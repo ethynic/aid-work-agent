@@ -61,8 +61,17 @@
 | `browser_assistance:{tenant_id}:{assistance_id}` | 人工租约 + 120s | 脱敏条件、步骤索引、控制状态 | 禁止降级 |
 | `agent_tool_suspension:{tenant_id}:{agent_execution_id}:{tool_call_id}` | 人工租约 + 120s | 原工具挂起引用 | 禁止降级 |
 | `agent_session_suspension:{tenant_id}:{session_id}` | 人工租约 + 120s | 同会话 Agent loop 并发门禁 | 禁止降级 |
-| `browser_resume_jobs:stream` | Stream/消费幂等锁 600s | 脱敏恢复任务 | 禁止降级 |
 | `agent_continuation_events:{tenant_id}:{continuation_id}` | 900s | 带递增 seq 的断线补取事件 | 禁止降级 |
+
+Phase 3R（2026-07-22）起，恢复任务的事实源改为 PostgreSQL
+`bs_browser_resume_jobs` 持久 lease 队列，不再依赖 Redis Stream、consumer group
+或 `XADD/XREAD`。continuation events 保持为 Redis JSON 短期事件窗口，通过 CAS
+递增 `seq`；Redis 仍只承担短状态、控制锁和可丢弃缓存，不承担持久任务队列。
+入队后可选向 `browser_resume_jobs:notify` 频道 `publish` 通知以降低延迟，丢通知
+时 worker 靠短轮询恢复，通知不是唯一队列。应用启动时 `redis_client.probe_phase3_primitives()`
+一次性探测 Phase 3 实际使用的 Redis 原语（SET NX/EX、GET、DEL、TTL、SCAN、
+publish、Lua CAS，不含已迁移的 Stream），缺失时记录单条告警并禁用人工接管，
+不形成高频异常循环。
 
 安全说明：Browser RunManager 必须先用 `redis_client.is_available()` 判断真实
 Redis。透明内存 fallback 不能被视为分布式可用；降级只允许单请求

@@ -387,6 +387,39 @@ class RedisClient:
         """返回真实 Redis 是否可用；安全关键分布式状态不得把内存降级视为可用。"""
         return self._ensure_connection()
 
+    def probe_phase3_primitives(self) -> bool:
+        """一次性探测 Browser Phase 3 实际使用的 Redis 原语（Phase 3R）。
+
+        迁移到 PostgreSQL resume 队列后，Phase 3 不再使用 XADD/XREAD/XGROUP，
+        仅依赖 SET NX EX / GET / DEL / TTL / SCAN / publish / Lua(CAS)。本方法
+        验证这些原语可用；缺失时记录单条聚合告警并返回 False（调用方据此禁用
+        人工接管），不形成每秒刷错的后台循环。必须在应用启动时显式调用，
+        禁止在模块导入时触发。
+        """
+        if not self._ensure_connection() or self._client is None:
+            logger.warning("[Redis] Phase 3 原语探针失败：Redis 不可用（已降级内存）")
+            return False
+        probe_key = self.make_key("browser:phase3:probe", "primitives")
+        probe_val = "1"
+        try:
+            ok = self._client.set(probe_key, probe_val, nx=True, ex=60)
+            self._client.get(probe_key)
+            self._client.ttl(probe_key)
+            self._client.delete(probe_key)
+            self._client.publish(self.make_key("browser:phase3:probe", "notify"), "{}")
+            # SCAN 与 Lua(CAS) 是基础命令，4.x 均支持；逐一验证
+            self.scan(0, self.make_key("browser:phase3:probe", "*"), 10)
+            self.acquire_lock(probe_key + ":cas", "probe", 5)
+            self.release_lock(probe_key + ":cas", "probe")
+            logger.info("[Redis] Phase 3 原语探针通过（set/get/del/ttl/scan/publish/lua）ok={}", bool(ok))
+            return True
+        except Exception as exc:
+            logger.warning(
+                "[Redis] Phase 3 原语探针失败：type={} msg={}；将禁用人工接管",
+                type(exc).__name__, str(exc)[:200],
+            )
+            return False
+
     def _get_backend(self):
         """获取实际后端（Redis 或降级内存）"""
         if self._ensure_connection():

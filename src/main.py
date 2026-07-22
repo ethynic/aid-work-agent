@@ -476,8 +476,19 @@ async def lifespan(app: FastAPI):
         _browser_reaper = BrowserRunReaper(_browser_reaper_manager)
         _browser_reaper.start()
         if _browser_reaper_manager.store.distributed:
-            _browser_resume_worker = BrowserResumeWorker()
-            _browser_resume_worker.start()
+            # Phase 3R：启用 resume worker 前一次性探测 Redis 原语
+            # （GET/SET NX/EX/DEL/TTL/SCAN/publish/Lua CAS，不含已迁移的 Stream）。
+            # 缺失时记录单条告警并跳过 resume worker，不形成高频异常循环。
+            from src.core.redis_client import redis_client
+            phase3_primitives_ok = redis_client.probe_phase3_primitives()
+            if phase3_primitives_ok:
+                _browser_resume_worker = BrowserResumeWorker()
+                _browser_resume_worker.start()
+            else:
+                logger.warning(
+                    "browser resume worker 未启用：Redis Phase 3 原语探针未通过，"
+                    "人工接管将被禁用（server run 仍可用）"
+                )
         logger.info(
             "browser run reaper 初始化完成: distributed={}",
             _browser_reaper_manager.store.distributed,

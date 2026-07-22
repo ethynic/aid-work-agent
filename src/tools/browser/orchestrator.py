@@ -12,6 +12,7 @@ from loguru import logger
 from src.llm.gateway import llm_gateway
 from src.config.settings import settings
 from src.tools._helpers import sanitize_error
+from src.tools.browser.human_requirement_detector import detect_human_requirement
 from src.tools.browser.page_ops import PageOps
 from src.tools.browser.run_manager import BrowserRunManager, RunState
 from src.tools.browser.run_store import RunRecord
@@ -460,6 +461,25 @@ class BrowserOrchestrator:
 
                 # 处理 done
                 if action == "done":
+                    # 确定性人工需求检测（Phase 3R）：接受 LLM done 前先校验页面结构，
+                    # 命中验证码/登录/MFA/扫码/文件选择器时强制转人工，LLM done 或文字
+                    # 提示"请人工登录"都不能把 run 标记为成功。
+                    human_reason = detect_human_requirement(snapshot)
+                    if human_reason:
+                        logger.info(
+                            "[Orchestrator] LLM 返回 done 但页面仍存在人工需求: reason={}",
+                            human_reason,
+                        )
+                        if progress_callback:
+                            await progress_callback(
+                                "ask_user", f"检测到需要人工操作: {human_reason}"
+                            )
+                        return self._build_result(
+                            success=False,
+                            status="ask_user",
+                            error_code=human_reason,
+                            instruction="请直接在浏览器画面中完成操作，敏感信息不要发送到聊天",
+                        )
                     # 合并收集到的内容
                     final_reason = reason
                     if self._collected_content:
@@ -477,13 +497,15 @@ class BrowserOrchestrator:
                 # 处理 ask_user
                 if action == "ask_user":
                     logger.info("[Orchestrator] 需要人工参与，挂起当前工具")
-
+                    # 用结构化检测补充更精确的 reason_code；LLM 自由文本不能覆盖
+                    # 结构化证据（设计 §7.2）。
+                    human_reason = detect_human_requirement(snapshot) or "HUMAN_REQUIRED"
                     if progress_callback:
                         await progress_callback("ask_user", "任务需要人工参与，等待用户接管")
                     return self._build_result(
                         success=False,
                         status="ask_user",
-                        error_code="HUMAN_REQUIRED",
+                        error_code=human_reason,
                         instruction="请直接在浏览器画面中完成操作，敏感信息不要发送到聊天",
                     )
 

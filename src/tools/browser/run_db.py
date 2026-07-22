@@ -120,3 +120,153 @@ class BrowserRunDB:
                 conn.commit()
                 return changed
         return await asyncio.to_thread(op)
+
+
+class BrowserResumeJobDB:
+    """PostgreSQL 持久 lease 队列（Phase 3R 替代 Redis Stream）。
+
+    所有同步 PostgreSQL 调用均通过 ``asyncio.to_thread``；查询和更新始终带
+    ``tenant_id`` 条件。``assistance_id`` 唯一约束保证幂等入队；worker 用
+    ``FOR UPDATE SKIP LOCKED`` 领取，lease 过期可被回收。不保存异常正文，
+    只存白名单错误码。
+    """
+
+    @staticmethod
+    def available() -> bool:
+        """惰性探活 PostgreSQL 连接池，用于决定是否启用分布式恢复。
+
+        必须惰性调用，禁止在模块顶层或 ``__init__`` 中触发（避免包初始化副作用）。
+        """
+        try:
+            with get_db_connection() as conn:
+                conn.execute("SELECT 1")
+            return True
+        except Exception:
+            return False
+
+    async def enqueue(
+        self, *, tenant_id: str, assistance_id: str, run_id: str, job_id: str,
+    ) -> bool:
+        """插入 resume job。``assistance_id`` UNIQUE 保证重复入队幂等（返回 False）。"""
+        def op() -> bool:
+            with get_db_connection() as conn:
+                conn.execute(
+                    """INSERT INTO bs_browser_resume_jobs
+                    (job_id,tenant_id,assistance_id,run_id,state,available_at)
+                    VALUES (%s,%s,%s,%s,'pending',CURRENT_TIMESTAMP)
+                    ON CONFLICT (assistance_id) DO NOTHING""",
+                    (job_id, tenant_id, assistance_id, run_id),
+                )
+                changed = conn.rowcount > 0
+                conn.commit()
+                return changed
+        return await asyncio.to_thread(op)
+
+    async def enqueue_from_assistance(
+        self, *, tenant_id: str, assistance_id: str, run_id: str, job_id: str,
+    ) -> bool:
+        """Atomically transition the audit row and enqueue its resume job."""
+        def op() -> bool:
+            with get_db_connection() as conn:
+                conn.execute(
+                    """WITH transitioned AS (
+                        UPDATE bs_browser_assistance_requests
+                        SET state='resume_queued', updated_at=CURRENT_TIMESTAMP
+                        WHERE tenant_id=%s AND assistance_id=%s AND run_id=%s
+                          AND state='controlling'
+                        RETURNING tenant_id, assistance_id, run_id
+                    )
+                    INSERT INTO bs_browser_resume_jobs
+                        (job_id,tenant_id,assistance_id,run_id,state,available_at)
+                    SELECT %s,tenant_id,assistance_id,run_id,'pending',CURRENT_TIMESTAMP
+                    FROM transitioned
+                    ON CONFLICT (assistance_id) DO NOTHING""",
+                    (tenant_id, assistance_id, run_id, job_id),
+                )
+                changed = conn.rowcount > 0
+                conn.commit()
+                return changed
+        return await asyncio.to_thread(op)
+
+    async def claim_batch(
+        self, *, lease_owner: str, lease_seconds: int = 600, limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        """领取 pending 到期或 processing 租约过期的 job，同事务标记 processing。
+
+        ``FOR UPDATE SKIP LOCKED`` 让多 worker 互不阻塞、各领不同行。
+        """
+        def op() -> list[dict[str, Any]]:
+            with get_db_connection() as conn:
+                conn.execute(
+                    """SELECT job_id, tenant_id, assistance_id, run_id, attempts
+                    FROM bs_browser_resume_jobs
+                    WHERE (state = 'pending' AND available_at <= CURRENT_TIMESTAMP)
+                       OR (state = 'processing' AND lease_until < CURRENT_TIMESTAMP)
+                    ORDER BY created_at
+                    FOR UPDATE SKIP LOCKED
+                    LIMIT %s""",
+                    (limit,),
+                )
+                rows = conn.fetchall()
+                if not rows:
+                    conn.commit()
+                    return []
+                job_ids = [row["job_id"] for row in rows]
+                conn.execute(
+                    """UPDATE bs_browser_resume_jobs
+                    SET state = 'processing',
+                        lease_owner = %s,
+                        lease_until = CURRENT_TIMESTAMP + (%s || ' seconds')::interval,
+                        attempts = attempts + 1,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE job_id = ANY(%s)""",
+                    (lease_owner, str(lease_seconds), job_ids),
+                )
+                conn.commit()
+                return [dict(row) for row in rows]
+        return await asyncio.to_thread(op)
+
+    async def mark_completed(
+        self, *, tenant_id: str, job_id: str, lease_owner: str,
+    ) -> bool:
+        def op() -> bool:
+            with get_db_connection() as conn:
+                conn.execute(
+                    """UPDATE bs_browser_resume_jobs SET state='completed',
+                    completed_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP
+                    WHERE tenant_id=%s AND job_id=%s AND state='processing'
+                      AND lease_owner=%s""",
+                    (tenant_id, job_id, lease_owner),
+                )
+                changed = conn.rowcount > 0
+                conn.commit()
+                return changed
+        return await asyncio.to_thread(op)
+
+    async def mark_failed(
+        self, *, tenant_id: str, job_id: str, lease_owner: str,
+        error_code: str, permanent: bool, backoff_seconds: int = 30,
+    ) -> None:
+        """确定性失败或超过最大重试标记 failed；可重试失败重置为 pending 并退避。"""
+        def op():
+            with get_db_connection() as conn:
+                if permanent:
+                    conn.execute(
+                        """UPDATE bs_browser_resume_jobs SET state='failed',
+                        last_error_code=%s, updated_at=CURRENT_TIMESTAMP
+                        WHERE tenant_id=%s AND job_id=%s AND state='processing'
+                          AND lease_owner=%s""",
+                        (error_code, tenant_id, job_id, lease_owner),
+                    )
+                else:
+                    conn.execute(
+                        """UPDATE bs_browser_resume_jobs SET state='pending',
+                        last_error_code=%s,
+                        available_at=CURRENT_TIMESTAMP + (%s || ' seconds')::interval,
+                        lease_owner=NULL, lease_until=NULL, updated_at=CURRENT_TIMESTAMP
+                        WHERE tenant_id=%s AND job_id=%s AND state='processing'
+                          AND lease_owner=%s""",
+                        (error_code, str(backoff_seconds), tenant_id, job_id, lease_owner),
+                    )
+                conn.commit()
+        await asyncio.to_thread(op)

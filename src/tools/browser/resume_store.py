@@ -83,9 +83,6 @@ class ResumeStore:
     def _session_key(self, tenant_id: str, session_id: str) -> str:
         return redis_client.make_key(CacheKeys.AGENT_SESSION_SUSPENSION, f"{tenant_id}:{session_id}")
 
-    def _jobs_key(self) -> str:
-        return redis_client.make_key(CacheKeys.BROWSER_RESUME_JOBS, "stream")
-
     def _events_key(self, tenant_id: str, continuation_id: str) -> str:
         return redis_client.make_key(CacheKeys.AGENT_CONTINUATION_EVENTS, f"{tenant_id}:{continuation_id}")
 
@@ -250,56 +247,80 @@ class ResumeStore:
         return await asyncio.to_thread(op)
 
     async def enqueue_resume(self, record: AssistanceRecord, job_id: str) -> bool:
-        def op() -> bool:
-            key = self._jobs_key()
-            if redis_client._client is None or not redis_client.is_available():
-                return False
-            redis_client._client.xadd(key, {
-                "tenant_id": record.tenant_id, "assistance_id": record.assistance_id,
-                "run_id": record.run_id, "job_id": job_id,
-            }, maxlen=10_000, approximate=True)
-            redis_client.publish(
-                redis_client.make_key(CacheKeys.BROWSER_RESUME_JOBS, "notify"),
-                json.dumps({
-                    "tenant_id": record.tenant_id,
-                    "assistance_id": record.assistance_id,
-                    "job_id": job_id,
-                }),
-            )
-            return True
-        return await asyncio.to_thread(op)
+        """入队 resume job 到 PostgreSQL 持久队列（Phase 3R 替代 Redis Stream）。
 
-    async def read_resume_jobs(
-        self, after_id: str, *, block_ms: int = 1000, count: int = 100,
-    ) -> list[tuple[str, ResumeJob]]:
-        """每个 API worker 独立补读持久 Stream；非 owner 不会抢全局 claim。"""
-        def op() -> list[tuple[str, ResumeJob]]:
-            if redis_client._client is None or not redis_client.is_available():
-                return []
-            rows = redis_client._client.xread(
-                {self._jobs_key(): after_id}, count=count, block=block_ms
-            )
-            jobs: list[tuple[str, ResumeJob]] = []
-            for _, entries in rows:
-                for stream_id, fields in entries:
-                    if isinstance(stream_id, bytes):
-                        stream_id = stream_id.decode("utf-8")
-                    decoded = {
-                        (key.decode("utf-8") if isinstance(key, bytes) else key):
-                        (value.decode("utf-8") if isinstance(value, bytes) else value)
-                        for key, value in fields.items()
-                    }
-                    try:
-                        jobs.append((str(stream_id), ResumeJob.model_validate(decoded)))
-                    except Exception:
-                        continue
-            return jobs
+        ``assistance_id`` 唯一约束保证幂等。Redis publish 仅作为可选降延迟通知，
+        失败不得阻塞入队（丢通知时 worker 靠短轮询恢复）。不再调用 XADD/XREAD。
+        """
+        from .run_db import BrowserResumeJobDB
 
-        return await asyncio.to_thread(op)
+        enqueued = await BrowserResumeJobDB().enqueue_from_assistance(
+            tenant_id=record.tenant_id,
+            assistance_id=record.assistance_id,
+            run_id=record.run_id,
+            job_id=job_id,
+        )
+        if enqueued and redis_client.is_available():
+            try:
+                redis_client.publish(
+                    redis_client.make_key(CacheKeys.BROWSER_RESUME_JOBS, "notify"),
+                    json.dumps({
+                        "tenant_id": record.tenant_id,
+                        "assistance_id": record.assistance_id,
+                        "job_id": job_id,
+                    }),
+                )
+            except Exception:
+                # 通知失败不影响持久化入队；worker 轮询会补取
+                pass
+        return enqueued
 
-    async def claim_resume(self, tenant_id: str, assistance_id: str, consumer_id: str) -> bool:
-        key = redis_client.make_key(CacheKeys.BROWSER_RESUME_JOBS, f"claim:{tenant_id}:{assistance_id}")
-        return await asyncio.to_thread(redis_client.acquire_lock, key, consumer_id, 600)
+    async def claim_resume_jobs(
+        self, *, lease_owner: str, lease_seconds: int = 600, limit: int = 10,
+    ) -> list[ResumeJob]:
+        """领取 pending 到期或租约过期的 resume job（FOR UPDATE SKIP LOCKED）。
+
+        claim 在领取事务内完成，不再使用 Redis SETNX。多 worker 互不阻塞。
+        """
+        from .run_db import BrowserResumeJobDB
+
+        rows = await BrowserResumeJobDB().claim_batch(
+            lease_owner=lease_owner, lease_seconds=lease_seconds, limit=limit,
+        )
+        jobs: list[ResumeJob] = []
+        for row in rows:
+            try:
+                jobs.append(ResumeJob(
+                    tenant_id=row["tenant_id"],
+                    assistance_id=row["assistance_id"],
+                    run_id=row["run_id"],
+                    job_id=row["job_id"],
+                    claimed_by=lease_owner,
+                ))
+            except Exception:
+                continue
+        return jobs
+
+    async def complete_resume_job(
+        self, tenant_id: str, job_id: str, lease_owner: str,
+    ) -> bool:
+        from .run_db import BrowserResumeJobDB
+
+        return await BrowserResumeJobDB().mark_completed(
+            tenant_id=tenant_id, job_id=job_id, lease_owner=lease_owner,
+        )
+
+    async def fail_resume_job(
+        self, tenant_id: str, job_id: str, lease_owner: str, error_code: str,
+        *, permanent: bool, backoff_seconds: int = 30,
+    ) -> None:
+        from .run_db import BrowserResumeJobDB
+
+        await BrowserResumeJobDB().mark_failed(
+            tenant_id=tenant_id, job_id=job_id, lease_owner=lease_owner,
+            error_code=error_code,
+            permanent=permanent, backoff_seconds=backoff_seconds,
+        )
 
     async def append_event(self, tenant_id: str, continuation_id: str, event: dict[str, Any]) -> dict[str, Any]:
         def op():

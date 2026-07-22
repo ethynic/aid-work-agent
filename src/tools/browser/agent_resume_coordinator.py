@@ -26,17 +26,24 @@ def configure_continuation_callback(callback: ContinuationCallback | None) -> No
 
 
 class BrowserResumeWorker:
-    """持久 Stream fan-out worker；重启从头补读，owner + claim 保证只执行一次。"""
+    """PostgreSQL lease 队列消费 worker（Phase 3R 替代 Redis Stream）。
+
+    短轮询 ``claim_resume_jobs``（FOR UPDATE SKIP LOCKED）；claim 在领取事务内
+    完成，不依赖 Redis SETNX。lease 过期可被其他 worker 回收。业务结果仍由
+    assistance 唯一约束、原 tool_call_id 和 continuation 去重保证只生效一次。
+    """
 
     def __init__(
         self,
         store: ResumeStore | None = None,
         coordinator_factory: Callable[[], "AgentResumeCoordinator"] | None = None,
+        poll_interval: float = 1.0,
     ) -> None:
         self.store = store or ResumeStore()
         self.coordinator_factory = coordinator_factory or (
             lambda: AgentResumeCoordinator(store=self.store)
         )
+        self.poll_interval = poll_interval
         self._task: asyncio.Task | None = None
 
     def start(self) -> None:
@@ -50,15 +57,20 @@ class BrowserResumeWorker:
             self._task = None
 
     async def _loop(self) -> None:
-        last_id = "0-0"
+        consumer_id = f"resume_{os.getpid()}_{uuid.uuid4().hex}"
         while True:
             try:
-                jobs = await self.store.read_resume_jobs(last_id, block_ms=1000)
-                for stream_id, job in jobs:
-                    last_id = stream_id
+                jobs = await self.store.claim_resume_jobs(
+                    lease_owner=consumer_id, lease_seconds=600, limit=10,
+                )
+                for job in jobs:
                     await self.coordinator_factory().resume(
-                        job.tenant_id, job.assistance_id
+                        job.tenant_id, job.assistance_id, job_id=job.job_id,
+                        lease_owner=job.claimed_by,
                     )
+                # 有任务时立即继续轮询，无任务时等待一个轮询周期
+                if not jobs:
+                    await asyncio.sleep(self.poll_interval)
             except asyncio.CancelledError:
                 return
             except Exception as exc:
@@ -79,17 +91,25 @@ class AgentResumeCoordinator:
         self.consumer_id = consumer_id or f"resume_{os.getpid()}_{uuid.uuid4().hex}"
         self.continuation_callback = continuation_callback or _CONTINUATION_CALLBACK
 
-    async def resume(self, tenant_id: str, assistance_id: str) -> dict:
+    async def resume(
+        self, tenant_id: str, assistance_id: str, *, job_id: str | None = None,
+        lease_owner: str | None = None,
+    ) -> dict:
         record = await self.store.get_assistance(tenant_id, assistance_id)
         if record is None or record.state != "resume_queued":
+            # assistance 已被其他 worker 处理或已终态；job 使命达成，标记完成避免重领
+            if job_id is not None:
+                await self.store.complete_resume_job(tenant_id, job_id, lease_owner or self.consumer_id)
             return {"success": False, "error_code": "RESUME_ALREADY_CONSUMED"}
         runtime = await get_owned_runtime(tenant_id, record.run_id)
         if runtime is None:
-            # 请求可能落在非 owner Gunicorn worker；不能在确认 owner 已丢失前
-            # 抢 claim 或清理另一个 worker 的有效 page/context。
+            # 请求落在非 owner Gunicorn worker；owner 已丢失无法恢复，收口 job
+            if job_id is not None:
+                await self.store.fail_resume_job(
+                    tenant_id, job_id, lease_owner or self.consumer_id,
+                    "RESUME_NOT_OWNER", permanent=True,
+                )
             return {"success": False, "error_code": "RESUME_NOT_OWNER"}
-        if not await self.store.claim_resume(tenant_id, assistance_id, self.consumer_id):
-            return {"success": False, "error_code": "RESUME_ALREADY_CONSUMED"}
         await self.store.append_event(tenant_id, record.continuation_id, {
             "type": "browser_resume_started", "run_id": record.run_id,
         })
@@ -116,6 +136,9 @@ class AgentResumeCoordinator:
                 )
                 await self.store.append_event(tenant_id, record.continuation_id, next_suspension.event)
                 keep_runtime = True
+                # 二次人工挂起会创建新 assistance+新 job；当前 job 已处理完成
+                if job_id is not None:
+                    await self.store.complete_resume_job(tenant_id, job_id, lease_owner or self.consumer_id)
                 return {"success": False, "status": "ask_user", "assistance_id": next_suspension.assistance_id}
             await self.store.append_event(tenant_id, record.continuation_id, {
                 "type": "tool_result", "tool_call_id": record.tool_call_id,
@@ -137,6 +160,8 @@ class AgentResumeCoordinator:
                 expires_at=continuation_expires_at,
             )
             if resuming is None:
+                if job_id is not None:
+                    await self.store.complete_resume_job(tenant_id, job_id, lease_owner or self.consumer_id)
                 return {"success": False, "error_code": "RESUME_ALREADY_CONSUMED"}
             refresh = getattr(self.store, "refresh_suspension", None)
             if refresh is not None and not await refresh(resuming, continuation_ttl):
@@ -151,6 +176,8 @@ class AgentResumeCoordinator:
                 tenant_id, assistance_id, {"agent_resuming"}, "resumed"
             )
             await self.store.clear(record)
+            if job_id is not None:
+                await self.store.complete_resume_job(tenant_id, job_id, lease_owner or self.consumer_id)
             return result
         except Exception:
             try:
@@ -169,6 +196,11 @@ class AgentResumeCoordinator:
                 })
             finally:
                 await self.store.clear(record)
+            if job_id is not None:
+                await self.store.fail_resume_job(
+                    tenant_id, job_id, lease_owner or self.consumer_id,
+                    "RESUME_CONTEXT_LOST", permanent=True,
+                )
             return {"success": False, "error_code": "RESUME_CONTEXT_LOST"}
         finally:
             if not keep_runtime:

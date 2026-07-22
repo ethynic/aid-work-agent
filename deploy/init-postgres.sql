@@ -1824,6 +1824,33 @@ CREATE INDEX IF NOT EXISTS idx_bs_browser_assistance_tenant_run
 CREATE INDEX IF NOT EXISTS idx_bs_browser_assistance_tenant_state
     ON bs_browser_assistance_requests(tenant_id, state, expires_at);
 
+-- ============================================================================
+-- 2026-07-22 Browser Phase 3R：PostgreSQL 持久 lease 队列替代 Redis Stream 恢复
+-- 设计文档 browser_visualization_design.md v2.8 §8.1。遵循 database_dev.md
+-- 不加外键约束（外键完整性在应用层校验）。assistance_id 唯一保证幂等入队。
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS bs_browser_resume_jobs (
+    id BIGSERIAL PRIMARY KEY,
+    job_id TEXT NOT NULL UNIQUE,                       -- 不可猜 UUIDv4
+    tenant_id TEXT NOT NULL,
+    assistance_id TEXT NOT NULL UNIQUE,                -- 防重复入队
+    run_id TEXT NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('pending','processing','completed','failed')),
+    lease_owner TEXT,                                   -- worker 领取身份
+    lease_until TIMESTAMP,                              -- 短租约，崩溃后可回收
+    attempts INTEGER NOT NULL DEFAULT 0,
+    available_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,  -- 退避调度
+    last_error_code TEXT,                               -- 白名单错误码，不存异常正文
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    completed_at TIMESTAMP
+);
+-- 领取查询主索引：pending 到期或 processing 租约过期，按创建顺序
+CREATE INDEX IF NOT EXISTS idx_bs_browser_resume_jobs_claim
+    ON bs_browser_resume_jobs(state, available_at);
+CREATE INDEX IF NOT EXISTS idx_bs_browser_resume_jobs_tenant
+    ON bs_browser_resume_jobs(tenant_id, state, created_at);
+
 -- 测试库初始化完成
 DO $$
 BEGIN

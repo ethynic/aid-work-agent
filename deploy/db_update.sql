@@ -1088,6 +1088,32 @@ CREATE INDEX IF NOT EXISTS idx_bs_browser_assistance_tenant_run
 CREATE INDEX IF NOT EXISTS idx_bs_browser_assistance_tenant_state
     ON bs_browser_assistance_requests(tenant_id, state, expires_at);
 
+-- ============================================================================
+-- 2026-07-22 Browser Phase 3R：新增 bs_browser_resume_jobs，替代 Redis Stream 恢复队列
+-- 设计文档 browser_visualization_design.md v2.8 §8.1。遵循 database_dev.md 不加外键。
+-- assistance_id 唯一保证幂等入队；worker 用 FOR UPDATE SKIP LOCKED 领取。
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS bs_browser_resume_jobs (
+    id BIGSERIAL PRIMARY KEY,
+    job_id TEXT NOT NULL UNIQUE,
+    tenant_id TEXT NOT NULL,
+    assistance_id TEXT NOT NULL UNIQUE,
+    run_id TEXT NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('pending','processing','completed','failed')),
+    lease_owner TEXT,
+    lease_until TIMESTAMP,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    available_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_error_code TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    completed_at TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_bs_browser_resume_jobs_claim
+    ON bs_browser_resume_jobs(state, available_at);
+CREATE INDEX IF NOT EXISTS idx_bs_browser_resume_jobs_tenant
+    ON bs_browser_resume_jobs(tenant_id, state, created_at);
+
 -- ============== 租户积分充值与计费 #37 ==============
 
 -- 2026-7-20，tenants 表新增 credit_balance 字段，记录租户积分余额（整数，允许透支为负）

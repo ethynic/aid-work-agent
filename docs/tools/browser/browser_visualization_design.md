@@ -1,10 +1,10 @@
 # 浏览器执行架构、可视化与人工接管设计
 
-> 版本：v2.7
+> 版本：v2.8
 >
 > 日期：2026-07-14
 >
-> 状态：设计完成，待开发
+> 状态：🔧 设计完成，Phase 3 修复待开发
 >
 > 替代：v1.0《浏览器工具可视化设计文档》（2026-05-21）
 >
@@ -17,6 +17,8 @@
 > v2.6 变更：确立 Agent-first 原则。桌面执行能力改为 [Agent Desktop](../../system/desktop-agent-client-design.md) 的可选 browser runtime。
 >
 > v2.7 变更：彻底删除独立浏览器客户端产品、工程、安装包、协议 scheme、更新器和发布依赖。桌面执行只作为 Agent Desktop 内置可选 `browser-runtime` 模块存在；`browser/1.0` 仅是主进程内 runtime 与服务端 RemoteExecutor 的隔离协议。
+>
+> 2026-07-22 v2.8 修订：测试环境真实验收发现 Redis 服务不支持恢复链路所需的 Stream 能力（`XREAD` 实测为 unknown command）、恢复 worker 持续 `ResponseError`，且登录页图形验证码被 LLM `done` 错判为成功。Phase 3 改用 PostgreSQL 租约队列持久化 resume job；Redis 只保留短期状态、锁和 continuation 事件缓存；新增确定性人工需求检测、启动能力探针和跨事件循环测试隔离门禁。
 
 ## 1. 结论与范围
 
@@ -109,7 +111,7 @@ BrowserOrchestrator -> BrowserExecutor protocol
 | `BrowserViewHub` | 最新帧转发、背压、观察者授权，不持久化业务画面 |
 | `HumanControlCoordinator` | Agent/人工互斥锁、接管租约、输入转发、完成 CAS |
 | `HumanCompletionMonitor` | 监测白名单页面完成条件，稳定判定后请求恢复，不读取输入正文 |
-| `AgentResumeCoordinator` | 幂等领取 resume job，续跑原 BrowserOrchestrator 和原 Agent tool_call |
+| `AgentResumeCoordinator` | 从 PostgreSQL 租约队列幂等领取 resume job，续跑原 BrowserOrchestrator 和原 Agent tool_call |
 | `DesktopRuntimeRegistry` | 在线 Agent Desktop runtime、能力、当前负载和协议版本信息 |
 
 ### 3.2 执行器契约
@@ -363,15 +365,16 @@ browser runtime 随 Agent Desktop 的签名安装包和统一更新渠道发布�
 
 ### 7.2 接管流程
 
-1. 编排器检测 CAPTCHA/MFA/扫码/文件选择器，或用户点击“接管”，生成 `HumanAssistanceRequest`。请求必须包含 `assistance_id/run_id/agent_execution_id/tool_call_id/reason_code`、用户可执行指引、操作位置、完成模式、白名单完成条件和到期时间。
-2. `HumanControlCoordinator` 先保存浏览器检查点，再把原工具调用持久化为 `SUSPENDED_TOOL`。两项都成功后 CAS 获取控制锁，browser run 变为 `WAITING_HUMAN`；Agent 停止发命令。任何一步失败都不得向用户谎报“可以继续”。
-3. Agent Web 必须展示 `HumanAssistanceCard`，明确告诉用户：为什么暂停、在哪个浏览器操作、按顺序做什么、完成后是否会自动继续、无法自动识别时点击哪个按钮、剩余时间。密码、验证码要求用户直接输入浏览器，不在聊天中回复。
-4. 用户点击“开始接管”，状态变 `RUNNING_HUMAN`。本机用户操作 Agent Desktop 打开的专用浏览器窗口；网页用户的 pointer/keyboard 经授权 WebSocket 直达 executor，不进入 LLM 上下文、不持久化。
-5. executor 在人工控制期间只上报导航、DOM 结构变化和脱敏完成条件，不上报按键、输入值、cookies 或表单正文。`HumanCompletionMonitor` 在条件连续两次、间隔 1 秒成立后发出 `human_completion_detected`。
-6. 自动条件成立时，或用户点击“完成并继续”且服务端重新校验通过时，`HumanControlCoordinator` 用 `assistance_id` 做 CAS：`RUNNING_HUMAN/WAITING_HUMAN -> RESUMING`。重复点击、重复事件和 WebSocket 重连只能成功一次。
-7. CAS 成功后丢弃在途人工输入、释放人工控制锁、执行新 snapshot，并写入唯一 `browser_resume_job`。`AgentResumeCoordinator` 领取 job，从原 run、原 page/context、原步骤索引继续 `BrowserOrchestrator`；不是创建新 browser task，也不重新导航起始 URL。
-8. 原工具下一次真正完成、失败或再次需要人工时，Agent Runtime 才把对应 tool result 接回原 `tool_call_id` 并继续原 Agent 执行。前端收到 `agent_continuation_started`，无需用户再发消息。
-9. 用户选择取消、租约到期或上下文丢失时终止原工具并关闭浏览器。owner/browser 已崩溃时返回 `RESUME_CONTEXT_LOST`，不得假装从原页面继续；只有检查点声明所有步骤可安全重放且未发生不可逆操作时，才可另行让用户确认是否重开。
+1. 每次导航后的首个 snapshot、每步执行后的新 snapshot、以及接受 LLM `done` 前，都先经过 `HumanRequirementDetector`。检测器只使用结构化信号：challenge iframe、验证码/校验码控件标签与角色、密码/MFA/扫码表单结构、文件选择器和受阻目标区域；不得读取输入值。命中后直接生成 `CAPTCHA_REQUIRED`、`AUTH_REQUIRED`、`MFA_REQUIRED` 或 `FILE_PICKER_REQUIRED`，LLM 的 `done`、自由文本“请用户登录”或普通成功结果不能覆盖结构化证据。只有页面上存在普通“登录”链接而没有受阻表单/挑战时不得误触发。
+2. 确定性检测命中、LLM 明确返回 `ask_user`，或用户点击“接管”时，生成 `HumanAssistanceRequest`。请求必须包含 `assistance_id/run_id/agent_execution_id/tool_call_id/reason_code`、用户可执行指引、操作位置、完成模式、白名单完成条件和到期时间。若原任务的完成条件尚未满足，编排器不得把“页面已打开，请用户处理”记为 `SUCCEEDED`。
+3. `HumanControlCoordinator` 先保存浏览器检查点，再把原工具调用持久化为 `SUSPENDED_TOOL`。两项都成功后 CAS 获取控制锁，browser run 变为 `WAITING_HUMAN`；Agent 停止发命令。任何一步失败都不得向用户谎报“可以继续”。
+4. Agent Web 必须展示 `HumanAssistanceCard`，明确告诉用户：为什么暂停、在哪个浏览器操作、按顺序做什么、完成后是否会自动继续、无法自动识别时点击哪个按钮、剩余时间。密码、验证码要求用户直接输入浏览器，不在聊天中回复。
+5. 用户点击“开始接管”，状态变 `RUNNING_HUMAN`。本机用户操作 Agent Desktop 打开的专用浏览器窗口；网页用户的 pointer/keyboard 经授权 WebSocket 直达 executor，不进入 LLM 上下文、不持久化。
+6. executor 在人工控制期间只上报导航、DOM 结构变化和脱敏完成条件，不上报按键、输入值、cookies 或表单正文。`HumanCompletionMonitor` 在条件连续两次、间隔 1 秒成立后发出 `human_completion_detected`。
+7. 自动条件成立时，或用户点击“完成并继续”且服务端重新校验通过时，`HumanControlCoordinator` 在同一 PostgreSQL 事务中 CAS assistance 状态并插入唯一 resume job；重复点击、重复事件和 WebSocket 重连只能形成一条待处理记录。
+8. CAS 成功后丢弃在途人工输入、释放人工控制锁并执行新 snapshot。`AgentResumeCoordinator` 通过 `FOR UPDATE SKIP LOCKED` 租约领取 job，从原 run、原 page/context、原步骤索引继续 `BrowserOrchestrator`；不是创建新 browser task，也不重新导航起始 URL。
+9. 原工具下一次真正完成、失败或再次需要人工时，Agent Runtime 才把对应 tool result 接回原 `tool_call_id` 并继续原 Agent 执行。前端收到 `agent_continuation_started`，无需用户再发消息。
+10. 用户选择取消、租约到期或上下文丢失时终止原工具并关闭浏览器。owner/browser 已崩溃时返回 `RESUME_CONTEXT_LOST`，不得假装从原页面继续；只有检查点声明所有步骤可安全重放且未发生不可逆操作时，才可另行让用户确认是否重开。
 
 同一时刻控制者只能是 `agent` 或一个 `user_id`。观察者不能发送输入。涉及提交/支付的最后一步即使人工已完成，系统只描述结果，不重复点击。
 
@@ -458,6 +461,34 @@ Phase 2 已落地 DDL 中的 `client`、`executor_client_id` 及对应状态名�
 
 原 Agent messages 仍使用现有会话/Trace 持久化，不复制到该表。浏览器语义检查点只存 Redis 并设租约；进程或检查点丢失必须失败为 `RESUME_CONTEXT_LOST`，不能用数据库旧数据伪造活页面恢复。
 
+新增 `bs_browser_resume_jobs` 作为 Phase 3 唯一可靠恢复队列，不依赖 Redis Stream：
+
+| 字段 | 说明 |
+|---|---|
+| `job_id` | TEXT UNIQUE，不可猜 UUIDv4 |
+| `tenant_id/assistance_id/run_id` | 归属与恢复关联；`assistance_id` UNIQUE，防止重复入队 |
+| `state` | pending/processing/completed/failed |
+| `lease_owner/lease_until` | worker 领取身份与短租约；崩溃后可回收 |
+| `attempts/available_at` | 有界重试与退避调度 |
+| `last_error_code` | 白名单错误码，不保存异常正文 |
+| `created_at/updated_at/completed_at` | 生命周期审计 |
+
+入队必须与 `bs_browser_assistance_requests.state -> resume_queued` 在同一 PostgreSQL 事务提交。worker 每 500ms～1s 批量执行以下语义：
+
+```sql
+SELECT job_id
+FROM bs_browser_resume_jobs
+WHERE (state = 'pending' AND available_at <= CURRENT_TIMESTAMP)
+   OR (state = 'processing' AND lease_until < CURRENT_TIMESTAMP)
+ORDER BY created_at
+FOR UPDATE SKIP LOCKED
+LIMIT 10;
+```
+
+同一事务将领取记录更新为 `processing`、写入 `lease_owner/lease_until` 并递增 `attempts`，提交后再执行恢复。成功后标记 `completed`；可重试失败按退避重置为 `pending`；超过最大次数或确定性失败标记 `failed` 并收口原 run。传输语义允许 worker 崩溃造成至少一次领取，但通过 `assistance_id` 唯一约束、assistance CAS、原 `tool_call_id` 结果幂等键和 continuation 最终消息去重，实现 exactly-once effect。禁止宣称分布式执行本身 exactly-once。
+
+PostgreSQL 表是恢复任务事实来源；可选 `LISTEN/NOTIFY` 只能用于唤醒降低延迟，丢通知时仍靠轮询恢复，不得作为唯一队列。DDL 同步更新 `deploy/init-postgres.sql`、`deploy/db_update.sql` 和数据库文档。上线顺序为先部署 DDL、再滚动更新 API worker；回滚只回退代码，不删除新表。部署前若存在活动 assistance，必须先完成、取消或明确失败收口。
+
 ### 8.2 Redis
 
 在 `CacheKeys` 登记：
@@ -471,10 +502,9 @@ Phase 2 已落地 DDL 中的 `client`、`executor_client_id` 及对应状态名�
 - `browser_desktop_runtime_session:{tenant_id}:{user_id}:{desktop_runtime_session_id}`：Agent Desktop runtime 临时 capability 与连接状态，TTL 60 秒，WSS 存活时续租，断开主动删除。
 - `browser_assistance:{tenant_id}:{assistance_id}`：脱敏完成条件、步骤索引和控制状态，TTL 等于人工租约，CAS 更新。
 - `agent_tool_suspension:{tenant_id}:{agent_execution_id}:{tool_call_id}`：原工具挂起引用，TTL 为人工租约加 2 分钟收尾时间。
-- Redis Stream `browser_resume_jobs`：字段仅含 tenant_id、assistance_id、run_id、job_id；consumer group 领取，数据库 UNIQUE assistance_id 保证只恢复一次。
-- Redis Stream `agent_continuation_events:{tenant_id}:{continuation_id}`：带递增 seq 的续跑事件，TTL 15 分钟；前端重连按 last_seq 补取，最终 Agent 消息仍按现有会话消息机制持久化。
+- `agent_continuation_events:{tenant_id}:{continuation_id}`：Redis JSON 事件窗口，CAS 锁保护递增 seq，TTL 15 分钟；前端重连按 last_seq 补取，最终 Agent 消息仍按现有会话消息机制持久化。不得使用当前环境不支持的 Stream 命令。
 
-Redis 不可用时：禁止创建需要跨请求恢复或 desktop runtime 执行的 run；只允许单请求 server run，且必须在请求 `finally` 中关闭。不能静默降级为跨 worker 内存会话。
+Redis 不可用时：禁止创建需要跨请求人工接管或 desktop runtime 执行的 run；只允许单请求 server run，且必须在请求 `finally` 中关闭。不能静默降级为跨 worker 内存会话。应用启动时必须探测 Phase 3 实际使用的 Redis 原语（GET/SET NX/EX、DEL、TTL、SCAN、发布通知及现有 Lua/CAS）；缺失时记录单条聚合告警并禁用人工接管，不得启动每秒刷错的后台循环。PostgreSQL resume worker 只依赖数据库连接池，不因 Redis 缺少 `XADD/XREAD` 失败。
 
 ### 8.3 API/事件
 
@@ -574,6 +604,9 @@ Codex 当前公开产品表面区分：应用内 Browser Use、控制用户现�
 18. 自动条件事件、完成按钮双击、WebSocket 重连并发发生时只生成一个 resume job；两 Gunicorn worker 下也只恢复一次。
 19. “完成并继续”条件不满足时保持人工状态并指出未满足条件；owner/browser 丢失时明确返回 `RESUME_CONTEXT_LOST`，不得从头假装续跑。
 20. 人工完成提交/支付等不可逆动作后，恢复 Agent 不重复该动作；任务终态浏览器进程仍回到基线。
+21. 真实部署所用 Redis 不支持 Stream 时，应用不调用 `XADD/XREAD`；PostgreSQL resume worker 仍可在两个 Gunicorn worker 下只产生一次恢复效果，worker 崩溃后租约到期可接管。
+22. 登录表单、图片验证码、CAPTCHA iframe、MFA/扫码结构证据命中时必须生成 assistance 和 `WAITING_HUMAN`；LLM `done` 或普通文本“请人工登录”不能把 run 标为成功。
+23. Phase 3 测试文件必须整文件、随机顺序和连续运行两次均全绿；全局 runtime/monitor task 不得跨事件循环残留。
 
 ## 15. 参考资料
 

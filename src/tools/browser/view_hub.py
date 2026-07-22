@@ -52,7 +52,15 @@ class BrowserViewHub:
     def __init__(self) -> None:
         self._frames: dict[tuple[str, str], BrowserFrame] = {}
         self._subscribers: dict[tuple[str, str], set[BrowserViewSubscription]] = {}
-        self._lock = asyncio.Lock()
+        # 锁惰性创建（property），避免模块级单例在导入时绑定首个事件循环，
+        # 导致 pytest-asyncio function-scoped loop 跨循环残留（Phase 3R 修复）。
+        self._lock_instance: asyncio.Lock | None = None
+
+    @property
+    def _lock(self) -> asyncio.Lock:
+        if self._lock_instance is None:
+            self._lock_instance = asyncio.Lock()
+        return self._lock_instance
 
     async def publish(self, tenant_id: str, frame: BrowserFrame) -> None:
         if not frame.jpeg or len(frame.jpeg) > 1024 * 1024:

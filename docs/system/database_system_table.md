@@ -6,8 +6,16 @@
 > 2026-07-17 Browser Run/Executor Phase 2 例外登记：新增业务审计表
 > `bs_browser_runs`、`bs_browser_assistance_requests`。两表只保存租户归属、
 > 状态枚举和恢复关联，不保存完整 URL、DOM、截图、cookie、header、表单值或
-> 用户输入；所有读取和更新均要求 `tenant_id` 条件。DDL 已同步
+> 用户输入；所有读取和更新均要求 `tenant_id` 条件。两表 DDL 已同步
 > `deploy/init-postgres.sql` 与 `deploy/db_update.sql`，不创建长期 device 表。
+>
+> 2026-07-22 Phase 3R 已新增 `bs_browser_resume_jobs` 持久 lease 队列，替代
+> Redis Stream。字段仅包括任务/租户/assistance/run 标识、pending/processing/
+> completed/failed 状态、lease、重试调度、白名单错误码和时间戳；
+> `assistance_id` 唯一保证幂等入队。worker 用 `FOR UPDATE SKIP LOCKED` 领取，
+> lease 过期可回收。DDL 已同步 `deploy/init-postgres.sql` 与 `deploy/db_update.sql`，
+> Python service 为 `src/tools/browser/run_db.py` 的 `BrowserResumeJobDB`。
+> 遵循 `database_dev.md` 不加外键约束。
 
 > 2026-07-21 社媒营销智能体 outbound 模块 B0.5 例外登记：新增托管登录态表
 > `bs_outbound_account_sessions`。存知乎/小红书等 web 操作型连接器的 Playwright

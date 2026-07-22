@@ -1,8 +1,8 @@
 # 浏览器执行架构、可视化与人工接管开发计划
 
-> 日期：2026-07-14
+> 日期：2026-07-22
 >
-> 状态：🔧 部分完成（Phase 0～1 完成；Phase 2 实现完成、真实服务门禁待验证；Phase 3 代码收口完成、真实多 worker/E2E 门禁待验证）
+> 状态：🔧 部分完成（Phase 0～1 完成；Phase 2 实现完成、真实服务门禁待验证；Phase 3 真实验收未通过，进入 Phase 3R 修复；Phase 4 继续阻塞）
 >
 > 设计基线：[browser_visualization_design.md](./browser_visualization_design.md)
 >
@@ -15,6 +15,8 @@
 > 2026-07-14 v2.6 修订：采用 Agent-first 原则；桌面执行改为 Agent Desktop 的可选 browser runtime。技术栈、认证、发布和生命周期以 Agent Desktop 设计为准，浏览器能力不得阻塞或削弱 Agent 主链路。
 >
 > 2026-07-20 v2.7 修订：清除全部独立浏览器客户端设计、计划和依赖。Phase 4 改为 Agent Desktop 项目内的 browser runtime 集成阶段；浏览器计划只负责 `browser/1.0`、RemoteExecutor、服务端路由及联合验收，不再拥有客户端安装、更新、托盘或发布计划。
+>
+> 2026-07-22 v2.8 修订：真实环境确认 Redis 4.3.0 不支持 `XREAD`，现有 resume worker 持续报错；真实验证码登录页又被 LLM `done` 错判为成功。Phase 3R 改用 PostgreSQL 持久 lease 队列、确定性人工需求检测和跨事件循环测试隔离，不要求升级 Redis。
 
 ## 1. 完成定义
 
@@ -27,8 +29,8 @@
 | 0 | 基线、配置和泄漏复现测试 | ✅ 已完成 | 设计批准 | 测试能稳定复现当前泄漏/配置问题 |
 | 1 | 本地浏览器生命周期 P0 修复 | ✅ 已完成 | Phase 0 | 六类终态进程回基线 |
 | 2 | RunManager + Executor 抽象 + 多租户状态 | 🔧 部分完成 | Phase 1 | 两 worker/两租户契约测试通过 |
-| 3 | 服务端可视化 + 工具挂起/人工接管/自动恢复 | 🔧 部分完成 | Phase 2 | 明确指引、完成监测、原工具及 Agent 幂等续跑、超时关闭通过 |
-| 4 | Agent Desktop 项目内集成 browser runtime（跨项目阶段） | ⬜ | Phase 3，且 Agent Desktop Phase 0～3 稳定 | Desktop runtime 与 RemoteExecutor 契约通过；关闭模块后 Agent 主链路正常 |
+| 3 | 服务端可视化 + 工具挂起/人工接管/自动恢复 | 🔧 Phase 3R 修复待开发 | Phase 2 | 旧 Redis 无 Stream 依赖；验证码确定性转人工；原工具及 Agent 幂等续跑；全文件测试无事件循环残留 |
+| 4 | Agent Desktop 项目内集成 browser runtime（跨项目阶段） | ⏸ 被 Phase 3R 阻塞 | Phase 3R 真实门禁通过，且 Agent Desktop Phase 0～3 稳定 | Desktop runtime 与 RemoteExecutor 契约通过；关闭模块后 Agent 主链路正常 |
 | 5 | 自动路由与安全策略 | ⬜ | Phase 5A 服务端规则依赖 Phase 3；Phase 5B 桌面升级链路依赖 Agent Desktop Phase 4 | 路由矩阵、SSRF、不可逆防重放通过 |
 | 6 | 可观测性、容量和运维 | ⬜ | Phase 5 | 指标/告警/压测/故障注入通过 |
 | 7 | 灰度迁移、全量验收和文档收口 | ⬜ | Phase 6 | 全验收通过并更新索引状态 |
@@ -111,18 +113,36 @@
 
 ## 6. Phase 3：服务端画面与网页人工接管
 
-> 进度（2026-07-20）：🔧 代码收口完成、真实环境门禁待验证。已落地
+> 进度（2026-07-22）：🔧 真实环境验收未通过，进入 Phase 3R 修复。此前已落地
 > `ToolSuspension`、同会话 409、latest-only 画面、一次性 view ticket、网页人工
-> 接管、白名单双采样完成监测、持久 resume stream/worker、原 `tool_call_id`
+> 接管、白名单双采样完成监测、持久 resume worker、原 `tool_call_id`
 > exactly-once continuation、原 Agent 后台 LLM 续跑、自动完成后台 monitor、人工
 > 超时 reaper、continuation seq 补取，以及 BrowserView/HumanAssistanceCard。
 > 三智能体流程修复了多工具挂起配对、断线前上下文持久化、延期/reaper 竞态、
 > iframe 挑战识别、二次人工暂停路由、续跑 TTL 和前端轮询泄漏；本机 browser
 > 单测 177 通过、Phase 3 定向测试 32 通过、Agent 相邻测试 12 通过、前端组件
-> 3 通过且 production build、`src.main` import 通过。真实 Redis opt-in 用例因本机
-> 无服务保持 skip；真实 PostgreSQL、两 Gunicorn worker owner 路由、真实验证码页
-> 同 page/context 与进程崩溃补偿尚未验收，因此仍不得标记 Phase 3 完成，也未
-> 提前实现 Agent Desktop browser runtime executor。
+> 3 通过且 production build、`src.main` import 通过。但测试环境 Redis 4.3.0 对
+> `XREAD` 返回 unknown command，两个 resume worker 约每 0.5 秒持续报错；真实
+> 验证码页已进入同一 page/context，却被编排器判为 `done`，run 直接 `SUCCEEDED`，
+> 未创建 assistance。Phase 3 测试文件整体运行另有 31 通过、1 个跨事件循环残留
+> 失败（该用例单独运行通过）。真实 PostgreSQL、两 Gunicorn worker 与六终态进程
+> 回收已通过基础验证，但不足以抵消上述失败；Phase 3R 通过前不得开始 Phase 4。
+>
+> Phase 3R 实施进度（2026-07-22）：🔧 本机实现完成，真实 E2E 待部署补验。
+> 已落地：(1) 3R.1 PostgreSQL `bs_browser_resume_jobs` 持久 lease 队列替代 Redis
+> Stream，DDL 同步两份 SQL，`BrowserResumeJobDB` 用 `FOR UPDATE SKIP LOCKED` 领取，
+> `BrowserResumeWorker` 改短轮询，`ResumeStore` 删除 `xadd/xread`，assistance CAS
+> 与原 `tool_call_id`/continuation 去重保证 exactly-once effect；(2) 3R.2 确定性
+> `HumanRequirementDetector`，orchestrator 接受 LLM `done` 前先校验，验证码/登录/
+> MFA/扫码/文件选择器命中强制转人工，LLM `done` 或文字"请人工登录"不能覆盖；
+> (3) 3R.3 `human_control._RUNTIME_LOCK` 与 `view_hub` 锁惰性化，completion task
+> 跨循环归属检查，main.py 启动能力探针 `probe_phase3_primitives`，新增 browser
+> 测试 conftest 隔离 fixture。本机 browser 单测 194 通过（2 个真实 Playwright
+> `local_worker` 用例因本机无 Chromium 失败，属环境问题非回归），Phase 3 定向
+> 32 通过、新增 detector 9 通过、PG 队列 10 通过，正反顺序各跑一次均 51 通过
+> 无跨事件循环残留，`src.main` import 通过。真实门禁（无 Stream Redis + 真实 PG
+> + 两 Gunicorn worker + 真实验证码页）待部署后按 §3R.4 补验；本机 docker 不可用，
+> 真实门禁补验通过前 Phase 3R 仍不标完成、Phase 4 保持阻塞。
 
 ### 后端
 
@@ -132,7 +152,7 @@
 - 新增 `src/api/browser_runs.py` 的 view ticket、view WS、take/complete/extend/cancel API；complete 必须服务端重新快照校验并 CAS。
 - Local executor 接 `page.screencast`：1280×720、quality 60、5 FPS、latest-frame backpressure。
 - executor 上报脱敏 navigation/DOM-structure 变化；实现白名单完成条件、连续两次稳定判定和 `confirm_only`。
-- Redis 增加 assistance、tool suspension、`browser_resume_jobs` 和带 seq 的 `agent_continuation_events` Stream；consumer group + 数据库 UNIQUE assistance_id 确保 exactly-once 领取效果，continuation 事件支持断线补取。
+- Redis 仅保留 assistance、tool suspension、控制锁和带 seq 的短期 `agent_continuation_events` JSON 窗口；resume job 改由 PostgreSQL `bs_browser_resume_jobs` 持久化，唯一约束与 CAS 确保 exactly-once 业务效果。
 - `AgentResumeCoordinator` 从同一 run/page/context 和步骤索引恢复 orchestrator，工具终态后把结果接回原 tool_call_id，再启动原 Agent continuation。
 - Web presence 增加 `agent_continuation_available` 通知；新增 continuation events 补取 API。原 SSE 挂起后可正常结束，恢复事件不得写入已关闭响应。
 - pointer/keyboard 只在 `RUNNING_HUMAN` 接收；正文不写日志。
@@ -154,6 +174,46 @@
 - 不可逆：人工完成提交后 checkpoint 标记 `completed_by_human`，恢复 Agent 不重复点击。
 - 前端：组件交互测试 + `npm run build`。
 - 安全：另一 tenant/user 无法观看或发送输入。
+
+### Phase 3R：真实环境兼容性与人工接管修复
+
+#### 3R.0 红灯契约
+
+- 增加真实 Redis 能力用例：环境允许不支持 Streams，但 Browser Phase 3 启动和恢复链路不得调用 `XADD/XREAD/XGROUP`，worker 不得形成高频异常循环。
+- 增加真实结构快照用例：含用户名、密码和图形验证码的登录页必须创建 `CAPTCHA_REQUIRED` assistance，LLM 返回 `done` 或文字提示“请人工登录”都不能把 run 标记为成功。
+- 将 Phase 3 测试文件做整文件、重复和随机顺序运行；先稳定复现并定位跨 event loop 的 registry/task 残留，再转绿。
+
+#### 3R.1 PostgreSQL 恢复队列
+
+- 在 `deploy/init-postgres.sql` 与 `deploy/db_update.sql` 同步新增 `bs_browser_resume_jobs`：`job_id`、tenant/assistance/run 关联、状态、lease owner/期限、attempts、available_at、白名单错误码和时间戳；`assistance_id` 唯一。
+- assistance 的 `resume_queued` CAS 与 job 插入必须在同一 PostgreSQL 事务内完成，避免状态已变更但任务丢失。
+- coordinator 使用 `FOR UPDATE SKIP LOCKED` 领取 pending 或 lease 过期任务，按短轮询、有限退避和 lease 回收处理 worker 崩溃；业务结果仍由 assistance 唯一约束、原 `tool_call_id` 和 continuation 去重保证只生效一次。
+- 删除 resume job 的 Redis Stream 读写和 consumer group 初始化；Redis 继续承担短状态、控制锁与 continuation 事件窗口，不新增升级 Redis 的部署前提。
+
+#### 3R.2 确定性人工需求检测
+
+- 新增 `HumanRequirementDetector`，在导航后首个 snapshot、每步执行后及接受 LLM `done` 前检查结构信号。
+- 检测 challenge iframe、captcha 标签/角色、密码 + 验证码组合、MFA/扫码结构、文件选择器和受阻目标；只读取脱敏结构，不读取或记录输入值。
+- 命中后分别产生 `CAPTCHA_REQUIRED`、`AUTH_REQUIRED`、`MFA_REQUIRED`、`FILE_PICKER_REQUIRED`；未满足的人工条件禁止转 `SUCCEEDED`。
+- 单独出现“登录”链接或普通密码字段不触发误报；人工完成后仍复用既有双采样条件校验，并从同一 page/context、步骤索引和原 tool call 续跑。
+
+#### 3R.3 隔离与可观测性
+
+- runtime registry 只保存当前事件循环拥有的 task；测试 fixture 在每例结束时注销并等待本例 task，关闭的旧 event loop 不再参与 gather/cancel。
+- Redis 能力探测只验证实际使用的命令；不兼容时输出一次聚合告警并关闭相关分布式能力，禁止每 worker 每秒重复堆栈。
+- 增加 resume queue lag、lease reclaim、resume result、human-requirement reason 指标；日志只记录 ID、状态和白名单原因码。
+
+#### 3R.4 部署与验收
+
+1. 先执行两份 DDL，再滚动重启 API worker；确认旧 worker 清空且无活动 assistance 后切换 coordinator。
+2. 在不支持 Streams 的现有 Redis、真实 PostgreSQL 和两个 Gunicorn worker 下验证领取、并发双击、worker 崩溃、lease 回收与只恢复一次。
+3. 在真实验证码登录页验证：自动创建 assistance → 人工登录 → 同一 page/context 交还 → 原 `tool_call_id` 完成 → 原 Agent 无新用户消息继续回复。
+4. 重跑 browser 全量、Phase 3 整文件重复/随机顺序、Agent 相邻测试、前端组件/build、六终态进程回收和 `src.main` import。
+5. 回滚只回滚应用代码，不删除新增表；切回前必须先处理所有 pending/processing assistance，避免悬挂任务。
+
+Phase 3R 的退出门禁是：现有 Redis 无 Stream 错误、验证码场景稳定转人工、恢复任务跨 worker 只生效一次、测试无跨 event loop 残留、真实 E2E 保留证据。全部满足后才允许 Phase 4 进入开发。
+
+Phase 3R 实施按项目三智能体流程串行执行：开发与自测 → 独立测试及启动安全检查 → 独立 Code Review；全部通过后由主控再次执行关键 import/测试终检。任何一步失败都回到修复阶段，不以缩小断言、跳过真实 Redis/PostgreSQL 用例或只跑单个测试代替门禁。
 
 ## 7. Phase 4：Agent Desktop 项目内集成 browser runtime
 

@@ -1,7 +1,7 @@
 # Agent 跨平台桌面客户端开发计划
 
 > 日期：2026-07-14
-> 状态：🔧 部分完成（Phase 0～3 Windows 完成；Phase 4 等待浏览器契约；Phase 5 Windows 自动更新代码与开发包完成，正式签名/发布源/真升级待外部条件；macOS 各 Phase 延后验证）
+> 状态：🔧 部分完成（Phase 0～3 Windows 完成；Phase 4 被浏览器 Phase 3R 真实门禁阻塞；Phase 5 Windows 自动更新代码与开发包完成，正式签名/发布源/真升级待外部条件；macOS 各 Phase 延后验证）
 > 设计基线：[desktop-agent-client-design.md](./desktop-agent-client-design.md)
 > 流程：每个非平凡 Phase 严格执行开发 → 独立测试 → Code Review；不自动提交。
 
@@ -21,7 +21,7 @@ Web 构建和 Python 服务端能力无回归；Windows/macOS 签名客户端可
 | 1 | 路由/入口拆分与 Portal 构建隔离 | ✅ Windows 完成；macOS 延后验证 | Web 全功能不变；Desktop 包不含 Portal-only route/layout/admin API |
 | 2 | Electron 壳与平台适配层 | ✅ Windows 完成；macOS 延后验证 | Windows 真壳、真实 renderer、单实例、安全边界和离线恢复通过 |
 | 3 | 凭证、安全、文件与系统集成 | ✅ Windows 完成；macOS 延后验证 | Windows safeStorage、受控下载/外链、深链与零敏感残留门禁通过 |
-| 4 | 可选浏览器 runtime 适配 | ⏸ 等待进入条件 | 统一 Executor contract 与进程回收通过；关闭模块后 Agent 全功能正常 |
+| 4 | 可选浏览器 runtime 适配 | ⏸ 等待浏览器 Phase 3R | 统一 Executor contract 与进程回收通过；关闭模块后 Agent 全功能正常 |
 | 5 | 签名、更新、CI 与灰度 | 🔧 Windows 本地实现完成；正式发布待证书/发布源 | 更新状态/UI/受控配置/发布元数据和 0.0.2 unsigned dev NSIS 通过；签名、真实升级/回滚尚未验证 |
 | 6 | 全量回归、真机验收与文档收口 | ⬜ | 完成定义全部满足并归档索引 |
 
@@ -132,6 +132,8 @@ Web 构建和 Python 服务端能力无回归；Windows/macOS 签名客户端可
 ### 进入条件
 
 浏览器执行架构 Phase 0-3 的 RunManager、Executor、人工接管和 suspend/resume 契约已稳定；若其开发尚未完成，本 Phase 不提前复制临时代码。
+
+2026-07-22 真实环境发现 Redis 4.3.0 不支持当前 resume Stream，且验证码登录页未确定性触发人工接管。进入条件因此明确为浏览器 Phase 3R 全部门禁通过：PostgreSQL lease 队列、确定性人工需求检测、跨事件循环测试隔离及双 Gunicorn worker 真实 E2E 均有证据；仅“代码已合并”不满足条件。
 
 本 Phase 是 Agent Desktop 已稳定后的可选增强，不是桌面 MVP 的发布前置条件。浏览器工程必须适配 Phase 0～3 已确定的认证、更新、安全和生命周期边界。
 

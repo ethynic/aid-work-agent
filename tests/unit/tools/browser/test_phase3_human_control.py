@@ -678,7 +678,10 @@ async def test_automatic_completion_waits_while_challenge_iframe_is_present(monk
 
 @pytest.mark.asyncio
 async def test_resume_worker_restart_replays_persistent_job():
-    job = SimpleNamespace(tenant_id="tenant-a", assistance_id="assist-a")
+    job = SimpleNamespace(
+        tenant_id="tenant-a", assistance_id="assist-a", run_id="run-a",
+        job_id="brj_a", claimed_by="worker-1",
+    )
     processed = asyncio.Event()
 
     class Store:
@@ -686,26 +689,26 @@ async def test_resume_worker_restart_replays_persistent_job():
             self.expose_job = expose_job
             self.calls = 0
 
-        async def read_resume_jobs(self, after_id, block_ms=1000):
+        async def claim_resume_jobs(self, *, lease_owner, lease_seconds=600, limit=10):
             self.calls += 1
             if self.expose_job and self.calls == 1:
-                return [("1-0", job)]
-            await asyncio.sleep(60)
+                return [job]
+            return []
 
     class Coordinator:
-        async def resume(self, tenant_id, assistance_id):
+        async def resume(self, tenant_id, assistance_id, *, job_id=None, lease_owner=None):
             processed.set()
             return {"success": True}
 
     first = BrowserResumeWorker(
-        store=Store(expose_job=False), coordinator_factory=Coordinator
+        store=Store(expose_job=False), coordinator_factory=Coordinator, poll_interval=0.01,
     )
     first.start()
     await asyncio.sleep(0)
     await first.stop()
 
     restarted = BrowserResumeWorker(
-        store=Store(expose_job=True), coordinator_factory=Coordinator
+        store=Store(expose_job=True), coordinator_factory=Coordinator, poll_interval=0.01,
     )
     restarted.start()
     await asyncio.wait_for(processed.wait(), timeout=1)

@@ -16,6 +16,7 @@ from src.core.tool_suspension import ToolSuspension
 from .human_completion_monitor import (
     CompletionObservation, CompletionPredicate, HumanCompletionMonitor,
 )
+from .human_requirement_detector import CAPTCHA_MARKERS
 from .resume_store import AssistanceRecord, ResumeStore
 from .run_db import BrowserRunDB
 from .run_manager import BrowserRunManager, RunState
@@ -32,22 +33,47 @@ class OwnedHumanRuntime:
 
 
 _OWNED_RUNTIMES: dict[tuple[str, str], OwnedHumanRuntime] = {}
-_RUNTIME_LOCK = asyncio.Lock()
+_RUNTIME_LOCK: asyncio.Lock | None = None
 _COMPLETION_TASKS: dict[tuple[str, str], asyncio.Task] = {}
 
 
+def _get_runtime_lock() -> asyncio.Lock:
+    """惰性创建 asyncio.Lock，绑定到首次使用的当前事件循环。
+
+    模块级 ``asyncio.Lock()`` 会在导入时绑定首个循环，pytest-asyncio
+    function-scoped loop 下导致跨循环残留（Phase 3R 修复）。惰性创建让锁
+    绑定到真正运行注册函数的循环；测试 fixture 通过 ``_reset_runtime_state``
+    在每例后重建，避免旧循环的锁泄漏到新循环。
+    """
+    global _RUNTIME_LOCK
+    if _RUNTIME_LOCK is None:
+        _RUNTIME_LOCK = asyncio.Lock()
+    return _RUNTIME_LOCK
+
+
+def _reset_runtime_state() -> None:
+    """清空 owner runtime 注册表、completion task 和运行时锁。
+
+    仅供测试 fixture 在每例后调用，消除跨事件循环残留。生产代码不应调用。
+    """
+    global _RUNTIME_LOCK
+    _OWNED_RUNTIMES.clear()
+    _COMPLETION_TASKS.clear()
+    _RUNTIME_LOCK = None
+
+
 async def register_owned_runtime(tenant_id: str, run_id: str, runtime: OwnedHumanRuntime) -> None:
-    async with _RUNTIME_LOCK:
+    async with _get_runtime_lock():
         _OWNED_RUNTIMES[(tenant_id, run_id)] = runtime
 
 
 async def get_owned_runtime(tenant_id: str, run_id: str) -> OwnedHumanRuntime | None:
-    async with _RUNTIME_LOCK:
+    async with _get_runtime_lock():
         return _OWNED_RUNTIMES.get((tenant_id, run_id))
 
 
 async def unregister_owned_runtime(tenant_id: str, run_id: str) -> None:
-    async with _RUNTIME_LOCK:
+    async with _get_runtime_lock():
         _OWNED_RUNTIMES.pop((tenant_id, run_id), None)
         monitor_task = _COMPLETION_TASKS.pop((tenant_id, run_id), None)
     if monitor_task and monitor_task is not asyncio.current_task():
@@ -59,13 +85,23 @@ async def unregister_owned_runtime(tenant_id: str, run_id: str) -> None:
 
 async def stop_all_completion_monitors() -> None:
     """应用 shutdown 时停止所有自动完成采样，不遗留后台 task。"""
-    async with _RUNTIME_LOCK:
+    async with _get_runtime_lock():
         tasks = list(_COMPLETION_TASKS.values())
         _COMPLETION_TASKS.clear()
-    for task in tasks:
+    # 只 cancel/gather 属于当前事件循环的 task；旧循环的 task 跨循环 gather
+    # 会抛 RuntimeError（Phase 3R 修复）。
+    # 用 get_running_loop（而非已弃用的 get_event_loop）：本函数是 async def，
+    # 调用时必然存在运行中的循环。
+    current_loop = asyncio.get_running_loop()
+    cancellable = [t for t in tasks if t.get_loop() is current_loop]
+    stale = [t for t in tasks if t.get_loop() is not current_loop]
+    for task in cancellable:
         task.cancel()
-    if tasks:
-        await asyncio.gather(*tasks, return_exceptions=True)
+    if cancellable:
+        await asyncio.gather(*cancellable, return_exceptions=True)
+    # 旧循环的 task 已无法安全操作，仅作记录（测试隔离靠 fixture 重建状态）
+    if stale:
+        logger.debug("browser completion 残留跨循环 task 已跳过: count={}", len(stale))
 
 
 def _instructions(reason_code: str) -> tuple[str, str, tuple[str, ...]]:
@@ -75,6 +111,30 @@ def _instructions(reason_code: str) -> tuple[str, str, tuple[str, ...]]:
                 "点击“开始接管”",
                 "直接在浏览器画面中完成验证码，不要在聊天中发送验证码或密码",
                 "验证成功后点击“完成并继续”，系统会检测页面状态后续跑",
+            ),
+        )
+    if reason_code == "MFA_REQUIRED":
+        return (
+            "PAGE_MFA", "请完成二次验证", (
+                "点击“开始接管”",
+                "在浏览器中完成动态码 / 扫码 / 二次验证，验证码不要发送到聊天",
+                "完成二次验证后点击“完成并继续”",
+            ),
+        )
+    if reason_code == "FILE_PICKER_REQUIRED":
+        return (
+            "PAGE_FILE_PICKER", "请选择文件", (
+                "点击“开始接管”",
+                "在浏览器弹出的文件选择器中选择需要上传的文件",
+                "选择完成后点击“完成并继续”",
+            ),
+        )
+    if reason_code == "AUTH_REQUIRED":
+        return (
+            "PAGE_AUTH", "请完成登录", (
+                "点击“开始接管”",
+                "在浏览器中完成登录，账号密码只在浏览器中输入",
+                "登录成功后点击“完成并继续”",
             ),
         )
     return (
@@ -231,7 +291,7 @@ class HumanControlCoordinator:
     async def _start_completion_monitor(self, record: AssistanceRecord) -> None:
         """owner worker 后台双采样；按钮与自动事件仍共用同一个 CAS。"""
         key = (record.tenant_id, record.run_id)
-        async with _RUNTIME_LOCK:
+        async with _get_runtime_lock():
             current = _COMPLETION_TASKS.get(key)
             if current and not current.done():
                 return
@@ -294,14 +354,14 @@ class HumanControlCoordinator:
             structural = frozenset(
                 str(item.get("role") or item.get("element_type") or "") for item in elements
             )
-            challenge_markers = (
-                "captcha", "recaptcha", "hcaptcha", "turnstile",
-                "验证码", "人机验证", "安全验证",
-            )
+            # CAPTCHA 标记必须与 detect_human_requirement 完全对齐（Phase 3R 修复）：
+            # 否则 detect 命中（如 geetest/校验码/滑动验证/图形验证）但 sampler 漏判，
+            # challenge_iframe_absent 谓词提前满足，会在验证码仍存在时自动恢复 Agent。
+            # 元素签名也按 detector 的 _element_signature 口径（label+role+element_type+tag+name）。
             challenge = any(
-                any(marker in (
-                    str(item.get("label", "")) + str(item.get("role", ""))
-                ).lower() for marker in challenge_markers)
+                any(marker in " ".join(
+                    str(item.get(k) or "") for k in ("label", "role", "element_type", "tag", "name")
+                ).lower() for marker in CAPTCHA_MARKERS)
                 for item in elements
             ) or bool(snapshot.get("challenge_iframe_present"))
             return CompletionObservation(
@@ -349,9 +409,6 @@ class HumanControlCoordinator:
                 await unregister_owned_runtime(tenant_id, record.run_id)
                 await self.store.clear(record)
             raise RuntimeError("TOOL_SUSPEND_FAILED")
-        await self._update_audit_state(
-            tenant_id, assistance_id, "controlling", "resume_queued"
-        )
         return queued, []
 
     async def extend(self, tenant_id: str, user_id: str, assistance_id: str) -> AssistanceRecord:
