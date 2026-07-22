@@ -15,6 +15,7 @@ cat -n 行号一致，可直接配合 read 精读。
 - rg 不存在时返回明确错误，不崩溃。
 """
 
+import asyncio
 import os
 import re
 import subprocess
@@ -156,9 +157,10 @@ class GrepTool(BaseTool):
             logger.error(f"构建 rg 命令失败: {e}")
             return {"success": False, "error": f"构建搜索命令失败: {e}"}
 
-        # 执行 rg
+        # 执行 rg（通过 to_thread 避免阻塞事件循环）
         try:
-            proc = subprocess.run(
+            proc = await asyncio.to_thread(
+                subprocess.run,
                 cmd,
                 capture_output=True,
                 text=True,

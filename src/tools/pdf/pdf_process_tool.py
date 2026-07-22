@@ -6,6 +6,7 @@ Agent 优先传 instruction（用户目的）+ content（待处理正文）+ fil
 执行 pipeline 后返回结果。
 """
 
+import asyncio
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
@@ -767,7 +768,8 @@ class PdfProcessTool(BaseTool):
             return {"success": False, "error": "render_pages 操作需要 file_paths 参数"}
 
         file_path = self._resolve_file(ctx.file_paths[0])
-        return render_pages(
+        return await asyncio.to_thread(
+            render_pages,
             file_path,
             pages=params.get("pages"),
             dpi=params.get("dpi", 150),
@@ -782,7 +784,8 @@ class PdfProcessTool(BaseTool):
             return {"success": False, "error": "validate 操作需要 file_paths 参数"}
 
         file_path = self._resolve_file(ctx.file_paths[0])
-        result = validate_pdf(
+        result = await asyncio.to_thread(
+            validate_pdf,
             file_path,
             level=params.get("level", "structural"),
             pages=params.get("pages"),

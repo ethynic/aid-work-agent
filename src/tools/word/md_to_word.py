@@ -5,6 +5,7 @@ Markdown 转 Word 文档（基于 Pandoc 引擎）
 内置 LLM 输出规范化处理，自动修复常见 Markdown 格式问题。
 """
 
+import asyncio
 import re
 import subprocess
 import tempfile
@@ -111,7 +112,10 @@ async def convert_async(md_text: str, template: Optional[str] = None,
             logger.warning(
                 f"[md_to_word] inline_images 失败，回退使用原始 markdown: {e}"
             )
-    return _convert_sync(md_text, template=template, title=title, author=author)
+    # Pandoc 转换是同步阻塞调用（subprocess），必须 to_thread 避免阻塞事件循环
+    return await asyncio.to_thread(
+        _convert_sync, md_text, template=template, title=title, author=author
+    )
 
 
 def convert(md_text: str, template: Optional[str] = None,

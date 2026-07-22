@@ -95,6 +95,75 @@ async def get_data():
     return result
 ```
 
+### 假异步（Fake Async）规范
+
+**核心规则**：在 `async def` 函数中调用同步阻塞函数（`subprocess.run`、`requests.post`、`time.sleep`、Pandoc/LibreOffice/ripgrep 等子进程调用、CPU 密集计算）**必须**通过 `asyncio.to_thread()` 包裹，否则会阻塞 UvicornWorker 的 asyncio 事件循环，使该 worker 上的所有其他并发请求在阻塞期间无法调度。
+
+**关键定位原则**：修复点在 **async 入口层**，不是底层同步模块。
+
+- 底层同步模块（如 `pdf_renderer._render_with_poppler`、`md_to_word._pandoc_convert`、`ppt.renderer.NodePptRenderer.render`）保持 `def` 同步，**不要**在同步函数里写 `await asyncio.to_thread(...)`（语法错误）
+- 在调用它们的 `async def` 入口（如 `*_process_tool.py` 的 `_handle_*` handler、`convert_async`、`BaseTool.execute`）里用 `await asyncio.to_thread(sync_func, *args, **kwargs)` 包裹
+
+**正确示例**：
+
+```python
+# ✅ 底层保持同步
+def render_pages(file_path: str, ...) -> Dict[str, Any]:
+    result = subprocess.run(cmd, ...)  # 同步函数里直接调，没问题
+    return ...
+
+# ✅ async 入口用 to_thread 包裹
+async def _handle_render_pages(self, ctx, params) -> Dict:
+    file_path = self._resolve_file(ctx.file_paths[0])
+    return await asyncio.to_thread(
+        render_pages, file_path,
+        pages=params.get("pages"),
+        dpi=params.get("dpi", 150),
+    )
+```
+
+**错误示例**：
+
+```python
+# ❌ async 函数里直接调同步阻塞函数（假异步）
+async def _handle_render_pages(self, ctx, params) -> Dict:
+    file_path = self._resolve_file(ctx.file_paths[0])
+    return render_pages(file_path, ...)  # 阻塞事件循环
+
+# ❌ 在同步函数里写 await（语法错误）
+def _render_with_poppler(path, ...) -> Dict:
+    result = await asyncio.to_thread(subprocess.run, cmd, ...)  # SyntaxError
+```
+
+**`to_thread` 参数传递**：`asyncio.to_thread(func, *args, **kwargs)`，第一个参数是函数对象（不要加括号调用），后续参数传给该函数。`to_thread(func())` 会在主线程同步执行后把返回值传给 `to_thread`，失去异步化意义。
+
+**判断标准**：
+
+| 场景 | 是否需要 `to_thread` |
+|------|---------------------|
+| `async def` 里调 `subprocess.run` / `requests.post` / `time.sleep` | ✅ 必须 |
+| `async def` 里调底层同步函数（底层内部有 subprocess/网络/磁盘 IO） | ✅ 必须 |
+| `async def` 里调纯内存计算（<1ms） | ❌ 不需要 |
+| 同步 `def` 函数里调 `subprocess.run` | ❌ 不需要（同步函数本就跑在调用方的线程里） |
+| 守护线程 / APScheduler worker 线程里的 `time.sleep` | ❌ 不需要（不在事件循环里） |
+
+**已修复的假异步案例**（2026-07）：
+
+| 文件 | 修复点 |
+|------|--------|
+| `src/tools/file/grep_tool.py` | `execute` 里 `subprocess.run(rg)` 用 `to_thread` 包裹 |
+| `src/tools/pdf/pdf_process_tool.py` | `_handle_render_pages` / `_handle_validate` 用 `to_thread` 包裹 `render_pages` / `validate_pdf` |
+| `src/tools/word/md_to_word.py` | `convert_async` 内部 `_convert_sync`（Pandoc 转换）用 `to_thread` 包裹 |
+| `src/tools/ppt/ppt_process_tool.py` | `_handle_html` / `_handle_spec` / `_generate_ppt` / `execute` 中调 `_render_node_spec` / `_apply_quality_validation` / `_check_node_renderer_ready` 用 `to_thread` 包裹 |
+
+**检测方法**：
+
+```bash
+# 查找 async def 函数里直接调 subprocess.run 但未 to_thread 包裹的位置
+grep -rn "subprocess\.run" src/ --include="*.py" | grep -v "to_thread"
+# 逐个检查对应函数是否是 async def，若是则需要 to_thread 包裹
+```
+
 ## 包初始化副作用规范（Python `__init__.py` 反模式）
 
 **核心规则**：包的 `__init__.py` 和模块顶层**禁止**执行重计算或创建单例对象。包初始化应该是惰性的——任何对包内任意子模块的 import 都不应触发副作用。

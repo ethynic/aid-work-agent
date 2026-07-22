@@ -155,7 +155,7 @@ class PptProcessTool(BaseTool):
             else:
                 result = await self._handle_auto(normalized, mode)
             if result.get("success"):
-                return self._apply_quality_validation(result)
+                return await asyncio.to_thread(self._apply_quality_validation, result)
             return result
         except Exception as e:
             logger.error(f"[PptProcess] 执行失败: {e}", exc_info=True)
@@ -188,7 +188,7 @@ class PptProcessTool(BaseTool):
                 "error": "HTML 转 PPTX 功能未启用（PPT_ENABLE_HTML_EXPORT=false）",
             }
         export_mode = normalized.export_mode or "high_fidelity"
-        if not self._check_node_renderer_ready():
+        if not await asyncio.to_thread(self._check_node_renderer_ready):
             return {"success": False, "error": "HTML 转 PPTX 所需的 Node 渲染器不可用"}
 
         source: str | Path | None = normalized.content
@@ -230,21 +230,27 @@ class PptProcessTool(BaseTool):
                 include_editable=export_mode in {"editable", "both"},
             )
             if export_mode == "high_fidelity":
-                result = self._render_node_spec(exported.spec)
+                result = await asyncio.to_thread(self._render_node_spec, exported.spec)
             elif export_mode == "editable":
                 if exported.editable_spec is None:
                     raise RuntimeError("HTML editable extraction failed")
-                result = self._render_node_spec(
-                    exported.editable_spec, output_stem=f"{safe_asset_name}_editable"
+                result = await asyncio.to_thread(
+                    self._render_node_spec,
+                    exported.editable_spec,
+                    output_stem=f"{safe_asset_name}_editable",
                 )
             else:
                 if exported.editable_spec is None:
                     raise RuntimeError("HTML editable extraction failed")
-                result = self._render_node_spec(
-                    exported.editable_spec, output_stem=f"{safe_asset_name}_editable"
+                result = await asyncio.to_thread(
+                    self._render_node_spec,
+                    exported.editable_spec,
+                    output_stem=f"{safe_asset_name}_editable",
                 )
-                high_fidelity = self._render_node_spec(
-                    exported.spec, output_stem=f"{safe_asset_name}_high_fidelity"
+                high_fidelity = await asyncio.to_thread(
+                    self._render_node_spec,
+                    exported.spec,
+                    output_stem=f"{safe_asset_name}_high_fidelity",
                 )
                 result["alternate_file_path"] = high_fidelity["file_path"]
                 result["_alternate_layout_qa"] = high_fidelity.get("_layout_qa")
@@ -382,7 +388,7 @@ class PptProcessTool(BaseTool):
         output_title = self._normalizer.output_title(normalized.output_name)
         if output_title:
             spec = spec.model_copy(update={"title": output_title})
-        return self._render_node_spec(spec)
+        return await asyncio.to_thread(self._render_node_spec, spec)
 
     async def _generate_ppt(self, plan: dict) -> Dict[str, Any]:
         """根据大纲生成 PPT 文件。"""
@@ -394,17 +400,17 @@ class PptProcessTool(BaseTool):
             from src.tools.ppt.spec_builder import SlideDeckSpecBuilder
 
             try:
-                if not self._check_node_renderer_ready():
+                if not await asyncio.to_thread(self._check_node_renderer_ready):
                     raise RuntimeError("node renderer unavailable")
                 spec = SlideDeckSpecBuilder().from_planner(plan)
-                return self._render_node_spec(spec)
+                return await asyncio.to_thread(self._render_node_spec, spec)
             except Exception as e:
                 logger.error(f"[PptProcess] PptxGenJS 渲染失败: {e}", exc_info=True)
                 if not config.renderer_fallback:
                     return {"success": False, "error": "PPT渲染服务暂不可用，请稍后重试"}
                 warning = (
                     "PptxGenJS 渲染器依赖不可用，已回退到 python-pptx 路径"
-                    if not self._check_node_renderer_ready()
+                    if not await asyncio.to_thread(self._check_node_renderer_ready)
                     else "PptxGenJS 渲染失败，已回退到 python-pptx 路径"
                 )
 
