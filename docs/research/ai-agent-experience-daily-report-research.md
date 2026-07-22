@@ -121,7 +121,7 @@
 3. **数据驱动 + 故事化叙述**：数字证明价值，故事让人共情，两者缺一不可
 4. **主动推送 + 被动查询**：日报默认主动推送到企微/邮件，同时提供「日报中心」供历史查询
 5. **隐私可控**：团队日报只暴露工作内容摘要，不暴露对话原文；管理员可下钻但不能旁路租户隔离
-6. **成本可控**：日报生成走小模型（如 `qwen-turbo`）+ 缓存，避免给主链路加成本
+6. **成本可控**：日报生成走小模型（如 `deepseek-v4-flash`）+ 缓存，避免给主链路加成本
 
 ### 4.2 双视角总览
 
@@ -227,6 +227,37 @@
   - 每周一 9:00 推送周报给租户管理员 + 平台管理员
   - 月度报告（每月 1 日）推送给租户管理员
 
+#### 4.4.4 采纳度分析（Adoption Analytics）-- 暂时搁置
+
+**背景**：行业标杆产品（M365 Copilot Dashboard、Glean Admin Console、Cursor Team Insights）都把「采纳度分析」作为核心模块，包括活跃率、功能覆盖率、使用深度分级、留存率、满意度等指标。调研中曾考虑在团队日报中内置完整的采纳度分析，但评估后决定**暂时搁置**，原因如下：
+
+| 指标 | 所需基础数据 | 本项目现状 | 缺口 |
+|------|------------|----------|------|
+| 活跃率 | 活跃用户数 / 总用户数 | ✅ `chat_records` + `users` 可算 | **无缺口，MVP 保留** |
+| 功能覆盖率 | 用户使用了多少种数字员工、多少种工具 | ⚠️ `subagent_id` 有，但工具调用维度未聚合 | 中等缺口，需新增聚合逻辑 |
+| 使用深度分级 | 按对话频次/工具多样性给用户分级（探索者/达人/专家） | ❌ 无分级模型 | 大缺口，需设计分级规则 |
+| 留存率 | 次日/7日/30日复访 | ⚠️ 数据可算但无现成指标 | 中等缺口，需新增留存计算 |
+| 满意度 | thumbs up/down、复访率、人工反馈 | ❌ **无反馈埋点** | **关键缺口**：对话无评价机制，无法衡量「用得好不好」 |
+
+**关键阻塞点**：**满意度数据缺失**。采纳度分析的核心是「不只是用了，而且用得好」，但本项目目前没有任何用户反馈通道（对话评价、点赞/踩、问题解决确认等），导致无法计算真正意义上的「采纳度」，只能算「使用度」。
+
+**MVP 阶段决策**：
+
+1. 团队日报只保留「活跃率」一个基础指标（活跃员工数 / 员工总数），作为采纳度的近似
+2. 「使用深度分级」「功能覆盖率」「留存率」「满意度」全部搁置
+3. 在 §7 后续展望中登记，待基础数据补齐后再做
+
+**后续补齐路径**（不在本次日报方案范围内）：
+
+| 补齐项 | 实施方式 | 优先级 |
+|--------|---------|--------|
+| 对话满意度埋点 | 在对话结束后展示「有用/无用」按钮，写入 `chat_records.feedback` 字段 | P1（解锁采纳度分析的关键） |
+| 功能覆盖率 | 按用户聚合 distinct `subagent_id` + distinct `tool_name`，与全量做比值 | P2 |
+| 使用深度分级 | 设计分级规则（如 0-10 次=探索者 / 11-50 次=达人 / 50+ 次=专家），按月重算 | P2 |
+| 留存率 | 计算 `datediff('day', first_use, last_use)` 分布，按周聚合 | P3 |
+
+> **结论**：采纳度分析是「价值证明」的终极武器，但需要基础数据沉淀。本次日报方案不阻塞在此，先让「活跃率 + 工作成果摘要 + 节省时间」跑起来，待满意度埋点等基础数据补齐后再升级为完整采纳度分析。
+
 ### 4.5 关键交互设计
 
 #### 4.5.1 日报生成时机
@@ -275,20 +306,58 @@ CREATE INDEX IF NOT EXISTS idx_work_daily_reports_user_date ON work_daily_report
 
 ```sql
 -- 日报推送配置表（每用户一行，UPSERT）
+-- 个人 / 团队两个视角独立配置；每个视角下可复选日报 / 周报 / 月报
 CREATE TABLE IF NOT EXISTS work_report_preferences (
     id SERIAL PRIMARY KEY,
     tenant_id TEXT NOT NULL,
     user_id TEXT NOT NULL,
-    personal_report_enabled BOOLEAN DEFAULT TRUE,      -- 个人日报开关
-    personal_push_channels TEXT[],                     -- ['in_app', 'wecom', 'email']
-    personal_push_time TIME DEFAULT '18:00',           -- 推送时间
-    team_report_enabled BOOLEAN DEFAULT FALSE,         -- 团队日报开关（仅管理员可见）
+
+    -- 个人视角：总开关 + 订阅的报告类型（复选）
+    personal_report_enabled BOOLEAN DEFAULT TRUE,            -- 个人报告推送总开关
+    personal_report_types TEXT[] NOT NULL DEFAULT ARRAY['daily'],  -- 复选：'daily' / 'weekly' / 'monthly'
+    personal_push_channels TEXT[],                           -- ['in_app', 'wecom', 'email']
+    personal_push_time TIME DEFAULT '18:00',                 -- 推送时间（日报/周报/月报各按约定时段派生）
+
+    -- 团队视角（仅管理员可见）：总开关 + 订阅的报告类型（复选）
+    team_report_enabled BOOLEAN DEFAULT FALSE,               -- 团队报告推送总开关
+    team_report_types TEXT[] NOT NULL DEFAULT ARRAY['daily'],-- 复选：'daily' / 'weekly' / 'monthly'
     team_push_channels TEXT[],
     team_push_time TIME DEFAULT '19:00',
+
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(tenant_id, user_id)
 );
 ```
+
+**字段语义说明**：
+
+| 字段 | 含义 | 取值示例 |
+|------|------|---------|
+| `personal_report_enabled` | 个人视角推送总开关（一键全关） | `TRUE` / `FALSE` |
+| `personal_report_types` | 个人订阅的报告类型（复选，与总开关是 AND 关系） | `['daily']` / `['daily','weekly']` / `['weekly','monthly']` |
+| `team_report_enabled` | 团队视角推送总开关 | `TRUE` / `FALSE` |
+| `team_report_types` | 团队订阅的报告类型（复选） | `['daily','weekly','monthly']` / `['weekly']` |
+
+**典型场景**：
+
+| 租户场景 | `personal_report_types` | `team_report_types` | 说明 |
+|---------|------------------------|--------------------|------|
+| 只要周报 | `['weekly']` | `['weekly']` | 员工和管理员都只看周报，最低成本 |
+| 日报 + 周报 | `['daily','weekly']` | `['daily','weekly']` | 日报看细节、周报看汇总 |
+| 日报 + 月报 | `['daily','monthly']` | `['daily','monthly']` | 跳过周报，月报用于月度复盘 |
+| 全开 | `['daily','weekly','monthly']` | `['daily','weekly','monthly']` | 完整订阅 |
+
+**配置界面提示文案**（在推送配置页面顶部展示）：
+
+> 💡 提示：生成日报、周报、月报会消耗少量积分（每次约 2-5 积分，由小模型 `deepseek-v4-flash` 生成）。订阅的报告类型越多，消耗积分越多。周报聚合 7 天数据、月报聚合 30 天数据，单次生成成本略高于日报。可在「积分用量」页面查看报告类消耗明细。
+
+**推送时间规则**（根据订阅类型派生，避免每类报告单独配置时间）：
+
+| 报告类型 | 生成时段 | 说明 |
+|---------|---------|------|
+| 日报 | 每日 `personal_push_time` / `team_push_time` | 默认 18:00 / 19:00 |
+| 周报 | 每周一 09:00 | 聚合上一周数据 |
+| 月报 | 每月 1 日 09:00 | 聚合上一月数据 |
 
 ### 4.6 LLM 摘要 Prompt 设计
 
@@ -397,10 +466,128 @@ POST /api/reports/team/daily-push         # 手动触发推送（平台管理员
 
 #### 4.7.4 成本控制
 
-- **模型选择**：摘要生成使用 `qwen-turbo` 或 `glm-4-flash`（成本低、速度快）
+- **模型选择**：摘要生成使用 `deepseek-v4-flash`（专用小模型配置项，详见 §4.7.6），成本低、速度快
 - **Token 控制**：每条对话 `user_message` 截断到 200 字，每日上限 50 条对话进入摘要
 - **缓存复用**：同一日多次查询只生成一次
-- **积分消耗**：日报生成不消耗用户积分（由平台承担），但「重新生成」扣 50 积分防止滥用
+- **积分消耗**：日报/周报/月报生成**实际消耗的积分由租户承担**（按真实 LLM 调用计量），「重新生成」同样计费以防止滥用；具体计费链路见 §4.7.5
+
+#### 4.7.5 计费链路：日报 LLM 调用写入 `chat_records`
+
+**核心原则**：日报/周报/月报的 LLM 调用属于租户的「AI 使用量」，必须与普通对话走同一计费链路，写入 `chat_records` 表，由 `create_chat_record()` 同事务扣减租户积分余额。
+
+**写入字段约定**：
+
+| `chat_records` 字段 | 日报调用的填法 | 说明 |
+|--------------------|--------------|------|
+| `record_id` | `generate_record_id()` 正常生成 | |
+| `session_id` | `report:{tenant_id}:{user_id}:{report_date}:{report_type}` | 专用命名空间，避免与真实会话混淆；团队日报 `user_id` 用 `team` 占位 |
+| `tenant_id` | 租户 ID | 租户承担成本 |
+| `user_id` | 触发生成的用户 ID；定时生成时为「租户管理员」或系统占位用户 | 用于按用户聚合用量 |
+| `user_message` | 摘要 Prompt 的输入（聚合后的对话列表 / 下级报告），可截断到 8000 字 | 留痕输入内容 |
+| `assistant_message` | LLM 生成的报告正文 | 留痕输出内容 |
+| `prompt_tokens` / `completion_tokens` / `cached_input_tokens` | 真实 token 用量 | 从 LLM 网关响应取 |
+| `model` | `deepseek-v4-flash`（或实际使用的模型） | 便于按模型维度统计 |
+| `provider` | `deepseek` | |
+| `execution_details` | `{"report_type": "daily/weekly/monthly", "scope": "personal/team", "input_dialog_count": N, "input_token_truncated": bool}` | 记录报告生成元数据 |
+| `agent_iterations` | `1` | 单次 LLM 调用，无迭代 |
+| `subagent_calls` | `null` | 报告生成不调用子智能体 |
+| `status` | `completed` / `failed` | |
+| `duration_ms` | 真实耗时 | |
+| `source_type` | `report_personal` / `report_team` / `report_personal_weekly` / `report_team_weekly` / `report_personal_monthly` / `report_team_monthly` | **关键字段**：区分报告类型，便于用量页过滤 |
+| `credit_cost` | 按 LLM 计费规则真实计算（参考 `src/saas/utils/billing.py` 的计价逻辑） | 同事务扣减 `tenants.credit_balance` |
+
+**`source_type` 扩展登记**：需在 [database_system_table.md §3.5](../../docs/system/database_system_table.md) 和 `frontend/src/api/enums.ts` 中同步新增 6 个枚举值，并在用量页（`PlatformTokenUsage.vue` / `TenantTokenUsage.vue`）的「来源类型」筛选器中展示。
+
+**计费链路示意**：
+
+```
+定时任务 / 用户点击「重新生成」
+    │
+    ▼
+generator.generate_report(tenant_id, user_id, report_type, scope)
+    │
+    ├── 1. aggregator.aggregate(...)      # 从 chat_records 聚合输入数据（纯读）
+    │
+    ├── 2. summarizer.summarize(prompt)   # 调 LLM 网关，走 deepseek-v4-flash
+    │      └── gateway.chat_with_tools(model=report_model, ...)
+    │
+    ├── 3. 计算 credit_cost               # 按 token 用量和计价表计算
+    │
+    ├── 4. db.insert_work_daily_report()  # 写 work_daily_reports 表（报告正文）
+    │
+    └── 5. models.create_chat_record(     # 写 chat_records 表 + 同事务扣积分
+              session_id=f"report:{tenant}:...",
+              source_type=f"report_{scope}_{report_type}",
+              credit_cost=...,
+              ...
+        )
+```
+
+**用量页展示**：报告类 LLM 调用在「积分用量」页面会以独立条目出现，`source_type` 为 `report_*`，租户管理员可清楚看到「日报/周报/月报各消耗了多少积分」，与普通对话消耗并列展示。这样做的目的：
+
+1. **成本透明**：租户能看到报告功能本身的真实成本，避免「为什么积分消耗突然增加」的疑惑
+2. **计费一致**：报告生成不搞特殊通道，复用现有计费/扣减/审计链路，降低维护成本
+3. **可关闭性**：租户若觉得报告不划算，可通过 `work_report_preferences` 关闭订阅，立即停止该项消耗
+
+#### 4.7.6 日报专用小模型配置
+
+**背景**：`.env` 中 `DEEPSEEK_MODEL_CODE=deepseek-v4-pro` 是主链路（员工日常对话）使用的思考模型，能力强但成本高。日报/周报/月报是聚合摘要任务，不需要强推理能力，应该走 `deepseek-v4-flash` 降低成本。直接覆盖 `DEEPSEEK_MODEL_CODE` 会影响主链路质量，因此**必须新增独立配置项**。
+
+**配置项设计**：
+
+| 层级 | 配置项 | 默认值 | 说明 |
+|------|-------|--------|------|
+| 环境变量 | `DEEPSEEK_REPORT_MODEL_CODE` | `deepseek-v4-flash` | 日报/周报/月报专用模型，独立于主链路 |
+| YAML | `configs/config.yaml` `llm.deepseek.report_model` | `${DEEPSEEK_REPORT_MODEL_CODE:-deepseek-v4-flash}` | 与 `model` 字段并列 |
+| Settings | `src/config/settings.py` `LLMProviderConfig.report_model: Optional[str]` | `None`（未配置时 fallback 到 `model`） | 支持其他 provider 复用此字段 |
+
+**`.env.example` 新增**：
+
+```bash
+# 日报/周报/月报生成专用模型（小模型，降低成本；不影响主链路 DEEPSEEK_MODEL_CODE）
+# 主链路推荐 deepseek-v4-pro（思考模型），报告生成推荐 deepseek-v4-flash（快速模型）
+DEEPSEEK_REPORT_MODEL_CODE=deepseek-v4-flash
+```
+
+**`configs/config.yaml` 修改**（`llm.deepseek` 下新增 `report_model` 字段）：
+
+```yaml
+llm:
+  provider: ${LLM_PROVIDER:-deepseek}
+  deepseek:
+    api_keys: ${DEEPSEEK_API_KEYS}
+    model: ${DEEPSEEK_MODEL_CODE:-deepseek-v4-flash}            # 主链路模型
+    report_model: ${DEEPSEEK_REPORT_MODEL_CODE:-deepseek-v4-flash}  # 报告专用小模型
+    base_url: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+```
+
+**`src/config/settings.py` 修改**：`LLMProviderConfig` 新增 `report_model: Optional[str] = None` 字段，加载逻辑同 `model`（读 `DEEPSEEK_REPORT_MODEL_CODE` 环境变量）。
+
+**调用方式**：
+
+```python
+# src/reports/summarizer.py
+from src.config.settings import create_settings
+
+_settings = create_settings()
+
+def _get_report_model() -> str:
+    """获取报告专用模型，未配置时 fallback 到主模型"""
+    provider_cfg = _settings.llm.deepseek  # 或当前 provider
+    return provider_cfg.report_model or provider_cfg.model
+
+async def summarize(prompt: str, ...) -> str:
+    model = _get_report_model()
+    response = await gateway.chat_with_tools(
+        messages=[{"role": "user", "content": prompt}],
+        model=model,
+        ...
+    )
+    # response.model / response.prompt_tokens / response.completion_tokens 用于写 chat_records
+    return response.content, response.usage
+```
+
+**Provider 切换兼容**：若 `LLM_PROVIDER=qwen`，则 `qwen` provider 也应支持 `report_model` 字段（如 `qwen-turbo`），配置项对应改为 `QWEN_REPORT_MODEL_CODE`；`zhipu` 同理（如 `glm-4-flash`）。MVP 阶段只需支持 deepseek，后续按需扩展。
 
 ### 4.8 实施分阶段建议
 
@@ -408,11 +595,12 @@ POST /api/reports/team/daily-push         # 手动触发推送（平台管理员
 |------|------|--------|------|
 | **Phase 1** | 个人日报（站内查看 + 基础统计 + LLM 摘要） | 5-7 人天 | 让员工感受到 AI 陪伴，培养使用习惯 |
 | **Phase 2** | 团队日报（管理员视角 + 数据看板 + LLM 摘要） | 5-7 人天 | 让管理员看到团队采纳度，推动内部推广 |
-| **Phase 3** | 主动推送（企微/钉钉/飞书/邮件）+ 推送配置 | 4-5 人天 | 触达领导，不依赖管理员主动登录 |
+| **Phase 3** | 主动推送（企微/钉钉/飞书/邮件）+ 推送配置（含日报/周报/月报复选） | 4-5 人天 | 触达领导，不依赖管理员主动登录 |
 | **Phase 4** | PDF/Word 导出 + 领导汇报模式 | 3-4 人天 | 让管理员能直接拿去汇报，扩大影响 |
-| **Phase 5** | 节省时间量化 + 续费建议 + 月报/周报 | 4-5 人天 | 直接驱动续费决策 |
+| **Phase 5** | 节省时间量化 + 续费建议 + 月报/周报生成 + 日报专用小模型配置 | 4-5 人天 | 直接驱动续费决策 |
+| **Phase 6** | 采纳度分析（依赖满意度埋点等基础数据，见 §4.4.4） | 6-8 人天 | 完整价值证明，与 M365 Copilot Dashboard 对齐 |
 
-**MVP 建议**：Phase 1 + Phase 2 同步上线，是「双视角」的最小可用版本，能让员工和管理员都感受到价值。Phase 3-5 按优先级推进。
+**MVP 建议**：Phase 1 + Phase 2 同步上线，是「双视角」的最小可用版本，能让员工和管理员都感受到价值。Phase 3-5 按优先级推进。Phase 6 需先补齐满意度埋点等基础数据，可与日报方案并行启动埋点建设，但采纳度分析本身建议放在 Phase 5 之后。
 
 ---
 
@@ -457,6 +645,7 @@ POST /api/reports/team/daily-push         # 手动触发推送（平台管理员
 3. **员工 AI 等级**：根据使用密度和质量，给员工打 AI 使用等级（如「AI 探索者」「AI 达人」「AI 专家」），gamification 推动使用
 4. **数字员工效能榜**：基于日报数据反向评估数字员工的价值，为优化数字员工提供数据支撑
 5. **智能续约提醒**：基于使用密度趋势，提前 30 天给平台管理员推送「某租户续约风险高，建议主动联系」
+6. **完整采纳度分析**（详见 §4.4.4）：在满意度埋点、功能覆盖率、使用深度分级、留存率等基础数据补齐后，升级团队日报为完整采纳度分析模块，对标 M365 Copilot Dashboard。关键前置条件是「对话满意度埋点」上线。
 
 ---
 
