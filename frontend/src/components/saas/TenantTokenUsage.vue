@@ -90,41 +90,41 @@
       :title="`对话用量明细 - ${detailDate}`"
       size="xl"
       mode="view"
+      :scrollable="false"
     >
       <div v-if="detailLoading" class="text-center py-8 text-muted">加载中...</div>
       <template v-else>
-        <div class="table-scroll-wrapper mb-4">
-          <BaseTable :columns="detailColumns" :data="detailData" row-key="record_id">
-            <template #index="{ index }">
-              {{ (detailCurrentPage - 1) * detailPageSize + index + 1 }}
-            </template>
-            <template #session_title="{ row }">
-              <span :title="row.session_title">{{ row.session_title }}</span>
-            </template>
-            <template #user_message="{ row }">
-              <span :title="row.user_message">{{ truncateText(row.user_message) }}</span>
-            </template>
-            <template #assistant_message="{ row }">
-              <span :title="row.assistant_message">{{ truncateText(row.assistant_message) }}</span>
-            </template>
-            <template #credit_cost="{ row }">
-              <span class="text-danger-600 font-medium">{{ row.credit_cost }}</span>
-            </template>
-            <template #empty>该日暂无明细数据</template>
-          </BaseTable>
+        <div class="flex flex-col h-[calc(90vh-6rem)]">
+          <div class="flex-1 min-h-0 mb-4 table-scroll-wrapper">
+            <BaseTable :columns="detailColumns" :data="detailData" row-key="record_id">
+              <template #index="{ index }">
+                {{ (detailCurrentPage - 1) * detailPageSize + index + 1 }}
+              </template>
+              <template #session_title="{ row }">
+                <span :title="row.session_title">{{ row.session_title }}</span>
+              </template>
+              <template #user_message="{ row }">
+                <span :title="row.user_message">{{ truncateText(row.user_message) }}</span>
+              </template>
+              <template #assistant_message="{ row }">
+                <span :title="row.assistant_message">{{ truncateText(row.assistant_message) }}</span>
+              </template>
+              <template #credit_cost="{ row }">
+                <span class="text-danger-600 font-medium">{{ row.credit_cost }}</span>
+              </template>
+              <template #empty>该日暂无明细数据</template>
+            </BaseTable>
+          </div>
+          <div class="flex-shrink-0 flex items-center justify-center">
+            <BasePagination
+              :total="detailTotal"
+              v-model:currentPage="detailCurrentPage"
+              v-model:pageSize="detailPageSize"
+              :size-options="[20, 50, 100]"
+              @change="handleDetailPageChange"
+            />
+          </div>
         </div>
-        <div class="flex items-center justify-center">
-          <BasePagination
-            :total="detailTotal"
-            v-model:currentPage="detailCurrentPage"
-            v-model:pageSize="detailPageSize"
-            :size-options="[20, 50, 100]"
-            @change="handleDetailPageChange"
-          />
-        </div>
-      </template>
-      <template #footer>
-        <BaseButton intent="secondary" @click="showDetailModal = false">关闭</BaseButton>
       </template>
     </BaseModal>
   </div>
