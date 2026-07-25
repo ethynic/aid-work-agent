@@ -45,6 +45,10 @@
           <template #credits="{ row }">
             <span class="text-primary-600 font-medium">{{ row.credits }}</span>
           </template>
+          <template #balance_after="{ row }">
+            <span v-if="row.balance_after != null" class="text-default font-medium">{{ row.balance_after }}</span>
+            <span v-else class="text-muted">-</span>
+          </template>
           <template #source="{ row }">
             <span :class="getSourceBadgeClass(row.source)"
               class="px-2 py-0.5 rounded-full text-xs font-medium">
@@ -331,6 +335,7 @@ const columns = [
   { key: 'tenant_name', label: '租户' },
   { key: 'amount_yuan', label: '充值金额', width: '120px' },
   { key: 'credits', label: '转化积分', width: '120px' },
+  { key: 'balance_after', label: '充值后积分余额', width: '140px' },
   { key: 'source', label: '来源', width: '100px' },
   { key: 'operator_name', label: '操作人', width: '120px' },
   { key: 'remark', label: '备注' },

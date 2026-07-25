@@ -1876,6 +1876,7 @@ CREATE TABLE IF NOT EXISTS tenant_recharges (
     operator_id TEXT,                            -- 平台管理员 user_id（manual 必填）
     operator_name TEXT,                          -- 平台管理员姓名（冗余，便于审计）
     remark TEXT,                                 -- 备注
+    balance_after INTEGER,                       -- 充值后积分余额快照（创建时由事务内计算写入；历史数据为 NULL）
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 

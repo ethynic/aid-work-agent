@@ -2037,6 +2037,10 @@ class TenantRechargesDB:
     ) -> Optional[Dict[str, Any]]:
         """创建充值记录，同事务原子增加 tenants.credit_balance
 
+        在同一事务内 SELECT ... FOR UPDATE 锁定租户行、读取当前余额、
+        计算 balance_after 快照写入本表，再更新 tenants.credit_balance，
+        保证快照与最终余额一致且防并发充值竞态。
+
         Args:
             created_at: 可选，自定义充值时间（"YYYY-MM-DD HH:MM:SS"），未传则使用 DB 默认 CURRENT_TIMESTAMP
 
@@ -2050,25 +2054,37 @@ class TenantRechargesDB:
         recharge_id = generate_recharge_id()
         placeholder = "%s"
 
-        # created_at 未传时让 DB 走 DEFAULT CURRENT_TIMESTAMP
-        if created_at:
-            cols = "(tenant_id, amount_yuan, credits, rate, source, payment_order_id, operator_id, operator_name, remark, created_at)"
-            vals = f"({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})"
-            params = (
-                tenant_id, amount_yuan, credits, rate, source, payment_order_id,
-                operator_id, operator_name, remark, created_at,
-            )
-        else:
-            cols = "(tenant_id, amount_yuan, credits, rate, source, payment_order_id, operator_id, operator_name, remark)"
-            vals = f"({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})"
-            params = (
-                tenant_id, amount_yuan, credits, rate, source, payment_order_id,
-                operator_id, operator_name, remark,
-            )
-
         with get_db_connection() as conn:
             cursor = conn.cursor()
             try:
+                # 锁定租户行，读取当前余额（防并发充值竞态）
+                cursor.execute(
+                    f"SELECT credit_balance FROM tenants WHERE tenant_id = {placeholder} FOR UPDATE",
+                    (tenant_id,),
+                )
+                tenant_row = cursor.fetchone()
+                if not tenant_row:
+                    logger.error(f"TenantRechargesDB.create: tenant not found: {tenant_id}")
+                    return None
+                current_balance = int(tenant_row.get("credit_balance") or 0)
+                balance_after = current_balance + int(credits)
+
+                # 构造 INSERT：balance_after 紧跟 remark 之后；created_at 可选（未传走 DB 默认）
+                if created_at:
+                    cols = "(tenant_id, amount_yuan, credits, rate, source, payment_order_id, operator_id, operator_name, remark, balance_after, created_at)"
+                    vals = f"({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})"
+                    params = (
+                        tenant_id, amount_yuan, credits, rate, source, payment_order_id,
+                        operator_id, operator_name, remark, balance_after, created_at,
+                    )
+                else:
+                    cols = "(tenant_id, amount_yuan, credits, rate, source, payment_order_id, operator_id, operator_name, remark, balance_after)"
+                    vals = f"({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})"
+                    params = (
+                        tenant_id, amount_yuan, credits, rate, source, payment_order_id,
+                        operator_id, operator_name, remark, balance_after,
+                    )
+
                 cursor.execute(
                     f"""
                     INSERT INTO tenant_recharges
@@ -2080,16 +2096,16 @@ class TenantRechargesDB:
                 )
                 row = cursor.fetchone()
 
-                # 同事务原子加余额
+                # 同事务原子更新余额（用计算好的 balance_after，与快照一致）
                 cursor.execute(
-                    "UPDATE tenants SET credit_balance = credit_balance + %s WHERE tenant_id = %s",
-                    (credits, tenant_id),
+                    f"UPDATE tenants SET credit_balance = {placeholder} WHERE tenant_id = {placeholder}",
+                    (balance_after, tenant_id),
                 )
 
                 conn.commit()
                 logger.info(
                     f"Recharge created: tenant={tenant_id}, amount_yuan={amount_yuan}, "
-                    f"credits={credits}, rate={rate}, source={source}"
+                    f"credits={credits}, rate={rate}, source={source}, balance_after={balance_after}"
                 )
                 return dict(row) if row else None
             except Exception as e:

@@ -26,6 +26,7 @@ export interface RechargeItem {
   operator_id?: string | null
   operator_name?: string | null
   remark?: string | null
+  balance_after?: number | null  // 充值后积分余额快照（历史数据为 null）
   created_at: string
 }
 

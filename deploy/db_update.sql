@@ -1140,6 +1140,9 @@ CREATE TABLE IF NOT EXISTS tenant_recharges (
 CREATE INDEX IF NOT EXISTS idx_tenant_recharges_tenant_id ON tenant_recharges(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_tenant_recharges_created_at ON tenant_recharges(created_at DESC);
 
+-- 2026-7-25，tenant_recharges 增加 balance_after 字段，记录充值后积分余额快照
+ALTER TABLE tenant_recharges ADD COLUMN IF NOT EXISTS balance_after INTEGER;
+
 -- ============== 2026-7-21 巡检商机模块 B1：商机池 3 表 ==============
 -- 设计文档：docs/system/digital-employee/social-media-marketing-agent-design.md §7.6
 -- 幂等建表，可重复执行；对应初始化函数：src/social_media/outbound/db.py:init_outbound_tables
