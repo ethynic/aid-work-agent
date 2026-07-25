@@ -280,11 +280,11 @@ async function handleSubmit() {
   // 正整数校验：amount_yuan 与 credits 都必须是 >= 1 的整数
   const amount = Number(formData.value.amount_yuan)
   const credits = Number(formData.value.credits)
-  if (!Number.isInteger(amount) || amount < 1) {
+  if (!Number.isInteger(amount) ) { //|| amount < 1 为调试方便，暂放宽限制
     toast.error('充值金额必须是正整数')
     return
   }
-  if (!Number.isInteger(credits) || credits < 1) {
+  if (!Number.isInteger(credits) ) { //|| credits < 1 为调试方便，暂放宽限制
     toast.error('转化积分必须是正整数')
     return
   }

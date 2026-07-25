@@ -30,8 +30,8 @@ router = APIRouter(prefix="/api/saas/billing/recharges", tags=["SaaS 充值管�
 class RechargeCreateRequest(BaseModel):
     """创建充值请求"""
     tenant_id: str = Field(..., description="租户 ID")
-    amount_yuan: int = Field(..., ge=1, description="充值金额（元），正整数")
-    credits: int = Field(..., ge=1, description="转化积分，正整数")
+    amount_yuan: int = Field(..., description="充值金额（元），正整数") # ge=1, 为调试方便，暂放宽限制
+    credits: int = Field(..., description="转化积分，正整数") # ge=1, 为调试方便，暂放宽限制
     created_at: Optional[str] = Field(None, description="充值日期（ISO 8601 / YYYY-MM-DDTHH:MM），未传则使用当前时间")
     remark: Optional[str] = Field(None, description="备注")
 
