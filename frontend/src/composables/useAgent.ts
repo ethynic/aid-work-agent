@@ -284,6 +284,11 @@ export function useAgent() {
           } else {
             addProgress(state, '✅ 任务完成', 'complete')
           }
+          // 助手回复完成，把占位消息的 timestamp 更新为完成时刻，
+          // 对齐后端 assistant 消息的 created_at（避免始终显示发送时刻）
+          if (assistantMessageIndex < state.messages.value.length) {
+            state.messages.value[assistantMessageIndex].timestamp = Date.now()
+          }
           state.isProcessing.value = false
           state.inputHintState.value = 'idle'
           markUnreadIfBackground()
