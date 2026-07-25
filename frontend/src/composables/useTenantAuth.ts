@@ -190,20 +190,19 @@ export function useTenantAuth() {
     admin.value = adminInfo
     tenant.value = tenantInfo
 
-    // 登录成功后触发余额检查（仅提醒不阻断，平台管理员跳过）
+    // 登录成功后触发余额检查（仅提醒不阻断）
+    // 平台管理员在 /t/{tenant_id} 路径下代管理租户时也需要报警
     // 异步触发，不阻塞登录主流程
-    if (adminInfo.role !== 'platform_admin') {
-      import('./useCreditCheck').then(({ useCreditCheck }) => {
-        try {
-          const { checkCreditBeforeAction } = useCreditCheck()
-          checkCreditBeforeAction('login').catch((e) => {
-            console.warn('[useTenantAuth] 登录后余额检查失败:', e)
-          })
-        } catch (e) {
-          console.warn('[useTenantAuth] 余额检查初始化失败:', e)
-        }
-      })
-    }
+    import('./useCreditCheck').then(({ useCreditCheck }) => {
+      try {
+        const { checkCreditBeforeAction } = useCreditCheck()
+        checkCreditBeforeAction('login').catch((e) => {
+          console.warn('[useTenantAuth] 登录后余额检查失败:', e)
+        })
+      } catch (e) {
+        console.warn('[useTenantAuth] 余额检查初始化失败:', e)
+      }
+    })
   }
 
   /**

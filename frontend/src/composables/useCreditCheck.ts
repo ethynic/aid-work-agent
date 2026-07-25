@@ -73,10 +73,8 @@ export function useCreditCheck() {
    * @param action 触发场景，决定余额 ≤ 0 时是否真正阻断
    */
   async function checkCreditBeforeAction(action: CreditCheckAction): Promise<CreditCheckResult> {
-    // 平台管理员不参与扣费，跳过检查
-    if (admin.value?.role === 'platform_admin') {
-      return { allowed: true, balance: null, reason: 'platform_admin_skipped' }
-    }
+    // 平台管理员也参与余额检查（在 /t/{tenant_id} 路径下代管理租户时需要报警）
+    // 若 platform_admin 未带 X-Tenant-Id（在 /portal 路径下），后端返回 success=false，前端静默放行
 
     let balance: BalanceInfo | null = null
     try {
@@ -110,7 +108,7 @@ export function useCreditCheck() {
     // 低余额提醒：当天去重
     if (creditBalance <= LOW_CREDIT_THRESHOLD) {
       if (!hasWarnedToday(userId)) {
-        toast.warning(`积分余额不足（剩余 ${creditBalance} 积分），请尽快联系管理员充值`)
+        toast.success(`积分余额即将耗尽（剩余 ${creditBalance} 积分），请尽快联系管理员充值`)
         markWarnedToday(userId)
       }
       return { allowed: true, balance, reason: 'low_credit_warned' }
