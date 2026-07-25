@@ -11,13 +11,8 @@
 
     <div class="flex-1 min-h-0 flex flex-col p-6">
       <!-- 顶部工具栏 -->
-      <div class="page-toolbar">
-        <div class="page-toolbar-left">
-          <span class="text-sm text-muted">仅展示本企业的充值记录（只读）</span>
-        </div>
-        <div class="page-toolbar-right">
-          <BaseButton size="sm" @click="loadData(currentPage)">刷新</BaseButton>
-        </div>
+      <div class="page-toolbar justify-end">
+        <BaseButton size="sm" @click="loadData(currentPage)">刷新</BaseButton>
       </div>
 
       <div v-if="loading" class="text-center py-12 text-muted">加载中...</div>
@@ -32,12 +27,6 @@
             </template>
             <template #credits="{ row }">
               <span class="text-primary-600 font-medium">{{ row.credits }}</span>
-            </template>
-            <template #source="{ row }">
-              <span :class="getSourceBadgeClass(row.source)"
-                class="px-2 py-0.5 rounded-full text-xs font-medium">
-                {{ getSourceLabel(row.source) }}
-              </span>
             </template>
             <template #created_at="{ row }">
               <span class="text-sm text-muted">{{ formatDateTime(row.created_at) }}</span>
@@ -112,9 +101,6 @@ const columns = [
   { key: 'seq', label: '序号', width: '60px' },
   { key: 'amount_yuan', label: '充值金额', width: '120px' },
   { key: 'credits', label: '转化积分', width: '120px' },
-  { key: 'rate', label: '兑换系数', width: '100px' },
-  { key: 'source', label: '来源', width: '100px' },
-  { key: 'remark', label: '备注' },
   { key: 'created_at', label: '创建时间', width: '160px' },
 ]
 
@@ -162,22 +148,6 @@ function formatDateTime(datetime: string): string {
   if (!datetime) return ''
   const date = new Date(datetime)
   return date.toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
-}
-
-function getSourceLabel(source: string): string {
-  switch (source) {
-    case 'manual': return '手动'
-    case 'online_payment': return '在线支付'
-    default: return source || '-'
-  }
-}
-
-function getSourceBadgeClass(source: string): string {
-  switch (source) {
-    case 'manual': return 'bg-info-100 text-info-700'
-    case 'online_payment': return 'bg-success-100 text-success-700'
-    default: return 'bg-gray-100 text-gray-700'
-  }
 }
 
 onMounted(() => loadData(1))
