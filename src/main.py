@@ -1192,6 +1192,9 @@ async def chat_stream(http_request: Request, request: ChatRequest):
     current_user = auth.get_current_user(http_request)
     user_id = current_user["user_id"] if current_user else "anonymous"
 
+    # 记录用户消息接收时间，作为 user 消息的 created_at（避免与助手回复落入同一事务导致时间戳相同）
+    user_message_time = datetime.now()
+
     # 权限检查：数字员工访问授权（演示用户tenant_id='demo'豁免）
     if request.subagent and current_user and current_user.get("tenant_id") != "demo":
         from src.saas.permissions.checker import check_agent_access
@@ -1515,8 +1518,11 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                         assistant_metadata["downloadableFiles"] = downloadable_files
 
                     # 构造事务消息列表：user + 本轮 tool 消息序列 + assistant 最终回复
+                    # 助手回复完成时间，作为 assistant / tool 消息的 created_at
+                    assistant_message_time = datetime.now()
                     batch_messages = [
-                        {"role": "user", "content": full_message, "metadata": user_metadata},
+                        {"role": "user", "content": full_message, "metadata": user_metadata,
+                         "created_at": user_message_time},
                     ]
                     for tm in tool_messages_collected:
                         if tm.get("role") == "assistant" and tm.get("tool_calls"):
@@ -1528,6 +1534,7 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                                 "role": "assistant",
                                 "content": "",
                                 "metadata": tm_metadata,
+                                "created_at": assistant_message_time,
                             })
                         elif tm.get("role") == "tool":
                             # tool result content 可能是 dict（工具返回的 JSON），持久化前转字符串
@@ -1538,12 +1545,14 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                                 "role": "tool",
                                 "content": tc,
                                 "metadata": {"tool_call_id": tm.get("tool_call_id", "")},
+                                "created_at": assistant_message_time,
                             })
                     if full_response:
                         batch_messages.append({
                             "role": "assistant",
                             "content": full_response,
                             "metadata": assistant_metadata,
+                            "created_at": assistant_message_time,
                         })
 
                     created = MessageDB.create_batch_transactional(session_id, batch_messages)

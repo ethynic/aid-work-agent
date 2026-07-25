@@ -773,9 +773,13 @@ class MessageDB:
 
         Args:
             session_id: 会话 ID
-            messages: 消息列表，每条是 {"role": str, "content": str, "metadata": dict|None}
+            messages: 消息列表，每条是 {"role": str, "content": str, "metadata": dict|None,
+                                       "created_at": datetime|None}
                       role 可以是 "user" / "assistant" / "tool"
                       assistant 角色有两种子情况（靠 metadata.tool_calls 是否存在区分），本方法不区分，原样存储
+                      created_at 可选，未传时使用数据库默认值 CURRENT_TIMESTAMP。
+                      注意：PostgreSQL 的 CURRENT_TIMESTAMP 返回事务开始时间，同一事务内所有行
+                      会拿到完全相同的 created_at。若需区分先后（如用户消息和助手回复）必须显式传入。
 
         Returns:
             成功时返回创建的消息列表（含 message_id）；失败时返回 None
@@ -795,17 +799,29 @@ class MessageDB:
                     role = msg.get("role")
                     content = msg.get("content")
                     metadata = msg.get("metadata")
-                    cursor.execute(f"""
-                        INSERT INTO chat_messages (message_id, session_id, role, content, metadata)
-                        VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})
-                    """, (message_id, session_id, role, content,
-                          json.dumps(metadata, ensure_ascii=False, default=str) if metadata else None))
+                    created_at = msg.get("created_at")
+
+                    # 显式传入 created_at 时写入该列；否则省略列让数据库走默认值
+                    if created_at is not None:
+                        cursor.execute(f"""
+                            INSERT INTO chat_messages (message_id, session_id, role, content, metadata, created_at)
+                            VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})
+                        """, (message_id, session_id, role, content,
+                              json.dumps(metadata, ensure_ascii=False, default=str) if metadata else None,
+                              created_at))
+                    else:
+                        cursor.execute(f"""
+                            INSERT INTO chat_messages (message_id, session_id, role, content, metadata)
+                            VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})
+                        """, (message_id, session_id, role, content,
+                              json.dumps(metadata, ensure_ascii=False, default=str) if metadata else None))
                     created_messages.append({
                         "message_id": message_id,
                         "session_id": session_id,
                         "role": role,
                         "content": content,
                         "metadata": metadata,
+                        "created_at": created_at,
                     })
 
                 conn.commit()
