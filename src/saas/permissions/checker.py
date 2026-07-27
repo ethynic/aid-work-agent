@@ -17,8 +17,8 @@ def is_platform_admin(user: dict) -> bool:
 
 
 def is_tenant_admin(user: dict) -> bool:
-    """检查是否为租户管理员"""
-    return bool(user) and user.get("role") == "tenant_admin"
+    """检查是否为租户管理员，平台管理员能代租户管理员进行管理"""
+    return bool(user) and (user.get("role") == "tenant_admin" or user.get("role") == "platform_admin")
 
 
 def get_tenant_id_from_user(user: dict) -> Optional[str]:
@@ -170,7 +170,7 @@ def get_allowed_agent_ids_for_user(
     cache_key_id = f"{user_id}:{tenant_id}"
 
     # 普通用户：优先从缓存获取（租户管理员不走缓存）
-    if user and not is_tenant_admin(user) and not is_platform_admin(user):
+    if user and not is_tenant_admin(user):
         cached = get_cached(CacheKeys.USER_AGENTS, cache_key_id)
         if cached is not None:
             return cached
