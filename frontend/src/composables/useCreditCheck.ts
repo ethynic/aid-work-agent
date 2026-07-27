@@ -15,6 +15,7 @@
 import { useToast } from 'vue-toastification'
 import { getTenantBalance, type BalanceInfo } from '@/api/billing'
 import { useTenantAuth } from './useTenantAuth'
+import { formatCredit } from '@/utils/formatCredit'
 
 // 低余额提醒阈值
 const LOW_CREDIT_THRESHOLD = 100
@@ -108,7 +109,7 @@ export function useCreditCheck() {
     // 低余额提醒：当天去重
     if (creditBalance <= LOW_CREDIT_THRESHOLD) {
       if (!hasWarnedToday(userId)) {
-        toast.success(`积分余额即将耗尽（剩余 ${creditBalance} 积分），请尽快联系管理员充值`)
+        toast.success(`积分余额即将耗尽（剩余 ${formatCredit(creditBalance)} 积分），请尽快联系管理员充值`)
         markWarnedToday(userId)
       }
       return { allowed: true, balance, reason: 'low_credit_warned' }

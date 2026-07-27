@@ -1012,7 +1012,7 @@ class ChatRecordDB:
         error_message: str = None,
         duration_ms: int = 0,
         source_type: str = "chat",
-        credit_cost: int = 0
+        credit_cost: float = 0.0
     ) -> Optional[Dict[str, Any]]:
         """创建新的会话记录
 
@@ -1354,7 +1354,7 @@ class ChatRecordDB:
                     input_cost = float(row["input_cost"]) if row["input_cost"] else 0.0
                     output_cost = float(row["output_cost"]) if row["output_cost"] else 0.0
                     tenant_unpriced = bool(row["has_unpriced_tokens"])
-                    tenant_credit_cost = int(row["credit_cost"] or 0)
+                    tenant_credit_cost = float(row["credit_cost"] or 0)
                     tenant_data.append({
                         "tenant_id": row["tenant_id"],
                         "input_tokens": row["input_tokens"],
@@ -2082,8 +2082,8 @@ class TenantRechargesDB:
                 if not tenant_row:
                     logger.error(f"TenantRechargesDB.create: tenant not found: {tenant_id}")
                     return None
-                current_balance = int(tenant_row.get("credit_balance") or 0)
-                balance_after = current_balance + int(credits)
+                current_balance = float(tenant_row.get("credit_balance") or 0)
+                balance_after = current_balance + credits
 
                 # 构造 INSERT：balance_after 紧跟 remark 之后；created_at 可选（未传走 DB 默认）
                 if created_at:

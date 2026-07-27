@@ -94,7 +94,7 @@ class ReportGenerator:
                 summary_text=empty_report["summary_text"],
                 model=report_model,
                 token_cost=0,
-                credit_cost=0,
+                credit_cost=0.0,
                 is_regenerate=is_regenerate,
             )
             return {
@@ -105,7 +105,7 @@ class ReportGenerator:
                 "target_user_id": user_id,
                 **empty_report,
                 "model": report_model,
-                "credit_cost": 0,
+                "credit_cost": 0.0,
             }
 
         # 2. 调 LLM 生成摘要
@@ -233,7 +233,7 @@ class ReportGenerator:
             summary_text = f"本期团队无活跃成员，无{type_label}摘要。"
             prompt_tokens = 0
             completion_tokens = 0
-            credit_cost = 0
+            credit_cost = 0.0
 
         # 3. 落库 work_daily_reports
         metrics = self._build_team_metrics(agg, total_users)
@@ -357,7 +357,7 @@ class ReportGenerator:
         model: str,
         duration_ms: int,
         source_type: str,
-        credit_cost: int,
+        credit_cost: float,
     ) -> None:
         """写 chat_records 记录报告类 LLM 调用，复用现有计费链路
 

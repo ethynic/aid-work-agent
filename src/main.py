@@ -574,7 +574,7 @@ def _check_tenant_credit_blocked(tenant_id: Optional[str]) -> Optional[JSONRespo
         if not tenant:
             # 租户不存在：交给后续流程处理（最终会 404），此处放行
             return None
-        credit_balance = int(tenant.get("credit_balance") or 0)
+        credit_balance = float(tenant.get("credit_balance") or 0)
         if credit_balance <= 0:
             logger.warning(f"租户 {tenant_id} 积分余额耗尽（balance={credit_balance}），阻断对话")
             return JSONResponse({

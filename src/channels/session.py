@@ -838,7 +838,7 @@ class ChannelSessionManager:
                 from src.saas.db.tenant_db import TenantDB
                 _tenant_info = TenantDB.get_by_id(tenant_id)
                 if _tenant_info is not None:
-                    _credit_balance = int(_tenant_info.get("credit_balance") or 0)
+                    _credit_balance = float(_tenant_info.get("credit_balance") or 0)
                     if _credit_balance <= 0:
                         logger.warning(
                             f"租户 {tenant_id} 积分余额耗尽（balance={_credit_balance}），"

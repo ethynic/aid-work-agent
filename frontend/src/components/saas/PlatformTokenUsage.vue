@@ -45,7 +45,7 @@
         </div>
         <div class="bg-white rounded-xl shadow-sm p-4 border border-default">
           <div class="text-xs text-muted">总消耗积分</div>
-          <div class="text-xl font-bold text-danger-600 mt-1">{{ summary.total_credit_cost ?? 0 }}</div>
+          <div class="text-xl font-bold text-danger-600 mt-1">{{ formatCredit(summary.total_credit_cost) }}</div>
         </div>
       </div>
 
@@ -78,7 +78,7 @@
                 <td class="px-4 py-2 text-sm text-amber-600">
                   {{ formatCost(item.total_cost, item.has_unpriced_tokens) }}
                 </td>
-                <td class="px-4 py-2 text-sm text-danger-600 font-medium">{{ item.credit_cost ?? 0 }}</td>
+                <td class="px-4 py-2 text-sm text-danger-600 font-medium">{{ formatCredit(item.credit_cost) }}</td>
                 <td class="px-4 py-2 text-sm text-default">{{ item.conversation_count }}</td>
               </tr>
               <!-- 汇总行 -->
@@ -89,7 +89,7 @@
                 <td class="px-4 py-2 text-sm text-amber-600">
                   {{ formatCost(summary.total_cost, summary.has_unpriced_tokens) }}
                 </td>
-                <td class="px-4 py-2 text-sm text-danger-600 font-medium">{{ summary.total_credit_cost ?? 0 }}</td>
+                <td class="px-4 py-2 text-sm text-danger-600 font-medium">{{ formatCredit(summary.total_credit_cost) }}</td>
                 <td class="px-4 py-2 text-sm text-default">{{ summary.total_conversations }}</td>
               </tr>
             </tbody>
@@ -106,6 +106,7 @@ import { ref, onMounted } from 'vue'
 import { useToast } from 'vue-toastification'
 import { getPlatformTokenUsage } from '@/api/adminReports'
 import { formatTokensToMillionsThreeDecimals } from '@/utils/formatTokens'
+import { formatCredit } from '@/utils/formatCredit'
 
 const toast = useToast()
 

@@ -43,13 +43,13 @@ async def get_balance(request: Request):
         if not tenant:
             return {"success": False, "message": "租户不存在"}
 
-        credit_balance = int(tenant.get("credit_balance") or 0)
+        credit_balance = float(tenant.get("credit_balance") or 0)
 
         # 近 7 天日均消耗
         daily_avg_cost_7d = _compute_daily_avg_cost(tenant_id, days=7)
         estimated_days_left: Optional[int]
         if daily_avg_cost_7d > 0:
-            estimated_days_left = max(0, credit_balance // daily_avg_cost_7d)
+            estimated_days_left = max(0, int(credit_balance / daily_avg_cost_7d))
         else:
             # 日均为 0 时返回 -1（前端可显示"暂无数据"）
             estimated_days_left = -1 if credit_balance > 0 else 0
@@ -141,7 +141,7 @@ async def get_usage(
             items = [
                 {
                     "date": str(row["date"]) if row.get("date") else None,
-                    "credit_cost": int(row.get("credit_cost") or 0),
+                    "credit_cost": float(row.get("credit_cost") or 0),
                     "session_count": int(row.get("session_count") or 0),
                     "message_count": int(row.get("message_count") or 0),
                 }
@@ -163,7 +163,7 @@ async def get_usage(
             )
             summary_row = cursor.fetchone() or {}
             summary = {
-                "total_credit_cost": int(summary_row.get("total_credit_cost") or 0),
+                "total_credit_cost": float(summary_row.get("total_credit_cost") or 0),
                 "total_session_count": int(summary_row.get("total_session_count") or 0),
                 "total_message_count": int(summary_row.get("total_message_count") or 0),
             }
@@ -331,7 +331,7 @@ async def get_daily_usage_detail(
                     "prompt_tokens": int(r.get("prompt_tokens") or 0),
                     "cached_input_tokens": int(r.get("cached_input_tokens") or 0),
                     "completion_tokens": int(r.get("completion_tokens") or 0),
-                    "credit_cost": int(r.get("credit_cost") or 0),
+                    "credit_cost": float(r.get("credit_cost") or 0),
                     "created_at": r.get("created_at").strftime("%Y-%m-%d %H:%M:%S")
                         if r.get("created_at") else None,
                 })
@@ -351,10 +351,10 @@ async def get_daily_usage_detail(
 
 # ============== 辅助函数 ==============
 
-def _compute_daily_avg_cost(tenant_id: str, days: int = 7) -> int:
-    """计算近 N 天日均积分消耗（向下取整）
+def _compute_daily_avg_cost(tenant_id: str, days: int = 7) -> float:
+    """计算近 N 天日均积分消耗（2 位小数）
 
-    若 N 天内无消耗记录返回 0。
+    若 N 天内无消耗记录返回 0.0。
     """
     start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d 00:00:00")
     placeholder = "%s"
@@ -370,7 +370,7 @@ def _compute_daily_avg_cost(tenant_id: str, days: int = 7) -> int:
             (tenant_id, start_date),
         )
         row = cursor.fetchone() or {}
-        total_cost = int(row.get("total") or 0)
+        total_cost = float(row.get("total") or 0)
     if total_cost <= 0:
-        return 0
-    return total_cost // days
+        return 0.0
+    return round(total_cost / days, 2)

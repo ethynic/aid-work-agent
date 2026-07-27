@@ -107,7 +107,7 @@ CREATE TABLE IF NOT EXISTS chat_records (
     error_message TEXT,
     duration_ms INTEGER DEFAULT 0,
     source_type TEXT DEFAULT 'chat',
-    credit_cost INTEGER NOT NULL DEFAULT 0,
+    credit_cost NUMERIC(12,2) NOT NULL DEFAULT 0.00,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -493,13 +493,13 @@ CREATE TABLE IF NOT EXISTS tenants (
     settings TEXT,
     expire_at TIMESTAMP,
     tenant_code TEXT,
-    credit_balance INTEGER NOT NULL DEFAULT 0,
+    credit_balance NUMERIC(12,2) NOT NULL DEFAULT 0.00,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 COMMENT ON COLUMN tenants.expire_at IS '到期日期（时分秒为 23:59:59，当天仍可登录，空表示永久有效）';
-COMMENT ON COLUMN tenants.credit_balance IS '积分余额（整数），允许透支为负，对话中扣完不中断、下一轮入口拦截';
+COMMENT ON COLUMN tenants.credit_balance IS '积分余额（2 位小数），允许透支为负，对话中扣完不中断、下一轮入口拦截';
 
 CREATE INDEX IF NOT EXISTS idx_tenants_status ON tenants(status);
 CREATE INDEX IF NOT EXISTS idx_tenants_expire_at ON tenants(expire_at);
@@ -793,7 +793,7 @@ CREATE TABLE IF NOT EXISTS chat_records (
     status TEXT DEFAULT 'completed',
     error_message TEXT,
     duration_ms INTEGER DEFAULT 0,
-    credit_cost INTEGER NOT NULL DEFAULT 0,
+    credit_cost NUMERIC(12,2) NOT NULL DEFAULT 0.00,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -990,13 +990,13 @@ CREATE TABLE IF NOT EXISTS tenants (
     settings TEXT,
     expire_at TIMESTAMP,
     tenant_code TEXT,
-    credit_balance INTEGER NOT NULL DEFAULT 0,
+    credit_balance NUMERIC(12,2) NOT NULL DEFAULT 0.00,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 COMMENT ON COLUMN tenants.expire_at IS '到期日期（时分秒为 23:59:59，当天仍可登录，空表示永久有效）';
-COMMENT ON COLUMN tenants.credit_balance IS '积分余额（整数），允许透支为负，对话中扣完不中断、下一轮入口拦截';
+COMMENT ON COLUMN tenants.credit_balance IS '积分余额（2 位小数），允许透支为负，对话中扣完不中断、下一轮入口拦截';
 
 CREATE INDEX IF NOT EXISTS idx_tenants_status ON tenants(status);
 CREATE INDEX IF NOT EXISTS idx_tenants_expire_at ON tenants(expire_at);
@@ -1876,7 +1876,7 @@ CREATE TABLE IF NOT EXISTS tenant_recharges (
     operator_id TEXT,                            -- 平台管理员 user_id（manual 必填）
     operator_name TEXT,                          -- 平台管理员姓名（冗余，便于审计）
     remark TEXT,                                 -- 备注
-    balance_after INTEGER,                       -- 充值后积分余额快照（创建时由事务内计算写入；历史数据为 NULL）
+    balance_after NUMERIC(12,2),                  -- 充值后积分余额快照（创建时由事务内计算写入；历史数据为 NULL）
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -1993,7 +1993,7 @@ CREATE TABLE IF NOT EXISTS work_daily_reports (
     -- 元数据
     model TEXT,                                      -- 生成所用模型（deepseek-v4-flash 等）
     token_cost INTEGER DEFAULT 0,                    -- 生成消耗 token
-    credit_cost INTEGER DEFAULT 0,                   -- 生成消耗积分（与 chat_records.credit_cost 一致）
+    credit_cost NUMERIC(12,2) DEFAULT 0.00,                   -- 生成消耗积分（与 chat_records.credit_cost 一致）
     generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     regenerated_count INTEGER DEFAULT 0,             -- 重生次数
 

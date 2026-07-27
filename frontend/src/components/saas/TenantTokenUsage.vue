@@ -34,11 +34,11 @@
         <div v-if="balance || usageSummary" class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
           <div class="bg-surface rounded-lg p-4 border border-default">
             <div class="text-xs text-muted">积分余额</div>
-            <div class="text-xl font-bold text-primary-600 mt-1">{{ balance?.credit_balance ?? '-' }}</div>
+            <div class="text-xl font-bold text-primary-600 mt-1">{{ formatCredit(balance?.credit_balance) }}</div>
           </div>
           <div class="bg-surface rounded-lg p-4 border border-default">
             <div class="text-xs text-muted">近7天日均消耗</div>
-            <div class="text-xl font-bold text-default mt-1">{{ balance?.daily_avg_cost_7d ?? 0 }}</div>
+            <div class="text-xl font-bold text-default mt-1">{{ formatCredit(balance?.daily_avg_cost_7d) }}</div>
           </div>
           <div class="bg-surface rounded-lg p-4 border border-default">
             <div class="text-xs text-muted">预估可用天数</div>
@@ -46,7 +46,7 @@
           </div>
           <div class="bg-surface rounded-lg p-4 border border-default">
             <div class="text-xs text-muted">查询期总消耗积分</div>
-            <div class="text-xl font-bold text-danger-600 mt-1">{{ usageSummary?.total_credit_cost ?? 0 }}</div>
+            <div class="text-xl font-bold text-danger-600 mt-1">{{ formatCredit(usageSummary?.total_credit_cost) }}</div>
           </div>
         </div>
 
@@ -58,11 +58,11 @@
               <template #index="{ index }">{{ seqNumber(index) }}</template>
               <template #date="{ row }">{{ row.date || '-' }}</template>
               <template #credit_cost="{ row }">
-                <span v-if="!isPlatformAdmin" class="text-danger-600 font-medium">{{ row.credit_cost }}</span>
+                <span v-if="!isPlatformAdmin" class="text-danger-600 font-medium">{{ formatCredit(row.credit_cost) }}</span>
                 <a v-else
                    class="text-danger-600 font-medium underline-offset-2 hover:underline cursor-pointer"
                    @click="openDetailModal(row)">
-                  {{ row.credit_cost }}
+                  {{ formatCredit(row.credit_cost) }}
                 </a>
               </template>
               <template #session_count="{ row }">{{ row.session_count }}</template>
@@ -110,7 +110,7 @@
                 <span :title="row.assistant_message">{{ truncateText(row.assistant_message) }}</span>
               </template>
               <template #credit_cost="{ row }">
-                <span class="text-danger-600 font-medium">{{ row.credit_cost }}</span>
+                <span class="text-danger-600 font-medium">{{ formatCredit(row.credit_cost) }}</span>
               </template>
               <template #empty>该日暂无明细数据</template>
             </BaseTable>
@@ -140,6 +140,7 @@ import BaseTable from '@/components/ui/BaseTable.vue'
 import BasePagination from '@/components/ui/BasePagination.vue'
 import BaseModal from '@/components/ui/BaseModal.vue'
 import { useTenantAuth } from '@/composables/useTenantAuth'
+import { formatCredit } from '@/utils/formatCredit'
 import {
   getTenantBalance,
   getTenantUsage,

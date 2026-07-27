@@ -32,7 +32,7 @@ def init_saas_tables(conn):
             max_users INTEGER DEFAULT 50,
             settings TEXT,
             tenant_code TEXT,
-            credit_balance INTEGER NOT NULL DEFAULT 0,
+            credit_balance NUMERIC(12,2) NOT NULL DEFAULT 0.00,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )

@@ -122,7 +122,7 @@ def aggregate_personal(
         source_dist[src] = source_dist.get(src, 0) + 1
 
         # 积分累计
-        total_credit += int(rec.get("credit_cost") or 0)
+        total_credit += float(rec.get("credit_cost") or 0)
 
     # 节省时间估算（延迟导入避免循环依赖）
     from src.reports.time_saver import estimate_saved_minutes
@@ -226,14 +226,14 @@ def aggregate_team(
         user_stats.append({
             "user_id": row["user_id"],
             "dialog_count": int(row["dialog_count"] or 0),
-            "credit_cost": int(row["credit_cost"] or 0),
+            "credit_cost": float(row["credit_cost"] or 0),
             # 节省时间按用户级聚合估算（粗略：用 total_duration_ms 反推）
             # 准确值需要拉取明细，这里给保守估算
             "saved_minutes": _rough_saved_minutes(int(row["dialog_count"] or 0)),
         })
 
     total_dialog = int(total_row.get("dialog_count") or 0)
-    total_credit = int(total_row.get("credit_cost") or 0)
+    total_credit = float(total_row.get("credit_cost") or 0)
     total_saved = sum(u["saved_minutes"] for u in user_stats)
 
     source_dist = {r["source_type"]: int(r["cnt"]) for r in source_rows}

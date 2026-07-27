@@ -39,7 +39,7 @@ class WorkDailyReportDB:
         suggestions: Optional[List[Dict[str, Any]]] = None,
         model: Optional[str] = None,
         token_cost: int = 0,
-        credit_cost: int = 0,
+        credit_cost: float = 0.0,
         is_regenerate: bool = False,
     ) -> Dict[str, Any]:
         """UPSERT 一条报告记录

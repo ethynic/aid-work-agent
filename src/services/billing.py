@@ -8,9 +8,10 @@
                    + cached_input_tokens * cached_input_price_per_m
     否则（该模型计费不区分缓存命中）：
         token_cost = prompt_tokens * input_price_per_m + completion_tokens * output_price_per_m
-    credit_cost = math.ceil(token_cost * usage_factor)
+    credit_cost = math.ceil(token_cost * usage_factor * 100) / 100
 
 - 单价单位：元/百万 token（_per_m 后缀）
+- credit_cost 精度：2 位小数，向上取整到 0.01
 - token_cost_prices 无匹配记录时 credit_cost = 0（不阻断对话，记 warning 日志）
 """
 
@@ -28,7 +29,7 @@ def calculate_credit_cost(
     completion_tokens: int,
     model: Optional[str],
     cached_input_tokens: int = 0,
-) -> int:
+) -> float:
     """计算本轮对话消耗的积分
 
     Args:
@@ -38,7 +39,7 @@ def calculate_credit_cost(
         cached_input_tokens: 命中缓存的输入 token 数（已包含在 prompt_tokens 内）
 
     Returns:
-        积分用量（整数，向上取整）；单价缺失返回 0
+        积分用量（2 位小数，向上取整到 0.01）；单价缺失返回 0.0
     """
     if not model:
         logger.warning("计费：model 为空，credit_cost=0")
@@ -86,5 +87,5 @@ def calculate_credit_cost(
     if token_cost <= 0:
         return 0
 
-    credit_cost = math.ceil(token_cost * usage_factor)
-    return max(credit_cost, 0)
+    credit_cost = math.ceil(token_cost * usage_factor * 100) / 100
+    return max(credit_cost, 0.0)

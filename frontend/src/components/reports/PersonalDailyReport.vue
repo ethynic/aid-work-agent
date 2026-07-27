@@ -80,7 +80,7 @@
             </div>
             <div class="bg-white rounded-xl border border-default p-4">
               <div class="text-xs text-muted">消耗积分</div>
-              <div class="text-2xl font-bold text-default mt-1">{{ report.metrics?.credit_cost ?? 0 }}</div>
+              <div class="text-2xl font-bold text-default mt-1">{{ formatCredit(report.metrics?.credit_cost) }}</div>
             </div>
             <div class="bg-white rounded-xl border border-default p-4">
               <div class="text-xs text-muted">预估节省时间</div>
@@ -153,7 +153,7 @@
           <!-- 元数据 -->
           <div class="text-xs text-muted px-2">
             报告 ID: {{ report.report_id }} · 生成模型: {{ report.model || '-' }} ·
-            消耗积分: {{ report.credit_cost ?? 0 }} ·
+            消耗积分: {{ formatCredit(report.credit_cost) }} ·
             生成时间: {{ report.generated_at || '-' }}
           </div>
         </div>
@@ -180,6 +180,7 @@ import {
   type ReportType,
 } from '@/api/workReports'
 import { getChatRecordSourceTypeInfo } from '@/api/enums'
+import { formatCredit } from '@/utils/formatCredit'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 
 const { admin: tenantAdmin, isLoggedIn: tenantIsLoggedIn, logout: tenantLogout } = useTenantAuth()

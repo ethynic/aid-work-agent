@@ -64,9 +64,9 @@
             <span
               :class="Number(row.credit_balance || 0) > 0 ? 'text-default' : 'text-muted'"
               class="text-sm tabular-nums"
-              :title="Number(row.credit_balance || 0).toLocaleString() + ' 积分'"
+              :title="formatCredit(row.credit_balance) + ' 积分'"
             >
-              {{ Number(row.credit_balance || 0).toLocaleString() }}
+              {{ formatCredit(row.credit_balance) }}
             </span>
           </template>
           <template #tenant_url="{ row }">
@@ -224,7 +224,7 @@
         </div>
         <div v-if="isEdit">
           <label class="text-sm text-muted mb-1 block">积分余额</label>
-          <input :value="Number(currentTenant?.credit_balance || 0).toLocaleString()" type="text" disabled
+          <input :value="formatCredit(currentTenant?.credit_balance)" type="text" disabled
             class="w-full px-3 py-2 bg-canvas border border-default rounded-lg text-muted cursor-not-allowed tabular-nums" />
           <p class="text-xs text-muted mt-1">只读字段，通过充值/计费扣减自动维护</p>
         </div>
@@ -460,6 +460,7 @@ import { listTenants, createTenant, updateTenant, deleteTenant, type TenantFormD
 import { getAllAvailableAgents, getTenantAgentPermissions, setTenantAgentPermissions, getSubagentEnvVars, setSubagentEnvVars, getConfigFileStatus, uploadConfigFile, downloadConfigFile, deleteConfigFile, type AgentItem, type EnvVarItem, getSubagentKnowledgeSources, setSubagentKnowledgeSources, type KnowledgeSourceItem, listTenantKnowledgeCategories } from '@/api/saasPermissions'
 import TenantMigration from '@/components/saas/TenantMigration.vue'
 import { TenantStatus, TenantStatusMap } from '@/api/enums'
+import { formatCredit } from '@/utils/formatCredit'
 
 const toast = useToast()
 const { isLoggedIn, admin } = useTenantAuth()

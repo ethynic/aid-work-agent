@@ -293,7 +293,7 @@ class SessionRecordService:
             except Exception as billing_err:
                 # 计费异常不应影响对话记录落库
                 logger.error(f"计费计算失败，credit_cost 降级为 0: {billing_err}")
-                credit_cost = 0
+                credit_cost = 0.0
 
             record = ChatRecordDB.create(
                 session_id=self.session_id,

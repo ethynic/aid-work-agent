@@ -1282,3 +1282,11 @@ CREATE TABLE IF NOT EXISTS work_report_preferences (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(tenant_id, user_id)
 );
+
+-- 2026-7-27，credit_cost / credit_balance / balance_after 改为 NUMERIC(12,2)
+-- 计费精度从整数改为 2 位小数，小额对话不再被 ceil 到整数
+ALTER TABLE chat_records ALTER COLUMN credit_cost TYPE NUMERIC(12,2) USING credit_cost::NUMERIC(12,2);
+ALTER TABLE work_daily_reports ALTER COLUMN credit_cost TYPE NUMERIC(12,2) USING credit_cost::NUMERIC(12,2);
+ALTER TABLE tenants ALTER COLUMN credit_balance TYPE NUMERIC(12,2) USING credit_balance::NUMERIC(12,2);
+ALTER TABLE tenant_recharges ALTER COLUMN balance_after TYPE NUMERIC(12,2) USING balance_after::NUMERIC(12,2);
+COMMENT ON COLUMN tenants.credit_balance IS '积分余额（2 位小数），允许透支为负，对话中扣完不中断、下一轮入口拦截';

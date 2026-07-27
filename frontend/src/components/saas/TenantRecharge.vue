@@ -46,7 +46,7 @@
             <span class="text-primary-600 font-medium">{{ row.credits }}</span>
           </template>
           <template #balance_after="{ row }">
-            <span v-if="row.balance_after != null" class="text-default font-medium">{{ row.balance_after }}</span>
+            <span v-if="row.balance_after != null" class="text-default font-medium">{{ formatCredit(row.balance_after) }}</span>
             <span v-else class="text-muted">-</span>
           </template>
           <template #source="{ row }">
@@ -155,6 +155,7 @@ import { useTenantAuth } from '@/composables/useTenantAuth'
 import { usePageContext } from '@/composables/usePageContext'
 import { listTenants } from '@/api/saasTenant'
 import { listRecharges, createRecharge, deleteRecharge, type RechargeItem } from '@/api/billing'
+import { formatCredit } from '@/utils/formatCredit'
 
 const toast = useToast()
 const { admin, isLoggedIn } = useTenantAuth()
