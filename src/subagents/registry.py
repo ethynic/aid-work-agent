@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set
 from loguru import logger
 
-from src.models.subagent import SubagentConfig
+from src.models.subagent import SubagentConfig, extract_llm_config
 from src.subagents.loader import SubagentLoader
 
 
@@ -388,6 +388,7 @@ class SubagentRegistry:
                 )
                 continue
 
+            _provider, _model_codes = extract_llm_config(row.get("llm_provider"))
             config = SubagentConfig(
                 name=row["name"],
                 dir_name=agent_id,
@@ -401,7 +402,8 @@ class SubagentRegistry:
                 system_prompt=prompt_content,
                 delegatable_to=row.get("delegatable_to", []),
                 allow_delegation=row.get("allow_delegation", True),
-                llm_provider=row.get("llm_provider"),
+                llm_provider=_provider,
+                llm_model_codes=_model_codes,
                 reply_style=row.get("reply_style"),
                 business_pages=row.get("business_pages"),
                 knowledge_sources=row.get("knowledge_sources") or [],

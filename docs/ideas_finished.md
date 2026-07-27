@@ -62,6 +62,8 @@
 | 37 | HTML 生成清洗与长文档预览修复 | ✅ 已完成开发 | write 工具支持从“模型说明文字 + ```html 围栏 + 尾部说明”中准确提取完整 HTML，同时保留 Markdown 内普通代码块；HTML 预览 iframe 增加 min-height:0 高度约束，并在同源文档加载后覆盖常见的 100vh/overflow:hidden 打印样式，恢复长文档纵向滚动。write 单测 37 项通过，前端生产构建通过。2026-07-01 | — | — |
 | 38 | PDF.js 最小化前端预览 | ✅ 已完成开发 | PDF 预览由浏览器原生 iframe 改为前端动态加载 PDF.js 5.4.624，以 Canvas 逐页渲染并纵向排列；无工具栏、分页、搜索或缩放控件，仅保留自然滚动查看，下载仍使用原始 PDF。PDF.js 与 worker 独立异步加载，不增加首页主包；版本要求 Node 20.16+ 或 Node 22.3+，匹配服务器 node:22-alpine，前端类型检查及生产构建通过。2026-07-01 | — | — |
 
+| 39 | 子智能体 LLM 配置扩展（按 Provider 覆盖 MODEL_CODE） | ✅ 已完成开发 | 子智能体 `SUBAGENT.md` 和 DB `subagent_definitions` 表支持指定主 provider + 各 provider 的 model_code 覆盖，作用于主 provider 和 failover 链上每个备用 provider。数据格式：SUBAGENT.md 平铺 `{provider}_model_code`（贴 .env 习惯），DB `llm_provider` 改为 JSONB `{"provider": ..., "model_codes": {...}}`，SubagentConfig 拆为两个独立字段便于 Python 消费。新增 `extract_llm_config` / `pack_llm_config` 辅助函数处理 None / 旧字符串 / 新 dict 三种格式兼容。`LLMGateway.__init__` 和 `FailoverGateway.__init__` 加 `model_codes` 参数，`_build_provider` 加 `model` 覆盖参数，`_call_slot` / `_stream_slot` 按 slot.provider_name 查 model_codes 覆盖。`get_model_name()` 同步改造，确保会话记录 / trace / 监控中 model 字段与实际调用一致。API `update_definition` 改用 `exclude_unset=True` 区分「未传入字段」和「显式传 null 清空」。约束：不允许只指定 model_codes 而不带 provider（无 provider 时 model_codes 不被消费）；failover 链本身仍用全局 settings，子智能体只覆盖 model_code。三智能体流程通过：25 单测 + phase2 e2e + 42 failover 回归 + 前端 build 0 错误 + 启动安全。2026-07-27 | [设计](subagent/subagent-llm-config-override-design.md) / [Failover 扩展](infrastructure/llm-failover-design.md#7-子智能体-model_codes-覆盖) | - |
+
 ## 工具
 
 | # | 功能 | 说明 | 设计文档 | 开发计划 |

@@ -171,10 +171,10 @@ class ProviderSlot:
 # FailoverGateway
 # ---------------------------------------------------------------------------
 
-def _build_provider(provider_name: str, api_key: str) -> Any:
+def _build_provider(provider_name: str, api_key: str, model: Optional[str] = None) -> Any:
     """构建 Provider 实例（从 gateway 导入，避免循环引用）"""
     from .gateway import _build_provider as _gw_build
-    return _gw_build(provider_name, api_key)
+    return _gw_build(provider_name, api_key, model=model)
 
 
 class FailoverGateway:
@@ -185,6 +185,7 @@ class FailoverGateway:
         primary_name: str,
         fallback_names: Optional[List[str]] = None,
         failover_cfg=None,
+        model_codes: Optional[Dict[str, str]] = None,
     ):
         from src.config.settings import settings
 
@@ -192,6 +193,8 @@ class FailoverGateway:
         self._primary_name = primary_name
         self._fallback_names = fallback_names or []
         self._failover_cfg = failover_cfg or settings.llm.failover
+        # 子智能体级别的 model_code 覆盖（failover 链上每个 provider 单独覆盖）
+        self._model_codes: Dict[str, str] = model_codes or {}
 
         cb_cfg = self._failover_cfg.circuit_breaker
         self._slots: List[ProviderSlot] = []
@@ -268,7 +271,8 @@ class FailoverGateway:
     ) -> Any:
         """从 slot 的 key_pool 获取 key，构建 provider 后执行调用"""
         async with slot.key_pool.acquire() as api_key:
-            provider = _build_provider(slot.provider_name, api_key)
+            model_override = self._model_codes.get(slot.provider_name)
+            provider = _build_provider(slot.provider_name, api_key, model=model_override)
             method = getattr(provider, fn_name)
             return await method(**kwargs)
 
@@ -277,7 +281,8 @@ class FailoverGateway:
     ) -> AsyncGenerator[str, None]:
         """流式调用"""
         async with slot.key_pool.acquire() as api_key:
-            provider = _build_provider(slot.provider_name, api_key)
+            model_override = self._model_codes.get(slot.provider_name)
+            provider = _build_provider(slot.provider_name, api_key, model=model_override)
             method = getattr(provider, fn_name)
             async for chunk in method(**kwargs):
                 yield chunk
@@ -563,6 +568,14 @@ class FailoverGateway:
         return self._primary_name
 
     def get_model_name(self) -> str:
+        """获取主 provider 的模型名称。
+
+        优先返回子智能体配置的 model_code 覆盖，未配置时返回全局默认。
+        """
+        # 优先使用子智能体配置的 model_code 覆盖
+        override = self._model_codes.get(self._primary_name)
+        if override:
+            return override
         mapping = {
             "qwen": self._settings.llm.qwen.model,
             "zhipu": self._settings.llm.zhipu.model,

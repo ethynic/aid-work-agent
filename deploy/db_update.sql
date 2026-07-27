@@ -167,7 +167,7 @@ CREATE TABLE IF NOT EXISTS subagent_definitions (
     context         JSONB DEFAULT '{}',
     delegatable_to  JSONB DEFAULT '[]',
     allow_delegation BOOLEAN DEFAULT TRUE,
-    llm_provider    TEXT,
+    llm_provider    JSONB,
     reply_style     TEXT,
     business_pages  JSONB,
     status          TEXT DEFAULT 'active',
@@ -1290,3 +1290,11 @@ ALTER TABLE work_daily_reports ALTER COLUMN credit_cost TYPE NUMERIC(12,2) USING
 ALTER TABLE tenants ALTER COLUMN credit_balance TYPE NUMERIC(12,2) USING credit_balance::NUMERIC(12,2);
 ALTER TABLE tenant_recharges ALTER COLUMN balance_after TYPE NUMERIC(12,2) USING balance_after::NUMERIC(12,2);
 COMMENT ON COLUMN tenants.credit_balance IS '积分余额（2 位小数），允许透支为负，对话中扣完不中断、下一轮入口拦截';
+
+-- 2026-7-27，subagent_definitions.llm_provider 改为 JSONB，存 {provider, model_codes}
+-- 现有数据都为空，无需迁移；若历史存在字符串值，转为 {"provider": "..."} 形式
+-- 空字符串也转为 NULL，避免存入无意义的 {"provider": ""}
+ALTER TABLE subagent_definitions ALTER COLUMN llm_provider TYPE JSONB USING
+  CASE WHEN llm_provider IS NULL OR llm_provider = '' THEN NULL
+  ELSE jsonb_build_object('provider', llm_provider)
+  END;

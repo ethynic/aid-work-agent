@@ -149,6 +149,13 @@ class SubagentLoader:
             logger.warning(f"Missing required field 'name' in {path}")
             return None
         
+        # 提取所有 {provider}_model_code 字段，组装为 {provider: model_code} 字典
+        llm_model_codes = {
+            k.removesuffix("_model_code"): v
+            for k, v in frontmatter.items()
+            if k.endswith("_model_code") and isinstance(v, str) and v
+        } or None
+
         # 构建配置对象
         config = SubagentConfig(
             name=frontmatter.get("name", ""),
@@ -163,6 +170,7 @@ class SubagentLoader:
             delegatable_to=frontmatter.get("delegatable_to", []),
             allow_delegation=frontmatter.get("allow_delegation", True),
             llm_provider=frontmatter.get("llm_provider", None),
+            llm_model_codes=llm_model_codes,
             business_pages=frontmatter.get("business_pages", None),
             reply_style=frontmatter.get("reply_style", None),
             path=str(path),
@@ -260,6 +268,11 @@ class SubagentLoader:
             frontmatter["reply_style"] = config.reply_style
         if config.business_pages:
             frontmatter["business_pages"] = config.business_pages
+        if config.llm_provider:
+            frontmatter["llm_provider"] = config.llm_provider
+        if config.llm_model_codes:
+            for provider, model in config.llm_model_codes.items():
+                frontmatter[f"{provider}_model_code"] = model
 
         yaml_str = yaml.dump(frontmatter, allow_unicode=True, default_flow_style=False, sort_keys=False)
         return f"---\n{yaml_str}---\n\n{body}"

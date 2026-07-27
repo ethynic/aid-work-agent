@@ -22,7 +22,7 @@ from typing import Optional, TYPE_CHECKING
 
 from loguru import logger
 
-from src.models.subagent import SubagentConfig
+from src.models.subagent import SubagentConfig, extract_llm_config
 
 if TYPE_CHECKING:
     from src.memory.short_term import ShortTermMemory
@@ -222,6 +222,7 @@ class AgentFactory:
             logger.warning(f"DB 中有子智能体定义 {agent_id} 但无 system_prompt")
             return None
 
+        _provider, _model_codes = extract_llm_config(row.get("llm_provider"))
         config = SubagentConfig(
             name=row["name"],
             dir_name=agent_id,
@@ -235,7 +236,8 @@ class AgentFactory:
             system_prompt=prompt_content,
             delegatable_to=row.get("delegatable_to", []),
             allow_delegation=row.get("allow_delegation", True),
-            llm_provider=row.get("llm_provider"),
+            llm_provider=_provider,
+            llm_model_codes=_model_codes,
             reply_style=row.get("reply_style"),
             business_pages=row.get("business_pages"),
             knowledge_sources=row.get("knowledge_sources") or [],

@@ -417,3 +417,54 @@ class FailoverGateway:
 | 配置方式 | A. 代码硬编码备用链 B. 配置文件 | B | 不同环境可用不同备用策略 |
 | Key 管理 | A. 统一一套 Key B. 各 provider 独立环境变量 | B | DeepSeek 已有独立 `DEEPSEEK_*`，Qwen 新增 `QWEN_*`，互不干扰 |
 | Key 缺失处理 | A. 启动报错 B. 跳过无 Key 的 provider | B | 未配置 Key 的 provider 自动跳过，降级为单 provider 模式 |
+
+## 7. 子智能体 model_codes 覆盖
+
+> 详见 [子智能体 LLM 配置扩展设计文档](../subagent/subagent-llm-config-override-design.md)。
+
+### 7.1 背景
+
+`FailoverGateway` 初始化时从全局 `settings.llm.{provider}.model` 读取各 provider 的默认 model。但某些子智能体需要为特定 provider 指定更高级别的 model（例如旅游顾问需要 `deepseek-v4-pro` 而非全局默认的 `deepseek-v4-flash`），同时希望 failover 切换到备用 provider 时也用指定的 model（例如 `qwen3.7-plus` 而非 qwen 全局默认）。
+
+### 7.2 改造点
+
+`FailoverGateway.__init__` 新增 `model_codes: Optional[Dict[str, str]] = None` 参数，存为 `self._model_codes`。Failover 链本身不变（仍来自 `settings.llm.failover.providers`），但链上每个 provider slot 在调用时按 `model_codes.get(slot.provider_name)` 覆盖 model：
+
+```python
+async def _call_slot(self, slot: ProviderSlot, fn_name: str, **kwargs) -> Any:
+    async with slot.key_pool.acquire() as api_key:
+        model_override = self._model_codes.get(slot.provider_name)
+        provider = _build_provider(slot.provider_name, api_key, model=model_override)
+        method = getattr(provider, fn_name)
+        return await method(**kwargs)
+```
+
+`_stream_slot` 同样改造。`_build_provider(provider_name, api_key, model=None)` 当 `model` 传入时覆盖 `settings.llm.{provider}.model`，未传入则用全局默认。
+
+`get_model_name()` 同步改造：优先返回 `self._model_codes.get(self._primary_name)`，未配置时返回全局默认。该方法被 `record_service.set_model()` 等多处使用，确保会话记录 / trace / 监控中 model 字段与实际调用一致。
+
+### 7.3 LLMGateway 同步改造
+
+`LLMGateway.__init__` 同样新增 `model_codes` 参数，存为 `self._model_codes`，并传给内部 `FailoverGateway`。`_call_with_pool` / `_stream_with_pool` 在调用 `_build_provider` 时传入 `self._model_codes.get(self.provider_name)`。
+
+### 7.4 Agent 消费层
+
+`src/core/agent.py` 在构造子 `Agent(is_master=False)` 时，若 `subagent_config.llm_provider` 非空，创建专用 `LLMGateway`：
+
+```python
+self.llm = LLMGateway(
+    provider_name=subagent_config.llm_provider,
+    model_codes=subagent_config.llm_model_codes,
+)
+```
+
+主智能体（`is_master=True`）不传 `model_codes`，行为不变。
+
+### 7.5 数据来源
+
+子智能体的 `llm_provider` + `llm_model_codes` 来自：
+
+- **`SUBAGENT.md` frontmatter（平铺）**：`llm_provider: deepseek` + `deepseek_model_code: deepseek-v4-pro` + `qwen_model_code: qwen3.7-plus`
+- **DB `subagent_definitions.llm_provider`（JSONB）**：`{"provider": "deepseek", "model_codes": {"deepseek": "deepseek-v4-pro", "qwen": "qwen3.7-plus"}}`
+
+前端 `/portal/agent-definitions` 配置页面同步暴露这两个字段。详见子智能体 LLM 配置扩展设计文档。

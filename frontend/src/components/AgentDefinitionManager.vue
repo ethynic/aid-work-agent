@@ -155,6 +155,40 @@
                     </select>
                   </div>
 
+                  <!-- LLM 配置覆盖 -->
+                  <div>
+                    <label class="text-xs text-gray-500 mb-1 block">LLM 提供者</label>
+                    <select v-model="form.llm_provider"
+                      class="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-primary-400">
+                      <option :value="null">留空（用全局默认）</option>
+                      <option value="deepseek">deepseek</option>
+                      <option value="qwen">qwen</option>
+                      <option value="zhipu">zhipu</option>
+                    </select>
+                    <p class="text-[11px] text-gray-400 mt-1">指定后该智能体使用此 provider；留空则沿用 .env 中的 LLM_PROVIDER。</p>
+                  </div>
+                  <div>
+                    <label class="text-xs text-gray-500 mb-1 block">各 Provider Model 覆盖</label>
+                    <div class="bg-gray-50 rounded-lg p-2 space-y-1.5">
+                      <div class="grid grid-cols-[80px_1fr] items-center gap-2">
+                        <span class="text-xs text-gray-600">deepseek</span>
+                        <input v-model="form.llm_model_codes.deepseek" type="text" placeholder="留空用全局默认"
+                          class="w-full px-2 py-1 text-xs bg-white border border-gray-200 rounded focus:outline-none focus:border-primary-400" />
+                      </div>
+                      <div class="grid grid-cols-[80px_1fr] items-center gap-2">
+                        <span class="text-xs text-gray-600">qwen</span>
+                        <input v-model="form.llm_model_codes.qwen" type="text" placeholder="留空用全局默认"
+                          class="w-full px-2 py-1 text-xs bg-white border border-gray-200 rounded focus:outline-none focus:border-primary-400" />
+                      </div>
+                      <div class="grid grid-cols-[80px_1fr] items-center gap-2">
+                        <span class="text-xs text-gray-600">zhipu</span>
+                        <input v-model="form.llm_model_codes.zhipu" type="text" placeholder="留空用全局默认"
+                          class="w-full px-2 py-1 text-xs bg-white border border-gray-200 rounded focus:outline-none focus:border-primary-400" />
+                      </div>
+                    </div>
+                    <p class="text-[11px] text-gray-400 mt-1">主 provider 失败 failover 到备用 provider 时，备用 provider 也会用这里配置的 model。</p>
+                  </div>
+
                   <!-- Business Pages Editor -->
                   <div>
                     <label class="text-xs text-gray-500 mb-1 block">业务页面</label>
@@ -579,6 +613,12 @@ function populateForm(data: AgentDefinition) {
     skills: { ...data.skills },
     reply_style: data.reply_style || null,
     status: data.status || 'active',
+    llm_provider: data.llm_provider || null,
+    llm_model_codes: {
+      deepseek: data.llm_model_codes?.deepseek || '',
+      qwen: data.llm_model_codes?.qwen || '',
+      zhipu: data.llm_model_codes?.zhipu || '',
+    },
   }
   toolsInherit.value = data.tools?.inherit !== false
   additionalTools.value = data.tools?.additional || []
@@ -736,6 +776,12 @@ async function saveDefinition() {
   if (!selectedAgentId.value) return
   saving.value = true
   try {
+    // 组装 llm_model_codes：过滤空值，若全空则传 null
+    const rawCodes = form.value.llm_model_codes || {}
+    const model_codes: Record<string, string> = {}
+    for (const [k, v] of Object.entries(rawCodes)) {
+      if (typeof v === 'string' && v.trim()) model_codes[k] = v.trim()
+    }
     const data: Record<string, any> = {
       name: form.value.name,
       description: form.value.description || null,
@@ -743,6 +789,8 @@ async function saveDefinition() {
       skills: form.value.skills,
       reply_style: form.value.reply_style || null,
       business_pages: businessPages.value.length > 0 ? businessPages.value : null,
+      llm_provider: form.value.llm_provider || null,
+      llm_model_codes: Object.keys(model_codes).length > 0 ? model_codes : null,
       status: form.value.status,
     }
     const res = await updateDefinition(selectedAgentId.value, data)

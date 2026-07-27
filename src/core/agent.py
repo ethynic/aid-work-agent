@@ -208,8 +208,14 @@ class Agent:
         # 共享组件 — 子智能体可覆盖 LLM 提供者
         if subagent_config and hasattr(subagent_config, 'llm_provider') and subagent_config.llm_provider:
             from src.llm.gateway import LLMGateway
-            self.llm = LLMGateway(provider_name=subagent_config.llm_provider)
-            logger.info(f"Agent using override LLM provider: {subagent_config.llm_provider}")
+            self.llm = LLMGateway(
+                provider_name=subagent_config.llm_provider,
+                model_codes=getattr(subagent_config, 'llm_model_codes', None),
+            )
+            logger.info(
+                f"Agent using override LLM: provider={subagent_config.llm_provider}, "
+                f"model_codes={getattr(subagent_config, 'llm_model_codes', None)}"
+            )
         else:
             self.llm = llm_gateway
         self.tool_registry = ToolRegistry()

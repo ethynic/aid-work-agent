@@ -37,6 +37,7 @@ class CreateDefinitionRequest(BaseModel):
     delegatable_to: Optional[List[str]] = None
     allow_delegation: bool = True
     llm_provider: Optional[str] = None
+    llm_model_codes: Optional[Dict[str, str]] = None
     reply_style: Optional[str] = None
     business_pages: Optional[List[Dict[str, Any]]] = None
     knowledge_sources: Optional[List[Dict[str, str]]] = None
@@ -55,6 +56,7 @@ class UpdateDefinitionRequest(BaseModel):
     delegatable_to: Optional[List[str]] = None
     allow_delegation: Optional[bool] = None
     llm_provider: Optional[str] = None
+    llm_model_codes: Optional[Dict[str, str]] = None
     reply_style: Optional[str] = None
     business_pages: Optional[List[Dict[str, Any]]] = None
     knowledge_sources: Optional[List[Dict[str, str]]] = None
@@ -165,6 +167,7 @@ async def create_definition(request: Request, body: CreateDefinitionRequest):
             delegatable_to=body.delegatable_to,
             allow_delegation=body.allow_delegation,
             llm_provider=body.llm_provider,
+            llm_model_codes=body.llm_model_codes,
             reply_style=body.reply_style,
             business_pages=body.business_pages,
             knowledge_sources=body.knowledge_sources,
@@ -300,10 +303,14 @@ async def get_definition(request: Request, agent_id: str):
 
 @router.put("/{agent_id}")
 async def update_definition(request: Request, agent_id: str, body: UpdateDefinitionRequest):
-    """更新子智能体定义（不含 system_prompt）"""
+    """更新子智能体定义（不含 system_prompt）
+
+    使用 exclude_unset 而非 exclude_none，以便区分「未传入字段」和「显式传 null 清空」。
+    这对 llm_provider / llm_model_codes 至关重要：用户需要能通过传 null 清空已有 LLM 配置。
+    """
     try:
         admin = _require_admin(request)
-        updates = body.model_dump(exclude_none=True)
+        updates = body.model_dump(exclude_unset=True)
         if not updates:
             return _error("没有需要更新的字段")
 

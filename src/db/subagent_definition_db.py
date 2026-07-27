@@ -13,6 +13,7 @@ import psycopg2.extras
 from loguru import logger
 
 from src.db.database import get_db_connection
+from src.models.subagent import pack_llm_config
 
 
 def _json(val):
@@ -39,12 +40,14 @@ class SubagentDefinitionDB:
         delegatable_to: Optional[list] = None,
         allow_delegation: bool = True,
         llm_provider: Optional[str] = None,
+        llm_model_codes: Optional[Dict[str, str]] = None,
         reply_style: Optional[str] = None,
         business_pages: Optional[list] = None,
         knowledge_sources: Optional[list] = None,
         created_by: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         row_id = str(uuid.uuid4())
+        llm_config_json = _json(pack_llm_config(llm_provider, llm_model_codes))
         with get_db_connection() as conn:
             cursor = conn.cursor()
             try:
@@ -68,7 +71,7 @@ class SubagentDefinitionDB:
                     _json(tools or {}), _json(skills or {}),
                     _json(context or {}),
                     _json(delegatable_to or []), allow_delegation,
-                    llm_provider, reply_style, _json(business_pages),
+                    llm_config_json, reply_style, _json(business_pages),
                     _json(knowledge_sources or []),
                     created_by, created_by,
                 ))
@@ -140,11 +143,16 @@ class SubagentDefinitionDB:
 
     @staticmethod
     def update(agent_id: str, **kwargs) -> Optional[Dict[str, Any]]:
+        # llm_provider 和 llm_model_codes 需要合并为 JSONB 写入 llm_provider 列
+        llm_provider_val = kwargs.get("llm_provider")
+        llm_model_codes_val = kwargs.get("llm_model_codes")
+        has_llm_override = "llm_provider" in kwargs or "llm_model_codes" in kwargs
+
         allowed = {
             "name", "description", "version", "author",
             "triggers", "tools", "skills", "context",
             "delegatable_to", "allow_delegation",
-            "llm_provider", "reply_style", "business_pages",
+            "reply_style", "business_pages",
             "knowledge_sources",
             "status", "updated_by",
         }
@@ -156,6 +164,13 @@ class SubagentDefinitionDB:
         for k, v in kwargs.items():
             if k in allowed and v is not None:
                 updates[k] = _json(v) if k in jsonb_fields else v
+
+        # 合并 llm 配置：如果调用方传了 llm_provider 或 llm_model_codes，写 JSONB
+        # 注意：只传其中一个时，另一个保持空（不读旧值合并），因为业务上两者通常一起设置
+        if has_llm_override:
+            llm_config_packed = pack_llm_config(llm_provider_val, llm_model_codes_val)
+            updates["llm_provider"] = _json(llm_config_packed)
+
         if not updates:
             return SubagentDefinitionDB.get_by_agent_id(agent_id)
 

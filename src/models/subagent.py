@@ -77,6 +77,11 @@ class SubagentConfig(BaseModel):
 
     # LLM 配置覆盖
     llm_provider: Optional[str] = Field(default=None, description="覆盖 LLM 提供者（如 deepseek），为空则使用全局默认")
+    llm_model_codes: Optional[Dict[str, str]] = Field(
+        default=None,
+        description="各 provider 的 model_code 覆盖，如 {'deepseek': 'deepseek-v4-pro', 'qwen': 'qwen3.7-plus'}。"
+                    "未列出的 provider 使用全局默认 model",
+    )
 
     # 回复风格
     reply_style: Optional[str] = Field(default=None, description="回复风格ID（对应 src/prompts/styles/ 下的文件名）")
@@ -256,6 +261,42 @@ class DelegationRequest(BaseModel):
     target_subagent: Optional[str] = Field(default=None, description="目标子智能体名称（可选，自动匹配）")
     context_filter: Optional[List[str]] = Field(default=None, description="需要传递的上下文过滤")
     timeout: int = Field(default=300, description="超时时间（秒）")
+
+
+def extract_llm_config(raw: Any) -> tuple[Optional[str], Optional[Dict[str, str]]]:
+    """DB JSONB 字段 -> (provider, model_codes)。
+
+    兼容三种输入：
+    - None：返回 (None, None)
+    - 旧字符串格式（如 "deepseek"）：返回 ("deepseek", None)
+    - 新 JSONB 格式 {"provider": "deepseek", "model_codes": {...}}：拆分返回
+    """
+    if raw is None:
+        return None, None
+    if isinstance(raw, str):
+        return raw or None, None
+    if isinstance(raw, dict):
+        provider = raw.get("provider") or None
+        model_codes = raw.get("model_codes")
+        if isinstance(model_codes, dict):
+            model_codes = {k: v for k, v in model_codes.items() if isinstance(v, str) and v} or None
+        else:
+            model_codes = None
+        return provider, model_codes
+    return None, None
+
+
+def pack_llm_config(provider: Optional[str], model_codes: Optional[Dict[str, str]]) -> Optional[Dict[str, Any]]:
+    """(provider, model_codes) -> DB JSONB 字段。
+
+    两者都为空时返回 None；否则返回 {"provider": ..., "model_codes": {...}}。
+    """
+    if not provider and not model_codes:
+        return None
+    return {
+        "provider": provider or None,
+        "model_codes": dict(model_codes) if model_codes else {},
+    }
 
 
 class DelegationResponse(BaseModel):

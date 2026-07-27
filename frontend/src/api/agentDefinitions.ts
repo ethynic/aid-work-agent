@@ -32,6 +32,7 @@ export interface AgentDefinition {
   delegatable_to: string[]
   allow_delegation: boolean
   llm_provider: string | null
+  llm_model_codes: Record<string, string> | null
   reply_style: string | null
   business_pages: any[] | null
   knowledge_sources: { source_type: string; display_name: string }[]
@@ -109,6 +110,7 @@ export async function createDefinition(data: {
   skills?: Record<string, any>
   context?: Record<string, any>
   llm_provider?: string
+  llm_model_codes?: Record<string, string>
   reply_style?: string
 }): Promise<{ success: boolean; data: any }> {
   const response = await fetch(`${API_BASE}`, {

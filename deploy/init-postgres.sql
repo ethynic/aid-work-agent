@@ -1309,7 +1309,7 @@ CREATE TABLE IF NOT EXISTS subagent_definitions (
     context         JSONB DEFAULT '{}',
     delegatable_to  JSONB DEFAULT '[]',
     allow_delegation BOOLEAN DEFAULT TRUE,
-    llm_provider    TEXT,
+    llm_provider    JSONB,
     reply_style     TEXT,
     business_pages  JSONB,
     knowledge_sources JSONB DEFAULT '[]',

@@ -103,6 +103,7 @@ def main():
         skills=frontmatter.get("skills", {}),
         context=frontmatter.get("context", {}),
         llm_provider=frontmatter.get("llm_provider"),
+        llm_model_codes={"deepseek": "deepseek-v4-pro", "qwen": "qwen3.7-plus"},
         reply_style=frontmatter.get("reply_style"),
         business_pages=frontmatter.get("business_pages"),
         created_by=CREATED_BY,
@@ -125,12 +126,14 @@ def main():
         print(f"  tools = {defn.get('tools')}")
         print(f"  skills = {defn.get('skills')}")
         print(f"  llm_provider = {defn.get('llm_provider')}")
+        print(f"  llm_model_codes = {defn.get('llm_model_codes')}")
         print(f"  reply_style = {defn.get('reply_style')}")
         print(f"  business_pages count = {len(defn.get('business_pages') or [])}")
         print(f"  context = {defn.get('context')}")
         print(f"  production_version = {defn.get('production_version')}")
         assert defn["name"] == "旅游咨询顾问"
         assert defn.get("llm_provider") == "deepseek"
+        assert defn.get("llm_model_codes") == {"deepseek": "deepseek-v4-pro", "qwen": "qwen3.7-plus"}
         assert defn.get("reply_style") == "human-like"
         assert len(defn.get("business_pages") or []) == 6
         assert defn.get("context", {}).get("max_input_tokens") == 12000
@@ -163,6 +166,7 @@ def main():
         print(f"  config.tools = {config.tools}")
         print(f"  config.skills = {config.skills}")
         print(f"  config.llm_provider = {config.llm_provider}")
+        print(f"  config.llm_model_codes = {config.llm_model_codes}")
         print(f"  config.reply_style = {config.reply_style}")
 
         assert config.from_db is True, "from_db should be True"
@@ -170,6 +174,7 @@ def main():
         assert config.dir_name == AGENT_ID
         assert "行程规划师" in config.system_prompt
         assert config.llm_provider == "deepseek"
+        assert config.llm_model_codes == {"deepseek": "deepseek-v4-pro", "qwen": "qwen3.7-plus"}
         assert config.reply_style == "human-like"
         return config
 

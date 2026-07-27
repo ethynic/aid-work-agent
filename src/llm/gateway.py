@@ -44,24 +44,30 @@ def _build_key_pool(provider_name: str) -> KeyPool:
     )
 
 
-def _build_provider(provider_name: str, api_key: str) -> BaseLLMProvider:
-    """用给定 key 构建 Provider 实例（轻量，不缓存）"""
+def _build_provider(provider_name: str, api_key: str, model: Optional[str] = None) -> BaseLLMProvider:
+    """用给定 key 构建 Provider 实例（轻量，不缓存）。
+
+    Args:
+        provider_name: provider 名称
+        api_key: API key
+        model: 可选 model 覆盖，未传入则用 settings.llm.{provider}.model
+    """
     if provider_name == "qwen":
         return QwenProvider(
             api_key=api_key,
-            model=settings.llm.qwen.model,
+            model=model or settings.llm.qwen.model,
             base_url=settings.llm.qwen.base_url,
         )
     elif provider_name == "zhipu":
         return ZhipuProvider(
             api_key=api_key,
-            model=settings.llm.zhipu.model,
+            model=model or settings.llm.zhipu.model,
             base_url=settings.llm.zhipu.base_url,
         )
     elif provider_name == "deepseek":
         return DeepSeekProvider(
             api_key=api_key,
-            model=settings.llm.deepseek.model,
+            model=model or settings.llm.deepseek.model,
             base_url=settings.llm.deepseek.base_url,
         )
     raise ValueError(f"不支持的LLM提供者: {provider_name}")
@@ -86,16 +92,21 @@ class LLMGateway:
         "deepseek": DeepSeekProvider,
     }
 
-    def __init__(self, provider_name: Optional[str] = None):
+    def __init__(self, provider_name: Optional[str] = None, model_codes: Optional[Dict[str, str]] = None):
         """
         初始化LLM网关
 
         Args:
             provider_name: 指定提供者名称，默认使用配置中的提供者
+            model_codes: 各 provider 的 model_code 覆盖，如 {'deepseek': 'deepseek-v4-pro', 'qwen': 'qwen3.7-plus'}。
+                        未列出的 provider 使用全局默认 model。仅当指定 provider_name 时生效。
         """
         self.provider_name = provider_name or settings.llm.provider
         if self.provider_name not in self.PROVIDERS:
             raise ValueError(f"不支持的LLM提供者: {self.provider_name}")
+
+        # 子智能体级别的 model_code 覆盖（仅与 provider_name 一起使用）
+        self._model_codes: Dict[str, str] = model_codes or {}
 
         self._failover_enabled = (
             hasattr(settings.llm, 'failover')
@@ -107,16 +118,19 @@ class LLMGateway:
             self._failover = FailoverGateway(
                 primary_name=self.provider_name,
                 fallback_names=settings.llm.failover.providers,
+                model_codes=self._model_codes,
             )
             logger.info(
                 f"LLM网关初始化完成（Failover 模式），主提供者: {self.provider_name}，"
-                f"备用: {settings.llm.failover.providers}"
+                f"备用: {settings.llm.failover.providers}，"
+                f"model_codes 覆盖: {self._model_codes or '无'}"
             )
         else:
             self._key_pool: KeyPool = _build_key_pool(self.provider_name)
             logger.info(
                 f"LLM网关初始化完成，提供者: {self.provider_name}，"
-                f"Key 池统计: {self._key_pool.stats()}"
+                f"Key 池统计: {self._key_pool.stats()}，"
+                f"model_codes 覆盖: {self._model_codes or '无'}"
             )
 
     # ------------------------------------------------------------------
@@ -134,7 +148,8 @@ class LLMGateway:
         
         try:
             async with self._key_pool.acquire() as api_key:
-                provider = _build_provider(self.provider_name, api_key)
+                model_override = self._model_codes.get(self.provider_name)
+                provider = _build_provider(self.provider_name, api_key, model=model_override)
                 method = getattr(provider, fn_name)
                 logger.debug(f"[LLM] Provider built, calling {fn_name}")
                 
@@ -163,7 +178,8 @@ class LLMGateway:
         
         try:
             async with self._key_pool.acquire() as api_key:
-                provider = _build_provider(self.provider_name, api_key)
+                model_override = self._model_codes.get(self.provider_name)
+                provider = _build_provider(self.provider_name, api_key, model=model_override)
                 method = getattr(provider, fn_name)
                 logger.debug(f"[LLM] Provider built for streaming, calling {fn_name}")
                 
@@ -367,7 +383,14 @@ class LLMGateway:
         return self.provider_name
 
     def get_model_name(self) -> str:
-        """获取当前模型名称"""
+        """获取当前模型名称。
+
+        优先返回子智能体配置的 model_code 覆盖，未配置时返回全局默认。
+        """
+        # 优先使用子智能体配置的 model_code 覆盖
+        override = self._model_codes.get(self.provider_name)
+        if override:
+            return override
         if self.provider_name == "qwen":
             return settings.llm.qwen.model
         elif self.provider_name == "zhipu":

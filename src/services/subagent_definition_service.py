@@ -11,6 +11,7 @@ from loguru import logger
 
 from src.db.subagent_definition_db import SubagentDefinitionDB
 from src.db.subagent_prompt_section_db import SubagentPromptSectionDB
+from src.models.subagent import extract_llm_config
 from src.prompts.prompt_registry_service import PromptRegistryService
 
 
@@ -34,6 +35,7 @@ class SubagentDefinitionService:
         delegatable_to: Optional[list] = None,
         allow_delegation: bool = True,
         llm_provider: Optional[str] = None,
+        llm_model_codes: Optional[Dict[str, str]] = None,
         reply_style: Optional[str] = None,
         business_pages: Optional[list] = None,
         knowledge_sources: Optional[list] = None,
@@ -58,6 +60,7 @@ class SubagentDefinitionService:
             delegatable_to=delegatable_to or [],
             allow_delegation=allow_delegation,
             llm_provider=llm_provider,
+            llm_model_codes=llm_model_codes,
             reply_style=reply_style,
             business_pages=business_pages,
             knowledge_sources=knowledge_sources or [],
@@ -258,7 +261,11 @@ class SubagentDefinitionService:
 
 
 def _serialize(record: Dict) -> Dict:
-    """UUID/timestamp 转字符串，保留原生 JSONB 类型"""
+    """UUID/timestamp 转字符串，保留原生 JSONB 类型。
+
+    llm_provider 字段在 DB 中是 JSONB（存 {provider, model_codes}），
+    对外暴露时拆分为 llm_provider (string) + llm_model_codes (dict) 两个字段。
+    """
     import uuid
     from datetime import datetime
     result = {}
@@ -269,4 +276,8 @@ def _serialize(record: Dict) -> Dict:
             result[k] = str(v)
         else:
             result[k] = v
+    # 拆分 llm_provider JSONB -> llm_provider + llm_model_codes
+    provider, model_codes = extract_llm_config(result.get("llm_provider"))
+    result["llm_provider"] = provider
+    result["llm_model_codes"] = model_codes
     return result
