@@ -1,0 +1,9 @@
+node_modules/
+dist/
+release/
+*.log
+.env*
+.DS_Store
+
+# better-sqlite3 编译产物不提交
+build/Release/*.node

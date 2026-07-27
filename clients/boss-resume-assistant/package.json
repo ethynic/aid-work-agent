@@ -1,0 +1,43 @@
+{
+  "name": "boss-resume-assistant",
+  "version": "0.1.0",
+  "private": true,
+  "description": "BOSS 简历筛选助手 - 独立桌面客户端(原生 CDP)",
+  "type": "module",
+  "main": "dist/src/main/main.js",
+  "scripts": {
+    "dev:renderer": "vite",
+    "build:renderer": "vite build",
+    "build:main": "tsc -p tsconfig.main.json",
+    "build": "npm run build:renderer && npm run build:main",
+    "typecheck": "vue-tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.main.json",
+    "rebuild": "electron-rebuild -f -w better-sqlite3",
+    "test": "npm run build:main && node scripts/run-tests.mjs",
+    "start": "npm run build && electron .",
+    "package:win:dev": "npm run typecheck && npm test && node scripts/package-win.mjs dev",
+    "verify:package": "node scripts/verify-package.mjs dev"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.8.1",
+    "pngjs": "^7.0.0",
+    "tesseract.js": "^5.1.1",
+    "ws": "^8.21.1"
+  },
+  "devDependencies": {
+    "@electron/asar": "^4.2.0",
+    "@electron/rebuild": "^3.7.1",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^24.0.0",
+    "@types/pngjs": "^6.0.5",
+    "@types/ws": "^8.18.1",
+    "@vitejs/plugin-vue": "^5.2.1",
+    "electron": "43.1.0",
+    "electron-builder": "^26.15.3",
+    "js-yaml": "^4.1.0",
+    "typescript": "^5.9.0",
+    "vite": "^5.4.11",
+    "vue": "^3.4.38",
+    "vue-router": "^4.4.3",
+    "vue-tsc": "^2.1.6"
+  }
+}
