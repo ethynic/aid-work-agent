@@ -108,8 +108,8 @@ knowledge_base_search(query="天眼 小七孔 路线", top_k=10)
 
 用 `attraction_search` 搜索客户提到的主要景点所在城市的所有景点，了解该城市有哪些资源可以安排：
 ```
-attraction_search(query="平塘", top_k=20)
-attraction_search(query="安顺", top_k=20)
+attraction_search(query="平塘", top_k=8)
+attraction_search(query="安顺", top_k=8)
 ```
 
 **⚠️ 必须记住本次搜索返回的所有景点 `title`**：搜索结果是一个**白名单**，后续行程中出现的所有景点名都必须来自这个白名单的 `title` 字段。在脑中（或上下文中）保留这份清单，输出行程前逐一比对。**绝对不能脑补白名单中没有的景点**。
