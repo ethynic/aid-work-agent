@@ -23,7 +23,7 @@ from src.db.database import get_db_connection
 class HotelSearchInput(BaseModel):
     """搜索酒店知识库参数"""
     query: str = Field(..., description="搜索关键词（酒店名、城市名或区域名）")
-    top_k: Optional[int] = Field(20, description="返回结果数量，默认20")
+    top_k: Optional[int] = Field(8, description="返回结果数量，默认8")
 
 
 class HotelSearchTool(BaseTool):
@@ -129,7 +129,7 @@ class HotelSearchTool(BaseTool):
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
         query = kwargs.get("query")
-        top_k = kwargs.get("top_k", 20)
+        top_k = kwargs.get("top_k", 8)
 
         if not query:
             return {"success": False, "error": "查询不能为空", "results": [], "count": 0}

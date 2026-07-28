@@ -19,7 +19,7 @@ from src.core.image_asset import get_image_registry
 class AttractionSearchInput(BaseModel):
     """搜索景点知识库参数"""
     query: str = Field(..., description="搜索关键词（城市名、区域名或景点名）")
-    top_k: Optional[int] = Field(20, description="返回结果数量，默认20")
+    top_k: Optional[int] = Field(8, description="返回结果数量，默认8")
 
 
 class AttractionSearchTool(BaseTool):
@@ -77,7 +77,7 @@ class AttractionSearchTool(BaseTool):
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
         query = kwargs.get("query")
-        top_k = kwargs.get("top_k", 20)
+        top_k = kwargs.get("top_k", 8)
 
         if not query:
             return {"success": False, "error": "查询不能为空", "results": [], "count": 0}
