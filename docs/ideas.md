@@ -102,6 +102,9 @@
 | 企业微信个人账号 RPA 生产级客户端技术方案调研 | [wecom-personal-rpa-client-implementation-research.md](research/wecom-personal-rpa-client-implementation-research.md) | 企业微信个人账号 RPA 接入 |
 | 会话内上下文压缩业界方案调研 | [context_compression_research.md](research/context_compression_research.md) | 会话内上下文压缩（中期记忆） |
 | 社媒内容运营智能体与聚合平台可行性调研 | [social-media-operations-agent-platform-research.md](research/social-media-operations-agent-platform-research.md) | 社媒内容运营智能体与聚合平台 |
+| 微信桌面版 RPA 自动化技术方案调研 | [wechat-desktop-rpa-technical-research.md](research/wechat-desktop-rpa-technical-research.md) | 微信搜一搜 RPA（协会采集）；影刀失败后改自研「图像+OCR+键鼠」Python 方案，4 轮 PowerShell 真机验证通过 |
+| 微信搜一搜 RPA 命令行工具 | [设计](tools/wechat-souyisou-rpa-design.md) | 🔧 部分完成：probe/open/search 已真机跑通；第 11 条整页证据已隔离。search/collect 会在每个人结束时发送 `Ctrl+W`；插件 HWND 已销毁，或插件已不可见且可信微信主窗口恢复前台，均认定会话关闭。仍可见插件、错误窗口和主窗口未恢复继续返回 `SESSION_CLEANUP_FAILED`。自动连续前10条、多 DPI/浅色主题、完整真机矩阵与 artifact TTL 待完成。[开发计划](tools/wechat-souyisou-rpa-dev-plan.md) |
+| 协会官网优先资料补全 | [设计](tools/association-profile-enrichment-design.md) | 🔧 部分完成：新增严格 14 字段提取、自动站内导航、批量无界面 CLI 和 Excel 输出。输入支持文字/CSV/XLSX，解析协会清单并去重，逐协会失败隔离；官网按 HTTPS→HTTP 尝试，不可达时使用项目 WebSearchTool+LLM 补基础信息；微信补联系人手机。浏览器固定 `headless=false`。姓名证据允许网页排版空白差异，仍保留同域来源、原文 quote、号码/邮箱格式等安全边界。[开发计划](tools/association-profile-enrichment-dev-plan.md) |
 | 懂车帝与汽车之家客户留资统一接入可行性调研 | [automotive-platform-lead-integration-research.md](research/automotive-platform-lead-integration-research.md) | CRM 智能体、汽车平台渠道集成 |
 | AI 智能体行业产品体验提升调研与「工作日报」方案设计 | [ai-agent-experience-daily-report-research.md](research/ai-agent-experience-daily-report-research.md) | 工作日报（个人日报 + 团队日报）、AI 价值证明、续费驱动 |
 | 从个人经验到组织能力：AI 智能体组织知识沉淀调研与方案设计 | [org-knowledge-sedimentation-research.md](research/org-knowledge-sedimentation-research.md) | 组织知识沉淀（三层知识架构 + 专家识别 + 自动抽取 + 主动推荐）、个人经验转组织资产、续费护城河 |
