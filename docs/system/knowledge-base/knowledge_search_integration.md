@@ -1,4 +1,4 @@
-# 企业知识库搜索集成指南
+# 知识中心搜索集成指南
 
 在智能体工作流中直接调用 `search_documents` 方法（非 HTTP 接口），实现知识库检索能力集成。
 
@@ -163,7 +163,7 @@ async def execute_task(task_description: str, user_id=None):
 
     knowledge_context = ""
     if result["success"] and result["results"]:
-        knowledge_context = "\n\n## 企业知识库参考资料\n\n"
+        knowledge_context = "\n\n## 知识中心参考资料\n\n"
         for item in result["results"]:
             knowledge_context += f"- **{item['title']}**: {item['text'][:300]}\n"
 

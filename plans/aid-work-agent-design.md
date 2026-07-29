@@ -833,7 +833,7 @@ graph TB
 | OCR识别 | ocr_pdf | PDF文档识别 | P1 |
 | OCR识别 | ocr_handwriting | 手写文字识别 | P2 |
 | 信息检索 | web_search | 网络搜索 | P0 |
-| 信息检索 | kb_search | 企业知识库搜索 | P0 |
+| 信息检索 | kb_search | 知识中心搜索 | P0 |
 | 信息检索 | doc_search | 文档检索 | P1 |
 | 数据分析 | sql_query | 数据库查询 | P0 |
 | 数据分析 | chart_generator | 图表生成 | P0 |

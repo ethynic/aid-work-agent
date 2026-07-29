@@ -1,7 +1,7 @@
 # 知识库能力增强方案设计文档
 
 > 关联文档：[企业级 2B 智能体平台基础设施建设差距分析报告](../../research/enterprise-agent-infrastructure-gap-analysis.md) §2.3
-> 前序设计：[企业知识库功能设计文档](./enterprise_knowledge_base.md)
+> 前序设计：[知识中心功能设计文档](./enterprise_knowledge_base.md)
 > 技术调研：[企业知识库 RAG 系统前沿技术调研](../../research/enterprise-knowledge-base-rag-research.md)
 > 文档索引：[ideas.md §系统功能 #5](../../ideas.md)
 > 创建日期：2026-05-28
@@ -1202,7 +1202,7 @@ class CategoryResponse(BaseModel):
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│  [AppHeader: 企业知识库]                                          │
+│  [AppHeader: 知识中心]                                          │
 ├────────────────┬─────────────────────────────────────────────────┤
 │  知识库分类     │  [搜索文档...]  [上传文档]                         │
 │                │                                                 │

@@ -11,7 +11,7 @@
 
       <div class="flex-1 flex flex-col min-w-0">
         <AppHeader
-          title="企业知识库"
+          title="知识中心"
           :is-logged-in="effectiveIsLoggedIn"
           :user="effectiveUser"
           @toggle-sidebar="isSidebarCollapsed = !isSidebarCollapsed"

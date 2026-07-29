@@ -2,7 +2,7 @@
 
 ## 问题背景
 
-`KnowledgeBaseTool`（工具名 `knowledge_base_search`）是智能体用来检索企业知识库的核心工具。在多租户 SaaS 部署中，该工具**完全没有租户隔离**，向量搜索、全文搜索、文档标题查询都直接操作 `chunks`/`chunks_vec` 表，不带任何 `tenant_id` 过滤。
+`KnowledgeBaseTool`（工具名 `knowledge_base_search`）是智能体用来检索知识中心的核心工具。在多租户 SaaS 部署中，该工具**完全没有租户隔离**，向量搜索、全文搜索、文档标题查询都直接操作 `chunks`/`chunks_vec` 表，不带任何 `tenant_id` 过滤。
 
 这意味着一个租户的知识库搜索可能返回其他租户的文档数据，属于**数据隔离违规**。
 

@@ -1,10 +1,10 @@
-# 企业知识库功能设计文档
+# 知识中心功能设计文档
 
 ## 1. 概述
 
 ### 1.1 目标
 
-为企业用户提供企业知识库功能，支持上传多种格式文档（Word、Excel、PPT、PDF、图片、视频）和网址，实现内容提取、向量化、检索召回，让 Agent 能够基于企业内部知识回答问题。
+为企业用户提供知识中心功能，支持上传多种格式文档（Word、Excel、PPT、PDF、图片、视频）和网址，实现内容提取、向量化、检索召回，让 Agent 能够基于企业内部知识回答问题。
 
 ### 1.2 设计原则
 
@@ -1004,7 +1004,7 @@ class KnowledgeBaseTool(BaseTool):
     """知识库检索工具"""
 
     name = "knowledge_base_search"
-    description = "从企业知识库中检索相关信息，回答用户问题"
+    description = "从知识中心检索相关信息，回答用户问题"
 
     parameters = {
         "type": "object",

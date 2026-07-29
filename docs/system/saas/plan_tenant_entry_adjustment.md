@@ -26,8 +26,8 @@
 
 | 角色 | 可见菜单 |
 |------|----------|
-| platform_admin | 仪表盘、用户管理、企业知识库、渠道配置、企业设置、聊天功能 |
-| tenant_admin | 仪表盘、用户管理、企业知识库、渠道配置、企业设置、聊天功能 |
+| platform_admin | 仪表盘、用户管理、知识中心、渠道配置、企业设置、聊天功能 |
+| tenant_admin | 仪表盘、用户管理、知识中心、渠道配置、企业设置、聊天功能 |
 | 普通用户 | 无管理菜单，仅聊天功能 |
 
 > **注意**：数字员工**管理**是 `/portal` 的功能（见 2.3），不属于 `/t/{tenant_id}` 的菜单。
@@ -121,7 +121,7 @@ const isTenantRoute = computed(() => !!tenantId.value)
 const tenantAdminMenuItems = computed(() => [
   { path: `/t/${tenantId.value}`, label: '仪表盘', icon: '📊' },
   { path: `/t/${tenantId.value}/users`, label: '用户管理', icon: '👥' },
-  { path: `/t/${tenantId.value}/knowledge`, label: '企业知识库', icon: '📚' },
+  { path: `/t/${tenantId.value}/knowledge`, label: '知识中心', icon: '📚' },
   { path: `/t/${tenantId.value}/channels`, label: '渠道配置', icon: '📡' },
   { path: `/t/${tenantId.value}/settings`, label: '企业设置', icon: '⚙️' },
   { path: `/t/${tenantId.value}/chat`, label: '聊天', icon: '💬' },
@@ -156,7 +156,7 @@ const currentMenuItems = computed(() => {
 - 导航跳转时，必须使用当前 URL 中的实际租户 ID 替换 `:tenant_id` 占位符
 - 不允许使用 `/t/:tenant_id` 这样的原始路径进行 `router.push`
 
-#### 1.3 企业知识库组件 (`TenantKnowledgeBase.vue`)
+#### 1.3 知识中心组件 (`TenantKnowledgeBase.vue`)
 
 **决策：创建新组件** `TenantKnowledgeBase.vue`，而非修改现有 `KnowledgeBase.vue`。
 
@@ -452,12 +452,12 @@ if (info?.user && info?.tenant) {
 1. **租户管理员登录**：
    - 访问 `/t/{tenant_id}/login`
    - 登录后跳转到 `/t/{tenant_id}`
-   - 菜单显示：仪表盘、用户管理、企业知识库、渠道配置、企业设置、聊天
+   - 菜单显示：仪表盘、用户管理、知识中心、渠道配置、企业设置、聊天
 
 2. **平台管理员登录（代管理租户）**：
    - 访问 `/t/{tenant_id}/login`
    - 登录后跳转到 `/t/{tenant_id}`
-   - 菜单显示：仪表盘、用户管理、企业知识库、渠道配置、企业设置、聊天
+   - 菜单显示：仪表盘、用户管理、知识中心、渠道配置、企业设置、聊天
    - API 请求携带 `X-Tenant-Id` Header，后端按目标租户返回数据
 
 3. **平台管理员登录（管理后台）**：

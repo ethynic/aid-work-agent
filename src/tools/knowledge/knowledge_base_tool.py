@@ -25,7 +25,7 @@ class KnowledgeBaseTool(BaseTool):
     """知识库检索工具"""
 
     name = "knowledge_base_search"
-    description = "从企业知识库中检索相关信息，回答用户问题。当用户询问关于公司制度、文档资料、产品信息等问题时使用此工具。"
+    description = "从知识中心检索相关信息，回答用户问题。当用户询问关于公司制度、文档资料、产品信息等问题时使用此工具。"
     display_name = "搜索知识库"
     InputModel = KnowledgeBaseSearchInput
 
