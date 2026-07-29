@@ -249,6 +249,13 @@ class TestGenerateTeam:
             "total_saved_minutes": 30.0,
             "active_user_count": 1,
             "source_distribution": {"chat": 10},
+            "members_dialogs": [
+                {"user_id": "u1", "dialog_count": 10, "user_messages": ["查客户A", "发邮件"]},
+            ],
+            "input_truncated": False,
+            "input_member_count": 1,
+            "input_dialog_count": 2,
+            "input_char_count": 50,
             "time_range": {"start": "2026-07-22T00:00:00", "end": "2026-07-23T00:00:00"},
         }
 
@@ -264,7 +271,6 @@ class TestGenerateTeam:
                 total_users=20,
                 report_date=date(2026, 7, 22),
                 report_type="daily",
-                personal_summaries=["成员1：..."],
             )
 
         # 验证返回
@@ -274,14 +280,26 @@ class TestGenerateTeam:
         assert result["credit_cost"] == 8
         assert result["metrics"]["active_user_count"] == 1
         assert result["metrics"]["active_rate"] == 0.05  # 1/20
+        # 采样元数据应进入 metrics
+        assert result["metrics"]["input_truncated"] is False
+        assert result["metrics"]["input_member_count"] == 1
+        assert result["metrics"]["input_dialog_count"] == 2
 
-        # 验证 LLM 被调用
+        # 验证 LLM 被调用，且 member_dialogs 作为参数传入
         mock_summarize.assert_called_once()
+        summarize_kwargs = mock_summarize.call_args.kwargs
+        assert "member_dialogs" in summarize_kwargs
+        assert len(summarize_kwargs["member_dialogs"]) == 1
         # 验证 chat_records 写入，source_type=report_team
         mock_create_record.assert_called_once()
         create_kwargs = mock_create_record.call_args.kwargs
         assert create_kwargs["source_type"] == "report_team"
         assert create_kwargs["user_id"] is None  # 团队报告 user_id 为空
+        # execution_details 应包含采样元数据
+        ed = create_kwargs["execution_details"]
+        assert ed["input_truncated"] is False
+        assert ed["input_member_count"] == 1
+        assert ed["input_dialog_count"] == 2
 
     @pytest.mark.asyncio
     async def test_no_active_users(self):
@@ -295,6 +313,11 @@ class TestGenerateTeam:
             "total_saved_minutes": 0.0,
             "active_user_count": 0,
             "source_distribution": {},
+            "members_dialogs": [],
+            "input_truncated": False,
+            "input_member_count": 0,
+            "input_dialog_count": 0,
+            "input_char_count": 0,
             "time_range": {"start": "2026-07-22T00:00:00", "end": "2026-07-23T00:00:00"},
         }
 
@@ -309,7 +332,6 @@ class TestGenerateTeam:
                 total_users=20,
                 report_date=date(2026, 7, 22),
                 report_type="daily",
-                personal_summaries=[],
             )
 
         # 不应调 LLM
@@ -322,3 +344,56 @@ class TestGenerateTeam:
         assert create_kwargs["completion_tokens"] == 0
         assert result["credit_cost"] == 0
         assert "无活跃成员" in result["summary_text"]
+
+    @pytest.mark.asyncio
+    async def test_truncated_metadata_propagated(self):
+        """采样元数据 input_truncated=True 时正确传递到 metrics 和 chat_records"""
+        gen = ReportGenerator()
+
+        agg_result = {
+            "user_stats": [
+                {"user_id": f"u{i}", "dialog_count": 50 - i, "credit_cost": 10, "saved_minutes": 30.0}
+                for i in range(30)
+            ],
+            "total_dialog_count": 1000,
+            "total_credit_cost": 500,
+            "total_saved_minutes": 3000.0,
+            "active_user_count": 30,
+            "source_distribution": {"chat": 1000},
+            "members_dialogs": [
+                {"user_id": "u0", "dialog_count": 50, "user_messages": [f"msg {i}" for i in range(50)]},
+            ],
+            "input_truncated": True,
+            "input_member_count": 1,
+            "input_dialog_count": 50,
+            "input_char_count": 80000,
+            "time_range": {"start": "2026-07-01T00:00:00", "end": "2026-08-01T00:00:00"},
+        }
+
+        with patch("src.reports.generator.aggregate_team", return_value=agg_result), \
+             patch("src.reports.generator.summarize_team", new=AsyncMock(return_value=("团队月报摘要", {"prompt_tokens": 8000, "completion_tokens": 1000}))), \
+             patch("src.reports.generator.calculate_credit_cost", return_value=20), \
+             patch("src.reports.generator.WorkDailyReportDB.upsert", return_value={"id": 1, "report_id": "wdr_team_trunc"}), \
+             patch("src.reports.generator.ChatRecordDB.create") as mock_create_record, \
+             patch("src.reports.generator.get_report_model", return_value="deepseek-v4-flash"):
+            result = await gen.generate_team(
+                tenant_id="t1",
+                tenant_name="某公司",
+                total_users=30,
+                report_date=date(2026, 7, 1),
+                report_type="monthly",
+            )
+
+        # metrics 应包含采样元数据
+        assert result["metrics"]["input_truncated"] is True
+        assert result["metrics"]["input_member_count"] == 1
+        assert result["metrics"]["input_dialog_count"] == 50
+        # chat_records 的 execution_details 应包含采样元数据
+        create_kwargs = mock_create_record.call_args.kwargs
+        ed = create_kwargs["execution_details"]
+        assert ed["input_truncated"] is True
+        assert ed["input_member_count"] == 1
+        assert ed["input_dialog_count"] == 50
+        assert ed["input_char_count"] == 80000
+        # user_message 应包含"已截断"标记
+        assert "已截断" in create_kwargs["user_message"]

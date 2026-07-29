@@ -138,7 +138,7 @@ class TestAggregateTeam:
     def test_empty(self):
         """无对话记录时返回空聚合"""
         mock_cursor = MagicMock()
-        # 依次返回 user_rows, total_row, source_rows
+        # 依次返回 user_rows, total_row, source_rows, dialog_rows
         mock_cursor.fetchall.side_effect = [[], [], []]
         mock_cursor.fetchone.return_value = {}
         mock_conn = MagicMock()
@@ -153,20 +153,49 @@ class TestAggregateTeam:
         assert result["total_credit_cost"] == 0
         assert result["user_stats"] == []
         assert result["source_distribution"] == {}
+        # 采样相关字段
+        assert result["members_dialogs"] == []
+        assert result["input_truncated"] is False
+        assert result["input_member_count"] == 0
+        assert result["input_dialog_count"] == 0
+        assert result["input_char_count"] == 0
 
     def test_with_users(self):
         """有用户对话时正确聚合"""
         user_rows = [
-            {"user_id": "u1", "dialog_count": 10, "credit_cost": 50, "total_duration_ms": 50000},
-            {"user_id": "u2", "dialog_count": 5, "credit_cost": 25, "total_duration_ms": 25000},
+            {
+                "user_id": "u1",
+                "dialog_count": 10,
+                "credit_cost": 50,
+                "total_duration_ms": 50000,
+                "username": "张三",
+                "phone": "13800000001",
+                "nickname": "老张",
+            },
+            {
+                "user_id": "u2",
+                "dialog_count": 5,
+                "credit_cost": 25,
+                "total_duration_ms": 25000,
+                "username": "李四",
+                "phone": "13800000002",
+                "nickname": "",
+            },
         ]
         total_row = {"dialog_count": 15, "credit_cost": 75}
         source_rows = [
             {"source_type": "chat", "cnt": 10},
             {"source_type": "wecom", "cnt": 5},
         ]
+        # 成员对话明细：按 user_id 分组，每组按 created_at DESC
+        dialog_rows = [
+            {"user_id": "u1", "user_message": "查客户A", "created_at": datetime(2026, 7, 22, 10, 0, 0)},
+            {"user_id": "u1", "user_message": "发邮件", "created_at": datetime(2026, 7, 22, 9, 0, 0)},
+            {"user_id": "u2", "user_message": "录入订单", "created_at": datetime(2026, 7, 22, 11, 0, 0)},
+        ]
         mock_cursor = MagicMock()
-        mock_cursor.fetchall.side_effect = [user_rows, source_rows]
+        # 4 次 fetchall 调用顺序：user_rows, source_rows, dialog_rows
+        mock_cursor.fetchall.side_effect = [user_rows, source_rows, dialog_rows]
         mock_cursor.fetchone.return_value = total_row
         mock_conn = MagicMock()
         mock_conn.cursor.return_value = mock_cursor
@@ -181,7 +210,24 @@ class TestAggregateTeam:
         assert len(result["user_stats"]) == 2
         assert result["user_stats"][0]["user_id"] == "u1"
         assert result["user_stats"][0]["dialog_count"] == 10
+        # 验证 JOIN 出来的用户信息字段
+        assert result["user_stats"][0]["username"] == "张三"
+        assert result["user_stats"][0]["phone"] == "13800000001"
+        assert result["user_stats"][0]["nickname"] == "老张"
+        # nickname 为空字符串时应 fallback 为 ""（不报错）
+        assert result["user_stats"][1]["username"] == "李四"
+        assert result["user_stats"][1]["nickname"] == ""
         assert result["source_distribution"] == {"chat": 10, "wecom": 5}
         # 每用户节省时间 = dialog_count * 3
         assert result["user_stats"][0]["saved_minutes"] == 30.0
         assert result["total_saved_minutes"] == 45.0
+        # 采样相关字段：2 个成员都进入采样
+        assert result["input_member_count"] == 2
+        assert result["input_dialog_count"] == 3
+        assert result["input_truncated"] is False
+        assert len(result["members_dialogs"]) == 2
+        # u1 对话数多，应排在前面
+        assert result["members_dialogs"][0]["user_id"] == "u1"
+        assert len(result["members_dialogs"][0]["user_messages"]) == 2
+        assert result["members_dialogs"][1]["user_id"] == "u2"
+        assert len(result["members_dialogs"][1]["user_messages"]) == 1

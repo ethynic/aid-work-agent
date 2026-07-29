@@ -187,10 +187,9 @@ class ReportGenerator:
         total_users: int,
         report_date: date,
         report_type: str = "daily",
-        personal_summaries: Optional[list] = None,
         is_regenerate: bool = False,
     ) -> Dict[str, Any]:
-        """生成团队报告
+        """生成团队报告（1 次 LLM 调用，基于成员原始对话）
 
         Args:
             tenant_id: 租户 ID
@@ -198,28 +197,33 @@ class ReportGenerator:
             total_users: 团队总人数
             report_date: 报告日期
             report_type: daily / weekly / monthly
-            personal_summaries: 成员个人报告摘要列表（已脱敏）。None 时只做统计不调 LLM
             is_regenerate: 是否为重新生成
 
         Returns:
             报告 dict
+
+        说明：
+        - 团队日报只 1 次 LLM 调用，不依赖成员个人日报
+        - aggregate_team 直接采样活跃成员的原始对话片段（80K 字符预算）
+        - summarize_team 基于采样后的对话生成团队摘要
         """
         start_ts = time.perf_counter()
         report_model = get_report_model()
         type_label = {"daily": "日报", "weekly": "周报", "monthly": "月报"}.get(report_type, "报告")
 
-        # 1. 聚合数据
+        # 1. 聚合数据（含采样后的 members_dialogs）
         agg = aggregate_team(tenant_id, report_date, report_type)
         active_users = agg["active_user_count"]
+        members_dialogs = agg.get("members_dialogs") or []
 
-        # 2. 调 LLM 生成摘要（仅有活跃成员时才调）
-        if personal_summaries and active_users > 0:
+        # 2. 调 LLM 生成摘要（仅有活跃成员对话时才调）
+        if members_dialogs and active_users > 0:
             summary_text, usage = await summarize_team(
                 tenant_name=tenant_name,
                 report_date_str=report_date.isoformat(),
                 total_users=total_users,
                 active_users=active_users,
-                personal_summaries=personal_summaries,
+                member_dialogs=members_dialogs,
                 report_type=report_type,
             )
             prompt_tokens = usage["prompt_tokens"]
@@ -261,7 +265,11 @@ class ReportGenerator:
             scope=ReportScope.TEAM.value,
             report_type=report_type,
             report_date=report_date,
-            user_message=f"[团队{type_label}生成] 输入 {active_users} 个成员摘要",
+            user_message=(
+                f"[团队{type_label}生成] 输入 {agg.get('input_member_count', 0)} 个成员 / "
+                f"{agg.get('input_dialog_count', 0)} 条对话"
+                f"{'（已截断）' if agg.get('input_truncated') else ''}"
+            ),
             assistant_message=summary_text,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
@@ -269,12 +277,16 @@ class ReportGenerator:
             duration_ms=duration_ms,
             source_type=source_type,
             credit_cost=credit_cost,
+            agg=agg,
         )
 
         logger.info(
             f"团队{type_label}生成完成: tenant={tenant_id}, date={report_date}, "
             f"active_users={active_users}, model={report_model}, "
-            f"credit_cost={credit_cost}, duration={duration_ms}ms"
+            f"credit_cost={credit_cost}, duration={duration_ms}ms, "
+            f"input_truncated={agg.get('input_truncated')}, "
+            f"input_member_count={agg.get('input_member_count')}, "
+            f"input_dialog_count={agg.get('input_dialog_count')}"
         )
 
         return {
@@ -332,6 +344,10 @@ class ReportGenerator:
             "total_saved_minutes": agg["total_saved_minutes"],
             "source_distribution": agg["source_distribution"],
             "user_stats": agg["user_stats"],
+            # 采样元数据（团队日报独有，用于前端展示截断提示）
+            "input_truncated": agg.get("input_truncated", False),
+            "input_member_count": agg.get("input_member_count", 0),
+            "input_dialog_count": agg.get("input_dialog_count", 0),
             "time_range": agg["time_range"],
         }
 
@@ -358,13 +374,33 @@ class ReportGenerator:
         duration_ms: int,
         source_type: str,
         credit_cost: float,
+        agg: Optional[Dict[str, Any]] = None,
     ) -> None:
         """写 chat_records 记录报告类 LLM 调用，复用现有计费链路
 
         session_id 用专用命名空间 report:{tenant}:{user}:{date}:{type}，
         与真实对话会话隔离。
+
+        Args:
+            agg: 团队报告采样元数据（可选）。传入时把 input_truncated /
+                input_member_count / input_dialog_count 写入 execution_details
+                便于审计；个人报告不传。
         """
         session_id = f"report:{tenant_id}:{user_id or 'team'}:{report_date.isoformat()}:{report_type}"
+        execution_details = {
+            "report_scope": scope,
+            "report_type": report_type,
+            "report_date": report_date.isoformat(),
+            "input_dialog_count": 0,  # 个人报告默认值，团队报告下方覆盖
+        }
+        # 团队报告写入采样元数据
+        if scope == ReportScope.TEAM.value and agg is not None:
+            execution_details.update({
+                "input_truncated": bool(agg.get("input_truncated", False)),
+                "input_member_count": int(agg.get("input_member_count", 0)),
+                "input_dialog_count": int(agg.get("input_dialog_count", 0)),
+                "input_char_count": int(agg.get("input_char_count", 0)),
+            })
         try:
             ChatRecordDB.create(
                 session_id=session_id,
@@ -378,12 +414,7 @@ class ReportGenerator:
                 cached_input_tokens=0,
                 model=model,
                 provider=None,
-                execution_details={
-                    "report_scope": scope,
-                    "report_type": report_type,
-                    "report_date": report_date.isoformat(),
-                    "input_dialog_count": 0,  # 可后续扩展
-                },
+                execution_details=execution_details,
                 agent_iterations=1,
                 subagent_calls=None,
                 status="completed",

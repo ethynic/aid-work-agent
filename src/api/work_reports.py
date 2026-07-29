@@ -22,7 +22,8 @@ from pydantic import BaseModel, Field
 from src.api.auth import get_current_user
 from src.db.models import UserDB
 from src.reports import ReportGenerator, WorkDailyReportDB, WorkReportPreferenceDB
-from src.saas.permissions.checker import is_platform_admin
+from src.saas.db.tenant_db import TenantDB
+from src.saas.permissions.checker import is_platform_admin, is_tenant_admin
 
 router = APIRouter(prefix="/api/reports", tags=["工作日报"])
 
@@ -308,3 +309,121 @@ async def _generate_personal_report(
             exc_info=True,
         )
         raise HTTPException(status_code=500, detail=f"生成日报失败：{e}")
+
+
+# ============== 团队日报 ==============
+
+def _require_team_admin(user: Dict[str, Any]) -> None:
+    """校验团队报告权限：仅租户管理员（含平台管理员）可访问"""
+    if not is_tenant_admin(user):
+        raise HTTPException(status_code=403, detail="仅租户管理员可查看/生成团队报告")
+
+
+@router.get("/team/today")
+async def get_team_today(request: Request, report_type: str = Query("daily")):
+    """获取今日团队日报缓存（不自动生成）
+
+    团队日报成本较高，仅手动触发 POST /team/regenerate 生成。
+    缓存不存在时返回 data=null。
+    """
+    user = _resolve_user(request)
+    _require_team_admin(user)
+    tenant_id = _resolve_tenant_id(request, user)
+    _validate_report_type(report_type)
+
+    today = date.today()
+    try:
+        existing = WorkDailyReportDB.get(
+            tenant_id=tenant_id,
+            scope="team",
+            report_type=report_type,
+            report_date=today,
+            target_user_id=None,
+        )
+        return {"success": True, "data": existing, "cached": existing is not None}
+    except Exception as e:
+        logger.error(f"查询团队日报缓存失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="查询团队日报失败")
+
+
+@router.get("/team/{report_date}")
+async def get_team_by_date(request: Request, report_date: str, report_type: str = Query("daily")):
+    """获取指定日期团队日报缓存（不自动生成）"""
+    user = _resolve_user(request)
+    _require_team_admin(user)
+    tenant_id = _resolve_tenant_id(request, user)
+    _validate_report_type(report_type)
+    target_date = _parse_date(report_date)
+
+    try:
+        existing = WorkDailyReportDB.get(
+            tenant_id=tenant_id,
+            scope="team",
+            report_type=report_type,
+            report_date=target_date,
+            target_user_id=None,
+        )
+        return {"success": True, "data": existing, "cached": existing is not None}
+    except Exception as e:
+        logger.error(f"查询团队日报缓存失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="查询团队日报失败")
+
+
+@router.post("/team/regenerate")
+async def regenerate_team(request: Request, body: RegenerateRequest):
+    """重新生成团队日报（强制刷新，扣积分，仅 1 次 LLM 调用）"""
+    user = _resolve_user(request)
+    _require_team_admin(user)
+    tenant_id = _resolve_tenant_id(request, user)
+    _validate_report_type(body.report_type)
+    target_date = _parse_date(body.report_date)
+
+    logger.info(
+        f"重新生成团队日报: tenant={tenant_id}, admin={user.get('user_id')}, "
+        f"date={target_date}, type={body.report_type}"
+    )
+    return await _generate_team_report(
+        tenant_id=tenant_id,
+        report_date=target_date,
+        report_type=body.report_type,
+        is_regenerate=True,
+    )
+
+
+async def _generate_team_report(
+    tenant_id: str,
+    report_date: date,
+    report_type: str,
+    is_regenerate: bool,
+):
+    """实际生成团队日报
+
+    1. 查租户信息取 company_name 作为 tenant_name
+    2. 查租户活跃用户数（UserDB.list_by_tenant 取 total）
+    3. 调 ReportGenerator().generate_team
+    """
+    try:
+        tenant = TenantDB.get_by_id(tenant_id)
+        tenant_name = (tenant or {}).get("company_name") or tenant_id
+
+        # 取租户活跃用户数（status=active）
+        users_page = UserDB.list_by_tenant(tenant_id, page=1, page_size=1)
+        total_users = int(users_page.get("total") or 0)
+
+        generator = ReportGenerator()
+        report = await generator.generate_team(
+            tenant_id=tenant_id,
+            tenant_name=tenant_name,
+            total_users=total_users,
+            report_date=report_date,
+            report_type=report_type,
+            is_regenerate=is_regenerate,
+        )
+        return {"success": True, "data": report, "cached": False}
+    except Exception as e:
+        logger.error(
+            f"生成团队日报失败: tenant={tenant_id}, date={report_date}, "
+            f"type={report_type}, error={e}",
+            exc_info=True,
+        )
+        raise HTTPException(status_code=500, detail=f"生成团队日报失败：{e}")

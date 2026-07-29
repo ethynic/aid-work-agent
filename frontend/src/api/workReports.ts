@@ -41,6 +41,48 @@ export interface PersonalReport {
   cached?: boolean
 }
 
+/** 团队日报用户统计项 */
+export interface TeamUserStat {
+  user_id: string
+  username: string
+  phone: string
+  nickname: string
+  dialog_count: number
+  credit_cost: number
+  saved_minutes: number
+}
+
+/** 团队日报数据 */
+export interface TeamReport {
+  report_id: string
+  scope: 'team'
+  report_type: ReportType
+  report_date: string
+  target_user_id: null
+  metrics: {
+    total_users: number
+    active_user_count: number
+    active_rate: number
+    total_dialog_count: number
+    total_credit_cost: number
+    total_saved_minutes: number
+    source_distribution: Record<string, number>
+    user_stats: TeamUserStat[]
+    time_range: { start: string; end: string }
+    // 采样元数据（团队日报独有，用于前端展示截断提示）
+    input_truncated: boolean
+    input_member_count: number
+    input_dialog_count: number
+  }
+  summary_text: string
+  model?: string
+  token_cost?: number
+  credit_cost: number
+  generated_at?: string
+  regenerated_count?: number
+  cached?: boolean
+}
+
 /** 推送配置 */
 export interface ReportPreferences {
   tenant_id: string
@@ -106,6 +148,52 @@ export async function regeneratePersonal(reportDate: string, reportType: ReportT
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
     throw new Error(err.detail || `重新生成失败: ${res.status}`)
+  }
+  return res.json()
+}
+
+// ============== 团队日报 ==============
+
+/**
+ * 获取今日团队日报缓存（不自动生成，仅租户管理员可访问）
+ */
+export async function getTeamToday(reportType: ReportType = 'daily'): Promise<{ data: TeamReport | null; cached: boolean }> {
+  const res = await fetch(`${API_BASE}/team/today?report_type=${reportType}`, {
+    headers: { ...getAuthHeader() },
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }))
+    throw new Error(err.detail || `获取团队日报失败: ${res.status}`)
+  }
+  return res.json()
+}
+
+/**
+ * 获取指定日期团队日报缓存（不自动生成）
+ */
+export async function getTeamByDate(reportDate: string, reportType: ReportType = 'daily'): Promise<{ data: TeamReport | null; cached: boolean }> {
+  const res = await fetch(`${API_BASE}/team/${reportDate}?report_type=${reportType}`, {
+    headers: { ...getAuthHeader() },
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }))
+    throw new Error(err.detail || `获取团队日报失败: ${res.status}`)
+  }
+  return res.json()
+}
+
+/**
+ * 重新生成团队日报（扣积分，仅 1 次 LLM 调用，仅租户管理员）
+ */
+export async function regenerateTeam(reportDate: string, reportType: ReportType = 'daily'): Promise<{ data: TeamReport }> {
+  const res = await fetch(`${API_BASE}/team/regenerate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
+    body: JSON.stringify({ report_date: reportDate, report_type: reportType }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }))
+    throw new Error(err.detail || `重新生成团队日报失败: ${res.status}`)
   }
   return res.json()
 }

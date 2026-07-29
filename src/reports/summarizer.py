@@ -64,6 +64,11 @@ async def summarize_personal(
 
     dialog_text = "\n".join(dialog_summaries) if dialog_summaries else "（无对话记录）"
     period = {"daily": "今天", "weekly": "本周", "monthly": "本月"}.get(report_type, "本期")
+    next_period_label = {
+        "daily": "明日建议（1-2 条，基于今日工作内容给出可执行建议）",
+        "weekly": "下周建议（1-2 条，基于本周工作内容给出可执行建议）",
+        "monthly": "下月建议（1-2 条，基于本月工作内容给出可执行建议）",
+    }.get(report_type, "下期建议（1-2 条，基于本期工作内容给出可执行建议）")
 
     system_prompt = f"""你是数字员工的{type_label}助手，请根据以下用户{period}的对话记录，生成一份简洁的工作{type_label}。
 
@@ -78,13 +83,13 @@ async def summarize_personal(
 【请按以下结构输出】
 1. 工作内容摘要（3-5 条要点，每条 1-2 句，按工作主题归类，不要按对话顺序罗列）
 2. 高光时刻（选 1 条最有价值的对话，说明价值点）
-3. 明日建议（1-2 条，基于今日工作内容给出可执行建议）
+3. {next_period_label}
 
 【约束】
 - 客户姓名、金额、内部系统名等敏感信息用「某客户」「某金额」替代
 - 不编造未在对话中出现的内容
 - 使用第一人称「你」称呼用户
-- 总字数控制在 300-500 字
+- 总字数控制在 300-400 字
 """
 
     start_time = time.perf_counter()
@@ -117,17 +122,23 @@ async def summarize_team(
     report_date_str: str,
     total_users: int,
     active_users: int,
-    personal_summaries: List[str],
+    member_dialogs: List[Dict[str, Any]],
     report_type: str = "daily",
 ) -> Tuple[str, Dict[str, int]]:
-    """生成团队报告摘要
+    """生成团队报告摘要（基于成员对话记录，1 次 LLM 调用）
 
     Args:
         tenant_name: 租户名称
         report_date_str: 报告日期
         total_users: 团队总人数
-        active_users: 今日活跃人数
-        personal_summaries: 活跃成员的个人报告摘要列表（已脱敏）
+        active_users: 本期活跃人数
+        member_dialogs: 活跃成员的对话记录列表，每个元素形如：
+            {
+                "user_id": str,
+                "dialog_count": int,        # 该成员本期总对话数
+                "user_messages": List[str], # 已采样截断的对话片段（每条 ≤200 字，最多 50 条）
+            }
+            已在 aggregate_team 中按 80K 字符预算采样完成，此处不再截断。
         report_type: daily / weekly / monthly
 
     Returns:
@@ -137,29 +148,48 @@ async def summarize_team(
     type_label = {"daily": "日报", "weekly": "周报", "monthly": "月报"}.get(report_type, "报告")
     period = {"daily": "今日", "weekly": "本周", "monthly": "本月"}.get(report_type, "本期")
 
-    summaries_text = "\n\n".join(
-        f"【成员 {i + 1}】\n{s}" for i, s in enumerate(personal_summaries[:30])  # 上限 30 个成员
-    ) if personal_summaries else "（无活跃成员）"
+    # 构造每成员一段对话记录
+    member_sections: List[str] = []
+    for i, m in enumerate(member_dialogs[:30], start=1):  # 上限 30 个成员
+        uid = m.get("user_id", f"unknown-{i}")
+        dc = int(m.get("dialog_count") or 0)
+        msgs = m.get("user_messages") or []
+        if not msgs:
+            continue
+        # 展示该成员进入采样的对话数（注意：dialog_count 是全期总数，采样后可能更少）
+        header = f"【成员 {i}】（user_id: {uid}）对话数: {dc}（展示最近 {len(msgs)} 条）"
+        lines = [header]
+        for j, msg in enumerate(msgs, start=1):
+            lines.append(f"{j}. {msg}")
+        member_sections.append("\n".join(lines))
 
-    system_prompt = f"""你是团队 AI 使用{type_label}助手，请根据以下团队成员{period}的个人{type_label}，生成团队{type_label}。
+    if member_sections:
+        members_text = "\n\n".join(member_sections)
+        truncation_note = "（注：若数据量较大，仅展示部分代表性对话，统计指标已完整聚合）"
+    else:
+        members_text = "（无活跃成员）"
+        truncation_note = ""
+
+    system_prompt = f"""你是团队 AI 使用{type_label}助手，请基于以下团队成员{period}的对话记录，生成团队{type_label}。{truncation_note}
 
 【团队信息】
 - 租户：{tenant_name}
 - 日期：{report_date_str}
 - 团队规模：{total_users} 人，{period}活跃：{active_users} 人
 
-【成员个人{type_label}摘要】
-{summaries_text}
+【成员对话记录】
+{members_text}
 
 【请按以下结构输出】
 1. 团队工作成果（5-8 条要点，按业务主题归类，不要按员工罗列）
-2. 协作亮点（如多人解决同类问题、跨数字员工协作等）
+2. 协作亮点（如多人解决同类问题等）
 3. 改进建议（如「部分员工尚未使用 XX 数字员工，建议推广」）
-4. 续费建议（基于使用密度，给出「保持/扩容/缩减」建议）
 
 【约束】
 - 不点名批评任何员工，对未使用员工用「部分成员」表达
-- 总字数控制在 500-800 字
+- 客户姓名、金额、内部系统名等敏感信息用「某客户」「某金额」替代
+- 不编造未在对话中出现的内容
+- 总字数控制在 300-600 字
 """
 
     start_time = time.perf_counter()

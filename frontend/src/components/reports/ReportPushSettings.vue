@@ -7,7 +7,7 @@
     <div class="space-y-6">
       <!-- 顶部提示 -->
       <div class="px-4 py-2 rounded-lg bg-warning-50 border border-warning-200 text-warning-700 text-xs">
-        生成日报、周报、月报会消耗少量积分（每次约 2-5 积分，由小模型 deepseek-v4-flash 生成）。订阅的报告类型越多，消耗积分越多。周报聚合 7 天数据、月报聚合 30 天数据，单次生成成本略高于日报。
+        生成日报、周报、月报会消耗少量积分。
       </div>
 
       <div v-if="loading" class="text-center py-8 text-muted">加载中...</div>

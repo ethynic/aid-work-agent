@@ -162,27 +162,45 @@ def aggregate_team(
         "active_user_count": N,
         "subagent_distribution": {...},
         "source_distribution": {...},
+        # 采样后的成员对话（用于 LLM 输入，受 80K 字符预算限制）
+        "members_dialogs": [
+            {"user_id": str, "dialog_count": int, "user_messages": List[str]},
+            ...
+        ],
+        "input_truncated": bool,         # 是否触发 80K 字符预算截断
+        "input_member_count": int,       # 进入 LLM 输入的成员数
+        "input_dialog_count": int,       # 进入 LLM 输入的对话条数
+        "input_char_count": int,         # 实际输入字符数
     }
+
+    注意：user_stats / total_dialog_count / source_distribution 等统计字段基于全量数据，
+    不受 80K 字符预算采样影响。仅 members_dialogs 受采样影响。
     """
     start, end = parse_date_range(report_date, report_type)
     report_sources = set(ChatRecordSourceType.report_values())
 
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        # 按用户聚合
+        # 按用户聚合（统计用，全量数据）
+        # LEFT JOIN users 带出 username/phone/nickname，避免 N+1 查询；
+        # users 表无 FK 约束（项目规范），JOIN 在应用层执行。
         cursor.execute(
             """
-            SELECT user_id,
+            SELECT cr.user_id,
                    COUNT(*) AS dialog_count,
-                   COALESCE(SUM(credit_cost), 0) AS credit_cost,
-                   SUM(duration_ms) AS total_duration_ms
-            FROM chat_records
-            WHERE tenant_id = %s
-              AND created_at >= %s AND created_at < %s
-              AND source_type NOT IN %s
-              AND status = 'completed'
-              AND user_id IS NOT NULL
-            GROUP BY user_id
+                   COALESCE(SUM(cr.credit_cost), 0) AS credit_cost,
+                   SUM(cr.duration_ms) AS total_duration_ms,
+                   u.username,
+                   u.phone,
+                   u.nickname
+            FROM chat_records cr
+            LEFT JOIN users u ON u.user_id = cr.user_id
+            WHERE cr.tenant_id = %s
+              AND cr.created_at >= %s AND cr.created_at < %s
+              AND cr.source_type NOT IN %s
+              AND cr.status = 'completed'
+              AND cr.user_id IS NOT NULL
+            GROUP BY cr.user_id, u.username, u.phone, u.nickname
             ORDER BY dialog_count DESC
             """,
             (tenant_id, start, end, tuple(report_sources)),
@@ -220,23 +238,141 @@ def aggregate_team(
         )
         source_rows = cursor.fetchall() or []
 
-    # 构造用户统计列表
+        # 拉取所有活跃成员的对话明细（用于 LLM 输入采样）
+        # 按 user_id 分组在 Python 层处理，按 created_at 倒序取最近 50 条
+        cursor.execute(
+            """
+            SELECT user_id, user_message, created_at
+            FROM chat_records
+            WHERE tenant_id = %s
+              AND created_at >= %s AND created_at < %s
+              AND source_type NOT IN %s
+              AND status = 'completed'
+              AND user_id IS NOT NULL
+              AND user_message IS NOT NULL
+              AND user_message != ''
+            ORDER BY user_id, created_at DESC
+            """,
+            (tenant_id, start, end, tuple(report_sources)),
+        )
+        dialog_rows = cursor.fetchall() or []
+
+    # 构造用户统计列表（基于全量统计，不受采样影响）
     user_stats: List[Dict[str, Any]] = []
+    user_dialog_count_map: Dict[str, int] = {}
     for row in user_rows:
+        uid = row["user_id"]
+        dc = int(row["dialog_count"] or 0)
+        user_dialog_count_map[uid] = dc
         user_stats.append({
-            "user_id": row["user_id"],
-            "dialog_count": int(row["dialog_count"] or 0),
+            "user_id": uid,
+            "username": row.get("username") or "",
+            "phone": row.get("phone") or "",
+            "nickname": row.get("nickname") or "",
+            "dialog_count": dc,
             "credit_cost": float(row["credit_cost"] or 0),
             # 节省时间按用户级聚合估算（粗略：用 total_duration_ms 反推）
             # 准确值需要拉取明细，这里给保守估算
-            "saved_minutes": _rough_saved_minutes(int(row["dialog_count"] or 0)),
+            "saved_minutes": _rough_saved_minutes(dc),
         })
+
+    # 按 user_id 分组对话明细（dialog_rows 已按 user_id, created_at DESC 排序）
+    user_dialogs_map: Dict[str, List[Dict[str, Any]]] = {}
+    for row in dialog_rows:
+        uid = row["user_id"]
+        user_dialogs_map.setdefault(uid, []).append({
+            "user_message": row["user_message"] or "",
+            "created_at": row["created_at"],
+        })
+
+    # 按 dialog_count 倒序排序成员（活跃成员优先进入采样）
+    sorted_users = sorted(
+        user_dialog_count_map.items(),
+        key=lambda kv: kv[1],
+        reverse=True,
+    )
+
+    # 80K 字符预算采样
+    MAX_CHAR_BUDGET = 80000
+    MAX_DIALOGS_PER_MEMBER = 50
+    MAX_USER_MESSAGE_CHARS = 200
+
+    members_dialogs: List[Dict[str, Any]] = []
+    total_chars = 0
+    total_dialogs_sampled = 0
+    truncated = False
+
+    for uid, dc in sorted_users:
+        # 累计已达预算，停止追加新成员
+        if total_chars >= MAX_CHAR_BUDGET:
+            truncated = True
+            break
+
+        dialogs = user_dialogs_map.get(uid, [])
+        if not dialogs:
+            continue
+
+        # 取最近 MAX_DIALOGS_PER_MEMBER 条，每条 user_message 截断到 200 字
+        recent_dialogs = dialogs[:MAX_DIALOGS_PER_MEMBER]
+        truncated_messages: List[str] = []
+        member_chars = 0
+        for d in recent_dialogs:
+            msg = (d.get("user_message") or "").strip()[:MAX_USER_MESSAGE_CHARS]
+            if not msg:
+                continue
+            truncated_messages.append(msg)
+            # 每条消息字符数 + 序号和换行开销（保守估算每条多 5 字符）
+            member_chars += len(msg) + 5
+
+        if not truncated_messages:
+            continue
+
+        # 检查加入该成员是否超出预算
+        # 若加入后会超出，仍尝试加入部分对话（按条截断到预算内）
+        if total_chars + member_chars > MAX_CHAR_BUDGET:
+            # 逐条追加，到预算即停
+            partial_messages: List[str] = []
+            partial_chars = 0
+            for msg in truncated_messages:
+                cost = len(msg) + 5
+                if total_chars + partial_chars + cost > MAX_CHAR_BUDGET:
+                    break
+                partial_messages.append(msg)
+                partial_chars += cost
+
+            if partial_messages:
+                members_dialogs.append({
+                    "user_id": uid,
+                    "dialog_count": dc,
+                    "user_messages": partial_messages,
+                })
+                total_chars += partial_chars
+                total_dialogs_sampled += len(partial_messages)
+            truncated = True
+            # 继续遍历后续成员，但因为他们都会触发 total_chars >= budget 的检查而 break
+            # 实际上后续会直接 break，这里继续是为了语义清晰
+            continue
+
+        # 完整加入该成员
+        members_dialogs.append({
+            "user_id": uid,
+            "dialog_count": dc,
+            "user_messages": truncated_messages,
+        })
+        total_chars += member_chars
+        total_dialogs_sampled += len(truncated_messages)
 
     total_dialog = int(total_row.get("dialog_count") or 0)
     total_credit = float(total_row.get("credit_cost") or 0)
     total_saved = sum(u["saved_minutes"] for u in user_stats)
 
     source_dist = {r["source_type"]: int(r["cnt"]) for r in source_rows}
+
+    logger.info(
+        f"团队聚合采样: tenant={tenant_id}, type={report_type}, "
+        f"active_users={len(user_stats)}, sampled_members={len(members_dialogs)}, "
+        f"sampled_dialogs={total_dialogs_sampled}, chars={total_chars}, truncated={truncated}"
+    )
 
     return {
         "user_stats": user_stats,
@@ -245,6 +381,11 @@ def aggregate_team(
         "total_saved_minutes": round(total_saved, 1),
         "active_user_count": len(user_stats),
         "source_distribution": source_dist,
+        "members_dialogs": members_dialogs,
+        "input_truncated": truncated,
+        "input_member_count": len(members_dialogs),
+        "input_dialog_count": total_dialogs_sampled,
+        "input_char_count": total_chars,
         "time_range": {
             "start": start.isoformat(),
             "end": end.isoformat(),

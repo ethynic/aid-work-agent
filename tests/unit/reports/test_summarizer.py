@@ -169,6 +169,19 @@ class TestSummarizeTeam:
             "usage": {"prompt_tokens": 800, "completion_tokens": 400},
         })
 
+        member_dialogs = [
+            {
+                "user_id": "u1",
+                "dialog_count": 8,
+                "user_messages": ["查客户A", "发邮件给B", "录入订单"],
+            },
+            {
+                "user_id": "u2",
+                "dialog_count": 5,
+                "user_messages": ["审核合同", "导出报表"],
+            },
+        ]
+
         with patch("src.reports.summarizer.llm_gateway", mock_gateway), \
              patch("src.reports.summarizer.get_report_model", return_value="deepseek-v4-flash"):
             content, usage = await summarize_team(
@@ -176,7 +189,7 @@ class TestSummarizeTeam:
                 report_date_str="2026-07-22",
                 total_users=20,
                 active_users=5,
-                personal_summaries=["成员1：...", "成员2：..."],
+                member_dialogs=member_dialogs,
                 report_type="daily",
             )
 
@@ -186,10 +199,16 @@ class TestSummarizeTeam:
         mock_gateway.chat.assert_called_once()
         call_kwargs = mock_gateway.chat.call_args.kwargs
         assert call_kwargs["model"] == "deepseek-v4-flash"
+        # 验证 prompt 中包含成员对话片段
+        prompt_content = call_kwargs["messages"][0]["content"]
+        assert "【成员 1】" in prompt_content
+        assert "查客户A" in prompt_content
+        assert "【成员 2】" in prompt_content
+        assert "审核合同" in prompt_content
 
     @pytest.mark.asyncio
-    async def test_empty_summaries(self):
-        """无成员摘要时仍能调用 LLM"""
+    async def test_empty_member_dialogs(self):
+        """无成员对话时仍能调用 LLM（提示无活跃成员）"""
         mock_gateway = MagicMock()
         mock_gateway.chat = AsyncMock(return_value={
             "content": "本期无活跃成员。",
@@ -203,11 +222,15 @@ class TestSummarizeTeam:
                 report_date_str="2026-07-22",
                 total_users=20,
                 active_users=0,
-                personal_summaries=[],
+                member_dialogs=[],
                 report_type="daily",
             )
 
         assert "无活跃成员" in content
+        # prompt 中应显示"（无活跃成员）"
+        call_kwargs = mock_gateway.chat.call_args.kwargs
+        prompt_content = call_kwargs["messages"][0]["content"]
+        assert "（无活跃成员）" in prompt_content
 
     @pytest.mark.asyncio
     async def test_weekly_report_type(self):
@@ -218,6 +241,10 @@ class TestSummarizeTeam:
             "usage": {"prompt_tokens": 800, "completion_tokens": 400},
         })
 
+        member_dialogs = [
+            {"user_id": "u1", "dialog_count": 8, "user_messages": ["任务1", "任务2"]},
+        ]
+
         with patch("src.reports.summarizer.llm_gateway", mock_gateway), \
              patch("src.reports.summarizer.get_report_model", return_value="deepseek-v4-flash"):
             content, _ = await summarize_team(
@@ -225,12 +252,45 @@ class TestSummarizeTeam:
                 report_date_str="2026-07-22",
                 total_users=20,
                 active_users=5,
-                personal_summaries=["成员1：..."],
+                member_dialogs=member_dialogs,
                 report_type="weekly",
             )
 
-        # prompt 中应包含"本周"
+        # prompt 中应包含"本周"和"周报"
         call_kwargs = mock_gateway.chat.call_args.kwargs
         prompt_content = call_kwargs["messages"][0]["content"]
         assert "本周" in prompt_content
         assert "周报" in prompt_content
+
+    @pytest.mark.asyncio
+    async def test_member_dialogs_truncated_to_30(self):
+        """超过 30 个成员时截断"""
+        mock_gateway = MagicMock()
+        mock_gateway.chat = AsyncMock(return_value={
+            "content": "团队摘要",
+            "usage": {"prompt_tokens": 1000, "completion_tokens": 300},
+        })
+
+        # 构造 35 个成员
+        member_dialogs = [
+            {"user_id": f"u{i}", "dialog_count": 5, "user_messages": [f"任务 {i}"]}
+            for i in range(35)
+        ]
+
+        with patch("src.reports.summarizer.llm_gateway", mock_gateway), \
+             patch("src.reports.summarizer.get_report_model", return_value="deepseek-v4-flash"):
+            await summarize_team(
+                tenant_name="某公司",
+                report_date_str="2026-07-22",
+                total_users=40,
+                active_users=35,
+                member_dialogs=member_dialogs,
+                report_type="daily",
+            )
+
+        # 验证 prompt 中只包含 30 个成员
+        call_kwargs = mock_gateway.chat.call_args.kwargs
+        prompt_content = call_kwargs["messages"][0]["content"]
+        assert "【成员 1】" in prompt_content
+        assert "【成员 30】" in prompt_content
+        assert "【成员 31】" not in prompt_content
