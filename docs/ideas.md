@@ -109,4 +109,3 @@
 | AI 智能体行业产品体验提升调研与「工作日报」方案设计 | [ai-agent-experience-daily-report-research.md](research/ai-agent-experience-daily-report-research.md) | 工作日报（个人日报 + 团队日报）、AI 价值证明、续费驱动 |
 | 从个人经验到组织能力：AI 智能体组织知识沉淀调研与方案设计 | [org-knowledge-sedimentation-research.md](research/org-knowledge-sedimentation-research.md) | 组织知识沉淀（三层知识架构 + 专家识别 + 自动抽取 + 主动推荐）、个人经验转组织资产、续费护城河 |
 | 微信公众号文章搜索「不依赖微信 App」可行性调研 | [wechat-article-search-without-app-feasibility.md](research/wechat-article-search-without-app-feasibility.md) | 搜一搜无 App 外通道；不依赖 App 全域关键词搜文章只能在「搜狗(免费不稳)/商业聚合API(付费稳)/回退App内搜一搜」间三角取舍，无完美解 |
-| 微信桌面版搜一搜 RPA 自动化 POC 计划 | [wechat-desktop-souyisou-rpa-poc.md](research/wechat-desktop-souyisou-rpa-poc.md) | 协会采集子智能体前置验证：影刀RPA能否自动化微信桌面搜一搜并读结果提手机号(微信4.0 UI树缺失风险)。半天POC，3家协会，命中≥2/3则路通，否则回退 |

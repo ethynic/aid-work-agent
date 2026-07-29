@@ -25,7 +25,7 @@
 
 ## 2. 实施原则
 
-- 复用 `clients/wechat-desktop-rpa-poc/` 中已验证的窗口、激活和输入逻辑；
+- 将真机实验确认的窗口、激活和输入约束固化到正式实现及自动测试；
 - 正式代码放到 `clients/wechat-souyisou-rpa/`，不继续扩写 PoC；
 - 第一阶段只做 PowerShell CLI，不做 GUI、安装器和服务端；
 - 先完成确定性能力，再增加视觉定位和常驻 Worker；

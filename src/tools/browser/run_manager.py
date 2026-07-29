@@ -127,10 +127,16 @@ class BrowserRunManager:
                     self._renew_owner(record.tenant_id, record.run_id, str(owner_token))
                 )
             await self.transition(record.tenant_id, record.run_id, RunState.STARTING)
+            requested_headless = getattr(self, "headless_override", None)
+            effective_headless = (
+                settings.tools.browser.headless
+                if requested_headless is None
+                else bool(requested_headless)
+            )
             spec = BrowserRunSpec(
                 run_id=record.run_id, tenant_id=record.tenant_id, user_id=record.user_id,
                 session_id=record.session_id, execution_target=record.execution_target,
-                headless=settings.tools.browser.headless,
+                headless=effective_headless,
                 viewport_width=min(settings.tools.browser.viewport_width, 1280),
                 viewport_height=min(settings.tools.browser.viewport_height, 720),
             )

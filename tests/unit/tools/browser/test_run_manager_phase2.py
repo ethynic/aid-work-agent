@@ -22,6 +22,19 @@ class FakeRouter:
         executor = FakeRemoteExecutor(); self.executors.append(executor); return executor
 
 
+class CaptureSpecExecutor(FakeRemoteExecutor):
+    async def start(self, run):
+        self.started_spec = run
+        return await super().start(run)
+
+
+class CaptureSpecRouter:
+    def __init__(self): self.executor = CaptureSpecExecutor()
+    def create_executor(self, target):
+        assert target == "server"
+        return self.executor
+
+
 class BrokenRouter:
     def create_executor(self, target):
         raise RuntimeError("router unavailable")
@@ -46,6 +59,28 @@ async def test_two_tenants_with_same_session_are_isolated_and_context_required()
     assert await store.get("tenant-a", b.run_id) is None
     with pytest.raises(ValueError):
         await manager.create("", "user", "same")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("override", "configured", "expected"), [
+    (None, True, True),
+    (None, False, False),
+    (False, True, False),
+    (True, False, True),
+])
+async def test_start_writes_effective_headless_to_run_spec(
+    monkeypatch, override, configured, expected,
+):
+    monkeypatch.setattr(settings.tools.browser, "headless", configured)
+    router = CaptureSpecRouter()
+    manager = BrowserRunManager(
+        store=InMemoryRunStore(), router=router, run_db=NoopDB(),
+    )
+    manager.headless_override = override
+    record = await manager.create("tenant", "user", "session")
+    await manager.start(record)
+    assert router.executor.started_spec.headless is expected
+    await manager.finalize("tenant", record.run_id, RunState.SUCCEEDED, "test")
 
 
 @pytest.mark.asyncio

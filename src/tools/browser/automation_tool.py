@@ -1,6 +1,9 @@
 """Agent 可见的统一浏览器自动化工具。"""
 
 import asyncio
+import ctypes
+import os
+from ctypes import wintypes
 from typing import Any, Dict, Optional
 
 from loguru import logger
@@ -17,13 +20,70 @@ from src.tools.browser.human_control import HumanControlCoordinator
 _DEPRECATED_RESUME_ERROR = (
     "旧版浏览器会话恢复参数已停用，请重新发起完整的浏览器任务"
 )
+# 进程内能力令牌，无法由 JSON/tool arguments 伪造。可信本地调用方必须显式导入并注入。
+_LOCAL_INTERACTIVE_TRUST = object()
 
 
 class BrowserAutomationInput(BaseModel):
-    """浏览器自动化参数；headless 由服务端配置强制决定。"""
+    """浏览器自动化参数；可见模式仅允许可信本地交互调用。"""
 
     task: Optional[str] = Field(None, description="要在浏览器中完成的完整任务描述")
     url: Optional[str] = Field(None, description="起始页面 URL（可选）")
+    headless: Optional[bool] = Field(
+        None,
+        description="浏览器模式；省略时使用服务端配置，false 仅限可信本地交互桌面",
+    )
+
+
+def _windows_interactive_desktop(
+    session_id_provider=None,
+    open_input_desktop=None,
+    close_desktop=None,
+) -> bool:
+    """用 Windows session 和 input desktop 能力判断；任何 API 异常均拒绝。"""
+    try:
+        if session_id_provider is None:
+            def session_id_provider():
+                session_api = ctypes.windll.kernel32.ProcessIdToSessionId
+                session_api.argtypes = [
+                    wintypes.DWORD,
+                    ctypes.POINTER(wintypes.DWORD),
+                ]
+                session_api.restype = wintypes.BOOL
+                session_id = wintypes.DWORD()
+                if not session_api(
+                    os.getpid(), ctypes.byref(session_id)
+                ):
+                    raise OSError("ProcessIdToSessionId failed")
+                return int(session_id.value)
+
+        if int(session_id_provider()) == 0:
+            return False
+
+        if open_input_desktop is None:
+            open_api = ctypes.windll.user32.OpenInputDesktop
+            open_api.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+            open_api.restype = wintypes.HANDLE
+            open_input_desktop = lambda: open_api(0, False, 0x0100)  # DESKTOP_SWITCHDESKTOP
+        if close_desktop is None:
+            close_api = ctypes.windll.user32.CloseDesktop
+            close_api.argtypes = [wintypes.HANDLE]
+            close_api.restype = wintypes.BOOL
+            close_desktop = lambda handle: close_api(handle)
+
+        desktop = open_input_desktop()
+        if not desktop:
+            return False
+        return bool(close_desktop(desktop))
+    except Exception:
+        return False
+
+
+def _has_interactive_desktop() -> bool:
+    """只判断本机进程是否位于交互桌面，不接受请求方提供的环境描述。"""
+    if os.name == "nt":
+        return _windows_interactive_desktop()
+    return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
 
 
 class BrowserAutomationTool(BaseTool):
@@ -32,7 +92,7 @@ class BrowserAutomationTool(BaseTool):
     name = "browser_automation"
     description = """通过完整自然语言任务自动执行网页操作。
 
-服务端始终使用部署配置的无头模式，每次调用结束都会关闭浏览器。
+默认使用部署配置的浏览器模式。可见模式只允许可信本地交互桌面调用。
 当前过渡版本不支持验证码/登录等人工步骤的跨请求恢复；遇到人工步骤会安全
 关闭并明确返回，不能通过 session_id 或 user_response 续跑。"""
     display_name = "浏览器自动化"
@@ -54,12 +114,27 @@ class BrowserAutomationTool(BaseTool):
         del tool_args
         return self.display_name
 
+    async def execute_local_interactive(
+        self, *, task: str, url: Optional[str] = None
+    ) -> Any:
+        """供同进程本地桌面入口调用；该方法不会暴露到 Agent tool schema。"""
+        return await self.execute(
+            task=task,
+            url=url,
+            headless=False,
+            _trusted_local_interactive=_LOCAL_INTERACTIVE_TRUST,
+        )
+
     async def execute(self, **kwargs) -> Any:
-        if kwargs.get("headless") is not None:
+        requested_headless = kwargs.get("headless")
+        if requested_headless is False and not (
+            kwargs.get("_trusted_local_interactive") is _LOCAL_INTERACTIVE_TRUST
+            and _has_interactive_desktop()
+        ):
             return {
                 "success": False,
-                "error_code": "DEPRECATED_PARAMETER",
-                "error": "headless 参数已停用，浏览器模式由服务端配置决定",
+                "error_code": "VISIBLE_BROWSER_NOT_ALLOWED",
+                "error": "可见浏览器只允许可信本地交互桌面调用",
             }
         if kwargs.get("session_id") is not None or kwargs.get("user_response") is not None:
             return {
@@ -91,6 +166,8 @@ class BrowserAutomationTool(BaseTool):
             }
 
         manager = BrowserRunManager()
+        # 私有属性只在本次 run manager 内存中生效，不进入持久化记录或用户输入面。
+        manager.headless_override = requested_headless
         audit_session_id = kwargs.get("_audit_session_id") or f"audit_{user_id}"
         record = await manager.create(
             tenant_id=tenant_id,

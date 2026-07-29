@@ -6,7 +6,10 @@
 
 import pytest
 
-from src.tools.browser.human_requirement_detector import detect_human_requirement
+from src.tools.browser.human_requirement_detector import (
+    detect_access_block,
+    detect_human_requirement,
+)
 
 
 def _elem(label="", role="", element_type="", tag="", name=""):
@@ -101,6 +104,48 @@ def test_llm_done_cannot_override_structural_captcha():
 def test_empty_or_none_snapshot_returns_none():
     assert detect_human_requirement({}) is None
     assert detect_human_requirement(None) is None  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    "snapshot",
+    [
+        {"title": "403 Forbidden", "page_text": ""},
+        {"title": "访问被拒绝", "page_text": ""},
+        {
+            "title": "",
+            "page_text": "检测到异常访问，您的访问存在异常，请稍后重试",
+        },
+        {
+            "title": "",
+            "page_text": "Access denied. You don't have permission to access this resource.",
+        },
+    ],
+)
+def test_access_block_requires_deterministic_error_page_signals(snapshot):
+    assert detect_access_block(snapshot) == "ACCESS_BLOCKED"
+
+
+@pytest.mark.parametrize(
+    "snapshot",
+    [
+        {
+            "title": "网站运维教程",
+            "page_text": "本文介绍 403 Forbidden 的原因和解决办法。",
+        },
+        {
+            "title": "搜索结果",
+            "page_text": "用户搜索：access denied，共找到 10 条结果。",
+        },
+        {
+            "title": "How to fix 403 Forbidden",
+            "page_text": "A detailed tutorial about web server configuration.",
+        },
+        {"title": "", "page_text": "请求被阻止"},
+        {},
+    ],
+)
+def test_access_block_does_not_match_incidental_body_text(snapshot):
+    assert detect_access_block(snapshot) is None
 
 
 def test_captcha_takes_priority_over_file_picker():

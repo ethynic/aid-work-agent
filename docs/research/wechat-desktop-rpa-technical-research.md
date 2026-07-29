@@ -1,7 +1,6 @@
 # 微信桌面版 RPA 自动化技术方案调研
 
 > 日期：2026-07-27
-> 关联：[微信桌面版搜一搜 RPA — POC 计划](./wechat-desktop-souyisou-rpa-poc.md)
 > 目的：在 POC 文档（影刀路线）失败后，重新调研「自研 RPA 自动化微信桌面版搜一搜」的最佳技术路线，并通过 PowerShell 真机验证关键假设。
 > 结论先行：**已放弃影刀录制回放，主方案定为「图像识别 + OCR + 键鼠模拟」**（Python 技术栈），物理链路已真机验证通过。
 >
@@ -178,16 +177,8 @@ Locator/Reader 抽象成接口，**图像路线是默认实现，CDP 是未来�
 
 ---
 
-## 6. 探测脚本归档
+## 6. 实验资产处理
 
-本次真机验证的 PowerShell 脚本位于 `docs/research/rpa_probe/`：
-
-| 脚本 | 作用 |
-|------|------|
-| `probe_wechat.ps1` | 枚举微信进程、版本、加载 DLL、窗口类名、CEF 端口 |
-| `probe_cef.ps1` | 探测 WeChatAppEx 命令行参数（找 `--remote-debugging-port`）、监听端口 |
-| `probe_uia2.ps1` | UIA 控件树探测（证实 MMUI 自绘、UIA 不可达） |
-| `probe_capture2.ps1` | 窗口定位 + 截图验证（证实图像路线物理可行） |
-| `wechat_main.png` | 截图样本（1008×968，验证画面可读） |
-
-> 这些脚本仅为调研验证用，非生产代码。PowerShell 在此用作「系统级调用探针」，验证结论后，正式 RPA 用 Python 实现。
+早期系统探针、截图和快捷键 PoC 已在结论固化到正式设计、生产脚本及自动测试后删除，
+不作为长期维护资产。当前实现与验收依据以
+`clients/wechat-souyisou-rpa/` 和对应设计、开发计划为准。

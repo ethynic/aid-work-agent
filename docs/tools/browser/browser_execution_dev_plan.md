@@ -64,7 +64,13 @@
 - 引入 `CancellationToken` 等价的 `asyncio.Event/TaskGroup` 取消传播。
 - 删除旧 `ask_user + user_response + session_id` 恢复路径；过渡期遇到旧参数返回 deprecated，不再依赖 LLM 重调工具。
 - 主应用 lifespan 注册 `close_all_owned_browser_runs()`，预算 15 秒。
-- 移除 Agent 工具 schema 中的 `headless`；旧原子工具停止注册，兼容入口加 deprecated 标记。
+- Agent 工具 schema 暴露可选 `headless`：默认仍取服务端配置；`false` 仅允许私有可信
+  本地交互上下文，普通远程调用返回 `VISIBLE_BROWSER_NOT_ALLOWED`。旧会话参数继续 deprecated。
+
+> 2026-07-28 补充：可信本地可见模式已实现。RunManager 将最终模式写入
+> `BrowserRunSpec.headless`；桌面宿主通过不进入 Agent schema 的
+> `execute_local_interactive()` 入口调用；同时新增确定性异常访问页检测，阻断页不再被 LLM `done`
+> 错误映射为成功。待真实可见 Chromium 旁站验收。
 - 错误返回改用 `sanitize_error`；移除日志中的 `user_response` 和 fill value。
 
 ### 验证

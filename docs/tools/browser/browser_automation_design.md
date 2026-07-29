@@ -192,6 +192,24 @@ class PageOps:
 
 > 2026-07-20：本节原有会话与 `ask_user` 设计已由 [浏览器执行架构、可视化与人工接管设计 v2.7](./browser_visualization_design.md) 扩展并约束。新的强制规则是：服务端默认 headless；完成/失败/取消/超时/shutdown 必须关闭；人工等待仅能在 5 分钟租约内保留；原工具调用必须持久化 suspend/resume，用户完成后由页面条件或“完成并继续”事件自动唤醒，不依赖用户再次发消息或 LLM 重调工具；Agent 只公开完整任务边界；桌面执行只作为 Agent Desktop 内置可选 browser runtime，复用主应用技术栈、认证、installation identity、签名安装包、更新和生命周期，不形成第二个客户端；服务端模式免安装，Agent Web 跨应用拉起复用 `aidagent://browser-launch` 一次性 ticket；`auto` 必须先执行服务端 headless，只有确定的本地能力预检失败或 HeadlessFailureDetector 高置信失败才能升级 desktop runtime；实时视图、人工接管、多租户和多 worker 以 v2.7 为准。如本文件冲突，以 v2.7 为准。
 
+### 可信本地可见模式（2026-07-28）
+
+`BrowserAutomationInput.headless` 恢复为可选参数。`None` 继续使用部署配置；
+`true` 可显式要求无头；`false` 仅在执行器注入进程内不可序列化的本地交互能力令牌，
+且服务进程确认当前处于本机交互桌面时允许。该能力令牌不进入 Agent 工具 schema，
+JSON 参数中的同名布尔值不能伪造信任，普通远程用户不能据公开参数在服务端弹窗。
+同进程桌面宿主通过 `BrowserAutomationTool.execute_local_interactive()` 调用，不直接
+持有或传递能力令牌；普通 Agent 调用仍只能进入 `execute()` 的公开参数边界。
+最终值必须写入 `BrowserRunSpec.headless`，仍保留每次 run 隔离和终态关闭。
+
+Windows 检测不依赖可能缺失的 `SESSIONNAME`：先用 `ProcessIdToSessionId` 拒绝
+Session 0，再用 `OpenInputDesktop(DESKTOP_SWITCHDESKTOP)` 验证当前进程可访问
+input desktop，并用 `CloseDesktop` 释放句柄；任一 API 失败均拒绝可见模式。
+
+页面快照若确定性命中 403/Access Denied/异常访问等拒绝页，Orchestrator 在调用 LLM
+决策前返回 `success=false,status=blocked,error_code=ACCESS_BLOCKED`；LLM 的
+`done` 或 reason 不能覆盖页面阻断信号。
+
 ### 10.1 进度回调
 
 每步推送进度（语义快照生成除外），具体规则：

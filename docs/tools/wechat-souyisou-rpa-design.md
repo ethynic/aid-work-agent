@@ -14,7 +14,6 @@
 > 日期：2026-07-27
 > 状态：🔧 第一版 CLI 开发中
 > 关联调研：[微信桌面版 RPA 自动化技术方案调研](../research/wechat-desktop-rpa-technical-research.md)
-> 真机 PoC：[微信桌面版搜一搜 RPA 自动化 POC](../research/wechat-desktop-souyisou-rpa-poc.md)
 
 ## 1. 目标与结论
 
@@ -147,7 +146,8 @@ clients/wechat-souyisou-rpa/
 └── README.md
 ```
 
-PoC 目录 `clients/wechat-desktop-rpa-poc/` 保留为真机证据，不直接扩成生产目录。
+早期真机实验代码不进入生产目录；已验证的窗口识别、激活和输入约束直接由
+`clients/wechat-souyisou-rpa/` 的正式实现及自动测试维护。
 
 ## 5. 命令行协议
 

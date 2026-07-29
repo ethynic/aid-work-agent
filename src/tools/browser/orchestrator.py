@@ -12,7 +12,10 @@ from loguru import logger
 from src.llm.gateway import llm_gateway
 from src.config.settings import settings
 from src.tools._helpers import sanitize_error
-from src.tools.browser.human_requirement_detector import detect_human_requirement
+from src.tools.browser.human_requirement_detector import (
+    detect_access_block,
+    detect_human_requirement,
+)
 from src.tools.browser.page_ops import PageOps
 from src.tools.browser.run_manager import BrowserRunManager, RunState
 from src.tools.browser.run_store import RunRecord
@@ -426,6 +429,15 @@ class BrowserOrchestrator:
                     "[Orchestrator] 快照成功: 元素数={}",
                     len(snapshot.get("interactive_elements", [])),
                 )
+                access_block = detect_access_block(snapshot)
+                if access_block:
+                    logger.info("[Orchestrator] 页面访问被确定性阻断")
+                    return self._build_result(
+                        success=False,
+                        status="blocked",
+                        error_code=access_block,
+                        error="目标网站拒绝了当前浏览器访问",
+                    )
 
                 # 检测循环：如果 URL 连续多步未变化，提示 LLM 换策略
                 if current_url == last_url:

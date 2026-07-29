@@ -31,6 +31,16 @@ MFA_MARKERS = (
 # 文件选择器标记
 FILE_PICKER_MARKERS = ("文件上传", "选择文件", "file", "upload", "附件", "attachment")
 
+ACCESS_BLOCK_MARKERS = (
+    "403 forbidden", "access denied", "request blocked", "access blocked",
+    "异常访问", "访问被拒绝", "请求被阻止", "禁止访问",
+)
+ACCESS_BLOCK_BODY_HINTS = (
+    "you don't have permission", "permission to access", "your request has been denied",
+    "security policy", "稍后再试", "稍后重试", "安全策略", "访问存在异常",
+    "请求已被拦截", "无权访问",
+)
+
 
 def _element_signature(item: dict[str, Any]) -> str:
     """合并元素脱敏字段为小写串，用于关键词匹配。不包含输入值。"""
@@ -92,4 +102,25 @@ def detect_human_requirement(snapshot: dict[str, Any]) -> str | None:
     # AUTH_REQUIRED 不在此主动产出：单独密码字段或单独"登录"链接不误报（设计
     # §7.2）。密码 + 验证码组合已由上方 CAPTCHA_REQUIRED 覆盖；纯登录表单由
     # LLM ask_user 或显式场景触发。保留 reason_code 常量供 human_control 模板。
+    return None
+
+
+def detect_access_block(snapshot: dict[str, Any]) -> str | None:
+    """从当前页面快照确定性识别站点风控/HTTP 拒绝页，不采信 LLM reason。"""
+    if not snapshot:
+        return None
+    title = " ".join(str(snapshot.get("title") or "").lower().split())
+    page_text = " ".join(str(snapshot.get("page_text") or "").lower().split())
+    # 快照协议暂不携带导航 HTTP 状态，因此不能只凭正文出现一个 “403” 就
+    # 判定阻断；这会误伤教程、新闻和搜索结果。仅接受典型错误页标题，或
+    # 短错误页中“阻断标记 + 拒绝说明”的组合信号。
+    if title in ACCESS_BLOCK_MARKERS:
+        return "ACCESS_BLOCKED"
+    short_error_page = len(page_text) <= 1200
+    if (
+        short_error_page
+        and any(marker in page_text for marker in ACCESS_BLOCK_MARKERS)
+        and any(hint in page_text for hint in ACCESS_BLOCK_BODY_HINTS)
+    ):
+        return "ACCESS_BLOCKED"
     return None
