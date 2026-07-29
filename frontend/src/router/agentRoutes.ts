@@ -86,6 +86,7 @@ export const agentRoutes: RouteRecordRaw[] = [
       { path: 'wecom-personal-rpa', name: 'tenant-wecom-personal-rpa', component: () => import('@/components/saas/WecomPersonalRpaManager.vue') },
       { path: 'settings', name: 'tenant-settings', component: () => import('@/components/saas/TenantSettings.vue') },
       { path: 'daily-report', name: 'tenant-daily-report', component: () => import('@/components/reports/PersonalDailyReport.vue') },
+      { path: 'work-outcomes', name: 'tenant-work-outcomes', component: () => import('@/components/reports/WorkOutcomes.vue') },
       { path: 'my-agents', name: 'tenant-my-agents', component: () => import('@/components/MyDigitalEmployees.vue') },
       { path: 'agent/:subagent_name/prompt', name: 'tenant-agent-prompt', component: () => import('@/components/TenantPromptEditor.vue') },
       { path: 'chat', name: 'tenant-chat-explicit', component: () => import('@/components/ChatContainer.vue') },

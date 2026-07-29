@@ -1693,6 +1693,10 @@ app.include_router(browser_runs_api.agent_router)
 from src.api import work_reports
 app.include_router(work_reports.router)
 
+# 工作成果 API（文件交付 / 复盘成果的列表 / 统计 / 详情 / 删除 / 手动复盘）
+from src.api import work_outcomes
+app.include_router(work_outcomes.router)
+
 # SaaS 多租户 API（始终注册，未启用时返回友好提示）
 from src.saas.api import tenant_auth, tenant_mgmt, subscriptions
 from src.saas.api import channel_config, tenant_skills, channel_routes

@@ -207,6 +207,22 @@ class ScheduledTaskManager:
         except Exception as e:
             logger.error(f"后端日志：注册发布调度任务失败: {e}")
 
+        # ===== 工作成果复盘任务（每日 02:30）=====
+        # 设计文档 docs/system/work-outcome-record-design.md §6
+        # 复盘昨天有对话但无文件型成果的会话，用小模型提取 action/decision/other 成果
+        try:
+            self._scheduler.add_job(
+                self._run_work_outcome_review,
+                CronTrigger(hour=2, minute=30, timezone="Asia/Shanghai"),
+                id="job_system_work_outcome_review",
+                name="Work Outcome Review",
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info("后端日志：已注册工作成果复盘任务 (cron=02:30)")
+        except Exception as e:
+            logger.error(f"后端日志：注册工作成果复盘任务失败: {e}")
+
     def _run_memory_summarizer(self):
         """执行每日记忆总结（APScheduler 回调）"""
         try:
@@ -548,6 +564,32 @@ class ScheduledTaskManager:
             logger.info(f"后端日志：社媒发布调度完成: {stats}")
         except Exception as e:
             logger.error(f"后端日志：社媒发布调度失败: {e}", exc_info=True)
+        finally:
+            try:
+                loop.close()
+            except Exception:
+                pass
+
+    # ===== 工作成果复盘回调（async，每日 02:30）=====
+    def _run_work_outcome_review(self):
+        """执行工作成果复盘任务（APScheduler 回调，后台线程执行）。
+
+        参考设计文档 docs/system/work-outcome-record-design.md §6。
+        使用 asyncio.new_event_loop + run_until_complete 调用 async 入口
+        （同 _run_memory_summarizer 模式），复盘昨天（自然日）的会话。
+        """
+        from datetime import date, timedelta
+
+        loop = asyncio.new_event_loop()
+        try:
+            asyncio.set_event_loop(loop)
+            from src.reports.work_outcome_review import run_daily_review
+            batch_id = loop.run_until_complete(
+                run_daily_review(date.today() - timedelta(days=1))
+            )
+            logger.info(f"后端日志：工作成果复盘完成 batch_id={batch_id}")
+        except Exception as e:
+            logger.error(f"后端日志：工作成果复盘失败: {e}", exc_info=True)
         finally:
             try:
                 loop.close()

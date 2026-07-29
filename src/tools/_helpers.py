@@ -4,17 +4,113 @@
 为后续 Phase 2+ 所有工具改造提供两个统一能力：
 - truncate_text：文本返回字段统一截断（超出加后缀 + truncated 标记）
 - sanitize_error：错误返回统一脱敏（白名单机制，杜绝 str(e)/traceback/kwargs 泄漏）
+- 工具执行上下文 ContextVar：session_id / channel / subagent_id / chat_record_id
 
 设计依据：docs/tools/tool-overall-optimization-design.md #2 统一规范。
 脱敏白名单模式参照 src/tools/ppt/ppt_process_tool.py::_format_user_error。
 
-本模块只依赖标准库，刻意不拉起 src 的 db/config/agent 链，便于在工具 execute()
-内部就近调用而不引入循环导入或启动开销。
+本模块只依赖标准库 + src.saas.context（轻量级，仅含 ContextVar，不拉起 db/config/agent 链），
+便于在工具 execute() 内部就近调用而不引入循环导入或启动开销。
 """
 
-from typing import Optional, Tuple, Union
+from contextvars import ContextVar
+from typing import Any, Dict, Optional, Tuple, Union
 
-__all__ = ["truncate_text", "sanitize_error"]
+__all__ = [
+    "truncate_text",
+    "sanitize_error",
+    "get_tool_execution_context",
+    "set_tool_execution_context",
+    "clear_tool_execution_context",
+]
+
+
+# ============== 工具执行上下文 ContextVar ==============
+# 设计文档 docs/system/work-outcome-record-design.md §5.3
+# tenant_id / user_id 复用 src.saas.context 已有的 ContextVar（避免双源）
+# session_id / channel / subagent_id / chat_record_id 在本模块定义
+# 由 Agent 主循环在 process_message 入口设置，工具内部通过 get_tool_execution_context() 读取
+
+# 当前会话 ID（chat_sessions.session_id 或 channel_sessions.session_id）
+_tool_session_id: ContextVar[Optional[str]] = ContextVar(
+    "tool_session_id", default=None
+)
+# 当前渠道（web/wecom/dingtalk/feishu/wecom_kf）
+_tool_channel: ContextVar[Optional[str]] = ContextVar(
+    "tool_channel", default=None
+)
+# 当前子智能体 ID（主智能体执行时为 None）
+_tool_subagent_id: ContextVar[Optional[str]] = ContextVar(
+    "tool_subagent_id", default=None
+)
+# 当前会话最新一条 chat_records.id（用于工作成果溯源）
+_tool_chat_record_id: ContextVar[Optional[int]] = ContextVar(
+    "tool_chat_record_id", default=None
+)
+
+
+def set_tool_execution_context(
+    *,
+    session_id: Optional[str] = None,
+    channel: Optional[str] = None,
+    subagent_id: Optional[str] = None,
+    chat_record_id: Optional[int] = None,
+) -> None:
+    """设置当前请求/会话的工具执行上下文
+
+    由 Agent 主循环在 process_message 入口调用。tenant_id / user_id 不在此设置，
+    复用 src.saas.context.set_tenant_context()。
+    """
+    _tool_session_id.set(session_id)
+    _tool_channel.set(channel)
+    _tool_subagent_id.set(subagent_id)
+    _tool_chat_record_id.set(chat_record_id)
+
+
+def clear_tool_execution_context() -> None:
+    """清除工具执行上下文（请求结束时调用，避免跨请求污染）
+
+    注意：asyncio task 之间 ContextVar 默认会 copy，但主智能体在同 task 内
+    切换多个 session 时仍需主动清理。
+    """
+    _tool_session_id.set(None)
+    _tool_channel.set(None)
+    _tool_subagent_id.set(None)
+    _tool_chat_record_id.set(None)
+
+
+def get_tool_execution_context() -> Dict[str, Optional[Any]]:
+    """读取当前工具执行上下文（cp 工具等需要租户/用户/会话信息的工具统一调用）
+
+    Returns:
+        dict，包含字段：
+        - tenant_id: 租户 ID（从 src.saas.context 读取，可能为 None）
+        - user_id: 用户 ID（从 src.saas.context 读取，可能为 None）
+        - session_id: 会话 ID
+        - channel: 渠道
+        - subagent_id: 子智能体 ID
+        - chat_record_id: 最近一条 chat_records.id
+
+    任何字段都可能为 None（无上下文场景，如系统调试），调用方需自行判断是否跳过登记。
+    """
+    # tenant_id / user_id 复用 src.saas.context
+    try:
+        from src.saas.context import get_current_tenant_id, get_current_user_id
+        tenant_id = get_current_tenant_id()
+        user_id = get_current_user_id()
+    except Exception:
+        tenant_id = None
+        user_id = None
+
+    return {
+        "tenant_id": tenant_id,
+        "user_id": user_id,
+        "session_id": _tool_session_id.get(),
+        "channel": _tool_channel.get(),
+        "subagent_id": _tool_subagent_id.get(),
+        "chat_record_id": _tool_chat_record_id.get(),
+    }
+
 
 
 def truncate_text(

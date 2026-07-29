@@ -7,6 +7,7 @@
 源文件必须在项目根目录内（防穿越），目标文件必须在 storage/ 输出目录内。
 """
 
+import asyncio
 import os
 import shutil
 import tempfile
@@ -339,7 +340,7 @@ cp(source_file_path="src/skills/xxx/assets/template.html", file_path="output/ppt
                 if not download_info.get("success"):
                     return f"复制文件失败: 注册下载失败"
 
-                return {
+                result = {
                     "file_path": download_info["file_path"],
                     "file_name": download_info.get("file_name", dst.name),
                     "file_size": file_size,
@@ -348,6 +349,18 @@ cp(source_file_path="src/skills/xxx/assets/template.html", file_path="output/ppt
                     "resolved_source": str(src),
                     "visible": visible,
                 }
+
+                # ===== 实时登记工作成果（层1，设计文档 §5.2）=====
+                # 失败只记 warning，不阻塞 cp 主流程返回
+                try:
+                    await self._record_work_outcome(result)
+                except Exception as e:
+                    logger.warning(
+                        f"cp 工具实时登记工作成果失败（不影响主流程）: {e}",
+                        exc_info=True,
+                    )
+
+                return result
 
             return {
                 "file_path": str(dst),
@@ -359,3 +372,68 @@ cp(source_file_path="src/skills/xxx/assets/template.html", file_path="output/ppt
         except Exception as e:
             logger.error(f"复制文件失败: {e}")
             return f"复制文件失败: {e}"
+
+    async def _record_work_outcome(self, cp_result: Dict[str, Any]) -> None:
+        """cp 内嵌的工作成果实时登记（层1）
+
+        - 不调用 LLM，直接拼装 summary 写入 DB，延时 <5ms
+        - 无租户/用户上下文时跳过（不报错）
+        - DB 操作通过 asyncio.to_thread 包裹，避免阻塞事件循环
+          （参考 backend_dev.md 假异步规范）
+
+        Args:
+            cp_result: cp execute 返回的 result dict（含 file_id / file_name / file_path）
+        """
+        from src.tools._helpers import get_tool_execution_context
+
+        ctx = get_tool_execution_context()
+        if not ctx.get("tenant_id") or not ctx.get("user_id"):
+            # 无租户/用户上下文（如系统调试场景），跳过登记
+            logger.debug(
+                f"cp 工具跳过工作成果登记（无上下文）: "
+                f"tenant_id={ctx.get('tenant_id')}, user_id={ctx.get('user_id')}"
+            )
+            return
+
+        if not ctx.get("session_id"):
+            # 无 session_id 时跳过（避免 DB NOT NULL 约束失败）
+            logger.debug("cp 工具跳过工作成果登记（无 session_id）")
+            return
+
+        display_name = cp_result.get("file_name") or "未命名文件"
+        await asyncio.to_thread(
+            self._do_record_work_outcome,
+            ctx,
+            cp_result,
+            display_name,
+        )
+
+    @staticmethod
+    def _do_record_work_outcome(
+        ctx: Dict[str, Any],
+        cp_result: Dict[str, Any],
+        display_name: str,
+    ) -> None:
+        """同步执行 DB 写入（在 to_thread 中运行）"""
+        from src.reports.work_outcome_db import WorkOutcomeDB
+
+        WorkOutcomeDB.create(
+            tenant_id=ctx["tenant_id"],
+            user_id=ctx["user_id"],
+            subagent_id=ctx.get("subagent_id"),
+            session_id=ctx["session_id"],
+            channel=ctx.get("channel"),
+            # summary 用 display_name 作为最低质量底线（复盘任务不会覆盖）
+            summary=f"交付文件：{display_name}",
+            outcome_type="file",
+            file_id=cp_result.get("file_id"),
+            file_name=display_name,
+            file_path=cp_result.get("file_path"),
+            metadata={"source_tool": "cp"},
+            source="cp_realtime",
+            chat_record_id=ctx.get("chat_record_id"),
+        )
+        logger.debug(
+            f"工作成果实时登记: file_id={cp_result.get('file_id')}, "
+            f"session={ctx.get('session_id')}"
+        )

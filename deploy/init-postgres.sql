@@ -2030,3 +2030,53 @@ CREATE TABLE IF NOT EXISTS work_report_preferences (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(tenant_id, user_id)
 );
+
+-- ============== 工作成果记录功能（2026-07-29）==============
+-- 记录子智能体产生的重要工作成果（文件交付/业务操作/决策建议）
+-- 详见 docs/system/work-outcome-record-design.md
+-- source: cp_realtime（cp 工具实时登记）/ scheduled_review（半夜复盘提取）/ manual
+CREATE TABLE IF NOT EXISTS work_outcomes (
+    id SERIAL PRIMARY KEY,
+    outcome_id TEXT UNIQUE NOT NULL,                  -- wo_xxxxxxxx 格式
+    tenant_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,                            -- 触发成果的用户
+    subagent_id TEXT,                                 -- 子智能体ID（主智能体直接交付时为 NULL）
+    session_id TEXT NOT NULL,                         -- 会话ID（chat_sessions.session_id 或 channel_sessions.session_id）
+    channel TEXT,                                     -- web/wecom/dingtalk/feishu/wecom_kf
+
+    -- 成果内容
+    summary TEXT NOT NULL,                            -- 一句话摘要，含业务对象和动作
+    outcome_type TEXT NOT NULL DEFAULT 'other',       -- file/action/decision/other
+    importance TEXT NOT NULL DEFAULT 'normal',        -- normal/high（预留，便于后续过滤）
+
+    -- 文件关联（outcome_type=file 时必填）
+    file_id TEXT,                                     -- cp 工具注册的 file_id
+    file_name TEXT,                                    -- 面向用户的业务文件名（display_name）
+    file_path TEXT,                                    -- 文件存储路径（用于后续清理/迁移）
+
+    -- 业务扩展信息（如客户名、订单号、金额、行程天数等）
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+
+    -- 来源与溯源
+    source TEXT NOT NULL DEFAULT 'cp_realtime',     -- cp_realtime/scheduled_review/manual
+    chat_record_id BIGINT,                            -- 关联 chat_records.id，便于反查对话上下文
+
+    -- 复盘任务溯源（source=scheduled_review 时填写）
+    review_batch_id TEXT,                             -- 复盘批次ID，便于追溯本次复盘的所有产出
+    review_confidence REAL,                           -- 小模型判断置信度 0.0~1.0，便于后续过滤
+
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_work_outcomes_tenant_created
+    ON work_outcomes(tenant_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_work_outcomes_user_created
+    ON work_outcomes(tenant_id, user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_work_outcomes_subagent_created
+    ON work_outcomes(tenant_id, subagent_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_work_outcomes_session
+    ON work_outcomes(session_id);
+CREATE INDEX IF NOT EXISTS idx_work_outcomes_file_id
+    ON work_outcomes(file_id) WHERE file_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_work_outcomes_review_batch
+    ON work_outcomes(review_batch_id) WHERE review_batch_id IS NOT NULL;

@@ -2177,6 +2177,25 @@ class Agent:
             if browser_tool and hasattr(browser_tool, 'set_tenant_id'):
                 browser_tool.set_tenant_id(_resolve_tenant_id)
 
+        # 设置工具执行上下文（session_id / channel / subagent_id / chat_record_id）
+        # tenant_id / user_id 已由 src.saas.context 提供（HTTP 中间件设置）
+        # 设计文档 docs/system/work-outcome-record-design.md §5.3
+        try:
+            from src.tools._helpers import set_tool_execution_context
+            _subagent_dir = (
+                self.subagent_config.dir_name
+                if self.subagent_config and getattr(self.subagent_config, 'dir_name', None)
+                else None
+            )
+            set_tool_execution_context(
+                session_id=session_id,
+                channel=None,  # Phase 1 暂为 None，复盘任务从 channel_sessions 表反查
+                subagent_id=_subagent_dir,
+                chat_record_id=None,  # Phase 1 暂为 None，后续阶段补
+            )
+        except Exception as e:
+            logger.debug(f"set_tool_execution_context 失败（不影响主流程）: {e}")
+
         # 子智能体环境变量注入：从 subagent_env_vars 表读取，设置为 os.environ，供 http_api 工具的 ${VAR} 替换
         _injected_env_vars = {}
         if _resolve_tenant_id and self.mode != AgentMode.MASTER and self.subagent_config:
@@ -3240,7 +3259,28 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
         logger.info(f"[SUBAGENT] session_id: {self.session_id}")
         logger.info(f"[SUBAGENT] execution_id: {self.execution_id}")
         logger.info(f"[SUBAGENT] task_description: {task_description}")
-        
+
+        # 设置工具执行上下文（子智能体场景）
+        # 子智能体走 execute_as_subagent 而非 process_message，需要在入口补设
+        # ContextVar，否则 cp 工具登记工作成果时 subagent_id 会丢失
+        # （asyncio.create_task 复制主智能体 context，subagent_id=None 会被继承）
+        # 设计文档 docs/system/work-outcome-record-design.md §5.3
+        try:
+            from src.tools._helpers import set_tool_execution_context
+            _subagent_dir = (
+                self.subagent_config.dir_name
+                if self.subagent_config and getattr(self.subagent_config, 'dir_name', None)
+                else None
+            )
+            set_tool_execution_context(
+                session_id=self.session_id or parent_session_id,
+                channel=None,  # Phase 1 暂为 None
+                subagent_id=_subagent_dir,
+                chat_record_id=None,
+            )
+        except Exception as e:
+            logger.debug(f"set_tool_execution_context (subagent) 失败（不影响主流程）: {e}")
+
         try:
             # 步骤1：构建消息（子智能体不使用历史消息，只使用任务描述）
             messages = []

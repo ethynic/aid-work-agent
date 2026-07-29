@@ -13,6 +13,8 @@ domains:
     label: 数据分析
   - id: social-media-operations
     label: 社媒运营
+  - id: reports
+    label: 工作报表
 
 # icon 字段为统一的 SVG path 数据（24×24 viewBox，stroke 描边风格）
 # 由前端 MenuIcon 组件渲染
@@ -160,4 +162,12 @@ pages:
     route: /social-media
     icon: "M3 11l18-8v18l-18-8zM11.6 16.8a3 3 0 11-5.8-1.6"
     domain: social-media-operations
+    status: planned
+
+  - page_id: work-outcomes
+    title: 工作成果
+    description: 查看智能体产生的所有工作成果，包括文件交付、业务操作、决策建议等，支持按类型/来源/智能体筛选和手动触发复盘任务
+    route: /work-outcomes
+    icon: "M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8zM14 2v6h6M9 14l2 2 4-4"
+    domain: reports
     status: planned
