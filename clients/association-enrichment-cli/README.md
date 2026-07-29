@@ -11,3 +11,6 @@ python clients/association-enrichment-cli/association_enrichment_cli.py `
 CSV/XLSX 必须包含 `协会名称`、`association_name`、`association` 或 `单位名称` 列。浏览器固定以可见模式启动。`--dry-run` 仅验证输入和去重，不调用外部服务。
 
 CLI 标准输出只包含数量、状态与输出路径，不输出手机号。微信原始证据仍保存在当前 Windows 用户 DPAPI 加密 artifact 中；完整手机号只写入用户指定的本地 Excel。
+
+完整本机演示步骤、环境检查和故障恢复见：
+[本机演示操作手册](../../docs/tools/association-enrichment-local-demo-guide.md)。

@@ -233,6 +233,31 @@ public static class WechatSouyisouWin32 {
             }
             exit 0
         }
+        # 业务主路径：先让项目 LLM 判断整页列表。命中后直接结束；未命中或
+        # 不确定才进入最多 10 条详情。列表 artifact 明确标记为 unbounded，
+        # 供审计区分“整页列表证据”和“前 10 条详情证据”。
+        if ($judge) {
+            $listJudge = Invoke-EvidenceJudge $text $AssociationName $PersonName $judge
+            if ($listJudge.matched) {
+                $detailArtifact = Protect-EvidenceArtifact $ArtifactDirectory @{
+                    kind='collect_result';status='found';checked=0;failures=0
+                    source='result_page_unbounded';list_artifact_id=$artifact.artifact_id
+                    records=@();found_result=$listJudge
+                    captured_at=[DateTimeOffset]::Now.ToString('o')
+                }
+                $stage = 'cleanup'
+                $sessionCleanupAttempted = $true
+                $cleanupResult = Complete-WeixinPluginSession `
+                    ([ref]$sessionCleanupCompleted) $cleanupSession
+                Write-Result @{
+                    ok=$true;executed=$true;status='found';checked=0;failures=0
+                    source='result_page_unbounded'
+                    artifact_ref=$detailArtifact.artifact_ref
+                    session_closed=[bool]$cleanupResult.session_closed
+                }
+                exit 0
+            }
+        }
         $ocr = $null
         if (-not $DisableOcr) {
             if ($OcrCommand) {

@@ -675,7 +675,7 @@ foreach ($requiredStage in @(
 )) {
     Assert ($entryText -match ([regex]::Escape("`$stage = '$requiredStage'"))) "stage present: $requiredStage"
 }
-Assert ($entryText -notmatch 'Invoke-EvidenceJudge\s+\$text') 'unbounded list text is never judged'
+Assert ($entryText -match 'Invoke-EvidenceJudge\s+\$text') 'project LLM judges list before details'
 Assert ($entryText -match "kind='result_page_unbounded'") 'unbounded list artifact is labeled'
 Assert ($entryText -match "reason='screenshot_unchanged'") 'click failure metadata recorded'
 Assert ($entryText -match "reason='detail_evidence_invalid'") 'invalid detail metadata recorded'

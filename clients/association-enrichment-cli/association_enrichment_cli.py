@@ -72,14 +72,19 @@ async def run(args: argparse.Namespace) -> dict[str, object]:
     )
 
     providers = ProjectAssociationProviders(repository_root=ROOT)
+    def report_progress(message: str) -> None:
+        print(_redact_mobiles(message), file=sys.stderr, flush=True)
+
     enricher = AssociationBatchEnricher(
         official_site_resolver=providers.resolve_official_site,
         official_profile_collector=providers.collect_official_profile,
         fallback_profile_provider=providers.fallback_profile,
         wechat_mobile_provider=providers.wechat_mobile,
         headless=False,
+        progress_reporter=report_progress,
     )
     rows = await enricher.enrich_many(names)
+    report_progress("正在写入 Excel 结果")
     output = write_enrichment_workbook(rows, args.output)
     return {
         "ok": True,

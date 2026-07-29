@@ -24,11 +24,13 @@ DPAPI 加密后保存，返回值只包含 `artifact_ref`。日志和错误消�
 `session_closed=true`。清理失败返回 `SESSION_CLEANUP_FAILED`，调用方必须停止批处理，
 不能继续查询下一人；此前已生成的 DPAPI artifact 不会被覆盖。`open` 仅负责打开搜一搜，
 按命令语义不会自动关闭。
-插件 HWND 只有在 `IsWindow=false` 时才算关闭，仅隐藏不算成功。每个会话只尝试一次
-cleanup，失败后不会在 finally 重复发送关闭快捷键。
+插件 HWND 已销毁，或插件已不可见且可信微信主窗口恢复前台，均算关闭成功。仍可见插件、
+错误身份或主窗口未恢复继续返回清理失败。每个会话只尝试一次 cleanup，失败后不会在
+finally 重复发送关闭快捷键。
 
-结果页整页复制可能包含第 11 条及之后内容，因此 `search` 只返回 `captured`，
-`collect` 也不会直接判断整页文本；联系人命中只来自实际打开并计入前 10 条的详情。
+`search` 只复制并封存结果页。`collect` 使用项目 LLM 时先判断整页列表文字；列表命中后
+直接返回并把来源标记为 `result_page_unbounded`，未命中或不确定才继续打开前 10 条详情。
+结果页整页复制可能包含第 11 条及之后内容，因此 artifact 会明确保留该来源边界，供复核。
 图片/PDF 详情会默认调用项目 PaddleOCR adapter，只截取整页详情中央正文区域的最多 3 个滚动
 视口作为补充证据，避免把左侧其他搜索结果混入当前详情。
 可用 `-OcrCommand` 覆盖 OCR executable，或用 `-DisableOcr` 明确关闭；需要 OCR 而能力

@@ -7,6 +7,7 @@ import re
 from typing import Literal, Optional
 from urllib.parse import urlparse
 
+from loguru import logger
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -206,14 +207,14 @@ def _validate_profile(
         page = page_by_url.get(source_url)
         if page is None or not _same_verified_domain(source_url, verified_domain):
             raise ValueError(f"{field_name}: unverified source")
-        if evidence.evidence_quote not in page.content:
+        compact_quote = re.sub(r"\s+", "", evidence.evidence_quote)
+        compact_source = re.sub(r"\s+", "", page.content)
+        if compact_quote not in compact_source:
             raise ValueError(f"{field_name}: quote not in source")
-        value_is_in_quote = evidence.value in evidence.evidence_quote
-        if field_name in {"president_name", "secretary_general_name"}:
-            value_is_in_quote = (
-                re.sub(r"\s+", "", evidence.value)
-                in re.sub(r"\s+", "", evidence.evidence_quote)
-            )
+        value_is_in_quote = (
+            re.sub(r"\s+", "", evidence.value)
+            in compact_quote
+        )
         if not value_is_in_quote:
             raise ValueError(f"{field_name}: value not in quote")
         if field_name in COUNT_FIELDS:
@@ -269,7 +270,8 @@ def _build_prompt(pages: list[VerifiedOfficialPage]) -> str:
         "只依据下面已验证的协会官网页面提取信息，禁止使用记忆、猜测或补全。"
         "严格输出一个JSON对象，且只能包含指定14个字段。每个字段对象只能包含"
         "value、evidence_quote、source_url。未找到时三个值均为null。"
-        "非空evidence_quote必须逐字来自对应source_url页面，value必须出现在quote中。"
+        "非空evidence_quote必须来自对应source_url页面，允许忽略网页排版产生的空格和换行；"
+        "value必须出现在quote中，同样允许忽略排版空白。"
         "请根据网页原文整体语义判断每段证据对应哪个字段，不依赖固定关键词或固定措辞。"
         "四个计数字段的value必须优先输出为只含ASCII数字的JSON字符串，quote中必须有"
         "对应的独立数字。字段含义或人员身份不明确时必须留空，不得仅因出现姓名、数字、"
@@ -332,7 +334,8 @@ async def extract_association_profile(
         )
         profile = _validate_profile(profile, pages, verified_domain)
         return ExtractionResult(status="success", profile=profile)
-    except (ValidationError, ValueError, TypeError, json.JSONDecodeError):
+    except (ValidationError, ValueError, TypeError, json.JSONDecodeError) as exc:
+        logger.warning("协会官网字段证据未通过：{}", str(exc)[:240])
         return ExtractionResult(status="inconclusive", reason_code="INVALID_EVIDENCE")
     except Exception:
         return ExtractionResult(status="inconclusive", reason_code="PROVIDER_FAILED")

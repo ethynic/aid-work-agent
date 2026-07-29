@@ -1,5 +1,6 @@
 import csv
 import asyncio
+import json
 
 import pytest
 from openpyxl import Workbook, load_workbook
@@ -15,6 +16,29 @@ from src.services.association_profile_extractor import PROFILE_FIELDS
 
 
 pytestmark = pytest.mark.unit
+
+
+class _SearchStub:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.keywords = []
+
+    async def execute(self, *, keyword, **_kwargs):
+        self.keywords.append(keyword)
+        response = self.responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+
+class _GatewayStub:
+    def __init__(self, contents):
+        self.contents = list(contents)
+        self.calls = 0
+
+    async def chat(self, **_kwargs):
+        self.calls += 1
+        return {"content": self.contents.pop(0)}
 
 
 def test_text_csv_and_excel_inputs_produce_one_ordered_deduplicated_list(tmp_path):
@@ -242,3 +266,345 @@ async def test_timed_out_child_process_is_killed_and_reaped():
         )
     assert process.killed is True
     assert process.waited is True
+
+
+@pytest.mark.asyncio
+async def test_official_site_resolver_combines_queries_when_first_has_no_result(
+    monkeypatch, tmp_path
+):
+    import src.services.association_enrichment_providers as module
+
+    providers = ProjectAssociationProviders(repository_root=tmp_path)
+    providers._search = _SearchStub([
+        {"success": True, "results": []},
+        {
+            "success": True,
+            "results": [{
+                "url": "https://association.example.cn/",
+                "title": "测试协会官网",
+                "content": "测试协会官方网站",
+            }],
+        },
+        {"success": True, "results": []},
+    ])
+    gateway = _GatewayStub([
+        json.dumps({"official_url": "https://association.example.cn/"})
+    ])
+    monkeypatch.setattr(module, "llm_gateway", gateway)
+
+    assert (
+        await providers.resolve_official_site("测试协会")
+        == "https://association.example.cn/"
+    )
+    assert providers._search.keywords == [
+        "测试协会",
+        "测试协会",
+        "测试协会 官网",
+        "测试协会 官方网站",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_official_site_resolver_accepts_normalized_candidate_but_returns_original(
+    monkeypatch, tmp_path
+):
+    import src.services.association_enrichment_providers as module
+
+    providers = ProjectAssociationProviders(repository_root=tmp_path)
+    original = "HTTPS://Association.Example.CN:443/about/"
+    providers._search = _SearchStub([
+        {
+            "success": True,
+            "results": [{"url": original, "title": "官网", "content": "官方"}],
+        },
+        {"success": True, "results": []},
+        {"success": True, "results": []},
+    ])
+    monkeypatch.setattr(
+        module,
+        "llm_gateway",
+        _GatewayStub(['{"official_url":"https://association.example.cn/about"}']),
+    )
+
+    assert await providers.resolve_official_site("测试协会") == original
+
+
+@pytest.mark.asyncio
+async def test_website_only_official_profile_uses_fallback_then_wechat():
+    async def resolve(_name):
+        return "https://association.example.cn/"
+
+    async def collect(url, _headless):
+        return {"official_website": url}
+
+    async def fallback(_name):
+        return {"secretary_general_name": "潘华"}
+
+    async def wechat(association, person, role):
+        assert (association, person, role) == ("测试协会", "潘华", "秘书长")
+        return "18612345678"
+
+    enricher = AssociationBatchEnricher(
+        official_site_resolver=resolve,
+        official_profile_collector=collect,
+        fallback_profile_provider=fallback,
+        wechat_mobile_provider=wechat,
+    )
+
+    row = await enricher.enrich_one("测试协会")
+
+    assert row.values["official_website"] == "https://association.example.cn/"
+    assert row.values["secretary_general_name"] == "潘华"
+    assert row.values["secretary_general_mobile"] == "18612345678"
+    assert "web_search_fallback" in row.sources
+
+
+@pytest.mark.asyncio
+async def test_official_site_resolver_ignores_one_failed_query_and_retries_bad_json(
+    monkeypatch, tmp_path
+):
+    import src.services.association_enrichment_providers as module
+
+    providers = ProjectAssociationProviders(repository_root=tmp_path)
+    providers._search = _SearchStub([
+        RuntimeError("temporary search failure"),
+        {
+            "success": True,
+            "results": [{
+                "url": "http://association.example.cn/",
+                "title": "测试协会",
+                "content": "官方网站",
+            }],
+        },
+        {"success": True, "results": []},
+    ])
+    gateway = _GatewayStub([
+        "not json",
+        '{"official_url":"http://association.example.cn/"}',
+    ])
+    monkeypatch.setattr(module, "llm_gateway", gateway)
+
+    assert (
+        await providers.resolve_official_site("测试协会")
+        == "http://association.example.cn/"
+    )
+    assert gateway.calls == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "selected_url",
+    [
+        "ftp://association.example.cn/",
+        "https://hallucinated.example.cn/",
+    ],
+)
+async def test_official_site_resolver_rejects_non_http_or_non_candidate_url(
+    monkeypatch, tmp_path, selected_url
+):
+    import src.services.association_enrichment_providers as module
+
+    providers = ProjectAssociationProviders(repository_root=tmp_path)
+    search_result = {
+        "success": True,
+        "results": [
+            {
+                "url": "https://association.example.cn/",
+                "title": "测试协会官网",
+                "content": "测试协会官方网站",
+            },
+            {
+                "url": "ftp://association.example.cn/",
+                "title": "下载站",
+                "content": "非网页协议",
+            },
+        ],
+    }
+    providers._search = _SearchStub(
+        [search_result, {"success": True, "results": []}, {"success": True, "results": []}]
+    )
+    monkeypatch.setattr(
+        module,
+        "llm_gateway",
+        _GatewayStub([json.dumps({"official_url": selected_url})]),
+    )
+
+    with pytest.raises(ValueError, match="OFFICIAL_RESOLVER_INVALID_RESPONSE"):
+        await providers.resolve_official_site("测试协会")
+
+
+@pytest.mark.asyncio
+async def test_fallback_retries_invalid_structure(monkeypatch, tmp_path):
+    import src.services.association_enrichment_providers as module
+
+    providers = ProjectAssociationProviders(repository_root=tmp_path)
+    providers._search = _SearchStub([{
+        "success": True,
+        "results": [{
+            "url": "https://news.example.cn/a",
+            "title": "测试协会简介",
+            "content": "地址：北京市测试路1号",
+        }],
+    }])
+    valid = {
+        name: {"value": None, "evidence_quote": None, "source_url": None}
+        for name in PROFILE_FIELDS
+    }
+    valid["address"] = {
+        "value": "北京市测试路1号",
+        "evidence_quote": "地址：北京市测试路1号",
+        "source_url": "https://news.example.cn/a",
+    }
+    gateway = _GatewayStub([
+        '{"unexpected":"shape"}',
+        json.dumps(valid, ensure_ascii=False),
+    ])
+    monkeypatch.setattr(module, "llm_gateway", gateway)
+
+    result = await providers.fallback_profile("测试协会")
+
+    assert result["address"] == "北京市测试路1号"
+    assert gateway.calls == 2
+
+
+@pytest.mark.asyncio
+async def test_progress_reports_stages_and_redacts_mobile():
+    messages = []
+
+    async def resolve(_name):
+        return "https://association.example.cn/"
+
+    async def collect(_url, _headless):
+        return {"president_name": "张三"}
+
+    async def fallback(_name):
+        raise AssertionError("official collection succeeded")
+
+    async def wechat(_association, _person, _role):
+        return "18612345678"
+
+    enricher = AssociationBatchEnricher(
+        official_site_resolver=resolve,
+        official_profile_collector=collect,
+        fallback_profile_provider=fallback,
+        wechat_mobile_provider=wechat,
+        progress_reporter=messages.append,
+    )
+    row = await enricher.enrich_one("测试协会 18612345678")
+
+    assert row.values["president_mobile"] == "18612345678"
+    assert any("发现官网" in message for message in messages)
+    assert any("可见浏览器" in message for message in messages)
+    assert any("微信检索" in message for message in messages)
+    assert all("18612345678" not in message for message in messages)
+    assert any("186****5678" in message for message in messages)
+
+
+@pytest.mark.asyncio
+async def test_progress_reporter_failure_does_not_interrupt_enrichment():
+    async def resolve(_name):
+        return None
+
+    async def fallback(_name):
+        return {"address": "北京市"}
+
+    async def wechat(_association, _person, _role):
+        return None
+
+    def broken_reporter(_message):
+        raise RuntimeError("terminal closed")
+
+    enricher = AssociationBatchEnricher(
+        official_site_resolver=resolve,
+        official_profile_collector=lambda *_args: None,
+        fallback_profile_provider=fallback,
+        wechat_mobile_provider=wechat,
+        progress_reporter=broken_reporter,
+    )
+
+    row = await enricher.enrich_one("测试协会")
+
+    assert row.values["address"] == "北京市"
+    assert row.processing_status == "partial"
+
+
+@pytest.mark.asyncio
+async def test_official_profile_passes_hostname_as_verified_domain(
+    monkeypatch, tmp_path
+):
+    import src.services.association_enrichment_providers as module
+    from src.services.association_profile_extractor import (
+        AssociationProfile,
+        ExtractionResult,
+        FieldEvidence,
+    )
+
+    providers = ProjectAssociationProviders(repository_root=tmp_path)
+    captured = {}
+
+    async def collect(entry_url, domain, *, headless, **budgets):
+        captured["collector"] = (entry_url, domain, headless, budgets)
+        return []
+
+    async def extract(pages, verified_domain):
+        captured["extractor"] = (pages, verified_domain)
+        return ExtractionResult(
+            status="success",
+            profile=AssociationProfile(
+                **{name: FieldEvidence() for name in PROFILE_FIELDS}
+            ),
+        )
+
+    monkeypatch.setattr(module, "collect_official_pages_with_playwright", collect)
+    monkeypatch.setattr(module, "extract_association_profile", extract)
+
+    await providers.collect_official_profile(
+        "https://www.example.cn/about/index.html", False
+    )
+
+    assert captured["collector"][1] == "www.example.cn"
+    assert captured["extractor"][1] == "www.example.cn"
+
+
+@pytest.mark.asyncio
+async def test_official_profile_retries_invalid_llm_evidence_once(
+    monkeypatch, tmp_path
+):
+    import src.services.association_enrichment_providers as module
+    from src.services.association_profile_extractor import (
+        AssociationProfile,
+        ExtractionResult,
+        FieldEvidence,
+    )
+
+    providers = ProjectAssociationProviders(repository_root=tmp_path)
+    calls = []
+
+    async def collect(_entry_url, _domain, *, headless, **_budgets):
+        assert headless is False
+        return []
+
+    async def extract(pages, verified_domain):
+        calls.append((pages, verified_domain))
+        if len(calls) == 1:
+            return ExtractionResult(
+                status="inconclusive",
+                reason_code="INVALID_EVIDENCE",
+            )
+        return ExtractionResult(
+            status="success",
+            profile=AssociationProfile(
+                **{name: FieldEvidence() for name in PROFILE_FIELDS}
+            ),
+        )
+
+    monkeypatch.setattr(module, "collect_official_pages_with_playwright", collect)
+    monkeypatch.setattr(module, "extract_association_profile", extract)
+
+    result = await providers.collect_official_profile(
+        "https://www.example.cn/about/index.html", False
+    )
+
+    assert len(calls) == 2
+    assert calls[0][1] == calls[1][1] == "www.example.cn"
+    assert set(result) == set(PROFILE_FIELDS)

@@ -35,6 +35,7 @@ FallbackProfileProvider = Callable[
     [str], Awaitable[Mapping[str, str | None]]
 ]
 WechatMobileProvider = Callable[[str, str, str], Awaitable[str | None]]
+ProgressReporter = Callable[[str], None]
 
 
 def _redact(text: str) -> str:
@@ -155,6 +156,18 @@ def _scheme_candidates(url: str) -> list[str]:
     return [first, second] if first != second else [first]
 
 
+def _should_retry_other_scheme(exc: Exception) -> bool:
+    """Protocol fallback is for navigation failures, not semantic extraction failures."""
+    code = str(exc)
+    return code not in {
+        "INVALID_EVIDENCE",
+        "OFFICIAL_EXTRACTION_FAILED",
+        "INPUT_TOO_LARGE",
+        "UNVERIFIED_INPUT",
+        "PROVIDER_FAILED",
+    }
+
+
 @dataclass
 class AssociationEnrichmentRow:
     association_name: str
@@ -186,6 +199,7 @@ class AssociationBatchEnricher:
         fallback_profile_provider: FallbackProfileProvider,
         wechat_mobile_provider: WechatMobileProvider,
         headless: bool = False,
+        progress_reporter: ProgressReporter | None = None,
     ):
         if headless is not False:
             raise ValueError("VISIBLE_BROWSER_REQUIRED")
@@ -194,10 +208,20 @@ class AssociationBatchEnricher:
         self._fallback_profile = fallback_profile_provider
         self._wechat_mobile = wechat_mobile_provider
         self._headless = headless
+        self._progress_reporter = progress_reporter
+
+    def _progress(self, message: str) -> None:
+        if self._progress_reporter is not None:
+            try:
+                self._progress_reporter(_redact(message))
+            except Exception:
+                # Progress reporting must never change enrichment behavior.
+                pass
 
     async def enrich_one(self, association_name: str) -> AssociationEnrichmentRow:
         row = AssociationEnrichmentRow(association_name=association_name)
         official_succeeded = False
+        self._progress(f"[{association_name}] 正在发现官网")
         try:
             official_url = await self._resolve_official_site(association_name)
         except Exception as exc:
@@ -208,18 +232,27 @@ class AssociationBatchEnricher:
             official_attempt_errors: list[str] = []
             for candidate in _scheme_candidates(official_url):
                 try:
+                    self._progress(
+                        f"[{association_name}] 正在使用可见浏览器采集官网"
+                    )
                     profile = await self._collect_official_profile(
                         candidate, self._headless
                     )
                     self._merge(row.values, profile)
                     row.sources.append(f"official:{candidate}")
-                    official_succeeded = True
+                    official_succeeded = any(
+                        profile.get(field_name)
+                        for field_name in PROFILE_FIELDS
+                        if field_name != "official_website"
+                    )
                     break
                 except Exception as exc:
                     official_attempt_errors.append(
                         f"official_collect:{urlparse(candidate).scheme}:"
                         f"{type(exc).__name__}"
                     )
+                    if not _should_retry_other_scheme(exc):
+                        break
             if not official_succeeded:
                 row.errors.extend(official_attempt_errors)
         else:
@@ -227,6 +260,7 @@ class AssociationBatchEnricher:
 
         if not official_succeeded:
             try:
+                self._progress(f"[{association_name}] 正在使用网络检索补充基础信息")
                 fallback = await self._fallback_profile(association_name)
                 self._merge(row.values, fallback)
                 row.sources.append("web_search_fallback")
@@ -241,6 +275,7 @@ class AssociationBatchEnricher:
             if not person_name or row.values.get(mobile_field):
                 continue
             try:
+                self._progress(f"[{association_name}] 正在微信检索{role}")
                 mobile = await self._wechat_mobile(
                     association_name, str(person_name), role
                 )
@@ -250,6 +285,8 @@ class AssociationBatchEnricher:
                     else:
                         row.values[mobile_field] = str(mobile)
                         row.sources.append(f"wechat:{role}")
+                else:
+                    row.errors.append(f"wechat:{role}:not_found")
             except Exception as exc:
                 row.errors.append(f"wechat:{role}:{type(exc).__name__}")
 
