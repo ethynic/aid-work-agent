@@ -862,6 +862,98 @@ class TestToChart:
         with pytest.raises(ValueError, match="数据源不存在"):
             loaded_analyzer.to_chart("no_table", chart_type="bar", x_column="a")
 
+    def test_to_chart_group_by_auto_pivot(self, analyzer):
+        """group_by 自动透视长表为宽表，实现多系列分组柱状图"""
+        df = pd.DataFrame({
+            "品类": ["T恤", "T恤", "T恤", "外套", "外套", "外套"],
+            "渠道": ["淘宝", "京东", "拼多多", "淘宝", "京东", "拼多多"],
+            "毛利": [10000, 8000, 5000, 20000, 15000, 9000],
+        })
+        analyzer._store("long_data", df)
+        result = analyzer.to_chart(
+            "long_data", chart_type="grouped_bar",
+            x_column="品类", y_columns=["毛利"], group_by="渠道",
+            title="各品类分渠道毛利对比",
+        )
+        assert result["chart_type"] == "grouped_bar"
+        assert os.path.exists(result["file_path"])
+        # 透视后 data_columns 应包含三个渠道列
+        cols = result["data_columns"]
+        assert "淘宝" in cols
+        assert "京东" in cols
+        assert "拼多多" in cols
+
+    def test_to_chart_group_by_infer_value(self, analyzer):
+        """group_by 不传 y_columns 时，自动推断唯一数值列"""
+        df = pd.DataFrame({
+            "品类": ["T恤", "T恤", "外套", "外套"],
+            "渠道": ["淘宝", "京东", "淘宝", "京东"],
+            "毛利": [10000, 8000, 20000, 15000],
+        })
+        analyzer._store("long2", df)
+        result = analyzer.to_chart(
+            "long2", chart_type="bar",
+            x_column="品类", y_columns=None, group_by="渠道",
+            title="自动推断值列",
+        )
+        assert result["chart_type"] == "bar"
+        assert "淘宝" in result["data_columns"]
+        assert "京东" in result["data_columns"]
+
+    def test_to_chart_group_by_ambiguous_numeric_raises(self, analyzer):
+        """group_by 存在、无 y_columns、且有多个数值列 → 抛 ValueError"""
+        df = pd.DataFrame({
+            "品类": ["T恤", "T恤", "外套", "外套"],
+            "渠道": ["淘宝", "京东", "淘宝", "京东"],
+            "毛利": [10000, 8000, 20000, 15000],
+            "成本": [6000, 5000, 12000, 9000],
+        })
+        analyzer._store("ambig", df)
+        with pytest.raises(ValueError, match="数值列"):
+            analyzer.to_chart(
+                "ambig", chart_type="bar",
+                x_column="品类", y_columns=None, group_by="渠道",
+                title="歧义",
+            )
+
+    def test_to_chart_group_by_not_in_columns_ignored(self, analyzer):
+        """group_by 列不存在 → 忽略，走原逻辑不报错"""
+        df = pd.DataFrame({
+            "品类": ["T恤", "外套"],
+            "毛利": [10000, 20000],
+        })
+        analyzer._store("simple", df)
+        result = analyzer.to_chart(
+            "simple", chart_type="bar",
+            x_column="品类", y_columns=["毛利"], group_by="不存在的列",
+            title="group_by忽略",
+        )
+        assert result["chart_type"] == "bar"
+        assert os.path.exists(result["file_path"])
+
+    def test_to_chart_group_by_conflicts_raise(self, analyzer):
+        """group_by 与 x_column 或值列同名 → 抛明确错误，而非 pandas 内部异常"""
+        df = pd.DataFrame({
+            "品类": ["T恤", "T恤", "外套", "外套"],
+            "渠道": ["淘宝", "京东", "淘宝", "京东"],
+            "毛利": [100, 200, 300, 400],
+        })
+        analyzer._store("conflict", df)
+        # group_by == x_column
+        with pytest.raises(ValueError, match="x_column 相同"):
+            analyzer.to_chart(
+                "conflict", chart_type="bar",
+                x_column="品类", y_columns=["毛利"], group_by="品类",
+                title="x冲突",
+            )
+        # group_by == value_col
+        with pytest.raises(ValueError, match="值列相同"):
+            analyzer.to_chart(
+                "conflict", chart_type="bar",
+                x_column="品类", y_columns=["毛利"], group_by="毛利",
+                title="值列冲突",
+            )
+
 
 # ==================== _eval_expression 安全性 ====================
 

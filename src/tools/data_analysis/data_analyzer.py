@@ -768,7 +768,7 @@ class DataAnalyzer:
             x_column: X 轴列
             y_columns: Y 轴列列表
             title: 图表标题
-            group_by: 分组列（暂不使用，预留）
+            group_by: 系列拆分列（可选）。传入时自动按该列 pivot 转宽表，实现多系列分组对比图
 
         Returns:
             {"file_path": str, "chart_type": str, "title": str, "data_columns": [...]}
@@ -779,6 +779,29 @@ class DataAnalyzer:
 
         if x_column not in df.columns:
             raise ValueError(f"X 轴列不存在: {x_column}")
+
+        # 若传了 group_by 且数据为长表，自动 pivot 转宽表实现多系列
+        if group_by and group_by in df.columns and (not y_columns or len(y_columns) == 1):
+            value_col = y_columns[0] if y_columns else None
+            # 自动推断值列：group_by 之外、x_column 之外的数值列
+            if not value_col:
+                numeric_cols = [c for c in df.columns if c not in (x_column, group_by) and pd.api.types.is_numeric_dtype(df[c])]
+                if len(numeric_cols) != 1:
+                    raise ValueError(f"传 group_by 时需明确 y_columns，或数据恰好有1个数值列，当前数值列: {numeric_cols}")
+                value_col = numeric_cols[0]
+            if value_col not in df.columns:
+                raise ValueError(f"值列不存在: {value_col}")
+            # 校验三列互不相同，否则 groupby/pivot 的 reset_index 会因列名冲突报错
+            if group_by == x_column:
+                raise ValueError(f"group_by 不能与 x_column 相同: {group_by}")
+            if group_by == value_col:
+                raise ValueError(f"group_by 不能与值列相同: {group_by}")
+            # 先聚合（x_column × group_by）再 pivot，避免重复行
+            agg = df.groupby([x_column, group_by], dropna=False)[value_col].sum().reset_index()
+            df = pd.pivot_table(agg, index=x_column, columns=group_by, values=value_col, aggfunc="sum")
+            df.columns = [str(c) for c in df.columns]
+            df = df.reset_index()
+            y_columns = [c for c in df.columns if c != x_column]
 
         # 默认取所有非 x_column 的数值列
         if not y_columns:

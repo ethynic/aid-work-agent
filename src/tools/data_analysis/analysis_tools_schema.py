@@ -72,13 +72,23 @@ calculate(source=table_id, operations=[
 aggregate(source="with_tier", group_by=["金额档位"], aggregations=[{"column": "金额", "function": "sum"}, {"column": "金额", "function": "count"}], output_var="summary")
 ```
 
+**模式F：两维度交叉对比（如"对比3个渠道在各品类的毛利"）**
+describe → aggregate(group_by=[维度A, 维度B], aggregations=[{column:指标, function:sum}]) →
+pivot(index=维度A, columns=维度B, values=指标) → to_chart(grouped_bar)
+⚠️ 凡是"对比N个XX"的需求，必须先 pivot 把对比维度转成列，再用 grouped_bar 画分组柱状图。
+  禁止直接 aggregate 单维度聚合（会把对比维度合并求和，丢失对比信息）。
+示例：对比3个销售渠道各品类毛利
+aggregate(source=table_id, group_by=["品类","渠道"], aggregations=[{"column":"毛利","function":"sum"}], output_var="long")
+pivot(source="long", index="品类", columns="渠道", values="毛利", output_var="wide")
+to_chart(source="wide", chart_type="grouped_bar", x_column="品类", y_columns=[各渠道列], title="各品类分渠道毛利对比")
+
 ### 4.3 执行原则
 
 1. source 参数支持三种引用：table_id、output_var、文件路径
 2. 每次只调用一个工具
 3. 分析方法的结果会自动保存，后续通过 output_var 引用
 4. 输出最终结果时调用 to_table 或 to_chart，然后停止调用工具，直接用文字总结
-5. 图表类型建议：趋势用 line，对比用 bar，占比用 pie，交叉分析用 stacked_bar
+5. 图表类型建议：趋势用 line，单维度对比用 bar，占比用 pie，分组对比用 grouped_bar，构成占比用 stacked_bar
 6. ⚠️ 如果已经通过 to_table 或 to_chart 输出了最终结果，不要再调用任何工具，直接用文字总结结论
 
 ## 规则
@@ -537,7 +547,7 @@ ANALYSIS_TOOLS = [
         "type": "function",
         "function": {
             "name": "to_chart",
-            "description": "生成图表图片文件。图表类型建议：趋势用 line，对比用 bar，占比用 pie，交叉分析用 stacked_bar。",
+            "description": "生成图表图片文件。图表类型建议：趋势用 line，单维度对比用 bar，占比用 pie，分组对比（如N个渠道并排）用 grouped_bar，构成占比（部分堆叠看总量）用 stacked_bar。分组对比场景可传 group_by 参数自动拆分多系列。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -552,6 +562,10 @@ ANALYSIS_TOOLS = [
                         "type": "array",
                         "items": {"type": "string"},
                         "description": "Y 轴列名列表",
+                    },
+                    "group_by": {
+                        "type": "string",
+                        "description": "（可选）系列拆分列。当数据为长表且要画分组对比图时，传此列可自动按它拆成多系列（等价于先 pivot 再画图）。如对比各渠道毛利时传 group_by='渠道'",
                     },
                     "title": {"type": "string", "description": "图表标题"},
                     "output_var": {
