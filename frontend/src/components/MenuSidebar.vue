@@ -131,6 +131,24 @@
           <span>知识中心</span>
         </button>
 
+        <!-- 连接中心入口：一级菜单，仅租户管理员可见（手机端隐藏） -->
+        <button
+          v-if="isTenantAdmin && !props.isMobile"
+          @click="router.push(`/t/${tenantId}/connections`)"
+          :class="[
+            'w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors text-sm',
+            route.path === `/t/${tenantId}/connections`
+              ? 'bg-primary-50 text-primary-700 font-medium'
+              : 'text-gray-600 hover:bg-gray-50'
+          ]"
+        >
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <!-- 插头/连接：象征连接外部系统 -->
+            <path d="M9 7V3M15 7V3M9 21v-4M15 21v-4M5 12H3M21 12h-2M7 9h10a2 2 0 012 2v2a2 2 0 01-2 2H7a2 2 0 01-2-2v-2a2 2 0 012-2z" />
+          </svg>
+          <span>连接中心</span>
+        </button>
+
         <!-- 管理菜单 trigger：hover/click 触发右侧 flyout（仅租户管理员，手机端隐藏） -->
         <button
           v-if="isTenantAdmin && !props.isMobile"
