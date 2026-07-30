@@ -51,7 +51,7 @@
         <BaseSelect v-if="isAdmin" v-model="filters.subagent_id" size="sm" class="w-40">
           <option value="">全部智能体</option>
           <option value="main">主智能体</option>
-          <option v-for="sa in subagentOptions" :key="sa" :value="sa">{{ sa }}</option>
+          <option v-for="sa in subagentOptions" :key="sa.id" :value="sa.id">{{ sa.name }}</option>
         </BaseSelect>
         <BaseInput
           v-model="filters.keyword"
@@ -105,16 +105,10 @@
             <span class="text-xs text-muted">{{ sourceLabels[row.source as OutcomeSource] || row.source }}</span>
           </template>
           <template #subagent_id="{ row }">
-            <span class="text-xs text-muted">{{ row.subagent_id || '主智能体' }}</span>
+            <span class="text-xs text-muted">{{ getSubagentName(row.subagent_id) }}</span>
           </template>
           <template #channel="{ row }">
             <span class="text-xs text-muted">{{ channelLabels[row.channel as string] || row.channel || '-' }}</span>
-          </template>
-          <template #confidence="{ row }">
-            <span v-if="row.review_confidence !== null && row.review_confidence !== undefined" class="text-xs tabular-nums text-muted">
-              {{ (row.review_confidence * 100).toFixed(0) }}%
-            </span>
-            <span v-else class="text-xs text-muted">-</span>
           </template>
           <template #created_at="{ row }">{{ formatDate(row.created_at) }}</template>
           <template #actions="{ row }">
@@ -164,7 +158,7 @@
           </div>
           <div>
             <span class="text-muted">智能体：</span>
-            <span class="text-default">{{ detail.subagent_id || '主智能体' }}</span>
+            <span class="text-default">{{ getSubagentName(detail.subagent_id) }}</span>
           </div>
           <div>
             <span class="text-muted">渠道：</span>
@@ -178,17 +172,9 @@
             <span class="text-muted">文件名：</span>
             <span class="text-default">{{ detail.file_name }}</span>
           </div>
-          <div v-if="detail.file_id">
-            <span class="text-muted">文件 ID：</span>
-            <span class="font-mono text-xs text-default">{{ detail.file_id }}</span>
-          </div>
           <div v-if="detail.review_batch_id">
             <span class="text-muted">复盘批次：</span>
             <span class="font-mono text-xs text-default">{{ detail.review_batch_id }}</span>
-          </div>
-          <div v-if="detail.review_confidence !== null && detail.review_confidence !== undefined">
-            <span class="text-muted">置信度：</span>
-            <span class="text-default tabular-nums">{{ (detail.review_confidence * 100).toFixed(0) }}%</span>
           </div>
           <div>
             <span class="text-muted">会话 ID：</span>
@@ -250,7 +236,8 @@ import {
   type OutcomeSource,
   type OutcomeStats,
 } from '@/api/workOutcomes'
-import { formatShortDateTime as formatDate } from '@/utils/date'
+import { formatDateTimeWithSeconds as formatDate } from '@/utils/date'
+import { listSubagents } from '@/api/subagent'
 
 const { admin: tenantAdmin, isLoggedIn: tenantIsLoggedIn, logout: tenantLogout } = useTenantAuth()
 
@@ -293,10 +280,10 @@ const sourceLabels: Record<OutcomeSource, string> = {
 
 const channelLabels: Record<string, string> = {
   web: 'Web',
-  wecom: '企业微信',
+  wecom: '企微',
   dingtalk: '钉钉',
   feishu: '飞书',
-  wecom_kf: '微信客服',
+  wecom_kf: '企微客服',
   wecom_personal_rpa: '企微个人RPA',
 }
 
@@ -320,8 +307,7 @@ const columns = [
   { key: 'source', label: '来源', width: '100px' },
   { key: 'subagent_id', label: '智能体', width: '120px' },
   { key: 'channel', label: '渠道', width: '100px' },
-  { key: 'confidence', label: '置信度', width: '80px' },
-  { key: 'created_at', label: '创建时间', width: '160px' },
+  { key: 'created_at', label: '创建时间', width: '180px' },
   { key: 'actions', label: '操作', width: '140px' },
 ]
 
@@ -330,6 +316,7 @@ const total = ref(0)
 const stats = ref<OutcomeStats | null>(null)
 const detail = ref<WorkOutcome | null>(null)
 const showDetail = ref(false)
+const subagentNameMap = ref<Record<string, string>>({})
 const filters = ref({
   outcome_type: '',
   source: '',
@@ -342,10 +329,12 @@ const filters = ref({
 const { currentPage, pageSize, loading, seqNumber, handleSearch, refresh } =
   usePageContext(async () => { await loadOutcomes() })
 
-// 子智能体选项（从统计中提取）
+// 子智能体选项（从统计中提取，附带中文名）
 const subagentOptions = computed(() => {
   if (!stats.value) return []
-  return Object.keys(stats.value.by_subagent).filter(k => k !== 'main')
+  return Object.keys(stats.value.by_subagent)
+    .filter(k => k !== 'main')
+    .map(id => ({ id, name: subagentNameMap.value[id] || id }))
 })
 
 // 概览卡片
@@ -414,6 +403,26 @@ async function loadStats() {
   }
 }
 
+// 加载子智能体中文名映射，用于列表/详情/筛选框显示
+async function loadSubagentNames() {
+  try {
+    const res = await listSubagents()
+    const map: Record<string, string> = {}
+    for (const sa of res.data) {
+      map[sa.agent_id] = sa.display_name || sa.instance_name || sa.name
+    }
+    subagentNameMap.value = map
+  } catch (e: any) {
+    console.error('加载子智能体列表失败:', e)
+  }
+}
+
+// 智能体 ID -> 中文名；空 ID 表示主智能体；映射不到时回退显示 ID
+function getSubagentName(id: string | null | undefined): string {
+  if (!id) return '主智能体'
+  return subagentNameMap.value[id] || id
+}
+
 function resetFilters() {
   filters.value = {
     outcome_type: '',
@@ -455,5 +464,6 @@ async function confirmRunReview() {
 
 onMounted(() => {
   loadOutcomes()
+  loadSubagentNames()
 })
 </script>
