@@ -86,91 +86,36 @@
       <!-- 租户模式菜单 -->
       <template v-if="isTenantMode">
 
-        <!-- 经验中心（可折叠，所有租户用户可见） -->
-        <div>
-          <button
-            @click="isExperienceCenterExpanded = !isExperienceCenterExpanded"
-            class="w-full flex items-center justify-between gap-3 px-3 py-2.5 rounded-lg transition-colors text-sm text-gray-600 hover:bg-gray-50"
-          >
-            <div class="flex items-center gap-3">
-              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-                <!-- 奖杯：象征工作成果与经验沉淀 -->
-                <path d="M6 9V4h12v5a6 6 0 01-12 0z" />
-                <path d="M4 4h2M18 4h2M9 4v5a3 3 0 006 0V4M12 15v6M9 21h6" />
-              </svg>
-              <span>经验中心</span>
-            </div>
-            <svg
-              :class="['w-4 h-4 transition-transform', isExperienceCenterExpanded ? 'rotate-180' : '']"
-              fill="none" stroke="currentColor" viewBox="0 0 24 24"
-            >
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
-            </svg>
-          </button>
-
-          <!-- 经验中心子菜单 -->
-          <div v-show="isExperienceCenterExpanded" class="ml-4 mt-1 space-y-1">
-            <button
-              v-if="tenantId"
-              @click="router.push(`/t/${tenantId}/daily-report`)"
-              :class="[
-                'w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-sm',
-                route.path === `/t/${tenantId}/daily-report`
-                  ? 'bg-primary-50 text-primary-700 font-medium'
-                  : 'text-gray-600 hover:bg-gray-50'
-              ]"
-            >
-              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-                <!-- 文档+星标，象征报告 -->
-                <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
-                <path d="M14 2v6h6M9 13h6M9 17h4" />
-                <path d="M19 17l1.5 1.5L23 16" />
-              </svg>
-              <span>工作日报</span>
-            </button>
-
-            <button
-              v-if="tenantId"
-              @click="router.push(`/t/${tenantId}/work-outcomes`)"
-              :class="[
-                'w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-sm',
-                route.path === `/t/${tenantId}/work-outcomes`
-                  ? 'bg-primary-50 text-primary-700 font-medium'
-                  : 'text-gray-600 hover:bg-gray-50'
-              ]"
-            >
-              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-                <!-- 勾选+文件，象征已完成的成果 -->
-                <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
-                <path d="M14 2v6h6" />
-                <path d="M9 14l2 2 4-4" />
-              </svg>
-              <span>工作成果</span>
-            </button>
-
-            <!-- 外部接待客户：仅租户管理员可见（沿用原「管理菜单」权限） -->
-            <button
-              v-if="tenantId && isTenantAdmin"
-              @click="router.push(`/t/${tenantId}/external-customers`)"
-              :class="[
-                'w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-sm',
-                route.path === `/t/${tenantId}/external-customers`
-                  ? 'bg-primary-50 text-primary-700 font-medium'
-                  : 'text-gray-600 hover:bg-gray-50'
-              ]"
-            >
-              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-                <!-- 人形：客户接待 -->
-                <path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2M12 11a4 4 0 100-8 4 4 0 000 8z" />
-              </svg>
-              <span>外部接待客户</span>
-            </button>
-          </div>
-        </div>
-
-        <!-- 知识中心入口：一级菜单，仅租户管理员可见（从原「管理菜单」中迁出） -->
+        <!-- 经验中心 trigger：hover/click 触发右侧 flyout（手机端隐藏） -->
         <button
-          v-if="isTenantAdmin"
+          v-if="!props.isMobile"
+          :ref="el => setTriggerRef('experience', el)"
+          @mouseenter="openFlyout('experience')"
+          @mouseleave="scheduleClose()"
+          @click="toggleFlyout('experience')"
+          :aria-expanded="activeFlyout === 'experience'"
+          class="w-full flex items-center justify-between gap-3 px-3 py-2.5 rounded-lg transition-colors text-sm text-gray-600 hover:bg-gray-50"
+        >
+          <div class="flex items-center gap-3">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <!-- 奖杯：象征工作成果与经验沉淀 -->
+              <path d="M6 9V4h12v5a6 6 0 01-12 0z" />
+              <path d="M4 4h2M18 4h2M9 4v5a3 3 0 006 0V4M12 15v6M9 21h6" />
+            </svg>
+            <span>经验中心</span>
+          </div>
+          <!-- Chevron 默认指向右，active 时 rotate-90 转为向下，提示「展开方向是右侧」 -->
+          <svg
+            :class="['w-4 h-4 transition-transform', activeFlyout === 'experience' ? 'rotate-90' : '']"
+            fill="none" stroke="currentColor" viewBox="0 0 24 24"
+          >
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+          </svg>
+        </button>
+
+        <!-- 知识中心入口：一级菜单，仅租户管理员可见（手机端隐藏） -->
+        <button
+          v-if="isTenantAdmin && !props.isMobile"
           @click="router.push(`/t/${tenantId}/knowledge`)"
           :class="[
             'w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors text-sm',
@@ -186,46 +131,30 @@
           <span>知识中心</span>
         </button>
 
-        <!-- 管理菜单（可折叠，仅租户管理员可见） -->
-        <div v-if="isTenantAdmin" class="hidden md:block">
-          <!-- 管理菜单标题 -->
-          <button
-            @click="isAdminMenuExpanded = !isAdminMenuExpanded"
-            class="w-full flex items-center justify-between gap-3 px-3 py-2.5 rounded-lg transition-colors text-sm text-gray-600 hover:bg-gray-50"
-          >
-            <div class="flex items-center gap-3">
-              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                <path d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-              </svg>
-              <span>管理菜单</span>
-            </div>
-            <svg
-              :class="['w-4 h-4 transition-transform', isAdminMenuExpanded ? 'rotate-180' : '']"
-              fill="none" stroke="currentColor" viewBox="0 0 24 24"
-            >
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+        <!-- 管理菜单 trigger：hover/click 触发右侧 flyout（仅租户管理员，手机端隐藏） -->
+        <button
+          v-if="isTenantAdmin && !props.isMobile"
+          :ref="el => setTriggerRef('admin', el)"
+          @mouseenter="openFlyout('admin')"
+          @mouseleave="scheduleClose()"
+          @click="toggleFlyout('admin')"
+          :aria-expanded="activeFlyout === 'admin'"
+          class="w-full flex items-center justify-between gap-3 px-3 py-2.5 rounded-lg transition-colors text-sm text-gray-600 hover:bg-gray-50"
+        >
+          <div class="flex items-center gap-3">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+              <path d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
             </svg>
-          </button>
-
-          <!-- 管理子菜单 -->
-          <div v-show="isAdminMenuExpanded" class="ml-4 mt-1 space-y-1">
-            <button
-              v-for="item in adminSubMenuItems"
-              :key="item.path"
-              @click="router.push(item.path)"
-              :class="[
-                'w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-sm',
-                route.path === item.path
-                  ? 'bg-primary-50 text-primary-700 font-medium'
-                  : 'text-gray-600 hover:bg-gray-50'
-              ]"
-            >
-              <MenuIcon :icon="item.icon" />
-              <span>{{ item.label }}</span>
-            </button>
+            <span>管理菜单</span>
           </div>
-        </div>
+          <svg
+            :class="['w-4 h-4 transition-transform', activeFlyout === 'admin' ? 'rotate-90' : '']"
+            fill="none" stroke="currentColor" viewBox="0 0 24 24"
+          >
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+          </svg>
+        </button>
       </template>
 
       <!-- 演示模式菜单 -->
@@ -266,51 +195,38 @@
       </template>
     </div>
 
-    <!-- 业务数据分组 - 按数字员工分组展示 -->
-    <!-- 手机端暂时隐藏：业务数据页面尚未适配手机端 -->
-    <div v-if="groupedBusinessPages.length > 0 && !props.isMobile" class="flex-shrink-0 p-2 overflow-y-auto" style="max-height: 35%">
+    <!-- 业务数据 - 扁平 trigger 列表（每个有业务页的数字员工是一级菜单项） -->
+    <!-- 手机端暂时隐藏：业务数据页面尚未适配手机端；flyout 在 isMobile=true 时不会触发 -->
+    <div v-if="groupedBusinessPages.length > 0 && !props.isMobile" class="flex-shrink-0 p-2">
       <div class="flex-shrink-0 px-2 py-2">
         <div class="flex items-center gap-3">
           <div class="flex-1 h-px bg-gradient-to-r from-transparent via-gray-300 to-transparent"></div>
         </div>
       </div>
 
-      <!-- 各数字员工业务菜单分组 -->
+      <!-- 各数字员工业务菜单 trigger 列表（flyout 触发器） -->
       <div class="space-y-1">
-        <div v-for="group in groupedBusinessPages" :key="group.subagent.agent_id">
-          <button
-            @click="toggleGroup(group.subagent.agent_id)"
-            class="w-full flex items-center justify-between gap-3 px-3 py-2.5 rounded-lg transition-colors text-sm text-gray-600 hover:bg-gray-50"
-          >
-            <div class="flex items-center gap-3">
-              <MenuIcon icon="M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z" />
-              <span>{{ getSubagentDisplayName(group.subagent) }}</span>
-            </div>
-            <svg
-              :class="['w-4 h-4 transition-transform', isGroupExpanded(group.subagent.agent_id) ? 'rotate-180' : '']"
-              fill="none" stroke="currentColor" viewBox="0 0 24 24"
-            >
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
-            </svg>
-          </button>
-
-          <div v-show="isGroupExpanded(group.subagent.agent_id)" class="mt-1 ml-4 space-y-1">
-            <div
-              v-for="page in group.pages"
-              :key="page.id"
-              :class="[
-                'w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-sm cursor-pointer',
-                route.path === page.route
-                  ? 'bg-primary-50 text-primary-700 font-medium'
-                  : 'text-gray-600 hover:bg-gray-50'
-              ]"
-              @click="navigateToBusinessPage(page, group.subagent.agent_id)"
-            >
-              <BusinessPageIcon :title="page.title" />
-              <span>{{ page.title }}</span>
-            </div>
+        <button
+          v-for="group in groupedBusinessPages"
+          :key="group.subagent.agent_id"
+          :ref="el => setTriggerRef(group.subagent.agent_id, el)"
+          @mouseenter="openFlyout(group.subagent.agent_id)"
+          @mouseleave="scheduleClose()"
+          @click="toggleFlyout(group.subagent.agent_id)"
+          :aria-expanded="activeFlyout === group.subagent.agent_id"
+          class="w-full flex items-center justify-between gap-3 px-3 py-2.5 rounded-lg transition-colors text-sm text-gray-600 hover:bg-gray-50"
+        >
+          <div class="flex items-center gap-3">
+            <MenuIcon icon="M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z" />
+            <span>{{ group.subagent.display_name || group.subagent.name }}</span>
           </div>
-        </div>
+          <svg
+            :class="['w-4 h-4 transition-transform', activeFlyout === group.subagent.agent_id ? 'rotate-90' : '']"
+            fill="none" stroke="currentColor" viewBox="0 0 24 24"
+          >
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+          </svg>
+        </button>
       </div>
     </div>
 
@@ -530,8 +446,9 @@
 
         <div class="my-1 border-t border-gray-100"></div>
 
-        <!-- 我的定时任务 -->
+        <!-- 我的定时任务（手机端隐藏：定时任务页面未适配手机端） -->
         <button
+          v-if="!props.isMobile"
           @click="showUserMenu = false; openScheduledTasks()"
           class="w-full flex items-center gap-3 px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 transition-colors"
         >
@@ -541,8 +458,9 @@
           <span>我的定时任务</span>
         </button>
 
-        <!-- 设置 -->
+        <!-- 设置（手机端隐藏：设置弹窗未适配手机端） -->
         <button
+          v-if="!props.isMobile"
           @click="showUserMenu = false; showSettingsDialog = true"
           class="w-full flex items-center gap-3 px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 transition-colors"
         >
@@ -618,6 +536,111 @@
     </div>
   </aside>
 
+  <!-- 二级菜单 Flyout 面板（Teleport to body，单实例，由 activeFlyout 切换内容） -->
+  <!-- 经验中心/管理菜单/业务数据（每个数字员工）的二级菜单统一在此浮出，不占纵向空间 -->
+  <Teleport to="body">
+    <div
+      v-if="activeFlyout"
+      ref="panelRef"
+      :style="flyoutStyle"
+      class="fixed z-[45] w-56 bg-white border border-gray-200 rounded-lg shadow-lg py-1 max-h-[80vh] overflow-y-auto"
+      @mouseenter="cancelClose()"
+      @mouseleave="scheduleClose()"
+    >
+      <!-- 经验中心子菜单 -->
+      <template v-if="activeFlyout === 'experience'">
+        <button
+          v-if="tenantId"
+          @click="router.push(`/t/${tenantId}/daily-report`); closeFlyout()"
+          :class="[
+            'w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-sm',
+            route.path === `/t/${tenantId}/daily-report`
+              ? 'bg-primary-50 text-primary-700 font-medium'
+              : 'text-gray-600 hover:bg-gray-50'
+          ]"
+        >
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+            <path d="M14 2v6h6M9 13h6M9 17h4" />
+            <path d="M19 17l1.5 1.5L23 16" />
+          </svg>
+          <span>工作日报</span>
+        </button>
+
+        <button
+          v-if="tenantId"
+          @click="router.push(`/t/${tenantId}/work-outcomes`); closeFlyout()"
+          :class="[
+            'w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-sm',
+            route.path === `/t/${tenantId}/work-outcomes`
+              ? 'bg-primary-50 text-primary-700 font-medium'
+              : 'text-gray-600 hover:bg-gray-50'
+          ]"
+        >
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+            <path d="M14 2v6h6" />
+            <path d="M9 14l2 2 4-4" />
+          </svg>
+          <span>工作成果</span>
+        </button>
+
+        <!-- 外部接待客户：仅租户管理员可见 -->
+        <button
+          v-if="tenantId && isTenantAdmin"
+          @click="router.push(`/t/${tenantId}/external-customers`); closeFlyout()"
+          :class="[
+            'w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-sm',
+            route.path === `/t/${tenantId}/external-customers`
+              ? 'bg-primary-50 text-primary-700 font-medium'
+              : 'text-gray-600 hover:bg-gray-50'
+          ]"
+        >
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2M12 11a4 4 0 100-8 4 4 0 000 8z" />
+          </svg>
+          <span>外部接待客户</span>
+        </button>
+      </template>
+
+      <!-- 管理子菜单 -->
+      <template v-else-if="activeFlyout === 'admin'">
+        <button
+          v-for="item in adminSubMenuItems"
+          :key="item.path"
+          @click="router.push(item.path); closeFlyout()"
+          :class="[
+            'w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-sm',
+            route.path === item.path
+              ? 'bg-primary-50 text-primary-700 font-medium'
+              : 'text-gray-600 hover:bg-gray-50'
+          ]"
+        >
+          <MenuIcon :icon="item.icon" />
+          <span>{{ item.label }}</span>
+        </button>
+      </template>
+
+      <!-- 业务数据子菜单（按 agent_id 找回 pages） -->
+      <template v-else>
+        <div
+          v-for="page in pagesForAgent(activeFlyout!)"
+          :key="page.id"
+          :class="[
+            'w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-sm cursor-pointer',
+            route.path === page.route
+              ? 'bg-primary-50 text-primary-700 font-medium'
+              : 'text-gray-600 hover:bg-gray-50'
+          ]"
+          @click="navigateToBusinessPage(page, activeFlyout!); closeFlyout()"
+        >
+          <BusinessPageIcon :title="page.title" />
+          <span>{{ page.title }}</span>
+        </div>
+      </template>
+    </div>
+  </Teleport>
+
   <!-- 会话右击菜单（重命名/删除） -->
   <div
     v-if="sessionContextMenu.visible"
@@ -659,8 +682,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, reactive } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
+import { onClickOutside } from '@vueuse/core'
 import { useSession } from '@/composables/useSession'
 import { useDemoAuth } from '@/composables/useDemoAuth'
 import { useTenantAuth } from '@/composables/useTenantAuth'
@@ -764,31 +788,72 @@ const isCreating = ref(false)
 const showRenameModal = ref(false)
 const renameInput = ref('')
 const renamingSessionId = ref<string | null>(null)
-const isAdminMenuExpanded = ref(true)
-const isExperienceCenterExpanded = ref(true)
 
+// ============== Flyout 二级菜单状态机 ==============
+// 单一 activeFlyout 互斥：值域 'experience' | 'admin' | agent_id | null
+// hover 即打开、移出延迟 150ms 关闭；click 也切换；路由变化/收起态自动关
+const activeFlyout = ref<string | null>(null)
+// trigger 元素引用，用于 onClickOutside ignore 和 flyout 定位
+const triggerRefs = new Map<string, HTMLElement>()
+const panelRef = ref<HTMLElement | null>(null)
+let closeTimer: ReturnType<typeof setTimeout> | undefined
 
-
-// 业务菜单分组展开状态（按数字员工 agent_id）
-const expandedGroups = ref<Set<string>>(new Set())
-
-function isGroupExpanded(agentId: string): boolean {
-  return expandedGroups.value.has(agentId)
+function setTriggerRef(key: string, el: any) {
+  // Vue 3 :ref 回调，el 可能为 null（卸载时）
+  if (el) triggerRefs.set(key, el as HTMLElement)
+  else triggerRefs.delete(key)
 }
 
-function toggleGroup(agentId: string) {
-  const newSet = new Set(expandedGroups.value)
-  if (newSet.has(agentId)) {
-    newSet.delete(agentId)
-  } else {
-    newSet.add(agentId)
+// flyout 定位：从 trigger 元素 getBoundingClientRect 取 right+4 作为 left，top 对齐
+const flyoutStyle = reactive<Record<string, string>>({})
+function updateFlyoutStyle(key: string) {
+  const el = triggerRefs.get(key)
+  if (!el) return
+  const rect = el.getBoundingClientRect()
+  flyoutStyle.left = `${rect.right + 4}px`
+  flyoutStyle.top = `${rect.top}px`
+}
+
+function openFlyout(key: string) {
+  // 收起态/移动端屏蔽（移动端走抽屉模式，不应触发 flyout）
+  if (props.isCollapsed || props.isMobile) return
+  if (closeTimer) { clearTimeout(closeTimer); closeTimer = undefined }
+  // 先定位再切换 activeFlyout，避免初始渲染位置跳动
+  updateFlyoutStyle(key)
+  activeFlyout.value = key
+}
+
+function closeFlyout() {
+  activeFlyout.value = null
+}
+
+function toggleFlyout(key: string) {
+  activeFlyout.value === key ? closeFlyout() : openFlyout(key)
+}
+
+function scheduleClose() {
+  // 150ms 延迟关闭，避免鼠标从 trigger 移到 flyout 过程中误关
+  closeTimer = setTimeout(closeFlyout, 150)
+}
+
+function cancelClose() {
+  if (closeTimer) { clearTimeout(closeTimer); closeTimer = undefined }
+}
+
+// 点击外部关闭：handler 内手动检查 trigger 路径，避免点击 trigger 自身被判定为外部导致抖动
+// （onClickOutside v10 的 ignore 选项类型为固定数组，不接受函数，也不响应 triggerRefs 动态变化）
+onClickOutside(panelRef, (event) => {
+  const path = event.composedPath()
+  for (const el of triggerRefs.values()) {
+    if (path.includes(el)) return
   }
-  expandedGroups.value = newSet
-}
+  closeFlyout()
+})
 
-function getSubagentDisplayName(s: SubagentListItem): string {
-  return s.display_name || s.name || ''
-}
+// 路由变化关闭（点击子项跳转后即使 closeFlyout 没显式调，路由 watch 也会兜底）
+watch(() => route.path, closeFlyout)
+// 收起态自动关闭
+watch(() => props.isCollapsed, c => c && closeFlyout())
 
 // 判断是否为租户模式（路由以 /t/ 开头）
 const isTenantMode = computed(() => route.path.startsWith('/t/'))
@@ -942,48 +1007,20 @@ const groupedBusinessPages = computed(() => {
     }))
 })
 
-// 根据当前路由决定哪个分组应该展开
-const expandedSubagentId = computed<string | null>(() => {
-  const subagentId = props.currentSubagentId || currentSubagent.value
-  if (!subagentId) return null
-  const matched = filteredAvailableSubagents.value.find(
-    (s: SubagentListItem) => s.agent_id === subagentId || s.subagent_type === subagentId
-  )
-  return matched?.agent_id || null
-})
-
 // 判断当前是否在对话界面（路由包含 /chat/）
+// navigateToBusinessPage 据此决定：对话界面 window.open 新页（带 expand_menu 参数）；非对话界面 router.push 本页
 const isChatPage = computed(() => {
   return route.path.includes('/chat/')
 })
 
-// 监听当前数字员工变化，重置展开状态
-// 只在对话界面时自动展开/收缩业务数据菜单；非对话界面不做自动展开/收缩动作
-watch(() => currentSubagent.value, () => {
-  // 非对话界面，保留用户手动展开/收缩状态，不做自动调整
-  if (!isChatPage.value) {
-    return
-  }
-  const newSet = new Set<string>()
-  const expandedId = expandedSubagentId.value
-  if (expandedId) {
-    newSet.add(expandedId)
-  }
-  expandedGroups.value = newSet
-}, { immediate: true })
-
-// 初始化时检查 URL 的 expand_menu 参数（新开业务数据页面时展开对应分组）
-onMounted(() => {
-  const expandMenu = route.query.expand_menu as string | undefined
-  if (expandMenu) {
-    const newSet = new Set(expandedGroups.value)
-    newSet.add(expandMenu)
-    expandedGroups.value = newSet
-  }
-})
+// 根据 agent_id 找回对应业务页列表（用于 flyout 渲染）
+function pagesForAgent(agentId: string): BusinessPage[] {
+  const group = groupedBusinessPages.value.find(g => g.subagent.agent_id === agentId)
+  return group?.pages ?? []
+}
 
 // 跳转到业务数据页面
-// 非对话界面：在本页打开；对话界面：新开页面并附带 expand_menu 参数以展开对应菜单
+// 非对话界面：在本页打开；对话界面：新开页面并附带 expand_menu 参数
 function navigateToBusinessPage(page: BusinessPage, agentId: string) {
   const path = isTenantMode.value && tenantId.value
     ? `/t/${tenantId.value}${page.route}`
