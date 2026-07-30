@@ -86,44 +86,104 @@
       <!-- 租户模式菜单 -->
       <template v-if="isTenantMode">
 
-        <!-- 工作日报入口：所有租户用户可见 -->
-        <button
-          v-if="tenantId"
-          @click="router.push(`/t/${tenantId}/daily-report`)"
-          :class="[
-            'w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors text-sm',
-            route.path === `/t/${tenantId}/daily-report`
-              ? 'bg-primary-50 text-primary-700 font-medium'
-              : 'text-gray-600 hover:bg-gray-50'
-          ]"
-        >
-          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-            <!-- 文档+星标，象征报告 -->
-            <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
-            <path d="M14 2v6h6M9 13h6M9 17h4" />
-            <path d="M19 17l1.5 1.5L23 16" />
-          </svg>
-          <span>工作日报</span>
-        </button>
+        <!-- 经验中心（可折叠，所有租户用户可见） -->
+        <div>
+          <button
+            @click="isExperienceCenterExpanded = !isExperienceCenterExpanded"
+            class="w-full flex items-center justify-between gap-3 px-3 py-2.5 rounded-lg transition-colors text-sm text-gray-600 hover:bg-gray-50"
+          >
+            <div class="flex items-center gap-3">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                <!-- 奖杯：象征工作成果与经验沉淀 -->
+                <path d="M6 9V4h12v5a6 6 0 01-12 0z" />
+                <path d="M4 4h2M18 4h2M9 4v5a3 3 0 006 0V4M12 15v6M9 21h6" />
+              </svg>
+              <span>经验中心</span>
+            </div>
+            <svg
+              :class="['w-4 h-4 transition-transform', isExperienceCenterExpanded ? 'rotate-180' : '']"
+              fill="none" stroke="currentColor" viewBox="0 0 24 24"
+            >
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
 
-        <!-- 工作成果入口：所有租户用户可见 -->
+          <!-- 经验中心子菜单 -->
+          <div v-show="isExperienceCenterExpanded" class="ml-4 mt-1 space-y-1">
+            <button
+              v-if="tenantId"
+              @click="router.push(`/t/${tenantId}/daily-report`)"
+              :class="[
+                'w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-sm',
+                route.path === `/t/${tenantId}/daily-report`
+                  ? 'bg-primary-50 text-primary-700 font-medium'
+                  : 'text-gray-600 hover:bg-gray-50'
+              ]"
+            >
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                <!-- 文档+星标，象征报告 -->
+                <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+                <path d="M14 2v6h6M9 13h6M9 17h4" />
+                <path d="M19 17l1.5 1.5L23 16" />
+              </svg>
+              <span>工作日报</span>
+            </button>
+
+            <button
+              v-if="tenantId"
+              @click="router.push(`/t/${tenantId}/work-outcomes`)"
+              :class="[
+                'w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-sm',
+                route.path === `/t/${tenantId}/work-outcomes`
+                  ? 'bg-primary-50 text-primary-700 font-medium'
+                  : 'text-gray-600 hover:bg-gray-50'
+              ]"
+            >
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                <!-- 勾选+文件，象征已完成的成果 -->
+                <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+                <path d="M14 2v6h6" />
+                <path d="M9 14l2 2 4-4" />
+              </svg>
+              <span>工作成果</span>
+            </button>
+
+            <!-- 外部接待客户：仅租户管理员可见（沿用原「管理菜单」权限） -->
+            <button
+              v-if="tenantId && isTenantAdmin"
+              @click="router.push(`/t/${tenantId}/external-customers`)"
+              :class="[
+                'w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-sm',
+                route.path === `/t/${tenantId}/external-customers`
+                  ? 'bg-primary-50 text-primary-700 font-medium'
+                  : 'text-gray-600 hover:bg-gray-50'
+              ]"
+            >
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                <!-- 人形：客户接待 -->
+                <path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2M12 11a4 4 0 100-8 4 4 0 000 8z" />
+              </svg>
+              <span>外部接待客户</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- 知识中心入口：一级菜单，仅租户管理员可见（从原「管理菜单」中迁出） -->
         <button
-          v-if="tenantId"
-          @click="router.push(`/t/${tenantId}/work-outcomes`)"
+          v-if="isTenantAdmin"
+          @click="router.push(`/t/${tenantId}/knowledge`)"
           :class="[
             'w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors text-sm',
-            route.path === `/t/${tenantId}/work-outcomes`
+            route.path === `/t/${tenantId}/knowledge`
               ? 'bg-primary-50 text-primary-700 font-medium'
               : 'text-gray-600 hover:bg-gray-50'
           ]"
         >
           <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-            <!-- 勾选+文件，象征已完成的成果 -->
-            <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
-            <path d="M14 2v6h6" />
-            <path d="M9 14l2 2 4-4" />
+            <!-- 书本：象征知识库 -->
+            <path d="M4 19.5A2.5 2.5 0 016.5 17H20M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z" />
           </svg>
-          <span>工作成果</span>
+          <span>知识中心</span>
         </button>
 
         <!-- 管理菜单（可折叠，仅租户管理员可见） -->
@@ -705,6 +765,7 @@ const showRenameModal = ref(false)
 const renameInput = ref('')
 const renamingSessionId = ref<string | null>(null)
 const isAdminMenuExpanded = ref(true)
+const isExperienceCenterExpanded = ref(true)
 
 
 
@@ -765,8 +826,6 @@ const adminSubMenuItems = computed(() => {
     { path: `${base}/channels`, label: '渠道配置', icon: 'M5 12.55a11 11 0 0114 0M1.42 9a16 16 0 0121.16 0M8.53 16.11a6 6 0 016.95 0M12 20h.01' },
     // 企微个人RPA：机器人
     { path: `${base}/wecom-personal-rpa`, label: '企微个人RPA', icon: 'M12 4v3M5 8h14a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2v-8a2 2 0 012-2zM9 13h.01M15 13h.01M9 17h6' },
-    // 知识中心：书本
-    { path: `${base}/knowledge`, label: '知识中心', icon: 'M4 19.5A2.5 2.5 0 016.5 17H20M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z' },
     // 企业设置：齿轮（简化版）
     { path: `${base}/settings`, label: '企业设置', icon: 'M12 8a4 4 0 100 8 4 4 0 000-8zM19.4 15a1.7 1.7 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.8-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1-1.5 1.7 1.7 0 00-1.8.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.8 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.5-1 1.7 1.7 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.8.3h0a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5h0a1.7 1.7 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.8v0a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z' },
     // 积分用量：柱状图
@@ -775,8 +834,6 @@ const adminSubMenuItems = computed(() => {
     { path: `${base}/recharge-records`, label: '充值记录', icon: 'M21 12a9 9 0 11-18 0 9 9 0 0118 0zM12 7v10M9 10h4.5a1.5 1.5 0 010 3H9' },
     // 回复风格：对话气泡
     { path: `${base}/reply-styles`, label: '回复风格', icon: 'M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z' },
-    // 外部接待客户：人形
-    { path: `${base}/external-customers`, label: '外部接待客户', icon: 'M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2M12 11a4 4 0 100-8 4 4 0 000 8z' },
   ]
 })
 
