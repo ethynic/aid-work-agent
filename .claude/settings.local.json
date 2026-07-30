@@ -81,7 +81,13 @@
       "WebFetch(domain:github.com)",
       "WebFetch(domain:pypi.org)",
       "WebFetch(domain:open.feishu.cn)",
-      "WebFetch(domain:open.dingtalk.com)"
+      "WebFetch(domain:open.dingtalk.com)",
+      "WebFetch(domain:www.anthropic.com)",
+      "WebFetch(domain:docs.n8n.io)",
+      "WebFetch(domain:www.coze.com)",
+      "WebFetch(domain:docs.dify.ai)",
+      "WebFetch(domain:appbuilder.cloud.baidu.com)",
+      "WebFetch(domain:dify.ai)"
     ]
   }
 }
