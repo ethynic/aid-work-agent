@@ -13,7 +13,8 @@ param(
     [string]$OcrCommand,
     [switch]$DisableOcr,
     [string]$ArtifactDirectory = (Join-Path $env:LOCALAPPDATA 'AidWorkAgent\wechat-souyisou-rpa\artifacts'),
-    [ValidateRange(500,30000)][int]$WaitMilliseconds = 2500
+    [ValidateRange(500,30000)][int]$WaitMilliseconds = 2500,
+    [ValidateRange(10000,60000)][int]$SearchReadyTimeoutMilliseconds = 15000
 )
 
 $ErrorActionPreference = 'Stop'
@@ -44,9 +45,25 @@ try {
         if ($inputObject.association_name) { $AssociationName = [string]$inputObject.association_name }
         if ($inputObject.person_name) { $PersonName = [string]$inputObject.person_name }
         if ($inputObject.limit) { $Limit = [math]::Min(10, [int]$inputObject.limit) }
+        if ($null -ne $inputObject.search_ready_timeout_milliseconds) {
+            try {
+                $stdinSearchReadyTimeout = [int]$inputObject.search_ready_timeout_milliseconds
+            } catch {
+                throw 'INVALID_SEARCH_READY_TIMEOUT'
+            }
+            if (
+                $stdinSearchReadyTimeout -lt 10000 -or
+                $stdinSearchReadyTimeout -gt 60000
+            ) { throw 'INVALID_SEARCH_READY_TIMEOUT' }
+            $SearchReadyTimeoutMilliseconds = $stdinSearchReadyTimeout
+        }
     }
     if ($Command -notin @('probe','open','search','collect')) { throw 'INVALID_COMMAND' }
     if ($Limit -lt 1 -or $Limit -gt 10) { throw 'INVALID_LIMIT' }
+    if (
+        $SearchReadyTimeoutMilliseconds -lt 10000 -or
+        $SearchReadyTimeoutMilliseconds -gt 60000
+    ) { throw 'INVALID_SEARCH_READY_TIMEOUT' }
     if ($Command -in @('search','collect')) { $query = New-SearchQuery $AssociationName $PersonName }
     if (-not $Execute) {
         Write-Result @{
@@ -200,13 +217,41 @@ public static class WechatSouyisouWin32 {
         } catch { throw 'CLIPBOARD_CAPTURE_FAILED' }
         $stage = 'search'
         [Windows.Forms.Clipboard]::SetText($query)
-        & $send @('CTRL','A') $pluginGuard; & $send @('CTRL','V') $pluginGuard; & $send @('ENTER') $pluginGuard; Start-Sleep -Milliseconds $WaitMilliseconds
-        [Windows.Forms.Clipboard]::Clear()
+        & $send @('CTRL','A') $pluginGuard
+        & $send @('CTRL','V') $pluginGuard
+        & $send @('ENTER') $pluginGuard
+        $stage = 'search_wait'
+        $readyDeadline = [DateTimeOffset]::UtcNow.AddMilliseconds(
+            $SearchReadyTimeoutMilliseconds
+        )
+        $readySamples = 0
+        $text = ''
+        $html = ''
+        do {
+            Start-Sleep -Milliseconds 500
+            if (-not (& $pluginGuard)) { throw 'FOREGROUND_LOST' }
+            [Windows.Forms.Clipboard]::Clear()
+            & $send @('CTRL','A') $pluginGuard
+            & $send @('CTRL','C') $pluginGuard
+            Start-Sleep -Milliseconds 200
+            $candidateText = [Windows.Forms.Clipboard]::GetText(
+                [Windows.Forms.TextDataFormat]::UnicodeText
+            )
+            if (Test-SearchResultReady $candidateText $query) {
+                $readySamples++
+                $text = $candidateText
+                $html = [Windows.Forms.Clipboard]::GetText(
+                    [Windows.Forms.TextDataFormat]::Html
+                )
+            } else {
+                $readySamples = 0
+            }
+        } while (
+            $readySamples -lt 2 -and
+            [DateTimeOffset]::UtcNow -lt $readyDeadline
+        )
+        if ($readySamples -lt 2) { throw 'SEARCH_RESULTS_TIMEOUT' }
         $stage = 'copy'
-        & $send @('CTRL','A') $pluginGuard; & $send @('CTRL','C') $pluginGuard; Start-Sleep -Milliseconds 250
-        $text = [Windows.Forms.Clipboard]::GetText([Windows.Forms.TextDataFormat]::UnicodeText)
-        $html = [Windows.Forms.Clipboard]::GetText([Windows.Forms.TextDataFormat]::Html)
-        if ([string]::IsNullOrWhiteSpace($text)) { throw 'RESULT_TEXT_EMPTY' }
         $links = @(Get-CfHtmlLinks $html)
         $judge = $null
         if ($UseProjectLlm) {
@@ -238,10 +283,31 @@ public static class WechatSouyisouWin32 {
         # 供审计区分“整页列表证据”和“前 10 条详情证据”。
         if ($judge) {
             $listJudge = Invoke-EvidenceJudge $text $AssociationName $PersonName $judge
+            $listJudgeStatus = if ($listJudge.matched) {
+                'matched'
+            } elseif ($listJudge.inconclusive) {
+                'inconclusive'
+            } else {
+                'not_matched'
+            }
+            $listJudgeReasonCode = if (
+                [string]$listJudge.reason -in @(
+                    'no_mobile_candidate',
+                    'judge_failed',
+                    'judge_schema_rejected',
+                    'judge_evidence_rejected'
+                )
+            ) {
+                [string]$listJudge.reason
+            } else {
+                "llm_$listJudgeStatus"
+            }
             if ($listJudge.matched) {
                 $detailArtifact = Protect-EvidenceArtifact $ArtifactDirectory @{
                     kind='collect_result';status='found';checked=0;failures=0
                     source='result_page_unbounded';list_artifact_id=$artifact.artifact_id
+                    list_judge_status=$listJudgeStatus
+                    list_judge_reason_code=$listJudgeReasonCode
                     records=@();found_result=$listJudge
                     captured_at=[DateTimeOffset]::Now.ToString('o')
                 }
@@ -294,6 +360,7 @@ public static class WechatSouyisouWin32 {
         $checked=0; $failures=0; $consecutiveFailures=0; $scrolls=0
         $seen=@{}; $seenDetailText=@{}; $records=@(); $foundJudge=$null
         $detailMayBeOpen=$false
+        $detailCloseInProgress=$false
         while ($checked -lt $Limit -and $scrolls -le 6 -and $consecutiveFailures -lt 2) {
             if (-not (& $pluginGuard)) { throw 'FOREGROUND_LOST' }
             $viewport = & $capture
@@ -426,6 +493,7 @@ public static class WechatSouyisouWin32 {
                 }
                 if ($consecutiveFailures -ge 2) {
                     $stage='close'
+                    $detailCloseInProgress=$true
                     & $send @('CTRL','W') $pluginGuard
                     Start-Sleep -Milliseconds ([math]::Min(2000,[math]::Max(800,$WaitMilliseconds)))
                     $stage='recover'
@@ -434,6 +502,7 @@ public static class WechatSouyisouWin32 {
                     Start-Sleep -Milliseconds 150
                     $returned=[Windows.Forms.Clipboard]::GetText([Windows.Forms.TextDataFormat]::UnicodeText)
                     if (-not (Test-ResultPageEvidence $returned $text)) { throw 'RECOVERY_FAILED' }
+                    $detailCloseInProgress=$false
                     $detailMayBeOpen=$false
                     break
                 }
@@ -445,6 +514,7 @@ public static class WechatSouyisouWin32 {
                     }
                     $failures++; $consecutiveFailures++
                     $stage = 'close'
+                    $detailCloseInProgress=$true
                     & $send @('CTRL','W') $pluginGuard
                     Start-Sleep -Milliseconds ([math]::Min(2000,[math]::Max(800,$WaitMilliseconds)))
                     $stage = 'recover'
@@ -453,6 +523,7 @@ public static class WechatSouyisouWin32 {
                     Start-Sleep -Milliseconds 150
                     $returned=[Windows.Forms.Clipboard]::GetText([Windows.Forms.TextDataFormat]::UnicodeText)
                     if (-not (Test-ResultPageEvidence $returned $text)) { throw 'RECOVERY_FAILED' }
+                    $detailCloseInProgress=$false
                     $detailMayBeOpen=$false
                     continue
                 }
@@ -463,6 +534,7 @@ public static class WechatSouyisouWin32 {
                         text_length=$detail.Length;detail_hash=$afterHash;ocr_hashes=$ocrHashes
                     }
                     $stage = 'close'
+                    $detailCloseInProgress=$true
                     & $send @('CTRL','W') $pluginGuard
                     Start-Sleep -Milliseconds ([math]::Min(2000,[math]::Max(800,$WaitMilliseconds)))
                     $stage = 'recover'
@@ -471,6 +543,7 @@ public static class WechatSouyisouWin32 {
                     Start-Sleep -Milliseconds 150
                     $returned=[Windows.Forms.Clipboard]::GetText([Windows.Forms.TextDataFormat]::UnicodeText)
                     if (-not (Test-ResultPageEvidence $returned $text)) { throw 'RECOVERY_FAILED' }
+                    $detailCloseInProgress=$false
                     $detailMayBeOpen=$false
                     continue
                 }
@@ -486,6 +559,7 @@ public static class WechatSouyisouWin32 {
                     ocr_region=if($ocrHashes.Count){'center_detail_0.26_0.08_0.74_0.95'}else{$null}
                 }
                 $stage = 'close'
+                $detailCloseInProgress=$true
                 & $send @('CTRL','W') $pluginGuard
                 Start-Sleep -Milliseconds ([math]::Min(2000,[math]::Max(800,$WaitMilliseconds)))
                 $stage = 'recover'
@@ -494,6 +568,7 @@ public static class WechatSouyisouWin32 {
                 Start-Sleep -Milliseconds 150
                 $returned=[Windows.Forms.Clipboard]::GetText([Windows.Forms.TextDataFormat]::UnicodeText)
                 if (-not (Test-ResultPageEvidence $returned $text)) { throw 'RECOVERY_FAILED' }
+                $detailCloseInProgress=$false
                 $detailMayBeOpen=$false
                 if ($judgeResult.inconclusive) { $consecutiveFailures=2; break }
                 if ($judgeResult.matched) { $foundJudge=$judgeResult; break }
@@ -513,6 +588,8 @@ public static class WechatSouyisouWin32 {
         $detailArtifact=Protect-EvidenceArtifact $ArtifactDirectory @{
             kind='collect_result';status=$status;checked=$checked;failures=$failures
             records=$records
+            list_judge_status=if ($listJudgeStatus){$listJudgeStatus}else{$null}
+            list_judge_reason_code=if ($listJudgeReasonCode){$listJudgeReasonCode}else{$null}
             found_result=if($foundJudge){$foundJudge}else{$null}
             captured_at=[DateTimeOffset]::Now.ToString('o')
         }
@@ -532,21 +609,34 @@ public static class WechatSouyisouWin32 {
             if (
                 $requiresSessionCleanup -and
                 -not $sessionCleanupCompleted -and
-                -not $sessionCleanupAttempted
+                -not $sessionCleanupAttempted -and
+                -not $detailCloseInProgress
             ) {
                 $stageBeforeCleanup = $stage
                 $stage = 'cleanup'
                 $sessionCleanupAttempted = $true
-                if ($detailMayBeOpen) {
-                    if (-not $send -or -not $pluginGuard -or -not (& $pluginGuard)) {
-                        throw 'SESSION_CLEANUP_FAILED'
-                    }
-                    & $send @('CTRL','W') $pluginGuard
-                    $detailMayBeOpen=$false
-                }
                 if (-not $cleanupSession) { throw 'SESSION_CLEANUP_FAILED' }
-                [void](Complete-WeixinPluginSession `
-                    ([ref]$sessionCleanupCompleted) $cleanupSession)
+                [void](Complete-WeixinLayeredSession `
+                    ([ref]$detailMayBeOpen) `
+                    ([ref]$sessionCleanupCompleted) {
+                        if (-not $send -or -not $pluginGuard -or -not (& $pluginGuard)) {
+                            throw 'SESSION_CLEANUP_FAILED'
+                        }
+                        & $send @('CTRL','W') $pluginGuard
+                    } {
+                        Start-Sleep -Milliseconds (
+                            [math]::Min(2000,[math]::Max(800,$WaitMilliseconds))
+                        )
+                        if (-not (& $pluginGuard)) { return $false }
+                        [Windows.Forms.Clipboard]::Clear()
+                        & $send @('CTRL','A') $pluginGuard
+                        & $send @('CTRL','C') $pluginGuard
+                        Start-Sleep -Milliseconds 200
+                        $returned = [Windows.Forms.Clipboard]::GetText(
+                            [Windows.Forms.TextDataFormat]::UnicodeText
+                        )
+                        return Test-ResultPageEvidence $returned $text
+                    } $cleanupSession)
                 # 清理成功时保留原业务失败阶段；只有清理自身失败才对外报告 cleanup。
                 $stage = $stageBeforeCleanup
             }
@@ -595,6 +685,8 @@ public static class WechatSouyisouWin32 {
                 } elseif ($artifact) {
                     $artifact.artifact_id
                 } else { $null }
+                list_judge_status=if ($listJudgeStatus){$listJudgeStatus}else{$null}
+                list_judge_reason_code=if ($listJudgeReasonCode){$listJudgeReasonCode}else{$null}
                 captured_at=[DateTimeOffset]::Now.ToString('o')
             }
             $failureArtifactRef = $failureArtifact.artifact_ref

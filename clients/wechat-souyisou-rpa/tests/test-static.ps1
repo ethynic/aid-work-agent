@@ -26,6 +26,17 @@ Assert (Test-JudgeResult $validJudgeResult '王承展 18511597486' '王承展') 
 Assert (-not (Test-JudgeResult ([pscustomobject]@{matched=$true;person_name='王承展';mobile='13900000000';evidence_quote='王承展 13900000000';confidence=1.0;reason='same line'}) '王承展 18511597486' '王承展')) 'hallucination rejected'
 Assert (-not (Test-JudgeResult ([pscustomobject]@{matched=$true;person_name='王承展';mobile='13900000000';evidence_quote='王承展 13900000000';confidence=1.0;reason='same line'}) "王承展`n其他人 13900000000" '王承展')) 'name binding required'
 Assert (-not (Test-JudgeResult ([pscustomobject]@{matched=$true;person_name='王承展';mobile='18511597486';evidence_quote='王承展 18511597486';confidence='1';reason='same line'}) '王承展 18511597486' '王承展')) 'judge confidence type is strict'
+$repeatedSemanticEvidence = @'
+结果一 刘甲、陈戟 联系电话 13912345678
+结果二 联系人陈乙、陈戟 电话 13912345678
+结果三 刘丙 陈戟 联系电话：13912345678
+'@
+$repeatedSemanticResult = [pscustomobject]@{
+    matched=$true;person_name='陈戟';mobile='13912345678'
+    evidence_quote='结果三 刘丙 陈戟 联系电话：13912345678'
+    confidence=0.91;reason='llm_repeated_independent_binding'
+}
+Assert (Test-JudgeResult $repeatedSemanticResult $repeatedSemanticEvidence '陈戟') 'semantic repeated evidence preserves exact quote contract'
 $malformedExternal = Invoke-EvidenceJudge '王承展 18511597486' '协会' '王承展' {
     [pscustomobject]@{matched=$false}
 }
@@ -42,6 +53,26 @@ $externalResult = & $externalJudge ([pscustomobject]@{
 })
 Assert ($externalResult.person_name -eq '王承展') 'external judge UTF-8 stdin/stdout'
 Assert (Test-JudgeResult $externalResult '王承展 18511597486' '王承展') 'external judge evidence validation'
+$strictUtf8Helper = Join-Path $PSScriptRoot 'utf8-stdin-helper.py'
+$strictUtf8Judge = New-ExternalJudge $pythonExecutable @($strictUtf8Helper) 5000
+$previousConsoleInputEncoding = [Console]::InputEncoding
+try {
+    [Console]::InputEncoding = [Text.Encoding]::ASCII
+    $strictUtf8Result = & $strictUtf8Judge ([pscustomobject]@{
+        association_name='中国缝制机械协会'
+        person_name='陈戟'
+        text="第一行`n第二行　陈戟 13912345678"
+    })
+    Assert ([Console]::InputEncoding.CodePage -eq [Text.Encoding]::ASCII.CodePage) 'external judge restores caller console encoding'
+} finally {
+    [Console]::InputEncoding = $previousConsoleInputEncoding
+}
+Assert ($strictUtf8Result.reason -eq 'utf8_roundtrip') 'external judge reads strict UTF-8 Chinese JSON independent of console encoding'
+Assert (Test-JudgeResult $strictUtf8Result "第一行`n第二行　陈戟 13912345678" '陈戟') 'UTF-8 roundtrip preserves newline full-width space and evidence'
+$libText = Get-Content -LiteralPath $lib -Encoding UTF8 -Raw
+Assert ($libText -match 'StandardInputEncoding') 'modern runtime stdin encoding is configured when supported'
+Assert ($libText -match '\$stdin\.BaseStream\.Write\(\$stdinBytes') 'legacy Windows PowerShell writes explicit UTF-8 stdin bytes'
+Assert ($libText -match '\[Console\]::InputEncoding\s*=\s*\$previousInputEncoding') 'legacy preamble compatibility restores console encoding'
 $timeoutJudge = New-ExternalJudge $pythonExecutable @('-c','import time;time.sleep(2)') 50
 $timeoutStopped = [Diagnostics.Stopwatch]::StartNew()
 $timeoutCode = $null
@@ -277,6 +308,22 @@ $resultPageSample = @'
 中国游艺机游乐园协会CAAPA
 '@
 Assert (Test-ResultPageEvidence $resultPageSample $resultPageSample) 'result page restored'
+Assert (Test-SearchResultReady $resultPageSample '协会 王承展 联系人') 'result page ready signal'
+$whitespaceQuery = "中国游艺设备游乐园协会$([char]0x3000)王承展`r`n联系人"
+Assert (
+    Test-SearchResultReady $resultPageSample $whitespaceQuery
+) 'query comparison tolerates Chinese display whitespace differences'
+Assert (-not (Test-SearchResultReady '协会 王承展 联系人' '协会 王承展 联系人')) 'query alone is not ready'
+$staleResultPageSample = $resultPageSample.Replace(
+    '中国游艺设备游乐园协会 王承展 联系人',
+    '中国轮胎循环利用协会 李四 联系人')
+Assert (-not (Test-SearchResultReady $staleResultPageSample '协会 王承展 联系人')) 'stale result for another query is not ready'
+$loadingPageSample = @'
+全部
+文章
+正在加载
+'@
+Assert (-not (Test-SearchResultReady $loadingPageSample '协会 王承展 联系人')) 'loading page is not ready'
 $dynamicResultPage = $resultPageSample.Replace(
     '会议联系人和参会安排详细说明',
     "会议联系人和参会安排详细说明`r`n刚刚更新")
@@ -397,7 +444,64 @@ $hiddenPluginResult = Close-WeixinPluginSession 222 111 {
 } {} {} 2
 Assert ($hiddenPluginWindows[222] -eq $true) 'hidden plugin hwnd may remain alive after visual close'
 Assert ($hiddenPluginResult.session_closed -eq $true) 'hidden plugin with restored main is a closed session'
-Assert (($hiddenPluginActivations -join ',') -eq '222,111') 'cleanup still verifies plugin identity then restores main'
+Assert (($hiddenPluginActivations -join ',') -eq '111') 'cleanup never reactivates an already hidden plugin hwnd'
+
+$layerEvents = @()
+$layerDetailOpen = $true
+$layerCompleted = $false
+$layerResult = Complete-WeixinLayeredSession `
+    ([ref]$layerDetailOpen) ([ref]$layerCompleted) {
+        $script:layerEvents += 'close_detail'
+    } {
+        $script:layerEvents += 'verify_list'
+        return $true
+    } {
+        $script:layerEvents += 'close_plugin'
+        [pscustomobject]@{session_closed=$true}
+    }
+Assert (($layerEvents -join ',') -eq 'close_detail,verify_list,close_plugin') 'detail cleanup proves list before plugin close'
+Assert (-not $layerDetailOpen -and $layerResult.session_closed) 'detail state closes exactly one layer at a time'
+
+$listEvents = @()
+$listDetailOpen = $false
+$listCompleted = $false
+[void](Complete-WeixinLayeredSession `
+    ([ref]$listDetailOpen) ([ref]$listCompleted) {
+        $script:listEvents += 'unexpected_detail_close'
+    } {
+        $script:listEvents += 'unexpected_list_verify'
+        return $true
+    } {
+        $script:listEvents += 'close_plugin'
+        [pscustomobject]@{session_closed=$true}
+    })
+Assert (($listEvents -join ',') -eq 'close_plugin') 'result list state sends only plugin close'
+
+$mainEvents = @()
+$mainDetailOpen = $false
+$mainCompleted = $true
+$mainResult = Complete-WeixinLayeredSession `
+    ([ref]$mainDetailOpen) ([ref]$mainCompleted) {
+        $script:mainEvents += 'unexpected_detail_close'
+    } {
+        $script:mainEvents += 'unexpected_list_verify'
+        return $true
+    } {
+        $script:mainEvents += 'unexpected_plugin_close'
+        [pscustomobject]@{session_closed=$true}
+    }
+Assert ($mainEvents.Count -eq 0 -and $mainResult.already_closed) 'main window terminal state sends no extra Ctrl+W'
+
+$failedLayerDetailOpen = $true
+$failedLayerCompleted = $false
+$failedLayerRejected = $false
+try {
+    Complete-WeixinLayeredSession `
+        ([ref]$failedLayerDetailOpen) ([ref]$failedLayerCompleted) {} {$false} {
+            throw 'plugin close must not run before list recovery'
+        }
+} catch { $failedLayerRejected = $_.Exception.Message -eq 'SESSION_CLEANUP_FAILED' }
+Assert $failedLayerRejected 'failed detail recovery blocks plugin Ctrl+W'
 
 $completed = $false
 $cleanupCalls = 0
@@ -446,6 +550,22 @@ try {
     } {$true} {$true} {222} {$true} {} {} {} 1
 } catch { $closeTimeoutRejected = $_.Exception.Message -eq 'SESSION_CLEANUP_FAILED' }
 Assert $closeTimeoutRejected 'cleanup close timeout is fatal'
+
+$wrongForegroundRejected = $false
+try {
+    Close-WeixinPluginSession 222 111 {
+        param($h)
+        if ($h -eq 222) { $validPluginIdentity } else { $validMainIdentity }
+    } {$true} {
+        param($h)
+        if ($h -eq 222) { $false } else { $true }
+    } {333} {
+        param($h)
+        # Simulate an unrelated trusted-looking plugin retaining foreground.
+        return $true
+    } {} {} {} 1
+} catch { $wrongForegroundRejected = $_.Exception.Message -eq 'SESSION_CLEANUP_FAILED' }
+Assert $wrongForegroundRejected 'hidden plugin cleanup rejects wrong foreground hwnd'
 
 $missingMainRejected = $false
 $missingMainPluginExists = $true
@@ -496,14 +616,19 @@ $detailReturnIndex = $entryCleanupText.IndexOf(
     "& `$send @('CTRL','W') `$pluginGuard",
     $strictFinallyStart,
     [StringComparison]::Ordinal)
-$pluginCloseIndex = $entryCleanupText.IndexOf(
-    'Complete-WeixinPluginSession',
+$detailVerifyIndex = $entryCleanupText.IndexOf(
+    'Test-ResultPageEvidence $returned $text',
     $detailReturnIndex,
+    [StringComparison]::Ordinal)
+$pluginCloseIndex = $entryCleanupText.IndexOf(
+    '} $cleanupSession)',
+    $detailVerifyIndex,
     [StringComparison]::Ordinal)
 Assert (
     $strictFinallyStart -ge 0 -and
     $detailReturnIndex -gt $strictFinallyStart -and
-    $pluginCloseIndex -gt $detailReturnIndex
+    $detailVerifyIndex -gt $detailReturnIndex -and
+    $pluginCloseIndex -gt $detailVerifyIndex
 ) 'open detail returns to result list before plugin session closes'
 $probeBranchIndex = $entryCleanupText.IndexOf(
     "if (`$Command -eq 'probe')",
@@ -680,13 +805,28 @@ Assert ($entryText -match "kind='result_page_unbounded'") 'unbounded list artifa
 Assert ($entryText -match "reason='screenshot_unchanged'") 'click failure metadata recorded'
 Assert ($entryText -match "reason='detail_evidence_invalid'") 'invalid detail metadata recorded'
 Assert ($entryText -match 'text_length=\$detail.Length') 'failure metadata keeps length, not body'
+Assert ($entryText -match 'list_judge_status=') 'list judge status retained in encrypted diagnostics'
+Assert ($entryText -match 'list_judge_reason_code=') 'list judge safe reason code retained in encrypted diagnostics'
+Assert (
+    $entryText -match "source='result_page_unbounded';list_artifact_id=\`$artifact\.artifact_id\s+list_judge_status=\`$listJudgeStatus\s+list_judge_reason_code=\`$listJudgeReasonCode"
+) 'direct list hit artifact retains safe judge diagnostics'
+Assert ($entryText -match "source='result_page_unbounded'") 'found list result retains evidence source contract'
 Assert ($entryText -match 'Test-NewOcrViewportHash \$ocrHashes \$candidateOcrHash') 'duplicate ocr viewport stops'
 Assert ($entryText -match "'locator_read'") 'locator read diagnostic stage'
 Assert ($entryText -match "'WINDOW_RECT_FAILED'") 'window rect distinct error'
 Assert ($entryText -match 'Complete-WeixinPluginSession') 'search and collect use strict cleanup helper'
 Assert ($entryText -match '\$sessionCleanupAttempted\s*=\s*\$true') 'cleanup attempt is recorded before execution'
 Assert ($entryText -match '-not \$sessionCleanupAttempted') 'failed explicit cleanup is not retried in finally'
+Assert ($entryText -match '\$detailCloseInProgress\s*=\s*\$true') 'detail close is marked before Ctrl+W'
+Assert ($entryText -match '-not \$detailCloseInProgress') 'failed detail recovery is not retried in finally'
 Assert ($entryText -match 'session_closed=') 'successful session result reports closure'
 Assert ($entryText -match "'SESSION_CLEANUP_FAILED'") 'cleanup failure blocks next batch item'
+Assert ($entryText -match '\[ValidateRange\(10000,60000\)\]\[int\]\$SearchReadyTimeoutMilliseconds\s*=\s*15000') 'slow network readiness timeout defaults above ten seconds'
+Assert ($entryText -match '\$null\s+-ne\s+\$inputObject\.search_ready_timeout_milliseconds') 'stdin zero timeout reaches explicit range validation'
+Assert ($entryText -match "catch\s*\{\s*throw 'INVALID_SEARCH_READY_TIMEOUT'\s*\}") 'stdin timeout conversion errors use stable code'
+Assert ($entryText -match '\$stdinSearchReadyTimeout\s+-lt\s+10000') 'stdin timeout validates before assigning validated parameter'
+Assert ($entryText -match 'Test-SearchResultReady\s+\$candidateText\s+\$query') 'search readiness uses copied result signal'
+Assert ($entryText -match '\$readySamples\s+-lt\s+2') 'search readiness requires stable repeated evidence'
+Assert ($entryText -match "'SEARCH_RESULTS_TIMEOUT'") 'unready search fails explicitly before evidence'
 Assert ((Get-Content -Raw -LiteralPath $lib) -match "'LOCATOR_POINTS_INVALID'") 'invalid points distinct error'
-Write-Output '{"ok":true,"tests":161}'
+Write-Output '{"ok":true,"tests":163}'

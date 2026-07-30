@@ -50,7 +50,7 @@ function Close-WeixinPluginSession {
         [Parameter(Mandatory)][scriptblock]$KeyEvent,
         [Parameter(Mandatory)][scriptblock]$Pause,
         [Parameter(Mandatory)][scriptblock]$SleepMilliseconds,
-        [int]$PollAttempts = 20
+        [int]$PollAttempts = 50
     )
     try {
         $pluginExists = [bool](& $IsWindow $PluginHwnd)
@@ -64,29 +64,29 @@ function Close-WeixinPluginSession {
             ) {
                 throw 'PLUGIN_IDENTITY_INVALID'
             }
-            if (-not (& $ActivateWindow $PluginHwnd)) { throw 'PLUGIN_ACTIVATION_FAILED' }
-            $pluginGuard = {
-                if ([int64](& $GetForegroundHwnd) -ne $PluginHwnd) { return $false }
-                $identity = & $GetWindowIdentity $PluginHwnd
-                return $null -ne $identity -and
-                    [int64]$identity.Hwnd -eq $PluginHwnd -and
-                    (Test-WeixinForegroundIdentity $identity $MainHwnd)
-            }
-            Invoke-SafeKeyChord @('CTRL','W') $KeyEvent $Pause $pluginGuard
             $pluginClosed = $false
-            $pluginHidden = $false
-            for ($attempt = 0; $attempt -lt $PollAttempts; $attempt++) {
-                if (
-                    -not [bool](& $IsWindow $PluginHwnd)
-                ) {
-                    $pluginClosed = $true
-                    break
+            $pluginHidden = -not [bool](& $IsWindowVisible $PluginHwnd)
+            if (-not $pluginHidden) {
+                if (-not (& $ActivateWindow $PluginHwnd)) { throw 'PLUGIN_ACTIVATION_FAILED' }
+                $pluginGuard = {
+                    if ([int64](& $GetForegroundHwnd) -ne $PluginHwnd) { return $false }
+                    $identity = & $GetWindowIdentity $PluginHwnd
+                    return $null -ne $identity -and
+                        [int64]$identity.Hwnd -eq $PluginHwnd -and
+                        (Test-WeixinForegroundIdentity $identity $MainHwnd)
                 }
-                if (-not [bool](& $IsWindowVisible $PluginHwnd)) {
-                    $pluginHidden = $true
-                    break
+                Invoke-SafeKeyChord @('CTRL','W') $KeyEvent $Pause $pluginGuard
+                for ($attempt = 0; $attempt -lt $PollAttempts; $attempt++) {
+                    if (-not [bool](& $IsWindow $PluginHwnd)) {
+                        $pluginClosed = $true
+                        break
+                    }
+                    if (-not [bool](& $IsWindowVisible $PluginHwnd)) {
+                        $pluginHidden = $true
+                        break
+                    }
+                    & $SleepMilliseconds 100
                 }
-                & $SleepMilliseconds 100
             }
             if (-not $pluginClosed -and -not $pluginHidden) {
                 throw 'PLUGIN_CLOSE_TIMEOUT'
@@ -127,6 +127,28 @@ function Complete-WeixinPluginSession {
         throw 'SESSION_CLEANUP_FAILED'
     }
     $Completed.Value = $true
+    return $result
+}
+
+function Complete-WeixinLayeredSession {
+    param(
+        [Parameter(Mandatory)][ref]$DetailMayBeOpen,
+        [Parameter(Mandatory)][ref]$Completed,
+        [Parameter(Mandatory)][scriptblock]$CloseDetail,
+        [Parameter(Mandatory)][scriptblock]$VerifyResultPage,
+        [Parameter(Mandatory)][scriptblock]$CleanupPlugin
+    )
+    if ([bool]$Completed.Value) {
+        return [pscustomobject]@{ session_closed=$true; already_closed=$true }
+    }
+    if ([bool]$DetailMayBeOpen.Value) {
+        & $CloseDetail
+        if (-not [bool](& $VerifyResultPage)) {
+            throw 'SESSION_CLEANUP_FAILED'
+        }
+        $DetailMayBeOpen.Value = $false
+    }
+    $result = Complete-WeixinPluginSession $Completed $CleanupPlugin
     return $result
 }
 
@@ -344,6 +366,9 @@ function New-ExternalJudge {
         $start.RedirectStandardError = $true
         $start.CreateNoWindow = $true
         $utf8NoBom = New-Object Text.UTF8Encoding($false)
+        if ($start.PSObject.Properties.Name -contains 'StandardInputEncoding') {
+            $start.StandardInputEncoding = $utf8NoBom
+        }
         $start.StandardOutputEncoding = $utf8NoBom
         $start.StandardErrorEncoding = $utf8NoBom
         $start.Arguments = [string]::Join(
@@ -352,16 +377,26 @@ function New-ExternalJudge {
         $process.StartInfo = $start
         $previousInputEncoding = [Console]::InputEncoding
         try {
+            # On legacy .NET this controls only construction of the
+            # redirected StreamWriter (not payload encoding); prevent its
+            # default BOM before writing explicit UTF-8 bytes below.
             [Console]::InputEncoding = $utf8NoBom
             if (-not $process.Start()) { throw 'JUDGE_START_FAILED' }
-            $stdin = $process.StandardInput
         } finally {
             [Console]::InputEncoding = $previousInputEncoding
         }
+        $stdin = $process.StandardInput
         try {
             $stdoutTask = $process.StandardOutput.ReadToEndAsync()
             $stderrTask = $process.StandardError.ReadToEndAsync()
-            $stdin.WriteLine(($payload | ConvertTo-Json -Depth 6 -Compress))
+            # Windows PowerShell/.NET Framework may not expose
+            # ProcessStartInfo.StandardInputEncoding. Write explicit UTF-8
+            # bytes to the redirected stream instead of relying on the
+            # StreamWriter or console code page.
+            $stdinJson = ($payload | ConvertTo-Json -Depth 6 -Compress) + "`n"
+            $stdinBytes = $utf8NoBom.GetBytes($stdinJson)
+            $stdin.BaseStream.Write($stdinBytes, 0, $stdinBytes.Length)
+            $stdin.BaseStream.Flush()
             $stdin.Close()
             if (-not $process.WaitForExit($TimeoutMilliseconds)) {
                 try { $process.Kill() } catch {}
@@ -739,6 +774,42 @@ function Test-ResultPageEvidence {
         $Text.IndexOf($_, [StringComparison]::Ordinal) -ge 0
     }).Count
     return $overlap -ge 3
+}
+
+function Test-SearchResultReady {
+    param([string]$Text, [string]$Query)
+    if ([string]::IsNullOrWhiteSpace($Text) -or $Text.Length -lt 80) {
+        return $false
+    }
+    if (
+        -not [string]::IsNullOrWhiteSpace($Query) -and
+        [string]::Equals(
+            $Text.Trim(), $Query.Trim(), [StringComparison]::Ordinal
+        )
+    ) {
+        return $false
+    }
+    if (-not [string]::IsNullOrWhiteSpace($Query)) {
+        # 微信可能把中文查询中的普通空格、全角空格或换行去掉；仅忽略排版
+        # 空白，仍要求全部查询字符按原顺序出现在当前复制文本中。
+        $normalizedText = [regex]::Replace($Text.Trim(), '\s+', '')
+        $normalizedQuery = [regex]::Replace($Query.Trim(), '\s+', '')
+        if (
+            $normalizedText.IndexOf(
+                $normalizedQuery, [StringComparison]::Ordinal
+            ) -lt 0
+        ) {
+            return $false
+        }
+    }
+    # 搜一搜结果页的稳定栏目是比固定 sleep 更可靠的就绪信号；要求三个栏目，
+    # 避免把搜索输入框、加载提示或单篇详情误判为结果列表。
+    $navigationMarkers = @('全部', '文章', '账号', '相关搜索')
+    $textLines = @($Text -split '\r?\n' | ForEach-Object { $_.Trim() })
+    $markerMatches = @(
+        $navigationMarkers | Where-Object { $textLines -contains $_ }
+    ).Count
+    return $markerMatches -ge 3
 }
 
 function Invoke-CollectFramework {

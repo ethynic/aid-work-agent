@@ -258,7 +258,9 @@ Idle
 4. 发送 `Ctrl+F → Down → Enter`；
 5. 等待可信 `WeChatAppEx` 成为前台；
 6. `Ctrl+A` 清空输入，剪贴板粘贴关键词，Enter；
-7. 连续截图，直到画面稳定或超时。
+7. 每 500ms 通过 `Ctrl+A → Ctrl+C` 读取候选页面，连续两次满足结果页固定栏目证据
+   才能进入取证；默认上限 15 秒且不得低于 10 秒；
+8. 超时返回 `SEARCH_RESULTS_TIMEOUT`，不封存加载页，由 `finally` 清理会话。
 
 ### 7.2 读取结果列表
 
@@ -277,6 +279,8 @@ Idle
 - 原始 HTML 作为敏感证据加密保存，不写日志。
 
 剪贴板操作前保存原内容，任务完成后尽力恢复；敏感剪贴板内容在任务结束时清空。
+固定栏目就绪信号只解决结果列表。详情页已有截图变化、可信前台和复制文本特征校验，
+但慢网详情仍使用可配置等待，后续真机矩阵需补详情正文稳定轮询。
 
 ### 7.3 结果卡片定位
 
@@ -331,6 +335,14 @@ UIA 无法获取卡片坐标，因此采用“截图分区 + 视觉卡片检测�
 5. 确定性校验模型返回的手机号确实存在于原文，姓名也必须存在；
 6. 不满足校验时视为未命中或 `inconclusive`，不能凭模型补全号码。
 
+号码归属仍由 LLM 按自然语言语义判断，不增加固定词距或“同一行即归属”的死板规则。
+旧信息可以采用；目标人明确列在联系人/联络人组中且随后给出联系电话时，该号码可作为
+组内每个目标联系人的可用联系方式，即使多人共用或同时服务其他人。只有文本明确将号码
+排他绑定给另一人，或目标姓名只出现在与该联系方式无关的上下文时才拒绝。多人共现时，
+若存在多个候选号码，优先选择在更多独立搜索结果中重复与目标联系人组关联的完整手机号。
+命中引用必须是原文中同时包含目标姓名和完整号码的连续片段；PowerShell 的最终检查
+只验证姓名、号码和逐字引用真实存在，不重新判断语义归属。
+
 ### 8.2 结构化输出
 
 ```json
@@ -369,16 +381,20 @@ UIA 无法获取卡片坐标，因此采用“截图分区 + 视觉卡片检测�
 `found/not_found/inconclusive/blocked` 或任意异常，释放 Mutex 前都必须：
 
 1. 若详情仍打开，先在精确插件 HWND 上安全发送一次 `Ctrl+W` 返回结果页；
-2. 精确激活记录的插件 HWND，重新校验它仍是可信 `WeChatAppEx`，再发送 `Ctrl+W`；
-3. 轮询确认该 HWND 已不存在；仅隐藏或不可见不视为会话已关闭；
+   复制并用本次原始列表证据验证确已恢复，失败时不得继续发送插件关闭快捷键；
+2. 重新校验记录的插件 HWND 仍是可信 `WeChatAppEx`；若它已经隐藏，不得重新激活；
+3. 仅对仍可见的精确插件 HWND 发送 `Ctrl+W`，最多轮询约5秒等待 HWND 销毁或隐藏；
 4. 校验普通微信主 HWND 仍存在且进程可信，并精确激活为前台；
-5. 成功结果返回 `session_closed=true`。
+5. 插件 HWND 已销毁，或插件已隐藏且精确主 HWND 恢复前台，成功结果返回
+   `session_closed=true`；插件仍可见、仍占前台或其他插件 HWND 占前台均失败。
 
 不能使用模糊标题 `AppActivate`。清理动作使用安全组合键函数，异常路径也必须逐键
 `KeyUp`。清理失败升级为 `SESSION_CLEANUP_FAILED`，不得输出原业务成功并继续下一人；
 已有 DPAPI 证据 artifact 保持不变，另写 `stage=cleanup` 的无 PII 失败诊断。
 每个会话最多执行一次 cleanup 尝试；显式 cleanup 已失败时，外层 `finally` 不重复发送
 `Ctrl+W`，只完成剪贴板和 Mutex 收口后上报失败。
+分层状态必须分别处理：详情态执行“关详情→验列表→关插件”，列表态只关插件，已经
+完成主窗口恢复的终态不再发送任何关闭快捷键。
 `probe` 不创建插件会话；`open` 的语义是显式打开供调查，不自动关闭。
 
 建议错误码：
@@ -430,6 +446,22 @@ Windows CLI 也保留 `association_name + person_name` 的直接入口，便于�
 `src.llm.gateway.llm_gateway.chat`（`temperature=0`），stdout 只返回严格单行 JSON。
 PowerShell 执行姓名、手机号和证据原文的最终确定性校验；adapter 或 Provider 全失败时
 任务返回 `inconclusive`。
+
+外部 Judge 进程协议的 stdin/stdout 均为 UTF-8。Windows PowerShell 所在的旧 .NET
+若不提供 `ProcessStartInfo.StandardInputEncoding`，不得使用默认代码页的
+`StandardInput.WriteLine`；实现通过 `StandardInput.BaseStream` 写入 UTF-8 无 BOM
+字节，并仅为避免旧重定向 writer 预写 BOM 而短暂设置后恢复
+`Console.InputEncoding`。测试必须使用真实 Python 子进程严格解码中文 JSON，不能只做
+源码字符串断言。
+
+Provider 首次返回 JSON 解析失败或严格 schema/type/value 校验失败时，adapter 只重试
+一次。重试消息沿用原始目标与证据语义，只说明上次格式不合规并重申 exact schema；
+不得拼接第一次原始响应。网络、鉴权和 `gateway.chat` 异常不属于格式错误，不重试。
+第二次仍不合规则失败并由 PowerShell 记为 `inconclusive`；格式重试不能绕过最终的
+姓名、号码、逐字 evidence quote 合同。
+首次和重试共享单一 `JUDGE_MAX_TOKENS=2500` 预算常量。预算包含推理型 Provider 的
+reasoning token；不得回退到已真机复现会在800 token处 `finish_reason=length`、
+最终 `content` 为空的配置。
 
 ## 11. 测试策略
 
@@ -496,8 +528,8 @@ PowerShell 执行姓名、手机号和证据原文的最终确定性校验；ada
 
 ## 14. 前 10 条边界与图片/PDF 证据
 
-- 搜索结果页 `Ctrl+A/Ctrl+C` 可能包含第 11 条及更后结果，因此整页文本只用于列表恢复、
-  卡片发现和审计，不直接作为“前 10 条命中”证据。
+- 搜索结果页 `Ctrl+A/Ctrl+C` 可能包含第 11 条及更后结果；整页命中允许直接结束，
+  但必须把来源标记为 `result_page_unbounded`，不得宣称属于“前 10 条详情”。
 - 联系人命中必须来自已经按视觉顺序打开且计入 `limit <= 10` 的详情。
 - 已确认点击后截图变化、且复制内容不具备结果列表结构时，即使文本为空、没有目标主体
   或没有 PDF/图片标记，也允许对中央详情正文区执行 OCR。
@@ -509,6 +541,8 @@ PowerShell 执行姓名、手机号和证据原文的最终确定性校验；ada
   和视口序号，不在 stdout 或普通日志输出手机号。
 - OCR 未配置、调用失败、返回结构异常或无法证明仍在当前详情时，当前任务返回
   `inconclusive`，不得把图片/PDF 详情判为 `not_found`。
+- 列表 Judge 的 `matched/not_matched/inconclusive` 及固定非敏感 reason code 写入
+  DPAPI artifact；即使后续卡片定位失败，也能区分模型未命中、协议失败和证据拒绝。
 - 点击无变化、详情无效、OCR 失败和重复详情在 DPAPI artifact 中记录
   `stage/reason/text_length/hash` 等非正文诊断字段。
 

@@ -13,6 +13,9 @@ import sys
 from typing import Any
 
 
+JUDGE_MAX_TOKENS = 2500
+
+
 def _parse_json_content(content: str) -> dict[str, Any]:
     value = content.strip()
     fenced = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", value, re.DOTALL | re.IGNORECASE)
@@ -54,19 +57,54 @@ async def run_judge(payload: dict[str, Any], gateway: Any = None) -> dict[str, A
         gateway = llm_gateway
     prompt = (
         "仅依据下面证据判断目标联系人手机号。不得补全或猜测号码。"
+        "证据可能来自微信搜索结果，旧信息同样可以采用，不要因为发布时间较早而拒绝。"
+        "必须按自然语言语义判断号码是否可作为目标人的联系方式，不能仅因目标姓名和号码"
+        "偶然出现在同一行就命中。若目标人明确列在“联系人/联络人”等联系人组中，随后"
+        "给出一个联系电话或手机号，则该号码可视为组内每个人（包括目标人）的可用联系方式，"
+        "即使该号码为多人共用或同时服务其他人。只有文本明确把号码排他绑定给另一个人，"
+        "或目标姓名只出现在与该联系方式无关的上下文时，才必须不命中。"
+        "如果同一个完整手机号在多条相互独立的搜索结果中，反复与目标姓名及联系电话关系"
+        "紧邻出现，这种重复交叉证据可以支持命中。存在多个候选时，优先选择在更多条独立"
+        "结果中重复与目标联系人组关联的完整手机号，而不是只出现一次的候选。"
         "严格返回JSON对象，字段为 matched(bool), person_name(str), mobile(str), "
-        "evidence_quote(str), confidence(number), reason(str)。未命中时字符串字段可为空。"
+        "evidence_quote(str), confidence(number), reason(str)。"
+        "命中时person_name必须等于目标姓名，mobile必须逐字来自证据，evidence_quote必须是"
+        "证据中逐字连续的一段，且同时包含目标姓名和该完整手机号；优先选择最短、归属关系"
+        "最清晰的原文片段。未命中时字符串字段可为空。"
         f"\n目标协会：{association}\n目标姓名：{person}\n证据：\n{text}"
     )
+    messages = [
+        {"role": "system", "content": "你是联系人证据核验器，只输出严格JSON。"},
+        {"role": "user", "content": prompt},
+    ]
     response = await gateway.chat(
-        messages=[
-            {"role": "system", "content": "你是联系人证据核验器，只输出严格JSON。"},
-            {"role": "user", "content": prompt},
-        ],
+        messages=messages,
         temperature=0,
-        max_tokens=800,
+        max_tokens=JUDGE_MAX_TOKENS,
     )
-    return _parse_json_content(str(response.get("content", "")))
+    try:
+        return _parse_json_content(str(response.get("content", "")))
+    except (json.JSONDecodeError, ValueError):
+        # Do not include the invalid raw response: it may contain evidence,
+        # secrets or prompt-amplifying text. Retry only format/schema errors;
+        # provider/network/auth exceptions continue to fail immediately.
+        retry_messages = messages + [
+            {
+                "role": "user",
+                "content": (
+                    "上一次输出不符合协议。请重新判断同一份证据，并且只输出一个严格JSON对象，"
+                    "不要Markdown、代码围栏或解释。顶层字段必须且只能是："
+                    "matched(bool), person_name(str), mobile(str), "
+                    "evidence_quote(str), confidence(number 0..1), reason(str)。"
+                ),
+            }
+        ]
+        retry_response = await gateway.chat(
+            messages=retry_messages,
+            temperature=0,
+            max_tokens=JUDGE_MAX_TOKENS,
+        )
+        return _parse_json_content(str(retry_response.get("content", "")))
 
 
 def main() -> int:

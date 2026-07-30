@@ -217,8 +217,16 @@ SSRF 门禁。仅检查最终 URL 不能证明中间跳转未访问不可信地�
 前重新打开入口并重放路径，避免依赖人工留下的浏览器状态。点击后只有 URL、正文或
 可见子导航发生变化才继续，跨域、无变化、重复状态和超出页数/正文/点击预算的结果均
 拒绝。普通 `href` 与 JS click 共用同一发现和安全边界，最终同样输出
-`VerifiedOfficialPage[]`。单个页面最多保留前 200 个可见导航候选，结合总点击预算
-限制异常 DOM 的枚举成本和路径组合规模。Playwright wrapper 在 browser context 层
+`VerifiedOfficialPage[]`。路径队列按末级目标的业务价值做全局排序，因此从“协会介绍”
+二级菜单中新发现的领导或组织路径，可以抢占首页尚未处理的会员等低价值路径；同等
+价值时优先较短路径。collector 完成同域验证后，普通 HTTP(S) href 直接在当前采集页
+导航，避免 `target=_blank` 把内容打开到未被 driver 跟踪的 popup；JavaScript、锚点
+和无普通 href 的目标仍走点击路径。单个页面最多保留前 200 个可见导航候选，
+Playwright 在页面内先全量映射并过滤可见项，再截取前200项，同时保留原 locator
+下标供点击使用，避免隐藏菜单占满预算或过滤后 `nth` 漂移。批量读取可见性、文本和
+href，避免逐元素多次跨进程调用；再结合总点击
+预算、90 秒总采集截止时间和20秒单路径截止时间限制异常 DOM、失效页面及路径重放的
+成本。Playwright wrapper 在 browser context 层
 于请求发出前拦截当前页及 popup 的跨域顶层 frame 导航；第三方图片、脚本和 iframe
 等子资源不按顶层导航处理。即使文本同时含
 “会员”等高价值词，登录、注册、退出、删除、提交、报名、支付和下载类动作也禁止点击。
@@ -229,7 +237,9 @@ Playwright 入口 `collect_official_pages_with_playwright(...)` 的 `headless` �
 点击栏目后再把正文交给提取器，只能用于调查，不能计为自动采集验收通过。
 `navigation_timeout_ms` 在 wrapper 和 driver 两层均要求非布尔正整数。入口页在
 `domcontentloaded` 后按不超过 250ms 的固定间隔等待 SPA 正文和导航出现；不足 250ms
-的预算不额外 sleep，点击后仍先即时读取一次状态。BrowserContext route 使用 Playwright
+的预算不额外 sleep。老站若等待 `domcontentloaded` 超时，但当前 URL 仍是请求页且
+正文已经可读，则保留该状态并继续现有轮询；正文为空、状态不可读或 DNS、证书、
+连接拒绝等非超时错误仍按原异常失败。点击后仍先即时读取一次状态。BrowserContext route 使用 Playwright
 Python 的单参数 handler，并从 `route.request` 取得请求。任何异常路径最终关闭 browser。
 
 ### 8.3 `association_profile_enrichment`

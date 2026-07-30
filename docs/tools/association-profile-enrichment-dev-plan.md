@@ -73,6 +73,9 @@
 - [x] Playwright context 内当前页/popup 顶层 frame 跨域导航请求前置阻断；
 - [x] 登录/注册/删除/提交/支付/下载等动作型目标点击拒绝；
 - [x] Playwright 单参数 route handler、SPA 入口轮询与严格正整数导航超时；
+- [x] 嵌套高价值路径全局优先队列、DOM 导航批量快照及总采集/单路径耗时边界；
+- [x] 同域普通 href 当前页直达、可见项后置截断和原 locator 下标保持；
+- [x] 老站 `DOMContentLoaded` 超时但同页正文可读时恢复，非超时连接错误保持失败；
 - [ ] sitemap发现；
 - [ ] Browser/HTTP 适配器逐 redirect hop、DNS 重绑定和私网地址 SSRF 门禁；
 - [ ] 内容哈希缓存；

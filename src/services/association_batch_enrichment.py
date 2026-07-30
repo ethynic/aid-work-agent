@@ -267,6 +267,11 @@ class AssociationBatchEnricher:
             except Exception as exc:
                 row.errors.append(f"web_fallback:{type(exc).__name__}")
 
+        if not row.values.get("president_name"):
+            row.errors.append("profile:president_not_found")
+        if not row.values.get("secretary_general_name"):
+            row.errors.append("profile:secretary_general_not_found")
+
         for role, name_field, mobile_field in (
             ("会长", "president_name", "president_mobile"),
             ("秘书长", "secretary_general_name", "secretary_general_mobile"),

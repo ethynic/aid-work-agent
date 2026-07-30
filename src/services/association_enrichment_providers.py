@@ -338,10 +338,103 @@ class ProjectAssociationProviders:
             result = await extract_association_profile(pages, domain)
         if result.status != "success" or result.profile is None:
             raise ValueError(result.reason_code or "OFFICIAL_EXTRACTION_FAILED")
-        return {
+        values = {
             name: getattr(result.profile, name).value
             for name in PROFILE_FIELDS
         }
+        if not (
+            values.get("president_name")
+            and values.get("secretary_general_name")
+        ):
+            leadership_pages = [
+                page
+                for page in pages
+                if any(
+                    term in f"{page.title}\n{page.content}"
+                    for term in ("会长", "秘书长", "组织领导", "领导班子")
+                )
+            ]
+            try:
+                focused = await self._extract_leadership(
+                    leadership_pages[:2], domain
+                )
+            except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+                focused = {}
+            for name, value in focused.items():
+                if value and not values.get(name):
+                    values[name] = value
+        return values
+
+    async def _extract_leadership(
+        self,
+        pages,
+        verified_domain: str,
+    ) -> dict[str, str | None]:
+        if not pages:
+            return {"president_name": None, "secretary_general_name": None}
+        page_by_url = {str(page.url): page for page in pages}
+        parsed = await self._strict_json_chat(
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "只从给定协会官网页面提取现任会长和秘书长姓名，只输出严格JSON。"
+                        "顶层键必须恰好为president_name、secretary_general_name；"
+                        "每个值必须恰好包含value、evidence_quote、source_url。"
+                        "未找到时三个值均为null，不得输出其他字段。"
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        [
+                            {
+                                "url": str(page.url),
+                                "title": page.title,
+                                "content": page.content,
+                            }
+                            for page in pages
+                        ],
+                        ensure_ascii=False,
+                    ),
+                },
+            ],
+            max_tokens=800,
+        )
+        if set(parsed) != {"president_name", "secretary_general_name"}:
+            raise ValueError("LEADERSHIP_SCHEMA_INVALID")
+        result: dict[str, str | None] = {}
+        for field_name in ("president_name", "secretary_general_name"):
+            evidence = parsed[field_name]
+            if not isinstance(evidence, dict) or set(evidence) != {
+                "value", "evidence_quote", "source_url",
+            }:
+                raise ValueError("LEADERSHIP_SCHEMA_INVALID")
+            value = evidence["value"]
+            quote = evidence["evidence_quote"]
+            source_url = evidence["source_url"]
+            if value is None:
+                if quote is not None or source_url is not None:
+                    raise ValueError("LEADERSHIP_EVIDENCE_INVALID")
+                result[field_name] = None
+                continue
+            if not all(
+                isinstance(item, str) and item.strip()
+                for item in (value, quote, source_url)
+            ):
+                raise ValueError("LEADERSHIP_EVIDENCE_INVALID")
+            page = page_by_url.get(source_url)
+            if (
+                page is None
+                or urlparse(source_url).hostname != verified_domain
+                or re.sub(r"\s+", "", quote)
+                not in re.sub(r"\s+", "", page.content)
+                or re.sub(r"\s+", "", value)
+                not in re.sub(r"\s+", "", quote)
+            ):
+                raise ValueError("LEADERSHIP_EVIDENCE_INVALID")
+            result[field_name] = value.strip()
+        return result
 
     async def fallback_profile(self, association_name: str) -> dict[str, str | None]:
         result = await self._search.execute(

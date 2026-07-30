@@ -119,7 +119,8 @@ async def test_batch_falls_back_from_https_to_http_and_then_enriches_wechat():
         ("http://legacy.example.org/", False),
     ]
     assert row.values["secretary_general_mobile"] == "18612345678"
-    assert row.processing_status == "complete"
+    assert row.processing_status == "partial"
+    assert "profile:president_not_found" in row.errors
 
 
 @pytest.mark.asyncio
@@ -151,6 +152,42 @@ async def test_one_failed_association_does_not_stop_later_associations():
     assert [row.association_name for row in rows] == ["坏协会", "好协会"]
     assert rows[0].processing_status == "failed"
     assert rows[1].values["address"] == "北京市"
+
+
+@pytest.mark.asyncio
+async def test_one_person_cleanup_failure_does_not_skip_next_person_provider():
+    calls = []
+
+    async def resolve(_name):
+        return "https://association.example.cn/"
+
+    async def collect(_url, _headless):
+        return {
+            "president_name": "杨晓京",
+            "secretary_general_name": "陈戟",
+        }
+
+    async def fallback(_name):
+        raise AssertionError("official collection succeeded")
+
+    async def wechat(_association, person, _role):
+        calls.append(person)
+        if person == "杨晓京":
+            raise RuntimeError("WECHAT_SESSION_NOT_CLOSED")
+        return "18612345678"
+
+    enricher = AssociationBatchEnricher(
+        official_site_resolver=resolve,
+        official_profile_collector=collect,
+        fallback_profile_provider=fallback,
+        wechat_mobile_provider=wechat,
+    )
+
+    row = await enricher.enrich_one("测试协会")
+
+    assert calls == ["杨晓京", "陈戟"]
+    assert row.values["secretary_general_mobile"] == "18612345678"
+    assert any("wechat:会长:RuntimeError" in error for error in row.errors)
 
 
 def test_excel_contains_business_and_audit_columns_but_error_is_redacted(tmp_path):
