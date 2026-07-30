@@ -1,5 +1,5 @@
 <template>
-  <div class="h-screen flex flex-col bg-gray-50">
+  <div class="page-container bg-canvas">
     <AppHeader
       title="工作成果"
       :is-logged-in="effectiveIsLoggedIn"
@@ -24,112 +24,124 @@
       </template>
     </AppHeader>
 
-    <div class="flex-1 overflow-y-auto p-6">
-      <div class="max-w-7xl mx-auto">
-        <!-- 概览统计卡片 -->
-        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
-          <div
-            v-for="stat in statsCards"
-            :key="stat.key"
-            class="bg-surface rounded-xl border border-default p-4"
-          >
-            <p class="text-xs font-medium text-muted uppercase tracking-wider">{{ stat.label }}</p>
-            <p class="text-2xl font-bold mt-1 tabular-nums">{{ stat.value }}</p>
-            <p v-if="stat.sub" class="text-xs text-muted mt-1">{{ stat.sub }}</p>
-          </div>
+    <div class="page-content p-6">
+      <!-- 概览统计卡片 -->
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4 flex-shrink-0">
+        <div
+          v-for="stat in statsCards"
+          :key="stat.key"
+          class="bg-surface rounded-xl border border-default p-4"
+        >
+          <p class="text-xs font-medium text-muted uppercase tracking-wider">{{ stat.label }}</p>
+          <p class="text-2xl font-bold mt-1 tabular-nums">{{ stat.value }}</p>
+          <p v-if="stat.sub" class="text-xs text-muted mt-1">{{ stat.sub }}</p>
         </div>
-
-        <!-- 筛选区 -->
-        <div class="flex items-center gap-3 p-3 rounded-xl bg-surface border border-default mb-4">
-          <BaseSelect v-model="filters.outcome_type" size="sm" class="w-32">
-            <option value="">全部类型</option>
-            <option v-for="(label, key) in outcomeTypeLabels" :key="key" :value="key">{{ label }}</option>
-          </BaseSelect>
-          <BaseSelect v-model="filters.source" size="sm" class="w-36">
-            <option value="">全部来源</option>
-            <option v-for="(label, key) in sourceLabels" :key="key" :value="key">{{ label }}</option>
-          </BaseSelect>
-          <BaseSelect v-if="isAdmin" v-model="filters.subagent_id" size="sm" class="w-40">
-            <option value="">全部智能体</option>
-            <option value="main">主智能体</option>
-            <option v-for="sa in subagentOptions" :key="sa" :value="sa">{{ sa }}</option>
-          </BaseSelect>
-          <BaseInput
-            v-model="filters.keyword"
-            placeholder="搜索摘要..."
-            size="sm"
-            class="w-56"
-            @keyup.enter="handleSearch(filters.keyword)"
-          />
-          <input
-            v-model="filters.start_date"
-            type="date"
-            class="px-3 py-2 bg-surface border border-default rounded-lg text-default text-sm focus:outline-none focus:border-primary-400"
-          />
-          <input
-            v-model="filters.end_date"
-            type="date"
-            class="px-3 py-2 bg-surface border border-default rounded-lg text-default text-sm focus:outline-none focus:border-primary-400"
-          />
-          <div class="flex-1" />
-          <BaseButton size="sm" @click="handleSearch(filters.keyword)">查询</BaseButton>
-          <BaseButton size="sm" intent="secondary" @click="resetFilters">重置</BaseButton>
-        </div>
-
-        <!-- 列表表格 -->
-        <div class="table-scroll-wrapper">
-          <BaseTable :columns="columns" :data="outcomes" row-key="outcome_id">
-            <template #index="{ index }">{{ seqNumber(index) }}</template>
-            <template #summary="{ row }">
-              <span class="block max-w-[360px] truncate text-default">{{ row.summary }}</span>
-            </template>
-            <template #outcome_type="{ row }">
-              <span class="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium" :class="outcomeTypeBadgeClass(row.outcome_type)">
-                {{ outcomeTypeLabels[row.outcome_type as OutcomeType] || row.outcome_type }}
-              </span>
-            </template>
-            <template #source="{ row }">
-              <span class="text-xs text-muted">{{ sourceLabels[row.source as OutcomeSource] || row.source }}</span>
-            </template>
-            <template #subagent_id="{ row }">
-              <span class="text-xs text-muted">{{ row.subagent_id || '主智能体' }}</span>
-            </template>
-            <template #channel="{ row }">
-              <span class="text-xs text-muted">{{ channelLabels[row.channel as string] || row.channel || '-' }}</span>
-            </template>
-            <template #confidence="{ row }">
-              <span v-if="row.review_confidence !== null && row.review_confidence !== undefined" class="text-xs tabular-nums text-muted">
-                {{ (row.review_confidence * 100).toFixed(0) }}%
-              </span>
-              <span v-else class="text-xs text-muted">-</span>
-            </template>
-            <template #created_at="{ row }">{{ formatDate(row.created_at) }}</template>
-            <template #actions="{ row }">
-              <div class="flex items-center justify-end gap-1">
-                <BaseButton intent="ghost" size="sm" @click="openDetail(row)">详情</BaseButton>
-                <BaseButton v-if="isAdmin" intent="danger-ghost" size="sm" @click="confirmDelete(row)">删除</BaseButton>
-              </div>
-            </template>
-            <template #empty>
-              <div v-if="loading" class="flex items-center justify-center gap-2 py-8">
-                <svg class="w-5 h-5 animate-spin text-primary-500" fill="none" viewBox="0 0 24 24">
-                  <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
-                  <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
-                </svg>
-                <span class="text-muted">加载中...</span>
-              </div>
-              <span v-else class="text-muted py-8 inline-block">暂无工作成果数据</span>
-            </template>
-          </BaseTable>
-        </div>
-
-        <BasePagination
-          :total="total"
-          v-model:current-page="currentPage"
-          v-model:page-size="pageSize"
-          @change="loadOutcomes"
-        />
       </div>
+
+      <!-- 筛选区 -->
+      <div class="flex items-center gap-3 p-3 rounded-xl bg-surface border border-default mb-4 flex-shrink-0">
+        <BaseSelect v-model="filters.outcome_type" size="sm" class="w-32">
+          <option value="">全部类型</option>
+          <option v-for="(label, key) in outcomeTypeLabels" :key="key" :value="key">{{ label }}</option>
+        </BaseSelect>
+        <BaseSelect v-model="filters.source" size="sm" class="w-36">
+          <option value="">全部来源</option>
+          <option v-for="(label, key) in sourceLabels" :key="key" :value="key">{{ label }}</option>
+        </BaseSelect>
+        <BaseSelect v-if="isAdmin" v-model="filters.subagent_id" size="sm" class="w-40">
+          <option value="">全部智能体</option>
+          <option value="main">主智能体</option>
+          <option v-for="sa in subagentOptions" :key="sa" :value="sa">{{ sa }}</option>
+        </BaseSelect>
+        <BaseInput
+          v-model="filters.keyword"
+          placeholder="搜索摘要..."
+          size="sm"
+          class="w-56"
+          @keyup.enter="handleSearch(filters.keyword)"
+        />
+        <input
+          v-model="filters.start_date"
+          type="date"
+          class="px-3 py-2 bg-surface border border-default rounded-lg text-default text-sm focus:outline-none focus:border-primary-400"
+        />
+        <input
+          v-model="filters.end_date"
+          type="date"
+          class="px-3 py-2 bg-surface border border-default rounded-lg text-default text-sm focus:outline-none focus:border-primary-400"
+        />
+        <div class="flex-1" />
+        <BaseButton size="sm" @click="handleSearch(filters.keyword)">查询</BaseButton>
+        <BaseButton size="sm" intent="secondary" @click="resetFilters">重置</BaseButton>
+      </div>
+
+      <!-- 列表表格 -->
+      <div class="table-scroll-wrapper flex-1">
+        <BaseTable :columns="columns" :data="outcomes" row-key="outcome_id">
+          <template #index="{ index }">{{ seqNumber(index) }}</template>
+          <template #summary="{ row }">
+            <span class="block max-w-[640px] truncate text-left text-default" :title="row.summary">{{ row.summary }}</span>
+          </template>
+          <template #file="{ row }">
+            <a
+              v-if="row.file_id"
+              :href="`/api/files/${row.file_id}/download`"
+              class="inline-flex items-center gap-1 text-xs text-primary-600 hover:text-primary-700 whitespace-nowrap"
+              :title="row.file_name || '下载文件'"
+            >
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.6">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1M12 4v12m0 0l-4-4m4 4l4-4" />
+              </svg>
+              下载
+            </a>
+            <span v-else class="text-xs text-muted">-</span>
+          </template>
+          <template #outcome_type="{ row }">
+            <span class="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium" :class="outcomeTypeBadgeClass(row.outcome_type)">
+              {{ outcomeTypeLabels[row.outcome_type as OutcomeType] || row.outcome_type }}
+            </span>
+          </template>
+          <template #source="{ row }">
+            <span class="text-xs text-muted">{{ sourceLabels[row.source as OutcomeSource] || row.source }}</span>
+          </template>
+          <template #subagent_id="{ row }">
+            <span class="text-xs text-muted">{{ row.subagent_id || '主智能体' }}</span>
+          </template>
+          <template #channel="{ row }">
+            <span class="text-xs text-muted">{{ channelLabels[row.channel as string] || row.channel || '-' }}</span>
+          </template>
+          <template #confidence="{ row }">
+            <span v-if="row.review_confidence !== null && row.review_confidence !== undefined" class="text-xs tabular-nums text-muted">
+              {{ (row.review_confidence * 100).toFixed(0) }}%
+            </span>
+            <span v-else class="text-xs text-muted">-</span>
+          </template>
+          <template #created_at="{ row }">{{ formatDate(row.created_at) }}</template>
+          <template #actions="{ row }">
+            <div class="flex items-center justify-end gap-1">
+              <BaseButton intent="ghost" size="sm" @click="openDetail(row)">详情</BaseButton>
+              <BaseButton v-if="isAdmin" intent="danger-ghost" size="sm" @click="confirmDelete(row)">删除</BaseButton>
+            </div>
+          </template>
+          <template #empty>
+            <div v-if="loading" class="flex items-center justify-center gap-2 py-8">
+              <svg class="w-5 h-5 animate-spin text-primary-500" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+              </svg>
+              <span class="text-muted">加载中...</span>
+            </div>
+            <span v-else class="text-muted py-8 inline-block">暂无工作成果数据</span>
+          </template>
+        </BaseTable>
+      </div>
+
+      <BasePagination
+        :total="total"
+        v-model:current-page="currentPage"
+        v-model:page-size="pageSize"
+        @change="loadOutcomes"
+      />
     </div>
 
     <!-- 详情 Modal -->
@@ -302,7 +314,8 @@ function outcomeTypeBadgeClass(type: string): string {
 
 const columns = [
   { key: 'index', label: '序号', width: '60px' },
-  { key: 'summary', label: '成果摘要', minWidth: '240px' },
+  { key: 'summary', label: '成果摘要', minWidth: '240px', tdAlign: 'left' as const },
+  { key: 'file', label: '文件', width: '90px' },
   { key: 'outcome_type', label: '类型', width: '100px' },
   { key: 'source', label: '来源', width: '100px' },
   { key: 'subagent_id', label: '智能体', width: '120px' },
