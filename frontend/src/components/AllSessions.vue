@@ -19,10 +19,14 @@
           @logout="handleLogout"
         />
 
-        <div class="flex-1 overflow-y-auto p-4 md:p-6">
+        <div
+          ref="scrollContainer"
+          class="flex-1 overflow-y-auto p-4 md:p-6"
+          @scroll.passive="handleScroll"
+        >
           <div class="max-w-4xl mx-auto">
-            <!-- Loading State -->
-            <div v-if="isLoading" class="flex items-center justify-center py-12">
+            <!-- Loading State（仅初次加载、列表为空时显示全屏加载中，避免追加加载时卸载列表） -->
+            <div v-if="isLoading && sessions.length === 0" class="flex items-center justify-center py-12">
               <svg class="w-8 h-8 animate-spin text-primary-600" fill="none" viewBox="0 0 24 24">
                 <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                 <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
@@ -50,10 +54,12 @@
                 v-for="(session, index) in sessions"
                 :key="session.session_id"
                 :class="[
-                  'group relative p-2.5 rounded-lg border border-gray-200 bg-white transition-colors cursor-pointer',
+                  'group relative p-2.5 rounded-lg border transition-colors cursor-pointer',
                   currentSessionId === session.session_id
                     ? 'ring-2 ring-primary-300 bg-primary-50 border-primary-300'
-                    : 'hover:bg-gray-50'
+                    : index % 2 === 0
+                      ? 'bg-white border-gray-200 hover:bg-gray-100'
+                      : 'bg-gray-50 border-gray-200 hover:bg-gray-100'
                 ]"
                 @click="handleSelectSession(session.session_id)"
               >
@@ -100,10 +106,17 @@
                   </div>
                 </div>
               </div>
+
+              <!-- 手机端上划加载状态 -->
+              <div v-if="isMobile" class="py-3 text-center text-xs text-gray-400">
+                <span v-if="isLoadingMore">加载中...</span>
+                <span v-else-if="!hasMore">没有更多了</span>
+              </div>
             </div>
 
-            <!-- Pagination -->
+            <!-- Pagination（PC 端） -->
             <BasePagination
+              v-if="!isMobile"
               :total="totalSessions"
               :current-page="currentPage"
               :page-size="pageSize"
@@ -156,10 +169,14 @@
       @toggle-sidebar="handleToggleSidebar"
       @logout="handleLogout"
     />
-    <div class="flex-1 overflow-y-auto p-4 md:p-6">
+    <div
+      ref="scrollContainer"
+      class="flex-1 overflow-y-auto p-4 md:p-6"
+      @scroll.passive="handleScroll"
+    >
       <div class="max-w-4xl mx-auto">
-        <!-- Loading State -->
-      <div v-if="isLoading" class="flex items-center justify-center py-12">
+        <!-- Loading State（仅初次加载、列表为空时显示全屏加载中） -->
+      <div v-if="isLoading && sessions.length === 0" class="flex items-center justify-center py-12">
         <svg class="w-8 h-8 animate-spin text-primary-600" fill="none" viewBox="0 0 24 24">
           <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
           <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
@@ -187,16 +204,18 @@
           v-for="(session, index) in sessions"
           :key="session.session_id"
           :class="[
-            'group relative p-2.5 rounded-lg border border-gray-200 bg-white transition-colors cursor-pointer',
+            'group relative p-2.5 rounded-lg border transition-colors cursor-pointer',
             currentSessionId === session.session_id
-              ? 'ring-2 ring-primary-300 bg-primary-50 border-primary-300'
-              : 'hover:bg-gray-50'
+              ? 'ring-2 ring-primary-400 bg-primary-100 border-primary-300'
+              : index % 2 === 0
+                ? 'bg-white border-gray-200 hover:bg-surface-hover'
+                : 'bg-primary-50 border-gray-200 hover:bg-primary-100'
           ]"
           @click="handleSelectSession(session.session_id)"
         >
           <div class="flex items-center gap-3">
             <span class="text-xs text-gray-400 w-5 text-right flex-shrink-0">
-              {{ (currentPage - 1) * pageSize + index + 1 }}
+              {{ seqNumber(index) }}
             </span>
             <div class="flex-1 min-w-0">
               <div class="flex items-center justify-between">
@@ -237,10 +256,17 @@
             </div>
           </div>
         </div>
+
+        <!-- 手机端上划加载状态 -->
+        <div v-if="isMobile" class="py-3 text-center text-xs text-gray-400">
+          <span v-if="isLoadingMore">加载中...</span>
+          <span v-else-if="!hasMore">没有更多了</span>
+        </div>
       </div>
 
-      <!-- Pagination -->
+      <!-- Pagination（PC 端） -->
       <BasePagination
+        v-if="!isMobile"
         :total="totalSessions"
         :current-page="currentPage"
         :page-size="pageSize"
@@ -325,10 +351,12 @@ const {
   sessions,
   currentSessionId,
   isLoading,
+  isLoadingMore,
   currentPage,
   totalSessions,
   pageSize,
   loadSessions,
+  loadMoreSessions,
   selectSession,
   removeSession,
   renameSession
@@ -340,6 +368,25 @@ const toggleSidebarFn = inject<() => void>('toggleSidebar', () => {})
 const showRenameModal = ref(false)
 const renameInput = ref('')
 const renamingSessionId = ref<string | null>(null)
+
+// 手机端上划加载相关
+const scrollContainer = ref<HTMLElement | null>(null)
+const hasMore = computed(() => sessions.value.length < totalSessions.value)
+
+// 滚动到底部时加载下一页（仅手机端启用，PC 端使用分页器）
+async function handleScroll() {
+  if (!isMobile.value) return
+  const el = scrollContainer.value
+  if (!el) return
+  // isLoading（初次加载）或 isLoadingMore（追加加载）任一进行中都跳过
+  if (isLoading.value || isLoadingMore.value || !hasMore.value) return
+
+  const { scrollTop, scrollHeight, clientHeight } = el
+  // 距离底部 80px 时触发加载
+  if (scrollHeight - scrollTop - clientHeight < 80) {
+    await loadMoreSessions()
+  }
+}
 
 // 可用的数字员工列表
 const availableSubagents = ref<SubagentListItem[]>([])
@@ -388,6 +435,14 @@ async function loadAvailableSubagents() {
   } catch (e) {
     console.error('加载数字员工列表失败:', e)
   }
+}
+
+// 计算行号
+// - 手机端：sessions 是累积列表，index 本身就是全局序号
+// - PC 端：sessions 是当前页数据，需要按 currentPage 算全局行号
+function seqNumber(index: number): number {
+  if (isMobile.value) return index + 1
+  return (currentPage.value - 1) * pageSize.value + index + 1
 }
 
 // 格式化时间

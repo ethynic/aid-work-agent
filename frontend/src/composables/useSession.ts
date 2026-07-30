@@ -24,6 +24,7 @@ import { useTenantAuth } from './useTenantAuth'
 const sessions = ref<ChatSession[]>([])
 const currentSessionId = ref<string | null>(null)
 const isLoading = ref(false)
+const isLoadingMore = ref(false)  // 手机端上划加载下一页（独立标志，避免触发 v-if="isLoading" 卸载列表）
 const isLoaded = ref(false)    // 是否已加载完成（避免重复请求）
 const hasAuthError = ref(false) // 是否发生认证错误（401），用于防止重复请求
 const currentPage = ref(1)
@@ -312,6 +313,68 @@ export function useSession() {
   }
 
   /**
+   * 加载更多会话（用于手机端上划加载下一页）
+   *
+   * 与 loadSessions 不同：本函数把下一页数据**追加**到 sessions 列表，
+   * 而不是替换。这样手机端用户滚动到底部时可以无感地加载下一页。
+   *
+   * 关键：使用独立的 isLoadingMore 标志，**不**触碰 isLoading。
+   * 因为 AllSessions.vue 的 v-if="isLoading" 会卸载整个列表导致抖动，
+   * 追加加载时列表必须保持原样不动，只在底部显示"加载中..."。
+   *
+   * - 已经是最后一页或正在加载时，直接返回 false
+   * - 加载失败时按现有错误处理流程（401 触发登出）
+   *
+   * @returns 是否成功加载到新数据
+   */
+  async function loadMoreSessions(): Promise<boolean> {
+    if (hasAuthError.value) {
+      return false
+    }
+    if (!checkIsLoggedIn()) {
+      return false
+    }
+    // isLoading（初次加载）或 isLoadingMore（追加加载）任一为 true 都不再触发
+    if (isLoading.value || isLoadingMore.value) {
+      return false
+    }
+
+    const totalPages = Math.ceil(totalSessions.value / pageSize.value)
+    const nextPage = currentPage.value + 1
+    if (nextPage > totalPages) {
+      // 没有更多数据
+      return false
+    }
+
+    // 关键：用 isLoadingMore 而不是 isLoading，避免 UI 卸载列表
+    isLoadingMore.value = true
+    try {
+      const result = await listSessions(nextPage, pageSize.value)
+      const loadedSessions = result.sessions || []
+      // 追加到现有列表（去重，防止极端场景下重复）
+      const existingIds = new Set(sessions.value.map(s => s.session_id))
+      const newSessions = loadedSessions.filter(s => !existingIds.has(s.session_id))
+      sessions.value = [...sessions.value, ...newSessions]
+      currentPage.value = result.page
+      pageSize.value = result.page_size
+      totalSessions.value = result.total
+      isLoaded.value = true
+      hasAuthError.value = false
+      return newSessions.length > 0
+    } catch (e: any) {
+      console.error('Failed to load more sessions:', e)
+      if (e.status === 401 || e.message?.includes('401')) {
+        hasAuthError.value = true
+        console.warn('Authentication error (401) detected in loadMoreSessions')
+        triggerAuthError()
+      }
+      return false
+    } finally {
+      isLoadingMore.value = false
+    }
+  }
+
+  /**
    * 跳转到指定页
    */
   async function goToPage(page: number) {
@@ -453,6 +516,7 @@ export function useSession() {
     currentSessionId.value = null
     isLoaded.value = false
     isLoading.value = false
+    isLoadingMore.value = false
     hasAuthError.value = false
     currentPage.value = 1
     totalSessions.value = 0
@@ -462,6 +526,7 @@ export function useSession() {
     sessions,
     currentSessionId,
     isLoading,
+    isLoadingMore,
     isLoaded,
     hasAuthError,
     currentPage,
@@ -469,6 +534,7 @@ export function useSession() {
     pageSize,
     totalPages,
     loadSessions,
+    loadMoreSessions,
     goToPage,
     createNewSession,
     removeSession,

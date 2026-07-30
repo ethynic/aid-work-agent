@@ -96,7 +96,12 @@
 
 - 列宽：`60px`。
 - 列头："序号"。
-- 序号值由前端计算：有分页时 `(currentPage - 1) * pageSize + index + 1`，无分页时 `index + 1`。
+- 序号值由前端计算：
+  - **PC 端（分页器，每页数据独立替换）**：`(currentPage - 1) * pageSize + index + 1`
+  - **手机端（累积加载，列表是累积数据）**：`index + 1`（`index` 本身就是全局序号）
+  - **无分页**：`index + 1`
+
+  **关键陷阱**：手机端累积加载后 `currentPage` 会被更新成新页码，若误用 PC 端公式，前面已加载的行会按新页码重算导致序号整体偏移（如第 2 页加载后前 20 行变成 21-40）。正确做法是用 `seqNumber(index)` 函数根据 `isMobile` 分流，详见「6. 手机端列表页规范（累积加载）」。
 
 #### 操作列
 
@@ -131,10 +136,152 @@
 - 分页器应固定居于页面底部，水平居中。
   - **实现方式**：配合 `.page-content` 的 `flex-1 flex flex-col min-h-0` 布局，分页器会自动被推到 flex 容器的底部。
   - **示意**：外层容器使用 `page-container`（`h-full flex flex-col`），内容区使用 `page-content`（`flex-1 flex flex-col min-h-0`），此时分页器在内容区底部自然固定。
+- **仅 PC 端使用**。手机端不显示分页器，改用累积加载，详见「6. 手机端列表页规范（累积加载）」。
 
 ---
 
-## 6. 分页器固定底部的布局链要求
+## 6. 手机端列表页规范（累积加载）
+
+手机端列表页**不使用分页器**，而是滚动到底部时自动请求下一页并**追加**显示。这与 PC 端"分页器 + 当前页替换"模式完全不同，必须在数据加载、行号计算、加载状态管理三处分别处理，否则会出现"加载第 2 页后前 20 行消失/抖动"或"行号整体偏移"等问题。
+
+### 6.1 PC 端 vs 手机端对照
+
+| 维度 | PC 端 | 手机端 |
+|------|-------|--------|
+| 翻页方式 | 分页器（`BasePagination`） | 滚动到底部自动加载下一页 |
+| `sessions` 语义 | 当前页数据（**替换式**） | 累积数据（**追加式**，第 2 页加载后第 1 页数据仍保留） |
+| 加载状态标志 | `isLoading` | `isLoading`（初次）+ `isLoadingMore`（追加） |
+| 行号公式 | `(currentPage - 1) * pageSize + index + 1` | `index + 1` |
+| 底部分页器 | 显示 | 隐藏 |
+| 底部加载提示 | 无 | "加载中..." / "没有更多了" |
+
+### 6.2 数据加载：累积追加（核心规则）
+
+**核心规则**：手机端请求下一页时，新数据**追加**到列表数组，**不替换**原有数据。第 1 页 1-20 行保留，第 2 页 21-40 行追加在后面。
+
+Composable 中需提供独立的 `loadMore()` 函数，与 PC 端的 `loadList(page)` 区分：
+
+```ts
+// 累积加载示例（追加，不替换）
+async function loadMore(): Promise<boolean> {
+  if (isLoading.value || isLoadingMore.value) return false
+  const nextPage = currentPage.value + 1
+  if (nextPage > totalPages.value) return false
+
+  isLoadingMore.value = true  // 关键：用 isLoadingMore，不能用 isLoading
+  try {
+    const result = await api.list(nextPage, pageSize.value)
+    // 追加，不替换；按主键去重防止极端场景重复
+    const existingIds = new Set(items.value.map(i => i.id))
+    const newItems = result.items.filter(i => !existingIds.has(i.id))
+    items.value = [...items.value, ...newItems]
+    currentPage.value = result.page
+    total.value = result.total
+    return newItems.length > 0
+  } finally {
+    isLoadingMore.value = false
+  }
+}
+```
+
+### 6.3 加载状态：必须用独立的 `isLoadingMore` 标志（关键陷阱）
+
+**核心陷阱**：追加加载**不能**复用 `isLoading` 标志。
+
+列表页模板通常有 `v-if="isLoading"` 控制整个列表区域的挂载/卸载。若 `loadMore()` 也设置 `isLoading = true`，会触发列表卸载、显示"加载中..."全屏占位、加载完成后再挂载回来--DOM 重建导致滚动位置重置和视觉抖动，用户感知为"前 20 行消失，变成 21-40 行"。
+
+**正确做法**：
+- `isLoading`：仅用于**初次加载**（列表为空时）
+- `isLoadingMore`：用于**追加加载**，列表保持原样不动
+
+模板配合调整：
+
+```vue
+<!-- 顶部"加载中..."仅在列表为空时显示，追加加载时不卸载列表 -->
+<div v-if="isLoading && items.length === 0" class="flex items-center justify-center py-12">
+  加载中...
+</div>
+
+<!-- 列表始终渲染，追加加载时不动 -->
+<div v-else-if="items.length > 0">
+  <!-- 列表项 v-for... -->
+
+  <!-- 底部加载提示（仅手机端） -->
+  <div v-if="isMobile" class="py-3 text-center text-xs text-gray-400">
+    <span v-if="isLoadingMore">加载中...</span>
+    <span v-else-if="!hasMore">没有更多了</span>
+  </div>
+</div>
+
+<!-- 分页器仅 PC 端显示 -->
+<BasePagination v-if="!isMobile" ... />
+```
+
+### 6.4 行号计算：与 PC 端不同（关键陷阱）
+
+**核心陷阱**：手机端累积加载后，列表是累积数据（如 1-40 行），但 `currentPage` 也会被 `loadMore()` 更新成新页码（如 2）。若继续用 PC 端公式 `(currentPage - 1) * pageSize + index + 1`，前 20 行会按 `currentPage=2` 重算，全部偏移成 21-40。
+
+**正确做法**：用 `seqNumber(index)` 函数根据 `isMobile` 分流：
+
+```ts
+function seqNumber(index: number): number {
+  if (isMobile.value) return index + 1  // 累积列表，index 即全局序号
+  return (currentPage.value - 1) * pageSize.value + index + 1  // 当前页数据
+}
+```
+
+模板：`{{ seqNumber(index) }}`
+
+### 6.5 滚动监听实现
+
+```ts
+const scrollContainer = ref<HTMLElement | null>(null)
+const hasMore = computed(() => items.value.length < total.value)
+
+async function handleScroll() {
+  if (!isMobile.value) return  // 仅手机端启用，PC 端用分页器
+  const el = scrollContainer.value
+  if (!el) return
+  // 初次加载或追加加载任一进行中都跳过，防止重复请求
+  if (isLoading.value || isLoadingMore.value || !hasMore.value) return
+
+  const { scrollTop, scrollHeight, clientHeight } = el
+  // 距离底部 80px 时触发加载
+  if (scrollHeight - scrollTop - clientHeight < 80) {
+    await loadMore()
+  }
+}
+```
+
+```vue
+<div ref="scrollContainer" class="flex-1 overflow-y-auto" @scroll.passive="handleScroll">
+  <!-- 列表内容 -->
+</div>
+```
+
+**实现要点**：
+- `@scroll.passive`：必须加 `passive` 修饰符，不阻止滚动默认行为，保证滚动流畅
+- 触发阈值：`80px`（可根据行高调整。过小用户需停下来才触发；过大预加载过多）
+- 并发保护：`isLoading.value || isLoadingMore.value` 任一为 `true` 都跳过
+
+### 6.6 判断手机端
+
+使用 `useMobile` composable（`frontend/src/composables/useMobile.ts`），断点 768px：
+
+```ts
+import { useMobile } from '@/composables/useMobile'
+const { isMobile } = useMobile()
+```
+
+页面宽度 < 768px 时 `isMobile=true`，自动切换到累积加载模式。
+
+### 6.7 参考实现
+
+`frontend/src/components/AllSessions.vue` 是本规范的参考实现，包含完整的累积加载、行号分流、滚动监听、加载状态隔离逻辑。
+
+---
+
+## 7. 分页器固定底部的布局链要求
 
 分页器固定在页面底部，需要**整条布局链**（从外层布局到页面容器）全部正确设置 flex 样式。以下是各层级的具体要求：
 **关键点**：`min-h-0` 是 flex 子元素能收缩的必要条件，缺少它会导致子元素无法被压缩，分页器无法被推到容器底部。
@@ -150,7 +297,7 @@
 
 ---
 
-## 7. 公共 Composable：`usePageContext`
+## 8. 公共 Composable：`usePageContext`
 
 列表页的分页序号计算、搜索、刷新等通用逻辑已封装为 `usePageContext` composable（`frontend/src/composables/usePageContext.ts`）：
 
@@ -173,7 +320,7 @@ const { currentPage, pageSize, seqNumber, handleSearch, refresh } =
 
 ---
 
-## 8. 公共 Composable：`useTableSelection`
+## 9. 公共 Composable：`useTableSelection`
 
 表格批量选择逻辑已封装为 `useTableSelection` composable（`frontend/src/composables/useTableSelection.ts`）：
 
