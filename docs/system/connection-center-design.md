@@ -257,29 +257,24 @@ class TavilyConnector(BaseConnector):
 
 按使用频率分 3 批实现：
 
-### Phase 2 - 高优先级 5 个
+### Phase 2 - 高优先级
 
 | connector_id | 名称 | 类别 | 测试连接方式 |
 |--------------|------|------|------------|
-| `tavily` | Tavily 搜索 | search | 调 search API |
-| `email_smtp` | SMTP/IMAP 邮箱 | communication | `smtplib.SMTP.login` |
 | `feishu` | 飞书 | communication | 获取 tenant_access_token |
 | `qichacha` | 企查查 | enterprise | 调 ping 接口 |
 | `wecom` | 企业微信 | communication | 获取 access_token |
+| `dingtalk` | 钉钉 | communication |
 
-### Phase 3 - 补齐 7-10 个
+### Phase 3 - 补齐
 
 | connector_id | 名称 | 类别 |
 |--------------|------|------|
-| `dingtalk` | 钉钉 | communication |
 | `amap` | 高德地图 | utility |
-| `weather` | 天气 | utility |
 | `baidu_translate` | 百度翻译 | utility |
 | `web_fetch` | 网页抓取 | utility |
 | `ocr` | OCR 识别 | utility |
 | `image_gen` | 图片生成（Qwen-Image） | ai |
-
-总计 12-15 个内置连接器，覆盖企业日常 80% 场景。
 
 ---
 
