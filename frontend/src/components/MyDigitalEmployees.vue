@@ -69,15 +69,6 @@
           >
             立即使用
           </button>
-
-          <!-- 定制提示词按钮：仅租户模式显示（extra_md 是租户级特性） -->
-          <button
-            v-if="isTenantMode"
-            class="w-full h-8 mt-2 rounded-lg text-xs font-medium text-muted border border-default hover:border-primary-300 hover:text-primary-600 transition-colors"
-            @click.stop="handleCustomizePrompt(agent)"
-          >
-            定制提示词
-          </button>
         </div>
       </div>
     </div>
@@ -176,13 +167,6 @@ function handleUseAgent(agent: SubagentListItem) {
   } else {
     router.push(`/chat/${agent.agent_id}`)
   }
-}
-
-// 跳转到租户定制提示词编辑器（仅租户模式可用）
-function handleCustomizePrompt(agent: SubagentListItem) {
-  const tid = route.params.tenant_id
-  if (!isTenantMode.value || !tid) return
-  router.push(`/t/${tid}/agent/${agent.agent_id}/prompt`)
 }
 
 onMounted(() => loadAgents())

@@ -75,7 +75,6 @@ describe('entry route responsibilities', () => {
         "wecom-personal-rpa",
         "settings",
         "my-agents",
-        "agent/:subagent_name/prompt",
         "chat",
         "chat/:subagent",
         "all-sessions",
