@@ -204,12 +204,24 @@ class TestDailyUsageDetailAPI:
             assert "credit_cost" in it
             assert "created_at" in it
 
-    def test_tenant_admin_returns_forbidden(self, temp_tenant_for_detail):
-        """场景 2：tenant_admin 调用 -> success: False + message 含"无权限" """
+    def test_tenant_admin_success_without_token_fields(self, temp_tenant_for_detail):
+        """场景 2：tenant_admin 调用 -> success: True，但不返回 token 三列
+
+        租户管理员可查看自己租户的对话用量明细，但 prompt_tokens /
+        cached_input_tokens / completion_tokens 三列仅平台管理员可见。
+        """
         from src.saas.api import billing_balance
 
         tenant_id = temp_tenant_for_detail
         today = datetime.now().strftime("%Y-%m-%d")
+
+        # 写入一条 chat_records，确保 items 非空以校验字段裁剪
+        _insert_chat_record(
+            tenant_id=tenant_id,
+            user_id=f"detail_test_{uuid.uuid4().hex[:6]}",
+            session_id=f"sess_{uuid.uuid4().hex[:8]}",
+            credit_cost=5,
+        )
 
         def fake_require_admin(request):
             return {
@@ -235,8 +247,20 @@ class TestDailyUsageDetailAPI:
                 )
             )
 
-        assert response["success"] is False
-        assert "无权限" in response["message"]
+        assert response["success"] is True
+        assert response["total"] >= 1
+        # 校验租户管理员不返回 token 三列
+        for it in response["items"]:
+            assert "record_id" in it
+            assert "session_id" in it
+            assert "session_title" in it
+            assert "user_display" in it
+            assert "source_type" in it
+            assert "credit_cost" in it
+            assert "created_at" in it
+            assert "prompt_tokens" not in it, "租户管理员不应返回 prompt_tokens"
+            assert "cached_input_tokens" not in it, "租户管理员不应返回 cached_input_tokens"
+            assert "completion_tokens" not in it, "租户管理员不应返回 completion_tokens"
 
     def test_normal_user_returns_forbidden(self, temp_tenant_for_detail):
         """场景 3：普通 user 调用 -> success: False + message 含"无权限" """

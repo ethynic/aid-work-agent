@@ -230,9 +230,10 @@ export interface DailyUsageDetailItem {
   source_type: string
   user_message: string
   assistant_message: string
-  prompt_tokens: number
-  cached_input_tokens: number
-  completion_tokens: number
+  // 以下三字段仅平台管理员可见，租户管理员调用时不返回
+  prompt_tokens?: number
+  cached_input_tokens?: number
+  completion_tokens?: number
   credit_cost: number
   created_at: string
 }

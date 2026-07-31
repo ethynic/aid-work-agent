@@ -219,27 +219,33 @@ async def get_daily_usage_detail(
     page: int = Query(1, ge=1, description="页码，从 1 开始"),
     page_size: int = Query(20, ge=1, le=200, description="每页记录数"),
 ):
-    """查询某日 chat_records 明细（仅平台管理员可访问）
+    """查询某日 chat_records 明细（平台管理员 + 租户管理员可访问）
 
     返回字段：record_id、session_id、session_title（JOIN chat_sessions）、
     user_display（JOIN users，含 nickname/username/phone）、source_type、
     prompt_tokens、cached_input_tokens、completion_tokens、credit_cost、created_at
 
-    权限：仅 platform_admin。租户管理员/普通用户调用返回 success: False。
-    平台管理员需带 X-Tenant-Id 代管理目标租户。
+    权限：platform_admin + tenant_admin。
+    - 平台管理员需带 X-Tenant-Id 代管理目标租户，可看到全部字段。
+    - 租户管理员只能查自己租户的数据，且 prompt_tokens / cached_input_tokens / completion_tokens
+      三个字段不返回（前端也隐藏这 3 列），仅 platform_admin 可见。
     """
     if not settings.saas.enabled:
         return {"success": False, "message": "未启用 SaaS 模式无法访问"}
 
     admin = require_admin(request)
 
-    # 二次权限校验：仅平台管理员
-    if admin.get("role") != "platform_admin":
+    # 二次权限校验：仅平台管理员 + 租户管理员
+    role = admin.get("role")
+    if role not in ("platform_admin", "tenant_admin"):
         return {"success": False, "message": "无权限查看对话用量明细"}
 
     tenant_id = admin.get("tenant_id")
     if not tenant_id:
         return {"success": False, "message": "未关联租户"}
+
+    # 是否返回 token 三列（仅平台管理员）
+    reveal_tokens = role == "platform_admin"
 
     # 日期格式校验（参数化 SQL 已防注入，这里防逻辑错误）
     try:
@@ -328,13 +334,15 @@ async def get_daily_usage_detail(
                     "source_type": r.get("source_type") or "-",
                     "user_message": r.get("user_message") or "",
                     "assistant_message": r.get("assistant_message") or "",
-                    "prompt_tokens": int(r.get("prompt_tokens") or 0),
-                    "cached_input_tokens": int(r.get("cached_input_tokens") or 0),
-                    "completion_tokens": int(r.get("completion_tokens") or 0),
                     "credit_cost": float(r.get("credit_cost") or 0),
                     "created_at": r.get("created_at").strftime("%Y-%m-%d %H:%M:%S")
                         if r.get("created_at") else None,
                 })
+                # token 三列仅平台管理员可见，租户管理员不返回
+                if reveal_tokens:
+                    items[-1]["prompt_tokens"] = int(r.get("prompt_tokens") or 0)
+                    items[-1]["cached_input_tokens"] = int(r.get("cached_input_tokens") or 0)
+                    items[-1]["completion_tokens"] = int(r.get("completion_tokens") or 0)
 
         return {
             "success": True,
