@@ -6,7 +6,7 @@
         <div class="text-sm font-medium text-default">数字员工</div>
         <div class="text-xs text-muted mt-0.5">环境变量将注入运行时供 http_api 工具 ${VAR_NAME} 引用</div>
       </div>
-      <ul v-if="!loadingAgents" class="py-1">
+      <ul v-if="!loadingAgents && availableAgents.length > 0" class="py-1">
         <li
           v-for="agent in availableAgents"
           :key="agent.agent_id"
@@ -21,7 +21,8 @@
           {{ agent.name }}
         </li>
       </ul>
-      <div v-else class="p-4 text-center text-xs text-muted">加载中...</div>
+      <div v-else-if="loadingAgents" class="p-4 text-center text-xs text-muted">加载中...</div>
+      <div v-else class="p-4 text-center text-xs text-muted">暂无支持配置的数字员工</div>
     </aside>
 
     <!-- 右侧：环境变量编辑 -->
@@ -91,7 +92,7 @@ import { useRoute } from 'vue-router'
 import { useToast } from 'vue-toastification'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import {
-  getAllAvailableAgents,
+  getMyAllowedAgents,
   getSubagentEnvVars,
   setSubagentEnvVars,
   type AgentItem,
@@ -116,7 +117,7 @@ const envVarError = ref('')
 onMounted(async () => {
   loadingAgents.value = true
   try {
-    const res = await getAllAvailableAgents()
+    const res = await getMyAllowedAgents()
     if (res.success && res.data) {
       availableAgents.value = res.data
       if (availableAgents.value.length > 0) {

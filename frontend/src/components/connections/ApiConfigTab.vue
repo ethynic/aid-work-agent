@@ -6,7 +6,7 @@
         <div class="text-sm font-medium text-default">数字员工</div>
         <div class="text-xs text-muted mt-0.5">仅显示支持 API 配置的数字员工</div>
       </div>
-      <ul v-if="!loadingAgents" class="py-1">
+      <ul v-if="!loadingAgents && supportedAgents.length > 0" class="py-1">
         <li
           v-for="agent in supportedAgents"
           :key="agent.agent_id"
@@ -21,7 +21,8 @@
           {{ agent.name }}
         </li>
       </ul>
-      <div v-else class="p-4 text-center text-xs text-muted">加载中...</div>
+      <div v-else-if="loadingAgents" class="p-4 text-center text-xs text-muted">加载中...</div>
+      <div v-else class="p-4 text-center text-xs text-muted">暂无支持配置的数字员工</div>
     </aside>
 
     <!-- 右侧：配置文件管理 -->
@@ -87,7 +88,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { useToast } from 'vue-toastification'
 import {
-  getAllAvailableAgents,
+  getMyAllowedAgents,
   getConfigFileStatus,
   uploadConfigFile,
   downloadConfigFile,
@@ -121,7 +122,7 @@ const fileInputRef = ref<HTMLInputElement | null>(null)
 onMounted(async () => {
   loadingAgents.value = true
   try {
-    const res = await getAllAvailableAgents()
+    const res = await getMyAllowedAgents()
     if (res.success && res.data) {
       availableAgents.value = res.data
       if (supportedAgents.value.length > 0) {
