@@ -1723,6 +1723,9 @@ app.include_router(tenant_migration.router)
 app.include_router(context_compression_routes.router)
 app.include_router(billing_recharges.router)
 app.include_router(billing_balance.router)
+# 视频生成工具（MVP 抽卡式，见 docs/system/content-production/mvp-design.md）
+from src.api import video_gen as video_gen_api  # noqa: E402
+app.include_router(video_gen_api.router)
 # app.include_router(context_compression_routes.router)
 
 

@@ -20,26 +20,27 @@
 |------|------|------|------|
 | 0.1 配置项 | `src/config/settings.py` 加 WanxConfig + env 加载 | 设计§4 | `settings.llm.wanx` 可读（复用QWEN_API_KEYS） |
 | 0.2 万相 API（✅ spike 已完成） | 实测通过：`wan2.7-r2v-2026-06-12` + `reference_image` + `first_frame` + **base64传图** | 设计§5、§1.1 | 假睫毛+模特图均成功生成 |
-| 0.3 人脸裁剪验证 | OpenCV haarcascade 检测人脸+裁剪，消除鬼影 | 设计§1.2 | 长图裁剪后比例正常，无鬼影 |
-| 0.4 FFmpeg 验证 | 确认环境有 ffmpeg，drawtext 烧录文字成功 | 设计§11 | 输出带AI标识的 mp4 |
+| 0.3 FFmpeg 验证 | 确认环境有 ffmpeg，drawtext 烧录文字成功 | 设计§11 | 输出带AI标识的 mp4 |
 
-> **Spike 完整结论（2026-07-30）**：①模型 `wan2.7-r2v-2026-06-12`（r2v）；②media 用 `reference_image`（非first_frame/last_frame）；③只需1张图；④**base64 直传**（无需公网URL/OSS）；⑤**长图须人脸裁剪**否则鬼影；⑥必须用 httpx。Phase 0 已基本无阻塞。
+> **Spike 完整结论（2026-07-30）**：①模型 `wan2.7-r2v-2026-06-12`（r2v）；②media 用 `reference_image`（非first_frame/last_frame）；③只需1张图；④**base64 直传**（无需公网URL/OSS）；⑤必须用 httpx。Phase 0 已基本无阻塞。
+>
+> **素材预处理决策（2026-07-31 修正）**：MVP **不做程序侧素材预处理**（不裁剪/不抠图/不人脸检测），由用户自行上传正确比例素材（建议竖屏 9:16）。原 0.3 人脸裁剪任务删除，不再引入 OpenCV 依赖。
 
 ---
 
-## Phase 1：数据层 + 文件资产 + 预处理（2-3天）
+## Phase 1：数据层 + 文件资产（2-3天）
 
-**目标**：建表 + MediaRegistry + 人脸裁剪。可与 Phase 2 并行。
+**目标**：建表 + MediaRegistry（base64 直传，不做素材预处理）。可与 Phase 2 并行。
 
 | 任务 | 产出文件 | 对接 | 验收 |
 |------|---------|------|------|
 | 1.1 建表 | `src/video_gen/__init__.py`、`src/video_gen/db.py`（init_video_gen_tables） | 设计§3 | 启动幂等建 gen_sessions/gen_cards |
-| 1.2 建表触发 | `src/db/database.py` L1306 后加 try/except | 设计§3.3 | 应用启动自动建表 |
+| 1.2 建表触发 | `src/db/database.py` _init_postgresql 末尾加 try/except | 设计§3.3 | 应用启动自动建表 |
 | 1.3 MediaRegistry | `src/video_gen/media.py`（register_local/download_and_register/**read_as_base64**/burn_ai_label） | 设计§7、§11 | 注册mp4→可下载带AI标识；read_as_base64 读图转base64 |
-| 1.4 人脸裁剪 | `src/video_gen/preprocess.py`（detect_face_and_crop） | 设计§1.2 | 长图→裁剪到人脸区域正常比例；纯产品图→居中裁剪 |
 
 **1.3 验收**：register_local 写 Redis 含六字段；read_as_base64 返回 `data:image/jpeg;base64,...`；burn_ai_label 输出右下角"AI 生成内容"。
-**1.4 验收**：352×2048长图→裁剪到人脸区域（接近16:9）；无鬼影。
+
+> 注：不做素材预处理（不裁剪/不抠图）。原 1.4 人脸裁剪任务已删除，用户原图直接 base64 传万相。
 
 ---
 
@@ -71,8 +72,7 @@
 
 **3.2 验收细节（create_session）**：
 - 校验 scene_id；expanded_prompt 空则用模板填空。
-- **人脸裁剪**：preprocess.detect_face_and_crop(product_image_fid) → 裁剪图。
-- **base64**：media.read_as_base64(裁剪图file_id) → 传给万相（无需公网URL）。
+- **base64 直传**：media.read_as_base64(product_image_fid) → 读用户上传原图转 base64 传万相（无需公网URL，不做任何预处理）。
 - card_count 个不同 seed，各调 wanx.submit。
 - 写 gen_sessions(generating) + gen_cards(PENDING)。
 
@@ -108,7 +108,7 @@
 | 5.3 工作台Tab改造 | `frontend/src/components/social-media/SocialMediaWorkbench.vue` 加Tab容器 | 设计§12.3 | "内容创作"Tab 引入 VideoGeneration；现有功能不破坏 |
 
 **5.2 验收细节**：
-- 向导：场景下拉、产品图上传（POST /api/upload，1张）、**人脸裁剪预览（可调整）**、文案框、条数选择、prompt预览可微调、开始抽卡按钮。
+- 向导：场景下拉、产品图上传（POST /api/upload，1张）、文案框、条数选择、prompt预览可微调、开始抽卡按钮。（不做裁剪预览，原图直传）
 - 抽卡结果：v-for cards，视频预览/生成中/失败三态；留用开关、重新生成、下载按钮。
 - 前端轮询：generating 状态的 session 每5s 刷新。
 - 历史：listSessions 列表，点击切换。
@@ -127,7 +127,7 @@
 
 | 任务 | 验收点 | PRD§0.6 |
 |------|--------|---------|
-| 6.1 完整抽卡流程 | 选场景→传1张产品图→人脸裁剪→填文案→生成2-4条→卡片展示 | ①②③④ |
+| 6.1 完整抽卡流程 | 选场景→传1张产品图（用户自备正确比例）→填文案→生成2-4条→卡片展示 | ①②③④ |
 | 6.2 防变形 | 首尾帧模式成片产品无明显变形 | ⑤ |
 | 6.3 合规标识 | 成片右下角"AI 生成内容" | ⑥ |
 | 6.4 留用+精修 | 标记留用、重新生成（换prompt/seed） | ⑦⑧ |
@@ -140,8 +140,8 @@
 
 | Phase | 工期 | 说明 |
 |-------|------|------|
-| Phase 0 | 0.5天 | spike 已完成大半，补人脸裁剪验证 |
-| Phase 1 | 2-3天 | 数据层+MediaRegistry(base64)+人脸裁剪 |
+| Phase 0 | 0.5天 | spike 已完成大半，补 FFmpeg 验证（不做人脸裁剪） |
+| Phase 1 | 2-3天 | 数据层+MediaRegistry(base64) |
 | Phase 2 | 1-2天 | 万相 provider（与P1并行） |
 | Phase 3 | 2-3天 | Service 层 |
 | Phase 4 | 1-2天 | API + 路由 + 轮询job |
@@ -158,11 +158,11 @@
 | 风险 | 触发条件 | 备选 |
 |------|---------|------|
 | 万相变形 | ✅ spike 已验证 reference_image 防变形有效 | Phase 6 用真实美妆图最终量化 |
-| 长图鬼影 | ✅ spike 已验证：人脸裁剪可消除 | preprocess 检测不到人脸时居中裁剪 |
-| FFmpeg 不可用 | Phase 0.4 失败 | Dockerfile 加装 ffmpeg；或临时用万相 watermark=true |
+| 长图鬼影 | 用户上传长图/全身图直接生成会出鬼影 | MVP 不做程序侧预处理；前端加比例提示，由用户重传正确比例图（竖屏 9:16）。若后续需兜底，Phase 1+ 评估是否恢复预处理 |
+| FFmpeg 不可用 | Phase 0.3 失败 | Dockerfile 加装 ffmpeg；或临时用万相 watermark=true |
 | 万相 task 查询过期(24h) | 长时间未轮询 | poll 时捕获下载失败，标 FAILED 提示重新生成 |
 | blingbling光影效果不足 | AI视频生成闪光效果天生难 | 后期叠加闪光特效层（FFmpeg），Phase 2+ 评估 |
-| 社媒工作台Tab改造破坏现有功能 | Phase 5.3 | Tab用v-if隔离，现有功能独立Tab不受影响 |
+| 社媒工作台Tab改造破坏现有功能 | Phase 5.3 | Tab用v-show隔离，现有功能独立Tab不受影响 |
 
 ---
 

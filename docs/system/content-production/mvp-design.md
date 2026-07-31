@@ -13,7 +13,7 @@
 | 产品形态 | 抽卡式工具：选场景→上传1张产品图→填文案→生成2-4条→留用/重新生成→下载 | PRD §0.1（spike后修正：单图非2图） |
 | 防变形 | **reference_image 模式**（r2v 模型，1张产品图作 reference_image+first_frame） | spike 实测验证，产品不变形 |
 | 图传方式 | **base64 编码直传**（`data:image/jpeg;base64,...`） | spike 发现万相支持base64，无需公网URL/图床/OSS |
-| 素材预处理 | **生成前人脸检测+智能裁剪**（必须） | spike 实测：长图/全身图直接生成会出鬼影重复，须裁剪到主体区域 |
+| 素材预处理 | **不做程序侧预处理**，用户自行上传正确比例素材 | 由用户保证素材比例（如竖屏 9:16），程序不做裁剪/抠图；长图鬼影属素材问题 |
 | 图生成 provider | **通义万相 wan2.7-r2v-2026-06-12**（云 API，spike 已验证） | reference_image 防变形、720P、5s |
 | 场景预设 | **硬编码配置常量**（2个场景：产品展示/氛围），不建表 | MVP 最轻 |
 | 计费 | **MVP 不计费** | 验证阶段 |
@@ -30,32 +30,31 @@
 **完整链路（钉死）**：
 ```
 运营向导上传产品图 → POST /api/upload → file_id（落本地storage）
-→ 人脸检测+裁剪（§1.2）
-→ 生成时：读裁剪后的本地图片 → base64编码 → data:image/jpeg;base64,{b64}
+→ 生成时：读本地原图 → base64编码 → data:image/jpeg;base64,{b64}
 → 传给 wanx.submit（media.reference_image.url = base64串, first_frame.url = 同）
 ```
+> 注：程序不做任何素材预处理（不裁剪/不抠图）。用户须自行上传正确比例素材（建议竖屏 9:16）；长图/全身图直接生成可能出现鬼影，属素材问题，由用户重传。
 
 **优势**：✅ 零外部依赖（不需 PUBLIC_BASE_URL 公网可达、不需 OSS、不需图床） ✅ 更安全（图片不暴露公网） ✅ 本地开发也能跑
 
 > 之前设计的 `PUBLIC_BASE_URL + file_id 公网地址` 方案**作废**，改用 base64。`MediaRegistry.build_public_url` 不再需要，改为 `read_as_base64(file_id)`。
 
-### 1.2 素材预处理：人脸检测+智能裁剪（spike 发现，必须）
+### 1.2 素材预处理：不做程序侧预处理（由用户保证素材质量）
 
-> **Spike 发现（2026-07-30）**：用一张 352×2048 的模特全身长图直接生成，出现**鬼影/重复画面**（非人脸区域被模型幻觉出重复内容，上面清晰下面越来越模糊）。裁剪到眼睛/人脸区域（352×410，正常比例）后**鬼影消失、眨眼效果聚焦**。
+> **决策（2026-07-31 修正）**：MVP **不做任何程序侧素材预处理**（不裁剪、不抠图、不做人脸检测）。理由：①让用户自己上传正确比例的素材，比程序兜底更简单，避免引入 OpenCV 等重型依赖；②素材质量是运营职责。
 
-**结论：生成前必须做人脸检测+智能裁剪**，不能把任意比例的原图直接喂给万相。
+**Spike 的相关发现（仅作素材选型参考，程序不处理）**：
+- spike 曾实测 352×2048 模特全身长图直接生成出现**鬼影/重复画面**；裁剪到正常比例（如 352×410）后鬼影消失。
+- **结论转化为对用户的素材要求**（而非程序逻辑）：用户须上传**主体清晰、比例正常**的素材（建议竖屏 9:16 或接近），避免长图/全身图。若上传不当比例导致鬼影，由用户重传，程序不兜底。
 
-**MVP 预处理流程**：
+**MVP 无预处理流程**：
 ```
-上传图 → 人脸检测（OpenCV haarcascade / MediaPipe Face Detection）
-       → 裁剪到人脸/主体区域（目标比例接近 16:9 或 9:16）
-       → 裁剪结果展示给运营确认（可手动调整裁剪框）
-       → 裁剪图作 reference_image + first_frame 传给万相
+上传图（用户自行保证比例） → POST /api/upload → file_id
+→ 生成时：读本地原图 → base64 → 传给万相（reference_image + first_frame 同图）
 ```
 
-- 实现：`opencv-python`（`haarcascade_frontalface_default.xml`）或 MediaPipe FaceDetection。
-- 检测不到人脸时（纯产品图）：按主体居中裁剪到目标比例（16:9）。
-- 这是工艺链的**第0个环节**。之前 PRD §0.6 说"MVP不做抠图"，但**人脸裁剪是必须的**（不做就出鬼影），与抠图不同。
+- 不新增 `preprocess.py`，不引入 `opencv-python` / MediaPipe 等依赖。
+- 前端上传处可加一行**轻量提示**（建议竖屏 9:16，避免长图），但不阻断上传、不做校验。
 
 ### 1.3 与社媒模块的合并架构（v0.5，入口与模块归属）
 
@@ -131,7 +130,6 @@
 | `src/video_gen/__init__.py` | 包标识 |
 | `src/video_gen/scenes.py` | **场景预设硬编码常量**（2个场景） |
 | `src/video_gen/db.py` | 建表 `init_video_gen_tables(conn)` |
-| `src/video_gen/preprocess.py` | **人脸检测+智能裁剪**（OpenCV，§1.2） |
 | `src/video_gen/media.py` | MediaRegistry：视频/图片注册 file_id + **读图为base64** |
 | `src/video_gen/wanx_provider.py` | 通义万相 r2v 调用（提交任务+查状态） |
 | `src/video_gen/service.py` | VideoGenService 业务逻辑 |
@@ -165,10 +163,9 @@ CREATE TABLE IF NOT EXISTS gen_sessions (
     tenant_id      TEXT,                       -- 租户（可空，demo模式）
     user_id        TEXT,                       -- 发起用户
     scene_id       TEXT NOT NULL,             -- 场景预设id（硬编码，如 "product_showcase"）
-    product_image_fid TEXT NOT NULL,          -- 产品图 file_id（r2v 作 reference_image+first_frame）
+    product_image_fid TEXT NOT NULL,          -- 产品图 file_id（用户上传的原图，r2v 作 reference_image+first_frame，base64 直传）
     copywriting    TEXT NOT NULL,             -- 运营填写的文案
     expanded_prompt TEXT,                      -- 提示词引擎扩展后的完整prompt（可微调，见§6）
-    product_image_url TEXT,                    -- 产品图公网URL（{PUBLIC_BASE_URL}/api/files/{fid}/download，传给万相）
     card_count     INT NOT NULL DEFAULT 3,    -- 本次抽卡条数（2-4）
     status         TEXT NOT NULL DEFAULT 'generating',  -- generating/done/failed
     created_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -623,14 +620,15 @@ class VideoGenService:
 
 ```
 1. 校验 get_scene(scene_id) 非空，否则 raise ValueError("未知场景")
-2. 拼产品图公网URL（无需读Redis取path，直接用file_id拼）：
-   - product_image_url = MediaRegistry.build_public_url(product_image_fid)
-3. expanded_prompt = expanded_prompt or scene.prompt_template.format(copywriting=copywriting)
+2. expanded_prompt = expanded_prompt or scene.prompt_template.format(copywriting=copywriting)
+3. 读用户上传的产品图 base64（spike 验证万相支持 base64 直传，§1.1）：
+   - image_data_url = MediaRegistry.read_as_base64(product_image_fid)
+   （不做任何素材预处理，直接用用户上传的原图）
 4. 生成 card_count 个不同 seed（如 base_seed + i，base_seed=random.randint(0,2147483647)）
-5. 对每个 seed 调 wanx.submit(prompt=expanded_prompt, product_image_url, seed,
+5. 对每个 seed 调 wanx.submit(prompt=expanded_prompt, image_data_url, seed,
       negative_prompt=scene.negative_prompt, duration=scene.default_duration)
-   → 拿 task_id（media 内部 reference_image + first_frame 都用 product_image_url）
-6. 写 gen_sessions（status=generating, product_image_url）
+   → 拿 task_id（media 内部 reference_image + first_frame 都用 image_data_url）
+6. 写 gen_sessions（status=generating, product_image_fid=用户原图file_id）
 7. 写 gen_cards（每条 provider_task_id, provider_status=PENDING, seed, variant_prompt=expanded_prompt）
 8. 返回 session + cards
 ```
@@ -802,11 +800,12 @@ export const videoGenAPI = {
 **① 向导区（创建会话）**
 - 场景下拉（listScenes）
 - 产品图上传（POST /api/upload 拿 file_id，**只需1张**）
-- **人脸裁剪预览**（上传后调预处理，展示裁剪框，运营可调整）
 - 文案文本框
 - 抽卡条数选择（2/3/4）
 - prompt 预览框（可微调 expanded_prompt，留空则用场景默认）
 - 「开始抽卡」按钮 → createSession
+
+> 注：不做程序侧素材预处理（不裁剪/不抠图）。上传处可加一行轻量提示「建议竖屏 9:16，避免长图」，但不阻断上传、不做校验。
 
 **② 抽卡结果区（cards 网格）**
 - v-for 渲染 cards，每个卡片：视频预览（`/api/files/{output_fid}` inline）/ 生成中占位 / 失败提示
@@ -843,11 +842,11 @@ export const videoGenAPI = {
 | 万相提交失败（非2xx） | card 写 error_msg，provider_status=FAILED，不重试（用户可 regenerate） |
 | 万相轮询 FAILED | card 写 error_msg，provider_status=FAILED |
 | 万相 video_url 过期（24h） | poll 时若下载失败，card 标 FAILED + error_msg="成片下载失败，请重新生成" |
-| file_id Redis 过期（24h） | main.py _get_file_info 有磁盘扫描恢复（L1077），video scene 在扫描范围 |
-| PUBLIC_BASE_URL 未配置 | createSession 时报错"未配置 PUBLIC_BASE_URL，无法生成图片公网地址" |
+| file_id Redis 过期 | main.py _get_file_info 有磁盘扫描恢复（L1077），但仅扫 UPLOAD_DIR 不覆盖 storage/tenants；video_gen 成片靠 Redis TTL（默认7天）维持可访问，过期需重新生成 |
 | tenant_id 为空（demo） | 允许，过滤用 IS NOT DISTINCT FROM NULL |
 | FFmpeg 不可用 | burn_ai_label 抛异常，card 标 FAILED；记录待补装 FFmpeg |
-| 用户传非图片文件作首尾帧 | createSession 校验 mime_type startswith image/，否则报错 |
+| 用户上传非图片文件作产品图 | createSession 校验 mime_type startswith image/，否则报错 |
+| 用户上传不当比例素材（长图/全身图） | 程序不预处理，直接传万相；若出鬼影属素材问题，由用户重传正确比例图 |
 
 ---
 
@@ -869,13 +868,13 @@ PUBLIC_BASE_URL=https://agent2.aidingyi.cn   # 万相 media.url 用：{PUBLIC_BA
 | PRD 验收项 | 本设计实现位置 |
 |-----------|--------------|
 | 选场景（1-2个） | §6 SCENES 常量 + `/scenes` API |
-| 上传素材 | `/api/upload`（§12.3）；**注：MVP 不做自动抠图**（首尾帧用原图，抠图列 Phase 1） |
+| 上传素材 | `/api/upload`（§12.3）；**注：MVP 不做任何程序侧素材预处理**（不抠图、不裁剪、不人脸检测），直接用用户上传的原图（§1.2） |
 | 填文案+prompt | createSession copywriting + expanded_prompt（§8.4） |
 | 抽卡2-4条 | createSession card_count + 不同 seed（§8.4） |
-| 主体一致性 | 强制首尾帧模式（§1） |
+| 主体一致性 | reference_image + first_frame 同图模式（§1，spike 验证防变形） |
 | 合规标识 | FFmpeg burn_ai_label（§11） |
 | 留用 | set_card_kept（§9.2） |
 | 重新生成式编辑 | regenerate_card（§8.1） |
 | 下载 | `/cards/{id}/download-url` → `/api/files/{fid}/download`（§9.2） |
 
-> **MVP 范围澄清（抠图）**：PRD §0.6 提到"自动抠图"，但抠图需集成 Rembg/SAM3（额外依赖+GPU）。MVP **首尾帧直接用运营上传的原图**，不做抠图。抠图列为 Phase 1。本设计文档以此为准。
+> **MVP 范围澄清（素材预处理）**：PRD §0.6 提到"自动抠图"。MVP **不做任何程序侧素材预处理**（不抠图、不裁剪、不人脸检测），直接用用户上传的原图——素材质量（比例/主体清晰度）由用户保证。抠图/裁剪等预处理列 Phase 1。本设计文档以此为准。

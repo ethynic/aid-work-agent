@@ -78,6 +78,19 @@ class FailoverConfig(BaseModel):
     alert: FailoverAlertConfig = Field(default_factory=FailoverAlertConfig)
 
 
+class WanxConfig(BaseModel):
+    """通义万相（图生视频）配置。
+
+    万相与 Qwen 同属阿里云百炼，同一个 API key 通用，故 api_key 默认回退到
+    settings.llm.qwen.api_keys[0]。MVP 用旧域名 dashscope.aliyuncs.com，无需 workspace_id。
+    详见 docs/system/content-production/mvp-design.md §4。
+    """
+    api_key: str = ""                          # 优先读 WANX_API_KEY；空则回退 qwen.api_keys[0]
+    model: str = "wan2.7-r2v-2026-06-12"       # r2v（reference-to-video），spike 已验证
+    poll_interval_seconds: int = 30            # 后台轮询间隔
+    task_max_age_hours: int = 24               # 万相 task_id 查询有效期
+
+
 class LLMConfig(BaseModel):
     """LLM配置"""
     provider: str = "zhipu"
@@ -85,6 +98,7 @@ class LLMConfig(BaseModel):
     zhipu: LLMProviderConfig = Field(default_factory=LLMProviderConfig)
     deepseek: LLMProviderConfig = Field(default_factory=LLMProviderConfig)
     failover: FailoverConfig = Field(default_factory=FailoverConfig)
+    wanx: WanxConfig = Field(default_factory=WanxConfig)
 
 
 class StorageConfig(BaseModel):
@@ -442,6 +456,11 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
         zhipu_cfg["model"] = os.getenv("ZHIPU_MODEL_CODE")
     if os.getenv("ZHIPU_BASE_URL"):
         zhipu_cfg["base_url"] = os.getenv("ZHIPU_BASE_URL")
+
+    # 万相（图生视频）：多数情况无需配置，自动复用 QWEN_API_KEYS。详见 mvp-design.md §4.1
+    wanx_cfg = yaml_config.setdefault("llm", {}).setdefault("wanx", {})
+    if os.getenv("WANX_API_KEY"):
+        wanx_cfg["api_key"] = os.getenv("WANX_API_KEY")
 
     if os.getenv("DEBUG", "").lower() in ("true", "1", "yes"):
         yaml_config.setdefault("app", {})["debug"] = True

@@ -223,6 +223,22 @@ class ScheduledTaskManager:
         except Exception as e:
             logger.error(f"后端日志：注册工作成果复盘任务失败: {e}")
 
+        # ===== 视频生成状态轮询（每 30s，只在 background_runner 进程跑）=====
+        # 设计文档 docs/system/content-production/mvp-design.md §10
+        # 扫描 PENDING/RUNNING 的万相 card，SUCCEEDED 下载成片（含烧录 AI 标识）+ 注册 file_id
+        try:
+            self._scheduler.add_job(
+                self._run_video_gen_poll,
+                IntervalTrigger(seconds=settings.llm.wanx.poll_interval_seconds),
+                id="job_system_video_gen_poll",
+                name="Video Generation Status Poller",
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info(f"后端日志：已注册视频生成轮询任务 (interval={settings.llm.wanx.poll_interval_seconds}s)")
+        except Exception as e:
+            logger.error(f"后端日志：注册视频生成轮询任务失败: {e}")
+
     def _run_memory_summarizer(self):
         """执行每日记忆总结（APScheduler 回调）"""
         try:
@@ -595,6 +611,37 @@ class ScheduledTaskManager:
                 loop.close()
             except Exception:
                 pass
+
+    # ===== 视频生成状态轮询回调（async，每 30s）=====
+    def _run_video_gen_poll(self):
+        """视频生成状态轮询（APScheduler 回调，后台线程执行）。
+
+        参考设计文档 docs/system/content-production/mvp-design.md §10。
+        新建 event loop run_until_complete（同 _run_memory_summarizer 模式）。
+        只在 background_runner 进程跑（调度器有 manager 级 Redis 锁）。
+        """
+        loop = asyncio.new_event_loop()
+        try:
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(self._video_gen_poll_tick())
+        except Exception as e:
+            logger.error(f"后端日志：视频生成轮询异常: {e}", exc_info=True)
+        finally:
+            try:
+                loop.close()
+            except Exception:
+                pass
+
+    async def _video_gen_poll_tick(self):
+        """视频生成轮询单次 tick。"""
+        from src.video_gen.service import VideoGenService
+        try:
+            svc = VideoGenService()
+            n = await svc.poll_pending_cards()
+            if n > 0:
+                logger.info(f"后端日志：视频生成轮询处理 {n} 条 card")
+        except Exception as e:
+            logger.error(f"后端日志：视频生成轮询 tick 异常: {e}", exc_info=True)
 
     def shutdown(self):
         """优雅关闭"""

@@ -1326,6 +1326,17 @@ def _init_postgresql():
             except Exception as rollback_err:
                 logger.warning(f"Failed to rollback outbound transaction: {rollback_err}")
 
+        # 视频生成表（gen_sessions / gen_cards），MVP 抽卡式工具，见 mvp-design.md §3
+        try:
+            from src.video_gen.db import init_video_gen_tables
+            init_video_gen_tables(conn)
+        except Exception as e:
+            logger.warning(f"Failed to initialize video_gen tables: {e}")
+            try:
+                conn.rollback()
+            except Exception as rollback_err:
+                logger.warning(f"Failed to rollback video_gen transaction: {rollback_err}")
+
         # Skill 表初始化由 SkillLoader._init_skill_tables() 统一处理，
         # 通过 SKILL.md 中的 init_script 字段声明，不再硬编码。
 
