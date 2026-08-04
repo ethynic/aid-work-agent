@@ -56,6 +56,13 @@ export function initDatabase(): void {
   currentDbPath = dbPath
 }
 
+/** 初始化 DB 单例到指定路径（CLI 等非 Electron 入口用）。fail-loud：失败抛错。 */
+export function initDatabaseAt(dbPath: string): void {
+  if (instance) return
+  instance = openDatabase(dbPath)
+  currentDbPath = dbPath
+}
+
 /** 获取单例。未初始化抛错（fail-loud）。 */
 export function getClient(): BetterSqliteDatabaseType {
   if (!instance) {

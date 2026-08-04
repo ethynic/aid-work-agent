@@ -118,8 +118,61 @@ export interface Migration {
   sql: string
 }
 
+/**
+ * 迁移版本 2：actions 表补幂等字段（Phase 7，设计文档 §10/§11）。
+ * - unique_key：幂等唯一键（candidate_fingerprint|action_type），防重复打招呼
+ * - session_id：所属会话，用于会话级动作上限统计
+ * - sent_at / confirmed_at：状态机 SENT / CONFIRMED 时间戳，重启恢复用
+ */
+export const MIGRATION_V2 = `
+ALTER TABLE actions ADD COLUMN unique_key TEXT;
+ALTER TABLE actions ADD COLUMN session_id INTEGER;
+ALTER TABLE actions ADD COLUMN sent_at TIMESTAMP;
+ALTER TABLE actions ADD COLUMN confirmed_at TIMESTAMP;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_actions_unique_key ON actions(unique_key);
+CREATE INDEX IF NOT EXISTS idx_actions_session ON actions(session_id);
+`
+
+/**
+ * 迁移版本 3：Phase 8 编排与界面支撑。
+ * - jobs：动作上限（会话/日）列，界面上可配置；排除项合并存 hard_rules JSON，不单独加列
+ * - resume_views / evaluations：session_id 列，用于会话级统计与恢复
+ * - review_overrides：人工复核改判记录（原结论+改判结论+理由，原评估不可变）
+ */
+export const MIGRATION_V3 = `
+ALTER TABLE jobs ADD COLUMN action_limit_session INTEGER;
+ALTER TABLE jobs ADD COLUMN action_limit_day INTEGER;
+ALTER TABLE resume_views ADD COLUMN session_id INTEGER;
+ALTER TABLE evaluations ADD COLUMN session_id INTEGER;
+CREATE INDEX IF NOT EXISTS idx_resume_views_session ON resume_views(session_id);
+CREATE INDEX IF NOT EXISTS idx_evaluations_session ON evaluations(session_id);
+
+CREATE TABLE IF NOT EXISTS review_overrides (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  evaluation_id INTEGER NOT NULL,
+  candidate_id INTEGER,
+  original_conclusion TEXT NOT NULL,
+  override_conclusion TEXT NOT NULL,
+  override_reason TEXT NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_review_overrides_evaluation ON review_overrides(evaluation_id);
+`
+
+/**
+ * 迁移版本 4：resume_views 补 OCR markdown 列（Phase 9 CLI 复核报告）。
+ * CLI 静态复核报告需要展示 OCR 归一化 markdown 原文；
+ * 此前 markdown 只在内存中供筛选使用，不落库。
+ */
+export const MIGRATION_V4 = `
+ALTER TABLE resume_views ADD COLUMN ocr_markdown TEXT;
+`
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, description: 'initial schema (Phase 1)', sql: MIGRATION_V1 },
+  { version: 2, description: 'actions idempotency fields (Phase 7)', sql: MIGRATION_V2 },
+  { version: 3, description: 'session stats + review overrides (Phase 8)', sql: MIGRATION_V3 },
+  { version: 4, description: 'resume_views.ocr_markdown for CLI review report (Phase 9)', sql: MIGRATION_V4 },
 ] as const
 
 /** 当前 schema 应到达的版本号 */

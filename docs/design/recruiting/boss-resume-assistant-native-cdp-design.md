@@ -473,3 +473,12 @@ clients/boss-resume-assistant/
 3. 结构化摘要统一来自本地 OCR；DOMSnapshot 只做定位、结构辅助和字段交叉校验。
 4. 真机 Phase 0 是开发门禁；原生点击和写动作未通过前，不建设大规模业务功能。
 5. 任何无法确认页面对象、截图完整性或动作结果的情况都 fail-loud 并暂停。
+6. **CLI 优先于桌面 GUI（2026-08-04 产品决策）**：BOSS 操作场景有限、用户输入极简（扫码登录确认、UNCERTAIN 复核、启停），Electron + Vue + IPC 三层壳性价比低。产品形态改为 CLI 入口复用全部主进程模块（CDP/OCR/筛选/动作/状态机均 UI 无关）：
+   - 登录门禁：CLI 启动可见 Chrome → 用户扫码 → 终端回车确认 → 才连 CDP（与原设计 §5.1/§11 一致，仅交互载体从按钮换成回车）
+   - 岗位配置：YAML/JSON 配置文件，不再依赖 GUI 表单
+   - 运行进度：终端实时输出（状态机事件 → 控制台行）
+   - 复核队列：生成静态 HTML 复核报告（长图 + 摘要 + 证据 + 结论），改判在 CLI 按编号操作
+   - 审计/导出：复用现有 CSV/JSON 导出
+   - Electron 工程保留不删，CLI 与 GUI 共享 `src/main/` 下全部 UI 无关模块；CLI 入口禁止 import electron 耦合模块（main.ts / ipc.ts / windowState.ts / runtime.ts）
+   - better-sqlite3 升级 v13（N-API 预编译，跨 node/Electron ABI 免本地编译），开发与测试统一使用 node 22
+7. **浏览器接入方式：attach 用户日常 Chrome，禁止 spawn 全新 profile（2026-08-04 封号事故后的修正决策）**：原设计 §5.1 ChromeLauncher「独立临时 profile + 程序启动 Chrome」在高风控的招聘者账号场景下致命——全新设备环境（无 Cookie/历史/指纹）+ 调试端口扫码登录，BOSS 风控在登录环节即封号（CDP 连接尚未建立，与自动化操作无关）。修正为：**用户自己用日常 Chrome（正常 profile、已有登录态）加 `--remote-debugging-port=9222` 手动启动，程序仅 attach**（Phase 0/2 已验证此路径安全）；程序任何路径不得 spawn/kill 用户 Chrome、不得删除任何 profile。Electron GUI 的 spawn 模式仅保留代码，不再作为推荐使用方式。

@@ -13,5 +13,5 @@
     "declaration": false,
     "types": ["node"]
   },
-  "include": ["src/main/**/*.ts", "src/main/**/*.cts", "src/shared/**/*.ts", "db/**/*.ts", "tests/**/*.ts", "scripts/**/*.mjs"]
+  "include": ["src/main/**/*.ts", "src/main/**/*.cts", "src/cli/**/*.ts", "src/shared/**/*.ts", "db/**/*.ts", "tests/**/*.ts", "scripts/**/*.mjs"]
 }

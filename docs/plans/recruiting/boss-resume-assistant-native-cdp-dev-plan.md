@@ -1,7 +1,7 @@
 # BOSS 简历筛选助手原生 CDP 开发计划
 
-> 状态：🔧 Phase 1～4 代码完成，Phase 5/6 接口骨架完成待外部 provider 集成  
-> 日期：2026-07-22  
+> 状态：🔧 Phase 1～9 代码全部完成（CLI 形态），待真机端到端验证  
+> 日期：2026-07-22（Phase 7/8/9 完成于 2026-08-04）  
 > 设计文档：[BOSS 简历筛选助手原生 CDP 设计](../../design/recruiting/boss-resume-assistant-native-cdp-design.md)  
 > 工程位置：`clients/boss-resume-assistant/`
 
@@ -15,14 +15,31 @@
 | 4 | ✅ 代码+单测 | DetailCapture(滚动分段截图+稳定/到底检测)+LongScreenshotStitcher(重叠搜索+MSE 评分+断层检测+宽度校验)。纯像素算法 6 单测验证拼回连续长图、断层失败、宽度不一致失败 |
 | 5 | ✅ 代码+单测+真集成 | **TesseractJsProvider 已集成**(tesseract.js 纯 WASM 本地推理，输出 OcrBlock 带 box/confidence，chi_sim+eng)。OcrProvider 契约+fail-loud+ResumeNormalizer。单测 5 绿 |
 | 6 | ✅ 代码+单测+真集成 | **DeepSeekLlmProvider 已集成**(OpenAI 兼容、`deepseek-v4-flash`、JSON mode、temperature 0.1、多 key 轮询、非法结论降级 UNCERTAIN)。ScreeningEngine 两阶段+三态。单测 8 绿 |
-| 7 | ⬜ 未开始 | 写动作需用户确认最小样本，且依赖 Phase 6 结论 |
-| 8 | ⬜ 未开始 | Vue 业务页面(登录门禁/岗位配置/复核队列/审计日志)+打包验收 |
+| 7 | ✅ 代码+单测+CR通过 / 真机写动作待用户确认 | ActionPlanner（三态→GREET/REJECT/NO_ACTION，6项前置校验）+ActionStore（幂等 unique_key+状态机）+PageActionExecutor（fresh snapshot 重定位、before/after截图、UNKNOWN零重试）+ButtonLocator/DetailCloser+reasonMapping。DB migration v2（actions 补 unique_key/session_id/sent_at/confirmed_at+唯一索引）。CR 修复 P1：mousePressed 送达后 released 失败归 UNKNOWN 防重复点击。真机最小样本步骤见 tests/manual-e2e-phase7.md，需用户在场确认 |
+| 8 | ✅ 代码+单测+CR通过 / 真机与打包验收待办 | ChromeLauncher+ScreeningSession(14态状态机编排)+storage 四 store+exporter(CSV防公式注入)+runtime 装配；渲染层五页(LoginGate 交互登录门禁/JobConfig/RunConsole/ReviewQueue/AuditLog)+窄 IPC v2(18 新通道,全过 assertTrustedIpcSender)；migration v3。CR 修 3 个 P1：滚动改 mouseWheel(mouseMoved+delta 不滚动)、Launcher 启动失败杀进程防泄漏、登录等待期 Chrome 退出可复位。真机步骤 tests/manual-e2e-phase8.md；打包仍阻塞于 admin 装 VC++ workload |
+| 9 | ✅ 代码+单测+CR通过 / 真机待办 | **CLI 形态**（2026-08-04 产品决策，Electron 壳太重）：`src/cli/` 五子命令 run/review/review override/export/audit；岗位 YAML 配置(examples/example-job.yaml)、回车登录门禁、stdin p/r/s/q 控制、静态 HTML 复核报告（证据着色+长图 file://+全量转义）、数据落 `data/`(gitignore)；migration v4(resume_views.ocr_markdown)。CR 修 2 个 P1：Ctrl+C 无清理(Chrome 孤儿)改为 SIGINT 统一走强制清扫、q 退出与在途 runLoop 竞态改为 quitNow 立即 shutdown+exit。Electron 工程保留不删，CLI 链路零 electron import(依赖闭包 30 文件实测) |
 
 **真机环境**：用户 Chrome 已带 `--remote-debugging-port=9222` 启动并登录在 `https://www.zhipin.com/web/chat/recommend`，Phase 2 已实测可连。
 
-**当前测试基线**：`cd clients/boss-resume-assistant && npm test`(node 18)→ **98/98 全绿**，typecheck 通过。
+**当前测试基线**：`cd clients/boss-resume-assistant && npm test`(node 22)→ **205/205 全绿**，typecheck 与 `npm run build` 通过。
 
-**环境**：用 nvm 切 node 24 可下 electron 二进制；测试/dev 用 node 18(better-sqlite3 有 node 18 prebuilt)。打包需 admin 装 VS VC++ workload。
+**CLI 用法**（node 22）：`npm run cli -- run --job examples/example-job.yaml`（扫码登录后回车开始，运行中 p/r/s/q）；`npm run cli -- review --open`（HTML 复核报告）；`npm run cli -- review override <编号> <QUALIFIED|REJECTED> --reason "..."`；`export` / `audit`。
+
+**Phase 9 真机记录（2026-08-04）**：首次真机 run 时，CLI spawn 全新临时 profile Chrome 供扫码登录，**BOSS 风控在登录环节封号**（CDP 未建立连接，与自动化操作无关，系全新设备环境+调试端口触发）。已完成 attach 模式改造（ChromeAttacher：用户日常 Chrome 手动加 `--remote-debugging-port=9222` 启动，CLI 只 attach，任何路径不 spawn/kill Chrome、不删 profile；测试+CR 三轮修复 3 个 P1/P2：正常完成进程挂死、重复 connect 泄漏旧 gateway、onDisconnect 身份守卫）。212/212 全绿。**真机重测前置：用户账号申诉解封**。
+
+**Phase 9 真机待办**：重点覆盖 CR 指出的三条退出路径（运行中 q、运行中 Ctrl+C、登录等待中 Ctrl+C）及双终端同时 run（无单实例锁，P2 待加 `data/run.lock`）；attach 模式首跑确认任务正常完成后进程干净退出。
+
+**环境（2026-08-04 更新）**：统一 node 22（better-sqlite3 升 v13 N-API 预编译，node 18 不再使用，electron-43 ABI 免本地编译，**原 VC++ workload 打包阻塞已解除**）；electron 二进制经 npmmirror 镜像下载。
+
+**Phase 7 真机待办**（需用户在场确认，步骤见 `clients/boss-resume-assistant/tests/manual-e2e-phase7.md`）：重点观察 CR 报告的 P2-1（确认启发式整页作用域，详情背后列表的「打招呼」文案可能使确认永远 UNKNOWN）和 P2-2（候选人姓名精确匹配）。
+
+**登录方式决策（2026-08-04 产品确认）**：BOSS 登录需 App 扫码，不自动化；客户端走「用户手动登录 → 点击按钮确认继续」的交互式门禁（Phase 8 LoginGate 已落实，CDP WebSocket 只在确认后建立）。
+
+**Phase 8 真机待办**（步骤见 `clients/boss-resume-assistant/tests/manual-e2e-phase8.md`）：重点观察 CR 报告的 P2-2（详情滚轮锚点在 (0,0)，可能命中左侧导航，必要时改传视口中心）；并确认 P2-4（复核改判 QUALIFIED 后是否需补打招呼，设计未明确，待产品决策）。
+
+**待用户配合的两件事**：① admin 装 VS VC++ workload 后跑 `npm run package:win:dev` 出安装包；② 真机端到端验证（Phase 7 写动作最小样本 + Phase 8 全流程，均需用户在场确认）。
+
+**环境**：node 22 统一（见上）；旧记录：node 18 曾用于 better-sqlite3 v11 prebuilt 测试，已废弃。
 
 
 

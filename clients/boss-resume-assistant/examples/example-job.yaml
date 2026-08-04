@@ -1,0 +1,31 @@
+# BOSS 简历筛选助手 CLI 岗位配置示例
+# 用法：node dist/src/cli/index.js run --job examples/example-job.yaml
+#
+# 字段说明：
+#   name            岗位名称（必填，同名岗位再次运行时更新配置）
+#   hardRules       硬规则（确定性判断，键白名单：city/minYears/requiredSkills/excludeKeywords，未知键报错）
+#     city            期望城市白名单（字符串数组）
+#     minYears        最低工作年限（正整数）
+#     requiredSkills  必备技能（字符串数组，简历文本须全部包含）
+#     excludeKeywords 排除关键词（字符串数组，命中即不合格）
+#   preferences     偏好描述（供 LLM 参考，不做确定性判断，可多行文本）
+#   actionLimits    动作上限（正整数，可不配置）
+#     session         单会话动作上限
+#     day             单日动作上限
+
+name: 高级前端工程师
+
+hardRules:
+  city: [杭州, 上海]
+  minYears: 3
+  requiredSkills: [Vue, TypeScript]
+  excludeKeywords: [外包, 驻场]
+
+preferences: |
+  3 年以上中大型团队前端经验优先；
+  有低代码平台、数据可视化或 B 端中后台经验加分；
+  频繁跳槽（一年一换超过两次）降级。
+
+actionLimits:
+  session: 50
+  day: 200

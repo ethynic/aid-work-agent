@@ -11,8 +11,9 @@
  * 截图算法不依赖 scrollTop / DOM evaluate / 页面注入（设计文档硬约束）。
  * 稳定/到底检测用相邻小图 MSE。
  *
- * 注意：CDP Input.dispatchMouseEvent 的滚轮通过 type=mouseWheel 或带 deltaY 的 mouseMoved。
- * 这里统一用 dispatchMouse({ type:'mouseMoved', deltaY })，由 gateway 透传。
+ * 注意：CDP Input.dispatchMouseEvent 的滚轮必须用 type=mouseWheel（deltaX/deltaY 仅对
+ * mouseWheel 生效；mouseMoved 会忽略 delta，不滚动）。真机 spike（live-detail-scroll.mjs）
+ * 验证过的形态即 mouseWheel，这里统一用 dispatchMouse({ type:'mouseWheel', deltaY })。
  */
 import type { CdpGateway } from '../cdp/CdpGateway.js'
 import { decodePng, encodePng } from '../image/LongScreenshotStitcher.js'
@@ -25,6 +26,9 @@ export interface CaptureResult {
   reachedBottom: boolean
   hitMaxShards: boolean
 }
+
+/** 结构子集，便于测试 mock；CdpGateway 天然满足 */
+export type DetailCaptureGateway = Pick<CdpGateway, 'dispatchMouse' | 'captureScreenshot'>
 
 export interface CaptureOptions {
   /** 视口高度（用于滚动步长） */
@@ -44,7 +48,7 @@ export interface CaptureOptions {
 }
 
 export class DetailCapture {
-  constructor(private gateway: CdpGateway) {}
+  constructor(private gateway: DetailCaptureGateway) {}
 
   /**
    * 从顶部开始分段截图直到底部。返回分片 Buffer。
@@ -76,7 +80,7 @@ export class DetailCapture {
       prevShot = shot
 
       // 向下滚一屏
-      await this.gateway.dispatchMouse({ type: 'mouseMoved', x: 0, y: 0, deltaY: step })
+      await this.gateway.dispatchMouse({ type: 'mouseWheel', x: 0, y: 0, deltaY: step })
       await this.wait(180)
     }
 
@@ -88,7 +92,7 @@ export class DetailCapture {
   private async scrollToTop(viewportHeight: number, stableMse: number): Promise<void> {
     let prev: Buffer | null = null
     for (let i = 0; i < 25; i++) {
-      await this.gateway.dispatchMouse({ type: 'mouseMoved', x: 0, y: 0, deltaY: -viewportHeight })
+      await this.gateway.dispatchMouse({ type: 'mouseWheel', x: 0, y: 0, deltaY: -viewportHeight })
       await this.wait(150)
       const shot = await this.shot()
       if (prev && this.mse(prev, shot) < stableMse) return

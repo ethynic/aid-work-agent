@@ -9,11 +9,29 @@
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { contextBridge, ipcRenderer } = require('electron')
 
-const BRIDGE_VERSION = 1
+const BRIDGE_VERSION = 2
 const IPC = Object.freeze({
   DB_HEALTH: 'boss:db:health',
   APP_VERSION: 'boss:app:version',
   APP_RUNTIME: 'boss:app:runtime',
+  CHROME_LAUNCH: 'boss:chrome:launch',
+  SESSION_CONFIRM_LOGIN: 'boss:session:confirm-login',
+  SESSION_START: 'boss:session:start',
+  SESSION_PAUSE: 'boss:session:pause',
+  SESSION_RESUME: 'boss:session:resume',
+  SESSION_STOP: 'boss:session:stop',
+  SESSION_STATUS: 'boss:session:status',
+  SESSION_RESET: 'boss:session:reset',
+  SESSION_EVENT: 'boss:session:event',
+  JOB_LIST: 'boss:jobs:list',
+  JOB_CREATE: 'boss:jobs:create',
+  JOB_UPDATE: 'boss:jobs:update',
+  JOB_DELETE: 'boss:jobs:delete',
+  REVIEW_LIST: 'boss:review:list',
+  REVIEW_OVERRIDE: 'boss:review:override',
+  AUDIT_ACTIONS: 'boss:audit:actions',
+  AUDIT_CDP: 'boss:audit:cdp',
+  EXPORT_EVALUATIONS: 'boss:export:evaluations',
 })
 
 function readArgv(name: string): string {
@@ -36,12 +54,61 @@ const appApi = Object.freeze({
   runtime: () => ipcRenderer.invoke(IPC.APP_RUNTIME),
 })
 
+const chrome = Object.freeze({
+  launch: () => ipcRenderer.invoke(IPC.CHROME_LAUNCH),
+})
+
+const session = Object.freeze({
+  confirmLogin: () => ipcRenderer.invoke(IPC.SESSION_CONFIRM_LOGIN),
+  start: (jobId: number) => ipcRenderer.invoke(IPC.SESSION_START, jobId),
+  pause: () => ipcRenderer.invoke(IPC.SESSION_PAUSE),
+  resume: () => ipcRenderer.invoke(IPC.SESSION_RESUME),
+  stop: () => ipcRenderer.invoke(IPC.SESSION_STOP),
+  reset: () => ipcRenderer.invoke(IPC.SESSION_RESET),
+  status: () => ipcRenderer.invoke(IPC.SESSION_STATUS),
+  // 事件订阅：返回取消订阅函数；listener 不暴露 ipcRenderer event 对象
+  onEvent: (cb: (payload: unknown) => void) => {
+    const listener = (_event: unknown, payload: unknown) => cb(payload)
+    ipcRenderer.on(IPC.SESSION_EVENT, listener)
+    return () => {
+      ipcRenderer.removeListener(IPC.SESSION_EVENT, listener)
+    }
+  },
+})
+
+const jobs = Object.freeze({
+  list: () => ipcRenderer.invoke(IPC.JOB_LIST),
+  create: (input: unknown) => ipcRenderer.invoke(IPC.JOB_CREATE, input),
+  update: (id: number, input: unknown) => ipcRenderer.invoke(IPC.JOB_UPDATE, id, input),
+  remove: (id: number) => ipcRenderer.invoke(IPC.JOB_DELETE, id),
+})
+
+const review = Object.freeze({
+  list: (opts?: unknown) => ipcRenderer.invoke(IPC.REVIEW_LIST, opts),
+  override: (input: unknown) => ipcRenderer.invoke(IPC.REVIEW_OVERRIDE, input),
+})
+
+const audit = Object.freeze({
+  actions: (filters?: unknown) => ipcRenderer.invoke(IPC.AUDIT_ACTIONS, filters),
+  cdp: (filters?: unknown) => ipcRenderer.invoke(IPC.AUDIT_CDP, filters),
+})
+
+const exporter = Object.freeze({
+  evaluations: (req: unknown) => ipcRenderer.invoke(IPC.EXPORT_EVALUATIONS, req),
+})
+
 contextBridge.exposeInMainWorld(
   'bossResume',
   Object.freeze({
     version: BRIDGE_VERSION,
     db,
     app: appApi,
+    chrome,
+    session,
+    jobs,
+    review,
+    audit,
+    exporter,
   }),
 )
 

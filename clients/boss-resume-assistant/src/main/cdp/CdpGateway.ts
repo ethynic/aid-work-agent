@@ -100,6 +100,11 @@ export class CdpGateway {
     })
   }
 
+  /** 订阅底层 WS 断线（Chrome 关闭/崩溃 → 编排层据此 PAUSED） */
+  onDisconnect(handler: (err: Error) => void): void {
+    this.socket.on('disconnect', handler)
+  }
+
   // ===== 类型化业务方法（白名单内） =====
 
   async pageEnable(): Promise<void> {
@@ -143,7 +148,7 @@ export class CdpGateway {
   }
 
   async dispatchMouse(opts: {
-    type: 'mousePressed' | 'mouseReleased' | 'mouseMoved'
+    type: 'mousePressed' | 'mouseReleased' | 'mouseMoved' | 'mouseWheel'
     x: number
     y: number
     button?: 'none' | 'left' | 'right' | 'middle'
@@ -156,7 +161,8 @@ export class CdpGateway {
         type: opts.type,
         x: opts.x,
         y: opts.y,
-        button: opts.button ?? 'left',
+        // 滚轮事件不携带按键态（与真机验证过的 spike 参数一致）
+        button: opts.button ?? (opts.type === 'mouseWheel' ? 'none' : 'left'),
         clickCount: opts.clickCount ?? (opts.type === 'mouseReleased' ? 1 : undefined),
         deltaY: opts.deltaY,
       },

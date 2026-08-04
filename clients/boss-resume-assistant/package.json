@@ -14,11 +14,13 @@
     "rebuild": "electron-rebuild -f -w better-sqlite3",
     "test": "npm run build:main && node scripts/run-tests.mjs",
     "start": "npm run build && electron .",
+    "cli": "npm run build:main && node dist/src/cli/index.js",
     "package:win:dev": "npm run typecheck && npm test && node scripts/package-win.mjs dev",
     "verify:package": "node scripts/verify-package.mjs dev"
   },
   "dependencies": {
-    "better-sqlite3": "^11.8.1",
+    "better-sqlite3": "^13.0.2",
+    "js-yaml": "^4.1.0",
     "pngjs": "^7.0.0",
     "tesseract.js": "^5.1.1",
     "ws": "^8.21.1"
@@ -33,7 +35,6 @@
     "@vitejs/plugin-vue": "^5.2.1",
     "electron": "43.1.0",
     "electron-builder": "^26.15.3",
-    "js-yaml": "^4.1.0",
     "typescript": "^5.9.0",
     "vite": "^5.4.11",
     "vue": "^3.4.38",

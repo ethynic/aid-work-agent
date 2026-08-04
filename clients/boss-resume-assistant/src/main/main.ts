@@ -17,6 +17,7 @@ import {
 } from './security.js'
 import { loadWindowBounds, trackWindowState } from './windowState.js'
 import { registerIpcHandlers, setMainWindow } from './ipc.js'
+import { initRuntime, shutdownRuntime } from './runtime.js'
 import { initDatabase } from '../../db/client.js'
 import { BRIDGE_VERSION } from '../shared/ipc.js'
 
@@ -134,6 +135,8 @@ if (!gotLock) {
   app.whenReady().then(async () => {
     // fail-loud：DB 初始化失败直接抛出，应用不进入主界面
     initDatabase()
+    // 运行时装配：崩溃恢复清扫（残留会话 → INTERRUPTED）
+    initRuntime({ userDataDir: app.getPath('userData') })
     registerRendererProtocol()
     registerIpcHandlers()
     await createWindow()
@@ -142,6 +145,14 @@ if (!gotLock) {
       if (BrowserWindow.getAllWindows().length === 0) {
         void createWindow()
       }
+    })
+  })
+
+  // 退出前：在途会话记 INTERRUPTED + 关闭本进程启动的 Chrome 并清理临时 profile
+  app.on('will-quit', (e) => {
+    e.preventDefault()
+    void shutdownRuntime().finally(() => {
+      app.exit(0)
     })
   })
 

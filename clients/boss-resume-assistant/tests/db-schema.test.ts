@@ -14,7 +14,7 @@ function tempDbPath(): string {
   )
 }
 
-test('迁移创建全部 8 张业务表 + schema_migrations 版本表', () => {
+test('迁移创建全部 9 张业务表 + schema_migrations 版本表', () => {
   const dbPath = tempDbPath()
   const db = new BetterSqliteDatabase(dbPath)
   runMigrations(db)
@@ -32,6 +32,7 @@ test('迁移创建全部 8 张业务表 + schema_migrations 版本表', () => {
     'evaluations',
     'jobs',
     'resume_views',
+    'review_overrides',
     'schema_migrations',
     'sessions',
   ]
@@ -53,11 +54,33 @@ test('重复迁移幂等：第二次 runMigrations 不再应用', () => {
   const dbPath = tempDbPath()
   const db = new BetterSqliteDatabase(dbPath)
   const first = runMigrations(db)
-  assert.deepEqual(first.applied, [1])
+  assert.deepEqual(first.applied, [1, 2, 3, 4])
 
   const second = runMigrations(db)
   assert.deepEqual(second.applied, [], 'second migration run should apply nothing')
-  assert.equal(getAppliedVersions(db).size, 1)
+  assert.equal(getAppliedVersions(db).size, 4)
+  db.close()
+})
+
+test('v2：actions 表补幂等字段（unique_key/session_id/sent_at/confirmed_at）+ 唯一索引', () => {
+  const dbPath = tempDbPath()
+  const db = new BetterSqliteDatabase(dbPath)
+  runMigrations(db)
+  const cols = db.prepare('PRAGMA table_info(actions)').all() as { name: string }[]
+  const names = cols.map((c) => c.name)
+  for (const c of ['unique_key', 'session_id', 'sent_at', 'confirmed_at']) {
+    assert.ok(names.includes(c), `actions should have ${c}`)
+  }
+  // unique_key 唯一约束生效
+  db.prepare("INSERT INTO actions (action, status, unique_key) VALUES ('GREET', 'PLANNED', 'fp|GREET')").run()
+  assert.throws(
+    () =>
+      db.prepare("INSERT INTO actions (action, status, unique_key) VALUES ('GREET', 'PLANNED', 'fp|GREET')").run(),
+    /UNIQUE/i,
+  )
+  // 历史行为 NULL 的 unique_key 不冲突
+  db.prepare("INSERT INTO actions (action, status) VALUES ('GREET', 'PLANNED')").run()
+  db.prepare("INSERT INTO actions (action, status) VALUES ('GREET', 'PLANNED')").run()
   db.close()
 })
 
@@ -119,4 +142,27 @@ test('MIGRATIONS 版本号严格递增且无重复', () => {
   const sorted = [...versions].sort((a, b) => a - b)
   assert.deepEqual(versions, sorted, 'versions must be ascending')
   assert.equal(new Set(versions).size, versions.length, 'versions must be unique')
+})
+
+test('v3：jobs 动作上限列 + resume_views/evaluations session_id + review_overrides 表', () => {
+  const dbPath = tempDbPath()
+  const db = new BetterSqliteDatabase(dbPath)
+  runMigrations(db)
+
+  const jobCols = (db.prepare('PRAGMA table_info(jobs)').all() as { name: string }[]).map((c) => c.name)
+  for (const c of ['action_limit_session', 'action_limit_day']) {
+    assert.ok(jobCols.includes(c), `jobs should have ${c}`)
+  }
+  const viewCols = (db.prepare('PRAGMA table_info(resume_views)').all() as { name: string }[]).map((c) => c.name)
+  assert.ok(viewCols.includes('session_id'), 'resume_views should have session_id')
+  const evalCols = (db.prepare('PRAGMA table_info(evaluations)').all() as { name: string }[]).map((c) => c.name)
+  assert.ok(evalCols.includes('session_id'), 'evaluations should have session_id')
+
+  const overrideCols = (db.prepare('PRAGMA table_info(review_overrides)').all() as { name: string }[]).map(
+    (c) => c.name,
+  )
+  for (const c of ['evaluation_id', 'original_conclusion', 'override_conclusion', 'override_reason']) {
+    assert.ok(overrideCols.includes(c), `review_overrides should have ${c}`)
+  }
+  db.close()
 })
