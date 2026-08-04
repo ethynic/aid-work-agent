@@ -16,7 +16,8 @@ def init_video_gen_tables(conn) -> None:
             tenant_id         TEXT,                       -- 租户（可空，demo 模式）
             user_id           TEXT,                       -- 发起用户
             scene_id          TEXT NOT NULL,             -- 场景预设 id（硬编码，如 product_showcase）
-            product_image_fid TEXT NOT NULL,             -- 产品图 file_id（r2v 作 reference_image+first_frame）
+            product_image_fid TEXT NOT NULL,             -- 产品图 file_id（r2v 作 reference_image，锁定产品外观防变形）
+            model_image_fid   TEXT,                       -- 模特图 file_id（可选，作 first_frame 控制起始画面；空则用产品图）
             copywriting       TEXT NOT NULL,             -- 运营填写的文案
             expanded_prompt   TEXT,                      -- 提示词引擎扩展后的完整 prompt（可微调）
             card_count        INT NOT NULL DEFAULT 3,    -- 本次抽卡条数（2-4）
@@ -24,6 +25,10 @@ def init_video_gen_tables(conn) -> None:
             created_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
+    """)
+    # 幂等加列：已建表（无 model_image_fid）补列，新表上面 CREATE 已含
+    cursor.execute("""
+        ALTER TABLE gen_sessions ADD COLUMN IF NOT EXISTS model_image_fid TEXT
     """)
     # gen_cards：抽出来的视频卡片（每条对应一次万相提交）
     cursor.execute("""

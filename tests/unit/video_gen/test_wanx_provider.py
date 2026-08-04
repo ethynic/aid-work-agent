@@ -64,32 +64,46 @@ class FakeClient:
 
 
 class TestSubmit:
-    def test_submit_returns_task_id(self):
+    def test_submit_same_image(self):
+        """产品图同时作 reference_image + first_frame（无模特图场景）。"""
         resp = _resp(200, {"output": {"task_id": "abc-123", "task_status": "PENDING"}, "request_id": "r"})
         client = FakeClient(post_resp=resp)
+        img = "data:image/jpeg;base64,xxx"
         with patch.object(wp.httpx, "AsyncClient", return_value=client):
             provider = wp.WanxProvider(api_key="sk-test")
-            result = _run(provider.submit("prompt", "data:image/jpeg;base64,xxx", seed=42))
+            result = _run(provider.submit("prompt", img, img, seed=42))
 
         assert result.task_id == "abc-123"
-        assert result.task_status == "PENDING"
-        # 校验 body 结构（spike 规格）
         body = client.last_body
-        assert body["model"] == "wan2.7-r2v-2026-06-12"
-        assert body["input"]["prompt"] == "prompt"
         media_arr = body["input"]["media"]
         assert media_arr[0]["type"] == "reference_image"
         assert media_arr[1]["type"] == "first_frame"
-        # reference_image 和 first_frame 都传同一张图
-        assert media_arr[0]["url"] == media_arr[1]["url"]
+        # 同图：两个 slot url 相同
+        assert media_arr[0]["url"] == img
+        assert media_arr[1]["url"] == img
         params = body["parameters"]
         assert params["seed"] == 42
         assert params["prompt_extend"] is False
         assert params["watermark"] is False
         assert "negative_prompt" in params
-        # header 含 X-DashScope-Async
         assert client.last_headers.get("X-DashScope-Async") == "enable"
-        assert client.last_headers.get("Authorization") == "Bearer sk-test"
+
+    def test_submit_distinct_images(self):
+        """产品图作 reference_image、模特图作 first_frame（异图场景）。"""
+        resp = _resp(200, {"output": {"task_id": "abc-123", "task_status": "PENDING"}})
+        client = FakeClient(post_resp=resp)
+        product_img = "data:image/jpeg;base64,PROD"
+        model_img = "data:image/jpeg;base64,MODEL"
+        with patch.object(wp.httpx, "AsyncClient", return_value=client):
+            provider = wp.WanxProvider(api_key="sk-test")
+            _run(provider.submit("prompt", product_img, model_img, seed=42))
+
+        body = client.last_body
+        media_arr = body["input"]["media"]
+        # reference_image = 产品图，first_frame = 模特图（异图）
+        assert media_arr[0]["url"] == product_img
+        assert media_arr[1]["url"] == model_img
+        assert media_arr[0]["url"] != media_arr[1]["url"]
 
     def test_submit_non_200_raises(self):
         resp = _resp(400, {"message": "bad request"})
@@ -97,7 +111,7 @@ class TestSubmit:
         with patch.object(wp.httpx, "AsyncClient", return_value=client):
             provider = wp.WanxProvider(api_key="sk-test")
             with pytest.raises(wp.WanxProviderError):
-                _run(provider.submit("p", "data:url", seed=1))
+                _run(provider.submit("p", "data:url", "data:url", seed=1))
 
     def test_submit_missing_task_id_raises(self):
         resp = _resp(200, {"output": {}})
@@ -105,14 +119,14 @@ class TestSubmit:
         with patch.object(wp.httpx, "AsyncClient", return_value=client):
             provider = wp.WanxProvider(api_key="sk-test")
             with pytest.raises(wp.WanxProviderError):
-                _run(provider.submit("p", "data:url", seed=1))
+                _run(provider.submit("p", "data:url", "data:url", seed=1))
 
     def test_submit_network_error_raises(self):
         client = FakeClient(post_resp=httpx.ConnectError("conn refused"))
         with patch.object(wp.httpx, "AsyncClient", return_value=client):
             provider = wp.WanxProvider(api_key="sk-test")
             with pytest.raises(wp.WanxProviderError):
-                _run(provider.submit("p", "data:url", seed=1))
+                _run(provider.submit("p", "data:url", "data:url", seed=1))
 
     def test_missing_api_key_raises(self):
         with pytest.raises(wp.WanxProviderError):

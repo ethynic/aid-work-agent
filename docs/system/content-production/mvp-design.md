@@ -11,7 +11,7 @@
 | 决策项 | 锁定值 | 理由 |
 |--------|--------|------|
 | 产品形态 | 抽卡式工具：选场景→上传1张产品图→填文案→生成2-4条→留用/重新生成→下载 | PRD §0.1（spike后修正：单图非2图） |
-| 防变形 | **reference_image 模式**（r2v 模型，1张产品图作 reference_image+first_frame） | spike 实测验证，产品不变形 |
+| 防变形 | **reference_image（产品图）+ first_frame（模特图优先/否则产品图）** | r2v 双 slot：产品图锁外观防变形，模特图控制起始画面；spike 验证同图有效，异图待真实素材验证 |
 | 图传方式 | **base64 编码直传**（`data:image/jpeg;base64,...`） | spike 发现万相支持base64，无需公网URL/图床/OSS |
 | 素材预处理 | **不做程序侧预处理**，用户自行上传正确比例素材 | 由用户保证素材比例（如竖屏 9:16），程序不做裁剪/抠图；长图鬼影属素材问题 |
 | 图生成 provider | **通义万相 wan2.7-r2v-2026-06-12**（云 API，spike 已验证） | reference_image 防变形、720P、5s |
@@ -163,7 +163,8 @@ CREATE TABLE IF NOT EXISTS gen_sessions (
     tenant_id      TEXT,                       -- 租户（可空，demo模式）
     user_id        TEXT,                       -- 发起用户
     scene_id       TEXT NOT NULL,             -- 场景预设id（硬编码，如 "product_showcase"）
-    product_image_fid TEXT NOT NULL,          -- 产品图 file_id（用户上传的原图，r2v 作 reference_image+first_frame，base64 直传）
+    product_image_fid TEXT NOT NULL,          -- 产品图 file_id（用户上传原图，r2v 作 reference_image 锁定外观，base64 直传）
+    model_image_fid TEXT,                      -- 模特图 file_id（可选，作 first_frame 控制起始画面；空则用产品图）
     copywriting    TEXT NOT NULL,             -- 运营填写的文案
     expanded_prompt TEXT,                      -- 提示词引擎扩展后的完整prompt（可微调，见§6）
     card_count     INT NOT NULL DEFAULT 3,    -- 本次抽卡条数（2-4）
@@ -291,7 +292,9 @@ class WanxConfig(BaseSettings):
     }
 }
 ```
-> **media 说明**：`reference_image` 是防变形核心（锁定产品外观），`first_frame` 控制起始画面。MVP 用同一张产品图（`reference_image` 和 `first_frame` 的 url 都传同一张图）。`seed` 是差异化来源（同一次抽卡的 2-4 条用不同 seed）。`negative_prompt` 在 **parameters 下**（非 input，spike 实测确认），值取自场景预设 `scene.negative_prompt`。
+> **media 说明**：`reference_image` 是防变形核心（锁定产品外观，传**产品图**），`first_frame` 控制起始画面（传**模特图**；无模特图时退化为产品图）。`seed` 是差异化来源（同一次抽卡的 2-4 条用不同 seed）。`negative_prompt` 在 **parameters 下**（非 input，spike 实测确认），值取自场景预设 `scene.negative_prompt`。
+>
+> **异图组合待验证**：spike 只验证了"同一张产品图填两个 slot"。产品图(锁外观)+模特图(起始帧)的异图组合理论上 API 允许，但融合效果未实测——需真实素材验证。若效果不佳，备选是纯靠 prompt 引导。
 - 返回：
 ```json
 {"output": {"task_status": "PENDING", "task_id": "ce89fd84-..."}, "request_id": "..."}
@@ -344,15 +347,16 @@ class WanxProvider:
     async def submit(
         self,
         prompt: str,
-        product_image_url: str,    # 产品图公网URL（同时作reference_image和first_frame）
+        reference_image_data_url: str,  # 产品图 base64（reference_image，锁定外观防变形）
+        first_frame_data_url: str,      # 起始帧 base64（模特图优先，无则用产品图）
         seed: int,
-        negative_prompt: str = "", # 取自场景预设，放到 parameters.negative_prompt
+        negative_prompt: str = "",      # 取自场景预设，放到 parameters.negative_prompt
         duration: int = 5,
         resolution: str = "720P",
     ) -> WanxSubmitResult:
         """提交参考图生视频任务（r2v），返回 task_id。
-        media 固定格式：reference_image（防变形锁定）+ first_frame（控制起始），
-        两者 url 都传同一张产品图。negative_prompt 放 parameters 下。"""
+        media：reference_image=产品图（防变形），first_frame=模特图（控制起始，无则退化为产品图）。
+        negative_prompt 放 parameters 下。"""
         # body 见 §5.1，用 httpx.AsyncClient POST
 
     async def poll(self, task_id: str) -> WanxPollResult:
@@ -621,14 +625,15 @@ class VideoGenService:
 ```
 1. 校验 get_scene(scene_id) 非空，否则 raise ValueError("未知场景")
 2. expanded_prompt = expanded_prompt or scene.prompt_template.format(copywriting=copywriting)
-3. 读用户上传的产品图 base64（spike 验证万相支持 base64 直传，§1.1）：
-   - image_data_url = MediaRegistry.read_as_base64(product_image_fid)
-   （不做任何素材预处理，直接用用户上传的原图）
+3. 读 base64（spike 验证万相支持 base64 直传，§1.1，不做素材预处理）：
+   - reference_data_url = MediaRegistry.read_as_base64(product_image_fid)   # 产品图→reference_image
+   - first_frame_data_url = model_image_fid ? read_as_base64(model_image_fid) : reference_data_url
+     （有模特图用模特图作 first_frame，否则退化为产品图）
 4. 生成 card_count 个不同 seed（如 base_seed + i，base_seed=random.randint(0,2147483647)）
-5. 对每个 seed 调 wanx.submit(prompt=expanded_prompt, image_data_url, seed,
+5. 对每个 seed 调 wanx.submit(prompt=expanded_prompt, reference_data_url, first_frame_data_url, seed,
       negative_prompt=scene.negative_prompt, duration=scene.default_duration)
-   → 拿 task_id（media 内部 reference_image + first_frame 都用 image_data_url）
-6. 写 gen_sessions（status=generating, product_image_fid=用户原图file_id）
+   → 拿 task_id（media：reference_image=产品图, first_frame=模特图或产品图）
+6. 写 gen_sessions（status=generating, product_image_fid, model_image_fid）
 7. 写 gen_cards（每条 provider_task_id, provider_status=PENDING, seed, variant_prompt=expanded_prompt）
 8. 返回 session + cards
 ```
@@ -656,7 +661,7 @@ _service = VideoGenService()
 | Method | Path | 功能 | 请求体 | 返回 data |
 |--------|------|------|--------|-----------|
 | GET | `/scenes` | 场景列表 | - | `[{scene_id,name,description}]` |
-| POST | `/sessions` | 创建抽卡会话 | `{scene_id, product_image_fid, copywriting, card_count?, expanded_prompt?}` | session详情(含cards) |
+| POST | `/sessions` | 创建抽卡会话 | `{scene_id, product_image_fid, copywriting, model_image_fid?, card_count?, expanded_prompt?}` | session详情(含cards) |
 | GET | `/sessions` | 会话历史 | query: `?limit=20` | `[session]` |
 | GET | `/sessions/{session_id}` | 会话详情(含cards状态) | - | session详情 |
 | PATCH | `/cards/{card_id}/kept` | 标记留用 | `{kept: bool}` | card |
@@ -799,8 +804,9 @@ export const videoGenAPI = {
 
 **① 向导区（创建会话）**
 - 场景下拉（listScenes）
-- 产品图上传（POST /api/upload 拿 file_id，**只需1张**）
-- 文案文本框
+- 产品图上传（必填，POST /api/upload 拿 file_id，作 reference_image 锁定产品外观）
+- 模特图上传（可选，作 first_frame 控制起始画面；空则用产品图）
+- 文案文本框（较大，文案是视频提示词主体，描述要展示的产品和卖点）
 - 抽卡条数选择（2/3/4）
 - prompt 预览框（可微调 expanded_prompt，留空则用场景默认）
 - 「开始抽卡」按钮 → createSession

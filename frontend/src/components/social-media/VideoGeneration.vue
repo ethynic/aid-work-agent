@@ -13,33 +13,64 @@
             </BaseSelect>
           </div>
 
-          <!-- 产品图上传 -->
+          <!-- 产品图上传（必填，锁定产品外观防变形） -->
           <div>
-            <label class="block text-sm font-medium text-default mb-1.5">产品图（1张）</label>
+            <label class="block text-sm font-medium text-default mb-1.5">
+              产品图 <span class="text-red-500">*</span>
+              <span class="text-xs font-normal text-muted ml-1">用于锁定产品外观，防变形</span>
+            </label>
             <div v-if="!form.productImageFid" class="flex items-center justify-center w-full">
               <label class="flex flex-col items-center justify-center w-full h-32 border-2 border-dashed border-default rounded-lg cursor-pointer hover:border-primary-400 hover:bg-primary-50/50 transition-colors">
                 <div class="flex flex-col items-center justify-center pt-5 pb-6">
                   <svg class="w-8 h-8 mb-2 text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" /></svg>
-                  <p class="text-sm text-muted"><span class="font-semibold text-primary-600">点击上传</span> 或拖拽图片</p>
+                  <p class="text-sm text-muted"><span class="font-semibold text-primary-600">点击上传</span> 产品图</p>
                 </div>
-                <input type="file" accept="image/*" class="hidden" @change="onUpload" />
+                <input type="file" accept="image/*" class="hidden" @change="(e) => onUpload(e, 'product')" />
               </label>
             </div>
             <div v-else class="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
-              <img :src="previewUrl" class="w-16 h-16 object-cover rounded" />
+              <img :src="previewUrl('product')" class="w-16 h-16 object-cover rounded" />
               <div class="flex-1 min-w-0">
                 <p class="text-sm text-default truncate">{{ form.productImageName }}</p>
-                <p class="text-xs text-muted">已上传（建议竖屏 9:16，避免长图）</p>
+                <p class="text-xs text-muted">已上传</p>
               </div>
-              <BaseButton intent="ghost" size="sm" @click="clearImage">更换</BaseButton>
+              <BaseButton intent="ghost" size="sm" @click="clearImage('product')">更换</BaseButton>
             </div>
-            <p v-if="uploading" class="text-xs text-primary-600 mt-1">上传中...</p>
+            <p v-if="uploading === 'product'" class="text-xs text-primary-600 mt-1">上传中...</p>
           </div>
 
-          <!-- 文案 -->
+          <!-- 模特图上传（可选，作视频起始帧） -->
           <div>
-            <label class="block text-sm font-medium text-default mb-1.5">产品文案</label>
-            <MyTextarea v-model="form.copywriting" placeholder="如：12mm 水貂毛自然款假睫毛，轻盈贴合，放大双眼" :rows="2" />
+            <label class="block text-sm font-medium text-default mb-1.5">
+              模特图 <span class="text-xs font-normal text-muted ml-1">可选，作视频起始画面（建议竖屏 9:16）</span>
+            </label>
+            <div v-if="!form.modelImageFid" class="flex items-center justify-center w-full">
+              <label class="flex flex-col items-center justify-center w-full h-24 border-2 border-dashed border-default rounded-lg cursor-pointer hover:border-primary-400 hover:bg-primary-50/50 transition-colors">
+                <div class="flex flex-col items-center justify-center py-3">
+                  <svg class="w-6 h-6 mb-1 text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" /></svg>
+                  <p class="text-xs text-muted"><span class="font-semibold text-primary-600">点击上传</span> 模特图（可跳过）</p>
+                </div>
+                <input type="file" accept="image/*" class="hidden" @change="(e) => onUpload(e, 'model')" />
+              </label>
+            </div>
+            <div v-else class="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
+              <img :src="previewUrl('model')" class="w-16 h-16 object-cover rounded" />
+              <div class="flex-1 min-w-0">
+                <p class="text-sm text-default truncate">{{ form.modelImageName }}</p>
+                <p class="text-xs text-muted">起始画面</p>
+              </div>
+              <BaseButton intent="ghost" size="sm" @click="clearImage('model')">移除</BaseButton>
+            </div>
+            <p v-if="uploading === 'model'" class="text-xs text-primary-600 mt-1">上传中...</p>
+          </div>
+
+          <!-- 文案（视频提示词主体） -->
+          <div>
+            <label class="block text-sm font-medium text-default mb-1.5">
+              产品文案 <span class="text-red-500">*</span>
+            </label>
+            <p class="text-xs text-muted mb-1.5">这段文案会成为视频生成提示词的主体，描述要展示的产品和卖点（越具体出片越准）</p>
+            <MyTextarea v-model="form.copywriting" :rows="4" placeholder="如：12mm 水貂毛自然款假睫毛，轻盈贴合，放大双眼。展示睫毛的弧度和佩戴效果，突出自然妆感。" />
           </div>
 
           <!-- 抽卡条数 -->
@@ -154,18 +185,23 @@ const form = ref({
   sceneId: '',
   productImageFid: '',
   productImageName: '',
+  modelImageFid: '',
+  modelImageName: '',
   copywriting: '',
   cardCount: 3,
   expandedPrompt: '',
 })
-const uploading = ref(false)
+const uploading = ref<string | null>(null)   // null | 'product' | 'model'
 const creating = ref(false)
 const createError = ref('')
 const message = ref('')
 const messageType = ref<'success' | 'error'>('success')
 let pollTimer: ReturnType<typeof setInterval> | null = null
 
-const previewUrl = computed(() => form.value.productImageFid ? fileUrl(form.value.productImageFid) : '')
+const previewUrl = computed(() => (type: 'product' | 'model') => {
+  const fid = type === 'product' ? form.value.productImageFid : form.value.modelImageFid
+  return fid ? fileUrl(fid) : ''
+})
 const canCreate = computed(() => form.value.sceneId && form.value.productImageFid && form.value.copywriting.trim())
 
 const sessionStatusLabel = computed(() => {
@@ -207,31 +243,41 @@ async function loadHistory() {
   if (res.success && res.data) history.value = res.data.items
 }
 
-async function onUpload(e: Event) {
+async function onUpload(e: Event, type: 'product' | 'model') {
   const input = e.target as HTMLInputElement
   const file = input.files?.[0]
   if (!file) return
-  uploading.value = true
+  uploading.value = type
   createError.value = ''
   try {
     const res = await videoGenAPI.uploadImage(file)
     if (res.success && res.file_id) {
-      form.value.productImageFid = res.file_id
-      form.value.productImageName = res.name || file.name
+      if (type === 'product') {
+        form.value.productImageFid = res.file_id
+        form.value.productImageName = res.name || file.name
+      } else {
+        form.value.modelImageFid = res.file_id
+        form.value.modelImageName = res.name || file.name
+      }
     } else {
       toast('上传失败', 'error')
     }
   } catch {
     toast('上传失败', 'error')
   } finally {
-    uploading.value = false
+    uploading.value = null
     input.value = ''
   }
 }
 
-function clearImage() {
-  form.value.productImageFid = ''
-  form.value.productImageName = ''
+function clearImage(type: 'product' | 'model') {
+  if (type === 'product') {
+    form.value.productImageFid = ''
+    form.value.productImageName = ''
+  } else {
+    form.value.modelImageFid = ''
+    form.value.modelImageName = ''
+  }
 }
 
 async function onCreate() {
@@ -242,6 +288,7 @@ async function onCreate() {
       scene_id: form.value.sceneId,
       product_image_fid: form.value.productImageFid,
       copywriting: form.value.copywriting.trim(),
+      model_image_fid: form.value.modelImageFid || undefined,
       card_count: form.value.cardCount,
       expanded_prompt: form.value.expandedPrompt.trim() || undefined,
     })

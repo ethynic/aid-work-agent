@@ -72,9 +72,9 @@
 
 **3.2 验收细节（create_session）**：
 - 校验 scene_id；expanded_prompt 空则用模板填空。
-- **base64 直传**：media.read_as_base64(product_image_fid) → 读用户上传原图转 base64 传万相（无需公网URL，不做任何预处理）。
-- card_count 个不同 seed，各调 wanx.submit。
-- 写 gen_sessions(generating) + gen_cards(PENDING)。
+- **base64 直传（双图）**：产品图→reference_image（read_as_base64），模特图（可选）→first_frame，无模特图则用产品图。
+- card_count 个不同 seed，各调 wanx.submit（reference + first_frame 两 url）。
+- 写 gen_sessions(generating, product_image_fid + model_image_fid) + gen_cards(PENDING)。
 
 **3.2 验收细节（poll_pending_cards）**：
 - 扫 provider_status in (PENDING,RUNNING) 的 cards。
@@ -108,7 +108,7 @@
 | 5.3 工作台Tab改造 | `frontend/src/components/social-media/SocialMediaWorkbench.vue` 加Tab容器 | 设计§12.3 | "内容创作"Tab 引入 VideoGeneration；现有功能不破坏 |
 
 **5.2 验收细节**：
-- 向导：场景下拉、产品图上传（POST /api/upload，1张）、文案框、条数选择、prompt预览可微调、开始抽卡按钮。（不做裁剪预览，原图直传）
+- 向导：场景下拉、产品图上传（必填，作 reference_image）、模特图上传（可选，作 first_frame）、文案框（较大，含用途说明）、条数选择、prompt预览可微调、开始抽卡按钮。（不做裁剪预览，原图直传）
 - 抽卡结果：v-for cards，视频预览/生成中/失败三态；留用开关、重新生成、下载按钮。
 - 前端轮询：generating 状态的 session 每5s 刷新。
 - 历史：listSessions 列表，点击切换。
@@ -127,8 +127,8 @@
 
 | 任务 | 验收点 | PRD§0.6 |
 |------|--------|---------|
-| 6.1 完整抽卡流程 | 选场景→传1张产品图（用户自备正确比例）→填文案→生成2-4条→卡片展示 | ①②③④ |
-| 6.2 防变形 | 首尾帧模式成片产品无明显变形 | ⑤ |
+| 6.1 完整抽卡流程 | 选场景→传产品图(+可选模特图)→填文案→生成2-4条→卡片展示 | ①②③④ |
+| 6.2 防变形 | reference_image(产品图)+first_frame(模特图/产品图)成片无明显变形；**异图组合(产品+模特)效果需真实素材验证** | ⑤ |
 | 6.3 合规标识 | 成片右下角"AI 生成内容" | ⑥ |
 | 6.4 留用+精修 | 标记留用、重新生成（换prompt/seed） | ⑦⑧ |
 | 6.5 下载 | 成片可下载 | ⑨ |

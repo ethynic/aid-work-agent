@@ -52,7 +52,8 @@ class WanxProvider:
     async def submit(
         self,
         prompt: str,
-        product_image_data_url: str,    # 产品图 base64 data URL（同时作 reference_image 和 first_frame）
+        reference_image_data_url: str,  # 产品图 base64 data URL（reference_image，锁定产品外观防变形）
+        first_frame_data_url: str,      # 起始帧 base64 data URL（模特图优先，无则用产品图）
         seed: int,
         negative_prompt: str = "",
         duration: int = 5,
@@ -60,16 +61,16 @@ class WanxProvider:
     ) -> WanxSubmitResult:
         """提交参考图生视频任务（r2v）。
 
-        media 固定格式：reference_image（防变形锁定）+ first_frame（控制起始），
-        两者 url 都传同一张产品图。negative_prompt 放 parameters 下（spike 实测确认）。
+        media 固定格式：reference_image（产品图，防变形锁定）+ first_frame（起始帧，
+        有模特图传模特图，否则传产品图）。negative_prompt 放 parameters 下（spike 实测确认）。
         """
         body = {
             "model": self._model,
             "input": {
                 "prompt": prompt,
                 "media": [
-                    {"type": "reference_image", "url": product_image_data_url},
-                    {"type": "first_frame", "url": product_image_data_url},
+                    {"type": "reference_image", "url": reference_image_data_url},
+                    {"type": "first_frame", "url": first_frame_data_url},
                 ],
             },
             "parameters": {

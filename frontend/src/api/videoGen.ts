@@ -41,6 +41,7 @@ export interface GenSession {
   scene_id: string
   scene_name?: string
   product_image_fid: string
+  model_image_fid?: string | null   // 模特图（可选，作 first_frame）
   copywriting: string
   expanded_prompt?: string
   card_count: number
@@ -76,6 +77,7 @@ export const videoGenAPI = {
     scene_id: string
     product_image_fid: string
     copywriting: string
+    model_image_fid?: string
     card_count?: number
     expanded_prompt?: string
   }) => request<GenSession>('/sessions', {

@@ -66,7 +66,11 @@ class TestListScenes:
 
 class TestCreateSession:
     def _patch_externals(self, submit_task_ids=None):
-        """mock read_as_base64、wanx.submit（不再做素材预处理，直接用用户原图）。"""
+        """mock read_as_base64、wanx.submit（不再做素材预处理，直接用用户原图）。
+
+        read_as_base64 按 file_id 区分返回不同 data url，便于验证产品图/模特图异图场景。
+        submit 调用记录在 submit_calls，含 reference/first_frame url。
+        """
         if submit_task_ids is None:
             submit_task_ids = ["t1", "t2", "t3"]
 
@@ -77,13 +81,22 @@ class TestCreateSession:
                 self.task_id = tid
                 self.task_status = "PENDING"
 
-        async def fake_submit(self, prompt, product_image_data_url, seed, negative_prompt="", duration=5, resolution="720P"):
-            submit_calls.append(seed)
+        async def fake_submit(self, prompt, reference_image_data_url, first_frame_data_url,
+                              seed, negative_prompt="", duration=5, resolution="720P"):
+            submit_calls.append({
+                "seed": seed,
+                "reference": reference_image_data_url,
+                "first_frame": first_frame_data_url,
+            })
             return FakeSubmitResult(submit_task_ids[len(submit_calls) - 1])
+
+        # 按 file_id 区分返回不同 data url，便于断言异图
+        def fake_read_base64(fid):
+            return f"data:image/jpeg;base64,{fid}"
 
         patches = [
             patch.object(svc_mod, "get_scene", lambda sid: __import__("src.video_gen.scenes", fromlist=["get_scene"]).get_scene(sid)),
-            patch.object(svc_mod.MediaRegistry, "read_as_base64", staticmethod(lambda fid: "data:image/jpeg;base64,xxx")),
+            patch.object(svc_mod.MediaRegistry, "read_as_base64", staticmethod(fake_read_base64)),
             patch.object(svc_mod.WanxProvider, "submit", fake_submit),
         ]
         for p in patches:
@@ -106,11 +119,37 @@ class TestCreateSession:
             assert result["card_count"] == 3
             assert len(result["cards"]) == 3
             # 3 条 card 用了不同 seed
-            assert len(set(submit_calls)) == 3
+            seeds = [c["seed"] for c in submit_calls]
+            assert len(set(seeds)) == 3
+            # 无模特图：first_frame 退化为产品图（reference == first_frame）
+            for c in submit_calls:
+                assert c["reference"] == c["first_frame"]
             # 每条 card 有 task_id 和 PENDING 状态
             for c in result["cards"]:
                 assert c["provider_status"] == "PENDING"
                 assert c["provider_task_id"] in ("t1", "t2", "t3")
+        finally:
+            for p in patches:
+                p.stop()
+
+    def test_model_image_uses_distinct_first_frame(self):
+        """传了模特图时：reference=产品图，first_frame=模特图（异图）。"""
+        patches, submit_calls = self._patch_externals(submit_task_ids=["t1", "t2"])
+        try:
+            with fake_db() as (conn, cursor):
+                svc = VideoGenService()
+                result = _run(svc.create_session(
+                    tenant_id="t1", user_id="u1", scene_id="product_showcase",
+                    product_image_fid="file_prod", copywriting="假睫毛",
+                    card_count=2, model_image_fid="file_model",
+                ))
+                conn.commit.assert_called_once()
+            # reference = 产品图，first_frame = 模特图（异图）
+            for c in submit_calls:
+                assert c["reference"] == "data:image/jpeg;base64,file_prod"
+                assert c["first_frame"] == "data:image/jpeg;base64,file_model"
+                assert c["reference"] != c["first_frame"]
+            assert result["model_image_fid"] == "file_model"
         finally:
             for p in patches:
                 p.stop()

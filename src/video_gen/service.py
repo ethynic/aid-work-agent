@@ -63,12 +63,13 @@ class VideoGenService:
         copywriting: str,
         card_count: int = 3,
         expanded_prompt: str | None = None,
+        model_image_fid: str | None = None,
     ) -> dict[str, Any]:
         """创建抽卡会话 + 立即向万相提交 card_count 条任务。
 
         流程（mvp-design.md §8.4）：
         1. 校验 scene_id
-        2. 读用户上传的产品图 base64（spike 验证万相支持 base64 直传，§1.1）
+        2. 读 base64：产品图→reference_image（锁定外观），模特图（可选）→first_frame（控制起始）
         3. card_count 个不同 seed，各调 wanx.submit
         4. 写 gen_sessions + gen_cards
 
@@ -84,10 +85,13 @@ class VideoGenService:
         # 2. 提示词：expanded_prompt 为空则用场景模板填空（极简提示词引擎，§6）
         prompt = expanded_prompt or scene.prompt_template.format(copywriting=copywriting)
 
-        # 3. 读用户上传的产品图 base64（spike 验证万相支持 base64，§1.1）
-        image_data_url = MediaRegistry.read_as_base64(product_image_fid)
+        # 3. 读 base64：产品图→reference_image（锁定外观）；模特图→first_frame，无模特图则用产品图
+        reference_data_url = MediaRegistry.read_as_base64(product_image_fid)
+        first_frame_data_url = (
+            MediaRegistry.read_as_base64(model_image_fid) if model_image_fid else reference_data_url
+        )
 
-        # 5. 写会话 + 提交 N 条任务（不同 seed 差异化）
+        # 4. 写会话 + 提交 N 条任务（不同 seed 差异化）
         session_id = new_id("sess")
         base_seed = random.randint(0, 2147483647)
 
@@ -97,10 +101,10 @@ class VideoGenService:
             cur.execute(
                 """INSERT INTO gen_sessions
                    (session_id, tenant_id, user_id, scene_id, product_image_fid,
-                    copywriting, expanded_prompt, card_count, status)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'generating')""",
+                    model_image_fid, copywriting, expanded_prompt, card_count, status)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,'generating')""",
                 (session_id, tenant_id, user_id, scene_id, product_image_fid,
-                 copywriting, prompt, card_count),
+                 model_image_fid, copywriting, prompt, card_count),
             )
 
             for idx in range(card_count):
@@ -112,7 +116,8 @@ class VideoGenService:
                 try:
                     submit_result = await self.wanx.submit(
                         prompt=prompt,
-                        product_image_data_url=image_data_url,
+                        reference_image_data_url=reference_data_url,
+                        first_frame_data_url=first_frame_data_url,
                         seed=seed,
                         negative_prompt=scene.negative_prompt,
                         duration=scene.default_duration,
@@ -151,6 +156,8 @@ class VideoGenService:
         return {
             "session_id": session_id, "scene_id": scene_id,
             "scene_name": scene.name, "copywriting": copywriting,
+            "product_image_fid": product_image_fid,
+            "model_image_fid": model_image_fid,
             "expanded_prompt": prompt, "card_count": card_count,
             "status": "generating", "cards": cards,
         }
@@ -163,8 +170,8 @@ class VideoGenService:
         with get_db_connection() as conn:
             cur = conn.cursor()
             cur.execute(
-                """SELECT session_id, tenant_id, scene_id, product_image_fid, copywriting,
-                          expanded_prompt, card_count, status, created_at
+                """SELECT session_id, tenant_id, scene_id, product_image_fid, model_image_fid,
+                          copywriting, expanded_prompt, card_count, status, created_at
                    FROM gen_sessions
                    WHERE session_id = %s AND tenant_id IS NOT DISTINCT FROM %s""",
                 (session_id, tenant_id),
@@ -188,8 +195,8 @@ class VideoGenService:
         with get_db_connection() as conn:
             cur = conn.cursor()
             cur.execute(
-                """SELECT session_id, tenant_id, scene_id, product_image_fid, copywriting,
-                          expanded_prompt, card_count, status, created_at
+                """SELECT session_id, tenant_id, scene_id, product_image_fid, model_image_fid,
+                          copywriting, expanded_prompt, card_count, status, created_at
                    FROM gen_sessions
                    WHERE tenant_id IS NOT DISTINCT FROM %s
                    ORDER BY created_at DESC LIMIT %s""",
@@ -237,14 +244,14 @@ class VideoGenService:
     ) -> dict[str, Any]:
         """重新生成式编辑：基于某张 card 的 session，用新 prompt/seed 重新提交一条任务。
 
-        新 card 的 parent_card_id = 原 card_id，复用原 session 的首帧（裁剪后的产品图）。
+        新 card 的 parent_card_id = 原 card_id，复用原 session 的产品图 + 模特图（若有）。
         """
         # 取原 card 与 session
         with get_db_connection() as conn:
             cur = conn.cursor()
             cur.execute(
                 """SELECT c.card_id, c.session_id, c.tenant_id, c.variant_prompt, c.seed,
-                          s.scene_id, s.expanded_prompt, s.product_image_fid
+                          s.scene_id, s.expanded_prompt, s.product_image_fid, s.model_image_fid
                    FROM gen_cards c
                    JOIN gen_sessions s ON c.session_id = s.session_id
                    WHERE c.card_id = %s AND c.tenant_id IS NOT DISTINCT FROM %s""",
@@ -259,7 +266,12 @@ class VideoGenService:
         prompt = prompt_override or data["variant_prompt"] or data["expanded_prompt"]
         seed = seed_override if seed_override is not None else random.randint(0, 2147483647)
 
-        image_data_url = MediaRegistry.read_as_base64(data["product_image_fid"])
+        # 复用原 session 的图片：产品图→reference_image，模特图→first_frame（无则用产品图）
+        reference_data_url = MediaRegistry.read_as_base64(data["product_image_fid"])
+        model_fid = data.get("model_image_fid")
+        first_frame_data_url = (
+            MediaRegistry.read_as_base64(model_fid) if model_fid else reference_data_url
+        )
         new_card_id = new_id("card")
         negative_prompt = scene.negative_prompt if scene else ""
 
@@ -269,7 +281,8 @@ class VideoGenService:
         try:
             submit_result = await self.wanx.submit(
                 prompt=prompt,
-                product_image_data_url=image_data_url,
+                reference_image_data_url=reference_data_url,
+                first_frame_data_url=first_frame_data_url,
                 seed=seed,
                 negative_prompt=negative_prompt,
                 duration=scene.default_duration if scene else 5,
