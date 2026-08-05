@@ -46,8 +46,14 @@ RUN python -c "import redis; print('redis loaded OK:', redis.__version__)" || \
      pip install --no-cache-dir 'redis>=5.0.0' -i https://pypi.org/simple/ && \
      python -c "import redis; print('redis loaded OK:', redis.__version__)")
 
-# MCP 单独安装（依赖较多，独立一层便于排查与缓存；zhipuai 已移除，不再存在 pyjwt 冲突）
-RUN pip install --no-cache-dir --no-deps 'mcp>=1.27.0' -i https://mirrors.cloud.tencent.com/pypi/simple && \
+# MCP 单独安装（依赖较多，独立一层便于排查与缓存）
+# 注意 1：不要使用 --no-deps，mcp 2.0.0 依赖 httpx2/mcp-types/opentelemetry-api，
+#         跳过会导致 import mcp 失败（ModuleNotFoundError: No module named 'mcp_types'）。
+#         历史上用 --no-deps 是为避免 zhipuai 间接依赖老版本 pyjwt 与 mcp 要求新版 pyjwt 冲突，
+#         zhipuai 已移除，冲突不再存在。
+# 注意 2：锁 <2.0.0，mcp 2.0 把传输层从 httpx 切到 httpx2，是破坏性变更；
+#         代码 src/mcp/server.py 用的是 1.x 的 FastMCP API，未验证 2.0 兼容性前不升级。
+RUN pip install --no-cache-dir 'mcp>=1.27.0,<2.0.0' -i https://mirrors.cloud.tencent.com/pypi/simple && \
     pip install --no-cache-dir \
       'pyjwt>=2.10.1' \
       'httpx-sse>=0.4' \
