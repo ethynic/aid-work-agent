@@ -363,6 +363,9 @@ async function loadSession(sessionId: string) {
   }
 }
 
+// provider 终态：进入这三种状态后不再变化，无需继续轮询
+const PROVIDER_TERMINAL_STATUSES = ['SUCCEEDED', 'FAILED', 'CANCELED']
+
 function startPolling() {
   stopPolling()
   pollTimer = setInterval(async () => {
@@ -370,7 +373,12 @@ function startPolling() {
     const res = await videoGenAPI.getSession(currentSession.value.session_id)
     if (res.success && res.data) {
       currentSession.value = res.data
-      if (res.data.status !== 'generating') {
+      // 终止条件 1：session.status 已变 done/failed（后端兜底，目前后端不会主动更新）
+      // 终止条件 2：所有 cards 已到终态（含全部失败、全部成功、部分成功部分失败）
+      // 后端 _mark_failed 只更新 card 状态、不更新 session.status，故条件 2 是实际生效的关键终止条件
+      const cards = res.data.cards || []
+      const allCardsTerminal = cards.length > 0 && cards.every(c => PROVIDER_TERMINAL_STATUSES.includes(c.provider_status))
+      if (res.data.status !== 'generating' || allCardsTerminal) {
         stopPolling()
         await loadHistory()
       }

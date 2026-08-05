@@ -160,13 +160,16 @@ class VideoGenService:
             conn.commit()
 
         logger.info(f"视频生成: 创建会话 {session_id} 场景={scene_id} 条数={card_count}")
+        # 边界处理：所有 card 在提交时就全部 FAILED（万相全挂）-> 直接 finalize session
+        final_status = self._maybe_finalize_session(session_id, tenant_id)
         return {
             "session_id": session_id, "scene_id": scene_id,
             "scene_name": scene.name, "copywriting": copywriting,
             "product_image_fid": product_image_fid,
             "model_image_fid": model_image_fid,
             "expanded_prompt": prompt, "card_count": card_count,
-            "status": "generating", "cards": cards,
+            "status": final_status or "generating",
+            "cards": cards,
         }
 
     # ------------------------------------------------------------------
@@ -311,6 +314,12 @@ class VideoGenService:
                 (new_card_id, data["tenant_id"], data["session_id"], 99, seed, prompt,
                  provider_task_id, provider_status, error_msg, card_id),
             )
+            # 重新生成会引入新的 PENDING card，session 必须回到 generating，否则前端会立刻停止轮询
+            cur.execute(
+                """UPDATE gen_sessions SET status = 'generating', updated_at = NOW()
+                   WHERE session_id = %s AND status IN ('done', 'failed')""",
+                (data["session_id"],),
+            )
             conn.commit()
 
         return {
@@ -352,6 +361,7 @@ class VideoGenService:
                 self._mark_failed(
                     card["card_id"], card["tenant_id"],
                     "成片任务已过期（超过24h未完成），请重新生成",
+                    session_id=card["session_id"],
                 )
                 processed += 1
                 continue
@@ -368,6 +378,7 @@ class VideoGenService:
                 self._mark_failed(
                     card["card_id"], card["tenant_id"],
                     result.error or f"生成失败 ({result.task_status})",
+                    session_id=card["session_id"],
                 )
             # PENDING/RUNNING/UNKNOWN 不动，下轮继续
             processed += 1
@@ -400,6 +411,8 @@ class VideoGenService:
                 )
                 conn.commit()
             logger.info(f"视频生成 card 成功 {card['card_id']} → file_id={output_fid}")
+            # card 成功后，可能该 session 下所有 card 都已到终态，尝试更新 session.status
+            self._maybe_finalize_session(card["session_id"], card["tenant_id"])
         except Exception as exc:
             # 临时调试：打印完整 traceback + 关键上下文（万相返回的 video_url 是 24h 临时 URL，
             # 可能 404/超时；烧录 FFmpeg 可能因中文字体缺失失败）。bug 修复后可降级。
@@ -409,10 +422,19 @@ class VideoGenService:
                 f"video_url={getattr(result, 'video_url', None)} "
                 f"duration={getattr(result, 'duration', None)}: {exc!r}"
             )
-            self._mark_failed(card["card_id"], card["tenant_id"], "成片下载失败，请重新生成")
+            self._mark_failed(
+                card["card_id"], card["tenant_id"], "成片下载失败，请重新生成",
+                session_id=card["session_id"],
+            )
 
-    def _mark_failed(self, card_id: str, tenant_id: str | None, error_msg: str) -> None:
-        """标记 card 失败。"""
+    def _mark_failed(
+        self,
+        card_id: str,
+        tenant_id: str | None,
+        error_msg: str,
+        session_id: str | None = None,
+    ) -> None:
+        """标记 card 失败。若 session_id 传入，则尝试 finalize session status。"""
         with get_db_connection() as conn:
             conn.cursor().execute(
                 """UPDATE gen_cards
@@ -421,6 +443,52 @@ class VideoGenService:
                 (error_msg, card_id),
             )
             conn.commit()
+        # card 失败后，可能该 session 下所有 card 都已到终态，尝试更新 session.status
+        if session_id is not None:
+            self._maybe_finalize_session(session_id, tenant_id)
+
+    def _maybe_finalize_session(self, session_id: str, tenant_id: str | None) -> str | None:
+        """检查 session 下所有 cards 是否都已到终态，若是则更新 gen_sessions.status。
+
+        - 有任何 SUCCEEDED -> 'done'（用户拿到了视频，按成功处理）
+        - 全部 FAILED/CANCELED/UNKNOWN -> 'failed'
+        - 仍有 PENDING/RUNNING -> 不更新，返回 None
+        - session.status 已是 done/failed -> 不重复更新，返回当前 status
+
+        返回值：更新后的 status（或当前已是终态时的 status）；未更新时返回 None。
+        """
+        with get_db_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """SELECT status FROM gen_sessions
+                   WHERE session_id = %s AND tenant_id IS NOT DISTINCT FROM %s""",
+                (session_id, tenant_id),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            current_status = dict(row).get("status")
+            if current_status != "generating":
+                return current_status
+            cur.execute(
+                "SELECT provider_status FROM gen_cards WHERE session_id = %s",
+                (session_id,),
+            )
+            statuses = [dict(r)["provider_status"] for r in cur.fetchall()]
+            if not statuses:
+                return None
+            # 还有未到终态的 card，不更新
+            if any(s not in _TERMINAL_STATUSES for s in statuses):
+                return None
+            final_status = "done" if any(s == "SUCCEEDED" for s in statuses) else "failed"
+            cur.execute(
+                """UPDATE gen_sessions SET status = %s, updated_at = NOW()
+                   WHERE session_id = %s AND tenant_id IS NOT DISTINCT FROM %s""",
+                (final_status, session_id, tenant_id),
+            )
+            conn.commit()
+            logger.info(f"视频生成 session 终态 {session_id} -> {final_status}")
+            return final_status
 
     def _is_task_expired(self, created_at) -> bool:
         """task 是否超过万相查询有效期。"""

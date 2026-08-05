@@ -415,3 +415,84 @@ class TestPollPendingCards:
                 n = _run(svc.poll_pending_cards())
         # 网络错误时 continue 跳过计数，状态不变更，下轮重试 → 返回 0
         assert n == 0
+
+
+class TestMaybeFinalizeSession:
+    """验证 session.status 在所有 card 到终态时被正确更新。
+    覆盖：全成功->done、全失败->failed、部分成功->done、仍有 PENDING->不动、已 finalize->不动。
+    """
+
+    def _session_row(self, status="generating"):
+        return {"status": status}
+
+    def _card_rows(self, statuses):
+        return [{"provider_status": s} for s in statuses]
+
+    def test_all_succeeded_finalizes_done(self):
+        with fake_db() as (conn, cursor):
+            cursor.fetchone.side_effect = [self._session_row("generating")]
+            cursor.fetchall.side_effect = [self._card_rows(["SUCCEEDED", "SUCCEEDED"])]
+            svc = VideoGenService()
+            result = svc._maybe_finalize_session("s1", "t1")
+        assert result == "done"
+        update_calls = [c for c in cursor.execute.call_args_list if "UPDATE gen_sessions SET status" in str(c.args[0])]
+        assert len(update_calls) == 1
+        assert update_calls[0].args[1][0] == "done"
+        conn.commit.assert_called()
+
+    def test_all_failed_finalizes_failed(self):
+        with fake_db() as (conn, cursor):
+            cursor.fetchone.side_effect = [self._session_row("generating")]
+            cursor.fetchall.side_effect = [self._card_rows(["FAILED", "CANCELED"])]
+            svc = VideoGenService()
+            result = svc._maybe_finalize_session("s1", "t1")
+        assert result == "failed"
+        update_calls = [c for c in cursor.execute.call_args_list if "UPDATE gen_sessions SET status" in str(c.args[0])]
+        assert len(update_calls) == 1
+        assert update_calls[0].args[1][0] == "failed"
+
+    def test_partial_success_finalizes_done(self):
+        """部分成功部分失败时，session 应标 done（用户拿到了视频）。"""
+        with fake_db() as (conn, cursor):
+            cursor.fetchone.side_effect = [self._session_row("generating")]
+            cursor.fetchall.side_effect = [self._card_rows(["SUCCEEDED", "FAILED"])]
+            svc = VideoGenService()
+            result = svc._maybe_finalize_session("s1", "t1")
+        assert result == "done"
+
+    def test_pending_remains_no_update(self):
+        """仍有 PENDING/RUNNING 时不更新 session.status。"""
+        with fake_db() as (conn, cursor):
+            cursor.fetchone.side_effect = [self._session_row("generating")]
+            cursor.fetchall.side_effect = [self._card_rows(["SUCCEEDED", "PENDING"])]
+            svc = VideoGenService()
+            result = svc._maybe_finalize_session("s1", "t1")
+        assert result is None
+        update_calls = [c for c in cursor.execute.call_args_list if "UPDATE gen_sessions SET status" in str(c.args[0])]
+        assert len(update_calls) == 0
+
+    def test_already_final_no_update(self):
+        """session.status 已是 done/failed 时不重复更新。"""
+        with fake_db() as (conn, cursor):
+            cursor.fetchone.side_effect = [self._session_row("done")]
+            svc = VideoGenService()
+            result = svc._maybe_finalize_session("s1", "t1")
+        assert result == "done"
+        update_calls = [c for c in cursor.execute.call_args_list if "UPDATE gen_sessions SET status" in str(c.args[0])]
+        assert len(update_calls) == 0
+
+    def test_session_not_found_returns_none(self):
+        with fake_db() as (conn, cursor):
+            cursor.fetchone.side_effect = [None]
+            svc = VideoGenService()
+            result = svc._maybe_finalize_session("missing", "t1")
+        assert result is None
+
+    def test_no_cards_no_update(self):
+        """session 下无 card 时不更新（边界保护）。"""
+        with fake_db() as (conn, cursor):
+            cursor.fetchone.side_effect = [self._session_row("generating")]
+            cursor.fetchall.side_effect = [[]]
+            svc = VideoGenService()
+            result = svc._maybe_finalize_session("s1", "t1")
+        assert result is None
