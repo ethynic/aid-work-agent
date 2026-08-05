@@ -126,12 +126,15 @@ RUN echo 'deb https://mirrors.cloud.tencent.com/debian/ trixie main non-free-fir
     libpango-1.0-0 \
     libcairo2 \
     libatspi2.0-0 \
+    # FFmpeg：用于视频生成模块烧录「AI 生成内容」标识（2025.9.1 法规）
+    # 中文字形由 fonts-noto-cjk 提供，drawtext 已验证可用
+    ffmpeg \
     # gosu 用于 entrypoint 中以非 root 用户身份启动 gunicorn（保持 PID 1 信号处理）
     gosu \
     && rm -rf /var/lib/apt/lists/*
 
 # 构建时校验文档转换工具，避免依赖缺失延迟到运行时才暴露
-RUN soffice --headless --version && pandoc --version
+RUN soffice --headless --version && pandoc --version && ffmpeg -hide_banner -version | head -1
 
 # 创建非 root 用户及 home 目录（Uvicorn control server 需要）
 # 注意：uid=1000 与宿主机 SMB 挂载的 ubuntu 用户 uid 保持一致

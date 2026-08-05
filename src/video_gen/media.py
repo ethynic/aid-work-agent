@@ -35,11 +35,18 @@ from src.core.storage import (
 _REQUIRED_FIELDS = ("file_id", "name", "path", "size", "mime_type", "type")
 
 # AI 标识烧录（2025.9.1 法规）：右下角常驻文字 + 半透明背景框
-# Windows 中文字体（微软雅黑），Linux/Docker 回退到文泉驿/wqy 或 dejavu
+# 字体候选路径：覆盖 Linux/Docker（Noto CJK / wqy）、Windows（msyh）、macOS（PingFang）
+# Docker 镜像装的是 fonts-noto-cjk，路径与 wqy 不同，必须显式列出
 _FONT_CANDIDATES = [
-    "C:/Windows/Fonts/msyh.ttc",          # Windows 微软雅黑
-    "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",   # 常见 Docker 中文字体
+    # Linux/Docker（Dockerfile apt install fonts-noto-cjk）
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc",
+    "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    # Windows
+    "C:/Windows/Fonts/msyh.ttc",
+    # macOS
+    "/System/Library/Fonts/PingFang.ttc",
 ]
 
 _DEFAULT_TTL_SECONDS = 86400 * 7   # 成片默认保留 7 天（Redis TTL；磁盘恢复不覆盖 storage/tenants）
@@ -110,20 +117,46 @@ class MediaRegistry:
         成片在注册前用 FFmpeg 烧录醒目「AI 生成内容」标识（2025.9.1 法规，§11）。
         """
         tmp_dir = Path(tempfile.mkdtemp(prefix="vg_dl_"))
+        logger.info(
+            f"视频生成: 开始下载万相成片 url={url} tenant={tenant_id} "
+            f"display_name={display_name} burn_label={burn_label} tmp={tmp_dir}"
+        )
         try:
             raw_path = tmp_dir / "raw.mp4"
-            async with httpx.AsyncClient(timeout=180.0) as client:
-                resp = await client.get(url)
-                resp.raise_for_status()
-                raw_path.write_bytes(resp.content)
-            logger.info(f"视频生成: 万相成片下载完成 ({raw_path.stat().st_size}B)")
+            try:
+                async with httpx.AsyncClient(timeout=180.0) as client:
+                    resp = await client.get(url)
+                    if resp.status_code != 200:
+                        body_preview = (resp.text or "")[:500]
+                        logger.error(
+                            f"视频生成: 万相成片下载 HTTP 非 200 status={resp.status_code} "
+                            f"url={url} body_preview={body_preview!r}"
+                        )
+                    resp.raise_for_status()
+                    raw_path.write_bytes(resp.content)
+                logger.info(
+                    f"视频生成: 万相成片下载完成 size={raw_path.stat().st_size}B path={raw_path}"
+                )
+            except Exception as exc:
+                # 临时调试：万相 URL 24h 过期 / 404 / 超时 / 网络断均会走这里
+                logger.exception(
+                    f"视频生成: 万相成片下载失败 url={url} tenant={tenant_id}: {exc!r}"
+                )
+                raise
 
+            final_path = raw_path
             if burn_label:
                 labeled_path = tmp_dir / "labeled.mp4"
-                _burn_ai_label(str(raw_path), str(labeled_path))
-                final_path = labeled_path
-            else:
-                final_path = raw_path
+                try:
+                    _burn_ai_label(str(raw_path), str(labeled_path))
+                    final_path = labeled_path
+                except Exception as exc:
+                    # 临时调试：FFmpeg 未装 / 中文字体缺失 / 滤镜失败均会走这里
+                    logger.exception(
+                        f"视频生成: AI 标识烧录失败 raw={raw_path} "
+                        f"raw_size={raw_path.stat().st_size}B: {exc!r}"
+                    )
+                    raise
 
             return await self.register_local(
                 final_path,
@@ -164,6 +197,10 @@ def _burn_ai_label(input_path: str, output_path: str) -> None:
     若 FFmpeg 不可用或无中文字体，抛异常由调用方标记 card 失败。
     """
     fontfile = next((p for p in _FONT_CANDIDATES if Path(p).exists()), None)
+    logger.info(
+        f"视频生成: 开始烧录 AI 标识 input={input_path} output={output_path} "
+        f"fontfile={fontfile or '未命中候选列表（将用 FFmpeg 默认字体，可能无中文字形导致方框）'}"
+    )
     # drawtext 文字含特殊字符需转义（冒号、单引号）。中文「AI 生成内容」无特殊字符，安全。
     drawtext = (
         "drawtext=text='AI 生成内容':"
@@ -187,7 +224,17 @@ def _burn_ai_label(input_path: str, output_path: str) -> None:
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
     except FileNotFoundError as exc:
+        logger.error(f"视频生成: FFmpeg 未安装 cmd={cmd}")
         raise RuntimeError("FFmpeg 未安装，无法烧录 AI 标识") from exc
     if result.returncode != 0 or not Path(output_path).exists():
+        # 临时调试：把完整 stdout/stderr/cmd 都打出来，便于定位滤镜/字体/编码失败原因
+        logger.error(
+            f"视频生成: FFmpeg 烧录失败 returncode={result.returncode} "
+            f"output_exists={Path(output_path).exists()} "
+            f"input_size={Path(input_path).stat().st_size}B "
+            f"stdout={result.stdout!r} stderr={result.stderr!r} cmd={cmd}"
+        )
         raise RuntimeError(f"FFmpeg 烧录 AI 标识失败: {result.stderr[-500:]}")
-    logger.info(f"视频生成: AI 标识烧录完成 → {output_path}")
+    logger.info(
+        f"视频生成: AI 标识烧录完成 -> {output_path} size={Path(output_path).stat().st_size}B"
+    )

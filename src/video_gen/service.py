@@ -386,7 +386,14 @@ class VideoGenService:
                 conn.commit()
             logger.info(f"视频生成 card 成功 {card['card_id']} → file_id={output_fid}")
         except Exception as exc:
-            logger.error(f"视频生成成片下载/烧录失败 card={card['card_id']}: {exc}")
+            # 临时调试：打印完整 traceback + 关键上下文（万相返回的 video_url 是 24h 临时 URL，
+            # 可能 404/超时；烧录 FFmpeg 可能因中文字体缺失失败）。bug 修复后可降级。
+            logger.exception(
+                f"视频生成成片下载/烧录失败 card={card['card_id']} tenant={card.get('tenant_id')} "
+                f"provider_task_id={card.get('provider_task_id')} "
+                f"video_url={getattr(result, 'video_url', None)} "
+                f"duration={getattr(result, 'duration', None)}: {exc!r}"
+            )
             self._mark_failed(card["card_id"], card["tenant_id"], "成片下载失败，请重新生成")
 
     def _mark_failed(self, card_id: str, tenant_id: str | None, error_msg: str) -> None:
