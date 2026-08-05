@@ -75,12 +75,21 @@ class _InMemoryFallback:
             self._ttls.pop(key, None)
             return 1 if existed else 0
 
-    def hset(self, key: str, field: str, value: Any) -> None:
+    def hset(
+        self,
+        key: str,
+        field: Optional[str] = None,
+        value: Any = None,
+        mapping: Optional[Dict[str, Any]] = None,
+    ) -> None:
         with self._lock:
             if key not in self._data or self._types.get(key) != "hash":
                 self._data[key] = {}
                 self._types[key] = "hash"
-            self._data[key][field] = value
+            if mapping:
+                self._data[key].update(mapping)
+            if field is not None:
+                self._data[key][field] = value
 
     def hget(self, key: str, field: str) -> Optional[Any]:
         with self._lock:
@@ -463,12 +472,32 @@ class RedisClient:
 
     # ============== Hash 操作 ==============
 
-    def hset(self, key: str, field: str, value: Any) -> None:
-        """设置 Hash 字段（JSON 序列化）"""
+    def hset(
+        self,
+        key: str,
+        field: Optional[str] = None,
+        value: Any = None,
+        mapping: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """设置 Hash 字段（JSON 序列化）
+
+        支持两种调用方式（与 redis-py 原生签名对齐）：
+        1. redis_client.hset(key, field, value)  # 单字段
+        2. redis_client.hset(key, mapping={...})  # 多字段
+        """
         backend = self._get_backend()
         try:
-            raw = json.dumps(value, ensure_ascii=False, default=str)
-            backend.hset(key, field, raw)
+            if mapping is not None:
+                raw_mapping = {
+                    k: json.dumps(v, ensure_ascii=False, default=str)
+                    for k, v in mapping.items()
+                }
+                if field is not None:
+                    raw_mapping[field] = json.dumps(value, ensure_ascii=False, default=str)
+                backend.hset(key, mapping=raw_mapping)
+            else:
+                raw = json.dumps(value, ensure_ascii=False, default=str)
+                backend.hset(key, field, raw)
         except Exception as e:
             logger.warning(f"[Redis] hset 失败 [{key}:{field}]: {e}")
 
