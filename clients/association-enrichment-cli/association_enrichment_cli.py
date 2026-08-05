@@ -86,12 +86,20 @@ async def run(args: argparse.Namespace) -> dict[str, object]:
     rows = await enricher.enrich_many(names)
     report_progress("正在写入 Excel 结果")
     output = write_enrichment_workbook(rows, args.output)
+    failed_count = sum(row.processing_status == "failed" for row in rows)
+    batch_aborted = bool(getattr(rows, "aborted", False))
+    aborted_count = (len(names) - len(rows)) + (1 if batch_aborted else 0)
+    business_failed = failed_count > 0 or batch_aborted
     return {
-        "ok": True,
-        "association_count": len(rows),
+        "ok": not business_failed,
+        "business_status": "failed" if business_failed else "completed",
+        "association_count": len(names),
+        "processed_count": len(rows),
+        "aborted_count": aborted_count,
+        "abort_error_code": getattr(rows, "abort_error_code", None),
         "complete_count": sum(row.processing_status == "complete" for row in rows),
         "partial_count": sum(row.processing_status == "partial" for row in rows),
-        "failed_count": sum(row.processing_status == "failed" for row in rows),
+        "failed_count": failed_count,
         "output": _redact_mobiles(str(output)),
     }
 
@@ -101,7 +109,7 @@ def main() -> int:
     try:
         result = asyncio.run(run(args))
         print(json.dumps(result, ensure_ascii=False))
-        return 0
+        return 0 if result.get("ok") else 2
     except Exception as exc:
         print(
             json.dumps(

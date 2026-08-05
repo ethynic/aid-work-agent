@@ -259,6 +259,12 @@ class QwenProvider(BaseLLMProvider):
         """
         choices = response.get("choices", [])
         usage = response.get("usage", {})
+        prompt_details = usage.get("prompt_tokens_details", {})
+        cached_tokens = (
+            prompt_details.get("cached_tokens", 0)
+            if isinstance(prompt_details, dict)
+            else 0
+        ) or usage.get("prompt_cache_hit_tokens", usage.get("cached_tokens", 0))
 
         if choices:
             message = choices[0].get("message", {})
@@ -277,7 +283,7 @@ class QwenProvider(BaseLLMProvider):
                 "prompt_tokens": usage.get("prompt_tokens", 0),
                 "completion_tokens": usage.get("completion_tokens", 0),
                 "total_tokens": usage.get("total_tokens", 0),
-                "cached_tokens": usage.get("prompt_tokens_details", {}).get("cached_tokens", 0),
+                "cached_tokens": cached_tokens,
             },
             "request_id": response.get("id", ""),
         }

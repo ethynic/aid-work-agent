@@ -307,7 +307,7 @@ async def test_bad_json_and_extra_field_are_inconclusive(content):
         [page()], "www.caapa.org", MockGateway(content),
     )
     assert result.status == "inconclusive"
-    assert result.reason_code == "INVALID_EVIDENCE"
+    assert result.reason_code in {"STRICT_JSON_INVALID", "PROFILE_SCHEMA_INVALID"}
     assert result.profile is None
 
 
@@ -331,7 +331,7 @@ async def test_retired_fields_are_rejected_as_extra_fields(retired_field):
     )
 
     assert result.status == "inconclusive"
-    assert result.reason_code == "INVALID_EVIDENCE"
+    assert result.reason_code in {"PROFILE_SCHEMA_INVALID", "STRICT_JSON_INVALID"}
 
 
 @pytest.mark.asyncio
@@ -346,7 +346,33 @@ async def test_hallucinated_value_or_quote_is_inconclusive():
         [page()], "www.caapa.org", MockGateway(json.dumps(data)),
     )
     assert result.status == "inconclusive"
+    assert result.reason_code == "FIELD_EVIDENCE_REJECTED"
     assert result.profile is None
+
+
+@pytest.mark.asyncio
+async def test_invalid_count_does_not_discard_verified_leadership():
+    data = empty_profile()
+    data["president_name"] = {
+        "value": "张会长",
+        "evidence_quote": "现任会长张会长",
+        "source_url": URL,
+    }
+    data["brand_conference_consecutive_count"] = {
+        "value": "九届",
+        "evidence_quote": "品牌会议连续举办九届",
+        "source_url": URL,
+    }
+
+    result = await extract_association_profile(
+        [page("现任会长张会长。品牌会议连续举办九届。")],
+        "www.caapa.org",
+        MockGateway(json.dumps(data, ensure_ascii=False)),
+    )
+
+    assert result.status == "success"
+    assert result.profile.president_name.value == "张会长"
+    assert result.profile.brand_conference_consecutive_count.value is None
 
 
 @pytest.mark.asyncio
@@ -375,7 +401,9 @@ async def test_mobile_must_be_bound_to_same_name_in_quote():
     result = await extract_association_profile(
         [page(content)], "www.caapa.org", MockGateway(json.dumps(data)),
     )
-    assert result.status == "inconclusive"
+    assert result.status == "success"
+    assert result.profile.secretary_general_name.value == "王承展"
+    assert result.profile.secretary_general_mobile.value is None
 
 
 @pytest.mark.asyncio
@@ -393,8 +421,9 @@ async def test_president_mobile_binding_remains_strict_after_field_retirement():
     result = await extract_association_profile(
         [page(content)], "www.caapa.org", MockGateway(json.dumps(data, ensure_ascii=False)),
     )
-    assert result.status == "inconclusive"
-    assert result.reason_code == "INVALID_EVIDENCE"
+    assert result.status == "success"
+    assert result.profile.president_name.value == "许萍"
+    assert result.profile.president_mobile.value is None
 
 
 @pytest.mark.asyncio
@@ -410,7 +439,9 @@ async def test_mobile_cannot_be_cross_bound_inside_multi_contact_quote():
     result = await extract_association_profile(
         [page(quote)], "www.caapa.org", MockGateway(json.dumps(data, ensure_ascii=False)),
     )
-    assert result.status == "inconclusive"
+    assert result.status == "success"
+    assert result.profile.secretary_general_name.value == "王承展"
+    assert result.profile.secretary_general_mobile.value is None
 
 
 @pytest.mark.asyncio
@@ -432,7 +463,7 @@ async def test_duplicate_json_field_is_rejected_instead_of_last_value_wins():
         [page()], "www.caapa.org", MockGateway(duplicate),
     )
     assert result.status == "inconclusive"
-    assert result.reason_code == "INVALID_EVIDENCE"
+    assert result.reason_code in {"PROFILE_SCHEMA_INVALID", "STRICT_JSON_INVALID"}
 
 
 @pytest.mark.asyncio
@@ -584,7 +615,7 @@ async def test_non_object_or_empty_gateway_response_is_inconclusive(response):
     result = await extract_association_profile([page()], "www.caapa.org", RawGateway())
     assert result.status == "inconclusive"
     assert result.profile is None
-    assert result.reason_code == "INVALID_EVIDENCE"
+    assert result.reason_code in {"PROFILE_SCHEMA_INVALID", "STRICT_JSON_INVALID"}
 
 
 @pytest.mark.asyncio
@@ -860,7 +891,7 @@ async def test_integer_normalization_keeps_exact_numeric_token_check(
     )
     assert result.status == expected
     if expected == "inconclusive":
-        assert result.reason_code == "INVALID_EVIDENCE"
+        assert result.reason_code == "FIELD_EVIDENCE_REJECTED"
         assert result.profile is None
     else:
         assert result.profile.branch_count.value == "16"
@@ -894,7 +925,7 @@ async def test_numeric_values_outside_integer_count_contract_fail_closed(
     )
 
     assert result.status == "inconclusive"
-    assert result.reason_code == "INVALID_EVIDENCE"
+    assert result.reason_code == "FIELD_EVIDENCE_REJECTED"
 
 
 @pytest.mark.asyncio
@@ -918,7 +949,7 @@ async def test_scientific_notation_count_fails_closed():
     )
 
     assert result.status == "inconclusive"
-    assert result.reason_code == "INVALID_EVIDENCE"
+    assert result.reason_code == "FIELD_EVIDENCE_REJECTED"
 
 
 @pytest.mark.asyncio

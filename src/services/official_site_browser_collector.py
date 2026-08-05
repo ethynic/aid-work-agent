@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from hashlib import sha256
 import re
 from time import monotonic
-from typing import Protocol
+from typing import Callable, Protocol
 
 from src.services.association_profile_extractor import (
     MAX_PAGE_COUNT,
@@ -146,6 +146,7 @@ async def collect_official_pages_with_browser_driver(
     max_pages: int = DEFAULT_MAX_PAGES,
     max_total_chars: int = MAX_TOTAL_CONTENT_CHARS,
     max_navigation_attempts: int = 36,
+    audit_callback: Callable[..., None] | None = None,
 ) -> list[VerifiedOfficialPage]:
     """从入口自动嗅探并点击高价值导航，输出提取器可直接消费的页面。"""
     if (
@@ -162,10 +163,24 @@ async def collect_official_pages_with_browser_driver(
     if normalized_entry is None:
         raise ValueError("entry URL is outside verified domain")
 
+    def audit(**event) -> None:
+        if audit_callback is None:
+            return
+        try:
+            audit_callback(**event)
+        except Exception:
+            pass
+
     collection_deadline = monotonic() + MAX_COLLECTION_SECONDS
     entry_deadline = min(
         collection_deadline,
         monotonic() + MAX_SINGLE_PATH_SECONDS,
+    )
+    audit(
+        stage="官网采集",
+        kind="web_open",
+        summary="打开官网入口",
+        detail={"url": normalized_entry},
     )
     entry_state = await asyncio.wait_for(
         driver.open(normalized_entry),
@@ -208,6 +223,16 @@ async def collect_official_pages_with_browser_driver(
         page_titles[normalized] = state.title.strip() or normalized
         page_contents[normalized] = content
         total_chars += len(content)
+        audit(
+            stage="官网采集",
+            kind="web_page",
+            summary=f"已读取 {page_titles[normalized]}",
+            detail={
+                "url": normalized,
+                "title": page_titles[normalized],
+                "content": content,
+            },
+        )
 
     include(entry_state)
     visited_states = {entry_state.fingerprint}
@@ -261,6 +286,12 @@ async def collect_official_pages_with_browser_driver(
             monotonic() + MAX_SINGLE_PATH_SECONDS,
         )
         try:
+            audit(
+                stage="官网采集",
+                kind="web_open",
+                summary="重放官网入口",
+                detail={"url": normalized_entry},
+            )
             state = await asyncio.wait_for(
                 driver.open(normalized_entry),
                 timeout=max(0.001, path_deadline - monotonic()),
@@ -287,6 +318,15 @@ async def collect_official_pages_with_browser_driver(
                     driver.open(direct_url)
                     if direct_url is not None
                     else driver.activate(target, state)
+                )
+                audit(
+                    stage="官网采集",
+                    kind="web_open",
+                    summary=f"打开导航：{target.text}",
+                    detail={
+                        "url": direct_url,
+                        "navigation_text": target.text,
+                    },
                 )
                 next_state = await asyncio.wait_for(
                     operation,
@@ -545,6 +585,7 @@ async def collect_official_pages_with_playwright(
     max_total_chars: int = MAX_TOTAL_CONTENT_CHARS,
     max_navigation_attempts: int = 36,
     navigation_timeout_ms: int = 8_000,
+    audit_callback: Callable[..., None] | None = None,
 ) -> list[VerifiedOfficialPage]:
     """启动 Playwright 自动点击采集；真机风控回退应显式传 ``headless=False``。"""
     if not isinstance(headless, bool):
@@ -581,6 +622,7 @@ async def collect_official_pages_with_playwright(
                 max_pages=max_pages,
                 max_total_chars=max_total_chars,
                 max_navigation_attempts=max_navigation_attempts,
+                audit_callback=audit_callback,
             )
         finally:
             await browser.close()

@@ -10,6 +10,17 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'wechat-souyisou-lib.ps1')
 
 $artifact = Unprotect-EvidenceArtifact $ArtifactPath
+if (
+    [string]$artifact.kind -eq 'failure' -and
+    [string]$artifact.result_artifact_id -match '^[a-fA-F0-9]{32}$'
+) {
+    $resultPath = Join-Path (Split-Path -Parent (Resolve-Path -LiteralPath $ArtifactPath).Path) `
+        ("{0}.dpapi" -f [string]$artifact.result_artifact_id)
+    $artifact = Unprotect-EvidenceArtifact $resultPath
+    if ([string]$artifact.kind -ne 'collect_result') {
+        throw 'ARTIFACT_RESULT_REFERENCE_INVALID'
+    }
+}
 $foundResult = $artifact.found_result
 if ($foundResult -and $foundResult.matched -eq $true) {
     if (

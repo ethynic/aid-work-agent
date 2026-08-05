@@ -16,6 +16,49 @@ from typing import Any
 JUDGE_MAX_TOKENS = 2500
 
 
+class JudgeUsageError(ValueError):
+    def __init__(self, token_usage: dict[str, int]):
+        super().__init__("judge response invalid")
+        self.token_usage = token_usage
+
+
+def _usage(response: object) -> dict[str, int]:
+    usage = response.get("usage", {}) if isinstance(response, dict) else {}
+    if not isinstance(usage, dict):
+        return {"prompt_tokens": 0, "cached_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "call_count": 0}
+
+    def read(primary: str, alias: str | None = None, *, default: int | None = None):
+        name = primary if primary in usage else alias if alias and alias in usage else None
+        if name is None:
+            return default
+        item = usage[name]
+        return item if isinstance(item, int) and not isinstance(item, bool) and item >= 0 else None
+
+    prompt = read("prompt_tokens", "input_tokens")
+    cached = read("cached_tokens", "cached_input_tokens", default=0)
+    completion = read("completion_tokens", "output_tokens")
+    reported_total = read("total_tokens", default=0)
+    if (
+        None in (prompt, cached, completion, reported_total)
+        or cached > prompt
+        or (prompt == 0 and cached == 0 and completion == 0 and reported_total == 0)
+    ):
+        return {"prompt_tokens": 0, "cached_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "call_count": 0}
+    result = {
+        "prompt_tokens": prompt,
+        "cached_tokens": cached,
+        "completion_tokens": completion,
+        "total_tokens": prompt + completion,
+    }
+    result["call_count"] = 1
+    return result
+
+
+def _add_usage(target: dict[str, int], source: dict[str, int]) -> None:
+    for key in target:
+        target[key] += source.get(key, 0)
+
+
 def _parse_json_content(content: str) -> dict[str, Any]:
     value = content.strip()
     fenced = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", value, re.DOTALL | re.IGNORECASE)
@@ -82,8 +125,13 @@ async def run_judge(payload: dict[str, Any], gateway: Any = None) -> dict[str, A
         temperature=0,
         max_tokens=JUDGE_MAX_TOKENS,
     )
+    total_usage = {"prompt_tokens": 0, "cached_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "call_count": 0}
+    _add_usage(total_usage, _usage(response))
     try:
-        return _parse_json_content(str(response.get("content", "")))
+        result = _parse_json_content(str(response.get("content", "")))
+        if any(total_usage.values()):
+            result["token_usage"] = total_usage
+        return result
     except (json.JSONDecodeError, ValueError):
         # Do not include the invalid raw response: it may contain evidence,
         # secrets or prompt-amplifying text. Retry only format/schema errors;
@@ -99,12 +147,24 @@ async def run_judge(payload: dict[str, Any], gateway: Any = None) -> dict[str, A
                 ),
             }
         ]
-        retry_response = await gateway.chat(
-            messages=retry_messages,
-            temperature=0,
-            max_tokens=JUDGE_MAX_TOKENS,
-        )
-        return _parse_json_content(str(retry_response.get("content", "")))
+        try:
+            retry_response = await gateway.chat(
+                messages=retry_messages,
+                temperature=0,
+                max_tokens=JUDGE_MAX_TOKENS,
+            )
+        except Exception as exc:
+            if any(total_usage.values()):
+                raise JudgeUsageError(total_usage) from exc
+            raise
+        _add_usage(total_usage, _usage(retry_response))
+        try:
+            result = _parse_json_content(str(retry_response.get("content", "")))
+        except (json.JSONDecodeError, ValueError) as exc:
+            raise JudgeUsageError(total_usage) from exc
+        if any(total_usage.values()):
+            result["token_usage"] = total_usage
+        return result
 
 
 def main() -> int:
@@ -121,6 +181,13 @@ def main() -> int:
         sys.stdout.write(json.dumps(result, ensure_ascii=False, separators=(",", ":")) + "\n")
         return 0
     except Exception as exc:
+        token_usage = getattr(exc, "token_usage", None)
+        if isinstance(token_usage, dict) and any(token_usage.values()):
+            sys.stdout.write(json.dumps(
+                {"inconclusive": True, "token_usage": token_usage},
+                separators=(",", ":"),
+            ) + "\n")
+            return 0
         # 不写输入原文；仅输出异常类型，供调用方判定 inconclusive。
         sys.stderr.write(f"judge_failed:{type(exc).__name__}\n")
         return 2

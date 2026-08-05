@@ -14,6 +14,23 @@ SPEC.loader.exec_module(MODULE)
 
 
 class OcrAdapterTests(unittest.TestCase):
+    def test_accepts_detail_caller_temp_prefix(self):
+        path = (
+            pathlib.Path(tempfile.gettempdir())
+            / "wechat-ocr-detail-contract.png"
+        )
+        path.write_bytes(b"synthetic")
+        try:
+            result = MODULE.run_ocr(
+                {"image_paths": [str(path)]},
+                lambda **_: {"success": True, "full_text": "detail evidence"},
+            )
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["text"], "detail evidence")
+            self.assertEqual(result["image_count"], 1)
+        finally:
+            path.unlink(missing_ok=True)
+
     def test_reports_exact_count_for_one_two_and_three_images(self):
         for count in (1, 2, 3):
             with self.subTest(count=count):

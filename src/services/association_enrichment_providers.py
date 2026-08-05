@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
+import os
 import re
 from pathlib import Path
+from typing import Callable
 from urllib.parse import urlparse, urlunparse
 
 from src.llm.gateway import llm_gateway
@@ -18,6 +21,35 @@ from src.services.official_site_browser_collector import (
     collect_official_pages_with_playwright,
 )
 from src.tools.search.search_tool import WebSearchTool
+from src.services.llm_usage_meter import record_usage
+from src.services.association_batch_enrichment import WechatRpaError
+
+
+_WECHAT_SESSION_FATAL_CODES = {
+    "SESSION_CLEANUP_FAILED",
+    "PLUGIN_IDENTITY_INVALID",
+    "PLUGIN_ACTIVATION_FAILED",
+    "PLUGIN_CLOSE_REJECTED",
+    "PLUGIN_CLOSE_TIMEOUT",
+    "MAIN_WINDOW_MISSING",
+    "MAIN_WINDOW_UNTRUSTED",
+    "MAIN_ACTIVATION_FAILED",
+    "MAIN_FOREGROUND_NOT_RESTORED",
+    "FOREGROUND_LOST",
+    "SOUYISOU_WINDOW_UNTRUSTED",
+    "WECHAT_RPA_TIMEOUT",
+    "WECHAT_WORK_TIMEOUT",
+    "WECHAT_HANDOFF_FAILED",
+}
+_WECHAT_INPUT_FAILURE_CODES = {
+    "SEARCH_INPUT_FOCUS_FAILED",
+    "SEARCH_INPUT_LOCATOR_FAILED",
+    "SEARCH_INPUT_CLICK_STRUCTURE_INVALID",
+    "SEARCH_INPUT_READBACK_MISMATCH",
+    "SEARCH_INPUT_FINAL_STRUCTURE_INVALID",
+    "INPUT_FOCUS_LOST",
+}
+_WECHAT_RPA_TIMEOUT_SECONDS = 600
 
 
 class ProjectAssociationProviders:
@@ -31,9 +63,46 @@ class ProjectAssociationProviders:
         "emagecompany.com",
     )
 
-    def __init__(self, *, repository_root: str | Path):
+    def __init__(
+        self,
+        *,
+        repository_root: str | Path,
+        audit_callback: Callable[..., None] | None = None,
+    ):
         self._root = Path(repository_root)
         self._search = WebSearchTool()
+        self._audit_callback = audit_callback
+        # Provider 在 CLI 单批次/UI 单次运行内创建一次，微信调用由 enricher 串行执行。
+        # 只有上一条明确完成且 session_closed=true，下一条才允许消费一次交接。
+        self._wechat_handoff_ready = False
+        self._wechat_query_index = 0
+        self._wechat_handoff_sleep = asyncio.sleep
+
+    def _audit(self, **event) -> None:
+        if self._audit_callback is None:
+            return
+        try:
+            self._audit_callback(**event)
+        except Exception:
+            # 审计展示故障不能改变资料采集结果。
+            pass
+
+    @staticmethod
+    def _validated_wechat_artifact_path(artifact_ref: str) -> Path:
+        artifact_root = (
+            Path(os.environ["LOCALAPPDATA"])
+            / "AidWorkAgent"
+            / "wechat-souyisou-rpa"
+            / "artifacts"
+        ).resolve()
+        candidate = Path(artifact_ref).resolve()
+        if (
+            candidate.parent != artifact_root
+            or not re.fullmatch(r"[a-f0-9]{32}\.dpapi", candidate.name)
+            or not candidate.is_file()
+        ):
+            raise ValueError("WECHAT_ARTIFACT_REF_INVALID")
+        return candidate
 
     @staticmethod
     def _candidate_urls(candidates: list[dict]) -> dict[str, str]:
@@ -108,9 +177,9 @@ class ProjectAssociationProviders:
                 if not isinstance(parsed, dict):
                     raise TypeError("LLM_JSON_NOT_OBJECT")
                 return parsed
-            except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+            except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
                 if attempt:
-                    raise
+                    raise ValueError("LLM_STRICT_JSON_INVALID") from exc
                 retry_messages = messages + [
                     {
                         "role": "user",
@@ -126,9 +195,11 @@ class ProjectAssociationProviders:
     def _validate_fallback_evidence(
         parsed: dict,
         candidates: list[dict],
+        rejected: list[str] | None = None,
     ) -> dict[str, str | None]:
-        if set(parsed) != set(PROFILE_FIELDS):
+        if set(parsed) - set(PROFILE_FIELDS):
             raise ValueError("WEB_FALLBACK_SCHEMA_INVALID")
+        rejected = rejected if rejected is not None else []
         evidence_by_url: dict[str, str] = {}
         for candidate in candidates:
             url = candidate.get("url")
@@ -140,32 +211,42 @@ class ProjectAssociationProviders:
             )
         result: dict[str, str | None] = {}
         for name in PROFILE_FIELDS:
-            evidence = parsed[name]
+            evidence = parsed.get(name)
             if not isinstance(evidence, dict) or set(evidence) != {
                 "value", "evidence_quote", "source_url",
             }:
-                raise ValueError("WEB_FALLBACK_SCHEMA_INVALID")
+                result[name] = None
+                rejected.append(f"{name}:WEB_FALLBACK_FIELD_SCHEMA_INVALID")
+                continue
             value = evidence["value"]
             quote = evidence["evidence_quote"]
             source_url = evidence["source_url"]
             if value is None:
                 if quote is not None or source_url is not None:
-                    raise ValueError("WEB_FALLBACK_EVIDENCE_INVALID")
+                    rejected.append(f"{name}:WEB_FALLBACK_NULL_EVIDENCE_INVALID")
                 result[name] = None
                 continue
             if name in {"president_mobile", "secretary_general_mobile"}:
-                raise ValueError("WEB_FALLBACK_MOBILE_FORBIDDEN")
+                result[name] = None
+                rejected.append(f"{name}:WEB_FALLBACK_MOBILE_FORBIDDEN")
+                continue
             if not all(isinstance(item, str) and item.strip() for item in (
                 value, quote, source_url,
             )):
-                raise ValueError("WEB_FALLBACK_EVIDENCE_INVALID")
+                result[name] = None
+                rejected.append(f"{name}:WEB_FALLBACK_EVIDENCE_INVALID")
+                continue
             source_text = evidence_by_url.get(source_url)
             if source_text is None or quote not in source_text:
-                raise ValueError("WEB_FALLBACK_EVIDENCE_INVALID")
+                result[name] = None
+                rejected.append(f"{name}:WEB_FALLBACK_SOURCE_INVALID")
+                continue
             compact_value = re.sub(r"\s+", "", value)
             compact_quote = re.sub(r"\s+", "", quote)
             if compact_value not in compact_quote:
-                raise ValueError("WEB_FALLBACK_EVIDENCE_INVALID")
+                result[name] = None
+                rejected.append(f"{name}:WEB_FALLBACK_VALUE_NOT_IN_QUOTE")
+                continue
             result[name] = value.strip()
         return result
 
@@ -182,7 +263,13 @@ class ProjectAssociationProviders:
                 timeout=timeout_seconds,
             )
         except TimeoutError:
-            process.kill()
+            try:
+                process.kill()
+            except ProcessLookupError:
+                # The child may exit between wait_for timing out and kill().
+                # It still exceeded the caller's deadline, so preserve the
+                # stable timeout contract while reaping it below.
+                pass
             await process.wait()
             raise RuntimeError(error_code) from None
 
@@ -332,16 +419,19 @@ class ProjectAssociationProviders:
             max_pages=4,
             max_navigation_attempts=12,
             navigation_timeout_ms=6_000,
+            audit_callback=self._audit,
         )
         result = await extract_association_profile(pages, domain)
-        if result.status != "success" and result.reason_code == "INVALID_EVIDENCE":
+        if result.status != "success" and result.reason_code in {
+            "STRICT_JSON_INVALID", "PROFILE_SCHEMA_INVALID", "INVALID_EVIDENCE",
+        }:
             result = await extract_association_profile(pages, domain)
-        if result.status != "success" or result.profile is None:
-            raise ValueError(result.reason_code or "OFFICIAL_EXTRACTION_FAILED")
-        values = {
-            name: getattr(result.profile, name).value
-            for name in PROFILE_FIELDS
-        }
+        values = {name: None for name in PROFILE_FIELDS}
+        if result.status == "success" and result.profile is not None:
+            values.update({
+                name: getattr(result.profile, name).value
+                for name in PROFILE_FIELDS
+            })
         if not (
             values.get("president_name")
             and values.get("secretary_general_name")
@@ -358,11 +448,19 @@ class ProjectAssociationProviders:
                 focused = await self._extract_leadership(
                     leadership_pages[:2], domain
                 )
-            except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+            except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+                self._audit(
+                    association=domain,
+                    stage="官网领导独立提取",
+                    kind="official_leadership_failed",
+                    summary=(str(exc) if re.fullmatch(r"[A-Z][A-Z0-9_]+", str(exc)) else type(exc).__name__),
+                )
                 focused = {}
             for name, value in focused.items():
                 if value and not values.get(name):
                     values[name] = value
+        if result.status != "success" and not any(values.values()):
+            raise ValueError(result.reason_code or "OFFICIAL_EXTRACTION_FAILED")
         return values
 
     async def _extract_leadership(
@@ -405,35 +503,38 @@ class ProjectAssociationProviders:
             raise ValueError("LEADERSHIP_SCHEMA_INVALID")
         result: dict[str, str | None] = {}
         for field_name in ("president_name", "secretary_general_name"):
-            evidence = parsed[field_name]
-            if not isinstance(evidence, dict) or set(evidence) != {
-                "value", "evidence_quote", "source_url",
-            }:
-                raise ValueError("LEADERSHIP_SCHEMA_INVALID")
-            value = evidence["value"]
-            quote = evidence["evidence_quote"]
-            source_url = evidence["source_url"]
-            if value is None:
-                if quote is not None or source_url is not None:
+            try:
+                evidence = parsed[field_name]
+                if not isinstance(evidence, dict) or set(evidence) != {
+                    "value", "evidence_quote", "source_url",
+                }:
+                    raise ValueError("LEADERSHIP_FIELD_SCHEMA_INVALID")
+                value = evidence["value"]
+                quote = evidence["evidence_quote"]
+                source_url = evidence["source_url"]
+                if value is None:
+                    if quote is not None or source_url is not None:
+                        raise ValueError("LEADERSHIP_NULL_EVIDENCE_INVALID")
+                    result[field_name] = None
+                    continue
+                if not all(
+                    isinstance(item, str) and item.strip()
+                    for item in (value, quote, source_url)
+                ):
                     raise ValueError("LEADERSHIP_EVIDENCE_INVALID")
+                page = page_by_url.get(source_url)
+                if (
+                    page is None
+                    or urlparse(source_url).hostname != verified_domain
+                    or re.sub(r"\s+", "", quote)
+                    not in re.sub(r"\s+", "", page.content)
+                    or re.sub(r"\s+", "", value)
+                    not in re.sub(r"\s+", "", quote)
+                ):
+                    raise ValueError("LEADERSHIP_EVIDENCE_INVALID")
+                result[field_name] = value.strip()
+            except (KeyError, TypeError, ValueError):
                 result[field_name] = None
-                continue
-            if not all(
-                isinstance(item, str) and item.strip()
-                for item in (value, quote, source_url)
-            ):
-                raise ValueError("LEADERSHIP_EVIDENCE_INVALID")
-            page = page_by_url.get(source_url)
-            if (
-                page is None
-                or urlparse(source_url).hostname != verified_domain
-                or re.sub(r"\s+", "", quote)
-                not in re.sub(r"\s+", "", page.content)
-                or re.sub(r"\s+", "", value)
-                not in re.sub(r"\s+", "", quote)
-            ):
-                raise ValueError("LEADERSHIP_EVIDENCE_INVALID")
-            result[field_name] = value.strip()
         return result
 
     async def fallback_profile(self, association_name: str) -> dict[str, str | None]:
@@ -474,8 +575,17 @@ class ProjectAssociationProviders:
             ],
             max_tokens=2500,
         )
+        rejected: list[str] = []
         try:
-            return self._validate_fallback_evidence(parsed, candidates)
+            values = self._validate_fallback_evidence(parsed, candidates, rejected)
+            if rejected:
+                self._audit(
+                    association=association_name,
+                    stage="网络搜索补充",
+                    kind="fallback_fields_rejected",
+                    summary=",".join(rejected),
+                )
+            return values
         except (TypeError, ValueError):
             retry = await self._strict_json_chat(
                 messages=[
@@ -501,11 +611,32 @@ class ProjectAssociationProviders:
                 ],
                 max_tokens=2500,
             )
-            return self._validate_fallback_evidence(retry, candidates)
+            rejected = []
+            values = self._validate_fallback_evidence(retry, candidates, rejected)
+            if rejected:
+                self._audit(
+                    association=association_name,
+                    stage="网络搜索补充",
+                    kind="fallback_fields_rejected",
+                    summary=",".join(rejected),
+                )
+            return values
 
     async def wechat_mobile(
         self, association_name: str, person_name: str, role: str
     ) -> str | None:
+        try:
+            handoff_performed = await self._prepare_wechat_query_handoff()
+        except Exception as exc:
+            self._audit(
+                association=association_name,
+                stage=f"微信搜一搜·{role}",
+                kind="wechat_failed",
+                summary="WECHAT_HANDOFF_FAILED",
+            )
+            raise WechatRpaError(
+                "WECHAT_HANDOFF_FAILED", stage="handoff", session_fatal=True
+            ) from exc
         script = (
             self._root
             / "clients"
@@ -513,7 +644,6 @@ class ProjectAssociationProviders:
             / "scripts"
             / "wechat-souyisou.ps1"
         )
-        import os
         import sys
 
         child_environment = os.environ.copy()
@@ -521,6 +651,16 @@ class ProjectAssociationProviders:
             str(Path(sys.executable).parent)
             + os.pathsep
             + child_environment.get("PATH", "")
+        )
+        self._audit(
+            association=association_name,
+            stage=f"微信搜一搜·{role}",
+            kind="wechat_start",
+            summary=f"开始检索 {person_name}",
+            detail={
+                "query_index": self._wechat_query_index + 1,
+                "handoff_performed": handoff_performed,
+            },
         )
         process = await asyncio.create_subprocess_exec(
             "powershell.exe",
@@ -543,19 +683,203 @@ class ProjectAssociationProviders:
             stderr=asyncio.subprocess.PIPE,
             env=child_environment,
         )
-        stdout, _stderr = await self._communicate_with_timeout(
-            process,
-            timeout_seconds=120,
-            error_code="WECHAT_RPA_TIMEOUT",
+        self._wechat_query_index += 1
+        try:
+            stdout, stderr = await self._communicate_with_timeout(
+                process,
+                timeout_seconds=_WECHAT_RPA_TIMEOUT_SECONDS,
+                error_code="WECHAT_RPA_TIMEOUT",
+            )
+        except Exception as exc:
+            self._audit(
+                association=association_name,
+                stage=f"微信搜一搜·{role}",
+                kind="wechat_failed",
+                summary=(
+                    str(exc)
+                    if re.fullmatch(r"[A-Z][A-Z0-9_]+", str(exc))
+                    else type(exc).__name__
+                ),
+            )
+            code = str(exc) if str(exc) in _WECHAT_SESSION_FATAL_CODES else "WECHAT_RPA_TIMEOUT"
+            raise WechatRpaError(
+                code, stage="timeout", session_fatal=True
+            ) from exc
+        stderr_diagnostic = {
+            "stderr_bytes": len(stderr),
+            "stderr_sha256": hashlib.sha256(stderr).hexdigest() if stderr else None,
+        }
+        payload = None
+        try:
+            payload = json.loads(
+                stdout.decode("utf-8-sig").strip().splitlines()[-1]
+            )
+        except (IndexError, UnicodeDecodeError, json.JSONDecodeError):
+            pass
+        artifact_ref = (
+            payload.get("artifact_ref") if isinstance(payload, dict) else None
         )
+        if isinstance(artifact_ref, str):
+            try:
+                await self._audit_wechat_artifact(
+                    artifact_ref,
+                    association_name=association_name,
+                    person_name=person_name,
+                    role=role,
+                )
+            except Exception as exc:
+                self._audit(
+                    association=association_name,
+                    stage=f"微信搜一搜·{role}",
+                    kind="wechat_audit_failed",
+                    summary=type(exc).__name__,
+                )
         if process.returncode != 0:
-            raise RuntimeError("WECHAT_RPA_FAILED")
-        payload = json.loads(stdout.decode("utf-8-sig").strip().splitlines()[-1])
+            error_code = (
+                str(payload.get("error_code"))
+                if isinstance(payload, dict)
+                and re.fullmatch(r"[A-Z][A-Z0-9_]+", str(payload.get("error_code")))
+                else "WECHAT_RPA_FAILED"
+            )
+            failure_stage = (
+                str(payload.get("stage"))
+                if isinstance(payload, dict)
+                and re.fullmatch(r"[a-z][a-z0-9_]+", str(payload.get("stage")))
+                else "unknown"
+            )
+            recovered_mobile = None
+            if (
+                isinstance(payload, dict)
+                and payload.get("result_status") == "found"
+                and isinstance(artifact_ref, str)
+            ):
+                try:
+                    recovered_mobile = await self._extract_wechat_mobile(
+                        script, artifact_ref, association_name, person_name
+                    )
+                except Exception as exc:
+                    self._audit(
+                        association=association_name,
+                        stage=f"微信搜一搜·{role}",
+                        kind="wechat_recovery_failed",
+                        summary=type(exc).__name__,
+                    )
+            self._audit(
+                association=association_name,
+                stage=f"微信搜一搜·{role}",
+                kind="wechat_failed",
+                summary=error_code,
+                detail={"rpa_stage": failure_stage, **stderr_diagnostic},
+            )
+            raise WechatRpaError(
+                error_code,
+                stage=failure_stage,
+                session_fatal=(
+                    failure_stage == "cleanup"
+                    or error_code in _WECHAT_SESSION_FATAL_CODES
+                    or (
+                        error_code in _WECHAT_INPUT_FAILURE_CODES
+                        and payload.get("session_closed") is not True
+                    )
+                ),
+                recovered_mobile=recovered_mobile,
+            )
+        if not isinstance(payload, dict):
+            self._audit(
+                association=association_name,
+                stage=f"微信搜一搜·{role}",
+                kind="wechat_failed",
+                summary="WECHAT_RPA_RESPONSE_INVALID",
+            )
+            raise RuntimeError("WECHAT_RPA_RESPONSE_INVALID")
+        reported_status = payload.get("status")
+        if reported_status not in {
+            "captured",
+            "failed",
+            "found",
+            "inconclusive",
+            "not_found",
+        }:
+            reported_status = "unknown"
+        self._audit(
+            association=association_name,
+            stage=f"微信搜一搜·{role}",
+            kind="wechat_returned",
+            summary=(
+                f"status={reported_status}; "
+                f"session_closed={bool(payload.get('session_closed'))}"
+            ),
+        )
         if not payload.get("ok") or not payload.get("session_closed"):
-            raise RuntimeError("WECHAT_SESSION_NOT_CLOSED")
+            self._audit(
+                association=association_name,
+                stage=f"微信搜一搜·{role}",
+                kind="wechat_failed",
+                summary="WECHAT_SESSION_NOT_CLOSED",
+            )
+            raise WechatRpaError(
+                "WECHAT_SESSION_NOT_CLOSED",
+                stage=str(payload.get("stage") or "cleanup"),
+                session_fatal=True,
+            )
+        # 仅明确成功且确认会话关闭的真实查询，才授权下一条发送一次交接键。
+        self._wechat_handoff_ready = True
         if payload.get("status") != "found":
             return None
 
+        return await self._extract_wechat_mobile(
+            script,
+            str(payload.get("artifact_ref") or ""),
+            association_name,
+            person_name,
+            role=role,
+        )
+
+    async def _prepare_wechat_query_handoff(self) -> bool:
+        if not self._wechat_handoff_ready:
+            return False
+        # 先消费资格；发送或等待失败时不得在后续调用再次向未知前台补发。
+        self._wechat_handoff_ready = False
+        self._send_alt_tab_once()
+        await self._wechat_handoff_sleep(1.0)
+        return True
+
+    @staticmethod
+    def _send_alt_tab_once() -> None:
+        if os.name != "nt":
+            raise RuntimeError("WECHAT_HANDOFF_WINDOWS_REQUIRED")
+        import ctypes
+
+        user32 = ctypes.windll.user32
+        vk_menu = 0x12
+        vk_tab = 0x09
+        key_up = 0x0002
+        user32.keybd_event(vk_menu, 0, 0, 0)
+        try:
+            user32.keybd_event(vk_tab, 0, 0, 0)
+            user32.keybd_event(vk_tab, 0, key_up, 0)
+        finally:
+            user32.keybd_event(vk_menu, 0, key_up, 0)
+
+    async def _extract_wechat_mobile(
+        self,
+        script: Path,
+        artifact_ref: str,
+        association_name: str,
+        person_name: str,
+        *,
+        role: str = "负责人",
+    ) -> str | None:
+        try:
+            artifact_path = self._validated_wechat_artifact_path(artifact_ref)
+        except (KeyError, OSError, ValueError) as exc:
+            self._audit(
+                association=association_name,
+                stage=f"微信搜一搜·{role}",
+                kind="wechat_failed",
+                summary="WECHAT_ARTIFACT_REF_INVALID",
+            )
+            raise RuntimeError("WECHAT_ARTIFACT_REF_INVALID") from exc
         helper = script.with_name("extract-mobile.ps1")
         extraction = await asyncio.create_subprocess_exec(
             "powershell.exe",
@@ -565,7 +889,7 @@ class ProjectAssociationProviders:
             "-File",
             str(helper),
             "-ArtifactPath",
-            payload["artifact_ref"],
+            str(artifact_path),
             "-AssociationName",
             association_name,
             "-PersonName",
@@ -573,15 +897,140 @@ class ProjectAssociationProviders:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        private_stdout, _private_stderr = await self._communicate_with_timeout(
-            extraction,
-            timeout_seconds=30,
-            error_code="WECHAT_ARTIFACT_READ_TIMEOUT",
-        )
+        try:
+            private_stdout, _private_stderr = await self._communicate_with_timeout(
+                extraction,
+                timeout_seconds=30,
+                error_code="WECHAT_ARTIFACT_READ_TIMEOUT",
+            )
+        except Exception as exc:
+            self._audit(
+                association=association_name,
+                stage=f"微信搜一搜·{role}",
+                kind="wechat_failed",
+                summary=(
+                    str(exc)
+                    if re.fullmatch(r"[A-Z][A-Z0-9_]+", str(exc))
+                    else type(exc).__name__
+                ),
+            )
+            raise
         if extraction.returncode != 0:
+            self._audit(
+                association=association_name,
+                stage=f"微信搜一搜·{role}",
+                kind="wechat_failed",
+                summary="WECHAT_ARTIFACT_READ_FAILED",
+            )
             raise RuntimeError("WECHAT_ARTIFACT_READ_FAILED")
-        evidence = json.loads(private_stdout.decode("utf-8-sig").strip())
+        try:
+            evidence = json.loads(private_stdout.decode("utf-8-sig").strip())
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            self._audit(
+                association=association_name,
+                stage=f"微信搜一搜·{role}",
+                kind="wechat_failed",
+                summary="WECHAT_ARTIFACT_INVALID",
+            )
+            raise RuntimeError("WECHAT_ARTIFACT_INVALID") from exc
         mobile = evidence.get("mobile") if evidence.get("matched") else None
         if mobile is not None and not re.fullmatch(r"1[3-9]\d{9}", str(mobile)):
+            self._audit(
+                association=association_name,
+                stage=f"微信搜一搜·{role}",
+                kind="wechat_failed",
+                summary="WECHAT_ARTIFACT_INVALID",
+            )
             raise RuntimeError("WECHAT_ARTIFACT_INVALID")
+        self._audit(
+            association=association_name,
+            stage=f"微信搜一搜·{role}",
+            kind="wechat_complete",
+            summary="已完成微信取证",
+        )
         return str(mobile) if mobile is not None else None
+
+    async def _audit_wechat_artifact(
+        self,
+        artifact_ref: str,
+        *,
+        association_name: str,
+        person_name: str,
+        role: str,
+    ) -> None:
+        helper = (
+            self._root
+            / "clients"
+            / "wechat-souyisou-rpa"
+            / "scripts"
+            / "read-artifact.ps1"
+        )
+        if not helper.is_file():
+            self._audit(
+                association=association_name,
+                stage=f"微信搜一搜·{role}",
+                kind="wechat_audit_failed",
+                summary="WECHAT_AUDIT_HELPER_NOT_FOUND",
+            )
+            return
+        try:
+            artifact_path = self._validated_wechat_artifact_path(artifact_ref)
+            process = await asyncio.create_subprocess_exec(
+                "powershell.exe",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(helper),
+                "-ArtifactPath",
+                str(artifact_path),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _stderr = await self._communicate_with_timeout(
+                process,
+                timeout_seconds=15,
+                error_code="WECHAT_AUDIT_READ_TIMEOUT",
+            )
+            if process.returncode != 0:
+                raise RuntimeError("WECHAT_AUDIT_READ_FAILED")
+            artifact = json.loads(stdout.decode("utf-8-sig"))
+        except Exception as exc:
+            self._audit(
+                association=association_name,
+                stage=f"微信搜一搜·{role}",
+                kind="wechat_audit_failed",
+                summary=type(exc).__name__,
+            )
+            return
+        list_artifact = artifact.get("list_artifact")
+        if not isinstance(list_artifact, dict):
+            list_artifact = {}
+        records = artifact.get("records")
+        if not isinstance(records, list):
+            records = []
+        llm_usages = artifact.get("llm_usages")
+        if isinstance(llm_usages, list):
+            for usage in llm_usages:
+                record_usage(usage)
+        self._audit(
+            association=association_name,
+            stage=f"微信搜一搜·{role}",
+            kind="wechat_artifact",
+            summary=f"{person_name}：列表及详情记录 {len(records)} 条",
+            detail={
+                "query": artifact.get("query"),
+                "source": artifact.get("source"),
+                "list_text": list_artifact.get("text") or artifact.get("text"),
+                "records": [
+                    {
+                        "ordinal": record.get("ordinal"),
+                        "text": record.get("text"),
+                        "ocr_text": record.get("ocr_text"),
+                        "ocr_performed": bool(record.get("ocr_hashes")),
+                    }
+                    for record in records
+                    if isinstance(record, dict)
+                ],
+            },
+        )

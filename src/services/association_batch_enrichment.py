@@ -38,6 +38,48 @@ WechatMobileProvider = Callable[[str, str, str], Awaitable[str | None]]
 ProgressReporter = Callable[[str], None]
 
 
+class WechatRpaError(RuntimeError):
+    """微信 RPA 的脱敏稳定错误契约。"""
+
+    def __init__(
+        self,
+        error_code: str,
+        *,
+        stage: str = "unknown",
+        session_fatal: bool = False,
+        recovered_mobile: str | None = None,
+    ):
+        super().__init__(error_code)
+        self.error_code = error_code
+        self.stage = stage
+        self.session_fatal = session_fatal
+        self.recovered_mobile = recovered_mobile
+
+
+class AssociationBatchAborted(RuntimeError):
+    """携带已完成当前行的批次熔断信号。"""
+
+    def __init__(self, row: "AssociationEnrichmentRow", error: WechatRpaError):
+        super().__init__(error.error_code)
+        self.row = row
+        self.error = error
+
+
+class AssociationBatchResult(list["AssociationEnrichmentRow"]):
+    """兼容行列表，同时显式携带批次熔断终态。"""
+
+    def __init__(
+        self,
+        rows: Sequence["AssociationEnrichmentRow"] = (),
+        *,
+        aborted: bool = False,
+        abort_error_code: str | None = None,
+    ):
+        super().__init__(rows)
+        self.aborted = aborted
+        self.abort_error_code = abort_error_code
+
+
 def _redact(text: str) -> str:
     return _MOBILE_RE.sub(lambda match: f"{match.group()[:3]}****{match.group()[-4:]}", text)
 
@@ -293,8 +335,22 @@ class AssociationBatchEnricher:
                 else:
                     row.errors.append(f"wechat:{role}:not_found")
             except Exception as exc:
-                row.errors.append(f"wechat:{role}:{type(exc).__name__}")
+                error_code = getattr(exc, "error_code", type(exc).__name__)
+                stage = getattr(exc, "stage", "unknown")
+                recovered_mobile = getattr(exc, "recovered_mobile", None)
+                if recovered_mobile and _MOBILE_RE.fullmatch(str(recovered_mobile)):
+                    row.values[mobile_field] = str(recovered_mobile)
+                    row.sources.append(f"wechat:{role}")
+                row.errors.append(f"wechat:{role}:{error_code}:{stage}")
+                if getattr(exc, "session_fatal", False):
+                    self._finalize_row(row)
+                    raise AssociationBatchAborted(row, exc) from exc
 
+        self._finalize_row(row)
+        return row
+
+    @staticmethod
+    def _finalize_row(row: AssociationEnrichmentRow) -> None:
         populated = sum(bool(row.values.get(name)) for name in PROFILE_FIELDS)
         row.processing_status = (
             "complete" if populated and not row.errors else
@@ -302,15 +358,19 @@ class AssociationBatchEnricher:
             "failed"
         )
         row.processed_at = datetime.now(timezone.utc).isoformat()
-        return row
 
     async def enrich_many(
         self, association_names: Sequence[str]
-    ) -> list[AssociationEnrichmentRow]:
-        rows = []
+    ) -> AssociationBatchResult:
+        rows = AssociationBatchResult()
         for association_name in deduplicate_association_names(association_names):
             try:
                 rows.append(await self.enrich_one(association_name))
+            except AssociationBatchAborted as exc:
+                rows.append(exc.row)
+                rows.aborted = True
+                rows.abort_error_code = exc.error.error_code
+                break
             except Exception as exc:
                 rows.append(
                     AssociationEnrichmentRow(
@@ -333,7 +393,10 @@ class AssociationBatchEnricher:
 
 
 def write_enrichment_workbook(
-    rows: Sequence[AssociationEnrichmentRow], output_path: str | Path
+    rows: Sequence[AssociationEnrichmentRow],
+    output_path: str | Path,
+    *,
+    token_usage: Mapping[str, object] | None = None,
 ) -> Path:
     path = Path(output_path).resolve()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -352,5 +415,37 @@ def write_enrichment_workbook(
             max(12, max(len(str(cell.value or "")) for cell in column_cells) + 2),
         )
         worksheet.column_dimensions[column_cells[0].column_letter].width = width
+    if token_usage is not None:
+        usage_sheet = workbook.create_sheet("Token用量")
+        headers = (
+            "association_name", "input_tokens", "cached_input_tokens",
+            "output_tokens", "total_tokens", "call_count",
+        )
+        usage_sheet.append(headers)
+        associations = token_usage.get("associations", {})
+        if isinstance(associations, Mapping):
+            for name, usage in associations.items():
+                if isinstance(usage, Mapping):
+                    usage_sheet.append([name] + [usage.get(key, 0) for key in headers[1:]])
+        overhead = token_usage.get("batch_overhead", {})
+        if isinstance(overhead, Mapping) and any(overhead.values()):
+            usage_sheet.append(
+                ["批次开销（清单解析）"]
+                + [overhead.get(key, 0) for key in headers[1:]]
+            )
+        usage_sheet.append([])
+        usage_sheet.append(["批次汇总"])
+        batch = token_usage.get("batch", {})
+        if isinstance(batch, Mapping):
+            for key in (
+                "input_tokens", "cached_input_tokens", "output_tokens", "total_tokens",
+                "call_count", "average_input_tokens", "average_cached_input_tokens",
+                "average_output_tokens", "average_total_tokens",
+            ):
+                usage_sheet.append([key, batch.get(key, 0)])
+        usage_sheet.freeze_panes = "A2"
+        usage_sheet.column_dimensions["A"].width = 34
+        for column in "BCDEF":
+            usage_sheet.column_dimensions[column].width = 22
     workbook.save(path)
     return path

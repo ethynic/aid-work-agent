@@ -3,6 +3,7 @@
 
 # Web Framework
 fastapi>=0.104.0
+python-multipart>=0.0.9
 uvicorn[standard]>=0.24.0
 gunicorn>=21.2.0  # Production WSGI server (used with uvicorn workers)
 

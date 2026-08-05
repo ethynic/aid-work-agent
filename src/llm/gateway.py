@@ -266,6 +266,12 @@ class LLMGateway:
                 )
             
             chat_duration = time.time() - chat_start
+            try:
+                from src.services.llm_usage_meter import record_response_usage
+                record_response_usage(result)
+            except Exception:
+                # Usage accounting is observational and must not break LLM calls.
+                pass
             logger.info(f"[LLM] chat() completed, duration={chat_duration:.2f}s, has_content={bool(result.get('content'))}, has_tool_calls={bool(result.get('tool_calls'))}")
             return result
             

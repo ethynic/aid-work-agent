@@ -106,6 +106,30 @@ class ExtractionResult(StrictModel):
         return self
 
 
+def _empty_evidence() -> FieldEvidence:
+    return FieldEvidence(value=None, evidence_quote=None, source_url=None)
+
+
+def _parse_profile_fields(parsed: dict) -> tuple[AssociationProfile, list[str]]:
+    """逐字段解析；一个字段结构错误不能抹掉其他已验证字段。"""
+    extra_fields = set(parsed) - set(PROFILE_FIELDS)
+    if extra_fields:
+        raise ValueError("PROFILE_EXTRA_FIELDS")
+    values: dict[str, FieldEvidence] = {}
+    rejected: list[str] = []
+    for field_name in PROFILE_FIELDS:
+        if field_name not in parsed:
+            values[field_name] = _empty_evidence()
+            rejected.append(f"{field_name}:FIELD_MISSING")
+            continue
+        try:
+            values[field_name] = FieldEvidence.model_validate(parsed.get(field_name, {}))
+        except (ValidationError, TypeError, ValueError):
+            values[field_name] = _empty_evidence()
+            rejected.append(f"{field_name}:FIELD_SCHEMA_INVALID")
+    return AssociationProfile.model_construct(**values), rejected
+
+
 def _parse_json_object(content: str) -> dict:
     def reject_duplicate_keys(pairs):
         result = {}
@@ -190,63 +214,72 @@ def _validate_profile(
     profile: AssociationProfile,
     pages: list[VerifiedOfficialPage],
     verified_domain: str,
+    rejected: list[str] | None = None,
 ) -> AssociationProfile:
     page_by_url = {str(page.url): page for page in pages}
     updates: dict[str, FieldEvidence] = {}
+    rejected = rejected if rejected is not None else []
     for field_name in PROFILE_FIELDS:
         evidence = getattr(profile, field_name)
-        if evidence.value is None:
-            if evidence.evidence_quote is not None or evidence.source_url is not None:
-                raise ValueError(f"{field_name}: null value must have null evidence")
-            continue
-        if field_name == "official_website":
-            continue
-        if evidence.source_url is None or evidence.evidence_quote is None:
-            raise ValueError(f"{field_name}: evidence required")
-        source_url = str(evidence.source_url)
-        page = page_by_url.get(source_url)
-        if page is None or not _same_verified_domain(source_url, verified_domain):
-            raise ValueError(f"{field_name}: unverified source")
-        compact_quote = re.sub(r"\s+", "", evidence.evidence_quote)
-        compact_source = re.sub(r"\s+", "", page.content)
-        if compact_quote not in compact_source:
-            raise ValueError(f"{field_name}: quote not in source")
-        value_is_in_quote = (
-            re.sub(r"\s+", "", evidence.value)
-            in compact_quote
-        )
-        if not value_is_in_quote:
-            raise ValueError(f"{field_name}: value not in quote")
-        if field_name in COUNT_FIELDS:
-            if not evidence.value.isascii() or not evidence.value.isdigit():
-                raise ValueError(f"{field_name}: count must be ASCII digits")
-            if not re.search(
-                rf"(?<!\d){re.escape(evidence.value)}(?!\d)",
-                evidence.evidence_quote,
-            ):
-                raise ValueError(f"{field_name}: count is not an exact numeric token")
-        if field_name == "email" and not _EMAIL_RE.fullmatch(evidence.value):
-            raise ValueError("email: invalid format")
+        try:
+            if evidence.value is None:
+                if evidence.evidence_quote is not None or evidence.source_url is not None:
+                    raise ValueError("NULL_EVIDENCE_INVALID")
+                continue
+            if field_name == "official_website":
+                continue
+            if evidence.source_url is None or evidence.evidence_quote is None:
+                raise ValueError("EVIDENCE_REQUIRED")
+            source_url = str(evidence.source_url)
+            page = page_by_url.get(source_url)
+            if page is None or not _same_verified_domain(source_url, verified_domain):
+                raise ValueError("SOURCE_UNVERIFIED")
+            compact_quote = re.sub(r"\s+", "", evidence.evidence_quote)
+            compact_source = re.sub(r"\s+", "", page.content)
+            if compact_quote not in compact_source:
+                raise ValueError("QUOTE_NOT_IN_SOURCE")
+            if re.sub(r"\s+", "", evidence.value) not in compact_quote:
+                raise ValueError("VALUE_NOT_IN_QUOTE")
+            if field_name in COUNT_FIELDS:
+                if not evidence.value.isascii() or not evidence.value.isdigit():
+                    raise ValueError("COUNT_FORMAT_INVALID")
+                if not re.search(
+                    rf"(?<!\d){re.escape(evidence.value)}(?!\d)",
+                    evidence.evidence_quote,
+                ):
+                    raise ValueError("COUNT_TOKEN_INVALID")
+            if field_name == "email" and not _EMAIL_RE.fullmatch(evidence.value):
+                raise ValueError("EMAIL_FORMAT_INVALID")
+        except ValueError as exc:
+            updates[field_name] = _empty_evidence()
+            rejected.append(f"{field_name}:{exc}")
 
     for name_field, phone_field in (
         ("president_name", "president_mobile"),
         ("secretary_general_name", "secretary_general_mobile"),
     ):
-        name = getattr(profile, name_field)
-        phone = getattr(profile, phone_field)
+        name = updates.get(name_field, getattr(profile, name_field))
+        phone = updates.get(phone_field, getattr(profile, phone_field))
         if phone.value is None:
             continue
         if name.value is None or phone.evidence_quote is None:
-            raise ValueError(f"{phone_field}: missing bound name")
+            updates[phone_field] = _empty_evidence()
+            rejected.append(f"{phone_field}:MISSING_BOUND_NAME")
+            continue
         normalized_name = re.sub(r"\s+", "", name.value)
         normalized_quote = re.sub(r"\s+", "", phone.evidence_quote)
         if normalized_name not in normalized_quote or phone.value not in phone.evidence_quote:
-            raise ValueError(f"{phone_field}: name and phone are not bound")
+            updates[phone_field] = _empty_evidence()
+            rejected.append(f"{phone_field}:NAME_PHONE_NOT_BOUND")
+            continue
         if not _phone_is_nearest_to_name(phone.evidence_quote, name.value, phone.value):
-            raise ValueError(f"{phone_field}: ambiguous name and phone binding")
+            updates[phone_field] = _empty_evidence()
+            rejected.append(f"{phone_field}:NAME_PHONE_AMBIGUOUS")
+            continue
         normalized_phone = _MOBILE_SEPARATOR_RE.sub("", phone.value)
         if not _MOBILE_RE.fullmatch(normalized_phone):
-            raise ValueError(f"{phone_field}: invalid mobile")
+            updates[phone_field] = _empty_evidence()
+            rejected.append(f"{phone_field}:MOBILE_FORMAT_INVALID")
 
     website = _canonical_website(verified_domain)
     updates["official_website"] = FieldEvidence(
@@ -254,6 +287,8 @@ def _validate_profile(
         evidence_quote=None,
         source_url=pages[0].url,
     )
+    if rejected:
+        logger.warning("协会官网字段被逐项拒绝：{}", ",".join(rejected)[:500])
     return profile.model_copy(update=updates)
 
 
@@ -329,13 +364,26 @@ async def extract_association_profile(
         if not isinstance(response, dict) or not isinstance(response.get("content"), str):
             raise ValueError("invalid gateway response")
         parsed = _parse_json_object(response["content"])
-        profile = AssociationProfile.model_validate(
+        profile, field_rejections = _parse_profile_fields(
             _normalize_integer_count_values(parsed)
         )
-        profile = _validate_profile(profile, pages, verified_domain)
+        if field_rejections:
+            logger.warning("协会官网字段结构被逐项拒绝：{}", ",".join(field_rejections)[:500])
+        profile = _validate_profile(profile, pages, verified_domain, field_rejections)
+        if field_rejections and not any(
+            getattr(profile, name).value
+            for name in PROFILE_FIELDS
+            if name != "official_website"
+        ):
+            return ExtractionResult(
+                status="inconclusive", reason_code="FIELD_EVIDENCE_REJECTED"
+            )
         return ExtractionResult(status="success", profile=profile)
-    except (ValidationError, ValueError, TypeError, json.JSONDecodeError) as exc:
+    except json.JSONDecodeError as exc:
+        logger.warning("协会官网 JSON 无法解析：{}", str(exc)[:240])
+        return ExtractionResult(status="inconclusive", reason_code="STRICT_JSON_INVALID")
+    except (ValidationError, ValueError, TypeError) as exc:
         logger.warning("协会官网字段证据未通过：{}", str(exc)[:240])
-        return ExtractionResult(status="inconclusive", reason_code="INVALID_EVIDENCE")
+        return ExtractionResult(status="inconclusive", reason_code="PROFILE_SCHEMA_INVALID")
     except Exception:
         return ExtractionResult(status="inconclusive", reason_code="PROVIDER_FAILED")

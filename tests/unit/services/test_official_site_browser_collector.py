@@ -242,6 +242,26 @@ async def test_automatically_clicks_js_navigation_and_supports_normal_href():
 
 
 @pytest.mark.asyncio
+async def test_audit_callback_keeps_urls_in_encrypted_detail_not_summary():
+    events = []
+    await collect_official_pages_with_browser_driver(
+        ENTRY,
+        DOMAIN,
+        js_navigation_fixture(),
+        max_pages=2,
+        max_navigation_attempts=2,
+        audit_callback=lambda **event: events.append(event),
+    )
+    assert any(event["kind"] == "web_page" for event in events)
+    assert any(
+        isinstance(event.get("detail"), dict)
+        and event["detail"].get("url", "").startswith("https://")
+        for event in events
+    )
+    assert all("https://" not in event["summary"] for event in events)
+
+
+@pytest.mark.asyncio
 async def test_nested_leadership_globally_preempts_low_value_root_paths():
     driver = js_navigation_fixture()
 

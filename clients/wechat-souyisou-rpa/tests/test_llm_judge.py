@@ -153,6 +153,40 @@ class JudgeTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(gateway.calls), 2)
 
+    async def test_final_invalid_response_carries_both_billable_calls(self):
+        class UsageGateway:
+            def __init__(self):
+                self.calls = 0
+
+            async def chat(self, **_kwargs):
+                self.calls += 1
+                return {
+                    "content": "not-json",
+                    "usage": {
+                        "prompt_tokens": 10 * self.calls,
+                        "cached_tokens": self.calls,
+                        "completion_tokens": 2,
+                        "total_tokens": 999,
+                    },
+                }
+
+        gateway = UsageGateway()
+        with self.assertRaises(MODULE.JudgeUsageError) as raised:
+            await MODULE.run_judge(
+                {"association_name": "协会", "person_name": "姓名", "text": "证据"},
+                gateway,
+            )
+        self.assertEqual(
+            raised.exception.token_usage,
+            {
+                "prompt_tokens": 30,
+                "cached_tokens": 3,
+                "completion_tokens": 4,
+                "total_tokens": 34,
+                "call_count": 2,
+            },
+        )
+
     async def test_prompt_supports_repeated_independent_target_binding(self):
         mobile = "13912345678"
         evidence = (
@@ -316,6 +350,61 @@ class JudgeTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(value=value), self.assertRaises((ValueError, json.JSONDecodeError)):
                 MODULE._parse_json_content(value)
 
+    async def test_returns_exact_provider_usage_for_parent_run(self):
+        expected = {
+            "matched": False,
+            "person_name": "",
+            "mobile": "",
+            "evidence_quote": "",
+            "confidence": 0.8,
+            "reason": "not found",
+        }
+
+        class UsageGateway:
+            async def chat(self, **_kwargs):
+                return {
+                    "content": json.dumps(expected),
+                    "usage": {
+                        "prompt_tokens": 90,
+                        "cached_tokens": 30,
+                        "completion_tokens": 10,
+                        "total_tokens": 130,
+                    },
+                }
+
+        result = await MODULE.run_judge(
+            {"association_name": "协会", "person_name": "张三", "text": "证据"},
+            UsageGateway(),
+        )
+        self.assertEqual(
+            result["token_usage"],
+            {
+                "prompt_tokens": 90,
+                "cached_tokens": 30,
+                "completion_tokens": 10,
+                "total_tokens": 100,
+                "call_count": 1,
+            },
+        )
+
+    def test_invalid_provider_usage_is_not_partially_estimated(self):
+        self.assertEqual(
+            MODULE._usage({
+                "usage": {
+                    "prompt_tokens": 90,
+                    "cached_tokens": 30,
+                    "completion_tokens": -1,
+                    "total_tokens": 100,
+                }
+            }),
+            {
+                "prompt_tokens": 0,
+                "cached_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+                "call_count": 0,
+            },
+        )
     def test_main_failure_stderr_does_not_echo_input(self):
         secret = "王承展 18511597486 原始证据"
         process = subprocess.run(
