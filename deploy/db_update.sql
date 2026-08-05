@@ -1294,10 +1294,19 @@ COMMENT ON COLUMN tenants.credit_balance IS '积分余额（2 位小数），允
 -- 2026-7-27，subagent_definitions.llm_provider 改为 JSONB，存 {provider, model_codes}
 -- 现有数据都为空，无需迁移；若历史存在字符串值，转为 {"provider": "..."} 形式
 -- 空字符串也转为 NULL，避免存入无意义的 {"provider": ""}
-ALTER TABLE subagent_definitions ALTER COLUMN llm_provider TYPE JSONB USING
-  CASE WHEN llm_provider IS NULL OR llm_provider = '' THEN NULL
-  ELSE jsonb_build_object('provider', llm_provider)
-  END;
+-- 注意：用 DO $$ 块包裹，仅当 llm_provider 不是 JSONB 时才执行 ALTER
+-- 否则当列已是 JSONB 时，llm_provider = '' 会触发空字符串隐式转 JSON，报 invalid input syntax for type json
+DO $$
+BEGIN
+    PERFORM 1 FROM information_schema.columns
+    WHERE table_name = 'subagent_definitions' AND column_name = 'llm_provider' AND data_type <> 'jsonb';
+    IF FOUND THEN
+        ALTER TABLE subagent_definitions ALTER COLUMN llm_provider TYPE JSONB USING
+            CASE WHEN llm_provider IS NULL OR llm_provider = '' THEN NULL
+            ELSE jsonb_build_object('provider', llm_provider)
+            END;
+    END IF;
+END $$;
 
 -- ============================================================================
 -- 2026-07-29 工作成果记录功能：新增 work_outcomes 表
