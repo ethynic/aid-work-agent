@@ -1399,3 +1399,12 @@ CREATE INDEX IF NOT EXISTS idx_gen_cards_session
     ON gen_cards(session_id);
 CREATE INDEX IF NOT EXISTS idx_gen_cards_polling
     ON gen_cards(provider_status);
+
+-- 2026-8-5，"社媒运营智能体"改名为"视频创作智能体"（agent_id 不变，仅改显示名）
+UPDATE subagent_definitions
+SET name = '视频创作智能体', updated_at = NOW()
+WHERE agent_id = 'social-media-operations' AND name = '社媒运营智能体';
+
+-- 2026-8-5，视频生成会话增加 AI角标开关与时长字段（mvp-design.md §6 新增参数）
+ALTER TABLE gen_sessions ADD COLUMN IF NOT EXISTS enable_ai_label BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE gen_sessions ADD COLUMN IF NOT EXISTS duration_sec INT NOT NULL DEFAULT 10;

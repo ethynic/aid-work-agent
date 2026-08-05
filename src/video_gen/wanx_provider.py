@@ -64,6 +64,9 @@ class WanxProvider:
         media 固定格式：reference_image（产品图，防变形锁定）+ first_frame（起始帧，
         有模特图传模特图，否则传产品图）。negative_prompt 放 parameters 下（spike 实测确认）。
         """
+        # 防御性校验：万相 2.7 r2v 单次调用 duration 上限 15s，防止前端脏数据直传阿里云
+        if duration not in (5, 10, 15):
+            raise WanxProviderError(f"duration 仅支持 5/10/15 秒，收到: {duration}")
         body = {
             "model": self._model,
             "input": {

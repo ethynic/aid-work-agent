@@ -87,6 +87,7 @@ class TestCreateSession:
                 "seed": seed,
                 "reference": reference_image_data_url,
                 "first_frame": first_frame_data_url,
+                "duration": duration,
             })
             return FakeSubmitResult(submit_task_ids[len(submit_calls) - 1])
 
@@ -227,6 +228,86 @@ class TestCreateSession:
             for p in patches:
                 p.stop()
 
+    def test_duration_sec_out_of_range_raises(self):
+        """duration_sec 不在 (5,10,15) 时应抛 ValueError（万相 r2v 上限 15s）。"""
+        patches, _ = self._patch_externals()
+        try:
+            svc = VideoGenService()
+            with pytest.raises(ValueError, match="duration_sec"):
+                _run(svc.create_session(
+                    tenant_id="t1", user_id="u1", scene_id="product_showcase",
+                    product_image_fid="f", copywriting="x", card_count=2,
+                    duration_sec=20,
+                ))
+        finally:
+            for p in patches:
+                p.stop()
+
+    def test_duration_sec_15_passes(self):
+        """duration_sec=15 应正常通过校验。"""
+        patches, submit_calls = self._patch_externals(submit_task_ids=["t1", "t2"])
+        try:
+            with fake_db() as (conn, cursor):
+                svc = VideoGenService()
+                result = _run(svc.create_session(
+                    tenant_id="t1", user_id="u1", scene_id="product_showcase",
+                    product_image_fid="f", copywriting="x", card_count=2,
+                    duration_sec=15,
+                ))
+                conn.commit.assert_called_once()
+            assert result["status"] == "generating"
+            # 验证 INSERT 持久化了 duration_sec（第 2 个 execute 是 gen_sessions INSERT）
+            insert_calls = [c for c in cursor.execute.call_args_list if "INSERT INTO gen_sessions" in str(c.args[0])]
+            assert len(insert_calls) == 1
+            sql_args = insert_calls[0].args[1]
+            # 参数顺序：session_id, tenant_id, user_id, scene_id, product_image_fid,
+            #          model_image_fid, copywriting, prompt, card_count,
+            #          enable_ai_label, duration_sec（末两位是本次新增字段）
+            assert sql_args[-1] == 15  # duration_sec
+            assert sql_args[-2] is True  # enable_ai_label 默认 True
+        finally:
+            for p in patches:
+                p.stop()
+
+    def test_enable_ai_label_false_persists(self):
+        """enable_ai_label=False 应持久化到 gen_sessions（验证默认值被覆盖）。"""
+        patches, _ = self._patch_externals(submit_task_ids=["t1", "t2"])
+        try:
+            with fake_db() as (conn, cursor):
+                svc = VideoGenService()
+                _run(svc.create_session(
+                    tenant_id="t1", user_id="u1", scene_id="product_showcase",
+                    product_image_fid="f", copywriting="x", card_count=2,
+                    enable_ai_label=False,
+                ))
+            insert_calls = [c for c in cursor.execute.call_args_list if "INSERT INTO gen_sessions" in str(c.args[0])]
+            assert len(insert_calls) == 1
+            sql_args = insert_calls[0].args[1]
+            # 参数顺序末位是 duration_sec，倒数第二位是 enable_ai_label
+            assert sql_args[-2] is False  # enable_ai_label=False
+        finally:
+            for p in patches:
+                p.stop()
+
+    def test_duration_sec_passed_to_wanx_submit(self):
+        """duration_sec 应透传给 wanx.submit 的 duration 参数（替代 scene.default_duration）。"""
+        patches, submit_calls = self._patch_externals(submit_task_ids=["t1", "t2"])
+        try:
+            with fake_db() as (conn, cursor):
+                svc = VideoGenService()
+                _run(svc.create_session(
+                    tenant_id="t1", user_id="u1", scene_id="product_showcase",
+                    product_image_fid="f", copywriting="x", card_count=2,
+                    duration_sec=10,
+                ))
+            # 两条 card 的 wanx.submit 都收到 duration=10
+            assert len(submit_calls) == 2
+            for call in submit_calls:
+                assert call["duration"] == 10
+        finally:
+            for p in patches:
+                p.stop()
+
 
 class TestSetCardKept:
     def test_not_found_raises(self):
@@ -253,6 +334,16 @@ class TestPollPendingCards:
         r.error = error
         return r
 
+    def _make_card(self, **overrides):
+        """构造 poll_pending_cards 的 fetchall 行（含 JOIN 出的 enable_ai_label）。"""
+        card = {
+            "card_id": "c1", "tenant_id": "t1", "session_id": "s1",
+            "provider_task_id": "tk1", "created_at": datetime.now(),
+            "enable_ai_label": True,
+        }
+        card.update(overrides)
+        return card
+
     def test_no_pending_returns_zero(self):
         with fake_db() as (conn, cursor):
             cursor.fetchall.return_value = []
@@ -261,8 +352,7 @@ class TestPollPendingCards:
         assert n == 0
 
     def test_succeeded_downloads_and_registers(self):
-        card = {"card_id": "c1", "tenant_id": "t1", "session_id": "s1",
-                "provider_task_id": "tk1", "created_at": datetime.now()}
+        card = self._make_card()
         with fake_db() as (conn, cursor):
             cursor.fetchall.return_value = [card]
             svc = VideoGenService()
@@ -273,9 +363,30 @@ class TestPollPendingCards:
         # 应 commit 两次（download_and_register 内部 + card 更新）
         conn.commit.assert_called()
 
+    def test_succeeded_burns_label_when_enable_ai_label_true(self):
+        """enable_ai_label=True 时 download_and_register 应传 burn_label=True。"""
+        card = self._make_card(enable_ai_label=True)
+        with fake_db() as (conn, cursor):
+            cursor.fetchall.return_value = [card]
+            svc = VideoGenService()
+            with patch.object(svc_mod.WanxProvider, "poll", AsyncMock(return_value=self._poll_result("SUCCEEDED", url="http://x/y.mp4", duration=5))), \
+                 patch.object(svc_mod.MediaRegistry, "download_and_register", AsyncMock(return_value="file_out1")) as mock_dl:
+                _run(svc.poll_pending_cards())
+        assert mock_dl.call_args.kwargs.get("burn_label") is True
+
+    def test_succeeded_skips_burn_label_when_enable_ai_label_false(self):
+        """enable_ai_label=False 时 download_and_register 应传 burn_label=False（导出原始素材）。"""
+        card = self._make_card(enable_ai_label=False)
+        with fake_db() as (conn, cursor):
+            cursor.fetchall.return_value = [card]
+            svc = VideoGenService()
+            with patch.object(svc_mod.WanxProvider, "poll", AsyncMock(return_value=self._poll_result("SUCCEEDED", url="http://x/y.mp4", duration=5))), \
+                 patch.object(svc_mod.MediaRegistry, "download_and_register", AsyncMock(return_value="file_out1")) as mock_dl:
+                _run(svc.poll_pending_cards())
+        assert mock_dl.call_args.kwargs.get("burn_label") is False
+
     def test_failed_marks_error(self):
-        card = {"card_id": "c1", "tenant_id": "t1", "session_id": "s1",
-                "provider_task_id": "tk1", "created_at": datetime.now()}
+        card = self._make_card()
         with fake_db() as (conn, cursor):
             cursor.fetchall.return_value = [card]
             svc = VideoGenService()
@@ -286,8 +397,7 @@ class TestPollPendingCards:
 
     def test_expired_marks_failed(self):
         old = datetime.now() - timedelta(hours=25)
-        card = {"card_id": "c1", "tenant_id": "t1", "session_id": "s1",
-                "provider_task_id": "tk1", "created_at": old}
+        card = self._make_card(created_at=old)
         with fake_db() as (conn, cursor):
             cursor.fetchall.return_value = [card]
             svc = VideoGenService()
@@ -297,8 +407,7 @@ class TestPollPendingCards:
 
     def test_poll_network_error_skips(self):
         from src.video_gen.wanx_provider import WanxProviderError
-        card = {"card_id": "c1", "tenant_id": "t1", "session_id": "s1",
-                "provider_task_id": "tk1", "created_at": datetime.now()}
+        card = self._make_card()
         with fake_db() as (conn, cursor):
             cursor.fetchall.return_value = [card]
             svc = VideoGenService()

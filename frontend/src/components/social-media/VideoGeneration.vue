@@ -73,15 +73,41 @@
             <MyTextarea v-model="form.copywriting" :rows="4" :enable-preview="false" placeholder="如：12mm 水貂毛自然款假睫毛，轻盈贴合，放大双眼。展示睫毛的弧度和佩戴效果，突出自然妆感。" />
           </div>
 
-          <!-- 抽卡条数 -->
-          <div class="flex items-center gap-4">
-            <label class="text-sm font-medium text-default">生成条数</label>
-            <div class="flex gap-2">
-              <button v-for="n in [2,3,4]" :key="n" @click="form.cardCount = n"
-                :class="['px-4 py-1.5 rounded-md text-sm border transition-colors',
-                  form.cardCount===n ? 'bg-primary-600 text-white border-primary-600' : 'bg-white text-default border-default hover:border-primary-400']">
-                {{ n }} 条
-              </button>
+          <!-- 抽卡参数：生成条数 / 视频时长 / AI 内容角标 -->
+          <div class="flex items-center gap-6 flex-wrap">
+            <!-- 生成条数 -->
+            <div class="flex items-center gap-3">
+              <label class="text-sm font-medium text-default">生成条数</label>
+              <div class="flex gap-2">
+                <button v-for="n in [2,3,4]" :key="n" @click="form.cardCount = n"
+                  :class="['px-4 py-1.5 rounded-md text-sm border transition-colors',
+                    form.cardCount===n ? 'bg-primary-600 text-white border-primary-600' : 'bg-white text-default border-default hover:border-primary-400']">
+                  {{ n }} 条
+                </button>
+              </div>
+            </div>
+
+            <!-- 视频时长（万相 r2v 上限 15s，收敛为 5/10/15） -->
+            <div class="flex items-center gap-3">
+              <label class="text-sm font-medium text-default">视频时长</label>
+              <div class="flex gap-2">
+                <button v-for="d in [5,10,15]" :key="d" @click="form.durationSec = d"
+                  :class="['px-4 py-1.5 rounded-md text-sm border transition-colors',
+                    form.durationSec===d ? 'bg-primary-600 text-white border-primary-600' : 'bg-white text-default border-default hover:border-primary-400']">
+                  {{ d }}s
+                </button>
+              </div>
+            </div>
+
+            <!-- AI 内容角标（默认勾选；取消时弹风险提示） -->
+            <div class="flex items-center gap-2">
+              <input
+                type="checkbox"
+                :checked="form.enableAiLabel"
+                @change="onToggleAiLabel"
+                class="w-3.5 h-3.5 rounded border-primary-200 text-primary-600 focus:ring-primary-500"
+              />
+              <label class="text-sm text-default">AI 内容角标</label>
             </div>
           </div>
 
@@ -190,6 +216,8 @@ const form = ref({
   copywriting: '',
   cardCount: 3,
   expandedPrompt: '',
+  enableAiLabel: true,
+  durationSec: 10,
 })
 const uploading = ref<string | null>(null)   // null | 'product' | 'model'
 const creating = ref(false)
@@ -280,6 +308,23 @@ function clearImage(type: 'product' | 'model') {
   }
 }
 
+function onToggleAiLabel(e: Event) {
+  const checked = (e.target as HTMLInputElement).checked
+  if (checked) {
+    form.value.enableAiLabel = true
+    return
+  }
+  // 取消勾选时弹风险提示（2025.9.1《人工智能生成合成内容标识办法》）
+  const ok = confirm('不勾选「AI 内容角标」将导出无 AI 标识的原始素材，可能违反 2025.9.1《人工智能生成合成内容标识办法》。确认您已了解风险并有权导出原始素材？')
+  if (ok) {
+    form.value.enableAiLabel = false
+  } else {
+    // 用户取消，恢复勾选状态
+    form.value.enableAiLabel = true
+    ;(e.target as HTMLInputElement).checked = true
+  }
+}
+
 async function onCreate() {
   creating.value = true
   createError.value = ''
@@ -291,6 +336,8 @@ async function onCreate() {
       model_image_fid: form.value.modelImageFid || undefined,
       card_count: form.value.cardCount,
       expanded_prompt: form.value.expandedPrompt.trim() || undefined,
+      enable_ai_label: form.value.enableAiLabel,
+      duration_sec: form.value.durationSec,
     })
     if (res.success && res.data) {
       currentSession.value = res.data

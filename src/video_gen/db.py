@@ -21,6 +21,8 @@ def init_video_gen_tables(conn) -> None:
             copywriting       TEXT NOT NULL,             -- 运营填写的文案
             expanded_prompt   TEXT,                      -- 提示词引擎扩展后的完整 prompt（可微调）
             card_count        INT NOT NULL DEFAULT 3,    -- 本次抽卡条数（2-4）
+            enable_ai_label   BOOLEAN NOT NULL DEFAULT TRUE,  -- 是否烧录 AI 内容角标（合规默认开）
+            duration_sec      INT NOT NULL DEFAULT 10,   -- 视频时长（5/10/15 秒，万相 r2v 上限 15s）
             status            TEXT NOT NULL DEFAULT 'generating',  -- generating/done/failed
             created_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -29,6 +31,13 @@ def init_video_gen_tables(conn) -> None:
     # 幂等加列：已建表（无 model_image_fid）补列，新表上面 CREATE 已含
     cursor.execute("""
         ALTER TABLE gen_sessions ADD COLUMN IF NOT EXISTS model_image_fid TEXT
+    """)
+    # 幂等加列：AI 角标开关 + 视频时长（与 deploy/init-postgres.sql 保持一致，db_update.sql 也会兜底）
+    cursor.execute("""
+        ALTER TABLE gen_sessions ADD COLUMN IF NOT EXISTS enable_ai_label BOOLEAN NOT NULL DEFAULT TRUE
+    """)
+    cursor.execute("""
+        ALTER TABLE gen_sessions ADD COLUMN IF NOT EXISTS duration_sec INT NOT NULL DEFAULT 10
     """)
     # gen_cards：抽出来的视频卡片（每条对应一次万相提交）
     cursor.execute("""

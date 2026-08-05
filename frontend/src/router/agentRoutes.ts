@@ -21,7 +21,7 @@ export const agentRoutes: RouteRecordRaw[] = [
   { path: '/my-agents', name: 'my-agents', component: () => import('@/components/MyDigitalEmployees.vue') },
   { path: '/all-sessions', name: 'all-sessions', component: () => import('@/components/AllSessions.vue') },
   { path: '/data-sources', name: 'data-sources', component: () => import('@/pages/DataSourceManager.vue') },
-  { path: '/social-media', name: 'social-media', component: () => import('@/components/social-media/SocialMediaWorkbench.vue') },
+  { path: '/social-media', name: 'social-media', component: () => import('@/components/social-media/VideoCreationWorkbench.vue') },
   {
     path: '/trade-specialist',
     name: 'trade-specialist',
@@ -97,7 +97,7 @@ export const agentRoutes: RouteRecordRaw[] = [
       { path: 'reply-styles', name: 'tenant-reply-styles', component: () => import('@/components/saas/ReplyStyleManager.vue') },
       { path: 'external-customers', name: 'tenant-external-customers', component: () => import('@/components/saas/ExternalCustomerService.vue') },
       { path: 'data-sources', name: 'tenant-data-sources', component: () => import('@/pages/DataSourceManager.vue') },
-      { path: 'social-media', name: 'tenant-social-media', component: () => import('@/components/social-media/SocialMediaWorkbench.vue') },
+      { path: 'social-media', name: 'tenant-social-media', component: () => import('@/components/social-media/VideoCreationWorkbench.vue') },
       {
         path: 'trade-specialist',
         name: 'tenant-trade-specialist',

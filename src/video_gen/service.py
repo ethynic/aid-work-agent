@@ -64,6 +64,8 @@ class VideoGenService:
         card_count: int = 3,
         expanded_prompt: str | None = None,
         model_image_fid: str | None = None,
+        enable_ai_label: bool = True,
+        duration_sec: int = 10,
     ) -> dict[str, Any]:
         """创建抽卡会话 + 立即向万相提交 card_count 条任务。
 
@@ -81,6 +83,9 @@ class VideoGenService:
             raise ValueError(f"未知场景: {scene_id}")
         if not 2 <= card_count <= 4:
             raise ValueError("card_count 必须为 2-4")
+        # 校验时长（万相 2.7 r2v 单次调用 duration 上限 15s）
+        if duration_sec not in (5, 10, 15):
+            raise ValueError("duration_sec 必须为 5/10/15")
 
         # 2. 提示词：expanded_prompt 为空则用场景模板填空（极简提示词引擎，§6）
         prompt = expanded_prompt or scene.prompt_template.format(copywriting=copywriting)
@@ -101,10 +106,12 @@ class VideoGenService:
             cur.execute(
                 """INSERT INTO gen_sessions
                    (session_id, tenant_id, user_id, scene_id, product_image_fid,
-                    model_image_fid, copywriting, expanded_prompt, card_count, status)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,'generating')""",
+                    model_image_fid, copywriting, expanded_prompt, card_count,
+                    enable_ai_label, duration_sec, status)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'generating')""",
                 (session_id, tenant_id, user_id, scene_id, product_image_fid,
-                 model_image_fid, copywriting, prompt, card_count),
+                 model_image_fid, copywriting, prompt, card_count,
+                 enable_ai_label, duration_sec),
             )
 
             for idx in range(card_count):
@@ -120,7 +127,7 @@ class VideoGenService:
                         first_frame_data_url=first_frame_data_url,
                         seed=seed,
                         negative_prompt=scene.negative_prompt,
-                        duration=scene.default_duration,
+                        duration=duration_sec,
                     )
                     provider_task_id = submit_result.task_id
                     provider_status = submit_result.task_status
@@ -326,9 +333,12 @@ class VideoGenService:
         with get_db_connection() as conn:
             cur = conn.cursor()
             cur.execute(
-                """SELECT card_id, tenant_id, session_id, provider_task_id, created_at
-                   FROM gen_cards
-                   WHERE provider_status IN ('PENDING', 'RUNNING') AND provider_task_id IS NOT NULL"""
+                """SELECT c.card_id, c.tenant_id, c.session_id, c.provider_task_id, c.created_at,
+                          s.enable_ai_label
+                   FROM gen_cards c
+                   JOIN gen_sessions s ON c.session_id = s.session_id
+                   WHERE c.provider_status IN ('PENDING', 'RUNNING')
+                     AND c.provider_task_id IS NOT NULL"""
             )
             pending = [dict(r) for r in cur.fetchall()]
 
@@ -353,7 +363,7 @@ class VideoGenService:
                 continue   # 网络/临时错误，下轮再试
 
             if result.task_status == "SUCCEEDED" and result.video_url:
-                await self._on_card_succeeded(card, result)
+                await self._on_card_succeeded(card, result, enable_ai_label=card.get("enable_ai_label", True))
             elif result.task_status in ("FAILED", "CANCELED"):
                 self._mark_failed(
                     card["card_id"], card["tenant_id"],
@@ -366,14 +376,19 @@ class VideoGenService:
             logger.info(f"视频生成轮询: 处理 {processed} 条 card")
         return processed
 
-    async def _on_card_succeeded(self, card: dict[str, Any], result) -> None:
-        """SUCCEEDED：下载成片（含烧录 AI 标识）→ 注册 file_id → 更新 card。"""
+    async def _on_card_succeeded(
+        self,
+        card: dict[str, Any],
+        result,
+        enable_ai_label: bool = True,
+    ) -> None:
+        """SUCCEEDED：下载成片（按 session 配置决定是否烧录 AI 标识）→ 注册 file_id → 更新 card。"""
         try:
             output_fid = await self.media.download_and_register(
                 url=result.video_url,
                 tenant_id=card["tenant_id"] or "demo",
                 display_name=f"{card['card_id']}.mp4",
-                burn_label=True,
+                burn_label=enable_ai_label,
             )
             with get_db_connection() as conn:
                 conn.cursor().execute(

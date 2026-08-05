@@ -80,6 +80,8 @@ export const videoGenAPI = {
     model_image_fid?: string
     card_count?: number
     expanded_prompt?: string
+    enable_ai_label?: boolean
+    duration_sec?: number
   }) => request<GenSession>('/sessions', {
     method: 'POST',
     body: JSON.stringify(body),

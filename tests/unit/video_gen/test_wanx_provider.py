@@ -132,6 +132,34 @@ class TestSubmit:
         with pytest.raises(wp.WanxProviderError):
             wp.WanxProvider(api_key="")
 
+    def test_submit_invalid_duration_raises(self):
+        """duration 不在 (5,10,15) 时应抛 WanxProviderError（防御性校验，防前端脏数据直传阿里云）。"""
+        client = FakeClient(post_resp=_resp(200, {"output": {"task_id": "t", "task_status": "PENDING"}}))
+        with patch.object(wp.httpx, "AsyncClient", return_value=client):
+            provider = wp.WanxProvider(api_key="sk-test")
+            with pytest.raises(wp.WanxProviderError, match="duration"):
+                _run(provider.submit("p", "data:url", "data:url", seed=1, duration=20))
+
+    def test_submit_duration_5_passes(self):
+        """duration=5 应通过校验（万相 r2v 最短时长）。"""
+        resp = _resp(200, {"output": {"task_id": "abc", "task_status": "PENDING"}})
+        client = FakeClient(post_resp=resp)
+        with patch.object(wp.httpx, "AsyncClient", return_value=client):
+            provider = wp.WanxProvider(api_key="sk-test")
+            result = _run(provider.submit("p", "data:url", "data:url", seed=1, duration=5))
+        assert result.task_id == "abc"
+        # 验证 duration 已写入 body
+        assert client.last_body["parameters"]["duration"] == 5
+
+    def test_submit_duration_15_passes(self):
+        """duration=15 应通过校验（万相 r2v 最长时长）。"""
+        resp = _resp(200, {"output": {"task_id": "abc", "task_status": "PENDING"}})
+        client = FakeClient(post_resp=resp)
+        with patch.object(wp.httpx, "AsyncClient", return_value=client):
+            provider = wp.WanxProvider(api_key="sk-test")
+            _run(provider.submit("p", "data:url", "data:url", seed=1, duration=15))
+        assert client.last_body["parameters"]["duration"] == 15
+
 
 class TestPoll:
     def test_poll_succeeded_returns_video_url(self):

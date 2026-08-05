@@ -12,7 +12,7 @@ domains:
   - id: data-analysis
     label: 数据分析
   - id: social-media-operations
-    label: 社媒运营
+    label: 视频创作
   - id: reports
     label: 工作报表
 
@@ -157,12 +157,12 @@ pages:
     status: published
 
   - page_id: social-media-operations-workbench
-    title: 社媒运营工作台
-    description: 统一管理微信公众号和微信视频号账号、内容计划、平台版本、审核发布队列和运营数据
+    title: 视频创作
+    description: 通过场景选择、素材上传、文案填写生成 2-4 条差异化视频卡片，支持留用标记与成片下载
     route: /social-media
-    icon: "M3 11l18-8v18l-18-8zM11.6 16.8a3 3 0 11-5.8-1.6"
+    icon: "M4 4h16v16H4zM10 9l5 3-5 3V9z"
     domain: social-media-operations
-    status: planned
+    status: published
 
   - page_id: work-outcomes
     title: 工作成果

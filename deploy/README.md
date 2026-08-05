@@ -299,6 +299,21 @@ worker_connections 1024;
 keepalive_timeout 65;
 ```
 
+## 服务器容器编译很慢的解决方案
+
+如果服务器上 docker compose build 很慢，而本地开发环境编译很快，可以在本地导出 tar.gz 文件，FTP上传到服务器，然后在服务器上解压缩，然后再启动就很快了。
+
+1. 本地：tag + 导出
+  docker tag aid-work-agent-aid-agent-api:latest aid-agent-api:latest   # 如果本地镜像没有命名，先要打标签
+  docker save aid-agent-api:latest | gzip > /tmp/aid-agent-api.tar.gz
+
+2. 上传服务器
+  gunzip -c aid-agent-api.tar.gz | docker load
+  docker images | grep aid-agent-api   # 确认导入
+
+3. 启动（不会触发 build）
+  docker compose -f docker-compose.dev.yml up -d
+
 ## 📝 更新日志
 
 - **2026-03-23**: 初始版本，包含完整部署脚本和文档

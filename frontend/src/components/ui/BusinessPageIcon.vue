@@ -74,8 +74,8 @@ const ICON_RULES: Array<{ keywords: string[]; path: string }> = [
   // 数据源
   { keywords: ['数据源管理', '数据源'], path: 'M4 6a2 2 0 012-2h12a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h12a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM6 11h12' },
 
-  // 社媒
-  { keywords: ['社媒运营', '社媒', '工作台'], path: 'M3 11l18-8v18l-18-8zM11.6 16.8a3 3 0 11-5.8-1.6' },
+  // 视频创作
+  { keywords: ['视频创作', '视频'], path: 'M4 4h16v16H4zM10 9l5 3-5 3V9z' },
 ]
 
 // 默认图标：通用文档

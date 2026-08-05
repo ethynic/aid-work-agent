@@ -65,6 +65,47 @@ def test_create_session_success(client):
     assert body["success"] is True
     assert body["data"]["session_id"] == "sess_1"
     mock_svc.create_session.assert_awaited_once()
+    # 验证默认值：enable_ai_label=True, duration_sec=10
+    kwargs = mock_svc.create_session.call_args.kwargs
+    assert kwargs["enable_ai_label"] is True
+    assert kwargs["duration_sec"] == 10
+
+
+def test_create_session_with_label_and_duration(client):
+    """前端传 enable_ai_label=False 和 duration_sec=15 应透传给 service。"""
+    mock_svc = MagicMock()
+    mock_svc.create_session = AsyncMock(return_value={
+        "session_id": "sess_2", "status": "generating", "cards": [], "card_count": 2,
+    })
+    with patch.object(api_mod, "_service", mock_svc):
+        resp = client.post("/api/video-gen/sessions", json={
+            "scene_id": "product_showcase",
+            "product_image_fid": "file_1",
+            "copywriting": "假睫毛",
+            "card_count": 2,
+            "enable_ai_label": False,
+            "duration_sec": 15,
+        })
+    assert resp.json()["success"] is True
+    kwargs = mock_svc.create_session.call_args.kwargs
+    assert kwargs["enable_ai_label"] is False
+    assert kwargs["duration_sec"] == 15
+
+
+def test_create_session_invalid_duration(client):
+    """duration_sec=20 应触发 ValueError（service 校验），返回 success=False。"""
+    mock_svc = MagicMock()
+    mock_svc.create_session = AsyncMock(side_effect=ValueError("duration_sec 必须为 5/10/15"))
+    with patch.object(api_mod, "_service", mock_svc):
+        resp = client.post("/api/video-gen/sessions", json={
+            "scene_id": "product_showcase",
+            "product_image_fid": "f",
+            "copywriting": "x",
+            "duration_sec": 20,
+        })
+    body = resp.json()
+    assert body["success"] is False
+    assert "duration_sec" in body["error"]
 
 
 def test_create_session_value_error(client):

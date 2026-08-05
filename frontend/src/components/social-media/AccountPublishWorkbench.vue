@@ -1,7 +1,7 @@
 <template>
   <div class="h-screen flex flex-col bg-gray-50">
     <AppHeader
-      title="社媒运营工作台"
+      title="账号与发布"
       :is-logged-in="effectiveIsLoggedIn"
       :user="effectiveUser"
       @toggle-sidebar="handleToggleSidebar"
@@ -9,183 +9,156 @@
     />
 
     <main class="flex-1 overflow-y-auto">
-      <!-- Tab 切换栏（原生 button + Tailwind，参考 ConnectionCenter.vue） -->
-      <div class="flex-shrink-0 bg-white border-b border-default sticky top-0 z-10">
-        <div class="px-6 flex gap-6">
-          <button
-            v-for="tab in tabs"
-            :key="tab.key"
-            @click="activeTab = tab.key"
-            :class="[
-              'py-3 text-sm font-medium border-b-2 transition-colors',
-              activeTab === tab.key
-                ? 'text-primary-600 border-primary-600'
-                : 'text-muted border-transparent hover:text-default hover:border-hover'
-            ]"
-          >
-            {{ tab.label }}
-          </button>
-        </div>
-      </div>
-
-      <!-- Tab：账号与发布（原有社媒功能，v-show 保留状态） -->
-      <div v-show="activeTab === 'accounts'">
-        <section class="border-b border-default bg-surface">
-          <div class="px-6 py-5">
-            <div class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-              <div>
-                <p class="text-sm text-muted">微信公众号 / 微信视频号</p>
-                <h1 class="mt-1 text-2xl font-semibold text-default">计划、审核、发布和数据统一看板</h1>
-              </div>
-              <div class="flex flex-wrap gap-2">
-                <BaseButton intent="secondary" @click="loadAll">刷新</BaseButton>
-                <BaseButton @click="seedDemoFlow">创建示例草稿</BaseButton>
-              </div>
+      <section class="border-b border-default bg-surface">
+        <div class="px-6 py-5">
+          <div class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+            <div>
+              <p class="text-sm text-muted">微信公众号 / 微信视频号</p>
+              <h1 class="mt-1 text-2xl font-semibold text-default">计划、审核、发布和数据统一看板</h1>
+            </div>
+            <div class="flex flex-wrap gap-2">
+              <BaseButton intent="secondary" @click="loadAll">刷新</BaseButton>
+              <BaseButton @click="seedDemoFlow">创建示例草稿</BaseButton>
             </div>
           </div>
-        </section>
+        </div>
+      </section>
 
-        <section class="grid gap-4 px-6 py-5 md:grid-cols-3">
-          <div class="rounded-lg border border-default bg-surface p-4">
-            <p class="text-sm text-muted">账号</p>
-            <p class="mt-2 text-2xl font-semibold text-default">{{ accounts.length }}</p>
-          </div>
-          <div class="rounded-lg border border-default bg-surface p-4">
-            <p class="text-sm text-muted">内容计划</p>
-            <p class="mt-2 text-2xl font-semibold text-default">{{ plans.length }}</p>
-          </div>
-          <div class="rounded-lg border border-default bg-surface p-4">
-            <p class="text-sm text-muted">发布任务</p>
-            <p class="mt-2 text-2xl font-semibold text-default">{{ publishJobs.length }}</p>
-          </div>
-        </section>
+      <section class="grid gap-4 px-6 py-5 md:grid-cols-3">
+        <div class="rounded-lg border border-default bg-surface p-4">
+          <p class="text-sm text-muted">账号</p>
+          <p class="mt-2 text-2xl font-semibold text-default">{{ accounts.length }}</p>
+        </div>
+        <div class="rounded-lg border border-default bg-surface p-4">
+          <p class="text-sm text-muted">内容计划</p>
+          <p class="mt-2 text-2xl font-semibold text-default">{{ plans.length }}</p>
+        </div>
+        <div class="rounded-lg border border-default bg-surface p-4">
+          <p class="text-sm text-muted">发布任务</p>
+          <p class="mt-2 text-2xl font-semibold text-default">{{ publishJobs.length }}</p>
+        </div>
+      </section>
 
-        <section class="grid gap-5 px-6 pb-6 xl:grid-cols-[360px_1fr]">
-          <div class="space-y-5">
-            <BaseCard title="绑定平台账号">
-              <div class="space-y-3">
-                <label class="block text-sm text-default">
-                  平台
-                  <BaseSelect v-model="accountForm.platform" class="mt-1">
-                    <option value="wechat_official">微信公众号</option>
-                    <option value="wechat_channels">微信视频号</option>
-                  </BaseSelect>
-                </label>
-                <label class="block text-sm text-default">
-                  账号名称
-                  <BaseInput v-model="accountForm.display_name" class="mt-1" placeholder="例如：品牌服务号" />
-                </label>
-                <label class="block text-sm text-default">
-                  外部账号 ID
-                  <BaseInput v-model="accountForm.external_account_id" class="mt-1" placeholder="AppID 或账号标识" />
-                </label>
-                <BaseButton full-width :disabled="savingAccount" @click="createAccount">
-                  {{ savingAccount ? '保存中...' : '保存账号' }}
-                </BaseButton>
-              </div>
-            </BaseCard>
+      <section class="grid gap-5 px-6 pb-6 xl:grid-cols-[360px_1fr]">
+        <div class="space-y-5">
+          <BaseCard title="绑定平台账号">
+            <div class="space-y-3">
+              <label class="block text-sm text-default">
+                平台
+                <BaseSelect v-model="accountForm.platform" class="mt-1">
+                  <option value="wechat_official">微信公众号</option>
+                  <option value="wechat_channels">微信视频号</option>
+                </BaseSelect>
+              </label>
+              <label class="block text-sm text-default">
+                账号名称
+                <BaseInput v-model="accountForm.display_name" class="mt-1" placeholder="例如：品牌服务号" />
+              </label>
+              <label class="block text-sm text-default">
+                外部账号 ID
+                <BaseInput v-model="accountForm.external_account_id" class="mt-1" placeholder="AppID 或账号标识" />
+              </label>
+              <BaseButton full-width :disabled="savingAccount" @click="createAccount">
+                {{ savingAccount ? '保存中...' : '保存账号' }}
+              </BaseButton>
+            </div>
+          </BaseCard>
 
-            <BaseCard title="创建周计划">
-              <div class="space-y-3">
-                <label class="block text-sm text-default">
-                  计划名称
-                  <BaseInput v-model="planForm.name" class="mt-1" placeholder="本周品牌内容运营" />
-                </label>
-                <label class="block text-sm text-default">
-                  目标
-                  <BaseInput v-model="planForm.goal" class="mt-1" placeholder="获客、转化、活动预热" />
-                </label>
-                <BaseButton full-width intent="secondary" :disabled="savingPlan" @click="createPlan">
-                  {{ savingPlan ? '创建中...' : '创建计划' }}
-                </BaseButton>
-              </div>
-            </BaseCard>
-          </div>
+          <BaseCard title="创建周计划">
+            <div class="space-y-3">
+              <label class="block text-sm text-default">
+                计划名称
+                <BaseInput v-model="planForm.name" class="mt-1" placeholder="本周品牌内容运营" />
+              </label>
+              <label class="block text-sm text-default">
+                目标
+                <BaseInput v-model="planForm.goal" class="mt-1" placeholder="获客、转化、活动预热" />
+              </label>
+              <BaseButton full-width intent="secondary" :disabled="savingPlan" @click="createPlan">
+                {{ savingPlan ? '创建中...' : '创建计划' }}
+              </BaseButton>
+            </div>
+          </BaseCard>
+        </div>
 
-          <div class="space-y-5">
-            <BaseCard title="账号能力">
-              <div v-if="accounts.length === 0" class="py-8 text-center text-sm text-muted">暂无账号</div>
-              <div v-else class="overflow-x-auto">
-                <table class="w-full min-w-[720px] text-left text-sm">
-                  <thead class="border-b border-default text-muted">
-                    <tr>
-                      <th class="py-2 font-medium">账号</th>
-                      <th class="py-2 font-medium">平台</th>
-                      <th class="py-2 font-medium">能力</th>
-                      <th class="py-2 font-medium">状态</th>
-                      <th class="py-2 text-right font-medium">操作</th>
-                    </tr>
-                  </thead>
-                  <tbody class="divide-y divide-default">
-                    <tr v-for="account in accounts" :key="account.account_id">
-                      <td class="py-3 text-default">{{ account.display_name }}</td>
-                      <td class="py-3 text-muted">{{ platformLabel(account.platform) }}</td>
-                      <td class="py-3">
-                        <div class="flex flex-wrap gap-1">
-                          <BaseBadge
-                            v-for="cap in supportedCapabilities(account)"
-                            :key="cap"
-                            :intent="capIntent(cap)"
-                            size="sm"
-                          >
-                            {{ capabilityLabel(cap) }}
-                          </BaseBadge>
-                        </div>
-                      </td>
-                      <td class="py-3"><BaseBadge intent="success" size="sm">{{ account.status }}</BaseBadge></td>
-                      <td class="py-3 text-right">
-                        <BaseButton intent="ghost" size="sm" @click="refreshAccount(account.account_id)">验证</BaseButton>
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-            </BaseCard>
-
-            <BaseCard title="发布队列">
-              <div v-if="publishJobs.length === 0" class="py-8 text-center text-sm text-muted">暂无发布任务</div>
-              <div v-else class="grid gap-3">
-                <article
-                  v-for="job in publishJobs"
-                  :key="job.job_id"
-                  class="rounded-lg border border-default bg-surface-hover p-4"
-                >
-                  <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                    <div>
-                      <div class="flex items-center gap-2">
-                        <p class="font-medium text-default">{{ job.account_name || job.account_id }}</p>
-                        <BaseBadge :intent="statusIntent(job.status)" size="sm">{{ statusLabel(job.status) }}</BaseBadge>
+        <div class="space-y-5">
+          <BaseCard title="账号能力">
+            <div v-if="accounts.length === 0" class="py-8 text-center text-sm text-muted">暂无账号</div>
+            <div v-else class="overflow-x-auto">
+              <table class="w-full min-w-[720px] text-left text-sm">
+                <thead class="border-b border-default text-muted">
+                  <tr>
+                    <th class="py-2 font-medium">账号</th>
+                    <th class="py-2 font-medium">平台</th>
+                    <th class="py-2 font-medium">能力</th>
+                    <th class="py-2 font-medium">状态</th>
+                    <th class="py-2 text-right font-medium">操作</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-default">
+                  <tr v-for="account in accounts" :key="account.account_id">
+                    <td class="py-3 text-default">{{ account.display_name }}</td>
+                    <td class="py-3 text-muted">{{ platformLabel(account.platform) }}</td>
+                    <td class="py-3">
+                      <div class="flex flex-wrap gap-1">
+                        <BaseBadge
+                          v-for="cap in supportedCapabilities(account)"
+                          :key="cap"
+                          :intent="capIntent(cap)"
+                          size="sm"
+                        >
+                          {{ capabilityLabel(cap) }}
+                        </BaseBadge>
                       </div>
-                      <p class="mt-1 text-sm text-muted">
-                        {{ platformLabel(job.platform || '') }} / {{ modeLabel(job.publish_mode) }}
-                      </p>
+                    </td>
+                    <td class="py-3"><BaseBadge intent="success" size="sm">{{ account.status }}</BaseBadge></td>
+                    <td class="py-3 text-right">
+                      <BaseButton intent="ghost" size="sm" @click="refreshAccount(account.account_id)">验证</BaseButton>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </BaseCard>
+
+          <BaseCard title="发布队列">
+            <div v-if="publishJobs.length === 0" class="py-8 text-center text-sm text-muted">暂无发布任务</div>
+            <div v-else class="grid gap-3">
+              <article
+                v-for="job in publishJobs"
+                :key="job.job_id"
+                class="rounded-lg border border-default bg-surface-hover p-4"
+              >
+                <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                  <div>
+                    <div class="flex items-center gap-2">
+                      <p class="font-medium text-default">{{ job.account_name || job.account_id }}</p>
+                      <BaseBadge :intent="statusIntent(job.status)" size="sm">{{ statusLabel(job.status) }}</BaseBadge>
                     </div>
-                    <p class="text-sm text-muted">{{ job.created_at ? new Date(job.created_at).toLocaleString() : '' }}</p>
+                    <p class="mt-1 text-sm text-muted">
+                      {{ platformLabel(job.platform || '') }} / {{ modeLabel(job.publish_mode) }}
+                    </p>
                   </div>
-                </article>
-              </div>
-            </BaseCard>
-
-            <BaseCard title="运营数据">
-              <div class="grid gap-3 md:grid-cols-2">
-                <div class="rounded-lg bg-surface-hover p-4">
-                  <p class="text-sm text-muted">平台账号分布</p>
-                  <p class="mt-2 text-default">{{ overviewText(overview.accounts_by_platform) }}</p>
+                  <p class="text-sm text-muted">{{ job.created_at ? new Date(job.created_at).toLocaleString() : '' }}</p>
                 </div>
-                <div class="rounded-lg bg-surface-hover p-4">
-                  <p class="text-sm text-muted">发布状态分布</p>
-                  <p class="mt-2 text-default">{{ overviewText(overview.publish_jobs_by_status) }}</p>
-                </div>
-              </div>
-            </BaseCard>
-          </div>
-        </section>
-      </div>
+              </article>
+            </div>
+          </BaseCard>
 
-      <!-- Tab：内容创作（视频生成子组件） -->
-      <div v-show="activeTab === 'content'">
-        <VideoGeneration />
-      </div>
+          <BaseCard title="运营数据">
+            <div class="grid gap-3 md:grid-cols-2">
+              <div class="rounded-lg bg-surface-hover p-4">
+                <p class="text-sm text-muted">平台账号分布</p>
+                <p class="mt-2 text-default">{{ overviewText(overview.accounts_by_platform) }}</p>
+              </div>
+              <div class="rounded-lg bg-surface-hover p-4">
+                <p class="text-sm text-muted">发布状态分布</p>
+                <p class="mt-2 text-default">{{ overviewText(overview.publish_jobs_by_status) }}</p>
+              </div>
+            </div>
+          </BaseCard>
+        </div>
+      </section>
     </main>
 
     <div
@@ -210,15 +183,6 @@ import BaseSelect from '@/components/ui/BaseSelect.vue'
 import { useDemoAuth } from '@/composables/useDemoAuth'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 import { socialMediaAPI, type ContentPlan, type PublishJob, type SocialAccount } from '@/api/socialMedia'
-import VideoGeneration from './VideoGeneration.vue'
-
-// Tab 切换（原生 button + Tailwind，参考 ConnectionCenter.vue；v-show 保留各 Tab 状态）
-type WorkbenchTab = 'accounts' | 'content'
-const tabs: Array<{ key: WorkbenchTab; label: string }> = [
-  { key: 'content', label: '内容创作' },
-  { key: 'accounts', label: '账号与发布' },
-]
-const activeTab = ref<WorkbenchTab>('content')
 
 const route = useRoute()
 const router = useRouter()
