@@ -70,7 +70,7 @@
               产品文案 <span class="text-red-500">*</span>
             </label>
             <p class="text-xs text-muted mb-1.5">这段文案会成为视频生成提示词的主体，描述要展示的产品和卖点（越具体出片越准）</p>
-            <MyTextarea v-model="form.copywriting" :rows="4" placeholder="如：12mm 水貂毛自然款假睫毛，轻盈贴合，放大双眼。展示睫毛的弧度和佩戴效果，突出自然妆感。" />
+            <MyTextarea v-model="form.copywriting" :rows="4" :enable-preview="false" placeholder="如：12mm 水貂毛自然款假睫毛，轻盈贴合，放大双眼。展示睫毛的弧度和佩戴效果，突出自然妆感。" />
           </div>
 
           <!-- 抽卡条数 -->
@@ -88,7 +88,7 @@
           <!-- 提示词预览（可微调） -->
           <div>
             <label class="block text-sm font-medium text-default mb-1.5">提示词预览（留空用场景默认，可微调）</label>
-            <MyTextarea v-model="form.expandedPrompt" :rows="3" placeholder="留空则按场景模板自动生成" />
+            <MyTextarea v-model="form.expandedPrompt" :rows="3" :enable-preview="false" placeholder="留空则按场景模板自动生成" />
           </div>
 
           <!-- 错误提示 -->
