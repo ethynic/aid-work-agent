@@ -1350,3 +1350,52 @@ CREATE INDEX IF NOT EXISTS idx_work_outcomes_file_id
     ON work_outcomes(file_id) WHERE file_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_work_outcomes_review_batch
     ON work_outcomes(review_batch_id) WHERE review_batch_id IS NOT NULL;
+
+-- ============================================================================
+-- 2026-08-05 视频生成 MVP：新增 gen_sessions / gen_cards 表
+-- 详情见 docs/system/content-production/mvp-design.md §3
+-- gen_sessions：一次抽卡会话（选场景+上传产品图+填文案+生成N条）
+-- gen_cards：抽出的视频卡片（每条对应一次万相提交）
+-- 与 src/video_gen/db.py 的 init_video_gen_tables() 保持一致
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS gen_sessions (
+    session_id        TEXT PRIMARY KEY,          -- sess_<12hex>
+    tenant_id         TEXT,                      -- 租户（可空，demo 模式）
+    user_id           TEXT,                      -- 发起用户
+    scene_id          TEXT NOT NULL,             -- 场景预设 id（硬编码，如 product_showcase）
+    product_image_fid TEXT NOT NULL,             -- 产品图 file_id（r2v 作 reference_image，锁定产品外观防变形）
+    model_image_fid   TEXT,                      -- 模特图 file_id（可选，作 first_frame 控制起始画面；空则用产品图）
+    copywriting       TEXT NOT NULL,             -- 运营填写的文案
+    expanded_prompt   TEXT,                      -- 提示词引擎扩展后的完整 prompt（可微调）
+    card_count        INT NOT NULL DEFAULT 3,    -- 本次抽卡条数（2-4）
+    status            TEXT NOT NULL DEFAULT 'generating',  -- generating/done/failed
+    created_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 幂等加列：已建表（无 model_image_fid）补列，新表上面 CREATE 已含
+ALTER TABLE gen_sessions ADD COLUMN IF NOT EXISTS model_image_fid TEXT;
+
+CREATE TABLE IF NOT EXISTS gen_cards (
+    card_id           TEXT PRIMARY KEY,          -- card_<12hex>
+    tenant_id         TEXT,
+    session_id        TEXT NOT NULL,             -- 逻辑外键 -> gen_sessions
+    variant_idx       INT NOT NULL,              -- 第几条（0-based）
+    seed              BIGINT,                    -- 万相随机种子（差异化来源）
+    variant_prompt    TEXT,                      -- 本条差异化后的 prompt
+    provider_task_id  TEXT,                      -- 万相返回的 task_id
+    provider_status   TEXT,                      -- PENDING/RUNNING/SUCCEEDED/FAILED/CANCELED/UNKNOWN
+    output_fid        TEXT,                      -- 成片 file_id（成功后回填）
+    output_url        TEXT,                      -- 万相返回的临时 video_url（24h 有效，下载后可清）
+    output_duration   INT,                       -- 成片时长（秒）
+    kept              BOOLEAN NOT NULL DEFAULT FALSE,  -- 是否被运营留用
+    parent_card_id    TEXT,                      -- 精修溯源（从哪张 card 重新生成）
+    error_msg         TEXT,
+    created_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_gen_cards_session
+    ON gen_cards(session_id);
+CREATE INDEX IF NOT EXISTS idx_gen_cards_polling
+    ON gen_cards(provider_status);
