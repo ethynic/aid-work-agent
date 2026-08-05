@@ -1,8 +1,17 @@
-﻿# 一次性实验：用 Win32 SendInput 真实点击 BOSS 页面视口内坐标
-# 用法: powershell -File scripts/win-click.ps1 -X 1787 -Y 105
+﻿# Win32 真实鼠标点击（设计文档 §10.3 通道 2 / §17 踩坑 6~13）
+# 用法: powershell -File scripts/win-click.ps1 -X 904 -Y 700 [-CssW 1917] [-CssH 1905]
+# 输入为 page 坐标（DOMSnapshot device px，与截图 PNG 同尺寸），脚本内部：
+#   1. GetWindowRect(Chrome_RenderWidgetHostHWND) 实时取渲染视口屏幕矩形（每次校准，不缓存）
+#   2. scale = 视口宽 / CssW 换算屏幕坐标（自动覆盖 150% DPI 缩放）
+#   3. WindowFromPoint 落点守卫：目标点必须归属 Chrome_RenderWidgetHostHWND，
+#      否则 SetWindowPos 抬窗重试一次，仍不行 exit 2（fail-loud，不盲点）
+#   4. SetCursorPos 拟人分步移动 + 悬停 + mouse_event down/up
+# 退出码：0=已点击；1=窗口/参数错误；2=落点被遮挡（守卫拒绝）
 param(
   [Parameter(Mandatory=$true)][int]$X,
   [Parameter(Mandatory=$true)][int]$Y,
+  [double]$CssW = 1917,
+  [double]$CssH = 1905,
   [string]$TitleKeyword = "BOSS直聘 - Google Chrome"
 )
 
@@ -11,7 +20,6 @@ Add-Type -ReferencedAssemblies System.Drawing -TypeDefinition @"
 using System;
 using System.Runtime.InteropServices;
 using System.Text;
-using System.Collections.Generic;
 
 public class Win32 {
     public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
@@ -23,13 +31,19 @@ public class Win32 {
     [DllImport("user32.dll", CharSet=CharSet.Ansi)] public static extern int GetClassName(IntPtr hWnd, StringBuilder sb, int max);
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT r);
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint flags);
+    [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(POINT p);
     [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
     [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extra);
 
     public const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
     public const uint MOUSEEVENTF_LEFTUP   = 0x0004;
+    public const uint SWP_NOMOVE = 0x0002;
+    public const uint SWP_NOSIZE = 0x0001;
+    public static readonly IntPtr HWND_TOP = IntPtr.Zero;
 
     [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
+    [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X, Y; }
 
     public static IntPtr FindWindowByTitle(string keyword) {
         IntPtr found = IntPtr.Zero;
@@ -44,39 +58,75 @@ public class Win32 {
     }
 
     public static IntPtr FindRenderWidget(IntPtr parent) {
+        IntPtr firstHidden = IntPtr.Zero;
         IntPtr found = IntPtr.Zero;
         EnumChildWindows(parent, (h, l) => {
             var sb = new StringBuilder(256);
             GetClassName(h, sb, 256);
-            if (sb.ToString() == "Chrome_RenderWidgetHostHWND" && IsWindowVisible(h)) { found = h; return false; }
+            // Chrome 会保留多个 render widget（当前标签页可见 + 后台标签页隐藏），
+            // 必须优先取可见的，否则取到隐藏实例会误判「标签页在后台」
+            if (sb.ToString() == "Chrome_RenderWidgetHostHWND") {
+                if (IsWindowVisible(h)) { found = h; return false; }
+                if (firstHidden == IntPtr.Zero) firstHidden = h;
+            }
             return true;
         }, IntPtr.Zero);
-        return found;
+        return found != IntPtr.Zero ? found : firstHidden;
+    }
+
+    public static string ClassNameOf(IntPtr hWnd) {
+        var sb = new StringBuilder(256);
+        GetClassName(hWnd, sb, 256);
+        return sb.ToString();
     }
 }
 "@
+
+function Get-ScreenPoint($rw, [double]$cssW, [double]$cssH, [int]$px, [int]$py) {
+  $r = New-Object Win32+RECT
+  [Win32]::GetWindowRect($rw, [ref]$r) | Out-Null
+  $vw = $r.Right - $r.Left
+  $vh = $r.Bottom - $r.Top
+  $sx = [int]($r.Left + $px * ($vw / $cssW))
+  $sy = [int]($r.Top + $py * ($vh / $cssH))
+  return @($sx, $sy)
+}
+
+function Test-PointOnRenderWidget([int]$sx, [int]$sy, $rw) {
+  $pt = New-Object Win32+POINT
+  $pt.X = $sx; $pt.Y = $sy
+  $h = [Win32]::WindowFromPoint($pt)
+  if ($h -eq $rw) { return $true }
+  # WindowFromPoint 可能返回 render widget 的子孙/同族 Chrome 图层，类名一致也视为命中
+  return [Win32]::ClassNameOf($h) -eq "Chrome_RenderWidgetHostHWND"
+}
 
 $win = [Win32]::FindWindowByTitle($TitleKeyword)
 if ($win -eq [IntPtr]::Zero) { Write-Error "未找到标题含「$TitleKeyword」的窗口"; exit 1 }
 
 $rw = [Win32]::FindRenderWidget($win)
 if ($rw -eq [IntPtr]::Zero) { Write-Error "未找到 Chrome 渲染子窗口"; exit 1 }
-
-$r = New-Object Win32+RECT
-[Win32]::GetWindowRect($rw, [ref]$r) | Out-Null
-$vw = $r.Right - $r.Left
-$vh = $r.Bottom - $r.Top
-Write-Output "渲染视口: left=$($r.Left) top=$($r.Top) ${vw}x${vh}"
-
-# 视口 CSS 坐标 -> 屏幕坐标（截图视口 1917x1905，与渲染窗口像素不同时按比例缩放）
-$scaleX = $vw / 1917.0
-$scaleY = $vh / 1905.0
-$sx = [int]($r.Left + $X * $scaleX)
-$sy = [int]($r.Top + $Y * $scaleY)
-Write-Output "目标屏幕坐标: ($sx, $sy)"
+if (-not [Win32]::IsWindowVisible($rw)) { Write-Error "渲染子窗口不可见：BOSS 标签页可能在后台，请切换到前台后重试"; exit 1 }
 
 [Win32]::SetForegroundWindow($win) | Out-Null
-Start-Sleep -Milliseconds 400
+Start-Sleep -Milliseconds 300
+
+$pt = Get-ScreenPoint $rw $CssW $CssH $X $Y
+$sx = $pt[0]; $sy = $pt[1]
+Write-Output "目标屏幕坐标: ($sx, $sy)"
+
+if (-not (Test-PointOnRenderWidget $sx $sy $rw)) {
+  # 落点被遮挡（会话终端/QQ 等窗口压住目标点会吃点击）：抬窗重试一次，重算坐标
+  Write-Output "落点被其他窗口遮挡，抬窗重试"
+  [Win32]::SetWindowPos($win, [Win32]::HWND_TOP, 0, 0, 0, 0, [Win32]::SWP_NOMOVE -bor [Win32]::SWP_NOSIZE) | Out-Null
+  Start-Sleep -Milliseconds 300
+  $pt = Get-ScreenPoint $rw $CssW $CssH $X $Y
+  $sx = $pt[0]; $sy = $pt[1]
+  if (-not (Test-PointOnRenderWidget $sx $sy $rw)) {
+    Write-Error "落点仍被遮挡（WindowFromPoint 校验失败），中止点击"
+    exit 2
+  }
+}
 
 # 拟人移动：从当前位置分 10 步移动过去
 $cur = [System.Windows.Forms.Cursor]::Position
@@ -91,3 +141,4 @@ Start-Sleep -Milliseconds 500
 Start-Sleep -Milliseconds 70
 [Win32]::mouse_event([Win32]::MOUSEEVENTF_LEFTUP, 0, 0, 0, [UIntPtr]::Zero)
 Write-Output "已点击"
+exit 0

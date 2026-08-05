@@ -1,6 +1,6 @@
 # BOSS 简历筛选助手原生 CDP 开发计划
 
-> 状态：🔧 Phase 1～9 代码全部完成（CLI 形态）；Phase 10（双通道点击固化）进行中，demo 已实证  
+> 状态：🔧 Phase 1～9 代码全部完成（CLI 形态）；Phase 10 进行中——12.1/12.2 已完成（CLI `filter` 真机验证通过），剩 12.2 YAML 集成 / 12.3 付费误判修复 / 12.4 写动作验证  
 > 日期：2026-07-22（Phase 7/8/9 完成于 2026-08-04，Phase 10 新增于 2026-08-05）  
 > ⚠️ **2026-08-05 路线收敛**：Electron GUI（renderer/主进程壳/IPC/preload/打包链路）、spawn 模式 ChromeLauncher、探索期探针脚本、`spikes/boss-native-cdp/` 已全部删除，CLI 为唯一产品形态。本文 Phase 1/8 等章节中 GUI、IPC、Electron 打包相关描述仅作历史记录，不再有效；以设计文档 §16 决策 6/7/8 为准。
 > 设计文档：[BOSS 简历筛选助手原生 CDP 设计](../../design/recruiting/boss-resume-assistant-native-cdp-design.md)  
@@ -366,19 +366,23 @@ Phase 4 先交付截图、拼接和查看日志持久化骨架；`ViewedResumeSu
 
 ### 12.1 WinMouseClicker（Win32 真实鼠标通道）
 
-- [ ] 实现 `src/main/input/WinMouseClicker.ts`：输入 page 坐标（DOMSnapshot 给出），输出点击成功/失败。
-- [ ] 实时校准：`GetWindowRect(Chrome_RenderWidgetHostHWND)` 取渲染视口屏幕矩形，`scale = 视口宽 / 截图PNG宽` 换算（DOMSnapshot bounds 即 device px，与截图同口径）；每次点击前重新校准，不缓存窗口位置。
-- [ ] 落点守卫：点击前 `WindowFromPoint` 归属校验 = `Chrome_RenderWidgetHostHWND`；失败则 `SetWindowPos` 抬窗重试一次，仍失败 fail-loud 进入 PAUSED。
-- [ ] 动作：`SetCursorPos + mouse_event`（禁用 SendInput 绝对坐标），拟人分步移动（10 步/300ms）→ 悬停 500ms → down/up。
-- [ ] 落地形态：node 侧 child_process 调用 `scripts/win-click.ps1`（UTF-8 BOM，中文参数不经 bash 内联）；`win-screenshot.ps1` 保留为诊断工具。
-- [ ] CLI 在 Win32 点击期间提示用户手离鼠标。
+- [x] 实现 `src/main/input/WinMouseClicker.ts`：输入 page 坐标（DOMSnapshot 给出），输出点击成功/失败。
+- [x] 实时校准：`GetWindowRect(Chrome_RenderWidgetHostHWND)` 取渲染视口屏幕矩形，`scale = 视口宽 / 截图PNG宽` 换算（DOMSnapshot bounds 即 device px，与截图同口径）；每次点击前重新校准，不缓存窗口位置。
+- [x] 落点守卫：点击前 `WindowFromPoint` 归属校验 = `Chrome_RenderWidgetHostHWND`；失败则 `SetWindowPos` 抬窗重试一次，仍失败 fail-loud 进入 PAUSED。
+- [x] 动作：`SetCursorPos + mouse_event`（禁用 SendInput 绝对坐标），拟人分步移动（10 步/300ms）→ 悬停 500ms → down/up。
+- [x] 落地形态：node 侧 child_process 调用 `scripts/win-click.ps1`（UTF-8 BOM，中文参数不经 bash 内联）；`win-screenshot.ps1` 保留为诊断工具。
+- [x] CLI 在 Win32 点击期间提示用户手离鼠标。
+- [x] 修复：`FindRenderWidget` 优先取可见 render widget（Chrome 每窗口多实例，后台标签留隐藏实例，踩坑 #14）；`defaultScriptPath` 兼容 dist 布局多一级目录。
 
 ### 12.2 筛选设置自动化（FilterSetter）
 
-- [ ] 产品化 `scripts/locate-text.mjs` 的定位逻辑（DOMSnapshot 文本 → 唯一命中坐标，多命中时按面板区域约束消歧，无法唯一定位 fail-loud）。
-- [ ] 岗位 YAML 配置扩展筛选条件字段（经验/学历多选/薪资），启动 run 前自动设置筛选并验证列表变化。
-- [ ] 「学历本科及以上」语义映射为多选 本科+硕士+博士。
-- [ ] 真机门禁：完整流程 开面板 → 选选项 → 确定 → 列表变化验证（demo 已手动通过，产品化后复验）。
+- [x] 产品化 `scripts/locate-text.mjs` 的定位逻辑 → `src/main/boss/FilterSetter.ts`（行锚定消歧：行带 = 最近其他行标签垂直距离的一半，x 严格在标签右缘右侧；面板已打开时跳过开面板；徽章计数校验兜底，全部 fail-loud）。
+- [x] CLI `filter` 子命令（`--experience/--education/--salary`），真机端到端验证通过（2026-08-05：5-10年 + 本科/硕士/博士 + 10-20K → 筛选·5 徽章校验通过，列表刷新全员本科）。
+- [x] CLI `filter --probe` 只读探针：一次快照输出三行全部选项及坐标（LCA 面板容器结构级排除卡片垃圾文本 + 行带几何规则），真机验证通过（2026-08-05）。
+- [x] CLI `filter --clear` 清除筛选：开面板（已开跳过）→ 清除 → 确定 → 徽章无计数校验，真机验证通过（2026-08-05）。
+- [ ] 自然语言筛选：用户自然语言描述 → LLM 对照 `--probe` 实时面板选项词表翻译成 `--experience/--education/--salary` 参数（probe 即为此提供合法选项词表，2026-08-05 确认设计意图）。
+- [ ] 岗位 YAML 配置扩展筛选条件字段（经验/学历多选/薪资），run 启动前自动调用 FilterSetter 并验证列表变化。
+- [ ] 「学历本科及以上」语义映射为多选 本科+硕士+博士（CLI 目前需显式传 `本科,硕士,博士`）。
 
 ### 12.3 已知 bug 修复
 
@@ -387,7 +391,11 @@ Phase 4 先交付截图、拼接和查看日志持久化骨架；`ViewedResumeSu
 
 ### 12.4 收尾
 
-- [ ] 真机验证 GREET/REJECT 写动作通道归属（CDP 先试，被拦走 Win32；「不合适」原因弹层文案未校准，UNKNOWN→PAUSED 兜底）。
+- [x] CLI `greet [--limit N]` 子命令（`GreetExecutor`，独立于旧 ActionPlanner 体系）：DOMSnapshot 找视口内全部「打招呼」→ Win32 逐个点击，每击后校验按钮数减少否则 fail-loud 停止。真机验证通过（2026-08-05：点击直发无确认弹层，按钮变「继续沟通」）。
+- [ ] 真机验证 REJECT 写动作通道（「不合适」原因弹层文案未校准，UNKNOWN→PAUSED 兜底）。
+- [x] greet 滚动加载：默认上限 10、最大 100，当前屏点完 CDP mouseWheel 自动滚动，滚动前后列表文档 scrollOffsetY 不变判定到底（2026-08-05）。**真机回归修复**：iframe 文档 bounds 是文档绝对坐标，可见性/点击坐标必须减 scrollOffsetY（设计文档 §17 坑 16），否则「不停往下滚但一个都不点」；修复后 limit 1 真机验证通过（滚动后位置点击正确）。
+- [x] greet 前置校验：当前页非推荐牛人列表页（无「筛选」按钮）直接报错，避免误报「已滚到底」；付费墙弹层识别（「该职位无开聊权益/商品价格/扫码支付」）fail-loud 提示换职位（2026-08-05 真机发现：打招呼按职位扣开聊权益，无权益职位弹购买层）。**已知不足**：沟通页 DOM 仍挂载推荐 iframe（含「筛选」「打招呼」文本），文本存在性校验会误通过（§17 坑 17），需增强为可见性/结构判定。
+- [ ] 付费墙体验优化（用户要求记录）：付费弹层自动关闭（点 X）；greet 开始前预检当前职位开聊权益，避免点出去才发现；YAML 岗位配置记录各职位权益状态。
 - [ ] 全部未提交改动过三智能体流程后提交（枚举修复/探针脚本/win 脚本/付费修复）。
 - [ ] 同步本文状态 + `docs/ideas.md` 登记。
 
@@ -423,5 +431,6 @@ npm run build
 - [x] Canvas/Network/WASM 数据形态完成定位。
 - [x] Phase 1～9 代码全部完成（CLI 形态），214/214 测试绿。
 - [x] 双通道点击真机实证 + 筛选设置 demo 手动跑通（2026-08-05）。
-- [ ] Phase 10：WinMouseClicker/FilterSetter 产品化 + 付费误判修复（进行中，见 §12）。
+- [x] Phase 10.1/10.2：WinMouseClicker + FilterSetter 产品化，CLI `filter` 子命令真机端到端验证通过（208/208 测试绿，2026-08-05）。
+- [ ] Phase 10 剩余：YAML 筛选集成（12.2）、付费误判修复 + 假数据清理（12.3）、写动作通道验证（12.4）。
 - [ ] Phase 7/8 真机端到端验证（写动作通道归属、全流程）。

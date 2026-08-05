@@ -522,3 +522,7 @@ clients/boss-resume-assistant/
 | 11 | PowerShell 中文乱码 | .ps1 必须 UTF-8 with BOM；中文参数勿经 bash 内联传递 |
 | 12 | PS 脚本块→C# 委托静默失败 | 窗口枚举等逻辑全部写在 C# Add-Type 里，PowerShell 只做调用 |
 | 13 | 用户鼠标干扰 | Win32 点击借用真实光标，点击期间（约 1s）用户手不能碰鼠标；CLI 流程中需明确提示 |
+| 14 | Chrome 多 render widget | 一个窗口有多个 `Chrome_RenderWidgetHostHWND`（当前标签可见 + 后台标签隐藏实例），`FindRenderWidget` 必须优先取可见的，否则误判「标签页在后台」或取错窗口矩形 |
+| 15 | 筛选面板行锚定两个变体 | ①标签与选项可能分行（选项换行，真机垂直差 57.5px）——行带按「最近其他行标签垂直距离的一半」推导，不用固定行高倍数；②弹层背后候选人卡片的重名文本（如「本科」cx=631）会落进行带——x 条件必须严格在行标签右缘右侧，放松到标签左缘会引入诱饵 |
+| 16 | iframe 文档 bounds 是文档绝对坐标 | 推荐列表 iframe（doc2）滚动后按钮 bounds **不变**、`document.scrollOffsetY` 变（实测 0→1200→2400）。可见性/点击坐标必须 `owner偏移 + bounds - scrollOffset`，否则滚动后新露出的按钮永远被当视口外（表现为「不停往下滚但一个都不点」）。另：mouseWheel 实际滚动距离 ≈ deltaY 的 1.5 倍，滚动步长取 min(800, 视口半高) 防小窗口漏人 |
+| 17 | 「沟通」页内嵌推荐 iframe 干扰页面判定 | 沟通页的 DOM 里仍挂着推荐 iframe 的全量节点（「筛选」「打招呼」文本都在 strings 里），按文本存在性做的页面前置校验会误通过。greet 前置校验需增强（待做，见开发计划 Phase 10） |
