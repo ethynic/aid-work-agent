@@ -215,10 +215,10 @@ import VideoGeneration from './VideoGeneration.vue'
 // Tab 切换（原生 button + Tailwind，参考 ConnectionCenter.vue；v-show 保留各 Tab 状态）
 type WorkbenchTab = 'accounts' | 'content'
 const tabs: Array<{ key: WorkbenchTab; label: string }> = [
-  { key: 'accounts', label: '账号与发布' },
   { key: 'content', label: '内容创作' },
+  { key: 'accounts', label: '账号与发布' },
 ]
-const activeTab = ref<WorkbenchTab>('accounts')
+const activeTab = ref<WorkbenchTab>('content')
 
 const route = useRoute()
 const router = useRouter()
