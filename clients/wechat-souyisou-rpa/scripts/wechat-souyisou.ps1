@@ -1,21 +1,17 @@
 ﻿[CmdletBinding()]
 param(
-    [ValidateSet('probe','open','search','collect','flow_probe')][string]$Command = 'probe',
+    [ValidateSet('probe','open','search','collect')][string]$Command = 'probe',
     [string]$AssociationName,
     [string]$PersonName,
     [string]$InputJson,
     [switch]$ReadStdin,
     [switch]$Execute,
     [ValidateRange(1,10)][int]$Limit = 10,
-    [string]$LocatorPath,
     [string]$JudgeCommand,
     [switch]$UseProjectLlm,
     [string]$OcrCommand,
     [switch]$DisableOcr,
     [switch]$VerifyInputOnly,
-    [string]$FlowProbeInputPath,
-    [ValidateRange(0.28,0.68)][double]$FlowProbeXRatio = 0.30,
-    [ValidateRange(0.18,0.70)][double]$FlowProbeYRatio = 0.30,
     [string]$ArtifactDirectory = (Join-Path $env:LOCALAPPDATA 'AidWorkAgent\wechat-souyisou-rpa\artifacts'),
     [ValidateRange(500,30000)][int]$WaitMilliseconds = 2500,
     [ValidateRange(10000,60000)][int]$SearchReadyTimeoutMilliseconds = 15000
@@ -73,10 +69,7 @@ try {
             $SearchReadyTimeoutMilliseconds = $stdinSearchReadyTimeout
         }
     }
-    if ($Command -notin @('probe','open','search','collect','flow_probe')) { throw 'INVALID_COMMAND' }
-    if ($Command -eq 'flow_probe' -and (
-        -not $Execute -or [string]::IsNullOrWhiteSpace($FlowProbeInputPath)
-    )) { throw 'INVALID_FLOW_PROBE_INPUT' }
+    if ($Command -notin @('probe','open','search','collect')) { throw 'INVALID_COMMAND' }
     if ($VerifyInputOnly -and (
         -not $Execute -or $Command -notin @('search','collect')
     )) { throw 'INVALID_INPUT_PROBE_MODE' }
@@ -113,6 +106,9 @@ try {
     try {
         [void](Add-Type -AssemblyName System.Windows.Forms)
         [void](Add-Type -AssemblyName System.Drawing)
+        [void](Add-Type -AssemblyName UIAutomationClient)
+        [void](Add-Type -AssemblyName UIAutomationTypes)
+        [void](Add-Type -AssemblyName WindowsBase)
         [void](Add-Type -TypeDefinition @"
 using System;
 using System.Runtime.InteropServices;
@@ -135,10 +131,26 @@ public static class WechatSouyisouWin32 {
  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h,out RECT r);
  [DllImport("user32.dll")] public static extern bool SetCursorPos(int x,int y);
  [DllImport("user32.dll")] public static extern void mouse_event(uint f,uint x,uint y,uint d,IntPtr e);
+ [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr c);
+ [DllImport("user32.dll")] public static extern IntPtr GetThreadDpiAwarenessContext();
+ [DllImport("user32.dll")] public static extern bool AreDpiAwarenessContextsEqual(IntPtr a,IntPtr b);
+ [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr h);
  [DllImport("user32.dll",SetLastError=true)] public static extern IntPtr SendMessageTimeout(IntPtr h,uint m,UIntPtr w,IntPtr l,uint f,uint t,out UIntPtr r);
  public struct RECT { public int Left,Top,Right,Bottom; }
 }
 "@)
+        # UIA 的 BoundingRectangle/ClickablePoint 是物理屏幕坐标。在线程进入任何
+        # GetWindowRect、截图或鼠标路径前固定 Per-Monitor V2，避免 150% DPI 下
+        # Win32 坐标被虚拟化；双屏负坐标也原样传给 SetCursorPos。
+        $perMonitorV2 = [IntPtr](-4)
+        $previousDpiContext = [WechatSouyisouWin32]::SetThreadDpiAwarenessContext(
+            $perMonitorV2)
+        if (
+            $previousDpiContext -eq [IntPtr]::Zero -or
+            -not [WechatSouyisouWin32]::AreDpiAwarenessContextsEqual(
+                [WechatSouyisouWin32]::GetThreadDpiAwarenessContext(),
+                $perMonitorV2)
+        ) { throw 'DPI_AWARENESS_FAILED' }
         $windows = @()
         [WechatSouyisouWin32]::EnumWindows({
             param($h,$unused)
@@ -208,6 +220,50 @@ public static class WechatSouyisouWin32 {
             if ($currentHwnd -eq [IntPtr]::Zero) { return $null }
             Get-WindowIdentityByHwnd $currentHwnd.ToInt64()
         }
+        function Get-WeixinUiaResultDescriptors(
+            [int64]$Hwnd,
+            [object]$WindowRect
+        ) {
+            if (-not (& $pluginGuard)) { throw 'FOREGROUND_LOST' }
+            $root = [Windows.Automation.AutomationElement]::FromHandle([IntPtr]$Hwnd)
+            if ($null -eq $root) { throw 'UIA_ROOT_UNAVAILABLE' }
+            $nodes = $root.FindAll(
+                [Windows.Automation.TreeScope]::Descendants,
+                [Windows.Automation.Condition]::TrueCondition)
+            $descriptors = New-Object Collections.Generic.List[object]
+            foreach ($node in $nodes) {
+                try {
+                    $current = $node.Current
+                    $controlType = $current.ControlType.ProgrammaticName.Replace(
+                        'ControlType.','')
+                    if ($controlType -notin @('Button','ListItem')) { continue }
+                    $pattern = $null
+                    $supportsInvoke = $node.TryGetCurrentPattern(
+                        [Windows.Automation.InvokePattern]::Pattern, [ref]$pattern)
+                    if (-not $supportsInvoke) { continue }
+                    $clickablePoint = New-Object Windows.Point
+                    $hasClickablePoint = $node.TryGetClickablePoint([ref]$clickablePoint)
+                    if (-not $hasClickablePoint) { continue }
+                    $bounds = $current.BoundingRectangle
+                    $descriptors.Add([pscustomobject]@{
+                        Name=[string]$current.Name;ControlType=$controlType
+                        IsOffscreen=[bool]$current.IsOffscreen
+                        SupportsInvoke=$true;HasClickablePoint=$true
+                        Left=[double]$bounds.Left;Top=[double]$bounds.Top
+                        Width=[double]$bounds.Width;Height=[double]$bounds.Height
+                        ClickableX=[double]$clickablePoint.X
+                        ClickableY=[double]$clickablePoint.Y
+                        Element=$node
+                    })
+                } catch {
+                    # Chromium UIA 节点可能在 FindAll 后失效；忽略单节点，不输出 Name。
+                    continue
+                }
+            }
+            if (-not (& $pluginGuard)) { throw 'FOREGROUND_LOST' }
+            @(Select-WeixinUiaResultTargets $descriptors `
+                $AssociationName $PersonName $WindowRect)
+        }
         $preexistingPluginHwnds = [Collections.Generic.HashSet[int64]]::new()
         foreach ($visibleWindow in $windows) {
             $visibleIdentity = Get-WindowIdentityByHwnd ([int64]$visibleWindow.Hwnd)
@@ -252,389 +308,7 @@ public static class WechatSouyisouWin32 {
             $sent -ne [IntPtr]::Zero
         }
         $verifySouyisou = { Get-TrustedForegroundIdentity -RequirePlugin }
-        if ($Command -eq 'flow_probe') {
-            $stage = 'flow_input'
-            $flowItems = @(Read-WeixinFlowProbeItems $FlowProbeInputPath)
-            $flowCloseSend = {
-                param($keys)
-                Invoke-SafeKeyChord $keys {
-                    param($key,$up)
-                    [WechatSouyisouWin32]::keybd_event(
-                        $virtualKeyMap[$key],0,$(if($up){2}else{0}),
-                        [IntPtr]::Zero)
-                } { Start-Sleep -Milliseconds 40 } { $true }
-            }
-
-            $flowOriginalClipboard = $null
-            $flowClipboardCaptured = $false
-            $flowPluginHwnd = [int64]0
-            $flowSteps = @()
-            $flowFailure = $null
-            $flowFailureStage = $null
-            $flowFailureFocus = $null
-            $flowForegroundIdentity = $null
-            $flowHandleTransition = $false
-            $flowSessionHwnds = New-Object Collections.Generic.List[int64]
-            $flowInputHwndChanged = $false
-            $flowListHwndChanged = $false
-            $flowClickHwndChanged = $false
-            $flowDetailHwndChanged = $false
-            $flowCloseCount = 0
-            $flowOpenAttempts = 0
-            $flowBaseKind = ''
-            try {
-                $flowOriginalClipboard = [Windows.Forms.Clipboard]::GetDataObject()
-                $flowClipboardCaptured = $true
-                for ($flowIndex = 0; $flowIndex -lt $flowItems.Count; $flowIndex++) {
-                    $flowItem = $flowItems[$flowIndex]
-                    $flowHandleTransition = $false
-                    $flowInputHwndChanged = $false
-                    $flowListHwndChanged = $false
-                    $flowClickHwndChanged = $false
-                    $flowDetailHwndChanged = $false
-                    $flowCloseCount = 0
-                    $flowOpenAttempts = 0
-                    $flowBaseKind = ''
-                    $stage = 'flow_open'
-                    $flowIdentity = $null
-                    for ($flowOpenAttempt = 1; $flowOpenAttempt -le 2; $flowOpenAttempt++) {
-                        $flowOpenBase = Get-CurrentForegroundIdentity
-                        [void](Get-WeixinFlowBaseKind `
-                            $flowOpenBase ([int64]$main.Hwnd))
-                        $flowOpenBaseHwnd = [int64]$flowOpenBase.Hwnd
-                        $flowOpenGuard = {
-                            $current = Get-CurrentForegroundIdentity
-                            if ($null -eq $current -or
-                                [int64]$current.Hwnd -ne $flowOpenBaseHwnd) {
-                                return $false
-                            }
-                            try {
-                                [void](Get-WeixinFlowBaseKind `
-                                    $current ([int64]$main.Hwnd))
-                                return $true
-                            } catch { return $false }
-                        }.GetNewClosure()
-                        & $send @('CTRL','F') $flowOpenGuard
-                        Start-Sleep -Milliseconds 400
-                        & $send @('DOWN') $flowOpenGuard
-                        Start-Sleep -Milliseconds 250
-                        & $send @('ENTER') $flowOpenGuard
-                        $flowOpenAttempts++
-                        Start-Sleep -Milliseconds $WaitMilliseconds
-                        $flowOpenForeground = Get-CurrentForegroundIdentity
-                        $flowOpenDecision = Get-WeixinFlowOpenDecision `
-                            $flowOpenForeground ([int64]$main.Hwnd) $flowOpenAttempt
-                        if ($flowOpenDecision -eq 'plugin') {
-                            $flowIdentity = $flowOpenForeground
-                            break
-                        }
-                        Start-Sleep -Milliseconds 250
-                    }
-                    $flowPluginHwnd = [int64]$flowIdentity.Hwnd
-                    $flowSessionHwnds.Add($flowPluginHwnd)
-                    $flowGuard = {
-                        $current = Get-TrustedForegroundIdentity -RequirePlugin
-                        $null -ne $current -and [int64]$current.Hwnd -eq $flowPluginHwnd
-                    }.GetNewClosure()
-
-                    $stage = 'flow_input_verify'
-                    $flowInputIdentity = Resolve-WeixinFlowForegroundPlugin `
-                        (Get-CurrentForegroundIdentity) ([int64]$main.Hwnd)
-                    $flowInputHwndChanged =
-                        [int64]$flowInputIdentity.Hwnd -ne $flowPluginHwnd
-                    if ($flowInputHwndChanged) {
-                        $flowPluginHwnd = [int64]$flowInputIdentity.Hwnd
-                        $flowSessionHwnds.Add($flowPluginHwnd)
-                        $flowHandleTransition = $true
-                        $flowGuard = {
-                            $current = Get-TrustedForegroundIdentity -RequirePlugin
-                            $null -ne $current -and
-                                [int64]$current.Hwnd -eq $flowPluginHwnd
-                        }.GetNewClosure()
-                    }
-                    $flowPerson = ([string]$flowItem.person_name).Trim()
-                    $flowQuery = if ($flowPerson) {
-                        New-SearchQuery `
-                            ([string]$flowItem.association_name) $flowPerson
-                    } else {
-                        ([string]$flowItem.association_name).Trim()
-                    }
-                    $flowInput = Invoke-VerifiedWeixinFocusedSearchSubmission `
-                        $flowQuery $flowGuard {
-                            param($value) [Windows.Forms.Clipboard]::SetText([string]$value)
-                        } {
-                            param($keys) & $send $keys $flowGuard
-                        } {
-                            Start-Sleep -Milliseconds 120
-                            [Windows.Forms.Clipboard]::GetText(
-                                [Windows.Forms.TextDataFormat]::UnicodeText)
-                        } $true @{}
-
-                    $stage = 'flow_list_copy'
-                    $flowListIdentity = Resolve-WeixinFlowForegroundPlugin `
-                        (Get-CurrentForegroundIdentity) ([int64]$main.Hwnd)
-                    $flowListHwndChanged =
-                        [int64]$flowListIdentity.Hwnd -ne $flowPluginHwnd
-                    if ($flowListHwndChanged) {
-                        $flowPluginHwnd = [int64]$flowListIdentity.Hwnd
-                        $flowSessionHwnds.Add($flowPluginHwnd)
-                        $flowHandleTransition = $true
-                        $flowGuard = {
-                            $current = Get-TrustedForegroundIdentity -RequirePlugin
-                            $null -ne $current -and
-                                [int64]$current.Hwnd -eq $flowPluginHwnd
-                        }.GetNewClosure()
-                    }
-                    $flowListCopy = Wait-WeixinFlowListCopy $flowGuard {
-                        [Windows.Forms.Clipboard]::Clear()
-                    } {
-                        param($keys) & $send $keys $flowGuard
-                    } {
-                        Start-Sleep -Milliseconds 120
-                        [Windows.Forms.Clipboard]::GetText(
-                            [Windows.Forms.TextDataFormat]::UnicodeText)
-                    } {
-                        param($ms) Start-Sleep -Milliseconds $ms
-                    } 12 500 80
-                    $flowListText = [string]$flowListCopy.text
-
-                    $stage = 'flow_click'
-                    $flowClickIdentity = Resolve-WeixinFlowForegroundPlugin `
-                        (Get-CurrentForegroundIdentity) ([int64]$main.Hwnd)
-                    $flowClickHwndChanged =
-                        [int64]$flowClickIdentity.Hwnd -ne $flowPluginHwnd
-                    if ($flowClickHwndChanged) {
-                        $flowPluginHwnd = [int64]$flowClickIdentity.Hwnd
-                        $flowSessionHwnds.Add($flowPluginHwnd)
-                        $flowHandleTransition = $true
-                        $flowGuard = {
-                            $current = Get-TrustedForegroundIdentity -RequirePlugin
-                            $null -ne $current -and
-                                [int64]$current.Hwnd -eq $flowPluginHwnd
-                        }.GetNewClosure()
-                    }
-                    $flowRect = New-Object WechatSouyisouWin32+RECT
-                    if (-not [WechatSouyisouWin32]::GetWindowRect(
-                        [IntPtr]$flowPluginHwnd,[ref]$flowRect)) { throw 'WINDOW_RECT_FAILED' }
-                    $flowWidth = $flowRect.Right - $flowRect.Left
-                    $flowHeight = $flowRect.Bottom - $flowRect.Top
-                    if (-not (Test-WindowRectDimensions $flowWidth $flowHeight)) {
-                        throw 'WINDOW_RECT_FAILED'
-                    }
-                    $flowCapture = {
-                        $image = New-Object Drawing.Bitmap $flowWidth,$flowHeight
-                        $graphics = [Drawing.Graphics]::FromImage($image)
-                        try {
-                            $graphics.CopyFromScreen(
-                                $flowRect.Left,$flowRect.Top,0,0,$image.Size)
-                        } finally { $graphics.Dispose() }
-                        $image
-                    }.GetNewClosure()
-                    if (-not (& $flowGuard)) { throw 'INPUT_FOCUS_LOST' }
-                    [void][WechatSouyisouWin32]::SetCursorPos(
-                        $flowRect.Left+[int]($flowWidth*$FlowProbeXRatio),
-                        $flowRect.Top+[int]($flowHeight*$FlowProbeYRatio))
-                    Start-Sleep -Milliseconds 150
-                    if (-not (& $flowGuard)) { throw 'INPUT_FOCUS_LOST' }
-                    $flowBefore = & $flowCapture
-                    try { $flowBeforeHash = Get-BitmapSha256 $flowBefore }
-                    finally { $flowBefore.Dispose() }
-                    Invoke-SafeMouseClick {
-                        param($up)
-                        [WechatSouyisouWin32]::mouse_event(
-                            $(if($up){4}else{2}),0,0,0,[IntPtr]::Zero)
-                    } $flowGuard
-                    Start-Sleep -Milliseconds $WaitMilliseconds
-                    $flowDetailIdentity = Resolve-WeixinFlowForegroundPlugin `
-                        (Get-CurrentForegroundIdentity) ([int64]$main.Hwnd)
-                    $flowDetailHwndChanged =
-                        [int64]$flowDetailIdentity.Hwnd -ne $flowPluginHwnd
-                    if ($flowDetailHwndChanged) {
-                        $flowPluginHwnd = [int64]$flowDetailIdentity.Hwnd
-                        $flowSessionHwnds.Add($flowPluginHwnd)
-                        $flowHandleTransition = $true
-                        $flowGuard = {
-                            $current = Get-TrustedForegroundIdentity -RequirePlugin
-                            $null -ne $current -and
-                                [int64]$current.Hwnd -eq $flowPluginHwnd
-                        }.GetNewClosure()
-                        $flowRect = New-Object WechatSouyisouWin32+RECT
-                        if (-not [WechatSouyisouWin32]::GetWindowRect(
-                            [IntPtr]$flowPluginHwnd,[ref]$flowRect)) {
-                            throw 'WINDOW_RECT_FAILED'
-                        }
-                        $flowWidth = $flowRect.Right - $flowRect.Left
-                        $flowHeight = $flowRect.Bottom - $flowRect.Top
-                        if (-not (Test-WindowRectDimensions $flowWidth $flowHeight)) {
-                            throw 'WINDOW_RECT_FAILED'
-                        }
-                        $flowCapture = {
-                            $image = New-Object Drawing.Bitmap $flowWidth,$flowHeight
-                            $graphics = [Drawing.Graphics]::FromImage($image)
-                            try {
-                                $graphics.CopyFromScreen(
-                                    $flowRect.Left,$flowRect.Top,0,0,$image.Size)
-                            } finally { $graphics.Dispose() }
-                            $image
-                        }.GetNewClosure()
-                    }
-                    if (-not (& $flowGuard)) { throw 'INPUT_FOCUS_LOST' }
-                    $flowAfter = & $flowCapture
-                    try { $flowAfterHash = Get-BitmapSha256 $flowAfter }
-                    finally { $flowAfter.Dispose() }
-                    if ($flowAfterHash -eq $flowBeforeHash) { throw 'FLOW_DETAIL_NOT_OPENED' }
-
-                    # 诊断关键序列：确认详情变化后只关闭详情和结果页，保留搜索主页
-                    # 作为下一轮基准。两次 Ctrl+W 之间不执行任何其他操作。
-                    $stage = 'flow_close_detail'
-                    $flowCloseIdentity = Resolve-WeixinFlowForegroundPlugin `
-                        (Get-CurrentForegroundIdentity) ([int64]$main.Hwnd)
-                    if ([int64]$flowCloseIdentity.Hwnd -ne $flowPluginHwnd) {
-                        $flowPluginHwnd = [int64]$flowCloseIdentity.Hwnd
-                        $flowSessionHwnds.Add($flowPluginHwnd)
-                        $flowHandleTransition = $true
-                        $flowGuard = {
-                            $current = Get-TrustedForegroundIdentity -RequirePlugin
-                            $null -ne $current -and
-                                [int64]$current.Hwnd -eq $flowPluginHwnd
-                        }.GetNewClosure()
-                    }
-                    & $flowCloseSend @('CTRL','W')
-                    $flowCloseCount++
-                    Start-Sleep -Milliseconds $WaitMilliseconds
-                    $stage = 'flow_close_list'
-                    & $flowCloseSend @('CTRL','W')
-                    $flowCloseCount++
-                    Start-Sleep -Milliseconds $WaitMilliseconds
-                    $flowAfterCloseIdentity = Get-CurrentForegroundIdentity
-                    $flowBaseKind = Get-WeixinFlowBaseKind `
-                        $flowAfterCloseIdentity ([int64]$main.Hwnd)
-                    $flowSteps += [pscustomobject]@{
-                        index=$flowIndex+1; plugin_hwnd=$flowPluginHwnd
-                        opened=$true;input_verified=[bool]$flowInput.input_verified
-                        list_copied=$true;detail_opened=$true;detail_closed=$true
-                        list_closed=$true;base_ready=$true
-                        base_kind=[string]$flowBaseKind
-                        handle_transition=[bool]$flowHandleTransition
-                        input_hwnd_changed=[bool]$flowInputHwndChanged
-                        list_hwnd_changed=[bool]$flowListHwndChanged
-                        click_hwnd_changed=[bool]$flowClickHwndChanged
-                        detail_hwnd_changed=[bool]$flowDetailHwndChanged
-                        close_count=[int]$flowCloseCount
-                        open_attempts=[int]$flowOpenAttempts
-                        stage='complete';error_code=$null
-                    }
-                    $flowPluginHwnd = [int64]0
-                    $flowSessionHwnds.Clear()
-                    $flowListText = $null
-                    $flowQuery = $null
-                }
-                $stage = 'flow_complete'
-                try {
-                    if ($null -eq $flowOriginalClipboard) {
-                        [Windows.Forms.Clipboard]::Clear()
-                    } else {
-                        [Windows.Forms.Clipboard]::SetDataObject(
-                            $flowOriginalClipboard,$true)
-                    }
-                    $flowClipboardCaptured = $false
-                } catch { throw 'CLIPBOARD_RESTORE_FAILED' }
-                Write-Result @{
-                    ok=$true;executed=$true;mode='flow_probe'
-                    completed_count=$flowSteps.Count;steps=$flowSteps
-                }
-                exit 0
-            } catch {
-                $flowFailure = $_
-                $flowFailureStage = $stage
-                $flowOriginalCode = if (
-                    $_.Exception.Message -match '^[A-Z][A-Z0-9_]+$'
-                ) { $_.Exception.Message } else { 'FLOW_PROBE_FAILED' }
-                try {
-                    $flowForegroundHwnd = [WechatSouyisouWin32]::GetForegroundWindow()
-                    $flowForegroundIdentity = if ($flowForegroundHwnd -eq [IntPtr]::Zero) {
-                        $null
-                    } else {
-                        Get-WindowIdentityByHwnd $flowForegroundHwnd.ToInt64()
-                    }
-                    $flowFailureFocus = Get-WeixinFlowFocusFailureDiagnostic `
-                        $flowForegroundIdentity $flowPluginHwnd ([int64]$main.Hwnd) `
-                        $flowOriginalCode
-                } catch {
-                    # 诊断只能补充原失败，任何采样/身份格式异常均不得覆盖原错误。
-                    $flowFailureFocus = [pscustomobject]@{
-                        error_code=$flowOriginalCode;foreground_hwnd=[int64]0
-                        process_basename='';class_name=''
-                    }
-                }
-            } finally {
-                $flowCleanupFailure = $null
-                # 诊断失败只允许定向关闭当前前台、且已在本轮见过的可信插件。
-                # 不激活主窗口，不操作后台句柄，也不触碰外部应用。
-                try {
-                    $flowCleanupIdentity = Get-CurrentForegroundIdentity
-                    if (
-                        $flowCleanupIdentity -and
-                        [int64]$flowCleanupIdentity.Hwnd -ne [int64]$main.Hwnd -and
-                        $flowSessionHwnds.Contains(
-                            [int64]$flowCleanupIdentity.Hwnd) -and
-                        (Test-WeixinForegroundIdentity `
-                            $flowCleanupIdentity ([int64]$main.Hwnd))
-                    ) {
-                        if (-not (& $requestCloseWindow `
-                            ([int64]$flowCleanupIdentity.Hwnd))) {
-                            throw 'FLOW_PLUGIN_CLOSE_REJECTED'
-                        }
-                    }
-                } catch {
-                    if ($_.Exception.Message -eq 'FLOW_PLUGIN_CLOSE_REJECTED') {
-                        $flowCleanupFailure = $_
-                    }
-                }
-                if ($flowClipboardCaptured) {
-                    try {
-                        if ($null -eq $flowOriginalClipboard) {
-                            [Windows.Forms.Clipboard]::Clear()
-                        } else {
-                            [Windows.Forms.Clipboard]::SetDataObject(
-                                $flowOriginalClipboard,$true)
-                        }
-                    } catch {
-                        if (-not $flowCleanupFailure) {
-                            $flowCleanupFailure = New-Object Management.Automation.ErrorRecord(
-                                (New-Object Exception 'CLIPBOARD_RESTORE_FAILED'),
-                                'CLIPBOARD_RESTORE_FAILED',
-                                [Management.Automation.ErrorCategory]::OperationStopped,$null)
-                        }
-                    }
-                }
-                if ($flowCleanupFailure) { throw $flowCleanupFailure }
-            }
-            if ($flowFailure) {
-                Write-Result @{
-                    ok=$false;executed=$true;mode='flow_probe'
-                    completed_count=$flowSteps.Count;steps=$flowSteps
-                    failed_index=$flowSteps.Count+1;stage=$flowFailureStage
-                    error_code=[string]$flowFailureFocus.error_code
-                    handle_transition=[bool]$flowHandleTransition
-                    input_hwnd_changed=[bool]$flowInputHwndChanged
-                    list_hwnd_changed=[bool]$flowListHwndChanged
-                    click_hwnd_changed=[bool]$flowClickHwndChanged
-                    detail_hwnd_changed=[bool]$flowDetailHwndChanged
-                    close_count=[int]$flowCloseCount
-                    open_attempts=[int]$flowOpenAttempts
-                    base_ready=$false;base_kind=[string]$flowBaseKind
-                    foreground_hwnd=[int64]$flowFailureFocus.foreground_hwnd
-                    process_id=[uint32]$(if ($flowForegroundIdentity) {
-                        $flowForegroundIdentity.ProcessId
-                    } else { 0 })
-                    process_basename=[string]$flowFailureFocus.process_basename
-                    class_name=[string]$flowFailureFocus.class_name
-                }
-                exit 1
-            }
-        }
-        & $assertWorkBudget 90000
+                & $assertWorkBudget 90000
         $pluginIdentity = Invoke-LimitedTrustedOpen $openSouyisou $verifySouyisou 1
         $pluginHwnd = [IntPtr]$pluginIdentity.Hwnd
         $windowSession = New-WeixinWindowSession ([int64]$main.Hwnd) `
@@ -675,10 +349,7 @@ public static class WechatSouyisouWin32 {
         $stage = 'input_verify'
         $inputVerified = $false
         $inputDiagnostics = @{
-            locator_found=$false
-            post_click_structure=$false
             readback_matched=$false
-            final_structure=$false
         }
         # 新会话由可信主窗口 Ctrl+F/Down/Enter 打开后，焦点即位于搜索输入框。
         # 从此处到回读完成禁止截图、鼠标点击或窗口激活，避免主动抢走焦点。
@@ -767,53 +438,6 @@ public static class WechatSouyisouWin32 {
             }
             exit 0
         }
-        $stage = 'article_switch'
-        # 搜索结果首次稳定后，微信原生 Ctrl+Tab 会直接进入“文章”。每个 query
-        # 只发送一次；不通过坐标、UIA、截图或重复快捷键猜测分类状态。
-        & $assertWorkBudget 62000
-        if (-not (& $pluginGuard)) { throw 'FOREGROUND_LOST' }
-        & $send @('CTRL','TAB') $pluginGuard
-        Start-Sleep -Milliseconds 2000
-        if (-not (& $pluginGuard)) { throw 'FOREGROUND_LOST' }
-
-        # 丢弃切换前的列表内容和 HTML。后续 artifact、Judge、viewport 与卡片
-        # 定位只能从文章分类刷新后的页面重新建立。
-        $text = ''
-        $html = ''
-        [Windows.Forms.Clipboard]::Clear()
-        & $send @('CTRL','A') $pluginGuard
-        & $send @('CTRL','C') $pluginGuard
-        Start-Sleep -Milliseconds 200
-        $postSwitchText = [Windows.Forms.Clipboard]::GetText(
-            [Windows.Forms.TextDataFormat]::UnicodeText
-        )
-        if (-not (Test-SearchResultReady $postSwitchText $query `
-            $AssociationName $PersonName $inputVerified)) {
-            $artifact=Protect-EvidenceArtifact $ArtifactDirectory @{
-                kind='result_page_unbounded';association_name=$AssociationName
-                person_name=$PersonName;text='';links=@();input_verified=[bool]$inputVerified
-                captured_at=[DateTimeOffset]::Now.ToString('o')
-            }
-            $detailArtifact=Protect-EvidenceArtifact $ArtifactDirectory @{
-                kind='collect_result';status='inconclusive';checked=0;failures=1
-                list_artifact_id=$artifact.artifact_id;records=@([pscustomobject]@{
-                    stage='article_switch';reason='article_list_text_unavailable';text_length=0
-                });found_result=$null;captured_at=[DateTimeOffset]::Now.ToString('o')
-            }
-            $stage='cleanup';$sessionCleanupAttempted=$true
-            $cleanupResult=Complete-WeixinPluginSession `
-                ([ref]$sessionCleanupCompleted) $cleanupSession
-            Write-Result @{
-                ok=$true;executed=$true;status='inconclusive';checked=0;failures=1
-                artifact_ref=$detailArtifact.artifact_ref
-                session_closed=[bool]$cleanupResult.session_closed
-            }
-            exit 0
-        }
-        $text = $postSwitchText
-        $html = [Windows.Forms.Clipboard]::GetText(
-            [Windows.Forms.TextDataFormat]::Html
-        )
         $stage = 'copy'
         $links = @(Get-CfHtmlLinks $html)
         $judge = $null
@@ -854,15 +478,12 @@ public static class WechatSouyisouWin32 {
         $initialViewport = & $newPluginViewport $pluginHwnd.ToInt64()
         $rect=$initialViewport.rect;$width=$initialViewport.width
         $height=$initialViewport.height;$capture=$initialViewport.capture
-        $contentRegion = [pscustomobject]@{
-            left_ratio=0.04;right_ratio=0.72;top_ratio=0.10;bottom_ratio=0.94
-        }
         # 保留阶段名用于兼容诊断协议；本阶段仅封存无边界列表，不做命中判断。
         $stage = 'list_judge'
         $artifact = Protect-EvidenceArtifact $ArtifactDirectory @{
             kind='result_page_unbounded'; association_name=$AssociationName; person_name=$PersonName
             text=$text; links=$links; input_verified=[bool]$inputVerified
-            input_locator=if($inputResult){[string]$inputResult.locator}else{$null}
+            input_method=if($inputResult){[string]$inputResult.input_method}else{$null}
             captured_at=[DateTimeOffset]::Now.ToString('o')
         }
         if ($Command -eq 'search') {
@@ -978,17 +599,8 @@ public static class WechatSouyisouWin32 {
         }
         $stage = 'locate'
         $stage = 'points'
-        $explicitItems = $null
-        if ($LocatorPath) {
-            $stage = 'locator_read'
-            $clientRoot = Split-Path -Parent $PSScriptRoot
-            $resolvedLocatorPath = Resolve-LocatorFilePath $LocatorPath $clientRoot
-            $locator = Read-LocatorJson $resolvedLocatorPath
-            $stage = 'points'
-            $explicitItems = @(Get-ValidatedLocatorPoints $locator)
-        }
         $checked=0; $failures=0; $consecutiveFailures=0; $scrolls=0
-        $locateRecoveryAttempts=0
+        $uiaEnumerationRecoveryAttempts=0
         $recoveryEvidenceUnavailable=$false
         $sessionNaturallyClosed=$false
         $seen=@{}; $seenDetailText=@{}; $records=@(); $foundJudge=$null
@@ -1019,52 +631,48 @@ public static class WechatSouyisouWin32 {
             $viewport = & $capture
             try {
                 $viewportHash = Get-BitmapSha256 $viewport
-                $points = @(if ($explicitItems) { $explicitItems } else {
-                    @(Find-DarkThemeCardBands $viewport `
-                        $contentRegion.left_ratio $contentRegion.right_ratio `
-                        $contentRegion.top_ratio $contentRegion.bottom_ratio)
-                })
+                $points = @(Get-WeixinUiaResultDescriptors `
+                    $pluginHwnd.ToInt64() $rect)
             } finally { $viewport.Dispose() }
             if (-not $points.Count) {
                 $stage = 'points'
-                if ($locateRecoveryAttempts -lt 1) {
-                    $locateRecoveryAttempts++
+                if ($uiaEnumerationRecoveryAttempts -lt 1) {
+                    $uiaEnumerationRecoveryAttempts++
                     if (-not (& $restorePluginForeground)) { throw 'FOREGROUND_LOST' }
                     Start-Sleep -Milliseconds 500
                     continue
                 }
-                if (-not (Test-ListHasActionableCandidates $text $PersonName $links)) {
-                    $records += [pscustomobject]@{
-                        stage='points';reason='no_actionable_list_candidate';text_length=0
-                        viewport_hash=$viewportHash
-                    }
-                    $consecutiveFailures=2
-                    break
-                }
-                throw 'CARD_LOCATE_FAILED'
+                # UIA 无候选只是有界枚举结束，不是窗口安全故障。
+                # 正文和节点 Name 均不写记录。
+                $records += New-WeixinUiaCandidateExhaustionRecord $checked
+                $consecutiveFailures=2
+                break
             }
             $newCount = 0
             foreach ($point in $points) {
                 & $assertWorkBudget 60000
                 if ($checked -ge $Limit -or $consecutiveFailures -ge 2) { break }
-                $pointKey = if ($point.fingerprint) {
-                    [string]$point.fingerprint
-                } elseif ($point.title -or $point.source -or $point.date) {
-                    "$($point.title)|$($point.source)|$($point.date)"
-                } else {
-                    "$viewportHash|$($point.x_ratio)|$($point.y_ratio)"
-                }
+                $pointKey = [string]$point.fingerprint
                 if ($seen.ContainsKey($pointKey)) { continue }
                 $seen[$pointKey]=$true; $newCount++
                 $stage = 'click'
                 $clickForegroundRecoveryUsed=$false
-                $x=$rect.Left+[int]($width*[double]$point.x_ratio)
-                $y=$rect.Top+[int]($height*[double]$point.y_ratio)
+                $windowDpi = [int][WechatSouyisouWin32]::GetDpiForWindow(
+                    $pluginHwnd)
+                if ($windowDpi -lt 96 -or $windowDpi -gt 480) {
+                    throw 'WINDOW_DPI_INVALID'
+                }
+                $physicalPoint = ConvertTo-WeixinPhysicalClickPoint `
+                    ([double]$point.x) ([double]$point.y) `
+                    $windowDpi 'PerMonitorV2'
+                $x=[int]$physicalPoint.x; $y=[int]$physicalPoint.y
                 if (-not (& $pluginGuard)) {
                     $clickForegroundRecoveryUsed=$true
                     if (-not (& $restorePluginForeground)) { throw 'FOREGROUND_LOST' }
                 }
-                [void][WechatSouyisouWin32]::SetCursorPos($x,$y)
+                if (-not [WechatSouyisouWin32]::SetCursorPos($x,$y)) {
+                    throw 'MOUSE_POSITION_FAILED'
+                }
                 Start-Sleep -Milliseconds 100
                 if (-not (& $pluginGuard)) {
                     if ($clickForegroundRecoveryUsed -or -not (& $restorePluginForeground)) {
@@ -1298,8 +906,12 @@ public static class WechatSouyisouWin32 {
             }
             if (
                 $foundJudge -or $sessionNaturallyClosed -or
-                $checked -ge $Limit -or $consecutiveFailures -ge 2 -or -not $newCount
+                $checked -ge $Limit -or $consecutiveFailures -ge 2
             ) { break }
+            if (-not $newCount) {
+                $records += New-WeixinUiaCandidateExhaustionRecord $checked
+                break
+            }
             $stage = 'scroll'
             if (-not (& $pluginGuard)) { throw 'FOREGROUND_LOST' }
             [void][WechatSouyisouWin32]::SetCursorPos(
@@ -1395,10 +1007,7 @@ public static class WechatSouyisouWin32 {
                 cleanup_error_code=if ($stage -eq 'cleanup') {$code}else{$null}
                 detail_may_be_open=[bool]$detailMayBeOpen
                 input_verified=[bool]$inputVerified
-                locator_found=[bool]$inputDiagnostics.locator_found
-                post_click_structure=[bool]$inputDiagnostics.post_click_structure
                 readback_matched=[bool]$inputDiagnostics.readback_matched
-                final_structure=[bool]$inputDiagnostics.final_structure
                 foreground=$foregroundContext
                 result_artifact_id=if ($detailArtifact) {
                     $detailArtifact.artifact_id

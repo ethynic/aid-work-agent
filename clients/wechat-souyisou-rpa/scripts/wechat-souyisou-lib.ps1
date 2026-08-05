@@ -63,92 +63,6 @@ function Test-FreshWeixinPluginIdentity {
         (Test-WeixinForegroundIdentity $Identity $MainHwnd)
 }
 
-function Get-WeixinFlowFocusFailureDiagnostic {
-    param(
-        [AllowNull()][object]$ForegroundIdentity,
-        [Parameter(Mandatory)][int64]$PluginHwnd,
-        [Parameter(Mandatory)][int64]$MainHwnd,
-        [Parameter(Mandatory)][string]$OriginalErrorCode
-    )
-    $foregroundHwnd = if ($ForegroundIdentity) {
-        [int64]$ForegroundIdentity.Hwnd
-    } else { [int64]0 }
-    $processBasename = if ($ForegroundIdentity) {
-        [IO.Path]::GetFileName([string]$ForegroundIdentity.ProcessPath)
-    } else { '' }
-    $className = if ($ForegroundIdentity) {
-        [string]$ForegroundIdentity.ClassName
-    } else { '' }
-    $wechatAppFocusPresent = $null -ne $ForegroundIdentity -and (
-        (Test-WeixinMainIdentity $ForegroundIdentity $MainHwnd) -or
-        (
-            $foregroundHwnd -ne $MainHwnd -and
-            (Test-WeixinForegroundIdentity $ForegroundIdentity $MainHwnd)
-        )
-    )
-    $errorCode = if (
-        $OriginalErrorCode -eq 'INPUT_FOCUS_LOST' -and
-        $wechatAppFocusPresent -and
-        $foregroundHwnd -ne $PluginHwnd
-    ) { 'WECHAT_APP_FOCUS_PRESENT_BUT_PLUGIN_NOT_FOREGROUND' } else {
-        $OriginalErrorCode
-    }
-    return [pscustomobject]@{
-        error_code=$errorCode
-        foreground_hwnd=$foregroundHwnd
-        process_basename=$processBasename
-        class_name=$className
-    }
-}
-
-function Resolve-WeixinFlowForegroundPlugin {
-    param(
-        [AllowNull()][object]$ForegroundIdentity,
-        [Parameter(Mandatory)][int64]$MainHwnd
-    )
-    if (Test-WeixinMainIdentity $ForegroundIdentity $MainHwnd) {
-        throw 'FLOW_PLUGIN_NOT_FOREGROUND'
-    }
-    if (
-        $null -eq $ForegroundIdentity -or
-        [int64]$ForegroundIdentity.Hwnd -eq $MainHwnd -or
-        -not (Test-WeixinForegroundIdentity $ForegroundIdentity $MainHwnd)
-    ) { throw 'INPUT_FOCUS_LOST' }
-    return $ForegroundIdentity
-}
-
-function Get-WeixinFlowBaseKind {
-    param(
-        [AllowNull()][object]$ForegroundIdentity,
-        [Parameter(Mandatory)][int64]$MainHwnd
-    )
-    if (Test-WeixinMainIdentity $ForegroundIdentity $MainHwnd) { return 'main' }
-    if (
-        $ForegroundIdentity -and
-        [int64]$ForegroundIdentity.Hwnd -ne $MainHwnd -and
-        (Test-WeixinForegroundIdentity $ForegroundIdentity $MainHwnd)
-    ) { return 'plugin' }
-    throw 'INPUT_FOCUS_LOST'
-}
-
-function Get-WeixinFlowOpenDecision {
-    param(
-        [AllowNull()][object]$ForegroundIdentity,
-        [Parameter(Mandatory)][int64]$MainHwnd,
-        [ValidateRange(1,2)][int]$Attempt
-    )
-    if (
-        $ForegroundIdentity -and
-        [int64]$ForegroundIdentity.Hwnd -ne $MainHwnd -and
-        (Test-WeixinForegroundIdentity $ForegroundIdentity $MainHwnd)
-    ) { return 'plugin' }
-    if (Test-WeixinMainIdentity $ForegroundIdentity $MainHwnd) {
-        if ($Attempt -eq 1) { return 'retry' }
-        throw 'FLOW_PLUGIN_NOT_FOREGROUND'
-    }
-    throw 'INPUT_FOCUS_LOST'
-}
-
 function New-WeixinWindowSession {
     param(
         [Parameter(Mandatory)][int64]$MainHwnd,
@@ -220,7 +134,7 @@ function Invoke-WeixinWindowSessionReturnToList {
     if (-not $usedIndependentDetail) {
         & $SendChord @('ALT','LEFT')
     } else {
-        # 独立详情顶层窗口沿用 flow_probe 已真机验证的关闭动作。关闭动作与
+        # 独立详情顶层窗口沿用已真机验证的关闭动作。关闭动作与
         # 等待之间不读取前台、不激活窗口，避免正式流程附加操作抢焦点。
         & $SendChord @('CTRL','W')
     }
@@ -794,83 +708,147 @@ function Get-BitmapSha256 {
     } finally { $stream.Dispose() }
 }
 
-function Get-BitmapRegionSha256 {
+function ConvertTo-WeixinPhysicalClickPoint {
     param(
-        [Parameter(Mandatory)][System.Drawing.Bitmap]$Bitmap,
-        [Parameter(Mandatory)][Drawing.Rectangle]$Region
+        [Parameter(Mandatory)][double]$X,
+        [Parameter(Mandatory)][double]$Y,
+        [ValidateRange(96,480)][int]$WindowDpi,
+        [Parameter(Mandatory)][string]$DpiAwareness
     )
-    if ($Region.Width -le 0 -or $Region.Height -le 0 -or
-        $Region.Left -lt 0 -or $Region.Top -lt 0 -or
-        $Region.Right -gt $Bitmap.Width -or $Region.Bottom -gt $Bitmap.Height) {
-        throw 'INVALID_BITMAP_REGION'
+    if ($DpiAwareness -ne 'PerMonitorV2') { throw 'DPI_AWARENESS_INVALID' }
+    if (
+        [double]::IsNaN($X) -or [double]::IsInfinity($X) -or
+        [double]::IsNaN($Y) -or [double]::IsInfinity($Y)
+    ) { throw 'UIA_CLICK_POINT_INVALID' }
+
+    # UIA BoundingRectangle/ClickablePoint 与 Per-Monitor V2 下的 SetCursorPos
+    # 都使用物理屏幕坐标。150% 缩放时不能再除以 1.5，也不能叠加窗口原点；
+    # 负数坐标是位于主屏左侧/上方的显示器，不应当被拒绝。
+    [pscustomobject]@{
+        x = [int][math]::Round($X, [MidpointRounding]::AwayFromZero)
+        y = [int][math]::Round($Y, [MidpointRounding]::AwayFromZero)
+        coordinate_space = 'physical_screen'
+        window_dpi = $WindowDpi
     }
-    $crop = $Bitmap.Clone($Region, $Bitmap.PixelFormat)
-    try { Get-BitmapSha256 $crop } finally { $crop.Dispose() }
 }
 
-function Find-DarkThemeCardBands {
+function Select-WeixinUiaResultTargets {
     param(
-        [Parameter(Mandatory)][System.Drawing.Bitmap]$Bitmap,
-        [double]$LeftRatio = 0.04, [double]$RightRatio = 0.72,
-        [double]$TopRatio = 0.10, [double]$BottomRatio = 0.94
+        [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Descriptors,
+        [Parameter(Mandatory)][string]$AssociationName,
+        [Parameter(Mandatory)][string]$PersonName,
+        [Parameter(Mandatory)][object]$WindowRect
     )
-    if ($Bitmap.Width -lt 400 -or $Bitmap.Height -lt 300) { return @() }
-    $left = [int]($Bitmap.Width * $LeftRatio)
-    $right = [int]($Bitmap.Width * $RightRatio)
-    $top = [int]($Bitmap.Height * $TopRatio)
-    $bottom = [int]($Bitmap.Height * $BottomRatio)
-    if ($right -le $left -or $bottom -le $top) { return @() }
-
-    $activeRows = New-Object Collections.Generic.List[int]
-    $stepX = [math]::Max(2, [int](($right - $left) / 180))
-    for ($y = $top; $y -lt $bottom; $y += 2) {
-        $different = 0
-        $total = 0
-        $background = $Bitmap.GetPixel($right - 2, $y)
-        $backgroundBrightness = [int](($background.R + $background.G + $background.B) / 3)
-        for ($x = $left; $x -lt ($right - 8); $x += $stepX) {
-            $color = $Bitmap.GetPixel($x, $y)
-            $brightness = [int](($color.R + $color.G + $color.B) / 3)
-            if ([math]::Abs($brightness - $backgroundBrightness) -ge 10) { $different++ }
-            $total++
-        }
-        if ($total -and ($different / $total) -ge 0.42) { $activeRows.Add($y) }
+    $association = [regex]::Replace($AssociationName.Trim(), '\s+', '')
+    $person = [regex]::Replace($PersonName.Trim(), '\s+', '')
+    if ([string]::IsNullOrWhiteSpace($association) -or
+        [string]::IsNullOrWhiteSpace($person)) {
+        throw 'UIA_TARGET_TERMS_INVALID'
     }
-    if (-not $activeRows.Count) { return @() }
+    $windowLeft = [double]$WindowRect.Left
+    $windowTop = [double]$WindowRect.Top
+    $windowRight = [double]$WindowRect.Right
+    $windowBottom = [double]$WindowRect.Bottom
+    $windowWidth = $windowRight - $windowLeft
+    $windowHeight = $windowBottom - $windowTop
+    if ($windowWidth -le 0 -or $windowHeight -le 0) { throw 'WINDOW_RECT_FAILED' }
 
-    $bands = @()
-    $start = $activeRows[0]
-    $previous = $start
-    foreach ($row in @($activeRows | Select-Object -Skip 1)) {
-        if (($row - $previous) -gt 8) {
-            $height = $previous - $start
-            if ($height -ge 32 -and $height -le ($Bitmap.Height * 0.35) -and $start -gt ($top + 8)) {
-                $bands += ,@($start, $previous)
+    $eligible = New-Object Collections.Generic.List[object]
+    foreach ($descriptor in $Descriptors) {
+        try {
+            $name = [regex]::Replace(([string]$descriptor.Name).Trim(), '\s+', '')
+            $controlType = [string]$descriptor.ControlType
+            $left = [double]$descriptor.Left
+            $top = [double]$descriptor.Top
+            $width = [double]$descriptor.Width
+            $height = [double]$descriptor.Height
+            $right = $left + $width
+            $bottom = $top + $height
+            $clickX = [double]$descriptor.ClickableX
+            $clickY = [double]$descriptor.ClickableY
+            if (
+                $descriptor.IsOffscreen -eq $true -or
+                $descriptor.SupportsInvoke -ne $true -or
+                $descriptor.HasClickablePoint -ne $true -or
+                $name.IndexOf($association, [StringComparison]::Ordinal) -lt 0 -or
+                $name.IndexOf($person, [StringComparison]::Ordinal) -lt 0 -or
+                $name -match '(百科|小程序)' -or
+                $controlType -notin @('Button','ListItem')
+            ) { continue }
+            $validSize = if ($controlType -eq 'Button') {
+                $width -ge 400 -and $height -ge 80 -and $height -le 300
+            } else {
+                $width -ge 300 -and $height -ge 25 -and $height -le 130
             }
-            $start = $row
+            if (-not $validSize) { continue }
+            # 只接纳结果主列：排除顶部分类、右侧栏以及窗口外的虚拟化节点。
+            $centerX = $left + ($width / 2)
+            $centerY = $top + ($height / 2)
+            if (
+                $left -lt $windowLeft -or $top -lt $windowTop -or
+                $right -gt $windowRight -or $bottom -gt $windowBottom -or
+                $centerX -lt ($windowLeft + $windowWidth * 0.04) -or
+                $centerX -gt ($windowLeft + $windowWidth * 0.76) -or
+                $centerY -lt ($windowTop + $windowHeight * 0.12) -or
+                $centerY -gt ($windowTop + $windowHeight * 0.95) -or
+                $clickX -lt $left -or $clickX -gt $right -or
+                $clickY -lt $top -or $clickY -gt $bottom
+            ) { continue }
+            $sha = [Security.Cryptography.SHA256]::Create()
+            try {
+                $fingerprintBytes = [Text.Encoding]::UTF8.GetBytes(
+                    "$controlType|$name")
+                $fingerprint = ([BitConverter]::ToString(
+                    $sha.ComputeHash($fingerprintBytes))).Replace('-', '').ToLowerInvariant()
+            } finally { $sha.Dispose() }
+            $eligible.Add([pscustomobject]@{
+                control_type=$controlType;left=$left;top=$top;width=$width;height=$height
+                x=$clickX;y=$clickY;coordinate_space='physical_screen'
+                fingerprint=$fingerprint
+            })
+        } catch {
+            # 单个 UIA 节点可能在枚举过程中失效；候选层跳过该节点，不能放宽筛选。
+            continue
         }
-        $previous = $row
-    }
-    $height = $previous - $start
-    if ($height -ge 32 -and $height -le ($Bitmap.Height * 0.35) -and $start -gt ($top + 8)) {
-        $bands += ,@($start, $previous)
     }
 
-    @($bands | ForEach-Object {
-        $bandTop = [int]$_[0]
-        $bandBottom = [int]$_[1]
-        [pscustomobject]@{
-            top = $bandTop
-            bottom = $bandBottom
-            # 标题文字位于卡片内容列，不在卡片左侧缩略图/留白区。结果区为
-            # 0.04..0.72，取其 38% 得到窗口 x≈0.30；随窗口宽度缩放。
-            x_ratio = [math]::Round(($left + (($right - $left) * 0.38)) / $Bitmap.Width, 5)
-            y_ratio = [math]::Round(($bandTop + [math]::Min(28, ($bandBottom - $bandTop) * 0.25)) / $Bitmap.Height, 5)
-            confidence = 0.8
-            fingerprint = Get-BitmapRegionSha256 $Bitmap (New-Object Drawing.Rectangle(
-                $left, $bandTop, ($right - $left), ($bandBottom - $bandTop + 1)))
+    $selected = New-Object Collections.Generic.List[object]
+    foreach ($candidate in @($eligible | Sort-Object `
+        @{Expression={if ($_.control_type -eq 'Button') { 0 } else { 1 }}}, `
+        @{Expression={[double]$_.top}}, @{Expression={[double]$_.left}})) {
+        $duplicate = $false
+        foreach ($accepted in $selected) {
+            $intersectionWidth = [math]::Max(0, [math]::Min(
+                $candidate.left + $candidate.width,
+                $accepted.left + $accepted.width) - [math]::Max($candidate.left,$accepted.left))
+            $intersectionHeight = [math]::Max(0, [math]::Min(
+                $candidate.top + $candidate.height,
+                $accepted.top + $accepted.height) - [math]::Max($candidate.top,$accepted.top))
+            $intersection = $intersectionWidth * $intersectionHeight
+            $smallerArea = [math]::Min(
+                $candidate.width * $candidate.height,
+                $accepted.width * $accepted.height)
+            if ($smallerArea -gt 0 -and ($intersection / $smallerArea) -ge 0.70) {
+                $duplicate = $true
+                break
+            }
         }
-    })
+        if (-not $duplicate) { $selected.Add($candidate) }
+    }
+    $selected.ToArray()
+}
+
+function New-WeixinUiaCandidateExhaustionRecord {
+    param([ValidateRange(0,10)][int]$Checked)
+    [pscustomobject]@{
+        stage = 'points'
+        reason = if ($Checked -eq 0) {
+            'uia_candidates_unavailable'
+        } else {
+            'no_new_uia_candidate'
+        }
+        text_length = 0
+    }
 }
 
 function Assert-WeixinWorkBudget {
@@ -887,227 +865,10 @@ function Assert-WeixinWorkBudget {
     return $remaining
 }
 
-function Find-WeixinSearchInputTarget {
-    param([Parameter(Mandatory)][System.Drawing.Bitmap]$Bitmap)
-    if ($Bitmap.Width -lt 800 -or $Bitmap.Height -lt 500) { return $null }
-
-    # 搜一搜主页的搜索输入框位于右侧内容面板，并紧邻绿色搜索按钮。只在该受限
-    # 区域识别绿色按钮，再验证其左侧为大面积低色度输入区域，避免盲点坐标。
-    $scanLeft = [int]($Bitmap.Width * 0.55)
-    $scanRight = [int]($Bitmap.Width * 0.995)
-    $scanTop = [int]($Bitmap.Height * 0.28)
-    $scanBottom = [int]($Bitmap.Height * 0.55)
-    $greenLeft = $Bitmap.Width
-    $greenRight = -1
-    $greenTop = $Bitmap.Height
-    $greenBottom = -1
-    $greenCount = 0
-    for ($y = $scanTop; $y -lt $scanBottom; $y += 2) {
-        for ($x = $scanLeft; $x -lt $scanRight; $x += 2) {
-            $color = $Bitmap.GetPixel($x, $y)
-            if (
-                $color.G -ge 90 -and
-                $color.G -ge ($color.R + 18) -and
-                $color.G -ge ($color.B + 12)
-            ) {
-                $greenCount++
-                $greenLeft = [math]::Min($greenLeft, $x)
-                $greenRight = [math]::Max($greenRight, $x)
-                $greenTop = [math]::Min($greenTop, $y)
-                $greenBottom = [math]::Max($greenBottom, $y)
-            }
-        }
-    }
-    if (
-        $greenCount -lt 20 -or
-        $greenLeft -lt ($Bitmap.Width * 0.84) -or
-        ($greenRight - $greenLeft) -lt ($Bitmap.Width * 0.015) -or
-        ($greenRight - $greenLeft) -gt ($Bitmap.Width * 0.14) -or
-        ($greenBottom - $greenTop) -lt ($Bitmap.Height * 0.018) -or
-        ($greenBottom - $greenTop) -gt ($Bitmap.Height * 0.10)
-    ) { return $null }
-    $greenGridWidth = [math]::Floor(($greenRight - $greenLeft) / 2) + 1
-    $greenGridHeight = [math]::Floor(($greenBottom - $greenTop) / 2) + 1
-    if (
-        $greenGridWidth -le 0 -or $greenGridHeight -le 0 -or
-        ($greenCount / ($greenGridWidth * $greenGridHeight)) -lt 0.55
-    ) { return $null }
-
-    $fieldLeft = [math]::Max([int]($Bitmap.Width * 0.58), [int]($greenLeft - ($Bitmap.Width * 0.31)))
-    $fieldRight = [int]($greenLeft - ($Bitmap.Width * 0.008))
-    $fieldTop = [math]::Max($scanTop, $greenTop)
-    $fieldBottom = [math]::Min($scanBottom, $greenBottom)
-    if (
-        ($fieldRight - $fieldLeft) -lt ($Bitmap.Width * 0.18) -or
-        ($fieldBottom - $fieldTop) -lt ($Bitmap.Height * 0.018)
-    ) { return $null }
-
-    $neutral = 0
-    $samples = 0
-    for ($y = $fieldTop; $y -le $fieldBottom; $y += 3) {
-        for ($x = $fieldLeft; $x -le $fieldRight; $x += 4) {
-            $color = $Bitmap.GetPixel($x, $y)
-            $maxChannel = [math]::Max($color.R, [math]::Max($color.G, $color.B))
-            $minChannel = [math]::Min($color.R, [math]::Min($color.G, $color.B))
-            if (($maxChannel - $minChannel) -le 35) { $neutral++ }
-            $samples++
-        }
-    }
-    if ($samples -eq 0 -or ($neutral / $samples) -lt 0.55) { return $null }
-
-    [pscustomobject]@{
-        x_ratio = [math]::Round((($fieldLeft + $fieldRight) / 2) / $Bitmap.Width, 5)
-        y_ratio = [math]::Round((($fieldTop + $fieldBottom) / 2) / $Bitmap.Height, 5)
-        locator = 'search_input_green_button_layout'
-    }
-}
-
 function Normalize-WeixinSearchInputText {
     param([AllowNull()][string]$Text)
     if ($null -eq $Text) { return '' }
     return [regex]::Replace($Text.Trim(), '[\s\u3000]+', ' ')
-}
-
-function Read-WeixinFlowProbeItems {
-    param([Parameter(Mandatory)][string]$Path)
-    try {
-        $resolved = (Resolve-Path -LiteralPath $Path -ErrorAction Stop).Path
-        $file = Get-Item -LiteralPath $resolved -ErrorAction Stop
-        if ($file.Length -le 0 -or $file.Length -gt 1048576) {
-            throw 'INVALID_FLOW_PROBE_INPUT'
-        }
-        $payload = [IO.File]::ReadAllText($resolved,[Text.Encoding]::UTF8) | ConvertFrom-Json
-    } catch {
-        throw 'INVALID_FLOW_PROBE_INPUT'
-    }
-    if (-not $payload) { throw 'INVALID_FLOW_PROBE_INPUT' }
-    if ($payload -is [array]) {
-        $items = @($payload)
-    } elseif (
-        @($payload.PSObject.Properties.Name).Count -eq 1 -and
-        @($payload.PSObject.Properties.Name) -contains 'items'
-    ) {
-        $items = @($payload.items)
-    } else {
-        throw 'INVALID_FLOW_PROBE_INPUT'
-    }
-    if ($items.Count -lt 1 -or $items.Count -gt 20) {
-        throw 'INVALID_FLOW_PROBE_INPUT'
-    }
-    foreach ($item in $items) {
-        $names = @($item.PSObject.Properties.Name)
-        if (
-            $names.Count -ne 2 -or
-            $names -notcontains 'association_name' -or
-            $names -notcontains 'person_name' -or
-            -not ($item.association_name -is [string]) -or
-            -not ($item.person_name -is [string]) -or
-            [string]::IsNullOrWhiteSpace($item.association_name) -or
-            $item.association_name.Length -gt 200 -or
-            $item.person_name.Length -gt 100
-        ) { throw 'INVALID_FLOW_PROBE_INPUT' }
-    }
-    return $items
-}
-
-function Wait-WeixinFlowListCopy {
-    param(
-        [Parameter(Mandatory)][scriptblock]$ForegroundGuard,
-        [Parameter(Mandatory)][scriptblock]$ClearClipboard,
-        [Parameter(Mandatory)][scriptblock]$SendChord,
-        [Parameter(Mandatory)][scriptblock]$ReadClipboardText,
-        [Parameter(Mandatory)][scriptblock]$Pause,
-        [ValidateRange(1,20)][int]$MaxAttempts = 12,
-        [ValidateRange(1,1000)][int]$IntervalMilliseconds = 500,
-        [ValidateRange(1,10000)][int]$MinimumLength = 80
-    )
-    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
-        if (-not (& $ForegroundGuard)) { throw 'INPUT_FOCUS_LOST' }
-        & $ClearClipboard
-        & $SendChord @('CTRL','A')
-        & $SendChord @('CTRL','C')
-        $text = [string](& $ReadClipboardText)
-        if (-not [string]::IsNullOrWhiteSpace($text) -and $text.Length -ge $MinimumLength) {
-            return [pscustomobject]@{ copied=$true; attempts=$attempt; text=$text }
-        }
-        if ($attempt -lt $MaxAttempts) { & $Pause $IntervalMilliseconds }
-    }
-    throw 'FLOW_LIST_COPY_FAILED'
-}
-
-function Test-WeixinSearchInputTargetMatch {
-    param([AllowNull()][object]$Expected, [AllowNull()][object]$Actual)
-    if (-not $Expected -or -not $Actual) { return $false }
-    return [string]$Expected.locator -eq 'search_input_green_button_layout' -and
-        [string]$Actual.locator -eq [string]$Expected.locator -and
-        [math]::Abs([double]$Actual.x_ratio - [double]$Expected.x_ratio) -le 0.015 -and
-        [math]::Abs([double]$Actual.y_ratio - [double]$Expected.y_ratio) -le 0.015
-}
-
-function Invoke-VerifiedWeixinSearchSubmission {
-    param(
-        [Parameter(Mandatory)][string]$Query,
-        [AllowNull()][object]$Target,
-        [Parameter(Mandatory)][scriptblock]$ForegroundGuard,
-        [Parameter(Mandatory)][scriptblock]$ClickTarget,
-        [Parameter(Mandatory)][scriptblock]$FocusedTargetGuard,
-        [Parameter(Mandatory)][scriptblock]$SetClipboardText,
-        [Parameter(Mandatory)][scriptblock]$SendChord,
-        [Parameter(Mandatory)][scriptblock]$ReadClipboardText,
-        [bool]$Submit = $true,
-        [hashtable]$Diagnostics = @{}
-    )
-    try {
-        $Diagnostics.locator_found = $null -ne $Target
-        $Diagnostics.post_click_structure = $false
-        $Diagnostics.readback_matched = $false
-        $Diagnostics.final_structure = $false
-        if (-not $Target) { throw 'SEARCH_INPUT_LOCATOR_FAILED' }
-        if (-not (& $ForegroundGuard)) { throw 'INPUT_FOCUS_LOST' }
-        & $ClickTarget $Target
-        if (-not (& $ForegroundGuard)) { throw 'INPUT_FOCUS_LOST' }
-        $Diagnostics.post_click_structure = [bool](& $FocusedTargetGuard $Target)
-        if (-not $Diagnostics.post_click_structure) {
-            throw 'SEARCH_INPUT_CLICK_STRUCTURE_INVALID'
-        }
-        & $SetClipboardText $Query
-        & $SendChord @('CTRL','A')
-        & $SendChord @('CTRL','V')
-        if (-not (& $ForegroundGuard)) { throw 'INPUT_FOCUS_LOST' }
-        if (-not [bool](& $FocusedTargetGuard $Target)) {
-            throw 'SEARCH_INPUT_CLICK_STRUCTURE_INVALID'
-        }
-        & $SendChord @('CTRL','A')
-        & $SendChord @('CTRL','C')
-        $actual = [string](& $ReadClipboardText)
-        $Diagnostics.readback_matched = [string]::Equals(
-            (Normalize-WeixinSearchInputText $actual),
-            (Normalize-WeixinSearchInputText $Query),
-            [StringComparison]::Ordinal
-        )
-        if (-not $Diagnostics.readback_matched) {
-            throw 'SEARCH_INPUT_READBACK_MISMATCH'
-        }
-        if (-not (& $ForegroundGuard)) { throw 'INPUT_FOCUS_LOST' }
-        $Diagnostics.final_structure = [bool](& $FocusedTargetGuard $Target)
-        if (-not $Diagnostics.final_structure) {
-            throw 'SEARCH_INPUT_FINAL_STRUCTURE_INVALID'
-        }
-        if ($Submit) { & $SendChord @('ENTER') }
-        return [pscustomobject]@{
-            input_verified=$true; submitted=[bool]$Submit
-            locator=[string]$Target.locator
-        }
-    } catch {
-        if ($_.Exception.Message -in @(
-            'SEARCH_INPUT_LOCATOR_FAILED',
-            'SEARCH_INPUT_CLICK_STRUCTURE_INVALID',
-            'SEARCH_INPUT_READBACK_MISMATCH',
-            'SEARCH_INPUT_FINAL_STRUCTURE_INVALID',
-            'INPUT_FOCUS_LOST'
-        )) { throw }
-        throw 'SEARCH_INPUT_FOCUS_FAILED'
-    }
 }
 
 function Invoke-VerifiedWeixinFocusedSearchSubmission {
@@ -1146,7 +907,7 @@ function Invoke-VerifiedWeixinFocusedSearchSubmission {
         }
         return [pscustomobject]@{
             input_verified=$true; submitted=[bool]$Submit
-            locator='trusted_keyboard_navigation'
+            input_method='trusted_keyboard_navigation'
         }
     } catch {
         if ($_.Exception.Message -in @(
@@ -1161,116 +922,9 @@ function Test-ListHasActionableCandidates {
     if ([string]::IsNullOrWhiteSpace($Text) -or [string]::IsNullOrWhiteSpace($PersonName)) {
         return $false
     }
-    # CF_HTML 在部分微信版本/页面主题下不提供 href；视觉卡片定位不依赖
+    # CF_HTML 在部分微信版本/页面主题下不提供 href；UIA 语义候选不依赖
     # 链接，因此不能仅因 Links 为空就跳过真实候选。
     return $Text.IndexOf($PersonName, [StringComparison]::Ordinal) -ge 0
-}
-
-function Resolve-LocatorFilePath {
-    param([string]$Path, [string]$ClientRoot, [string]$CurrentDirectory = (Get-Location).Path)
-    if ([string]::IsNullOrWhiteSpace($Path)) { throw 'LOCATOR_READ_FAILED' }
-    if ($Path.Trim().StartsWith('\\', [StringComparison]::Ordinal)) {
-        # 禁止 UNC/设备路径，避免 locator 解析触发网络访问或绕过本地根目录判断。
-        throw 'LOCATOR_READ_FAILED'
-    }
-    $candidates = if ([IO.Path]::IsPathRooted($Path)) {
-        @([pscustomobject]@{ path=$Path; root=$null })
-    } else {
-        @(
-            [pscustomobject]@{ path=(Join-Path $CurrentDirectory $Path); root=$CurrentDirectory },
-            [pscustomobject]@{ path=(Join-Path $ClientRoot $Path); root=$ClientRoot }
-        )
-    }
-    foreach ($candidate in $candidates) {
-        $fullPath = [IO.Path]::GetFullPath([string]$candidate.path)
-        if ($candidate.root) {
-            $rootPath = [IO.Path]::GetFullPath([string]$candidate.root).TrimEnd('\') + '\'
-            if (-not $fullPath.StartsWith($rootPath, [StringComparison]::OrdinalIgnoreCase)) {
-                continue
-            }
-        }
-        if ([IO.Path]::GetExtension($fullPath) -ne '.json' -or
-            -not (Test-Path -LiteralPath $fullPath -PathType Leaf)) {
-            continue
-        }
-        $resolved = (Resolve-Path -LiteralPath $fullPath -ErrorAction Stop).Path
-        if ($candidate.root -and
-            -not $resolved.StartsWith($rootPath, [StringComparison]::OrdinalIgnoreCase)) {
-            continue
-        }
-        return $resolved
-    }
-    throw 'LOCATOR_READ_FAILED'
-}
-
-function Get-ValidatedLocatorPoints {
-    param([object]$Locator)
-    if (-not $Locator -or @($Locator.PSObject.Properties.Name).Count -ne 1 -or
-        @($Locator.PSObject.Properties.Name) -notcontains 'items') {
-        throw 'LOCATOR_POINTS_INVALID'
-    }
-    $items = @($Locator.items)
-    if ($items.Count -lt 1 -or $items.Count -gt 10) { throw 'LOCATOR_POINTS_INVALID' }
-    foreach ($item in $items) {
-        if (-not $item) { throw 'LOCATOR_POINTS_INVALID' }
-        $propertyNames = @($item.PSObject.Properties.Name)
-        $allowedProperties = @('title','source','date','x_ratio','y_ratio','scroll_after')
-        if ($propertyNames -notcontains 'title' -or
-            $propertyNames -notcontains 'x_ratio' -or
-            $propertyNames -notcontains 'y_ratio' -or
-            @($propertyNames | Where-Object { $allowedProperties -notcontains $_ }).Count) {
-            throw 'LOCATOR_POINTS_INVALID'
-        }
-        if (-not ($item.title -is [string]) -or
-            [string]::IsNullOrWhiteSpace([string]$item.title) -or
-            ([string]$item.title).Length -gt 512) {
-            throw 'LOCATOR_POINTS_INVALID'
-        }
-        foreach ($optionalText in @('source','date')) {
-            if ($propertyNames -contains $optionalText -and
-                (-not ($item.$optionalText -is [string]) -or
-                 ([string]$item.$optionalText).Length -gt 256)) {
-                throw 'LOCATOR_POINTS_INVALID'
-            }
-        }
-        if ($propertyNames -contains 'scroll_after' -and
-            -not ($item.scroll_after -is [bool])) {
-            throw 'LOCATOR_POINTS_INVALID'
-        }
-        $xNumeric = $item.x_ratio -is [byte] -or $item.x_ratio -is [sbyte] -or
-            $item.x_ratio -is [int16] -or $item.x_ratio -is [uint16] -or
-            $item.x_ratio -is [int32] -or $item.x_ratio -is [uint32] -or
-            $item.x_ratio -is [int64] -or $item.x_ratio -is [uint64] -or
-            $item.x_ratio -is [single] -or $item.x_ratio -is [double] -or
-            $item.x_ratio -is [decimal]
-        $yNumeric = $item.y_ratio -is [byte] -or $item.y_ratio -is [sbyte] -or
-            $item.y_ratio -is [int16] -or $item.y_ratio -is [uint16] -or
-            $item.y_ratio -is [int32] -or $item.y_ratio -is [uint32] -or
-            $item.y_ratio -is [int64] -or $item.y_ratio -is [uint64] -or
-            $item.y_ratio -is [single] -or $item.y_ratio -is [double] -or
-            $item.y_ratio -is [decimal]
-        if (-not $xNumeric -or -not $yNumeric) {
-            throw 'LOCATOR_POINTS_INVALID'
-        }
-        $x = [double]$item.x_ratio
-        $y = [double]$item.y_ratio
-        if ([double]::IsNaN($x) -or [double]::IsInfinity($x) -or
-            [double]::IsNaN($y) -or [double]::IsInfinity($y) -or
-            $x -lt 0.28 -or $x -gt 0.68 -or $y -lt 0.10 -or $y -gt 0.94) {
-            throw 'LOCATOR_POINTS_INVALID'
-        }
-    }
-    $items
-}
-
-function Read-LocatorJson {
-    param([Parameter(Mandatory)][string]$Path)
-    try {
-        $file = Get-Item -LiteralPath $Path -ErrorAction Stop
-        if ($file.Length -le 0 -or $file.Length -gt 65536) { throw 'LOCATOR_READ_FAILED' }
-        [IO.File]::ReadAllText($file.FullName, [Text.Encoding]::UTF8) | ConvertFrom-Json
-    }
-    catch { throw 'LOCATOR_READ_FAILED' }
 }
 
 function Test-WindowRectDimensions {

@@ -118,13 +118,11 @@ CLI 每批次创建一个 `ProjectAssociationProviders`；UI 每次运行也由 
    使用最小长度或“真实性”门禁。
 5. 搜索列表判断已经删除截图视觉模型链路：不存在 `stage=visual_verify`、列表截图 OCR 或图片 payload。
    列表 Judge payload 只有 `association_name`、`person_name`、`text`；保留的截图只用于本地页面哈希、
-   卡片像素定位和详情 OCR。
-6. 已放弃并完整撤回“按像素/UIA 定位文章标签”的 Phase 1E7；当前代码没有分类固定坐标、UIA 或
-   下划线像素定位。
-7. 最新 Phase 1E8：首次结果列表 ready 后，在严格插件前台 guard 下，每个正式 query 仅发送一次
-   `Ctrl+Tab`，固定等待 2 秒并再次 guard，然后清空切换前的 text/html，重新复制“文章”分类列表。
-   后续 artifact、文本 Judge、viewport、card bands、locator 和 hash 都只使用切换后状态。
-   `flow_probe` 未接入此快捷键。
+   页面变化验证和详情 OCR，不参与元素定位。
+6. 已完整撤回按像素或 UIA 点击“文章”分类的实验；当前正式流程保留“全部”结果列表，不发送
+   `Ctrl+Tab`，也没有分类固定坐标或下划线像素定位。
+7. 正式详情入口只使用可信搜索 HWND 内的 UIA 双语义候选和物理 `ClickablePoint`；旧卡片 band、
+   比例 locator、固定相对点和 `flow_probe` 命令均已删除。
 
 ### 已确认的真机结果
 
@@ -153,8 +151,8 @@ CLI 每批次创建一个 `ProjectAssociationProviders`；UI 每次运行也由 
 
 ### 正式与测试脚本说明
 
-- `clients/wechat-souyisou-rpa/scripts/wechat-souyisou.ps1`：正式 PowerShell 入口，命令包括
-  `probe/open/search/collect/flow_probe`；当前主要开发目标是正式 `collect`。
+- `clients/wechat-souyisou-rpa/scripts/wechat-souyisou.ps1`：正式 PowerShell 入口，仅支持
+  `probe/open/search/collect`；当前主要开发目标是正式 `collect`。
 - `clients/wechat-souyisou-rpa/scripts/wechat-souyisou-lib.ps1`：窗口身份、会话状态机、键盘、剪贴板、
   页面证据和预算公共函数。
 - `clients/wechat-souyisou-rpa/scripts/llm_judge.py`：列表/详情的文本 Judge 适配器；结果列表不得传图片。
@@ -167,14 +165,12 @@ CLI 每批次创建一个 `ProjectAssociationProviders`；UI 每次运行也由 
   “中国饭店协会/陈新华”，输出每条 ok/mobile_found 以及安全的 handoff 审计。它是验收工具，未纳入
   正式产品入口。
 - `clients/wechat-souyisou-rpa/tests/test-window-session.ps1`：可执行窗口会话/预算/恢复行为测试。
-- `clients/wechat-souyisou-rpa/tests/test-static.ps1`：PowerShell 静态契约回归；输出的 `tests=279` 是历史
-  硬编码计数，不能据此推断实际断言数量。
+- `clients/wechat-souyisou-rpa/tests/test-static.ps1`：PowerShell 静态契约回归；测试数按脚本中的
+  顶层 `Assert` 动态统计。
 - `clients/wechat-souyisou-rpa/tests/test_llm_judge.py`：文本 Judge 协议和 payload 测试。
 - `clients/wechat-souyisou-rpa/tests/test_ocr_adapter.py`：详情 OCR adapter 测试；列表视觉 OCR 已删除。
 - `tests/unit/services/test_association_batch_enrichment.py`：provider/handoff/超时/批次行为测试。
 - `tests/unit/services/test_association_enrichment_cli.py`：CLI 相邻回归。
-- `demo-output/wechat-flow-probe-only-09.json`、`...-10.json`：旧 `flow_probe` 9->10 成功输入/记录，不能
-  替代正式 `collect` 验收。
 
 ### 换机后建议先运行的自动测试
 
@@ -184,8 +180,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File clients/wechat-souyisou-rpa/
 python -m pytest clients/wechat-souyisou-rpa/tests/test_llm_judge.py clients/wechat-souyisou-rpa/tests/test_ocr_adapter.py tests/unit/services/test_association_batch_enrichment.py tests/unit/services/test_association_enrichment_cli.py -p no:cacheprovider -q
 ```
 
-当前电脑最后一次主控结果为：窗口行为测试通过、静态测试输出 `279/279`、Python `67 passed + 8
-subtests`（另有 3 条既有 Pydantic 弃用警告）。
+历史主控结果曾为窗口行为测试通过、静态测试硬编码输出 `279/279`、Python `67 passed + 8 subtests`；
+旧静态计数与旧比例点击探针均不再作为当前验收依据。
 
 ### Git/工作区注意事项
 
@@ -193,3 +189,42 @@ subtests`（另有 3 条既有 Pydantic 弃用警告）。
   `git checkout --` 或整仓覆盖来“清理”，否则会丢失用户和前序会话改动。
 - 换电脑前必须通过用户认可的方式把整个工作区改动带过去；仅拉远端仓库无法获得当前进度。
 - 不要把 `demo-output`、DPAPI artifact 或临时 runner 当正式产品代码提交；提交范围需另行审查。
+
+## 2026-08-05 Ctrl+Tab 真机结论
+
+新电脑微信版本中，用户手工测试和两次正式单条 `collect` 均确认 `Ctrl+Tab` 不再切换到“文章”分类。
+两次查询都成功获得完整搜索结果文本，但深色卡片像素定位返回零候选并以 `CARD_LOCATE_FAILED / points`
+安全结束，`session_closed=true`。正式流程已移除 Phase 1E8 的 `Ctrl+Tab`、2 秒等待和切换后二次复制，
+直接使用首次稳定的搜索结果文本及页面进入 Judge。后续深色主题重跑仍确认像素 band 返回零候选，
+因此该定位器不能继续作为当前微信版本的生产详情入口。
+
+## 2026-08-05 UIA 详情定位结论与实现
+
+用户在双屏、微信所在显示器 150% 缩放下手工打开“中国黄金协会 / 周洲 联系人”的“全部”结果页。
+只读 UIA 探测确认可信 `WeChatAppEx.exe / Chrome_WidgetWin_0` 内存在真实结果 `Button/ListItem`；线程
+设为 Per-Monitor DPI Aware V2 后，筛选同时包含协会名和人员名的节点，得到最上方 Button 的
+`BoundingRectangle=(2347,756,988,190)`、`ClickablePoint=(2841,851)`。点击前完整复验同一可信前台，
+按物理坐标单击一次，成功打开视觉上的第二条链接详情；第一条百科因不具备双语义而被排除。文章标签
+的 UIA Invoke 虽返回成功但页面未切换，因此文章分类暂不进入正式实现。
+
+正式 `collect` 已以同 HWND 内 UIA 候选替代暗色卡片像素 band：只接纳可见、支持 Invoke 且具有
+ClickablePoint 的 Button/ListItem，以协会名和人员名在内存筛选，排除百科、小程序、顶部分类和右侧栏，
+按 Button 优先、从上到下排序并对嵌套标题去重。UIA 和 Per-Monitor V2 `SetCursorPos` 都使用物理屏幕
+坐标，150% 缩放不做除法或窗口原点换算，负屏幕坐标保持有效。详情点击后的 HWND 接纳、5 秒等待、复制/Judge/OCR/返回和 cleanup 契约
+均保持不变。下一步必须先独立自动测试，再由用户观察单条“周洲”真机，不在开发阶段自动运行微信。
+
+单条真机随后确认：UIA 打开了正确详情，固定停留 5 秒，完成复制/Judge，并正确关闭详情返回列表；
+该详情没有手机号。返回列表后 UIA 不再产生新候选属于枚举自然结束。正式实现现经一次有界恢复后记录不含正文的
+`uia_candidates_unavailable/no_new_uia_candidate`，保留 `checked` 计数并交给既有
+`Get-WeixinCollectStatus`，随后正常 cleanup；任何窗口安全失败仍保持致命。
+
+## 2026-08-05 旧像素定位完整删除
+
+正式 UIA 真机链路确认后，旧像素元素定位不再保留：已删除暗色卡片 band、视觉搜索框定位、显式比例
+locator、比例坐标详情分支，以及通过固定相对点点击结果的 `flow_probe` 命令和对应 fixture/合成位图
+测试。仅服务旧定位器的错误语义同时删除。
+
+保留的图像用途不参与 UI 元素识别：结果/详情截图哈希只验证点击前后页面变化，详情中央截图只供 OCR，
+滚轮坐标只用于把滚动焦点保持在已验证窗口内容区。正式输入继续使用可信键盘导航与精确回读，正式详情
+只使用已验证 HWND 内的 UIA 双语义候选和物理 `ClickablePoint`；窗口状态机、DPI、Judge、OCR 与 cleanup
+门禁均未放宽。历史章节中的 `flow_probe` 仅记录当时发现窗口层级的过程，不表示该命令仍可调用。

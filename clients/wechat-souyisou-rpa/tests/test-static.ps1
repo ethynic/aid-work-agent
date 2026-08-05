@@ -13,133 +13,9 @@ foreach ($file in @($entry,$lib)) {
 $entryText = Get-Content -LiteralPath $entry -Encoding UTF8 -Raw
 Assert ($entryText -notmatch '(?im)\$pid\s*=') 'must not overwrite PowerShell read-only $PID'
 Assert ($entryText -notmatch '(?im)^\s*\$keys\s*=\s*@\{') 'virtual key map must not shadow Invoke-SafeKeyChord Keys parameter'
-Assert ($entryText -match '\$points\s*=\s*@\(if\s*\(\$explicitItems\)') 'single explicit locator point remains an array on PowerShell 5.1'
 Assert ((Get-Content -LiteralPath $lib -Encoding UTF8 -Raw) -match `
     '\$Checked\s+-ge\s+\$Limit\s+-and\s+\$Failures\s+-eq\s+0') `
     'not_found requires every limited detail to succeed'
-Assert (
-    $entryText.IndexOf('$flowFailureFocus = Get-WeixinFlowFocusFailureDiagnostic') -lt
-    $entryText.IndexOf('Close-WeixinPluginSession', $entryText.IndexOf('$flowFailureFocus = Get-WeixinFlowFocusFailureDiagnostic'))
-) 'flow failure identity is captured before cleanup can change foreground state'
-Assert (
-    $entryText -match 'foreground_hwnd=\[int64\]\$flowFailureFocus\.foreground_hwnd' -and
-    $entryText -match 'process_basename=\[string\]\$flowFailureFocus\.process_basename' -and
-    $entryText -match 'class_name=\[string\]\$flowFailureFocus\.class_name'
-) 'flow failure output exposes only the approved safe window identity fields'
-Assert ((ConvertTo-MouseWheelData -480) -eq 4294966816) 'negative wheel delta uses Win32 uint32 two-complement encoding'
-Assert ((New-SearchQuery '中国游艺设备游乐园协会' '王承展') -eq '中国游艺设备游乐园协会 王承展 联系人') 'query'
-$flowProbeInput = Join-Path $root '..\..\demo-output\wechat-flow-probe-20-input.json'
-$flowProbeItems = @(Read-WeixinFlowProbeItems $flowProbeInput)
-Assert ($flowProbeItems.Count -eq 20) 'flow probe fixture contains exactly twenty rounds'
-Assert (
-    @($flowProbeItems | Where-Object {
-        @($_.PSObject.Properties.Name) -contains 'mobile' -or
-        @($_.PSObject.Properties.Name).Count -ne 2
-    }).Count -eq 0
-) 'flow probe fixture contains names only and no mobile field'
-$flowCopyReads = [Collections.Queue]::new()
-$flowCopyReads.Enqueue('')
-$flowCopyReads.Enqueue('加载中')
-$flowCopyReads.Enqueue(('结果列表' + ('x' * 90)))
-$flowCopyEvents = @()
-$flowCopyResult = Wait-WeixinFlowListCopy {$true} {
-    $script:flowCopyEvents += 'clear'
-} {
-    param($keys) $script:flowCopyEvents += ($keys -join '+')
-} { $script:flowCopyReads.Dequeue() } {} 12 500 80
-Assert (
-    $flowCopyResult.copied -and $flowCopyResult.attempts -eq 3 -and
-    @($flowCopyEvents | Where-Object { $_ -eq 'CTRL+C' }).Count -eq 3
-) 'flow list copy polls until a reasonable in-memory page is available'
-$flowCopyTimedOut = $false
-try {
-    [void](Wait-WeixinFlowListCopy {$true} {} {} {''} {} 2 500 80)
-} catch { $flowCopyTimedOut = $_.Exception.Message -eq 'FLOW_LIST_COPY_FAILED' }
-Assert $flowCopyTimedOut 'flow list copy stops with stable error after its bounded budget'
-$flowCopyLost = $false
-try {
-    [void](Wait-WeixinFlowListCopy {$false} {throw 'must not clear'} {} {''} {} 2 500 80)
-} catch { $flowCopyLost = $_.Exception.Message -eq 'INPUT_FOCUS_LOST' }
-Assert $flowCopyLost 'flow list copy checks trusted plugin before clipboard or key actions'
-$flowMainFocusDiagnostic = Get-WeixinFlowFocusFailureDiagnostic ([pscustomobject]@{
-    Hwnd=111; ProcessPath='C:\Program Files\Tencent\Weixin\Weixin.exe'
-    ClassName='Qt51514QWindowIcon'; Title=$script:WeixinTitle
-}) 222 111 'INPUT_FOCUS_LOST'
-Assert (
-    $flowMainFocusDiagnostic.error_code -eq
-        'WECHAT_APP_FOCUS_PRESENT_BUT_PLUGIN_NOT_FOREGROUND' -and
-    $flowMainFocusDiagnostic.foreground_hwnd -eq 111 -and
-    $flowMainFocusDiagnostic.process_basename -eq 'Weixin.exe' -and
-    $flowMainFocusDiagnostic.class_name -eq 'Qt51514QWindowIcon'
-) 'flow focus diagnostic distinguishes trusted Weixin main window from leaving the app'
-$flowExternalFocusDiagnostic = Get-WeixinFlowFocusFailureDiagnostic ([pscustomobject]@{
-    Hwnd=333; ProcessPath='C:\Windows\notepad.exe'
-    ClassName='Notepad'; Title='notes'
-}) 222 111 'INPUT_FOCUS_LOST'
-Assert (
-    $flowExternalFocusDiagnostic.error_code -eq 'INPUT_FOCUS_LOST' -and
-    $flowExternalFocusDiagnostic.process_basename -eq 'notepad.exe'
-) 'flow focus diagnostic preserves genuine focus loss without exposing full paths'
-$flowReusedMainHwndDiagnostic = Get-WeixinFlowFocusFailureDiagnostic ([pscustomobject]@{
-    Hwnd=111; ProcessPath='C:\Windows\notepad.exe'
-    ClassName='Notepad'; Title='notes'
-}) 222 111 'INPUT_FOCUS_LOST'
-Assert (
-    $flowReusedMainHwndDiagnostic.error_code -eq 'INPUT_FOCUS_LOST'
-) 'flow focus diagnostic revalidates main identity instead of trusting a reused hwnd'
-$flowCurrentPlugin = Resolve-WeixinFlowForegroundPlugin ([pscustomobject]@{
-    Hwnd=222; ProcessPath=(Join-Path $script:WeixinPluginRoot '1\WeChatAppEx.exe')
-    ClassName='Chrome_WidgetWin_0'; Title=$script:WeixinTitle
-}) 111
-Assert ($flowCurrentPlugin.Hwnd -eq 222) 'flow accepts whichever fully trusted plugin is currently foreground'
-$flowMainPluginRejected = $false
-try {
-    [void](Resolve-WeixinFlowForegroundPlugin ([pscustomobject]@{
-        Hwnd=111; ProcessPath='C:\Program Files\Tencent\Weixin\Weixin.exe'
-        ClassName='Qt51514QWindowIcon'; Title=$script:WeixinTitle
-    }) 111)
-} catch { $flowMainPluginRejected = $_.Exception.Message -eq 'FLOW_PLUGIN_NOT_FOREGROUND' }
-Assert $flowMainPluginRejected 'flow distinguishes trusted Weixin main focus from plugin focus'
-$flowExternalPluginRejected = $false
-try {
-    [void](Resolve-WeixinFlowForegroundPlugin ([pscustomobject]@{
-        Hwnd=333; ProcessPath='C:\untrusted\WeChatAppEx.exe'
-        ClassName='Chrome_WidgetWin_0'; Title=$script:WeixinTitle
-    }) 111)
-} catch { $flowExternalPluginRejected = $_.Exception.Message -eq 'INPUT_FOCUS_LOST' }
-Assert $flowExternalPluginRejected 'flow rejects external or spoofed foreground windows'
-$flowPostCloseMain = [pscustomobject]@{
-    Hwnd=111; ProcessPath='C:\Program Files\Tencent\Weixin\Weixin.exe'
-    ClassName='Qt51514QWindowIcon'; Title=$script:WeixinTitle
-}
-$flowPostClosePlugin = [pscustomobject]@{
-    Hwnd=222; ProcessPath=(Join-Path $script:WeixinPluginRoot '1\WeChatAppEx.exe')
-    ClassName='Chrome_WidgetWin_0'; Title=$script:WeixinTitle
-}
-Assert ((Get-WeixinFlowBaseKind $flowPostCloseMain 111) -eq 'main') 'two closes accept a fully trusted main base'
-Assert ((Get-WeixinFlowBaseKind $flowPostClosePlugin 111) -eq 'plugin') 'two closes accept a fully trusted search plugin base'
-$flowBaseExternalRejected = $false
-try { [void](Get-WeixinFlowBaseKind $null 111) }
-catch { $flowBaseExternalRejected = $_.Exception.Message -eq 'INPUT_FOCUS_LOST' }
-Assert $flowBaseExternalRejected 'two closes reject an external base'
-Assert ((Get-WeixinFlowOpenDecision $flowPostCloseMain 111 1) -eq 'retry') 'flow open retries once when the first attempt remains on trusted main'
-Assert ((Get-WeixinFlowOpenDecision $flowPostClosePlugin 111 1) -eq 'plugin') 'flow open continues immediately when a trusted plugin becomes foreground'
-$flowSecondMainRejected = $false
-try { [void](Get-WeixinFlowOpenDecision $flowPostCloseMain 111 2) }
-catch { $flowSecondMainRejected = $_.Exception.Message -eq 'FLOW_PLUGIN_NOT_FOREGROUND' }
-Assert $flowSecondMainRejected 'flow open reports plugin-not-foreground after two trusted-main attempts'
-$flowOpenExternalRejected = $false
-try { [void](Get-WeixinFlowOpenDecision $null 111 1) }
-catch { $flowOpenExternalRejected = $_.Exception.Message -eq 'INPUT_FOCUS_LOST' }
-Assert $flowOpenExternalRejected 'flow open stops immediately when foreground leaves Weixin'
-$twoRoundPluginBases = @(1,2 | ForEach-Object {
-    (Get-WeixinFlowBaseKind $flowPostClosePlugin 111) + ':' +
-        (Get-WeixinFlowOpenDecision $flowPostClosePlugin 111 1)
-})
-Assert (($twoRoundPluginBases -join ',') -eq 'plugin:plugin,plugin:plugin') 'two consecutive rounds reuse the trusted search-home plugin base'
-Assert (
-    $entryText -match '(?s)try\s*\{\s*\$flowForegroundHwnd.*?Get-WeixinFlowFocusFailureDiagnostic.*?catch\s*\{.*?error_code=\$flowOriginalCode'
-) 'flow diagnostic sampling failure falls back to the original stable error code'
 Assert ((Get-MobileCandidates '王承展 18511597486').Count -eq 1) 'mobile extraction'
 $validJudgeResult = [pscustomobject]@{
     matched=$true;person_name='王承展';mobile='18511597486'
@@ -212,41 +88,6 @@ $exitResult = Invoke-EvidenceJudge '王承展 18511597486' '协会' '王承展' 
 Assert ($exitResult.inconclusive -eq $true) 'external judge nonzero exit is inconclusive'
 Assert ((Get-CfHtmlLinks '<a href="https://example.test/a">x</a>').Count -eq 1) 'html link'
 [void](Add-Type -AssemblyName System.Drawing)
-$bitmap = New-Object Drawing.Bitmap 1000, 700
-$graphics = [Drawing.Graphics]::FromImage($bitmap)
-try {
-    $graphics.Clear([Drawing.Color]::FromArgb(28,28,28))
-    $cardBrush = New-Object Drawing.SolidBrush ([Drawing.Color]::FromArgb(58,58,58))
-    try {
-        $graphics.FillRectangle($cardBrush,45,90,620,120)
-        $graphics.FillRectangle($cardBrush,45,245,620,145)
-    } finally { $cardBrush.Dispose() }
-} finally { $graphics.Dispose() }
-try {
-    $bands = @(Find-DarkThemeCardBands $bitmap)
-    Assert ($bands.Count -eq 2) 'dark card bands'
-    Assert ($bands[0].y_ratio -lt $bands[1].y_ratio) 'card visual order'
-    Assert ($bands[0].x_ratio -ge 0.28 -and $bands[0].x_ratio -le 0.32) 'title click x is safe'
-    Assert ((Get-BitmapSha256 $bitmap).Length -eq 64) 'bitmap hash'
-} finally { $bitmap.Dispose() }
-$light = New-Object Drawing.Bitmap 1000,700
-$lightGraphics = [Drawing.Graphics]::FromImage($light)
-try { $lightGraphics.Clear([Drawing.Color]::White) } finally { $lightGraphics.Dispose() }
-try { Assert (@(Find-DarkThemeCardBands $light).Count -eq 0) 'light theme fail closed' }
-finally { $light.Dispose() }
-$lightCards = New-Object Drawing.Bitmap 1000,700
-$lightCardGraphics = [Drawing.Graphics]::FromImage($lightCards)
-try {
-    $lightCardGraphics.Clear([Drawing.Color]::White)
-    $lightCardBrush = New-Object Drawing.SolidBrush ([Drawing.Color]::FromArgb(225,225,225))
-    try {
-        $lightCardGraphics.FillRectangle($lightCardBrush,45,130,620,90)
-        $lightCardGraphics.FillRectangle($lightCardBrush,45,270,620,110)
-    } finally { $lightCardBrush.Dispose() }
-} finally { $lightCardGraphics.Dispose() }
-try { Assert (@(Find-DarkThemeCardBands $lightCards).Count -eq 2) 'light theme cards are located inside content region' }
-finally { $lightCards.Dispose() }
-
 $openCalls=0
 $opened = Invoke-LimitedTrustedOpen {
     $script:openCalls++
@@ -303,148 +144,11 @@ $sharedContactJudge = Invoke-EvidenceJudge `
     '联系人刘甲、陈戟；联系电话：13912345678' '协会' '陈戟' $null
 Assert (-not $sharedContactJudge.matched) 'built-in list judge rejects ambiguous multi-person contact binding'
 
-function New-SyntheticDarkViewport([int]$width, [int]$height, [int[]]$cards, [switch]$Interference) {
-    $result = New-Object Drawing.Bitmap $width,$height
-    $drawing = [Drawing.Graphics]::FromImage($result)
-    try {
-        $drawing.Clear([Drawing.Color]::FromArgb(28,28,28))
-        $cardBrush = New-Object Drawing.SolidBrush ([Drawing.Color]::FromArgb(58,58,58))
-        try {
-            for ($index=0; $index -lt $cards.Count; $index+=2) {
-                $drawing.FillRectangle($cardBrush,[int]($width*.05),$cards[$index],[int]($width*.62),$cards[$index+1])
-            }
-            if ($Interference) {
-                # 搜索页 header 从扫描区顶边开始；sidebar 贯穿视口，两者都不能成为卡片。
-                $drawing.FillRectangle($cardBrush,[int]($width*.05),[int]($height*.10),[int]($width*.62),[int]($height*.07))
-                $drawing.FillRectangle($cardBrush,[int]($width*.05),[int]($height*.10),[int]($width*.12),[int]($height*.84))
-            }
-        } finally { $cardBrush.Dispose() }
-    } finally { $drawing.Dispose() }
-    $result
-}
-
-foreach ($case in @(
-    @{w=600;h=400;cards=@(80,55)},
-    @{w=1000;h=700;cards=@(125,72,245,138)},
-    @{w=1500;h=1050;cards=@(190,95,345,180,585,245)}
-)) {
-    $synthetic = New-SyntheticDarkViewport $case.w $case.h $case.cards
-    try {
-        $syntheticBands = @(Find-DarkThemeCardBands $synthetic)
-        Assert ($syntheticBands.Count -eq ($case.cards.Count / 2)) "scaled card count $($case.w)x$($case.h)"
-        foreach ($band in $syntheticBands) {
-            Assert ($band.x_ratio -ge 0.29 -and $band.x_ratio -le 0.31) 'scaled click x stays in title safe area'
-            Assert ($band.y_ratio -gt ($band.top / $case.h) -and $band.y_ratio -lt ($band.bottom / $case.h)) 'click y inside card'
-            Assert ($band.fingerprint.Length -eq 64) 'card fingerprint'
-        }
-    } finally { $synthetic.Dispose() }
-}
-$emptyDark = New-SyntheticDarkViewport 800 500 @()
-try { Assert (@(Find-DarkThemeCardBands $emptyDark).Count -eq 0) 'empty dark viewport' }
-finally { $emptyDark.Dispose() }
-$interference = New-SyntheticDarkViewport 1000 700 @(180,80,310,105) -Interference
-try {
-    $interferenceBands = @(Find-DarkThemeCardBands $interference)
-    Assert ($interferenceBands.Count -eq 2) 'header and sidebar excluded'
-    Assert ($interferenceBands[0].top -ge 180) 'header is not clickable'
-} finally { $interference.Dispose() }
-$scrollViewportA = New-SyntheticDarkViewport 1000 700 @(180,90)
-$scrollViewportB = New-SyntheticDarkViewport 1000 700 @(320,90)
-try {
-    $fingerprintA = @(Find-DarkThemeCardBands $scrollViewportA)[0].fingerprint
-    $fingerprintB = @(Find-DarkThemeCardBands $scrollViewportB)[0].fingerprint
-    Assert ($fingerprintA -eq $fingerprintB) 'same card deduplicates after scrolling'
-} finally {
-    $scrollViewportA.Dispose()
-    $scrollViewportB.Dispose()
-}
-$weakContrast = New-Object Drawing.Bitmap 800,500
-$weakGraphics = [Drawing.Graphics]::FromImage($weakContrast)
-try {
-    $weakGraphics.Clear([Drawing.Color]::FromArgb(28,28,28))
-    $weakBrush = New-Object Drawing.SolidBrush ([Drawing.Color]::FromArgb(37,37,37))
-    try { $weakGraphics.FillRectangle($weakBrush,40,100,500,90) } finally { $weakBrush.Dispose() }
-} finally { $weakGraphics.Dispose() }
-try { Assert (@(Find-DarkThemeCardBands $weakContrast).Count -eq 0) 'ambiguous weak contrast fails closed' }
-finally { $weakContrast.Dispose() }
-
 Assert (Test-DetailEvidence ('协会会议联系人王承展，正文内容。' * 10) '列表内容' '协会' '王承展') 'detail evidence'
 Assert (-not (Test-DetailEvidence '列表内容' '列表内容' '协会' '王承展')) 'list is not detail'
 Assert (Test-DetailNeedsOcr ('协会联系人图片附件。' * 12) '列表内容' '协会' '王承展') 'image detail needs ocr'
 Assert (Test-DetailNeedsOcr ('协会会议联系人王承展正文。' * 12) '列表内容' '协会' '王承展') 'detail without target mobile uses ocr fallback'
 Assert (Test-DetailNeedsOcr '' '列表结果正文' '协会' '王承展') 'pure image detail without copied marker uses ocr'
-$locatorPath = Join-Path $PSScriptRoot 'liu-changlei-first-card.locator.json'
-Assert ((Resolve-LocatorFilePath $locatorPath $root) -eq (Resolve-Path $locatorPath).Path) 'absolute locator path'
-Assert ((Resolve-LocatorFilePath 'tests\liu-changlei-first-card.locator.json' $root) -eq
-    (Resolve-Path $locatorPath).Path) 'locator relative to client root'
-$liuLocator = Get-Content -Raw -LiteralPath $locatorPath | ConvertFrom-Json
-Assert (@($liuLocator.items).Count -eq 1 -and
-    [double]$liuLocator.items[0].x_ratio -eq 0.3 -and
-    [double]$liuLocator.items[0].y_ratio -eq 0.215) 'real screenshot ratio locator fixture'
-$validatedFixturePoints = @(Get-ValidatedLocatorPoints $liuLocator)
-Assert ($validatedFixturePoints.Count -eq 1) 'fixture locator points valid'
-foreach ($invalidLocator in @(
-    [pscustomobject]@{items=@()},
-    [pscustomobject]@{items=@([pscustomobject]@{title='x';x_ratio='0.3';y_ratio=0.2})},
-    [pscustomobject]@{items=@([pscustomobject]@{title='x';x_ratio=0.19;y_ratio=0.2})},
-    [pscustomobject]@{items=@([pscustomobject]@{title='x';x_ratio=0.70;y_ratio=0.2})},
-    [pscustomobject]@{items=@([pscustomobject]@{title='x';x_ratio=0.3;y_ratio=0.09})},
-    [pscustomobject]@{items=@([pscustomobject]@{title='x';x_ratio=0.3;y_ratio=0.945})},
-    [pscustomobject]@{items=@([pscustomobject]@{title='x';x_ratio=0.3;y_ratio=0.96})},
-    [pscustomobject]@{items=@([pscustomobject]@{title='x';x_ratio=0.3;y_ratio=0.2;unexpected='x'})},
-    [pscustomobject]@{items=@(
-        [pscustomobject]@{title='x';x_ratio=0.3;y_ratio=0.2},
-        [pscustomobject]@{title='y';x_ratio=0.01;y_ratio=0.2}
-    )},
-    [pscustomobject]@{items=@(1..11 | ForEach-Object {
-        [pscustomobject]@{title="x$_";x_ratio=0.3;y_ratio=0.2}
-    })}
-)) {
-    $invalidLocatorRejected=$false
-    try { [void](Get-ValidatedLocatorPoints $invalidLocator) }
-    catch { $invalidLocatorRejected=$_.Exception.Message -eq 'LOCATOR_POINTS_INVALID' }
-    Assert $invalidLocatorRejected 'malicious locator points fail closed'
-}
-Assert (Test-WindowRectDimensions 400 300) 'minimum window rect accepted'
-Assert (-not (Test-WindowRectDimensions 399 300)) 'narrow window rect rejected'
-Assert (-not (Test-WindowRectDimensions 400 299)) 'short window rect rejected'
-Assert (-not (Test-WindowRectDimensions 10001 300)) 'oversized window width rejected'
-Assert (-not (Test-WindowRectDimensions 8000 6000)) 'oversized window pixel area rejected'
-$locatorSandbox = Join-Path ([IO.Path]::GetTempPath()) ('wechat-locator-' + [guid]::NewGuid().ToString('N'))
-$locatorRoot = Join-Path $locatorSandbox 'root'
-$locatorSibling = Join-Path $locatorSandbox 'secret.json'
-$malformedLocator = Join-Path $locatorRoot 'malformed.json'
-$oversizedLocator = Join-Path $locatorRoot 'oversized.json'
-try {
-    [void](New-Item -ItemType Directory -Path $locatorRoot -Force)
-    [IO.File]::WriteAllText($locatorSibling,'{"items":[]}',(New-Object Text.UTF8Encoding($false)))
-    [IO.File]::WriteAllText($malformedLocator,'{"items":[}',(New-Object Text.UTF8Encoding($false)))
-    [IO.File]::WriteAllText($oversizedLocator,(' ' * 65537),(New-Object Text.UTF8Encoding($false)))
-    $traversalRejected=$false
-    try { [void](Resolve-LocatorFilePath '..\secret.json' $locatorRoot $locatorRoot) }
-    catch { $traversalRejected=$_.Exception.Message -eq 'LOCATOR_READ_FAILED' }
-    Assert $traversalRejected 'relative locator path traversal rejected'
-    $uncRejected=$false
-    try { [void](Resolve-LocatorFilePath '\\server\share\locator.json' $locatorRoot $locatorRoot) }
-    catch { $uncRejected=$_.Exception.Message -eq 'LOCATOR_READ_FAILED' }
-    Assert $uncRejected 'UNC locator path rejected without network access'
-    $wrongExtensionRejected=$false
-    try { [void](Resolve-LocatorFilePath (Join-Path $root 'README.md') $root) }
-    catch { $wrongExtensionRejected=$_.Exception.Message -eq 'LOCATOR_READ_FAILED' }
-    Assert $wrongExtensionRejected 'non-json locator rejected'
-    $malformedRejected=$false
-    try { [void](Read-LocatorJson $malformedLocator) }
-    catch { $malformedRejected=$_.Exception.Message -eq 'LOCATOR_READ_FAILED' }
-    Assert $malformedRejected 'malformed locator JSON rejected'
-    $oversizedRejected=$false
-    try { [void](Read-LocatorJson $oversizedLocator) }
-    catch { $oversizedRejected=$_.Exception.Message -eq 'LOCATOR_READ_FAILED' }
-    Assert $oversizedRejected 'oversized locator JSON rejected before parsing'
-} finally {
-    if (Test-Path -LiteralPath $locatorSandbox) {
-        Remove-Item -LiteralPath $locatorSandbox -Recurse -Force
-    }
-}
 Assert (Test-DetailNeedsOcr "客服电话 13900000000`n协会联系人王承展 图片附件。" '列表内容' '协会' '王承展') 'unrelated mobile does not suppress target image ocr'
 $listWithImageMarker = ('协会 图片 全部 文章 账号 相关搜索 搜索结果内容。' * 12)
 Assert (-not (Test-DetailNeedsOcr $listWithImageMarker $listWithImageMarker '协会' '王承展')) 'result page image marker never triggers ocr'
@@ -523,91 +227,6 @@ $loadingPageSample = @'
 Assert (-not (Test-SearchResultReady $loadingPageSample '协会 王承展 联系人')) 'loading page is not ready'
 Assert (-not (Test-SearchResultReady $resultPageSample '协会 王承展 联系人' '协会' '王承展' $false)) 'unverified input can never produce ready state'
 
-$searchBitmap = New-Object Drawing.Bitmap 1000,600
-$searchGraphics = [Drawing.Graphics]::FromImage($searchBitmap)
-try {
-    $searchGraphics.Clear([Drawing.Color]::FromArgb(245,245,245))
-    $searchGraphics.FillRectangle(
-        (New-Object Drawing.SolidBrush ([Drawing.Color]::FromArgb(232,232,232))),
-        620,220,300,32)
-    $searchGraphics.FillRectangle(
-        (New-Object Drawing.SolidBrush ([Drawing.Color]::FromArgb(40,180,90))),
-        925,220,60,32)
-    $searchTarget = Find-WeixinSearchInputTarget $searchBitmap
-} finally {
-    $searchGraphics.Dispose()
-    $searchBitmap.Dispose()
-}
-Assert ($searchTarget -and $searchTarget.x_ratio -gt 0.6 -and $searchTarget.x_ratio -lt 0.93) 'visual search input locator validates field beside green button'
-$blankSearchBitmap = New-Object Drawing.Bitmap 1000,600
-try { $missingSearchTarget = Find-WeixinSearchInputTarget $blankSearchBitmap } finally { $blankSearchBitmap.Dispose() }
-Assert (-not $missingSearchTarget) 'visual search input locator fails closed without validated structure'
-$chatBitmap = New-Object Drawing.Bitmap 1000,600
-$chatGraphics = [Drawing.Graphics]::FromImage($chatBitmap)
-try {
-    $chatGraphics.Clear([Drawing.Color]::FromArgb(245,245,245))
-    $chatGraphics.FillRectangle(
-        (New-Object Drawing.SolidBrush ([Drawing.Color]::FromArgb(232,232,232))),
-        620,500,300,32)
-    $chatGraphics.FillRectangle(
-        (New-Object Drawing.SolidBrush ([Drawing.Color]::FromArgb(40,180,90))),
-        925,500,60,32)
-    $chatTarget = Find-WeixinSearchInputTarget $chatBitmap
-} finally { $chatGraphics.Dispose(); $chatBitmap.Dispose() }
-Assert (-not $chatTarget) 'bottom chat send layout is outside trusted search input region'
-$multiGreenBitmap = New-Object Drawing.Bitmap 1000,600
-$multiGreenGraphics = [Drawing.Graphics]::FromImage($multiGreenBitmap)
-try {
-    $multiGreenGraphics.Clear([Drawing.Color]::FromArgb(245,245,245))
-    $multiGreenGraphics.FillRectangle(
-        (New-Object Drawing.SolidBrush ([Drawing.Color]::FromArgb(232,232,232))),
-        620,190,300,150)
-    foreach ($greenY in @(190,300)) {
-        $multiGreenGraphics.FillRectangle(
-            (New-Object Drawing.SolidBrush ([Drawing.Color]::FromArgb(40,180,90))),
-            925,$greenY,60,32)
-    }
-    $multiGreenTarget = Find-WeixinSearchInputTarget $multiGreenBitmap
-} finally { $multiGreenGraphics.Dispose(); $multiGreenBitmap.Dispose() }
-Assert (-not $multiGreenTarget) 'separate green regions cannot merge into one trusted search button'
-$scaledDarkBitmap = New-Object Drawing.Bitmap 1500,900
-$scaledDarkGraphics = [Drawing.Graphics]::FromImage($scaledDarkBitmap)
-try {
-    $scaledDarkGraphics.Clear([Drawing.Color]::FromArgb(32,32,32))
-    $scaledDarkGraphics.FillRectangle(
-        (New-Object Drawing.SolidBrush ([Drawing.Color]::FromArgb(55,55,55))),
-        930,330,450,48)
-    $scaledDarkGraphics.FillRectangle(
-        (New-Object Drawing.SolidBrush ([Drawing.Color]::FromArgb(40,180,90))),
-        1388,330,90,48)
-    $scaledDarkTarget = Find-WeixinSearchInputTarget $scaledDarkBitmap
-} finally { $scaledDarkGraphics.Dispose(); $scaledDarkBitmap.Dispose() }
-Assert (
-    $scaledDarkTarget -and
-    $scaledDarkTarget.x_ratio -gt 0.6 -and
-    $scaledDarkTarget.x_ratio -lt 0.93
-) 'scaled dark search layout keeps click inside trusted right-side field'
-
-$submissionEvents = @()
-$verifiedSubmission = Invoke-VerifiedWeixinSearchSubmission '协会 张三' $searchTarget {$true} {
-    param($target) $script:submissionEvents += 'click'
-} { $true
-} {
-    param($value) $script:submissionEvents += 'clipboard_set'
-} {
-    param($keys) $script:submissionEvents += ($keys -join '+')
-} { '协会 张三' }
-Assert ($verifiedSubmission.input_verified -and $submissionEvents[-1] -eq 'ENTER') 'exact input readback is required before submit'
-$probeEvents = @()
-$probeSubmission = Invoke-VerifiedWeixinSearchSubmission '协会 张三' $searchTarget {$true} {
-    param($target) $script:probeEvents += 'click'
-} {$true} {} {
-    param($keys) $script:probeEvents += ($keys -join '+')
-} { '协会 张三' } $false
-Assert (
-    $probeSubmission.input_verified -and -not $probeSubmission.submitted -and
-    $probeEvents -notcontains 'ENTER'
-) 'input-only probe verifies focus and readback without submitting'
 $failedRetryEvents = @(); $failedRetryRejected = $false
 try {
     [void](Invoke-VerifiedWeixinFocusedSearchSubmission '协会 张三' {$true} {} {
@@ -619,61 +238,6 @@ Assert (
     $failedRetryEvents -notcontains 'ENTER'
 ) 'first readback mismatch fails without unsafe keyboard refocus or search submission'
 
-foreach ($badReadback in @('', '旧协会 李四', '协会 张', '聊天框文字')) {
-    $badEvents = @()
-    $rejected = $false
-    try {
-        [void](Invoke-VerifiedWeixinSearchSubmission '协会 张三' $searchTarget {$true} {} {$true} {} {
-            param($keys) $script:badEvents += ($keys -join '+')
-        } { $badReadback })
-    } catch { $rejected = $_.Exception.Message -eq 'SEARCH_INPUT_READBACK_MISMATCH' }
-    Assert ($rejected -and $badEvents -notcontains 'ENTER') "bad input readback never submits: $badReadback"
-}
-$missingTargetSubmitted = $false
-try {
-    [void](Invoke-VerifiedWeixinSearchSubmission '协会 张三' $null {$true} {
-        throw 'must not click'
-    } {$true} {} {} { '协会 张三' })
-} catch { $missingTargetSubmitted = $_.Exception.Message -eq 'SEARCH_INPUT_LOCATOR_FAILED' }
-Assert $missingTargetSubmitted 'visual locator failure never clicks or submits'
-$lostForegroundEvents = @()
-$lostForegroundRejected = $false
-try {
-    [void](Invoke-VerifiedWeixinSearchSubmission '协会 张三' $searchTarget {$false} {
-        $script:lostForegroundEvents += 'click'
-    } {$true} {} {
-        param($keys) $script:lostForegroundEvents += ($keys -join '+')
-    } { '协会 张三' })
-} catch { $lostForegroundRejected = $_.Exception.Message -eq 'INPUT_FOCUS_LOST' }
-Assert ($lostForegroundRejected -and $lostForegroundEvents.Count -eq 0) 'foreground loss prevents all input injection'
-$chatFocusEvents=@(); $chatFocusRejected=$false
-try {
-    [void](Invoke-VerifiedWeixinSearchSubmission '协会 张三' $searchTarget {$true} {
-        $script:chatFocusEvents += 'click'
-    } {$false} {} {
-        param($keys) $script:chatFocusEvents += ($keys -join '+')
-    } { '协会 张三' })
-} catch { $chatFocusRejected=$_.Exception.Message -eq 'SEARCH_INPUT_CLICK_STRUCTURE_INVALID' }
-Assert (
-    $chatFocusRejected -and $chatFocusEvents -notcontains 'ENTER'
-) 'matching chat-box text cannot submit without focused search structure proof'
-$preEnterChecks=0; $preEnterEvents=@(); $preEnterRejected=$false
-try {
-    [void](Invoke-VerifiedWeixinSearchSubmission '协会 张三' $searchTarget {$true} {} {
-        $script:preEnterChecks++
-        return $script:preEnterChecks -lt 3
-    } {} {
-        param($keys) $script:preEnterEvents += ($keys -join '+')
-    } { '协会 张三' })
-} catch { $preEnterRejected=$_.Exception.Message -eq 'SEARCH_INPUT_FINAL_STRUCTURE_INVALID' }
-Assert (
-    $preEnterRejected -and $preEnterChecks -eq 3 -and
-    $preEnterEvents -notcontains 'ENTER'
-) 'structure is revalidated after readback immediately before Enter'
-$movedSearchTarget = $searchTarget.PSObject.Copy()
-$movedSearchTarget.x_ratio = [double]$searchTarget.x_ratio + 0.03
-Assert (Test-WeixinSearchInputTargetMatch $searchTarget $searchTarget) 'same focused search structure matches'
-Assert (-not (Test-WeixinSearchInputTargetMatch $searchTarget $movedSearchTarget)) 'moved structure is not accepted as focused input'
 $dynamicResultPage = $resultPageSample.Replace(
     '会议联系人和参会安排详细说明',
     "会议联系人和参会安排详细说明`r`n刚刚更新")
@@ -1078,14 +642,6 @@ try {
     }
     $failureRoundtrip = Unprotect-EvidenceArtifact $failureArtifact.artifact_ref
     Assert ($failureRoundtrip.message -notlike '*18511597486*') 'failure evidence is redacted and encrypted'
-    $locateFailureArtifact = Protect-EvidenceArtifact $artifactDir @{
-        kind='failure';error_code='LOCATOR_POINTS_INVALID';stage='points'
-        reason='invalid_points';ordinal=1;text_length=0;hashes=@();region=$null
-    }
-    $locateFailureRoundtrip = Unprotect-EvidenceArtifact $locateFailureArtifact.artifact_ref
-    Assert ($locateFailureRoundtrip.stage -eq 'points' -and
-        $locateFailureRoundtrip.error_code -eq 'LOCATOR_POINTS_INVALID') 'locator error artifact stage and code'
-    Assert (($locateFailureRoundtrip | ConvertTo-Json -Compress) -notlike '*18511597486*') 'locator error artifact has no PII'
     $cleanupFailureArtifact = Protect-EvidenceArtifact $artifactDir @{
         kind='failure';error_code='PLUGIN_CLOSE_TIMEOUT';stage='cleanup'
         result_artifact_id='safe-artifact-id';captured_at=[DateTimeOffset]::Now.ToString('o')
@@ -1193,7 +749,7 @@ Assert ($entryText -match 'process_basename') 'failure artifact carries safe pro
 Assert ($entryText -notmatch 'result_artifact_ref') 'failure artifact excludes full artifact path'
 Assert ($entryText -notmatch 'foreground=.*title|title=\\$failureTitle') 'failure artifact excludes foreground title'
 foreach ($requiredStage in @(
-    'enum','activate','open','input_verify','search_wait','article_switch','copy','list_judge','locate','click',
+    'enum','activate','open','input_verify','search_wait','copy','list_judge','locate','click',
     'detail_settle','detail_copy','detail_judge','close','recover','scroll','cleanup'
 )) {
     Assert ($entryText -match ([regex]::Escape("`$stage = '$requiredStage'"))) "stage present: $requiredStage"
@@ -1224,7 +780,6 @@ Assert (
     $entryText -notmatch 'visual_verify|wechat-ocr-list-verify|visualOcr|visualViewportHash|RESULT_PAGE_VISUAL_STATE_INVALID'
 ) 'formal result relevance never uses screenshot OCR or visual judge'
 Assert ($entryText -match 'kind=''failure''[\s\S]*llm_usages=if \(\$llmUsages\)') 'failure artifact preserves available llm usage'
-Assert ($entryText -match "'locator_read'") 'locator read diagnostic stage'
 Assert ($entryText -match "'WINDOW_RECT_FAILED'") 'window rect distinct error'
 Assert ($entryText -match 'Complete-WeixinPluginSession') 'search and collect use strict cleanup helper'
 Assert ($entryText -match '\$sessionCleanupAttempted\s*=\s*\$true') 'cleanup attempt is recorded before execution'
@@ -1234,10 +789,8 @@ Assert (([regex]::Matches(
     $entryText,
     [regex]::Escape('$returnResult = & $returnToResultPage')
 )).Count -eq 4) 'each detail branch uses the shared session return transition'
-$flowStart = $entryText.IndexOf("if (`$Command -eq 'flow_probe')", [StringComparison]::Ordinal)
 $productionStart = $entryText.IndexOf(
     '$pluginIdentity = Invoke-LimitedTrustedOpen $openSouyisou $verifySouyisou 1',
-    $flowStart,
     [StringComparison]::Ordinal)
 $productionText = $entryText.Substring($productionStart)
 Assert (
@@ -1246,73 +799,6 @@ Assert (
     $libText -match "& \`$SendChord @\('ALT','LEFT'\)" -and
     $libText -match "& \`$SendChord @\('CTRL','W'\)"
 ) 'shared return transition distinguishes same-hwnd back from independent-detail close'
-Assert (([regex]::Matches($entryText,"@\('CTRL','W'\)")).Count -eq 2) 'flow probe alone performs exactly two Ctrl+W events per loop body'
-$flowCloseStart = $entryText.IndexOf("`$stage = 'flow_close_detail'",$flowStart,[StringComparison]::Ordinal)
-$flowCloseEnd = $entryText.IndexOf('$flowSteps +=',$flowCloseStart,[StringComparison]::Ordinal)
-$flowCloseText = $entryText.Substring($flowCloseStart,$flowCloseEnd-$flowCloseStart)
-Assert (
-    $flowCloseText -notmatch 'CopyFromScreen|Clipboard|activateWindow|SetCursorPos|mouse_event|ALT|LEFT' -and
-    ([regex]::Matches($flowCloseText,"@\('CTRL','W'\)")).Count -eq 2
-) 'flow close critical interval contains only two Ctrl+W chords and waits'
-Assert (
-    $flowCloseText -match 'Resolve-WeixinFlowForegroundPlugin' -and
-    $flowCloseText -notmatch 'SetForegroundWindow|activateWindow'
-) 'flow close sequence binds the current strictly trusted foreground plugin without activation'
-Assert (
-    $entryText -match '\$flowSessionHwnds\.Contains' -and
-    $entryText -match 'FLOW_PLUGIN_CLOSE_REJECTED'
-) 'flow failure cleanup only closes a current foreground plugin seen in this probe round'
-Assert (
-    $entryText -match 'list_hwnd_changed=\[bool\]\$flowListHwndChanged' -and
-    $entryText -match 'click_hwnd_changed=\[bool\]\$flowClickHwndChanged' -and
-    $entryText -match 'detail_hwnd_changed=\[bool\]\$flowDetailHwndChanged' -and
-    $entryText -match 'process_id=\[uint32\]'
-) 'flow probe emits only safe per-stage hwnd-change and process diagnostics'
-Assert (
-    $entryText.Substring($flowStart,$productionStart-$flowStart) -notmatch
-        'candidateCopy|Test-SearchResultReady|Test-ResultPageEvidence|Get-WeixinWindowContentHash|PrintWindow'
-) 'isolated flow probe does not perform result ownership or semantic transition analysis'
-Assert (
-    ([regex]::Matches(
-        $entryText.Substring($flowStart,$productionStart-$flowStart),
-        'Resolve-WeixinFlowForegroundPlugin'
-    )).Count -ge 5 -and
-    $entryText.Substring($flowStart,$productionStart-$flowStart) -match
-        '(?s)flow_open.*?Get-CurrentForegroundIdentity'
-) 'flow probe resolves the current foreground identity at every action stage'
-$firstFlowClose = $flowCloseText.IndexOf("& `$flowCloseSend @('CTRL','W')",[StringComparison]::Ordinal)
-$secondFlowClose = $flowCloseText.LastIndexOf("& `$flowCloseSend @('CTRL','W')",[StringComparison]::Ordinal)
-$betweenFlowCloses = $flowCloseText.Substring($firstFlowClose,$secondFlowClose-$firstFlowClose)
-Assert (
-    $betweenFlowCloses -notmatch 'Get-|Resolve-|Clipboard|CopyFromScreen|SetCursorPos|mouse_event|activateWindow'
-) 'flow probe performs no action or foreground read between its two Ctrl+W chords'
-Assert (
-    ([regex]::Matches($flowCloseText,"& \`$flowCloseSend @\('CTRL','W'\)")).Count -eq 2 -and
-    $flowCloseText -notmatch "& \`$send @\('CTRL','W'\) \`$flowGuard"
-) 'flow close sequence uses direct chords after its one pre-sequence identity check'
-Assert (
-    $entryText -match 'close_count=\[int\]\$flowCloseCount' -and
-    $entryText -match 'base_kind=\[string\]\$flowBaseKind' -and
-    $entryText -match 'base_ready=\$true'
-) 'flow probe reports two closes and its safe main/plugin base kind'
-Assert (
-    $entryText -match 'for \(\$flowOpenAttempt = 1; \$flowOpenAttempt -le 2;' -and
-    $entryText -match 'open_attempts=\[int\]\$flowOpenAttempts'
-) 'flow probe bounds trusted-main keyboard open recovery to two attempts and reports the count'
-$flowOpenStart = $entryText.IndexOf("`$stage = 'flow_open'",$flowStart,[StringComparison]::Ordinal)
-$flowInputStart = $entryText.IndexOf("`$stage = 'flow_input_verify'",$flowOpenStart,[StringComparison]::Ordinal)
-$flowOpenText = $entryText.Substring($flowOpenStart,$flowInputStart-$flowOpenStart)
-Assert (
-    $flowOpenText -notmatch 'activateWindow|SetForegroundWindow|SetCursorPos|mouse_event|CopyFromScreen' -and
-    $flowOpenText -match 'Get-WeixinFlowBaseKind'
-) 'flow open retry accepts only trusted main or current foreground plugin bases'
-Assert ($entryText -match 'if \(\$flowAfterHash -eq \$flowBeforeHash\) \{ throw ''FLOW_DETAIL_NOT_OPENED'' \}') 'flow probe fails closed unless click changes the page'
-Assert (
-    $entryText.IndexOf('SetCursorPos', $flowStart) -lt
-    $entryText.IndexOf('$flowBefore = & $flowCapture', $flowStart)
-) 'flow probe captures click baseline only after hover has settled'
-Assert ($entryText -match '\$flowCleanupFailure') 'flow probe cleanup preserves clipboard restoration after close failure'
-Assert ($entryText -match '\[ValidateRange\(0\.28,0\.68\)\]\[double\]\$FlowProbeXRatio') 'flow probe click x is constrained to trusted content bounds'
 Assert ($entryText -match '\$returnToResultPage') 'detail close recovery uses the shared state transition'
 Assert (
     $entryText -notmatch '\$recoveryDeadline|Test-ResultPageEvidence \$returned \$text' -and
@@ -1358,9 +844,6 @@ Assert (
     $libText -match '\[ValidateRange\(1,30000\)\]\[int\]\$DelayMilliseconds = 5000'
 ) 'detail settle delay has one testable 5000 ms default'
 Assert (
-    $entryText.Substring($flowStart,$productionStart-$flowStart) -notmatch 'Wait-WeixinDetailSettled|detail_settle'
-) 'flow probe remains a window transition probe without business detail settle delay'
-Assert (
     $entryText -match '\$preexistingPluginHwnds = \[Collections\.Generic\.HashSet\[int64\]\]::new\(\)' -and
     $entryText -match 'New-WeixinWindowSession \(\[int64\]\$main\.Hwnd\)' -and
     $libText -match '(?s)\$Session\.PreexistingPluginHwnds\.Contains\(\$hwnd\).*?throw ''PREEXISTING_PLUGIN_REJECTED'''
@@ -1391,40 +874,34 @@ Assert ($entryText -match "catch\s*\{\s*throw 'INVALID_SEARCH_READY_TIMEOUT'\s*\
 Assert ($entryText -match '\$stdinSearchReadyTimeout\s+-lt\s+10000') 'stdin timeout validates before assigning validated parameter'
 Assert ($entryText -match 'Test-SearchResultReady\s+\$candidateText\s+\$query') 'search readiness uses copied result signal'
 Assert (
-    ([regex]::Matches($productionText,'& \$send @\(''CTRL'',''TAB''\) \$pluginGuard')).Count -eq 1
-) 'each formal search or collect query sends exactly one native article switch chord'
+    ([regex]::Matches($productionText,'& \$send @\(''CTRL'',''TAB''\) \$pluginGuard')).Count -eq 0
+) 'formal search and collect do not use the unsupported native article switch chord'
 $initialReadyIndex = $productionText.IndexOf(
     'if ($readySamples -lt 2)', [StringComparison]::Ordinal)
-$articleSwitchIndex = $productionText.IndexOf(
-    "`$stage = 'article_switch'", [StringComparison]::Ordinal)
-$postSwitchCopyIndex = $productionText.IndexOf(
-    '$postSwitchText = [Windows.Forms.Clipboard]::GetText(',
-    [StringComparison]::Ordinal)
 $listJudgeIndex = $productionText.IndexOf(
     "`$stage = 'list_judge'", [StringComparison]::Ordinal)
 Assert (
-    $initialReadyIndex -ge 0 -and $articleSwitchIndex -gt $initialReadyIndex -and
-    $postSwitchCopyIndex -gt $articleSwitchIndex -and
-    $listJudgeIndex -gt $postSwitchCopyIndex
-) 'native article switch occurs after initial ready and before the second list copy and judge'
-Assert (
-    $productionText -match '(?s)& \$assertWorkBudget 62000\s+if \(-not \(& \$pluginGuard\)\).*?& \$send @\(''CTRL'',''TAB''\) \$pluginGuard\s+Start-Sleep -Milliseconds 2000\s+if \(-not \(& \$pluginGuard\)\)' -and
-    $productionText -notmatch '(?s)& \$send @\(''CTRL'',''TAB''\).*?& \$send @\(''CTRL'',''TAB''\)'
-) 'article refresh is budgeted and guarded without retrying the switch chord'
-Assert (
-    $productionText -match '(?s)\$text = ''''\s+\$html = ''''.*?\$text = \$postSwitchText.*?Invoke-EvidenceJudge \$text' -and
-    $productionText -match "stage='article_switch';reason='article_list_text_unavailable'" -and
-    $productionText -match '(?s)article_list_text_unavailable.*?Complete-WeixinPluginSession.*?exit 0'
-) 'judge receives only post-switch text and unavailable article text cleans up inconclusively'
+    $initialReadyIndex -ge 0 -and $listJudgeIndex -gt $initialReadyIndex
+) 'initial stable result text flows directly to the list judge'
 Assert (
     $productionText.IndexOf('$initialViewport = & $newPluginViewport', [StringComparison]::Ordinal) -gt
-        $postSwitchCopyIndex -and
-    $productionText.IndexOf('Find-DarkThemeCardBands $viewport', [StringComparison]::Ordinal) -gt
-        $postSwitchCopyIndex
-) 'viewport and card bands are rebuilt only after the article refresh'
+        $initialReadyIndex -and
+    $productionText.IndexOf('Get-WeixinUiaResultDescriptors', [StringComparison]::Ordinal) -gt
+        $initialReadyIndex
+) 'trusted viewport and UIA detail candidates are built after the stable result list is ready'
 Assert (
-    $productionText -notmatch 'Get-WeixinArticleTab|Find-DarkThemeCategoryTabBands|UIAutomation|SetCursorPos\(\$article|articleX|articleY'
-) 'native article switching has no pixel UIA or fixed-coordinate category fallback'
+    $productionText -notmatch 'Get-WeixinArticleTab|Find-DarkThemeCategoryTabBands|SetCursorPos\(\$article|articleX|articleY'
+) 'removed article switching has no pixel UIA or fixed-coordinate category fallback'
+Assert (
+    $productionText -notmatch 'Find-DarkThemeCardBands|x_ratio|y_ratio|LocatorPath' -and
+    $entryText -match 'Select-WeixinUiaResultTargets' -and
+    $entryText -match 'TryGetClickablePoint'
+) 'formal detail collection uses only UIA clickable points for element targeting'
+Assert (
+    $entryText -match 'SetThreadDpiAwarenessContext' -and
+    $entryText -match 'AreDpiAwarenessContextsEqual' -and
+    $entryText -match "(?s)ConvertTo-WeixinPhysicalClickPoint.*?'PerMonitorV2'"
+) 'UIA physical clicks require a verified Per-Monitor V2 thread context'
 Assert ($entryText -match '\$stage\s*=\s*''input_verify''') 'input focus failures use explicit input_verify stage'
 Assert ($entryText -match 'Invoke-VerifiedWeixinFocusedSearchSubmission') 'entry point verifies keyboard-focused input readback before submission'
 $focusedInputIndex = $entryText.IndexOf(
@@ -1458,19 +935,21 @@ Assert (
 Assert ($entryText -match "catch \{ throw 'CLIPBOARD_RESTORE_FAILED' \}") 'input-only clipboard restore fails loud'
 Assert ($entryText -match 'input_verified=\$true; submitted=\$false') 'input-only success output is query-free and explicitly unsubmitted'
 Assert (
-    $entryText -match 'locator_found=\[bool\]\$inputDiagnostics\.locator_found' -and
-    $entryText -match 'post_click_structure=\[bool\]\$inputDiagnostics\.post_click_structure' -and
     $entryText -match 'readback_matched=\[bool\]\$inputDiagnostics\.readback_matched' -and
-    $entryText -match 'final_structure=\[bool\]\$inputDiagnostics\.final_structure'
-) 'failure artifact contains only boolean input diagnostics'
+    $entryText -notmatch 'locator_found|post_click_structure|final_structure'
+) 'failure artifact retains only the keyboard readback diagnostic'
 Assert ($entryText -match '\$readySamples\s+-lt\s+2') 'search readiness requires stable repeated evidence'
 Assert (
     $entryText -notmatch "throw 'SEARCH_RESULTS_TIMEOUT'" -and
     $entryText -match "reason='list_text_unavailable'" -and
     $entryText -match '(?s)if \(\$readySamples -lt 2\).*?status=''inconclusive''.*?Complete-WeixinPluginSession'
 ) 'unavailable list text is a cleaned inconclusive query outcome'
-Assert ((Get-Content -Raw -LiteralPath $lib) -match "'LOCATOR_POINTS_INVALID'") 'invalid points distinct error'
-Assert ($entryText -match '\$locateRecoveryAttempts\s*-lt\s*1') 'card locator recovery is limited to one retry'
+Assert ($entryText -match '\$uiaEnumerationRecoveryAttempts\s*-lt\s*1') 'UIA enumeration recovery is limited to one retry'
+Assert (
+    $productionText -notmatch 'CARD_LOCATE_FAILED|explicitItems' -and
+    $productionText -match 'New-WeixinUiaCandidateExhaustionRecord \$checked' -and
+    $productionText -match '(?s)if \(-not \$newCount\) \{\s+\$records \+= New-WeixinUiaCandidateExhaustionRecord \$checked'
+) 'production UIA exhaustion is a normal bounded enumeration outcome'
 Assert ($entryText -match '\$clickForegroundRecoveryUsed') 'pre-click foreground recovery is limited per card'
 Assert ($libText -match 'function Test-OrRestoreTrustedForeground') 'foreground recovery revalidates trusted hwnd'
 Assert (
@@ -1508,4 +987,6 @@ Assert (
     ([regex]::Matches($entryText,'& \$assertWorkBudget 60000')).Count -ge 4 -and
     $entryText -match "'FOREGROUND_LOST','WECHAT_WORK_TIMEOUT'"
 ) 'blocking open judge and OCR calls reserve their timeout plus cleanup minute'
-Write-Output '{"ok":true,"tests":279}'
+$assertionCount = ([regex]::Matches(
+    (Get-Content -Raw -LiteralPath $PSCommandPath), '(?m)^Assert\s')).Count
+Write-Output (@{ok=$true;tests=$assertionCount} | ConvertTo-Json -Compress)

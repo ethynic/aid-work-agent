@@ -48,7 +48,7 @@ Schema 不合法分别使用 `STRICT_JSON_INVALID`、`PROFILE_SCHEMA_INVALID`，
 领导姓名使用独立的官网领导页提取，即使主 14 字段提取失败也会运行；会长和秘书长之间同样按字段
 隔离。网络搜索回退采用相同的逐字段拒绝方式，并继续禁止填写手机字段。
 
-微信详情定位仅允许两种有限恢复：无卡片定位点时等待并重截一次；点击前短暂失焦时只激活原受信
+微信详情定位仅允许两种有限恢复：UIA 无候选时等待并重新枚举一次；点击前短暂失焦时只激活原受信
 插件 HWND 一次并重新校验。点击后的未知页面状态、清理失败和外层超时不重试，继续执行批次熔断。
 
 ### 2026-08-03：搜一搜可见状态门禁
@@ -82,12 +82,11 @@ Schema 不合法分别使用 `STRICT_JSON_INVALID`、`PROFILE_SCHEMA_INVALID`，
 
 若输入失败后完整插件顶层关闭及主窗口恢复成功，该错误是当前人员的明确技术失败，可继续下一人员；
 若关闭或恢复不确定，则由具体 cleanup 错误码覆盖并按会话致命错误熔断。此前 20 家真机结果没有
-建立输入框回读证据，所有 `not_found`、卡片定位结果和成功率统计均作废，必须在本门禁下重新验证。
+建立输入框回读证据，所有 `not_found`、旧定位结果和成功率统计均作废，必须在本门禁下重新验证。
 `-VerifyInputOnly` 提供最小真机诊断：仅限已执行的 `search/collect`，复用同一键盘聚焦和回读
-门禁但禁止 Enter，随后按统一顶层关闭契约恢复主窗口，不进入 ready/list/card。
-输入失败保留 `SEARCH_INPUT_LOCATOR_FAILED`、`SEARCH_INPUT_CLICK_STRUCTURE_INVALID`、
-`SEARCH_INPUT_READBACK_MISMATCH`、`SEARCH_INPUT_FINAL_STRUCTURE_INVALID` 或 `INPUT_FOCUS_LOST`；
-failure artifact 只保存 locator/post-click/readback/final 四个布尔状态，不保存输入内容。
+门禁但禁止 Enter，随后按统一顶层关闭契约恢复主窗口，不进入 ready/list/UIA 枚举。
+输入失败保留 `SEARCH_INPUT_READBACK_MISMATCH`、`SEARCH_INPUT_FOCUS_FAILED` 或 `INPUT_FOCUS_LOST`；
+failure artifact 只保存回读是否匹配，不保存输入内容。
 
 详情遍历内部使用一次受前台可信 HWND guard 保护的 `Alt+Left` 返回结果列表，非终止路径禁止
 `Ctrl+W`。若后退后失焦，只允许恢复原可信插件一次；随后在有界截止时间内复制并复验原结果页，
@@ -97,12 +96,14 @@ failure artifact 只保存 locator/post-click/readback/final 四个布尔状态�
 `wechat-ocr-list-verify-*`。外部 OCR/判定进程非零退出只返回无内容的 `JUDGE_PROCESS_FAILED`，
 不得把 stderr、临时路径或页面正文写入错误结果。
 
-默认卡片 band locator 依赖卡片与背景形成连续像素亮度带，不适用于 693px 窄微信 Qt 窗口中的浅色
-文字流列表。进入卡片定位前必须始终运行整页证据 Judge：配置外部 Judge 时执行严格模型契约，未配置
-时仍执行内置的同一行姓名—手机号精确绑定。整页已有有效绑定则直接返回 `found`，禁止为了打开详情
-而猜测卡片坐标；只有整页没有绑定证据时才进入有限的视觉卡片定位。
+进入 UIA 详情枚举前必须始终运行整页证据 Judge：配置外部 Judge 时执行严格模型契约，未配置时仍
+执行内置的同一行姓名—手机号精确绑定。整页已有有效绑定则直接返回 `found`；否则仅接纳可信 HWND
+内同时包含协会名和人员名的 UIA 候选及其物理 `ClickablePoint`，不使用像素或比例坐标兜底。
 
-### 2026-08-03：纯 RPA 连续焦点流程探针
+### 2026-08-03：纯 RPA 连续焦点流程探针（历史，命令已删除）
+
+本节记录窗口状态机形成前的实验过程。`flow_probe`、固定相对点和对应 fixture 已删除，不是现行 CLI
+能力；其中验证出的可信 HWND、前台守卫和关闭约束已经并入正式窗口会话状态机。
 
 `flow_probe` 是与业务采集隔离的真机诊断模式，读取 1～20 条严格 JSON（仅
 `association_name/person_name`，负责人可为空）。同一 PowerShell 进程逐轮执行：主窗口三键打开搜一搜、
@@ -141,15 +142,14 @@ guard，也不在两次之间读取前台。在无人干扰的诊断前提下直
 输出保留 `process_id`、安全整数 `close_count=2`，并以 `input/list/click/detail_hwnd_changed` 布尔值记录阶段间 HWND 是否变化；
 不包含完整路径、标题、query、列表正文或手机号。
 
-搜索完成后的点击门禁同时要求：剪贴板仍是本次 query 的结果页；结果内容区域截图 OCR 同时出现协会名
-和人员名；卡片坐标位于固定比例内容区。定位算法使用相对比例和背景差异，支持深浅主题及 DPI 缩放。
-任何一项不能证明时禁止点击。点击之后失焦仍禁止恢复或重复点击。
+现行点击门禁要求当前前台仍是本会话可信搜索 HWND，且 UIA 候选同时包含协会名和人员名并提供物理
+`ClickablePoint`。任何一项不能证明时禁止点击；点击之后失焦仍禁止重复点击。
 
-列表不含目标人员时，定义为“无可操作候选”，形成 `inconclusive` 业务结果，不计为
-`CARD_LOCATE_FAILED`。CF_HTML 没有详情链接时仍继续视觉卡片定位，避免微信版本差异造成假阴性。
+列表不含目标人员或 UIA 枚举没有新候选时，形成 `inconclusive` 业务结果。CF_HTML 没有详情链接
+不影响 UIA 枚举，避免微信版本差异造成假阴性。
 详情 OCR 固定裁剪中央内容区，最多捕获两次（最多滚动一次），且 OCR 汇总必须同时含协会名与目标
-人员名。真正视觉定位失败的加密 artifact 仅保存窗口宽高、内容区比例及截图 SHA-256，不保存截图
-或明文手机号。
+人员名。UIA 枚举结束的加密 artifact 仅保存安全 reason、计数及截图 SHA-256，不保存节点正文、
+截图或明文手机号。
 
 批处理结果显式携带 `aborted` 和 `abort_error_code`，CLI 不再仅靠请求数与处理行数推断熔断。
 因此单个协会熔断或最后一个协会熔断，即使没有“缺失行”，也必须导出包含当前行的 Excel，同时返回
@@ -491,7 +491,7 @@ Python Provider 对单次正式微信 RPA 提供 600 秒外层预算。PowerShel
 
 ### 12.3 Phase 1E3：详情内容稳定等待
 
-正式 `collect` 仅在点击后截图哈希已经变化、且详情插件窗口身份确认完成后，固定等待 5000ms，再开始剪贴板复制、OCR 与模型判断。每个成功打开的详情只等待一次；点击前不增加等待。等待前后都复验当前详情前台守卫，焦点丢失继续失败并停止输入。`flow_probe` 只验证窗口和焦点转换，不读取详情内容，因此保持原时序不变。
+正式 `collect` 仅在点击后截图哈希已经变化、且详情插件窗口身份确认完成后，固定等待 5000ms，再开始剪贴板复制、OCR 与模型判断。每个成功打开的详情只等待一次；点击前不增加等待。等待前后都复验当前详情前台守卫，焦点丢失继续失败并停止输入。
 
 ### 12.4 Phase 1E4：内容结果与窗口安全解耦
 
@@ -503,14 +503,12 @@ Python Provider 对单次正式微信 RPA 提供 600 秒外层预算。PowerShel
 
 正式 `search/collect` 的搜索结果相关性判断以剪贴板复制的列表文字为唯一模型输入，payload 只包含 `association_name/person_name/text`，不得包含截图、base64、图片路径或图片对象。删除原 `visual_verify` 路径：不再截取列表区域、不再生成 `wechat-ocr-list-verify-*` 临时图片、不再调用 OCR adapter 判断当前搜索结果，因此也不会出现 `stage=visual_verify` 的 `JUDGE_TIMEOUT`。
 
-截图仍保留两种纯本地用途，均不发送模型：一是点击前后 bitmap 哈希用于确定页面是否发生变化；二是 `Find-DarkThemeCardBands` 的本地像素分析用于卡片坐标定位。详情图片/PDF OCR 属于详情正文补充链路，不是搜索结果相关性判断，并继续受 Phase 1E4 的可读复制门禁约束。
+截图仅保留两种纯本地用途，均不发送模型：点击前后 bitmap 哈希用于确定页面是否发生变化，详情中央裁剪用于图片/PDF OCR。两者都不参与元素定位；OCR 继续受 Phase 1E4 的可读复制门禁约束。
 
 列表文字持续复制不到时，或外部文本 Judge 超时、进程异常、返回协议异常时，当前 query 返回 `ok=true,status=inconclusive`，完成严格 cleanup 后携带 `session_closed=true`，允许批处理继续交接下一 query。只有前台身份、owned HWND、关闭或 cleanup 无法证明安全时才保持会话级失败。
 
-### 12.6 Phase 1E8：原生快捷键进入“文章”分类
+### 12.6 Phase 1E8：原生快捷键进入“文章”分类（历史，已撤回）
 
-真实微信搜一搜验证表明，初始搜索结果稳定后发送一次 `Ctrl+Tab` 会直接进入“文章”分类。正式 `search/collect` 因此只采用这一原生快捷键，不做 UIA、像素文字带、固定坐标、OCR 或模型分类定位，也不通过截图脑补选中态。`flow_probe` 暂不接入该行为。
+后续真机已确认当前微信版本的 `Ctrl+Tab` 不再切换“文章”。正式 `search/collect` 已删除该快捷键和切换后二次复制，直接使用稳定的“全部”结果列表。
 
-首次列表文字通过 ready 门禁后，程序检查业务预算至少保留 62 秒，并在严格 plugin foreground guard 下发送且仅发送一次 `Ctrl+Tab`；固定等待 2 秒，等待后再次验证同一可信插件前台。快捷键发送异常或前台丢失继续按窗口安全错误处理，不重试 `Ctrl+Tab`。
-
-切换后立即丢弃切换前的列表文字和 HTML，重新复制文章分类列表。只有重新复制且通过结果 ready 门禁的文字才能写入列表 artifact、交给 Phase 1E5 纯文本 Judge，并作为详情判断的列表基准；`search` 返回的同样是该文章分类文本。viewport、卡片 band、locator 使用和页面 hash 均在切换后重新建立，不复用切换前状态。切换后文字为空或不可用、文本 Judge 异常时，当前 query 返回 `inconclusive + cleanup`，清理成功后允许下一 query；窗口身份或清理失败仍为会话级错误。
+列表文字通过 ready 门禁后直接写入 artifact、交给 Phase 1E5 纯文本 Judge，并作为详情判断基准。文本不可用或 Judge 异常时仍返回 `inconclusive + cleanup`；窗口身份或清理失败仍为会话级错误。

@@ -39,7 +39,7 @@ $sameReturned = Invoke-WeixinWindowSessionReturnToList $same `
 Assert ($sameReturned -eq 200) 'same hwnd returns list'
 Assert (($sameKeys[0] -join '+') -eq 'ALT+LEFT') 'same hwnd uses back'
 
-# Independent detail uses the Ctrl+W sequence proven by flow_probe.
+# Independent detail uses the Ctrl+W sequence proven on the real application.
 $independent = New-WeixinWindowSession $mainHwnd @()
 [void](Add-WeixinWindowSessionForeground $independent (New-PluginIdentity 200) 'list')
 [void](Add-WeixinWindowSessionForeground $independent (New-PluginIdentity 300) 'detail')
