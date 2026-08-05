@@ -98,33 +98,15 @@ class PipelineContext:
 
 
 TOOL_DESCRIPTION = (
-    "处理PDF：读取/转Markdown/OCR/提取表格，以及生成PDF/合并/拆分/页面操作。"
-    "不支持Word(.docx)转PDF，请基于内容用md_to_pdf/html_to_pdf生成。"
+    "处理PDF：读取/转Markdown/OCR/提取表格，以及生成PDF/合并/拆分/页面操作。不支持Word转PDF，请基于内容用md_to_pdf/html_to_pdf生成。"
+    "操作类型（工具自动判断）：read/read_tables/ocr/pdf_to_md/md_to_pdf/html_to_pdf/merge/split/extract_pages/"
+    "inspect/render_pages/validate/clean_metadata/add_watermark/protect/compress/extract_images/rotate。"
+    "推荐 instruction+content 调用（instruction 放用户目的，content 放 Markdown/HTML 正文），附件路径放 file_paths。"
+    "产生新文件的操作（转PDF/合并/拆分/提取页面/水印/加密/压缩/旋转）必须紧接着调 cp 注册下载；"
+    "read/read_tables/ocr/pdf_to_md 不产生新文件无需 cp。"
 )
 
-TOOL_USAGE_GUIDE = """\
-## pdf_process 使用指南
-
-### 支持的操作（工具自动判断操作类型）
-读取/查看内容(read)、提取表格(read_tables)、OCR识别(ocr)、PDF转Markdown(pdf_to_md)、\
-Markdown/HTML转PDF(md_to_pdf/html_to_pdf)、合并(merge)、拆分(split)、\
-提取页面(extract_pages)、检查结构(inspect)、渲染页面(render_pages)、验证(validate)、\
-清理元数据(clean_metadata)、添加水印(add_watermark)、加密保护(protect)、压缩(compress)、\
-提取图片(extract_images)、旋转(rotate)。用户上传 .pdf 文件并要求处理时同样使用本工具。
-
-### 调用方式
-- 推荐使用 instruction + content：instruction 放用户目的，content 放待转换 Markdown/HTML 正文。
-- 兼容旧调用：也可把用户原始需求和相关内容放在 context 中。
-- 若需将对话内容转为PDF，content/context 必须包含完整 Markdown 或 HTML 文本。
-- output_name 可传业务文件名；不传时工具从 Markdown 标题推断。
-- 用户上传的附件路径放在 file_paths 中。
-
-### cp 注册下载（重要）
-本工具产生新 PDF 文件时（转PDF、合并、拆分、提取页面、清理元数据、添加水印、加密保护、压缩、旋转，\
-返回结果含 file_path 或 files），必须紧接着调用 cp 工具完成交付：
-    cp(source_file_path="<返回的 file_path>", display_name="<业务文件名>")
-拆分(split)产生多个文件时，对每个文件分别调用 cp。display_name 用用户能理解的业务文件名。
-仅 read/read_tables/ocr/pdf_to_md 不产生新文件，无需调用 cp。"""
+TOOL_USAGE_GUIDE = ""
 
 
 class PdfProcessTool(BaseTool):

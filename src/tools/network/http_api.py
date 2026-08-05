@@ -67,35 +67,13 @@ class HttpApiTool(BaseTool):
 
     name = "http_api"
     description = (
-        "调用外部 HTTP API（GET/POST/PUT/DELETE/PATCH、文件上传），"
-        "${VAR_NAME} 替换环境变量。调用前先查上下文是否已有结果。"
+        "调用外部 HTTP API（GET/POST/PUT/DELETE/PATCH、文件上传），${VAR_NAME} 替换环境变量。"
+        "调用前先查上下文是否已有相同结果：历史/详情类（已发生事件）复用，实时/状态类（库存/价格/状态）重调。"
+        "认证模式：Bearer Token（{\"Authorization\":\"Bearer ${API_TOKEN}\"}）、"
+        "API Key Header（{\"X-API-Key\":\"${API_KEY}\"}）、Basic Auth。"
+        "文件上传用 files 参数（{\"file\":\"/path/to/doc.pdf\"}，multipart/form-data），可与 form_data 同时使用。"
     )
-    usage_guide = """\
-## http_api 工具使用指南
-
-### 调用决策：上下文已有结果时是否复用
-调用前先看本会话是否已有相同 API（同 URL 同参数）的近期结果，按数据特性决定：
-
-1. 历史/详情类（订单商品明细、交易记录、基础资料、已发生事件）：数据产生即固定
-   → 同会话已查过，直接复用上下文结果，不重复调用
-2. 实时/状态类（当前状态、库存、价格、位置、余额）：随时间变化
-   → 每次询问都应调用获取最新值
-3. 终态判定：若上下文已显示实体进入终态（订单已完成、流程已关闭、物流已签收）
-   → 该实体后续所有查询无需再调，终态不可逆
-
-不确定数据属于哪类时，倾向于调用（宁可多调一次，不要用陈旧数据回答）。
-
-### 文件上传
-使用 files 参数上传文件，自动以 multipart/form-data 编码发送：
-```
-files: {"file": "/path/to/document.pdf"}
-```
-也可以与 form_data 同时使用，实现带额外字段的文件上传。
-
-### 常见认证模式
-1. Bearer Token: `{"Authorization": "Bearer ${API_TOKEN}"}`
-2. API Key Header: `{"X-API-Key": "${API_KEY}"}`
-3. Basic Auth: `{"Authorization": "Basic ${BASIC_AUTH}"}`"""
+    usage_guide = ""
     display_name = "HTTP API 调用"
     category = "network"
     InputModel = HttpApiInput

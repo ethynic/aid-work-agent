@@ -50,27 +50,7 @@ class ContentGenerateTool(BaseTool):
         "工具负责调用大模型并返回结果。"
         "content_type 参数提供常用场景的快捷预设（如 email、report），非预设场景留空即可。"
     )
-    usage_guide = """（通用内容生成）
-
-**好的 prompt 示例：**
-```
-你代表 ABC 国际贸易有限公司，向德国客户撰写一封产品推荐邮件。
-
-客户信息：
-- 公司：SmartLiving GmbH
-- 联系人：Hans Weber
-- 行业：智能家居
-
-推荐产品：
-- 智能LED灯泡系列，节能40%，支持WiFi控制
-
-要求：
-1. 使用德语撰写
-2. 格式：邮件主题 + 正文
-3. 语气：专业但不生硬，像真实的商务邮件
-```
-
-**差的 prompt 示例：** `帮我写一封给德国客户的邮件，推销我们的智能灯泡`"""
+    usage_guide = ""
     display_name = "生成内容"
     category = "llm"
     InputModel = ContentGenerateInput

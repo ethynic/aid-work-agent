@@ -239,25 +239,7 @@ display_name 必须使用用户能理解的业务文件名，不要使用工具�
     category = "file"
     InputModel = WriteInput
 
-    usage_guide = """生成文本文件时：
-
-方式一（直接写入·短文件）：
-  write(content="完整内容", file_extension="md")
-  -> 自动生成临时文件
-
-方式二（内部生成·中等文件）：
-  write(file_path="report.html", generate_prompt="根据以下材料生成封面页 HTML：...")
-  -> 工具内部调 LLM 生成，内容不进入对话上下文，节省 token
-
-方式三（控制路径 + 内部生成）：
-  write(file_path="output/report.html", generate_prompt="...", content_type="report")
-  -> 指定路径和内容类型辅助生成
-
-注意：
-- 超过 4000 字的内容不要一次性放入 content 参数
-- 生成文件后必须调用 cp 工具注册下载，用户才能在前端下载/预览
-- 如果同时提供 content 和 generate_prompt，优先使用 content（直接写入）
-- 路径支持 Windows 和 Linux 格式"""
+    usage_guide = ""
 
     def __init__(self) -> None:
         self._user_id: Optional[str] = None

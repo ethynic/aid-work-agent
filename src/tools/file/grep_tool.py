@@ -84,27 +84,12 @@ class GrepTool(BaseTool):
 
     name = "grep"
     description = (
-        "在文件或目录中搜索文本（正则匹配）。用于在工具落盘的大响应文件、代码、"
-        "日志中定位内容，返回匹配行+行号+上下文。"
+        "在文件或目录中搜索文本（正则匹配），返回匹配行+1-based行号+上下文。"
+        "output_mode: content(默认,返回匹配行+上下文)/files_with_matches(只返回文件名)/count(匹配数)。"
+        "context/before_context/after_context 取上下文行，glob 按扩展名过滤（如 *.json），"
+        "max_matches 默认50。配合 read 精读：offset=行号-1。只读不写。"
     )
-    usage_guide = """\
-### grep 搜索定位
-在文件或目录中按正则搜索内容，返回匹配行 + 1-based 行号。
-
-**output_mode 三种模式**：
-- `content`（默认）：返回匹配行 + 行号 + 上下文。拿到行号后可用 read(file_path, offset=行号-1, limit=...) 精读该行附近内容。
-- `files_with_matches`：只返回含匹配的文件名列表（适合先定位文件）。
-- `count`：返回每个文件的匹配数。
-
-**配合 read 精读**：grep 拿到匹配行号后，read 用 offset（0-based，即行号-1）+ limit 读取上下文。行号是 1-based，与 read 的 cat -n 显示一致。
-
-**常用参数**：
-- `glob="*.json"`：目录搜索时按扩展名过滤。
-- `context=3` 或 `before_context`/`after_context`：取上下文行。
-- `max_matches`（默认 50）：超过会置 truncated=True，提示有更多匹配未返回。
-
-**注意**：本工具只读不写。搜索范围限于项目根目录与系统临时目录（工具落盘的大响应文件在临时目录下）。
-"""
+    usage_guide = ""
     display_name = "搜索文本"
     category = "file"
     InputModel = GrepInput
