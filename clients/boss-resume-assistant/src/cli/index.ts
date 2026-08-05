@@ -30,6 +30,7 @@ const USAGE = `BOSS 简历筛选助手 CLI
   filter --probe              只读模式：打印筛选面板各行全部选项及坐标，不改动筛选（可用于核对选项合法值）
   filter --clear              清除全部筛选（开面板 → 清除 → 确定，期间勿动鼠标）
   greet [--limit N]           逐个打招呼（默认 10 上限，最大 100；当前屏点完自动滚动，到底结束；真实写动作，期间勿动鼠标）
+  goto recommend|chat         点击左侧菜单跳转页面：recommend=推荐牛人，chat=沟通（看打招呼回复）；已在目标页自动跳过
   review [--all] [--open]       列出 UNCERTAIN 复核队列并生成静态 HTML 复核报告
   review override <编号> <QUALIFIED|REJECTED> --reason "..."  改判复核项
   export [--format csv|json] [--out 路径]   导出评估+动作（默认 ./exports/）
@@ -38,7 +39,7 @@ const USAGE = `BOSS 简历筛选助手 CLI
 全局参数：
   --data-dir <目录>             数据目录（默认 clients/boss-resume-assistant/data/）
   --exports-dir <目录>          复核报告/导出默认输出目录（默认 ./exports/，相对当前工作目录）
-  --cdp-port <端口>             Chrome 调试端口（默认 9222，run/filter/greet 生效）
+  --cdp-port <端口>             Chrome 调试端口（默认 9222，run/filter/greet/goto 生效）
 
 run 的 Chrome 准备（CLI 不启动 Chrome，只 attach 你日常的 Chrome）：
   1. 关闭所有 Chrome 窗口
@@ -118,6 +119,24 @@ async function main(): Promise<number> {
       }
       const { greetCommand } = await import('./commands/greet.js')
       return greetCommand({ limit, cdpPort })
+    }
+    case 'goto': {
+      const target = args.positional[1]
+      if (!target) {
+        console.error('goto 缺少目标页面：recommend（推荐牛人）/ chat（沟通）')
+        return 2
+      }
+      const cdpPortRaw = flagString(args, 'cdp-port')
+      let cdpPort: number | undefined
+      if (cdpPortRaw !== undefined) {
+        cdpPort = Number(cdpPortRaw)
+        if (!Number.isInteger(cdpPort) || cdpPort <= 0 || cdpPort > 65535) {
+          console.error(`--cdp-port 必须是 1-65535 的整数：${cdpPortRaw}`)
+          return 2
+        }
+      }
+      const { gotoCommand } = await import('./commands/goto.js')
+      return gotoCommand({ target, cdpPort })
     }
     case 'review': {
       const { reviewListCommand, reviewOverrideCommand } = await import('./commands/review.js')
