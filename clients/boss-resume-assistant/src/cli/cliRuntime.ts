@@ -1,5 +1,5 @@
 /**
- * CLI 运行时装配（Phase 9）：仿 src/main/runtime.ts 的组装方式，但不 import electron。
+ * CLI 运行时装配（Phase 9，CLI 为唯一产品形态，Electron GUI 已随路线收敛删除）。
  * - 数据目录：clients/boss-resume-assistant/data/（DB + 截图 + 指纹密钥）
  * - Chrome 接入：attach 用户日常 Chrome（带 --remote-debugging-port 启动），
  *   绝不 spawn 临时 profile（该路径触发 BOSS 风控封号，已废弃）；

@@ -44,9 +44,12 @@ function snapWith(items: Array<{ text: string; bounds: [number, number, number, 
 const NAME = { text: '张三', bounds: [100, 200, 60, 24] as [number, number, number, number] }
 const NAME2 = { text: '李四', bounds: [100, 300, 60, 24] as [number, number, number, number] }
 const GREET_BTN = { text: '打招呼', bounds: [400, 400, 80, 32] as [number, number, number, number] }
+// 列表卡片必须有年龄行「\d+岁」（姓名下方同列），与真实推荐页结构一致（candidateEnumerator 结构信号要求）
+const CARD1_INFO = { text: '31岁', bounds: [100, 240, 60, 24] as [number, number, number, number] }
+const CARD2_INFO = { text: '38岁', bounds: [100, 340, 60, 24] as [number, number, number, number] }
 
-const LIST = snapWith([NAME])
-const LIST_TWO = snapWith([NAME, NAME2])
+const LIST = snapWith([NAME, CARD1_INFO])
+const LIST_TWO = snapWith([NAME, CARD1_INFO, NAME2, CARD2_INFO])
 const DETAIL_BTN = snapWith([NAME, GREET_BTN])
 const DETAIL_NOBTN = snapWith([NAME])
 const DETAIL2_BTN = snapWith([NAME2, GREET_BTN])
@@ -223,13 +226,38 @@ test('UNCERTAIN → WAITING_REVIEW 进复核队列，不执行动作', async () 
   db.close()
 })
 
+test('付费简历：详情命中解锁弹层标记 → 落库 PAYWALL_LOCKED 后跳过，不截图/OCR/筛选，且后续运行不重试', async () => {
+  const db = freshDb()
+  const gateway = new StubGateway()
+  // 详情快照含「直豆」解锁标记（真机语料 2026-08-04）
+  const DETAIL_PAYWALL = snapWith([NAME, { text: '直豆', bounds: [300, 300, 60, 24] }])
+  gateway.snapshotQueue = [LIST, LIST, DETAIL_PAYWALL]
+  const session = new ScreeningSession(makeDeps(db, gateway, []))
+
+  session.markChromeLaunched()
+  await session.confirmLoginReady()
+  await startAndWait(session, ['COMPLETED'])
+
+  // 落库 PAYWALL_LOCKED 标记行，无评估、无动作
+  const rv = db.prepare("SELECT source FROM resume_views").get() as { source: string }
+  assert.equal(rv.source, 'PAYWALL_LOCKED')
+  assert.equal((db.prepare('SELECT COUNT(*) AS c FROM evaluations').get() as { c: number }).c, 0)
+  assert.equal((db.prepare('SELECT COUNT(*) AS c FROM actions').get() as { c: number }).c, 0)
+  // 详情已用 Escape 关闭
+  assert.ok(gateway.keyCalls.length >= 1)
+  db.close()
+})
+
+
 test('DOMSnapshot 无法唯一定位 → PAUSED，会话行同步 PAUSED', async () => {
   const db = freshDb()
   const gateway = new StubGateway()
   // 两个同名节点：枚举去重为一个名字，但 locate 发现 2 个可见匹配 → UNLOCATABLE
   const dup = snapWith([
     { text: '张三', bounds: [100, 200, 60, 24] },
+    { text: '31岁', bounds: [100, 240, 60, 24] },
     { text: '张三', bounds: [100, 400, 60, 24] },
+    { text: '32岁', bounds: [100, 440, 60, 24] },
   ])
   gateway.snapshotQueue = [dup, dup]
   const session = new ScreeningSession(makeDeps(db, gateway, []))

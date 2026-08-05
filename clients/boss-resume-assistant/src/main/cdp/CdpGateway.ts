@@ -153,6 +153,7 @@ export class CdpGateway {
     y: number
     button?: 'none' | 'left' | 'right' | 'middle'
     clickCount?: number
+    deltaX?: number
     deltaY?: number
   }): Promise<void> {
     await this.socket.send(
@@ -164,6 +165,8 @@ export class CdpGateway {
         // 滚轮事件不携带按键态（与真机验证过的 spike 参数一致）
         button: opts.button ?? (opts.type === 'mouseWheel' ? 'none' : 'left'),
         clickCount: opts.clickCount ?? (opts.type === 'mouseReleased' ? 1 : undefined),
+        // Chrome 150 实测：mouseWheel 的 deltaX/deltaY 均为必填，缺任一个报 -32602
+        deltaX: opts.deltaX ?? (opts.type === 'mouseWheel' ? 0 : undefined),
         deltaY: opts.deltaY,
       },
       this.pageSessionId,

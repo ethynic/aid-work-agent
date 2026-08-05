@@ -2,21 +2,14 @@
   "name": "boss-resume-assistant",
   "version": "0.1.0",
   "private": true,
-  "description": "BOSS 简历筛选助手 - 独立桌面客户端(原生 CDP)",
+  "description": "BOSS 简历筛选助手 - CLI 客户端（原生 CDP 定位 + 双通道点击）",
   "type": "module",
-  "main": "dist/src/main/main.js",
   "scripts": {
-    "dev:renderer": "vite",
-    "build:renderer": "vite build",
+    "build": "tsc -p tsconfig.main.json",
     "build:main": "tsc -p tsconfig.main.json",
-    "build": "npm run build:renderer && npm run build:main",
-    "typecheck": "vue-tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.main.json",
-    "rebuild": "electron-rebuild -f -w better-sqlite3",
+    "typecheck": "tsc --noEmit -p tsconfig.main.json",
     "test": "npm run build:main && node scripts/run-tests.mjs",
-    "start": "npm run build && electron .",
-    "cli": "npm run build:main && node dist/src/cli/index.js",
-    "package:win:dev": "npm run typecheck && npm test && node scripts/package-win.mjs dev",
-    "verify:package": "node scripts/verify-package.mjs dev"
+    "cli": "npm run build:main && node dist/src/cli/index.js"
   },
   "dependencies": {
     "better-sqlite3": "^13.0.2",
@@ -26,19 +19,10 @@
     "ws": "^8.21.1"
   },
   "devDependencies": {
-    "@electron/asar": "^4.2.0",
-    "@electron/rebuild": "^3.7.1",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^24.0.0",
     "@types/pngjs": "^6.0.5",
     "@types/ws": "^8.18.1",
-    "@vitejs/plugin-vue": "^5.2.1",
-    "electron": "43.1.0",
-    "electron-builder": "^26.15.3",
-    "typescript": "^5.9.0",
-    "vite": "^5.4.11",
-    "vue": "^3.4.38",
-    "vue-router": "^4.4.3",
-    "vue-tsc": "^2.1.6"
+    "typescript": "^5.9.0"
   }
 }

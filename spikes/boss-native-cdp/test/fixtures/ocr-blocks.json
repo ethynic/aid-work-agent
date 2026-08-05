@@ -1,4 +1,0 @@
-[
-  { "text": "工作经历", "confidence": 0.99, "box": [10, 20, 110, 40], "pageIndex": 0 },
-  { "text": "示例公司", "confidence": 0.96, "box": [10, 50, 110, 70], "pageIndex": 0 }
-]

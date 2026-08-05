@@ -15,7 +15,7 @@
  * - 用户暂停/停止在候选人边界生效（绝不在动作执行中途打断，避免半点击状态）
  *
  * 所有 CDP 交互通过注入的 SessionGateway（生产为 CdpGateway，测试为 stub）。
- * 本类不直接 import Electron，便于 node:test 单测。
+ * 本类不依赖具体入口形态，便于 node:test 单测。
  */
 import type { Database as BetterSqliteDatabase } from 'better-sqlite3'
 import type { CdpGateway } from '../cdp/CdpGateway.js'
@@ -50,6 +50,9 @@ export type SessionState =
   | 'PAUSED'
   | 'STOPPED'
   | 'COMPLETED'
+
+/** 付费简历解锁弹层标记词（真机语料 2026-08-04）：详情打开后 snapshot 命中任一词即判定付费锁定 */
+const PAYWALL_MARKERS = ['直豆', '首充', '道具解锁', '付费解锁', '解锁简历', '开通会员'] as const
 
 /** 编排层用到的 CDP 能力子集（CdpGateway 天然满足，测试可 stub） */
 export type SessionGateway = Pick<
@@ -318,6 +321,18 @@ export class ScreeningSession {
       throw new Error(`详情打开失败: snapshot 中未找到候选人 ${name}`)
     }
 
+    // 付费简历（道具/直豆解锁弹层）看不了正文：落库标记后跳过，不截图/OCR/筛选。
+    // 标记词来自真机语料（2026-08-04 probe-snapshot-strings）：首充/直豆/道具/解锁。
+    if (snapshotContainsText(detailSnap, PAYWALL_MARKERS)) {
+      const payCandidateId = this.upsertCandidate(fingerprint, name)
+      this.insertResumeView(payCandidateId, 'PAYWALL_LOCKED', 'NO_SUMMARY', null)
+      this.log('info', `${name} 为付费简历（需道具/直豆解锁），已跳过`)
+      this.transition('CLOSING_DETAIL', `关闭详情: ${name}`)
+      await sendEscapeClose(gateway)
+      await this.wait(this.settleMs)
+      return
+    }
+
     // 候选人落库（指纹去重）+ resume_views 先插最小行（设计 §15：每次成功打开都有记录）
     const candidateId = this.upsertCandidate(fingerprint, name)
     const resumeViewId = this.insertResumeView(candidateId, 'LIST_DOM_FALLBACK', 'PARTIAL_SUMMARY', null)
@@ -438,7 +453,16 @@ export class ScreeningSession {
          WHERE c2.fingerprint = ?`,
       )
       .get(fingerprint) as { c: number }
-    return row.c > 0
+    if (row.c > 0) return true
+    // 付费简历跳过也视为已处理，避免每次运行重复打开解锁弹层
+    const paywalled = this.deps.db
+      .prepare(
+        `SELECT COUNT(*) AS c FROM resume_views rv
+         JOIN candidates c2 ON c2.id = rv.candidate_id
+         WHERE c2.fingerprint = ? AND rv.source = 'PAYWALL_LOCKED'`,
+      )
+      .get(fingerprint) as { c: number }
+    return paywalled.c > 0
   }
 
   private upsertCandidate(fingerprint: string, name: string): number {

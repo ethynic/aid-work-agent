@@ -8,10 +8,37 @@
  * fail-loud：连接拒绝 / 超时 / 响应非法三类故障各自抛出带 kind 的 ChromeAttachError，
  * 由 CLI 层转译为用户可操作的诊断文案。
  */
-import { findChromeExecutable } from './ChromeLauncher.js'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 
 /** 默认调试端口（可用 --cdp-port 覆盖） */
 export const DEFAULT_CDP_PORT = 9222
+
+/** Windows 常见 Chrome 安装路径 */
+function defaultChromeCandidates(): string[] {
+  const pf = process.env['ProgramFiles'] ?? 'C:\\Program Files'
+  const pfx86 = process.env['ProgramFiles(x86)'] ?? 'C:\\Program Files (x86)'
+  const local = process.env['LOCALAPPDATA'] ?? path.join(os.homedir(), 'AppData', 'Local')
+  return [
+    path.join(pf, 'Google', 'Chrome', 'Application', 'chrome.exe'),
+    path.join(pfx86, 'Google', 'Chrome', 'Application', 'chrome.exe'),
+    path.join(local, 'Google', 'Chrome', 'Application', 'chrome.exe'),
+  ]
+}
+
+/** 探测系统 Chrome 路径（仅用于生成启动命令提示），找不到 fail-loud */
+export function findChromeExecutable(candidates?: string[]): string {
+  const list = candidates ?? defaultChromeCandidates()
+  for (const p of list) {
+    try {
+      if (p && fs.existsSync(p)) return p
+    } catch {
+      // 单个路径探测失败继续
+    }
+  }
+  throw new Error(`未找到 Chrome 可执行文件（已探测 ${list.length} 个常见路径），请安装 Chrome 或配置路径`)
+}
 
 export type ChromeAttachErrorKind = 'refused' | 'timeout' | 'invalid'
 

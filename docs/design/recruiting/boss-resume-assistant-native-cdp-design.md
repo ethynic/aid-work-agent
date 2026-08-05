@@ -2,13 +2,13 @@
 
 > 状态：✅ Phase 0 已通过（按产品确认的最小原生 CDP 门禁）  
 > 日期：2026-07-22  
-> 类型：Windows 独立桌面应用  
+> 类型：Windows CLI 工具（Electron GUI 已随路线收敛删除，见 §16 决策 6）  
 > 关联调研：[BOSS 直聘智能招聘 Agent 可行性调研](../../research/boss-recruiting-agent-research.md)  
 > 开发计划：[原生 CDP 开发计划](../../plans/recruiting/boss-resume-assistant-native-cdp-dev-plan.md)
 
 ## 1. 结论
 
-新建独立桌面应用 `clients/boss-resume-assistant/`，与现有 Agent、租户、渠道、服务端 Browser Runtime 和服务端数据库完全解耦。应用启动一个普通、可见的系统 Chrome，用户自行扫码登录、关闭弹窗并进入推荐牛人页面；用户明确点击“登录和页面准备完成”后，应用才通过 Chrome DevTools Protocol 的 browser WebSocket 建立连接。
+新建 CLI 工具 `clients/boss-resume-assistant/`，与现有 Agent、租户、渠道、服务端 Browser Runtime 和服务端数据库完全解耦。用户自己用日常 Chrome 带 `--remote-debugging-port=9222` 启动并扫码登录、关闭弹窗、进入推荐牛人页面；CLI attach 调试端点并在终端回车确认后，才通过 Chrome DevTools Protocol 的 browser WebSocket 建立连接（attach-only，程序绝不 spawn/kill 用户 Chrome，见 §16 决策 7）。
 
 浏览器控制必须使用自行实现的原生 CDP 客户端，不得引入 Playwright、Puppeteer、Selenium 或其他会自动初始化页面执行上下文的浏览器自动化框架。详情阶段禁止发送任何 `Runtime.*` 方法，也禁止通过其他域间接创建 isolated world、RemoteObject 或注入页面脚本。详情正文和结构化摘要统一来自截图与本地 OCR；DOMSnapshot 仅用于列表定位和结构辅助。
 
@@ -31,7 +31,7 @@
 
 ### 2.0 Phase 0 工程化进度（2026-07-22）
 
-已在 `spikes/boss-native-cdp/` 建立可重复的原生 WebSocket 工具骨架：请求 ID 与 session 路由、超时/断开处理、CDP method 强制白名单、`Runtime.*` 与脚本注入硬拒绝及脱敏 JSONL 审计。当前命令只允许用户确认页面就绪后采集推荐页 DOMSnapshot、当前视口截图和实际 method 审计，不自动导航、刷新或执行写动作。离线自动化测试覆盖协议安全与清理、Chrome 150 dense array 与标准 sparse `{index,value}` 两种 DOMSnapshot 序列化、嵌套 iframe owner 偏移、各层滚动偏移、`nodeValue`/`contentDocumentIndex` 未知形态 fail-loud、重复文本、零面积点击区和招聘写动作文案拒绝。
+已在 `spikes/boss-native-cdp/` 建立可重复的原生 WebSocket 工具骨架（该探针工程已完成使命，2026-08-05 随路线收敛删除，结论固化于本文）：请求 ID 与 session 路由、超时/断开处理、CDP method 强制白名单、`Runtime.*` 与脚本注入硬拒绝及脱敏 JSONL 审计。当前命令只允许用户确认页面就绪后采集推荐页 DOMSnapshot、当前视口截图和实际 method 审计，不自动导航、刷新或执行写动作。离线自动化测试覆盖协议安全与清理、Chrome 150 dense array 与标准 sparse `{index,value}` 两种 DOMSnapshot 序列化、嵌套 iframe owner 偏移、各层滚动偏移、`nodeValue`/`contentDocumentIndex` 未知形态 fail-loud、重复文本、零面积点击区和招聘写动作文案拒绝。
 
 2026-07-22 现场真机部分门禁结果：原生 Input 打开详情 2/2 成功；详情滚动 3 次并逐次截图成功；完整 Escape `rawKeyDown`/`keyUp` 2/2 成功；两份详情 DOMSnapshot 正文可读。根据产品决策，不再捕获 WASM `abstractData`，固定摘要探针及相关协议权限已删除。后续摘要门禁只验证分段截图、本地 OCR 与字段归一化链路。
 
@@ -92,10 +92,10 @@
 
 ```mermaid
 flowchart LR
-    U["用户"] --> UI["Electron + Vue 桌面界面"]
+    U["用户"] --> UI["CLI 终端（岗位 YAML / 回车门禁 / stdin 控制）"]
     UI --> O["任务状态机"]
     O --> C["Raw CDP Gateway"]
-    C --> CH["可见系统 Chrome"]
+    C --> CH["用户日常 Chrome（attach 调试端口）"]
     CH --> B["BOSS 招聘页面"]
 
     C --> L["列表 DOMSnapshot 解析器"]
@@ -107,6 +107,8 @@ flowchart LR
     N --> R["硬规则 + LLM 筛选器"]
     R --> A["动作规划器"]
     A --> C
+    A --> W["WinMouseClicker（Win32 真实鼠标通道）"]
+    W --> CH
 
     O --> DB["本地 SQLite"]
     ST --> FS["本地加密附件目录"]
@@ -118,8 +120,8 @@ flowchart LR
 
 | 组件 | 职责 | 禁止事项 |
 |---|---|---|
-| Electron Renderer | 岗位配置、进度、人工复核、日志浏览 | 不直接访问 CDP、文件系统或密钥 |
-| Electron Main | 状态机、Chrome 生命周期、SQLite、IPC | 不解析具体页面选择器 |
+| CLI 入口 | 岗位配置、进度输出、人工复核（HTML 报告）、日志导出 | 不直接访问 CDP 或密钥 |
+| 主进程（node） | 状态机、Chrome attach、SQLite、任务编排 | 不解析具体页面选择器 |
 | Raw CDP Worker | WebSocket、协议白名单、请求关联、截图和 Input | 禁止 Runtime；禁止任意 method 透传 |
 | BOSS Adapter | 列表快照解析、坐标定位、详情状态识别、动作语义 | 不执行 LLM 判断 |
 | Capture/OCR Worker | 裁剪、滚动、拼接、OCR、Markdown | 不控制招聘动作 |
@@ -128,25 +130,21 @@ flowchart LR
 
 ## 5. Chrome 生命周期
 
-### 5.1 启动
+### 5.1 启动（attach-only）
 
-应用通过 `child_process.spawn()` 启动系统 Chrome，而不是通过浏览器自动化框架启动：
+程序**不启动 Chrome**。用户自己用日常 Chrome 带调试端口启动（正常 profile、已有登录态）：
 
 ```text
-chrome.exe
-  --remote-debugging-port=0
-  --user-data-dir=<本次会话独立目录>
-  --new-window
-  https://www.zhipin.com/web/user/?ka=header-login
+chrome.exe --remote-debugging-port=9222 --user-data-dir="C:\chrome-boss-profile"
 ```
 
-Chrome 在 profile 中写入 `DevToolsActivePort`，应用只读取该文件获得端口和 WebSocket 路径。首版每次使用新的临时 profile，不保存登录态；用户关闭应用时明确选择关闭 Chrome 或保留窗口，临时 profile 在 Chrome 完全退出后清理。
+`--user-data-dir` 用目录联接到真实 User Data（绕过 Chrome 150+ 默认 profile 禁用调试端口的限制）。程序仅通过 `http://127.0.0.1:9222/json/version` 探测端点、解析 `webSocketDebuggerUrl` 后 attach；任何路径不得 spawn/kill 用户 Chrome、不得删除任何 profile（背景见 §16 决策 7：spawn 全新 profile 扫码登录触发 BOSS 风控封号）。
 
 ### 5.2 手动登录门禁
 
-1. 应用启动 Chrome 后保持完全断开。
+1. CLI 探测调试端点但保持 CDP WebSocket 完全断开。
 2. 用户扫码登录、进入“推荐牛人”、选择岗位并关闭所有遮挡弹窗。
-3. 用户点击桌面应用中的“登录和页面准备完成”。
+3. 用户在终端回车确认“登录和页面准备完成”。
 4. 应用只调用 `/json/version` 和 `/json/list` 做只读检查。
 5. URL、页面目标和截图预检通过后才建立 Raw CDP session。
 
@@ -359,6 +357,22 @@ LLM 输入使用 Markdown，必须包含岗位知识版本和候选人字段来�
 
 任何写操作都必须具有 `PLANNED → SENT → CONFIRMED/UNKNOWN/FAILED` 状态。`UNKNOWN` 不自动重试，防止重复打招呼。
 
+### 10.3 双通道点击执行
+
+真机实证（2026-08-05，见 §16 决策 8）：BOSS 反作弊 SDK 对 CDP 合成鼠标事件**选择性拦截**，浏览类操作放行、筛选类控件拦截。因此点击执行分双通道：
+
+- **定位统一走 CDP DOMSnapshot**：元素文本 → 结构化坐标（含 iframe owner 偏移累加），禁止大模型估算坐标。
+- **通道 1（默认）CDP `Input.dispatchMouseEvent`**：卡片详情、Escape、滚动等浏览类操作。
+- **通道 2 Win32 真实鼠标（`WinMouseClicker`）**：筛选按钮、tab、城市/职位下拉、筛选面板选项、确定按钮等被风控拦截的控件。
+- **写动作（打招呼/不合适）**：默认先试通道 1，实证被拦则降级通道 2。
+
+Win32 通道实现要点：
+
+- **坐标换算**：DOMSnapshot layout bounds 即 device px（与截图 PNG 尺寸一致）；点击前 `GetWindowRect(Chrome_RenderWidgetHostHWND)` 实时取渲染视口屏幕矩形，`scale = 视口宽 / 截图宽` 换算屏幕坐标（自动覆盖 150% DPI 缩放），**窗口可变必须每次校准**。
+- **落点守卫**：点击前 `WindowFromPoint` 必须归属 `Chrome_RenderWidgetHostHWND`；不是则 `SetWindowPos` 抬窗重试一次，仍失败 fail-loud 进入 `PAUSED`，不盲点。（防「幽灵按钮」：会话终端渲染的截图影像会被误当目标；防遮挡窗口吃点击。）
+- **动作**：`SetCursorPos + mouse_event`（不用 SendInput 绝对坐标，多显示器需 VIRTUALDESK 标志有坑）；拟人分步移动（10 步/300ms）→ 悬停 500ms → down/up。
+- **用户提示**：Win32 点击借用真实光标（约 1s），执行期间 CLI 必须提示用户手离鼠标。
+
 ## 11. 状态机与恢复
 
 ```text
@@ -406,31 +420,29 @@ IDLE
 
 ```text
 clients/boss-resume-assistant/
+  src/cli/                     # CLI 入口（唯一产品形态）
+    index.ts                   # 子命令分发：run / review / export / audit
+    commands/                  # 各子命令实现
+    cliRuntime.ts              # 运行时装配（数据目录、attach、状态机接线）
+    jobConfig.ts               # 岗位 YAML 配置
   src/main/
-    chrome/ChromeLauncher.ts
+    chrome/ChromeAttacher.ts   # 调试端点探测（attach-only，绝不 spawn/kill Chrome）
     cdp/CdpSocket.ts
     cdp/CdpGateway.ts
     cdp/methodPolicy.ts
+    input/WinMouseClicker.ts   # Win32 真实鼠标通道（Phase 10 待实现）
     workflow/ScreeningSession.ts
-    storage/
-  src/renderer/
-    views/LoginGate.vue
-    views/JobConfig.vue
-    views/RunConsole.vue
-    views/ReviewQueue.vue
-    views/AuditLog.vue
-  src/workers/
-    boss/ListSnapshotParser.ts
-    boss/DetailCapture.ts
+    workflow/candidateEnumerator.ts
+    boss/                      # ListSnapshotParser / DetailCapture / ButtonLocator 等
     image/LongScreenshotStitcher.ts
-    ocr/OcrAdapter.ts
+    ocr/                       # OcrProvider / TesseractJsProvider
     normalize/ResumeNormalizer.ts
-    screening/ScreeningEngine.ts
-  tests/
-    unit/
-    integration/
-    fixtures/
-    manual-e2e/
+    screening/                 # ScreeningEngine / DeepSeekLlmProvider
+    actions/                   # ActionPlanner / PageActionExecutor / ActionStore
+    storage/
+  db/                          # SQLite client / schema / migrations
+  scripts/                     # 诊断与 Win32 点击落地脚本（win-click.ps1 等）
+  tests/                       # node:test 单测 + manual-e2e 真机步骤
 ```
 
 ## 14. 测试策略
@@ -479,6 +491,34 @@ clients/boss-resume-assistant/
    - 运行进度：终端实时输出（状态机事件 → 控制台行）
    - 复核队列：生成静态 HTML 复核报告（长图 + 摘要 + 证据 + 结论），改判在 CLI 按编号操作
    - 审计/导出：复用现有 CSV/JSON 导出
-   - Electron 工程保留不删，CLI 与 GUI 共享 `src/main/` 下全部 UI 无关模块；CLI 入口禁止 import electron 耦合模块（main.ts / ipc.ts / windowState.ts / runtime.ts）
-   - better-sqlite3 升级 v13（N-API 预编译，跨 node/Electron ABI 免本地编译），开发与测试统一使用 node 22
-7. **浏览器接入方式：attach 用户日常 Chrome，禁止 spawn 全新 profile（2026-08-04 封号事故后的修正决策）**：原设计 §5.1 ChromeLauncher「独立临时 profile + 程序启动 Chrome」在高风控的招聘者账号场景下致命——全新设备环境（无 Cookie/历史/指纹）+ 调试端口扫码登录，BOSS 风控在登录环节即封号（CDP 连接尚未建立，与自动化操作无关）。修正为：**用户自己用日常 Chrome（正常 profile、已有登录态）加 `--remote-debugging-port=9222` 手动启动，程序仅 attach**（Phase 0/2 已验证此路径安全）；程序任何路径不得 spawn/kill 用户 Chrome、不得删除任何 profile。Electron GUI 的 spawn 模式仅保留代码，不再作为推荐使用方式。
+   - Electron GUI 工程已随路线收敛**整体删除**（2026-08-05，renderer/main 壳/IPC/preload/打包链路及对应测试），CLI 为唯一产品形态
+   - better-sqlite3 升级 v13（N-API 预编译），开发与测试统一使用 node 22
+7. **浏览器接入方式：attach 用户日常 Chrome，禁止 spawn 全新 profile（2026-08-04 封号事故后的修正决策）**：原设计 §5.1 ChromeLauncher「独立临时 profile + 程序启动 Chrome」在高风控的招聘者账号场景下致命——全新设备环境（无 Cookie/历史/指纹）+ 调试端口扫码登录，BOSS 风控在登录环节即封号（CDP 连接尚未建立，与自动化操作无关）。修正为：**用户自己用日常 Chrome（正常 profile、已有登录态）加 `--remote-debugging-port=9222` 手动启动，程序仅 attach**（Phase 0/2 已验证此路径安全）；程序任何路径不得 spawn/kill 用户 Chrome、不得删除任何 profile。spawn 模式的 ChromeLauncher 已随路线收敛删除（2026-08-05）。
+8. **双通道点击：CDP 合成事件 + Win32 真实鼠标（2026-08-05 真机实证）**：BOSS 页面隐藏 iframe 运行 `parent.__xbc` 反作弊 SDK，对 CDP `Input.dispatchMouseEvent` 合成事件做**选择性拦截**——浏览类操作放行、筛选类交互拦截；OS 级真实输入无法区分，全通。
+
+   | 操作 | CDP 合成点击 | Win32 真实鼠标 |
+   |------|------------|---------------|
+   | 候选人卡片（开详情）、Escape、滚动 | ✅ | ✅ |
+   | 筛选按钮、最新 tab、上海/职位下拉、面板选项 | ❌ 被风控选择性拦截 | ✅ |
+
+   2026-08-05 demo 实证：筛选面板「5-10年 / 本科 / 硕士 / 博士 / 10-20K → 确定」全流程经 DOMSnapshot 定位 + Win32 点击一次通过，列表正确刷新（筛选·5 生效）。写动作通道归属待 Phase 7 真机验证。执行规范见 §10.3。
+
+## 17. 附录：真机踩坑清单
+
+2026-08-05 前后真机联调沉淀，全部已闭环。排查新问题时先对照此表。
+
+| # | 坑 | 结论/解法 |
+|---|----|----------|
+| 1 | spawn 全新 profile 登录 → 封号 | attach 用户日常 Chrome（§16 决策 7） |
+| 2 | Chrome 150 默认 profile 调试端口无效 | 目录联接 `C:\chrome-boss-profile` → 真实 User Data |
+| 3 | 候选人误枚举（职位管理/上海等 UI 文本） | 结构信号：左列 x∈[80,700] + 姓名下方同列 `\d+岁` 年龄行 |
+| 4 | 付费检测全员误判 | `直豆/首充` 命中左导航常驻文本；修复方向：区域限定 x≥400 + 弹层文案（解锁/购买/商品价格）子串匹配（Phase 10 实施） |
+| 5 | mouseWheel -32602 | Chrome 150 要求 deltaX/deltaY 成对 |
+| 6 | CDP 合成点击点不动筛选 | 风控 SDK 选择性拦截（§16 决策 8），筛选类控件走 Win32 |
+| 7 | 150% DPI 缩放坐标系 | DOMSnapshot bounds = device px（与截图 PNG 同尺寸）；屏幕虚拟 px = device px ÷ 1.5；视口原点用 `GetWindowRect(Chrome_RenderWidgetHostHWND)` 实时取，窗口会变必须每次校准 |
+| 8 | 幽灵按钮 | Claude 会话终端会把截图渲染出来，截图里的按钮影像会被误当真按钮（坐标/WindowFromPoint/截图全被带偏）。排查时先 WindowFromPoint 确认归属，别信肉眼截图位置 |
+| 9 | 遮挡吃点击 | 会话终端/QQ 等窗口压住目标点时点击被吃掉。点击前 `WindowFromPoint` 必须是 `Chrome_RenderWidgetHostHWND`，否则先 SetWindowPos 抬 BOSS 窗口 |
+| 10 | SendInput 多显示器映射错 | 绝对坐标需 `MOUSEEVENTF_VIRTUALDESK` 标志；统一用 `SetCursorPos + mouse_event`（虚拟坐标，无此坑） |
+| 11 | PowerShell 中文乱码 | .ps1 必须 UTF-8 with BOM；中文参数勿经 bash 内联传递 |
+| 12 | PS 脚本块→C# 委托静默失败 | 窗口枚举等逻辑全部写在 C# Add-Type 里，PowerShell 只做调用 |
+| 13 | 用户鼠标干扰 | Win32 点击借用真实光标，点击期间（约 1s）用户手不能碰鼠标；CLI 流程中需明确提示 |

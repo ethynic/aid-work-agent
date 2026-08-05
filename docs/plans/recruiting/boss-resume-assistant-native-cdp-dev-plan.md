@@ -1,7 +1,8 @@
 # BOSS 简历筛选助手原生 CDP 开发计划
 
-> 状态：🔧 Phase 1～9 代码全部完成（CLI 形态），待真机端到端验证  
-> 日期：2026-07-22（Phase 7/8/9 完成于 2026-08-04）  
+> 状态：🔧 Phase 1～9 代码全部完成（CLI 形态）；Phase 10（双通道点击固化）进行中，demo 已实证  
+> 日期：2026-07-22（Phase 7/8/9 完成于 2026-08-04，Phase 10 新增于 2026-08-05）  
+> ⚠️ **2026-08-05 路线收敛**：Electron GUI（renderer/主进程壳/IPC/preload/打包链路）、spawn 模式 ChromeLauncher、探索期探针脚本、`spikes/boss-native-cdp/` 已全部删除，CLI 为唯一产品形态。本文 Phase 1/8 等章节中 GUI、IPC、Electron 打包相关描述仅作历史记录，不再有效；以设计文档 §16 决策 6/7/8 为准。
 > 设计文档：[BOSS 简历筛选助手原生 CDP 设计](../../design/recruiting/boss-resume-assistant-native-cdp-design.md)  
 > 工程位置：`clients/boss-resume-assistant/`
 
@@ -18,6 +19,7 @@
 | 7 | ✅ 代码+单测+CR通过 / 真机写动作待用户确认 | ActionPlanner（三态→GREET/REJECT/NO_ACTION，6项前置校验）+ActionStore（幂等 unique_key+状态机）+PageActionExecutor（fresh snapshot 重定位、before/after截图、UNKNOWN零重试）+ButtonLocator/DetailCloser+reasonMapping。DB migration v2（actions 补 unique_key/session_id/sent_at/confirmed_at+唯一索引）。CR 修复 P1：mousePressed 送达后 released 失败归 UNKNOWN 防重复点击。真机最小样本步骤见 tests/manual-e2e-phase7.md，需用户在场确认 |
 | 8 | ✅ 代码+单测+CR通过 / 真机与打包验收待办 | ChromeLauncher+ScreeningSession(14态状态机编排)+storage 四 store+exporter(CSV防公式注入)+runtime 装配；渲染层五页(LoginGate 交互登录门禁/JobConfig/RunConsole/ReviewQueue/AuditLog)+窄 IPC v2(18 新通道,全过 assertTrustedIpcSender)；migration v3。CR 修 3 个 P1：滚动改 mouseWheel(mouseMoved+delta 不滚动)、Launcher 启动失败杀进程防泄漏、登录等待期 Chrome 退出可复位。真机步骤 tests/manual-e2e-phase8.md；打包仍阻塞于 admin 装 VC++ workload |
 | 9 | ✅ 代码+单测+CR通过 / 真机待办 | **CLI 形态**（2026-08-04 产品决策，Electron 壳太重）：`src/cli/` 五子命令 run/review/review override/export/audit；岗位 YAML 配置(examples/example-job.yaml)、回车登录门禁、stdin p/r/s/q 控制、静态 HTML 复核报告（证据着色+长图 file://+全量转义）、数据落 `data/`(gitignore)；migration v4(resume_views.ocr_markdown)。CR 修 2 个 P1：Ctrl+C 无清理(Chrome 孤儿)改为 SIGINT 统一走强制清扫、q 退出与在途 runLoop 竞态改为 quitNow 立即 shutdown+exit。Electron 工程保留不删，CLI 链路零 electron import(依赖闭包 30 文件实测) |
+| 10 | 🔧 进行中 / demo 已实证 | **双通道点击固化**（2026-08-05 真机实证，设计文档 §16 决策 8）：BOSS 反作弊 SDK 选择性拦截 CDP 合成点击（筛选类控件），Win32 真实鼠标全通。08-05 demo 已手动跑通全流程：DOMSnapshot 定位「5-10年/本科/硕士/博士/10-20K」→ win-click.ps1 逐个点击 → 确定 → 列表刷新（筛选·5 生效）。待办见 §12 |
 
 **真机环境**：用户 Chrome 已带 `--remote-debugging-port=9222` 启动并登录在 `https://www.zhipin.com/web/chat/recommend`，Phase 2 已实测可连。
 
@@ -65,6 +67,8 @@
 | 6 | 硬规则、LLM筛选与人工复核 | 5～7 人日 | ⬜ | 三态结论、证据和Schema门禁通过 |
 | 7 | 打招呼/不合适动作与幂等 | 5～8 人日 | ⬜ | 最小真实动作样本和UNKNOWN不重试通过 |
 | 8 | 审计界面、恢复、打包与验收 | 5～7 人日 | ⬜ | Windows安装包和端到端验收通过 |
+| 9 | CLI 形态（产品决策 2026-08-04） | 2～3 人日 | ✅ 代码完成 | 见 §0；Electron 壳保留不删 |
+| 10 | 双通道点击固化与筛选设置自动化 | 2～3 人日 | 🔧 demo 已实证 | WinMouseClicker 落地 + 筛选全流程真机通过 + 付费误判修复 |
 
 总预估：43～64 人日。Phase 0 失败时停止项目并回到人工点击或纯只读辅助方案，不通过增加 stealth、Runtime 注入或更换自动化框架继续绕行。
 
@@ -356,28 +360,54 @@ Phase 4 先交付截图、拼接和查看日志持久化骨架；`ViewedResumeSu
 - [ ] Windows安装、升级和卸载验证通过。
 - [ ] 更新本文完成状态并将 `docs/ideas.md` 条目移动到 `docs/ideas_finished.md`。
 
-## 12. 测试命令规划
+## 12. Phase 10：双通道点击固化与筛选设置自动化
+
+> 背景：2026-08-05 真机实证 CDP 合成点击被 BOSS 反作弊 SDK 选择性拦截（筛选类控件），Win32 真实鼠标全通。设计决策见设计文档 §16 决策 8、执行规范见 §10.3、踩坑清单见 §17。当日 demo 已用探针脚本手动跑通筛选全流程（经验 5-10年 + 学历 本科/硕士/博士 + 薪资 10-20K → 确定 → 列表刷新），本 Phase 将其产品化。
+
+### 12.1 WinMouseClicker（Win32 真实鼠标通道）
+
+- [ ] 实现 `src/main/input/WinMouseClicker.ts`：输入 page 坐标（DOMSnapshot 给出），输出点击成功/失败。
+- [ ] 实时校准：`GetWindowRect(Chrome_RenderWidgetHostHWND)` 取渲染视口屏幕矩形，`scale = 视口宽 / 截图PNG宽` 换算（DOMSnapshot bounds 即 device px，与截图同口径）；每次点击前重新校准，不缓存窗口位置。
+- [ ] 落点守卫：点击前 `WindowFromPoint` 归属校验 = `Chrome_RenderWidgetHostHWND`；失败则 `SetWindowPos` 抬窗重试一次，仍失败 fail-loud 进入 PAUSED。
+- [ ] 动作：`SetCursorPos + mouse_event`（禁用 SendInput 绝对坐标），拟人分步移动（10 步/300ms）→ 悬停 500ms → down/up。
+- [ ] 落地形态：node 侧 child_process 调用 `scripts/win-click.ps1`（UTF-8 BOM，中文参数不经 bash 内联）；`win-screenshot.ps1` 保留为诊断工具。
+- [ ] CLI 在 Win32 点击期间提示用户手离鼠标。
+
+### 12.2 筛选设置自动化（FilterSetter）
+
+- [ ] 产品化 `scripts/locate-text.mjs` 的定位逻辑（DOMSnapshot 文本 → 唯一命中坐标，多命中时按面板区域约束消歧，无法唯一定位 fail-loud）。
+- [ ] 岗位 YAML 配置扩展筛选条件字段（经验/学历多选/薪资），启动 run 前自动设置筛选并验证列表变化。
+- [ ] 「学历本科及以上」语义映射为多选 本科+硕士+博士。
+- [ ] 真机门禁：完整流程 开面板 → 选选项 → 确定 → 列表变化验证（demo 已手动通过，产品化后复验）。
+
+### 12.3 已知 bug 修复
+
+- [ ] 付费检测误判修复：`ScreeningSession.PAYWALL_MARKERS` 改区域限定（x≥400，排除左导航常驻「直豆/首充」文本）+ 弹层文案子串匹配（解锁/购买/商品价格），参考 `ButtonLocator.snapshotContainsText` 加区域变体。
+- [ ] 清理 `data/boss-resume.db` 6 条假 `PAYWALL_LOCKED`（肖迪/高佩瑶/李亮/杨志杰/朱威/张哲铭），清理后候选人可重新评估。
+
+### 12.4 收尾
+
+- [ ] 真机验证 GREET/REJECT 写动作通道归属（CDP 先试，被拦走 Win32；「不合适」原因弹层文案未校准，UNKNOWN→PAUSED 兜底）。
+- [ ] 全部未提交改动过三智能体流程后提交（枚举修复/探针脚本/win 脚本/付费修复）。
+- [ ] 同步本文状态 + `docs/ideas.md` 登记。
+
+## 13. 测试命令规划
 
 具体命令在工程建立后固化，目标形态：
 
 ```powershell
-npm run lint
 npm run typecheck
-npm run test:unit
-npm run test:integration
-npm run test:cdp-policy
-npm run test:image-fixtures
+npm test
 npm run build
-npm run package:win
 ```
 
-真机测试必须单独执行并生成报告，不能混入普通 CI，也不能在无人值守环境执行页面写动作。
+真机测试必须单独执行并生成报告，不能混入普通 CI，也不能在无人值守环境执行页面写动作。（GUI 打包命令 `package:win` 等已随路线收敛删除。）
 
-## 13. 风险与缓解
+## 14. 风险与缓解
 
 | 风险 | 影响 | 缓解 |
 |---|---|---|
-| 原生 Input 点击仍触发详情异常 | 项目核心阻塞 | Phase 0先验证；失败降级人工点击 |
+| CDP 合成点击被风控选择性拦截 | 筛选类控件不可点 | ✅ 已实证闭环（2026-08-05）：双通道点击，筛选类走 Win32 真实鼠标（决策 8），Phase 10 产品化 |
 | BOSS 改版 | 列表解析或按钮定位失败 | DOMSnapshot契约、几何+文本联合定位、fail-loud |
 | Canvas 虚拟滚动 | 长图缺段 | 固定重叠、稳定检测、断层检测、保留原始分片 |
 | OCR中文长文本错误 | 筛选误判 | DOM摘要优先、置信度、证据化、UNCERTAIN复核 |
@@ -386,10 +416,12 @@ npm run package:win
 | 误引入 Runtime | 页面刷新 | 网关硬拒绝、依赖扫描、方法审计、真机门禁 |
 | 候选人隐私落盘 | 数据风险 | DPAPI、字段/附件加密、保留期、主动导出 |
 
-## 14. 当前状态
+## 15. 当前状态
 
 - [x] 原始 CDP 安全域单变量实验完成。
 - [x] 详情截图、滚轮和分段截图可行性完成。
 - [x] Canvas/Network/WASM 数据形态完成定位。
-- [ ] Phase 0 正式工程化和原生点击稳定性门禁。
-- [ ] Phase 1～8 未开始。
+- [x] Phase 1～9 代码全部完成（CLI 形态），214/214 测试绿。
+- [x] 双通道点击真机实证 + 筛选设置 demo 手动跑通（2026-08-05）。
+- [ ] Phase 10：WinMouseClicker/FilterSetter 产品化 + 付费误判修复（进行中，见 §12）。
+- [ ] Phase 7/8 真机端到端验证（写动作通道归属、全流程）。

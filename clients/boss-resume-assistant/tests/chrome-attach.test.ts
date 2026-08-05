@@ -9,6 +9,7 @@ import {
   probeChromeDebugEndpoint,
   diagnoseAttachError,
   ChromeAttachError,
+  findChromeExecutable,
 } from '../src/main/chrome/ChromeAttacher.js'
 import {
   initCliRuntime,
@@ -217,4 +218,13 @@ test('shutdown 显式断开 CDP WebSocket（不关会导致进程挂死），且
     httpServer.close()
     fs.rmSync(dir, { recursive: true, force: true })
   }
+})
+
+test('findChromeExecutable：探测到存在的路径；全部不存在时 fail-loud', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'chrome-attacher-'))
+  const fake = path.join(tmp, 'chrome.exe')
+  fs.writeFileSync(fake, 'fake')
+  assert.equal(findChromeExecutable(['/nonexistent/a.exe', fake]), fake)
+  assert.throws(() => findChromeExecutable(['/nonexistent/a.exe', '/nonexistent/b.exe']), /未找到 Chrome/)
+  fs.rmSync(tmp, { recursive: true, force: true })
 })

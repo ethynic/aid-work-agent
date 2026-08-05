@@ -7,7 +7,7 @@
  * - 用 JSON mode 保证筛选判断结构化
  *
  * API key 从环境变量 DEEPSEEK_API_KEYS（复数，逗号分隔，与主项目命名一致）读取，
- * 轮询使用。运行于 Electron 主进程（有 Node fetch）。
+ * 轮询使用。运行于 CLI 主进程（Node fetch）。
  */
 import type { LlmProvider, ScreeningInput, Evidence, Conclusion } from './ScreeningEngine.js'
 
