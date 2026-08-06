@@ -131,13 +131,9 @@ function Invoke-WeixinWindowSessionReturnToList {
         -not (Test-WeixinForegroundIdentity $current ([int64]$Session.MainHwnd))
     ) { throw 'FOREGROUND_LOST' }
     $usedIndependentDetail = [int64]$current.Hwnd -ne [int64]$Session.ListHwnd
-    if (-not $usedIndependentDetail) {
-        & $SendChord @('ALT','LEFT')
-    } else {
-        # 独立详情顶层窗口沿用已真机验证的关闭动作。关闭动作与
-        # 等待之间不读取前台、不激活窗口，避免正式流程附加操作抢焦点。
-        & $SendChord @('CTRL','W')
-    }
+    # 微信搜一搜的详情页无论同窗口还是独立窗口，关闭都用 Ctrl+W。
+    # Alt+Left 只是浏览器式后退，在微信搜一搜中不会关闭详情页。
+    & $SendChord @('CTRL','W')
     & $SleepMilliseconds
     $returned = & $GetForegroundIdentity
     if (
@@ -799,7 +795,7 @@ function Select-WeixinUiaResultTargets {
             $eligible.Add([pscustomobject]@{
                 control_type=$controlType;left=$left;top=$top;width=$width;height=$height
                 x=$clickX;y=$clickY;coordinate_space='physical_screen'
-                fingerprint=$fingerprint
+                fingerprint=$fingerprint;name=$name
             })
         } catch {
             # 单个 UIA 节点可能在枚举过程中失效；候选层跳过该节点，不能放宽筛选。
@@ -974,9 +970,10 @@ function Get-ValidatedOcrText {
 
 function Test-OcrEvidenceAttribution {
     param([string]$OcrText, [string]$AssociationName, [string]$PersonName)
-    return -not [string]::IsNullOrWhiteSpace($OcrText) -and
-        $OcrText.IndexOf($AssociationName, [StringComparison]::Ordinal) -ge 0 -and
-        $OcrText.IndexOf($PersonName, [StringComparison]::Ordinal) -ge 0
+    if ([string]::IsNullOrWhiteSpace($OcrText)) { return $false }
+    $compactOcr = [regex]::Replace($OcrText, '\s+', '')
+    $compactPerson = [regex]::Replace($PersonName, '\s+', '')
+    return $compactOcr.IndexOf($compactPerson, [StringComparison]::Ordinal) -ge 0
 }
 
 function Test-NewOcrViewportHash {

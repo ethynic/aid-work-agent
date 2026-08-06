@@ -178,7 +178,10 @@ foreach ($maliciousOcrResult in @(
 }
 Assert (-not (Test-OcrEvidenceAttribution '' '协会' '王承展')) 'empty OCR cannot be attributed'
 Assert (-not (Test-OcrEvidenceAttribution '协会 客服 13900000000' '协会' '王承展')) 'OCR without target person rejected'
-Assert (-not (Test-OcrEvidenceAttribution '王承展 18511597486' '协会' '王承展')) 'OCR without target association rejected'
+# 去掉协会名检查后，OCR 只要含目标人名即通过（去空格匹配）。
+Assert (Test-OcrEvidenceAttribution '王承展 18511597486' '协会' '王承展') 'OCR with target person passes without association name'
+# 人名含空格时去空格后匹配（如"陈 戟"）。
+Assert (Test-OcrEvidenceAttribution '联系人陈 戟 13910906310' '协会' '陈戟') 'OCR person name matches after whitespace removal'
 Assert (-not (Test-OcrEvidenceAttribution '登录失败 广告电话 13900000000' '协会' '王承展')) 'unknown page OCR rejected'
 Assert (Test-OcrEvidenceAttribution '协会 联系人王承展 18511597486' '协会' '王承展') 'target OCR attribution'
 $uniqueHashes=@()
@@ -797,10 +800,9 @@ $productionStart = $entryText.IndexOf(
 $productionText = $entryText.Substring($productionStart)
 Assert (
     $libText -match '\$usedIndependentDetail = \[int64\]\$current\.Hwnd -ne \[int64\]\$Session\.ListHwnd' -and
-    $libText -match 'if \(-not \$usedIndependentDetail\)' -and
-    $libText -match "& \`$SendChord @\('ALT','LEFT'\)" -and
-    $libText -match "& \`$SendChord @\('CTRL','W'\)"
-) 'shared return transition distinguishes same-hwnd back from independent-detail close'
+    $libText -match "& \`$SendChord @\('CTRL','W'\)" -and
+    $libText -notmatch "@\('ALT','LEFT'\)"
+) 'shared return transition always uses ctrl+w to close detail'
 Assert ($entryText -match '\$returnToResultPage') 'detail close recovery uses the shared state transition'
 Assert (
     $entryText -notmatch '\$recoveryDeadline|Test-ResultPageEvidence \$returned \$text' -and

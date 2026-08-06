@@ -662,7 +662,7 @@ class ProjectAssociationProviders:
             "-Execute",
             "-UseProjectLlm",
             "-Limit",
-            "10",
+            "3",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=child_environment,

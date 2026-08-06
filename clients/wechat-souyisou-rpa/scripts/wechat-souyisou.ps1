@@ -6,7 +6,7 @@ param(
     [string]$InputJson,
     [switch]$ReadStdin,
     [switch]$Execute,
-    [ValidateRange(1,10)][int]$Limit = 10,
+    [ValidateRange(1,10)][int]$Limit = 3,
     [string]$JudgeCommand,
     [switch]$UseProjectLlm,
     [string]$OcrCommand,
@@ -219,6 +219,21 @@ public static class WechatSouyisouWin32 {
             $currentHwnd = [WechatSouyisouWin32]::GetForegroundWindow()
             if ($currentHwnd -eq [IntPtr]::Zero) { return $null }
             Get-WindowIdentityByHwnd $currentHwnd.ToInt64()
+        }
+        # 诊断用：安全获取前台窗口身份摘要，不抛异常，只记录关键字段。
+        function Get-CurrentForegroundIdentitySafe {
+            try {
+                $id = Get-CurrentForegroundIdentity
+                if ($null -eq $id) { return @{ hwnd=0; note='null_identity' } }
+                return @{
+                    hwnd=[int64]$id.Hwnd
+                    process=[IO.Path]::GetFileName([string]$id.ProcessPath)
+                    class_name=[string]$id.ClassName
+                    title=[string]$id.Title
+                }
+            } catch {
+                return @{ hwnd=0; note=$_.Exception.Message }
+            }
         }
         function Get-WeixinUiaResultDescriptors(
             [int64]$Hwnd,
@@ -657,6 +672,17 @@ public static class WechatSouyisouWin32 {
                 $seen[$pointKey]=$true; $newCount++
                 $stage = 'click'
                 $clickForegroundRecoveryUsed=$false
+                # 诊断埋点：记录点击全过程的窗口变化，用于排查详情打开后前台异常。
+                $clickDiagnostics = [Collections.Generic.List[object]]::new()
+                $clickDiagnostics.Add([pscustomobject]@{
+                    checkpoint='candidate_selected'
+                    point_control_type=[string]$point.control_type
+                    point_fingerprint=[string]$point.fingerprint
+                    point_name=[string]$point.name
+                    point_x=[double]$point.x; point_y=[double]$point.y
+                    plugin_hwnd=$pluginHwnd.ToInt64()
+                    foreground=(Get-CurrentForegroundIdentitySafe)
+                })
                 $windowDpi = [int][WechatSouyisouWin32]::GetDpiForWindow(
                     $pluginHwnd)
                 if ($windowDpi -lt 96 -or $windowDpi -gt 480) {
@@ -680,6 +706,11 @@ public static class WechatSouyisouWin32 {
                     }
                     $clickForegroundRecoveryUsed=$true
                 }
+                $clickDiagnostics.Add([pscustomobject]@{
+                    checkpoint='before_click'
+                    cursor_x=$x; cursor_y=$y
+                    foreground=(Get-CurrentForegroundIdentitySafe)
+                })
                 $before = & $capture
                 try { $beforeHash=Get-BitmapSha256 $before } finally { $before.Dispose() }
                 & $assertWorkBudget 95000
@@ -687,7 +718,16 @@ public static class WechatSouyisouWin32 {
                     param($up)
                     [WechatSouyisouWin32]::mouse_event($(if($up){4}else{2}),0,0,0,[IntPtr]::Zero)
                 } $pluginGuard
+                $clickDiagnostics.Add([pscustomobject]@{
+                    checkpoint='after_mouse_click'
+                    foreground=(Get-CurrentForegroundIdentitySafe)
+                })
                 Start-Sleep -Milliseconds $WaitMilliseconds
+                $clickDiagnostics.Add([pscustomobject]@{
+                    checkpoint='after_wait'
+                    wait_ms=$WaitMilliseconds
+                    foreground=(Get-CurrentForegroundIdentitySafe)
+                })
                 if (-not (& $pluginGuard)) {
                     # 点击是生产路径唯一允许引入新插件 HWND 的阶段。当前前台仍须
                     # 通过完整 WeChatAppEx/Chrome_WidgetWin_0 身份校验；后续返回
@@ -1022,6 +1062,9 @@ public static class WechatSouyisouWin32 {
                     [pscustomobject]@{width=[int]$width;height=[int]$height}
                 }else{$null}
                 content_region=if ($contentRegion){$contentRegion}else{$null}
+                click_diagnostics=if ($clickDiagnostics -and $clickDiagnostics.Count){
+                    @($clickDiagnostics)
+                }else{$null}
                 captured_at=[DateTimeOffset]::Now.ToString('o')
             }
             $failureArtifactRef = $failureArtifact.artifact_ref

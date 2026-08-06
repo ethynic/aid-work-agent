@@ -25,7 +25,7 @@ function New-MainIdentity([int64]$Hwnd) {
 
 $mainHwnd = [int64]100
 
-# Same-HWND detail uses browser back and returns to the list.
+# Same-HWND detail uses Ctrl+W (same as independent detail) and returns to the list.
 $same = New-WeixinWindowSession $mainHwnd @()
 [void](Add-WeixinWindowSessionForeground $same (New-PluginIdentity 200) 'list')
 $sameForegrounds = [Collections.Generic.Queue[object]]::new()
@@ -37,7 +37,7 @@ $sameReturned = Invoke-WeixinWindowSessionReturnToList $same `
     { param($keys) $script:sameKeys += ,@($keys) } `
     { }
 Assert ($sameReturned -eq 200) 'same hwnd returns list'
-Assert (($sameKeys[0] -join '+') -eq 'ALT+LEFT') 'same hwnd uses back'
+Assert (($sameKeys[0] -join '+') -eq 'CTRL+W') 'same hwnd uses ctrl+w to close detail'
 
 # Independent detail uses the Ctrl+W sequence proven on the real application.
 $independent = New-WeixinWindowSession $mainHwnd @()
