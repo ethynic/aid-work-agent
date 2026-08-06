@@ -87,7 +87,8 @@
       "WebFetch(domain:www.coze.com)",
       "WebFetch(domain:docs.dify.ai)",
       "WebFetch(domain:appbuilder.cloud.baidu.com)",
-      "WebFetch(domain:dify.ai)"
+      "WebFetch(domain:dify.ai)",
+      "WebFetch(domain:platform.minimaxi.com)"
     ]
   }
 }

@@ -108,8 +108,7 @@
                   @click="form.resolution = r.value"
                   :class="['px-4 py-1.5 rounded-md text-sm border transition-colors',
                     form.resolution===r.value ? 'bg-primary-600 text-white border-primary-600' : 'bg-white text-default border-default hover:border-primary-400']">
-                  <span class="mr-1">{{ r.label }}</span>
-                  <span v-if="r.price_per_sec != null" class="text-xs text-muted">{{ r.price_per_sec }}元/秒</span>
+                  {{ r.label }}
                 </button>
               </div>
             </div>
