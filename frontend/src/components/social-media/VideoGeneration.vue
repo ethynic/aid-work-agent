@@ -111,6 +111,18 @@
               </div>
             </div>
 
+            <!-- 视频比例（默认 9:16 竖版；"智能"按产品图自动识别） -->
+            <div class="flex items-center gap-3">
+              <label class="text-sm font-medium text-default">视频比例</label>
+              <div class="flex gap-2">
+                <button v-for="opt in ratioOptions" :key="opt.value" @click="form.ratio = opt.value"
+                  :class="['px-4 py-1.5 rounded-md text-sm border transition-colors',
+                    form.ratio===opt.value ? 'bg-primary-600 text-white border-primary-600' : 'bg-white text-default border-default hover:border-primary-400']">
+                  {{ opt.label }}
+                </button>
+              </div>
+            </div>
+
             <!-- AI 内容角标（默认勾选；取消时弹风险提示） -->
             <div class="flex items-center gap-2">
               <input
@@ -219,6 +231,16 @@ const scenes = ref<SceneItem[]>([])
 const history = ref<GenSession[]>([])
 const currentSession = ref<GenSession | null>(null)
 
+// 视频比例选项：auto = 智能（按产品图自动识别最接近的预设）
+const ratioOptions = [
+  { value: '9:16', label: '9:16 竖版' },
+  { value: '16:9', label: '16:9 横版' },
+  { value: '1:1',  label: '1:1 方形' },
+  { value: '4:3',  label: '4:3 横版' },
+  { value: '3:4',  label: '3:4 竖版' },
+  { value: 'auto', label: '智能' },
+]
+
 const form = ref({
   sceneId: '',
   productImageFid: '',
@@ -231,6 +253,7 @@ const form = ref({
   enableAiLabel: true,
   durationSec: 5,
   resolution: '720P',
+  ratio: '9:16',
 })
 const uploading = ref<string | null>(null)   // null | 'product' | 'model'
 const creating = ref(false)
@@ -352,6 +375,7 @@ async function onCreate() {
       enable_ai_label: form.value.enableAiLabel,
       duration_sec: form.value.durationSec,
       resolution: form.value.resolution,
+      ratio: form.value.ratio,
     })
     if (res.success && res.data) {
       currentSession.value = res.data

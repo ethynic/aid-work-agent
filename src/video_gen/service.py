@@ -28,6 +28,38 @@ _TASK_MAX_AGE = timedelta(hours=settings.llm.wanx.task_max_age_hours)
 # card 终态集合（轮询时跳过）
 _TERMINAL_STATUSES = ("SUCCEEDED", "FAILED", "CANCELED", "UNKNOWN")
 
+# 预设比例 -> (宽/高) 浮点值，用于智能识别时找最接近的预设
+# 不含 21:9（已下线）：5 个预设覆盖竖屏/横屏/方屏/常见比例
+_RATIO_PRESETS = {
+    "9:16": 9 / 16,   # 竖屏
+    "16:9": 16 / 9,   # 横屏
+    "1:1":  1.0,      # 方屏
+    "4:3":  4 / 3,    # 横屏（传统）
+    "3:4":  3 / 4,    # 竖屏（传统）
+}
+
+
+def _detect_ratio_from_image(file_id: str) -> str:
+    """读图片实际宽高，返回最接近的预设比例（9:16/16:9/1:1/4:3/3:4）。
+
+    用 PIL 读图，按 |actual - preset| 最小者匹配。读图失败时回退到 9:16（短视频主流竖屏）。
+    """
+    try:
+        from PIL import Image
+        path = MediaRegistry.get_local_path(file_id)
+        with Image.open(path) as img:
+            w, h = img.size
+        if h == 0:
+            return "9:16"
+        actual = w / h
+        # 找最接近的预设
+        best = min(_RATIO_PRESETS.items(), key=lambda kv: abs(kv[1] - actual))
+        logger.info(f"智能识别比例 file_id={file_id} 实际={w}x{h}={actual:.3f} -> {best[0]}")
+        return best[0]
+    except Exception as exc:
+        logger.warning(f"智能识别比例失败 file_id={file_id}，回退 9:16: {exc}")
+        return "9:16"
+
 
 def new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:12]}"
@@ -67,6 +99,7 @@ class VideoGenService:
         enable_ai_label: bool = True,
         duration_sec: int = 5,
         resolution: str = "720P",
+        ratio: str = "9:16",
     ) -> dict[str, Any]:
         """创建抽卡会话 + 立即向万相提交 card_count 条任务。
 
@@ -90,6 +123,12 @@ class VideoGenService:
         # 校验分辨率（万相 2.7 r2v 支持 720P/1080P，不支持 480P）
         if resolution not in ("720P", "1080P"):
             raise ValueError("resolution 必须为 720P/1080P")
+        # 校验画面比例（万相 2.7 r2v 支持 9:16/16:9/1:1/4:3/3:4；auto 为智能识别，按产品图自动选）
+        if ratio not in ("9:16", "16:9", "1:1", "4:3", "3:4", "auto"):
+            raise ValueError("ratio 必须为 9:16/16:9/1:1/4:3/3:4/auto")
+        # auto 智能识别：读产品图实际宽高，选最接近的预设比例（落地为具体值，便于 DB 持久化与 regenerate 复用）
+        if ratio == "auto":
+            ratio = _detect_ratio_from_image(product_image_fid)
 
         # 2. 提示词：expanded_prompt 为空则用场景模板填空（极简提示词引擎，§6）
         prompt = expanded_prompt or scene.prompt_template.format(copywriting=copywriting)
@@ -111,11 +150,11 @@ class VideoGenService:
                 """INSERT INTO gen_sessions
                    (session_id, tenant_id, user_id, scene_id, product_image_fid,
                     model_image_fid, copywriting, expanded_prompt, card_count,
-                    enable_ai_label, duration_sec, resolution, status)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'generating')""",
+                    enable_ai_label, duration_sec, resolution, ratio, status)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'generating')""",
                 (session_id, tenant_id, user_id, scene_id, product_image_fid,
                  model_image_fid, copywriting, prompt, card_count,
-                 enable_ai_label, duration_sec, resolution),
+                 enable_ai_label, duration_sec, resolution, ratio),
             )
 
             for idx in range(card_count):
@@ -133,6 +172,7 @@ class VideoGenService:
                         negative_prompt=scene.negative_prompt,
                         duration=duration_sec,
                         resolution=resolution,
+                        ratio=ratio,
                     )
                     provider_task_id = submit_result.task_id
                     provider_status = submit_result.task_status
@@ -267,7 +307,7 @@ class VideoGenService:
             cur.execute(
                 """SELECT c.card_id, c.session_id, c.tenant_id, c.variant_prompt, c.seed,
                           s.scene_id, s.expanded_prompt, s.product_image_fid, s.model_image_fid,
-                          s.resolution
+                          s.resolution, s.ratio
                    FROM gen_cards c
                    JOIN gen_sessions s ON c.session_id = s.session_id
                    WHERE c.card_id = %s AND c.tenant_id IS NOT DISTINCT FROM %s""",
@@ -303,6 +343,7 @@ class VideoGenService:
                 negative_prompt=negative_prompt,
                 duration=scene.default_duration if scene else 5,
                 resolution=data.get("resolution") or "720P",
+                ratio=data.get("ratio") or "9:16",
             )
             provider_task_id = submit_result.task_id
             provider_status = submit_result.task_status

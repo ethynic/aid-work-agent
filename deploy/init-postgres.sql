@@ -2099,6 +2099,7 @@ CREATE TABLE IF NOT EXISTS gen_sessions (
     enable_ai_label   BOOLEAN NOT NULL DEFAULT TRUE,  -- 是否烧录 AI 内容角标（合规默认开）
     duration_sec      INT NOT NULL DEFAULT 5,    -- 视频时长（5/10/15 秒，万相 r2v 上限 15s）
     resolution        TEXT NOT NULL DEFAULT '720P',  -- 分辨率（720P/1080P，万相 r2v 不支持 480P）
+    ratio             TEXT NOT NULL DEFAULT '9:16',  -- 视频画面比例（9:16 竖版 / 16:9 横版 / 1:1 / 4:3 / 3:4 / 21:9）
     status            TEXT NOT NULL DEFAULT 'generating',  -- generating/done/failed
     created_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP

@@ -24,6 +24,7 @@ def init_video_gen_tables(conn) -> None:
             enable_ai_label   BOOLEAN NOT NULL DEFAULT TRUE,  -- 是否烧录 AI 内容角标（合规默认开）
             duration_sec      INT NOT NULL DEFAULT 5,    -- 视频时长（5/10/15 秒，万相 r2v 上限 15s）
             resolution        TEXT NOT NULL DEFAULT '720P',  -- 分辨率（720P/1080P，万相 r2v 不支持 480P）
+            ratio             TEXT NOT NULL DEFAULT '9:16',  -- 视频画面比例（9:16 竖版 / 16:9 横版 / 1:1 / 4:3 / 3:4 / 21:9）
             status            TEXT NOT NULL DEFAULT 'generating',  -- generating/done/failed
             created_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -45,6 +46,10 @@ def init_video_gen_tables(conn) -> None:
     """)
     # 兼容历史数据：曾用 480P 默认值，万相 r2v 不支持，统一回填为 720P
     cursor.execute("UPDATE gen_sessions SET resolution = '720P' WHERE resolution = '480P'")
+    # 幂等加列：视频画面比例（横版/竖版）
+    cursor.execute("""
+        ALTER TABLE gen_sessions ADD COLUMN IF NOT EXISTS ratio TEXT NOT NULL DEFAULT '9:16'
+    """)
     # gen_cards：抽出来的视频卡片（每条对应一次万相提交）
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS gen_cards (

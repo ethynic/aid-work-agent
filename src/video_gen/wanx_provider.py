@@ -58,15 +58,21 @@ class WanxProvider:
         negative_prompt: str = "",
         duration: int = 5,
         resolution: str = "720P",
+        ratio: str = "9:16",
     ) -> WanxSubmitResult:
         """提交参考图生视频任务（r2v）。
 
         media 固定格式：reference_image（产品图，防变形锁定）+ first_frame（起始帧，
         有模特图传模特图，否则传产品图）。negative_prompt 放 parameters 下（spike 实测确认）。
+        ratio 控制视频画面比例（9:16 竖版 / 16:9 横版 / 1:1 / 4:3 / 3:4 / 21:9）。
         """
         # 防御性校验：万相 2.7 r2v 单次调用 duration 上限 15s，防止前端脏数据直传阿里云
         if duration not in (5, 10, 15):
             raise WanxProviderError(f"duration 仅支持 5/10/15 秒，收到: {duration}")
+        if resolution not in ("720P", "1080P"):
+            raise WanxProviderError(f"resolution 仅支持 720P/1080P，收到: {resolution}")
+        if ratio not in ("9:16", "16:9", "1:1", "4:3", "3:4"):
+            raise WanxProviderError(f"ratio 仅支持 9:16/16:9/1:1/4:3/3:4，收到: {ratio}")
         body = {
             "model": self._model,
             "input": {
@@ -79,6 +85,7 @@ class WanxProvider:
             "parameters": {
                 "resolution": resolution,
                 "duration": duration,
+                "ratio": ratio,
                 "negative_prompt": negative_prompt,
                 "prompt_extend": False,     # 自己用提示词引擎扩展，不让万相再改写
                 "watermark": False,          # 自己烧录合规 AI 标识，不用万相水印

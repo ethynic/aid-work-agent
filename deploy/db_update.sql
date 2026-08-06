@@ -1424,3 +1424,6 @@ ALTER TABLE gen_sessions ADD COLUMN IF NOT EXISTS resolution TEXT NOT NULL DEFAU
 -- 2026-8-6，修正：曾误用 480P 作为默认值，万相 r2v 不支持，回填历史数据为 720P
 UPDATE gen_sessions SET resolution = '720P' WHERE resolution = '480P';
 ALTER TABLE gen_sessions ALTER COLUMN resolution SET DEFAULT '720P';
+
+-- 2026-8-6，视频生成会话增加视频画面比例字段（9:16 竖版 / 16:9 横版 / 1:1 / 4:3 / 3:4 / 21:9）
+ALTER TABLE gen_sessions ADD COLUMN IF NOT EXISTS ratio TEXT NOT NULL DEFAULT '9:16';
