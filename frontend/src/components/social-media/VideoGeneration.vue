@@ -175,22 +175,12 @@
                 <p class="text-xs text-red-500 mb-2">生成失败</p>
                 <p class="text-xs text-muted">{{ card.error_msg || '请重新生成' }}</p>
               </div>
-              <span v-if="card.kept" class="absolute top-2 left-2 text-xs px-2 py-0.5 rounded-full bg-green-500 text-white">已留用</span>
             </div>
             <!-- 卡片操作 -->
             <div class="p-3 space-y-2">
               <p class="text-xs text-muted">Seed: {{ card.seed }} · {{ card.provider_status }}</p>
-              <div class="flex items-center gap-2">
-                <button @click="toggleKept(card)"
-                  :class="['flex-1 text-xs py-1.5 rounded border transition-colors',
-                    card.kept ? 'bg-green-50 text-green-700 border-green-300' : 'bg-white text-default border-default hover:border-green-400']">
-                  {{ card.kept ? '✓ 留用' : '留用' }}
-                </button>
-                <button v-if="card.provider_status === 'SUCCEEDED'" @click="onDownload(card)"
-                  class="flex-1 text-xs py-1.5 rounded border bg-white text-default border-default hover:border-primary-400">下载</button>
-              </div>
-              <button @click="onRegenerate(card)"
-                class="w-full text-xs py-1.5 rounded border bg-white text-primary-600 border-primary-300 hover:bg-primary-50">重新生成</button>
+              <button v-if="card.provider_status === 'SUCCEEDED'" @click="onDownload(card)"
+                class="w-full text-xs py-1.5 rounded border bg-white text-default border-default hover:border-primary-400">下载</button>
             </div>
           </div>
         </div>
@@ -428,32 +418,12 @@ function stopPolling() {
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
 }
 
-async function toggleKept(card: GenCard) {
-  const res = await videoGenAPI.setKept(card.card_id, !card.kept)
-  if (res.success) card.kept = !card.kept
-}
-
 async function onDownload(card: GenCard) {
   const res = await videoGenAPI.getDownloadUrl(card.card_id)
   if (res.success && res.data) {
     window.open(res.data.download_url, '_blank')
   } else {
     toast(res.error || '获取下载地址失败', 'error')
-  }
-}
-
-async function onRegenerate(card: GenCard) {
-  try {
-    const res = await videoGenAPI.regenerate(card.card_id, {})
-    if (res.success) {
-      toast('已提交重新生成')
-      if (currentSession.value) await loadSession(currentSession.value.session_id)
-      startPolling()
-    } else {
-      toast(res.error || '重新生成失败', 'error')
-    }
-  } catch {
-    toast('重新生成失败', 'error')
   }
 }
 

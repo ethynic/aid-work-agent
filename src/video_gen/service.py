@@ -3,7 +3,7 @@
 串联 db / wanx_provider / media / preprocess / scenes，实现抽卡式工具的完整业务逻辑：
 - create_session: 创建会话 + 人脸裁剪产品图 + 向万相提交 N 条任务（不同 seed 差异化）
 - poll_pending_cards: 后台轮询，SUCCEEDED 下载成片（含烧录 AI 标识）+ 注册 file_id
-- get_session / list_sessions / set_card_kept / regenerate_card: 会话与卡片管理
+- get_session / list_sessions: 会话与卡片查询
 
 设计依据：docs/system/content-production/mvp-design.md §8。
 """
@@ -261,7 +261,7 @@ class VideoGenService:
         return [self._serialize_session(s) for s in sessions]
 
     # ------------------------------------------------------------------
-    # 留用 / 重新生成
+    # 卡片查询
     # ------------------------------------------------------------------
     def get_card_output_fid(self, tenant_id: str | None, card_id: str) -> str | None:
         """查 card 的成片 file_id（给下载 URL 端点用）。无成片返回 None。"""
@@ -274,108 +274,6 @@ class VideoGenService:
             )
             row = cur.fetchone()
         return dict(row).get("output_fid") if row else None
-
-    def set_card_kept(self, tenant_id: str | None, card_id: str, kept: bool) -> dict[str, Any]:
-        """标记 card 留用/取消留用。"""
-        with get_db_connection() as conn:
-            cur = conn.cursor()
-            cur.execute(
-                """UPDATE gen_cards SET kept = %s, updated_at = NOW()
-                   WHERE card_id = %s AND tenant_id IS NOT DISTINCT FROM %s""",
-                (kept, card_id, tenant_id),
-            )
-            if cur.rowcount == 0:
-                conn.rollback()
-                raise ValueError("卡片不存在或无权限")
-            conn.commit()
-        return {"card_id": card_id, "kept": kept}
-
-    async def regenerate_card(
-        self,
-        tenant_id: str | None,
-        card_id: str,
-        prompt_override: str | None = None,
-        seed_override: int | None = None,
-    ) -> dict[str, Any]:
-        """重新生成式编辑：基于某张 card 的 session，用新 prompt/seed 重新提交一条任务。
-
-        新 card 的 parent_card_id = 原 card_id，复用原 session 的产品图 + 模特图（若有）。
-        """
-        # 取原 card 与 session
-        with get_db_connection() as conn:
-            cur = conn.cursor()
-            cur.execute(
-                """SELECT c.card_id, c.session_id, c.tenant_id, c.variant_prompt, c.seed,
-                          s.scene_id, s.expanded_prompt, s.product_image_fid, s.model_image_fid,
-                          s.resolution, s.ratio
-                   FROM gen_cards c
-                   JOIN gen_sessions s ON c.session_id = s.session_id
-                   WHERE c.card_id = %s AND c.tenant_id IS NOT DISTINCT FROM %s""",
-                (card_id, tenant_id),
-            )
-            row = cur.fetchone()
-        if row is None:
-            raise ValueError("卡片不存在或无权限")
-        data = dict(row)
-
-        scene = get_scene(data["scene_id"])
-        prompt = prompt_override or data["variant_prompt"] or data["expanded_prompt"]
-        seed = seed_override if seed_override is not None else random.randint(0, 2147483647)
-
-        # 复用原 session 的图片：产品图→reference_image，模特图→first_frame（无则用产品图）
-        reference_data_url = MediaRegistry.read_as_base64(data["product_image_fid"])
-        model_fid = data.get("model_image_fid")
-        first_frame_data_url = (
-            MediaRegistry.read_as_base64(model_fid) if model_fid else reference_data_url
-        )
-        new_card_id = new_id("card")
-        negative_prompt = scene.negative_prompt if scene else ""
-
-        provider_task_id = None
-        provider_status = "PENDING"
-        error_msg = None
-        try:
-            submit_result = await self.wanx.submit(
-                prompt=prompt,
-                reference_image_data_url=reference_data_url,
-                first_frame_data_url=first_frame_data_url,
-                seed=seed,
-                negative_prompt=negative_prompt,
-                duration=scene.default_duration if scene else 5,
-                resolution=data.get("resolution") or "720P",
-                ratio=data.get("ratio") or "9:16",
-            )
-            provider_task_id = submit_result.task_id
-            provider_status = submit_result.task_status
-        except WanxProviderError as exc:
-            error_msg = str(exc)
-            provider_status = "FAILED"
-            logger.error(f"视频生成 regenerate 提交失败 parent={card_id}: {exc}")
-
-        with get_db_connection() as conn:
-            cur = conn.cursor()
-            cur.execute(
-                """INSERT INTO gen_cards
-                   (card_id, tenant_id, session_id, variant_idx, seed, variant_prompt,
-                    provider_task_id, provider_status, error_msg, parent_card_id)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
-                (new_card_id, data["tenant_id"], data["session_id"], 99, seed, prompt,
-                 provider_task_id, provider_status, error_msg, card_id),
-            )
-            # 重新生成会引入新的 PENDING card，session 必须回到 generating，否则前端会立刻停止轮询
-            cur.execute(
-                """UPDATE gen_sessions SET status = 'generating', updated_at = NOW()
-                   WHERE session_id = %s AND status IN ('done', 'failed')""",
-                (data["session_id"],),
-            )
-            conn.commit()
-
-        return {
-            "card_id": new_card_id, "session_id": data["session_id"],
-            "parent_card_id": card_id, "seed": seed, "variant_prompt": prompt,
-            "provider_task_id": provider_task_id, "provider_status": provider_status,
-            "output_fid": None, "kept": False, "error_msg": error_msg,
-        }
 
     # ------------------------------------------------------------------
     # 后台轮询（scheduler job 调用）

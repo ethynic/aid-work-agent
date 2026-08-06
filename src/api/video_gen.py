@@ -6,8 +6,6 @@
 - POST   /sessions                     创建抽卡会话
 - GET    /sessions                     会话历史
 - GET    /sessions/{session_id}        会话详情（含 cards 状态）
-- PATCH  /cards/{card_id}/kept         标记留用
-- POST   /cards/{card_id}/regenerate   重新生成
 - GET    /cards/{card_id}/download-url 获取成片下载 URL
 """
 from __future__ import annotations
@@ -128,39 +126,6 @@ async def get_session(request: Request, session_id: str):
     except Exception as e:
         logger.error(f"视频生成-会话详情失败: {e}", exc_info=True)
         return _fail("查询会话详情失败", e)
-
-
-@router.patch("/cards/{card_id}/kept", response_model=JsonResponse)
-async def set_card_kept(request: Request, card_id: str):
-    """标记 card 留用/取消：{kept: bool}"""
-    try:
-        body = await request.json()
-        result = _service.set_card_kept(_tenant_id(request), card_id, bool(body.get("kept", True)))
-        return _ok(result)
-    except ValueError as e:
-        return _fail(str(e), e)
-    except Exception as e:
-        logger.error(f"视频生成-留用失败: {e}", exc_info=True)
-        return _fail("操作失败", e)
-
-
-@router.post("/cards/{card_id}/regenerate", response_model=JsonResponse)
-async def regenerate_card(request: Request, card_id: str):
-    """重新生成式编辑：{prompt_override?, seed_override?}"""
-    try:
-        body = await request.json()
-        result = await _service.regenerate_card(
-            _tenant_id(request),
-            card_id,
-            prompt_override=body.get("prompt_override"),
-            seed_override=body.get("seed_override"),
-        )
-        return _ok(result)
-    except ValueError as e:
-        return _fail(str(e), e)
-    except Exception as e:
-        logger.error(f"视频生成-重新生成失败: {e}", exc_info=True)
-        return _fail("重新生成失败", e)
 
 
 @router.get("/cards/{card_id}/download-url", response_model=JsonResponse)

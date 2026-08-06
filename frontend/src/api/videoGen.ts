@@ -95,19 +95,6 @@ export const videoGenAPI = {
   /** 会话详情（含 cards 状态） */
   getSession: (sessionId: string) => request<GenSession>(`/sessions/${sessionId}`),
 
-  /** 标记留用/取消 */
-  setKept: (cardId: string, kept: boolean) => request<{ card_id: string; kept: boolean }>(`/cards/${cardId}/kept`, {
-    method: 'PATCH',
-    body: JSON.stringify({ kept }),
-  }),
-
-  /** 重新生成（精修） */
-  regenerate: (cardId: string, body: { prompt_override?: string; seed_override?: number }) =>
-    request<GenCard>(`/cards/${cardId}/regenerate`, {
-      method: 'POST',
-      body: JSON.stringify(body),
-    }),
-
   /** 获取成片下载 URL */
   getDownloadUrl: (cardId: string) => request<{ download_url: string; file_id: string }>(`/cards/${cardId}/download-url`),
 
