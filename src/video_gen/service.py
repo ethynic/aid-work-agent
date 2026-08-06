@@ -61,11 +61,12 @@ class VideoGenService:
         scene_id: str,
         product_image_fid: str,
         copywriting: str,
-        card_count: int = 3,
+        card_count: int = 2,
         expanded_prompt: str | None = None,
         model_image_fid: str | None = None,
         enable_ai_label: bool = True,
-        duration_sec: int = 10,
+        duration_sec: int = 5,
+        resolution: str = "480P",
     ) -> dict[str, Any]:
         """创建抽卡会话 + 立即向万相提交 card_count 条任务。
 
@@ -86,6 +87,9 @@ class VideoGenService:
         # 校验时长（万相 2.7 r2v 单次调用 duration 上限 15s）
         if duration_sec not in (5, 10, 15):
             raise ValueError("duration_sec 必须为 5/10/15")
+        # 校验分辨率（万相 2.7 r2v 支持 480P/720P）
+        if resolution not in ("480P", "720P"):
+            raise ValueError("resolution 必须为 480P/720P")
 
         # 2. 提示词：expanded_prompt 为空则用场景模板填空（极简提示词引擎，§6）
         prompt = expanded_prompt or scene.prompt_template.format(copywriting=copywriting)
@@ -107,11 +111,11 @@ class VideoGenService:
                 """INSERT INTO gen_sessions
                    (session_id, tenant_id, user_id, scene_id, product_image_fid,
                     model_image_fid, copywriting, expanded_prompt, card_count,
-                    enable_ai_label, duration_sec, status)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'generating')""",
+                    enable_ai_label, duration_sec, resolution, status)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'generating')""",
                 (session_id, tenant_id, user_id, scene_id, product_image_fid,
                  model_image_fid, copywriting, prompt, card_count,
-                 enable_ai_label, duration_sec),
+                 enable_ai_label, duration_sec, resolution),
             )
 
             for idx in range(card_count):
@@ -128,6 +132,7 @@ class VideoGenService:
                         seed=seed,
                         negative_prompt=scene.negative_prompt,
                         duration=duration_sec,
+                        resolution=resolution,
                     )
                     provider_task_id = submit_result.task_id
                     provider_status = submit_result.task_status
@@ -261,7 +266,8 @@ class VideoGenService:
             cur = conn.cursor()
             cur.execute(
                 """SELECT c.card_id, c.session_id, c.tenant_id, c.variant_prompt, c.seed,
-                          s.scene_id, s.expanded_prompt, s.product_image_fid, s.model_image_fid
+                          s.scene_id, s.expanded_prompt, s.product_image_fid, s.model_image_fid,
+                          s.resolution
                    FROM gen_cards c
                    JOIN gen_sessions s ON c.session_id = s.session_id
                    WHERE c.card_id = %s AND c.tenant_id IS NOT DISTINCT FROM %s""",
@@ -296,6 +302,7 @@ class VideoGenService:
                 seed=seed,
                 negative_prompt=negative_prompt,
                 duration=scene.default_duration if scene else 5,
+                resolution=data.get("resolution") or "480P",
             )
             provider_task_id = submit_result.task_id
             provider_status = submit_result.task_status

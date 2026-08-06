@@ -82,6 +82,7 @@ export const videoGenAPI = {
     expanded_prompt?: string
     enable_ai_label?: boolean
     duration_sec?: number
+    resolution?: string
   }) => request<GenSession>('/sessions', {
     method: 'POST',
     body: JSON.stringify(body),

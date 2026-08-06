@@ -79,7 +79,7 @@ async def list_scenes(request: Request):
 
 @router.post("/sessions", response_model=JsonResponse)
 async def create_session(request: Request):
-    """创建抽卡会话：{scene_id, product_image_fid, copywriting, model_image_fid?, card_count?, expanded_prompt?, enable_ai_label?, duration_sec?}"""
+    """创建抽卡会话：{scene_id, product_image_fid, copywriting, model_image_fid?, card_count?, expanded_prompt?, enable_ai_label?, duration_sec?, resolution?}"""
     try:
         body = await request.json()
         result = await _service.create_session(
@@ -88,11 +88,12 @@ async def create_session(request: Request):
             scene_id=body["scene_id"],
             product_image_fid=body["product_image_fid"],
             copywriting=body["copywriting"],
-            card_count=body.get("card_count", 3),
+            card_count=body.get("card_count", 2),
             expanded_prompt=body.get("expanded_prompt"),
             model_image_fid=body.get("model_image_fid"),
             enable_ai_label=body.get("enable_ai_label", True),
-            duration_sec=body.get("duration_sec", 10),
+            duration_sec=body.get("duration_sec", 5),
+            resolution=body.get("resolution", "480P"),
         )
         return _ok(result)
     except ValueError as e:

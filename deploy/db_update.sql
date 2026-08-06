@@ -1416,4 +1416,7 @@ WHERE agent_id = 'social-media-operations' AND name = '社媒运营智能体';
 
 -- 2026-8-5，视频生成会话增加 AI角标开关与时长字段（mvp-design.md §6 新增参数）
 ALTER TABLE gen_sessions ADD COLUMN IF NOT EXISTS enable_ai_label BOOLEAN NOT NULL DEFAULT TRUE;
-ALTER TABLE gen_sessions ADD COLUMN IF NOT EXISTS duration_sec INT NOT NULL DEFAULT 10;
+ALTER TABLE gen_sessions ADD COLUMN IF NOT EXISTS duration_sec INT NOT NULL DEFAULT 5;
+
+-- 2026-8-6，视频生成会话增加分辨率字段（480P/720P，默认 480P 节约成本）
+ALTER TABLE gen_sessions ADD COLUMN IF NOT EXISTS resolution TEXT NOT NULL DEFAULT '480P';

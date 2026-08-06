@@ -99,6 +99,18 @@
               </div>
             </div>
 
+            <!-- 分辨率（480P/720P，默认 480P 节约成本） -->
+            <div class="flex items-center gap-3">
+              <label class="text-sm font-medium text-default">分辨率</label>
+              <div class="flex gap-2">
+                <button v-for="r in ['480P','720P']" :key="r" @click="form.resolution = r"
+                  :class="['px-4 py-1.5 rounded-md text-sm border transition-colors',
+                    form.resolution===r ? 'bg-primary-600 text-white border-primary-600' : 'bg-white text-default border-default hover:border-primary-400']">
+                  {{ r }}
+                </button>
+              </div>
+            </div>
+
             <!-- AI 内容角标（默认勾选；取消时弹风险提示） -->
             <div class="flex items-center gap-2">
               <input
@@ -214,10 +226,11 @@ const form = ref({
   modelImageFid: '',
   modelImageName: '',
   copywriting: '',
-  cardCount: 3,
+  cardCount: 2,
   expandedPrompt: '',
   enableAiLabel: true,
-  durationSec: 10,
+  durationSec: 5,
+  resolution: '480P',
 })
 const uploading = ref<string | null>(null)   // null | 'product' | 'model'
 const creating = ref(false)
@@ -338,6 +351,7 @@ async function onCreate() {
       expanded_prompt: form.value.expandedPrompt.trim() || undefined,
       enable_ai_label: form.value.enableAiLabel,
       duration_sec: form.value.durationSec,
+      resolution: form.value.resolution,
     })
     if (res.success && res.data) {
       currentSession.value = res.data
