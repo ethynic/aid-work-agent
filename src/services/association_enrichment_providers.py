@@ -610,52 +610,47 @@ class ProjectAssociationProviders:
                 result[field_name] = None
         return result
 
-    async def fallback_profile(self, association_name: str) -> dict[str, str | None]:
-        """Qwen 联网搜索获取协会基础信息，不依赖 Tavily。"""
-        from src.llm.providers.qwen import QwenProvider
-        from src.config.settings import settings
-
-        qwen_keys = settings.llm.qwen.api_keys
-        if not qwen_keys:
-            raise RuntimeError("QWEN_NOT_CONFIGURED")
-        provider = QwenProvider(api_key=qwen_keys[0], model="qwen-plus")
-        try:
-            resp = await provider.chat(
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "你是一个协会信息提取器。请通过联网搜索获取信息，只输出JSON，不要其他文字。"
-                            f"键必须恰好为：{','.join(PROFILE_FIELDS)}。"
-                            "每个值是字符串或null。找不到的值为null。"
-                            "手机号字段(president_mobile,secretary_general_mobile)必须为null。"
-                            "official_website 要返回完整的网址（含 https://）。"
-                        ),
-                    },
-                    {
-                        "role": "user",
-                        "content": (
-                            f"请搜索{association_name}的以下信息："
-                            "地址、邮箱、官网网址、主管单位、单位等级、会员数量、"
-                            "分支机构数量、公众号名称、会长姓名、秘书长姓名。"
-                        ),
-                    },
-                ],
-                temperature=0,
-                max_tokens=2500,
-                enable_search=True,
-            )
-        except Exception as exc:
-            raise RuntimeError(f"QWEN_SEARCH_FAILED:{type(exc).__name__}") from exc
+    async def search_profile(self, association_name: str) -> dict[str, str | None]:
+        """第1步：用 LLM 获取协会基础信息（不含会长/秘书长/手机号）。"""
+        # 会长/秘书长/手机号不由模型返回——人员由官网采集或微信搜一搜精确获取。
+        search_fields = [
+            name for name in PROFILE_FIELDS
+            if name not in ("president_name", "secretary_general_name",
+                            "president_mobile", "secretary_general_mobile")
+        ]
+        resp = await llm_gateway.chat(
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "你是一个协会信息提取器。只输出JSON，不要其他文字。"
+                        f"键必须恰好为：{','.join(search_fields)}。"
+                        "每个值是字符串或null。找不到的值为null。"
+                        "official_website 要返回完整的网址（含 https://）。"
+                        "不要返回人员姓名或手机号。"
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"给出{association_name}的以下信息："
+                        "地址、邮箱、官网网址、主管单位、单位等级、会员数量、"
+                        "分支机构数量、公众号名称。"
+                    ),
+                },
+            ],
+            temperature=0,
+            max_tokens=2500,
+        )
         content = resp.get("content", "") if isinstance(resp, dict) else ""
         import re as _re
         m = _re.search(r'\{.*\}', content, _re.S)
         if not m:
-            raise RuntimeError("QWEN_SEARCH_NO_JSON")
+            raise RuntimeError("SEARCH_NO_JSON")
         try:
             parsed = json.loads(m.group(0))
         except json.JSONDecodeError as exc:
-            raise RuntimeError("QWEN_SEARCH_BAD_JSON") from exc
+            raise RuntimeError("SEARCH_BAD_JSON") from exc
         values: dict[str, str | None] = {}
         for name in PROFILE_FIELDS:
             value = parsed.get(name)
@@ -663,9 +658,10 @@ class ProjectAssociationProviders:
                 values[name] = value.strip()
             else:
                 values[name] = None
-        # 手机号字段禁止
-        for mobile_field in ("president_mobile", "secretary_general_mobile"):
-            values[mobile_field] = None
+        # 会长/秘书长/手机号强制 null——这些由官网采集或微信搜一搜获取
+        for locked in ("president_name", "secretary_general_name",
+                       "president_mobile", "secretary_general_mobile"):
+            values[locked] = None
         return values
 
     async def wechat_mobile(

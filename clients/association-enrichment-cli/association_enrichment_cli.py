@@ -78,7 +78,7 @@ async def run(args: argparse.Namespace) -> dict[str, object]:
     enricher = AssociationBatchEnricher(
         official_site_resolver=providers.resolve_official_site,
         official_profile_collector=providers.collect_official_profile,
-        fallback_profile_provider=providers.fallback_profile,
+        fallback_profile_provider=providers.search_profile,
         wechat_mobile_provider=providers.wechat_mobile,
         wechat_leader_name_provider=providers.wechat_search_leader_name,
         headless=False,

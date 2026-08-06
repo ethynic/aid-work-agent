@@ -715,27 +715,26 @@ async def test_official_site_resolver_rejects_non_http_or_non_candidate_url(
 
 
 @pytest.mark.asyncio
-async def test_fallback_profile_uses_qwen_search(monkeypatch, tmp_path):
-    """fallback_profile 现在用 Qwen 联网搜索，不再依赖 Tavily。"""
+async def test_search_profile_returns_basic_info(monkeypatch, tmp_path):
+    """search_profile 用 llm_gateway 获取协会基础信息。"""
     import src.services.association_enrichment_providers as module
 
     providers = ProjectAssociationProviders(repository_root=tmp_path)
 
     mock_result = {name: None for name in PROFILE_FIELDS}
     mock_result["address"] = "北京市测试路1号"
+    mock_result["official_website"] = "https://example.cn"
 
-    class MockQwenProvider:
-        def __init__(self, **kwargs):
-            pass
+    class MockGateway:
         async def chat(self, **kwargs):
             return {"content": json.dumps(mock_result, ensure_ascii=False)}
 
-    # Patch QwenProvider 在 fallback_profile 方法内部动态 import 的位置
-    import src.llm.providers.qwen as qwen_module
-    monkeypatch.setattr(qwen_module, "QwenProvider", MockQwenProvider)
+    monkeypatch.setattr(module, "llm_gateway", MockGateway())
 
-    result = await providers.fallback_profile("测试协会")
+    result = await providers.search_profile("测试协会")
     assert result["address"] == "北京市测试路1号"
+    assert result["president_name"] is None
+    assert result["secretary_general_name"] is None
 
 
 @pytest.mark.asyncio
