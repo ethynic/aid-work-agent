@@ -45,6 +45,10 @@ export interface GenSession {
   copywriting: string
   expanded_prompt?: string
   card_count: number
+  enable_ai_label?: boolean         // 是否烧录 AI 内容角标（回显用）
+  duration_sec?: number             // 视频时长（5/10/15）
+  resolution?: string              // 分辨率（720P/1080P/768P/2K）
+  ratio?: string                    // 视频比例（9:16/16:9/1:1/4:3/3:4）
   status: string            // generating/done/failed
   created_at?: string
   cards?: GenCard[]

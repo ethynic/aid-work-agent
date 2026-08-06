@@ -31,7 +31,7 @@
             <div v-else class="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
               <img :src="previewUrl('product')" class="w-16 h-16 object-cover rounded" />
               <div class="flex-1 min-w-0">
-                <p class="text-sm text-default truncate">{{ form.productImageName }}</p>
+                <p class="text-sm text-default truncate">{{ form.productImageName || '已上传的产品图' }}</p>
                 <p class="text-xs text-muted">已上传</p>
               </div>
               <BaseButton intent="ghost" size="sm" @click="clearImage('product')">更换</BaseButton>
@@ -56,7 +56,7 @@
             <div v-else class="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
               <img :src="previewUrl('model')" class="w-16 h-16 object-cover rounded" />
               <div class="flex-1 min-w-0">
-                <p class="text-sm text-default truncate">{{ form.modelImageName }}</p>
+                <p class="text-sm text-default truncate">{{ form.modelImageName || '已上传的模特图' }}</p>
                 <p class="text-xs text-muted">起始画面</p>
               </div>
               <BaseButton intent="ghost" size="sm" @click="clearImage('model')">移除</BaseButton>
@@ -422,6 +422,22 @@ async function loadSession(sessionId: string) {
   const res = await videoGenAPI.getSession(sessionId)
   if (res.success && res.data) {
     currentSession.value = res.data
+    // 回填表单：基于历史会话参数，用户可基于此再次抽卡
+    const s = res.data
+    form.value.sceneId = s.scene_id
+    form.value.productImageFid = s.product_image_fid
+    form.value.modelImageFid = s.model_image_fid || ''
+    form.value.copywriting = s.copywriting
+    form.value.cardCount = s.card_count
+    form.value.expandedPrompt = s.expanded_prompt || ''
+    form.value.enableAiLabel = s.enable_ai_label ?? true
+    form.value.durationSec = s.duration_sec ?? 5
+    form.value.resolution = s.resolution || '720P'
+    form.value.ratio = s.ratio || '9:16'
+    // 后端不存原文件名，留空 -> 模板用 fallback 文案显示
+    form.value.productImageName = ''
+    form.value.modelImageName = ''
+
     if (res.data.status === 'generating') startPolling()
     else stopPolling()
   }

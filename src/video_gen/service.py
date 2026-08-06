@@ -238,7 +238,9 @@ class VideoGenService:
             cur = conn.cursor()
             cur.execute(
                 """SELECT session_id, tenant_id, scene_id, product_image_fid, model_image_fid,
-                          copywriting, expanded_prompt, card_count, status, created_at
+                          copywriting, expanded_prompt, card_count,
+                          enable_ai_label, duration_sec, resolution, ratio,
+                          status, created_at
                    FROM gen_sessions
                    WHERE session_id = %s AND tenant_id IS NOT DISTINCT FROM %s""",
                 (session_id, tenant_id),
@@ -263,7 +265,9 @@ class VideoGenService:
             cur = conn.cursor()
             cur.execute(
                 """SELECT session_id, tenant_id, scene_id, product_image_fid, model_image_fid,
-                          copywriting, expanded_prompt, card_count, status, created_at
+                          copywriting, expanded_prompt, card_count,
+                          enable_ai_label, duration_sec, resolution, ratio,
+                          status, created_at
                    FROM gen_sessions
                    WHERE tenant_id IS NOT DISTINCT FROM %s
                    ORDER BY created_at DESC LIMIT %s""",
