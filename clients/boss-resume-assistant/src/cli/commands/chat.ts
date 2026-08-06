@@ -15,6 +15,7 @@ import { PageNavigator } from '../../main/boss/PageNavigator.js'
 import { FilterSetter, viewportOf } from '../../main/boss/FilterSetter.js'
 import { GreetExecutor } from '../../main/boss/GreetExecutor.js'
 import { ResumeConsentExecutor } from '../../main/boss/ResumeConsentExecutor.js'
+import { ChatRejectExecutor } from '../../main/boss/ChatRejectExecutor.js'
 import { translateFilterRequest } from '../../main/boss/NlFilterTranslator.js'
 import { ChatOrchestrator, CAPABILITY_HINT, type ChatHandlers } from '../../main/boss/ChatOrchestrator.js'
 import { WinMouseClicker } from '../../main/input/WinMouseClicker.js'
@@ -85,6 +86,7 @@ export async function chatCommand(opts: ChatCommandOptions): Promise<number> {
         const r = await executor.acceptAll({ limit: 20, preview: true })
         return { accepted: r.accepted, previewed: r.previewed }
       },
+      rejectCurrent: () => new ChatRejectExecutor({ snapshot, click }).rejectCurrent(),
       clearFilter: () => setter.clear(),
     }
     const orchestrator = new ChatOrchestrator({ handlers })

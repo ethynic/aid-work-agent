@@ -44,8 +44,8 @@ const AGREE_TEXT = '同意'
 const PREVIEW_TEXT = '点击预览附件简历'
 /** 简历预览弹层标志文案：弹层打开时成组出现（≥2），关闭后只剩聊天页自身的 1 个（真机实测） */
 const MODAL_MARKERS = ['个人优势', '工作经历', '教育经历', '项目经历']
-/** 左列会话列表与右侧聊天面板的分界（真机：列表命中 cx≈549~567，面板文案 cx≥1013） */
-const LIST_MAX_X = 850
+/** 左列会话列表与右侧聊天面板的分界（真机：列表命中 cx≈549~567，面板文案 cx≥1013）；ChatRejectExecutor 同用 */
+export const LIST_MAX_X = 850
 /** 处理条「同意」与提示文案同一行的容差（消息卡片按钮 Δy≈95，被此排除） */
 const SAME_ROW_DY = 30
 

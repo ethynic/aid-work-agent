@@ -51,6 +51,14 @@ test('分类：「再打一个」→ greet limit 1（省略句依赖上文，his
   assert.match(capturedBody, /本科以上筛选简历/)
 })
 
+test('分类：「这个不合适」→ reject', async () => {
+  const action = await classifyIntent('这个不合适', [], {
+    ...OPTS,
+    fetchImpl: llmReturning({ action: 'reject', filter_request: null, limit: null, target: null }),
+  })
+  assert.deepEqual(action, { type: 'reject' })
+})
+
 test('分类：limit 越界收敛到 1-100（演示安全：绝不一次打几百个）', async () => {
   const big = await classifyIntent('给1000个人打招呼', [], {
     ...OPTS,
@@ -99,6 +107,7 @@ function mockHandlers(calls: string[], overrides: Partial<ChatHandlers> = {}): C
     applyFilter: async () => (calls.push('apply'), { filterCount: 1 }),
     greet: async (limit) => (calls.push(`greet:${limit}`), { greeted: limit, reachedEnd: false }),
     acceptResumes: async () => (calls.push('accept'), { accepted: 2, previewed: 2 }),
+    rejectCurrent: async () => void calls.push('reject'),
     clearFilter: async () => void calls.push('clear'),
     ...overrides,
   }
@@ -139,6 +148,13 @@ test('编排：accept 先跳沟通页；有简历报数量，没有则明确说�
     acceptResumes: async () => (calls2.push('accept'), { accepted: 0, previewed: 0 }),
   }).handle('看看谁给我发简历了')
   assert.match(lines2[0]!, /没有等待你同意接收/)
+})
+
+test('编排：reject 先跳沟通页再标记不合适', async () => {
+  const calls: string[] = []
+  const lines = await orchestratorWith({ type: 'reject' }, calls).handle('这个不合适')
+  assert.deepEqual(calls, ['goto:chat', 'reject'])
+  assert.match(lines[0]!, /已把当前会话的候选人标记为不合适/)
 })
 
 test('编排：goto/clear_filter/help 各自回答', async () => {
@@ -182,7 +198,7 @@ test('编排：handler 抛错原样上抛（CLI 层打印 ❌ 但 REPL 存活）
 })
 
 test('能力提示覆盖全部动作入口', () => {
-  for (const kw of ['筛选简历', '打招呼', '推荐牛人', '沟通', '附件简历', '清除筛选', '退出']) {
+  for (const kw of ['筛选简历', '打招呼', '推荐牛人', '沟通', '附件简历', '不合适', '清除筛选', '退出']) {
     assert.ok(CAPABILITY_HINT.includes(kw), `CAPABILITY_HINT 应包含「${kw}」`)
   }
 })
