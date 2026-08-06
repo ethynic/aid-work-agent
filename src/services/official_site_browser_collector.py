@@ -120,7 +120,7 @@ def _target_business_priority(target: BrowserNavigationTarget) -> int:
     weighted_terms = (
         (100, ("组织领导", "驻会领导", "领导集体", "领导班子", "领导机构", "协会领导",
                "leadership", "leader")),
-        (90, ("组织架构", "组织机构", "机构设置", "秘书处",
+        (90, ("协会设置", "组织架构", "组织机构", "机构设置", "秘书处",
               "organization", "organisational", "organizational")),
         (80, ("协会简介", "协会介绍", "协会概况", "关于协会",
               "about", "profile", "introduction")),
@@ -542,16 +542,34 @@ class PlaywrightNavigationDriver:
             )
         except Exception:
             pass
+        # Vue/React SPA 路由切换后内容是异步渲染的，需要等到 content 稳定
+        # （连续两次 content 不再变化）才返回，避免拿到空白或半加载页面。
         poll_count = max(0, min(self._navigation_timeout_ms, 3_000) // 250)
         state = await self._state()
         if state.fingerprint != previous_state.fingerprint:
+            # fingerprint 已变，但 SPA 内容可能还在加载；额外等待内容稳定。
+            for _attempt in range(poll_count):
+                await self._page.wait_for_timeout(250)
+                next_state = await self._state()
+                if next_state.fingerprint == state.fingerprint:
+                    break
+                state = next_state
             return state
         for _attempt in range(poll_count):
             await self._page.wait_for_timeout(250)
             state = await self._state()
             if state.fingerprint != previous_state.fingerprint:
-                return state
-        return None
+                break
+        if state.fingerprint == previous_state.fingerprint:
+            return None
+        # 内容稳定检查
+        for _attempt in range(poll_count):
+            await self._page.wait_for_timeout(250)
+            next_state = await self._state()
+            if next_state.fingerprint == state.fingerprint:
+                break
+            state = next_state
+        return state
 
 
 async def _guard_main_frame_navigation(

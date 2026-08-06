@@ -911,6 +911,9 @@ async def test_sub_250ms_activate_observes_immediate_state_without_sleep():
         async def wait_for_load_state(self, **_kwargs):
             return None
 
+        async def wait_for_timeout(self, _ms):
+            return None
+
         async def wait_for_timeout(self, _milliseconds):
             raise AssertionError("must not sleep past a sub-250ms budget")
 
@@ -1077,6 +1080,9 @@ async def test_activate_preserves_original_locator_index_after_visible_filtering
             return FakeLocator()
 
         async def wait_for_load_state(self, **_kwargs):
+            return None
+
+        async def wait_for_timeout(self, _ms):
             return None
 
     driver = browser_collector_module.PlaywrightNavigationDriver(FakePage())
