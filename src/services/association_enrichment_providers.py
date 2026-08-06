@@ -258,6 +258,41 @@ class ProjectAssociationProviders:
             raise RuntimeError(error_code) from None
 
     async def resolve_official_site(self, association_name: str) -> str | None:
+        # 优先用 Qwen-plus 联网搜索直接获取官网 URL，不依赖 Tavily。
+        from src.llm.providers.qwen import QwenProvider
+        from src.config.settings import settings
+
+        qwen_keys = settings.llm.qwen.api_keys
+        if qwen_keys:
+            provider = QwenProvider(api_key=qwen_keys[0], model="qwen-plus")
+            try:
+                resp = await provider.chat(
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": (
+                                "你只负责识别协会官方网站。请通过联网搜索确认，"
+                                '只输出JSON：{"official_url":"网址"}。'
+                                "无法确认时输出 {\"official_url\":null}。"
+                            ),
+                        },
+                        {
+                            "role": "user",
+                            "content": f"请搜索{association_name}的官方网站地址。",
+                        },
+                    ],
+                    temperature=0,
+                    max_tokens=500,
+                    enable_search=True,
+                )
+                content = resp.get("content", "") if isinstance(resp, dict) else ""
+                import re as _re
+                m = _re.search(r'"official_url"\s*:\s*"(https?://[^"]+)"', content)
+                if m:
+                    return m.group(1)
+            except Exception:
+                pass  # 降级到 Tavily 搜索
+        # 降级：用 Tavily 搜索
         candidates: list[dict] = []
         seen_urls: set[str] = set()
         for keyword, search_depth, max_results in (
@@ -402,7 +437,7 @@ class ProjectAssociationProviders:
             headless=headless,
             max_pages=4,
             max_navigation_attempts=12,
-            navigation_timeout_ms=6_000,
+            navigation_timeout_ms=10_000,
             audit_callback=self._audit,
         )
         result = await extract_association_profile(pages, domain)
@@ -443,27 +478,6 @@ class ProjectAssociationProviders:
             for name, value in focused.items():
                 if value and not values.get(name):
                     values[name] = value
-        # 官网解析和领导独立提取后，如果会长或秘书长仍为空，
-        # 用网络搜索结果补充给 LLM 一起解析。官网信息优先，搜索结果作为补充。
-        if not (
-            values.get("president_name")
-            and values.get("secretary_general_name")
-        ):
-            try:
-                search_name = association_name or domain
-                supplemented = await self._search_supplementary_profile(
-                    search_name, values
-                )
-                for name, value in supplemented.items():
-                    if value and not values.get(name):
-                        values[name] = value
-            except Exception as exc:
-                self._audit(
-                    association=domain,
-                    stage="搜索补充解析",
-                    kind="search_supplement_failed",
-                    summary=(str(exc) if re.fullmatch(r"[A-Z][A-Z0-9_]+", str(exc)) else type(exc).__name__),
-                )
         if result.status != "success" and not any(values.values()):
             raise ValueError(result.reason_code or "OFFICIAL_EXTRACTION_FAILED")
         return values
@@ -471,76 +485,69 @@ class ProjectAssociationProviders:
     async def _search_supplementary_profile(
         self, association_name: str, current_values: dict[str, str | None]
     ) -> dict[str, str | None]:
-        """网络搜索补充：把搜索结果和已有官网字段一起给 LLM，补充缺失字段。
+        """用 Qwen-plus 联网搜索补充缺失字段。
 
-        只填充 current_values 中仍为空的字段，不覆盖已有官网解析结果。
+        不依赖 Tavily，直接用 Qwen 的 enable_search 联网能力搜索并提取结构化信息。
+        官网已有的字段优先保留，只补充官网未提供的字段。
         """
-        search_result = await self._search.execute(
-            keyword=f"{association_name} 协会简介 会长 秘书长 地址 邮箱",
-            max_results=8,
-            include_answer=True,
-            search_depth="advanced",
-        )
-        if not search_result.get("success"):
-            return {}
-        candidates = search_result.get("results")
-        if not isinstance(candidates, list) or not candidates:
-            return {}
-        # 把搜索结果摘要为文本块
-        search_snippets = []
-        for item in candidates[:6]:
-            title = str(item.get("title") or "").strip()
-            content = str(item.get("content") or "").strip()
-            if title or content:
-                search_snippets.append(f"{title}\n{content}")
-        search_text = "\n\n".join(search_snippets)[:8000]
-        if not search_text.strip():
-            return {}
         missing = [
             name for name in PROFILE_FIELDS
             if not current_values.get(name) and name != "official_website"
         ]
         if not missing:
             return {}
-        parsed = await self._strict_json_chat(
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "你是协会信息提取器。下面同时给出协会官网已解析字段和网络搜索结果。"
-                        "官网字段更权威；网络搜索结果作为补充，用于填充官网未提供的字段。"
-                        "只输出严格JSON，键必须恰好为以下字段中当前为null的那些："
-                        f"{','.join(missing)}。"
-                        "每个值必须是仅含value、evidence_quote、source_url的对象；"
-                        "找不到时三个值均为null。evidence_quote是支持判断的原文片段，"
-                        "用于审计。手机号字段必须全部为null（手机号由微信流程填写）。"
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": json.dumps(
-                        {
-                            "association_name": association_name,
-                            "official_fields": {
-                                name: current_values.get(name)
-                                for name in PROFILE_FIELDS
-                                if current_values.get(name)
-                            },
-                            "search_results": search_text,
-                        },
-                        ensure_ascii=False,
-                    ),
-                },
-            ],
-            max_tokens=2500,
-        )
+        from src.llm.providers.qwen import QwenProvider
+        from src.config.settings import settings
+
+        qwen_keys = settings.llm.qwen.api_keys
+        if not qwen_keys:
+            return {}
+        provider = QwenProvider(api_key=qwen_keys[0], model="qwen-plus")
+        existing = {
+            name: current_values.get(name)
+            for name in PROFILE_FIELDS
+            if current_values.get(name)
+        }
+        try:
+            resp = await provider.chat(
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "你是一个协会信息提取器。请通过联网搜索获取信息，只输出JSON，不要其他文字。"
+                            f"键必须恰好为：{','.join(missing)}。"
+                            "每个值是字符串或null。找不到的值为null。"
+                            "手机号字段必须为null。"
+                            "官网已有字段不要覆盖。"
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": (
+                            f"协会：{association_name}\n"
+                            f"官网已有字段：{json.dumps(existing, ensure_ascii=False)}\n"
+                            f"请搜索并补充以上缺失的字段。"
+                        ),
+                    },
+                ],
+                temperature=0,
+                max_tokens=2500,
+                enable_search=True,
+            )
+        except Exception:
+            return {}
+        content = resp.get("content", "") if isinstance(resp, dict) else ""
+        import re as _re
+        m = _re.search(r'\{.*\}', content, _re.S)
+        if not m:
+            return {}
+        try:
+            parsed = json.loads(m.group(0))
+        except json.JSONDecodeError:
+            return {}
         result: dict[str, str | None] = {}
         for name in missing:
-            evidence = parsed.get(name)
-            if not isinstance(evidence, dict):
-                result[name] = None
-                continue
-            value = evidence.get("value")
+            value = parsed.get(name)
             if isinstance(value, str) and value.strip():
                 result[name] = value.strip()
             else:
@@ -604,89 +611,62 @@ class ProjectAssociationProviders:
         return result
 
     async def fallback_profile(self, association_name: str) -> dict[str, str | None]:
-        result = await self._search.execute(
-            keyword=f"{association_name} 协会简介 会长 秘书长 地址 邮箱 会员",
-            max_results=10,
-            include_answer=True,
-            search_depth="advanced",
-        )
-        if not result.get("success"):
-            raise RuntimeError("WEB_SEARCH_FAILED")
-        candidates = result.get("results")
-        if not isinstance(candidates, list) or not candidates:
-            raise RuntimeError("WEB_SEARCH_NO_EVIDENCE")
-        parsed = await self._strict_json_chat(
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "根据网络检索结果补充协会基础资料，只输出严格 JSON。每个字段"
-                        "必须是仅含value、evidence_quote、source_url的对象；"
-                        "evidence_quote 是支持该字段判断的原文片段，用于事后审计，"
-                        "不需要逐字覆盖 value；没有可靠依据时三个值均为null。"
-                        f"键必须恰好为：{','.join(PROFILE_FIELDS)}。"
-                        "手机字段三个值必须均为null，手机只由微信取证流程填写。"
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": json.dumps(
-                        {
-                            "association_name": association_name,
-                            "search_result": result,
-                        },
-                        ensure_ascii=False,
-                    ),
-                },
-            ],
-            max_tokens=2500,
-        )
-        rejected: list[str] = []
+        """Qwen 联网搜索获取协会基础信息，不依赖 Tavily。"""
+        from src.llm.providers.qwen import QwenProvider
+        from src.config.settings import settings
+
+        qwen_keys = settings.llm.qwen.api_keys
+        if not qwen_keys:
+            raise RuntimeError("QWEN_NOT_CONFIGURED")
+        provider = QwenProvider(api_key=qwen_keys[0], model="qwen-plus")
         try:
-            values = self._validate_fallback_evidence(parsed, candidates, rejected)
-            if rejected:
-                self._audit(
-                    association=association_name,
-                    stage="网络搜索补充",
-                    kind="fallback_fields_rejected",
-                    summary=",".join(rejected),
-                )
-            return values
-        except (TypeError, ValueError):
-            retry = await self._strict_json_chat(
+            resp = await provider.chat(
                 messages=[
                     {
                         "role": "system",
                         "content": (
-                            "上一次结果的 JSON 结构或证据不合格。只输出严格 JSON。"
-                            f"顶层键必须恰好为：{','.join(PROFILE_FIELDS)}。"
-                            "每个值必须恰好包含 value、evidence_quote、source_url；"
-                            "无法证明的字段三个值都写 null；手机号字段必须全部为 null。"
+                            "你是一个协会信息提取器。请通过联网搜索获取信息，只输出JSON，不要其他文字。"
+                            f"键必须恰好为：{','.join(PROFILE_FIELDS)}。"
+                            "每个值是字符串或null。找不到的值为null。"
+                            "手机号字段(president_mobile,secretary_general_mobile)必须为null。"
+                            "official_website 要返回完整的网址（含 https://）。"
                         ),
                     },
                     {
                         "role": "user",
-                        "content": json.dumps(
-                            {
-                                "association_name": association_name,
-                                "search_result": result,
-                            },
-                            ensure_ascii=False,
+                        "content": (
+                            f"请搜索{association_name}的以下信息："
+                            "地址、邮箱、官网网址、主管单位、单位等级、会员数量、"
+                            "分支机构数量、公众号名称、会长姓名、秘书长姓名。"
                         ),
                     },
                 ],
+                temperature=0,
                 max_tokens=2500,
+                enable_search=True,
             )
-            rejected = []
-            values = self._validate_fallback_evidence(retry, candidates, rejected)
-            if rejected:
-                self._audit(
-                    association=association_name,
-                    stage="网络搜索补充",
-                    kind="fallback_fields_rejected",
-                    summary=",".join(rejected),
-                )
-            return values
+        except Exception as exc:
+            raise RuntimeError(f"QWEN_SEARCH_FAILED:{type(exc).__name__}") from exc
+        content = resp.get("content", "") if isinstance(resp, dict) else ""
+        import re as _re
+        m = _re.search(r'\{.*\}', content, _re.S)
+        if not m:
+            raise RuntimeError("QWEN_SEARCH_NO_JSON")
+        try:
+            parsed = json.loads(m.group(0))
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("QWEN_SEARCH_BAD_JSON") from exc
+        values: dict[str, str | None] = {}
+        for name in PROFILE_FIELDS:
+            value = parsed.get(name)
+            if isinstance(value, str) and value.strip():
+                values[name] = value.strip()
+            else:
+                values[name] = None
+        # 手机号字段禁止
+        for mobile_field in ("president_mobile", "secretary_general_mobile"):
+            values[mobile_field] = None
+        return values
 
     async def wechat_mobile(
         self, association_name: str, person_name: str, role: str
@@ -900,6 +880,160 @@ class ProjectAssociationProviders:
             person_name,
             role=role,
         )
+
+    async def wechat_search_leader_name(
+        self, association_name: str, role: str, known_president: str = ""
+    ) -> str | None:
+        """用微信搜一搜搜索协会领导姓名。
+
+        搜 "协会名 会长" 或 "协会名 秘书长"，复制列表文本，让 LLM 解析出姓名。
+        搜索完关闭搜一搜窗口。不进详情、不找手机号。
+        """
+        try:
+            handoff_performed = await self._prepare_wechat_query_handoff()
+        except Exception as exc:
+            raise WechatRpaError(
+                "WECHAT_HANDOFF_FAILED", stage="handoff", session_fatal=True
+            ) from exc
+        script = (
+            self._root
+            / "clients"
+            / "wechat-souyisou-rpa"
+            / "scripts"
+            / "wechat-souyisou.ps1"
+        )
+        import sys
+
+        child_environment = os.environ.copy()
+        child_environment["PATH"] = (
+            str(Path(sys.executable).parent)
+            + os.pathsep
+            + child_environment.get("PATH", "")
+        )
+        self._audit(
+            association=association_name,
+            stage=f"微信搜领导·{role}",
+            kind="wechat_start",
+            summary=f"搜索{role}姓名",
+            detail={
+                "query_index": self._wechat_query_index + 1,
+                "handoff_performed": handoff_performed,
+            },
+        )
+        process = await asyncio.create_subprocess_exec(
+            "powershell.exe",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(script),
+            "-Command",
+            "search",
+            "-AssociationName",
+            association_name,
+            "-PersonName",
+            role,
+            "-Execute",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=child_environment,
+        )
+        self._wechat_query_index += 1
+        try:
+            stdout, stderr = await self._communicate_with_timeout(
+                process,
+                timeout_seconds=_WECHAT_RPA_TIMEOUT_SECONDS,
+                error_code="WECHAT_RPA_TIMEOUT",
+            )
+        except Exception as exc:
+            code = str(exc) if str(exc) in _WECHAT_SESSION_FATAL_CODES else "WECHAT_RPA_TIMEOUT"
+            raise WechatRpaError(
+                code, stage="timeout", session_fatal=True
+            ) from exc
+        payload = None
+        try:
+            payload = json.loads(
+                stdout.decode("utf-8-sig").strip().splitlines()[-1]
+            )
+        except (IndexError, UnicodeDecodeError, json.JSONDecodeError):
+            pass
+        artifact_ref = (
+            payload.get("artifact_ref") if isinstance(payload, dict) else None
+        )
+        list_text = ""
+        if isinstance(artifact_ref, str):
+            try:
+                list_text = await self._read_wechat_search_list_text(artifact_ref)
+            except Exception:
+                pass
+        if not list_text.strip():
+            self._audit(
+                association=association_name,
+                stage=f"微信搜领导·{role}",
+                kind="list_text_empty",
+                summary="搜索列表文本为空",
+            )
+            return None
+        # LLM 从列表文本解析领导姓名
+        president_hint = f"当前会长是{known_president}，" if known_president else ""
+        parsed = await self._strict_json_chat(
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        f"从下面微信搜一搜的搜索结果中，找出这个协会现任{role}的姓名。"
+                        f"{president_hint}"
+                        "只输出JSON：{\"name\":\"姓名\"}。找不到时输出{\"name\":null}。"
+                        "注意区分现任和前任，只提取最新的。"
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": f"协会：{association_name}\n角色：{role}\n\n搜索结果：\n{list_text[:4000]}",
+                },
+            ],
+            max_tokens=1000,
+        )
+        name = parsed.get("name")
+        if isinstance(name, str) and name.strip():
+            self._audit(
+                association=association_name,
+                stage=f"微信搜领导·{role}",
+                kind="leader_name_found",
+                summary=name.strip(),
+            )
+            return name.strip()
+        self._audit(
+            association=association_name,
+            stage=f"微信搜领导·{role}",
+            kind="leader_name_not_found",
+            summary="LLM未能从搜索结果解析出姓名",
+        )
+        return None
+
+    async def _read_wechat_search_list_text(self, artifact_ref: str) -> str:
+        """读取微信 search 命令保存的列表文本（DPAPI artifact）。"""
+        artifact_path = Path(artifact_ref)
+        if not artifact_path.exists():
+            return ""
+        import subprocess
+        result = subprocess.run(
+            [
+                "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                "-File",
+                str(self._root / "clients" / "wechat-souyisou-rpa" / "scripts" / "read-artifact.ps1"),
+                "-ArtifactPath", str(artifact_path),
+            ],
+            capture_output=True, timeout=15,
+        )
+        if result.returncode != 0:
+            return ""
+        import json as _json
+        try:
+            data = _json.loads(result.stdout.decode("utf-8-sig"))
+            return str(data.get("text") or "")
+        except Exception:
+            return ""
 
     async def _prepare_wechat_query_handoff(self) -> bool:
         if not self._wechat_handoff_ready:

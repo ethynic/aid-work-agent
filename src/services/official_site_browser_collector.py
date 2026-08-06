@@ -286,16 +286,40 @@ async def collect_official_pages_with_browser_driver(
             monotonic() + MAX_SINGLE_PATH_SECONDS,
         )
         try:
+            # 单步路径且有同域 href 时，直接访问目标页面，避免每次重新加载首页。
+            # 这显著减少了慢网站的加载时间和超时失败。
+            direct_first = (
+                len(path) == 1
+                and path[0].href
+                and not path[0].href.lower().startswith(
+                    ("javascript:", "void(")
+                )
+                and "#" not in path[0].href
+            )
+            if direct_first:
+                direct_entry = _normalized_same_domain_url(
+                    path[0].href, normalized_entry, verified_domain
+                )
+            else:
+                direct_entry = normalized_entry
             audit(
                 stage="官网采集",
                 kind="web_open",
                 summary="重放官网入口",
-                detail={"url": normalized_entry},
+                detail={"url": direct_entry},
             )
             state = await asyncio.wait_for(
-                driver.open(normalized_entry),
+                driver.open(direct_entry),
                 timeout=max(0.001, path_deadline - monotonic()),
             )
+            # 单步路径已直接打开目标页面，跳过 activate 循环直接进入 include。
+            if direct_first:
+                if state.fingerprint in visited_states:
+                    continue
+                visited_states.add(state.fingerprint)
+                include(state)
+                enqueue_from(state, path)
+                continue
             path_succeeded = True
             for target in path:
                 if (

@@ -80,6 +80,7 @@ async def run(args: argparse.Namespace) -> dict[str, object]:
         official_profile_collector=providers.collect_official_profile,
         fallback_profile_provider=providers.fallback_profile,
         wechat_mobile_provider=providers.wechat_mobile,
+        wechat_leader_name_provider=providers.wechat_search_leader_name,
         headless=False,
         progress_reporter=report_progress,
     )

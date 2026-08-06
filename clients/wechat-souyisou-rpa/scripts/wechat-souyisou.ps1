@@ -78,7 +78,11 @@ try {
         $SearchReadyTimeoutMilliseconds -lt 10000 -or
         $SearchReadyTimeoutMilliseconds -gt 60000
     ) { throw 'INVALID_SEARCH_READY_TIMEOUT' }
-    if ($Command -in @('search','collect')) { $query = New-SearchQuery $AssociationName $PersonName }
+    if ($Command -eq 'collect') {
+        $query = New-SearchQuery $AssociationName $PersonName -ContactSuffix
+    } elseif ($Command -eq 'search') {
+        $query = New-SearchQuery $AssociationName $PersonName
+    }
     if (-not $Execute) {
         Write-Result @{
             ok=$true; executed=$false; mode='dry_run'; command=$Command

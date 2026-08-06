@@ -101,6 +101,7 @@ async def test_run_exports_mixed_rows_but_reports_business_failure(monkeypatch, 
             self.collect_official_profile = None
             self.fallback_profile = None
             self.wechat_mobile = None
+            self.wechat_search_leader_name = None
 
     class FakeEnricher:
         def __init__(self, **_kwargs):
@@ -163,6 +164,7 @@ async def test_run_reports_session_abort_as_business_failure(monkeypatch, tmp_pa
             self.collect_official_profile = None
             self.fallback_profile = None
             self.wechat_mobile = None
+            self.wechat_search_leader_name = None
 
     class AbortedEnricher:
         def __init__(self, **_kwargs):
@@ -219,6 +221,7 @@ async def test_run_reports_explicit_abort_even_when_no_rows_are_missing(
             self.collect_official_profile = None
             self.fallback_profile = None
             self.wechat_mobile = None
+            self.wechat_search_leader_name = None
 
     class AbortedEnricher:
         def __init__(self, **_kwargs):

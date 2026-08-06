@@ -637,7 +637,7 @@ async def test_website_only_official_profile_uses_fallback_then_wechat():
     assert row.values["official_website"] == "https://association.example.cn/"
     assert row.values["secretary_general_name"] == "潘华"
     assert row.values["secretary_general_mobile"] == "18612345678"
-    assert "web_search_fallback" in row.sources
+    assert "qwen_search" in row.sources
 
 
 @pytest.mark.asyncio
@@ -715,37 +715,27 @@ async def test_official_site_resolver_rejects_non_http_or_non_candidate_url(
 
 
 @pytest.mark.asyncio
-async def test_fallback_retries_invalid_structure(monkeypatch, tmp_path):
+async def test_fallback_profile_uses_qwen_search(monkeypatch, tmp_path):
+    """fallback_profile 现在用 Qwen 联网搜索，不再依赖 Tavily。"""
     import src.services.association_enrichment_providers as module
 
     providers = ProjectAssociationProviders(repository_root=tmp_path)
-    providers._search = _SearchStub([{
-        "success": True,
-        "results": [{
-            "url": "https://news.example.cn/a",
-            "title": "测试协会简介",
-            "content": "地址：北京市测试路1号",
-        }],
-    }])
-    valid = {
-        name: {"value": None, "evidence_quote": None, "source_url": None}
-        for name in PROFILE_FIELDS
-    }
-    valid["address"] = {
-        "value": "北京市测试路1号",
-        "evidence_quote": "地址：北京市测试路1号",
-        "source_url": "https://news.example.cn/a",
-    }
-    gateway = _GatewayStub([
-        '{"unexpected":"shape"}',
-        json.dumps(valid, ensure_ascii=False),
-    ])
-    monkeypatch.setattr(module, "llm_gateway", gateway)
+
+    mock_result = {name: None for name in PROFILE_FIELDS}
+    mock_result["address"] = "北京市测试路1号"
+
+    class MockQwenProvider:
+        def __init__(self, **kwargs):
+            pass
+        async def chat(self, **kwargs):
+            return {"content": json.dumps(mock_result, ensure_ascii=False)}
+
+    # Patch QwenProvider 在 fallback_profile 方法内部动态 import 的位置
+    import src.llm.providers.qwen as qwen_module
+    monkeypatch.setattr(qwen_module, "QwenProvider", MockQwenProvider)
 
     result = await providers.fallback_profile("测试协会")
-
     assert result["address"] == "北京市测试路1号"
-    assert gateway.calls == 2
 
 
 @pytest.mark.asyncio
@@ -759,7 +749,7 @@ async def test_progress_reports_stages_and_redacts_mobile():
         return {"president_name": "张三"}
 
     async def fallback(_name):
-        raise AssertionError("official collection succeeded")
+        return {"president_name": "张三"}
 
     async def wechat(_association, _person, _role):
         return "18612345678"
@@ -774,7 +764,7 @@ async def test_progress_reports_stages_and_redacts_mobile():
     row = await enricher.enrich_one("测试协会 18612345678")
 
     assert row.values["president_mobile"] == "18612345678"
-    assert any("发现官网" in message for message in messages)
+    assert any("搜索协会" in message for message in messages)
     assert any("可见浏览器" in message for message in messages)
     assert any("微信检索" in message for message in messages)
     assert all("18612345678" not in message for message in messages)

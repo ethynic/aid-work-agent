@@ -458,11 +458,14 @@ function Invoke-WeixinActivation {
 }
 
 function New-SearchQuery {
-    param([string]$AssociationName, [string]$PersonName)
+    param([string]$AssociationName, [string]$PersonName, [switch]$ContactSuffix)
     $association = $AssociationName.Trim()
     $person = $PersonName.Trim()
     if (-not $association -or -not $person) { throw 'INVALID_INPUT' }
-    return "$association $person 联系人"
+    if ($ContactSuffix) {
+        return "$association $person 联系人"
+    }
+    return "$association $person"
 }
 
 function Get-MobileCandidates {
