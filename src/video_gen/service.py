@@ -115,8 +115,8 @@ class VideoGenService:
         scene = get_scene(scene_id)
         if scene is None:
             raise ValueError(f"未知场景: {scene_id}")
-        if not 2 <= card_count <= 4:
-            raise ValueError("card_count 必须为 2-4")
+        if not 1 <= card_count <= 3:
+            raise ValueError("card_count 必须为 1-3")
         # 校验时长（万相 2.7 r2v 单次调用 duration 上限 15s）
         if duration_sec not in (5, 10, 15):
             raise ValueError("duration_sec 必须为 5/10/15")

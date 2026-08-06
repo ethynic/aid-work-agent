@@ -20,7 +20,7 @@ def init_video_gen_tables(conn) -> None:
             model_image_fid   TEXT,                       -- 模特图 file_id（可选，作 first_frame 控制起始画面；空则用产品图）
             copywriting       TEXT NOT NULL,             -- 运营填写的文案
             expanded_prompt   TEXT,                      -- 提示词引擎扩展后的完整 prompt（可微调）
-            card_count        INT NOT NULL DEFAULT 3,    -- 本次抽卡条数（2-4）
+            card_count        INT NOT NULL DEFAULT 3,    -- 本次抽卡条数（1-3）
             enable_ai_label   BOOLEAN NOT NULL DEFAULT TRUE,  -- 是否烧录 AI 内容角标（合规默认开）
             duration_sec      INT NOT NULL DEFAULT 5,    -- 视频时长（5/10/15 秒，万相 r2v 上限 15s）
             resolution        TEXT NOT NULL DEFAULT '720P',  -- 分辨率（720P/1080P，万相 r2v 不支持 480P）
