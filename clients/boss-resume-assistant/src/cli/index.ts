@@ -31,6 +31,9 @@ const USAGE = `BOSS 简历筛选助手 CLI
   filter --clear              清除全部筛选（开面板 → 清除 → 确定，期间勿动鼠标）
   greet [--limit N]           逐个打招呼（默认 10 上限，最大 100；当前屏点完自动滚动，到底结束；真实写动作，期间勿动鼠标）
   goto recommend|chat         点击左侧菜单跳转页面：recommend=推荐牛人，chat=沟通（看打招呼回复）；已在目标页自动跳过
+  accept [--limit N] [--no-preview]   逐个打开「对方想发送附件简历」的会话并点「同意」接收简历，同意后自动点开预览再关闭（默认 20 上限，最大 100；不在沟通页自动先跳转）
+  ask "筛选要求..."         自然语言一站式演示：LLM 翻译成合法选项 → 自动跳推荐牛人 → 设置筛选 → 给最近 1 人打招呼（--limit 调整）
+  chat                      交互式对话模式：启动后连续用中文提要求（筛选/打招呼/接收简历/切页面），自动操作并回答，输入「退出」结束
   review [--all] [--open]       列出 UNCERTAIN 复核队列并生成静态 HTML 复核报告
   review override <编号> <QUALIFIED|REJECTED> --reason "..."  改判复核项
   export [--format csv|json] [--out 路径]   导出评估+动作（默认 ./exports/）
@@ -39,7 +42,7 @@ const USAGE = `BOSS 简历筛选助手 CLI
 全局参数：
   --data-dir <目录>             数据目录（默认 clients/boss-resume-assistant/data/）
   --exports-dir <目录>          复核报告/导出默认输出目录（默认 ./exports/，相对当前工作目录）
-  --cdp-port <端口>             Chrome 调试端口（默认 9222，run/filter/greet/goto 生效）
+  --cdp-port <端口>             Chrome 调试端口（默认 9222，run/filter/greet/goto/accept/ask/chat 生效）
 
 run 的 Chrome 准备（CLI 不启动 Chrome，只 attach 你日常的 Chrome）：
   1. 关闭所有 Chrome 窗口
@@ -137,6 +140,68 @@ async function main(): Promise<number> {
       }
       const { gotoCommand } = await import('./commands/goto.js')
       return gotoCommand({ target, cdpPort })
+    }
+    case 'accept': {
+      const limitRaw = flagString(args, 'limit')
+      let limit: number | undefined
+      if (limitRaw !== undefined) {
+        limit = Number(limitRaw)
+        if (!Number.isInteger(limit) || limit <= 0 || limit > 100) {
+          console.error(`accept --limit 必须是 1-100 的整数（默认 20）：${limitRaw}`)
+          return 2
+        }
+      }
+      const cdpPortRaw = flagString(args, 'cdp-port')
+      let cdpPort: number | undefined
+      if (cdpPortRaw !== undefined) {
+        cdpPort = Number(cdpPortRaw)
+        if (!Number.isInteger(cdpPort) || cdpPort <= 0 || cdpPort > 65535) {
+          console.error(`--cdp-port 必须是 1-65535 的整数：${cdpPortRaw}`)
+          return 2
+        }
+      }
+      const { acceptCommand } = await import('./commands/accept.js')
+      return acceptCommand({ limit, cdpPort, preview: !hasFlag(args, 'no-preview') })
+    }
+    case 'ask': {
+      const request = args.positional.slice(1).join(' ').trim()
+      if (!request) {
+        console.error('ask 缺少筛选要求，如：ask "本科以上学历，5年工作经验，月薪15000到20000"')
+        return 2
+      }
+      const limitRaw = flagString(args, 'limit')
+      let limit: number | undefined
+      if (limitRaw !== undefined) {
+        limit = Number(limitRaw)
+        if (!Number.isInteger(limit) || limit <= 0 || limit > 100) {
+          console.error(`ask --limit 必须是 1-100 的整数（默认 1）：${limitRaw}`)
+          return 2
+        }
+      }
+      const cdpPortRaw = flagString(args, 'cdp-port')
+      let cdpPort: number | undefined
+      if (cdpPortRaw !== undefined) {
+        cdpPort = Number(cdpPortRaw)
+        if (!Number.isInteger(cdpPort) || cdpPort <= 0 || cdpPort > 65535) {
+          console.error(`--cdp-port 必须是 1-65535 的整数：${cdpPortRaw}`)
+          return 2
+        }
+      }
+      const { askCommand } = await import('./commands/ask.js')
+      return askCommand({ request, limit, cdpPort })
+    }
+    case 'chat': {
+      const cdpPortRaw = flagString(args, 'cdp-port')
+      let cdpPort: number | undefined
+      if (cdpPortRaw !== undefined) {
+        cdpPort = Number(cdpPortRaw)
+        if (!Number.isInteger(cdpPort) || cdpPort <= 0 || cdpPort > 65535) {
+          console.error(`--cdp-port 必须是 1-65535 的整数：${cdpPortRaw}`)
+          return 2
+        }
+      }
+      const { chatCommand } = await import('./commands/chat.js')
+      return chatCommand({ cdpPort })
     }
     case 'review': {
       const { reviewListCommand, reviewOverrideCommand } = await import('./commands/review.js')

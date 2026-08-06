@@ -526,3 +526,5 @@ clients/boss-resume-assistant/
 | 15 | 筛选面板行锚定两个变体 | ①标签与选项可能分行（选项换行，真机垂直差 57.5px）——行带按「最近其他行标签垂直距离的一半」推导，不用固定行高倍数；②弹层背后候选人卡片的重名文本（如「本科」cx=631）会落进行带——x 条件必须严格在行标签右缘右侧，放松到标签左缘会引入诱饵 |
 | 16 | iframe 文档 bounds 是文档绝对坐标 | 推荐列表 iframe（doc2）滚动后按钮 bounds **不变**、`document.scrollOffsetY` 变（实测 0→1200→2400）。可见性/点击坐标必须 `owner偏移 + bounds - scrollOffset`，否则滚动后新露出的按钮永远被当视口外（表现为「不停往下滚但一个都不点」）。另：mouseWheel 实际滚动距离 ≈ deltaY 的 1.5 倍，滚动步长取 min(800, 视口半高) 防小窗口漏人 |
 | 17 | 「沟通」页内嵌推荐 iframe 干扰页面判定 | 沟通页的 DOM 里仍挂着推荐 iframe 的全量节点（「筛选」「打招呼」文本都在 strings 里），按文本存在性做的页面前置校验会误通过。greet 前置校验需增强（待做，见开发计划 Phase 10） |
+| 18 | 筛选选项是切换式控件，残留状态下 apply 变反选 | 上次运行留下的已选状态（如 筛选·5）下，再点同名选项是**取消**而非选中——同 spec 重复 apply 会把 5 项全点掉（2026-08-06 chat 演示实测翻车）。`FilterSetter.apply` 进面板后先点「清除」再选选项，替换语义保证幂等 |
+| 19 | REPL 管道输入冲垮操作 | Node readline 在管道/快速输入下会把已缓冲的行**全部立即派发**（`rl.pause()` 挡不住），且 stdin EOF 立刻触发 `close`——若 close 直接退出，进行中的操作会被 `gw.close()` 半途中断（报「CDP socket is not connected」）。chat REPL 用「输入队列 + 串行处理 + close 置标志等队列排空」 |

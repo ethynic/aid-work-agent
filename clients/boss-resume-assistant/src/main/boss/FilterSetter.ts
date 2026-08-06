@@ -106,7 +106,11 @@ export class FilterSetter {
   }
 
   /**
-   * 应用筛选条件。返回生效的筛选条件数（与「筛选·N」徽章比对通过）。
+   * 应用筛选条件（替换语义）。返回生效的筛选条件数（与「筛选·N」徽章比对通过）。
+   *
+   * 进面板后先点「清除」再选选项：选项是切换式控件，上次运行残留的已选状态下
+   * 直接点同名选项会变成反选（2026-08-06 chat 演示实测：筛选·5 残留 + 同 spec
+   * 再 apply → 5 项全被点掉，徽章校验失败）。先清除保证从空白态开始，幂等。
    * 任一步失败抛 FilterSetError。
    */
   async apply(spec: FilterSpec): Promise<{ filterCount: number }> {
@@ -128,7 +132,12 @@ export class FilterSetter {
     // 1. 开面板（已打开则跳过——面板开着时再点「筛选」会把它关掉）
     let snap = await this.ensurePanelOpen()
 
-    // 2. 逐项行锚定点击（每项 fresh snapshot，页面可能重排）
+    // 2. 先清除残留选择（反选防护，见方法注释）
+    const clearBtn = this.locateUniqueText(snap, (s) => s === '清除', '清除按钮')
+    await this.deps.click(clearBtn, viewportOf(snap))
+    await this.sleep(500)
+
+    // 3. 逐项行锚定点击（每项 fresh snapshot，页面可能重排）
     for (const row of rows) {
       for (const option of row.options) {
         snap = await this.deps.snapshot()
@@ -138,13 +147,13 @@ export class FilterSetter {
       }
     }
 
-    // 3. 确定
+    // 4. 确定
     snap = await this.deps.snapshot()
     const confirm = this.locateUniqueText(snap, (s) => s === '确定', '确定按钮')
     await this.deps.click(confirm, viewportOf(snap))
     await this.sleep(2000)
 
-    // 4. 徽章计数校验（筛选·N）
+    // 5. 徽章计数校验（筛选·N）
     snap = await this.deps.snapshot()
     const expected = rows.reduce((n, r) => n + r.options.length, 0)
     const badge = snap.strings.map((s) => FILTER_BADGE_PATTERN.exec(s.trim())).find((m) => m !== null)

@@ -69,26 +69,28 @@ function recorder() {
 
 const FULL_SPEC = { experience: '5-10年', educations: ['本科', '硕士', '博士'], salary: '10-20K' }
 
-test('完整流程：开面板 → 5 个选项 → 确定 → 徽章 筛选·5 校验通过', async () => {
+test('完整流程：开面板 → 清除残留 → 5 个选项 → 确定 → 徽章 筛选·5 校验通过', async () => {
   const r = recorder()
   const setter = new FilterSetter({
-    // 9 次 snapshot：初始 + 开面板后 + 5 选项 + 确定前 + 徽章校验
+    // 9 次 snapshot：初始 + 开面板后（清除定位复用） + 5 选项 + 确定前 + 徽章校验
     snapshot: snapshotQueue([closedSnap, ...Array(7).fill(panelSnap), doneSnap]),
     click: r.click,
     sleep: r.sleep,
   })
   const result = await setter.apply(FULL_SPEC)
   assert.equal(result.filterCount, 5)
-  // 点击序列：筛选按钮 + 5 个选项 + 确定 = 7 次
-  assert.equal(r.clicks.length, 7)
+  // 点击序列：筛选按钮 + 清除 + 5 个选项 + 确定 = 8 次
+  assert.equal(r.clicks.length, 8)
   // 筛选按钮中心
   assert.deepEqual(r.clicks[0], { x: 1535, y: 45 })
+  // 必须先点清除（残留已选状态下直接点同名选项会变反选，2026-08-06 实测翻车）
+  assert.deepEqual(r.clicks[1], { x: 1654, y: 1000 })
   // 5-10年（经验要求行内）
-  assert.deepEqual(r.clicks[1], { x: 903.75, y: 640 })
+  assert.deepEqual(r.clicks[2], { x: 903.75, y: 640 })
   // 本科命中的是学历要求行内的选项，不是候选人卡片诱饵（x≈619）
-  assert.deepEqual(r.clicks[2], { x: 1368.5, y: 769.5 })
-  assert.deepEqual(r.clicks[5], { x: 1223.5, y: 909 })
-  assert.deepEqual(r.clicks[6], { x: 1759.5, y: 1000 })
+  assert.deepEqual(r.clicks[3], { x: 1368.5, y: 769.5 })
+  assert.deepEqual(r.clicks[6], { x: 1223.5, y: 909 })
+  assert.deepEqual(r.clicks[7], { x: 1759.5, y: 1000 })
 })
 
 test('已带计数的筛选按钮（筛选·3）也能定位开面板', async () => {
@@ -144,8 +146,9 @@ test('行带内的卡片诱饵（x 在标签左缘右、右缘左）必须被排
   })
   const result = await setter.apply({ educations: ['本科'] })
   assert.equal(result.filterCount, 1)
-  // 命中的仍是行内选项 (1368.5,769.5)，不是卡片诱饵
-  assert.deepEqual(r.clicks[1], { x: 1368.5, y: 769.5 })
+  // 清除之后命中的仍是行内选项 (1368.5,769.5)，不是卡片诱饵
+  assert.deepEqual(r.clicks[1], { x: 1654, y: 1000 })
+  assert.deepEqual(r.clicks[2], { x: 1368.5, y: 769.5 })
 })
 
 test('徽章计数与条件数不符 → fail-loud', async () => {
@@ -176,6 +179,7 @@ test('分行布局：标签独占一行、选项在下一行也能命中（真�
     { text: '学历要求', bounds: [600, 760.5, 75, 22] },
     // 下一行选项区的同名诱饵（y 差 186.5，超出半个行距，必须被排除）
     { text: '5-10年', bounds: [874.5, 818.5, 58.53125, 22] },
+    { text: '清除', bounds: [1633, 988.5, 42, 23] },
     { text: '确定', bounds: [1738.5, 988.5, 42, 23] },
   ])
   const r = recorder()
@@ -186,7 +190,7 @@ test('分行布局：标签独占一行、选项在下一行也能命中（真�
   })
   const result = await setter.apply({ experience: '5-10年' })
   assert.equal(result.filterCount, 1)
-  assert.deepEqual(r.clicks[1], { x: 903.765625, y: 700 })
+  assert.deepEqual(r.clicks[2], { x: 903.765625, y: 700 })
 })
 
 test('面板已打开（经验要求行标签可见）→ 跳过开面板，不再点筛选按钮', async () => {
@@ -199,9 +203,10 @@ test('面板已打开（经验要求行标签可见）→ 跳过开面板，不�
   })
   const result = await setter.apply({ experience: '5-10年' })
   assert.equal(result.filterCount, 1)
-  // 点击序列：5-10年 + 确定 = 2 次，不含筛选按钮 (1535,45)
-  assert.equal(r.clicks.length, 2)
-  assert.deepEqual(r.clicks[0], { x: 903.75, y: 640 })
+  // 点击序列：清除 + 5-10年 + 确定 = 3 次，不含筛选按钮 (1535,45)
+  assert.equal(r.clicks.length, 3)
+  assert.deepEqual(r.clicks[0], { x: 1654, y: 1000 })
+  assert.deepEqual(r.clicks[1], { x: 903.75, y: 640 })
 })
 
 test('清除流程：开面板 → 清除 → 确定 → 徽章无计数校验通过', async () => {
