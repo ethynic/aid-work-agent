@@ -88,7 +88,7 @@ async def test_batch_falls_back_from_https_to_http_and_then_enriches_wechat():
     async def resolve(_name):
         return "https://legacy.example.org/"
 
-    async def collect(url, headless):
+    async def collect(url, headless, **kwargs):
         attempts.append((url, headless))
         if url.startswith("https://"):
             raise ConnectionError("old site")
@@ -129,7 +129,7 @@ async def test_one_failed_association_does_not_stop_later_associations():
             raise RuntimeError("resolver down")
         return None
 
-    async def collect(_url, _headless):
+    async def collect(_url, _headless, **kwargs):
         raise AssertionError("no official URL")
 
     async def fallback(name):
@@ -162,7 +162,7 @@ async def test_cleanup_failure_keeps_verified_mobile_and_stops_batch():
     async def resolve(_name):
         return "https://association.example.cn/"
 
-    async def collect(_url, _headless):
+    async def collect(_url, _headless, **kwargs):
         return {
             "president_name": "杨晓京",
             "secretary_general_name": "陈戟",
@@ -210,7 +210,7 @@ async def test_nonfatal_wechat_failure_allows_next_person():
     async def resolve(_name):
         return "https://example.cn"
 
-    async def collect(_url, _headless):
+    async def collect(_url, _headless, **kwargs):
         return {
             "president_name": "会长甲",
             "secretary_general_name": "秘书长乙",
@@ -244,7 +244,7 @@ async def test_last_association_session_failure_is_explicitly_aborted():
     async def resolve(_name):
         return "https://example.cn"
 
-    async def collect(_url, _headless):
+    async def collect(_url, _headless, **kwargs):
         return {"president_name": "会长甲"}
 
     async def fallback(_name):
@@ -615,7 +615,7 @@ async def test_website_only_official_profile_uses_fallback_then_wechat():
     async def resolve(_name):
         return "https://association.example.cn/"
 
-    async def collect(url, _headless):
+    async def collect(url, _headless, **kwargs):
         return {"official_website": url}
 
     async def fallback(_name):
@@ -755,7 +755,7 @@ async def test_progress_reports_stages_and_redacts_mobile():
     async def resolve(_name):
         return "https://association.example.cn/"
 
-    async def collect(_url, _headless):
+    async def collect(_url, _headless, **kwargs):
         return {"president_name": "张三"}
 
     async def fallback(_name):

@@ -391,7 +391,7 @@ class ProjectAssociationProviders:
         return original_candidate
 
     async def collect_official_profile(
-        self, entry_url: str, headless: bool
+        self, entry_url: str, headless: bool, *, association_name: str = ""
     ) -> dict[str, str | None]:
         domain = urlparse(entry_url).hostname
         if not domain:
@@ -450,8 +450,9 @@ class ProjectAssociationProviders:
             and values.get("secretary_general_name")
         ):
             try:
+                search_name = association_name or domain
                 supplemented = await self._search_supplementary_profile(
-                    domain, values
+                    search_name, values
                 )
                 for name, value in supplemented.items():
                     if value and not values.get(name):

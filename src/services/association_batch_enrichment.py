@@ -340,7 +340,7 @@ class AssociationBatchEnricher:
                         f"[{association_name}] 正在使用可见浏览器采集官网"
                     )
                     profile = await self._collect_official_profile(
-                        candidate, self._headless
+                        candidate, self._headless, association_name=association_name
                     )
                     self._merge(row.values, profile)
                     row.sources.append(f"official:{candidate}")
