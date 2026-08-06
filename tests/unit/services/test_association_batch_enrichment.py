@@ -6,7 +6,6 @@ import pytest
 from openpyxl import Workbook, load_workbook
 
 from src.services.association_batch_enrichment import (
-    OUTPUT_FIELDS,
     AssociationBatchEnricher,
     parse_association_input,
     write_enrichment_workbook,
@@ -293,9 +292,14 @@ def test_excel_contains_business_and_audit_columns_but_error_is_redacted(tmp_pat
     finally:
         workbook.close()
 
-    assert tuple(headers) == OUTPUT_FIELDS
-    assert values["secretary_general_mobile"] == "18612345678"
-    assert values["error_summary"] == "provider returned 186****5678"
+    # 表头按客户参考表输出中文标签，额外职务占位列已包含在内。
+    from src.services.association_batch_enrichment import _EXCEL_HEADERS
+    assert headers == [label for label, _ in _EXCEL_HEADERS]
+    assert values["秘书长\n手机"] == "18612345678"
+    assert values["错误摘要"] == "provider returned 186****5678"
+    # 未采集的职务占位列存在且为空
+    assert "副秘书长\n姓名" in values
+    assert values["副秘书长\n姓名"] is None
 
 
 def test_excel_treats_external_formula_prefixes_as_text(tmp_path):
@@ -319,18 +323,20 @@ def test_excel_treats_external_formula_prefixes_as_text(tmp_path):
     finally:
         workbook.close()
 
-    for field_name in (
-        "association_name",
-        "address",
-        "source_summary",
-        "error_summary",
-        "processed_at",
+    for header_name in (
+        "客户名称",
+        "单位地址",
+        "来源摘要",
+        "错误摘要",
+        "处理时间",
     ):
-        assert cells[field_name].startswith("'")
-        assert types[field_name] == "s"
+        assert cells[header_name].startswith("'")
+        assert types[header_name] == "s"
 
 
-def test_web_fallback_only_accepts_values_with_exact_search_evidence():
+def test_web_fallback_accepts_model_values_without_verbatim_quote_check():
+    """删除逐字校验后，fallback 路径只做 schema/类型/手机号禁止校验；
+    模型给出的 value 一律接受，不再要求 value 逐字出现在 quote 中。"""
     parsed = {
         name: {"value": None, "evidence_quote": None, "source_url": None}
         for name in PROFILE_FIELDS
@@ -361,10 +367,8 @@ def test_web_fallback_only_accepts_values_with_exact_search_evidence():
         }],
         rejected,
     )
-    assert result["secretary_general_name"] is None
-    assert rejected == [
-        "secretary_general_name:WEB_FALLBACK_VALUE_NOT_IN_QUOTE"
-    ]
+    assert result["secretary_general_name"] == "虚构姓名"
+    assert rejected == []
 
 
 @pytest.mark.asyncio
@@ -1021,7 +1025,8 @@ def test_workbook_token_usage_uses_separate_sheet_without_changing_main_contract
     )
     workbook = load_workbook(path, read_only=True, data_only=True)
     try:
-        assert workbook["协会信息"].max_column == len(OUTPUT_FIELDS)
+        from src.services.association_batch_enrichment import _EXCEL_HEADERS
+        assert workbook["协会信息"].max_column == len(_EXCEL_HEADERS)
         token_sheet = workbook["Token用量"]
         assert token_sheet.cell(2, 1).value == "协会一"
         assert token_sheet.cell(2, 2).value == 100

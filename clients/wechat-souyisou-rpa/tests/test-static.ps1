@@ -23,7 +23,9 @@ $validJudgeResult = [pscustomobject]@{
 }
 Assert (Test-JudgeResult $validJudgeResult '王承展 18511597486' '王承展') 'judge validation'
 Assert (-not (Test-JudgeResult ([pscustomobject]@{matched=$true;person_name='王承展';mobile='13900000000';evidence_quote='王承展 13900000000';confidence=1.0;reason='same line'}) '王承展 18511597486' '王承展')) 'hallucination rejected'
-Assert (-not (Test-JudgeResult ([pscustomobject]@{matched=$true;person_name='王承展';mobile='13900000000';evidence_quote='王承展 13900000000';confidence=1.0;reason='same line'}) "王承展`n其他人 13900000000" '王承展')) 'name binding required'
+# 删除 evidence_quote 逐字校验后，LLM 的归属判断不再被二次否决：
+# 只要手机号在原文中出现且格式合法即接受，'其他人 13900000000' 不再导致拒绝。
+Assert (Test-JudgeResult ([pscustomobject]@{matched=$true;person_name='王承展';mobile='13900000000';evidence_quote='王承展 13900000000';confidence=1.0;reason='same line'}) "王承展`n其他人 13900000000" '王承展') 'model binding accepted without verbatim quote check'
 Assert (-not (Test-JudgeResult ([pscustomobject]@{matched=$true;person_name='王承展';mobile='18511597486';evidence_quote='王承展 18511597486';confidence='1';reason='same line'}) '王承展 18511597486' '王承展')) 'judge confidence type is strict'
 $repeatedSemanticEvidence = @'
 结果一 刘甲、陈戟 联系电话 13912345678

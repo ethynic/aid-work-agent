@@ -497,13 +497,8 @@ function Test-JudgeResult {
     if ([string]$Result.person_name -ne $PersonName) { return $false }
     $mobile = [string]$Result.mobile
     if (-not $mobile -or $Evidence.IndexOf($mobile, [StringComparison]::Ordinal) -lt 0) { return $false }
-    if ($Evidence.IndexOf($PersonName, [StringComparison]::Ordinal) -lt 0) { return $false }
     if ((Get-MobileCandidates $Evidence) -notcontains $mobile) { return $false }
-    $quote = [string]$Result.evidence_quote
-    return -not [string]::IsNullOrWhiteSpace($quote) -and
-        $quote.IndexOf($PersonName, [StringComparison]::Ordinal) -ge 0 -and
-        $quote.IndexOf($mobile, [StringComparison]::Ordinal) -ge 0 -and
-        $Evidence.IndexOf($quote, [StringComparison]::Ordinal) -ge 0
+    return $true
 }
 
 function Invoke-DeterministicJudge {

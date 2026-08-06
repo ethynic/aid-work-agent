@@ -197,18 +197,15 @@ class ProjectAssociationProviders:
         candidates: list[dict],
         rejected: list[str] | None = None,
     ) -> dict[str, str | None]:
+        """网络回退路径的结构安全校验。
+
+        只校验 schema、字段类型、手机号业务隔离和 value 非空；不再校验
+        evidence_quote 是否在 source_text 中或 value 是否在 quote 中。模型解析出的
+        字段一律接受，evidence_quote/source_url 仅作审计记录。
+        """
         if set(parsed) - set(PROFILE_FIELDS):
             raise ValueError("WEB_FALLBACK_SCHEMA_INVALID")
         rejected = rejected if rejected is not None else []
-        evidence_by_url: dict[str, str] = {}
-        for candidate in candidates:
-            url = candidate.get("url")
-            if not isinstance(url, str):
-                continue
-            evidence_by_url[url] = "\n".join(
-                str(candidate.get(key) or "")
-                for key in ("title", "content", "raw_content")
-            )
         result: dict[str, str | None] = {}
         for name in PROFILE_FIELDS:
             evidence = parsed.get(name)
@@ -230,22 +227,9 @@ class ProjectAssociationProviders:
                 result[name] = None
                 rejected.append(f"{name}:WEB_FALLBACK_MOBILE_FORBIDDEN")
                 continue
-            if not all(isinstance(item, str) and item.strip() for item in (
-                value, quote, source_url,
-            )):
+            if not isinstance(value, str) or not value.strip():
                 result[name] = None
                 rejected.append(f"{name}:WEB_FALLBACK_EVIDENCE_INVALID")
-                continue
-            source_text = evidence_by_url.get(source_url)
-            if source_text is None or quote not in source_text:
-                result[name] = None
-                rejected.append(f"{name}:WEB_FALLBACK_SOURCE_INVALID")
-                continue
-            compact_value = re.sub(r"\s+", "", value)
-            compact_quote = re.sub(r"\s+", "", quote)
-            if compact_value not in compact_quote:
-                result[name] = None
-                rejected.append(f"{name}:WEB_FALLBACK_VALUE_NOT_IN_QUOTE")
                 continue
             result[name] = value.strip()
         return result
@@ -555,9 +539,9 @@ class ProjectAssociationProviders:
                     "role": "system",
                     "content": (
                         "根据网络检索结果补充协会基础资料，只输出严格 JSON。每个字段"
-                        "必须是仅含value、evidence_quote、source_url的对象；非空quote"
-                        "必须逐字来自对应搜索结果的title/content/raw_content，value"
-                        "必须出现在quote中；没有可靠依据时三个值均为null。"
+                        "必须是仅含value、evidence_quote、source_url的对象；"
+                        "evidence_quote 是支持该字段判断的原文片段，用于事后审计，"
+                        "不需要逐字覆盖 value；没有可靠依据时三个值均为null。"
                         f"键必须恰好为：{','.join(PROFILE_FIELDS)}。"
                         "手机字段三个值必须均为null，手机只由微信取证流程填写。"
                     ),

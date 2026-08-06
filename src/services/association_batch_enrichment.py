@@ -23,6 +23,68 @@ AUDIT_FIELDS = (
     "processed_at",
 )
 OUTPUT_FIELDS = ("association_name",) + PROFILE_FIELDS + AUDIT_FIELDS[1:]
+
+# 当前暂未采集但需要出现在 Excel 中的额外职务占位列（姓名+手机成对）。
+# 这些列目前始终为空，待后续扩展采集时填充。
+EXTRA_ROLE_PLACEHOLDER_FIELDS = (
+    "deputy_secretary_general_name",
+    "deputy_secretary_general_mobile",
+    "vice_secretary_general_name",
+    "vice_secretary_general_mobile",
+    "academic_director_name",
+    "academic_director_mobile",
+    "member_director_name",
+    "member_director_mobile",
+    "conference_office_director_name",
+    "conference_office_director_mobile",
+    "network_info_director_name",
+    "network_info_director_mobile",
+    "general_office_director_name",
+    "general_office_director_mobile",
+    "office_director_name",
+    "office_director_mobile",
+)
+
+# Excel 中文表头：按客户提供的参考表排列，未采集的职务列输出为空。
+_EXCEL_HEADERS: tuple[tuple[str, str | None], ...] = (
+    ("客户名称", "association_name"),
+    ("主管单位", "supervising_unit"),
+    ("单位等级", "organization_level"),
+    ("会长\n姓名", "president_name"),
+    ("会长\n手机", "president_mobile"),
+    ("秘书长\n姓名", "secretary_general_name"),
+    ("秘书长\n手机", "secretary_general_mobile"),
+    ("常务副秘书长\n姓名", "deputy_secretary_general_name"),
+    ("常务副秘书长\n手机", "deputy_secretary_general_mobile"),
+    ("副秘书长\n姓名", "vice_secretary_general_name"),
+    ("副秘书长\n手机", "vice_secretary_general_mobile"),
+    ("学术部主任\n姓名", "academic_director_name"),
+    ("学术部主任\n手机", "academic_director_mobile"),
+    ("会员部主任\n姓名", "member_director_name"),
+    ("会员部主任\n手机", "member_director_mobile"),
+    ("会议会展办主任\n姓名", "conference_office_director_name"),
+    ("会议会展办主任\n手机", "conference_office_director_mobile"),
+    ("网络信息部主任\n姓名", "network_info_director_name"),
+    ("网络信息部主任\n手机", "network_info_director_mobile"),
+    ("综合办主任\n姓名", "general_office_director_name"),
+    ("综合办主任\n手机", "general_office_director_mobile"),
+    ("办公室主任\n姓名", "office_director_name"),
+    ("办公室主任\n手机", "office_director_mobile"),
+    ("单位地址", "address"),
+    ("单位邮箱", "email"),
+    ("分支机构数量", "branch_count"),
+    ("单位会员数量", "organization_member_count"),
+    ("个人会员数量", "individual_member_count"),
+    ("品牌会议连续次数", "brand_conference_consecutive_count"),
+    ("单位官网", "official_website"),
+    ("单位公众号", "official_wechat_account"),
+    # 审计字段放最后
+    ("处理状态", "processing_status"),
+    ("来源摘要", "source_summary"),
+    ("错误摘要", "error_summary"),
+    ("处理时间", "processed_at"),
+)
+
 ASSOCIATION_COLUMN_NAMES = {"协会名称", "association_name", "association", "单位名称"}
 _MOBILE_RE = re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)")
 _FORMULA_PREFIXES = ("=", "+", "-", "@")
@@ -403,10 +465,12 @@ def write_enrichment_workbook(
     workbook = Workbook()
     worksheet = workbook.active
     worksheet.title = "协会信息"
-    worksheet.append(list(OUTPUT_FIELDS))
+    worksheet.append([label for label, _ in _EXCEL_HEADERS])
     for item in rows:
         row = item.as_excel_row()
-        worksheet.append([_excel_safe_value(row.get(name)) for name in OUTPUT_FIELDS])
+        worksheet.append([
+            _excel_safe_value(row.get(field_name)) for _, field_name in _EXCEL_HEADERS
+        ])
     worksheet.freeze_panes = "A2"
     worksheet.auto_filter.ref = worksheet.dimensions
     for column_cells in worksheet.columns:
