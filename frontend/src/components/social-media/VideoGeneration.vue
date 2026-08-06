@@ -99,11 +99,11 @@
               </div>
             </div>
 
-            <!-- 分辨率（480P/720P，默认 480P 节约成本） -->
+            <!-- 分辨率（720P/1080P，默认 720P；万相 r2v 不支持 480P） -->
             <div class="flex items-center gap-3">
               <label class="text-sm font-medium text-default">分辨率</label>
               <div class="flex gap-2">
-                <button v-for="r in ['480P','720P']" :key="r" @click="form.resolution = r"
+                <button v-for="r in ['720P','1080P']" :key="r" @click="form.resolution = r"
                   :class="['px-4 py-1.5 rounded-md text-sm border transition-colors',
                     form.resolution===r ? 'bg-primary-600 text-white border-primary-600' : 'bg-white text-default border-default hover:border-primary-400']">
                   {{ r }}
@@ -230,7 +230,7 @@ const form = ref({
   expandedPrompt: '',
   enableAiLabel: true,
   durationSec: 5,
-  resolution: '480P',
+  resolution: '720P',
 })
 const uploading = ref<string | null>(null)   // null | 'product' | 'model'
 const creating = ref(false)

@@ -93,7 +93,7 @@ async def create_session(request: Request):
             model_image_fid=body.get("model_image_fid"),
             enable_ai_label=body.get("enable_ai_label", True),
             duration_sec=body.get("duration_sec", 5),
-            resolution=body.get("resolution", "480P"),
+            resolution=body.get("resolution", "720P"),
         )
         return _ok(result)
     except ValueError as e:

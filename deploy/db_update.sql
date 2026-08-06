@@ -1418,5 +1418,9 @@ WHERE agent_id = 'social-media-operations' AND name = '社媒运营智能体';
 ALTER TABLE gen_sessions ADD COLUMN IF NOT EXISTS enable_ai_label BOOLEAN NOT NULL DEFAULT TRUE;
 ALTER TABLE gen_sessions ADD COLUMN IF NOT EXISTS duration_sec INT NOT NULL DEFAULT 5;
 
--- 2026-8-6，视频生成会话增加分辨率字段（480P/720P，默认 480P 节约成本）
-ALTER TABLE gen_sessions ADD COLUMN IF NOT EXISTS resolution TEXT NOT NULL DEFAULT '480P';
+-- 2026-8-6，视频生成会话增加分辨率字段（720P/1080P，默认 720P；万相 r2v 不支持 480P）
+ALTER TABLE gen_sessions ADD COLUMN IF NOT EXISTS resolution TEXT NOT NULL DEFAULT '720P';
+
+-- 2026-8-6，修正：曾误用 480P 作为默认值，万相 r2v 不支持，回填历史数据为 720P
+UPDATE gen_sessions SET resolution = '720P' WHERE resolution = '480P';
+ALTER TABLE gen_sessions ALTER COLUMN resolution SET DEFAULT '720P';

@@ -66,7 +66,7 @@ class VideoGenService:
         model_image_fid: str | None = None,
         enable_ai_label: bool = True,
         duration_sec: int = 5,
-        resolution: str = "480P",
+        resolution: str = "720P",
     ) -> dict[str, Any]:
         """创建抽卡会话 + 立即向万相提交 card_count 条任务。
 
@@ -87,9 +87,9 @@ class VideoGenService:
         # 校验时长（万相 2.7 r2v 单次调用 duration 上限 15s）
         if duration_sec not in (5, 10, 15):
             raise ValueError("duration_sec 必须为 5/10/15")
-        # 校验分辨率（万相 2.7 r2v 支持 480P/720P）
-        if resolution not in ("480P", "720P"):
-            raise ValueError("resolution 必须为 480P/720P")
+        # 校验分辨率（万相 2.7 r2v 支持 720P/1080P，不支持 480P）
+        if resolution not in ("720P", "1080P"):
+            raise ValueError("resolution 必须为 720P/1080P")
 
         # 2. 提示词：expanded_prompt 为空则用场景模板填空（极简提示词引擎，§6）
         prompt = expanded_prompt or scene.prompt_template.format(copywriting=copywriting)
@@ -302,7 +302,7 @@ class VideoGenService:
                 seed=seed,
                 negative_prompt=negative_prompt,
                 duration=scene.default_duration if scene else 5,
-                resolution=data.get("resolution") or "480P",
+                resolution=data.get("resolution") or "720P",
             )
             provider_task_id = submit_result.task_id
             provider_status = submit_result.task_status
