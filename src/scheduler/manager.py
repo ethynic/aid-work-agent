@@ -229,13 +229,13 @@ class ScheduledTaskManager:
         try:
             self._scheduler.add_job(
                 self._run_video_gen_poll,
-                IntervalTrigger(seconds=settings.llm.wanx.poll_interval_seconds),
+                IntervalTrigger(seconds=settings.video_gen.wanx.poll_interval_seconds),
                 id="job_system_video_gen_poll",
                 name="Video Generation Status Poller",
                 max_instances=1,
                 coalesce=True,
             )
-            logger.info(f"后端日志：已注册视频生成轮询任务 (interval={settings.llm.wanx.poll_interval_seconds}s)")
+            logger.info(f"后端日志：已注册视频生成轮询任务 (interval={settings.video_gen.wanx.poll_interval_seconds}s)")
         except Exception as e:
             logger.error(f"后端日志：注册视频生成轮询任务失败: {e}")
 

@@ -54,6 +54,23 @@ llm:
       channel: webhook            # 告警渠道
       cooldown: 300               # 告警冷却时间（秒）
 
+# 视频生成配置（多 provider：wanx / minimax，由 VIDEO_GEN_PROVIDER 切换）
+video_gen:
+  provider: ${VIDEO_GEN_PROVIDER:-wanx}    # wanx | minimax
+  poll_interval_seconds: 30
+  task_max_age_hours: 24                   # 全局兜底；实际以 provider 声明为准
+  wanx:
+    api_key: ${WANX_API_KEY:-}             # 空：回退 qwen.api_keys[0]（同百炼账号通用）
+    model: wan2.7-r2v-2026-06-12
+    poll_interval_seconds: 30
+    task_max_age_hours: 24                  # 万相 task_id 查询有效期
+  minimax:
+    api_key: ${MINIMAX_API_KEY:-}           # 必须独立配置（不与 Qwen 共用）
+    model: ${MINIMAX_MODEL_CODE:-MiniMax-H3}
+    base_url: ${MINIMAX_BASE_URL:-https://api.minimaxi.com}
+    poll_interval_seconds: 30
+    task_max_age_hours: 168                 # MiniMax 7 天查询窗口
+
 # 工具配置
 tools:
   email:

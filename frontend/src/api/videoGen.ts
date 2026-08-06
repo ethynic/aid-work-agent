@@ -58,6 +58,27 @@ export interface UploadResult {
   mime_type?: string
 }
 
+/** Provider 选项项（resolutions / ratios / durations 元素） */
+export interface OptionItem {
+  value: string
+  label: string
+  price_per_sec?: number | null
+}
+
+/** Provider 能力声明（GET /options 响应 data） */
+export interface ProviderOptions {
+  provider: string
+  resolutions: OptionItem[]
+  ratios: OptionItem[]
+  durations: OptionItem[]
+  default_resolution: string
+  default_ratio: string
+  default_duration: number
+  supports_reference_image: boolean
+  supports_negative_prompt: boolean
+  task_max_age_hours: number
+}
+
 async function request<T>(path: string, options: RequestInit = {}): Promise<ApiResponse<T>> {
   const headers = {
     'Content-Type': 'application/json',
@@ -71,6 +92,9 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<ApiR
 export const videoGenAPI = {
   /** 场景列表 */
   listScenes: () => request<{ items: SceneItem[] }>('/scenes'),
+
+  /** 当前 provider 选项（resolutions/ratios/durations + 默认值 + 能力声明） */
+  getOptions: () => request<ProviderOptions>('/options'),
 
   /** 创建抽卡会话 */
   createSession: (body: {

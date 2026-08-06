@@ -1,6 +1,7 @@
 """视频生成 API 路由单元测试（FastAPI TestClient，mock service）。
 
-验证 7 个端点的响应契约 {success,data,error}：
+验证 8 个端点的响应契约 {success,data,error}：
+- GET /options 当前 provider 选项（resolutions/ratios/durations + 默认值 + 能力声明）
 - GET /scenes 返回场景列表
 - POST /sessions 创建会话（含参数校验失败分支）
 - GET /sessions / GET /sessions/{id} 查询
@@ -32,6 +33,114 @@ def _make_app():
 @pytest.fixture
 def client():
     return TestClient(_make_app())
+
+
+def _wanx_options_dict():
+    """与 WanxProvider.get_options 对齐的 dict（dataclasses.asdict 输出）。"""
+    return {
+        "provider": "wanx",
+        "resolutions": [
+            {"value": "720P", "label": "720P", "price_per_sec": 0.6},
+            {"value": "1080P", "label": "1080P", "price_per_sec": 1.0},
+        ],
+        "ratios": [
+            {"value": "9:16", "label": "9:16", "price_per_sec": None},
+            {"value": "16:9", "label": "16:9", "price_per_sec": None},
+            {"value": "1:1",  "label": "1:1",  "price_per_sec": None},
+            {"value": "4:3",  "label": "4:3",  "price_per_sec": None},
+            {"value": "3:4",  "label": "3:4",  "price_per_sec": None},
+        ],
+        "durations": [
+            {"value": "5",  "label": "5s",  "price_per_sec": None},
+            {"value": "10", "label": "10s", "price_per_sec": None},
+            {"value": "15", "label": "15s", "price_per_sec": None},
+        ],
+        "default_resolution": "720P",
+        "default_ratio": "9:16",
+        "default_duration": 5,
+        "supports_reference_image": True,
+        "supports_negative_prompt": True,
+        "task_max_age_hours": 24,
+    }
+
+
+def _minimax_options_dict():
+    """与 MiniMaxProvider.get_options 对齐的 dict。"""
+    return {
+        "provider": "minimax",
+        "resolutions": [
+            {"value": "768P", "label": "768P", "price_per_sec": 0.5},
+            {"value": "2K",   "label": "2K",   "price_per_sec": 0.8},
+        ],
+        "ratios": [
+            {"value": "9:16",     "label": "9:16",     "price_per_sec": None},
+            {"value": "16:9",     "label": "16:9",     "price_per_sec": None},
+            {"value": "1:1",      "label": "1:1",      "price_per_sec": None},
+            {"value": "4:3",      "label": "4:3",      "price_per_sec": None},
+            {"value": "3:4",      "label": "3:4",      "price_per_sec": None},
+            {"value": "21:9",     "label": "21:9",     "price_per_sec": None},
+            {"value": "adaptive", "label": "adaptive", "price_per_sec": None},
+        ],
+        "durations": [
+            {"value": "5",  "label": "5s",  "price_per_sec": None},
+            {"value": "10", "label": "10s", "price_per_sec": None},
+            {"value": "15", "label": "15s", "price_per_sec": None},
+        ],
+        "default_resolution": "768P",
+        "default_ratio": "9:16",
+        "default_duration": 5,
+        "supports_reference_image": True,
+        "supports_negative_prompt": False,
+        "task_max_age_hours": 168,
+    }
+
+
+def test_get_options_returns_wanx(client):
+    """VIDEO_GEN_PROVIDER=wanx 时 /options 应返回万相选项。"""
+    from src.video_gen.base import ProviderOptions
+    opts = ProviderOptions(
+        provider="wanx",
+        resolutions=[],
+        ratios=[],
+        durations=[],
+        default_resolution="720P", default_ratio="9:16", default_duration=5,
+        supports_reference_image=True, supports_negative_prompt=True,
+        task_max_age_hours=24,
+    )
+    mock_svc = MagicMock()
+    mock_svc.get_options.return_value = opts
+    with patch.object(api_mod, "_service", mock_svc):
+        resp = client.get("/api/video-gen/options")
+    body = resp.json()
+    assert body["success"] is True
+    assert body["data"]["provider"] == "wanx"
+    assert body["data"]["default_resolution"] == "720P"
+    assert body["data"]["task_max_age_hours"] == 24
+    assert body["data"]["supports_negative_prompt"] is True
+
+
+def test_get_options_returns_minimax(client):
+    """VIDEO_GEN_PROVIDER=minimax 时 /options 应返回 MiniMax 选项。"""
+    from src.video_gen.base import ProviderOptions
+    opts = ProviderOptions(
+        provider="minimax",
+        resolutions=[],
+        ratios=[],
+        durations=[],
+        default_resolution="768P", default_ratio="9:16", default_duration=5,
+        supports_reference_image=True, supports_negative_prompt=False,
+        task_max_age_hours=168,
+    )
+    mock_svc = MagicMock()
+    mock_svc.get_options.return_value = opts
+    with patch.object(api_mod, "_service", mock_svc):
+        resp = client.get("/api/video-gen/options")
+    body = resp.json()
+    assert body["success"] is True
+    assert body["data"]["provider"] == "minimax"
+    assert body["data"]["default_resolution"] == "768P"
+    assert body["data"]["task_max_age_hours"] == 168
+    assert body["data"]["supports_negative_prompt"] is False
 
 
 def test_list_scenes(client):

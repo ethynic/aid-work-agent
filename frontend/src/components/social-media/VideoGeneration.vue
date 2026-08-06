@@ -87,31 +87,34 @@
               </div>
             </div>
 
-            <!-- 视频时长（万相 r2v 上限 15s，收敛为 5/10/15） -->
+            <!-- 视频时长（动态从 options 拉取，万相/MiniMax 均为 5/10/15） -->
             <div class="flex items-center gap-3">
               <label class="text-sm font-medium text-default">视频时长</label>
               <div class="flex gap-2">
-                <button v-for="d in [5,10,15]" :key="d" @click="form.durationSec = d"
+                <button v-for="d in options?.durations ?? []" :key="d.value"
+                  @click="form.durationSec = Number(d.value)"
                   :class="['px-4 py-1.5 rounded-md text-sm border transition-colors',
-                    form.durationSec===d ? 'bg-primary-600 text-white border-primary-600' : 'bg-white text-default border-default hover:border-primary-400']">
-                  {{ d }}s
+                    form.durationSec===Number(d.value) ? 'bg-primary-600 text-white border-primary-600' : 'bg-white text-default border-default hover:border-primary-400']">
+                  {{ d.label }}
                 </button>
               </div>
             </div>
 
-            <!-- 分辨率（720P/1080P，默认 720P；万相 r2v 不支持 480P） -->
+            <!-- 分辨率（动态从 options 拉取；万相 720P/1080P，MiniMax 768P/2K） -->
             <div class="flex items-center gap-3">
               <label class="text-sm font-medium text-default">分辨率</label>
               <div class="flex gap-2">
-                <button v-for="r in ['720P','1080P']" :key="r" @click="form.resolution = r"
+                <button v-for="r in options?.resolutions ?? []" :key="r.value"
+                  @click="form.resolution = r.value"
                   :class="['px-4 py-1.5 rounded-md text-sm border transition-colors',
-                    form.resolution===r ? 'bg-primary-600 text-white border-primary-600' : 'bg-white text-default border-default hover:border-primary-400']">
-                  {{ r }}
+                    form.resolution===r.value ? 'bg-primary-600 text-white border-primary-600' : 'bg-white text-default border-default hover:border-primary-400']">
+                  <span class="mr-1">{{ r.label }}</span>
+                  <span v-if="r.price_per_sec != null" class="text-xs text-muted">{{ r.price_per_sec }}元/秒</span>
                 </button>
               </div>
             </div>
 
-            <!-- 视频比例（默认 9:16 竖版；"智能"按产品图自动识别） -->
+            <!-- 视频比例（动态从 options 拉取；auto = 智能识别按产品图自动选） -->
             <div class="flex items-center gap-3">
               <label class="text-sm font-medium text-default">视频比例</label>
               <div class="flex gap-2">
@@ -215,21 +218,38 @@ import BaseCard from '@/components/ui/BaseCard.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
 import MyTextarea from '@/components/ui/MyTextarea.vue'
-import { videoGenAPI, fileUrl, type SceneItem, type GenSession, type GenCard } from '@/api/videoGen'
+import { videoGenAPI, fileUrl, type SceneItem, type GenSession, type GenCard, type ProviderOptions } from '@/api/videoGen'
 
 const scenes = ref<SceneItem[]>([])
 const history = ref<GenSession[]>([])
 const currentSession = ref<GenSession | null>(null)
+const options = ref<ProviderOptions | null>(null)
 
-// 视频比例选项：auto = 智能（按产品图自动识别最接近的预设）
-const ratioOptions = [
-  { value: '9:16', label: '9:16 竖版' },
-  { value: '16:9', label: '16:9 横版' },
-  { value: '1:1',  label: '1:1 方形' },
-  { value: '4:3',  label: '4:3 横版' },
-  { value: '3:4',  label: '3:4 竖版' },
-  { value: 'auto', label: '智能' },
-]
+// 视频比例选项：从 provider options 拉 + auto（智能识别按产品图自动选）
+// auto 始终追加，provider 自身的 adaptive（MiniMax）也会出现在列表里
+const ratioOptions = computed(() => {
+  const base = options.value?.ratios ?? []
+  // 若 provider 已含 adaptive，则只追加 auto；否则保留旧默认（无 provider options 时的兜底）
+  const hasAdaptive = base.some(o => o.value === 'adaptive')
+  const auto = { value: 'auto', label: '智能' }
+  return hasAdaptive ? base : [...base, auto]
+})
+
+// provider options 未拉到时的兜底默认（与后端 WanxProvider.get_options 对齐）
+const FALLBACK = {
+  resolutions: [
+    { value: '720P', label: '720P' },
+    { value: '1080P', label: '1080P' },
+  ],
+  durations: [
+    { value: '5', label: '5s' },
+    { value: '10', label: '10s' },
+    { value: '15', label: '15s' },
+  ],
+  default_resolution: '720P',
+  default_ratio: '9:16',
+  default_duration: 5,
+}
 
 const form = ref({
   sceneId: '',
@@ -290,6 +310,22 @@ function toast(msg: string, type: 'success' | 'error' = 'success') {
 async function loadScenes() {
   const res = await videoGenAPI.listScenes()
   if (res.success && res.data) scenes.value = res.data.items
+}
+
+async function loadOptions() {
+  const res = await videoGenAPI.getOptions()
+  if (res.success && res.data) {
+    options.value = res.data
+    // 用 provider 默认值初始化表单（避免前端硬编码 720P/9:16/5 与 provider 错位）
+    form.value.resolution = res.data.default_resolution || FALLBACK.default_resolution
+    form.value.ratio = res.data.default_ratio || FALLBACK.default_ratio
+    form.value.durationSec = res.data.default_duration || FALLBACK.default_duration
+  } else {
+    // 拉取失败时用兜底默认
+    form.value.resolution = FALLBACK.default_resolution
+    form.value.ratio = FALLBACK.default_ratio
+    form.value.durationSec = FALLBACK.default_duration
+  }
 }
 
 async function loadHistory() {
@@ -428,7 +464,7 @@ async function onDownload(card: GenCard) {
 }
 
 onMounted(async () => {
-  await Promise.all([loadScenes(), loadHistory()])
+  await Promise.all([loadScenes(), loadHistory(), loadOptions()])
 })
 onUnmounted(stopPolling)
 </script>

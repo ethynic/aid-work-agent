@@ -1,10 +1,11 @@
 """视频生成 Service 层。
 
-串联 db / wanx_provider / media / preprocess / scenes，实现抽卡式工具的完整业务逻辑：
-- create_session: 创建会话 + 人脸裁剪产品图 + 向万相提交 N 条任务（不同 seed 差异化）
+串联 db / provider / media / preprocess / scenes，实现抽卡式工具的完整业务逻辑：
+- create_session: 创建会话 + 人脸裁剪产品图 + 向 provider 提交 N 条任务（不同 seed 差异化）
 - poll_pending_cards: 后台轮询，SUCCEEDED 下载成片（含烧录 AI 标识）+ 注册 file_id
 - get_session / list_sessions: 会话与卡片查询
 
+Provider 由 settings.video_gen.provider 决定（wanx / minimax），通过 factory 构造。
 设计依据：docs/system/content-production/mvp-design.md §8。
 """
 from __future__ import annotations
@@ -18,12 +19,10 @@ from loguru import logger
 
 from src.config.settings import settings
 from src.db.database import get_db_connection
+from src.video_gen.base import BaseVideoProviderError, ProviderOptions, VideoGenRequest
+from src.video_gen.factory import build_provider
 from src.video_gen.media import MediaRegistry
 from src.video_gen.scenes import get_scene, list_scenes as _list_scene_presets
-from src.video_gen.wanx_provider import WanxProvider, WanxProviderError
-
-# 万相 task 查询有效期（与 settings.llm.wanx.task_max_age_hours 对齐）
-_TASK_MAX_AGE = timedelta(hours=settings.llm.wanx.task_max_age_hours)
 
 # card 终态集合（轮询时跳过）
 _TERMINAL_STATUSES = ("SUCCEEDED", "FAILED", "CANCELED", "UNKNOWN")
@@ -67,11 +66,15 @@ def new_id(prefix: str) -> str:
 
 class VideoGenService:
     def __init__(self) -> None:
-        api_key = settings.llm.wanx.api_key or (
-            settings.llm.qwen.api_keys[0] if settings.llm.qwen.api_keys else ""
-        )
-        self.wanx = WanxProvider(api_key=api_key, model=settings.llm.wanx.model)
+        # 通过 factory 构造当前 provider（wanx / minimax），api_keys 注入便于测试
+        self._provider = build_provider(settings.video_gen, settings.llm.qwen.api_keys)
+        # task 有效期取 provider 声明值（万相 24h / MiniMax 168h）
+        self._task_max_age = timedelta(hours=self._provider.get_options().task_max_age_hours)
         self.media = MediaRegistry()
+
+    def get_options(self) -> ProviderOptions:
+        """透传当前 provider 的能力声明（给前端 /options 端点用）。"""
+        return self._provider.get_options()
 
     # ------------------------------------------------------------------
     # 场景
@@ -117,15 +120,17 @@ class VideoGenService:
             raise ValueError(f"未知场景: {scene_id}")
         if not 1 <= card_count <= 3:
             raise ValueError("card_count 必须为 1-3")
-        # 校验时长（万相 2.7 r2v 单次调用 duration 上限 15s）
-        if duration_sec not in (5, 10, 15):
-            raise ValueError("duration_sec 必须为 5/10/15")
-        # 校验分辨率（万相 2.7 r2v 支持 720P/1080P，不支持 480P）
-        if resolution not in ("720P", "1080P"):
-            raise ValueError("resolution 必须为 720P/1080P")
-        # 校验画面比例（万相 2.7 r2v 支持 9:16/16:9/1:1/4:3/3:4；auto 为智能识别，按产品图自动选）
-        if ratio not in ("9:16", "16:9", "1:1", "4:3", "3:4", "auto"):
-            raise ValueError("ratio 必须为 9:16/16:9/1:1/4:3/3:4/auto")
+        # 校验时长 / 分辨率 / 比例：用当前 provider 暴露的白名单
+        opts = self._provider.get_options()
+        valid_durations = [int(d.value) for d in opts.durations]
+        if duration_sec not in valid_durations:
+            raise ValueError(f"duration_sec 必须为 {valid_durations}")
+        valid_resolutions = [r.value for r in opts.resolutions]
+        if resolution not in valid_resolutions:
+            raise ValueError(f"resolution 必须为 {valid_resolutions}")
+        valid_ratios = [r.value for r in opts.ratios] + ["auto"]
+        if ratio not in valid_ratios:
+            raise ValueError(f"ratio 必须为 {valid_ratios} 或 auto")
         # auto 智能识别：读产品图实际宽高，选最接近的预设比例（落地为具体值，便于 DB 持久化与 regenerate 复用）
         if ratio == "auto":
             ratio = _detect_ratio_from_image(product_image_fid)
@@ -164,24 +169,31 @@ class VideoGenService:
                 provider_status = "PENDING"
                 error_msg = None
                 try:
-                    submit_result = await self.wanx.submit(
+                    # 构造统一请求；MiniMax 不支持 negative_prompt，service 层据此决定是否传
+                    negative = scene.negative_prompt or ""
+                    if not opts.supports_negative_prompt:
+                        if negative:
+                            logger.info(f"视频生成: 当前 provider 不支持 negative_prompt，已忽略: session={session_id}")
+                        negative = ""
+                    req = VideoGenRequest(
                         prompt=prompt,
                         reference_image_data_url=reference_data_url,
                         first_frame_data_url=first_frame_data_url,
                         seed=seed,
-                        negative_prompt=scene.negative_prompt,
+                        negative_prompt=negative,
                         duration=duration_sec,
                         resolution=resolution,
                         ratio=ratio,
                     )
+                    submit_result = await self._provider.submit(req)
                     provider_task_id = submit_result.task_id
                     provider_status = submit_result.task_status
-                except WanxProviderError as exc:
+                except BaseVideoProviderError as exc:
                     error_msg = str(exc)
                     provider_status = "FAILED"
                     logger.error(f"视频生成 card 提交失败 session={session_id} idx={idx}: {exc}")
                 except Exception as exc:
-                    # 兜底非预期异常（如万相返回非 JSON），防止单条失败导致整批 session 回滚丢失
+                    # 兜底非预期异常（如 provider 返回非 JSON），防止单条失败导致整批 session 回滚丢失
                     error_msg = f"提交异常: {exc}"
                     provider_status = "FAILED"
                     logger.error(f"视频生成 card 提交非预期异常 session={session_id} idx={idx}: {exc}", exc_info=True)
@@ -306,17 +318,28 @@ class VideoGenService:
             if self._is_task_expired(card["created_at"]):
                 self._mark_failed(
                     card["card_id"], card["tenant_id"],
-                    "成片任务已过期（超过24h未完成），请重新生成",
+                    f"成片任务已过期（超过{int(self._task_max_age.total_seconds() // 3600)}h 未完成），请重新生成",
                     session_id=card["session_id"],
                 )
                 processed += 1
                 continue
 
             try:
-                result = await self.wanx.poll(card["provider_task_id"])
-            except WanxProviderError as exc:
+                result = await self._provider.poll(card["provider_task_id"])
+            except BaseVideoProviderError as exc:
                 logger.warning(f"视频生成轮询失败 card={card['card_id']}: {exc}")
                 continue   # 网络/临时错误，下轮再试
+            except Exception as exc:
+                # 切换 provider 后，旧 provider 的 task_id 在新 provider 上无法查询
+                # （如 wanx -> minimax 切换），抛 unknown-task 异常时直接标 FAILED
+                logger.warning(f"视频生成轮询异常（可能 provider 切换）card={card['card_id']}: {exc}")
+                self._mark_failed(
+                    card["card_id"], card["tenant_id"],
+                    f"原 provider 任务无法轮询，请重新生成: {exc}",
+                    session_id=card["session_id"],
+                )
+                processed += 1
+                continue
 
             if result.task_status == "SUCCEEDED" and result.video_url:
                 await self._on_card_succeeded(card, result, enable_ai_label=card.get("enable_ai_label", True))
@@ -437,7 +460,7 @@ class VideoGenService:
             return final_status
 
     def _is_task_expired(self, created_at) -> bool:
-        """task 是否超过万相查询有效期。"""
+        """task 是否超过 provider 查询有效期（万相 24h / MiniMax 168h）。"""
         if created_at is None:
             return False
         if isinstance(created_at, str):
@@ -446,9 +469,9 @@ class VideoGenService:
             except ValueError:
                 return False
         try:
-            return datetime.now(created_at.tzinfo) - created_at > _TASK_MAX_AGE
+            return datetime.now(created_at.tzinfo) - created_at > self._task_max_age
         except Exception:
-            return datetime.utcnow() - created_at > _TASK_MAX_AGE
+            return datetime.utcnow() - created_at > self._task_max_age
 
     # ------------------------------------------------------------------
     # 序列化辅助

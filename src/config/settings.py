@@ -91,6 +91,30 @@ class WanxConfig(BaseModel):
     task_max_age_hours: int = 24               # 万相 task_id 查询有效期
 
 
+class MinimaxConfig(BaseModel):
+    """MiniMax-H3（视频生成）配置。
+
+    MiniMax API 文档见 ext/Minimax-H3.md。与万相独立 API key，不与 Qwen 共用。
+    """
+    api_key: str = ""                          # 必须读 MINIMAX_API_KEY
+    model: str = "MiniMax-H3"
+    base_url: str = "https://api.minimaxi.com"
+    poll_interval_seconds: int = 30
+    task_max_age_hours: int = 168              # 7 天查询窗口
+
+
+class VideoGenConfig(BaseModel):
+    """视频生成配置（统一管理多 provider）。
+
+    provider 切换：通过 VIDEO_GEN_PROVIDER=wanx|minimax 切换，同时只一个 provider 生效。
+    """
+    provider: str = "wanx"
+    wanx: WanxConfig = Field(default_factory=WanxConfig)
+    minimax: MinimaxConfig = Field(default_factory=MinimaxConfig)
+    poll_interval_seconds: int = 30
+    task_max_age_hours: int = 24               # 全局兜底（provider 未声明时用）
+
+
 class LLMConfig(BaseModel):
     """LLM配置"""
     provider: str = "zhipu"
@@ -98,7 +122,7 @@ class LLMConfig(BaseModel):
     zhipu: LLMProviderConfig = Field(default_factory=LLMProviderConfig)
     deepseek: LLMProviderConfig = Field(default_factory=LLMProviderConfig)
     failover: FailoverConfig = Field(default_factory=FailoverConfig)
-    wanx: WanxConfig = Field(default_factory=WanxConfig)
+    # 注：wanx 已迁移到 settings.video_gen.wanx，请改用 settings.video_gen.wanx.*
 
 
 class StorageConfig(BaseModel):
@@ -343,6 +367,7 @@ class Settings(BaseModel):
     redis: RedisConfig = Field(default_factory=RedisConfig)
     wecom: WeComConfig = Field(default_factory=WeComConfig)
     billing: BillingConfig = Field(default_factory=BillingConfig)
+    video_gen: VideoGenConfig = Field(default_factory=VideoGenConfig)
 
     # 认证相关配置（从环境变量加载）
     qb_token: str = ""  # 平台管理员超级token（明文，仅用于向后兼容，推荐使用 qb_token_hash）
@@ -457,10 +482,28 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
     if os.getenv("ZHIPU_BASE_URL"):
         zhipu_cfg["base_url"] = os.getenv("ZHIPU_BASE_URL")
 
-    # 万相（图生视频）：多数情况无需配置，自动复用 QWEN_API_KEYS。详见 mvp-design.md §4.1
-    wanx_cfg = yaml_config.setdefault("llm", {}).setdefault("wanx", {})
+    # 视频生成（多 provider：wanx / minimax）：保留 llm.wanx 兼容旧 yaml，但实际值迁移到 video_gen.wanx
+    # 兼容桥接：先把 llm.wanx 复制到 video_gen.wanx（若 video_gen.wanx 未配置），再让 env 覆盖
+    legacy_wanx = yaml_config.get("llm", {}).get("wanx") or {}
+    vg_cfg = yaml_config.setdefault("video_gen", {})
+    vg_wanx = vg_cfg.setdefault("wanx", {})
+    for k in ("api_key", "model", "poll_interval_seconds", "task_max_age_hours"):
+        if not vg_wanx.get(k) and legacy_wanx.get(k):
+            vg_wanx[k] = legacy_wanx[k]
+    # 兼容旧 env：WANX_API_KEY 写到 video_gen.wanx.api_key
     if os.getenv("WANX_API_KEY"):
-        wanx_cfg["api_key"] = os.getenv("WANX_API_KEY")
+        vg_wanx["api_key"] = os.getenv("WANX_API_KEY")
+
+    # video_gen.provider / minimax 配置
+    if os.getenv("VIDEO_GEN_PROVIDER"):
+        vg_cfg["provider"] = os.getenv("VIDEO_GEN_PROVIDER")
+    vg_minimax = vg_cfg.setdefault("minimax", {})
+    if os.getenv("MINIMAX_API_KEY"):
+        vg_minimax["api_key"] = os.getenv("MINIMAX_API_KEY")
+    if os.getenv("MINIMAX_MODEL_CODE"):
+        vg_minimax["model"] = os.getenv("MINIMAX_MODEL_CODE")
+    if os.getenv("MINIMAX_BASE_URL"):
+        vg_minimax["base_url"] = os.getenv("MINIMAX_BASE_URL")
 
     if os.getenv("DEBUG", "").lower() in ("true", "1", "yes"):
         yaml_config.setdefault("app", {})["debug"] = True

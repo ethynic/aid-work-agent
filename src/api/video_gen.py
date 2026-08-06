@@ -2,6 +2,7 @@
 
 照抄 src/api/social_media.py 的 JsonResponse + _ok/_fail/_tenant_id/_user_id 模式。
 端点清单（mvp-design.md §9）：
+- GET    /options                      当前 provider 选项（resolutions/ratios/durations + 默认值 + 能力声明）
 - GET    /scenes                       场景列表
 - POST   /sessions                     创建抽卡会话
 - GET    /sessions                     会话历史
@@ -10,6 +11,7 @@
 """
 from __future__ import annotations
 
+import dataclasses
 import re
 from typing import Any, Optional
 
@@ -63,6 +65,22 @@ def _download_url(file_id: str) -> str:
     """构造文件下载 URL（复用现有 /api/files/{file_id}/download 路由）。"""
     base = settings.app.public_base_url or ""
     return f"{base}/api/files/{file_id}/download" if base else f"/api/files/{file_id}/download"
+
+
+@router.get("/options", response_model=JsonResponse)
+async def get_options(request: Request):
+    """返回当前 provider 的选项与能力声明（resolutions/ratios/durations + 默认值 + 能力声明）。
+
+    前端进页面时拉取，动态渲染选择器；切换 provider（.env 改 VIDEO_GEN_PROVIDER 重启）
+    后前端下次进页面会拉到新列表。
+    """
+    try:
+        opts = _service.get_options()
+        # dataclasses.asdict 递归把 dataclass 转 dict（含嵌套 OptionItem）
+        return _ok(dataclasses.asdict(opts))
+    except Exception as e:
+        logger.error(f"视频生成-查询选项失败: {e}", exc_info=True)
+        return _fail("查询选项失败", e)
 
 
 @router.get("/scenes", response_model=JsonResponse)
