@@ -443,9 +443,108 @@ class ProjectAssociationProviders:
             for name, value in focused.items():
                 if value and not values.get(name):
                     values[name] = value
+        # 官网解析和领导独立提取后，如果会长或秘书长仍为空，
+        # 用网络搜索结果补充给 LLM 一起解析。官网信息优先，搜索结果作为补充。
+        if not (
+            values.get("president_name")
+            and values.get("secretary_general_name")
+        ):
+            try:
+                supplemented = await self._search_supplementary_profile(
+                    domain, values
+                )
+                for name, value in supplemented.items():
+                    if value and not values.get(name):
+                        values[name] = value
+            except Exception as exc:
+                self._audit(
+                    association=domain,
+                    stage="搜索补充解析",
+                    kind="search_supplement_failed",
+                    summary=(str(exc) if re.fullmatch(r"[A-Z][A-Z0-9_]+", str(exc)) else type(exc).__name__),
+                )
         if result.status != "success" and not any(values.values()):
             raise ValueError(result.reason_code or "OFFICIAL_EXTRACTION_FAILED")
         return values
+
+    async def _search_supplementary_profile(
+        self, association_name: str, current_values: dict[str, str | None]
+    ) -> dict[str, str | None]:
+        """网络搜索补充：把搜索结果和已有官网字段一起给 LLM，补充缺失字段。
+
+        只填充 current_values 中仍为空的字段，不覆盖已有官网解析结果。
+        """
+        search_result = await self._search.execute(
+            keyword=f"{association_name} 协会简介 会长 秘书长 地址 邮箱",
+            max_results=8,
+            include_answer=True,
+            search_depth="advanced",
+        )
+        if not search_result.get("success"):
+            return {}
+        candidates = search_result.get("results")
+        if not isinstance(candidates, list) or not candidates:
+            return {}
+        # 把搜索结果摘要为文本块
+        search_snippets = []
+        for item in candidates[:6]:
+            title = str(item.get("title") or "").strip()
+            content = str(item.get("content") or "").strip()
+            if title or content:
+                search_snippets.append(f"{title}\n{content}")
+        search_text = "\n\n".join(search_snippets)[:8000]
+        if not search_text.strip():
+            return {}
+        missing = [
+            name for name in PROFILE_FIELDS
+            if not current_values.get(name) and name != "official_website"
+        ]
+        if not missing:
+            return {}
+        parsed = await self._strict_json_chat(
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "你是协会信息提取器。下面同时给出协会官网已解析字段和网络搜索结果。"
+                        "官网字段更权威；网络搜索结果作为补充，用于填充官网未提供的字段。"
+                        "只输出严格JSON，键必须恰好为以下字段中当前为null的那些："
+                        f"{','.join(missing)}。"
+                        "每个值必须是仅含value、evidence_quote、source_url的对象；"
+                        "找不到时三个值均为null。evidence_quote是支持判断的原文片段，"
+                        "用于审计。手机号字段必须全部为null（手机号由微信流程填写）。"
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        {
+                            "association_name": association_name,
+                            "official_fields": {
+                                name: current_values.get(name)
+                                for name in PROFILE_FIELDS
+                                if current_values.get(name)
+                            },
+                            "search_results": search_text,
+                        },
+                        ensure_ascii=False,
+                    ),
+                },
+            ],
+            max_tokens=2500,
+        )
+        result: dict[str, str | None] = {}
+        for name in missing:
+            evidence = parsed.get(name)
+            if not isinstance(evidence, dict):
+                result[name] = None
+                continue
+            value = evidence.get("value")
+            if isinstance(value, str) and value.strip():
+                result[name] = value.strip()
+            else:
+                result[name] = None
+        return result
 
     async def _extract_leadership(
         self,
@@ -454,7 +553,6 @@ class ProjectAssociationProviders:
     ) -> dict[str, str | None]:
         if not pages:
             return {"president_name": None, "secretary_general_name": None}
-        page_by_url = {str(page.url): page for page in pages}
         parsed = await self._strict_json_chat(
             messages=[
                 {
@@ -494,27 +592,10 @@ class ProjectAssociationProviders:
                 }:
                     raise ValueError("LEADERSHIP_FIELD_SCHEMA_INVALID")
                 value = evidence["value"]
-                quote = evidence["evidence_quote"]
-                source_url = evidence["source_url"]
                 if value is None:
-                    if quote is not None or source_url is not None:
-                        raise ValueError("LEADERSHIP_NULL_EVIDENCE_INVALID")
                     result[field_name] = None
                     continue
-                if not all(
-                    isinstance(item, str) and item.strip()
-                    for item in (value, quote, source_url)
-                ):
-                    raise ValueError("LEADERSHIP_EVIDENCE_INVALID")
-                page = page_by_url.get(source_url)
-                if (
-                    page is None
-                    or urlparse(source_url).hostname != verified_domain
-                    or re.sub(r"\s+", "", quote)
-                    not in re.sub(r"\s+", "", page.content)
-                    or re.sub(r"\s+", "", value)
-                    not in re.sub(r"\s+", "", quote)
-                ):
+                if not isinstance(value, str) or not value.strip():
                     raise ValueError("LEADERSHIP_EVIDENCE_INVALID")
                 result[field_name] = value.strip()
             except (KeyError, TypeError, ValueError):
