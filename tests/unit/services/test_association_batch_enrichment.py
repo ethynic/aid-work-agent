@@ -682,7 +682,7 @@ async def test_official_profile_passes_hostname_as_verified_domain(
         captured["collector"] = (entry_url, domain, headless, budgets)
         return []
 
-    async def extract(pages, verified_domain):
+    async def extract(pages, verified_domain, gateway=None):
         captured["extractor"] = (pages, verified_domain)
         return ExtractionResult(
             status="success",
@@ -720,7 +720,7 @@ async def test_official_profile_retries_invalid_llm_evidence_once(
         assert headless is False
         return []
 
-    async def extract(pages, verified_domain):
+    async def extract(pages, verified_domain, gateway=None):
         calls.append((pages, verified_domain))
         if len(calls) == 1:
             return ExtractionResult(

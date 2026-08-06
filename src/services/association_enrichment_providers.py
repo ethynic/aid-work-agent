@@ -59,14 +59,23 @@ class ProjectAssociationProviders:
         *,
         repository_root: str | Path,
         audit_callback: Callable[..., None] | None = None,
+        gateway=None,
     ):
         self._root = Path(repository_root)
         self._audit_callback = audit_callback
+        # gateway=None 时走模块级 llm_gateway（延迟解析，便于测试 monkeypatch）；
+        # 客户端 CLI 传 ProxyLLMGateway 走服务端代理计费。
+        self._gateway_override = gateway
         # Provider 在 CLI 单批次/UI 单次运行内创建一次，微信调用由 enricher 串行执行。
         # 只有上一条明确完成且 session_closed=true，下一条才允许消费一次交接。
         self._wechat_handoff_ready = False
         self._wechat_query_index = 0
         self._wechat_handoff_sleep = asyncio.sleep
+
+    @property
+    def _gateway(self):
+        """延迟解析：传了 gateway 用传的，否则取模块级 llm_gateway（兼容测试 monkeypatch）。"""
+        return self._gateway_override if self._gateway_override is not None else llm_gateway
 
     def _audit(self, **event) -> None:
         if self._audit_callback is None:
@@ -94,12 +103,11 @@ class ProjectAssociationProviders:
             raise ValueError("WECHAT_ARTIFACT_REF_INVALID")
         return candidate
 
-    @staticmethod
-    async def _strict_json_chat(messages: list[dict], *, max_tokens: int) -> dict:
+    async def _strict_json_chat(self, messages: list[dict], *, max_tokens: int) -> dict:
         """Retry once when a provider returns non-JSON or a non-object."""
         retry_messages = list(messages)
         for attempt in range(2):
-            response = await llm_gateway.chat(
+            response = await self._gateway.chat(
                 messages=retry_messages,
                 temperature=0,
                 max_tokens=max_tokens,
@@ -207,11 +215,11 @@ class ProjectAssociationProviders:
             navigation_timeout_ms=10_000,
             audit_callback=self._audit,
         )
-        result = await extract_association_profile(pages, domain)
+        result = await extract_association_profile(pages, domain, gateway=self._gateway)
         if result.status != "success" and result.reason_code in {
             "STRICT_JSON_INVALID", "PROFILE_SCHEMA_INVALID", "INVALID_EVIDENCE",
         }:
-            result = await extract_association_profile(pages, domain)
+            result = await extract_association_profile(pages, domain, gateway=self._gateway)
         values = {name: None for name in PROFILE_FIELDS}
         if result.status == "success" and result.profile is not None:
             values.update({
@@ -313,7 +321,7 @@ class ProjectAssociationProviders:
             if name not in ("president_name", "secretary_general_name",
                             "president_mobile", "secretary_general_mobile")
         ]
-        resp = await llm_gateway.chat(
+        resp = await self._gateway.chat(
             messages=[
                 {
                     "role": "system",

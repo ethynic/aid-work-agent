@@ -773,14 +773,22 @@ class NoCreditError(Exception):
 
 **改造方案（静态方法→实例方法 + gateway 注入）**：
 
-1. `ProjectAssociationProviders.__init__` 新增 `gateway` 参数：
+1. `ProjectAssociationProviders.__init__` 新增 `gateway` 参数（已实现）：
 
 ```python
 class ProjectAssociationProviders:
-    def __init__(self, repository_root: Path, gateway=None):
-        self._root = repository_root
-        self._gateway = gateway or llm_gateway  # CLI 传 ProxyLLMGateway，服务端/CLI 内置用默认
+    def __init__(self, *, repository_root, audit_callback=None, gateway=None):
+        self._root = Path(repository_root)
+        self._gateway_override = gateway  # None 时延迟解析模块级 llm_gateway
+        ...
+
+    @property
+    def _gateway(self):
+        """延迟解析：传了 gateway 用传的，否则取模块级 llm_gateway（兼容测试 monkeypatch）。"""
+        return self._gateway_override if self._gateway_override is not None else llm_gateway
 ```
+
+> 用 property 而非构造时绑定，是为了让现有测试的 `monkeypatch.setattr(module, "llm_gateway", mock)` 仍然生效。
 
 2. `_strict_json_chat` 从**静态方法改为实例方法**，用 `self._gateway`：
 
