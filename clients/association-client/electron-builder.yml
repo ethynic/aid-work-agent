@@ -1,0 +1,33 @@
+appId: cn.aidingyi.association.client
+productName: 协会信息收集助手
+asar: true
+compression: normal
+directories:
+  output: release
+files:
+  - dist/electron/main.js
+  - dist/electron/preload.cjs
+  - dist/electron/*.js
+  - dist/renderer/**/*
+  - package.json
+  - "!**/*.map"
+  - "!**/node_modules/.cache/**"
+protocols:
+  - name: Association Client
+    schemes:
+      - assoclient
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  artifactName: AssociationClient-${version}-win-x64.${ext}
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+# CLI exe 通过 extraResources 打入（打包前需先 PyInstaller 构建 CLI）
+# extraResources:
+#   - from: ../association-client-cli/dist/association-cli.exe
+#     to: cli/association-cli.exe

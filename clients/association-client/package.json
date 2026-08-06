@@ -1,0 +1,20 @@
+{
+  "name": "association-client",
+  "version": "1.0.0",
+  "private": true,
+  "description": "协会信息收集助手桌面客户端",
+  "main": "dist/electron/main.js",
+  "scripts": {
+    "build": "tsc && node scripts/copy-renderer.mjs",
+    "typecheck": "tsc --noEmit",
+    "start": "npm run build && electron .",
+    "package:win": "npm run typecheck && npm run build && node scripts/package-win.mjs"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "electron": "^43.1.0",
+    "electron-builder": "^26.15.3",
+    "typescript": "^5.9.0"
+  }
+}

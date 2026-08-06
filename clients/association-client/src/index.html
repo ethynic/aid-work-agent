@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:;" />
+  <title>协会信息收集助手</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="app">
+    <!-- 顶部栏 -->
+    <header class="topbar">
+      <h1>协会信息收集助手</h1>
+      <div id="credits-display" class="credits-display hidden">
+        <span class="credits-label">积分余额</span>
+        <span id="credits-balance" class="credits-value">--</span>
+        <button id="btn-refresh-credits" class="btn-small" title="刷新">↻</button>
+      </div>
+    </header>
+
+    <!-- 激活页 -->
+    <section id="page-activation" class="page">
+      <div class="card activation-card">
+        <h2>客户端激活</h2>
+        <p class="hint">请输入服务商提供的激活码完成绑定。</p>
+        <div class="form-group">
+          <label for="activation-code">激活码</label>
+          <input type="text" id="activation-code" placeholder="AC-XXXXXXXXXXXX" class="input" />
+        </div>
+        <div class="form-group">
+          <label for="server-url">服务端地址</label>
+          <input type="text" id="server-url" value="https://agent.aidingyi.cn" class="input" />
+        </div>
+        <div class="form-group">
+          <label for="client-name">客户端名称（可选）</label>
+          <input type="text" id="client-name" placeholder="如：我的电脑" class="input" />
+        </div>
+        <button id="btn-activate" class="btn-primary">激活</button>
+        <div id="activation-error" class="error-msg hidden"></div>
+      </div>
+    </section>
+
+    <!-- 收集页 -->
+    <section id="page-collect" class="page hidden">
+      <!-- 输入区 -->
+      <div class="card">
+        <h2>输入协会名称</h2>
+        <textarea id="associations-input" class="textarea" placeholder="每行一个协会名称，或用逗号分隔&#10;例如：&#10;中国黄金协会&#10;中国机械工业协会"></textarea>
+        <div class="form-row">
+          <div class="form-group form-group-inline">
+            <label>输出文件</label>
+            <input type="text" id="output-path" class="input" readonly placeholder="点击右侧选择..." />
+            <button id="btn-select-output" class="btn-small">选择</button>
+          </div>
+        </div>
+        <div class="actions">
+          <button id="btn-start" class="btn-primary">开始收集</button>
+          <button id="btn-stop" class="btn-danger hidden">停止</button>
+        </div>
+        <div id="balance-warning" class="warning hidden">积分余额不足，请联系服务商充值</div>
+      </div>
+
+      <!-- 进度区 -->
+      <div id="progress-section" class="card hidden">
+        <h2>进度</h2>
+        <div id="progress-list" class="progress-list"></div>
+      </div>
+
+      <!-- 日志区 -->
+      <div id="log-section" class="card hidden">
+        <h2>日志</h2>
+        <div id="log-stream" class="log-stream"></div>
+      </div>
+
+      <!-- 结果区 -->
+      <div id="result-section" class="card hidden">
+        <h2>收集完成</h2>
+        <div id="result-summary" class="result-summary"></div>
+        <button id="btn-open-result" class="btn-primary">打开结果文件</button>
+        <button id="btn-new-task" class="btn-secondary">开始新任务</button>
+      </div>
+    </section>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
