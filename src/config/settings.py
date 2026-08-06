@@ -351,6 +351,16 @@ class BillingConfig(BaseModel):
     usage_factor: int = 100
 
 
+class ClientConfig(BaseModel):
+    """协会客户端配置（docs/tools/association-client-design.md）
+
+    - credit_multiplier: 客户端积分膨胀系数，标准积分 × 此系数 = 客户端实扣（默认5倍）
+    - llm_request_timeout: 客户端 LLM 代理请求超时（秒）
+    """
+    credit_multiplier: float = 5.0
+    llm_request_timeout: int = 120
+
+
 class Settings(BaseModel):
     """全局配置"""
     app: AppConfig = Field(default_factory=AppConfig)
@@ -368,6 +378,7 @@ class Settings(BaseModel):
     wecom: WeComConfig = Field(default_factory=WeComConfig)
     billing: BillingConfig = Field(default_factory=BillingConfig)
     video_gen: VideoGenConfig = Field(default_factory=VideoGenConfig)
+    client: ClientConfig = Field(default_factory=ClientConfig)
 
     # 认证相关配置（从环境变量加载）
     qb_token: str = ""  # 平台管理员超级token（明文，仅用于向后兼容，推荐使用 qb_token_hash）

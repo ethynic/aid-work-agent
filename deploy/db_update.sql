@@ -1427,3 +1427,67 @@ ALTER TABLE gen_sessions ALTER COLUMN resolution SET DEFAULT '720P';
 
 -- 2026-8-6，视频生成会话增加视频画面比例字段（9:16 竖版 / 16:9 横版 / 1:1 / 4:3 / 3:4 / 21:9）
 ALTER TABLE gen_sessions ADD COLUMN IF NOT EXISTS ratio TEXT NOT NULL DEFAULT '9:16';
+
+
+-- 2026-8-6，协会信息收集客户端：激活码 / 客户端绑定 / 消耗日志 3 张表
+-- 设计文档：docs/tools/association-client-design.md
+
+CREATE TABLE IF NOT EXISTS client_activation_codes (
+    id SERIAL PRIMARY KEY,
+    code TEXT UNIQUE NOT NULL,                       -- 激活码明文，格式 AC-XXXXXXXXXXXX（AC-前缀+12位去混淆字符）
+    code_hash TEXT NOT NULL,                         -- bcrypt(code) 哈希
+    tenant_id TEXT NOT NULL,                         -- 绑定的租户
+    client_name TEXT,                                -- 客户端标识名（如"中国黄金协会-张三电脑"）
+    status TEXT NOT NULL DEFAULT 'unused',           -- unused / used / disabled
+    activated_at TIMESTAMP,                          -- 激活时间
+    activated_machine TEXT,                          -- 激活机器标识（机器码）
+    expires_at TIMESTAMP,                            -- 激活码本身的有效期（过期不可激活，可空=不过期）
+    max_uses INTEGER DEFAULT 1,                      -- 最大可激活次数（默认1次）
+    used_count INTEGER DEFAULT 0,                    -- 已激活次数
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_client_activation_codes_tenant
+    ON client_activation_codes(tenant_id);
+
+CREATE TABLE IF NOT EXISTS client_bindings (
+    id SERIAL PRIMARY KEY,
+    binding_id TEXT UNIQUE NOT NULL,                 -- 绑定ID，格式 cb_<32位hex>
+    tenant_id TEXT NOT NULL,                         -- 绑定的租户
+    activation_code_id INTEGER,                      -- 来源激活码（可空，支持非激活码创建）
+    client_name TEXT,                                -- 客户端显示名
+    machine_id TEXT,                                 -- 绑定的机器码
+    access_token TEXT UNIQUE NOT NULL,               -- 长期访问令牌 secrets.token_urlsafe(48)
+    status TEXT NOT NULL DEFAULT 'active',           -- active / disabled
+    last_seen_at TIMESTAMP,                          -- 最后活跃时间
+    expires_at TIMESTAMP,                            -- 绑定过期时间（默认null=不过期）
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_client_bindings_tenant ON client_bindings(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_client_bindings_token ON client_bindings(access_token);
+
+CREATE TABLE IF NOT EXISTS client_usage_logs (
+    id SERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,                         -- 租户
+    binding_id TEXT NOT NULL,                        -- 客户端绑定
+    client_name TEXT,                                -- 客户端名快照
+    session_id TEXT,                                 -- 客户端会话ID（一次协会收集任务）
+    association_name TEXT,                           -- 协会名
+    role TEXT,                                       -- 角色（会长/秘书长，微信RPA用）
+    stage TEXT,                                      -- 流水线阶段（search_profile/official_profile/wechat_search_leader/wechat_mobile/judge/ocr）
+    status TEXT,                                     -- 结果状态（success/failed/not_found/inconclusive/aborted）
+    model TEXT,                                      -- 使用的模型
+    provider TEXT,                                   -- 提供商
+    prompt_tokens INTEGER DEFAULT 0,
+    completion_tokens INTEGER DEFAULT 0,
+    cached_tokens INTEGER DEFAULT 0,
+    total_tokens INTEGER DEFAULT 0,
+    raw_credit_cost NUMERIC(12,2) DEFAULT 0,         -- 标准积分成本（未乘5）
+    credit_cost NUMERIC(12,2) DEFAULT 0,             -- 实际扣除积分（raw_credit_cost × 5）
+    error_code TEXT,                                 -- 错误码
+    detail TEXT,                                     -- 脱敏详情（JSON字符串）
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_client_usage_logs_tenant ON client_usage_logs(tenant_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_client_usage_logs_binding ON client_usage_logs(binding_id, created_at);

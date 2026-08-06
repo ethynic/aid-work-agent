@@ -1723,6 +1723,12 @@ app.include_router(tenant_migration.router)
 app.include_router(context_compression_routes.router)
 app.include_router(billing_recharges.router)
 app.include_router(billing_balance.router)
+# 协会客户端（docs/tools/association-client-design.md）
+from src.api import client_routes  # noqa: E402
+from src.saas.api import client_activation_mgmt  # noqa: E402
+app.include_router(client_routes.router)
+app.include_router(client_activation_mgmt.activation_router)
+app.include_router(client_activation_mgmt.binding_router)
 # 视频生成工具（MVP 抽卡式，见 docs/system/content-production/mvp-design.md）
 from src.api import video_gen as video_gen_api  # noqa: E402
 app.include_router(video_gen_api.router)
