@@ -79,7 +79,7 @@
             <div class="flex items-center gap-3">
               <label class="text-sm font-medium text-default">生成条数</label>
               <div class="flex gap-2">
-                <button v-for="n in [2,3,4]" :key="n" @click="form.cardCount = n"
+                <button v-for="n in [1,2,3]" :key="n" @click="form.cardCount = n"
                   :class="['px-4 py-1.5 rounded-md text-sm border transition-colors',
                     form.cardCount===n ? 'bg-primary-600 text-white border-primary-600' : 'bg-white text-default border-default hover:border-primary-400']">
                   {{ n }} 条
