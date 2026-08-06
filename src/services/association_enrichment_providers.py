@@ -20,7 +20,6 @@ from src.services.association_profile_extractor import (
 from src.services.official_site_browser_collector import (
     collect_official_pages_with_playwright,
 )
-from src.tools.search.search_tool import WebSearchTool
 from src.services.llm_usage_meter import record_usage
 from src.services.association_batch_enrichment import WechatRpaError
 
@@ -53,15 +52,7 @@ _WECHAT_RPA_TIMEOUT_SECONDS = 600
 
 
 class ProjectAssociationProviders:
-    """复用 WebSearchTool、llm_gateway、可见 Playwright 与微信 PowerShell。"""
-
-    _DIRECTORY_DOMAIN_SUFFIXES = (
-        "baidu.com",
-        "npoall.com",
-        "huixx.cn",
-        "ttbz.org.cn",
-        "emagecompany.com",
-    )
+    """复用 llm_gateway、可见 Playwright 与微信 PowerShell。"""
 
     def __init__(
         self,
@@ -70,7 +61,6 @@ class ProjectAssociationProviders:
         audit_callback: Callable[..., None] | None = None,
     ):
         self._root = Path(repository_root)
-        self._search = WebSearchTool()
         self._audit_callback = audit_callback
         # Provider 在 CLI 单批次/UI 单次运行内创建一次，微信调用由 enricher 串行执行。
         # 只有上一条明确完成且 session_closed=true，下一条才允许消费一次交接。
@@ -103,61 +93,6 @@ class ProjectAssociationProviders:
         ):
             raise ValueError("WECHAT_ARTIFACT_REF_INVALID")
         return candidate
-
-    @staticmethod
-    def _candidate_urls(candidates: list[dict]) -> dict[str, str]:
-        """Return original candidate URLs keyed by a normalized URL identity."""
-        urls: dict[str, str] = {}
-        for candidate in candidates:
-            url = candidate.get("url")
-            if not isinstance(url, str):
-                continue
-            original = url.strip()
-            parsed = urlparse(original)
-            if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-                continue
-            scheme = parsed.scheme.casefold()
-            hostname = parsed.hostname.casefold()
-            port = parsed.port
-            if port == (443 if scheme == "https" else 80):
-                port = None
-            netloc = hostname if port is None else f"{hostname}:{port}"
-            path = parsed.path.rstrip("/") or "/"
-            identity = urlunparse(
-                (scheme, netloc, path, parsed.params, parsed.query, "")
-            )
-            urls.setdefault(identity, original)
-        return urls
-
-    @classmethod
-    def _deterministic_official_candidate(
-        cls,
-        association_name: str,
-        candidates: list[dict],
-    ) -> str | None:
-        """Use only an exact-title root candidate outside known directory platforms."""
-        expected_title = re.sub(r"\s+", "", association_name).casefold()
-        matches: list[str] = []
-        for candidate in candidates:
-            title = candidate.get("title")
-            url = candidate.get("url")
-            if not isinstance(title, str) or not isinstance(url, str):
-                continue
-            if re.sub(r"\s+", "", title).casefold() != expected_title:
-                continue
-            parsed = urlparse(url.strip())
-            if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-                continue
-            hostname = parsed.hostname.casefold()
-            if any(
-                hostname == suffix or hostname.endswith(f".{suffix}")
-                for suffix in cls._DIRECTORY_DOMAIN_SUFFIXES
-            ):
-                continue
-            if parsed.path.rstrip("/") or parsed.params or parsed.query:
-                continue
-            matches.append(url.strip())
-        return matches[0] if len(matches) == 1 else None
 
     @staticmethod
     async def _strict_json_chat(messages: list[dict], *, max_tokens: int) -> dict:
@@ -257,174 +192,6 @@ class ProjectAssociationProviders:
             await process.wait()
             raise RuntimeError(error_code) from None
 
-    async def resolve_official_site(self, association_name: str) -> str | None:
-        # 优先用 Qwen-plus 联网搜索直接获取官网 URL，不依赖 Tavily。
-        from src.llm.providers.qwen import QwenProvider
-        from src.config.settings import settings
-
-        qwen_keys = settings.llm.qwen.api_keys
-        if qwen_keys:
-            provider = QwenProvider(api_key=qwen_keys[0], model="qwen-plus")
-            try:
-                resp = await provider.chat(
-                    messages=[
-                        {
-                            "role": "system",
-                            "content": (
-                                "你只负责识别协会官方网站。请通过联网搜索确认，"
-                                '只输出JSON：{"official_url":"网址"}。'
-                                "无法确认时输出 {\"official_url\":null}。"
-                            ),
-                        },
-                        {
-                            "role": "user",
-                            "content": f"请搜索{association_name}的官方网站地址。",
-                        },
-                    ],
-                    temperature=0,
-                    max_tokens=500,
-                    enable_search=True,
-                )
-                content = resp.get("content", "") if isinstance(resp, dict) else ""
-                import re as _re
-                m = _re.search(r'"official_url"\s*:\s*"(https?://[^"]+)"', content)
-                if m:
-                    return m.group(1)
-            except Exception:
-                pass  # 降级到 Tavily 搜索
-        # 降级：用 Tavily 搜索
-        candidates: list[dict] = []
-        seen_urls: set[str] = set()
-        for keyword, search_depth, max_results in (
-            (association_name, "basic", 20),
-            (association_name, "advanced", 8),
-            (f"{association_name} 官网", "basic", 8),
-            (f"{association_name} 官方网站", "basic", 8),
-        ):
-            try:
-                result = await self._search.execute(
-                    keyword=keyword,
-                    max_results=max_results,
-                    include_answer=False,
-                    search_depth=search_depth,
-                )
-            except Exception:
-                continue
-            results = result.get("results", []) if result.get("success") else []
-            if not isinstance(results, list):
-                continue
-            for candidate in results:
-                if not isinstance(candidate, dict):
-                    continue
-                url = candidate.get("url")
-                if not isinstance(url, str) or url in seen_urls:
-                    continue
-                seen_urls.add(url)
-                candidates.append(candidate)
-        if not candidates:
-            return None
-        resolver_messages = [
-                {
-                    "role": "system",
-                    "content": (
-                        "你只负责从搜索结果识别协会官方网站。只输出严格 JSON："
-                        '{"official_url":字符串或null}。无法确认时必须为null。'
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": json.dumps(
-                        {"association_name": association_name, "results": candidates},
-                        ensure_ascii=False,
-                    ),
-                },
-            ]
-        try:
-            parsed = await self._strict_json_chat(
-                messages=resolver_messages,
-                max_tokens=500,
-            )
-        except (KeyError, TypeError, ValueError, json.JSONDecodeError):
-            deterministic = self._deterministic_official_candidate(
-                association_name, candidates
-            )
-            if deterministic is not None:
-                return deterministic
-            raise
-        official_url = parsed.get("official_url")
-        if official_url is None:
-            indexed_candidates = [
-                {
-                    "index": index,
-                    "title": candidate.get("title"),
-                    "url": candidate.get("url"),
-                    "content": candidate.get("content"),
-                }
-                for index, candidate in enumerate(candidates)
-            ]
-            try:
-                indexed = await self._strict_json_chat(
-                    messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "从候选中选择目标协会自己的独立官方网站。排除百科、协会名录、"
-                            "黄页、新闻媒体、其他协会和第三方聚合平台。只能返回候选编号，"
-                            '严格输出 {"candidate_index":整数或null}。如果存在标题与目标'
-                            "协会一致的独立官网，不要因为同时存在目录站而返回null。"
-                        ),
-                    },
-                    {
-                        "role": "user",
-                        "content": json.dumps(
-                            {
-                                "association_name": association_name,
-                                "candidates": indexed_candidates,
-                            },
-                            ensure_ascii=False,
-                        ),
-                    },
-                    ],
-                    max_tokens=300,
-                )
-            except (KeyError, TypeError, ValueError, json.JSONDecodeError):
-                deterministic = self._deterministic_official_candidate(
-                    association_name, candidates
-                )
-                if deterministic is not None:
-                    return deterministic
-                raise
-            candidate_index = indexed.get("candidate_index")
-            if candidate_index is None:
-                return self._deterministic_official_candidate(
-                    association_name, candidates
-                )
-            if (
-                isinstance(candidate_index, bool)
-                or not isinstance(candidate_index, int)
-                or candidate_index < 0
-                or candidate_index >= len(candidates)
-            ):
-                raise ValueError("OFFICIAL_RESOLVER_INVALID_RESPONSE")
-            selected = candidates[candidate_index].get("url")
-            if not isinstance(selected, str):
-                raise ValueError("OFFICIAL_RESOLVER_INVALID_RESPONSE")
-            allowed = self._candidate_urls([{"url": selected}])
-            if len(allowed) != 1:
-                raise ValueError("OFFICIAL_RESOLVER_INVALID_RESPONSE")
-            return selected
-        if not isinstance(official_url, str):
-            raise ValueError("OFFICIAL_RESOLVER_INVALID_RESPONSE")
-        normalized_selection = self._candidate_urls([{"url": official_url}])
-        if len(normalized_selection) != 1:
-            raise ValueError("OFFICIAL_RESOLVER_INVALID_RESPONSE")
-        candidate_urls = self._candidate_urls(candidates)
-        selected_identity = next(iter(normalized_selection))
-        original_candidate = candidate_urls.get(selected_identity)
-        if original_candidate is None:
-            raise ValueError("OFFICIAL_RESOLVER_INVALID_RESPONSE")
-        return original_candidate
-
     async def collect_official_profile(
         self, entry_url: str, headless: bool, *, association_name: str = ""
     ) -> dict[str, str | None]:
@@ -481,78 +248,6 @@ class ProjectAssociationProviders:
         if result.status != "success" and not any(values.values()):
             raise ValueError(result.reason_code or "OFFICIAL_EXTRACTION_FAILED")
         return values
-
-    async def _search_supplementary_profile(
-        self, association_name: str, current_values: dict[str, str | None]
-    ) -> dict[str, str | None]:
-        """用 Qwen-plus 联网搜索补充缺失字段。
-
-        不依赖 Tavily，直接用 Qwen 的 enable_search 联网能力搜索并提取结构化信息。
-        官网已有的字段优先保留，只补充官网未提供的字段。
-        """
-        missing = [
-            name for name in PROFILE_FIELDS
-            if not current_values.get(name) and name != "official_website"
-        ]
-        if not missing:
-            return {}
-        from src.llm.providers.qwen import QwenProvider
-        from src.config.settings import settings
-
-        qwen_keys = settings.llm.qwen.api_keys
-        if not qwen_keys:
-            return {}
-        provider = QwenProvider(api_key=qwen_keys[0], model="qwen-plus")
-        existing = {
-            name: current_values.get(name)
-            for name in PROFILE_FIELDS
-            if current_values.get(name)
-        }
-        try:
-            resp = await provider.chat(
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "你是一个协会信息提取器。请通过联网搜索获取信息，只输出JSON，不要其他文字。"
-                            f"键必须恰好为：{','.join(missing)}。"
-                            "每个值是字符串或null。找不到的值为null。"
-                            "手机号字段必须为null。"
-                            "官网已有字段不要覆盖。"
-                        ),
-                    },
-                    {
-                        "role": "user",
-                        "content": (
-                            f"协会：{association_name}\n"
-                            f"官网已有字段：{json.dumps(existing, ensure_ascii=False)}\n"
-                            f"请搜索并补充以上缺失的字段。"
-                        ),
-                    },
-                ],
-                temperature=0,
-                max_tokens=2500,
-                enable_search=True,
-            )
-        except Exception:
-            return {}
-        content = resp.get("content", "") if isinstance(resp, dict) else ""
-        import re as _re
-        m = _re.search(r'\{.*\}', content, _re.S)
-        if not m:
-            return {}
-        try:
-            parsed = json.loads(m.group(0))
-        except json.JSONDecodeError:
-            return {}
-        result: dict[str, str | None] = {}
-        for name in missing:
-            value = parsed.get(name)
-            if isinstance(value, str) and value.strip():
-                result[name] = value.strip()
-            else:
-                result[name] = None
-        return result
 
     async def _extract_leadership(
         self,

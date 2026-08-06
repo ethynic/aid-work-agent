@@ -76,7 +76,6 @@ async def run(args: argparse.Namespace) -> dict[str, object]:
         print(_redact_mobiles(message), file=sys.stderr, flush=True)
 
     enricher = AssociationBatchEnricher(
-        official_site_resolver=providers.resolve_official_site,
         official_profile_collector=providers.collect_official_profile,
         fallback_profile_provider=providers.search_profile,
         wechat_mobile_provider=providers.wechat_mobile,

@@ -52,7 +52,6 @@ def _enricher_factory(progress, audit):
         audit_callback=audit,
     )
     return AssociationBatchEnricher(
-        official_site_resolver=providers.resolve_official_site,
         official_profile_collector=providers.collect_official_profile,
         fallback_profile_provider=providers.fallback_profile,
         wechat_mobile_provider=providers.wechat_mobile,

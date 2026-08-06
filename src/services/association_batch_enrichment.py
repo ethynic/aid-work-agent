@@ -299,7 +299,7 @@ class AssociationBatchEnricher:
     def __init__(
         self,
         *,
-        official_site_resolver: OfficialSiteResolver,
+        official_site_resolver: OfficialSiteResolver | None = None,
         official_profile_collector: OfficialProfileCollector,
         fallback_profile_provider: FallbackProfileProvider,
         wechat_mobile_provider: WechatMobileProvider,
@@ -338,9 +338,10 @@ class AssociationBatchEnricher:
         except Exception as exc:
             row.errors.append(f"search_profile:{type(exc).__name__}")
 
-        # 第2步：从搜索结果中获取官网URL，访问官网采集补充信息
+        # 第2步：从搜索结果中获取官网URL，访问官网采集补充信息。
+        # official_site_resolver 已废弃（Tavily 移除），官网 URL 完全依赖第1步 search_profile 返回。
         official_url = row.values.get("official_website")
-        if not official_url:
+        if not official_url and self._resolve_official_site is not None:
             try:
                 official_url = await self._resolve_official_site(association_name)
             except Exception:
