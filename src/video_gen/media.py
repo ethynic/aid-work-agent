@@ -193,7 +193,7 @@ class MediaRegistry:
 def _burn_ai_label(input_path: str, output_path: str) -> None:
     """用 FFmpeg drawtext 在视频右下角烧录「AI 生成内容」标识。
 
-    白字 + 黑色半透明背景框，长期可见（满足 2025.9.1 法规"醒目、长期可见"要求）。
+    浅灰字 + 半透明黑色背景框，长期可见（满足 2025.9.1 法规"醒目、长期可见"要求）。
     若 FFmpeg 不可用或无中文字体，抛异常由调用方标记 card 失败。
     """
     fontfile = next((p for p in _FONT_CANDIDATES if Path(p).exists()), None)
@@ -202,11 +202,12 @@ def _burn_ai_label(input_path: str, output_path: str) -> None:
         f"fontfile={fontfile or '未命中候选列表（将用 FFmpeg 默认字体，可能无中文字形导致方框）'}"
     )
     # drawtext 文字含特殊字符需转义（冒号、单引号）。中文「AI 生成内容」无特殊字符，安全。
+    # 字号 h/24 + 浅灰字 + 较淡背景框，降低刺眼感但仍满足"醒目、长期可见"。
     drawtext = (
         "drawtext=text='AI 生成内容':"
-        "x=w-tw-20:y=h-th-20:"
-        "fontcolor=white:fontsize=h/16:"
-        "box=1:boxcolor=black@0.5:boxborderw=10"
+        "x=w-tw-16:y=h-th-16:"
+        "fontcolor=0xC0C0C0:fontsize=h/24:"
+        "box=1:boxcolor=black@0.35:boxborderw=6"
     )
     if fontfile:
         # fontfile 路径里的冒号在 ffmpeg filter 中需转义（Windows C:）
