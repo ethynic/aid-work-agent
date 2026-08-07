@@ -29,26 +29,11 @@ if (!existsSync(cliExe)) {
 }
 console.log(`[OK] CLI exe: ${cliExe}`)
 
-// 2. electron-builder（动态注入 extraResources）
-const builderConfig = path.resolve(projectRoot, 'release-builder-config.json')
-const fs = await import('node:fs')
-fs.writeFileSync(builderConfig, JSON.stringify({
-  extends: path.resolve(projectRoot, 'electron-builder.yml'),
-  extraResources: [
-    { from: cliExe, to: 'cli/association-cli.exe' },
-  ],
-}))
-
+// 2. electron-builder（extraResources 已在 electron-builder.yml 静态配置，
+//    不再动态注入——无论走 package-win.mjs 还是直接 npx electron-builder，
+//    cli.exe 都会打入安装包，防漏打包）
 console.log('\n[打包中] electron-builder...')
-try {
-  execSync(
-    `npx electron-builder --win --config "${builderConfig}"`,
-    { cwd: projectRoot, stdio: 'inherit' },
-  )
-} finally {
-  // 清理临时配置
-  if (existsSync(builderConfig)) fs.unlinkSync(builderConfig)
-}
+execSync('npx electron-builder --win', { cwd: projectRoot, stdio: 'inherit' })
 
 console.log('\n=== 打包完成 ===')
 console.log(`安装包在: ${path.resolve(projectRoot, 'release')}`)

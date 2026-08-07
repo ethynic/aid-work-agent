@@ -322,34 +322,34 @@ class ProjectAssociationProviders:
         任何失败（脚本缺失/启动失败/超时/格式错误）都返回 None，由上层走
         DeepSeek 兜底——文心只是优化信息源，不可让它拖垮整步。
         """
+        import shutil
         import sys
 
-        script = (
-            self._root
-            / "clients"
-            / "association-client-cli"
-            / "scripts"
-            / "wenxin_collect.py"
-        )
+        # python 解释器定位：
+        #   dev 模式用当前解释器 sys.executable（已装 playwright）；
+        #   打包模式（PyInstaller onefile）sys.executable 是 exe 本体跑不了 .py，
+        #   改用客户机 PATH 里的 python（README 要求客户预装 Python 3.11+，
+        #   与 wechat 脚本 Get-Command python.exe 同一假设）；找不到则放弃文心。
+        if getattr(sys, "frozen", False):
+            python_exe = shutil.which("python") or shutil.which("python3")
+            if python_exe is None:
+                return None
+        else:
+            python_exe = sys.executable
+
+        script = self._wenxin_collect_script_path()
         if not script.is_file():
             return None
-        child_environment = os.environ.copy()
-        child_environment["PATH"] = (
-            str(Path(sys.executable).parent)
-            + os.pathsep
-            + child_environment.get("PATH", "")
-        )
         stdin_bytes = json.dumps(
             {"association_name": association_name}, ensure_ascii=False
         ).encode("utf-8")
         try:
             process = await asyncio.create_subprocess_exec(
-                sys.executable,
+                python_exe,
                 str(script),
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                env=child_environment,
             )
         except OSError:
             return None
@@ -373,6 +373,30 @@ class ProjectAssociationProviders:
             return json.loads(stdout.decode("utf-8").strip().splitlines()[-1])
         except (IndexError, UnicodeDecodeError, json.JSONDecodeError):
             return None
+
+    def _wenxin_collect_script_path(self) -> Path:
+        """wenxin_collect.py 路径：打包下从 _MEIPASS/scripts/，dev 下从源码仓库解析。
+
+        build.spec 把 scripts/*.py 打成扁平 _MEIPASS/scripts/（非源码的
+        clients/association-client-cli/scripts/ 嵌套结构），故打包后不能照
+        self._root 模式解析——照 runtime.powershell_runner.scripts_dir() 做
+        frozen-aware 解析。
+        """
+        import sys
+        if getattr(sys, "frozen", False):
+            base = (
+                Path(sys._MEIPASS)
+                if hasattr(sys, "_MEIPASS")
+                else Path(sys.executable).parent
+            )
+            return base / "scripts" / "wenxin_collect.py"
+        return (
+            self._root
+            / "clients"
+            / "association-client-cli"
+            / "scripts"
+            / "wenxin_collect.py"
+        )
 
     async def search_profile(self, association_name: str) -> dict[str, str | None]:
         """第1步：文心联网采集协会基础信息原文 → DeepSeek 解析成结构化字段。

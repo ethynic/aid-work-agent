@@ -27,7 +27,9 @@ nsis:
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
   createStartMenuShortcut: true
-# CLI exe 通过 extraResources 打入（打包前需先 PyInstaller 构建 CLI）
-# extraResources:
-#   - from: ../association-client-cli/dist/association-cli.exe
-#     to: cli/association-cli.exe
+# CLI exe 通过 extraResources 打入（打包前需先 PyInstaller 构建 CLI）。
+# 固化在 yml 静态配置（不再靠 package-win.mjs 动态注入），确保无论走
+# package-win.mjs 还是直接 npx electron-builder，cli.exe 都会打入安装包。
+extraResources:
+  - from: ../association-client-cli/dist/association-cli.exe
+    to: cli/association-cli.exe
