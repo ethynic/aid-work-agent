@@ -151,6 +151,66 @@ test('行带内的卡片诱饵（x 在标签左缘右、右缘左）必须被排
   assert.deepEqual(r.clicks[2], { x: 1368.5, y: 769.5 })
 })
 
+test('行带内、标签右侧的卡片诱饵被 LCA 容器结构级排除（真机 2026-08-07：筛选本科报 2 命中）', async () => {
+  // 真机：弹层背后右列候选人卡片「本科」cy=622.5 落进学历要求行带 ±34.75 且 cx=1444 > 标签右缘，
+  // 纯几何规则与真选项形成 2 命中。卡片在面板容器（行标签 LCA）之外，必须结构级排除。
+  const N = panelItems.length
+  const panelContainer = N + 1
+  const cardContainer = N + 2
+  const snap = buildSnap(
+    [
+      ...panelItems,
+      { text: '', bounds: [560, 140, 1290, 900] as [number, number, number, number] }, // 面板容器节点
+      { text: '', bounds: [300, 200, 1550, 600] as [number, number, number, number] }, // 卡片容器节点
+      // 卡片诱饵：与真选项 [1349,758.5,39,22]（cy=769.5）同学历要求行带、x 在标签右侧
+      { text: '本科', bounds: [1423, 752, 42, 23] as [number, number, number, number] },
+    ],
+    [
+      ...panelItems.map(() => panelContainer), // 面板内容挂在面板容器下
+      0, // 面板容器挂根
+      0, // 卡片容器挂根
+      cardContainer, // 诱饵挂在卡片容器下
+    ],
+  )
+  const r = recorder()
+  const setter = new FilterSetter({
+    snapshot: snapshotQueue([closedSnap, snap, snap, snap, doneSnap1]),
+    click: r.click,
+    sleep: r.sleep,
+  })
+  const result = await setter.apply({ educations: ['本科'] })
+  assert.equal(result.filterCount, 1)
+  // 命中的仍是行内选项 (1368.5,769.5)，不是卡片诱饵 (1444,763.5)
+  assert.deepEqual(r.clicks[2], { x: 1368.5, y: 769.5 })
+})
+
+test('选项折行：第二行选项落到行带外时，放宽下界到下一行标签仍能命中（真机 2026-08-07：5-10年 0 命中）', async () => {
+  // 真机：经验要求行 8 个选项折成两行，5-10年 cy=770 在第二行；标签 cy=712，行带 ±34.75
+  // （学历要求标签仅距 69.5px）。紧行带 0 命中 → 放宽到「下一行标签（求职意向 838.5）上沿」唯一命中。
+  const wrapped = buildSnap([
+    { text: '筛选', bounds: [1514, 33.5, 42, 23] as [number, number, number, number] },
+    { text: '学历要求', bounds: [598.5, 631, 84, 23] as [number, number, number, number] },
+    { text: '经验要求', bounds: [598.5, 700.5, 84, 23] as [number, number, number, number] },
+    { text: '不限', bounds: [790, 702, 28, 22] as [number, number, number, number] },
+    { text: '3-5年', bounds: [1654, 702, 58, 22] as [number, number, number, number] },
+    // 第二行（折行）：cy=770，超出 ±34.75 行带
+    { text: '5-10年', bounds: [875.5, 759, 58.5, 22] as [number, number, number, number] },
+    { text: '10年以上', bounds: [987, 759, 80, 22] as [number, number, number, number] },
+    { text: '求职意向', bounds: [598.5, 827, 84, 23] as [number, number, number, number] },
+    { text: '清除', bounds: [1633, 988.5, 42, 23] as [number, number, number, number] },
+    { text: '确定', bounds: [1738.5, 988.5, 42, 23] as [number, number, number, number] },
+  ])
+  const r = recorder()
+  const setter = new FilterSetter({
+    snapshot: snapshotQueue([closedSnap, wrapped, wrapped, wrapped, doneSnap1]),
+    click: r.click,
+    sleep: r.sleep,
+  })
+  const result = await setter.apply({ experience: '5-10年' })
+  assert.equal(result.filterCount, 1)
+  assert.deepEqual(r.clicks[2], { x: 904.75, y: 770 })
+})
+
 test('徽章计数与条件数不符 → fail-loud', async () => {
   const r = recorder()
   const wrongBadge = buildSnap([{ text: '筛选·4', bounds: [1514, 33.5, 60, 23] }])

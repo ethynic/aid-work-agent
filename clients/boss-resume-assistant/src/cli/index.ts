@@ -33,6 +33,7 @@ const USAGE = `BOSS 简历筛选助手 CLI
   goto recommend|chat         点击左侧菜单跳转页面：recommend=推荐牛人，chat=沟通（看打招呼回复）；已在目标页自动跳过
   accept [--limit N] [--no-preview]   逐个打开「对方想发送附件简历」的会话并点「同意」接收简历，同意后自动点开预览再关闭（默认 20 上限，最大 100；不在沟通页自动先跳转）
   reject                    把沟通页当前会话的候选人标记为「不合适」（弹确认层自动点确定；真实写动作，期间勿动鼠标）
+  interview [--remark "..."]  约面试表单填充演示：逐字填备注+选明天日期后点取消关闭（绝不点发送；期间勿动鼠标）
   ask "筛选要求..."         自然语言一站式演示：LLM 翻译成合法选项 → 自动跳推荐牛人 → 设置筛选 → 给最近 1 人打招呼（--limit 调整）
   chat                      交互式对话模式：启动后连续用中文提要求（筛选/打招呼/接收简历/切页面），自动操作并回答，输入「退出」结束
   review [--all] [--open]       列出 UNCERTAIN 复核队列并生成静态 HTML 复核报告
@@ -176,6 +177,19 @@ async function main(): Promise<number> {
       }
       const { rejectCommand } = await import('./commands/reject.js')
       return rejectCommand({ cdpPort })
+    }
+    case 'interview': {
+      const cdpPortRaw = flagString(args, 'cdp-port')
+      let cdpPort: number | undefined
+      if (cdpPortRaw !== undefined) {
+        cdpPort = Number(cdpPortRaw)
+        if (!Number.isInteger(cdpPort) || cdpPort <= 0 || cdpPort > 65535) {
+          console.error(`--cdp-port 必须是 1-65535 的整数：${cdpPortRaw}`)
+          return 2
+        }
+      }
+      const { interviewCommand } = await import('./commands/interview.js')
+      return interviewCommand({ remark: flagString(args, 'remark'), cdpPort })
     }
     case 'ask': {
       const request = args.positional.slice(1).join(' ').trim()

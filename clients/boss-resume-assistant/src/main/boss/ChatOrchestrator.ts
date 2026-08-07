@@ -22,6 +22,7 @@ export type ChatAction =
   | { type: 'goto'; target: 'recommend' | 'chat' }
   | { type: 'accept' }
   | { type: 'reject' }
+  | { type: 'interview' }
   | { type: 'clear_filter' }
   | { type: 'help' }
   | { type: 'unknown' }
@@ -42,7 +43,8 @@ export interface ClassifyOptions {
 export const CAPABILITY_HINT =
   '我能做：筛选简历（如「本科以上，5年经验，月薪15-20K，筛选简历」）、打招呼（「给最近1个人打招呼」「再打一个」）、' +
   '跳页面（「去推荐牛人」「去沟通页」）、接收附件简历（「看看谁给我发简历了，同意接收」）、' +
-  '标记不合适（「这个不合适」，把沟通页当前会话的候选人标记为不合适）、清除筛选（「清除筛选」）。输入「退出」结束。'
+  '标记不合适（「这个不合适」，把沟通页当前会话的候选人标记为不合适）、' +
+  '约面试（「约面试」，打开当前会话的面试邀请表单逐字填备注+选日期，演示模式只填不发送）、清除筛选（「清除筛选」）。输入「退出」结束。'
 
 /**
  * 把用户一句话分类成动作。history 是最近几轮用户输入（旧的在前），
@@ -85,6 +87,7 @@ export async function classifyIntent(
           '- goto：要求切换页面，target 填 recommend（推荐牛人）或 chat（沟通/消息页）\n' +
           '- accept：要求查看/同意接收候选人发来的附件简历\n' +
           '- reject：要求把当前沟通的候选人标记为不合适（如「这个不合适」「把这个人标成不合适」「当前候选人不合适」）\n' +
+          '- interview：要求约面试/发面试邀请（如「约面试」「帮我约他面试」）。当前是演示模式：只填充表单不发送\n' +
           '- clear_filter：要求清除/重置筛选条件\n' +
           '- help：问你能做什么\n' +
           '- unknown：与招聘操作无关或无法理解\n' +
@@ -151,6 +154,8 @@ function validateAction(raw: string, originalText: string): ChatAction {
       return { type: 'accept' }
     case 'reject':
       return { type: 'reject' }
+    case 'interview':
+      return { type: 'interview' }
     case 'clear_filter':
       return { type: 'clear_filter' }
     case 'help':
@@ -176,6 +181,8 @@ export interface ChatHandlers {
   acceptResumes(): Promise<{ accepted: number; previewed: number }>
   /** 把沟通页当前会话的候选人标记为不合适 */
   rejectCurrent(): Promise<void>
+  /** 约面试表单填充演示（只填不发送），返回填入的备注与日期 */
+  interviewDemo(): Promise<{ remark: string; date: string }>
   /** 清除全部筛选 */
   clearFilter(): Promise<void>
 }
@@ -239,6 +246,13 @@ export class ChatOrchestrator {
         await h.gotoPage('chat')
         await h.rejectCurrent()
         return ['已把当前会话的候选人标记为不合适。']
+      }
+      case 'interview': {
+        await h.gotoPage('chat')
+        const result = await h.interviewDemo()
+        return [
+          `已打开面试邀请表单并完成填充演示：备注「${result.remark}」、日期 ${result.date}，随后已取消关闭（没有发送）。`,
+        ]
       }
       case 'clear_filter':
         await h.gotoPage('recommend')

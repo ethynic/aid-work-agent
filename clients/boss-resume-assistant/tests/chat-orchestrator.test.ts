@@ -108,6 +108,7 @@ function mockHandlers(calls: string[], overrides: Partial<ChatHandlers> = {}): C
     greet: async (limit) => (calls.push(`greet:${limit}`), { greeted: limit, reachedEnd: false }),
     acceptResumes: async () => (calls.push('accept'), { accepted: 2, previewed: 2 }),
     rejectCurrent: async () => void calls.push('reject'),
+    interviewDemo: async () => (calls.push('interview'), { remark: '请带好身份证和简历准时面试', date: '2026-08-07' }),
     clearFilter: async () => void calls.push('clear'),
     ...overrides,
   }
@@ -157,6 +158,14 @@ test('编排：reject 先跳沟通页再标记不合适', async () => {
   assert.match(lines[0]!, /已把当前会话的候选人标记为不合适/)
 })
 
+test('编排：interview 先跳沟通页再填充演示，回答明确说没有发送', async () => {
+  const calls: string[] = []
+  const lines = await orchestratorWith({ type: 'interview' }, calls).handle('约面试')
+  assert.deepEqual(calls, ['goto:chat', 'interview'])
+  assert.match(lines[0]!, /备注「请带好身份证和简历准时面试」/)
+  assert.match(lines[0]!, /没有发送/)
+})
+
 test('编排：goto/clear_filter/help 各自回答', async () => {
   const calls: string[] = []
   assert.match((await orchestratorWith({ type: 'goto', target: 'chat' }, calls).handle('去沟通页'))[0]!, /沟通/ )
@@ -198,7 +207,7 @@ test('编排：handler 抛错原样上抛（CLI 层打印 ❌ 但 REPL 存活）
 })
 
 test('能力提示覆盖全部动作入口', () => {
-  for (const kw of ['筛选简历', '打招呼', '推荐牛人', '沟通', '附件简历', '不合适', '清除筛选', '退出']) {
+  for (const kw of ['筛选简历', '打招呼', '推荐牛人', '沟通', '附件简历', '不合适', '约面试', '清除筛选', '退出']) {
     assert.ok(CAPABILITY_HINT.includes(kw), `CAPABILITY_HINT 应包含「${kw}」`)
   }
 })

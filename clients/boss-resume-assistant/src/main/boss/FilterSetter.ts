@@ -199,18 +199,7 @@ export class FilterSetter {
     }
 
     // 2. 面板容器 = 同一 document 内行标签节点的 LCA
-    const labelNodesByDoc = new Map<number, number[]>()
-    for (const hit of labelHits.values()) {
-      const arr = labelNodesByDoc.get(hit.documentIndex) ?? []
-      arr.push(hit.nodeIndex)
-      labelNodesByDoc.set(hit.documentIndex, arr)
-    }
-    const containerByDoc = new Map<number, number>()
-    for (const [docIdx, nodeIdxs] of labelNodesByDoc) {
-      if (nodeIdxs.length < 2) continue
-      const lca = lowestCommonAncestor(snap.documents[docIdx]!, nodeIdxs)
-      if (lca !== null) containerByDoc.set(docIdx, lca)
-    }
+    const containerByDoc = this.panelContainerByDoc(snap, [...labelHits.values()])
 
     // 3. 逐行收集容器内、行带内、标签右侧的文本
     const rows: PanelRowInfo[] = []
@@ -238,6 +227,23 @@ export class FilterSetter {
       rows.push({ label: label.text, options })
     }
     return rows
+  }
+
+  /** 面板容器定位：≥2 个行标签节点的 LCA（describePanel 与 locateRowOption 共用的结构级消歧） */
+  private panelContainerByDoc(snap: DomSnapshot, labelHits: VisibleHit[]): Map<number, number> {
+    const labelNodesByDoc = new Map<number, number[]>()
+    for (const hit of labelHits) {
+      const arr = labelNodesByDoc.get(hit.documentIndex) ?? []
+      arr.push(hit.nodeIndex)
+      labelNodesByDoc.set(hit.documentIndex, arr)
+    }
+    const containerByDoc = new Map<number, number>()
+    for (const [docIdx, nodeIdxs] of labelNodesByDoc) {
+      if (nodeIdxs.length < 2) continue
+      const lca = lowestCommonAncestor(snap.documents[docIdx]!, nodeIdxs)
+      if (lca !== null) containerByDoc.set(docIdx, lca)
+    }
+    return containerByDoc
   }
 
   /** 跨 document 收集所有可见文本命中（bounds w/h > 0） */
@@ -285,11 +291,34 @@ export class FilterSetter {
     const rowRight = labelOffset.x + label.bounds[0] + label.bounds[2]
     const band = this.rowBand(snap, labelPrefix, rowCy)
 
-    const candidates = this.visibleHits(snap, (s) => s === option).filter((h) => {
-      const offset = accumulateOwnerOffset(snap, h.documentIndex)
-      const c = boundsCenter(h.bounds)
-      return Math.abs(offset.y + c.y - rowCy) <= band && offset.x + c.x > rowRight
-    })
+    // 结构级消歧（与 describePanel 同源）：弹层背后的候选人卡片文本仍带布局 bounds，
+    // 可能恰好落进行带且在标签右侧（真机 2026-08-07：右列卡片「本科」cy=622.5 落进
+    // 学历要求行带 ±34.75，与真选项 cy=643 形成 2 命中）。容器外命中一律排除，
+    // isDescendantOf 返回 null（快照缺 parentIndex）时回退纯几何。
+    const allLabelHits = ROW_DEFS.flatMap((d) => this.visibleHits(snap, (s) => s.startsWith(d.labelPrefix)))
+    const containerByDoc = this.panelContainerByDoc(snap, allLabelHits)
+
+    const inRow = (cyMin: number, cyMax: number) =>
+      this.visibleHits(snap, (s) => s === option).filter((h) => {
+        const container = containerByDoc.get(h.documentIndex)
+        if (container !== undefined) {
+          const inside = isDescendantOf(snap.documents[h.documentIndex]!, h.nodeIndex, container)
+          if (inside === false) return false
+        }
+        const offset = accumulateOwnerOffset(snap, h.documentIndex)
+        const c = boundsCenter(h.bounds)
+        const hitCy = offset.y + c.y
+        return hitCy >= cyMin && hitCy < cyMax && offset.x + c.x > rowRight
+      })
+
+    let candidates = inRow(rowCy - band, rowCy + band)
+    if (candidates.length === 0) {
+      // 折行兜底：行内选项过多时第二行选项落到行带外（真机 2026-08-07：5-10年 cy=770、
+      // 标签 cy=712，行带仅 ±34.75）。放宽下界到「下一行标签上沿」，上沿仍收紧；
+      // 容器/x 规则不变，仍要求唯一，多命中照样 fail-loud。
+      const nextBelow = this.nextLabelBelowCy(snap, rowCy)
+      if (nextBelow !== null) candidates = inRow(rowCy - band, nextBelow)
+    }
     if (candidates.length !== 1) {
       throw new FilterSetError(
         `选项「${option}」在「${labelPrefix}」行内必须恰好 1 个可见匹配，实际 ${candidates.length} 个`,
@@ -298,9 +327,22 @@ export class FilterSetter {
     return this.toGlobalPoint(snap, candidates[0]!)
   }
 
+  /** 本行标签下方最近的其他行标签 cy（折行兜底的下界）；没有则返回 null */
+  private nextLabelBelowCy(snap: DomSnapshot, rowCy: number): number | null {
+    const prefixes = [...ROW_DEFS.map((d) => d.labelPrefix), ...EXTRA_ROW_LABEL_PREFIXES]
+    let next: number | null = null
+    for (const prefix of prefixes) {
+      for (const other of this.visibleHits(snap, (s) => s.startsWith(prefix))) {
+        const offset = accumulateOwnerOffset(snap, other.documentIndex)
+        const cy = offset.y + other.bounds[1] + other.bounds[3] / 2
+        if (cy > rowCy + 1 && (next === null || cy < next)) next = cy
+      }
+    }
+    return next
+  }
+
   /** 行带半径：最近其他行标签垂直距离的一半；无其他行标签时给足余量兜底 100 */
-  private rowBand(snap: DomSnapshot, labelPrefix: string, rowCy: number): number {
-    let band = 100
+  private rowBand(snap: DomSnapshot, labelPrefix: string, rowCy: number): number {    let band = 100
     const otherPrefixes = [
       ...ROW_DEFS.filter((d) => d.labelPrefix !== labelPrefix).map((d) => d.labelPrefix),
       ...EXTRA_ROW_LABEL_PREFIXES,

@@ -178,6 +178,8 @@ export class CdpGateway {
     key: string
     code?: string
     windowsVirtualKeyCode?: number
+    /** type='char' 时的字符文本（逐字输入中文用，如「请」） */
+    text?: string
   }): Promise<void> {
     await this.socket.send(
       'Input.dispatchKeyEvent',
@@ -186,6 +188,7 @@ export class CdpGateway {
         key: opts.key,
         code: opts.code,
         windowsVirtualKeyCode: opts.windowsVirtualKeyCode,
+        text: opts.text,
       },
       this.pageSessionId,
     )
