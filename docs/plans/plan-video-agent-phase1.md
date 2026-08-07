@@ -41,16 +41,16 @@
 
 | 任务 | 产出 | 验收 |
 |------|------|------|
-| 0.1 新增 `VIDEO_GEN_USAGE_FACTOR` env | `.env.example` 增加一行 `VIDEO_GEN_USAGE_FACTOR=30` | 文件存在该行；`.env.example` 与 settings.py 一致 |
-| 0.2 BillingConfig 扩展 | `src/config/settings.py:346` `BillingConfig` 新增 `video_gen_usage_factor: int = 30` | `settings.billing.video_gen_usage_factor` 可读，默认 30 |
-| 0.3 config.yaml 同步 | `configs/config.yaml` 的 `billing:` 块新增 `video_gen_usage_factor: 30` | yaml 与 settings.py 字段名/默认值一致 |
-| 0.4 单元测试 | `tests/unit/test_config.py` 增加 `test_billing_video_gen_usage_factor_default` | 默认 30；env 覆盖生效 |
+| 0.1 新增 `VIDEO_GEN_USAGE_FACTOR` env | `.env.example` 增加一行 `VIDEO_GEN_USAGE_FACTOR=33` | 文件存在该行；`.env.example` 与 settings.py 一致 |
+| 0.2 BillingConfig 扩展 | `src/config/settings.py:346` `BillingConfig` 新增 `video_gen_usage_factor: int = 33` | `settings.billing.video_gen_usage_factor` 可读，默认 33 |
+| 0.3 config.yaml 同步 | `configs/config.yaml` 的 `billing:` 块新增 `video_gen_usage_factor: 33` | yaml 与 settings.py 字段名/默认值一致 |
+| 0.4 单元测试 | `tests/unit/test_config.py` 增加 `test_billing_video_gen_usage_factor_default` | 默认 33；env 覆盖生效 |
 
 **0.2 验收细节**：
 ```python
 class BillingConfig(BaseModel):
-    usage_factor: int = 100              # 主业务（已有）
-    video_gen_usage_factor: int = 30     # 视频创作（新增，3 倍加价）
+    usage_factor: int = 100              # 主业务（已有，10 倍加价）
+    video_gen_usage_factor: int = 33     # 视频创作（新增，3.3 倍加价）
 ```
 
 ---
@@ -140,31 +140,26 @@ CREATE INDEX IF NOT EXISTS idx_prompt_library_tenant_scene ON prompt_library(ten
 - `business_prompt` / `craft_prompt` 双层存储，对应设计文档 §5.3.2 三层架构（模型层在 `model_params` JSONB 中）
 - 模版字段（promoted_*）第一阶段不写入，但字段先建好，避免后续 ALTER TABLE
 
-### 1.3 视频库（复用工作成果，不新建表）
+### 1.3 视频库（复用 `work_outcomes` 表，不新建表）
 
 | 任务 | 产出 | 验收 |
 |------|------|------|
-| 1.3.1 视频库视图 | 复用现有「工作成果」表（若不存在则需先建），通过 `type=video` 过滤 + 视频专属元数据 JSONB 扩展 | 菜单「视频库」看到的是工作成果中视频类型的记录 |
+| 1.3.1 视频库视图 | 复用现有 `work_outcomes` 表（已存在，详见 `deploy/init-postgres.sql:2038`），通过 `outcome_type='file'` + `subagent_id='video-agent'` 过滤，视频专属字段存 `metadata` JSONB | 菜单「视频库」看到的是 work_outcomes 中视频创作类的记录 |
 
 > 对应设计文档：§5.6.2 推荐方案 A（单一数据源）
 
-**前置确认**：Phase 1 启动前需确认「工作成果」表是否已存在。若不存在：
-- **方案 A1**（推荐）：新建 `work_products` 表（含 type / file_id / 业务元数据 JSONB），视频是 type=video 的一种
-- **方案 A2**：暂用 `chat_messages.metadata` 中的 `kept=true` 标记 + 查询时过滤（临时方案，不推荐）
+**前置确认**：`work_outcomes` 表已存在，含 `outcome_type` / `file_id` / `file_name` / `metadata` JSONB / `user_id` / `session_id` / `created_at` 等字段（详见 `docs/system/work-outcome-record-design.md`），第一阶段暂不加字段，仅扩展 `metadata` JSONB 存视频专属元数据（prompt_library_id / generation_params / credit_cost），不改表结构
 
-**视频专属元数据**（存 work_products.metadata JSONB）：
+**视频专属元数据**（存 `work_outcomes.metadata` JSONB；`user_id` / `session_id` / `created_at` 由表本身字段承载，不重复存）：
 ```json
 {
   "prompt_library_id": 123,           // 关联 prompt_library.id
-  "generation_params": {               // 生成参数
+  "generation_params": {              // 生成参数
     "duration_sec": 5,
     "ratio": "9:16",
     "resolution": "720p"
   },
-  "kept_by": "user_xxx",
-  "kept_at": "2026-08-07T10:30:00",
-  "source_chat_session_id": "session_xxx",
-  "credit_cost": 4.5                   // 消耗积分
+  "credit_cost": 4.5                  // 消耗积分
 }
 ```
 
@@ -190,12 +185,78 @@ CREATE INDEX IF NOT EXISTS idx_prompt_library_tenant_scene ON prompt_library(ten
 
 **关键**：不在 `chat_sessions` 加新列，仅扩展 `metadata` JSONB，避免破坏现有表结构与迁移成本。
 
-### 1.5 表初始化机制
+### 1.5 subagent_definitions 扩展 chat_toolbar + upload_accept 字段（声明式 UI 配置）
 
 | 任务 | 产出 | 验收 |
 |------|------|------|
-| 1.5.1 init_video_agent_tables | `src/video_agent/db.py`（新模块）增加 `init_video_agent_tables()` 函数 | 启动幂等建 3 张表（asset_library / prompt_library / work_products 若不存在） |
-| 1.5.2 启动接入 | `src/db/database.py` `_init_postgresql` 末尾调用 `init_video_agent_tables()` | 应用启动自动建表 |
+| 1.5.1 表结构变更 | `deploy/init-postgres.sql:1299` `subagent_definitions` 表 ALTER 增加 `chat_toolbar JSONB DEFAULT '[]'` + `upload_accept TEXT` 两列；同步 `deploy/db_update.sql` 增量 | 启动幂等加列 |
+| 1.5.2 SubagentConfig 扩展 | `src/models/subagent.py:24` `SubagentConfig` 新增 `chat_toolbar: List[str] = []` + `upload_accept: Optional[str] = None` 字段 | 两字段可读，默认空数组 / None |
+| 1.5.3 SUBAGENT.md loader 解析 | `src/subagents/loader.py:160-178` frontmatter 字段映射增加 `chat_toolbar` 与 `upload_accept` | SUBAGENT.md 声明两字段后能被加载到 SubagentConfig |
+| 1.5.4 API 暴露 | `GET /api/subagents/{name}` 等接口返回 `chat_toolbar` 与 `upload_accept` 字段 | 前端拉取 subagent 详情时能拿到按钮 id 列表与上传类型限制 |
+| 1.5.5 video-agent SUBAGENT.md 新建 | 新建 `subagents/video-agent/SUBAGENT.md`（与现有 9 个子智能体并列，目录名用连字符对齐规范）；frontmatter 含 `chat_toolbar: [video_gen]` + `upload_accept: "image/*"` + `triggers.keywords: [视频创作, 生成视频, 做个视频]` | video-agent 会话工具栏显示视频生成按钮；加号上传限定只能选图片；主聊天输入「视频创作」时路由到 video-agent 而非 social-media-operations |
+| 1.5.6 social-media-operations 改名与职责边界 | 修改 `subagents/social-media-operations/SUBAGENT.md`：`name` 从「视频创作智能体」改为「社媒运营智能体」；`triggers.keywords` 去掉「视频创作」（保留社媒运营/微信公众号/视频号/内容日历/发布计划）；`business_pages[0].title` 从「视频创作」改为「社媒运营」（route `/social-media` 保留）；正文增加与 video-agent 的职责边界说明 | 主聊天中「视频创作」关键词只路由到 video-agent；前端菜单显示「社媒运营」与「视频创作」两个独立入口，无名称冲突 |
+| 1.5.7 主智能体默认值 | `configs/config.yaml` 新增 `chat.master_toolbar_buttons: [file_upload]` + `chat.default_upload_accept`（沿用 ChatInput 现有白名单）；前端在 `subagent_id` 为空时读此配置 | 主智能体仍显示加号且接受全部附件类型；子智能体未声明 upload_accept 时也走此默认 |
+
+**chat_toolbar 字段语义**：
+- 类型：`JSONB`，存储字符串数组，如 `["video_gen", "image_gen", "ppt_create"]`
+- 语义：聊天输入框旁的「快捷操作」按钮 id 列表（业界同类产品也有叫 Tools / 快捷功能 / 能力入口），与现有 `tools`（LLM 函数调用工具，`deploy/init-postgres.sql:1307`）、`skills`（技能包）、`business_pages`（业务页面）语义独立，**不复用现有字段**
+- 取值：第一阶段仅 `video_gen`；未来扩展 `image_gen` / `ppt_create` 等
+
+**upload_accept 字段语义**：
+- 类型：`TEXT`，单值，对齐 HTML `<input accept>` 属性语法
+- 语义：限定本子智能体聊天输入框加号按钮可选的文件类型；前端 ChatInput 拿到此值直接塞 `<input accept="...">`，零翻译
+- 取值示例：
+  - `"image/*"` -- 仅图片（video-agent 用此值）
+  - `"image/*,video/*"` -- 图片 + 视频
+  - `".pdf,.docx"` -- 指定后缀
+  - `None`（不声明） -- 走 `chat.default_upload_accept` 全局默认（兼容现有行为）
+- 背景：现有 `frontend/src/components/ChatInput.vue:90` 加号按钮 accept 是全局硬编码白名单，所有子智能体共用；视频创作智能体只需图片输入（产品图/模特图），需限定只传图片，避免用户误传 PDF/Word 等
+
+**SUBAGENT.md frontmatter 示例**（video-agent）：
+```yaml
+---
+name: 视频创作智能体
+description: 会话化视频创作智能体，精修/敏捷双模 + 企业组织沉淀
+version: 1.0.0
+author: system
+chat_toolbar:
+  - video_gen
+upload_accept: "image/*"
+triggers:
+  keywords:
+    - 视频创作
+    - 生成视频
+    - 做个视频
+tools:
+  inherit: true
+skills:
+  allowed: []
+---
+（系统提示词正文）
+```
+
+**与 social-media-operations 的职责边界**（Phase 1.5.6 同步完成改名）：
+
+| 维度 | social-media-operations（改名后） | video-agent（新建） |
+|------|----------------------------------|---------------------|
+| 显示名 | 社媒运营智能体 | 视频创作智能体 |
+| 核心职责 | 社媒运营全流程（内容日历/发布计划/母版管理/审核交接/运营复盘） | 会话化视频生成（精修/敏捷双模/提示词引擎/企业组织沉淀） |
+| trigger 关键词 | 社媒运营/微信公众号/视频号/内容日历/发布计划 | 视频创作/生成视频/做个视频 |
+| 入口 | 工作台页面 `/social-media`（MVP 原型保留） | 主聊天流 |
+| 数据表 | gen_sessions / gen_cards（原型保留） | chat_sessions / work_outcomes |
+
+**关键**：triggers 关键词严格去重，「视频创作」只归 video-agent，避免主智能体委托时歧义。
+
+**主智能体 fallback**：`chat_sessions.subagent_id` 为空（主智能体会话）时，前端读 `configs/config.yaml` 的 `chat.master_toolbar_buttons`（默认 `['file_upload']`）与 `chat.default_upload_accept`，不强制每个子智能体都声明。
+
+**关键**：两字段都是「声明式启用」--前端按 id 注册表渲染按钮、按 upload_accept 限定文件类型；新增按钮需前后端同步维护注册表（见 Phase 5.1.1），新增上传类型限制只需 SUBAGENT.md 声明。
+
+### 1.6 表初始化机制
+
+| 任务 | 产出 | 验收 |
+|------|------|------|
+| 1.6.1 init_video_agent_tables | `src/video_agent/db.py`（新模块）增加 `init_video_agent_tables()` 函数 | 启动幂等建 2 张表（asset_library / prompt_library 若不存在）；视频库复用 `work_outcomes` 表，不新建 |
+| 1.6.2 启动接入 | `src/db/database.py` `_init_postgresql` 末尾调用 `init_video_agent_tables()` | 应用启动自动建表 |
 
 **注意**：本计划新建模块 `src/video_agent/`（与现有 `src/video_gen/` 并列），不污染 MVP 原型代码。`video_gen/` 保留给原「视频创作」页面，`video_agent/` 承载新会话化能力。
 
@@ -236,13 +297,10 @@ def calculate_video_credit_cost(
 
 | 任务 | 产出 | 验收 |
 |------|------|------|
-| 2.2.1 单价数据 | `token_cost_prices` 表增加 MiniMax-H3、wan2.7-r2v 记录，`input_price_per_m` 字段记秒单价（元/秒 × 1000，或新增 `price_per_second` 字段） | 单价可查 |
+| 2.2.1 单价数据 | `token_cost_prices` 表增加 MiniMax-H3、wan2.7-r2v 记录，新增 `price_per_second` 字段 | 单价可查 |
 
 **字段决策**：
-- **方案 A**（推荐）：复用 `input_price_per_m`，语义改为「单价 × 1000」（视频场景解释为「秒单价 × 1000」）
 - **方案 B**：`token_cost_prices` 新增 `price_per_second` 字段，专用于视频模型
-
-Phase 1 启动前需与计费模块负责人确认。倾向方案 A，零新增字段。
 
 ### 2.3 video_agent 服务接入计费
 
@@ -307,7 +365,7 @@ src/video_agent/
 |------|------|------|
 | 3.2.1 create_video_chat_session | `src/video_agent/service.py` 创建 `VideoChatService` 类 | 创建 chat_sessions 记录，subagent_id='video-agent'，metadata 含 video_gen_params |
 | 3.2.2 handle_user_message | 处理用户消息：识别意图（精修/敏捷）、调用提示词引擎、提交视频生成 | 文本模型调用 -> 提示词 -> 视频模型调用 全链路通 |
-| 3.2.3 keep_video | 用户留用视频：写 prompt_library（category=kept）+ 写 work_products（type=video） | 留用后提示词库、视频库都有记录 |
+| 3.2.3 keep_video | 用户留用视频：写 prompt_library（category=kept）+ 写 work_outcomes（outcome_type='file'，subagent_id='video-agent'，metadata 含视频专属字段） | 留用后提示词库、视频库都有记录 |
 | 3.2.4 dislike_video | 用户不喜欢：写 prompt_library（category=blacklist，dislike_reason 可选填） | 黑名单有记录 |
 | 3.2.5 continue_with_video | 基于已有视频微调：传 source_video_file_id 给提示词引擎 | 支持混合使用场景 |
 
@@ -369,7 +427,7 @@ class PromptResult:
 | 素材库 | GET /api/video-agent/assets/{id} | 详情 |
 | 素材库 | DELETE /api/video-agent/assets/{id} | 删除 |
 | 素材库 | POST /api/video-agent/assets/manual | 手动上传到素材库（其他智能体附件收藏） |
-| 视频库 | GET /api/video-agent/videos | 列表（type=video 的 work_products） |
+| 视频库 | GET /api/video-agent/videos | 列表（work_outcomes 中 outcome_type='file' + subagent_id='video-agent'） |
 | 视频库 | GET /api/video-agent/videos/{id} | 详情（含提示词溯源） |
 | 视频库 | DELETE /api/video-agent/videos/{id} | 删除 |
 | 提示词库 | GET /api/video-agent/prompts | 列表（按 category 筛选：kept/blacklist/template） |
@@ -406,26 +464,37 @@ class PromptResult:
 
 > 对应设计文档：§5.3.4.3 工具栏、§5.3.4.12 UI 改造重点
 
-### 5.1 工具栏与参数弹框
+### 5.1 工具栏与参数弹框（配置驱动）
+
+> 对应 Phase 1.5 的 `chat_toolbar` 字段。不同子智能体会话显示不同按钮组，前端按 id 注册表渲染。
 
 | 任务 | 产出 | 验收 |
 |------|------|------|
-| 5.1.1 工具栏组件 | `frontend/src/components/chat/ChatToolbar.vue`（新组件） | 加号旁显示「视频生成」按钮 |
-| 5.1.2 参数弹框 | `frontend/src/components/chat/VideoGenParamsDialog.vue` | 弹框含 5 个参数（创作模式/时长/比例/分辨率/生成条数） |
-| 5.1.3 聊天输入框集成 | 修改现有聊天输入框组件，加入 ChatToolbar | 加号 + 视频生成按钮同时显示 |
-| 5.1.4 参数状态管理 | `frontend/src/composables/useVideoGenParams.ts` | 参数状态在会话内持久化，发送时附加到消息 |
+| 5.1.1 按钮注册表 | `frontend/src/components/chat/toolbar-buttons/registry.ts`（新模块）：id -> 组件 + 元信息（图标/标签/排序）映射；首期注册 `file_upload`（封装现有加号附件按钮）+ `video_gen`（视频生成） | 注册表可被 ChatToolbar 遍历渲染；新增按钮只需在此注册 |
+| 5.1.2 ChatToolbar 组件 | `frontend/src/components/chat/ChatToolbar.vue`（新组件）：接收 `buttonIds: string[]` prop，按注册表顺序渲染按钮；空数组时整体不显示 | 传入 `['file_upload', 'video_gen']` 渲染两个按钮；传入 `[]` 不显示 |
+| 5.1.3 ChatInput 集成 | 修改 `frontend/src/components/ChatInput.vue:74-83` 与 `:86-92`，移除硬编码加号按钮与全局 accept 白名单，改为 `<ChatToolbar :button-ids="currentToolbarButtons" />` + `<input :accept="currentUploadAccept">`；`currentToolbarButtons` 取自当前会话 subagent 的 `chat_toolbar`，`currentUploadAccept` 取自 `upload_accept`；两者在 `subagent_id` 为空时 fallback 到 `chat.master_toolbar_buttons` 与 `chat.default_upload_accept` | 不同子智能体会话显示不同按钮组 + 不同上传类型限制；video-agent 加号只能选图片，主智能体仍可传 PDF/Word 等 |
+| 5.1.4 视频生成按钮 | `frontend/src/components/chat/toolbar-buttons/VideoGenButton.vue`：点击打开参数弹框，确认后写入 `useVideoGenParams` 状态 | 仅在 video-agent 会话显示该按钮，点击弹出参数弹框 |
+| 5.1.5 参数弹框 | `frontend/src/components/chat/VideoGenParamsDialog.vue` | 弹框含 5 个参数（创作模式/时长/比例/分辨率/生成条数） |
+| 5.1.6 参数状态管理 | `frontend/src/composables/useVideoGenParams.ts` | 参数状态在会话内持久化，发送时附加到消息 |
+| 5.1.7 subagent 详情拉取 | 进入会话时 `GET /api/subagents/{name}` 拿到 `chat_toolbar`，前端 store 缓存并按会话隔离 | 切换会话时工具栏按钮组正确切换 |
 
-**5.1.2 参数弹框字段**：
+**参数弹框字段**：
 
 | 参数 | 控件 | 选项 | 默认值 |
 |------|------|------|--------|
 | 创作模式 | Radio | 精修模式 / 敏捷模式 | 精修模式 |
 | 视频时长 | Select | 5s / 10s / 15s / 30s | 5s |
-| 视频比例 | Select | 16:9 / 9:16 / 1:1 / 4:3 / 3:4 / auto | 9:16 |
+| 视频比例 | Select | 16:9 / 9:16 / 1:1 / 4:3 / 3:4 / auto | auto |
 | 分辨率 | Select | 720p / 768p / 1080p / 2K | 720p |
 | 生成条数 | Select | 精修模式固定 1 条（禁用）；敏捷模式可选 1/2/3 条 | 精修=1，敏捷=3 |
 
 **联动逻辑**：选择「精修模式」时，生成条数下拉禁用并固定为 1；选择「敏捷模式」时，生成条数可选 1/2/3。
+
+**注册表扩展规范**（未来新增按钮时遵循）：
+1. 在 `frontend/src/components/chat/toolbar-buttons/` 下新建 `<ButtonName>.vue` 组件
+2. 在 `registry.ts` 注册 id -> 组件映射，含 `icon` / `label` / `order` 元信息
+3. 在需要启用的子智能体 SUBAGENT.md frontmatter 加 `chat_toolbar: [<new_id>]`
+4. 主智能体如需启用，更新 `configs/config.yaml` 的 `chat.master_toolbar_buttons`
 
 ### 5.2 文件卡片组件
 
@@ -455,11 +524,11 @@ class PromptResult:
 | 任务 | 产出 | 验收 |
 |------|------|------|
 | 5.3.1 消息渲染 | 聊天消息支持渲染 VideoFileCard 类型 | 视频结果在聊天中显示为卡片 |
-| 5.3.2 等待提示 | 视频生成等待期间显示"生成视频，预计需要3分钟"消息 | 等待期间有可见反馈 |
+| 5.3.2 等待提示 | 视频生成等待期间显示"生成视频，预计需要 3 ~ 5 分钟"消息 | 等待期间有可见反馈 |
 | 5.3.3 多卡片处理 | 敏捷模式 3 条视频分 3 条消息发送 | 每条消息一个卡片 |
-| 5.3.4 图片上传支持 | 聊天输入框支持图片上传（多图、拖拽、粘贴） | 多图可上传，关联到本次视频生成 |
+| 5.3.4 图片上传限定 | video-agent 会话通过 `upload_accept: "image/*"` 限定加号按钮只能选图片（多图、拖拽、粘贴均受限） | 用户在 video-agent 会话点击加号，文件选择器只显示图片；拖拽/粘贴非图片被拒绝；其他子智能体不受影响 |
 
-**5.3.4 关键**：多模态输入是会话化的硬前置条件。现有聊天框若不支持图片上传，需先实现。若已支持则复用。
+**5.3.4 关键**：现有 `ChatInput.vue:90` 加号按钮的 accept 是全局硬编码白名单（图片+PDF+Office 等），所有子智能体共用。Phase 1.5 的 `upload_accept` 字段提供子智能体级别覆盖能力--video-agent 声明 `upload_accept: "image/*"` 后，前端把此值塞到 `<input accept>`，文件选择器自动只显示图片，无需改 ChatInput 业务逻辑。多图上传、拖拽、粘贴均由 HTML accept 属性 + ChatInput 现有逻辑自动处理。
 
 ### 5.4 历史会话复用
 
@@ -556,8 +625,6 @@ class PromptResult:
 
 | 风险 | 影响 | 对策 |
 |------|------|------|
-| 多模态输入未支持 | Phase 5 阻塞 | 提前确认现有聊天框是否支持图片上传；不支持则 Phase 5 增加 1-2 天 |
-| 工作成果表不存在 | Phase 1.3 阻塞 | Phase 1 启动前确认；不存在则采用方案 A1 新建 work_products 表 |
 | 计费单价表语义冲突 | Phase 2.2 阻塞 | Phase 2 启动前与计费模块负责人确认方案 A/B |
 | 文本模型提示词质量不达标 | Phase 3 提示词引擎效果差 | 预置通用模板库兜底（设计文档 §9.3） |
 | 视频生成 API 限流 | Phase 7 联调受阻 | 敏捷模式 3 条并发可能触发限流，提前确认 provider 限流策略 |
@@ -566,8 +633,8 @@ class PromptResult:
 
 | 依赖项 | 状态 | 影响 Phase |
 |--------|------|-----------|
-| 现有聊天框支持图片上传 | 待确认 | Phase 5 |
-| 现有「工作成果」表 | 待确认 | Phase 1.3 |
+| 现有聊天框支持图片上传 | ✅ 已支持（加号触发文件选择，多图/拖拽/粘贴均可用），但全局 accept 白名单未限定类型 | Phase 5.3.4（通过 `upload_accept` 字段在 video-agent 限定只传图片） |
+| 现有「工作成果」表 | ✅ 已存在（`work_outcomes`，`deploy/init-postgres.sql:2038`） | Phase 1.3 已确定复用 |
 | `token_cost_prices` 表视频模型记录 | 待确认 | Phase 2.2 |
 | ImageRegistry 机制 | 已就绪（[image-asset-pipeline](../system/image-asset-pipeline-design.md)） | Phase 3.4.3 |
 | 主聊天循环 + subagent 注册 | 已就绪 | Phase 3.4 |
@@ -608,13 +675,13 @@ class PromptResult:
 | 维度 | 现有 MVP（保留为原型） | Phase 1 新功能 |
 |------|---------------------|--------------|
 | 入口 | 「视频创作」独立页面 | 主聊天流，子智能体接管 |
-| 数据表 | gen_sessions / gen_cards | chat_sessions（复用）+ asset_library / prompt_library / work_products（新建） |
+| 数据表 | gen_sessions / gen_cards | chat_sessions（复用）+ work_outcomes（复用，outcome_type='file'）+ asset_library / prompt_library（新建） |
 | 视频模型调用 | src/video_gen/wanx_provider.py | 复用，从 src/video_agent/ 调用 |
 | 计费 | 无 | chat_records（source_type=video_gen） |
 | 提示词引擎 | 模板填空 | 文本模型生成（精修/敏捷双模） |
 | 提示词沉淀 | 无 | prompt_library 三类（留用/黑名单/模版） |
 | 素材管理 | 一次会话内 | asset_library 跨会话 |
-| 视频管理 | gen_cards 表 | work_products（type=video） |
+| 视频管理 | gen_cards 表 | work_outcomes（outcome_type='file' + subagent_id='video-agent'） |
 
 **关键**：MVP 原型完全独立，新功能不破坏原页面。`src/video_gen/` 模块保留，`src/video_agent/` 是新模块。Provider 层（wanx_provider / minimax_provider）被两套共用，但不修改其实现。
 
@@ -626,11 +693,11 @@ class PromptResult:
 
 | 设计点 | 待确认问题 | 倾向方案 | 影响 Phase |
 |--------|----------|---------|-----------|
-| 工作成果表结构 | 是否已存在 `work_products` 表？若不存在采用方案 A1 还是 A2？ | 方案 A1（新建 work_products 表） | Phase 1.3 |
+| 视频库元数据扩展 | 复用 `work_outcomes.metadata` JSONB（方案 A1）还是 ALTER TABLE 加专属字段（方案 A2）？ | 方案 A1（不改表结构） | Phase 1.3 |
 | 提示词库表结构 | 单表 + category 字段（本计划方案）还是三表分离？ | 单表（本计划方案，便于升级操作） | Phase 1.2 |
 | 计费单价表字段 | 复用 `input_price_per_m`（方案 A）还是新增 `price_per_second`（方案 B）？ | 方案 A（零新增字段） | Phase 2.2 |
-| 聊天框图片上传 | 现有聊天框是否支持多图上传（含拖拽/粘贴）？ | 若不支持需先实现 | Phase 5 |
-| 子智能体注册 | `video-agent` 子智能体如何注册到主聊天循环？ | 复用现有 subagent 注册机制 | Phase 3.4 |
+| 聊天框图片上传限定 | 现有聊天框支持图片上传但 accept 全局硬编码，如何让 video-agent 限定只传图片？ | Phase 1.5 新增 `upload_accept` 字段，SUBAGENT.md 声明 `"image/*"`，前端 ChatInput 读此值覆盖默认 accept | Phase 1.5、5.3.4 |
+| 子智能体注册与职责边界 | `video-agent` 子智能体如何注册？与现有 `social-media-operations` 职责重叠如何处理？ | ✅ 已确认：新建 `subagents/video-agent/`（连字符对齐规范）；`social-media-operations` 改名为「社媒运营智能体」，triggers 去掉「视频创作」（Phase 1.5.5 + 1.5.6 同步完成） | Phase 1.5、3.4 |
 | 菜单可见性机制 | 现有订阅状态如何传递到前端菜单组件？ | 复用现有订阅能力开关 | Phase 6.1 |
 
 ---
