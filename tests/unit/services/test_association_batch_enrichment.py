@@ -296,7 +296,6 @@ def test_excel_contains_business_and_audit_columns_but_error_is_redacted(tmp_pat
     from src.services.association_batch_enrichment import _EXCEL_HEADERS
     assert headers == [label for label, _ in _EXCEL_HEADERS]
     assert values["秘书长\n手机"] == "18612345678"
-    assert values["错误摘要"] == "provider returned 186****5678"
     # 未采集的职务占位列存在且为空
     assert "副秘书长\n姓名" in values
     assert values["副秘书长\n姓名"] is None
@@ -326,8 +325,6 @@ def test_excel_treats_external_formula_prefixes_as_text(tmp_path):
     for header_name in (
         "客户名称",
         "单位地址",
-        "来源摘要",
-        "错误摘要",
         "处理时间",
     ):
         assert cells[header_name].startswith("'")

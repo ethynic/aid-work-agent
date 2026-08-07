@@ -78,10 +78,8 @@ _EXCEL_HEADERS: tuple[tuple[str, str | None], ...] = (
     ("品牌会议连续次数", "brand_conference_consecutive_count"),
     ("单位官网", "official_website"),
     ("单位公众号", "official_wechat_account"),
-    # 审计字段放最后
+    # 审计字段放最后（来源摘要/错误摘要仅内部记录，不输出到 Excel）
     ("处理状态", "processing_status"),
-    ("来源摘要", "source_summary"),
-    ("错误摘要", "error_summary"),
     ("处理时间", "processed_at"),
 )
 
