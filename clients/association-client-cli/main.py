@@ -216,6 +216,16 @@ async def cmd_collect(args: argparse.Namespace) -> int:
             gateway=gateway,
         )
 
+        # 第1步改走文心联网采集，需要常开调试浏览器(9222)。失败仅警告——
+        # providers.search_profile 会 fallback 到 DeepSeek 兜底，不致命。
+        try:
+            from runtime.wenxin_browser import ensure_wenxin_browser
+
+            await ensure_wenxin_browser()
+            emit_log("INFO", "文心采集浏览器已就绪(localhost:9222)")
+        except Exception as exc:
+            emit_log("WARNING", f"文心浏览器未就绪，第1步将降级为 DeepSeek 直出：{exc}")
+
         from src.services.association_batch_enrichment import (
             AssociationBatchEnricher,
             write_enrichment_workbook,

@@ -10,7 +10,7 @@
 
 将现有的「协会信息收集」能力从服务端内部工具，改造成一个 **可交付给客户电脑独立运行的产品**：
 - **Electron 客户端**：用户输入协会名、查看进度/日志/结果/积分消耗的 GUI 入口
-- **本地命令行工具（PyInstaller exe）**：承载完整 5 步业务逻辑（LLM联网搜索基础信息→采集官网→微信搜一搜搜领导姓名→微信RPA取证手机号），LLM/OCR 能力通过 HTTP 调用服务端代理（服务端计费）
+- **本地命令行工具（PyInstaller exe）**：承载完整 5 步业务逻辑（文心联网采集基础信息→采集官网→微信搜一搜搜领导姓名→微信RPA取证手机号），LLM/OCR 能力通过 HTTP 调用服务端代理（服务端计费）
 - **服务端（aid-work-agent）**：LLM 代理网关 + 积分计费 + 激活鉴权 + 日志接收
 
 客户端与客户租户绑定，消耗的积分按 **5 倍系数** 计入该租户的通用积分池。
@@ -946,6 +946,8 @@ if __name__ == "__main__":
 
 > **2026-08-06 现状**：Qwen `enable_search` 实验失败已废弃，Tavily 也已移除。当前所有信息获取都靠 **DeepSeek 普通对话**（`llm_gateway.chat()`），DeepSeek 接口无联网搜索能力，依赖模型自身知识。
 
+> **2026-08-07 更新（基础信息联网化）**：第1步 `search_profile` 改为「文心一言（wenxin.baidu.com）联网采集协会基础信息原文 → DeepSeek 解析成结构化字段」。文心是**网页信息源**（Playwright attach 常开调试浏览器 9222 采集 wenxin 页面，反风控铁律见 memory `wenxin-reuse-session-anti-captcha`：复用单一常开浏览器会话连续提问不触发验证码，频繁新开才会），**不是 LLM provider**——不引入文心 API、无文心计费；只有 DeepSeek 解析那步走 `ProxyLLMGateway` → `/api/client/v1/llm/chat` 计费。官网 URL 从文心原文的"官网网址"提取，不再靠 DeepSeek 训练知识猜，根治官网幻觉。文心失败（浏览器未就绪/验证码/超时）时 fallback 原 DeepSeek 直出。
+
 **官网 URL 来源**：第1步 `search_profile` 让 DeepSeek 直接返回 `official_website` 字段。`resolve_official_site` 方法（原 Tavily 搜索兜底）已从 `ProjectAssociationProviders` 删除；`AssociationBatchEnricher.official_site_resolver` 注入项改为**可选**（默认 `None`），`enrich_one` 里仅在传入 resolver 且 `search_profile` 未返回官网 URL 时才调用。客户端 CLI 构造 enricher 时**不传** `official_site_resolver`，官网 URL 完全依赖 `search_profile` 的 DeepSeek 输出。
 
 **计费影响**：所有 LLM 调用都是普通 chat（走 gateway → 代理 → 计费），不涉及搜索 API、不涉及 `enable_search`，链路最简单。Tavily 的 Key、配置在协会收集场景下不再需要。
@@ -1447,9 +1449,13 @@ nsis:
 1. 用户输入"中国黄金协会" → 点击"开始收集"
 2. Electron → spawn cli.exe collect --associations "中国黄金协会" --output ...
 3. CLI 启动 AssociationBatchEnricher.enrich_one("中国黄金协会")
-4. 步骤1：search_profile（DeepSeek 提取基础信息）
+4. 步骤1：search_profile（文心联网采集原文 → DeepSeek 解析）
+   - spawn wenxin_collect.py → attach 常开调试浏览器(9222) → 文心一言联网采集协会基础信息原文
+     （含"官网网址：..."），根治 DeepSeek 不联网直出官网的幻觉
    - ProxyLLMGateway.chat() → POST /api/client/v1/llm/chat
-     → 服务端 llm_gateway(DeepSeek) → 扣积分（×5）→ 返回
+     → 服务端 llm_gateway(DeepSeek) 按原文解析成结构化字段 → 扣积分（×5）→ 返回
+     （文心是网页信息源，不引入文心 API、无文心计费；DeepSeek 解析那步才计费）
+   - 文心失败（浏览器未就绪/验证码/超时）→ fallback 原 DeepSeek 直出，不至于整步空
    - 获取地址/邮箱/官网URL/主管单位等基础字段（不含人员/手机号）
    - stdout: {"event":"progress","step":"search_profile","status":"success"}
 5. 步骤2：collect_official_profile（官网采集）

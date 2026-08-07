@@ -328,12 +328,12 @@ class AssociationBatchEnricher:
     async def enrich_one(self, association_name: str) -> AssociationEnrichmentRow:
         row = AssociationEnrichmentRow(association_name=association_name)
         # 第1步：LLM 搜索获取基础信息（含官网URL）
-        self._progress(f"[{association_name}] 【1/4】正在用 DeepSeek 获取协会基础信息")
+        self._progress(f"[{association_name}] 【1/4】正在文心联网采集协会基础信息")
         try:
             from src.services.association_profile_extractor import PROFILE_FIELDS as _PF
             search_profile = await self._fallback_profile(association_name)
             self._merge(row.values, search_profile)
-            row.sources.append("qwen_search")
+            row.sources.append("wenxin_search")
             # 输出拿到的关键字段
             got_fields = {k: v for k, v in search_profile.items() if v}
             self._progress(f"[{association_name}] 【1/4】基础信息获取完成：{got_fields}")

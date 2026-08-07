@@ -49,6 +49,8 @@ _WECHAT_INPUT_FAILURE_CODES = {
     "INPUT_FOCUS_LOST",
 }
 _WECHAT_RPA_TIMEOUT_SECONDS = 600
+# 文心联网采集单题超时：提问+生成+稳定判断最多约 90s，留余量到 180s。
+_WENXIN_COLLECT_TIMEOUT_SECONDS = 180
 
 
 class ProjectAssociationProviders:
@@ -313,38 +315,136 @@ class ProjectAssociationProviders:
                 result[field_name] = None
         return result
 
+    async def _spawn_wenxin_collect(self, association_name: str) -> dict | None:
+        """spawn wenxin_collect.py：文心联网采集协会基础信息原文。
+
+        返回子脚本 stdout 最后一行 JSON（{"ok":..., "answer":..., "note":...}）。
+        任何失败（脚本缺失/启动失败/超时/格式错误）都返回 None，由上层走
+        DeepSeek 兜底——文心只是优化信息源，不可让它拖垮整步。
+        """
+        import sys
+
+        script = (
+            self._root
+            / "clients"
+            / "association-client-cli"
+            / "scripts"
+            / "wenxin_collect.py"
+        )
+        if not script.is_file():
+            return None
+        child_environment = os.environ.copy()
+        child_environment["PATH"] = (
+            str(Path(sys.executable).parent)
+            + os.pathsep
+            + child_environment.get("PATH", "")
+        )
+        stdin_bytes = json.dumps(
+            {"association_name": association_name}, ensure_ascii=False
+        ).encode("utf-8")
+        try:
+            process = await asyncio.create_subprocess_exec(
+                sys.executable,
+                str(script),
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=child_environment,
+            )
+        except OSError:
+            return None
+        # 文心脚本需要 stdin 喂 JSON，故单独内联带 input 的 communicate；
+        # 不复用 _communicate_with_timeout（它面向微信脚本，无 input 参数）。
+        try:
+            stdout, _stderr = await asyncio.wait_for(
+                process.communicate(input=stdin_bytes),
+                timeout=_WENXIN_COLLECT_TIMEOUT_SECONDS,
+            )
+        except (TimeoutError, RuntimeError, OSError):
+            # 超时/OSError（管道断裂等）；文心非关键，一律 kill+wait 回收后
+            # 返回 None 走 DeepSeek 降级，防 communicate 异常时子进程泄漏。
+            try:
+                process.kill()
+            except ProcessLookupError:
+                pass
+            await process.wait()
+            return None
+        try:
+            return json.loads(stdout.decode("utf-8").strip().splitlines()[-1])
+        except (IndexError, UnicodeDecodeError, json.JSONDecodeError):
+            return None
+
     async def search_profile(self, association_name: str) -> dict[str, str | None]:
-        """第1步：用 LLM 获取协会基础信息（不含会长/秘书长/手机号）。"""
+        """第1步：文心联网采集协会基础信息原文 → DeepSeek 解析成结构化字段。
+
+        文心联网采集根治 DeepSeek 不联网直出官网的幻觉。文心失败时 fallback
+        原 DeepSeek 直出（保底，无浏览器/服务端环境仍可运行，不至于整步空）。
+        对外接口（dict[str, str|None]）不变。
+        """
         # 会长/秘书长/手机号不由模型返回——人员由官网采集或微信搜一搜精确获取。
         search_fields = [
             name for name in PROFILE_FIELDS
             if name not in ("president_name", "secretary_general_name",
                             "president_mobile", "secretary_general_mobile")
         ]
-        # 用 _strict_json_chat（自带围栏去除 + 重试）
+
+        # 1) 文心联网采集原文（含"官网网址：..."），根治官网幻觉
+        wenxin = await self._spawn_wenxin_collect(association_name)
+        raw_text = wenxin.get("answer") if (
+            isinstance(wenxin, dict)
+            and wenxin.get("ok")
+            and isinstance(wenxin.get("answer"), str)
+        ) else None
+
+        if raw_text and raw_text.strip():
+            # 2a) 有原文：DeepSeek 从原文提取，官网从原文「官网网址」取，不再靠模型瞎猜
+            system_prompt = (
+                "你是协会信息提取器。下面是文心一言联网采集到的协会资料原文，"
+                "请严格依据该原文提取字段，原文未提及的值返回 null，不要编造或补全。"
+                f"只输出严格 JSON 对象，键恰好为：{','.join(search_fields)}。"
+                "每个值是字符串或 null。"
+                "official_website 必须从原文「官网网址」一行提取该协会真实的官网完整网址"
+                "（原文未给出网址则设为 null，严禁照搬示例域名后缀猜测）。"
+                "不要返回人员姓名或手机号。"
+            )
+            user_content = raw_text.strip()[:8000]
+            self._audit(
+                association=association_name,
+                stage="基础信息·文心采集",
+                kind="wenxin_collected",
+                summary=f"原文 {len(raw_text.strip())} 字",
+            )
+        else:
+            # 2b) 文心失败：fallback 原 DeepSeek 直出（保底，无浏览器/服务端环境不崩）
+            self._audit(
+                association=association_name,
+                stage="基础信息·文心采集",
+                kind="wenxin_fallback",
+                summary=(
+                    str(wenxin.get("note"))
+                    if isinstance(wenxin, dict)
+                    else "wenxin_spawn_failed"
+                ),
+            )
+            system_prompt = (
+                "你是一个协会信息提取器。只输出JSON，不要其他文字。"
+                f"键必须恰好为：{','.join(search_fields)}。"
+                "每个值是字符串或null。找不到的值为null。"
+                "official_website 是最重要的字段，必须返回该协会真实的、可访问的官方网站完整网址（含 https://）。"
+                "绝对不能猜测或编造网址。如果不确定官网地址，official_website 必须设为 null。"
+                "不要返回人员姓名或手机号。"
+            )
+            user_content = (
+                f"给出{association_name}的以下信息："
+                "地址、邮箱、官网网址、主管单位、单位等级、会员数量、"
+                "分支机构数量、公众号名称。"
+            )
+
+        # 3) DeepSeek 严格 JSON 解析（自带围栏去除 + 一次重试）
         parsed = await self._strict_json_chat(
             messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "你是一个协会信息提取器。只输出JSON，不要其他文字。"
-                        f"键必须恰好为：{','.join(search_fields)}。"
-                        "每个值是字符串或null。找不到的值为null。"
-                        "official_website 是最重要的字段，必须返回该协会真实的、可访问的官方网站完整网址（含 https://）。"
-                        "绝对不能猜测或编造网址。如果不确定官网地址，official_website 必须设为 null。"
-                        "常见的协会官网域名后缀通常是 .org、.cn、.com.cn，"
-                        "例如中国黄金协会是 cngold.org.cn，中国游艺机游乐园协会是 caapa.org。"
-                        "不要返回人员姓名或手机号。"
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": (
-                        f"给出{association_name}的以下信息："
-                        "地址、邮箱、官网网址、主管单位、单位等级、会员数量、"
-                        "分支机构数量、公众号名称。"
-                    ),
-                },
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content},
             ],
             max_tokens=4000,
         )
