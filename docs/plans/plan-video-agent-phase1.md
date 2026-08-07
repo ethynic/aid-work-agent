@@ -193,8 +193,8 @@ CREATE INDEX IF NOT EXISTS idx_prompt_library_tenant_scene ON prompt_library(ten
 | 1.5.2 SubagentConfig 扩展 | `src/models/subagent.py:24` `SubagentConfig` 新增 `chat_toolbar: List[str] = []` + `upload_accept: Optional[str] = None` 字段 | 两字段可读，默认空数组 / None |
 | 1.5.3 SUBAGENT.md loader 解析 | `src/subagents/loader.py:160-178` frontmatter 字段映射增加 `chat_toolbar` 与 `upload_accept` | SUBAGENT.md 声明两字段后能被加载到 SubagentConfig |
 | 1.5.4 API 暴露 | `GET /api/subagents/{name}` 等接口返回 `chat_toolbar` 与 `upload_accept` 字段 | 前端拉取 subagent 详情时能拿到按钮 id 列表与上传类型限制 |
-| 1.5.5 video-agent SUBAGENT.md 新建 | 新建 `subagents/video-agent/SUBAGENT.md`（与现有 9 个子智能体并列，目录名用连字符对齐规范）；frontmatter 含 `chat_toolbar: [video_gen]` + `upload_accept: "image/*"` + `triggers.keywords: [视频创作, 生成视频, 做个视频]` | video-agent 会话工具栏显示视频生成按钮；加号上传限定只能选图片；主聊天输入「视频创作」时路由到 video-agent 而非 social-media-operations |
-| 1.5.6 social-media-operations 改名与职责边界 | 修改 `subagents/social-media-operations/SUBAGENT.md`：`name` 从「视频创作智能体」改为「社媒运营智能体」；`triggers.keywords` 去掉「视频创作」（保留社媒运营/微信公众号/视频号/内容日历/发布计划）；`business_pages[0].title` 从「视频创作」改为「社媒运营」（route `/social-media` 保留）；正文增加与 video-agent 的职责边界说明 | 主聊天中「视频创作」关键词只路由到 video-agent；前端菜单显示「社媒运营」与「视频创作」两个独立入口，无名称冲突 |
+| 1.5.5 video-agent SUBAGENT.md 新建 | 新建 `subagents/video-agent/SUBAGENT.md`（与现有 9 个子智能体并列，目录名用连字符对齐规范）；frontmatter 含 `name: 视频创作智能体` + `chat_toolbar: [video_gen]` + `upload_accept: "image/*"` + `triggers.keywords: [视频创作, 生成视频, 做个视频]` + `business_pages: [{title: 素材库, route: /assets}, {title: 视频库, route: /videos}, {title: 提示词库, route: /prompts}]` | video-agent 会话工具栏显示视频生成按钮；加号上传限定只能选图片；主聊天输入「视频创作」时路由到 video-agent 而非 social-media-operations；前端菜单「视频创作智能体」下含 3 个二级菜单 |
+| 1.5.6 social-media-operations 改名与职责边界 | 修改 `subagents/social-media-operations/SUBAGENT.md`：`name` 从「视频创作智能体」改为「社媒运营智能体」；`triggers.keywords` 去掉「视频创作」（保留社媒运营/微信公众号/视频号/内容日历/发布计划）；`business_pages[0].title` 保留为「视频创作」（route `/social-media` 保留）；正文增加与 video-agent 的职责边界说明 | 主聊天中「视频创作」关键词只路由到 video-agent；前端菜单显示一级「社媒运营智能体」（二级「视频创作」指向工作台 /social-media）与一级「视频创作智能体」（二级素材库/视频库/提示词库）两个独立入口，无名称冲突 |
 | 1.5.7 主智能体默认值 | `configs/config.yaml` 新增 `chat.master_toolbar_buttons: [file_upload]` + `chat.default_upload_accept`（沿用 ChatInput 现有白名单）；前端在 `subagent_id` 为空时读此配置 | 主智能体仍显示加号且接受全部附件类型；子智能体未声明 upload_accept 时也走此默认 |
 
 **chat_toolbar 字段语义**：
@@ -231,21 +231,38 @@ tools:
   inherit: true
 skills:
   allowed: []
+business_pages:
+  - title: 素材库
+    route: /assets
+    icon: "M4 4h16v16H4zM8 8h8v8H8z"
+  - title: 视频库
+    route: /videos
+    icon: "M4 4h16v16H4zM10 9l5 3-5 3V9z"
+  - title: 提示词库
+    route: /prompts
+    icon: "M4 4h16v4H4zM4 12h16v8H4z"
 ---
 （系统提示词正文）
 ```
+
+**菜单结构**（来自 `MenuSidebar.vue` 渲染逻辑）：
+- 一级菜单 = `subagent.name`（数字员工名）
+- 二级菜单 = `business_pages[].title`（业务页面名）
+- video-agent：「视频创作智能体」一级，下含「素材库 / 视频库 / 提示词库」3 个二级
+- social-media-operations：「社媒运营智能体」一级，下含「视频创作」（指向工作台 `/social-media`，MVP 原型）1 个二级
 
 **与 social-media-operations 的职责边界**（Phase 1.5.6 同步完成改名）：
 
 | 维度 | social-media-operations（改名后） | video-agent（新建） |
 |------|----------------------------------|---------------------|
-| 显示名 | 社媒运营智能体 | 视频创作智能体 |
-| 核心职责 | 社媒运营全流程（内容日历/发布计划/母版管理/审核交接/运营复盘） | 会话化视频生成（精修/敏捷双模/提示词引擎/企业组织沉淀） |
+| 一级菜单名（subagent.name） | 社媒运营智能体 | 视频创作智能体 |
+| 二级菜单（business_pages） | 视频创作（→ `/social-media` 工作台） | 素材库 / 视频库 / 提示词库 |
+| 核心职责 | 社媒运营全流程（内容日历/发布计划/母版管理/审核交接/运营复盘）+ MVP 视频生成工作台 | 会话化视频生成（精修/敏捷双模/提示词引擎/企业组织沉淀） |
 | trigger 关键词 | 社媒运营/微信公众号/视频号/内容日历/发布计划 | 视频创作/生成视频/做个视频 |
-| 入口 | 工作台页面 `/social-media`（MVP 原型保留） | 主聊天流 |
-| 数据表 | gen_sessions / gen_cards（原型保留） | chat_sessions / work_outcomes |
+| 入口 | 工作台页面 `/social-media`（MVP 原型保留） | 主聊天流 + 3 个知识中心页面 |
+| 数据表 | gen_sessions / gen_cards（原型保留） | chat_sessions / work_outcomes / asset_library / prompt_library |
 
-**关键**：triggers 关键词严格去重，「视频创作」只归 video-agent，避免主智能体委托时歧义。
+**关键**：triggers 关键词严格去重，「视频创作」只归 video-agent（路由层），避免主智能体委托时歧义；social-media-operations 的二级菜单「视频创作」是页面标题（不参与路由触发），两者不冲突。
 
 **主智能体 fallback**：`chat_sessions.subagent_id` 为空（主智能体会话）时，前端读 `configs/config.yaml` 的 `chat.master_toolbar_buttons`（默认 `['file_upload']`）与 `chat.default_upload_accept`，不强制每个子智能体都声明。
 
@@ -545,13 +562,13 @@ class PromptResult:
 
 > 对应设计文档：§5.6.1 菜单结构
 
-### 6.1 菜单可见性
+### 6.1 菜单可见性与结构
 
 | 任务 | 产出 | 验收 |
 |------|------|------|
 | 6.1.1 订阅状态查询 | `frontend/src/api/subscription.ts` 增加查询视频创作智能体订阅状态的方法 | 返回是否订阅 |
-| 6.1.2 菜单条件渲染 | `frontend/src/components/MenuSidebar.vue`（或对应组件）中，素材库/视频库/提示词库三个菜单项按订阅状态条件渲染 | 未订阅租户看不到这三个菜单 |
-| 6.1.3 「视频创作智能体」一级菜单 | 新增一级菜单，下含「视频创作」（保留）/ 素材库 / 视频库 / 提示词库 | 菜单结构符合 §5.6.1 |
+| 6.1.2 菜单条件渲染 | `frontend/src/components/MenuSidebar.vue:1019-1026`（`groupedBusinessPages` 分组逻辑）中，video-agent 的素材库/视频库/提示词库三个二级菜单按订阅状态条件渲染 | 未订阅租户看不到这三个二级菜单；一级菜单「视频创作智能体」整体在未订阅时隐藏 |
+| 6.1.3 菜单结构对齐 | 确认 `MenuSidebar.vue` 渲染逻辑：一级菜单 = `subagent.name`，二级菜单 = `business_pages[].title`；video-agent 一级「视频创作智能体」下含「素材库/视频库/提示词库」3 个二级；social-media-operations 一级「社媒运营智能体」下含「视频创作」（指向 `/social-media` 工作台，MVP 原型）1 个二级 | 菜单结构符合 §5.6.1；两个一级菜单无名称冲突，二级菜单互不重叠 |
 
 ### 6.2 素材库页面
 
