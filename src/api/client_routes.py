@@ -155,6 +155,44 @@ async def get_credits(binding: ClientBinding = Depends(_require_binding)):
     }
 
 
+@router.get("/credits/detail")
+async def get_credits_detail(
+    binding: ClientBinding = Depends(_require_binding),
+    limit: int = 100,
+):
+    """查询消耗明细列表（时间 / 消耗积分 / 任务摘要）。"""
+    from src.db.database import get_db_connection
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """SELECT created_at, credit_cost, raw_credit_cost, association_name,
+                      stage, status, model, total_tokens, session_id
+               FROM client_usage_logs
+               WHERE tenant_id = %s AND credit_cost > 0
+               ORDER BY created_at DESC
+               LIMIT %s""",
+            (binding.tenant_id, min(limit, 500)),
+        )
+        rows = cursor.fetchall()
+
+    return {
+        "items": [
+            {
+                "time": r["created_at"].isoformat() if r.get("created_at") else "",
+                "credit_cost": float(r.get("credit_cost") or 0),
+                "raw_credit_cost": float(r.get("raw_credit_cost") or 0),
+                "association": r.get("association_name") or "",
+                "stage": r.get("stage") or "",
+                "status": r.get("status") or "",
+                "model": r.get("model") or "",
+                "tokens": int(r.get("total_tokens") or 0),
+            }
+            for r in rows
+        ],
+    }
+
+
 # ============== LLM 代理（计费 ×5） ==============
 
 @router.post("/llm/chat")

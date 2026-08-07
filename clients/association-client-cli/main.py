@@ -134,7 +134,49 @@ async def cmd_credits(args: argparse.Namespace) -> int:
     return 0
 
 
+async def cmd_credits_detail(args: argparse.Namespace) -> int:
+    """查询消耗明细。"""
+    access_token = get_access_token()
+    if not access_token:
+        print("客户端未激活", file=sys.stderr)
+        return 1
+
+    server_url = get_server_url(args.server_url)
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(
+                f"{server_url}/api/client/v1/credits/detail",
+                headers={"Authorization": f"Bearer {access_token}"},
+                params={"limit": getattr(args, 'limit', 100)},
+            )
+    except httpx.ConnectError as exc:
+        print(f"无法连接服务端: {exc}", file=sys.stderr)
+        return 1
+
+    if resp.status_code != 200:
+        print(f"查询失败（{resp.status_code}）", file=sys.stderr)
+        return 1
+
+    data = resp.json()
+    print(json.dumps(data, ensure_ascii=False))
+    return 0
+
+
 # ============== collect 命令 ==============
+
+def _query_balance(server_url: str, access_token: str) -> Optional[float]:
+    """查询当前积分余额，失败返回 None。"""
+    try:
+        with httpx.Client(timeout=10) as c:
+            resp = c.get(
+                f"{server_url}/api/client/v1/credits",
+                headers={"Authorization": f"Bearer {access_token}"},
+            )
+        if resp.status_code == 200:
+            return float(resp.json().get("balance", 0))
+    except Exception:
+        pass
+    return None
 
 async def cmd_collect(args: argparse.Namespace) -> int:
     """协会信息收集主流程。"""
@@ -160,6 +202,9 @@ async def cmd_collect(args: argparse.Namespace) -> int:
     emit_start(session_id, names, server_url)
     emit_log("INFO", f"开始收集 {len(names)} 个协会")
 
+    # 记录任务开始前余额（任务结束后用差值算真实总消耗，含微信 judge 子进程的消耗）
+    balance_before = _query_balance(server_url, access_token)
+
     # 构造 ProxyLLMGateway 并注入 providers
     gateway = ProxyLLMGateway(server_url, access_token)
 
@@ -177,6 +222,7 @@ async def cmd_collect(args: argparse.Namespace) -> int:
         )
 
         reporter = CliProgressReporter()
+        reporter.gateway = gateway  # 让 reporter 同步 current_association 到 gateway
         enricher = AssociationBatchEnricher(
             official_profile_collector=providers.collect_official_profile,
             fallback_profile_provider=providers.search_profile,
@@ -188,7 +234,11 @@ async def cmd_collect(args: argparse.Namespace) -> int:
 
         rows = await enricher.enrich_many(names)
         emit_log("INFO", "正在写入 Excel 结果")
-        output = write_enrichment_workbook(rows, args.output)
+        output = str(write_enrichment_workbook(rows, args.output))
+
+        # 真实总消耗 = 任务前余额 - 任务后余额（含微信 judge 子进程的消耗）
+        balance_after = _query_balance(server_url, access_token)
+        total_consumed = round(balance_before - balance_after, 2) if balance_before is not None and balance_after is not None else reporter.total_consumed
 
         # 统计
         complete_count = sum(1 for r in rows if r.processing_status == "complete")
@@ -197,7 +247,7 @@ async def cmd_collect(args: argparse.Namespace) -> int:
 
         emit_complete(
             session_id=session_id,
-            total_consumed=reporter.total_consumed,
+            total_consumed=total_consumed,
             output=output,
             summary={
                 "total": len(rows),
@@ -226,11 +276,13 @@ async def cmd_collect(args: argparse.Namespace) -> int:
         emit_log("WARNING", "用户中断")
         return 1
     except Exception as exc:
+        import traceback
+        traceback.print_exc()  # 输出到 stderr 便于调试
         error_code = str(exc) if re.fullmatch(r"[A-Z][A-Z0-9_]+", str(exc)) else type(exc).__name__
         emit_error(
             association="",
             error_code=error_code,
-            message=f"收集过程出错: {type(exc).__name__}",
+            message=f"收集过程出错: {type(exc).__name__}: {exc}",
             session_fatal=True,
         )
         return 1
@@ -256,6 +308,11 @@ def build_parser() -> argparse.ArgumentParser:
     # credits
     p_cred = sub.add_parser("credits", help="查询积分余额")
     p_cred.add_argument("--server-url", default=None)
+
+    # credits-detail
+    p_detail = sub.add_parser("credits-detail", help="查询消耗明细")
+    p_detail.add_argument("--server-url", default=None)
+    p_detail.add_argument("--limit", type=int, default=100)
 
     # collect
     p_col = sub.add_parser("collect", help="协会信息收集")
@@ -283,6 +340,8 @@ async def _dispatch(args: argparse.Namespace) -> int:
         return await cmd_activate(args)
     elif args.command == "credits":
         return await cmd_credits(args)
+    elif args.command == "credits-detail":
+        return await cmd_credits_detail(args)
     elif args.command == "collect":
         return await cmd_collect(args)
     else:

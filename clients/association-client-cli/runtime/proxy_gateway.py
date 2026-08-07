@@ -50,6 +50,9 @@ class ProxyLLMGateway:
         self._client = httpx.Client(timeout=timeout)
         # 最近一次 billing 信息（供进度上报读取）
         self.last_billing: Optional[dict[str, Any]] = None
+        # 当前上下文（由 CLI 设置，用于 billing 事件补全 association/stage）
+        self.current_association: str = ""
+        self.current_stage: str = ""
 
     def _headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self.access_token}"}
@@ -111,7 +114,7 @@ class ProxyLLMGateway:
 
         data = resp.json()
 
-        # 记录 billing 信息（供进度上报读取）
+        # 记录 billing 信息（供进度上报读取，过程中不输出到 stdout）
         self.last_billing = data.get("billing")
 
         return {
@@ -131,19 +134,28 @@ class ProxyLLMGateway:
         self._client.close()
 
 
-def emit_billing_event(billing: Optional[dict[str, Any]]) -> None:
+def emit_billing_event(
+    billing: Optional[dict[str, Any]],
+    association: str = "",
+    stage: str = "",
+) -> None:
     """将 billing 事件输出为 NDJSON 行（供 Electron 解析）。
 
     输出格式：
-        {"event":"billing","raw_credit_cost":0.4,"credit_cost":2.0,"balance_after":4498.0}
+        {"event":"billing","association":"...","stage":"...","raw_credit_cost":0.4,"credit_cost":2.0,"balance_after":4498.0}
     """
     if not billing:
         return
     event = {
         "event": "billing",
+        "association": association,
+        "stage": stage,
         "raw_credit_cost": billing.get("raw_credit_cost", 0),
         "credit_cost": billing.get("credit_cost", 0),
         "balance_after": billing.get("balance_after"),
+        "model": "",
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
     }
-    sys.stdout.write(json.dumps(event, ensure_ascii=False) + "\n")
+    sys.stdout.write(json.dumps(event, ensure_ascii=False, default=str) + "\n")
     sys.stdout.flush()

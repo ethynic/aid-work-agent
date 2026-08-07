@@ -11,6 +11,7 @@ import json
 import re
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 # 手机号脱敏正则
@@ -32,13 +33,18 @@ def _now() -> str:
 
 def _emit(event: dict) -> None:
     """输出一行 NDJSON。"""
-    # 所有输出做手机号脱敏
+    # 所有输出做手机号脱敏 + Path→str 安全转换
     for key, val in list(event.items()):
-        if isinstance(val, str):
+        if isinstance(val, Path):
+            event[key] = str(val)
+        elif isinstance(val, str):
             event[key] = _redact_mobiles(val)
         elif isinstance(val, dict):
-            event[key] = {k: _redact_mobiles(v) if isinstance(v, str) else v for k, v in val.items()}
-    sys.stdout.write(json.dumps(event, ensure_ascii=False) + "\n")
+            event[key] = {
+                k: str(v) if isinstance(v, Path) else (_redact_mobiles(v) if isinstance(v, str) else v)
+                for k, v in val.items()
+            }
+    sys.stdout.write(json.dumps(event, ensure_ascii=False, default=str) + "\n")
     sys.stdout.flush()
 
 
@@ -149,6 +155,7 @@ class CliProgressReporter:
     def __init__(self):
         self.current_association: str = ""
         self.total_consumed: float = 0.0
+        self.gateway = None  # 由 main.py 注入，用于同步 current_association
 
     def __call__(self, message: str) -> None:
         """enricher 进度回调（message 格式 [协会名] 正在...）。"""
@@ -157,6 +164,18 @@ class CliProgressReporter:
             end = message.index("]")
             self.current_association = message[1:end]
             action = message[end + 1:].strip()
+            # 同步到 gateway（让 billing 事件带上 association）
+            if self.gateway:
+                self.gateway.current_association = self.current_association
+                # 从 action 推断 stage
+                if "搜索协会基础信息" in action:
+                    self.gateway.current_stage = "search_profile"
+                elif "采集官网" in action:
+                    self.gateway.current_stage = "official_profile"
+                elif "微信搜索会长" in action or "微信搜索秘书长" in action:
+                    self.gateway.current_stage = "wechat_search_leader"
+                elif "微信检索" in action:
+                    self.gateway.current_stage = "wechat_mobile"
         else:
             action = message
 

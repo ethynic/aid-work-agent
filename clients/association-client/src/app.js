@@ -5,13 +5,24 @@
 // eslint-disable-next-line no-undef
 const client = window.associationClient
 
+// 全局错误捕获，方便调试
+window.addEventListener('error', (e) => {
+  console.error('[renderer error]', e.message, e.error?.stack || '')
+})
+window.addEventListener('unhandledrejection', (e) => {
+  console.error('[unhandled promise]', e.reason)
+})
+
 // ============== 状态 ==============
 
 const state = {
-  config: null, // ClientConfig | null
+  config: null,
   cliRunning: false,
-  progressMap: new Map(), // association → { steps: [], status }
+  associations: [],
+  progressMap: new Map(),
   totalConsumed: 0,
+  lastOutput: '',
+  inputFilePath: '',  // 上传的输入文件路径
 }
 
 // ============== DOM 元素 ==============
@@ -33,20 +44,22 @@ function showPage(name) {
 // ============== 初始化 ==============
 
 async function init() {
-  // 加载配置
+  console.log('[init] loading config...')
   state.config = await client.config.load()
+  console.log('[init] config loaded:', state.config ? 'has config' : 'no config')
   if (state.config) {
     showPage('collect')
+    console.log('[init] refreshing credits...')
     await refreshCredits()
+    console.log('[init] credits refreshed')
   } else {
     showPage('activation')
   }
 
-  // 订阅 CLI 事件
   client.cli.onEvent(handleCliEvent)
   client.cli.onClose(handleCliClose)
-
   bindEvents()
+  console.log('[init] events bound, ready')
 }
 
 // ============== 激活 ==============
@@ -70,11 +83,8 @@ async function handleActivate() {
 
   try {
     const result = await client.cli.activate(code, serverUrl, clientName)
-    if (!result.ok) {
-      throw new Error(result.error || '激活失败')
-    }
+    if (!result.ok) throw new Error(result.error || '激活失败')
     const data = result.data
-    // 保存配置
     await client.config.save({
       bindingId: data.binding_id,
       accessToken: data.access_token || '',
@@ -102,61 +112,72 @@ async function refreshCredits() {
   try {
     const result = await client.cli.getCredits(state.config.serverUrl, state.config.accessToken)
     if (result.ok && result.data) {
-      const balance = parseFloat(result.data.balance || 0)
-      $('credits-balance').textContent = balance.toFixed(2)
-      $('credits-display').classList.remove('hidden')
-
-      // 余额不足警告
-      if (balance <= 0) {
-        $('balance-warning').classList.remove('hidden')
-        $('btn-start').disabled = true
-      } else {
-        $('balance-warning').classList.add('hidden')
-        $('btn-start').disabled = false
-      }
+      updateBalance(parseFloat(result.data.balance || 0))
     }
   } catch (err) {
     console.error('查询积分失败:', err)
   }
 }
 
+function updateBalance(balance) {
+  $('credits-balance').textContent = balance.toFixed(2)
+  $('credits-display').classList.remove('hidden')
+  if (balance <= 0) {
+    $('balance-warning').classList.remove('hidden')
+    $('btn-start').disabled = true
+  } else {
+    $('balance-warning').classList.add('hidden')
+    $('btn-start').disabled = false
+  }
+}
+
 // ============== 收集 ==============
 
 function parseAssociations(text) {
-  return text
-    .split(/[,\n，；;]/)
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0)
+  return text.split(/[,\n，；;]/).map((s) => s.trim()).filter((s) => s.length > 0)
 }
 
 async function handleStart() {
   const text = $('associations-input').value.trim()
   const associations = parseAssociations(text)
-  if (associations.length === 0) {
-    alert('请输入至少一个协会名称')
+  const hasFile = !!state.inputFilePath
+  const hasText = associations.length > 0
+
+  if (!hasText && !hasFile) {
+    alert('请输入协会名称或上传文件')
     return
   }
 
-  let outputPath = $('output-path').value.trim()
-  if (!outputPath) {
-    alert('请选择输出文件')
-    return
-  }
+  // 输出路径自动生成到桌面
+  const desktopPath = await client.system.getDesktopPath()
+  const now = new Date()
+  const ts = `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}_${String(now.getHours()).padStart(2,'0')}${String(now.getMinutes()).padStart(2,'0')}${String(now.getSeconds()).padStart(2,'0')}`
+  const outputPath = `${desktopPath}\\协会收集结果_${ts}.xlsx`
 
-  // 重置 UI
+  // 重置状态
+  state.associations = hasText ? associations : []  // 文件模式时 count 由 start 事件补全
   state.progressMap.clear()
   state.totalConsumed = 0
   $('progress-list').innerHTML = ''
+  $('detail-list').innerHTML = ''
   $('log-stream').innerHTML = ''
+  $('current-task').classList.add('hidden')
+  $('progress-counter').textContent = hasText ? `0 / ${associations.length}` : '读取中...'
   $('progress-section').classList.remove('hidden')
-  $('log-section').classList.remove('hidden')
   $('result-section').classList.add('hidden')
   $('btn-start').classList.add('hidden')
   $('btn-stop').classList.remove('hidden')
+  $('progress-status').textContent = '运行中'
+  $('progress-status').className = 'log-status running'
 
   state.cliRunning = true
 
-  await client.cli.collect(associations, outputPath, state.config.serverUrl, state.config.accessToken)
+  if (hasFile) {
+    // 文件输入模式
+    await client.cli.collect([], outputPath, state.config.serverUrl, state.config.accessToken, state.inputFilePath)
+  } else {
+    await client.cli.collect(associations, outputPath, state.config.serverUrl, state.config.accessToken)
+  }
 }
 
 function handleStop() {
@@ -166,6 +187,7 @@ function handleStop() {
 // ============== CLI 事件处理 ==============
 
 function handleCliEvent(evt) {
+  console.log('[app] event received:', evt.event, evt.message || evt.credit_cost || '')
   switch (evt.event) {
     case 'start':
       appendLog('INFO', `开始收集 ${evt.associations?.length || 0} 个协会`)
@@ -182,7 +204,9 @@ function handleCliEvent(evt) {
     case 'error':
       appendLog('ERROR', `[${evt.association || ''}] ${evt.message || evt.error_code}`)
       if (evt.session_fatal) {
-        appendLog('ERROR', '会话致命错误，任务终止')
+        appendLog('ERROR', '任务终止')
+        $('log-status').textContent = '错误'
+        $('log-status').className = 'log-status error'
       }
       break
     case 'complete':
@@ -197,45 +221,32 @@ function handleProgressEvent(evt) {
 
   let item = state.progressMap.get(name)
   if (!item) {
-    item = { steps: [], status: 'running', element: null }
+    const index = state.progressMap.size + 1
+    item = { steps: [], status: 'running', index, element: null }
     state.progressMap.set(name, item)
-    item.element = createProgressItem(name)
+    item.element = createProgressItem(name, index, state.associations.length)
     $('progress-list').appendChild(item.element)
+    $('progress-counter').textContent = `${index} / ${state.associations.length}`
   }
 
-  if (evt.status === 'success') {
-    item.status = 'success'
-  } else if (evt.status === 'failed') {
-    item.status = 'failed'
-  }
+  if (evt.status === 'success') item.status = 'success'
+  else if (evt.status === 'failed') item.status = 'failed'
 
   if (evt.step && evt.message) {
     item.steps.push({ step: evt.step, message: evt.message, status: evt.status })
+    // 右侧进度详情面板显示
+    appendDetail(name, evt.message, evt.status)
   }
 
-  updateProgressItem(item, name)
+  // 更新当前任务状态
+  updateCurrentTask(name, evt.message || '')
+  updateProgressItem(item)
 }
 
 function handleBillingEvent(evt) {
-  state.totalConsumed += parseFloat(evt.credit_cost || 0)
-  // 更新余额显示
+  // 过程中不显示积分消耗，只在完成时显示总数
   if (evt.balance_after != null) {
-    $('credits-balance').textContent = parseFloat(evt.balance_after).toFixed(2)
-    if (parseFloat(evt.balance_after) <= 0) {
-      $('balance-warning').classList.remove('hidden')
-    }
-  }
-  // 在对应协会的进度项追加消耗
-  const name = evt.association || ''
-  if (name) {
-    const item = state.progressMap.get(name)
-    if (item) {
-      const stepsEl = item.element.querySelector('.progress-steps')
-      const costSpan = document.createElement('div')
-      costSpan.className = 'progress-step'
-      costSpan.innerHTML = `<span class="step-cost">消耗 ${parseFloat(evt.credit_cost || 0).toFixed(2)} 积分</span>`
-      stepsEl.appendChild(costSpan)
-    }
+    updateBalance(parseFloat(evt.balance_after))
   }
 }
 
@@ -243,18 +254,25 @@ function handleCompleteEvent(evt) {
   state.cliRunning = false
   $('btn-start').classList.remove('hidden')
   $('btn-stop').classList.add('hidden')
+  $('progress-status').textContent = '完成'
+  $('progress-status').className = 'log-status success'
 
   const summary = evt.summary || {}
+  const totalCost = parseFloat(evt.total_consumed || 0).toFixed(2)
   $('result-summary').innerHTML = `
     <div class="result-stat success"><div class="stat-num">${summary.complete || 0}</div><div class="stat-label">完整成功</div></div>
     <div class="result-stat partial"><div class="stat-num">${summary.partial || 0}</div><div class="stat-label">部分成功</div></div>
     <div class="result-stat failed"><div class="stat-num">${summary.failed || 0}</div><div class="stat-label">失败</div></div>
+    <div class="result-stat cost"><div class="stat-num">${totalCost}</div><div class="stat-label">消耗积分</div></div>
   `
+  // 显示输出路径
+  if (evt.output) {
+    state.lastOutput = evt.output
+    $('result-output-path').textContent = evt.output
+    $('result-output').classList.remove('hidden')
+  }
   $('result-section').classList.remove('hidden')
-  appendLog('INFO', `收集完成，共消耗 ${parseFloat(evt.total_consumed || 0).toFixed(2)} 积分`)
-
-  // 保存输出路径供打开
-  state.lastOutput = evt.output
+  appendLog('INFO', `✅ 收集完成，共消耗 ${parseFloat(evt.total_consumed || 0).toFixed(2)} 积分`)
   refreshCredits()
 }
 
@@ -264,15 +282,18 @@ function handleCliClose(code) {
   $('btn-stop').classList.add('hidden')
   if (code !== 0 && code !== 2) {
     appendLog('ERROR', `CLI 进程退出（代码 ${code}）`)
+    $('progress-status').textContent = '异常退出'
+    $('progress-status').className = 'log-status error'
   }
 }
 
 // ============== 进度项 UI ==============
 
-function createProgressItem(name) {
+function createProgressItem(name, index, total) {
   const div = document.createElement('div')
   div.className = 'progress-item'
   div.innerHTML = `
+    <div class="progress-index">${index}/${total}</div>
     <div class="progress-icon running">●</div>
     <div class="progress-body">
       <div class="progress-name">${escapeHtml(name)}</div>
@@ -282,34 +303,63 @@ function createProgressItem(name) {
   return div
 }
 
-function updateProgressItem(item, name) {
+function updateProgressItem(item) {
   const icon = item.element.querySelector('.progress-icon')
   icon.className = `progress-icon ${item.status}`
   icon.textContent = item.status === 'success' ? '✓' : item.status === 'failed' ? '✗' : '●'
 
   const stepsEl = item.element.querySelector('.progress-steps')
-  // 只追加最新的步骤（避免重绘）
   const lastStep = item.steps[item.steps.length - 1]
-  if (lastStep && !stepsEl.querySelector(`[data-step="${lastStep.step}"]`)) {
+  if (lastStep && !stepsEl.querySelector(`[data-step="${lastStep.step}-${item.steps.length}"]`)) {
     const stepDiv = document.createElement('div')
     stepDiv.className = 'progress-step'
-    stepDiv.dataset.step = lastStep.step
+    stepDiv.dataset.step = `${lastStep.step}-${item.steps.length}`
     const statusIcon = lastStep.status === 'success' ? '✅' : lastStep.status === 'failed' ? '❌' : '🔄'
     stepDiv.textContent = `${statusIcon} ${lastStep.message}`
     stepsEl.appendChild(stepDiv)
   }
 }
 
-// ============== 日志 ==============
+// ============== 右侧进度详情面板 ==============
+
+function appendDetail(association, message, status = 'running', isCost = false) {
+  const list = $('detail-list')
+  if (!list) return
+  const time = new Date().toLocaleTimeString('zh-CN', { hour12: false })
+  const div = document.createElement('div')
+  div.className = `detail-item ${status === 'success' ? 'success' : status === 'failed' ? 'error' : ''}`
+  if (isCost) div.classList.add('cost-item')
+  div.innerHTML = `
+    <div class="detail-item-time">[${time}] ${escapeHtml(association)}</div>
+    <div class="detail-item-content${isCost ? ' detail-item-cost' : ''}">${escapeHtml(message)}</div>
+  `
+  list.appendChild(div)
+  list.scrollTop = list.scrollHeight
+}
+
+function updateCurrentTask(name, step) {
+  const task = $('current-task')
+  if (!task) return
+  task.classList.remove('hidden')
+  task.querySelector('.current-task-name').textContent = name
+  task.querySelector('.current-task-step').textContent = step
+}
+
+// ============== 日志（弹窗内） ==============
 
 function appendLog(level, message, association = '') {
   const stream = $('log-stream')
+  if (!stream) {
+    console.error('[appendLog] log-stream element not found!')
+    return
+  }
   const time = new Date().toLocaleTimeString('zh-CN', { hour12: false })
   const line = document.createElement('div')
   line.className = 'log-line'
   const prefix = association ? `[${association}] ` : ''
   line.innerHTML = `<span class="log-time">[${time}]</span> <span class="log-level-${level.toLowerCase()}">[${level}]</span> ${escapeHtml(prefix + message)}`
   stream.appendChild(line)
+  // 自动滚动到最新日志
   stream.scrollTop = stream.scrollHeight
 }
 
@@ -328,25 +378,84 @@ function bindEvents() {
   $('btn-start').addEventListener('click', handleStart)
   $('btn-stop').addEventListener('click', handleStop)
   $('btn-refresh-credits').addEventListener('click', refreshCredits)
-  $('btn-select-output').addEventListener('click', handleSelectOutput)
-  $('btn-open-result').addEventListener('click', () => {
-    if (state.lastOutput) client.system.openPath(state.lastOutput)
+  $('btn-select-input').addEventListener('click', handleSelectInput)
+  $('btn-open-folder').addEventListener('click', () => {
+    if (state.lastOutput) client.system.openFolder(state.lastOutput)
   })
   $('btn-new-task').addEventListener('click', () => {
     $('progress-section').classList.add('hidden')
-    $('log-section').classList.add('hidden')
     $('result-section').classList.add('hidden')
+    $('result-output').classList.add('hidden')
     $('associations-input').value = ''
+    $('input-file-name').textContent = ''
+    state.inputFilePath = ''
+    $('detail-list').innerHTML = ''
+    $('current-task').classList.add('hidden')
+    $('log-stream').innerHTML = ''
+    $('progress-status').textContent = '空闲'
+    $('progress-status').className = 'log-status'
+  })
+  // 日志弹窗
+  $('btn-show-log').addEventListener('click', () => $('log-modal').classList.remove('hidden'))
+  $('btn-close-log-modal').addEventListener('click', () => $('log-modal').classList.add('hidden'))
+  // 积分余额点击 → 弹出明细
+  $('credits-balance').addEventListener('click', showCreditsDetail)
+  $('btn-close-modal').addEventListener('click', () => $('credits-modal').classList.add('hidden'))
+  // 弹窗遮罩点击关闭
+  document.querySelectorAll('.modal-overlay').forEach((el) => {
+    el.addEventListener('click', () => el.parentElement.classList.add('hidden'))
   })
 }
 
-async function handleSelectOutput() {
-  const defaultName = `协会收集结果_${new Date().toISOString().slice(0, 10)}.xlsx`
-  const result = await client.system.selectOutputFile(defaultName)
+async function handleSelectInput() {
+  const result = await client.system.selectInputFile()
   if (result) {
-    $('output-path').value = result
+    state.inputFilePath = result
+    // 显示文件名
+    const parts = result.replace(/\\/g, '/').split('/')
+    $('input-file-name').textContent = `📎 ${parts[parts.length - 1]}`
+  }
+}
+
+// ============== 积分明细弹窗 ==============
+
+async function showCreditsDetail() {
+  $('credits-modal').classList.remove('hidden')
+  $('credits-detail-loading').classList.remove('hidden')
+  $('credits-detail-table').classList.add('hidden')
+  $('credits-detail-tbody').innerHTML = ''
+
+  try {
+    const result = await client.cli.getCreditsDetail(state.config.serverUrl, state.config.accessToken)
+    if (!result.ok) throw new Error(result.error || '查询失败')
+    const items = result.data?.items || []
+    if (items.length === 0) {
+      $('credits-detail-loading').textContent = '暂无消耗记录'
+      return
+    }
+    const tbody = $('credits-detail-tbody')
+    for (const item of items) {
+      const tr = document.createElement('tr')
+      const time = new Date(item.time).toLocaleString('zh-CN', { hour12: false })
+      const summary = [item.association, item.stage, item.model ? `(${item.model})` : ''].filter(Boolean).join(' ')
+      tr.innerHTML = `
+        <td class="time">${escapeHtml(time)}</td>
+        <td class="cost">${parseFloat(item.credit_cost || 0).toFixed(2)}</td>
+        <td class="summary">${escapeHtml(summary || '-')}</td>
+      `
+      tbody.appendChild(tr)
+    }
+    $('credits-detail-loading').classList.add('hidden')
+    $('credits-detail-table').classList.remove('hidden')
+  } catch (err) {
+    $('credits-detail-loading').textContent = `查询失败: ${err.message || err}`
   }
 }
 
 // 启动
-init()
+console.log('[app.js] starting init, client available:', !!client)
+if (!client) {
+  document.body.innerHTML = '<div style="padding:40px;color:red;font-size:16px">客户端初始化失败：preload 未加载。请重启应用。</div>'
+} else {
+  init().catch((err) => console.error('[init failed]', err))
+}

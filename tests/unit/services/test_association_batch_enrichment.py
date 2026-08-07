@@ -629,9 +629,9 @@ async def test_progress_reports_stages_and_redacts_mobile():
     row = await enricher.enrich_one("测试协会 18612345678")
 
     assert row.values["president_mobile"] == "18612345678"
-    assert any("搜索协会" in message for message in messages)
-    assert any("可见浏览器" in message for message in messages)
-    assert any("微信检索" in message for message in messages)
+    assert any("DeepSeek" in m or "基础信息" in m for m in messages)
+    assert any("官网" in m for m in messages)
+    assert any("微信检索" in m or "手机号" in m for m in messages)
     assert all("18612345678" not in message for message in messages)
     assert any("186****5678" in message for message in messages)
 
@@ -672,7 +672,6 @@ async def test_official_profile_passes_hostname_as_verified_domain(
     from src.services.association_profile_extractor import (
         AssociationProfile,
         ExtractionResult,
-        FieldEvidence,
     )
 
     providers = ProjectAssociationProviders(repository_root=tmp_path)
@@ -687,7 +686,7 @@ async def test_official_profile_passes_hostname_as_verified_domain(
         return ExtractionResult(
             status="success",
             profile=AssociationProfile(
-                **{name: FieldEvidence() for name in PROFILE_FIELDS}
+                **{name: None for name in PROFILE_FIELDS}
             ),
         )
 
@@ -710,7 +709,6 @@ async def test_official_profile_retries_invalid_llm_evidence_once(
     from src.services.association_profile_extractor import (
         AssociationProfile,
         ExtractionResult,
-        FieldEvidence,
     )
 
     providers = ProjectAssociationProviders(repository_root=tmp_path)
@@ -730,7 +728,7 @@ async def test_official_profile_retries_invalid_llm_evidence_once(
         return ExtractionResult(
             status="success",
             profile=AssociationProfile(
-                **{name: FieldEvidence() for name in PROFILE_FIELDS}
+                **{name: None for name in PROFILE_FIELDS}
             ),
         )
 

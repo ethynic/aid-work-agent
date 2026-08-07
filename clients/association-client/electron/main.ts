@@ -28,7 +28,9 @@ let cliRunner: CliRunner | null = null
 function getCliRunner(): CliRunner {
   if (!cliRunner) {
     if (isDev) {
-      cliRunner = new CliRunner(resolveCliPath(true), devCliArgs())
+      const args = devCliArgs()
+      console.log('[main] dev mode CLI:', resolveCliPath(true), args)
+      cliRunner = new CliRunner(resolveCliPath(true), args)
     } else {
       cliRunner = new CliRunner(resolveCliPath(false))
     }
@@ -45,12 +47,23 @@ function createWindow(): void {
     minHeight: 600,
     title: '协会信息收集助手',
     webPreferences: createSecureWebPreferences(preloadPath),
-    show: false,
+    show: true,
   })
 
-  mainWindow.once('ready-to-show', () => {
-    mainWindow?.show()
+  // 调试：加载失败时输出到控制台
+  mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
+    console.error(`[did-fail-load] code=${errorCode} desc=${errorDescription} url=${validatedURL}`)
   })
+  mainWindow.webContents.on('did-finish-load', () => {
+    console.log('[main] renderer page loaded successfully')
+  })
+  mainWindow.webContents.on('console-message', (_event, level, message) => {
+    console.log(`[renderer:${level}] ${message}`)
+  })
+  // 调试模式打开 DevTools
+  if (isDev) {
+    mainWindow.webContents.openDevTools({ mode: 'detach' })
+  }
 
   // 拦截外部导航
   mainWindow.webContents.on('will-navigate', (event, url) => {
@@ -149,6 +162,19 @@ function registerIpc(): void {
     }
   })
 
+  // cli:getCreditsDetail
+  ipcMain.handle('client:cli:getCreditsDetail', async (_event, serverUrl: string, accessToken: string) => {
+    const runner = getCliRunner()
+    try {
+      const result = await runner.runSyncCommand(['credits-detail', '--server-url', serverUrl], {
+        ASSOCIATION_CLIENT_ACCESS_TOKEN: accessToken,
+      })
+      return { ok: true, data: result }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+
   // cli:collect
   ipcMain.handle('client:cli:collect', async (
     _event,
@@ -156,10 +182,23 @@ function registerIpc(): void {
     outputPath: string,
     serverUrl: string,
     accessToken: string,
+    inputPath?: string,
   ) => {
     const runner = getCliRunner()
-    // 收集模式下需要把 accessToken 传给 CLI（通过环境变量，cliRunner 已处理）
-    runner.collect(associations, outputPath, serverUrl, accessToken)
+    console.log('[main] collect called, associations:', associations, 'inputPath:', inputPath)
+    // 每次新任务前，先移除旧的事件监听器（避免重复转发）
+    runner.removeAllListeners('event')
+    runner.removeAllListeners('close')
+    // 注册事件转发到 renderer
+    runner.on('event', (evt: CliEvent) => {
+      console.log('[main] forwarding event:', evt.event)
+      mainWindow?.webContents.send('client:cli:event', evt)
+    })
+    runner.on('close', (code: number) => {
+      console.log('[main] CLI closed:', code)
+      mainWindow?.webContents.send('client:cli:close', code)
+    })
+    runner.collect(associations, outputPath, serverUrl, accessToken, inputPath)
     return { ok: true }
   })
 
@@ -168,24 +207,12 @@ function registerIpc(): void {
     getCliRunner().kill()
   })
 
-  // cli 事件转发到 renderer
-  function forwardCliEvent(evt: CliEvent): void {
-    mainWindow?.webContents.send('client:cli:event', evt)
-  }
-  function forwardCliClose(code: number): void {
-    mainWindow?.webContents.send('client:cli:close', code)
-  }
-
-  // 注册一个初始化钩子，让 cliRunner 的事件能转发
-  ipcMain.handle('client:cli:subscribe', () => {
-    const runner = getCliRunner()
-    runner.on('event', forwardCliEvent)
-    runner.on('close', forwardCliClose)
-  })
-
   // system
   ipcMain.handle('client:system:openPath', (_event, filePath: string) => {
     shell.openPath(filePath)
+  })
+  ipcMain.handle('client:system:openFolder', (_event, filePath: string) => {
+    shell.showItemInFolder(filePath)
   })
   ipcMain.handle('client:system:openExternal', (_event, url: string) => {
     if (url.startsWith('http://') || url.startsWith('https://')) {
@@ -199,6 +226,19 @@ function registerIpc(): void {
       filters: [{ name: 'Excel 文件', extensions: ['xlsx'] }],
     })
     return result.canceled ? null : result.filePath
+  })
+  ipcMain.handle('client:system:selectInputFile', async () => {
+    const result = await dialog.showOpenDialog(mainWindow!, {
+      title: '选择输入文件',
+      filters: [
+        { name: 'Excel/CSV 文件', extensions: ['xlsx', 'csv'] },
+      ],
+      properties: ['openFile'],
+    })
+    return result.canceled ? null : result.filePaths[0]
+  })
+  ipcMain.handle('client:system:getDesktopPath', () => {
+    return app.getPath('desktop')
   })
 }
 

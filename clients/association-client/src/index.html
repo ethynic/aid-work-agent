@@ -13,7 +13,7 @@
       <h1>协会信息收集助手</h1>
       <div id="credits-display" class="credits-display hidden">
         <span class="credits-label">积分余额</span>
-        <span id="credits-balance" class="credits-value">--</span>
+        <span id="credits-balance" class="credits-value credits-clickable">--</span>
         <button id="btn-refresh-credits" class="btn-small" title="刷新">↻</button>
       </div>
     </header>
@@ -29,7 +29,7 @@
         </div>
         <div class="form-group">
           <label for="server-url">服务端地址</label>
-          <input type="text" id="server-url" value="https://agent.aidingyi.cn" class="input" />
+          <input type="text" id="server-url" value="https://agent2.aidingyi.cn" class="input" />
         </div>
         <div class="form-group">
           <label for="client-name">客户端名称（可选）</label>
@@ -40,46 +40,110 @@
       </div>
     </section>
 
-    <!-- 收集页 -->
+    <!-- 收集页：左右分栏布局 -->
     <section id="page-collect" class="page hidden">
-      <!-- 输入区 -->
-      <div class="card">
-        <h2>输入协会名称</h2>
-        <textarea id="associations-input" class="textarea" placeholder="每行一个协会名称，或用逗号分隔&#10;例如：&#10;中国黄金协会&#10;中国机械工业协会"></textarea>
-        <div class="form-row">
-          <div class="form-group form-group-inline">
-            <label>输出文件</label>
-            <input type="text" id="output-path" class="input" readonly placeholder="点击右侧选择..." />
-            <button id="btn-select-output" class="btn-small">选择</button>
+      <div class="collect-layout">
+        <!-- 左侧：输入 + 进度 + 结果 -->
+        <div class="collect-left">
+          <!-- 输入区 -->
+          <div class="card">
+            <h2>输入协会名称</h2>
+            <div class="input-tabs">
+              <div class="input-mode">
+                <textarea id="associations-input" class="textarea" placeholder="每行一个协会名称，或用逗号分隔&#10;例如：&#10;中国黄金协会&#10;中国机械工业协会"></textarea>
+              </div>
+              <div class="input-divider">或</div>
+              <div class="input-file-area">
+                <button id="btn-select-input" class="btn-secondary">📂 上传 CSV/Excel 文件</button>
+                <span id="input-file-name" class="file-name"></span>
+              </div>
+            </div>
+            <div class="actions">
+              <button id="btn-start" class="btn-primary">开始收集</button>
+              <button id="btn-stop" class="btn-danger hidden">停止</button>
+            </div>
+            <div id="balance-warning" class="warning hidden">积分余额不足，请联系服务商充值</div>
+          </div>
+
+          <!-- 进度区 -->
+          <div id="progress-section" class="card hidden">
+            <div class="progress-header">
+              <h2>进度</h2>
+              <span id="progress-counter" class="progress-counter"></span>
+            </div>
+            <div id="progress-list" class="progress-list"></div>
+          </div>
+
+          <!-- 结果区 -->
+          <div id="result-section" class="card hidden">
+            <h2>收集完成</h2>
+            <div id="result-summary" class="result-summary"></div>
+            <div id="result-output" class="result-output hidden">
+              <span class="result-output-label">结果文件：</span>
+              <span id="result-output-path" class="result-output-path"></span>
+            </div>
+            <div class="actions">
+              <button id="btn-open-folder" class="btn-primary">📂 打开所在文件夹</button>
+              <button id="btn-new-task" class="btn-secondary">开始新任务</button>
+              <button id="btn-show-log" class="btn-secondary">📋 查看日志</button>
+            </div>
           </div>
         </div>
-        <div class="actions">
-          <button id="btn-start" class="btn-primary">开始收集</button>
-          <button id="btn-stop" class="btn-danger hidden">停止</button>
+
+        <!-- 右侧：进度详情 Panel -->
+        <div class="collect-right">
+          <div class="card progress-panel">
+            <div class="progress-panel-header">
+              <h2>采集进度</h2>
+              <span id="progress-status" class="log-status">空闲</span>
+            </div>
+            <div id="current-task" class="current-task hidden">
+              <div class="current-task-name"></div>
+              <div class="current-task-step"></div>
+            </div>
+            <div id="detail-list" class="detail-list"></div>
+          </div>
         </div>
-        <div id="balance-warning" class="warning hidden">积分余额不足，请联系服务商充值</div>
-      </div>
-
-      <!-- 进度区 -->
-      <div id="progress-section" class="card hidden">
-        <h2>进度</h2>
-        <div id="progress-list" class="progress-list"></div>
-      </div>
-
-      <!-- 日志区 -->
-      <div id="log-section" class="card hidden">
-        <h2>日志</h2>
-        <div id="log-stream" class="log-stream"></div>
-      </div>
-
-      <!-- 结果区 -->
-      <div id="result-section" class="card hidden">
-        <h2>收集完成</h2>
-        <div id="result-summary" class="result-summary"></div>
-        <button id="btn-open-result" class="btn-primary">打开结果文件</button>
-        <button id="btn-new-task" class="btn-secondary">开始新任务</button>
       </div>
     </section>
+  </div>
+
+  <!-- 日志弹窗 -->
+  <div id="log-modal" class="modal hidden">
+    <div class="modal-overlay"></div>
+    <div class="modal-content modal-content-wide">
+      <div class="modal-header">
+        <h2>运行日志</h2>
+        <button id="btn-close-log-modal" class="btn-small">✕</button>
+      </div>
+      <div class="modal-body">
+        <div id="log-stream" class="log-stream"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 积分明细弹窗 -->
+  <div id="credits-modal" class="modal hidden">
+    <div class="modal-overlay"></div>
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>积分消耗明细</h2>
+        <button id="btn-close-modal" class="btn-small">✕</button>
+      </div>
+      <div class="modal-body">
+        <div id="credits-detail-loading" class="hint">加载中...</div>
+        <table id="credits-detail-table" class="detail-table hidden">
+          <thead>
+            <tr>
+              <th>时间</th>
+              <th>消耗积分</th>
+              <th>任务摘要</th>
+            </tr>
+          </thead>
+          <tbody id="credits-detail-tbody"></tbody>
+        </table>
+      </div>
+    </div>
   </div>
 
   <script src="app.js"></script>

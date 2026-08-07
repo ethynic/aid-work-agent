@@ -223,7 +223,7 @@ class ProjectAssociationProviders:
         values = {name: None for name in PROFILE_FIELDS}
         if result.status == "success" and result.profile is not None:
             values.update({
-                name: getattr(result.profile, name).value
+                name: getattr(result.profile, name)
                 for name in PROFILE_FIELDS
             })
         if not (
@@ -321,7 +321,8 @@ class ProjectAssociationProviders:
             if name not in ("president_name", "secretary_general_name",
                             "president_mobile", "secretary_general_mobile")
         ]
-        resp = await self._gateway.chat(
+        # 用 _strict_json_chat（自带围栏去除 + 重试）
+        parsed = await self._strict_json_chat(
             messages=[
                 {
                     "role": "system",
@@ -329,7 +330,10 @@ class ProjectAssociationProviders:
                         "你是一个协会信息提取器。只输出JSON，不要其他文字。"
                         f"键必须恰好为：{','.join(search_fields)}。"
                         "每个值是字符串或null。找不到的值为null。"
-                        "official_website 要返回完整的网址（含 https://）。"
+                        "official_website 是最重要的字段，必须返回该协会真实的、可访问的官方网站完整网址（含 https://）。"
+                        "绝对不能猜测或编造网址。如果不确定官网地址，official_website 必须设为 null。"
+                        "常见的协会官网域名后缀通常是 .org、.cn、.com.cn，"
+                        "例如中国黄金协会是 cngold.org.cn，中国游艺机游乐园协会是 caapa.org。"
                         "不要返回人员姓名或手机号。"
                     ),
                 },
@@ -342,18 +346,8 @@ class ProjectAssociationProviders:
                     ),
                 },
             ],
-            temperature=0,
-            max_tokens=2500,
+            max_tokens=4000,
         )
-        content = resp.get("content", "") if isinstance(resp, dict) else ""
-        import re as _re
-        m = _re.search(r'\{.*\}', content, _re.S)
-        if not m:
-            raise RuntimeError("SEARCH_NO_JSON")
-        try:
-            parsed = json.loads(m.group(0))
-        except json.JSONDecodeError as exc:
-            raise RuntimeError("SEARCH_BAD_JSON") from exc
         values: dict[str, str | None] = {}
         for name in PROFILE_FIELDS:
             value = parsed.get(name)

@@ -54,14 +54,20 @@ export class CliRunner extends EventEmitter {
     outputPath: string,
     serverUrl: string,
     accessToken: string,
+    inputPath?: string,
   ): void {
     const args = [
       ...this.argsPrefix,
       'collect',
-      '--associations', associations.join(','),
       '--output', outputPath,
       '--server-url', serverUrl,
     ]
+    // 有输入文件时用 --input，否则用 --associations
+    if (inputPath) {
+      args.push('--input', inputPath)
+    } else {
+      args.push('--associations', associations.join(','))
+    }
 
     this.process = spawn(this.cliPath, args, {
       windowsHide: false,
@@ -113,6 +119,11 @@ export class CliRunner extends EventEmitter {
       this.process.kill()
       this.process = null
     }
+  }
+
+  /** 同步运行命令（等进程退出，收集 stdout）——公开方法。 */
+  runSyncCommand(args: string[], extraEnv?: Record<string, string>): Promise<Record<string, unknown>> {
+    return this.runSync(args, extraEnv)
   }
 
   /** 同步运行命令（等进程退出，收集 stdout）。 */

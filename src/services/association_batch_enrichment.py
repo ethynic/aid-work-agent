@@ -327,16 +327,19 @@ class AssociationBatchEnricher:
 
     async def enrich_one(self, association_name: str) -> AssociationEnrichmentRow:
         row = AssociationEnrichmentRow(association_name=association_name)
-        # 第1步：Qwen 联网搜索获取基础信息（含官网URL）
-        self._progress(f"[{association_name}] 正在搜索协会基础信息")
+        # 第1步：LLM 搜索获取基础信息（含官网URL）
+        self._progress(f"[{association_name}] 【1/4】正在用 DeepSeek 获取协会基础信息")
         try:
             from src.services.association_profile_extractor import PROFILE_FIELDS as _PF
-            empty = {name: None for name in _PF}
             search_profile = await self._fallback_profile(association_name)
             self._merge(row.values, search_profile)
             row.sources.append("qwen_search")
+            # 输出拿到的关键字段
+            got_fields = {k: v for k, v in search_profile.items() if v}
+            self._progress(f"[{association_name}] 【1/4】基础信息获取完成：{got_fields}")
         except Exception as exc:
             row.errors.append(f"search_profile:{type(exc).__name__}")
+            self._progress(f"[{association_name}] 【1/4】基础信息获取失败：{type(exc).__name__}: {exc}")
 
         # 第2步：从搜索结果中获取官网URL，访问官网采集补充信息。
         # official_site_resolver 已废弃（Tavily 移除），官网 URL 完全依赖第1步 search_profile 返回。
@@ -347,48 +350,72 @@ class AssociationBatchEnricher:
             except Exception:
                 official_url = None
         if official_url:
+            self._progress(f"[{association_name}] 【2/4】正在打开官网采集：{official_url}")
+            official_done = False
             for candidate in _scheme_candidates(str(official_url)):
                 try:
-                    self._progress(
-                        f"[{association_name}] 正在使用可见浏览器采集官网"
-                    )
                     profile = await self._collect_official_profile(
                         candidate, self._headless, association_name=association_name
                     )
                     self._merge(row.values, profile, override=True)
                     row.sources.append(f"official:{candidate}")
+                    got_fields = {k: v for k, v in profile.items() if v}
+                    self._progress(f"[{association_name}] 【2/4】官网采集完成，解析出：{got_fields}")
+                    official_done = True
                     break
                 except Exception as exc:
                     row.errors.append(
                         f"official_collect:{type(exc).__name__}"
                     )
+                    self._progress(f"[{association_name}] 【2/4】官网采集失败（{candidate}）：{type(exc).__name__}: {exc}")
                     if not _should_retry_other_scheme(exc):
                         break
-        # 官网失败不再有 fallback——搜索已在第1步提供基础信息
+            # 所有 scheme 都失败时，尝试修正域名后缀（.org.cn→.org 修正 DeepSeek 域名幻觉）
+            if not official_done and ".org.cn" in str(official_url):
+                corrected_url = str(official_url).replace(".org.cn", ".org")
+                self._progress(f"[{association_name}] 【2/4】尝试修正域名后缀：{corrected_url}")
+                for candidate in _scheme_candidates(corrected_url):
+                    try:
+                        profile = await self._collect_official_profile(
+                            candidate, self._headless, association_name=association_name
+                        )
+                        self._merge(row.values, profile, override=True)
+                        row.sources.append(f"official:{candidate}")
+                        got_fields = {k: v for k, v in profile.items() if v}
+                        self._progress(f"[{association_name}] 【2/4】官网采集完成（修正后），解析出：{got_fields}")
+                        official_done = True
+                        break
+                    except Exception as exc:
+                        self._progress(f"[{association_name}] 【2/4】修正域名后仍失败（{candidate}）：{type(exc).__name__}")
+        else:
+            self._progress(f"[{association_name}] 【2/4】跳过官网采集（未获取到官网URL）")
 
         # 会长/秘书长姓名仍为空时，用微信搜一搜搜索列表文本让 LLM 解析姓名。
         if self._wechat_leader_name:
             if not row.values.get("president_name"):
                 try:
-                    self._progress(f"[{association_name}] 正在微信搜索会长姓名")
+                    self._progress(f"[{association_name}] 【3/4】正在微信搜索会长姓名")
                     name = await self._wechat_leader_name(
                         association_name, "会长", ""
                     )
                     if name:
                         row.values["president_name"] = name
                         row.sources.append("wechat_search:会长")
+                        self._progress(f"[{association_name}] 【3/4】微信搜索到会长姓名：{name}")
                     else:
                         row.errors.append("profile:president_not_found")
+                        self._progress(f"[{association_name}] 【3/4】微信未搜索到会长姓名")
                 except Exception as exc:
                     error_code = getattr(exc, "error_code", type(exc).__name__)
                     stage = getattr(exc, "stage", "unknown")
                     row.errors.append(f"wechat_search:会长:{error_code}:{stage}")
+                    self._progress(f"[{association_name}] 【3/4】微信搜索会长失败：{error_code}:{stage}")
                     if getattr(exc, "session_fatal", False):
                         self._finalize_row(row)
                         raise AssociationBatchAborted(row, exc) from exc
             if not row.values.get("secretary_general_name"):
                 try:
-                    self._progress(f"[{association_name}] 正在微信搜索秘书长姓名")
+                    self._progress(f"[{association_name}] 【3/4】正在微信搜索秘书长姓名")
                     known_president = str(row.values.get("president_name") or "")
                     name = await self._wechat_leader_name(
                         association_name, "秘书长", known_president
@@ -396,16 +423,20 @@ class AssociationBatchEnricher:
                     if name:
                         row.values["secretary_general_name"] = name
                         row.sources.append("wechat_search:秘书长")
+                        self._progress(f"[{association_name}] 【3/4】微信搜索到秘书长姓名：{name}")
                     else:
                         row.errors.append("profile:secretary_general_not_found")
+                        self._progress(f"[{association_name}] 【3/4】微信未搜索到秘书长姓名")
                 except Exception as exc:
                     error_code = getattr(exc, "error_code", type(exc).__name__)
                     stage = getattr(exc, "stage", "unknown")
                     row.errors.append(f"wechat_search:秘书长:{error_code}:{stage}")
+                    self._progress(f"[{association_name}] 【3/4】微信搜索秘书长失败：{error_code}:{stage}")
                     if getattr(exc, "session_fatal", False):
                         self._finalize_row(row)
                         raise AssociationBatchAborted(row, exc) from exc
         else:
+            self._progress(f"[{association_name}] 【3/4】跳过微信搜领导（未启用 wechat_leader_name）")
             if not row.values.get("president_name"):
                 row.errors.append("profile:president_not_found")
             if not row.values.get("secretary_general_name"):
@@ -417,20 +448,25 @@ class AssociationBatchEnricher:
         ):
             person_name = row.values.get(name_field)
             if not person_name or row.values.get(mobile_field):
+                if not person_name:
+                    self._progress(f"[{association_name}] 【4/4】跳过{role}手机号检索（无姓名）")
                 continue
             try:
-                self._progress(f"[{association_name}] 正在微信检索{role}")
+                self._progress(f"[{association_name}] 【4/4】正在微信检索{role}（{person_name}）手机号")
                 mobile = await self._wechat_mobile(
                     association_name, str(person_name), role
                 )
                 if mobile:
                     if not _MOBILE_RE.fullmatch(str(mobile)):
                         row.errors.append(f"wechat:{role}:invalid_mobile")
+                        self._progress(f"[{association_name}] 【4/4】{role}手机号格式无效")
                     else:
                         row.values[mobile_field] = str(mobile)
                         row.sources.append(f"wechat:{role}")
+                        self._progress(f"[{association_name}] 【4/4】{role}手机号检索完成")
                 else:
                     row.errors.append(f"wechat:{role}:not_found")
+                    self._progress(f"[{association_name}] 【4/4】{role}手机号未找到")
             except Exception as exc:
                 error_code = getattr(exc, "error_code", type(exc).__name__)
                 stage = getattr(exc, "stage", "unknown")
@@ -438,7 +474,9 @@ class AssociationBatchEnricher:
                 if recovered_mobile and _MOBILE_RE.fullmatch(str(recovered_mobile)):
                     row.values[mobile_field] = str(recovered_mobile)
                     row.sources.append(f"wechat:{role}")
+                    self._progress(f"[{association_name}] 【4/4】{role}手机号恢复成功")
                 row.errors.append(f"wechat:{role}:{error_code}:{stage}")
+                self._progress(f"[{association_name}] 【4/4】{role}手机号检索失败：{error_code}:{stage}")
                 if getattr(exc, "session_fatal", False):
                     self._finalize_row(row)
                     raise AssociationBatchAborted(row, exc) from exc
