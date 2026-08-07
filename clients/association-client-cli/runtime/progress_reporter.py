@@ -168,13 +168,13 @@ class CliProgressReporter:
             if self.gateway:
                 self.gateway.current_association = self.current_association
                 # 从 action 推断 stage
-                if "搜索协会基础信息" in action:
+                if "基础信息" in action:
                     self.gateway.current_stage = "search_profile"
                 elif "采集官网" in action:
                     self.gateway.current_stage = "official_profile"
                 elif "微信搜索会长" in action or "微信搜索秘书长" in action:
                     self.gateway.current_stage = "wechat_search_leader"
-                elif "微信检索" in action:
+                elif "微信检索" in action or "手机号" in action:
                     self.gateway.current_stage = "wechat_mobile"
         else:
             action = message
@@ -184,13 +184,13 @@ class CliProgressReporter:
 
         # 推断步骤
         step = "unknown"
-        if "搜索协会基础信息" in action or "search" in action.lower():
+        if "基础信息" in action or "search" in action.lower():
             step = "search_profile"
         elif "采集官网" in action or "官网" in action:
             step = "official_profile"
         elif "微信搜索会长" in action or "微信搜索秘书长" in action:
             step = "wechat_search_leader"
-        elif "微信检索" in action or "微信" in action:
+        elif "微信检索" in action or "微信" in action or "手机号" in action:
             step = "wechat_mobile"
 
         emit_progress(

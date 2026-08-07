@@ -577,12 +577,12 @@ async def test_website_only_official_profile_uses_fallback_then_wechat():
     assert row.values["official_website"] == "https://association.example.cn/"
     assert row.values["secretary_general_name"] == "潘华"
     assert row.values["secretary_general_mobile"] == "18612345678"
-    assert "qwen_search" in row.sources
+    assert "wenxin_search" in row.sources
 
 
 @pytest.mark.asyncio
 async def test_search_profile_returns_basic_info(monkeypatch, tmp_path):
-    """search_profile 用 llm_gateway 获取协会基础信息。"""
+    """文心脚本缺失（tmp_path 下无 wenxin_collect.py）时降级 llm_gateway 直出。"""
     import src.services.association_enrichment_providers as module
 
     providers = ProjectAssociationProviders(repository_root=tmp_path)
@@ -601,6 +601,101 @@ async def test_search_profile_returns_basic_info(monkeypatch, tmp_path):
     assert result["address"] == "北京市测试路1号"
     assert result["president_name"] is None
     assert result["secretary_general_name"] is None
+
+
+class _RecordingGateway:
+    """记录 DeepSeek 收到的 messages，供验证文心/降级分支用。"""
+
+    def __init__(self, content: str):
+        self.content = content
+        self.messages = None
+
+    async def chat(self, **kwargs):
+        self.messages = kwargs.get("messages")
+        return {"content": self.content}
+
+
+@pytest.mark.asyncio
+async def test_search_profile_parses_wenxin_raw_text(monkeypatch, tmp_path):
+    """文心联网采集到原文时，DeepSeek 从原文提取——官网来自原文，不靠模型瞎猜。"""
+    import src.services.association_enrichment_providers as module
+
+    providers = ProjectAssociationProviders(repository_root=tmp_path)
+    wenxin_answer = (
+        "地址：北京市测试路1号\n"
+        "官网网址：http://www.zgct.org.cn\n"
+        "主管单位：工业和信息化部"
+    )
+
+    async def fake_wenxin(name):
+        assert name == "测试协会"
+        return {"ok": True, "answer": wenxin_answer, "note": ""}
+
+    monkeypatch.setattr(providers, "_spawn_wenxin_collect", fake_wenxin)
+
+    parsed = {name: None for name in PROFILE_FIELDS}
+    parsed["address"] = "北京市测试路1号"
+    parsed["official_website"] = "http://www.zgct.org.cn"
+    gateway = _RecordingGateway(json.dumps(parsed, ensure_ascii=False))
+    monkeypatch.setattr(module, "llm_gateway", gateway)
+
+    result = await providers.search_profile("测试协会")
+
+    # DeepSeek 收到的必须是文心原文，而非泛泛提问（降级路径）
+    assert "原文" in gateway.messages[0]["content"]
+    assert wenxin_answer in gateway.messages[1]["content"]
+    assert "给出测试协会的以下信息" not in gateway.messages[1]["content"]
+    # 官网从原文解析、会长/秘书长/手机号强制 null
+    assert result["official_website"] == "http://www.zgct.org.cn"
+    assert result["address"] == "北京市测试路1号"
+    assert result["president_name"] is None
+    assert result["president_mobile"] is None
+
+
+@pytest.mark.asyncio
+async def test_search_profile_falls_back_when_wenxin_returns_none(monkeypatch, tmp_path):
+    """文心 spawn 失败/返回 None 时，降级原 DeepSeek 直出（保底，不至整步空）。"""
+    import src.services.association_enrichment_providers as module
+
+    providers = ProjectAssociationProviders(repository_root=tmp_path)
+
+    async def fake_wenxin(name):
+        return None
+
+    monkeypatch.setattr(providers, "_spawn_wenxin_collect", fake_wenxin)
+
+    parsed = {name: None for name in PROFILE_FIELDS}
+    parsed["official_website"] = "https://example.cn"
+    gateway = _RecordingGateway(json.dumps(parsed, ensure_ascii=False))
+    monkeypatch.setattr(module, "llm_gateway", gateway)
+
+    result = await providers.search_profile("测试协会")
+
+    # 降级：user content 是泛泛提问，不含原文
+    assert "给出测试协会的以下信息" in gateway.messages[1]["content"]
+    assert result["official_website"] == "https://example.cn"
+
+
+@pytest.mark.asyncio
+async def test_search_profile_falls_back_on_captcha(monkeypatch, tmp_path):
+    """文心返回验证码时，降级 DeepSeek 直出。"""
+    import src.services.association_enrichment_providers as module
+
+    providers = ProjectAssociationProviders(repository_root=tmp_path)
+
+    async def fake_wenxin(name):
+        return {"ok": False, "answer": "", "note": "captcha"}
+
+    monkeypatch.setattr(providers, "_spawn_wenxin_collect", fake_wenxin)
+
+    parsed = {name: None for name in PROFILE_FIELDS}
+    gateway = _RecordingGateway(json.dumps(parsed, ensure_ascii=False))
+    monkeypatch.setattr(module, "llm_gateway", gateway)
+
+    result = await providers.search_profile("测试协会")
+
+    assert gateway.messages is not None
+    assert all(v is None for v in result.values())
 
 
 @pytest.mark.asyncio
