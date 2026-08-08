@@ -480,6 +480,49 @@ class ProjectAssociationProviders:
                 "handoff_performed": handoff_performed,
             },
         )
+        # ps1 collect 正常返回但 status != found（搜一搜焦点丢失/返回空/未匹配
+        # 到手机号）时，重试一次——等于重发 Ctrl+F/下/回车 组合键重搜，兜住偶
+        # 发焦点/加载问题。fatal 错误（超时、returncode!=0、非 dict 响应、会话
+        # 未关闭）在 _run_wechat_collect_once 内直接 raise，不会走到重试。
+        for mobile_attempt in range(2):
+            payload = await self._run_wechat_collect_once(
+                script,
+                child_environment,
+                association_name,
+                person_name,
+                role,
+            )
+            if payload.get("status") == "found":
+                return await self._extract_wechat_mobile(
+                    script,
+                    str(payload.get("artifact_ref") or ""),
+                    association_name,
+                    person_name,
+                    role=role,
+                )
+            if mobile_attempt == 0:
+                self._audit(
+                    association=association_name,
+                    stage=f"微信搜一搜·{role}",
+                    kind="wechat_mobile_empty_retry",
+                    summary="手机号未搜到，重发组合键重试",
+                )
+        return None
+
+    async def _run_wechat_collect_once(
+        self,
+        script: Path,
+        child_environment: dict,
+        association_name: str,
+        person_name: str,
+        role: str,
+    ) -> dict:
+        """运行一次 ps1 collect 子进程，返回通过校验的 payload。
+
+        payload 此时 ok=True、session_closed=True，status 是已知枚举值。任何
+        fatal 错误（超时、returncode!=0、非 dict 响应、会话未关闭）直接 raise，
+        不在此重试——只有「正常返回但 status != found」才由调用方重试。
+        """
         process = await asyncio.create_subprocess_exec(
             "powershell.exe",
             "-NoProfile",
@@ -642,16 +685,7 @@ class ProjectAssociationProviders:
             )
         # 仅明确成功且确认会话关闭的真实查询，才授权下一条发送一次交接键。
         self._wechat_handoff_ready = True
-        if payload.get("status") != "found":
-            return None
-
-        return await self._extract_wechat_mobile(
-            script,
-            str(payload.get("artifact_ref") or ""),
-            association_name,
-            person_name,
-            role=role,
-        )
+        return payload
 
     async def wechat_search_leader_name(
         self, association_name: str, role: str, known_president: str = ""

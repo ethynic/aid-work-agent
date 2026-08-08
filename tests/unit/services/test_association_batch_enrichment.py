@@ -478,6 +478,90 @@ async def test_wechat_audit_failure_does_not_discard_found_mobile(
 
 
 @pytest.mark.asyncio
+async def test_wechat_mobile_retries_when_status_not_found(monkeypatch, tmp_path):
+    """ps1 collect 首轮没搜到（status != found）时重发组合键重搜一次；第二轮搜到 → 返回手机号。
+
+    业务意图：用户实测搜手机偶发焦点丢失/搜一搜返回空，单次必失败；重发一次组合键
+    能救回。若把重试删掉，首轮 inconclusive 即返回 None，本测试失败。
+    """
+    import src.services.association_enrichment_providers as module
+
+    class CompletedProcess:
+        def __init__(self, stdout):
+            self.returncode = 0
+            self._stdout = stdout
+
+        async def communicate(self):
+            return self._stdout, b""
+
+    processes = iter([
+        # 第一轮 collect：没搜到 → 触发重试
+        CompletedProcess(
+            json.dumps({"ok": True, "session_closed": True, "status": "inconclusive"}).encode("utf-8")
+        ),
+        # 第二轮 collect：搜到
+        CompletedProcess(
+            json.dumps({
+                "ok": True, "session_closed": True, "status": "found",
+                "artifact_ref": "artifact.dpapi",
+            }).encode("utf-8")
+        ),
+        # extract-mobile.ps1
+        CompletedProcess(
+            json.dumps({"matched": True, "mobile": "13912345678"}).encode("utf-8")
+        ),
+    ])
+
+    async def fake_subprocess(*_args, **_kwargs):
+        return next(processes)
+
+    async def noop(*_args, **_kwargs):
+        return None
+
+    providers = ProjectAssociationProviders(repository_root=tmp_path)
+    monkeypatch.setattr(module.asyncio, "create_subprocess_exec", fake_subprocess)
+    monkeypatch.setattr(providers, "_audit_wechat_artifact", noop)
+    monkeypatch.setattr(
+        providers,
+        "_validated_wechat_artifact_path",
+        lambda _ref: tmp_path / "artifact.dpapi",
+    )
+
+    assert await providers.wechat_mobile("测试协会", "张三", "会长") == "13912345678"
+
+
+@pytest.mark.asyncio
+async def test_wechat_mobile_returns_none_after_retry_exhausted(monkeypatch, tmp_path):
+    """两轮 collect 都没搜到 → 返回 None（重试一次仍失败，不无限重试）。"""
+    import src.services.association_enrichment_providers as module
+
+    class CompletedProcess:
+        def __init__(self, stdout):
+            self.returncode = 0
+            self._stdout = stdout
+
+        async def communicate(self):
+            return self._stdout, b""
+
+    processes = iter([
+        CompletedProcess(
+            json.dumps({"ok": True, "session_closed": True, "status": "not_found"}).encode("utf-8")
+        ),
+        CompletedProcess(
+            json.dumps({"ok": True, "session_closed": True, "status": "not_found"}).encode("utf-8")
+        ),
+    ])
+
+    async def fake_subprocess(*_args, **_kwargs):
+        return next(processes)
+
+    providers = ProjectAssociationProviders(repository_root=tmp_path)
+    monkeypatch.setattr(module.asyncio, "create_subprocess_exec", fake_subprocess)
+
+    assert await providers.wechat_mobile("测试协会", "张三", "会长") is None
+
+
+@pytest.mark.asyncio
 async def test_wechat_inter_query_handoff_runs_once_only_after_confirmed_close(
     monkeypatch, tmp_path
 ):
