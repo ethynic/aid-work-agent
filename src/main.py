@@ -1732,6 +1732,9 @@ app.include_router(client_activation_mgmt.binding_router)
 # 视频生成工具（MVP 抽卡式，见 docs/system/content-production/mvp-design.md）
 from src.api import video_gen as video_gen_api  # noqa: E402
 app.include_router(video_gen_api.router)
+# 视频创作智能体（会话化，见 docs/plans/plan-video-agent-phase1.md）
+from src.api import video_agent as video_agent_api  # noqa: E402
+app.include_router(video_agent_api.router)
 # app.include_router(context_compression_routes.router)
 
 

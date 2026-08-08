@@ -278,3 +278,155 @@ class TestCalculateCreditCost:
             )
             assert result == 100.0
             assert isinstance(result, float)
+
+
+class TestUsageFactorOverride:
+    """Phase 2.1.1: usage_factor_override 参数测试"""
+
+    def test_override_takes_effect(self):
+        """传入 usage_factor_override 时覆盖 settings.billing.usage_factor"""
+        from src.services.billing import calculate_credit_cost
+
+        settings = MagicMock()
+        settings.billing.usage_factor = 100  # settings 默认 100
+
+        with patch("src.services.billing.TokenCostPriceDB") as mock_tcp_db, \
+             patch("src.services.billing.create_settings", return_value=settings):
+            mock_tcp_db.get_by_model_name.return_value = _make_tcp(1.0, 0.0)
+            # token_cost = 1_000_000 * 1.0 / 1e6 = 1.0 元
+            # 默认 usage_factor=100 -> 100.00
+            # override=200 -> 200.00
+            result_default = calculate_credit_cost(
+                prompt_tokens=1_000_000, completion_tokens=0, model="test-model",
+            )
+            result_override = calculate_credit_cost(
+                prompt_tokens=1_000_000, completion_tokens=0, model="test-model",
+                usage_factor_override=200,
+            )
+            assert result_default == 100.0
+            assert result_override == 200.0
+
+    def test_override_does_not_affect_default_behavior(self, fixed_settings):
+        """不传 usage_factor_override 时维持原行为（读 settings.billing.usage_factor）"""
+        from src.services.billing import calculate_credit_cost
+
+        with patch("src.services.billing.TokenCostPriceDB") as mock_tcp_db, \
+             patch("src.services.billing.create_settings", return_value=fixed_settings):
+            mock_tcp_db.get_by_model_name.return_value = _make_tcp(1.0, 0.0)
+            # token_cost = 1.0 元，usage_factor=100 -> 100.00
+            result = calculate_credit_cost(
+                prompt_tokens=1_000_000, completion_tokens=0, model="test-model",
+            )
+            assert result == 100.0
+
+
+class TestCalculateVideoCreditCost:
+    """Phase 2.1.2: calculate_video_credit_cost 按秒计费测试"""
+
+    @pytest.fixture
+    def video_settings(self):
+        """固定 billing.video_gen_usage_factor = 33"""
+        settings = MagicMock()
+        settings.billing.video_gen_usage_factor = 33
+        return settings
+
+    def test_basic_calculation(self, video_settings):
+        """5 秒 × 0.20 元/秒 × 33 = 33.00"""
+        from src.services.billing import calculate_video_credit_cost
+
+        with patch("src.services.billing.create_settings", return_value=video_settings):
+            result = calculate_video_credit_cost(
+                seconds=5,
+                cost_per_second_yuan=0.20,
+                provider="wanx",
+                model="wan2.7-r2v",
+            )
+            # ceil(5 * 0.20 * 33 * 100) / 100 = ceil(3300.0) / 100 = 33.00
+            assert result == 33.0
+
+    def test_factor_3_3x(self, video_settings):
+        """video_gen_usage_factor=33 即 3.3 倍加价：5s × 0.10 元/s × 33 = 16.50"""
+        from src.services.billing import calculate_video_credit_cost
+
+        with patch("src.services.billing.create_settings", return_value=video_settings):
+            result = calculate_video_credit_cost(
+                seconds=5,
+                cost_per_second_yuan=0.10,
+                provider="minimax",
+                model="MiniMax-H3",
+            )
+            # ceil(5 * 0.10 * 33 * 100) / 100 = ceil(1650.0) / 100 = 16.50
+            assert result == 16.5
+
+    def test_zero_seconds_returns_zero(self, video_settings):
+        """0 秒返回 0.0"""
+        from src.services.billing import calculate_video_credit_cost
+
+        with patch("src.services.billing.create_settings", return_value=video_settings):
+            result = calculate_video_credit_cost(
+                seconds=0,
+                cost_per_second_yuan=0.20,
+                provider="wanx",
+                model="wan2.7-r2v",
+            )
+            assert result == 0.0
+
+    def test_negative_seconds_returns_zero(self, video_settings):
+        """负秒数防御性返回 0.0"""
+        from src.services.billing import calculate_video_credit_cost
+
+        with patch("src.services.billing.create_settings", return_value=video_settings):
+            result = calculate_video_credit_cost(
+                seconds=-5,
+                cost_per_second_yuan=0.20,
+                provider="wanx",
+                model="wan2.7-r2v",
+            )
+            assert result == 0.0
+
+    def test_zero_price_returns_zero(self, video_settings):
+        """单价为 0 返回 0.0"""
+        from src.services.billing import calculate_video_credit_cost
+
+        with patch("src.services.billing.create_settings", return_value=video_settings):
+            result = calculate_video_credit_cost(
+                seconds=5,
+                cost_per_second_yuan=0.0,
+                provider="wanx",
+                model="wan2.7-r2v",
+            )
+            assert result == 0.0
+
+    def test_ceil_rounding(self, video_settings):
+        """向上取整到 0.01：3s × 0.07 元/s × 33 = 6.93（精确）；3s × 0.071 × 33 = 7.029 -> 7.03"""
+        from src.services.billing import calculate_video_credit_cost
+
+        with patch("src.services.billing.create_settings", return_value=video_settings):
+            result = calculate_video_credit_cost(
+                seconds=3,
+                cost_per_second_yuan=0.071,
+                provider="wanx",
+                model="wan2.7-r2v",
+            )
+            # 3 * 0.071 * 33 = 7.029 -> ceil(702.9) / 100 = 7.03
+            assert result == 7.03
+
+    def test_factor_fallback_when_settings_missing(self):
+        """settings.billing.video_gen_usage_factor 缺失时回退到默认 33"""
+        from src.services.billing import calculate_video_credit_cost
+
+        settings = MagicMock()
+        # 模拟属性缺失：getattr 返回 None
+        del settings.billing.video_gen_usage_factor
+        settings.billing.video_gen_usage_factor = None
+
+        with patch("src.services.billing.create_settings", return_value=settings):
+            result = calculate_video_credit_cost(
+                seconds=5,
+                cost_per_second_yuan=0.20,
+                provider="wanx",
+                model="wan2.7-r2v",
+            )
+            # 因 settings.billing.video_gen_usage_factor=None，getattr 返回 None，`or 33` 兜底为 33
+            assert result == 33.0
+

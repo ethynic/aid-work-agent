@@ -173,6 +173,8 @@ class SubagentLoader:
             llm_model_codes=llm_model_codes,
             business_pages=frontmatter.get("business_pages", None),
             reply_style=frontmatter.get("reply_style", None),
+            chat_toolbar=frontmatter.get("chat_toolbar", []) or [],
+            upload_accept=frontmatter.get("upload_accept", None),
             path=str(path),
             dir=str(path.parent),
         )
@@ -268,6 +270,10 @@ class SubagentLoader:
             frontmatter["reply_style"] = config.reply_style
         if config.business_pages:
             frontmatter["business_pages"] = config.business_pages
+        if config.chat_toolbar:
+            frontmatter["chat_toolbar"] = config.chat_toolbar
+        if config.upload_accept:
+            frontmatter["upload_accept"] = config.upload_accept
         if config.llm_provider:
             frontmatter["llm_provider"] = config.llm_provider
         if config.llm_model_codes:

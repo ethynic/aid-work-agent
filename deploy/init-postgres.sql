@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
     instance_id TEXT,                        -- 关联的数字员工实例ID
     title TEXT,
     context_data TEXT,
+    metadata JSONB,                          -- 会话级元数据（如 video_gen_params：创作模式/时长/比例/分辨率/生成条数）
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     ended_at TIMESTAMP
@@ -242,6 +243,7 @@ CREATE TABLE IF NOT EXISTS token_cost_prices (
     input_price_per_m NUMERIC(10,4),
     cached_input_price_per_m NUMERIC(10,4), -- 命中缓存输入单价
     output_price_per_m NUMERIC(10,4),
+    price_per_second NUMERIC(10,4), -- 视频模型按秒计费单价（元/秒），仅视频模型用
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -255,6 +257,13 @@ VALUES ('deepseek-v4-flash', 1.0, 2.0, 0.02)
 ON CONFLICT (model_name) DO NOTHING;
 INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m)
 VALUES ('deepseek-v4-pro', 3.0, 6.0, 0.025)
+ON CONFLICT (model_name) DO NOTHING;
+-- 视频模型按秒计费单价（Phase 2.2）：单价按 provider 公开价填充，后续可由管理后台调整
+INSERT INTO token_cost_prices (model_name, price_per_second)
+VALUES ('wan2.7-r2v', 0.20)
+ON CONFLICT (model_name) DO NOTHING;
+INSERT INTO token_cost_prices (model_name, price_per_second)
+VALUES ('MiniMax-H3', 0.30)
 ON CONFLICT (model_name) DO NOTHING;
 
 
@@ -744,6 +753,7 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
     instance_id TEXT,                        -- 关联的数字员工实例ID
     title TEXT,
     context_data TEXT,
+    metadata JSONB,                          -- 会话级元数据（如 video_gen_params：创作模式/时长/比例/分辨率/生成条数）
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     ended_at TIMESTAMP
@@ -2128,3 +2138,64 @@ CREATE INDEX IF NOT EXISTS idx_gen_cards_session
     ON gen_cards(session_id);
 CREATE INDEX IF NOT EXISTS idx_gen_cards_polling
     ON gen_cards(provider_status);
+
+-- ============================================================================
+-- 视频创作智能体（video-agent）Phase 1：素材库 + 提示词库
+-- 详见 docs/plans/plan-video-agent-phase1.md §1.1 / §1.2
+-- 视频库复用 work_outcomes 表（outcome_type='file' + subagent_id='video-agent'），不新建
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS asset_library (
+    id SERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,                         -- 租户隔离
+    user_id TEXT,                                   -- 上传者（系统自动入库时可空）
+    file_id TEXT NOT NULL,                          -- 关联 uploaded_file:{file_id}，下载入口
+    display_name TEXT NOT NULL,                     -- 显示名（如 "产品图_001.jpg"）
+    mime_type TEXT NOT NULL,                        -- image/jpeg / video/mp4 等
+    size_bytes BIGINT NOT NULL,
+    source TEXT NOT NULL,                           -- video_chat / user_upload / other_agent_manual
+    scene TEXT,                                     -- 业务场景标签（product / model / bgm 等，可选）
+    width INT,                                      -- 图片/视频宽
+    height INT,                                     -- 图片/视频高
+    -- 肖像授权字段（仅 source=video_chat 且图为模特图时使用，第一阶段可空）
+    portrait_authorized BOOLEAN DEFAULT FALSE,
+    portrait_auth_expire_at TIMESTAMP,
+    portrait_auth_scope TEXT,                       -- 授权范围（如 "电商展示"）
+    metadata JSONB,                                 -- 附加信息（如 EXIF、来源会话 ID）
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_asset_library_tenant ON asset_library(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_asset_library_source ON asset_library(source);
+CREATE INDEX IF NOT EXISTS idx_asset_library_tenant_scene ON asset_library(tenant_id, scene);
+
+CREATE TABLE IF NOT EXISTS prompt_library (
+    id SERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT,                                   -- 留用者 / 黑名单提交者
+    category TEXT NOT NULL,                         -- kept（留用）/ blacklist（黑名单）/ template（模版）
+    business_prompt TEXT NOT NULL,                  -- 业务层提示词（中文，员工可读）
+    craft_prompt TEXT NOT NULL,                     -- 工艺层提示词（可灵 8 层框架结构化）
+    model_params JSONB,                             -- 模型层参数（seed / negative_prompt / duration / ratio / resolution）
+    industry_tag TEXT,                              -- 行业品类（美妆 / 服饰 / 食品等，可选）
+    scene_tag TEXT,                                 -- 场景标签（开箱 / 展示 / 氛围等，可选）
+    -- 关联视频（留用时记录是哪个视频的提示词）
+    source_video_file_id TEXT,                      -- 来源视频的 file_id（可空，黑名单必填，留用必填）
+    source_chat_session_id TEXT,                    -- 来源会话 ID（溯源）
+    -- 黑名单专用
+    dislike_reason TEXT,                            -- 不喜欢原因（光线偏暗/动作不自然/构图有问题/其他）
+    -- 模版专用（第一阶段不写入，但字段先建好）
+    promoted_from_kept_id INT,                      -- 由哪条留用记录升级而来
+    promoted_by_user_id TEXT,                       -- 升级操作者（租户管理员）
+    promoted_at TIMESTAMP,
+    -- 通用
+    metadata JSONB,                                 -- 附加信息（如生成时用的模型、消耗积分）
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_prompt_library_tenant_category ON prompt_library(tenant_id, category);
+CREATE INDEX IF NOT EXISTS idx_prompt_library_tenant_scene ON prompt_library(tenant_id, scene_tag);
+
+-- ============================================================================
+-- subagent_definitions 扩展：chat_toolbar JSONB + upload_accept TEXT
+-- 用于声明式 UI 配置：聊天工具栏额外按钮 + 上传文件类型限定
+-- ============================================================================
+ALTER TABLE subagent_definitions ADD COLUMN IF NOT EXISTS chat_toolbar JSONB DEFAULT '[]'::jsonb;
+ALTER TABLE subagent_definitions ADD COLUMN IF NOT EXISTS upload_accept TEXT;

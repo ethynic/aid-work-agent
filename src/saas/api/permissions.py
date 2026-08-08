@@ -273,14 +273,20 @@ def get_my_allowed_agents(request: Request):
         for item in all_items:
             if item["agent_id"] in allowed_ids:
                 # 返回智能体基本信息，不包含实例相关字段
-                result.append({
+                agent_info = {
                     "agent_id": item["agent_id"],
                     "name": item["name"],
                     "description": item.get("description", ""),
                     "type": item.get("type", "custom"),
                     "business_pages": item.get("business_pages", []),
                     # 不包含 instance_id, instance_name, display_name 等实例字段
-                })
+                }
+                # 透传 Phase 1.5 声明式 UI 字段
+                if item.get("chat_toolbar"):
+                    agent_info["chat_toolbar"] = item["chat_toolbar"]
+                if item.get("upload_accept"):
+                    agent_info["upload_accept"] = item["upload_accept"]
+                result.append(agent_info)
 
         # 如果主智能体在允许列表中，添加到结果中
         if "main" in allowed_ids:

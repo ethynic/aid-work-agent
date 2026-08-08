@@ -2004,8 +2004,10 @@ class TokenCostPriceDB:
         """按模型名查询单价
 
         Returns:
-            {"model_name", "input_price_per_m", "cached_input_price_per_m", "output_price_per_m"} 或 None
+            {"model_name", "input_price_per_m", "cached_input_price_per_m",
+             "output_price_per_m", "price_per_second"} 或 None
             cached_input_price_per_m 为 NULL 表示该模型计费不区分缓存命中
+            price_per_second 为 NULL 表示该模型不按秒计费（文本模型）
         """
         if not model_name:
             return None
@@ -2014,7 +2016,8 @@ class TokenCostPriceDB:
             cursor = conn.cursor()
             cursor.execute(
                 f"""
-                SELECT model_name, input_price_per_m, cached_input_price_per_m, output_price_per_m
+                SELECT model_name, input_price_per_m, cached_input_price_per_m,
+                       output_price_per_m, price_per_second
                 FROM token_cost_prices
                 WHERE model_name = {placeholder}
                 """,

@@ -70,26 +70,32 @@
 
         <!-- 底部工具行 -->
         <div class="flex items-center justify-between px-3 pb-2.5">
-          <!-- 附件上传按钮 -->
-          <button
-            @click="triggerFileInput"
-            :disabled="disabled || isProcessing"
-            class="w-8 h-8 rounded-full border border-gray-300 text-gray-500 hover:text-primary-600 hover:border-primary-400 transition-colors disabled:opacity-50 flex items-center justify-center"
-            title="添加附件（也可 Ctrl+V 粘贴）"
-          >
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
-            </svg>
-          </button>
+          <div class="flex items-center gap-1">
+            <!-- 附件上传按钮（加号按钮硬编码，所有智能体共有） -->
+            <button
+              @click="triggerFileInput"
+              :disabled="disabled || isProcessing"
+              class="w-8 h-8 rounded-full border border-gray-300 text-gray-500 hover:text-primary-600 hover:border-primary-400 transition-colors disabled:opacity-50 flex items-center justify-center"
+              title="添加附件（也可 Ctrl+V 粘贴）"
+            >
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
+              </svg>
+            </button>
 
-          <!-- 隐藏的文件输入 -->
-          <input
-            ref="fileInputRef"
-            type="file"
-            class="hidden"
-            accept=".pdf,.doc,.docx,.xls,.xlsx,.txt,.png,.jpg,.jpeg,.gif,.ppt,.pptx"
-            @change="handleFileChange"
-          />
+            <!-- 隐藏的文件输入（accept 由当前会话 subagent.upload_accept 决定） -->
+            <input
+              ref="fileInputRef"
+              type="file"
+              class="hidden"
+              :accept="currentUploadAccept"
+              @change="handleFileChange"
+            />
+
+            <!-- 子智能体工具栏额外按钮（Phase 5.1.3）
+                 按钮组由 currentToolbarButtons 决定，主智能体无额外按钮 -->
+            <ChatToolbar :button-ids="currentToolbarButtons" />
+          </div>
 
           <div class="flex items-center gap-2">
             <!-- Processing indicator -->
@@ -141,11 +147,16 @@ import { ref, computed, watch, nextTick } from 'vue'
 import { useMobile } from '@/composables/useMobile'
 import { useAttachmentPreview } from '@/composables/useAttachmentPreview'
 import type { UploadedFile } from '@/api/agent'
+import ChatToolbar from './chat/ChatToolbar.vue'
 
 interface Props {
   disabled: boolean
   isProcessing: boolean
   files: UploadedFile[]
+  /** 当前会话 subagent 的上传文件类型限定（如 "image/*"），未声明时 fallback 到默认白名单 */
+  uploadAccept?: string | null
+  /** 当前会话 subagent 的工具栏额外按钮 id 列表（如 ['video_gen']） */
+  toolbarButtons?: string[] | null
 }
 
 const props = defineProps<Props>()
@@ -161,6 +172,15 @@ const { openPreview } = useAttachmentPreview()
 const inputText = ref('')
 const inputRef = ref<HTMLTextAreaElement | null>(null)
 const fileInputRef = ref<HTMLInputElement | null>(null)
+
+// 默认上传白名单（与原 ChatInput 硬编码 accept 一致，对应 chat.default_upload_accept）
+const DEFAULT_UPLOAD_ACCEPT = '.pdf,.doc,.docx,.xls,.xlsx,.txt,.png,.jpg,.jpeg,.gif,.ppt,.pptx'
+
+/** 当前生效的上传 accept（subagent 声明覆盖时用声明值，否则用默认白名单） */
+const currentUploadAccept = computed(() => props.uploadAccept || DEFAULT_UPLOAD_ACCEPT)
+
+/** 当前生效的工具栏按钮 id 列表 */
+const currentToolbarButtons = computed(() => props.toolbarButtons || [])
 
 const canSend = computed(() => {
   return !props.disabled
@@ -248,7 +268,26 @@ const ACCEPTED_EXTENSIONS = [
   '.png', '.jpg', '.jpeg', '.gif', '.ppt', '.pptx',
 ]
 
+/** 判断文件是否符合当前 currentUploadAccept（Phase 5.1.3）
+ *  - MIME 前缀（如 "image/*"）：按 MIME 类型匹配
+ *  - 扩展名列表（如 ".pdf,.docx"）：按扩展名匹配
+ *  - 空值：使用默认白名单
+ */
 function isAcceptedFile(file: File): boolean {
+  const accept = currentUploadAccept.value
+  if (accept && accept.includes('/*')) {
+    // MIME 前缀模式，如 "image/*" / "video/*" / "audio/*"
+    const prefixes = accept.split(',').map((s) => s.trim()).filter(Boolean)
+    return prefixes.some((prefix) => {
+      if (prefix.endsWith('/*')) {
+        const typePrefix = prefix.slice(0, -1) // "image/"
+        return file.type.startsWith(typePrefix)
+      }
+      // 也可能混入扩展名
+      return file.name.toLowerCase().endsWith(prefix)
+    })
+  }
+  // 默认白名单模式
   const lowerName = file.name.toLowerCase()
   if (ACCEPTED_EXTENSIONS.some((ext) => lowerName.endsWith(ext))) {
     return true

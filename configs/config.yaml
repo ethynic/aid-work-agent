@@ -9,6 +9,11 @@ app:
   host: "0.0.0.0"
   port: 8000
 
+# 聊天输入框全局默认配置
+# 子智能体未声明 upload_accept 时走此默认值（与 ChatInput.vue 硬编码 accept 保持一致）
+chat:
+  default_upload_accept: "image/*,video/*,.pdf,.doc,.docx,.xls,.xlsx,.txt,.png,.jpg,.jpeg,.gif,.ppt,.pptx"
+
 # 智能体全局配置
 agent:
   reply_style: human-like  # 默认回复风格 ID，对应 src/prompts/styles/{style_id}.md
@@ -256,6 +261,7 @@ notification:
 # 积分计费配置（#37 租户积分充值与计费）
 billing:
   usage_factor: 100  # 用量系数，token 成本价 × 系数 = 积分用量（向上取整）
+  video_gen_usage_factor: 33  # 视频创作用量系数（3.3 倍加价），视频秒数 × 单价 × 此系数 = 积分用量
 
 wecom:
   waiting_indicator:

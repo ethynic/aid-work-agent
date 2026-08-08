@@ -89,6 +89,15 @@ class SubagentConfig(BaseModel):
     # 业务数据页面配置
     business_pages: Optional[List[Dict[str, Any]]] = Field(default=None, description="业务数据页面列表")
 
+    # 聊天工具栏额外按钮 id 列表（声明式 UI 配置，详见 plan-video-agent-phase1.md §1.5）
+    # 取值如 ["video_gen"]；与 tools（LLM 函数调用工具）、skills（技能包）、business_pages（业务页面）语义独立
+    # 加号上传按钮由 ChatInput 硬编码渲染，所有智能体共有，不在此字段中
+    chat_toolbar: List[str] = Field(default_factory=list, description="聊天工具栏额外按钮 id 列表")
+
+    # 上传文件类型限定（对齐 HTML <input accept> 语法），未声明时走 chat.default_upload_accept 全局默认
+    # 取值如 "image/*" / "image/*,video/*" / ".pdf,.docx"
+    upload_accept: Optional[str] = Field(default=None, description="聊天输入框加号按钮可选文件类型限定")
+
     # 知识库关联配置
     knowledge_sources: List[Dict[str, str]] = Field(default_factory=list, description="关联的知识库列表，每项含 source_type 和 display_name")
 

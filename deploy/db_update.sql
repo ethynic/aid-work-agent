@@ -1491,3 +1491,77 @@ CREATE TABLE IF NOT EXISTS client_usage_logs (
 );
 CREATE INDEX IF NOT EXISTS idx_client_usage_logs_tenant ON client_usage_logs(tenant_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_client_usage_logs_binding ON client_usage_logs(binding_id, created_at);
+
+-- ============================================================================
+-- 2026-08-07 视频创作智能体（video-agent）Phase 1：素材库 + 提示词库 + subagent_definitions 扩展
+-- 详见 docs/plans/plan-video-agent-phase1.md §1.1 / §1.2 / §1.5
+-- ============================================================================
+
+-- 素材库：跨会话的图片/视频素材（视频创作聊天自动入库 + 用户手动上传）
+CREATE TABLE IF NOT EXISTS asset_library (
+    id SERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT,
+    file_id TEXT NOT NULL,
+    display_name TEXT NOT NULL,
+    mime_type TEXT NOT NULL,
+    size_bytes BIGINT NOT NULL,
+    source TEXT NOT NULL,
+    scene TEXT,
+    width INT,
+    height INT,
+    portrait_authorized BOOLEAN DEFAULT FALSE,
+    portrait_auth_expire_at TIMESTAMP,
+    portrait_auth_scope TEXT,
+    metadata JSONB,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_asset_library_tenant ON asset_library(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_asset_library_source ON asset_library(source);
+CREATE INDEX IF NOT EXISTS idx_asset_library_tenant_scene ON asset_library(tenant_id, scene);
+
+-- 提示词库：留用 / 黑名单 / 模版 三类合并一表，用 category 区分
+CREATE TABLE IF NOT EXISTS prompt_library (
+    id SERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT,
+    category TEXT NOT NULL,
+    business_prompt TEXT NOT NULL,
+    craft_prompt TEXT NOT NULL,
+    model_params JSONB,
+    industry_tag TEXT,
+    scene_tag TEXT,
+    source_video_file_id TEXT,
+    source_chat_session_id TEXT,
+    dislike_reason TEXT,
+    promoted_from_kept_id INT,
+    promoted_by_user_id TEXT,
+    promoted_at TIMESTAMP,
+    metadata JSONB,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_prompt_library_tenant_category ON prompt_library(tenant_id, category);
+CREATE INDEX IF NOT EXISTS idx_prompt_library_tenant_scene ON prompt_library(tenant_id, scene_tag);
+
+-- subagent_definitions 扩展：声明式 UI 配置（chat_toolbar 额外按钮 + upload_accept 上传类型限定）
+ALTER TABLE subagent_definitions ADD COLUMN IF NOT EXISTS chat_toolbar JSONB DEFAULT '[]'::jsonb;
+ALTER TABLE subagent_definitions ADD COLUMN IF NOT EXISTS upload_accept TEXT;
+
+-- ============================================================================
+-- 2026-08-07 视频创作智能体 Phase 2：token_cost_prices 扩展 price_per_second 字段 + 视频模型记录
+-- 详见 docs/plans/plan-video-agent-phase1.md §2.2
+-- ============================================================================
+ALTER TABLE token_cost_prices ADD COLUMN IF NOT EXISTS price_per_second NUMERIC(10,4);
+
+INSERT INTO token_cost_prices (model_name, price_per_second)
+VALUES ('wan2.7-r2v', 0.20)
+ON CONFLICT (model_name) DO NOTHING;
+INSERT INTO token_cost_prices (model_name, price_per_second)
+VALUES ('MiniMax-H3', 0.30)
+ON CONFLICT (model_name) DO NOTHING;
+
+-- ============================================================================
+-- 2026-08-07 视频创作智能体 Phase 1.4：chat_sessions 增加 metadata JSONB 列
+-- 用于存储 video_gen_params（创作模式/时长/比例/分辨率/生成条数）等子智能体会话级元数据
+-- ============================================================================
+ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS metadata JSONB;

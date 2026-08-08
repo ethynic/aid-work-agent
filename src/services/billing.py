@@ -29,6 +29,7 @@ def calculate_credit_cost(
     completion_tokens: int,
     model: Optional[str],
     cached_input_tokens: int = 0,
+    usage_factor_override: Optional[int] = None,
 ) -> float:
     """计算本轮对话消耗的积分
 
@@ -37,6 +38,8 @@ def calculate_credit_cost(
         completion_tokens: 输出 token 数
         model: 模型名，用于查询单价
         cached_input_tokens: 命中缓存的输入 token 数（已包含在 prompt_tokens 内）
+        usage_factor_override: 用量系数覆盖值；传入时覆盖 settings.billing.usage_factor，
+            不传时维持原行为（读 settings.billing.usage_factor，默认 100）
 
     Returns:
         积分用量（2 位小数，向上取整到 0.01）；单价缺失返回 0.0
@@ -62,7 +65,10 @@ def calculate_credit_cost(
         return 0
 
     settings = create_settings()
-    usage_factor = getattr(settings.billing, "usage_factor", 100) or 100
+    if usage_factor_override is not None:
+        usage_factor = usage_factor_override
+    else:
+        usage_factor = getattr(settings.billing, "usage_factor", 100) or 100
 
     prompt_tokens = prompt_tokens or 0
     completion_tokens = completion_tokens or 0
@@ -88,4 +94,37 @@ def calculate_credit_cost(
         return 0
 
     credit_cost = math.ceil(token_cost * usage_factor * 100) / 100
+    return max(credit_cost, 0.0)
+
+
+def calculate_video_credit_cost(
+    seconds: float,
+    cost_per_second_yuan: float,
+    provider: str,
+    model: str,
+) -> float:
+    """计算视频生成消耗的积分（按秒计费）
+
+    视频创作智能体（video-agent）专用计费函数，区别于主业务按 token 计费。
+    公式：credit_cost = ceil(seconds × 单价 × video_gen_usage_factor × 100) / 100
+
+    Args:
+        seconds: 视频时长（秒）
+        cost_per_second_yuan: 视频模型单价（元/秒），从 token_cost_prices.price_per_second 取
+        provider: 视频生成 provider（wanx / minimax），用于日志
+        model: 视频模型名（如 wan2.7-r2v / MiniMax-H3），用于日志
+
+    Returns:
+        积分用量（2 位小数，向上取整到 0.01）；单价缺失或秒数 ≤ 0 返回 0.0
+    """
+    if seconds <= 0:
+        return 0.0
+    if not cost_per_second_yuan or cost_per_second_yuan <= 0:
+        logger.warning(f"视频计费：{provider}/{model} 单价为空，credit_cost=0")
+        return 0.0
+
+    settings = create_settings()
+    factor = getattr(settings.billing, "video_gen_usage_factor", 33) or 33
+
+    credit_cost = math.ceil(seconds * cost_per_second_yuan * factor * 100) / 100
     return max(credit_cost, 0.0)

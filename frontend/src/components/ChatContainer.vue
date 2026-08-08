@@ -52,6 +52,8 @@
               :disabled="isProcessing || isWaitingHuman"
               :is-processing="isProcessing"
               :files="currentFiles"
+              :upload-accept="currentUploadAccept"
+              :toolbar-buttons="currentToolbarButtons"
             />
           </div>
         </div>
@@ -256,6 +258,20 @@ const currentSubagentId = computed(() => {
 
   return subagentName.value
 })
+
+// 当前 subagent 对象（用于读取 chat_toolbar/upload_accept 等声明式 UI 字段）
+const currentSubagent = computed(() => {
+  if (!subagentName.value) return null
+  return availableSubagents.value.find(
+    (a) => a.agent_id === subagentName.value || a.subagent_type === subagentName.value,
+  ) || null
+})
+
+// 当前会话 subagent 的上传文件类型限定（Phase 5.1.3）
+const currentUploadAccept = computed(() => currentSubagent.value?.upload_accept || null)
+
+// 当前会话 subagent 的工具栏额外按钮 id 列表（Phase 5.1.3）
+const currentToolbarButtons = computed(() => currentSubagent.value?.chat_toolbar || [])
 
 // 判断是否为租户模式
 const isTenantMode = computed(() => route.path.startsWith('/t/'))

@@ -240,6 +240,8 @@ class AgentFactory:
             llm_model_codes=_model_codes,
             reply_style=row.get("reply_style"),
             business_pages=row.get("business_pages"),
+            chat_toolbar=row.get("chat_toolbar") or [],
+            upload_accept=row.get("upload_accept"),
             knowledge_sources=row.get("knowledge_sources") or [],
             from_db=True,
         )

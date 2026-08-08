@@ -72,6 +72,11 @@ class SubagentRegistry:
             }
             if config.business_pages:
                 item["business_pages"] = config.business_pages
+            # 透传 Phase 1.5 声明式 UI 字段（chat_toolbar/upload_accept）
+            if config.chat_toolbar:
+                item["chat_toolbar"] = config.chat_toolbar
+            if config.upload_accept:
+                item["upload_accept"] = config.upload_accept
             result.append(item)
         return result
 
@@ -406,6 +411,8 @@ class SubagentRegistry:
                 llm_model_codes=_model_codes,
                 reply_style=row.get("reply_style"),
                 business_pages=row.get("business_pages"),
+                chat_toolbar=row.get("chat_toolbar") or [],
+                upload_accept=row.get("upload_accept"),
                 knowledge_sources=row.get("knowledge_sources") or [],
                 from_db=True,
             )

@@ -39,6 +39,8 @@ class SubagentDefinitionService:
         reply_style: Optional[str] = None,
         business_pages: Optional[list] = None,
         knowledge_sources: Optional[list] = None,
+        chat_toolbar: Optional[list] = None,
+        upload_accept: Optional[str] = None,
         created_by: Optional[str] = None,
         commit_message: str = "初始版本",
     ) -> Optional[Dict[str, Any]]:
@@ -64,6 +66,8 @@ class SubagentDefinitionService:
             reply_style=reply_style,
             business_pages=business_pages,
             knowledge_sources=knowledge_sources or [],
+            chat_toolbar=chat_toolbar or [],
+            upload_accept=upload_accept,
             created_by=created_by,
         )
         if not definition:

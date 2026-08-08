@@ -22,6 +22,9 @@ export const agentRoutes: RouteRecordRaw[] = [
   { path: '/all-sessions', name: 'all-sessions', component: () => import('@/components/AllSessions.vue') },
   { path: '/data-sources', name: 'data-sources', component: () => import('@/pages/DataSourceManager.vue') },
   { path: '/social-media', name: 'social-media', component: () => import('@/components/social-media/VideoCreationWorkbench.vue') },
+  { path: '/assets', name: 'video-agent-assets', component: () => import('@/components/video-agent/AssetLibrary.vue') },
+  { path: '/videos', name: 'video-agent-videos', component: () => import('@/components/video-agent/VideoLibrary.vue') },
+  { path: '/prompts', name: 'video-agent-prompts', component: () => import('@/components/video-agent/PromptLibrary.vue') },
   {
     path: '/trade-specialist',
     name: 'trade-specialist',
@@ -98,6 +101,9 @@ export const agentRoutes: RouteRecordRaw[] = [
       { path: 'external-customers', name: 'tenant-external-customers', component: () => import('@/components/saas/ExternalCustomerService.vue') },
       { path: 'data-sources', name: 'tenant-data-sources', component: () => import('@/pages/DataSourceManager.vue') },
       { path: 'social-media', name: 'tenant-social-media', component: () => import('@/components/social-media/VideoCreationWorkbench.vue') },
+      { path: 'assets', name: 'tenant-video-agent-assets', component: () => import('@/components/video-agent/AssetLibrary.vue') },
+      { path: 'videos', name: 'tenant-video-agent-videos', component: () => import('@/components/video-agent/VideoLibrary.vue') },
+      { path: 'prompts', name: 'tenant-video-agent-prompts', component: () => import('@/components/video-agent/PromptLibrary.vue') },
       {
         path: 'trade-specialist',
         name: 'tenant-trade-specialist',

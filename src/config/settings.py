@@ -347,8 +347,11 @@ class BillingConfig(BaseModel):
     """积分计费配置（#37 租户积分充值与计费）
 
     - usage_factor: 用量系数，token 成本价 × 系数 = 积分用量（向上取整）
+    - video_gen_usage_factor: 视频创作用量系数，视频秒数 × 单价 × 系数 = 积分用量（向上取整）
+      视频创作智能体（video-agent）按秒计费专用，区别于主业务按 token 计费
     """
     usage_factor: int = 100
+    video_gen_usage_factor: int = 33
 
 
 class ClientConfig(BaseModel):
@@ -608,6 +611,14 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
     if os.getenv("WECOM_WAITING_INDICATOR_DELAY_SECONDS") is not None:
         try:
             wecom_cfg["delay_seconds"] = float(os.getenv("WECOM_WAITING_INDICATOR_DELAY_SECONDS"))
+        except ValueError:
+            pass
+
+    # 积分计费配置：环境变量覆盖
+    billing_cfg = yaml_config.setdefault("billing", {})
+    if os.getenv("VIDEO_GEN_USAGE_FACTOR") is not None:
+        try:
+            billing_cfg["video_gen_usage_factor"] = int(os.getenv("VIDEO_GEN_USAGE_FACTOR"))
         except ValueError:
             pass
 

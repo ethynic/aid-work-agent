@@ -44,6 +44,8 @@ class SubagentDefinitionDB:
         reply_style: Optional[str] = None,
         business_pages: Optional[list] = None,
         knowledge_sources: Optional[list] = None,
+        chat_toolbar: Optional[list] = None,
+        upload_accept: Optional[str] = None,
         created_by: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         row_id = str(uuid.uuid4())
@@ -57,12 +59,14 @@ class SubagentDefinitionDB:
                         triggers, tools, skills, context,
                         delegatable_to, allow_delegation,
                         llm_provider, reply_style, business_pages, knowledge_sources,
+                        chat_toolbar, upload_accept,
                         created_by, updated_by
                     ) VALUES (
                         %s, %s, %s, %s, %s, %s,
                         %s, %s, %s, %s,
                         %s, %s,
                         %s, %s, %s, %s,
+                        %s, %s,
                         %s, %s
                     )
                 """, (
@@ -73,6 +77,8 @@ class SubagentDefinitionDB:
                     _json(delegatable_to or []), allow_delegation,
                     llm_config_json, reply_style, _json(business_pages),
                     _json(knowledge_sources or []),
+                    _json(chat_toolbar or []),
+                    upload_accept,
                     created_by, created_by,
                 ))
                 conn.commit()
@@ -154,11 +160,13 @@ class SubagentDefinitionDB:
             "delegatable_to", "allow_delegation",
             "reply_style", "business_pages",
             "knowledge_sources",
+            "chat_toolbar", "upload_accept",
             "status", "updated_by",
         }
         jsonb_fields = {
             "triggers", "tools", "skills", "context",
             "delegatable_to", "business_pages", "knowledge_sources",
+            "chat_toolbar",
         }
         updates = {}
         for k, v in kwargs.items():
