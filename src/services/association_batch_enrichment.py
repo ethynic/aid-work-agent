@@ -349,7 +349,6 @@ class AssociationBatchEnricher:
                 official_url = None
         if official_url:
             self._progress(f"[{association_name}] 【2/4】正在打开官网采集：{official_url}")
-            official_done = False
             for candidate in _scheme_candidates(str(official_url)):
                 try:
                     profile = await self._collect_official_profile(
@@ -359,7 +358,6 @@ class AssociationBatchEnricher:
                     row.sources.append(f"official:{candidate}")
                     got_fields = {k: v for k, v in profile.items() if v}
                     self._progress(f"[{association_name}] 【2/4】官网采集完成，解析出：{got_fields}")
-                    official_done = True
                     break
                 except Exception as exc:
                     row.errors.append(
@@ -368,23 +366,6 @@ class AssociationBatchEnricher:
                     self._progress(f"[{association_name}] 【2/4】官网采集失败（{candidate}）：{type(exc).__name__}: {exc}")
                     if not _should_retry_other_scheme(exc):
                         break
-            # 所有 scheme 都失败时，尝试修正域名后缀（.org.cn→.org 修正 DeepSeek 域名幻觉）
-            if not official_done and ".org.cn" in str(official_url):
-                corrected_url = str(official_url).replace(".org.cn", ".org")
-                self._progress(f"[{association_name}] 【2/4】尝试修正域名后缀：{corrected_url}")
-                for candidate in _scheme_candidates(corrected_url):
-                    try:
-                        profile = await self._collect_official_profile(
-                            candidate, self._headless, association_name=association_name
-                        )
-                        self._merge(row.values, profile, override=True)
-                        row.sources.append(f"official:{candidate}")
-                        got_fields = {k: v for k, v in profile.items() if v}
-                        self._progress(f"[{association_name}] 【2/4】官网采集完成（修正后），解析出：{got_fields}")
-                        official_done = True
-                        break
-                    except Exception as exc:
-                        self._progress(f"[{association_name}] 【2/4】修正域名后仍失败（{candidate}）：{type(exc).__name__}")
         else:
             self._progress(f"[{association_name}] 【2/4】跳过官网采集（未获取到官网URL）")
 

@@ -608,8 +608,8 @@ async def test_spa_same_url_merges_distinct_body_and_replays_parent_path():
 
 
 @pytest.mark.asyncio
-async def test_playwright_wrapper_passes_headless_and_always_closes(monkeypatch):
-    launched = []
+async def test_playwright_wrapper_uses_cdp_and_always_closes(monkeypatch):
+    connected = []
 
     class FakeBrowser:
         def __init__(self):
@@ -625,10 +625,10 @@ async def test_playwright_wrapper_passes_headless_and_always_closes(monkeypatch)
 
     class FakePlaywright:
         def __init__(self):
-            self.chromium = SimpleNamespace(launch=self.launch)
+            self.chromium = SimpleNamespace(connect_over_cdp=self.connect_over_cdp)
 
-        async def launch(self, **kwargs):
-            launched.append(kwargs)
+        async def connect_over_cdp(self, endpoint_url):
+            connected.append(endpoint_url)
             return browser
 
     class FakeContext:
@@ -645,7 +645,8 @@ async def test_playwright_wrapper_passes_headless_and_always_closes(monkeypatch)
         await collect_official_pages_with_playwright(
             ENTRY, DOMAIN, headless=False,
         )
-    assert launched == [{"headless": False}]
+    # 复用 9222 常驻 CDP 浏览器，不再 launch 新 chromium（打包 exe 无 chromium）
+    assert connected == ["http://localhost:9222"]
     assert browser.closed is True
 
 
@@ -687,7 +688,7 @@ async def test_playwright_context_route_handler_uses_single_route_argument(monke
     browser = FakeBrowser()
     playwright = SimpleNamespace(
         chromium=SimpleNamespace(
-            launch=AsyncMock(return_value=browser),
+            connect_over_cdp=AsyncMock(return_value=browser),
         )
     )
 

@@ -629,7 +629,12 @@ async def collect_official_pages_with_playwright(
     navigation_timeout_ms: int = 8_000,
     audit_callback: Callable[..., None] | None = None,
 ) -> list[VerifiedOfficialPage]:
-    """启动 Playwright 自动点击采集；真机风控回退应显式传 ``headless=False``。"""
+    """复用常驻 CDP 浏览器(localhost:9222)采集官网，避免 launch 新 chromium。
+
+    打包 exe 不带 chromium 二进制，``launch`` 会报 Executable doesn't exist。
+    改为 ``connect_over_cdp`` 复用 ``ensure_wenxin_browser`` 拉起的有头 Chrome。
+    ``headless`` 参数在 attach 模式下不生效（常驻 Chrome 为有头窗口），保留仅为兼容调用链。
+    """
     if not isinstance(headless, bool):
         raise ValueError("headless must be an explicit boolean")
     if (
@@ -641,7 +646,9 @@ async def collect_official_pages_with_playwright(
     from playwright.async_api import async_playwright
 
     async with async_playwright() as playwright:
-        browser = await playwright.chromium.launch(headless=headless)
+        # 复用 ensure_wenxin_browser 拉起的常驻 CDP 浏览器(localhost:9222)，
+        # 避免 launch 新 chromium——打包 exe 不带 chromium 二进制会 launch 失败。
+        browser = await playwright.chromium.connect_over_cdp("http://localhost:9222")
         try:
             page = await browser.new_page()
             async def guard_navigation(route):
