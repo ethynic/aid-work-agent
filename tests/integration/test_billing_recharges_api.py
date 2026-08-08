@@ -62,9 +62,9 @@ class TestTenantRechargesORM:
         from src.saas.db.tenant_db import TenantDB
 
         tenant_id = temp_tenant["tenant_id"]
-        # 初始余额可能是 0 或已有值
+        # 初始余额可能是 0 或已有值（credit_balance 是 NUMERIC(12,2)，psycopg2 返回字符串需经 float 转换）
         before = TenantDB.get_by_id(tenant_id)
-        balance_before = int(before.get("credit_balance") or 0)
+        balance_before = int(float(before.get("credit_balance") or 0))
 
         record = TenantRechargesDB.create(
             tenant_id=tenant_id,
@@ -84,7 +84,7 @@ class TestTenantRechargesORM:
         from src.core.cache_utils import invalidate_tenant_cache
         invalidate_tenant_cache(tenant_id)
         after = TenantDB.get_by_id(tenant_id)
-        balance_after = int(after.get("credit_balance") or 0)
+        balance_after = int(float(after.get("credit_balance") or 0))
         assert balance_after == balance_before + 1000
 
     def test_delete_decreases_balance(self, temp_tenant):
@@ -109,7 +109,7 @@ class TestTenantRechargesORM:
 
         invalidate_tenant_cache(tenant_id)
         before = TenantDB.get_by_id(tenant_id)
-        balance_before = int(before.get("credit_balance") or 0)
+        balance_before = int(float(before.get("credit_balance") or 0))
 
         # 删除
         deleted = TenantRechargesDB.delete(recharge_id)
@@ -118,7 +118,7 @@ class TestTenantRechargesORM:
 
         invalidate_tenant_cache(tenant_id)
         after = TenantDB.get_by_id(tenant_id)
-        balance_after = int(after.get("credit_balance") or 0)
+        balance_after = int(float(after.get("credit_balance") or 0))
         assert balance_after == balance_before - 2000
 
     def test_list_with_tenant_filter(self, temp_tenant):

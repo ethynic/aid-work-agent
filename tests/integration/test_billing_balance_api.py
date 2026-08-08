@@ -117,10 +117,10 @@ class TestBillingBalanceAPI:
         # 余额 = 1000 - 5 = 995
         assert balance["credit_balance"] == 995
         assert balance["daily_avg_cost_7d"] >= 0
-        # 日均消耗 5/7 = 0（向下取整）
-        assert balance["daily_avg_cost_7d"] == 0
-        # 日均 0 且余额 > 0 时返回 -1
-        assert balance["estimated_days_left"] == -1
+        # 日均消耗 5/7 ≈ 0.71（round(5/7, 2)）
+        assert balance["daily_avg_cost_7d"] == 0.71
+        # 日均 0.71 且余额 > 0 时返回剩余天数 = int(995 / 0.71) = 1401
+        assert balance["estimated_days_left"] == 1401
 
     def test_usage_returns_aggregated_items(self, temp_tenant_with_data):
         """/usage 按日聚合返回明细"""
