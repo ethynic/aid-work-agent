@@ -376,17 +376,14 @@ public static class WechatSouyisouWin32 {
         # 从此处到回读完成禁止截图、鼠标点击或窗口激活，避免主动抢走焦点。
         & $assertWorkBudget 60000
         # 输入提交封进 scriptblock，便于 readback 失败时重发组合键后再试一次。
+        # 改用 UIA ValuePattern.SetValue 直接写搜索框（不依赖前台/焦点/剪贴板），取代旧的
+        # 剪贴板 Ctrl+V 粘贴 + Ctrl+C 回读。WriteAndReadback 内部做 SetValue + Value 读回。
         $submitInput = {
-            Invoke-VerifiedWeixinFocusedSearchSubmission $query `
-                $pluginGuard {
-                    param($value) [Windows.Forms.Clipboard]::SetText([string]$value)
-                } {
-                    param($keys) & $send $keys $pluginGuard
-                } {
-                    Start-Sleep -Milliseconds 120
-                    [Windows.Forms.Clipboard]::GetText(
-                        [Windows.Forms.TextDataFormat]::UnicodeText)
-                } (-not $VerifyInputOnly) $inputDiagnostics
+            Invoke-VerifiedWeixinUaSearchSubmission $query `
+                $pluginGuard `
+                { Invoke-WeixinSouyisouSetValueAndReadback ([IntPtr]$pluginHwnd) $query } `
+                { & $send @('ENTER') $pluginGuard } `
+                (-not $VerifyInputOnly) $inputDiagnostics
         }
         $inputResult = $null
         $inputAttempt = 0

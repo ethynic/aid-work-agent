@@ -867,27 +867,58 @@ function Normalize-WeixinSearchInputText {
     return [regex]::Replace($Text.Trim(), '[\s\u3000]+', ' ')
 }
 
-function Invoke-VerifiedWeixinFocusedSearchSubmission {
+function Invoke-WeixinSouyisouSetValueAndReadback {
+    param(
+        [Parameter(Mandatory)][IntPtr]$PluginHwnd,
+        [Parameter(Mandatory)][string]$Query
+    )
+    # UIA 原生写搜一搜搜索框：枚举插件窗找到合法矩形 Edit（搜索框，落地页唯一），
+    # ValuePattern.SetValue 写入查询并返回读回文本（供上层比对）。不依赖窗口前台/键盘焦点/剪贴板。
+    # Windows PowerShell 5.1（.NET Framework 4.x）没有 [double]::IsFinite，用
+    # Width/Height>0 + 左上顶<+∞ 判合法矩形（NaN 与任何值比较均为 false，自动排除）。
+    $root = [Windows.Automation.AutomationElement]::FromHandle($PluginHwnd)
+    if ($null -eq $root) { throw 'UIA_ROOT_UNAVAILABLE' }
+    $nodes = $root.FindAll(
+        [Windows.Automation.TreeScope]::Descendants,
+        [Windows.Automation.Condition]::TrueCondition)
+    $target = $null
+    foreach ($node in $nodes) {
+        try {
+            $current = $node.Current
+            if ([string]$current.ControlType.ProgrammaticName.Replace('ControlType.','') -ne 'Edit') { continue }
+            $b = $current.BoundingRectangle
+            if ([double]$b.Width -gt 0 -and [double]$b.Height -gt 0 -and
+                [double]$b.Left -lt [double]::PositiveInfinity -and
+                [double]$b.Top -lt [double]::PositiveInfinity) {
+                $target = $node; break
+            }
+        } catch { continue }
+    }
+    if ($null -eq $target) { throw 'SEARCHBOX_NOT_FOUND' }
+    $vp = $null
+    if (-not $target.TryGetCurrentPattern(
+        [Windows.Automation.ValuePattern]::Pattern, [ref]$vp)) {
+        throw 'SEARCHBOX_VALUE_PATTERN_UNAVAILABLE'
+    }
+    $vp.SetValue($Query)
+    Start-Sleep -Milliseconds 200
+    return [string]$vp.Current.Value
+}
+
+function Invoke-VerifiedWeixinUaSearchSubmission {
     param(
         [Parameter(Mandatory)][string]$Query,
         [Parameter(Mandatory)][scriptblock]$ForegroundGuard,
-        [Parameter(Mandatory)][scriptblock]$SetClipboardText,
-        [Parameter(Mandatory)][scriptblock]$SendChord,
-        [Parameter(Mandatory)][scriptblock]$ReadClipboardText,
+        [Parameter(Mandatory)][scriptblock]$WriteAndReadback,
+        [AllowNull()][scriptblock]$SubmitChord,
         [bool]$Submit = $true,
-        [hashtable]$Diagnostics = @{},
-        [AllowNull()][scriptblock]$BeforeSubmit
+        [hashtable]$Diagnostics = @{}
     )
     try {
         $Diagnostics.readback_matched = $false
-        if (-not (& $ForegroundGuard)) { throw 'INPUT_FOCUS_LOST' }
-        & $SetClipboardText $Query
-        & $SendChord @('CTRL','A')
-        & $SendChord @('CTRL','V')
-        if (-not (& $ForegroundGuard)) { throw 'INPUT_FOCUS_LOST' }
-        & $SendChord @('CTRL','A')
-        & $SendChord @('CTRL','C')
-        $actual = [string](& $ReadClipboardText)
+        # SetValue 不依赖窗口前台/键盘焦点（实测：TAB 移走焦点后仍写入成功），故写入前不查前台，
+        # 避免搜一搜窗前台漂走时被误判 INPUT_FOCUS_LOST 触发无谓重开——这正是改用 SetValue 的意义。
+        $actual = [string](& $WriteAndReadback)
         $Diagnostics.readback_matched = [string]::Equals(
             (Normalize-WeixinSearchInputText $actual),
             (Normalize-WeixinSearchInputText $Query),
@@ -896,14 +927,14 @@ function Invoke-VerifiedWeixinFocusedSearchSubmission {
         if (-not $Diagnostics.readback_matched) {
             throw 'SEARCH_INPUT_READBACK_MISMATCH'
         }
-        if (-not (& $ForegroundGuard)) { throw 'INPUT_FOCUS_LOST' }
-        if ($Submit) {
-            if ($BeforeSubmit) { & $BeforeSubmit }
-            & $SendChord @('ENTER')
+        if ($Submit -and $SubmitChord) {
+            # 提交（回车）需要窗口前台：显式查一次，INPUT_FOCUS_LOST 由上层重开兜底。
+            if (-not (& $ForegroundGuard)) { throw 'INPUT_FOCUS_LOST' }
+            & $SubmitChord
         }
         return [pscustomobject]@{
-            input_verified=$true; submitted=[bool]$Submit
-            input_method='trusted_keyboard_navigation'
+            input_verified=$true; submitted=[bool]($Submit -and $SubmitChord)
+            input_method='uia_value_pattern'
         }
     } catch {
         if ($_.Exception.Message -in @(

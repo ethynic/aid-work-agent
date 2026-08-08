@@ -234,9 +234,11 @@ Assert (-not (Test-SearchResultReady $resultPageSample '协会 王承展 联系�
 
 $failedRetryEvents = @(); $failedRetryRejected = $false
 try {
-    [void](Invoke-VerifiedWeixinFocusedSearchSubmission '协会 张三' {$true} {} {
-        param($keys) $script:failedRetryEvents += ($keys -join '+')
-    } { '旧文本一' } $true @{})
+    [void](Invoke-VerifiedWeixinUaSearchSubmission '协会 张三' {$true} {
+        '旧文本一'
+    } {
+        $script:failedRetryEvents += 'ENTER'
+    } $true @{})
 } catch { $failedRetryRejected = $_.Exception.Message -eq 'SEARCH_INPUT_READBACK_MISMATCH' }
 Assert (
     $failedRetryRejected -and
@@ -907,9 +909,9 @@ Assert (
     $entryText -match "(?s)ConvertTo-WeixinPhysicalClickPoint.*?'PerMonitorV2'"
 ) 'UIA physical clicks require a verified Per-Monitor V2 thread context'
 Assert ($entryText -match '\$stage\s*=\s*''input_verify''') 'input focus failures use explicit input_verify stage'
-Assert ($entryText -match 'Invoke-VerifiedWeixinFocusedSearchSubmission') 'entry point verifies keyboard-focused input readback before submission'
+Assert ($entryText -match 'Invoke-VerifiedWeixinUaSearchSubmission') 'entry point verifies UIA value-pattern input readback before submission'
 $focusedInputIndex = $entryText.IndexOf(
-    'Invoke-VerifiedWeixinFocusedSearchSubmission',
+    'Invoke-VerifiedWeixinUaSearchSubmission',
     $productionStart,
     [StringComparison]::Ordinal)
 $freshOpenIndex = $entryText.LastIndexOf(
