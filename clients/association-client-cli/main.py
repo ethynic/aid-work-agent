@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
+import io
 import json
 import re
 import sys
@@ -300,6 +302,58 @@ async def cmd_collect(args: argparse.Namespace) -> int:
         gateway.close()
 
 
+# ============== llm-judge 命令 ==============
+
+async def cmd_llm_judge(args: argparse.Namespace) -> int:
+    """LLM 证据判断（stdin JSON → stdout JSON，供 ps1 collect 调用）。
+
+    打包 exe 内含 python 运行时 + ProxyLLMGateway（走服务端代理计费），不依赖
+    客户机 python / 本地 key。逻辑单点在 runtime/llm_judge.py 的 run_judge。
+    """
+    access_token = get_access_token()
+    if not access_token:
+        # 无 token 无法走代理，输出 inconclusive 让 ps1 走兜底分支。
+        sys.stdout.write(json.dumps({"inconclusive": True}, ensure_ascii=False) + "\n")
+        return 1
+
+    server_url = get_server_url(args.server_url)
+    try:
+        payload = json.loads(sys.stdin.read())
+    except (json.JSONDecodeError, ValueError):
+        sys.stderr.write("judge_failed:ValueError\n")
+        return 2
+
+    gateway = ProxyLLMGateway(server_url, access_token)
+    try:
+        from runtime.llm_judge import run_judge
+
+        # 隔离 run_judge / gateway 内部日志，保证 stdout 只有一行 JSON。
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            result = await run_judge(payload, gateway)
+        sys.stdout.write(json.dumps(result, ensure_ascii=False, separators=(",", ":")) + "\n")
+        return 0
+    except Exception as exc:
+        import os as _os
+        import traceback as _tb
+        try:
+            with open(_os.path.join(_os.environ.get("TEMP", ""), "wechat_diag.log"), "a", encoding="utf-8") as _f:
+                _f.write(f"cmd_llm_judge EXCEPTION: {_tb.format_exc()}\n")
+        except Exception:
+            pass
+        token_usage = getattr(exc, "token_usage", None)
+        if isinstance(token_usage, dict) and any(token_usage.values()):
+            sys.stdout.write(json.dumps(
+                {"inconclusive": True, "token_usage": token_usage},
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ) + "\n")
+            return 0
+        sys.stderr.write(f"judge_failed:{type(exc).__name__}\n")
+        return 2
+    finally:
+        gateway.close()
+
+
 # ============== 命令行解析 ==============
 
 def build_parser() -> argparse.ArgumentParser:
@@ -332,17 +386,24 @@ def build_parser() -> argparse.ArgumentParser:
     p_col.add_argument("--server-url", default=None, help="服务端地址（覆盖配置）")
     p_col.add_argument("--no-wechat", action="store_true", help="跳过微信RPA步骤（调试用）")
 
+    # llm-judge
+    p_judge = sub.add_parser(
+        "llm-judge",
+        help="LLM 证据判断（stdin JSON → stdout JSON，供 ps1 collect 调用）",
+    )
+    p_judge.add_argument("--server-url", default=None, help="服务端地址（覆盖配置）")
+
     return parser
 
 
 def _ensure_utf8_stdout() -> None:
-    """强制 stdout/stderr UTF-8。
+    """强制 stdin/stdout/stderr UTF-8。
 
-    PyInstaller exe 在 Windows pipe 默认 cp936（GBK），而 Electron 按 UTF-8
-    解码，中文乱码。PYTHONUTF8 env 在打包 exe 下未可靠生效，显式 reconfigure
-    兜底——emit 的 print 走 sys.stdout、loguru 走 sys.__stderr__，一并覆盖。
+    PyInstaller exe 在 Windows pipe 默认 cp936（GBK）：stdout/stderr 让中文乱码；
+    stdin 会把 UTF-8 的中文 JSON（如 llm-judge 读的 payload）解码出 surrogate，
+    导致 httpx 编码报 UnicodeEncodeError。显式 reconfigure 兜底。
     """
-    for stream in (sys.stdout, sys.stderr, sys.__stdout__, sys.__stderr__):
+    for stream in (sys.stdin, sys.stdout, sys.stderr, sys.__stdin__, sys.__stdout__, sys.__stderr__):
         try:
             stream.reconfigure(encoding="utf-8")
         except Exception:
@@ -369,6 +430,8 @@ async def _dispatch(args: argparse.Namespace) -> int:
         return await cmd_credits_detail(args)
     elif args.command == "collect":
         return await cmd_collect(args)
+    elif args.command == "llm-judge":
+        return await cmd_llm_judge(args)
     else:
         parser = build_parser()
         parser.print_help()

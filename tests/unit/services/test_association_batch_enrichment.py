@@ -497,7 +497,7 @@ async def test_wechat_mobile_retries_when_souyisou_empty(monkeypatch, tmp_path):
     processes = iter([
         # 第一轮 collect：没搜到 → 触发重试
         CompletedProcess(
-            json.dumps({"ok": True, "session_closed": True, "status": "inconclusive"}).encode("utf-8")
+            json.dumps({"ok": True, "session_closed": True, "status": "inconclusive", "checked": 0}).encode("utf-8")
         ),
         # 第二轮 collect：搜到
         CompletedProcess(
@@ -545,10 +545,10 @@ async def test_wechat_mobile_returns_none_after_retry_exhausted(monkeypatch, tmp
 
     processes = iter([
         CompletedProcess(
-            json.dumps({"ok": True, "session_closed": True, "status": "inconclusive"}).encode("utf-8")
+            json.dumps({"ok": True, "session_closed": True, "status": "inconclusive", "checked": 0}).encode("utf-8")
         ),
         CompletedProcess(
-            json.dumps({"ok": True, "session_closed": True, "status": "inconclusive"}).encode("utf-8")
+            json.dumps({"ok": True, "session_closed": True, "status": "inconclusive", "checked": 0}).encode("utf-8")
         ),
     ])
 
@@ -592,6 +592,40 @@ async def test_wechat_mobile_no_retry_when_not_found(monkeypatch, tmp_path):
 
     assert await providers.wechat_mobile("测试协会", "张三", "会长") is None
     assert call_count == 1  # not_found 不重试，只搜一次
+
+
+@pytest.mark.asyncio
+async def test_wechat_mobile_no_retry_after_detail_checked(monkeypatch, tmp_path):
+    """进过详情页（inconclusive + checked>0）→ 不重试，直接返回 None。
+
+    业务意图：checked>0 说明已经打开过详情尽力搜过，重搜结果一样。回归保护用户报告的
+    「秘书长手机搜两次」——首版重试条件 status==inconclusive 没看 checked，导致进过详情
+    也重搜一遍。
+    """
+    import src.services.association_enrichment_providers as module
+
+    class CompletedProcess:
+        def __init__(self, stdout):
+            self.returncode = 0
+            self._stdout = stdout
+
+        async def communicate(self):
+            return self._stdout, b""
+
+    call_count = 0
+
+    async def fake_subprocess(*_args, **_kwargs):
+        nonlocal call_count
+        call_count += 1
+        return CompletedProcess(
+            json.dumps({"ok": True, "session_closed": True, "status": "inconclusive", "checked": 1}).encode("utf-8")
+        )
+
+    providers = ProjectAssociationProviders(repository_root=tmp_path)
+    monkeypatch.setattr(module.asyncio, "create_subprocess_exec", fake_subprocess)
+
+    assert await providers.wechat_mobile("测试协会", "张三", "会长") is None
+    assert call_count == 1  # 进过详情(checked>0)不重试，只搜一次
 
 
 @pytest.mark.asyncio

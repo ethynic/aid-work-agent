@@ -543,9 +543,11 @@ function Invoke-EvidenceJudge {
             association_name = $AssociationName; person_name = $PersonName; text = $Evidence
         }) } else { Invoke-DeterministicJudge $Evidence $PersonName }
     } catch {
+        Add-Content -Path "$env:TEMP\wechat_diag.log" -Value "[$([DateTimeOffset]::Now.ToString('HH:mm:ss'))] Invoke-EvidenceJudge EXCEPTION: $($_.Exception.Message) person=$PersonName"
         return [pscustomobject]@{ matched = $false; inconclusive = $true; reason = 'judge_failed' }
     }
     if ($result.inconclusive -eq $true) {
+        Add-Content -Path "$env:TEMP\wechat_diag.log" -Value "[$([DateTimeOffset]::Now.ToString('HH:mm:ss'))] Invoke-EvidenceJudge INCONCLUSIVE: matched=$($result.matched) reason=$($result.reason) person=$PersonName"
         $safe = [pscustomobject]@{ matched = $false; inconclusive = $true; reason = 'judge_failed' }
         if ($result.token_usage) {
             $safe | Add-Member -NotePropertyName token_usage -NotePropertyValue $result.token_usage

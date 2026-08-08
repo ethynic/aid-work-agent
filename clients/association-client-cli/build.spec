@@ -46,6 +46,7 @@ hiddenimports += [
     "runtime.playwright_check",
     "runtime.wenxin_browser",
     "runtime.wenxin_collector",
+    "runtime.llm_judge",
     "src.services.association_batch_enrichment",
     "src.services.association_enrichment_providers",
     "src.services.association_profile_extractor",

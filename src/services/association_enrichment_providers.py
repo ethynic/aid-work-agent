@@ -501,11 +501,14 @@ class ProjectAssociationProviders:
                     person_name,
                     role=role,
                 )
-            # 只有「搜一搜结果为空」（inconclusive：没读到搜索列表）才重试一次
-            # ——等于重发组合键重搜。not_found 等（搜一搜有列表、只是没匹配到
-            # 手机号）算正常返回，不重试，避免「有结果也搜两遍」。
-            if status != "inconclusive" or mobile_attempt > 0:
+            # 只在「没读到搜一搜列表/没进详情」(inconclusive + checked=0)时重试一次。
+            # 进过详情(checked>0)说明已尽力搜过，重搜结果一样；not_found 等也不重试。
+            if status != "inconclusive" or payload.get("checked") or mobile_attempt > 0:
                 return None
+            # 重试前 alt+tab 把微信切到后台，ps1 打开搜一搜时会 activate 把微信
+            # 重新置顶，重置焦点（用户经验：这样一般能保证焦点落到输入框）。
+            self._send_alt_tab_once()
+            await self._wechat_handoff_sleep(1.0)
             self._audit(
                 association=association_name,
                 stage=f"微信搜一搜·{role}",
@@ -528,6 +531,13 @@ class ProjectAssociationProviders:
         fatal 错误（超时、returncode!=0、非 dict 响应、会话未关闭）直接 raise，
         不在此重试——只有「正常返回但 status != found」才由调用方重试。
         """
+        import sys
+        # 打包 exe（PyInstaller frozen）下，ps1 collect 的 LLM judge 改用 cli exe
+        # 的 llm-judge 子命令（内含 ProxyLLMGateway，走服务端代理计费），避免依赖
+        # 客户机 python / 本地 key。dev 下不传，ps1 走 python + llm_judge.py。
+        judge_args = (
+            ["-CliExe", sys.executable] if getattr(sys, "frozen", False) else []
+        )
         process = await asyncio.create_subprocess_exec(
             "powershell.exe",
             "-NoProfile",
@@ -543,6 +553,7 @@ class ProjectAssociationProviders:
             person_name,
             "-Execute",
             "-UseProjectLlm",
+            *judge_args,
             "-Limit",
             "3",
             stdout=asyncio.subprocess.PIPE,
@@ -777,6 +788,9 @@ class ProjectAssociationProviders:
             # 搜索列表为空（搜一搜结果没读到/没加载）：重试一次，等于重发
             # Ctrl+F/下/回车 组合键 + 重输 + 重搜。偶发焦点/加载问题靠它兜底。
             if search_attempt == 0:
+                # 重试前 alt+tab 把微信切到后台，ps1 打开搜一搜时 activate 回前台，重置焦点
+                self._send_alt_tab_once()
+                await self._wechat_handoff_sleep(1.0)
                 self._audit(
                     association=association_name,
                     stage=f"微信搜领导·{role}",

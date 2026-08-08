@@ -9,6 +9,7 @@ param(
     [ValidateRange(1,10)][int]$Limit = 3,
     [string]$JudgeCommand,
     [switch]$UseProjectLlm,
+    [string]$CliExe,
     [string]$OcrCommand,
     [switch]$DisableOcr,
     [switch]$VerifyInputOnly,
@@ -23,6 +24,7 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'wechat-souyisou-lib.ps1')
 
 function Write-Result([hashtable]$Value) {
+    Add-Content -Path "$env:TEMP\wechat_diag.log" -Value "[$([DateTimeOffset]::Now.ToString('HH:mm:ss'))] Write-Result: ok=$($Value.ok) status=$($Value.status) error_code=$($Value.error_code) stage=$($Value.stage) checked=$($Value.checked) person=$PersonName assoc=$AssociationName"
     [Console]::Out.WriteLine(($Value | ConvertTo-Json -Depth 12 -Compress))
 }
 function Fail(
@@ -434,6 +436,7 @@ public static class WechatSouyisouWin32 {
         $readySamples = 0
         $text = ''
         $html = ''
+        Add-Content -Path "$env:TEMP\wechat_diag.log" -Value "[$([DateTimeOffset]::Now.ToString('HH:mm:ss'))] collect START: command=$Command query='$query' person=$PersonName assoc=$AssociationName"
         do {
             & $assertWorkBudget 60000
             Start-Sleep -Milliseconds 500
@@ -460,6 +463,7 @@ public static class WechatSouyisouWin32 {
             [DateTimeOffset]::UtcNow -lt $readyDeadline
         )
         if ($readySamples -lt 2) {
+            Add-Content -Path "$env:TEMP\wechat_diag.log" -Value "[$([DateTimeOffset]::Now.ToString('HH:mm:ss'))] collect search_wait INCONCLUSIVE: readySamples=$readySamples last_candidate_len=$($candidateText.Length) person_in_candidate=$([bool]$candidateText.Contains($PersonName)) query='$query' person=$PersonName assoc=$AssociationName"
             $artifact=Protect-EvidenceArtifact $ArtifactDirectory @{
                 kind='result_page_unbounded';association_name=$AssociationName
                 person_name=$PersonName;text='';links=@();input_verified=[bool]$inputVerified
@@ -485,8 +489,14 @@ public static class WechatSouyisouWin32 {
         $links = @(Get-CfHtmlLinks $html)
         $judge = $null
         if ($UseProjectLlm) {
-            $judge = New-ExternalJudge (Get-Command python.exe -ErrorAction Stop).Source `
-                @((Join-Path $PSScriptRoot 'llm_judge.py'))
+            if ($CliExe) {
+                # 打包：cli exe 内含 python + ProxyLLMGateway，不依赖客户机 python
+                $judge = New-ExternalJudge $CliExe @('llm-judge')
+            } else {
+                # dev：python + llm_judge.py
+                $judge = New-ExternalJudge (Get-Command python.exe -ErrorAction Stop).Source `
+                    @((Join-Path $PSScriptRoot 'llm_judge.py'))
+            }
         } elseif ($JudgeCommand) {
             $judge = New-ExternalJudge $JudgeCommand
         }
@@ -546,7 +556,10 @@ public static class WechatSouyisouWin32 {
         # 不确定才进入最多 10 条详情。列表 artifact 明确标记为 unbounded，
         # 供审计区分“整页列表证据”和“前 10 条详情证据”。
         if ($judge) { & $assertWorkBudget 120000 } else { & $assertWorkBudget }
+        $mobileCandidates = @(Get-MobileCandidates $text)
+        Add-Content -Path "$env:TEMP\wechat_diag.log" -Value "[$([DateTimeOffset]::Now.ToString('HH:mm:ss'))] list_judge IN: person=$PersonName text_len=$($text.Length) mobile_candidates=$($mobileCandidates.Count) has_judge=$([bool]$judge) assoc=$AssociationName"
         $listJudge = Invoke-EvidenceJudge $text $AssociationName $PersonName $judge
+        Add-Content -Path "$env:TEMP\wechat_diag.log" -Value "[$([DateTimeOffset]::Now.ToString('HH:mm:ss'))] list_judge OUT: matched=$($listJudge.matched) inconclusive=$($listJudge.inconclusive) reason=$($listJudge.reason) person=$PersonName"
             if ($listJudge.token_usage) { $llmUsages += $listJudge.token_usage }
             $listJudgeStatus = if ($listJudge.matched) {
                 'matched'
@@ -590,25 +603,11 @@ public static class WechatSouyisouWin32 {
                 }
                 exit 0
             }
-            if ($listJudge.inconclusive) {
-                $detailArtifact = Protect-EvidenceArtifact $ArtifactDirectory @{
-                    kind='collect_result';status='inconclusive';checked=0;failures=1
-                    source='result_page_unbounded';list_artifact_id=$artifact.artifact_id
-                    list_judge_status=$listJudgeStatus
-                    list_judge_reason_code=$listJudgeReasonCode
-                    llm_usages=$llmUsages;records=@();found_result=$null
-                    captured_at=[DateTimeOffset]::Now.ToString('o')
-                }
-                $stage='cleanup';$sessionCleanupAttempted=$true
-                $cleanupResult=Complete-WeixinPluginSession `
-                    ([ref]$sessionCleanupCompleted) $cleanupSession
-                Write-Result @{
-                    ok=$true;executed=$true;status='inconclusive';checked=0;failures=1
-                    artifact_ref=$detailArtifact.artifact_ref
-                    session_closed=[bool]$cleanupResult.session_closed
-                }
-                exit 0
-            }
+            # list_judge inconclusive（列表有、LLM 没判出手机号）不在此 exit：
+            # 落到下面 Test-ListHasActionableCandidates → 进详情页找手机号，与
+            # L545 注释「未匹配或不确定才进入详情」一致。原逻辑在此 exit，导致
+            # 「列表有结果却没进详情、还因 inconclusive 被上层当空结果重搜一遍」。
+        Add-Content -Path "$env:TEMP\wechat_diag.log" -Value "[$([DateTimeOffset]::Now.ToString('HH:mm:ss'))] collect list: person=$PersonName text_len=$($text.Length) person_in_text=$([bool]$text.Contains($PersonName)) links=$($links.Count) list_judge=$listJudgeStatus query='$query' assoc=$AssociationName"
         if (-not (Test-ListHasActionableCandidates $text $PersonName $links)) {
             $detailArtifact = Protect-EvidenceArtifact $ArtifactDirectory @{
                 kind='collect_result';status='inconclusive';checked=0;failures=0
@@ -676,6 +675,7 @@ public static class WechatSouyisouWin32 {
                 $viewportHash = Get-BitmapSha256 $viewport
                 $points = @(Get-WeixinUiaResultDescriptors `
                     $pluginHwnd.ToInt64() $rect)
+                Add-Content -Path "$env:TEMP\wechat_diag.log" -Value "[$([DateTimeOffset]::Now.ToString('HH:mm:ss'))] collect detail: points=$($points.Count) checked=$checked scrolls=$scrolls uiaRecovery=$uiaEnumerationRecoveryAttempts person=$PersonName assoc=$AssociationName"
             } finally { $viewport.Dispose() }
             if (-not $points.Count) {
                 $stage = 'points'
@@ -1006,6 +1006,7 @@ public static class WechatSouyisouWin32 {
         $sessionCleanupAttempted = $true
         $cleanupResult = Complete-WeixinPluginSession `
             ([ref]$sessionCleanupCompleted) $cleanupSession
+        Add-Content -Path "$env:TEMP\wechat_diag.log" -Value "[$([DateTimeOffset]::Now.ToString('HH:mm:ss'))] collect done: status=$status checked=$checked failures=$failures list_judge=$listJudgeStatus list_reason=$listJudgeReasonCode person=$PersonName assoc=$AssociationName"
         Write-Result @{
             ok=$true;executed=$true;status=$status;checked=$checked;failures=$failures
             artifact_ref=$detailArtifact.artifact_ref
