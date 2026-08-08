@@ -315,70 +315,31 @@ class ProjectAssociationProviders:
                 result[field_name] = None
         return result
 
-    async def _spawn_wenxin_collect(self, association_name: str) -> dict | None:
-        """spawn wenxin_collect.py：文心联网采集协会基础信息原文。
+    async def _collect_wenxin(self, association_name: str) -> dict | None:
+        """进程内调用文心联网采集协会基础信息原文。
 
-        返回子脚本 stdout 最后一行 JSON（{"ok":..., "answer":..., "note":...}）。
-        任何失败（脚本缺失/启动失败/超时/格式错误）都返回 None，由上层走
+        用 exe 内嵌的 playwright 连接 9222 常驻浏览器（由 ensure_wenxin_browser
+        保证就绪），返回 collect_one 的 {ok, answer, note}。不再 spawn 外部
+        python——PyInstaller onefile 打包后无客户机 python 可用，进程内调用让
+        打包 exe 真正自包含（客户机零安装）。任何失败返回 None，由上层走
         DeepSeek 兜底——文心只是优化信息源，不可让它拖垮整步。
         """
-        import shutil
-        import sys
-
-        # python 解释器定位：
-        #   dev 模式用当前解释器 sys.executable（已装 playwright）；
-        #   打包模式（PyInstaller onefile）sys.executable 是 exe 本体跑不了 .py，
-        #   改用客户机 PATH 里的 python（README 要求客户预装 Python 3.11+，
-        #   与 wechat 脚本 Get-Command python.exe 同一假设）；找不到则放弃文心。
-        if getattr(sys, "frozen", False):
-            python_exe = shutil.which("python") or shutil.which("python3")
-            if python_exe is None:
-                return None
-        else:
-            python_exe = sys.executable
-
-        script = self._wenxin_collect_script_path()
-        if not script.is_file():
-            return None
-        stdin_bytes = json.dumps(
-            {"association_name": association_name}, ensure_ascii=False
-        ).encode("utf-8")
         try:
-            process = await asyncio.create_subprocess_exec(
-                python_exe,
-                str(script),
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-        except OSError:
-            return None
-        # 文心脚本需要 stdin 喂 JSON，故单独内联带 input 的 communicate；
-        # 不复用 _communicate_with_timeout（它面向微信脚本，无 input 参数）。
-        try:
-            stdout, _stderr = await asyncio.wait_for(
-                process.communicate(input=stdin_bytes),
+            from runtime.wenxin_collector import collect_one
+
+            return await asyncio.wait_for(
+                collect_one(association_name),
                 timeout=_WENXIN_COLLECT_TIMEOUT_SECONDS,
             )
-        except (TimeoutError, RuntimeError, OSError):
-            # 超时/OSError（管道断裂等）；文心非关键，一律 kill+wait 回收后
-            # 返回 None 走 DeepSeek 降级，防 communicate 异常时子进程泄漏。
-            try:
-                process.kill()
-            except ProcessLookupError:
-                pass
-            await process.wait()
-            return None
-        try:
-            return json.loads(stdout.decode("utf-8").strip().splitlines()[-1])
-        except (IndexError, UnicodeDecodeError, json.JSONDecodeError):
+        except Exception:
+            # playwright/CDP 异常或超时；文心非关键，降级 DeepSeek 不拖垮整步。
             return None
 
-    def _wenxin_collect_script_path(self) -> Path:
-        """wenxin_collect.py 路径：打包下从 _MEIPASS/scripts/，dev 下从源码仓库解析。
+    def _wechat_script_path(self, filename: str) -> Path:
+        """wechat ps1 路径：打包下从 _MEIPASS/scripts/，dev 下从源码仓库解析。
 
-        build.spec 把 scripts/*.py 打成扁平 _MEIPASS/scripts/（非源码的
-        clients/association-client-cli/scripts/ 嵌套结构），故打包后不能照
+        build.spec 把 scripts/*.ps1 打成扁平 _MEIPASS/scripts/（非源码的
+        clients/wechat-souyisou-rpa/scripts/ 嵌套结构），故打包后不能照
         self._root 模式解析——照 runtime.powershell_runner.scripts_dir() 做
         frozen-aware 解析。
         """
@@ -389,13 +350,13 @@ class ProjectAssociationProviders:
                 if hasattr(sys, "_MEIPASS")
                 else Path(sys.executable).parent
             )
-            return base / "scripts" / "wenxin_collect.py"
+            return base / "scripts" / filename
         return (
             self._root
             / "clients"
-            / "association-client-cli"
+            / "wechat-souyisou-rpa"
             / "scripts"
-            / "wenxin_collect.py"
+            / filename
         )
 
     async def search_profile(self, association_name: str) -> dict[str, str | None]:
@@ -413,7 +374,7 @@ class ProjectAssociationProviders:
         ]
 
         # 1) 文心联网采集原文（含"官网网址：..."），根治官网幻觉
-        wenxin = await self._spawn_wenxin_collect(association_name)
+        wenxin = await self._collect_wenxin(association_name)
         raw_text = wenxin.get("answer") if (
             isinstance(wenxin, dict)
             and wenxin.get("ok")
@@ -447,7 +408,7 @@ class ProjectAssociationProviders:
                 summary=(
                     str(wenxin.get("note"))
                     if isinstance(wenxin, dict)
-                    else "wenxin_spawn_failed"
+                    else "wenxin_collect_failed"
                 ),
             )
             system_prompt = (
@@ -500,13 +461,7 @@ class ProjectAssociationProviders:
             raise WechatRpaError(
                 "WECHAT_HANDOFF_FAILED", stage="handoff", session_fatal=True
             ) from exc
-        script = (
-            self._root
-            / "clients"
-            / "wechat-souyisou-rpa"
-            / "scripts"
-            / "wechat-souyisou.ps1"
-        )
+        script = self._wechat_script_path("wechat-souyisou.ps1")
         import sys
 
         child_environment = os.environ.copy()
@@ -712,13 +667,7 @@ class ProjectAssociationProviders:
             raise WechatRpaError(
                 "WECHAT_HANDOFF_FAILED", stage="handoff", session_fatal=True
             ) from exc
-        script = (
-            self._root
-            / "clients"
-            / "wechat-souyisou-rpa"
-            / "scripts"
-            / "wechat-souyisou.ps1"
-        )
+        script = self._wechat_script_path("wechat-souyisou.ps1")
         import sys
 
         child_environment = os.environ.copy()
@@ -737,52 +686,64 @@ class ProjectAssociationProviders:
                 "handoff_performed": handoff_performed,
             },
         )
-        process = await asyncio.create_subprocess_exec(
-            "powershell.exe",
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-File",
-            str(script),
-            "-Command",
-            "search",
-            "-AssociationName",
-            association_name,
-            "-PersonName",
-            role,
-            "-Execute",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=child_environment,
-        )
-        self._wechat_query_index += 1
-        try:
-            stdout, stderr = await self._communicate_with_timeout(
-                process,
-                timeout_seconds=_WECHAT_RPA_TIMEOUT_SECONDS,
-                error_code="WECHAT_RPA_TIMEOUT",
-            )
-        except Exception as exc:
-            code = str(exc) if str(exc) in _WECHAT_SESSION_FATAL_CODES else "WECHAT_RPA_TIMEOUT"
-            raise WechatRpaError(
-                code, stage="timeout", session_fatal=True
-            ) from exc
-        payload = None
-        try:
-            payload = json.loads(
-                stdout.decode("utf-8-sig").strip().splitlines()[-1]
-            )
-        except (IndexError, UnicodeDecodeError, json.JSONDecodeError):
-            pass
-        artifact_ref = (
-            payload.get("artifact_ref") if isinstance(payload, dict) else None
-        )
         list_text = ""
-        if isinstance(artifact_ref, str):
+        for search_attempt in range(2):
+            process = await asyncio.create_subprocess_exec(
+                "powershell.exe",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(script),
+                "-Command",
+                "search",
+                "-AssociationName",
+                association_name,
+                "-PersonName",
+                role,
+                "-Execute",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=child_environment,
+            )
+            self._wechat_query_index += 1
             try:
-                list_text = await self._read_wechat_search_list_text(artifact_ref)
-            except Exception:
+                stdout, stderr = await self._communicate_with_timeout(
+                    process,
+                    timeout_seconds=_WECHAT_RPA_TIMEOUT_SECONDS,
+                    error_code="WECHAT_RPA_TIMEOUT",
+                )
+            except Exception as exc:
+                code = str(exc) if str(exc) in _WECHAT_SESSION_FATAL_CODES else "WECHAT_RPA_TIMEOUT"
+                raise WechatRpaError(
+                    code, stage="timeout", session_fatal=True
+                ) from exc
+            payload = None
+            try:
+                payload = json.loads(
+                    stdout.decode("utf-8-sig").strip().splitlines()[-1]
+                )
+            except (IndexError, UnicodeDecodeError, json.JSONDecodeError):
                 pass
+            artifact_ref = (
+                payload.get("artifact_ref") if isinstance(payload, dict) else None
+            )
+            if isinstance(artifact_ref, str):
+                try:
+                    list_text = await self._read_wechat_search_list_text(artifact_ref)
+                except Exception:
+                    pass
+            if list_text.strip():
+                break
+            # 搜索列表为空（搜一搜结果没读到/没加载）：重试一次，等于重发
+            # Ctrl+F/下/回车 组合键 + 重输 + 重搜。偶发焦点/加载问题靠它兜底。
+            if search_attempt == 0:
+                self._audit(
+                    association=association_name,
+                    stage=f"微信搜领导·{role}",
+                    kind="list_text_empty_retry",
+                    summary="搜索列表为空，重发组合键重试",
+                )
         if not list_text.strip():
             self._audit(
                 association=association_name,
@@ -838,7 +799,7 @@ class ProjectAssociationProviders:
             [
                 "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
                 "-File",
-                str(self._root / "clients" / "wechat-souyisou-rpa" / "scripts" / "read-artifact.ps1"),
+                str(self._wechat_script_path("read-artifact.ps1")),
                 "-ArtifactPath", str(artifact_path),
             ],
             capture_output=True, timeout=15,
@@ -975,13 +936,7 @@ class ProjectAssociationProviders:
         person_name: str,
         role: str,
     ) -> None:
-        helper = (
-            self._root
-            / "clients"
-            / "wechat-souyisou-rpa"
-            / "scripts"
-            / "read-artifact.ps1"
-        )
+        helper = self._wechat_script_path("read-artifact.ps1")
         if not helper.is_file():
             self._audit(
                 association=association_name,

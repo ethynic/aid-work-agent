@@ -126,12 +126,21 @@ class LLMGateway:
                 f"model_codes 覆盖: {self._model_codes or '无'}"
             )
         else:
-            self._key_pool: KeyPool = _build_key_pool(self.provider_name)
-            logger.info(
-                f"LLM网关初始化完成，提供者: {self.provider_name}，"
-                f"Key 池统计: {self._key_pool.stats()}，"
-                f"model_codes 覆盖: {self._model_codes or '无'}"
-            )
+            # 无 key 时（如打包 CLI 无 .env）不阻断模块加载——CLI 走 ProxyLLMGateway
+            # 不调用本实例；真正调用时由 _call_with_pool fail-loud。
+            try:
+                self._key_pool: KeyPool = _build_key_pool(self.provider_name)
+                logger.info(
+                    f"LLM网关初始化完成，提供者: {self.provider_name}，"
+                    f"Key 池统计: {self._key_pool.stats()}，"
+                    f"model_codes 覆盖: {self._model_codes or '无'}"
+                )
+            except ValueError as exc:
+                logger.warning(
+                    f"LLM网关未配置 provider={self.provider_name} 的 Key（{exc}）；"
+                    f"模块加载不阻断，真正调用时再报错。"
+                )
+                self._key_pool = None
 
     # ------------------------------------------------------------------
     # 内部：从 Key 池获取 Provider 并执行调用
@@ -143,6 +152,11 @@ class LLMGateway:
         Key 在 async with 块结束时自动归还。
         """
         import time
+        if self._key_pool is None:
+            raise RuntimeError(
+                f"LLM网关未配置 provider={self.provider_name} 的 Key，无法调用 {fn_name}；"
+                f"请在 .env 配置 {self.provider_name.upper()}_API_KEYS。"
+            )
         call_start = time.time()
         logger.info(f"[LLM] _call_with_pool started, provider={self.provider_name}, fn={fn_name}")
         

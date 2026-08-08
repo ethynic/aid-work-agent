@@ -29,11 +29,19 @@ if (!existsSync(cliExe)) {
 }
 console.log(`[OK] CLI exe: ${cliExe}`)
 
-// 2. electron-builder（extraResources 已在 electron-builder.yml 静态配置，
-//    不再动态注入——无论走 package-win.mjs 还是直接 npx electron-builder，
-//    cli.exe 都会打入安装包，防漏打包）
-console.log('\n[打包中] electron-builder...')
-execSync('npx electron-builder --win', { cwd: projectRoot, stdio: 'inherit' })
+// 2. electron-builder
+//    - extraResources 在 electron-builder.yml 静态配置（cli.exe 打入，防漏）
+//    - 国内镜像 env：electron/winCodeSign 从 github 下载常超时，固定走 npmmirror
+console.log('\n[打包中] electron-builder（国内镜像）...')
+execSync('npx electron-builder --win', {
+  cwd: projectRoot,
+  stdio: 'inherit',
+  env: {
+    ...process.env,
+    ELECTRON_MIRROR: 'https://registry.npmmirror.com/-/binary/electron/',
+    ELECTRON_BUILDER_BINARIES_MIRROR: 'https://registry.npmmirror.com/-/binary/electron-builder-binaries/',
+  },
+})
 
 console.log('\n=== 打包完成 ===')
 console.log(`安装包在: ${path.resolve(projectRoot, 'release')}`)

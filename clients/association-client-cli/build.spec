@@ -29,7 +29,6 @@ datas += [
     ("scripts/read-artifact.ps1", "scripts"),
     ("scripts/llm_judge.py", "scripts"),
     ("scripts/ocr_adapter.py", "scripts"),
-    ("scripts/wenxin_collect.py", "scripts"),
 ]
 
 # 必须带入的 runtime 模块
@@ -46,6 +45,7 @@ hiddenimports += [
     "runtime.powershell_runner",
     "runtime.playwright_check",
     "runtime.wenxin_browser",
+    "runtime.wenxin_collector",
     "src.services.association_batch_enrichment",
     "src.services.association_enrichment_providers",
     "src.services.association_profile_extractor",

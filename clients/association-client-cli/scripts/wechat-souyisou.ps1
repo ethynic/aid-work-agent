@@ -373,16 +373,40 @@ public static class WechatSouyisouWin32 {
         # 新会话由可信主窗口 Ctrl+F/Down/Enter 打开后，焦点即位于搜索输入框。
         # 从此处到回读完成禁止截图、鼠标点击或窗口激活，避免主动抢走焦点。
         & $assertWorkBudget 60000
-        $inputResult = Invoke-VerifiedWeixinFocusedSearchSubmission $query `
-            $pluginGuard {
-                param($value) [Windows.Forms.Clipboard]::SetText([string]$value)
-            } {
-                param($keys) & $send $keys $pluginGuard
-            } {
-                Start-Sleep -Milliseconds 120
-                [Windows.Forms.Clipboard]::GetText(
-                    [Windows.Forms.TextDataFormat]::UnicodeText)
-            } (-not $VerifyInputOnly) $inputDiagnostics
+        # 输入提交封进 scriptblock，便于 readback 失败时重发组合键后再试一次。
+        $submitInput = {
+            Invoke-VerifiedWeixinFocusedSearchSubmission $query `
+                $pluginGuard {
+                    param($value) [Windows.Forms.Clipboard]::SetText([string]$value)
+                } {
+                    param($keys) & $send $keys $pluginGuard
+                } {
+                    Start-Sleep -Milliseconds 120
+                    [Windows.Forms.Clipboard]::GetText(
+                        [Windows.Forms.TextDataFormat]::UnicodeText)
+                } (-not $VerifyInputOnly) $inputDiagnostics
+        }
+        $inputResult = $null
+        $inputAttempt = 0
+        while ($inputAttempt -lt 2 -and -not $inputResult) {
+            $inputAttempt++
+            try {
+                $inputResult = & $submitInput
+            } catch {
+                if ($inputAttempt -ge 2 -or
+                    $_.Exception.Message -notin @('SEARCH_INPUT_READBACK_MISMATCH','INPUT_FOCUS_LOST')) {
+                    throw
+                }
+                # 焦点未落进搜索框（readback 不匹配）：重发 Ctrl+F/Down/Enter
+                # 重新打开搜一搜，焦点会重新进入输入框，再试一次。
+                & $assertWorkBudget 60000
+                & $openSouyisou
+                $reopenIdentity = & $verifySouyisou
+                if (-not $reopenIdentity) { throw 'SOUYISOU_WINDOW_UNTRUSTED' }
+                $pluginHwnd = [IntPtr]$reopenIdentity.Hwnd
+                $inputDiagnostics.readback_matched = $false
+            }
+        }
         $inputVerified = [bool]$inputResult.input_verified
         if ($VerifyInputOnly) {
             try {

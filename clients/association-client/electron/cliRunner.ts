@@ -7,6 +7,7 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import path from 'node:path'
+import { StringDecoder } from 'node:string_decoder'
 
 /** CLI stdout 输出的 NDJSON 事件（设计文档 §9.1） */
 export interface CliEvent {
@@ -77,9 +78,13 @@ export class CliRunner extends EventEmitter {
       },
     })
 
+    // 用 StringDecoder 处理 UTF-8 多字节边界：中文 3 字节跨 chunk 时，
+    // chunk.toString('utf-8') 会把不完整字节替换成 U+FFFD 导致乱码；
+    // StringDecoder 缓存末尾不完整字节，下次 chunk 拼接后解码。
+    const decoder = new StringDecoder('utf-8')
     let buffer = ''
     this.process.stdout?.on('data', (chunk: Buffer) => {
-      buffer += chunk.toString('utf-8')
+      buffer += decoder.write(chunk)
       const lines = buffer.split('\n')
       buffer = lines.pop() || ''
       for (const line of lines) {
@@ -94,8 +99,9 @@ export class CliRunner extends EventEmitter {
       }
     })
 
+    const stderrDecoder = new StringDecoder('utf-8')
     this.process.stderr?.on('data', (chunk: Buffer) => {
-      const text = chunk.toString('utf-8').trim()
+      const text = stderrDecoder.write(chunk).trim()
       if (text) {
         this.emit('event', { event: 'log', level: 'INFO', message: text })
       }

@@ -628,7 +628,7 @@ async def test_search_profile_parses_wenxin_raw_text(monkeypatch, tmp_path):
         assert name == "测试协会"
         return {"ok": True, "answer": wenxin_answer, "note": ""}
 
-    monkeypatch.setattr(providers, "_spawn_wenxin_collect", fake_wenxin)
+    monkeypatch.setattr(providers, "_collect_wenxin", fake_wenxin)
 
     parsed = {name: None for name in PROFILE_FIELDS}
     parsed["address"] = "北京市测试路1号"
@@ -659,7 +659,7 @@ async def test_search_profile_falls_back_when_wenxin_returns_none(monkeypatch, t
     async def fake_wenxin(name):
         return None
 
-    monkeypatch.setattr(providers, "_spawn_wenxin_collect", fake_wenxin)
+    monkeypatch.setattr(providers, "_collect_wenxin", fake_wenxin)
 
     parsed = {name: None for name in PROFILE_FIELDS}
     parsed["official_website"] = "https://example.cn"
@@ -683,7 +683,7 @@ async def test_search_profile_falls_back_on_captcha(monkeypatch, tmp_path):
     async def fake_wenxin(name):
         return {"ok": False, "answer": "", "note": "captcha"}
 
-    monkeypatch.setattr(providers, "_spawn_wenxin_collect", fake_wenxin)
+    monkeypatch.setattr(providers, "_collect_wenxin", fake_wenxin)
 
     parsed = {name: None for name in PROFILE_FIELDS}
     gateway = _RecordingGateway(json.dumps(parsed, ensure_ascii=False))

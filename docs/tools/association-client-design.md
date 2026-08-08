@@ -1450,7 +1450,7 @@ nsis:
 2. Electron → spawn cli.exe collect --associations "中国黄金协会" --output ...
 3. CLI 启动 AssociationBatchEnricher.enrich_one("中国黄金协会")
 4. 步骤1：search_profile（文心联网采集原文 → DeepSeek 解析）
-   - spawn wenxin_collect.py → attach 常开调试浏览器(9222) → 文心一言联网采集协会基础信息原文
+   - 进程内 await runtime.wenxin_collector.collect_one → attach 常开调试浏览器(9222) → 文心一言联网采集协会基础信息原文
      （含"官网网址：..."），根治 DeepSeek 不联网直出官网的幻觉
    - ProxyLLMGateway.chat() → POST /api/client/v1/llm/chat
      → 服务端 llm_gateway(DeepSeek) 按原文解析成结构化字段 → 扣积分（×5）→ 返回

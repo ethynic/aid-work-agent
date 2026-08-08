@@ -335,7 +335,22 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _ensure_utf8_stdout() -> None:
+    """强制 stdout/stderr UTF-8。
+
+    PyInstaller exe 在 Windows pipe 默认 cp936（GBK），而 Electron 按 UTF-8
+    解码，中文乱码。PYTHONUTF8 env 在打包 exe 下未可靠生效，显式 reconfigure
+    兜底——emit 的 print 走 sys.stdout、loguru 走 sys.__stderr__，一并覆盖。
+    """
+    for stream in (sys.stdout, sys.stderr, sys.__stdout__, sys.__stderr__):
+        try:
+            stream.reconfigure(encoding="utf-8")
+        except Exception:
+            pass
+
+
 def main() -> int:
+    _ensure_utf8_stdout()
     parser = build_parser()
     args = parser.parse_args()
 
