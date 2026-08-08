@@ -478,11 +478,11 @@ async def test_wechat_audit_failure_does_not_discard_found_mobile(
 
 
 @pytest.mark.asyncio
-async def test_wechat_mobile_retries_when_status_not_found(monkeypatch, tmp_path):
-    """ps1 collect 首轮没搜到（status != found）时重发组合键重搜一次；第二轮搜到 → 返回手机号。
+async def test_wechat_mobile_retries_when_souyisou_empty(monkeypatch, tmp_path):
+    """搜一搜结果为空（inconclusive：没读到列表）时重发组合键重搜一次；第二轮搜到 → 返回手机号。
 
-    业务意图：用户实测搜手机偶发焦点丢失/搜一搜返回空，单次必失败；重发一次组合键
-    能救回。若把重试删掉，首轮 inconclusive 即返回 None，本测试失败。
+    业务意图：用户要「搜一搜空才重试，有结果不重试」。inconclusive = 搜一搜没读到列表
+    （焦点丢失/没加载），该重试；not_found = 有列表但没匹配手机号，算成功不重试。
     """
     import src.services.association_enrichment_providers as module
 
@@ -532,7 +532,7 @@ async def test_wechat_mobile_retries_when_status_not_found(monkeypatch, tmp_path
 
 @pytest.mark.asyncio
 async def test_wechat_mobile_returns_none_after_retry_exhausted(monkeypatch, tmp_path):
-    """两轮 collect 都没搜到 → 返回 None（重试一次仍失败，不无限重试）。"""
+    """两轮搜一搜都为空（inconclusive）→ 返回 None（重试一次仍空，不无限重试）。"""
     import src.services.association_enrichment_providers as module
 
     class CompletedProcess:
@@ -545,10 +545,10 @@ async def test_wechat_mobile_returns_none_after_retry_exhausted(monkeypatch, tmp
 
     processes = iter([
         CompletedProcess(
-            json.dumps({"ok": True, "session_closed": True, "status": "not_found"}).encode("utf-8")
+            json.dumps({"ok": True, "session_closed": True, "status": "inconclusive"}).encode("utf-8")
         ),
         CompletedProcess(
-            json.dumps({"ok": True, "session_closed": True, "status": "not_found"}).encode("utf-8")
+            json.dumps({"ok": True, "session_closed": True, "status": "inconclusive"}).encode("utf-8")
         ),
     ])
 
@@ -559,6 +559,39 @@ async def test_wechat_mobile_returns_none_after_retry_exhausted(monkeypatch, tmp
     monkeypatch.setattr(module.asyncio, "create_subprocess_exec", fake_subprocess)
 
     assert await providers.wechat_mobile("测试协会", "张三", "会长") is None
+
+
+@pytest.mark.asyncio
+async def test_wechat_mobile_no_retry_when_not_found(monkeypatch, tmp_path):
+    """搜一搜有列表但没匹配到手机号（not_found）→ 直接返回 None，不重试。
+
+    业务意图：not_found 算「搜一搜成功」（有结果），不该重发组合键。回归保护用户报告的
+    「有结果也搜两遍」bug——若重试条件误用 status != found，not_found 也会搜两次。
+    """
+    import src.services.association_enrichment_providers as module
+
+    class CompletedProcess:
+        def __init__(self, stdout):
+            self.returncode = 0
+            self._stdout = stdout
+
+        async def communicate(self):
+            return self._stdout, b""
+
+    call_count = 0
+
+    async def fake_subprocess(*_args, **_kwargs):
+        nonlocal call_count
+        call_count += 1
+        return CompletedProcess(
+            json.dumps({"ok": True, "session_closed": True, "status": "not_found"}).encode("utf-8")
+        )
+
+    providers = ProjectAssociationProviders(repository_root=tmp_path)
+    monkeypatch.setattr(module.asyncio, "create_subprocess_exec", fake_subprocess)
+
+    assert await providers.wechat_mobile("测试协会", "张三", "会长") is None
+    assert call_count == 1  # not_found 不重试，只搜一次
 
 
 @pytest.mark.asyncio

@@ -492,7 +492,8 @@ class ProjectAssociationProviders:
                 person_name,
                 role,
             )
-            if payload.get("status") == "found":
+            status = payload.get("status")
+            if status == "found":
                 return await self._extract_wechat_mobile(
                     script,
                     str(payload.get("artifact_ref") or ""),
@@ -500,13 +501,17 @@ class ProjectAssociationProviders:
                     person_name,
                     role=role,
                 )
-            if mobile_attempt == 0:
-                self._audit(
-                    association=association_name,
-                    stage=f"微信搜一搜·{role}",
-                    kind="wechat_mobile_empty_retry",
-                    summary="手机号未搜到，重发组合键重试",
-                )
+            # 只有「搜一搜结果为空」（inconclusive：没读到搜索列表）才重试一次
+            # ——等于重发组合键重搜。not_found 等（搜一搜有列表、只是没匹配到
+            # 手机号）算正常返回，不重试，避免「有结果也搜两遍」。
+            if status != "inconclusive" or mobile_attempt > 0:
+                return None
+            self._audit(
+                association=association_name,
+                stage=f"微信搜一搜·{role}",
+                kind="wechat_mobile_empty_retry",
+                summary="搜一搜结果为空，重发组合键重试",
+            )
         return None
 
     async def _run_wechat_collect_once(
