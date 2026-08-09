@@ -320,5 +320,6 @@ async def extract_association_profile(
     except (ValidationError, ValueError, TypeError) as exc:
         logger.warning("协会官网字段证据未通过：{}", str(exc)[:240])
         return ExtractionResult(status="inconclusive", reason_code="PROFILE_SCHEMA_INVALID")
-    except Exception:
+    except Exception as exc:
+        logger.warning("协会官网 PROVIDER_FAILED：{}: {}", type(exc).__name__, str(exc)[:500])
         return ExtractionResult(status="inconclusive", reason_code="PROVIDER_FAILED")
