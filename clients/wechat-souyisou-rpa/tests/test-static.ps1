@@ -795,7 +795,7 @@ Assert ($entryText -match '\$detailCloseInProgress\s*=\s*\$true') 'detail close 
 Assert (([regex]::Matches(
     $entryText,
     [regex]::Escape('$returnResult = & $returnToResultPage')
-)).Count -eq 4) 'each detail branch uses the shared session return transition'
+)).Count -eq 5) 'each detail branch uses the shared session return transition'
 $productionStart = $entryText.IndexOf(
     '$pluginIdentity = Invoke-LimitedTrustedOpen $openSouyisou $verifySouyisou 1',
     [StringComparison]::Ordinal)
@@ -814,7 +814,7 @@ Assert (
     ([regex]::Matches(
         $entryText,
         '\$recoveryEvidenceUnavailable=\$true'
-    )).Count -eq 4 -and
+    )).Count -eq 5 -and
     $entryText -match 'Get-WeixinCollectStatus' -and
     $libText -match "return 'inconclusive'"
 ) 'natural session close remains an inconclusive content outcome'
@@ -843,7 +843,7 @@ Assert (
     ([regex]::Matches($productionText, 'Wait-WeixinDetailSettled \$pluginGuard')).Count -eq 1
 ) 'formal collect waits exactly once after detail confirmation and before content copy'
 Assert (
-    $productionText -match '(?s)& \$assertWorkBudget 95000\s+Invoke-SafeMouseClick.*?Start-Sleep -Milliseconds \$WaitMilliseconds.*?& \$assertWorkBudget 65000\s+Wait-WeixinDetailSettled'
+    $productionText -match '(?s)& \$assertWorkBudget 95000.*?Invoke-SafeMouseClick.*?Start-Sleep -Milliseconds \$WaitMilliseconds.*?& \$assertWorkBudget 65000\s+Wait-WeixinDetailSettled'
 ) 'detail click and settle budgets retain the final cleanup minute'
 Assert (
     $libText -match 'function Wait-WeixinDetailSettled' -and

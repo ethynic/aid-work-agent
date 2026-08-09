@@ -285,6 +285,29 @@ public static class WechatSouyisouWin32 {
             @(Select-WeixinUiaResultTargets $descriptors `
                 $AssociationName $PersonName $WindowRect)
         }
+        # 按名字+控件类型重新定位结果卡片的「活」UIA 元素（Chromium 元素会失效，需现取），
+        # 供 InvokePattern.Invoke() 触发点击——绕开鼠标 mouse_event 的前台抢占。
+        # name 用去空白精确匹配（Select-WeixinUiaResultTargets 存的已是去空白名）。
+        function Find-WeixinCardElement([IntPtr]$Hwnd, [string]$Name, [string]$ControlType) {
+            if ([string]::IsNullOrWhiteSpace($Name)) { return $null }
+            $root = [Windows.Automation.AutomationElement]::FromHandle($Hwnd)
+            if ($null -eq $root) { return $null }
+            $nodes = $root.FindAll(
+                [Windows.Automation.TreeScope]::Descendants,
+                [Windows.Automation.Condition]::TrueCondition)
+            $want = [regex]::Replace($Name.Trim(), '\s+', '')
+            foreach ($node in $nodes) {
+                try {
+                    $cur = $node.Current
+                    if ([string]$cur.ControlType.ProgrammaticName.Replace('ControlType.','') -ne $ControlType) { continue }
+                    $ip = $null
+                    if (-not $node.TryGetCurrentPattern(
+                        [Windows.Automation.InvokePattern]::Pattern, [ref]$ip)) { continue }
+                    if ([regex]::Replace(([string]$cur.Name).Trim(), '\s+', '') -eq $want) { return $node }
+                } catch { continue }
+            }
+            $null
+        }
         $preexistingPluginHwnds = [Collections.Generic.HashSet[int64]]::new()
         foreach ($visibleWindow in $windows) {
             $visibleIdentity = Get-WindowIdentityByHwnd ([int64]$visibleWindow.Hwnd)
@@ -717,36 +740,66 @@ public static class WechatSouyisouWin32 {
                     ([double]$point.x) ([double]$point.y) `
                     $windowDpi 'PerMonitorV2'
                 $x=[int]$physicalPoint.x; $y=[int]$physicalPoint.y
-                if (-not (& $pluginGuard)) {
-                    $clickForegroundRecoveryUsed=$true
-                    if (-not (& $restorePluginForeground)) { throw 'FOREGROUND_LOST' }
-                }
-                if (-not [WechatSouyisouWin32]::SetCursorPos($x,$y)) {
-                    throw 'MOUSE_POSITION_FAILED'
-                }
-                Start-Sleep -Milliseconds 100
-                if (-not (& $pluginGuard)) {
-                    if ($clickForegroundRecoveryUsed -or -not (& $restorePluginForeground)) {
-                        throw 'FOREGROUND_LOST'
-                    }
-                    $clickForegroundRecoveryUsed=$true
-                }
-                $clickDiagnostics.Add([pscustomobject]@{
-                    checkpoint='before_click'
-                    cursor_x=$x; cursor_y=$y
-                    foreground=(Get-CurrentForegroundIdentitySafe)
-                })
+                # 详情打开前的截图（结果列表状态），点击后比对判断详情是否打开。
                 $before = & $capture
                 try { $beforeHash=Get-BitmapSha256 $before } finally { $before.Dispose() }
                 & $assertWorkBudget 95000
-                Invoke-SafeMouseClick {
-                    param($up)
-                    [WechatSouyisouWin32]::mouse_event($(if($up){4}else{2}),0,0,0,[IntPtr]::Zero)
-                } $pluginGuard
-                $clickDiagnostics.Add([pscustomobject]@{
-                    checkpoint='after_mouse_click'
-                    foreground=(Get-CurrentForegroundIdentitySafe)
-                })
+                # 优先 UIA InvokePattern 触发点击——不依赖窗口前台/鼠标，绕开前台抢占
+                # （mouse_event 在前台漂走时 FOREGROUND_LOST）。找不到卡片元素/不支持 Invoke/
+                # 抛异常则回退鼠标点击。两种方式后续都走同一套"等待→新详情 HWND→截图比对"。
+                $invokeClicked = $false
+                try {
+                    $invokeEl = Find-WeixinCardElement $pluginHwnd `
+                        ([string]$point.name) ([string]$point.control_type)
+                    if ($invokeEl) {
+                        $invokePat = $null
+                        if ($invokeEl.TryGetCurrentPattern(
+                            [Windows.Automation.InvokePattern]::Pattern, [ref]$invokePat)) {
+                            $invokePat.Invoke()
+                            $invokeClicked = $true
+                            $clickDiagnostics.Add([pscustomobject]@{
+                                checkpoint='invoke_pattern'
+                                point_name=[string]$point.name
+                                foreground=(Get-CurrentForegroundIdentitySafe)
+                            })
+                        }
+                    }
+                } catch {
+                    $clickDiagnostics.Add([pscustomobject]@{
+                        checkpoint='invoke_failed'
+                        error=$_.Exception.Message
+                    })
+                }
+                if (-not $invokeClicked) {
+                    # 回退：鼠标点击（前台 guard + SetCursorPos + mouse_event）
+                    if (-not (& $pluginGuard)) {
+                        $clickForegroundRecoveryUsed=$true
+                        if (-not (& $restorePluginForeground)) { throw 'FOREGROUND_LOST' }
+                    }
+                    if (-not [WechatSouyisouWin32]::SetCursorPos($x,$y)) {
+                        throw 'MOUSE_POSITION_FAILED'
+                    }
+                    Start-Sleep -Milliseconds 100
+                    if (-not (& $pluginGuard)) {
+                        if ($clickForegroundRecoveryUsed -or -not (& $restorePluginForeground)) {
+                            throw 'FOREGROUND_LOST'
+                        }
+                        $clickForegroundRecoveryUsed=$true
+                    }
+                    $clickDiagnostics.Add([pscustomobject]@{
+                        checkpoint='before_click'
+                        cursor_x=$x; cursor_y=$y
+                        foreground=(Get-CurrentForegroundIdentitySafe)
+                    })
+                    Invoke-SafeMouseClick {
+                        param($up)
+                        [WechatSouyisouWin32]::mouse_event($(if($up){4}else{2}),0,0,0,[IntPtr]::Zero)
+                    } $pluginGuard
+                    $clickDiagnostics.Add([pscustomobject]@{
+                        checkpoint='after_mouse_click'
+                        foreground=(Get-CurrentForegroundIdentitySafe)
+                    })
+                }
                 Start-Sleep -Milliseconds $WaitMilliseconds
                 $clickDiagnostics.Add([pscustomobject]@{
                     checkpoint='after_wait'
@@ -810,7 +863,9 @@ public static class WechatSouyisouWin32 {
                 $ocrHashes=@()
                 $ocrText=$null
                 $contentUsable=$true
-                $needsOcr = Test-DetailNeedsOcr $detail $text $AssociationName $PersonName
+                # OCR 暂屏蔽（PaddleOCR 云 API 未配置；后续配好把 $ocrEnabled 改 $true 恢复）
+                $ocrEnabled = $false
+                $needsOcr = $ocrEnabled -and (Test-DetailNeedsOcr $detail $text $AssociationName $PersonName)
                 if ($needsOcr) {
                     if (-not $ocr) {
                         $records += [pscustomobject]@{
@@ -936,6 +991,30 @@ public static class WechatSouyisouWin32 {
                 }
                 $seenDetailText[$detail]=$true
                 $consecutiveFailures=0
+                # 详情文本无手机号 pattern 就不走大模型（用户要求：只有含手机 pattern 才问 LLM）。
+                # OCR 已屏蔽——无手机的详情（如新闻稿）直接记 no_mobile_pattern 返回，省一次 LLM。
+                if ((Get-MobileCandidates $detail).Count -eq 0) {
+                    $records += [pscustomobject]@{
+                        ordinal=$checked; stage='detail_judge'; reason='no_mobile_pattern'
+                        text_length=$detail.Length; detail_hash=$afterHash
+                        text=$detail
+                    }
+                    $stage='close'; $detailCloseInProgress=$true; $stage='recover'
+                    $returnResult = & $returnToResultPage
+                    if (-not $returnResult) { throw 'RECOVERY_FAILED' }
+                    $returnedHwnd = [int64]$returnResult.hwnd
+                    if ($returnResult.session_closed) {
+                        $recoveryEvidenceUnavailable=$true; $sessionNaturallyClosed=$true
+                        $detailCloseInProgress=$false; $detailMayBeOpen=$false
+                        break
+                    }
+                    $pluginHwnd = [IntPtr]$returnedHwnd
+                    $returnedViewport = & $newPluginViewport $returnedHwnd
+                    $rect=$returnedViewport.rect; $width=$returnedViewport.width
+                    $height=$returnedViewport.height; $capture=$returnedViewport.capture
+                    $detailCloseInProgress=$false; $detailMayBeOpen=$false
+                    continue
+                }
                 $stage = 'detail_judge'
                 if ($judge) { & $assertWorkBudget 120000 } else { & $assertWorkBudget }
                 $judgeResult=Invoke-EvidenceJudge $detail $AssociationName $PersonName $judge
