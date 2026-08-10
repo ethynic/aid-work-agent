@@ -364,10 +364,16 @@ class DataAnalyzer:
         if df is None:
             raise ValueError(f"数据源不存在: {source}")
 
-        # 校验 group_by 列
+        # 空 group_by 校验：pandas 会抛出 "No group keys passed!"，对 LLM 不友好
+        if not group_by:
+            raise ValueError(
+                f"group_by 不能为空，必须提供至少一个分组字段。可用列: {list(df.columns)}"
+            )
+
+        # 校验 group_by 列，错误信息附带可用列名供 LLM 修正
         for col in group_by:
             if col not in df.columns:
-                raise ValueError(f"分组列不存在: {col}")
+                raise ValueError(f"分组列不存在: {col}。可用列: {list(df.columns)}")
 
         # 构建聚合映射和别名
         agg_dict: Dict[str, list] = {}
@@ -379,7 +385,7 @@ class DataAnalyzer:
             alias = agg.get("alias", f"{col}_{func}")
 
             if col not in df.columns:
-                raise ValueError(f"聚合列不存在: {col}")
+                raise ValueError(f"聚合列不存在: {col}。可用列: {list(df.columns)}")
             if func not in AGG_FUNC_WHITELIST:
                 raise ValueError(f"不支持的聚合函数: {func}，支持: {', '.join(sorted(AGG_FUNC_WHITELIST))}")
 
