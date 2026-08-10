@@ -123,6 +123,90 @@ async function netFetch(filePath: string): Promise<Response> {
   }
 }
 
+// ============== 诊断包导出 ==============
+
+// 脱敏：键值对里的敏感值（access_token / token / secret / key / password）→ ***，仅作用于文本
+const REDACT_RE = /(["']?(?:access_token|accessTokenEnc|secret|api[_-]?key|token|password)["']?\s*[:=]\s*["']?)[^"'\r\n,'}]+/gi
+
+async function _readTextRedacted(fsProm: any, src: string, dest: string): Promise<void> {
+  try {
+    const raw = await fsProm.readFile(src, 'utf-8')
+    await fsProm.writeFile(dest, raw.replace(REDACT_RE, '$1***'), 'utf-8')
+  } catch {
+    // 源文件不存在等，跳过
+  }
+}
+
+async function _copyDirCapped(fsProm: any, src: string, dest: string, perFile: number, totalCap: number): Promise<void> {
+  let entries: any[]
+  try {
+    entries = await fsProm.readdir(src, { withFileTypes: true })
+  } catch {
+    return
+  }
+  await fsProm.mkdir(dest, { recursive: true })
+  let total = 0
+  for (const ent of entries) {
+    const s = path.join(src, ent.name)
+    const d = path.join(dest, ent.name)
+    if (ent.isDirectory()) {
+      await _copyDirCapped(fsProm, s, d, perFile, totalCap)
+    } else if (ent.isFile()) {
+      try {
+        const st = await fsProm.stat(s)
+        if (st.size > perFile) continue
+        if (total + st.size > totalCap) continue
+        await fsProm.copyFile(s, d)
+        total += st.size
+      } catch {
+        // 跳过单文件异常
+      }
+    }
+  }
+}
+
+/** 收集本地日志/配置（脱敏）到临时目录，用 PowerShell Compress-Archive 打成 zip。零依赖。 */
+async function exportDiagnosticsBundle(outPath: string, guiLogText: string): Promise<void> {
+  const fsProm = await import('node:fs/promises')
+  const { spawn } = await import('node:child_process')
+  const tmpDir = path.join(app.getPath('temp'), `assoc-diag-${Date.now()}`)
+  await fsProm.mkdir(tmpDir, { recursive: true })
+
+  const appdata = process.env.APPDATA || ''
+  const localAppdata = process.env.LOCALAPPDATA || appdata
+  const tempEnv = process.env.TEMP || app.getPath('temp')
+
+  // 配置类（必须脱敏 token）
+  await _readTextRedacted(fsProm, path.join(appdata, 'association-client', 'cli-config.json'), path.join(tmpDir, 'cli-config.json'))
+  await _readTextRedacted(fsProm, path.join(app.getPath('userData'), 'client-config.json'), path.join(tmpDir, 'client-config.json'))
+  // 日志类（已由 CLI 脱敏手机号，原样拷贝）
+  await _readTextRedacted(fsProm, path.join(localAppdata, 'AidWorkAgent', 'association-client', 'logs', 'app.log'), path.join(tmpDir, 'app.log'))
+  await _readTextRedacted(fsProm, path.join(tempEnv, 'wechat_diag.log'), path.join(tmpDir, 'wechat_diag.log'))
+  // GUI 内存日志
+  await fsProm.writeFile(path.join(tmpDir, 'gui-log.txt'), guiLogText || '(空)', 'utf-8')
+  // 系统信息
+  await fsProm.writeFile(path.join(tmpDir, 'system_info.txt'), [
+    `时间: ${new Date().toISOString()}`,
+    `平台: ${process.platform} ${process.arch}`,
+    `Electron: ${process.versions.electron}  Node: ${process.versions.node}`,
+    `应用: ${app.getName()} ${app.getVersion()}`,
+    `userData: ${app.getPath('userData')}`,
+  ].join('\n'), 'utf-8')
+  // 微信取证产物（DPAPI 加密，按大小裁剪：单文件 ≤2MB、总计 ≤10MB）
+  await _copyDirCapped(fsProm, path.join(localAppdata, 'AidWorkAgent', 'wechat-souyisou-rpa', 'artifacts'), path.join(tmpDir, 'artifacts'), 2 * 1024 * 1024, 10 * 1024 * 1024)
+
+  // 打 zip
+  await new Promise<void>((resolve, reject) => {
+    const cmd = `Compress-Archive -Path '${tmpDir}\\*' -DestinationPath '${outPath}' -Force`
+    const ps = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', cmd])
+    ps.on('error', (e) => reject(new Error('无法启动 PowerShell: ' + e.message)))
+    ps.on('close', (code) => (code === 0 ? resolve() : reject(new Error('Compress-Archive 失败，退出码 ' + String(code)))))
+  })
+
+  // 清理临时目录（best-effort）
+  try { await fsProm.rm(tmpDir, { recursive: true, force: true }) } catch { /* 忽略 */ }
+}
+
 // ============== IPC 注册 ==============
 
 function registerIpc(): void {
@@ -239,6 +323,23 @@ function registerIpc(): void {
   })
   ipcMain.handle('client:system:getDesktopPath', () => {
     return app.getPath('desktop')
+  })
+
+  // 导出诊断包：收集本地日志/配置（脱敏）→ Compress-Archive 打 zip
+  ipcMain.handle('client:system:exportDiagnostics', async (_event, defaultName: string, guiLogText: string) => {
+    const result = await dialog.showSaveDialog(mainWindow!, {
+      title: '导出诊断包',
+      defaultPath: defaultName || '协会客户端诊断包.zip',
+      filters: [{ name: '诊断包', extensions: ['zip'] }],
+    })
+    if (result.canceled || !result.filePath) return null
+    try {
+      await exportDiagnosticsBundle(result.filePath, guiLogText || '')
+      return result.filePath
+    } catch (err) {
+      console.error('[main] exportDiagnostics failed:', err)
+      return { error: err instanceof Error ? err.message : String(err) }
+    }
   })
 }
 

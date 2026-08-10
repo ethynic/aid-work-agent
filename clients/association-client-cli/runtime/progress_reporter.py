@@ -47,6 +47,18 @@ def _emit(event: dict) -> None:
     sys.stdout.write(json.dumps(event, ensure_ascii=False, default=str) + "\n")
     sys.stdout.flush()
 
+    # tee：本地完整日志 + 遥测缓冲（均吞异常，绝不影响采集）
+    try:
+        from runtime import run_log
+        run_log.append_event(event)
+    except Exception:
+        pass
+    try:
+        from runtime import telemetry
+        telemetry.record_event(event)
+    except Exception:
+        pass
+
 
 def emit_start(session_id: str, associations: list[str], server_url: str = "") -> None:
     _emit({

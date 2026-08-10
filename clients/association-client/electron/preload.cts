@@ -48,6 +48,8 @@ const system = Object.freeze({
   selectInputFile: () => ipcRenderer.invoke('client:system:selectInputFile'),
   getDesktopPath: () => ipcRenderer.invoke('client:system:getDesktopPath'),
   openExternal: (url) => ipcRenderer.invoke('client:system:openExternal', url),
+  exportDiagnostics: (defaultName, guiLogText) =>
+    ipcRenderer.invoke('client:system:exportDiagnostics', defaultName, guiLogText),
 })
 
 const runtime = Object.freeze({

@@ -1686,7 +1686,32 @@ credit_cost（客户端实扣） = ceil(raw_credit_cost × 5 × 100) / 100
 
 ---
 
-## 10. 不在本次范围内（Phase 2+）
+## 10. 可观测性与遥测（2026-08-10 增补）
+
+客户端可观测性四件套，目的是大面积客户出问题时运营能主动发现而非被动等投诉。本地真机验证通过（6 协会 run，遥测落 agent2、app.log 完整、导出包脱敏正常）。
+
+### 10.1 本地完整日志（CLI）
+- `runtime/run_log.py`：在 `progress_reporter._emit()` 末尾 tee，把每条（已脱敏手机号）NDJSON 事件追加到 `%LOCALAPPDATA%\AidWorkAgent\association-client\logs\app.log`，每行带 `session=<sid>`，5MB 滚动保留 `app.log.1`。吞异常。
+- 覆盖全部事件（含 progress），是 per-协会 per-步骤排障的唯一持久来源。
+
+### 10.2 遥测上报（CLI）
+- `runtime/telemetry.py`：仅 `start`/`log`/`error`/`complete` 入缓冲（**不上报 progress**，控量）；缓冲≥20 非阻塞中途 flush，`cmd_collect` 的 `finally` 兜底全量 flush。
+- POST 到 `/api/client/v1/logs`（Bearer，吞一切异常，绝不影响采集）；session_id 经模块级变量注入每条。服务端落 `client_usage_logs`（`record_non_llm_usage`，credit_cost=0）。
+
+### 10.3 导出诊断包（GUI）
+- Electron 主进程 `client:system:exportDiagnostics` IPC：收集 `app.log` / `wechat_diag.log` / `gui-log.txt` / 配置（脱敏 `access_token`）/ `artifacts`（≤2MB/文件、≤10MB 总）/ `system_info.txt` → `spawn powershell Compress-Archive` 打 zip（零新依赖）。顶栏「📦 诊断包」按钮触发。
+
+### 10.4 后台查看（服务端 + 前端）
+- `ClientUsageLogDB.list` / `recent_errors` + `/api/saas/client-usage-logs/list`、`/recent-errors`（platform_admin 鉴权）。
+- 前端 `/portal/client-logs`（`ClientUsageLogs.vue`）：租户/状态/阶段/日期筛选 + 分页 + 错误高亮 + 「🔍 近24h错误」速查。
+- `client_usage_logs` 加 `(status, created_at)` 索引。
+
+### 10.5 可观测性边界
+服务端遥测是 **run 级**（成功/失败计数、消耗、错误事件）+ 已有 LLM 计费行；**per-协会 per-步骤细节**（如「手机号未找到」、微信 INCONCLUSIVE 重试）只在本地 `app.log` / `wechat_diag.log`，不上报服务端（progress 不上报）。运营后台能发现「某批 N/M partial」，定位「为什么」仍需客户导诊断包。
+
+---
+
+## 11. 不在本次范围内（Phase 2+）
 
 - 在线支付/自助充值（客户端内直接充值）
 - 客户端自动更新（electron-updater）

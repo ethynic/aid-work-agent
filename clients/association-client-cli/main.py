@@ -184,7 +184,11 @@ async def cmd_collect(args: argparse.Namespace) -> int:
     """协会信息收集主流程。"""
     access_token = get_access_token()
     if not access_token:
-        print(json.dumps({"event": "error", "error_code": "NOT_ACTIVATED", "message": "客户端未激活"}))
+        emit_error(
+            association="",
+            error_code="NOT_ACTIVATED",
+            message="客户端未激活",
+        )
         return 1
 
     server_url = get_server_url(args.server_url)
@@ -201,6 +205,9 @@ async def cmd_collect(args: argparse.Namespace) -> int:
         return 1
 
     session_id = str(uuid.uuid4())
+    from runtime import run_log, telemetry
+    run_log.set_session_id(session_id)
+    telemetry.set_session_id(session_id)
     emit_start(session_id, names, server_url)
     emit_log("INFO", f"开始收集 {len(names)} 个协会")
 
@@ -299,6 +306,10 @@ async def cmd_collect(args: argparse.Namespace) -> int:
         )
         return 1
     finally:
+        try:
+            await telemetry.flush()
+        except Exception:
+            pass
         gateway.close()
 
 

@@ -482,4 +482,20 @@ async def run_judge(payload, gateway=None):
 
 ---
 
+## 增补：可观测性（遥测 + 本地日志 + 诊断包 + 后台查看）— ✅ 已完成（2026-08-10）
+
+客户端可观测性补全。设计见 [association-client-design.md §10](association-client-design.md)。
+
+**已完成工作**：
+- **CLI 本地完整日志**：`runtime/run_log.py`（`_emit` tee → `%LOCALAPPDATA%\AidWorkAgent\association-client\logs\app.log`，5MB 滚动）。
+- **CLI 遥测上报**：`runtime/telemetry.py`（start/log/error/complete 缓冲→`/api/client/v1/logs`，吞异常；finally 兜底 flush）；`main.py` 注入 session_id + 修 L187 旁路。
+- **GUI 导出诊断包**：`electron/main.ts` `client:system:exportDiagnostics`（脱敏 + PowerShell Compress-Archive，零依赖）+ `preload.cts` + 顶栏按钮 + `app.js` guiLog。
+- **后台查看**：`ClientUsageLogDB.list/recent_errors` + `/api/saas/client-usage-logs/list|recent-errors` + 前端 `/portal/client-logs`（ClientUsageLogs.vue）+ `client_usage_logs(status,created_at)` 索引。
+
+**验证**：本地真机 6 协会 run——遥测落 agent2 `client_usage_logs`（run_start/run_complete 可见）、`app.log` 62 事件完整、`wechat_diag.log` 含 INCONCLUSIVE 重试、导出包 access_token 已脱敏。未补正式单测（以真机 e2e 验证为准）。
+
+**部署节奏**：后台部分（API+页面+索引）独立先行上线；客户端部分（CLI+GUI）本地 exe 验证通过后提交，需重打 `association-cli.exe`（PyInstaller）+ 安装包。
+
+---
+
 *开发计划结束。设计文档见 [association-client-design.md](association-client-design.md)。*

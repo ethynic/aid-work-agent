@@ -269,47 +269,44 @@ curl -s -X POST "$SERVER/api/saas/tenants/" \
 
 ---
 
-## 8. 客户端出问题：如何让客户收集诊断日志
+## 8. 客户端出问题：排查与日志收集
 
-> 现状先讲清楚（避免期望偏差）：客户端**目前不会自动上报遥测**——服务端虽然有 `/api/client/v1/logs` 上报接口，但客户端代码尚未调用它。所以远程排查主要靠客户本机的几样东西，下面给出可直接发给客户的话术。
+> 现状：客户端**已自动上报遥测**（`start`/`log`/`error`/`complete` → 服务端 `/api/client/v1/logs`），并在本机写完整日志、GUI 一键导出诊断包。排查顺序：**先看后台遥测（不打扰客户）→ 不够再让客户导诊断包**。
 
-### 8.1 客户端到底有哪些日志
+### 8.1 排查顺序
 
-| 来源 | 位置 | 覆盖范围 | 是否持久 |
-|------|------|---------|---------|
-| **微信搜一搜诊断日志**（最有用） | `%TEMP%\wechat_diag.log` | 微信 RPA 全过程：collect 开始/结束、list_judge 判断、详情点开、INCONCLUSIVE 原因、judge 异常 | ✅ 追加写入，跨次保留历史 |
-| **GUI 运行日志弹窗** | 界面「📋 查看日志」按钮打开 | 文心 / 官网 / 计费 / 整体流水线事件（CLI 的 NDJSON 事件） | ❌ 仅内存，关软件即丢；**无导出按钮**，只能截图或全选复制 |
-| **微信取证产物** | `%LOCALAPPDATA%\AidWorkAgent\wechat-souyisou-rpa\artifacts\*.dpapi` | 每条取证的结构化结果 | DPAPI 加密绑客户 Windows 账户，**远程无法解密**；只能看文件数量/时间判断 RPA 走到哪一步 |
-| Electron 主进程日志 | （无文件，仅 console） | GUI 自身启动/异常 | ❌ 打包后 console 输出丢失，基本拿不到 |
+1. **后台遥测（首选，不打扰客户）**：平台管理后台「客户端运行日志」(`/portal/client-logs`)，按租户/状态/阶段/时间筛，或点「🔍 近24h错误」。能看到每个 run 的 `run_start`/`run_complete`（含成功/失败计数、消耗积分）+ ERROR/WARNING 事件。
+2. **客户本机完整日志**：`%LOCALAPPDATA%\AidWorkAgent\association-client\logs\app.log`（每次 run 的全事件，含文心/官网/微信每一步，跨次保留、5MB 滚动）。
+3. **微信 RPA 诊断**：`%TEMP%\wechat_diag.log`（搜一搜 INCONCLUSIVE/重试/judge 异常；跨所有 run 追加，按协会名+时间筛）。
+4. **导出诊断包**：客户端顶栏「📦 诊断包」一键打包（见 8.3）。
 
-> ⚠️ 关键限制：**文心、官网抓取这两步没有持久日志文件**——它们的事件只在 GUI 日志弹窗里（内存）。所以这两步出问题，必须让客户**当场截图/复制日志弹窗**，关掉软件就没了。微信搜一搜这步才有持久文件（`wechat_diag.log`）。
+### 8.2 各日志覆盖范围
 
-### 8.2 发给客户的收集话术（可直接复制给客户）
+| 来源 | 位置 | 覆盖范围 | 持久 |
+|------|------|---------|------|
+| **本地完整日志** | `%LOCALAPPDATA%\AidWorkAgent\association-client\logs\app.log` | 全部事件：文心/官网/微信每步 progress + start/complete + log/error | ✅ 持久，5MB 滚动 |
+| **服务端遥测** | 后台 `/portal/client-logs`（表 `client_usage_logs`） | start / log / error / complete（**不上报 progress**） | ✅ 服务端持久 |
+| **微信诊断日志** | `%TEMP%\wechat_diag.log` | 搜一搜 INCONCLUSIVE/重试/list_judge/judge 异常 | ✅ 追加，跨 run 共用 |
+| GUI 日志弹窗 | 「📋 查看日志」按钮 | 同 app.log 的事件流（内存） | ❌ 内存，关软件丢 |
+| 微信取证产物 | `%LOCALAPPDATA%\AidWorkAgent\wechat-souyisou-rpa\artifacts\*.dpapi` | 每条取证结构化结果 | DPAPI 加密，远程无法解密 |
 
-> 请按下面步骤把信息发给我，我才能帮你查：
->
-> 1. **重新跑一次**刚才出问题的采集，让它再次报错（先别关软件）。
-> 2. 找微信日志：按键盘 **Win + R** → 输入 `%temp%` 回车 → 在打开的文件夹里找到 **`wechat_diag.log`** → 把这个文件发给我。
-> 3. 软件里点 **「📋 查看日志」** 按钮 → 把弹出的日志窗口**截图**发给我（或在窗口里按 Ctrl+A 全选、Ctrl+C 复制，粘贴到记事本存成 txt 发给我）。
-> 4. 把**报错时的屏幕截图**发给我。
-> 5. 告诉我：**大概几点出的错、是哪个协会、哪个人**。
+> ⚠️ **可观测性边界**：服务端遥测是 **run 级**（哪批、几个成功/失败、消耗多少）+ 错误事件；**per-协会 per-步骤的细节**（如「中国XX协会会长手机号未找到」、微信 INCONCLUSIVE 重试）只在**本地 app.log / wechat_diag.log** 里，不上报服务端（progress 不上报，控量）。所以运营在后台能发现「某客户这批 5/6 partial」，但要查「为什么 partial」仍需客户的诊断包。
 
-> `%temp%` 展开就是 `C:\Users\<用户名>\AppData\Local\Temp`，客户找不到的话让他直接在文件资源管理器地址栏粘贴这个路径也行。
+### 8.3 导出诊断包（一键，发给客服）
 
-### 8.3 运营侧能自己查的（不依赖客户）
+客户端顶栏「📦 诊断包」按钮 → 选保存位置 → 生成 zip，内含：
+- `app.log`（完整运行日志）、`wechat_diag.log`（微信诊断）、`gui-log.txt`（GUI 内存日志）
+- `cli-config.json` / `client-config.json`（**access_token 已脱敏成 `***`**）
+- `artifacts/`（微信取证产物，单文件≤2MB、总≤10MB 裁剪）、`system_info.txt`（系统/版本信息）
 
-- **激活/绑定状态**：`GET /api/saas/client-bindings/list`（看该客户是否在线、token 有没有被禁用）。
-- **积分消耗**：`GET /api/saas/billing/balance`（带 `X-Tenant-Id`）+ `/api/saas/billing/usage`，看采集期间扣了多少费——能反推跑到哪一步（文心问答/官网抓取会扣费，微信 RPA 取证不扣费）。
-- **服务端 LLM 代理调用**：客户端的 LLM 请求走服务端 `/api/client/v1/llm/chat`，服务端会落 trace。凭 **binding_id + 大致时间**在日志库 `obs_spans` 表查那次调用的真实入参/返回/报错（比客户端日志更全）。
-- ⚠️ 客户端调用**不会**把 trace_id 显示给客户，所以只能靠「时间 + 协会名」在服务端反查。
+打完自动打开所在文件夹，客户把 zip 发给客服即可，无需手动找文件。
 
-### 8.4 已知短板 & 建议改进（后续优化项，当前版本未做）
+### 8.4 运营侧自检（不依赖客户）
 
-当前可观测性较弱，建议后续补（不阻塞本次交付）：
-
-1. **接通遥测上报**：让 CLI 在每个 stage 把事件 POST 到**已存在**的 `/api/client/v1/logs`，运营就能在后台直接看每台客户的运行日志，不用让客户发文件。
-2. **GUI 加「导出诊断包」按钮**：一键把 `wechat_diag.log` + 当前内存日志 + 配置（脱敏掉 access_token）打包成 zip，客户点一下就能发。
-3. **把流水线事件（文心/官网）也写进本地日志文件**（目前只留在内存），关软件也能保留。
+- **客户端运行日志**：后台 `/portal/client-logs`（API `GET /api/saas/client-usage-logs/list`、`/recent-errors`，platform_admin 鉴权）。
+- **激活/绑定状态**：`GET /api/saas/client-bindings/list`。
+- **积分消耗**：`GET /api/saas/billing/balance`（带 `X-Tenant-Id`）。
+- **服务端 LLM 代理 trace**：客户端 LLM 请求走 `/api/client/v1/llm/chat`，凭 binding_id + 时间在日志库 `obs_spans` 查。
 
 ---
 

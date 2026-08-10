@@ -23,6 +23,7 @@ const state = {
   totalConsumed: 0,
   lastOutput: '',
   inputFilePath: '',  // 上传的输入文件路径
+  guiLog: [],         // GUI 内存日志（{time,level,message}），供导出诊断包
 }
 
 // ============== DOM 元素 ==============
@@ -354,6 +355,7 @@ function appendLog(level, message, association = '') {
     return
   }
   const time = new Date().toLocaleTimeString('zh-CN', { hour12: false })
+  state.guiLog.push({ time, level, message: (association ? `[${association}] ` : '') + message })
   const line = document.createElement('div')
   line.className = 'log-line'
   const prefix = association ? `[${association}] ` : ''
@@ -378,6 +380,7 @@ function bindEvents() {
   $('btn-start').addEventListener('click', handleStart)
   $('btn-stop').addEventListener('click', handleStop)
   $('btn-refresh-credits').addEventListener('click', refreshCredits)
+  $('btn-export-diag').addEventListener('click', handleExportDiag)
   $('btn-select-input').addEventListener('click', handleSelectInput)
   $('btn-open-folder').addEventListener('click', () => {
     if (state.lastOutput) client.system.openFolder(state.lastOutput)
@@ -405,6 +408,28 @@ function bindEvents() {
   document.querySelectorAll('.modal-overlay').forEach((el) => {
     el.addEventListener('click', () => el.parentElement.classList.add('hidden'))
   })
+}
+
+async function handleExportDiag() {
+  // 把 GUI 内存日志 + 本地文件聚合成 zip（主进程脱敏 token、裁剪大小）
+  const guiLogText = (state.guiLog || [])
+    .map((e) => `[${e.time}] [${e.level}] ${e.message}`)
+    .join('\n')
+  const today = new Date().toISOString().slice(0, 10)
+  let res
+  try {
+    res = await client.system.exportDiagnostics(`协会客户端诊断包_${today}.zip`, guiLogText)
+  } catch (e) {
+    alert('导出失败：' + (e && e.message ? e.message : e))
+    return
+  }
+  if (res === null || res === undefined) return  // 用户取消
+  if (res && typeof res === 'object' && res.error) {
+    alert('导出失败：' + res.error)
+    return
+  }
+  alert('诊断包已导出：\n' + res + '\n\n可把这个 zip 文件发给客服排查。')
+  client.system.openFolder(res)
 }
 
 async function handleSelectInput() {
