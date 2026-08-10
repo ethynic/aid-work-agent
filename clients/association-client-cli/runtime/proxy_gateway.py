@@ -82,7 +82,10 @@ class ProxyLLMGateway:
             "messages": messages,
             "temperature": temperature,
             "max_tokens": max_tokens,
-            "purpose": purpose,
+            # purpose 默认 "unknown" 无意义：退回到 reporter 同步过来的当前 stage；
+            # 同时带上 current_association，让后台「积分明细/任务摘要」能显示协会名
+            "purpose": purpose if purpose and purpose != "unknown" else (self.current_stage or "llm"),
+            "association": self.current_association or "",
         }
         if response_format:
             payload["response_format"] = response_format

@@ -46,6 +46,7 @@ class LlmChatRequest(BaseModel):
     max_tokens: int = 4000
     response_format: Optional[dict[str, Any]] = None
     purpose: str = "unknown"
+    association: Optional[str] = None
 
 
 class LogEntry(BaseModel):
@@ -225,6 +226,7 @@ async def llm_chat(
         model=model,
         provider=provider,
         usage=usage,
+        association_name=req.association,
         stage=req.purpose or "llm",
     )
 
