@@ -107,3 +107,29 @@ def test_main_rejects_empty_association_name(monkeypatch):
 
     assert rc == 2
     assert err.getvalue().strip() == "wenxin_collect_failed:ValueError"
+
+
+def test_collect_one_delegates_to_collect_query(monkeypatch):
+    """collect_one 委托 collect_query(QUERY_TMPL.format(name=...))。
+
+    collect_one/collect_query 定义在 runtime.wenxin_collector；本测试 patch
+    collector_mod.collect_query 验证委托关系与 query 模板拼接。DOM 逻辑
+    （CDP/textarea/稳定判断）继续由端到端验证。
+    """
+    import asyncio
+    import sys
+
+    wenxin = _load_wenxin()  # 触发 runtime.wenxin_collector 加载进 sys.modules
+    collector_mod = sys.modules["runtime.wenxin_collector"]
+    captured = {}
+
+    async def fake_collect_query(query):
+        captured["query"] = query
+        return {"ok": True, "answer": "stub", "note": ""}
+
+    monkeypatch.setattr(collector_mod, "collect_query", fake_collect_query)
+
+    result = asyncio.run(wenxin.collect_one("中国黄金协会"))
+
+    assert captured["query"] == wenxin.QUERY_TMPL.format(name="中国黄金协会")
+    assert result == {"ok": True, "answer": "stub", "note": ""}

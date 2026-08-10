@@ -220,9 +220,19 @@ async def cmd_collect(args: argparse.Namespace) -> int:
     try:
         from src.services.association_enrichment_providers import ProjectAssociationProviders
 
+        def _audit_to_log(**event):
+            # 审计事件落到 app.log，便于排查采集分支（文心原文 wenxin_collected /
+            # 降级 wenxin_fallback）、原文长度、失败 note（captcha/cdp_attach_failed 等）
+            emit_log(
+                "INFO",
+                f"[audit] stage={event.get('stage', '')} kind={event.get('kind', '')} "
+                f"summary={event.get('summary', '')}",
+            )
+
         providers = ProjectAssociationProviders(
             repository_root=ROOT,
             gateway=gateway,
+            audit_callback=_audit_to_log,
         )
 
         # 第1步改走文心联网采集，需要常开调试浏览器(9222)。失败仅警告——
@@ -247,6 +257,7 @@ async def cmd_collect(args: argparse.Namespace) -> int:
             fallback_profile_provider=providers.search_profile,
             wechat_mobile_provider=providers.wechat_mobile,
             wechat_leader_name_provider=providers.wechat_search_leader_name,
+            wenxin_secretary_mobile_provider=providers.wenxin_search_secretary_mobile,
             headless=False,
             progress_reporter=reporter,
         )

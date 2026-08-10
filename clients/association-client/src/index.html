@@ -66,16 +66,7 @@
             <div id="balance-warning" class="warning hidden">积分余额不足，请联系服务商充值</div>
           </div>
 
-          <!-- 进度区 -->
-          <div id="progress-section" class="card hidden">
-            <div class="progress-header">
-              <h2>进度</h2>
-              <span id="progress-counter" class="progress-counter"></span>
-            </div>
-            <div id="progress-list" class="progress-list"></div>
-          </div>
-
-          <!-- 结果区 -->
+          <!-- 结果区（放在进度上方：批量上传进度很长时，完成结果不会被挤到屏幕外） -->
           <div id="result-section" class="card hidden">
             <h2>收集完成</h2>
             <div id="result-summary" class="result-summary"></div>
@@ -88,6 +79,15 @@
               <button id="btn-new-task" class="btn-secondary">开始新任务</button>
               <button id="btn-show-log" class="btn-secondary">📋 查看日志</button>
             </div>
+          </div>
+
+          <!-- 进度区 -->
+          <div id="progress-section" class="card hidden">
+            <div class="progress-header">
+              <h2>进度</h2>
+              <span id="progress-counter" class="progress-counter"></span>
+            </div>
+            <div id="progress-list" class="progress-list"></div>
           </div>
         </div>
 

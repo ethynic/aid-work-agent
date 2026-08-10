@@ -33,12 +33,16 @@ STABLE_TICKS = 3           # 连续 3 次(每 0.5s)文本不变判完成
 MAX_TOTAL_SECONDS = 90     # 单题等文本稳定的总超时上限
 
 
-async def collect_one(name: str) -> dict[str, Any]:
-    """对单个协会在文心提问，返回 {ok, answer, note}。"""
+async def collect_query(query: str) -> dict[str, Any]:
+    """对文心发送任意 query，返回 {ok, answer, note}。
+
+    query 进、answer 文本出，不绑定提问模板。复用 9222 常驻浏览器（由
+    runtime.wenxin_browser.ensure_wenxin_browser 保证）。collect_one 用
+    QUERY_TMPL 调本函数。
+    """
     # 延迟 import：避免模块加载即要求 playwright（照 llm_judge.py 范式）
     from playwright.async_api import async_playwright
 
-    query = QUERY_TMPL.format(name=name)
     async with async_playwright() as pw:
         try:
             browser = await pw.chromium.connect_over_cdp(CDP_URL)
@@ -105,3 +109,8 @@ async def collect_one(name: str) -> dict[str, Any]:
             return {"ok": False, "note": "empty_answer"}
         return {"ok": True, "answer": last, "note": ""}
         # attach 模式不 close browser —— async_playwright 退出自动断开 CDP，浏览器常驻
+
+
+async def collect_one(name: str) -> dict[str, Any]:
+    """对单个协会用基础信息模板（QUERY_TMPL）在文心提问，返回 {ok, answer, note}。"""
+    return await collect_query(QUERY_TMPL.format(name=name))

@@ -730,14 +730,19 @@ async def test_website_only_official_profile_uses_fallback_then_wechat():
 
 @pytest.mark.asyncio
 async def test_search_profile_returns_basic_info(monkeypatch, tmp_path):
-    """文心脚本缺失（tmp_path 下无 wenxin_collect.py）时降级 llm_gateway 直出。
+    """文心采集失败时降级 llm_gateway 直出（DeepSeek 不联网）。
 
     DeepSeek 直出不联网，会长/秘书长/手机号即使模型返回也强制 null
     （避免过期/幻觉，交给官网组织领导页或微信搜一搜精确取证）。
+    显式 mock _collect_wenxin 返回 None，避免依赖 runtime import / 9222 状态。
     """
     import src.services.association_enrichment_providers as module
 
     providers = ProjectAssociationProviders(repository_root=tmp_path)
+
+    async def fake_wenxin(_name):
+        return None  # 文心采集失败 → fallback DeepSeek 直出
+    monkeypatch.setattr(providers, "_collect_wenxin", fake_wenxin)
 
     mock_result = {name: None for name in PROFILE_FIELDS}
     mock_result["address"] = "北京市测试路1号"
@@ -1349,3 +1354,240 @@ async def test_wechat_invalid_json_audits_response_error(monkeypatch, tmp_path):
 
     assert events[-1]["kind"] == "wechat_failed"
     assert events[-1]["summary"] == "WECHAT_RPA_RESPONSE_INVALID"
+
+
+# ---- 秘书长手机号「文心快速路径」enricher 级测试 ----
+
+
+@pytest.mark.asyncio
+async def test_secretary_wenxin_hit_skips_wechat():
+    """秘书长文心命中手机号 → 填值并跳过微信；会长仍走微信。"""
+    async def collect(url, _headless, **kwargs):
+        return {}
+
+    async def fallback(_name):
+        return {"president_name": "会长甲", "secretary_general_name": "秘书长乙"}
+
+    wenxin_calls = []
+    async def wenxin_secretary_mobile(association, name):
+        wenxin_calls.append((association, name))
+        return "13812345678"  # 秘书长文心命中
+
+    wechat_calls = []
+    async def wechat(association, person, role):
+        wechat_calls.append((association, person, role))
+        return "13900000000"
+
+    enricher = AssociationBatchEnricher(
+        official_profile_collector=collect,
+        fallback_profile_provider=fallback,
+        wechat_mobile_provider=wechat,
+        wenxin_secretary_mobile_provider=wenxin_secretary_mobile,
+    )
+    row = await enricher.enrich_one("测试协会")
+
+    assert row.values["secretary_general_mobile"] == "13812345678"
+    assert row.values["president_mobile"] == "13900000000"
+    assert "wenxin_mobile:秘书长" in row.sources
+    assert "wechat:会长" in row.sources
+    assert "wechat:秘书长" not in row.sources
+    # 秘书长走文心（命中跳过微信），只有会长走微信
+    assert wechat_calls == [("测试协会", "会长甲", "会长")]
+    assert wenxin_calls == [("测试协会", "秘书长乙")]
+
+
+@pytest.mark.asyncio
+async def test_secretary_wenxin_miss_falls_back_to_wechat():
+    """秘书长文心未命中(返None) → 落回微信搜一搜。"""
+    async def collect(url, _headless, **kwargs):
+        return {}
+
+    async def fallback(_name):
+        return {"president_name": "会长甲", "secretary_general_name": "秘书长乙"}
+
+    async def wenxin_secretary_mobile(_association, _name):
+        return None  # 文心未查到
+
+    async def wechat(_association, _person, role):
+        return "13900000001" if role == "秘书长" else "13900000000"
+
+    enricher = AssociationBatchEnricher(
+        official_profile_collector=collect,
+        fallback_profile_provider=fallback,
+        wechat_mobile_provider=wechat,
+        wenxin_secretary_mobile_provider=wenxin_secretary_mobile,
+    )
+    row = await enricher.enrich_one("测试协会")
+
+    assert row.values["secretary_general_mobile"] == "13900000001"
+    assert "wechat:秘书长" in row.sources
+    assert "wenxin_mobile:秘书长" not in row.sources
+
+
+@pytest.mark.asyncio
+async def test_secretary_wenxin_exception_falls_back_to_wechat():
+    """秘书长文心 provider 抛异常 → 不崩，落回微信兜底。"""
+    async def collect(url, _headless, **kwargs):
+        return {}
+
+    async def fallback(_name):
+        return {"president_name": "会长甲", "secretary_general_name": "秘书长乙"}
+
+    async def wenxin_secretary_mobile(_association, _name):
+        raise RuntimeError("wenxin boom")
+
+    async def wechat(_association, _person, role):
+        return "13900000002" if role == "秘书长" else "13900000000"
+
+    enricher = AssociationBatchEnricher(
+        official_profile_collector=collect,
+        fallback_profile_provider=fallback,
+        wechat_mobile_provider=wechat,
+        wenxin_secretary_mobile_provider=wenxin_secretary_mobile,
+    )
+    row = await enricher.enrich_one("测试协会")
+
+    assert row.values["secretary_general_mobile"] == "13900000002"
+    assert "wechat:秘书长" in row.sources
+
+
+@pytest.mark.asyncio
+async def test_president_never_uses_wenxin_mobile():
+    """会长手机号永远不走文心（只秘书长走文心快速路径）。"""
+    async def collect(url, _headless, **kwargs):
+        return {}
+
+    async def fallback(_name):
+        return {"president_name": "会长甲", "secretary_general_name": "秘书长乙"}
+
+    wenxin_calls = []
+    async def wenxin_secretary_mobile(_association, name):
+        wenxin_calls.append(name)
+        return None
+
+    async def wechat(_association, _person, _role):
+        return None
+
+    enricher = AssociationBatchEnricher(
+        official_profile_collector=collect,
+        fallback_profile_provider=fallback,
+        wechat_mobile_provider=wechat,
+        wenxin_secretary_mobile_provider=wenxin_secretary_mobile,
+    )
+    await enricher.enrich_one("测试协会")
+
+    # 文心只被秘书长调用一次，会长从不调用
+    assert wenxin_calls == ["秘书长乙"]
+
+
+@pytest.mark.asyncio
+async def test_secretary_wenxin_skipped_when_no_secretary_name():
+    """无秘书长姓名时，文心 provider 不被调用（Step4 守卫先 continue）。"""
+    async def collect(url, _headless, **kwargs):
+        return {}
+
+    async def fallback(_name):
+        return {"president_name": "会长甲"}  # 无秘书长姓名
+
+    wenxin_calls = []
+    async def wenxin_secretary_mobile(_association, name):
+        wenxin_calls.append(name)
+        return None
+
+    async def wechat(_association, _person, _role):
+        return None
+
+    enricher = AssociationBatchEnricher(
+        official_profile_collector=collect,
+        fallback_profile_provider=fallback,
+        wechat_mobile_provider=wechat,
+        wenxin_secretary_mobile_provider=wenxin_secretary_mobile,
+    )
+    await enricher.enrich_one("测试协会")
+
+    assert wenxin_calls == []
+
+
+# ---- wenxin_search_secretary_mobile providers 级测试（纯正则提取）----
+
+
+@pytest.mark.asyncio
+async def test_wenxin_secretary_mobile_extracts_valid_number(monkeypatch, tmp_path):
+    """文心回答含手机号 → 纯正则提取。"""
+    providers = ProjectAssociationProviders(repository_root=tmp_path)
+
+    async def fake_query(_query):
+        return {"ok": True, "answer": "秘书长张三，手机 13812345678", "note": ""}
+    monkeypatch.setattr(providers, "_collect_wenxin_query", fake_query)
+
+    mobile = await providers.wenxin_search_secretary_mobile("测试协会", "张三")
+    assert mobile == "13812345678"
+
+
+@pytest.mark.asyncio
+async def test_wenxin_secretary_mobile_rejects_landline_fax(monkeypatch, tmp_path):
+    """回答含座机/传真 + 手机 → 只取手机号（座机0开头/传真被 1[3-9] 正则排除）。"""
+    providers = ProjectAssociationProviders(repository_root=tmp_path)
+
+    async def fake_query(_query):
+        return {
+            "ok": True,
+            "answer": "电话：010-12345678 传真：010-87654321 手机：13812345678",
+            "note": "",
+        }
+    monkeypatch.setattr(providers, "_collect_wenxin_query", fake_query)
+
+    mobile = await providers.wenxin_search_secretary_mobile("测试协会", "张三")
+    assert mobile == "13812345678"
+
+
+@pytest.mark.asyncio
+async def test_wenxin_mobile_picks_first_when_multiple(monkeypatch, tmp_path):
+    """回答含多个手机号 → 去重保序取第一个。"""
+    providers = ProjectAssociationProviders(repository_root=tmp_path)
+
+    async def fake_query(_query):
+        return {"ok": True, "answer": "13811112222 13833334444", "note": ""}
+    monkeypatch.setattr(providers, "_collect_wenxin_query", fake_query)
+
+    mobile = await providers.wenxin_search_secretary_mobile("测试协会", "张三")
+    assert mobile == "13811112222"
+
+
+@pytest.mark.asyncio
+async def test_wenxin_secretary_mobile_none_on_no_mobile(monkeypatch, tmp_path):
+    """回答只有座机、无手机号 → None。"""
+    providers = ProjectAssociationProviders(repository_root=tmp_path)
+
+    async def fake_query(_query):
+        return {"ok": True, "answer": "办公电话 010-12345678，无手机号", "note": ""}
+    monkeypatch.setattr(providers, "_collect_wenxin_query", fake_query)
+
+    mobile = await providers.wenxin_search_secretary_mobile("测试协会", "张三")
+    assert mobile is None
+
+
+@pytest.mark.asyncio
+async def test_wenxin_secretary_mobile_none_on_wenxin_failure(monkeypatch, tmp_path):
+    """文心采集失败(返回None) → None。"""
+    providers = ProjectAssociationProviders(repository_root=tmp_path)
+
+    async def fake_query(_query):
+        return None
+    monkeypatch.setattr(providers, "_collect_wenxin_query", fake_query)
+
+    mobile = await providers.wenxin_search_secretary_mobile("测试协会", "张三")
+    assert mobile is None
+
+
+@pytest.mark.asyncio
+async def test_wenxin_secretary_mobile_none_on_captcha(monkeypatch, tmp_path):
+    """文心返回验证码 → None。"""
+    providers = ProjectAssociationProviders(repository_root=tmp_path)
+
+    async def fake_query(_query):
+        return {"ok": False, "note": "captcha"}
+    monkeypatch.setattr(providers, "_collect_wenxin_query", fake_query)
+
+    mobile = await providers.wenxin_search_secretary_mobile("测试协会", "张三")
+    assert mobile is None

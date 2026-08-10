@@ -273,6 +273,12 @@ function handleCompleteEvent(evt) {
     $('result-output').classList.remove('hidden')
   }
   $('result-section').classList.remove('hidden')
+  // 结果区已在进度上方；批量上传进度很长时，完成时滚到顶部让结果立即可见
+  $('result-section').scrollIntoView({ behavior: 'smooth', block: 'start' })
+  // 自动清空输入（协会名称文本 / 上传文件），防止共享机器上他人误点「开始收集」重复跑
+  $('associations-input').value = ''
+  $('input-file-name').textContent = ''
+  state.inputFilePath = ''
   appendLog('INFO', `✅ 收集完成，共消耗 ${parseFloat(evt.total_consumed || 0).toFixed(2)} 积分`)
   refreshCredits()
 }

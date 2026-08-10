@@ -96,6 +96,7 @@ FallbackProfileProvider = Callable[
 ]
 WechatMobileProvider = Callable[[str, str, str], Awaitable[str | None]]
 WechatLeaderNameProvider = Callable[[str, str, str], Awaitable[str | None]]
+WenxinSecretaryMobileProvider = Callable[[str, str], Awaitable[str | None]]
 ProgressReporter = Callable[[str], None]
 
 
@@ -302,6 +303,7 @@ class AssociationBatchEnricher:
         fallback_profile_provider: FallbackProfileProvider,
         wechat_mobile_provider: WechatMobileProvider,
         wechat_leader_name_provider: WechatLeaderNameProvider | None = None,
+        wenxin_secretary_mobile_provider: WenxinSecretaryMobileProvider | None = None,
         headless: bool = False,
         progress_reporter: ProgressReporter | None = None,
     ):
@@ -312,6 +314,7 @@ class AssociationBatchEnricher:
         self._fallback_profile = fallback_profile_provider
         self._wechat_mobile = wechat_mobile_provider
         self._wechat_leader_name = wechat_leader_name_provider
+        self._wenxin_secretary_mobile = wenxin_secretary_mobile_provider
         self._headless = headless
         self._progress_reporter = progress_reporter
 
@@ -430,6 +433,22 @@ class AssociationBatchEnricher:
                 if not person_name:
                     self._progress(f"[{association_name}] 【4/4】跳过{role}手机号检索（无姓名）")
                 continue
+            # 秘书长手机号：先走文心快速路径（公开网更易命中），命中即跳过微信兜底。
+            # 会长不参与（秘书长才是实际联系人，会长公开手机号概率低）。
+            if role == "秘书长" and self._wenxin_secretary_mobile is not None:
+                try:
+                    self._progress(f"[{association_name}] 【4/4】正在文心查秘书长（{person_name}）手机号")
+                    wenxin_mobile = await self._wenxin_secretary_mobile(
+                        association_name, str(person_name)
+                    )
+                    if wenxin_mobile:
+                        row.values[mobile_field] = str(wenxin_mobile)
+                        row.sources.append("wenxin_mobile:秘书长")
+                        self._progress(f"[{association_name}] 【4/4】文心查到秘书长手机号，跳过微信")
+                        continue
+                    self._progress(f"[{association_name}] 【4/4】文心未查到秘书长手机号，转微信兜底")
+                except Exception as exc:
+                    self._progress(f"[{association_name}] 【4/4】文心查秘书长手机号失败，转微信兜底：{type(exc).__name__}")
             try:
                 self._progress(f"[{association_name}] 【4/4】正在微信检索{role}（{person_name}）手机号")
                 mobile = await self._wechat_mobile(

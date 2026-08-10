@@ -51,6 +51,9 @@ _WECHAT_INPUT_FAILURE_CODES = {
 _WECHAT_RPA_TIMEOUT_SECONDS = 600
 # 文心联网采集单题超时：提问+生成+稳定判断最多约 90s，留余量到 180s。
 _WENXIN_COLLECT_TIMEOUT_SECONDS = 180
+# 文心查秘书长手机号的提问模板（仅秘书长手机号快速路径用，
+# 详见 wenxin_search_secretary_mobile）。
+_SECRETARY_MOBILE_QUERY_TMPL = "{association} {name} 联系人手机号"
 
 
 class ProjectAssociationProviders:
@@ -315,25 +318,33 @@ class ProjectAssociationProviders:
                 result[field_name] = None
         return result
 
-    async def _collect_wenxin(self, association_name: str) -> dict | None:
-        """进程内调用文心联网采集协会基础信息原文。
+    async def _collect_wenxin_query(self, query: str) -> dict | None:
+        """进程内对文心发送任意 query，返回 {ok, answer, note} 或 None。
 
         用 exe 内嵌的 playwright 连接 9222 常驻浏览器（由 ensure_wenxin_browser
-        保证就绪），返回 collect_one 的 {ok, answer, note}。不再 spawn 外部
-        python——PyInstaller onefile 打包后无客户机 python 可用，进程内调用让
-        打包 exe 真正自包含（客户机零安装）。任何失败返回 None，由上层走
-        DeepSeek 兜底——文心只是优化信息源，不可让它拖垮整步。
+        保证就绪）。不再 spawn 外部 python——PyInstaller onefile 打包后无客户机
+        python 可用，进程内调用让打包 exe 真正自包含（客户机零安装）。任何失败
+        返回 None——文心只是优化信息源，不可让它拖垮整步。
         """
         try:
-            from runtime.wenxin_collector import collect_one
+            from runtime.wenxin_collector import collect_query
 
             return await asyncio.wait_for(
-                collect_one(association_name),
+                collect_query(query),
                 timeout=_WENXIN_COLLECT_TIMEOUT_SECONDS,
             )
         except Exception:
-            # playwright/CDP 异常或超时；文心非关键，降级 DeepSeek 不拖垮整步。
+            # playwright/CDP 异常或超时；文心非关键，降级兜底不拖垮整步。
             return None
+
+    async def _collect_wenxin(self, association_name: str) -> dict | None:
+        """文心联网采集协会基础信息原文（QUERY_TMPL 提问）。"""
+        try:
+            from runtime.wenxin_collector import QUERY_TMPL
+        except ImportError:
+            # 测试/无 runtime 环境降级（同 _collect_wenxin_query 的 import 容错）
+            return None
+        return await self._collect_wenxin_query(QUERY_TMPL.format(name=association_name))
 
     def _wechat_script_path(self, filename: str) -> Path:
         """wechat ps1 路径：打包下从 _MEIPASS/scripts/，dev 下从源码仓库解析。
@@ -461,6 +472,56 @@ class ProjectAssociationProviders:
             for locked in _leader_name_locked:
                 values[locked] = None
         return values
+
+    async def wenxin_search_secretary_mobile(
+        self, association_name: str, secretary_name: str
+    ) -> str | None:
+        """文心联网搜秘书长手机号（仅秘书长手机号快速路径）。
+
+        用 _SECRETARY_MOBILE_QUERY_TMPL 提问，从回答里纯正则提取手机号
+        （1[3-9] 开头 11 位，天然排除座机/传真/400/800）。命中返回合法手机号，
+        未命中/文心失败/无手机号返回 None——由 enricher 落回微信搜一搜兜底。
+        文心只给怀疑是该秘书长本人的号码（不会给其他人），故纯正则即可定位。
+        """
+        query = _SECRETARY_MOBILE_QUERY_TMPL.format(
+            association=association_name, name=secretary_name
+        )
+        wenxin = await self._collect_wenxin_query(query)
+        raw = wenxin.get("answer") if (
+            isinstance(wenxin, dict)
+            and wenxin.get("ok")
+            and isinstance(wenxin.get("answer"), str)
+        ) else None
+        if not (raw and raw.strip()):
+            self._audit(
+                association=association_name,
+                stage="秘书长手机号·文心",
+                kind="wenxin_mobile_no_answer",
+                summary=(
+                    str(wenxin.get("note"))
+                    if isinstance(wenxin, dict)
+                    else "collect_failed"
+                ),
+            )
+            return None
+        # 纯正则提取手机号：1 开头 11 位，天然排除座机(0开头/带区号)/传真/400/800
+        mobiles = re.findall(r"(?<!\d)1[3-9]\d{9}(?!\d)", raw)
+        if not mobiles:
+            self._audit(
+                association=association_name,
+                stage="秘书长手机号·文心",
+                kind="wenxin_mobile_not_found",
+                summary="回答中无手机号",
+            )
+            return None
+        mobile = list(dict.fromkeys(mobiles))[0]  # 去重保序取第一个
+        self._audit(
+            association=association_name,
+            stage="秘书长手机号·文心",
+            kind="wenxin_mobile_found",
+            summary=f"{mobile[:3]}****{mobile[-4:]}",  # 脱敏：_audit 不自动脱敏
+        )
+        return mobile
 
     async def wechat_mobile(
         self, association_name: str, person_name: str, role: str
