@@ -33,3 +33,18 @@ def test_billing_usage_factor_unchanged(monkeypatch):
     monkeypatch.delenv("VIDEO_GEN_USAGE_FACTOR", raising=False)
     settings = create_settings()
     assert settings.billing.usage_factor == 100
+
+
+def test_billing_usage_factor_env_override(monkeypatch):
+    """USAGE_FACTOR env 覆盖生效"""
+    monkeypatch.setenv("USAGE_FACTOR", "200")
+    settings = create_settings()
+    assert settings.billing.usage_factor == 200
+
+
+def test_billing_usage_factor_invalid_env_fallback(monkeypatch):
+    """非法 USAGE_FACTOR env 值时回退到 yaml/默认值"""
+    monkeypatch.setenv("USAGE_FACTOR", "not-a-number")
+    settings = create_settings()
+    # 非法值不覆盖，沿用 yaml 中的 100
+    assert settings.billing.usage_factor == 100

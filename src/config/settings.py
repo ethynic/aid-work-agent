@@ -616,6 +616,11 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
 
     # 积分计费配置：环境变量覆盖
     billing_cfg = yaml_config.setdefault("billing", {})
+    if os.getenv("USAGE_FACTOR") is not None:
+        try:
+            billing_cfg["usage_factor"] = int(os.getenv("USAGE_FACTOR"))
+        except ValueError:
+            pass
     if os.getenv("VIDEO_GEN_USAGE_FACTOR") is not None:
         try:
             billing_cfg["video_gen_usage_factor"] = int(os.getenv("VIDEO_GEN_USAGE_FACTOR"))
