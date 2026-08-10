@@ -14,6 +14,7 @@ export const portalRoutes: RouteRecordRaw[] = [
       { path: 'subagents', name: 'portal-subagents', component: () => import('@/components/DigitalEmployeeManager.vue') },
       { path: 'agent-definitions', name: 'portal-agent-definitions', component: () => import('@/components/AgentDefinitionManager.vue') },
       { path: 'token-usage', name: 'portal-token-usage', component: () => import('@/components/saas/PlatformTokenUsage.vue') },
+      { path: 'client-logs', name: 'portal-client-logs', component: () => import('@/components/saas/ClientUsageLogs.vue') },
       { path: 'error-logs', name: 'portal-error-logs', component: () => import('@/components/saas/ErrorLogs.vue') },
       { path: 'reply-styles', name: 'portal-reply-styles', component: () => import('@/components/saas/SystemReplyStyleManager.vue') },
       { path: 'monitoring', name: 'portal-monitoring', component: () => import('@/components/saas/TraceBrowser.vue') },

@@ -394,3 +394,95 @@ class ClientUsageLogDB:
             if not row:
                 return {"today": 0.0, "week": 0.0, "total": 0.0}
             return {"today": float(row["today"] or 0), "week": float(row["week"] or 0), "total": float(row["total"] or 0)}
+
+    @staticmethod
+    def list(
+        *,
+        tenant_id: Optional[str] = None,
+        binding_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        stage: Optional[str] = None,
+        status: Optional[str] = None,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> dict[str, Any]:
+        """平台管理员视角的消耗/日志列表（按 created_at DESC）。
+
+        同表覆盖两类行：LLM 计费行（stage=llm/purpose, credit_cost>0）+
+        客户端遥测/日志行（stage=run_*/wenxin_browser/..., credit_cost=0）。
+        """
+        where_clauses: list[str] = []
+        params: list[Any] = []
+        if tenant_id:
+            where_clauses.append("tenant_id = %s")
+            params.append(tenant_id)
+        if binding_id:
+            where_clauses.append("binding_id = %s")
+            params.append(binding_id)
+        if session_id:
+            where_clauses.append("session_id = %s")
+            params.append(session_id)
+        if stage:
+            where_clauses.append("stage = %s")
+            params.append(stage)
+        if status:
+            where_clauses.append("status = %s")
+            params.append(status)
+        if date_from:
+            where_clauses.append("created_at >= %s")
+            params.append(f"{date_from} 00:00:00")
+        if date_to:
+            where_clauses.append("created_at <= %s")
+            params.append(f"{date_to} 23:59:59")
+        where_sql = " AND ".join(where_clauses) if where_clauses else "TRUE"
+
+        if page < 1:
+            page = 1
+        if page_size < 1 or page_size > 200:
+            page_size = 20
+        offset = (page - 1) * page_size
+
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(f"SELECT COUNT(*) AS cnt FROM client_usage_logs WHERE {where_sql}", params)
+            total = int(cursor.fetchone()["cnt"] or 0)
+            cursor.execute(
+                f"""SELECT id, tenant_id, binding_id, session_id, association_name, stage, status,
+                          model, provider, total_tokens, raw_credit_cost, credit_cost, error_code,
+                          detail, created_at
+                   FROM client_usage_logs
+                   WHERE {where_sql}
+                   ORDER BY created_at DESC
+                   LIMIT %s OFFSET %s""",
+                (*params, page_size, offset),
+            )
+            items = [dict(r) for r in cursor.fetchall()]
+        return {"items": items, "total": total, "page": page, "page_size": page_size}
+
+    @staticmethod
+    def recent_errors(*, hours: int = 24, limit: int = 100, tenant_id: Optional[str] = None) -> list[dict[str, Any]]:
+        """近 N 小时的错误/告警行（跨租户，供「及时发现」仪表）。"""
+        if hours < 1:
+            hours = 24
+        if limit < 1 or limit > 500:
+            limit = 100
+        where_clauses: list[str] = ["status IN ('error', 'warning')", "created_at >= NOW() - %s * INTERVAL '1 hour'"]
+        params: list[Any] = [hours]
+        if tenant_id:
+            where_clauses.append("tenant_id = %s")
+            params.append(tenant_id)
+        where_sql = " AND ".join(where_clauses)
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                f"""SELECT id, tenant_id, binding_id, session_id, association_name, stage, status,
+                          error_code, detail, created_at
+                   FROM client_usage_logs
+                   WHERE {where_sql}
+                   ORDER BY created_at DESC
+                   LIMIT %s""",
+                (*params, limit),
+            )
+            return [dict(r) for r in cursor.fetchall()]

@@ -1491,6 +1491,8 @@ CREATE TABLE IF NOT EXISTS client_usage_logs (
 );
 CREATE INDEX IF NOT EXISTS idx_client_usage_logs_tenant ON client_usage_logs(tenant_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_client_usage_logs_binding ON client_usage_logs(binding_id, created_at);
+-- 2026-08-10，客户端遥测/日志上报后，运营后台按状态跨租户筛错误需要 status 索引
+CREATE INDEX IF NOT EXISTS idx_client_usage_logs_status ON client_usage_logs(status, created_at);
 
 -- ============================================================================
 -- 2026-08-07 视频创作智能体（video-agent）Phase 1：素材库 + 提示词库 + subagent_definitions 扩展
