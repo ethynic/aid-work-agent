@@ -25,6 +25,7 @@ export interface TenantInfo {
   plan: string
   status: string
   expire_at?: string
+  logo_file_id?: string | null  // 租户 Logo 文件 ID（无 Logo 时为 null）
 }
 
 const admin = ref<TenantAdmin | null>(null)

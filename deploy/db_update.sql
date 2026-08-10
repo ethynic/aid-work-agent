@@ -226,3 +226,6 @@ VALUES ('MiniMax-H3', 0.5, '{"768P": 0.5, "2K": 0.8}'::jsonb)
 ON CONFLICT (model_name) DO UPDATE SET
   price_per_second = EXCLUDED.price_per_second,
   price_per_second_by_resolution = EXCLUDED.price_per_second_by_resolution;
+
+-- 2026-8-10，tenants 增加 logo_file_id 字段，存储租户 Logo 文件 ID
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS logo_file_id TEXT;

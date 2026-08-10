@@ -8,12 +8,14 @@ SaaS 企业信息管理 API
 - 租户增删改查（仅平台管理员）
 """
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, UploadFile, File
 from pydantic import BaseModel, Field
 from typing import Optional
 from datetime import datetime
 from loguru import logger
+import os
 import re
+import tempfile
 
 from src.saas.api.tenant_auth import require_admin
 from src.saas.db.tenant_db import TenantDB
@@ -24,6 +26,12 @@ from src.db.models import UserDB, TokenDB
 from src.db.database import get_db_connection
 
 router = APIRouter(prefix="/api/saas/tenants", tags=["SaaS 企业管理"])
+
+
+# 租户 Logo 上传允许的扩展名（与 travel_quote.py 图片白名单一致，额外允许 svg）
+_LOGO_ALLOWED_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".svg"}
+# 租户 Logo 文件大小上限（2MB）
+_LOGO_MAX_SIZE = 2 * 1024 * 1024
 
 
 def _normalize_expire_date(date_str: str | None) -> datetime | None:
@@ -58,6 +66,7 @@ class TenantUpdateRequest(BaseModel):
     contact_phone: Optional[str] = Field(None, max_length=20, description="联系人电话")
     initial_admin_name: Optional[str] = Field(None, max_length=50, description="初始管理员姓名")
     initial_admin_phone: Optional[str] = Field(None, max_length=11, description="初始管理员手机号")
+    logo_file_id: Optional[str] = Field(None, description="租户 Logo 文件 ID，传 null 清空")
 
 
 def sanitize_error_info(error_msg: str) -> str:
@@ -356,3 +365,90 @@ async def delete_tenant(request: Request, tenant_id: str):
     except Exception as e:
         logger.error(f"删除租户异常: {e}", exc_info=True)
         return {"success": False, "error": "删除失败", "debug": sanitize_error_info(str(e))}
+
+
+@router.post("/logo")
+async def upload_tenant_logo(request: Request, file: UploadFile = File(...)):
+    """上传租户 Logo 图片
+
+    鉴权：require_admin（平台管理员或租户管理员均可）。
+    平台管理员代管时通过 X-Tenant-Id header 指定目标租户，由 TenantContextMiddleware 处理。
+
+    流程：
+    1. 校验扩展名和大小
+    2. 落临时文件
+    3. 调 ImageRegistry.register（source=user_upload, usage=inline, ttl_seconds=-1 永久保留）
+    4. 返回 file_id + download_url
+
+    注意：上传只注册资产返回 file_id，不立即改租户表；点保存才把 logo_file_id 写入 tenants 表。
+    """
+    if not settings.saas.enabled:
+        return {"success": False, "error": "未启用 SaaS 模式无法访问", "debug": "SaaS mode disabled"}
+
+    admin = require_admin(request)
+    tenant_id = admin.get("tenant_id")
+    if not tenant_id:
+        return {"success": False, "error": "无法确定目标租户", "debug": "Missing tenant_id in admin context"}
+
+    # 1. 校验文件名扩展
+    filename = file.filename or ""
+    ext = os.path.splitext(filename)[1].lower()
+    if ext not in _LOGO_ALLOWED_EXTS:
+        return {
+            "success": False,
+            "error": f"不支持的图片格式（仅支持 {sorted(_LOGO_ALLOWED_EXTS)}）",
+            "debug": f"Invalid ext: {ext}",
+        }
+
+    # 2. 读取内容并校验大小
+    content = await file.read()
+    if len(content) == 0:
+        return {"success": False, "error": "文件为空", "debug": "Empty file content"}
+    if len(content) > _LOGO_MAX_SIZE:
+        return {
+            "success": False,
+            "error": f"文件过大（上限 {_LOGO_MAX_SIZE // 1024 // 1024}MB）",
+            "debug": f"File size {len(content)} exceeds {_LOGO_MAX_SIZE}",
+        }
+
+    # 3. 落临时文件（register 会 move 到租户目录）
+    suffix = ext
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        tmp.write(content)
+        tmp_path = tmp.name
+
+    try:
+        # 4. 注册到 ImageRegistry（永久保留，不被 cleanup_temp 清理）
+        from src.core.image_asset import get_image_registry
+        registry = get_image_registry()
+        # register 是 async 协程，但内部仅做磁盘 IO 和 Redis hset（同步），
+        # 此处直接 await 即可，无需 to_thread 包裹
+        ref = await registry.register(
+            source_path=tmp_path,
+            tenant_id=tenant_id,
+            user_id=admin.get("user_id"),
+            display_name=os.path.basename(filename) or f"logo{suffix}",
+            source="user_upload",
+            usage="inline",
+            move=True,
+            ttl_seconds=-1,  # 永久保留，不调 expire
+        )
+        logger.info(
+            f"租户 Logo 上传成功: tenant={tenant_id} file_id={ref.file_id} "
+            f"size={len(content)} by admin={admin.get('user_id')}"
+        )
+        return {
+            "success": True,
+            "file_id": ref.file_id,
+            "download_url": ref.download_url,
+        }
+    except Exception as e:
+        logger.error(f"租户 Logo 上传异常: {e}", exc_info=True)
+        return {"success": False, "error": "上传失败", "debug": sanitize_error_info(str(e))}
+    finally:
+        # register 用 move=True，成功后临时文件已被移走；失败时清理
+        try:
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+        except OSError:
+            pass

@@ -3,9 +3,17 @@
     <!-- 管理后台菜单 - 仅 /portal 路由下显示 -->
     <aside v-if="!isTenantRoute" class="w-60 bg-gray-900 text-white flex flex-col flex-shrink-0">
       <!-- 企业信息 -->
-      <div class="p-4 border-b border-gray-700">
-        <h2 class="text-lg font-bold truncate">{{ tenant?.company_name || '管理后台' }}</h2>
-        <p class="text-sm text-muted mt-1">{{ admin?.username || admin?.phone || '' }}</p>
+      <div class="p-4 border-b border-gray-700 flex items-center gap-3">
+        <img
+          v-if="logoUrl"
+          :src="logoUrl"
+          alt="Logo"
+          class="w-8 h-8 rounded object-contain flex-shrink-0"
+        />
+        <div class="min-w-0">
+          <h2 class="text-lg font-bold truncate">{{ tenant?.company_name || '管理后台' }}</h2>
+          <p class="text-sm text-muted mt-1">{{ admin?.username || admin?.phone || '' }}</p>
+        </div>
       </div>
 
       <!-- 导航菜单 -->
@@ -192,6 +200,12 @@ const tenantStatusColorClass = computed(() => {
     default:
       return 'amber'
   }
+})
+
+// 租户 Logo 下载 URL（无 Logo 时为 null，不渲染 img）
+const logoUrl = computed(() => {
+  const fileId = tenant.value?.logo_file_id
+  return fileId ? `/api/files/${fileId}/download` : null
 })
 
 // /portal 下的菜单（仅平台管理员）

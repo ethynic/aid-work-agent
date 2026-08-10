@@ -34,6 +34,7 @@ class TenantUpdate(BaseModel):
     max_users: Optional[int] = Field(None, description="最大用户数")
     tenant_code: Optional[str] = Field(None, pattern='^[A-Za-z0-9]{4,8}$', description='租户代码（4-8位字母数字，不区分大小写）')
     expire_at: Optional[str] = Field(None, description="到期日期（YYYY-MM-DD，空表示永久有效）")
+    logo_file_id: Optional[str] = Field(None, description="租户 Logo 文件 ID，传 null 清空")
 
 
 class TenantResponse(BaseModel):
@@ -51,6 +52,7 @@ class TenantResponse(BaseModel):
     expire_at: Optional[str] = None
     tenant_code: Optional[str] = None
     settings: Optional[dict] = None
+    logo_file_id: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 

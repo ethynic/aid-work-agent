@@ -20,6 +20,10 @@
         <div class="bg-white rounded-xl shadow-sm border border-default p-6">
           <div class="space-y-4">
             <div>
+              <label class="block text-sm text-default mb-1">Logo</label>
+              <LogoUpload v-model="form.logo_file_id" />
+            </div>
+            <div>
               <label class="block text-sm text-default mb-1">企业名称</label>
               <input v-model="form.company_name" type="text"
                 class="w-full px-3 py-2 bg-surface-hover border border-hover rounded-lg text-default focus:outline-none focus:border-primary-400" />
@@ -58,6 +62,7 @@
 import { ref, computed, onMounted, inject } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppHeader from '@/components/AppHeader.vue'
+import LogoUpload from '@/components/ui/LogoUpload.vue'
 import { getTenantInfo, updateTenantInfo } from '@/api/saasTenant'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 
@@ -116,7 +121,8 @@ const messageType = ref<'success' | 'error'>('success')
 const form = ref({
   company_name: '',
   contact_name: '',
-  contact_phone: ''
+  contact_phone: '',
+  logo_file_id: null as string | null
 })
 
 async function loadSettings() {
@@ -127,7 +133,8 @@ async function loadSettings() {
       form.value = {
         company_name: res.tenant.company_name || '',
         contact_name: res.tenant.contact_name || '',
-        contact_phone: res.tenant.contact_phone || ''
+        contact_phone: res.tenant.contact_phone || '',
+        logo_file_id: res.tenant.logo_file_id || null
       }
     }
   } catch (e) {

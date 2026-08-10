@@ -2,7 +2,15 @@
   <div class="min-h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 flex items-center justify-center p-4">
     <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
       <div class="px-4 md:px-8 pt-6 pb-6">
-        <h1 class="text-xl font-bold text-default text-center mt-4 mb-1">{{ pageTitle.title }}</h1>
+        <div class="flex items-center justify-center gap-3 mt-4 mb-1">
+          <img
+            v-if="logoUrl"
+            :src="logoUrl"
+            alt="Logo"
+            class="w-12 h-12 rounded object-contain"
+          />
+          <h1 class="text-xl font-bold text-default">{{ pageTitle.title }}</h1>
+        </div>
 
         <!-- 租户状态提示 -->
         <div v-if="tenantStatusMessage" class="text-danger-500 text-sm text-center font-medium mb-6 py-2 px-3 bg-danger-50 rounded border border-danger-200">
@@ -115,6 +123,7 @@ const resetPasswordUrl = computed(() =>
 )
 
 const tenantName = ref('')
+const logoUrl = ref<string | null>(null)
 
 // 登录页标题动态显示
 const pageTitle = computed(() => {
@@ -233,6 +242,7 @@ onMounted(() => {
     getTenantPublicInfo(tenantId.value).then(res => {
       if (res.success && res.tenant) {
         tenantName.value = res.tenant.company_name
+        logoUrl.value = res.tenant.logo_url || null
       }
       // 显示租户状态提示
       if (res.tenant?.status && res.tenant.status !== 'active') {

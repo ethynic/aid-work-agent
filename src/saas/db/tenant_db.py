@@ -112,11 +112,14 @@ class TenantDB:
             "company_name", "contact_name", "contact_phone",
             "initial_admin_name", "initial_admin_phone",
             "plan", "status", "max_instances", "max_users", "settings",
-            "expire_at", "tenant_code",
+            "expire_at", "tenant_code", "logo_file_id",
         }
         updates = {}
         for k, v in kwargs.items():
-            if k in allowed_fields and v is not None:
+            if k == "logo_file_id":
+                # 允许 None 清空 Logo（其他字段 None 表示不更新）
+                updates[k] = v
+            elif k in allowed_fields and v is not None:
                 if k == "settings" and isinstance(v, dict):
                     v = json.dumps(v, ensure_ascii=False)
                 elif k == "tenant_code":

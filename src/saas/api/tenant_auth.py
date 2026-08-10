@@ -732,6 +732,10 @@ async def get_tenant_public_info(tenant_id: str):
     }
     status_display = status_display_map.get(status, "未知")
 
+    # 拼接 Logo 下载 URL（无鉴权路由，登录页未登录可用）
+    logo_file_id = tenant.get("logo_file_id")
+    logo_url = f"/api/files/{logo_file_id}/download" if logo_file_id else None
+
     return {
         "success": True,
         "tenant": {
@@ -739,6 +743,7 @@ async def get_tenant_public_info(tenant_id: str):
             "company_name": tenant["company_name"],
             "status": status,  # 新增
             "status_display": status_display,  # 新增
+            "logo_url": logo_url,  # 租户 Logo URL，无 Logo 时为 None
         },
         "expire_info": {
             "is_expired": expire_check["is_expired"],
@@ -801,6 +806,7 @@ async def get_admin_info(request: Request, tenant_id: Optional[str] = None):
             "plan": tenant["plan"],
             "status": tenant["status"],
             "expire_at": tenant.get("expire_at"),
+            "logo_file_id": tenant.get("logo_file_id"),
         } if tenant else None,
         "tenant_check": tenant_check,
     }

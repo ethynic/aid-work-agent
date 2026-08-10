@@ -19,6 +19,7 @@ export async function getTenantPublicInfo(tenantId: string): Promise<{
     company_name: string
     status: string  // 新增
     status_display?: string  // 新增
+    logo_url?: string | null  // 租户 Logo 下载 URL，无 Logo 时为 null
   }
   expire_info?: {
     is_expired: boolean
@@ -108,7 +109,7 @@ export async function getTenantInfo(): Promise<any> {
   return res.json()
 }
 
-export async function updateTenantInfo(data: { company_name?: string; contact_name?: string; contact_phone?: string }): Promise<any> {
+export async function updateTenantInfo(data: { company_name?: string; contact_name?: string; contact_phone?: string; logo_file_id?: string | null }): Promise<any> {
   const res = await fetch(`${API_BASE}/tenants/me`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json', ...getSaasAuthHeader() },
@@ -147,6 +148,7 @@ export interface TenantFormData {
   max_instances?: number
   max_users?: number
   expire_at?: string
+  logo_file_id?: string | null
 }
 
 export async function createTenant(data: TenantFormData): Promise<{
@@ -197,6 +199,34 @@ export async function deleteTenant(tenantId: string): Promise<{ success: boolean
   const result = await res.json()
   if (!res.ok || !result.success) {
     throw new Error(result.error || result.debug || '删除租户失败')
+  }
+  return result
+}
+
+/**
+ * 上传租户 Logo 图片
+ * 仅注册图片资产返回 file_id，不立即改租户表；点保存才把 file_id 写入 tenants 表。
+ *
+ * @param file 图片文件（JPG/PNG/WebP/SVG，≤2MB）
+ * @returns { success, file_id, download_url }
+ */
+export async function uploadTenantLogo(file: File): Promise<{
+  success: boolean
+  file_id?: string
+  download_url?: string
+  error?: string
+  debug?: string
+}> {
+  const formData = new FormData()
+  formData.append('file', file)
+  const res = await fetch(`${API_BASE}/tenants/logo`, {
+    method: 'POST',
+    headers: getSaasAuthHeader(),
+    body: formData
+  })
+  const result = await res.json()
+  if (!res.ok || !result.success) {
+    throw new Error(result.error || result.debug || '上传 Logo 失败')
   }
   return result
 }

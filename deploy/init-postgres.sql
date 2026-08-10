@@ -506,6 +506,7 @@ CREATE TABLE IF NOT EXISTS tenants (
     expire_at TIMESTAMP,
     tenant_code TEXT,
     credit_balance NUMERIC(12,2) NOT NULL DEFAULT 0.00,
+    logo_file_id TEXT,  -- 租户 Logo 文件 ID（对应 uploaded_file:{file_id}）
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -1004,6 +1005,7 @@ CREATE TABLE IF NOT EXISTS tenants (
     expire_at TIMESTAMP,
     tenant_code TEXT,
     credit_balance NUMERIC(12,2) NOT NULL DEFAULT 0.00,
+    logo_file_id TEXT,  -- 租户 Logo 文件 ID（对应 uploaded_file:{file_id}）
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

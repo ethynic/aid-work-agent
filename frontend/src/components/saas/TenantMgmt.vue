@@ -176,6 +176,10 @@
 
       <!-- 基本信息标签页 -->
       <div v-show="activeTab === 'basic'" class="grid grid-cols-2 gap-x-6 gap-y-4">
+        <div class="col-span-2">
+          <label class="text-sm text-muted mb-1 block">Logo</label>
+          <LogoUpload v-model="formData.logo_file_id" />
+        </div>
         <div>
           <label class="text-sm text-muted mb-1 block">企业名称 <span class="text-danger-500">*</span></label>
           <input v-model="formData.company_name" type="text" placeholder="请输入企业名称" maxlength="100"
@@ -473,6 +477,7 @@ import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseTable, { type TableColumn } from '@/components/ui/BaseTable.vue'
 import BasePagination from '@/components/ui/BasePagination.vue'
 import BaseModal from '@/components/ui/BaseModal.vue'
+import LogoUpload from '@/components/ui/LogoUpload.vue'
 import { listTenants, createTenant, updateTenant, deleteTenant, type TenantFormData } from '@/api/saasTenant'
 import { getAllAvailableAgents, getTenantAgentPermissions, setTenantAgentPermissions, getSubagentEnvVars, setSubagentEnvVars, getConfigFileStatus, uploadConfigFile, downloadConfigFile, deleteConfigFile, type AgentItem, type EnvVarItem, getSubagentKnowledgeSources, setSubagentKnowledgeSources, type KnowledgeSourceItem, listTenantKnowledgeCategories } from '@/api/saasPermissions'
 import TenantMigration from '@/components/saas/TenantMigration.vue'
@@ -565,6 +570,7 @@ const defaultFormData: TenantFormData = {
   initial_admin_phone: '',
   plan: 'basic',
   expire_at: '',
+  logo_file_id: null,
 }
 
 const formData = ref<TenantFormData & { status: string }>({ ...defaultFormData, status: 'active' })
@@ -679,6 +685,7 @@ async function openEditDialog(tenant: any) {
     plan: tenant.plan,
     status: String(tenant.status),
     expire_at: tenant.expire_at ? tenant.expire_at.split('T')[0].split(' ')[0] : '',
+    logo_file_id: tenant.logo_file_id || null,
   }
   originalFormData.value = { ...formData.value }
   activeTab.value = 'basic'
