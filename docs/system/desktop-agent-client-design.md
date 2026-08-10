@@ -4,6 +4,8 @@
 > 状态：🔧 设计完成，分阶段开发中
 > 适用平台：Windows 10/11 x64、macOS 13+ x64/Apple Silicon
 > 关联：[浏览器混合执行与人工接管设计](../tools/browser/browser_visualization_design.md)
+>
+> CLI Host 上位规范：[第一方 CLI / MCP Provider 架构与开发规范](first-party-cli-mcp-provider-standard.md)
 
 ## 1. 决策摘要
 
@@ -241,3 +243,16 @@ Python Agent 业务能力不迁入客户端。必要改动限定为：
 - 不把 Node、Electron 或 Playwright 权限暴露给 Vue renderer。
 - 不为桌面端复制一套 Python API 或 Vue 页面。
 - 不为 browser runtime 创建第二套桌面产品、安装包、托盘、认证或更新体系。
+
+## 13. 本地 CLI Host 兼容边界
+
+未来 Agent Desktop 调用本地 CLI 时，必须遵守项目级第一方 CLI / MCP Provider 规范：
+
+- Desktop 是与 Codex、WorkBuddy 同类的标准本地 MCP Host，不拥有第一方 CLI 私有接口；
+- Electron main 或隔离 child runtime 管理 MCP stdio，renderer 不启动进程；
+- 第一方与第三方 Provider 共用生命周期、权限、进度和结果接口，区别仅在信任与发布来源；
+- Web Agent 的 Local Tool Runtime 与 Desktop 复用 Host core/contract，不能形成两套本地工具体系；
+- BOSS 等第一方 CLI 不导入 Desktop 代码，Desktop 也不导入 Provider domain 代码；
+- Desktop 开发不得要求修改已发布第一方 CLI 的 tool schema。
+
+本节只锁定兼容边界，不在当前招聘 MVP 中开发 Desktop CLI Host。
