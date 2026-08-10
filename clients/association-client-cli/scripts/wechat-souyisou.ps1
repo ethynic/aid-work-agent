@@ -170,7 +170,14 @@ public static class WechatSouyisouWin32 {
             }; return $true
         },[IntPtr]::Zero) | Out-Null
         $stage = 'enum'
-        $main = Select-WeixinMainWindow $windows
+        try {
+            $main = Select-WeixinMainWindow $windows
+        } catch {
+            # 诊断：枚举到却没匹配上，把疑似微信的进程路径记进 diag，便于排查版本/路径/UAC
+            $suspects = @($windows | Where-Object { [string]$_.ProcessPath -match '(?i)weixin|wechat|tencent' } | ForEach-Object { [string]$_.ProcessPath } | Sort-Object -Unique)
+            Add-Content -Path "$env:TEMP\wechat_diag.log" -Value "[$([DateTimeOffset]::Now.ToString('HH:mm:ss'))] WX_WINDOW_NOT_FOUND diag: visible_windows=$($windows.Count) wechat_like_suspects=$($suspects -join '|')"
+            throw $_
+        }
         if ($Command -eq 'probe') {
             Write-Result @{ ok=$true; executed=$true; command='probe'; window_found=$true; hwnd=[int64]$main.Hwnd }
             exit 0

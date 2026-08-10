@@ -1,4 +1,4 @@
-﻿$script:WeixinExpectedPathSuffix = 'Tencent\Weixin\Weixin.exe'
+﻿$script:WeixinExpectedPathSuffix = 'Weixin.exe'
 $script:WeixinPluginPathSegment = '\Tencent\xwechat\xplugin\plugins\RadiumWMPF\'
 $script:WeixinPluginRoot = if ($env:APPDATA) {
     (Join-Path $env:APPDATA 'Tencent\xwechat\xplugin\plugins\RadiumWMPF').Replace('/', '\').TrimEnd('\') + '\'
