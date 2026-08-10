@@ -366,12 +366,12 @@ class ProjectAssociationProviders:
         原 DeepSeek 直出（保底，无浏览器/服务端环境仍可运行，不至于整步空）。
         对外接口（dict[str, str|None]）不变。
         """
-        # 会长/秘书长/手机号不由模型返回——人员由官网采集或微信搜一搜精确获取。
-        search_fields = [
-            name for name in PROFILE_FIELDS
-            if name not in ("president_name", "secretary_general_name",
-                            "president_mobile", "secretary_general_mobile")
-        ]
+        # 手机号始终不由本步返回——人员手机号由微信搜一搜精确取证，避免幻觉。
+        # 会长/秘书长姓名：文心联网原文路径返回（联网核实，可靠）；文心采集失败走
+        # DeepSeek 直出兜底时不返回（不联网，姓名易过期/幻觉，交给官网组织领导页或
+        # 微信搜一搜精确获取）。
+        _mobile_locked = ("president_mobile", "secretary_general_mobile")
+        _leader_name_locked = ("president_name", "secretary_general_name")
 
         # 1) 文心联网采集原文（含"官网网址：..."），根治官网幻觉
         wenxin = await self._collect_wenxin(association_name)
@@ -380,9 +380,14 @@ class ProjectAssociationProviders:
             and wenxin.get("ok")
             and isinstance(wenxin.get("answer"), str)
         ) else None
+        has_raw_text = bool(raw_text and raw_text.strip())
 
-        if raw_text and raw_text.strip():
-            # 2a) 有原文：DeepSeek 从原文提取，官网从原文「官网网址」取，不再靠模型瞎猜
+        if has_raw_text:
+            # 2a) 有原文：DeepSeek 从原文提取，官网从原文「官网网址」取，不再靠模型瞎猜；
+            #     会长/秘书长从原文「现任会长/秘书长」提取（联网核实，可靠）
+            search_fields = [
+                name for name in PROFILE_FIELDS if name not in _mobile_locked
+            ]
             system_prompt = (
                 "你是协会信息提取器。下面是文心一言联网采集到的协会资料原文，"
                 "请严格依据该原文提取字段，原文未提及的值返回 null，不要编造或补全。"
@@ -390,7 +395,9 @@ class ProjectAssociationProviders:
                 "每个值是字符串或 null。"
                 "official_website 必须从原文「官网网址」一行提取该协会真实的官网完整网址"
                 "（原文未给出网址则设为 null，严禁照搬示例域名后缀猜测）。"
-                "不要返回人员姓名或手机号。"
+                "president_name、secretary_general_name 只取原文明确写明的现任会长、秘书长姓名，"
+                "注意区分现任与离任/前任，原文未明确给出则设为 null。"
+                "不要返回手机号。"
             )
             user_content = raw_text.strip()[:8000]
             self._audit(
@@ -400,7 +407,12 @@ class ProjectAssociationProviders:
                 summary=f"原文 {len(raw_text.strip())} 字",
             )
         else:
-            # 2b) 文心失败：fallback 原 DeepSeek 直出（保底，无浏览器/服务端环境不崩）
+            # 2b) 文心失败：fallback 原 DeepSeek 直出（保底，无浏览器/服务端环境不崩）。
+            #     不联网，姓名易过期/幻觉，故只抽基础信息，会长/秘书长交给官网/微信取证。
+            search_fields = [
+                name for name in PROFILE_FIELDS
+                if name not in _mobile_locked + _leader_name_locked
+            ]
             self._audit(
                 association=association_name,
                 stage="基础信息·文心采集",
@@ -440,10 +452,14 @@ class ProjectAssociationProviders:
                 values[name] = value.strip()
             else:
                 values[name] = None
-        # 会长/秘书长/手机号强制 null——这些由官网采集或微信搜一搜获取
-        for locked in ("president_name", "secretary_general_name",
-                       "president_mobile", "secretary_general_mobile"):
+        # 手机号始终强制 null——人员手机号由微信搜一搜精确取证，不让模型猜测
+        for locked in _mobile_locked:
             values[locked] = None
+        # 文心采集失败走 DeepSeek 直出时，会长/秘书长也强制 null
+        # （不联网易过期/幻觉；交给官网组织领导页或微信搜一搜精确获取）
+        if not has_raw_text:
+            for locked in _leader_name_locked:
+                values[locked] = None
         return values
 
     async def wechat_mobile(

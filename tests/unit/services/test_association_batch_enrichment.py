@@ -730,7 +730,11 @@ async def test_website_only_official_profile_uses_fallback_then_wechat():
 
 @pytest.mark.asyncio
 async def test_search_profile_returns_basic_info(monkeypatch, tmp_path):
-    """文心脚本缺失（tmp_path 下无 wenxin_collect.py）时降级 llm_gateway 直出。"""
+    """文心脚本缺失（tmp_path 下无 wenxin_collect.py）时降级 llm_gateway 直出。
+
+    DeepSeek 直出不联网，会长/秘书长/手机号即使模型返回也强制 null
+    （避免过期/幻觉，交给官网组织领导页或微信搜一搜精确取证）。
+    """
     import src.services.association_enrichment_providers as module
 
     providers = ProjectAssociationProviders(repository_root=tmp_path)
@@ -738,6 +742,10 @@ async def test_search_profile_returns_basic_info(monkeypatch, tmp_path):
     mock_result = {name: None for name in PROFILE_FIELDS}
     mock_result["address"] = "北京市测试路1号"
     mock_result["official_website"] = "https://example.cn"
+    # 模型瞎给的姓名/手机号——fallback 分支必须强制清掉
+    mock_result["president_name"] = "张三"
+    mock_result["secretary_general_name"] = "李四"
+    mock_result["president_mobile"] = "13800000000"
 
     class MockGateway:
         async def chat(self, **kwargs):
@@ -749,6 +757,8 @@ async def test_search_profile_returns_basic_info(monkeypatch, tmp_path):
     assert result["address"] == "北京市测试路1号"
     assert result["president_name"] is None
     assert result["secretary_general_name"] is None
+    assert result["president_mobile"] is None
+    assert result["secretary_general_mobile"] is None
 
 
 class _RecordingGateway:
@@ -765,14 +775,16 @@ class _RecordingGateway:
 
 @pytest.mark.asyncio
 async def test_search_profile_parses_wenxin_raw_text(monkeypatch, tmp_path):
-    """文心联网采集到原文时，DeepSeek 从原文提取——官网来自原文，不靠模型瞎猜。"""
+    """文心联网采集到原文时，DeepSeek 从原文提取——官网/会长/秘书长均来自原文。"""
     import src.services.association_enrichment_providers as module
 
     providers = ProjectAssociationProviders(repository_root=tmp_path)
     wenxin_answer = (
         "地址：北京市测试路1号\n"
         "官网网址：http://www.zgct.org.cn\n"
-        "主管单位：工业和信息化部"
+        "主管单位：工业和信息化部\n"
+        "现任会长：张三\n"
+        "秘书长：李四"
     )
 
     async def fake_wenxin(name):
@@ -784,6 +796,8 @@ async def test_search_profile_parses_wenxin_raw_text(monkeypatch, tmp_path):
     parsed = {name: None for name in PROFILE_FIELDS}
     parsed["address"] = "北京市测试路1号"
     parsed["official_website"] = "http://www.zgct.org.cn"
+    parsed["president_name"] = "张三"
+    parsed["secretary_general_name"] = "李四"
     gateway = _RecordingGateway(json.dumps(parsed, ensure_ascii=False))
     monkeypatch.setattr(module, "llm_gateway", gateway)
 
@@ -793,11 +807,13 @@ async def test_search_profile_parses_wenxin_raw_text(monkeypatch, tmp_path):
     assert "原文" in gateway.messages[0]["content"]
     assert wenxin_answer in gateway.messages[1]["content"]
     assert "给出测试协会的以下信息" not in gateway.messages[1]["content"]
-    # 官网从原文解析、会长/秘书长/手机号强制 null
+    # 官网/会长/秘书长从原文提取（文心联网，可靠）；手机号强制 null（由微信取证）
     assert result["official_website"] == "http://www.zgct.org.cn"
     assert result["address"] == "北京市测试路1号"
-    assert result["president_name"] is None
+    assert result["president_name"] == "张三"
+    assert result["secretary_general_name"] == "李四"
     assert result["president_mobile"] is None
+    assert result["secretary_general_mobile"] is None
 
 
 @pytest.mark.asyncio
