@@ -432,8 +432,9 @@ onMounted(async () => {
       if (hasSession && currentSessionId.value) {
         agentSessionId.value = currentSessionId.value
       }
-    } else if (currentSessionId.value) {
-      // currentSessionId 已有值（从业务页等场景跳转过来，watch 已错过 null→id 的变化）
+    } else if (currentSessionId.value && !subagentName.value) {
+      // currentSessionId 已有值且为非子智能体路由（从历史列表跳转过来）
+      // 子智能体路由始终开始新会话，避免加载其他智能体的历史消息
       // 同步 id 并显式加载该会话消息，避免挂载后无消息显示为空白"新会话"
       agentSessionId.value = currentSessionId.value
       await switchSession(currentSessionId.value)
@@ -583,15 +584,18 @@ watch(currentSessionId, async (newSessionId) => {
   }
 })
 
-// 切换子智能体时清空当前会话和消息
-// 注意：如果 currentSessionId 已有值（从历史会话点击），不执行清空，避免覆盖用户选择
+// 切换子智能体时，检查当前会话是否属于新的子智能体
+// 不属于则清空（开始新会话）；属于或无新子智能体则保留（兼容从历史列表跳转）
 watch(subagentName, () => {
-  // 只有当不是从历史会话点击过来时才清空
-  // 从历史会话点击的特征：currentSessionId 已有值，且不为 null
-  if (!currentSessionId.value) {
+  const newSubagent = subagentName.value || undefined
+  const currentSession = currentSessionId.value
+    ? sessions.value.find(s => s.session_id === currentSessionId.value)
+    : null
+  const sessionSubagent = (currentSession?.subagent_id ||
+    (currentSession?.context_data?.subagent as string | undefined)) || undefined
+
+  if (sessionSubagent !== newSubagent) {
     selectSession(null)
-    // 不手动清 messages：clearSession() 已切到全新空会话状态；
-    // 若此处 messages.value = [] 会清空旧会话（可能正在后台流式）的状态缓冲
     clearSession()
     clearAttachments()
   }
