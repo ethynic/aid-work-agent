@@ -243,7 +243,8 @@ CREATE TABLE IF NOT EXISTS token_cost_prices (
     input_price_per_m NUMERIC(10,4),
     cached_input_price_per_m NUMERIC(10,4), -- 命中缓存输入单价
     output_price_per_m NUMERIC(10,4),
-    price_per_second NUMERIC(10,4), -- 视频模型按秒计费单价（元/秒），仅视频模型用
+    price_per_second NUMERIC(10,4), -- 视频模型按秒计费单价（元/秒），fallback；优先看 price_per_second_by_resolution
+    price_per_second_by_resolution JSONB, -- 按分辨率区分的视频单价 {"720P": 0.6, "1080P": 1.0}，命中 resolution key 优先用
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -259,11 +260,13 @@ INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m
 VALUES ('deepseek-v4-pro', 3.0, 6.0, 0.025)
 ON CONFLICT (model_name) DO NOTHING;
 -- 视频模型按秒计费单价（Phase 2.2）：单价按 provider 公开价填充，后续可由管理后台调整
-INSERT INTO token_cost_prices (model_name, price_per_second)
-VALUES ('wan2.7-r2v', 0.20)
+-- 万相 r2v 按 resolution 区分：720P=0.6, 1080P=1.0；price_per_second 留 720P 作 fallback
+INSERT INTO token_cost_prices (model_name, price_per_second, price_per_second_by_resolution)
+VALUES ('wan2.7-r2v', 0.6, '{"720P": 0.6, "1080P": 1.0}'::jsonb)
 ON CONFLICT (model_name) DO NOTHING;
-INSERT INTO token_cost_prices (model_name, price_per_second)
-VALUES ('MiniMax-H3', 0.30)
+-- MiniMax-H3 主生成按 resolution 区分：768P=0.5, 2K=0.8；price_per_second 留 768P 作 fallback
+INSERT INTO token_cost_prices (model_name, price_per_second, price_per_second_by_resolution)
+VALUES ('MiniMax-H3', 0.5, '{"768P": 0.5, "2K": 0.8}'::jsonb)
 ON CONFLICT (model_name) DO NOTHING;
 
 

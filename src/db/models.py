@@ -2005,9 +2005,10 @@ class TokenCostPriceDB:
 
         Returns:
             {"model_name", "input_price_per_m", "cached_input_price_per_m",
-             "output_price_per_m", "price_per_second"} 或 None
+             "output_price_per_m", "price_per_second", "price_per_second_by_resolution"} 或 None
             cached_input_price_per_m 为 NULL 表示该模型计费不区分缓存命中
             price_per_second 为 NULL 表示该模型不按秒计费（文本模型）
+            price_per_second_by_resolution 为 NULL 表示视频模型不按分辨率区分，用 price_per_second
         """
         if not model_name:
             return None
@@ -2017,7 +2018,7 @@ class TokenCostPriceDB:
             cursor.execute(
                 f"""
                 SELECT model_name, input_price_per_m, cached_input_price_per_m,
-                       output_price_per_m, price_per_second
+                       output_price_per_m, price_per_second, price_per_second_by_resolution
                 FROM token_cost_prices
                 WHERE model_name = {placeholder}
                 """,

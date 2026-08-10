@@ -283,7 +283,9 @@ class VideoChatService:
         prompt_result.model_params["seed"] = seed
 
         # 预扣计费：按目标时长 × 单价 × factor（实际成片时长可能略短，成功后按实际结算差额）
-        cost_per_second = self._get_cost_per_second(self._provider.name, settings.video_gen.provider)
+        cost_per_second = self._get_cost_per_second(
+            self._provider.name, settings.video_gen.provider, params.resolution
+        )
         expected_credit = calculate_video_credit_cost(
             seconds=params.duration_sec,
             cost_per_second_yuan=cost_per_second,
@@ -521,17 +523,32 @@ class VideoChatService:
             return settings.video_gen.minimax.model or "MiniMax-H3"
         return ""
 
-    def _get_cost_per_second(self, provider_name: str, cfg_provider: str) -> float:
-        """从 token_cost_prices 查视频模型按秒单价"""
+    def _get_cost_per_second(self, provider_name: str, cfg_provider: str, resolution: str) -> float:
+        """从 token_cost_prices 查视频模型按秒单价（按 resolution 区分）
+
+        优先级：price_per_second_by_resolution[resolution] > price_per_second > 0
+
+        TODO: 仅覆盖主生成模式的按 resolution 单价。未实现：
+        - MiniMax H3-Regeneration 单价（0.30 元/秒，按 mode 区分而非 resolution）
+        - 参考图片计费（MiniMax 前 5 张免费，超出 0.20 元/张；万相无此项）
+        H3-Regeneration 接入时需扩 JSONB schema（如按 mode 分层），参考图计费需在调用层统计张数。
+        """
         model_name = self._get_model_name()
         if not model_name:
             return 0.0
         try:
             tcp = TokenCostPriceDB.get_by_model_name(model_name)
-            if tcp and tcp.get("price_per_second") is not None:
+            if not tcp:
+                logger.warning(f"视频计费：模型 {model_name} 未配置单价，credit_cost=0")
+                return 0.0
+            by_res = tcp.get("price_per_second_by_resolution")
+            if by_res and resolution in by_res:
+                return float(by_res[resolution])
+            if tcp.get("price_per_second") is not None:
                 return float(tcp["price_per_second"])
+            logger.warning(f"视频计费：{model_name}@{resolution} 单价为空，credit_cost=0")
         except Exception as e:
-            logger.warning(f"查询视频模型 {model_name} 单价失败: {e}")
+            logger.warning(f"查询视频模型 {model_name}@{resolution} 单价失败: {e}")
         return 0.0
 
     def _read_image_as_data_url(self, file_id: Optional[str]) -> Optional[str]:

@@ -42,7 +42,12 @@ class MiniMaxProviderError(BaseVideoProviderError):
 
 
 class MiniMaxProvider(BaseVideoProvider):
-    """MiniMax-H3 视频生成调用（提交 + 查询）。"""
+    """MiniMax-H3 视频生成调用（提交 + 查询）。
+
+    TODO: 当前只接入主生成模式（/v2/video_generation），未实现 H3-Regeneration（超分再生成）
+    和参考图片计费（前 5 张免费，超出 0.20 元/张）。H3-Regeneration 接入时需扩 token_cost_prices
+    的 price_per_second_by_resolution schema 区分生成模式，参考图计费需在请求层加张数统计。
+    """
 
     name = "minimax"
 

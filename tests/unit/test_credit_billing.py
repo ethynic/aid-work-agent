@@ -430,3 +430,93 @@ class TestCalculateVideoCreditCost:
             # 因 settings.billing.video_gen_usage_factor=None，getattr 返回 None，`or 33` 兜底为 33
             assert result == 33.0
 
+
+class TestVideoCostPerSecondByResolution:
+    """VideoChatService._get_cost_per_second 按 resolution 区分单价测试
+
+    优先级：price_per_second_by_resolution[resolution] > price_per_second > 0
+    """
+
+    def _make_service(self):
+        """构造一个 VideoChatService 实例（provider 构造失败时 _provider=None，不影响此测试）"""
+        from src.video_agent.service import VideoChatService
+        return VideoChatService()
+
+    def test_by_resolution_hit(self):
+        """JSONB 命中 resolution key 时用 JSONB 值（1080P=1.0）"""
+        with patch("src.video_agent.service.TokenCostPriceDB") as mock_db:
+            mock_db.get_by_model_name.return_value = {
+                "model_name": "wan2.7-r2v",
+                "price_per_second": 0.6,
+                "price_per_second_by_resolution": {"720P": 0.6, "1080P": 1.0},
+            }
+            svc = self._make_service()
+            svc._provider = MagicMock()
+            svc._provider.name = "wanx"
+            # _get_model_name 在 provider.name=wanx 时返回 settings.video_gen.wanx.model
+            cost = svc._get_cost_per_second("wanx", "wanx", "1080P")
+            assert cost == 1.0
+
+    def test_by_resolution_null_fallback_to_price_per_second(self):
+        """by_resolution 为 NULL 时回退到 price_per_second（MiniMax 暂未配 JSONB 的兼容场景）"""
+        with patch("src.video_agent.service.TokenCostPriceDB") as mock_db:
+            mock_db.get_by_model_name.return_value = {
+                "model_name": "MiniMax-H3",
+                "price_per_second": 0.5,
+                "price_per_second_by_resolution": None,
+            }
+            svc = self._make_service()
+            svc._provider = MagicMock()
+            svc._provider.name = "minimax"
+            cost = svc._get_cost_per_second("minimax", "minimax", "2K")
+            assert cost == 0.5
+
+    def test_by_resolution_key_missing_fallback(self):
+        """JSONB 中无对应 resolution key 时回退到 price_per_second"""
+        with patch("src.video_agent.service.TokenCostPriceDB") as mock_db:
+            mock_db.get_by_model_name.return_value = {
+                "model_name": "wan2.7-r2v",
+                "price_per_second": 0.6,
+                "price_per_second_by_resolution": {"720P": 0.6, "1080P": 1.0},
+            }
+            svc = self._make_service()
+            svc._provider = MagicMock()
+            svc._provider.name = "wanx"
+            # 传 JSONB 中没有的 resolution（如 4K）
+            cost = svc._get_cost_per_second("wanx", "wanx", "4K")
+            assert cost == 0.6
+
+    def test_both_null_returns_zero(self):
+        """by_resolution 和 price_per_second 都为 NULL 返回 0"""
+        with patch("src.video_agent.service.TokenCostPriceDB") as mock_db:
+            mock_db.get_by_model_name.return_value = {
+                "model_name": "wan2.7-r2v",
+                "price_per_second": None,
+                "price_per_second_by_resolution": None,
+            }
+            svc = self._make_service()
+            svc._provider = MagicMock()
+            svc._provider.name = "wanx"
+            cost = svc._get_cost_per_second("wanx", "wanx", "1080P")
+            assert cost == 0.0
+
+    def test_no_price_record_returns_zero(self):
+        """token_cost_prices 无匹配记录返回 0"""
+        with patch("src.video_agent.service.TokenCostPriceDB") as mock_db:
+            mock_db.get_by_model_name.return_value = None
+            svc = self._make_service()
+            svc._provider = MagicMock()
+            svc._provider.name = "wanx"
+            cost = svc._get_cost_per_second("wanx", "wanx", "1080P")
+            assert cost == 0.0
+
+    def test_db_exception_returns_zero(self):
+        """DB 查询异常时返回 0，不抛出"""
+        with patch("src.video_agent.service.TokenCostPriceDB") as mock_db:
+            mock_db.get_by_model_name.side_effect = Exception("DB connection lost")
+            svc = self._make_service()
+            svc._provider = MagicMock()
+            svc._provider.name = "wanx"
+            cost = svc._get_cost_per_second("wanx", "wanx", "1080P")
+            assert cost == 0.0
+

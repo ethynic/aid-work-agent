@@ -66,7 +66,7 @@ video_gen:
   task_max_age_hours: 24                   # 全局兜底；实际以 provider 声明为准
   wanx:
     api_key: ${WANX_API_KEY:-}             # 空：回退 qwen.api_keys[0]（同百炼账号通用）
-    model: wan2.7-r2v-2026-06-12
+    model: wan2.7-r2v                            # 稳定别名，百炼自动指向最新小版本（与 token_cost_prices.model_name 严格相等）
     poll_interval_seconds: 30
     task_max_age_hours: 24                  # 万相 task_id 查询有效期
   minimax:

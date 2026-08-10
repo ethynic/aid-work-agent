@@ -37,7 +37,7 @@ class WanxProvider(BaseVideoProvider):
 
     name = "wanx"
 
-    def __init__(self, api_key: str, model: str = "wan2.7-r2v-2026-06-12"):
+    def __init__(self, api_key: str, model: str = "wan2.7-r2v"):
         if not api_key:
             raise WanxProviderError("万相 api_key 未配置（需 WANX_API_KEY 或 QWEN_API_KEYS）")
         self._api_key = api_key

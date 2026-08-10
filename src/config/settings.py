@@ -86,7 +86,7 @@ class WanxConfig(BaseModel):
     详见 docs/system/content-production/mvp-design.md §4。
     """
     api_key: str = ""                          # 优先读 WANX_API_KEY；空则回退 qwen.api_keys[0]
-    model: str = "wan2.7-r2v-2026-06-12"       # r2v（reference-to-video），spike 已验证
+    model: str = "wan2.7-r2v"                    # r2v（reference-to-video）；用稳定别名，百炼自动指向最新小版本，与 token_cost_prices.model_name 严格相等
     poll_interval_seconds: int = 30            # 后台轮询间隔
     task_max_age_hours: int = 24               # 万相 task_id 查询有效期
 
