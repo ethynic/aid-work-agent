@@ -462,7 +462,7 @@ async function showCreditsDetail() {
     for (const item of items) {
       const tr = document.createElement('tr')
       const time = new Date(item.time).toLocaleString('zh-CN', { hour12: false })
-      const summary = [item.association, item.stage, item.model ? `(${item.model})` : ''].filter(Boolean).join(' ')
+      const summary = [item.association, item.stage].filter(Boolean).join(' · ')
       tr.innerHTML = `
         <td class="time">${escapeHtml(time)}</td>
         <td class="cost">${parseFloat(item.credit_cost || 0).toFixed(2)}</td>
