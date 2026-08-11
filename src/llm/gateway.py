@@ -7,13 +7,11 @@ LLM网关
 
 import asyncio
 import time
-import traceback
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from loguru import logger
 
 from src.config.settings import settings
-from src.core.temp_logger import tlog
 from .key_pool import KeyPool
 from .providers.base import BaseLLMProvider
 from .providers.deepseek import DeepSeekProvider
@@ -181,16 +179,13 @@ class LLMGateway:
             raise
         except Exception as e:
             call_duration = time.time() - call_start
-            logger.error(f"[LLM] _call_with_pool error, provider={self.provider_name}, fn={fn_name}, duration={call_duration:.2f}s, error: {type(e).__name__}: {e}", exc_info=True)
-            # 临时调试：追踪 KeyError 在 LLM 链路的真实来源
-            tlog(
-                "视频对话错误",
-                "_call_with_pool 异常 fn={fn} 类型={etype} 消息={emsg}\n{tb}",
-                fn=fn_name,
-                etype=type(e).__name__,
-                emsg=str(e),
-                tb=traceback.format_exc(),
-                level="ERROR",
+            # 用 loguru 占位符而非 f-string 嵌入 {e}，避免异常消息含 {"error":...} 时
+            # loguru 内部 message.format() 把 {error} 当占位符解析抛 KeyError，遮蔽原始异常
+            logger.error(
+                "[LLM] _call_with_pool error, provider={p}, fn={fn}, duration={d:.2f}s, error: {et}: {err}",
+                p=self.provider_name, fn=fn_name, d=call_duration,
+                et=type(e).__name__, err=e,
+                exc_info=True,
             )
             raise
 
@@ -303,15 +298,11 @@ class LLMGateway:
             
         except Exception as e:
             chat_duration = time.time() - chat_start
-            logger.error(f"[LLM] chat() failed, duration={chat_duration:.2f}s, error: {type(e).__name__}: {e}", exc_info=True)
-            # 临时调试：追踪 KeyError 在 LLM 链路的真实来源
-            tlog(
-                "视频对话错误",
-                "gateway.chat 异常 类型={etype} 消息={emsg}\n{tb}",
-                etype=type(e).__name__,
-                emsg=str(e),
-                tb=traceback.format_exc(),
-                level="ERROR",
+            # 用 loguru 占位符而非 f-string 嵌入 {e}，避免异常消息含 {"error":...} 触发 KeyError
+            logger.error(
+                "[LLM] chat() failed, duration={d:.2f}s, error: {et}: {err}",
+                d=chat_duration, et=type(e).__name__, err=e,
+                exc_info=True,
             )
             raise
 
@@ -416,15 +407,11 @@ class LLMGateway:
             
         except Exception as e:
             cwt_duration = time.time() - cwt_start
-            logger.error(f"[LLM] chat_with_tools() failed, duration={cwt_duration:.2f}s, error: {type(e).__name__}: {e}", exc_info=True)
-            # 临时调试：追踪 KeyError 在 LLM 链路的真实来源
-            tlog(
-                "视频对话错误",
-                "gateway.chat_with_tools 异常 类型={etype} 消息={emsg}\n{tb}",
-                etype=type(e).__name__,
-                emsg=str(e),
-                tb=traceback.format_exc(),
-                level="ERROR",
+            # 用 loguru 占位符而非 f-string 嵌入 {e}，避免异常消息含 {"error":...} 触发 KeyError
+            logger.error(
+                "[LLM] chat_with_tools() failed, duration={d:.2f}s, error: {et}: {err}",
+                d=cwt_duration, et=type(e).__name__, err=e,
+                exc_info=True,
             )
             raise
 

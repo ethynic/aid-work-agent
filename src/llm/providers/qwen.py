@@ -6,15 +6,33 @@
 
 import json
 import time
-import traceback
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 import httpx
 from loguru import logger
 
-from src.core.temp_logger import tlog
 from .base import BaseLLMProvider
 from ..llm_call_logger import generate_request_id, log_llm_invoke
+
+
+# Qwen 各模型 max_tokens 上限（超出会触发 400 invalid_parameter_error）
+# 多数 qwen 文本/视觉模型上限 8192；未列出的模型保持调用方传入值
+_QWEN_MAX_TOKENS_LIMITS: Dict[str, int] = {
+    "qwen-vl-plus": 8192,
+    "qwen-vl-max": 8192,
+    "qwen3-vl-flash": 8192,
+}
+
+
+def _clamp_max_tokens(model: str, max_tokens: int) -> int:
+    """按模型 clamp max_tokens 到 API 上限，避免触发 400"""
+    limit = _QWEN_MAX_TOKENS_LIMITS.get(model)
+    if limit and max_tokens > limit:
+        logger.warning(
+            f"qwen {model} max_tokens={max_tokens} 超过上限 {limit}，自动 clamp"
+        )
+        return limit
+    return max_tokens
 
 
 class QwenProvider(BaseLLMProvider):
@@ -75,6 +93,8 @@ class QwenProvider(BaseLLMProvider):
             标准化的响应字典
         """
         # 构建请求体（OpenAI 兼容格式）
+        # 按模型 clamp max_tokens，避免超出上限触发 400（qwen-vl-* 上限 8192）
+        max_tokens = _clamp_max_tokens(self.model, max_tokens)
         request_body = {
             "model": self.model,
             "messages": self._format_messages(messages),
@@ -131,14 +151,13 @@ class QwenProvider(BaseLLMProvider):
                 error=f"HTTP {e.response.status_code}: {e.response.text[:2000]}",
                 duration_ms=round(duration_ms, 2),
             )
-            logger.error(f"通义千问API请求失败: {type(e).__name__}: {e}")
-            # 临时调试：记录 400 响应体，定位视频创作对话报错
-            tlog(
-                "视频对话错误",
-                "qwen.chat HTTPStatusError 状态={status} 响应体={body}",
+            # 注意：用 loguru 占位符而非 f-string 嵌入 {e}，否则响应体中的 {"error":...}
+            # 会被 loguru 内部 message.format() 当占位符解析，抛 KeyError 遮蔽原始异常
+            logger.error(
+                "通义千问API请求失败: {etype} | status={status} | body={body}",
+                etype=type(e).__name__,
                 status=e.response.status_code,
-                body=e.response.text[:3000],
-                level="ERROR",
+                body=e.response.text[:1000],
             )
             raise RuntimeError(f"通义千问API请求失败: {e.response.text}")
         except Exception as e:
@@ -151,15 +170,10 @@ class QwenProvider(BaseLLMProvider):
                 error=str(e),
                 duration_ms=round(duration_ms, 2),
             )
-            logger.error(f"通义千问调用异常: {type(e).__name__}: {e}")
-            # 临时调试：记录非 HTTPStatusError 异常的完整 traceback
-            tlog(
-                "视频对话错误",
-                "qwen.chat 非HTTP异常 类型={etype} 消息={emsg}\n{tb}",
+            logger.error(
+                "通义千问调用异常: {etype}: {err}",
                 etype=type(e).__name__,
-                emsg=str(e),
-                tb=traceback.format_exc(),
-                level="ERROR",
+                err=e,
             )
             raise
 
@@ -189,6 +203,9 @@ class QwenProvider(BaseLLMProvider):
         Yields:
             流式输出的文本片段
         """
+        # 流式请求体（OpenAI 兼容格式）
+        # 按模型 clamp max_tokens，避免超出上限触发 400（qwen-vl-* 上限 8192）
+        max_tokens = _clamp_max_tokens(self.model, max_tokens)
         request_body = {
             "model": self.model,
             "messages": self._format_messages(messages),
@@ -251,7 +268,13 @@ class QwenProvider(BaseLLMProvider):
                 error=f"HTTP {e.response.status_code}: {e.response.text[:2000]}",
                 duration_ms=round(duration_ms, 2),
             )
-            logger.error(f"通义千问流式API请求失败: {type(e).__name__}: {e}")
+            # 用 loguru 占位符而非 f-string 嵌入 {e}，避免响应体含 {"error":...} 触发 KeyError
+            logger.error(
+                "通义千问流式API请求失败: {etype} | status={status} | body={body}",
+                etype=type(e).__name__,
+                status=e.response.status_code,
+                body=e.response.text[:1000],
+            )
             raise RuntimeError(f"通义千问流式API请求失败: {e.response.text}")
         except Exception as e:
             duration_ms = (time.perf_counter() - start_time) * 1000
@@ -263,7 +286,11 @@ class QwenProvider(BaseLLMProvider):
                 error=str(e),
                 duration_ms=round(duration_ms, 2),
             )
-            logger.error(f"通义千问流式调用异常: {type(e).__name__}: {e}")
+            logger.error(
+                "通义千问流式调用异常: {etype}: {err}",
+                etype=type(e).__name__,
+                err=e,
+            )
             raise
 
     def _parse_response(self, response: Dict[str, Any]) -> Dict[str, Any]:

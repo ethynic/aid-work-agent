@@ -2619,19 +2619,7 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                 raise
             except Exception as e:
                 llm_call_duration = time.time() - llm_call_start
-                logger.error(f"[AGENT] LLM call FAILED, session_id={session_id}, iteration={iteration}, duration={llm_call_duration:.2f}s, error: {type(e).__name__}: {e}", exc_info=True)
-                # 临时调试：追踪视频对话 KeyError 在 LLM 链路的真实来源
-                import traceback as _tb
-                tlog(
-                    "视频对话错误",
-                    "agent._process_message_impl LLM call 异常 session={sid} iter={it} 类型={etype} 消息={emsg}\n{tb}",
-                    sid=session_id,
-                    it=iteration,
-                    etype=type(e).__name__,
-                    emsg=str(e),
-                    tb=_tb.format_exc(),
-                    level="ERROR",
-                )
+                logger.error(f"[AGENT] LLM call FAILED, session_id={session_id}, iteration={iteration}, duration={llm_call_duration:.2f}s, error: {type(e).__name__}", exc_info=True)
                 raise
             
             tool_calls = response.get("tool_calls", [])
