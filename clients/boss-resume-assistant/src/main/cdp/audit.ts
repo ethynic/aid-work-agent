@@ -1,10 +1,8 @@
 /**
  * CDP 协议审计（设计文档 §6.3）。
  * 脱敏：禁止记录响应正文、Cookie、securityId、完整候选人隐私。
- * sessionId 哈希后存储。写入 cdp_audit 表。
+ * 本模块只提供脱敏摘要与 AuditWriter 接口；具体写入实现由调用方注入。
  */
-import { createHash } from 'node:crypto'
-import type { Database as BetterSqliteDatabaseType } from 'better-sqlite3'
 
 export type CdpAuditStatus = 'OK' | 'ERROR' | 'FORBIDDEN'
 
@@ -55,31 +53,6 @@ function redact(value: unknown): unknown {
   return out
 }
 
-function hashSessionId(sessionId?: string): string | null {
-  return sessionId ? createHash('sha256').update(sessionId).digest('hex').slice(0, 16) : null
-}
-
 export interface AuditWriter {
   write(entry: CdpAuditEntry): Promise<void> | void
-}
-
-/** 写入 cdp_audit 表的审计 writer */
-export class DbAuditWriter implements AuditWriter {
-  private stmt
-
-  constructor(db: BetterSqliteDatabaseType) {
-    this.stmt = db.prepare(
-      'INSERT INTO cdp_audit (session_id_hash, method, params_summary, duration_ms, status) VALUES (?, ?, ?, ?, ?)',
-    )
-  }
-
-  async write(entry: CdpAuditEntry): Promise<void> {
-    this.stmt.run(
-      hashSessionId(entry.sessionId) ?? '',
-      entry.method,
-      JSON.stringify(summarizeParams(entry.method, entry.params)),
-      entry.durationMs,
-      entry.status,
-    )
-  }
 }

@@ -2204,3 +2204,72 @@ CREATE INDEX IF NOT EXISTS idx_prompt_library_tenant_scene ON prompt_library(ten
 -- ============================================================================
 ALTER TABLE subagent_definitions ADD COLUMN IF NOT EXISTS chat_toolbar JSONB DEFAULT '[]'::jsonb;
 ALTER TABLE subagent_definitions ADD COLUMN IF NOT EXISTS upload_accept TEXT;
+
+-- ============================================================================
+-- 本地工具基础设施（M0.3）：本地设备配对/调用/事件 系统表
+-- 详见 docs/plans/recruiting/m03-implementation-spec.md §2
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS local_tool_devices (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    name TEXT,
+    platform TEXT,
+    runtime_version TEXT,
+    token_hash TEXT UNIQUE NOT NULL,
+    machine_fingerprint_hash TEXT,
+    capabilities_json JSONB,
+    manifest_digest TEXT,
+    selected BOOLEAN DEFAULT FALSE,
+    status TEXT NOT NULL DEFAULT 'active',   -- active / revoked
+    last_seen_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_lt_devices_tenant_user ON local_tool_devices(tenant_id, user_id);
+
+CREATE TABLE IF NOT EXISTS local_tool_pairing_tickets (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    code_hash TEXT UNIQUE NOT NULL,
+    expires_at TIMESTAMP NOT NULL,
+    used_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS local_tool_invocations (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    device_id UUID NOT NULL,
+    tool_name TEXT NOT NULL,
+    arguments_json JSONB NOT NULL,
+    state TEXT NOT NULL DEFAULT 'queued',
+    -- queued/claimed/running/succeeded/failed/cancel_requested/cancelled/unknown/expired
+    effect TEXT,                              -- none/applied/partial/unknown，终态时填
+    claim_token_hash TEXT,
+    lease_expires_at TIMESTAMP,
+    result_json JSONB,
+    error_code TEXT,
+    error_message TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    claimed_at TIMESTAMP,
+    started_at TIMESTAMP,
+    finished_at TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_lt_inv_device_state ON local_tool_invocations(device_id, state);
+CREATE INDEX IF NOT EXISTS idx_lt_inv_tenant_user ON local_tool_invocations(tenant_id, user_id);
+
+CREATE TABLE IF NOT EXISTS local_tool_events (
+    id BIGSERIAL PRIMARY KEY,
+    invocation_id UUID NOT NULL,
+    tenant_id TEXT NOT NULL,
+    seq INT NOT NULL,
+    stage TEXT,
+    current INT,
+    total INT,
+    message TEXT,                             -- 脱敏后进度文案
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (invocation_id, seq)
+);

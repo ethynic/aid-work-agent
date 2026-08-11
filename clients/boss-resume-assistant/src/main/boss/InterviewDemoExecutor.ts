@@ -23,6 +23,7 @@ import {
 } from './domSnapshot.js'
 import { viewportOf } from './FilterSetter.js'
 import { LIST_MAX_X } from './ResumeConsentExecutor.js'
+import { CancelledError } from '../operations/types.js'
 
 export class InterviewDemoError extends Error {
   constructor(message: string) {
@@ -37,6 +38,8 @@ export interface InterviewDemoDeps {
   click(point: ClickPoint, viewport: { width: number; height: number }): Promise<void>
   /** CDP char 事件逐字输入（调用方保证焦点已在目标输入框） */
   typeChar(ch: string): Promise<void>
+  /** 协作式取消信号：入口检查一次，触发即抛 CancelledError */
+  signal?: AbortSignal
   sleep?(ms: number): Promise<void>
   /** 当前时间（测试注入跨月边界用），默认 Date.now */
   now?(): number
@@ -60,6 +63,7 @@ export class InterviewDemoExecutor {
 
   /** 填表单演示；返回填入的备注与日期。任何一步异常抛 InterviewDemoError（表单状态需人工确认） */
   async run(opts: { remark?: string } = {}): Promise<{ remark: string; date: string }> {
+    if (this.deps.signal?.aborted) throw new CancelledError()
     const remark = opts.remark ?? DEFAULT_REMARK
     if (!remark.trim()) throw new InterviewDemoError('备注内容不能为空')
 

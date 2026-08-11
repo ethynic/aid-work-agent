@@ -19,6 +19,7 @@ import {
   boundsCenter,
 } from './domSnapshot.js'
 import { viewportOf } from './FilterSetter.js'
+import { CancelledError } from '../operations/types.js'
 
 export class NavError extends Error {
   constructor(message: string) {
@@ -42,6 +43,8 @@ export interface NavDeps {
   click(point: ClickPoint, viewport: { width: number; height: number }): Promise<void>
   /** 当前 BOSS 标签页 URL（Target.getTargets 实时取） */
   getUrl(): Promise<string>
+  /** 协作式取消信号：入口检查一次，触发即抛 CancelledError */
+  signal?: AbortSignal
   sleep?(ms: number): Promise<void>
 }
 
@@ -54,6 +57,7 @@ export class PageNavigator {
 
   /** 跳转到目标页；已在目标页则跳过。返回是否发生了点击跳转 */
   async navigate(target: NavTarget): Promise<{ clicked: boolean }> {
+    if (this.deps.signal?.aborted) throw new CancelledError()
     const spec = TARGETS[target]
     const urlBefore = await this.deps.getUrl()
     if (urlBefore.includes(spec.urlPattern)) {

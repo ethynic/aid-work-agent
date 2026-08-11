@@ -17,6 +17,7 @@ import {
   lowestCommonAncestor,
   isDescendantOf,
 } from './domSnapshot.js'
+import { CancelledError } from '../operations/types.js'
 
 export class FilterSetError extends Error {
   constructor(message: string) {
@@ -39,6 +40,8 @@ export interface FilterSetterDeps {
   snapshot(): Promise<DomSnapshot>
   /** Win32 真实鼠标点击（viewport 为页面截图尺寸，device px） */
   click(point: ClickPoint, viewport: { width: number; height: number }): Promise<void>
+  /** 协作式取消信号：入口检查一次，触发即抛 CancelledError */
+  signal?: AbortSignal
   /** 可注入 sleep（测试） */
   sleep?(ms: number): Promise<void>
 }
@@ -87,6 +90,7 @@ export class FilterSetter {
    * 任一步失败抛 FilterSetError。
    */
   async clear(): Promise<void> {
+    if (this.deps.signal?.aborted) throw new CancelledError()
     let snap = await this.ensurePanelOpen()
     const clearBtn = this.locateUniqueText(snap, (s) => s === '清除', '清除按钮')
     await this.deps.click(clearBtn, viewportOf(snap))
@@ -114,6 +118,7 @@ export class FilterSetter {
    * 任一步失败抛 FilterSetError。
    */
   async apply(spec: FilterSpec): Promise<{ filterCount: number }> {
+    if (this.deps.signal?.aborted) throw new CancelledError()
     const rows: Array<{ labelPrefix: string; options: string[] }> = []
     for (const def of ROW_DEFS) {
       const value = spec[def.key]

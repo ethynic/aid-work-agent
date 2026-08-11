@@ -85,7 +85,10 @@ class ToolExecutor:
             if tool_name == "browser_automation":
                 logger.info("执行工具: browser_automation, 参数已脱敏")
             else:
-                logger.info(f"执行工具: {tool_name}, 参数: {parameters}")
+                # 过滤 _ 前缀的注入参数（_trusted_tenant_id/_progress_queue 等），
+                # 避免受信身份与内部对象 repr 落日志
+                log_params = {k: v for k, v in parameters.items() if not k.startswith("_")}
+                logger.info(f"执行工具: {tool_name}, 参数: {log_params}")
             result = await tool.execute(**parameters)
             logger.info(f"工具执行成功: {tool_name}")
             return result

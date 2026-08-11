@@ -30,6 +30,7 @@ import {
 import { viewportOf } from './FilterSetter.js'
 import { REJECT_REASON_OPTIONS } from '../actions/reasonMapping.js'
 import { LIST_MAX_X } from './ResumeConsentExecutor.js'
+import { CancelledError } from '../operations/types.js'
 
 export class ChatRejectError extends Error {
   constructor(message: string) {
@@ -43,6 +44,8 @@ export interface ChatRejectDeps {
   snapshot(): Promise<DomSnapshot>
   /** Win32 真实鼠标点击（viewport 为页面截图尺寸，device px） */
   click(point: ClickPoint, viewport: { width: number; height: number }): Promise<void>
+  /** 协作式取消信号：入口检查一次，触发即抛 CancelledError */
+  signal?: AbortSignal
   /** 可注入 sleep（测试） */
   sleep?(ms: number): Promise<void>
 }
@@ -62,6 +65,7 @@ export class ChatRejectExecutor {
 
   /** 把当前会话的候选人标记为不合适；成功返回，任何异常/歧义抛 ChatRejectError */
   async rejectCurrent(): Promise<void> {
+    if (this.deps.signal?.aborted) throw new CancelledError()
     const snap = await this.deps.snapshot()
     const button = this.locateRejectButton(snap)
     if (!button) {

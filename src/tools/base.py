@@ -5,9 +5,18 @@
 """
 
 from abc import ABC, abstractmethod
+from enum import Enum
 from typing import Any, Dict, List, Optional, Type
 
 from pydantic import BaseModel
+
+
+class ExecutionTarget(str, Enum):
+    """工具执行位置（设计 docs/design/recruiting/recruiting-cli-agent-integration-design.md §4.1）"""
+
+    SERVER = "server"                  # 服务端执行（现有工具默认）
+    LOCAL_REQUIRED = "local_required"  # 必须在用户本机 Runtime 执行（boss_* proxy 工具）
+    EITHER = "either"                  # 两端均可（预留）
 
 
 class BaseTool(ABC):
@@ -27,6 +36,7 @@ class BaseTool(ABC):
     parameters_schema: Dict[str, Any] = {}
     category: str = "general"
     InputModel: Optional[Type[BaseModel]] = None  # Pydantic 参数模型
+    execution_target: ExecutionTarget = ExecutionTarget.SERVER  # 执行位置，默认服务端，现有工具零改动
 
     @abstractmethod
     async def execute(self, **kwargs) -> Dict[str, Any]:

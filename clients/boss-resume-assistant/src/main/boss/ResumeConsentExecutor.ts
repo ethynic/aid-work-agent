@@ -21,6 +21,7 @@ import {
   boundsCenter,
 } from './domSnapshot.js'
 import { viewportOf } from './FilterSetter.js'
+import { CancelledError } from '../operations/types.js'
 
 export class ConsentError extends Error {
   constructor(message: string) {
@@ -36,6 +37,10 @@ export interface ConsentDeps {
   scroll?(deltaY: number): Promise<void>
   /** 按 Escape 关闭简历预览弹层（CDP dispatchKey）；preview 开启时必需 */
   pressEscape?(): Promise<void>
+  /** 协作式取消信号：每轮循环顶部检查，触发即抛 CancelledError */
+  signal?: AbortSignal
+  /** 每成功同意 1 人回调一次（done 为累计同意数） */
+  onProgress?(done: number): void
   sleep?(ms: number): Promise<void>
 }
 
@@ -69,6 +74,7 @@ export class ResumeConsentExecutor {
     for (;;) {
       // 1. 处理当前可见的全部目标会话
       for (;;) {
+        if (this.deps.signal?.aborted) throw new CancelledError(`已取消：同意接收 ${accepted} 人后中止`)
         if (accepted >= limit) return { accepted, previewed, reachedEnd: false }
         const snap = await this.deps.snapshot()
         const targets = this.findListTargets(snap)
@@ -104,6 +110,7 @@ export class ResumeConsentExecutor {
           )
         }
         accepted++
+        this.deps.onProgress?.(accepted)
 
         if (preview) {
           await this.previewResume(accepted)

@@ -1,0 +1,22 @@
+{
+  "name": "agent-tool-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "description": "本地工具 Runtime：配对/心跳/长轮询领取云端 invocation，经 MCP stdio 调用本地 Provider（BOSS 招聘）执行",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.main.json",
+    "build:main": "tsc -p tsconfig.main.json",
+    "typecheck": "tsc --noEmit -p tsconfig.main.json",
+    "test": "npm run build:main && node scripts/run-tests.mjs",
+    "cli": "npm run build:main && node dist/src/cli.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0"
+  }
+}

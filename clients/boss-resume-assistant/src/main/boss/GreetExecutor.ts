@@ -19,6 +19,7 @@ import {
   boundsCenter,
 } from './domSnapshot.js'
 import { viewportOf } from './FilterSetter.js'
+import { CancelledError } from '../operations/types.js'
 
 export class GreetError extends Error {
   constructor(message: string) {
@@ -34,6 +35,10 @@ export interface GreetDeps {
   click(point: ClickPoint, viewport: { width: number; height: number }): Promise<void>
   /** CDP mouseWheel 向下滚动（deltaY>0，device px）；缺省时无可滚动，视口点完即结束 */
   scroll?(deltaY: number): Promise<void>
+  /** 协作式取消信号：每轮循环顶部检查，触发即抛 CancelledError */
+  signal?: AbortSignal
+  /** 每成功打完 1 人回调一次（done 为累计成功数） */
+  onProgress?(done: number): void
   /** 可注入 sleep（测试） */
   sleep?(ms: number): Promise<void>
 }
@@ -65,6 +70,7 @@ export class GreetExecutor {
     for (;;) {
       // 1. 点完当前视口内所有可见按钮
       for (;;) {
+        if (this.deps.signal?.aborted) throw new CancelledError(`已取消：成功打招呼 ${greeted} 人后中止`)
         if (greeted >= limit) return { greeted, reachedEnd: false }
         const snap = await this.deps.snapshot()
         const buttons = this.findGreetButtons(snap)
@@ -88,6 +94,7 @@ export class GreetExecutor {
           )
         }
         greeted++
+        this.deps.onProgress?.(greeted)
       }
 
       // 2. 视口内点完了，向下滚动加载更多。

@@ -30,6 +30,7 @@ from src.core.temp_logger import tlog
 from src.llm.gateway import llm_gateway
 from src.tools.registry import ToolRegistry
 from src.tools.executor import ToolExecutor
+from src.tools.base import ExecutionTarget
 from src.memory.short_term import ShortTermMemory
 from src.memory.manager import MemoryManager
 from src.prompts import PromptManager
@@ -269,6 +270,7 @@ class Agent:
             self.subagent_registry = None
             self.subagent_executor = None
             self._register_builtin_tools()
+            self._register_local_proxy_tools()
             if subagent_config:
                 self._filter_tools_by_config()
             logger.info(f"Standalone agent initialized: {subagent_config.name if subagent_config else 'unknown'}")
@@ -301,6 +303,7 @@ class Agent:
 
             # 注册受限的工具（根据子智能体配置）
             self._register_builtin_tools()
+            self._register_local_proxy_tools()
             self._filter_tools_by_config()
 
             logger.info(f"Subagent initialized: {subagent_config.name if subagent_config else 'unknown'}")
@@ -547,6 +550,104 @@ class Agent:
             # 如果没有指定允许的工具，清除所有工具
             self.tool_registry._tools.clear()
             logger.info(f"Subagent {self.subagent_config.name} has no tools allowed")
+
+    def _register_local_proxy_tools(self):
+        """注册本地代理工具（boss_* proxy，LOCAL_REQUIRED）
+
+        仅非主智能体且 subagent_config 的 allowed 工具列表与本地代理工具名有交集时注册。
+        主智能体、inherit=true（get_allowed_tools 返回空）或无交集的子智能体
+        永远看不到这些工具（设计 §11：主 Agent 和其他子智能体不获得 BOSS 工具）。
+        """
+        if self.mode == AgentMode.MASTER or not self.subagent_config:
+            return
+        from src.local_tools.proxy_tool import LOCAL_PROXY_TOOL_CLASSES
+
+        allowed = set(self.subagent_config.get_allowed_tools())
+        registered = 0
+        for tool_cls in LOCAL_PROXY_TOOL_CLASSES:
+            if tool_cls.name in allowed:
+                self.tool_registry.register(tool_cls())
+                registered += 1
+        if registered:
+            logger.info(
+                f"Registered {registered} local proxy tools for subagent "
+                f"{self.subagent_config.name}"
+            )
+
+    async def _run_local_required_tool(
+        self,
+        tool_name: str,
+        tool_args: Dict[str, Any],
+        tenant_id: Optional[str],
+        user_id: Optional[str],
+        cancel_check: Optional[Callable[[], bool]] = None,
+    ) -> AsyncGenerator[tuple, None]:
+        """执行 LOCAL_REQUIRED 本地工具并流式产出进度（m05-implementation-spec §5）
+
+        依次产出 ("progress", text)（本机执行事件），最后产出一次 ("result", result_dict)。
+        取消时只 request_cancel，不中断等待——等 proxy 自身到终态，
+        保证 tool_call 有配对结果。
+        """
+        from src.local_tools import repository
+
+        execution_args = dict(tool_args)
+        execution_args["_trusted_tenant_id"] = tenant_id
+        execution_args["_trusted_user_id"] = user_id
+        progress_queue: asyncio.Queue = asyncio.Queue()
+        execution_args["_progress_queue"] = progress_queue
+        task = asyncio.create_task(self.tool_executor.execute(tool_name, execution_args))
+        current_invocation_id = None
+        cancel_requested = False
+        try:
+            while not task.done():
+                evt = None
+                try:
+                    evt = await asyncio.wait_for(progress_queue.get(), timeout=0.5)
+                except asyncio.TimeoutError:
+                    pass
+                if evt is not None:
+                    if evt.get("type") == "started":
+                        current_invocation_id = evt.get("invocation_id")
+                    text = evt.get("text")
+                    if text:
+                        yield ("progress", text)
+                if (
+                    not cancel_requested
+                    and cancel_check
+                    and cancel_check()
+                    and current_invocation_id
+                    and tenant_id
+                ):
+                    cancel_requested = True
+                    await asyncio.to_thread(
+                        repository.request_cancel, current_invocation_id, tenant_id
+                    )
+            # 队列可能还有 proxy 收尾前推入的事件，排空
+            while not progress_queue.empty():
+                evt = progress_queue.get_nowait()
+                text = evt.get("text")
+                if text:
+                    yield ("progress", text)
+            yield ("result", await task)
+        finally:
+            if not task.done():
+                task.cancel()
+                # 防止孤儿 invocation：生成器被提前关闭（如客户端断开）时 proxy 被取消，
+                # 但 invocation 仍为 queued/running，设备稍后会领取并执行
+                # 用户已看不到结果的写动作——必须请求取消
+                if current_invocation_id and tenant_id:
+                    try:
+                        await asyncio.to_thread(
+                            repository.request_cancel, current_invocation_id, tenant_id
+                        )
+                        logger.info(
+                            f"后端日志：本地工具生成器提前关闭，已请求取消孤儿 invocation "
+                            f"id={current_invocation_id} tool={tool_name}"
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            f"后端日志：取消孤儿 invocation 失败 id={current_invocation_id}: {e}"
+                        )
     
     def _get_tools(self) -> List[Dict[str, Any]]:
         """
@@ -2867,15 +2968,28 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
 
                 # Execute the tool
                 try:
-                    execution_args = tool_args
-                    if tool_name == "browser_automation":
-                        execution_args = dict(tool_args)
-                        execution_args["_audit_session_id"] = session_id
-                        execution_args["_trusted_tenant_id"] = _resolve_tenant_id
-                        execution_args["_trusted_user_id"] = user.user_id if user else None
-                        execution_args["_agent_execution_id"] = f"ae_{uuid.uuid4().hex}"
-                        execution_args["_tool_call_id"] = tool_id
-                    result = await self.tool_executor.execute(tool_name, execution_args)
+                    _exec_tool = self.tool_registry.get_tool(tool_name)
+                    if _exec_tool is not None and getattr(_exec_tool, "execution_target", None) == ExecutionTarget.LOCAL_REQUIRED:
+                        # 本地工具：注入受信身份 + 进度队列，流式转发本机执行进度
+                        result = {"success": False, "error": "本地工具未返回结果"}
+                        async for _evt_kind, _evt_payload in self._run_local_required_tool(
+                            tool_name, tool_args, _resolve_tenant_id,
+                            user.user_id if user else None, cancel_check,
+                        ):
+                            if _evt_kind == "progress":
+                                yield make_event("progress", data=_evt_payload)
+                            else:
+                                result = _evt_payload
+                    else:
+                        execution_args = tool_args
+                        if tool_name == "browser_automation":
+                            execution_args = dict(tool_args)
+                            execution_args["_audit_session_id"] = session_id
+                            execution_args["_trusted_tenant_id"] = _resolve_tenant_id
+                            execution_args["_trusted_user_id"] = user.user_id if user else None
+                            execution_args["_agent_execution_id"] = f"ae_{uuid.uuid4().hex}"
+                            execution_args["_tool_call_id"] = tool_id
+                        result = await self.tool_executor.execute(tool_name, execution_args)
                     logger.info(f"[TOOL_RESULT] {tool_name}: type={type(result).__name__}")
 
                     from src.core.tool_suspension import ToolSuspension
@@ -3609,13 +3723,26 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                     else:
                         # 执行普通工具
                         try:
-                            execution_args = tool_args
-                            if tool_name == "browser_automation":
-                                execution_args = dict(tool_args)
-                                execution_args["_audit_session_id"] = parent_session_id
-                                execution_args["_trusted_tenant_id"] = self._init_tenant_id
-                                execution_args["_trusted_user_id"] = self._init_user_id
-                            result = await self.tool_executor.execute(tool_name, execution_args)
+                            _exec_tool = self.tool_registry.get_tool(tool_name)
+                            if _exec_tool is not None and getattr(_exec_tool, "execution_target", None) == ExecutionTarget.LOCAL_REQUIRED:
+                                # 本地工具：注入受信身份 + 进度队列，流式转发本机执行进度
+                                result = {"success": False, "error": "本地工具未返回结果"}
+                                async for _evt_kind, _evt_payload in self._run_local_required_tool(
+                                    tool_name, tool_args,
+                                    self._init_tenant_id, self._init_user_id,
+                                ):
+                                    if _evt_kind == "progress":
+                                        await _emit_async(make_event("progress", data=_evt_payload))
+                                    else:
+                                        result = _evt_payload
+                            else:
+                                execution_args = tool_args
+                                if tool_name == "browser_automation":
+                                    execution_args = dict(tool_args)
+                                    execution_args["_audit_session_id"] = parent_session_id
+                                    execution_args["_trusted_tenant_id"] = self._init_tenant_id
+                                    execution_args["_trusted_user_id"] = self._init_user_id
+                                result = await self.tool_executor.execute(tool_name, execution_args)
                             tool_result = result
 
                             # 发送工具执行完成进度

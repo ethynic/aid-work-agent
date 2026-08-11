@@ -1,0 +1,316 @@
+/**
+ * operations 参数校验 fail-fast + 错误映射全路径 + effect/retryable 语义。
+ *
+ * 用 fake BossSessionFactory 注入替身（不连 Chrome）：参数校验失败时工厂不得被调用；
+ * 执行期错误经 errorMapping 映射为稳定 code/effect/retryable。
+ */
+import assert from 'node:assert/strict'
+import test from 'node:test'
+import { mapExecutorError } from '../src/main/operations/errorMapping.js'
+import { CancelledError, CodedOperationError } from '../src/main/operations/types.js'
+import { createBossFilterOperation, createBossClearFilterOperation } from '../src/main/operations/bossFilter.js'
+import { createBossGotoOperation } from '../src/main/operations/bossGoto.js'
+import { createBossGreetOperation } from '../src/main/operations/bossGreet.js'
+import { createBossAcceptResumeOperation } from '../src/main/operations/bossAcceptResume.js'
+import { createBossRejectCurrentOperation } from '../src/main/operations/bossRejectCurrent.js'
+import { createBossInterviewDemoOperation } from '../src/main/operations/bossInterviewDemo.js'
+import type { BossSession } from '../src/main/operations/bossContext.js'
+import type { OpContext } from '../src/main/operations/types.js'
+import type { DomSnapshot, ClickPoint } from '../src/main/boss/domSnapshot.js'
+import { FilterSetError } from '../src/main/boss/FilterSetter.js'
+import { GreetError } from '../src/main/boss/GreetExecutor.js'
+import { ConsentError } from '../src/main/boss/ResumeConsentExecutor.js'
+import { NavError } from '../src/main/boss/PageNavigator.js'
+import { ChatRejectError } from '../src/main/boss/ChatRejectExecutor.js'
+import { InterviewDemoError } from '../src/main/boss/InterviewDemoExecutor.js'
+import { WinClickError } from '../src/main/input/WinMouseClicker.js'
+
+function silentCtx(): OpContext {
+  return { signal: new AbortController().signal, progress: () => {} }
+}
+
+/** 记录调用次数的 fake 工厂：返回脚本化 session */
+function fakeFactory(snaps: DomSnapshot[], opts: { url?: string; throwOnCreate?: unknown } = {}) {
+  const calls: string[] = []
+  const clicks: ClickPoint[] = []
+  let i = 0
+  const session: BossSession = {
+    snapshot: async () => snaps[Math.min(i++, Math.max(snaps.length - 1, 0))]!,
+    click: async (p) => {
+      clicks.push(p)
+    },
+    mouseWheel: async () => {},
+    pressEscape: async () => {},
+    typeChar: async () => {},
+    getUrl: async () => opts.url ?? 'https://www.zhipin.com/web/chat/recommend',
+    close: async () => {},
+  }
+  const factory = async () => {
+    calls.push('create')
+    if (opts.throwOnCreate) throw opts.throwOnCreate
+    return session
+  }
+  return { factory, calls, clicks, session }
+}
+
+/** 空 snapshot（只有根节点 + 给定文案） */
+function snapWithTexts(texts: string[]): DomSnapshot {
+  const idx = [0, ...texts.map((_, i) => i + 1)]
+  return {
+    strings: ['', ...texts],
+    documents: [
+      {
+        nodes: {
+          nodeValue: { index: idx, value: [0, ...texts.map((_, i) => i + 1)] },
+          contentDocumentIndex: { index: [], value: [] },
+        },
+        layout: {
+          nodeIndex: idx,
+          bounds: [[0, 0, 1917, 1905], ...texts.map((): [number, number, number, number] => [100, 200, 50, 20])],
+        },
+      },
+    ],
+  }
+}
+
+/** greet 用 snapshot：根 + 「筛选」+ N 个「打招呼」按钮 + 附加文案（相同文案共享 string 下标） */
+function greetSnap(buttons: Array<[number, number, number, number]>, extraTexts: string[] = []): DomSnapshot {
+  const nodeCount = 2 + buttons.length + extraTexts.length
+  const idx = Array.from({ length: nodeCount }, (_, i) => i)
+  const values = [0, 1, ...buttons.map(() => 2), ...extraTexts.map((_, i) => 3 + i)]
+  const bounds: Array<[number, number, number, number]> = [
+    [0, 0, 1917, 1905],
+    [100, 100, 50, 20],
+    ...buttons,
+    ...extraTexts.map((): [number, number, number, number] => [100, 300, 50, 20]),
+  ]
+  return {
+    strings: ['', '筛选', '打招呼', ...extraTexts],
+    documents: [
+      {
+        nodes: {
+          nodeValue: { index: idx, value: values },
+          contentDocumentIndex: { index: [], value: [] },
+        },
+        layout: { nodeIndex: idx, bounds },
+      },
+    ],
+  }
+}
+
+// ---------- 参数校验 fail-fast（不连 Chrome） ----------
+
+test('boss_filter：无筛选条件 → INVALID_ARGUMENT，且不触达 Chrome', async () => {
+  const f = fakeFactory([])
+  const op = createBossFilterOperation(f.factory)
+  const r = await op.execute({}, silentCtx())
+  assert.equal(r.success, false)
+  assert.equal(r.code, 'INVALID_ARGUMENT')
+  assert.equal(r.effect, 'none')
+  assert.equal(r.retryable, false)
+  assert.ok(r.run_id.length > 0)
+  assert.equal(f.calls.length, 0)
+})
+
+test('boss_filter：educations 含空串 → INVALID_ARGUMENT', async () => {
+  const f = fakeFactory([])
+  const op = createBossFilterOperation(f.factory)
+  const r = await op.execute({ educations: ['本科', '  '] }, silentCtx())
+  assert.equal(r.code, 'INVALID_ARGUMENT')
+  assert.equal(f.calls.length, 0)
+})
+
+test('boss_goto：非法 target → INVALID_ARGUMENT', async () => {
+  const f = fakeFactory([])
+  const op = createBossGotoOperation(f.factory)
+  // @ts-expect-error 故意传非法值模拟 Host 侧绕过 schema
+  const r = await op.execute({ target: 'nope' }, silentCtx())
+  assert.equal(r.code, 'INVALID_ARGUMENT')
+  assert.equal(f.calls.length, 0)
+})
+
+test('boss_greet：limit 超上限/非整数 → INVALID_ARGUMENT', async () => {
+  const f = fakeFactory([])
+  const op = createBossGreetOperation(f.factory)
+  for (const limit of [0, 101, 1.5, -3]) {
+    const r = await op.execute({ limit }, silentCtx())
+    assert.equal(r.code, 'INVALID_ARGUMENT', `limit=${limit}`)
+    assert.equal(f.calls.length, 0)
+  }
+})
+
+test('boss_accept_resume：limit 非法 → INVALID_ARGUMENT', async () => {
+  const f = fakeFactory([])
+  const op = createBossAcceptResumeOperation(f.factory)
+  const r = await op.execute({ limit: 200 }, silentCtx())
+  assert.equal(r.code, 'INVALID_ARGUMENT')
+  assert.equal(f.calls.length, 0)
+})
+
+test('boss_reject_current / boss_clear_filter：无参数校验，正常进入工厂', async () => {
+  const f1 = fakeFactory([], { throwOnCreate: new Error('fetch failed') })
+  const r1 = await createBossRejectCurrentOperation(f1.factory).execute({}, silentCtx())
+  assert.equal(r1.code, 'CHROME_UNAVAILABLE')
+  assert.equal(f1.calls.length, 1)
+  const f2 = fakeFactory([], { throwOnCreate: new Error('fetch failed') })
+  const r2 = await createBossClearFilterOperation(f2.factory).execute({}, silentCtx())
+  assert.equal(r2.code, 'CHROME_UNAVAILABLE')
+  assert.equal(f2.calls.length, 1)
+})
+
+test('boss_interview_demo：remark 为空/超 140 字 → INVALID_ARGUMENT', async () => {
+  const f = fakeFactory([])
+  const op = createBossInterviewDemoOperation(f.factory)
+  assert.equal((await op.execute({ remark: '   ' }, silentCtx())).code, 'INVALID_ARGUMENT')
+  assert.equal((await op.execute({ remark: 'x'.repeat(141) }, silentCtx())).code, 'INVALID_ARGUMENT')
+  assert.equal(f.calls.length, 0)
+})
+
+// ---------- operation 执行期错误映射 ----------
+
+test('connect 失败（ECONNREFUSED cause）→ CHROME_UNAVAILABLE，retryable=true', async () => {
+  const err = new TypeError('fetch failed', { cause: Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }) })
+  const f = fakeFactory([], { throwOnCreate: err })
+  const r = await createBossGotoOperation(f.factory).execute({ target: 'chat' }, silentCtx())
+  assert.equal(r.success, false)
+  assert.equal(r.code, 'CHROME_UNAVAILABLE')
+  assert.equal(r.retryable, true)
+  assert.equal(r.effect, 'none')
+})
+
+test('greet 前置校验非推荐页 → WRONG_PAGE，retryable=true', async () => {
+  const f = fakeFactory([snapWithTexts(['沟通', '消息'])])
+  const r = await createBossGreetOperation(f.factory).execute({ limit: 1 }, silentCtx())
+  assert.equal(r.success, false)
+  assert.equal(r.code, 'WRONG_PAGE')
+  assert.equal(r.retryable, true)
+  assert.equal(r.effect, 'none')
+})
+
+test('greet 付费墙（未成功任何人）→ PAYWALL，effect=none，retryable=false', async () => {
+  // probe → locate(1btn) → 点完出现付费墙弹层
+  const f = fakeFactory([
+    greetSnap([[1690, 208, 64, 32]]),
+    greetSnap([[1690, 208, 64, 32]]),
+    greetSnap([[1690, 208, 64, 32]], ['该职位无开聊权益']),
+  ])
+  const r = await createBossGreetOperation(f.factory).execute({ limit: 1 }, silentCtx())
+  assert.equal(r.success, false)
+  assert.equal(r.code, 'PAYWALL')
+  assert.equal(r.effect, 'none')
+  assert.equal(r.retryable, false)
+})
+
+test('greet 付费墙（已成功 1 人后触发）→ PAYWALL，effect=partial', async () => {
+  const BTN1: [number, number, number, number] = [1690, 208, 64, 32]
+  const BTN2: [number, number, number, number] = [1690, 484, 64, 32]
+  // probe → locate(2btn) → 点完剩 1 → locate(1btn) → 点完付费墙
+  const f = fakeFactory([
+    greetSnap([BTN1, BTN2]),
+    greetSnap([BTN1, BTN2]),
+    greetSnap([BTN2]),
+    greetSnap([BTN2]),
+    greetSnap([BTN2], ['该职位无开聊权益']),
+  ])
+  const r = await createBossGreetOperation(f.factory).execute({ limit: 3 }, silentCtx())
+  assert.equal(r.success, false)
+  assert.equal(r.code, 'PAYWALL')
+  assert.equal(r.effect, 'partial')
+  assert.equal(r.retryable, false)
+  assert.equal(r.data.completed, 1)
+})
+
+test('greet 成功路径：effect=applied，data 含 greeted/reached_end', async () => {
+  const BTN1: [number, number, number, number] = [1690, 208, 64, 32]
+  // probe → locate(1btn) → 点完无按钮 → 滚动探测(2 次签名不变=到底)
+  const f = fakeFactory([
+    greetSnap([BTN1]),
+    greetSnap([BTN1]),
+    greetSnap([]),
+    greetSnap([]),
+    greetSnap([]),
+  ])
+  const r = await createBossGreetOperation(f.factory).execute({ limit: 5 }, silentCtx())
+  assert.equal(r.success, true)
+  assert.equal(r.code, 'OK')
+  assert.equal(r.effect, 'applied')
+  assert.equal(r.data.greeted, 1)
+  assert.equal(r.data.reached_end, true)
+  assert.ok(r.run_id.length > 0)
+})
+
+// ---------- errorMapping 全路径（每种 executor Error + 消息标记） ----------
+
+test('errorMapping：取消与主动 code', () => {
+  assert.equal(mapExecutorError(new CancelledError()).code, 'CANCELLED')
+  assert.equal(mapExecutorError(new CodedOperationError('WRONG_PAGE', '非推荐页')).code, 'WRONG_PAGE')
+})
+
+test('errorMapping：Chrome 连接失败', () => {
+  const withCause = new TypeError('fetch failed', { cause: Object.assign(new Error('x'), { code: 'ECONNREFUSED' }) })
+  assert.equal(mapExecutorError(withCause).code, 'CHROME_UNAVAILABLE')
+  assert.equal(mapExecutorError(new Error('fetch failed')).code, 'CHROME_UNAVAILABLE')
+  assert.equal(mapExecutorError(new Error('CDP request timed out after 10000ms')).code, 'CHROME_UNAVAILABLE')
+})
+
+test('errorMapping：未登录/未打开 BOSS 页面', () => {
+  assert.equal(mapExecutorError(new Error('no BOSS page target found among 5 targets')).code, 'NOT_LOGGED_IN')
+  assert.equal(mapExecutorError(new NavError('页面上找不到菜单文案「沟通」（不在 DOM 文本表中），请确认已登录 BOSS')).code, 'NOT_LOGGED_IN')
+})
+
+test('errorMapping：付费墙与参数类', () => {
+  assert.equal(mapExecutorError(new GreetError('第 1 个打招呼触发付费墙：当前职位无开聊权益')).code, 'PAYWALL')
+  assert.equal(mapExecutorError(new FilterSetError('学历要求 行为单选，收到 2 个选项')).code, 'INVALID_ARGUMENT')
+  assert.equal(mapExecutorError(new FilterSetError('未提供任何筛选条件')).code, 'INVALID_ARGUMENT')
+})
+
+test('errorMapping：写后校验失败 → EXECUTION_UNKNOWN', () => {
+  const cases: Error[] = [
+    new GreetError('第 1 个打招呼点击后按钮数未减少（2→2）'),
+    new ConsentError('第 1 个「同意」点击后按钮未消失（1→1）'),
+    new ConsentError('第 1 个同意后等待 4.5s 仍未出现「点击预览附件简历」按钮'),
+    new ConsentError('第 1 个点击预览后弹层未打开'),
+    new ConsentError('第 1 个预览弹层 Escape 后未关闭'),
+    new FilterSetError('清除筛选校验失败：徽章仍为「筛选·2」（确定可能未生效）'),
+    new ChatRejectError('确认后「不合适」按钮仍存在且会话未切换：标记结果无法确认'),
+    new NavError('点击左侧菜单「沟通」后页面未跳转（当前 URL: xxx）'),
+    new InterviewDemoError('备注逐字输入后字数计数器未显示 16'),
+  ]
+  for (const err of cases) {
+    assert.equal(mapExecutorError(err).code, 'EXECUTION_UNKNOWN', err.message)
+  }
+})
+
+test('errorMapping：结构变化/找不到元素 → UI_CHANGED', () => {
+  const cases: Error[] = [
+    new ConsentError('第 1 个会话打开后未找到「同意」处理条'),
+    new NavError('左侧导航栏中找不到「沟通」菜单项（x<200 无命中），页面布局可能已变'),
+    new FilterSetError('行标签「经验要求」必须恰好 1 个可见匹配，实际 0 个'),
+    new ChatRejectError('当前页面右侧面板没有「不合适」按钮'),
+    new InterviewDemoError('未找到唯一的「约面试」按钮'),
+    new GreetError('某个结构错误'),
+    new WinClickError('win-click.ps1 执行失败(exit=2): 落点被遮挡', 2),
+  ]
+  for (const err of cases) {
+    assert.equal(mapExecutorError(err).code, 'UI_CHANGED', err.message)
+  }
+})
+
+test('errorMapping：脚本缺失与兜底 → INTERNAL_ERROR', () => {
+  assert.equal(mapExecutorError(new WinClickError('未找到 scripts/win-click.ps1（已从 x 向上探测）')).code, 'INTERNAL_ERROR')
+  assert.equal(mapExecutorError(new Error('unexpected')).code, 'INTERNAL_ERROR')
+  assert.equal(mapExecutorError('字符串错误').code, 'INTERNAL_ERROR')
+})
+
+test('写动作未预期异常（INTERNAL_ERROR）→ effect=unknown（规格 §3 兜底行：不可误报 none 让 Host 误以为无副作用）', async () => {
+  const f = fakeFactory([snapWithTexts(['沟通'])])
+  // snapshot 抛非 executor Error 的意外异常 → INTERNAL_ERROR；写动作是否落地不可知 → unknown
+  f.session.snapshot = async () => {
+    throw new Error('boom: unexpected snapshot failure')
+  }
+  const r = await createBossRejectCurrentOperation(f.factory).execute({}, silentCtx())
+  assert.equal(r.success, false)
+  assert.equal(r.code, 'INTERNAL_ERROR')
+  assert.equal(r.effect, 'unknown')
+  assert.equal(r.retryable, false)
+})

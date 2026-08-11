@@ -482,6 +482,18 @@
           <span>我的定时任务</span>
         </button>
 
+        <!-- 本地工具（仅租户模式：普通用户配对管理自己的本机 Runtime 设备） -->
+        <button
+          v-if="isTenantMode && tenantIsLoggedIn"
+          @click="showUserMenu = false; openLocalTools()"
+          class="w-full flex items-center gap-3 px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+        >
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+          </svg>
+          <span>本地工具</span>
+        </button>
+
         <!-- 设置（手机端隐藏：设置弹窗未适配手机端） -->
         <button
           v-if="!props.isMobile"
@@ -1279,6 +1291,17 @@ async function confirmRename() {
 // 我的定时任务
 function openScheduledTasks() {
   window.open('/scheduled-tasks', '_blank')
+}
+
+// 本地工具设备管理（仅租户模式）
+function openLocalTools() {
+  if (tenantId.value) {
+    router.push(`/t/${tenantId.value}/local-tools`)
+  }
+  // 手机端点击后自动收起左侧菜单
+  if (props.isMobile) {
+    emit('collapse')
+  }
 }
 
 // 租户模式修改密码

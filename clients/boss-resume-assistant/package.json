@@ -2,7 +2,7 @@
   "name": "boss-resume-assistant",
   "version": "0.1.0",
   "private": true,
-  "description": "BOSS 简历筛选助手 - CLI 客户端（原生 CDP 定位 + 双通道点击）",
+  "description": "BOSS 招聘操作 CLI（7 个真机验证操作 + MCP）",
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.main.json",
@@ -12,16 +12,12 @@
     "cli": "npm run build:main && node dist/src/cli/index.js"
   },
   "dependencies": {
-    "better-sqlite3": "^13.0.2",
-    "js-yaml": "^4.1.0",
-    "pngjs": "^7.0.0",
-    "tesseract.js": "^5.1.1",
-    "ws": "^8.21.1"
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "ws": "^8.21.1",
+    "zod": "4.4.3"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^24.0.0",
-    "@types/pngjs": "^6.0.5",
     "@types/ws": "^8.18.1",
     "typescript": "^5.9.0"
   }
