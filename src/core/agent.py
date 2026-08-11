@@ -2120,6 +2120,31 @@ class Agent:
             if hasattr(self, '_current_video_params'):
                 delattr(self, '_current_video_params')
 
+    def _format_video_params_for_llm(self, video_params: Dict[str, Any]) -> str:
+        """把前端工具栏选择的视频参数格式化为 LLM 可读说明文本
+
+        仅 video-agent 子智能体在 process_message 期间持有 _current_video_params。
+        注入到对话上下文后，LLM 能直接看到用户已确定的参数，避免重复询问时长/比例/模式。
+        """
+        mode = video_params.get("mode", "refine")
+        mode_label = "精修（refine）" if mode == "refine" else "敏捷（agile）"
+        duration = int(video_params.get("duration_sec", 5))
+        ratio = video_params.get("ratio", "9:16")
+        resolution = video_params.get("resolution", "720P")
+        card_count = int(video_params.get("card_count", 1))
+        prompt_model = video_params.get("prompt_model", "qwen-vl-plus")
+        return (
+            "<video-params>\n"
+            "用户已通过前端「视频生成参数」面板指定本次视频创作参数，请直接遵循，"
+            "除非用户明确表示要修改，否则不要向用户重复询问以下信息：\n"
+            f"- 创作模式：{mode_label}\n"
+            f"- 视频时长：{duration} 秒\n"
+            f"- 视频比例：{ratio}\n"
+            f"- 分辨率：{resolution}\n"
+            f"- 生成条数：{card_count} 条\n"
+            "</video-params>"
+        )
+
     async def _process_message_impl(
         self,
         user_input: str,
@@ -2505,7 +2530,17 @@ class Agent:
 
         messages = self._build_messages(session_id)
         system_prompt = self._build_system_prompt(user, extra_system_prompt=extra_system_prompt)
-        
+
+        # 视频创作参数注入上下文（video-agent 前端工具栏选择）。
+        # 让 LLM 在对话轮次直接看到用户已确定的参数，避免重复询问时长/比例/模式。
+        video_params = getattr(self, '_current_video_params', None)
+        if video_params:
+            messages.append({
+                "role": "user",
+                "content": self._format_video_params_for_llm(video_params),
+            })
+            logger.info(f"[video_params] 注入视频创作参数到上下文: {video_params}")
+
         if auto_loaded_skill:
             skill_content = self.skill_registry.get_content(auto_loaded_skill)
             if skill_content:
