@@ -1383,16 +1383,24 @@ async def tenant_wecom_kf_callback_post(tenant_id: str, config_id: str, request:
         return PlainTextResponse("error", status_code=500)
 
 
-async def _auto_fill_open_kfid(tenant_id: str, open_kfid: str) -> None:
+async def _auto_fill_open_kfid(tenant_id: str, open_kfid: str) -> tuple:
     """
     自动填入 open_kfid：查找当前租户下 open_kfid 未设置的 wecom_kf 配置，
     如果只有 1 条匹配，将 open_kfid 写入该配置的 kf_account 中第一条记录。
+
+    Returns:
+        (success, config_id)：是否成功填入，及被更新的 config_id（用于上游失效 adapter 缓存）
     """
     try:
         configs = ChannelConfigDB.list_by_tenant(tenant_id, "wecom_kf")
         if not configs:
             logger.warning(f"[wecom_kf] auto_fill_open_kfid: 租户 {tenant_id} 无 wecom_kf 配置")
-            return
+            _kf_tlog(
+                "auto_fill失败: 租户无wecom_kf配置, tenant={tenant}",
+                tenant=tenant_id,
+                level="WARNING",
+            )
+            return False, None
 
         # 筛选 open_kfid 未设置的配置（kf_account 中至少有一条 open_kfid 为空）
         candidates = []
@@ -1408,14 +1416,27 @@ async def _auto_fill_open_kfid(tenant_id: str, open_kfid: str) -> None:
             logger.info(
                 f"[wecom_kf] auto_fill_open_kfid: 租户 {tenant_id} 所有配置的 open_kfid 均已设置"
             )
-            return
+            _kf_tlog(
+                "auto_fill失败: 所有配置的open_kfid均已设置, tenant={tenant}, open_kfid={open_kfid}（"
+                "说明DB有值但adapter缓存陈旧，应触发invalidate）",
+                tenant=tenant_id,
+                open_kfid=open_kfid,
+                level="WARNING",
+            )
+            return False, None
 
         if len(candidates) > 1:
             logger.warning(
                 f"[wecom_kf] auto_fill_open_kfid: 租户 {tenant_id} 存在 {len(candidates)} 条 "
                 f"open_kfid 未设置的 wecom_kf 配置，无法自动填入"
             )
-            return
+            _kf_tlog(
+                "auto_fill失败: 存在{count}条候选配置无法唯一确定, tenant={tenant}",
+                tenant=tenant_id,
+                count=len(candidates),
+                level="WARNING",
+            )
+            return False, None
 
         config_id, config_dict, kf_accounts = candidates[0]
         # 填入第一条 open_kfid 为空的记录
@@ -1425,12 +1446,28 @@ async def _auto_fill_open_kfid(tenant_id: str, open_kfid: str) -> None:
                 break
 
         ChannelConfigDB.update(config_id, config_dict)
+        # DB 已更新，必须使 adapter 进程内缓存失效，否则缓存的 adapter 实例
+        # 仍持有旧 kf_accounts（无 open_kfid），下次回调依旧找不到 kf_config
+        await ChannelFactory.invalidate_adapter(tenant_id, "wecom_kf", config_id, close=True)
         logger.info(
             f"[wecom_kf] auto_fill_open_kfid: 已将 open_kfid={open_kfid} "
-            f"自动填入 tenant={tenant_id} config={config_id}"
+            f"自动填入 tenant={tenant_id} config={config_id}，并失效 adapter 缓存"
         )
+        _kf_tlog(
+            "auto_fill成功: open_kfid={open_kfid} 已填入 config={config}, adapter缓存已失效",
+            open_kfid=open_kfid,
+            config=config_id,
+        )
+        return True, config_id
     except Exception as e:
         logger.error(f"[wecom_kf] auto_fill_open_kfid 异常: {e}", exc_info=True)
+        _kf_tlog(
+            "auto_fill异常: {err}, tenant={tenant}",
+            tenant=tenant_id,
+            err=str(e),
+            level="ERROR",
+        )
+        return False, None
 
 
 async def _process_tenant_wecom_kf_messages(
@@ -1467,8 +1504,36 @@ async def _process_tenant_wecom_kf_messages(
                 open_kfid=open_kfid,
                 level="WARNING",
             )
-            await _auto_fill_open_kfid(tenant_id, open_kfid)
-            return
+            filled, filled_config_id = await _auto_fill_open_kfid(tenant_id, open_kfid)
+            if not filled:
+                return
+            # auto_fill 已失效 adapter 缓存，重新获取最新 adapter 实例
+            new_adapter, _, _ = await ChannelFactory.create_from_tenant_config(
+                tenant_id, "wecom_kf", config_id=filled_config_id
+            )
+            if not new_adapter:
+                _kf_tlog(
+                    "auto_fill后重建adapter失败: tenant={tenant}, config={config}",
+                    tenant=tenant_id,
+                    config=filled_config_id,
+                    level="ERROR",
+                )
+                return
+            adapter = new_adapter
+            kf_config = adapter.get_kf_config(open_kfid)
+            if not kf_config:
+                _kf_tlog(
+                    "auto_fill+重建adapter后仍未找到kf_config, tenant={tenant}, open_kfid={open_kfid}",
+                    tenant=tenant_id,
+                    open_kfid=open_kfid,
+                    level="ERROR",
+                )
+                return
+            _kf_tlog(
+                "auto_fill后重试成功: tenant={tenant}, open_kfid={open_kfid}",
+                tenant=tenant_id,
+                open_kfid=open_kfid,
+            )
 
         subagent_type = kf_config.get("subagent_type", "")
         logger.info(f"[wecom_kf] 客服配置: subagent_type={subagent_type}, open_kfid={open_kfid}")
