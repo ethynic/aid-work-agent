@@ -1,0 +1,188 @@
+﻿param(
+    [string]$Message = '你好',
+    [switch]$DryRun,
+    [switch]$LocateOnly
+)
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$probeDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+. (Join-Path $probeDir '..\p1-chat-search-group\probe-lib.ps1')
+
+# Kimi (Moonshot) vision config
+$apiKey = 'sk-Eqn3ctEHy5mJWCwmEl9IGxERm9TZiHcq6LKII6xbkglxVsTc'
+$apiBase = 'https://api.moonshot.cn/v1/chat/completions'
+$model = 'kimi-k3'
+
+$sysPrompt = @'
+You are a coordinate locator for WeChat desktop chat window.
+Input image: a screenshot of WeChat main window with a chat conversation open.
+Locate TWO elements and return their CENTER click coordinates:
+1. "input_box": the text input area at the bottom where you type a message
+2. "send_button": the send button (usually bottom-right, labeled "发送" / Send)
+Coordinate origin = top-left corner of the screenshot. Unit = pixel.
+Return ONLY a single JSON object, no markdown, no explanation:
+{"input_box": {"x": <int>, "y": <int>}, "send_button": {"x": <int>, "y": <int>}, "found": <true|false>}
+If either element cannot be located, return {"input_box":{"x":0,"y":0},"send_button":{"x":0,"y":0},"found":false}.
+Coordinates are INSIDE the screenshot image (not the screen).
+'@
+
+function Invoke-KimiVision([string]$ImagePath) {
+    $b64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($ImagePath))
+    $dataUrl = 'data:image/png;base64,' + $b64
+    $payload = @{
+        model = $model
+        messages = @(
+            @{ role = 'system'; content = $sysPrompt },
+            @{ role = 'user'; content = @(
+                @{ type = 'image_url'; image_url = @{ url = $dataUrl } },
+                @{ type = 'text'; text = 'Locate the input box and send button in this WeChat chat window. Return JSON.' }
+            )}
+        )
+        max_tokens = 4096
+    } | ConvertTo-Json -Depth 8
+    $reqPath = Join-Path $env:TEMP 'weixin-probe-p2-vision-req.json'
+    $utf8NoBom = New-Object Text.UTF8Encoding($false)
+    [IO.File]::WriteAllText($reqPath, $payload, $utf8NoBom)
+    $respPath = Join-Path $env:TEMP 'weixin-probe-p2-vision-resp.json'
+    $curlArgs = @('-s', '-X', 'POST', $apiBase,
+        '-H', "Authorization: Bearer $apiKey",
+        '-H', 'Content-Type: application/json',
+        '--data-binary', "@$reqPath",
+        '-o', $respPath, '-w', '%{http_code}', '--max-time', '180')
+    $http = $null
+    for ($attempt = 1; $attempt -le 4; $attempt++) {
+        $http = & curl.exe @curlArgs
+        if ($LASTEXITCODE -ne 0) { throw "VISION_CURL_FAILED exit=$LASTEXITCODE http=$http" }
+        if ($http -eq '200') { break }
+        $errBody = if (Test-Path $respPath) { Get-Content $respPath -Raw -Encoding UTF8 } else { '<no body>' }
+        if ($http -eq '429' -and $attempt -lt 4) {
+            Write-Host ("[vision] HTTP 429 (attempt {0}/4), retrying in 25s..." -f $attempt)
+            Start-Sleep -Seconds 25
+            continue
+        }
+        throw "VISION_HTTP_$http body=$($errBody.Substring(0, [Math]::Min(300, $errBody.Length)))"
+    }
+    $resp = (Get-Content $respPath -Raw -Encoding UTF8) | ConvertFrom-Json
+    $content = [string]$resp.choices[0].message.content
+    if ([string]::IsNullOrWhiteSpace($content)) { $content = [string]$resp.choices[0].message.reasoning_content }
+    $m = [regex]::Match($content, '\{[^{}]*"input_box"[^{}]*\}')
+    if (-not $m.Success) {
+        $stripped = $content -replace '(?s)^```(?:json)?\s*', '' -replace '(?s)\s*```$', ''
+        $m = [regex]::Match($stripped, '\{[\s\S]*\}')
+    }
+    if (-not $m.Success) { throw "VISION_NO_JSON in: $content" }
+    [IO.File]::WriteAllText((Join-Path $env:TEMP 'weixin-probe-p2-vision-raw.json'), $content, [Text.Encoding]::UTF8)
+    $m.Value | ConvertFrom-Json
+}
+
+function Click-ScreenPoint([int]$pngX, [int]$pngY, [int]$winLeft, [int]$winTop, $mainGuard) {
+    $screenX = $winLeft + $pngX
+    $screenY = $winTop + $pngY
+    if (-not (& $mainGuard)) { throw 'FOREGROUND_LOST' }
+    [void][WeixinProbeWin32]::SetCursorPos($screenX, $screenY)
+    Start-Sleep -Milliseconds 150
+    if (-not (& $mainGuard)) { throw 'FOREGROUND_LOST' }
+    $downDone = $false; $failure = $null
+    try {
+        [WeixinProbeWin32]::mouse_event(0x0002, 0, 0, 0, [IntPtr]::Zero)
+        $downDone = $true
+        if (-not (& $mainGuard)) { throw 'FOREGROUND_LOST' }
+    } catch { $failure = $_ } finally {
+        if ($downDone) { [WeixinProbeWin32]::mouse_event(0x0004, 0, 0, 0, [IntPtr]::Zero) }
+    }
+    if ($failure) { throw $failure }
+    Write-Host "      clicked screen ($screenX, $screenY)"
+    Start-Sleep -Milliseconds 300
+}
+
+$mutex = New-Object Threading.Mutex($false, 'Local\AidWorkAgent.WeixinCliProbe.MessageSend', [ref]$null)
+if (-not $mutex.WaitOne(0)) { throw 'PROBE_BUSY' }
+try {
+    Initialize-WeixinProbeWin32
+    Set-WeixinProbeDpiContext
+
+    $windows = @(Get-VisibleWindowList)
+    $main = Select-WeixinMainWindow $windows
+    $mainHwnd = [int64]$main.Hwnd
+    Write-Host "[1] main hwnd=$mainHwnd"
+    if (-not (Invoke-WeixinActivation $mainHwnd)) { throw 'WX_ACTIVATION_FAILED' }
+    $mainGuard = { [WeixinProbeWin32]::GetForegroundWindow().ToInt64() -eq $mainHwnd }
+    if (-not (& $mainGuard)) { throw 'MAIN_NOT_FOREGROUND' }
+    Write-Host "[1] 当前微信打开的会话即测试目标（请确认目标正确）"
+
+    # 截图
+    $rect = New-Object WeixinProbeWin32+RECT
+    [void][WeixinProbeWin32]::GetWindowRect([IntPtr]$mainHwnd, [ref]$rect)
+    $winLeft = $rect.Left; $winTop = $rect.Top
+    $w = $rect.Right - $rect.Left; $h = $rect.Bottom - $rect.Top
+    Add-Type -AssemblyName System.Drawing
+    $bmp = New-Object Drawing.Bitmap $w, $h
+    $g = [Drawing.Graphics]::FromImage($bmp)
+    $g.CopyFromScreen($winLeft, $winTop, 0, 0, (New-Object Drawing.Size $w, $h))
+    $shotPath = Join-Path $env:TEMP 'weixin-probe-p2-shot.png'
+    $bmp.Save($shotPath, [Drawing.Imaging.ImageFormat]::Png)
+    $g.Dispose(); $bmp.Dispose()
+    Write-Host ("[2] shot: {0} rect=({1},{2},{3}x{4})" -f $shotPath,$winLeft,$winTop,$w,$h)
+
+    # Kimi 定位输入框 + 发送按钮
+    $loc = Invoke-KimiVision $shotPath
+    Write-Host "[3] vision found=$($loc.found)"
+    if (-not $loc.found) { throw 'VISION_NOT_FOUND' }
+    $inboxX = [int]$loc.input_box.x; $inboxY = [int]$loc.input_box.y
+    $sendX = [int]$loc.send_button.x; $sendY = [int]$loc.send_button.y
+    Write-Host ("[3] input_box png=({0},{1}) screen=({2},{3})" -f $inboxX,$inboxY,($winLeft+$inboxX),($winTop+$inboxY))
+    Write-Host ("[3] send_button png=({0},{1}) screen=({2},{3})" -f $sendX,$sendY,($winLeft+$sendX),($winTop+$sendY))
+
+    # 标注图：两个目标都画十字
+    $bmp2 = [Drawing.Image]::FromFile($shotPath)
+    $g2 = [Drawing.Graphics]::FromImage($bmp2)
+    $redPen = New-Object Drawing.Pen ([Drawing.Color]::Red, 3)
+    $bluePen = New-Object Drawing.Pen ([Drawing.Color]::Blue, 3)
+    foreach ($p in @(@($inboxX,$inboxY,$redPen,'input'), @($sendX,$sendY,$bluePen,'send'))) {
+        $px=$p[0]; $py=$p[1]; $pen=$p[2]
+        $g2.DrawEllipse($pen, $px-10, $py-10, 20, 20)
+        $g2.DrawLine($pen, $px-15, $py, $px+15, $py)
+        $g2.DrawLine($pen, $px, $py-15, $px, $py+15)
+    }
+    $annotated = Join-Path $env:TEMP 'weixin-probe-p2-annotated.png'
+    $bmp2.Save($annotated, [Drawing.Imaging.ImageFormat]::Png)
+    $g2.Dispose(); $bmp2.Dispose()
+    Write-Host ("[4] annotated (red=input_box, blue=send_button): {0}" -f $annotated)
+
+    if ($LocateOnly -or $DryRun) { Write-Host "PROBE_RESULT: LOCATE_DONE"; return }
+
+    Write-Host "[5] 即将执行：点击输入框 -> 粘贴 '$Message' -> 回车发送。3秒后开始，Ctrl+C 取消"
+    Start-Sleep -Seconds 3
+
+    # 5a 点击输入框聚焦
+    Write-Host "[5a] 点击输入框"
+    Click-ScreenPoint $inboxX $inboxY $winLeft $winTop $mainGuard
+
+    # 5b 清空 + 粘贴
+    Send-WeixinKeyChord @('CTRL', 'A') $mainGuard; Start-Sleep -Milliseconds 120
+    Send-WeixinKeyChord @('DEL') $mainGuard; Start-Sleep -Milliseconds 150
+    $script:originalClipboard = Get-ClipboardTextSafe
+    Send-WeixinPasteText $Message $mainGuard
+    Start-Sleep -Milliseconds 400
+    Write-Host "[5b] 已粘贴 '$Message'"
+
+    # 5c 回车发送（微信默认 Enter=发送）
+    # 视觉定位的"发送按钮"坐标在本次实验被误识为语音通话按钮，点击不可靠；
+    # Enter 键是微信最稳定的发送路径，绕过发送按钮识别不准的问题。
+    Write-Host "[5c] 回车发送（Enter）"
+    Send-WeixinKeyChord @('ENTER') $mainGuard
+    Start-Sleep -Milliseconds 800
+
+    # 6 发送后截图，Kimi 二次确认最后一条消息是否为 $Message
+    $bmp3 = New-Object Drawing.Bitmap $w, $h
+    $g3 = [Drawing.Graphics]::FromImage($bmp3)
+    $g3.CopyFromScreen($winLeft, $winTop, 0, 0, (New-Object Drawing.Size $w, $h))
+    $afterPath = Join-Path $env:TEMP 'weixin-probe-p2-after-send.png'
+    $bmp3.Save($afterPath, [Drawing.Imaging.ImageFormat]::Png)
+    $g3.Dispose(); $bmp3.Dispose()
+    Write-Host "[6] after-send shot: $afterPath"
+    Write-Host "PROBE_RESULT: SENT (请人工核对 $afterPath 最后一条消息是否为 '$Message')"
+} finally {
+    if ($null -ne $script:originalClipboard) { try { Set-ClipboardTextRetry $script:originalClipboard } catch {} }
+    [void]$mutex.ReleaseMutex(); $mutex.Dispose()
+}

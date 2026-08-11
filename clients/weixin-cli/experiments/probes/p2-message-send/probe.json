@@ -1,0 +1,26 @@
+{
+  "probe_id": "p2-message-send",
+  "risk_level": "P2",
+  "hypothesis": "微信 4.x 主窗口当前打开的聊天会话，其输入框和发送按钮可通过 Kimi k3 视觉模型定位中心坐标；通过点击输入框聚焦、剪贴板粘贴输入文本、点击发送按钮，可完成单条文本消息发送，且发送成功可机器验证（最后一条消息特征匹配）。",
+  "allowed_actions": [
+    "activate_window",
+    "screenshot",
+    "kimi_vision_locate",
+    "click_input_box",
+    "paste_text",
+    "enter_key_send"
+  ],
+  "forbidden_actions": [
+    "send_to_multiple_targets",
+    "send_image_or_file",
+    "bulk_send",
+    "read_history",
+    "retry_on_unknown",
+    "click_send_button_by_vision"
+  ],
+  "test_message": "你好",
+  "target": "用户当前在微信主窗口打开的会话（非脚本指定，避免误发；运行前由用户确认当前会话即测试目标）",
+  "success_criteria": "1) Kimi 视觉返回输入框中心坐标，vision 二次核对落在输入区；2) 点击输入框后焦点在输入区；3) 粘贴文本后输入框含目标文本；4) Enter 发送后，最后一条消息=目标文本（右侧气泡）+ 输入框清空（vision 二次确认）；5) 单次单目标，失败返回 unknown 不重试。",
+  "cleanup": "消息已发出无法撤回（除非 2 分钟内手动撤回）。实验仅对用户当前打开的会话发 1 条测试文本，由用户自行决定测试对象。",
+  "notes": "对应设计文档 §5.4 v0.4 受控写动作——weixin_message_send 的前置 probe。P2 级：真实发送 1 条消息。运行前必须由用户确认当前微信打开的会话就是要发的目标。两个已验证结论：① 发送走 Enter 键（微信默认 Enter=发送），不靠视觉定位发送按钮——Kimi 把发送按钮误识为语音通话按钮；② 输入框坐标可缓存复用（窗口几何不变则坐标恒定，仅失效才重定位）。"
+}

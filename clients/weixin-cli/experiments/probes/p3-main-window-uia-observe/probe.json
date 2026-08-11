@@ -1,0 +1,24 @@
+﻿{
+  "probe_id": "p3-main-window-uia-observe",
+  "risk_level": "P1",
+  "hypothesis": "微信 4.x 正常主窗口（非搜索态）的「会话列表」与「当前会话对话窗口」两个核心区域，UIA 仍不暴露内部元素（与 p1 搜索态结论一致：Qt 把界面画成 MMUIRenderSubWindowHW 渲染窗口，UIA 只看到外壳）。通过 TreeWalker 深度枚举主窗口及所有 Weixin 可见子窗口的 UIA 树 + 主窗口截图，机器可验证该结论：若 UIA 节点BoundingRectangle 无法对应截图上两个区域的视觉边界，则定位必须走外部视觉识别。",
+  "allowed_actions": [
+    "activate_window",
+    "uia_enumerate",
+    "screenshot"
+  ],
+  "forbidden_actions": [
+    "send_keys",
+    "open_search",
+    "type_text",
+    "click",
+    "send_message",
+    "read_history",
+    "close_weixin_window",
+    "change_clipboard",
+    "switch_chat"
+  ],
+  "success_criteria": "1) 主窗口唯一识别并激活；2) 主窗口及所有 Weixin 可见子窗口的 UIA 深度树完整枚举（落 %TEMP% JSON，不进仓库）；3) 主窗口截图落 %TEMP%；4) 机器可判定：UIA 节点中是否存在 BoundingRectangle 能覆盖「会话列表区域」和「对话窗口区域」的元素，给出节点计数 / 有名节点 / 可点击 / 可编辑的统计与结论。",
+  "cleanup": "无写动作，无需恢复；不关闭任何用户已打开的窗口，不切换会话。",
+  "notes": "对应 p1 报告 §5 结论的二次确认：将「Qt UIA 不暴露结果项」从搜索态推广到正常主窗口的两个核心区域（会话列表 / 对话窗口）。这是 weixin-cli 设计文档 §5 中「元素定位必须走视觉识别」假设在正常态的验证。纯只读，零输入零点击零剪贴板改动。截图与 UIA dump 含真实会话名/消息内容，仅落 %TEMP%，不进仓库。"
+}

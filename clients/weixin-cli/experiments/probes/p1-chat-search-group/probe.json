@@ -1,0 +1,24 @@
+{
+  "probe_id": "p1-chat-search-group",
+  "risk_level": "P1",
+  "hypothesis": "微信主窗口 Ctrl+F 全局搜索可通过 UIA 定位搜索框；逐字输入查询后，搜索结果中的“群聊”分类匹配项可通过 UIA 识别并点击进入会话，全程有机器可验证的终态。",
+  "allowed_actions": [
+    "activate_window",
+    "send_ctrl_f",
+    "type_text_no_send",
+    "clipboard_paste_with_restore",
+    "uia_enumerate",
+    "uia_invoke_or_click",
+    "screenshot_hash"
+  ],
+  "forbidden_actions": [
+    "send_message",
+    "read_history",
+    "close_weixin_window",
+    "bulk_action"
+  ],
+  "test_query_type": "真实联系人姓名（3 字中文，本机通讯录唯一匹配；明文不入库，仅作真机验证用，见报告 §5.3.1）",
+  "success_criteria": "1) 搜索框可被 UIA 唯一定位且输入文本可回读；2) 群聊分类匹配项可被 UIA 枚举（脱敏记录名称 hash 与控件类型）；3) 点击后进入目标会话且终态可机器验证（窗口标题或消息区变化）；4) 实验结束后搜索面板关闭，主窗口恢复。",
+  "cleanup": "实验结束按 ESC 关闭搜索面板，恢复主窗口前台；不关闭任何用户已打开的窗口。",
+  "notes": "对应设计文档 §7.3 首批 probe 第 4 项（通讯录/顶部搜索对好友与群的 UIA 结构）。P1 级：不发送任何消息，不写剪贴板。目标群为用户本机真实群，仅做导航进入，不做任何写动作。"
+}
