@@ -302,8 +302,23 @@ CREATE TABLE IF NOT EXISTS local_tool_events (
 -- ============================================================================
 -- 2026-08-11 video-agent 切 qwen-vl-plus 多模态模型，补充计费单价
 -- qwen-vl-plus 在 DashScope 与 qwen-plus 同价位：输入 0.8 / 输出 2.0 / 缓存 0.16 元/百万 tokens
--- 不补则 billing.py 静默返回 0（免费调用），影响租户计费准确性
+-- 百炼平台模型价格 https://bailian.console.aliyun.com/cn-beijing/?msctype=email&mscareaid=cn&mscsiteid=cn&mscmsgid=5380126031901110341&yunge_info=email___5380126031901110341&spm=a2c4k.32345051.zh-cnc.9&msctype=pmsg&mscareaid=cn&mscsiteid=cn&mscmsgid=4960126031300407999&yunge_info=pmsg___4960126031300407999&tab=doc#/doc/?type=model&url=2987148
+-- 百炼平台缓存命中后价格为 20%，具体参考 https://bailian.console.aliyun.com/cn-beijing/?msctype=email&mscareaid=cn&mscsiteid=cn&mscmsgid=5380126031901110341&yunge_info=email___5380126031901110341&spm=a2c4k.32345051.zh-cnc.9&msctype=pmsg&mscareaid=cn&mscsiteid=cn&mscmsgid=4960126031300407999&yunge_info=pmsg___4960126031300407999&tab=doc#/doc/?type=model&url=2862577
 -- ============================================================================
+INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m)
+VALUES ('qwen3.7-plus', 2.0, 8.0, 0.4)
+ON CONFLICT (model_name) DO UPDATE SET
+  input_price_per_m = EXCLUDED.input_price_per_m,
+  output_price_per_m = EXCLUDED.output_price_per_m,
+  cached_input_price_per_m = EXCLUDED.cached_input_price_per_m;
+
+INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m)
+VALUES ('qwen-vl-max', 1.6, 4.0, 0.32)
+ON CONFLICT (model_name) DO UPDATE SET
+  input_price_per_m = EXCLUDED.input_price_per_m,
+  output_price_per_m = EXCLUDED.output_price_per_m,
+  cached_input_price_per_m = EXCLUDED.cached_input_price_per_m;
+
 INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m)
 VALUES ('qwen-vl-plus', 0.8, 2.0, 0.16)
 ON CONFLICT (model_name) DO UPDATE SET
@@ -311,33 +326,8 @@ ON CONFLICT (model_name) DO UPDATE SET
   output_price_per_m = EXCLUDED.output_price_per_m,
   cached_input_price_per_m = EXCLUDED.cached_input_price_per_m;
 
--- ============================================================================
--- 2026-08-11 video-agent 多模态模型对比测试，补充候选模型计费单价
--- 价格需自行核实 DashScope 官网，此处为占位值
--- ============================================================================
 INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m)
-VALUES ('qwen3.7-plus', 2.0, 5.0, 0.4)
-ON CONFLICT (model_name) DO UPDATE SET
-  input_price_per_m = EXCLUDED.input_price_per_m,
-  output_price_per_m = EXCLUDED.output_price_per_m,
-  cached_input_price_per_m = EXCLUDED.cached_input_price_per_m;
-
-INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m)
-VALUES ('qwen3-vl-plus', 2.0, 5.0, 0.4)
-ON CONFLICT (model_name) DO UPDATE SET
-  input_price_per_m = EXCLUDED.input_price_per_m,
-  output_price_per_m = EXCLUDED.output_price_per_m,
-  cached_input_price_per_m = EXCLUDED.cached_input_price_per_m;
-
-INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m)
-VALUES ('qwen-vl-max', 2.0, 5.0, 0.4)
-ON CONFLICT (model_name) DO UPDATE SET
-  input_price_per_m = EXCLUDED.input_price_per_m,
-  output_price_per_m = EXCLUDED.output_price_per_m,
-  cached_input_price_per_m = EXCLUDED.cached_input_price_per_m;
-
-INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m)
-VALUES ('qwen3-vl-flash', 0.3, 0.6, 0.06)
+VALUES ('qwen3-vl-flash', 0.6, 6, 0.012)    -- 按顶格 128K<Token≤256K 计算
 ON CONFLICT (model_name) DO UPDATE SET
   input_price_per_m = EXCLUDED.input_price_per_m,
   output_price_per_m = EXCLUDED.output_price_per_m,

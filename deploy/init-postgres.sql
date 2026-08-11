@@ -249,29 +249,9 @@ CREATE TABLE IF NOT EXISTS token_cost_prices (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- 初始数据：qwen-plus 模型单价
+-- 文本模型单价
 INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m)
 VALUES ('qwen-plus', 0.8, 2.0, 0.16)
-ON CONFLICT (model_name) DO NOTHING;
--- qwen-vl-plus 多模态模型（video-agent 使用），与 qwen-plus 同价位
-INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m)
-VALUES ('qwen-vl-plus', 0.8, 2.0, 0.16)
-ON CONFLICT (model_name) DO NOTHING;
--- qwen3.7-plus 多模态模型（video-agent 对比测试用）
-INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m)
-VALUES ('qwen3.7-plus', 2.0, 5.0, 0.4)
-ON CONFLICT (model_name) DO NOTHING;
--- qwen3-vl-plus 多模态模型（video-agent 对比测试用）
-INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m)
-VALUES ('qwen3-vl-plus', 2.0, 5.0, 0.4)
-ON CONFLICT (model_name) DO NOTHING;
--- qwen-vl-max 多模态模型（video-agent 对比测试用）
-INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m)
-VALUES ('qwen-vl-max', 2.0, 5.0, 0.4)
-ON CONFLICT (model_name) DO NOTHING;
--- qwen3-vl-flash 多模态模型（video-agent 对比测试用，最便宜）
-INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m)
-VALUES ('qwen3-vl-flash', 0.3, 0.6, 0.06)
 ON CONFLICT (model_name) DO NOTHING;
 INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m)
 VALUES ('deepseek-v4-flash', 1.0, 2.0, 0.02)
@@ -279,7 +259,22 @@ ON CONFLICT (model_name) DO NOTHING;
 INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m)
 VALUES ('deepseek-v4-pro', 3.0, 6.0, 0.025)
 ON CONFLICT (model_name) DO NOTHING;
--- 视频模型按秒计费单价（Phase 2.2）：单价按 provider 公开价填充，后续可由管理后台调整
+
+-- 视觉模型单价
+INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m)
+VALUES ('qwen3.7-plus', 2.0, 8.0, 0.4)
+ON CONFLICT (model_name) DO NOTHING;
+INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m)
+VALUES ('qwen-vl-max', 1.6, 4.0, 0.32)
+ON CONFLICT (model_name) DO NOTHING;
+INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m)
+VALUES ('qwen-vl-plus', 0.8, 2.0, 0.16)
+ON CONFLICT (model_name) DO NOTHING;
+INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m)
+VALUES ('qwen3-vl-flash',0.6, 6, 0.012)    -- 按顶格 128K<Token≤256K 计算
+ON CONFLICT (model_name) DO NOTHING;
+
+-- 视频模型按秒计费单价
 -- 万相 r2v 按 resolution 区分：720P=0.6, 1080P=1.0；price_per_second 留 720P 作 fallback
 INSERT INTO token_cost_prices (model_name, price_per_second, price_per_second_by_resolution)
 VALUES ('wan2.7-r2v', 0.6, '{"720P": 0.6, "1080P": 1.0}'::jsonb)
