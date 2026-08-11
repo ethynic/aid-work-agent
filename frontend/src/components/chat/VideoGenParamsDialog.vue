@@ -76,7 +76,7 @@
         </BaseSelect>
       </div>
 
-      <!-- 分辨率 -->
+      <!-- 分辨率（按 .env 中 VIDEO_GEN_PROVIDER 动态拉取；wanx=720P/1080P，minimax=768P/2K） -->
       <div>
         <label class="text-sm text-muted mb-1 block">分辨率</label>
         <BaseSelect
@@ -84,13 +84,10 @@
           @update:model-value="(v: string) => emit('update', 'resolution', v)"
           size="md"
         >
-          <option value="720P">720P</option>
-          <option value="1080P">1080P</option>
-          <option value="768P">768P</option>
-          <option value="2K">2K</option>
+          <option v-for="r in resolutionOptions" :key="r.value" :value="r.value">{{ r.label }}</option>
         </BaseSelect>
         <p class="text-xs text-muted mt-1">
-          支持的分辨率取决于当前会话视频模型（wan2.7-r2v: 720P/1080P；MiniMax-H3: 768P/2K）
+          支持的分辨率取决于当前配置的视频模型
         </p>
       </div>
 
@@ -121,9 +118,11 @@
 </template>
 
 <script setup lang="ts">
+import { ref, computed, watch } from 'vue'
 import BaseModal from '@/components/ui/BaseModal.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
+import { videoGenAPI, type ProviderOptions, type OptionItem } from '@/api/videoGen'
 import type { VideoGenParams } from '@/composables/useVideoGenParams'
 
 interface Props {
@@ -131,10 +130,41 @@ interface Props {
   draft: VideoGenParams
 }
 
-defineProps<Props>()
+const props = defineProps<Props>()
 const emit = defineEmits<{
   (e: 'close'): void
   (e: 'commit'): void
   (e: 'update', field: keyof VideoGenParams, value: any): void
 }>()
+
+// 拉取失败时的兜底（与 .env 默认 provider=wanx 对齐）
+const FALLBACK_RESOLUTIONS: OptionItem[] = [
+  { value: '720P', label: '720P' },
+  { value: '1080P', label: '1080P' },
+]
+
+const options = ref<ProviderOptions | null>(null)
+const resolutionOptions = computed<OptionItem[]>(
+  () => options.value?.resolutions ?? FALLBACK_RESOLUTIONS,
+)
+
+async function loadOptions() {
+  const res = await videoGenAPI.getOptions()
+  if (!res.success || !res.data) return
+  options.value = res.data
+  // draft.resolution 不在 provider 支持列表中（如默认 720P 但 provider=minimax）时，
+  // 自动纠正为 provider 默认分辨率，避免下拉框无匹配项
+  const validValues = res.data.resolutions.map(r => r.value)
+  if (!validValues.includes(props.draft.resolution) && res.data.default_resolution) {
+    emit('update', 'resolution', res.data.default_resolution)
+  }
+}
+
+// 弹框首次打开时拉一次 options（同一会话内 provider 不变，无需每次拉）
+watch(
+  () => props.open,
+  (isOpen) => {
+    if (isOpen && !options.value) loadOptions()
+  },
+)
 </script>
