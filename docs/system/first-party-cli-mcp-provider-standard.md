@@ -6,6 +6,8 @@
 >
 > 首个参考实现：[云端 Web Agent 调用本地 BOSS CLI](../design/recruiting/recruiting-cli-agent-integration-design.md)
 >
+> 第二个落地设计：[weixin-cli 第一方微信操作 CLI / MCP Provider](../design/weixin/weixin-cli-design.md)
+>
 > 关联客户端：[Agent 跨平台桌面客户端设计](desktop-agent-client-design.md)
 
 ## 1. 核心决策
@@ -214,7 +216,9 @@ Web Agent 使用 Local Tool Runtime 作为 Host；Desktop 未来可内嵌同一 
 8. aid-work-agent Desktop Host contract test（Desktop 开发时启用）；
 9. 至少一个外部 Host 真机 smoke test；对有商业价值的 Provider要求 Codex + 一个国内主流 Host。
 
-## 12. BOSS 参考实现约束
+## 12. 参考实现约束
+
+### 12.1 BOSS CLI
 
 BOSS CLI 是本规范首个 reference provider：
 
@@ -222,6 +226,12 @@ BOSS CLI 是本规范首个 reference provider：
 - 同时通过自有 Local Tool Runtime、Codex 和 WorkBuddy 调用；
 - 任何为自有 Web Agent 增加的功能不得改变 MCP schema；
 - 招聘 MVP 完成时必须把可复用 contract tests 抽到共享目录，后续第一方 CLI 从模板起步。
+
+### 12.2 weixin-cli
+
+`weixin-cli` 是第二个落地实现，用于验证规范能否跨业务复用。它必须直接复用共享 contract tests，
+不能从 BOSS CLI 复制出一套仅名称不同的 MCP 生命周期；微信自动化 driver 可以保留平台专属实现，
+但 operation、manifest、effect、取消、单飞和 Host 兼容必须遵守本规范。
 
 ## 13. 禁止事项
 
