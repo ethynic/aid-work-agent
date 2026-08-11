@@ -83,10 +83,11 @@
               </svg>
             </button>
 
-            <!-- 隐藏的文件输入（accept 由当前会话 subagent.upload_accept 决定） -->
+            <!-- 隐藏的文件输入（accept 由当前会话 subagent.upload_accept 决定，支持多选） -->
             <input
               ref="fileInputRef"
               type="file"
+              multiple
               class="hidden"
               :accept="currentUploadAccept"
               @change="handleFileChange"
@@ -255,8 +256,13 @@ function triggerFileInput() {
 function handleFileChange(event: Event) {
   const input = event.target as HTMLInputElement
   if (input.files && input.files.length > 0) {
-    const file = input.files[0]
-    emit('upload', file)
+    // 支持多选：逐个 emit，与粘贴多文件行为保持一致
+    for (let i = 0; i < input.files.length; i++) {
+      const file = input.files[i]
+      if (file && isAcceptedFile(file)) {
+        emit('upload', file)
+      }
+    }
     // 清空input以允许重复选择同一文件
     input.value = ''
   }
