@@ -212,7 +212,7 @@ flowchart LR
 >
 > **📖 验收测试指南（从环境准备到测试步骤）：[m07-acceptance-test-guide.md](m07-acceptance-test-guide.md)**
 >
-> **真机前准备**：① 应用 deploy/db_update.sql 的 2026-08-10 四表段落到目标库；② 构建 boss-resume-assistant 与 agent-tool-runtime；③ 重启后端使新路由与子智能体生效。
+> **真机前准备**：① 应用 deploy/db_update.sql 的 2026-08-10 四表段落到目标库；② 构建 boss-resume-assistant 与 agent-tool-runtime 并 `npm pack` 出两个 tgz（验收机器无代码库，`npm install -g` 后使用 `boss-cli` / `aid-runtime` 命令，出包步骤见验收指南 §2.2 末尾）；③ 重启后端使新路由与子智能体生效。
 >
 > **各阶段 CR/测试遗留 P2 待办汇总**（真机期间顺带处理或另行登记）：
 > - M0.2：errorMapping 裸 `'timeout'` 子串收窄为 CDP 专属文案；「未打开」marker 写前场景 message 后缀；describePanel 死代码；二次 Ctrl+C 强杀

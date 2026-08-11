@@ -63,7 +63,7 @@ agent-tool-runtime unpair                           # 调云端撤销？（MVP�
     execution_target: 'local_required',
   }
   ```
-- boss CLI 入口解析（config.bossCliEntry）：默认 `../boss-resume-assistant/dist/src/cli/index.js`（相对 runtime 包目录，开发态），可被 config.json 覆盖为绝对路径（本地管理员配置，非云端下发）。spawn 参数固定：`node <entry> mcp --stdio`，**不用 shell**。
+- boss CLI 入口解析（config.bossCliEntry）：默认依次探测 ① 包内捆绑依赖 `node_modules/boss-resume-assistant/dist/src/cli/index.js`（npm 全局安装形态，`boss-resume-assistant` 作为 runtime 的 bundledDependency 打进 tgz）② 兄弟目录 `../boss-resume-assistant/dist/src/cli/index.js`（开发态 fallback），可被 config.json 覆盖为绝对路径（本地管理员配置，非云端下发）。spawn 参数固定：`node <entry> mcp --stdio`，**不用 shell**。
 - MCP client：官方 SDK `@modelcontextprotocol/sdk` Client + StdioClientTransport。
 - 单飞：进程级同时只执行一个 invocation；云端协议本身一设备一任务，本地仍兜底。
 - manifest 校验：claim 到的 tool_name 必须 ∈ manifest.tools，否则直接回 result（success=false, code=TOOL_NOT_ALLOWED 不对——用 `INVALID_ARGUMENT`... 不对，用云端约定：回 success=false, code='INTERNAL_ERROR' 不合适。**决策**：本地校验失败回 `success=false, code='TOOL_NOT_ALLOWED', retryable=false`，与 M0.3 云端毒消息处理码一致）。

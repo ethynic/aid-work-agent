@@ -56,11 +56,17 @@ export function saveConfig(config: RuntimeConfig): void {
   writeFileSync(configPath(), JSON.stringify(config, null, 2), 'utf8')
 }
 
-/** 默认 boss CLI 入口：相对 runtime 包目录的 ../boss-resume-assistant/dist/src/cli/index.js */
+/**
+ * 默认 boss CLI 入口。优先级：
+ * 1. 随包捆绑的依赖：node_modules/boss-resume-assistant（npm 全局安装 tgz 的场景）
+ * 2. 开发仓库兄弟目录：../boss-resume-assistant（源码构建直接跑的场景）
+ */
 export function defaultBossCliEntry(): string {
   const here = path.dirname(fileURLToPath(import.meta.url))
   // dist/src/config.js → 包根是上两级
   const pkgRoot = path.resolve(here, '..', '..')
+  const bundled = path.resolve(pkgRoot, 'node_modules', 'boss-resume-assistant', 'dist', 'src', 'cli', 'index.js')
+  if (existsSync(bundled)) return bundled
   return path.resolve(pkgRoot, '..', 'boss-resume-assistant', 'dist', 'src', 'cli', 'index.js')
 }
 

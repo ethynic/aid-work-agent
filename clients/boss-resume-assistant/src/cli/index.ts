@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /**
  * BOSS 招聘操作 CLI 入口。
  *

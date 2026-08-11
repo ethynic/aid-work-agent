@@ -1,7 +1,6 @@
 {
   "name": "boss-resume-assistant",
   "version": "0.1.0",
-  "private": true,
   "description": "BOSS 招聘操作 CLI（7 个真机验证操作 + MCP）",
   "type": "module",
   "scripts": {
@@ -9,7 +8,8 @@
     "build:main": "tsc -p tsconfig.main.json",
     "typecheck": "tsc --noEmit -p tsconfig.main.json",
     "test": "npm run build:main && node scripts/run-tests.mjs",
-    "cli": "npm run build:main && node dist/src/cli/index.js"
+    "cli": "npm run build:main && node dist/src/cli/index.js",
+    "prepack": "npm run build:main"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.30.0",
@@ -20,5 +20,13 @@
     "@types/node": "^24.0.0",
     "@types/ws": "^8.18.1",
     "typescript": "^5.9.0"
-  }
+  },
+  "bin": {
+    "boss-cli": "dist/src/cli/index.js"
+  },
+  "files": [
+    "dist",
+    "scripts"
+  ],
+  "private": "true"
 }

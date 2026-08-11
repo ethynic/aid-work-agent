@@ -9,14 +9,26 @@
     "build:main": "tsc -p tsconfig.main.json",
     "typecheck": "tsc --noEmit -p tsconfig.main.json",
     "test": "npm run build:main && node scripts/run-tests.mjs",
-    "cli": "npm run build:main && node dist/src/cli.js"
+    "cli": "npm run build:main && node dist/src/cli.js",
+    "prepack": "npm --prefix ../boss-resume-assistant run build:main && npm run build:main && npm install --install-links",
+    "postpack": "npm install"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.30.0",
+    "boss-resume-assistant": "file:../boss-resume-assistant",
     "zod": "4.4.3"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
     "typescript": "^5.9.0"
-  }
+  },
+  "bin": {
+    "aid-runtime": "dist/src/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "bundledDependencies": [
+    "boss-resume-assistant"
+  ]
 }

@@ -119,48 +119,58 @@ curl -s https://agent2.aidingyi.cn/api/local-tools/devices | head -c 200
 **前置检查**（都满足才继续）：
 - [ ] Windows 10/11，当前是交互登录会话（不是远程桌面最小化状态）
 - [ ] 已安装 Node.js 22+（`node -v` 验证）
-- [ ] 日常使用的 Chrome（里面已登录**受控 BOSS 测试账号**）
+- [ ] Chrome（调试专用 profile 里已登录**受控 BOSS 测试账号**，见下方 Chrome 启动说明）
+- [ ] 拿到两个安装包：`boss-resume-assistant-0.1.0.tgz`、`agent-tool-runtime-0.1.0.tgz`（开发方提供，制作方式见本节末尾「附：开发侧出包」）
+
+> **验收机器不需要代码库**。两个 CLI 以 npm 全局包形式安装，安装后命令为 `boss-cli` 和 `aid-runtime`。
 
 ```powershell
-# 1. 拉最新代码（本机仓库）
-cd C:\repos\aid-work-agent
-git pull
+# 1. 全局安装（在 tgz 所在目录执行；依赖已全部打进包里，安装过程不需要访问 npm registry）
+npm install -g .\boss-resume-assistant-0.1.0.tgz .\agent-tool-runtime-0.1.0.tgz
 
-# 2. 构建 BOSS CLI
-cd clients\boss-resume-assistant
-npm install
-npm run build
+# 2. 冒烟：BOSS CLI 版本信息（应输出 JSON，含 provider_id 和 schema_digest）
+boss-cli version --json
 
-# 3. 构建 Local Tool Runtime
-cd ..\agent-tool-runtime
-npm install
-npm run build
-
-# 4. 冒烟：BOSS CLI 版本信息（应输出 JSON，含 provider_id 和 schema_digest）
-node ..\boss-resume-assistant\dist\src\cli\index.js version --json
-
-# 5. 冒烟：Runtime 环境自检（此时未配对，报「配置不存在」等是预期的；
-#    重点看 DPAPI、桌面检测、boss CLI 入口三项是否为 OK）
-node dist\src\cli.js doctor
+# 3. 冒烟：Runtime 环境自检（此时未配对，报「配置不存在」等是预期的；
+#    重点看 DPAPI、桌面检测、boss CLI 入口三项是否为 OK；
+#    boss CLI 入口应指向 npm 全局目录下的 node_modules\agent-tool-runtime\node_modules\boss-resume-assistant\...）
+aid-runtime doctor
 ```
 
 **启动带调试端口的 Chrome**（每次验收前都要做）：
 
-```powershell
-# 1. 先彻底关闭所有 Chrome 窗口（任务栏右键退出，确认托盘也没有）
-# 2. 用你日常登录 BOSS 的那个 Chrome 带调试端口启动（路径按你机器实际调整）
-& "C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222
+> ⚠️ **Chrome 136+ 的硬性限制**：默认用户数据目录下 `--remote-debugging-port` 会被**静默忽略**（进程命令行里有参数、但端口不开）。必须指定一个**非默认的 `--user-data-dir`**，用独立的「调试专用 Chrome」profile，首次启动后在里面登录一次受控 BOSS 测试账号（之后保持登录态）。这是**全新独立实例，日常 Chrome 无需关闭**、两者互不干扰。仅当要重启**调试 profile 本身**时，才需要先关掉它。
 
-# 3. 在打开的 Chrome 里访问 https://www.zhipin.com 确认是登录状态，打开「推荐牛人」页
+```powershell
+# 1. 用调试专用 profile 带调试端口启动（独立实例，不影响正在使用的日常 Chrome；路径按你机器实际调整）
+& "C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222 --user-data-dir="C:\chrome-debug-profile"
+
+# 2. 在打开的 Chrome 里访问 https://www.zhipin.com 确认是登录状态（首次需登录受控测试账号），打开「推荐牛人」页
+# 3. 可选验证：curl http://127.0.0.1:9222/json/version 应返回 JSON；无返回说明调试 profile 有残留进程（关掉它再启）或参数被忽略
 ```
 
 ```powershell
 # 4. 验证 BOSS CLI 能 attach（应输出逐项检查结果全部 ✅）
-cd C:\repos\aid-work-agent\clients\boss-resume-assistant
-node dist\src\cli\index.js doctor
+boss-cli doctor
 ```
 
-✅ 通过标准：两个构建都 0 错误；`version --json` 输出 JSON；BOSS CLI `doctor` 全部 ✅（如果提示未登录/未找到 BOSS 页面，回 Chrome 确认登录态和页面）。
+✅ 通过标准：`npm install -g` 无报错；`version --json` 输出 JSON；BOSS CLI `doctor` 全部 ✅（如果提示未登录/未找到 BOSS 页面，回 Chrome 确认登录态和页面）。
+
+**附：开发侧出包**（在代码库中执行，验收人员跳过）：
+
+```powershell
+cd clients\boss-resume-assistant
+npm pack    # 产出 boss-resume-assistant-0.1.0.tgz
+cd ..\agent-tool-runtime
+npm pack    # 产出 agent-tool-runtime-0.1.0.tgz（prepack 自动构建 boss 并落实体依赖目录打包；postpack 自动恢复符号链接，不影响开发态）
+
+# 出包后必做：隔离目录安装冒烟（只装 runtime tgz 即可，boss 已捆绑在内）。
+# files 白名单漏文件（如 scripts/win-click.ps1）只有在这步才会暴露，仓库内跑测不出来。
+mkdir C:\tmp\pack-smoke; npm install -g --prefix C:\tmp\pack-smoke .\agent-tool-runtime-0.1.0.tgz
+C:\tmp\pack-smoke\aid-runtime.cmd doctor   # boss CLI 入口 / win-click.ps1 等检查应无「未找到」类 FAIL
+```
+
+> 仓库内开发态仍可 `node dist\src\cli.js ...` 直接跑（boss CLI 入口解析：包内捆绑的 node_modules 优先，兄弟目录源码作为 fallback）。
 
 ---
 
@@ -176,9 +186,9 @@ node dist\src\cli\index.js doctor
 |---|---|---|
 | 1 | 左侧菜单栏**底部点用户名** → 弹出菜单选「本地工具」 | 打开本地工具页，有三步引导说明 |
 | 2 | 点「生成配对码」 | 显示 8 位配对码 + 5 分钟倒计时（**只显示这一次，先复制好**） |
-| 3 | 本机 PowerShell 执行（把 `AB12CD34` 换成真实配对码）：<br>`cd C:\repos\aid-work-agent\clients\agent-tool-runtime`<br>`node dist\src\cli.js pair --code AB12CD34 --server https://agent2.aidingyi.cn --name 我的测试机` | 输出配对成功、设备 ID |
+| 3 | 本机 PowerShell 执行（把 `AB12CD34` 换成真实配对码）：<br>`aid-runtime pair --code AB12CD34 --server https://agent2.aidingyi.cn --name 我的测试机` | 输出配对成功、设备 ID |
 | 4 | 回 Web 页刷新设备列表 | 看到「我的测试机」，状态列显示（此时还未 start，可能显示离线） |
-| 5 | 本机执行 `node dist\src\cli.js start` | 开始心跳循环，终端持续输出心跳日志，**这个窗口保持开着** |
+| 5 | 本机执行 `aid-runtime start` | 开始心跳循环，终端持续输出心跳日志，**这个窗口保持开着** |
 | 6 | 回 Web 页刷新，点该设备的「选定」 | 状态变「在线」+「使用中」badge |
 
 ✅ 通过标准：设备列表显示在线 + 使用中；Runtime 终端无报错持续心跳。
@@ -252,7 +262,7 @@ node dist\src\cli\index.js doctor
 |---|---|---|
 | 1 | Web 设备列表点「解绑」并确认 | 设备从列表消失/变已撤销 |
 | 2 | Runtime 终端观察 | 心跳收到 401 后停止并提示设备已撤销 |
-| 3 | 本机执行 `node dist\src\cli.js unpair` | 本地凭证清除 |
+| 3 | 本机执行 `aid-runtime unpair` | 本地凭证清除 |
 
 ---
 
@@ -264,8 +274,9 @@ node dist\src\cli\index.js doctor
 ### T8 Codex 直连
 
 ```powershell
-# 1. 注册本地 MCP Provider（路径按实际调整）
-codex mcp add boss-recruiting -- node "C:\repos\aid-work-agent\clients\boss-resume-assistant\dist\src\cli\index.js" mcp --stdio
+# 1. 注册本地 MCP Provider（boss-cli 已全局安装；先取全局 npm 根目录下的入口绝对路径）
+$entry = "$(npm root -g)\boss-resume-assistant\dist\src\cli\index.js"
+codex mcp add boss-recruiting -- node $entry mcp --stdio
 
 # 2. 确认工具被发现（应列出 7 个 boss_* 工具）
 codex mcp list
@@ -279,7 +290,7 @@ codex mcp list
 
 ### T9 WorkBuddy 直连
 
-在 WorkBuddy 的 `mcp.json` 添加（路径按实际调整）：
+在 WorkBuddy 的 `mcp.json` 添加（路径用 `npm root -g` 的实际输出拼接）：
 
 ```json
 {
@@ -287,7 +298,7 @@ codex mcp list
     "boss-recruiting": {
       "type": "stdio",
       "command": "node",
-      "args": ["C:/repos/aid-work-agent/clients/boss-resume-assistant/dist/src/cli/index.js", "mcp", "--stdio"]
+      "args": ["C:/Users/<用户名>/AppData/Roaming/npm/node_modules/boss-resume-assistant/dist/src/cli/index.js", "mcp", "--stdio"]
     }
   }
 }
@@ -324,6 +335,8 @@ codex mcp list
 
 | 现象 | 可能原因 | 处理 |
 |---|---|---|
+| `aid-runtime` / `boss-cli` 提示「不是内部或外部命令」 | 全局安装未成功 / npm 全局 bin 目录不在 PATH | 重跑 §2.2 步骤 1；`npm prefix -g` 看全局目录是否在 PATH |
+| pair/start 报「网络请求失败： fetch failed」 | 本机代理软件（Clash 等）拦截或失效；请求根本没到服务器 | 退出代理或对 `*.aidingyi.cn` 加 DIRECT 规则后重试；检查 PowerShell 里没有失效的 `HTTP(S)_PROXY` 变量 |
 | Web「本地工具」页报错 | 服务器没建 4 张表 | 回 §2.1 步骤 3 |
 | 配对码报错 | 超过 5 分钟 / 已用过 | 重新生成（一码一次） |
 | 设备一直「离线」 | Runtime 没 start / server 地址不对 | 检查 `start` 窗口日志；`status` 看本地配置 |
@@ -331,6 +344,6 @@ codex mcp list
 | 智能体回复但没有本机动作 | Runtime 窗口有报错 | 看 Runtime 终端输出（日志不含敏感信息，可整段保存反馈） |
 | 动作做到一半停了 | 页面结构变化 / 风控弹层 | 属于 fail-loud 设计，看回复里的原因；**不要重复发同一指令**，先人工看页面 |
 | 回复「实际效果未知」 | 写动作发出但校验失败 | 人工去 BOSS 页面核对真实状态，**禁止让智能体重试** |
-| Chrome 完全没被操作 | 调试端口没起 | 关干净 Chrome 重新带 `--remote-debugging-port=9222` 启动 |
+| Chrome 完全没被操作 / doctor 报 CDP 端点不可连 | 调试端口没起：Chrome 136+ 用了默认 profile（静默忽略调试端口）；或调试 profile 实例残留导致新参数被忽略 | 按 §2.2 用 `--user-data-dir` 启独立调试实例（日常 Chrome 不用关）；`curl http://127.0.0.1:9222/json/version` 验证 |
 
 **收集反馈时带上**：Runtime 终端最后 20 行、Web 端智能体完整回复、大概时间点。服务端日志在服务器 `docker logs aid-agent-api2`（可选，给开发用）。

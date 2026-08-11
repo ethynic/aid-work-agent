@@ -11,3 +11,4 @@ build/Release/*.node
 # CLI 数据目录（DB + 截图）与导出产物不提交
 data/
 exports/
+*.tgz

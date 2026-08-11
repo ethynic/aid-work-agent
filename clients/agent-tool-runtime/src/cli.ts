@@ -1,12 +1,13 @@
+#!/usr/bin/env node
 /**
  * agent-tool-runtime CLI 入口。
  *
  * 用法：
- *   node dist/src/cli.js pair --code <8位配对码> [--server https://...] [--name 设备名]
- *   node dist/src/cli.js start [--server https://...]
- *   node dist/src/cli.js status
- *   node dist/src/cli.js doctor
- *   node dist/src/cli.js unpair
+ *   aid-runtime pair --code <8位配对码> [--server https://...] [--name 设备名]
+ *   aid-runtime start [--server https://...]
+ *   aid-runtime status
+ *   aid-runtime doctor
+ *   aid-runtime unpair
  *
  * 约束：不打印 token/claim_token；pair 后 config.json 不含 token（DPAPI 密文存 credentials.bin）。
  */
