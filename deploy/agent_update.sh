@@ -18,8 +18,10 @@ git config --global --add safe.directory /var/www/agent 2>/dev/null || true
 echo "[1] 拉取最新代码..."
 cd "/var/www/agent"
 OLD_HEAD=$(git rev-parse HEAD)
+echo "更新前版本: $(git log -1 --format='%cd %s' --date=format:'%Y-%m-%d %H:%M:%S')"
 git fetch --all
 git reset --hard origin/master
+echo "更新后版本: $(git log -1 --format='%cd %s' --date=format:'%Y-%m-%d %H:%M:%S')"
 NEW_HEAD=$(git rev-parse HEAD)
 #sudo chmod -R 777 .
 find . -type d -name "__pycache__" -exec chmod -R 777 {} + 2>/dev/null || true
