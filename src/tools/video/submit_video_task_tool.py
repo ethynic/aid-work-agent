@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional
 from loguru import logger
 from pydantic import BaseModel, Field
 
+from src.core.temp_logger import tlog
 from src.tools.base import BaseTool
 
 
@@ -57,6 +58,14 @@ class SubmitVideoTaskTool(BaseTool):
             f"[submit_video_task] 收到视频创作请求: user_input={user_input[:50]}, "
             f"images={len(image_file_ids or [])}, video_params={video_params}, user={user_id}"
         )
+        tlog(
+            "视频创作",
+            "工具收到请求 user_input={u}, images={img}, session={sid}, video_params={vp}",
+            u=user_input[:80],
+            img=len(image_file_ids or []),
+            sid=session_id,
+            vp=video_params,
+        )
 
         if not user_input.strip():
             return {
@@ -87,9 +96,18 @@ class SubmitVideoTaskTool(BaseTool):
             )
             # 附加 success 标记，便于 LLM 读取
             result["success"] = result.get("error") is None
+            tlog(
+                "视频创作",
+                "工具返回 mode={mode}, cards={n}, waiting={w}, error={err}",
+                mode=result.get("mode"),
+                n=len(result.get("cards") or []),
+                w=result.get("waiting"),
+                err=result.get("error"),
+            )
             return result
         except Exception as e:
             logger.error(f"[submit_video_task] 视频创作失败: {e}", exc_info=True)
+            tlog("视频创作", "工具执行异常: {err}", err=repr(e), level="ERROR")
             return {
                 "success": False,
                 "error": "视频创作失败，请稍后重试",

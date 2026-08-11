@@ -24,6 +24,7 @@ from typing import Any, Dict, List, Optional
 from loguru import logger
 
 from src.config.settings import settings
+from src.core.temp_logger import tlog
 from src.db.database import get_db_connection
 from src.db.models import ChatRecordDB, SessionDB, TokenCostPriceDB
 from src.reports.work_outcome_db import WorkOutcomeDB
@@ -203,6 +204,15 @@ class VideoChatService:
         error: Optional[str] = None
         waiting = False
 
+        tlog(
+            "视频创作",
+            "handle_user_message 进入 session={sid}, mode={mode}, images={img}, user_input={u}",
+            sid=session_id,
+            mode=params.mode,
+            img=image_count,
+            u=(user_input or "")[:80],
+        )
+
         try:
             if params.mode == "refine":
                 # 精修模式：生成 1 段提示词，等用户确认后再提交视频模型
@@ -254,6 +264,15 @@ class VideoChatService:
             logger.error(f"[VideoChatService] handle_user_message 失败: {e}", exc_info=True)
             error = str(e)
 
+        tlog(
+            "视频创作",
+            "handle_user_message 返回 mode={mode}, cards={n}, waiting={w}, has_draft={d}, error={err}",
+            mode=params.mode,
+            n=len(cards),
+            w=waiting,
+            d=bool(prompt_draft),
+            err=error,
+        )
         return {
             "mode": params.mode,
             "cards": [asdict(c) for c in cards],
@@ -356,10 +375,26 @@ class VideoChatService:
                 f"[VideoChatService] 视频生成已提交: card_id={card_id}, "
                 f"task_id={submit_result.task_id}, status={card.provider_status}"
             )
+            tlog(
+                "视频创作",
+                "视频生成已提交 card={cid}, task={tid}, status={st}, credit={c}, duration={d}",
+                cid=card_id,
+                tid=submit_result.task_id,
+                st=card.provider_status,
+                c=expected_credit,
+                d=params.duration_sec,
+            )
         except Exception as e:
             logger.error(f"[VideoChatService] 视频生成提交失败: card_id={card_id}, error={e}")
             card.provider_status = "FAILED"
             card.error = str(e)
+            tlog(
+                "视频创作",
+                "视频生成提交失败 card={cid}, error={err}",
+                cid=card_id,
+                err=repr(e),
+                level="ERROR",
+            )
             # 失败退还预扣
             if record_id:
                 self._update_chat_record_status(record_id, STATUS_REFUNDED, error_message=str(e))
