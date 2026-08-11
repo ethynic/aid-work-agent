@@ -4,6 +4,7 @@ OCR工具
 实现图片和PDF文字识别功能，支持PaddleOCR文档解析
 """
 
+import asyncio
 import base64
 import os
 from typing import Any, Dict, List, Optional
@@ -361,8 +362,11 @@ class PaddleOCRDocParsingTool(BaseTool):
                 "error": "请提供文件URL或本地路径",
             }
 
-        return paddleocr_doc_parsing(
+        # 同步函数 paddleocr_doc_parsing 内部用 httpx.Client 同步请求远端 API（单次可达 60s），
+        # 直接调用会阻塞事件循环导致 Gunicorn worker 心跳超时被杀。必须用 asyncio.to_thread 包裹。
+        return await asyncio.to_thread(
+            paddleocr_doc_parsing,
             file_path=file_path if file_path else None,
             file_url=file_url if file_url else None,
-            file_type=file_type
+            file_type=file_type,
         )

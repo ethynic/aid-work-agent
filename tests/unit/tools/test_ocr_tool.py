@@ -172,6 +172,82 @@ class TestPaddleOCRToolExecute:
         assert len(tool.description) <= 80
 
 
+class TestPaddleOCRToolExecuteAsyncWrapped:
+    """execute() 必须用 asyncio.to_thread 包裹同步函数，避免阻塞事件循环。
+
+    回归场景：原本 `return paddleocr_doc_parsing(...)` 直接同步调用，
+    导致 Gunicorn worker 因事件循环阻塞被 SIGABRT 强杀。
+    """
+
+    @pytest.mark.asyncio
+    @patch("src.tools.ocr.ocr_tool._make_paddleocr_request")
+    @patch("src.tools.ocr.ocr_tool._get_paddleocr_config",
+           return_value=("https://x.paddleocr.com/layout-parsing", "tok"))
+    @patch("src.tools.ocr.ocr_tool._load_file_as_base64", return_value="b64")
+    async def test_execute_uses_to_thread(self, _b64, _cfg, mock_req):
+        """execute() 必须通过 asyncio.to_thread 调用同步函数 paddleocr_doc_parsing。"""
+        import asyncio
+        from unittest.mock import AsyncMock
+        from src.tools.ocr.ocr_tool import PaddleOCRDocParsingTool, paddleocr_doc_parsing
+
+        mock_req.return_value = _fake_api_result(["page one"])
+        tool = PaddleOCRDocParsingTool()
+
+        # 用 AsyncMock 替换 asyncio.to_thread，验证被调用且第一个参数是同步函数对象
+        with patch("asyncio.to_thread", new=AsyncMock(return_value={"success": True})) as mock_to_thread:
+            await tool.execute(file_path="/fake/a.jpg", file_type=1)
+            mock_to_thread.assert_awaited_once()
+            # 第一个位置参数必须是同步函数 paddleocr_doc_parsing 本身（不加括号调用）
+            assert mock_to_thread.call_args.args[0] is paddleocr_doc_parsing
+
+    @pytest.mark.asyncio
+    @patch("src.tools.ocr.ocr_tool._make_paddleocr_request")
+    @patch("src.tools.ocr.ocr_tool._get_paddleocr_config",
+           return_value=("https://x.paddleocr.com/layout-parsing", "tok"))
+    @patch("src.tools.ocr.ocr_tool._load_file_as_base64", return_value="b64")
+    async def test_execute_does_not_block_event_loop(self, _b64, _cfg, mock_req):
+        """execute() 期间事件循环必须保持可调度：并发 quick_task 应在同步阻塞结束前完成。
+
+        若 to_thread 生效：paddleocr_doc_parsing 在另一线程跑 0.3s，事件循环同时调度
+        quick_task（asyncio.sleep(0.1)），quick_task 在 ~0.1s 完成。
+        若 to_thread 未生效（假异步）：paddleocr_doc_parsing 阻塞事件循环 0.3s，期间
+        quick_task 的 asyncio.sleep 无法调度，quick_task 被推迟到 ~0.4s 才完成。
+        """
+        import asyncio
+        import time
+        from src.tools.ocr.ocr_tool import PaddleOCRDocParsingTool
+
+        # 让同步的 _make_paddleocr_request 阻塞 0.3s（模拟远端 API 耗时）
+        def slow_request(*args, **kwargs):
+            time.sleep(0.3)
+            return _fake_api_result(["page"])
+
+        mock_req.side_effect = slow_request
+        tool = PaddleOCRDocParsingTool()
+
+        quick_done_at = {}
+
+        async def quick_task():
+            await asyncio.sleep(0.1)
+            quick_done_at["t"] = time.monotonic()
+            return "done"
+
+        start = time.monotonic()
+        await asyncio.gather(
+            tool.execute(file_path="/fake/a.jpg", file_type=1),
+            quick_task(),
+        )
+
+        # quick_task 完成时刻相对起点应在 ~0.1s；如果事件循环被阻塞 0.3s，
+        # quick_task 会等到 ~0.3s 后才开始调度 sleep(0.1)，完成时刻接近 0.4s。
+        quick_elapsed = quick_done_at["t"] - start
+        assert quick_elapsed < 0.25, (
+            f"事件循环被阻塞，quick_task 在 {quick_elapsed:.3f}s 才完成（应 ~0.1s）"
+        )
+
+
+
+
 class TestPdfToMdConsumesOCRFields:
     """回归：pdf_to_md._ocr_fallback 依赖 full_text + texts，改造后仍可用。"""
 

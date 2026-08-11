@@ -18,9 +18,15 @@ triggers:
     - 生成视频
     - 做个视频
 
-# 工具配置：继承主智能体工具集
+# 多模态 LLM：直接看图，跳过 OCR
+llm_provider: qwen
+qwen_model_code: qwen-vl-plus
+
+# 工具配置：继承主智能体工具集，但排除 OCR（已用多模态 LLM 直接看图）
 tools:
   inherit: true
+  excluded:
+    - paddleocr_doc_parsing
 
 # 技能访问：第一阶段无专属技能
 skills:
@@ -96,3 +102,4 @@ context:
 5. 视频生成等待期间，发送"生成视频，预计需要 3 ~ 5 分钟"提示文本
 6. 不直接调用第三方平台 HTTP 发布接口（MVP 到下载为止）
 7. 未实现的能力，诚实告知用户「该功能正在开发中」
+8. **多模态视觉能力**：你可以直接看到用户上传的产品图/模特图（qwen-vl-plus 多模态 LLM），图片会以多模态形式随任务一起传入。**禁止调用 paddleocr_doc_parsing 工具**，无需通过 OCR 提取文字。基于图片的视觉特征（颜色/材质/构图/风格/产品细节）生成提示词，不要只依赖图片中的文字信息。

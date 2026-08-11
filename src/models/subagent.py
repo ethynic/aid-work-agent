@@ -116,6 +116,17 @@ class SubagentConfig(BaseModel):
 
         # 兼容前端使用的 "additional" 和原始的 "allowed" 两种字段名
         return self.tools.get("allowed", []) or self.tools.get("additional", [])
+
+    def get_excluded_tools(self) -> List[str]:
+        """获取需要从工具集中排除的工具名列表（黑名单）。
+
+        与 inherit/allowed 组合使用：先按 inherit/allowed 确定工具集，再 pop 排除项。
+        典型场景：video-agent inherit=true 但排除 paddleocr_doc_parsing（改用多模态 LLM 看图）。
+        """
+        if not self.tools:
+            return []
+        return self.tools.get("excluded", []) or []
+
     
     def get_allowed_skills(self) -> List[str]:
         """获取允许使用的技能列表"""

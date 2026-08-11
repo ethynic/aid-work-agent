@@ -298,3 +298,47 @@ CREATE TABLE IF NOT EXISTS local_tool_events (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE (invocation_id, seq)
 );
+
+-- ============================================================================
+-- 2026-08-11 video-agent 切 qwen-vl-plus 多模态模型，补充计费单价
+-- qwen-vl-plus 在 DashScope 与 qwen-plus 同价位：输入 0.8 / 输出 2.0 / 缓存 0.16 元/百万 tokens
+-- 不补则 billing.py 静默返回 0（免费调用），影响租户计费准确性
+-- ============================================================================
+INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m)
+VALUES ('qwen-vl-plus', 0.8, 2.0, 0.16)
+ON CONFLICT (model_name) DO UPDATE SET
+  input_price_per_m = EXCLUDED.input_price_per_m,
+  output_price_per_m = EXCLUDED.output_price_per_m,
+  cached_input_price_per_m = EXCLUDED.cached_input_price_per_m;
+
+-- ============================================================================
+-- 2026-08-11 video-agent 多模态模型对比测试，补充候选模型计费单价
+-- 价格需自行核实 DashScope 官网，此处为占位值
+-- ============================================================================
+INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m)
+VALUES ('qwen3.7-plus', 2.0, 5.0, 0.4)
+ON CONFLICT (model_name) DO UPDATE SET
+  input_price_per_m = EXCLUDED.input_price_per_m,
+  output_price_per_m = EXCLUDED.output_price_per_m,
+  cached_input_price_per_m = EXCLUDED.cached_input_price_per_m;
+
+INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m)
+VALUES ('qwen3-vl-plus', 2.0, 5.0, 0.4)
+ON CONFLICT (model_name) DO UPDATE SET
+  input_price_per_m = EXCLUDED.input_price_per_m,
+  output_price_per_m = EXCLUDED.output_price_per_m,
+  cached_input_price_per_m = EXCLUDED.cached_input_price_per_m;
+
+INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m)
+VALUES ('qwen-vl-max', 2.0, 5.0, 0.4)
+ON CONFLICT (model_name) DO UPDATE SET
+  input_price_per_m = EXCLUDED.input_price_per_m,
+  output_price_per_m = EXCLUDED.output_price_per_m,
+  cached_input_price_per_m = EXCLUDED.cached_input_price_per_m;
+
+INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m)
+VALUES ('qwen3-vl-flash', 0.3, 0.6, 0.06)
+ON CONFLICT (model_name) DO UPDATE SET
+  input_price_per_m = EXCLUDED.input_price_per_m,
+  output_price_per_m = EXCLUDED.output_price_per_m,
+  cached_input_price_per_m = EXCLUDED.cached_input_price_per_m;

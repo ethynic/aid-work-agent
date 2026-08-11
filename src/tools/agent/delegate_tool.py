@@ -7,11 +7,29 @@ DelegateToSubagentTool - 委派任务给子智能体
 """
 
 import uuid
-from typing import Dict, Any
+from typing import Any, Dict, List, Optional
 
 from loguru import logger
+from pydantic import BaseModel, Field
 
 from src.tools.base import BaseTool
+
+
+class DelegateToSubagentInput(BaseModel):
+    """delegate_to_subagent 参数 schema，暴露给 LLM 显式感知字段。"""
+
+    subagent_name: str = Field(..., description="子智能体名称")
+    task_description: str = Field(..., description="任务描述，需包含完整上下文（用户需求、约束、期望产出）")
+    image_paths: Optional[List[str]] = Field(
+        None,
+        description=(
+            "用户上传图片的完整路径列表，仅当任务含图片且子智能体支持视觉（如 video-agent）时传入。"
+            "不要把图片路径只写在 task_description 里，必须用此参数显式传递。"
+        ),
+    )
+    context_needed: Optional[List[str]] = Field(None, description="上下文关键词")
+    session_id: Optional[str] = Field(None, description="会话ID")
+    user_id: Optional[str] = Field(None, description="用户ID")
 
 
 class DelegateToSubagentTool(BaseTool):
@@ -22,9 +40,12 @@ class DelegateToSubagentTool(BaseTool):
         "将任务委派给专业的子智能体执行。"
         "⚠️ 如果任务只需要委派给一个子智能体就能完成，直接调用此工具，不需要先 create_plan。"
         "task_description 必须包含完整信息（包括用户上传文件的完整路径）。"
+        "若任务含用户上传图片且子智能体支持视觉（如 video-agent），必须用 image_paths 传完整路径列表，"
+        "不要把图片路径只写在 task_description 里。"
     )
     display_name = "调用子智能体"
     category = "agent"
+    InputModel = DelegateToSubagentInput
 
     def __init__(self, subagent_registry, subagent_executor):
         """
@@ -54,6 +75,7 @@ class DelegateToSubagentTool(BaseTool):
         Args:
             subagent_name: 子智能体名称
             task_description: 任务描述
+            image_paths: 用户上传图片的完整路径列表（可选，传给多模态子智能体如 video-agent）
             context_needed: 上下文关键词（可选）
             session_id: 会话ID（可选）
             user_id: 用户ID（可选，传递给子智能体用于读取邮箱配置等）
@@ -63,6 +85,7 @@ class DelegateToSubagentTool(BaseTool):
         """
         subagent_name = kwargs.get("subagent_name", "")
         task_description = kwargs.get("task_description", "")
+        image_paths = kwargs.get("image_paths")
         context_needed = kwargs.get("context_needed")
         session_id = kwargs.get("session_id")
         user_id = kwargs.get("user_id")
@@ -95,6 +118,15 @@ class DelegateToSubagentTool(BaseTool):
             # Generate task ID
             task_id = f"delegate_{uuid.uuid4().hex[:8]}"
 
+            # 规范化 image_paths：去重 + 过滤空值
+            if image_paths:
+                image_paths = [p for p in image_paths if p]
+                if not image_paths:
+                    image_paths = None
+
+            if image_paths:
+                logger.info(f"[DELEGATE] image_paths passed to subagent '{subagent_name}': {image_paths}")
+
             # Delegate to subagent
             response = await self.subagent_executor.delegate(
                 task_id=task_id,
@@ -102,6 +134,7 @@ class DelegateToSubagentTool(BaseTool):
                 task_description=task_description,
                 session_id=session_id or "default",
                 user_id=user_id,
+                image_paths=image_paths,
             )
 
             if not response.success:

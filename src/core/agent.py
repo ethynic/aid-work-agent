@@ -530,15 +530,24 @@ class Agent:
         """根据子智能体配置过滤可用工具"""
         if self.mode == AgentMode.MASTER or not self.subagent_config:
             return
-        
+
         # 获取允许的工具列表
         allowed_tools = self.subagent_config.get_allowed_tools()
-        
-        # 如果配置为继承，保留所有工具
+        excluded_tools = self.subagent_config.get_excluded_tools()
+
+        # 如果配置为继承，保留所有工具，再 pop 黑名单
         if self.subagent_config.tools.get("inherit", False):
-            logger.info(f"Subagent {self.subagent_config.name} inherits all tools")
+            for tool_name in excluded_tools:
+                self.tool_registry._tools.pop(tool_name, None)
+            if excluded_tools:
+                logger.info(
+                    f"Subagent {self.subagent_config.name} inherits all tools, "
+                    f"excluded: {excluded_tools}"
+                )
+            else:
+                logger.info(f"Subagent {self.subagent_config.name} inherits all tools")
             return
-        
+
         # 否则只保留允许的工具
         if allowed_tools:
             all_tools = list(self.tool_registry._tools.keys())
@@ -550,6 +559,14 @@ class Agent:
             # 如果没有指定允许的工具，清除所有工具
             self.tool_registry._tools.clear()
             logger.info(f"Subagent {self.subagent_config.name} has no tools allowed")
+
+        # allowed 模式下也应用 excluded 黑名单
+        for tool_name in excluded_tools:
+            self.tool_registry._tools.pop(tool_name, None)
+        if excluded_tools:
+            logger.info(
+                f"Subagent {self.subagent_config.name} excluded tools: {excluded_tools}"
+            )
 
     def _register_local_proxy_tools(self):
         """注册本地代理工具（boss_* proxy，LOCAL_REQUIRED）
@@ -923,7 +940,78 @@ class Agent:
             }
 
         return self.prompt_manager.render(template_name, variables)
-    
+
+    # 支持的图片扩展名 -> MIME 映射（用于构造多模态 image_url data URL）
+    _IMAGE_EXT_MIME = {
+        "png": "image/png",
+        "jpg": "image/jpeg",
+        "jpeg": "image/jpeg",
+        "webp": "image/webp",
+        "gif": "image/gif",
+    }
+    _MULTIMODAL_MAX_IMAGES = 3
+    _MULTIMODAL_MAX_BYTES = 5 * 1024 * 1024  # 单张 5MB
+
+    def _build_multimodal_user_content(
+        self, text: str, image_paths: Optional[List[str]]
+    ) -> Optional[List[Dict[str, Any]]]:
+        """构造 OpenAI 多模态 user content（text + image_url data:base64）。
+
+        - image_paths 为空或全部无效时返回 None（调用方按纯文本处理）
+        - 单张图片超过 _MULTIMODAL_MAX_BYTES 跳过并记 warning
+        - 最多 _MULTIMODAL_MAX_IMAGES 张，超出忽略
+        - 不支持的扩展名跳过
+        - base64 仅 in-memory 传给 LLM，不持久化
+
+        返回的 content 格式：
+            [
+                {"type": "text", "text": <text>},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}}
+            ]
+        """
+        if not image_paths:
+            return None
+
+        parts: List[Dict[str, Any]] = [{"type": "text", "text": text}]
+        attached = 0
+
+        for path in image_paths:
+            if attached >= self._MULTIMODAL_MAX_IMAGES:
+                logger.warning(
+                    f"[SUBAGENT] image_paths 超过 {self._MULTIMODAL_MAX_IMAGES} 张上限，忽略后续: {path}"
+                )
+                break
+
+            ext = Path(path).suffix.lstrip(".").lower()
+            mime = self._IMAGE_EXT_MIME.get(ext)
+            if not mime:
+                logger.warning(f"[SUBAGENT] 不支持的图片格式，跳过: {path}")
+                continue
+
+            try:
+                data = Path(path).read_bytes()
+            except Exception as e:
+                logger.warning(f"[SUBAGENT] 读取图片失败，跳过: {path}, err={e}")
+                continue
+
+            if len(data) > self._MULTIMODAL_MAX_BYTES:
+                logger.warning(
+                    f"[SUBAGENT] 图片过大（{len(data)} bytes > {self._MULTIMODAL_MAX_BYTES}），跳过: {path}"
+                )
+                continue
+
+            import base64
+            b64 = base64.b64encode(data).decode("ascii")
+            parts.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:{mime};base64,{b64}"},
+            })
+            attached += 1
+
+        if attached == 0:
+            return None
+        return parts
+
     def _build_system_prompt(
         self,
         user: Optional[User] = None,
@@ -2892,8 +2980,11 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                     subagent_name = tool_args.get("subagent_name", "")
                     task_description = tool_args.get("task_description", "")
                     context_needed = tool_args.get("context_needed", [])
+                    image_paths = tool_args.get("image_paths")
 
                     logger.info(f"Delegating to subagent: {subagent_name}, task: {task_description[:50]}...")
+                    if image_paths:
+                        logger.info(f"[DELEGATE] image_paths from LLM: {image_paths}")
                     yield make_event("progress", data=f"🚀 正在调用{subagent_name}子智能体处理任务...")
 
                     # 标记任务开始（如果计划中存在）
@@ -2909,6 +3000,7 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                     delegation_result = await self._delegate_tool.execute(
                         subagent_name=subagent_name,
                         task_description=task_description,
+                        image_paths=image_paths,
                         context_needed=context_needed,
                         session_id=session_id,
                         user_id=user.user_id if user else None,
@@ -3306,6 +3398,7 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
         parent_session_id: str,
         task_record=None,
         progress_callback: Optional[Callable[[str], Coroutine[Any, Any, None]]] = None,
+        image_paths: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """
         作为子智能体执行任务
@@ -3315,6 +3408,9 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
             parent_session_id: 父智能体的session ID
             task_record: 任务记录（用于状态更新）
             progress_callback: 进度回调函数（保留兼容，内部收集事件并转发）
+            image_paths: 用户上传图片的完整路径列表（可选，多模态子智能体如 video-agent 用）
+                传入时构造 OpenAI 多模态 content（text + image_url data:base64），
+                直接传给 LLM；不持久化到 memory/chat_messages 表。
 
         Returns:
             执行结果
@@ -3408,11 +3504,17 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                 f"今年是{current_time.year}年]\n\n"
             )
             
-            # 添加任务描述
-            messages.append({
-                "role": "user",
-                "content": timestamp_context + task_description
-            })
+            # 添加任务描述（若提供 image_paths，构造 OpenAI 多模态 content）
+            user_text = timestamp_context + task_description
+            multimodal_parts = self._build_multimodal_user_content(user_text, image_paths)
+            if multimodal_parts is not None:
+                messages.append({"role": "user", "content": multimodal_parts})
+                logger.info(
+                    f"[SUBAGENT] multimodal messages built, "
+                    f"{len(multimodal_parts) - 1} images attached"
+                )
+            else:
+                messages.append({"role": "user", "content": user_text})
             
             system_prompt = self._build_system_prompt()
             tools = self._get_tools()

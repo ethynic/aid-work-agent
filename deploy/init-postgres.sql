@@ -253,6 +253,26 @@ CREATE TABLE IF NOT EXISTS token_cost_prices (
 INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m)
 VALUES ('qwen-plus', 0.8, 2.0, 0.16)
 ON CONFLICT (model_name) DO NOTHING;
+-- qwen-vl-plus 多模态模型（video-agent 使用），与 qwen-plus 同价位
+INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m)
+VALUES ('qwen-vl-plus', 0.8, 2.0, 0.16)
+ON CONFLICT (model_name) DO NOTHING;
+-- qwen3.7-plus 多模态模型（video-agent 对比测试用）
+INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m)
+VALUES ('qwen3.7-plus', 2.0, 5.0, 0.4)
+ON CONFLICT (model_name) DO NOTHING;
+-- qwen3-vl-plus 多模态模型（video-agent 对比测试用）
+INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m)
+VALUES ('qwen3-vl-plus', 2.0, 5.0, 0.4)
+ON CONFLICT (model_name) DO NOTHING;
+-- qwen-vl-max 多模态模型（video-agent 对比测试用）
+INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m)
+VALUES ('qwen-vl-max', 2.0, 5.0, 0.4)
+ON CONFLICT (model_name) DO NOTHING;
+-- qwen3-vl-flash 多模态模型（video-agent 对比测试用，最便宜）
+INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m)
+VALUES ('qwen3-vl-flash', 0.3, 0.6, 0.06)
+ON CONFLICT (model_name) DO NOTHING;
 INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m)
 VALUES ('deepseek-v4-flash', 1.0, 2.0, 0.02)
 ON CONFLICT (model_name) DO NOTHING;

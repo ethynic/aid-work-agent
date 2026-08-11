@@ -180,6 +180,7 @@ class SubagentExecutor:
         timeout: int = 7200,
         progress_callback: Optional[callable] = None,
         user_id: Optional[str] = None,
+        image_paths: Optional[List[str]] = None,
     ) -> DelegationResponse:
         """
         委托任务给子智能体
@@ -193,6 +194,7 @@ class SubagentExecutor:
             timeout: 超时时间（秒）
             progress_callback: 进度回调函数，用于实时传递子智能体执行进度
             user_id: 用户ID（用于设置邮件等工具的用户上下文）
+            image_paths: 用户上传图片的完整路径列表（可选，传给多模态子智能体如 video-agent）
 
         Returns:
             委托响应
@@ -202,7 +204,9 @@ class SubagentExecutor:
         logger.info(f"[SUBAGENT] subagent_name: {subagent_name}")
         logger.info(f"[SUBAGENT] task_description: {task_description}")
         logger.info(f"[SUBAGENT] session_id: {session_id}")
-        
+        if image_paths:
+            logger.info(f"[SUBAGENT] image_paths: {image_paths}")
+
         # 获取配置
         config = self.registry.get(subagent_name)
         if not config:
@@ -211,23 +215,28 @@ class SubagentExecutor:
                 success=False,
                 error=f"Subagent not found: {subagent_name}"
             )
-        
+
         logger.info(f"[SUBAGENT] Config found: {config.name}")
 
         # 生成执行ID
         execution_id = self._create_execution_id()
         logger.info(f"[SUBAGENT] Generated execution_id: {execution_id}")
-        
+
+        # 把 image_paths 并入 task_parameters 持久化（便于追溯）
+        effective_task_parameters = dict(task_parameters or {})
+        if image_paths:
+            effective_task_parameters["image_paths"] = image_paths
+
         # 创建任务记录
         record = self._create_task_record(
             task_id=task_id,
             execution_id=execution_id,
             subagent_name=subagent_name,
             task_description=task_description,
-            task_parameters=task_parameters,
+            task_parameters=effective_task_parameters,
         )
         logger.info(f"[SUBAGENT] Task record created: {record.task_id}")
-        
+
         # 导入Agent类（避免循环导入）
         from src.core.agent import Agent
 
@@ -259,17 +268,20 @@ class SubagentExecutor:
                 tool = subagent_instance.tool_registry.get_tool(tool_name)
                 if tool and hasattr(tool, 'set_user_id'):
                     tool.set_user_id(user_id)
-        
+
         # 在子线程启动执行
         async_task = asyncio.create_task(
-            self._run_instance(subagent_instance, record, timeout, task_description, session_id, progress_callback),
+            self._run_instance(
+                subagent_instance, record, timeout, task_description, session_id,
+                progress_callback, image_paths=image_paths,
+            ),
             name=f"subagent_{subagent_name}_{execution_id}"
         )
         self._active_executions[execution_id] = async_task
-        
+
         logger.info(f"[SUBAGENT] Started async task: subagent_{subagent_name}_{execution_id}")
         logger.info(f"[SUBAGENT] Active executions: {list(self._active_executions.keys())}")
-        
+
         return DelegationResponse(
             success=True,
             execution_id=execution_id,
@@ -284,6 +296,7 @@ class SubagentExecutor:
         task_description: str,
         session_id: str,
         progress_callback: Optional[callable] = None,
+        image_paths: Optional[List[str]] = None,
     ) -> None:
         """
         运行子智能体实例
@@ -295,6 +308,7 @@ class SubagentExecutor:
             task_description: 任务描述
             session_id: session ID
             progress_callback: 进度回调函数
+            image_paths: 用户上传图片路径列表（可选，传给多模态子智能体）
         """
         logger.info(f"\n{'='*60}\n[SUBAGENT] _run_instance started\n{'='*60}")
         logger.info(f"[SUBAGENT] instance.is_master: {instance.is_master}")
@@ -322,6 +336,7 @@ class SubagentExecutor:
                             parent_session_id=session_id,
                             task_record=record,
                             progress_callback=progress_callback,
+                            image_paths=image_paths,
                         ),
                         timeout=timeout
                     )

@@ -294,3 +294,53 @@ class TestUpdateDefinitionRequestClearing:
         result = body.model_dump(exclude_unset=True)
         assert result["llm_provider"] == "deepseek"
         assert result["llm_model_codes"] == {"deepseek": "deepseek-v4-pro"}
+
+
+class TestExcludedTools:
+    """get_excluded_tools() 解析 tools.excluded 黑名单字段。"""
+
+    def test_get_excluded_tools_returns_list(self):
+        """tools.excluded 列表被正确解析。"""
+        config = SubagentConfig(
+            name="video-agent",
+            description="test",
+            tools={"inherit": True, "excluded": ["paddleocr_doc_parsing"]},
+        )
+        assert config.get_excluded_tools() == ["paddleocr_doc_parsing"]
+
+    def test_get_excluded_tools_empty_when_no_field(self):
+        """没有 excluded 字段时返回空列表。"""
+        config = SubagentConfig(
+            name="test",
+            description="test",
+            tools={"inherit": True},
+        )
+        assert config.get_excluded_tools() == []
+
+    def test_get_excluded_tools_empty_when_no_tools(self):
+        """tools 字段为空 dict 时返回空列表。"""
+        config = SubagentConfig(name="test", description="test", tools={})
+        assert config.get_excluded_tools() == []
+
+    def test_get_excluded_tools_parses_from_subagent_md(self, tmp_path):
+        """SUBAGENT.md frontmatter 的 tools.excluded 字段被 loader 正确解析。"""
+        content = """---
+name: 测试智能体
+description: test
+tools:
+  inherit: true
+  excluded:
+    - paddleocr_doc_parsing
+---
+
+body
+"""
+        path = tmp_path / "SUBAGENT.md"
+        path.write_text(content, encoding="utf-8")
+
+        from src.subagents.loader import SubagentLoader
+        loader = SubagentLoader()
+        config = loader.parse_subagent_md(path)
+
+        assert config is not None
+        assert config.get_excluded_tools() == ["paddleocr_doc_parsing"]
