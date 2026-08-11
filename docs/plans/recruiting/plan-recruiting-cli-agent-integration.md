@@ -210,6 +210,8 @@ flowchart LR
 
 > M0.0~M0.6 已完成（自动化部分全绿），本阶段需真机 + 用户在场。
 >
+> **📖 验收测试指南（从环境准备到测试步骤）：[m07-acceptance-test-guide.md](m07-acceptance-test-guide.md)**
+>
 > **真机前准备**：① 应用 deploy/db_update.sql 的 2026-08-10 四表段落到目标库；② 构建 boss-resume-assistant 与 agent-tool-runtime；③ 重启后端使新路由与子智能体生效。
 >
 > **各阶段 CR/测试遗留 P2 待办汇总**（真机期间顺带处理或另行登记）：
