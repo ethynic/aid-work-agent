@@ -40,40 +40,40 @@ docs/tools/association-client-*.md
 
 ## 2. M0：现状冻结与实验规范
 
-状态：📋 待开发
+状态：✅ 已完成（2026-08-11，产物见 `docs/research/weixin-cli/`）
 
 任务：
 
-- [ ] 记录 `clients/wechat-souyisou-rpa/` 当前离线测试和真机基线；
-- [ ] 只读比对协会客户端和旧 RPA 的核心脚本，记录可复用算法与已知踩坑；
-- [ ] 冻结旧 ps1 stdin/stdout、错误码、artifact 和 cleanup 行为样本；
-- [ ] 建立 `docs/research/weixin-cli/` 与 probe 报告模板；
-- [ ] 建立 P0/P1/P2/P3 probe 风险等级和测试目标白名单格式；
-- [ ] 将上述硬性禁改路径写入各阶段实施规格和智能体任务说明；
-- [ ] 在 `docs/ideas.md` 标记开始开发时更新为 🔧 部分完成。
+- [x] 记录 `clients/wechat-souyisou-rpa/` 当前离线测试和真机基线（见 [m0-baseline-freeze.md](../../research/weixin-cli/m0-baseline-freeze.md) §2/§3）；
+- [x] 只读比对协会客户端和旧 RPA 的核心脚本，记录可复用算法与已知踩坑（同上 §4/§5/§6：4 个 ps1 字节一致，Python 业务层有差异且不进入 weixin-cli）；
+- [x] 冻结旧 ps1 stdin/stdout、错误码、artifact 和 cleanup 行为样本（见 [m0-frozen-protocol-samples.md](../../research/weixin-cli/m0-frozen-protocol-samples.md)）；
+- [x] 建立 `docs/research/weixin-cli/` 与 [probe 报告模板](../../research/weixin-cli/probe-report-template.md)；
+- [x] 建立 [P0/P1/P2/P3 probe 风险等级和测试目标白名单格式](../../research/weixin-cli/probe-risk-and-whitelist.md)；
+- [x] 将上述硬性禁改路径写入各阶段实施规格和智能体任务说明（§1 清单 + probe 规范文件头部强制引用）；
+- [x] 在 `docs/ideas.md` 标记开始开发时更新为 🔧 部分完成。
 
-验收：不操作真实微信即可用冻结样本验证后续 driver；`git diff` 确认协会禁改路径为零改动。
+验收：不操作真实微信即可用冻结样本验证后续 driver；`git diff` 确认协会禁改路径为零改动（M0 仅新增 `docs/research/weixin-cli/` 四个文档，禁改路径零改动）。
 
 ## 3. M1：TypeScript Provider 骨架
 
-状态：📋 待开发
+状态：✅ 已完成（2026-08-11，三智能体流程：开发→独立测试→独立 CR，主控终检通过）
 
 任务：
 
-- [ ] 创建 `clients/weixin-cli/` Node.js 22 + TypeScript 工程；
-- [ ] 从 BOSS reference provider 复用结构，不复制招聘领域代码；
-- [ ] 实现 `OperationResult`、错误映射、progress、AbortSignal 和 operation 注册表；
-- [ ] 实现 `weixin-cli mcp --stdio`、`doctor`、`version --json`；
-- [ ] 实现 Provider manifest、tool schema 单一来源和 digest；
-- [ ] Provider ID=`ai.aidwork.weixin`、target=`local_required`、platform=`win32-x64`；
-- [ ] 接入进程级单飞和跨进程命名 Mutex；
-- [ ] 接入 `clients/shared/mcp-conformance/`；
-- [ ] `doctor` 保证严格只读；
-- [ ] 测试 stdout 零污染、stderr 脱敏、关闭无孤儿进程、取消后锁释放。
+- [x] 创建 `clients/weixin-cli/` Node.js 22 + TypeScript 工程；
+- [x] 从 BOSS reference provider 复用结构，不复制招聘领域代码；
+- [x] 实现 `OperationResult`、错误映射、progress、AbortSignal 和 operation 注册表；
+- [x] 实现 `aid-weixin mcp --stdio`、`doctor`、`version --json`；
+- [x] 实现 Provider manifest、tool schema 单一来源和 digest；
+- [x] Provider ID=`ai.aidwork.weixin`、target=`local_required`、platform=`win32-x64`；
+- [x] 接入进程级单飞和跨进程命名互斥（Windows 命名管道 `\\.\pipe\AidWorkAgent.AidWeixin.<scope>`，进程死亡 OS 自动回收）；
+- [x] 接入 `clients/shared/mcp-conformance/`；
+- [x] `doctor` 保证严格只读；
+- [x] 测试 stdout 零污染、stderr 脱敏、关闭无孤儿进程、取消后锁释放。
 
-验收：无微信环境时 initialize/list/call 都快速返回结构化结果；conformance 全绿；doctor 不激活窗口、不发送输入。
+验收：无微信环境时 initialize/list/call 都快速返回结构化结果 ✅；conformance 全绿（npm test 内含 8 项 + 独立 CLI 模式 6/6）✅；doctor 不激活窗口、不发送输入 ✅。测试 **53/53**、typecheck 0 错误。CR 修复：命名管道常驻 error 监听、互斥系统错误映射 INTERNAL_ERROR、toolDefs↔registry 启动期一致性守卫。
 
-开发流程：本阶段完成后独立测试和 CR，主控者亲自运行 build、typecheck、conformance。
+开发流程：本阶段完成后独立测试和 CR，主控者亲自运行 build、typecheck、conformance。✅ 已执行。
 
 ## 4. M2：现有搜一搜能力产品化到 weixin-cli（v0.1）
 
@@ -200,7 +200,7 @@ docs/tools/association-client-*.md
 
 任务：
 
-- [ ] 生成自包含 `weixin-cli.exe`，内置正式 PowerShell driver；
+- [ ] 生成自包含 `aid-weixin.exe`，内置正式 PowerShell driver；
 - [ ] 正式包排除 `experiments/`、测试目标、截图和诊断样本；
 - [ ] provider manifest、schema digest、签名和版本校验；
 - [ ] `doctor` 覆盖安装、微信版本、交互桌面和 artifact 权限；
@@ -217,8 +217,8 @@ docs/tools/association-client-*.md
 
 | 检查点 | 可交付结果 | 阻塞条件 |
 |---|---|---|
-| M0 | 冻结协议、样本和隔离边界 | 基线不可复现则停止 |
-| M1 | 空壳标准 Provider | conformance 不全绿则停止 |
+| M0 | 冻结协议、样本和隔离边界 | ✅ 已完成（2026-08-11） |
+| M1 | 空壳标准 Provider | ✅ 已完成（2026-08-11，53/53 + conformance 全绿） |
 | M2 | v0.1 搜一搜 Provider | 真机稳定性或 cleanup 退化则停止 |
 | M3 | v0.2 文章只读能力 | URL/正文无法验证的 tool 不发布 |
 | M4 | v0.3 好友/群检索 | 重名消歧失败不进入写动作 |
@@ -241,6 +241,6 @@ M0～M2 是第一里程碑，约 7～12 天；后续每种能力按 probe 证据
 
 ## 11. 当前下一步
 
-1. 先执行 M0，不写产品代码；
-2. M0 输出经确认后，按完整三智能体流程开发 M1；
+1. ~~先执行 M0，不写产品代码~~（M0 已完成 2026-08-11）；
+2. ~~M0 输出经确认后~~，按完整三智能体流程开发 M1；
 3. M2 完成且 v0.1 真机验收后，直接进入 M3 公众号文章只读 probe；正式代码阶段仍保持三智能体串行验证。

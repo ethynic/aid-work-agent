@@ -67,7 +67,7 @@
 - 控制面：Node.js 22 + TypeScript，与 BOSS CLI reference provider 一致；
 - MCP：精确锁定与项目当前 reference provider 相同的官方 SDK 版本；
 - 自动化执行面：首期继续使用 Windows PowerShell 5.1 兼容脚本；
-- 打包：最终发布自包含 `weixin-cli.exe`，不要求用户安装 Node、Python 或源码；
+- 打包：最终发布自包含 `aid-weixin.exe`，不要求用户安装 Node、Python 或源码；
 - 平台：`win32-x64`、`LOCAL_REQUIRED`、必须运行于已登录且未锁屏的交互桌面会话。
 
 选择 TypeScript 控制面而不立即将 PowerShell 重写为 C#，原因是当前风险集中在微信 UI 稳定性。重写会同时改变语言、进程边界和已验证输入路径，无法区分回归来源。只有当 probe 证明 PowerShell 子进程成为明确瓶颈时，才单独设计执行层迁移。
@@ -97,7 +97,7 @@ clients/weixin-cli/
 ├─ src/
 │  ├─ cli/
 │  │  ├─ index.ts
-│  │  └─ commands/{doctor,version,mcp,souyisou,contacts,message,officialAccount,lab}.ts
+│  │  └─ commands/{doctor,version,mcp,probe,search,collect,read,getUrl,send,follow,lab}.ts
 │  ├─ operations/
 │  │  ├─ types.ts
 │  │  ├─ errorMapping.ts
@@ -133,24 +133,35 @@ clients/weixin-cli/
 
 ```text
 provider_id: ai.aidwork.weixin
-binary:      weixin-cli.exe
+binary:      aid-weixin.exe
 transport:   stdio
 target:      local_required
 ```
 
+**命名规则（2026-08-11 决策）**：可执行名统一为 `aid-weixin`，所有命令都以 `aid-weixin <动词>` 开头；操作对象（搜一搜、文章、聊天、公众号）**一律作为命令内的参数值表达**（`--domain <值>` 或专用选项），不允许出现 `aid-weixin souyisou ...`、`aid-weixin contacts ...` 这类按对象划分的子命令。
+
 标准命令：
 
 ```text
-weixin-cli mcp --stdio
-weixin-cli doctor [--json]
-weixin-cli version --json
-weixin-cli souyisou search ...
-weixin-cli souyisou collect ...
-weixin-cli contacts search ...
-weixin-cli message send ...
-weixin-cli official-account follow ...
-weixin-cli lab list|run ...        # 仅开发包/人工实验，不注册 MCP
+aid-weixin mcp --stdio
+aid-weixin doctor [--json]
+aid-weixin version --json
+aid-weixin probe
+aid-weixin search --domain souyisou --query <text> [--category all] [--limit 10]
+aid-weixin collect --domain souyisou --query <text> [--required-term <t>]... [--limit 10]
+aid-weixin search --domain article --query <text> [--limit 10]                       # v0.2
+aid-weixin read --domain article --result-set <ref> --result-id <id>                 # v0.2
+aid-weixin get-url --domain article --result-set <ref> --result-id <id>              # v0.2
+aid-weixin search --domain chat --type friend|group|any --query <text> [--limit 20]  # v0.3
+aid-weixin send --target-ref <ref> --text <text>                                     # v0.4
+aid-weixin follow --account-ref <ref>                                                # v0.4
+aid-weixin lab list|run ...        # 仅开发包/人工实验，不注册 MCP
 ```
+
+- 动词子命令集合固定为：`mcp / doctor / version / probe / search / collect / read / get-url / send / follow / lab`；
+- `search` 必须显式 `--domain`（`souyisou|article|chat`），`read`/`get-url` 当前仅 `article` 域；
+- `send`/`follow` 动作域唯一（消息/公众号），不重复要求 `--domain`；
+- 新增能力只能新增动词或 `--domain` 值，不得新增按对象命名的子命令。
 
 `doctor` 只能读取：平台和交互会话、微信进程/版本、登录态特征、主窗口唯一性、PowerShell/依赖、DPAPI artifact 目录权限。不得激活窗口、发送按键、改剪贴板或打开搜一搜。
 
@@ -369,7 +380,7 @@ v0.x 期间 tool 只能逐个晋级。未过真机矩阵的能力只存在于 `l
 
 ## 12. 已确定决策
 
-1. 产品名和可执行名统一为 `weixin-cli`，tool 前缀统一 `weixin_`；
+1. 可执行名统一为 `aid-weixin`（命令一律 `aid-weixin <动词>` 开头，搜一搜/文章/聊天/公众号等对象只作为 `--domain` 等参数值，不设按对象命名的子命令）；工程目录沿用 `clients/weixin-cli/`，MCP tool 前缀统一 `weixin_`；
 2. 它是独立 MCP Provider，不是协会客户端的内部模块；
 3. 复用 BOSS CLI 的 TypeScript Provider 骨架和共享 conformance suite；
 4. 首期从协会现有实现一次性复制已验证能力，再在 `weixin-cli` 内独立产品化；
