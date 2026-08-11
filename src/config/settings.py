@@ -122,6 +122,8 @@ class LLMConfig(BaseModel):
     zhipu: LLMProviderConfig = Field(default_factory=LLMProviderConfig)
     deepseek: LLMProviderConfig = Field(default_factory=LLMProviderConfig)
     failover: FailoverConfig = Field(default_factory=FailoverConfig)
+    # 各模型 max_tokens 上限映射表（gateway 未显式指定时按模型取默认值，空字典时用全局默认 16384）
+    model_max_tokens: Dict[str, int] = Field(default_factory=dict)
     # 注：wanx 已迁移到 settings.video_gen.wanx，请改用 settings.video_gen.wanx.*
 
 

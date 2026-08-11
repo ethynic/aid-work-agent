@@ -19,6 +19,10 @@ from .providers.qwen import QwenProvider
 from .providers.zhipu import ZhipuProvider
 
 
+# 未在 llm.model_max_tokens 配置表中的模型，其默认 max_tokens 兜底值
+DEFAULT_MAX_TOKENS = 16384
+
+
 def _build_key_pool(provider_name: str) -> KeyPool:
     """根据 provider 配置构建 KeyPool"""
     if provider_name == "qwen":
@@ -244,7 +248,7 @@ class LLMGateway:
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
         temperature: float = 0.7,
-        max_tokens: int = 16384,
+        max_tokens: Optional[int] = None,
         **kwargs
     ) -> Dict[str, Any]:
         """
@@ -263,6 +267,7 @@ class LLMGateway:
         """
         import time
         chat_start = time.time()
+        max_tokens = self._resolve_max_tokens(max_tokens)
         logger.info(f"[LLM] chat() called, provider={self.provider_name}, messages_count={len(messages)}, has_tools={tools is not None}")
 
         try:
@@ -312,7 +317,7 @@ class LLMGateway:
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
         temperature: float = 0.7,
-        max_tokens: int = 16384,
+        max_tokens: Optional[int] = None,
         **kwargs
     ) -> AsyncGenerator[str, None]:
         """
@@ -329,6 +334,7 @@ class LLMGateway:
         Yields:
             流式输出的文本片段
         """
+        max_tokens = self._resolve_max_tokens(max_tokens)
         async for chunk in (
             self._failover.stream_chat(
                 messages=messages,
@@ -357,7 +363,7 @@ class LLMGateway:
         tools: List[Dict[str, Any]],
         tool_choice: str = "auto",
         system_prompt: Optional[str] = None,
-        max_tokens: int = 16384,
+        max_tokens: Optional[int] = None,
         **kwargs
     ) -> Dict[str, Any]:
         """
@@ -378,6 +384,7 @@ class LLMGateway:
         """
         import time
         cwt_start = time.time()
+        max_tokens = self._resolve_max_tokens(max_tokens)
         logger.info(f"[LLM] chat_with_tools() called, provider={self.provider_name}, messages_count={len(messages)}, tools_count={len(tools) if tools else 0}, has_system_prompt={system_prompt is not None}")
 
         try:
@@ -414,6 +421,20 @@ class LLMGateway:
                 exc_info=True,
             )
             raise
+
+    def _resolve_max_tokens(self, max_tokens: Optional[int]) -> int:
+        """未显式指定 max_tokens 时，按当前生效模型从配置表取上限作为默认值。
+
+        配置表 llm.model_max_tokens 未覆盖的模型回退到 DEFAULT_MAX_TOKENS。
+        """
+        if max_tokens is not None:
+            return max_tokens
+        model = self.get_model_name()
+        limit = settings.llm.model_max_tokens.get(model)
+        if limit:
+            logger.info(f"[LLM] model={model} 未指定 max_tokens，使用配置上限 {limit}")
+            return limit
+        return DEFAULT_MAX_TOKENS
 
     def get_provider_name(self) -> str:
         """获取当前提供者名称"""

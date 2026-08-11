@@ -23,6 +23,13 @@ agent:
 # 各备用 provider 有独立环境变量（如 DEEPSEEK_*、QWEN_*），用于 failover
 llm:
   provider: ${LLM_PROVIDER:-deepseek}
+  # 各模型 max_tokens 上限（调用方未显式指定 max_tokens 时，按当前生效模型查此表作为默认值）
+  # 数据来源：阿里云百炼平台官方文档（2026-08）
+  model_max_tokens:
+    qwen-vl-plus: 8192
+    qwen-vl-max: 8192
+    qwen3.7-plus: 131072
+    qwen3-vl-flash: 32768
   qwen:
     api_keys: ${QWEN_API_KEYS:-}
     model: ${QWEN_MODEL_CODE:-qwen-plus}

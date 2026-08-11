@@ -11,22 +11,14 @@ from typing import Any, AsyncGenerator, Dict, List, Optional
 import httpx
 from loguru import logger
 
+from src.config.settings import settings
 from .base import BaseLLMProvider
 from ..llm_call_logger import generate_request_id, log_llm_invoke
 
 
-# Qwen 各模型 max_tokens 上限（超出会触发 400 invalid_parameter_error）
-# 多数 qwen 文本/视觉模型上限 8192；未列出的模型保持调用方传入值
-_QWEN_MAX_TOKENS_LIMITS: Dict[str, int] = {
-    "qwen-vl-plus": 8192,
-    "qwen-vl-max": 8192,
-    "qwen3-vl-flash": 8192,
-}
-
-
 def _clamp_max_tokens(model: str, max_tokens: int) -> int:
-    """按模型 clamp max_tokens 到 API 上限，避免触发 400"""
-    limit = _QWEN_MAX_TOKENS_LIMITS.get(model)
+    """按模型 clamp max_tokens 到 API 上限（上限从 config.yaml llm.model_max_tokens 读取），避免触发 400"""
+    limit = (settings.llm.model_max_tokens or {}).get(model)
     if limit and max_tokens > limit:
         logger.warning(
             f"qwen {model} max_tokens={max_tokens} 超过上限 {limit}，自动 clamp"
