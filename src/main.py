@@ -337,6 +337,7 @@ class ChatRequest(BaseModel):
     user_id: Optional[str] = None  # 用于会话记录
     subagent: Optional[str] = None  # 子智能体名称（由前端从路由参数提取后传入）
     instance_id: Optional[str] = None  # 数字员工实例ID（用于并发控制锁）
+    video_params: Optional[Dict[str, Any]] = None  # 视频创作参数（前端工具栏选择，仅 subagent=video-agent 时生效）
 
 
 class ChatResponse(BaseModel):
@@ -1375,6 +1376,7 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                     user=agent_user,
                     attachments=attachments,
                     cancel_check=lambda: sse_manager.is_cancelled(session_id) or session_queue.check_cancel(session_id),
+                    video_params=request.video_params,
                 ):
                     event_type = event.get("type")
                     if event_type == "tool_messages":

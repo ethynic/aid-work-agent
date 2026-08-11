@@ -91,6 +91,21 @@
         </p>
       </div>
 
+      <!-- 提示词模型（生成提示词所用的 LLM；视觉模型可看图，文本模型仅文字） -->
+      <div>
+        <label class="text-sm text-muted mb-1 block">提示词模型</label>
+        <BaseSelect
+          :model-value="draft.prompt_model"
+          @update:model-value="(v: string) => emit('update', 'prompt_model', v)"
+          size="md"
+        >
+          <option v-for="m in promptModelOptions" :key="m.value" :value="m.value">{{ m.label }}</option>
+        </BaseSelect>
+        <p class="text-xs text-muted mt-1">
+          视觉模型（Qwen-VL-*）可根据上传的参考图片生成提示词；文本模型（Qwen3.7-Plus）仅支持文字需求
+        </p>
+      </div>
+
       <!-- 生成条数 -->
       <div>
         <label class="text-sm text-muted mb-1 block">生成条数</label>
@@ -142,10 +157,20 @@ const FALLBACK_RESOLUTIONS: OptionItem[] = [
   { value: '720P', label: '720P' },
   { value: '1080P', label: '1080P' },
 ]
+// 提示词模型兜底（与后端 /api/video-gen/options 默认列表一致）
+const FALLBACK_PROMPT_MODELS: OptionItem[] = [
+  { value: 'qwen-vl-plus', label: 'Qwen-VL-Plus（视觉模型，默认）' },
+  { value: 'qwen-vl-max', label: 'Qwen-VL-Max（视觉模型，更强）' },
+  { value: 'qwen3-vl-flash', label: 'Qwen3-VL-Flash（视觉模型，最快）' },
+  { value: 'qwen3.7-plus', label: 'Qwen3.7-Plus（文本模型，不支持看图）' },
+]
 
 const options = ref<ProviderOptions | null>(null)
 const resolutionOptions = computed<OptionItem[]>(
   () => options.value?.resolutions ?? FALLBACK_RESOLUTIONS,
+)
+const promptModelOptions = computed<OptionItem[]>(
+  () => options.value?.prompt_models ?? FALLBACK_PROMPT_MODELS,
 )
 
 async function loadOptions() {

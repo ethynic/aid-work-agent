@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
-from src.llm.gateway import llm_gateway
+from src.llm.gateway import LLMGateway, llm_gateway
 
 
 @dataclass
@@ -181,7 +181,23 @@ def _build_prompt_result(
 
 
 class PromptEngine:
-    """视频创作提示词引擎（精修/敏捷双模）"""
+    """视频创作提示词引擎（精修/敏捷双模）
+
+    Args:
+        prompt_model_code: 指定用于生成提示词的 qwen 模型（如 'qwen-vl-max'）。
+                          为 None 时使用全局 llm_gateway 单例（即 settings 默认模型）。
+    """
+
+    def __init__(self, prompt_model_code: Optional[str] = None) -> None:
+        if prompt_model_code:
+            # 按需构造局部 LLMGateway，仅覆盖 qwen provider 的模型
+            self._llm = LLMGateway(
+                provider_name="qwen",
+                model_codes={"qwen": prompt_model_code},
+            )
+            logger.info(f"[PromptEngine] 使用自定义提示词模型: {prompt_model_code}")
+        else:
+            self._llm = llm_gateway
 
     async def generate_prompt_refine(
         self,
@@ -215,7 +231,7 @@ class PromptEngine:
             {"role": "user", "content": user_prompt},
         ]
         logger.info(f"[PromptEngine] 精修模式调用文本模型, user_input={user_input[:50]}")
-        resp = await llm_gateway.chat(messages=messages, temperature=0.7, max_tokens=2000)
+        resp = await self._llm.chat(messages=messages, temperature=0.7, max_tokens=2000)
         content = resp.get("content") or ""
         obj = _extract_json_object(content)
         if obj is None:
@@ -260,7 +276,7 @@ class PromptEngine:
             {"role": "user", "content": user_prompt},
         ]
         logger.info(f"[PromptEngine] 敏捷模式调用文本模型, count={count}, user_input={user_input[:50]}")
-        resp = await llm_gateway.chat(messages=messages, temperature=0.9, max_tokens=4000)
+        resp = await self._llm.chat(messages=messages, temperature=0.9, max_tokens=4000)
         content = resp.get("content") or ""
         arr = _extract_json_array(content)
         if arr is None:
@@ -278,13 +294,32 @@ class PromptEngine:
         return results
 
 
-# 模块级单例（惰性）
-_prompt_engine_instance: Optional[PromptEngine] = None
+# 模块级单例缓存（按 prompt_model_code 分 key）
+_prompt_engine_cache: Dict[Optional[str], PromptEngine] = {}
+
+# 允许的提示词模型白名单（与 /api/video-gen/options 返回的 prompt_models 一致）
+ALLOWED_PROMPT_MODELS = frozenset({
+    "qwen-vl-plus",
+    "qwen-vl-max",
+    "qwen3-vl-flash",
+    "qwen3.7-plus",
+})
 
 
-def get_prompt_engine() -> PromptEngine:
-    """返回 PromptEngine 单例"""
-    global _prompt_engine_instance
-    if _prompt_engine_instance is None:
-        _prompt_engine_instance = PromptEngine()
-    return _prompt_engine_instance
+def get_prompt_engine(prompt_model_code: Optional[str] = None) -> PromptEngine:
+    """返回 PromptEngine 实例（按 prompt_model_code 缓存）
+
+    Args:
+        prompt_model_code: 自定义提示词模型。相同模型返回相同实例。
+                          为 None 时使用全局默认模型。
+                          不在白名单中的值会被忽略（回退到默认模型）。
+    """
+    # 校验白名单，防止恶意输入导致缓存无限增长
+    if prompt_model_code and prompt_model_code not in ALLOWED_PROMPT_MODELS:
+        logger.warning(
+            f"[PromptEngine] prompt_model_code={prompt_model_code!r} 不在白名单中，回退到默认模型"
+        )
+        prompt_model_code = None
+    if prompt_model_code not in _prompt_engine_cache:
+        _prompt_engine_cache[prompt_model_code] = PromptEngine(prompt_model_code=prompt_model_code)
+    return _prompt_engine_cache[prompt_model_code]

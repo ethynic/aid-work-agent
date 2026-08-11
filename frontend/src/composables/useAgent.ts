@@ -6,6 +6,7 @@ import { useToast } from 'vue-toastification'
 import { useDemoAuth } from './useDemoAuth'
 import { useTenantAuth } from './useTenantAuth'
 import { useCreditCheck } from './useCreditCheck'
+import { useVideoGenParams } from './useVideoGenParams'
 
 /**
  * 多会话后台流式架构
@@ -410,7 +411,9 @@ export function useAgent() {
           addProgress(state, '等待你在浏览器中完成操作', 'progress')
         },
         subagent,
-        instanceId
+        instanceId,
+        // 视频创作参数：仅 video-agent 子智能体使用，其他智能体忽略
+        subagent === 'video-agent' ? { ...useVideoGenParams().params.value } : null
       )
     } catch (err) {
       if (effectiveSessionId === sessionId.value) {

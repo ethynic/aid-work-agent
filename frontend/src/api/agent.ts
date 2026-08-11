@@ -106,7 +106,8 @@ export class SSEManager {
     onImages?: (images: any[], placement: string) => void,
     onBrowserHumanRequired?: (event: Extract<MessageStreamEvent, { type: 'browser_human_required' }>) => void,
     subagent?: string | null,
-    instance_id?: string | null
+    instance_id?: string | null,
+    video_params?: Record<string, any> | null
   ): Promise<void> {
     this.abortController = new AbortController()
 
@@ -130,6 +131,8 @@ export class SSEManager {
           })),
           ...(subagent ? { subagent } : {}),
           ...(instance_id ? { instance_id } : {}),
+          // 视频创作参数（仅 video-agent 子智能体使用，含 session_id 供工具读取）
+          ...(video_params ? { video_params: { ...video_params, session_id: sessionId } } : {}),
         }),
         signal: this.abortController.signal,
       })

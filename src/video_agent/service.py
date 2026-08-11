@@ -56,6 +56,7 @@ class VideoGenParams:
     ratio: str = DEFAULT_RATIO
     resolution: str = DEFAULT_RESOLUTION
     card_count: int = 1               # 精修固定 1；敏捷 1/2/3，默认 3
+    prompt_model: Optional[str] = None  # 提示词模型（覆盖 SUBAGENT.md 默认值），如 'qwen-vl-max'
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -70,6 +71,7 @@ class VideoGenParams:
             ratio=data.get("ratio", DEFAULT_RATIO),
             resolution=data.get("resolution", DEFAULT_RESOLUTION),
             card_count=int(data.get("card_count", 1)),
+            prompt_model=data.get("prompt_model"),
         )
 
 
@@ -99,8 +101,14 @@ class VideoChatService:
     复用 video_gen 的 provider 实现（wanx_provider / minimax_provider）。
     """
 
-    def __init__(self, prompt_engine: Optional[PromptEngine] = None) -> None:
-        self._prompt_engine = prompt_engine or get_prompt_engine()
+    def __init__(
+        self,
+        prompt_engine: Optional[PromptEngine] = None,
+        prompt_model_code: Optional[str] = None,
+    ) -> None:
+        # prompt_model_code 用于按需构造局部 PromptEngine（覆盖默认模型）
+        self._prompt_engine = prompt_engine or get_prompt_engine(prompt_model_code=prompt_model_code)
+        self._prompt_model_code = prompt_model_code
         # 复用 video_gen 的 provider 工厂（wanx / minimax）
         try:
             self._provider = build_provider(settings.video_gen, settings.llm.qwen.api_keys)
@@ -736,13 +744,17 @@ class VideoChatService:
             return None
 
 
-# 模块级单例（惰性，避免 import 副作用）
-_video_chat_service_instance: Optional[VideoChatService] = None
+# 模块级单例缓存（按 prompt_model_code 分 key）
+_video_chat_service_cache: Dict[Optional[str], VideoChatService] = {}
 
 
-def get_video_chat_service() -> VideoChatService:
-    """返回 VideoChatService 单例"""
-    global _video_chat_service_instance
-    if _video_chat_service_instance is None:
-        _video_chat_service_instance = VideoChatService()
-    return _video_chat_service_instance
+def get_video_chat_service(prompt_model_code: Optional[str] = None) -> VideoChatService:
+    """返回 VideoChatService 实例（按 prompt_model_code 缓存）
+
+    Args:
+        prompt_model_code: 自定义提示词模型。相同模型返回相同实例。
+                          为 None 时使用全局默认模型。
+    """
+    if prompt_model_code not in _video_chat_service_cache:
+        _video_chat_service_cache[prompt_model_code] = VideoChatService(prompt_model_code=prompt_model_code)
+    return _video_chat_service_cache[prompt_model_code]

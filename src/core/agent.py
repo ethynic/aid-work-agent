@@ -471,6 +471,10 @@ class Agent:
         from src.tools.ppt.ppt_process_tool import PptProcessTool
         self.tool_registry.register(PptProcessTool())
 
+        # 注册视频创作提交工具（video-agent 子智能体使用，从 _video_params 读取前端参数）
+        from src.tools.video.submit_video_task_tool import SubmitVideoTaskTool
+        self.tool_registry.register(SubmitVideoTaskTool())
+
         # 注册转人工客服工具
         from src.tools.transfer_to_human import TransferToHumanTool
         self.tool_registry.register(TransferToHumanTool())
@@ -2035,6 +2039,7 @@ class Agent:
         cancel_check: Optional[Callable[[], bool]] = None,
         extra_system_prompt: Optional[str] = None,
         _continuation_tool_result: Optional[Dict[str, Any]] = None,
+        video_params: Optional[Dict[str, Any]] = None,
     ) -> AsyncGenerator[dict, None]:
         """
         Process a user message and yield AgentEvent dicts (trace-wrapped).
@@ -2045,7 +2050,13 @@ class Agent:
         Trace failures are swallowed (debug log) and never affect business logic.
 
         See: docs/infrastructure/observability-channel-sessions-design.md
+
+        Args:
+            video_params: 前端工具栏传入的视频创作参数（仅 video-agent 子智能体使用）。
+                         通过 _current_video_params 实例变量供工具读取，执行完成后清理。
         """
+        # 视频创作参数存到实例变量，供工具执行时读取（同请求期间有效，finally 清理）
+        self._current_video_params = video_params
         trace_collector = None
         try:
             from src.services.session_record import SessionRecordManager
@@ -2105,6 +2116,9 @@ class Agent:
                     trace_collector.on_complete(_record)
                 except Exception as e:
                     logger.debug(f"Trace on_complete failed: {e}")
+            # 清理视频创作参数（同请求期间持有，避免跨请求污染）
+            if hasattr(self, '_current_video_params'):
+                delattr(self, '_current_video_params')
 
     async def _process_message_impl(
         self,
@@ -3081,6 +3095,12 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                             execution_args["_trusted_user_id"] = user.user_id if user else None
                             execution_args["_agent_execution_id"] = f"ae_{uuid.uuid4().hex}"
                             execution_args["_tool_call_id"] = tool_id
+                        # 注入视频创作参数（前端工具栏选择，供 submit_video_task 等工具读取）
+                        video_params = getattr(self, '_current_video_params', None)
+                        if video_params:
+                            if execution_args is tool_args:
+                                execution_args = dict(tool_args)
+                            execution_args["_video_params"] = video_params
                         result = await self.tool_executor.execute(tool_name, execution_args)
                     logger.info(f"[TOOL_RESULT] {tool_name}: type={type(result).__name__}")
 
@@ -3844,6 +3864,12 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                                     execution_args["_audit_session_id"] = parent_session_id
                                     execution_args["_trusted_tenant_id"] = self._init_tenant_id
                                     execution_args["_trusted_user_id"] = self._init_user_id
+                                # 注入视频创作参数（前端工具栏选择，供 submit_video_task 等工具读取）
+                                video_params = getattr(self, '_current_video_params', None)
+                                if video_params:
+                                    if execution_args is tool_args:
+                                        execution_args = dict(tool_args)
+                                    execution_args["_video_params"] = video_params
                                 result = await self.tool_executor.execute(tool_name, execution_args)
                             tool_result = result
 

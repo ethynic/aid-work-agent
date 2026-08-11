@@ -69,15 +69,24 @@ def _download_url(file_id: str) -> str:
 
 @router.get("/options", response_model=JsonResponse)
 async def get_options(request: Request):
-    """返回当前 provider 的选项与能力声明（resolutions/ratios/durations + 默认值 + 能力声明）。
+    """返回当前 provider 的选项与能力声明（resolutions/ratios/durations + 默认值 + 能力声明 + prompt_models）。
 
     前端进页面时拉取，动态渲染选择器；切换 provider（.env 改 VIDEO_GEN_PROVIDER 重启）
     后前端下次进页面会拉到新列表。
+
+    prompt_models 与具体视频 provider 无关（通用 qwen 模型列表），在此统一追加。
     """
     try:
         opts = _service.get_options()
-        # dataclasses.asdict 递归把 dataclass 转 dict（含嵌套 OptionItem）
-        return _ok(dataclasses.asdict(opts))
+        opts_dict = dataclasses.asdict(opts)
+        # 追加提示词模型选项（与视频 provider 解耦，统一在此返回）
+        opts_dict["prompt_models"] = [
+            {"value": "qwen-vl-plus", "label": "Qwen-VL-Plus（视觉模型，默认）"},
+            {"value": "qwen-vl-max", "label": "Qwen-VL-Max（视觉模型，更强）"},
+            {"value": "qwen3-vl-flash", "label": "Qwen3-VL-Flash（视觉模型，最快）"},
+            {"value": "qwen3.7-plus", "label": "Qwen3.7-Plus（文本模型，不支持看图）"},
+        ]
+        return _ok(opts_dict)
     except Exception as e:
         logger.error(f"视频生成-查询选项失败: {e}", exc_info=True)
         return _fail("查询选项失败", e)

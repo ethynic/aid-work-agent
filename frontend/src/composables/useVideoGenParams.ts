@@ -24,6 +24,8 @@ export interface VideoGenParams {
   resolution: string
   /** 生成条数（精修模式固定 1） */
   card_count: number
+  /** 提示词模型（覆盖 SUBAGENT.md 默认值），如 'qwen-vl-max' */
+  prompt_model: string
 }
 
 export const DEFAULT_PARAMS: VideoGenParams = {
@@ -32,6 +34,7 @@ export const DEFAULT_PARAMS: VideoGenParams = {
   ratio: '9:16',
   resolution: '720P',
   card_count: 1,
+  prompt_model: 'qwen-vl-plus',
 }
 
 /** 全局单例状态（在同一会话内保持，切换会话由调用方重置） */

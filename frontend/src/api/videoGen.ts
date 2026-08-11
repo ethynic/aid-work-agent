@@ -81,6 +81,8 @@ export interface ProviderOptions {
   supports_reference_image: boolean
   supports_negative_prompt: boolean
   task_max_age_hours: number
+  /** 提示词模型选项（与视频 provider 无关，通用 qwen 模型列表） */
+  prompt_models?: OptionItem[]
 }
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<ApiResponse<T>> {
