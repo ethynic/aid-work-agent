@@ -7,11 +7,13 @@ LLM网关
 
 import asyncio
 import time
+import traceback
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from loguru import logger
 
 from src.config.settings import settings
+from src.core.temp_logger import tlog
 from .key_pool import KeyPool
 from .providers.base import BaseLLMProvider
 from .providers.deepseek import DeepSeekProvider
@@ -180,6 +182,16 @@ class LLMGateway:
         except Exception as e:
             call_duration = time.time() - call_start
             logger.error(f"[LLM] _call_with_pool error, provider={self.provider_name}, fn={fn_name}, duration={call_duration:.2f}s, error: {type(e).__name__}: {e}", exc_info=True)
+            # 临时调试：追踪 KeyError 在 LLM 链路的真实来源
+            tlog(
+                "视频对话错误",
+                "_call_with_pool 异常 fn={fn} 类型={etype} 消息={emsg}\n{tb}",
+                fn=fn_name,
+                etype=type(e).__name__,
+                emsg=str(e),
+                tb=traceback.format_exc(),
+                level="ERROR",
+            )
             raise
 
     async def _stream_with_pool(self, fn_name: str, **kwargs) -> AsyncGenerator[str, None]:
@@ -292,6 +304,15 @@ class LLMGateway:
         except Exception as e:
             chat_duration = time.time() - chat_start
             logger.error(f"[LLM] chat() failed, duration={chat_duration:.2f}s, error: {type(e).__name__}: {e}", exc_info=True)
+            # 临时调试：追踪 KeyError 在 LLM 链路的真实来源
+            tlog(
+                "视频对话错误",
+                "gateway.chat 异常 类型={etype} 消息={emsg}\n{tb}",
+                etype=type(e).__name__,
+                emsg=str(e),
+                tb=traceback.format_exc(),
+                level="ERROR",
+            )
             raise
 
     async def stream_chat(
@@ -396,6 +417,15 @@ class LLMGateway:
         except Exception as e:
             cwt_duration = time.time() - cwt_start
             logger.error(f"[LLM] chat_with_tools() failed, duration={cwt_duration:.2f}s, error: {type(e).__name__}: {e}", exc_info=True)
+            # 临时调试：追踪 KeyError 在 LLM 链路的真实来源
+            tlog(
+                "视频对话错误",
+                "gateway.chat_with_tools 异常 类型={etype} 消息={emsg}\n{tb}",
+                etype=type(e).__name__,
+                emsg=str(e),
+                tb=traceback.format_exc(),
+                level="ERROR",
+            )
             raise
 
     def get_provider_name(self) -> str:

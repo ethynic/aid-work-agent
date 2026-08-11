@@ -6,11 +6,13 @@
 
 import json
 import time
+import traceback
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 import httpx
 from loguru import logger
 
+from src.core.temp_logger import tlog
 from .base import BaseLLMProvider
 from ..llm_call_logger import generate_request_id, log_llm_invoke
 
@@ -130,6 +132,14 @@ class QwenProvider(BaseLLMProvider):
                 duration_ms=round(duration_ms, 2),
             )
             logger.error(f"通义千问API请求失败: {type(e).__name__}: {e}")
+            # 临时调试：记录 400 响应体，定位视频创作对话报错
+            tlog(
+                "视频对话错误",
+                "qwen.chat HTTPStatusError 状态={status} 响应体={body}",
+                status=e.response.status_code,
+                body=e.response.text[:3000],
+                level="ERROR",
+            )
             raise RuntimeError(f"通义千问API请求失败: {e.response.text}")
         except Exception as e:
             duration_ms = (time.perf_counter() - start_time) * 1000
@@ -142,6 +152,15 @@ class QwenProvider(BaseLLMProvider):
                 duration_ms=round(duration_ms, 2),
             )
             logger.error(f"通义千问调用异常: {type(e).__name__}: {e}")
+            # 临时调试：记录非 HTTPStatusError 异常的完整 traceback
+            tlog(
+                "视频对话错误",
+                "qwen.chat 非HTTP异常 类型={etype} 消息={emsg}\n{tb}",
+                etype=type(e).__name__,
+                emsg=str(e),
+                tb=traceback.format_exc(),
+                level="ERROR",
+            )
             raise
 
     async def stream_chat(
