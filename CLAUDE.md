@@ -18,6 +18,7 @@
 | [.claude/rules/architecture.md](.claude/rules/architecture.md) | 系统架构、核心组件、扩展点 |
 | [.claude/rules/database_dev.md](.claude/rules/database_dev.md) | 数据库表开发规范，包括表分类、租户隔离要求、变更记录 |
 | [.claude/rules/dev_workflow.md](.claude/rules/dev_workflow.md) | **开发流程规范**：三智能体开发流程（开发→测试→CodeReview），非平凡任务必读 |
+| [.claude/rules/powershell.md](.claude/rules/powershell.md) | **PowerShell 脚本规范**：UTF-8 BOM、字符串插值用 `-f`、HTTP 用 curl.exe、外部 API 重试、写完强制 ParseFile 检查 |
 
 **回答简洁**：每个响应不超过 5000 个 token
 **代码输出**：只输出修改的部分，不要输出完整文件
