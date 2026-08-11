@@ -33,9 +33,9 @@ find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 
 # 2. 判断前端是否需要编译
 if [ "$OLD_HEAD" != "$NEW_HEAD" ]; then
-   FRONTEND_CHANGED=$(git diff --name-only "$OLD_HEAD" "$NEW_HEAD" -- frontend/ | wc -l)
+    FRONTEND_CHANGED=$(git diff --name-only "$OLD_HEAD" "$NEW_HEAD" -- frontend/ | wc -l)
 else
-   FRONTEND_CHANGED=0
+    FRONTEND_CHANGED=0
 fi
 
 if [ "$FRONTEND_CHANGED" -gt 0 ] || [ ! -d "frontend/dist" ]; then
