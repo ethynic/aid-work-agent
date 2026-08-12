@@ -122,18 +122,20 @@ class KnowledgeBaseTool(BaseTool):
                         if source_type:
                             params.append(source_type)
                         cursor.execute(f"""
-                            SELECT id, title FROM documents WHERE id IN ({placeholders}) AND tenant_id = %s{source_type_condition}
+                            SELECT id, title, file_path FROM documents WHERE id IN ({placeholders}) AND tenant_id = %s{source_type_condition}
                         """, params)
                     else:
                         params = list(doc_ids)
                         if source_type:
                             params.append(source_type)
                         cursor.execute(f"""
-                            SELECT id, title FROM documents WHERE id IN ({placeholders})
+                            SELECT id, title, file_path FROM documents WHERE id IN ({placeholders})
                               AND (tenant_id = 'demo' OR tenant_id IS NULL){source_type_condition}
                         """, params)
 
-                    doc_titles = {row["id"]: row["title"] for row in cursor.fetchall()}
+                    rows = cursor.fetchall()
+                    doc_titles = {row["id"]: row["title"] for row in rows}
+                    doc_file_paths = {row["id"]: row.get("file_path") or "" for row in rows}
                 finally:
                     conn_cm.__exit__(None, None, None)
 
@@ -141,7 +143,9 @@ class KnowledgeBaseTool(BaseTool):
                 formatted_results = [
                     {
                         "text": r["text"],
+                        "doc_id": r["doc_id"],
                         "doc_title": doc_titles.get(r["doc_id"], "未知文档"),
+                        "file_path": doc_file_paths.get(r["doc_id"], ""),
                         "score": round(r["score"], 4),
                         "metadata": r["metadata"]
                     }
