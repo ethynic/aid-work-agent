@@ -86,7 +86,6 @@ sudo apt-get install -y cifs-utils
 # 创建项目目录
 sudo mkdir -p /var/www/agent
 sudo mkdir -p /home/ubuntu/aid_data/uploads
-sudo mkdir -p /home/ubuntu/aid_data/memories
 sudo mkdir -p /home/ubuntu/aid_data/storage
 sudo mkdir -p /mnt/smb/AIUpload
 
@@ -381,7 +380,6 @@ fi
 # 4. 创建必要目录
 mkdir -p log
 mkdir -p /home/ubuntu/aid_data/uploads
-mkdir -p /home/ubuntu/aid_data/memories
 sudo chown -R www-data:www-data /home/ubuntu/aid_data
 
 # 5. 启动 Docker 容器

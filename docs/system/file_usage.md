@@ -244,7 +244,6 @@ UUID 为 12 位十六进制字符串，保证文件名唯一性，避免覆盖�
 class StorageConfig(BaseModel):
     base_dir: str = "storage"                              # 存储根目录
     uploads_dir: str = "storage/uploads"                   # 上传目录
-    memories_dir: str = "storage/memories"                 # 长期记忆目录
     max_knowledge_file_size: int = 50 * 1024 * 1024        # 最大知识库文件大小 (50MB)
     max_general_file_size: int = 20 * 1024 * 1024          # 最大通用文件大小 (20MB)
 ```

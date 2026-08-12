@@ -61,9 +61,6 @@ services:
       # 用于数据迁移
       - /var/www/qb3_upload/agent2_storage:/app/source_storage
 
-      # 记忆文件目录
-      - /var/www/qb3_upload/agent_memories:/app/memories
-    
     # 网络配置
     networks:
       - aid-network
@@ -94,7 +91,7 @@ services:
         max-file: "3"
 
   # 独立后台运行时（调度器 + 全部后台任务；不启 HTTP）
-  # 与 aid-agent-api 共享 storage/memories/uploads，确保 master_agent 状态、
+  # 与 aid-agent-api 共享 storage/uploads，确保 master_agent 状态、
   # poller Redis 锁、心跳文件路径一致。
   aid-agent-background:
     build:
@@ -121,7 +118,6 @@ services:
       # 共享业务存储（心跳文件 + master_agent 文件状态 + poller 锁状态）
       - /var/www/qb3_upload/agent_uploads:/app/uploads
       - /var/www/qb3_upload/agent_storage:/app/storage
-      - /var/www/qb3_upload/agent_memories:/app/memories
     networks:
       - aid-network
     # 心跳文件法判活：runner 每 30s 写 storage/.bg_runner_alive，2 分钟内有更新即健康

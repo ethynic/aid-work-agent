@@ -61,9 +61,6 @@ services:
       # 用于数据迁移
       - /var/www/qb3_upload/agent_storage:/app/source_storage
 
-      # 记忆文件目录（agent2 独立目录，避免与生产环境冲突）
-      - /var/www/qb3_upload/agent2_memories:/app/memories
-    
     # 网络配置（使用独立网络名称，避免与生产环境冲突）
     networks:
       - aid-network2
@@ -94,7 +91,7 @@ services:
         max-file: "3"
 
   # 独立后台运行时（调度器 + 全部后台任务；不启 HTTP）
-  # 与 aid-agent-api 共享 storage/memories/uploads。
+  # 与 aid-agent-api 共享 storage/uploads。
   aid-agent-background:
     build:
       context: .
@@ -117,7 +114,6 @@ services:
       # 与 API 服务共享业务存储（测试环境路径）
       - /var/www/qb3_upload/agent2_uploads:/app/uploads
       - /var/www/qb3_upload/agent2_storage:/app/storage
-      - /var/www/qb3_upload/agent2_memories:/app/memories
     networks:
       - aid-network2
     healthcheck:

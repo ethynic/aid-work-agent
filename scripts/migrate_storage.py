@@ -184,15 +184,6 @@ def main():
         print("  无可迁移的全局对话文件")
     print()
 
-    # 5. 创建 memories 目录
-    memories_dir = project_root / "storage" / "memories"
-    if args.yes:
-        memories_dir.mkdir(parents=True, exist_ok=True)
-        print(f"[长期记忆目录] 已创建: {memories_dir}")
-    else:
-        print(f"[长期记忆目录] 将创建: {memories_dir}")
-    print()
-
     if args.yes:
         print("=== 迁移完成 ===")
         print()

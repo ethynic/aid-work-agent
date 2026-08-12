@@ -61,14 +61,6 @@ else
     log_error "上传文件目录不存在"
 fi
 
-log_info "备份记忆文件..."
-if [ -d "/var/www/qb3_upload/agent_memories" ]; then
-    tar -czf $BACKUP_DIR/memories.tar.gz -C /var/www/qb3_upload agent_memories
-    log_success "记忆文件已备份"
-else
-    log_error "记忆文件目录不存在"
-fi
-
 # 3. 备份日志文件
 log_info "备份日志文件..."
 if [ -d "$PROJECT_DIR/log" ]; then
@@ -90,7 +82,6 @@ cat > $BACKUP_DIR/manifest.txt <<EOF
 备份内容:
   - .env (配置文件)
   - uploads.tar.gz (上传文件)
-  - memories.tar.gz (记忆文件)
   - log.tar.gz (日志文件)
 
 文件列表:

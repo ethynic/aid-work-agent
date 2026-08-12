@@ -26,8 +26,7 @@
 Nginx (宿主机)
     ├── 静态文件 (frontend/dist) → 直接返回
     ├── API请求 (/api/*) → Docker容器 (8000端口)
-    ├── 文件上传 (/uploads/*) → 宿主机文件系统
-    └── 记忆文件 (/memories/*) → 宿主机文件系统
+    └── 文件上传 (/uploads/*) → 宿主机文件系统
 
 Docker 容器内部
     Gunicorn (主进程)
@@ -90,7 +89,6 @@ sudo apt-get install nginx -y
 # 创建项目目录
 sudo mkdir -p /var/www/agent
 sudo mkdir -p /var/www/qb3_upload/agent_uploads
-sudo mkdir -p /var/www/qb3_upload/agent_memories
 sudo chown -R $USER:$USER /var/www/agent
 sudo chown -R www-data:www-data /var/www/qb3_upload
 
@@ -391,7 +389,6 @@ docker compose -f docker-compose.prod.yml restart
 # 备份数据目录
 tar -czf agent_backup_$(date +%Y%m%d).tar.gz \
   /var/www/qb3_upload/agent_uploads \
-  /var/www/qb3_upload/agent_memories \
   /var/www/agent/.env
 
 # 定期备份（添加到 crontab）

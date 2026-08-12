@@ -143,7 +143,6 @@ cd /var/www/agent/deploy
 
 - ✅ 环境配置文件 (`.env`)
 - ✅ 上传文件目录 (`agent_uploads/`)
-- ✅ 记忆文件目录 (`agent_memories/`)
 - ✅ 日志文件目录 (`log/`)
 
 **备份策略**：

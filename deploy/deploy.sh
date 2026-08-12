@@ -85,8 +85,7 @@ main() {
     log_info "步骤 4/7: 创建必要的目录..."
     mkdir -p log
     mkdir -p /var/www/qb3_upload/agent_uploads
-    mkdir -p /var/www/qb3_upload/agent_memories
-    
+
     # 设置正确的权限（允许容器内的 appuser 写入，同时在宿主机可查看）
     # 获取当前用户（通常是部署用户，如 gaofang）
     CURRENT_USER=$(whoami)

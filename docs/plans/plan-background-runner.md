@@ -182,7 +182,6 @@ if __name__ == "__main__": main()
       - ./configs:/app/configs
       - ./skills:/app/skills
       - /var/www/qb3_upload/agent_storage:/app/storage
-      - /var/www/qb3_upload/agent_memories:/app/memories
     networks: [aid-network]
     healthcheck:
       test: ["CMD-SHELL", "test -n \"$$(find /app/storage/.bg_runner_alive -mmin -2 2>/dev/null)\""]

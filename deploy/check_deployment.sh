@@ -182,23 +182,7 @@ else
 fi
 TOTAL_CHECKS=$((TOTAL_CHECKS + 1))
 
-# 11. 检查记忆目录
-log_info "检查记忆目录..."
-if [ -d "/var/www/qb3_upload/agent_memories" ]; then
-    if [ -w "/var/www/qb3_upload/agent_memories" ]; then
-        log_success "记忆目录存在且可写"
-        PASSED_CHECKS=$((PASSED_CHECKS + 1))
-    else
-        log_error "记忆目录存在但不可写"
-        FAILED_CHECKS=$((FAILED_CHECKS + 1))
-    fi
-else
-    log_error "记忆目录不存在"
-    FAILED_CHECKS=$((FAILED_CHECKS + 1))
-fi
-TOTAL_CHECKS=$((TOTAL_CHECKS + 1))
-
-# 12. 检查 HTTPS 访问
+# 11. 检查 HTTPS 访问
 log_info "检查 HTTPS 访问..."
 HTTPS_RESPONSE=$(curl -s -k -o /dev/null -w "%{http_code}" https://agent.aidingyi.cn 2>/dev/null)
 if [ "$HTTPS_RESPONSE" = "200" ] || [ "$HTTPS_RESPONSE" = "301" ]; then
@@ -210,7 +194,7 @@ else
 fi
 TOTAL_CHECKS=$((TOTAL_CHECKS + 1))
 
-# 13. 检查日志目录
+# 12. 检查日志目录
 log_info "检查日志目录..."
 if [ -d "$PROJECT_DIR/log" ]; then
     if [ -w "$PROJECT_DIR/log" ]; then
@@ -226,7 +210,7 @@ else
 fi
 TOTAL_CHECKS=$((TOTAL_CHECKS + 1))
 
-# 14. 检查磁盘空间
+# 13. 检查磁盘空间
 log_info "检查磁盘空间..."
 DISK_USAGE=$(df -h $PROJECT_DIR | tail -1 | awk '{print $5}' | sed 's/%//')
 if [ "$DISK_USAGE" -lt 90 ]; then
@@ -241,7 +225,7 @@ else
 fi
 TOTAL_CHECKS=$((TOTAL_CHECKS + 1))
 
-# 15. 检查容器资源使用
+# 14. 检查容器资源使用
 log_info "检查容器资源使用..."
 CONTAINER_STATS=$(docker stats --no-stream aid-agent-api 2>/dev/null)
 if [ -n "$CONTAINER_STATS" ]; then

@@ -226,7 +226,6 @@ demo:
 storage:
   base_dir: "storage"
   uploads_dir: "storage/uploads"
-  memories_dir: "storage/memories"
 
 # 定时任务配置
 scheduler:
