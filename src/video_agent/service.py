@@ -24,7 +24,6 @@ from typing import Any, Dict, List, Optional
 from loguru import logger
 
 from src.config.settings import settings
-from src.core.temp_logger import tlog
 from src.db.database import get_db_connection
 from src.db.models import ChatRecordDB, SessionDB, TokenCostPriceDB
 from src.reports.work_outcome_db import WorkOutcomeDB
@@ -175,6 +174,7 @@ class VideoChatService:
         user_input: str,
         image_file_ids: Optional[List[str]] = None,
         params: Optional[VideoGenParams] = None,
+        draft_only: bool = False,
     ) -> Dict[str, Any]:
         """处理用户消息：识别意图（精修/敏捷）-> 调用提示词引擎 -> 提交视频生成
 
@@ -185,13 +185,15 @@ class VideoChatService:
             user_input: 用户的中文需求描述
             image_file_ids: 用户上传的参考图片 file_id 列表
             params: 视频生成参数（None 时读会话 metadata）
+            draft_only: True=只生成提示词草稿存 Redis 不提交视频生成（精修模式预览用）；
+                        False=提交视频生成任务（精修模式优先用 Redis 草稿，无则重新生成）
 
         Returns:
             {
                 "mode": "refine" | "agile",
-                "cards": List[VideoCard],
-                "prompt_draft": Optional[str],  # 精修模式的提示词草稿 md（等用户确认）
-                "waiting": bool,                 # 是否在等待视频生成
+                "cards": List[VideoCard],         # draft_only=True 时为空
+                "prompt_draft": Optional[str],    # 提示词草稿 Markdown
+                "waiting": bool,                  # 是否在等待视频生成
                 "error": Optional[str],
             }
         """
@@ -204,40 +206,52 @@ class VideoChatService:
         error: Optional[str] = None
         waiting = False
 
-        tlog(
-            "视频创作",
-            "handle_user_message 进入 session={sid}, mode={mode}, images={img}, user_input={u}",
-            sid=session_id,
-            mode=params.mode,
-            img=image_count,
-            u=(user_input or "")[:80],
+        logger.info(
+            f"[VideoChatService] handle_user_message 进入: session={session_id}, "
+            f"mode={params.mode}, draft_only={draft_only}, images={image_count}"
         )
 
         try:
             if params.mode == "refine":
-                # 精修模式：生成 1 段提示词，等用户确认后再提交视频模型
-                result = await self._prompt_engine.generate_prompt_refine(
-                    user_input=user_input,
-                    image_count=image_count,
-                    duration_sec=params.duration_sec,
-                    ratio=params.ratio,
-                    resolution=params.resolution,
-                )
-                prompt_draft = self._format_prompt_draft_md(result)
-                # 第一阶段简化：精修模式生成提示词后直接提交视频模型（不实现"用户确认"循环）
-                # 用户可在视频生成后通过 continue_with_video 微调
-                card = await self._submit_video_generation(
-                    tenant_id=tenant_id,
-                    user_id=user_id,
-                    session_id=session_id,
-                    prompt_result=result,
-                    image_file_ids=image_file_ids,
-                    params=params,
-                )
-                cards.append(card)
-                waiting = card.provider_status in ("PENDING", "RUNNING")
+                if draft_only:
+                    # 精修模式 - 草稿阶段：生成提示词 + 存 Redis，不提交视频生成
+                    result = await self._prompt_engine.generate_prompt_refine(
+                        user_input=user_input,
+                        image_count=image_count,
+                        duration_sec=params.duration_sec,
+                        ratio=params.ratio,
+                        resolution=params.resolution,
+                    )
+                    self._save_draft_to_redis(session_id, result)
+                    prompt_draft = self._format_prompt_draft_md(result)
+                else:
+                    # 精修模式 - 提交阶段：优先用 Redis 草稿，无则重新生成，然后提交视频生成
+                    result = self._load_draft_from_redis(session_id)
+                    if result is None:
+                        logger.info(f"[VideoChatService] submit 时无草稿缓存，重新生成: session={session_id}")
+                        result = await self._prompt_engine.generate_prompt_refine(
+                            user_input=user_input,
+                            image_count=image_count,
+                            duration_sec=params.duration_sec,
+                            ratio=params.ratio,
+                            resolution=params.resolution,
+                        )
+                    else:
+                        # 草稿命中后清除（一次性使用，避免下次 submit 复用旧草稿）
+                        self._delete_draft_from_redis(session_id)
+                    prompt_draft = self._format_prompt_draft_md(result)
+                    card = await self._submit_video_generation(
+                        tenant_id=tenant_id,
+                        user_id=user_id,
+                        session_id=session_id,
+                        prompt_result=result,
+                        image_file_ids=image_file_ids,
+                        params=params,
+                    )
+                    cards.append(card)
+                    waiting = card.provider_status in ("PENDING", "RUNNING")
             elif params.mode == "agile":
-                # 敏捷模式：一次生成 N 段差异化提示词，无需用户确认，直接提交 N 条
+                # 敏捷模式不支持 draft_only（本就无需用户确认），直接提交 N 条
                 count = max(1, min(params.card_count or DEFAULT_AGILE_COUNT, 3))
                 results = await self._prompt_engine.generate_prompts_agile(
                     user_input=user_input,
@@ -264,14 +278,10 @@ class VideoChatService:
             logger.error(f"[VideoChatService] handle_user_message 失败: {e}", exc_info=True)
             error = str(e)
 
-        tlog(
-            "视频创作",
-            "handle_user_message 返回 mode={mode}, cards={n}, waiting={w}, has_draft={d}, error={err}",
-            mode=params.mode,
-            n=len(cards),
-            w=waiting,
-            d=bool(prompt_draft),
-            err=error,
+        logger.info(
+            f"[VideoChatService] handle_user_message 返回: mode={params.mode}, "
+            f"draft_only={draft_only}, cards={len(cards)}, waiting={waiting}, "
+            f"has_draft={bool(prompt_draft)}, error={error}"
         )
         return {
             "mode": params.mode,
@@ -280,6 +290,55 @@ class VideoChatService:
             "waiting": waiting,
             "error": error,
         }
+
+    # ------------------------------------------------------------------
+    # 草稿状态（Redis）：精修模式 draft -> submit 跨轮次保持用户确认的提示词
+    # ------------------------------------------------------------------
+    def _save_draft_to_redis(self, session_id: str, result: PromptResult) -> None:
+        """把提示词草稿存 Redis（TTL 1 小时，跨 worker 共享）"""
+        try:
+            from src.core.cache_utils import CacheKeys
+            from src.core.redis_client import redis_client
+
+            key = redis_client.make_key(CacheKeys.VIDEO_PROMPT_DRAFT, session_id)
+            payload = {
+                "business_prompt": result.business_prompt,
+                "craft_prompt": result.craft_prompt,
+                "model_params": result.model_params,
+            }
+            redis_client.set(key, payload, ex=3600)
+        except Exception as e:
+            logger.warning(f"[VideoChatService] 保存草稿到 Redis 失败: session={session_id}, error={e}")
+
+    def _load_draft_from_redis(self, session_id: str) -> Optional[PromptResult]:
+        """读取 Redis 中的提示词草稿"""
+        try:
+            from src.core.cache_utils import CacheKeys
+            from src.core.redis_client import redis_client
+
+            key = redis_client.make_key(CacheKeys.VIDEO_PROMPT_DRAFT, session_id)
+            payload = redis_client.get(key)
+            if not payload or not isinstance(payload, dict):
+                return None
+            return PromptResult(
+                business_prompt=payload.get("business_prompt", ""),
+                craft_prompt=payload.get("craft_prompt", ""),
+                model_params=payload.get("model_params", {}) or {},
+            )
+        except Exception as e:
+            logger.warning(f"[VideoChatService] 读取草稿从 Redis 失败: session={session_id}, error={e}")
+            return None
+
+    def _delete_draft_from_redis(self, session_id: str) -> None:
+        """删除 Redis 中的草稿（submit 成功消费后清除，避免下次复用旧草稿）"""
+        try:
+            from src.core.cache_utils import CacheKeys
+            from src.core.redis_client import redis_client
+
+            key = redis_client.make_key(CacheKeys.VIDEO_PROMPT_DRAFT, session_id)
+            redis_client.delete(key)
+        except Exception as e:
+            logger.warning(f"[VideoChatService] 删除草稿从 Redis 失败: session={session_id}, error={e}")
 
     # ------------------------------------------------------------------
     # 视频生成提交（计费 + provider 调用）
@@ -373,28 +432,13 @@ class VideoChatService:
             card.provider_status = submit_result.task_status or "PENDING"
             logger.info(
                 f"[VideoChatService] 视频生成已提交: card_id={card_id}, "
-                f"task_id={submit_result.task_id}, status={card.provider_status}"
-            )
-            tlog(
-                "视频创作",
-                "视频生成已提交 card={cid}, task={tid}, status={st}, credit={c}, duration={d}",
-                cid=card_id,
-                tid=submit_result.task_id,
-                st=card.provider_status,
-                c=expected_credit,
-                d=params.duration_sec,
+                f"task_id={submit_result.task_id}, status={card.provider_status}, "
+                f"credit={expected_credit}, duration={params.duration_sec}"
             )
         except Exception as e:
             logger.error(f"[VideoChatService] 视频生成提交失败: card_id={card_id}, error={e}")
             card.provider_status = "FAILED"
             card.error = str(e)
-            tlog(
-                "视频创作",
-                "视频生成提交失败 card={cid}, error={err}",
-                cid=card_id,
-                err=repr(e),
-                level="ERROR",
-            )
             # 失败退还预扣
             if record_id:
                 self._update_chat_record_status(record_id, STATUS_REFUNDED, error_message=str(e))

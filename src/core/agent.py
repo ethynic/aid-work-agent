@@ -2540,14 +2540,6 @@ class Agent:
                 "content": self._format_video_params_for_llm(video_params),
             })
             logger.info(f"[video_params] 注入视频创作参数到上下文: {video_params}")
-        else:
-            # 临时调试：video-agent 会话未收到 video_params（前端未传 / 链路断裂）时记录
-            tlog(
-                "视频创作",
-                "[注入检查] 当前无 video_params（mode 未注入），subagent={sub}, is_master={m}",
-                sub=getattr(getattr(self, "subagent_config", None), "dir_name", None),
-                m=self.is_master,
-            )
 
         if auto_loaded_skill:
             skill_content = self.skill_registry.get_content(auto_loaded_skill)
@@ -2763,14 +2755,6 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
             
             # If no valid tool calls, we're done
             if not valid_tool_calls:
-                # 临时调试：视频会话 LLM 未调用任何工具直接输出文本时记录（排查"无后续"问题）
-                if getattr(self, '_current_video_params', None):
-                    tlog(
-                        "视频创作",
-                        "[循环结束] LLM 无工具调用直接输出文本, iteration={i}, content={c}",
-                        i=iteration,
-                        c=(content or "")[:120],
-                    )
                 # Store assistant response in memory
                 reasoning = response.get("reasoning_content")
                 if reasoning:

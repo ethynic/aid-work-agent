@@ -4,6 +4,10 @@ video-agent 子智能体的"视频生成"入口。LLM 在 agent loop 中识别�
 调用此工具；工具从 `_video_params`（agent 注入的上下文）读取前端工具栏选择的参数，
 调用 VideoChatService.handle_user_message 完成视频生成。
 
+精修模式两阶段调用（参考 subagents/video-agent/SUBAGENT.md）：
+- 阶段一/二（draft_only=True）：生成提示词草稿，存 Redis，返回草稿 Markdown，不提交视频
+- 阶段三（draft_only=False）：优先用 Redis 草稿提交视频生成 API，无草稿则重新生成
+
 设计依据：docs/plans/plan-video-agent-phase1.md §3.4
 """
 from __future__ import annotations
@@ -13,7 +17,6 @@ from typing import Any, Dict, List, Optional
 from loguru import logger
 from pydantic import BaseModel, Field
 
-from src.core.temp_logger import tlog
 from src.tools.base import BaseTool
 
 
@@ -24,6 +27,14 @@ class SubmitVideoTaskInput(BaseModel):
         None,
         description="用户上传的参考图片 file_id 列表（产品图 / 模特图），可为空",
     )
+    draft_only: bool = Field(
+        False,
+        description=(
+            "True=只生成提示词草稿不提交视频生成（精修模式阶段一/二，预览草稿等用户确认）；"
+            "False=提交视频生成任务（精修模式阶段三，优先用上一轮确认的草稿提交）。"
+            "敏捷模式固定 False"
+        ),
+    )
 
 
 class SubmitVideoTaskTool(BaseTool):
@@ -33,10 +44,12 @@ class SubmitVideoTaskTool(BaseTool):
     description = (
         "提交视频创作任务。根据用户需求和参考图片，结合前端工具栏选择的创作参数"
         "（模式/时长/比例/分辨率/抽卡数/提示词模型），调用提示词引擎生成结构化提示词"
-        "后提交视频生成 API。"
+        "后提交视频生成 API。精修模式支持两阶段调用：draft_only=True 只生成草稿供用户预览，"
+        "draft_only=False 提交视频生成（优先用上一轮草稿）。"
     )
     usage_guide = (
-        "当用户明确要求生成视频 / 创作视频时调用。"
+        "精修模式：用户提需求/调整意见时调用 draft_only=True 生成草稿；用户明确确认后才调用 draft_only=False 提交视频。"
+        "敏捷模式：直接调用 draft_only=False 提交 N 条。"
         "创作参数由前端工具栏提供，你无需关心；只需把用户的文字需求和上传图片传入即可。"
     )
     display_name = "提交视频任务"
@@ -46,7 +59,8 @@ class SubmitVideoTaskTool(BaseTool):
     async def execute(self, **kwargs) -> Dict[str, Any]:
         user_input: str = kwargs.get("user_input", "")
         image_file_ids: Optional[List[str]] = kwargs.get("image_file_ids")
-        # 视频参数由 agent 注入（前端工具栏选择 → ChatRequest.video_params → _current_video_params → _video_params）
+        draft_only: bool = bool(kwargs.get("draft_only", False))
+        # 视频参数由 agent 注入（前端工具栏选择 -> ChatRequest.video_params -> _current_video_params -> _video_params）
         video_params: Dict[str, Any] = kwargs.get("_video_params") or {}
         # 调用方上下文：tenant_id / user_id / session_id 由 trusted 注入或 agent 状态提供
         tenant_id: Optional[str] = kwargs.get("_trusted_tenant_id")
@@ -56,15 +70,8 @@ class SubmitVideoTaskTool(BaseTool):
 
         logger.info(
             f"[submit_video_task] 收到视频创作请求: user_input={user_input[:50]}, "
-            f"images={len(image_file_ids or [])}, video_params={video_params}, user={user_id}"
-        )
-        tlog(
-            "视频创作",
-            "工具收到请求 user_input={u}, images={img}, session={sid}, video_params={vp}",
-            u=user_input[:80],
-            img=len(image_file_ids or []),
-            sid=session_id,
-            vp=video_params,
+            f"draft_only={draft_only}, images={len(image_file_ids or [])}, "
+            f"video_params={video_params}, user={user_id}"
         )
 
         if not user_input.strip():
@@ -93,21 +100,13 @@ class SubmitVideoTaskTool(BaseTool):
                 resolution=video_params.get("resolution", "720P"),
                 card_count=int(video_params.get("card_count", 1)),
                 prompt_model=video_params.get("prompt_model"),
+                draft_only=draft_only,
             )
             # 附加 success 标记，便于 LLM 读取
             result["success"] = result.get("error") is None
-            tlog(
-                "视频创作",
-                "工具返回 mode={mode}, cards={n}, waiting={w}, error={err}",
-                mode=result.get("mode"),
-                n=len(result.get("cards") or []),
-                w=result.get("waiting"),
-                err=result.get("error"),
-            )
             return result
         except Exception as e:
             logger.error(f"[submit_video_task] 视频创作失败: {e}", exc_info=True)
-            tlog("视频创作", "工具执行异常: {err}", err=repr(e), level="ERROR")
             return {
                 "success": False,
                 "error": "视频创作失败，请稍后重试",

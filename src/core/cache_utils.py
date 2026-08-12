@@ -63,6 +63,9 @@ class CacheKeys:
     AGENT_SESSION_SUSPENSION = "agent_session_suspension"
     BROWSER_RESUME_JOBS = "browser_resume_jobs"
     AGENT_CONTINUATION_EVENTS = "agent_continuation_events"
+    # video-agent：精修模式提示词草稿缓存（draft_only=True 时写入，draft_only=False 时优先读取）
+    # video_prompt_draft:{session_id} -> PromptResult 序列化 dict（含 business_prompt/craft_prompt/model_params）
+    VIDEO_PROMPT_DRAFT = "video_prompt_draft"
 
 
 # ============== 通用缓存函数 ==============

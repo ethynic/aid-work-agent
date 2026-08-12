@@ -44,6 +44,7 @@ async def handle_user_message_via_chat(
     resolution: str = "720P",
     card_count: int = 1,
     prompt_model: Optional[str] = None,
+    draft_only: bool = False,
 ) -> Dict[str, Any]:
     """子 Agent 工具调用入口：处理用户视频创作消息
 
@@ -59,6 +60,8 @@ async def handle_user_message_via_chat(
         resolution: 分辨率（720P / 1080P / 768P / 2K）
         card_count: 敏捷模式生成条数（1-3，精修模式固定 1）
         prompt_model: 提示词模型（覆盖 SUBAGENT.md 默认值），如 'qwen-vl-max'
+        draft_only: True=只生成提示词草稿不提交视频生成（精修模式预览）；
+                    False=提交视频生成任务（精修模式优先用 Redis 草稿）
 
     Returns:
         VideoChatService.handle_user_message 的返回值（dict）
@@ -74,7 +77,8 @@ async def handle_user_message_via_chat(
     )
     logger.info(
         f"[chat_integration] 处理视频创作消息: session={session_id}, mode={mode}, "
-        f"prompt_model={prompt_model}, images={len(image_file_ids or [])}, user={user_id}"
+        f"draft_only={draft_only}, prompt_model={prompt_model}, "
+        f"images={len(image_file_ids or [])}, user={user_id}"
     )
     return await service.handle_user_message(
         session_id=session_id,
@@ -83,6 +87,7 @@ async def handle_user_message_via_chat(
         user_input=user_input,
         image_file_ids=image_file_ids,
         params=params,
+        draft_only=draft_only,
     )
 
 
