@@ -620,12 +620,24 @@ class ScheduledTaskManager:
         新建 event loop run_until_complete（同 _run_memory_summarizer 模式）。
         只在 background_runner 进程跑（调度器有 manager 级 Redis 锁）。
         """
+        # 临时 tlog：标记 background_runner 触发视频轮询
+        try:
+            from src.core.temp_logger import tlog
+            tlog("video-agent-阶段三", "background_runner._run_video_gen_poll 触发")
+        except Exception:
+            pass
+
         loop = asyncio.new_event_loop()
         try:
             asyncio.set_event_loop(loop)
             loop.run_until_complete(self._video_gen_poll_tick())
         except Exception as e:
             logger.error(f"后端日志：视频生成轮询异常: {e}", exc_info=True)
+            try:
+                from src.core.temp_logger import tlog
+                tlog("video-agent-阶段三", "background_runner 轮询异常 err={err}", err=str(e), level="ERROR")
+            except Exception:
+                pass
         finally:
             try:
                 loop.close()
@@ -638,10 +650,21 @@ class ScheduledTaskManager:
         try:
             svc = VideoGenService()
             n = await svc.poll_pending_cards()
+            # 临时 tlog：标记 tick 执行结果（含 0 也要记，便于排查是否真的在跑）
+            try:
+                from src.core.temp_logger import tlog
+                tlog("video-agent-阶段三", "background_runner._video_gen_poll_tick 完成 processed={n}", n=n)
+            except Exception:
+                pass
             if n > 0:
                 logger.info(f"后端日志：视频生成轮询处理 {n} 条 card")
         except Exception as e:
             logger.error(f"后端日志：视频生成轮询 tick 异常: {e}", exc_info=True)
+            try:
+                from src.core.temp_logger import tlog
+                tlog("video-agent-阶段三", "background_runner tick 异常 err={err}", err=str(e), level="ERROR")
+            except Exception:
+                pass
 
     def shutdown(self):
         """优雅关闭"""

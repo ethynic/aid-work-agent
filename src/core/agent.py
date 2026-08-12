@@ -2659,7 +2659,27 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
             
             tool_calls = response.get("tool_calls", [])
             content = response.get("content", "")
-            
+
+            # 临时 tlog：追踪 video-agent 阶段三 LLM 响应（排查"嘴上说提交但没调工具"）
+            try:
+                from src.core.temp_logger import tlog
+                tool_names = [
+                    tc.get("function", {}).get("name", tc.get("name", ""))
+                    for tc in tool_calls
+                ] if tool_calls else []
+                tlog(
+                    "video-agent-阶段三",
+                    "LLM 响应 iteration={iter} has_tool_calls={has_tc} tool_names={names} "
+                    "content_len={clen} content_preview={preview}",
+                    iter=iteration,
+                    has_tc=bool(tool_calls),
+                    names=tool_names,
+                    clen=len(content) if content else 0,
+                    preview=(content or "")[:300],
+                )
+            except Exception:
+                pass
+
             # 后端日志：记录Agent迭代信息（关联LLM request_id）
             log_agent_iteration(
                 iteration=iteration,
@@ -2755,6 +2775,22 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
             
             # If no valid tool calls, we're done
             if not valid_tool_calls:
+                # 临时 tlog：LLM 没调工具直接退出，标记是否在 video-agent 上下文
+                try:
+                    from src.core.temp_logger import tlog
+                    has_vp = bool(getattr(self, '_current_video_params', None))
+                    tlog(
+                        "video-agent-阶段三",
+                        "LLM 未调用工具直接退出 iteration={iter} has_video_params={vp} "
+                        "is_master={master} content_preview={preview}",
+                        iter=iteration,
+                        vp=has_vp,
+                        master=self.is_master,
+                        preview=(content or "")[:300],
+                    )
+                except Exception:
+                    pass
+
                 # Store assistant response in memory
                 reasoning = response.get("reasoning_content")
                 if reasoning:

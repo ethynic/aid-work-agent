@@ -206,6 +206,21 @@ class VideoChatService:
         error: Optional[str] = None
         waiting = False
 
+        # 临时 tlog：service.handle_user_message 入口（追踪 LLM 是否真的把请求送到 service）
+        try:
+            from src.core.temp_logger import tlog
+            tlog(
+                "video-agent-阶段三",
+                "VideoChatService.handle_user_message 进入 session={sid} mode={mode} "
+                "draft_only={draft} images={n_img}",
+                sid=session_id,
+                mode=params.mode,
+                draft=draft_only,
+                n_img=image_count,
+            )
+        except Exception:
+            pass
+
         logger.info(
             f"[VideoChatService] handle_user_message 进入: session={session_id}, "
             f"mode={params.mode}, draft_only={draft_only}, images={image_count}"
@@ -283,6 +298,24 @@ class VideoChatService:
             f"draft_only={draft_only}, cards={len(cards)}, waiting={waiting}, "
             f"has_draft={bool(prompt_draft)}, error={error}"
         )
+        # 临时 tlog：service 返回结果（含 cards 状态，便于排查 LLM 是否拿到 cards 字段）
+        try:
+            from src.core.temp_logger import tlog
+            tlog(
+                "video-agent-阶段三",
+                "VideoChatService.handle_user_message 返回 mode={mode} draft_only={draft} "
+                "cards={nc} waiting={w} has_draft={hd} error={err} "
+                "cards_status={csts}",
+                mode=params.mode,
+                draft=draft_only,
+                nc=len(cards),
+                w=waiting,
+                hd=bool(prompt_draft),
+                err=error,
+                csts=[{"card_id": c.card_id, "tid": c.provider_task_id, "st": c.provider_status} for c in cards],
+            )
+        except Exception:
+            pass
         return {
             "mode": params.mode,
             "cards": [asdict(c) for c in cards],
@@ -430,6 +463,30 @@ class VideoChatService:
             submit_result = await self._provider.submit(req)
             card.provider_task_id = submit_result.task_id
             card.provider_status = submit_result.task_status or "PENDING"
+            # 临时 tlog：provider 提交成功 + 标记 video_agent 走 chat_records（非 gen_cards）
+            try:
+                from src.core.temp_logger import tlog
+                tlog(
+                    "video-agent-阶段三",
+                    "provider.submit 成功 card_id={cid} task_id={tid} status={st} "
+                    "credit={credit} duration={dur} chat_record_id={rid}",
+                    cid=card_id,
+                    tid=submit_result.task_id,
+                    st=card.provider_status,
+                    credit=expected_credit,
+                    dur=params.duration_sec,
+                    rid=record_id,
+                )
+                tlog(
+                    "video-agent-阶段三",
+                    "⚠️ video_agent 写 chat_records 表（record_id={rid}），未写 gen_cards 表；"
+                    "background_runner 轮询扫的是 gen_cards，task_id={tid} 不会被自动轮询",
+                    rid=record_id,
+                    tid=submit_result.task_id,
+                    level="WARNING",
+                )
+            except Exception:
+                pass
             logger.info(
                 f"[VideoChatService] 视频生成已提交: card_id={card_id}, "
                 f"task_id={submit_result.task_id}, status={card.provider_status}, "
@@ -437,6 +494,18 @@ class VideoChatService:
             )
         except Exception as e:
             logger.error(f"[VideoChatService] 视频生成提交失败: card_id={card_id}, error={e}")
+            # 临时 tlog：provider 提交失败
+            try:
+                from src.core.temp_logger import tlog
+                tlog(
+                    "video-agent-阶段三",
+                    "provider.submit 失败 card_id={cid} error={err}",
+                    cid=card_id,
+                    err=str(e)[:300],
+                    level="ERROR",
+                )
+            except Exception:
+                pass
             card.provider_status = "FAILED"
             card.error = str(e)
             # 失败退还预扣

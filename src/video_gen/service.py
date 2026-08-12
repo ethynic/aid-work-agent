@@ -313,6 +313,18 @@ class VideoGenService:
             )
             pending = [dict(r) for r in cur.fetchall()]
 
+        # 临时 tlog：扫描结果（含 0 也要记，便于排查 background_runner 是否在跑）
+        try:
+            from src.core.temp_logger import tlog
+            tlog(
+                "video-agent-阶段三",
+                "poll_pending_cards 扫描到 pending={n} 条 cards={cids}",
+                n=len(pending),
+                cids=[c.get("card_id") for c in pending],
+            )
+        except Exception:
+            pass
+
         if not pending:
             return 0
 
@@ -332,11 +344,33 @@ class VideoGenService:
                 result = await self._provider.poll(card["provider_task_id"])
             except BaseVideoProviderError as exc:
                 logger.warning(f"视频生成轮询失败 card={card['card_id']}: {exc}")
+                try:
+                    from src.core.temp_logger import tlog
+                    tlog(
+                        "video-agent-阶段三",
+                        "poll_pending_cards 轮询失败（下轮重试）card={cid} err={err}",
+                        cid=card["card_id"],
+                        err=str(exc),
+                        level="WARNING",
+                    )
+                except Exception:
+                    pass
                 continue   # 网络/临时错误，下轮再试
             except Exception as exc:
                 # 切换 provider 后，旧 provider 的 task_id 在新 provider 上无法查询
                 # （如 wanx -> minimax 切换），抛 unknown-task 异常时直接标 FAILED
                 logger.warning(f"视频生成轮询异常（可能 provider 切换）card={card['card_id']}: {exc}")
+                try:
+                    from src.core.temp_logger import tlog
+                    tlog(
+                        "video-agent-阶段三",
+                        "poll_pending_cards 轮询异常（标 FAILED）card={cid} err={err}",
+                        cid=card["card_id"],
+                        err=str(exc),
+                        level="ERROR",
+                    )
+                except Exception:
+                    pass
                 self._mark_failed(
                     card["card_id"], card["tenant_id"],
                     f"原 provider 任务无法轮询，请重新生成: {exc}",
@@ -344,6 +378,18 @@ class VideoGenService:
                 )
                 processed += 1
                 continue
+
+            try:
+                from src.core.temp_logger import tlog
+                tlog(
+                    "video-agent-阶段三",
+                    "poll_pending_cards 状态更新 card={cid} status={st} has_video={hv}",
+                    cid=card["card_id"],
+                    st=result.task_status,
+                    hv=bool(result.video_url),
+                )
+            except Exception:
+                pass
 
             if result.task_status == "SUCCEEDED" and result.video_url:
                 await self._on_card_succeeded(card, result, enable_ai_label=card.get("enable_ai_label", True))

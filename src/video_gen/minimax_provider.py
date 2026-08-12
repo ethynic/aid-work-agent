@@ -66,6 +66,23 @@ class MiniMaxProvider(BaseVideoProvider):
         - aigc_watermark=False（项目自己烧录 AI 标识）
         - negative_prompt 在 MiniMax 不支持，provider 内部忽略
         """
+        # 临时 tlog：标记 minimax submit 入口
+        try:
+            from src.core.temp_logger import tlog
+            tlog(
+                "video-agent-阶段三",
+                "minimax.submit 入口 model={model} duration={dur} resolution={res} ratio={ratio} "
+                "seed={seed} has_first_frame={has_ff}",
+                model=self._model,
+                dur=req.duration,
+                res=req.resolution,
+                ratio=req.ratio,
+                seed=req.seed,
+                has_ff=bool(req.first_frame_data_url or req.reference_image_data_url),
+            )
+        except Exception:
+            pass
+
         # 防御性校验：MiniMax 支持 768P/2K，duration 4-15 任意整数
         if req.resolution not in ("768P", "2K"):
             raise MiniMaxProviderError(f"resolution 仅支持 768P/2K，收到: {req.resolution}")
@@ -100,29 +117,72 @@ class MiniMaxProvider(BaseVideoProvider):
             async with httpx.AsyncClient(timeout=60.0) as client:
                 resp = await client.post(_SUBMIT_URL, json=body, headers=headers)
         except httpx.HTTPError as exc:
+            try:
+                from src.core.temp_logger import tlog
+                tlog("video-agent-阶段三", "minimax.submit 网络异常 err={err}", err=str(exc), level="ERROR")
+            except Exception:
+                pass
             raise MiniMaxProviderError(f"MiniMax 提交网络异常: {exc}") from exc
 
         if resp.status_code != 200:
+            try:
+                from src.core.temp_logger import tlog
+                tlog(
+                    "video-agent-阶段三",
+                    "minimax.submit HTTP 失败 status={st} body={body}",
+                    st=resp.status_code,
+                    body=resp.text[:300],
+                    level="ERROR",
+                )
+            except Exception:
+                pass
             raise MiniMaxProviderError(f"MiniMax 提交失败 (HTTP {resp.status_code}): {resp.text}")
 
         data = resp.json()
         task_id = data.get("task_id")
         if not task_id:
+            try:
+                from src.core.temp_logger import tlog
+                tlog("video-agent-阶段三", "minimax.submit 未返回 task_id data={data}", data=str(data)[:300], level="ERROR")
+            except Exception:
+                pass
             raise MiniMaxProviderError(f"MiniMax 提交未返回 task_id: {data}")
+        try:
+            from src.core.temp_logger import tlog
+            tlog("video-agent-阶段三", "minimax.submit 成功 task_id={tid}", tid=task_id)
+        except Exception:
+            pass
         logger.info(f"MiniMax 提交成功 task_id={task_id}")
         return SubmitResult(task_id=task_id, task_status="PENDING", raw=data)
 
     async def poll(self, task_id: str) -> PollResult:
         """查询任务状态，把 MiniMax 小写状态码映射到统一大写。"""
+        # 临时 tlog：标记 minimax poll 入口
+        try:
+            from src.core.temp_logger import tlog
+            tlog("video-agent-阶段三", "minimax.poll 入口 task_id={tid}", tid=task_id)
+        except Exception:
+            pass
+
         url = f"{_POLL_BASE}{task_id}"
         headers = {"Authorization": f"Bearer {self._api_key}"}
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 resp = await client.get(url, headers=headers)
         except httpx.HTTPError as exc:
+            try:
+                from src.core.temp_logger import tlog
+                tlog("video-agent-阶段三", "minimax.poll 网络异常 task={tid} err={err}", tid=task_id, err=str(exc), level="ERROR")
+            except Exception:
+                pass
             raise MiniMaxProviderError(f"MiniMax 轮询网络异常 (task={task_id}): {exc}") from exc
 
         if resp.status_code != 200:
+            try:
+                from src.core.temp_logger import tlog
+                tlog("video-agent-阶段三", "minimax.poll HTTP 失败 task={tid} status={st} body={body}", tid=task_id, st=resp.status_code, body=resp.text[:300], level="ERROR")
+            except Exception:
+                pass
             raise MiniMaxProviderError(f"MiniMax 轮询失败 (HTTP {resp.status_code}): {resp.text}")
 
         data = resp.json()
@@ -139,6 +199,19 @@ class MiniMaxProvider(BaseVideoProvider):
         if mapped == "FAILED":
             err_obj = task.get("error") or {}
             error = err_obj.get("message") or "MiniMax 生成失败"
+        try:
+            from src.core.temp_logger import tlog
+            tlog(
+                "video-agent-阶段三",
+                "minimax.poll 返回 task_id={tid} raw_status={raw} mapped={st} has_video={hv} err={err}",
+                tid=task_id,
+                raw=raw_status,
+                st=mapped,
+                hv=bool(video_url),
+                err=error,
+            )
+        except Exception:
+            pass
         return PollResult(
             task_status=mapped,
             video_url=video_url,

@@ -68,6 +68,22 @@ class SubmitVideoTaskTool(BaseTool):
         # session_id 没有专门的 trusted 注入；第一阶段从 video_params 中透传（前端 attach）
         session_id: Optional[str] = video_params.get("session_id")
 
+        # 临时 tlog：标记工具被调用（排查 LLM 嘴上说提交但没调工具）
+        try:
+            from src.core.temp_logger import tlog
+            tlog(
+                "video-agent-阶段三",
+                "submit_video_task.execute 被调用 draft_only={draft} session_id={sid} "
+                "user={uid} images={n_img} video_params={vp}",
+                draft=draft_only,
+                sid=session_id,
+                uid=user_id,
+                n_img=len(image_file_ids or []),
+                vp=video_params,
+            )
+        except Exception:
+            pass
+
         logger.info(
             f"[submit_video_task] 收到视频创作请求: user_input={user_input[:50]}, "
             f"draft_only={draft_only}, images={len(image_file_ids or [])}, "

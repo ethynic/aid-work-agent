@@ -50,6 +50,24 @@ class WanxProvider(BaseVideoProvider):
         有模特图传模特图，否则传产品图）。negative_prompt 放 parameters 下（spike 实测确认）。
         ratio 控制视频画面比例（9:16 竖版 / 16:9 横版 / 1:1 / 4:3 / 3:4）。
         """
+        # 临时 tlog：标记 wanx submit 入口
+        try:
+            from src.core.temp_logger import tlog
+            tlog(
+                "video-agent-阶段三",
+                "wanx.submit 入口 model={model} duration={dur} resolution={res} ratio={ratio} "
+                "seed={seed} has_ref_img={has_ref} has_first_frame={has_ff}",
+                model=self._model,
+                dur=req.duration,
+                res=req.resolution,
+                ratio=req.ratio,
+                seed=req.seed,
+                has_ref=bool(req.reference_image_data_url),
+                has_ff=bool(req.first_frame_data_url),
+            )
+        except Exception:
+            pass
+
         # 防御性校验：万相 2.7 r2v 单次调用 duration 上限 15s，防止前端脏数据直传阿里云
         if req.duration not in (5, 10, 15):
             raise WanxProviderError(f"duration 仅支持 5/10/15 秒，收到: {req.duration}")
@@ -89,31 +107,74 @@ class WanxProvider(BaseVideoProvider):
             async with httpx.AsyncClient(timeout=60.0) as client:
                 resp = await client.post(_SUBMIT_URL, json=body, headers=headers)
         except httpx.HTTPError as exc:
+            try:
+                from src.core.temp_logger import tlog
+                tlog("video-agent-阶段三", "wanx.submit 网络异常 err={err}", err=str(exc), level="ERROR")
+            except Exception:
+                pass
             raise WanxProviderError(f"万相提交网络异常: {exc}") from exc
 
         if resp.status_code != 200:
+            try:
+                from src.core.temp_logger import tlog
+                tlog(
+                    "video-agent-阶段三",
+                    "wanx.submit HTTP 失败 status={st} body={body}",
+                    st=resp.status_code,
+                    body=resp.text[:300],
+                    level="ERROR",
+                )
+            except Exception:
+                pass
             raise WanxProviderError(f"万相提交失败 (HTTP {resp.status_code}): {resp.text}")
 
         data = resp.json()
         output = data.get("output") or {}
         task_id = output.get("task_id")
         if not task_id:
+            try:
+                from src.core.temp_logger import tlog
+                tlog("video-agent-阶段三", "wanx.submit 未返回 task_id data={data}", data=str(data)[:300], level="ERROR")
+            except Exception:
+                pass
             raise WanxProviderError(f"万相提交未返回 task_id: {data}")
         task_status = output.get("task_status", "PENDING")
+        try:
+            from src.core.temp_logger import tlog
+            tlog("video-agent-阶段三", "wanx.submit 成功 task_id={tid} status={st}", tid=task_id, st=task_status)
+        except Exception:
+            pass
         logger.info(f"万相提交成功 task_id={task_id} status={task_status}")
         return SubmitResult(task_id=task_id, task_status=task_status, raw=data)
 
     async def poll(self, task_id: str) -> PollResult:
         """查询任务状态（万相状态码已是大写）。"""
+        # 临时 tlog：标记 wanx poll 入口
+        try:
+            from src.core.temp_logger import tlog
+            tlog("video-agent-阶段三", "wanx.poll 入口 task_id={tid}", tid=task_id)
+        except Exception:
+            pass
+
         headers = {"Authorization": f"Bearer {self._api_key}"}
         url = f"{_POLL_BASE}{task_id}"
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 resp = await client.get(url, headers=headers)
         except httpx.HTTPError as exc:
+            try:
+                from src.core.temp_logger import tlog
+                tlog("video-agent-阶段三", "wanx.poll 网络异常 task={tid} err={err}", tid=task_id, err=str(exc), level="ERROR")
+            except Exception:
+                pass
             raise WanxProviderError(f"万相轮询网络异常 (task={task_id}): {exc}") from exc
 
         if resp.status_code != 200:
+            try:
+                from src.core.temp_logger import tlog
+                tlog("video-agent-阶段三", "wanx.poll HTTP 失败 task={tid} status={st} body={body}", tid=task_id, st=resp.status_code, body=resp.text[:300], level="ERROR")
+            except Exception:
+                pass
             raise WanxProviderError(f"万相轮询失败 (HTTP {resp.status_code}): {resp.text}")
 
         data = resp.json()
@@ -126,6 +187,19 @@ class WanxProvider(BaseVideoProvider):
         error = None
         if task_status == "FAILED":
             error = output.get("message") or output.get("errors") or "万相生成失败"
+        try:
+            from src.core.temp_logger import tlog
+            tlog(
+                "video-agent-阶段三",
+                "wanx.poll 返回 task_id={tid} status={st} has_video={hv} duration={dur} err={err}",
+                tid=task_id,
+                st=task_status,
+                hv=bool(video_url),
+                dur=duration,
+                err=error,
+            )
+        except Exception:
+            pass
         return PollResult(
             task_status=task_status,
             video_url=video_url,
