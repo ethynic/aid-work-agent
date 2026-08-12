@@ -5,16 +5,16 @@ import { findForbiddenDesktopBundleText, findForbiddenDesktopModules } from '../
 
 describe('desktop artifact verifier', () => {
   it.each([
-    'src/router/portalRoutes.ts?vue&type=script',
-    'SRC\\COMPONENTS\\SAAS\\PORTALLAYOUT.VUE',
-    'C:\\repo\\frontend\\src\\components\\DigitalEmployeeManager.vue?import',
-    '/workspace/frontend/src/api/adminSubagent.ts#virtual',
+    'web/router/portalRoutes.ts?vue&type=script',
+    'WEB\\COMPONENTS\\SAAS\\PORTALLAYOUT.VUE',
+    'C:\\repo\\frontend\\web\\components\\DigitalEmployeeManager.vue?import',
+    '/workspace/frontend/web/api/adminSubagent.ts#virtual',
   ])('rejects forbidden module path form %s', (modulePath) => {
     expect(findForbiddenDesktopModules({}, [modulePath])).not.toEqual([])
   })
 
   it('allows tenant-only modules', () => {
-    expect(findForbiddenDesktopModules({}, ['src/components/saas/TenantLayout.vue'])).toEqual([])
+    expect(findForbiddenDesktopModules({}, ['web/components/saas/TenantLayout.vue'])).toEqual([])
   })
 
   it('rejects Portal credentials and direct sensitive localStorage persistence in built JavaScript', () => {

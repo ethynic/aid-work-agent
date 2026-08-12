@@ -108,7 +108,7 @@ focus:ring-primary-500
 
 ### 1.6 滚动条样式
 
-滚动条样式已提取到公共样式文件 `frontend/src/styles/page-common.css`，使用 `.table-scroll-wrapper` 类即可：
+滚动条样式已提取到公共样式文件 `frontend/web/styles/page-common.css`，使用 `.table-scroll-wrapper` 类即可：
 
 ```vue
 <div class="table-scroll-wrapper">

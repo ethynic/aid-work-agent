@@ -10,9 +10,12 @@ export const agentRoutes: RouteRecordRaw[] = [
   {
     path: '/',
     name: 'root',
-    component: () => import.meta.env.VITE_DEMO_ENABLED === 'true'
-      ? import('@/components/ChatContainer.vue')
-      : import('@/components/UniversalLogin.vue')
+    component: () => {
+      if (import.meta.env.VITE_DEMO_ENABLED === 'true') {
+        return import('@/components/ChatContainer.vue')
+      }
+      return import('@/components/UniversalLogin.vue')
+    }
   },
   { path: '/chat/:subagent', name: 'chat-subagent', component: () => import('@/components/ChatContainer.vue') },
   { path: '/customer-info', name: 'customer-info', component: CustomerInfo },

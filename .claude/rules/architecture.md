@@ -129,11 +129,11 @@ context:
 
 **2. 创建 Vue 组件**
 
-在 `frontend/src/components/<domain>/` 目录下创建组件，遵循 [list-page-convention.md](./list-page-convention.md) 规范。
+在 `frontend/web/components/<domain>/` 目录下创建组件，遵循 [list-page-convention.md](./list-page-convention.md) 规范。
 
 **3. 注册路由**
 
-在 `frontend/src/main.ts` 中注册路由，每个业务域的路由需要注册两份（demo 模式 + tenant 模式），参照现有模式。
+在 `frontend/web/main.ts` 中注册路由，每个业务域的路由需要注册两份（demo 模式 + tenant 模式），参照现有模式。
 
 **4. 发布**
 

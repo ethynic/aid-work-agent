@@ -334,7 +334,7 @@ class TenantStatus(IntEnum):
 
 3. **前端显示值不受此限制**：显示值通常为中文，通过映射表实现（如 `TenantStatusMap`）。
 
-**如需修改字段枚举值，注意前后端协调修改**：同时更新 `src/saas/models/enums.py`（后端）和 `frontend/src/api/enums.ts`（前端）。
+**如需修改字段枚举值，注意前后端协调修改**：同时更新 `src/saas/models/enums.py`（后端）和 `frontend/web/api/enums.ts`（前端）。
 
 ## 业务数据表（bs_）CRUD 规范
 
@@ -601,4 +601,3 @@ ref: ImageRef = await registry.register(
 - `PERMANENT_TTL(-1)` 不调用 `redis_client.expire`（内存降级版 seconds≤0 立即删键）；只有正数 TTL 才调 expire
 - Redis key 与 `cp_tool._register_download` 完全同命名空间（`uploaded_file:{file_id}`），现有 `/api/files/{file_id}/download` 路由可直接下载
 - ImageRegistry 是惰性单例（`get_image_registry()`），模块顶层**无**实例化副作用，import 该模块不会拉起 master_agent
-

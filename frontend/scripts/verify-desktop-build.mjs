@@ -3,22 +3,22 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const forbiddenModules = [
-  'src/router/portalRoutes.ts',
-  'src/components/saas/PortalLayout.vue',
-  'src/components/DigitalEmployeeManager.vue',
-  'src/api/adminSubagent.ts',
-  'src/components/saas/TenantDashboard.vue',
-  'src/components/saas/TenantMgmt.vue',
-  'src/components/AgentDefinitionManager.vue',
-  'src/components/saas/PlatformTokenUsage.vue',
-  'src/components/saas/ErrorLogs.vue',
-  'src/components/saas/SystemReplyStyleManager.vue',
-  'src/components/saas/TraceBrowser.vue',
-  'src/components/saas/SessionTraces.vue',
-  'src/components/saas/TraceDetail.vue',
-  'src/components/saas/ContextCompressionManager.vue',
-  'src/components/saas/RpaBindingPanel.vue',
-  'src/components/saas/RedisCacheManager.vue',
+  'web/router/portalRoutes.ts',
+  'web/components/saas/PortalLayout.vue',
+  'web/components/DigitalEmployeeManager.vue',
+  'web/api/adminSubagent.ts',
+  'web/components/saas/TenantDashboard.vue',
+  'web/components/saas/TenantMgmt.vue',
+  'web/components/AgentDefinitionManager.vue',
+  'web/components/saas/PlatformTokenUsage.vue',
+  'web/components/saas/ErrorLogs.vue',
+  'web/components/saas/SystemReplyStyleManager.vue',
+  'web/components/saas/TraceBrowser.vue',
+  'web/components/saas/SessionTraces.vue',
+  'web/components/saas/TraceDetail.vue',
+  'web/components/saas/ContextCompressionManager.vue',
+  'web/components/saas/RpaBindingPanel.vue',
+  'web/components/saas/RedisCacheManager.vue',
 ]
 
 const normalizeModulePath = (value) => {

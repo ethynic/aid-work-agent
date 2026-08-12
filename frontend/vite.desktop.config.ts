@@ -31,7 +31,7 @@ export default defineConfig(() => {
     plugins: [vue(), desktopModuleManifest()],
     resolve: {
       alias: {
-        '@': path.resolve(__dirname, 'src')
+        '@': path.resolve(__dirname, 'web')
       }
     },
     build: {

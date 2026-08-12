@@ -25,7 +25,7 @@
 
 ### 2.1 代码库事实
 
-- `frontend/` 是 Vue 3 + Vite 5 SPA，路由集中在 `frontend/src/main.ts`，使用 `createWebHistory()`。
+- `frontend/` 是 Vue 3 + Vite 5 SPA，现有 Web UI 源码整体位于 `frontend/web/`，Web 路由入口为 `frontend/web/main.ts`，使用 `createWebHistory()`。
 - Web 与平台管理后台当前共享入口；`/portal/login`、`/portal/**` 和 `/t/:tenant_id/**` 同时注册。
 - Agent 对话使用 `POST /api/chat/stream` 的流式 Fetch/SSE；上传、下载、知识库和业务页面也直接调用 Python API。
 - API 基址多数使用 `VITE_API_BASE_URL || '/api'`，少数模块使用 `VITE_API_BASE` 或 `window.location.origin`，尚未形成统一运行时解析层。
@@ -87,13 +87,15 @@ flowchart LR
 
 ```text
 frontend/
-  src/
+  web/                       # 现有稳定 Web UI；第一阶段仅由 src 原样迁入
     app/bootstrap.ts
     router/agentRoutes.ts
     router/portalRoutes.ts
     platform/runtime.ts
-  src/main.ts                 # Web 入口：agent + portal
-  src/main.desktop.ts         # Desktop 入口：仅 agent
+    main.ts                  # Web 入口：agent + portal
+    main.desktop.ts          # 现有 Desktop 入口：仅 agent
+  desktop/                   # 后续阶段新增独立桌面 UI（Windows/macOS 共用）
+  shared/                    # 后续按需提取的纯共享业务/UI 基础层
 clients/agent-desktop/
   package.json
   electron/main/
@@ -103,7 +105,9 @@ clients/agent-desktop/
   tests/
 ```
 
-`frontend` 仍是 UI 的唯一实现；`clients/agent-desktop` 只负责桌面生命周期、原生能力、Playwright runtime 和发布。禁止复制一套 Vue 页面到客户端工程。
+第一阶段只完成 `frontend/src` → `frontend/web` 的原样目录迁移，`@/` 继续映射到 `web/`，不改变 Web 页面、样式、路由或业务行为。后续再新增与 `web/` 同级的 `desktop/`，并将确实复用的能力逐步提取到 `shared/`；不得在目录迁移阶段同时拆 UI 或提取共享代码。
+
+`clients/agent-desktop` 只负责桌面生命周期、原生能力、Playwright runtime 和发布，不承载 Vue 页面。Windows 与 macOS 共用一套 `frontend/desktop` UI，平台差异通过 Electron 平台能力边界处理。
 
 ## 5. `/portal` 的排除方式
 

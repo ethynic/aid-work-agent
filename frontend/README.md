@@ -28,8 +28,9 @@ frontend/
 ├── package.json            # 依赖配置
 ├── vite.config.ts          # Vite配置
 ├── tailwind.config.js      # TailwindCSS配置
-├── src/
-│   ├── main.ts             # Vue入口
+├── web/                    # 现有 Web UI 源码；Desktop UI 分离前也承载桌面入口
+│   ├── main.ts             # Web Vue入口
+│   ├── main.desktop.ts     # 现有 Desktop Vue入口
 │   ├── App.vue             # 根组件
 │   ├── style.css           # 全局样式
 │   ├── api/

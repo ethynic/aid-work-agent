@@ -52,6 +52,13 @@ Web 构建和 Python 服务端能力无回归；Windows/macOS 签名客户端可
 
 ## 4. Phase 1：前端双入口与路由隔离
 
+### 2026-08-12 前端目录分层第一阶段检查点
+
+- 将现有 `frontend/src/` 整体原样迁移为 `frontend/web/`，保留 `@/` import 语义，不调整任何 Web 页面、样式、路由或业务逻辑。
+- Web 与现有 Desktop 入口分别改为 `/web/main.ts`、`/web/main.desktop.ts`；Vite、Vitest、TypeScript、Tailwind 和 Desktop artifact verifier 同步使用 `web/` 源码根。
+- 本阶段不新增 Desktop UI、不提取 `shared/`，只为后续 `frontend/desktop/`、`frontend/shared/` 同级目录预留稳定边界。
+- 新增目录结构回归测试，禁止恢复遗留 `frontend/src/` 入口和目录。
+
 ### 2026-07-14 Windows 检查点
 
 - 完成 Web/Desktop 双入口和路由拆分；Web 继续组合 Agent 与 Portal，Desktop 只引用 Agent 路由并拒绝 `/portal/**` 与 Web-only `/subagents`。
