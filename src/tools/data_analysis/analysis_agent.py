@@ -362,12 +362,14 @@ class AnalysisAgent:
         file_path = result.get("file_path", "")
         chart_type = result.get("chart_type", params.get("chart_type", ""))
         title = result.get("title", params.get("title", ""))
+        theme_name = result.get("theme_name", "")
+        theme_suffix = f"（{theme_name}）" if theme_name else ""
 
         artifact = {
             "id": output_var,
             "type": "chart",
             "title": title,
-            "description": f"{chart_type} 图表",
+            "description": f"{chart_type} 图表{theme_suffix}",
             "download_path": file_path,
             "format": "png",
             "ready_for_download": bool(file_path),
@@ -379,10 +381,11 @@ class AnalysisAgent:
             "step": len(self._steps) + 1,
             "method": "to_chart",
             "output_var": output_var,
-            "description": f"生成{chart_type}图表: {title}",
+            "description": f"生成{chart_type}图表{theme_suffix}: {title}",
             "file_path": file_path,
             "chart_type": chart_type,
             "title": title,
+            "theme_name": theme_name,
         }
         self._steps.append(step)
 
@@ -393,6 +396,7 @@ class AnalysisAgent:
             "output_var": output_var,
             "title": title,
             "chart_type": chart_type,
+            "theme_name": theme_name,
             "note": "图表已生成，最终结果由 conclusion 统一描述",
         }
 

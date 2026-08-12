@@ -89,7 +89,8 @@ to_chart(source="wide", chart_type="grouped_bar", x_column="品类", y_columns=[
 3. 分析方法的结果会自动保存，后续通过 output_var 引用
 4. 输出最终结果时调用 to_table 或 to_chart，然后停止调用工具，直接用文字总结
 5. 图表类型建议：趋势用 line，单维度对比用 bar，占比用 pie，分组对比用 grouped_bar，构成占比用 stacked_bar
-6. ⚠️ 如果已经通过 to_table 或 to_chart 输出了最终结果，不要再调用任何工具，直接用文字总结结论
+6. 图表配色默认财经风(ft)；用户要求其他风格（如"深色""柔和莫兰迪""商务深蓝"）时，在 to_chart 传 theme 参数（ft/corporate/morandi/dark）；用户问"有哪些风格"时，告知有财经风/商务深蓝/莫兰迪/深色科技 4 种
+7. ⚠️ 如果已经通过 to_table 或 to_chart 输出了最终结果，不要再调用任何工具，直接用文字总结结论
 
 ## 规则
 
@@ -566,6 +567,11 @@ ANALYSIS_TOOLS = [
                     "group_by": {
                         "type": "string",
                         "description": "（可选）系列拆分列。当数据为长表且要画分组对比图时，传此列可自动按它拆成多系列（等价于先 pivot 再画图）。如对比各渠道毛利时传 group_by='渠道'",
+                    },
+                    "theme": {
+                        "type": "string",
+                        "enum": ["ft", "corporate", "morandi", "dark"],
+                        "description": "（可选）图表配色风格，默认 ft。ft=财经风（杏底深红/深蓝/橄榄绿，权威克制，推荐）；corporate=商务深蓝（白底，稳重）；morandi=莫兰迪（米白底低饱和圆角，柔和）；dark=深色科技（近黑底霓虹色，大屏）。用户未指定时用 ft；用户明确要求深色/柔和/商务等风格时传对应值；用户问'有哪些风格'时告知有这 4 种。",
                     },
                     "title": {"type": "string", "description": "图表标题"},
                     "output_var": {

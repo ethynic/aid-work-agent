@@ -14,6 +14,8 @@ from typing import Any, Dict, List, Optional
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.patches import FancyBboxPatch, Patch
+import matplotlib.patheffects as pe
 import numpy as np
 import pandas as pd
 from loguru import logger
@@ -43,6 +45,36 @@ AGG_FUNC_WHITELIST = {
     "sum", "mean", "count", "min", "max",
     "median", "std", "var", "nunique", "first", "last",
 }
+
+# 图表配色主题（4 套高端风格，默认 ft 财经风）
+# 与白名单同构：模块级常量，简单可控；palette 按 series 数循环取色
+CHART_THEMES = {
+    "ft": {
+        "name": "财经风",
+        "palette": ["#990F3D", "#0F5499", "#4D8B31"],
+        "bg": "#FFF1E5", "grid": "#E8D9C8", "text": "#33302E",
+        "subtext": "#8C7B68", "label": "#33302E", "rounded": False,
+    },
+    "corporate": {
+        "name": "商务深蓝",
+        "palette": ["#1F3A5F", "#5B8FB9", "#C9A66B"],
+        "bg": "#FFFFFF", "grid": "#EAEEF3", "text": "#1F2D3D",
+        "subtext": "#7F8C9A", "label": "#2C3E50", "rounded": False,
+    },
+    "morandi": {
+        "name": "莫兰迪",
+        "palette": ["#6B7B8C", "#B5A28E", "#9CAE9B"],
+        "bg": "#F7F5F2", "grid": "#E4DFD8", "text": "#4A4641",
+        "subtext": "#8E8578", "label": "#4A4641", "rounded": True,
+    },
+    "dark": {
+        "name": "深色科技",
+        "palette": ["#22D3EE", "#F472B6", "#A78BFA"],
+        "bg": "#0F1419", "grid": "#1E2730", "text": "#E6EDF3",
+        "subtext": "#8B949E", "label": "#E6EDF3", "rounded": True,
+    },
+}
+DEFAULT_CHART_THEME = "ft"
 
 
 class DataAnalyzer:
@@ -756,6 +788,101 @@ class DataAnalyzer:
             "total_count": total,
         }
 
+    # ==================== 图表主题与样式 ====================
+
+    @staticmethod
+    def _resolve_theme(theme: str) -> dict:
+        """解析主题键；未知键回退默认主题并告警（不抛异常，保证健壮）。"""
+        t = CHART_THEMES.get(theme)
+        if t is None:
+            logger.warning(
+                f"[DataAnalyzer] 未知图表主题 {theme!r}，回退默认 {DEFAULT_CHART_THEME!r}。"
+                f"可选: {list(CHART_THEMES.keys())}"
+            )
+            t = CHART_THEMES[DEFAULT_CHART_THEME]
+        return t
+
+    @staticmethod
+    def _theme_color(t: dict, i: int) -> str:
+        """按系列序号循环取主题色。"""
+        return t["palette"][i % len(t["palette"])]
+
+    @staticmethod
+    def _fmt_value(v) -> str:
+        """数值格式化：整数显示整数，否则保留 1 位小数。"""
+        if v != v:  # NaN
+            return ""
+        if float(v).is_integer():
+            return str(int(v))
+        return f"{v:.1f}"
+
+    @staticmethod
+    def _apply_axes_style(ax, t: dict):
+        """统一坐标轴样式：背景色、去三边框、底部细轴、浅色横向网格、tick 配色。"""
+        ax.set_facecolor(t["bg"])
+        ax.tick_params(axis="x", length=0, pad=8, labelsize=10, colors=t["label"])
+        ax.tick_params(axis="y", length=0, labelsize=9, colors=t["subtext"])
+        for sp in ("top", "right", "left"):
+            ax.spines[sp].set_visible(False)
+        ax.spines["bottom"].set_color(t["grid"])
+        ax.spines["bottom"].set_linewidth(1.2)
+        ax.grid(axis="y", color=t["grid"], linewidth=1)
+        ax.set_axisbelow(True)
+
+    @staticmethod
+    def _style_legend(ax, t: dict, **kwargs):
+        """无框图例 + 文字配色。"""
+        leg = ax.legend(frameon=False, fontsize=10.5, **kwargs)
+        if leg is not None:
+            for txt in leg.get_texts():
+                txt.set_color(t["text"])
+        return leg
+
+    @staticmethod
+    def _add_titles(ax, t: dict, title: str, subtitle: str = ""):
+        """左对齐加粗主标题 + 灰色副标题（替代 matplotlib 默认居中标题）。"""
+        ax.set_title("")
+        ax.text(0, 1.13, title, transform=ax.transAxes, fontsize=15,
+                color=t["text"], fontweight="bold")
+        if subtitle:
+            ax.text(0, 1.05, subtitle, transform=ax.transAxes,
+                    fontsize=10, color=t["subtext"])
+
+    def _draw_bar_series(self, ax, xs, heights, width, color, t: dict):
+        """画一组柱 + 柱顶/柱底数值标签。
+
+        rounded 主题用圆角 FancyBboxPatch，但圆角不支持负高，故含负值时
+        整组回退直角柱，保证负值（亏损/负增长）数据完整可见。
+        """
+        heights = list(heights)
+        has_negative = any(h == h and h < 0 for h in heights)  # 排除 NaN
+        if t.get("rounded") and not has_negative:
+            for xi, h in zip(xs, heights):
+                if h != h or h <= 0:  # NaN 或 0：不画柱
+                    continue
+                ax.add_patch(FancyBboxPatch(
+                    (xi - width / 2, 0), width, h,
+                    boxstyle="round,pad=0,rounding_size=0.18",
+                    mutation_aspect=0.32,
+                    linewidth=0, facecolor=color, zorder=3,
+                ))
+        else:
+            ax.bar(xs, heights, width=width, color=color, linewidth=0, zorder=3)
+        # 数值标签：正值标在柱顶上方，负值标在柱底下方
+        pos_vals = [h for h in heights if h == h and h > 0]
+        neg_vals = [h for h in heights if h == h and h < 0]
+        pos_step = max((max(pos_vals) if pos_vals else 1) * 0.02, 0.1)
+        neg_step = max((abs(min(neg_vals)) if neg_vals else 1) * 0.02, 0.1)
+        for xi, h in zip(xs, heights):
+            if h != h:  # NaN
+                continue
+            if h >= 0:
+                ax.text(xi, h + pos_step, self._fmt_value(h), ha="center", va="bottom",
+                        fontsize=9, color=t["label"], zorder=4)
+            else:
+                ax.text(xi, h - neg_step, self._fmt_value(h), ha="center", va="top",
+                        fontsize=9, color=t["label"], zorder=4)
+
     def to_chart(
         self,
         source: str,
@@ -764,6 +891,7 @@ class DataAnalyzer:
         y_columns: Optional[List[str]] = None,
         title: str = "数据分析",
         group_by: Optional[str] = None,
+        theme: str = DEFAULT_CHART_THEME,
     ) -> dict:
         """
         生成图表并保存为 PNG。
@@ -820,53 +948,96 @@ class DataAnalyzer:
             if yc not in df.columns:
                 raise ValueError(f"Y 轴列不存在: {yc}")
 
+        t = self._resolve_theme(theme)
         fig, ax = plt.subplots(figsize=(12, 6))
+        fig.patch.set_facecolor(t["bg"])
         x = df[x_column]
         x_range = range(len(x))
+        x_labels = [str(v) for v in x]
+        legend_handles = [
+            Patch(facecolor=self._theme_color(t, i), linewidth=0, label=yc)
+            for i, yc in enumerate(y_columns)
+        ]
 
         if chart_type == "pie":
             values = df[y_columns[0]]
-            ax.pie(values, labels=x, autopct="%1.1f%%", startangle=90)
-            ax.set_title(title)
+            n_cat = len(x_labels)
+            pal_len = len(t["palette"])
+            if n_cat <= pal_len:
+                colors = [self._theme_color(t, i) for i in range(n_cat)]
+            else:
+                # 类目多于色板：从主题色板派生连续渐变色，避免相邻扇区同色
+                from matplotlib.colors import LinearSegmentedColormap
+                cmap = LinearSegmentedColormap.from_list(
+                    "_theme", t["palette"] + [t["palette"][0]])
+                colors = [cmap(i / max(n_cat - 1, 1)) for i in range(n_cat)]
+            wedges, texts, autotexts = ax.pie(
+                values, labels=x_labels, colors=colors,
+                autopct="%1.1f%%", startangle=90, counterclock=False,
+                wedgeprops=dict(linewidth=2.5, edgecolor=t["bg"]),
+                textprops=dict(color=t["label"], fontsize=11), pctdistance=0.74,
+            )
+            # 百分比白字 + 主题深色描边，保证任意扇区底色上都清晰可读
+            for at in autotexts:
+                at.set_color("#FFFFFF")
+                at.set_fontsize(10)
+                at.set_fontweight("bold")
+                at.set_path_effects([pe.withStroke(linewidth=2.5, foreground=t["text"])])
+            ax.set_aspect("equal")
+            self._add_titles(ax, t, title, "占比构成")
 
         elif chart_type in ("bar", "grouped_bar"):
             width = 0.8 / len(y_columns) if len(y_columns) > 1 else 0.6
             for i, y_col in enumerate(y_columns):
                 offset = (i - len(y_columns) / 2 + 0.5) * width
-                ax.bar([xi + offset for xi in x_range], df[y_col], width=width, label=y_col)
+                xs = [xi + offset for xi in x_range]
+                self._draw_bar_series(ax, xs, df[y_col].values, width * 0.88,
+                                      self._theme_color(t, i), t)
             ax.set_xticks(list(x_range))
-            ax.set_xticklabels(x, rotation=45, ha="right")
-            ax.set_title(title)
-            ax.legend()
-            ax.grid(axis="y", alpha=0.3)
+            ax.set_xticklabels(x_labels, rotation=30, ha="right")
+            self._apply_axes_style(ax, t)
+            self._style_legend(ax, t, handles=legend_handles, loc="upper right")
+            self._add_titles(ax, t, title)
 
         elif chart_type == "stacked_bar":
+            # 堆积柱有意用直角（非圆角）：FancyBboxPatch 不支持 bottom 堆叠，
+            # 圆角堆积需逐段裁剪、实现复杂，此处保持直角，以数据准确性优先
             bottom = np.zeros(len(x))
-            for y_col in y_columns:
-                ax.bar(x_range, df[y_col], bottom=bottom, label=y_col)
+            for i, y_col in enumerate(y_columns):
+                ax.bar(x_range, df[y_col], width=0.62, bottom=bottom,
+                       color=self._theme_color(t, i), linewidth=0, zorder=3)
                 bottom += df[y_col].values
             ax.set_xticks(list(x_range))
-            ax.set_xticklabels(x, rotation=45, ha="right")
-            ax.set_title(title)
-            ax.legend()
-            ax.grid(axis="y", alpha=0.3)
+            ax.set_xticklabels(x_labels, rotation=30, ha="right")
+            self._apply_axes_style(ax, t)
+            self._style_legend(ax, t, handles=legend_handles, loc="upper right")
+            self._add_titles(ax, t, title)
 
         elif chart_type == "line":
-            for y_col in y_columns:
-                ax.plot(x, df[y_col], marker="o", label=y_col)
-            ax.set_title(title)
-            ax.legend()
-            ax.grid(axis="y", alpha=0.3)
-            plt.xticks(rotation=45, ha="right")
+            # 数值/日期型 x 保留真实刻度（反映时间间隔），类别型用等距索引+标签
+            x_series = df[x_column]
+            is_continuous = (pd.api.types.is_numeric_dtype(x_series)
+                             or pd.api.types.is_datetime64_any_dtype(x_series))
+            plot_x = x_series.values if is_continuous else list(x_range)
+            for i, y_col in enumerate(y_columns):
+                ax.plot(plot_x, df[y_col].values, color=self._theme_color(t, i),
+                        linewidth=2.6, marker="o", markersize=6, markeredgewidth=0,
+                        label=y_col, zorder=3)
+            if not is_continuous:
+                ax.set_xticks(list(x_range))
+                ax.set_xticklabels(x_labels, rotation=30, ha="right")
+            self._apply_axes_style(ax, t)
+            self._style_legend(ax, t, loc="upper right")
+            self._add_titles(ax, t, title)
 
         elif chart_type == "scatter":
-            ax.scatter(df[x_column], df[y_columns[0]], alpha=0.6)
+            for i, y_col in enumerate(y_columns):
+                ax.scatter(df[x_column], df[y_col], color=self._theme_color(t, i),
+                           alpha=0.7, s=42, linewidth=0, label=y_col, zorder=3)
+            self._apply_axes_style(ax, t)
             if len(y_columns) > 1:
-                for y_col in y_columns[1:]:
-                    ax.scatter(df[x_column], df[y_col], alpha=0.6, label=y_col)
-                ax.legend()
-            ax.set_title(title)
-            ax.grid(alpha=0.3)
+                self._style_legend(ax, t, loc="upper right")
+            self._add_titles(ax, t, title)
 
         else:
             plt.close(fig)
@@ -877,7 +1048,7 @@ class DataAnalyzer:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         safe_title = re.sub(r'[\\/:*?"<>|]', "_", title)
         file_path = os.path.join(self.CHART_OUTPUT_DIR, f"{safe_title}_{timestamp}.png")
-        fig.savefig(file_path, dpi=150, bbox_inches="tight")
+        fig.savefig(file_path, dpi=150, bbox_inches="tight", facecolor=t["bg"])
         plt.close(fig)
 
         logger.info(f"[DataAnalyzer] 图表已保存: {file_path}")
@@ -886,6 +1057,8 @@ class DataAnalyzer:
             "file_path": file_path,
             "chart_type": chart_type,
             "title": title,
+            "theme": theme,
+            "theme_name": t["name"],
             "data_columns": list(df.columns),
         }
 

@@ -954,6 +954,85 @@ class TestToChart:
                 title="值列冲突",
             )
 
+    # ---------- 图表主题 ----------
+
+    def test_chart_default_theme_is_ft(self, analyzer, tmp_path):
+        """不传 theme 时默认财经风(ft)"""
+        analyzer.CHART_OUTPUT_DIR = str(tmp_path / "charts")
+        analyzer._variables["td"] = pd.DataFrame({"cat": ["A", "B"], "v": [10, 20]})
+        result = analyzer.to_chart("td", chart_type="bar", x_column="cat", y_columns=["v"])
+        assert result["theme"] == "ft"
+        assert result["theme_name"] == "财经风"
+        assert os.path.exists(result["file_path"])
+
+    def test_chart_theme_corporate(self, analyzer, tmp_path):
+        """theme=corporate 商务深蓝"""
+        analyzer.CHART_OUTPUT_DIR = str(tmp_path / "charts")
+        analyzer._variables["td"] = pd.DataFrame({"cat": ["A", "B"], "v": [10, 20]})
+        result = analyzer.to_chart("td", chart_type="bar", x_column="cat", y_columns=["v"], theme="corporate")
+        assert result["theme"] == "corporate"
+        assert result["theme_name"] == "商务深蓝"
+        assert os.path.exists(result["file_path"])
+
+    def test_chart_theme_morandi(self, analyzer, tmp_path):
+        """theme=morandi 莫兰迪（圆角柱）"""
+        analyzer.CHART_OUTPUT_DIR = str(tmp_path / "charts")
+        analyzer._variables["td"] = pd.DataFrame({"cat": ["A", "B"], "v": [10, 20]})
+        result = analyzer.to_chart("td", chart_type="bar", x_column="cat", y_columns=["v"], theme="morandi")
+        assert result["theme_name"] == "莫兰迪"
+        assert os.path.exists(result["file_path"])
+
+    def test_chart_theme_dark(self, analyzer, tmp_path):
+        """theme=dark 深色科技（圆角柱，深色底）"""
+        analyzer.CHART_OUTPUT_DIR = str(tmp_path / "charts")
+        analyzer._variables["td"] = pd.DataFrame({"cat": ["A", "B"], "v": [10, 20]})
+        result = analyzer.to_chart("td", chart_type="bar", x_column="cat", y_columns=["v"], theme="dark")
+        assert result["theme_name"] == "深色科技"
+        assert os.path.exists(result["file_path"])
+
+    def test_chart_theme_dark_pie(self, analyzer, tmp_path):
+        """深色主题下饼图正常（验证 wedge 边缝与百分比配色）"""
+        analyzer.CHART_OUTPUT_DIR = str(tmp_path / "charts")
+        analyzer._variables["td"] = pd.DataFrame({"cat": ["A", "B", "C"], "v": [30, 50, 20]})
+        result = analyzer.to_chart("td", chart_type="pie", x_column="cat", y_columns=["v"], theme="dark")
+        assert result["theme_name"] == "深色科技"
+        assert os.path.exists(result["file_path"])
+
+    def test_chart_unknown_theme_falls_back(self, analyzer, tmp_path):
+        """未知 theme 键回退默认 ft，不报错"""
+        analyzer.CHART_OUTPUT_DIR = str(tmp_path / "charts")
+        analyzer._variables["td"] = pd.DataFrame({"cat": ["A", "B"], "v": [10, 20]})
+        result = analyzer.to_chart("td", chart_type="bar", x_column="cat", y_columns=["v"], theme="nonexistent")
+        assert result["theme_name"] == "财经风"
+        assert os.path.exists(result["file_path"])
+
+    def test_chart_negative_values_morandi(self, analyzer, tmp_path):
+        """含负值数据在圆角主题(morandi)下回退直角柱，负值完整可见，不报错"""
+        analyzer.CHART_OUTPUT_DIR = str(tmp_path / "charts")
+        analyzer._variables["td"] = pd.DataFrame({"cat": ["A", "B", "C"], "v": [10, -5, 20]})
+        result = analyzer.to_chart("td", chart_type="bar", x_column="cat", y_columns=["v"], theme="morandi")
+        assert result["theme_name"] == "莫兰迪"
+        assert os.path.exists(result["file_path"])
+
+    def test_chart_line_theme_returns_theme_name(self, analyzer, tmp_path):
+        """非 bar 图（line）切换主题后返回值带 theme/theme_name"""
+        analyzer.CHART_OUTPUT_DIR = str(tmp_path / "charts")
+        analyzer._variables["td"] = pd.DataFrame({"m": ["1月", "2月", "3月"], "v": [10, 20, 30]})
+        result = analyzer.to_chart("td", chart_type="line", x_column="m", y_columns=["v"], theme="corporate")
+        assert result["theme"] == "corporate"
+        assert result["theme_name"] == "商务深蓝"
+        assert os.path.exists(result["file_path"])
+
+    def test_chart_pie_more_categories_than_palette(self, analyzer, tmp_path):
+        """饼图类目数 > 色板长度(3)时派生渐变色，生成成功"""
+        analyzer.CHART_OUTPUT_DIR = str(tmp_path / "charts")
+        analyzer._variables["td"] = pd.DataFrame({
+            "cat": ["A", "B", "C", "D", "E"], "v": [10, 20, 15, 25, 30],
+        })
+        result = analyzer.to_chart("td", chart_type="pie", x_column="cat", y_columns=["v"], theme="ft")
+        assert result["theme_name"] == "财经风"
+        assert os.path.exists(result["file_path"])
+
 
 # ==================== _eval_expression 安全性 ====================
 
