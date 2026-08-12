@@ -84,6 +84,7 @@
       <!-- Image Preview -->
       <div v-if="previewType === 'image' && attachment?.file_id" class="flex items-center justify-center p-4 min-h-full">
         <img
+          :key="mediaKey"
           :src="getFileUrl(attachment.file_id)"
           :alt="attachment.name"
           class="max-w-full max-h-[calc(100vh-120px)] object-contain rounded shadow-sm"
@@ -95,6 +96,7 @@
       <!-- PDF Preview -->
       <PdfCanvasPreview
         v-if="previewType === 'pdf' && attachment?.file_id"
+        :key="mediaKey"
         :file-url="getFileUrl(attachment.file_id)"
         :file-name="attachment.name"
         @loaded="loading = false"
@@ -104,6 +106,7 @@
       <!-- HTML Preview -->
       <iframe
         v-if="previewType === 'html' && attachment?.file_id"
+        :key="mediaKey"
         ref="htmlFrameRef"
         :src="getFileUrl(attachment.file_id)"
         class="block w-full h-full min-h-0 border-0"
@@ -168,6 +171,9 @@ const emit = defineEmits<{
 
 const loading = ref(false)
 const error = ref<string | null>(null)
+// 媒体元素（img/pdf/iframe）的挂载 key，每次打开附件递增，
+// 强制重新挂载以保证 load/error 事件触发（修复重复点击同一卡片时一直转圈的问题）
+const mediaKey = ref(0)
 const textContent = ref('')
 const textLanguage = ref('plaintext')
 const docxContainer = ref<HTMLDivElement | null>(null)
@@ -372,6 +378,8 @@ watch(() => props.attachment, (newAtt) => {
   // 图片、PDF、HTML 设置 loading
   if (previewType.value === 'image' || previewType.value === 'pdf' || previewType.value === 'html') {
     loading.value = true
+    // 递增 key 强制重新挂载媒体元素，避免 src 未变时不触发 load 事件导致一直转圈
+    mediaKey.value++
   }
 
   // 文本文件需要 fetch 内容
