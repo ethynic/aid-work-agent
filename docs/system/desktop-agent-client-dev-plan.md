@@ -1,231 +1,559 @@
-# Agent 跨平台桌面客户端开发计划
+# Agent 跨平台桌面客户端开发计划 v2.3
 
-> 日期：2026-07-14
-> 状态：🔧 部分完成（Phase 0～3 Windows 完成；Phase 4 被浏览器 Phase 3R 真实门禁阻塞；Phase 5 Windows 自动更新代码与开发包完成，正式签名/发布源/真升级待外部条件；macOS 各 Phase 延后验证）
-> 设计基线：[desktop-agent-client-design.md](./desktop-agent-client-design.md)
-> 流程：每个非平凡 Phase 严格执行开发 → 独立测试 → Code Review；不自动提交。
-
-> 主从原则：Agent Desktop 是主产品，browser runtime 是可选模块。浏览器方案必须适配桌面主架构；任何浏览器依赖、故障或发布节奏不得阻塞或削弱 Agent 主链路。
+> 初版日期：2026-07-14
 >
-> 验证策略（2026-07-14 用户确认）：当前开发以 Windows 自动化/真机门禁推进；macOS 不阻塞各 Phase，逐 Phase 保留同等验收清单，后续在 Mac 设备单独补验。不得把 Windows 结果表述为 macOS 已通过。
+> v2.3 日期：2026-08-12
+>
+> 状态：🔧 部分完成
+>
+> 设计基线：[desktop-agent-client-design.md](./desktop-agent-client-design.md)
+>
+> 上位架构：[企业 Agent 平台总体架构](enterprise-agent-platform/enterprise-agent-platform-integration-design.md)
+>
+> 流程：每个非平凡 Phase 严格执行开发 → 独立测试 → Code Review；不自动提交
+> 原则：Web 稳定优先；Local Agent Coordinator + Local Tool Host 是 Desktop 核心；Browser Runtime 独立门禁、按需启用
 
-## 1. 完成定义
+## 1. 当前状态
 
-Web 构建和 Python 服务端能力无回归；Windows/macOS 签名客户端可安装、登录并完成 Agent 全链路；桌面包从构建产物中排除 `/portal`；浏览器 runtime 集成同一客户端且七类终态零残留；纯 Web 用户仍可使用 server browser；自动化与真机验收均有记录。
+### 1.1 已完成
 
-## 2. Phase 总览
+- Windows Electron 壳、安全 scheme、单实例、窗口状态、深链、CSP、凭证、下载、外链和自动更新状态机。
+- Web/Desktop 双入口、独立构建产物和 `/portal` artifact 排除门禁。
+- Windows x64 unsigned 开发安装包、ASAR 校验、SBOM、audit、license、release manifest 和 packaged smoke。
+- 前端目录准备 Phase：`frontend/src` 的 220 个文件迁移至 `frontend/web`；Web/Desktop production build 与测试门禁通过。
+
+### 1.2 未完成
+
+- `frontend/desktop` 独立 UI 和 Desktop 自有路由。
+- `frontend/shared` 的渐进式业务逻辑/组件提取。
+- Desktop 与 `web` 页面、路由、全局样式彻底解耦。
+- Windows 正式签名、生产更新源和真实升级/回滚。
+- macOS main/platform 行为、builder、签名、notarization、更新与真机验收。
+- Desktop MCP Host、第一方/第三方 CLI 管理、跨平台 Host core、诊断中心和完整本地能力体验。
+- 版本化 Agent Turn Protocol、Remote Tool Gateway、语言无关协议源和 Desktop Local Agent Coordinator。
+
+## 2. 完成定义
+
+满足以下条件才可将 `docs/ideas.md` 条目移动到 `docs/ideas_finished.md`：
+
+1. Web 全量测试、production build、关键路由/认证/视觉门禁无回归。
+2. Desktop 不再引用 `frontend/web` 的页面、路由和全局样式；临时依赖 allowlist 为 0。
+3. Windows 10/11 x64、macOS 13+ arm64/x64 签名包通过核心 Agent 真机闭环。
+4. Windows/macOS 正式更新、损坏/坏签名拒绝和修复版本升级有证据。
+5. `/portal`、portal credential、管理员 API 不进入 Desktop artifact。
+6. Desktop 能执行受控本地命令、文件和系统工具，也能把 `LOCAL_REQUIRED` 工具路由到当前电脑或远端 `agent-tool-runtime` 节点，并统一管理第一方/第三方 MCP Provider。
+7. `SERVER/LOCAL_REQUIRED/EITHER` 路由、授权、取消、未知结果和禁止静默 fallback 有端到端证据。
+8. 当前电脑工具由 Coordinator 直接调用 Local Host 且不创建 cloud invocation；服务端/其他电脑工具只走 Remote Tool Gateway/Invocation Relay。
+9. Agent Turn/Tool Invocation 协议完成版本协商、幂等、结果重放、滚动升级和不兼容 fail-loud 验收。
+10. `DEVICE_OWNED` 会话以 Desktop 本地事件库为权威，用户/Agent 消息可同步为云端投影；Web/移动端接续始终回到原设备，离线时明确阻断且不排队、不换端、不转 Cloud Agent。
+11. Browser Runtime 即使未启用或崩溃也不影响 Agent/Desktop 本地工具主链路。
+12. 安装、卸载、深链、断网、睡眠唤醒、多显示器和服务端滚动升级完成验收记录。
+13. Task/Execution/Action/Artifact/Evidence 企业对象贯穿 Desktop、Gateway、Host 和 Runtime；本机执行不绕云队列，但不绕策略与证据。
+14. 本地 Event Store、至少一次 Relay、fencing、persist-before-effect、`STATUS_UNKNOWN` 和 schema-aware update 通过故障注入。
+15. 已存在的 `DEVICE_OWNED` 会话在离线、版本或协议不兼容时绝不 fallback 到 Cloud Agent；云端继续只能显式新建/fork `CLOUD_OWNED`。
+
+## 3. Phase 总览
 
 | Phase | 交付 | 状态 | 退出门禁 |
 |---|---|---|---|
-| 0 | 基线清单、契约测试、技术 Spike | ✅ Windows 完成；macOS 延后验证 | Windows 自定义 scheme、CORS、SSE、上传下载通过；macOS 清单已保留 |
-| 1 | 路由/入口拆分与 Portal 构建隔离 | ✅ Windows 完成；macOS 延后验证 | Web 全功能不变；Desktop 包不含 Portal-only route/layout/admin API |
-| 2 | Electron 壳与平台适配层 | ✅ Windows 完成；macOS 延后验证 | Windows 真壳、真实 renderer、单实例、安全边界和离线恢复通过 |
-| 3 | 凭证、安全、文件与系统集成 | ✅ Windows 完成；macOS 延后验证 | Windows safeStorage、受控下载/外链、深链与零敏感残留门禁通过 |
-| 4 | 可选浏览器 runtime 适配 | ⏸ 等待浏览器 Phase 3R | 统一 Executor contract 与进程回收通过；关闭模块后 Agent 全功能正常 |
-| 5 | 签名、更新、CI 与灰度 | 🔧 Windows 本地实现完成；正式发布待证书/发布源 | 更新状态/UI/受控配置/发布元数据和 0.0.2 unsigned dev NSIS 通过；签名、真实升级/回滚尚未验证 |
-| 6 | 全量回归、真机验收与文档收口 | ⬜ | 完成定义全部满足并归档索引 |
+| A | Web 目录基线：`src → web` | ✅ 完成 | 220/220 完整；Web/Desktop build；结构测试 |
+| B | 工程边界与 Shared 基础设施 | ⬜ | 四 alias、依赖规则、双端测试发现、Web 行为不变 |
+| C | Desktop Shell + 登录/启动状态 | ⬜ | 独立 DesktopApp/router/styles；Windows/macOS dev smoke |
+| D | Local Agent Coordinator 与核心对话 | ⬜ | Agent Turn Protocol、本地 loop、Remote Tool Gateway、对话/多会话闭环 |
+| E | 通用 Local Tool Host 与 CLI 支持 | ⬜ | 本地 shell/文件/系统工具；第一方/第三方 MCP；多节点闭环 |
+| F | Agent 工作台页面 | ⬜ | 数字员工/会话/知识库/本地工具/设置可用 |
+| G | 平台能力与生命周期收口 | ⬜ | Win/mac driver、诊断、大文件、菜单/权限/退出策略 |
+| H | macOS 交付链路 | ⬜ | arm64/x64 DMG+ZIP、签名、notarization、Gatekeeper、更新 |
+| I | Windows 正式发布闭环 | 🔧 代码已有 | 签名、生产更新源、升级/回滚矩阵 |
+| J | Browser Runtime | ⏸ 等待 Browser 3R | contract、人工接管、七终态零残留 |
+| K | 全量真机验收与收口 | ⬜ | 完成定义全部满足 |
 
-## 3. Phase 0：基线与 Spike
+Phase B～I 是正式 Desktop 产品交付主线。D 的 Local Agent Coordinator 和 E 的 Local Tool Host/MCP Host 都不可删除或后置到正式版之后；J Browser Runtime 不阻塞正式 Desktop。
 
-### 2026-07-14 检查点
+### 3.1 关键路径与不可逆依赖
 
-- 新增 `clients/agent-desktop/` 独立 Electron + TypeScript Spike，未修改现有 Web 路由或 Python API。
-- Windows 自动门禁通过：`npm run typecheck`、`npm test`（5/5）、`npm run build`、`npm run smoke`（`SPIKE_SMOKE_PASS`）。
-- smoke 已实际验证 `aidagent://app` history fallback、Portal/traversal 拒绝、精确 `Origin: aidagent://app`、三段流式响应、multipart marker 和 65536 bytes 下载；结束后 Electron 进程回到基线。
-- Electron 安全基线已锁定：`nodeIntegration=false`、`contextIsolation=true`、`sandbox=true`、`webSecurity=true`；preload 不暴露 `ipcRenderer`。
-- 独立测试与 Code Review 已完成；修复 URL 点路径折叠绕过、跨平台 Electron 可执行路径、SSE/multipart smoke 假阳性和 fixture/子进程清理问题。
-- 官方 npm registry 审计为 0 vulnerabilities；默认 npmmirror 不支持 audit API（404），属于环境限制。
-- macOS arm64/x64 按用户决定延后到 Mac 设备逐 Phase 补验，不阻塞 Phase 1；真实 Python API、麦克风、PDF/Office 和大文件落盘按后续 Phase 验证。
+```text
+A Web 基线
+  └─> B 边界 + 语言无关协议骨架
+       └─> C 独立 Desktop Shell
+            └─> D Agent Turn/Remote Tool Gateway + Local Coordinator
+                 └─> E Local Tool Host + 本地/远端节点
+                      ├─> F 工作台
+                      └─> G 平台生命周期
+                           ├─> H macOS 正式交付
+                           └─> I Windows 正式交付
+                                └─> K 全量验收
+```
 
-### 工作
+- D1 服务端协议必须先于 D2 Coordinator 闭环；E 依赖 D 的路由、审批、取消和幂等语义，不能先做成独立私有工具链。
+- Web/渠道的 Cloud Agent 路径在 D/E 期间保持兼容，不要求改用本地 Coordinator。
+- H/I 可以在 D/E contract 稳定后并行，但 K 前必须完成双平台真机和服务端滚动升级矩阵。
 
-- 盘点桌面需保留的 Agent 路由、Portal-only 组件、所有 API base 拼接和直接 Token 存取点。
-- 固化 Web 路由清单与构建产物快照，增加 `/portal`、`/t/:tenant_id`、根登录的回归测试。
-- 最小 Electron Spike 验证：自定义 standard/secure scheme + `createWebHistory`、FastAPI 精确 CORS、流式 Fetch/SSE、FormData 上传、大文件下载、音频录制、PDF/Office 预览。
-- Windows 11 x64、macOS arm64 至少各验证一次；macOS x64 由 CI 构建验证，最终 Phase 做真机。
-- 决定自定义 scheme Origin 是否可直接 CORS；失败则锁定 main-process 固定域 transport，不允许用 `webSecurity: false`。
+## 4. 全程强制门禁
 
-### 验证
+### 4.1 每个 Phase 开始前
 
-- 形成可执行 Spike 测试记录，明确每个 Web API 在桌面协议下的行为。
-- 原 `npm test`、`npm run build`、Python 关键测试记录为基线。
+- `git status --short`，识别用户已有改动并避免覆盖。
+- 记录 Web `npm run typecheck`、测试和 build 基线。
+- 明确本 Phase 允许修改文件；禁止顺手重构 Web。
+- 非平凡 Phase 建立三智能体计划并在 `docs/ideas.md` 更新进度。
 
-## 4. Phase 1：前端双入口与路由隔离
+### 4.2 每个 Phase 结束时
 
-### 2026-08-12 前端目录分层第一阶段检查点
+```bash
+cd frontend
+npm run typecheck
+npm test
+npm run build
+npm run build:desktop
 
-- 将现有 `frontend/src/` 整体原样迁移为 `frontend/web/`，保留 `@/` import 语义，不调整任何 Web 页面、样式、路由或业务逻辑。
-- Web 与现有 Desktop 入口分别改为 `/web/main.ts`、`/web/main.desktop.ts`；Vite、Vitest、TypeScript、Tailwind 和 Desktop artifact verifier 同步使用 `web/` 源码根。
-- 本阶段不新增 Desktop UI、不提取 `shared/`，只为后续 `frontend/desktop/`、`frontend/shared/` 同级目录预留稳定边界。
-- 新增目录结构回归测试，禁止恢复遗留 `frontend/src/` 入口和目录。
+cd ../clients/agent-desktop
+npm run typecheck
+npm test
+npm run smoke
+```
 
-### 2026-07-14 Windows 检查点
+若仓库存在与改动无关的既有失败，必须用迁移前版本/哈希或独立复现证明，不能宣称全绿，也不能越界修改业务。
 
-- 完成 Web/Desktop 双入口和路由拆分；Web 继续组合 Agent 与 Portal，Desktop 只引用 Agent 路由并拒绝 `/portal/**` 与 Web-only `/subagents`。
-- 将租户端公共壳拆为 `TenantLayout`，Desktop 不再间接打入 `PortalLayout`、`DigitalEmployeeManager` 或 `adminSubagent`；Web 的 Portal 页面和原 URL 保持可用。
-- Windows 门禁通过：20 项定向测试、`vue-tsc`、Web production build、Desktop production build全部成功；Desktop artifact 校验通过（51 个 manifest entry、406 个 bundled module）。
-- Desktop 深链使用根路径资产地址，`aidagent://app/t/:tenant_id/**` 不会错误解析到租户子目录。
-- 共享 tenant API 中历史 `/portal` 与 `portal_token` 兼容分支尚未迁移；按计划由 Phase 3 的 `CredentialStore`/API resolver 收口，最终安装包仍执行零残留扫描。
-- macOS 构建与深链验证保留到 Mac 设备补验，不作为当前 Phase 2 的阻塞项。
+### 4.3 Web 稳定性证据
 
-### 工作
+每个 Phase 记录：
 
-- 提取共享 bootstrap、`agentRoutes`、`portalRoutes`。
-- 保持 `main.ts` 为 Web 入口，新增 `main.desktop.ts` 和独立桌面 HTML/Vite build。
-- 将 API URL、平台能力和 credential access 建立 adapter 接口，首期 Web adapter 行为不变。
-- 新增桌面 `/portal` 深链拒绝与 fallback。
-- 新增解包/静态依赖检查，禁止 Portal-only 组件进入桌面 artifact。
+- Web route 集合与认证入口差异。
+- 登录、租户登录、对话/SSE、多会话、附件、知识库和 Portal 定向结果。
+- 关键页面固定视口截图差异。
+- Web bundle 中 Desktop/Electron-only module 扫描结果。
+- `deploy/agent_update.sh`、`agent2_update.sh`、`agent3_update.sh` 继续通过 `npm run build` 生成 `frontend/dist`；不得要求改部署脚本才能维持 Web。
 
-### 验证
+## 5. Phase A：Web 目录基线
 
-- Web 路由快照与现状一致，Portal 登录、租户登录和 Agent 对话组件测试通过。
-- Web production build 通过。
-- Desktop build 只含允许路由；解包扫描无 Portal-only route/component。
+### 状态：✅ 2026-08-12 完成
 
-## 5. Phase 2：Electron 基础客户端
+完成内容：
 
-### 2026-07-14 Windows 检查点
+- `frontend/src` → `frontend/web`，220/220 文件完整，218 个逐字节不变。
+- `@/` 保持指向 Web，避免批量 import 改写。
+- 更新 HTML、Vite、Vitest、TypeScript、Tailwind、Desktop verifier 和开发规范路径。
+- 修复 `agentRoutes` 在 Desktop define 下的等价动态 import 解析问题。
+- 新增结构测试，禁止恢复旧 `frontend/src`。
 
-- Electron 壳已加载真实 `frontend/dist-desktop`，不再使用 Phase 0 静态 renderer；hashed assets、Agent history 深链与缺失资源 404 均由自定义 scheme 稳定处理。
-- 完成单实例、加载期第二实例聚焦、窗口状态可见性恢复、系统主题、窗口内缩放和最后窗口关闭即退出；本阶段保持无托盘，避免后台残留。
-- 安全门禁保持 `nodeIntegration=false`、`contextIsolation=true`、`sandbox=true`、`webSecurity=true`，并增加精确 API origin CSP、主框架导航/新窗口/WebView/权限默认拒绝和脱敏错误日志。
-- preload 仅暴露冻结、版本化的只读 runtime；API base 由 main 严格校验后运行时注入。兼容现有两种 Vite API 基址变量，但 Phase 3 仍需统一 API resolver。
-- Windows 三智能体流程及主控终检通过：前端 23 项定向测试、类型检查、Web build；客户端 12/12 测试、Desktop build/artifact verifier（51 entries、407 modules）及真实 Electron smoke 全绿，输出 `AGENT_DESKTOP_SMOKE_PASS`，结束后工作区 Electron 进程为 0。
-- smoke 覆盖真实 Agent renderer、精确 CORS、health、投诉 legacy API、三段流式响应、FormData、64 KiB 下载和 history；缺失/非法 API 配置均以退出码 1 失败且日志不泄漏凭据。
-- 已知后续项：下载路径仍有 `window.location.origin` 拼接；connectivity banner 清理与并发代次保护可在适配层收口；正式 asar 资源路径属于 Phase 5。macOS 按用户决定延后到 Mac 设备补验。
+验收结果：Web typecheck/build、Desktop build/artifact verifier、Desktop 37/37 通过；前端既有 139/140 与异步测试债务已证明不是迁移引入。
 
-### 工作
+## 6. Phase B：工程边界与 Shared 基础设施
 
-- 新建 `clients/agent-desktop/`：main、preload、renderer build 接入、窗口/托盘/单实例、日志和崩溃边界。
-- `nodeIntegration=false`、`contextIsolation=true`、sandbox、CSP、导航/窗口/权限拦截默认启用。
-- 实现运行时 API 地址、健康检查、离线/版本过低页面和安全重连。
-- 适配全局快捷键仅限窗口内；支持系统主题、缩放、窗口状态恢复。
-- 不实现浏览器 runtime，先完成完整远程 Agent 能力。
+### 目标
 
-### 验证
+建立长期依赖方向，但暂不迁移大块业务逻辑、不改变任何 Web 页面。
 
-- Windows/macOS：安装开发包 → 登录 → 新建会话 → SSE 回复 → 中断 → 历史会话 → 退出。
-- 服务端不可达、401、429、5xx、SSE 中断均有明确状态且可恢复。
-- Electron 安全配置自动化断言通过。
+### 工作包
 
-## 6. Phase 3：凭证、文件与系统能力
+1. 新建空的 `frontend/desktop`、`frontend/shared` 最小骨架和 README。
+2. 配置明确 alias：
+   - `@web/* → web/*`；
+   - `@desktop/* → desktop/*`；
+   - `@shared/* → shared/*`；
+   - `@/* → web/*` 暂时兼容 Web。
+3. 新增 Desktop 专用 tsconfig/Vitest include 或等价 project 配置，确保两端测试均会被发现。
+4. 增加依赖边界检查：
+   - shared 禁止引用 web/desktop/Electron；
+   - web 禁止引用 desktop；
+   - desktop 对 web 使用临时 allowlist；
+   - Desktop artifact 禁止 Portal/Web entry。
+5. 建立 Shared contract test harness 和 Desktop renderer test setup。
+6. 固化 Web route/auth/bundle 结构基线和关键截图基线。
+7. 建立 `contracts/desktop-agent` 语言无关协议目录和版本规则，先放 Agent Turn、Tool Invocation、FileRef、Device Capabilities、Session Projection/Relay schema 骨架；TypeScript/Python 类型必须由其生成或做一致性校验。
+8. 建立 `clients/shared/agent-coordinator-core` 与 `local-tool-host-core` 的依赖边界骨架；此 Phase 不实现业务循环。
 
-### 2026-07-14 Windows 检查点
+### 允许修改
 
-- 建立 Web/Desktop `CredentialStore` 契约：Web 保持原 localStorage key 行为；Desktop 启动时从 Electron `safeStorage` 加密文件 hydrate 到内存，同步读取、异步白名单 IPC 持久化，不回退明文 localStorage。
-- Desktop 只允许 Agent/demo/tenant 凭证 key，拒绝 `portal_*` 和任意 key；tenant key 最长 128 字符、value 最大 64 KiB。写入/删除只有在磁盘成功后才更新内存，删除失败保留登录态并报错，避免旧密文下次启动“复活”。
-- 完成 Agent/Tenant 主认证链与 Desktop 可达 legacy token 读取迁移；Desktop 自动 artifact 门禁扫描 `portal_token`、Portal credential、管理员/Portal-only import 和敏感 localStorage 直接访问，最终均为 0。
-- 增加版本化白名单 IPC：仅当前主窗口、主 frame、合法 `aidagent://app` Agent/tenant 页面可调用；preload 不暴露通用 IPC。
-- 外链仅允许无凭据 HTTPS；下载仅允许配置 API origin，手动同源重定向最多 5 次，声明/实际流量均限制 100 MiB，同目录临时文件后原子替换；dialog 取消、非 2xx、超限和 redirect body 均安全收口。
-- deep link 支持冷/热启动 pending 队列，只接受 Agent/tenant route，拒绝 Portal、traversal、query/fragment；safeStorage/hydrate 失败显示固定本地安全失败 UI，不泄漏底层异常。
-- Windows 三智能体与主控终检通过：前端 33 项 scoped tests、typecheck、Web build；客户端 23/23、Desktop artifact（51 entries、409 modules）、真实 smoke 全绿并输出 `AGENT_DESKTOP_SMOKE_PASS`；`git diff --check` 通过，工作区 Electron 残留为 0。
-- 后续项：下载当前最多在内存缓存 100 MiB，未来可流式直写临时文件；safeStorage 文件格式升级前需增加 schema version；协议注册和安装后 deep link 属于 Phase 5 真安装包门禁。macOS 延后补验。
+- `frontend` 工具链配置、测试基础设施、新目录骨架。
+- 不修改 Web 页面模板、样式和业务逻辑。
 
-### 工作
+### 验收
 
-- 将认证代码迁移到 `CredentialStore`；Web localStorage adapter 与 Desktop safeStorage adapter 跑同一 contract suite。
-- 清理 API base 双变量和 `window.location.origin` 拼接；统一上传、预览、下载 URL resolver。
-- 实现受控文件选择/保存、系统浏览器外链、`aidagent://` 深链和 Web 一次性拉起 ticket。
-- 增加 Token/正文日志脱敏、Profile/缓存清理和退出时短期会话撤销。
+- 四类 alias 和测试发现正确。
+- 依赖边界测试具备正/反例，不能只检查目录存在。
+- Web build 输出与 Phase A 行为一致。
+- Desktop 旧 renderer 仍能构建，作为可回退基线。
 
-### 验证
+### 估算
 
-- 磁盘扫描不出现明文 access token、短信验证码、模型 Key。
-- 上传图片/文档、下载、PDF/Office 预览、麦克风授权在双平台通过。
-- 恶意导航、任意 IPC、任意下载路径、非白名单协议/域名均被拒绝。
+2～3 个工作日。
 
-## 7. Phase 4：集成浏览器 runtime
+## 7. Phase C：Desktop Shell、启动与登录
+
+### 目标
+
+让 Electron 首次加载真正独立的 Desktop renderer，但不在本 Phase 迁移对话主链路。
+
+### 工作包
+
+1. 新建：
+   - `desktop/main.ts`；
+   - `DesktopApp.vue`；
+   - Desktop router；
+   - `DesktopShell`、`DesktopSidebar`、`DesktopTitlebar`、`DesktopStatusBar`；
+   - Desktop tokens/styles。
+2. `desktop.html` 和 `vite.desktop.config.ts` 切换到 `/desktop/main.ts` 与 Desktop alias。
+3. 实现 Desktop 启动状态机：booting、secure-store-ready、auth、online/offline、update-required、fatal-local。
+4. 实现独立 Desktop 登录页；Shared 提取第一批：认证 DTO、CredentialStore contract、API resolver、纯类型。
+5. 更新/离线/安全失败从 Web Sidebar/内联 DOM 移到 Desktop Shell。
+6. 建立临时旧 UI 回退开关，仅开发构建可用；生产 Desktop 不加载 Web entry。
+
+### macOS 同步要求
+
+- `darwin` 窗口创建、traffic-light safe area、Dock activate 恢复、应用菜单基础行为。
+- 不要求本 Phase 正式签名，但必须在 macOS arm64 开发机启动真实 renderer；x64 至少 CI compile/build。
+
+### 验收
+
+- Desktop module manifest 不包含 `web/App.vue`、`web/router/**`、`web/style.css`、Portal-only 模块。
+- 登录成功/失败、safeStorage 失败、API 离线、最低版本阻断均有可访问 UI。
+- 720×500、默认窗口、150%/200% 缩放可用。
+- Windows 与 macOS 开发 smoke 通过；Web 全门禁通过。
+
+### 估算
+
+5～7 个工作日。
+
+## 8. Phase D：Local Agent Coordinator、核心对话与多会话
+
+### 目标
+
+Desktop 独立完成最重要的 Agent 使用链路，并让本地 Coordinator 成为 Desktop tool-call loop 的控制者；不把现有 Python Agent/Redis/数据库整体打包进客户端。
+
+### Shared 提取顺序
+
+1. Agent/session DTO、事件和纯 reducer。
+2. API client 与 SSE parser/transport contract。
+3. per-session 状态池和取消/恢复语义。
+4. Markdown/message/attachment 的纯展示能力。
+
+### D1：Agent Turn Protocol 与 Remote Tool Gateway
+
+1. 从现有 `Agent` 抽象版本化 `next` contract，返回 final、clarification、local tool call 或 remote tool call；Web 现有调用路径保持不变。
+2. Remote Tool Gateway 暴露 catalog/invoke/events/cancel，服务端注入可信 tenant/user/secret，要求 schema version、idempotency key、权限和审计。
+3. 模型供应商 Key、Prompt、数字员工/Skill 策略、长期记忆和计费继续在服务器；现有 `CLOUD_OWNED` 会话保持云端权威，`DEVICE_OWNED` 会话只向云端同步可阅读投影。
+4. 首版使用 HTTPS JSON + SSE/WSS；不为形式统一强制引入公网 gRPC。
+5. 协议封套加入 `task_id/session_ref/execution_id/attempt_id/action_id/invocation_id/artifact_id/evidence_stream_id/release_id/policy_decision_id`，语言无关 schema 同时约束 TypeScript/Python。
+6. 服务器 PDP 签发绑定 action/args/schema/target/policy revision/expiry 的 authorization ticket；Desktop/Runtime PEP 验签。claim token 仅管理租约，不能代替授权票据。
+
+### D2：Desktop Local Agent Coordinator
+
+1. 在 `clients/shared/agent-coordinator-core` 实现无 UI Coordinator core，管理 turn loop、工具目标、审批等待、取消、并发和恢复 journal。
+2. 当前 Desktop 的 local tool call 直接进入 Local Host；Server tool call 进入 Remote Tool Gateway；其他 device call 进入现有 invocation relay。
+3. preload 只传递结构化状态和审批，不向 renderer 暴露 tool executor。
+4. Coordinator/Server protocol version 不兼容时 fail-loud，现存 `DEVICE_OWNED` 会话进入 `update-required` 或只读态，绝不回退 Cloud Agent。用户只能显式新建或 fork `CLOUD_OWNED` 会话。
+5. 每个 DEVICE_OWNED session 固定 `release_id/protocol_version/policy snapshot`；canary 按新会话分桶，不在进行中回合切换版本。
+
+### D3：本地会话存储、云端投影与远程接续
+
+1. Desktop 使用 SQLCipher（原生依赖验证不通过时采用经审计的字段级 envelope encryption）持久化完整会话事件、执行 journal、workspace 引用和恢复游标；safeStorage 只包装 DB key。明确 WAL/fsync、单写锁、迁移、轮换、完整性检查、配额、compact/snapshot、备份和损坏 safe mode。
+2. 服务端保存 `session_id`、`session_type`、`owner_device_id`、在线状态以及按租户策略同步的用户/Agent 消息和进度摘要；该记录是阅读投影，不是设备会话执行权威。
+3. Web/移动端通过 Session Relay 订阅投影和实时事件；提交新消息时携带 `command_id`、`expected_command_revision` 与 idempotency key，必须等原 Desktop 返回本地持久化 ACK 才显示发送成功。
+4. `owner_device_id`、`coordinator_session_id`、`workspace_ref/fingerprint` 在会话执行期不可变。原设备离线时返回明确离线状态，不排队自动执行、不切换 Cloud Agent、不换 Desktop。
+5. 显式远端工具调用仍可路由到固定 `agent-tool-runtime`，但 Coordinator 和 workspace 权威留在原 Desktop；换电脑只能新建会话或显式 fork/handoff 并重新校验和授权。
+6. 分离 `local_event_seq/command_revision/projection_revision/evidence_seq`；实现 inbox/outbox、ACK 查询、cursor replay、gap detection 和 hash snapshot resync，明确至少一次投递。
+7. Relay 下发 `connection_epoch/fencing_token`，拒绝旧进程、旧连接和迟到工具结果；本地/Web/移动输入进入单写者队列并定义 busy/approval/cancel 并发语义。
+8. 工具 intent 在 effect 前落盘，结果与 Evidence 原子关联；恢复按 not_started/running/result_pending/unknown reconciliation，unknown 写动作禁止自动重放。
+9. 云端投影采用字段级 retention/residency 策略，默认不上传本地 stdout、路径、文件正文和敏感审批参数；附件、索引和临时文件纳入相同加密/清理生命周期。
+
+Web 原路径先保留兼容 re-export；不批量替换 `@/`。
+
+### Desktop 实现
+
+- `DesktopChatPage`、`DesktopConversationPane`、`DesktopComposer`。
+- `DesktopSessionRail` 和后台多会话状态。
+- 上传队列、附件预览/下载、输入草稿和错误恢复。
+- 窗口窄模式、键盘快捷键、焦点恢复、ARIA live 流式状态。
+- 活跃 stream 对退出/更新的阻断信息。
+
+### 验收
+
+- 登录 → 新会话 → SSE → 切换会话后台继续 → 返回查看 → 上传/预览/下载 → 取消/重试闭环。
+- 本机测试工具证明调用不创建 cloud invocation；服务端测试工具经 Remote Tool Gateway 执行；远端测试 Provider 仍经指定 device relay。
+- Agent Turn Protocol 的重复请求、断线恢复、版本不兼容、tool result 重放和幂等门禁通过。
+- authorization ticket 的篡改、重放、过期、换参、换节点和策略/schema 变化全部拒绝；claim token 与授权票据不可互换。
+- Web/移动端能查看云端消息投影并接续 `DEVICE_OWNED` 会话；消息只由原 Desktop ACK 后确认，执行事件按序返回。
+- ACK 丢失、重复 command、乱序/gap、双连接、睡眠、强杀、电源中断、DB full/corrupt 与 effect 后崩溃通过 Golden Recovery Matrix。
+- 原 Desktop 断网、退出、重装后身份变化、workspace revision 冲突时均 fail-closed；验证不会在 Cloud Agent 或其他设备重复执行。
+- 401、429、5xx、网络中断、SSE 非正常终止均可恢复，不重复用户写操作。
+- Shared contract 同时由 Web 与 Desktop 消费并通过。
+- Web 关键截图和路由无非预期变化。
+
+### 估算
+
+18～25 个工作日（包含 Event Store、Relay/fencing、Policy/Evidence envelope 与故障注入；不建议为赶进度删减这些一致性门禁）。
+
+## 9. Phase E：通用 Local Tool Host 与第一方/第三方 CLI
+
+### 目标
+
+让 Desktop 同时成为通用本地工具执行器、现有边缘工具架构的控制台和可选执行节点，而不是新建一条 Desktop 私有工具链。正式版必须能安全执行本地命令/文件工具，完成至少一个第一方 Provider 在“当前 Desktop”和“远端 `agent-tool-runtime`”两种节点上的真实闭环，并具备安全接入第三方标准 MCP Provider 的能力。
+
+### E1：冻结复用边界
+
+1. 以现有 `clients/agent-tool-runtime`、`src/local_tools`、`ExecutionTarget` 和第一方 CLI/MCP 规范为 contract 基线。
+2. 建立 Desktop Host 与 headless Runtime 共用测试：manifest/schema digest、pair/claim、progress/cancel/result、lease/unknown。
+3. 明确 `clients/agent-tool-runtime` 长期保留为 Web/Desktop 共用的远端/headless 执行节点；Desktop 本机执行不要求另装 `aid-runtime`，远端电脑必须安装并配对它。
+
+### E2：抽取 Host Core
+
+1. 新建 `clients/shared/local-tool-host-core`，渐进抽取 API client、poll loop、invocation runner、Provider manager 和 manifest verifier。
+2. 把凭证、进程监管、日志和安装源做成 adapter；core 不依赖 Electron、renderer 或 Windows DPAPI。
+3. `agent-tool-runtime` 接回该 core，现有 CLI 行为和安装包保持兼容。
+4. 正式拓扑固定为 Electron main 仅作为 broker，Local Host 在隔离 utility/child process 消费同一 core，Provider 再作为 Host 子进程；禁止在 main 内执行工具。
+5. IPC 绑定 authenticated window/session、版本化 schema、action digest、user-gesture nonce、大小和超时；Host 使用有界 restart backoff。
+
+### E3：通用本地命令、文件与系统 Executor
+
+1. 定义结构化 `local_shell` contract：command、授权目录引用、timeout、期望 effect；shell executable 和基础 env 由 Host 固定。
+2. Windows/macOS 实现受控 Shell adapter、stdout/stderr 流式输出、cancel、timeout 和整棵进程树回收。
+3. 建立授权目录 registry 和结构化本地文件工具；renderer/LLM 不直接获得任意文件系统能力。
+4. 定义统一 `FileRef` 和 `FileToolRouter`：server workspace/artifact 继续走现有 Python 工具，device workspace 走 Local File Executor；不长期暴露两组同义工具。
+5. 本地 `read/write/edit` 支持 revision/hash、冲突拒绝、原子写入、diff、路径/软链接/reparse point 边界；第一期文本文件，复杂 Office/PDF 后续 Provider 化。
+6. 实现逐次、会话和持久规则审批；高风险动作二次确认，远端无人值守节点只允许管理员 allowlist。
+7. 增加剪贴板、通知、打开文件/应用等窄 capability，禁止退化为万能 IPC。
+8. 为每次本机执行创建本地 Action/Attempt/Evidence journal 和有界审计 outbox；高风险 Evidence 无法持久化或同步策略要求在线时 fail-closed。
+9. 远端文件 grant 必须在目标节点由用户/管理员创建，服务器只保存 opaque grant ID/范围摘要；定义过期、撤销和节点本地管理 UI。
+
+### E4：Provider 信任与权限
+
+1. 第一方 Provider：受信 catalog、签名/摘要、受控捆绑或安装、版本兼容和更新来源。
+2. 第三方 Provider：支持标准 MCP stdio/config 的显式本地添加；区分管理员批准与用户添加，并为服务端建立带 namespace/发布者/schema digest 的租户审批快照。
+3. 云端/LLM 永远不能提供 Provider executable、Host 启动参数/env、安装 URL 或任意本地路径；`local_shell.command` 是唯一受控例外，cwd 必须使用授权目录引用。
+4. Provider/工具默认权限、写操作授权、并发/输出/超时上限、`unknown` 禁止重试。
+5. 第三方升级或 schema digest 变化后重新授权；不并入 Desktop 主更新信任链。
+6. Provider 安装配置 canonicalize command/args/env；校验目录 owner/ACL、签名/hash、quarantine 与 TOCTOU，采用版本并存、原子切换、失败 quarantine/回滚。
+7. 本地审批仅满足服务端 policy obligation，持久规则只能收窄服务器授权；变参、策略/设备/schema revision 变化后强制失效。
+
+### E5：本地工具传输与 UI Bridge
+
+1. 其他电脑上的 Runtime 首版复用现有出站 HTTPS 长轮询和设备状态机；WSS 仅作 transport 优化。当前 Desktop 工具由 Coordinator 直接调用 Host。
+2. Desktop 登录身份与设备 token 分离，token 绑定 tenant/user/device 并由 `safeStorage` 加密。
+3. 服务端增加统一 `DeviceRouter` 和 Provider 默认节点持久化；现有 `selected` 作为迁移期通用默认，不再由 `LocalToolProxy` 直接使用 `selected[0]`。
+4. 支持列出当前 Desktop 与远端 Runtime 节点，并为 Provider/工具配置本次节点、默认节点和“必须当前电脑”约束。
+5. 路由顺序固定为本次显式选择 → Provider 默认节点 → 唯一匹配在线节点；多候选无规则时询问用户，不随机调度、不在失败后改投其他节点。
+6. invocation 固定并审计 `device_id`、provider/tool/digest 与选择理由；取消、超时、unknown 不改变目标节点。
+7. Desktop Agent Turn Service 与 Cloud Agent 的有效工具集都按 `服务端租户策略 ∩ 授权节点能力 ∩ Provider/工具授权` 计算；未经服务端审批的第三方 schema 不注入 LLM，远端 claim 时复核 device/provider/tool/digest。
+8. Desktop 与远端 Runtime 均只出站连接后台，不增加 P2P、局域网发现或 Desktop 直连 Runtime 协议。
+9. `LocalToolsBridge` 仅暴露列举、状态、节点选择、启停、授权、取消、诊断等窄操作，不暴露 spawn/command/path。
+10. 为 Phase F 的 `DesktopLocalToolsPage` 提供节点、Provider、工具、来源、签名、权限、默认路由、最近运行和诊断 DTO。
+11. 节点支持 ownership scope、active/draining/maintenance/quarantined/revoked、minimum version、capability snapshot、Provider slots 和 GUI exclusive slot。
+12. Node Lease 与 Execution Lease 分离；容量 reservation+claim 原子化，服务器 reaper 独立处理 stale execution。
+13. `DEVICE_OWNED` session 固定 owner/workspace，每个 invocation 固定 target；多步 GUI workflow 使用显式 affinity group，不能把整个 Task 误绑同一 device。
+
+### 验收
+
+- BOSS 或 weixin 第一方 Provider 分别完成：Desktop Coordinator → 当前 Desktop Local Host，以及 Desktop Coordinator → Cloud invocation → 远端 `agent-tool-runtime` → MCP stdio → result 真机闭环；Web Cloud Agent 的既有链路保持兼容。
+- Windows PowerShell 与 macOS zsh 分别完成安全命令、流式输出、审批拒绝、取消、超时、输出截断和子进程回收真机闭环。
+- 本地文件工具只能访问已授权目录；越界、软链接/重解析点逃逸和未确认上传均被拒绝。
+- 同一 `read/write/edit` contract 对 ServerFileRef 与 DeviceFileRef 运行 golden tests；revision 冲突不覆盖用户修改，Web/渠道服务端文件链路保持兼容。
+- UI 明确区分“文件在本机执行”和“内容片段会送往云端模型”，不得把本地副作用宣传为内容完全不离机。
+- 选择远端节点后，当前 Desktop 不启动 Provider、不抢占鼠标键盘；远端节点离线/失败不自动转回当前电脑。
+- 一个测试第三方 Provider 完成添加、禁用、逐工具授权、调用、取消、升级后重新授权和移除。
+- `SERVER/LOCAL_REQUIRED/EITHER`、多设备选择、能力不匹配和无静默跨节点 fallback 测试通过。
+- 从旧 `selected` 设备迁移后行为兼容；BOSS 与 weixin 可分别绑定不同节点，路由选择有审计记录。
+- Desktop Host 与 headless Runtime 对同一 invocation golden contract 结果一致。
+- Provider crash/timeout/oversize/app quit 后无残留；服务端工具和聊天仍可用。
+- Windows kill-on-job-close/breakaway 与 macOS 禁止 daemonize/PID+create-time ownership 通过；严禁按进程名全局清理。
+- Windows 与 macOS 至少各完成 Provider 启动/取消/退出的开发真机证据。
+
+### 估算
+
+20～30 个工作日（包含隔离 Host、通用 Shell/File Executor、服务器授权票据、节点治理、远端 grant 与旧 `selected` 兼容迁移）。
+
+## 10. Phase F：Agent 工作台页面
+
+按用户价值和复用难度分小 Phase，每项独立三智能体流程：
+
+| 子 Phase | 页面 | 策略 |
+|---|---|---|
+| F1 | Task 工作台 | 目标、完成标准、状态、阻塞、审批、关联 sessions/executions/artifacts，以及会话创建/搜索 |
+| F2 | 我的数字员工 | Shared DTO/API，Desktop 卡片/筛选 UI |
+| F3 | 知识库 | Shared API，Desktop 文件/知识库 UI |
+| F4 | 本地工具 | 当前/远端节点、Provider 来源/签名/版本、默认路由、工具权限、运行状态、最近执行与诊断 |
+| F5 | 设置中心 | 账户、主题、缩放、更新、存储、诊断 |
+
+复杂业务管理页不自动纳入。每页先判断：高频桌面使用则实现 Desktop 页面；低频管理操作则受控打开 Web。外部 Web URL 必须由服务端/包内策略给出并经过 HTTPS/host allowlist。
+
+### 验收
+
+- Desktop router 只包含已实现页面，未实现入口显示明确说明或外部打开，不展示空壳。
+- 每个页面具备 loading/empty/error/offline/permission 状态。
+- 页面不引用 Web layout、route、global CSS。
+
+### 估算
+
+10～15 个工作日，按 F1～F5 分批交付。
+
+## 11. Phase G：平台能力与生命周期收口
+
+### 工作包
+
+1. 将 Electron main 拆为跨平台 core + Windows/macOS driver，保持 preload contract 不变。
+2. Command Registry 统一菜单、快捷键和命令面板，显示 Ctrl/Command 差异。
+3. 明确关闭/退出/托盘策略；默认不静默常驻，用户可配置。
+4. 大文件下载改为流式临时文件 + 原子替换。
+5. Credential 文件 schemaVersion、迁移和损坏恢复。
+6. Desktop 诊断中心：版本、API 可达性、更新状态、存储/权限、本地 runtime 状态；导出脱敏诊断包。
+7. 系统睡眠/唤醒、网络变化、多显示器、DPI/Retina、主题变化恢复。
+8. Electron Fuses 安全加固并扩展 ASAR/启动验证。
+9. 实现统一 Quiesce：停止接单、checkpoint/fsync、reconcile unknown、刷新 Evidence/Artifact outbox、关闭子进程、释放锁和租约；覆盖 pending approval/WAITING_INPUT/强杀/断电恢复。
+10. 本地数据管理 UI：占用、保留、导出/删除、投影级别、诊断开关和企业策略锁定原因。
+11. 遥测 envelope 只包含关联 ID、设备 hash、版本与脱敏指标；离线 buffer 有界，诊断包用户预览后导出。
+
+### 验收
+
+- Platform Driver contract 在 Windows/macOS 通过。
+- 活跃 stream/upload/download/local run 下退出和更新行为确定。
+- 诊断包不含 Token、正文、文件内容和敏感绝对路径。
+- app quit 后无 Electron/Worker/Chrome 残留。
+- Quiesce 超时会延后更新；睡眠/唤醒、OS 强杀和断电后先 reconciliation 再接单。
+- SLO/告警覆盖 Relay ACK P95、projection lag、replay/gap、DB corruption、recovery、unknown effect、重复执行、Provider crash 与版本分布，不采集正文。
+
+### 估算
+
+8～12 个工作日（包含 Quiesce、数据生命周期、遥测/SLO 与崩溃恢复）。
+
+## 12. Phase H：macOS 交付链路
+
+### 外部准备
+
+- Apple Developer Program。
+- Developer ID Application certificate。
+- Apple API Key（优先）或受控 notarization 凭证。
+- Apple Silicon runner/真机；Intel runner 或受控 Intel 真机。
+- 正式 `.icns` 和品牌资料。
+
+### 工作包
+
+1. electron-builder 增加 mac arm64/x64 的 DMG + ZIP；暂不默认 universal。
+2. 配置 Hardened Runtime、entitlements 和 inherit entitlements；只申请实际使用权限。
+3. 签名、notarize、staple 和 Gatekeeper 校验脚本。
+4. `aidagent` URL protocol、Dock/app menu、About/Preferences、窗口恢复。
+5. 建立 capability→TCC 映射，覆盖 Accessibility、Automation/Apple Events、Screen Recording、Files & Folders、麦克风和通知的 usage description、preflight 与拒绝/撤销恢复；绝不要求 Full Disk Access。
+6. `latest-mac.yml`、分架构更新目录和真实旧版→新版升级。
+7. macOS release manifest/SBOM/audit/license/ASAR parity。
+8. 对 helper/native addon/捆绑第一方 Provider 做 nested codesign/notarization；第三方 Provider 位于 Application Support，验证 quarantine/ACL/hash/exec bit。
+
+### 验收
+
+- `codesign --verify --deep --strict`、`spctl --assess`、stapler validate 通过。
+- DMG 安装、首次启动、深链、登录、对话、附件、权限、更新和卸载数据策略通过。
+- arm64 必须真机；x64 在全量发布前必须真机或受控 Intel runner 验收。
+- 未签名/未 notarize/metadata 缺失的 release 命令 fail-closed。
+
+### 估算
+
+5～8 个工作日，不含证书采购等待。
+
+## 13. Phase I：Windows 正式发布闭环
+
+### 已有
+
+- NSIS、electron-updater、development-unsigned、release fail-closed、manifest/SBOM/audit/license 和 0.0.2 开发包证据。
+
+### 待完成
+
+1. 正式 `.ico`、Authenticode 证书与受控 CI Secret。
+2. 生产 HTTPS Generic Provider 和原子发布流程。
+3. Windows 10/11：全新安装、覆盖升级、跳版本、降级拒绝。
+4. 错误 publisher、损坏包、混用 metadata/blockmap 拒绝。
+5. staged rollout 和更高 SemVer 修复版本演练。
+6. SmartScreen/publisher 展示与企业代理网络验证。
+7. manifest 固定 `asInvoker`，验证 Controlled Folder Access、Defender、AppLocker/WDAC、代理证书及 UIAutomation/input injection/screen capture 的阻断恢复。
+8. 增加 Authenticode timestamp、证书续期/紧急轮换和 publisher 迁移 runbook。
+
+### 验收
+
+- Authenticode `Valid`；publisherName、latest.yml、app-update.yml 和安装包一致。
+- 更新过程中有活跃任务时不会强制退出。
+- 发布脚本失败不遗留可误认的正式产物。
+
+### 估算
+
+3～5 个工作日，不含证书/发布源等待。
+
+## 14. Phase J：Browser Runtime
 
 ### 进入条件
 
-浏览器执行架构 Phase 0-3 的 RunManager、Executor、人工接管和 suspend/resume 契约已稳定；若其开发尚未完成，本 Phase 不提前复制临时代码。
+Browser Phase 3R 的 PostgreSQL lease、确定性人工需求、跨事件循环隔离和双 Gunicorn worker 真实 E2E 全部有证据；仅代码合并不满足。
 
-2026-07-22 真实环境发现 Redis 4.3.0 不支持当前 resume Stream，且验证码登录页未确定性触发人工接管。进入条件因此明确为浏览器 Phase 3R 全部门禁通过：PostgreSQL lease 队列、确定性人工需求检测、跨事件循环测试隔离及双 Gunicorn worker 真实 E2E 均有证据；仅“代码已合并”不满足条件。
+### 工作包
 
-本 Phase 是 Agent Desktop 已稳定后的可选增强，不是桌面 MVP 的发布前置条件。浏览器工程必须适配 Phase 0～3 已确定的认证、更新、安全和生命周期边界。
+- `clients/agent-desktop/browser-runtime` 内置可选模块，不建第二产品。
+- 短期 browser session、`browser/1.0`、Worker/Profile、人工接管和 Web launch ticket。
+- Windows Job Object、macOS process group。
+- Desktop UI 状态、继续/取消、权限和更新延期。
 
-### 工作
+### 验收
 
-- 在 `clients/agent-desktop/browser-runtime/` 实现内置可选模块；不创建第二个客户端工程或 shell。
-- 增加 browser runtime feature flag、延迟加载和故障隔离；关闭/缺失/崩溃时不得影响桌面启动、登录、对话和非浏览器工具。
-- 实现 `browser/1.0`、短期 desktop browser session、Agent Web launch ticket、DesktopRuntimeExecutor、Profile、Worker 和进程托管边界。
-- Desktop 登录 presence 自动注册 browser capability；Web 可用一次性深链拉起同一应用。
-- Vue UI 显示 browser run、人工接管、继续/取消和 Agent Desktop 更新状态。
-- 复用 Agent Desktop 的 CredentialStore、installation identity、API 配置、签名安装包、更新器、托盘和设置页；browser runtime 不拥有独立发布状态。
+- local/remote executor golden contract。
+- success/error/cancel/timeout/app quit/断网/update 七终态零残留。
+- runtime disabled/missing/crash/version mismatch 时 Agent 主链路全绿。
 
-### 验证
+### 估算
 
-- Python/TypeScript golden fixtures 和 local/desktop runtime executor contract tests 通过。
-- Windows/macOS 可见浏览器、Profile 复用、验证码人工处理和原 run 自动续跑通过。
-- success/error/cancel/timeout/app quit/断网/update 七类终态进程回基线。
-- Web 未安装 Desktop 时，server headless 和网页人工接管回归通过。
-- 禁用 runtime、Worker 启动失败、协议版本不兼容三种情况下，Agent Desktop 主链路回归全部通过。
+8～12 个工作日，进入条件未满足前不排期实现。
 
-## 8. Phase 5：发布、签名和更新
-
-### 2026-07-14 Windows 开发包检查点
-
-- 引入 electron-builder 26，生成 Windows x64、user-scope NSIS；配置固定 `appId` 与 `aidagent` protocol，asar 只包含编译后的 main/preload/renderer 运行时文件。
-- 开发渠道明确为 `development-unsigned`；release 缺 `CSC_LINK`/`WIN_CSC_LINK` 会在清理产物和调用 builder 前失败，Authenticode 非 `Valid` 也不得发布。unsigned dev 包不能被后处理伪装成 release。
-- 标准 `npm run package:win:dev` 必须完整重跑：先清空 release、typecheck、26/26 tests、Desktop artifact verifier、electron-builder、SBOM/audit/license/manifest 和 ASAR verifier；已删除可复用旧 installer 的 `--postprocess-existing` 旁路。
-- manifest 记录版本、平台/架构、commit/dirty、installer size/SHA-256/签名状态和完整构建输入 SHA-256；manifest、CycloneDX SBOM、npm audit、license 均原子写入并严格校验。npm audit 明确走官方 advisory endpoint，镜像 404 不再被误报为 0 漏洞。
-- Windows 主控最终产物：`AID-Work-Agent-0.0.1-win-x64-dev-unsigned.exe`，100,215,084 bytes，SHA-256 `20555b354fe2d506d98d61c7eef98625e073b5c3eac6b3cde66996c41ee37979`，Authenticode `NotSigned`，与 manifest 一致；release 目录已 gitignore。
-- packaged `win-unpacked/AID Work Agent.exe` 在临时 API fixture 与隔离 userData 下输出 `AGENT_DESKTOP_SMOKE_PASS`，退出码 0，临时目录与 Electron/packaged 进程残留为 0。
-- 此检查点当时仅完成可审计的 Windows 开发安装包，不代表正式可分发；2026-07-20 已补齐自动更新代码与本地门禁，但正式 `.ico`、代码签名证书、真实更新源，以及安装/卸载、协议注册、升级/回滚真机验证仍未完成。单独存在 `.blockmap` 不能作为生产升级已验收的证据。
-
-### 2026-07-20 Windows 自动更新开发检查点
-
-- 新前端提交包含 `MenuSidebar.vue`、对话组件和 `useAgent.ts`，均属于 Desktop renderer 输入，必须重新构建安装包；同版本 `0.0.1` 重打包不能触发升级，下一测试版本需提升至 `0.0.2`。
-- 接入 `electron-updater` + NSIS Generic Provider；生产更新地址由 `AID_AGENT_UPDATE_BASE_URL` 在构建时写入包内配置。缺地址、非 HTTPS、未打包或 development-unsigned 渠道全部 fail-closed 为 `disabled`。
-- main 进程维护更新状态机，关闭自动下载和退出时自动安装；preload 仅暴露状态订阅、手动检查、下载、重启安装。左下角仅 Desktop 显示更新提示，下载完成必须由用户确认重启。
-- 本地自动化覆盖配置校验、状态转换、IPC sender 校验和 Web 无桥接降级；开发包只验证 UI/状态/产物，不连接或伪造生产更新源。
-- 外部阻塞项：生产 HTTPS 更新目录、Authenticode 证书/CI Secret、真实的旧版→新版与坏签名/回滚真机矩阵。在这些条件完成前不得标记生产自动更新完成。
-- 三智能体与主控终检完成：Desktop 37/37、Frontend updater/runtime 7/7、Web 与 Desktop production build、开发包 verifier（326 ASAR files）、packaged smoke 和零残留均通过。最终开发包 `AID-Work-Agent-0.0.2-win-x64-dev-unsigned.exe` 为 100,415,947 bytes，SHA-256 `36e017ea473486ee3b59288fe8a7cf95b43c6abfb9b3eda6ecf87a4d17b0ab70`，Authenticode `NotSigned`，包内 API 为 `https://agent2.aidingyi.cn/api`，更新源为 `null`。
-
-### 工作
-
-- electron-builder：Windows x64 NSIS；macOS x64/arm64 universal DMG + ZIP 更新产物。
-- Windows 签名、macOS Developer ID + Hardened Runtime + notarization；CI `forceCodeSigning`。
-- 分平台 CI matrix，构建产物生成 SBOM、SHA-256、版本清单并上传受控发布源。
-- staged rollout、强制最低版本、下载后验签、失败回滚和 browser protocol 兼容策略。
-
-### 验证
-
-- 全新安装、覆盖升级、跳版本升级、降级拒绝、损坏包/错误签名拒绝通过。
-- Windows SmartScreen/签名信息、macOS Gatekeeper/notarization 真机通过。
-- 更新过程中进行中的 Agent/browser run 有明确延后或安全取消策略。
-
-## 9. Phase 6：全量验收与收口
+## 15. Phase K：全量验收与收口
 
 ### 自动化
 
-- Frontend 全量 tests + Web/Desktop production builds。
-- Python 受影响模块 unit/integration + import/启动检查。
-- Electron unit/integration/e2e；artifact Portal exclusion；依赖漏洞和许可证检查。
-- Browser runtime contract/lifecycle/security/e2e。
+- Frontend Web/Desktop/Shared 全量测试和双 production build。
+- Electron unit/integration/package tests；artifact/ASAR/security/supply-chain 门禁。
+- Python 受影响 contract/integration 与服务启动检查。
+- MCP Host、第一方/第三方 Provider 全量 contract/lifecycle/security；Browser 若启用则增加其专项门禁。
+- Task/Execution/Action/Artifact/Evidence envelope、authorization ticket/claim 分离、fencing、固定 release/policy snapshot 的跨语言 golden contract。
+- Session-sync/crash Golden Matrix：ACK 前后断网、ACK 丢失、重复/乱序/gap、双连接、睡眠、强杀/断电、磁盘满/DB corrupt、Keychain locked、effect 后崩溃和服务端滚动升级。
+- 更新数据库迁移、备份点、migration marker、post-update health check、只读 safe mode 与禁止不兼容降级。
 
 ### 真机矩阵
 
-- Windows 10 x64、Windows 11 x64。
-- macOS 13+ Intel、macOS 13+ Apple Silicon。
-- 企业代理网络、断网重连、系统睡眠/唤醒、多显示器、应用强退、服务端滚动升级。
+| 场景 | Windows 10 | Windows 11 | macOS arm64 | macOS x64 |
+|---|---:|---:|---:|---:|
+| 安装/首次启动/登录 | 必须 | 必须 | 必须 | 必须 |
+| 对话/SSE/多会话/附件 | 必须 | 必须 | 必须 | 必须 |
+| 深链/菜单/快捷键/更新 | 必须 | 必须 | 必须 | 必须 |
+| 断网/代理/睡眠唤醒 | 抽样 | 必须 | 必须 | 抽样 |
+| 多显示器/DPI/Retina | 抽样 | 必须 | 必须 | 抽样 |
+| MCP Provider/本地工具 | 必须 | 必须 | 必须 | 构建+真机抽样 |
+| Browser Runtime（若启用） | 必须 | 必须 | 必须 | 构建+抽样 |
+| 本地 DB/恢复/磁盘满 | 必须 | 必须 | 必须 | 构建+真机抽样 |
+| GUI/RPA 系统权限拒绝与撤销 | 必须 | 必须 | 必须 | 真机抽样 |
 
-### 文档
+### 文档收口
 
-- 更新桌面设计/计划状态、部署和用户安装指南。
-- 同步浏览器 v2.7 设计与计划的 Phase 4 跨项目依赖和联合验收状态。
-- 完成后将本条从 `docs/ideas.md` 移至 `docs/ideas_finished.md`。
+- Windows 与 macOS 分平台构建/安装/运维/更新/故障手册。
+- 用户手册和隐私/本地数据说明。
+- release checklist、回滚 runbook、支持矩阵和已知限制。
+- 支持 runbook 覆盖投影卡住、在线但 session unavailable、事件 gap、DB 损坏、密钥不可解、crash loop、unknown action 和旧协议客户端。
+- 更新 `docs/ideas.md`；完成定义全部满足后移至 `docs/ideas_finished.md`。
 
-## 10. 建议排期与依赖
+## 16. 排期与里程碑
 
-在 1 名熟悉现有前端的开发者 + 1 名 Electron/发布工程师条件下，建议 6～9 周；浏览器 RunManager/Executor 未完成会阻塞 Phase 4，但不阻塞 Phase 0～3。
+在 1 名前端/桌面开发 + 1 名 Electron/发布工程师、每 Phase 严格三智能体的前提下：
 
-推荐顺序：先交付不含本地浏览器能力的 Desktop MVP（Phase 0～3），验证双入口和服务端兼容；再接入已经通过服务端门禁的 browser runtime，避免桌面壳与浏览器架构同时失稳。
+| 里程碑 | 包含 Phase | 预计 |
+|---|---|---|
+| M1 独立 Desktop 核心可用 | B～D | 5～7 周 |
+| M2 本地工具与工作台完善 | E～G | 9～12 周 |
+| M3 双平台正式交付 | H～I + K 核心项 | 2～3 周 + 外部等待 |
+| M4 浏览器执行增强 | J | 2～3 周，满足门禁后触发 |
 
-## 11. 不允许的范围漂移
+建议先在 Windows 开发版完成 Desktop UI 与 MCP Host 的单 Provider 闭环，再并行推进工作台和 macOS Host adapter；双平台正式版包含 MCP Host，Browser Runtime 按服务端门禁另行启用。
 
-- 不修改 `/portal` 业务功能。
-- 不把 Python/数据库/模型 Key 打进客户端。
-- 不用关闭 Web Security、启用 Node integration 或暴露通用 IPC 赶进度。
-- 不复制 Agent UI 或 browser runtime 形成长期双实现。
-- 不在没有 Windows/macOS 真机证据时标记完成。
+## 17. 不允许的范围漂移
+
+- 不为了 Desktop 整洁批量改写稳定 Web import、页面或样式。
+- 不在一个 Phase 同时做目录搬迁、Shared 大提取和 Desktop UI 重写。
+- 不把 Web 页面临时复制到 Desktop 后长期保留。
+- 不使用 `webSecurity=false`、`nodeIntegration=true` 或通用 IPC 赶进度。
+- 不在 Windows 结果上标记 macOS 完成，不把 unsigned/unnotarized 包称为正式包。
+- 不让单个 Provider 或 Browser Runtime 的故障拖垮 Electron、服务端工具或聊天主链路。
+- 不因 Desktop 已内置 Host 而删除 Web/headless 场景仍需要的 `clients/agent-tool-runtime`。
+- 不把 `LOCAL_REQUIRED` 误解成“当前电脑执行”；它表示授权边缘节点执行，当前 Desktop 和远端 Runtime 是同级候选节点。
+- 不建立 Desktop 到 Runtime 的 P2P 私有通道；设备选择、invocation、进度和结果统一经后台中转。
+- 不为第一方 CLI 增加 Desktop 私有协议；不允许云端/LLM 下发 Provider executable、Host 环境或任意路径，但受控 `local_shell.command` 是明确支持的工具参数。
