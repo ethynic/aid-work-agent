@@ -291,15 +291,14 @@ VALUES ('MiniMax-H3', 0.5, '{"768P": 0.5, "2K": 0.8}'::jsonb)
 ON CONFLICT (model_name) DO NOTHING;
 
 -- Embedding 向量模型单价（元/百万 tokens）
--- text-embedding-v3 阿里云百炼官方定价 0.7 元/百万 tokens
+-- text-embedding-v3 阿里云百炼官方定价 0.5 元/百万 tokens
 INSERT INTO token_cost_prices (model_name, embedding_price_per_m)
-VALUES ('text-embedding-v3', 0.7)
+VALUES ('text-embedding-v3', 0.5)
 ON CONFLICT (model_name) DO NOTHING;
 
--- ASR 语音识别单价（元/次）
--- 阿里云 NLS 一句话识别，按时长档位折算的常见价（需运营确认）
+-- 阿里云 NLS 一句话识别单价：0.01 元/次（1次最多60s）
 INSERT INTO token_cost_prices (model_name, asr_price_per_call)
-VALUES ('aliyun-nls-asr', 0.06)
+VALUES ('aliyun-nls-asr', 0.01)
 ON CONFLICT (model_name) DO NOTHING;
 
 

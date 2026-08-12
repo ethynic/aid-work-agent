@@ -349,14 +349,14 @@ ALTER TABLE chat_records ADD COLUMN IF NOT EXISTS usage_breakdown JSONB;
 ALTER TABLE token_cost_prices ADD COLUMN IF NOT EXISTS embedding_price_per_m NUMERIC(10,4);
 ALTER TABLE token_cost_prices ADD COLUMN IF NOT EXISTS asr_price_per_call NUMERIC(10,4);
 
--- text-embedding-v3 单价：0.7 元/百万 tokens（阿里云百炼官方定价）
+-- text-embedding-v3 单价：0.5 元/百万 tokens（阿里云百炼官方定价）
 INSERT INTO token_cost_prices (model_name, embedding_price_per_m)
-VALUES ('text-embedding-v3', 0.7)
+VALUES ('text-embedding-v3', 0.5)
 ON CONFLICT (model_name) DO UPDATE SET
   embedding_price_per_m = EXCLUDED.embedding_price_per_m;
 
--- 阿里云 NLS 一句话识别单价：0.06 元/次（按时长档位折算的常见价，需运营确认）
+-- 阿里云 NLS 一句话识别单价：0.01 元/次（1次最多60s）
 INSERT INTO token_cost_prices (model_name, asr_price_per_call)
-VALUES ('aliyun-nls-asr', 0.06)
+VALUES ('aliyun-nls-asr', 0.01)
 ON CONFLICT (model_name) DO UPDATE SET
   asr_price_per_call = EXCLUDED.asr_price_per_call;
