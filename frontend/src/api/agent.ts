@@ -23,7 +23,6 @@ export async function uploadFile(file: File, authHeaders?: Record<string, string
     // Don't set Content-Type for FormData - browser sets it automatically with boundary
 
     const apiBase = import.meta.env.VITE_API_BASE_URL || '/api'
-    console.log('前端日志：开始上传文件', file.name, '大小:', file.size, '字节')
     const response = await fetch(`${apiBase}/upload`, {
       method: 'POST',
       headers,
@@ -56,7 +55,6 @@ export async function uploadFile(file: File, authHeaders?: Record<string, string
       throw new Error(result.error || '上传失败')
     }
 
-    console.log('前端日志：文件上传成功', result)
     return result
   } catch (error: any) {
     console.error('前端日志：upload 异常捕获', error)
