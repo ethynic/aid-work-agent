@@ -649,6 +649,19 @@ CREATE TABLE IF NOT EXISTS subagent_knowledge_sources (
     UNIQUE(tenant_id, subagent_name)
 );
 
+-- subagent_template_files — 租户级子智能体模板文件关联
+-- 每个租户的每个子智能体可挂载多个模板文件（名称 + file_id + 元信息），
+-- 运行时注入 system prompt 末尾（### 相关模板位置信息）。
+CREATE TABLE IF NOT EXISTS subagent_template_files (
+    id SERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    subagent_name TEXT NOT NULL,
+    files JSONB NOT NULL DEFAULT '[]',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, subagent_name)
+);
+
 -- ============== Prompt 版本管理表 ==============
 
 -- prompt_registry — Prompt 注册表

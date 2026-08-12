@@ -82,6 +82,98 @@
           </div>
         </div>
 
+        <!-- 模板文件区 -->
+        <div class="bg-surface rounded-xl border border-default p-5 mt-6">
+          <div class="flex items-start justify-between mb-3 gap-3">
+            <div class="min-w-0">
+              <h3 class="text-sm font-medium text-default">模板文件</h3>
+              <p class="text-xs text-muted mt-1 leading-relaxed">
+                上传模板后，系统会在提示词末尾自动追加「### 相关模板位置信息」，以
+                <code class="text-xs bg-canvas px-1 rounded">{名称}：{file_id}</code> 形式列出；
+                数字员工可按 file_id 调用文档工具（word/excel/pdf_process 等）套用对应模板。
+              </p>
+            </div>
+            <button
+              class="flex-shrink-0 h-8 px-3 rounded-lg text-sm font-medium border border-primary-300 text-primary-600 hover:bg-primary-50 transition-colors disabled:opacity-50"
+              :disabled="templateUploading"
+              @click="showAddTemplate = !showAddTemplate"
+            >
+              {{ showAddTemplate ? '取消' : '+ 添加模板' }}
+            </button>
+          </div>
+
+          <!-- 添加模板表单 -->
+          <div v-if="showAddTemplate" class="mb-4 p-3 bg-canvas rounded-lg border border-default">
+            <div class="flex flex-col gap-2">
+              <div class="text-xs text-muted">模板名称 <span class="text-danger-500">*</span></div>
+              <input
+                v-model="newTemplateName"
+                type="text"
+                placeholder="如：标准报价单"
+                class="w-full h-9 px-3 rounded-lg border border-default bg-surface text-sm text-default focus:border-primary-400 focus:ring-1 focus:ring-primary-400 outline-none"
+                :disabled="templateUploading"
+              />
+              <div class="text-xs text-muted">模板文件 <span class="text-danger-500">*</span></div>
+              <div class="flex gap-2">
+                <button
+                  class="flex-1 h-9 px-3 rounded-lg border border-dashed border-default text-sm text-muted hover:border-primary-300 hover:text-primary-600 transition-colors flex items-center justify-center gap-2 min-w-0"
+                  @click="templateFileInput?.click()"
+                >
+                  <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.8">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M12 4v12m0-12l-4 4m4-4l4 4" />
+                  </svg>
+                  <span class="truncate">{{ selectedFile ? selectedFile.name : '选择模板文件' }}</span>
+                </button>
+                <button
+                  class="flex-shrink-0 h-9 px-4 rounded-lg text-sm font-medium bg-primary-600 text-white hover:bg-primary-700 transition-colors disabled:opacity-50"
+                  :disabled="templateUploading || !newTemplateName.trim() || !selectedFile"
+                  @click="handleUploadTemplate"
+                >
+                  {{ templateUploading ? '上传中...' : '上传' }}
+                </button>
+              </div>
+              <p class="text-xs text-muted">名称与文件均为必填，缺一不可；支持 .docx / .xlsx / .pptx / .pdf / .md / .txt / .csv</p>
+              <input
+                ref="templateFileInput"
+                type="file"
+                accept=".docx,.xlsx,.pptx,.pdf,.md,.txt,.csv"
+                class="hidden"
+                @change="handleFileSelect"
+              />
+            </div>
+          </div>
+
+          <!-- 模板列表 -->
+          <div v-if="templatesLoading" class="py-4 text-center text-sm text-muted">加载中...</div>
+          <div v-else-if="templates.length === 0" class="py-4 text-center text-sm text-muted">
+            暂无模板文件，点击「添加模板」上传
+          </div>
+          <div v-else class="space-y-2">
+            <div
+              v-for="t in templates"
+              :key="t.file_id"
+              class="flex items-center gap-3 p-2.5 rounded-lg border border-default bg-canvas"
+            >
+              <svg class="w-5 h-5 flex-shrink-0 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.6">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+              <div class="flex-1 min-w-0">
+                <p class="text-sm text-default truncate">{{ t.name }}</p>
+                <p class="text-xs text-muted truncate">
+                  {{ t.original_name || '-' }} · {{ formatSize(t.size_bytes) }} · {{ t.file_id }}
+                </p>
+              </div>
+              <button
+                class="flex-shrink-0 h-7 px-2.5 rounded text-xs text-muted hover:text-danger-600 hover:bg-danger-50 transition-colors"
+                :disabled="templateUploading"
+                @click="handleDeleteTemplate(t.file_id)"
+              >
+                删除
+              </button>
+            </div>
+          </div>
+        </div>
+
         <!-- 错误提示 -->
         <div v-if="errorMsg" class="mt-4 bg-danger-50 border border-danger-200 rounded-lg p-3 text-sm text-danger-700">
           {{ errorMsg }}
@@ -96,6 +188,7 @@ import { ref, computed, onMounted, inject, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import AppHeader from '@/components/AppHeader.vue'
 import { getExtraMd, saveExtraMd, deleteExtraMd } from '@/api/subagent'
+import { listTemplates, uploadTemplate, deleteTemplate, type TemplateFile } from '@/api/subagentTemplates'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 
 const router = useRouter()
@@ -113,6 +206,7 @@ const effectiveUser = computed(() => tenantAdmin.value ? {
   phone: tenantAdmin.value.phone,
 } : null)
 
+// ============== extra_md 状态 ==============
 const loading = ref(true)
 const saving = ref(false)
 const content = ref('')
@@ -120,6 +214,17 @@ const initialContent = ref('')
 const lastVersion = ref<number | null>(null)
 const lastSavedAt = ref('')
 const errorMsg = ref('')
+
+// ============== 模板文件状态 ==============
+const templates = ref<TemplateFile[]>([])
+const templatesLoading = ref(false)
+const templateUploading = ref(false)
+const showAddTemplate = ref(false)
+const newTemplateName = ref('')
+const selectedFile = ref<File | null>(null)
+const templateFileInput = ref<HTMLInputElement | null>(null)
+
+const ALLOWED_TEMPLATE_EXTS = ['.docx', '.xlsx', '.pptx', '.pdf', '.md', '.txt', '.csv']
 
 const toggleSidebarFn = inject<() => void>('toggleSidebar', () => {})
 function handleToggleSidebar() {
@@ -148,6 +253,7 @@ watch(dirty, (val) => {
   }
 })
 
+// ============== extra_md 加载/保存/清空 ==============
 async function loadContent() {
   loading.value = true
   errorMsg.value = ''
@@ -206,11 +312,86 @@ async function handleClear() {
   }
 }
 
+// ============== 模板文件 加载/上传/删除 ==============
+function formatSize(bytes?: number): string {
+  if (!bytes) return '-'
+  if (bytes < 1024) return bytes + 'B'
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + 'KB'
+  return (bytes / 1024 / 1024).toFixed(1) + 'MB'
+}
+
+async function loadTemplates() {
+  templatesLoading.value = true
+  try {
+    const res = await listTemplates(subagentName.value)
+    templates.value = res.data || []
+  } catch {
+    // 静默失败，不阻塞 extra_md 编辑
+    templates.value = []
+  } finally {
+    templatesLoading.value = false
+  }
+}
+
+function handleFileSelect(e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  // 重置 input value 允许重复选择同一文件
+  input.value = ''
+  if (!file) return
+  const dotIdx = file.name.lastIndexOf('.')
+  const ext = dotIdx >= 0 ? file.name.slice(dotIdx).toLowerCase() : ''
+  if (!ALLOWED_TEMPLATE_EXTS.includes(ext)) {
+    alert(`不支持的文件格式（仅支持 ${ALLOWED_TEMPLATE_EXTS.join(' / ')}）`)
+    return
+  }
+  selectedFile.value = file
+}
+
+async function handleUploadTemplate() {
+  const name = newTemplateName.value.trim()
+  if (!name || !selectedFile.value || templateUploading.value) return
+  templateUploading.value = true
+  errorMsg.value = ''
+  try {
+    const res = await uploadTemplate(subagentName.value, name, selectedFile.value)
+    if (res.success) {
+      templates.value = res.data || []
+      newTemplateName.value = ''
+      selectedFile.value = null
+      showAddTemplate.value = false
+    } else {
+      errorMsg.value = res.error || '上传失败'
+    }
+  } catch (e: any) {
+    errorMsg.value = e.message || '上传失败'
+  } finally {
+    templateUploading.value = false
+  }
+}
+
+async function handleDeleteTemplate(fileId: string) {
+  if (!confirm('确定删除该模板？')) return
+  errorMsg.value = ''
+  try {
+    const res = await deleteTemplate(subagentName.value, fileId)
+    if (res.success) {
+      templates.value = res.data || []
+    } else {
+      errorMsg.value = res.error || '删除失败'
+    }
+  } catch (e: any) {
+    errorMsg.value = e.message || '删除失败'
+  }
+}
+
 onMounted(() => {
   if (!subagentName.value) {
     router.push(`/t/${tenantId.value}/extras`)
     return
   }
+  // extra_md 与模板列表并行加载，互不阻塞
   loadContent()
+  loadTemplates()
 })
 </script>

@@ -1667,6 +1667,10 @@ app.include_router(subagent_env_var.router)
 from src.api import subagent_knowledge_source
 app.include_router(subagent_knowledge_source.router)
 
+# 子智能体模板文件 API（定制提示词页模板上传）
+from src.api import subagent_template_file
+app.include_router(subagent_template_file.router)
+
 from src.api import tenant_config_file
 app.include_router(tenant_config_file.router)
 

@@ -1061,6 +1061,14 @@ class Agent:
             if extra_content:
                 subagent_constraint = subagent_constraint + "\n\n## 租户定制需求\n\n" + extra_content
 
+            # 加载租户模板文件，在提示词末尾注入模板位置信息
+            templates = self._load_template_files()
+            if templates:
+                tpl_lines = ["\n\n### 相关模板位置信息", ""]
+                for t in templates:
+                    tpl_lines.append(f"{t.get('name', '')}：{t.get('file_id', '')}")
+                subagent_constraint += "\n".join(tpl_lines)
+
             base_prompt = self._build_base_system_prompt(
                 include_delegation=False,
                 subagent_constraint=subagent_constraint,
@@ -1138,6 +1146,40 @@ class Agent:
             logger.warning(f"Failed to load extra.md from DB: {e}")
 
         return None
+
+    def _load_template_files(self) -> list:
+        """加载租户为该子智能体配置的模板文件列表。
+
+        从 subagent_template_files 表读取（per tenant+subagent），返回 [{name, file_id, ...}]。
+        用于在 system prompt 末尾注入「### 相关模板位置信息」，模板位置以 file_id 标识，
+        数字员工可据此调用文档工具（word/excel/pdf_process 等）套用模板。
+        """
+        if not self.subagent_config:
+            return []
+
+        tenant_id = self._init_tenant_id
+        if not tenant_id:
+            try:
+                from src.saas.context import get_current_tenant_id
+                tenant_id = get_current_tenant_id()
+            except Exception:
+                pass
+
+        if not tenant_id or not self.subagent_config.dir_name:
+            return []
+
+        try:
+            from src.db.subagent_template_file_db import SubagentTemplateFileDB
+            files = SubagentTemplateFileDB.get(tenant_id, self.subagent_config.dir_name)
+            if files:
+                logger.debug(
+                    f"Loaded template files (DB) for tenant {tenant_id}, "
+                    f"subagent {self.subagent_config.dir_name}: {len(files)} 个"
+                )
+            return files or []
+        except Exception as e:
+            logger.warning(f"Failed to load template files from DB: {e}")
+            return []
 
     def _load_knowledge_sources(self) -> list:
         """加载租户级子智能体知识库关联"""
