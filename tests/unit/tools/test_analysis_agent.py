@@ -511,6 +511,81 @@ class TestLLMFailure:
 
 
 # ============================================================
+# Tests: 出图兜底（_is_chartable / _maybe_nudge_to_chart）
+# ============================================================
+
+
+class TestChartNudge:
+    """总结前出图兜底：有表无图且数据可可视化时提示补图。"""
+
+    def test_is_chartable_multi_row_with_numeric_and_dim(self):
+        """多行 + 数值列 + 维度列 → True"""
+        df = pd.DataFrame({"region": ["A", "B", "C"], "amount": [10, 20, 30]})
+        assert AnalysisAgent._is_chartable(df) is True
+
+    def test_is_chartable_single_row(self):
+        """单行 → False"""
+        df = pd.DataFrame({"region": ["A"], "amount": [10]})
+        assert AnalysisAgent._is_chartable(df) is False
+
+    def test_is_chartable_no_numeric(self):
+        """无数值列 → False"""
+        df = pd.DataFrame({"region": ["A", "B"], "name": ["x", "y"]})
+        assert AnalysisAgent._is_chartable(df) is False
+
+    def test_is_chartable_no_dimension(self):
+        """纯数值无维度列 → False"""
+        df = pd.DataFrame({"a": [1, 2], "b": [3, 4]})
+        assert AnalysisAgent._is_chartable(df) is False
+
+    def test_is_chartable_none(self):
+        assert AnalysisAgent._is_chartable(None) is False
+
+    def test_nudge_triggers_when_table_without_chart(self, agent):
+        """有表无图且数据可可视化 → 注入提示、返回 True、且仅触发一次"""
+        agent._artifacts = [{"type": "table", "id": "t1"}]
+        agent._last_table_df = pd.DataFrame({"region": ["A", "B"], "amount": [10, 20]})
+        messages = []
+        triggered = agent._maybe_nudge_to_chart(messages, "这是总结")
+        assert triggered is True
+        assert agent._chart_nudge_done is True
+        assert len(messages) == 2  # assistant 总结 + user 补图提示
+        assert "to_chart" in messages[1]["content"]
+        # 二次调用应放行（防死循环）
+        assert agent._maybe_nudge_to_chart([], "总结2") is False
+
+    def test_nudge_skipped_when_chart_exists(self, agent):
+        """已有 chart artifact → 不触发"""
+        agent._artifacts = [{"type": "chart", "id": "c1"}, {"type": "table", "id": "t1"}]
+        agent._last_table_df = pd.DataFrame({"region": ["A", "B"], "amount": [10, 20]})
+        assert agent._maybe_nudge_to_chart([], "总结") is False
+
+    def test_nudge_skipped_when_no_table(self, agent):
+        """无任何 artifact → 不触发"""
+        agent._artifacts = []
+        agent._last_table_df = pd.DataFrame({"region": ["A", "B"], "amount": [10, 20]})
+        assert agent._maybe_nudge_to_chart([], "总结") is False
+
+    def test_nudge_skipped_when_data_not_chartable(self, agent):
+        """有表但数据不可可视化（单行）→ 不触发"""
+        agent._artifacts = [{"type": "table", "id": "t1"}]
+        agent._last_table_df = pd.DataFrame({"region": ["A"], "amount": [10]})
+        assert agent._maybe_nudge_to_chart([], "总结") is False
+
+    def test_last_table_df_uses_actual_output_not_full_source(self, agent):
+        """to_table 实际输出 1 行时，_last_table_df 应反映实际输出（而非全量源）→ 不可可视化"""
+        result = {
+            "columns": ["region", "amount"],
+            "rows": [["华东", 100]],  # 仅 1 行（如查某条明细）
+            "row_count": 1,
+            "total_count": 1,
+        }
+        agent._handle_to_table("v1", result, {"source": "v1", "title": "单条明细"})
+        assert len(agent._last_table_df) == 1
+        assert agent._is_chartable(agent._last_table_df) is False
+
+
+# ============================================================
 # Tests: 白名单校验
 # ============================================================
 

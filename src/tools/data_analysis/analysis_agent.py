@@ -61,6 +61,9 @@ class AnalysisAgent:
         # _steps 仅用于 trace 持久化，不放进对外返回值
         self._steps: List[Dict] = []
         self._spans: List[SpanRecord] = []
+        # 出图兜底：总结前若"有表无图且数据可可视化"则提示补图（仅触发一次）
+        self._chart_nudge_done: bool = False
+        self._last_table_df = None
 
         # 如果传入了预加载的表，标记为已加载
         for meta in self.tables_metadata:
@@ -128,6 +131,9 @@ class AnalysisAgent:
 
             # 无工具调用 → LLM 给出最终总结
             if not tool_calls:
+                # 出图兜底：若已输出表格但无图表且数据可可视化，提示补图（仅一次）
+                if self._maybe_nudge_to_chart(messages, content):
+                    continue
                 summary = content
                 break
 
@@ -289,6 +295,13 @@ class AnalysisAgent:
         row_count = result.get("row_count", len(rows))
         total_count = result.get("total_count", row_count)
 
+        # 出图兜底判定：用 to_table 实际输出（列筛选+行数限制后）而非全量源，避免误判
+        try:
+            import pandas as pd
+            self._last_table_df = pd.DataFrame(rows, columns=columns) if columns else None
+        except Exception:
+            self._last_table_df = None
+
         # preview 最多 10 行（含表头），让主智能体能直接回答简单数据问题
         from src.tools.data_analysis.data_analyzer import DataAnalyzer
         preview_rows = rows[:10]
@@ -399,6 +412,49 @@ class AnalysisAgent:
             "theme_name": theme_name,
             "note": "图表已生成，最终结果由 conclusion 统一描述",
         }
+
+    def _maybe_nudge_to_chart(self, messages: List[Dict], content: str) -> bool:
+        """总结前出图兜底：若已输出表格但无图表、且该表数据可可视化，注入提示让 LLM 补图。
+
+        仅触发一次（_chart_nudge_done）；LLM 若二次仍不补图则放行，避免死循环。
+        """
+        if self._chart_nudge_done:
+            return False
+        has_chart = any(a.get("type") == "chart" for a in self._artifacts)
+        if has_chart:
+            return False
+        has_table = any(a.get("type") == "table" for a in self._artifacts)
+        if not has_table:
+            return False  # 连表格都没有，不强制出图
+        if not self._is_chartable(self._last_table_df):
+            return False
+        # 注入补图提示：附列名（防止 tool 结果被上下文压缩后 LLM 记不清列名）
+        df = self._last_table_df
+        cols_hint = ", ".join(str(c) for c in df.columns)
+        self._chart_nudge_done = True
+        messages.append({"role": "assistant", "content": content})
+        messages.append({
+            "role": "user",
+            "content": f"（系统提示）检测到你已输出表格但尚未生成图表。该结果含多行可统计的数值维度，适合可视化——请根据「数据类型→图表决策表」调用 to_chart 生成合适的图表（该表列：{cols_hint}），然后再给出最终总结。若确属单条记录/纯文本等不宜出图场景，可直接总结。",
+        })
+        logger.info("[AnalysisAgent] 触发出图兜底：提示 LLM 补充图表")
+        return True
+
+    @staticmethod
+    def _is_chartable(df) -> bool:
+        """判断 DataFrame 是否适合出图：行数≥2 + 至少1个数值列 + 至少1个非数值维度列。"""
+        if df is None:
+            return False
+        try:
+            import pandas as pd
+            if len(df) < 2:
+                return False
+            has_numeric = any(pd.api.types.is_numeric_dtype(df[c]) for c in df.columns)
+            has_dim = any(not pd.api.types.is_numeric_dtype(df[c]) for c in df.columns)
+            return has_numeric and has_dim
+        except Exception as e:
+            logger.debug(f"[AnalysisAgent] _is_chartable 判断异常: {e}")
+            return False
 
     def _build_user_message(self, requirement: str) -> str:
         """构建初始用户消息。"""
