@@ -235,7 +235,7 @@ class AnalysisAgent:
             return {"success": False, "error": f"未知方法类型: {method_name}"}
 
         except Exception as e:
-            logger.error(f"AnalysisAgent tool execution failed: {method_name} - {e}")
+            logger.info(f"AnalysisAgent tool execution failed (可恢复): {method_name} - {e}")
             return {"success": False, "error": str(e)}
 
     def _handle_data_method(self, method_name: str, output_var: str, df, params: Dict) -> Dict[str, Any]:
