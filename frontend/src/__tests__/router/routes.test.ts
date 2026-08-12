@@ -84,6 +84,8 @@ describe('entry route responsibilities', () => {
         "daily-report",
         "work-outcomes",
         "my-agents",
+        "extras",
+        "agent/:subagent_name/prompt",
         "chat",
         "chat/:subagent",
         "all-sessions",
