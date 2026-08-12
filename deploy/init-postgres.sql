@@ -109,6 +109,10 @@ CREATE TABLE IF NOT EXISTS chat_records (
     duration_ms INTEGER DEFAULT 0,
     source_type TEXT DEFAULT 'chat',
     credit_cost NUMERIC(12,2) NOT NULL DEFAULT 0.00,
+    -- LLM 计费接入改造（2026-08-12）：embedding/ASR/视频提示词 等扩展计费维度
+    embedding_tokens INTEGER DEFAULT 0,   -- 累加该轮交互中所有 embedding 调用的 input token
+    asr_calls INTEGER DEFAULT 0,          -- 累加该轮交互中所有 ASR 调用次数（阿里云 NLS 按次计费）
+    usage_breakdown JSONB,                -- 详细分项明细 JSON（chat/embedding/asr/vision 各自 token 与 credit）
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -245,6 +249,8 @@ CREATE TABLE IF NOT EXISTS token_cost_prices (
     output_price_per_m NUMERIC(10,4),
     price_per_second NUMERIC(10,4), -- 视频模型按秒计费单价（元/秒），fallback；优先看 price_per_second_by_resolution
     price_per_second_by_resolution JSONB, -- 按分辨率区分的视频单价 {"720P": 0.6, "1080P": 1.0}，命中 resolution key 优先用
+    embedding_price_per_m NUMERIC(10,4), -- 向量模型单价（元/百万 token），用于 text-embedding-v3 等
+    asr_price_per_call NUMERIC(10,4), -- 语音识别单价（元/次），用于阿里云 NLS 一句话识别
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -282,6 +288,18 @@ ON CONFLICT (model_name) DO NOTHING;
 -- MiniMax-H3 主生成按 resolution 区分：768P=0.5, 2K=0.8；price_per_second 留 768P 作 fallback
 INSERT INTO token_cost_prices (model_name, price_per_second, price_per_second_by_resolution)
 VALUES ('MiniMax-H3', 0.5, '{"768P": 0.5, "2K": 0.8}'::jsonb)
+ON CONFLICT (model_name) DO NOTHING;
+
+-- Embedding 向量模型单价（元/百万 tokens）
+-- text-embedding-v3 阿里云百炼官方定价 0.7 元/百万 tokens
+INSERT INTO token_cost_prices (model_name, embedding_price_per_m)
+VALUES ('text-embedding-v3', 0.7)
+ON CONFLICT (model_name) DO NOTHING;
+
+-- ASR 语音识别单价（元/次）
+-- 阿里云 NLS 一句话识别，按时长档位折算的常见价（需运营确认）
+INSERT INTO token_cost_prices (model_name, asr_price_per_call)
+VALUES ('aliyun-nls-asr', 0.06)
 ON CONFLICT (model_name) DO NOTHING;
 
 
@@ -836,6 +854,9 @@ CREATE TABLE IF NOT EXISTS chat_records (
     error_message TEXT,
     duration_ms INTEGER DEFAULT 0,
     credit_cost NUMERIC(12,2) NOT NULL DEFAULT 0.00,
+    embedding_tokens INTEGER DEFAULT 0,
+    asr_calls INTEGER DEFAULT 0,
+    usage_breakdown JSONB,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 

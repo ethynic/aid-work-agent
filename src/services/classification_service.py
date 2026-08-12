@@ -62,6 +62,10 @@ class ClassificationService:
                 max_tokens=500,
             )
 
+            # 累加 LLM 用量到当前 SessionRecordService（对话内后台 LLM 调用计费）
+            from src.services.session_record import record_background_llm_usage
+            record_background_llm_usage(response.get("usage") if isinstance(response, dict) else None)
+
             content = response.get("content", "")
             if not content:
                 return ClassificationResult(category=categories[0] if categories else "其他", confidence=0.0)

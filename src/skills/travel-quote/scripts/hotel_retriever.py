@@ -42,21 +42,9 @@ class HotelRetriever:
         return get_db_connection()
 
     def _embed(self, text: str) -> List[float]:
-        """同步调用 embedding（适配子进程场景）"""
-        import dashscope
-        from src.config.settings import get_embedding_api_key
-
-        dashscope.api_key = get_embedding_api_key()
-
-        resp = dashscope.TextEmbedding.call(
-            model="text-embedding-v3",
-            input=text,
-            dimension=1024,
-            text_type="document",
-        )
-        if resp.status_code != 200:
-            raise RuntimeError(f"Embedding API 调用失败: {resp.message}")
-        return resp.output["embeddings"][0]["embedding"]
+        """使用 TextEmbeddingV3Client 同步向量化（累加 usage 到 client）"""
+        client = self._get_embedding_client()
+        return client.embed_sync(text)
 
     # ----------------------------------------------------------
     # 搜索
@@ -103,7 +91,18 @@ class HotelRetriever:
 
     def search_by_vector(self, tenant_id: str, query: str, top_k: int = 5) -> List[Dict]:
         """向量语义搜索"""
+        client = self._get_embedding_client()
+        client.reset_usage()
         embedding = self._embed(query)
+        # 累加 embedding usage 到当前 SessionRecordService（对话内检索计费）
+        if client.last_usage_tokens > 0:
+            try:
+                from src.services.session_record import SessionRecordManager
+                record = SessionRecordManager.get_current_record()
+                if record:
+                    record.add_embedding_usage(client.last_usage_tokens, model=client.model)
+            except Exception:
+                logger.debug("Failed to record embedding usage", exc_info=True)
         embedding_str = "[" + ",".join(str(v) for v in embedding) + "]"
 
         with self._get_conn() as conn:

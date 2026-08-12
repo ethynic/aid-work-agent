@@ -125,6 +125,9 @@ class AnalysisAgent:
 
             # 累加 token 用量
             self._accumulate_usage(usage)
+            # 累加 LLM 用量到当前 SessionRecordService（对话内后台 LLM 调用计费）
+            from src.services.session_record import record_background_llm_usage
+            record_background_llm_usage(usage)
 
             content = response.get("content", "")
             tool_calls = response.get("tool_calls") or []

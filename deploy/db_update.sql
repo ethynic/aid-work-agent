@@ -332,3 +332,31 @@ ON CONFLICT (model_name) DO UPDATE SET
   input_price_per_m = EXCLUDED.input_price_per_m,
   output_price_per_m = EXCLUDED.output_price_per_m,
   cached_input_price_per_m = EXCLUDED.cached_input_price_per_m;
+
+-- ============================================================================
+-- 2026-08-12 LLM 计费接入改造：chat_records 增加 embedding/ASR 计费维度
+-- 详见 docs/plans/plan-llm-billing-integration.md
+-- ============================================================================
+ALTER TABLE chat_records ADD COLUMN IF NOT EXISTS embedding_tokens INTEGER DEFAULT 0;
+ALTER TABLE chat_records ADD COLUMN IF NOT EXISTS asr_calls INTEGER DEFAULT 0;
+ALTER TABLE chat_records ADD COLUMN IF NOT EXISTS usage_breakdown JSONB;
+
+-- ============================================================================
+-- 2026-08-12 LLM 计费接入改造：token_cost_prices 增加 embedding/ASR 单价列
+-- embedding_price_per_m: 向量模型单价（元/百万 token），用于 text-embedding-v3 等
+-- asr_price_per_call: 语音识别单价（元/次），用于阿里云 NLS 一句话识别
+-- ============================================================================
+ALTER TABLE token_cost_prices ADD COLUMN IF NOT EXISTS embedding_price_per_m NUMERIC(10,4);
+ALTER TABLE token_cost_prices ADD COLUMN IF NOT EXISTS asr_price_per_call NUMERIC(10,4);
+
+-- text-embedding-v3 单价：0.7 元/百万 tokens（阿里云百炼官方定价）
+INSERT INTO token_cost_prices (model_name, embedding_price_per_m)
+VALUES ('text-embedding-v3', 0.7)
+ON CONFLICT (model_name) DO UPDATE SET
+  embedding_price_per_m = EXCLUDED.embedding_price_per_m;
+
+-- 阿里云 NLS 一句话识别单价：0.06 元/次（按时长档位折算的常见价，需运营确认）
+INSERT INTO token_cost_prices (model_name, asr_price_per_call)
+VALUES ('aliyun-nls-asr', 0.06)
+ON CONFLICT (model_name) DO UPDATE SET
+  asr_price_per_call = EXCLUDED.asr_price_per_call;

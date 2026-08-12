@@ -27,7 +27,7 @@ from src.config.settings import settings
 from src.db.database import get_db_connection
 from src.db.models import ChatRecordDB, SessionDB, TokenCostPriceDB
 from src.reports.work_outcome_db import WorkOutcomeDB
-from src.services.billing import calculate_video_credit_cost
+from src.services.billing import calculate_credit_cost, calculate_video_credit_cost
 from src.video_agent.prompt_engine import PromptEngine, PromptResult, get_prompt_engine
 from src.video_gen.base import VideoGenRequest
 from src.video_gen.factory import build_provider
@@ -237,6 +237,14 @@ class VideoChatService:
                         ratio=params.ratio,
                         resolution=params.resolution,
                     )
+                    self._record_prompt_llm_usage(
+                        tenant_id=tenant_id,
+                        user_id=user_id,
+                        session_id=session_id,
+                        user_input=user_input,
+                        usage=self._prompt_engine.last_usage,
+                        model=params.prompt_model or "qwen-vl-max",
+                    )
                     self._save_draft_to_redis(session_id, result)
                     prompt_draft = self._format_prompt_draft_md(result)
                 else:
@@ -250,6 +258,14 @@ class VideoChatService:
                             duration_sec=params.duration_sec,
                             ratio=params.ratio,
                             resolution=params.resolution,
+                        )
+                        self._record_prompt_llm_usage(
+                            tenant_id=tenant_id,
+                            user_id=user_id,
+                            session_id=session_id,
+                            user_input=user_input,
+                            usage=self._prompt_engine.last_usage,
+                            model=params.prompt_model or "qwen-vl-max",
                         )
                     else:
                         # 草稿命中后清除（一次性使用，避免下次 submit 复用旧草稿）
@@ -275,6 +291,14 @@ class VideoChatService:
                     duration_sec=params.duration_sec,
                     ratio=params.ratio,
                     resolution=params.resolution,
+                )
+                self._record_prompt_llm_usage(
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    session_id=session_id,
+                    user_input=user_input,
+                    usage=self._prompt_engine.last_usage,
+                    model=params.prompt_model or "qwen-vl-max",
                 )
                 for idx, result in enumerate(results):
                     card = await self._submit_video_generation(
@@ -648,6 +672,14 @@ class VideoChatService:
             ratio=params.ratio,
             resolution=params.resolution,
         )
+        self._record_prompt_llm_usage(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            session_id=session_id,
+            user_input=combined_input,
+            usage=self._prompt_engine.last_usage,
+            model=params.prompt_model or "qwen-vl-max",
+        )
         # 溯源：在 model_params 中记录 source_video_file_id
         result.model_params["source_video_file_id"] = source_video_file_id
         card = await self._submit_video_generation(
@@ -665,6 +697,65 @@ class VideoChatService:
             "waiting": card.provider_status in ("PENDING", "RUNNING"),
             "error": None,
         }
+
+    # ------------------------------------------------------------------
+    # 视频提示词 LLM 独立计费（source_type=video_prompt）
+    # ------------------------------------------------------------------
+    def _record_prompt_llm_usage(
+        self,
+        tenant_id: Optional[str],
+        user_id: Optional[str],
+        session_id: str,
+        user_input: str,
+        usage: Optional[Dict[str, Any]],
+        model: Optional[str],
+    ) -> None:
+        """把视频提示词 LLM 调用独立写入 chat_records（source_type=video_prompt）
+
+        用户可能多次调整提示词后放弃创建视频，需独立计费，不与最终视频生成计费合并。
+        失败只记日志，不影响已返回的响应。
+        """
+        if not usage:
+            return
+        try:
+            prompt_tokens = int(usage.get("prompt_tokens", 0) or 0)
+            completion_tokens = int(usage.get("completion_tokens", 0) or 0)
+            total_tokens = int(usage.get("total_tokens", 0) or 0)
+            cached_input_tokens = int(usage.get("cached_tokens", 0) or 0)
+
+            try:
+                credit_cost = calculate_credit_cost(
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    model=model,
+                    cached_input_tokens=cached_input_tokens,
+                )
+            except Exception as billing_err:
+                logger.error(f"视频提示词计费计算失败，credit_cost 降级为 0: {billing_err}")
+                credit_cost = 0.0
+
+            ChatRecordDB.create(
+                session_id=session_id,
+                tenant_id=tenant_id,
+                user_id=user_id,
+                user_message=user_input[:500] if user_input else None,
+                assistant_message=None,
+                total_token_count=total_tokens,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                cached_input_tokens=cached_input_tokens,
+                model=model,
+                provider="qwen",
+                source_type="video_prompt",
+                credit_cost=credit_cost,
+                status="completed",
+            )
+            logger.info(
+                f"[VideoChatService] 视频提示词 LLM 计费: session={session_id}, "
+                f"tenant={tenant_id}, tokens={total_tokens}, credit={credit_cost}, model={model}"
+            )
+        except Exception as e:
+            logger.error(f"[VideoChatService] 视频提示词 LLM 计费落库失败: {e}", exc_info=True)
 
     # ------------------------------------------------------------------
     # 工具方法

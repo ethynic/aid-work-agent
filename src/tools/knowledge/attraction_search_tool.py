@@ -60,20 +60,9 @@ class AttractionSearchTool(BaseTool):
         return self._embedding_client
 
     def _embed(self, text: str) -> List[float]:
-        import dashscope
-        from src.config.settings import get_embedding_api_key
-
-        dashscope.api_key = get_embedding_api_key()
-
-        resp = dashscope.TextEmbedding.call(
-            model="text-embedding-v3",
-            input=text,
-            dimension=1024,
-            text_type="document",
-        )
-        if resp.status_code != 200:
-            raise RuntimeError(f"Embedding API 调用失败: {resp.message}")
-        return resp.output["embeddings"][0]["embedding"]
+        """使用 TextEmbeddingV3Client 同步向量化（累加 usage 到 client）"""
+        client = self._get_embedding_client()
+        return client.embed_sync(text)
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
         query = kwargs.get("query")
@@ -95,7 +84,15 @@ class AttractionSearchTool(BaseTool):
                 return {"success": False, "error": "无法确定租户ID", "results": [], "count": 0}
 
             # 向量化查询
+            client = self._get_embedding_client()
+            client.reset_usage()
             embedding = self._embed(query)
+            # 累加 embedding usage 到当前 SessionRecordService（对话内检索计费）
+            if client.last_usage_tokens > 0:
+                from src.services.session_record import SessionRecordManager
+                record = SessionRecordManager.get_current_record()
+                if record:
+                    record.add_embedding_usage(client.last_usage_tokens, model=client.model)
             embedding_str = "[" + ",".join(str(v) for v in embedding) + "]"
 
             # 向量语义搜索，限定景点知识库

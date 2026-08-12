@@ -2168,6 +2168,13 @@ async def _process_tenant_wecom_kf_messages(
                 record_service.set_model(agent.llm.get_model_name())
                 record_service.set_provider(agent.llm.get_provider_name())
 
+                # ASR 计费（按次计费，识别成功才计费；必须在 start_record 之后，否则 get_current_record 返回 None）
+                if asr_success:
+                    try:
+                        record_service.add_asr_usage(calls=1)
+                    except Exception:
+                        logger.debug("Failed to record ASR usage", exc_info=True)
+
                 # 处理消息（通过 progress_callback 捕获可下载文件 + 本轮 tool 消息序列）
                 downloadable_files = []
                 tool_messages_collected = []  # 本轮 tool 消息序列，供事务持久化到 channel_messages

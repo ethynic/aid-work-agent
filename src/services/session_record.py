@@ -16,7 +16,11 @@ from datetime import datetime
 from loguru import logger
 
 from src.db.models import ChatRecordDB
-from src.services.billing import calculate_credit_cost
+from src.services.billing import (
+    calculate_credit_cost,
+    calculate_embedding_credit_cost,
+    calculate_asr_credit_cost,
+)
 
 _RESULT_MAX_LENGTH = 2000
 
@@ -104,6 +108,11 @@ class SessionRecordService:
         self.completion_tokens = 0
         self.cached_input_tokens = 0
 
+        # Embedding / ASR 用量（LLM 计费接入改造 2026-08-12）
+        self.embedding_tokens = 0
+        self.asr_calls = 0
+        self.usage_breakdown: Dict[str, Any] = {}  # 详细分项明细 JSON
+
         # 模型信息
         self.model = None
         self.provider = None
@@ -190,6 +199,37 @@ class SessionRecordService:
             self.total_token_count += usage.get("total_tokens", 0)
             self.cached_input_tokens += usage.get("cached_tokens", 0)
             self._llm_call_count += 1
+
+    def add_embedding_usage(self, tokens: int, model: str = "text-embedding-v3"):
+        """添加 embedding 调用的 token 用量（累加，纯内存操作）
+
+        对话内检索（RAG query 向量化）等场景调用，累加到当前会话记录。
+        离线向量化（文档上传）不调用此方法，应独立 ChatRecordDB.create。
+        """
+        if not tokens or tokens <= 0:
+            return
+        self.embedding_tokens += tokens
+        breakdown = self.usage_breakdown.setdefault(
+            "embedding", {"tokens": 0, "calls": 0, "model": model}
+        )
+        breakdown["tokens"] += tokens
+        breakdown["calls"] += 1
+        breakdown["model"] = model
+
+    def add_asr_usage(self, calls: int = 1, model: str = "aliyun-nls-asr"):
+        """添加 ASR 调用次数（累加，纯内存操作）
+
+        微信语音消息转文字等场景调用，累加到当前会话记录。
+        阿里云 NLS 按次计费（响应不返回音频时长）。
+        """
+        if not calls or calls <= 0:
+            return
+        self.asr_calls += calls
+        breakdown = self.usage_breakdown.setdefault(
+            "asr", {"calls": 0, "model": model}
+        )
+        breakdown["calls"] += calls
+        breakdown["model"] = model
 
     def set_model(self, model: str):
         """设置使用的模型"""
@@ -284,7 +324,7 @@ class SessionRecordService:
 
             # 计算积分用量：单价缺失时 credit_cost = 0，不阻断对话
             try:
-                credit_cost = calculate_credit_cost(
+                chat_credit_cost = calculate_credit_cost(
                     prompt_tokens=self.prompt_tokens,
                     completion_tokens=self.completion_tokens,
                     model=self.model,
@@ -293,7 +333,41 @@ class SessionRecordService:
             except Exception as billing_err:
                 # 计费异常不应影响对话记录落库
                 logger.error(f"计费计算失败，credit_cost 降级为 0: {billing_err}")
-                credit_cost = 0.0
+                chat_credit_cost = 0.0
+
+            # Embedding 积分（对话内检索 RAG 等场景）
+            try:
+                embedding_credit_cost = calculate_embedding_credit_cost(
+                    embedding_tokens=self.embedding_tokens,
+                )
+            except Exception as billing_err:
+                logger.error(f"embedding 计费计算失败，降级为 0: {billing_err}")
+                embedding_credit_cost = 0.0
+
+            # ASR 积分（微信语音转文字等场景）
+            try:
+                asr_credit_cost = calculate_asr_credit_cost(asr_calls=self.asr_calls)
+            except Exception as billing_err:
+                logger.error(f"ASR 计费计算失败，降级为 0: {billing_err}")
+                asr_credit_cost = 0.0
+
+            # 合并总积分（chat + embedding + asr）
+            credit_cost = round(chat_credit_cost + embedding_credit_cost + asr_credit_cost, 2)
+
+            # 构造 usage_breakdown：补充 chat 分项与各分项 credit
+            usage_breakdown: Dict[str, Any] = dict(self.usage_breakdown)
+            usage_breakdown.setdefault("chat", {
+                "prompt_tokens": self.prompt_tokens,
+                "completion_tokens": self.completion_tokens,
+                "cached_input_tokens": self.cached_input_tokens,
+                "total_tokens": self.total_token_count,
+                "model": self.model,
+                "credit": round(chat_credit_cost, 2),
+            })
+            if self.embedding_tokens > 0 and "embedding" in usage_breakdown:
+                usage_breakdown["embedding"]["credit"] = round(embedding_credit_cost, 2)
+            if self.asr_calls > 0 and "asr" in usage_breakdown:
+                usage_breakdown["asr"]["credit"] = round(asr_credit_cost, 2)
 
             record = ChatRecordDB.create(
                 session_id=self.session_id,
@@ -314,7 +388,10 @@ class SessionRecordService:
                 error_message=self.error_message,
                 duration_ms=self.get_duration_ms(),
                 source_type=self.source_type,
-                credit_cost=credit_cost
+                credit_cost=credit_cost,
+                embedding_tokens=self.embedding_tokens,
+                asr_calls=self.asr_calls,
+                usage_breakdown=usage_breakdown if usage_breakdown else None,
             )
 
             if record:
@@ -324,7 +401,9 @@ class SessionRecordService:
                     f"tokens(total={self.total_token_count}, "
                     f"input={self.prompt_tokens}, output={self.completion_tokens}, "
                     f"cached={self.cached_input_tokens}), "
-                    f"credit_cost={credit_cost}, "
+                    f"embedding_tokens={self.embedding_tokens}, asr_calls={self.asr_calls}, "
+                    f"credit_cost={credit_cost} (chat={chat_credit_cost}, "
+                    f"embedding={embedding_credit_cost}, asr={asr_credit_cost}), "
                     f"iterations={self.agent_iterations}, "
                     f"duration={self.get_duration_ms()}ms"
                 )
@@ -378,3 +457,96 @@ class SessionRecordManager:
             cls._local.record_service = None
             return record
         return None
+
+
+def record_background_llm_usage(usage: Optional[Dict[str, int]]) -> None:
+    """后台 LLM 调用（非主循环 chat_with_tools）的 usage 累加到当前 SessionRecordService
+
+    用于对话内触发的后台 LLM 调用：
+    - mid_term 上下文压缩（mid_term.py:913 gateway 路径）
+    - 情感分析（sentiment_service.py:49）
+    - 文本分类（classification_service.py:50）
+    - 案件匹配（case_matching_service.py:126）
+    - 内容生成工具（content_generate_tool.py:105）
+    - 数据分析（analysis_agent.py:44/93）
+
+    这些调用走 gateway.chat 但不在 agent 主循环中，原有 record_response_usage
+    因无 recorder 安装是 no-op，usage 被丢弃。本函数显式把 usage 累加到当前
+    SessionRecordService，确保 chat_records 的 token 统计完整。
+
+    若当前线程无 SessionRecordService（background_runner 调度场景），降级为
+    独立 ChatRecordDB.create(source_type=background_llm)，确保后台扫描类 LLM
+    调用也能计入计费。background_runner 调度线程无 HTTP 上下文，
+    SessionRecordManager.get_current_record() 恒为 None。
+    """
+    if not usage:
+        return
+    try:
+        record = SessionRecordManager.get_current_record()
+        if record:
+            record.add_llm_usage(usage)
+            return
+        # background_runner 调度场景：无 SessionRecordService，独立落库
+        _persist_background_llm_record(usage)
+    except Exception:
+        logger.debug("Failed to record background LLM usage", exc_info=True)
+
+
+def _persist_background_llm_record(usage: Dict[str, int]) -> None:
+    """background_runner 调度线程的后台 LLM 调用独立写入 chat_records
+
+    source_type=background_llm，tenant_id/user_id 无法解析（无 session 上下文），
+    计费仍归到调用方租户需调用方自行调用 ChatRecordDB.create（参考
+    memory_summarizer.py / work_outcome_review.py 的 _record_background_llm_billing）。
+
+    本函数仅在 mid_term background_scan 等无法确定租户的场景下作为兜底，
+    避免后台 LLM 调用计费丢失。
+    """
+    try:
+        from src.db.models import ChatRecordDB
+        from src.services.billing import calculate_credit_cost
+
+        prompt_tokens = int(usage.get("prompt_tokens", 0) or 0)
+        completion_tokens = int(usage.get("completion_tokens", 0) or 0)
+        total_tokens = int(usage.get("total_tokens", 0) or 0)
+        cached_input_tokens = int(usage.get("cached_tokens", 0) or 0)
+
+        # mid_term 摘要走独立 provider，model 用 settings.memory.mid_term.summary_llm.model
+        try:
+            from src.config.settings import settings as _settings
+            llm_model = getattr(_settings.memory.mid_term.summary_llm, "model", None) or "deepseek-chat"
+        except Exception:
+            llm_model = "deepseek-chat"
+
+        try:
+            credit_cost = calculate_credit_cost(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                model=llm_model,
+                cached_input_tokens=cached_input_tokens,
+            )
+        except Exception as billing_err:
+            logger.error(f"background_llm 计费计算失败，credit_cost 降级为 0: {billing_err}")
+            credit_cost = 0.0
+
+        ChatRecordDB.create(
+            session_id=f"background_llm_mid_term_{int(time.time())}",
+            tenant_id=None,
+            user_id=None,
+            user_message="上下文压缩扫描摘要",
+            assistant_message=None,
+            total_token_count=total_tokens,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            cached_input_tokens=cached_input_tokens,
+            model=llm_model,
+            provider="mid_term_background_scan",
+            source_type="background_llm",
+            credit_cost=credit_cost,
+            status="completed",
+        )
+        logger.info(
+            f"background_llm (mid_term scan) 计费: tokens={total_tokens}, credit={credit_cost}"
+        )
+    except Exception as e:
+        logger.error(f"background_llm 计费落库失败: {e}", exc_info=True)

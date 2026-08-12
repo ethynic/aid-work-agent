@@ -901,6 +901,9 @@ class ContextCompressionService:
                     )
                     self._actual_provider = provider_cfg
                     self._actual_model = model_cfg
+                    # 累加 LLM 用量到当前 SessionRecordService（对话内后台 LLM 调用计费）
+                    from src.services.session_record import record_background_llm_usage
+                    record_background_llm_usage(_usage)
                 else:
                     # fallback 到主 gateway（仅首次记录 warning）
                     if attempt == 1:
@@ -921,6 +924,9 @@ class ContextCompressionService:
                     # fallback 到主 gateway，provider/model 以 gateway 实际为准
                     self._actual_provider = getattr(gateway, "provider_name", None) or "main"
                     self._actual_model = model_cfg
+                    # 累加 LLM 用量到当前 SessionRecordService（对话内后台 LLM 调用计费）
+                    from src.services.session_record import record_background_llm_usage
+                    record_background_llm_usage((result or {}).get("usage"))
 
                 content = (content or "").strip()
                 if content:

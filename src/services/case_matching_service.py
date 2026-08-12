@@ -157,6 +157,10 @@ class CaseMatchingService:
                 max_tokens=1000,
             )
 
+            # 累加 LLM 用量到当前 SessionRecordService（对话内后台 LLM 调用计费）
+            from src.services.session_record import record_background_llm_usage
+            record_background_llm_usage(response.get("usage") if isinstance(response, dict) else None)
+
             content = response.get("content", "")
             matches = self._parse_json_array(content)
             if not matches:

@@ -108,6 +108,10 @@ class ContentGenerateTool(BaseTool):
                 max_tokens=65536
             )
 
+            # 累加 LLM 用量到当前 SessionRecordService（对话内后台 LLM 调用计费）
+            from src.services.session_record import record_background_llm_usage
+            record_background_llm_usage(response.get("usage") if isinstance(response, dict) else None)
+
             # 提取生成的content（DeepSeek 思考模型可能返回 content: null）
             generated_content = ""
             if isinstance(response, dict):

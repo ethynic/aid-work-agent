@@ -520,3 +520,290 @@ class TestVideoCostPerSecondByResolution:
             cost = svc._get_cost_per_second("wanx", "wanx", "1080P")
             assert cost == 0.0
 
+
+def _make_embedding_tcp(embedding_price_per_m: float) -> dict:
+    """构造 embedding 计费的 TokenCostPriceDB 返回值"""
+    return {
+        "model_name": "text-embedding-v3",
+        "embedding_price_per_m": embedding_price_per_m,
+        "input_price_per_m": None,
+        "output_price_per_m": None,
+        "cached_input_price_per_m": None,
+    }
+
+
+def _make_asr_tcp(asr_price_per_call: float) -> dict:
+    """构造 ASR 计费的 TokenCostPriceDB 返回值"""
+    return {
+        "model_name": "aliyun-nls-asr",
+        "asr_price_per_call": asr_price_per_call,
+        "input_price_per_m": None,
+        "output_price_per_m": None,
+        "cached_input_price_per_m": None,
+    }
+
+
+class TestCalculateEmbeddingCreditCost:
+    """LLM 计费接入改造：calculate_embedding_credit_cost 按 token 计费测试"""
+
+    @pytest.fixture
+    def embedding_settings(self):
+        """固定 billing.embedding_usage_factor = 100"""
+        settings = MagicMock()
+        settings.billing.embedding_usage_factor = 100
+        return settings
+
+    def test_basic_calculation(self, embedding_settings):
+        """1M tokens × 0.7 元/百万 × 100 = 70.00"""
+        from src.services.billing import calculate_embedding_credit_cost
+
+        with patch("src.services.billing.TokenCostPriceDB") as mock_tcp_db, \
+             patch("src.services.billing.create_settings", return_value=embedding_settings):
+            mock_tcp_db.get_by_model_name.return_value = _make_embedding_tcp(0.7)
+            # token_cost = 1_000_000 * 0.7 / 1e6 = 0.7 元
+            # credit_cost = ceil(0.7 * 100 * 100) / 100 = ceil(7000.0) / 100 = 70.00
+            result = calculate_embedding_credit_cost(embedding_tokens=1_000_000)
+            assert result == 70.0
+
+    def test_default_model_is_text_embedding_v3(self, embedding_settings):
+        """不传 model 时默认查 text-embedding-v3"""
+        from src.services.billing import calculate_embedding_credit_cost
+
+        with patch("src.services.billing.TokenCostPriceDB") as mock_tcp_db, \
+             patch("src.services.billing.create_settings", return_value=embedding_settings):
+            mock_tcp_db.get_by_model_name.return_value = _make_embedding_tcp(0.7)
+            calculate_embedding_credit_cost(embedding_tokens=1000)
+            mock_tcp_db.get_by_model_name.assert_called_with("text-embedding-v3")
+
+    def test_zero_tokens_returns_zero(self, embedding_settings):
+        """0 token 返回 0.0"""
+        from src.services.billing import calculate_embedding_credit_cost
+
+        with patch("src.services.billing.TokenCostPriceDB") as mock_tcp_db, \
+             patch("src.services.billing.create_settings", return_value=embedding_settings):
+            mock_tcp_db.get_by_model_name.return_value = _make_embedding_tcp(0.7)
+            result = calculate_embedding_credit_cost(embedding_tokens=0)
+            assert result == 0.0
+
+    def test_negative_tokens_returns_zero(self, embedding_settings):
+        """负 token 防御性返回 0.0"""
+        from src.services.billing import calculate_embedding_credit_cost
+
+        with patch("src.services.billing.TokenCostPriceDB") as mock_tcp_db, \
+             patch("src.services.billing.create_settings", return_value=embedding_settings):
+            mock_tcp_db.get_by_model_name.return_value = _make_embedding_tcp(0.7)
+            result = calculate_embedding_credit_cost(embedding_tokens=-100)
+            assert result == 0.0
+
+    def test_missing_model_returns_zero(self, embedding_settings):
+        """model 为空返回 0.0"""
+        from src.services.billing import calculate_embedding_credit_cost
+
+        with patch("src.services.billing.TokenCostPriceDB") as mock_tcp_db, \
+             patch("src.services.billing.create_settings", return_value=embedding_settings):
+            result = calculate_embedding_credit_cost(embedding_tokens=1000, model=None)
+            assert result == 0.0
+            mock_tcp_db.get_by_model_name.assert_not_called()
+
+    def test_missing_price_record_returns_zero(self, embedding_settings):
+        """token_cost_prices 无匹配记录返回 0.0"""
+        from src.services.billing import calculate_embedding_credit_cost
+
+        with patch("src.services.billing.TokenCostPriceDB") as mock_tcp_db, \
+             patch("src.services.billing.create_settings", return_value=embedding_settings):
+            mock_tcp_db.get_by_model_name.return_value = None
+            result = calculate_embedding_credit_cost(embedding_tokens=1000)
+            assert result == 0.0
+
+    def test_zero_price_returns_zero(self, embedding_settings):
+        """embedding_price_per_m 为 0 返回 0.0"""
+        from src.services.billing import calculate_embedding_credit_cost
+
+        with patch("src.services.billing.TokenCostPriceDB") as mock_tcp_db, \
+             patch("src.services.billing.create_settings", return_value=embedding_settings):
+            mock_tcp_db.get_by_model_name.return_value = _make_embedding_tcp(0)
+            result = calculate_embedding_credit_cost(embedding_tokens=1000)
+            assert result == 0.0
+
+    def test_usage_factor_takes_effect(self):
+        """embedding_usage_factor 配置生效：系数 200 是系数 100 的 2 倍"""
+        from src.services.billing import calculate_embedding_credit_cost
+
+        settings_factor_100 = MagicMock()
+        settings_factor_100.billing.embedding_usage_factor = 100
+
+        settings_factor_200 = MagicMock()
+        settings_factor_200.billing.embedding_usage_factor = 200
+
+        with patch("src.services.billing.TokenCostPriceDB") as mock_tcp_db:
+            mock_tcp_db.get_by_model_name.return_value = _make_embedding_tcp(0.7)
+            # token_cost = 1_000_000 * 0.7 / 1e6 = 0.7 元
+            with patch("src.services.billing.create_settings", return_value=settings_factor_100):
+                cost_100 = calculate_embedding_credit_cost(embedding_tokens=1_000_000)
+            with patch("src.services.billing.create_settings", return_value=settings_factor_200):
+                cost_200 = calculate_embedding_credit_cost(embedding_tokens=1_000_000)
+
+        # 0.7 * 100 = 70.00；0.7 * 200 = 140.00
+        assert cost_100 == 70.0
+        assert cost_200 == 140.0
+        assert cost_200 == 2 * cost_100
+
+    def test_ceil_rounding(self, embedding_settings):
+        """向上取整到 0.01：1 token × 0.7 × 100 = 7e-5 -> 0.01"""
+        from src.services.billing import calculate_embedding_credit_cost
+
+        with patch("src.services.billing.TokenCostPriceDB") as mock_tcp_db, \
+             patch("src.services.billing.create_settings", return_value=embedding_settings):
+            mock_tcp_db.get_by_model_name.return_value = _make_embedding_tcp(0.7)
+            # token_cost = 1 * 0.7 / 1e6 = 7e-7
+            # credit_cost = ceil(7e-7 * 100 * 100) / 100 = ceil(7e-3) / 100 = 1 / 100 = 0.01
+            result = calculate_embedding_credit_cost(embedding_tokens=1)
+            assert result == 0.01
+
+    def test_usage_factor_override(self, embedding_settings):
+        """usage_factor_override 覆盖 settings 配置"""
+        from src.services.billing import calculate_embedding_credit_cost
+
+        with patch("src.services.billing.TokenCostPriceDB") as mock_tcp_db, \
+             patch("src.services.billing.create_settings", return_value=embedding_settings):
+            mock_tcp_db.get_by_model_name.return_value = _make_embedding_tcp(0.7)
+            # token_cost = 0.7 元，override=50 -> 35.00
+            result = calculate_embedding_credit_cost(
+                embedding_tokens=1_000_000, usage_factor_override=50,
+            )
+            assert result == 35.0
+
+    def test_factor_fallback_when_settings_missing(self):
+        """settings.billing.embedding_usage_factor 缺失时回退到默认 100"""
+        from src.services.billing import calculate_embedding_credit_cost
+
+        settings = MagicMock()
+        settings.billing.embedding_usage_factor = None
+
+        with patch("src.services.billing.TokenCostPriceDB") as mock_tcp_db, \
+             patch("src.services.billing.create_settings", return_value=settings):
+            mock_tcp_db.get_by_model_name.return_value = _make_embedding_tcp(0.7)
+            result = calculate_embedding_credit_cost(embedding_tokens=1_000_000)
+            # 0.7 * 100 = 70.00
+            assert result == 70.0
+
+
+class TestCalculateAsrCreditCost:
+    """LLM 计费接入改造：calculate_asr_credit_cost 按调用次数计费测试"""
+
+    @pytest.fixture
+    def asr_settings(self):
+        """固定 billing.asr_usage_factor = 100"""
+        settings = MagicMock()
+        settings.billing.asr_usage_factor = 100
+        return settings
+
+    def test_basic_calculation(self, asr_settings):
+        """10 次 × 0.06 元/次 × 100 = 60.00"""
+        from src.services.billing import calculate_asr_credit_cost
+
+        with patch("src.services.billing.TokenCostPriceDB") as mock_tcp_db, \
+             patch("src.services.billing.create_settings", return_value=asr_settings):
+            mock_tcp_db.get_by_model_name.return_value = _make_asr_tcp(0.06)
+            # cost = 10 * 0.06 = 0.6 元
+            # credit_cost = ceil(0.6 * 100 * 100) / 100 = ceil(6000.0) / 100 = 60.00
+            result = calculate_asr_credit_cost(asr_calls=10)
+            assert result == 60.0
+
+    def test_default_model_is_aliyun_nls_asr(self, asr_settings):
+        """不传 model 时默认查 aliyun-nls-asr"""
+        from src.services.billing import calculate_asr_credit_cost
+
+        with patch("src.services.billing.TokenCostPriceDB") as mock_tcp_db, \
+             patch("src.services.billing.create_settings", return_value=asr_settings):
+            mock_tcp_db.get_by_model_name.return_value = _make_asr_tcp(0.06)
+            calculate_asr_credit_cost(asr_calls=1)
+            mock_tcp_db.get_by_model_name.assert_called_with("aliyun-nls-asr")
+
+    def test_zero_calls_returns_zero(self, asr_settings):
+        """0 次返回 0.0"""
+        from src.services.billing import calculate_asr_credit_cost
+
+        with patch("src.services.billing.TokenCostPriceDB") as mock_tcp_db, \
+             patch("src.services.billing.create_settings", return_value=asr_settings):
+            mock_tcp_db.get_by_model_name.return_value = _make_asr_tcp(0.06)
+            result = calculate_asr_credit_cost(asr_calls=0)
+            assert result == 0.0
+
+    def test_negative_calls_returns_zero(self, asr_settings):
+        """负次数防御性返回 0.0"""
+        from src.services.billing import calculate_asr_credit_cost
+
+        with patch("src.services.billing.TokenCostPriceDB") as mock_tcp_db, \
+             patch("src.services.billing.create_settings", return_value=asr_settings):
+            mock_tcp_db.get_by_model_name.return_value = _make_asr_tcp(0.06)
+            result = calculate_asr_credit_cost(asr_calls=-5)
+            assert result == 0.0
+
+    def test_missing_model_returns_zero(self, asr_settings):
+        """model 为空返回 0.0"""
+        from src.services.billing import calculate_asr_credit_cost
+
+        with patch("src.services.billing.TokenCostPriceDB") as mock_tcp_db, \
+             patch("src.services.billing.create_settings", return_value=asr_settings):
+            result = calculate_asr_credit_cost(asr_calls=1, model=None)
+            assert result == 0.0
+            mock_tcp_db.get_by_model_name.assert_not_called()
+
+    def test_missing_price_record_returns_zero(self, asr_settings):
+        """token_cost_prices 无匹配记录返回 0.0"""
+        from src.services.billing import calculate_asr_credit_cost
+
+        with patch("src.services.billing.TokenCostPriceDB") as mock_tcp_db, \
+             patch("src.services.billing.create_settings", return_value=asr_settings):
+            mock_tcp_db.get_by_model_name.return_value = None
+            result = calculate_asr_credit_cost(asr_calls=1)
+            assert result == 0.0
+
+    def test_zero_price_returns_zero(self, asr_settings):
+        """asr_price_per_call 为 0 返回 0.0"""
+        from src.services.billing import calculate_asr_credit_cost
+
+        with patch("src.services.billing.TokenCostPriceDB") as mock_tcp_db, \
+             patch("src.services.billing.create_settings", return_value=asr_settings):
+            mock_tcp_db.get_by_model_name.return_value = _make_asr_tcp(0)
+            result = calculate_asr_credit_cost(asr_calls=1)
+            assert result == 0.0
+
+    def test_usage_factor_override(self, asr_settings):
+        """usage_factor_override 覆盖 settings 配置"""
+        from src.services.billing import calculate_asr_credit_cost
+
+        with patch("src.services.billing.TokenCostPriceDB") as mock_tcp_db, \
+             patch("src.services.billing.create_settings", return_value=asr_settings):
+            mock_tcp_db.get_by_model_name.return_value = _make_asr_tcp(0.06)
+            # cost = 10 * 0.06 = 0.6 元，override=50 -> 30.00
+            result = calculate_asr_credit_cost(asr_calls=10, usage_factor_override=50)
+            assert result == 30.0
+
+    def test_ceil_rounding(self, asr_settings):
+        """向上取整到 0.01：1 次 × 0.06 × 100 = 6.00"""
+        from src.services.billing import calculate_asr_credit_cost
+
+        with patch("src.services.billing.TokenCostPriceDB") as mock_tcp_db, \
+             patch("src.services.billing.create_settings", return_value=asr_settings):
+            mock_tcp_db.get_by_model_name.return_value = _make_asr_tcp(0.06)
+            # cost = 1 * 0.06 = 0.06 元
+            # credit_cost = ceil(0.06 * 100 * 100) / 100 = ceil(600.0) / 100 = 6.00
+            result = calculate_asr_credit_cost(asr_calls=1)
+            assert result == 6.0
+
+    def test_factor_fallback_when_settings_missing(self):
+        """settings.billing.asr_usage_factor 缺失时回退到默认 100"""
+        from src.services.billing import calculate_asr_credit_cost
+
+        settings = MagicMock()
+        settings.billing.asr_usage_factor = None
+
+        with patch("src.services.billing.TokenCostPriceDB") as mock_tcp_db, \
+             patch("src.services.billing.create_settings", return_value=settings):
+            mock_tcp_db.get_by_model_name.return_value = _make_asr_tcp(0.06)
+            result = calculate_asr_credit_cost(asr_calls=10)
+            # 10 * 0.06 * 100 = 60.00
+            assert result == 60.0
+

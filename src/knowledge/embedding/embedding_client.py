@@ -48,6 +48,8 @@ class TextEmbeddingV3Client:
         self._api_key = api_key  # 保存 key 用于日志
         self.model = "text-embedding-v3"
         self.dimension = 1024
+        # 最近一次调用累加的 usage tokens（供调用方读取以接入计费）
+        self.last_usage_tokens: int = 0
 
     async def embed_batch(self, texts: List[str], batch_size: int = 10) -> List[List[float]]:
         """
@@ -98,6 +100,13 @@ class TextEmbeddingV3Client:
                 sanitized_msg = sanitize_error_info(resp.message)
                 raise Exception(f"Embedding API 失败: {sanitized_msg}")
 
+            # 累加 usage tokens，供调用方接入计费
+            usage_tokens = getattr(resp, "usage", None)
+            if usage_tokens is not None:
+                tokens = getattr(usage_tokens, "tokens", None)
+                if isinstance(tokens, (int, float)) and tokens > 0:
+                    self.last_usage_tokens += int(tokens)
+
             embeddings = [item["embedding"] for item in resp.output["embeddings"]]
             logger.info(f"后端日志：Embedding 批量调用成功，数量={len(texts)}")
             return embeddings
@@ -114,6 +123,38 @@ class TextEmbeddingV3Client:
                 error_str = sanitize_error_info(error_str)
             logger.error(f"后端日志：Embedding 批量调用失败: {error_str}", exc_info=True)
             raise
+
+    def reset_usage(self) -> None:
+        """重置累加的 usage tokens 计数器，方便调用方按段计费"""
+        self.last_usage_tokens = 0
+
+    def embed_sync(self, text: str) -> List[float]:
+        """单文本向量化（同步版本）
+
+        供同步代码路径（如 retriever、search tool 的 _embed 方法）使用，
+        避免在 event loop 中嵌套 asyncio.run。同时累加 usage_tokens
+        供调用方接入计费。
+        """
+        if not text:
+            return []
+        resp = TextEmbedding.call(
+            model=self.model,
+            input=text,
+            parameters={
+                "text_type": "document",
+                "dimension": self.dimension,
+            },
+        )
+        if resp.status_code != 200:
+            sanitized_msg = sanitize_error_info(resp.message)
+            raise Exception(f"Embedding API 失败: {sanitized_msg}")
+        # 累加 usage tokens
+        usage_tokens = getattr(resp, "usage", None)
+        if usage_tokens is not None:
+            tokens = getattr(usage_tokens, "tokens", None)
+            if isinstance(tokens, (int, float)) and tokens > 0:
+                self.last_usage_tokens += int(tokens)
+        return resp.output["embeddings"][0]["embedding"]
 
     async def embed(self, text: str) -> List[float]:
         """单文本向量化"""

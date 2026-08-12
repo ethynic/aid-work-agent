@@ -1012,7 +1012,10 @@ class ChatRecordDB:
         error_message: str = None,
         duration_ms: int = 0,
         source_type: str = "chat",
-        credit_cost: float = 0.0
+        credit_cost: float = 0.0,
+        embedding_tokens: int = 0,
+        asr_calls: int = 0,
+        usage_breakdown: dict = None,
     ) -> Optional[Dict[str, Any]]:
         """创建新的会话记录
 
@@ -1033,11 +1036,13 @@ class ChatRecordDB:
                     (record_id, session_id, tenant_id, user_id, user_message, assistant_message,
                      total_token_count, prompt_tokens, completion_tokens, cached_input_tokens,
                      model, provider, execution_details, agent_iterations, subagent_calls,
-                     status, error_message, duration_ms, source_type, credit_cost)
+                     status, error_message, duration_ms, source_type, credit_cost,
+                     embedding_tokens, asr_calls, usage_breakdown)
                     VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder},
                             {placeholder}, {placeholder}, {placeholder}, {placeholder},
                             {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder},
-                            {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})
+                            {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder},
+                            {placeholder}, {placeholder}, {placeholder})
                     RETURNING *
                 """, (
                     record_id, session_id, tenant_id, user_id, user_message, assistant_message,
@@ -1046,7 +1051,10 @@ class ChatRecordDB:
                     json.dumps(execution_details) if execution_details else None,
                     agent_iterations,
                     json.dumps(subagent_calls) if subagent_calls else None,
-                    status, error_message, duration_ms, source_type, credit_cost
+                    status, error_message, duration_ms, source_type, credit_cost,
+                    embedding_tokens or 0,
+                    asr_calls or 0,
+                    json.dumps(usage_breakdown) if usage_breakdown else None,
                 ))
                 row = cursor.fetchone()
 
@@ -2005,10 +2013,13 @@ class TokenCostPriceDB:
 
         Returns:
             {"model_name", "input_price_per_m", "cached_input_price_per_m",
-             "output_price_per_m", "price_per_second", "price_per_second_by_resolution"} 或 None
+             "output_price_per_m", "price_per_second", "price_per_second_by_resolution",
+             "embedding_price_per_m", "asr_price_per_call"} 或 None
             cached_input_price_per_m 为 NULL 表示该模型计费不区分缓存命中
             price_per_second 为 NULL 表示该模型不按秒计费（文本模型）
             price_per_second_by_resolution 为 NULL 表示视频模型不按分辨率区分，用 price_per_second
+            embedding_price_per_m 为 NULL 表示该模型非 embedding 模型（无向量单价）
+            asr_price_per_call 为 NULL 表示该模型非 ASR 模型（无语音识别单价）
         """
         if not model_name:
             return None
@@ -2018,7 +2029,8 @@ class TokenCostPriceDB:
             cursor.execute(
                 f"""
                 SELECT model_name, input_price_per_m, cached_input_price_per_m,
-                       output_price_per_m, price_per_second, price_per_second_by_resolution
+                       output_price_per_m, price_per_second, price_per_second_by_resolution,
+                       embedding_price_per_m, asr_price_per_call
                 FROM token_cost_prices
                 WHERE model_name = {placeholder}
                 """,

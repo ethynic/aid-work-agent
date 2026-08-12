@@ -128,3 +128,104 @@ def calculate_video_credit_cost(
 
     credit_cost = math.ceil(seconds * cost_per_second_yuan * factor * 100) / 100
     return max(credit_cost, 0.0)
+
+
+def calculate_embedding_credit_cost(
+    embedding_tokens: int,
+    model: Optional[str] = "text-embedding-v3",
+    usage_factor_override: Optional[int] = None,
+) -> float:
+    """计算 embedding 调用消耗的积分（按 token 计费）
+
+    知识库向量化、检索 query 向量化等场景调用 text-embedding-v3 等向量模型时，
+    按 token_cost_prices.embedding_price_per_m 单价计算积分。
+
+    公式：credit_cost = ceil(embedding_tokens × embedding_price_per_m / 1e6 × embedding_usage_factor × 100) / 100
+
+    Args:
+        embedding_tokens: embedding 调用消耗的 token 数
+        model: 向量模型名（默认 text-embedding-v3），用于查 embedding_price_per_m 单价
+        usage_factor_override: 用量系数覆盖值；传入时覆盖 settings.billing.embedding_usage_factor
+
+    Returns:
+        积分用量（2 位小数，向上取整到 0.01）；单价缺失或 token ≤ 0 返回 0.0
+    """
+    if not model:
+        logger.warning("embedding 计费：model 为空，credit_cost=0")
+        return 0.0
+
+    if not embedding_tokens or embedding_tokens <= 0:
+        return 0.0
+
+    tcp = TokenCostPriceDB.get_by_model_name(model)
+    if not tcp:
+        logger.warning(f"embedding 计费：模型 {model} 未配置单价，credit_cost=0")
+        return 0.0
+
+    embedding_price = float(tcp.get("embedding_price_per_m") or 0)
+    if embedding_price <= 0:
+        logger.warning(f"embedding 计费：模型 {model} 的 embedding_price_per_m 为空或 0，credit_cost=0")
+        return 0.0
+
+    settings = create_settings()
+    if usage_factor_override is not None:
+        usage_factor = usage_factor_override
+    else:
+        usage_factor = getattr(settings.billing, "embedding_usage_factor", 100) or 100
+
+    # token_cost 单位：元（百万 token 单价 × token 数 / 1e6）
+    token_cost = embedding_tokens * embedding_price / 1_000_000
+    if token_cost <= 0:
+        return 0.0
+
+    credit_cost = math.ceil(token_cost * usage_factor * 100) / 100
+    return max(credit_cost, 0.0)
+
+
+def calculate_asr_credit_cost(
+    asr_calls: int,
+    model: str = "aliyun-nls-asr",
+    usage_factor_override: Optional[int] = None,
+) -> float:
+    """计算 ASR 语音识别消耗的积分（按调用次数计费）
+
+    阿里云 NLS 一句话识别按调用次数计费（响应不返回音频时长，无法按时长计量）。
+    公式：credit_cost = ceil(asr_calls × asr_price_per_call × asr_usage_factor × 100) / 100
+
+    Args:
+        asr_calls: ASR 调用次数
+        model: ASR 模型名（默认 aliyun-nls-asr），用于查 asr_price_per_call 单价
+        usage_factor_override: 用量系数覆盖值
+
+    Returns:
+        积分用量（2 位小数，向上取整到 0.01）；单价缺失或次数 ≤ 0 返回 0.0
+    """
+    if not asr_calls or asr_calls <= 0:
+        return 0.0
+
+    if not model:
+        logger.warning("ASR 计费：model 为空，credit_cost=0")
+        return 0.0
+
+    tcp = TokenCostPriceDB.get_by_model_name(model)
+    if not tcp:
+        logger.warning(f"ASR 计费：模型 {model} 未配置单价，credit_cost=0")
+        return 0.0
+
+    asr_price = float(tcp.get("asr_price_per_call") or 0)
+    if asr_price <= 0:
+        logger.warning(f"ASR 计费：模型 {model} 的 asr_price_per_call 为空或 0，credit_cost=0")
+        return 0.0
+
+    settings = create_settings()
+    if usage_factor_override is not None:
+        usage_factor = usage_factor_override
+    else:
+        usage_factor = getattr(settings.billing, "asr_usage_factor", 100) or 100
+
+    cost = asr_calls * asr_price
+    if cost <= 0:
+        return 0.0
+
+    credit_cost = math.ceil(cost * usage_factor * 100) / 100
+    return max(credit_cost, 0.0)

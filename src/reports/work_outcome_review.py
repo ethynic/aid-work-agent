@@ -330,6 +330,15 @@ async def _review_session_with_llm(
         return []
 
     content = result.get("content", "") or ""
+    # 后台 LLM 计费（source_type=background_llm）
+    _record_background_llm_billing(
+        tenant_id=session.tenant_id,
+        user_id=session.user_id,
+        source="work_outcome_review",
+        user_message=f"工作成果复盘: session={session.session_id}",
+        usage=result.get("usage") if isinstance(result, dict) else None,
+        model=report_model,
+    )
     outcomes = _parse_review_response(content)
 
     # 4. 过滤低置信度结果
@@ -515,3 +524,62 @@ def _parse_review_response(content: str) -> List[Dict[str, Any]]:
             "confidence": confidence,
         })
     return result
+
+
+def _record_background_llm_billing(
+    tenant_id: Optional[str],
+    user_id: Optional[str],
+    source: str,
+    user_message: str,
+    usage: Optional[dict],
+    model: Optional[str],
+) -> None:
+    """后台 LLM 调用独立写入 chat_records（source_type=background_llm）
+
+    background_runner 调度线程无 HTTP 上下文，无法复用 SessionRecordManager，
+    仿 reports/generator.py:405 模式独立 ChatRecordDB.create。
+    """
+    if not usage:
+        return
+    try:
+        from src.db.models import ChatRecordDB
+        from src.services.billing import calculate_credit_cost
+
+        prompt_tokens = int(usage.get("prompt_tokens", 0) or 0)
+        completion_tokens = int(usage.get("completion_tokens", 0) or 0)
+        total_tokens = int(usage.get("total_tokens", 0) or 0)
+        cached_input_tokens = int(usage.get("cached_tokens", 0) or 0)
+
+        try:
+            credit_cost = calculate_credit_cost(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                model=model,
+                cached_input_tokens=cached_input_tokens,
+            )
+        except Exception as billing_err:
+            logger.error(f"background_llm 计费计算失败，credit_cost 降级为 0: {billing_err}")
+            credit_cost = 0.0
+
+        ChatRecordDB.create(
+            session_id=f"background_llm_{source}_{user_id or 'unknown'}",
+            tenant_id=tenant_id,
+            user_id=user_id,
+            user_message=user_message,
+            assistant_message=None,
+            total_token_count=total_tokens,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            cached_input_tokens=cached_input_tokens,
+            model=model,
+            provider="qwen",
+            source_type="background_llm",
+            credit_cost=credit_cost,
+            status="completed",
+        )
+        logger.info(
+            f"background_llm 计费: source={source}, tenant={tenant_id}, user={user_id}, "
+            f"tokens={total_tokens}, credit={credit_cost}"
+        )
+    except Exception as e:
+        logger.error(f"background_llm 计费落库失败: {e}", exc_info=True)

@@ -16,7 +16,9 @@ from src.knowledge.embedding.embedding_client import TextEmbeddingV3Client, sani
 from src.knowledge.vector_db.vector_db import get_vector_db
 from src.config.settings import settings
 from src.db.database import get_db_connection
+from src.db.models import ChatRecordDB
 from src.llm.gateway import LLMGateway
+from src.services.billing import calculate_credit_cost, calculate_embedding_credit_cost
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +44,8 @@ class KnowledgeBaseService:
         )
         # LLM 网关（懒加载）
         self._llm_gateway = None
+        # 最近一次文档摘要 LLM 调用的 usage（供 upload_document 接入计费）
+        self._last_summary_usage: Optional[Dict[str, Any]] = None
 
     @property
     def llm_gateway(self):
@@ -91,11 +95,112 @@ class KnowledgeBaseService:
                 temperature=0.3,
                 max_tokens=500
             )
+            self._last_summary_usage = response.get("usage") if isinstance(response, dict) else None
             summary = response.get("content", "") or ""
             return summary.strip()
         except Exception as e:
             logger.warning(f"生成文档摘要失败: {e}")
+            self._last_summary_usage = None
             return ""
+
+    def _record_knowledge_embedding_billing(
+        self,
+        tenant_id: Optional[str],
+        user_id: Optional[str],
+        doc_id: int,
+        file_filename: str,
+        embedding_tokens: int,
+        summary_usage: Optional[Dict[str, Any]],
+    ) -> None:
+        """知识库文档处理独立计费（source_type=knowledge_embedding）
+
+        包含两部分：
+        - embedding_tokens: 文档向量化消耗（按 token 计费，calculate_embedding_credit_cost）
+        - summary_usage: 摘要 LLM 调用消耗（按 token 计费，calculate_credit_cost）
+
+        合并为一条 chat_records，usage_breakdown 记录分项明细。
+        """
+        # Embedding 积分
+        try:
+            embedding_credit = calculate_embedding_credit_cost(
+                embedding_tokens=embedding_tokens,
+            )
+        except Exception as e:
+            logger.error(f"embedding 计费计算失败，降级为 0: {e}")
+            embedding_credit = 0.0
+
+        # 摘要 LLM 积分
+        prompt_tokens = 0
+        completion_tokens = 0
+        total_tokens = 0
+        cached_input_tokens = 0
+        llm_model = None
+        llm_credit = 0.0
+        if summary_usage:
+            prompt_tokens = int(summary_usage.get("prompt_tokens", 0) or 0)
+            completion_tokens = int(summary_usage.get("completion_tokens", 0) or 0)
+            total_tokens = int(summary_usage.get("total_tokens", 0) or 0)
+            cached_input_tokens = int(summary_usage.get("cached_tokens", 0) or 0)
+            # 知识库摘要使用主 gateway 默认模型
+            try:
+                llm_model = getattr(settings.llm, "model_code", None) or "qwen-plus"
+            except Exception:
+                llm_model = "qwen-plus"
+            try:
+                llm_credit = calculate_credit_cost(
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    model=llm_model,
+                    cached_input_tokens=cached_input_tokens,
+                )
+            except Exception as e:
+                logger.error(f"摘要 LLM 计费计算失败，降级为 0: {e}")
+                llm_credit = 0.0
+
+        total_credit = round(embedding_credit + llm_credit, 2)
+        if total_credit <= 0 and embedding_tokens == 0 and total_tokens == 0:
+            return  # 无任何用量，不写空记录
+
+        usage_breakdown: Dict[str, Any] = {
+            "embedding": {
+                "tokens": embedding_tokens,
+                "model": "text-embedding-v3",
+                "credit": round(embedding_credit, 2),
+            },
+        }
+        if summary_usage:
+            usage_breakdown["summary_llm"] = {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "cached_input_tokens": cached_input_tokens,
+                "total_tokens": total_tokens,
+                "model": llm_model,
+                "credit": round(llm_credit, 2),
+            }
+
+        ChatRecordDB.create(
+            session_id=f"knowledge_embedding_{doc_id}",
+            tenant_id=tenant_id,
+            user_id=user_id,
+            user_message=f"知识库文档向量化+摘要: {file_filename}",
+            assistant_message=None,
+            total_token_count=total_tokens,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            cached_input_tokens=cached_input_tokens,
+            model=llm_model,
+            provider="qwen",
+            source_type="knowledge_embedding",
+            credit_cost=total_credit,
+            embedding_tokens=embedding_tokens,
+            usage_breakdown=usage_breakdown,
+            status="completed",
+        )
+        logger.info(
+            f"知识库文档计费: doc_id={doc_id}, tenant={tenant_id}, "
+            f"embedding_tokens={embedding_tokens}, llm_tokens={total_tokens}, "
+            f"credit={total_credit} (embedding={embedding_credit}, llm={llm_credit})"
+        )
 
     def _get_upload_path(self, tenant_id: Optional[str] = None) -> Path:
         """获取知识库文档上传路径
@@ -260,13 +365,18 @@ class KnowledgeBaseService:
             # TODO: 后续支持 key 池轮询或并发控制，避免单 key 限流
             embedding_client = TextEmbeddingV3Client(api_key=embedding_api_key)
             chunk_texts = [c["text"] for c in chunks]
+            embedding_client.reset_usage()
             embeddings = await embedding_client.embed_batch(chunk_texts)
+            # 读取 embedding usage（供计费）
+            embedding_usage_tokens = embedding_client.last_usage_tokens
 
             # 4. 生成文档摘要
             summary = await self.generate_summary(
                 text=parse_result.text or "",
                 title=file_filename
             )
+            # 读取摘要 LLM usage（供计费）
+            summary_usage = self._last_summary_usage
 
             # 5. 保存到数据库
             with self._get_db_connection() as conn:
@@ -330,6 +440,20 @@ class KnowledgeBaseService:
                 conn.commit()
 
             logger.info(f"后端日志：文档上传成功，doc_id={doc_id}, 文件={file_filename}, chunks={len(chunks)}")
+
+            # 知识库文档处理独立计费（source_type=knowledge_embedding）
+            # 包含 embedding tokens + 摘要 LLM tokens，失败只记日志不影响文档上传
+            try:
+                self._record_knowledge_embedding_billing(
+                    tenant_id=tenant_id,
+                    user_id=str(user_id) if user_id is not None else None,
+                    doc_id=doc_id,
+                    file_filename=file_filename,
+                    embedding_tokens=embedding_usage_tokens,
+                    summary_usage=summary_usage,
+                )
+            except Exception as billing_err:
+                logger.error(f"知识库文档计费失败: {billing_err}", exc_info=True)
 
             return {
                 "success": True,

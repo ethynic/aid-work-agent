@@ -268,6 +268,8 @@ notification:
 billing:
   usage_factor: 100  # 用量系数，token 成本价 × 系数 = 积分用量（向上取整）
   video_gen_usage_factor: 33  # 视频创作用量系数（3.3 倍加价），视频秒数 × 单价 × 此系数 = 积分用量
+  embedding_usage_factor: 100  # 向量模型用量系数，embedding token × 单价 × 系数 = 积分用量（知识库向量化/检索 query 向量化）
+  asr_usage_factor: 100  # 语音识别用量系数，ASR 调用次数 × 单价 × 系数 = 积分用量（阿里云 NLS 按次计费）
 
 wecom:
   waiting_indicator:

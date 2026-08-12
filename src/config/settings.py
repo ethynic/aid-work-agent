@@ -350,9 +350,15 @@ class BillingConfig(BaseModel):
     - usage_factor: 用量系数，token 成本价 × 系数 = 积分用量（向上取整）
     - video_gen_usage_factor: 视频创作用量系数，视频秒数 × 单价 × 系数 = 积分用量（向上取整）
       视频创作智能体（video-agent）按秒计费专用，区别于主业务按 token 计费
+    - embedding_usage_factor: 向量模型用量系数，embedding token × 单价 × 系数 = 积分用量
+      知识库向量化、检索 query 向量化等场景使用 text-embedding-v3 等模型计费
+    - asr_usage_factor: 语音识别用量系数，ASR 调用次数 × 单价 × 系数 = 积分用量
+      阿里云 NLS 一句话识别按次计费
     """
     usage_factor: int = 100
     video_gen_usage_factor: int = 33
+    embedding_usage_factor: int = 100
+    asr_usage_factor: int = 100
 
 
 class ClientConfig(BaseModel):
@@ -625,6 +631,16 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
     if os.getenv("VIDEO_GEN_USAGE_FACTOR") is not None:
         try:
             billing_cfg["video_gen_usage_factor"] = int(os.getenv("VIDEO_GEN_USAGE_FACTOR"))
+        except ValueError:
+            pass
+    if os.getenv("EMBEDDING_USAGE_FACTOR") is not None:
+        try:
+            billing_cfg["embedding_usage_factor"] = int(os.getenv("EMBEDDING_USAGE_FACTOR"))
+        except ValueError:
+            pass
+    if os.getenv("ASR_USAGE_FACTOR") is not None:
+        try:
+            billing_cfg["asr_usage_factor"] = int(os.getenv("ASR_USAGE_FACTOR"))
         except ValueError:
             pass
 

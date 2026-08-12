@@ -113,18 +113,42 @@ async def _summarize_user(
         conversations=conversations[:8000],
     )
 
-    llm_output = await _call_llm(prompt)
+    llm_output, llm_usage = await _call_llm(prompt)
     if not llm_output or llm_output.strip() == "无更新":
+        # 即使无更新也计费（LLM 已调用，token 已消耗）
+        _record_background_llm_billing(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            source="memory_summarizer",
+            user_message="长期记忆摘要（无更新）",
+            usage=llm_usage,
+        )
         return False
 
     # 4. 解析 LLM 输出为 {分类: 条目} 结构
     new_sections = _parse_llm_output(llm_output)
     if not new_sections:
+        _record_background_llm_billing(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            source="memory_summarizer",
+            user_message="长期记忆摘要（解析失败）",
+            usage=llm_usage,
+        )
         return False
 
     # 5. 增量合并
     ltm.merge_memory(tenant_id, user_id, new_sections)
     logger.info(f"Updated memory for user {user_id} (tenant={tenant_id}): {list(new_sections.keys())}")
+
+    # 后台 LLM 计费（source_type=background_llm）
+    _record_background_llm_billing(
+        tenant_id=tenant_id,
+        user_id=user_id,
+        source="memory_summarizer",
+        user_message="长期记忆摘要",
+        usage=llm_usage,
+    )
     return True
 
 
@@ -255,17 +279,89 @@ def _clean_message_content(role: str, content: str) -> str:
     return text
 
 
-async def _call_llm(prompt: str) -> Optional[str]:
-    """调用 LLM 进行记忆提取"""
+async def _call_llm(prompt: str) -> tuple[Optional[str], Optional[dict]]:
+    """调用 LLM 进行记忆提取
+
+    Returns:
+        (content, usage) - content 为 LLM 输出文本，usage 为 token 用量
+    """
     try:
         from src.llm.gateway import llm_gateway
 
         messages = [{"role": "user", "content": prompt}]
         response = await llm_gateway.chat(messages=messages)
-        return response
+        if not isinstance(response, dict):
+            return None, None
+        content = response.get("content") or ""
+        usage = response.get("usage")
+        return content, usage
     except Exception as e:
         logger.error(f"LLM call for memory summarization failed: {e}")
-        return None
+        return None, None
+
+
+def _record_background_llm_billing(
+    tenant_id: Optional[str],
+    user_id: Optional[str],
+    source: str,
+    user_message: str,
+    usage: Optional[dict],
+) -> None:
+    """后台 LLM 调用独立写入 chat_records（source_type=background_llm）
+
+    background_runner 调度线程无 HTTP 上下文，无法复用 SessionRecordManager，
+    仿 reports/generator.py:405 模式独立 ChatRecordDB.create。
+    """
+    if not usage:
+        return
+    try:
+        from src.db.models import ChatRecordDB
+        from src.services.billing import calculate_credit_cost
+
+        prompt_tokens = int(usage.get("prompt_tokens", 0) or 0)
+        completion_tokens = int(usage.get("completion_tokens", 0) or 0)
+        total_tokens = int(usage.get("total_tokens", 0) or 0)
+        cached_input_tokens = int(usage.get("cached_tokens", 0) or 0)
+
+        # 后台任务使用主 gateway 默认模型
+        try:
+            llm_model = getattr(settings.llm, "model_code", None) or "qwen-plus"
+        except Exception:
+            llm_model = "qwen-plus"
+
+        try:
+            credit_cost = calculate_credit_cost(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                model=llm_model,
+                cached_input_tokens=cached_input_tokens,
+            )
+        except Exception as billing_err:
+            logger.error(f"background_llm 计费计算失败，credit_cost 降级为 0: {billing_err}")
+            credit_cost = 0.0
+
+        ChatRecordDB.create(
+            session_id=f"background_llm_{source}_{user_id or 'unknown'}",
+            tenant_id=tenant_id,
+            user_id=user_id,
+            user_message=user_message,
+            assistant_message=None,
+            total_token_count=total_tokens,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            cached_input_tokens=cached_input_tokens,
+            model=llm_model,
+            provider="qwen",
+            source_type="background_llm",
+            credit_cost=credit_cost,
+            status="completed",
+        )
+        logger.info(
+            f"background_llm 计费: source={source}, tenant={tenant_id}, user={user_id}, "
+            f"tokens={total_tokens}, credit={credit_cost}"
+        )
+    except Exception as e:
+        logger.error(f"background_llm 计费落库失败: {e}", exc_info=True)
 
 
 def _parse_llm_output(output: str) -> Dict[str, List[str]]:
