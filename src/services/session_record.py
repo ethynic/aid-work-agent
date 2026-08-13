@@ -459,7 +459,14 @@ class SessionRecordManager:
         return None
 
 
-def record_background_llm_usage(usage: Optional[Dict[str, int]]) -> None:
+def record_background_llm_usage(
+    usage: Optional[Dict[str, int]],
+    *,
+    tenant_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+    source: str = "background_llm",
+    user_message: Optional[str] = None,
+) -> None:
     """后台 LLM 调用（非主循环 chat_with_tools）的 usage 累加到当前 SessionRecordService
 
     用于对话内触发的后台 LLM 调用：
@@ -478,6 +485,15 @@ def record_background_llm_usage(usage: Optional[Dict[str, int]]) -> None:
     独立 ChatRecordDB.create(source_type=background_llm)，确保后台扫描类 LLM
     调用也能计入计费。background_runner 调度线程无 HTTP 上下文，
     SessionRecordManager.get_current_record() 恒为 None。
+
+    新增 keyword-only 参数（v3.2.2 P1 修复）：
+    - tenant_id/user_id：background_runner 调度场景由调用方（mid_term）显式
+      传入，从 SessionMeta 解析；让计费能归属到具体租户，避免硬编码 None
+    - source：计费来源标识，与 memory_summarizer 一致用于 session_id 拼接
+    - user_message：用户可见消息文本（默认 "上下文压缩扫描摘要"）
+
+    对话内调用方（case_matching/classification/sentiment/analysis_agent/
+    content_generate_tool）不传这些参数，默认 None 向后兼容。
     """
     if not usage:
         return
@@ -487,20 +503,42 @@ def record_background_llm_usage(usage: Optional[Dict[str, int]]) -> None:
             record.add_llm_usage(usage)
             return
         # background_runner 调度场景：无 SessionRecordService，独立落库
-        _persist_background_llm_record(usage)
+        _persist_background_llm_record(
+            usage,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            source=source,
+            user_message=user_message,
+        )
     except Exception:
         logger.debug("Failed to record background LLM usage", exc_info=True)
 
 
-def _persist_background_llm_record(usage: Dict[str, int]) -> None:
+def _persist_background_llm_record(
+    usage: Dict[str, int],
+    *,
+    tenant_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+    source: str = "background_llm",
+    user_message: Optional[str] = None,
+) -> None:
     """background_runner 调度线程的后台 LLM 调用独立写入 chat_records
 
-    source_type=background_llm，tenant_id/user_id 无法解析（无 session 上下文），
-    计费仍归到调用方租户需调用方自行调用 ChatRecordDB.create（参考
-    memory_summarizer.py / work_outcome_review.py 的 _record_background_llm_billing）。
+    source_type=background_llm，tenant_id/user_id 由调用方（mid_term）从
+    SessionMeta 透传；早期版本硬编码 None 会导致计费无法归属租户。
 
-    本函数仅在 mid_term background_scan 等无法确定租户的场景下作为兜底，
-    避免后台 LLM 调用计费丢失。
+    本函数仅在 mid_term background_scan 等无 SessionRecordService 的场景下
+    作为兜底，避免后台 LLM 调用计费丢失。memory_summarizer.py /
+    work_outcome_review.py 有各自独立的 `_record_background_llm_billing`，
+    本函数不覆盖那些路径。
+
+    Args:
+        usage: LLM 调用返回的 token 用量 dict
+        tenant_id: 租户 ID（从 SessionMeta.tenant_id 透传；对话内调用走
+                   record.add_llm_usage 不会进本函数）
+        user_id: 用户 ID（从 SessionMeta.user_id 透传）
+        source: 计费来源标识，用于 session_id 拼接与追溯
+        user_message: chat_records.user_message 字段值
     """
     try:
         from src.db.models import ChatRecordDB
@@ -529,11 +567,14 @@ def _persist_background_llm_record(usage: Dict[str, int]) -> None:
             logger.error(f"background_llm 计费计算失败，credit_cost 降级为 0: {billing_err}")
             credit_cost = 0.0
 
+        # session_id 与 memory_summarizer 一致：background_llm_{source}_{user_id|unknown}
+        # 便于按 source + user 维度追溯后台扫描计费记录
+        session_id = f"background_llm_{source}_{user_id or 'unknown'}"
         ChatRecordDB.create(
-            session_id=f"background_llm_mid_term_{int(time.time())}",
-            tenant_id=None,
-            user_id=None,
-            user_message="上下文压缩扫描摘要",
+            session_id=session_id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            user_message=user_message or "上下文压缩扫描摘要",
             assistant_message=None,
             total_token_count=total_tokens,
             prompt_tokens=prompt_tokens,
@@ -546,7 +587,8 @@ def _persist_background_llm_record(usage: Dict[str, int]) -> None:
             status="completed",
         )
         logger.info(
-            f"background_llm (mid_term scan) 计费: tokens={total_tokens}, credit={credit_cost}"
+            f"background_llm (source={source}) 计费: tenant={tenant_id}, "
+            f"user={user_id}, tokens={total_tokens}, credit={credit_cost}"
         )
     except Exception as e:
         logger.error(f"background_llm 计费落库失败: {e}", exc_info=True)
