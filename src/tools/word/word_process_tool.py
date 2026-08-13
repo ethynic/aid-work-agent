@@ -137,6 +137,19 @@ class WordProcessTool(BaseTool):
             self._router = WordRouter()
         return self._router
 
+    def _resolve_file(self, file_path: str) -> str:
+        """解析 file_id 或相对路径为磁盘绝对路径
+
+        Agent 传的 file_paths 可能是 file_id（如 file_e300d0d5befc）或相对路径，
+        不能直接当磁盘路径用。通过 WordFileHandler.resolve_path 走 Redis 元数据
+        + 新旧目录兜底扫描，找不到抛 FileNotFoundError。
+        """
+        from src.tools.word.word_lib import WordFileHandler
+        resolved = WordFileHandler.resolve_path(file_path)
+        if not Path(resolved).exists():
+            raise FileNotFoundError(f"文件不存在: {file_path}")
+        return resolved
+
     async def execute(self, **kwargs) -> Dict[str, Any]:
         context = kwargs.get("context")
         instruction = kwargs.get("instruction")
@@ -482,7 +495,11 @@ class WordProcessTool(BaseTool):
         if not ctx.file_paths:
             return {"success": False, "error": "read 操作需要 file_paths 参数"}
 
-        file_path = ctx.file_paths[0]
+        try:
+            file_path = self._resolve_file(ctx.file_paths[0])
+        except FileNotFoundError as e:
+            return {"success": False, "error": str(e)}
+
         return read_content(file_path)
 
     async def _handle_analyze(self, ctx: PipelineContext, params: Dict) -> Dict:
@@ -491,7 +508,11 @@ class WordProcessTool(BaseTool):
         if not ctx.file_paths:
             return {"success": False, "error": "analyze 操作需要 file_paths 参数"}
 
-        file_path = ctx.file_paths[0]
+        try:
+            file_path = self._resolve_file(ctx.file_paths[0])
+        except FileNotFoundError as e:
+            return {"success": False, "error": str(e)}
+
         result = analyze_structure(file_path, detailed=params.get("detailed", False))
         if result.get("success"):
             return {"success": True, "structure": result}
@@ -503,7 +524,11 @@ class WordProcessTool(BaseTool):
         if not ctx.file_paths:
             return {"success": False, "error": "word_to_md 操作需要 file_paths 参数"}
 
-        file_path = ctx.file_paths[0]
+        try:
+            file_path = self._resolve_file(ctx.file_paths[0])
+        except FileNotFoundError as e:
+            return {"success": False, "error": str(e)}
+
         md_text = convert(file_path)
         return {
             "success": True,
@@ -516,9 +541,13 @@ class WordProcessTool(BaseTool):
 
         md_text = ctx.content or ctx.context
         if not md_text and ctx.file_paths:
-            md_path = ctx.file_paths[0]
-            if Path(md_path).exists():
+            # file_paths[0] 可能是 file_id 或相对路径，走 _resolve_file 解析
+            # 解析失败时不阻塞流程（md_text 可能在其他途径被填充），由后续 if not md_text 兜底
+            try:
+                md_path = self._resolve_file(ctx.file_paths[0])
                 md_text = Path(md_path).read_text(encoding="utf-8")
+            except (FileNotFoundError, OSError):
+                md_text = None
 
         if not md_text:
             return {"success": False, "error": "md_to_word 需要提供 context（Markdown文本）或 file_paths（.md文件路径）"}
@@ -572,7 +601,11 @@ class WordProcessTool(BaseTool):
         if not ctx.file_paths:
             return {"success": False, "error": "modify 操作需要 file_paths 参数"}
 
-        file_path = ctx.file_paths[0]
+        try:
+            file_path = self._resolve_file(ctx.file_paths[0])
+        except FileNotFoundError as e:
+            return {"success": False, "error": str(e)}
+
         operations = params.get("operations", [])
         if not operations:
             return {"success": False, "error": "modify 操作需要 params.operations 参数"}
@@ -598,7 +631,11 @@ class WordProcessTool(BaseTool):
         if not ctx.file_paths:
             return {"success": False, "error": "format 操作需要 file_paths 参数"}
 
-        file_path = ctx.file_paths[0]
+        try:
+            file_path = self._resolve_file(ctx.file_paths[0])
+        except FileNotFoundError as e:
+            return {"success": False, "error": str(e)}
+
         operations = params.get("format_operations") or params.get("operations", [])
         if not operations:
             return {"success": False, "error": "format 操作需要 params.format_operations 参数"}
@@ -624,7 +661,11 @@ class WordProcessTool(BaseTool):
         if not ctx.file_paths:
             return {"success": False, "error": "fill_template 操作需要 file_paths 参数"}
 
-        file_path = ctx.file_paths[0]
+        try:
+            file_path = self._resolve_file(ctx.file_paths[0])
+        except FileNotFoundError as e:
+            return {"success": False, "error": str(e)}
+
         variables = params.get("variables", {})
         if not variables:
             return {"success": False, "error": "fill_template 操作需要 params.variables 参数"}
@@ -653,5 +694,11 @@ class WordProcessTool(BaseTool):
         if not ctx.file_paths or len(ctx.file_paths) < 2:
             return {"success": False, "error": "diff 操作需要 file_paths 参数（两个文件路径：[旧版本, 新版本]）"}
 
+        try:
+            file_path_old = self._resolve_file(ctx.file_paths[0])
+            file_path_new = self._resolve_file(ctx.file_paths[1])
+        except FileNotFoundError as e:
+            return {"success": False, "error": str(e)}
+
         output_format = params.get("output_format", "text")
-        return diff(ctx.file_paths[0], ctx.file_paths[1], output_format=output_format)
+        return diff(file_path_old, file_path_new, output_format=output_format)

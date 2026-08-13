@@ -148,19 +148,35 @@
 
 ---
 
-### Phase 6：word_process_tool 同步修复 + 收尾 🔧 未开始
+### Phase 6：word_process_tool 同步修复 + 收尾 ✅ 已完成
 
 **改造范围**：word 工具同步 Phase 1 的 file_id 解析修复 + 全项目收尾。
 
-**待改文件**：
-- `src/tools/word/word_process_tool.py` - 8 处 `ctx.file_paths[0]` 直接当路径用（line 485/494/506/519/575/601/627/657），未调用 `WordFileHandler.resolve_path`。需补 `_resolve_file` 方法并在所有 handler 入口调用（与 excel_process 同结构）
-- `src/tools/word/word_lib.py` - `WordFileHandler.resolve_path` 补 Redis 元数据命中分支（与 `ExcelFileHandler.resolve_path` 同结构）
-- `src/core/skill_executor.py:735` - 检查 `Path.cwd() / settings.storage.uploads_dir` 是否需改造
-- `src/saas/api/tenant_migration.py:121-123` - 租户迁移工具的路径返回值，检查是否需同步
+**改动文件**：
+- `src/core/storage.py` - **新增** `resolve_path_via_redis(file_id)` 公共工具函数（从 `excel_lib.py` 提取，作为 word/excel 共享）
+- `src/tools/word/word_lib.py` - `WordFileHandler.resolve_path` 补 Redis 元数据命中分支 + 旧路径 `storage/uploads/{tenant}/templates/{file}` 兜底（与 `ExcelFileHandler.resolve_path` 同结构）
+- `src/tools/excel/excel_lib.py` - `_resolve_path_via_redis` 改为薄包装调用 `src.core.storage.resolve_path_via_redis`（保留函数名向后兼容，test 直接从此模块导入）
+- `src/tools/word/word_process_tool.py` - 新增 `_resolve_file` 方法，在 8 处 handler 入口调用（`_handle_read` / `_handle_analyze` / `_handle_word_to_md` / `_handle_md_to_word` / `_handle_modify` / `_handle_format` / `_handle_fill_template` / `_handle_diff`），与 `excel_process_tool._resolve_file` 同结构
+- `src/core/skill_executor.py:735` - `search_dirs` 列表加 `storage/tenants` 作为新搜索根，更新注释（旧 `storage/uploads` 仍保留作只读兜底）
+- `tests/unit/tools/test_word_process_resolve_file.py` - **新建**，24 个测试
 
 **关键点**：
-- word 的修复与 excel 完全同构，可复用 `_resolve_path_via_redis` 辅助函数（提到 `src/core/storage.py` 作为公共工具）
-- 收尾时全项目 grep `storage.uploads` / `uploads_dir` / `UPLOAD_DIR`，确认无遗漏
+- word 的修复与 excel 完全同构，复用 `resolve_path_via_redis` 公共函数（提到 `src/core/storage.py`）
+- `_handle_md_to_word` 特殊：file_paths[0] 解析失败时不阻塞流程（`try/except (FileNotFoundError, OSError)`），由 `md_text` 兜底返回需要 context 的错误
+- `_handle_diff` 两个 file_path 都通过 `_resolve_file` 解析
+- `tenant_migration.py:121-123` 评估结论：迁移工具的 `target_storage` 改造涉及 `tenant_migrate_kb.py` 核心逻辑（file_path 字段重新构造 + 数据库更新），工程量大，**单独立项**
+
+**收尾 grep 结论**（全项目 `storage.uploads` / `uploads_dir` / `UPLOAD_DIR`）：
+- Phase 6 范围内无遗漏（word/skill_executor 已改）
+- Phase 3（`src/api/data_analysis.py`）+ Phase 4（`src/api/subagent_template_file.py`）+ Phase 5（渠道 `src/channels/*/`）按计划单独执行
+- `src/main.py` 中的 `UPLOAD_DIR` 全部为只读兜底扫描（Phase 1 已改造写入侧）
+- `src/tools/{excel,word,pdf}/_lib.py` 中的 `storage/uploads` 全部为 resolve_path 兜底（迁移期保留）
+
+**测试**：`tests/unit/tools/test_word_process_resolve_file.py` 24 passed；回归 `test_excel_process_resolve_file.py` + `test_tenant_storage_paths.py` + `test_storage_migration.py` 54 passed
+
+**三智能体流程**：
+- 测试智能体：新功能 24 + 核心 54 全绿，启动安全检查 OK；tools 目录全量 26 failed 已用 git stash 验证为预先存在（与 Phase 6 无关）
+- CodeReview 智能体：无 P0/P1，6 个 P2/nit 全 REPORTED-ONLY（`_handle_md_to_word` 假异步 nit 与既有模式一致建议后续统一治理；其余为防御性写法/边界情况/预先存在），可安全提交
 
 ---
 
@@ -171,17 +187,18 @@
 | Phase 1 | ✅ 已完成 | `5a8d4fa` |
 | 一次性迁移模块 | ✅ 已完成 | `5a8d4fa` |
 | excel_process file_id 修复 | ✅ 已完成（待提交） | - |
-| Phase 2 知识库 | ✅ 已完成 | - |
+| Phase 2 知识库 | ✅ 已完成 | `ebca7d3` |
 | Phase 3 数据分析 | 🔧 未开始 | - |
 | Phase 4 模板文件 | 🔧 未开始 | - |
 | Phase 5 渠道媒体 | 🔧 未开始（建议豁免） | - |
-| Phase 6 word 同步 + 收尾 | 🔧 未开始 | - |
+| Phase 6 word 同步 + 收尾 | ✅ 已完成（待提交） | - |
+| Phase 7 租户迁移工具 target_storage 改造 | 🔧 待立项（Phase 6 评估剥离） | - |
 
 ## 下次继续的入口
 
-1. **优先级最高**：Phase 6 的 word_process_tool 同步修复（与 excel_process 同结构，可快速完成，修复同类 bug）
-2. **优先级中**：Phase 2 知识库 + Phase 4 模板文件（影响实际业务，迁移脚本需补充变体）
-3. **优先级低**：Phase 3 数据分析（单文件改造）+ Phase 5 渠道（建议豁免，仅补规范说明）
+1. **优先级中**：Phase 4 模板文件（影响实际业务，迁移脚本需补充 `templates` 变体）+ Phase 2 已完成
+2. **优先级低**：Phase 3 数据分析（单文件改造）+ Phase 5 渠道（建议豁免，仅补规范说明）
+3. **待立项**：Phase 7 租户迁移工具 `tenant_migration.py` + `scripts/tenant_migrate_kb.py` 的 target_storage 改造（涉及 file_path 字段重新构造，工程量大）
 
 ## 相关文档
 

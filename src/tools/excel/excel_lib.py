@@ -59,28 +59,13 @@ def resolve_font_name(name: str) -> str:
 
 
 def _resolve_path_via_redis(file_id: str) -> Optional[str]:
-    """通过 Redis uploaded_file:{file_id} 元数据查磁盘路径
+    """[已废弃] 薄包装，调用 src.core.storage.resolve_path_via_redis
 
-    file_id 上传时（cp/upload/subagent_template_file）写了永久元数据，
-    path 字段是绝对路径，直接命中最可靠，不依赖目录扫描。
-
-    Redis 不可用或 key 不存在时返回 None，调用方走目录扫描兜底。
+    保留是为了向后兼容（test 直接从此模块导入 _resolve_path_via_redis）。
+    新代码请直接 from src.core.storage import resolve_path_via_redis。
     """
-    if not file_id or not file_id.startswith("file_"):
-        return None
-    try:
-        from src.core.redis_client import redis_client
-        key = redis_client.make_key("uploaded_file", file_id)
-        info = redis_client.hgetall(key)
-        if not info:
-            return None
-        path = info.get("path")
-        if path and Path(path).exists():
-            return str(Path(path).absolute())
-        return None
-    except Exception as e:
-        logger.warning(f"[ExcelFileHandler] Redis 元数据查询失败: {e}")
-        return None
+    from src.core.storage import resolve_path_via_redis
+    return resolve_path_via_redis(file_id)
 
 
 def parse_color(color_str: str) -> Optional[str]:

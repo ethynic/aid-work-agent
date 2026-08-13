@@ -19,6 +19,10 @@
 """
 
 import os
+from pathlib import Path
+from typing import Optional
+
+from loguru import logger
 
 
 # 仓库根目录下的统一存储根
@@ -80,3 +84,38 @@ def get_tenant_storage_abs_path(tenant_id: str, scene: str, filename: str) -> st
     """
     rel = get_tenant_storage_path(tenant_id, scene, filename)
     return os.path.abspath(rel)
+
+
+def resolve_path_via_redis(file_id: str) -> Optional[str]:
+    """通过 Redis uploaded_file:{file_id} 元数据查磁盘路径
+
+    Agent 传给工具的 file_paths 经常是 file_id（如 file_e300d0d5befc），
+    而不是磁盘路径。file_id 上传时（cp/upload/subagent_template_file）
+    在 Redis `uploaded_file:{file_id}` 写了永久元数据，path 字段是绝对路径，
+    直接命中最可靠，不依赖目录扫描。
+
+    Args:
+        file_id: 文件 ID，形如 `file_xxxxxxxxxxx`
+
+    Returns:
+        命中且文件存在 -> 返回绝对路径字符串；否则返回 None，调用方走目录扫描兜底。
+
+    Note:
+        Redis 不可用或 key 不存在时返回 None，不抛异常（降级到目录扫描）。
+        仅 `file_` 前缀的 ID 才查 Redis，其他直接返回 None。
+    """
+    if not file_id or not file_id.startswith("file_"):
+        return None
+    try:
+        from src.core.redis_client import redis_client
+        key = redis_client.make_key("uploaded_file", file_id)
+        info = redis_client.hgetall(key)
+        if not info:
+            return None
+        path = info.get("path")
+        if path and Path(path).exists():
+            return str(Path(path).absolute())
+        return None
+    except Exception as e:
+        logger.warning(f"[storage] Redis 元数据查询失败: {e}")
+        return None
