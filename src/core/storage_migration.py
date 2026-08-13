@@ -112,6 +112,7 @@ def _resolve_new_path(
         storage/uploads/{tid}/knowledge/{file}              -> storage/tenants/{tid}/knowledge/{file}
         storage/uploads/{tid}/data_sources/{file}           -> storage/tenants/{tid}/data_sources/{file}
         storage/uploads/_global/data_sources/{file}         -> storage/tenants/_anonymous/data_sources/{file}
+        storage/uploads/{tid}/templates/{file}              -> storage/tenants/{tid}/templates/{file}
         storage/uploads/dingtalk/、wecom_kf/                -> None（跳过）
         其他                                                -> None（跳过 + warning）
     """
@@ -173,6 +174,10 @@ def _resolve_new_path(
         if top == "_global":
             return tenants_root / "_anonymous" / "data_sources" / Path(*parts[2:])
         return tenants_root / top / "data_sources" / Path(*parts[2:])
+
+    # {tid}/templates/{file} -> templates（子智能体模板文件，tid 不带 tenant_ 前缀）
+    if len(parts) >= 2 and parts[1] == "templates":
+        return tenants_root / top / "templates" / Path(*parts[2:])
 
     # 其他无法识别
     logger.warning(

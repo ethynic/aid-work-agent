@@ -117,23 +117,27 @@
 
 ---
 
-### Phase 4：子智能体模板文件（templates）🔧 未开始
+### Phase 4：子智能体模板文件（templates）✅ 已完成
 
 **改造范围**：`/t/{tenant}/agent/{subagent}/prompt` 页面"模版文件"上传路径。
 
-**待改文件**：
-- `src/api/subagent_template_file.py:40,45-46,175-176` - `_templates_dir` 从 `UPLOAD_DIR / tenant_id / "templates"` 改为 `storage/tenants/{tenant}/templates/`
+**改动文件**：
+- `src/api/subagent_template_file.py:39-48` - `_templates_dir` 从 `UPLOAD_DIR / tenant_id / "templates"` 改为 `Path(ensure_tenant_storage_dir(tenant_id, "templates")).absolute()`
+- `src/api/subagent_template_file.py:172-177` - `delete_template` 删除逻辑复用 `_templates_dir`（原 `UPLOAD_DIR / tenant_id / "templates"`）
+- `src/core/storage_migration.py:115` - docstring 补充 templates 迁移规则
+- `src/core/storage_migration.py:179-181` - `_resolve_new_path` 新增 `{tid}/templates/{file}` -> `storage/tenants/{tid}/templates/{file}` 变体
+- `tests/unit/api/test_subagent_template_file.py` - `test_delete_existing` mock 改 `_templates_dir`；新增 `TestTemplatesDir` 路径断言
+- `tests/unit/test_storage_migration.py` - 新增 `test_bare_tenant_templates`
 
 **关键点**：
-- 模板文件是永久存储（Redis 元数据不 expire），迁移后必须同步更新 Redis path 字段
+- 模板文件是永久存储（Redis 元数据不 expire），迁移脚本通过 path 反向索引同步更新 Redis path 字段
 - `ExcelFileHandler.resolve_path` 已支持 `storage/uploads/{tenant}/templates/` 兜底（Phase 1 修复时加的），改造后读取侧自动跟随
-- `subagent_template_file.py:175-176` 删除逻辑用 `glob(f"{file_id}*")` 扫旧目录，需同步改新目录
 
-**迁移规则补充**：`storage/uploads/{tenant}/templates/{file}` -> `storage/tenants/{tenant}/templates/{file}`（迁移脚本需新增此变体）
+**测试**：`test_subagent_template_file.py` + `test_storage_migration.py` 共 36 passed；import 检查 OK
 
 ---
 
-### Phase 5：渠道媒体文件（dingtalk/feishu/wecom/wecom_kf）🔧 未开始
+### Phase 5：渠道媒体文件（dingtalk/feishu/wecom/wecom_kf）⏸ 搁置（有疑问待讨论）
 
 **改造范围**：渠道消息媒体文件（图片/语音/视频）持久化路径。
 
@@ -193,16 +197,15 @@
 | excel_process file_id 修复 | ✅ 已完成（待提交） | - |
 | Phase 2 知识库 | ✅ 已完成 | `ebca7d3` |
 | Phase 3 数据分析 | ✅ 已完成（待提交） | - |
-| Phase 4 模板文件 | 🔧 未开始 | - |
-| Phase 5 渠道媒体 | 🔧 未开始（建议豁免） | - |
+| Phase 4 模板文件 | ✅ 已完成（待提交） | - |
+| Phase 5 渠道媒体 | ⏸ 搁置（有疑问待讨论） | - |
 | Phase 6 word 同步 + 收尾 | ✅ 已完成（待提交） | - |
 | Phase 7 租户迁移工具 target_storage 改造 | 🔧 待立项（Phase 6 评估剥离） | - |
 
 ## 下次继续的入口
 
-1. **优先级中**：Phase 4 模板文件（影响实际业务，迁移脚本需补充 `templates` 变体）
-2. **优先级低**：Phase 5 渠道（建议豁免，仅补规范说明）
-3. **待立项**：Phase 7 租户迁移工具 `tenant_migration.py` + `scripts/tenant_migrate_kb.py` 的 target_storage 改造（涉及 file_path 字段重新构造，工程量大）
+1. **需讨论**：Phase 5 渠道媒体文件（用户提出疑问，暂搁置，待澄清后决定选项 A/B）
+2. **待立项**：Phase 7 租户迁移工具 `tenant_migration.py` + `scripts/tenant_migrate_kb.py` 的 target_storage 改造（涉及 file_path 字段重新构造，工程量大）
 
 ## 相关文档
 

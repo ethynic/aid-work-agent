@@ -138,7 +138,7 @@ class TestDeleteTemplate:
             {"name": "B", "file_id": "file_2"},
         ]
         with patch.object(api_module, "get_current_tenant_id", return_value="t1"), \
-             patch("src.main.UPLOAD_DIR", tmp_path), \
+             patch.object(api_module, "_templates_dir", return_value=tmp_path), \
              patch.object(api_module, "redis_client") as mock_redis, \
              patch.object(api_module.SubagentTemplateFileDB, "get", return_value=existing), \
              patch.object(api_module.SubagentTemplateFileDB, "set", return_value=True) as mock_set:
@@ -169,3 +169,17 @@ class TestDeleteTemplate:
             with pytest.raises(HTTPException) as exc:
                 await api_module.delete_template("agent_x", "file_1", request_admin={})
         assert exc.value.status_code == 400
+
+
+class TestTemplatesDir:
+    """_templates_dir 路径规范：storage/tenants/{tenant_id}/templates/"""
+
+    def test_uses_tenant_storage(self):
+        """模板文件落盘目录改为 storage/tenants/{tenant_id}/templates/（新规范）"""
+        with patch(
+            "src.core.storage.ensure_tenant_storage_dir",
+            return_value="/abs/storage/tenants/t1/templates",
+        ) as mock_ensure:
+            d = api_module._templates_dir("t1")
+        mock_ensure.assert_called_once_with("t1", "templates")
+        assert str(d) == "/abs/storage/tenants/t1/templates"

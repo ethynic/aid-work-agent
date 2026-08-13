@@ -92,6 +92,20 @@ class TestResolveNewPath:
         new = _resolve_new_path(old, uploads, tenants)
         assert new == tenants / "_anonymous" / "data_sources" / "file_def.csv"
 
+    def test_bare_tenant_templates(self, tmp_path):
+        """storage/uploads/{tid}/templates/{file} -> storage/tenants/{tid}/templates/{file}
+
+        Phase 4 子智能体模板文件，tid 不带 tenant_ 前缀。
+        """
+        uploads = tmp_path / "storage" / "uploads"
+        tenants = tmp_path / "storage" / "tenants"
+        old = uploads / "1dc997a1806b" / "templates" / "file_abc.docx"
+        old.parent.mkdir(parents=True)
+        old.write_text("x")
+
+        new = _resolve_new_path(old, uploads, tenants)
+        assert new == tenants / "1dc997a1806b" / "templates" / "file_abc.docx"
+
     def test_tenant_user(self, tmp_path):
         """storage/uploads/tenant_{tid}/user_{uid}/{file} -> conversation"""
         uploads = tmp_path / "storage" / "uploads"

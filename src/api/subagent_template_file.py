@@ -37,15 +37,13 @@ _ALLOWED_EXTS: dict = {
 
 
 def _templates_dir(tenant_id: str) -> Path:
-    """模板文件落盘目录：UPLOAD_DIR/{tenant_id}/templates/
+    """模板文件落盘目录：storage/tenants/{tenant_id}/templates/（新规范）
 
-    延迟 import UPLOAD_DIR 以避免与 src.main 的循环导入；
-    置于 UPLOAD_DIR 树下，使 /api/files/{file_id}/download 的兜底扫描可覆盖（双保险）。
+    统一走 ensure_tenant_storage_dir，符合租户附件存储规范；
+    Redis 元数据存绝对路径，供 /api/files/{file_id}/download 与文档工具读取。
     """
-    from src.main import UPLOAD_DIR
-    d = UPLOAD_DIR / tenant_id / "templates"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
+    from src.core.storage import ensure_tenant_storage_dir
+    return Path(ensure_tenant_storage_dir(tenant_id, "templates")).absolute()
 
 
 def _persist_file_meta(file_id: str, name: str, path: Path, size: int, mime_type: str) -> None:
@@ -172,8 +170,7 @@ async def delete_template(
 
     # 删磁盘文件（按 file_id 前缀 glob，避免依赖 ext 反推）
     try:
-        from src.main import UPLOAD_DIR
-        for p in (UPLOAD_DIR / tenant_id / "templates").glob(f"{file_id}*"):
+        for p in _templates_dir(tenant_id).glob(f"{file_id}*"):
             p.unlink(missing_ok=True)
     except Exception as e:
         logger.warning(f"删除模板磁盘文件失败 file_id={file_id}: {e}")
