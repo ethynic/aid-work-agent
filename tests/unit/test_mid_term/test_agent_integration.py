@@ -80,7 +80,7 @@ def test_build_messages_injects_active_summary(monkeypatch):
         "src.memory.mid_term.get_compression_service", lambda: fake_cs
     )
 
-    messages = agent._build_messages("sess_x")
+    messages, _ = agent._build_messages("sess_x")
 
     # 验证：第一条是摘要 user，第二条是占位 assistant，之后是 real history
     assert "之前对话摘要" in messages[0]["content"]
@@ -114,7 +114,7 @@ def test_build_messages_no_summary_passthrough(monkeypatch):
         "src.memory.mid_term.get_compression_service", lambda: fake_cs
     )
 
-    messages = agent._build_messages("sess_y")
+    messages, _ = agent._build_messages("sess_y")
     # 不应有摘要 user（[📋 之前对话摘要]）
     assert all("之前对话摘要" not in (m.get("content") or "") for m in messages)
 
@@ -141,5 +141,5 @@ def test_build_messages_exception_does_not_crash(monkeypatch):
     )
 
     # 不抛异常即可
-    messages = agent._build_messages("sess_z")
+    messages, _ = agent._build_messages("sess_z")
     assert isinstance(messages, list)

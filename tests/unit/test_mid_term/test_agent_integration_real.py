@@ -120,7 +120,7 @@ def test_build_messages_real_code_injects_summary_with_correct_prefix():
     )
 
     try:
-        messages = agent._build_messages("sess")
+        messages, _ = agent._build_messages("sess")
         # 注入的 user 消息前缀必须严格匹配设计 §3.5
         assert messages[0]["role"] == "user"
         assert messages[0]["content"].startswith("[📋 之前对话摘要]")
@@ -156,7 +156,7 @@ def test_build_messages_real_code_no_summary_returns_original_history():
     mp.setattr("src.memory.mid_term.get_compression_service", lambda: fake_cs)
 
     try:
-        messages = agent._build_messages("sess")
+        messages, _ = agent._build_messages("sess")
         # 不应有「之前对话摘要」
         assert all(
             "之前对话摘要" not in (m.get("content") or "") for m in messages

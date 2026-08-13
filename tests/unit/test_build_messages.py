@@ -101,11 +101,12 @@ class TestReorderMessages:
         assert ok, msg
         assert [m["role"] for m in out] == ["user", "assistant", "tool", "assistant"]
 
-    def test_system_converted_to_user_and_empty_skipped(self):
-        """system 转 user；空 content 的 user/assistant 跳过。
+    def test_system_skipped_and_empty_skipped(self):
+        """system 消息跳过（不再转 user）；空 content 的 user/assistant 跳过。
 
-        P0-2 修复兜底方向后：第一阶段转换产生 [user(你是助手), user(你好)] 连续 user，
-        兜底丢弃较早的，只保留最新一条 user(你好)。
+        system 标记消息（如转人工标记 transfer_to_human_marker）由 _build_messages
+        提取到 system_markers 并拼接到 system_prompt，不进入对话序列。此处直接调
+        _reorder_messages_for_llm 时，system 消息应被跳过，避免转成 user 形成连续 user。
         """
         history = [
             {"role": "system", "content": "你是助手"},
@@ -115,8 +116,26 @@ class TestReorderMessages:
         ]
         out = Agent._reorder_messages_for_llm(history)
         roles = [(m["role"], m["content"]) for m in out]
-        # P0-2 兜底保留最新一条 user（丢弃较早的 "你是助手"）
         assert roles == [("user", "你好")]
+        # system 消息不应以任何角色残留
+        assert all(m["content"] != "你是助手" for m in out)
+
+    def test_system_between_assistant_and_user_skipped(self):
+        """system 夹在 assistant 和 user 之间（转人工标记真实场景）→ 跳过，不产生连续 user。
+
+        复现生产告警：assistant(房型价格) → system([已转人工]...) → user(帮我预定...)。
+        若 system 转 user，会与后面的 user 形成连续 user，触发清洗并丢弃标记。
+        """
+        history = [
+            {"role": "user", "content": "查房型"},
+            {"role": "assistant", "content": "酒店房型价格"},
+            {"role": "system", "content": "[已转人工] 该次请求已处理完成。"},
+            {"role": "user", "content": "帮我预定"},
+        ]
+        out = Agent._reorder_messages_for_llm(history)
+        roles = [m["role"] for m in out]
+        assert roles == ["user", "assistant", "user"], f"system 应被跳过，实际 {roles}"
+        assert all(m["content"] != "[已转人工] 该次请求已处理完成。" for m in out)
 
     def test_reasoning_content_preserved(self):
         """DeepSeek 思考模式的 reasoning_content 在 assistant 消息上保留。"""

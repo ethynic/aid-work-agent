@@ -18,7 +18,7 @@ import re
 import time
 import uuid
 from pathlib import Path
-from typing import Optional, List, Dict, Any, AsyncGenerator, Callable, Coroutine, Any
+from typing import Optional, List, Dict, Any, AsyncGenerator, Callable, Coroutine, Tuple
 from loguru import logger
 
 from enum import Enum
@@ -1661,15 +1661,21 @@ class Agent:
     def _build_messages(
         self,
         session_id: str
-    ) -> List[Dict[str, Any]]:
+    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         """
         Build message list for LLM from memory.
+
+        返回 (messages, system_markers)：
+        - messages：对话消息序列（不含 system 消息）
+        - system_markers：历史中 role=system 的标记消息（如转人工标记），由上层拼接到
+          system_prompt 注入 LLM
 
         健壮性保障（输出无论 DB 返回顺序如何都满足 LLM API 约束）：
         1. 跳过空 content 的 user/assistant 消息（防止空 user 导致 API 报错）
         2. 每条 assistant(tool_calls) 后「立即、连续」跟随其匹配的 tool 结果（按 tool_calls
            声明顺序）；无任何匹配结果的 tool_calls 被丢弃，assistant 降级为普通内容
-        3. system 消息转为 user 消息（部分 LLM API 不允许在对话序列中插入 system）
+        3. system 消息从对话序列中提取（部分 LLM API 不允许在对话序列中插入 system），
+           不再转成 user（转成 user 会与其后的真实 user 形成连续 user，被清洗丢弃）
         4. 孤立的 tool 消息（无对应 assistant(tool_calls)）一律跳过
         背景：单事务批量写入会让同轮消息 created_at 相同，若查询缺二级排序键，返回顺序会
         错乱；这里按 tool_call_id 重新配对重建合法序列，不依赖 DB 返回顺序。
@@ -1702,6 +1708,14 @@ class Agent:
         except Exception as e:
             logger.warning(f"读取 active summary 失败, sid={session_id}: {e}")
 
+        # 提取 role=system 的历史标记消息（如转人工标记 transfer_to_human_marker），
+        # 从对话序列中移除，改由上层拼接到 system_prompt 注入 LLM。
+        # 不能转成 user 放进对话序列：会与其后的真实 user 形成连续 user，
+        # 触发 _reorder_messages_for_llm 的连续-user 清洗，既产生告警又使标记失效。
+        system_markers = [m for m in history if m.get("role") == "system"]
+        if system_markers:
+            history = [m for m in history if m.get("role") != "system"]
+
         messages = self._reorder_messages_for_llm(history)
 
         result_roles = []
@@ -1715,7 +1729,7 @@ class Agent:
             result_roles.append(f"{role}:{content}")
         logger.debug(f"_build_messages result: session_id={session_id}, count={len(messages)}, msgs={result_roles}")
 
-        return messages
+        return messages, system_markers
 
     @staticmethod
     def _reorder_messages_for_llm(history: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -1788,9 +1802,13 @@ class Agent:
                     if msg.get("reasoning_content"):
                         asst_msg["reasoning_content"] = msg["reasoning_content"]
                     messages.append(asst_msg)
+            elif role == "system":
+                # system 标记消息已在上层 _build_messages 提取并拼接到 system_prompt，
+                # 此处不应再出现在对话序列中；转成 user 会与其后的真实 user 形成连续
+                # user，被清洗丢弃且污染对话语义。直接跳过。
+                continue
             else:
-                # system 消息转为 user 消息（LLM API 不允许对话序列中插入 system）
-                # 跳过空 content 的消息
+                # user 消息（含未知角色兜底），跳过空 content
                 if content:
                     messages.append({"role": "user", "content": content})
 
@@ -2578,8 +2596,11 @@ class Agent:
         # 检测用户"记住"意图，写入长期记忆
         await self._handle_remember_intent(user_input, user)
 
-        messages = self._build_messages(session_id)
+        messages, system_markers = self._build_messages(session_id)
         system_prompt = self._build_system_prompt(user, extra_system_prompt=extra_system_prompt)
+        if system_markers:
+            marker_text = "\n".join(m.get("content", "") for m in system_markers)
+            system_prompt = system_prompt + "\n\n" + marker_text
 
         # 视频创作参数注入上下文（video-agent 前端工具栏选择）。
         # 让 LLM 在对话轮次直接看到用户已确定的参数，避免重复询问时长/比例/模式。

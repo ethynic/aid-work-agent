@@ -35,7 +35,7 @@ def test_injected_user_content_contains_full_summary(monkeypatch):
     fake_cs.get_active_summary.return_value = special_summary
     monkeypatch.setattr("src.memory.mid_term.get_compression_service", lambda: fake_cs)
 
-    messages = agent._build_messages("sess")
+    messages, _ = agent._build_messages("sess")
     # 第一条是 user，内容必须完整包含摘要原文
     assert messages[0]["role"] == "user"
     assert special_summary in messages[0]["content"]
@@ -63,7 +63,7 @@ def test_mid_term_disabled_skips_compression_service(monkeypatch):
 
     monkeypatch.setattr("src.memory.mid_term.get_compression_service", _should_not_be_called)
 
-    messages = agent._build_messages("sess")
+    messages, _ = agent._build_messages("sess")
     assert called["n"] == 0, "mid_term 禁用时不应该调 get_compression_service"
     assert all("之前对话摘要" not in (m.get("content") or "") for m in messages)
 
@@ -88,7 +88,7 @@ def test_injection_prepend_count(monkeypatch):
     fake_cs.get_active_summary.return_value = "summary text"
     monkeypatch.setattr("src.memory.mid_term.get_compression_service", lambda: fake_cs)
 
-    messages = agent._build_messages("sess")
+    messages, _ = agent._build_messages("sess")
     # 注入 2 条 + reorder 后空内容 user 被过滤；至少包含原 3 条 + 注入 2 条 = 5
     # reorder 可能合并连续 user，所以这里只检查 messages[0] 和 messages[1] 是注入对
     assert messages[0]["content"].startswith("[📋 之前对话摘要]")
@@ -112,7 +112,7 @@ def test_summary_with_only_whitespace_not_injected(monkeypatch):
     fake_cs.get_active_summary.return_value = "   \n  "  # 仅空白
     monkeypatch.setattr("src.memory.mid_term.get_compression_service", lambda: fake_cs)
 
-    messages = agent._build_messages("sess")
+    messages, _ = agent._build_messages("sess")
     # 现状：空白字符串是 truthy，会被注入（记录这个边界行为）
     # 如果未来加了 strip()，这里应该改成 assert not injected
     assert any("之前对话摘要" in (m.get("content") or "") for m in messages), \
