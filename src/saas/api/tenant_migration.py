@@ -116,8 +116,9 @@ def _get_target_db() -> str:
 
 
 def _get_target_storage() -> str:
+    """目标存储根路径（新规范 `storage/tenants`）"""
     try:
-        from src.config.settings import settings
-        return str(settings.storage.uploads_dir) if hasattr(settings, 'storage') else "storage/uploads"
+        from src.core.storage import get_tenants_storage_root
+        return get_tenants_storage_root()
     except Exception:
-        return "storage/uploads"
+        return os.path.join("storage", "tenants")

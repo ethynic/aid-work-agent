@@ -30,6 +30,15 @@ _STORAGE_ROOT = "storage"
 _TENANTS_ROOT = os.path.join(_STORAGE_ROOT, "tenants")
 
 
+def get_tenants_storage_root() -> str:
+    """获取租户存储根目录（`storage/tenants`，相对路径）。
+
+    供租户数据迁移工具等需要引用租户存储根的调用方使用，
+    避免在业务代码中硬编码 `storage/tenants` 路径字符串。
+    """
+    return _TENANTS_ROOT
+
+
 def get_tenant_storage_dir(tenant_id: str, scene: str) -> str:
     """获取租户某场景的目录路径（相对路径，不保证存在）。
 

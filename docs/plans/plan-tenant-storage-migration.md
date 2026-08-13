@@ -194,6 +194,36 @@
 
 ---
 
+### Phase 7：租户迁移工具 target_storage 改造 ✅ 已完成
+
+**改造范围**：租户数据迁移工具（`tenant_migration.py` + `tenant_migrate_kb.py`）的目标存储路径从旧规范 `storage/uploads` 改为新规范 `storage/tenants/{tenant}/knowledge/`。
+
+**改动文件**：
+- `src/core/storage.py` - **新增** `get_tenants_storage_root()` 函数，返回 `storage/tenants` 根路径（避免业务代码硬编码路径）
+- `src/saas/api/tenant_migration.py` - `_get_target_storage()` 从 `settings.storage.uploads_dir`（旧路径）改为返回 `get_tenants_storage_root()`（新路径）
+- `scripts/tenant_migrate_kb.py`
+  - 新增 `_build_target_knowledge_path(target_tenant, src_path, target_storage)` helper，返回 `(tgt_rel, full_tgt)`，目标路径统一为 `storage/tenants/{target_tenant}/knowledge/{basename}`
+  - `_migrate_kb()` 文件复制逻辑：从 `src_path.replace(source_tenant, target_tenant)`（保留旧目录结构）改为调用 helper，`documents.file_path` 存相对路径 `tgt_rel`（与知识库 API 存储格式一致）
+  - `run_migration()` 的 `target_storage` 默认值从 `settings.storage.uploads_dir` 改为 `get_tenants_storage_root()`
+- `tests/unit/test_tenant_migrate_kb_target_storage.py` - **新建**，6 个测试
+
+**关键点**：
+- 知识库文档属于 `knowledge` 场景，迁移后目标文件统一落到 `storage/tenants/{target_tenant}/knowledge/` 单层目录，`file_path` 存相对路径
+- 文件 basename 天然唯一（知识库上传命名 `{file_id}{ext}`，file_id 是 uuid），无需处理同名冲突
+- 源文件路径读取逻辑（`source_storage` 兼容 `storage/` 前缀）保持不变，旧/新规范源库均可读
+
+**顺手修复既有 P1 bug**（与 Phase 7 目标直接相关）：
+- `_migrate_kb` 原 `doc_id_to_uuid = {d["id"]: d.get("uuid") for d in source_docs}` 存原始 uuid（可能为 None），当源文档 uuid 为空时：插入阶段与 chunk 关联 / file_path 更新阶段各生成不同随机 uuid，导致 chunk 丢失 + file_path 更新被跳过（残留旧路径）
+- 修复：在插入循环里统一构建 `doc_id_to_uuid[d["id"]] = doc_uuid`（含随机 fallback），chunk 关联与 file_path 更新复用同一映射，三处对齐
+
+**测试**：`tests/unit/test_tenant_migrate_kb_target_storage.py` 6 passed；回归 `test_tenant_storage_paths.py` + `test_storage_migration.py` 54 passed
+
+**三智能体流程**：
+- 测试智能体：新功能 6 + 回归 48 全绿，启动安全检查（3 个 import）OK；无需要修复的问题
+- CodeReview 智能体：修复 1 个 P1（uuid 空值既有 bug，见上）；2 个 P2/nit REPORTED-ONLY（basename 冲突理论风险依赖唯一命名约定可后续处理、`_get_target_storage` except 兜底硬编码合理）；可安全提交
+
+---
+
 ## 当前状态总览
 
 | 阶段 | 状态 | 提交 commit |
@@ -206,11 +236,11 @@
 | Phase 4 模板文件 | ✅ 已完成 | `d17d657` |
 | Phase 5 渠道媒体 | ✅ 已完成 | 待提交 |
 | Phase 6 word 同步 + 收尾 | ✅ 已完成 | `78a0a79` |
-| Phase 7 租户迁移工具 target_storage 改造 | 🔧 待立项（Phase 6 评估剥离） | - |
+| Phase 7 租户迁移工具 target_storage 改造 | ✅ 已完成 | 待提交 |
 
 ## 下次继续的入口
 
-1. **待立项**：Phase 7 租户迁移工具 `tenant_migration.py` + `scripts/tenant_migrate_kb.py` 的 target_storage 改造（涉及 file_path 字段重新构造，工程量大）
+1. 全项目「租户附件存储路径规范改造」已全部完成（Phase 1~7），无待办项。
 
 ## 相关文档
 
