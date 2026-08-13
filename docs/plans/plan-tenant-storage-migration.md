@@ -75,20 +75,26 @@
 
 ---
 
-### Phase 2：知识库场景（knowledge）🔧 未开始
+### Phase 2：知识库场景（knowledge）✅ 已完成
 
 **改造范围**：知识库文档上传/存储路径。
 
-**待改文件**：
-- `src/knowledge/service.py:33,38,207,217` - `base_upload_path = Path(settings.storage.uploads_dir)`，路径 `storage/uploads/{tenant_id}/knowledge/` 改为 `storage/tenants/{tenant_id}/knowledge/`
-- `src/api/travel_quote.py:51` - `upload_dir = Path(settings.storage.uploads_dir) / tenant_id / "knowledge"` 同步改造
+**改动文件**：
+- `src/knowledge/service.py` - `KnowledgeBaseService.__init__` 删除 `base_upload_path` 字段及 `knowledge_upload_path` 自定义死代码分支；`_get_upload_path` 整体改用 `ensure_tenant_storage_dir(tid, "knowledge")`，无租户走 `_anonymous`
+- `src/api/travel_quote.py:45-62` - `_save_upload_to_storage` 从 `Path(settings.storage.uploads_dir) / tenant_id / "knowledge"` 改为 `Path(ensure_tenant_storage_dir(tenant_id, "knowledge"))`
+- `tests/unit/test_tenant_storage_paths.py` - 末尾新增 `TestKnowledgeUploadPath` 测试类（5 个测试）
+- `docs/system/file_usage.md:235` - 清理 `knowledge_upload_path` 文档残留
 
 **关键点**：
-- 知识库文件量大，迁移脚本需考虑性能（可能数千个文件）
-- 向量库元数据（chunks 表）可能引用旧路径，需同步更新 `documents.file_path` 字段
-- `resolve_path` 已支持 `storage/tenants/{tenant}/knowledge/` 兜底，读取侧无需改
+- 知识库文件量大，迁移脚本（一次性迁移模块）已支持 `tenant_{tid}/knowledge/{file}` -> `tenants/{tid}/knowledge/{file}`，Phase 2 无需扩展
+- 向量库元数据（`documents.file_path`）未触碰，旧记录的 `file_path` 失效由 `delete_document` 的 `os.path.exists` 静默兜底，业务无影响；Phase 6 收尾时统一处理
+- `ExcelFileHandler.resolve_path` 已在 Phase 1 加过 `storage/tenants/{tenant}/knowledge/` 兜底，读取侧无需改
 
-**迁移规则补充**：`storage/uploads/{tenant}/knowledge/{file}` -> `storage/tenants/{tenant}/knowledge/{file}`（已在迁移脚本中支持）
+**测试**：`tests/unit/test_tenant_storage_paths.py` 全套 24 passed（19 原有 + 5 新增）
+
+**三智能体流程**：
+- 测试智能体：新功能 24 passed，unit 回归全绿，启动安全检查 OK；集成测试 `test_knowledge_endpoints.py` 4 failed + 3 errors 为预先存在的 `total_chunks` vs `total_chunk` DB schema 问题，与 Phase 2 无关
+- CodeReview 智能体：无 P0/P1 问题，可安全提交
 
 ---
 
@@ -165,7 +171,7 @@
 | Phase 1 | ✅ 已完成 | `5a8d4fa` |
 | 一次性迁移模块 | ✅ 已完成 | `5a8d4fa` |
 | excel_process file_id 修复 | ✅ 已完成（待提交） | - |
-| Phase 2 知识库 | 🔧 未开始 | - |
+| Phase 2 知识库 | ✅ 已完成 | - |
 | Phase 3 数据分析 | 🔧 未开始 | - |
 | Phase 4 模板文件 | 🔧 未开始 | - |
 | Phase 5 渠道媒体 | 🔧 未开始（建议豁免） | - |

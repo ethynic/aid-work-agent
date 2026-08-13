@@ -45,11 +45,10 @@ def _get_tenant_id(request: Request) -> str:
 def _save_upload_to_storage(content: bytes, filename: str, tenant_id: str) -> str:
     """保存上传文件到 storage 目录，返回相对路径（storage/...）"""
     from pathlib import Path
-    from src.config.settings import settings
+    from src.core.storage import ensure_tenant_storage_dir
     import uuid
 
-    upload_dir = Path(settings.storage.uploads_dir) / tenant_id / "knowledge"
-    upload_dir.mkdir(parents=True, exist_ok=True)
+    upload_dir = Path(ensure_tenant_storage_dir(tenant_id, "knowledge"))
 
     ext = Path(filename).suffix.lower()
     file_id = f"kb_{uuid.uuid4().hex[:12]}"

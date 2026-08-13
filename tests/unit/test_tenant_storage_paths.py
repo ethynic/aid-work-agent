@@ -242,3 +242,60 @@ class TestResolvePathFallback:
         assert Path(result).resolve() != bait.resolve()
         # 返回路径不应真实存在（即没有读到任何文件）
         assert not Path(result).exists()
+
+
+# ============================================================
+# Phase 2: knowledge 场景上传路径
+# ============================================================
+
+
+class TestKnowledgeUploadPath:
+    """知识库文档上传路径：storage/tenants/{tenant}/knowledge/"""
+
+    def test_knowledge_service_with_tenant(self, isolated_tenants_root):
+        """有租户: storage/tenants/{tenant}/knowledge/"""
+        from src.knowledge.service import knowledge_service
+        result = knowledge_service._get_upload_path("tenant_kb")
+        assert result.name == "knowledge"
+        assert result.parent.name == "tenant_kb"
+        assert result.parent.parent.name == "tenants"
+        assert result.is_dir()  # 目录已被 ensure_tenant_storage_dir 创建
+
+    def test_knowledge_service_without_tenant(self, isolated_tenants_root):
+        """无租户: storage/tenants/_anonymous/knowledge/"""
+        from src.knowledge.service import knowledge_service
+        result = knowledge_service._get_upload_path(None)
+        assert result.name == "knowledge"
+        assert result.parent.name == "_anonymous"
+        assert result.is_dir()
+
+    def test_knowledge_service_empty_tenant(self, isolated_tenants_root):
+        """空字符串 tenant_id: 走 _anonymous 兜底"""
+        from src.knowledge.service import knowledge_service
+        result = knowledge_service._get_upload_path("")
+        assert result.parent.name == "_anonymous"
+
+    def test_travel_quote_save_upload(self, isolated_tenants_root):
+        """travel_quote._save_upload_to_storage 落到新路径"""
+        from src.api.travel_quote import _save_upload_to_storage
+        content = b"hello knowledge"
+        rel_path = _save_upload_to_storage(content, "report.md", "tenant_tq")
+        # 返回的是相对路径，校验路径结构
+        p = Path(rel_path)
+        assert p.parent.name == "knowledge"
+        assert p.parent.parent.name == "tenant_tq"
+        # 文件确实写入且内容一致
+        assert p.exists()
+        assert p.read_bytes() == content
+        # 文件名带 kb_ 前缀 + uuid12 + .md 后缀
+        assert p.name.startswith("kb_")
+        assert p.suffix == ".md"
+
+    def test_travel_quote_save_upload_creates_dir(self, isolated_tenants_root):
+        """目录不存在时自动创建"""
+        from src.api.travel_quote import _save_upload_to_storage
+        # 先确认目录不存在
+        tenants_root = Path(isolated_tenants_root) / "tenants"
+        assert not (tenants_root / "tenant_new" / "knowledge").exists()
+        _save_upload_to_storage(b"x", "f.txt", "tenant_new")
+        assert (tenants_root / "tenant_new" / "knowledge").is_dir()

@@ -29,15 +29,6 @@ class KnowledgeBaseService:
     def __init__(self):
         self.chunk_size = getattr(settings, 'knowledge_chunk_size', 512)
         self.chunk_overlap = getattr(settings, 'knowledge_chunk_overlap', 64)
-        # 知识库文档路径（保持向后兼容：如果配置了 knowledge_upload_path，使用自定义值）
-        # 新默认结构: storage/uploads/{tenant_id}/knowledge/
-        if hasattr(settings, 'knowledge_upload_path'):
-            self.base_upload_path = Path(getattr(settings, 'knowledge_upload_path'))
-        else:
-            # 默认使用统一存储根路径，_get_upload_path 会拼接 tenant_id/knowledge
-            self.base_upload_path = Path(settings.storage.uploads_dir)
-        self.base_upload_path.mkdir(parents=True, exist_ok=True)
-
         self.chunker = TextChunker(
             chunk_size=self.chunk_size,
             overlap=self.chunk_overlap
@@ -204,23 +195,12 @@ class KnowledgeBaseService:
 
     def _get_upload_path(self, tenant_id: Optional[str] = None) -> Path:
         """获取知识库文档上传路径
-        有租户: storage/uploads/{tenant_id}/knowledge/
-        无租户: storage/uploads/knowledge/
+        有租户: storage/tenants/{tenant_id}/knowledge/
+        无租户: storage/tenants/_anonymous/knowledge/
         """
-        if hasattr(settings, 'knowledge_upload_path'):
-            # 自定义路径模式：保持原有拼接逻辑
-            if tenant_id:
-                path = self.base_upload_path / tenant_id
-            else:
-                path = self.base_upload_path
-        else:
-            # 新默认结构：统一使用 storage/uploads
-            if tenant_id:
-                path = self.base_upload_path / tenant_id / "knowledge"
-            else:
-                path = self.base_upload_path / "knowledge"
-        path.mkdir(parents=True, exist_ok=True)
-        return path
+        from src.core.storage import ensure_tenant_storage_dir
+        tid = tenant_id or "_anonymous"
+        return Path(ensure_tenant_storage_dir(tid, "knowledge"))
 
     def _get_db_connection(self):
         """获取数据库连接（使用统一的数据库连接管理）"""
