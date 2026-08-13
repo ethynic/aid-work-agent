@@ -109,7 +109,31 @@
 
                   <!-- Tools Picker -->
                   <div>
-                    <label class="text-xs text-gray-500 mb-1 block">工具配置</label>
+                    <div class="flex items-center justify-between mb-1">
+                      <label class="text-xs text-gray-500">工具配置</label>
+                      <FullscreenPicker title="工具配置" :selected-count="additionalTools.length">
+                        <template #content>
+                          <div class="space-y-1.5">
+                            <label class="flex items-center gap-2 text-sm text-gray-600">
+                              <input type="checkbox" v-model="toolsInherit"
+                                class="w-4 h-4 rounded border-primary-200 text-primary-600 focus:ring-primary-500" />
+                              继承默认工具
+                            </label>
+                            <div v-if="!toolsInherit" class="space-y-1.5">
+                              <label v-for="tool in availableTools" :key="tool.id"
+                                class="flex items-center gap-3 px-3 py-2 text-sm bg-white rounded-lg border border-gray-200 hover:border-gray-300 cursor-pointer">
+                                <input type="checkbox"
+                                  class="w-4 h-4 rounded border-primary-200 text-primary-600 focus:ring-primary-500"
+                                  :checked="additionalTools.includes(tool.id)" @change="toggleTool(tool.id)" />
+                                <span class="font-medium text-gray-700">{{ tool.name }}</span>
+                                <span class="text-gray-400 truncate flex-1">{{ tool.description }}</span>
+                              </label>
+                              <div v-if="availableTools.length === 0" class="text-sm text-gray-400 py-2">加载中...</div>
+                            </div>
+                          </div>
+                        </template>
+                      </FullscreenPicker>
+                    </div>
                     <div class="bg-gray-50 rounded-lg p-2">
                       <label class="flex items-center gap-2 text-xs text-gray-600 mb-2">
                         <input type="checkbox" v-model="toolsInherit" />
@@ -130,7 +154,24 @@
 
                   <!-- Skills Picker -->
                   <div>
-                    <label class="text-xs text-gray-500 mb-1 block">技能配置</label>
+                    <div class="flex items-center justify-between mb-1">
+                      <label class="text-xs text-gray-500">技能配置</label>
+                      <FullscreenPicker title="技能配置" :selected-count="form.skills?.allowed?.length || 0">
+                        <template #content>
+                          <div class="space-y-1.5">
+                            <label v-for="skill in availableSkills" :key="skill.id"
+                              class="flex items-center gap-3 px-3 py-2 text-sm bg-white rounded-lg border border-gray-200 hover:border-gray-300 cursor-pointer">
+                              <input type="checkbox"
+                                class="w-4 h-4 rounded border-primary-200 text-primary-600 focus:ring-primary-500"
+                                :checked="form.skills?.allowed?.includes(skill.id)" @change="toggleSkill(skill.id)" />
+                              <span class="font-medium text-gray-700">{{ skill.name }}</span>
+                              <span class="text-gray-400 truncate flex-1">{{ skill.description }}</span>
+                            </label>
+                            <div v-if="availableSkills.length === 0" class="text-sm text-gray-400 py-2">加载中...</div>
+                          </div>
+                        </template>
+                      </FullscreenPicker>
+                    </div>
                     <div class="bg-gray-50 rounded-lg p-2 max-h-40 overflow-y-auto space-y-1">
                       <label v-for="skill in availableSkills" :key="skill.id"
                         class="flex items-center gap-2 px-2 py-1 text-xs bg-white rounded border border-gray-100 hover:border-gray-200 cursor-pointer">
@@ -450,6 +491,7 @@ import AppHeader from './AppHeader.vue'
 import PageMetaSelector from './PageMetaSelector.vue'
 import MyTextarea from './ui/MyTextarea.vue'
 import MenuIcon from './ui/MenuIcon.vue'
+import FullscreenPicker from './ui/FullscreenPicker.vue'
 import {
   listDefinitions, getDefinition, createDefinition,
   updateDefinition, deleteDefinition, updateSystemPrompt,
