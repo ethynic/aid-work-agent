@@ -3462,6 +3462,15 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
         for var_name in _injected_env_vars:
             os.environ.pop(var_name, None)
 
+        # 清理本次消息创建的技能工作目录（skill_ws_* 临时文件，避免逐月堆积）
+        if session_workspace is not None and session_workspace.exists():
+            try:
+                import shutil
+                shutil.rmtree(session_workspace, ignore_errors=True)
+                logger.debug(f"已清理会话工作目录: {session_workspace}")
+            except Exception as e:
+                logger.warning(f"后端日志：清理会话工作目录失败 {session_workspace}: {e}")
+
     async def continue_tool_call(
         self,
         *,

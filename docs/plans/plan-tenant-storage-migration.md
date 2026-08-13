@@ -224,6 +224,33 @@
 
 ---
 
+### Phase 8：tenants/ 下 tenant_ 前缀目录治理 🔧 待开发
+
+**背景**：2026-08-13 生产环境迁移检查发现 `storage/tenants/` 下存在带 `tenant_` 前缀的目录，与规范 `storage/tenants/{tid}/{scene}/` 不一致：
+
+| 带前缀目录 | 场景 | 正确位置 |
+|-----------|------|---------|
+| `tenants/tenant_ea24cd1a1097/skills` | 租户自定义 skills | `tenants/ea24cd1a1097/skills` |
+| `tenants/tenant_ea24cd1a1097/temp/skill_ws_...` | skill workspace 临时目录 | `tenants/ea24cd1a1097/temp/...` |
+| `tenants/tenant_c148f4efb4dc/templates` | 子智能体模板文件 | `tenants/c148f4efb4dc/templates` |
+| `tenants/tenant_128a10da9e2c`、`tenant_9342a90cbec9`、`tenant_e32fb6c2e00a` | skills/conversation | 去掉 `tenant_` 前缀 |
+
+**根因**：部分业务代码用带 `tenant_` 前缀的 tenant_id（如 `tenant_ea24cd1a1097`）调用 `ensure_tenant_storage_dir` 或直接拼路径，而规范要求 tenant_id 不带前缀（如 `ea24cd1a1097`）。涉及加载/写入路径的代码：
+- 租户自定义 skills 扫描：`src/core/agent.py`（`storage/tenants/{tenant_id}/skills/`）、`src/saas/services/skill_resolver.py`
+- skill workspace 临时目录：`skill_executor` 相关（`temp/skill_ws_{tenant_id}_{channel}_...` 命名）
+- 子智能体模板文件：`src/api/subagent_template_file.py`（Phase 4 改造后 `tenant_c148f4efb4dc/templates` 仍带前缀）
+
+**影响**：带前缀与不带前缀目录并存，租户自定义 skills 加载、模板文件读取可能因路径错位而失败（示例：`tenants/ea24cd1a1097/`（正确）有 knowledge/conversation，但无 skills；skills 实际落在带前缀目录）。
+
+**改造方向**：
+1. 排查所有传给 `ensure_tenant_storage_dir` / 路径拼接的 tenant_id 来源，统一去除 `tenant_` 前缀（`grep -rn "tenant_" src/` 定位拼接点，重点看 `agent.py` skills 加载、`skill_resolver.py`、`subagent_template_file.py`）
+2. 历史带前缀目录迁移：将 `tenants/tenant_{tid}/*` 下的 skills/templates/temp 文件搬到 `tenants/{tid}/{scene}/`（参考一次性迁移模块的幂等规则）
+3. 需确认 `skill_ws_{tenant_id}_...` 临时目录命名中的 tenant_id 是否也带前缀，统一修正
+
+**待办**：定位调用方 → 修正 tenant_id → 迁移历史目录 → 回归测试。
+
+---
+
 ## 当前状态总览
 
 | 阶段 | 状态 | 提交 commit |
@@ -237,10 +264,12 @@
 | Phase 5 渠道媒体 | ✅ 已完成 | 待提交 |
 | Phase 6 word 同步 + 收尾 | ✅ 已完成 | `78a0a79` |
 | Phase 7 租户迁移工具 target_storage 改造 | ✅ 已完成 | 待提交 |
+| Phase 8 tenants/ 下 tenant_ 前缀目录治理 | 🔧 待开发 | — |
 
 ## 下次继续的入口
 
-1. 全项目「租户附件存储路径规范改造」已全部完成（Phase 1~7），无待办项。
+1. **Phase 8**：治理 `storage/tenants/` 下带 `tenant_` 前缀目录（定位调用方 → 统一 tenant_id → 迁移历史目录），详见「Phase 8」小节。
+2. 补充 2026-08-13 生产服务器迁移核对记录（数据库 263 条 `file_path` 已更新为新路径、嵌套残留副本已清理），本次检查与修复过程可归档。
 
 ## 相关文档
 
