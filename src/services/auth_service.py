@@ -36,7 +36,11 @@ def authenticate_user(identifier: str, password: str, *,
     else:
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM users WHERE username = %s", (identifier,))
+            # 同 username 可能跨租户存在多条记录，需显式排序避免返回顺序不确定
+            cursor.execute(
+                "SELECT * FROM users WHERE username = %s ORDER BY created_at DESC LIMIT 1",
+                (identifier,),
+            )
             row = cursor.fetchone()
             if row:
                 user = dict(row)

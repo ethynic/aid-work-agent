@@ -216,13 +216,14 @@ def _ensure_config_admin(phone: str, role: str = "platform_admin") -> Optional[d
     if phone not in phones:
         return None
 
-    # 查找已有用户
     from src.db.models import UserDB
-    user = UserDB.get_by_phone(phone)
-    if user:
-        # 更新 role 为 platform_admin
-        UserDB.update(user["user_id"], role="platform_admin")
-        return user
+    # 平台管理员应全局唯一（按 phone）：优先复用已有的 platform_admin 记录
+    # （tenant_id 为空），避免把同 phone 的租户用户重复提升为 platform_admin
+    # 导致多条 platform_admin 记录、tenant_id 不为空等违反不变量的情况
+    if role == "platform_admin":
+        existing = UserDB.get_platform_admin_by_phone(phone)
+        if existing:
+            return existing
 
     # 平台管理员不需要 tenant_id
     tenant_id = None
@@ -384,7 +385,11 @@ async def password_login(http_request: Request, request: AdminPasswordLoginReque
         if not user:
             with get_db_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute("SELECT * FROM users WHERE username = %s", (identifier,))
+                # 同 username 可能跨租户存在多条记录，需显式排序避免返回顺序不确定
+                cursor.execute(
+                    "SELECT * FROM users WHERE username = %s ORDER BY created_at DESC LIMIT 1",
+                    (identifier,),
+                )
                 row = cursor.fetchone()
                 if row:
                     user = dict(row)
@@ -430,9 +435,14 @@ async def password_login(http_request: Request, request: AdminPasswordLoginReque
         qb_token_verified = _verify_qb_token(request.password)
 
         if phone_in_admin_list and qb_token_verified:   # 是平台管理员，且qb_token验证通过
-            # 确保 role 为 platform_admin
-            if user.get("role") != "platform_admin":
-                UserDB.update(user["user_id"], role="platform_admin")
+            # 优先复用已有的 platform_admin 记录（tenant_id 为空，符合不变量），
+            # 避免把同 phone 的租户用户重复提升为 platform_admin
+            pa = UserDB.get_platform_admin_by_phone(identifier)
+            if pa and pa["user_id"] != user["user_id"]:
+                user = pa
+            # 确保 role 为 platform_admin 且 tenant_id 为空（platform_admin 不变量）
+            elif user.get("role") != "platform_admin" or user.get("tenant_id") is not None:
+                UserDB.update(user["user_id"], role="platform_admin", tenant_id=None)
                 user = UserDB.get_by_id(user["user_id"])
             role = "platform_admin"
             qb_token_pass = True    # 条件满足，不用校验密码了

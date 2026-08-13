@@ -129,7 +129,12 @@ class UserDB:
         placeholder = "%s"
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(f"SELECT * FROM users WHERE phone = {placeholder}", (phone,))
+            # 同一 phone 可能存在多条记录（不同 tenant_id 的同号用户、历史重复创建的 platform_admin）
+            # 必须显式排序，否则 PostgreSQL 返回顺序不确定，导致不同 worker / 不同请求拿到不同用户
+            cursor.execute(
+                f"SELECT * FROM users WHERE phone = {placeholder} ORDER BY created_at DESC LIMIT 1",
+                (phone,),
+            )
             row = cursor.fetchone()
             user = dict(row) if row else None
             if user and not bypass_cache:
@@ -137,6 +142,25 @@ class UserDB:
                 safe_user = {k: v for k, v in user.items() if k != "password_hash"}
                 set_cached(CacheKeys.USER, f"phone:{phone}", value=safe_user, ttl=600)
             return user
+
+    @staticmethod
+    def get_platform_admin_by_phone(phone: str) -> Optional[Dict[str, Any]]:
+        """查找 phone 对应的 platform_admin 记录（tenant_id 为空，符合 platform_admin 不变量）
+
+        平台管理员应全局唯一（按 phone）：tenant_id 为空、role=platform_admin。
+        本方法用于登录/自动建号时避免重复创建/转换。
+        """
+        placeholder = "%s"
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                f"SELECT * FROM users WHERE phone = {placeholder} "
+                f"AND role = 'platform_admin' AND tenant_id IS NULL "
+                f"ORDER BY created_at DESC LIMIT 1",
+                (phone,),
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
 
     @staticmethod
     def get_by_phone_in_tenant(phone: str, tenant_id: str) -> Optional[Dict[str, Any]]:
@@ -204,6 +228,21 @@ class UserDB:
         ts = get_current_timestamp()
         values = list(updates.values()) + [user_id]
 
+        # phone 变更时需要清理按 phone 维度的缓存（user:phone:{phone}），
+        # 该 key 不在 invalidate_user_cache 默认清理范围（默认只清 user:{user_id}），
+        # 不清理会导致 get_by_phone 在缓存 TTL 内仍返回旧记录
+        old_phone = None
+        if "phone" in updates:
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    f"SELECT phone FROM users WHERE user_id = {placeholder}",
+                    (user_id,),
+                )
+                row = cursor.fetchone()
+                if row:
+                    old_phone = row["phone"] if isinstance(row, dict) else row[0]
+
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(f"UPDATE users SET {set_clause}, updated_at = {ts} WHERE user_id = {placeholder}",
@@ -213,6 +252,13 @@ class UserDB:
             if result:
                 # 清除用户缓存，下次查询从数据库重新加载
                 invalidate_user_cache(user_id)
+                # phone 变更时同步清理 phone 维度缓存
+                if "phone" in updates:
+                    new_phone = updates["phone"]
+                    if old_phone:
+                        delete_cached(CacheKeys.USER, f"phone:{old_phone}")
+                    if new_phone:
+                        delete_cached(CacheKeys.USER, f"phone:{new_phone}")
             return result
 
     # 别名方法，保持向后兼容

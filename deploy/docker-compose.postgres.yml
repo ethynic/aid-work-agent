@@ -112,7 +112,7 @@ services:
     volumes:
       # 持久化数据卷
       - postgres_data:/var/lib/postgresql/data
-      # 初始化脚本（首次启动时执行，创建 prod + test 双库）
+      # 初始化脚本（首次启动时执行，建库）
       - ./init-postgres.sql:/docker-entrypoint-initdb.d/init.sql:ro
     networks:
       - aid-network
