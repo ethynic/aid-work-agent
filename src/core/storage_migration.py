@@ -133,6 +133,7 @@ def _resolve_new_path(
         storage/uploads/_global/data_sources/{file}         -> storage/tenants/_anonymous/data_sources/{file}
         storage/uploads/{tid}/templates/{file}              -> storage/tenants/{tid}/templates/{file}
         storage/uploads/dingtalk/、wecom_kf/                -> None（跳过）
+        storage/uploads/storage/uploads/...（嵌套）         -> 剥离多余前缀后按上面规则处理
         其他                                                -> None（跳过 + warning）
     """
     try:
@@ -140,6 +141,16 @@ def _resolve_new_path(
     except ValueError:
         return None
     parts = rel.parts
+    if not parts:
+        return None
+
+    # 剥离嵌套的 storage/uploads/ 前缀。历史运维误操作（如 cp -r storage storage/uploads/
+    # 或备份还原错位）会产生 /app/storage/uploads/storage/uploads/tenant_xxx/knowledge/f.xlsx
+    # 这种自嵌套路径，原文件实际属于 tenant_xxx/knowledge 场景。循环处理多次嵌套，
+    # 剥离后按正常旧路径分支推算新路径，文件可正确迁移到 tenants/{tid}/{scene}/。
+    while len(parts) >= 2 and parts[0] == "storage" and parts[1] == "uploads":
+        parts = parts[2:]
+
     if not parts:
         return None
 

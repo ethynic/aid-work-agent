@@ -173,6 +173,74 @@ class TestResolveNewPath:
         new = _resolve_new_path(old, uploads, tenants)
         assert new is None
 
+    def test_nested_tenant_knowledge(self, tmp_path):
+        """storage/uploads/storage/uploads/tenant_{tid}/knowledge/{file} -> storage/tenants/{tid}/knowledge/{file}
+
+        历史运维误操作（如 cp -r storage storage/uploads/）会产生自嵌套路径，
+        剥离多余的 storage/uploads/ 前缀后按正常 tenant_{tid}/knowledge 分支处理。
+        """
+        uploads = tmp_path / "storage" / "uploads"
+        tenants = tmp_path / "storage" / "tenants"
+        old = uploads / "storage" / "uploads" / "tenant_ea24cd1a1097" / "knowledge" / "kb_11300a9aaaf5.xlsx"
+        old.parent.mkdir(parents=True)
+        old.write_text("x")
+
+        new = _resolve_new_path(old, uploads, tenants)
+        assert new == tenants / "ea24cd1a1097" / "knowledge" / "kb_11300a9aaaf5.xlsx"
+
+    def test_nested_bare_tenant_knowledge(self, tmp_path):
+        """storage/uploads/storage/uploads/{tid}/knowledge/{file} -> storage/tenants/{tid}/knowledge/{file}
+
+        剥离后命中 bare tid/knowledge 分支（c3f749b 风格）。
+        """
+        uploads = tmp_path / "storage" / "uploads"
+        tenants = tmp_path / "storage" / "tenants"
+        old = uploads / "storage" / "uploads" / "ea24cd1a1097" / "knowledge" / "kb_abc.md"
+        old.parent.mkdir(parents=True)
+        old.write_text("x")
+
+        new = _resolve_new_path(old, uploads, tenants)
+        assert new == tenants / "ea24cd1a1097" / "knowledge" / "kb_abc.md"
+
+    def test_nested_conversation(self, tmp_path):
+        """storage/uploads/storage/uploads/conversation/{file} -> storage/tenants/_anonymous/conversation/{file}
+
+        剥离后命中全局 conversation 分支。
+        """
+        uploads = tmp_path / "storage" / "uploads"
+        tenants = tmp_path / "storage" / "tenants"
+        old = uploads / "storage" / "uploads" / "conversation" / "anon.docx"
+        old.parent.mkdir(parents=True)
+        old.write_text("x")
+
+        new = _resolve_new_path(old, uploads, tenants)
+        assert new == tenants / "_anonymous" / "conversation" / "anon.docx"
+
+    def test_nested_double_wrapping(self, tmp_path):
+        """多层嵌套 storage/uploads/storage/uploads/storage/uploads/... 也应被全部剥离"""
+        uploads = tmp_path / "storage" / "uploads"
+        tenants = tmp_path / "storage" / "tenants"
+        old = (
+            uploads / "storage" / "uploads" / "storage" / "uploads"
+            / "tenant_t1" / "knowledge" / "kb.md"
+        )
+        old.parent.mkdir(parents=True)
+        old.write_text("x")
+
+        new = _resolve_new_path(old, uploads, tenants)
+        assert new == tenants / "t1" / "knowledge" / "kb.md"
+
+    def test_nested_channel_skipped(self, tmp_path):
+        """嵌套的渠道目录 storage/uploads/storage/uploads/dingtalk/... -> None（剥离后跳过）"""
+        uploads = tmp_path / "storage" / "uploads"
+        tenants = tmp_path / "storage" / "tenants"
+        old = uploads / "storage" / "uploads" / "dingtalk" / "msg.txt"
+        old.parent.mkdir(parents=True)
+        old.write_text("x")
+
+        new = _resolve_new_path(old, uploads, tenants)
+        assert new is None
+
     def test_unknown_structure_skipped(self, tmp_path):
         """无法识别的顶层目录 -> None + warning"""
         uploads = tmp_path / "storage" / "uploads"
