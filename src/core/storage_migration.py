@@ -105,9 +105,11 @@ def _resolve_new_path(
 
     迁移规则：
         storage/uploads/conversation/{file}                 -> storage/tenants/_anonymous/conversation/{file}
+        storage/uploads/knowledge/{file}                    -> storage/tenants/_anonymous/knowledge/{file}
         storage/uploads/tenant_{tid}/user_{uid}/{file}      -> storage/tenants/{tid}/conversation/{file}
         storage/uploads/tenant_{tid}/knowledge/{file}       -> storage/tenants/{tid}/knowledge/{file}
         storage/uploads/tenant_{tid}/{file}                 -> storage/tenants/{tid}/conversation/{file}
+        storage/uploads/{tid}/knowledge/{file}              -> storage/tenants/{tid}/knowledge/{file}
         storage/uploads/dingtalk/、wecom_kf/                -> None（跳过）
         其他                                                -> None（跳过 + warning）
     """
@@ -131,6 +133,12 @@ def _resolve_new_path(
             return None
         return tenants_root / "_anonymous" / "conversation" / Path(*parts[1:])
 
+    # 旧的全局 knowledge 目录 -> 匿名租户（c3f749b 之前的无租户知识库路径）
+    if top == "knowledge":
+        if len(parts) < 2:
+            return None
+        return tenants_root / "_anonymous" / "knowledge" / Path(*parts[1:])
+
     # tenant_{tid}/... 系列
     if top.startswith("tenant_"):
         tid = top[len("tenant_"):]
@@ -151,6 +159,11 @@ def _resolve_new_path(
 
         # tenant_{tid}/{file} -> conversation
         return tenants_root / tid / "conversation" / Path(*parts[1:])
+
+    # {tid}/knowledge/{file} -> knowledge（c3f749b 风格的租户路径，tid 不带 tenant_ 前缀）
+    # parts[1]=="knowledge" 是强约束，避免误识别其他顶层目录
+    if len(parts) >= 2 and parts[1] == "knowledge":
+        return tenants_root / top / "knowledge" / Path(*parts[2:])
 
     # 其他无法识别
     logger.warning(

@@ -36,6 +36,34 @@ class TestResolveNewPath:
         new = _resolve_new_path(old, uploads, tenants)
         assert new == tenants / "_anonymous" / "conversation" / "file_abc.docx"
 
+    def test_anonymous_knowledge(self, tmp_path):
+        """storage/uploads/knowledge/{file} -> storage/tenants/_anonymous/knowledge/{file}
+
+        c3f749b 之前的无租户知识库路径。
+        """
+        uploads = tmp_path / "storage" / "uploads"
+        tenants = tmp_path / "storage" / "tenants"
+        old = uploads / "knowledge" / "kb_d5776386fd50.docx"
+        old.parent.mkdir(parents=True)
+        old.write_text("x")
+
+        new = _resolve_new_path(old, uploads, tenants)
+        assert new == tenants / "_anonymous" / "knowledge" / "kb_d5776386fd50.docx"
+
+    def test_bare_tenant_knowledge(self, tmp_path):
+        """storage/uploads/{tid}/knowledge/{file} -> storage/tenants/{tid}/knowledge/{file}
+
+        c3f749b 风格的租户路径，tid 不带 tenant_ 前缀。
+        """
+        uploads = tmp_path / "storage" / "uploads"
+        tenants = tmp_path / "storage" / "tenants"
+        old = uploads / "1dc997a1806b" / "knowledge" / "kb_abc.md"
+        old.parent.mkdir(parents=True)
+        old.write_text("x")
+
+        new = _resolve_new_path(old, uploads, tenants)
+        assert new == tenants / "1dc997a1806b" / "knowledge" / "kb_abc.md"
+
     def test_tenant_user(self, tmp_path):
         """storage/uploads/tenant_{tid}/user_{uid}/{file} -> conversation"""
         uploads = tmp_path / "storage" / "uploads"
@@ -223,6 +251,13 @@ class TestMigrateUploadsToTenantsIntegration:
         (uploads / "dingtalk").mkdir(parents=True)
         (uploads / "dingtalk" / "msg.txt").write_text("channel")
 
+        # 旧 knowledge 路径（c3f749b 之前 / 之中遗留）
+        (uploads / "knowledge").mkdir(parents=True)
+        (uploads / "knowledge" / "kb_anon.docx").write_text("anon-kb")
+
+        (uploads / "1dc997a1806b" / "knowledge").mkdir(parents=True)
+        (uploads / "1dc997a1806b" / "knowledge" / "kb_tenant.md").write_text("tenant-kb")
+
         # mock advisory lock + Redis
         with patch(
             "src.core.storage_migration._acquire_advisory_lock", return_value=(True, None)
@@ -233,8 +268,8 @@ class TestMigrateUploadsToTenantsIntegration:
         ):
             stats = migrate_uploads_to_tenants(project_root=tmp_path)
 
-        assert stats["scanned"] == 5
-        assert stats["migrated"] == 4  # dingtalk 跳过
+        assert stats["scanned"] == 7
+        assert stats["migrated"] == 6  # dingtalk 跳过
         assert stats["skipped"] == 1
         assert stats["errors"] == 0
 
@@ -243,6 +278,8 @@ class TestMigrateUploadsToTenantsIntegration:
         assert (tenants / "t1" / "conversation" / "u1file.pdf").exists()
         assert (tenants / "t1" / "knowledge" / "kb.md").exists()
         assert (tenants / "t2" / "conversation" / "direct.xlsx").exists()
+        assert (tenants / "_anonymous" / "knowledge" / "kb_anon.docx").exists()
+        assert (tenants / "1dc997a1806b" / "knowledge" / "kb_tenant.md").exists()
 
         # 渠道文件未迁移
         assert (uploads / "dingtalk" / "msg.txt").exists()
