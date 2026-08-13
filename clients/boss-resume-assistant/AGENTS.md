@@ -65,11 +65,13 @@ const gw = new CdpGateway(); await gw.connect('http://127.0.0.1:9222')
 **已知坑（真机实证，别再踩）：**
 - **会话列表可滚动**：用 `CHAT_LIST_SCROLL_POINT={x:550,y:900}`（真机校准，见 `bossAcceptResume.ts`）+ CDP `mouseWheel`；判到底**必须用 `ResumeConsentExecutor.listSignatureOf`**（cx<850 全文本 y 签名，接受简历场景真机验证有效），**别用局部人名序列判到底**（混入导航/推荐卡片标签会误判"到底"提前退出）。已知姓名精确找人用 `ChatSearchExecutor` 搜索更直接，与滚动互补——不是"滚动失效才改搜索"。
 - **CSS 背景图标抓不到**：如搜索图标，DOMSnapshot 无节点无文本 → 让用户把鼠标移上去，用 Win32 `GetCursorPos` 读屏幕坐标反算 page 坐标校准。
-- **虚拟列表/特殊渲染文本抓不到**：如搜索结果卡片人名，视口内 0 命中（只在 strings 有数据无 layout 节点）→ 靠相邻可见文本**锚点 + 固定偏移**定位（参照 §10.5 InterviewDemo、§10.6 ChatSearchExecutor）。
+- **虚拟列表/特殊渲染文本抓不到**：少数元素（如 §10.5 InterviewDemo 的约面试日期下拉）确实视口内 0 命中 → 靠相邻可见文本**锚点 + 固定偏移**定位。但**先排除"延时不够"**：搜索结果/职位下拉等异步渲染控件，等够延时（见上条）就有 bounds，不是真盲区——曾误判搜索结果卡片人名"抓不到"，实为 sleep 太早。
 - **沟通页内嵌推荐 iframe**（§17 坑17）：DOM 里有推荐牛人全量节点（「打招呼」「筛选」都在），按文本存在性判页面会误判 → **用 URL 校验**（推荐=`/web/chat/recommend`，沟通=`/web/chat/index`）。
 - **多 render widget**：Chrome 一个窗口有多个 `Chrome_RenderWidgetHostHWND`，`FindRenderWidget` 必须取可见实例（§17 坑14）。
 - **PowerShell .ps1 必须 UTF-8 BOM**（中文标题/参数）；中文参数勿经 bash 内联传递。
 - **WinMouseClicker 借真实光标**约 1 秒，调用前必须提示用户手离鼠标。
+- **展开类控件（下拉/面板）点击后必须等渲染完再 snapshot**：下拉/面板异步渲染，项的 layout bounds 需时间出现。snapshot 太早 → 项无 bounds → **误判为"DOMSnapshot 盲区"**（职位下拉曾因此误判，实为等不够）。不同控件等待不同：筛选面板 `ensurePanelOpen` sleep 1200ms、职位下拉需 2500ms——**等不够就再多等/重 snapshot，别急着判盲区**。
+- **解析列表项要遍历 `nodes.nodeValue`（所有节点）**，不只 `layout.nodeIndex`（仅有 bounds 的节点）：异步/未渲染的列表项文本节点有 nodeValue 但暂时无 bounds，只遍历 layout 会漏。典型：职位下拉项文本在 `nodes.nodeValue`，等渲染后才有 bounds。
 
 ## 7. 新增能力的流程
 

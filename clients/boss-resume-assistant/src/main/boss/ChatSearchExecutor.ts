@@ -7,11 +7,10 @@
  * 真机校准（2026-08-13，窗口 1249x1277）：
  * - 搜索图标：SEARCH_ICON_POINT。GetCursorPos 校准值——CSS 背景图标在 DOMSnapshot 里抓不到节点，
  *   无法几何定位，只能用真机标定的固定坐标（窗口尺寸/布局变化时需重新校准）。
- * - 搜索框：点图标后弹出的 doc0 INPUT（cx<850、y∈[100,200]、w>200，视口内唯一）。
- * - 「联系人」分类标签：DOMSnapshot 文本锚点；真机 (236,186)。
- * - 结果卡片点击点：cx=会话项人名列（真机恒定 279-287，取 NAME_COLUMN_CX），y=「联系人」标签 y+24；
- *   真机 (287,210)。结果卡片人名节点 DOMSnapshot 抓不到（视口内 0 命中），必须靠
- *   「联系人」锚点 y + 人名列 cx + 偏移定位。
+ * - 搜索框：点图标后弹出的 doc0 INPUT（cx<850、y∈[100,200]、w>200，按 nodeName=INPUT 过滤唯一定位）。
+ * - 搜索结果项：输入姓名后等异步渲染（SEARCH_RESULT_DELAY=2500ms），结果项有 layout bounds，
+ *   直接按目标姓名在视口内（cx<850）唯一定位点击。真机修正（2026-08-13）：曾因 sleep 太早（1100ms）
+ *   误判"结果卡片人名 DOMSnapshot 抓不到"，实为延时不够；且不再点固定第一项（目标未必在第一项，会点错人）。
  * - 进入对话校验：发送按钮出现（locateSendButton 命中 1 个）。
  *
  * 关键结论（会话列表滚动 CDP mouseWheel + Win32 mouse_event 双失效，BOSS 非标准滚动）→ 改用搜索找人。
@@ -58,16 +57,13 @@ const SEARCH_BOX_MAX_CX = 850
 const SEARCH_BOX_MIN_CY = 100
 const SEARCH_BOX_MAX_CY = 200
 const SEARCH_BOX_MIN_W = 200
-/** 搜索结果「联系人」分类标签文案（结果卡片定位锚点） */
-const CONTACTS_LABEL = '联系人'
-/** 会话项人名列 cx（device px）。真机标定恒在 279-287：结果卡片人名节点 DOMSnapshot 抓不到（视口内 0 命中），只能靠「联系人」锚点 y + 此 cx 点击第一张结果卡片 */
-const NAME_COLUMN_CX = 287
-/** 「联系人」标签 y → 第一张结果卡片点击点 y 的偏移（device px，真机标定） */
-const RESULT_CARD_Y_OFFSET = 24
+/** 「联系人」标签下方结果项的 y 范围（device px）：结果浮层项在联系人紧贴下方此范围内（排除更下方的会话列表连续姓名节点） */
+const CONTACTS_RESULT_BAND = 80
 /** 点搜索图标后等弹层（ms） */
 const SEARCH_OPEN_DELAY = 1400
-/** 输入姓名后等搜索结果（ms） */
-const SEARCH_RESULT_DELAY = 1100
+/** 输入姓名后等搜索结果异步渲染（ms）。真机修正（2026-08-13）：搜索结果项（公司名）bounds 异步渲染较慢，
+ *  太早（<3000ms）项无 bounds 会误判"抓不到"；真机实测需 ~4000ms 稳定出现 */
+const SEARCH_RESULT_DELAY = 4000
 /** 点结果卡片后等进入对话（ms） */
 const ENTER_CHAT_DELAY = 2000
 /** 点击搜索框后等待聚焦（ms） */
@@ -117,16 +113,19 @@ export class ChatSearchExecutor {
     }
     await this.sleep(SEARCH_RESULT_DELAY)
 
-    // 4. 定位「联系人」分类标签（DOMSnapshot 文本锚点），取最上方命中
+    // 4. 定位目标姓名的搜索结果项（视口内 cx<SEARCH_BOX_MAX_CX 唯一命中，直接点击该坐标）
+    //    真机修正（2026-08-13）：搜索结果项异步渲染，等够 SEARCH_RESULT_DELAY 后项有 layout bounds，
+    //    可直接按目标姓名定位——不再用「联系人」锚点+固定偏移点第一项（目标未必在第一项，会点错人）。
     const snap2 = await this.deps.snapshot()
-    const label = this.locateContactsLabel(snap2)
-    if (!label) {
-      throw new ChatSearchError(`输入「${name}」后未找到搜索结果「联系人」分类标签：搜索无结果或页面结构已变，请人工查看`)
+    const { point: target, count: targetCount } = this.locateTargetResult(snap2)
+    if (targetCount !== 1) {
+      throw new ChatSearchError(
+        targetCount === 0
+          ? `搜索「${name}」后未在结果列表找到该姓名的可见项：搜索无结果或目标在列表深处，请人工查看`
+          : `搜索「${name}」在结果列表有 ${targetCount} 个可见命中，无法唯一定位，请人工查看`,
+      )
     }
-
-    // 5. 点「联系人」下第一张结果卡片（cx=人名列，y=标签 y+偏移；结果卡片人名节点 DOMSnapshot 抓不到）
-    const resultCard: ClickPoint = { x: NAME_COLUMN_CX, y: label.y + RESULT_CARD_Y_OFFSET }
-    await this.deps.click(resultCard, viewportOf(snap2))
+    await this.deps.click(target!, viewportOf(snap2))
     await this.sleep(ENTER_CHAT_DELAY)
 
     // 6. 校验进入对话：发送按钮出现（唯一命中）
@@ -168,30 +167,68 @@ export class ChatSearchExecutor {
     return { point: hits.length === 1 ? hits[0]! : null, count: hits.length }
   }
 
-  /** 「联系人」分类标签：全文档可见精确命中（trim）取最上方（y 最小）的一个作为锚点；无命中返回 null */
-  private locateContactsLabel(snap: DomSnapshot): ClickPoint | null {
+  /**
+   * 定位搜索结果项：在「联系人」分类标签紧贴下方的结果区，找公司名文本（"_" 开头连续字符串）点击。
+   *
+   * 真机关键（2026-08-13）：搜索结果浮层姓名是逐字单独节点（反爬，"施""文""斌"），但**公司名是连续字符串
+   * 且以 "_" 开头**（如 "_上海功存智能科技有限公司"）。点公司名所在结果项即可进入对话——不靠姓名逐字匹配，
+   * 简单可靠（搜索精确匹配，结果第一项即目标）。
+   * 用「联系人下方紧贴」y 范围（联系人y+4 ~ +CONTACTS_RESULT_BAND）排除上方搜索框区 + 下方会话列表。
+   */
+  private locateTargetResult(snap: DomSnapshot): { point: ClickPoint | null; count: number } {
     const viewport = viewportOf(snap)
+    const contactsY = this.contactsLabelY(snap)
+    if (contactsY === null) return { point: null, count: 0 } // 无联系人标签 = 搜索无结果/浮层未开
+    const yMin = contactsY + 4
+    const yMax = contactsY + CONTACTS_RESULT_BAND
     const hits: ClickPoint[] = []
+    snap.documents.forEach((document, documentIndex) => {
+      let offset: { x: number; y: number }
+      try {
+        offset = accumulateOwnerOffset(snap, documentIndex)
+      } catch {
+        return
+      }
+      const valueByNode = new Map(indexedValues(document.nodes.nodeValue, 'nodeValue'))
+      document.layout.nodeIndex.forEach((ni, li) => {
+        const si = valueByNode.get(ni)
+        const t = si !== undefined ? snap.strings[si] : ''
+        if (typeof t !== 'string') return
+        const trimmed = t.trim()
+        if (trimmed.length === 0 || !trimmed.startsWith('_')) return // 只要公司名（"_" 开头）
+        const b = document.layout.bounds[li]
+        if (!b || b[2]! <= 0 || b[3]! <= 0) return
+        const x = offset.x + b[0]! + b[2]! / 2 - (document.scrollOffsetX ?? 0)
+        const y = offset.y + b[1]! + b[3]! / 2 - (document.scrollOffsetY ?? 0)
+        if (x <= 0 || x >= SEARCH_BOX_MAX_CX || y <= 0 || y > viewport.height) return
+        if (y < yMin || y > yMax) return
+        hits.push({ x: Math.round(x), y: Math.round(y) })
+      })
+    })
+    return { point: hits.length === 1 ? hits[0]! : null, count: hits.length }
+  }
+
+  /** 「联系人」分类标签 y（结果项定位的 y 下限锚点）：全文档可见精确命中取最上方；无命中返回 null */
+  private contactsLabelY(snap: DomSnapshot): number | null {
+    let best: number | null = null
     snap.strings.forEach((s, stringIndex) => {
-      if (s.trim() !== CONTACTS_LABEL) return
+      if (s.trim() !== '联系人') return
       snap.documents.forEach((document, documentIndex) => {
         let offset: { x: number; y: number }
         try {
           offset = accumulateOwnerOffset(snap, documentIndex)
         } catch {
-          return // 隐藏 iframe owner 无可见 bounds（后台标签页），跳过
+          return
         }
         for (const { bounds } of findNodesByString(document, stringIndex)) {
           if (bounds[2] <= 0 || bounds[3] <= 0) continue
           const c = boundsCenter(bounds)
-          const x = offset.x + c.x - (document.scrollOffsetX ?? 0)
           const y = offset.y + c.y - (document.scrollOffsetY ?? 0)
-          if (x < 0 || y < 0 || x > viewport.width || y > viewport.height) continue
-          hits.push({ x, y })
+          if (y <= 0 || y > viewportOf(snap).height) continue
+          if (best === null || y < best) best = y
         }
       })
     })
-    if (hits.length === 0) return null
-    return hits.reduce((a, b) => (a.y <= b.y ? a : b))
+    return best
   }
 }
