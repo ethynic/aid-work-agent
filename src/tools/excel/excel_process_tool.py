@@ -115,7 +115,7 @@ TOOL_DESCRIPTION = """Excel电子表格处理工具。处理Excel(.xlsx/.csv)文
 - 如果当前对话中已有表格数据（由其他工具生成或用户提供），必须将其完整放入 content 中
 - output_name 可传入业务文件名
 - 如果还没有表格数据，Agent 应先通过其他方式准备好数据，再调用本工具
-- 用户上传的附件路径放在 file_paths 中
+- file_paths 支持直接传 file_id（如 file_xxx，推荐，工具自动解析为真实路径）或文件相对路径，禁止自行拼接 storage/uploads 等目录路径
 工具会自动判断并执行合适的操作。
 
 📦 生成文件后必须用 cp 注册下载（重要）：

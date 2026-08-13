@@ -280,7 +280,11 @@ def _build_analyze_prompt(grid_text: str, data_keys: Dict[str, List[str]], data:
 
 ## 关键规则
 1. **columns 必须覆盖明细区所有列**：样例明细表头有几列就列几列；能绑到上面"明细行可用的键"的填 bind，绑不上的列 bind 填 null（渲染时清空，避免残留样例数据）。多个分组共用同一组 columns。
-2. **groups（分区小计版式必填）**：样例若出现"XX小计"行（如"房餐车小计""门票小计"），每个小计行对应一个分组：detail_first_row/detail_last_row 是该小计行**上方**紧邻的明细示例数据首末行，subtotal_row/subtotal_col 是小计行及其合计值所在列，match 用"明细行可用的键"指明哪些值归该组（常用 category）。detail_template_row 取该组明细首行。**无分区小计的简单版式，groups 填空数组，改填 detail_first_row/detail_last_row。**
+2. **groups（分区小计版式必填）+ 小计形态判定（关键，极易错）**：
+   先判定小计是「行式」还是「列式」，二者处理方式完全不同：
+   - **行式小计**：每组明细**下方有独立一行**"XX小计"（如"房餐车小计""门票小计"）。每个小计行对应一个分组：detail_first_row/detail_last_row 是该小计行**上方**紧邻的明细示例数据首末行，subtotal_row/subtotal_col 是小计行及其合计值所在列，match 用"明细行可用的键"指明哪些值归该组（常用 category）。detail_template_row 取该组明细首行。
+   - **⚠️ 列式小计**：小计与明细**同行**——某列跨行竖向合并显示，如"商品类别总计/分类小计"列每组仅首行有值、下方合并居中。**此类列严禁设 subtotal_row/subtotal_col**，必须作为普通 columns 绑定列（bind=对应键名，如"商品类别总计"），组内非首行该键留空（竖向合并会自动居中显示）。误把列式小计设成 subtotal_row，会在明细行数变化时让小计落到相邻分组的残留行，触发"样例残留"报错。
+   **无分区小计的简单版式，groups 填空数组，改填 detail_first_row/detail_last_row。**
 3. **meta_fields 的 (row,col) 是"标题单元格"（标题文字所在格），不是值格**。这类是左右结构：标题在左格、值要填到它**右侧相邻格**。渲染器会自动把值写到 col+1，所以你只需标注标题格。例如"日期："在 C2（col=3）、值要填到 D2，则 meta_fields 写 {{row:2,col:3,bind:"date"}}（col=3 是标题格 C2，渲染器自动写到 D2）。**千万不要把 col 写成值格或写进标题格的 bind——否则值会覆盖标题。** 若某字段值不在标题紧邻右侧（如隔一列、或在合并区右端），加 value_col 显式指定值格列。
 4. **totals**：合计行 + 人均/标量单元格。bind 用上面"合计可用的键"（grand_total 或 per_capita 的键名，如"成人人均"）。
 5. **bind 优先用上面给出的键**；键里没有的不要编造。
@@ -460,6 +464,30 @@ def _row_was_deleted(orig_row: int, plan) -> bool:
             m_g = len(rows)
             if g.detail_first_row + m_g <= orig_row <= g.detail_last_row:
                 return True
+    return False
+
+
+def _subtotal_hits_residue(final_r: int, plan) -> bool:
+    """小计最终行 final_r 是否落在某个收缩组（delta<0）被删除尾部区间的最终坐标内。
+
+    fill_template 防御用：列式小计（小计与明细同行、靠竖向合并跨行显示）一旦被误判为
+    行式 subtotal_row，多个组的 subtotal_row 经 _final_row 重映射后会落到同一行，且该行
+    往往是别组（或本组）行数收缩后腾出的"残留尾行"。往这里写小计会被 _verify_render
+    当成"样例残留"硬报错。命中即应由调用方跳过该次写入（降级为留空——该格已被
+    _write_detail_row 清空，不会残留），用降级换不报错。
+    """
+    for g, rows, delta in plan:
+        if delta >= 0:
+            continue
+        m_g = len(rows)
+        # 被删除的尾部区间原始坐标 [detail_first_row + m_g, detail_last_row]
+        res_first = g.detail_first_row + m_g
+        res_last = g.detail_last_row
+        if res_first > res_last:
+            continue
+        # 区间两端的最终行（上方组 delta 等量作用于二者，故两端 _final_row 相等）
+        if _final_row(res_first, plan) <= final_r <= _final_row(res_last, plan):
+            return True
     return False
 
 
@@ -758,6 +786,14 @@ def _render(ws, structure: SheetStructure, data: FillData) -> int:
     for g, rows, _delta in plan:
         if g.subtotal_row and g.subtotal_col:
             r = _final_row(g.subtotal_row, plan)
+            # 防御：小计最终行若撞上收缩组的残留尾行（列式小计误判为行式 subtotal_row 的典型症状），
+            # 跳过写入降级为留空，避免触发"样例残留"硬报错（该格已被 _write_detail_row 清空）
+            if _subtotal_hits_residue(r, plan):
+                logger.warning(
+                    f"[excel_template_ai] 跳过分组 {g.name!r} 小计：最终行 R{r} 落入收缩组残留区，"
+                    f"疑似列式小计被误判为 subtotal_row"
+                )
+                continue
             _set_value(ws, r, g.subtotal_col, _resolve_subtotal(g, data, rows, bound_by_col), final_merges)
 
     # 6. 填顶部 meta（左右结构：标题在 mf.col，值写到标题视觉范围右侧；标题合并时取合并区右侧+1）

@@ -1061,12 +1061,19 @@ class Agent:
             if extra_content:
                 subagent_constraint = subagent_constraint + "\n\n## 租户定制需求\n\n" + extra_content
 
-            # 加载租户模板文件，在提示词末尾注入模板位置信息
+            # 加载租户模板文件，在提示词末尾注入模板 file_id（工具自动解析，勿拼路径）
             templates = self._load_template_files()
             if templates:
-                tpl_lines = ["\n\n### 相关模板位置信息", ""]
+                tpl_lines = [
+                    "\n\n### 可用模板文件",
+                    "",
+                    "以下为模板的 file_id。调用 excel_process / word / pdf_process 等文档工具时，"
+                    "将 file_id 原样放入 file_paths 参数即可，工具会自动解析为真实路径，"
+                    "禁止自行拼接 storage/uploads 等目录路径。",
+                    "",
+                ]
                 for t in templates:
-                    tpl_lines.append(f"{t.get('name', '')}：{t.get('file_id', '')}")
+                    tpl_lines.append(f"- {t.get('name', '')}：{t.get('file_id', '')}")
                 subagent_constraint += "\n".join(tpl_lines)
 
             base_prompt = self._build_base_system_prompt(
@@ -1151,8 +1158,9 @@ class Agent:
         """加载租户为该子智能体配置的模板文件列表。
 
         从 subagent_template_files 表读取（per tenant+subagent），返回 [{name, file_id, ...}]。
-        用于在 system prompt 末尾注入「### 相关模板位置信息」，模板位置以 file_id 标识，
-        数字员工可据此调用文档工具（word/excel/pdf_process 等）套用模板。
+        用于在 system prompt 末尾注入「### 可用模板文件」，模板以 file_id 标识并附用法说明，
+        数字员工据此将 file_id 原样传入文档工具（word/excel/pdf_process 等）的 file_paths 套用模板，
+        无需自行拼接路径。
         """
         if not self.subagent_config:
             return []
