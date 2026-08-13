@@ -254,7 +254,8 @@ def _acquire_advisory_lock(
                 "SELECT pg_try_advisory_lock(%s) AS locked", (_MIGRATION_LOCK_KEY,)
             )
             row = cursor.fetchone()
-            locked = bool(row["locked"]) if row else False
+            # 默认 cursor 返回 tuple，用 row[0] 访问第一列（AS locked）
+            locked = bool(row[0]) if row else False
             cursor.close()
             conn.commit()
             if locked:
