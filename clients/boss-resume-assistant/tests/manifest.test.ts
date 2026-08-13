@@ -43,12 +43,22 @@ test('manifest 字段完整（标准 §6）', () => {
   assert.equal(m.execution_target, 'local_required')
   assert.equal(m.min_mcp_protocol_version, '2024-11-05')
   assert.equal(m.schema_digest, computeSchemaDigest())
-  // 7 个 tool，名称与设计 §10.2 一致
+  // 9 个 tool，名称与设计 §10.2 / §10.6 一致
   assert.deepEqual(
     m.tools.map((t) => t.name).sort(),
-    ['boss_accept_resume', 'boss_clear_filter', 'boss_filter', 'boss_goto', 'boss_greet', 'boss_interview_demo', 'boss_reject_current'].sort(),
+    [
+      'boss_accept_resume',
+      'boss_clear_filter',
+      'boss_filter',
+      'boss_goto',
+      'boss_greet',
+      'boss_interview_demo',
+      'boss_reject_current',
+      'boss_send_current',
+      'boss_send_to',
+    ].sort(),
   )
-  assert.equal(m.tools.length, 7)
+  assert.equal(m.tools.length, 9)
   for (const tool of m.tools) {
     assert.ok(tool.title.length > 0 && tool.description.length > 0)
     assert.equal(tool.inputSchema.type, 'object')
@@ -68,7 +78,7 @@ test('写动作硬上限进入 schema（设计 §14）：greet 最大 3 / accept
   assert.equal(acceptProps.limit!.default, 1)
   const reject = tools.find((t) => t.name === 'boss_reject_current')!
   assert.deepEqual(reject.inputSchema.properties, {})
-  assert.equal(TOOL_NAMES.length, 7)
+  assert.equal(TOOL_NAMES.length, 9)
 })
 
 test('version --json 输出与 buildManifest/computeSchemaDigest 同源', () => {
@@ -77,5 +87,5 @@ test('version --json 输出与 buildManifest/computeSchemaDigest 同源', () => 
   const parsed = JSON.parse(out)
   assert.equal(parsed.schema_digest, computeSchemaDigest())
   assert.equal(parsed.provider_id, 'ai.aidwork.boss-recruiting')
-  assert.equal(parsed.tools.length, 7)
+  assert.equal(parsed.tools.length, 9)
 })

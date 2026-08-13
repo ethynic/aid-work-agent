@@ -399,6 +399,30 @@ Win32 通道实现要点：
 - **日期选择**：点日期下拉开出日历面板，日期数字在日历区域（相对标签 x +60~+540 / y +40~+520）内唯一；跨月（明天是 1 号）先点面板右上角下月箭头（标签右 455 / 下 85）。选中日历自动关闭。
 - **每步结果校验**（fail-loud）：表单打开校验（「线下面试邀请」标题可见）→ 字数校验 → 日期 strings 校验 → 取消后表单关闭校验；任何一步不符立即停止请人工查看，绝不盲点下一步。
 
+### 10.6 沟通页发消息与搜索找人（ChatSearchExecutor / ChatSendExecutor）
+
+沟通页「搜索找人 + 输入 + 发送」链路，封装为两个 CLI 子命令（`send-to` / `send-current`）与同名 MCP tool（`boss_send_to` / `boss_send_current`）。默认**真发送**；`--dry-run`（`dry_run=true`）只输入不点发送，用于测试链路。
+
+真机校准（2026-08-13，窗口 1249x1277）：
+
+- **搜索找人（ChatSearchExecutor.openContact）流程**：
+  1. 点搜索图标：坐标 `(519,135)`，**GetCursorPos 校准的固定常量**——该图标是 CSS 背景图，DOMSnapshot 抓不到节点，无法几何定位，只能用真机标定值（窗口尺寸/布局变化需重新校准）。
+  2. 等 ~1400ms 弹层后定位搜索框：点图标后弹出的 doc0 INPUT，靠几何定位（DOMSnapshot 不暴露 tagName）——doc0 layout bounds 中 cx<850、y∈[100,200]、w>200 的**唯一**节点；0 或多个 fail-loud。真机搜索框 center `(368,141)`。
+  3. Win32 点击搜索框聚焦 → CDP `typeChar` 逐字输入姓名（200ms/字，风控拦鼠标不拦键盘）→ 等 ~1100ms 出结果。
+  4. 定位结果分类标签「联系人」：DOMSnapshot 文本锚点，取视口内最上方（y 最小）命中；真机 `(236,186)`。
+  5. 点结果卡片：cx=**会话项人名列常量 287**，y=「联系人」标签 y+24。真机 `(287,210)`。**结果卡片人名节点 DOMSnapshot 抓不到（视口内 0 命中），必须靠「联系人」锚点 y + 人名列 cx + 偏移**定位。
+  6. 等 ~2000ms 后校验进入对话：发送按钮出现（locateSendButton 命中 1 个）；0 个（结果不存在/点击未生效）或多个 fail-loud。
+- **发消息（ChatSendExecutor.sendMessage）流程**：
+  - 定位发送按钮：DOMSnapshot 文本「发送」，cx>850（LIST_MAX_X）视口内**唯一**命中；0/多个 fail-loud。真机 center `(1146,1233)`。
+  - 激活输入框：发送按钮 center + 固定偏移 `(-130,-38)` → Win32 点击聚焦（输入框无独立可定位节点，靠发送按钮反推激活点）。真机激活点 `(1016,1195)`。
+  - CDP `typeChar` 逐字输入消息 → 聊天输入框 value 进了 DOMSnapshot strings（dry-run 可校验输入内容）。
+- **dry-run**：输入后校验 `strings` 含 message 即返回（sent=false，effect=none），不点发送。
+- **真发送校验（TODO 真机验证）**：点发送按钮（Win32 写动作）后，期望输入框清空（strings 不再含 message）；若仍含 message → `EXECUTION_UNKNOWN`（消息「无法确认是否发出」），系统**不自动重试**，请人工查看。注意：发送成功后消息会作为聊天气泡出现在历史里（也在 strings），本 naive 校验的真机可区分性待验证，必要时改为查消息气泡出现等更稳信号。
+- **坐标鲁棒性策略**：动态元素（搜索框、发送按钮、「联系人」标签）一律 fresh DOMSnapshot 几何/文本定位，不写死坐标；仅两处**无法用 DOMSnapshot 定位**的元素写死真机标定常量——搜索图标（CSS 背景，抓不到节点）与会话项人名列 cx（结果卡片人名节点视口内 0 命中）。写死的常量均带校准来源注释。
+- **fail-loud 校验点**：搜索框 0/多个、无「联系人」标签、点结果卡片后无发送按钮、发送按钮 0/多个、发送后输入框未清空（UNKNOWN）——任一歧义抛错，绝不盲发。
+- **通道**：所有写动作（点搜索图标/搜索框/结果卡片/激活点/发送按钮）走 Win32（deps.click）；逐字输入走 CDP（typeChar）；永不 Runtime.*/Playwright（methodPolicy 白名单）。
+- **为什么用搜索找人而非滚动定位会话**：会话列表滚动 CDP `mouseWheel` + Win32 `mouse_event(WHEEL)` **双失效**（BOSS 非标准滚动容器），无法可靠翻到目标会话；搜索找人是已真机验证可行的唯一链路。
+
 ## 11. 状态机与恢复
 
 ```text

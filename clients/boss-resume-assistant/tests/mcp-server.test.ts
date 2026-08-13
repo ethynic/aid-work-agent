@@ -27,6 +27,8 @@ const EXPECTED_TOOLS = [
   'boss_accept_resume',
   'boss_reject_current',
   'boss_interview_demo',
+  'boss_send_to',
+  'boss_send_current',
 ]
 
 /** 找一个空闲端口（listen 0 后立即关闭） */
@@ -72,7 +74,7 @@ test('initialize：serverInfo + instructions（含关键前提与写动作上限
   }
 })
 
-test('list_tools：7 个 tool，名称与 annotations 正确', async () => {
+test('list_tools：9 个 tool，名称与 annotations 正确', async () => {
   const client = await startClient([CLI, 'mcp', '--stdio', '--cdp-port', String(await freePort())])
   try {
     const { tools } = await client.listTools()

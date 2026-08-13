@@ -10,6 +10,8 @@ import { ConsentError } from '../boss/ResumeConsentExecutor.js'
 import { NavError } from '../boss/PageNavigator.js'
 import { ChatRejectError } from '../boss/ChatRejectExecutor.js'
 import { InterviewDemoError } from '../boss/InterviewDemoExecutor.js'
+import { ChatSendError } from '../boss/ChatSendExecutor.js'
+import { ChatSearchError } from '../boss/ChatSearchExecutor.js'
 import { WinClickError } from '../input/WinMouseClicker.js'
 import { CancelledError, CodedOperationError, type ErrorCode } from './types.js'
 
@@ -94,6 +96,8 @@ export function mapExecutorError(err: unknown): MappedError {
     err instanceof NavError ||
     err instanceof ChatRejectError ||
     err instanceof InterviewDemoError ||
+    err instanceof ChatSendError ||
+    err instanceof ChatSearchError ||
     err instanceof WinClickError
   ) {
     return { code: 'UI_CHANGED', message }

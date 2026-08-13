@@ -1,5 +1,5 @@
 /**
- * 7 个 MCP tool 的契约定义（实施规格 m02 §6 / 标准 §5）。
+ * 9 个 MCP tool 的契约定义（实施规格 m02 §6 / 标准 §5）。
  *
  * zodShape 是 registerTool 的输入；manifest digest 用同一来源推导的 JSON Schema，
  * 保证「Host 看到的 schema」与「manifest digest 的 schema」同源（SDK 1.30.0 内部同样
@@ -101,6 +101,33 @@ export const TOOL_DEFS: BossToolDef[] = [
       remark: z.string().min(1).max(140).optional().describe('备注内容（缺省用默认文案，表单上限 140 字）'),
     },
     annotations: { title: '约面试表单填充演示', readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+  },
+  {
+    name: 'boss_send_to',
+    title: '搜索找人并发送消息',
+    description:
+      '在 BOSS 直聘「沟通」页搜索联系人姓名 → 进入对话 → 逐字输入消息并发送（外部写动作）。' +
+      '默认真发送；dry_run=true 时只输入不点发送（测试链路）。' +
+      '前置要求：当前在沟通页（不在时自动跳转）；搜索结果中存在该姓名的联系人，否则报错。',
+    zodShape: {
+      to: z.string().min(1).describe('联系人姓名（搜索关键词）'),
+      message: z.string().min(1).describe('要发送的消息内容'),
+      dry_run: z.boolean().default(false).describe('只输入不点发送（测试链路，默认 false 真发送）'),
+    },
+    annotations: { title: '搜索找人并发送消息', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  },
+  {
+    name: 'boss_send_current',
+    title: '向当前会话发送消息',
+    description:
+      '在 BOSS 直聘「沟通」页向当前已选中的会话逐字输入消息并发送（外部写动作）。' +
+      '默认真发送；dry_run=true 时只输入不点发送（测试链路）。' +
+      '前置要求：当前在沟通页且已选中一个会话（右侧面板有发送按钮），否则返回 WRONG_PAGE（请先选会话）。',
+    zodShape: {
+      message: z.string().min(1).describe('要发送的消息内容'),
+      dry_run: z.boolean().default(false).describe('只输入不点发送（测试链路，默认 false 真发送）'),
+    },
+    annotations: { title: '向当前会话发送消息', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   },
 ]
 

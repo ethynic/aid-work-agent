@@ -14,6 +14,8 @@
  *   node dist/src/cli/index.js accept [--limit N] [--no-preview]
  *   node dist/src/cli/index.js reject
  *   node dist/src/cli/index.js interview [--remark "..."]
+ *   node dist/src/cli/index.js send-to <姓名> --message <消息> [--dry-run]
+ *   node dist/src/cli/index.js send-current --message <消息> [--dry-run]
  *   node dist/src/cli/index.js mcp --stdio
  *   node dist/src/cli/index.js doctor
  *   node dist/src/cli/index.js version [--json]
@@ -34,6 +36,8 @@ const USAGE = `BOSS 招聘操作 CLI
   accept [--limit N] [--no-preview]   逐个打开「对方想发送附件简历」的会话并点「同意」接收简历，同意后自动点开预览再关闭（默认 20 上限，最大 100；不在沟通页自动先跳转）
   reject                    把沟通页当前会话的候选人标记为「不合适」（弹确认层自动点确定；真实写动作，期间勿动鼠标）
   interview [--remark "..."]  约面试表单填充演示：逐字填备注+选明天日期后点取消关闭（绝不点发送；期间勿动鼠标）
+  send-to <姓名> --message <消息> [--dry-run]   搜索找人 → 进入对话 → 输入并发送消息（默认真发送；--dry-run 只输入不发送；期间勿动鼠标）
+  send-current --message <消息> [--dry-run]     向当前已选会话输入并发送消息（前提已选会话；默认真发送；--dry-run 只输入不发送；期间勿动鼠标）
 
 Provider 命令：
   mcp --stdio                 启动标准本地 MCP server（stdout 只承载协议，供 Codex/WorkBuddy 等 Host 使用）
@@ -136,6 +140,33 @@ async function main(): Promise<number> {
       if (cdpPort === 'invalid') return 2
       const { interviewCommand } = await import('./commands/interview.js')
       return interviewCommand({ remark: flagString(args, 'remark'), cdpPort })
+    }
+    case 'send-to': {
+      const to = args.positional[1]
+      if (!to) {
+        console.error('send-to 缺少联系人姓名：send-to <姓名> --message <消息> [--dry-run]')
+        return 2
+      }
+      const message = flagString(args, 'message')
+      if (!message) {
+        console.error('send-to 缺少 --message <消息>')
+        return 2
+      }
+      const cdpPort = parseCdpPort(args)
+      if (cdpPort === 'invalid') return 2
+      const { sendToCommand } = await import('./commands/sendTo.js')
+      return sendToCommand({ to, message, dryRun: hasFlag(args, 'dry-run'), cdpPort })
+    }
+    case 'send-current': {
+      const message = flagString(args, 'message')
+      if (!message) {
+        console.error('send-current 缺少 --message <消息>')
+        return 2
+      }
+      const cdpPort = parseCdpPort(args)
+      if (cdpPort === 'invalid') return 2
+      const { sendCurrentCommand } = await import('./commands/sendCurrent.js')
+      return sendCurrentCommand({ message, dryRun: hasFlag(args, 'dry-run'), cdpPort })
     }
     case 'mcp': {
       const cdpPort = parseCdpPort(args)
