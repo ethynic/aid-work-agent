@@ -90,6 +90,7 @@ class DingTalkAdapter(ChannelAdapter):
         self.token = token
         self.encoding_aes_key = encoding_aes_key
         self.welcome_message = welcome_message
+        self._tenant_id: str = ""
 
         if _extra:
             logger.debug(f"[DingTalk] 忽略未使用的 ChannelConfig 字段: {list(_extra.keys())}")
@@ -120,6 +121,17 @@ class DingTalkAdapter(ChannelAdapter):
     @property
     def channel_type(self) -> str:
         return "dingtalk"
+
+    async def set_tenant_id(self, tenant_id: str) -> None:
+        """
+        注入租户 ID（由 ChannelFactory 在创建 adapter 后调用）。
+
+        设置后媒体文件将存到 `storage/tenants/{tenant_id}/conversation/`，
+        遵循 `backend_dev.md` 租户附件存储规范。
+        """
+        self._tenant_id = tenant_id or ""
+        if hasattr(self.media, "set_tenant_id"):
+            self.media.set_tenant_id(self._tenant_id)
 
     async def _get_client(self) -> httpx.AsyncClient:
         # 快速路径：client 已存在且未关闭

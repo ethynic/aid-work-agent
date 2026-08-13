@@ -32,6 +32,7 @@ from src.channels.wecom_kf.message import (
 )
 from src.channels.wecom_kf.renderer import WeComKfRenderer
 from src.core.redis_client import redis_client
+from src.core.storage import ensure_tenant_storage_dir
 from src.models.message import MessageType, UnifiedMessage, UnifiedResponse
 
 
@@ -82,10 +83,30 @@ class WeComKfAdapter(ChannelAdapter):
         self._renderer: Optional[WeComKfRenderer] = None
         self._render_enabled: bool = kwargs.get("render_tables", True)
         self._media_upload_dir: str = media_upload_dir
+        self._tenant_id: str = ""
 
     @property
     def channel_type(self) -> str:
         return "wecom_kf"
+
+    async def set_tenant_id(self, tenant_id: str) -> None:
+        """
+        注入租户 ID（由 ChannelFactory 在创建 adapter 后调用）。
+
+        设置后媒体文件将存到 `storage/tenants/{tenant_id}/conversation/`，
+        遵循 `backend_dev.md` 租户附件存储规范。
+        """
+        self._tenant_id = tenant_id or ""
+        # 渲染器懒加载；若已创建则同步 tenant_id，未创建时创建时传入
+        if self._renderer is not None and hasattr(self._renderer, "set_tenant_id"):
+            self._renderer.set_tenant_id(self._tenant_id)
+
+    def _resolve_media_dir(self) -> str:
+        """解析媒体文件存储目录：有租户走 tenants 规范，无租户回退旧路径。"""
+        if self._tenant_id:
+            return ensure_tenant_storage_dir(self._tenant_id, "conversation")
+        os.makedirs(self._media_upload_dir, exist_ok=True)
+        return self._media_upload_dir
 
     # ==================== 默认缩略图 ====================
 
@@ -144,7 +165,7 @@ class WeComKfAdapter(ChannelAdapter):
             return cached
 
         png_data = self._generate_default_thumb()
-        thumb_path = os.path.join(self._media_upload_dir, "_default_thumb.png")
+        thumb_path = os.path.join(self._resolve_media_dir(), "_default_thumb.png")
         os.makedirs(os.path.dirname(thumb_path), exist_ok=True)
         with open(thumb_path, "wb") as f:
             f.write(png_data)
@@ -199,7 +220,10 @@ class WeComKfAdapter(ChannelAdapter):
     @property
     def renderer(self) -> WeComKfRenderer:
         if self._renderer is None:
-            self._renderer = WeComKfRenderer(upload_dir=self._media_upload_dir)
+            self._renderer = WeComKfRenderer(
+                upload_dir=self._media_upload_dir,
+                tenant_id=self._tenant_id,
+            )
         return self._renderer
 
     # ==================== 消息发送 ====================

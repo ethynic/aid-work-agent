@@ -21,6 +21,8 @@ from typing import Awaitable, Callable, Optional, Tuple
 import httpx
 from loguru import logger
 
+from src.core.storage import ensure_tenant_storage_dir
+
 DINGTALK_API_BASE_URL = "https://api.dingtalk.com"
 
 
@@ -31,15 +33,31 @@ class DingTalkMedia:
         self,
         access_token_getter: Callable[[], Awaitable[str]],
         upload_dir: Optional[str] = None,
+        tenant_id: str = "",
     ):
         """
         Args:
             access_token_getter: 获取 access_token 的异步函数
-            upload_dir: 媒体文件本地存储目录
+            upload_dir: 媒体文件本地存储目录（无 tenant_id 时使用）
+            tenant_id: 租户 ID，设置后文件存到
+                       `storage/tenants/{tenant_id}/conversation/`
         """
         self._get_access_token = access_token_getter
         self.upload_dir = upload_dir or "./storage/uploads/dingtalk"
+        self.tenant_id = tenant_id or ""
         os.makedirs(self.upload_dir, exist_ok=True)
+
+    def set_tenant_id(self, tenant_id: str) -> None:
+        """设置租户 ID（由 ChannelFactory 在创建 adapter 后注入）"""
+        self.tenant_id = tenant_id or ""
+
+    def _resolve_save_dir(self) -> str:
+        """解析最终保存目录，按租户隔离规范优先"""
+        if self.tenant_id:
+            return ensure_tenant_storage_dir(self.tenant_id, "conversation")
+        # 单租户模式兜底
+        os.makedirs(self.upload_dir, exist_ok=True)
+        return self.upload_dir
 
     async def download_image(
         self, download_code: str, robot_code: str, save_dir: Optional[str] = None
@@ -105,7 +123,7 @@ class DingTalkMedia:
                 content_type = image_response.headers.get("Content-Type", "")
                 ext = _ext_from_content_type(content_type)
                 local_path = os.path.join(
-                    save_dir or self.upload_dir, f"{download_code}{ext}"
+                    save_dir or self._resolve_save_dir(), f"{download_code}{ext}"
                 )
                 with open(local_path, "wb") as f:
                     f.write(image_response.content)
@@ -188,7 +206,7 @@ class DingTalkMedia:
                 # 文件名：优先使用传入的 file_name，否则使用 download_code
                 final_name = file_name or download_code
 
-                local_path = os.path.join(save_dir or self.upload_dir, final_name)
+                local_path = os.path.join(save_dir or self._resolve_save_dir(), final_name)
                 with open(local_path, "wb") as f:
                     f.write(file_response.content)
 
@@ -230,7 +248,7 @@ class DingTalkMedia:
 
         try:
             safe_name = _sanitize_filename(file_name or f"file_{int(time.time())}")
-            local_path = os.path.join(self.upload_dir, safe_name)
+            local_path = os.path.join(self._resolve_save_dir(), safe_name)
             async with httpx.AsyncClient(timeout=120.0) as client:
                 with client.stream("GET", download_url) as resp:
                     if resp.status_code != 200:

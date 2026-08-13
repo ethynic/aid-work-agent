@@ -66,6 +66,7 @@ class WeComAdapter(ChannelAdapter):
         self.token = token or ""
         self.encoding_aes_key = encoding_aes_key or ""
         self.welcome_message = welcome_message
+        self._tenant_id: str = ""
 
         # 消息配置
         self._msg_config = {
@@ -106,6 +107,17 @@ class WeComAdapter(ChannelAdapter):
     @property
     def channel_type(self) -> str:
         return "wecom"
+
+    async def set_tenant_id(self, tenant_id: str) -> None:
+        """
+        注入租户 ID（由 ChannelFactory 在创建 adapter 后调用）。
+
+        设置后媒体文件将存到 `storage/tenants/{tenant_id}/conversation/`，
+        遵循 `backend_dev.md` 租户附件存储规范。
+        """
+        self._tenant_id = tenant_id or ""
+        if hasattr(self.media, "set_tenant_id"):
+            self.media.set_tenant_id(self._tenant_id)
 
     async def _get_client(self) -> httpx.AsyncClient:
         """获取持久化的 HTTP 客户端（连接池）"""

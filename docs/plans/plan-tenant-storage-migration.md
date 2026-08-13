@@ -137,29 +137,28 @@
 
 ---
 
-### Phase 5：渠道媒体文件（dingtalk/feishu/wecom/wecom_kf）🔧 未开始
+### Phase 5：渠道媒体文件（dingtalk/feishu/wecom/wecom_kf）✅ 已完成
 
 **改造范围**：渠道消息媒体文件（图片/语音/视频）持久化路径，纳入租户隔离。
 
 **结论**：渠道配置页（`/t/{tenant_id}/channels`）位于租户前台，渠道本身是租户级的，媒体文件**应纳入** `storage/tenants/{tenant_id}/` 规范（选项 A），**不豁免**。
 
-**现状**：
-- 飞书渠道**已完成**：`feishu/adapter.py:89,138-147` 有 `set_tenant_id`，`feishu/media.py:89-101` 有 `set_tenant_id` + `_resolve_save_dir` 走 `ensure_tenant_storage_dir(tenant_id, "conversation")`
-- 其余三渠道（wecom / dingtalk / wecom_kf）仍用 `./storage/uploads/{channel}` 旧路径，待补齐
-
-**关键机制**：`src/saas/services/channel_factory.py:48-59` `_build_adapter` 已有通用注入——`if hasattr(adapter, "set_tenant_id"): await adapter.set_tenant_id(tenant_id)`。只需给 adapter 加 `set_tenant_id` 方法即自动生效，**无需改 factory**。
-
-**待改文件**（参照飞书模式）：
-- `src/channels/wecom/adapter.py` - 新增 `set_tenant_id`（`_tenant_id` 字段 + 转发 `self.media.set_tenant_id`）
+**改动文件**（参照飞书已有模式，补齐 wecom / dingtalk / wecom_kf）：
+- `src/channels/wecom/adapter.py` - 新增 `_tenant_id` 字段 + `async set_tenant_id`（转发 `self.media.set_tenant_id`）
 - `src/channels/wecom/media.py` - 新增 `tenant_id` 字段 + `set_tenant_id` + `_resolve_save_dir`（有 tenant_id 走 `ensure_tenant_storage_dir(tenant_id, "conversation")`，无则回退 `upload_dir`）；`download_media` 落盘点改 `_resolve_save_dir`
-- `src/channels/dingtalk/adapter.py` - 同 wecom adapter
-- `src/channels/dingtalk/media.py` - 同 wecom media；三处落盘点（`download_image` / `download_file` / `upload_from_url`）改 `_resolve_save_dir`
-- `src/channels/wecom_kf/adapter.py` - 新增 `set_tenant_id`；`_media_upload_dir` 引用点（`_default_thumb.png` / renderer 创建）跟随切换
-- `src/channels/wecom_kf/renderer.py` - 新增 tenant_id 支持，落盘走 `ensure_tenant_storage_dir(tenant_id, "conversation")`
+- `src/channels/dingtalk/adapter.py` - 新增 `_tenant_id` 字段 + `async set_tenant_id`（转发 `self.media.set_tenant_id`）
+- `src/channels/dingtalk/media.py` - 新增 `tenant_id` 字段 + `set_tenant_id` + `_resolve_save_dir`；三处落盘点（`download_image` / `download_file` / `upload_from_url`）改 `_resolve_save_dir`
+- `src/channels/wecom_kf/adapter.py` - 新增 `_tenant_id` 字段 + `async set_tenant_id`（转发已创建 renderer）+ `_resolve_media_dir`；`_get_default_thumb_media_id` 的 `_default_thumb.png` 与 `renderer` 懒加载创建跟随切换
+- `src/channels/wecom_kf/renderer.py` - 新增 `tenant_id` 参数 + `set_tenant_id` + `_resolve_save_dir`；`render_table` / `render_markdown` 落盘走 `_resolve_save_dir`
+- `tests/unit/channels/test_channel_tenant_storage.py` - **新建**，13 个测试
+
+**关键机制**：`src/saas/services/channel_factory.py:48-59` `_build_adapter` 已有通用注入——`if hasattr(adapter, "set_tenant_id"): await adapter.set_tenant_id(tenant_id)`。各 adapter 加 `set_tenant_id` 后自动生效，**无需改 factory**。飞书渠道此前已具备该能力，本阶段未改动。
 
 **场景目录**：渠道媒体文件本质是对话附件，统一用 `conversation/` 场景（与飞书一致）。
 
 **迁移脚本**：历史渠道文件 `storage/uploads/{channel}/` **无租户维度**（旧文件落盘时未记录 tenant_id），无法推断目标租户，`_SKIP_TOP_DIRS` 继续跳过；仅新文件走新路径。此为"无法迁移"而非"豁免"。
+
+**测试**：`tests/unit/channels/test_channel_tenant_storage.py` 13 passed；回归 `tests/unit/channels/` + `test_storage_migration.py` + `test_tenant_storage_paths.py` 808 passed（其中 `wecom_personal_rpa` 2 failed 为预先存在的 DB schema 漂移，与 Phase 5 无关）；import 检查 OK
 
 ---
 
@@ -205,14 +204,13 @@
 | Phase 2 知识库 | ✅ 已完成 | `ebca7d3` |
 | Phase 3 数据分析 | ✅ 已完成 | `16165e8` |
 | Phase 4 模板文件 | ✅ 已完成 | `d17d657` |
-| Phase 5 渠道媒体 | 🔧 未开始（纳入租户隔离） | - |
+| Phase 5 渠道媒体 | ✅ 已完成 | 待提交 |
 | Phase 6 word 同步 + 收尾 | ✅ 已完成 | `78a0a79` |
 | Phase 7 租户迁移工具 target_storage 改造 | 🔧 待立项（Phase 6 评估剥离） | - |
 
 ## 下次继续的入口
 
-1. **待开发**：Phase 5 渠道媒体文件（纳入租户隔离，飞书已完成，wecom / dingtalk / wecom_kf 按同模式补齐）
-2. **待立项**：Phase 7 租户迁移工具 `tenant_migration.py` + `scripts/tenant_migrate_kb.py` 的 target_storage 改造（涉及 file_path 字段重新构造，工程量大）
+1. **待立项**：Phase 7 租户迁移工具 `tenant_migration.py` + `scripts/tenant_migrate_kb.py` 的 target_storage 改造（涉及 file_path 字段重新构造，工程量大）
 
 ## 相关文档
 

@@ -12,6 +12,8 @@ from typing import Any, Callable, Awaitable, Optional, Tuple
 import httpx
 from loguru import logger
 
+from src.core.storage import ensure_tenant_storage_dir
+
 class WeComMedia:
     """企业微信媒体文件管理"""
 
@@ -27,15 +29,31 @@ class WeComMedia:
         self,
         access_token_getter: Callable[[], Awaitable[str]],
         upload_dir: Optional[str] = None,
+        tenant_id: str = "",
     ):
         """
         Args:
             access_token_getter: 获取 access_token 的异步函数
-            upload_dir: 媒体文件本地存储目录
+            upload_dir: 媒体文件本地存储目录（无 tenant_id 时使用）
+            tenant_id: 租户 ID，设置后文件存到
+                       `storage/tenants/{tenant_id}/conversation/`
         """
         self._get_access_token = access_token_getter
         self.upload_dir = upload_dir or "./storage/uploads/wecom"
+        self.tenant_id = tenant_id or ""
         os.makedirs(self.upload_dir, exist_ok=True)
+
+    def set_tenant_id(self, tenant_id: str) -> None:
+        """设置租户 ID（由 ChannelFactory 在创建 adapter 后注入）"""
+        self.tenant_id = tenant_id or ""
+
+    def _resolve_save_dir(self) -> str:
+        """解析最终保存目录，按租户隔离规范优先"""
+        if self.tenant_id:
+            return ensure_tenant_storage_dir(self.tenant_id, "conversation")
+        # 单租户模式兜底
+        os.makedirs(self.upload_dir, exist_ok=True)
+        return self.upload_dir
 
     async def download_media(
         self, media_id: str
@@ -85,7 +103,7 @@ class WeComMedia:
                     filename = disposition.split("filename=")[-1].strip('"')
 
                 # 保存到本地
-                local_path = os.path.join(self.upload_dir, filename)
+                local_path = os.path.join(self._resolve_save_dir(), filename)
                 with open(local_path, "wb") as f:
                     f.write(response.content)
 
