@@ -1,5 +1,5 @@
 /**
- * 9 个 MCP tool 的契约定义（实施规格 m02 §6 / 标准 §5）。
+ * 11 个 MCP tool 的契约定义（实施规格 m02 §6 / 标准 §5）。
  *
  * zodShape 是 registerTool 的输入；manifest digest 用同一来源推导的 JSON Schema，
  * 保证「Host 看到的 schema」与「manifest digest 的 schema」同源（SDK 1.30.0 内部同样
@@ -128,6 +128,30 @@ export const TOOL_DEFS: BossToolDef[] = [
       dry_run: z.boolean().default(false).describe('只输入不点发送（测试链路，默认 false 真发送）'),
     },
     annotations: { title: '向当前会话发送消息', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  },
+  {
+    name: 'boss_list_jobs',
+    title: '列出当前招聘者所有职位',
+    description:
+      '在 BOSS 直聘「推荐牛人」页打开职位下拉，解析并返回当前招聘者的全部职位列表（职位名/城市/薪资/点击坐标/是否待开放）。' +
+      '只读：不改变任何职位状态（但会借用真实鼠标点开下拉，操作期间勿动鼠标）。' +
+      '每个职位标注 pending（待开放/未发布，项右侧有「待」徽章）——切到待开放职位会导致页面异常，select-job 会拒绝这类职位。' +
+      '用于在 select-job 前确认精确职位名（用户口述的职位名可能不精确）。前置要求：当前在推荐牛人页，否则返回 WRONG_PAGE。',
+    zodShape: {},
+    annotations: { title: '列出当前招聘者所有职位', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  {
+    name: 'boss_select_job',
+    title: '切换当前招聘职位',
+    description:
+      '在 BOSS 直聘「推荐牛人」页切换当前招聘职位到指定职位名（精确匹配，外部写动作）。' +
+      'job_name 必须是 list-jobs 返回的精确职位名（CLI 内部不做模糊匹配，匹配 0 或多个都报错）。' +
+      '若目标职位待开放（pending=true），点击前直接拒绝（切到未发布职位会致页面异常），请改选已开放职位。' +
+      '前置要求：当前在推荐牛人页，否则返回 WRONG_PAGE。切换后会校验职位框文本已变更，未生效则报错。',
+    zodShape: {
+      job_name: z.string().min(1).describe('目标职位名（精确，用 list-jobs 查看，如 "PHP开发工程师"）'),
+    },
+    annotations: { title: '切换当前招聘职位', readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
 ]
 

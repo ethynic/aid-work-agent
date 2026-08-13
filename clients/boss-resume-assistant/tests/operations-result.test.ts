@@ -23,6 +23,7 @@ import { ConsentError } from '../src/main/boss/ResumeConsentExecutor.js'
 import { NavError } from '../src/main/boss/PageNavigator.js'
 import { ChatRejectError } from '../src/main/boss/ChatRejectExecutor.js'
 import { InterviewDemoError } from '../src/main/boss/InterviewDemoExecutor.js'
+import { JobSwitchError } from '../src/main/boss/JobSwitcher.js'
 import { WinClickError } from '../src/main/input/WinMouseClicker.js'
 
 function silentCtx(): OpContext {
@@ -275,6 +276,7 @@ test('errorMapping：写后校验失败 → EXECUTION_UNKNOWN', () => {
     new ChatRejectError('确认后「不合适」按钮仍存在且会话未切换：标记结果无法确认'),
     new NavError('点击左侧菜单「沟通」后页面未跳转（当前 URL: xxx）'),
     new InterviewDemoError('备注逐字输入后字数计数器未显示 16'),
+    new JobSwitchError('点击职位项后切换未生效（职位框仍为「PHP开发工程师」，期望「前端开发」），请人工查看页面'),
   ]
   for (const err of cases) {
     assert.equal(mapExecutorError(err).code, 'EXECUTION_UNKNOWN', err.message)
@@ -290,6 +292,8 @@ test('errorMapping：结构变化/找不到元素 → UI_CHANGED', () => {
     new InterviewDemoError('未找到唯一的「约面试」按钮'),
     new GreetError('某个结构错误'),
     new WinClickError('win-click.ps1 执行失败(exit=2): 落点被遮挡', 2),
+    new JobSwitchError('职位「Java」不在当前招聘者的职位列表中（可用职位：PHP开发工程师、前端开发），请人工查看'),
+    new JobSwitchError('打开职位下拉后未解析到任何职位项（项无 layout bounds 可能是等待不足），请人工查看'),
   ]
   for (const err of cases) {
     assert.equal(mapExecutorError(err).code, 'UI_CHANGED', err.message)

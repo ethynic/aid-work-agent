@@ -2,8 +2,8 @@
 /**
  * BOSS 招聘操作 CLI 入口。
  *
- * 7 个真机验证成功的操作命令（filter / greet / goto / accept / reject / interview，
- * 其中 filter 含设置与 --clear 两种用法）+ 3 个标准 Provider 命令（mcp / doctor / version）。
+ * 操作命令（filter / greet / goto / accept / reject / interview / send-to / send-current /
+ * list-jobs / select-job，其中 filter 含设置与 --clear 两种用法）+ 3 个标准 Provider 命令（mcp / doctor / version）。
  * 操作命令只是薄 renderer，业务能力在 src/main/operations/，与 MCP tool handler 共享。
  *
  * 用法：
@@ -16,6 +16,8 @@
  *   node dist/src/cli/index.js interview [--remark "..."]
  *   node dist/src/cli/index.js send-to <姓名> --message <消息> [--dry-run]
  *   node dist/src/cli/index.js send-current --message <消息> [--dry-run]
+ *   node dist/src/cli/index.js list-jobs
+ *   node dist/src/cli/index.js select-job <职位名>
  *   node dist/src/cli/index.js mcp --stdio
  *   node dist/src/cli/index.js doctor
  *   node dist/src/cli/index.js version [--json]
@@ -38,6 +40,8 @@ const USAGE = `BOSS 招聘操作 CLI
   interview [--remark "..."]  约面试表单填充演示：逐字填备注+选明天日期后点取消关闭（绝不点发送；期间勿动鼠标）
   send-to <姓名> --message <消息> [--dry-run]   搜索找人 → 进入对话 → 输入并发送消息（默认真发送；--dry-run 只输入不发送；期间勿动鼠标）
   send-current --message <消息> [--dry-run]     向当前已选会话输入并发送消息（前提已选会话；默认真发送；--dry-run 只输入不发送；期间勿动鼠标）
+  list-jobs                    列出当前招聘者的所有职位（打开职位下拉解析；只读，但借用真实鼠标点开下拉，期间勿动鼠标）
+  select-job <职位名>          切换到指定职位（精确职位名，可用 list-jobs 查看；真实写动作，期间勿动鼠标）
 
 Provider 命令：
   mcp --stdio                 启动标准本地 MCP server（stdout 只承载协议，供 Codex/WorkBuddy 等 Host 使用）
@@ -167,6 +171,23 @@ async function main(): Promise<number> {
       if (cdpPort === 'invalid') return 2
       const { sendCurrentCommand } = await import('./commands/sendCurrent.js')
       return sendCurrentCommand({ message, dryRun: hasFlag(args, 'dry-run'), cdpPort })
+    }
+    case 'list-jobs': {
+      const cdpPort = parseCdpPort(args)
+      if (cdpPort === 'invalid') return 2
+      const { listJobsCommand } = await import('./commands/listJobs.js')
+      return listJobsCommand({ cdpPort })
+    }
+    case 'select-job': {
+      const jobName = args.positional[1]
+      if (!jobName) {
+        console.error('select-job 缺少职位名：select-job <职位名>（可用 list-jobs 查看精确职位名）')
+        return 2
+      }
+      const cdpPort = parseCdpPort(args)
+      if (cdpPort === 'invalid') return 2
+      const { selectJobCommand } = await import('./commands/selectJob.js')
+      return selectJobCommand({ jobName, cdpPort })
     }
     case 'mcp': {
       const cdpPort = parseCdpPort(args)
