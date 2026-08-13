@@ -58,6 +58,31 @@ def resolve_font_name(name: str) -> str:
     return FONT_MAP.get(name, name)
 
 
+def _resolve_path_via_redis(file_id: str) -> Optional[str]:
+    """通过 Redis uploaded_file:{file_id} 元数据查磁盘路径
+
+    file_id 上传时（cp/upload/subagent_template_file）写了永久元数据，
+    path 字段是绝对路径，直接命中最可靠，不依赖目录扫描。
+
+    Redis 不可用或 key 不存在时返回 None，调用方走目录扫描兜底。
+    """
+    if not file_id or not file_id.startswith("file_"):
+        return None
+    try:
+        from src.core.redis_client import redis_client
+        key = redis_client.make_key("uploaded_file", file_id)
+        info = redis_client.hgetall(key)
+        if not info:
+            return None
+        path = info.get("path")
+        if path and Path(path).exists():
+            return str(Path(path).absolute())
+        return None
+    except Exception as e:
+        logger.warning(f"[ExcelFileHandler] Redis 元数据查询失败: {e}")
+        return None
+
+
 def parse_color(color_str: str) -> Optional[str]:
     """解析颜色字符串，返回 6 位 hex（不含 #）"""
     if not color_str:
@@ -207,12 +232,14 @@ class ExcelFileHandler:
 
     @staticmethod
     def resolve_path(file_path: str) -> str:
-        """解析文件路径（支持相对路径）
+        """解析文件路径（支持相对路径或 file_id）
 
         查找顺序：
-        1. 原路径直接命中
-        2. 新路径 storage/tenants/{tenant}/conversation/{file}
-        3. 旧路径 storage/uploads/{file}（只读兼容）
+        1. 原路径直接命中（含绝对路径）
+        2. Redis 元数据命中（file_id -> uploaded_file:{file_id}.path，最可靠）
+        3. 新路径 storage/tenants/{tenant}/conversation/{file}
+        4. 旧路径 storage/uploads/{tenant}/templates/{file}（子智能体模板文件）
+        5. 旧路径 storage/uploads/{file}（只读兼容，根目录散落文件）
         """
         p = Path(file_path)
         # 防路径穿越：含 .. 的相对路径不得进行 exists 检查或路径拼接
@@ -221,6 +248,13 @@ class ExcelFileHandler:
             return str(p.absolute())
         if p.exists():
             return str(p.absolute())
+
+        # Redis 元数据命中：file_id 上传时写了 uploaded_file:{file_id} 永久元数据
+        # 适用于所有走 cp/upload/subagent_template_file 上传的文件，不依赖目录扫描
+        redis_path = _resolve_path_via_redis(file_path)
+        if redis_path:
+            return redis_path
+
         try:
             from src.core.storage import _TENANTS_ROOT
             project_root = Path(__file__).resolve().parents[3]
@@ -236,6 +270,24 @@ class ExcelFileHandler:
                                 return str(candidate.absolute())
         except (ImportError, AttributeError):
             pass
+        # 旧路径兜底 1：storage/uploads/{tenant}/templates/{file}（子智能体模板文件）
+        # 防路径穿越：file_path 含 .. 或绝对路径时跳过
+        fp_obj2 = Path(file_path)
+        if not fp_obj2.is_absolute() and ".." not in fp_obj2.parts:
+            try:
+                from src.config.settings import settings
+                uploads_root = Path(settings.storage.uploads_dir)
+                if not uploads_root.is_absolute():
+                    uploads_root = Path(__file__).resolve().parents[3] / uploads_root
+                if uploads_root.exists():
+                    for d1 in uploads_root.iterdir():
+                        if d1.is_dir() and d1.name.startswith("tenant_"):
+                            candidate = d1 / "templates" / file_path
+                            if candidate.exists():
+                                return str(candidate.absolute())
+            except (ImportError, AttributeError):
+                pass
+        # 旧路径兜底 2：storage/uploads/{file}（根目录散落文件）
         try:
             from src.config.settings import settings
             uploads = Path(settings.storage.uploads_dir) / file_path

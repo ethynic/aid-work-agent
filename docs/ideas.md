@@ -20,6 +20,8 @@
 | # | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
 | 1 | 可观测性与质量保障 | 🔧 部分完成 | 分布式追踪 + LLM 质量评估 + 实时监控 + 结构化告警。Phase 1 全部完成（含渠道追踪方案 C：TraceCollector 下沉到 `Agent.process_message`，从 record_service 自动读 source_type，渠道零改造）。1.6（单测/e2e）和 1.7（JSONL 双写迁移）已取消：obs 系统每日真实流量运行已事实验证；JSONL 与 obs 永久并行。Phase 2-4 未开始。2026-07-07 | [设计](infrastructure/observability-design.md) / [延伸设计](infrastructure/observability-channel-sessions-design.md) | [计划](infrastructure/observability-dev-plan.md) / [延伸计划](infrastructure/observability-channel-sessions-dev-plan.md) |
+| 60 | 租户附件存储路径规范改造 | 🔧 部分完成 | 把全项目 `storage/uploads/{tenant}/{user}/` 旧路径统一改造为 `storage/tenants/{tenant_id}/{scene}/` 新规范（依据 `.claude/rules/backend_dev.md` §租户附件存储规范）。**已完成**：Phase 1（主入口 + 5 个文档工具 conversation 场景 + resolve_path 兜底 + 路径穿越守卫）+ 一次性迁移模块（`src/core/storage_migration.py`，lifespan 启动时自动执行，含 Redis 元数据同步 + advisory lock 防多 worker 并发）+ excel_process file_id 解析修复（补 `_resolve_file` + resolve_path 兜底扩展查 Redis + templates 子目录）。**未完成**：Phase 2 知识库（`src/knowledge/service.py` + `src/api/travel_quote.py`）+ Phase 3 数据分析（`src/api/data_analysis.py` data_sources 场景）+ Phase 4 模板文件（`src/api/subagent_template_file.py` templates 场景）+ Phase 5 渠道媒体（建议豁免，仅补规范说明）+ Phase 6 word_process_tool 同步修复 + skill_executor/tenant_migration 收尾。2026-08-13 | [规范](../.claude/rules/backend_dev.md) | [计划](plans/plan-tenant-storage-migration.md) |
+
 
 ## 系统功能
 

@@ -184,6 +184,19 @@ class ExcelProcessTool(BaseTool):
             logger.warning(f"[ExcelProcess] 解析输出目录失败，回退默认: {e}")
             return None
 
+    def _resolve_file(self, file_path: str) -> str:
+        """解析 file_id 或相对路径为磁盘绝对路径
+
+        Agent 传的 file_paths 可能是 file_id（如 file_e300d0d5befc）或相对路径，
+        不能直接当磁盘路径用。通过 ExcelFileHandler.resolve_path 走 Redis 元数据
+        + 新旧目录兜底扫描，找不到抛 FileNotFoundError。
+        """
+        from src.tools.excel.excel_lib import ExcelFileHandler
+        resolved = ExcelFileHandler.resolve_path(file_path)
+        if not Path(resolved).exists():
+            raise FileNotFoundError(f"文件不存在: {file_path}")
+        return resolved
+
     def _get_router(self):
         if self._router is None:
             from src.tools.excel.excel_router import ExcelRouter
@@ -477,7 +490,10 @@ class ExcelProcessTool(BaseTool):
         if not ctx.file_paths:
             return {"success": False, "error": "read 操作需要 file_paths 参数"}
 
-        file_path = ctx.file_paths[0]
+        try:
+            file_path = self._resolve_file(ctx.file_paths[0])
+        except FileNotFoundError as e:
+            return {"success": False, "error": str(e)}
 
         # 精确范围读取 或 公式读取 → 使用 read_sheet（结构化数据）
         if params.get("range") or params.get("include_formulas"):
@@ -500,7 +516,11 @@ class ExcelProcessTool(BaseTool):
         if not ctx.file_paths:
             return {"success": False, "error": "to_md 操作需要 file_paths 参数"}
 
-        file_path = ctx.file_paths[0]
+        try:
+            file_path = self._resolve_file(ctx.file_paths[0])
+        except FileNotFoundError as e:
+            return {"success": False, "error": str(e)}
+
         return excel_to_markdown(
             file_path,
             sheet_name=params.get("sheet_name"),
@@ -572,7 +592,10 @@ class ExcelProcessTool(BaseTool):
         if not ctx.file_paths:
             return {"success": False, "error": "modify 操作需要 file_paths 参数"}
 
-        file_path = ctx.file_paths[0]
+        try:
+            file_path = self._resolve_file(ctx.file_paths[0])
+        except FileNotFoundError as e:
+            return {"success": False, "error": str(e)}
         operations = params.get("operations", [])
         if not operations:
             return {"success": False, "error": "modify 操作需要 params.operations 参数"}
@@ -601,7 +624,10 @@ class ExcelProcessTool(BaseTool):
         if not ctx.file_paths:
             return {"success": False, "error": "format 操作需要 file_paths 参数"}
 
-        file_path = ctx.file_paths[0]
+        try:
+            file_path = self._resolve_file(ctx.file_paths[0])
+        except FileNotFoundError as e:
+            return {"success": False, "error": str(e)}
         operations = params.get("format_operations") or params.get("operations", [])
         if not operations:
             return {"success": False, "error": "format 操作需要 params.format_operations 参数"}
@@ -628,11 +654,17 @@ class ExcelProcessTool(BaseTool):
         template_name = params.get("template_name")
         template_file = params.get("template_file")
         if template_file:
-            template_path = template_file
+            try:
+                template_path = self._resolve_file(template_file)
+            except FileNotFoundError as e:
+                return {"success": False, "error": str(e)}
         elif template_name:
             template_path = str(Path("storage/excel_templates") / f"{template_name}.xlsx")
         elif ctx.file_paths:
-            template_path = ctx.file_paths[0]
+            try:
+                template_path = self._resolve_file(ctx.file_paths[0])
+            except FileNotFoundError as e:
+                return {"success": False, "error": str(e)}
         else:
             return {"success": False, "error": "fill_template 需要指定模板（template_file / template_name / file_paths）"}
 
@@ -667,8 +699,13 @@ class ExcelProcessTool(BaseTool):
         if not ctx.file_paths or len(ctx.file_paths) < 2:
             return {"success": False, "error": "merge 操作需要 file_paths 中包含至少 2 个文件"}
 
+        try:
+            resolved_paths = [self._resolve_file(fp) for fp in ctx.file_paths]
+        except FileNotFoundError as e:
+            return {"success": False, "error": str(e)}
+
         result = merge_files(
-            ctx.file_paths,
+            resolved_paths,
             output_name=params.get("output_name"),
             merge_mode=params.get("merge_mode", "sheets"),
         )
@@ -684,7 +721,10 @@ class ExcelProcessTool(BaseTool):
         if not ctx.file_paths:
             return {"success": False, "error": "convert 操作需要 file_paths 参数"}
 
-        file_path = ctx.file_paths[0]
+        try:
+            file_path = self._resolve_file(ctx.file_paths[0])
+        except FileNotFoundError as e:
+            return {"success": False, "error": str(e)}
         target_format = params.get("target_format", "xlsx")
 
         result = convert_format(
