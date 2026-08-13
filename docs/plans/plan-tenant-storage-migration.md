@@ -98,18 +98,22 @@
 
 ---
 
-### Phase 3：数据分析场景（data_sources）🔧 未开始
+### Phase 3：数据分析场景（data_sources）✅ 已完成
 
 **改造范围**：数据分析源文件持久化路径。
 
-**待改文件**：
-- `src/api/data_analysis.py:515,532,536` - `persist_dir = _project_root / settings.storage.uploads_dir / (tenant_id or "_global") / "data_sources"` 改为 `storage/tenants/{tenant}/data_sources/`
+**改动文件**：
+- `src/api/data_analysis.py:515,532,534` - `upload_excel` 的 `persist_dir` 从 `_project_root / settings.storage.uploads_dir / (tenant_id or "_global") / "data_sources"` 改为 `Path(ensure_tenant_storage_dir(tenant_id or "_anonymous", "data_sources")).absolute()`，写入 `storage/tenants/{tenant}/data_sources/`
+- `src/core/storage_migration.py` - `_resolve_new_path` 新增 `data_sources` 变体识别 + 迁移规则 docstring 补充
+- `tests/unit/test_storage_migration.py` - 新增 2 个测试（`test_bare_tenant_data_sources` / `test_global_data_sources`）
+- `docs/system/file_usage.md:62,133,137,305` - 更新数据源文件路径与源文件说明
 
 **关键点**：
-- 无租户时回退 `_global`，需统一为 `_anonymous`（与 Phase 1 一致）
-- 数据分析任务可能引用旧路径，需检查 `task_records` 表
+- 无租户回退 `_global` 统一为 `_anonymous`（与 Phase 1 一致），迁移脚本同步把 `_global/data_sources` 映射到 `_anonymous/data_sources`
+- 迁移脚本已支持 `storage/uploads/{tid}/data_sources/{file}` -> `storage/tenants/{tid}/data_sources/{file}`（含 `_global` -> `_anonymous` 变体）
+- 数据源文件路径存于 `documents.metadata.source.file_path`（非 `task_records` 表，该表不存在）；迁移后旧记录路径失效由 `_resolve_schema_source_status` 的 `os.path.exists` 兜底为 `missing`，与 Phase 2 `documents.file_path` 相同的已知收尾项
 
-**迁移规则补充**：`storage/uploads/{tenant}/data_sources/{file}` -> `storage/tenants/{tenant}/data_sources/{file}`（迁移脚本需新增此变体）
+**测试**：`tests/unit/test_storage_migration.py` 23 passed；回归 `tests/unit/test_tenant_storage_paths.py` 24 passed
 
 ---
 
@@ -188,7 +192,7 @@
 | 一次性迁移模块 | ✅ 已完成 | `5a8d4fa` |
 | excel_process file_id 修复 | ✅ 已完成（待提交） | - |
 | Phase 2 知识库 | ✅ 已完成 | `ebca7d3` |
-| Phase 3 数据分析 | 🔧 未开始 | - |
+| Phase 3 数据分析 | ✅ 已完成（待提交） | - |
 | Phase 4 模板文件 | 🔧 未开始 | - |
 | Phase 5 渠道媒体 | 🔧 未开始（建议豁免） | - |
 | Phase 6 word 同步 + 收尾 | ✅ 已完成（待提交） | - |
@@ -196,8 +200,8 @@
 
 ## 下次继续的入口
 
-1. **优先级中**：Phase 4 模板文件（影响实际业务，迁移脚本需补充 `templates` 变体）+ Phase 2 已完成
-2. **优先级低**：Phase 3 数据分析（单文件改造）+ Phase 5 渠道（建议豁免，仅补规范说明）
+1. **优先级中**：Phase 4 模板文件（影响实际业务，迁移脚本需补充 `templates` 变体）
+2. **优先级低**：Phase 5 渠道（建议豁免，仅补规范说明）
 3. **待立项**：Phase 7 租户迁移工具 `tenant_migration.py` + `scripts/tenant_migrate_kb.py` 的 target_storage 改造（涉及 file_path 字段重新构造，工程量大）
 
 ## 相关文档

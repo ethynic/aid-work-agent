@@ -110,6 +110,8 @@ def _resolve_new_path(
         storage/uploads/tenant_{tid}/knowledge/{file}       -> storage/tenants/{tid}/knowledge/{file}
         storage/uploads/tenant_{tid}/{file}                 -> storage/tenants/{tid}/conversation/{file}
         storage/uploads/{tid}/knowledge/{file}              -> storage/tenants/{tid}/knowledge/{file}
+        storage/uploads/{tid}/data_sources/{file}           -> storage/tenants/{tid}/data_sources/{file}
+        storage/uploads/_global/data_sources/{file}         -> storage/tenants/_anonymous/data_sources/{file}
         storage/uploads/dingtalk/、wecom_kf/                -> None（跳过）
         其他                                                -> None（跳过 + warning）
     """
@@ -164,6 +166,13 @@ def _resolve_new_path(
     # parts[1]=="knowledge" 是强约束，避免误识别其他顶层目录
     if len(parts) >= 2 and parts[1] == "knowledge":
         return tenants_root / top / "knowledge" / Path(*parts[2:])
+
+    # {tid}/data_sources/{file} -> data_sources（数据分析源文件，tid 不带 tenant_ 前缀）
+    # _global/data_sources/{file} -> _anonymous/data_sources/{file}（无租户回退统一为 _anonymous）
+    if len(parts) >= 2 and parts[1] == "data_sources":
+        if top == "_global":
+            return tenants_root / "_anonymous" / "data_sources" / Path(*parts[2:])
+        return tenants_root / top / "data_sources" / Path(*parts[2:])
 
     # 其他无法识别
     logger.warning(

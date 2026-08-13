@@ -512,7 +512,7 @@ async def upload_excel(
 ):
     """
     上传 Excel/CSV 文件，解析结构并用 LLM 推断 schema，返回供用户确认。
-    不保存到知识库。源文件持久化到 storage/uploads/{tenant_id}/data_sources/，
+    不保存到知识库。源文件持久化到 storage/tenants/{tenant_id}/data_sources/，
     供后续数据分析时加载数据使用。
 
     采用 SSE 流式响应：推送解析、推断进度，最终 complete 事件携带 schemas。
@@ -529,12 +529,9 @@ async def upload_excel(
     async def event_generator():
         total_start = time.monotonic()
         try:
-            # 持久化源文件到 storage/uploads/{tenant_id}/data_sources/
-            from src.config.settings import settings
-            from pathlib import Path as _Path
-            _project_root = _Path(__file__).resolve().parent.parent.parent
-            persist_dir = _project_root / settings.storage.uploads_dir / (tenant_id or "_global") / "data_sources"
-            persist_dir.mkdir(parents=True, exist_ok=True)
+            # 持久化源文件到 storage/tenants/{tenant_id}/data_sources/
+            from src.core.storage import ensure_tenant_storage_dir
+            persist_dir = Path(ensure_tenant_storage_dir(tenant_id or "_anonymous", "data_sources")).absolute()
             file_id = uuid.uuid4().hex[:12]
             persist_path = persist_dir / f"{file_id}{ext}"
 

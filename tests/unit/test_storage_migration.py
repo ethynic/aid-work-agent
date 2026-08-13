@@ -64,6 +64,34 @@ class TestResolveNewPath:
         new = _resolve_new_path(old, uploads, tenants)
         assert new == tenants / "1dc997a1806b" / "knowledge" / "kb_abc.md"
 
+    def test_bare_tenant_data_sources(self, tmp_path):
+        """storage/uploads/{tid}/data_sources/{file} -> storage/tenants/{tid}/data_sources/{file}
+
+        Phase 3 数据分析源文件，tid 不带 tenant_ 前缀。
+        """
+        uploads = tmp_path / "storage" / "uploads"
+        tenants = tmp_path / "storage" / "tenants"
+        old = uploads / "1dc997a1806b" / "data_sources" / "file_abc.xlsx"
+        old.parent.mkdir(parents=True)
+        old.write_text("x")
+
+        new = _resolve_new_path(old, uploads, tenants)
+        assert new == tenants / "1dc997a1806b" / "data_sources" / "file_abc.xlsx"
+
+    def test_global_data_sources(self, tmp_path):
+        """storage/uploads/_global/data_sources/{file} -> storage/tenants/_anonymous/data_sources/{file}
+
+        Phase 3 无租户回退 _global 统一为 _anonymous。
+        """
+        uploads = tmp_path / "storage" / "uploads"
+        tenants = tmp_path / "storage" / "tenants"
+        old = uploads / "_global" / "data_sources" / "file_def.csv"
+        old.parent.mkdir(parents=True)
+        old.write_text("x")
+
+        new = _resolve_new_path(old, uploads, tenants)
+        assert new == tenants / "_anonymous" / "data_sources" / "file_def.csv"
+
     def test_tenant_user(self, tmp_path):
         """storage/uploads/tenant_{tid}/user_{uid}/{file} -> conversation"""
         uploads = tmp_path / "storage" / "uploads"

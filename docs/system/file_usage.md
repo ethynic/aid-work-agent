@@ -59,7 +59,7 @@ storage/
 | 知识图文档 | `uploads/{tenant_id}/knowledge/` | 磁盘 | 是 | 上传后解析、向量化的知识文件 |
 | 渠道媒体文件 | `uploads/wecom/`、`uploads/wecom_kf/` | 磁盘 | 否 | 企业微信下载的媒体文件和渲染图片 |
 | 用户个人文件 | `uploads/tenant_{id}/user_{uid}/` | 磁盘 | 是 | 用户个人上传的混合类型文件 |
-| 数据源文件 | `uploads/{tenant_id}/data_sources/` | 磁盘 | 是 | 数据分析智能体的数据源 |
+| 数据源文件 | `tenants/{tenant_id}/data_sources/` | 磁盘 | 是 | 数据分析智能体的数据源 |
 | 技能环境文件 | `tenants/{tenant_id}/skills/{skill_name}/.env` | 磁盘 | 是 | 技能的环境变量配置 |
 | 长期记忆文件 | `memory/{tenant_id}/` | 磁盘 | 是 | 长期记忆存储文件 |
 | 子智能体配置 | `subagents/{dir}/extra_{tenant_id}.md` | 磁盘 | 是 | 子智能体租户级额外配置 |
@@ -130,11 +130,11 @@ storage/
 
 数据分析智能体使用的数据源文件（Excel、CSV 等）。
 
-**路径**：`storage/uploads/{tenant_id}/data_sources/`
+**路径**：`storage/tenants/{tenant_id}/data_sources/`
 **文件类型**：`.xlsx`、`.csv`、`.xls` 等
 **用途**：数据分析的原始数据输入
 
-**源文件**：`src/tools/data_analysis/upload_data_tool.py`
+**源文件**：`src/api/data_analysis.py`（`upload_excel` 端点）
 
 ### 3.6 技能环境变量文件
 
@@ -302,7 +302,6 @@ class StorageConfig(BaseModel):
 | 企业微信客服渲染 | `storage/uploads/wecom_kf` |
 | 知识服务 | `storage/uploads/{tenant_id}/knowledge/` |
 | 文件工具 | `storage/uploads/{tenant_id}/{user_id}/` |
-| 数据分析上传 | `storage/uploads/{tenant_id}/data_sources/` |
 | 旅行报价 | `storage/uploads/{tenant_id}/knowledge` |
 | Word 工具 | `storage/uploads/{tenant_id}/conversation/` |
 
@@ -314,6 +313,7 @@ class StorageConfig(BaseModel):
 |------|------|
 | 企业微信客服消息 | `tenants/{tenant_id}/`（通过 `ensure_tenant_storage_dir`） |
 | 外部客户附件 | `tenants/{tenant_id}/`（优先新路径，兼容旧路径） |
+| 数据分析上传 | `tenants/{tenant_id}/data_sources/`（通过 `ensure_tenant_storage_dir`） |
 
 ### 8.4 迁移策略
 
