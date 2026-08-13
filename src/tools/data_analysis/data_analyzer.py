@@ -135,9 +135,24 @@ class DataAnalyzer:
     def _load_excel(self, source: dict) -> Optional[pd.DataFrame]:
         """从 Excel/CSV 文件加载数据"""
         file_path = source.get("file_path", "")
-        if not file_path or not os.path.exists(file_path):
-            logger.error(f"[DataAnalyzer] 文件不存在: {file_path}")
+        if not file_path:
             return None
+        if not os.path.exists(file_path):
+            # 兜底：旧路径前缀重写（迁移期历史 metadata.source.file_path 可能仍指向
+            # storage/uploads/... 或误搬的 tenants/{tid}/conversation/data_sources/...）
+            # 命中且新路径存在则自动加载并回写 source.file_path，避免下次再兜底
+            from src.core.storage_migration import rewrite_legacy_data_source_path
+
+            alt = rewrite_legacy_data_source_path(file_path)
+            if alt and os.path.exists(alt):
+                logger.warning(
+                    f"[DataAnalyzer] 旧路径已迁移，自动重写: {file_path} -> {alt}"
+                )
+                file_path = alt
+                source["file_path"] = alt
+            else:
+                logger.error(f"[DataAnalyzer] 文件不存在: {file_path}")
+                return None
         return self._load_from_path(file_path, source)
 
     def _load_from_path(self, file_path: str, source: dict = None) -> Optional[pd.DataFrame]:

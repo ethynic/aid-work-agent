@@ -7,7 +7,11 @@
 - Redis 元数据同步
 - 渠道目录跳过
 - advisory lock 获取失败时跳过迁移
+- data_sources 误搬文件 relocate 修复（幂等）
+- documents.metadata.source.file_path 旧路径前缀重写（仅动 metadata 列）
 """
+
+import json
 
 import pytest
 from pathlib import Path
@@ -18,6 +22,8 @@ from src.core.storage_migration import (
     _migrate_file,
     _build_redis_path_index,
     migrate_uploads_to_tenants,
+    rewrite_legacy_data_source_path,
+    _fix_documents_metadata_paths,
 )
 
 
@@ -127,6 +133,22 @@ class TestResolveNewPath:
 
         new = _resolve_new_path(old, uploads, tenants)
         assert new == tenants / "t1" / "knowledge" / "kb_doc.md"
+
+    def test_tenant_data_sources(self, tmp_path):
+        """storage/uploads/tenant_{tid}/data_sources/{file} -> data_sources
+
+        Phase 3 数据分析源文件，tid 带 tenant_ 前缀。
+        历史曾因 _resolve_new_path 缺 data_sources 分支被误搬到
+        tenants/{tid}/conversation/data_sources/，本测试覆盖修复后的正确路径推算。
+        """
+        uploads = tmp_path / "storage" / "uploads"
+        tenants = tmp_path / "storage" / "tenants"
+        old = uploads / "tenant_t1" / "data_sources" / "650280730142.xlsx"
+        old.parent.mkdir(parents=True)
+        old.write_text("x")
+
+        new = _resolve_new_path(old, uploads, tenants)
+        assert new == tenants / "t1" / "data_sources" / "650280730142.xlsx"
 
     def test_tenant_direct_file(self, tmp_path):
         """storage/uploads/tenant_{tid}/{file} -> conversation"""
@@ -300,13 +322,15 @@ class TestMigrateUploadsToTenantsIntegration:
         (uploads / "1dc997a1806b" / "knowledge").mkdir(parents=True)
         (uploads / "1dc997a1806b" / "knowledge" / "kb_tenant.md").write_text("tenant-kb")
 
-        # mock advisory lock + Redis
+        # mock advisory lock + Redis + documents metadata 修复（避免连真实 DB）
         with patch(
             "src.core.storage_migration._acquire_advisory_lock", return_value=(True, None)
         ), patch(
             "src.core.storage_migration._release_advisory_lock"
         ), patch(
             "src.core.storage_migration._build_redis_path_index", return_value={}
+        ), patch(
+            "src.core.storage_migration._fix_documents_metadata_paths", return_value=0
         ):
             stats = migrate_uploads_to_tenants(project_root=tmp_path)
 
@@ -314,6 +338,7 @@ class TestMigrateUploadsToTenantsIntegration:
         assert stats["migrated"] == 6  # dingtalk 跳过
         assert stats["skipped"] == 1
         assert stats["errors"] == 0
+        assert stats["docs_updated"] == 0
 
         # 验证新路径下文件存在
         assert (tenants / "_anonymous" / "conversation" / "anon.docx").exists()
@@ -345,6 +370,7 @@ class TestMigrateUploadsToTenantsIntegration:
             "skipped": 0,
             "redis_updated": 0,
             "errors": 0,
+            "docs_updated": 0,
         }
         assert (uploads / "conversation" / "a.docx").exists()
 
@@ -360,18 +386,23 @@ class TestMigrateUploadsToTenantsIntegration:
             "src.core.storage_migration._release_advisory_lock"
         ), patch(
             "src.core.storage_migration._build_redis_path_index", return_value={}
+        ), patch(
+            "src.core.storage_migration._fix_documents_metadata_paths", return_value=0
         ):
             stats = migrate_uploads_to_tenants(project_root=tmp_path)
 
         assert stats["scanned"] == 0
         assert stats["migrated"] == 0
+        assert stats["docs_updated"] == 0
 
     def test_uploads_root_not_exists(self, tmp_path):
-        """storage/uploads/ 不存在：直接返回零统计"""
+        """storage/uploads/ 不存在：跳过 uploads 扫描，但仍跑 relocate 和 metadata 修复"""
         with patch(
             "src.core.storage_migration._acquire_advisory_lock", return_value=(True, None)
         ), patch(
             "src.core.storage_migration._release_advisory_lock"
+        ), patch(
+            "src.core.storage_migration._fix_documents_metadata_paths", return_value=0
         ):
             stats = migrate_uploads_to_tenants(project_root=tmp_path)
 
@@ -381,6 +412,7 @@ class TestMigrateUploadsToTenantsIntegration:
             "skipped": 0,
             "redis_updated": 0,
             "errors": 0,
+            "docs_updated": 0,
         }
 
 
@@ -428,3 +460,245 @@ class TestAdvisoryLockContract:
             migrate_uploads_to_tenants(project_root=tmp_path)
 
         mock_rel.assert_not_called()
+
+
+class TestRewriteLegacyDataSourcePath:
+    """数据分析源文件旧路径前缀重写规则（4 条）"""
+
+    def test_uploads_tenant_prefix(self):
+        """uploads/tenant_{tid}/data_sources/{file} -> tenants/{tid}/data_sources/{file}"""
+        assert rewrite_legacy_data_source_path(
+            "storage/uploads/tenant_b586cc25f107/data_sources/650280730142.xlsx"
+        ) == "storage/tenants/b586cc25f107/data_sources/650280730142.xlsx"
+
+    def test_uploads_tenant_prefix_absolute(self):
+        """绝对路径前缀（/app/...）也应被识别，输出保留前缀"""
+        assert rewrite_legacy_data_source_path(
+            "/app/storage/uploads/tenant_b586cc25f107/data_sources/650280730142.xlsx"
+        ) == "/app/storage/tenants/b586cc25f107/data_sources/650280730142.xlsx"
+
+    def test_uploads_global_prefix(self):
+        """uploads/_global/data_sources/{file} -> tenants/_anonymous/data_sources/{file}"""
+        assert rewrite_legacy_data_source_path(
+            "storage/uploads/_global/data_sources/file_def.csv"
+        ) == "storage/tenants/_anonymous/data_sources/file_def.csv"
+
+    def test_uploads_bare_tenant_prefix(self):
+        """uploads/{tid}/data_sources/{file} -> tenants/{tid}/data_sources/{file}"""
+        assert rewrite_legacy_data_source_path(
+            "storage/uploads/1dc997a1806b/data_sources/file_abc.xlsx"
+        ) == "storage/tenants/1dc997a1806b/data_sources/file_abc.xlsx"
+
+    def test_misplaced_tenants_conversation_data_sources(self):
+        """tenants/{tid}/conversation/data_sources/{file} -> tenants/{tid}/data_sources/{file}
+
+        _resolve_new_path 缺 data_sources 分支时历史误搬的位置。
+        """
+        assert rewrite_legacy_data_source_path(
+            "storage/tenants/b586cc25f107/conversation/data_sources/650280730142.xlsx"
+        ) == "storage/tenants/b586cc25f107/data_sources/650280730142.xlsx"
+
+    def test_no_match_returns_none(self):
+        """非旧路径前缀返回 None"""
+        assert rewrite_legacy_data_source_path(
+            "storage/tenants/b586cc25f107/data_sources/650280730142.xlsx"
+        ) is None
+        assert rewrite_legacy_data_source_path("") is None
+        assert rewrite_legacy_data_source_path(
+            "storage/uploads/tenant_t1/knowledge/kb.md"
+        ) is None
+
+
+class TestRelocateMisplacedDataSources:
+    """data_sources 误搬文件 relocate 修复 + 幂等"""
+
+    def test_relocate_misplaced_file(self, tmp_path):
+        """tenants/{tid}/conversation/data_sources/{file} 搬到 tenants/{tid}/data_sources/"""
+        uploads = tmp_path / "storage" / "uploads"
+        tenants = tmp_path / "storage" / "tenants"
+
+        # 构造误搬场景：文件已在 conversation/data_sources/ 下
+        misplaced = tenants / "b586cc25f107" / "conversation" / "data_sources" / "650280730142.xlsx"
+        misplaced.parent.mkdir(parents=True)
+        misplaced.write_text("data")
+
+        with patch(
+            "src.core.storage_migration._acquire_advisory_lock", return_value=(True, None)
+        ), patch(
+            "src.core.storage_migration._release_advisory_lock"
+        ), patch(
+            "src.core.storage_migration._build_redis_path_index", return_value={}
+        ), patch(
+            "src.core.storage_migration._fix_documents_metadata_paths", return_value=0
+        ):
+            stats = migrate_uploads_to_tenants(project_root=tmp_path)
+
+        # 文件已搬到正确位置
+        assert (tenants / "b586cc25f107" / "data_sources" / "650280730142.xlsx").exists()
+        assert (tenants / "b586cc25f107" / "data_sources" / "650280730142.xlsx").read_text() == "data"
+        # 原误搬位置已清空（目录被 rmdir）
+        assert not misplaced.exists()
+        assert not (tenants / "b586cc25f107" / "conversation" / "data_sources").exists()
+        # stats 反映 relocate
+        assert stats["migrated"] == 1
+        assert stats["errors"] == 0
+
+    def test_relocate_idempotent(self, tmp_path):
+        """二次运行：误搬文件已搬走，stats.migrated 不再增加"""
+        tenants = tmp_path / "storage" / "tenants"
+        target = tenants / "b586cc25f107" / "data_sources" / "650280730142.xlsx"
+        target.parent.mkdir(parents=True)
+        target.write_text("data")
+
+        with patch(
+            "src.core.storage_migration._acquire_advisory_lock", return_value=(True, None)
+        ), patch(
+            "src.core.storage_migration._release_advisory_lock"
+        ), patch(
+            "src.core.storage_migration._build_redis_path_index", return_value={}
+        ), patch(
+            "src.core.storage_migration._fix_documents_metadata_paths", return_value=0
+        ):
+            stats = migrate_uploads_to_tenants(project_root=tmp_path)
+
+        # 没有误搬文件可处理
+        assert stats["migrated"] == 0
+        assert stats["errors"] == 0
+        # 原文件未动
+        assert target.exists()
+
+    def test_relocate_skips_when_tenants_root_missing(self, tmp_path):
+        """tenants_root 不存在时 relocate 静默跳过"""
+        with patch(
+            "src.core.storage_migration._acquire_advisory_lock", return_value=(True, None)
+        ), patch(
+            "src.core.storage_migration._release_advisory_lock"
+        ), patch(
+            "src.core.storage_migration._fix_documents_metadata_paths", return_value=0
+        ):
+            stats = migrate_uploads_to_tenants(project_root=tmp_path)
+
+        assert stats["migrated"] == 0
+        assert stats["errors"] == 0
+
+
+class TestFixDocumentsMetadataPaths:
+    """documents.metadata.source.file_path 旧路径前缀重写"""
+
+    def test_rewrites_all_four_legacy_prefixes(self):
+        """4 种旧前缀全部被正确重写，UPDATE 调用 4 次"""
+        # 4 种旧前缀各一条记录
+        rows = [
+            {
+                "id": 101,
+                "metadata": json.dumps({
+                    "source": {"type": "excel", "file_path": "storage/uploads/tenant_b586cc25f107/data_sources/f1.xlsx"}
+                }),
+            },
+            {
+                "id": 102,
+                "metadata": json.dumps({
+                    "source": {"type": "excel", "file_path": "storage/uploads/_global/data_sources/f2.csv"}
+                }),
+            },
+            {
+                "id": 103,
+                "metadata": json.dumps({
+                    "source": {"type": "excel", "file_path": "storage/uploads/1dc997a1806b/data_sources/f3.xlsx"}
+                }),
+            },
+            {
+                "id": 104,
+                "metadata": json.dumps({
+                    "source": {"type": "excel", "file_path": "storage/tenants/b586cc25f107/conversation/data_sources/f4.xlsx"}
+                }),
+            },
+            # 不需重写的记录（已是新路径）
+            {
+                "id": 105,
+                "metadata": json.dumps({
+                    "source": {"type": "excel", "file_path": "storage/tenants/b586cc25f107/data_sources/f5.xlsx"}
+                }),
+            },
+            # 缺 source 的记录（应跳过）
+            {
+                "id": 106,
+                "metadata": json.dumps({"table_name": "t"}),
+            },
+        ]
+
+        mock_cursor = MagicMock()
+        mock_cursor.fetchall.return_value = rows
+        # 记录所有 UPDATE 调用的 SQL 和参数
+        update_calls = []
+
+        def _execute(sql, params=None):
+            if sql.strip().startswith("UPDATE"):
+                update_calls.append((sql, params))
+
+        mock_cursor.execute.side_effect = _execute
+
+        mock_conn = MagicMock()
+        mock_conn.__enter__.return_value = mock_conn
+        mock_conn.__exit__.return_value = False
+        mock_conn.cursor.return_value = mock_cursor
+
+        with patch("src.db.database.get_db_connection", return_value=mock_conn):
+            updated = _fix_documents_metadata_paths()
+
+        assert updated == 4  # 4 条旧前缀记录被重写
+        assert len(update_calls) == 4
+
+        # 关键断言：UPDATE SQL 不含 file_path= 列赋值（仅 metadata=%s）
+        # 避免误改知识库 documents.file_path 字段
+        for sql, _ in update_calls:
+            assert "UPDATE documents SET metadata = %s WHERE id = %s" in sql
+            assert "file_path=" not in sql.replace(" ", "")
+            assert "file_path =" not in sql
+
+        # 验证 4 条重写后的路径正确
+        rewritten_paths = []
+        for _, params in update_calls:
+            meta = json.loads(params[0])
+            rewritten_paths.append(meta["source"]["file_path"])
+        assert rewritten_paths == [
+            "storage/tenants/b586cc25f107/data_sources/f1.xlsx",
+            "storage/tenants/_anonymous/data_sources/f2.csv",
+            "storage/tenants/1dc997a1806b/data_sources/f3.xlsx",
+            "storage/tenants/b586cc25f107/data_sources/f4.xlsx",
+        ]
+
+        # conn.commit 被调用
+        mock_conn.commit.assert_called_once()
+
+    def test_returns_zero_when_db_unavailable(self):
+        """DB 模块不可用时返回 0，不抛异常"""
+        with patch(
+            "src.db.database.get_db_connection",
+            side_effect=Exception("db down"),
+        ):
+            updated = _fix_documents_metadata_paths()
+        assert updated == 0
+
+    def test_skips_records_without_source_file_path(self):
+        """source.file_path 缺失或 source 不是 dict 时跳过"""
+        rows = [
+            {"id": 1, "metadata": json.dumps({"source": {"type": "database"}})},  # 无 file_path
+            {"id": 2, "metadata": json.dumps({"source": "not_a_dict"})},  # source 非 dict
+            {"id": 3, "metadata": json.dumps({})},  # 无 source
+        ]
+        mock_cursor = MagicMock()
+        mock_cursor.fetchall.return_value = rows
+        mock_cursor.execute.side_effect = lambda sql, params=None: None
+
+        mock_conn = MagicMock()
+        mock_conn.__enter__.return_value = mock_conn
+        mock_conn.__exit__.return_value = False
+        mock_conn.cursor.return_value = mock_cursor
+
+        with patch("src.db.database.get_db_connection", return_value=mock_conn):
+            updated = _fix_documents_metadata_paths()
+
+        assert updated == 0
+        # SELECT 被调用，UPDATE 没被调用
+        assert mock_cursor.execute.call_count == 1

@@ -138,6 +138,77 @@ class TestLoadTable:
         assert "db1" not in analyzer._tables
 
 
+class TestLoadExcelLegacyPath:
+    """_load_excel 旧路径前缀自动重写兜底
+
+    场景：迁移期 documents.metadata.source.file_path 仍指向旧路径前缀，
+    实际文件已在新路径下。_load_excel 应自动重写并回写 source.file_path，
+    避免下次再兜底。
+    """
+
+    def test_rewrite_uploads_tenant_prefix(self, analyzer, tmp_path):
+        """uploads/tenant_{tid}/data_sources/{file} -> tenants/{tid}/data_sources/{file}"""
+        # 实际文件在新路径
+        new_path = tmp_path / "storage" / "tenants" / "t1" / "data_sources" / "f.xlsx"
+        new_path.parent.mkdir(parents=True)
+        pd.DataFrame({"x": [1, 2]}).to_excel(str(new_path), index=False)
+
+        # source.file_path 指向旧路径
+        legacy_path = str(tmp_path / "storage" / "uploads" / "tenant_t1" / "data_sources" / "f.xlsx")
+        source = {"type": "excel", "file_path": legacy_path}
+
+        df = analyzer._load_excel(source)
+
+        assert df is not None
+        assert len(df) == 2
+        # source.file_path 被回写为新路径（避免下次再兜底）
+        assert source["file_path"] == str(new_path)
+
+    def test_rewrite_misplaced_tenants_conversation(self, analyzer, tmp_path):
+        """tenants/{tid}/conversation/data_sources/{file} -> tenants/{tid}/data_sources/{file}
+
+        _resolve_new_path 缺 data_sources 分支时历史误搬的位置。
+        """
+        new_path = tmp_path / "storage" / "tenants" / "t1" / "data_sources" / "f.xlsx"
+        new_path.parent.mkdir(parents=True)
+        pd.DataFrame({"x": [1, 2]}).to_excel(str(new_path), index=False)
+
+        legacy_path = str(
+            tmp_path / "storage" / "tenants" / "t1" / "conversation" / "data_sources" / "f.xlsx"
+        )
+        source = {"type": "excel", "file_path": legacy_path}
+
+        df = analyzer._load_excel(source)
+
+        assert df is not None
+        assert source["file_path"] == str(new_path)
+
+    def test_rewrite_fails_when_new_path_also_missing(self, analyzer, tmp_path):
+        """旧路径不存在 + 新路径也不存在 -> 返回 None（不静默成功）"""
+        legacy_path = str(
+            tmp_path / "storage" / "uploads" / "tenant_t1" / "data_sources" / "nonexistent.xlsx"
+        )
+        source = {"type": "excel", "file_path": legacy_path}
+
+        df = analyzer._load_excel(source)
+
+        assert df is None
+        # source.file_path 未被回写
+        assert source["file_path"] == legacy_path
+
+    def test_normal_path_not_affected(self, analyzer, tmp_path):
+        """正常路径不受兜底影响，source.file_path 不被改写"""
+        xlsx_path = str(tmp_path / "normal.xlsx")
+        pd.DataFrame({"x": [1]}).to_excel(xlsx_path, index=False)
+
+        source = {"type": "excel", "file_path": xlsx_path}
+
+        df = analyzer._load_excel(source)
+
+        assert df is not None
+        assert source["file_path"] == xlsx_path  # 未被改写
+
+
 # ==================== 变量管理：_resolve_source / _store ====================
 
 

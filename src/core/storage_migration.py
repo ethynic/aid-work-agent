@@ -6,12 +6,18 @@
 - 多 worker 并发：pg_try_advisory_lock(789012) 防止 Gunicorn 多 worker 重复执行
 - Redis 元数据同步：扫 uploaded_file:* 键建 path -> key 反向索引，
   迁移每个文件后更新对应 hash 的 path 字段，避免 /api/files/{file_id}/download 404
+- 历史误搬修复：data_sources 场景曾因 _resolve_new_path 缺分支被误搬到
+  tenants/{tid}/conversation/data_sources/，启动时自动搬到 tenants/{tid}/data_sources/
+- documents.metadata 同步：data-analysis-metadata 类型记录的 source.file_path
+  同步重写到新路径前缀（仅动 metadata 列，绝不碰 file_path 列）
 - 渠道目录（dingtalk/wecom_kf）跳过：非租户附件，由渠道系统自管
 
 调用入口：migrate_uploads_to_tenants()，在 FastAPI lifespan 中执行（init_database 之后）
 """
 
+import json
 import os
+import re
 import shutil
 import uuid
 from pathlib import Path
@@ -31,17 +37,20 @@ def migrate_uploads_to_tenants(project_root: Optional[Path] = None) -> Dict[str,
     """将 storage/uploads/ 下的旧文件迁移到 storage/tenants/{tid}/{scene}/
 
     Returns:
-        统计 dict：{scanned, migrated, skipped, redis_updated, errors}
+        统计 dict：{scanned, migrated, skipped, redis_updated, errors, docs_updated}
     """
     project_root = Path(project_root or Path(__file__).resolve().parents[2])
     uploads_root = project_root / "storage" / "uploads"
     tenants_root = project_root / "storage" / "tenants"
 
-    stats = {"scanned": 0, "migrated": 0, "skipped": 0, "redis_updated": 0, "errors": 0}
-
-    if not uploads_root.exists():
-        logger.info("[storage_migration] storage/uploads/ 不存在，跳过迁移")
-        return stats
+    stats = {
+        "scanned": 0,
+        "migrated": 0,
+        "skipped": 0,
+        "redis_updated": 0,
+        "errors": 0,
+        "docs_updated": 0,
+    }
 
     # 获取 advisory lock 防多 worker 并发
     # lock_conn 持有 advisory lock 的物理连接，release 时必须用同一连接 unlock
@@ -58,41 +67,50 @@ def migrate_uploads_to_tenants(project_root: Optional[Path] = None) -> Dict[str,
             f"redis_index_size={len(redis_index)}"
         )
 
-        for old_path in uploads_root.rglob("*"):
-            if not old_path.is_file():
-                continue
-            # 跳过 .migrated 标记文件（若存在）
-            if old_path.name.startswith("."):
-                continue
+        # Phase A: 扫描 uploads 旧路径，搬到 tenants/{tid}/{scene}/
+        if uploads_root.exists():
+            for old_path in uploads_root.rglob("*"):
+                if not old_path.is_file():
+                    continue
+                # 跳过 .migrated 标记文件（若存在）
+                if old_path.name.startswith("."):
+                    continue
 
-            stats["scanned"] += 1
+                stats["scanned"] += 1
 
-            new_path = _resolve_new_path(old_path, uploads_root, tenants_root)
-            if new_path is None:
-                logger.debug(f"[storage_migration] 跳过非租户附件: {old_path}")
-                stats["skipped"] += 1
-                continue
+                new_path = _resolve_new_path(old_path, uploads_root, tenants_root)
+                if new_path is None:
+                    logger.debug(f"[storage_migration] 跳过非租户附件: {old_path}")
+                    stats["skipped"] += 1
+                    continue
 
-            try:
-                migrated_dst, redis_key = _migrate_file(
-                    old_path, new_path, redis_index
-                )
-                stats["migrated"] += 1
-                if redis_key:
-                    stats["redis_updated"] += 1
-                logger.debug(
-                    f"[storage_migration] 已迁移: {old_path.name} -> {migrated_dst}"
-                )
-            except Exception as e:
-                stats["errors"] += 1
-                logger.error(
-                    f"[storage_migration] 迁移失败 {old_path} -> {new_path}: {e}",
-                    exc_info=True,
-                )
+                try:
+                    migrated_dst, redis_key = _migrate_file(
+                        old_path, new_path, redis_index
+                    )
+                    stats["migrated"] += 1
+                    if redis_key:
+                        stats["redis_updated"] += 1
+                    logger.debug(
+                        f"[storage_migration] 已迁移: {old_path.name} -> {migrated_dst}"
+                    )
+                except Exception as e:
+                    stats["errors"] += 1
+                    logger.error(
+                        f"[storage_migration] 迁移失败 {old_path} -> {new_path}: {e}",
+                        exc_info=True,
+                    )
+        else:
+            logger.info("[storage_migration] storage/uploads/ 不存在，跳过 uploads 扫描")
 
-        logger.info(
-            f"[storage_migration] 迁移完成: {stats}"
-        )
+        # Phase B: 修复历史误搬到 tenants/{tid}/conversation/data_sources/ 的数据分析源文件
+        _relocate_misplaced_data_sources(tenants_root, redis_index, stats)
+
+        # Phase C: 修复 documents.metadata.source.file_path 旧路径前缀
+        # 仅动 metadata 列，绝不碰 file_path 列（file_path 是知识库字段，独立）
+        stats["docs_updated"] = _fix_documents_metadata_paths()
+
+        logger.info(f"[storage_migration] 迁移完成: {stats}")
         return stats
     finally:
         _release_advisory_lock(lock_conn)
@@ -108,6 +126,7 @@ def _resolve_new_path(
         storage/uploads/knowledge/{file}                    -> storage/tenants/_anonymous/knowledge/{file}
         storage/uploads/tenant_{tid}/user_{uid}/{file}      -> storage/tenants/{tid}/conversation/{file}
         storage/uploads/tenant_{tid}/knowledge/{file}       -> storage/tenants/{tid}/knowledge/{file}
+        storage/uploads/tenant_{tid}/data_sources/{file}    -> storage/tenants/{tid}/data_sources/{file}
         storage/uploads/tenant_{tid}/{file}                 -> storage/tenants/{tid}/conversation/{file}
         storage/uploads/{tid}/knowledge/{file}              -> storage/tenants/{tid}/knowledge/{file}
         storage/uploads/{tid}/data_sources/{file}           -> storage/tenants/{tid}/data_sources/{file}
@@ -160,6 +179,12 @@ def _resolve_new_path(
                 return None
             return tenants_root / tid / "knowledge" / Path(*parts[2:])
 
+        # tenant_{tid}/data_sources/{file} -> data_sources（数据分析源文件）
+        if parts[1] == "data_sources":
+            if len(parts) < 3:
+                return None
+            return tenants_root / tid / "data_sources" / Path(*parts[2:])
+
         # tenant_{tid}/{file} -> conversation
         return tenants_root / tid / "conversation" / Path(*parts[1:])
 
@@ -211,6 +236,206 @@ def _migrate_file(
         _update_redis_path(redis_key, str(final_dst.absolute()))
 
     return final_dst, redis_key
+
+
+# 数据分析源文件旧路径重写规则（4 条，与 _resolve_new_path 对齐）
+# 用正则匹配前缀通配，保留前缀（绝对/相对），仅替换 storage/uploads/... 或
+# storage/tenants/{tid}/conversation/data_sources/... 部分，使输出路径与输入路径
+# 同格式（绝对路径输入 -> 绝对路径输出，相对路径输入 -> 相对路径输出）
+#
+# **规则顺序敏感**：规则1（tenant_ 前缀）和规则2（_global）必须排在规则3
+# （通用 [^/]+）之前，否则 tenant_t1 的 tid 会被截断为 _t1，_global 也会被规则3
+# 误匹配。规则4（误搬路径）独立，与其他规则无重叠。
+_LEGACY_DATA_SOURCE_PATTERNS = [
+    # uploads/tenant_{tid}/data_sources/{file} -> tenants/{tid}/data_sources/{file}
+    (
+        re.compile(r"^(.*)storage/uploads/tenant_([^/]+)/data_sources/(.+)$"),
+        lambda m: f"{m.group(1)}storage/tenants/{m.group(2)}/data_sources/{m.group(3)}",
+    ),
+    # uploads/_global/data_sources/{file} -> tenants/_anonymous/data_sources/{file}
+    # 必须在通用 {tid} 规则前，因为 _global 是特殊标识
+    (
+        re.compile(r"^(.*)storage/uploads/_global/data_sources/(.+)$"),
+        lambda m: f"{m.group(1)}storage/tenants/_anonymous/data_sources/{m.group(2)}",
+    ),
+    # uploads/{tid}/data_sources/{file} -> tenants/{tid}/data_sources/{file}（tid 不含 tenant_ 前缀）
+    (
+        re.compile(r"^(.*)storage/uploads/([^/]+)/data_sources/(.+)$"),
+        lambda m: f"{m.group(1)}storage/tenants/{m.group(2)}/data_sources/{m.group(3)}",
+    ),
+    # tenants/{tid}/conversation/data_sources/{file} -> tenants/{tid}/data_sources/{file}
+    # （_resolve_new_path 缺 data_sources 分支时历史误搬的位置）
+    (
+        re.compile(r"^(.*)storage/tenants/([^/]+)/conversation/data_sources/(.+)$"),
+        lambda m: f"{m.group(1)}storage/tenants/{m.group(2)}/data_sources/{m.group(3)}",
+    ),
+]
+
+
+def rewrite_legacy_data_source_path(file_path: str) -> Optional[str]:
+    """把数据分析源文件的旧路径前缀重写为新规范路径
+
+    用于：
+    - 迁移脚本主动修复 documents.metadata.source.file_path（_fix_documents_metadata_paths）
+    - data_analyzer._load_excel 被动兜底（运行时遇到旧路径自动重写加载）
+
+    规则与 _resolve_new_path 对齐（4 条），保留路径前缀（绝对/相对），仅替换
+    storage/uploads/... 或 storage/tenants/{tid}/conversation/data_sources/... 部分：
+
+        storage/uploads/tenant_{tid}/data_sources/{file}       -> storage/tenants/{tid}/data_sources/{file}
+        storage/uploads/_global/data_sources/{file}             -> storage/tenants/_anonymous/data_sources/{file}
+        storage/uploads/{tid}/data_sources/{file}               -> storage/tenants/{tid}/data_sources/{file}
+        storage/tenants/{tid}/conversation/data_sources/{file}  -> storage/tenants/{tid}/data_sources/{file}
+
+    Args:
+        file_path: 任意路径字符串（绝对或相对）
+
+    Returns:
+        命中规则 -> 新路径字符串（与输入同格式，绝对路径输入返回绝对路径，
+                   相对路径输入返回相对路径）；不命中 -> None
+    """
+    if not file_path:
+        return None
+    for pattern, replacer in _LEGACY_DATA_SOURCE_PATTERNS:
+        m = pattern.match(file_path)
+        if m:
+            return replacer(m)
+    return None
+
+
+def _relocate_misplaced_data_sources(
+    tenants_root: Path, redis_index: Dict[str, str], stats: Dict[str, int]
+) -> None:
+    """修复历史误搬到 tenants/{tid}/conversation/data_sources/ 的数据分析源文件
+
+    扫描 tenants_root/{tid}/conversation/data_sources/*，搬到
+    tenants/{tid}/data_sources/{file}，复用 _migrate_file 的幂等规则
+    （同大小跳过、不同加后缀），同步 Redis path 字段。
+
+    二次运行时 conversation/data_sources/ 已空，天然幂等。
+    """
+    if not tenants_root.exists():
+        return
+
+    for tid_dir in tenants_root.iterdir():
+        if not tid_dir.is_dir():
+            continue
+        misplaced_dir = tid_dir / "conversation" / "data_sources"
+        if not misplaced_dir.exists():
+            continue
+
+        for old_path in list(misplaced_dir.rglob("*")):
+            if not old_path.is_file():
+                continue
+            try:
+                rel = old_path.relative_to(misplaced_dir)
+            except ValueError:
+                continue
+            new_path = tenants_root / tid_dir.name / "data_sources" / rel
+
+            try:
+                migrated_dst, redis_key = _migrate_file(
+                    old_path, new_path, redis_index
+                )
+                stats["migrated"] += 1
+                if redis_key:
+                    stats["redis_updated"] += 1
+                logger.debug(
+                    f"[storage_migration] relocate 误搬文件: {old_path} -> {migrated_dst}"
+                )
+            except Exception as e:
+                stats["errors"] += 1
+                logger.error(
+                    f"[storage_migration] relocate 失败 {old_path} -> {new_path}: {e}",
+                    exc_info=True,
+                )
+
+        # 清理空目录（best-effort，非空则保留）
+        try:
+            misplaced_dir.rmdir()
+        except OSError:
+            pass
+
+
+def _fix_documents_metadata_paths() -> int:
+    """修复 documents.metadata.source.file_path 旧路径前缀
+
+    遍历 source_type='data-analysis-metadata' 的 documents 行，用
+    rewrite_legacy_data_source_path 重写 metadata.source.file_path，
+    命中则 UPDATE documents SET metadata=%s WHERE id=%s。
+
+    **仅动 metadata 列，绝不碰 file_path 列**（file_path 是知识库字段，独立）。
+
+    Returns:
+        更新的行数；DB 不可用或异常时返回 0（不阻塞迁移）
+    """
+    try:
+        from src.db.database import get_db_connection
+    except ImportError:
+        logger.warning("[storage_migration] 数据库模块不可用，跳过 documents metadata 修复")
+        return 0
+
+    updated = 0
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT id, metadata FROM documents "
+                "WHERE source_type = 'data-analysis-metadata'"
+            )
+            rows = cursor.fetchall()
+
+            for row in rows:
+                # 兼容 dict cursor 和 tuple cursor
+                if isinstance(row, dict):
+                    doc_id = row["id"]
+                    meta_raw = row["metadata"]
+                else:
+                    doc_id = row[0]
+                    meta_raw = row[1]
+
+                if isinstance(meta_raw, str):
+                    try:
+                        meta = json.loads(meta_raw)
+                    except (json.JSONDecodeError, TypeError):
+                        continue
+                elif isinstance(meta_raw, dict):
+                    meta = meta_raw
+                else:
+                    continue
+
+                source = meta.get("source")
+                if not isinstance(source, dict):
+                    continue
+
+                file_path = source.get("file_path")
+                if not file_path:
+                    continue
+
+                new_path = rewrite_legacy_data_source_path(file_path)
+                if not new_path or new_path == file_path:
+                    continue
+
+                source["file_path"] = new_path
+                cursor.execute(
+                    "UPDATE documents SET metadata = %s WHERE id = %s",
+                    (json.dumps(meta, ensure_ascii=False), doc_id),
+                )
+                updated += 1
+                logger.info(
+                    f"[storage_migration] documents#{doc_id} source.file_path 重写: "
+                    f"{file_path} -> {new_path}"
+                )
+
+            conn.commit()
+    except Exception as e:
+        logger.warning(
+            f"[storage_migration] 修复 documents metadata 失败（不阻塞迁移）: {e}",
+            exc_info=True,
+        )
+        return 0
+
+    return updated
 
 
 def _build_redis_path_index() -> Dict[str, str]:
