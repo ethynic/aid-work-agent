@@ -360,3 +360,16 @@ INSERT INTO token_cost_prices (model_name, asr_price_per_call)
 VALUES ('aliyun-nls-asr', 0.01)
 ON CONFLICT (model_name) DO UPDATE SET
   asr_price_per_call = EXCLUDED.asr_price_per_call;
+
+-- subagent_template_files — 租户级子智能体模板文件关联
+-- 每个租户的每个子智能体可挂载多个模板文件（名称 + file_id + 元信息），
+-- 运行时注入 system prompt 末尾（### 相关模板位置信息）。
+CREATE TABLE IF NOT EXISTS subagent_template_files (
+    id SERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    subagent_name TEXT NOT NULL,
+    files JSONB NOT NULL DEFAULT '[]',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, subagent_name)
+);
