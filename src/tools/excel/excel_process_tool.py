@@ -168,24 +168,18 @@ class ExcelProcessTool(BaseTool):
         return tenant_id, user_id
 
     def _resolve_output_dir(self) -> Optional[str]:
-        """注入的 tenant/user 优先构造输出目录；都未注入返回 None（让 save_temp 走 ContextVar）。
-        镜像 ExcelFileHandler.get_session_dir 的路径逻辑，用注入的 id。"""
+        """注入的 tenant 优先构造输出目录；未注入返回 None（让 save_temp 走 ContextVar）。
+
+        路径: storage/tenants/{tenant_id}/conversation/
+        无 tenant_id: storage/tenants/_anonymous/conversation/
+        """
         if not self._tenant_id and not self._user_id:
             return None
         try:
-            from src.config.settings import settings
-            project_root = Path(__file__).resolve().parents[3]
-            upload_root = Path(settings.storage.uploads_dir)
-            if not upload_root.is_absolute():
-                upload_root = project_root / upload_root
-            parts = [str(upload_root)]
-            if self._tenant_id:
-                parts.append(self._tenant_id)
-            if self._user_id:
-                parts.append(self._user_id)
-            d = Path(*parts)
-            d.mkdir(parents=True, exist_ok=True)
-            return str(d)
+            from src.core.storage import ensure_tenant_storage_dir
+            tid = self._tenant_id or "_anonymous"
+            # user_id 不进路径，仅作元数据
+            return str(ensure_tenant_storage_dir(tid, "conversation"))
         except Exception as e:
             logger.warning(f"[ExcelProcess] 解析输出目录失败，回退默认: {e}")
             return None

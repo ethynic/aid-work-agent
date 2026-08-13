@@ -191,19 +191,17 @@ def _strip_code_fences(content: str) -> str:
 
 
 def _resolve_upload_dir(tenant_id: Optional[str], user_id: Optional[str]) -> Path:
-    """根据 tenant_id 和 user_id 确定文件存储目录"""
-    from src.main import UPLOAD_DIR
+    """根据 tenant_id 确定文件存储目录（遵循租户附件存储规范）
 
-    if tenant_id and user_id:
-        upload_dir = UPLOAD_DIR / tenant_id / user_id
-    elif tenant_id:
-        upload_dir = UPLOAD_DIR / tenant_id
-    elif user_id:
-        upload_dir = UPLOAD_DIR / user_id
-    else:
-        upload_dir = UPLOAD_DIR / "conversation"
-    upload_dir.mkdir(parents=True, exist_ok=True)
-    return upload_dir
+    路径: storage/tenants/{tenant_id}/conversation/
+    无 tenant_id: storage/tenants/_anonymous/conversation/
+
+    user_id 不进入路径，避免目录碎片化。
+    """
+    from src.core.storage import ensure_tenant_storage_dir
+    tid = tenant_id or "_anonymous"
+    _ = user_id  # 保留参数兼容性，但不进路径
+    return Path(ensure_tenant_storage_dir(tid, "conversation"))
 
 
 # ---------------------------------------------------------------------------

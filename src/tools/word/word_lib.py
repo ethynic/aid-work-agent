@@ -260,8 +260,8 @@ class WordFileHandler:
     def get_session_dir() -> Path:
         """获取当前用户会话的文件存储目录。
 
-        目录结构: storage/uploads/{tenant_id}/conversation/
-        无租户时: storage/uploads/conversation/
+        目录结构: storage/tenants/{tenant_id}/conversation/
+        无租户时: storage/tenants/_anonymous/conversation/
 
         与用户上传文件共用同一目录，生成的文件天然支持下载和预览。
         """
@@ -289,11 +289,37 @@ class WordFileHandler:
 
     @staticmethod
     def resolve_path(file_path: str) -> str:
-        """解析文件路径（支持相对路径）"""
+        """解析文件路径（支持相对路径）
+
+        查找顺序：
+        1. 原路径直接命中
+        2. 新路径 storage/tenants/{tenant}/conversation/{file}（含 _anonymous 兜底）
+        3. 旧路径 storage/uploads/{...}（只读兼容，迁移期保留）
+        """
         p = Path(file_path)
+        # 防路径穿越：含 .. 的相对路径不得进行 exists 检查或路径拼接
+        # （Path.exists() 和 Path()/.. 都会自动 resolve 后命中项目外系统文件）
+        if not p.is_absolute() and ".." in p.parts:
+            return str(p.absolute())
         if p.exists():
             return str(p.absolute())
-        # 尝试在 uploads 目录下查找
+        # 优先在新路径下查找
+        try:
+            from src.core.storage import _TENANTS_ROOT
+            project_root = Path(__file__).resolve().parents[3]
+            tenants_root = project_root / _TENANTS_ROOT
+            if tenants_root.exists():
+                # 防路径穿越：file_path 含 .. 或绝对路径时跳过新路径扫描
+                fp_obj = Path(file_path)
+                if not fp_obj.is_absolute() and ".." not in fp_obj.parts:
+                    for d1 in tenants_root.iterdir():
+                        if d1.is_dir():
+                            candidate = d1 / "conversation" / file_path
+                            if candidate.exists():
+                                return str(candidate.absolute())
+        except (ImportError, AttributeError):
+            pass
+        # 兜底旧路径 storage/uploads/{file}
         try:
             from src.config.settings import settings
             uploads = Path(settings.storage.uploads_dir) / file_path

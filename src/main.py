@@ -427,6 +427,20 @@ async def lifespan(app: FastAPI):
         logger.error(f"[pid={_pid}] step2 FAILED (critical): {e}", exc_info=True)
         raise
 
+    # Migrate legacy storage/uploads/ files to storage/tenants/{tid}/{scene}/
+    # 幂等，多 worker 通过 pg_try_advisory_lock 防并发，失败不阻塞启动
+    try:
+        logger.info(f"[pid={_pid}] step2b: migrate_uploads_to_tenants ...")
+        from src.core.storage_migration import migrate_uploads_to_tenants
+        stats = migrate_uploads_to_tenants()
+        logger.info(
+            f"[pid={_pid}] step2b: migrate_uploads_to_tenants done, stats={stats}"
+        )
+    except Exception as e:
+        logger.warning(
+            f"[pid={_pid}] step2b FAILED (non-critical): {e}", exc_info=True
+        )
+
     # Load subagent definitions from DB (Phase 2: 整体降级策略)
     try:
         from src.core.agent import master_agent as _master
@@ -547,11 +561,16 @@ import shutil
 from pathlib import Path
 
 # 上传文件存储目录（基于项目根目录，不受 cwd 影响）
-# 新结构: storage/uploads/{tenant_id}/conversation/ (有租户)
-#          storage/uploads/conversation/ (无租户)
+# 历史结构: storage/uploads/{tenant_id}/conversation/ (已废弃，仅作只读兜底)
+# 新结构:   storage/tenants/{tenant_id}/conversation/ (遵循租户附件存储规范)
+# 新写入统一走 src.core.storage.ensure_tenant_storage_dir，
+# UPLOAD_DIR 仅在 _get_file_info 兜底磁盘扫描时使用（兼容历史文件）。
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
-UPLOAD_DIR = _PROJECT_ROOT / settings.storage.uploads_dir
+UPLOAD_DIR = _PROJECT_ROOT / settings.storage.uploads_dir  # 历史目录，只读兜底
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+# 新版租户附件根目录（写入路径，由 ensure_tenant_storage_dir 创建子目录）
+TENANTS_STORAGE_DIR = _PROJECT_ROOT / "storage" / "tenants"
+TENANTS_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _check_tenant_credit_blocked(tenant_id: Optional[str]) -> Optional[JSONResponse]:
@@ -592,27 +611,19 @@ def _check_tenant_credit_blocked(tenant_id: Optional[str]) -> Optional[JSONRespo
 
 
 def _get_tenant_upload_dir() -> Path:
-    """获取当前用户的文件上传目录
+    """获取当前会话的上传目录（遵循租户附件存储规范）
 
-    有租户有用户: storage/uploads/{tenant_id}/{user_id}/
-    有租户无用户: storage/uploads/{tenant_id}/
-    无租户有用户: storage/uploads/{user_id}/
-    无租户无用户: storage/uploads/conversation/
+    路径: storage/tenants/{tenant_id}/conversation/
+    无 tenant_id（演示/匿名/单租户模式）: storage/tenants/_anonymous/conversation/
+
+    user_id 不进入路径，避免目录碎片化；user_id 仅作为元数据写入 Redis。
     """
+    from src.core.storage import ensure_tenant_storage_dir
     from src.saas.context import get_current_tenant_id, get_current_user_id
-    tenant_id = get_current_tenant_id()
-    user_id = get_current_user_id()
-
-    if tenant_id and user_id:
-        upload_dir = UPLOAD_DIR / tenant_id / user_id
-    elif tenant_id:
-        upload_dir = UPLOAD_DIR / tenant_id
-    elif user_id:
-        upload_dir = UPLOAD_DIR / user_id
-    else:
-        upload_dir = UPLOAD_DIR / "conversation"
-    upload_dir.mkdir(parents=True, exist_ok=True)
-    return upload_dir
+    tenant_id = get_current_tenant_id() or "_anonymous"
+    # user_id 仅作元数据，不进路径（保持兼容性，调用方仍可通过 ContextVar 取到）
+    _ = get_current_user_id()
+    return Path(ensure_tenant_storage_dir(tenant_id, "conversation"))
 
 # 已上传的文件元数据已迁移到 Redis: uploaded_file:{file_id}, TTL=86400s
 
@@ -1076,8 +1087,21 @@ def _get_file_info(file_id: str) -> dict | None:
         return cached
 
     # 尝试从磁盘目录扫描恢复（包括租户/用户子目录，最多3层）
+    # 同时扫描新目录 storage/tenants/ 和旧目录 storage/uploads/（只读兼容）
     skip_dirs = {"knowledge", "wecom"}
-    search_dirs = [UPLOAD_DIR]
+    search_dirs: list[Path] = []
+    # 新目录优先：storage/tenants/{tenant}/conversation/ 等
+    if TENANTS_STORAGE_DIR.exists():
+        for d1 in TENANTS_STORAGE_DIR.iterdir():
+            if d1.is_dir():
+                for d2 in d1.iterdir():
+                    if d2.is_dir():
+                        search_dirs.append(d2)
+                        for d3 in d2.iterdir():
+                            if d3.is_dir():
+                                search_dirs.append(d3)
+    # 旧目录兜底：storage/uploads/{tenant}/... （历史文件，迁移期保留）
+    search_dirs.append(UPLOAD_DIR)
     if UPLOAD_DIR.exists():
         for d1 in UPLOAD_DIR.iterdir():
             if d1.is_dir() and d1.name not in skip_dirs:
