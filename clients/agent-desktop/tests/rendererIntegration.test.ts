@@ -3,19 +3,23 @@ import { readFile, stat } from 'node:fs/promises'
 import path from 'node:path'
 import test from 'node:test'
 
-test('桌面壳装载真实 Agent renderer，而不是 Phase 0 静态 Spike', async () => {
+test('桌面壳装载独立 Desktop renderer，而不是 Web 回退入口', async () => {
   const html = await readFile(path.resolve('dist/renderer/index.html'), 'utf8')
   assert.match(html, /<div id="app"><\/div>/)
   assert.match(html, /\/assets\/[^"']+\.js/)
   assert.doesNotMatch(html, /Phase 0|stream-path|upload-path/)
   await stat(path.resolve('dist/renderer/desktop-module-manifest.json'))
+  const modules = JSON.parse(await readFile(path.resolve('dist/renderer/desktop-module-manifest.json'), 'utf8')) as string[]
+  assert.ok(modules.some((module) => module.replaceAll('\\', '/').endsWith('desktop/main.ts')))
+  assert.ok(modules.every((module) => !/(^|\/)web\//.test(module.replaceAll('\\', '/'))))
 })
 
 test('preload 只暴露版本化白名单能力，不暴露任意 channel 调用入口', async () => {
   const preload = await readFile(path.resolve('dist/electron/preload.cjs'), 'utf8')
-  assert.match(preload, /version:\s*2/)
+  assert.match(preload, /version:\s*3/)
   assert.match(preload, /Object\.freeze/)
   assert.match(preload, /desktop:credentials:hydrate/)
+  assert.match(preload, /desktop:startup:get-state/)
   assert.match(preload, /desktop:save-download/)
   assert.match(preload, /desktop:update:get-state/)
   assert.match(preload, /desktop:update:download/)

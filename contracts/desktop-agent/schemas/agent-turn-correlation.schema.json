@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aid.example/contracts/desktop-agent/1.0/agent-turn-correlation.schema.json",
+  "title": "AgentTurnCorrelation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["request_id", "session_id", "turn_id"],
+  "properties": {
+    "request_id": { "type": "string", "minLength": 1 },
+    "session_id": { "type": "string", "minLength": 1 },
+    "turn_id": { "type": "string", "minLength": 1 }
+  }
+}

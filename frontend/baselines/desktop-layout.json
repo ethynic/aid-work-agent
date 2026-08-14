@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "viewports": [
+    { "name": "minimum", "width": 720, "height": 500, "zoom": 1 },
+    { "name": "default", "width": 1200, "height": 800, "zoom": 1 },
+    { "name": "minimum-150", "width": 720, "height": 500, "zoom": 1.5 },
+    { "name": "minimum-200", "width": 720, "height": 500, "zoom": 2 }
+  ],
+  "requiredLandmarks": ["desktop-titlebar", "主导航", "desktop-workspace", "应用状态"],
+  "notes": "Phase C structure baseline. Pixel screenshots require a controlled Windows/macOS runner and must not be synthesized from jsdom."
+}

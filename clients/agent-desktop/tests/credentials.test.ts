@@ -12,6 +12,7 @@ const encryption = {
 }
 
 test('只允许 Agent/tenant credential key，防止 Desktop 获得 Portal 凭证命名空间', () => {
+  assert.equal(isAllowedCredentialKey('desktop_auth'), true)
   assert.equal(isAllowedCredentialKey('demo_token'), true)
   assert.equal(isAllowedCredentialKey('saas_token_tenant-a'), true)
   assert.equal(isAllowedCredentialKey('portal_token'), false)

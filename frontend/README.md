@@ -28,9 +28,9 @@ frontend/
 ├── package.json            # 依赖配置
 ├── vite.config.ts          # Vite配置
 ├── tailwind.config.js      # TailwindCSS配置
-├── web/                    # 现有 Web UI 源码；Desktop UI 分离前也承载桌面入口
+├── web/                    # 稳定 Web UI；生产 Desktop 不引用
 │   ├── main.ts             # Web Vue入口
-│   ├── main.desktop.ts     # 现有 Desktop Vue入口
+│   ├── main.desktop.ts     # 仅供开发期显式 legacy 回退
 │   ├── App.vue             # 根组件
 │   ├── style.css           # 全局样式
 │   ├── api/
@@ -45,7 +45,39 @@ frontend/
 │   │   └── ProgressPanel.vue    # 进度面板
 │   └── types/
 │       └── index.ts        # TypeScript类型
+├── desktop/               # 独立 Desktop Shell、路由、登录与启动状态机
+├── shared/                # 纯认证 DTO、transport/store contract 与 contract harness
+├── config/                # 四类 alias 和临时 Desktop→Web allowlist
+└── baselines/             # Web 入口、路由、认证和 bundle 结构基线
 ```
+
+## 工程边界与验证
+
+四类 alias 由 `config/aliases.ts` 统一提供给 Vite/Vitest；TypeScript 使用同名 paths：
+`@web/*`、`@desktop/*`、`@shared/*`，以及兼容现有 Web 的 `@/*`。
+
+生产 Web 构建使用 `tsconfig.web.json` 和 `--scope=web`，只检查 Web 根及其真实导入的
+Shared 模块，不会因未参与 Web bundle 的 Desktop/client-core 开发错误中断部署。
+`npm run check:boundaries` 与 `npm run verify:phase-b` 仍执行 full scope，负责全仓分层完整性。
+`web-module-manifest.json` 仅是构建期校验输入，校验成功后会从 `dist/` 删除，不进入部署产物。
+
+```bash
+npm run typecheck
+npm run typecheck:desktop
+npm run check:boundaries
+npm run check:protocol
+npm run build
+npm run build:desktop
+```
+
+`npm test` 会发现 Web、Shared、Desktop 三个测试 project。依赖门禁会扫描真实 import，
+并要求所有临时 Desktop→Web import 精确登记负责人和移除 Phase。Web/Desktop 构建均输出
+模块 manifest，分别阻止 Desktop-only 与 Portal/Web entry 泄漏。
+
+Desktop 开发入口使用 `npm run dev:desktop`。旧 Web renderer 仅可通过
+`npm run dev:desktop:legacy` 显式启动；production build 固定使用 `desktop/main.ts`，
+artifact verifier 会拒绝任何 `web/**` 模块。固定视口结构测试覆盖 720×500，
+Windows 本地 smoke 可执行；macOS 截图和真机 smoke 必须在真实 macOS runner 上留证据。
 
 ## 快速开始
 

@@ -70,6 +70,11 @@
 ## 前端
 
 > 2026-07-15：Agent Desktop 增加可交付 API 配置。构建必须显式传入 API 基址并写入受控包内资源；首次启动原子初始化 `%APPDATA%\aid-agent-desktop\desktop-config.json`，升级保留且可编辑；`AID_AGENT_API_BASE_URL` 仅作为最高优先级运维覆盖，非法或缺失配置 fail-loud。详见 [Windows 编译与打包手册](system/desktop-agent-client-build-manual.md)。
+>
+> 2026-08-12：Agent Desktop 开发计划升级为 v2.4。保留 4 个产品里程碑，将主线细化为 14 个可独立验收的执行阶段；D 拆为协议/Gateway、Coordinator/核心对话、Event Store/Relay，E 拆为 Host Core、本地 Executor、Provider 信任、多节点路由；新增 Alpha/Beta/RC/GA 分级门槛、后端平台资源假设和 K 独立工期。Browser Runtime 保持可选增强轨。详见 [开发计划](system/desktop-agent-client-dev-plan.md)。
+
+> 2026-08-12：M0 Phase B 已完成。Phase C 的独立 Desktop Shell、登录、启动状态机、Shared auth/platform contract、v3 preload 启动状态 bridge 和 production `web/**` 零引用门禁已完成开发、独立测试与 CodeReview；Phase B/C 门禁 80/80、Agent Desktop 39/39，双 typecheck、Web/Desktop production build、artifact/边界/协议门禁通过。主控补齐锁定 Electron 43.1.0 的 Windows 可执行 smoke，返回 `AGENT_DESKTOP_SMOKE_PASS`；当前没有 macOS 设备，macOS arm64 dev smoke 与固定视口截图仍待真机补证。严格 M0 尚未关闭，也未进入 M1。
+> 2026-08-13：Web 生产构建隔离已完成开发：`npm run build/typecheck` 使用 Web-only TypeScript project 和 Web scope 依赖门禁，仅检查 Web 及真实 import；full scope 继续由 Phase 门禁覆盖 Desktop、Shared 与 client core。Web 模块 manifest 校验成功后从部署产物删除。该调整不修改 Web 运行源码、路由、认证或样式。
 
 | # | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|

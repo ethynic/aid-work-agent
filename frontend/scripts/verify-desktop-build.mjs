@@ -3,6 +3,10 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const forbiddenModules = [
+  'web/App.vue',
+  'web/main.desktop.ts',
+  'web/main.ts',
+  'web/style.css',
   'web/router/portalRoutes.ts',
   'web/components/saas/PortalLayout.vue',
   'web/components/DigitalEmployeeManager.vue',
@@ -42,9 +46,11 @@ export function findForbiddenDesktopModules(manifest, bundledModules = []) {
   for (const modulePath of bundledModules) {
     modulePaths.add(normalizeModulePath(modulePath))
   }
-  return forbiddenModules.filter((forbidden) =>
+  const explicit = forbiddenModules.filter((forbidden) =>
     [...modulePaths].some((modulePath) => matchesForbiddenModule(modulePath, forbidden))
   )
+  const anyWebModule = [...modulePaths].find((modulePath) => /(^|\/)web\//.test(modulePath))
+  return anyWebModule ? [...explicit, `desktop production artifact contains Web module: ${anyWebModule}`] : explicit
 }
 
 export function findDeepLinkRelativeAssets(html, deepLink = 'aidagent://app/t/example/chat') {

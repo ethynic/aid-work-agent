@@ -14,8 +14,8 @@ describe('frontend directory layout', () => {
 
   it.each([
     ['index.html', '/web/main.ts'],
-    ['desktop.html', '/web/main.desktop.ts'],
-  ])('%s points to the web entry', (fileName, expectedEntry) => {
+    ['desktop.html', '/desktop/main.ts'],
+  ])('%s points to its application entry', (fileName, expectedEntry) => {
     const html = readFileSync(path.join(frontendRoot, fileName), 'utf8')
     expect(html).toContain(expectedEntry)
     expect(html).not.toMatch(/(?:src|href)=["']\/src\//)

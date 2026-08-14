@@ -1,0 +1,4 @@
+{
+  "description": "Phase B 临时 allowlist。每项必须包含精确 importer/specifier、负责人和移除阶段。",
+  "entries": []
+}

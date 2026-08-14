@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import type { SafeStorage } from 'electron'
 
-const CREDENTIAL_KEY = /^(demo_token|user_info|saas_(token|admin|tenant)(_[a-zA-Z0-9_-]{1,128})?)$/
+const CREDENTIAL_KEY = /^(desktop_auth|demo_token|user_info|saas_(token|admin|tenant)(_[a-zA-Z0-9_-]{1,128})?)$/
 const MAX_CREDENTIAL_VALUE_LENGTH = 64 * 1024
 
 export function isAllowedCredentialKey(key: string): boolean {

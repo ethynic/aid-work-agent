@@ -1,0 +1,16 @@
+{
+  "name": "@aid/client-shared-workspace",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "agent-coordinator-core",
+    "local-tool-host-core"
+  ],
+  "scripts": {
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}

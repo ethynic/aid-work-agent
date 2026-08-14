@@ -37,12 +37,15 @@ type AgentDesktopUpdateState = Readonly<{
 
 interface Window {
   readonly agentDesktop?: Readonly<{
-    readonly version: 1 | 2
+    readonly version: 1 | 2 | 3
     readonly runtime: AgentDesktopRuntime
     readonly credentials: Readonly<{
       hydrate(): Promise<Record<string, string>>
       set(key: string, value: string): Promise<void>
       delete(key: string): Promise<void>
+    }>
+    readonly startup?: Readonly<{
+      getState(): Promise<Readonly<{ secureStorageAvailable: boolean; online: boolean }>>
     }>
     readonly system: Readonly<{
       openExternal(url: string): Promise<void>
