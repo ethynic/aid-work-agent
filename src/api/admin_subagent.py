@@ -507,6 +507,14 @@ async def ai_enhance_subagent(request: Request, agent_id: str, body: AiEnhanceRe
             max_tokens=8192,
         )
 
+        from src.services.session_record import record_admin_llm_usage
+        record_admin_llm_usage(
+            result,
+            tenant_id=getattr(request.state, "tenant_id", None),
+            user_id=getattr(request.state, "user_id", None),
+            source_label=f"ai_enhance_subagent_{agent_id}",
+        )
+
         enhanced_content = result.get("content", "").strip()
 
         if not enhanced_content:

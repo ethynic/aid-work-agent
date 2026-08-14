@@ -2169,6 +2169,9 @@ async def _process_tenant_wecom_kf_messages(
                 record_service.set_provider(agent.llm.get_provider_name())
 
                 # ASR 计费（按次计费，识别成功才计费；必须在 start_record 之后，否则 get_current_record 返回 None）
+                # 注意：SpeechToTextTool 内部也已补 add_asr_usage，但仅当调用时已有当前 record 才生效；
+                # 渠道侧 ASR 在 start_record（2161）之前调用（2095），此时 get_current_record 恒为 None，
+                # 故工具内部不会计费，需在此处外层补计。agent 主循环路径由工具内部计费，无此外层调用，不会双计。
                 if asr_success:
                     try:
                         record_service.add_asr_usage(calls=1)

@@ -134,6 +134,12 @@ class WordRouter:
                 max_tokens=512,
             )
 
+            from src.services.session_record import record_background_llm_usage
+            record_background_llm_usage(
+                response.get("usage") if isinstance(response, dict) else None,
+                source="word_router",
+            )
+
             content = response.get("content", "")
             if not content:
                 logger.warning("[WordRouter] LLM 返回空内容")

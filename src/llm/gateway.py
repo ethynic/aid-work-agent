@@ -323,6 +323,8 @@ class LLMGateway:
         """
         流式对话
 
+        # TODO(billing): 启用流式前需在 chunk 累积 loop 末尾收集 usage 并调用 record_background_llm_usage
+
         Args:
             messages: 消息列表
             tools: 工具定义列表

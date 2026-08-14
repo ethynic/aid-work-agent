@@ -27,7 +27,12 @@ from src.config.settings import settings
 from src.db.database import get_db_connection
 from src.db.models import ChatRecordDB, SessionDB, TokenCostPriceDB
 from src.reports.work_outcome_db import WorkOutcomeDB
-from src.services.billing import calculate_credit_cost, calculate_video_credit_cost
+from src.services.billing import (
+    calculate_credit_cost,
+    calculate_credit_cost_with_breakdown,
+    calculate_video_credit_cost,
+    calculate_video_credit_cost_with_breakdown,
+)
 from src.video_agent.prompt_engine import PromptEngine, PromptResult, get_prompt_engine
 from src.video_gen.base import VideoGenRequest
 from src.video_gen.factory import build_provider
@@ -723,8 +728,10 @@ class VideoChatService:
             total_tokens = int(usage.get("total_tokens", 0) or 0)
             cached_input_tokens = int(usage.get("cached_tokens", 0) or 0)
 
+            credit_cost = 0.0
+            chat_bd: Dict[str, Any] = {}
             try:
-                credit_cost = calculate_credit_cost(
+                credit_cost, chat_bd = calculate_credit_cost_with_breakdown(
                     prompt_tokens=prompt_tokens,
                     completion_tokens=completion_tokens,
                     model=model,
@@ -733,6 +740,25 @@ class VideoChatService:
             except Exception as billing_err:
                 logger.error(f"视频提示词计费计算失败，credit_cost 降级为 0: {billing_err}")
                 credit_cost = 0.0
+                chat_bd = {}
+
+            usage_breakdown = {
+                "chat": {
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "cached_input_tokens": cached_input_tokens,
+                    "total_tokens": total_tokens,
+                    "model": model,
+                    "credit": round(credit_cost, 2),
+                }
+            }
+            if chat_bd:
+                usage_breakdown["chat"].update({
+                    "non_cached_input_tokens": chat_bd.get("non_cached_input_tokens", 0),
+                    "unit_prices": chat_bd.get("unit_prices", {}),
+                    "usage_factor": chat_bd.get("usage_factor"),
+                    "credits": chat_bd.get("credits", {}),
+                })
 
             ChatRecordDB.create(
                 session_id=session_id,
@@ -748,6 +774,7 @@ class VideoChatService:
                 provider="qwen",
                 source_type="video_prompt",
                 credit_cost=credit_cost,
+                usage_breakdown=usage_breakdown,
                 status="completed",
             )
             logger.info(
@@ -850,6 +877,23 @@ class VideoChatService:
             chat_records.id，失败返回 None
         """
         try:
+            cost_per_second = execution_details.get("cost_per_second_yuan", 0.0)
+            duration_seconds = execution_details.get("seconds", 0.0)
+            resolution = execution_details.get("resolution")
+            try:
+                usage_factor = getattr(settings.billing, "video_gen_usage_factor", 33) or 33
+            except Exception:
+                usage_factor = 33
+
+            video_breakdown = {
+                "model": model,
+                "duration_seconds": duration_seconds,
+                "resolution": resolution,
+                "unit_price_per_second": cost_per_second,
+                "usage_factor": usage_factor,
+                "credit": round(credit_cost, 2),
+            }
+
             record = ChatRecordDB.create(
                 session_id=session_id,
                 tenant_id=tenant_id,
@@ -860,6 +904,7 @@ class VideoChatService:
                 status=status,
                 source_type="video_gen",
                 credit_cost=credit_cost,
+                usage_breakdown={"video": video_breakdown},
             )
             return record.get("id") if record else None
         except Exception as e:

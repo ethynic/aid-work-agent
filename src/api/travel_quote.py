@@ -203,7 +203,7 @@ def _delete_kb_doc(doc_id: int, source_type: str, tenant_id: str) -> bool:
         return True
 
 
-def _update_chunk_embedding(doc_id: int, chunk_index: int, text: str) -> None:
+def _update_chunk_embedding(doc_id: int, chunk_index: int, text: str, tenant_id: Optional[str] = None, user_id: Optional[str] = None) -> None:
     """更新 chunk 文本并重新计算向量嵌入"""
     import sys
     from pathlib import Path
@@ -213,7 +213,23 @@ def _update_chunk_embedding(doc_id: int, chunk_index: int, text: str) -> None:
 
     from attraction_retriever import AttractionRetriever
     retriever = AttractionRetriever()
+    client = retriever._get_embedding_client()
+    client.reset_usage()
     embedding = retriever._embed(text)
+
+    # 补计费：chunk 重新向量化消耗（管理后台独立落库）
+    if client.last_usage_tokens > 0:
+        try:
+            from src.services.session_record import record_admin_embedding_usage
+            record_admin_embedding_usage(
+                client,
+                tenant_id=tenant_id,
+                user_id=user_id,
+                source_label="travel_quote_update_chunk",
+            )
+        except Exception:
+            logger.debug("Failed to record chunk embedding usage", exc_info=True)
+
     embedding_str = "[" + ",".join(str(v) for v in embedding) + "]"
 
     with get_db_connection() as conn:
@@ -297,7 +313,7 @@ async def update_attraction_kb(doc_id: int, request: Request, body: Dict[str, An
     # 更新 info 后同步更新向量嵌入
     if "info" in body:
         try:
-            _update_chunk_embedding(doc_id, 0, body["info"])
+            _update_chunk_embedding(doc_id, 0, body["info"], tenant_id=tenant_id, user_id=getattr(request.state, "user_id", None))
         except Exception as e:
             logger.warning(f"更新景点向量嵌入失败 doc_id={doc_id}: {e}")
 
@@ -546,7 +562,7 @@ async def update_hotel_kb(doc_id: int, request: Request, body: Dict[str, Any]):
     # 更新 info 后同步更新向量嵌入
     if "info" in body:
         try:
-            _update_chunk_embedding(doc_id, 0, body["info"])
+            _update_chunk_embedding(doc_id, 0, body["info"], tenant_id=tenant_id, user_id=getattr(request.state, "user_id", None))
         except Exception as e:
             logger.warning(f"更新酒店向量嵌入失败 doc_id={doc_id}: {e}")
 

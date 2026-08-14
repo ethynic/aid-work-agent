@@ -252,6 +252,12 @@ class HotelExcelParser:
                 max_tokens=65536,
             )
 
+            from src.services.session_record import record_background_llm_usage
+            record_background_llm_usage(
+                response.get("usage") if isinstance(response, dict) else None,
+                source="hotel_excel_parser",
+            )
+
             content = response.get("content", "")
             if not content:
                 logger.warning(f"[HotelExcelParser] Sheet '{sheet_name}' LLM 返回空内容, finish_reason={response.get('finish_reason')}")

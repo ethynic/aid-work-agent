@@ -18,7 +18,10 @@ from src.config.settings import settings
 from src.db.database import get_db_connection
 from src.db.models import ChatRecordDB
 from src.llm.gateway import LLMGateway
-from src.services.billing import calculate_credit_cost, calculate_embedding_credit_cost
+from src.services.billing import (
+    calculate_credit_cost_with_breakdown,
+    calculate_embedding_credit_cost_with_breakdown,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -112,13 +115,15 @@ class KnowledgeBaseService:
         合并为一条 chat_records，usage_breakdown 记录分项明细。
         """
         # Embedding 积分
+        emb_bd: Dict[str, Any] = {}
         try:
-            embedding_credit = calculate_embedding_credit_cost(
+            embedding_credit, emb_bd = calculate_embedding_credit_cost_with_breakdown(
                 embedding_tokens=embedding_tokens,
             )
         except Exception as e:
             logger.error(f"embedding 计费计算失败，降级为 0: {e}")
             embedding_credit = 0.0
+            emb_bd = {}
 
         # 摘要 LLM 积分
         prompt_tokens = 0
@@ -137,8 +142,9 @@ class KnowledgeBaseService:
                 llm_model = getattr(settings.llm, "model_code", None) or "qwen-plus"
             except Exception:
                 llm_model = "qwen-plus"
+            chat_bd: Dict[str, Any] = {}
             try:
-                llm_credit = calculate_credit_cost(
+                llm_credit, chat_bd = calculate_credit_cost_with_breakdown(
                     prompt_tokens=prompt_tokens,
                     completion_tokens=completion_tokens,
                     model=llm_model,
@@ -147,6 +153,7 @@ class KnowledgeBaseService:
             except Exception as e:
                 logger.error(f"摘要 LLM 计费计算失败，降级为 0: {e}")
                 llm_credit = 0.0
+                chat_bd = {}
 
         total_credit = round(embedding_credit + llm_credit, 2)
         if total_credit <= 0 and embedding_tokens == 0 and total_tokens == 0:
@@ -159,6 +166,11 @@ class KnowledgeBaseService:
                 "credit": round(embedding_credit, 2),
             },
         }
+        if emb_bd:
+            usage_breakdown["embedding"].update({
+                "unit_price_per_m": emb_bd.get("unit_price_per_m"),
+                "usage_factor": emb_bd.get("usage_factor"),
+            })
         if summary_usage:
             usage_breakdown["summary_llm"] = {
                 "prompt_tokens": prompt_tokens,
@@ -168,6 +180,13 @@ class KnowledgeBaseService:
                 "model": llm_model,
                 "credit": round(llm_credit, 2),
             }
+            if chat_bd:
+                usage_breakdown["summary_llm"].update({
+                    "non_cached_input_tokens": chat_bd.get("non_cached_input_tokens", 0),
+                    "unit_prices": chat_bd.get("unit_prices", {}),
+                    "usage_factor": chat_bd.get("usage_factor"),
+                    "credits": chat_bd.get("credits", {}),
+                })
 
         ChatRecordDB.create(
             session_id=f"knowledge_embedding_{doc_id}",

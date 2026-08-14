@@ -215,6 +215,12 @@ class AttractionExcelParser:
                 max_tokens=16384,
             )
 
+            from src.services.session_record import record_background_llm_usage
+            record_background_llm_usage(
+                response.get("usage") if isinstance(response, dict) else None,
+                source="attraction_excel_parser",
+            )
+
             content = response.get("content", "")
             if not content:
                 logger.warning(f"[AttractionExcelParser] Sheet '{sheet_name}' LLM 返回空内容")

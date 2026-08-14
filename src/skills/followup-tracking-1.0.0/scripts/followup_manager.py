@@ -361,9 +361,20 @@ def _evaluate_with_llm(record: dict) -> tuple:
 - 5-7分：跟进内容基本完整，但缺少某些关键信息
 - 1-4分：跟进内容过于简略或缺乏实质信息"""
 
-        result = llm_gateway.chat(
+        import asyncio
+        result = asyncio.run(llm_gateway.chat(
             messages=[{"role": "user", "content": prompt}],
             max_tokens=200,
+        ))
+
+        # 补计费：followup_manager 是独立进程，无 SessionRecordService，
+        # record_background_llm_usage 走兜底独立落库分支（source_type=background_llm）
+        from src.services.session_record import record_background_llm_usage
+        record_background_llm_usage(
+            result.get("usage") if isinstance(result, dict) else None,
+            tenant_id=record.get("tenant_id"),
+            user_id=record.get("user_id"),
+            source="followup_evaluate",
         )
 
         content = result.get("content", "")

@@ -148,6 +148,12 @@ class SchemaExtractor:
                 max_tokens=4096,
             )
 
+            from src.services.session_record import record_background_llm_usage
+            record_background_llm_usage(
+                response.get("usage") if isinstance(response, dict) else None,
+                source="schema_extract",
+            )
+
             content = response.get("content", "")
             schema = self._parse_json_response(content)
 
@@ -193,6 +199,12 @@ class SchemaExtractor:
                 ],
                 temperature=0.3,
                 max_tokens=4096,
+            )
+
+            from src.services.session_record import record_background_llm_usage
+            record_background_llm_usage(
+                response.get("usage") if isinstance(response, dict) else None,
+                source="schema_infer_relations",
             )
 
             content = response.get("content", "")

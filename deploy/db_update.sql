@@ -373,3 +373,8 @@ CREATE TABLE IF NOT EXISTS subagent_template_files (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(tenant_id, subagent_name)
 );
+-- 2026-08-14，chat_records.usage_breakdown 结构升级：6 个分项（chat/embedding/asr/video）
+--   增加 unit_prices / unit_price_per_m / unit_price_per_call / unit_price_per_second 单价字段，
+--   chat 增加 credits 嵌套对象（non_cached_input / cached_input / output 三分项积分），
+--   各分项增加 usage_factor 系数字段，video 分项为新增（原视频记录无 usage_breakdown）。
+--   旧记录无这些字段，读取时按 NULL/0 兜底；不涉及表结构变更。

@@ -96,7 +96,20 @@ class HybridRetriever:
             检索结果列表
         """
         # 1. 向量检索（语义相似度，权重更高）
+        self.embedding_client.reset_usage()
         query_embedding = await self.embedding_client.embed(query)
+        # 累加 embedding usage 到当前 SessionRecordService（对话内检索计费）
+        if getattr(self.embedding_client, "last_usage_tokens", 0) > 0:
+            try:
+                from src.services.session_record import SessionRecordManager
+                record = SessionRecordManager.get_current_record()
+                if record:
+                    record.add_embedding_usage(
+                        self.embedding_client.last_usage_tokens,
+                        model=getattr(self.embedding_client, "model", "text-embedding-v3"),
+                    )
+            except Exception:
+                logger.debug("Failed to record embedding usage", exc_info=True)
         raw_vector_results = await self.vector_db.search(query_embedding, top_k=top_k * 3, tenant_id=tenant_id, source_type=source_type)
 
         # 后端日志：输出原始向量检索结果（调优用）

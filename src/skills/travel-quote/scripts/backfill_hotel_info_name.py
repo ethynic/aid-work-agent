@@ -104,7 +104,23 @@ def backfill(tenant_id: Optional[str] = None, dry_run: bool = False) -> None:
             continue
 
         try:
+            client = retriever._get_embedding_client()
+            client.reset_usage()
             embedding = retriever._embed(new_text)
+
+            # 补计费：回填脚本的 embedding 消耗（独立落库，归属租户便于审计）
+            if client.last_usage_tokens > 0:
+                try:
+                    from src.services.session_record import record_admin_embedding_usage
+                    record_admin_embedding_usage(
+                        client,
+                        tenant_id=tenant_id,
+                        source_label="backfill_hotel_info_name",
+                        source_type="background_embedding",
+                    )
+                except Exception:
+                    logger.debug("Failed to record backfill embedding usage", exc_info=True)
+
             embedding_str = "[" + ",".join(str(v) for v in embedding) + "]"
 
             with retriever._get_conn() as conn:

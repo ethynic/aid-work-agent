@@ -345,6 +345,15 @@ class SpeechToTextTool(BaseTool):
                     if status_code == 20000000:
                         text = result_json.get("result", "")
                         logger.info("后端日志：语音转文字成功 text={}", text[:100])
+                        # 补计费：ASR 调用成功后累加到当前 SessionRecordService
+                        # （工具内部统一计费，覆盖 agent 主循环与渠道侧所有入口）
+                        try:
+                            from src.services.session_record import SessionRecordManager
+                            record = SessionRecordManager.get_current_record()
+                            if record:
+                                record.add_asr_usage(calls=1)
+                        except Exception:
+                            logger.debug("Failed to record ASR usage", exc_info=True)
                         return {
                             "success": True,
                             "text": text,

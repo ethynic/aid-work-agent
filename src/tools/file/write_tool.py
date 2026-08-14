@@ -342,6 +342,12 @@ display_name 必须使用用户能理解的业务文件名，不要使用工具�
             messages=messages, temperature=0.7, max_tokens=65536
         )
 
+        from src.services.session_record import record_background_llm_usage
+        record_background_llm_usage(
+            response.get("usage") if isinstance(response, dict) else None,
+            source="write_tool",
+        )
+
         if isinstance(response, dict):
             return response.get("content", "")
         return str(response)

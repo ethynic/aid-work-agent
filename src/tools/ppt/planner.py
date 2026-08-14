@@ -99,6 +99,12 @@ class PPTPlanner:
                 max_tokens=4096,
             )
 
+            from src.services.session_record import record_background_llm_usage
+            record_background_llm_usage(
+                response.get("usage") if isinstance(response, dict) else None,
+                source="ppt_planner",
+            )
+
             content = response.get("content", "")
             return self._parse_json(content)
 

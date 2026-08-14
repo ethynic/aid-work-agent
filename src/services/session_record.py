@@ -20,6 +20,9 @@ from src.services.billing import (
     calculate_credit_cost,
     calculate_embedding_credit_cost,
     calculate_asr_credit_cost,
+    calculate_credit_cost_with_breakdown,
+    calculate_embedding_credit_cost_with_breakdown,
+    calculate_asr_credit_cost_with_breakdown,
 )
 
 _RESULT_MAX_LENGTH = 2000
@@ -323,8 +326,10 @@ class SessionRecordService:
                 self.end_time = time.time()
 
             # 计算积分用量：单价缺失时 credit_cost = 0，不阻断对话
+            chat_credit_cost = 0.0
+            chat_bd: Dict[str, Any] = {}
             try:
-                chat_credit_cost = calculate_credit_cost(
+                chat_credit_cost, chat_bd = calculate_credit_cost_with_breakdown(
                     prompt_tokens=self.prompt_tokens,
                     completion_tokens=self.completion_tokens,
                     model=self.model,
@@ -334,27 +339,34 @@ class SessionRecordService:
                 # 计费异常不应影响对话记录落库
                 logger.error(f"计费计算失败，credit_cost 降级为 0: {billing_err}")
                 chat_credit_cost = 0.0
+                chat_bd = {}
 
             # Embedding 积分（对话内检索 RAG 等场景）
+            embedding_credit_cost = 0.0
+            emb_bd: Dict[str, Any] = {}
             try:
-                embedding_credit_cost = calculate_embedding_credit_cost(
+                embedding_credit_cost, emb_bd = calculate_embedding_credit_cost_with_breakdown(
                     embedding_tokens=self.embedding_tokens,
                 )
             except Exception as billing_err:
                 logger.error(f"embedding 计费计算失败，降级为 0: {billing_err}")
                 embedding_credit_cost = 0.0
+                emb_bd = {}
 
             # ASR 积分（微信语音转文字等场景）
+            asr_credit_cost = 0.0
+            asr_bd: Dict[str, Any] = {}
             try:
-                asr_credit_cost = calculate_asr_credit_cost(asr_calls=self.asr_calls)
+                asr_credit_cost, asr_bd = calculate_asr_credit_cost_with_breakdown(asr_calls=self.asr_calls)
             except Exception as billing_err:
                 logger.error(f"ASR 计费计算失败，降级为 0: {billing_err}")
                 asr_credit_cost = 0.0
+                asr_bd = {}
 
             # 合并总积分（chat + embedding + asr）
             credit_cost = round(chat_credit_cost + embedding_credit_cost + asr_credit_cost, 2)
 
-            # 构造 usage_breakdown：补充 chat 分项与各分项 credit
+            # 构造 usage_breakdown：补充 chat 分项单价/分项积分与各分项 credit
             usage_breakdown: Dict[str, Any] = dict(self.usage_breakdown)
             usage_breakdown.setdefault("chat", {
                 "prompt_tokens": self.prompt_tokens,
@@ -364,10 +376,27 @@ class SessionRecordService:
                 "model": self.model,
                 "credit": round(chat_credit_cost, 2),
             })
+            if chat_bd:
+                usage_breakdown["chat"].update({
+                    "non_cached_input_tokens": chat_bd.get("non_cached_input_tokens", 0),
+                    "unit_prices": chat_bd.get("unit_prices", {}),
+                    "usage_factor": chat_bd.get("usage_factor"),
+                    "credits": chat_bd.get("credits", {}),
+                })
             if self.embedding_tokens > 0 and "embedding" in usage_breakdown:
                 usage_breakdown["embedding"]["credit"] = round(embedding_credit_cost, 2)
+                if emb_bd:
+                    usage_breakdown["embedding"].update({
+                        "unit_price_per_m": emb_bd.get("unit_price_per_m"),
+                        "usage_factor": emb_bd.get("usage_factor"),
+                    })
             if self.asr_calls > 0 and "asr" in usage_breakdown:
                 usage_breakdown["asr"]["credit"] = round(asr_credit_cost, 2)
+                if asr_bd:
+                    usage_breakdown["asr"].update({
+                        "unit_price_per_call": asr_bd.get("unit_price_per_call"),
+                        "usage_factor": asr_bd.get("usage_factor"),
+                    })
 
             record = ChatRecordDB.create(
                 session_id=self.session_id,
@@ -556,8 +585,10 @@ def _persist_background_llm_record(
         except Exception:
             llm_model = "deepseek-chat"
 
+        credit_cost = 0.0
+        chat_bd: Dict[str, Any] = {}
         try:
-            credit_cost = calculate_credit_cost(
+            credit_cost, chat_bd = calculate_credit_cost_with_breakdown(
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
                 model=llm_model,
@@ -566,6 +597,25 @@ def _persist_background_llm_record(
         except Exception as billing_err:
             logger.error(f"background_llm 计费计算失败，credit_cost 降级为 0: {billing_err}")
             credit_cost = 0.0
+            chat_bd = {}
+
+        usage_breakdown = {
+            "chat": {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "cached_input_tokens": cached_input_tokens,
+                "total_tokens": total_tokens,
+                "model": llm_model,
+                "credit": round(credit_cost, 2),
+            }
+        }
+        if chat_bd:
+            usage_breakdown["chat"].update({
+                "non_cached_input_tokens": chat_bd.get("non_cached_input_tokens", 0),
+                "unit_prices": chat_bd.get("unit_prices", {}),
+                "usage_factor": chat_bd.get("usage_factor"),
+                "credits": chat_bd.get("credits", {}),
+            })
 
         # session_id 与 memory_summarizer 一致：background_llm_{source}_{user_id|unknown}
         # 便于按 source + user 维度追溯后台扫描计费记录
@@ -584,6 +634,7 @@ def _persist_background_llm_record(
             provider="mid_term_background_scan",
             source_type="background_llm",
             credit_cost=credit_cost,
+            usage_breakdown=usage_breakdown,
             status="completed",
         )
         logger.info(
@@ -592,3 +643,165 @@ def _persist_background_llm_record(
         )
     except Exception as e:
         logger.error(f"background_llm 计费落库失败: {e}", exc_info=True)
+
+
+def record_admin_llm_usage(
+    response: Optional[Dict[str, Any]],
+    *,
+    tenant_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+    source_label: str = "admin_llm_ops",
+    model: Optional[str] = None,
+) -> None:
+    """管理后台 API 路由直接调用 LLM 的计费独立落库
+
+    管理后台 AI 增强（提示词优化、智能体描述增强、页面推荐等）无会话上下文，
+    用独立 ChatRecordDB.create(source_type=admin_llm_ops) 落账，并从
+    request.state 透传 tenant_id/user_id 归属租户。
+
+    usage_breakdown.chat 写入分项单价/分项积分，与主路径格式对齐，
+    便于统一 SQL 对账。失败只记日志，不影响已返回的响应。
+    """
+    if not isinstance(response, dict):
+        return
+    usage = response.get("usage")
+    if not usage:
+        return
+    try:
+        prompt_tokens = int(usage.get("prompt_tokens", 0) or 0)
+        completion_tokens = int(usage.get("completion_tokens", 0) or 0)
+        total_tokens = int(usage.get("total_tokens", 0) or 0)
+        cached_input_tokens = int(usage.get("cached_tokens", 0) or 0)
+
+        if not model:
+            try:
+                from src.llm.gateway import llm_gateway
+                model = llm_gateway.get_model_name()
+            except Exception:
+                model = None
+
+        credit_cost = 0.0
+        chat_bd: Dict[str, Any] = {}
+        try:
+            credit_cost, chat_bd = calculate_credit_cost_with_breakdown(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                model=model,
+                cached_input_tokens=cached_input_tokens,
+            )
+        except Exception as billing_err:
+            logger.error(f"管理后台 LLM 计费计算失败，credit_cost 降级为 0: {billing_err}")
+            credit_cost = 0.0
+            chat_bd = {}
+
+        usage_breakdown = {
+            "chat": {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "cached_input_tokens": cached_input_tokens,
+                "total_tokens": total_tokens,
+                "model": model,
+                "credit": round(credit_cost, 2),
+            }
+        }
+        if chat_bd:
+            usage_breakdown["chat"].update({
+                "non_cached_input_tokens": chat_bd.get("non_cached_input_tokens", 0),
+                "unit_prices": chat_bd.get("unit_prices", {}),
+                "usage_factor": chat_bd.get("usage_factor"),
+                "credits": chat_bd.get("credits", {}),
+            })
+
+        ChatRecordDB.create(
+            session_id=f"admin_llm_ops_{source_label}_{user_id or 'unknown'}_{int(time.time())}",
+            tenant_id=tenant_id,
+            user_id=user_id,
+            user_message=f"[管理后台] {source_label}",
+            assistant_message=None,
+            total_token_count=total_tokens,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            cached_input_tokens=cached_input_tokens,
+            model=model,
+            provider=None,
+            source_type="admin_llm_ops",
+            credit_cost=credit_cost,
+            usage_breakdown=usage_breakdown,
+            status="completed",
+        )
+        logger.info(
+            f"管理后台 LLM 计费: source={source_label}, tenant={tenant_id}, "
+            f"user={user_id}, tokens={total_tokens}, credit={credit_cost}"
+        )
+    except Exception as e:
+        logger.error(f"管理后台 LLM 计费落库失败: {e}", exc_info=True)
+
+
+def record_admin_embedding_usage(
+    embedding_client,
+    *,
+    tenant_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+    source_label: str = "admin_embedding_ops",
+    source_type: str = "admin_embedding_ops",
+) -> None:
+    """管理后台/数据管理/运维脚本的 embedding 调用独立落库计费
+
+    embedding_client 需带 last_usage_tokens（累加计数器）与 model 属性。
+    无会话上下文，用独立 ChatRecordDB.create(source_type=...) 落账，
+    从 request.state 或调用方透传 tenant_id/user_id 归属租户。
+
+    usage_breakdown.embedding 写入分项单价/系数，与主路径格式对齐，
+    便于统一 SQL 对账。失败只记日志，不影响已返回的响应。
+    """
+    tokens = int(getattr(embedding_client, "last_usage_tokens", 0) or 0)
+    if tokens <= 0:
+        return
+    model = getattr(embedding_client, "model", "text-embedding-v3")
+    try:
+        credit_cost = 0.0
+        emb_bd: Dict[str, Any] = {}
+        try:
+            credit_cost, emb_bd = calculate_embedding_credit_cost_with_breakdown(
+                embedding_tokens=tokens,
+                model=model,
+            )
+        except Exception as billing_err:
+            logger.error(f"embedding 计费计算失败，credit_cost 降级为 0: {billing_err}")
+            credit_cost = 0.0
+            emb_bd = {}
+
+        usage_breakdown = {
+            "embedding": {
+                "tokens": tokens,
+                "model": model,
+                "credit": round(credit_cost, 2),
+            }
+        }
+        if emb_bd:
+            usage_breakdown["embedding"].update(emb_bd)
+
+        ChatRecordDB.create(
+            session_id=f"{source_type}_{source_label}_{user_id or 'unknown'}_{int(time.time())}",
+            tenant_id=tenant_id,
+            user_id=user_id,
+            user_message=f"[管理后台] {source_label}",
+            assistant_message=None,
+            total_token_count=0,
+            prompt_tokens=0,
+            completion_tokens=0,
+            cached_input_tokens=0,
+            model=model,
+            provider=None,
+            source_type=source_type,
+            credit_cost=credit_cost,
+            embedding_tokens=tokens,
+            usage_breakdown=usage_breakdown,
+            status="completed",
+        )
+        logger.info(
+            f"管理后台 embedding 计费: source={source_label}, tenant={tenant_id}, "
+            f"user={user_id}, tokens={tokens}, credit={credit_cost}"
+        )
+    except Exception as e:
+        logger.error(f"管理后台 embedding 计费落库失败: {e}", exc_info=True)

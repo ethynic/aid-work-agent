@@ -739,7 +739,21 @@ async def update_schema(doc_id: int, req: SchemaSave, request: Request):
         from src.config.settings import get_embedding_api_key
         embedding_api_key = get_embedding_api_key()
         embedding_client = TextEmbeddingV3Client(api_key=embedding_api_key)
+        embedding_client.reset_usage()
         embeddings = await embedding_client.embed_batch([schema_text])
+
+        # 补计费：schema 重新向量化消耗（管理后台独立落库）
+        if int(getattr(embedding_client, "last_usage_tokens", 0) or 0) > 0:
+            try:
+                from src.services.session_record import record_admin_embedding_usage
+                record_admin_embedding_usage(
+                    embedding_client,
+                    tenant_id=tenant_id,
+                    user_id=getattr(request.state, "user_id", None),
+                    source_label="update_schema",
+                )
+            except Exception:
+                logger.debug("Failed to record schema embedding usage", exc_info=True)
 
         metadata = {
             "connector_id": req.connector_id,
