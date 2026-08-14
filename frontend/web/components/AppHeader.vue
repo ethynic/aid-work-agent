@@ -1,6 +1,18 @@
 <template>
   <header class="flex-shrink-0 h-14 bg-white border-b border-gray-200 flex items-center px-4 shadow-sticky z-10">
     <div class="flex-1 flex items-center gap-3 min-w-0">
+      <!-- Back Button（可选，showBack 时渲染） -->
+      <button
+        v-if="showBack"
+        @click="$emit('back')"
+        class="p-2 min-w-[44px] min-h-[44px] flex items-center justify-center text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors flex-shrink-0"
+        title="返回"
+      >
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+        </svg>
+      </button>
+
       <!-- Toggle Sidebar Button -->
       <button
         @click="$emit('toggle-sidebar')"
@@ -102,6 +114,8 @@ const props = withDefaults(defineProps<{
   title?: string
   isLoggedIn?: boolean
   user?: { username: string; user_id?: string | number } | null
+  /** 是否显示左上角返回按钮 */
+  showBack?: boolean
   /** 可用的数字员工列表（演示模式为子智能体类型，租户模式为实例列表） */
   availableSubagents?: AgentItem[]
   /** 当前选中的数字员工ID，null 表示主智能体。租户模式下为 instance_id，演示模式下为 agent_id */
@@ -109,6 +123,7 @@ const props = withDefaults(defineProps<{
   /** 是否显示右上角演示模式退出按钮，默认 true */
   showDemoLogout?: boolean
 }>(), {
+  showBack: false,
   showDemoLogout: true,
 })
 
@@ -116,6 +131,7 @@ const emit = defineEmits<{
   'toggle-sidebar': []
   'logout': []
   'change-subagent': [agentId: string]
+  'back': []
 }>()
 
 const showSubagentDropdown = ref(false)

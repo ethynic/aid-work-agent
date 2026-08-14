@@ -2,20 +2,13 @@
   <div class="h-screen flex flex-col bg-canvas">
     <AppHeader
       :title="`定制提示词 - ${subagentName}`"
+      show-back
       :is-logged-in="effectiveIsLoggedIn"
       :user="effectiveUser"
       @toggle-sidebar="handleToggleSidebar"
+      @back="goBack"
       @logout="handleLogout"
-    >
-      <template #menu-items="{ closeMenu }">
-        <button
-          class="block w-full text-left px-4 py-2 text-sm text-default hover:bg-surface-hover"
-          @click="goBack(closeMenu)"
-        >
-          返回定制提示词列表
-        </button>
-      </template>
-    </AppHeader>
+    />
 
     <div class="flex-1 overflow-y-auto p-6">
       <!-- 加载态 -->
@@ -42,20 +35,25 @@
 
         <!-- 编辑器 -->
         <div class="bg-surface rounded-xl border border-default p-5">
-          <div class="flex items-center justify-between mb-3">
-            <h3 class="text-sm font-medium text-default">Markdown 内容</h3>
-            <div class="text-xs text-muted">
-              <span v-if="lastVersion">当前版本 V{{ lastVersion }}</span>
-              <span v-else>未配置</span>
-            </div>
-          </div>
-
-          <textarea
+          <MyTextarea
             v-model="content"
-            class="w-full h-96 p-3 rounded-lg border border-default bg-canvas text-sm font-mono text-default focus:border-primary-400 focus:ring-1 focus:ring-primary-400 outline-none resize-y"
+            label="Markdown 内容"
             placeholder="例如：&#10;&#10;## 本租户定制要求&#10;- 回复中必须使用「贵司」而非「你」&#10;- 所有报价保留两位小数&#10;- 涉及合同条款时必须先确认法务审核"
+            monospace
+            show-char-count
+            enable-preview
+            :rows="18"
+            :auto-resize="false"
+            :min-height="'384px'"
             :disabled="saving"
-          ></textarea>
+          >
+            <template #extra>
+              <span class="text-xs text-muted">
+                <span v-if="lastVersion">当前版本 V{{ lastVersion }}</span>
+                <span v-else>未配置</span>
+              </span>
+            </template>
+          </MyTextarea>
 
           <!-- 操作按钮 -->
           <div class="flex items-center justify-between mt-4">
@@ -187,6 +185,7 @@
 import { ref, computed, onMounted, inject, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import AppHeader from '@/components/AppHeader.vue'
+import MyTextarea from '@/components/ui/MyTextarea.vue'
 import { getExtraMd, saveExtraMd, deleteExtraMd } from '@/api/subagent'
 import { listTemplates, uploadTemplate, deleteTemplate, type TemplateFile } from '@/api/subagentTemplates'
 import { useTenantAuth } from '@/composables/useTenantAuth'
@@ -237,8 +236,7 @@ async function handleLogout() {
 }
 
 // 返回定制提示词选择页
-function goBack(closeMenu?: () => void) {
-  closeMenu?.()
+function goBack() {
   router.push(`/t/${tenantId.value}/extras`)
 }
 
