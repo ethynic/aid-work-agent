@@ -1,6 +1,7 @@
 -- PostgreSQL 数据库初始化脚本
 -- 用于 AID Work Agent 数据库初始化
--- 包含核心业务表和 SaaS 多租户表
+-- 包含核心业务表、SaaS 多租户表，及渠道(wecom_rpa)/社媒/视频/工作报告等全部系统表
+-- 不含 bs_ 开头的业务表（由子智能体初始化时自动创建）
 -- 单实例方案：通过修改下方 \c 指令切换目标数据库（生产库 / 测试库）
 --
 -- 切换数据库：修改下面这一行 \c 即可
@@ -445,11 +446,15 @@ CREATE TABLE IF NOT EXISTS chunks (
     doc_id INTEGER,
     chunk_index INTEGER,
     text TEXT,
+    text_vec TSVECTOR,  -- 全文检索向量（由触发器自动维护，替代原 chunks_fts 表）
     tokens INTEGER,
     metadata TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     uuid TEXT UNIQUE
 );
+
+-- 旧表迁移兜底（CREATE TABLE IF NOT EXISTS 不会更新已存在的表）
+ALTER TABLE chunks ADD COLUMN IF NOT EXISTS text_vec TSVECTOR;
 
 CREATE INDEX IF NOT EXISTS idx_chunks_doc ON chunks(doc_id);
 
@@ -462,15 +467,23 @@ CREATE TABLE IF NOT EXISTS chunks_vec (
 -- 创建向量索引（使用 HNSW 算法，支持余弦相似度搜索）
 CREATE INDEX IF NOT EXISTS idx_chunks_vec_cosine ON chunks_vec USING hnsw (embedding vector_cosine_ops);
 
--- FTS5 全文搜索表（PostgreSQL 使用 tsvector）
-CREATE TABLE IF NOT EXISTS chunks_fts (
-    chunk_id INTEGER PRIMARY KEY,
-    text TEXT,
-    fts_vector tsvector
-);
+-- 全文检索：chunks.text_vec 由触发器自动维护（2026-08-14 从原 chunks_fts 表迁移而来）
+CREATE INDEX IF NOT EXISTS idx_chunks_text_vec ON chunks USING GIN (text_vec);
 
--- 创建 GIN 索引用于全文搜索
-CREATE INDEX IF NOT EXISTS idx_chunks_fts_fts ON chunks_fts USING gin (fts_vector);
+-- 自动更新 text_vec 的触发器
+CREATE OR REPLACE FUNCTION chunks_text_vec_update()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.text_vec := to_tsvector('simple', NEW.text);
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- PostgreSQL 不支持 CREATE TRIGGER IF NOT EXISTS，需先删除再创建
+DROP TRIGGER IF EXISTS chunks_text_vec_trigger ON chunks;
+CREATE TRIGGER chunks_text_vec_trigger
+BEFORE INSERT OR UPDATE ON chunks
+FOR EACH ROW EXECUTE FUNCTION chunks_text_vec_update();
 
 -- 用户邮箱配置表
 CREATE TABLE IF NOT EXISTS user_email_settings (
@@ -596,6 +609,7 @@ CREATE TABLE IF NOT EXISTS tenant_channel_configs (
     config TEXT,
     verified INTEGER DEFAULT 0,
     subagent_type TEXT,
+    mode TEXT,  -- 渠道模式（如 wecom_personal_rpa 的 server/client），历史遗留列
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -753,6 +767,731 @@ CREATE TABLE IF NOT EXISTS subagent_prompt_sections (
 );
 CREATE INDEX IF NOT EXISTS idx_prompt_sections_agent ON subagent_prompt_sections(agent_id);
 
+
+-- =================== 系统级补充表（2026-08-14 全量审计补齐）===================
+CREATE TABLE IF NOT EXISTS _db_update_applied (
+    id TEXT NOT NULL,
+    file_hash TEXT NOT NULL,
+    applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id)
+);
+
+CREATE TABLE IF NOT EXISTS captchas (
+    captcha_id TEXT NOT NULL,
+    code TEXT NOT NULL,
+    expires_at TIMESTAMP NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (captcha_id)
+);
+
+CREATE TABLE IF NOT EXISTS channel_message_dedup (
+    message_id TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    PRIMARY KEY (message_id)
+);
+CREATE INDEX IF NOT EXISTS idx_dedup_created_at ON channel_message_dedup USING btree (created_at);
+
+
+-- =================== 渠道系统补充表（wecom_personal_rpa）===================
+CREATE TABLE IF NOT EXISTS wecom_rpa_clients (
+    id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT,
+    name TEXT,
+    encrypted_secret TEXT,
+    status TEXT DEFAULT 'active' NOT NULL,
+    min_version TEXT,
+    last_seen_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    agent_base_url TEXT,
+    listen_mode TEXT,
+    PRIMARY KEY (id)
+);
+CREATE INDEX IF NOT EXISTS idx_wecom_rpa_clients_tenant ON wecom_rpa_clients USING btree (tenant_id);
+
+CREATE TABLE IF NOT EXISTS wecom_rpa_accounts (
+    id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT,
+    client_id TEXT,
+    display_name TEXT,
+    status TEXT DEFAULT 'offline' NOT NULL,
+    paused_reason TEXT,
+    last_login_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    wecom_user_id TEXT,
+    wecom_user_aliases TEXT[] DEFAULT '{}',
+    identity_verified_at TIMESTAMP,
+    identity_verified_by TEXT,
+    PRIMARY KEY (id)
+);
+CREATE INDEX IF NOT EXISTS idx_wecom_rpa_accounts_tenant_client ON wecom_rpa_accounts USING btree (tenant_id, client_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_wecom_rpa_accounts_tenant_wecom_user ON wecom_rpa_accounts USING btree (tenant_id, wecom_user_id) WHERE (wecom_user_id IS NOT NULL);
+
+CREATE TABLE IF NOT EXISTS wecom_rpa_action_outbox (
+    id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT,
+    account_id TEXT NOT NULL,
+    conversation_id TEXT,
+    request_id TEXT NOT NULL,
+    session_id TEXT,
+    actions TEXT,
+    status TEXT DEFAULT 'pending' NOT NULL,
+    attempts INTEGER DEFAULT 0 NOT NULL,
+    next_retry_at TIMESTAMP,
+    completed_at TIMESTAMP,
+    error_message TEXT,
+    dedup_key TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    reply_context JSONB,
+    action_results JSONB DEFAULT '{}' NOT NULL,
+    target_peer_id TEXT,
+    reply_digest TEXT,
+    reply_digests JSONB DEFAULT '[]' NOT NULL,
+    send_started_at TIMESTAMP,
+    UNIQUE (dedup_key),
+    PRIMARY KEY (id)
+);
+CREATE INDEX IF NOT EXISTS idx_wecom_rpa_outbox_recent_echo ON wecom_rpa_action_outbox USING btree (tenant_id, account_id, target_peer_id, completed_at DESC) WHERE (status = 'succeeded'::text);
+CREATE INDEX IF NOT EXISTS idx_wecom_rpa_outbox_status_retry ON wecom_rpa_action_outbox USING btree (status, next_retry_at);
+CREATE INDEX IF NOT EXISTS idx_wecom_rpa_outbox_tenant_account ON wecom_rpa_action_outbox USING btree (tenant_id, account_id);
+
+CREATE TABLE IF NOT EXISTS wecom_rpa_archive_inbox (
+    id SERIAL,
+    tenant_id TEXT NOT NULL,
+    config_id TEXT NOT NULL,
+    event_id TEXT NOT NULL,
+    envelope JSONB NOT NULL,
+    status TEXT DEFAULT 'pending' NOT NULL,
+    attempts INTEGER DEFAULT 0 NOT NULL,
+    claim_token TEXT,
+    error_message TEXT,
+    next_retry_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    completed_at TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE (tenant_id, event_id)
+);
+CREATE INDEX IF NOT EXISTS idx_wecom_rpa_archive_inbox_claim ON wecom_rpa_archive_inbox USING btree (tenant_id, status, next_retry_at, created_at);
+
+CREATE TABLE IF NOT EXISTS wecom_rpa_audit_logs (
+    id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT,
+    client_id TEXT,
+    account_id TEXT,
+    action_id TEXT,
+    category TEXT,
+    payload TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id)
+);
+CREATE INDEX IF NOT EXISTS idx_wecom_rpa_audit_tenant_account ON wecom_rpa_audit_logs USING btree (tenant_id, account_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_wecom_rpa_audit_tenant_category ON wecom_rpa_audit_logs USING btree (tenant_id, category, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS wecom_rpa_conversation_bindings (
+    id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT,
+    account_id TEXT NOT NULL,
+    conversation_type TEXT,
+    display_name TEXT,
+    search_key TEXT NOT NULL,
+    stable_id TEXT,
+    status TEXT DEFAULT 'pending' NOT NULL,
+    last_verified_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    monitor_user_names TEXT[] DEFAULT '{}',
+    monitor_user_ids TEXT[] DEFAULT '{}',
+    UNIQUE (account_id, search_key),
+    PRIMARY KEY (id)
+);
+CREATE INDEX IF NOT EXISTS idx_wecom_rpa_bindings_tenant_account ON wecom_rpa_conversation_bindings USING btree (tenant_id, account_id);
+
+
+-- =================== SaaS 多租户补充表（子智能体定义 / 充值 / 桌面客户端）===================
+CREATE TABLE IF NOT EXISTS subagent_definitions (
+    id UUID DEFAULT gen_random_uuid() NOT NULL,
+    agent_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT,
+    version TEXT DEFAULT '1.0.0',
+    author TEXT,
+    triggers JSONB DEFAULT '{}',
+    tools JSONB DEFAULT '{}',
+    skills JSONB DEFAULT '{}',
+    context JSONB DEFAULT '{}',
+    delegatable_to JSONB DEFAULT '[]',
+    allow_delegation BOOLEAN DEFAULT true,
+    llm_provider JSONB,
+    reply_style TEXT,
+    business_pages JSONB,
+    status TEXT DEFAULT 'active',
+    created_by TEXT,
+    updated_by TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    knowledge_sources JSONB DEFAULT '[]',
+    chat_toolbar JSONB DEFAULT '[]',
+    upload_accept TEXT,
+    PRIMARY KEY (id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_subagent_def_agent_id ON subagent_definitions USING btree (agent_id);
+CREATE INDEX IF NOT EXISTS idx_subagent_def_status ON subagent_definitions USING btree (status);
+
+CREATE TABLE IF NOT EXISTS tenant_recharges (
+    id SERIAL,
+    tenant_id TEXT NOT NULL,
+    amount_yuan NUMERIC(10,2) NOT NULL,
+    credits INTEGER NOT NULL,
+    rate INTEGER NOT NULL,
+    source TEXT DEFAULT 'manual' NOT NULL,
+    payment_order_id TEXT,
+    operator_id TEXT,
+    operator_name TEXT,
+    remark TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    balance_after NUMERIC(12,2),
+    PRIMARY KEY (id)
+);
+CREATE INDEX IF NOT EXISTS idx_tenant_recharges_created_at ON tenant_recharges USING btree (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_tenant_recharges_tenant_id ON tenant_recharges USING btree (tenant_id);
+
+CREATE TABLE IF NOT EXISTS client_activation_codes (
+    id SERIAL,
+    code TEXT NOT NULL,
+    code_hash TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    client_name TEXT,
+    status TEXT DEFAULT 'unused' NOT NULL,
+    activated_at TIMESTAMP,
+    activated_machine TEXT,
+    expires_at TIMESTAMP,
+    max_uses INTEGER DEFAULT 1,
+    used_count INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (code),
+    PRIMARY KEY (id)
+);
+CREATE INDEX IF NOT EXISTS idx_client_activation_codes_tenant ON client_activation_codes USING btree (tenant_id);
+
+CREATE TABLE IF NOT EXISTS client_bindings (
+    id SERIAL,
+    binding_id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    activation_code_id INTEGER,
+    client_name TEXT,
+    machine_id TEXT,
+    access_token TEXT NOT NULL,
+    status TEXT DEFAULT 'active' NOT NULL,
+    last_seen_at TIMESTAMP,
+    expires_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (access_token),
+    UNIQUE (binding_id),
+    PRIMARY KEY (id)
+);
+CREATE INDEX IF NOT EXISTS idx_client_bindings_tenant ON client_bindings USING btree (tenant_id);
+CREATE INDEX IF NOT EXISTS idx_client_bindings_token ON client_bindings USING btree (access_token);
+
+CREATE TABLE IF NOT EXISTS client_usage_logs (
+    id SERIAL,
+    tenant_id TEXT NOT NULL,
+    binding_id TEXT NOT NULL,
+    client_name TEXT,
+    session_id TEXT,
+    association_name TEXT,
+    role TEXT,
+    stage TEXT,
+    status TEXT,
+    model TEXT,
+    provider TEXT,
+    prompt_tokens INTEGER DEFAULT 0,
+    completion_tokens INTEGER DEFAULT 0,
+    cached_tokens INTEGER DEFAULT 0,
+    total_tokens INTEGER DEFAULT 0,
+    raw_credit_cost NUMERIC(12,2) DEFAULT 0,
+    credit_cost NUMERIC(12,2) DEFAULT 0,
+    error_code TEXT,
+    detail TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id)
+);
+CREATE INDEX IF NOT EXISTS idx_client_usage_logs_binding ON client_usage_logs USING btree (binding_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_client_usage_logs_status ON client_usage_logs USING btree (status, created_at);
+CREATE INDEX IF NOT EXISTS idx_client_usage_logs_tenant ON client_usage_logs USING btree (tenant_id, created_at);
+
+
+-- =================== 本地工具补充表（浏览器助手 / 本地设备）===================
+CREATE TABLE IF NOT EXISTS local_tool_devices (
+    id UUID DEFAULT gen_random_uuid() NOT NULL,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    name TEXT,
+    platform TEXT,
+    runtime_version TEXT,
+    token_hash TEXT NOT NULL,
+    machine_fingerprint_hash TEXT,
+    capabilities_json JSONB,
+    manifest_digest TEXT,
+    selected BOOLEAN DEFAULT false,
+    status TEXT DEFAULT 'active' NOT NULL,
+    last_seen_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE (token_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_lt_devices_tenant_user ON local_tool_devices USING btree (tenant_id, user_id);
+
+CREATE TABLE IF NOT EXISTS local_tool_pairing_tickets (
+    id UUID DEFAULT gen_random_uuid() NOT NULL,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    code_hash TEXT NOT NULL,
+    expires_at TIMESTAMP NOT NULL,
+    used_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (code_hash),
+    PRIMARY KEY (id)
+);
+
+CREATE TABLE IF NOT EXISTS local_tool_invocations (
+    id UUID DEFAULT gen_random_uuid() NOT NULL,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    device_id UUID NOT NULL,
+    tool_name TEXT NOT NULL,
+    arguments_json JSONB NOT NULL,
+    state TEXT DEFAULT 'queued' NOT NULL,
+    effect TEXT,
+    claim_token_hash TEXT,
+    lease_expires_at TIMESTAMP,
+    result_json JSONB,
+    error_code TEXT,
+    error_message TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    claimed_at TIMESTAMP,
+    started_at TIMESTAMP,
+    finished_at TIMESTAMP,
+    PRIMARY KEY (id)
+);
+CREATE INDEX IF NOT EXISTS idx_lt_inv_device_state ON local_tool_invocations USING btree (device_id, state);
+CREATE INDEX IF NOT EXISTS idx_lt_inv_tenant_user ON local_tool_invocations USING btree (tenant_id, user_id);
+
+CREATE TABLE IF NOT EXISTS local_tool_events (
+    id SERIAL,
+    invocation_id UUID NOT NULL,
+    tenant_id TEXT NOT NULL,
+    seq INTEGER NOT NULL,
+    stage TEXT,
+    current INTEGER,
+    total INTEGER,
+    message TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (invocation_id, seq),
+    PRIMARY KEY (id)
+);
+
+
+-- =================== 视频生成补充表 ===================
+CREATE TABLE IF NOT EXISTS gen_sessions (
+    session_id TEXT NOT NULL,
+    tenant_id TEXT,
+    user_id TEXT,
+    scene_id TEXT NOT NULL,
+    product_image_fid TEXT NOT NULL,
+    model_image_fid TEXT,
+    copywriting TEXT NOT NULL,
+    expanded_prompt TEXT,
+    card_count INTEGER DEFAULT 3 NOT NULL,
+    status TEXT DEFAULT 'generating' NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    enable_ai_label BOOLEAN DEFAULT true NOT NULL,
+    duration_sec INTEGER DEFAULT 10 NOT NULL,
+    resolution TEXT DEFAULT '720P' NOT NULL,
+    ratio TEXT DEFAULT '9:16' NOT NULL,
+    PRIMARY KEY (session_id)
+);
+
+CREATE TABLE IF NOT EXISTS gen_cards (
+    card_id TEXT NOT NULL,
+    tenant_id TEXT,
+    session_id TEXT NOT NULL,
+    variant_idx INTEGER NOT NULL,
+    seed BIGINT,
+    variant_prompt TEXT,
+    provider_task_id TEXT,
+    provider_status TEXT,
+    output_fid TEXT,
+    output_url TEXT,
+    output_duration INTEGER,
+    kept BOOLEAN DEFAULT false NOT NULL,
+    parent_card_id TEXT,
+    error_msg TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (card_id)
+);
+CREATE INDEX IF NOT EXISTS idx_gen_cards_polling ON gen_cards USING btree (provider_status);
+CREATE INDEX IF NOT EXISTS idx_gen_cards_session ON gen_cards USING btree (session_id);
+
+CREATE TABLE IF NOT EXISTS asset_library (
+    id SERIAL,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT,
+    file_id TEXT NOT NULL,
+    display_name TEXT NOT NULL,
+    mime_type TEXT NOT NULL,
+    size_bytes BIGINT NOT NULL,
+    source TEXT NOT NULL,
+    scene TEXT,
+    width INTEGER,
+    height INTEGER,
+    portrait_authorized BOOLEAN DEFAULT false,
+    portrait_auth_expire_at TIMESTAMP,
+    portrait_auth_scope TEXT,
+    metadata JSONB,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id)
+);
+CREATE INDEX IF NOT EXISTS idx_asset_library_source ON asset_library USING btree (source);
+CREATE INDEX IF NOT EXISTS idx_asset_library_tenant ON asset_library USING btree (tenant_id);
+CREATE INDEX IF NOT EXISTS idx_asset_library_tenant_scene ON asset_library USING btree (tenant_id, scene);
+
+CREATE TABLE IF NOT EXISTS prompt_library (
+    id SERIAL,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT,
+    category TEXT NOT NULL,
+    business_prompt TEXT NOT NULL,
+    craft_prompt TEXT NOT NULL,
+    model_params JSONB,
+    industry_tag TEXT,
+    scene_tag TEXT,
+    source_video_file_id TEXT,
+    source_chat_session_id TEXT,
+    dislike_reason TEXT,
+    promoted_from_kept_id INTEGER,
+    promoted_by_user_id TEXT,
+    promoted_at TIMESTAMP,
+    metadata JSONB,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id)
+);
+CREATE INDEX IF NOT EXISTS idx_prompt_library_tenant_category ON prompt_library USING btree (tenant_id, category);
+CREATE INDEX IF NOT EXISTS idx_prompt_library_tenant_scene ON prompt_library USING btree (tenant_id, scene_tag);
+
+
+-- =================== 社媒运营补充表（social_media 智能体）===================
+CREATE TABLE IF NOT EXISTS social_accounts (
+    account_id TEXT NOT NULL,
+    tenant_id TEXT,
+    platform TEXT,
+    display_name TEXT,
+    external_account_id TEXT,
+    auth_type TEXT,
+    credentials_encrypted TEXT,
+    credential_key_version TEXT,
+    status TEXT DEFAULT 'active',
+    capabilities_json JSONB,
+    capability_expires_at TIMESTAMP,
+    last_validated_at TIMESTAMP,
+    created_by TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (account_id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_social_accounts_unique ON social_accounts USING btree (tenant_id, platform, external_account_id);
+
+CREATE TABLE IF NOT EXISTS social_media_assets (
+    asset_id TEXT NOT NULL,
+    tenant_id TEXT,
+    storage_file_id TEXT,
+    asset_type TEXT,
+    mime_type TEXT,
+    file_size INTEGER,
+    checksum TEXT,
+    source_type TEXT,
+    source_uri TEXT,
+    license_type TEXT,
+    license_owner TEXT,
+    license_expires_at TIMESTAMP,
+    status TEXT DEFAULT 'active',
+    metadata_json JSONB,
+    created_by TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (asset_id)
+);
+
+CREATE TABLE IF NOT EXISTS social_content_masters (
+    master_id TEXT NOT NULL,
+    tenant_id TEXT,
+    item_id TEXT,
+    title TEXT,
+    brief TEXT,
+    facts_json JSONB,
+    source_refs_json JSONB,
+    brand_constraints_json JSONB,
+    revision INTEGER DEFAULT 1,
+    content_hash TEXT,
+    status TEXT DEFAULT 'draft',
+    created_by TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (master_id)
+);
+
+CREATE TABLE IF NOT EXISTS social_content_items (
+    item_id TEXT NOT NULL,
+    tenant_id TEXT,
+    plan_id TEXT,
+    topic TEXT,
+    objective TEXT,
+    planned_at TIMESTAMP,
+    timezone TEXT,
+    owner_user_id TEXT,
+    status TEXT DEFAULT 'draft',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (item_id)
+);
+
+CREATE TABLE IF NOT EXISTS social_content_variants (
+    variant_id TEXT NOT NULL,
+    tenant_id TEXT,
+    master_id TEXT,
+    account_id TEXT,
+    platform TEXT,
+    content_type TEXT,
+    revision INTEGER DEFAULT 1,
+    content_json JSONB,
+    content_hash TEXT,
+    spec_version TEXT,
+    prompt_version TEXT,
+    status TEXT DEFAULT 'draft',
+    created_by TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (variant_id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_social_variants_revision ON social_content_variants USING btree (tenant_id, variant_id, revision);
+
+CREATE TABLE IF NOT EXISTS social_content_plans (
+    plan_id TEXT NOT NULL,
+    tenant_id TEXT,
+    name TEXT,
+    period_start DATE,
+    period_end DATE,
+    goal TEXT,
+    target_audience TEXT,
+    status TEXT DEFAULT 'draft',
+    owner_user_id TEXT,
+    created_by TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (plan_id)
+);
+
+CREATE TABLE IF NOT EXISTS social_content_asset_links (
+    link_id TEXT NOT NULL,
+    tenant_id TEXT,
+    master_id TEXT,
+    asset_id TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (link_id)
+);
+
+CREATE TABLE IF NOT EXISTS social_publish_jobs (
+    job_id TEXT NOT NULL,
+    tenant_id TEXT,
+    account_id TEXT,
+    variant_id TEXT,
+    variant_revision INTEGER,
+    content_hash TEXT,
+    publish_mode TEXT,
+    scheduled_at TIMESTAMP,
+    timezone TEXT,
+    status TEXT DEFAULT 'draft',
+    idempotency_key TEXT,
+    publish_snapshot_json JSONB,
+    external_task_id TEXT,
+    retry_count INTEGER DEFAULT 0,
+    max_retries INTEGER DEFAULT 3,
+    next_retry_at TIMESTAMP,
+    lease_owner TEXT,
+    lease_expires_at TIMESTAMP,
+    last_error_code TEXT,
+    last_error_message TEXT,
+    created_by TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (idempotency_key),
+    PRIMARY KEY (job_id)
+);
+CREATE INDEX IF NOT EXISTS idx_social_publish_jobs_due ON social_publish_jobs USING btree (status, scheduled_at);
+CREATE INDEX IF NOT EXISTS idx_social_publish_jobs_external_task ON social_publish_jobs USING btree (external_task_id);
+CREATE INDEX IF NOT EXISTS idx_social_publish_jobs_lease ON social_publish_jobs USING btree (lease_expires_at);
+CREATE INDEX IF NOT EXISTS idx_social_publish_jobs_tenant_account ON social_publish_jobs USING btree (tenant_id, account_id, created_at);
+
+CREATE TABLE IF NOT EXISTS social_publish_attempts (
+    attempt_id TEXT NOT NULL,
+    tenant_id TEXT,
+    job_id TEXT,
+    attempt_no INTEGER,
+    trigger_type TEXT,
+    request_summary_json JSONB,
+    response_summary_json JSONB,
+    status TEXT,
+    platform_error_code TEXT,
+    error_category TEXT,
+    started_at TIMESTAMP,
+    completed_at TIMESTAMP,
+    duration_ms INTEGER,
+    PRIMARY KEY (attempt_id)
+);
+
+CREATE TABLE IF NOT EXISTS social_published_contents (
+    published_id TEXT NOT NULL,
+    tenant_id TEXT,
+    job_id TEXT,
+    account_id TEXT,
+    variant_id TEXT,
+    platform TEXT,
+    external_content_id TEXT,
+    external_url TEXT,
+    confirmation_source TEXT,
+    published_at TIMESTAMP,
+    confirmed_by TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (published_id)
+);
+
+CREATE TABLE IF NOT EXISTS social_metric_snapshots (
+    snapshot_id TEXT NOT NULL,
+    tenant_id TEXT,
+    account_id TEXT,
+    published_id TEXT,
+    metric_date DATE,
+    metric_definition TEXT,
+    normalized_metrics_json JSONB,
+    raw_metrics_json JSONB,
+    source_type TEXT,
+    collected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    import_batch_id TEXT,
+    PRIMARY KEY (snapshot_id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_social_metric_snapshots_unique ON social_metric_snapshots USING btree (tenant_id, account_id, published_id, metric_date, metric_definition);
+
+CREATE TABLE IF NOT EXISTS social_review_records (
+    review_id TEXT NOT NULL,
+    tenant_id TEXT,
+    variant_id TEXT,
+    variant_revision INTEGER,
+    content_hash TEXT,
+    decision TEXT,
+    comment TEXT,
+    reviewer_user_id TEXT,
+    reviewed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (review_id)
+);
+
+CREATE TABLE IF NOT EXISTS social_data_import_batches (
+    batch_id TEXT NOT NULL,
+    tenant_id TEXT,
+    account_id TEXT,
+    platform TEXT,
+    template_version TEXT,
+    file_digest TEXT,
+    status TEXT DEFAULT 'uploaded',
+    error_summary TEXT,
+    created_by TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (batch_id)
+);
+
+
+-- =================== 工作报告补充表 ===================
+CREATE TABLE IF NOT EXISTS work_daily_reports (
+    id SERIAL,
+    report_id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    report_type TEXT DEFAULT 'daily' NOT NULL,
+    target_user_id TEXT,
+    report_date DATE NOT NULL,
+    metrics JSONB DEFAULT '{}' NOT NULL,
+    summary_text TEXT,
+    highlights JSONB,
+    suggestions JSONB,
+    model TEXT,
+    token_cost INTEGER DEFAULT 0,
+    credit_cost NUMERIC(12,2) DEFAULT 0,
+    generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    regenerated_count INTEGER DEFAULT 0,
+    PRIMARY KEY (id),
+    UNIQUE (report_id),
+    UNIQUE (tenant_id, scope, report_type, target_user_id, report_date)
+);
+CREATE INDEX IF NOT EXISTS idx_work_daily_reports_tenant_date ON work_daily_reports USING btree (tenant_id, report_date DESC);
+CREATE INDEX IF NOT EXISTS idx_work_daily_reports_tenant_scope_type_date ON work_daily_reports USING btree (tenant_id, scope, report_type, report_date DESC);
+CREATE INDEX IF NOT EXISTS idx_work_daily_reports_user_date ON work_daily_reports USING btree (target_user_id, report_date DESC) WHERE (scope = 'personal'::text);
+
+CREATE TABLE IF NOT EXISTS work_outcomes (
+    id SERIAL,
+    outcome_id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    subagent_id TEXT,
+    session_id TEXT NOT NULL,
+    channel TEXT,
+    summary TEXT NOT NULL,
+    outcome_type TEXT DEFAULT 'other' NOT NULL,
+    importance TEXT DEFAULT 'normal' NOT NULL,
+    file_id TEXT,
+    file_name TEXT,
+    file_path TEXT,
+    metadata JSONB DEFAULT '{}' NOT NULL,
+    source TEXT DEFAULT 'cp_realtime' NOT NULL,
+    chat_record_id BIGINT,
+    review_batch_id TEXT,
+    review_confidence REAL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (outcome_id),
+    PRIMARY KEY (id)
+);
+CREATE INDEX IF NOT EXISTS idx_work_outcomes_file_id ON work_outcomes USING btree (file_id) WHERE (file_id IS NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_work_outcomes_review_batch ON work_outcomes USING btree (review_batch_id) WHERE (review_batch_id IS NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_work_outcomes_session ON work_outcomes USING btree (session_id);
+CREATE INDEX IF NOT EXISTS idx_work_outcomes_subagent_created ON work_outcomes USING btree (tenant_id, subagent_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_work_outcomes_tenant_created ON work_outcomes USING btree (tenant_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_work_outcomes_user_created ON work_outcomes USING btree (tenant_id, user_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS work_report_preferences (
+    id SERIAL,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    personal_report_enabled BOOLEAN DEFAULT true,
+    personal_report_types TEXT[] DEFAULT ARRAY['daily'] NOT NULL,
+    personal_push_channels TEXT[],
+    personal_push_time TIME DEFAULT '18:00:00',
+    team_report_enabled BOOLEAN DEFAULT false,
+    team_report_types TEXT[] DEFAULT ARRAY['daily'] NOT NULL,
+    team_push_channels TEXT[],
+    team_push_time TIME DEFAULT '19:00:00',
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE (tenant_id, user_id)
+);
 
 -- 输出初始化完成信息
 DO $$
