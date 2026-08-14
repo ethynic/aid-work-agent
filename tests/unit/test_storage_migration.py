@@ -820,7 +820,13 @@ class TestRelocatePrefixedTenantDirs:
         assert stats["errors"] == 0
 
     def test_relocates_root_level_files(self, tmp_path):
-        """前缀目录根下的散落文件（after-sales-api.md 等）也搬走"""
+        """前缀目录根下的散落文件（after-sales-api.md 等）也搬走
+
+        `*-api.md` 是 tenant_config_file 产出的配置文件，按修复后的规范
+        必须落到 templates/ 场景子目录。前缀目录治理先把它搬到
+        `tenants/{tid}/after-sales-api.md`，Phase E 再把它归位到
+        `tenants/{tid}/templates/after-sales-api.md`。
+        """
         tenants = tmp_path / "storage" / "tenants"
         cfg = tenants / "tenant_ea24cd1a1097" / "after-sales-api.md"
         cfg.parent.mkdir(parents=True)
@@ -828,7 +834,8 @@ class TestRelocatePrefixedTenantDirs:
 
         stats = self._run(tmp_path)
 
-        assert (tenants / "ea24cd1a1097" / "after-sales-api.md").exists()
+        assert (tenants / "ea24cd1a1097" / "templates" / "after-sales-api.md").exists()
+        assert not (tenants / "ea24cd1a1097" / "after-sales-api.md").exists()
         assert not (tenants / "tenant_ea24cd1a1097").exists()
         assert stats["errors"] == 0
 
@@ -911,3 +918,80 @@ class TestRelocatePrefixedTenantDirs:
         # 前缀目录保留，源文件未丢失
         assert (tenants / "tenant_t1").exists()
         assert src.exists()
+
+
+class TestRelocateLegacyConfigFiles:
+    """Phase E: tenants/{tid}/{subagent}-api.md 根目录违规文件归位 templates/"""
+
+    def _run(self, tmp_path):
+        with patch(
+            "src.core.storage_migration._acquire_advisory_lock", return_value=(True, None)
+        ), patch(
+            "src.core.storage_migration._release_advisory_lock"
+        ), patch(
+            "src.core.storage_migration._build_redis_path_index", return_value={}
+        ), patch(
+            "src.core.storage_migration._fix_documents_metadata_paths", return_value=0
+        ):
+            return migrate_uploads_to_tenants(project_root=tmp_path)
+
+    def test_relocates_bare_tenant_root_config_file(self, tmp_path):
+        """tenants/{tid}/{subagent}-api.md -> tenants/{tid}/templates/{subagent}-api.md"""
+        tenants = tmp_path / "storage" / "tenants"
+        cfg = tenants / "ea24cd1a1097" / "after-sales-api.md"
+        cfg.parent.mkdir(parents=True)
+        cfg.write_text("api config")
+
+        stats = self._run(tmp_path)
+
+        assert (tenants / "ea24cd1a1097" / "templates" / "after-sales-api.md").exists()
+        assert not (tenants / "ea24cd1a1097" / "after-sales-api.md").exists()
+        assert stats["errors"] == 0
+        assert stats["migrated"] >= 1
+
+    def test_idempotent_second_run(self, tmp_path):
+        """二次运行：根目录无 -api.md 文件，migrated 不增加"""
+        tenants = tmp_path / "storage" / "tenants"
+        cfg = tenants / "ea24cd1a1097" / "templates" / "after-sales-api.md"
+        cfg.parent.mkdir(parents=True)
+        cfg.write_text("api config")
+
+        stats = self._run(tmp_path)
+
+        # 已在 templates/ 内，不再触发迁移
+        assert stats["migrated"] == 0
+        assert stats["errors"] == 0
+        assert cfg.exists()
+
+    def test_does_not_touch_files_inside_templates(self, tmp_path):
+        """templates/ 内已有的 -api.md 文件保持原位，不被误搬"""
+        tenants = tmp_path / "storage" / "tenants"
+        inside = tenants / "ea24cd1a1097" / "templates" / "after-sales-api.md"
+        inside.parent.mkdir(parents=True)
+        inside.write_text("already in templates")
+
+        stats = self._run(tmp_path)
+
+        # 文件原位保留，无迁移发生
+        assert inside.exists()
+        assert stats["migrated"] == 0
+        assert stats["errors"] == 0
+
+    def test_skips_non_config_files_in_root(self, tmp_path):
+        """根目录下非 -api.md 文件不被 Phase E 搬走"""
+        tenants = tmp_path / "storage" / "tenants"
+        other = tenants / "ea24cd1a1097" / "notes.md"
+        other.parent.mkdir(parents=True)
+        other.write_text("just notes")
+
+        stats = self._run(tmp_path)
+
+        # 非 -api.md 文件保持原位
+        assert other.exists()
+        assert stats["migrated"] == 0
+        assert stats["errors"] == 0
+
+    def test_skips_when_tenants_root_missing(self, tmp_path):
+        """tenants/ 不存在时 Phase E 安全跳过"""
+        stats = self._run(tmp_path)
+        assert stats["errors"] == 0

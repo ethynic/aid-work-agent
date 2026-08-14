@@ -1,8 +1,12 @@
 """
 租户配置文件管理 API。
 
-管理 storage/tenants/{tenant_id}/ 下的子智能体配置文件（如 after-sales-api.md）。
-供租户管理员或平台管理员上传/下载/删除配置文件。
+管理 storage/tenants/{tenant_id}/templates/ 下的子智能体配置文件
+（如 after-sales-api.md）。供租户管理员或平台管理员上传/下载/删除配置文件。
+
+按 `.claude/rules/backend_dev.md`「租户附件存储规范」统一走
+`src.core.storage` 工具函数，子智能体模板/配置文件统一落 templates 场景
+（与 `subagent_template_file.py` 一致），禁止直接落在租户根目录。
 """
 
 import os
@@ -10,12 +14,10 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Depends, UploadFile, File
 from loguru import logger
 
+from src.core.storage import ensure_tenant_storage_dir, get_tenant_storage_abs_path
 from src.saas.api.tenant_auth import require_admin
 
 router = APIRouter(prefix="/api/saas/tenant/config-file", tags=["tenant-config-file"])
-
-# 项目根目录
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 # 支持上传的文件扩展名
 ALLOWED_EXTENSIONS = {".md"}
@@ -25,13 +27,18 @@ MAX_FILE_SIZE = 1 * 1024 * 1024
 
 
 def _get_config_path(tenant_id: str, subagent_name: str) -> Path:
-    """获取配置文件路径，文件名格式：{subagent_name}-api.md
+    """获取配置文件路径：storage/tenants/{tenant_id}/templates/{subagent_name}-api.md
 
-    tenant_id 统一剥离 `tenant_` 前缀（与 storage.py 规范一致），
-    否则会与迁移脚本产出的无前缀目录并存导致读写错位。
+    统一走 `get_tenant_storage_abs_path`（normalize_tenant_id 自动剥离 `tenant_`
+    前缀），与 `subagent_template_file.py::_templates_dir` 同一场景，
+    禁止直接落在 `storage/tenants/{tid}/` 根目录。
     """
-    from src.core.storage import normalize_tenant_id
-    return PROJECT_ROOT / "storage" / "tenants" / normalize_tenant_id(tenant_id) / f"{subagent_name}-api.md"
+    ensure_tenant_storage_dir(tenant_id, "templates")
+    return Path(
+        get_tenant_storage_abs_path(
+            tenant_id, "templates", f"{subagent_name}-api.md"
+        )
+    )
 
 
 @router.post("/{subagent_name}")
@@ -56,9 +63,8 @@ async def upload_config_file(
     if len(content) > MAX_FILE_SIZE:
         raise HTTPException(status_code=400, detail="文件大小超过 1MB 限制")
 
-    # 保存文件
+    # 保存文件（_get_config_path 内部已确保 templates 目录存在）
     config_path = _get_config_path(tenant_id, subagent_name)
-    config_path.parent.mkdir(parents=True, exist_ok=True)
 
     try:
         config_path.write_bytes(content)

@@ -116,6 +116,12 @@ def migrate_uploads_to_tenants(project_root: Optional[Path] = None) -> Dict[str,
         # 历史代码用带 tenant_ 前缀的 tenant_id 产生前缀目录，统一搬到 tenants/{tid}/{scene}/
         _relocate_prefixed_tenant_dirs(tenants_root, redis_index, stats)
 
+        # Phase E: 治理 tenants/{tid}/{subagent}-api.md 根目录违规文件
+        # tenant_config_file.py 历史拼路径把配置文件直接落在租户根目录（无场景子目录），
+        # 修复后路径为 tenants/{tid}/templates/{subagent}-api.md，启动时把根目录下
+        # 的违规配置文件幂等搬到 templates/ 子目录，复用 _migrate_file 的同大小跳过规则
+        _relocate_legacy_config_files(tenants_root, redis_index, stats)
+
         logger.info(f"[storage_migration] 迁移完成: {stats}")
         return stats
     finally:
@@ -679,3 +685,57 @@ def _release_advisory_lock(conn: Optional[Any]) -> None:
             return_pooled_connection(conn)
     except ImportError:
         pass
+
+
+# 配置文件名后缀（与 src/api/tenant_config_file.py::_get_config_path 文件名规则对齐）
+_CONFIG_FILE_SUFFIX = "-api.md"
+
+
+def _relocate_legacy_config_files(
+    tenants_root: Path, redis_index: Dict[str, str], stats: Dict[str, int]
+) -> None:
+    """治理 tenants/{tid}/{subagent}-api.md 根目录违规文件（Phase E）
+
+    `tenant_config_file.py::_get_config_path` 历史拼路径把配置文件直接落在
+    `tenants/{tid}/{subagent}-api.md`（租户根目录，无场景子目录），违反
+    「禁止跳过场景子目录直接存放文件」规范。修复后路径为
+    `tenants/{tid}/templates/{subagent}-api.md`，启动时把根目录下所有
+    `*-api.md` 文件幂等搬到 `templates/` 子目录，复用 `_migrate_file` 的
+    同大小跳过、不同加后缀规则，同步 Redis path 字段。
+
+    必须在 `_relocate_prefixed_tenant_dirs` 之后运行：先治理 `tenant_{tid}/`
+    前缀目录把所有 `*-api.md` 集中到 `tenants/{tid}/` 根目录，再统一搬到
+    `templates/` 子目录。
+
+    二次运行时根目录下 `*-api.md` 已迁完，天然幂等。
+    """
+    if not tenants_root.exists():
+        return
+
+    for tid_dir in tenants_root.iterdir():
+        if not tid_dir.is_dir():
+            continue
+        # 仅扫描直接位于 tid 根目录下的文件（不递归，避免误搬 templates/
+        # 子目录里已有的 -api.md 文件）
+        for item in list(tid_dir.iterdir()):
+            if not item.is_file():
+                continue
+            if not item.name.endswith(_CONFIG_FILE_SUFFIX):
+                continue
+
+            target = tid_dir / "templates" / item.name
+            try:
+                migrated_dst, redis_key = _migrate_file(item, target, redis_index)
+                stats["migrated"] += 1
+                if redis_key:
+                    stats["redis_updated"] += 1
+                logger.info(
+                    f"[storage_migration] 配置文件归位 templates/: "
+                    f"{item} -> {migrated_dst}"
+                )
+            except Exception as e:
+                stats["errors"] += 1
+                logger.error(
+                    f"[storage_migration] 配置文件迁移失败 {item} -> {target}: {e}",
+                    exc_info=True,
+                )
