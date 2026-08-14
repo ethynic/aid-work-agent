@@ -190,12 +190,12 @@ class AttractionExcelParser:
             self._gateway = LLMGateway()
         return self._gateway
 
-    async def parse_sheet_by_name(self, file_path: str, sheet_name: str) -> List[Dict]:
+    async def parse_sheet_by_name(self, file_path: str, sheet_name: str, tenant_id: Optional[str] = None, user_id: Optional[str] = None) -> List[Dict]:
         """读取指定 Sheet 的原始内容并解析。"""
         raw_text = sheet_to_raw_text(file_path, sheet_name)
-        return await self.parse_sheet(sheet_name, raw_text)
+        return await self.parse_sheet(sheet_name, raw_text, tenant_id=tenant_id, user_id=user_id)
 
-    async def parse_sheet(self, sheet_name: str, raw_text: str) -> List[Dict]:
+    async def parse_sheet(self, sheet_name: str, raw_text: str, tenant_id: Optional[str] = None, user_id: Optional[str] = None) -> List[Dict]:
         """
         用 LLM 解析单个 Sheet 的原始文本。
 
@@ -219,6 +219,9 @@ class AttractionExcelParser:
             record_background_llm_usage(
                 response.get("usage") if isinstance(response, dict) else None,
                 source="attraction_excel_parser",
+                model=gateway.get_model_name(),
+                tenant_id=tenant_id,
+                user_id=user_id,
             )
 
             content = response.get("content", "")
@@ -318,7 +321,7 @@ class AttractionExcelParser:
             },
         }]
 
-    async def parse_excel_sheets(self, file_path: str) -> List[Dict]:
+    async def parse_excel_sheets(self, file_path: str, tenant_id: Optional[str] = None, user_id: Optional[str] = None) -> List[Dict]:
         """
         处理 Excel 文件：逐 Sheet 读取原始内容，传给 LLM 解析。
 
@@ -356,7 +359,7 @@ class AttractionExcelParser:
             logger.info(f"[AttractionExcelParser] 解析 Sheet {idx}/{len(valid_sheets)}: '{sheet_name}' ({len(raw_text)} 字符)...")
 
             try:
-                parsed = await self.parse_sheet(sheet_name, raw_text)
+                parsed = await self.parse_sheet(sheet_name, raw_text, tenant_id=tenant_id, user_id=user_id)
                 if parsed:
                     all_parsed.extend(parsed)
                     logger.info(f"[AttractionExcelParser] Sheet '{sheet_name}' 解析完成，得到 {len(parsed)} 个景点")

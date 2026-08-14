@@ -918,6 +918,7 @@ class ContextCompressionService:
                         user_id=user_id,
                         source="mid_term_summary",
                         user_message="上下文压缩扫描摘要",
+                        model=model_cfg,
                     )
                 else:
                     # fallback 到主 gateway（仅首次记录 warning）
@@ -948,6 +949,7 @@ class ContextCompressionService:
                         user_id=user_id,
                         source="mid_term_summary",
                         user_message="上下文压缩扫描摘要",
+                        model=model_cfg,
                     )
 
                 content = (content or "").strip()

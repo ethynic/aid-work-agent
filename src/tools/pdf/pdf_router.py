@@ -144,6 +144,7 @@ class PdfRouter:
             record_background_llm_usage(
                 response.get("usage") if isinstance(response, dict) else None,
                 source="pdf_router",
+                model=gateway.get_model_name(),
             )
 
             content = response.get("content", "")

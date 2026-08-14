@@ -103,6 +103,7 @@ class PPTPlanner:
             record_background_llm_usage(
                 response.get("usage") if isinstance(response, dict) else None,
                 source="ppt_planner",
+                model=gateway.get_model_name(),
             )
 
             content = response.get("content", "")

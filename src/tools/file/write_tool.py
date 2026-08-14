@@ -346,6 +346,7 @@ display_name 必须使用用户能理解的业务文件名，不要使用工具�
         record_background_llm_usage(
             response.get("usage") if isinstance(response, dict) else None,
             source="write_tool",
+            model=llm_gateway.get_model_name(),
         )
 
         if isinstance(response, dict):

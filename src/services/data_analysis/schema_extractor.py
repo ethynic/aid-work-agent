@@ -152,6 +152,7 @@ class SchemaExtractor:
             record_background_llm_usage(
                 response.get("usage") if isinstance(response, dict) else None,
                 source="schema_extract",
+                model=gateway.get_model_name(),
             )
 
             content = response.get("content", "")
@@ -205,6 +206,7 @@ class SchemaExtractor:
             record_background_llm_usage(
                 response.get("usage") if isinstance(response, dict) else None,
                 source="schema_infer_relations",
+                model=gateway.get_model_name(),
             )
 
             content = response.get("content", "")

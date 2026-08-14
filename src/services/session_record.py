@@ -495,6 +495,7 @@ def record_background_llm_usage(
     user_id: Optional[str] = None,
     source: str = "background_llm",
     user_message: Optional[str] = None,
+    model: Optional[str] = None,
 ) -> None:
     """后台 LLM 调用（非主循环 chat_with_tools）的 usage 累加到当前 SessionRecordService
 
@@ -520,6 +521,9 @@ def record_background_llm_usage(
       传入，从 SessionMeta 解析；让计费能归属到具体租户，避免硬编码 None
     - source：计费来源标识，与 memory_summarizer 一致用于 session_id 拼接
     - user_message：用户可见消息文本（默认 "上下文压缩扫描摘要"）
+    - model：实际调用模型名。非 mid_term 场景（工具路由/技能脚本用主
+      gateway 默认模型）必须显式传入，否则兜底分支会误用 mid_term 摘要
+      模型单价（P2-1 修复）
 
     对话内调用方（case_matching/classification/sentiment/analysis_agent/
     content_generate_tool）不传这些参数，默认 None 向后兼容。
@@ -538,6 +542,7 @@ def record_background_llm_usage(
             user_id=user_id,
             source=source,
             user_message=user_message,
+            model=model,
         )
     except Exception:
         logger.debug("Failed to record background LLM usage", exc_info=True)
@@ -550,6 +555,7 @@ def _persist_background_llm_record(
     user_id: Optional[str] = None,
     source: str = "background_llm",
     user_message: Optional[str] = None,
+    model: Optional[str] = None,
 ) -> None:
     """background_runner 调度线程的后台 LLM 调用独立写入 chat_records
 
@@ -568,6 +574,7 @@ def _persist_background_llm_record(
         user_id: 用户 ID（从 SessionMeta.user_id 透传）
         source: 计费来源标识，用于 session_id 拼接与追溯
         user_message: chat_records.user_message 字段值
+        model: 实际调用模型名；未传时回退 mid_term 摘要模型（向后兼容）
     """
     try:
         from src.db.models import ChatRecordDB
@@ -578,12 +585,16 @@ def _persist_background_llm_record(
         total_tokens = int(usage.get("total_tokens", 0) or 0)
         cached_input_tokens = int(usage.get("cached_tokens", 0) or 0)
 
-        # mid_term 摘要走独立 provider，model 用 settings.memory.mid_term.summary_llm.model
-        try:
-            from src.config.settings import settings as _settings
-            llm_model = getattr(_settings.memory.mid_term.summary_llm, "model", None) or "deepseek-chat"
-        except Exception:
-            llm_model = "deepseek-chat"
+        # 模型优先级：调用方显式传入 model > mid_term 摘要模型（历史兜底）
+        # mid_term 走独立 provider 用 summary_llm.model；工具路由/技能脚本用
+        # 主 gateway 默认模型，必须显式传 model 才能算准单价（P2-1 修复）
+        llm_model = model
+        if not llm_model:
+            try:
+                from src.config.settings import settings as _settings
+                llm_model = getattr(_settings.memory.mid_term.summary_llm, "model", None) or "deepseek-chat"
+            except Exception:
+                llm_model = "deepseek-chat"
 
         credit_cost = 0.0
         chat_bd: Dict[str, Any] = {}

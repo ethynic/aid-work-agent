@@ -1268,7 +1268,7 @@ async def import_vehicle_excel(request: Request, file: UploadFile = File(...)):
         from vehicle_excel_parser import VehicleExcelParser
 
         parser = VehicleExcelParser()
-        all_parsed = await parser.parse_excel_sheets(tmp_path)
+        all_parsed = await parser.parse_excel_sheets(tmp_path, tenant_id=tenant_id, user_id=getattr(request.state, "user_id", None))
 
         if not all_parsed:
             return {
@@ -1397,7 +1397,7 @@ async def import_hotel_excel_to_kb(request: Request, file: UploadFile = File(...
 
             try:
                 # 解析单个 Sheet
-                parsed = await parser.parse_sheet_by_name(tmp_path, sheet_name)
+                parsed = await parser.parse_sheet_by_name(tmp_path, sheet_name, tenant_id=tenant_id, user_id=user_id)
             except Exception as e:
                 error_msg = sanitize_error_info(str(e))
                 errors.append(f"Sheet '{sheet_name}' 解析失败: {error_msg}")
@@ -1577,7 +1577,7 @@ async def _process_parsed_attractions(
         logger.info(f"[AttractionExcelImport] 处理 Sheet {idx}/{total_sheets}: '{sheet_name}'")
 
         try:
-            parsed = await parser.parse_sheet_by_name(xlsx_path, sheet_name)
+            parsed = await parser.parse_sheet_by_name(xlsx_path, sheet_name, tenant_id=tenant_id, user_id=user_id)
         except Exception as e:
             error_msg = sanitize_error_info(str(e))
             errors.append(f"Sheet '{sheet_name}' 解析失败: {error_msg}")

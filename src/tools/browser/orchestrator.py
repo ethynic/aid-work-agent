@@ -212,6 +212,7 @@ class BrowserOrchestrator:
         record_background_llm_usage(
             response.get("usage") if isinstance(response, dict) else None,
             source="browser_orchestrator",
+            model=llm_gateway.get_model_name(),
         )
 
         content = response.get("content", "")

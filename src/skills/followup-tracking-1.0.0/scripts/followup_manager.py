@@ -375,6 +375,7 @@ def _evaluate_with_llm(record: dict) -> tuple:
             tenant_id=record.get("tenant_id"),
             user_id=record.get("user_id"),
             source="followup_evaluate",
+            model=llm_gateway.get_model_name(),
         )
 
         content = result.get("content", "")
