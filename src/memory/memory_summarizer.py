@@ -181,7 +181,7 @@ def _get_active_users() -> List[Tuple[Optional[str], str]]:
                 (today, today, today, today),
             )
             rows = cursor.fetchall()
-            return [(row[0], row[1]) for row in rows if row[1]]
+            return [(row["tenant_id"], row["user_id"]) for row in rows if row["user_id"]]
     except Exception as e:
         logger.error(f"Failed to get active users: {e}")
         return []
@@ -238,7 +238,9 @@ def _get_user_conversations(tenant_id: Optional[str], user_id: str) -> str:
                 return ""
 
             lines = []
-            for role, content in rows:
+            for row in rows:
+                role = row["role"]
+                content = row["content"]
                 cleaned = _clean_message_content(role, content)
                 if not cleaned:
                     continue
