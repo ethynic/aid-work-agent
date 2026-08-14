@@ -225,7 +225,6 @@ demo:
 # 存储配置（所有业务数据集中于此，便于备份和迁移）
 storage:
   base_dir: "storage"
-  uploads_dir: "storage/uploads"
 
 # 定时任务配置
 scheduler:

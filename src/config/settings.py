@@ -130,7 +130,6 @@ class LLMConfig(BaseModel):
 class StorageConfig(BaseModel):
     """存储配置（所有业务数据集中于此，便于备份和迁移）"""
     base_dir: str = "storage"  # 存储根目录
-    uploads_dir: str = "storage/uploads"  # 上传文件根目录
     # 注意：代码内部使用字节单位，.env 中配置使用 MB 单位
     max_knowledge_file_size: int = 50 * 1024 * 1024  # 知识库文件大小限制（默认 50MB），支持 .env 覆盖
     max_general_file_size: int = 20 * 1024 * 1024  # 通用上传文件大小限制（默认 20MB），支持 .env 覆盖
