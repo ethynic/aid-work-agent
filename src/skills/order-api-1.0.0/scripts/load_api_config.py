@@ -62,7 +62,7 @@ def load_api_config():
         os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
             os.path.abspath(__file__)
         )))),
-        "storage", "tenants", tenant_id, "order-api.md"
+        "storage", "tenants", tenant_id, "templates", "order-api.md"
     )
 
     if not os.path.exists(config_path):

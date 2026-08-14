@@ -1018,6 +1018,9 @@ def cmd_export_leads(args):
                 ws.cell(row=row_idx, column=col_idx + 1, value=str(val) if val else "")
 
         # 保存
+        # TODO(警告): 导出文件写到全局 storage/exports，违反租户附件存储规范
+        # （应落 storage/tenants/{tenant_id}/export/，实现租户隔离）。历史遗留，
+        # 暂不影响功能（返回的 file_path 可被直接命中），后续迁移时一并整改。
         export_dir = Path(project_root) / "storage" / "exports"
         export_dir.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

@@ -60,7 +60,7 @@ def load_api_config():
     # tenant_id 数据库带 `tenant_` 前缀，存储规范要求目录不带前缀，统一剥离（与 src.core.storage.normalize_tenant_id 一致）
     if tenant_id.startswith("tenant_"):
         tenant_id = tenant_id[len("tenant_"):]
-    config_path = os.path.join(project_root, "storage", "tenants", tenant_id, "after-sales-api.md")
+    config_path = os.path.join(project_root, "storage", "tenants", tenant_id, "templates", "after-sales-api.md")
 
     if not os.path.exists(config_path):
         print(json.dumps({
