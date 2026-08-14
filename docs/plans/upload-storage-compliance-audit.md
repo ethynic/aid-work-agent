@@ -4,6 +4,7 @@
 > **依据规范**：`.claude/rules/backend_dev.md`「租户附件存储规范」
 > **关联改造**：[plan-tenant-storage-migration.md](plan-tenant-storage-migration.md)（Phase 1~8 已完成）
 > **审计方法**：全项目扫描上传/保存文件调用点 + 逐点读函数上下文核对路径构造与 tenant_id 来源
+> **状态**：✅ 已修复并发生产、已验证（2026-08-14）
 
 ---
 
@@ -27,7 +28,7 @@
 
 ---
 
-## 3. 唯一违规项（P1）
+## 3. 唯一违规项（P1）— 已修复
 
 ### `tenant_config_file.py` 硬编码拼路径且跳过场景子目录
 
@@ -47,6 +48,8 @@ def _get_config_path(tenant_id: str, subagent_name: str) -> Path:
 
 ---
 
-## 4. 修复建议
+## 4. 修复结果（已完成，commit `a75269a9`）
 
-改用 `ensure_tenant_storage_dir(tenant_id, "templates")`（子智能体模板场景已存在）或新建 `config` 场景；同时更新 `storage_migration.py` 迁移映射表，把历史已落盘的无场景目录文件纳入迁移。
+- `tenant_config_file.py::_get_config_path` 改用 `ensure_tenant_storage_dir`/`get_tenant_storage_abs_path` 落 `templates/` 场景（与 `subagent_template_file.py` 一致），消除硬编码拼路径与跳过场景子目录两处违规。
+- `storage_migration.py` 新增 Phase E `_relocate_legacy_config_files`，启动时把历史落盘在 `tenants/{tid}/{subagent}-api.md` 根目录的违规文件幂等搬到 `tenants/{tid}/templates/` 子目录（复用 `_migrate_file` 同大小跳过 + Redis path 字段同步，必须在 Phase D 之后运行）。
+- 已发生产并验证（2026-08-14）：Phase D + Phase E 迁移在容器启动时执行完成，磁盘核对无残留违规文件。

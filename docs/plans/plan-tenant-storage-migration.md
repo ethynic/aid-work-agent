@@ -271,15 +271,21 @@
 | Phase 2 知识库 | ✅ 已完成 | `ebca7d3` |
 | Phase 3 数据分析 | ✅ 已完成 | `16165e8` |
 | Phase 4 模板文件 | ✅ 已完成 | `d17d657` |
-| Phase 5 渠道媒体 | ✅ 已完成 | 待提交 |
+| Phase 5 渠道媒体 | ✅ 已完成 | `7e638071` |
 | Phase 6 word 同步 + 收尾 | ✅ 已完成 | `78a0a79` |
-| Phase 7 租户迁移工具 target_storage 改造 | ✅ 已完成 | 待提交 |
-| Phase 8 tenants/ 下 tenant_ 前缀目录治理 | ✅ 已完成 | 待提交 |
+| Phase 7 租户迁移工具 target_storage 改造 | ✅ 已完成 | `21fa6d9d` |
+| Phase 8 tenants/ 下 tenant_ 前缀目录治理 | ✅ 已完成 | `95130d0f` |
 
-## 下次继续的入口
+## 发布与验证
 
-1. 补充 2026-08-13 生产服务器迁移核对记录（数据库 263 条 `file_path` 已更新为新路径、嵌套残留副本已清理）。
-2. 上线观察：Phase 8 的 Phase D 迁移需在服务器下次重启时执行，确认生产环境 `tenants/tenant_{tid}` 前缀目录被清理、租户 skills/模板读取正常。
+**2026-08-14 已发生产、已验证**：生产容器重启后 Phase D（`_relocate_prefixed_tenant_dirs`）+ Phase E（`_relocate_legacy_config_files`）迁移执行完成，宿主机 `/var/www/qb3_upload/agent_storage`（容器 `/app/storage`）磁盘核对确认：
+
+- `tenants/` 下 9 个租户目录（含 `_anonymous`、`demo`）均已去掉 `tenant_` 前缀，场景子目录齐全（conversation / knowledge / data_sources / templates / images / skills / temp）
+- `uploads/` 仅剩 `wecom_kf` 渠道目录（按设计跳过），其余旧结构已清空
+- 全 storage 树 `find -name 'tenant_*'` 无残留
+- 空 `skills` 目录为应用按需 `mkdir` 重建（该租户无自定义 skill），非数据丢失
+- `skill_ws_tenant_*` 工作区目录名中的 `tenant_` 为渠道 session_id 格式（`tenant_{tid}_{channel}_{user}_{subagent}`），非存储前缀问题
+- 7 个历史孤儿文件（2026-05 月，Redis 元数据已随 24h TTL 过期）残留嵌套在 `ea24cd1a1097/conversation/05f94c6d-*/` 裸 UUID 子目录，无任何引用，无关紧要、无需处理
 
 ## 相关文档
 
