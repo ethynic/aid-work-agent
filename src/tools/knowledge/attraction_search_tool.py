@@ -5,6 +5,7 @@
 搜索范围限制在 source_type='attraction_resource' + chunk_index=0（景点信息摘要）。
 """
 
+import asyncio
 import json
 from typing import Dict, Any, List, Optional
 
@@ -83,10 +84,10 @@ class AttractionSearchTool(BaseTool):
             if not tenant_id:
                 return {"success": False, "error": "无法确定租户ID", "results": [], "count": 0}
 
-            # 向量化查询
+            # 向量化查询（_embed 内部含 TextEmbedding.call 同步阻塞 + 重试 sleep，必须 to_thread 化避免卡事件循环）
             client = self._get_embedding_client()
             client.reset_usage()
-            embedding = self._embed(query)
+            embedding = await asyncio.to_thread(self._embed, query)
             # 累加 embedding usage 到当前 SessionRecordService（对话内检索计费）
             if client.last_usage_tokens > 0:
                 from src.services.session_record import SessionRecordManager

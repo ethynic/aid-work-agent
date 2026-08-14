@@ -4,12 +4,39 @@
 
 import asyncio
 import re
+import time
 from typing import List
-import logging
 
+import requests.exceptions
 from dashscope import TextEmbedding
+from loguru import logger
 
-logger = logging.getLogger(__name__)
+# 可重试的瞬时网络异常：DashScope SDK 用模块级 requests.Session 单例复用 keep-alive
+# 连接，长期空闲后被服务端关闭，下次复用即抛 ConnectionError(RemoteDisconnected)。
+# 这些异常重试时 SDK 会丢弃死连接、建新连接，第二次基本必中。
+_RETRYABLE_EXC = (
+    requests.exceptions.ConnectionError,    # 含 RemoteDisconnected / ConnectionReset
+    requests.exceptions.Timeout,
+    requests.exceptions.ChunkedEncodingError,
+)
+
+# 瞬时错误关键字（兜底匹配未被 isinstance 覆盖的子类或被包装异常）
+_TRANSIENT_KEYWORDS = (
+    "connection aborted",
+    "remote disconnected",
+    "connection reset",
+    "connection refused",
+    "timed out",
+    "connection closed",
+)
+
+
+def _is_transient_error(error: Exception) -> bool:
+    """判断是否为可重试的瞬时网络错误"""
+    if isinstance(error, _RETRYABLE_EXC):
+        return True
+    msg = str(error).lower()
+    return any(kw in msg for kw in _TRANSIENT_KEYWORDS)
 
 
 def sanitize_error_info(error_msg: str) -> str:
@@ -74,6 +101,39 @@ class TextEmbeddingV3Client:
 
         return all_embeddings
 
+    def _call_dashscope_with_retry(self, texts):
+        """调用 DashScope TextEmbedding.call，含 2 次重试覆盖 keep-alive 死连接
+
+        仅 wrap HTTP 传输层调用；resp.status_code 业务错误由外层处理（业务错误不可重试）。
+        """
+        last_exc = None
+        for attempt in range(1, 4):  # 1 + 2 = 3 次尝试
+            try:
+                return TextEmbedding.call(
+                    model=self.model,
+                    input=texts,
+                    parameters={
+                        "text_type": "document",
+                        "dimension": self.dimension,
+                    },
+                )
+            except Exception as e:
+                last_exc = e
+                if not _is_transient_error(e):
+                    raise
+                if attempt < 3:
+                    logger.warning(
+                        f"后端日志：Embedding 调用瞬时网络错误 (attempt={attempt}/3): "
+                        f"{type(e).__name__}: {sanitize_error_info(str(e))}，1s 后重试"
+                    )
+                    time.sleep(1)
+                else:
+                    logger.error(
+                        f"后端日志：Embedding 调用 3 次均失败: "
+                        f"{type(e).__name__}: {sanitize_error_info(str(e))}"
+                    )
+        raise last_exc  # type: ignore[misc]
+
     async def _embed_single_batch(self, texts: List[str]) -> List[List[float]]:
         """
         单批次向量化（不拆分）
@@ -85,16 +145,9 @@ class TextEmbeddingV3Client:
             向量列表
         """
         try:
-            # TextEmbedding.call 是同步 SDK，使用 to_thread 包装
-            resp = await asyncio.to_thread(
-                TextEmbedding.call,
-                model=self.model,
-                input=texts,
-                parameters={
-                    "text_type": "document",
-                    "dimension": self.dimension
-                }
-            )
+            # TextEmbedding.call 是同步 SDK，使用 to_thread 包装；
+            # _call_dashscope_with_retry 内部对 keep-alive 死连接等瞬时网络错误重试 2 次
+            resp = await asyncio.to_thread(self._call_dashscope_with_retry, texts)
 
             if resp.status_code != 200:
                 sanitized_msg = sanitize_error_info(resp.message)
@@ -137,14 +190,7 @@ class TextEmbeddingV3Client:
         """
         if not text:
             return []
-        resp = TextEmbedding.call(
-            model=self.model,
-            input=text,
-            parameters={
-                "text_type": "document",
-                "dimension": self.dimension,
-            },
-        )
+        resp = self._call_dashscope_with_retry(text)
         if resp.status_code != 200:
             sanitized_msg = sanitize_error_info(resp.message)
             raise Exception(f"Embedding API 失败: {sanitized_msg}")
