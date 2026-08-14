@@ -6,4 +6,11 @@
     </section>
   </main>
 </template>
-<script setup lang="ts">defineProps<{ code: string; title: string; message: string; tone: 'neutral' | 'warning' | 'fatal' }>()</script>
+<script setup lang="ts">
+defineProps<{
+  code: string
+  title: string
+  message: string
+  tone: 'neutral' | 'warning' | 'fatal'
+}>()
+</script>
