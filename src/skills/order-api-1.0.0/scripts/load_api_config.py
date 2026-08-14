@@ -55,6 +55,9 @@ def load_api_config():
         }, ensure_ascii=False))
         return
 
+    # tenant_id 数据库带 `tenant_` 前缀，存储规范要求目录不带前缀，统一剥离（与 src.core.storage.normalize_tenant_id 一致）
+    if tenant_id.startswith("tenant_"):
+        tenant_id = tenant_id[len("tenant_"):]
     config_path = os.path.join(
         os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
             os.path.abspath(__file__)

@@ -39,17 +39,32 @@ def get_tenants_storage_root() -> str:
     return _TENANTS_ROOT
 
 
+def normalize_tenant_id(tenant_id: str) -> str:
+    """规范化租户 ID 用于存储路径：剥离 `tenant_` 前缀。
+
+    数据库 `tenants.tenant_id` 带 `tenant_` 前缀（如 `tenant_ea24cd1a1097`），
+    而存储规范要求 `storage/tenants/{tid}/{scene}/` 中 {tid} 不带前缀
+    （storage_migration 已把 uploads/tenant_{tid}/ 迁移到 tenants/{tid}/）。
+    统一在此剥离，避免带前缀与不带前缀目录并存导致读写路径错位。
+
+    特殊值（`_anonymous` / `demo` 等）不以 `tenant_` 开头，原样返回。
+    """
+    if tenant_id.startswith("tenant_") and len(tenant_id) > len("tenant_"):
+        return tenant_id[len("tenant_"):]
+    return tenant_id
+
+
 def get_tenant_storage_dir(tenant_id: str, scene: str) -> str:
     """获取租户某场景的目录路径（相对路径，不保证存在）。
 
     Args:
-        tenant_id: 租户 ID
+        tenant_id: 租户 ID（自动剥离 `tenant_` 前缀，见 normalize_tenant_id）
         scene: 业务场景子目录名（conversation / knowledge / export / ...）
 
     Returns:
         `storage/tenants/{tenant_id}/{scene}`
     """
-    return os.path.join(_TENANTS_ROOT, tenant_id, scene)
+    return os.path.join(_TENANTS_ROOT, normalize_tenant_id(tenant_id), scene)
 
 
 def ensure_tenant_storage_dir(tenant_id: str, scene: str) -> str:

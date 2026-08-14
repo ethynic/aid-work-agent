@@ -224,7 +224,7 @@
 
 ---
 
-### Phase 8：tenants/ 下 tenant_ 前缀目录治理 🔧 待开发
+### Phase 8：tenants/ 下 tenant_ 前缀目录治理 ✅ 已完成
 
 **背景**：2026-08-13 生产环境迁移检查发现 `storage/tenants/` 下存在带 `tenant_` 前缀的目录，与规范 `storage/tenants/{tid}/{scene}/` 不一致：
 
@@ -247,7 +247,17 @@
 2. 历史带前缀目录迁移：将 `tenants/tenant_{tid}/*` 下的 skills/templates/temp 文件搬到 `tenants/{tid}/{scene}/`（参考一次性迁移模块的幂等规则）
 3. 需确认 `skill_ws_{tenant_id}_...` 临时目录命名中的 tenant_id 是否也带前缀，统一修正
 
-**待办**：定位调用方 → 修正 tenant_id → 迁移历史目录 → 回归测试。
+**已完成（2026-08-13）**：
+
+1. **统一规范化**：`src/core/storage.py` 新增 `normalize_tenant_id()`（剥离 `tenant_` 前缀，`_anonymous`/`demo` 等特殊值不动），并在 `get_tenant_storage_dir` 中应用。所有通过 storage.py 工具函数的调用点（约 14 处：conversation/knowledge/export/report/avatar/temp/templates/data_sources/images 场景）自动修复。
+2. **绕过点单独修复**（直接拼路径、不经 storage.py）：
+   - `src/saas/services/skill_resolver.py::get_tenant_skills_dir` — 加 `normalize_tenant_id`
+   - `src/core/skill_loader.py::_load_skill_env` — 租户级 `.env` 路径加 `normalize_tenant_id`
+   - `src/api/tenant_config_file.py::_get_config_path` — 模板 `{subagent}-api.md` 路径加 `normalize_tenant_id`
+   - `src/skills/after-sales-api-1.0.0/scripts/load_api_config.py` / `order-api-1.0.0/scripts/load_api_config.py` — subprocess 脚本路径剥离 `tenant_` 前缀
+3. **`skill_ws` 确认**：实际命名 `skill_ws_{session_id}_`（agent.py），位于 `ensure_tenant_storage_dir(ws_tenant_id, "temp")` 根目录下，随统一规范化自动修复，无需单独改动。
+4. **历史前缀目录迁移**：`src/core/storage_migration.py` 新增 `_relocate_prefixed_tenant_dirs()`（Phase D），随 `migrate_uploads_to_tenants()` 在 lifespan step2b 启动时执行——将 `tenants/tenant_{tid}/*` 全部内容按相对结构搬到 `tenants/{tid}/`，复用 `_migrate_file` 幂等规则（同大小跳过/不同加后缀），同步 Redis 路径索引；全部成功才删空前缀目录，有失败保留待重试。
+5. **测试**：`tests/unit/test_tenant_storage_paths.py` 新增 `TestNormalizeTenantId`（8 用例）+ 各断言更新为去前缀值；`tests/unit/test_storage_migration.py` 新增 `TestRelocatePrefixedTenantDirs`（8 用例）；`tests/unit/channels/test_channel_tenant_storage.py` 5 处断言更新。回归 110 passed，`import src.main` 启动链正常。
 
 ---
 
@@ -264,12 +274,12 @@
 | Phase 5 渠道媒体 | ✅ 已完成 | 待提交 |
 | Phase 6 word 同步 + 收尾 | ✅ 已完成 | `78a0a79` |
 | Phase 7 租户迁移工具 target_storage 改造 | ✅ 已完成 | 待提交 |
-| Phase 8 tenants/ 下 tenant_ 前缀目录治理 | 🔧 待开发 | — |
+| Phase 8 tenants/ 下 tenant_ 前缀目录治理 | ✅ 已完成 | 待提交 |
 
 ## 下次继续的入口
 
-1. **Phase 8**：治理 `storage/tenants/` 下带 `tenant_` 前缀目录（定位调用方 → 统一 tenant_id → 迁移历史目录），详见「Phase 8」小节。
-2. 补充 2026-08-13 生产服务器迁移核对记录（数据库 263 条 `file_path` 已更新为新路径、嵌套残留副本已清理），本次检查与修复过程可归档。
+1. 补充 2026-08-13 生产服务器迁移核对记录（数据库 263 条 `file_path` 已更新为新路径、嵌套残留副本已清理）。
+2. 上线观察：Phase 8 的 Phase D 迁移需在服务器下次重启时执行，确认生产环境 `tenants/tenant_{tid}` 前缀目录被清理、租户 skills/模板读取正常。
 
 ## 相关文档
 

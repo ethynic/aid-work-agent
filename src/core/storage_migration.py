@@ -10,6 +10,8 @@
   tenants/{tid}/conversation/data_sources/，启动时自动搬到 tenants/{tid}/data_sources/
 - documents.metadata 同步：data-analysis-metadata 类型记录的 source.file_path
   同步重写到新路径前缀（仅动 metadata 列，绝不碰 file_path 列）
+- 前缀目录治理：历史代码用带 tenant_ 前缀的 tenant_id 调用 ensure_tenant_storage_dir，
+  产生 tenants/tenant_{tid}/{scene}/，启动时搬到 tenants/{tid}/{scene}/（Phase 8）
 - 渠道目录（dingtalk/wecom_kf）跳过：非租户附件，由渠道系统自管
 
 调用入口：migrate_uploads_to_tenants()，在 FastAPI lifespan 中执行（init_database 之后）
@@ -109,6 +111,10 @@ def migrate_uploads_to_tenants(project_root: Optional[Path] = None) -> Dict[str,
         # Phase C: 修复 documents.metadata.source.file_path 旧路径前缀
         # 仅动 metadata 列，绝不碰 file_path 列（file_path 是知识库字段，独立）
         stats["docs_updated"] = _fix_documents_metadata_paths()
+
+        # Phase D: 治理 tenants/tenant_{tid}/* 前缀目录（Phase 8）
+        # 历史代码用带 tenant_ 前缀的 tenant_id 产生前缀目录，统一搬到 tenants/{tid}/{scene}/
+        _relocate_prefixed_tenant_dirs(tenants_root, redis_index, stats)
 
         logger.info(f"[storage_migration] 迁移完成: {stats}")
         return stats
@@ -543,6 +549,105 @@ def _acquire_advisory_lock(
         time.sleep(interval)
 
     return False, None
+
+
+def _relocate_prefixed_tenant_dirs(
+    tenants_root: Path, redis_index: Dict[str, str], stats: Dict[str, int]
+) -> None:
+    """治理 tenants/tenant_{tid}/* 前缀目录（Phase 8）
+
+    历史代码用带 `tenant_` 前缀的 tenant_id 调用 ensure_tenant_storage_dir 或
+    直接拼路径，产生 tenants/tenant_{tid}/{scene}/ 目录，与迁移脚本产出的
+    tenants/{tid}/{scene}/ 无前缀目录并存，导致租户 skills / 模板文件等
+    读写路径错位。把带前缀目录的**所有内容**搬到无前缀目录下：
+        tenants/tenant_{tid}/{scene}/{file} -> tenants/{tid}/{scene}/{file}
+
+    复用 _migrate_file 的幂等规则（目标同大小跳过、不同加后缀），同步 Redis
+    path 字段。所有条目迁移成功后才删除空的 tenant_{tid} 目录；存在失败时
+    保留目录待下次运行重试，避免误删未迁移文件。
+
+    二次运行时 tenant_{tid} 目录已删，天然幂等。
+    """
+    if not tenants_root.exists():
+        return
+
+    for prefixed_dir in tenants_root.iterdir():
+        if not prefixed_dir.is_dir():
+            continue
+        name = prefixed_dir.name
+        if not name.startswith("tenant_"):
+            continue
+        tid = name[len("tenant_"):]
+        if not tid:
+            continue
+
+        target_root = tenants_root / tid
+        dir_errors = 0
+
+        for item in list(prefixed_dir.iterdir()):
+            if item.is_file():
+                target = target_root / item.name
+                try:
+                    migrated_dst, redis_key = _migrate_file(item, target, redis_index)
+                    stats["migrated"] += 1
+                    if redis_key:
+                        stats["redis_updated"] += 1
+                    logger.debug(
+                        f"[storage_migration] 前缀目录治理: {item} -> {migrated_dst}"
+                    )
+                except Exception as e:
+                    dir_errors += 1
+                    stats["errors"] += 1
+                    logger.error(
+                        f"[storage_migration] 前缀目录迁移失败 {item} -> {target}: {e}",
+                        exc_info=True,
+                    )
+                continue
+
+            # 子目录：递归搬运其中所有文件，保留相对结构
+            if not item.is_dir():
+                continue
+            for old_path in list(item.rglob("*")):
+                if not old_path.is_file():
+                    continue
+                try:
+                    rel = old_path.relative_to(prefixed_dir)
+                except ValueError:
+                    continue
+                target = target_root / rel
+                try:
+                    migrated_dst, redis_key = _migrate_file(
+                        old_path, target, redis_index
+                    )
+                    stats["migrated"] += 1
+                    if redis_key:
+                        stats["redis_updated"] += 1
+                    logger.debug(
+                        f"[storage_migration] 前缀目录治理: {old_path} -> {migrated_dst}"
+                    )
+                except Exception as e:
+                    dir_errors += 1
+                    stats["errors"] += 1
+                    logger.error(
+                        f"[storage_migration] 前缀目录迁移失败 {old_path} -> {target}: {e}",
+                        exc_info=True,
+                    )
+
+        if dir_errors == 0:
+            try:
+                shutil.rmtree(prefixed_dir)
+                logger.info(
+                    f"[storage_migration] 前缀目录已治理并删除空目录: {prefixed_dir}"
+                )
+            except OSError as e:
+                logger.warning(
+                    f"[storage_migration] 删除前缀目录失败 {prefixed_dir}: {e}"
+                )
+        else:
+            logger.warning(
+                f"[storage_migration] 前缀目录 {prefixed_dir} 存在 {dir_errors} 个迁移失败，"
+                f"保留目录待下次运行重试"
+            )
 
 
 def _release_advisory_lock(conn: Optional[Any]) -> None:

@@ -25,8 +25,13 @@ MAX_FILE_SIZE = 1 * 1024 * 1024
 
 
 def _get_config_path(tenant_id: str, subagent_name: str) -> Path:
-    """获取配置文件路径，文件名格式：{subagent_name}-api.md"""
-    return PROJECT_ROOT / "storage" / "tenants" / tenant_id / f"{subagent_name}-api.md"
+    """获取配置文件路径，文件名格式：{subagent_name}-api.md
+
+    tenant_id 统一剥离 `tenant_` 前缀（与 storage.py 规范一致），
+    否则会与迁移脚本产出的无前缀目录并存导致读写错位。
+    """
+    from src.core.storage import normalize_tenant_id
+    return PROJECT_ROOT / "storage" / "tenants" / normalize_tenant_id(tenant_id) / f"{subagent_name}-api.md"
 
 
 @router.post("/{subagent_name}")

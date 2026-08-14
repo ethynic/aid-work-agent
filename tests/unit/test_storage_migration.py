@@ -9,6 +9,7 @@
 - advisory lock 获取失败时跳过迁移
 - data_sources 误搬文件 relocate 修复（幂等）
 - documents.metadata.source.file_path 旧路径前缀重写（仅动 metadata 列）
+- Phase 8 tenants/tenant_{tid}/* 前缀目录治理（迁移到 tenants/{tid}/ + 幂等）
 """
 
 import json
@@ -770,3 +771,143 @@ class TestFixDocumentsMetadataPaths:
         assert updated == 0
         # SELECT 被调用，UPDATE 没被调用
         assert mock_cursor.execute.call_count == 1
+
+
+class TestRelocatePrefixedTenantDirs:
+    """Phase 8: tenants/tenant_{tid}/* 前缀目录治理"""
+
+    def _run(self, tmp_path):
+        with patch(
+            "src.core.storage_migration._acquire_advisory_lock", return_value=(True, None)
+        ), patch(
+            "src.core.storage_migration._release_advisory_lock"
+        ), patch(
+            "src.core.storage_migration._build_redis_path_index", return_value={}
+        ), patch(
+            "src.core.storage_migration._fix_documents_metadata_paths", return_value=0
+        ):
+            return migrate_uploads_to_tenants(project_root=tmp_path)
+
+    def test_relocates_prefixed_tenant_dir(self, tmp_path):
+        """tenants/tenant_{tid}/skills、templates、temp 全部搬到 tenants/{tid}/"""
+        tenants = tmp_path / "storage" / "tenants"
+
+        # skills（多层子目录）
+        skill_md = tenants / "tenant_ea24cd1a1097" / "skills" / "my-skill-1.0.0" / "SKILL.md"
+        skill_md.parent.mkdir(parents=True)
+        skill_md.write_text("---\nname: my-skill\n---\nbody")
+
+        # templates
+        tpl = tenants / "tenant_c148f4efb4dc" / "templates" / "file_abc.docx"
+        tpl.parent.mkdir(parents=True)
+        tpl.write_text("tpl")
+
+        # temp/skill_ws_...
+        ws = tenants / "tenant_ea24cd1a1097" / "temp" / "skill_ws_s1_xxxx"
+        ws.mkdir(parents=True)
+        (ws / "data.txt").write_text("wsdata")
+
+        stats = self._run(tmp_path)
+
+        # skills 已搬至无前缀目录，保留相对结构
+        assert (tenants / "ea24cd1a1097" / "skills" / "my-skill-1.0.0" / "SKILL.md").exists()
+        assert (tenants / "ea24cd1a1097" / "skills" / "my-skill-1.0.0" / "SKILL.md").read_text().startswith("---")
+        assert (tenants / "c148f4efb4dc" / "templates" / "file_abc.docx").exists()
+        assert (tenants / "ea24cd1a1097" / "temp" / "skill_ws_s1_xxxx" / "data.txt").exists()
+        # 前缀目录已删除
+        assert not (tenants / "tenant_ea24cd1a1097").exists()
+        assert not (tenants / "tenant_c148f4efb4dc").exists()
+        assert stats["errors"] == 0
+
+    def test_relocates_root_level_files(self, tmp_path):
+        """前缀目录根下的散落文件（after-sales-api.md 等）也搬走"""
+        tenants = tmp_path / "storage" / "tenants"
+        cfg = tenants / "tenant_ea24cd1a1097" / "after-sales-api.md"
+        cfg.parent.mkdir(parents=True)
+        cfg.write_text("api config")
+
+        stats = self._run(tmp_path)
+
+        assert (tenants / "ea24cd1a1097" / "after-sales-api.md").exists()
+        assert not (tenants / "tenant_ea24cd1a1097").exists()
+        assert stats["errors"] == 0
+
+    def test_idempotent_second_run(self, tmp_path):
+        """二次运行：前缀目录已删，migrated 不增加"""
+        tenants = tmp_path / "storage" / "tenants"
+        tpl = tenants / "tenant_t1" / "templates" / "f.docx"
+        tpl.parent.mkdir(parents=True)
+        tpl.write_text("x")
+
+        self._run(tmp_path)
+        stats = self._run(tmp_path)
+
+        assert stats["migrated"] == 0
+        assert stats["errors"] == 0
+        assert (tenants / "t1" / "templates" / "f.docx").exists()
+
+    def test_skips_when_tenants_root_missing(self, tmp_path):
+        """tenants_root 不存在时静默跳过"""
+        stats = self._run(tmp_path)
+        assert stats["errors"] == 0
+
+    def test_no_prefix_dirs_untouched(self, tmp_path):
+        """无前缀目录不受影响"""
+        tenants = tmp_path / "storage" / "tenants"
+        kb = tenants / "ea24cd1a1097" / "knowledge" / "kb.md"
+        kb.parent.mkdir(parents=True)
+        kb.write_text("kb")
+
+        stats = self._run(tmp_path)
+
+        assert kb.exists()
+        assert (tenants / "ea24cd1a1097").exists()
+        assert stats["errors"] == 0
+
+    def test_conflict_different_size_keeps_both(self, tmp_path):
+        """目标已存在但大小不同：加后缀保留，不覆盖；源被 move 走后删除空前缀目录"""
+        tenants = tmp_path / "storage" / "tenants"
+        # 目标（无前缀）已有不同内容
+        tgt = tenants / "t1" / "templates" / "f.docx"
+        tgt.parent.mkdir(parents=True)
+        tgt.write_text("old")
+        # 源（带前缀）内容不同
+        src = tenants / "tenant_t1" / "templates" / "f.docx"
+        src.parent.mkdir(parents=True)
+        src.write_text("new content longer")
+
+        stats = self._run(tmp_path)
+
+        # 两个文件都保留（原目标 + 加后缀副本）
+        assert tgt.read_text() == "old"
+        migrated = list((tenants / "t1" / "templates").glob("f_migrated_*.docx"))
+        assert len(migrated) == 1
+        assert migrated[0].read_text() == "new content longer"
+        # 所有文件迁移成功，前缀目录被删除
+        assert not (tenants / "tenant_t1").exists()
+        assert stats["errors"] == 0
+
+    def test_keeps_dir_when_migration_fails(self, tmp_path):
+        """迁移失败时保留前缀目录，不误删未迁移文件"""
+        tenants = tmp_path / "storage" / "tenants"
+        src = tenants / "tenant_t1" / "skills" / "SKILL.md"
+        src.parent.mkdir(parents=True)
+        src.write_text("x")
+
+        with patch(
+            "src.core.storage_migration._acquire_advisory_lock", return_value=(True, None)
+        ), patch(
+            "src.core.storage_migration._release_advisory_lock"
+        ), patch(
+            "src.core.storage_migration._build_redis_path_index", return_value={}
+        ), patch(
+            "src.core.storage_migration._fix_documents_metadata_paths", return_value=0
+        ), patch(
+            "src.core.storage_migration._migrate_file", side_effect=OSError("disk full")
+        ):
+            stats = migrate_uploads_to_tenants(project_root=tmp_path)
+
+        assert stats["errors"] == 1
+        # 前缀目录保留，源文件未丢失
+        assert (tenants / "tenant_t1").exists()
+        assert src.exists()

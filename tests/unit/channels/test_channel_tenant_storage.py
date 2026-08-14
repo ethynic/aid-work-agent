@@ -49,7 +49,7 @@ class TestWeComMediaTenantStorage:
         result = media._resolve_save_dir()
         p = Path(result)
         assert p.name == "conversation"
-        assert p.parent.name == "tenant_wc"
+        assert p.parent.name == "wc"  # tenant_wc -> wc（Phase 8 前缀治理）
         assert p.parent.parent.name == "tenants"
         assert p.is_dir()
 
@@ -81,7 +81,7 @@ class TestDingTalkMediaTenantStorage:
         result = media._resolve_save_dir()
         p = Path(result)
         assert p.name == "conversation"
-        assert p.parent.name == "tenant_dt"
+        assert p.parent.name == "dt"  # tenant_dt -> dt（Phase 8 前缀治理）
         assert p.parent.parent.name == "tenants"
         assert p.is_dir()
 
@@ -169,7 +169,7 @@ class TestWeComKfAdapterTenantStorage:
         result = adapter._resolve_media_dir()
         p = Path(result)
         assert p.name == "conversation"
-        assert p.parent.name == "tenant_kf"
+        assert p.parent.name == "kf"  # tenant_kf -> kf（Phase 8 前缀治理）
         assert p.parent.parent.name == "tenants"
         assert p.is_dir()
 
@@ -197,7 +197,7 @@ class TestWeComKfRendererTenantStorage:
         result = renderer._resolve_save_dir()
         p = Path(result)
         assert p.name == "conversation"
-        assert p.parent.name == "tenant_kf_render"
+        assert p.parent.name == "kf_render"  # tenant_kf_render -> kf_render（Phase 8 前缀治理）
         assert p.parent.parent.name == "tenants"
         assert p.is_dir()
 
@@ -216,5 +216,5 @@ class TestWeComKfRendererTenantStorage:
         )
         result = renderer._resolve_save_dir()
         p = Path(result)
-        assert p.parent.name == "tenant_kf_init"
+        assert p.parent.name == "kf_init"  # tenant_kf_init -> kf_init（Phase 8 前缀治理）
         assert p.name == "conversation"
