@@ -2,7 +2,7 @@
 word_process_tool file_id 解析修复的单测
 
 覆盖：
-- WordFileHandler.resolve_path: Redis 元数据命中 / templates 子目录兜底 / 找不到
+- WordFileHandler.resolve_path: Redis 元数据命中 / 目录扫描兜底 / 找不到
 - WordProcessTool._resolve_file: file_id 解析为磁盘路径 / 找不到抛 FileNotFoundError
 - _handle_read / _handle_word_to_md / _handle_modify 等 handler: file_id 输入正确解析
 - _handle_md_to_word: file_paths[0] 解析失败不阻塞流程（md_text 兜底）
@@ -121,44 +121,8 @@ class TestResolvePathViaRedis:
             mock_hgetall.assert_not_called()
 
 
-class TestResolvePathTemplatesFallback:
-    """resolve_path 兜底扫 storage/uploads/{tenant}/templates/"""
-
-    def test_templates_subdir_hit(self, tmp_path, monkeypatch):
-        """file_id 在 storage/uploads/{tenant}/templates/ 下找到"""
-        from src.tools.word.word_lib import WordFileHandler
-
-        uploads_root = tmp_path / "uploads"
-        templates_dir = uploads_root / "tenant_t1" / "templates"
-        templates_dir.mkdir(parents=True)
-        target = templates_dir / "file_tpl123.docx"
-        target.write_text("x")
-
-        # patch settings.storage.uploads_dir 指向 tmp_path/uploads
-        from src.config.settings import settings
-        monkeypatch.setattr(settings.storage, "uploads_dir", str(uploads_root))
-
-        # Redis miss
-        with patch(
-            "src.core.redis_client.redis_client.hgetall", return_value={}
-        ):
-            result = WordFileHandler.resolve_path("file_tpl123.docx")
-
-        assert Path(result).resolve() == target.resolve()
-
-    def test_templates_subdir_skipped_for_absolute_path(self, tmp_path, monkeypatch):
-        """绝对路径不进入 templates 扫描"""
-        from src.tools.word.word_lib import WordFileHandler
-
-        uploads_root = tmp_path / "uploads"
-        uploads_root.mkdir(parents=True)
-
-        with patch(
-            "src.core.redis_client.redis_client.hgetall", return_value={}
-        ):
-            # 绝对路径且不存在 -> 直接返回绝对路径字符串，不扫描
-            result = WordFileHandler.resolve_path("/tmp/nonexistent_abs.docx")
-            assert result.endswith("nonexistent_abs.docx")
+class TestResolvePathTraversalGuard:
+    """resolve_path 路径穿越防护"""
 
     def test_path_traversal_blocked(self):
         """含 .. 的相对路径不进入 exists 检查和目录扫描"""

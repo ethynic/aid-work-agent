@@ -43,8 +43,7 @@ def normalize_tenant_id(tenant_id: str) -> str:
     """规范化租户 ID 用于存储路径：剥离 `tenant_` 前缀。
 
     数据库 `tenants.tenant_id` 带 `tenant_` 前缀（如 `tenant_ea24cd1a1097`），
-    而存储规范要求 `storage/tenants/{tid}/{scene}/` 中 {tid} 不带前缀
-    （storage_migration 已把 uploads/tenant_{tid}/ 迁移到 tenants/{tid}/）。
+    而存储规范要求 `storage/tenants/{tid}/{scene}/` 中 {tid} 不带前缀。
     统一在此剥离，避免带前缀与不带前缀目录并存导致读写路径错位。
 
     特殊值（`_anonymous` / `demo` 等）不以 `tenant_` 开头，原样返回。

@@ -714,7 +714,7 @@ Follow the instructions in the skill above to complete the user's task."""
         1. 原路径
         2. test_uploads/ 目录
         3. 项目根目录
-        4. uploads/ 目录
+        4. storage/tenants/ 租户附件根目录
         
         Args:
             file_path: 文件路径（可能是相对或绝对路径）
@@ -732,9 +732,7 @@ Follow the instructions in the skill above to complete the user's task."""
         search_dirs = [
             Path.cwd(),  # 当前工作目录
             Path.cwd() / "test_uploads",  # test_uploads 目录
-            Path.cwd() / settings.storage.uploads_dir,  # 旧存储目录（向后兼容）: storage/uploads
             Path.cwd() / "storage" / "tenants",  # 新租户附件根目录: storage/tenants
-            Path.cwd() / "uploads",  # 旧目录（向后兼容）
             self.workspace,  # 执行器工作空间
         ]
         

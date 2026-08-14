@@ -83,7 +83,6 @@ class PdfFileHandler:
         查找顺序：
         1. 原路径直接命中
         2. 新路径 storage/tenants/{tenant}/conversation/{file}
-        3. 旧路径 storage/uploads/{file}（只读兼容）
         """
         p = Path(file_path)
         # 防路径穿越：含 .. 的相对路径不得进行 exists 检查或路径拼接
@@ -105,13 +104,6 @@ class PdfFileHandler:
                             candidate = d1 / "conversation" / file_path
                             if candidate.exists():
                                 return str(candidate.absolute())
-        except (ImportError, AttributeError):
-            pass
-        try:
-            from src.config.settings import settings
-            uploads = Path(settings.storage.uploads_dir) / file_path
-            if uploads.exists():
-                return str(uploads.absolute())
         except (ImportError, AttributeError):
             pass
         return str(p.absolute())

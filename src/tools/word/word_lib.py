@@ -295,8 +295,6 @@ class WordFileHandler:
         1. 原路径直接命中（含绝对路径）
         2. Redis 元数据命中（file_id -> uploaded_file:{file_id}.path，最可靠）
         3. 新路径 storage/tenants/{tenant}/conversation/{file}（含 _anonymous 兜底）
-        4. 旧路径 storage/uploads/{tenant}/templates/{file}（子智能体模板文件）
-        5. 旧路径 storage/uploads/{file}（只读兼容，迁移期保留）
         """
         p = Path(file_path)
         # 防路径穿越：含 .. 的相对路径不得进行 exists 检查或路径拼接
@@ -330,31 +328,6 @@ class WordFileHandler:
                             candidate = d1 / "conversation" / file_path
                             if candidate.exists():
                                 return str(candidate.absolute())
-        except (ImportError, AttributeError):
-            pass
-        # 旧路径兜底 1：storage/uploads/{tenant}/templates/{file}（子智能体模板文件）
-        # 防路径穿越：file_path 含 .. 或绝对路径时跳过
-        fp_obj2 = Path(file_path)
-        if not fp_obj2.is_absolute() and ".." not in fp_obj2.parts:
-            try:
-                from src.config.settings import settings
-                uploads_root = Path(settings.storage.uploads_dir)
-                if not uploads_root.is_absolute():
-                    uploads_root = Path(__file__).resolve().parents[3] / uploads_root
-                if uploads_root.exists():
-                    for d1 in uploads_root.iterdir():
-                        if d1.is_dir() and d1.name.startswith("tenant_"):
-                            candidate = d1 / "templates" / file_path
-                            if candidate.exists():
-                                return str(candidate.absolute())
-            except (ImportError, AttributeError):
-                pass
-        # 旧路径兜底 2：storage/uploads/{file}（根目录散落文件）
-        try:
-            from src.config.settings import settings
-            uploads = Path(settings.storage.uploads_dir) / file_path
-            if uploads.exists():
-                return str(uploads.absolute())
         except (ImportError, AttributeError):
             pass
         return str(p.absolute())

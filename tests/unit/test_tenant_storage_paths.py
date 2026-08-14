@@ -7,13 +7,12 @@ Phase 1 租户附件存储路径改造的单测
 - src.tools.file.write_tool._resolve_upload_dir
 - src.tools.excel.excel_lib.ExcelFileHandler.get_session_dir
 - src.tools.excel.excel_process_tool._resolve_output_dir
-- src.tools.word/pdf/excel.resolve_path：新路径命中 / 旧路径兜底 / 找不到
+- src.tools.word/pdf/excel.resolve_path：新路径命中 / 找不到
 - Phase 8 normalize_tenant_id：统一剥离 tenant_ 前缀（storage / skill_resolver）
 """
 
 import os
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
@@ -181,20 +180,6 @@ class TestResolvePathFallback:
         target.write_text("fake")
 
         result = WordFileHandler.resolve_path("report.docx")
-        assert Path(result).resolve() == target.resolve()
-
-    def test_resolve_path_legacy_uploads(self, isolated_tenants_root, monkeypatch, tmp_path):
-        """旧路径 storage/uploads/{file} 兜底命中（迁移期兼容）"""
-        from src.tools.pdf.pdf_lib import PdfFileHandler
-        # mock settings.storage.uploads_dir 指向 tmp_path 下的假 uploads
-        fake_uploads = tmp_path / "uploads"
-        fake_uploads.mkdir()
-        target = fake_uploads / "legacy.pdf"
-        target.write_text("legacy")
-
-        with patch("src.config.settings.settings") as mock_settings:
-            mock_settings.storage.uploads_dir = str(fake_uploads)
-            result = PdfFileHandler.resolve_path("legacy.pdf")
         assert Path(result).resolve() == target.resolve()
 
     def test_resolve_path_not_found_returns_original(self, isolated_tenants_root, tmp_path):

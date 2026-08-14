@@ -2,7 +2,7 @@
 excel_process_tool file_id 解析修复的单测
 
 覆盖：
-- ExcelFileHandler.resolve_path: Redis 元数据命中 / templates 子目录兜底 / 找不到
+- ExcelFileHandler.resolve_path: Redis 元数据命中 / 目录扫描兜底 / 找不到
 - ExcelProcessTool._resolve_file: file_id 解析为磁盘路径 / 找不到抛 FileNotFoundError
 - _handle_to_md / _handle_read 等 handler: file_id 输入正确解析
 """
@@ -13,18 +13,6 @@ from unittest.mock import patch
 import pytest
 
 pytestmark = [pytest.mark.tools]
-
-
-@pytest.fixture
-def isolated_storage(tmp_path: Path, monkeypatch):
-    """把 storage._TENANTS_ROOT 和 settings.storage.uploads_dir 重定向到 tmp_path"""
-    from src.core import storage as storage_mod
-    fake_tenants = str(tmp_path / "tenants")
-    monkeypatch.setattr(storage_mod, "_TENANTS_ROOT", fake_tenants)
-
-    # settings.storage.uploads_dir 是相对路径 "storage/uploads"，resolve_path 内部会拼项目根
-    # 通过 patch Path.exists 或直接造文件在 tmp_path 下测试
-    return tmp_path
 
 
 class TestResolvePathViaRedis:
@@ -117,46 +105,6 @@ class TestResolvePathViaRedis:
             result = _resolve_path_via_redis("file_ghost")
 
         assert result is None
-
-
-class TestResolvePathTemplatesFallback:
-    """resolve_path 兜底扫 storage/uploads/{tenant}/templates/"""
-
-    def test_templates_subdir_hit(self, tmp_path, monkeypatch):
-        """file_id 在 storage/uploads/{tenant}/templates/ 下找到"""
-        from src.tools.excel.excel_lib import ExcelFileHandler
-
-        uploads_root = tmp_path / "uploads"
-        templates_dir = uploads_root / "tenant_t1" / "templates"
-        templates_dir.mkdir(parents=True)
-        target = templates_dir / "file_tpl123.xlsx"
-        target.write_text("x")
-
-        # patch settings.storage.uploads_dir 指向 tmp_path/uploads
-        from src.config.settings import settings
-        monkeypatch.setattr(settings.storage, "uploads_dir", str(uploads_root))
-
-        # Redis miss
-        with patch(
-            "src.core.redis_client.redis_client.hgetall", return_value={}
-        ):
-            result = ExcelFileHandler.resolve_path("file_tpl123.xlsx")
-
-        assert Path(result).resolve() == target.resolve()
-
-    def test_templates_subdir_skipped_for_absolute_path(self, tmp_path, monkeypatch):
-        """绝对路径不进入 templates 扫描"""
-        from src.tools.excel.excel_lib import ExcelFileHandler
-
-        uploads_root = tmp_path / "uploads"
-        uploads_root.mkdir(parents=True)
-
-        with patch(
-            "src.core.redis_client.redis_client.hgetall", return_value={}
-        ):
-            # 绝对路径且不存在 -> 直接返回绝对路径字符串，不扫描
-            result = ExcelFileHandler.resolve_path("/tmp/nonexistent_abs.xlsx")
-            assert result.endswith("nonexistent_abs.xlsx")
 
 
 class TestExcelProcessResolveFile:

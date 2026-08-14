@@ -1,6 +1,9 @@
 """
 旧路径 storage/uploads/ 到新路径 storage/tenants/{tenant_id}/{scene}/ 的一次性迁移
 
+【已废弃】租户文件迁移已于生产环境完成，storage/uploads/ 下租户文件已迁空，
+本脚本不再需要执行。仅作历史归档保留，勿再从启动链路调用。
+
 设计要点：
 - 幂等：目标已存在 + 大小相同视为已迁移，跳过；大小不同加后缀避免覆盖
 - 多 worker 并发：pg_try_advisory_lock(789012) 防止 Gunicorn 多 worker 重复执行

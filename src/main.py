@@ -427,20 +427,6 @@ async def lifespan(app: FastAPI):
         logger.error(f"[pid={_pid}] step2 FAILED (critical): {e}", exc_info=True)
         raise
 
-    # Migrate legacy storage/uploads/ files to storage/tenants/{tid}/{scene}/
-    # 幂等，多 worker 通过 pg_try_advisory_lock 防并发，失败不阻塞启动
-    try:
-        logger.info(f"[pid={_pid}] step2b: migrate_uploads_to_tenants ...")
-        from src.core.storage_migration import migrate_uploads_to_tenants
-        stats = migrate_uploads_to_tenants()
-        logger.info(
-            f"[pid={_pid}] step2b: migrate_uploads_to_tenants done, stats={stats}"
-        )
-    except Exception as e:
-        logger.warning(
-            f"[pid={_pid}] step2b FAILED (non-critical): {e}", exc_info=True
-        )
-
     # Load subagent definitions from DB (Phase 2: 整体降级策略)
     try:
         from src.core.agent import master_agent as _master
@@ -561,13 +547,9 @@ import shutil
 from pathlib import Path
 
 # 上传文件存储目录（基于项目根目录，不受 cwd 影响）
-# 历史结构: storage/uploads/{tenant_id}/conversation/ (已废弃，仅作只读兜底)
-# 新结构:   storage/tenants/{tenant_id}/conversation/ (遵循租户附件存储规范)
-# 新写入统一走 src.core.storage.ensure_tenant_storage_dir，
-# UPLOAD_DIR 仅在 _get_file_info 兜底磁盘扫描时使用（兼容历史文件）。
+# 新结构: storage/tenants/{tenant_id}/conversation/ (遵循租户附件存储规范)
+# 新写入统一走 src.core.storage.ensure_tenant_storage_dir。
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
-UPLOAD_DIR = _PROJECT_ROOT / settings.storage.uploads_dir  # 历史目录，只读兜底
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 # 新版租户附件根目录（写入路径，由 ensure_tenant_storage_dir 创建子目录）
 TENANTS_STORAGE_DIR = _PROJECT_ROOT / "storage" / "tenants"
 TENANTS_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
@@ -1047,7 +1029,7 @@ async def delete_uploaded_file(file_id: str):
             # 清理空的租户目录
             try:
                 parent_dir = file_path.parent
-                if parent_dir != UPLOAD_DIR and parent_dir.is_dir() and not any(parent_dir.iterdir()):
+                if parent_dir != TENANTS_STORAGE_DIR and parent_dir.is_dir() and not any(parent_dir.iterdir()):
                     parent_dir.rmdir()
                     logger.info(f"已清理空目录: {parent_dir}")
             except OSError:
@@ -1087,25 +1069,11 @@ def _get_file_info(file_id: str) -> dict | None:
         return cached
 
     # 尝试从磁盘目录扫描恢复（包括租户/用户子目录，最多3层）
-    # 同时扫描新目录 storage/tenants/ 和旧目录 storage/uploads/（只读兼容）
-    skip_dirs = {"knowledge", "wecom"}
+    # 扫描新目录 storage/tenants/{tenant}/conversation/ 等
     search_dirs: list[Path] = []
-    # 新目录优先：storage/tenants/{tenant}/conversation/ 等
     if TENANTS_STORAGE_DIR.exists():
         for d1 in TENANTS_STORAGE_DIR.iterdir():
             if d1.is_dir():
-                for d2 in d1.iterdir():
-                    if d2.is_dir():
-                        search_dirs.append(d2)
-                        for d3 in d2.iterdir():
-                            if d3.is_dir():
-                                search_dirs.append(d3)
-    # 旧目录兜底：storage/uploads/{tenant}/... （历史文件，迁移期保留）
-    search_dirs.append(UPLOAD_DIR)
-    if UPLOAD_DIR.exists():
-        for d1 in UPLOAD_DIR.iterdir():
-            if d1.is_dir() and d1.name not in skip_dirs:
-                search_dirs.append(d1)
                 for d2 in d1.iterdir():
                     if d2.is_dir():
                         search_dirs.append(d2)
@@ -1292,17 +1260,11 @@ async def chat_stream(http_request: Request, request: ChatRequest):
             }
 
             # 如果提供了 file_id，使用 Redis 中存储的实际路径
-            # 兜底：Redis 中可能无此 file_id，此时根据 file_id 直接在 UPLOAD_DIR 中查找文件
             file_id = f.get("file_id")
             if file_id:
                 file_info = _get_file_info(file_id)
                 if file_info:
                     att["path"] = file_info["path"]
-                else:
-                    # 兜底：递归扫描 UPLOAD_DIR 中以该 file_id 开头的文件
-                    matched = list(UPLOAD_DIR.glob(f"**/{file_id}.*"))
-                    if matched:
-                        att["path"] = str(matched[0].absolute())
                 att["file_id"] = file_id
 
             if "content" in f:
