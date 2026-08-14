@@ -174,11 +174,13 @@ def _build_target_knowledge_path(target_tenant: str, src_path: str, target_stora
           - tgt_rel: 相对路径，写入 `documents.file_path`
           - full_tgt: 磁盘写入路径（`{target_storage}/{target_tenant}/knowledge/{basename}`）
     """
-    from src.core.storage import get_tenant_storage_path
+    from src.core.storage import get_tenant_storage_path, normalize_tenant_id
 
     basename = os.path.basename(src_path)
     tgt_rel = get_tenant_storage_path(target_tenant, "knowledge", basename)
-    full_tgt = os.path.join(target_storage, target_tenant, "knowledge", basename)
+    # full_tgt 必须与 tgt_rel 走同一 normalize_tenant_id 剥离 tenant_ 前缀，
+    # 否则 tgt_rel=tenants/b/... 与 full_tgt=tenants/tenant_b/... 不一致
+    full_tgt = os.path.join(target_storage, normalize_tenant_id(target_tenant), "knowledge", basename)
     return tgt_rel, full_tgt
 
 

@@ -146,7 +146,9 @@ def update_hotel(params: dict) -> dict:
         "trip_days": trip_days,
         "rows": rows,
         "合计_费用小计": cost_per_person,
-        "合计_随队老师": teacher_total,
+        # 顶层 合计_随队老师 = 所有老师总价（与 generate.py:250 一致）；
+        # teacher_total（÷ teacher_count 的人均版）只供 internal_data.teacher_total 字段使用
+        "合计_随队老师": teacher_total_sum,
         "人均报价": quote_per_person,
         "总价": quote_total,
         "file_path": os.path.abspath(file_path),

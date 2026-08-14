@@ -120,7 +120,8 @@ async def test_execute_fill_tenant_injection(sample_path):
     assert res["success"]
     fp = Path(res["file_path"])
     # 新规范：user_id 不进路径，目录结构为 storage/tenants/{tenant_id}/conversation/
-    assert "tenant_test_tt" in fp.parts
+    # 按 storage.normalize_tenant_id 规范，磁盘目录剥离 tenant_ 前缀（tenant_test_tt -> test_tt）
+    assert "test_tt" in fp.parts
     assert "conversation" in fp.parts
 
 
