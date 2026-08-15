@@ -21,6 +21,7 @@ from src.services.billing import (
     calculate_embedding_credit_cost,
     calculate_asr_credit_cost,
     calculate_credit_cost_with_breakdown,
+    calculate_llm_credit_cost_with_breakdown,
     calculate_embedding_credit_cost_with_breakdown,
     calculate_asr_credit_cost_with_breakdown,
 )
@@ -141,6 +142,9 @@ class SessionRecordService:
         # LLM调用计数
         self._llm_call_count = 0
 
+        # 每轮 LLM 调用 usage 快照（add_llm_usage 追加；分段计价模型 save() 时逐轮查档用）
+        self._llm_usages: list = []
+
         # 关联的 TraceCollector 引用（由 agent.process_message 在创建 TraceCollector 后注入）。
         # process_and_persist 写入 channel_messages 后通过它回填 user_message_id，
         # 用于 monitor.py 精确匹配撤回状态。类型为 Any 避免循环依赖。
@@ -201,6 +205,12 @@ class SessionRecordService:
             self.completion_tokens += usage.get("completion_tokens", 0)
             self.total_token_count += usage.get("total_tokens", 0)
             self.cached_input_tokens += usage.get("cached_tokens", 0)
+            # 每轮调用快照（分段计价模型 save() 时按单次请求输入逐轮查档；非分段模型仍走累计原逻辑）
+            self._llm_usages.append({
+                "prompt_tokens": int(usage.get("prompt_tokens", 0) or 0),
+                "completion_tokens": int(usage.get("completion_tokens", 0) or 0),
+                "cached_tokens": int(usage.get("cached_tokens", 0) or 0),
+            })
             self._llm_call_count += 1
 
     def add_embedding_usage(self, tokens: int, model: str = "text-embedding-v3"):
@@ -329,11 +339,18 @@ class SessionRecordService:
             chat_credit_cost = 0.0
             chat_bd: Dict[str, Any] = {}
             try:
-                chat_credit_cost, chat_bd = calculate_credit_cost_with_breakdown(
-                    prompt_tokens=self.prompt_tokens,
-                    completion_tokens=self.completion_tokens,
+                # 分段计价模型按每轮调用逐轮查档合并计费；非分段模型回退累计原逻辑。
+                # 极端兜底：无逐轮快照（老路径）时按累计值单元素构造。
+                usage_calls = self._llm_usages
+                if not usage_calls and self.prompt_tokens > 0:
+                    usage_calls = [{
+                        "prompt_tokens": self.prompt_tokens,
+                        "completion_tokens": self.completion_tokens,
+                        "cached_tokens": self.cached_input_tokens,
+                    }]
+                chat_credit_cost, chat_bd = calculate_llm_credit_cost_with_breakdown(
+                    usage_calls=usage_calls,
                     model=self.model,
-                    cached_input_tokens=self.cached_input_tokens,
                 )
             except Exception as billing_err:
                 # 计费异常不应影响对话记录落库
@@ -383,6 +400,9 @@ class SessionRecordService:
                     "usage_factor": chat_bd.get("usage_factor"),
                     "credits": chat_bd.get("credits", {}),
                 })
+                if chat_bd.get("tiered"):
+                    # 分段计价模型标记，便于审计区分 tiered 记录（反向合并单价）
+                    usage_breakdown["chat"]["tiered"] = True
             if self.embedding_tokens > 0 and "embedding" in usage_breakdown:
                 usage_breakdown["embedding"]["credit"] = round(embedding_credit_cost, 2)
                 if emb_bd:

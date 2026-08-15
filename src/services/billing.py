@@ -142,6 +142,55 @@ def calculate_asr_credit_cost(
 # 使 chat_records.usage_breakdown 不依赖 token_cost_prices 表的当前快照即可独立对账。
 
 
+def _pick_tier(tiers: list, input_tokens: int) -> dict:
+    """取单次请求输入 token 数所在的分段档位；超过最大档用最后一档兜底。
+
+    Args:
+        tiers: token_cost_prices.tiered_pricing，元素为
+            {"max_input": int, "input_per_m": float, "cached_input_per_m": float|None, "output_per_m": float}
+            按 max_input 升序排列（隐含区间：上一档 max < T ≤ 本档 max）
+        input_tokens: 单次请求的输入 token 数
+
+    Returns:
+        命中的档位 dict；tiers 为空时返回 {}
+    """
+    if not tiers:
+        return {}
+    for tier in tiers:
+        if input_tokens <= int(tier.get("max_input", 0)):
+            return tier
+    return tiers[-1]
+
+
+def _resolve_unit_prices(tcp: dict, prompt_tokens: int) -> tuple:
+    """解析模型单价（tiered 模型按单次输入 token 查档，否则用统一单价）
+
+    Args:
+        tcp: TokenCostPriceDB.get_by_model_name 返回的行
+        prompt_tokens: 单次请求的输入 token 数（用于 tiered 查档）
+
+    Returns:
+        (input_price, output_price, has_cached_price, cached_input_price)
+    """
+    tiers = tcp.get("tiered_pricing")
+    if tiers:
+        tier = _pick_tier(tiers, prompt_tokens or 0)
+        cached_raw = tier.get("cached_input_per_m")
+        return (
+            float(tier.get("input_per_m") or 0),
+            float(tier.get("output_per_m") or 0),
+            cached_raw is not None,
+            float(cached_raw) if cached_raw is not None else 0.0,
+        )
+    cached_raw = tcp.get("cached_input_price_per_m")
+    return (
+        float(tcp.get("input_price_per_m") or 0),
+        float(tcp.get("output_price_per_m") or 0),
+        cached_raw is not None,
+        float(cached_raw) if cached_raw is not None else 0.0,
+    )
+
+
 def calculate_credit_cost_with_breakdown(
     prompt_tokens: int,
     completion_tokens: int,
@@ -169,11 +218,7 @@ def calculate_credit_cost_with_breakdown(
         logger.warning(f"计费：模型 {model} 未配置单价，credit_cost=0")
         return 0.0, {}
 
-    input_price = float(tcp.get("input_price_per_m") or 0)
-    output_price = float(tcp.get("output_price_per_m") or 0)
-    cached_input_price_raw = tcp.get("cached_input_price_per_m")
-    has_cached_price = cached_input_price_raw is not None
-    cached_input_price = float(cached_input_price_raw) if has_cached_price else 0.0
+    input_price, output_price, has_cached_price, cached_input_price = _resolve_unit_prices(tcp, prompt_tokens)
 
     if input_price <= 0 and output_price <= 0:
         logger.warning(f"计费：模型 {model} 单价全部为 0，credit_cost=0")
@@ -219,6 +264,126 @@ def calculate_credit_cost_with_breakdown(
             "non_cached_input": round(non_cached_input_cost * usage_factor, 6),
             "cached_input": round(cached_input_cost * usage_factor, 6),
             "output": round(output_cost * usage_factor, 6),
+        },
+    }
+    if tcp.get("tiered_pricing"):
+        breakdown["tiered"] = True
+    return credit_cost, breakdown
+
+
+def calculate_llm_credit_cost_with_breakdown(
+    usage_calls: list,
+    model: Optional[str],
+    usage_factor_override: Optional[int] = None,
+) -> tuple:
+    """多轮 LLM 调用合并计费（分段计价模型专用入口）
+
+    SessionRecordService.save() 使用：agent 多轮循环每轮 LLM 调用是独立的 API 请求，
+    分段计价模型（tiered_pricing）每轮的输入 token 数可能落在不同档位、单价不同，
+    累加后按单一单价计费无意义。本函数对每轮按该轮输入 token 数取档累加成本，
+    再按 {成本价合计}/{token数合计} 反向算出合并单价记入 breakdown，保证
+    「合并单价 × 累计 token = 累计成本」对账自洽。
+
+    Args:
+        usage_calls: 每轮 LLM 调用 usage 快照列表，元素为
+            {"prompt_tokens": int, "completion_tokens": int, "cached_tokens": int}
+        model: 模型名
+        usage_factor_override: 用量系数覆盖值；不传读 settings.billing.usage_factor
+
+    Returns:
+        (credit_cost, breakdown)。非 tiered 模型回退原逻辑（按累计 token 统一算）；
+        model 缺失或 tcp 无单价返回 (0.0, {})。
+    """
+    if not model:
+        logger.warning("计费：model 为空，credit_cost=0")
+        return 0.0, {}
+    if not usage_calls:
+        return 0.0, {}
+
+    tcp = TokenCostPriceDB.get_by_model_name(model)
+    if not tcp:
+        logger.warning(f"计费：模型 {model} 未配置单价，credit_cost=0")
+        return 0.0, {}
+
+    tiers = tcp.get("tiered_pricing")
+    if not tiers:
+        # 非分段模型：按累计 token 走原逻辑
+        return calculate_credit_cost_with_breakdown(
+            prompt_tokens=sum(int(c.get("prompt_tokens", 0) or 0) for c in usage_calls),
+            completion_tokens=sum(int(c.get("completion_tokens", 0) or 0) for c in usage_calls),
+            model=model,
+            cached_input_tokens=sum(int(c.get("cached_tokens", 0) or 0) for c in usage_calls),
+            usage_factor_override=usage_factor_override,
+        )
+
+    settings = create_settings()
+    if usage_factor_override is not None:
+        usage_factor = usage_factor_override
+    else:
+        usage_factor = getattr(settings.billing, "usage_factor", 100) or 100
+
+    # 逐轮取档，累加「单价 × token 数」加权和（中间量，/1e6 后为元）与各分项 token 数
+    sum_input = 0.0
+    sum_cached = 0.0
+    sum_output = 0.0
+    w_input = 0
+    w_cached = 0
+    w_output = 0
+    total_prompt = 0
+    total_completion = 0
+    total_cached = 0
+    for c in usage_calls:
+        prompt = int(c.get("prompt_tokens", 0) or 0)
+        completion = int(c.get("completion_tokens", 0) or 0)
+        cached = int(c.get("cached_tokens", 0) or 0)
+        total_prompt += prompt
+        total_completion += completion
+        total_cached += cached
+        tier = _pick_tier(tiers, prompt)
+        cached_raw = tier.get("cached_input_per_m")
+        has_cached = cached_raw is not None
+        if has_cached:
+            non_cached = max(prompt - cached, 0)
+        else:
+            non_cached = prompt
+            cached = 0
+        input_price = float(tier.get("input_per_m") or 0)
+        output_price = float(tier.get("output_per_m") or 0)
+        cached_price = float(cached_raw) if has_cached else 0.0
+        sum_input += non_cached * input_price
+        sum_cached += cached * cached_price
+        sum_output += completion * output_price
+        w_input += non_cached
+        w_cached += cached
+        w_output += completion
+
+    token_cost = (sum_input + sum_cached + sum_output) / 1_000_000
+    if token_cost <= 0:
+        return 0.0, {}
+
+    credit_cost = math.ceil(token_cost * usage_factor * 100) / 100
+    credit_cost = max(credit_cost, 0.0)
+
+    # 合并反向单价（元/百万 token）= 分项成本价合计 / 分项 token 数合计；分母为 0 置 None
+    def _merged_price(cost_part: float, weight: int):
+        return (cost_part / weight) if weight and weight > 0 else None
+
+    breakdown = {
+        "tiered": True,
+        "prompt_tokens": total_prompt,
+        "completion_tokens": total_completion,
+        "cached_input_tokens": total_cached,
+        "non_cached_input_tokens": w_input,
+        "unit_prices": {
+            "input_per_m": _merged_price(sum_input, w_input),
+            "cached_input_per_m": _merged_price(sum_cached, w_cached),
+            "output_per_m": _merged_price(sum_output, w_output),
+        },
+        "usage_factor": usage_factor,
+        "credits": {
+            "non_cached_input": round(sum_input / 1_000_000 * usage_factor, 6),
+            "cached_input": round(sum_cached / 1_000_000 * usage_factor, 6),
+            "output": round(sum_output / 1_000_000 * usage_factor, 6),
         },
     }
     return credit_cost, breakdown

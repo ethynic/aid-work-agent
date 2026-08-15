@@ -15,6 +15,9 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
+# sentinel：区分 TestTieredMergedCall._call 缺省（用 tiered tcp）与显式 tcp=None（无单价记录）
+_MISSING = object()
+
 
 @pytest.fixture
 def fixed_settings():
@@ -806,4 +809,206 @@ class TestCalculateAsrCreditCost:
             result = calculate_asr_credit_cost(asr_calls=10)
             # 10 * 0.06 * 100 = 60.00
             assert result == 60.0
+
+
+# ============== qwen3.7-flash 分段计价（tiered_pricing） ==============
+# 百炼官方三档：0<T≤32K=输入0.2/缓存0.04/输出0.8；32K<T≤256K=0.6/0.12/2.4；256K<T≤1M=1.2/0.24/4.8
+# 计费口径：每轮 LLM 调用（= 一次 API 请求）按该轮输入 token 数取档，逐轮累加成本；
+#           合并后的单价由 {成本价合计}/{token数合计} 反向算出，保证对账自洽。
+
+
+def _make_tiered_tcp() -> dict:
+    """构造带 tiered_pricing 的 TokenCostPriceDB 返回值（qwen3.7-flash 三档）"""
+    return {
+        "model_name": "qwen3.7-flash",
+        "input_price_per_m": None,
+        "cached_input_price_per_m": None,
+        "output_price_per_m": None,
+        "tiered_pricing": [
+            {"max_input": 32768,   "input_per_m": 0.2, "cached_input_per_m": 0.04, "output_per_m": 0.8},
+            {"max_input": 262144,  "input_per_m": 0.6, "cached_input_per_m": 0.12, "output_per_m": 2.4},
+            {"max_input": 1048576, "input_per_m": 1.2, "cached_input_per_m": 0.24, "output_per_m": 4.8},
+        ],
+    }
+
+
+class TestTieredSingleCall:
+    """calculate_credit_cost_with_breakdown 对 tiered 模型按单次输入 token 取档"""
+
+    def _call(self, prompt_tokens, completion_tokens=0, cached_input_tokens=0, fixed_settings=None):
+        from src.services.billing import calculate_credit_cost_with_breakdown
+        settings = fixed_settings or MagicMock()
+        settings.billing.usage_factor = 100  # MagicMock 上 getattr 会自生成 truthy mock，须显式赋值
+        with patch("src.services.billing.TokenCostPriceDB") as mock_tcp_db, \
+             patch("src.services.billing.create_settings", return_value=settings):
+            mock_tcp_db.get_by_model_name.return_value = _make_tiered_tcp()
+            return calculate_credit_cost_with_breakdown(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                model="qwen3.7-flash",
+                cached_input_tokens=cached_input_tokens,
+            )
+
+    def test_tier1_price(self):
+        """输入 1000（档1）：input=0.2 -> 0.02"""
+        credit_cost, breakdown = self._call(prompt_tokens=1000)
+        assert credit_cost == 0.02
+        assert breakdown["unit_prices"]["input_per_m"] == 0.2
+        assert breakdown["tiered"] is True
+
+    def test_tier2_price(self):
+        """输入 50000（档2）：input=0.6 -> 3.00"""
+        credit_cost, _ = self._call(prompt_tokens=50000)
+        assert credit_cost == 3.0
+
+    def test_tier3_price(self):
+        """输入 300000（档3）：input=1.2 -> 36.00"""
+        credit_cost, _ = self._call(prompt_tokens=300000)
+        assert credit_cost == 36.0
+
+    def test_tier_boundary_32768(self):
+        """边界 32768（≤32K）属档1（0.2）"""
+        credit_cost, breakdown = self._call(prompt_tokens=32768)
+        assert breakdown["unit_prices"]["input_per_m"] == 0.2
+
+    def test_tier_boundary_32769(self):
+        """边界 32769（>32K）属档2（0.6）"""
+        credit_cost, breakdown = self._call(prompt_tokens=32769)
+        assert breakdown["unit_prices"]["input_per_m"] == 0.6
+
+    def test_tier_boundary_262144(self):
+        """边界 262144（≤256K）属档2（0.6）"""
+        credit_cost, breakdown = self._call(prompt_tokens=262144)
+        assert breakdown["unit_prices"]["input_per_m"] == 0.6
+
+    def test_tier_boundary_262145(self):
+        """边界 262145（>256K）属档3（1.2）"""
+        credit_cost, breakdown = self._call(prompt_tokens=262145)
+        assert breakdown["unit_prices"]["input_per_m"] == 1.2
+
+    def test_tier_over_max_fallback_last(self):
+        """输入超过最大档（>1M）兜底用最后一档（1.2）"""
+        credit_cost, breakdown = self._call(prompt_tokens=2000000)
+        assert breakdown["unit_prices"]["input_per_m"] == 1.2
+
+    def test_tier_cached_price(self):
+        """tiered 模型区分缓存命中：cached 部分按该档缓存单价"""
+        # prompt=1000(档1), cached=400 -> non_cached=600
+        # token_cost = (600*0.2 + 400*0.04 + 0*0.8)/1e6 = (120+16)/1e6 = 0.000136
+        # credit_cost = ceil(0.000136*100*100)/100 = ceil(1.36)/100 = 2/100 = 0.02
+        credit_cost, breakdown = self._call(prompt_tokens=1000, cached_input_tokens=400)
+        assert credit_cost == 0.02
+        assert breakdown["unit_prices"]["cached_input_per_m"] == 0.04
+
+
+class TestTieredMergedCall:
+    """calculate_llm_credit_cost_with_breakdown 多轮逐档合并计费"""
+
+    def _call(self, usage_calls, model="qwen3.7-flash", fixed_settings=None, tcp=_MISSING,
+              usage_factor_override=None):
+        from src.services.billing import calculate_llm_credit_cost_with_breakdown
+        settings = fixed_settings or MagicMock()
+        settings.billing.usage_factor = 100  # MagicMock 上 getattr 会自生成 truthy mock，须显式赋值
+        with patch("src.services.billing.TokenCostPriceDB") as mock_tcp_db, \
+             patch("src.services.billing.create_settings", return_value=settings):
+            # 显式传 tcp=None 表示"无单价记录"；缺省用 tiered tcp
+            mock_tcp_db.get_by_model_name.return_value = (
+                _make_tiered_tcp() if tcp is _MISSING else tcp
+            )
+            return calculate_llm_credit_cost_with_breakdown(
+                usage_calls=usage_calls, model=model,
+                usage_factor_override=usage_factor_override,
+            )
+
+    def test_two_calls_merged(self):
+        """两轮 [10K(档1), 40K(档2)] 各自取档，反向单价 = 加权平均，总成本对账自洽"""
+        credit_cost, breakdown = self._call([
+            {"prompt_tokens": 10000, "completion_tokens": 1000, "cached_tokens": 0},
+            {"prompt_tokens": 40000, "completion_tokens": 1000, "cached_tokens": 0},
+        ])
+        # sum_input = 10000*0.2 + 40000*0.6 = 2000 + 24000 = 26000
+        # sum_output = 1000*0.8 + 1000*2.4 = 800 + 2400 = 3200
+        # token_cost = (26000 + 3200)/1e6 = 0.0292
+        # credit_cost = ceil(0.0292*100*100)/100 = ceil(292.0)/100 = 2.92
+        assert credit_cost == 2.92
+        # 合并反向单价：input=26000/50000=0.52；output=3200/2000=1.6；cached 无命中 -> None
+        assert breakdown["unit_prices"]["input_per_m"] == 0.52
+        assert breakdown["unit_prices"]["output_per_m"] == 1.6
+        assert breakdown["unit_prices"]["cached_input_per_m"] is None
+        assert breakdown["tiered"] is True
+        # 对账：input 0.52*50000/1e6*100=2.6；output 1.6*2000/1e6*100=0.32；合计=2.92
+        assert breakdown["credits"]["non_cached_input"] == 2.6
+        assert breakdown["credits"]["output"] == 0.32
+
+    def test_merged_cached_tokens(self):
+        """多轮含缓存命中：cached 部分按各自档位缓存单价合并"""
+        credit_cost, breakdown = self._call([
+            {"prompt_tokens": 10000, "completion_tokens": 0, "cached_tokens": 3000},
+            {"prompt_tokens": 40000, "completion_tokens": 0, "cached_tokens": 5000},
+        ])
+        # 轮1(档1)：non_cached=7000*0.2=1400；cached=3000*0.04=120
+        # 轮2(档2)：non_cached=35000*0.6=21000；cached=5000*0.12=600
+        # sum_input=22400；sum_cached=720；w_input=42000；w_cached=8000
+        # token_cost=(22400+720)/1e6=0.02312 -> credit=ceil(231.2)/100=2.32
+        assert credit_cost == 2.32
+        # 合并反向单价 = 精确除法（对账自洽），用 approx 比较
+        assert breakdown["unit_prices"]["input_per_m"] == pytest.approx(22400 / 42000)
+        assert breakdown["unit_prices"]["cached_input_per_m"] == pytest.approx(720 / 8000)
+        # 对账：input 22400/1e6*100=2.24；cached 720/1e6*100=0.072
+        assert breakdown["credits"]["non_cached_input"] == 2.24
+        assert round(breakdown["credits"]["cached_input"], 6) == 0.072
+
+    def test_merged_division_by_zero(self):
+        """某分项 token 数为 0 时对应单价置 None，不 crash"""
+        credit_cost, breakdown = self._call([
+            {"prompt_tokens": 1000, "completion_tokens": 0, "cached_tokens": 0},
+        ])
+        assert breakdown["unit_prices"]["cached_input_per_m"] is None
+        assert breakdown["unit_prices"]["output_per_m"] is None
+        assert breakdown["unit_prices"]["input_per_m"] == 0.2
+
+    def test_non_tiered_fallback(self):
+        """非 tiered 模型：calculate_llm_credit_cost_with_breakdown 回退按累计 token 走原逻辑"""
+        from src.services.billing import calculate_credit_cost
+        tcp = _make_tcp(0.8, 2.0)  # 无 tiered_pricing
+        usage_calls = [
+            {"prompt_tokens": 1000, "completion_tokens": 500, "cached_tokens": 0},
+            {"prompt_tokens": 1000, "completion_tokens": 500, "cached_tokens": 0},
+        ]
+        credit_cost, breakdown = self._call(usage_calls, model="test-model", tcp=tcp)
+        # 累计 prompt=2000, completion=1000
+        # token_cost = (2000*0.8 + 1000*2.0)/1e6 = 0.0036 -> credit = ceil(36.0)/100 = 0.36
+        assert credit_cost == 0.36
+        assert breakdown.get("tiered") is None
+
+    def test_empty_calls_returns_zero(self):
+        """usage_calls 为空返回 0.0"""
+        credit_cost, _ = self._call([], model="qwen3.7-flash")
+        assert credit_cost == 0.0
+
+    def test_missing_model_returns_zero(self):
+        """model 为空返回 0.0"""
+        credit_cost, _ = self._call([{"prompt_tokens": 1000, "completion_tokens": 0, "cached_tokens": 0}], model=None)
+        assert credit_cost == 0.0
+
+    def test_missing_price_record_returns_zero(self):
+        """tcp 无匹配记录返回 0.0"""
+        credit_cost, _ = self._call([{"prompt_tokens": 1000, "completion_tokens": 0, "cached_tokens": 0}],
+                                    model="unknown", tcp=None)
+        assert credit_cost == 0.0
+
+    def test_usage_factor_override(self):
+        """usage_factor_override 覆盖 settings 配置（传 200 时积分翻倍）"""
+        settings = MagicMock()
+        settings.billing.usage_factor = 100
+        credit_cost, breakdown = self._call(
+            [{"prompt_tokens": 10000, "completion_tokens": 0, "cached_tokens": 0}],
+            fixed_settings=settings,
+            usage_factor_override=200,
+        )
+        # 单轮 10K(档1)：token_cost = 10000*0.2/1e6 = 0.002
+        # override=200：credit = ceil(0.002 * 200 * 100)/100 = ceil(40)/100 = 0.4
+        # （若 override 未生效，会落到 settings 的 100，credit = 0.2）
+        assert credit_cost == 0.4
+        assert breakdown["usage_factor"] == 200
 

@@ -247,6 +247,7 @@ CREATE TABLE IF NOT EXISTS token_cost_prices (
     price_per_second_by_resolution JSONB, -- 按分辨率区分的视频单价 {"720P": 0.6, "1080P": 1.0}，命中 resolution key 优先用
     embedding_price_per_m NUMERIC(10,4), -- 向量模型单价（元/百万 token），用于 text-embedding-v3 等
     asr_price_per_call NUMERIC(10,4), -- 语音识别单价（元/次），用于阿里云 NLS 一句话识别
+    tiered_pricing JSONB, -- 分段计价模型单价（按单次请求输入 token 数分档），[{"max_input": 32768, "input_per_m": 0.2, "cached_input_per_m": 0.04, "output_per_m": 0.8}, ...]
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -295,6 +296,16 @@ ON CONFLICT (model_name) DO NOTHING;
 -- 阿里云 NLS 一句话识别单价：0.01 元/次（1次最多60s）
 INSERT INTO token_cost_prices (model_name, asr_price_per_call)
 VALUES ('aliyun-nls-asr', 0.01)
+ON CONFLICT (model_name) DO NOTHING;
+
+-- 分段计价模型单价：qwen3.7-flash 按单次请求输入 token 数分档
+-- 档位（百炼官方）：0<T≤32K=输入0.2/输出0.8；32K<T≤256K=0.6/2.4；256K<T≤1M=1.2/4.8；缓存命中按输入价 20%
+INSERT INTO token_cost_prices (model_name, tiered_pricing)
+VALUES ('qwen3.7-flash', '[
+  {"max_input": 32768,   "input_per_m": 0.2, "cached_input_per_m": 0.04, "output_per_m": 0.8},
+  {"max_input": 262144,  "input_per_m": 0.6, "cached_input_per_m": 0.12, "output_per_m": 2.4},
+  {"max_input": 1048576, "input_per_m": 1.2, "cached_input_per_m": 0.24, "output_per_m": 4.8}
+]'::jsonb)
 ON CONFLICT (model_name) DO NOTHING;
 
 

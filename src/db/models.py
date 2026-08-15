@@ -2060,12 +2060,13 @@ class TokenCostPriceDB:
         Returns:
             {"model_name", "input_price_per_m", "cached_input_price_per_m",
              "output_price_per_m", "price_per_second", "price_per_second_by_resolution",
-             "embedding_price_per_m", "asr_price_per_call"} 或 None
+             "embedding_price_per_m", "asr_price_per_call", "tiered_pricing"} 或 None
             cached_input_price_per_m 为 NULL 表示该模型计费不区分缓存命中
             price_per_second 为 NULL 表示该模型不按秒计费（文本模型）
             price_per_second_by_resolution 为 NULL 表示视频模型不按分辨率区分，用 price_per_second
             embedding_price_per_m 为 NULL 表示该模型非 embedding 模型（无向量单价）
             asr_price_per_call 为 NULL 表示该模型非 ASR 模型（无语音识别单价）
+            tiered_pricing 为 NULL 表示该模型不分段计价（走 input/output/cached 统一单价）
         """
         if not model_name:
             return None
@@ -2076,7 +2077,7 @@ class TokenCostPriceDB:
                 f"""
                 SELECT model_name, input_price_per_m, cached_input_price_per_m,
                        output_price_per_m, price_per_second, price_per_second_by_resolution,
-                       embedding_price_per_m, asr_price_per_call
+                       embedding_price_per_m, asr_price_per_call, tiered_pricing
                 FROM token_cost_prices
                 WHERE model_name = {placeholder}
                 """,

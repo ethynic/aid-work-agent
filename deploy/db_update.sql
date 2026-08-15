@@ -378,3 +378,18 @@ CREATE TABLE IF NOT EXISTS subagent_template_files (
 --   chat 增加 credits 嵌套对象（non_cached_input / cached_input / output 三分项积分），
 --   各分项增加 usage_factor 系数字段，video 分项为新增（原视频记录无 usage_breakdown）。
 --   旧记录无这些字段，读取时按 NULL/0 兜底；不涉及表结构变更。
+
+-- 2026-08-15，token_cost_prices 增加 tiered_pricing JSONB 列：分段计价模型单价
+-- qwen3.7-flash 按单次请求输入 token 数分档（百炼官方）：
+--   0<T≤32K=输入0.2/输出0.8；32K<T≤256K=0.6/2.4；256K<T≤1M=1.2/4.8；缓存命中按输入价 20%
+ALTER TABLE token_cost_prices ADD COLUMN IF NOT EXISTS tiered_pricing JSONB;
+
+INSERT INTO token_cost_prices (model_name, tiered_pricing)
+VALUES ('qwen3.7-flash', '[
+  {"max_input": 32768,   "input_per_m": 0.2, "cached_input_per_m": 0.04, "output_per_m": 0.8},
+  {"max_input": 262144,  "input_per_m": 0.6, "cached_input_per_m": 0.12, "output_per_m": 2.4},
+  {"max_input": 1048576, "input_per_m": 1.2, "cached_input_per_m": 0.24, "output_per_m": 4.8}
+]'::jsonb)
+ON CONFLICT (model_name) DO UPDATE SET
+  tiered_pricing = EXCLUDED.tiered_pricing,
+  updated_at = NOW();
