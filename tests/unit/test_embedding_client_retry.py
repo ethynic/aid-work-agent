@@ -11,6 +11,7 @@ import requests.exceptions
 from src.knowledge.embedding.embedding_client import (
     TextEmbeddingV3Client,
     _is_transient_error,
+    _extract_usage_tokens,
 )
 
 
@@ -174,3 +175,65 @@ def test_embed_sync_empty_input_short_circuits():
 
     assert emb == []
     assert mock_call.call_count == 0
+
+
+# ---------------------------------------------------------------------------
+# _extract_usage_tokens 提取测试（计费根因：dict 形态 total_tokens）
+# ---------------------------------------------------------------------------
+
+
+def _make_resp_with_usage(usage):
+    return type(
+        "R",
+        (),
+        {
+            "status_code": 200,
+            "output": {"embeddings": [{"embedding": [0.1, 0.2]}]},
+            "usage": usage,
+            "message": "ok",
+        },
+    )()
+
+
+def test_extract_usage_tokens_dict_total_tokens():
+    """DashScope 实际返回 dict 形态 {"total_tokens": 9}，应提取为 9"""
+    assert _extract_usage_tokens(_make_resp_with_usage({"total_tokens": 9})) == 9
+
+
+def test_extract_usage_tokens_dict_tokens_fallback():
+    """dict 形态无 total_tokens 时回退读 tokens"""
+    assert _extract_usage_tokens(_make_resp_with_usage({"tokens": 42})) == 42
+
+
+def test_extract_usage_tokens_object_total_tokens():
+    """对象形态 .total_tokens 优先"""
+    obj = type("U", (), {"total_tokens": 7, "tokens": 3})()
+    assert _extract_usage_tokens(_make_resp_with_usage(obj)) == 7
+
+
+def test_extract_usage_tokens_object_tokens_fallback():
+    """对象形态无 total_tokens 时回退读 tokens"""
+    obj = type("U", (), {"tokens": 15})()
+    assert _extract_usage_tokens(_make_resp_with_usage(obj)) == 15
+
+
+def test_extract_usage_tokens_zero_on_missing():
+    """无 usage / 无 token 字段 / token 为 0 -> 返回 0（不计费）"""
+    assert _extract_usage_tokens(_make_resp_with_usage(None)) == 0
+    assert _extract_usage_tokens(_make_resp_with_usage({})) == 0
+    assert _extract_usage_tokens(_make_resp_with_usage({"total_tokens": 0})) == 0
+
+
+def test_embed_sync_accumulates_last_usage_tokens_from_dict():
+    """embed_sync 调用后应从 dict 形态 usage 累加 last_usage_tokens（计费根因修复验证）"""
+    client = _make_client()
+    fake_resp = _make_resp_with_usage({"total_tokens": 9})
+    fake_resp.output = {"embeddings": [{"embedding": [0.1, 0.2, 0.3]}]}
+    with patch(
+        "src.knowledge.embedding.embedding_client.TextEmbedding.call",
+        return_value=fake_resp,
+    ):
+        emb = client.embed_sync("测试向量检索计费排查")
+
+    assert emb == [0.1, 0.2, 0.3]
+    assert client.last_usage_tokens == 9

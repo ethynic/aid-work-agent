@@ -39,6 +39,28 @@ def _is_transient_error(error: Exception) -> bool:
     return any(kw in msg for kw in _TRANSIENT_KEYWORDS)
 
 
+def _extract_usage_tokens(resp) -> int:
+    """从 DashScope TextEmbedding 响应中提取 usage token 数
+
+    DashScope 返回的 usage 是 dict 形式（如 {"total_tokens": 9}），而非带
+    .tokens 属性的对象。兼容两种形态：
+    - dict：读 total_tokens（优先）或 tokens
+    - 对象：读 .total_tokens（优先）或 .tokens
+
+    提取失败返回 0（调用方按 0 处理，即不计费）。
+    """
+    usage = getattr(resp, "usage", None)
+    if usage is None:
+        return 0
+    if isinstance(usage, dict):
+        tokens = usage.get("total_tokens") or usage.get("tokens")
+    else:
+        tokens = getattr(usage, "total_tokens", None) or getattr(usage, "tokens", None)
+    if isinstance(tokens, (int, float)) and tokens > 0:
+        return int(tokens)
+    return 0
+
+
 def sanitize_error_info(error_msg: str) -> str:
     """过滤错误信息中的敏感信息"""
     if not error_msg:
@@ -154,11 +176,7 @@ class TextEmbeddingV3Client:
                 raise Exception(f"Embedding API 失败: {sanitized_msg}")
 
             # 累加 usage tokens，供调用方接入计费
-            usage_tokens = getattr(resp, "usage", None)
-            if usage_tokens is not None:
-                tokens = getattr(usage_tokens, "tokens", None)
-                if isinstance(tokens, (int, float)) and tokens > 0:
-                    self.last_usage_tokens += int(tokens)
+            self.last_usage_tokens += _extract_usage_tokens(resp)
 
             embeddings = [item["embedding"] for item in resp.output["embeddings"]]
             logger.info(f"后端日志：Embedding 批量调用成功，数量={len(texts)}")
@@ -195,11 +213,7 @@ class TextEmbeddingV3Client:
             sanitized_msg = sanitize_error_info(resp.message)
             raise Exception(f"Embedding API 失败: {sanitized_msg}")
         # 累加 usage tokens
-        usage_tokens = getattr(resp, "usage", None)
-        if usage_tokens is not None:
-            tokens = getattr(usage_tokens, "tokens", None)
-            if isinstance(tokens, (int, float)) and tokens > 0:
-                self.last_usage_tokens += int(tokens)
+        self.last_usage_tokens += _extract_usage_tokens(resp)
         return resp.output["embeddings"][0]["embedding"]
 
     async def embed(self, text: str) -> List[float]:
