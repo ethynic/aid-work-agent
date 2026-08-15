@@ -327,13 +327,15 @@ function truncateText(text: string | null | undefined, maxLen: number = 30): str
   return text.slice(0, maxLen) + '...'
 }
 
-// 数值格式化：整数加千分位，小数保留 6 位去尾零
+// 数值格式化：整数/小数均加千分位，小数保留 6 位去尾零
 function fmtNum(v: number | string | null | undefined): string {
   if (v === null || v === undefined || v === '') return '-'
   const num = typeof v === 'string' ? parseFloat(v) : Number(v)
   if (isNaN(num)) return '-'
-  if (Number.isInteger(num)) return num.toLocaleString('en-US')
-  return String(Number(num.toFixed(6)))
+  const trimmed = num.toFixed(6).replace(/\.?0+$/, '')
+  const [intPart, decPart] = trimmed.split('.')
+  const intFormatted = Number(intPart).toLocaleString('en-US')
+  return decPart !== undefined ? `${intFormatted}.${decPart}` : intFormatted
 }
 
 // 渲染 usage_breakdown 分项：
