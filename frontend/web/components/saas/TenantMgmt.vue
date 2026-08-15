@@ -682,10 +682,11 @@ function getExpireStatusClass(dateStr: string | undefined): string {
   return 'text-default'
 }
 
-// 预估可用天数格式化：后端 -1 表示暂无数据（无日均消耗）
+// 预估可用天数格式化：后端 -1 表示暂无数据（无日均消耗）；>365 天无意义封顶显示 365+
 function formatEstimatedDays(days: number | null | undefined): string {
   if (days === null || days === undefined || days < 0) return '暂无数据'
-  return `${days} 天`
+  if (days > 365) return '365+'
+  return `${days}`
 }
 
 // 预估可用天数着色：<7 红、7~30 黄、>30 黑；暂无数据灰字

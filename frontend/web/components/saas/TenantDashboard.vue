@@ -67,7 +67,7 @@
             <path d="M12 9v4m0 4h.01M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z" />
           </svg>
         </div>
-        <div class="text-3xl font-bold text-danger-600">{{ stats.renewal_pending_count }}</div>
+        <div :class="stats.renewal_pending_count > 0 ? 'text-danger-600' : 'text-default'" class="text-3xl font-bold">{{ stats.renewal_pending_count }}</div>
         <div class="text-xs text-muted mt-2">待续费租户 · 点击查看详情</div>
       </button>
     </div>

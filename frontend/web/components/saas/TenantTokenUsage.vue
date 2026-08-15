@@ -222,7 +222,9 @@ function seqNumber(index: number): number {
 function formatEstimatedDays(days: number | null | undefined): string {
   if (days === null || days === undefined) return '-'
   if (days < 0) return '暂无数据'
-  return `${days} 天`
+  // >365 天无意义封顶显示 365+
+  if (days > 365) return '365+'
+  return `${days}`
 }
 
 async function loadData(page: number = 1) {
