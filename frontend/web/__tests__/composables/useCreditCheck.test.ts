@@ -5,7 +5,9 @@
  * - newSession 入口：余额 ≤ 0 阻断（allowed: false）
  * - sendMessage 入口：余额 ≤ 0 阻断（allowed: false）
  * - login 入口：余额 ≤ 0 仅提醒不阻断（allowed: true）
- * - 余额 > 100：放行
+ * - 余额充足且非待续费：放行
+ * - 待续费（renewal_pending=true）：提示续费、当天去重
+ * - 待续费且预估天数 < 0：文案显示"暂无数据"
  * - 余额获取失败：放行
  * - 平台管理员：跳过检查
  */
@@ -56,7 +58,7 @@ describe('useCreditCheck', () => {
     mockAdmin.value = { user_id: 'u1', role: 'tenant_admin' }
     mockGetTenantBalance.mockResolvedValue({
       success: true,
-      balance: { credit_balance: 0, daily_avg_cost_7d: 0, estimated_days_left: 0 },
+      balance: { credit_balance: 0, daily_avg_cost: 0, daily_avg_cost_7d: 0, estimated_days_left: 0, renewal_pending: true },
     })
 
     const { checkCreditBeforeAction } = useCreditCheck()
@@ -73,7 +75,7 @@ describe('useCreditCheck', () => {
     mockAdmin.value = { user_id: 'u1', role: 'tenant_admin' }
     mockGetTenantBalance.mockResolvedValue({
       success: true,
-      balance: { credit_balance: -5, daily_avg_cost_7d: 0, estimated_days_left: 0 },
+      balance: { credit_balance: -5, daily_avg_cost: 0, daily_avg_cost_7d: 0, estimated_days_left: 0, renewal_pending: true },
     })
 
     const { checkCreditBeforeAction } = useCreditCheck()
@@ -87,7 +89,7 @@ describe('useCreditCheck', () => {
     mockAdmin.value = { user_id: 'u1', role: 'tenant_admin' }
     mockGetTenantBalance.mockResolvedValue({
       success: true,
-      balance: { credit_balance: 0, daily_avg_cost_7d: 0, estimated_days_left: 0 },
+      balance: { credit_balance: 0, daily_avg_cost: 0, daily_avg_cost_7d: 0, estimated_days_left: 0, renewal_pending: true },
     })
 
     const { checkCreditBeforeAction } = useCreditCheck()
@@ -98,11 +100,11 @@ describe('useCreditCheck', () => {
     expect(mockToast.error).toHaveBeenCalled()
   })
 
-  it('newSession 入口：余额 > 100 放行', async () => {
+  it('余额充足且非待续费：放行且不提示', async () => {
     mockAdmin.value = { user_id: 'u1', role: 'tenant_admin' }
     mockGetTenantBalance.mockResolvedValue({
       success: true,
-      balance: { credit_balance: 500, daily_avg_cost_7d: 10, estimated_days_left: 50 },
+      balance: { credit_balance: 500, daily_avg_cost: 10, daily_avg_cost_7d: 10, estimated_days_left: 50, renewal_pending: false },
     })
 
     const { checkCreditBeforeAction } = useCreditCheck()
@@ -111,6 +113,43 @@ describe('useCreditCheck', () => {
     expect(result.allowed).toBe(true)
     expect(result.reason).toBe('ok')
     expect(mockToast.error).not.toHaveBeenCalled()
+    expect(mockToast.success).not.toHaveBeenCalled()
+  })
+
+  it('login 入口：renewal_pending=true 应提示续费且当天去重', async () => {
+    mockAdmin.value = { user_id: 'u1', role: 'tenant_admin' }
+    mockGetTenantBalance.mockResolvedValue({
+      success: true,
+      balance: { credit_balance: 100, daily_avg_cost: 10, daily_avg_cost_7d: 10, estimated_days_left: 10, renewal_pending: true },
+    })
+
+    const { checkCreditBeforeAction } = useCreditCheck()
+
+    // 第一次调用：提示续费
+    const result1 = await checkCreditBeforeAction('login')
+    expect(result1.allowed).toBe(true)
+    expect(result1.reason).toBe('renewal_pending_warned')
+    expect(mockToast.success).toHaveBeenCalledTimes(1)
+    expect(mockToast.success).toHaveBeenCalledWith('积分余额预计可用 10 天，即将耗尽，请及时续费')
+
+    // 同一天第二次调用：不再重复提示
+    const result2 = await checkCreditBeforeAction('login')
+    expect(result2.allowed).toBe(true)
+    expect(mockToast.success).toHaveBeenCalledTimes(1)
+  })
+
+  it('renewal_pending=true 且预估天数 < 0：文案显示"暂无数据"', async () => {
+    mockAdmin.value = { user_id: 'u1', role: 'tenant_admin' }
+    mockGetTenantBalance.mockResolvedValue({
+      success: true,
+      balance: { credit_balance: 100, daily_avg_cost: 0, daily_avg_cost_7d: 0, estimated_days_left: -1, renewal_pending: true },
+    })
+
+    const { checkCreditBeforeAction } = useCreditCheck()
+    const result = await checkCreditBeforeAction('login')
+
+    expect(result.allowed).toBe(true)
+    expect(mockToast.success).toHaveBeenCalledWith('积分余额预计可用 暂无数据，即将耗尽，请及时续费')
   })
 
   it('平台管理员：跳过检查', async () => {

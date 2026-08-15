@@ -6,7 +6,7 @@
     <div v-if="loading" class="text-center py-12 text-muted">加载中...</div>
 
     <!-- 统计卡片 -->
-    <div v-else class="grid grid-cols-1 md:grid-cols-3 gap-4">
+    <div v-else class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
       <!-- 租户数量 -->
       <button
         type="button"
@@ -54,6 +54,22 @@
         <div class="text-3xl font-bold text-default">{{ stats.today_conversation_count }}</div>
         <div class="text-xs text-muted mt-2">全平台今日对话总数 · 点击查看详情</div>
       </button>
+
+      <!-- 续费提醒 -->
+      <button
+        type="button"
+        class="bg-surface rounded-xl shadow-sm p-6 border border-default hover:border-danger-400 hover:shadow-md transition-all text-left cursor-pointer flex flex-col"
+        @click="goTo('/portal/tenants?renewal=1')"
+      >
+        <div class="flex items-center justify-between mb-3">
+          <span class="text-sm text-muted">续费提醒</span>
+          <svg class="w-5 h-5 text-danger-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 9v4m0 4h.01M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z" />
+          </svg>
+        </div>
+        <div class="text-3xl font-bold text-danger-600">{{ stats.renewal_pending_count }}</div>
+        <div class="text-xs text-muted mt-2">待续费租户 · 点击查看详情</div>
+      </button>
     </div>
 
     <!-- 错误信息 -->
@@ -78,6 +94,7 @@ const stats = ref<DashboardStats>({
   tenant_count: 0,
   monthly_token_usage: 0,
   today_conversation_count: 0,
+  renewal_pending_count: 0,
   month: ''
 })
 

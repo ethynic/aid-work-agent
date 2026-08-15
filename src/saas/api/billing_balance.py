@@ -2,14 +2,14 @@
 租户余额查询与用量明细 API（#37 租户积分充值与计费）
 
 路由：/api/saas/billing/*
-- GET /balance    当前租户积分余额 + 近 7 天日均消耗 + 预估可用天数
+- GET /balance    当前租户积分余额 + 日均消耗（动态 n 天窗口）+ 预估可用天数 + 是否待续费
 - GET /usage      用量明细列表（按日聚合，含 credit_cost）
 - GET /recharges  本租户充值记录列表（只读）
 
 权限：tenant_admin / user / platform_admin（代管理需带 X-Tenant-Id）
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Request, Query
@@ -18,6 +18,7 @@ from loguru import logger
 from src.config.settings import settings
 from src.saas.api.tenant_auth import require_admin, sanitize_error_info
 from src.saas.db.tenant_db import TenantDB
+from src.saas.services.renewal import compute_renewal_status
 from src.db.models import TenantRechargesDB
 from src.db.database import get_db_connection
 
@@ -44,22 +45,17 @@ async def get_balance(request: Request):
             return {"success": False, "message": "租户不存在"}
 
         credit_balance = float(tenant.get("credit_balance") or 0)
-
-        # 近 7 天日均消耗
-        daily_avg_cost_7d = _compute_daily_avg_cost(tenant_id, days=7)
-        estimated_days_left: Optional[int]
-        if daily_avg_cost_7d > 0:
-            estimated_days_left = max(0, int(credit_balance / daily_avg_cost_7d))
-        else:
-            # 日均为 0 时返回 -1（前端可显示"暂无数据"）
-            estimated_days_left = -1 if credit_balance > 0 else 0
+        renewal = compute_renewal_status(tenant)
 
         return {
             "success": True,
             "balance": {
                 "credit_balance": credit_balance,
-                "daily_avg_cost_7d": daily_avg_cost_7d,
-                "estimated_days_left": estimated_days_left,
+                "daily_avg_cost": renewal["daily_avg_cost"],
+                # 兼容旧字段名，值为动态 n 日均（开通 > 30 天取 30，否则取开通天数）
+                "daily_avg_cost_7d": renewal["daily_avg_cost"],
+                "estimated_days_left": renewal["estimated_days_left"],
+                "renewal_pending": renewal["renewal_pending"],
             },
         }
     except Exception as e:
@@ -450,28 +446,3 @@ def _parse_breakdown_items(breakdown) -> list:
             "is_per_million": True,
         },
     ]
-
-
-def _compute_daily_avg_cost(tenant_id: str, days: int = 7) -> float:
-    """计算近 N 天日均积分消耗（2 位小数）
-
-    若 N 天内无消耗记录返回 0.0。
-    """
-    start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d 00:00:00")
-    placeholder = "%s"
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            f"""
-            SELECT COALESCE(SUM(credit_cost), 0) AS total
-            FROM chat_records
-            WHERE tenant_id = {placeholder}
-              AND created_at >= {placeholder}
-            """,
-            (tenant_id, start_date),
-        )
-        row = cursor.fetchone() or {}
-        total_cost = float(row.get("total") or 0)
-    if total_cost <= 0:
-        return 0.0
-    return round(total_cost / days, 2)

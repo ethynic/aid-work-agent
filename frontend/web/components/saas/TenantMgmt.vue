@@ -25,6 +25,15 @@
         </div>
       </div>
 
+      <!-- 待续费过滤提示条 -->
+      <div
+        v-if="renewalFilter"
+        class="mb-2 flex items-center justify-between px-3 py-2 bg-warning-50 border border-warning-200 rounded-lg"
+      >
+        <span class="text-sm text-warning-700">仅显示待续费租户（积分余额不足 7 天用量）</span>
+        <BaseButton intent="ghost" size="sm" @click="clearRenewalFilter">查看全部租户</BaseButton>
+      </div>
+
       <!-- 表格 -->
       <div class="table-scroll-wrapper flex-1 min-h-0">
         <BaseTable :columns="columns" :data="displayTenants" row-key="tenant_id">
@@ -67,6 +76,16 @@
               :title="formatCredit(row.credit_balance) + ' 积分'"
             >
               {{ formatCredit(row.credit_balance) }}
+            </span>
+          </template>
+          <template #daily_avg_cost="{ row }">
+            <span class="text-sm tabular-nums" :title="formatCredit(row.daily_avg_cost) + ' 积分/天'">
+              {{ formatCredit(row.daily_avg_cost) }}
+            </span>
+          </template>
+          <template #estimated_days_left="{ row }">
+            <span :class="getDaysLeftClass(row.estimated_days_left)" class="text-sm tabular-nums">
+              {{ formatEstimatedDays(row.estimated_days_left) }}
             </span>
           </template>
           <template #tenant_url="{ row }">
@@ -468,6 +487,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, inject } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useToast } from 'vue-toastification'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 import { usePageContext } from '@/composables/usePageContext'
@@ -487,6 +507,8 @@ import { formatCredit } from '@/utils/formatCredit'
 
 const toast = useToast()
 const { isLoggedIn, admin } = useTenantAuth()
+const route = useRoute()
+const router = useRouter()
 
 const toggleSidebarFn = inject<() => void>('toggleSidebar')
 function handleToggleSidebar() {
@@ -503,6 +525,8 @@ const columns: TableColumn[] = [
   { key: 'expire_at', label: '到期日期', width: '120px' },
   { key: 'agent_count', label: '数字员工授权', width: '130px' },
   { key: 'credit_balance', label: '积分余额', width: '120px' },
+  { key: 'daily_avg_cost', label: '日均使用积分', width: '110px' },
+  { key: 'estimated_days_left', label: '预估可用天数', width: '130px' },
   { key: 'tenant_url', label: '租户入口网址', width: '280px' },
   { key: 'actions', label: '操作', width: '140px', thAlign: 'center' },
 ]
@@ -580,6 +604,8 @@ const searchInput = ref('')
 const allTenants = ref<any[]>([])
 const displayTenants = ref<any[]>([])
 const total = ref(0)
+// 待续费过滤（仪表盘"续费提醒"卡片跳转 ?renewal=1 进入时启用）
+const renewalFilter = ref(false)
 
 const { currentPage, pageSize, seqNumber } =
   usePageContext(async () => {
@@ -607,6 +633,10 @@ function applyFilterAndPagination() {
       (t.tenant_code && t.tenant_code.toLowerCase().includes(kw)) ||
       (t.initial_admin_phone && t.initial_admin_phone.includes(kw))
     )
+  }
+  // 待续费过滤：仅显示 renewal_pending=true 的租户
+  if (renewalFilter.value) {
+    filtered = filtered.filter(t => t.renewal_pending)
   }
   total.value = filtered.length
   const start = (currentPage.value - 1) * pageSize.value
@@ -650,6 +680,28 @@ function getExpireStatusClass(dateStr: string | undefined): string {
   if (diffDays < 0) return 'text-danger-600 font-medium'
   if (diffDays < 15) return 'text-warning-600 font-medium'
   return 'text-default'
+}
+
+// 预估可用天数格式化：后端 -1 表示暂无数据（无日均消耗）
+function formatEstimatedDays(days: number | null | undefined): string {
+  if (days === null || days === undefined || days < 0) return '暂无数据'
+  return `${days} 天`
+}
+
+// 预估可用天数着色：<7 红、7~30 黄、>30 黑；暂无数据灰字
+function getDaysLeftClass(days: number | null | undefined): string {
+  if (days === null || days === undefined || days < 0) return 'text-muted'
+  if (days < 7) return 'text-danger-600 font-medium'
+  if (days < 31) return 'text-warning-600 font-medium'
+  return 'text-default'
+}
+
+// 关闭待续费过滤并回到全量列表（同时清理 URL 上的 ?renewal=1）
+function clearRenewalFilter() {
+  renewalFilter.value = false
+  router.replace({ query: {} })
+  currentPage.value = 1
+  applyFilterAndPagination()
 }
 
 function openAddDialog() {
@@ -1035,6 +1087,8 @@ async function copyTenantUrl(tenantId: string) {
 }
 
 onMounted(() => {
+  // 仪表盘"续费提醒"卡片跳转 ?renewal=1 进入时启用待续费过滤
+  renewalFilter.value = route.query.renewal === '1'
   loadAllTenants().then(() => applyFilterAndPagination())
 })
 </script>

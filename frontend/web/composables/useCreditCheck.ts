@@ -1,10 +1,10 @@
 /**
- * 积分余额检查 composable（#37 Phase 4 余额报警）
+ * 积分余额检查 composable（续费提醒）
  *
  * 提供 `checkCreditBeforeAction(action)` 在关键动作前检查余额：
- * - 余额 ≤ 0：toast.error 阻断动作（sendMessage / newSession 均阻断）
- * - 0 < 余额 ≤ LOW_CREDIT_THRESHOLD：toast.warning 提醒，当天只提醒一次（localStorage 去重）
- * - 余额 > 阈值：放行
+ * - 余额 ≤ 0：toast.error 阻断动作（sendMessage / newSession 均阻断），login 仅提醒不阻断
+ * - 待续费（renewal_pending，余额不足 7 天用量）：toast.success 提醒续费，当天只提醒一次（localStorage 去重）
+ * - 余额充足：放行
  *
  * 三入口调用：
  * 1. 登录成功后（useTenantAuth.setLogin）：action='login'，仅提醒不阻断
@@ -15,10 +15,6 @@
 import { useToast } from 'vue-toastification'
 import { getTenantBalance, type BalanceInfo } from '@/api/billing'
 import { useTenantAuth } from './useTenantAuth'
-import { formatCredit } from '@/utils/formatCredit'
-
-// 低余额提醒阈值
-const LOW_CREDIT_THRESHOLD = 100
 
 // 当天提醒去重 key 前缀，完整 key: `credit_low_warn_{userId}_{YYYY-MM-DD}`
 const LOW_WARN_KEY_PREFIX = 'credit_low_warn_'
@@ -64,18 +60,21 @@ export function useCreditCheck() {
    * 在关键动作前检查积分余额
    *
    * 行为约定：
+   * - 平台管理员：跳过检查（无租户属性），返回 { allowed: true, reason: 'platform_admin_skipped' }
    * - 余额 ≤ 0：
    *   - sendMessage / newSession：toast.error 阻断，返回 { allowed: false }
    *   - login：toast.error 提醒，返回 { allowed: true }（不阻断登录本身）
-   * - 0 < 余额 ≤ 100：toast.warning 提醒（当天仅一次），返回 { allowed: true }
-   * - 余额 > 100：静默放行
+   * - 待续费（renewal_pending，余额不足 7 天用量）：toast.success 提醒续费（当天仅一次），返回 { allowed: true }
+   * - 余额充足：静默放行
    * - 余额获取失败：静默放行（不阻塞用户），返回 { allowed: true, balance: null }
    *
    * @param action 触发场景，决定余额 ≤ 0 时是否真正阻断
    */
   async function checkCreditBeforeAction(action: CreditCheckAction): Promise<CreditCheckResult> {
-    // 平台管理员也参与余额检查（在 /t/{tenant_id} 路径下代管理租户时需要报警）
-    // 若 platform_admin 未带 X-Tenant-Id（在 /portal 路径下），后端返回 success=false，前端静默放行
+    // 平台管理员无租户属性，跳过余额检查（在 /portal 路径下代管理时也无 X-Tenant-Id）
+    if (admin.value?.role === 'platform_admin') {
+      return { allowed: true, balance: null, reason: 'platform_admin_skipped' }
+    }
 
     let balance: BalanceInfo | null = null
     try {
@@ -106,13 +105,15 @@ export function useCreditCheck() {
       return { allowed: true, balance, reason: 'no_credit_warned' }
     }
 
-    // 低余额提醒：当天去重
-    if (creditBalance <= LOW_CREDIT_THRESHOLD) {
+    // 待续费提醒（余额不足 7 天用量）：提示续费，当天去重
+    if (balance.renewal_pending) {
       if (!hasWarnedToday(userId)) {
-        toast.success(`积分余额即将耗尽（剩余 ${formatCredit(creditBalance)} 积分），请尽快联系管理员充值`)
+        const estimatedDays = balance.estimated_days_left ?? -1
+        const daysText = estimatedDays < 0 ? '暂无数据' : `${estimatedDays} 天`
+        toast.success(`积分余额预计可用 ${daysText}，即将耗尽，请及时续费`)
         markWarnedToday(userId)
       }
-      return { allowed: true, balance, reason: 'low_credit_warned' }
+      return { allowed: true, balance, reason: 'renewal_pending_warned' }
     }
 
     return { allowed: true, balance, reason: 'ok' }
@@ -120,6 +121,5 @@ export function useCreditCheck() {
 
   return {
     checkCreditBeforeAction,
-    LOW_CREDIT_THRESHOLD,
   }
 }

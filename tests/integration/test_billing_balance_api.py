@@ -116,11 +116,15 @@ class TestBillingBalanceAPI:
         balance = response["balance"]
         # 余额 = 1000 - 5 = 995
         assert balance["credit_balance"] == 995
-        assert balance["daily_avg_cost_7d"] >= 0
-        # 日均消耗 5/7 ≈ 0.71（round(5/7, 2)）
-        assert balance["daily_avg_cost_7d"] == 0.71
-        # 日均 0.71 且余额 > 0 时返回剩余天数 = int(995 / 0.71) = 1401
-        assert balance["estimated_days_left"] == 1401
+        assert balance["daily_avg_cost"] >= 0
+        # 兼容旧字段 daily_avg_cost_7d，值与动态 n 日均一致
+        assert balance["daily_avg_cost_7d"] == balance["daily_avg_cost"]
+        # 新建租户统计窗口 = 1 天（max(0,1)），日均 = 5/1 = 5.0
+        assert balance["daily_avg_cost"] == 5.0
+        # 日均 5.0 且余额 995 时预估天数 = int(995/5) = 199
+        assert balance["estimated_days_left"] == 199
+        # 余额 > 0 且预估 > 7 天，非待续费
+        assert balance["renewal_pending"] is False
 
     def test_usage_returns_aggregated_items(self, temp_tenant_with_data):
         """/usage 按日聚合返回明细"""

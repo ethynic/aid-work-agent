@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from src.api.auth import get_current_user
 from src.config.settings import settings
 from src.saas.permissions.checker import is_platform_admin
+from src.saas.services.renewal import enrich_tenants_with_renewal
 from src.db.models import ChatRecordDB
 from src.db.database import get_db_connection
 from src.saas.db.tenant_db import TenantDB
@@ -38,6 +39,7 @@ class DashboardStatsResponse(BaseModel):
     tenant_count: int = Field(0, description="正常租户数量（status=active）")
     monthly_token_usage: int = Field(0, description="本月Token用量（全平台 prompt+completion 总和）")
     today_conversation_count: int = Field(0, description="今日对话数量（全平台 chat_records 记录数）")
+    renewal_pending_count: int = Field(0, description="待续费租户数量（积分余额不足 7 天用量）")
     month: str = Field("", description="统计月份，格式 YYYY-MM")
     message: Optional[str] = None
 
@@ -131,10 +133,11 @@ async def get_dashboard_stats(request: Request):
     """
     获取管理后台仪表盘统计数据
 
-    仅平台管理员可访问，返回三个核心指标：
+    仅平台管理员可访问，返回四个核心指标：
     - 正常租户数量（status=active）
     - 本月Token用量（全平台 prompt+completion 总和）
     - 今日对话数量（全平台 chat_records 记录数）
+    - 待续费租户数量（积分余额不足 7 天用量）
     """
     user = get_current_user(request)
     if not user:
@@ -179,10 +182,21 @@ async def get_dashboard_stats(request: Request):
     except Exception as e:
         logger.error(f"获取今日对话数量失败: {e}", exc_info=True)
 
+    # 4. 待续费租户数量：扫描全部 active 租户，统计积分余额不足 7 天用量的租户
+    renewal_pending_count = 0
+    try:
+        renewal_result = TenantDB.list_tenants(status="active", page=1, page_size=10000)
+        active_tenants = renewal_result.get("tenants", [])
+        enrich_tenants_with_renewal(active_tenants)
+        renewal_pending_count = sum(1 for t in active_tenants if t.get("renewal_pending"))
+    except Exception as e:
+        logger.error(f"获取待续费租户数量失败: {e}", exc_info=True)
+
     return DashboardStatsResponse(
         success=True,
         tenant_count=tenant_count,
         monthly_token_usage=monthly_token_usage,
         today_conversation_count=today_conversation_count,
+        renewal_pending_count=renewal_pending_count,
         month=month_str,
     )

@@ -192,7 +192,7 @@ export function useTenantAuth() {
     tenant.value = tenantInfo
 
     // 登录成功后触发余额检查（仅提醒不阻断）
-    // 平台管理员在 /t/{tenant_id} 路径下代管理租户时也需要报警
+    // 平台管理员无租户属性，由 useCreditCheck 内部跳过（reason=platform_admin_skipped）
     // 异步触发，不阻塞登录主流程
     import('./useCreditCheck').then(({ useCreditCheck }) => {
       try {

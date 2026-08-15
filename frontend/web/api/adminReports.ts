@@ -36,6 +36,7 @@ export interface DashboardStats {
   tenant_count: number
   monthly_token_usage: number
   today_conversation_count: number
+  renewal_pending_count: number
   month: string
   message?: string
 }

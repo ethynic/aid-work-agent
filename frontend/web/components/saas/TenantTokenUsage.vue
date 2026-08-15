@@ -37,8 +37,8 @@
             <div class="text-xl font-bold text-primary-600 mt-1">{{ formatCredit(balance?.credit_balance) }}</div>
           </div>
           <div class="bg-surface rounded-lg p-4 border border-default">
-            <div class="text-xs text-muted">近7天日均消耗</div>
-            <div class="text-xl font-bold text-default mt-1">{{ formatCredit(balance?.daily_avg_cost_7d) }}</div>
+            <div class="text-xs text-muted">日均消耗</div>
+            <div class="text-xl font-bold text-default mt-1">{{ formatCredit(balance?.daily_avg_cost) }}</div>
           </div>
           <div class="bg-surface rounded-lg p-4 border border-default">
             <div class="text-xs text-muted">预估可用天数</div>

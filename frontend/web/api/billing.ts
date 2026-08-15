@@ -75,8 +75,13 @@ export interface RechargeStatsResponse {
 
 export interface BalanceInfo {
   credit_balance: number
+  /** 日均积分消耗（动态 n 天窗口：开通 > 30 天取 30，否则取开通天数） */
+  daily_avg_cost: number
+  /** 兼容旧字段，值为动态 n 日均消耗 */
   daily_avg_cost_7d: number
   estimated_days_left: number | null
+  /** 是否待续费：积分余额不足 7 天用量 */
+  renewal_pending: boolean
 }
 
 export interface BalanceResponse {

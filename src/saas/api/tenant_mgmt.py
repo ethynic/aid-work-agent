@@ -20,6 +20,7 @@ import tempfile
 from src.saas.api.tenant_auth import require_admin
 from src.saas.db.tenant_db import TenantDB
 from src.saas.db.subscription_db import SubscriptionDB
+from src.saas.services.renewal import enrich_tenants_with_renewal
 from src.saas.models.tenant import TenantCreate, TenantUpdate
 from src.config.settings import settings
 from src.db.models import UserDB, TokenDB
@@ -173,6 +174,8 @@ async def list_tenants(request: Request, page: int = 1, page_size: int = 20):
         return {"success": False, "message": "权限不足"}
 
     result = TenantDB.list_tenants(page=page, page_size=page_size)
+    # 补充续费状态计算列：日均使用积分 / 预估可用天数 / 是否待续费
+    enrich_tenants_with_renewal(result["tenants"])
     return {"success": True, **result}
 
 
