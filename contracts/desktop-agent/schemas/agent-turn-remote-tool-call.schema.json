@@ -1,0 +1,6 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "agent-turn-remote-tool-call.schema.json", "title": "AgentTurnRemoteToolCall",
+  "type": "object", "additionalProperties": false,
+  "required": ["type", "tool_name", "target", "schema_version", "schema_digest", "arguments", "authorization_ticket"],
+  "properties": { "type": { "const": "remote_tool_call" }, "tool_name": { "type": "string", "minLength": 1 }, "target": { "const": "server" }, "schema_version": { "type": "string" }, "schema_digest": { "type": "string" }, "arguments": { "type": "object" }, "authorization_ticket": { "type": "string", "minLength": 1 } }
+}

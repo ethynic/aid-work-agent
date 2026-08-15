@@ -1,0 +1,1 @@
+{ "$schema":"https://json-schema.org/draft/2020-12/schema", "$id":"remote-tool-events-response.schema.json", "title":"RemoteToolEventsResponse", "type":"object", "additionalProperties":false, "required":["events"], "properties":{"events":{"type":"array","items":{"$ref":"remote-tool-event.schema.json"}}} }

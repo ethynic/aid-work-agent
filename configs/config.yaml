@@ -286,3 +286,11 @@ wecom:
       - "正在为您查询..."
       - "让我核对一下..."
       - "收到，我来看看..."
+
+# Desktop Agent D1：默认关闭；启用时必须通过环境变量提供至少 32 字节的签名密钥。
+desktop_agent:
+  enabled: ${DESKTOP_AGENT_ENABLED:-false}
+  authorization_ticket_secret: ${DESKTOP_AGENT_AUTHORIZATION_SECRET:-}
+  authorization_ticket_ttl_seconds: 120
+  policy_revision: "desktop-d1-v1"
+  allowed_remote_tools: []

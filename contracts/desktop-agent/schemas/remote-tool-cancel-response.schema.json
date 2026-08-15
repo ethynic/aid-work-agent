@@ -1,0 +1,1 @@
+{ "$schema":"https://json-schema.org/draft/2020-12/schema", "$id":"remote-tool-cancel-response.schema.json", "title":"RemoteToolCancelResponse", "type":"object", "additionalProperties":false, "required":["accepted","reason"], "properties":{"accepted":{"type":"boolean"},"reason":{"type":"string"}} }

@@ -1732,6 +1732,12 @@ app.include_router(video_agent_api.router)
 # 本地工具基础设施 M0.3（见 docs/plans/recruiting/m03-implementation-spec.md）
 from src.local_tools import api as local_tools_api  # noqa: E402
 app.include_router(local_tools_api.router)
+
+# Desktop Agent D1 is opt-in. Default production startup neither imports its
+# module nor registers routes; changing the setting requires a process restart.
+if settings.desktop_agent.enabled:
+    from src.desktop_agent import api as desktop_agent_api  # noqa: E402
+    app.include_router(desktop_agent_api.router)
 # app.include_router(context_compression_routes.router)
 
 

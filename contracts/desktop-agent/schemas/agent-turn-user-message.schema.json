@@ -1,0 +1,1 @@
+{ "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "agent-turn-user-message.schema.json", "title": "AgentTurnUserMessage", "type":"object", "additionalProperties":false, "required":["type","content"], "properties":{"type":{"const":"user_message"},"content":{"type":"string","minLength":1}} }

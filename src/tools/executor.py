@@ -36,6 +36,8 @@ class ToolExecutor:
         tool_name: str,
         parameters: Dict[str, Any],
         user_permissions: Optional[List[str]] = None,
+        *,
+        redact_parameter_logs: bool = False,
     ) -> Dict[str, Any]:
         """
         执行工具
@@ -84,6 +86,8 @@ class ToolExecutor:
         try:
             if tool_name == "browser_automation":
                 logger.info("执行工具: browser_automation, 参数已脱敏")
+            elif redact_parameter_logs:
+                logger.info(f"执行工具: {tool_name}, 参数已脱敏")
             else:
                 # 过滤 _ 前缀的注入参数（_trusted_tenant_id/_progress_queue 等），
                 # 避免受信身份与内部对象 repr 落日志
@@ -93,11 +97,15 @@ class ToolExecutor:
             logger.info(f"工具执行成功: {tool_name}")
             return result
         except Exception as e:
-            error_msg = f"工具执行失败: {tool_name}, 错误: {str(e)}"
+            # Desktop arguments may contain credentials. Tool exceptions often
+            # interpolate their inputs, so never log or return exception text on
+            # the explicitly redacted Remote Gateway path.
+            public_error = "Remote tool execution failed" if redact_parameter_logs else str(e)
+            error_msg = f"工具执行失败: {tool_name}, 错误: {public_error}"
             logger.error(error_msg)
             return {
                 "success": False,
-                "error": str(e),
+                "error": public_error,
             }
     
     async def execute_batch(

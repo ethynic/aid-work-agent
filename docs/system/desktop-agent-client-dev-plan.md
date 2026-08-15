@@ -60,8 +60,8 @@
 
 | 里程碑 | 范围 | 可交付状态 | 状态 |
 |---|---|---|---|
-| M0 工程与独立桌面壳 | A～C | Internal Alpha：独立 Shell、登录、云端基础能力可用 | 🔧 进行中 |
-| M1 Desktop Agent 核心 | D1～D3 | Engineering Beta：本地 Coordinator、持久会话、跨端投影与恢复闭环 | ⬜ |
+| M0 工程与独立桌面壳 | A～C | Internal Alpha：独立 Shell、登录、云端基础能力可用 | ✅ 完成 |
+| M1 Desktop Agent 核心 | D1～D3 | Engineering Beta：本地 Coordinator、持久会话、跨端投影与恢复闭环 | 🔧 进行中 |
 | M2 本地工具与产品化 | E1～G | Tool Beta：本机/远端工具、工作台、生命周期与诊断可用 | ⬜ |
 | M3 双平台正式发布 | H/I + K | Signed RC → GA：双平台签名、更新、真机和滚动升级验收完成 | ⬜ |
 
@@ -71,8 +71,8 @@
 |---:|---|---|---|---:|
 | 0 | A Web 目录基线 | `src → web`，双端构建与结构门禁 | ✅ 完成 | — |
 | 1 | B 工程边界与 Shared 基础设施 | alias、依赖规则、测试发现、协议工具链 | ✅ 完成 | 2～3 天 |
-| 2 | C Desktop Shell、启动与登录 | 独立 renderer、启动状态机、双平台 dev smoke | 🔧 开发/独立测试/CR 与 Windows smoke 完成，待 macOS 真机证据 | 5～7 天 |
-| 3 | D1 Agent Turn Protocol 与 Remote Gateway | 语言无关协议、版本协商、服务端远程工具入口 | ⬜ | 7～10 天 |
+| 2 | C Desktop Shell、启动与登录 | 独立 renderer、启动状态机、双平台 dev smoke | ✅ 完成 | 5～7 天 |
+| 3 | D1 Agent Turn Protocol 与 Remote Gateway | 语言无关协议、版本协商、服务端远程工具入口 | ✅ 完成 | 7～10 天 |
 | 4 | D2 Coordinator 与核心对话 | 本地 turn loop、基础对话、多会话与取消恢复 | ⬜ | 8～12 天 |
 | 5 | D3 Event Store、Relay 与故障恢复 | 设备会话权威、投影、fencing、Golden Recovery Matrix | ⬜ | 10～15 天 |
 | 6 | E1 Host Core 与 Runtime 兼容 | 共用 Host Core、隔离进程、既有 Runtime 行为不变 | ⬜ | 7～10 天 |
@@ -253,6 +253,7 @@ npm run smoke
 - Electron bridge 升级为 v3，增加窄启动状态 contract；macOS driver 已完成 traffic-light、Dock activate 生命周期和应用菜单 compile/contract 测试。
 - 独立测试与 Code Review 已完成；Phase B/C 门禁 80/80、Agent Desktop 39/39，Web/Desktop production build、artifact verifier、边界和协议一致性均通过。
 - Windows 已使用锁定的 Electron 43.1.0 完成可执行 smoke，返回 `AGENT_DESKTOP_SMOKE_PASS`；macOS 真机 smoke/固定视口截图仍必须在 macOS arm64 设备补证，不以编译、jsdom 或 Windows 结果代替。
+- 2026-08-14 macOS arm64 真机已完成可执行 smoke、默认/720×500/150%/200% 视口、Dock 关闭恢复、`Command+Q` 和登录页窗口拖动验收；M0 关闭并进入 M1/D1。
 
 ### 估算
 
@@ -286,6 +287,14 @@ Desktop 独立完成最重要的 Agent 使用链路，并让本地 Coordinator �
 - 使用测试客户端完成 `next → remote tool call → result → final` 最小纵向闭环，不依赖 Desktop UI。
 - 重复请求、ticket 篡改/过期/换参、schema 不兼容和服务端滚动升级 contract test 通过。
 - Web/渠道 Cloud Agent 既有入口和工具调用行为不变。
+
+#### D1 实施进度（2026-08-14）
+
+- 已完成语言无关 Agent Turn/Remote Gateway 1.0 schema、TypeScript/Python 同源生成、版本协商与兼容性样例。
+- 已完成隔离且默认关闭的 `/api/desktop/v1` next/catalog/invoke/events/cancel API、授权票据、跨 worker 幂等、审计事件与 cursor SSE replay；默认启动不导入 API、不注册路由，D1 专用表也不进入三个常规更新脚本。
+- 生产 `ExistingAgentBackend` 已通过现有 Agent 的专用分步 seam 完成 `next → remote tool → result → final`，Web/渠道默认 Agent 路径不变。
+- 开发、独立测试与 CodeReview 已完成；D1 24/24、Agent 相邻主控回归 71/71，协议生成、后端启动导入、Web/Desktop 构建与既有客户端门禁通过。真实 PostgreSQL 已验证 DDL 可重复执行并回滚无残留。
+- D1 只完成单 action 顺序闭环；provider 同批多 tool call 会 fail-closed 并要求重新决策，不会静默丢弃或并行执行。worker 硬崩溃恢复、持续 live event tail 和同 session 单写者语义留给 D2/D3。启用前运维需显式执行 repeat-safe `deploy/desktop_agent_d1.sql`、配置密钥/allowlist 并重启。
 
 ### D2：Desktop Local Agent Coordinator 与核心对话（执行阶段 4）
 

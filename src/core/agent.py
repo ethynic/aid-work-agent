@@ -2108,6 +2108,8 @@ class Agent:
         extra_system_prompt: Optional[str] = None,
         _continuation_tool_result: Optional[Dict[str, Any]] = None,
         video_params: Optional[Dict[str, Any]] = None,
+        _defer_tool_names: Optional[set[str]] = None,
+        _deferred_tool_call_id: Optional[str] = None,
     ) -> AsyncGenerator[dict, None]:
         """
         Process a user message and yield AgentEvent dicts (trace-wrapped).
@@ -2164,6 +2166,8 @@ class Agent:
                 cancel_check=cancel_check,
                 extra_system_prompt=extra_system_prompt,
                 _continuation_tool_result=_continuation_tool_result,
+                _defer_tool_names=_defer_tool_names,
+                _deferred_tool_call_id=_deferred_tool_call_id,
             ):
                 if trace_collector:
                     try:
@@ -2222,6 +2226,8 @@ class Agent:
         cancel_check: Optional[Callable[[], bool]] = None,
         extra_system_prompt: Optional[str] = None,
         _continuation_tool_result: Optional[Dict[str, Any]] = None,
+        _defer_tool_names: Optional[set[str]] = None,
+        _deferred_tool_call_id: Optional[str] = None,
     ) -> AsyncGenerator[dict, None]:
         """
         Process a user message and yield AgentEvent dicts.
@@ -2592,6 +2598,26 @@ class Agent:
         
         if not _continuation_tool_result:
             self.memory.add(session_id, "user", enhanced_input)
+        elif _defer_tool_names is not None:
+            continuation_tool_call_id = str(_continuation_tool_result.get("tool_call_id") or "")
+            if not continuation_tool_call_id:
+                raise RuntimeError("CONTINUATION_TOOL_CALL_REQUIRED")
+            raw_history = self.memory.get_context(session_id)
+            unresolved_ids: set[str] = set()
+            for message in raw_history:
+                if message.get("role") == "assistant":
+                    unresolved_ids.update(str(call.get("id")) for call in message.get("tool_calls", []) if call.get("id"))
+                elif message.get("role") == "tool":
+                    unresolved_ids.discard(str(message.get("tool_call_id") or ""))
+            if continuation_tool_call_id not in unresolved_ids:
+                raise RuntimeError("CONTINUATION_CONTEXT_LOST")
+            # 在清洗/重排前接入结构化 tool result，使 assistant(tool_calls)
+            # 与 tool 消息成对进入模型；默认 Web/渠道首轮不经过此分支。
+            self.memory.add_message(session_id, {
+                "role": "tool",
+                "tool_call_id": continuation_tool_call_id,
+                "content": _continuation_tool_result.get("content"),
+            })
 
         # 检测用户"记住"意图，写入长期记忆
         await self._handle_remember_intent(user_input, user)
@@ -2633,7 +2659,9 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
         # 记录本轮开始时 messages 的长度，用于末尾收集本轮新增的 tool 消息序列。
         # continuation 不制造新的 user 消息，只把恢复结果接回原 tool_call_id。
         initial_len = len(messages)
-        if _continuation_tool_result:
+        if _continuation_tool_result and _defer_tool_names is None:
+            # 原有 Web/渠道/browser continuation 路径：保持修改前的历史扫描、
+            # tool result 插入顺序与清洗语义不变。
             continuation_tool_call_id = str(
                 _continuation_tool_result.get("tool_call_id") or ""
             )
@@ -2662,6 +2690,9 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
             }
             messages.append(tool_message)
             self.memory.add_message(session_id, tool_message)
+        elif _continuation_tool_result:
+            # D1 在 _build_messages 前配对，因此最后一条已是本次 tool result。
+            initial_len = len(messages) - 1
 
         max_iterations = 20  # Prevent infinite loops
         iteration = 0
@@ -2679,6 +2710,10 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                 return
             
             tools = self._get_tools()
+            # Desktop D1 的分步调用仅向模型暴露 Gateway 明确允许的工具。
+            # 默认 None 保持既有 Web/渠道工具集合与执行路径完全不变。
+            if _defer_tool_names is not None:
+                tools = [tool for tool in tools if tool.get("name") in _defer_tool_names]
             
             if settings.app.llm_debug:
                 logger.debug(f"\n{'='*60}\n"
@@ -2843,6 +2878,24 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                     "name": tool_name,
                     "arguments": tool_args
                 })
+
+            # D1 contract 每个 next 只承载一个 action，无法无损表达 provider
+            # 同一次返回的并行 tool calls。明确 fail-loud，禁止静默丢弃或重复执行。
+            if _defer_tool_names is not None and valid_tool_calls:
+                if len(valid_tool_calls) > 1:
+                    raise RuntimeError("DESKTOP_MULTIPLE_TOOL_CALLS_UNSUPPORTED")
+                # valid_tool_calls may not align with tool_calls[0] when a provider
+                # emitted an empty/malformed call before the one valid call. Persist
+                # the raw call that produced the selected normalized call.
+                selected_id = valid_tool_calls[0]["id"]
+                tool_calls = [
+                    call for call in tool_calls if call.get("id") == selected_id
+                ]
+                if len(tool_calls) != 1:
+                    raise RuntimeError("DESKTOP_TOOL_CALL_NORMALIZATION_FAILED")
+                if _deferred_tool_call_id:
+                    valid_tool_calls[0]["id"] = _deferred_tool_call_id
+                    tool_calls[0]["id"] = _deferred_tool_call_id
             
             # If no valid tool calls, we're done
             if not valid_tool_calls:
@@ -2900,6 +2953,29 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
             
             # Save assistant message with tool calls to memory
             self.memory.add_message(session_id, assistant_message)
+
+            if _defer_tool_names is not None:
+                deferred = valid_tool_calls[0]
+                deferred_messages = []
+                for message in messages[initial_len:]:
+                    if message.get("role") == "assistant" and message.get("tool_calls"):
+                        deferred_messages.append({
+                            "role": "assistant",
+                            "content": message.get("content", ""),
+                            "tool_calls": message["tool_calls"],
+                            **({"reasoning_content": message["reasoning_content"]} if message.get("reasoning_content") else {}),
+                        })
+                    elif message.get("role") == "tool":
+                        deferred_messages.append({"role": "tool", "tool_call_id": message["tool_call_id"], "content": message["content"]})
+                if deferred_messages:
+                    yield make_event("tool_messages", messages=deferred_messages, suspended=True)
+                yield make_event(
+                    "desktop_remote_tool_call",
+                    toolName=deferred["name"],
+                    toolArgs=deferred["arguments"],
+                    toolCallId=deferred["id"],
+                )
+                return
             
             # Execute each tool call
             tool_results = []
@@ -3478,17 +3554,23 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
         tool_call_id: str,
         result: Dict[str, Any],
         user: Optional[User] = None,
+        defer_tool_names: Optional[set[str]] = None,
+        deferred_tool_call_id: Optional[str] = None,
     ) -> AsyncGenerator[dict, None]:
         """从已持久化的 assistant(tool_calls) 接回一次工具结果并继续 LLM。"""
-        async for event in self.process_message(
-            user_input="",
-            session_id=session_id,
-            user=user,
-            _continuation_tool_result={
+        process_kwargs = {
+            "user_input": "",
+            "session_id": session_id,
+            "user": user,
+            "_continuation_tool_result": {
                 "tool_call_id": tool_call_id,
                 "content": result,
             },
-        ):
+        }
+        if defer_tool_names is not None:
+            process_kwargs["_defer_tool_names"] = defer_tool_names
+            process_kwargs["_deferred_tool_call_id"] = deferred_tool_call_id
+        async for event in self.process_message(**process_kwargs):
             yield event
     
     async def process_message_sync(

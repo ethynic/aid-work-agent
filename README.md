@@ -1,5 +1,7 @@
 # AID Work Agent
 
+> Desktop Agent D1 隔离在 `/api/desktop/v1`，默认关闭。默认启动不导入 D1 API、不注册路由，也不会由常规部署创建 D1 数据表。启用前由运维显式执行 `deploy/desktop_agent_d1.sql`，再配置 32 字节以上 `DESKTOP_AGENT_AUTHORIZATION_SECRET`、Remote Tool allowlist 与 `DESKTOP_AGENT_ENABLED=true`，重启服务生效；现有 Web/渠道路径不依赖 D1。
+
 企业员工智能代理系统 - V1.0 MVP版本
 
 ## 简介

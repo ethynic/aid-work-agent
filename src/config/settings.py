@@ -370,6 +370,15 @@ class ClientConfig(BaseModel):
     llm_request_timeout: int = 120
 
 
+class DesktopAgentConfig(BaseModel):
+    """Desktop D1 is disabled until a strong server-side ticket secret is provided."""
+    enabled: bool = False
+    authorization_ticket_secret: str = ""
+    authorization_ticket_ttl_seconds: int = 120
+    policy_revision: str = "desktop-d1-v1"
+    allowed_remote_tools: List[str] = Field(default_factory=list)
+
+
 class Settings(BaseModel):
     """全局配置"""
     app: AppConfig = Field(default_factory=AppConfig)
@@ -388,6 +397,7 @@ class Settings(BaseModel):
     billing: BillingConfig = Field(default_factory=BillingConfig)
     video_gen: VideoGenConfig = Field(default_factory=VideoGenConfig)
     client: ClientConfig = Field(default_factory=ClientConfig)
+    desktop_agent: DesktopAgentConfig = Field(default_factory=DesktopAgentConfig)
 
     # 认证相关配置（从环境变量加载）
     qb_token: str = ""  # 平台管理员超级token（明文，仅用于向后兼容，推荐使用 qb_token_hash）
@@ -529,6 +539,14 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
         yaml_config.setdefault("app", {})["debug"] = True
     if os.getenv("PUBLIC_BASE_URL"):
         yaml_config.setdefault("app", {})["public_base_url"] = os.getenv("PUBLIC_BASE_URL")
+
+    desktop_cfg = yaml_config.setdefault("desktop_agent", {})
+    if os.getenv("DESKTOP_AGENT_ENABLED") is not None:
+        desktop_cfg["enabled"] = os.getenv("DESKTOP_AGENT_ENABLED", "").lower() in ("true", "1", "yes")
+    if os.getenv("DESKTOP_AGENT_AUTHORIZATION_SECRET") is not None:
+        desktop_cfg["authorization_ticket_secret"] = os.getenv("DESKTOP_AGENT_AUTHORIZATION_SECRET")
+    if os.getenv("DESKTOP_AGENT_ALLOWED_REMOTE_TOOLS") is not None:
+        desktop_cfg["allowed_remote_tools"] = [item.strip() for item in os.getenv("DESKTOP_AGENT_ALLOWED_REMOTE_TOOLS", "").split(",") if item.strip()]
 
     # 文件上传大小限制（.env 中单位为 MB，代码内部转换为字节）
     if os.getenv("STORAGE_MAX_KNOWLEDGE_FILE_SIZE"):

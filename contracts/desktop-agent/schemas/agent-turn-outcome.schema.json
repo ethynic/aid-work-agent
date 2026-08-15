@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agent-turn-outcome.schema.json",
+  "title": "AgentTurnOutcome",
+  "oneOf": [
+    { "$ref": "agent-turn-final.schema.json" },
+    { "$ref": "agent-turn-clarification.schema.json" },
+    { "$ref": "agent-turn-local-tool-call.schema.json" },
+    { "$ref": "agent-turn-remote-tool-call.schema.json" }
+  ]
+}

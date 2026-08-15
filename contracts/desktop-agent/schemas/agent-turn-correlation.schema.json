@@ -4,10 +4,17 @@
   "title": "AgentTurnCorrelation",
   "type": "object",
   "additionalProperties": false,
-  "required": ["request_id", "session_id", "turn_id"],
+  "required": ["task_id", "session_ref", "execution_id", "attempt_id", "action_id", "invocation_id", "artifact_id", "evidence_stream_id", "release_id", "policy_decision_id"],
   "properties": {
-    "request_id": { "type": "string", "minLength": 1 },
-    "session_id": { "type": "string", "minLength": 1 },
-    "turn_id": { "type": "string", "minLength": 1 }
+    "task_id": { "type": "string", "minLength": 1 },
+    "session_ref": { "type": "string", "minLength": 1 },
+    "execution_id": { "type": "string", "minLength": 1 },
+    "attempt_id": { "type": "string", "minLength": 1 },
+    "action_id": { "type": "string", "minLength": 1 },
+    "invocation_id": { "type": "string", "minLength": 1 },
+    "artifact_id": { "type": "string", "minLength": 1 },
+    "evidence_stream_id": { "type": "string", "minLength": 1 },
+    "release_id": { "type": "string", "minLength": 1 },
+    "policy_decision_id": { "type": "string", "minLength": 1 }
   }
 }
