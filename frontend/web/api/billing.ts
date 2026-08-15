@@ -222,6 +222,18 @@ export async function listTenantRecharges(params: {
 
 // ==================== 平台管理员：每日用量明细下钻 ====================
 
+/** usage_breakdown 的 6 分项对账结构（仅平台管理员返回） */
+export interface BreakdownItem {
+  key: 'non_cached_input' | 'cached_input' | 'output' | 'video' | 'asr' | 'embedding'
+  label: string
+  qty: number | null
+  unit_price: number | null
+  usage_factor: number | null
+  credit: number | null
+  /** 单价是否为每百万类（chat 三分项 / embedding），展示时需 ÷1M 换算 */
+  is_per_million: boolean
+}
+
 export interface DailyUsageDetailItem {
   record_id: string
   session_id: string
@@ -230,10 +242,11 @@ export interface DailyUsageDetailItem {
   source_type: string
   user_message: string
   assistant_message: string
-  // 以下三字段仅平台管理员可见，租户管理员调用时不返回
+  // 以下字段仅平台管理员可见，租户管理员调用时不返回
   prompt_tokens?: number
   cached_input_tokens?: number
   completion_tokens?: number
+  breakdown_items?: BreakdownItem[]
   credit_cost: number
   created_at: string
 }

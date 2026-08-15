@@ -9,6 +9,8 @@
 - 分页参数 page=2, page_size=20 正确传给 SQL
 """
 
+import json
+
 import pytest
 import uuid
 from datetime import datetime
@@ -72,11 +74,13 @@ def _insert_chat_record(
     cached_input_tokens: int = 0,
     source_type: str = "chat",
     created_at: str | None = None,
+    usage_breakdown: dict | None = None,
 ):
     """直接 SQL 写入 chat_records，绕过 ChatRecordDB.create 的余额扣减逻辑"""
     from src.db.database import get_db_connection
 
     record_id = f"rec_{uuid.uuid4().hex[:12]}"
+    breakdown_json = json.dumps(usage_breakdown) if usage_breakdown else None
     with get_db_connection() as conn:
         cursor = conn.cursor()
         if created_at:
@@ -85,14 +89,15 @@ def _insert_chat_record(
                 INSERT INTO chat_records
                 (record_id, session_id, tenant_id, user_id, user_message, assistant_message,
                  prompt_tokens, completion_tokens, cached_input_tokens,
-                 model, status, source_type, credit_cost, created_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 model, status, source_type, credit_cost, created_at, usage_breakdown)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     record_id, session_id, tenant_id, user_id,
                     "测试消息", "测试回复",
                     prompt_tokens, completion_tokens, cached_input_tokens,
                     "test-model", "completed", source_type, credit_cost, created_at,
+                    breakdown_json,
                 ),
             )
         else:
@@ -101,14 +106,15 @@ def _insert_chat_record(
                 INSERT INTO chat_records
                 (record_id, session_id, tenant_id, user_id, user_message, assistant_message,
                  prompt_tokens, completion_tokens, cached_input_tokens,
-                 model, status, source_type, credit_cost)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 model, status, source_type, credit_cost, usage_breakdown)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     record_id, session_id, tenant_id, user_id,
                     "测试消息", "测试回复",
                     prompt_tokens, completion_tokens, cached_input_tokens,
                     "test-model", "completed", source_type, credit_cost,
+                    breakdown_json,
                 ),
             )
         conn.commit()
@@ -201,8 +207,230 @@ class TestDailyUsageDetailAPI:
             assert "prompt_tokens" in it
             assert "cached_input_tokens" in it
             assert "completion_tokens" in it
+            assert "breakdown_items" in it, "平台管理员应返回 usage_breakdown 6 分项"
             assert "credit_cost" in it
             assert "created_at" in it
+
+    def test_platform_admin_breakdown_items_parsed(self, temp_tenant_for_detail):
+        """场景 1b：带 usage_breakdown 的记录 -> 平台管理员返回固定 6 分项对账结构
+
+        验证 chat 三分项（未命中缓存输入/命中缓存输入/输出）、视频模型、ASR、向量模型
+        的 qty / unit_price / usage_factor / credit / is_per_million 均正确解析，
+        且缺失分项（video/embedding）字段为 None（前端按 "-" 兜底）。
+        """
+        from src.saas.api import billing_balance
+
+        tenant_id = temp_tenant_for_detail
+        today = datetime.now().strftime("%Y-%m-%d")
+
+        breakdown = {
+            "chat": {
+                "non_cached_input_tokens": 641,
+                "cached_input_tokens": 217088,
+                "completion_tokens": 123,
+                "total_tokens": 217852,
+                "model": "deepseek-v4-flash",
+                "credit": 1.24,
+                "unit_prices": {"input_per_m": 3, "cached_input_per_m": 0.1, "output_per_m": 9},
+                "usage_factor": 50,
+                "credits": {
+                    "non_cached_input": 0.09615,
+                    "cached_input": 1.08544,
+                    "output": 0.05535,
+                },
+            },
+            "asr": {
+                "calls": 1,
+                "model": "aliyun-nls-asr",
+                "credit": 1,
+                "usage_factor": 100,
+                "unit_price_per_call": 0.01,
+            },
+        }
+        _insert_chat_record(
+            tenant_id=tenant_id,
+            user_id=f"detail_test_{uuid.uuid4().hex[:6]}",
+            session_id=f"sess_{uuid.uuid4().hex[:8]}",
+            credit_cost=3,
+            usage_breakdown=breakdown,
+        )
+
+        def fake_require_admin(request):
+            return {
+                "user_id": "platform_admin_xxx",
+                "role": "platform_admin",
+                "tenant_id": tenant_id,
+            }
+
+        class FakeRequest:
+            pass
+
+        with patch("src.saas.api.billing_balance.require_admin", fake_require_admin), \
+             patch("src.saas.api.billing_balance.settings") as mock_settings:
+            mock_settings.saas.enabled = True
+
+            import asyncio
+            response = asyncio.get_event_loop().run_until_complete(
+                billing_balance.get_daily_usage_detail(
+                    FakeRequest(),
+                    date=today,
+                    page=1,
+                    page_size=20,
+                )
+            )
+
+        assert response["success"] is True
+        # 找到刚插入的记录，校验 6 分项结构
+        items = [it for it in response["items"] if it["credit_cost"] == 3]
+        assert len(items) == 1
+        bd = items[0]["breakdown_items"]
+        assert len(bd) == 6, "应返回固定 6 分项"
+
+        # 6 分项 key 与标签
+        assert [it["key"] for it in bd] == [
+            "non_cached_input", "cached_input", "output", "video", "asr", "embedding",
+        ]
+
+        # chat 三分项：每百万单价 + 系数 + 积分
+        non_cached = bd[0]
+        assert non_cached["qty"] == 641
+        assert non_cached["unit_price"] == 3
+        assert non_cached["usage_factor"] == 50
+        assert non_cached["credit"] == 0.09615
+        assert non_cached["is_per_million"] is True
+
+        cached = bd[1]
+        assert cached["qty"] == 217088
+        assert cached["unit_price"] == 0.1
+        assert cached["usage_factor"] == 50
+        assert cached["credit"] == 1.08544
+        assert cached["is_per_million"] is True
+
+        output = bd[2]
+        assert output["qty"] == 123
+        assert output["unit_price"] == 9
+        assert output["usage_factor"] == 50
+        assert output["credit"] == 0.05535
+        assert output["is_per_million"] is True
+
+        # 缺失分项（video/embedding）字段为 None
+        video = bd[3]
+        assert video["qty"] is None
+        assert video["unit_price"] is None
+        assert video["usage_factor"] is None
+        assert video["credit"] is None
+        assert video["is_per_million"] is False
+
+        # ASR：每单位单价（元/次），无需 ÷1M
+        asr = bd[4]
+        assert asr["qty"] == 1
+        assert asr["unit_price"] == 0.01
+        assert asr["usage_factor"] == 100
+        assert asr["credit"] == 1
+        assert asr["is_per_million"] is False
+
+        embedding = bd[5]
+        assert embedding["qty"] is None
+        assert embedding["is_per_million"] is True
+
+    def test_platform_admin_old_breakdown_degrades_to_qty(self, temp_tenant_for_detail):
+        """场景 1c：老数据（2026-08-14 前）usage_breakdown 无单价/系数/分项积分
+
+        验证 chat 分项只有 prompt/completion/cached token 时：
+        - non_cached_input qty 用 prompt - cached 兜底计算；
+        - unit_price / usage_factor / credit 均为 None（前端降级只显示数量）。
+        """
+        from src.saas.api import billing_balance
+
+        tenant_id = temp_tenant_for_detail
+        today = datetime.now().strftime("%Y-%m-%d")
+
+        old_breakdown = {
+            "chat": {
+                "prompt_tokens": 1000,
+                "completion_tokens": 200,
+                "cached_input_tokens": 600,
+                "total_tokens": 1200,
+                "model": "deepseek-v4-flash",
+                "credit": 1.0,
+            },
+            "embedding": {
+                "tokens": 500,
+                "model": "text-embedding-v3",
+                "credit": 0.1,
+            },
+            "asr": {
+                "calls": 2,
+                "model": "aliyun-nls-asr",
+                "credit": 0.2,
+            },
+        }
+        _insert_chat_record(
+            tenant_id=tenant_id,
+            user_id=f"detail_test_{uuid.uuid4().hex[:6]}",
+            session_id=f"sess_{uuid.uuid4().hex[:8]}",
+            credit_cost=2,
+            usage_breakdown=old_breakdown,
+        )
+
+        def fake_require_admin(request):
+            return {
+                "user_id": "platform_admin_xxx",
+                "role": "platform_admin",
+                "tenant_id": tenant_id,
+            }
+
+        class FakeRequest:
+            pass
+
+        with patch("src.saas.api.billing_balance.require_admin", fake_require_admin), \
+             patch("src.saas.api.billing_balance.settings") as mock_settings:
+            mock_settings.saas.enabled = True
+
+            import asyncio
+            response = asyncio.get_event_loop().run_until_complete(
+                billing_balance.get_daily_usage_detail(
+                    FakeRequest(),
+                    date=today,
+                    page=1,
+                    page_size=20,
+                )
+            )
+
+        assert response["success"] is True
+        items = [it for it in response["items"] if it["credit_cost"] == 2]
+        assert len(items) == 1
+        bd = items[0]["breakdown_items"]
+        assert len(bd) == 6
+
+        # chat 三分项：数量可追溯，单价/系数/分项积分缺失
+        non_cached = bd[0]
+        assert non_cached["qty"] == 400, "老数据 non_cached_input 应为 prompt - cached = 1000 - 600"
+        assert non_cached["unit_price"] is None
+        assert non_cached["usage_factor"] is None
+        assert non_cached["credit"] is None
+
+        cached = bd[1]
+        assert cached["qty"] == 600
+        assert cached["unit_price"] is None
+
+        output = bd[2]
+        assert output["qty"] == 200
+        assert output["unit_price"] is None
+
+        # video 分项老数据不存在 -> qty None（前端显示 "-"）
+        assert bd[3]["qty"] is None
+
+        # asr / embedding 老数据有数量字段（calls / tokens），但无单价/系数
+        asr = bd[4]
+        assert asr["qty"] == 2
+        assert asr["unit_price"] is None
+        assert asr["usage_factor"] is None
+
+        embedding = bd[5]
+        assert embedding["qty"] == 500
+        assert embedding["unit_price"] is None
+        assert embedding["usage_factor"] is None
 
     def test_tenant_admin_success_without_token_fields(self, temp_tenant_for_detail):
         """场景 2：tenant_admin 调用 -> success: True，但不返回 token 三列

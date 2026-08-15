@@ -109,6 +109,12 @@
               <template #assistant_message="{ row }">
                 <span :title="row.assistant_message">{{ truncateText(row.assistant_message) }}</span>
               </template>
+              <template #bd_non_cached_input="{ row }">{{ formatBreakdown(row, 'non_cached_input') }}</template>
+              <template #bd_cached_input="{ row }">{{ formatBreakdown(row, 'cached_input') }}</template>
+              <template #bd_output="{ row }">{{ formatBreakdown(row, 'output') }}</template>
+              <template #bd_video="{ row }">{{ formatBreakdown(row, 'video') }}</template>
+              <template #bd_asr="{ row }">{{ formatBreakdown(row, 'asr') }}</template>
+              <template #bd_embedding="{ row }">{{ formatBreakdown(row, 'embedding') }}</template>
               <template #credit_cost="{ row }">
                 <span class="text-danger-600 font-medium">{{ formatCredit(row.credit_cost) }}</span>
               </template>
@@ -148,7 +154,8 @@ import {
   type BalanceInfo,
   type UsageItem,
   type UsageSummary,
-  type DailyUsageDetailItem
+  type DailyUsageDetailItem,
+  type BreakdownItem
 } from '@/api/billing'
 
 const route = useRoute()
@@ -280,9 +287,19 @@ const detailCurrentPage = ref(1)
 const detailPageSize = ref(20)
 const detailDate = ref('')
 
-// 弹窗列定义：输入Token / 命中缓存 / 输出Token 三列仅平台管理员可见
+// usage_breakdown 6 分项列（仅平台管理员）：dataKey 对应 breakdown_items 的分项 key
+const bdDetailCols = [
+  { key: 'bd_non_cached_input', dataKey: 'non_cached_input', label: '未命中缓存输入', width: '220px' },
+  { key: 'bd_cached_input', dataKey: 'cached_input', label: '命中缓存输入', width: '220px' },
+  { key: 'bd_output', dataKey: 'output', label: '输出', width: '190px' },
+  { key: 'bd_video', dataKey: 'video', label: '视频模型', width: '180px' },
+  { key: 'bd_asr', dataKey: 'asr', label: 'ASR', width: '170px' },
+  { key: 'bd_embedding', dataKey: 'embedding', label: '向量模型', width: '220px' },
+]
+
+// 弹窗列定义：usage_breakdown 6 分项（未命中缓存输入/命中缓存输入/输出/视频模型/ASR/向量模型）仅平台管理员可见
 const detailColumns = computed(() => {
-  const cols: Array<{ key: string; label: string; width: string }> = [
+  const cols: Array<{ key: string; label: string; width: string; tooltip?: (row: Record<string, any>) => string | undefined }> = [
     { key: 'index', label: '序号', width: '60px' },
     { key: 'created_at', label: '创建时间', width: '160px' },
     { key: 'session_title', label: '会话标题', width: '180px' },
@@ -292,11 +309,13 @@ const detailColumns = computed(() => {
     { key: 'source_type', label: '来源', width: '120px' },
   ]
   if (isPlatformAdmin.value) {
-    cols.push(
-      { key: 'prompt_tokens', label: '输入Token', width: '110px' },
-      { key: 'cached_input_tokens', label: '命中缓存', width: '110px' },
-      { key: 'completion_tokens', label: '输出Token', width: '110px' },
-    )
+    bdDetailCols.forEach((c) => cols.push({
+      key: c.key,
+      label: c.label,
+      width: c.width,
+      // 公式较长可能在列宽内截断，悬停显示完整对账公式
+      tooltip: (row: Record<string, any>) => formatBreakdown(row, c.dataKey),
+    }))
   }
   cols.push({ key: 'credit_cost', label: '消耗积分', width: '100px' })
   return cols
@@ -306,6 +325,32 @@ function truncateText(text: string | null | undefined, maxLen: number = 30): str
   if (!text) return '-'
   if (text.length <= maxLen) return text
   return text.slice(0, maxLen) + '...'
+}
+
+// 数值格式化：整数加千分位，小数保留 6 位去尾零
+function fmtNum(v: number | string | null | undefined): string {
+  if (v === null || v === undefined || v === '') return '-'
+  const num = typeof v === 'string' ? parseFloat(v) : Number(v)
+  if (isNaN(num)) return '-'
+  if (Number.isInteger(num)) return num.toLocaleString('en-US')
+  return String(Number(num.toFixed(6)))
+}
+
+// 渲染 usage_breakdown 分项：
+// - 新数据（含单价/系数/分项积分）：{数量} * {单价} * {系数} / 1M = {积分}（每百万类）/ {数量} * {单价} * {系数} = {积分}
+// - 老数据（8-14 前无单价/系数/分项积分）：降级只显示数量（token数/秒数/次数）
+function formatBreakdown(row: Record<string, any>, key: string): string {
+  const items: BreakdownItem[] = row.breakdown_items || []
+  const item = items.find(i => i.key === key)
+  if (!item) return '-'
+  const { qty, unit_price, usage_factor, credit } = item
+  if (qty === null || qty === undefined) return '-'
+  // 老数据：仅数量可追溯，单价/系数/分项积分缺失时只显示数量
+  if (unit_price === null || unit_price === undefined || usage_factor === null || usage_factor === undefined || credit === null || credit === undefined) {
+    return fmtNum(qty)
+  }
+  const base = `${fmtNum(qty)} * ${fmtNum(unit_price)} * ${fmtNum(usage_factor)}`
+  return item.is_per_million ? `${base} / 1M = ${fmtNum(credit)}` : `${base} = ${fmtNum(credit)}`
 }
 
 function openDetailModal(row: UsageItem | Record<string, any>) {

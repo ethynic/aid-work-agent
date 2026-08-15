@@ -288,6 +288,7 @@ async def get_daily_usage_detail(
                     cr.cached_input_tokens,
                     cr.completion_tokens,
                     cr.credit_cost,
+                    cr.usage_breakdown,
                     cr.created_at
                 FROM chat_records cr
                 LEFT JOIN users u ON u.user_id = cr.user_id
@@ -338,11 +339,12 @@ async def get_daily_usage_detail(
                     "created_at": r.get("created_at").strftime("%Y-%m-%d %H:%M:%S")
                         if r.get("created_at") else None,
                 })
-                # token 三列仅平台管理员可见，租户管理员不返回
+                # token 三列 + usage_breakdown 6 分项仅平台管理员可见，租户管理员不返回
                 if reveal_tokens:
                     items[-1]["prompt_tokens"] = int(r.get("prompt_tokens") or 0)
                     items[-1]["cached_input_tokens"] = int(r.get("cached_input_tokens") or 0)
                     items[-1]["completion_tokens"] = int(r.get("completion_tokens") or 0)
+                    items[-1]["breakdown_items"] = _parse_breakdown_items(r.get("usage_breakdown"))
 
         return {
             "success": True,
@@ -358,6 +360,97 @@ async def get_daily_usage_detail(
 
 
 # ============== 辅助函数 ==============
+
+def _parse_breakdown_items(breakdown) -> list:
+    """把 chat_records.usage_breakdown JSON 解析为 6 分项对账结构（仅平台管理员明细弹框使用）。
+
+    返回固定 6 项列表，每项：
+    {
+        "key": 分项标识（non_cached_input / cached_input / output / video / asr / embedding）,
+        "label": 分项中文名,
+        "qty": 数量（token / 秒 / 次），
+        "unit_price": 单价原始值（每百万 token 或 每秒/每次），
+        "usage_factor": 用量系数,
+        "credit": 积分消耗,
+        "is_per_million": 单价是否为每百万类（chat 三分项 / embedding，前端需 ÷1M 换算）,
+    }
+    无对应分项或字段缺失时为 None，前端按 "-" 兜底（旧记录无 unit_prices/usage_factor/credits）。
+    """
+    breakdown = breakdown or {}
+    chat = breakdown.get("chat") or breakdown.get("summary_llm") or {}
+    video = breakdown.get("video") or {}
+    asr = breakdown.get("asr") or {}
+    emb = breakdown.get("embedding") or {}
+
+    unit_prices = chat.get("unit_prices") or {}
+    credits = chat.get("credits") or {}
+    chat_factor = chat.get("usage_factor")
+
+    # 老数据（2026-08-14 前）chat 分项无 non_cached_input_tokens 单独字段，
+    # 用 prompt_tokens - cached_input_tokens 兜底计算（cached 缺失视为 0 -> 即全量 prompt）
+    non_cached_qty = chat.get("non_cached_input_tokens")
+    if non_cached_qty is None and chat.get("prompt_tokens") is not None:
+        non_cached_qty = max(
+            int(chat.get("prompt_tokens") or 0) - int(chat.get("cached_input_tokens") or 0), 0
+        )
+
+    return [
+        {
+            "key": "non_cached_input",
+            "label": "未命中缓存输入",
+            "qty": non_cached_qty,
+            "unit_price": unit_prices.get("input_per_m"),
+            "usage_factor": chat_factor,
+            "credit": credits.get("non_cached_input"),
+            "is_per_million": True,
+        },
+        {
+            "key": "cached_input",
+            "label": "命中缓存输入",
+            "qty": chat.get("cached_input_tokens"),
+            "unit_price": unit_prices.get("cached_input_per_m"),
+            "usage_factor": chat_factor,
+            "credit": credits.get("cached_input"),
+            "is_per_million": True,
+        },
+        {
+            "key": "output",
+            "label": "输出",
+            "qty": chat.get("completion_tokens"),
+            "unit_price": unit_prices.get("output_per_m"),
+            "usage_factor": chat_factor,
+            "credit": credits.get("output"),
+            "is_per_million": True,
+        },
+        {
+            "key": "video",
+            "label": "视频模型",
+            "qty": video.get("duration_seconds"),
+            "unit_price": video.get("unit_price_per_second"),
+            "usage_factor": video.get("usage_factor"),
+            "credit": video.get("credit"),
+            "is_per_million": False,
+        },
+        {
+            "key": "asr",
+            "label": "ASR",
+            "qty": asr.get("calls"),
+            "unit_price": asr.get("unit_price_per_call"),
+            "usage_factor": asr.get("usage_factor"),
+            "credit": asr.get("credit"),
+            "is_per_million": False,
+        },
+        {
+            "key": "embedding",
+            "label": "向量模型",
+            "qty": emb.get("tokens"),
+            "unit_price": emb.get("unit_price_per_m"),
+            "usage_factor": emb.get("usage_factor"),
+            "credit": emb.get("credit"),
+            "is_per_million": True,
+        },
+    ]
+
 
 def _compute_daily_avg_cost(tenant_id: str, days: int = 7) -> float:
     """计算近 N 天日均积分消耗（2 位小数）
