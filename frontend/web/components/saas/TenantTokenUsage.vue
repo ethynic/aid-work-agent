@@ -111,6 +111,7 @@
               </template>
               <template #bd_non_cached_input="{ row }">{{ formatBreakdown(row, 'non_cached_input') }}</template>
               <template #bd_cached_input="{ row }">{{ formatBreakdown(row, 'cached_input') }}</template>
+              <template #bd_cache_creation_input="{ row }">{{ formatBreakdown(row, 'cache_creation_input') }}</template>
               <template #bd_output="{ row }">{{ formatBreakdown(row, 'output') }}</template>
               <template #bd_video="{ row }">{{ formatBreakdown(row, 'video') }}</template>
               <template #bd_asr="{ row }">{{ formatBreakdown(row, 'asr') }}</template>
