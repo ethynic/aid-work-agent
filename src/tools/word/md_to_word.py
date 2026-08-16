@@ -77,7 +77,9 @@ def _convert_sync(md_text: str, template: Optional[str] = None,
 
     doc = _pandoc_convert(normalized, reference_doc=reference_doc,
                           title=title, author=author)
-    _ensure_cjk_fonts(doc)
+    # 从 reference doc 提取 Normal 样式默认中文字体，未定义时回退 SimSun
+    default_cjk_font = _extract_reference_default_cjk_font(reference_doc) or "SimSun"
+    _ensure_cjk_fonts(doc, cjk_font=default_cjk_font)
     # 从 reference doc 模板复制表格内联格式（边框、底色、字体）
     if reference_doc:
         _apply_template_table_style(doc, reference_doc)
@@ -400,14 +402,62 @@ def _pandoc_convert(md_text: str, reference_doc: Optional[str] = None,
 # ============== CJK 字体后处理 ==============
 
 
+def _extract_reference_default_cjk_font(reference_doc_path: Optional[str]) -> Optional[str]:
+    """读取 reference doc Normal 样式中定义的 eastAsia 中文字体。
+
+    客户模板常在 Normal 样式上指定中文字体（如微软雅黑/仿宋），
+    提取后作为输出文档 run 级兜底默认值，避免被硬编码 SimSun 覆盖。
+    文件不存在/打开异常/未设置 eastAsia 时返回 None（不抛异常），调用方回退默认。
+    """
+    if not reference_doc_path or not Path(reference_doc_path).exists():
+        return None
+
+    try:
+        ref_doc = Document(reference_doc_path)
+        normal_style = ref_doc.styles["Normal"]
+        rPr = normal_style.element.find(qn('w:rPr'))
+        if rPr is None:
+            return None
+        rFonts = rPr.find(qn('w:rFonts'))
+        if rFonts is None:
+            return None
+        return rFonts.get(qn('w:eastAsia'))
+    except Exception as e:
+        logger.warning(f"[md_to_word] 读取参考模板默认中文字体失败: {e}")
+        return None
+
+
+def _style_chain_defines_cjk(style, max_depth: int = 3) -> bool:
+    """检查样式链（style 及 base style，向上至多 max_depth 层防循环）是否定义了 eastAsia 字体。"""
+    current = style
+    for _ in range(max_depth):
+        if current is None:
+            return False
+        element = getattr(current, "element", None)
+        if element is not None:
+            rPr = element.find(qn('w:rPr'))
+            if rPr is not None:
+                rFonts = rPr.find(qn('w:rFonts'))
+                if rFonts is not None and rFonts.get(qn('w:eastAsia')) is not None:
+                    return True
+        current = current.base_style
+    return False
+
+
 def _ensure_cjk_fonts(doc: Document, cjk_font: str = "SimSun") -> None:
-    """确保文档中所有 run 都设置了 eastAsia 字体。
+    """确保文档中所有 run 都设置了 eastAsia 字体（样式感知）。
 
     Pandoc 不设置 w:rFonts w:eastAsia 属性，
     导致中文字符可能回退到非预期字体。
+    仅当 run 自身无 run 级 eastAsia 且其所在段落样式链
+    （style 及 base style，向上至多 3 层）也未定义 eastAsia 时，
+    才写 run 级默认值——这样模板标题/正样式中定义的中文字体不被覆盖。
     """
     def _fix_runs(paragraphs):
         for para in paragraphs:
+            if _style_chain_defines_cjk(para.style):
+                # 样式链已定义中文字体，run 级不写默认值，交给样式继承
+                continue
             for run in para.runs:
                 rPr = run._element.get_or_add_rPr()
                 rFonts = rPr.find(qn('w:rFonts'))

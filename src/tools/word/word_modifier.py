@@ -11,7 +11,12 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.text.paragraph import Paragraph
 
-from src.tools.word.word_lib import replace_text_cross_run, StyleManager
+from src.tools.word.word_lib import (
+    StyleManager,
+    iter_all_paragraphs,
+    paragraph_text_runs,
+    replace_text_cross_run,
+)
 
 
 def batch_modify(doc: Document, operations: list) -> Dict[str, Any]:
@@ -51,27 +56,19 @@ def execute_modify_op(doc: Document, op: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _op_replace_text(doc: Document, op: Dict[str, Any]) -> Dict[str, Any]:
-    """全局查找替换文本（支持跨 run 匹配）"""
+    """全局查找替换文本（支持跨 run 匹配）。
+
+    遍历全文档段落（iter_all_paragraphs：含嵌套表格、文本框、内容控件、
+    页眉页脚），并用 paragraph_text_runs 覆盖超链接内的 run，顶层语义不变。
+    """
     target = op.get("target", "")
     replacement = op.get("replacement", "")
     count = 0
 
-    for para in doc.paragraphs:
-        if target in para.text:
-            count += replace_text_cross_run(para.runs, target, replacement)
-
-    for table in doc.tables:
-        for row in table.rows:
-            for cell in row.cells:
-                for para in cell.paragraphs:
-                    if target in para.text:
-                        count += replace_text_cross_run(para.runs, target, replacement)
-
-    for section in doc.sections:
-        for hf in [section.header, section.footer]:
-            for para in hf.paragraphs:
-                if target in para.text:
-                    count += replace_text_cross_run(para.runs, target, replacement)
+    for para in iter_all_paragraphs(doc):
+        runs = paragraph_text_runs(para)
+        if runs and target in "".join(r.text for r in runs):
+            count += replace_text_cross_run(runs, target, replacement)
 
     return {"op": "replace_text", "success": True, "replacements": count}
 

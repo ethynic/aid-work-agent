@@ -255,9 +255,10 @@ Agent 调用:
 4. md_to_word - 将Markdown文本转换为Word文档
 5. modify - 修改Word文档内容（替换文本、增删段落/表格等）
 6. format - 格式化Word文档（字体、段落格式、页面设置、页眉页脚）
-7. fill_template - 填充Word模板中的变量占位符（{{变量名}} 或 [变量名]）
+7. fill_template - 填充Word模板中的变量占位符（支持多语法：{{x}}/{x}/【x】/[x]/%x%；variables 值可为字符串，也可为数组按表格行循环填充）
 8. list_templates - 列出可用的文档模板
 9. diff - 对比两个Word文档的差异
+10. scan_placeholders - 扫描Word模板中的占位符变量
 
 ## 判断规则
 
@@ -266,6 +267,7 @@ Agent 调用:
 - context 要求修改/编辑/替换 Word 文件 → modify
 - context 要求格式化/排版 Word 文件 → format
 - context 要求填充模板/替换变量 → fill_template
+- context 要求查看/列出模板里有哪些占位符/变量/待填项 → scan_placeholders（可与 fill_template 组合：先扫描再填充）
 - context 要求对比/比较两个文件 → diff
 - context 要求查看模板 → list_templates
 - 有文件且只要求转为 Markdown → word_to_md
@@ -361,7 +363,8 @@ class WordRouter:
 | md_to_word | context(Markdown) + params(template, title, output_name) | download_url |
 | modify | file_paths + params.operations | download_url |
 | format | file_paths + params.format_operations | download_url |
-| fill_template | file_paths + params.variables | download_url |
+| fill_template | file_paths + params.variables（值可为字符串或数组） | download_url + 替换反馈 |
+| scan_placeholders | file_paths | 占位符列表（name/syntax/count）+ 变量名列表 |
 | list_templates | 无 | 模板列表 |
 | diff | file_paths(2个) + params.output_format | 差异报告 |
 
@@ -476,3 +479,31 @@ API 层绕过 Agent 和内部 LLM，直接调用子模块。保持现有设计�
 3. **Agent 传的 context 质量不稳定**：Agent 可能传简短的描述而非完整内容。工具描述中已强调必须传完整内容，但仍需在工具内部做防御性检查
 4. **LLM 调用成本**：每次 word 工具调用多一次 LLM 请求（~200 token），成本可控
 5. **Markdown 转 Word 的表格渲染**：已支持 `**bold**`、`<br>` 换行、列宽自动分配，但复杂 Markdown（嵌套表格、合并单元格）仍有限制
+
+---
+
+## 10. 格式参考生成（客户 docx 模板）
+
+场景：用户上传 Word 模板 docx，要求按该模板的整体格式（样式/页边距/页眉页脚/表格样式）生成新文档。底层走 Pandoc `--reference-doc`（`md_to_word._convert_sync` 的 `template` 参数传 .docx 路径），链路要点：
+
+1. **路由层**（`word_router.py`）：file_paths 中有 .docx 且 context 要求按该文件的格式/样式/模板生成 → `md_to_word` + `params.template_file`（file_paths 中该 docx 的原样路径/file_id）。仅要求读取/修改该 docx 本身时不走此分支。
+2. **执行层**（`word_process_tool._handle_md_to_word`）：`template_file` 走 `_resolve_file` 解析（file_id→Redis 元数据、多目录兜底），失败 fail loud 返回「格式参考模板解析失败」，不静默回退默认模板；优先于命名模板 `template`（命名模板的静默回退语义保留）。md 来源守卫：`file_paths[0]` 为 .docx/.doc 时是格式参考，不作为 Markdown 源读取。
+3. **CJK 字体保真**（`md_to_word.py`）：`_extract_reference_default_cjk_font` 提取参考模板 Normal 样式的 eastAsia 作为 run 级兜底默认（未定义回退 SimSun）；`_ensure_cjk_fonts` 样式感知——仅当 run 无 run 级 eastAsia 且段落样式链（至多 3 层）也未定义时才写默认值，模板样式中定义的中文字体（微软雅黑/仿宋等）不被覆盖。
+
+---
+
+## 11. 占位符多语法与行循环填充
+
+`fill_template` / `scan_placeholders`（`template_manager.py`）的占位符引擎能力（2026-08-15 增强）：
+
+1. **多语法识别**：`{{x}}`（允许内侧空格 `{{ x }}`）、`{x}`、`【x】`、`[x]`、`%x%`，按语法优先级匹配（`{{x}}` 内部的 `{x}` 不重复识别）；按原文实际出现形式逐串替换，正文普通方括号引用 `[1]`、百分数 `100%` 不误伤。`[x]`/`%x%` 按启发式过滤（变量名须为标识符样式：字母/数字/下划线/中文、长度 ≥2 且至少含一个字母/中文/下划线，剔除 `[1]` 纯数字与含标点串）；误报匹配不占用字符区间，`%x%` 逐起点配对，裸百分数（如 `立省10%，折扣：%折扣%`）不会吞掉后面的真占位符。
+2. **全文档覆盖**：`word_lib.iter_all_paragraphs` 用 `body.iter(qn('w:p'))` 一把抓正文段落（含嵌套表格、`w:sdt` 内容控件、`w:txbxContent` 文本框）+ 各 section 页眉页脚（含 first_page/even_page）内全部段落；`paragraph_text_runs` 额外覆盖 `w:hyperlink`、`w:ins` 内的 run，修复超链接占位符漏替换。脚注/尾注在独立 part，明确不支持。`word_modifier` 的 `replace_text` 同步复用该迭代器。
+3. **占位符扫描**：`scan_placeholders` 返回 `[{name, syntax, count}]`（count 降序）+ 去重变量名列表，供 Agent 填充前先查看模板待填项；`word_process` 路由为 `scan_placeholders` 操作（只读，不产生新文件，无需 cp）。
+4. **替换反馈**：`fill_template` 返回 `{total, per_variable, unmatched_variables（提供了但没匹配到）, remaining_placeholders（没提供的仍留在文档）}`，静默漏填可见。
+5. **表格行循环**：`{{#列表名}}` ... `{{/列表名}}` 标记行区间，`variables[列表名]` 为 `List[Dict]` 时区间模板行按条数 deepcopy 复制并逐条替换字段（条目字段 > 全局变量兜底），空列表删除区间行；同名循环只处理第一个；同表多个循环按文档序选取、倒序展开（先行展开增删行不使后续区间行号失效）。
+
+### 11.1 能力边界（设计决策，明确不做）
+
+以下能力**永远不会实现**（2026-08-16 产品决策）：条件块（`{{#if}}`）、图片/富文本占位符值、脚注/尾注、vMerge 跨行循环、段落级循环。
+
+理由：模板引擎的职责边界是**确定性简单替换**（占位符 + 明细行循环，到此为止）；更复杂的文档结构不应靠增加模板语法复杂度实现，而应由 Agent 调度现有工具链自行生成——`scan_placeholders`/`read`/`analyze` 理解模板 → `md_to_word`（配合 #62 格式参考）按模板格式生成新内容 → `modify`/`format` 精修。人不需要也不应该搭建「带逻辑的模板」。

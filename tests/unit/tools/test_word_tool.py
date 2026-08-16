@@ -379,12 +379,13 @@ class TestTemplateManager:
         doc.add_paragraph("{{甲方}}和{{乙方}}签订合同")
         doc.add_paragraph("金额：[金额]")
 
-        count = fill_template(doc, {
+        result = fill_template(doc, {
             "甲方": "XX公司",
             "乙方": "YY公司",
             "金额": "50万",
         })
-        assert count >= 3
+        # fill_template 返回替换反馈 Dict（total/per_variable/...）
+        assert result["total"] >= 3
         assert "XX公司" in doc.paragraphs[0].text
         assert "YY公司" in doc.paragraphs[0].text
         assert "50万" in doc.paragraphs[1].text

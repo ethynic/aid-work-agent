@@ -6,6 +6,7 @@ Word 工具核心库
 - 样式操作（StyleManager）
 - 文件操作（WordFileHandler）
 - 跨 run 文本替换算法
+- 全文档段落迭代（iter_all_paragraphs / paragraph_text_runs，覆盖嵌套表格/文本框/超链接）
 """
 
 import json
@@ -17,6 +18,8 @@ from docx import Document
 from docx.shared import Pt, Cm, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
+from docx.text.paragraph import Paragraph
+from docx.text.run import Run
 
 # 常见中文字体映射
 CHINESE_FONTS = {
@@ -129,6 +132,78 @@ def replace_text_cross_run(runs, target: str, replacement: str) -> int:
             runs[run_end].text = runs[run_end].text[char_end + 1:]
 
     return len(occurrences)
+
+
+def iter_all_paragraphs(doc: Document) -> List[Paragraph]:
+    """
+    全文档段落迭代器（文档序），修复只遍历顶层段落/表格时的扫描盲区。
+
+    覆盖范围：
+    - 正文所有 w:p：用 body.iter(qn('w:p')) 递归一把抓，
+      天然包含嵌套表格、内容控件（w:sdt）内的段落、文本框（w:txbxContent）内的段落
+    - 各 section 的页眉/页脚（含 first_page / even_page 变体）中的所有 w:p，
+      同样覆盖其中的表格和文本框段落
+
+    已知限制（明确不支持）：
+    - 脚注/尾注位于独立的 XML part，python-docx 不解析，不在遍历范围内
+
+    Returns:
+        Paragraph 列表（每个 w:p 用 doc 作 parent 包装，本场景只改 run 文本）
+    """
+    paragraphs: List[Paragraph] = []
+
+    # 正文：body 递归迭代覆盖嵌套表格 / sdt / txbxContent 内的所有段落
+    for p_el in doc.element.body.iter(qn('w:p')):
+        paragraphs.append(Paragraph(p_el, doc))
+
+    # 页眉页脚：仅访问有自定义定义的（is_linked_to_previous=False），
+    # 避免触发 python-docx 懒创建空的 header/footer part；个别属性访问可能抛异常，逐个 try
+    for section in doc.sections:
+        for hf in (section.header, section.footer,
+                   section.first_page_header, section.first_page_footer,
+                   section.even_page_header, section.even_page_footer):
+            try:
+                if hf.is_linked_to_previous:
+                    continue
+                for p_el in hf._element.iter(qn('w:p')):
+                    paragraphs.append(Paragraph(p_el, doc))
+            except Exception:
+                continue
+
+    return paragraphs
+
+
+def paragraph_text_runs(para: Paragraph) -> List[Run]:
+    """
+    返回该段落文档序的全部含文本 run，供 replace_text_cross_run 使用。
+
+    与 paragraph.runs 的区别：paragraph.runs 只取 w:p 直接子级的 w:r，
+    本函数额外覆盖 w:hyperlink（超链接）、w:ins（修订插入）等容器内的 run，
+    修复超链接内占位符漏替换的问题。
+
+    注意：run 自身不再下钻（文本框嵌套在 run 的 drawing 内，其段落由
+    iter_all_paragraphs 单独覆盖，避免重复处理）；嵌套 w:p 同样跳过。
+    """
+    runs: List[Run] = []
+    for r_el in _iter_runs_excluding_nested(para._element):
+        run = Run(r_el, para)
+        if run.text:
+            runs.append(run)
+    return runs
+
+
+def _iter_runs_excluding_nested(el):
+    """递归收集元素内文档序的 w:r，不进入 w:r 内部（避免文本框 run 重复），跳过嵌套 w:p"""
+    for child in el.iterchildren():
+        tag = child.tag
+        if tag == qn('w:r'):
+            yield child
+        elif tag == qn('w:p'):
+            # 嵌套段落（文本框内）：由 iter_all_paragraphs 单独覆盖
+            continue
+        elif isinstance(tag, str):
+            # 常规容器（w:hyperlink、w:ins、w:sdt 等）继续下钻；跳过注释等非元素节点
+            yield from _iter_runs_excluding_nested(child)
 
 
 class StyleManager:

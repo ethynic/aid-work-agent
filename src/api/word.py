@@ -256,7 +256,7 @@ async def fill_template(
         from pathlib import Path
 
         doc, info = WordFileHandler.copy_and_open(request.file_path)
-        count = do_fill(doc, request.variables)
+        fill_result = do_fill(doc, request.variables)
 
         output_name = request.output_name or (Path(request.file_path).stem + "_filled.docx")
         save_result = WordFileHandler.save_temp(doc, file_name=output_name)
@@ -269,7 +269,10 @@ async def fill_template(
             "success": True,
             "file_path": save_result["file_path"],
             "file_size": save_result["file_size"],
-            "variables_replaced": count,
+            "variables_replaced": fill_result.get("total", 0),
+            "per_variable": fill_result.get("per_variable", {}),
+            "unmatched_variables": fill_result.get("unmatched_variables", []),
+            "remaining_placeholders": fill_result.get("remaining_placeholders", []),
         }
         if download_info:
             response["file_id"] = download_info["file_id"]
