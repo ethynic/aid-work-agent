@@ -107,6 +107,7 @@ qwen3.5-flash / qwen3.6-flash / qwen3.5-plus / qwen3.7-flash 默认开启**思�
 
 ## 关联文档
 
+- [小米 MiMo-v2.5 平替可行性调研（扩展）](./mimo-v2.5-replacement-research.md)（2026-08-16：mimo-v2.5 满足三条硬约束升格为第二备选，qwen3.7-flash 维持首选）
 - [qwen3.7-flash 平替实施计划](../plans/plan-qwen3-7-flash-replacement.md)
 - [qwen3.7-flash 分段计价开发计划](../plans/plan-qwen3-7-flash-tiered-pricing.md)
 - [LLM 计费接入改造设计](../system/saas/llm-billing-integration-design.md)
