@@ -299,12 +299,12 @@ VALUES ('aliyun-nls-asr', 0.01)
 ON CONFLICT (model_name) DO NOTHING;
 
 -- 分段计价模型单价：qwen3.7-flash 按单次请求输入 token 数分档
--- 档位（百炼官方）：0<T≤32K=输入0.2/输出0.8；32K<T≤256K=0.6/2.4；256K<T≤1M=1.2/4.8；缓存命中按输入价 20%
+-- 档位（百炼官方）：0<T≤32K=输入0.2/输出0.8；32K<T≤256K=0.6/2.4；256K<T≤1M=1.2/4.8；显式缓存命中按输入价 10%（2026-08-16 修正，原 20% 高估成本一倍）
 INSERT INTO token_cost_prices (model_name, tiered_pricing)
 VALUES ('qwen3.7-flash', '[
-  {"max_input": 32768,   "input_per_m": 0.2, "cached_input_per_m": 0.04, "output_per_m": 0.8},
-  {"max_input": 262144,  "input_per_m": 0.6, "cached_input_per_m": 0.12, "output_per_m": 2.4},
-  {"max_input": 1048576, "input_per_m": 1.2, "cached_input_per_m": 0.24, "output_per_m": 4.8}
+  {"max_input": 32768,   "input_per_m": 0.2, "cached_input_per_m": 0.02, "output_per_m": 0.8},
+  {"max_input": 262144,  "input_per_m": 0.6, "cached_input_per_m": 0.06, "output_per_m": 2.4},
+  {"max_input": 1048576, "input_per_m": 1.2, "cached_input_per_m": 0.12, "output_per_m": 4.8}
 ]'::jsonb)
 ON CONFLICT (model_name) DO NOTHING;
 

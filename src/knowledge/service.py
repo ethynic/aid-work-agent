@@ -130,6 +130,7 @@ class KnowledgeBaseService:
         completion_tokens = 0
         total_tokens = 0
         cached_input_tokens = 0
+        cache_creation_input_tokens = 0
         llm_model = None
         llm_credit = 0.0
         if summary_usage:
@@ -137,6 +138,7 @@ class KnowledgeBaseService:
             completion_tokens = int(summary_usage.get("completion_tokens", 0) or 0)
             total_tokens = int(summary_usage.get("total_tokens", 0) or 0)
             cached_input_tokens = int(summary_usage.get("cached_tokens", 0) or 0)
+            cache_creation_input_tokens = int(summary_usage.get("cache_creation_tokens", 0) or 0)
             # 知识库摘要使用主 gateway 默认模型
             try:
                 llm_model = getattr(settings.llm, "model_code", None) or "qwen-plus"
@@ -149,6 +151,7 @@ class KnowledgeBaseService:
                     completion_tokens=completion_tokens,
                     model=llm_model,
                     cached_input_tokens=cached_input_tokens,
+                    cache_creation_input_tokens=cache_creation_input_tokens,
                 )
             except Exception as e:
                 logger.error(f"摘要 LLM 计费计算失败，降级为 0: {e}")

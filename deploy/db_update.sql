@@ -393,3 +393,14 @@ VALUES ('qwen3.7-flash', '[
 ON CONFLICT (model_name) DO UPDATE SET
   tiered_pricing = EXCLUDED.tiered_pricing,
   updated_at = NOW();
+
+-- 2026-08-16，qwen3.7-flash 显式缓存命中单价修正：20% → 10%（百炼官方显式缓存命中按输入价 10% 计费）
+-- 原 cached_input_per_m 按 20% 填入（0.04/0.12/0.24），成本高估一倍；修正为 0.02/0.06/0.12
+UPDATE token_cost_prices SET
+  tiered_pricing = '[
+    {"max_input": 32768,   "input_per_m": 0.2, "cached_input_per_m": 0.02, "output_per_m": 0.8},
+    {"max_input": 262144,  "input_per_m": 0.6, "cached_input_per_m": 0.06, "output_per_m": 2.4},
+    {"max_input": 1048576, "input_per_m": 1.2, "cached_input_per_m": 0.12, "output_per_m": 4.8}
+  ]'::jsonb,
+  updated_at = NOW()
+WHERE model_name = 'qwen3.7-flash';

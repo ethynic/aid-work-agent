@@ -29,6 +29,7 @@ def calculate_credit_cost(
     completion_tokens: int,
     model: Optional[str],
     cached_input_tokens: int = 0,
+    cache_creation_input_tokens: int = 0,
     usage_factor_override: Optional[int] = None,
 ) -> float:
     """计算本轮对话消耗的积分
@@ -38,6 +39,7 @@ def calculate_credit_cost(
         completion_tokens: 输出 token 数
         model: 模型名，用于查询单价
         cached_input_tokens: 命中缓存的输入 token 数（已包含在 prompt_tokens 内）
+        cache_creation_input_tokens: 显式缓存创建 token 数（按输入价 125% 计费）
         usage_factor_override: 用量系数覆盖值；传入时覆盖 settings.billing.usage_factor，
             不传时维持原行为（读 settings.billing.usage_factor，默认 100）
 
@@ -49,6 +51,7 @@ def calculate_credit_cost(
         completion_tokens=completion_tokens,
         model=model,
         cached_input_tokens=cached_input_tokens,
+        cache_creation_input_tokens=cache_creation_input_tokens,
         usage_factor_override=usage_factor_override,
     )
     return credit_cost
@@ -196,6 +199,7 @@ def calculate_credit_cost_with_breakdown(
     completion_tokens: int,
     model: Optional[str],
     cached_input_tokens: int = 0,
+    cache_creation_input_tokens: int = 0,
     usage_factor_override: Optional[int] = None,
 ) -> tuple:
     """计算本轮对话消耗的积分，并返回分项单价/积分 breakdown。
@@ -207,6 +211,7 @@ def calculate_credit_cost_with_breakdown(
         "usage_factor": int,
         "credits": {"non_cached_input": float, "cached_input": float, "output": float},
     }
+    cache_creation_input_tokens 按输入单价 125% 计费（显式缓存创建，百炼官方口径）。
     单价缺失或 model 为空时返回 (0.0, {})。
     """
     if not model:
@@ -233,19 +238,23 @@ def calculate_credit_cost_with_breakdown(
     prompt_tokens = prompt_tokens or 0
     completion_tokens = completion_tokens or 0
     cached_input_tokens = cached_input_tokens or 0
+    cache_creation_input_tokens = cache_creation_input_tokens or 0
 
     if has_cached_price:
-        non_cached_input = max(prompt_tokens - cached_input_tokens, 0)
+        non_cached_input = max(prompt_tokens - cached_input_tokens - cache_creation_input_tokens, 0)
         non_cached_input_cost = non_cached_input * input_price / 1_000_000
         cached_input_cost = cached_input_tokens * cached_input_price / 1_000_000
+        # 显式缓存创建按输入价 125% 计费（百炼官方口径）
+        creation_input_cost = cache_creation_input_tokens * input_price * 1.25 / 1_000_000
         output_cost = completion_tokens * output_price / 1_000_000
     else:
         non_cached_input = prompt_tokens
         non_cached_input_cost = prompt_tokens * input_price / 1_000_000
         cached_input_cost = 0.0
+        creation_input_cost = 0.0
         output_cost = completion_tokens * output_price / 1_000_000
 
-    token_cost = non_cached_input_cost + cached_input_cost + output_cost
+    token_cost = non_cached_input_cost + cached_input_cost + creation_input_cost + output_cost
     if token_cost <= 0:
         return 0.0, {}
 
@@ -257,12 +266,14 @@ def calculate_credit_cost_with_breakdown(
         "unit_prices": {
             "input_per_m": input_price,
             "cached_input_per_m": cached_input_price if has_cached_price else None,
+            "cache_creation_input_per_m": round(input_price * 1.25, 6) if has_cached_price else None,
             "output_per_m": output_price,
         },
         "usage_factor": usage_factor,
         "credits": {
             "non_cached_input": round(non_cached_input_cost * usage_factor, 6),
             "cached_input": round(cached_input_cost * usage_factor, 6),
+            "cache_creation_input": round(creation_input_cost * usage_factor, 6),
             "output": round(output_cost * usage_factor, 6),
         },
     }
@@ -313,6 +324,7 @@ def calculate_llm_credit_cost_with_breakdown(
             completion_tokens=sum(int(c.get("completion_tokens", 0) or 0) for c in usage_calls),
             model=model,
             cached_input_tokens=sum(int(c.get("cached_tokens", 0) or 0) for c in usage_calls),
+            cache_creation_input_tokens=sum(int(c.get("cache_creation_tokens", 0) or 0) for c in usage_calls),
             usage_factor_override=usage_factor_override,
         )
 
@@ -325,39 +337,49 @@ def calculate_llm_credit_cost_with_breakdown(
     # 逐轮取档，累加「单价 × token 数」加权和（中间量，/1e6 后为元）与各分项 token 数
     sum_input = 0.0
     sum_cached = 0.0
+    sum_creation = 0.0
     sum_output = 0.0
     w_input = 0
     w_cached = 0
+    w_creation = 0
     w_output = 0
     total_prompt = 0
     total_completion = 0
     total_cached = 0
+    total_creation = 0
     for c in usage_calls:
         prompt = int(c.get("prompt_tokens", 0) or 0)
         completion = int(c.get("completion_tokens", 0) or 0)
         cached = int(c.get("cached_tokens", 0) or 0)
+        creation = int(c.get("cache_creation_tokens", 0) or 0)
         total_prompt += prompt
         total_completion += completion
         total_cached += cached
+        total_creation += creation
         tier = _pick_tier(tiers, prompt)
         cached_raw = tier.get("cached_input_per_m")
         has_cached = cached_raw is not None
         if has_cached:
-            non_cached = max(prompt - cached, 0)
+            non_cached = max(prompt - cached - creation, 0)
         else:
             non_cached = prompt
             cached = 0
+            creation = 0
         input_price = float(tier.get("input_per_m") or 0)
         output_price = float(tier.get("output_per_m") or 0)
         cached_price = float(cached_raw) if has_cached else 0.0
+        # 显式缓存创建按输入价 125% 计费（百炼官方口径），与命中（10%）分开核算
+        creation_price = input_price * 1.25
         sum_input += non_cached * input_price
         sum_cached += cached * cached_price
+        sum_creation += creation * creation_price
         sum_output += completion * output_price
         w_input += non_cached
         w_cached += cached
+        w_creation += creation
         w_output += completion
 
-    token_cost = (sum_input + sum_cached + sum_output) / 1_000_000
+    token_cost = (sum_input + sum_cached + sum_creation + sum_output) / 1_000_000
     if token_cost <= 0:
         return 0.0, {}
 
@@ -373,16 +395,19 @@ def calculate_llm_credit_cost_with_breakdown(
         "prompt_tokens": total_prompt,
         "completion_tokens": total_completion,
         "cached_input_tokens": total_cached,
+        "cache_creation_input_tokens": total_creation,
         "non_cached_input_tokens": w_input,
         "unit_prices": {
             "input_per_m": _merged_price(sum_input, w_input),
             "cached_input_per_m": _merged_price(sum_cached, w_cached),
+            "cache_creation_input_per_m": _merged_price(sum_creation, w_creation),
             "output_per_m": _merged_price(sum_output, w_output),
         },
         "usage_factor": usage_factor,
         "credits": {
             "non_cached_input": round(sum_input / 1_000_000 * usage_factor, 6),
             "cached_input": round(sum_cached / 1_000_000 * usage_factor, 6),
+            "cache_creation_input": round(sum_creation / 1_000_000 * usage_factor, 6),
             "output": round(sum_output / 1_000_000 * usage_factor, 6),
         },
     }

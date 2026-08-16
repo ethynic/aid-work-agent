@@ -111,6 +111,8 @@ class SessionRecordService:
         self.prompt_tokens = 0
         self.completion_tokens = 0
         self.cached_input_tokens = 0
+        # 显式缓存创建 token（cache_control 首条消息触发，按输入价 125% 计费）
+        self.cache_creation_input_tokens = 0
 
         # Embedding / ASR 用量（LLM 计费接入改造 2026-08-12）
         self.embedding_tokens = 0
@@ -205,11 +207,13 @@ class SessionRecordService:
             self.completion_tokens += usage.get("completion_tokens", 0)
             self.total_token_count += usage.get("total_tokens", 0)
             self.cached_input_tokens += usage.get("cached_tokens", 0)
+            self.cache_creation_input_tokens += usage.get("cache_creation_tokens", 0)
             # 每轮调用快照（分段计价模型 save() 时按单次请求输入逐轮查档；非分段模型仍走累计原逻辑）
             self._llm_usages.append({
                 "prompt_tokens": int(usage.get("prompt_tokens", 0) or 0),
                 "completion_tokens": int(usage.get("completion_tokens", 0) or 0),
                 "cached_tokens": int(usage.get("cached_tokens", 0) or 0),
+                "cache_creation_tokens": int(usage.get("cache_creation_tokens", 0) or 0),
             })
             self._llm_call_count += 1
 
@@ -347,6 +351,7 @@ class SessionRecordService:
                         "prompt_tokens": self.prompt_tokens,
                         "completion_tokens": self.completion_tokens,
                         "cached_tokens": self.cached_input_tokens,
+                        "cache_creation_tokens": self.cache_creation_input_tokens,
                     }]
                 chat_credit_cost, chat_bd = calculate_llm_credit_cost_with_breakdown(
                     usage_calls=usage_calls,
@@ -389,6 +394,7 @@ class SessionRecordService:
                 "prompt_tokens": self.prompt_tokens,
                 "completion_tokens": self.completion_tokens,
                 "cached_input_tokens": self.cached_input_tokens,
+                "cache_creation_input_tokens": self.cache_creation_input_tokens,
                 "total_tokens": self.total_token_count,
                 "model": self.model,
                 "credit": round(chat_credit_cost, 2),
@@ -396,6 +402,7 @@ class SessionRecordService:
             if chat_bd:
                 usage_breakdown["chat"].update({
                     "non_cached_input_tokens": chat_bd.get("non_cached_input_tokens", 0),
+                    "cache_creation_input_tokens": chat_bd.get("cache_creation_input_tokens", self.cache_creation_input_tokens),
                     "unit_prices": chat_bd.get("unit_prices", {}),
                     "usage_factor": chat_bd.get("usage_factor"),
                     "credits": chat_bd.get("credits", {}),
@@ -604,6 +611,7 @@ def _persist_background_llm_record(
         completion_tokens = int(usage.get("completion_tokens", 0) or 0)
         total_tokens = int(usage.get("total_tokens", 0) or 0)
         cached_input_tokens = int(usage.get("cached_tokens", 0) or 0)
+        cache_creation_input_tokens = int(usage.get("cache_creation_tokens", 0) or 0)
 
         # 模型优先级：调用方显式传入 model > mid_term 摘要模型（历史兜底）
         # mid_term 走独立 provider 用 summary_llm.model；工具路由/技能脚本用
@@ -624,6 +632,7 @@ def _persist_background_llm_record(
                 completion_tokens=completion_tokens,
                 model=llm_model,
                 cached_input_tokens=cached_input_tokens,
+                cache_creation_input_tokens=cache_creation_input_tokens,
             )
         except Exception as billing_err:
             logger.error(f"background_llm 计费计算失败，credit_cost 降级为 0: {billing_err}")
@@ -635,6 +644,7 @@ def _persist_background_llm_record(
                 "prompt_tokens": prompt_tokens,
                 "completion_tokens": completion_tokens,
                 "cached_input_tokens": cached_input_tokens,
+                "cache_creation_input_tokens": cache_creation_input_tokens,
                 "total_tokens": total_tokens,
                 "model": llm_model,
                 "credit": round(credit_cost, 2),
@@ -703,6 +713,7 @@ def record_admin_llm_usage(
         completion_tokens = int(usage.get("completion_tokens", 0) or 0)
         total_tokens = int(usage.get("total_tokens", 0) or 0)
         cached_input_tokens = int(usage.get("cached_tokens", 0) or 0)
+        cache_creation_input_tokens = int(usage.get("cache_creation_tokens", 0) or 0)
 
         if not model:
             try:
@@ -719,6 +730,7 @@ def record_admin_llm_usage(
                 completion_tokens=completion_tokens,
                 model=model,
                 cached_input_tokens=cached_input_tokens,
+                cache_creation_input_tokens=cache_creation_input_tokens,
             )
         except Exception as billing_err:
             logger.error(f"管理后台 LLM 计费计算失败，credit_cost 降级为 0: {billing_err}")
@@ -730,6 +742,7 @@ def record_admin_llm_usage(
                 "prompt_tokens": prompt_tokens,
                 "completion_tokens": completion_tokens,
                 "cached_input_tokens": cached_input_tokens,
+                "cache_creation_input_tokens": cache_creation_input_tokens,
                 "total_tokens": total_tokens,
                 "model": model,
                 "credit": round(credit_cost, 2),

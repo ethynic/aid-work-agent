@@ -289,17 +289,18 @@ const detailCurrentPage = ref(1)
 const detailPageSize = ref(20)
 const detailDate = ref('')
 
-// usage_breakdown 6 分项列（仅平台管理员）：dataKey 对应 breakdown_items 的分项 key
+// usage_breakdown 7 分项列（仅平台管理员）：dataKey 对应 breakdown_items 的分项 key
 const bdDetailCols = [
   { key: 'bd_non_cached_input', dataKey: 'non_cached_input', label: '未命中缓存输入', width: '220px' },
   { key: 'bd_cached_input', dataKey: 'cached_input', label: '命中缓存输入', width: '220px' },
+  { key: 'bd_cache_creation_input', dataKey: 'cache_creation_input', label: '缓存创建输入', width: '220px' },
   { key: 'bd_output', dataKey: 'output', label: '输出', width: '190px' },
   { key: 'bd_video', dataKey: 'video', label: '视频模型', width: '180px' },
   { key: 'bd_asr', dataKey: 'asr', label: 'ASR', width: '170px' },
   { key: 'bd_embedding', dataKey: 'embedding', label: '向量模型', width: '220px' },
 ]
 
-// 弹窗列定义：usage_breakdown 6 分项（未命中缓存输入/命中缓存输入/输出/视频模型/ASR/向量模型）仅平台管理员可见
+// 弹窗列定义：usage_breakdown 7 分项（未命中缓存输入/命中缓存输入/缓存创建输入/输出/视频模型/ASR/向量模型）仅平台管理员可见
 const detailColumns = computed(() => {
   const cols: Array<{ key: string; label: string; width: string; tooltip?: (row: Record<string, any>) => string | undefined }> = [
     { key: 'index', label: '序号', width: '60px' },

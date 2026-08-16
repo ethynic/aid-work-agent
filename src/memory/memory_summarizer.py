@@ -324,6 +324,7 @@ def _record_background_llm_billing(
         completion_tokens = int(usage.get("completion_tokens", 0) or 0)
         total_tokens = int(usage.get("total_tokens", 0) or 0)
         cached_input_tokens = int(usage.get("cached_tokens", 0) or 0)
+        cache_creation_input_tokens = int(usage.get("cache_creation_tokens", 0) or 0)
 
         # 后台任务使用主 gateway 默认模型
         try:
@@ -337,6 +338,7 @@ def _record_background_llm_billing(
                 completion_tokens=completion_tokens,
                 model=llm_model,
                 cached_input_tokens=cached_input_tokens,
+                cache_creation_input_tokens=cache_creation_input_tokens,
             )
         except Exception as billing_err:
             logger.error(f"background_llm 计费计算失败，credit_cost 降级为 0: {billing_err}")

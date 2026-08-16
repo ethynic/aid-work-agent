@@ -158,6 +158,52 @@ class TestCalculateCreditCost:
             )
             assert result == 0.16
 
+    def test_cache_creation_price_takes_effect(self, fixed_settings):
+        """显式缓存创建按输入价 125% 计费，且从 non_cached 中剔除"""
+        from src.services.billing import calculate_credit_cost_with_breakdown
+
+        with patch("src.services.billing.TokenCostPriceDB") as mock_tcp_db, \
+             patch("src.services.billing.create_settings", return_value=fixed_settings):
+            # input_price=0.8, cached_input_price=0.16（命中 20% 口径），output=2.0
+            mock_tcp_db.get_by_model_name.return_value = _make_tcp(0.8, 2.0, cached_input_price_per_m=0.16)
+            # prompt=1000, cached=400, creation=200, completion=500
+            # non_cached_input = 1000 - 400 - 200 = 400
+            # creation_price = 0.8 * 1.25 = 1.0
+            # token_cost = (400*0.8 + 400*0.16 + 200*1.0 + 500*2.0) / 1e6
+            #            = (320 + 64 + 200 + 1000) / 1e6 = 1584 / 1e6 = 0.001584
+            # credit_cost = ceil(0.001584 * 100 * 100) / 100 = ceil(15.84) / 100 = 16 / 100 = 0.16
+            credit_cost, breakdown = calculate_credit_cost_with_breakdown(
+                prompt_tokens=1000,
+                completion_tokens=500,
+                model="test-model",
+                cached_input_tokens=400,
+                cache_creation_input_tokens=200,
+            )
+            assert credit_cost == 0.16
+            assert breakdown["non_cached_input_tokens"] == 400
+            assert breakdown["unit_prices"]["cache_creation_input_per_m"] == 1.0
+            assert breakdown["credits"]["cache_creation_input"] == pytest.approx(200 * 1.0 / 1_000_000 * 100)
+
+    def test_cache_creation_no_cached_price_fallback(self, fixed_settings):
+        """无缓存单价（cached_input_price_per_m=None）时，缓存创建按 0 计费、归入普通输入"""
+        from src.services.billing import calculate_credit_cost_with_breakdown
+
+        with patch("src.services.billing.TokenCostPriceDB") as mock_tcp_db, \
+             patch("src.services.billing.create_settings", return_value=fixed_settings):
+            mock_tcp_db.get_by_model_name.return_value = _make_tcp(0.8, 2.0, cached_input_price_per_m=None)
+            # prompt=1000, creation=200, completion=0
+            # 无缓存单价走原公式：non_cached=1000 全量按输入价，creation 不参与
+            # token_cost = 1000*0.8/1e6 = 0.0008 -> credit = ceil(8.0)/100 = 0.08
+            credit_cost, breakdown = calculate_credit_cost_with_breakdown(
+                prompt_tokens=1000,
+                completion_tokens=0,
+                model="test-model",
+                cache_creation_input_tokens=200,
+            )
+            assert credit_cost == 0.08
+            assert breakdown["unit_prices"]["cache_creation_input_per_m"] is None
+            assert breakdown["credits"]["cache_creation_input"] == 0.0
+
     def test_cached_input_price_none_fallback(self, fixed_settings):
         """cached_input_price_per_m 为 None 时走原公式：cached_input_tokens 不参与计费"""
         from src.services.billing import calculate_credit_cost
@@ -812,7 +858,8 @@ class TestCalculateAsrCreditCost:
 
 
 # ============== qwen3.7-flash 分段计价（tiered_pricing） ==============
-# 百炼官方三档：0<T≤32K=输入0.2/缓存0.04/输出0.8；32K<T≤256K=0.6/0.12/2.4；256K<T≤1M=1.2/0.24/4.8
+# 百炼官方三档：0<T≤32K=输入0.2/缓存0.02/输出0.8；32K<T≤256K=0.6/0.06/2.4；256K<T≤1M=1.2/0.12/4.8
+# 缓存命中按输入价 10% 计费（cached_input_per_m=0.02/0.06/0.12）；显式缓存创建按输入价 125%（0.25/0.75/1.5）。
 # 计费口径：每轮 LLM 调用（= 一次 API 请求）按该轮输入 token 数取档，逐轮累加成本；
 #           合并后的单价由 {成本价合计}/{token数合计} 反向算出，保证对账自洽。
 
@@ -825,9 +872,9 @@ def _make_tiered_tcp() -> dict:
         "cached_input_price_per_m": None,
         "output_price_per_m": None,
         "tiered_pricing": [
-            {"max_input": 32768,   "input_per_m": 0.2, "cached_input_per_m": 0.04, "output_per_m": 0.8},
-            {"max_input": 262144,  "input_per_m": 0.6, "cached_input_per_m": 0.12, "output_per_m": 2.4},
-            {"max_input": 1048576, "input_per_m": 1.2, "cached_input_per_m": 0.24, "output_per_m": 4.8},
+            {"max_input": 32768,   "input_per_m": 0.2, "cached_input_per_m": 0.02, "output_per_m": 0.8},
+            {"max_input": 262144,  "input_per_m": 0.6, "cached_input_per_m": 0.06, "output_per_m": 2.4},
+            {"max_input": 1048576, "input_per_m": 1.2, "cached_input_per_m": 0.12, "output_per_m": 4.8},
         ],
     }
 
@@ -835,7 +882,8 @@ def _make_tiered_tcp() -> dict:
 class TestTieredSingleCall:
     """calculate_credit_cost_with_breakdown 对 tiered 模型按单次输入 token 取档"""
 
-    def _call(self, prompt_tokens, completion_tokens=0, cached_input_tokens=0, fixed_settings=None):
+    def _call(self, prompt_tokens, completion_tokens=0, cached_input_tokens=0,
+              cache_creation_input_tokens=0, fixed_settings=None):
         from src.services.billing import calculate_credit_cost_with_breakdown
         settings = fixed_settings or MagicMock()
         settings.billing.usage_factor = 100  # MagicMock 上 getattr 会自生成 truthy mock，须显式赋值
@@ -847,6 +895,7 @@ class TestTieredSingleCall:
                 completion_tokens=completion_tokens,
                 model="qwen3.7-flash",
                 cached_input_tokens=cached_input_tokens,
+                cache_creation_input_tokens=cache_creation_input_tokens,
             )
 
     def test_tier1_price(self):
@@ -892,13 +941,26 @@ class TestTieredSingleCall:
         assert breakdown["unit_prices"]["input_per_m"] == 1.2
 
     def test_tier_cached_price(self):
-        """tiered 模型区分缓存命中：cached 部分按该档缓存单价"""
+        """tiered 模型区分缓存命中：cached 部分按该档缓存单价（输入价 10%）"""
         # prompt=1000(档1), cached=400 -> non_cached=600
-        # token_cost = (600*0.2 + 400*0.04 + 0*0.8)/1e6 = (120+16)/1e6 = 0.000136
-        # credit_cost = ceil(0.000136*100*100)/100 = ceil(1.36)/100 = 2/100 = 0.02
+        # token_cost = (600*0.2 + 400*0.02 + 0*0.8)/1e6 = (120+8)/1e6 = 0.000128
+        # credit_cost = ceil(0.000128*100*100)/100 = ceil(1.28)/100 = 2/100 = 0.02
         credit_cost, breakdown = self._call(prompt_tokens=1000, cached_input_tokens=400)
         assert credit_cost == 0.02
-        assert breakdown["unit_prices"]["cached_input_per_m"] == 0.04
+        assert breakdown["unit_prices"]["cached_input_per_m"] == 0.02
+
+    def test_tier_cache_creation_price(self):
+        """tiered 显式缓存创建：按该档输入价 125% 计费，且从 non_cached 中剔除"""
+        # prompt=1000(档1), cached=400, creation=200 -> non_cached=400
+        # token_cost = (400*0.2 + 400*0.02 + 200*0.25 + 0*0.8)/1e6 = (80+8+50)/1e6 = 0.000138
+        # credit_cost = ceil(0.000138*100*100)/100 = ceil(1.38)/100 = 2/100 = 0.02
+        credit_cost, breakdown = self._call(prompt_tokens=1000, cached_input_tokens=400,
+                                            cache_creation_input_tokens=200)
+        assert credit_cost == 0.02
+        # 反向单价 = 创建成本/创建token = (200*0.25)/200 = 0.25（输入价 0.2 × 1.25）
+        assert breakdown["unit_prices"]["cache_creation_input_per_m"] == 0.25
+        assert breakdown["non_cached_input_tokens"] == 400
+        assert breakdown["credits"]["cache_creation_input"] == pytest.approx(200 * 0.25 / 1_000_000 * 100)
 
 
 class TestTieredMergedCall:
@@ -941,22 +1003,42 @@ class TestTieredMergedCall:
         assert breakdown["credits"]["output"] == 0.32
 
     def test_merged_cached_tokens(self):
-        """多轮含缓存命中：cached 部分按各自档位缓存单价合并"""
+        """多轮含缓存命中：cached 部分按各自档位缓存单价（输入价 10%）合并"""
         credit_cost, breakdown = self._call([
             {"prompt_tokens": 10000, "completion_tokens": 0, "cached_tokens": 3000},
             {"prompt_tokens": 40000, "completion_tokens": 0, "cached_tokens": 5000},
         ])
-        # 轮1(档1)：non_cached=7000*0.2=1400；cached=3000*0.04=120
-        # 轮2(档2)：non_cached=35000*0.6=21000；cached=5000*0.12=600
-        # sum_input=22400；sum_cached=720；w_input=42000；w_cached=8000
-        # token_cost=(22400+720)/1e6=0.02312 -> credit=ceil(231.2)/100=2.32
-        assert credit_cost == 2.32
+        # 轮1(档1)：non_cached=7000*0.2=1400；cached=3000*0.02=60
+        # 轮2(档2)：non_cached=35000*0.6=21000；cached=5000*0.06=300
+        # sum_input=22400；sum_cached=360；w_input=42000；w_cached=8000
+        # token_cost=(22400+360)/1e6=0.02276 -> credit=ceil(227.6)/100=2.28
+        assert credit_cost == 2.28
         # 合并反向单价 = 精确除法（对账自洽），用 approx 比较
         assert breakdown["unit_prices"]["input_per_m"] == pytest.approx(22400 / 42000)
-        assert breakdown["unit_prices"]["cached_input_per_m"] == pytest.approx(720 / 8000)
-        # 对账：input 22400/1e6*100=2.24；cached 720/1e6*100=0.072
+        assert breakdown["unit_prices"]["cached_input_per_m"] == pytest.approx(360 / 8000)
+        # 对账：input 22400/1e6*100=2.24；cached 360/1e6*100=0.036
         assert breakdown["credits"]["non_cached_input"] == 2.24
-        assert round(breakdown["credits"]["cached_input"], 6) == 0.072
+        assert round(breakdown["credits"]["cached_input"], 6) == 0.036
+
+    def test_merged_cache_creation_tokens(self):
+        """多轮含显式缓存创建：creation 部分按各自档位输入价 125% 合并，且从 non_cached 中剔除"""
+        credit_cost, breakdown = self._call([
+            {"prompt_tokens": 10000, "completion_tokens": 0, "cached_tokens": 0, "cache_creation_tokens": 2000},
+            {"prompt_tokens": 40000, "completion_tokens": 0, "cached_tokens": 0, "cache_creation_tokens": 1000},
+        ])
+        # 轮1(档1)：non_cached=8000*0.2=1600；creation=2000*0.25=500
+        # 轮2(档2)：non_cached=39000*0.6=23400；creation=1000*0.75=750
+        # sum_input=25000；sum_creation=1250；w_input=47000；w_creation=3000
+        # token_cost=(25000+1250)/1e6=0.02625 -> credit=ceil(262.5)/100=2.63
+        assert credit_cost == 2.63
+        # 合并反向单价：creation = 1250/3000 = 0.41666...；input = 25000/47000
+        assert breakdown["unit_prices"]["cache_creation_input_per_m"] == pytest.approx(1250 / 3000)
+        assert breakdown["unit_prices"]["input_per_m"] == pytest.approx(25000 / 47000)
+        assert breakdown["cache_creation_input_tokens"] == 3000
+        assert breakdown["non_cached_input_tokens"] == 47000
+        # 对账：input 25000/1e6*100=2.5；creation 1250/1e6*100=0.125
+        assert breakdown["credits"]["non_cached_input"] == 2.5
+        assert round(breakdown["credits"]["cache_creation_input"], 6) == 0.125
 
     def test_merged_division_by_zero(self):
         """某分项 token 数为 0 时对应单价置 None，不 crash"""

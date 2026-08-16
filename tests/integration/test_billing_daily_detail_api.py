@@ -280,18 +280,19 @@ class TestDailyUsageDetailAPI:
             )
 
         assert response["success"] is True
-        # 找到刚插入的记录，校验 6 分项结构
+        # 找到刚插入的记录，校验 7 分项结构
         items = [it for it in response["items"] if it["credit_cost"] == 3]
         assert len(items) == 1
         bd = items[0]["breakdown_items"]
-        assert len(bd) == 6, "应返回固定 6 分项"
+        assert len(bd) == 7, "应返回固定 7 分项"
 
-        # 6 分项 key 与标签
+        # 7 分项 key 与标签
         assert [it["key"] for it in bd] == [
-            "non_cached_input", "cached_input", "output", "video", "asr", "embedding",
+            "non_cached_input", "cached_input", "cache_creation_input",
+            "output", "video", "asr", "embedding",
         ]
 
-        # chat 三分项：每百万单价 + 系数 + 积分
+        # chat 四细分：每百万单价 + 系数 + 积分
         non_cached = bd[0]
         assert non_cached["qty"] == 641
         assert non_cached["unit_price"] == 3
@@ -306,7 +307,15 @@ class TestDailyUsageDetailAPI:
         assert cached["credit"] == 1.08544
         assert cached["is_per_million"] is True
 
-        output = bd[2]
+        # 老数据无缓存创建分项：qty/单价/积分均为 None（前端降级为 "-"）
+        cache_creation = bd[2]
+        assert cache_creation["key"] == "cache_creation_input"
+        assert cache_creation["qty"] is None
+        assert cache_creation["unit_price"] is None
+        assert cache_creation["credit"] is None
+        assert cache_creation["is_per_million"] is True
+
+        output = bd[3]
         assert output["qty"] == 123
         assert output["unit_price"] == 9
         assert output["usage_factor"] == 50
@@ -314,7 +323,7 @@ class TestDailyUsageDetailAPI:
         assert output["is_per_million"] is True
 
         # 缺失分项（video/embedding）字段为 None
-        video = bd[3]
+        video = bd[4]
         assert video["qty"] is None
         assert video["unit_price"] is None
         assert video["usage_factor"] is None
@@ -322,14 +331,14 @@ class TestDailyUsageDetailAPI:
         assert video["is_per_million"] is False
 
         # ASR：每单位单价（元/次），无需 ÷1M
-        asr = bd[4]
+        asr = bd[5]
         assert asr["qty"] == 1
         assert asr["unit_price"] == 0.01
         assert asr["usage_factor"] == 100
         assert asr["credit"] == 1
         assert asr["is_per_million"] is False
 
-        embedding = bd[5]
+        embedding = bd[6]
         assert embedding["qty"] is None
         assert embedding["is_per_million"] is True
 
@@ -401,9 +410,9 @@ class TestDailyUsageDetailAPI:
         items = [it for it in response["items"] if it["credit_cost"] == 2]
         assert len(items) == 1
         bd = items[0]["breakdown_items"]
-        assert len(bd) == 6
+        assert len(bd) == 7
 
-        # chat 三分项：数量可追溯，单价/系数/分项积分缺失
+        # chat 分项：数量可追溯，单价/系数/分项积分缺失
         non_cached = bd[0]
         assert non_cached["qty"] == 400, "老数据 non_cached_input 应为 prompt - cached = 1000 - 600"
         assert non_cached["unit_price"] is None
@@ -414,20 +423,24 @@ class TestDailyUsageDetailAPI:
         assert cached["qty"] == 600
         assert cached["unit_price"] is None
 
-        output = bd[2]
+        # 缓存创建分项老数据不存在 -> qty None
+        assert bd[2]["key"] == "cache_creation_input"
+        assert bd[2]["qty"] is None
+
+        output = bd[3]
         assert output["qty"] == 200
         assert output["unit_price"] is None
 
         # video 分项老数据不存在 -> qty None（前端显示 "-"）
-        assert bd[3]["qty"] is None
+        assert bd[4]["qty"] is None
 
         # asr / embedding 老数据有数量字段（calls / tokens），但无单价/系数
-        asr = bd[4]
+        asr = bd[5]
         assert asr["qty"] == 2
         assert asr["unit_price"] is None
         assert asr["usage_factor"] is None
 
-        embedding = bd[5]
+        embedding = bd[6]
         assert embedding["qty"] == 500
         assert embedding["unit_price"] is None
         assert embedding["usage_factor"] is None

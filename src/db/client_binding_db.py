@@ -298,6 +298,7 @@ class ClientUsageLogDB:
         prompt_tokens = int(usage.get("prompt_tokens") or 0)
         completion_tokens = int(usage.get("completion_tokens") or 0)
         cached_tokens = int(usage.get("cached_tokens") or usage.get("cached_input_tokens") or 0)
+        cache_creation_tokens = int(usage.get("cache_creation_tokens") or 0)
         total_tokens = int(usage.get("total_tokens") or (prompt_tokens + completion_tokens))
 
         # 标准积分（复用现有计费函数）
@@ -306,6 +307,7 @@ class ClientUsageLogDB:
             completion_tokens=completion_tokens,
             model=model,
             cached_input_tokens=cached_tokens,
+            cache_creation_input_tokens=cache_creation_tokens,
         )
         # 客户端 ×5 系数，2 位小数向上取整
         credit_cost = math.ceil(raw_credit * _client_credit_multiplier() * 100) / 100

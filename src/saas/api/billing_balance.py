@@ -358,17 +358,17 @@ async def get_daily_usage_detail(
 # ============== 辅助函数 ==============
 
 def _parse_breakdown_items(breakdown) -> list:
-    """把 chat_records.usage_breakdown JSON 解析为 6 分项对账结构（仅平台管理员明细弹框使用）。
+    """把 chat_records.usage_breakdown JSON 解析为 7 分项对账结构（仅平台管理员明细弹框使用）。
 
-    返回固定 6 项列表，每项：
+    返回固定 7 项列表，每项：
     {
-        "key": 分项标识（non_cached_input / cached_input / output / video / asr / embedding）,
+        "key": 分项标识（non_cached_input / cached_input / cache_creation_input / output / video / asr / embedding）,
         "label": 分项中文名,
         "qty": 数量（token / 秒 / 次），
         "unit_price": 单价原始值（每百万 token 或 每秒/每次），
         "usage_factor": 用量系数,
         "credit": 积分消耗,
-        "is_per_million": 单价是否为每百万类（chat 三分项 / embedding，前端需 ÷1M 换算）,
+        "is_per_million": 单价是否为每百万类（chat 分项 / embedding，前端需 ÷1M 换算）,
     }
     无对应分项或字段缺失时为 None，前端按 "-" 兜底（旧记录无 unit_prices/usage_factor/credits）。
     """
@@ -407,6 +407,15 @@ def _parse_breakdown_items(breakdown) -> list:
             "unit_price": unit_prices.get("cached_input_per_m"),
             "usage_factor": chat_factor,
             "credit": credits.get("cached_input"),
+            "is_per_million": True,
+        },
+        {
+            "key": "cache_creation_input",
+            "label": "缓存创建输入",
+            "qty": chat.get("cache_creation_input_tokens"),
+            "unit_price": unit_prices.get("cache_creation_input_per_m"),
+            "usage_factor": chat_factor,
+            "credit": credits.get("cache_creation_input"),
             "is_per_million": True,
         },
         {

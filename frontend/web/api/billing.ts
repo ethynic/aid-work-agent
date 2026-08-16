@@ -227,15 +227,15 @@ export async function listTenantRecharges(params: {
 
 // ==================== 平台管理员：每日用量明细下钻 ====================
 
-/** usage_breakdown 的 6 分项对账结构（仅平台管理员返回） */
+/** usage_breakdown 的 7 分项对账结构（仅平台管理员返回） */
 export interface BreakdownItem {
-  key: 'non_cached_input' | 'cached_input' | 'output' | 'video' | 'asr' | 'embedding'
+  key: 'non_cached_input' | 'cached_input' | 'cache_creation_input' | 'output' | 'video' | 'asr' | 'embedding'
   label: string
   qty: number | null
   unit_price: number | null
   usage_factor: number | null
   credit: number | null
-  /** 单价是否为每百万类（chat 三分项 / embedding），展示时需 ÷1M 换算 */
+  /** 单价是否为每百万类（chat 分项 / embedding），展示时需 ÷1M 换算 */
   is_per_million: boolean
 }
 

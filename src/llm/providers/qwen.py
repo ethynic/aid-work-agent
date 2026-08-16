@@ -89,10 +89,15 @@ class QwenProvider(BaseLLMProvider):
         max_tokens = _clamp_max_tokens(self.model, max_tokens)
         request_body = {
             "model": self.model,
-            "messages": self._format_messages(messages),
+            "messages": self._format_messages(messages, use_cache=settings.llm.context_cache),
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
+
+        # qwen 推理模型关闭思考（enable_thinking）+ 显式缓存仅对 qwen 系模型生效；
+        # 百炼第三方模型（deepseek/kimi/glm 等）不写入，避免不支持参数触发 400
+        if self._is_qwen_model() and settings.llm.enable_thinking is not None:
+            request_body["enable_thinking"] = settings.llm.enable_thinking
 
         # 添加工具定义
         if tools:
@@ -200,11 +205,15 @@ class QwenProvider(BaseLLMProvider):
         max_tokens = _clamp_max_tokens(self.model, max_tokens)
         request_body = {
             "model": self.model,
-            "messages": self._format_messages(messages),
+            "messages": self._format_messages(messages, use_cache=settings.llm.context_cache),
             "temperature": temperature,
             "max_tokens": max_tokens,
             "stream": True,
         }
+
+        # qwen 推理模型关闭思考（enable_thinking）仅对 qwen 系模型生效；百炼第三方模型不写入
+        if self._is_qwen_model() and settings.llm.enable_thinking is not None:
+            request_body["enable_thinking"] = settings.llm.enable_thinking
 
         if tools:
             logger.warning("通义千问 OpenAI 兼容接口不支持 tools 与 stream 同时使用，tools 参数将被忽略")
@@ -303,6 +312,12 @@ class QwenProvider(BaseLLMProvider):
             if isinstance(prompt_details, dict)
             else 0
         ) or usage.get("prompt_cache_hit_tokens", usage.get("cached_tokens", 0))
+        # 显式缓存创建 token（cache_control 首条消息触发，按输入价 125% 计费，计费端用）
+        cache_creation_tokens = (
+            prompt_details.get("cache_creation_input_tokens", 0)
+            if isinstance(prompt_details, dict)
+            else 0
+        ) or usage.get("cache_creation_input_tokens", 0)
 
         if choices:
             message = choices[0].get("message", {})
@@ -322,6 +337,7 @@ class QwenProvider(BaseLLMProvider):
                 "completion_tokens": usage.get("completion_tokens", 0),
                 "total_tokens": usage.get("total_tokens", 0),
                 "cached_tokens": cached_tokens,
+                "cache_creation_tokens": cache_creation_tokens,
             },
             "request_id": response.get("id", ""),
         }

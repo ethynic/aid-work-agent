@@ -94,16 +94,35 @@ class BaseLLMProvider(ABC):
         """
         pass
     
+    def _is_qwen_model(self) -> bool:
+        """判断当前模型是否为 qwen 系文本模型（model 名 qwen 前缀，排除视觉模型），
+        用于显式缓存/思考开关判定。
+
+        排除 qwen-vl / qwen3-vl 视觉模型：
+        - 视觉模型无思考模式，写入 enable_thinking 可能被 API 拒绝（400）
+        - qwen-vl-max / qwen-vl-plus 不在显式缓存（cache_control）官方支持列表，
+          对其加缓存标记同样有 400 风险（视频提示词路径默认用 qwen-vl-plus）
+
+        百炼 provider 同时承载 deepseek/kimi/glm 等第三方模型，其缓存参数语义与
+        qwen 系不同，必须按 model 名前缀判定，不能按 provider 判定。
+        """
+        name = str(self.model or "").lower()
+        return name.startswith("qwen") and "vl" not in name
+
     def _format_messages(
         self,
-        messages: List[Dict[str, Any]]
+        messages: List[Dict[str, Any]],
+        use_cache: bool = False,
     ) -> List[Dict[str, Any]]:
         """
         格式化消息（子类可覆盖）
-        
+
         Args:
             messages: 原始消息列表
-        
+            use_cache: 是否启用显式缓存。仅 qwen provider 传入 True（且 model 为 qwen 系时生效），
+                把第一条 system 消息 content 转数组 + cache_control: ephemeral。
+                其他 provider 保持默认 False，行为与改动前完全一致。
+
         Returns:
             格式化后的消息列表
         """
@@ -111,7 +130,7 @@ class BaseLLMProvider(ABC):
         for msg in messages:
             role = msg.get("role", "user")
             content = msg.get("content", "")
-            
+
             # 处理不同类型的消息
             if role == "tool":
                 # 工具结果消息 - 必须包含tool_call_id
@@ -131,9 +150,14 @@ class BaseLLMProvider(ABC):
             elif isinstance(content, list):
                 # 处理多模态内容
                 formatted.append({"role": role, "content": content})
+            elif use_cache and self._is_qwen_model() and role == "system" and not formatted:
+                # 显式缓存：仅 qwen 系模型第一条 system 消息加 cache_control（命中按 10% 计费）
+                formatted.append({"role": "system", "content": [
+                    {"type": "text", "text": str(content), "cache_control": {"type": "ephemeral"}}
+                ]})
             else:
                 formatted.append({"role": role, "content": str(content)})
-        
+
         return formatted
     
     def _format_tools(

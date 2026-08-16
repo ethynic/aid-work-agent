@@ -23,6 +23,12 @@ agent:
 # 各备用 provider 有独立环境变量（如 DEEPSEEK_*、QWEN_*），用于 failover
 llm:
   provider: ${LLM_PROVIDER:-deepseek}
+  # qwen 推理模型（qwen3.x-flash/plus 系）是否关闭思考模式；默认 false（关闭思考，1-2s 响应）。
+  # 仅 qwen provider 的 qwen 系模型生效；置 None 时不写该参数（不影响非 qwen 推理模型）
+  enable_thinking: false
+  # 是否启用显式缓存（cache_control: ephemeral）。仅 qwen provider 的 qwen 系模型生效，
+  # 命中按输入单价 10% 计费（百炼官方），有效 5 分钟
+  context_cache: true
   # 各模型 max_tokens 上限（调用方未显式指定 max_tokens 时，按当前生效模型查此表作为默认值）
   # 数据来源：阿里云百炼平台官方文档（2026-08）
   model_max_tokens:
@@ -32,7 +38,7 @@ llm:
     qwen3-vl-flash: 32768
   qwen:
     api_keys: ${QWEN_API_KEYS:-}
-    model: ${QWEN_MODEL_CODE:-qwen-plus}
+    model: ${QWEN_MODEL_CODE:-qwen3.7-flash}
     base_url: ${QWEN_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
     max_concurrent_per_key: 2
     queue_timeout: 30
