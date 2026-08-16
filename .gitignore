@@ -125,3 +125,8 @@ uploads/
 memories/
 storage/
 plans/cron_user*
+
+# Playwright E2E（认证快照含 token，不入库）
+frontend/e2e/.auth/
+frontend/playwright-report/
+frontend/test-results/
