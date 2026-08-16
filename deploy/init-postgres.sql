@@ -1504,6 +1504,29 @@ CREATE TABLE IF NOT EXISTS work_report_preferences (
     UNIQUE (tenant_id, user_id)
 );
 
+-- =================== 招聘操作智能体（recruiting-operator）===================
+-- 简历库：保存从 BOSS 直聘 CLI 采集的候选人简历（截图图片 file_id 引用、OCR 全文、
+-- 基本信息 JSONB、关联职位、获取日期）。与 deploy/db_update.sql 2026-08-16 条目保持一致。
+CREATE TABLE IF NOT EXISTS bs_recruiting_operator_resumes (
+    id SERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT,
+    candidate_name TEXT,
+    job_name TEXT,
+    candidate_info JSONB,
+    images JSONB NOT NULL DEFAULT '[]'::jsonb,
+    ocr_text TEXT,
+    source TEXT NOT NULL DEFAULT 'boss',
+    status TEXT NOT NULL DEFAULT 'new',
+    remark TEXT,
+    fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_bs_ror_tenant ON bs_recruiting_operator_resumes(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_bs_ror_tenant_job ON bs_recruiting_operator_resumes(tenant_id, job_name);
+CREATE INDEX IF NOT EXISTS idx_bs_ror_tenant_fetched ON bs_recruiting_operator_resumes(tenant_id, fetched_at);
+
 -- 输出初始化完成信息
 DO $$
 BEGIN

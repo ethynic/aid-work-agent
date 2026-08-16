@@ -3,9 +3,12 @@
 设计：docs/design/recruiting/recruiting-cli-agent-integration-design.md §4/§11/§14
 实施规格：docs/plans/recruiting/m05-implementation-spec.md §3
 
-7 个 boss_* 工具全部为 LOCAL_REQUIRED：execute() 不直接操作 BOSS，
+8 个 boss_* 工具全部为 LOCAL_REQUIRED：execute() 不直接操作 BOSS，
 而是经「设备闸门 → 创建 invocation → 轮询 events/state → 终态映射」
 驱动本机 Runtime 执行，进度事件推入 agent 注入的 _progress_queue。
+
+其中 boss_resume_detail 额外做云端后处理：CLI 成功结果（截图+OCR payload）
+在工具层直接落简历库，只把紧凑摘要返回给 LLM（图片字节不进上下文）。
 
 安全约束：
 - 设备闸门在 create_invocation 之前（repository.create_invocation 本身不校验
@@ -21,6 +24,7 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 from src.local_tools import catalog, repository
+from src.services import recruiting_resume_service
 from src.tools.base import BaseTool, ExecutionTarget
 
 ONLINE_THRESHOLD_SECONDS = 30  # last_seen_at 距今 ≤30s 视为在线（与 api.py 一致）
@@ -215,7 +219,7 @@ class LocalToolProxyTool(BaseTool):
         return None
 
 
-# ==================== 7 个 BOSS 工具 ====================
+# ==================== 8 个 BOSS 工具 ====================
 
 
 class BossFilterInput(BaseModel):
@@ -303,6 +307,84 @@ class BossInterviewDemoTool(LocalToolProxyTool):
     InputModel = BossInterviewDemoInput
 
 
+class BossResumeDetailTool(LocalToolProxyTool):
+    """BOSS 读取简历入库：CLI 截图+OCR 结果在云端工具层直接落库，图片字节绝不进 LLM 上下文。
+
+    注意：工具实例是共享单例（tool_registry.register(tool_cls())），
+    禁止把每次调用的状态存 self；tenant/user 一律从 kwargs 的 _trusted_* 取。
+    """
+    name = "boss_resume_detail"
+    display_name = "BOSS 读取简历入库"
+    description = (
+        "在用户本机 BOSS 直聘「沟通」页读取当前候选人简历详情（截图+OCR），"
+        "结果自动存入简历库，返回紧凑摘要（不含图片与 OCR 全文）"
+    )
+
+    class InputModel(BaseModel):
+        # 暂无参数：CLI resume-detail 命令明天落地，参数届时对齐
+        pass
+
+    timeout_seconds = 600
+
+    async def execute(self, **kwargs) -> Dict[str, Any]:
+        tenant_id = kwargs.get("_trusted_tenant_id")
+        user_id = kwargs.get("_trusted_user_id")
+        result = await super().execute(**kwargs)
+
+        # CLI 失败/非 success：message/code 透传（message 已带失败原因），不落库。
+        # data 一律置 None：CLI 失败结果 data 形状未约定（可能夹带部分截图 base64），
+        # 「图片字节绝不进 LLM 上下文」的保证必须覆盖所有返回路径
+        if not result.get("success"):
+            return {**result, "data": None}
+
+        # 成功：结果 payload（invocation result_json.data）直接落库（同步 DB 调用放线程池）
+        payload = result.get("data") or {}
+        try:
+            record = await asyncio.to_thread(
+                recruiting_resume_service.create_resume_record_from_tool_result,
+                tenant_id, user_id, payload, "boss",
+            )
+        except recruiting_resume_service.ResumePayloadError as e:
+            # fail-loud：payload 不符契约，不落任何库/盘数据
+            logger.error(f"后端日志：boss_resume_detail 结果入库失败 payload 不符契约: {e}")
+            return {
+                "success": False,
+                "code": "RESUME_PAYLOAD_INVALID",
+                "message": f"{e}",
+                "effect": result.get("effect"),
+                "data": None,
+                "invocation_id": result.get("invocation_id"),
+            }
+        except Exception as e:
+            logger.error(f"后端日志：boss_resume_detail 结果入库失败: {e}", exc_info=True)
+            return {
+                "success": False,
+                "code": "RESUME_STORE_FAILED",
+                "message": "简历读取成功但入库失败，请稍后重试或联系管理员",
+                "effect": result.get("effect"),
+                "data": None,
+                "invocation_id": result.get("invocation_id"),
+            }
+
+        # 返回给 LLM 的 data 只含紧凑摘要（recruiting-operator 上下文预算仅 8000 token，
+        # 图片字节/OCR 全文绝不进上下文，完整内容到简历库页面看）
+        summary = {
+            "resume_id": record["id"],
+            "candidate_name": record.get("candidate_name"),
+            "job_name": record.get("job_name"),
+            "image_count": len(record.get("images") or []),
+            "ocr_char_count": len(record.get("ocr_text") or ""),
+        }
+        message = f"简历已存入简历库：{summary['candidate_name']}"
+        if summary["job_name"]:
+            message += f" · {summary['job_name']}"
+        message += f" · {summary['image_count']} 张截图"
+        # 基类在 effect=unknown 时已给 message 追加「实际效果未知」提示，覆写摘要时必须保留
+        if UNKNOWN_EFFECT_NOTICE in (result.get("message") or ""):
+            message = f"{message}；{UNKNOWN_EFFECT_NOTICE}"
+        return {**result, "data": summary, "message": message}
+
+
 LOCAL_PROXY_TOOL_CLASSES = (
     BossFilterTool,
     BossClearFilterTool,
@@ -311,6 +393,7 @@ LOCAL_PROXY_TOOL_CLASSES = (
     BossAcceptResumeTool,
     BossRejectCurrentTool,
     BossInterviewDemoTool,
+    BossResumeDetailTool,
 )
 
 LOCAL_PROXY_TOOL_NAMES = frozenset(cls.name for cls in LOCAL_PROXY_TOOL_CLASSES)

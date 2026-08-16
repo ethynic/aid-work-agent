@@ -1,0 +1,252 @@
+"""招聘操作智能体简历库 API（薄壳）
+
+保存从 BOSS 直聘 CLI 采集的候选人简历（截图图片、OCR 文本、基本信息、关联职位、获取日期），
+供前端「简历库」业务页浏览 / 筛选 / 编辑状态。
+
+分层说明（2026-08-16 架构升级）：
+- 核心业务逻辑已抽至 src/services/recruiting_resume_service.py（服务层）
+- 本模块只做 HTTP 适配：saas context 取租户 / auth 取用户 / ValueError → 400 / 未命中 → 404
+- 智能体入库走本地工具 boss_resume_detail → 服务层，不走本 HTTP API
+- 端点函数签名与响应格式保持不变（前端与既有集成测试兼容）
+
+一套 CRUD API（表 bs_recruiting_operator_resumes）：
+- 简历列表（分页 + keyword/job_name/status/fetched_at 区间筛选，轻量不含 ocr_text）
+- 职位下拉（distinct job_name）
+- 创建（支持 images=file_id 引用 与 images_base64 直传两路合并，base64 落盘转 file_id）
+- 详情（含 ocr_text / images / candidate_info）
+- 更新（status / remark / job_name / candidate_name / candidate_info）
+- 删除
+
+所有 API 必须遵循租户隔离规范（[backend_dev.md SaaS 租户隔离规范]）：
+- 通过 get_current_tenant_id() 取租户
+- 所有查询带 tenant_id 过滤
+"""
+from __future__ import annotations
+
+import re
+from typing import Any, Dict, List, Optional
+
+from fastapi import APIRouter, Query, Request
+from fastapi.responses import JSONResponse
+from loguru import logger
+from pydantic import BaseModel, Field
+
+from src.saas.context import get_current_tenant_id
+from src.api.auth import get_current_user
+from src.services import recruiting_resume_service as resume_service
+# 兼容再导出：既有调用方（src/db/database.py 启动初始化、集成测试）沿用旧导入路径
+from src.services.recruiting_resume_service import (  # noqa: F401
+    RESUME_SOURCES,
+    RESUME_STATUSES,
+    init_recruiting_operator_tables,
+)
+
+router = APIRouter(prefix="/api/recruiting-operator", tags=["招聘操作智能体-简历库"])
+
+
+# ============== HTTP 适配工具函数 ==============
+
+def _sanitize_error_info(error_msg: str) -> str:
+    """过滤错误信息中的敏感信息"""
+    if not error_msg:
+        return error_msg
+    patterns = [
+        r'password["\s:=]+\S+',
+        r'api[_-]?key["\s:=]+\S+',
+        r'token["\s:=]+\S+',
+        r'secret["\s:=]+\S+',
+    ]
+    sanitized = error_msg
+    for pattern in patterns:
+        sanitized = re.sub(pattern, lambda m: m.group(0).split('=')[0] + '=***', sanitized, flags=re.IGNORECASE)
+    return sanitized
+
+
+def _error_response(error: str, debug: str, status_code: int = 500) -> JSONResponse:
+    return JSONResponse(
+        status_code=status_code,
+        content={"success": False, "error": error, "debug": _sanitize_error_info(debug)},
+    )
+
+
+def _require_tenant() -> Optional[str]:
+    """获取当前租户 ID（SaaS 模式下必填）"""
+    tenant_id = get_current_tenant_id()
+    return tenant_id
+
+
+# ============== 请求模型 ==============
+
+class ResumeImageRef(BaseModel):
+    """已上传图片引用（前端先调 /api/upload 拿 file_id）"""
+    file_id: str = Field(..., description="已上传文件的 file_id")
+    name: Optional[str] = Field(None, description="显示名")
+
+
+class ResumeImageBase64(BaseModel):
+    """base64 直传图片（CLI 采集截图入库用）"""
+    data: str = Field(..., description="base64 数据，兼容 data:image/png;base64, 前缀")
+    name: Optional[str] = Field(None, description="显示名")
+    mime_type: str = Field(..., description="MIME 类型，必须 image/*")
+
+
+class CreateResumeRequest(BaseModel):
+    candidate_name: str = Field(..., description="候选人姓名")
+    job_name: Optional[str] = Field(None, description="关联职位")
+    candidate_info: Optional[Dict[str, Any]] = Field(None, description="基本信息（学历/工作年限/期望薪资/城市等，key 灵活）")
+    ocr_text: Optional[str] = Field(None, description="OCR 全文")
+    images: Optional[List[ResumeImageRef]] = Field(None, description="已上传图片引用列表（有序）")
+    images_base64: Optional[List[ResumeImageBase64]] = Field(None, description="base64 图片直传列表（服务端落盘转 file_id）")
+    source: str = Field("manual", description="来源：boss=CLI 入库 / manual=页面补录")
+    fetched_at: Optional[str] = Field(None, description="获取简历日期（ISO 字符串，缺省为当前时间）")
+    remark: Optional[str] = Field(None, description="备注")
+
+
+class UpdateResumeRequest(BaseModel):
+    candidate_name: Optional[str] = Field(None, description="候选人姓名")
+    job_name: Optional[str] = Field(None, description="关联职位")
+    candidate_info: Optional[Dict[str, Any]] = Field(None, description="基本信息")
+    status: Optional[str] = Field(None, description="状态：new/viewed/shortlisted/interviewed/rejected")
+    remark: Optional[str] = Field(None, description="备注")
+
+
+# ============== 简历库 API ==============
+
+@router.get("/resumes")
+async def list_resumes(
+    request: Request,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    keyword: Optional[str] = Query(None, description="按候选人姓名模糊搜索"),
+    job_name: Optional[str] = Query(None, description="按关联职位筛选"),
+    status: Optional[str] = Query(None, description="按状态筛选"),
+    fetched_at_from: Optional[str] = Query(None, description="获取日期起（YYYY-MM-DD 或 ISO）"),
+    fetched_at_to: Optional[str] = Query(None, description="获取日期止（YYYY-MM-DD 或 ISO）"),
+):
+    """简历列表（分页 + 筛选，轻量不含 ocr_text，按 created_at DESC）"""
+    try:
+        tenant_id = _require_tenant()
+        if not tenant_id:
+            return _error_response("租户 ID 缺失", "tenant_id is None", 400)
+
+        try:
+            data = resume_service.list_resumes(
+                tenant_id,
+                page=page, page_size=page_size, keyword=keyword, job_name=job_name,
+                status=status, fetched_at_from=fetched_at_from, fetched_at_to=fetched_at_to,
+            )
+        except ValueError as e:
+            return _error_response(str(e), str(e), 400)
+
+        return {"success": True, "data": data}
+    except Exception as e:
+        logger.error(f"简历列表查询失败: {e}", exc_info=True)
+        return _error_response("简历列表查询失败", str(e))
+
+
+@router.get("/resumes/jobs")
+async def list_resume_jobs(request: Request):
+    """该租户已录入的 distinct 职位列表（筛选下拉用）"""
+    try:
+        tenant_id = _require_tenant()
+        if not tenant_id:
+            return _error_response("租户 ID 缺失", "tenant_id is None", 400)
+        jobs = resume_service.list_distinct_jobs(tenant_id)
+        return {"success": True, "data": {"jobs": jobs}}
+    except Exception as e:
+        logger.error(f"简历职位列表查询失败: {e}", exc_info=True)
+        return _error_response("简历职位列表查询失败", str(e))
+
+
+@router.post("/resumes")
+async def create_resume(req: CreateResumeRequest, request: Request):
+    """创建简历记录（images 引用路与 images_base64 直传路合并入库，base64 优先落盘转 file_id）"""
+    try:
+        tenant_id = _require_tenant()
+        if not tenant_id:
+            return _error_response("租户 ID 缺失", "tenant_id is None", 400)
+
+        user = get_current_user(request)
+        user_id = user.get("user_id") if user else None
+
+        try:
+            record = resume_service.create_resume_record(
+                tenant_id,
+                user_id,
+                candidate_name=req.candidate_name,
+                job_name=req.job_name,
+                candidate_info=req.candidate_info,
+                ocr_text=req.ocr_text,
+                images=[item.model_dump() for item in (req.images or [])],
+                images_base64=[item.model_dump() for item in (req.images_base64 or [])],
+                source=req.source,
+                fetched_at=req.fetched_at,
+                remark=req.remark,
+            )
+        except ValueError as e:
+            return _error_response(str(e), str(e), 400)
+
+        return {"success": True, "data": record}
+    except Exception as e:
+        logger.error(f"简历创建失败: {e}", exc_info=True)
+        return _error_response("简历创建失败", str(e))
+
+
+@router.get("/resumes/{resume_id}")
+async def get_resume(resume_id: int, request: Request):
+    """简历详情（含 ocr_text / images / candidate_info）"""
+    try:
+        tenant_id = _require_tenant()
+        if not tenant_id:
+            return _error_response("租户 ID 缺失", "tenant_id is None", 400)
+        record = resume_service.get_resume(tenant_id, resume_id)
+        if record is None:
+            return _error_response("简历不存在", f"resume_id={resume_id} not found", 404)
+        return {"success": True, "data": record}
+    except Exception as e:
+        logger.error(f"简历详情查询失败: {e}", exc_info=True)
+        return _error_response("简历详情查询失败", str(e))
+
+
+@router.patch("/resumes/{resume_id}")
+async def update_resume(resume_id: int, req: UpdateResumeRequest, request: Request):
+    """更新简历（仅传的字段：status/remark/job_name/candidate_name/candidate_info），updated_at=NOW()"""
+    try:
+        tenant_id = _require_tenant()
+        if not tenant_id:
+            return _error_response("租户 ID 缺失", "tenant_id is None", 400)
+
+        try:
+            record = resume_service.update_resume(
+                tenant_id,
+                resume_id,
+                candidate_name=req.candidate_name,
+                job_name=req.job_name,
+                candidate_info=req.candidate_info,
+                status=req.status,
+                remark=req.remark,
+            )
+        except ValueError as e:
+            return _error_response(str(e), str(e), 400)
+        if record is None:
+            return _error_response("简历不存在", f"resume_id={resume_id} not found", 404)
+
+        return {"success": True, "data": record}
+    except Exception as e:
+        logger.error(f"简历更新失败: {e}", exc_info=True)
+        return _error_response("简历更新失败", str(e))
+
+
+@router.delete("/resumes/{resume_id}")
+async def delete_resume(resume_id: int, request: Request):
+    """删除简历（仅删除库记录，不删除底层图片文件）"""
+    try:
+        tenant_id = _require_tenant()
+        if not tenant_id:
+            return _error_response("租户 ID 缺失", "tenant_id is None", 400)
+        if not resume_service.delete_resume(tenant_id, resume_id):
+            return _error_response("简历不存在", f"resume_id={resume_id} not found", 404)
+        return {"success": True}
+    except Exception as e:
+        logger.error(f"简历删除失败: {e}", exc_info=True)
+        return _error_response("简历删除失败", str(e))

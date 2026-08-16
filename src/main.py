@@ -1729,6 +1729,9 @@ app.include_router(video_gen_api.router)
 # 视频创作智能体（会话化，见 docs/plans/plan-video-agent-phase1.md）
 from src.api import video_agent as video_agent_api  # noqa: E402
 app.include_router(video_agent_api.router)
+# 招聘操作智能体（简历库，见 subagents/recruiting-operator/SUBAGENT.md）
+from src.api import recruiting_operator as recruiting_operator_api  # noqa: E402
+app.include_router(recruiting_operator_api.router)
 # 本地工具基础设施 M0.3（见 docs/plans/recruiting/m03-implementation-spec.md）
 from src.local_tools import api as local_tools_api  # noqa: E402
 app.include_router(local_tools_api.router)

@@ -52,6 +52,14 @@ export const agentRoutes: RouteRecordRaw[] = [
     ]
   },
   {
+    path: '/recruiting-operator',
+    name: 'recruiting-operator',
+    component: () => import('@/components/BaseBusinessLayout.vue'),
+    children: [
+      { path: 'resumes', name: 'recruiting-operator-resumes', component: () => import('@/components/recruiting/ResumeLibrary.vue') },
+    ]
+  },
+  {
     path: '/customer-followup',
     name: 'customer-followup',
     component: () => import('@/components/BaseBusinessLayout.vue'),
@@ -131,6 +139,14 @@ export const agentRoutes: RouteRecordRaw[] = [
           { path: 'meals', name: '餐标价格', component: () => import('@/components/travel/MealManager.vue') },
           { path: 'guides', name: '导游费用', component: () => import('@/components/travel/GuideManager.vue') },
           { path: 'fees', name: '其他费用', component: () => import('@/components/travel/FeeManager.vue') },
+        ]
+      },
+      {
+        path: 'recruiting-operator',
+        name: 'tenant-recruiting-operator',
+        component: () => import('@/components/BaseBusinessLayout.vue'),
+        children: [
+          { path: 'resumes', name: 'tenant-recruiting-operator-resumes', component: () => import('@/components/recruiting/ResumeLibrary.vue') },
         ]
       },
       {

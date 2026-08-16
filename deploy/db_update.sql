@@ -404,3 +404,30 @@ UPDATE token_cost_prices SET
   ]'::jsonb,
   updated_at = NOW()
 WHERE model_name = 'qwen3.7-flash';
+
+-- ============================================================================
+-- 2026-08-16 招聘操作智能体简历库：bs_recruiting_operator_resumes
+-- 保存从 BOSS 直聘 CLI 采集的候选人简历（截图图片 file_id 引用、OCR 全文、
+-- 基本信息 JSONB、关联职位、获取日期），供「简历库」业务页浏览 / 筛选 / 编辑状态。
+-- images 为 [{file_id, name}] 有序多图；source: boss=CLI 入库 / manual=页面补录；
+-- status: new新简历/viewed已查看/shortlisted有意向/interviewed已约面/rejected不合适。
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS bs_recruiting_operator_resumes (
+    id SERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT,
+    candidate_name TEXT,                     -- 候选人姓名
+    job_name TEXT,                           -- 关联职位
+    candidate_info JSONB,                    -- 基本信息（学历/工作年限/期望薪资/城市/当前公司/头衔等，key 灵活）
+    images JSONB NOT NULL DEFAULT '[]'::jsonb, -- [{file_id, name}] 有序多图
+    ocr_text TEXT,                           -- OCR 全文
+    source TEXT NOT NULL DEFAULT 'boss',     -- boss=CLI 入库 / manual=页面补录
+    status TEXT NOT NULL DEFAULT 'new',      -- new/viewed/shortlisted/interviewed/rejected
+    remark TEXT,                             -- 备注
+    fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, -- 获取简历日期
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_bs_ror_tenant ON bs_recruiting_operator_resumes(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_bs_ror_tenant_job ON bs_recruiting_operator_resumes(tenant_id, job_name);
+CREATE INDEX IF NOT EXISTS idx_bs_ror_tenant_fetched ON bs_recruiting_operator_resumes(tenant_id, fetched_at);
