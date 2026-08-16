@@ -89,7 +89,8 @@
       "WebFetch(domain:appbuilder.cloud.baidu.com)",
       "WebFetch(domain:dify.ai)",
       "WebFetch(domain:platform.minimaxi.com)",
-      "WebFetch(domain:api-docs.deepseek.com)"
+      "WebFetch(domain:api-docs.deepseek.com)",
+      "WebFetch(domain:www.bing.com)"
     ]
   }
 }
