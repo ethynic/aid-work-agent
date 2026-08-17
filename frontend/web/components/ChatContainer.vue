@@ -39,6 +39,7 @@
               :is-processing="isProcessing"
               :input-hint-state="inputHintState"
               @quick-prompt="handleSend"
+              @send="handleSend"
             />
           </div>
 

@@ -7,6 +7,8 @@
 - 话术 CRUD：创建（分类校验）/ 更新 / 删除
 - 租户隔离：B 租户看不到 A 的职位，不可详情/更新/删除/挂话术
 - 错误：重名 400 / 不存在 id 404 / 非法 UUID 400 / 空名称 400
+- Phase 1（简历-职位匹配）：status/match_threshold/job_requirements 新字段
+  （默认值 active/70/NULL、结构校验两路、可更新）+ 老库迁移幂等回填
 
 测试策略（镜像 test_recruiting_operator_apis.py）：
 - 使用真实 PostgreSQL，创建临时租户隔离测试数据
@@ -54,10 +56,14 @@ def temp_tenant_with_user():
     user_id = f"test_user_{uuid_module.uuid4().hex[:8]}"
     yield {"tenant_id": tenant_id, "user_id": user_id}
 
-    # 清理：删测试业务数据 + 删租户
+    # 清理：删测试业务数据 + 删租户（含简历，迁移测试会造简历数据）
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
+            cursor.execute(
+                "DELETE FROM bs_recruiting_operator_resumes WHERE tenant_id = %s",
+                (tenant_id,),
+            )
             cursor.execute(
                 "DELETE FROM bs_recruiting_operator_job_scripts WHERE tenant_id = %s",
                 (tenant_id,),
@@ -389,6 +395,287 @@ class TestJobCrudAPI:
             response = _unpack(_call(recruiting_operator.list_jobs(request=None)))
         assert response["success"] is False
         assert response["error"] == "租户 ID 缺失"
+
+
+# ============== 3. Phase 1 新字段（status / match_threshold / job_requirements） ==============
+
+class TestJobNewFieldsAPI:
+    """简历-职位匹配 Phase 1：jobs 新字段默认值 / job_requirements 结构校验 / 可更新"""
+
+    def test_create_defaults_active_70_null(self, temp_tenant_with_user):
+        """创建职位缺省新字段 → status=active / match_threshold=70 / job_requirements=None；
+        create / get / list 三路都返回新字段"""
+        from src.api import recruiting_operator
+
+        ctx = temp_tenant_with_user
+        req = recruiting_operator.CreateJobRequest(job_name="默认值职位")
+        with _mock_tenant_ctx(ctx["tenant_id"]), _mock_user(ctx["user_id"]):
+            create_resp = _unpack(_call(recruiting_operator.create_job(req, request=None)))
+        assert create_resp["success"] is True
+        job = create_resp["data"]
+        job_id = job["id"]
+        assert job["status"] == "active"
+        assert job["match_threshold"] == 70
+        assert job["job_requirements"] is None
+
+        with _mock_tenant_ctx(ctx["tenant_id"]):
+            detail = _unpack(_call(recruiting_operator.get_job(job_id, request=None)))
+            listed = _unpack(_call(recruiting_operator.list_jobs(request=None)))
+        assert detail["data"]["status"] == "active"
+        assert detail["data"]["match_threshold"] == 70
+        item = next(j for j in listed["data"]["items"] if j["id"] == job_id)
+        assert item["status"] == "active"
+        assert item["match_threshold"] == 70
+        assert item["job_requirements"] is None
+
+    def test_create_with_full_requirements(self, temp_tenant_with_user):
+        """job_requirements 合法结构（全键）→ 原样入库并返回；部分键亦可"""
+        from src.api import recruiting_operator
+
+        ctx = temp_tenant_with_user
+        requirements = {
+            "experience": "3-5年",
+            "educations": ["本科", "硕士"],
+            "salary": "10-20K",
+            "keywords": ["Linux", "MySQL", "PHP", "Laravel"],
+            "notes": "接受 AI 工具深度使用者优先",
+        }
+        req = recruiting_operator.CreateJobRequest(
+            job_name="要求齐全职位", status="paused", match_threshold=85,
+            job_requirements=requirements,
+        )
+        with _mock_tenant_ctx(ctx["tenant_id"]), _mock_user(ctx["user_id"]):
+            resp = _unpack(_call(recruiting_operator.create_job(req, request=None)))
+        assert resp["success"] is True
+        job = resp["data"]
+        assert job["status"] == "paused"
+        assert job["match_threshold"] == 85
+        assert job["job_requirements"] == requirements
+
+    @pytest.mark.parametrize("requirements,match_text", [
+        ({"experience": 123}, "必须为字符串"),            # str 键给 int
+        ({"salary": ["10-20K"]}, "必须为字符串"),         # str 键给 list
+        ({"educations": "本科"}, "必须为字符串数组"),      # list 键给 str
+        ({"keywords": [1, 2]}, "必须为字符串数组"),        # list 元素非 str
+        ({"unknown_key": "x"}, "不支持的字段"),           # 未知键
+    ])
+    def test_create_requirements_invalid_returns_400(
+        self, temp_tenant_with_user, requirements, match_text
+    ):
+        """job_requirements 结构不符 → 400（仅结构校验，不做档位值硬校验）"""
+        from src.api import recruiting_operator
+
+        ctx = temp_tenant_with_user
+        req = recruiting_operator.CreateJobRequest(
+            job_name="非法要求职位", job_requirements=requirements)
+        with _mock_tenant_ctx(ctx["tenant_id"]), _mock_user(ctx["user_id"]):
+            resp = _unpack(_call(recruiting_operator.create_job(req, request=None)))
+        assert resp["success"] is False
+        assert match_text in resp["error"]
+
+    def test_update_status_threshold_requirements(self, temp_tenant_with_user):
+        """status / match_threshold / job_requirements 可更新（整体替换，传 {} 清空）"""
+        from src.api import recruiting_operator
+
+        ctx = temp_tenant_with_user
+        create_req = recruiting_operator.CreateJobRequest(
+            job_name="更新字段职位", job_requirements={"experience": "3-5年", "keywords": ["PHP"]})
+        with _mock_tenant_ctx(ctx["tenant_id"]), _mock_user(ctx["user_id"]):
+            create_resp = _unpack(_call(recruiting_operator.create_job(create_req, request=None)))
+        job_id = create_resp["data"]["id"]
+
+        # 更新 status + threshold + requirements（整体替换）
+        patch_req = recruiting_operator.UpdateJobRequest(
+            status="paused", match_threshold=60,
+            job_requirements={"salary": "15-25K"},
+        )
+        with _mock_tenant_ctx(ctx["tenant_id"]):
+            patched = _unpack(_call(recruiting_operator.update_job(job_id, patch_req, request=None)))
+        assert patched["success"] is True
+        assert patched["data"]["status"] == "paused"
+        assert patched["data"]["match_threshold"] == 60
+        assert patched["data"]["job_requirements"] == {"salary": "15-25K"}
+
+        # 传 {} 清空要求 → NULL
+        clear_req = recruiting_operator.UpdateJobRequest(job_requirements={})
+        with _mock_tenant_ctx(ctx["tenant_id"]):
+            cleared = _unpack(_call(recruiting_operator.update_job(job_id, clear_req, request=None)))
+        assert cleared["success"] is True
+        assert cleared["data"]["job_requirements"] is None
+        # 仅清要求不影响其他字段
+        assert cleared["data"]["status"] == "paused"
+        assert cleared["data"]["match_threshold"] == 60
+
+    def test_update_invalid_status_and_threshold_returns_400(self, temp_tenant_with_user):
+        """status 非法取值 / match_threshold 越界 → 400"""
+        from src.api import recruiting_operator
+
+        ctx = temp_tenant_with_user
+        create_req = recruiting_operator.CreateJobRequest(job_name="校验职位")
+        with _mock_tenant_ctx(ctx["tenant_id"]), _mock_user(ctx["user_id"]):
+            create_resp = _unpack(_call(recruiting_operator.create_job(create_req, request=None)))
+        job_id = create_resp["data"]["id"]
+
+        with _mock_tenant_ctx(ctx["tenant_id"]):
+            bad_status = _unpack(_call(recruiting_operator.update_job(
+                job_id, recruiting_operator.UpdateJobRequest(status="frozen"), request=None)))
+            bad_threshold_high = _unpack(_call(recruiting_operator.update_job(
+                job_id, recruiting_operator.UpdateJobRequest(match_threshold=101), request=None)))
+            bad_threshold_low = _unpack(_call(recruiting_operator.update_job(
+                job_id, recruiting_operator.UpdateJobRequest(match_threshold=-1), request=None)))
+        assert bad_status["success"] is False
+        assert "状态非法" in bad_status["error"]
+        assert bad_threshold_high["success"] is False
+        assert "0-100" in bad_threshold_high["error"]
+        assert bad_threshold_low["success"] is False
+
+
+# ============== 4. Phase 1 老库迁移幂等 ==============
+
+class TestPhase1MigrationIdempotent:
+    """重复执行 init 迁移不报错、存量回填不重复（幂等）"""
+
+    def test_repeat_init_backfills_job_id_once(self, temp_tenant_with_user):
+        """存量简历按 job_name 精确匹配回填 job_id；对不上的保持 NULL；重复 init 值稳定"""
+        from src.db.database import get_db_connection
+        from src.api.recruiting_operator import init_recruiting_job_tables
+        from src.services.recruiting_resume_service import init_recruiting_operator_tables
+        from src.services import recruiting_job_service
+
+        ctx = temp_tenant_with_user
+        job = recruiting_job_service.create_job(ctx["tenant_id"], job_name="回填测试职位")
+
+        # 直插两份「老数据」简历（job_id 为 NULL）：名字精确匹配 / 对不上
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            # 兜底建 resumes 表（本模块 _ensure_tables 只建 jobs 表，
+            # 单文件在全新库上运行时 resumes 表可能还不存在）
+            init_recruiting_operator_tables(conn)
+            for name, job_name in (("回填甲", "回填测试职位"), ("回填乙", "对不上的职位")):
+                cursor.execute(
+                    """
+                    INSERT INTO bs_recruiting_operator_resumes (tenant_id, user_id, candidate_name, job_name)
+                    VALUES (%s, %s, %s, %s)
+                    """,
+                    (ctx["tenant_id"], ctx["user_id"], name, job_name),
+                )
+            conn.commit()
+
+        def _read_job_ids():
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    SELECT candidate_name, job_id FROM bs_recruiting_operator_resumes
+                    WHERE tenant_id = %s ORDER BY candidate_name
+                    """,
+                    (ctx["tenant_id"],),
+                )
+                return {row["candidate_name"]: (str(row["job_id"]) if row["job_id"] else None)
+                        for row in cursor.fetchall()}
+
+        # 重复执行两次完整 init 迁移（连接上下文不提交会 rollback，必须显式 commit）
+        for _ in range(2):
+            with get_db_connection() as conn:
+                init_recruiting_job_tables(conn)
+                init_recruiting_operator_tables(conn)
+                conn.commit()
+
+        first = _read_job_ids()
+        assert first["回填甲"] == job["id"]      # 精确匹配 → 回填
+        assert first["回填乙"] is None           # 对不上 → 保持 NULL
+
+        # 再跑一次确认幂等（值不变，无重复回填/报错）
+        with get_db_connection() as conn:
+            init_recruiting_job_tables(conn)
+            init_recruiting_operator_tables(conn)
+            conn.commit()
+        assert _read_job_ids() == first
+
+
+# ============== 5. Phase 5 列表统计 + 档位候选 ==============
+
+class TestJobListStatsAndRequirementOptions:
+    """简历-职位匹配 Phase 5：jobs 列表带 resume_count/matched_count 统计；
+    requirement-options 静态档位候选端点"""
+
+    def test_list_returns_resume_and_matched_counts(self, temp_tenant_with_user):
+        """列表每职位带「简历 N · 匹配 M」：N=该职位关联简历数，M 仅 match_status='matched'"""
+        from src.api import recruiting_operator
+        from src.services.recruiting_resume_service import init_recruiting_operator_tables
+        from src.services import recruiting_job_service, recruiting_resume_service
+        from src.db.database import get_db_connection
+
+        ctx = temp_tenant_with_user
+        with get_db_connection() as conn:
+            init_recruiting_operator_tables(conn)  # 本模块 fixture 只建 jobs 表，简历统计需 resumes 表
+            conn.commit()
+
+        jobs = recruiting_job_service.list_jobs(ctx["tenant_id"])  # 预置 PHP 职位
+        php = jobs[0]
+        for name in ("统计甲", "统计乙", "统计丙"):
+            recruiting_resume_service.create_resume_record(
+                ctx["tenant_id"], ctx["user_id"],
+                candidate_name=name, job_id=php["id"], ocr_text=f"{name} 的简历",
+            )
+        # 甲 matched / 乙 unmatched（接近，不计入匹配数）/ 丙不评分
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE bs_recruiting_operator_resumes SET match_status = %s, match_score = %s "
+                "WHERE tenant_id = %s AND candidate_name = %s",
+                ("matched", 82, ctx["tenant_id"], "统计甲"),
+            )
+            cursor.execute(
+                "UPDATE bs_recruiting_operator_resumes SET match_status = %s, match_score = %s "
+                "WHERE tenant_id = %s AND candidate_name = %s",
+                ("unmatched", 61, ctx["tenant_id"], "统计乙"),
+            )
+            conn.commit()
+
+        with _mock_tenant_ctx(ctx["tenant_id"]):
+            resp = _unpack(_call(recruiting_operator.list_jobs(request=None)))
+        assert resp["success"] is True
+        item = next(j for j in resp["data"]["items"] if j["id"] == php["id"])
+        assert item["resume_count"] == 3
+        assert item["matched_count"] == 1
+
+    def test_list_counts_default_zero_for_new_job(self, temp_tenant_with_user):
+        """无关联简历的新职位统计为 0/0（列表仍带两统计键）"""
+        from src.api import recruiting_operator
+
+        ctx = temp_tenant_with_user
+        req = recruiting_operator.CreateJobRequest(job_name="零统计职位")
+        with _mock_tenant_ctx(ctx["tenant_id"]), _mock_user(ctx["user_id"]):
+            create_resp = _unpack(_call(recruiting_operator.create_job(req, request=None)))
+        job_id = create_resp["data"]["id"]
+
+        with _mock_tenant_ctx(ctx["tenant_id"]):
+            resp = _unpack(_call(recruiting_operator.list_jobs(request=None)))
+        item = next(j for j in resp["data"]["items"] if j["id"] == job_id)
+        assert item["resume_count"] == 0
+        assert item["matched_count"] == 0
+
+    def test_requirement_options_endpoint(self):
+        """GET /jobs/requirement-options 返回三维度静态档位候选（无需租户）"""
+        from src.api import recruiting_operator
+
+        resp = _unpack(_call(recruiting_operator.get_requirement_options(request=None)))
+        assert resp["success"] is True
+        data = resp["data"]
+        assert data["experience"] == ["1年以内", "1-3年", "3-5年", "5-10年", "10年以上"]
+        assert data["educations"] == ["大专", "本科", "硕士", "博士"]
+        assert data["salary"] == ["3-5K", "5-10K", "10-15K", "15-25K", "25-50K", "50K以上"]
+
+    def test_requirement_options_route_not_swallowed_by_job_id(self):
+        """路由顺序：/jobs/requirement-options 不被 /jobs/{job_id} 吞掉（FastAPI 声明序校验）"""
+        from fastapi.routing import APIRoute
+        from src.api.recruiting_operator import router
+
+        paths = [route.path for route in router.routes if isinstance(route, APIRoute)]
+        assert "/api/recruiting-operator/jobs/requirement-options" in paths
+        assert paths.index("/api/recruiting-operator/jobs/requirement-options") < \
+            paths.index("/api/recruiting-operator/jobs/{job_id}")
 
 
 # ============== 租户隔离测试 ==============

@@ -43,6 +43,14 @@ export interface ChatMessage {
   downloadableFiles?: DownloadableFile[]  // 可下载文件列表
   images?: ImageRef[]  // Agent 推送的图片列表（Phase 2 P2.4）
   browserAssistance?: BrowserHumanAssistance
+  quickOptions?: QuickOption[]  // 编号选择按钮（§5.1 选择交互；纯前端增强，不持久化到历史）
+}
+
+/** 编号选择元数据（设计 §5.1 选择交互）：工具结果 data.options，前端渲染编号按钮 */
+export interface QuickOption {
+  key: string
+  label: string
+  description?: string
 }
 
 export interface BrowserHumanAssistance {

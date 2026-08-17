@@ -9,6 +9,16 @@
   成功落库+紧凑摘要（不含 base64/ocr 全文）/ CLI 失败原样透传不落库 / payload 非法 RESUME_PAYLOAD_INVALID
 - import 安全：proxy_tool ↔ services 无循环依赖
 
+简历-职位匹配 Phase 1（2026-08-17）新增覆盖：
+- 落库关联解析（设计 §4.1）：job_name 精确命中关联 job_id / 0 命中 job_id NULL + 摘要 warning /
+  payload 带 job_id 直用（非本租户拒绝）/ 绝不自动创建职位
+- create_resume_record 新增 job_id 参数校验（格式/租户归属）
+
+简历-职位匹配 Phase 2（2026-08-17）新增覆盖：
+- 工具落库后自动评分（设计 §3）：detail/batch 摘要带 match_score/match_status/match_summary，
+  评分失败 match_score=None + match_note「未评分」；单份评分异常不影响其余份与工具成功返回
+- 全模块 autouse stub 评分 LLM（不真调网），评分服务直测见 test_recruiting_match_service.py
+
 既有 24 个端点测试见 test_recruiting_operator_apis.py（验证 API 薄壳化没变行为）。
 """
 
@@ -28,6 +38,7 @@ from src.local_tools.proxy_tool import (
     BossResumeDetailTool,
     LocalToolProxyTool,
 )
+from src.services import recruiting_match_service
 from src.services import recruiting_resume_service as resume_service
 
 pytestmark = pytest.mark.integration
@@ -44,18 +55,20 @@ _TINY_PNG_BASE64 = (
 
 @pytest.fixture(scope="module", autouse=True)
 def _ensure_tables():
-    """模块级幂等建表（测试库可能未跑过服务启动初始化）"""
+    """模块级幂等建表（测试库可能未跑过服务启动初始化；jobs 先建——resumes.job_id 外键引用 jobs 表）"""
     from src.db.database import get_db_connection
+    from src.services.recruiting_job_service import init_recruiting_job_tables
     from src.services.recruiting_resume_service import init_recruiting_operator_tables
 
     with get_db_connection() as conn:
+        init_recruiting_job_tables(conn)
         init_recruiting_operator_tables(conn)
         conn.commit()
 
 
 @pytest.fixture
 def temp_tenant_with_user():
-    """创建临时租户 + 测试用户，测试后清理"""
+    """创建临时租户 + 测试用户，测试后清理（含职位与话术，Phase 1 关联测试会建职位）"""
     from src.db.database import get_db_connection
     from src.saas.db.tenant_db import TenantDB
 
@@ -78,6 +91,14 @@ def temp_tenant_with_user():
             cursor = conn.cursor()
             cursor.execute(
                 "DELETE FROM bs_recruiting_operator_resumes WHERE tenant_id = %s",
+                (tenant_id,),
+            )
+            cursor.execute(
+                "DELETE FROM bs_recruiting_operator_job_scripts WHERE tenant_id = %s",
+                (tenant_id,),
+            )
+            cursor.execute(
+                "DELETE FROM bs_recruiting_operator_jobs WHERE tenant_id = %s",
                 (tenant_id,),
             )
             conn.commit()
@@ -105,6 +126,24 @@ def temp_storage_dir(tmp_path, monkeypatch):
     return target
 
 
+@pytest.fixture(autouse=True)
+def _stub_match_llm(monkeypatch):
+    """全模块自动 stub 评分 LLM（Phase 2：落库成功后自动评分）。
+
+    工具编排测试走「落库 → 自动评分」完整链路但不真调网：固定返回 82 分
+    （默认阈值 70 → matched）；usage 置 None 让计费落库分支 no-op。
+    """
+    class _StubMatchGateway:
+        async def chat(self, **kwargs):
+            return {"content": json.dumps({
+                "score": 82,
+                "match_summary": "PHP/Laravel 经验匹配，本科，5 年经验",
+                "key_info": {"education": "本科", "core_skills": ["PHP", "Laravel"]},
+            }, ensure_ascii=False), "usage": None}
+
+    monkeypatch.setattr(recruiting_match_service, "llm_gateway", _StubMatchGateway())
+
+
 def _call(coro):
     """同步驱动 async 函数（独立新 event loop，避免跨文件事件循环状态污染）"""
     import asyncio
@@ -127,6 +166,27 @@ def _count_resumes(tenant_id: str) -> int:
             (tenant_id,),
         )
         return cursor.fetchone()["total"]
+
+
+def _count_jobs(tenant_id: str) -> int:
+    """统计该租户职位数（「绝不自动创建职位」断言用）"""
+    from src.db.database import get_db_connection
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT COUNT(*) AS total FROM bs_recruiting_operator_jobs WHERE tenant_id = %s",
+            (tenant_id,),
+        )
+        return cursor.fetchone()["total"]
+
+
+# 紧凑摘要基础字段集合（Phase 1 新增 job_id；未关联职位时附带 warning；
+# Phase 2 新增评分三键 match_score/match_status/match_summary，评分失败附 match_note）
+_BASE_SUMMARY_KEYS = {
+    "resume_id", "candidate_name", "job_name", "job_id", "image_count", "ocr_char_count"
+}
+_MATCH_SUMMARY_KEYS = {"match_score", "match_status", "match_summary"}
 
 
 # ============== 1. 服务层直测 ==============
@@ -312,6 +372,129 @@ class TestToolResultContract:
         assert not list(temp_storage_dir.iterdir())
 
 
+# ============== 2b. 简历-职位关联解析（Phase 1，设计 §4.1） ==============
+
+
+class TestJobLinkResolution:
+    """落库关联解析：payload 带 job_id 直用（校验租户）/ job_name 精确匹配 / 绝不自动创建职位"""
+
+    def test_job_name_exact_match_links_job_id(self, temp_tenant_with_user, temp_storage_dir):
+        """job_name 精确命中租户内唯一职位 → 关联 job_id，无 warning"""
+        from src.services import recruiting_job_service
+
+        ctx = temp_tenant_with_user
+        job = recruiting_job_service.create_job(ctx["tenant_id"], job_name="PHP后端工程师")
+        record = resume_service.create_resume_record_from_tool_result(
+            ctx["tenant_id"], ctx["user_id"],
+            {"candidate_name": "张三", "job_name": "PHP后端工程师",
+             "images": [{"base64": _TINY_PNG_BASE64, "mime_type": "image/png"}]},
+        )
+        assert record["job_id"] == job["id"]
+        assert record["job_name"] == "PHP后端工程师"
+        assert "job_warning" not in record
+
+    def test_job_name_zero_match_keeps_null_with_warning(self, temp_tenant_with_user, temp_storage_dir):
+        """job_name 0 命中 → job_id=NULL、job_name 原文保留 + warning；绝不自动创建职位"""
+        ctx = temp_tenant_with_user
+        record = resume_service.create_resume_record_from_tool_result(
+            ctx["tenant_id"], ctx["user_id"],
+            {"candidate_name": "李四", "job_name": "不存在的职位",
+             "images": [{"base64": _TINY_PNG_BASE64, "mime_type": "image/png"}]},
+        )
+        assert record["job_id"] is None
+        assert record["job_name"] == "不存在的职位"  # 原文保留
+        assert "未关联职位" in record["job_warning"]
+        assert "请在职位管理核对" in record["job_warning"]
+        # 无自动建职位副作用
+        assert _count_jobs(ctx["tenant_id"]) == 0
+
+    def test_payload_job_id_direct_use_and_name_backfill(self, temp_tenant_with_user, temp_storage_dir):
+        """payload 带 job_id → 校验本租户后直接用；job_name 缺省回填职位规范名"""
+        from src.services import recruiting_job_service
+
+        ctx = temp_tenant_with_user
+        job = recruiting_job_service.create_job(ctx["tenant_id"], job_name="资深 Laravel 工程师")
+        record = resume_service.create_resume_record_from_tool_result(
+            ctx["tenant_id"], ctx["user_id"],
+            {"candidate_name": "王五", "job_id": job["id"],
+             "images": [{"base64": _TINY_PNG_BASE64, "mime_type": "image/png"}]},
+        )
+        assert record["job_id"] == job["id"]
+        assert record["job_name"] == "资深 Laravel 工程师"  # 回填显示冗余
+        assert "job_warning" not in record
+
+    def test_payload_job_id_cross_tenant_rejected(self, temp_tenant_with_user, temp_storage_dir):
+        """payload 带 job_id 但职位属另一租户 → ResumePayloadError 拒绝入库，不落库不建职位"""
+        from src.db.database import get_db_connection
+        from src.saas.db.tenant_db import TenantDB
+        from src.services import recruiting_job_service
+
+        ctx_a = temp_tenant_with_user
+        job_a = recruiting_job_service.create_job(ctx_a["tenant_id"], job_name="A租户职位")
+
+        tenant_b = TenantDB.create(
+            company_name=f"简历关联B租户-{uuid.uuid4().hex[:6].upper()}",
+            tenant_code=f"T{uuid.uuid4().hex[:6].upper()}",
+            contact_name="测试B", contact_phone="13800000001",
+        )
+        if not tenant_b:
+            pytest.skip("无法创建测试租户B")
+        tenant_id_b = tenant_b["tenant_id"]
+        try:
+            with pytest.raises(resume_service.ResumePayloadError, match="不属于本租户"):
+                resume_service.create_resume_record_from_tool_result(
+                    tenant_id_b, "u_b",
+                    {"candidate_name": "赵六", "job_id": job_a["id"],
+                     "images": [{"base64": _TINY_PNG_BASE64, "mime_type": "image/png"}]},
+                )
+            assert _count_resumes(tenant_id_b) == 0
+            assert _count_jobs(tenant_id_b) == 0  # 无自动建职位
+        finally:
+            TenantDB.delete(tenant_id_b)
+            try:
+                with get_db_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("DELETE FROM tenants WHERE tenant_id = %s", (tenant_id_b,))
+                    conn.commit()
+            except Exception:
+                pass
+
+    def test_payload_job_id_bad_format_rejected(self, temp_tenant_with_user, temp_storage_dir):
+        """payload job_id 格式非法 → ResumePayloadError，不落库"""
+        ctx = temp_tenant_with_user
+        with pytest.raises(resume_service.ResumePayloadError, match="格式非法"):
+            resume_service.create_resume_record_from_tool_result(
+                ctx["tenant_id"], ctx["user_id"],
+                {"candidate_name": "孙七", "job_id": "not-a-uuid",
+                 "images": [{"base64": _TINY_PNG_BASE64, "mime_type": "image/png"}]},
+            )
+        assert _count_resumes(ctx["tenant_id"]) == 0
+
+    def test_create_resume_record_job_id_param_validation(self, temp_tenant_with_user, temp_storage_dir):
+        """create_resume_record 直传 job_id：合法关联 / 非法格式 / 非本租户职位三路"""
+        from src.services import recruiting_job_service
+
+        ctx = temp_tenant_with_user
+        job = recruiting_job_service.create_job(ctx["tenant_id"], job_name="参数校验职位")
+
+        ok = resume_service.create_resume_record(
+            ctx["tenant_id"], ctx["user_id"],
+            candidate_name="周八", job_id=job["id"], source="manual",
+        )
+        assert ok["job_id"] == job["id"]
+
+        with pytest.raises(ValueError, match="格式非法"):
+            resume_service.create_resume_record(
+                ctx["tenant_id"], ctx["user_id"], candidate_name="吴九", job_id="xxx",
+            )
+        with pytest.raises(ValueError, match="不属于本租户"):
+            resume_service.create_resume_record(
+                ctx["tenant_id"], ctx["user_id"],
+                candidate_name="郑十", job_id=str(uuid.uuid4()),  # 随机 UUID（非本租户职位）
+            )
+        assert _count_resumes(ctx["tenant_id"]) == 1  # 仅第一份入库
+
+
 # ============== 3. 工具编排测试 ==============
 
 def _cli_success_result(payload):
@@ -353,14 +536,18 @@ class TestBossResumeDetailToolOrchestration:
 
         assert result["success"] is True
         assert result["invocation_id"] == "inv-test-1"
-        # 紧凑摘要：字段集合精确匹配
-        assert set(result["data"].keys()) == {
-            "resume_id", "candidate_name", "job_name", "image_count", "ocr_char_count"
-        }
+        # 紧凑摘要：基础字段集合 + 未关联职位 warning（该租户无「后端开发」职位）
+        # + Phase 2 评分三键（job_name 存在 → 评分执行，stub 固定 82 分 → matched）
+        assert set(result["data"].keys()) == _BASE_SUMMARY_KEYS | {"warning"} | _MATCH_SUMMARY_KEYS
         assert result["data"]["candidate_name"] == "张三"
         assert result["data"]["job_name"] == "后端开发"
+        assert result["data"]["job_id"] is None
+        assert "未关联职位" in result["data"]["warning"]
         assert result["data"]["image_count"] == 3
         assert result["data"]["ocr_char_count"] == len(payload["ocr_text"])
+        assert result["data"]["match_score"] == 82
+        assert result["data"]["match_status"] == "matched"
+        assert result["data"]["match_summary"]
         # 图片字节与 OCR 全文绝不进 LLM 上下文
         serialized = json.dumps(result, ensure_ascii=False)
         assert _TINY_PNG_BASE64 not in serialized
@@ -369,11 +556,14 @@ class TestBossResumeDetailToolOrchestration:
         assert "张三" in result["message"]
         assert "后端开发" in result["message"]
         assert "3" in result["message"]
-        # 已真实落库（source=boss）且截图落盘
+        # 已真实落库（source=boss）且截图落盘；评分四列已回写（未关联职位 → 阈值默认 70）
         record = resume_service.get_resume(ctx["tenant_id"], result["data"]["resume_id"])
         assert record["source"] == "boss"
         assert record["ocr_text"] == payload["ocr_text"]
         assert len(record["images"]) == 3
+        assert record["match_score"] == 82
+        assert record["match_status"] == "matched"
+        assert record["key_info"]["education"] == "本科"
         assert len(list(temp_storage_dir.iterdir())) == 3
 
     def test_success_keeps_unknown_effect_notice(self, temp_tenant_with_user, temp_storage_dir):
@@ -536,13 +726,28 @@ class TestBossResumeBatchToolOrchestration:
         assert result["data"]["failures"] == []
         summaries = result["data"]["resumes"]
         assert len(summaries) == 2
-        # 每份摘要字段集合精确匹配（与 BossResumeDetailTool 同款紧凑摘要）
+        # 每份摘要 = 基础字段（与 BossResumeDetailTool 同款紧凑摘要）+ Phase 2 评分三键，
+        # 至多附带一个 warning（未关联职位）与 match_note（评分失败/跳过）；
+        # 第 1 份有 job_name → 评分执行（stub 82 分 matched）；
+        # 第 2 份无 job_name → skipped（match_score=None + match_note「未评分」）
         for s in summaries:
-            assert set(s.keys()) == {
-                "resume_id", "candidate_name", "job_name", "image_count", "ocr_char_count"
-            }
+            assert _BASE_SUMMARY_KEYS <= set(s.keys())
+            extra = set(s.keys()) - _BASE_SUMMARY_KEYS
+            if s.get("match_score") is None:
+                assert extra <= {"warning", "match_score", "match_status", "match_summary", "match_note"}
+                assert s["match_note"] == "未评分"
+            else:
+                assert extra <= {"warning", "match_score", "match_status", "match_summary"}
+                assert "match_note" not in s
         assert [s["candidate_name"] for s in summaries] == ["刘草威", "张三丰"]
+        assert summaries[0]["match_score"] == 82
+        assert summaries[0]["match_status"] == "matched"
+        assert summaries[1]["match_score"] is None
+        assert summaries[1]["match_note"] == "未评分"
         assert summaries[0]["job_name"] == "PHP开发工程师"
+        assert summaries[0]["job_id"] is None
+        assert "未关联职位" in summaries[0]["warning"]
+        assert "warning" not in summaries[1]
         assert summaries[0]["ocr_char_count"] == len(payloads[0]["ocr_text"])
         assert summaries[0]["image_count"] == 1
         # 图片字节与 OCR 全文绝不进 LLM 上下文
@@ -638,6 +843,85 @@ class TestBossResumeBatchToolOrchestration:
         assert "BATCH_OCR_X" not in serialized
         assert _count_resumes(ctx["tenant_id"]) == 0
         assert not list(temp_storage_dir.iterdir())
+
+
+# ============== 3c. 入库后自动评分接入（Phase 2，设计 §3） ==============
+
+
+class TestMatchEvaluationIntegration:
+    """工具层评分接入：摘要带分数键；单份评分失败/异常不影响其余份与工具成功返回"""
+
+    def test_detail_summary_carries_match_note_when_evaluation_fails(
+        self, temp_tenant_with_user, temp_storage_dir, monkeypatch
+    ):
+        """detail：评分失败（LLM 重试仍败）→ 摘要 match_score=None + match_note「未评分」，工具仍成功"""
+        ctx = temp_tenant_with_user
+
+        async def fake_evaluate(_tid, rid):
+            return {"resume_id": rid, "score": None, "note": "评分失败：LLM 调用失败"}
+
+        monkeypatch.setattr(recruiting_match_service, "evaluate_and_update", fake_evaluate)
+
+        payload = {
+            "candidate_name": "评分失败者",
+            "job_name": "后端开发",
+            "images": [{"base64": _TINY_PNG_BASE64, "mime_type": "image/png"}],
+        }
+        fake = _cli_success_result(payload)
+        with patch.object(LocalToolProxyTool, "execute", new=AsyncMock(return_value=fake)):
+            result = _call(BossResumeDetailTool().execute(
+                _trusted_tenant_id=ctx["tenant_id"], _trusted_user_id=ctx["user_id"],
+            ))
+
+        assert result["success"] is True
+        assert result["data"]["match_score"] is None
+        assert result["data"]["match_status"] is None
+        assert result["data"]["match_summary"] is None
+        assert result["data"]["match_note"] == "未评分"
+        # 简历本体照常入库，评分列留 NULL（评分失败不丢简历）
+        record = resume_service.get_resume(ctx["tenant_id"], result["data"]["resume_id"])
+        assert record["candidate_name"] == "评分失败者"
+        assert record["match_score"] is None
+
+    def test_batch_single_evaluation_exception_does_not_affect_others(
+        self, temp_tenant_with_user, temp_storage_dir, monkeypatch
+    ):
+        """batch：单份评分服务抛异常（防御兜底）→ 该份 match_note「未评分」，
+        其余份照常带分数；工具成功返回（评分绝不拖垮入库结果，也不进 failures）"""
+        ctx = temp_tenant_with_user
+
+        async def fake_evaluate(tid, rid):
+            record = resume_service.get_resume(tid, rid)
+            if record and record["candidate_name"] == "评分失败者":
+                raise RuntimeError("llm gateway boom")
+            return {
+                "resume_id": rid, "match_score": 90,
+                "match_status": "matched", "match_summary": "高度匹配", "key_info": None,
+            }
+
+        monkeypatch.setattr(recruiting_match_service, "evaluate_and_update", fake_evaluate)
+
+        payloads = [
+            {"candidate_name": "评分失败者", "job_name": "后端开发",
+             "images": [{"base64": _TINY_PNG_BASE64, "mime_type": "image/png"}]},
+            {"candidate_name": "评分成功者", "job_name": "后端开发",
+             "images": [{"base64": _TINY_PNG_BASE64, "mime_type": "image/png"}]},
+        ]
+        fake = TestBossResumeBatchToolOrchestration._batch_success_result(payloads)
+        with patch.object(LocalToolProxyTool, "execute", new=AsyncMock(return_value=fake)):
+            result = _call(BossResumeBatchTool().execute(
+                _trusted_tenant_id=ctx["tenant_id"], _trusted_user_id=ctx["user_id"],
+            ))
+
+        assert result["success"] is True
+        assert result["data"]["failures"] == []  # 评分失败不进 failures（简历已入库）
+        summaries = {s["candidate_name"]: s for s in result["data"]["resumes"]}
+        assert summaries["评分失败者"]["match_score"] is None
+        assert summaries["评分失败者"]["match_note"] == "未评分"
+        assert summaries["评分成功者"]["match_score"] == 90
+        assert summaries["评分成功者"]["match_status"] == "matched"
+        assert "match_note" not in summaries["评分成功者"]
+        assert _count_resumes(ctx["tenant_id"]) == 2
 
 
 # ============== 4. import 安全 / 注册 ==============

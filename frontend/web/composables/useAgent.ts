@@ -2,6 +2,7 @@ import { ref, computed, shallowReactive, type Ref } from 'vue'
 import type { ChatMessage, InputHintState, ProgressMessage } from '@/types'
 import { SSEManager, uploadFile, type UploadedFile } from '@/api/agent'
 import { getSessionMessages } from '@/api/session'
+import { extractQuickOptions } from '@/utils/quickOptions'
 import { useToast } from 'vue-toastification'
 import { useDemoAuth } from './useDemoAuth'
 import { useTenantAuth } from './useTenantAuth'
@@ -347,6 +348,18 @@ export function useAgent() {
                       mime_type: result.mime_type || '',
                     })
                   }
+                }
+              }
+            }
+            // 编号选择元数据（设计 §5.1 选择交互）：boss_jobs_list 成功结果带 data.options
+            // → 挂到助手消息渲染选项按钮（≥2 项才挂载，1 项 SUBAGENT 约定直用不列单；
+            // 纯前端增强不进历史持久化，用户手动回复数字同样有效）
+            if (toolName === 'boss_jobs_list' || !toolName) {
+              const quickOptions = extractQuickOptions(result)
+              if (quickOptions.length) {
+                const lastMsg = state.messages.value[state.messages.value.length - 1]
+                if (lastMsg && lastMsg.role === 'assistant') {
+                  lastMsg.quickOptions = quickOptions
                 }
               }
             }

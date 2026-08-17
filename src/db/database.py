@@ -1349,6 +1349,19 @@ def _init_postgresql():
             except Exception as rollback_err:
                 logger.warning(f"Failed to rollback video_agent transaction: {rollback_err}")
 
+        # 招聘操作智能体职位库表（bs_recruiting_operator_jobs / bs_recruiting_operator_job_scripts）
+        # 注意：必须在简历库表之前初始化（resumes.job_id 外键引用 jobs 表，
+        # 简历-职位匹配 Phase 1 关联严密化）
+        try:
+            from src.services.recruiting_job_service import init_recruiting_job_tables
+            init_recruiting_job_tables(conn)
+        except Exception as e:
+            logger.warning(f"Failed to initialize recruiting_operator job tables: {e}")
+            try:
+                conn.rollback()
+            except Exception as rollback_err:
+                logger.warning(f"Failed to rollback recruiting_operator job transaction: {rollback_err}")
+
         # 招聘操作智能体表（bs_recruiting_operator_resumes 简历库）
         try:
             from src.services.recruiting_resume_service import init_recruiting_operator_tables
@@ -1359,17 +1372,6 @@ def _init_postgresql():
                 conn.rollback()
             except Exception as rollback_err:
                 logger.warning(f"Failed to rollback recruiting_operator transaction: {rollback_err}")
-
-        # 招聘操作智能体职位库表（bs_recruiting_operator_jobs / bs_recruiting_operator_job_scripts）
-        try:
-            from src.services.recruiting_job_service import init_recruiting_job_tables
-            init_recruiting_job_tables(conn)
-        except Exception as e:
-            logger.warning(f"Failed to initialize recruiting_operator job tables: {e}")
-            try:
-                conn.rollback()
-            except Exception as rollback_err:
-                logger.warning(f"Failed to rollback recruiting_operator job transaction: {rollback_err}")
 
         # Skill 表初始化由 SkillLoader._init_skill_tables() 统一处理，
         # 通过 SKILL.md 中的 init_script 字段声明，不再硬编码。

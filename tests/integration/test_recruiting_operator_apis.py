@@ -39,11 +39,13 @@ _TINY_PNG_BASE64 = (
 
 @pytest.fixture(scope="module", autouse=True)
 def _ensure_tables():
-    """模块级幂等建表（测试库可能未跑过服务启动初始化）"""
+    """模块级幂等建表（测试库可能未跑过服务启动初始化；jobs 先建——resumes.job_id 外键引用 jobs 表）"""
     from src.db.database import get_db_connection
+    from src.services.recruiting_job_service import init_recruiting_job_tables
     from src.api.recruiting_operator import init_recruiting_operator_tables
 
     with get_db_connection() as conn:
+        init_recruiting_job_tables(conn)
         init_recruiting_operator_tables(conn)
         conn.commit()
 
@@ -67,12 +69,20 @@ def temp_tenant_with_user():
     user_id = f"test_user_{uuid.uuid4().hex[:8]}"
     yield {"tenant_id": tenant_id, "user_id": user_id}
 
-    # 清理：删测试业务数据 + 删租户
+    # 清理：删测试业务数据（含职位/话术——re-evaluate 测试会建职位）+ 删租户
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "DELETE FROM bs_recruiting_operator_resumes WHERE tenant_id = %s",
+                (tenant_id,),
+            )
+            cursor.execute(
+                "DELETE FROM bs_recruiting_operator_job_scripts WHERE tenant_id = %s",
+                (tenant_id,),
+            )
+            cursor.execute(
+                "DELETE FROM bs_recruiting_operator_jobs WHERE tenant_id = %s",
                 (tenant_id,),
             )
             conn.commit()
@@ -683,3 +693,90 @@ class TestTenantIsolation:
                     conn.commit()
             except Exception:
                 pass
+
+
+# ============== 5. 重新评分 API（简历-职位匹配 Phase 2） ==============
+
+
+class TestReEvaluateResumeAPI:
+    """POST /resumes/{id}/re-evaluate 测试（LLM 全程 stub；评分服务直测见 test_recruiting_match_service.py）"""
+
+    def test_re_evaluate_success_updates_score(self, temp_tenant_with_user, monkeypatch):
+        """重评成功：按职位阈值回写 match_* / key_info 并返回评分结果 dict"""
+        import json as json_mod
+
+        from src.api import recruiting_operator
+        from src.services import recruiting_match_service, recruiting_resume_service
+
+        ctx = temp_tenant_with_user
+        job = recruiting_operator.job_service.create_job(
+            ctx["tenant_id"], job_name="Laravel 工程师", match_threshold=60,
+            job_requirements={"experience": "3-5年", "educations": ["本科"]},
+        )
+        resume_id = _insert_resume(
+            ctx["tenant_id"], ctx["user_id"],
+            job_name=job["job_name"],
+            ocr_text="张三 本科 5年 PHP/Laravel 开发经验，现任 xx科技",
+        )
+
+        class _StubGateway:
+            async def chat(self, **kwargs):
+                return {"content": json_mod.dumps({
+                    "score": 75, "match_summary": "技术栈匹配",
+                    "key_info": {"education": "本科", "core_skills": ["PHP"]},
+                }, ensure_ascii=False), "usage": None}
+
+        monkeypatch.setattr(recruiting_match_service, "llm_gateway", _StubGateway())
+
+        with _mock_tenant_ctx(ctx["tenant_id"]), _mock_user(ctx["user_id"]):
+            response = _unpack(_call(recruiting_operator.re_evaluate_resume(resume_id, request=None)))
+
+        assert response["success"] is True
+        data = response["data"]
+        assert data["resume_id"] == resume_id
+        assert data["match_score"] == 75
+        assert data["match_status"] == "matched"  # 75 ≥ 职位阈值 60
+        assert data["match_summary"] == "技术栈匹配"
+        # DB 已回写
+        record = recruiting_resume_service.get_resume(ctx["tenant_id"], resume_id)
+        assert record["match_score"] == 75
+        assert record["match_status"] == "matched"
+        assert record["key_info"]["education"] == "本科"
+
+    def test_re_evaluate_not_found_returns_404(self, temp_tenant_with_user):
+        """重评不存在的简历返回 404"""
+        from src.api import recruiting_operator
+
+        ctx = temp_tenant_with_user
+        with _mock_tenant_ctx(ctx["tenant_id"]):
+            response = _unpack(_call(recruiting_operator.re_evaluate_resume(99999999, request=None)))
+
+        assert response["success"] is False
+        assert response["error"] == "简历不存在"
+
+    def test_re_evaluate_failure_returns_note_not_error(self, temp_tenant_with_user, monkeypatch):
+        """重评失败（LLM 异常重试仍败）：HTTP success=True + data.score=None 带 note（前端据此提示），不抛 500"""
+        from src.api import recruiting_operator
+        from src.services import recruiting_match_service, recruiting_resume_service
+
+        ctx = temp_tenant_with_user
+        resume_id = _insert_resume(
+            ctx["tenant_id"], ctx["user_id"],
+            job_name="后端开发", ocr_text="OCR 正文",
+        )
+
+        class _BoomGateway:
+            async def chat(self, **kwargs):
+                raise RuntimeError("gateway down")
+
+        monkeypatch.setattr(recruiting_match_service, "llm_gateway", _BoomGateway())
+
+        with _mock_tenant_ctx(ctx["tenant_id"]):
+            response = _unpack(_call(recruiting_operator.re_evaluate_resume(resume_id, request=None)))
+
+        assert response["success"] is True  # 评分失败不是 HTTP 错误
+        assert response["data"]["score"] is None
+        assert "评分失败" in response["data"]["note"]
+        # 评分列留 NULL（评分失败不丢简历）
+        record = recruiting_resume_service.get_resume(ctx["tenant_id"], resume_id)
+        assert record["match_score"] is None
