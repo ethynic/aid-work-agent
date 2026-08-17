@@ -151,7 +151,7 @@ class DataAnalyzer:
                 sheet_name = (source or {}).get("sheet_name", 0)
                 return pd.read_excel(file_path, sheet_name=sheet_name)
         except Exception as e:
-            logger.error(f"[DataAnalyzer] 加载文件失败 {file_path}: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"[DataAnalyzer] 加载文件失败 {file_path}: {e}")
             return None
 
     async def _load_database(self, source: dict) -> Optional[pd.DataFrame]:
@@ -211,7 +211,7 @@ class DataAnalyzer:
             import asyncio
             return await asyncio.to_thread(_load)
         except Exception as e:
-            logger.error(f"[DataAnalyzer] 数据库加载失败: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"[DataAnalyzer] 数据库加载失败: {e}")
             return None
 
     # ==================== 变量管理 ====================

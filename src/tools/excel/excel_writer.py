@@ -84,7 +84,7 @@ def create_excel(data: Any, data_type: str = "markdown",
             "column_count": len(headers),
         }
     except Exception as e:
-        logger.error(f"[ExcelWriter] 创建 Excel 失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"[ExcelWriter] 创建 Excel 失败: {e}")
         return {"success": False, "error": f"创建 Excel 失败: {e}"}
 
 
@@ -140,7 +140,7 @@ def write_multi_sheet(sheets_data: Dict[str, Any], file_name: Optional[str] = No
             "sheet_count": len(sheets_data),
         }
     except Exception as e:
-        logger.error(f"[ExcelWriter] 多 Sheet 创建失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"[ExcelWriter] 多 Sheet 创建失败: {e}")
         return {"success": False, "error": f"创建多 Sheet Excel 失败: {e}"}
 
 
@@ -210,7 +210,7 @@ def merge_files(file_paths: List[str], output_name: Optional[str] = None,
             "merge_mode": merge_mode,
         }
     except Exception as e:
-        logger.error(f"[ExcelWriter] 合并失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"[ExcelWriter] 合并失败: {e}")
         return {"success": False, "error": f"合并文件失败: {e}"}
 
 
@@ -263,7 +263,7 @@ def convert_format(file_path: str, target_format: str = "xlsx",
         else:
             return {"success": False, "error": f"不支持的转换: {file_type} → {target_format}"}
     except Exception as e:
-        logger.error(f"[ExcelWriter] 格式转换失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"[ExcelWriter] 格式转换失败: {e}")
         return {"success": False, "error": f"格式转换失败: {e}"}
 
 

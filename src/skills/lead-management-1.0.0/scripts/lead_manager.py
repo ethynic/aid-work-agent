@@ -302,7 +302,7 @@ def cmd_init_tables(args):
             "bs_customer_followup_conversion_funnel",
         ]})
     except Exception as e:
-        logger.error(f"init_tables 失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"init_tables 失败: {e}")
         output_json(False, error="创建表失败", debug=str(e))
 
 
@@ -361,7 +361,7 @@ def cmd_add_lead(args):
 
         output_json(True, {"lead_id": lead_id, "message": "线索创建成功"})
     except Exception as e:
-        logger.error(f"add-lead 失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"add-lead 失败: {e}")
         output_json(False, error="创建线索失败", debug=str(e))
 
 
@@ -433,7 +433,7 @@ def cmd_list_leads(args):
             "items": rows,
         })
     except Exception as e:
-        logger.error(f"list-leads 失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"list-leads 失败: {e}")
         output_json(False, error="查询线索失败", debug=str(e))
 
 
@@ -478,7 +478,7 @@ def cmd_get_lead(args):
         lead["recent_records"] = records
         output_json(True, lead)
     except Exception as e:
-        logger.error(f"get-lead 失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"get-lead 失败: {e}")
         output_json(False, error="查询线索详情失败", debug=str(e))
 
 
@@ -532,7 +532,7 @@ def cmd_update_lead(args):
 
         output_json(True, {"lead_id": args.lead_id, "message": "更新成功"})
     except Exception as e:
-        logger.error(f"update-lead 失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"update-lead 失败: {e}")
         output_json(False, error="更新线索失败", debug=str(e))
 
 
@@ -613,7 +613,7 @@ def cmd_update_stage(args):
             "message": f"阶段已从 {from_stage} 变更为 {args.stage}",
         })
     except Exception as e:
-        logger.error(f"update-stage 失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"update-stage 失败: {e}")
         output_json(False, error="变更阶段失败", debug=str(e))
 
 
@@ -641,7 +641,7 @@ def cmd_delete_lead(args):
 
         output_json(True, {"lead_id": args.lead_id, "message": "线索已标记为丢失"})
     except Exception as e:
-        logger.error(f"delete-lead 失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"delete-lead 失败: {e}")
         output_json(False, error="删除线索失败", debug=str(e))
 
 
@@ -690,7 +690,7 @@ def cmd_assign_lead(args):
             "message": f"线索已分配给 {assigned_to}",
         })
     except Exception as e:
-        logger.error(f"assign-lead 失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"assign-lead 失败: {e}")
         output_json(False, error="分配线索失败", debug=str(e))
 
 
@@ -756,7 +756,7 @@ def cmd_batch_assign(args):
             "message": f"已分配 {assigned} 条线索，跳过 {skipped} 条",
         })
     except Exception as e:
-        logger.error(f"batch-assign 失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"batch-assign 失败: {e}")
         output_json(False, error="批量分配失败", debug=str(e))
 
 
@@ -826,7 +826,7 @@ def cmd_stats(args):
             "followup": followup_stats,
         })
     except Exception as e:
-        logger.error(f"stats 失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"stats 失败: {e}")
         output_json(False, error="获取统计失败", debug=str(e))
 
 
@@ -955,7 +955,7 @@ def cmd_import_leads(args):
             "errors": errors[:10],  # 最多返回 10 条错误
         })
     except Exception as e:
-        logger.error(f"import-leads 失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"import-leads 失败: {e}")
         output_json(False, error="导入线索失败", debug=str(e))
 
 
@@ -1035,7 +1035,7 @@ def cmd_export_leads(args):
             "message": f"已导出 {len(rows)} 条线索",
         })
     except Exception as e:
-        logger.error(f"export-leads 失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"export-leads 失败: {e}")
         output_json(False, error="导出线索失败", debug=str(e))
 
 
@@ -1073,7 +1073,7 @@ def cmd_add_sales_rep(args):
 
         output_json(True, {"rep_id": rep_id, "message": "销售人员添加成功"})
     except Exception as e:
-        logger.error(f"add-sales-rep 失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"add-sales-rep 失败: {e}")
         output_json(False, error="添加销售人员失败", debug=str(e))
 
 
@@ -1107,7 +1107,7 @@ def cmd_list_sales_reps(args):
 
         output_json(True, {"items": rows, "total": len(rows)})
     except Exception as e:
-        logger.error(f"list-sales-reps 失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"list-sales-reps 失败: {e}")
         output_json(False, error="查询销售人员失败", debug=str(e))
 
 
@@ -1154,7 +1154,7 @@ def cmd_update_sales_rep(args):
 
         output_json(True, {"rep_id": args.rep_id, "message": "更新成功"})
     except Exception as e:
-        logger.error(f"update-sales-rep 失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"update-sales-rep 失败: {e}")
         output_json(False, error="更新销售人员失败", debug=str(e))
 
 
@@ -1178,7 +1178,7 @@ def cmd_deactivate_sales_rep(args):
 
         output_json(True, {"rep_id": args.rep_id, "message": "销售人员已停用"})
     except Exception as e:
-        logger.error(f"deactivate-sales-rep 失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"deactivate-sales-rep 失败: {e}")
         output_json(False, error="停用销售人员失败", debug=str(e))
 
 
@@ -1217,7 +1217,7 @@ def cmd_add_assign_rule(args):
 
         output_json(True, {"rule_id": rule_id, "message": "分配规则创建成功"})
     except Exception as e:
-        logger.error(f"add-assign-rule 失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"add-assign-rule 失败: {e}")
         output_json(False, error="创建分配规则失败", debug=str(e))
 
 
@@ -1250,7 +1250,7 @@ def cmd_list_assign_rules(args):
 
         output_json(True, {"items": rows, "total": len(rows)})
     except Exception as e:
-        logger.error(f"list-assign-rules 失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"list-assign-rules 失败: {e}")
         output_json(False, error="查询分配规则失败", debug=str(e))
 
 
@@ -1299,7 +1299,7 @@ def cmd_update_assign_rule(args):
 
         output_json(True, {"rule_id": args.rule_id, "message": "更新成功"})
     except Exception as e:
-        logger.error(f"update-assign-rule 失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"update-assign-rule 失败: {e}")
         output_json(False, error="更新分配规则失败", debug=str(e))
 
 
@@ -1392,7 +1392,7 @@ def _auto_assign_rep(tenant_id: str, rule_type: str, lead_id: str = None, lead_r
             return min(available, key=lambda r: r['active_lead_count'])['user_id']
 
     except Exception as e:
-        logger.error(f"_auto_assign_rep 失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"_auto_assign_rep 失败: {e}")
         return None
 
 

@@ -65,7 +65,7 @@ class SmartDataAnalysisTool(BaseTool):
                 try:
                     await analyzer.load_table(meta)
                 except Exception as e:
-                    logger.error(f"[SmartDataAnalysisTool] 加载表失败: {e}", exc_info=True)
+                    logger.opt(exception=True).error(f"[SmartDataAnalysisTool] 加载表失败: {e}")
                     return {"success": False, "error": f"加载数据表失败: {e}"}
 
         # 4. 运行 AnalysisAgent
@@ -83,7 +83,7 @@ class SmartDataAnalysisTool(BaseTool):
             )
             result = await agent.run(requirement)
         except Exception as e:
-            logger.error(f"[SmartDataAnalysisTool] AnalysisAgent 运行失败: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"[SmartDataAnalysisTool] AnalysisAgent 运行失败: {e}")
             return {"success": False, "error": f"分析执行失败: {e}"}
 
         return result

@@ -103,7 +103,7 @@ class WorkOutcomeDB:
                 return {"id": row["id"], "outcome_id": row["outcome_id"]}
             except Exception as e:
                 conn.rollback()
-                logger.error(f"work_outcomes INSERT 失败: {e}", exc_info=True)
+                logger.opt(exception=True).error(f"work_outcomes INSERT 失败: {e}")
                 raise
 
     @staticmethod
@@ -265,7 +265,7 @@ class WorkOutcomeDB:
                 return deleted
             except Exception as e:
                 conn.rollback()
-                logger.error(f"work_outcomes DELETE 失败: {e}", exc_info=True)
+                logger.opt(exception=True).error(f"work_outcomes DELETE 失败: {e}")
                 raise
 
     @staticmethod

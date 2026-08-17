@@ -214,7 +214,7 @@ class WordProcessTool(BaseTool):
             except FileNotFoundError as e:
                 return {"success": False, "error": str(e)}
             except Exception as e:
-                logger.error(f"Word pipeline error at {op}: {e}", exc_info=True)
+                logger.opt(exception=True).error(f"Word pipeline error at {op}: {e}")
                 return {"success": False, "error": f"操作 {op} 执行失败: {str(e)}"}
 
             if not step_result.get("success", True):
@@ -313,7 +313,7 @@ class WordProcessTool(BaseTool):
             router = self._get_router()
             return await router.route(context, file_paths)
         except Exception as e:
-            logger.error(f"[WordProcess] LLM 路由异常: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"[WordProcess] LLM 路由异常: {e}")
             return {"task": "", "error": f"路由服务异常: {e}"}
 
     def _resolve_task_deterministic(

@@ -168,7 +168,7 @@ class KnowledgeBaseTool(BaseTool):
             }
 
         except Exception as e:
-            logger.error(f"后端日志：知识库检索失败: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"后端日志：知识库检索失败: {e}")
             return {
                 "success": False,
                 "error": str(e),

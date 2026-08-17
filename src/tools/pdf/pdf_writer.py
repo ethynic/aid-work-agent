@@ -706,7 +706,7 @@ def md_to_pdf(md_text: str, output_name: Optional[str] = None,
         )
 
     except Exception as e:
-        logger.error(f"[PdfWriter] md_to_pdf 失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"[PdfWriter] md_to_pdf 失败: {e}")
         return {"success": False, "error": sanitize_error(e, fallback="生成PDF失败，请稍后重试")}
 
 
@@ -862,5 +862,5 @@ def _html_to_pdf_via_fpdf2(html_text: str, output_name: Optional[str] = None,
             return save_result
 
     except Exception as e:
-        logger.error(f"[PdfWriter] fpdf2 HTML转PDF失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"[PdfWriter] fpdf2 HTML转PDF失败: {e}")
         return {"success": False, "error": sanitize_error(e, fallback="HTML转PDF失败，请稍后重试")}

@@ -76,7 +76,7 @@ class XToImageService:
                 page_paths, inp, work_dir, renderer_name=renderer.name
             )
         except Exception as e:
-            logger.error(f"[XToImage] 转换失败: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"[XToImage] 转换失败: {e}")
             return XToImageResult(success=False, error=str(e))
 
 

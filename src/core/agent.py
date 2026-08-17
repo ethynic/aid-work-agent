@@ -2781,7 +2781,7 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                 raise
             except Exception as e:
                 llm_call_duration = time.time() - llm_call_start
-                logger.error(f"[AGENT] LLM call FAILED, session_id={session_id}, iteration={iteration}, duration={llm_call_duration:.2f}s, error: {type(e).__name__}", exc_info=True)
+                logger.opt(exception=True).error(f"[AGENT] LLM call FAILED, session_id={session_id}, iteration={iteration}, duration={llm_call_duration:.2f}s, error: {type(e).__name__}")
                 raise
             
             tool_calls = response.get("tool_calls", [])
@@ -2834,7 +2834,7 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                         _record.set_model(self.llm.get_model_name())
                         _record.set_provider(self.llm.get_provider_name())
             except Exception:
-                logger.debug(f"Failed to record token usage", exc_info=True)
+                logger.opt(exception=True).debug(f"Failed to record token usage")
 
             # v3.1 Phase 4: 更新 session 上下文 token 缓存
             # 循环内每次 LLM 调用后写入，最后一次写入获胜（PG 行级锁 + session_queue 串行化保证不冲突）。
@@ -2853,7 +2853,7 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                         from src.channels.session import channel_session_manager
                         channel_session_manager.update_context_token_count(session_id, _total_tok)
             except Exception as _e:
-                logger.debug(f"更新 session token 缓存失败: {_e}", exc_info=True)
+                logger.opt(exception=True).debug(f"更新 session token 缓存失败: {_e}")
 
             if settings.app.llm_debug:
                 logger.debug(f"\n{'='*60}\n"
@@ -3540,7 +3540,7 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                     _normalize_image_placement(_round_image_refs)
                     yield make_image_event(_round_image_refs, placement="after_text")
                 except Exception as _img_e:
-                    logger.warning(f"[AGENT] 推送 images SSE 事件失败: {_img_e}", exc_info=True)
+                    logger.opt(exception=True).warning(f"[AGENT] 推送 images SSE 事件失败: {_img_e}")
 
         if iteration >= max_iterations:
             logger.warning(f"Reached max iterations ({max_iterations})")
@@ -3874,7 +3874,7 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                     raise
                 except Exception as e:
                     llm_call_duration = time.time() - llm_call_start
-                    logger.error(f"[SUBAGENT] LLM call FAILED, execution_id={self.execution_id}, iteration={iteration}, duration={llm_call_duration:.2f}s, error: {e}", exc_info=True)
+                    logger.opt(exception=True).error(f"[SUBAGENT] LLM call FAILED, execution_id={self.execution_id}, iteration={iteration}, duration={llm_call_duration:.2f}s, error: {e}")
                     raise
                 
                 content = response.get("content", "")
@@ -3912,7 +3912,7 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                     subagent_token_usage["output"] += _usage.get("completion_tokens", 0)
                     subagent_token_usage["cached"] += _usage.get("cached_tokens", 0)
                 except Exception:
-                    logger.debug(f"Failed to record subagent token usage", exc_info=True)
+                    logger.opt(exception=True).debug(f"Failed to record subagent token usage")
                 
                 # 打印LLM响应信息
                 if settings.app.llm_debug:

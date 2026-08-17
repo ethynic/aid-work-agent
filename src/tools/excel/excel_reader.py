@@ -113,7 +113,7 @@ def read_sheet(file_path: str, sheet_name: Optional[str] = None,
             **({"formulas": formulas} if include_formulas else {}),
         }
     except Exception as e:
-        logger.error(f"[ExcelReader] 读取失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"[ExcelReader] 读取失败: {e}")
         return {"success": False, "error": f"读取 Excel 失败: {e}"}
 
 
@@ -182,7 +182,7 @@ def read_all_sheets(file_path: str) -> Dict[str, Any]:
         result["success"] = True
         return result
     except Exception as e:
-        logger.error(f"[ExcelReader] read_all_sheets 失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"[ExcelReader] read_all_sheets 失败: {e}")
         return {"success": False, "error": f"读取 Excel 失败: {e}"}
 
 
@@ -228,7 +228,7 @@ def _read_csv(file_path: str) -> Dict[str, Any]:
             "merged_cells": [],
         }
     except Exception as e:
-        logger.error(f"[ExcelReader] CSV 读取失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"[ExcelReader] CSV 读取失败: {e}")
         return {"success": False, "error": f"读取 CSV 失败: {e}"}
 
 
@@ -304,7 +304,7 @@ def read_excel_document(file_path: str, sheet_name: Optional[str] = None) -> Dic
             "total_lines": total_lines,
         }
     except Exception as e:
-        logger.error(f"[ExcelReader] read_excel_document 失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"[ExcelReader] read_excel_document 失败: {e}")
         return {"success": False, "error": f"读取Excel文档失败: {e}"}
 
 

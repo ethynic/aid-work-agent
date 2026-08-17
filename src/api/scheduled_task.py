@@ -57,7 +57,7 @@ async def list_tasks(request: Request, status: Optional[str] = None):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"后端日志：获取定时任务列表失败 {e}", exc_info=True)
+        logger.opt(exception=True).error(f"后端日志：获取定时任务列表失败 {e}")
         return JSONResponse(
             status_code=500,
             content={"success": False, "error": "获取定时任务列表失败", "debug": _sanitize_error(str(e))}
@@ -93,7 +93,7 @@ async def get_user_stats(request: Request):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"后端日志：获取定时任务统计失败 {e}", exc_info=True)
+        logger.opt(exception=True).error(f"后端日志：获取定时任务统计失败 {e}")
         return JSONResponse(
             status_code=500,
             content={"success": False, "error": "获取统计失败", "debug": _sanitize_error(str(e))}
@@ -119,7 +119,7 @@ async def get_task(request: Request, task_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"后端日志：获取定时任务详情失败 task_id={task_id}, {e}", exc_info=True)
+        logger.opt(exception=True).error(f"后端日志：获取定时任务详情失败 task_id={task_id}, {e}")
         return JSONResponse(
             status_code=500,
             content={"success": False, "error": "获取任务详情失败", "debug": _sanitize_error(str(e))}
@@ -144,7 +144,7 @@ async def pause_task(request: Request, task_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"后端日志：暂停定时任务失败 task_id={task_id}, {e}", exc_info=True)
+        logger.opt(exception=True).error(f"后端日志：暂停定时任务失败 task_id={task_id}, {e}")
         return JSONResponse(
             status_code=500,
             content={"success": False, "error": "暂停失败", "debug": _sanitize_error(str(e))}
@@ -169,7 +169,7 @@ async def resume_task(request: Request, task_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"后端日志：恢复定时任务失败 task_id={task_id}, {e}", exc_info=True)
+        logger.opt(exception=True).error(f"后端日志：恢复定时任务失败 task_id={task_id}, {e}")
         return JSONResponse(
             status_code=500,
             content={"success": False, "error": "恢复失败", "debug": _sanitize_error(str(e))}
@@ -191,7 +191,7 @@ async def cancel_task(request: Request, task_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"后端日志：取消定时任务失败 task_id={task_id}, {e}", exc_info=True)
+        logger.opt(exception=True).error(f"后端日志：取消定时任务失败 task_id={task_id}, {e}")
         return JSONResponse(
             status_code=500,
             content={"success": False, "error": "取消失败", "debug": _sanitize_error(str(e))}
@@ -213,7 +213,7 @@ async def trigger_task(request: Request, task_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"后端日志：手动触发定时任务失败 task_id={task_id}, {e}", exc_info=True)
+        logger.opt(exception=True).error(f"后端日志：手动触发定时任务失败 task_id={task_id}, {e}")
         return JSONResponse(
             status_code=500,
             content={"success": False, "error": "触发失败", "debug": _sanitize_error(str(e))}
@@ -266,7 +266,7 @@ async def update_task_schedule(request: Request, task_id: str, body: UpdateSched
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"后端日志：更新定时任务调度失败 task_id={task_id}, {e}", exc_info=True)
+        logger.opt(exception=True).error(f"后端日志：更新定时任务调度失败 task_id={task_id}, {e}")
         return JSONResponse(
             status_code=500,
             content={"success": False, "error": "更新调度时间失败", "debug": _sanitize_error(str(e))}
@@ -289,7 +289,7 @@ async def get_task_logs(request: Request, task_id: str, limit: int = 20):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"后端日志：获取定时任务日志失败 task_id={task_id}, {e}", exc_info=True)
+        logger.opt(exception=True).error(f"后端日志：获取定时任务日志失败 task_id={task_id}, {e}")
         return JSONResponse(
             status_code=500,
             content={"success": False, "error": "获取日志失败", "debug": _sanitize_error(str(e))}
@@ -306,7 +306,7 @@ async def get_user_logs(request: Request, limit: int = 50):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"后端日志：获取用户执行日志失败 {e}", exc_info=True)
+        logger.opt(exception=True).error(f"后端日志：获取用户执行日志失败 {e}")
         return JSONResponse(
             status_code=500,
             content={"success": False, "error": "获取日志失败", "debug": _sanitize_error(str(e))}

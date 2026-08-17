@@ -120,7 +120,7 @@ async def summarize_personal(
             "cache_creation_tokens": cache_creation_input_tokens,
         }
     except Exception as e:
-        logger.error(f"个人{type_label}摘要生成失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"个人{type_label}摘要生成失败: {e}")
         raise
 
 
@@ -227,7 +227,7 @@ async def summarize_team(
             "cache_creation_tokens": cache_creation_input_tokens,
         }
     except Exception as e:
-        logger.error(f"团队{type_label}摘要生成失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"团队{type_label}摘要生成失败: {e}")
         raise
 
 

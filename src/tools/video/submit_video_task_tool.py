@@ -122,7 +122,7 @@ class SubmitVideoTaskTool(BaseTool):
             result["success"] = result.get("error") is None
             return result
         except Exception as e:
-            logger.error(f"[submit_video_task] 视频创作失败: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"[submit_video_task] 视频创作失败: {e}")
             return {
                 "success": False,
                 "error": "视频创作失败，请稍后重试",

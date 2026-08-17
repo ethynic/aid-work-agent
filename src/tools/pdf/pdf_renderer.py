@@ -140,5 +140,5 @@ def _render_with_pymupdf(path: Path, out_dir: Path, pages: List[int], dpi: int) 
             "errors": [],
         }
     except Exception as e:
-        logger.error(f"[PdfRenderer] PyMuPDF 渲染失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"[PdfRenderer] PyMuPDF 渲染失败: {e}")
         return {"success": False, "renderer": "pymupdf", "error": f"PDF渲染失败: {e}"}

@@ -110,7 +110,7 @@ class PPTPlanner:
             return self._parse_json(content)
 
         except Exception as e:
-            logger.error(f"[PPTPlanner] LLM 调用失败: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"[PPTPlanner] LLM 调用失败: {e}")
             return {"error": f"LLM 规划失败: {e}"}
 
     def _parse_json(self, text: str) -> Dict[str, Any]:

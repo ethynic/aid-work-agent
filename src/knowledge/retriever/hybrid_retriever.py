@@ -109,7 +109,7 @@ class HybridRetriever:
                         model=getattr(self.embedding_client, "model", "text-embedding-v3"),
                     )
             except Exception:
-                logger.debug("Failed to record embedding usage", exc_info=True)
+                logger.opt(exception=True).debug("Failed to record embedding usage")
         raw_vector_results = await self.vector_db.search(query_embedding, top_k=top_k * 3, tenant_id=tenant_id, source_type=source_type)
 
         # 后端日志：输出原始向量检索结果（调优用）

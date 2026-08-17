@@ -84,7 +84,7 @@ class SentimentService:
                 suggested_response_tone=result.get("suggested_response_tone", ""),
             )
         except Exception as e:
-            logger.error(f"情绪分析失败: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"情绪分析失败: {e}")
             return self._default_result()
 
     async def analyze_batch(self, texts: List[str]) -> List[SentimentResult]:

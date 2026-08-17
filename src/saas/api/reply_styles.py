@@ -163,7 +163,7 @@ async def update_system_style(style_id: str, request: Request, body: StyleUpdate
             description=description,
         )
     except Exception as e:
-        logger.error(f"Failed to update system style {style_id}: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"Failed to update system style {style_id}: {e}")
         raise HTTPException(status_code=500, detail=f"更新风格失败: {e}")
 
     if not style:
@@ -328,7 +328,7 @@ async def update_style(style_id: str, request: Request, body: StyleUpdateRequest
             description=description,
         )
     except Exception as e:
-        logger.error(f"Failed to update tenant style {style_id}: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"Failed to update tenant style {style_id}: {e}")
         raise HTTPException(status_code=500, detail=f"更新风格失败: {e}")
 
     if not style:

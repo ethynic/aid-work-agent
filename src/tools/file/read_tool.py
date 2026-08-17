@@ -155,7 +155,7 @@ Word/Excel/PPT 文档自动走专用解析器，不需要单独的工具。
             if isinstance(e, (FileNotFoundError, ValueError)):
                 logger.warning(f"读取文件失败（可自愈，模型可能传错路径）: {e}")
             else:
-                logger.error(f"读取文件失败: {e}", exc_info=True)
+                logger.opt(exception=True).error(f"读取文件失败: {e}")
             return f"读取文件失败: {e}"
 
     # ------------------------------------------------------------------

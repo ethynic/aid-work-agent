@@ -185,11 +185,10 @@ class LLMGateway:
             call_duration = time.time() - call_start
             # 用 loguru 占位符而非 f-string 嵌入 {e}，避免异常消息含 {"error":...} 时
             # loguru 内部 message.format() 把 {error} 当占位符解析抛 KeyError，遮蔽原始异常
-            logger.error(
+            logger.opt(exception=True).error(
                 "[LLM] _call_with_pool error, provider={p}, fn={fn}, duration={d:.2f}s, error: {et}: {err}",
                 p=self.provider_name, fn=fn_name, d=call_duration,
                 et=type(e).__name__, err=e,
-                exc_info=True,
             )
             raise
 
@@ -226,7 +225,7 @@ class LLMGateway:
                     raise
                 except Exception as e:
                     stream_duration = time.time() - stream_start
-                    logger.error(f"[LLM] _stream_with_pool error during iteration, provider={self.provider_name}, fn={fn_name}, duration={stream_duration:.2f}s, chunks={chunk_count}, error: {e}", exc_info=True)
+                    logger.opt(exception=True).error(f"[LLM] _stream_with_pool error during iteration, provider={self.provider_name}, fn={fn_name}, duration={stream_duration:.2f}s, chunks={chunk_count}, error: {e}")
                     raise
                     
         except asyncio.TimeoutError as e:
@@ -235,7 +234,7 @@ class LLMGateway:
             raise
         except Exception as e:
             stream_duration = time.time() - stream_start
-            logger.error(f"[LLM] _stream_with_pool error (acquire key), provider={self.provider_name}, fn={fn_name}, duration={stream_duration:.2f}s, error: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"[LLM] _stream_with_pool error (acquire key), provider={self.provider_name}, fn={fn_name}, duration={stream_duration:.2f}s, error: {e}")
             raise
 
     # ------------------------------------------------------------------
@@ -304,10 +303,9 @@ class LLMGateway:
         except Exception as e:
             chat_duration = time.time() - chat_start
             # 用 loguru 占位符而非 f-string 嵌入 {e}，避免异常消息含 {"error":...} 触发 KeyError
-            logger.error(
+            logger.opt(exception=True).error(
                 "[LLM] chat() failed, duration={d:.2f}s, error: {et}: {err}",
                 d=chat_duration, et=type(e).__name__, err=e,
-                exc_info=True,
             )
             raise
 
@@ -417,10 +415,9 @@ class LLMGateway:
         except Exception as e:
             cwt_duration = time.time() - cwt_start
             # 用 loguru 占位符而非 f-string 嵌入 {e}，避免异常消息含 {"error":...} 触发 KeyError
-            logger.error(
+            logger.opt(exception=True).error(
                 "[LLM] chat_with_tools() failed, duration={d:.2f}s, error: {et}: {err}",
                 d=cwt_duration, et=type(e).__name__, err=e,
-                exc_info=True,
             )
             raise
 

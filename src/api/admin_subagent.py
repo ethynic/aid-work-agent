@@ -133,7 +133,7 @@ async def list_subagents(request: Request):
         return {"success": True, "data": items}
 
     except Exception as e:
-        logger.error(f"列出数字员工失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"列出数字员工失败: {e}")
         return _error_response("列出数字员工失败", str(e))
 
 
@@ -157,7 +157,7 @@ async def list_available_skills(request: Request):
         return {"success": True, "data": skills}
 
     except Exception as e:
-        logger.error(f"获取技能列表失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"获取技能列表失败: {e}")
         return _error_response("获取技能列表失败", str(e))
 
 
@@ -183,7 +183,7 @@ async def list_available_tools(request: Request):
         return {"success": True, "data": tools}
 
     except Exception as e:
-        logger.error(f"获取工具列表失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"获取工具列表失败: {e}")
         return _error_response("获取工具列表失败", str(e))
 
 
@@ -227,7 +227,7 @@ async def get_subagent_detail(request: Request, agent_id: str):
         }
 
     except Exception as e:
-        logger.error(f"获取数字员工详情失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"获取数字员工详情失败: {e}")
         return _error_response("获取数字员工详情失败", str(e))
 
 
@@ -253,7 +253,7 @@ async def get_subagent_content(request: Request, agent_id: str):
         return {"success": True, "data": content}
 
     except Exception as e:
-        logger.error(f"获取数字员工内容失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"获取数字员工内容失败: {e}")
         return _error_response("获取数字员工内容失败", str(e))
 
 
@@ -307,7 +307,7 @@ async def create_subagent(request: Request, body: CreateSubagentRequest):
         }
 
     except Exception as e:
-        logger.error(f"创建数字员工失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"创建数字员工失败: {e}")
         return _error_response("创建数字员工失败", str(e))
 
 
@@ -367,7 +367,7 @@ async def update_subagent(request: Request, agent_id: str, body: CreateSubagentR
         }
 
     except Exception as e:
-        logger.error(f"更新数字员工失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"更新数字员工失败: {e}")
         return _error_response("更新数字员工失败", str(e))
 
 
@@ -397,7 +397,7 @@ async def delete_subagent(request: Request, agent_id: str):
         return {"success": True, "message": f"已删除数字员工: {agent_id}"}
 
     except Exception as e:
-        logger.error(f"删除数字员工失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"删除数字员工失败: {e}")
         return _error_response("删除数字员工失败", str(e))
 
 
@@ -451,7 +451,7 @@ async def duplicate_subagent(request: Request, agent_id: str, body: DuplicateSub
         }
 
     except Exception as e:
-        logger.error(f"另存为数字员工失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"另存为数字员工失败: {e}")
         return _error_response("另存为数字员工失败", str(e))
 
 
@@ -540,5 +540,5 @@ async def ai_enhance_subagent(request: Request, agent_id: str, body: AiEnhanceRe
         }
 
     except Exception as e:
-        logger.error(f"AI 完善失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"AI 完善失败: {e}")
         return _error_response("AI 完善失败，请稍后重试", str(e))

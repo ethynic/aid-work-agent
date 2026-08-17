@@ -46,7 +46,7 @@ def _start_persist_worker():
             except queue.Empty:
                 continue
             except Exception as e:
-                logger.error(f"Trace persist error: {e}", exc_info=True)
+                logger.opt(exception=True).error(f"Trace persist error: {e}")
 
     t = threading.Thread(target=worker, daemon=True, name="trace-persist")
     t.start()

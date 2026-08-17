@@ -143,7 +143,7 @@ def cmd_init_tables(args):
 
         output_json(True, {"message": "跟进记录表已就绪"})
     except Exception as e:
-        logger.error(f"init_tables 失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"init_tables 失败: {e}")
         output_json(False, error="初始化表失败", debug=str(e))
 
 
@@ -191,7 +191,7 @@ def cmd_add_record(args):
 
         output_json(True, {"record_id": record_id, "message": "跟进记录创建成功"})
     except Exception as e:
-        logger.error(f"add-record 失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"add-record 失败: {e}")
         output_json(False, error="创建跟进记录失败", debug=str(e))
 
 
@@ -241,7 +241,7 @@ def cmd_list_records(args):
 
         output_json(True, {"items": items, "total": len(items)})
     except Exception as e:
-        logger.error(f"list-records 失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"list-records 失败: {e}")
         output_json(False, error="查询跟进记录失败", debug=str(e))
 
 
@@ -277,7 +277,7 @@ def cmd_get_record(args):
         record = dict(zip(columns, row))
         output_json(True, record)
     except Exception as e:
-        logger.error(f"get-record 失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"get-record 失败: {e}")
         output_json(False, error="查询跟进记录详情失败", debug=str(e))
 
 
@@ -331,7 +331,7 @@ def cmd_evaluate_quality(args):
             "feedback": feedback,
         })
     except Exception as e:
-        logger.error(f"evaluate-quality 失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"evaluate-quality 失败: {e}")
         output_json(False, error="评估跟进质量失败", debug=str(e))
 
 
@@ -464,7 +464,7 @@ def cmd_batch_evaluate(args):
             "message": f"已评估 {evaluated} 条跟进记录",
         })
     except Exception as e:
-        logger.error(f"batch-evaluate 失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"batch-evaluate 失败: {e}")
         output_json(False, error="批量评估失败", debug=str(e))
 
 
@@ -508,7 +508,7 @@ def cmd_get_reminders(args):
 
         output_json(True, {"items": items, "total": len(items)})
     except Exception as e:
-        logger.error(f"get-reminders 失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"get-reminders 失败: {e}")
         output_json(False, error="获取提醒失败", debug=str(e))
 
 
@@ -547,7 +547,7 @@ def cmd_get_overdue(args):
 
         output_json(True, {"items": items, "total": len(items)})
     except Exception as e:
-        logger.error(f"get-overdue 失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"get-overdue 失败: {e}")
         output_json(False, error="获取逾期跟进失败", debug=str(e))
 
 
@@ -594,7 +594,7 @@ def cmd_reminder_stats(args):
 
         output_json(True, stats)
     except Exception as e:
-        logger.error(f"reminder-stats 失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"reminder-stats 失败: {e}")
         output_json(False, error="获取提醒统计失败", debug=str(e))
 
 
@@ -646,7 +646,7 @@ def cmd_record_ai_call(args):
             "message": "AI 外呼记录已创建",
         })
     except Exception as e:
-        logger.error(f"record-ai-call 失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"record-ai-call 失败: {e}")
         output_json(False, error="记录 AI 外呼结果失败", debug=str(e))
 
 
@@ -713,7 +713,7 @@ def cmd_batch_ai_call_results(args):
             "message": f"已记录 {recorded}/{len(results)} 条外呼结果",
         })
     except Exception as e:
-        logger.error(f"batch-ai-call-results 失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"batch-ai-call-results 失败: {e}")
         output_json(False, error="批量记录外呼结果失败", debug=str(e))
 
 

@@ -40,7 +40,7 @@ def convert(file_path: str, pages: Optional[List[int]] = None) -> Dict[str, Any]
             "page_count": len(selected),
         }
     except Exception as e:
-        logger.error(f"[PdfToMd] 转换失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"[PdfToMd] 转换失败: {e}")
         return {"success": False, "error": f"PDF转Markdown失败: {e}"}
 
 
@@ -78,5 +78,5 @@ def _ocr_fallback(file_path: str) -> Dict[str, Any]:
             }
         return ocr_result
     except Exception as e:
-        logger.error(f"[PdfToMd] OCR 降级失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"[PdfToMd] OCR 降级失败: {e}")
         return {"success": False, "error": f"OCR识别失败: {e}"}

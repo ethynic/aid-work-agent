@@ -85,7 +85,7 @@ class ClassificationService:
                 tags=result.get("tags", []),
             )
         except Exception as e:
-            logger.error(f"文本分类失败: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"文本分类失败: {e}")
             return ClassificationResult(category="其他", confidence=0.0)
 
     async def classify_with_confidence(

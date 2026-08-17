@@ -119,7 +119,7 @@ def backfill(tenant_id: Optional[str] = None, dry_run: bool = False) -> None:
                         source_type="background_embedding",
                     )
                 except Exception:
-                    logger.debug("Failed to record backfill embedding usage", exc_info=True)
+                    logger.opt(exception=True).debug("Failed to record backfill embedding usage")
 
             embedding_str = "[" + ",".join(str(v) for v in embedding) + "]"
 
@@ -140,7 +140,7 @@ def backfill(tenant_id: Optional[str] = None, dry_run: bool = False) -> None:
             updated += 1
             logger.info(f"[Backfill] doc_id={doc_id} 已补名称行: {hotel_name}")
         except Exception as e:
-            logger.error(f"[Backfill] doc_id={doc_id} 更新失败: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"[Backfill] doc_id={doc_id} 更新失败: {e}")
             failed.append(f"doc_id={doc_id}: {e}")
 
     logger.info(f"[Backfill] 完成: updated={updated} skipped={skipped} failed={len(failed)}")

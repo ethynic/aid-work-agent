@@ -1460,7 +1460,7 @@ async def _auto_fill_open_kfid(tenant_id: str, open_kfid: str) -> tuple:
         )
         return True, config_id
     except Exception as e:
-        logger.error(f"[wecom_kf] auto_fill_open_kfid 异常: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"[wecom_kf] auto_fill_open_kfid 异常: {e}")
         _kf_tlog(
             "auto_fill异常: {err}, tenant={tenant}",
             tenant=tenant_id,
@@ -2176,7 +2176,7 @@ async def _process_tenant_wecom_kf_messages(
                     try:
                         record_service.add_asr_usage(calls=1)
                     except Exception:
-                        logger.debug("Failed to record ASR usage", exc_info=True)
+                        logger.opt(exception=True).debug("Failed to record ASR usage")
 
                 # 处理消息（通过 progress_callback 捕获可下载文件 + 本轮 tool 消息序列）
                 downloadable_files = []
@@ -2264,7 +2264,7 @@ async def _process_tenant_wecom_kf_messages(
                         response_text=(result.get("response_text") or "")[:500],
                     )
                 except Exception as e:
-                    logger.error(f"[wecom_kf] Agent 处理异常: {e}", exc_info=True)
+                    logger.opt(exception=True).error(f"[wecom_kf] Agent 处理异常: {e}")
                     _kf_tlog(
                         "Agent处理异常: tenant={tenant}, session_id={session_id}, error={error}",
                         tenant=tenant_id,

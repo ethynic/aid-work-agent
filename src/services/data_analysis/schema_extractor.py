@@ -166,7 +166,7 @@ class SchemaExtractor:
                 return schema
 
         except Exception as e:
-            logger.error(f"LLM schema 提取失败: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"LLM schema 提取失败: {e}")
 
         # LLM 失败时返回基础 schema（best-effort）
         return self._build_fallback_schema(sheet_info, table_name_hint)
@@ -218,7 +218,7 @@ class SchemaExtractor:
                 return relations["relations"]
 
         except Exception as e:
-            logger.error(f"LLM 关系推断失败: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"LLM 关系推断失败: {e}")
 
         return []
 

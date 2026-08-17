@@ -117,7 +117,7 @@ async def list_accounts(request: Request):
     try:
         return _ok({"items": service.list_accounts(_tenant_id(request))})
     except Exception as e:
-        logger.error(f"社媒账号列表失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"社媒账号列表失败: {e}")
         return _fail("查询账号失败", e)
 
 
@@ -127,7 +127,7 @@ async def create_account(request: Request, body: AccountCreateRequest):
         data = await service.create_account(_tenant_id(request), _user_id(request), body.model_dump())
         return _ok(data)
     except Exception as e:
-        logger.error(f"社媒账号创建失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"社媒账号创建失败: {e}")
         return _fail("创建账号失败", e)
 
 
@@ -145,7 +145,7 @@ async def validate_account(request: Request, account_id: str):
         data = await service.refresh_account_capabilities(_tenant_id(request), account_id)
         return _ok(data)
     except Exception as e:
-        logger.error(f"社媒账号验证失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"社媒账号验证失败: {e}")
         return _fail("验证账号失败", e)
 
 
@@ -225,7 +225,7 @@ async def create_variant(request: Request, master_id: str, body: VariantCreateRe
         data = await service.create_variant(_tenant_id(request), _user_id(request), master_id, body.model_dump())
         return _ok(data)
     except Exception as e:
-        logger.error(f"社媒平台版本创建失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"社媒平台版本创建失败: {e}")
         return _fail("创建平台版本失败", e)
 
 

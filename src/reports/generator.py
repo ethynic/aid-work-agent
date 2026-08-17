@@ -434,8 +434,7 @@ class ReportGenerator:
         except Exception as e:
             # 写 chat_records 失败不应该让报告生成失败
             # 报告已落库 work_daily_reports，用户能看到；只是用量页缺一条记录
-            logger.error(
+            logger.opt(exception=True).error(
                 f"报告 chat_records 写入失败（不影响报告本身）: scope={scope}, "
                 f"type={report_type}, date={report_date}, error={e}",
-                exc_info=True,
             )

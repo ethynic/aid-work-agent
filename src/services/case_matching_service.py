@@ -58,7 +58,7 @@ class CaseMatchingService:
 
             return await self._llm_match(query, cases, top_k)
         except Exception as e:
-            logger.error(f"案例匹配失败: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"案例匹配失败: {e}")
             return []
 
     async def index_case(
@@ -117,7 +117,7 @@ class CaseMatchingService:
                     })
                 return cases
         except Exception as e:
-            logger.error(f"获取候选案例失败: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"获取候选案例失败: {e}")
             return []
 
     async def _llm_match(self, query: str, cases: List[Dict], top_k: int) -> List[CaseMatch]:
@@ -182,7 +182,7 @@ class CaseMatchingService:
                     ))
             return results
         except Exception as e:
-            logger.error(f"LLM案例匹配失败: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"LLM案例匹配失败: {e}")
             return []
 
     def _parse_json_array(self, text: str) -> List[Dict]:

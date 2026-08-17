@@ -70,7 +70,7 @@ async def preview_migration(tenant_id: str, request: MigrationRequest, req: Requ
         return {"success": result.get("success", True), "summary": result.get("summary", {}),
                 "errors": result.get("errors", [])}
     except Exception as e:
-        logger.error(f"预览迁移失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"预览迁移失败: {e}")
         raise HTTPException(status_code=500, detail={"success": False, "error": _sanitize_error(str(e))})
 
 
@@ -107,7 +107,7 @@ async def execute_migration(tenant_id: str, request: MigrationRequest, req: Requ
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"执行迁移失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"执行迁移失败: {e}")
         raise HTTPException(status_code=500, detail={"success": False, "error": _sanitize_error(str(e))})
 
 

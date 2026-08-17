@@ -81,7 +81,7 @@ class AttractionRetriever:
                 if record:
                     record.add_embedding_usage(client.last_usage_tokens, model=client.model)
             except Exception:
-                logger.debug("Failed to record embedding usage", exc_info=True)
+                logger.opt(exception=True).debug("Failed to record embedding usage")
         embedding_str = "[" + ",".join(str(v) for v in embedding) + "]"
 
         with self._get_conn() as conn:

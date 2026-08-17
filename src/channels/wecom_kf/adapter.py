@@ -358,9 +358,8 @@ class WeComKfAdapter(ChannelAdapter):
             )
             return False
         except Exception as e:
-            logger.warning(
+            logger.opt(exception=True).warning(
                 f"整段 markdown 长图渲染/发送异常，降级走分段逻辑: {e}",
-                exc_info=True,
             )
             return False
 

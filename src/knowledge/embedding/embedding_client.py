@@ -187,12 +187,12 @@ class TextEmbeddingV3Client:
             key = getattr(self, '_api_key', None)
             if key:
                 key_preview = f"{key[:6]}...{key[-4:]}" if len(key) > 10 else "***"
-                logger.error(f"后端日志：Embedding 批量调用失败，使用的 key: {key_preview}", exc_info=True)
+                logger.opt(exception=True).error(f"后端日志：Embedding 批量调用失败，使用的 key: {key_preview}")
             error_str = str(e)
             # 避免重复过滤
             if "=***" not in error_str:
                 error_str = sanitize_error_info(error_str)
-            logger.error(f"后端日志：Embedding 批量调用失败: {error_str}", exc_info=True)
+            logger.opt(exception=True).error(f"后端日志：Embedding 批量调用失败: {error_str}")
             raise
 
     def reset_usage(self) -> None:

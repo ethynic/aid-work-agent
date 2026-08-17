@@ -187,7 +187,7 @@ async def check_conversation_authorization(
         siblings = db.list_bindings(tenant_id=tenant_id)
         same_key_count = sum(1 for b in siblings if b.get("search_key") == search_key)
     except Exception as e:  # 防御性：统计失败不应阻断主流程
-        logger.error(f"RPA authorization: list_bindings failed: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"RPA authorization: list_bindings failed: {e}")
         same_key_count = 1
 
     if same_key_count > 1:

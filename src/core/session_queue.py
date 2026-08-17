@@ -829,9 +829,8 @@ class SessionMessageQueue:
                     if asyncio.iscoroutine(response):
                         response = await response
                 except Exception as e:
-                    logger.error(
+                    logger.opt(exception=True).error(
                         f"[SessionQueue] processor 异常 session={session_id[:20]}...: {e}",
-                        exc_info=True,
                     )
                     error_result = EnqueueResult(
                         status="error",
@@ -873,9 +872,8 @@ class SessionMessageQueue:
                         on_before_reprocess,
                     )
                 except Exception as e:
-                    logger.error(
+                    logger.opt(exception=True).error(
                         f"[SessionQueue] cancel 重处理异常 session={session_id[:20]}...: {e}",
-                        exc_info=True,
                     )
                     self.release_lock(session_id, lock_value)
                     return EnqueueResult(
@@ -942,9 +940,8 @@ class SessionMessageQueue:
                             if asyncio.iscoroutine(pending_response):
                                 pending_response = await pending_response
                         except Exception as e:
-                            logger.error(
+                            logger.opt(exception=True).error(
                                 f"[SessionQueue] pending processor 异常 session={session_id[:20]}...: {e}",
-                                exc_info=True,
                             )
                             self.release_lock(session_id, lock_value)
                             return EnqueueResult(

@@ -123,7 +123,7 @@ async def list_customers(
                 }
             }
     except Exception as e:
-        logger.error(f"后端日志：查询客户列表失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"后端日志：查询客户列表失败: {e}")
         return {
             "success": False,
             "error": "查询客户列表失败",
@@ -183,7 +183,7 @@ async def get_customer(customer_id: str):
                 "data": customer
             }
     except Exception as e:
-        logger.error(f"后端日志：查询客户详情失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"后端日志：查询客户详情失败: {e}")
         return {
             "success": False,
             "error": "查询客户详情失败",
@@ -246,7 +246,7 @@ async def list_emails(
                 }
             }
     except Exception as e:
-        logger.error(f"后端日志：查询邮件历史失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"后端日志：查询邮件历史失败: {e}")
         return {
             "success": False,
             "error": "查询邮件历史失败",
@@ -340,7 +340,7 @@ async def get_stats(
                 "data": stats
             }
     except Exception as e:
-        logger.error(f"后端日志：获取统计信息失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"后端日志：获取统计信息失败: {e}")
         return {
             "success": False,
             "error": "获取统计信息失败",

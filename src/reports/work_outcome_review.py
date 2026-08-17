@@ -155,10 +155,9 @@ async def run_daily_review(target_date: Optional[date] = None) -> str:
                         )
                         total_outcomes += 1
                     except Exception as e:
-                        logger.error(
+                        logger.opt(exception=True).error(
                             f"工作成果复盘写入失败: session={session.session_id}, "
                             f"outcome={outcome.get('summary', '')[:50]}, error={e}",
-                            exc_info=True,
                         )
                 return len(outcomes)
             except asyncio.TimeoutError:
@@ -176,9 +175,8 @@ async def run_daily_review(target_date: Optional[date] = None) -> str:
                 return 0
             except Exception as e:
                 failed_sessions += 1
-                logger.error(
+                logger.opt(exception=True).error(
                     f"工作成果复盘失败: session={session.session_id}, {e}",
-                    exc_info=True,
                 )
                 tlog(
                     "work_outcome_review",
@@ -322,10 +320,9 @@ async def _review_session_with_llm(
             max_tokens=2048,
         )
     except Exception as e:
-        logger.error(
+        logger.opt(exception=True).error(
             f"复盘小模型调用失败: session={session.session_id}, model={report_model}, "
             f"error={e}",
-            exc_info=True,
         )
         return []
 
@@ -584,4 +581,4 @@ def _record_background_llm_billing(
             f"tokens={total_tokens}, credit={credit_cost}"
         )
     except Exception as e:
-        logger.error(f"background_llm 计费落库失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"background_llm 计费落库失败: {e}")

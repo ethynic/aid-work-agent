@@ -102,7 +102,7 @@ class ToolExecutor:
                 parameters = coerced
             except Exception:
                 # validate_parameters 已保证 InputModel 可构造，此处仅兜底
-                logger.warning(f"工具参数类型规范化失败: {tool_name}", exc_info=True)
+                logger.opt(exception=True).warning(f"工具参数类型规范化失败: {tool_name}")
 
         # 执行工具
         try:

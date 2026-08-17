@@ -222,7 +222,7 @@ async def upload_document(
         )
 
     except Exception as e:
-        logger.error(f"后端日志：文档上传失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"后端日志：文档上传失败: {e}")
         # 清理已保存的文件
         if file_path.exists():
             file_path.unlink()
@@ -322,7 +322,7 @@ async def upload_documents_batch(
                 ))
 
         except Exception as e:
-            logger.error(f"后端日志：文档上传失败: {filename}: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"后端日志：文档上传失败: {filename}: {e}")
             # 清理已保存的文件
             if file_path.exists():
                 file_path.unlink()

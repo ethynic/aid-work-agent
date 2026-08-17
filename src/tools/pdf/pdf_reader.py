@@ -50,7 +50,7 @@ def read_text(file_path: str, pages: Optional[List[int]] = None) -> Dict[str, An
             "metadata": metadata,
         }
     except Exception as e:
-        logger.error(f"[PdfReader] 读取失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"[PdfReader] 读取失败: {e}")
         return {"success": False, "error": f"读取PDF失败: {e}"}
 
 
@@ -88,7 +88,7 @@ def extract_tables(file_path: str, pages: Optional[List[int]] = None) -> Dict[st
             "count": len(tables_all),
         }
     except Exception as e:
-        logger.error(f"[PdfReader] 表格提取失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"[PdfReader] 表格提取失败: {e}")
         return {"success": False, "error": f"提取表格失败: {e}"}
 
 

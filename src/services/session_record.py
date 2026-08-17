@@ -572,7 +572,7 @@ def record_background_llm_usage(
             model=model,
         )
     except Exception:
-        logger.debug("Failed to record background LLM usage", exc_info=True)
+        logger.opt(exception=True).debug("Failed to record background LLM usage")
 
 
 def _persist_background_llm_record(
@@ -683,7 +683,7 @@ def _persist_background_llm_record(
             f"user={user_id}, tokens={total_tokens}, credit={credit_cost}"
         )
     except Exception as e:
-        logger.error(f"background_llm 计费落库失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"background_llm 计费落库失败: {e}")
 
 
 def record_admin_llm_usage(
@@ -778,7 +778,7 @@ def record_admin_llm_usage(
             f"user={user_id}, tokens={total_tokens}, credit={credit_cost}"
         )
     except Exception as e:
-        logger.error(f"管理后台 LLM 计费落库失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"管理后台 LLM 计费落库失败: {e}")
 
 
 def record_admin_embedding_usage(
@@ -848,4 +848,4 @@ def record_admin_embedding_usage(
             f"user={user_id}, tokens={tokens}, credit={credit_cost}"
         )
     except Exception as e:
-        logger.error(f"管理后台 embedding 计费落库失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"管理后台 embedding 计费落库失败: {e}")

@@ -355,7 +355,7 @@ class SubagentExecutor:
                     raise
                 except Exception as e:
                     exec_duration = time.time() - exec_start_time
-                    logger.error(f"[SUBAGENT] execute_as_subagent FAILED, execution_id={record.execution_id}, duration={exec_duration:.2f}s, error: {e}", exc_info=True)
+                    logger.opt(exception=True).error(f"[SUBAGENT] execute_as_subagent FAILED, execution_id={record.execution_id}, duration={exec_duration:.2f}s, error: {e}")
                     raise
 
                 # 更新结果
@@ -452,7 +452,7 @@ class SubagentExecutor:
             
         except Exception as e:
             wait_duration = time.time() - wait_start
-            logger.error(f"[SUBAGENT] wait_for_result ERROR, execution_id={execution_id}, duration={wait_duration:.2f}s, error: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"[SUBAGENT] wait_for_result ERROR, execution_id={execution_id}, duration={wait_duration:.2f}s, error: {e}")
             raise
         
         logger.warning(f"[SUBAGENT] Wait for result timed out: {execution_id}")

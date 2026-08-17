@@ -319,7 +319,7 @@ class VideoChatService:
             else:
                 error = f"未知创作模式: {params.mode}"
         except Exception as e:
-            logger.error(f"[VideoChatService] handle_user_message 失败: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"[VideoChatService] handle_user_message 失败: {e}")
             error = str(e)
 
         logger.info(
@@ -782,7 +782,7 @@ class VideoChatService:
                 f"tenant={tenant_id}, tokens={total_tokens}, credit={credit_cost}, model={model}"
             )
         except Exception as e:
-            logger.error(f"[VideoChatService] 视频提示词 LLM 计费落库失败: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"[VideoChatService] 视频提示词 LLM 计费落库失败: {e}")
 
     # ------------------------------------------------------------------
     # 工具方法
@@ -908,7 +908,7 @@ class VideoChatService:
             )
             return record.get("id") if record else None
         except Exception as e:
-            logger.error(f"[VideoChatService] 写 chat_records 失败: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"[VideoChatService] 写 chat_records 失败: {e}")
             return None
 
     def _update_chat_record_status(
@@ -959,7 +959,7 @@ class VideoChatService:
                 except Exception as cache_err:
                     logger.warning(f"退还积分后失效租户缓存失败: {cache_err}")
         except Exception as e:
-            logger.error(f"[VideoChatService] 更新 chat_records 状态失败: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"[VideoChatService] 更新 chat_records 状态失败: {e}")
 
     def _insert_prompt_library(
         self,

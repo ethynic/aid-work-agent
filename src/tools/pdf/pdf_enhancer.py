@@ -39,7 +39,7 @@ def clean_metadata(file_path: str, output_name: Optional[str] = None) -> Dict[st
             result["success"] = True
             return result
     except Exception as e:
-        logger.error(f"[PdfEnhancer] 元数据清理失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"[PdfEnhancer] 元数据清理失败: {e}")
         return {"success": False, "error": f"清理PDF元数据失败: {e}"}
 
 
@@ -81,7 +81,7 @@ def protect_pdf(
             result["protected"] = True
             return result
     except Exception as e:
-        logger.error(f"[PdfEnhancer] PDF加密失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"[PdfEnhancer] PDF加密失败: {e}")
         return {"success": False, "error": f"PDF加密失败: {e}"}
 
 
@@ -142,7 +142,7 @@ def add_watermark(
                 result["warnings"] = warnings
             return result
     except Exception as e:
-        logger.error(f"[PdfEnhancer] 添加水印失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"[PdfEnhancer] 添加水印失败: {e}")
         return {"success": False, "error": f"添加PDF水印失败: {e}"}
 
 
@@ -194,7 +194,7 @@ def rotate_pages(
             result["rotation"] = rotation
             return result
     except Exception as e:
-        logger.error(f"[PdfEnhancer] 页面旋转失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"[PdfEnhancer] 页面旋转失败: {e}")
         return {"success": False, "error": f"旋转PDF页面失败: {e}"}
 
 
@@ -229,7 +229,7 @@ def compress_pdf(file_path: str, output_name: Optional[str] = None) -> Dict[str,
                 result["warnings"] = ["压缩后文件未变小，可能原 PDF 已压缩"]
             return result
     except Exception as e:
-        logger.error(f"[PdfEnhancer] PDF压缩失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"[PdfEnhancer] PDF压缩失败: {e}")
         return {"success": False, "error": f"压缩PDF失败: {e}"}
 
 
@@ -286,7 +286,7 @@ def extract_images(
             "warnings": [] if images else ["未提取到内嵌图片"],
         }
     except Exception as e:
-        logger.error(f"[PdfEnhancer] 提取图片失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"[PdfEnhancer] 提取图片失败: {e}")
         return {"success": False, "error": f"提取PDF图片失败: {e}"}
 
 

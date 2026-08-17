@@ -353,9 +353,8 @@ cp(source_file_path="src/skills/xxx/assets/template.html", file_path="output/ppt
                 try:
                     await self._record_work_outcome(result)
                 except Exception as e:
-                    logger.warning(
+                    logger.opt(exception=True).warning(
                         f"cp 工具实时登记工作成果失败（不影响主流程）: {e}",
-                        exc_info=True,
                     )
 
                 return result

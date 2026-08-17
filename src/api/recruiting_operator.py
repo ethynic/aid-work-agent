@@ -151,7 +151,7 @@ async def list_resumes(
 
         return {"success": True, "data": data}
     except Exception as e:
-        logger.error(f"简历列表查询失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"简历列表查询失败: {e}")
         return _error_response("简历列表查询失败", str(e))
 
 
@@ -165,7 +165,7 @@ async def list_resume_jobs(request: Request):
         jobs = resume_service.list_distinct_jobs(tenant_id)
         return {"success": True, "data": {"jobs": jobs}}
     except Exception as e:
-        logger.error(f"简历职位列表查询失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"简历职位列表查询失败: {e}")
         return _error_response("简历职位列表查询失败", str(e))
 
 
@@ -199,7 +199,7 @@ async def create_resume(req: CreateResumeRequest, request: Request):
 
         return {"success": True, "data": record}
     except Exception as e:
-        logger.error(f"简历创建失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"简历创建失败: {e}")
         return _error_response("简历创建失败", str(e))
 
 
@@ -215,7 +215,7 @@ async def get_resume(resume_id: int, request: Request):
             return _error_response("简历不存在", f"resume_id={resume_id} not found", 404)
         return {"success": True, "data": record}
     except Exception as e:
-        logger.error(f"简历详情查询失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"简历详情查询失败: {e}")
         return _error_response("简历详情查询失败", str(e))
 
 
@@ -244,7 +244,7 @@ async def update_resume(resume_id: int, req: UpdateResumeRequest, request: Reque
 
         return {"success": True, "data": record}
     except Exception as e:
-        logger.error(f"简历更新失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"简历更新失败: {e}")
         return _error_response("简历更新失败", str(e))
 
 
@@ -259,7 +259,7 @@ async def delete_resume(resume_id: int, request: Request):
             return _error_response("简历不存在", f"resume_id={resume_id} not found", 404)
         return {"success": True}
     except Exception as e:
-        logger.error(f"简历删除失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"简历删除失败: {e}")
         return _error_response("简历删除失败", str(e))
 
 
@@ -301,7 +301,7 @@ async def list_jobs(request: Request):
         jobs = job_service.list_jobs(tenant_id)
         return {"success": True, "data": {"items": jobs}}
     except Exception as e:
-        logger.error(f"职位列表查询失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"职位列表查询失败: {e}")
         return _error_response("职位列表查询失败", str(e))
 
 
@@ -318,7 +318,7 @@ async def create_job(req: CreateJobRequest, request: Request):
             return _error_response(str(e), str(e), 400)
         return {"success": True, "data": job}
     except Exception as e:
-        logger.error(f"职位创建失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"职位创建失败: {e}")
         return _error_response("职位创建失败", str(e))
 
 
@@ -337,7 +337,7 @@ async def get_job(job_id: str, request: Request):
             return _error_response("职位不存在", f"job_id={job_id} not found", 404)
         return {"success": True, "data": job}
     except Exception as e:
-        logger.error(f"职位详情查询失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"职位详情查询失败: {e}")
         return _error_response("职位详情查询失败", str(e))
 
 
@@ -356,7 +356,7 @@ async def update_job(job_id: str, req: UpdateJobRequest, request: Request):
             return _error_response("职位不存在", f"job_id={job_id} not found", 404)
         return {"success": True, "data": job}
     except Exception as e:
-        logger.error(f"职位更新失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"职位更新失败: {e}")
         return _error_response("职位更新失败", str(e))
 
 
@@ -375,7 +375,7 @@ async def delete_job(job_id: str, request: Request):
             return _error_response("职位不存在", f"job_id={job_id} not found", 404)
         return {"success": True}
     except Exception as e:
-        logger.error(f"职位删除失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"职位删除失败: {e}")
         return _error_response("职位删除失败", str(e))
 
 
@@ -398,7 +398,7 @@ async def create_job_script(job_id: str, req: CreateJobScriptRequest, request: R
             return _error_response("职位不存在", f"job_id={job_id} not found", 404)
         return {"success": True, "data": script}
     except Exception as e:
-        logger.error(f"话术创建失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"话术创建失败: {e}")
         return _error_response("话术创建失败", str(e))
 
 
@@ -421,7 +421,7 @@ async def update_job_script(script_id: str, req: UpdateJobScriptRequest, request
             return _error_response("话术不存在", f"script_id={script_id} not found", 404)
         return {"success": True, "data": script}
     except Exception as e:
-        logger.error(f"话术更新失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"话术更新失败: {e}")
         return _error_response("话术更新失败", str(e))
 
 
@@ -440,5 +440,5 @@ async def delete_job_script(script_id: str, request: Request):
             return _error_response("话术不存在", f"script_id={script_id} not found", 404)
         return {"success": True}
     except Exception as e:
-        logger.error(f"话术删除失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"话术删除失败: {e}")
         return _error_response("话术删除失败", str(e))

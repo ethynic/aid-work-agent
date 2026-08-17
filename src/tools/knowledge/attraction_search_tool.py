@@ -178,5 +178,5 @@ class AttractionSearchTool(BaseTool):
             }
 
         except Exception as e:
-            logger.error(f"景点搜索失败: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"景点搜索失败: {e}")
             return {"success": False, "error": str(e), "results": [], "count": 0}

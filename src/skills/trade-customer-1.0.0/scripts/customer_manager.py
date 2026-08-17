@@ -411,8 +411,8 @@ def save_customer(user_id: str, session_id: str, customer: Dict[str, Any]) -> Di
                 }
             }
     except Exception as e:
-        logger.error(f"后端日志：保存单个客户失败: {e}", exc_info=True)
-        logger.error(f"后端日志：[trade-customer诊断] save_customer 数据库写入失败! user_id={user_id}, session_id={session_id}, error={e}", exc_info=True)
+        logger.opt(exception=True).error(f"后端日志：保存单个客户失败: {e}")
+        logger.opt(exception=True).error(f"后端日志：[trade-customer诊断] save_customer 数据库写入失败! user_id={user_id}, session_id={session_id}, error={e}")
         return {
             "success": False,
             "error": "保存客户信息失败",
@@ -487,8 +487,8 @@ def save_customers(user_id: str, session_id: str, customers: List[Dict[str, Any]
                 }
             }
     except Exception as e:
-        logger.error(f"后端日志：保存客户失败: {e}", exc_info=True)
-        logger.error(f"后端日志：[trade-customer诊断] save_customers 批量写入失败! user_id={user_id}, session_id={session_id}, error={e}", exc_info=True)
+        logger.opt(exception=True).error(f"后端日志：保存客户失败: {e}")
+        logger.opt(exception=True).error(f"后端日志：[trade-customer诊断] save_customers 批量写入失败! user_id={user_id}, session_id={session_id}, error={e}")
         return {
             "success": False,
             "error": "保存客户信息失败",
@@ -533,7 +533,7 @@ def list_customers(user_id: str, session_id: Optional[str] = None) -> Dict[str, 
                 }
             }
     except Exception as e:
-        logger.error(f"后端日志：查询客户列表失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"后端日志：查询客户列表失败: {e}")
         return {
             "success": False,
             "error": "查询客户列表失败",
@@ -580,7 +580,7 @@ def get_customer(customer_id: str) -> Dict[str, Any]:
                 "data": customer
             }
     except Exception as e:
-        logger.error(f"后端日志：查询客户详情失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"后端日志：查询客户详情失败: {e}")
         return {
             "success": False,
             "error": "查询客户详情失败",
@@ -649,7 +649,7 @@ def record_email(
                 }
             }
     except Exception as e:
-        logger.error(f"后端日志：记录邮件发送失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"后端日志：记录邮件发送失败: {e}")
         return {
             "success": False,
             "error": "记录邮件发送失败",
@@ -704,7 +704,7 @@ def list_emails(
                 }
             }
     except Exception as e:
-        logger.error(f"后端日志：查询邮件历史失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"后端日志：查询邮件历史失败: {e}")
         return {
             "success": False,
             "error": "查询邮件历史失败",
@@ -790,7 +790,7 @@ def get_stats(user_id: str) -> Dict[str, Any]:
                 "data": stats
             }
     except Exception as e:
-        logger.error(f"后端日志：获取统计信息失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"后端日志：获取统计信息失败: {e}")
         return {
             "success": False,
             "error": "获取统计信息失败",

@@ -181,7 +181,7 @@ class CreateScheduledTaskTool(BaseTool):
                 user_input=description or name,
             )
         except Exception as e:
-            logger.error(f"后端日志：定时任务试执行异常 user_id={user_id}, error={e}", exc_info=True)
+            logger.opt(exception=True).error(f"后端日志：定时任务试执行异常 user_id={user_id}, error={e}")
             return {
                 "success": False,
                 "error": "任务验证过程出错，无法创建定时任务",
@@ -326,5 +326,5 @@ class ManageScheduledTaskTool(BaseTool):
                 return {"success": False, "error": f"不支持的操作: {action}"}
 
         except Exception as e:
-            logger.error(f"后端日志：管理定时任务失败 action={action}, error={e}", exc_info=True)
+            logger.opt(exception=True).error(f"后端日志：管理定时任务失败 action={action}, error={e}")
             return {"success": False, "error": "操作失败", "debug": str(e)}

@@ -89,7 +89,7 @@ class DatabaseConnector:
 
             return results
         except Exception as e:
-            logger.error(f"列出远程表失败: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"列出远程表失败: {e}")
             raise
         finally:
             if engine:
@@ -202,7 +202,7 @@ class DatabaseConnector:
                 "rows": row_count,
             }
         except Exception as e:
-            logger.error(f"获取表采样数据失败: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"获取表采样数据失败: {e}")
             raise
         finally:
             if engine:

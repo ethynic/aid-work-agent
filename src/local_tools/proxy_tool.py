@@ -63,7 +63,7 @@ class LocalToolProxyTool(BaseTool):
             device, gate_error = await self._find_ready_device(tenant_id, user_id)
         except Exception as e:
             # 表未迁移（relation does not exist）等基础设施异常不应把 psycopg2 原文抛给用户
-            logger.error(f"后端日志：本地工具设备闸门查询失败 tool={self.name}: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"后端日志：本地工具设备闸门查询失败 tool={self.name}: {e}")
             return {"success": False, "code": "DEVICE_UNAVAILABLE",
                     "message": "本地工具服务未就绪（云端未完成初始化），请联系管理员"}
         if device is None:
@@ -375,7 +375,7 @@ class BossResumeDetailTool(LocalToolProxyTool):
                 "invocation_id": result.get("invocation_id"),
             }
         except Exception as e:
-            logger.error(f"后端日志：boss_resume_detail 结果入库失败: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"后端日志：boss_resume_detail 结果入库失败: {e}")
             return {
                 "success": False,
                 "code": "RESUME_STORE_FAILED",
@@ -470,7 +470,7 @@ class BossResumeBatchTool(LocalToolProxyTool):
                 failures.append({"name": name, "error": f"{e}"})
                 continue
             except Exception as e:
-                logger.error(f"后端日志：boss_resume_batch 第 {idx + 1} 份入库失败: {e}", exc_info=True)
+                logger.opt(exception=True).error(f"后端日志：boss_resume_batch 第 {idx + 1} 份入库失败: {e}")
                 failures.append({"name": name, "error": "简历入库失败（数据库或存储异常）"})
                 continue
             summaries.append({

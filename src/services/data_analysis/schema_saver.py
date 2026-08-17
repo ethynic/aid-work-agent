@@ -95,7 +95,7 @@ async def save_schema_to_knowledge(
                         source_label="save_schema_to_knowledge",
                     )
             except Exception:
-                logger.debug("Failed to record schema embedding usage", exc_info=True)
+                logger.opt(exception=True).debug("Failed to record schema embedding usage")
 
         metadata = {
             "connector_id": connector_id,
@@ -173,5 +173,5 @@ async def save_schema_to_knowledge(
         return {"success": True, "doc_id": doc_id, "message": "Schema 已保存到知识库"}
 
     except Exception as e:
-        logger.error(f"保存 schema 到知识库失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"保存 schema 到知识库失败: {e}")
         return {"success": False, "error": str(e)}

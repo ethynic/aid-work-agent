@@ -57,7 +57,7 @@ class UploadDataFileTool(BaseTool):
         try:
             sheets = await asyncio.to_thread(sheet_parser.parse_file, file_path)
         except Exception as e:
-            logger.error(f"解析文件失败: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"解析文件失败: {e}")
             return {"success": False, "error": f"解析文件失败: {str(e)}"}
 
         if not sheets:
@@ -114,7 +114,7 @@ class UploadDataFileTool(BaseTool):
                     errors.append(f"Sheet '{sheet_name}' 保存失败: {result.get('error', '')}")
 
             except Exception as e:
-                logger.error(f"处理 sheet '{sheet_name}' 失败: {e}", exc_info=True)
+                logger.opt(exception=True).error(f"处理 sheet '{sheet_name}' 失败: {e}")
                 errors.append(f"Sheet '{sheet_name}' 处理失败: {str(e)}")
 
         if not registered_tables:

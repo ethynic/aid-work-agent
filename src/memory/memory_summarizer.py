@@ -365,7 +365,7 @@ def _record_background_llm_billing(
             f"tokens={total_tokens}, credit={credit_cost}"
         )
     except Exception as e:
-        logger.error(f"background_llm 计费落库失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"background_llm 计费落库失败: {e}")
 
 
 def _parse_llm_output(output: str) -> Dict[str, List[str]]:

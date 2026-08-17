@@ -180,7 +180,7 @@ class WeComKfRenderer:
             logger.info(f"表格已渲染为图片: {output_path} ({file_size} bytes)")
             return output_path
         except Exception as e:
-            logger.error(f"表格渲染失败: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"表格渲染失败: {e}")
             return None
 
     async def render_markdown(self, markdown_text: str) -> Optional[str]:
@@ -226,7 +226,7 @@ class WeComKfRenderer:
             )
             full_html = self.HTML_TEMPLATE.format(html_content=html)
         except Exception as e:
-            logger.error(f"markdown 转 HTML 失败: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"markdown 转 HTML 失败: {e}")
             return None
 
         # 3. 临时目录 + browser_pool 生成页图
@@ -237,7 +237,7 @@ class WeComKfRenderer:
                     full_html, width=self._VIEWPORT_WIDTH, out_dir=work_dir
                 )
             except Exception as e:
-                logger.error(f"browser_pool.shoot 失败: {e}", exc_info=True)
+                logger.opt(exception=True).error(f"browser_pool.shoot 失败: {e}")
                 return None
 
             # 4. 后处理:空白检测 + 高度截断 + 体积控制
@@ -256,7 +256,7 @@ class WeComKfRenderer:
                     [page_path], inp, work_dir, renderer_name="wecom_kf_md"
                 )
             except Exception as e:
-                logger.error(f"finalize_long_image 失败: {e}", exc_info=True)
+                logger.opt(exception=True).error(f"finalize_long_image 失败: {e}")
                 return None
 
             if not result.success or not result.image_path:
@@ -270,8 +270,8 @@ class WeComKfRenderer:
             try:
                 shutil.move(result.image_path, final_path)
             except Exception as e:
-                logger.error(
-                    f"移动长图到持久化目录失败: {e}", exc_info=True
+                logger.opt(exception=True).error(
+                    f"移动长图到持久化目录失败: {e}"
                 )
                 return None
             logger.info(

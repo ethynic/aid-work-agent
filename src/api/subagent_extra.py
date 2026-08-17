@@ -84,7 +84,7 @@ async def get_extra_md(subagent_name: str, request: Request):
 
         return {"success": True, "content": content.strip()}
     except Exception as e:
-        logger.error(f"读取 extra.md 失败 (DB): {e}", exc_info=True)
+        logger.opt(exception=True).error(f"读取 extra.md 失败 (DB): {e}")
         raise HTTPException(status_code=500, detail="读取配置失败")
 
 
@@ -135,7 +135,7 @@ async def save_extra_md(subagent_name: str, body: ExtraMdRequest, request: Reque
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"保存 extra.md 失败 (DB): {e}", exc_info=True)
+        logger.opt(exception=True).error(f"保存 extra.md 失败 (DB): {e}")
         raise HTTPException(status_code=500, detail="保存失败")
 
 
@@ -162,5 +162,5 @@ async def delete_extra_md(subagent_name: str, request: Request):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"删除 extra.md 失败 (DB): {e}", exc_info=True)
+        logger.opt(exception=True).error(f"删除 extra.md 失败 (DB): {e}")
         raise HTTPException(status_code=500, detail="删除失败")

@@ -9,8 +9,13 @@ from loguru import logger
 # 后端日志：复杂业务逻辑长期保留
 logger.info('后端日志：开始处理用户请求')
 
-# 后端日志：异常捕获
-logger.error(f'后端日志：数据库连接失败: {e}', exc_info=True)
+# 后端日志：异常捕获（必须用 opt(exception=True) 或 logger.exception，才能把堆栈写入错误日志库）
+logger.opt(exception=True).error(f'后端日志：数据库连接失败: {e}')
+
+# 注意：loguru 不识别标准库 logging 的 exc_info=True 参数！
+# ❌ logger.error(f'...: {e}', exc_info=True) 不会捕获堆栈，
+#    exc_info 只是普通 kwarg 被塞进 extra，record['exception'] 恒为 None，
+#    log_error 表的 traceback 列永远为空。正确写法见上。
 
 # 临时调试日志（bug 修复后删除）
 logger.debug(f'临时调试：请求参数 {params}')

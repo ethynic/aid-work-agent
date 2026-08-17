@@ -50,5 +50,5 @@ class ExcelParser(BaseParser):
             return ParseResult(text=text, metadata=metadata)
 
         except Exception as e:
-            logger.error(f"后端日志：Excel 文档解析失败: {file_path}, error: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"后端日志：Excel 文档解析失败: {file_path}, error: {e}")
             raise

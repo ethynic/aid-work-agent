@@ -133,7 +133,7 @@ def fill_template(template_path: str, variables: Dict[str, Any],
 
         return save_result
     except Exception as e:
-        logger.error(f"[ExcelTemplate] 模板填充失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"[ExcelTemplate] 模板填充失败: {e}")
         return {"success": False, "error": f"模板填充失败: {e}"}
 
 

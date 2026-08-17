@@ -174,7 +174,7 @@ async def get_overview(request: Request):
             "key_prefix": redis_client._key_prefix,
         }
     except Exception as e:
-        logger.error(f"[RedisAdmin] overview 失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"[RedisAdmin] overview 失败: {e}")
         return {
             "success": False,
             "error": "获取概览失败",
@@ -259,7 +259,7 @@ async def list_keys(
             },
         }
     except Exception as e:
-        logger.error(f"[RedisAdmin] list_keys 失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"[RedisAdmin] list_keys 失败: {e}")
         return {
             "success": False,
             "error": "获取键列表失败",
@@ -341,7 +341,7 @@ async def get_key_detail(request: Request, key: str):
             "is_bare": _is_bare_key(key, _registered_prefixes()),
         }
     except Exception as e:
-        logger.error(f"[RedisAdmin] get_key_detail 失败 [{key}]: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"[RedisAdmin] get_key_detail 失败 [{key}]: {e}")
         return {
             "success": False,
             "error": "获取键详情失败",
@@ -371,7 +371,7 @@ async def delete_key(request: Request, key: str):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"[RedisAdmin] delete_key 失败 [{key}]: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"[RedisAdmin] delete_key 失败 [{key}]: {e}")
         return {
             "success": False,
             "error": "删除键失败",

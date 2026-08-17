@@ -171,7 +171,7 @@ class VehicleExcelParser:
             return self._parse_llm_output(content, sheet_name)
 
         except Exception as e:
-            logger.error(f"[VehicleExcelParser] Sheet '{sheet_name}' LLM 调用失败: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"[VehicleExcelParser] Sheet '{sheet_name}' LLM 调用失败: {e}")
             return []
 
     def _parse_llm_output(self, content: str, sheet_name: str) -> List[Dict]:

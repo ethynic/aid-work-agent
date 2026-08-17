@@ -61,7 +61,7 @@ async def get_email_settings(current_user: dict = Depends(get_current_user)):
         return {"success": True, "data": safe_config, "bound": True}
 
     except Exception as e:
-        logger.error(f"获取邮箱配置失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"获取邮箱配置失败: {e}")
         return {"success": False, "error": "获取邮箱配置失败"}
 
 
@@ -125,7 +125,7 @@ async def save_email_settings(
         }
 
     except Exception as e:
-        logger.error(f"保存邮箱配置失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"保存邮箱配置失败: {e}")
         return {"success": False, "error": f"保存邮箱配置失败: {str(e)}"}
 
 
@@ -146,5 +146,5 @@ async def delete_email_settings(current_user: dict = Depends(get_current_user)):
         return {"success": True, "message": "邮箱配置已删除"}
 
     except Exception as e:
-        logger.error(f"删除邮箱配置失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"删除邮箱配置失败: {e}")
         return {"success": False, "error": "删除邮箱配置失败"}

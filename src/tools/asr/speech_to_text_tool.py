@@ -117,7 +117,7 @@ class SpeechToTextTool(BaseTool):
                     None, self._read_file, audio_content
                 )
             except Exception as e:
-                logger.error(f"读取音频文件失败: {e}", exc_info=True)
+                logger.opt(exception=True).error(f"读取音频文件失败: {e}")
                 return {
                     "success": False,
                     "error": "读取音频文件失败",
@@ -142,7 +142,7 @@ class SpeechToTextTool(BaseTool):
             try:
                 audio_bytes = base64.b64decode(audio_content)
             except Exception as e:
-                logger.error(f"base64 解码失败: {e}", exc_info=True)
+                logger.opt(exception=True).error(f"base64 解码失败: {e}")
                 return {
                     "success": False,
                     "error": "base64 解码失败，请提供合法的 base64 音频内容",
@@ -353,7 +353,7 @@ class SpeechToTextTool(BaseTool):
                             if record:
                                 record.add_asr_usage(calls=1)
                         except Exception:
-                            logger.debug("Failed to record ASR usage", exc_info=True)
+                            logger.opt(exception=True).debug("Failed to record ASR usage")
                         return {
                             "success": True,
                             "text": text,
@@ -375,14 +375,14 @@ class SpeechToTextTool(BaseTool):
                         }
 
         except aiohttp.ClientError as e:
-            logger.error("后端日志：阿里云 ASR 网络错误: {}", e, exc_info=True)
+            logger.opt(exception=True).error("后端日志：阿里云 ASR 网络错误: {}", e)
             return {
                 "success": False,
                 "error": "阿里云 ASR 网络错误，请稍后重试",
                 "debug": sanitize_error_info(str(e)),
             }
         except Exception as e:
-            logger.error("后端日志：阿里云 ASR 未知错误: {}", e, exc_info=True)
+            logger.opt(exception=True).error("后端日志：阿里云 ASR 未知错误: {}", e)
             return {
                 "success": False,
                 "error": "语音转文字失败",

@@ -770,8 +770,8 @@ async def _process_inbound_message(
                 send_response=send_response,
             )
         except Exception as e:
-            logger.error(
-                f"RPA agent 处理异常 event_id={env.event_id}: {e}", exc_info=True
+            logger.opt(exception=True).error(
+                f"RPA agent 处理异常 event_id={env.event_id}: {e}"
             )
             record.mark_error(str(e))
             SessionRecordManager.end_record()
@@ -808,9 +808,8 @@ async def _process_inbound_message(
             logger.warning(f"RPA agent_reply 审计写入失败: {e}")
 
     except Exception as e:
-        logger.error(
+        logger.opt(exception=True).error(
             f"RPA _process_inbound_message 异常 event_id={env.event_id}: {e}",
-            exc_info=True,
         )
         # 不影响已返回的 accepted；尽量补一条审计
         try:
@@ -1258,7 +1257,7 @@ async def upload_media(request: Request, file: UploadFile = File(...)):
                     )
                 out.write(chunk)
     except Exception as e:
-        logger.error(f"RPA media-upload 写文件失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"RPA media-upload 写文件失败: {e}")
         # 清理半成品
         try:
             if os.path.isfile(abs_path):

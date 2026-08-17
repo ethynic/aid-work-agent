@@ -61,7 +61,7 @@ class NotificationService:
                 logger.info(f"通知发送成功: channel={message.channel}, recipient={message.recipient}, title={message.title}")
             return result
         except Exception as e:
-            logger.error(f"通知发送失败: channel={message.channel}, recipient={message.recipient}, error={e}", exc_info=True)
+            logger.opt(exception=True).error(f"通知发送失败: channel={message.channel}, recipient={message.recipient}, error={e}")
             return False
 
     async def send_batch(self, messages: List[NotificationMessage]) -> List[bool]:
@@ -122,7 +122,7 @@ class NotificationService:
             await loop.run_in_executor(None, self._smtp_send, smtp_server, smtp_port, smtp_user, smtp_password, msg, message.recipient)
             return True
         except Exception as e:
-            logger.error(f"邮件发送失败: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"邮件发送失败: {e}")
             return False
 
     def _smtp_send(self, server, port, user, password, msg, recipient):
@@ -164,7 +164,7 @@ class NotificationService:
                 resp = await client.post(webhook_url, json=payload)
                 return resp.status_code == 200
         except Exception as e:
-            logger.error(f"Webhook 发送失败: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"Webhook 发送失败: {e}")
             return False
 
 

@@ -86,9 +86,8 @@ async def _run():
         from src.channels.wecom_personal_rpa.archive.poller import poller as _poller
         await _poller.start()
     except Exception as e:
-        logger.error(
+        logger.opt(exception=True).error(
             f"background runner: archive poller 启动失败（不影响 runner）: {e}",
-            exc_info=True,
         )
 
     # 3. 心跳
@@ -108,7 +107,7 @@ async def _run():
     try:
         scheduled_task_manager.shutdown()
     except Exception as e:
-        logger.error(f"background runner: scheduler shutdown error: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"background runner: scheduler shutdown error: {e}")
 
     try:
         from src.db.database import close_postgres_pool, close_logs_pool

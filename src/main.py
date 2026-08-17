@@ -88,7 +88,7 @@ def _resolve_default_subagent(subagent_name, tenant_id, user):
             logger.info(f"[AutoRoute] 租户 {tenant_id} 仅有 1 个可用智能体，自动路由到 {agent_id}")
             return agent_id
     except Exception as e:
-        logger.warning(f"[AutoRoute] 解析默认子智能体失败: {e}", exc_info=True)
+        logger.opt(exception=True).warning(f"[AutoRoute] 解析默认子智能体失败: {e}")
 
     return None
 
@@ -415,7 +415,7 @@ async def lifespan(app: FastAPI):
         init_postgres_pool()
         logger.info(f"[pid={_pid}] step1: init_postgres_pool done")
     except Exception as e:
-        logger.error(f"[pid={_pid}] step1 FAILED (critical): {e}", exc_info=True)
+        logger.opt(exception=True).error(f"[pid={_pid}] step1 FAILED (critical): {e}")
         raise
 
     # Initialize database (may use PostgreSQL)
@@ -424,7 +424,7 @@ async def lifespan(app: FastAPI):
         init_database()
         logger.info(f"[pid={_pid}] step2: init_database done")
     except Exception as e:
-        logger.error(f"[pid={_pid}] step2 FAILED (critical): {e}", exc_info=True)
+        logger.opt(exception=True).error(f"[pid={_pid}] step2 FAILED (critical): {e}")
         raise
 
     # Load subagent definitions from DB (Phase 2: 整体降级策略)
@@ -458,7 +458,7 @@ async def lifespan(app: FastAPI):
         logger.info(f"[pid={_pid}] step4: channel_session_manager done")
         logger.info("Channel session manager initialized")
     except Exception as e:
-        logger.error(f"[pid={_pid}] step4 FAILED (critical): {e}", exc_info=True)
+        logger.opt(exception=True).error(f"[pid={_pid}] step4 FAILED (critical): {e}")
         raise
 
     # 注意：定时任务调度器 + 后台循环（memory_cleanup / dedup_cleanup / wecom_kf_timeout /
@@ -1350,7 +1350,7 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                 yield init_msg
                 logger.info(f"[SSE] Initial connected message sent, session_id={session_id}")
             except Exception as e:
-                logger.error(f"[SSE] Failed to send initial message: {e}", exc_info=True)
+                logger.opt(exception=True).error(f"[SSE] Failed to send initial message: {e}")
                 return
 
             # 直接在 FastAPI event loop 中迭代 agent
@@ -1439,7 +1439,7 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                     SessionRecordManager.get_current_record().mark_error("Cancelled by user")
                     SessionRecordManager.end_record()
             except Exception as e:
-                logger.error(f"[SSE] Agent error, session_id={session_id}, error: {type(e).__name__}: {e}", exc_info=True)
+                logger.opt(exception=True).error(f"[SSE] Agent error, session_id={session_id}, error: {type(e).__name__}: {e}")
                 error_occurred = str(e)
                 try:
                     yield f"data: {json.dumps({'type': 'error', 'data': str(e), 'timestamp': int(datetime.now().timestamp() * 1000)}, ensure_ascii=False)}\n\n"
@@ -1550,7 +1550,7 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                         f"[SSE] Messages saved to DB (transactional, {len(created)} rows), session_id={session_id}"
                     )
                 except Exception as e:
-                    logger.error(f"[SSE] Failed to save messages: {e}", exc_info=True)
+                    logger.opt(exception=True).error(f"[SSE] Failed to save messages: {e}")
 
         except Exception as e:
             import traceback

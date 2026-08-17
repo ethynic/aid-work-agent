@@ -161,7 +161,7 @@ async def get_dashboard_stats(request: Request):
         summary = token_result.get("summary", {})
         monthly_token_usage = int(summary.get("total_input_tokens", 0)) + int(summary.get("total_output_tokens", 0))
     except Exception as e:
-        logger.error(f"获取本月Token用量失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"获取本月Token用量失败: {e}")
 
     # 3. 今日对话数量：查询 chat_records 表今日（按 created_at）的记录数
     today_conversation_count = 0
@@ -180,7 +180,7 @@ async def get_dashboard_stats(request: Request):
             )
             today_conversation_count = cursor.fetchone()["cnt"]
     except Exception as e:
-        logger.error(f"获取今日对话数量失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"获取今日对话数量失败: {e}")
 
     # 4. 待续费租户数量：扫描全部 active 租户，统计积分余额不足 7 天用量的租户
     renewal_pending_count = 0
@@ -190,7 +190,7 @@ async def get_dashboard_stats(request: Request):
         enrich_tenants_with_renewal(active_tenants)
         renewal_pending_count = sum(1 for t in active_tenants if t.get("renewal_pending"))
     except Exception as e:
-        logger.error(f"获取待续费租户数量失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"获取待续费租户数量失败: {e}")
 
     return DashboardStatsResponse(
         success=True,

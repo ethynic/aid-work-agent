@@ -58,7 +58,7 @@ def merge_pdfs(file_paths: List[str], output_name: Optional[str] = None) -> Dict
             return save_result
 
     except Exception as e:
-        logger.error(f"[PdfMerger] 合并失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"[PdfMerger] 合并失败: {e}")
         return {"success": False, "error": f"合并PDF失败: {e}"}
 
 
@@ -139,7 +139,7 @@ def split_pdf(file_path: str, ranges: List[str],
             "warnings": warnings,
         }
     except Exception as e:
-        logger.error(f"[PdfMerger] 拆分失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"[PdfMerger] 拆分失败: {e}")
         return {"success": False, "error": f"拆分PDF失败: {e}"}
 
 
@@ -195,5 +195,5 @@ def extract_pages(file_path: str, pages: List[int],
         return save_result
 
     except Exception as e:
-        logger.error(f"[PdfMerger] 页面提取失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"[PdfMerger] 页面提取失败: {e}")
         return {"success": False, "error": f"提取页面失败: {e}"}

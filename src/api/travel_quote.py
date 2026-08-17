@@ -228,7 +228,7 @@ def _update_chunk_embedding(doc_id: int, chunk_index: int, text: str, tenant_id:
                 source_label="travel_quote_update_chunk",
             )
         except Exception:
-            logger.debug("Failed to record chunk embedding usage", exc_info=True)
+            logger.opt(exception=True).debug("Failed to record chunk embedding usage")
 
     embedding_str = "[" + ",".join(str(v) for v in embedding) + "]"
 
@@ -1320,7 +1320,7 @@ async def import_vehicle_excel(request: Request, file: UploadFile = File(...)):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"[VehicleExcelImport] 导入失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"[VehicleExcelImport] 导入失败: {e}")
         return {"success": False, "error": sanitize_error_info(str(e))}
     finally:
         import os
@@ -1487,7 +1487,7 @@ async def import_hotel_excel_to_kb(request: Request, file: UploadFile = File(...
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"[HotelExcelImport] 导入失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"[HotelExcelImport] 导入失败: {e}")
         return {"success": False, "error": sanitize_error_info(str(e))}
     finally:
         import os
@@ -1742,7 +1742,7 @@ async def import_attraction_excel_to_kb(request: Request, file: UploadFile = Fil
         except HTTPException:
             raise
         except Exception as e:
-            logger.error(f"[AttractionExcelImport] 导入失败: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"[AttractionExcelImport] 导入失败: {e}")
             return {"success": False, "error": sanitize_error_info(str(e))}
         finally:
             try:
@@ -1798,7 +1798,7 @@ async def import_attraction_excel_to_kb(request: Request, file: UploadFile = Fil
         except HTTPException:
             raise
         except Exception as e:
-            logger.error(f"[AttractionExcelImport] 导入失败: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"[AttractionExcelImport] 导入失败: {e}")
             return {"success": False, "error": sanitize_error_info(str(e))}
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
@@ -1825,7 +1825,7 @@ async def search_hotels(request: Request, q: str = Query(..., min_length=1), top
         results = retriever.search(tenant_id, q, top_k)
         return {"success": True, "data": results}
     except Exception as e:
-        logger.error(f"[TravelQuoteSearch] 酒店搜索失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"[TravelQuoteSearch] 酒店搜索失败: {e}")
         return {"success": False, "error": sanitize_error_info(str(e))}
 
 
@@ -1846,7 +1846,7 @@ async def list_hotels_kb(request: Request, limit: int = Query(200), offset: int 
         result = retriever.list_all(tenant_id, limit, offset)
         return {"success": True, "data": result}
     except Exception as e:
-        logger.error(f"[TravelQuoteKB] 列出酒店失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"[TravelQuoteKB] 列出酒店失败: {e}")
         return {"success": False, "error": sanitize_error_info(str(e))}
 
 
@@ -1867,7 +1867,7 @@ async def list_attractions_kb(request: Request, limit: int = Query(200), offset:
         result = retriever.list_all(tenant_id, limit, offset)
         return {"success": True, "data": result}
     except Exception as e:
-        logger.error(f"[TravelQuoteKB] 列出景点失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"[TravelQuoteKB] 列出景点失败: {e}")
         return {"success": False, "error": sanitize_error_info(str(e))}
 
 
@@ -1888,7 +1888,7 @@ async def search_attractions(request: Request, q: str = Query(..., min_length=1)
         results = retriever.search(tenant_id, q, top_k)
         return {"success": True, "data": results}
     except Exception as e:
-        logger.error(f"[TravelQuoteSearch] 景点搜索失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"[TravelQuoteSearch] 景点搜索失败: {e}")
         return {"success": False, "error": sanitize_error_info(str(e))}
 
 
@@ -1944,7 +1944,7 @@ async def get_hotel_kb(doc_id: int, request: Request):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"[TravelQuoteKB] 获取酒店详情失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"[TravelQuoteKB] 获取酒店详情失败: {e}")
         return {"success": False, "error": sanitize_error_info(str(e))}
 
 
@@ -1998,7 +1998,7 @@ async def get_attraction_kb(doc_id: int, request: Request):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"[TravelQuoteKB] 获取景点详情失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"[TravelQuoteKB] 获取景点详情失败: {e}")
         return {"success": False, "error": sanitize_error_info(str(e))}
 
 
@@ -2052,7 +2052,7 @@ async def import_hotels_kb(request: Request, body: ImportHotelKBRequest):
         )
         return {"success": True, "data": {"doc_id": doc_id}}
     except Exception as e:
-        logger.error(f"[TravelQuoteKB] 导入酒店失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"[TravelQuoteKB] 导入酒店失败: {e}")
         return {"success": False, "error": sanitize_error_info(str(e))}
 
 
@@ -2085,5 +2085,5 @@ async def import_attractions_kb(request: Request, body: ImportAttractionKBReques
         )
         return {"success": True, "data": {"doc_id": doc_id}}
     except Exception as e:
-        logger.error(f"[TravelQuoteKB] 导入景点失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"[TravelQuoteKB] 导入景点失败: {e}")
         return {"success": False, "error": sanitize_error_info(str(e))}

@@ -724,9 +724,8 @@ class ChannelSessionManager:
                     conn.rollback()
                 except Exception as rollback_err:
                     logger.error(f"Failed to rollback channel_messages batch insert: {rollback_err}")
-                logger.error(
+                logger.opt(exception=True).error(
                     f"后端日志：channel_messages 批量写入失败 session={session_id}: {e}",
-                    exc_info=True,
                 )
                 return None
 
@@ -958,9 +957,8 @@ class ChannelSessionManager:
                 agent_attachments=agent_attachments or [],
             )
         except Exception as e:
-            logger.error(
+            logger.opt(exception=True).error(
                 f"后端日志：process_and_persist enqueue_and_process 异常 session={session_id}: {e}",
-                exc_info=True,
             )
             # enqueue 异常：user 写入已推迟，调用 mark_error 记录失败
             if record_service is not None:
@@ -1123,9 +1121,8 @@ class ChannelSessionManager:
                 session_queue.mark_responding(session_id)
                 await send_response("", downloadable_files)
             except Exception as send_err:
-                logger.error(
+                logger.opt(exception=True).error(
                     f"后端日志：批量写入失败后 send_response 异常 session={session_id}: {send_err}",
-                    exc_info=True,
                 )
             finally:
                 session_queue.mark_idle(session_id)
@@ -1195,9 +1192,8 @@ class ChannelSessionManager:
                 agent_images = []
             send_ok = await send_response(response_text, downloadable_files, agent_images)
         except Exception as e:
-            logger.error(
+            logger.opt(exception=True).error(
                 f"后端日志：send_response 异常 session={session_id}: {e}",
-                exc_info=True,
             )
         finally:
             session_queue.mark_idle(session_id)
@@ -1304,9 +1300,8 @@ class ChannelSessionManager:
                     tenant_id=tenant_id,
                 )
         except Exception as e:
-            logger.error(
+            logger.opt(exception=True).error(
                 f"后端日志：_ensure_last_not_orphan_user 异常 session={session_id}: {e}",
-                exc_info=True,
             )
 
     def find_session(
