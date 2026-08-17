@@ -60,9 +60,18 @@ export function createBossFilterOperation(
           salary: args.salary?.trim(),
         }
         const result = await setter.apply(spec)
+        // 保底映射说明：LLM/用户传的档位页面上不存在时已自动映射到最接近的真实档位，必须转述
+        const subNote = result.substitutions
+          .map((s) => `${s.row}「${s.requested}」无该档位，已按最接近的「${s.matched}」设置`)
+          .join('；')
         return {
-          message: `筛选已应用并校验通过：筛选·${result.filterCount}`,
-          data: { filter_count: result.filterCount, applied: true },
+          message:
+            `筛选已应用并校验通过：筛选·${result.filterCount}` + (subNote ? `；${subNote}` : ''),
+          data: {
+            filter_count: result.filterCount,
+            applied: true,
+            ...(result.substitutions.length > 0 ? { substitutions: result.substitutions } : {}),
+          },
           effect: 'applied' as const,
         }
       })

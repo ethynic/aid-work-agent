@@ -115,10 +115,12 @@ test('面板未打开（行标签缺失）→ fail-loud，不盲点', async () =
   assert.equal(r.clicks.length, 1)
 })
 
-test('行内选项缺失 → fail-loud', async () => {
+test('行内选项缺失（数值档位 20年以上，页面最高 5-10年）→ 保底映射最接近档位并记录 substitution', async () => {
   const r = recorder()
-  const setter = new FilterSetter({ snapshot: snapshotQueue([closedSnap, panelSnap]), click: r.click, sleep: r.sleep })
-  await assert.rejects(setter.apply({ experience: '20年以上' }), /恰好 1 个可见匹配，实际 0/)
+  const setter = new FilterSetter({ snapshot: snapshotQueue([closedSnap, ...Array(3).fill(panelSnap), doneSnap1]), click: r.click, sleep: r.sleep })
+  const result = await setter.apply({ experience: '20年以上' })
+  assert.deepEqual(result.substitutions, [{ row: '经验要求', requested: '20年以上', matched: '5-10年' }])
+  assert.equal(r.clicks.length, 4) // 筛选 + 清除 + 5-10年 + 确定
 })
 
 test('行内选项多命中（同名诱饵落在行带内）→ fail-loud', async () => {
@@ -373,6 +375,30 @@ test('normalizeOptionText：去空白+大写（15k-20k ≡ 15-20K）', async () 
   assert.equal(normalizeOptionText('15k - 20k'), normalizeOptionText('15-20K'))
 })
 
+test('pickClosestOption 保底映射：15-30K → 20-50K（保下限）；5年以上 → 5-10年；本科 → null', async () => {
+  const { pickClosestOption } = await import('../src/main/boss/FilterSetter.js')
+  assert.equal(pickClosestOption('15-30K', ['10-20K', '20-50K']), '20-50K')
+  assert.equal(pickClosestOption('15-30k', ['10-20K', '20-50K']), '20-50K')
+  assert.equal(pickClosestOption('5年以上', ['1-3年', '3-5年', '5-10年', '10年以上']), '5-10年')
+  assert.equal(pickClosestOption('15-20K', ['10-20K', '15-25K', '20-50K']), '15-25K')
+  assert.equal(pickClosestOption('15-20K', ['10-20K']), '10-20K') // 全部低于下限 → 重叠最大
+  assert.equal(pickClosestOption('本科', ['大专', '本科']), null) // 非数值不自动换
+})
+
+test('apply 保底映射：请求 15-20K（页面只有 10-20K）→ 实点 10-20K 并记录 substitution', async () => {
+  const r = recorder()
+  const setter = new FilterSetter({
+    snapshot: snapshotQueue([closedSnap, ...Array(3).fill(panelSnap), doneSnap1]),
+    click: r.click,
+    sleep: r.sleep,
+  })
+  const result = await setter.apply({ salary: '15-20K' })
+  assert.equal(result.filterCount, 1)
+  assert.deepEqual(result.substitutions, [{ row: '薪资待遇', requested: '15-20K', matched: '10-20K' }])
+  assert.equal(r.clicks.length, 4) // 筛选 + 清除 + 10-20K + 确定
+  assert.deepEqual(r.clicks[2], { x: 1223.5, y: 909 })
+})
+
 test('apply 归一化兜底：传 15-25k（页面 15-25K）→ 点真实档位，不报错', async () => {
   const panel15 = buildSnap([
     ...panelItems,
@@ -389,16 +415,16 @@ test('apply 归一化兜底：传 15-25k（页面 15-25K）→ 点真实档位�
   assert.equal(r.clicks.length, 4) // 筛选 + 清除 + 15-25K + 确定
 })
 
-test('apply 选项不存在 → 报错并列出该行全部可选档位（AI 自纠用，绝不让用户看页面）', async () => {
+test('apply 非数值选项不存在（学历 大专以上）→ 报错并列出该行全部可选档位（AI 自纠用，绝不让用户看页面）', async () => {
   const r = recorder()
   const setter = new FilterSetter({
     snapshot: snapshotQueue([closedSnap, ...Array(4).fill(panelSnap)]),
     click: r.click,
     sleep: r.sleep,
   })
-  await assert.rejects(setter.apply({ salary: '15-20K' }), (e: unknown) => {
+  await assert.rejects(setter.apply({ educations: ['大专以上'] }), (e: unknown) => {
     const msg = (e as Error).message
-    return msg.includes('没有匹配的选项「15-20K」') && msg.includes('该行可选：10-20K') && msg.includes('boss_filter_options')
+    return msg.includes('没有匹配的选项「大专以上」') && msg.includes('本科、硕士、博士') && msg.includes('boss_filter_options')
   })
 })
 

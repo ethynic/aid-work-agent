@@ -81,6 +81,41 @@ export function normalizeOptionText(s: string): string {
   return s.replace(/[\sKk]/g, '').toUpperCase()
 }
 
+/** 解析「数值区间」档位：5-10年 / 15-30K / 15k-30k → {min,max}；「5年以上」→ {min, max:∞哨兵}；非数值（本科/应届生）→ null */
+function parseNumericRange(text: string): { min: number; max: number } | null {
+  const t = text.replace(/\s+/g, '').replace(/[Kk]/g, '')
+  let m = /^(\d+(?:\.\d+)?)[-~](\d+(?:\.\d+)?)/.exec(t)
+  if (m) return { min: Number(m[1]), max: Number(m[2]) }
+  m = /^(\d+(?:\.\d+)?)年?以上/.exec(t) // 「5年以上」：数字与「以上」之间带「年」
+  if (m) return { min: Number(m[1]), max: 99999 }
+  return null
+}
+
+/**
+ * 保底档位映射（2026-08-17 用户定调：**必须映射到页面上真实存在的选项**，不能让 LLM 瞎编）：
+ * LLM 未先查 boss_filter_options 时可能传页面不存在的档位（如 15-30K，页面只有 10-20K/20-50K）。
+ * 只在双方都能解析出数值区间时生效（经验/薪资；学历等非数值仍报错并列出可选值）。
+ * 规则 = 保下限：薪资/经验下限是常见硬约束——在「下限 ≥ 用户下限」的档位里取下限最近者
+ * （并列取重叠更大者）；全部低于用户下限时取重叠最大者（并列取下限更近者）。
+ */
+export function pickClosestOption(requested: string, available: string[]): string | null {
+  const rq = parseNumericRange(requested)
+  if (!rq) return null
+  const cands = available
+    .map((opt) => ({ opt, r: parseNumericRange(opt) }))
+    .filter((c): c is { opt: string; r: { min: number; max: number } } => c.r !== null)
+  if (cands.length === 0) return null
+  const overlap = (c: { min: number; max: number }) =>
+    Math.max(0, Math.min(rq.max, c.max) - Math.max(rq.min, c.min))
+  const eligible = cands.filter((c) => c.r.min >= rq.min - 1e-9)
+  if (eligible.length > 0) {
+    eligible.sort((a, b) => a.r.min - b.r.min || overlap(b.r) - overlap(a.r))
+    return eligible[0]!.opt
+  }
+  cands.sort((a, b) => overlap(b.r) - overlap(a.r) || Math.abs(rq.min - a.r.min) - Math.abs(rq.min - b.r.min))
+  return cands[0]!.opt
+}
+
 /** 面板中其他常见行标签（真机 2026-08-05 面板实拍）：只参与行带收紧，不支持点击设置 */
 const EXTRA_ROW_LABEL_PREFIXES = ['年龄', '活跃度', '性别', '近期没有看过', '求职意向']
 
@@ -128,7 +163,7 @@ export class FilterSetter {
    * 再 apply → 5 项全被点掉，徽章校验失败）。先清除保证从空白态开始，幂等。
    * 任一步失败抛 FilterSetError。
    */
-  async apply(spec: FilterSpec): Promise<{ filterCount: number }> {
+  async apply(spec: FilterSpec): Promise<{ filterCount: number; substitutions: Array<{ row: string; requested: string; matched: string }> }> {
     if (this.deps.signal?.aborted) throw new CancelledError()
     const rows: Array<{ labelPrefix: string; options: string[] }> = []
     for (const def of ROW_DEFS) {
@@ -154,8 +189,11 @@ export class FilterSetter {
     await this.sleep(500)
 
     // 3. 逐项行锚定点击（每项 fresh snapshot，页面可能重排）。
-    //    先按原文走 locateRowOption（保留折行放宽/诱饵消歧等既有行为）；0 命中才按归一化
-    //    精确匹配兜底（15k-20k ≡ 15-20K）；仍不中报错并列出该行全部可选档位（AI 据此自纠重试）
+    //    先按原文走 locateRowOption（保留折行放宽/诱饵消歧等既有行为）；0 命中进入保底链：
+    //    归一化精确匹配（15k-20k ≡ 15-20K）→ 数值保底映射到页面真实存在的最接近档位
+    //    （记 substitution 由调用方转述用户）；数值都不兼容（如学历「大专以上」）才报错
+    //    并列出该行全部可选档位（AI 据此自纠重试）
+    const substitutions: Array<{ row: string; requested: string; matched: string }> = []
     for (const row of rows) {
       for (const option of row.options) {
         snap = await this.deps.snapshot()
@@ -165,14 +203,18 @@ export class FilterSetter {
         } catch (err) {
           const available = this.rowOptionTexts(snap, row.labelPrefix)
           const exact = available.find((t) => normalizeOptionText(t) === normalizeOptionText(option))
-          if (!exact) {
+          const closest = exact ?? pickClosestOption(option, available)
+          if (!closest) {
             throw new FilterSetError(
               `${row.labelPrefix} 没有匹配的选项「${option}」，该行可选：${available.join('、') || '（未解析到选项）'}；` +
                 '请从可选值中选择最接近用户要求的档位重试（可先用 boss_filter_options 查询全部可选档位）' +
                 `（原始定位错误：${err instanceof Error ? err.message : String(err)}）`,
             )
           }
-          point = this.locateRowOption(snap, row.labelPrefix, exact)
+          if (!exact) {
+            substitutions.push({ row: row.labelPrefix, requested: option, matched: closest })
+          }
+          point = this.locateRowOption(snap, row.labelPrefix, closest)
         }
         await this.deps.click(point, viewportOf(snap))
         await this.sleep(500)
@@ -195,7 +237,7 @@ export class FilterSetter {
         `筛选结果校验失败：期望「筛选·${expected}」，实际 ${count === null ? '未找到徽章（面板可能未提交）' : `筛选·${count}`}`,
       )
     }
-    return { filterCount: count }
+    return { filterCount: count, substitutions }
   }
 
   /**

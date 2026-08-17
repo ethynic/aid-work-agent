@@ -9,24 +9,40 @@ import { createHash } from 'node:crypto'
 export const TRUSTED_MANIFEST = {
   provider_key: 'boss-recruiting',
   provider_id: 'ai.aidwork.boss-recruiting',
+  // 与 boss CLI 的 TOOL_DEFS（src/mcp/toolDefs.ts）保持同步——2026-08-17 真机踩坑：
+  // 新增工具没进此清单会被 TOOL_NOT_ALLOWED 拒绝，云端智能体误判「功能不可用」
   tools: [
     'boss_filter',
     'boss_clear_filter',
+    'boss_filter_options',
     'boss_goto',
     'boss_greet',
     'boss_accept_resume',
     'boss_reject_current',
     'boss_interview_demo',
+    'boss_send_to',
+    'boss_send_current',
+    'boss_list_jobs',
+    'boss_select_job',
+    'boss_resume_detail',
+    'boss_resume_batch',
   ],
   execution_target: 'local_required',
 } as const
 
-/** 写动作集合：外部副作用不可逆，崩溃/锁屏策略与只读不同 */
+/** 写动作集合：外部副作用不可逆，崩溃/锁屏策略与只读不同（与 boss CLI OPERATIONS 的 cli.write 同步 + interview_demo 沿用历史归类） */
 const WRITE_TOOLS: ReadonlySet<string> = new Set([
+  'boss_filter',
+  'boss_clear_filter',
   'boss_greet',
   'boss_accept_resume',
   'boss_reject_current',
   'boss_interview_demo',
+  'boss_send_to',
+  'boss_send_current',
+  'boss_select_job',
+  'boss_resume_detail',
+  'boss_resume_batch',
 ])
 
 export function isToolAllowed(toolName: string): boolean {
