@@ -89,10 +89,10 @@
             </span>
           </template>
           <template #tenant_url="{ row }">
-            <div class="flex items-center gap-2">
-              <a :href="getTenantUrl(row.tenant_id)" target="_blank"
-                class="text-primary-600 hover:text-primary-700 hover:underline text-sm">
-                {{ getTenantUrl(row.tenant_id) }}
+            <div class="flex items-center justify-center gap-2">
+              <a :href="getTenantUrl(row.tenant_id)" target="_blank" :title="getTenantUrl(row.tenant_id)"
+                class="text-primary-600 hover:text-primary-700 hover:underline text-sm whitespace-nowrap">
+                链接
               </a>
               <button @click="copyTenantUrl(row.tenant_id)"
                 class="p-1 text-muted hover:text-primary-600 hover:bg-primary-50 rounded transition-colors"
@@ -527,7 +527,7 @@ const columns: TableColumn[] = [
   { key: 'credit_balance', label: '积分余额', width: '120px' },
   { key: 'daily_avg_cost', label: '日均使用积分', width: '110px' },
   { key: 'estimated_days_left', label: '预估可用天数', width: '130px' },
-  { key: 'tenant_url', label: '租户入口网址', width: '280px' },
+  { key: 'tenant_url', label: '租户入口', width: '100px', thAlign: 'center' },
   { key: 'actions', label: '操作', width: '140px', thAlign: 'center' },
 ]
 
@@ -615,6 +615,8 @@ const { currentPage, pageSize, seqNumber } =
     }
     applyFilterAndPagination()
   })
+// 租户列表默认每页 20 条
+pageSize.value = 20
 
 async function loadAllTenants() {
   // 拉一大页避免分页：本页是客户端分页/搜索，后端 list_tenants 默认 page_size=20 会导致切片最多只有 20 条
