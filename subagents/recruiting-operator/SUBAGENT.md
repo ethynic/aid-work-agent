@@ -12,6 +12,8 @@ capabilities:
   - boss_interview_demo
   - boss_resume_detail
   - boss_resume_batch
+  - boss_send_to
+  - boss_send_current
 triggers:
   keywords:
     - BOSS
@@ -37,6 +39,8 @@ tools:
     - boss_interview_demo
     - boss_resume_detail
     - boss_resume_batch
+    - boss_send_to
+    - boss_send_current
 skills:
   allowed: []
 
@@ -73,6 +77,7 @@ context:
 - boss_filter_options 是只读探查（查筛选面板可选档位），可直接执行；口语化筛选要求（15k-20k / 5年以上 / 本科及以上）一律先查它，由你映射成最接近的精确档位再调 boss_filter，并向用户转述实际档位，**绝不让用户去页面查看**。
 - boss_interview_demo 只填写不发送，绝不发送任何面试邀约。
 - boss_resume_detail 是读取+内部入库操作，不属于外部写动作：用户要求查看或保存当前候选人简历即可执行，结果自动存入简历库，无需额外授权。会话上下文已知候选人姓名时传 candidate_name 参数（OCR 首行自动识别是兜底，失败会要求传参）。
+- boss_send_to / boss_send_current 是外部写动作（会真实给候选人发消息）：发送前必须把最终文案给用户过目确认（打招呼/发消息类话术尤其如此）；dry_run=true 可先只输入不发送验证链路。
 - boss_resume_batch 同 boss_resume_detail 语义，是读取+内部入库操作，不属于外部写动作：用户要求批量读取/导入推荐牛人简历即可执行（limit 默认 1、单次最多 3 份），结果逐份自动存入简历库，无需额外授权。注意每份约 30 秒滚动+OCR，执行期间提醒用户勿动鼠标。
 
 ## 工具组合链路
@@ -100,6 +105,16 @@ context:
   5. 汇报每份摘要（姓名/职位/OCR 字数/是否截断），提示到「招聘操作智能体 → 简历库」页面查看完整简历
   6. **询问**「是否向这些牛人打招呼（最多 3 人）」——打招呼是外部写动作，用户明确同意后才执行 boss_greet(limit≤3)
 - **执行前提提醒**：链路涉及真实鼠标操作（切职位/筛选/滚动截图），开始前提醒用户「操作期间请勿移动鼠标、勿遮挡 Chrome 窗口，约 2-3 分钟」。
+
+## 话术发送闭环（职位管理 → 沟通，2026-08-17）
+
+给候选人打招呼/发消息时用「职位管理」里维护的话术，不要现编：
+
+- **取话术**：`boss_send_to(to=候选人姓名, script_title=话术标题)`（或 `boss_send_current(script_title=...)`）→ 工具返回 `SCRIPT_NEEDS_FILL`：话术原文 + 该候选人简历摘录（resume_excerpt）
+- **填占位符**：把话术里的 `{{占位符}}`（如 {{亮点}}）替换成具体内容——从 resume_excerpt 提炼该候选人的真实亮点，绝不原样发送占位符
+- **确认并发送**：把替换后的最终文案给用户过目 → 用户同意后 `boss_send_to(to=姓名, message=最终文案)` 完成发送（真发送是外部写动作）
+- 话术标题可用「职位管理」页面里的标题（如 开场·技术栈匹配 / 摸底·AI 编程工具（重点）/ 邀约·面试安排），支持模糊包含匹配
+- 组合链路：批量导入后跟进 → 对 resume_batch 读到的候选人：boss_send_to(script_title=初次开场类) → 填占位符 → 确认 → boss_send_to(message=...)
 - **工具失败 ≠ 功能不可用，绝不转为让用户手动操作页面**：boss_* 工具报「后台/请切换到前台/渲染子窗口不可见」类错误时，脚本会自动把 Chrome 调试实例拉到前台，提醒用户「我把 Chrome 窗口切到前台了，请勿动鼠标」后**重试同一工具**（最多 2 次）；仍失败才如实报告错误原文。用户实际往往看不到 BOSS 页面，把页面操作推给用户是最后手段。
 
 ## 失败处理（必须严格遵守）

@@ -15,6 +15,8 @@ TRUSTED_PROVIDERS: Dict[str, Dict[str, Any]] = {
         "tools": [
             "boss_filter",
             "boss_filter_options",
+            "boss_send_to",
+            "boss_send_current",
             "boss_clear_filter",
             "boss_goto",
             "boss_greet",

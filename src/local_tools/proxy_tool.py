@@ -24,7 +24,7 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 from src.local_tools import catalog, repository
-from src.services import recruiting_resume_service
+from src.services import recruiting_job_service, recruiting_resume_service
 from src.tools.base import BaseTool, ExecutionTarget
 
 ONLINE_THRESHOLD_SECONDS = 30  # last_seen_at 距今 ≤30s 视为在线（与 api.py 一致）
@@ -505,6 +505,174 @@ class BossResumeBatchTool(LocalToolProxyTool):
         return {**result, "data": {"resumes": summaries, "failures": failures}, "message": message}
 
 
+# ============== 话术发送闭环（职位管理 → boss_send_to / boss_send_current，2026-08-17） ==============
+
+# 简历摘录上限（字符）：供 LLM 填话术 {{占位符}} 用，够提炼亮点且省上下文
+SCRIPT_RESUME_EXCERPT_CHARS = 600
+
+
+def _resolve_job_script(
+    tenant_id: str, job_name: Optional[str], title: str
+) -> Tuple[Optional[Dict[str, str]], Optional[str]]:
+    """在「职位管理」里定位话术（标题精确 → 包含兜底）。返回 (script, error)；job_name 缺省遍历全部职位。"""
+    jobs = recruiting_job_service.list_jobs(tenant_id)
+    if not jobs:
+        return None, "职位管理里还没有职位，请先在「职位管理」页面添加职位与话术"
+    matched = jobs
+    if job_name:
+        matched = [j for j in jobs if j["job_name"] == job_name] or [
+            j for j in jobs if job_name in j["job_name"]
+        ]
+        if not matched:
+            return None, f"职位管理中没有职位「{job_name}」，现有：{'、'.join(j['job_name'] for j in jobs)}"
+    for job in matched:
+        detail = recruiting_job_service.get_job(tenant_id, job["id"])
+        scripts = (detail or {}).get("scripts", [])
+        for s_ in scripts:
+            if s_.get("title") == title:
+                return {"job_name": job["job_name"], "category": s_.get("category", ""),
+                        "title": s_.get("title", ""), "content": s_.get("content", "")}, None
+    for job in matched:  # 包含兜底
+        detail = recruiting_job_service.get_job(tenant_id, job["id"])
+        for s_ in (detail or {}).get("scripts", []):
+            if title in s_.get("title", ""):
+                return {"job_name": job["job_name"], "category": s_.get("category", ""),
+                        "title": s_.get("title", ""), "content": s_.get("content", "")}, None
+    available = []
+    for job in matched:
+        detail = recruiting_job_service.get_job(tenant_id, job["id"])
+        available.extend(s_.get("title", "") for s_ in (detail or {}).get("scripts", []))
+    scope = f"职位「{job_name}」" if job_name else "职位管理"
+    return None, f"{scope}里没找到话术「{title}」，可选：{'、'.join(available) or '（无）'}"
+
+
+def _resume_ocr_excerpt(tenant_id: str, candidate_name: str) -> Optional[str]:
+    """按姓名取简历库 OCR 正文开头（同名多条取最新）。无简历返回 None。"""
+    data = recruiting_resume_service.list_resumes(
+        tenant_id, keyword=candidate_name, page=1, page_size=5
+    )
+    items = data.get("items") or []
+    exact = [r for r in items if r.get("candidate_name") == candidate_name] or items
+    if not exact:
+        return None
+    full = recruiting_resume_service.get_resume(tenant_id, exact[0]["id"])
+    text = (full or {}).get("ocr_text") or ""
+    return text[:SCRIPT_RESUME_EXCERPT_CHARS] or None
+
+
+class BossSendToTool(LocalToolProxyTool):
+    """搜索找人发消息（外部写动作）。话术模式：script_title 引用「职位管理」话术，
+    返回话术原文 + 该候选人简历摘录（SCRIPT_NEEDS_FILL），LLM 填好 {{占位符}} 后带 message 重调完成发送。"""
+
+    name = "boss_send_to"
+    display_name = "BOSS 搜索找人发消息"
+    description = (
+        "在用户本机 BOSS 直聘「沟通」页搜索联系人姓名并进入对话，逐字输入消息并发送（外部写动作；"
+        "dry_run=true 只输入不发送）。话术模式：不传 message 而传 script_title（「职位管理」里的话术标题）时，"
+        "返回话术原文与该候选人简历摘录（code=SCRIPT_NEEDS_FILL），把 {{占位符}} 替换成具体内容后，"
+        "再带完整 message 调用本工具完成发送。前置：当前在沟通页（不在时自动跳转）。"
+    )
+    timeout_seconds = 300
+
+    class InputModel(BaseModel):
+        to: str = Field(..., min_length=1, max_length=30, description="联系人姓名（搜索关键词）")
+        message: Optional[str] = Field(None, max_length=2000, description="最终消息全文（话术占位符已替换完毕）")
+        script_title: Optional[str] = Field(
+            None, max_length=100, description="「职位管理」里的话术标题（话术模式，与 message 二选一）"
+        )
+        job_name: Optional[str] = Field(
+            None, max_length=100, description="话术所属职位名（多职位时定位；缺省遍历全部职位）"
+        )
+        dry_run: bool = Field(False, description="只输入不发送（测试链路，默认 false 真发送）")
+
+    async def execute(self, **kwargs) -> Dict[str, Any]:
+        tenant_id = kwargs.get("_trusted_tenant_id")
+        script_title = (kwargs.get("script_title") or "").strip()
+        if script_title:
+            if kwargs.get("message"):
+                return {"success": False, "code": "INVALID_ARGS",
+                        "message": "script_title（话术模式）与 message 只能二选一：要么传 script_title 取话术填占位符，要么直接传最终 message"}
+            if not tenant_id:
+                return {"success": False, "code": "NO_IDENTITY", "message": "无法确定用户身份，请重新登录后再试"}
+            script, err = await asyncio.to_thread(
+                _resolve_job_script, tenant_id, kwargs.get("job_name"), script_title
+            )
+            if err:
+                return {"success": False, "code": "NOT_FOUND", "message": err}
+            excerpt = await asyncio.to_thread(_resume_ocr_excerpt, tenant_id, kwargs["to"])
+            result: Dict[str, Any] = {
+                "success": False,
+                "code": "SCRIPT_NEEDS_FILL",
+                "message": (
+                    f"话术已定位（{script['job_name']}·{script['category']}·{script['title']}）："
+                    "请把 content 里的 {{占位符}} 替换为具体内容（参考 resume_excerpt 提炼），"
+                    "确认最终文案并征得用户同意后，带完整 message 重新调用本工具发送"
+                ),
+                "script": script,
+            }
+            if excerpt:
+                result["resume_excerpt"] = excerpt
+            else:
+                result["resume_hint"] = f"简历库暂无「{kwargs['to']}」的简历，请基于会话上下文与用户确认的内容填写"
+            return result
+        if not (kwargs.get("message") or "").strip():
+            return {"success": False, "code": "INVALID_ARGS",
+                    "message": "缺少 message（最终消息全文）；或改用 script_title 话术模式"}
+        return await super().execute(**kwargs)
+
+
+class BossSendCurrentTool(LocalToolProxyTool):
+    """向当前会话发消息（外部写动作）。话术模式同 BossSendToTool（无候选人姓名，不带简历摘录）。"""
+
+    name = "boss_send_current"
+    display_name = "BOSS 向当前会话发消息"
+    description = (
+        "在用户本机 BOSS 直聘「沟通」页向当前已选会话逐字输入消息并发送（外部写动作；dry_run 只输入不发送）。"
+        "话术模式：不传 message 而传 script_title（「职位管理」里的话术标题）时，返回话术原文"
+        "（code=SCRIPT_NEEDS_FILL），把 {{占位符}} 替换后带完整 message 重调完成发送。"
+        "前置：当前在沟通页且已选中会话（右侧有发送按钮）。"
+    )
+    timeout_seconds = 300
+
+    class InputModel(BaseModel):
+        message: Optional[str] = Field(None, max_length=2000, description="最终消息全文（话术占位符已替换完毕）")
+        script_title: Optional[str] = Field(
+            None, max_length=100, description="「职位管理」里的话术标题（话术模式，与 message 二选一）"
+        )
+        job_name: Optional[str] = Field(
+            None, max_length=100, description="话术所属职位名（多职位时定位；缺省遍历全部职位）"
+        )
+        dry_run: bool = Field(False, description="只输入不发送（测试链路，默认 false 真发送）")
+
+    async def execute(self, **kwargs) -> Dict[str, Any]:
+        tenant_id = kwargs.get("_trusted_tenant_id")
+        script_title = (kwargs.get("script_title") or "").strip()
+        if script_title:
+            if kwargs.get("message"):
+                return {"success": False, "code": "INVALID_ARGS",
+                        "message": "script_title（话术模式）与 message 只能二选一"}
+            if not tenant_id:
+                return {"success": False, "code": "NO_IDENTITY", "message": "无法确定用户身份，请重新登录后再试"}
+            script, err = await asyncio.to_thread(
+                _resolve_job_script, tenant_id, kwargs.get("job_name"), script_title
+            )
+            if err:
+                return {"success": False, "code": "NOT_FOUND", "message": err}
+            return {
+                "success": False,
+                "code": "SCRIPT_NEEDS_FILL",
+                "message": (
+                    f"话术已定位（{script['job_name']}·{script['category']}·{script['title']}）："
+                    "请结合当前会话上下文把 {{占位符}} 替换为具体内容，征得用户同意后带完整 message 重新调用本工具发送"
+                ),
+                "script": script,
+            }
+        if not (kwargs.get("message") or "").strip():
+            return {"success": False, "code": "INVALID_ARGS",
+                    "message": "缺少 message（最终消息全文）；或改用 script_title 话术模式"}
+        return await super().execute(**kwargs)
+
+
 LOCAL_PROXY_TOOL_CLASSES = (
     BossFilterTool,
     BossClearFilterTool,
@@ -516,6 +684,8 @@ LOCAL_PROXY_TOOL_CLASSES = (
     BossInterviewDemoTool,
     BossResumeDetailTool,
     BossResumeBatchTool,
+    BossSendToTool,
+    BossSendCurrentTool,
 )
 
 LOCAL_PROXY_TOOL_NAMES = frozenset(cls.name for cls in LOCAL_PROXY_TOOL_CLASSES)
