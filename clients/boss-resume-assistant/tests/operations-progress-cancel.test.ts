@@ -21,6 +21,7 @@ function fakeSession(snaps: DomSnapshot[], opts: { url?: string } = {}) {
     click: async (p) => {
       clicks.push(p)
     },
+    clickBrowse: async () => {},
     mouseWheel: async () => {},
     pressEscape: async () => {},
     typeChar: async () => {},

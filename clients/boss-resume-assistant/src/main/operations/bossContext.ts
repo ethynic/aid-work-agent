@@ -29,8 +29,13 @@ import { mapExecutorError } from './errorMapping.js'
 export interface BossSession {
   /** 采集 fresh DOMSnapshot（页面动态变化，每次定位前重新采集） */
   snapshot(): Promise<DomSnapshot>
-  /** Win32 真实鼠标点击（viewport 为页面截图尺寸，device px） */
+  /** Win32 真实鼠标点击（viewport 为页面截图尺寸，device px）。写动作按钮/筛选类控件专用：
+   *  BOSS 反作弊 SDK 选择性拦截 CDP 合成点击，这类动作必须借真实光标 */
   click(point: ClickPoint, viewport: { width: number; height: number }): Promise<void>
+  /** CDP 浏览类点击（mousePressed+mouseReleased，device px）。与 Win32 click 的区别：
+   *  浏览动作（点牛人卡片打开简历详情等）真机实证 CDP 有效且不被拦、不占用真实鼠标；
+   *  写动作/筛选类控件仍必须走 click（Win32），不得混用 */
+  clickBrowse(point: ClickPoint): Promise<void>
   /** CDP mouseWheel 滚动（浏览类操作，不占用真实鼠标） */
   mouseWheel(x: number, y: number, deltaY: number): Promise<void>
   /** 按 Escape（CDP dispatchKey，关简历预览弹层用） */
@@ -87,6 +92,11 @@ export const defaultSessionFactory: BossSessionFactory = async (ctx) => {
   return {
     snapshot: async () => (await gw.captureDomSnapshot()) as DomSnapshot,
     click: (point, viewport) => clicker.click(point, viewport),
+    clickBrowse: async (point) => {
+      // 浏览类点击（真机 2026-08-17 实证：牛人卡片 CDP 点击有效打开简历详情；写动作按钮走 Win32 click）
+      await gw.dispatchMouse({ type: 'mousePressed', x: point.x, y: point.y, button: 'left', clickCount: 1 })
+      await gw.dispatchMouse({ type: 'mouseReleased', x: point.x, y: point.y, button: 'left', clickCount: 1 })
+    },
     mouseWheel: async (x, y, deltaY) => {
       await gw.dispatchMouse({ type: 'mouseWheel', x, y, deltaX: 0, deltaY })
     },

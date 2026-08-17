@@ -1,12 +1,12 @@
 /**
- * 12 个 MCP tool 的契约定义（实施规格 m02 §6 / 标准 §5 / 设计 §10.8）。
+ * 13 个 MCP tool 的契约定义（实施规格 m02 §6 / 标准 §5 / 设计 §10.8）。
  *
  * zodShape 是 registerTool 的输入；manifest digest 用同一来源推导的 JSON Schema，
  * 保证「Host 看到的 schema」与「manifest digest 的 schema」同源（SDK 1.30.0 内部同样
  * 用 zod v4 toJSONSchema 生成 list_tools 的 inputSchema）。
  *
  * 写动作硬上限在 schema 层收紧（设计 §14）：greet 单次最大 3、accept 最大 1、reject 固定 1；
- * CLI/operation 层的上限（100）不变。
+ * resume_batch 因单份约 30 秒滚动+OCR 也收紧到 3；CLI/operation 层的上限（10）不变。
  */
 import { z } from 'zod'
 
@@ -171,6 +171,22 @@ export const TOOL_DEFS: BossToolDef[] = [
       save_image_to: z.string().min(1).optional().describe('可选：拼接长图保存路径（PNG）；缺省不保留图片'),
     },
     annotations: { title: '读取候选人简历详情入库', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  {
+    name: 'boss_resume_batch',
+    title: '批量读取牛人简历入库',
+    description:
+      '在 BOSS 直聘「推荐牛人」页逐个点开当前视口的牛人卡片 → 读取在线简历（滚动分段截图拼接 OCR）→ 自动关闭 → 下一份。' +
+      '结果 resumes 数组按简历库契约返回（candidate_name 从卡片行 DOM 配对，失败用 OCR 首行启发式兜底；job_name 取当前招聘职位；' +
+      '含 ocr_text 全文与拼接长图 base64），云端自动逐份存入简历库，只返回紧凑摘要。' +
+      '单份失败（打开超时/读取失败/姓名无法确定）记入 failures 后继续下一份。' +
+      '前置要求：当前在推荐牛人列表页，否则返回 WRONG_PAGE。' +
+      '只读：无外部写副作用；但每份简历滚动借用真实鼠标约 30 秒，操作期间勿动鼠标、勿遮挡 Chrome 窗口。',
+    zodShape: {
+      limit: z.number().int().min(1).max(3).default(1).describe('读取份数上限：默认 1，单次最大 3（每份约 30 秒滚动+OCR）'),
+      save_dir: z.string().min(1).optional().describe('可选：拼接长图保存目录（每份存 <姓名>.png）；缺省不保留图片'),
+    },
+    annotations: { title: '批量读取牛人简历入库', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
 ]
 

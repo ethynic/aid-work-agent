@@ -3,12 +3,12 @@
 设计：docs/design/recruiting/recruiting-cli-agent-integration-design.md §4/§11/§14
 实施规格：docs/plans/recruiting/m05-implementation-spec.md §3
 
-8 个 boss_* 工具全部为 LOCAL_REQUIRED：execute() 不直接操作 BOSS，
+9 个 boss_* 工具全部为 LOCAL_REQUIRED：execute() 不直接操作 BOSS，
 而是经「设备闸门 → 创建 invocation → 轮询 events/state → 终态映射」
 驱动本机 Runtime 执行，进度事件推入 agent 注入的 _progress_queue。
 
-其中 boss_resume_detail 额外做云端后处理：CLI 成功结果（截图+OCR payload）
-在工具层直接落简历库，只把紧凑摘要返回给 LLM（图片字节不进上下文）。
+其中 boss_resume_detail / boss_resume_batch 额外做云端后处理：CLI 成功结果（截图+OCR payload）
+在工具层直接落简历库（batch 逐份落库），只把紧凑摘要返回给 LLM（图片字节不进上下文）。
 
 安全约束：
 - 设备闸门在 create_invocation 之前（repository.create_invocation 本身不校验
@@ -391,6 +391,107 @@ class BossResumeDetailTool(LocalToolProxyTool):
         return {**result, "data": summary, "message": message}
 
 
+class BossResumeBatchTool(LocalToolProxyTool):
+    """BOSS 批量读取简历入库：CLI 批量 payload 逐份落库，图片字节绝不进 LLM 上下文。
+
+    与 BossResumeDetailTool 同语义的批量版：CLI（boss_resume_batch）在推荐牛人页逐个点开
+    卡片读取简历，返回 data.resumes 契约 payload 数组 + data.failures；云端逐份入库，
+    单份异常捕获记入 failures（不中断循环，与 CLI 侧 failures 合并语义），只返回紧凑摘要列表。
+
+    注意：工具实例是共享单例（tool_registry.register(tool_cls())），
+    禁止把每次调用的状态存 self；tenant/user 一律从 kwargs 的 _trusted_* 取。
+    """
+    name = "boss_resume_batch"
+    display_name = "BOSS 批量读取简历入库"
+    description = (
+        "在用户本机 BOSS 直聘「推荐」页逐个点开牛人卡片批量读取简历（截图+OCR），"
+        "结果逐份自动存入简历库，返回紧凑摘要列表（不含图片与 OCR 全文）"
+    )
+
+    class InputModel(BaseModel):
+        limit: Optional[int] = Field(
+            None,
+            ge=1,
+            le=3,
+            description="读取份数上限：默认 1，单次最多 3 份（授权上限，不可突破）",
+        )
+
+    timeout_seconds = 600
+
+    async def execute(self, **kwargs) -> Dict[str, Any]:
+        tenant_id = kwargs.get("_trusted_tenant_id")
+        user_id = kwargs.get("_trusted_user_id")
+        result = await super().execute(**kwargs)
+
+        # CLI 失败/非 success：message/code 透传，不落库；data 一律置 None（图片字节绝不进上下文）
+        if not result.get("success"):
+            return {**result, "data": None}
+
+        data = result.get("data") or {}
+        resumes = data.get("resumes")
+        if not isinstance(resumes, list) or not resumes:
+            return {
+                "success": False,
+                "code": "RESUME_PAYLOAD_INVALID",
+                "message": "CLI 批量结果缺少 resumes 数组或为空（未读取到任何简历）",
+                "effect": result.get("effect"),
+                "data": None,
+                "invocation_id": result.get("invocation_id"),
+            }
+        # CLI 侧单份失败（打开超时/读取失败等）与云端入库失败合并到同一 failures 列表
+        failures: List[Dict[str, Any]] = [
+            f for f in (data.get("failures") or []) if isinstance(f, dict)
+        ]
+
+        # 逐份入库：单份异常捕获记录，不中断循环（尽量多收简历）
+        summaries: List[Dict[str, Any]] = []
+        for idx, payload in enumerate(resumes):
+            name = payload.get("candidate_name") if isinstance(payload, dict) else None
+            try:
+                record = await asyncio.to_thread(
+                    recruiting_resume_service.create_resume_record_from_tool_result,
+                    tenant_id, user_id, payload, "boss",
+                )
+            except recruiting_resume_service.ResumePayloadError as e:
+                logger.error(f"后端日志：boss_resume_batch 第 {idx + 1} 份入库失败 payload 不符契约: {e}")
+                failures.append({"name": name, "error": f"{e}"})
+                continue
+            except Exception as e:
+                logger.error(f"后端日志：boss_resume_batch 第 {idx + 1} 份入库失败: {e}", exc_info=True)
+                failures.append({"name": name, "error": "简历入库失败（数据库或存储异常）"})
+                continue
+            summaries.append({
+                "resume_id": record["id"],
+                "candidate_name": record.get("candidate_name"),
+                "job_name": record.get("job_name"),
+                "image_count": len(record.get("images") or []),
+                "ocr_char_count": len(record.get("ocr_text") or ""),
+            })
+
+        # 全部失败 → fail-loud；部分/全部成功 → success=True（失败信息在 failures）
+        if not summaries:
+            return {
+                "success": False,
+                "code": "RESUME_STORE_FAILED",
+                "message": f"批量读取 {len(resumes)} 份简历但全部入库失败，请稍后重试或联系管理员",
+                "effect": result.get("effect"),
+                "data": None,
+                "invocation_id": result.get("invocation_id"),
+            }
+
+        # 返回给 LLM 的 data 只含紧凑摘要 + failures（绝不含 base64/OCR 全文，
+        # recruiting-operator 上下文预算仅 8000 token，完整内容到简历库页面看）
+        names = "、".join(s["candidate_name"] or "?" for s in summaries)
+        message = f"已存入简历库 {len(summaries)} 份：{names}"
+        if failures:
+            first = failures[0]
+            message += f"；{len(failures)} 份失败（第一个：{first.get('name') or '未知姓名'}—{first.get('error')}）"
+        # 基类在 effect=unknown 时已给 message 追加「实际效果未知」提示，覆写摘要时必须保留
+        if UNKNOWN_EFFECT_NOTICE in (result.get("message") or ""):
+            message = f"{message}；{UNKNOWN_EFFECT_NOTICE}"
+        return {**result, "data": {"resumes": summaries, "failures": failures}, "message": message}
+
+
 LOCAL_PROXY_TOOL_CLASSES = (
     BossFilterTool,
     BossClearFilterTool,
@@ -400,6 +501,7 @@ LOCAL_PROXY_TOOL_CLASSES = (
     BossRejectCurrentTool,
     BossInterviewDemoTool,
     BossResumeDetailTool,
+    BossResumeBatchTool,
 )
 
 LOCAL_PROXY_TOOL_NAMES = frozenset(cls.name for cls in LOCAL_PROXY_TOOL_CLASSES)

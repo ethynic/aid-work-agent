@@ -65,6 +65,7 @@ test('mcp-conformance 套件全项通过', async () => {
       'boss_list_jobs',
       'boss_select_job',
       'boss_resume_detail',
+      'boss_resume_batch',
     ],
     // 无 Chrome：空闲端口 → 快速返回结构化 CHROME_UNAVAILABLE
     callProbe: { name: 'boss_goto', arguments: { target: 'chat' } },
@@ -98,7 +99,7 @@ test('mcp-conformance 套件 CLI 模式可独立运行', async () => {
       '--require-base',
       path.join(DIST_ROOT, '..', 'package.json'),
       '--expect-tools',
-      'boss_filter,boss_clear_filter,boss_goto,boss_greet,boss_accept_resume,boss_reject_current,boss_interview_demo,boss_send_to,boss_send_current,boss_list_jobs,boss_select_job,boss_resume_detail',
+      'boss_filter,boss_clear_filter,boss_goto,boss_greet,boss_accept_resume,boss_reject_current,boss_interview_demo,boss_send_to,boss_send_current,boss_list_jobs,boss_select_job,boss_resume_detail,boss_resume_batch',
       '--call',
       'boss_goto:{"target":"chat"}',
       '--invalid',

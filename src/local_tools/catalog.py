@@ -21,6 +21,7 @@ TRUSTED_PROVIDERS: Dict[str, Dict[str, Any]] = {
             "boss_reject_current",
             "boss_interview_demo",
             "boss_resume_detail",
+            "boss_resume_batch",
         ],
     }
 }

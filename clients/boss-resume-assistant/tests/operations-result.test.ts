@@ -15,6 +15,7 @@ import { createBossAcceptResumeOperation } from '../src/main/operations/bossAcce
 import { createBossRejectCurrentOperation } from '../src/main/operations/bossRejectCurrent.js'
 import { createBossInterviewDemoOperation } from '../src/main/operations/bossInterviewDemo.js'
 import { createBossResumeDetailOperation } from '../src/main/operations/bossResumeDetail.js'
+import { createBossResumeBatchOperation } from '../src/main/operations/bossResumeBatch.js'
 import type { BossSession } from '../src/main/operations/bossContext.js'
 import type { OpContext } from '../src/main/operations/types.js'
 import type { DomSnapshot, ClickPoint } from '../src/main/boss/domSnapshot.js'
@@ -26,6 +27,7 @@ import { ChatRejectError } from '../src/main/boss/ChatRejectExecutor.js'
 import { InterviewDemoError } from '../src/main/boss/InterviewDemoExecutor.js'
 import { JobSwitchError } from '../src/main/boss/JobSwitcher.js'
 import { ResumeReadError } from '../src/main/boss/ResumeReader.js'
+import { ResumeBatchError } from '../src/main/boss/ResumeBatchReader.js'
 import { WinClickError } from '../src/main/input/WinMouseClicker.js'
 
 function silentCtx(): OpContext {
@@ -42,6 +44,7 @@ function fakeFactory(snaps: DomSnapshot[], opts: { url?: string; throwOnCreate?:
     click: async (p) => {
       clicks.push(p)
     },
+    clickBrowse: async () => {},
     mouseWheel: async () => {},
     pressEscape: async () => {},
     typeChar: async () => {},
@@ -97,6 +100,33 @@ function greetSnap(buttons: Array<[number, number, number, number]>, extraTexts:
           contentDocumentIndex: { index: [], value: [] },
         },
         layout: { nodeIndex: idx, bounds },
+      },
+    ],
+  }
+}
+
+/** resume-batch 用 snapshot：根 + 文本节点 + 大 CANVAS 元素（沟通页简历预览 / 推荐页残留详情弹层态） */
+function snapWithCanvas(texts: string[]): DomSnapshot {
+  const canvasSi = texts.length + 1
+  const nodeCount = 1 + texts.length + 1
+  const idx = Array.from({ length: nodeCount }, (_, i) => i)
+  return {
+    strings: ['', ...texts, 'CANVAS'],
+    documents: [
+      {
+        nodes: {
+          nodeValue: { index: idx, value: [0, ...texts.map((_t, i) => i + 1), 0] },
+          nodeName: { index: [nodeCount - 1], value: [canvasSi] },
+          contentDocumentIndex: { index: [], value: [] },
+        },
+        layout: {
+          nodeIndex: idx,
+          bounds: [
+            [0, 0, 1917, 1905],
+            ...texts.map((): [number, number, number, number] => [100, 200, 50, 20]),
+            [168, 40, 760, 1264],
+          ],
+        },
       },
     ],
   }
@@ -188,6 +218,47 @@ test('boss_resume_detail：未打开简历详情（无大 canvas）→ WRONG_PAG
   assert.equal(r.effect, 'none')
   assert.match(r.message, /未找到简历画布/)
   assert.equal(f.calls.length, 1) // 工厂已连上（前置校验在 body 内），但 wheel/截图未被触达
+})
+
+test('boss_resume_batch：limit 非法（0/11/1.5）→ INVALID_ARGUMENT，不连 Chrome', async () => {
+  const f = fakeFactory([])
+  const op = createBossResumeBatchOperation(f.factory)
+  for (const limit of [0, 11, 1.5, -3]) {
+    const r = await op.execute({ limit }, silentCtx())
+    assert.equal(r.code, 'INVALID_ARGUMENT', `limit=${limit}`)
+    assert.equal(f.calls.length, 0)
+  }
+})
+
+test('boss_resume_batch：save_dir 空白 → INVALID_ARGUMENT，不连 Chrome', async () => {
+  const f = fakeFactory([])
+  const op = createBossResumeBatchOperation(f.factory)
+  const r = await op.execute({ save_dir: '   ' }, silentCtx())
+  assert.equal(r.code, 'INVALID_ARGUMENT')
+  assert.equal(f.calls.length, 0)
+})
+
+test('boss_resume_batch：非推荐页且无简历详情（无筛选无 canvas）→ WRONG_PAGE', async () => {
+  const f = fakeFactory([snapWithTexts(['沟通', '消息'])])
+  const op = createBossResumeBatchOperation(f.factory)
+  const r = await op.execute({ limit: 1 }, silentCtx())
+  assert.equal(r.success, false)
+  assert.equal(r.code, 'WRONG_PAGE')
+  assert.equal(r.retryable, true)
+  assert.equal(r.effect, 'none')
+  assert.match(r.message, /推荐牛人列表页/)
+  assert.match(r.message, /boss_goto/)
+  assert.equal(f.calls.length, 1) // 前置校验在 body 内，工厂已连上，但未点击任何卡片
+})
+
+test('boss_resume_batch：非推荐页但有简历 canvas（沟通页简历预览）→ 仍 WRONG_PAGE（canvas 不豁免）', async () => {
+  const f = fakeFactory([snapWithCanvas(['沟通', '消息'])])
+  const op = createBossResumeBatchOperation(f.factory)
+  const r = await op.execute({ limit: 1 }, silentCtx())
+  assert.equal(r.success, false)
+  assert.equal(r.code, 'WRONG_PAGE')
+  assert.match(r.message, /boss_goto/)
+  assert.equal(f.clicks.length, 0)
 })
 
 // ---------- operation 执行期错误映射 ----------
@@ -318,6 +389,7 @@ test('errorMapping：结构变化/找不到元素 → UI_CHANGED', () => {
     new JobSwitchError('职位「Java」不在当前招聘者的职位列表中（可用职位：PHP开发工程师、前端开发），请人工查看'),
     new JobSwitchError('打开职位下拉后未解析到任何职位项（项无 layout bounds 可能是等待不足），请人工查看'),
     new ResumeReadError('未找到简历详情画布（页面中无大尺寸 CANVAS）：请先在推荐牛人页点开一个候选人的在线简历详情，再执行读取'),
+    new ResumeBatchError('当前视口未找到任何牛人卡片（无「打招呼」按钮）：请确认已打开推荐牛人列表页且列表已加载'),
   ]
   for (const err of cases) {
     assert.equal(mapExecutorError(err).code, 'UI_CHANGED', err.message)

@@ -29,6 +29,7 @@ import {
   extractCandidateNameFromOcr,
   locateResumeCanvas,
   type DeviceRect,
+  type ResumeReadResult,
 } from '../boss/ResumeReader.js'
 import { JobSwitcher } from '../boss/JobSwitcher.js'
 import { viewportOf } from '../boss/FilterSetter.js'
@@ -92,8 +93,10 @@ function cvScriptPath(name: string): string {
  * TitleKeyword 显式传 win-click.ps1 同款「BOSS直聘 - Google Chrome」：不用 cv-wheel 的默认 "Google Chrome"，
  * 否则多 Chrome 窗口时 EnumWindows 按 Z 序可能命中其他窗口 → 错滚 → BOSS canvas 纹丝不动 →
  * 各段截图字节相同被判「到底」→ 静默只返回首屏半成品（违背 fail-loud，真机标题 2026-08-14 实证）。
+ *
+ * export：bossResumeBatch operation（同域：读简历 canvas）复用同一套 PS runner。
  */
-async function wheelAt(
+export async function wheelAt(
   rect: DeviceRect,
   viewport: { width: number; height: number },
   deltaY: number,
@@ -118,8 +121,11 @@ async function wheelAt(
   )
 }
 
-/** 裁剪 + 对齐 + 拼接：解析 cv-stitch.ps1 stdout（overlapNN=<n> / stitched=<w>x<h>） */
-async function stitchParts(
+/**
+ * 裁剪 + 对齐 + 拼接：解析 cv-stitch.ps1 stdout（overlapNN=<n> / stitched=<w>x<h>）。
+ * export：bossResumeBatch operation 复用（同域共用）。
+ */
+export async function stitchParts(
   parts: string[],
   rect: DeviceRect,
   outFile: string,
@@ -146,11 +152,42 @@ async function stitchParts(
   return { width: Number(stitched[1]), height: Number(stitched[2]), overlaps }
 }
 
-/** WinRT OCR：cv-ocr.ps1 把 UTF-8 文本写 <img>.txt，node 读回 */
-async function ocrImage(imgFile: string): Promise<string> {
+/** WinRT OCR：cv-ocr.ps1 把 UTF-8 文本写 <img>.txt，node 读回。export：bossResumeBatch operation 复用（同域共用） */
+export async function ocrImage(imgFile: string): Promise<string> {
   const outFile = `${imgFile}.txt`
   await runPs(cvScriptPath('cv-ocr.ps1'), ['-Img', imgFile, '-Out', outFile], 300000, 'cv-ocr.ps1', ResumeReadError)
   return await fsp.readFile(outFile, 'utf8')
+}
+
+/**
+ * 组装云端简历库契约 payload（handoff §2，与 recruiting_resume_service.create_resume_record_from_tool_result
+ * 对齐）：candidate_name 必填，job_name 可选，ocr_text + images base64 + 元信息。
+ * boss_resume_detail / boss_resume_batch 两个 operation 共用（单份与批量同契约）。
+ */
+export function buildResumePayload(
+  candidateName: string,
+  jobName: string | null,
+  readResult: ResumeReadResult,
+): Record<string, unknown> {
+  return {
+    candidate_name: candidateName,
+    ...(jobName ? { job_name: jobName } : {}),
+    ocr_text: readResult.text,
+    images: [
+      {
+        name: 'resume_full.png',
+        mime_type: 'image/png',
+        base64: readResult.imageBuffer.toString('base64'),
+      },
+    ],
+    // 元信息（云端契约不读取，供 CLI 展示/调试）
+    ocr_chars: readResult.chars,
+    segments: readResult.segments,
+    bottom_reached: readResult.bottomReached,
+    image_width: readResult.width,
+    image_height: readResult.height,
+    fetched_at: new Date().toISOString(),
+  }
 }
 
 export function createBossResumeDetailOperation(
@@ -215,24 +252,8 @@ export function createBossResumeDetailOperation(
               truncateWarn,
             // 云端入库契约 payload（handoff §2）：candidate_name 必填，其余可选；额外元信息云端按需忽略
             data: {
-              candidate_name: candidateName,
-              ...(jobBox.name ? { job_name: jobBox.name } : {}),
-              ocr_text: result.text,
-              images: [
-                {
-                  name: 'resume_full.png',
-                  mime_type: 'image/png',
-                  base64: result.imageBuffer.toString('base64'),
-                },
-              ],
-              // 元信息（云端契约不读取，供 CLI 展示/调试）
+              ...buildResumePayload(candidateName, jobBox.name, result),
               name_source: nameParam ? 'param' : 'ocr',
-              ocr_chars: result.chars,
-              segments: result.segments,
-              bottom_reached: result.bottomReached,
-              image_width: result.width,
-              image_height: result.height,
-              fetched_at: new Date().toISOString(),
             },
             effect: 'none',
           }

@@ -24,6 +24,7 @@ import pytest
 
 from src.local_tools.proxy_tool import (
     LOCAL_PROXY_TOOL_CLASSES,
+    BossResumeBatchTool,
     BossResumeDetailTool,
     LocalToolProxyTool,
 )
@@ -491,18 +492,169 @@ class TestBossResumeDetailToolOrchestration:
         assert not list(temp_storage_dir.iterdir())
 
 
+# ============== 3b. 批量工具编排测试 ==============
+
+
+class TestBossResumeBatchToolOrchestration:
+    """BossResumeBatchTool 编排（monkeypatch 基类 execute，不碰真设备/DB invocation）"""
+
+    @staticmethod
+    def _batch_success_result(payloads, cli_failures=None):
+        """构造基类 execute 的假批量成功结果（data.resumes + data.failures + attempted）"""
+        return _cli_success_result({
+            "resumes": payloads,
+            "failures": cli_failures or [],
+            "attempted": len(payloads),
+        })
+
+    def test_two_valid_payloads_stored_and_compact_summaries(
+        self, temp_tenant_with_user, temp_storage_dir
+    ):
+        """CLI 成功（2 份合法 payload）：2 条入库 + summaries 正确 + 返回 data 无 base64/OCR 全文"""
+        ctx = temp_tenant_with_user
+        payloads = [
+            {
+                "candidate_name": "刘草威",
+                "job_name": "PHP开发工程师",
+                "ocr_text": "BATCH_OCR_FULLTEXT_UNIQUE_XYZ_1" * 10,
+                "images": [{"base64": _TINY_PNG_BASE64, "name": "s1.png", "mime_type": "image/png"}],
+            },
+            {
+                "candidate_name": "张三丰",
+                "ocr_text": "BATCH_OCR_FULLTEXT_UNIQUE_XYZ_2",
+                "images": [{"base64": _TINY_PNG_BASE64, "name": "s2.png", "mime_type": "image/png"}],
+            },
+        ]
+        fake = self._batch_success_result(payloads)
+        with patch.object(LocalToolProxyTool, "execute", new=AsyncMock(return_value=fake)):
+            result = _call(BossResumeBatchTool().execute(
+                _trusted_tenant_id=ctx["tenant_id"], _trusted_user_id=ctx["user_id"],
+            ))
+
+        assert result["success"] is True
+        assert result["invocation_id"] == "inv-test-1"
+        assert result["data"]["failures"] == []
+        summaries = result["data"]["resumes"]
+        assert len(summaries) == 2
+        # 每份摘要字段集合精确匹配（与 BossResumeDetailTool 同款紧凑摘要）
+        for s in summaries:
+            assert set(s.keys()) == {
+                "resume_id", "candidate_name", "job_name", "image_count", "ocr_char_count"
+            }
+        assert [s["candidate_name"] for s in summaries] == ["刘草威", "张三丰"]
+        assert summaries[0]["job_name"] == "PHP开发工程师"
+        assert summaries[0]["ocr_char_count"] == len(payloads[0]["ocr_text"])
+        assert summaries[0]["image_count"] == 1
+        # 图片字节与 OCR 全文绝不进 LLM 上下文
+        serialized = json.dumps(result, ensure_ascii=False)
+        assert _TINY_PNG_BASE64 not in serialized
+        assert "BATCH_OCR_FULLTEXT_UNIQUE_XYZ_1" not in serialized
+        assert "BATCH_OCR_FULLTEXT_UNIQUE_XYZ_2" not in serialized
+        # message 含入库份数与姓名
+        assert "2 份" in result["message"]
+        assert "刘草威" in result["message"] and "张三丰" in result["message"]
+        # 已真实落库（2 条，source=boss）且截图落盘
+        assert _count_resumes(ctx["tenant_id"]) == 2
+        for s in summaries:
+            record = resume_service.get_resume(ctx["tenant_id"], s["resume_id"])
+            assert record["source"] == "boss"
+        assert len(list(temp_storage_dir.iterdir())) == 2
+
+    def test_failed_payload_does_not_block_valid_one(
+        self, temp_tenant_with_user, temp_storage_dir
+    ):
+        """单份 payload 非法（缺 candidate_name）：记入 failures 不中断循环，成功份照常入库"""
+        ctx = temp_tenant_with_user
+        payloads = [
+            {"images": [{"base64": _TINY_PNG_BASE64}]},  # 第 1 份缺 candidate_name
+            {
+                "candidate_name": "康嘉润",
+                "job_name": "后端开发",
+                "ocr_text": "BATCH_OCR_FULLTEXT_UNIQUE_XYZ_3",
+                "images": [{"base64": _TINY_PNG_BASE64, "mime_type": "image/png"}],
+            },
+        ]
+        fake = self._batch_success_result(payloads)
+        with patch.object(LocalToolProxyTool, "execute", new=AsyncMock(return_value=fake)):
+            result = _call(BossResumeBatchTool().execute(
+                _trusted_tenant_id=ctx["tenant_id"], _trusted_user_id=ctx["user_id"],
+            ))
+
+        # 部分成功 → success=True；成功份入库、失败份在 failures
+        assert result["success"] is True
+        summaries = result["data"]["resumes"]
+        assert [s["candidate_name"] for s in summaries] == ["康嘉润"]
+        failures = result["data"]["failures"]
+        assert len(failures) == 1
+        assert failures[0]["name"] is None
+        assert "候选人姓名" in failures[0]["error"]
+        assert "1 份失败" in result["message"]
+        assert _count_resumes(ctx["tenant_id"]) == 1
+        assert len(list(temp_storage_dir.iterdir())) == 1
+
+    def test_empty_resumes_returns_payload_invalid_no_store(
+        self, temp_tenant_with_user, temp_storage_dir
+    ):
+        """CLI 成功但 resumes 为空（一份都没读到）：RESUME_PAYLOAD_INVALID，不落库不落盘"""
+        ctx = temp_tenant_with_user
+        fake = _cli_success_result({"resumes": [], "failures": [
+            {"name": None, "error": "未能确定候选人姓名（DOM 配对与 OCR 启发式均失败）"},
+        ], "attempted": 1})
+        with patch.object(LocalToolProxyTool, "execute", new=AsyncMock(return_value=fake)):
+            result = _call(BossResumeBatchTool().execute(
+                _trusted_tenant_id=ctx["tenant_id"], _trusted_user_id=ctx["user_id"],
+            ))
+
+        assert result["success"] is False
+        assert result["code"] == "RESUME_PAYLOAD_INVALID"
+        assert result["data"] is None
+        assert _count_resumes(ctx["tenant_id"]) == 0
+        assert not list(temp_storage_dir.iterdir())
+
+    def test_all_store_failures_returns_store_failed(
+        self, temp_tenant_with_user, temp_storage_dir
+    ):
+        """全部入库失败（DB 故障）：RESUME_STORE_FAILED，不泄漏 base64/OCR 全文"""
+        ctx = temp_tenant_with_user
+        payloads = [
+            {"candidate_name": "李雷", "ocr_text": "BATCH_OCR_X",
+             "images": [{"base64": _TINY_PNG_BASE64, "mime_type": "image/png"}]},
+            {"candidate_name": "韩梅梅", "ocr_text": "BATCH_OCR_Y",
+             "images": [{"base64": _TINY_PNG_BASE64, "mime_type": "image/png"}]},
+        ]
+        fake = self._batch_success_result(payloads)
+        with patch.object(LocalToolProxyTool, "execute", new=AsyncMock(return_value=fake)), \
+             patch.object(resume_service, "create_resume_record_from_tool_result",
+                          side_effect=RuntimeError("db down")):
+            result = _call(BossResumeBatchTool().execute(
+                _trusted_tenant_id=ctx["tenant_id"], _trusted_user_id=ctx["user_id"],
+            ))
+
+        assert result["success"] is False
+        assert result["code"] == "RESUME_STORE_FAILED"
+        assert result["data"] is None
+        serialized = json.dumps(result, ensure_ascii=False)
+        assert _TINY_PNG_BASE64 not in serialized
+        assert "BATCH_OCR_X" not in serialized
+        assert _count_resumes(ctx["tenant_id"]) == 0
+        assert not list(temp_storage_dir.iterdir())
+
+
 # ============== 4. import 安全 / 注册 ==============
 
 class TestImportSafety:
     """import 安全：proxy_tool ↔ services 无循环依赖"""
 
     def test_imports_and_registration(self):
-        """工具类进 LOCAL_PROXY_TOOL_CLASSES，受信清单放行 boss_resume_detail"""
+        """工具类进 LOCAL_PROXY_TOOL_CLASSES，受信清单放行 boss_resume_detail / boss_resume_batch"""
         from src.local_tools import catalog
 
         assert BossResumeDetailTool in LOCAL_PROXY_TOOL_CLASSES
         assert BossResumeDetailTool.name == "boss_resume_detail"
         assert catalog.is_tool_allowed("boss-recruiting", "boss_resume_detail") is True
+        assert BossResumeBatchTool in LOCAL_PROXY_TOOL_CLASSES
+        assert BossResumeBatchTool.name == "boss_resume_batch"
+        assert catalog.is_tool_allowed("boss-recruiting", "boss_resume_batch") is True
 
     def test_services_do_not_import_local_tools(self):
         """子进程验证：先 import 服务层不拉起 src.local_tools（防循环依赖回归）"""

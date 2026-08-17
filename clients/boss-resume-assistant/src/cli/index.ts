@@ -3,7 +3,7 @@
  * BOSS 招聘操作 CLI 入口。
  *
  * 操作命令（filter / greet / goto / accept / reject / interview / send-to / send-current /
- * list-jobs / select-job / resume-detail，其中 filter 含设置与 --clear 两种用法）+ 3 个标准 Provider 命令（mcp / doctor / version）。
+ * list-jobs / select-job / resume-detail / resume-batch，其中 filter 含设置与 --clear 两种用法）+ 3 个标准 Provider 命令（mcp / doctor / version）。
  * 操作命令只是薄 renderer，业务能力在 src/main/operations/，与 MCP tool handler 共享。
  *
  * 用法：
@@ -19,6 +19,7 @@
  *   node dist/src/cli/index.js list-jobs
  *   node dist/src/cli/index.js select-job <职位名>
  *   node dist/src/cli/index.js resume-detail [--name <姓名>] [--save-image <path>]
+ *   node dist/src/cli/index.js resume-batch [--limit N] [--save-dir <目录>]
  *   node dist/src/cli/index.js mcp --stdio
  *   node dist/src/cli/index.js doctor
  *   node dist/src/cli/index.js version [--json]
@@ -44,6 +45,7 @@ const USAGE = `BOSS 招聘操作 CLI
   list-jobs                    列出当前招聘者的所有职位（打开职位下拉解析；只读，但借用真实鼠标点开下拉，期间勿动鼠标）
   select-job <职位名>          切换到指定职位（精确职位名，可用 list-jobs 查看；真实写动作，期间勿动鼠标）
   resume-detail [--name <姓名>] [--save-image <path>]   读取当前打开的候选人简历详情（canvas 截图拼接 OCR；--name 候选人姓名，缺省从 OCR 首行自动识别；前提先点开候选人详情；只读，但滚动借用真实鼠标，期间勿动鼠标）
+  resume-batch [--limit N] [--save-dir <目录>]   批量打开推荐牛人卡片并读取简历（默认 1 份，最大 10；逐个点开→读取→关闭→下一份；只读，但滚动借用真实鼠标约 30 秒/份，期间勿动鼠标）
 
 Provider 命令：
   mcp --stdio                 启动标准本地 MCP server（stdout 只承载协议，供 Codex/WorkBuddy 等 Host 使用）
@@ -200,6 +202,26 @@ async function main(): Promise<number> {
         saveImage: flagString(args, 'save-image'),
         cdpPort,
       })
+    }
+    case 'resume-batch': {
+      const limitRaw = flagString(args, 'limit')
+      let limit: number | undefined
+      if (limitRaw !== undefined) {
+        limit = Number(limitRaw)
+        if (!Number.isInteger(limit) || limit <= 0 || limit > 10) {
+          console.error(`resume-batch --limit 必须是 1-10 的整数（默认 1）：${limitRaw}`)
+          return 2
+        }
+      }
+      const saveDir = flagString(args, 'save-dir')
+      if (saveDir === '') {
+        console.error('resume-batch --save-dir 不能为空')
+        return 2
+      }
+      const cdpPort = parseCdpPort(args)
+      if (cdpPort === 'invalid') return 2
+      const { resumeBatchCommand } = await import('./commands/resumeBatch.js')
+      return resumeBatchCommand({ limit, saveDir, cdpPort })
     }
     case 'mcp': {
       const cdpPort = parseCdpPort(args)

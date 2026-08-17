@@ -14,6 +14,7 @@ import { ChatSendError } from '../boss/ChatSendExecutor.js'
 import { ChatSearchError } from '../boss/ChatSearchExecutor.js'
 import { JobSwitchError } from '../boss/JobSwitcher.js'
 import { ResumeReadError } from '../boss/ResumeReader.js'
+import { ResumeBatchError } from '../boss/ResumeBatchReader.js'
 import { WinClickError } from '../input/WinMouseClicker.js'
 import { CancelledError, CodedOperationError, type ErrorCode } from './types.js'
 
@@ -102,6 +103,7 @@ export function mapExecutorError(err: unknown): MappedError {
     err instanceof ChatSearchError ||
     err instanceof JobSwitchError ||
     err instanceof ResumeReadError ||
+    err instanceof ResumeBatchError ||
     err instanceof WinClickError
   ) {
     return { code: 'UI_CHANGED', message }
