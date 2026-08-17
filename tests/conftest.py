@@ -171,6 +171,88 @@ def mock_tool():
 
 
 # ============================================================
+# 测试租户兜底清理（多租户集成测试的数据卫生，2026-08-17）
+#
+# 集成测试 fixture 会创建真实租户做租户隔离验证（招聘/billing/video 等三表
+# 均按 tenant_id 隔离，mock DB 无法验证真实 SQL 与隔离逻辑）。约定：
+# 测试租户用完必须物理删除（TenantDB.delete 是软删除，行会永久残留）。
+# 各 fixture 自行清理为主，这里做全局兜底：
+#   - session 开始：清历史残留（上次测试进程被中断、fixture 漏删遗留）
+#   - session 结束：清本次测试产生的一切测试数据（含所有含 tenant_id 的表）
+# 清理规则只匹配测试命名模式，真实租户（4 位业务 code，如 YDYY/KCDB）不命中。
+# ============================================================
+
+# 测试租户识别规则（并集）；真实租户名可能含「测试」二字（如「旅行智能体(测试)」，
+# 故不能用宽泛的 LIKE '%测试%'，必须精确匹配 fixture 的命名前缀模式
+_TEST_TENANT_WHERE = """(
+    company_name LIKE '%测试租户%'
+    OR company_name LIKE 'proxy测试-%'
+    OR company_name LIKE '本地工具测试-%'
+    OR company_name LIKE '简历关联B租户-%'
+    OR tenant_code ~ '^T[0-9A-F]{6}$'
+)"""
+
+
+def _purge_test_tenants() -> int:
+    """物理删除所有测试租户及其在全部含 tenant_id 列表中的数据，返回删除租户数。
+
+    DB 不可用时静默跳过（大量单测不依赖数据库，conftest 对所有测试生效）。
+    """
+    try:
+        import src.db.database as _db
+        if getattr(_db, "_pg_connection_pool", None) is None:
+            _db.init_postgres_pool()
+        from src.db.database import get_db_connection
+    except Exception:
+        return 0
+    try:
+        with get_db_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(f"SELECT tenant_id FROM tenants WHERE {_TEST_TENANT_WHERE}")
+            tenant_ids = [r["tenant_id"] for r in cur.fetchall()]
+            if not tenant_ids:
+                return 0
+            # 动态枚举所有含 tenant_id 列的表，逐表清空该批租户的数据（防 fixture 漏表）
+            cur.execute(
+                """
+                SELECT table_name FROM information_schema.columns
+                WHERE column_name = 'tenant_id' AND table_schema = 'public'
+                """
+            )
+            tables = [r["table_name"] for r in cur.fetchall()]
+            for table in tables:
+                if table == "tenants":
+                    continue
+                try:
+                    cur.execute(
+                        f"DELETE FROM {table} WHERE tenant_id = ANY(%s)", (tenant_ids,)
+                    )
+                except Exception:
+                    conn.rollback()
+            cur.execute(
+                "DELETE FROM tenants WHERE tenant_id = ANY(%s)", (tenant_ids,)
+            )
+            conn.commit()
+            return len(tenant_ids)
+    except Exception:
+        return 0
+
+
+def pytest_sessionstart(session):
+    """开跑前清历史测试残留（上次中断/漏删的测试租户及其数据）"""
+    purged = _purge_test_tenants()
+    if purged:
+        print(f"\n[conftest] 已清理历史测试租户残留 {purged} 个")
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """跑完后清本次测试数据（测试好了及时删除所有测试数据的兜底）"""
+    purged = _purge_test_tenants()
+    if purged:
+        print(f"\n[conftest] 已清理本次测试租户 {purged} 个（含全部关联表数据）")
+
+
+# ============================================================
 # 真实实例 fixtures（无外部依赖）
 # ============================================================
 

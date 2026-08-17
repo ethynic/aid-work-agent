@@ -43,6 +43,9 @@
         <BaseTable :columns="columns" :data="items" row-key="id">
           <template #seq="{ index }">{{ seqNumber(index) }}</template>
           <template #candidate_name="{ row }">{{ row.candidate_name || '-' }}</template>
+          <template #match="{ row }">
+            <BaseBadge :intent="matchIntent(row.match_status)">{{ matchText(row) }}</BaseBadge>
+          </template>
           <template #job_name="{ row }">{{ row.job_name || '-' }}</template>
           <template #info="{ row }">{{ infoSummary(row.candidate_info) }}</template>
           <template #fetched_at="{ row }">{{ formatDate(row.fetched_at) }}</template>
@@ -80,7 +83,15 @@
           <BaseButton size="sm" intent="secondary" @click="closeDetail">← 返回列表</BaseButton>
           <span class="text-sm font-medium text-default">
             {{ detail.candidate_name || '未命名候选人' }}
-            <span v-if="detail.job_name" class="text-muted font-normal">· {{ detail.job_name }}</span>
+            <template v-if="detail.job_name">
+              <span class="text-muted font-normal">· {{ detail.job_name }}</span>
+              <a
+                v-if="detail.job_id"
+                class="ml-1 text-xs text-primary-600 hover:underline cursor-pointer"
+                @click="goJobLibrary"
+              >查看职位</a>
+              <span v-else class="text-xs text-muted">未关联</span>
+            </template>
           </span>
         </div>
       </div>
@@ -134,6 +145,36 @@
             <div v-else class="text-muted text-sm">暂无基本信息</div>
             <div class="mt-2 pt-2 border-t border-default text-xs text-muted">
               来源：{{ sourceLabel(detail.source) }} · 获取日期：{{ formatDate(detail.fetched_at) }}
+            </div>
+          </div>
+
+          <!-- 匹配评估卡（简历-职位匹配 Phase 5：分数/理由/关键信息/重新评分） -->
+          <div class="rounded-lg border border-default bg-white p-4">
+            <div class="flex items-center justify-between mb-2">
+              <div class="text-sm font-semibold text-default">匹配评估</div>
+              <BaseButton
+                intent="secondary"
+                size="sm"
+                class="whitespace-nowrap"
+                :disabled="reEvaluating"
+                @click="handleReEvaluate"
+              >
+                {{ reEvaluating ? '评分中...' : '重新评分' }}
+              </BaseButton>
+            </div>
+            <div class="flex items-center gap-2">
+              <BaseBadge :intent="matchIntent(detail.match_status)">{{ matchText(detail) }}</BaseBadge>
+              <span v-if="!detail.match_status" class="text-xs text-muted">未评分或未关联职位，可点「重新评分」</span>
+            </div>
+            <p v-if="detail.match_summary" class="mt-2 text-sm text-default leading-relaxed">{{ detail.match_summary }}</p>
+            <div v-if="keyInfoEntries.length" class="mt-2 space-y-1 border-t border-default pt-2">
+              <div v-for="[label, value] in keyInfoEntries" :key="label" class="flex text-sm">
+                <span class="text-muted w-24 flex-shrink-0">{{ label }}</span>
+                <span class="text-default break-all">{{ value }}</span>
+              </div>
+            </div>
+            <div v-else-if="!detail.match_status" class="mt-2 text-xs text-muted">
+              评分后展示结构化关键信息（经验/学历/核心技能/亮点等）
             </div>
           </div>
 
@@ -250,6 +291,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
 import { useToast } from 'vue-toastification'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
@@ -266,6 +308,8 @@ import {
   getResume,
   updateResume,
   deleteResume,
+  reEvaluateResume,
+  MATCH_STATUS_LABELS,
   type ResumeDetail,
   type ResumeListItem,
   type ResumeStatus,
@@ -274,6 +318,8 @@ import { uploadFile } from '@/api/agent'
 import { getAuthHeader } from '@/api/auth'
 
 const toast = useToast()
+const router = useRouter()
+const route = useRoute()
 
 // 状态中文标签（顺序即下拉顺序）
 const STATUS_LABELS: Record<string, string> = {
@@ -299,6 +345,35 @@ function sourceLabel(source?: string): string {
   const map: Record<string, string> = { boss: 'CLI 入库', manual: '页面补录' }
   return map[source || ''] || source || '-'
 }
+
+// 匹配度徽标（简历-职位匹配 Phase 5）：matched 绿（分数+✓）/ unmatched 黄（分数，含 50-69 接近）/
+// rejected 灰（分数）/ null 灰「未评分」
+function matchIntent(status?: string | null): 'success' | 'warning' | 'neutral' {
+  const map: Record<string, 'success' | 'warning' | 'neutral'> = {
+    matched: 'success',
+    unmatched: 'warning',
+    rejected: 'neutral',
+  }
+  return map[status || ''] || 'neutral'
+}
+
+function matchText(row: Pick<ResumeListItem, 'match_score' | 'match_status'>): string {
+  if (!row.match_status) return '未评分'
+  if (row.match_score == null) return MATCH_STATUS_LABELS[row.match_status] || row.match_status
+  return row.match_status === 'matched' ? `${row.match_score} ✓` : String(row.match_score)
+}
+
+// key_info 固定 8 字段中文标签（设计 §2 schema；null/空数组跳过该行，宁缺勿编）
+const KEY_INFO_LABELS: [string, string][] = [
+  ['years_of_experience', '经验年限'],
+  ['education', '学历'],
+  ['current_company', '当前公司'],
+  ['core_skills', '核心技能'],
+  ['highlights', '亮点'],
+  ['ai_tool_usage', 'AI 工具使用'],
+  ['salary_expectation', '期望薪资'],
+  ['concerns', '关注点'],
+]
 
 function formatDate(t?: string): string {
   if (!t) return '-'
@@ -359,6 +434,7 @@ function handleReset() {
 const columns = [
   { key: 'seq', label: '序号', width: '60px' },
   { key: 'candidate_name', label: '候选人', width: '120px' },
+  { key: 'match', label: '匹配度', width: '90px' },
   { key: 'job_name', label: '关联职位' },
   { key: 'info', label: '基本信息' },
   { key: 'fetched_at', label: '获取日期', width: '110px' },
@@ -391,6 +467,20 @@ const savingRemark = ref(false)
 const detailImages = computed(() => detail.value?.images || [])
 const currentImage = computed(() => detailImages.value[currentImageIndex.value] || null)
 const infoEntries = computed(() => Object.entries(detail.value?.candidate_info || {}))
+
+// 匹配评估卡的关键信息行（中文标签 + 数组顿号连接；空值跳过）
+const keyInfoEntries = computed<[string, string][]>(() => {
+  const info = detail.value?.key_info
+  if (!info) return []
+  const entries: [string, string][] = []
+  for (const [key, label] of KEY_INFO_LABELS) {
+    const value = (info as Record<string, any>)[key]
+    if (value === null || value === undefined || value === '') continue
+    if (Array.isArray(value) && !value.length) continue
+    entries.push([label, Array.isArray(value) ? value.join('、') : String(value)])
+  }
+  return entries
+})
 
 async function openDetail(id: number) {
   const res = await getResume(id)
@@ -452,6 +542,50 @@ async function copyOcr() {
   } catch {
     toast.error('复制失败，请手动选择复制')
   }
+}
+
+// ============== 匹配评估（简历-职位匹配 Phase 5） ==============
+
+const reEvaluating = ref(false)
+
+// 重新评分：评分失败后端不报错（data.note 说明原因），前端据 note 提示并刷新详情（原值保留）
+async function handleReEvaluate() {
+  if (!detail.value || reEvaluating.value) return
+  reEvaluating.value = true
+  try {
+    const res = await reEvaluateResume(detail.value.id)
+    if (res.success) {
+      if (res.data?.note) {
+        toast.info(`评分未完成：${res.data.note}`)
+      } else {
+        toast.success('重新评分完成')
+      }
+      // 只刷新详情数据，不重置正在查看的图片索引与备注草稿（openDetail 会重置两者）
+      const detailRes = await getResume(detail.value.id)
+      if (detailRes.success && detailRes.data) {
+        detail.value = detailRes.data
+        // 同步列表行徽标（返回列表时「匹配度」列即为最新）
+        const row = items.value.find(r => r.id === detail.value!.id)
+        if (row) {
+          row.match_score = detailRes.data.match_score ?? null
+          row.match_status = detailRes.data.match_status ?? null
+        }
+      }
+    } else {
+      toast.error(res.error || '重新评分失败')
+    }
+  } catch (e: any) {
+    toast.error(e.message || '重新评分异常')
+  } finally {
+    reEvaluating.value = false
+  }
+}
+
+// 跳转职位管理页（demo 与 tenant 路由都支持，按当前路径前缀选路由名）
+function goJobLibrary() {
+  router.push({
+    name: route.path.startsWith('/t/') ? 'tenant-recruiting-operator-jobs' : 'recruiting-operator-jobs',
+  })
 }
 
 // ============== 手动录入 ==============

@@ -3,9 +3,14 @@
 设计：docs/design/recruiting/recruiting-cli-agent-integration-design.md §4/§11/§14
 实施规格：docs/plans/recruiting/m05-implementation-spec.md §3
 
-9 个 boss_* 工具全部为 LOCAL_REQUIRED：execute() 不直接操作 BOSS，
+boss_* 代理工具为 LOCAL_REQUIRED：execute() 不直接操作 BOSS，
 而是经「设备闸门 → 创建 invocation → 轮询 events/state → 终态映射」
 驱动本机 Runtime 执行，进度事件推入 agent 注入的 _progress_queue。
+例外（混合模式）：boss_jobs_list 覆写 execute 为纯云端逻辑（直查职位管理库，
+不查设备、不建 invocation），仅为复用 SUBAGENT tools.allowed 按名称交集的注册机制
+而留在 LOCAL_PROXY_TOOL_CLASSES（注册只看名称，execute 自决）；返回 jobs 数组外，
+非空时附 data.options 编号选择元数据（key/label/description，设计 §5.1，供
+LLM/前端直接渲染编号选择列表）。
 
 其中 boss_resume_detail / boss_resume_batch 额外做云端后处理：CLI 成功结果（截图+OCR payload）
 在工具层直接落简历库（batch 逐份落库），只把紧凑摘要返回给 LLM（图片字节不进上下文）。
@@ -24,7 +29,7 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 from src.local_tools import catalog, repository
-from src.services import recruiting_job_service, recruiting_resume_service
+from src.services import recruiting_job_service, recruiting_match_service, recruiting_resume_service
 from src.tools.base import BaseTool, ExecutionTarget
 
 ONLINE_THRESHOLD_SECONDS = 30  # last_seen_at 距今 ≤30s 视为在线（与 api.py 一致）
@@ -320,6 +325,175 @@ class BossInterviewDemoTool(LocalToolProxyTool):
     InputModel = BossInterviewDemoInput
 
 
+# ============== 职位切换与云端职位库（要求驱动闭环 Phase 3，设计 §5） ==============
+
+
+class BossListJobsTool(LocalToolProxyTool):
+    name = "boss_list_jobs"
+    display_name = "BOSS 列出页面职位"
+    description = (
+        "在用户本机 BOSS 直聘「推荐牛人」页点开职位下拉，列出当前招聘者在 BOSS 页面上的全部职位"
+        "（职位名/城市/薪资/是否待开放，只读，读完自动收起）。用于 boss_select_job 前确认页面职位的"
+        "精确名（用户口述可能不精确）并避开待开放职位。与 boss_jobs_list（查云端「职位管理」职位库）"
+        "区分：本工具查的是 BOSS 页面上实际发布的职位"
+    )
+    timeout_seconds = 180
+
+    class InputModel(BaseModel):
+        pass
+
+
+class BossSelectJobInput(BaseModel):
+    job_name: str = Field(
+        ..., min_length=1, max_length=100,
+        description="目标职位名（精确名，建议先用 boss_list_jobs 确认）",
+    )
+
+
+class BossSelectJobTool(LocalToolProxyTool):
+    name = "boss_select_job"
+    display_name = "BOSS 切换招聘职位"
+    description = (
+        "在用户本机 BOSS 直聘「推荐牛人」页把当前招聘职位切换为指定职位名（页面写动作，无对外消息副作用）。"
+        "job_name 必须是 boss_list_jobs 返回的精确职位名（不做模糊匹配，0 个或多个匹配都报错）；"
+        "待开放（pending）职位会被拒绝（切到未发布职位会致页面异常）；切换后校验职位框已变更，未生效报错"
+    )
+    InputModel = BossSelectJobInput
+    timeout_seconds = 300
+
+
+def _job_option_description(job: Dict[str, Any], resume_count: int, matched_count: int) -> str:
+    """拼 boss_jobs_list options.description（设计 §5.1 选择交互）。
+
+    要求三维度：experience / educations（顿号连接）/ salary 按序以「/」连接，
+    三维度全缺（含 job_requirements 为 null）时写「要求未配置」；
+    再接「 · 简历 N · 匹配 M」统计。keywords/notes 不进 description（不参与筛选）。
+    """
+    reqs = job.get("job_requirements") or {}
+    dims = []
+    experience = (reqs.get("experience") or "").strip()
+    if experience:
+        dims.append(experience)
+    educations = [e.strip() for e in (reqs.get("educations") or []) if (e or "").strip()]
+    if educations:
+        dims.append("、".join(educations))
+    salary = (reqs.get("salary") or "").strip()
+    if salary:
+        dims.append(salary)
+    req_part = f"要求 {'/'.join(dims)}" if dims else "要求未配置"
+    return f"{req_part} · 简历 {resume_count} · 匹配 {matched_count}"
+
+
+class BossJobsListTool(LocalToolProxyTool):
+    """云端查询「职位管理」职位库（混合模式，设计 §5.1 数据层）。
+
+    覆写 execute 为纯云端逻辑：不查设备、不建 invocation、不轮询（与 BossSendToTool
+    话术模式的云端分支同思路）。仍注册在 LOCAL_PROXY_TOOL_CLASSES——消费方
+    src/core/agent.py 按 SUBAGENT tools.allowed 名称交集注册，注册只看名称，
+    execute 自决是否走本机转发，两种模式互不干扰。
+
+    Phase 4（设计 §5.1 选择交互）：非空 active 时 data 附 options 数组（与 jobs 同序，
+    key=job_id / label=job_name / description=要求三维度+简历/匹配统计），供 LLM/前端
+    直接渲染编号选择列表；空 active 不带 options 键。
+    """
+
+    name = "boss_jobs_list"
+    display_name = "BOSS 查询职位库"
+    description = (
+        "查询云端「职位管理」里的在招职位（status=active，暂停职位不返回）：每个职位返回 "
+        "job_id/job_name/match_threshold/job_requirements（经验/学历/薪资三档位，可直接作为 "
+        "boss_filter 入参）/resume_count/matched_count（该职位简历数与匹配数），"
+        "并附与 jobs 同序的 data.options（key=job_id/label=job_name/description=要求与统计摘要）"
+        "——data.options 可直接用于向用户渲染编号选择列表。"
+        "「筛选简历」入口先用它确认职位与要求；查 BOSS 页面职位请用 boss_list_jobs，两者区分"
+    )
+    # 云端直查不轮询 invocation，timeout 仅对基类转发路有意义；留短值防误走转发
+    timeout_seconds = 30
+
+    class InputModel(BaseModel):
+        pass
+
+    async def execute(self, **kwargs) -> Dict[str, Any]:
+        tenant_id = kwargs.get("_trusted_tenant_id")
+        if not tenant_id:
+            return {"success": False, "code": "NO_IDENTITY",
+                    "message": "无法确定用户身份，请重新登录后再试"}
+        try:
+            # list_jobs 已附 resume_count/matched_count（内部调共享 count_job_resumes），
+            # 无需再单独查一次统计（Phase 5 下沉共享后消除重复查询）
+            jobs = await asyncio.to_thread(recruiting_job_service.list_jobs, tenant_id)
+        except Exception as e:  # noqa: BLE001 基础设施异常转用户可读文案，不把 psycopg2 原文抛给 LLM
+            logger.error(f"后端日志：boss_jobs_list 查询职位库失败: {e}", exc_info=True)
+            return {"success": False, "code": "FAILED",
+                    "message": "职位库查询失败，请稍后重试或联系管理员"}
+
+        items = [
+            {
+                "job_id": job["id"],
+                "job_name": job["job_name"],
+                "status": job["status"],
+                "match_threshold": job.get("match_threshold"),
+                "job_requirements": job.get("job_requirements"),
+                "resume_count": job.get("resume_count", 0),
+                "matched_count": job.get("matched_count", 0),
+            }
+            for job in jobs
+            if job.get("status") == "active"
+        ]
+        if not items:
+            return {
+                "success": True,
+                "code": None,
+                "message": "职位管理里还没有在招（active）职位。请先到「职位管理」页面创建职位并维护职位要求与话术",
+                "data": {"jobs": []},
+            }
+        names = "、".join(j["job_name"] for j in items)
+        # 编号选择元数据（设计 §5.1）：与 jobs 同序，LLM 按序号渲染「1. label · description」
+        options = [
+            {
+                "key": item["job_id"],
+                "label": item["job_name"],
+                "description": _job_option_description(
+                    item, item["resume_count"], item["matched_count"]
+                ),
+            }
+            for item in items
+        ]
+        return {
+            "success": True,
+            "code": None,
+            "message": f"当前在招职位 {len(items)} 个：{names}",
+            "data": {"jobs": items, "options": options},
+        }
+
+
+# ============== 简历入库后自动评分（简历-职位匹配设计 §3，Phase 2） ==============
+
+
+async def _evaluate_resume_match_safely(tenant_id: str, resume_id: int) -> Dict[str, Any]:
+    """调评分服务并吞掉一切异常（评分绝不影响工具成功返回，失败不阻塞设计 §3）。
+
+    服务层本身不抛异常，此处兜底防御（如 DB 读简历阶段意外错误），返回失败说明 dict。
+    """
+    try:
+        return await recruiting_match_service.evaluate_and_update(tenant_id, resume_id)
+    except Exception as e:  # noqa: BLE001 评分是增强信息，任何异常都不拖垮入库结果
+        logger.error(f"后端日志：简历评分异常 resume_id={resume_id}: {e}", exc_info=True)
+        return {"resume_id": resume_id, "score": None, "note": f"评分异常: {e}"}
+
+
+def _apply_match_fields(summary: Dict[str, Any], match_result: Dict[str, Any]) -> None:
+    """把评分结果并入紧凑摘要：增加 match_score / match_status / match_summary 三键。
+
+    评分失败（score None，含未关联职位跳过）时 match_score=null 且附 match_note「未评分」。
+    """
+    summary["match_score"] = match_result.get("match_score")
+    summary["match_status"] = match_result.get("match_status")
+    summary["match_summary"] = match_result.get("match_summary")
+    if summary["match_score"] is None:
+        summary["match_note"] = "未评分"
+
+
 class BossResumeDetailTool(LocalToolProxyTool):
     """BOSS 读取简历入库：CLI 截图+OCR 结果在云端工具层直接落库，图片字节绝不进 LLM 上下文。
 
@@ -386,11 +560,13 @@ class BossResumeDetailTool(LocalToolProxyTool):
             }
 
         # 返回给 LLM 的 data 只含紧凑摘要（recruiting-operator 上下文预算仅 8000 token，
-        # 图片字节/OCR 全文绝不进上下文，完整内容到简历库页面看）
+        # 图片字节/OCR 全文绝不进上下文，完整内容到简历库页面看）。
+        # job_warning 为服务层职位关联解析的临时字段（0 命中时「未关联职位」提示）
         summary = {
             "resume_id": record["id"],
             "candidate_name": record.get("candidate_name"),
             "job_name": record.get("job_name"),
+            "job_id": record.get("job_id"),
             "image_count": len(record.get("images") or []),
             "ocr_char_count": len(record.get("ocr_text") or ""),
         }
@@ -398,6 +574,12 @@ class BossResumeDetailTool(LocalToolProxyTool):
         if summary["job_name"]:
             message += f" · {summary['job_name']}"
         message += f" · {summary['image_count']} 张截图"
+        if record.get("job_warning"):
+            summary["warning"] = record["job_warning"]
+            message += f"；{record['job_warning']}"
+        # 落库成功后自动评分（设计 §3）：失败不阻塞，评分异常绝不影响工具成功返回
+        match_result = await _evaluate_resume_match_safely(tenant_id, record["id"])
+        _apply_match_fields(summary, match_result)
         # 基类在 effect=unknown 时已给 message 追加「实际效果未知」提示，覆写摘要时必须保留
         if UNKNOWN_EFFECT_NOTICE in (result.get("message") or ""):
             message = f"{message}；{UNKNOWN_EFFECT_NOTICE}"
@@ -477,9 +659,12 @@ class BossResumeBatchTool(LocalToolProxyTool):
                 "resume_id": record["id"],
                 "candidate_name": record.get("candidate_name"),
                 "job_name": record.get("job_name"),
+                "job_id": record.get("job_id"),
                 "image_count": len(record.get("images") or []),
                 "ocr_char_count": len(record.get("ocr_text") or ""),
             })
+            if record.get("job_warning"):
+                summaries[-1]["warning"] = record["job_warning"]
 
         # 全部失败 → fail-loud；部分/全部成功 → success=True（失败信息在 failures）
         if not summaries:
@@ -491,6 +676,13 @@ class BossResumeBatchTool(LocalToolProxyTool):
                 "data": None,
                 "invocation_id": result.get("invocation_id"),
             }
+
+        # 逐份自动评分（设计 §3）：gather 并行，单份失败/异常吞掉（helper 已兜底）不影响其余与工具返回
+        match_results = await asyncio.gather(
+            *[_evaluate_resume_match_safely(tenant_id, s["resume_id"]) for s in summaries]
+        )
+        for s, match_result in zip(summaries, match_results):
+            _apply_match_fields(s, match_result)
 
         # 返回给 LLM 的 data 只含紧凑摘要 + failures（绝不含 base64/OCR 全文，
         # recruiting-operator 上下文预算仅 8000 token，完整内容到简历库页面看）
@@ -514,40 +706,88 @@ SCRIPT_RESUME_EXCERPT_CHARS = 600
 def _resolve_job_script(
     tenant_id: str, job_name: Optional[str], title: str
 ) -> Tuple[Optional[Dict[str, str]], Optional[str]]:
-    """在「职位管理」里定位话术（标题精确 → 包含兜底）。返回 (script, error)；job_name 缺省遍历全部职位。"""
+    """在「职位管理」里定位话术（标题精确 → 包含兜底）。返回 (script, error)。
+
+    话术只在所属职位下解析，绝不跨职位（简历-职位匹配设计 §4.3）：
+    - 必须先定位唯一职位：job_name 必传（精确匹配，包含兜底需唯一命中）；
+      租户恰好只有一个职位时可省略 job_name
+    - 定位不到职位（无职位 / 名字不存在 / 多职位未传 / 包含匹配多义）→ 报错并列出现有职位名
+    - 定位到职位后只在该职位的 scripts 里找（标题精确 → 包含兜底，逻辑不变）
+    """
     jobs = recruiting_job_service.list_jobs(tenant_id)
     if not jobs:
         return None, "职位管理里还没有职位，请先在「职位管理」页面添加职位与话术"
-    matched = jobs
+
+    all_names = "、".join(j["job_name"] for j in jobs)
     if job_name:
         matched = [j for j in jobs if j["job_name"] == job_name] or [
             j for j in jobs if job_name in j["job_name"]
         ]
         if not matched:
-            return None, f"职位管理中没有职位「{job_name}」，现有：{'、'.join(j['job_name'] for j in jobs)}"
-    for job in matched:
-        detail = recruiting_job_service.get_job(tenant_id, job["id"])
-        scripts = (detail or {}).get("scripts", [])
-        for s_ in scripts:
-            if s_.get("title") == title:
-                return {"job_name": job["job_name"], "category": s_.get("category", ""),
-                        "title": s_.get("title", ""), "content": s_.get("content", "")}, None
-    for job in matched:  # 包含兜底
-        detail = recruiting_job_service.get_job(tenant_id, job["id"])
-        for s_ in (detail or {}).get("scripts", []):
-            if title in s_.get("title", ""):
-                return {"job_name": job["job_name"], "category": s_.get("category", ""),
-                        "title": s_.get("title", ""), "content": s_.get("content", "")}, None
-    available = []
-    for job in matched:
-        detail = recruiting_job_service.get_job(tenant_id, job["id"])
-        available.extend(s_.get("title", "") for s_ in (detail or {}).get("scripts", []))
-    scope = f"职位「{job_name}」" if job_name else "职位管理"
-    return None, f"{scope}里没找到话术「{title}」，可选：{'、'.join(available) or '（无）'}"
+            return None, f"职位管理中没有职位「{job_name}」，现有：{all_names}"
+        if len(matched) > 1:
+            names = "、".join(j["job_name"] for j in matched)
+            return None, f"职位「{job_name}」匹配到多个职位（{names}），请传完整职位名"
+    elif len(jobs) == 1:
+        matched = jobs
+    else:
+        return None, f"职位管理里有 {len(jobs)} 个职位，必须传 job_name 定位话术所属职位；现有：{all_names}"
+
+    job = matched[0]
+    detail = recruiting_job_service.get_job(tenant_id, job["id"])
+    scripts = (detail or {}).get("scripts", [])
+    for s_ in scripts:  # 标题精确
+        if s_.get("title") == title:
+            return {"job_name": job["job_name"], "category": s_.get("category", ""),
+                    "title": s_.get("title", ""), "content": s_.get("content", "")}, None
+    for s_ in scripts:  # 标题包含兜底
+        if title in s_.get("title", ""):
+            return {"job_name": job["job_name"], "category": s_.get("category", ""),
+                    "title": s_.get("title", ""), "content": s_.get("content", "")}, None
+    available = [s_.get("title", "") for s_ in scripts]
+    return None, f"职位「{job['job_name']}」里没找到话术「{title}」，可选：{'、'.join(available) or '（无）'}"
 
 
-def _resume_ocr_excerpt(tenant_id: str, candidate_name: str) -> Optional[str]:
-    """按姓名取简历库 OCR 正文开头（同名多条取最新）。无简历返回 None。"""
+# key_info 截断上限（防 OCR 注入文本借道评分提炼结果进上下文，Phase 2 CR 遗留）：
+# str 字段 ≤200 字、数组每项 ≤50 字、数组 ≤8 项
+KEY_INFO_STR_MAX_CHARS = 200
+KEY_INFO_LIST_ITEM_MAX_CHARS = 50
+KEY_INFO_LIST_MAX_ITEMS = 8
+
+
+def _truncate_key_info(key_info: Any) -> Optional[Dict[str, Any]]:
+    """key_info 长度截断：str 字段 ≤200 字、数组每项 ≤50 字、数组 ≤8 项。
+
+    key_info 源自评分 LLM 对 OCR 正文的提炼，可能夹带超长原文片段；截断防注入文本借道。
+    保留 str/数字/数组（仅 str/数字项）/null 值，其余类型丢弃；非 dict 输入返回 None。
+    """
+    if not isinstance(key_info, dict):
+        return None
+    truncated: Dict[str, Any] = {}
+    for key, val in key_info.items():
+        if isinstance(val, str):
+            truncated[key] = val[:KEY_INFO_STR_MAX_CHARS]
+        elif isinstance(val, list):
+            items: List[Any] = []
+            for item in val[:KEY_INFO_LIST_MAX_ITEMS]:
+                if isinstance(item, str):
+                    items.append(item[:KEY_INFO_LIST_ITEM_MAX_CHARS])
+                elif isinstance(item, (int, float)) and not isinstance(item, bool):
+                    items.append(item)
+            truncated[key] = items
+        elif isinstance(val, (int, float)) and not isinstance(val, bool):
+            truncated[key] = val
+        elif val is None:
+            truncated[key] = None
+    return truncated
+
+
+def _resume_match_brief(tenant_id: str, candidate_name: str) -> Optional[Dict[str, Any]]:
+    """按姓名定位简历（同名多条取最新），取评分结果 + OCR 摘录。无简历返回 None。
+
+    返回 {resume_id, match_score, key_info（截断版）, ocr_excerpt}；
+    match_score / key_info 为 None 表示该简历未评分（评分失败留 NULL 的设计 §3 兜底路径）。
+    """
     data = recruiting_resume_service.list_resumes(
         tenant_id, keyword=candidate_name, page=1, page_size=5
     )
@@ -556,8 +796,14 @@ def _resume_ocr_excerpt(tenant_id: str, candidate_name: str) -> Optional[str]:
     if not exact:
         return None
     full = recruiting_resume_service.get_resume(tenant_id, exact[0]["id"])
-    text = (full or {}).get("ocr_text") or ""
-    return text[:SCRIPT_RESUME_EXCERPT_CHARS] or None
+    if not full:
+        return None
+    return {
+        "resume_id": full.get("id"),
+        "match_score": full.get("match_score"),
+        "key_info": _truncate_key_info(full.get("key_info")),
+        "ocr_excerpt": (full.get("ocr_text") or "")[:SCRIPT_RESUME_EXCERPT_CHARS] or None,
+    }
 
 
 class BossSendToTool(LocalToolProxyTool):
@@ -581,7 +827,7 @@ class BossSendToTool(LocalToolProxyTool):
             None, max_length=100, description="「职位管理」里的话术标题（话术模式，与 message 二选一）"
         )
         job_name: Optional[str] = Field(
-            None, max_length=100, description="话术所属职位名（多职位时定位；缺省遍历全部职位）"
+            None, max_length=100, description="话术所属职位名（租户有多个职位时必传定位；仅一个职位时可省略）"
         )
         dry_run: bool = Field(False, description="只输入不发送（测试链路，默认 false 真发送）")
 
@@ -599,19 +845,31 @@ class BossSendToTool(LocalToolProxyTool):
             )
             if err:
                 return {"success": False, "code": "NOT_FOUND", "message": err}
-            excerpt = await asyncio.to_thread(_resume_ocr_excerpt, tenant_id, kwargs["to"])
+            brief = await asyncio.to_thread(_resume_match_brief, tenant_id, kwargs["to"])
             result: Dict[str, Any] = {
                 "success": False,
                 "code": "SCRIPT_NEEDS_FILL",
                 "message": (
                     f"话术已定位（{script['job_name']}·{script['category']}·{script['title']}）："
-                    "请把 content 里的 {{占位符}} 替换为具体内容（参考 resume_excerpt 提炼），"
+                    "请把 content 里的 {{占位符}} 替换为具体内容——优先用 key_info.highlights"
+                    "（评分时已提炼），其次 resume_excerpt，均无证据时据实说明或询问用户，严禁编造；"
                     "确认最终文案并征得用户同意后，带完整 message 重新调用本工具发送"
                 ),
                 "script": script,
+                # 评分结果恒返回（未评分/无简历为 null，设计 §5 升级）
+                "match_score": None,
+                "key_info": None,
             }
-            if excerpt:
-                result["resume_excerpt"] = excerpt
+            if brief:
+                result["match_score"] = brief["match_score"]
+                result["key_info"] = brief["key_info"]
+                if brief["ocr_excerpt"]:
+                    result["resume_excerpt"] = brief["ocr_excerpt"]
+                else:
+                    result["resume_hint"] = (
+                        f"简历库有「{kwargs['to']}」的简历但 OCR 正文为空，无法提供摘录。"
+                        "占位符必须有真实证据：改用无占位符的话术，或会话中确有其信息时据实填写——严禁编造"
+                    )
             else:
                 result["resume_hint"] = (
                     f"简历库暂无「{kwargs['to']}」的简历。占位符必须有真实证据，三选一："
@@ -645,7 +903,7 @@ class BossSendCurrentTool(LocalToolProxyTool):
             None, max_length=100, description="「职位管理」里的话术标题（话术模式，与 message 二选一）"
         )
         job_name: Optional[str] = Field(
-            None, max_length=100, description="话术所属职位名（多职位时定位；缺省遍历全部职位）"
+            None, max_length=100, description="话术所属职位名（租户有多个职位时必传定位；仅一个职位时可省略）"
         )
         dry_run: bool = Field(False, description="只输入不发送（测试链路，默认 false 真发送）")
 
@@ -687,6 +945,9 @@ LOCAL_PROXY_TOOL_CLASSES = (
     BossAcceptResumeTool,
     BossRejectCurrentTool,
     BossInterviewDemoTool,
+    BossListJobsTool,
+    BossSelectJobTool,
+    BossJobsListTool,
     BossResumeDetailTool,
     BossResumeBatchTool,
     BossSendToTool,

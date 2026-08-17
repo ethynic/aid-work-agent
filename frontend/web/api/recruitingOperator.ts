@@ -44,6 +44,19 @@ export type ResumeStatus = 'new' | 'viewed' | 'shortlisted' | 'interviewed' | 'r
 /** 来源：boss=CLI 入库 / manual=页面补录 */
 export type ResumeSource = 'boss' | 'manual'
 
+/** 匹配状态（简历-职位匹配）：matched 达标 / unmatched 接近或未关联 / rejected 不匹配 */
+export type MatchStatus = 'matched' | 'unmatched' | 'rejected'
+
+/**
+ * 匹配状态中文标签（null/未知 → 未评分）。
+ * 注意语义：unmatched 涵盖 50-69 分「接近」与未关联职位两种情况（设计 §3 阈值规则）。
+ */
+export const MATCH_STATUS_LABELS: Record<string, string> = {
+  matched: '匹配',
+  unmatched: '接近',
+  rejected: '不匹配',
+}
+
 /** 简历图片（file_id 引用，展示走 /api/files/{file_id}） */
 export interface ResumeImage {
   file_id: string
@@ -56,20 +69,35 @@ export interface ResumeListItem {
   tenant_id?: string
   user_id?: string
   candidate_name?: string
+  job_id?: string | null
   job_name?: string
   candidate_info?: Record<string, any>
   images?: ResumeImage[]
   source: ResumeSource
   status: ResumeStatus
+  match_score?: number | null
+  match_summary?: string | null
+  match_status?: MatchStatus | null
   remark?: string
   fetched_at?: string
   created_at?: string
   updated_at?: string
 }
 
-/** 详情（含 OCR 全文） */
+/** 详情（含 OCR 全文 + 评分关键信息） */
 export interface ResumeDetail extends ResumeListItem {
   ocr_text?: string
+  key_info?: Record<string, any> | null
+}
+
+/** 重新评分结果（评分失败不报错，data 带 note 说明原因） */
+export interface ReEvaluateResult {
+  resume_id?: number
+  match_score?: number | null
+  match_status?: MatchStatus | null
+  match_summary?: string | null
+  key_info?: Record<string, any> | null
+  note?: string
 }
 
 export interface CreateResumeRequest {
@@ -157,6 +185,15 @@ export async function deleteResume(resumeId: number): Promise<ApiMutationRespons
   return res.json()
 }
 
+/** 重新评分（评分失败不报错：success=true + data.note 说明原因，库中原值保留） */
+export async function reEvaluateResume(resumeId: number): Promise<ApiDetailResponse<ReEvaluateResult>> {
+  const res = await fetch(`${API_BASE}/recruiting-operator/resumes/${resumeId}/re-evaluate`, {
+    method: 'POST',
+    headers: { ...getAuthHeader() },
+  })
+  return res.json()
+}
+
 // ============== 职位库类型 ==============
 
 /** 话术分类（固定四值，顺序即展示顺序） */
@@ -164,16 +201,44 @@ export const JOB_SCRIPT_CATEGORIES = ['初次开场', '了解摸底', '追问细
 
 export type JobScriptCategory = (typeof JOB_SCRIPT_CATEGORIES)[number]
 
-/** 职位列表项（含话术数与已用分类） */
-export interface JobListItem {
+/** 结构化职位要求（= BOSS 筛选项，值须为档位文本；字段可缺省，见设计 §2.1） */
+export interface JobRequirements {
+  experience?: string | null
+  educations?: string[]
+  salary?: string | null
+  keywords?: string[]
+  notes?: string | null
+}
+
+/** 职位要求档位候选（静态下拉候选；真值档位由 boss_filter_options 运行时校准兜底） */
+export interface JobRequirementOptions {
+  experience: string[]
+  educations: string[]
+  salary: string[]
+}
+
+/** 职位公共字段（列表与详情响应都保证的字段） */
+interface JobBase {
   id: string
   tenant_id?: string
   job_name: string
   notes?: string
+  status: 'active' | 'paused'
+  match_threshold: number
+  job_requirements?: JobRequirements | null
   script_count: number
-  categories: string[]
   created_at?: string
   updated_at?: string
+}
+
+/**
+ * 职位列表项（GET /jobs）：除公共字段外，另含已用分类与简历/匹配统计
+ * （注意：这些统计仅列表接口返回，详情 getJob 响应不含，勿在详情视图误用）
+ */
+export interface JobListItem extends JobBase {
+  categories: string[]
+  resume_count: number
+  matched_count: number
 }
 
 /** 职位话术 */
@@ -189,8 +254,8 @@ export interface JobScript {
   updated_at?: string
 }
 
-/** 职位详情（scripts 平铺 + script_groups 按分类分组） */
-export interface JobDetail extends JobListItem {
+/** 职位详情（GET /jobs/{id}）：scripts 平铺 + script_groups 按分类分组（不含列表统计字段） */
+export interface JobDetail extends JobBase {
   scripts: JobScript[]
   script_groups: { category: string; scripts: JobScript[] }[]
 }
@@ -198,11 +263,18 @@ export interface JobDetail extends JobListItem {
 export interface CreateJobRequest {
   job_name: string
   notes?: string
+  status?: 'active' | 'paused'
+  match_threshold?: number
+  job_requirements?: JobRequirements
 }
 
 export interface UpdateJobRequest {
   job_name?: string
   notes?: string
+  status?: 'active' | 'paused'
+  match_threshold?: number
+  /** 传 {} 清空全部要求（存 NULL）；不传该键表示不修改 */
+  job_requirements?: JobRequirements
 }
 
 export interface CreateJobScriptRequest {
@@ -223,6 +295,14 @@ export interface UpdateJobScriptRequest {
 
 export async function listJobs(): Promise<{ success: boolean; data?: { items: JobListItem[] }; error?: string }> {
   const res = await fetch(`${API_BASE}/recruiting-operator/jobs`, {
+    headers: { ...getAuthHeader() },
+  })
+  return res.json()
+}
+
+/** 职位要求档位候选（静态：experience/educations/salary 下拉候选） */
+export async function getRequirementOptions(): Promise<{ success: boolean; data?: JobRequirementOptions; error?: string }> {
+  const res = await fetch(`${API_BASE}/recruiting-operator/jobs/requirement-options`, {
     headers: { ...getAuthHeader() },
   })
   return res.json()

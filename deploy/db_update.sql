@@ -406,44 +406,24 @@ UPDATE token_cost_prices SET
 WHERE model_name = 'qwen3.7-flash';
 
 -- ============================================================================
--- 2026-08-16 招聘操作智能体简历库：bs_recruiting_operator_resumes
--- 保存从 BOSS 直聘 CLI 采集的候选人简历（截图图片 file_id 引用、OCR 全文、
--- 基本信息 JSONB、关联职位、获取日期），供「简历库」业务页浏览 / 筛选 / 编辑状态。
--- images 为 [{file_id, name}] 有序多图；source: boss=CLI 入库 / manual=页面补录；
--- status: new新简历/viewed已查看/shortlisted有意向/interviewed已约面/rejected不合适。
--- ============================================================================
-CREATE TABLE IF NOT EXISTS bs_recruiting_operator_resumes (
-    id SERIAL PRIMARY KEY,
-    tenant_id TEXT NOT NULL,
-    user_id TEXT,
-    candidate_name TEXT,                     -- 候选人姓名
-    job_name TEXT,                           -- 关联职位
-    candidate_info JSONB,                    -- 基本信息（学历/工作年限/期望薪资/城市/当前公司/头衔等，key 灵活）
-    images JSONB NOT NULL DEFAULT '[]'::jsonb, -- [{file_id, name}] 有序多图
-    ocr_text TEXT,                           -- OCR 全文
-    source TEXT NOT NULL DEFAULT 'boss',     -- boss=CLI 入库 / manual=页面补录
-    status TEXT NOT NULL DEFAULT 'new',      -- new/viewed/shortlisted/interviewed/rejected
-    remark TEXT,                             -- 备注
-    fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, -- 获取简历日期
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-CREATE INDEX IF NOT EXISTS idx_bs_ror_tenant ON bs_recruiting_operator_resumes(tenant_id);
-CREATE INDEX IF NOT EXISTS idx_bs_ror_tenant_job ON bs_recruiting_operator_resumes(tenant_id, job_name);
-CREATE INDEX IF NOT EXISTS idx_bs_ror_tenant_fetched ON bs_recruiting_operator_resumes(tenant_id, fetched_at);
-
--- ============================================================================
 -- 2026-08-17 招聘操作智能体职位库：bs_recruiting_operator_jobs / bs_recruiting_operator_job_scripts
 -- 职位库维护「职位名称 + 该职位的常用沟通话术库」，话术是招聘 HR 在 BOSS 上
 -- 与候选人聊天的常用模板，固定四分类：初次开场/了解摸底/追问细节/邀约推进；
 -- content 支持 {{占位符}}（复制后手动替换）。首个职位「PHP开发工程师（Laravel）」
 -- 及其 13 条话术由服务层 ensure_default_job 按租户自动预置（jobs 表为空时插入）。
+-- 注意：本块必须在 bs_recruiting_operator_resumes 之前执行（简历表 job_id 带 FK 引用本表）。
+-- 2026-08-17 简历-职位匹配 Phase 1 新增列（老库由文末幂等 ALTER 补齐）：
+-- status / match_threshold / job_requirements，见
+-- docs/design/recruiting/resume-job-matching-design.md §2 / §2.1。
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS bs_recruiting_operator_jobs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id TEXT NOT NULL,
     job_name TEXT NOT NULL,                  -- 职位名称
     notes TEXT,                              -- 职位备注（技术栈/团队说明等，可空）
+    status TEXT NOT NULL DEFAULT 'active',   -- active=正常可选 / paused=暂停存档（仅本库展示控制，不与 BOSS 页面同步）
+    match_threshold INT NOT NULL DEFAULT 70, -- 匹配及格线 0-100（简历评分 >= 阈值才算 matched）
+    job_requirements JSONB,                  -- 结构化职位要求 {experience(str),educations(list),salary(str),keywords(list),notes(str)}，值须为 BOSS 档位文本
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(tenant_id, job_name)              -- 租户内职位名唯一
@@ -462,3 +442,73 @@ CREATE TABLE IF NOT EXISTS bs_recruiting_operator_job_scripts (
 CREATE INDEX IF NOT EXISTS idx_bs_roj_tenant ON bs_recruiting_operator_jobs(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_bs_rojs_tenant ON bs_recruiting_operator_job_scripts(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_bs_rojs_job ON bs_recruiting_operator_job_scripts(job_id, sort_order);
+
+-- ============================================================================
+-- 2026-08-16 招聘操作智能体简历库：bs_recruiting_operator_resumes
+-- 保存从 BOSS 直聘 CLI 采集的候选人简历（截图图片 file_id 引用、OCR 全文、
+-- 基本信息 JSONB、关联职位、获取日期），供「简历库」业务页浏览 / 筛选 / 编辑状态。
+-- images 为 [{file_id, name}] 有序多图；source: boss=CLI 入库 / manual=页面补录；
+-- status: new新简历/viewed已查看/shortlisted有意向/interviewed已约面/rejected不合适。
+-- 2026-08-17 简历-职位匹配 Phase 1 新增列（老库由文末幂等 ALTER 补齐）：
+-- job_id / match_score / match_summary / match_status / key_info。
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS bs_recruiting_operator_resumes (
+    id SERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT,
+    candidate_name TEXT,                     -- 候选人姓名
+    job_id UUID CONSTRAINT fk_bs_ror_job REFERENCES bs_recruiting_operator_jobs(id) ON DELETE SET NULL, -- 硬关联职位（Phase 1；删职位置空，job_name 保留为显示冗余；约束名与文末 DO 块幂等检查对齐）
+    job_name TEXT,                           -- 关联职位（显示冗余文本；关联以 job_id 为准）
+    candidate_info JSONB,                    -- 基本信息（学历/工作年限/期望薪资/城市/当前公司/头衔等，key 灵活）
+    images JSONB NOT NULL DEFAULT '[]'::jsonb, -- [{file_id, name}] 有序多图
+    ocr_text TEXT,                           -- OCR 全文
+    source TEXT NOT NULL DEFAULT 'boss',     -- boss=CLI 入库 / manual=页面补录
+    status TEXT NOT NULL DEFAULT 'new',      -- new/viewed/shortlisted/interviewed/rejected（业务流转）
+    match_score INT,                         -- 匹配分 0-100（LLM 评分，NULL=未评分）
+    match_summary TEXT,                      -- 评分理由（人可读，<=100 字）
+    match_status TEXT,                       -- unmatched/matched/rejected（与业务流转 status 分离；NULL=未评分）
+    key_info JSONB,                          -- 结构化关键信息（评分时产出，schema 见设计 §2.1）
+    remark TEXT,                             -- 备注
+    fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, -- 获取简历日期
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_bs_ror_tenant ON bs_recruiting_operator_resumes(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_bs_ror_tenant_job ON bs_recruiting_operator_resumes(tenant_id, job_name);
+CREATE INDEX IF NOT EXISTS idx_bs_ror_tenant_fetched ON bs_recruiting_operator_resumes(tenant_id, fetched_at);
+CREATE INDEX IF NOT EXISTS idx_bs_ror_tenant_job_id ON bs_recruiting_operator_resumes(tenant_id, job_id);
+
+-- ============================================================================
+-- 2026-08-17 简历-职位匹配 Phase 1 关联严密化：老库幂等迁移
+-- jobs 加 status/match_threshold/job_requirements；resumes 加 job_id/match_*/key_info；
+-- resumes.job_id 补 FK 约束（删职位置空）并按 job_name 精确匹配回填存量。
+-- 本文件按 file_hash 变化整体重跑，所有语句必须幂等（IF NOT EXISTS / pg_constraint
+-- 存在性检查 / 回填仅命中 job_id IS NULL 的行）。
+-- ============================================================================
+ALTER TABLE bs_recruiting_operator_jobs ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active';
+ALTER TABLE bs_recruiting_operator_jobs ADD COLUMN IF NOT EXISTS match_threshold INT NOT NULL DEFAULT 70;
+ALTER TABLE bs_recruiting_operator_jobs ADD COLUMN IF NOT EXISTS job_requirements JSONB;
+ALTER TABLE bs_recruiting_operator_resumes ADD COLUMN IF NOT EXISTS job_id UUID;
+ALTER TABLE bs_recruiting_operator_resumes ADD COLUMN IF NOT EXISTS match_score INT;
+ALTER TABLE bs_recruiting_operator_resumes ADD COLUMN IF NOT EXISTS match_summary TEXT;
+ALTER TABLE bs_recruiting_operator_resumes ADD COLUMN IF NOT EXISTS match_status TEXT;
+ALTER TABLE bs_recruiting_operator_resumes ADD COLUMN IF NOT EXISTS key_info JSONB;
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'fk_bs_ror_job'
+          AND conrelid = 'bs_recruiting_operator_resumes'::regclass
+    ) THEN
+        ALTER TABLE bs_recruiting_operator_resumes
+            ADD CONSTRAINT fk_bs_ror_job FOREIGN KEY (job_id)
+            REFERENCES bs_recruiting_operator_jobs(id) ON DELETE SET NULL;
+    END IF;
+END $$;
+CREATE INDEX IF NOT EXISTS idx_bs_ror_tenant_job_id ON bs_recruiting_operator_resumes(tenant_id, job_id);
+UPDATE bs_recruiting_operator_resumes r
+SET job_id = j.id
+FROM bs_recruiting_operator_jobs j
+WHERE r.tenant_id = j.tenant_id
+  AND r.job_name = j.job_name
+  AND r.job_id IS NULL;

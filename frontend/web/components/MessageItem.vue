@@ -102,6 +102,22 @@
         @continuation="handleContinuation"
       />
 
+      <!-- 编号选择按钮（设计 §5.1 选择交互）：点击即发送序号，与手动回复数字等效；
+           点击一次后整组置灰（选择已发出，避免重复回复） -->
+      <div v-if="quickOptions.length" class="mt-3 flex flex-wrap gap-2">
+        <button
+          v-for="(option, i) in quickOptions"
+          :key="option.key"
+          type="button"
+          :disabled="optionClicked || isProcessing"
+          :title="option.description"
+          class="px-3 py-1.5 bg-white border border-gray-200 rounded-full text-sm text-gray-600 hover:border-primary-300 hover:text-primary-600 transition-all disabled:opacity-50"
+          @click="handleOptionClick(i)"
+        >
+          {{ i + 1 }}. {{ option.label }}
+        </button>
+      </div>
+
       <!-- 执行详情（仅 debug 模式显示） -->
       <div v-if="isDebugEnabled && hasProgress" class="mt-2">
         <button
@@ -150,7 +166,7 @@
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import type { ChatMessage, AttachmentInfo, DownloadableFile, InputHintState, ProgressMessage } from '@/types'
+import type { ChatMessage, AttachmentInfo, DownloadableFile, InputHintState, ProgressMessage, QuickOption } from '@/types'
 import AttachmentChip from './AttachmentChip.vue'
 import DownloadFileCard from './DownloadFileCard.vue'
 import ImageGallery from './ui/ImageGallery.vue'
@@ -171,6 +187,26 @@ const props = withDefaults(defineProps<Props>(), {
   isProcessing: false,
   inputHintState: 'idle'
 })
+
+const emit = defineEmits<{
+  (e: 'send', content: string): void
+}>()
+
+// 编号选择按钮（§5.1）：仅 assistant 消息且 ≥2 项时渲染；点击后本地置灰（不持久化）
+const quickOptions = computed<QuickOption[]>(() =>
+  props.message.role === 'assistant' ? (props.message.quickOptions || []) : []
+)
+const optionClicked = ref(false)
+
+function handleOptionClick(index: number) {
+  if (optionClicked.value) return
+  // 流式进行中（工具结果先于最终回复到达）时发送会被会话 guard 拦截，
+  // 此时忽略点击不置灰，等回复完成后再选
+  if (props.isProcessing) return
+  optionClicked.value = true
+  // 序号即消息内容，agent 按列表顺序解析（与用户手动回复数字完全同链路）
+  emit('send', String(index + 1))
+}
 
 const { openPreview } = useAttachmentPreview()
 const { isDebugEnabled } = useDebugMode()
