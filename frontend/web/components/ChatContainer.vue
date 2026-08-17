@@ -54,6 +54,7 @@
               :files="currentFiles"
               :upload-accept="currentUploadAccept"
               :toolbar-buttons="currentToolbarButtons"
+              :quick-prompts="currentQuickPrompts"
             />
           </div>
         </div>
@@ -94,6 +95,7 @@ import MenuSidebar from './MenuSidebar.vue'
 import AttachmentPreviewPanel from './AttachmentPreviewPanel.vue'
 
 import { useAgent } from '@/composables/useAgent'
+import { quickPromptsForSubagent } from '@/utils/quickPrompts'
 import { useDemoAuth } from '@/composables/useDemoAuth'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 import { useSession } from '@/composables/useSession'
@@ -272,6 +274,15 @@ const currentUploadAccept = computed(() => currentSubagent.value?.upload_accept 
 
 // 当前会话 subagent 的工具栏额外按钮 id 列表（Phase 5.1.3）
 const currentToolbarButtons = computed(() => currentSubagent.value?.chat_toolbar || [])
+
+// 当前会话 subagent 的类型（演示模式路由参数即类型；租户模式从实例解析）——快捷按钮映射键
+const currentSubagentType = computed<string | null>(() => {
+  if (currentSubagent.value?.subagent_type) return currentSubagent.value.subagent_type
+  return route.name === 'chat-subagent' ? subagentName.value : null
+})
+
+// 子智能体快捷按钮（utils/quickPrompts.ts；无配置不渲染）
+const currentQuickPrompts = computed(() => quickPromptsForSubagent(currentSubagentType.value))
 
 // 判断是否为租户模式
 const isTenantMode = computed(() => route.path.startsWith('/t/'))

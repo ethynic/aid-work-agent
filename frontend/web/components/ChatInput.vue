@@ -1,6 +1,19 @@
 <template>
   <div class="max-w-none md:max-w-4xl mx-auto">
     <div class="relative">
+      <!-- 子智能体快捷按钮（点击即发送预设消息，与手动输入同链路） -->
+      <div v-if="quickPrompts && quickPrompts.length > 0" class="mb-2 flex flex-wrap gap-2">
+        <button
+          v-for="p in quickPrompts"
+          :key="p.label"
+          type="button"
+          :disabled="disabled"
+          class="px-3 py-1.5 bg-white border border-gray-200 rounded-full text-sm text-gray-600 hover:border-primary-300 hover:text-primary-600 transition-all disabled:opacity-50"
+          @click="emit('send', p.message)"
+        >
+          {{ p.label }}
+        </button>
+      </div>
       <!-- 附件预览区 -->
       <div v-if="files.length > 0" class="mb-3 flex flex-wrap gap-2">
         <div
@@ -148,6 +161,7 @@ import { ref, computed, watch, nextTick } from 'vue'
 import { useMobile } from '@/composables/useMobile'
 import { useAttachmentPreview } from '@/composables/useAttachmentPreview'
 import type { UploadedFile } from '@/api/agent'
+import type { QuickPrompt } from '@/utils/quickPrompts'
 import ChatToolbar from './chat/ChatToolbar.vue'
 
 interface Props {
@@ -158,6 +172,8 @@ interface Props {
   uploadAccept?: string | null
   /** 当前会话 subagent 的工具栏额外按钮 id 列表（如 ['video_gen']） */
   toolbarButtons?: string[] | null
+  /** 子智能体快捷按钮（utils/quickPrompts.ts 按 subagent_type 映射）；空/缺省不渲染 */
+  quickPrompts?: QuickPrompt[] | null
 }
 
 const props = defineProps<Props>()
