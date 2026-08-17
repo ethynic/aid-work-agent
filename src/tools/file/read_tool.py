@@ -150,7 +150,12 @@ Word/Excel/PPT 文档自动走专用解析器，不需要单独的工具。
             return self._read_range(lines, offset, limit, total)
 
         except Exception as e:
-            logger.error(f"读取文件失败: {e}")
+            # 文件不存在/路径越界多为 LLM 猜错路径导致，模型会依据报错自纠，
+            # 降级为 warning 避免刷屏 log_error 表；真正的内部异常保留 error
+            if isinstance(e, (FileNotFoundError, ValueError)):
+                logger.warning(f"读取文件失败（可自愈，模型可能传错路径）: {e}")
+            else:
+                logger.error(f"读取文件失败: {e}", exc_info=True)
             return f"读取文件失败: {e}"
 
     # ------------------------------------------------------------------
