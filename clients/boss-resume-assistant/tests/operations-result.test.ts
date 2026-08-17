@@ -14,7 +14,7 @@ import { createBossGreetOperation } from '../src/main/operations/bossGreet.js'
 import { createBossAcceptResumeOperation } from '../src/main/operations/bossAcceptResume.js'
 import { createBossRejectCurrentOperation } from '../src/main/operations/bossRejectCurrent.js'
 import { createBossInterviewDemoOperation } from '../src/main/operations/bossInterviewDemo.js'
-import { createBossReadResumeOperation } from '../src/main/operations/bossReadResume.js'
+import { createBossResumeDetailOperation } from '../src/main/operations/bossResumeDetail.js'
 import type { BossSession } from '../src/main/operations/bossContext.js'
 import type { OpContext } from '../src/main/operations/types.js'
 import type { DomSnapshot, ClickPoint } from '../src/main/boss/domSnapshot.js'
@@ -170,17 +170,17 @@ test('boss_interview_demo：remark 为空/超 140 字 → INVALID_ARGUMENT', asy
   assert.equal(f.calls.length, 0)
 })
 
-test('boss_read_resume：save_image_to 空白 → INVALID_ARGUMENT，不连 Chrome', async () => {
+test('boss_resume_detail：save_image_to 空白 → INVALID_ARGUMENT，不连 Chrome', async () => {
   const f = fakeFactory([])
-  const op = createBossReadResumeOperation(f.factory)
+  const op = createBossResumeDetailOperation(f.factory)
   const r = await op.execute({ save_image_to: '   ' }, silentCtx())
   assert.equal(r.code, 'INVALID_ARGUMENT')
   assert.equal(f.calls.length, 0)
 })
 
-test('boss_read_resume：未打开简历详情（无大 canvas）→ WRONG_PAGE，不滚不截', async () => {
+test('boss_resume_detail：未打开简历详情（无大 canvas）→ WRONG_PAGE，不滚不截', async () => {
   const f = fakeFactory([snapWithTexts(['沟通', '消息'])])
-  const op = createBossReadResumeOperation(f.factory)
+  const op = createBossResumeDetailOperation(f.factory)
   const r = await op.execute({}, silentCtx())
   assert.equal(r.success, false)
   assert.equal(r.code, 'WRONG_PAGE')

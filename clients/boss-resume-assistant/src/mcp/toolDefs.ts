@@ -154,18 +154,23 @@ export const TOOL_DEFS: BossToolDef[] = [
     annotations: { title: '切换当前招聘职位', readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
   {
-    name: 'boss_read_resume',
-    title: '读取候选人在线简历全文',
+    name: 'boss_resume_detail',
+    title: '读取候选人简历详情入库',
     description:
-      '读取 BOSS 直聘「推荐牛人」页当前打开的候选人在线简历详情全文。简历是 canvas 像素渲染（DOM 抓不到文字），' +
-      '通过「滚动分段截图 → 重叠拼接 → Windows OCR」提取，返回全文文本（text 字段，Windows OCR 水平，可能含 ~20% 错字）。' +
+      '读取 BOSS 直聘当前打开的候选人在线简历详情（推荐牛人页或沟通页均可，前提已点开候选人详情，否则 WRONG_PAGE）。' +
+      '简历是 canvas 像素渲染（DOM 抓不到文字），通过「滚动分段截图 → 重叠拼接 → Windows OCR」提取。' +
+      '结果按简历库契约返回：candidate_name（入参优先，缺省从 OCR 首行自动识别，识别失败报错）、' +
+      'job_name（推荐页当前招聘职位）、ocr_text 全文（Windows OCR 水平，可能含 ~20% 错字）、' +
+      'images 拼接长图 base64（供云端入库，图片绝不进对话上下文）。' +
       '只读：无外部写副作用；但滚动借用真实鼠标约 1-2 秒，操作期间勿动鼠标、勿遮挡 Chrome 窗口。' +
-      '前置要求：已在推荐牛人页点开一个候选人的在线简历详情（当前页面存在简历画布），否则返回 WRONG_PAGE。' +
       '可选 save_image_to 保存拼接长图（PNG）。',
     zodShape: {
+      candidate_name: z.string().min(1).max(30).optional().describe(
+        '候选人姓名（会话上下文已知时建议传入，更可靠）；缺省从 OCR 首行自动识别，识别失败报错要求传参',
+      ),
       save_image_to: z.string().min(1).optional().describe('可选：拼接长图保存路径（PNG）；缺省不保留图片'),
     },
-    annotations: { title: '读取候选人在线简历全文', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    annotations: { title: '读取候选人简历详情入库', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
 ]
 

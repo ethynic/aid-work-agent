@@ -1,5 +1,5 @@
 /**
- * 候选人在线简历读取执行器（设计文档 §10.8，CLI read-resume 命令 / boss_read_resume tool）。
+ * 候选人在线简历读取执行器（设计文档 §10.8，CLI resume-detail 命令 / boss_resume_detail tool）。
  *
  * 推荐牛人页点开候选人后，简历详情渲染在 /web/frame/c-resume/ iframe 内的一个 <CANVAS> 上
  * （WASM fillText 画像素），DOM/Shadow DOM/DOMSnapshot 任何手段都读不到文字（真机 2026-08-14
@@ -77,12 +77,14 @@ export interface ResumeReadResult {
   chars: number
   /** 分段截图段数 */
   segments: number
-  /** 是否确认滚到了简历底部（相邻段字节相同判定）。false = 打满 MAX_SEGMENTS 段仍未到底，内容可能被截断 */
+  /** 是否确认滚到了简历底部（相邻段字节相同判定）。false = 打满 MAX_SEGMENTS 段仍未到底，内容可能截断 */
   bottomReached: boolean
   /** 拼接图宽（device px） */
   width: number
   /** 拼接图高（device px） */
   height: number
+  /** 拼接长图 PNG 字节（返回给调用方做 base64 入库；临时文件在 finally 已清理） */
+  imageBuffer: Buffer
 }
 
 /** 回顶防护格数：向上滚 50 格（DeltaY=+120×50）确保从简历顶部开始分段（防护值，多余滚动无害） */
@@ -223,10 +225,53 @@ export class ResumeReader {
       if (!text.trim()) {
         throw new ResumeReadError('OCR 未识别到任何文字：拼接图可能为空白，或 Windows 中文 OCR 语言包异常，请人工查看')
       }
-      return { text, chars: text.length, segments: parts.length, bottomReached, width, height }
+      // 拼接图读进内存返回（调用方 base64 入库/保存）；临时文件在 finally 清理
+      const imageBuffer = await fs.readFile(stitchedFile)
+      return { text, chars: text.length, segments: parts.length, bottomReached, width, height, imageBuffer }
     } finally {
       // 临时目录清理（失败路径也清；清理本身的错误吞掉，不掩盖业务错误）
       await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {})
     }
   }
+}
+
+/**
+ * 简历详情 canvas 顶部布局（真机 2026-08-14 OCR 实证）的首行姓名启发式提取。
+ *
+ * 首行实际样例（OCR 原文带空格）："最 近 关 注 工 作 经 历 0 0 康 嘉 润 飓 飓 活 跃 严 24 《 大 亏 4 年 …"
+ * 结构 = [左侧栏 tab 词（最近关注/工作经历…）] + [杂字符] + 姓名 + 「刚刚活跃」(OCR 常误识"刚刚"二字但
+ * 「活跃」稳定) + 年龄/学历…。解析步骤：去空白 → 截「活跃」前 → 剥离已知侧栏 tab 前缀 → 去开头非中文
+ * 前缀 → 取开头连续中文段（含·）：2-4 字全取；5-6 字取前 n-2（视为"刚刚"误识尾巴）；>6 字视为噪音返回 null。
+ *
+ * 这是兜底手段（candidate_name 参数优先，智能体上下文通常已知姓名）；返回 null 表示无法识别，
+ * 由调用方 fail-loud 要求显式传参，绝不瞎猜入库。
+ */
+const OCR_SIDEBAR_TABS = ['最近关注', '工作经历', '项目经历', '教育经历', '资格证书', '基本信息']
+
+export function extractCandidateNameFromOcr(ocrText: string): string | null {
+  const firstLine = ocrText
+    .split('\n')
+    .map((l) => l.trim())
+    .find((l) => l.length > 0)
+  if (!firstLine) return null
+  let s = firstLine.replace(/\s+/g, '')
+  const activeIdx = s.indexOf('活跃')
+  if (activeIdx > 0) s = s.slice(0, activeIdx)
+  let stripped = true
+  while (stripped) {
+    stripped = false
+    for (const tab of OCR_SIDEBAR_TABS) {
+      if (s.startsWith(tab)) {
+        s = s.slice(tab.length)
+        stripped = true
+      }
+    }
+  }
+  s = s.replace(/^[^\u4e00-\u9fa5·]+/, '') // 去开头非中文前缀（如 "00"）
+  const m = /^[\u4e00-\u9fa5·]+/.exec(s)
+  if (!m) return null
+  const run = m[0]!
+  if (run.length >= 2 && run.length <= 4) return run
+  if (run.length === 5 || run.length === 6) return run.slice(0, run.length - 2)
+  return null // >6 字视为噪音（不像姓名），交回调用方显式传参
 }

@@ -14,7 +14,7 @@ import { createBossSendToOperation } from './bossSendTo.js'
 import { createBossSendCurrentOperation } from './bossSendCurrent.js'
 import { createBossListJobsOperation } from './bossListJobs.js'
 import { createBossSelectJobOperation } from './bossSelectJob.js'
-import { createBossReadResumeOperation } from './bossReadResume.js'
+import { createBossResumeDetailOperation } from './bossResumeDetail.js'
 import type { BossOperation } from './types.js'
 
 export interface OperationEntry {
@@ -39,7 +39,7 @@ export const OPERATIONS: Record<string, OperationEntry> = {
   boss_send_current: { operation: createBossSendCurrentOperation(), cli: { write: true } },
   boss_list_jobs: { operation: createBossListJobsOperation(), cli: { write: false } },
   boss_select_job: { operation: createBossSelectJobOperation(), cli: { write: true } },
-  boss_read_resume: { operation: createBossReadResumeOperation(), cli: { write: false } },
+  boss_resume_detail: { operation: createBossResumeDetailOperation(), cli: { write: false } },
 }
 
 export const OPERATION_NAMES = Object.keys(OPERATIONS)

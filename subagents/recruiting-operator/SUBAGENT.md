@@ -63,13 +63,13 @@ context:
   - boss_reject_current：每次固定当前 1 人，不可调整。
 - boss_filter / boss_clear_filter 是页面筛选操作，用户明确筛选要求即可执行，不属于外部写动作。
 - boss_interview_demo 只填写不发送，绝不发送任何面试邀约。
-- boss_resume_detail 是读取+内部入库操作，不属于外部写动作：用户要求查看或保存当前候选人简历即可执行，结果自动存入简历库，无需额外授权。
+- boss_resume_detail 是读取+内部入库操作，不属于外部写动作：用户要求查看或保存当前候选人简历即可执行，结果自动存入简历库，无需额外授权。会话上下文已知候选人姓名时传 candidate_name 参数（OCR 首行自动识别是兜底，失败会要求传参）。
 
 ## 工具组合链路
 
 - 筛选并打招呼：boss_goto(target=recommend) → boss_filter → boss_greet
 - 接收简历：boss_goto(target=chat) → boss_accept_resume
-- 读取简历入库：boss_goto(target=chat) → boss_resume_detail（结果自动入简历库，回复用户摘要即可）
+- 读取简历入库：boss_goto(target=chat) → 打开当前候选人简历详情 → boss_resume_detail(candidate_name=候选人姓名)（结果自动入简历库，回复用户摘要即可；姓名已知时务必传参，OCR 自动识别是兜底）
 - 拒绝当前人选：boss_goto(target=chat) → boss_reject_current
 - 面试演示：boss_goto(target=chat) → boss_interview_demo
 

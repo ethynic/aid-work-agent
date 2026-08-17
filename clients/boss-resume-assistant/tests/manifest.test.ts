@@ -54,7 +54,7 @@ test('manifest 字段完整（标准 §6）', () => {
       'boss_greet',
       'boss_interview_demo',
       'boss_list_jobs',
-      'boss_read_resume',
+      'boss_resume_detail',
       'boss_reject_current',
       'boss_select_job',
       'boss_send_current',

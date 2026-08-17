@@ -17,6 +17,7 @@ import {
   ResumeReader,
   ResumeReadError,
   locateResumeCanvas,
+  extractCandidateNameFromOcr,
   SCROLL_TOP_NOTCHES,
   SEGMENT_WHEEL_NOTCHES,
   MAX_SEGMENTS,
@@ -183,6 +184,8 @@ test('正常 3 段：第 4 段字节数相同触发到底（本段丢弃），wh
   assert.equal(f.ocrCalls.length, 1)
   assert.equal(f.ocrCalls[0], f.stitchCalls[0]!.outFile)
   assert.deepEqual(f.progress, ['stitch', 'ocr'])
+  // 拼接图字节随结果返回（供 base64 入库；临时文件已清理）
+  assert.deepEqual(res.imageBuffer, STITCHED_PNG)
   // 临时目录已清理
   const tmpDir = path.dirname(f.stitchCalls[0]!.parts[0]!)
   assert.equal(existsSync(tmpDir), false)
@@ -275,4 +278,28 @@ test(`段数上限 MAX_SEGMENTS=${MAX_SEGMENTS}：一直不到底时最多截 ${
     f.wheels.filter((w) => w.deltaY < 0),
     Array.from({ length: MAX_SEGMENTS - 1 }, () => ({ deltaY: -120, notches: SEGMENT_WHEEL_NOTCHES })),
   )
+})
+
+// ---------- extractCandidateNameFromOcr：OCR 首行姓名启发式（boss_resume_detail 的 candidate_name 兜底） ----------
+
+test('姓名启发式：真机首行样本（侧栏词 + 杂字符 + 姓名 + 误识"刚刚" + 活跃）→ 康嘉润', () => {
+  // 真机 OCR 原文（2026-08-14，带空格）："最 近 关 注 工 作 经 历 0 0 康 嘉 润 飓 飓 活 跃 严 24 …"
+  const line = '最 近 关 注 工 作 经 历 0 0 康 嘉 润 飓 飓 活 跃 严 24 《 大 亏 4 年 离 一 随 时 到 岗'
+  assert.equal(extractCandidateNameFromOcr(`${line}\n后续内容`), '康嘉润')
+})
+
+test('姓名启发式：无侧栏词直姓名开头（2-4 字全取）', () => {
+  assert.equal(extractCandidateNameFromOcr('王 五 活 跃 26 岁 本 科\n工作经历'), '王五')
+  assert.equal(extractCandidateNameFromOcr('欧阳锦绣 刚刚活跃'), '欧阳锦绣')
+})
+
+test('姓名启发式："刚刚"误识尾巴 → 5-6 字段剥尾 2 字；4 字段全取（已知局限：2 字名 + 2 误识不可区分，入参可避开）', () => {
+  assert.equal(extractCandidateNameFromOcr('李 雷 桂 桂 活 跃'), '李雷桂桂') // 4 字段 → 全取
+  assert.equal(extractCandidateNameFromOcr('张 小 明 飓 飓 活 跃 本 科'), '张小明') // 5 字段 → 前 3
+})
+
+test('姓名启发式：无法识别（>6 字噪音 / 空文本 / 无中文）→ null（调用方 fail-loud 要求传参）', () => {
+  assert.equal(extractCandidateNameFromOcr('今天天气很好我们聊聊吧活跃'), null) // 9 字噪音
+  assert.equal(extractCandidateNameFromOcr(''), null)
+  assert.equal(extractCandidateNameFromOcr('12345 ABC'), null)
 })

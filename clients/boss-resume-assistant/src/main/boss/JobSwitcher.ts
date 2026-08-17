@@ -224,8 +224,10 @@ export class JobSwitcher {
    *
    * 真机（2026-08-13）：职位框与筛选按钮在推荐列表 iframe 同一行（y≈70），职位框在筛选左侧。
    * 「筛选」按钮是推荐牛人页信号（与 bossGreet 同），无筛选 = 不在该页。
+   *
+   * public：bossResumeDetail operation 复用其 name 读「当前招聘职位」（简历库 job_name 字段）。
    */
-  private locateJobBox(
+  locateJobBox(
     snap: DomSnapshot,
   ): { point: ClickPoint | null; name: string | null; count: number; nodeIndex: number | null } {
     const viewport = viewportOf(snap)

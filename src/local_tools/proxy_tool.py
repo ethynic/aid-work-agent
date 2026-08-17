@@ -321,8 +321,14 @@ class BossResumeDetailTool(LocalToolProxyTool):
     )
 
     class InputModel(BaseModel):
-        # 暂无参数：CLI resume-detail 命令明天落地，参数届时对齐
-        pass
+        candidate_name: Optional[str] = Field(
+            None,
+            max_length=30,
+            description=(
+                "候选人姓名（会话上下文已知时建议传入，更可靠）；"
+                "缺省 CLI 从 OCR 首行自动识别，识别失败会报错要求传参"
+            ),
+        )
 
     timeout_seconds = 600
 

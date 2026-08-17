@@ -3,7 +3,7 @@
  * BOSS 招聘操作 CLI 入口。
  *
  * 操作命令（filter / greet / goto / accept / reject / interview / send-to / send-current /
- * list-jobs / select-job / read-resume，其中 filter 含设置与 --clear 两种用法）+ 3 个标准 Provider 命令（mcp / doctor / version）。
+ * list-jobs / select-job / resume-detail，其中 filter 含设置与 --clear 两种用法）+ 3 个标准 Provider 命令（mcp / doctor / version）。
  * 操作命令只是薄 renderer，业务能力在 src/main/operations/，与 MCP tool handler 共享。
  *
  * 用法：
@@ -18,7 +18,7 @@
  *   node dist/src/cli/index.js send-current --message <消息> [--dry-run]
  *   node dist/src/cli/index.js list-jobs
  *   node dist/src/cli/index.js select-job <职位名>
- *   node dist/src/cli/index.js read-resume [--save-image <path>]
+ *   node dist/src/cli/index.js resume-detail [--name <姓名>] [--save-image <path>]
  *   node dist/src/cli/index.js mcp --stdio
  *   node dist/src/cli/index.js doctor
  *   node dist/src/cli/index.js version [--json]
@@ -43,7 +43,7 @@ const USAGE = `BOSS 招聘操作 CLI
   send-current --message <消息> [--dry-run]     向当前已选会话输入并发送消息（前提已选会话；默认真发送；--dry-run 只输入不发送；期间勿动鼠标）
   list-jobs                    列出当前招聘者的所有职位（打开职位下拉解析；只读，但借用真实鼠标点开下拉，期间勿动鼠标）
   select-job <职位名>          切换到指定职位（精确职位名，可用 list-jobs 查看；真实写动作，期间勿动鼠标）
-  read-resume [--save-image <path>]   读取当前打开的候选人在线简历全文（canvas 截图拼接 OCR；前提先点开候选人详情；只读，但滚动借用真实鼠标，期间勿动鼠标）
+  resume-detail [--name <姓名>] [--save-image <path>]   读取当前打开的候选人简历详情（canvas 截图拼接 OCR；--name 候选人姓名，缺省从 OCR 首行自动识别；前提先点开候选人详情；只读，但滚动借用真实鼠标，期间勿动鼠标）
 
 Provider 命令：
   mcp --stdio                 启动标准本地 MCP server（stdout 只承载协议，供 Codex/WorkBuddy 等 Host 使用）
@@ -191,11 +191,15 @@ async function main(): Promise<number> {
       const { selectJobCommand } = await import('./commands/selectJob.js')
       return selectJobCommand({ jobName, cdpPort })
     }
-    case 'read-resume': {
+    case 'resume-detail': {
       const cdpPort = parseCdpPort(args)
       if (cdpPort === 'invalid') return 2
-      const { readResumeCommand } = await import('./commands/readResume.js')
-      return readResumeCommand({ saveImage: flagString(args, 'save-image'), cdpPort })
+      const { resumeDetailCommand } = await import('./commands/resumeDetail.js')
+      return resumeDetailCommand({
+        name: flagString(args, 'name'),
+        saveImage: flagString(args, 'save-image'),
+        cdpPort,
+      })
     }
     case 'mcp': {
       const cdpPort = parseCdpPort(args)

@@ -9,7 +9,7 @@ import type { BossOperation, OperationResult, OpContext } from '../main/operatio
 
 export interface CliRunOptions {
   cdpPort?: number
-  /** 成功时的附加渲染（在 ✅ 结果行之后调用，如 read-resume 打印简历全文） */
+  /** 成功时的附加渲染（在 ✅ 结果行之后调用，如 resume-detail 打印简历全文） */
   onSuccess?: (result: OperationResult) => void
 }
 

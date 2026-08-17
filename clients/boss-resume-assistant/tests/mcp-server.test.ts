@@ -31,7 +31,7 @@ const EXPECTED_TOOLS = [
   'boss_send_current',
   'boss_list_jobs',
   'boss_select_job',
-  'boss_read_resume',
+  'boss_resume_detail',
 ]
 
 /** 找一个空闲端口（listen 0 后立即关闭） */
