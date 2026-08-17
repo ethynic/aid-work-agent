@@ -120,6 +120,17 @@ class CreateScheduledTaskTool(BaseTool):
         time_config = kwargs.get("time_config") or {}
         description = kwargs.get("description", "")
 
+        # LLM 解析时间时可能把数值字段以字符串传出（如 interval_hours="2"、hour="9"）。
+        # time_config 是 Dict[str, Any]，executor 的 InputModel 不会递归强转内部值，
+        # 且本工具由 agent 直接调用（绕过 executor），这里统一强转数值字段，
+        # 防止字符串乘法（interval_hours）与 :02d 格式化崩溃（hour/minute/day）
+        for key, default in (("interval_hours", 1), ("hour", 9), ("minute", 0), ("day", 1)):
+            if key in time_config:
+                try:
+                    time_config[key] = int(time_config[key])
+                except (TypeError, ValueError):
+                    time_config[key] = default
+
         user_id = self._user.user_id if self._user else None
 
         # 必须有用户信息才能创建定时任务
