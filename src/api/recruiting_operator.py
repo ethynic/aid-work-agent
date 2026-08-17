@@ -280,7 +280,7 @@ async def re_evaluate_resume(resume_id: int, request: Request):
         result = await match_service.evaluate_and_update(tenant_id, resume_id)
         return {"success": True, "data": result}
     except Exception as e:
-        logger.error(f"简历重新评分失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"简历重新评分失败: {e}")
         return _error_response("简历重新评分失败", str(e))
 
 

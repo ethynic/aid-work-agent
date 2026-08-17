@@ -423,7 +423,7 @@ class BossJobsListTool(LocalToolProxyTool):
             # 无需再单独查一次统计（Phase 5 下沉共享后消除重复查询）
             jobs = await asyncio.to_thread(recruiting_job_service.list_jobs, tenant_id)
         except Exception as e:  # noqa: BLE001 基础设施异常转用户可读文案，不把 psycopg2 原文抛给 LLM
-            logger.error(f"后端日志：boss_jobs_list 查询职位库失败: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"后端日志：boss_jobs_list 查询职位库失败: {e}")
             return {"success": False, "code": "FAILED",
                     "message": "职位库查询失败，请稍后重试或联系管理员"}
 
@@ -478,7 +478,7 @@ async def _evaluate_resume_match_safely(tenant_id: str, resume_id: int) -> Dict[
     try:
         return await recruiting_match_service.evaluate_and_update(tenant_id, resume_id)
     except Exception as e:  # noqa: BLE001 评分是增强信息，任何异常都不拖垮入库结果
-        logger.error(f"后端日志：简历评分异常 resume_id={resume_id}: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"后端日志：简历评分异常 resume_id={resume_id}: {e}")
         return {"resume_id": resume_id, "score": None, "note": f"评分异常: {e}"}
 
 
