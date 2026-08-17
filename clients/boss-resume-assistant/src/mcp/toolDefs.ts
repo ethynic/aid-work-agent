@@ -32,7 +32,9 @@ export const TOOL_DEFS: BossToolDef[] = [
     title: '设置筛选条件',
     description:
       '在 BOSS 直聘「推荐牛人」页设置筛选面板：经验要求/学历要求/薪资待遇（替换语义，先清除残留再选）。' +
-      '写动作：会改动页面上的筛选状态。至少提供一个条件。',
+      '写动作：会改动页面上的筛选状态。至少提供一个条件。' +
+      '数值档位（经验/薪资）无需精确：页面上不存在时会自动选最接近的档位并在结果 substitutions 里注明（如要 15-20K 而页面只有 15-25K 会选 15-25K），请向用户转述实际档位；' +
+      '学历等非数值选项不支持自动替换，报错信息会列出该行全部可选档位。',
     zodShape: {
       experience: z.string().min(1).optional().describe('经验要求行选项，如 "5-10年"'),
       educations: z.array(z.string().min(1)).optional().describe('学历要求行选项（多选），如 ["本科","硕士"]'),
@@ -152,6 +154,17 @@ export const TOOL_DEFS: BossToolDef[] = [
       job_name: z.string().min(1).describe('目标职位名（精确，用 list-jobs 查看，如 "PHP开发工程师"）'),
     },
     annotations: { title: '切换当前招聘职位', readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  {
+    name: 'boss_filter_options',
+    title: '查询筛选可选档位',
+    description:
+      '只读探查 BOSS 直聘「推荐牛人」页筛选面板的全部可选档位（经验要求/学历要求/薪资待遇各行选项），' +
+      '读完后自动收起面板还原页面。用于把用户口语化的筛选要求（如 15k-20k、5年以上、本科及以上）' +
+      '映射成页面实际存在的精确档位，再调 boss_filter。前置要求：当前在推荐牛人页，否则返回 WRONG_PAGE。' +
+      '开/收面板借用真实鼠标约 2 秒，期间勿动鼠标。',
+    zodShape: {},
+    annotations: { title: '查询筛选可选档位', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
   {
     name: 'boss_resume_detail',

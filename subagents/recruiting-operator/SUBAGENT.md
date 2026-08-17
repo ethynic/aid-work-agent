@@ -5,6 +5,7 @@ version: 1.0.0
 author: system
 capabilities:
   - boss_filter
+  - boss_filter_options
   - boss_greet
   - boss_accept_resume
   - boss_reject_current
@@ -27,6 +28,7 @@ tools:
   inherit: false
   allowed:
     - boss_filter
+    - boss_filter_options
     - boss_clear_filter
     - boss_goto
     - boss_greet
@@ -64,6 +66,7 @@ context:
   - boss_accept_resume：单次固定 1 份。
   - boss_reject_current：每次固定当前 1 人，不可调整。
 - boss_filter / boss_clear_filter 是页面筛选操作，用户明确筛选要求即可执行，不属于外部写动作。
+- boss_filter_options 是只读探查（查筛选面板可选档位），可直接执行；口语化筛选要求（15k-20k / 5年以上 / 本科及以上）一律先查它，由你映射成最接近的精确档位再调 boss_filter，并向用户转述实际档位，**绝不让用户去页面查看**。
 - boss_interview_demo 只填写不发送，绝不发送任何面试邀约。
 - boss_resume_detail 是读取+内部入库操作，不属于外部写动作：用户要求查看或保存当前候选人简历即可执行，结果自动存入简历库，无需额外授权。会话上下文已知候选人姓名时传 candidate_name 参数（OCR 首行自动识别是兜底，失败会要求传参）。
 - boss_resume_batch 同 boss_resume_detail 语义，是读取+内部入库操作，不属于外部写动作：用户要求批量读取/导入推荐牛人简历即可执行（limit 默认 1、单次最多 3 份），结果逐份自动存入简历库，无需额外授权。注意每份约 30 秒滚动+OCR，执行期间提醒用户勿动鼠标。
@@ -88,7 +91,7 @@ context:
 - **参数齐后链路**（按序执行，每步用上一步结果）：
   1. boss_list_jobs：确认精确职位名（用户口述可能不精确，如「PHP」→「PHP开发工程师」；避开待开放职位）
   2. boss_select_job(job_name)：切换到目标职位
-  3. boss_filter：按用户筛选要求设置（经验/学历/薪资）
+  3. boss_filter_options → 你（AI）把用户筛选要求映射到最接近的精确档位 → boss_filter（传精确档位）→ 向用户转述实际设置值（如「薪资按最接近档位 15-25K 设置」），**绝不让用户去页面查看**
   4. boss_resume_batch(limit=3)：批量读取当前视口筛选后的牛人简历，自动入简历库
   5. 汇报每份摘要（姓名/职位/OCR 字数/是否截断），提示到「招聘操作智能体 → 简历库」页面查看完整简历
   6. **询问**「是否向这些牛人打招呼（最多 3 人）」——打招呼是外部写动作，用户明确同意后才执行 boss_greet(limit≤3)

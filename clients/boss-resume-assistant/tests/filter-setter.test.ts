@@ -365,3 +365,72 @@ test('探针 describePanel：面板容器外的同行带垃圾文本被结构级
 test('viewportOf 取根文档 bounds 作为视口尺寸', () => {
   assert.deepEqual(viewportOf(closedSnap), { width: 1917, height: 1905 })
 })
+
+// ---------- 档位匹配策略（2026-08-17 用户定调：判断交 AI，CLI 只精确执行） ----------
+
+test('normalizeOptionText：去空白+大写（15k-20k ≡ 15-20K）', async () => {
+  const { normalizeOptionText } = await import('../src/main/boss/FilterSetter.js')
+  assert.equal(normalizeOptionText('15k - 20k'), normalizeOptionText('15-20K'))
+})
+
+test('apply 归一化兜底：传 15-25k（页面 15-25K）→ 点真实档位，不报错', async () => {
+  const panel15 = buildSnap([
+    ...panelItems,
+    { text: '15-25K', bounds: [1280, 898, 63, 22] as [number, number, number, number] },
+  ])
+  const r = recorder()
+  const setter = new FilterSetter({
+    snapshot: snapshotQueue([closedSnap, ...Array(3).fill(panel15), doneSnap1]),
+    click: r.click,
+    sleep: r.sleep,
+  })
+  const result = await setter.apply({ salary: '15-25k' })
+  assert.equal(result.filterCount, 1)
+  assert.equal(r.clicks.length, 4) // 筛选 + 清除 + 15-25K + 确定
+})
+
+test('apply 选项不存在 → 报错并列出该行全部可选档位（AI 自纠用，绝不让用户看页面）', async () => {
+  const r = recorder()
+  const setter = new FilterSetter({
+    snapshot: snapshotQueue([closedSnap, ...Array(4).fill(panelSnap)]),
+    click: r.click,
+    sleep: r.sleep,
+  })
+  await assert.rejects(setter.apply({ salary: '15-20K' }), (e: unknown) => {
+    const msg = (e as Error).message
+    return msg.includes('没有匹配的选项「15-20K」') && msg.includes('该行可选：10-20K') && msg.includes('boss_filter_options')
+  })
+})
+
+test('probeOptions：开面板 → 读各行选项 → 点「筛选」收起还原页面', async () => {
+  const r = recorder()
+  const closedAgain = buildSnap([{ text: '筛选', bounds: [1514, 33.5, 42, 23] }])
+  const setter = new FilterSetter({
+    snapshot: snapshotQueue([closedSnap, panelSnap, panelSnap, closedAgain]),
+    click: r.click,
+    sleep: r.sleep,
+  })
+  const rows = await setter.probeOptions()
+  const byLabel = new Map(rows.map((row) => [row.label, row.options.map((o) => o.text)]))
+  assert.deepEqual(byLabel.get('经验要求'), ['5-10年'])
+  assert.deepEqual(byLabel.get('学历要求'), ['本科', '硕士', '博士'])
+  assert.deepEqual(byLabel.get('薪资待遇[单选]'), ['10-20K'])
+  // 点击序列：开面板（筛选按钮）+ 收起（再点筛选）
+  assert.equal(r.clicks.length, 2)
+  assert.deepEqual(r.clicks[0], { x: 1535, y: 45 })
+  assert.deepEqual(r.clicks[1], { x: 1535, y: 45 })
+})
+
+test('probeOptions：面板行标签在但行内无选项（无可读行）→ fail-loud', async () => {
+  const noOptions = buildSnap([
+    { text: '筛选', bounds: [1514, 33.5, 42, 23] },
+    { text: '经验要求', bounds: [600, 629, 75, 22] },
+  ])
+  const r = recorder()
+  const setter = new FilterSetter({
+    snapshot: snapshotQueue([closedSnap, noOptions, noOptions]),
+    click: r.click,
+    sleep: r.sleep,
+  })
+  await assert.rejects(setter.probeOptions(), /未解析到任何可选档位/)
+})

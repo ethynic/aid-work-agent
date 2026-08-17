@@ -33,6 +33,7 @@ import { parseArgs, flagString, hasFlag } from './args.js'
 const USAGE = `BOSS 招聘操作 CLI
 
 操作命令：
+  filter-options                 查询筛选面板全部可选档位（只读；给 AI/用户选精确档位用；开收面板借鼠标约 2 秒）
   filter [--experience 5-10年] [--education 本科,硕士,博士] [--salary 10-20K]   自动设置筛选面板（Win32 真实鼠标，期间勿动鼠标）
   filter --clear              清除全部筛选（开面板 → 清除 → 确定，期间勿动鼠标）
   greet [--limit N]           逐个打招呼（默认 10 上限，最大 100；当前屏点完自动滚动，到底结束；真实写动作，期间勿动鼠标）
@@ -80,6 +81,12 @@ async function main(): Promise<number> {
   const command = args.positional[0]
 
   switch (command) {
+    case 'filter-options': {
+      const cdpPort = parseCdpPort(args)
+      if (cdpPort === 'invalid') return 2
+      const { filterOptionsCommand } = await import('./commands/filterOptions.js')
+      return filterOptionsCommand({ cdpPort })
+    }
     case 'filter': {
       const educationRaw = flagString(args, 'education')
       const educations = educationRaw

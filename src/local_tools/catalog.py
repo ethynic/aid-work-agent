@@ -14,6 +14,7 @@ TRUSTED_PROVIDERS: Dict[str, Dict[str, Any]] = {
         "execution_target": "local_required",
         "tools": [
             "boss_filter",
+            "boss_filter_options",
             "boss_clear_filter",
             "boss_goto",
             "boss_greet",

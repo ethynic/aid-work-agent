@@ -255,6 +255,19 @@ class BossGotoInput(BaseModel):
     )
 
 
+class BossFilterOptionsTool(LocalToolProxyTool):
+    name = "boss_filter_options"
+    display_name = "BOSS 查询筛选可选档位"
+    description = (
+        "在用户本机 BOSS 直聘「推荐牛人」页只读探查筛选面板的全部可选档位"
+        "（经验/学历/薪资各行选项），读完自动收起面板。用于把用户口语化筛选要求"
+        "（如 15k-20k、5年以上、本科及以上）映射成页面实际存在的精确档位后再调 boss_filter"
+    )
+
+    class InputModel(BaseModel):
+        pass
+
+
 class BossGotoTool(LocalToolProxyTool):
     name = "boss_goto"
     display_name = "BOSS 切换页面"
@@ -495,6 +508,7 @@ class BossResumeBatchTool(LocalToolProxyTool):
 LOCAL_PROXY_TOOL_CLASSES = (
     BossFilterTool,
     BossClearFilterTool,
+    BossFilterOptionsTool,
     BossGotoTool,
     BossGreetTool,
     BossAcceptResumeTool,

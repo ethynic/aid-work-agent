@@ -5,6 +5,7 @@
  * cli 元数据供薄 renderer 使用：write=true 的命令在执行前打印 ⚠️ 写动作提示。
  */
 import { createBossFilterOperation, createBossClearFilterOperation } from './bossFilter.js'
+import { createBossFilterOptionsOperation } from './bossFilterOptions.js'
 import { createBossGotoOperation } from './bossGoto.js'
 import { createBossGreetOperation } from './bossGreet.js'
 import { createBossAcceptResumeOperation } from './bossAcceptResume.js'
@@ -30,6 +31,7 @@ export interface OperationEntry {
 
 export const OPERATIONS: Record<string, OperationEntry> = {
   boss_filter: { operation: createBossFilterOperation(), cli: { write: true } },
+  boss_filter_options: { operation: createBossFilterOptionsOperation(), cli: { write: false } },
   boss_clear_filter: { operation: createBossClearFilterOperation(), cli: { write: true } },
   boss_goto: { operation: createBossGotoOperation(), cli: { write: false } },
   boss_greet: { operation: createBossGreetOperation(), cli: { write: true } },
