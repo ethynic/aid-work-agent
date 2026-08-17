@@ -246,12 +246,15 @@ async function doCleanup() {
 // ------- Copy -------
 function copyToClipboard() {
   if (!selectedLog.value) return
-  const text = `模块: ${selectedLog.value.module || '-'}
-消息:
-${selectedLog.value.message}
-堆栈:
-${selectedLog.value.traceback || '-'}
-`
+  const parts = [
+    `时间: ${formatDateTime(selectedLog.value.timestamp)}`,
+    `模块: ${selectedLog.value.module || '-'}`,
+    `消息:\n${selectedLog.value.message}`
+  ]
+  if (selectedLog.value.traceback) {
+    parts.push(`堆栈:\n${selectedLog.value.traceback}`)
+  }
+  const text = parts.join('\n')
   navigator.clipboard.writeText(text).then(() => {
     toast.success('已复制到剪贴板')
   }).catch(() => {
