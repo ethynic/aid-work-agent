@@ -1727,6 +1727,15 @@ async def _process_tenant_wecom_kf_messages(
                     logger.debug(f"[wecom_kf] 跳过非客户消息: msgid={msg_id}, origin={msg_origin}")
                     continue
 
+                # 仅处理文字 + 语音消息：图片/视频/文件等附件消息直接过滤，
+                # 避免转发给智能体产生"看不了视频"等无效回复消耗积分
+                from src.channels.wecom_kf.message import should_process_kf_message
+                if not should_process_kf_message(msg_type):
+                    logger.info(
+                        f"[wecom_kf] 跳过非文字/语音消息: msgid={msg_id}, msgtype={msg_type}"
+                    )
+                    continue
+
                 # 消息去重
                 dedup = _get_tenant_dedup(tenant_id)
                 if await dedup.is_duplicate(msg_id):

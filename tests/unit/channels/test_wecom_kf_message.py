@@ -283,3 +283,52 @@ class TestContainsTableOrImage:
         # 第三行不以 | 开头
         # 所以应该返回 False
         assert contains_table_or_image(md) is False
+
+
+class TestShouldProcessKfMessage:
+    def test_text_message_processed(self):
+        """文字消息应处理。"""
+        from src.channels.wecom_kf.message import should_process_kf_message
+        assert should_process_kf_message("text") is True
+
+    def test_voice_message_processed(self):
+        """语音消息应处理（走 ASR 转文字）。"""
+        from src.channels.wecom_kf.message import should_process_kf_message
+        assert should_process_kf_message("voice") is True
+
+    def test_image_message_filtered(self):
+        """图片消息应过滤。"""
+        from src.channels.wecom_kf.message import should_process_kf_message
+        assert should_process_kf_message("image") is False
+
+    def test_video_message_filtered(self):
+        """视频消息应过滤。"""
+        from src.channels.wecom_kf.message import should_process_kf_message
+        assert should_process_kf_message("video") is False
+
+    def test_file_message_filtered(self):
+        """文件消息（PPT/Word/PDF 等）应过滤。"""
+        from src.channels.wecom_kf.message import should_process_kf_message
+        assert should_process_kf_message("file") is False
+
+    def test_link_message_filtered(self):
+        """链接消息应过滤。"""
+        from src.channels.wecom_kf.message import should_process_kf_message
+        assert should_process_kf_message("link") is False
+
+    def test_emoji_message_filtered(self):
+        """表情消息应过滤。"""
+        from src.channels.wecom_kf.message import should_process_kf_message
+        assert should_process_kf_message("emoji") is False
+
+    def test_event_message_filtered(self):
+        """事件消息应过滤。"""
+        from src.channels.wecom_kf.message import should_process_kf_message
+        assert should_process_kf_message("event") is False
+
+    def test_unknown_and_empty_filtered(self):
+        """未知类型与空值应过滤。"""
+        from src.channels.wecom_kf.message import should_process_kf_message
+        assert should_process_kf_message("miniprogram") is False
+        assert should_process_kf_message("") is False
+        assert should_process_kf_message(None) is False
