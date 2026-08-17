@@ -14,6 +14,7 @@ import { createBossGreetOperation } from '../src/main/operations/bossGreet.js'
 import { createBossAcceptResumeOperation } from '../src/main/operations/bossAcceptResume.js'
 import { createBossRejectCurrentOperation } from '../src/main/operations/bossRejectCurrent.js'
 import { createBossInterviewDemoOperation } from '../src/main/operations/bossInterviewDemo.js'
+import { createBossReadResumeOperation } from '../src/main/operations/bossReadResume.js'
 import type { BossSession } from '../src/main/operations/bossContext.js'
 import type { OpContext } from '../src/main/operations/types.js'
 import type { DomSnapshot, ClickPoint } from '../src/main/boss/domSnapshot.js'
@@ -24,6 +25,7 @@ import { NavError } from '../src/main/boss/PageNavigator.js'
 import { ChatRejectError } from '../src/main/boss/ChatRejectExecutor.js'
 import { InterviewDemoError } from '../src/main/boss/InterviewDemoExecutor.js'
 import { JobSwitchError } from '../src/main/boss/JobSwitcher.js'
+import { ResumeReadError } from '../src/main/boss/ResumeReader.js'
 import { WinClickError } from '../src/main/input/WinMouseClicker.js'
 
 function silentCtx(): OpContext {
@@ -43,6 +45,7 @@ function fakeFactory(snaps: DomSnapshot[], opts: { url?: string; throwOnCreate?:
     mouseWheel: async () => {},
     pressEscape: async () => {},
     typeChar: async () => {},
+    captureFullpage: async () => Buffer.alloc(0),
     getUrl: async () => opts.url ?? 'https://www.zhipin.com/web/chat/recommend',
     close: async () => {},
   }
@@ -165,6 +168,26 @@ test('boss_interview_demo：remark 为空/超 140 字 → INVALID_ARGUMENT', asy
   assert.equal((await op.execute({ remark: '   ' }, silentCtx())).code, 'INVALID_ARGUMENT')
   assert.equal((await op.execute({ remark: 'x'.repeat(141) }, silentCtx())).code, 'INVALID_ARGUMENT')
   assert.equal(f.calls.length, 0)
+})
+
+test('boss_read_resume：save_image_to 空白 → INVALID_ARGUMENT，不连 Chrome', async () => {
+  const f = fakeFactory([])
+  const op = createBossReadResumeOperation(f.factory)
+  const r = await op.execute({ save_image_to: '   ' }, silentCtx())
+  assert.equal(r.code, 'INVALID_ARGUMENT')
+  assert.equal(f.calls.length, 0)
+})
+
+test('boss_read_resume：未打开简历详情（无大 canvas）→ WRONG_PAGE，不滚不截', async () => {
+  const f = fakeFactory([snapWithTexts(['沟通', '消息'])])
+  const op = createBossReadResumeOperation(f.factory)
+  const r = await op.execute({}, silentCtx())
+  assert.equal(r.success, false)
+  assert.equal(r.code, 'WRONG_PAGE')
+  assert.equal(r.retryable, true)
+  assert.equal(r.effect, 'none')
+  assert.match(r.message, /未找到简历画布/)
+  assert.equal(f.calls.length, 1) // 工厂已连上（前置校验在 body 内），但 wheel/截图未被触达
 })
 
 // ---------- operation 执行期错误映射 ----------
@@ -294,6 +317,7 @@ test('errorMapping：结构变化/找不到元素 → UI_CHANGED', () => {
     new WinClickError('win-click.ps1 执行失败(exit=2): 落点被遮挡', 2),
     new JobSwitchError('职位「Java」不在当前招聘者的职位列表中（可用职位：PHP开发工程师、前端开发），请人工查看'),
     new JobSwitchError('打开职位下拉后未解析到任何职位项（项无 layout bounds 可能是等待不足），请人工查看'),
+    new ResumeReadError('未找到简历详情画布（页面中无大尺寸 CANVAS）：请先在推荐牛人页点开一个候选人的在线简历详情，再执行读取'),
   ]
   for (const err of cases) {
     assert.equal(mapExecutorError(err).code, 'UI_CHANGED', err.message)

@@ -24,6 +24,7 @@ function fakeSession(snaps: DomSnapshot[], opts: { url?: string } = {}) {
     mouseWheel: async () => {},
     pressEscape: async () => {},
     typeChar: async () => {},
+    captureFullpage: async () => Buffer.alloc(0),
     getUrl: async () => opts.url ?? 'https://www.zhipin.com/web/chat/index',
     close: async () => {},
   }

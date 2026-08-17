@@ -37,6 +37,9 @@ export interface BossSession {
   pressEscape(): Promise<void>
   /** CDP char 事件逐字输入（调用方保证焦点已在目标输入框） */
   typeChar(ch: string): Promise<void>
+  /** 无 clip 整页截图（Page.captureScreenshot png）。输出即 device px，与 DOMSnapshot bounds 同坐标系，
+   *  按 device 坐标直接裁剪即可，绝不做 DPI 换算（设计 §10.8 真机实证：整页 1249x1277 = viewport bounds） */
+  captureFullpage(): Promise<Buffer>
   /** 当前 BOSS 标签页 URL（Target.getTargets 实时取） */
   getUrl(): Promise<string>
   /** 断开 CDP 连接（不关闭 Chrome）；必须幂等、绝不 throw */
@@ -94,6 +97,7 @@ export const defaultSessionFactory: BossSessionFactory = async (ctx) => {
     typeChar: async (ch) => {
       await gw.dispatchKey({ type: 'char', key: ch, text: ch })
     },
+    captureFullpage: async () => Buffer.from(await gw.captureScreenshot({ format: 'png' }), 'base64'),
     getUrl: async () => {
       const targets = await gw.getTargets()
       return targets.find((t) => t.type === 'page' && t.url.includes('zhipin.com'))?.url ?? ''

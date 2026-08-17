@@ -1,5 +1,5 @@
 /**
- * 11 个 MCP tool 的契约定义（实施规格 m02 §6 / 标准 §5）。
+ * 12 个 MCP tool 的契约定义（实施规格 m02 §6 / 标准 §5 / 设计 §10.8）。
  *
  * zodShape 是 registerTool 的输入；manifest digest 用同一来源推导的 JSON Schema，
  * 保证「Host 看到的 schema」与「manifest digest 的 schema」同源（SDK 1.30.0 内部同样
@@ -152,6 +152,20 @@ export const TOOL_DEFS: BossToolDef[] = [
       job_name: z.string().min(1).describe('目标职位名（精确，用 list-jobs 查看，如 "PHP开发工程师"）'),
     },
     annotations: { title: '切换当前招聘职位', readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  {
+    name: 'boss_read_resume',
+    title: '读取候选人在线简历全文',
+    description:
+      '读取 BOSS 直聘「推荐牛人」页当前打开的候选人在线简历详情全文。简历是 canvas 像素渲染（DOM 抓不到文字），' +
+      '通过「滚动分段截图 → 重叠拼接 → Windows OCR」提取，返回全文文本（text 字段，Windows OCR 水平，可能含 ~20% 错字）。' +
+      '只读：无外部写副作用；但滚动借用真实鼠标约 1-2 秒，操作期间勿动鼠标、勿遮挡 Chrome 窗口。' +
+      '前置要求：已在推荐牛人页点开一个候选人的在线简历详情（当前页面存在简历画布），否则返回 WRONG_PAGE。' +
+      '可选 save_image_to 保存拼接长图（PNG）。',
+    zodShape: {
+      save_image_to: z.string().min(1).optional().describe('可选：拼接长图保存路径（PNG）；缺省不保留图片'),
+    },
+    annotations: { title: '读取候选人在线简历全文', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
 ]
 
