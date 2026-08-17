@@ -207,12 +207,13 @@ class TestDailyUsageDetailAPI:
             assert "prompt_tokens" in it
             assert "cached_input_tokens" in it
             assert "completion_tokens" in it
-            assert "breakdown_items" in it, "平台管理员应返回 usage_breakdown 6 分项"
+            assert "breakdown_items" in it, "平台管理员应返回 usage_breakdown 7 分项"
+            assert it["model"] == "test-model", "无 usage_breakdown 时 model 应回退到 chat_records.model 列"
             assert "credit_cost" in it
             assert "created_at" in it
 
     def test_platform_admin_breakdown_items_parsed(self, temp_tenant_for_detail):
-        """场景 1b：带 usage_breakdown 的记录 -> 平台管理员返回固定 6 分项对账结构
+        """场景 1b：带 usage_breakdown 的记录 -> 平台管理员返回固定 7 分项对账结构
 
         验证 chat 三分项（未命中缓存输入/命中缓存输入/输出）、视频模型、ASR、向量模型
         的 qty / unit_price / usage_factor / credit / is_per_million 均正确解析，
@@ -283,6 +284,8 @@ class TestDailyUsageDetailAPI:
         # 找到刚插入的记录，校验 7 分项结构
         items = [it for it in response["items"] if it["credit_cost"] == 3]
         assert len(items) == 1
+        assert items[0]["model"] == "deepseek-v4-flash", \
+            "文本模型应从 usage_breakdown.chat.model 解析"
         bd = items[0]["breakdown_items"]
         assert len(bd) == 7, "应返回固定 7 分项"
 
@@ -409,6 +412,7 @@ class TestDailyUsageDetailAPI:
         assert response["success"] is True
         items = [it for it in response["items"] if it["credit_cost"] == 2]
         assert len(items) == 1
+        assert items[0]["model"] == "deepseek-v4-flash", "老数据 model 也从 usage_breakdown.chat.model 解析"
         bd = items[0]["breakdown_items"]
         assert len(bd) == 7
 
@@ -502,6 +506,7 @@ class TestDailyUsageDetailAPI:
             assert "prompt_tokens" not in it, "租户管理员不应返回 prompt_tokens"
             assert "cached_input_tokens" not in it, "租户管理员不应返回 cached_input_tokens"
             assert "completion_tokens" not in it, "租户管理员不应返回 completion_tokens"
+            assert "model" not in it, "租户管理员不应返回文本模型"
 
     def test_normal_user_returns_forbidden(self, temp_tenant_for_detail):
         """场景 3：普通 user 调用 -> success: False + message 含"无权限" """

@@ -109,6 +109,9 @@
               <template #assistant_message="{ row }">
                 <span :title="row.assistant_message">{{ truncateText(row.assistant_message) }}</span>
               </template>
+              <template #model="{ row }">
+                <span :title="row.model">{{ row.model || '-' }}</span>
+              </template>
               <template #bd_non_cached_input="{ row }">{{ formatBreakdown(row, 'non_cached_input') }}</template>
               <template #bd_cached_input="{ row }">{{ formatBreakdown(row, 'cached_input') }}</template>
               <template #bd_cache_creation_input="{ row }">{{ formatBreakdown(row, 'cache_creation_input') }}</template>
@@ -313,6 +316,7 @@ const detailColumns = computed(() => {
     { key: 'source_type', label: '来源', width: '120px' },
   ]
   if (isPlatformAdmin.value) {
+    cols.push({ key: 'model', label: '文本模型', width: '150px' })
     bdDetailCols.forEach((c) => cols.push({
       key: c.key,
       label: c.label,

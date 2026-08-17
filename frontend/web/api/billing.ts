@@ -252,6 +252,8 @@ export interface DailyUsageDetailItem {
   cached_input_tokens?: number
   completion_tokens?: number
   breakdown_items?: BreakdownItem[]
+  /** 文本模型（usage_breakdown.chat.model，仅平台管理员可见） */
+  model?: string
   credit_cost: number
   created_at: string
 }

@@ -284,6 +284,7 @@ async def get_daily_usage_detail(
                     cr.cached_input_tokens,
                     cr.completion_tokens,
                     cr.credit_cost,
+                    cr.model,
                     cr.usage_breakdown,
                     cr.created_at
                 FROM chat_records cr
@@ -335,12 +336,19 @@ async def get_daily_usage_detail(
                     "created_at": r.get("created_at").strftime("%Y-%m-%d %H:%M:%S")
                         if r.get("created_at") else None,
                 })
-                # token 三列 + usage_breakdown 6 分项仅平台管理员可见，租户管理员不返回
+                # token 三列 + usage_breakdown 7 分项仅平台管理员可见，租户管理员不返回
                 if reveal_tokens:
                     items[-1]["prompt_tokens"] = int(r.get("prompt_tokens") or 0)
                     items[-1]["cached_input_tokens"] = int(r.get("cached_input_tokens") or 0)
                     items[-1]["completion_tokens"] = int(r.get("completion_tokens") or 0)
                     items[-1]["breakdown_items"] = _parse_breakdown_items(r.get("usage_breakdown"))
+                    # 文本模型：优先 usage_breakdown.chat.model（summary_llm 为 mid_term 摘要等场景），
+                    # 老数据 breakdown 无 model 时回退到 chat_records.model 列
+                    _bd = r.get("usage_breakdown") or {}
+                    items[-1]["model"] = (
+                        (_bd.get("chat") or _bd.get("summary_llm") or {}).get("model")
+                        or r.get("model")
+                    )
 
         return {
             "success": True,
