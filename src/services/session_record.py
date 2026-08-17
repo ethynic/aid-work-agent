@@ -9,7 +9,7 @@
 
 import time
 import json
-import threading
+import contextvars
 from typing import Optional, List, Dict, Any, Callable, Coroutine, Any as AnyType
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
@@ -476,10 +476,21 @@ class SessionRecordManager:
     会话记录管理器
 
     管理当前请求的生命周期内的记录服务实例。
-    使用 threading.local() 实现线程隔离。
+    使用 contextvars.ContextVar 实现 asyncio task 级隔离。
+
+    为什么用 ContextVar 而非 threading.local()：
+    wecom_kf / web SSE 等多条消息通过 asyncio.create_task 并发处理，
+    它们共享同一事件循环线程。threading.local() 是线程级单槽，并发 task
+    的 start_record 会互相覆盖 record_service，导致 end_record 保存错误
+    实例、真实发生的 LLM/ASR 计费丢失。ContextVar 按 asyncio task 隔离，
+    同一 task 内 start→end 顺序配对；无 asyncio 的同步代码按线程存储
+    （等价 threading.local），后台线程无上下文时 get() 返回 None，
+    与原有语义一致（走独立落库兜底）。
     """
 
-    _local = threading.local()
+    _local: "contextvars.ContextVar[Optional[SessionRecordService]]" = contextvars.ContextVar(
+        "session_record_manager", default=None
+    )
 
     @classmethod
     def start_record(
@@ -491,27 +502,28 @@ class SessionRecordManager:
         source_type: str = "chat"
     ) -> SessionRecordService:
         """开始一条新的记录"""
-        cls._local.record_service = SessionRecordService(
+        service = SessionRecordService(
             session_id=session_id,
             user_id=user_id,
             user_message=user_message,
             tenant_id=tenant_id,
             source_type=source_type
         )
-        return cls._local.record_service
+        cls._local.set(service)
+        return service
 
     @classmethod
     def get_current_record(cls) -> Optional[SessionRecordService]:
         """获取当前记录服务"""
-        return getattr(cls._local, 'record_service', None)
+        return cls._local.get()
 
     @classmethod
     def end_record(cls) -> Optional[Dict[str, Any]]:
         """结束当前记录并保存"""
-        if hasattr(cls._local, 'record_service') and cls._local.record_service:
-            record = cls._local.record_service.save()
-            cls._local.record_service = None
-            return record
+        record = cls._local.get()
+        if record is not None:
+            cls._local.set(None)
+            return record.save()
         return None
 
 
