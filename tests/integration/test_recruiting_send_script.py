@@ -52,6 +52,14 @@ def temp_tenant_with_user():
     except Exception:
         pass
     TenantDB.delete(tenant_id)
+    # TenantDB.delete 仅是软删除（status=deactivated），需追加物理删除避免测试租户堆积
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM tenants WHERE tenant_id = %s", (tenant_id,))
+            conn.commit()
+    except Exception:
+        pass
 
 
 def _call(coro):
