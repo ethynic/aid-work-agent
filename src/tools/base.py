@@ -154,3 +154,53 @@ class BaseTool(ABC):
             if param not in kwargs or kwargs[param] is None:
                 missing.append(param)
         return missing
+
+    def get_validation_errors(self, **kwargs) -> List[str]:
+        """
+        获取参数校验的可读错误信息列表（覆盖所有 Pydantic 错误类型，含类型错误）。
+
+        原先 `get_missing_parameters` 只提取 `missing`/`value_error` 两类错误，
+        当 LLM 传了类型错误（如 headers 传 JSON 字符串导致 `dict_type`）时会返回
+        空列表，生成误导性的"缺少必需参数: []"，LLM 无法自纠导致死循环。
+
+        Args:
+            **kwargs: 工具参数
+
+        Returns:
+            可读错误信息列表，如
+            ["headers: Input should be a valid dictionary（实际输入类型: str）"]
+        """
+        if self.InputModel is not None:
+            try:
+                self.InputModel(**kwargs)
+                return []
+            except Exception as e:
+                errors: List[str] = []
+                if hasattr(e, 'errors'):
+                    for err in e.errors():
+                        loc = '.'.join(str(x) for x in err.get('loc', ()))
+                        msg = err.get('msg', '') or '参数无效'
+                        input_type = self._describe_validation_input(err)
+                        if loc:
+                            errors.append(f"{loc}: {msg}（实际输入类型: {input_type}）")
+                        else:
+                            errors.append(f"{msg}（实际输入类型: {input_type}）")
+                return errors
+
+        # 旧的 schema 校验路径：无 InputModel，仅按必填字段判断
+        required = self.parameters_schema.get("required", [])
+        errors = []
+        for param in required:
+            if param not in kwargs or kwargs[param] is None:
+                errors.append(f"{param}: 缺少必需参数（实际输入类型: 未提供）")
+        return errors
+
+    @staticmethod
+    def _describe_validation_input(err: Dict[str, Any]) -> str:
+        """从 Pydantic 错误条目中提取实际输入类型描述，便于 LLM 自纠。"""
+        if err.get("type") == "missing":
+            return "未提供"
+        raw = err.get("input")
+        if raw is None:
+            return "None"
+        return type(raw).__name__

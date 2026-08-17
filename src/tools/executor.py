@@ -74,12 +74,18 @@ class ToolExecutor:
         # 参数验证
         if not tool.validate_parameters(**parameters):
             missing = tool.get_missing_parameters(**parameters)
-            error_msg = f"缺少必需参数: {missing}"
+            validation_errors = tool.get_validation_errors(**parameters)
+            if validation_errors:
+                # 优先给出可读的具体错误（含类型错误），避免误导性的"缺少必需参数: []"
+                error_msg = f"参数校验失败: {'; '.join(validation_errors)}"
+            else:
+                error_msg = f"缺少必需参数: {missing}"
             logger.warning(error_msg)
             return {
                 "success": False,
                 "error": error_msg,
                 "missing_parameters": missing,
+                "validation_errors": validation_errors,
             }
         
         # 执行工具
