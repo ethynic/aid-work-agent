@@ -31,6 +31,8 @@ public class Win32 {
     [DllImport("user32.dll", CharSet=CharSet.Ansi)] public static extern int GetClassName(IntPtr hWnd, StringBuilder sb, int max);
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT r);
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
     [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint flags);
     [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(POINT p);
     [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
@@ -104,12 +106,18 @@ function Test-PointOnRenderWidget([int]$sx, [int]$sy, $rw) {
 $win = [Win32]::FindWindowByTitle($TitleKeyword)
 if ($win -eq [IntPtr]::Zero) { Write-Error "未找到标题含「$TitleKeyword」的窗口"; exit 1 }
 
-$rw = [Win32]::FindRenderWidget($win)
-if ($rw -eq [IntPtr]::Zero) { Write-Error "未找到 Chrome 渲染子窗口"; exit 1 }
-if (-not [Win32]::IsWindowVisible($rw)) { Write-Error "渲染子窗口不可见：BOSS 标签页可能在后台，请切换到前台后重试"; exit 1 }
-
+# Chrome 最小化时 render widget 被销毁（EnumChildWindows 枚举不到，真机 2026-08-17 实证：
+# 主窗口在但 0 子窗口）。必须先还原 + 前台化，再定位 render widget（与 cv-wheel.ps1 同款修复）
+if ([Win32]::IsIconic($win)) {
+  [Win32]::ShowWindow($win, 9) | Out-Null   # SW_RESTORE
+  Start-Sleep -Milliseconds 400
+}
 [Win32]::SetForegroundWindow($win) | Out-Null
 Start-Sleep -Milliseconds 300
+
+$rw = [Win32]::FindRenderWidget($win)
+if ($rw -eq [IntPtr]::Zero) { Write-Error "未找到 Chrome 渲染子窗口（窗口已还原仍无渲染子窗口）"; exit 1 }
+if (-not [Win32]::IsWindowVisible($rw)) { Write-Error "渲染子窗口不可见：BOSS 标签页可能在后台，请切换到前台后重试"; exit 1 }
 
 $pt = Get-ScreenPoint $rw $CssW $CssH $X $Y
 $sx = $pt[0]; $sy = $pt[1]
