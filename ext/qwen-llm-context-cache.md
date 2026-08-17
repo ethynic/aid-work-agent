@@ -27,6 +27,20 @@
 
 本文内容适用 OpenAI Chat Completions 、 DashScope 与 Anthropic 兼容接口。使用 Responses API 可通过 Session 缓存降低推理延迟与成本，详情参考[Session 缓存](https://help.aliyun.com/zh/model-studio/compatibility-with-openai-responses-api#example-session-cache)。
 
+> **本项目业务空间信息（2026-08-17 记录，华北2·北京）**
+>
+> - 业务空间 ID：`ws-hjp2aklyr0ramcne`
+> - OpenAI 兼容端点：`https://ws-hjp2aklyr0ramcne.cn-beijing.maas.aliyuncs.com/compatible-mode/v1`
+> - DashScope 端点：`https://ws-hjp2aklyr0ramcne.cn-beijing.maas.aliyuncs.com/api/v1`
+>
+> **legacy vs MaaS 端点缓存差异实测结论（2026-08-17）**：
+>
+> - **legacy 端点**（`https://dashscope.aliyuncs.com/compatible-mode/v1`）：qwen3.7-flash **隐式缓存完全无效**（25K 稳定前缀重复 3 次均无 `cached_tokens`），显式缓存可用。
+> - **MaaS 端点**（本业务空间）：隐式缓存**仅在默认思考模式下偶发命中**（P1 组 6 次命中 2 次、~30%，符合文档"命中率不确定"），`enable_thinking=false` 下**完全不命中**（14+ 次全空）。
+> - 生产强制 `enable_thinking=false`（思考模式延迟 12s+ 不可用）→ **隐式缓存对生产不可用，两条端点皆然**。显式缓存不受 `enable_thinking` 影响（两条端点均完美命中）。
+>
+> **显式末尾标记方案实测（MaaS 端点，enable_thinking=false）**：`cache_control` 标记放在**消息数组末尾**而非首条 system，创建的缓存块覆盖**整个消息数组**；下一轮追加新消息后前序块完整命中（命中 10%），仅新增尾部按创建 125% 计费。13 块与 27 块数组均完整命中——文档「20 content 块回溯」限制指**相邻标记之间间隔**，只要每轮都在末尾放标记即不触发。这是生产唯一可行的全量缓存路径。
+
 ## **显式缓存**
 
 与隐式缓存相比，显式缓存需要显式创建并承担相应开销，但能实现更高的缓存命中率和更低的访问延迟。
