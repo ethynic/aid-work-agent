@@ -613,7 +613,12 @@ class BossSendToTool(LocalToolProxyTool):
             if excerpt:
                 result["resume_excerpt"] = excerpt
             else:
-                result["resume_hint"] = f"简历库暂无「{kwargs['to']}」的简历，请基于会话上下文与用户确认的内容填写"
+                result["resume_hint"] = (
+                    f"简历库暂无「{kwargs['to']}」的简历。占位符必须有真实证据，三选一："
+                    "① 改用无占位符的话术（如 开场·技术栈匹配 / 开场·活跃候选人）；"
+                    "② 先用 boss_resume_detail 读取其简历入库后再填；"
+                    "③ 会话中确有其信息时据实填写——严禁凭空编造亮点"
+                )
             return result
         if not (kwargs.get("message") or "").strip():
             return {"success": False, "code": "INVALID_ARGS",
