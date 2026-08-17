@@ -31,6 +31,11 @@ public class Win32 {
     [DllImport("user32.dll", CharSet=CharSet.Ansi)] public static extern int GetClassName(IntPtr hWnd, StringBuilder sb, int max);
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT r);
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, ref uint pid);
+    [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
+    [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
     [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
     [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint flags);
@@ -112,8 +117,18 @@ if ([Win32]::IsIconic($win)) {
   [Win32]::ShowWindow($win, 9) | Out-Null   # SW_RESTORE
   Start-Sleep -Milliseconds 400
 }
-[Win32]::SetForegroundWindow($win) | Out-Null
-Start-Sleep -Milliseconds 300
+# 强制前台（Windows 前台锁：后台进程直接 SetForegroundWindow 常被静默拒绝，真机 2026-08-17
+# 实证：用户在别的窗口操作 Web 时调试 Chrome 被压后台 → 工具全线「渲染子窗口不可见」）。
+# AttachThreadInput 把本线程挂到当前前台线程的输入队列后，SetForegroundWindow 即可成功
+$fg = [Win32]::GetForegroundWindow()
+$fgPid = [uint32]0
+$fgThread = [Win32]::GetWindowThreadProcessId($fg, [ref]$fgPid)
+$thisThread = [Win32]::GetCurrentThreadId()
+[void][Win32]::AttachThreadInput($thisThread, $fgThread, $true)
+[void][Win32]::BringWindowToTop($win)
+[void][Win32]::SetForegroundWindow($win)
+[void][Win32]::AttachThreadInput($thisThread, $fgThread, $false)
+Start-Sleep -Milliseconds 400
 
 $rw = [Win32]::FindRenderWidget($win)
 if ($rw -eq [IntPtr]::Zero) { Write-Error "未找到 Chrome 渲染子窗口（窗口已还原仍无渲染子窗口）"; exit 1 }

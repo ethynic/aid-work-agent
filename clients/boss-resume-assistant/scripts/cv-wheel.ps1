@@ -49,6 +49,11 @@ public class CvWin32 {
     [DllImport("user32.dll", CharSet=CharSet.Ansi)] public static extern int GetClassName(IntPtr hWnd, StringBuilder sb, int max);
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT r);
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, ref uint pid);
+    [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
+    [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
     [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
     [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
@@ -109,8 +114,17 @@ if ([CvWin32]::IsIconic($win)) {
     [CvWin32]::ShowWindow($win, 9) | Out-Null   # SW_RESTORE
     Start-Sleep -Milliseconds 400
 }
-[CvWin32]::SetForegroundWindow($win) | Out-Null
-Start-Sleep -Milliseconds 300
+# Force foreground (Windows foreground lock: SetForegroundWindow from a background process is
+# silently denied; AttachThreadInput onto the current foreground thread makes it succeed).
+$fg = [CvWin32]::GetForegroundWindow()
+$fgPid = [uint32]0
+$fgThread = [CvWin32]::GetWindowThreadProcessId($fg, [ref]$fgPid)
+$thisThread = [CvWin32]::GetCurrentThreadId()
+[void][CvWin32]::AttachThreadInput($thisThread, $fgThread, $true)
+[void][CvWin32]::BringWindowToTop($win)
+[void][CvWin32]::SetForegroundWindow($win)
+[void][CvWin32]::AttachThreadInput($thisThread, $fgThread, $false)
+Start-Sleep -Milliseconds 400
 
 $rw = [CvWin32]::FindRenderWidget($win)
 if ($rw -eq [IntPtr]::Zero) { Write-Error "Chrome_RenderWidgetHostHWND not found: the BOSS Chrome window is suspended in background (its render child windows are destroyed). Click the Chrome window to bring it to the foreground, then retry."; exit 1 }
