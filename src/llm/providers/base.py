@@ -120,7 +120,9 @@ class BaseLLMProvider(ABC):
         Args:
             messages: 原始消息列表
             use_cache: 是否启用显式缓存。仅 qwen provider 传入 True（且 model 为 qwen 系时生效），
-                把第一条 system 消息 content 转数组 + cache_control: ephemeral。
+                在消息数组最后一条消息的 content 上追加 cache_control: ephemeral——末尾标记创建的
+                缓存块覆盖整个消息数组（system + 全部历史 + 工具结果），agent 循环下一轮追加新消息后
+                前序块完整命中（10% 计费），仅新增尾部按创建（125%）计费。
                 其他 provider 保持默认 False，行为与改动前完全一致。
 
         Returns:
@@ -150,14 +152,20 @@ class BaseLLMProvider(ABC):
             elif isinstance(content, list):
                 # 处理多模态内容
                 formatted.append({"role": role, "content": content})
-            elif use_cache and self._is_qwen_model() and role == "system" and not formatted:
-                # 显式缓存：仅 qwen 系模型第一条 system 消息加 cache_control（命中按 10% 计费）
-                formatted.append({"role": "system", "content": [
-                    {"type": "text", "text": str(content), "cache_control": {"type": "ephemeral"}}
-                ]})
             else:
                 formatted.append({"role": role, "content": str(content)})
 
+        # 显式缓存：标记从「首条 system」改为「最后一条消息」。
+        # 末尾标记创建的缓存块覆盖整个消息数组，agent 循环下一轮前序块完整命中（10%），
+        # 仅新增尾部按创建（125%）计费。仅 qwen 系文本模型生效（_is_qwen_model）。
+        if use_cache and self._is_qwen_model() and formatted:
+            last = formatted[-1]
+            if isinstance(last["content"], str):
+                last["content"] = [{"type": "text", "text": last["content"],
+                                    "cache_control": {"type": "ephemeral"}}]
+            elif isinstance(last["content"], list) and last["content"]:
+                last["content"][-1] = {**last["content"][-1],
+                                       "cache_control": {"type": "ephemeral"}}
         return formatted
     
     def _format_tools(

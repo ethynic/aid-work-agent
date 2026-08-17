@@ -1,9 +1,9 @@
 """qwen3.7-flash enable_thinking / 显式缓存开关单元测试
 
-覆盖（plan-qwen3-7-flash-replacement.md 测试方案）：
-- _format_messages 缓存开：首条 system 转数组 + cache_control，后续消息不变
+覆盖（plan-qwen3-7-flash-context-cache-optimization.md 测试方案）：
+- _format_messages 缓存开：最后一条消息转数组 + cache_control，首条 system 保持字符串 content
 - _format_messages 缓存关：全部走原逻辑（字符串 content）
-- 非首条 system 不缓存
+- 仅最后一条消息被标记（末尾标记覆盖整个消息数组）
 - chat() enable_thinking true / false / None 三态，request_body 正确写/不写该键
 - 非 qwen 系 model（百炼第三方）即便 context_cache=True 也不加 cache_control，且 enable_thinking 不写入
 """
@@ -37,20 +37,22 @@ def _mock_response(content: str = "hi") -> MagicMock:
 
 
 class TestFormatMessagesCache:
-    def test_cache_on_first_system_becomes_array(self):
+    def test_cache_on_last_message_becomes_array(self):
+        # 缓存开：最后一条消息（user）被转数组 + cache_control，首条 system 保持字符串 content
         p = _StubProvider(api_key="k", model="qwen3.7-flash")
         messages = [
             {"role": "system", "content": "你是助手"},
             {"role": "user", "content": "你好"},
         ]
         formatted = p._format_messages(messages, use_cache=True)
-        assert formatted[0]["role"] == "system"
-        assert isinstance(formatted[0]["content"], list)
-        assert formatted[0]["content"][0]["type"] == "text"
-        assert formatted[0]["content"][0]["text"] == "你是助手"
-        assert formatted[0]["content"][0]["cache_control"] == {"type": "ephemeral"}
-        # 后续消息不变（字符串 content）
-        assert formatted[1] == {"role": "user", "content": "你好"}
+        # 首条 system 保持字符串 content，不被数组化
+        assert formatted[0] == {"role": "system", "content": "你是助手"}
+        # 最后一条消息被转数组 + cache_control
+        assert formatted[1]["role"] == "user"
+        assert isinstance(formatted[1]["content"], list)
+        assert formatted[1]["content"][0]["type"] == "text"
+        assert formatted[1]["content"][0]["text"] == "你好"
+        assert formatted[1]["content"][0]["cache_control"] == {"type": "ephemeral"}
 
     def test_cache_off_all_string_content(self):
         p = _StubProvider(api_key="k", model="qwen3.7-flash")
@@ -64,8 +66,8 @@ class TestFormatMessagesCache:
             {"role": "user", "content": "你好"},
         ]
 
-    def test_only_first_message_cached(self):
-        # 首条是 user 时，后续 system 也不再缓存（仅首条消息可加缓存标记）
+    def test_only_last_message_cached(self):
+        # 仅最后一条消息被标记（末尾标记覆盖整个消息数组），首条 user 保持字符串 content
         p = _StubProvider(api_key="k", model="qwen3.7-flash")
         messages = [
             {"role": "user", "content": "你好"},
@@ -73,7 +75,66 @@ class TestFormatMessagesCache:
         ]
         formatted = p._format_messages(messages, use_cache=True)
         assert formatted[0] == {"role": "user", "content": "你好"}
-        assert formatted[1] == {"role": "system", "content": "第二条 system"}
+        assert formatted[1]["role"] == "system"
+        assert isinstance(formatted[1]["content"], list)
+        assert formatted[1]["content"][0]["text"] == "第二条 system"
+        assert formatted[1]["content"][0]["cache_control"] == {"type": "ephemeral"}
+
+    def test_cache_empty_messages_returns_empty(self):
+        # 空消息列表：末尾标记逻辑的 `if formatted` 守卫，返回 [] 不崩
+        p = _StubProvider(api_key="k", model="qwen3.7-flash")
+        formatted = p._format_messages([], use_cache=True)
+        assert formatted == []
+
+    def test_cache_on_list_content_appends_to_last_block(self):
+        # 最后一条已是 list content（多模态/已数组化）：对最后一个 content 块追加
+        # cache_control，且不覆盖原字段
+        p = _StubProvider(api_key="k", model="qwen3.7-flash")
+        messages = [
+            {"role": "system", "content": "你是助手"},
+            {"role": "user", "content": [
+                {"type": "text", "text": "看图说话"},
+                {"type": "image_url", "image_url": {"url": "http://x/img.png"}},
+            ]},
+        ]
+        formatted = p._format_messages(messages, use_cache=True)
+        assert formatted[0] == {"role": "system", "content": "你是助手"}
+        last_content = formatted[1]["content"]
+        assert isinstance(last_content, list) and len(last_content) == 2
+        # 最后一个 content 块追加 cache_control，原字段保留
+        assert last_content[-1]["type"] == "image_url"
+        assert last_content[-1]["image_url"] == {"url": "http://x/img.png"}
+        assert last_content[-1]["cache_control"] == {"type": "ephemeral"}
+        # 前一个 content 块不受影响
+        assert "cache_control" not in last_content[0]
+
+    def test_cache_on_agent_loop_tool_result(self):
+        # 模拟 agent 循环：system + assistant tool_calls + tool 结果，
+        # 标记落在最后一条 tool 消息上，system 保持字符串 content
+        p = _StubProvider(api_key="k", model="qwen3.7-flash")
+        messages = [
+            {"role": "system", "content": "你是助手"},
+            {"role": "user", "content": "查一下天气"},
+            {"role": "assistant", "content": "", "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "weather", "arguments": "{}"}},
+            ]},
+            {"role": "tool", "tool_call_id": "call_1", "content": {"city": "北京", "temp": 25}},
+        ]
+        formatted = p._format_messages(messages, use_cache=True)
+        # 首条 system 保持字符串 content
+        assert formatted[0] == {"role": "system", "content": "你是助手"}
+        # assistant tool_calls 消息 content 保持字符串（空串），不带 cache_control
+        assert formatted[2]["role"] == "assistant"
+        assert "tool_calls" in formatted[2]
+        assert formatted[2]["content"] == ""
+        # 标记落在最后一条 tool 消息上
+        last = formatted[-1]
+        assert last["role"] == "tool"
+        assert last["tool_call_id"] == "call_1"
+        assert isinstance(last["content"], list)
+        assert last["content"][0]["type"] == "text"
+        assert last["content"][0]["text"] == '{"city": "北京", "temp": 25}'
+        assert last["content"][0]["cache_control"] == {"type": "ephemeral"}
 
     def test_non_qwen_model_not_cached(self):
         # 百炼第三方模型（deepseek 前缀）即便 use_cache=True 也不加 cache_control
@@ -124,12 +185,12 @@ class TestChatEnableThinking:
         assert "enable_thinking" not in body
 
     async def test_context_cache_wired_to_format_messages(self):
-        # 缓存开关开启时，qwen 系模型首条 system 应为数组 + cache_control
+        # 缓存开关开启时，qwen 系模型最后一条消息应为数组 + cache_control
         body = await self._run_chat("qwen3.7-flash", False, context_cache=True)
-        first = body["messages"][0]
-        assert first["role"] == "system"
-        assert isinstance(first["content"], list)
-        assert first["content"][0]["cache_control"] == {"type": "ephemeral"}
+        last = body["messages"][-1]
+        assert last["role"] == "user"
+        assert isinstance(last["content"], list)
+        assert last["content"][0]["cache_control"] == {"type": "ephemeral"}
 
     async def test_context_cache_disabled_plain_string(self):
         body = await self._run_chat("qwen3.7-flash", False, context_cache=False)
