@@ -215,6 +215,9 @@ def main():
         print(json.dumps({
             "success": True,
             "data": result,
+            # 更新后的报价结果须完整返回（schema 与 generate.py 一致）：rows 供 LLM 复述，
+            # 新的 internal_data 须原样回传给下一次 update_hotel 调用，截断成非法 JSON 会断链。
+            "_no_truncate": True
         }, ensure_ascii=False, indent=2, default=str))
 
     except json.JSONDecodeError as e:

@@ -3513,14 +3513,19 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
             # _get_last_use_skill_version 需解析 skill_version，截断成非法 JSON 会破坏解析链路。
             for tool_result in tool_results:
                 _raw_content = tool_result["content"]
+                _no_truncate = bool(tool_result.get("_no_truncate"))
                 if isinstance(_raw_content, dict):
+                    # 工具可经 _no_truncate 声明"文档型输出不截断"（如 load_api_config 的
+                    # API 说明文档，截断后 LLM 无法完成获取）。内部键 pop 掉，不进入给 LLM 的 JSON。
+                    if _raw_content.pop("_no_truncate", None):
+                        _no_truncate = True
                     _raw_content = json.dumps(_raw_content, ensure_ascii=False)
                 elif not isinstance(_raw_content, str):
                     _raw_content = str(_raw_content)
                 tool_message = {
                     "role": "tool",
                     "tool_call_id": tool_result["tool_call_id"],
-                    "content": _raw_content if tool_result.get("_no_truncate") else _truncate_tool_content(_raw_content)
+                    "content": _raw_content if _no_truncate else _truncate_tool_content(_raw_content)
                 }
                 messages.append(tool_message)
                 # Save tool result to memory
@@ -4197,18 +4202,19 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                     # use_skill 豁免截断：其 content 是技能操作指南（LLM 执行依据），且
                     # _check_skill_version_consistency → _get_last_use_skill_version 需从结果解析
                     # skill_version，截断成非法 JSON 会致解析失败 → 版本校验拦截死循环。
-                    _serialized_result = (
-                        json.dumps(tool_result, ensure_ascii=False)
-                        if isinstance(tool_result, dict) else str(tool_result)
-                    )
+                    # 工具也可经返回 dict 中的 _no_truncate 声明"文档型输出不截断"
+                    # （如 load_api_config 的 API 说明文档），内部键 pop 掉不进入给 LLM 的 JSON。
+                    _no_truncate = tool_name == "use_skill"
+                    if isinstance(tool_result, dict):
+                        if tool_result.pop("_no_truncate", None):
+                            _no_truncate = True
+                        _serialized_result = json.dumps(tool_result, ensure_ascii=False)
+                    else:
+                        _serialized_result = str(tool_result)
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tc.get("id", ""),
-                        "content": (
-                            _serialized_result
-                            if tool_name == "use_skill"
-                            else _truncate_tool_content(_serialized_result)
-                        )
+                        "content": _serialized_result if _no_truncate else _truncate_tool_content(_serialized_result)
                     })
 
             # 发送子任务完成消息

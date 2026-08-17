@@ -267,7 +267,7 @@ class SkillExecuteTool(BaseTool):
             # 构建 error 字段：优先使用 result.error，fallback 到 stderr
             exec_error = result.error or result.stderr or f"exit_code={result.exit_code}"
 
-            return {
+            resp = {
                 "success": result.success,
                 "stdout": result.stdout,
                 "stderr": result.stderr,
@@ -276,6 +276,17 @@ class SkillExecuteTool(BaseTool):
                 "timed_out": result.timed_out,
                 "error": exec_error
             }
+            # 脚本可通过 stdout JSON 中的 _no_truncate 声明输出不宜截断
+            # （如 load_api_config 返回外部 API 说明文档，LLM 需完整内容才能调用接口）。
+            # 提升到返回结果顶层，供 agent 工具结果截断逻辑识别豁免。
+            if result.stdout:
+                try:
+                    stdout_obj = _json.loads(result.stdout)
+                    if isinstance(stdout_obj, dict) and stdout_obj.get("_no_truncate"):
+                        resp["_no_truncate"] = True
+                except (_json.JSONDecodeError, TypeError):
+                    pass
+            return resp
 
         except Exception as e:
             logger.error(f"Skill execute failed: {e}")

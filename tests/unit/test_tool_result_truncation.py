@@ -224,6 +224,68 @@ class TestMasterAgentToolResultTruncation:
         assert "已截断" in tool_msgs[0]["content"]
         assert tool_msgs[0]["content"] == _truncate_tool_content(big_str)
 
+    async def test_dict_no_truncate_flag_not_truncated(self, monkeypatch):
+        """工具经返回 dict 中 _no_truncate: True 声明"文档型输出不截断"：
+        超长内容豁免截断，且内部键被 pop，不进入给 LLM 的 JSON。
+        （load_api_config 的 API 说明文档场景：截断后 LLM 无法完成获取。）
+        """
+        big_result = {
+            "success": True,
+            "content": "x" * 30000,
+            "configured": True,
+            "_no_truncate": True,
+        }
+        agent = self._make_agent(monkeypatch, big_result)
+
+        tool_msgs = await self._run_to_tool_messages(agent)
+        assert len(tool_msgs) == 1
+        assert "已截断" not in tool_msgs[0]["content"], "声明 _no_truncate 的超长工具结果应豁免截断"
+        # 完整 JSON（不含 _no_truncate 内部键）原样传给 LLM
+        expected = json.dumps(
+            {"success": True, "content": "x" * 30000, "configured": True},
+            ensure_ascii=False,
+        )
+        assert tool_msgs[0]["content"] == expected
+        assert "_no_truncate" not in tool_msgs[0]["content"], "内部标记键不应进入给 LLM 的 JSON"
+
+    async def test_travel_quote_internal_data_preserved(self, monkeypatch):
+        """端到端：travel-quote generate.py 输出（大 rows + internal_data + _no_truncate 提升）
+        主智能体接入点豁免截断，完整 JSON 原样喂给 LLM，internal_data 可 json.loads 提取
+        用于原样回传 update_hotel.py（换酒店链路依赖）。"""
+        big_rows = [{"成本类别": "住宿", "项目": f"酒店{i}", "费用小计": 100 + i} for i in range(300)]
+        stdout = json.dumps({
+            "success": True,
+            "data": {
+                "rows": big_rows,
+                "合计_费用小计": 1000,
+                "internal_data": {"items": [{"name": "x"}], "hotel_stays": [{"city": "贵阳"}]},
+            },
+            "_no_truncate": True,
+        }, ensure_ascii=False)
+        # skill_execute 工具提升后的返回：stdout（含 _no_truncate 声明）+ 顶层 _no_truncate
+        skill_exec_result = {
+            "success": True,
+            "stdout": stdout,
+            "stderr": "",
+            "exit_code": 0,
+            "duration": 0.1,
+            "timed_out": False,
+            "error": "",
+            "_no_truncate": True,
+        }
+        agent = self._make_agent(monkeypatch, skill_exec_result)
+
+        tool_msgs = await self._run_to_tool_messages(agent)
+        assert len(tool_msgs) == 1
+        assert "已截断" not in tool_msgs[0]["content"], "travel-quote 报价结果应豁免截断"
+        parsed = json.loads(tool_msgs[0]["content"])
+        assert "_no_truncate" not in parsed, "工具提升的标记键应被 pop，不进入给 LLM 的 JSON 顶层"
+        assert parsed["stdout"].startswith('{"success": true')
+        stdout_parsed = json.loads(parsed["stdout"])
+        assert len(stdout_parsed["data"]["rows"]) == 300, "rows 明细须完整（LLM 复述依据）"
+        assert stdout_parsed["data"]["internal_data"]["items"] == [{"name": "x"}], \
+            "internal_data 须完整（update_hotel.py 原样回传依赖）"
+
     async def test_use_skill_guide_not_truncated(self, monkeypatch):
         """use_skill 加载的技能指南（超 12K 大技能）豁免截断：
         skill_version 解析链路依赖完整 JSON，且指南须完整喂给 LLM。
@@ -357,6 +419,23 @@ class TestSubagentToolResultTruncation:
         assert "已截断" not in tool_msgs[0]["content"]
         assert tool_msgs[0]["content"] == json.dumps(short_result, ensure_ascii=False)
 
+    async def test_dict_no_truncate_flag_not_truncated(self, monkeypatch):
+        """子智能体：工具经返回 dict 中 _no_truncate: True 声明"文档型输出不截断"，
+        超长内容豁免截断，内部键被 pop 不进入给 LLM 的 JSON（与主智能体一致的修复）。"""
+        big_result = {
+            "success": True,
+            "data": "z" * 25000,
+            "_no_truncate": True,
+        }
+        agent = self._make_agent(monkeypatch, big_result)
+
+        tool_msgs = await self._run_to_tool_messages(agent)
+        assert len(tool_msgs) == 1
+        assert "已截断" not in tool_msgs[0]["content"], "声明 _no_truncate 的超长工具结果应豁免截断"
+        expected = json.dumps({"success": True, "data": "z" * 25000}, ensure_ascii=False)
+        assert tool_msgs[0]["content"] == expected
+        assert "_no_truncate" not in tool_msgs[0]["content"], "内部标记键不应进入给 LLM 的 JSON"
+
     async def test_use_skill_guide_not_truncated(self, monkeypatch):
         """子智能体：use_skill 技能指南豁免截断（与主智能体一致的 P1 修复）。"""
         big_guide = "S" * 20000
@@ -392,3 +471,64 @@ class TestSubagentToolResultTruncation:
         assert tool_msgs[0]["content"] == expected, "子智能体 use_skill 技能指南必须完整（豁免截断）"
         assert "已截断" not in tool_msgs[0]["content"]
         assert json.loads(tool_msgs[0]["content"])["skill_version"] == "1.0.0"
+
+
+# ------------------------------------------------------- skill_execute 声明提升
+
+class TestSkillExecuteNoTruncateLift:
+    """skill_execute 工具把脚本 stdout JSON 中声明的 _no_truncate 提升到返回结果顶层。
+
+    travel-quote 场景：generate.py / update_hotel.py 输出的 rows（LLM 复述依据）+ internal_data
+    （须原样回传给 update_hotel.py）超 12K 时不得截断；load_api_config 的 API 说明文档同理。
+    脚本只需在 stdout JSON 中声明 _no_truncate，工具负责翻译给 agent 截断逻辑识别。
+    """
+
+    @staticmethod
+    def _make_executor(stdout: str):
+        result = MagicMock()
+        for k, v in [("success", True), ("exit_code", 0), ("duration", 0.1),
+                     ("timed_out", False), ("error", None), ("stderr", "")]:
+            setattr(result, k, v)
+        result.stdout = stdout
+        executor = MagicMock()
+        executor.execute_skill_command = AsyncMock(return_value=result)
+        return executor
+
+    async def _run_tool(self, stdout: str) -> dict:
+        from src.tools.skill.skill_execute_tool import SkillExecuteTool
+        registry = MagicMock()
+        registry.get.return_value = MagicMock()
+        tool = SkillExecuteTool(self._make_executor(stdout), registry)
+        return await tool.execute(
+            skill="travel-quote",
+            command="python scripts/generate.py",
+            user_id="u1",  # 传 user_id 规避 execute 内的 SessionDB 查询
+        )
+
+    async def test_declared_no_truncate_lifted_to_top_level(self):
+        """脚本 stdout JSON 声明 _no_truncate -> 提升到返回结果顶层，stdout 原样保留。"""
+        big_content = "A" * 30000
+        stdout = json.dumps({
+            "success": True,
+            "data": {"rows": [{"费用小计": 100}], "internal_data": {"items": big_content}},
+            "_no_truncate": True,
+        }, ensure_ascii=False)
+        resp = await self._run_tool(stdout)
+        assert resp["_no_truncate"] is True, "脚本声明 _no_truncate 应提升到返回顶层"
+        assert resp["stdout"] == stdout, "stdout 应原样保留"
+
+    async def test_no_declaration_not_lifted(self):
+        """脚本 stdout JSON 无声明 -> 返回结果不带 _no_truncate 键。"""
+        resp = await self._run_tool(json.dumps({"success": True, "data": {"ok": 1}}, ensure_ascii=False))
+        assert "_no_truncate" not in resp
+
+    async def test_non_json_stdout_not_lifted(self):
+        """脚本 stdout 非 JSON（普通文本/错误输出）-> 不加键。"""
+        resp = await self._run_tool("plain text output")
+        assert "_no_truncate" not in resp
+
+    async def test_no_truncate_flag_lifted_preserved(self):
+        """提升后的 _no_truncate 标记保留在返回结果顶层，供 agent 截断逻辑识别。"""
+        stdout = json.dumps({"success": True, "data": {"x": "y" * 20000}, "_no_truncate": True}, ensure_ascii=False)
+        resp = await self._run_tool(stdout)
+        assert resp.get("_no_truncate") is True

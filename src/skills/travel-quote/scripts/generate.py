@@ -408,6 +408,10 @@ def main():
         print(json.dumps({
             "success": True,
             "data": result,
+            # 报价结果须完整返回：① rows 是 LLM 复述报价明细的依据（不得截断丢失中间项）；
+            # ② internal_data 须原样回传给 update_hotel.py（客户换酒店时），截断成非法 JSON
+            #    会致 update_hotel 无法解析。声明 _no_truncate，agent 工具结果截断逻辑据此豁免。
+            "_no_truncate": True
         }, ensure_ascii=False, indent=2, default=str))
 
     except json.JSONDecodeError as e:

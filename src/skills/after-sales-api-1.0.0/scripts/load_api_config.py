@@ -76,7 +76,10 @@ def load_api_config():
     print(json.dumps({
         "success": True,
         "content": content,
-        "configured": True
+        "configured": True,
+        # API 说明文档是 LLM 调用外部系统接口的唯一依据，超长也须完整返回；
+        # 声明 _no_truncate，agent 工具结果截断逻辑据此豁免（截断会导致 LLM 无法完成获取）。
+        "_no_truncate": True
     }, ensure_ascii=False))
 
 
