@@ -84,6 +84,13 @@ class KnowledgeBaseTool(BaseTool):
         top_k = kwargs.get("top_k", 10)
         source_type = kwargs.get("source_type")
 
+        # LLM 可能把 top_k 以字符串形式传入（如 "10"），强转为 int；
+        # 否则 top_k*3 变成字符串拼接、filtered[:top_k] 切片抛 slice indices 错误
+        try:
+            top_k = int(top_k)
+        except (TypeError, ValueError):
+            top_k = 10
+
         if not query:
             return {
                 "success": False,

@@ -90,3 +90,37 @@ async def test_kb_search_empty_results():
     assert result["results"] == []
     # 无结果时不应查 DB
     assert not db_mock.called
+
+
+async def test_kb_search_top_k_string_coerced_to_int():
+    """LLM 以字符串传入 top_k（如 "10"）时强转为 int，避免 top_k*3 字符串拼接 + slice 报错"""
+    tool = _make_tool()
+    mock_retriever = MagicMock()
+    mock_retriever.retrieve = AsyncMock(return_value=[
+        {"doc_id": 1, "text": "x", "score": 0.9, "metadata": {}},
+    ])
+    tool._retriever = mock_retriever
+
+    mock_cm, _ = _mock_db([{"id": 1, "title": "t.txt", "file_path": None}])
+
+    with patch("src.tools.knowledge.knowledge_base_tool.get_db_connection", return_value=mock_cm):
+        result = await tool.execute(query="test", top_k="10")
+
+    assert result["success"] is True
+    # retrieve 收到的是 int 10（而非字符串，top_k*3 才不会变成 "101010"）
+    call_kwargs = mock_retriever.retrieve.call_args.kwargs
+    assert call_kwargs["top_k"] == 10
+
+
+async def test_kb_search_top_k_invalid_falls_back_to_default():
+    """top_k 传无法转换的值时回退到默认 10"""
+    tool = _make_tool()
+    mock_retriever = MagicMock()
+    mock_retriever.retrieve = AsyncMock(return_value=[])
+    tool._retriever = mock_retriever
+
+    with patch("src.tools.knowledge.knowledge_base_tool.get_db_connection"):
+        result = await tool.execute(query="test", top_k="abc")
+
+    assert result["success"] is True
+    assert mock_retriever.retrieve.call_args.kwargs["top_k"] == 10
