@@ -43,6 +43,27 @@ from src.core.skill_executor import SkillExecutor
 from src.core.plan_manager import PlanManager
 
 
+def _truncate_tool_content(
+    content: str,
+    max_chars: int = 8000,
+    head_chars: int = 6000,
+    threshold: int = 12000,
+) -> str:
+    """超长工具结果截断：>threshold 字符时保留 head_chars + (max_chars-head_chars) 尾部 + 省略标记。
+
+    保头保尾策略：头部常含 summary/status，尾部常含关键数据（如 JSON 末尾、文件结尾），
+    中间省略并明确标注，LLM 能感知结果被截断并主动缩小检索范围或告知用户。
+    """
+    if len(content) <= threshold:
+        return content
+    tail_chars = max_chars - head_chars
+    return (
+        content[:head_chars]
+        + f"\n...[已截断：共 {len(content)} 字符，省略 {len(content) - head_chars - tail_chars} 字符]...\n"
+        + content[-tail_chars:]
+    )
+
+
 def _extract_image_refs_from_tool_result(result: Any) -> List[Dict[str, Any]]:
     """从工具返回结果中提取所有 ImageRef dict。
 
@@ -3100,7 +3121,12 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                     yield make_event("progress", data=f"📦 已加载技能: {skill_name}")
                     tool_results.append({
                         "tool_call_id": tool_id,
-                        "content": skill_result
+                        "content": skill_result,
+                        # use_skill 返回的技能指南必须完整：① LLM 执行依据；
+                        # ② _get_last_use_skill_version 需从结果解析 skill_version，
+                        #    截断成非法 JSON 会致解析失败 → skill_execute 版本校验拦截死循环。
+                        #    大技能（如 guizang-ppt 37K / skill-creator 33K）超 12K 阈值，须豁免截断。
+                        "_no_truncate": True,
                     })
                     continue
 
@@ -3482,11 +3508,19 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
             
             # Add tool results to messages and memory
             # Each tool result should be a separate message with role "tool"
+            # 超长工具结果截断（Phase 2）：保头保尾 + 省略标记，降低 LLM 输入基数。
+            # use_skill 豁免截断：其 content 是技能操作指南（LLM 执行依据），且
+            # _get_last_use_skill_version 需解析 skill_version，截断成非法 JSON 会破坏解析链路。
             for tool_result in tool_results:
+                _raw_content = tool_result["content"]
+                if isinstance(_raw_content, dict):
+                    _raw_content = json.dumps(_raw_content, ensure_ascii=False)
+                elif not isinstance(_raw_content, str):
+                    _raw_content = str(_raw_content)
                 tool_message = {
                     "role": "tool",
                     "tool_call_id": tool_result["tool_call_id"],
-                    "content": tool_result["content"]
+                    "content": _raw_content if tool_result.get("_no_truncate") else _truncate_tool_content(_raw_content)
                 }
                 messages.append(tool_message)
                 # Save tool result to memory
@@ -4159,11 +4193,22 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                                             self.session_id, task.task_id, str(e)
                                         )
                     
-                    # 添加工具结果
+                    # 添加工具结果（超长截断，Phase 2）。
+                    # use_skill 豁免截断：其 content 是技能操作指南（LLM 执行依据），且
+                    # _check_skill_version_consistency → _get_last_use_skill_version 需从结果解析
+                    # skill_version，截断成非法 JSON 会致解析失败 → 版本校验拦截死循环。
+                    _serialized_result = (
+                        json.dumps(tool_result, ensure_ascii=False)
+                        if isinstance(tool_result, dict) else str(tool_result)
+                    )
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tc.get("id", ""),
-                        "content": json.dumps(tool_result, ensure_ascii=False) if isinstance(tool_result, dict) else str(tool_result)
+                        "content": (
+                            _serialized_result
+                            if tool_name == "use_skill"
+                            else _truncate_tool_content(_serialized_result)
+                        )
                     })
 
             # 发送子任务完成消息

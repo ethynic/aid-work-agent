@@ -1,6 +1,6 @@
 # qwen3.7-flash 上下文缓存优化方案（显式末尾标记）
 
-> 状态：📋 方案定稿待开发（2026-08-17）
+> 状态：✅ Phase 1 已完成开发（2026-08-17，提交 e48d744），Phase 2 计划定稿
 > 背景：qwen3.7-flash 实测对话计费记录显示缓存命中极低（`cache_creation_input_tokens=5103` vs `non_cached_input_tokens=223931`，244K prompt 仅缓存 system 部分），成本明显高于 deepseek 对比记录。
 > 关联调研：[deepseek-v4-flash 平替模型调研](../research/deepseek-v4-flash-replacement-research.md)
 > 关联计划：[qwen3.7-flash 平替实施计划](./plan-qwen3-7-flash-replacement.md)（当前显式缓存标记放在首条 system）
@@ -119,7 +119,7 @@ def _format_messages(self, messages, use_cache=False):
 | Phase | 内容 | 预计 |
 |-------|------|------|
 | Phase 1 | `base.py` 标记位置改动 + 单测更新 + 三智能体流程（开发→测试→CR） | 0.5 天 |
-| Phase 2（可选，独立） | 工具结果截断：agent 循环 `messages.append(tool_result)` 处对长 JSON（http_api 等）限长，降低 10% 计费基数 | 另立计划 |
+| Phase 2（可选，独立） | 工具结果截断：agent 循环 `messages.append(tool_result)` 处对超长工具结果限长，降低输入基数 | 已立计划：[plan-tool-result-truncation.md](./plan-tool-result-truncation.md) |
 
 ## 五、验证方式
 
