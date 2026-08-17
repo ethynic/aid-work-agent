@@ -87,7 +87,23 @@ class ToolExecutor:
                 "missing_parameters": missing,
                 "validation_errors": validation_errors,
             }
-        
+
+        # 类型规范化：LLM 常把整型/浮点参数以字符串形式传出（如 top_k="10"），
+        # validate_parameters 只验证不回写类型，导致后续切片/range/整数运算
+        # 因字符串而崩溃（如 slice indices must be integers）。
+        # 用 InputModel 强转已显式传入的字段，未传字段不填充默认值，
+        # 内部注入参数（_trusted_tenant_id/_progress_queue 等）原样保留。
+        if tool.InputModel is not None:
+            try:
+                validated = tool.InputModel(**parameters)
+                coerced = dict(parameters)
+                for k in validated.model_fields_set:
+                    coerced[k] = getattr(validated, k)
+                parameters = coerced
+            except Exception:
+                # validate_parameters 已保证 InputModel 可构造，此处仅兜底
+                logger.warning(f"工具参数类型规范化失败: {tool_name}", exc_info=True)
+
         # 执行工具
         try:
             if tool_name == "browser_automation":
