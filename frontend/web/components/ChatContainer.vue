@@ -278,7 +278,11 @@ const currentToolbarButtons = computed(() => currentSubagent.value?.chat_toolbar
 // 当前会话 subagent 的类型（演示模式路由参数即类型；租户模式从实例解析）——快捷按钮映射键
 const currentSubagentType = computed<string | null>(() => {
   if (currentSubagent.value?.subagent_type) return currentSubagent.value.subagent_type
-  return route.name === 'chat-subagent' ? subagentName.value : null
+  // 实例列表未加载/未命中时按路由参数兜底（两种聊天路由：demo /chat/:sub 与租户 /t/:tid/chat/:sub）
+  if (route.name === 'chat-subagent' || route.name === 'tenant-chat-subagent') {
+    return subagentName.value
+  }
+  return null
 })
 
 // 子智能体快捷按钮（utils/quickPrompts.ts；无配置不渲染）
