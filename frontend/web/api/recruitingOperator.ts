@@ -1,10 +1,11 @@
 /**
- * 招聘操作智能体简历库 API 客户端
+ * 招聘操作智能体 API 客户端（简历库 + 职位库）
  *
  * 对应后端 src/api/recruiting_operator.py（prefix /api/recruiting-operator）：
  * - 简历列表（分页 + keyword/job_name/status/日期区间筛选）
  * - 职位下拉（distinct job_name）
  * - 创建（file_id 引用 + base64 直传两路）/ 详情 / 更新 / 删除
+ * - 职位库（职位 CRUD + 每职位常用沟通话术 CRUD，固定四分类）
  */
 import { getAuthHeader } from './auth'
 
@@ -150,6 +151,136 @@ export async function updateResume(resumeId: number, req: UpdateResumeRequest): 
 
 export async function deleteResume(resumeId: number): Promise<ApiMutationResponse> {
   const res = await fetch(`${API_BASE}/recruiting-operator/resumes/${resumeId}`, {
+    method: 'DELETE',
+    headers: { ...getAuthHeader() },
+  })
+  return res.json()
+}
+
+// ============== 职位库类型 ==============
+
+/** 话术分类（固定四值，顺序即展示顺序） */
+export const JOB_SCRIPT_CATEGORIES = ['初次开场', '了解摸底', '追问细节', '邀约推进'] as const
+
+export type JobScriptCategory = (typeof JOB_SCRIPT_CATEGORIES)[number]
+
+/** 职位列表项（含话术数与已用分类） */
+export interface JobListItem {
+  id: string
+  tenant_id?: string
+  job_name: string
+  notes?: string
+  script_count: number
+  categories: string[]
+  created_at?: string
+  updated_at?: string
+}
+
+/** 职位话术 */
+export interface JobScript {
+  id: string
+  tenant_id?: string
+  job_id: string
+  category: JobScriptCategory | string
+  title: string
+  content: string
+  sort_order: number
+  created_at?: string
+  updated_at?: string
+}
+
+/** 职位详情（scripts 平铺 + script_groups 按分类分组） */
+export interface JobDetail extends JobListItem {
+  scripts: JobScript[]
+  script_groups: { category: string; scripts: JobScript[] }[]
+}
+
+export interface CreateJobRequest {
+  job_name: string
+  notes?: string
+}
+
+export interface UpdateJobRequest {
+  job_name?: string
+  notes?: string
+}
+
+export interface CreateJobScriptRequest {
+  category: JobScriptCategory | string
+  title: string
+  content: string
+  sort_order?: number
+}
+
+export interface UpdateJobScriptRequest {
+  category?: JobScriptCategory | string
+  title?: string
+  content?: string
+  sort_order?: number
+}
+
+// ============== 职位库 API 封装 ==============
+
+export async function listJobs(): Promise<{ success: boolean; data?: { items: JobListItem[] }; error?: string }> {
+  const res = await fetch(`${API_BASE}/recruiting-operator/jobs`, {
+    headers: { ...getAuthHeader() },
+  })
+  return res.json()
+}
+
+export async function createJob(req: CreateJobRequest): Promise<ApiDetailResponse<JobDetail>> {
+  const res = await fetch(`${API_BASE}/recruiting-operator/jobs`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
+    body: JSON.stringify(req),
+  })
+  return res.json()
+}
+
+export async function getJob(jobId: string): Promise<ApiDetailResponse<JobDetail>> {
+  const res = await fetch(`${API_BASE}/recruiting-operator/jobs/${jobId}`, {
+    headers: { ...getAuthHeader() },
+  })
+  return res.json()
+}
+
+export async function updateJob(jobId: string, req: UpdateJobRequest): Promise<ApiDetailResponse<JobDetail>> {
+  const res = await fetch(`${API_BASE}/recruiting-operator/jobs/${jobId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
+    body: JSON.stringify(req),
+  })
+  return res.json()
+}
+
+export async function deleteJob(jobId: string): Promise<ApiMutationResponse> {
+  const res = await fetch(`${API_BASE}/recruiting-operator/jobs/${jobId}`, {
+    method: 'DELETE',
+    headers: { ...getAuthHeader() },
+  })
+  return res.json()
+}
+
+export async function createJobScript(jobId: string, req: CreateJobScriptRequest): Promise<ApiDetailResponse<JobScript>> {
+  const res = await fetch(`${API_BASE}/recruiting-operator/jobs/${jobId}/scripts`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
+    body: JSON.stringify(req),
+  })
+  return res.json()
+}
+
+export async function updateJobScript(scriptId: string, req: UpdateJobScriptRequest): Promise<ApiDetailResponse<JobScript>> {
+  const res = await fetch(`${API_BASE}/recruiting-operator/scripts/${scriptId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
+    body: JSON.stringify(req),
+  })
+  return res.json()
+}
+
+export async function deleteJobScript(scriptId: string): Promise<ApiMutationResponse> {
+  const res = await fetch(`${API_BASE}/recruiting-operator/scripts/${scriptId}`, {
     method: 'DELETE',
     headers: { ...getAuthHeader() },
   })

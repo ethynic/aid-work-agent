@@ -17,6 +17,12 @@
 - 更新（status / remark / job_name / candidate_name / candidate_info）
 - 删除
 
+一套职位库 CRUD API（表 bs_recruiting_operator_jobs / bs_recruiting_operator_job_scripts，
+服务层 src/services/recruiting_job_service.py，前端「职位库」业务页）：
+- 职位列表（首次访问自动预置「PHP开发工程师（Laravel）」+ 13 条话术）
+- 职位 CRUD（删职位级联删其话术）
+- 话术 CRUD（固定四分类：初次开场/了解摸底/追问细节/邀约推进）
+
 所有 API 必须遵循租户隔离规范（[backend_dev.md SaaS 租户隔离规范]）：
 - 通过 get_current_tenant_id() 取租户
 - 所有查询带 tenant_id 过滤
@@ -34,11 +40,16 @@ from pydantic import BaseModel, Field
 from src.saas.context import get_current_tenant_id
 from src.api.auth import get_current_user
 from src.services import recruiting_resume_service as resume_service
+from src.services import recruiting_job_service as job_service
 # 兼容再导出：既有调用方（src/db/database.py 启动初始化、集成测试）沿用旧导入路径
 from src.services.recruiting_resume_service import (  # noqa: F401
     RESUME_SOURCES,
     RESUME_STATUSES,
     init_recruiting_operator_tables,
+)
+from src.services.recruiting_job_service import (  # noqa: F401
+    SCRIPT_CATEGORIES,
+    init_recruiting_job_tables,
 )
 
 router = APIRouter(prefix="/api/recruiting-operator", tags=["招聘操作智能体-简历库"])
@@ -250,3 +261,184 @@ async def delete_resume(resume_id: int, request: Request):
     except Exception as e:
         logger.error(f"简历删除失败: {e}", exc_info=True)
         return _error_response("简历删除失败", str(e))
+
+
+# ============== 职位库请求模型 ==============
+
+class CreateJobRequest(BaseModel):
+    job_name: str = Field(..., description="职位名称")
+    notes: Optional[str] = Field(None, description="职位备注（技术栈/团队说明等）")
+
+
+class UpdateJobRequest(BaseModel):
+    job_name: Optional[str] = Field(None, description="职位名称")
+    notes: Optional[str] = Field(None, description="职位备注")
+
+
+class CreateJobScriptRequest(BaseModel):
+    category: str = Field(..., description="话术分类：初次开场/了解摸底/追问细节/邀约推进")
+    title: str = Field(..., description="话术标题（分类内小标题）")
+    content: str = Field(..., description="话术正文，支持 {{占位符}}（复制后手动替换）")
+    sort_order: int = Field(0, description="分类内排序，默认 0")
+
+
+class UpdateJobScriptRequest(BaseModel):
+    category: Optional[str] = Field(None, description="话术分类")
+    title: Optional[str] = Field(None, description="话术标题")
+    content: Optional[str] = Field(None, description="话术正文")
+    sort_order: Optional[int] = Field(None, description="分类内排序")
+
+
+# ============== 职位库 API ==============
+
+@router.get("/jobs")
+async def list_jobs(request: Request):
+    """职位列表（按 created_at DESC，含话术数与已用分类；首次访问自动预置默认职位）"""
+    try:
+        tenant_id = _require_tenant()
+        if not tenant_id:
+            return _error_response("租户 ID 缺失", "tenant_id is None", 400)
+        jobs = job_service.list_jobs(tenant_id)
+        return {"success": True, "data": {"items": jobs}}
+    except Exception as e:
+        logger.error(f"职位列表查询失败: {e}", exc_info=True)
+        return _error_response("职位列表查询失败", str(e))
+
+
+@router.post("/jobs")
+async def create_job(req: CreateJobRequest, request: Request):
+    """创建职位（tenant_id+job_name 唯一，重名 400）"""
+    try:
+        tenant_id = _require_tenant()
+        if not tenant_id:
+            return _error_response("租户 ID 缺失", "tenant_id is None", 400)
+        try:
+            job = job_service.create_job(tenant_id, job_name=req.job_name, notes=req.notes)
+        except ValueError as e:
+            return _error_response(str(e), str(e), 400)
+        return {"success": True, "data": job}
+    except Exception as e:
+        logger.error(f"职位创建失败: {e}", exc_info=True)
+        return _error_response("职位创建失败", str(e))
+
+
+@router.get("/jobs/{job_id}")
+async def get_job(job_id: str, request: Request):
+    """职位详情（含全部话术 scripts 平铺 + script_groups 按分类分组）"""
+    try:
+        tenant_id = _require_tenant()
+        if not tenant_id:
+            return _error_response("租户 ID 缺失", "tenant_id is None", 400)
+        try:
+            job = job_service.get_job(tenant_id, job_id)
+        except ValueError as e:
+            return _error_response(str(e), str(e), 400)
+        if job is None:
+            return _error_response("职位不存在", f"job_id={job_id} not found", 404)
+        return {"success": True, "data": job}
+    except Exception as e:
+        logger.error(f"职位详情查询失败: {e}", exc_info=True)
+        return _error_response("职位详情查询失败", str(e))
+
+
+@router.patch("/jobs/{job_id}")
+async def update_job(job_id: str, req: UpdateJobRequest, request: Request):
+    """更新职位（仅传的字段：job_name/notes），updated_at=NOW()"""
+    try:
+        tenant_id = _require_tenant()
+        if not tenant_id:
+            return _error_response("租户 ID 缺失", "tenant_id is None", 400)
+        try:
+            job = job_service.update_job(tenant_id, job_id, job_name=req.job_name, notes=req.notes)
+        except ValueError as e:
+            return _error_response(str(e), str(e), 400)
+        if job is None:
+            return _error_response("职位不存在", f"job_id={job_id} not found", 404)
+        return {"success": True, "data": job}
+    except Exception as e:
+        logger.error(f"职位更新失败: {e}", exc_info=True)
+        return _error_response("职位更新失败", str(e))
+
+
+@router.delete("/jobs/{job_id}")
+async def delete_job(job_id: str, request: Request):
+    """删除职位（物理删，级联删其全部话术）"""
+    try:
+        tenant_id = _require_tenant()
+        if not tenant_id:
+            return _error_response("租户 ID 缺失", "tenant_id is None", 400)
+        try:
+            deleted = job_service.delete_job(tenant_id, job_id)
+        except ValueError as e:
+            return _error_response(str(e), str(e), 400)
+        if not deleted:
+            return _error_response("职位不存在", f"job_id={job_id} not found", 404)
+        return {"success": True}
+    except Exception as e:
+        logger.error(f"职位删除失败: {e}", exc_info=True)
+        return _error_response("职位删除失败", str(e))
+
+
+@router.post("/jobs/{job_id}/scripts")
+async def create_job_script(job_id: str, req: CreateJobScriptRequest, request: Request):
+    """给职位添加话术（固定四分类）"""
+    try:
+        tenant_id = _require_tenant()
+        if not tenant_id:
+            return _error_response("租户 ID 缺失", "tenant_id is None", 400)
+        try:
+            script = job_service.create_script(
+                tenant_id, job_id,
+                category=req.category, title=req.title, content=req.content,
+                sort_order=req.sort_order,
+            )
+        except ValueError as e:
+            return _error_response(str(e), str(e), 400)
+        if script is None:
+            return _error_response("职位不存在", f"job_id={job_id} not found", 404)
+        return {"success": True, "data": script}
+    except Exception as e:
+        logger.error(f"话术创建失败: {e}", exc_info=True)
+        return _error_response("话术创建失败", str(e))
+
+
+@router.patch("/scripts/{script_id}")
+async def update_job_script(script_id: str, req: UpdateJobScriptRequest, request: Request):
+    """更新话术（仅传的字段：category/title/content/sort_order）"""
+    try:
+        tenant_id = _require_tenant()
+        if not tenant_id:
+            return _error_response("租户 ID 缺失", "tenant_id is None", 400)
+        try:
+            script = job_service.update_script(
+                tenant_id, script_id,
+                category=req.category, title=req.title, content=req.content,
+                sort_order=req.sort_order,
+            )
+        except ValueError as e:
+            return _error_response(str(e), str(e), 400)
+        if script is None:
+            return _error_response("话术不存在", f"script_id={script_id} not found", 404)
+        return {"success": True, "data": script}
+    except Exception as e:
+        logger.error(f"话术更新失败: {e}", exc_info=True)
+        return _error_response("话术更新失败", str(e))
+
+
+@router.delete("/scripts/{script_id}")
+async def delete_job_script(script_id: str, request: Request):
+    """删除话术（物理删）"""
+    try:
+        tenant_id = _require_tenant()
+        if not tenant_id:
+            return _error_response("租户 ID 缺失", "tenant_id is None", 400)
+        try:
+            deleted = job_service.delete_script(tenant_id, script_id)
+        except ValueError as e:
+            return _error_response(str(e), str(e), 400)
+        if not deleted:
+            return _error_response("话术不存在", f"script_id={script_id} not found", 404)
+        return {"success": True}
+    except Exception as e:
+        logger.error(f"话术删除失败: {e}", exc_info=True)
+        return _error_response("话术删除失败", str(e))

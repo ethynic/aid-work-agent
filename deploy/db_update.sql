@@ -431,3 +431,34 @@ CREATE TABLE IF NOT EXISTS bs_recruiting_operator_resumes (
 CREATE INDEX IF NOT EXISTS idx_bs_ror_tenant ON bs_recruiting_operator_resumes(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_bs_ror_tenant_job ON bs_recruiting_operator_resumes(tenant_id, job_name);
 CREATE INDEX IF NOT EXISTS idx_bs_ror_tenant_fetched ON bs_recruiting_operator_resumes(tenant_id, fetched_at);
+
+-- ============================================================================
+-- 2026-08-17 招聘操作智能体职位库：bs_recruiting_operator_jobs / bs_recruiting_operator_job_scripts
+-- 职位库维护「职位名称 + 该职位的常用沟通话术库」，话术是招聘 HR 在 BOSS 上
+-- 与候选人聊天的常用模板，固定四分类：初次开场/了解摸底/追问细节/邀约推进；
+-- content 支持 {{占位符}}（复制后手动替换）。首个职位「PHP开发工程师（Laravel）」
+-- 及其 13 条话术由服务层 ensure_default_job 按租户自动预置（jobs 表为空时插入）。
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS bs_recruiting_operator_jobs (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id TEXT NOT NULL,
+    job_name TEXT NOT NULL,                  -- 职位名称
+    notes TEXT,                              -- 职位备注（技术栈/团队说明等，可空）
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, job_name)              -- 租户内职位名唯一
+);
+CREATE TABLE IF NOT EXISTS bs_recruiting_operator_job_scripts (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id TEXT NOT NULL,
+    job_id UUID NOT NULL REFERENCES bs_recruiting_operator_jobs(id) ON DELETE CASCADE, -- 删职位级联删话术
+    category TEXT NOT NULL,                  -- 初次开场/了解摸底/追问细节/邀约推进
+    title TEXT NOT NULL,                     -- 分类内小标题
+    content TEXT NOT NULL,                   -- 话术正文，支持 {{占位符}}
+    sort_order INT NOT NULL DEFAULT 0,       -- 分类内排序
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_bs_roj_tenant ON bs_recruiting_operator_jobs(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_bs_rojs_tenant ON bs_recruiting_operator_job_scripts(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_bs_rojs_job ON bs_recruiting_operator_job_scripts(job_id, sort_order);
