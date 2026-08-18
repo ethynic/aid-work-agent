@@ -245,10 +245,15 @@ test('页面没有可点按钮且无滚动 → 0 人到底，不报错', async (
 // 卡片行结构按真机锚定（同 resume-batch.test.ts）：姓名(342,y-8) + 活跃状态(400,y-8)
 // 同行 + 噪音「本科」+ 打招呼按钮(1162,y)，根视口 1249x1277。
 
-/** 卡片行定义：姓名（null = DOM 配对失败的卡片）+ 按钮中心 y（屏幕坐标） */
+/**
+ * 卡片行定义：姓名（null = DOM 配对失败的卡片）+ 按钮中心 y（屏幕坐标）；
+ * status 省略 = 正常有「刚刚活跃」状态，status=null = 状态位为空（真机 2026-08-18
+ * 「曹鹤洋」卡：无状态节点，但无论在线与否都可打招呼，配对不得依赖状态）
+ */
 interface NameRow {
   name: string | null
   buttonY: number
+  status?: string | null
 }
 const ROW_A: NameRow = { name: '刘草威', buttonY: 146 }
 const ROW_B: NameRow = { name: '张三丰', buttonY: 330 }
@@ -279,7 +284,7 @@ function namedSnap(rows: NameRow[], offsetY = 0): DomSnapshot {
   }
   for (const row of rows) {
     if (row.name !== null) addText(row.name, [317, row.buttonY - 18 + offsetY, 50, 20]) // 中心 (342, y-8)
-    addText('刚刚活跃', [370, row.buttonY - 18 + offsetY, 60, 20]) // 中心 (400, y-8)
+    if (row.status !== null) addText(row.status ?? '刚刚活跃', [370, row.buttonY - 18 + offsetY, 60, 20]) // 中心 (400, y-8)
     addText('本科', [317, row.buttonY + 30 + offsetY, 40, 20]) // 噪音：同行带外
     addText('\n                  打招呼', [1130, row.buttonY - 16 + offsetY, 64, 32]) // 中心 (1162, y)
   }
@@ -297,6 +302,42 @@ function namedSnap(rows: NameRow[], offsetY = 0): DomSnapshot {
     ],
   }
 }
+
+test('定向：无「活跃」状态的卡片（状态位为空）仍能配上姓名并点击——配对不依赖在线状态', async () => {
+  // 真机 2026-08-18「曹鹤洋」卡：状态位无任何文本，姓名列(342,y-8)仍在。
+  // 此前以状态为锚整链断裂，定向打招呼滚遍全列表也找不到该人
+  const r = recorder()
+  // 点击曹鹤洋后他的行消失（按钮数 2→1 通过校验），刘草威保留
+  const executor = new GreetExecutor({
+    snapshot: snapshotQueue([
+      namedSnap([{ name: '刘草威', buttonY: 146 }, { name: '曹鹤洋', buttonY: 330, status: null }]),
+      namedSnap([{ name: '刘草威', buttonY: 146 }]),
+    ]),
+    click: r.click,
+    sleep: r.sleep,
+  })
+  const result = await executor.greetVisible({ names: ['曹鹤洋'] })
+  assert.equal(result.greeted, 1)
+  assert.deepEqual(result.greetedNames, ['曹鹤洋'])
+  // 只点了曹鹤洋的按钮（y=330），顶部刘草威（y=146）绝不点
+  assert.deepEqual(r.clicks.map((c) => c.y), [330])
+})
+
+test('定向：状态显示「在线」等变体（不含「活跃」）同样不影响配对', async () => {
+  const r = recorder()
+  // 点击后刘帅的行（唯一按钮）消失，按钮数 1→0 通过校验
+  const executor = new GreetExecutor({
+    snapshot: snapshotQueue([
+      namedSnap([{ name: '刘帅', buttonY: 146, status: '刚刚在线' }]),
+      namedSnap([]),
+    ]),
+    click: r.click,
+    sleep: r.sleep,
+  })
+  const result = await executor.greetVisible({ names: ['刘帅'] })
+  assert.equal(result.greeted, 1)
+  assert.deepEqual(result.greetedNames, ['刘帅'])
+})
 
 test('定向：names=[B] 时只点 B 的按钮，列表顶部的 A 与配对失败的卡片绝不点', async () => {
   const r = recorder()

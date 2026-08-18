@@ -1,10 +1,12 @@
 /**
  * 推荐牛人卡片行「打招呼按钮 → 候选人姓名」配对（共享模块）。
  *
- * 真机锚定（2026-08-17，视口 1249x1277）：卡片行 = 右侧「打招呼」按钮（x≈1162）
- * + 行左上「姓名 + 活跃状态」同行（如 刘草威@342,138 / 刚刚活跃@400,138 / 按钮 y=146）。
- * 配对规则：按钮同行上方带（|dy|<40、x<按钮x）内找含「活跃」的短文本节点（trim≤6 字），
- * 姓名 = 它左侧最近（同行 y±8、dx<120）的 2-4 字中文节点；配对失败返回 null。
+ * 配对规则（2026-08-18 简化，用户反馈：候选人无论在线与否都可打招呼，「活跃」状态
+ * 不该是配对的必要条件——此前以状态为锚，个别卡片状态位为空时（真机「曹鹤洋」卡）
+ * 整链断裂，定向打招呼滚遍全列表也「找不到」该人）：
+ * 按钮同排窄带（|dy|<16）的姓名列区间（x<360）内，取符合姓名模式的节点（x 最小优先）。
+ * 真机锚定：姓名列 x≈332-342、状态/学历列 x≈384-413（不在区间）、年龄含数字（不匹配模式）、
+ * 学历「本科」在 dy≈27 排外——多重排除不会误配；找不到合格节点返回 null（fail-safe）。
  *
  * 使用方（同一套锚定规则，保证「读到的人」与「打招呼的人」是同一个人）：
  * - ResumeBatchReader：批量读简历时给卡片配姓名（配对失败用 OCR 首行启发式兜底）
@@ -21,17 +23,11 @@ import {
 /** 「打招呼」按钮文本（DOM 抓取的原始文本 trim 后精确相等） */
 export const GREET_TEXT = '打招呼'
 
-/** 活跃状态文本特征：含「活跃」（OCR/DOM 均稳定），如「刚刚活跃」「今日活跃」 */
-const NAME_STATUS_PATTERN = /活跃/
-/** 活跃状态文本最大长度（trim 后字数）：真机「刚刚活跃」4 字，≤6 排除混入的长文本 */
-const STATUS_MAX_LEN = 6
-/** 活跃状态节点与「打招呼」按钮同行的判定带宽（|dy|<40；真机 dy≈8） */
-const STATUS_MAX_DY = 40
-/** 姓名节点与活跃状态节点同行的 y 容差（真机同行 dy≈0） */
-const NAME_SAME_LINE_BAND = 8
-/** 姓名节点在活跃状态节点左侧的最大 x 距离（真机 dx≈58） */
-const NAME_MAX_DX = 120
-/** 姓名文本模式：2-4 字中文（含·），排除 本科/上海/期望 等干扰词以外的杂文本 */
+/** 按钮同排窄带（|dy|）：只覆盖姓名/状态所在排（真机姓名 dy≈8），学历年龄在 dy≈19-27 排外 */
+const NAME_ROW_MAX_DY = 16
+/** 姓名列区间（x < 360）：真机姓名列 x≈332-342；状态/学历列 x≈384-413 不在区间 */
+const NAME_COL_MAX_X = 360
+/** 姓名文本模式：2-4 字中文（含·），年龄含数字、状态/学历等长文本不匹配 */
 const NAME_PATTERN = /^[\u4e00-\u9fa5·]{2,4}$/
 
 /** 「打招呼」按钮引用：点击点（device px 屏幕坐标）+ 所在文档序号（姓名配对需回同文档找文本节点） */
@@ -41,9 +37,8 @@ export interface GreetButtonRef {
 }
 
 /**
- * 姓名配对（真机锚定规则，2026-08-17 从 ResumeBatchReader 抽出的共享实现，行为零变化）：
- * 按钮同行上方带（|dy|<40、x<按钮x）内找含「活跃」的短文本节点（trim≤6 字），
- * 姓名 = 它左侧最近（同行 y±8、dx<120）的 2-4 字中文节点。配对失败返回 null。
+ * 姓名配对：按钮同排窄带（|dy|<16）的姓名列区间（x<360）内取姓名模式节点（x 最小优先）。
+ * 不依赖「活跃」等状态文本；配对失败返回 null。
  */
 export function pairCardName(
   snap: DomSnapshot,
@@ -72,20 +67,14 @@ export function pairCardName(
     if (x <= 0 || x > viewport.width || y <= 0 || y > viewport.height) continue
     texts.push({ t: t.trim(), x: Math.round(x), y: Math.round(y) })
   }
-  // 活跃状态节点：离按钮最近者优先（真机一行一个，防相邻行串扰）
-  const statuses = texts
-    .filter((n) => n.t.length <= STATUS_MAX_LEN && NAME_STATUS_PATTERN.test(n.t))
-    .filter((n) => Math.abs(n.y - btn.point.y) < STATUS_MAX_DY && n.x < btn.point.x)
-    .sort((a, b) => Math.abs(a.y - btn.point.y) - Math.abs(b.y - btn.point.y) || a.x - b.x)
-  const status = statuses[0]
-  if (!status) return null
-  // 姓名：状态左侧最近（x 最大）的合格中文节点
+  // 按钮同排窄带的姓名列区间内取姓名模式节点（x 最小优先——姓名是该行最左元素）。
+  // 不依赖任何状态文本；找不到返回 null（fail-safe，绝不拿学历/状态充当姓名）
   let best: { t: string; x: number } | null = null
   for (const n of texts) {
     if (!NAME_PATTERN.test(n.t)) continue
-    if (Math.abs(n.y - status.y) > NAME_SAME_LINE_BAND) continue
-    if (!(n.x < status.x) || status.x - n.x >= NAME_MAX_DX) continue
-    if (!best || n.x > best.x) best = { t: n.t, x: n.x }
+    if (Math.abs(n.y - btn.point.y) >= NAME_ROW_MAX_DY) continue
+    if (n.x >= NAME_COL_MAX_X || n.x >= btn.point.x) continue
+    if (!best || n.x < best.x) best = { t: n.t, x: n.x }
   }
   return best?.t ?? null
 }
