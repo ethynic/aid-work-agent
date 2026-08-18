@@ -107,6 +107,7 @@ if [ -n "$FRONTEND_PID" ]; then
     mv "$DIST_DIR.new" "$DIST_DIR"
     rm -rf "$DIST_DIR.old"
 fi
+chmod 777 "$DIST_DIR" # dist 目录需要 777 权限，否则无法ftp上传微信验证文件
 
 # 7. 增量安装 requirements.txt 中新增的依赖（快速更新脚本不重建镜像，
 #    新依赖不会自动安装；下次重建镜像后可移除此步骤）
