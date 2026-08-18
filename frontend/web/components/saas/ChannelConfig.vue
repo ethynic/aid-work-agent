@@ -51,6 +51,38 @@
             {{ copied[ch.config_id] ? '已复制' : '复制' }}
           </BaseButton>
         </div>
+
+        <!-- 微信客服特有：客服账号管理 -->
+        <div v-if="ch.channel_type === 'wecom_kf'" class="mt-3 bg-canvas rounded-lg p-3">
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-sm font-medium text-default">客服账号</span>
+            <BaseButton intent="ghost" size="sm" @click="openKfAccountCreate(ch)">+ 添加客服账号</BaseButton>
+          </div>
+          <div v-if="(kfAccountMap[ch.config_id] || []).length === 0" class="text-xs text-muted text-center py-2">
+            尚未配置客服账号，点击右上角添加
+          </div>
+          <div v-else class="space-y-2">
+            <div
+              v-for="acc in kfAccountMap[ch.config_id]"
+              :key="acc.open_kfid"
+              class="bg-surface border border-default rounded-md px-3 py-2 flex items-center justify-between gap-2"
+            >
+              <div class="flex items-center gap-3 min-w-0 flex-wrap">
+                <span class="text-sm font-medium text-default">{{ acc.name }}</span>
+                <span class="text-xs text-muted font-mono">{{ acc.open_kfid }}</span>
+                <span class="text-xs text-muted">绑定：{{ tenantUserName(acc.tenant_user_id) }}</span>
+                <span v-if="acc.expire_at" class="text-xs text-muted">到期 {{ acc.expire_at }}</span>
+                <span v-if="acc.credit_limit > 0" class="text-xs text-muted">积分 {{ acc.credit_used }}/{{ acc.credit_limit }}</span>
+                <span class="text-xs text-muted">引流 {{ acc.referral_count }} 人</span>
+              </div>
+              <div class="flex items-center gap-1 flex-shrink-0">
+                <BaseButton intent="ghost" size="sm" @click="viewKfQr(ch, acc)">二维码</BaseButton>
+                <BaseButton intent="ghost" size="sm" @click="openKfAccountEdit(ch, acc)">编辑</BaseButton>
+                <BaseButton intent="danger-ghost" size="sm" @click="handleDeleteKfAccount(ch, acc)">删除</BaseButton>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -202,54 +234,11 @@
           </div>
         </div>
 
-        <!-- 微信客服特有：客服账号配置 -->
+        <!-- 微信客服特有：客服账号管理提示 -->
         <div v-if="form.channel_type === 'wecom_kf'" class="mt-3 pt-3 border-t border-default">
-          <div class="flex items-center justify-between mb-3">
-            <label class="text-sm font-medium text-default">客服账号配置</label>
-            <BaseButton intent="ghost" size="sm" @click="addKfAccount">+ 添加客服账号</BaseButton>
-          </div>
-          <div v-if="kfAccounts.length === 0" class="text-xs text-muted bg-canvas rounded-lg p-4 text-center">
-            尚未配置客服账号，请先添加
-          </div>
-          <div v-for="(kf, idx) in kfAccounts" :key="idx" class="bg-canvas border border-default rounded-lg p-3 mb-3">
-            <div class="flex items-center justify-between mb-3">
-              <span class="text-sm font-medium text-default">客服账号 #{{ idx + 1 }}</span>
-              <BaseButton intent="danger-ghost" size="sm" @click="removeKfAccount(idx)">删除</BaseButton>
-            </div>
-            <div class="grid grid-cols-4 gap-3">
-              <div>
-                <label class="block text-xs text-muted mb-1">客服账号名称</label>
-                <BaseInput v-model="kf.name" placeholder="售前咨询" />
-              </div>
-              <div>
-                <label class="block text-xs text-muted mb-1">open_kfid</label>
-                <BaseInput v-model="kf.open_kfid" placeholder="首次接收消息时自动填入" />
-              </div>
-              <div>
-                <label class="block text-xs text-muted mb-1">绑定子智能体</label>
-                <BaseSelect v-model="kf.subagent_type">
-                  <option value="">不绑定（使用渠道默认）</option>
-                  <option v-for="sa in availableSubagents" :key="sa" :value="sa">{{ subagentTypeLabel(sa) }} ({{ sa }})</option>
-                </BaseSelect>
-              </div>
-              <div>
-                <label class="block text-xs text-muted mb-1">欢迎语</label>
-                <BaseInput v-model="kf.welcome_message" placeholder="您好，请问有什么可以帮您？" />
-              </div>
-              <div class="col-span-2">
-                <label class="block text-xs text-muted mb-1">人工接待人员（企微 userid）</label>
-                <BaseInput v-model="kf.servicer_userid_list" placeholder="zhangsan, lisi" />
-                <p class="mt-0.5 text-xs text-muted">多个用逗号分隔</p>
-              </div>
-              <div class="col-span-1">
-                <label class="block text-xs text-muted mb-1">转人工开关</label>
-                <div class="flex items-center h-10">
-                  <input type="checkbox" v-model="kf.allow_agent_transfer" class="w-4 h-4 rounded border-primary-200 text-primary-600 focus:ring-primary-500" />
-                  <span class="ml-2 text-sm text-default">允许 Agent 主动转人工</span>
-                </div>
-              </div>
-            </div>
-          </div>
+          <p class="text-sm text-muted">
+            微信客服账号请在保存渠道后，回到渠道列表点击「添加客服账号」管理：系统自动调用企业微信 API 创建账号、生成推广二维码，并支持绑定引流员工、设置到期日期与积分上限。
+          </p>
         </div>
 
         <!-- 回调地址提示 -->
@@ -264,6 +253,140 @@
 
         <div v-if="formError" class="mt-3 p-3 bg-danger-50 border border-danger-200 rounded-lg text-danger-600 text-sm">{{ formError }}</div>
       </div>
+    </BaseModal>
+
+    <!-- ==================== 客服账号弹窗（创建/编辑 + 二维码回显） ==================== -->
+    <BaseModal
+      v-model="showKfModal"
+      :title="kfEditingOpenKfid ? '客服账号 - 编辑' : '客服账号 - 新增'"
+      size="lg"
+      :close-on-overlay="false"
+    >
+      <div class="space-y-4">
+        <!-- 创建成功二维码回显 -->
+        <div v-if="createdQrData" class="bg-success-50 border border-success-200 rounded-lg p-4 flex flex-col items-center">
+          <p class="text-sm font-medium text-success-800 mb-2">客服账号创建成功！请下载二维码分享给绑定员工</p>
+          <p v-if="createdQrData.qr_title" class="text-sm font-medium text-default mb-2">{{ createdQrData.qr_title }}</p>
+          <img :src="createdQrData.qr_data_url" alt="客服二维码" class="w-40 h-40 rounded-lg border border-default bg-white" />
+          <p class="text-xs text-muted mt-2 break-all text-center">{{ createdQrData.contact_url }}</p>
+          <div class="flex gap-2 mt-2">
+            <BaseButton intent="secondary" size="sm" @click="copyUrl(createdQrData.contact_url, 'kfq')">{{ copied['kfq'] ? '已复制' : '复制链接' }}</BaseButton>
+            <BaseButton size="sm" @click="downloadQr(createdQrData)">下载二维码</BaseButton>
+            <BaseButton intent="ghost" size="sm" @click="resetKfFormForCreate">继续添加</BaseButton>
+          </div>
+        </div>
+
+        <!-- 编辑模式：不可变字段只读展示 -->
+        <div v-if="kfEditingOpenKfid" class="bg-canvas border border-default rounded-lg p-3 grid grid-cols-2 gap-3 text-xs">
+          <div>
+            <label class="text-muted block mb-0.5">open_kfid（不可改）</label>
+            <span class="text-default font-mono">{{ kfForm.open_kfid }}</span>
+          </div>
+          <div>
+            <label class="text-muted block mb-0.5">场景 scene（不可改）</label>
+            <span class="text-default font-mono">{{ kfForm.scene }}</span>
+          </div>
+          <div class="col-span-2">
+            <label class="text-muted block mb-0.5">客服链接（不可改）</label>
+            <span class="text-default break-all">{{ kfForm.contact_url }}</span>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <label class="text-sm text-muted mb-1 block">客服名称<span class="text-danger-500">*</span></label>
+            <BaseInput v-model="kfForm.name" maxlength="16" placeholder="如：售前咨询" />
+          </div>
+          <div>
+            <label class="text-sm text-muted mb-1 block">头像（可选）</label>
+            <div class="flex items-center gap-2">
+              <img v-if="kfForm.avatarPreview" :src="kfForm.avatarPreview" class="w-10 h-10 rounded-lg border border-default object-cover" />
+              <input
+                type="file"
+                accept=".png,.jpg,.jpeg"
+                @change="handleAvatarUpload"
+                class="text-sm text-default file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-primary-50 file:text-primary-700 hover:file:bg-primary-100 cursor-pointer"
+              />
+            </div>
+            <p class="mt-0.5 text-xs text-muted">不传则使用租户 Logo 或默认占位图</p>
+          </div>
+          <div>
+            <label class="text-sm text-muted mb-1 block">绑定引流员工<span class="text-danger-500">*</span></label>
+            <BaseSelect v-model="kfForm.tenant_user_id">
+              <option value="">请选择员工</option>
+              <option v-for="u in tenantUsers" :key="u.user_id" :value="u.user_id">{{ tenantUserName(u.user_id) }}</option>
+            </BaseSelect>
+            <p class="mt-0.5 text-xs text-muted">员工扫码后按此员工归因，可换绑</p>
+          </div>
+          <div>
+            <label class="text-sm text-muted mb-1 block">绑定子智能体</label>
+            <BaseSelect v-model="kfForm.subagent_type">
+              <option value="">不绑定（使用渠道默认）</option>
+              <option v-for="sa in availableSubagents" :key="sa" :value="sa">{{ subagentTypeLabel(sa) }} ({{ sa }})</option>
+            </BaseSelect>
+          </div>
+          <div class="col-span-2">
+            <label class="text-sm text-muted mb-1 block">欢迎语</label>
+            <BaseInput v-model="kfForm.welcome_message" placeholder="您好，请问有什么可以帮您？" />
+          </div>
+          <div>
+            <label class="text-sm text-muted mb-1 block">人工接待人员（企微 userid）</label>
+            <BaseInput v-model="kfForm.servicer_userid_list" placeholder="zhangsan, lisi" />
+            <p class="mt-0.5 text-xs text-muted">多个用逗号分隔</p>
+          </div>
+          <div>
+            <label class="text-sm text-muted mb-1 block">转人工开关</label>
+            <div class="flex items-center h-10">
+              <input type="checkbox" v-model="kfForm.allow_agent_transfer" class="w-4 h-4 rounded border-primary-200 text-primary-600 focus:ring-primary-500" />
+              <span class="ml-2 text-sm text-default">允许 Agent 主动转人工</span>
+            </div>
+          </div>
+          <div>
+            <label class="text-sm text-muted mb-1 block">到期日期</label>
+            <input
+              type="date"
+              v-model="kfForm.expire_at"
+              class="block w-full h-10 px-3 rounded-lg border border-default bg-surface text-sm text-default focus:outline-none focus:ring-2 focus:ring-primary-500"
+            />
+            <p class="mt-0.5 text-xs text-muted">到期后该账号自动拦截，空=不限制</p>
+          </div>
+          <div>
+            <label class="text-sm text-muted mb-1 block">积分上限</label>
+            <BaseInput v-model="kfForm.credit_limit" type="number" min="0" placeholder="0=无上限" />
+            <p class="mt-0.5 text-xs text-muted">0 表示不限制；超过上限自动拦截</p>
+          </div>
+          <div class="col-span-2">
+            <label class="text-sm text-muted mb-1 block">二维码标题</label>
+            <BaseInput v-model="kfForm.qr_title" maxlength="50" placeholder="如：爱定义 - 小蔡老师" />
+            <p class="mt-0.5 text-xs text-muted">显示在二维码图片上方，便于区分不同员工</p>
+          </div>
+        </div>
+
+        <p v-if="kfFormError" class="p-3 bg-danger-50 border border-danger-200 rounded-lg text-danger-600 text-sm">{{ kfFormError }}</p>
+      </div>
+
+      <template #footer>
+        <BaseButton intent="secondary" @click="showKfModal = false">关闭</BaseButton>
+        <BaseButton :disabled="kfSubmitting" @click="handleKfSubmit">
+          {{ kfSubmitting ? '保存中...' : (kfEditingOpenKfid ? '保存修改' : '创建客服账号') }}
+        </BaseButton>
+      </template>
+    </BaseModal>
+
+    <!-- ==================== 查看二维码弹窗 ==================== -->
+    <BaseModal v-model="showKfQrModal" title="客服二维码" size="sm">
+      <div class="flex flex-col items-center gap-2">
+        <p v-if="kfQrData.qr_title" class="text-sm font-medium text-default">{{ kfQrData.qr_title }}</p>
+        <img v-if="kfQrData.qr_data_url" :src="kfQrData.qr_data_url" class="w-48 h-48 rounded-lg border border-default bg-white" />
+        <p class="text-xs text-muted break-all text-center">{{ kfQrData.contact_url }}</p>
+        <div class="flex gap-2">
+          <BaseButton intent="secondary" size="sm" @click="copyUrl(kfQrData.contact_url, 'kfq2')">{{ copied['kfq2'] ? '已复制' : '复制链接' }}</BaseButton>
+          <BaseButton size="sm" @click="downloadQr(kfQrData)">下载二维码</BaseButton>
+        </div>
+      </div>
+      <template #footer>
+        <BaseButton intent="secondary" @click="showKfQrModal = false">关闭</BaseButton>
+      </template>
     </BaseModal>
 
     <!-- ==================== 配置指南弹窗 ==================== -->
@@ -368,7 +491,7 @@ import BaseTable from '@/components/ui/BaseTable.vue'
 import BaseBadge from '@/components/ui/BaseBadge.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
-import { listChannels, createChannel, updateChannel, deleteChannel, verifyChannel, getAvailableSubagents, generateChannelKeypair } from '@/api/saasTenant'
+import { listChannels, createChannel, updateChannel, deleteChannel, verifyChannel, getAvailableSubagents, generateChannelKeypair, listTenantUsers, listKfAccounts, createKfAccount, updateKfAccount, deleteKfAccount } from '@/api/saasTenant'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 
 const route = useRoute()
@@ -430,29 +553,246 @@ const copied = ref<Record<string, boolean>>({})
 const showGuideModal = ref(false)
 const guideChannel = ref('wecom')
 
-// 微信客服特有：客服账号配置
-const kfAccounts = ref<Array<{
-  name: string
-  open_kfid: string
-  subagent_type: string
-  welcome_message: string
-  servicer_userid_list: string
-  allow_agent_transfer: boolean
-}>>([])
+// ==================== 微信客服账号管理（引流） ====================
 
-function addKfAccount() {
-  kfAccounts.value.push({
+// config_id → 账号列表（来自 GET /api/saas/wecom-kf/accounts）
+const kfAccountMap = ref<Record<string, any[]>>({})
+const tenantUsers = ref<any[]>([])
+const tenantUserMap = ref<Record<string, any>>({})
+
+const showKfModal = ref(false)
+const kfSubmitting = ref(false)
+const kfFormError = ref('')
+// 当前弹窗所属渠道 config_id（创建/编辑后刷新列表用）
+const kfOwnerConfigId = ref<string | null>(null)
+// 编辑中的 open_kfid；null 表示新增
+const kfEditingOpenKfid = ref<string | null>(null)
+// 创建成功后回显的二维码数据（仅新增模式）
+const createdQrData = ref<any>(null)
+// 查看已保存账号的二维码弹窗
+const showKfQrModal = ref(false)
+const kfQrData = ref<any>({ qr_title: '', name: '', contact_url: '', qr_data_url: '' })
+
+const kfForm = ref({
+  name: '',
+  tenant_user_id: '',
+  subagent_type: '',
+  welcome_message: '',
+  servicer_userid_list: '',
+  allow_agent_transfer: true,
+  expire_at: '',
+  credit_limit: '',
+  qr_title: '',
+  open_kfid: '',
+  scene: '',
+  contact_url: '',
+  avatar_base64: '',
+  avatarPreview: '',
+})
+
+function tenantUserName(userId: string | null | undefined): string {
+  if (!userId) return '-'
+  const u = tenantUserMap.value[userId]
+  if (!u) return '已删除员工'
+  return u.nickname || u.username || u.phone || userId
+}
+
+async function loadTenantUsers() {
+  try {
+    const res = await listTenantUsers(500)
+    tenantUsers.value = res.users || []
+    tenantUserMap.value = {}
+    for (const u of tenantUsers.value) tenantUserMap.value[u.user_id] = u
+  } catch (e) {
+    console.error('加载员工列表失败:', e)
+  }
+}
+
+async function loadKfAccounts() {
+  try {
+    const res = await listKfAccounts()
+    const accounts = res.accounts || []
+    // 建立 open_kfid → config_id 映射（后端 /accounts 不含 config_id，从渠道配置反查）
+    const kfToConfig: Record<string, string> = {}
+    for (const ch of channels.value) {
+      if (ch.channel_type === 'wecom_kf' && ch.config?.kf_account) {
+        for (const kf of ch.config.kf_account) {
+          if (kf.open_kfid) kfToConfig[kf.open_kfid] = ch.config_id
+        }
+      }
+    }
+    const map: Record<string, any[]> = {}
+    for (const acc of accounts) {
+      const cid = kfToConfig[acc.open_kfid]
+      if (!cid) continue
+      if (!map[cid]) map[cid] = []
+      map[cid].push(acc)
+    }
+    kfAccountMap.value = map
+  } catch (e) {
+    console.error('加载客服账号失败:', e)
+  }
+}
+
+function resetKfForm() {
+  kfForm.value = {
     name: '',
-    open_kfid: '',
+    tenant_user_id: '',
     subagent_type: '',
     welcome_message: '',
     servicer_userid_list: '',
     allow_agent_transfer: true,
-  })
+    expire_at: '',
+    credit_limit: '',
+    qr_title: '',
+    open_kfid: '',
+    scene: '',
+    contact_url: '',
+    avatar_base64: '',
+    avatarPreview: '',
+  }
 }
 
-function removeKfAccount(idx: number) {
-  kfAccounts.value.splice(idx, 1)
+function openKfAccountCreate(ch: any) {
+  kfEditingOpenKfid.value = null
+  kfOwnerConfigId.value = ch.config_id
+  resetKfForm()
+  createdQrData.value = null
+  kfFormError.value = ''
+  showKfModal.value = true
+}
+
+function openKfAccountEdit(ch: any, acc: any) {
+  kfEditingOpenKfid.value = acc.open_kfid
+  kfOwnerConfigId.value = ch.config_id
+  kfForm.value = {
+    name: acc.name || '',
+    tenant_user_id: acc.tenant_user_id || '',
+    subagent_type: acc.subagent_type || '',
+    welcome_message: acc.welcome_message || '',
+    servicer_userid_list: Array.isArray(acc.servicer_userid_list) ? acc.servicer_userid_list.join(', ') : (acc.servicer_userid_list || ''),
+    allow_agent_transfer: acc.allow_agent_transfer !== false,
+    expire_at: acc.expire_at || '',
+    credit_limit: acc.credit_limit !== undefined && acc.credit_limit !== null ? String(acc.credit_limit) : '',
+    qr_title: acc.qr_title || '',
+    open_kfid: acc.open_kfid || '',
+    scene: acc.scene || '',
+    contact_url: acc.contact_url || '',
+    avatar_base64: '',
+    avatarPreview: '',
+  }
+  createdQrData.value = null
+  kfFormError.value = ''
+  showKfModal.value = true
+}
+
+function resetKfFormForCreate() {
+  kfEditingOpenKfid.value = null
+  resetKfForm()
+  createdQrData.value = null
+  kfFormError.value = ''
+}
+
+function handleAvatarUpload(event: Event) {
+  const target = event.target as HTMLInputElement
+  const file = target.files?.[0]
+  if (!file) return
+  const reader = new FileReader()
+  reader.onload = () => {
+    const dataUrl = String(reader.result || '')
+    kfForm.value.avatarPreview = dataUrl
+    // 去掉 data:image/...;base64, 前缀，只保留 base64 串
+    const commaIdx = dataUrl.indexOf(',')
+    kfForm.value.avatar_base64 = commaIdx >= 0 ? dataUrl.slice(commaIdx + 1) : dataUrl
+  }
+  reader.onerror = () => { kfFormError.value = '头像读取失败' }
+  reader.readAsDataURL(file)
+}
+
+function downloadQr(data: any) {
+  if (!data?.qr_data_url) return
+  const a = document.createElement('a')
+  a.href = data.qr_data_url
+  a.download = `${data.qr_title || data.name || 'kf_qr'}.png`
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+}
+
+function viewKfQr(_ch: any, acc: any) {
+  kfQrData.value = {
+    qr_title: acc.qr_title || '',
+    name: acc.name || '',
+    contact_url: acc.contact_url || '',
+    qr_data_url: acc.qr_data_url || '',
+  }
+  showKfQrModal.value = true
+}
+
+async function handleKfSubmit() {
+  const name = (kfForm.value.name || '').trim()
+  if (!name) { kfFormError.value = '请填写客服名称'; return }
+  if (!kfForm.value.tenant_user_id) { kfFormError.value = '请选择绑定引流员工'; return }
+
+  const payload: Record<string, any> = {
+    name,
+    tenant_user_id: kfForm.value.tenant_user_id,
+    subagent_type: kfForm.value.subagent_type || undefined,
+    welcome_message: kfForm.value.welcome_message || undefined,
+    allow_agent_transfer: kfForm.value.allow_agent_transfer,
+    expire_at: kfForm.value.expire_at || undefined,
+    credit_limit: kfForm.value.credit_limit === '' ? 0 : Number(kfForm.value.credit_limit) || 0,
+    qr_title: kfForm.value.qr_title || undefined,
+  }
+  if (kfForm.value.avatar_base64) payload.avatar_base64 = kfForm.value.avatar_base64
+  if (kfForm.value.servicer_userid_list) {
+    payload.servicer_userid_list = kfForm.value.servicer_userid_list.split(/[,，]/).map((s: string) => s.trim()).filter(Boolean)
+  }
+
+  kfSubmitting.value = true
+  kfFormError.value = ''
+  try {
+    if (kfEditingOpenKfid.value) {
+      // 换绑确认：历史 first-touch 归因不变，仅影响后续新扫码
+      const ownerAccounts = kfAccountMap.value[kfOwnerConfigId.value || ''] || []
+      const original = ownerAccounts.find((a: any) => a.open_kfid === kfEditingOpenKfid.value)
+      if (original && original.tenant_user_id !== payload.tenant_user_id) {
+        if (!confirm('之前已扫码的客户仍绑定原用户，新扫码的客户会绑定新用户。确定换绑吗？')) {
+          kfSubmitting.value = false
+          return
+        }
+      }
+      await updateKfAccount(kfEditingOpenKfid.value, payload)
+      toast.success('客服账号已更新')
+      showKfModal.value = false
+    } else {
+      const res = await createKfAccount(payload)
+      createdQrData.value = {
+        open_kfid: res.open_kfid,
+        name: res.name || '',
+        qr_title: res.qr_title || '',
+        contact_url: res.contact_url,
+        qr_data_url: res.qr_data_url,
+      }
+      toast.success('客服账号创建成功')
+    }
+    await loadKfAccounts()
+  } catch (e: any) {
+    kfFormError.value = e.message || '操作失败'
+  } finally {
+    kfSubmitting.value = false
+  }
+}
+
+async function handleDeleteKfAccount(_ch: any, acc: any) {
+  if (!confirm(`确定删除客服账号「${acc.name}」吗？删除后已发放的二维码将失效，客户将无法继续通过该二维码进入会话。`)) return
+  try {
+    await deleteKfAccount(acc.open_kfid)
+    toast.success('删除成功')
+    await loadKfAccounts()
+  } catch (e: any) {
+    toast.error(e.message || '删除失败')
+  }
 }
 
 const form = ref<{ channel_type: string; name: string; config: Record<string, any>; subagent_type: string }>({
@@ -711,7 +1051,6 @@ function copyUrl(url: string, id?: string) {
 function openAddChannel() {
   editingId.value = null
   form.value = { channel_type: 'wecom', name: '', config: {}, subagent_type: '' }
-  kfAccounts.value = []
   formError.value = ''
   formInitialSnapshot.value = JSON.parse(JSON.stringify(form.value))
   isFullscreen.value = false
@@ -722,19 +1061,6 @@ function editChannel(ch: any) {
   editingId.value = ch.config_id
   form.value = { channel_type: ch.channel_type, name: ch.name || '', config: { ...ch.config }, subagent_type: ch.subagent_type || '' }
   formError.value = ''
-  // 解析已有的客服账号配置（仅企业微信客服渠道）
-  if (ch.channel_type === 'wecom_kf' && ch.config.kf_account && Array.isArray(ch.config.kf_account)) {
-    kfAccounts.value = ch.config.kf_account.map((kf: any) => ({
-      name: kf.name || '',
-      open_kfid: kf.open_kfid || '',
-      subagent_type: kf.subagent_type || '',
-      welcome_message: kf.welcome_message || '',
-      servicer_userid_list: Array.isArray(kf.servicer_userid_list) ? kf.servicer_userid_list.join(', ') : (kf.servicer_userid_list || ''),
-      allow_agent_transfer: kf.allow_agent_transfer !== false,  // 默认 true，兼容旧配置
-    }))
-  } else {
-    kfAccounts.value = []
-  }
   formInitialSnapshot.value = JSON.parse(JSON.stringify(form.value))
   isFullscreen.value = false
   showForm.value = true
@@ -765,6 +1091,7 @@ async function loadChannels() {
   try {
     const res = await listChannels()
     channels.value = res.channels || []
+    await loadKfAccounts()
   } catch (e) {
     console.error('加载渠道列表失败:', e)
   } finally {
@@ -801,22 +1128,6 @@ async function handleSubmit() {
     // 此处兜底防止用户通过 DevTools 改单选值提交 client）
     if (form.value.channel_type === 'wecom_personal_rpa') {
       payload.config.listen_mode = 'server'
-    }
-    // 微信客服特有：序列化客服账号配置
-    if (form.value.channel_type === 'wecom_kf' && kfAccounts.value.length > 0) {
-      payload.config.kf_account = kfAccounts.value.map(kf => {
-        const obj: Record<string, any> = {
-          name: kf.name,
-          open_kfid: kf.open_kfid,
-          subagent_type: kf.subagent_type || undefined,
-          allow_agent_transfer: kf.allow_agent_transfer,
-        }
-        if (kf.welcome_message) obj.welcome_message = kf.welcome_message
-        if (kf.servicer_userid_list) {
-          obj.servicer_userid_list = kf.servicer_userid_list.split(/[,，]/).map((s: string) => s.trim()).filter(Boolean)
-        }
-        return obj
-      })
     }
     if (editingId.value) {
       await updateChannel(editingId.value, payload as any)
@@ -915,5 +1226,6 @@ async function handleDelete(configId: string) {
 onMounted(() => {
   loadChannels()
   loadAvailableSubagents()
+  loadTenantUsers()
 })
 </script>

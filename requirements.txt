@@ -67,6 +67,7 @@ python-pptx>=1.0.0  # PPT document reading and processing
 # Knowledge Base Dependencies
 pypdf>=4.0.0  # PDF parsing
 Pillow>=10.0.0  # Image processing
+qrcode>=7.4.2  # 客服账号引流二维码生成
 
 # SMB/FTP File Transfer
 pysmb>=1.2.9  # SMB protocol support

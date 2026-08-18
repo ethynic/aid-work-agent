@@ -8,9 +8,34 @@
       @logout="handleLogout"
     />
 
-    <div class="flex-1 overflow-hidden flex relative">
+    <!-- 顶部 Tab 切换 -->
+    <div class="border-b border-default bg-surface px-6">
+      <div class="flex gap-6">
+        <button
+          v-for="tab in tabs"
+          :key="tab.key"
+          :class="[
+            'py-3 text-sm font-medium border-b-2 transition-colors',
+            activeTab === tab.key
+              ? 'text-primary-600 border-primary-600'
+              : 'text-muted border-transparent hover:text-default hover:border-hover'
+          ]"
+          @click="switchTab(tab.key)"
+        >
+          {{ tab.label }}
+        </button>
+      </div>
+    </div>
+
+    <!-- Tab1：客户对话记录 -->
+    <div v-show="activeTab === 'chat'" class="flex-1 overflow-hidden flex relative">
       <!-- 左侧：客户列表 -->
       <div class="w-96 border-r border-default bg-surface flex flex-col">
+        <!-- 引流员工筛选条件 -->
+        <div v-if="referrerFilterName" class="flex items-center gap-2 px-4 py-2 bg-primary-50 border-b border-primary-200 text-sm text-primary-700">
+          <span class="flex-1">{{ referrerFilterName }} 的引流客户</span>
+          <BaseButton intent="ghost" size="sm" @click="clearReferrerFilter">清除</BaseButton>
+        </div>
         <!-- 搜索栏 -->
         <div class="p-4 border-b border-default">
           <div class="flex gap-2">
@@ -55,6 +80,9 @@
                   </div>
                   <div class="text-xs text-muted mt-1">
                     {{ formatSessionDateRange(user) }}
+                  </div>
+                  <div v-if="user.referrer_name" class="text-xs text-primary-600 mt-0.5">
+                    由 {{ user.referrer_name }} 引流
                   </div>
                 </div>
               </div>
@@ -235,6 +263,71 @@
         </div>
       </Transition>
     </div>
+
+    <!-- Tab2：引流统计 -->
+    <div v-show="activeTab === 'stats'" class="flex-1 overflow-y-auto p-6 bg-canvas">
+      <div v-if="statsLoading" class="text-center py-12 text-muted">加载中...</div>
+      <template v-else>
+        <!-- 日期段选择 -->
+        <div class="flex flex-wrap items-center gap-4 mb-6 bg-surface border border-default rounded-lg p-4">
+          <div class="flex gap-2">
+            <BaseButton
+              v-for="p in rangePresets"
+              :key="p.key"
+              :intent="activeRange === p.key ? 'primary' : 'ghost'"
+              size="sm"
+              @click="selectRange(p.key)"
+            >
+              {{ p.label }}
+            </BaseButton>
+          </div>
+          <div v-if="activeRange === 'custom'" class="flex items-center gap-2">
+            <input
+              type="date"
+              v-model="customStartDate"
+              class="block h-8 px-2 rounded-lg border border-default bg-surface text-sm text-default focus:outline-none focus:ring-2 focus:ring-primary-500"
+            />
+            <span class="text-muted text-sm">至</span>
+            <input
+              type="date"
+              v-model="customEndDate"
+              class="block h-8 px-2 rounded-lg border border-default bg-surface text-sm text-default focus:outline-none focus:ring-2 focus:ring-primary-500"
+            />
+            <BaseButton size="sm" @click="applyCustomRange">查询</BaseButton>
+          </div>
+          <span class="ml-auto text-xs text-muted">过滤基准：客户扫码引流发生时间</span>
+        </div>
+
+        <!-- 统计卡片 -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
+          <div class="bg-surface border border-default rounded-lg p-5">
+            <div class="text-muted text-sm">总引流数</div>
+            <div class="text-3xl font-bold text-default mt-1">{{ stats.total_referrals ?? 0 }}</div>
+          </div>
+          <div class="bg-surface border border-default rounded-lg p-5">
+            <div class="text-muted text-sm">总对话消息数</div>
+            <div class="text-3xl font-bold text-default mt-1">{{ stats.total_messages ?? 0 }}</div>
+          </div>
+        </div>
+
+        <!-- 员工维度表格 -->
+        <div class="bg-surface border border-default rounded-lg">
+          <div class="px-5 py-3 border-b border-default font-medium text-default">员工引流统计</div>
+          <div class="table-scroll-wrapper">
+            <BaseTable :columns="referrerColumns" :data="stats.referrers || []" row-key="referrer_user_id">
+              <template #referrer_name="{ row }">
+                <span>{{ row.referrer_name || '已删除员工' }}</span>
+              </template>
+              <template #referral_count="{ row }">
+                <BaseButton intent="ghost" size="sm" @click="drillIntoReferrer(row)">{{ row.referral_count }}</BaseButton>
+              </template>
+              <template #ratio="{ row }">{{ formatRatio(row.ratio) }}</template>
+              <template #empty>暂无数据</template>
+            </BaseTable>
+          </div>
+        </div>
+      </template>
+    </div>
   </div>
 </template>
 
@@ -245,9 +338,10 @@ import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BasePagination from '@/components/ui/BasePagination.vue'
 import BaseBadge from '@/components/ui/BaseBadge.vue'
+import BaseTable from '@/components/ui/BaseTable.vue'
 import DownloadFileCard from '@/components/DownloadFileCard.vue'
 import AttachmentPreviewPanel from '@/components/AttachmentPreviewPanel.vue'
-import { listExternalUsers, getUserSessions, getSessionMessages } from '@/api/externalCustomers'
+import { listExternalUsers, getUserSessions, getSessionMessages, getReferralStats } from '@/api/externalCustomers'
 import AttachmentCard from './AttachmentCard.vue'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 import { useAmrPlayer } from '@/composables/useAmrPlayer'
@@ -273,6 +367,34 @@ const effectiveUser = computed(() => {
     phone: tenantAdmin.value.phone
   } : null
 })
+
+// 顶部 Tab 切换
+const tabs = [
+  { key: 'chat', label: '客户对话记录' },
+  { key: 'stats', label: '引流统计' },
+]
+const activeTab = ref<'chat' | 'stats'>('chat')
+
+// 引流统计（Tab2）
+const stats = ref<{ total_referrals: number; total_messages: number; referrers: any[] }>({ total_referrals: 0, total_messages: 0, referrers: [] })
+const statsLoading = ref(false)
+const activeRange = ref<'7d' | '30d' | 'custom'>('30d')
+const customStartDate = ref('')
+const customEndDate = ref('')
+const rangePresets = [
+  { key: '7d', label: '近7天' },
+  { key: '30d', label: '近30天' },
+  { key: 'custom', label: '自定义' },
+]
+const referrerColumns = [
+  { key: 'referrer_name', label: '员工', tooltip: (row: any) => row.referrer_name || '已删除员工' },
+  { key: 'referral_count', label: '引流客户数' },
+  { key: 'ratio', label: '占比' },
+]
+
+// 引流员工筛选（Tab1 客户列表按员工过滤，来自引流统计下钻）
+const referrerFilterUserId = ref('')
+const referrerFilterName = ref('')
 
 // 搜索条件
 const searchUsername = ref('')
@@ -341,6 +463,7 @@ async function loadUsers() {
   try {
     const res = await listExternalUsers({
       username: searchUsername.value || undefined,
+      referrer_user_id: referrerFilterUserId.value || undefined,
       page: userPage.value,
       page_size: userPageSize.value,
     })
@@ -423,6 +546,98 @@ async function loadSessionMessages() {
   } finally {
     loadingMessages.value = false
   }
+}
+
+// ==================== 引流统计（Tab2） ====================
+
+function switchTab(key: string) {
+  activeTab.value = key as 'chat' | 'stats'
+  if (key === 'stats') {
+    loadReferralStats()
+  }
+}
+
+function dateStr(d: Date): string {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
+function computeRangeDates(key: '7d' | '30d') {
+  const today = new Date()
+  const start = new Date(today)
+  if (key === '7d') start.setDate(today.getDate() - 6)
+  else start.setDate(today.getDate() - 29)
+  return { start_date: dateStr(start), end_date: dateStr(today) }
+}
+
+function selectRange(key: string) {
+  activeRange.value = key as '7d' | '30d' | 'custom'
+  if (key === 'custom') return
+  loadReferralStats()
+}
+
+function applyCustomRange() {
+  if (!customStartDate.value || !customEndDate.value) {
+    toast.error('请选择起止日期')
+    return
+  }
+  if (customStartDate.value > customEndDate.value) {
+    toast.error('起始日期不能晚于结束日期')
+    return
+  }
+  loadReferralStats()
+}
+
+async function loadReferralStats() {
+  statsLoading.value = true
+  try {
+    let params: { start_date?: string; end_date?: string } = {}
+    if (activeRange.value === 'custom') {
+      params = { start_date: customStartDate.value || undefined, end_date: customEndDate.value || undefined }
+    } else {
+      params = computeRangeDates(activeRange.value)
+    }
+    const res = await getReferralStats(params)
+    if (res.success) {
+      stats.value = {
+        total_referrals: res.total_referrals || 0,
+        total_messages: res.total_messages || 0,
+        referrers: res.referrers || [],
+      }
+    } else {
+      toast.error(res.message || '获取引流统计失败')
+    }
+  } catch (e: any) {
+    toast.error(e.message || '获取引流统计失败')
+  } finally {
+    statsLoading.value = false
+  }
+}
+
+function formatRatio(ratio: number | null | undefined): string {
+  if (ratio === null || ratio === undefined) return '-'
+  return `${ratio}%`
+}
+
+// 下钻：点击员工行 → 切回客户对话记录 Tab，客户列表按该员工过滤
+function drillIntoReferrer(row: any) {
+  referrerFilterUserId.value = row.referrer_user_id || ''
+  referrerFilterName.value = row.referrer_name || '该员工'
+  userPage.value = 1
+  selectedUserId.value = ''
+  selectedUser.value = null
+  messageList.value = []
+  activeTab.value = 'chat'
+  loadUsers()
+}
+
+function clearReferrerFilter() {
+  referrerFilterUserId.value = ''
+  referrerFilterName.value = ''
+  userPage.value = 1
+  loadUsers()
 }
 
 function formatDate(dateStr: string | null): string {

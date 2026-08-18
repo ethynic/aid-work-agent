@@ -1527,6 +1527,23 @@ CREATE INDEX IF NOT EXISTS idx_bs_ror_tenant ON bs_recruiting_operator_resumes(t
 CREATE INDEX IF NOT EXISTS idx_bs_ror_tenant_job ON bs_recruiting_operator_resumes(tenant_id, job_name);
 CREATE INDEX IF NOT EXISTS idx_bs_ror_tenant_fetched ON bs_recruiting_operator_resumes(tenant_id, fetched_at);
 
+-- =================== 微信客服引流（wecom_kf 客服账号引流）===================
+-- 2026-08-18：C端客户→引流员工 first-touch 归因表。enter_session 事件按 scene 反查
+-- 绑定的引流员工后写入；UNIQUE(customer_user_id) + ON CONFLICT DO NOTHING 保证一个
+-- C端客户只归属第一个扫码的引流员工。与 deploy/db_update.sql 2026-08-18 条目保持一致。
+CREATE TABLE IF NOT EXISTS customer_referrals (
+    id SERIAL PRIMARY KEY,
+    tenant_id TEXT,                    -- 租户隔离
+    referrer_user_id TEXT,             -- 引流租户员工 user_id
+    customer_user_id TEXT,             -- C端客户 user_id
+    open_kfid TEXT,                    -- 客服账号 ID（追溯来源）
+    scene TEXT,                        -- 场景值（追溯来源）
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT uq_customer_referrals_customer UNIQUE (customer_user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_customer_referrals_tenant ON customer_referrals(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_customer_referrals_referrer ON customer_referrals(tenant_id, referrer_user_id);
+
 -- 输出初始化完成信息
 DO $$
 BEGIN

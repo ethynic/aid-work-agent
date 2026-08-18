@@ -512,3 +512,22 @@ FROM bs_recruiting_operator_jobs j
 WHERE r.tenant_id = j.tenant_id
   AND r.job_name = j.job_name
   AND r.job_id IS NULL;
+
+-- ============================================================================
+-- 2026-08-18 微信客服引流归因表 customer_referrals
+-- C端客户→引流员工 first-touch 归因：enter_session 事件按 scene 反查绑定员工后写入。
+-- UNIQUE(customer_user_id) + ON CONFLICT DO NOTHING 保证一个客户只归属第一个引流员工。
+-- 与 deploy/init-postgres.sql 2026-08-18 条目保持一致。
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS customer_referrals (
+    id SERIAL PRIMARY KEY,
+    tenant_id TEXT,
+    referrer_user_id TEXT,
+    customer_user_id TEXT,
+    open_kfid TEXT,
+    scene TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT uq_customer_referrals_customer UNIQUE (customer_user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_customer_referrals_tenant ON customer_referrals(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_customer_referrals_referrer ON customer_referrals(tenant_id, referrer_user_id);

@@ -381,12 +381,60 @@ export async function generateChannelKeypair(configId: string): Promise<{
 
 // ==================== 用户管理 ====================
 
-export async function listTenantUsers(): Promise<{ success: boolean; users: any[] }> {
-  const res = await fetch(`${API_BASE}/users`, {
+export async function listTenantUsers(pageSize: number = 20): Promise<{ success: boolean; users: any[] }> {
+  const res = await fetch(`${API_BASE}/users?page_size=${pageSize}`, {
     headers: getSaasAuthHeader()
   })
   if (!res.ok) throw new Error('获取用户列表失败')
   return res.json()
+}
+
+// ==================== 微信客服账号管理（引流） ====================
+
+export async function listKfAccounts(): Promise<{ success: boolean; accounts: any[] }> {
+  const res = await fetch(`${API_BASE}/wecom-kf/accounts`, {
+    headers: getSaasAuthHeader()
+  })
+  if (!res.ok) throw new Error('获取客服账号失败')
+  return res.json()
+}
+
+export async function createKfAccount(data: Record<string, any>): Promise<any> {
+  const res = await fetch(`${API_BASE}/wecom-kf/accounts`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getSaasAuthHeader() },
+    body: JSON.stringify(data)
+  })
+  const result = await res.json()
+  if (!res.ok || !result.success) {
+    throw new Error(result.detail || result.error || '创建客服账号失败')
+  }
+  return result
+}
+
+export async function updateKfAccount(openKfid: string, data: Record<string, any>): Promise<any> {
+  const res = await fetch(`${API_BASE}/wecom-kf/accounts/${encodeURIComponent(openKfid)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...getSaasAuthHeader() },
+    body: JSON.stringify(data)
+  })
+  const result = await res.json()
+  if (!res.ok || !result.success) {
+    throw new Error(result.detail || result.error || '编辑客服账号失败')
+  }
+  return result
+}
+
+export async function deleteKfAccount(openKfid: string): Promise<any> {
+  const res = await fetch(`${API_BASE}/wecom-kf/accounts/${encodeURIComponent(openKfid)}`, {
+    method: 'DELETE',
+    headers: getSaasAuthHeader()
+  })
+  const result = await res.json()
+  if (!res.ok || !result.success) {
+    throw new Error(result.detail || result.error || '删除客服账号失败')
+  }
+  return result
 }
 
 export async function createTenantUser(data: { phone: string; username: string; department?: string; role?: string; tenant_id?: string }): Promise<any> {

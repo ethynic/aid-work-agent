@@ -33,6 +33,9 @@ from src.channels.idempotency import MessageDeduplicator
 from src.services.session_record import SessionRecordManager
 from src.core.storage import ensure_tenant_storage_dir, get_tenant_storage_path
 from src.core.temp_logger import tlog as _tlog
+from src.db.models import CustomerReferralDB
+from src.channels.wecom_kf.prompts import MSG_EXPIRED, MSG_CREDIT_EXHAUSTED
+from src.saas.api.wecom_kf_account import resolve_scene
 
 
 def _kf_tlog(message: str, **kwargs) -> None:
@@ -1470,6 +1473,115 @@ async def _auto_fill_open_kfid(tenant_id: str, open_kfid: str) -> tuple:
         return False, None
 
 
+async def _reply_kf_blocked_message(
+    adapter,
+    tenant_id: str,
+    open_kfid: str,
+    unified_msg,
+    session_id: str,
+    user_content: str,
+    text: str,
+    kind: str,
+) -> None:
+    """拦截命中时：先落库用户消息，再发送固定话术并落库 assistant 消息（不计费）。
+
+    复用发送 + 落库通道，写 channel_messages 便于前端展示。
+    """
+    try:
+        channel_session_manager.add_message(
+            session_id=session_id,
+            role="user",
+            content=user_content,
+            message_type="text",
+            tenant_id=tenant_id,
+            metadata={
+                "kind": f"blocked_{kind}_user",
+                "msgid": getattr(unified_msg, "message_id", "") or "",
+            },
+        )
+    except Exception as e:
+        logger.warning(f"[wecom_kf] 拦截落库用户消息失败: {e}")
+
+    try:
+        adapter.current_open_kfid = open_kfid
+        await adapter.send_text(text, unified_msg.user_id)
+    except Exception as e:
+        logger.warning(f"[wecom_kf] 拦截话术发送失败: {e}")
+        return
+
+    try:
+        channel_session_manager.add_message(
+            session_id=session_id,
+            role="assistant",
+            content=text,
+            message_type="text",
+            tenant_id=tenant_id,
+            metadata={"kind": f"blocked_{kind}_reply", "open_kfid": open_kfid},
+        )
+    except Exception as e:
+        logger.warning(f"[wecom_kf] 拦截话术落库失败: {e}")
+
+
+async def _is_kf_account_blocked(
+    adapter,
+    kf_config: dict,
+    tenant_id: str,
+    open_kfid: str,
+    unified_msg,
+    session_id: str,
+    user_content: str,
+) -> bool:
+    """客服账号到期 / 积分用尽拦截，命中时回固定话术并落库，返回 True。
+
+    两条拦截均不调智能体、不 start_record（不计费）。
+    转人工会话不经此路径（企微直达员工侧，不会回调我方智能体）。
+    """
+    from datetime import datetime, timedelta
+
+    # 拦截 1：到期日期（expire_at 可空，到期日当天仍有效，+23h59m59s）
+    expire_at = kf_config.get("expire_at")
+    if expire_at:
+        try:
+            expire_dt = datetime.strptime(expire_at, "%Y-%m-%d") + timedelta(
+                hours=23, minutes=59, seconds=59
+            )
+            if datetime.now() > expire_dt:
+                _kf_tlog(
+                    "账号到期拦截: tenant={tenant}, open_kfid={open_kfid}, expire_at={expire_at}",
+                    tenant=tenant_id, open_kfid=open_kfid, expire_at=expire_at,
+                    level="WARNING",
+                )
+                await _reply_kf_blocked_message(
+                    adapter, tenant_id, open_kfid, unified_msg,
+                    session_id, user_content, MSG_EXPIRED, "expired",
+                )
+                return True
+        except ValueError:
+            logger.warning(f"[wecom_kf] expire_at 格式非法: {expire_at}")
+
+    # 拦截 2：积分上限（credit_limit>0 才查；0=跟随租户积分，已有租户级拦截）
+    credit_limit = kf_config.get("credit_limit", 0)
+    if credit_limit and credit_limit > 0:
+        try:
+            used = CustomerReferralDB.sum_kf_account_credit(tenant_id, open_kfid)
+            if used >= float(credit_limit):
+                _kf_tlog(
+                    "账号积分用尽拦截: tenant={tenant}, open_kfid={open_kfid}, "
+                    "used={used}, limit={limit}",
+                    tenant=tenant_id, open_kfid=open_kfid, used=used, limit=credit_limit,
+                    level="WARNING",
+                )
+                await _reply_kf_blocked_message(
+                    adapter, tenant_id, open_kfid, unified_msg,
+                    session_id, user_content, MSG_CREDIT_EXHAUSTED, "credit_exhausted",
+                )
+                return True
+        except Exception as e:
+            logger.warning(f"[wecom_kf] 积分归集查询失败: {e}")
+
+    return False
+
+
 async def _process_tenant_wecom_kf_messages(
     tenant_id: str, config_id: str, open_kfid: str, adapter
 ) -> None:
@@ -1704,6 +1816,73 @@ async def _process_tenant_wecom_kf_messages(
 
                     continue  # 撤回事件处理完毕，跳过后续 origin 过滤等逻辑
                 # ===== 撤回消息处理结束 =====
+
+                # ===== 客户扫码进入会话（enter_session）事件：引流归因 + 欢迎语 =====
+                if msg_type == "event" and msg.get("event", {}).get("event_type") == "enter_session":
+                    event_data = msg.get("event", {})
+                    scene = event_data.get("scene", "")
+                    ext_userid = event_data.get("external_userid", "")
+                    welcome_code = event_data.get("welcome_code", "")
+
+                    # 事件去重（enter_session 可能重复推送）
+                    dedup = _get_tenant_dedup(tenant_id)
+                    if await dedup.is_duplicate(f"enter_session:{msg_id}"):
+                        continue
+
+                    _kf_tlog(
+                        "enter_session事件: tenant={tenant}, user={user}, scene={scene}, "
+                        "open_kfid={open_kfid}, has_welcome_code={has_code}",
+                        tenant=tenant_id, user=ext_userid, scene=scene,
+                        open_kfid=open_kfid, has_code=bool(welcome_code),
+                    )
+
+                    # 1. 确保 C 端客户注册（幂等，扫码即建用户 → 计入引流数）
+                    customer_user_id = None
+                    if ext_userid:
+                        try:
+                            customer_user_id = await ensure_user_registered(
+                                "wecom_kf", ext_userid, tenant_id, source="wecom_kf"
+                            )
+                        except Exception as e:
+                            logger.warning(f"[wecom_kf] enter_session 注册客户失败: {e}")
+
+                    # 2. 引流归因（first-touch）：scene 匹配到绑定引流员工的客服账号
+                    if scene and customer_user_id:
+                        try:
+                            _cfg_id, kf_binding = resolve_scene(tenant_id, scene)
+                            if kf_binding and kf_binding.get("tenant_user_id"):
+                                CustomerReferralDB.record(
+                                    tenant_id=tenant_id,
+                                    referrer_user_id=kf_binding["tenant_user_id"],
+                                    customer_user_id=customer_user_id,
+                                    open_kfid=open_kfid,
+                                    scene=scene,
+                                )
+                                _kf_tlog(
+                                    "引流归因成功: tenant={tenant}, customer={customer}, "
+                                    "referrer={referrer}, scene={scene}",
+                                    tenant=tenant_id, customer=ext_userid,
+                                    referrer=kf_binding["tenant_user_id"], scene=scene,
+                                )
+                        except Exception as e:
+                            logger.warning(f"[wecom_kf] enter_session 引流归因失败: {e}")
+
+                    # 3. 发送欢迎语（welcome_code 有效 + 配置了欢迎语）
+                    if welcome_code and kf_config.get("welcome_message"):
+                        try:
+                            adapter.current_open_kfid = open_kfid
+                            await adapter.send_welcome_message(
+                                welcome_code, kf_config["welcome_message"]
+                            )
+                            _kf_tlog(
+                                "enter_session欢迎语已发送: tenant={tenant}, user={user}",
+                                tenant=tenant_id, user=ext_userid,
+                            )
+                        except Exception as e:
+                            logger.warning(f"[wecom_kf] enter_session 欢迎语发送失败: {e}")
+
+                    continue
+                # ===== enter_session 处理结束 =====
 
                 # 临时调试：记录 msg_list 中每条原始条目（含被过滤的事件型条目，如撤回事件）
                 # 调试主题：微信事件
@@ -2149,6 +2328,13 @@ async def _process_tenant_wecom_kf_messages(
                 # 检查人工转接关键词
                 if adapter.should_transfer_to_human(user_content, kf_config):
                     await _transfer_kf_to_human(adapter, session, kf_config, open_kfid, unified_msg.user_id, session_id)
+                    continue
+
+                # 客服账号到期 / 积分用尽拦截（不计费，回固定话术）
+                if await _is_kf_account_blocked(
+                    adapter, kf_config, tenant_id, open_kfid,
+                    unified_msg, session_id, user_content,
+                ):
                     continue
 
                 # 路由到智能体

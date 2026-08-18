@@ -10,6 +10,12 @@ extra_system_prompt 注入到 LLM 的 system prompt 末尾。
 详见：docs/channel/wecom_kf/reply_quota_control_plan.md
 """
 
+# ============ 客服账号到期/积分拦截固定话术 ============
+# 由 channel_routes 消息入口拦截使用：到期（expire_at 当天结束）或积分用尽
+# （credit_limit>0 且累计 >= 上限）时不调智能体、不计费，仅回固定话术。
+MSG_EXPIRED = "本服务已到期，如需继续使用请联系工作人员开通。"
+MSG_CREDIT_EXHAUSTED = "本服务积分已用完，如需继续使用请联系工作人员充值。"
+
 WECOM_KF_CHANNEL_PROMPT = """---
 
 ## 当前渠道约束（微信客服）

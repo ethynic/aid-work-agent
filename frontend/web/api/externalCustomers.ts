@@ -39,6 +39,7 @@ export function getSaasAuthHeader(): Record<string, string> {
 export async function listExternalUsers(params: {
   username?: string
   source?: string
+  referrer_user_id?: string
   page?: number
   page_size?: number
 }): Promise<{
@@ -52,6 +53,7 @@ export async function listExternalUsers(params: {
   const searchParams = new URLSearchParams()
   if (params.username) searchParams.set('username', params.username)
   if (params.source) searchParams.set('source', params.source)
+  if (params.referrer_user_id) searchParams.set('referrer_user_id', params.referrer_user_id)
   if (params.page) searchParams.set('page', params.page.toString())
   if (params.page_size) searchParams.set('page_size', params.page_size.toString())
 
@@ -59,6 +61,28 @@ export async function listExternalUsers(params: {
     headers: getSaasAuthHeader()
   })
   if (!res.ok) throw new Error('获取外部用户列表失败')
+  return res.json()
+}
+
+// 获取引流统计（总引流数 / 总对话消息数 / 员工维度分组）
+export async function getReferralStats(params: {
+  start_date?: string
+  end_date?: string
+}): Promise<{
+  success: boolean
+  total_referrals?: number
+  total_messages?: number
+  referrers?: any[]
+  message?: string
+}> {
+  const searchParams = new URLSearchParams()
+  if (params.start_date) searchParams.set('start_date', params.start_date)
+  if (params.end_date) searchParams.set('end_date', params.end_date)
+
+  const res = await fetch(`${API_BASE}/referral-stats?${searchParams}`, {
+    headers: getSaasAuthHeader()
+  })
+  if (!res.ok) throw new Error('获取引流统计失败')
   return res.json()
 }
 

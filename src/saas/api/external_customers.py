@@ -51,6 +51,7 @@ async def list_external_users(
     request: Request,
     username: Optional[str] = None,
     source: Optional[str] = None,
+    referrer_user_id: Optional[str] = None,
     page: int = 1,
     page_size: int = 20,
 ):
@@ -59,6 +60,7 @@ async def list_external_users(
     Args:
         username: 用户名/昵称搜索（可选）
         source: 用户来源筛选（可选）
+        referrer_user_id: 引流员工筛选（可选，引流统计下钻时传入）
         page: 页码
         page_size: 每页数量
     """
@@ -75,10 +77,52 @@ async def list_external_users(
         tenant_id=tenant_id,
         username=username,
         source=source,
+        referrer_user_id=referrer_user_id,
         page=page,
         page_size=page_size,
     )
     return {"success": True, **result}
+
+
+@router.get("/referral-stats")
+async def get_referral_stats(
+    request: Request,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+):
+    """引流统计：总引流数 / 总对话消息数 / 员工维度分组（供「引流统计」Tab 使用）
+
+    日期段过滤基准：
+    - 引流数 / 员工分组 → customer_referrals.created_at
+    - 总对话消息数 → channel_messages.created_at（is_recalled=FALSE）
+
+    Args:
+        start_date: 起始日期（含当日），格式 YYYY-MM-DD
+        end_date: 结束日期（含当日，后端按 < 次日 语义处理）
+    """
+    if not settings.saas.enabled:
+        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
+
+    admin = require_admin(request)
+    tenant_id = admin.get("tenant_id")
+
+    if not tenant_id:
+        raise HTTPException(status_code=400, detail="缺少租户信息")
+
+    from src.db.models import CustomerReferralDB
+
+    stats = CustomerReferralDB.referral_stats(
+        tenant_id, start_date=start_date, end_date=end_date
+    )
+    total_messages = CustomerReferralDB.count_referred_messages(
+        tenant_id, start_date=start_date, end_date=end_date
+    )
+    return {
+        "success": True,
+        "total_referrals": stats["total_referrals"],
+        "total_messages": total_messages,
+        "referrers": stats["referrers"],
+    }
 
 
 @router.get("/users/{user_id}/sessions")
