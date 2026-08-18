@@ -35,6 +35,7 @@ from typing import Any, Dict, List, Optional
 import psycopg2.extras
 from loguru import logger
 
+from src.config.settings import settings
 from src.db.database import get_db_connection
 from src.llm.gateway import llm_gateway
 from src.reports.summarizer import get_report_model
@@ -44,7 +45,7 @@ from src.services.session_record import record_background_llm_usage
 # 简历 OCR 正文拼入 prompt 的截断上限（设计 §3）
 _MAX_RESUME_CHARS = 3000
 # LLM 输出 token 上限（score + ≤100 字 summary + key_info 足够）
-_MAX_OUTPUT_TOKENS = 1024
+_MAX_OUTPUT_TOKENS = 3072
 # 隐含要求路径：单条初次开场话术拼入 prompt 的截断上限（最多取前 3 条）
 _MAX_SCRIPT_CHARS = 200
 _MAX_OPENING_SCRIPTS = 3
@@ -100,6 +101,12 @@ async def evaluate_and_update(tenant_id: str, resume_id: int) -> Dict[str, Any]:
             chat_kwargs: Dict[str, Any] = {"temperature": _TEMPERATURE, "max_tokens": _MAX_OUTPUT_TOKENS}
             if model_name:
                 chat_kwargs["model"] = model_name
+            # DeepSeek V4 是思考模型：reasoning 与正文共享 max_tokens 配额，真机实证
+            # 思考会耗尽输出空间致 content 为空（JSON 解析必败）。评分是结构化抽取任务
+            # 无需思考，直接关闭（经 gateway 的 kwargs 会摊到请求体顶层，与
+            # travel-quote 直连 SDK 的 extra_body={"thinking":{"type":"disabled"}} 等价）
+            if settings.llm.provider == "deepseek":
+                chat_kwargs["thinking"] = {"type": "disabled"}
             response = await llm_gateway.chat(messages=messages, **chat_kwargs)
         except Exception as e:  # noqa: BLE001 LLM 异常统一走重试/降级，绝不外抛
             last_error = f"LLM 调用失败: {type(e).__name__}: {e}"

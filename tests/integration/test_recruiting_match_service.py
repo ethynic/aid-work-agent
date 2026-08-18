@@ -218,7 +218,7 @@ class TestEvaluateSuccess:
         assert len(gw.calls) == 1
         # 调用参数：低温度 + 便宜报告模型 + token 上限
         assert gw.calls[0]["temperature"] == 0.1
-        assert gw.calls[0]["max_tokens"] == 1024
+        assert gw.calls[0]["max_tokens"] == match_service._MAX_OUTPUT_TOKENS
 
     @pytest.mark.parametrize(
         "score,threshold,expected_status",
