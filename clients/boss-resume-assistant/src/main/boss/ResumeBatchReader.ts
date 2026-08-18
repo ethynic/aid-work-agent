@@ -223,6 +223,9 @@ export class ResumeBatchReader {
       }
       if (!rect) {
         failures.push({ name: card.name, error: '点击卡片后简历详情未打开（未出现简历画布）' })
+        // 详情可能实际已打开但画布判定未命中（真机 2026-08-18：572 高画布被阈值卡掉）——
+        // 失败路径也必须尝试关闭，否则弹层挡住列表导致后续卡片连环点空
+        await this.tryCloseDetail().catch(() => false)
         continue
       }
 

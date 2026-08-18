@@ -99,9 +99,12 @@ export const SEGMENT_REPAINT_DELAY = 900
 export const BOTTOM_SIZE_EPSILON = 200
 /** 分段数上限（防护：异常页面无限不重复时终止） */
 export const MAX_SEGMENTS = 12
-/** 简历 canvas 最小尺寸（device px），排除小图标 canvas */
+/** 简历 canvas 最小尺寸（device px），排除小图标 canvas。
+ *  MIN_H 真机 2026-08-18 从 600 放宽到 400：详情弹层画布高度随窗口/内容自适应，
+ *  实测 760×572 的合法简历画布被 600 卡掉（判「详情未打开」连环失败）；
+ *  图标类 canvas 仅几十像素，400 仍能安全区分 */
 export const CANVAS_MIN_W = 400
-export const CANVAS_MIN_H = 600
+export const CANVAS_MIN_H = 400
 
 /** 屏幕上的 device px 矩形 */
 export interface DeviceRect {

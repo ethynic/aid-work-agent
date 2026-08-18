@@ -278,7 +278,9 @@ test('③ 打开超时（点后始终无 canvas）→ failures 记录后继续�
   assert.equal(result.attempted, 2)
   // 失败卡按 OPEN_CLICK_ATTEMPTS 重点了 3 次 + 下一张 1 次
   assert.equal(f.clicks.length, OPEN_CLICK_ATTEMPTS + 1)
-  assert.equal(f.escapes, 1) // 超时卡没打开详情，无需 Escape
+  // 2026-08-18 起失败路径也尝试 Escape 清场（画布判定未命中但详情可能实际开着，
+  // 不关会挡住列表导致后续卡片连环点空）：超时卡清场 1 次 + 成功卡关详情 1 次
+  assert.equal(f.escapes, 2)
 })
 
 test('④ 读取抛错（OCR 空白）→ failures 记录 + 详情已关闭（Escape）+ 继续下一张', async () => {

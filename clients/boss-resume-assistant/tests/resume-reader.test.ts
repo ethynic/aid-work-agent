@@ -155,7 +155,9 @@ test('locateResumeCanvas：多个 canvas 取面积最大者（排除小图标 ca
 test('locateResumeCanvas：无 canvas / 只有小 canvas / 高度不过门槛 → null', () => {
   assert.equal(locateResumeCanvas(canvasSnap({})), null)
   assert.equal(locateResumeCanvas(canvasSnap({ canvases: [[0, 0, 100, 100]] })), null)
-  assert.equal(locateResumeCanvas(canvasSnap({ canvases: [[0, 0, 727, 600]] })), null) // h=600 未过门槛
+  assert.equal(locateResumeCanvas(canvasSnap({ canvases: [[0, 0, 727, 399]] })), null) // h<400 未过门槛
+  // 真机 2026-08-18：572 高的合法弹层画布（旧门槛 600 曾误杀）必须识别
+  assert.notEqual(locateResumeCanvas(canvasSnap({ canvases: [[0, 0, 760, 572]] })), null)
 })
 
 // ---------- readResume 主链路 ----------
