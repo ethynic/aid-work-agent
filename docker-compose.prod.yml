@@ -1,5 +1,4 @@
-# AID Work Agent 生产环境 Docker Compose 配置
-# 优化用于生产环境部署
+# AID Work Agent 生产环境，强调稳定运行。发版周期为1-2周。
 
 services:
   # FastAPI 后端服务
@@ -25,7 +24,7 @@ services:
       - SERVER_MODE=fastapi
       - SERVER_PORT=8000
       # Gunicorn 配置
-      - WORKERS=${WORKERS:-9}
+      - WORKERS=${WORKERS:-4}
       - WORKER_TIMEOUT=${WORKER_TIMEOUT:-120}
       # 调试模式（生产环境必须为 false）
       - DEBUG=${DEBUG:-false}
@@ -73,16 +72,6 @@ services:
       retries: 3
       start_period: 60s
     
-    # 资源限制（生产环境推荐配置）
-    deploy:
-      resources:
-        limits:
-          cpus: '2'
-          memory: 2G
-        reservations:
-          cpus: '1'
-          memory: 1G
-    
     # 日志配置
     logging:
       driver: "json-file"
@@ -127,14 +116,6 @@ services:
       timeout: 5s
       retries: 3
       start_period: 90s
-    deploy:
-      resources:
-        limits:
-          cpus: '1'
-          memory: 1G
-        reservations:
-          cpus: '0.25'
-          memory: 256M
     logging:
       driver: "json-file"
       options:

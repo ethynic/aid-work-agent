@@ -1,5 +1,4 @@
-# AID Work Agent 在线测试环境 Docker Compose 配置
-# 基于 docker-compose.prod.yml 修改，避免与生产环境端口和路径冲突
+# AID Work Agent 在线测试环境。环境参数尽量贴近生产环境。发版周期是 1-2 天。
 
 services:
   # FastAPI 后端服务
@@ -24,8 +23,9 @@ services:
       # 服务模式（固定值）
       - SERVER_MODE=fastapi
       - SERVER_PORT=8000
-      # Gunicorn 配置
-      - WORKERS=${WORKERS:-9}
+      # Gunicorn 配置（默认 3 个 worker；多环境共享 8G 宿主机，9 个 worker 会
+      # 因每个 worker 加载完整 Agent 环境导致内存/Swap 压力过大、服务卡死）
+      - WORKERS=${WORKERS:-2}
       - WORKER_TIMEOUT=${WORKER_TIMEOUT:-120}
       # 调试模式（测试环境必须为 false）
       - DEBUG=${DEBUG:-false}
@@ -73,16 +73,6 @@ services:
       retries: 3
       start_period: 60s
     
-    # 资源限制（生产环境推荐配置）
-    deploy:
-      resources:
-        limits:
-          cpus: '2'
-          memory: 2G
-        reservations:
-          cpus: '1'
-          memory: 1G
-    
     # 日志配置
     logging:
       driver: "json-file"
@@ -122,14 +112,6 @@ services:
       timeout: 5s
       retries: 3
       start_period: 90s
-    deploy:
-      resources:
-        limits:
-          cpus: '1'
-          memory: 1G
-        reservations:
-          cpus: '0.25'
-          memory: 256M
     logging:
       driver: "json-file"
       options:
