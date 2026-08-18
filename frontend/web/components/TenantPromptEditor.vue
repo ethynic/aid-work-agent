@@ -88,7 +88,7 @@
               <p class="text-xs text-muted mt-1 leading-relaxed">
                 上传模板后，系统会在提示词末尾自动追加「### 相关模板位置信息」，以
                 <code class="text-xs bg-canvas px-1 rounded">{名称}：{file_id}</code> 形式列出；
-                数字员工可按 file_id 调用文档工具（word/excel/pdf_process 等）套用对应模板。
+                数字员工可按 file_id 调用文档工具（word/excel/pdf_process 等）套用对应模板。点击模板名称可下载。
               </p>
             </div>
             <button
@@ -156,7 +156,15 @@
                 <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
               </svg>
               <div class="flex-1 min-w-0">
-                <p class="text-sm text-default truncate">{{ t.name }}</p>
+                <button
+                  type="button"
+                  class="block max-w-full text-sm text-primary-600 hover:text-primary-700 hover:underline truncate text-left disabled:opacity-50 disabled:no-underline"
+                  :title="`下载 ${t.original_name || t.name}`"
+                  :disabled="!!downloadingId"
+                  @click="handleDownloadTemplate(t)"
+                >
+                  {{ downloadingId === t.file_id ? '下载中...' : t.name }}
+                </button>
                 <p class="text-xs text-muted truncate">
                   {{ t.original_name || '-' }} · {{ formatSize(t.size_bytes) }} · {{ t.file_id }}
                 </p>
@@ -187,7 +195,9 @@ import { useRouter, useRoute } from 'vue-router'
 import AppHeader from '@/components/AppHeader.vue'
 import MyTextarea from '@/components/ui/MyTextarea.vue'
 import { getExtraMd, saveExtraMd, deleteExtraMd } from '@/api/subagent'
-import { listTemplates, uploadTemplate, deleteTemplate, type TemplateFile } from '@/api/subagentTemplates'
+import { listTemplates, uploadTemplate, deleteTemplate, getTemplateDownloadUrl, type TemplateFile } from '@/api/subagentTemplates'
+import { resolveApiUrl, saveDownloadUrl } from '@/platform/urlResolver'
+import { getAuthHeader } from '@/api/auth'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 
 const router = useRouter()
@@ -222,6 +232,7 @@ const showAddTemplate = ref(false)
 const newTemplateName = ref('')
 const selectedFile = ref<File | null>(null)
 const templateFileInput = ref<HTMLInputElement | null>(null)
+const downloadingId = ref('')
 
 const ALLOWED_TEMPLATE_EXTS = ['.docx', '.xlsx', '.pptx', '.pdf', '.md', '.txt', '.csv']
 
@@ -380,6 +391,36 @@ async function handleDeleteTemplate(fileId: string) {
     }
   } catch (e: any) {
     errorMsg.value = e.message || '删除失败'
+  }
+}
+
+// 点击模板名称下载：桌面端走受控保存，Web 端 fetch blob 触发浏览器下载
+async function handleDownloadTemplate(t: TemplateFile) {
+  if (downloadingId.value) return
+  downloadingId.value = t.file_id
+  try {
+    const url = resolveApiUrl(getTemplateDownloadUrl(t.file_id))
+    const fileName = t.original_name || t.name
+    if (window.agentDesktop) {
+      await saveDownloadUrl(url, fileName, getAuthHeader())
+      return
+    }
+    const response = await fetch(url)
+    if (!response.ok) throw new Error(`下载失败: ${response.status}`)
+    const blob = await response.blob()
+    const blobUrl = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = blobUrl
+    a.download = fileName
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 1000)
+  } catch (e: any) {
+    console.error('模板下载失败:', e)
+    errorMsg.value = e.message || '模板下载失败'
+  } finally {
+    downloadingId.value = ''
   }
 }
 
