@@ -4,7 +4,8 @@
  */
 import { getAuthHeader } from '@/api/auth'
 
-const API_BASE = `${import.meta.env.VITE_API_BASE_URL || '/api'}/saas/tenant/subagent-templates`
+const API_ROOT = import.meta.env.VITE_API_BASE_URL || '/api'
+const API_BASE = `${API_ROOT}/saas/tenant/subagent-templates`
 
 export interface TemplateFile {
   name: string
@@ -52,6 +53,14 @@ export async function uploadTemplate(
     body: formData,
   })
   return handleResponse(response)
+}
+
+/**
+ * 模板下载地址。模板上传时已写入通用文件元数据（uploaded_file:{file_id}），
+ * 直接走通用下载接口 GET /api/files/{file_id}/download，后端无需新增接口。
+ */
+export function getTemplateDownloadUrl(fileId: string): string {
+  return `${API_ROOT}/files/${encodeURIComponent(fileId)}/download`
 }
 
 /**
