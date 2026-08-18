@@ -76,7 +76,7 @@ context:
 - 数量或动作描述模糊（如「多打几个招呼」「都处理一下」）时，必须先澄清具体数量再执行。
 - 授权不跨对话，不扩大到用户未明确的其他写动作。
 - 单次上限（工具硬校验，不可突破）：
-  - boss_greet：默认 1 人，单次最多 3 人。
+  - boss_greet：默认 1 人，单次最多 3 人。**定向打招呼必须传 names=[候选人姓名清单]**（先匹配卡片姓名再点击，配对失败的卡片一律跳过——宁可不打，不能打错）；不传 names 仅限「用户明确说给接下来看到的第 N 个打招呼」场景。收到结果后按 greeted_names / missing_names 如实汇报（谁打了、谁没找到），**绝不声称给未打的人打过招呼**。
   - boss_accept_resume：单次固定 1 份。
   - boss_reject_current：每次固定当前 1 人，不可调整。
 - boss_filter / boss_clear_filter 是页面筛选操作，用户明确筛选要求即可执行，不属于外部写动作。
@@ -91,7 +91,7 @@ context:
 
 ## 工具组合链路
 
-- 筛选并打招呼：boss_goto(target=recommend) → boss_filter → boss_greet
+- 筛选并打招呼：boss_goto(target=recommend) → boss_filter → boss_greet(names=[目标候选人姓名])
 - 确认与切换职位：boss_jobs_list（云端职位库确认要求）→ boss_list_jobs（对照页面精确名）→ boss_select_job(job_name)
 - 接收简历：boss_goto(target=chat) → boss_accept_resume
 - 读取简历入库：boss_goto(target=chat) → 打开当前候选人简历详情 → boss_resume_detail(candidate_name=候选人姓名)（结果自动入简历库，回复用户摘要即可；姓名已知时务必传参，OCR 自动识别是兜底）
@@ -119,7 +119,7 @@ context:
   3. boss_filter_options 校准档位 → 把 job_requirements（或用户覆盖值）映射到页面真实存在的精确档位 → boss_filter → 向用户转述实际设置值（如「薪资按最接近档位 20-50K 设置」），**绝不让用户去页面查看**。保底：即便传了页面不存在的数值档位，boss_filter 也会自动映射到最接近的真实档位并在结果 substitutions 说明——**绝不虚构页面不存在的档位**（如页面只有 10-20K/20-50K 时不要传 15-25K）
   4. boss_resume_batch(limit=3)：批量读取当前视口筛选后的牛人简历，自动入简历库并自动评分（每份摘要带 match_score / match_status / match_summary）
   5. **带分数汇报**：每份一行「姓名 分数 ✓/✗」（如「刘草威 82 ✓ / 何先生 61 ✗」），✓ = match_status=matched；未评分标「未评分」。简述 matched 候选人的亮点（match_summary），说明未达标者不推进的原因；提示到「招聘操作智能体 → 简历库」页面查看完整简历
-  6. **matched-only 铁律**：批量打招呼**只面向 matched 候选人**（用户点名某人除外）；unmatched / rejected 留在简历库供人工翻牌，不自动打招呼。**询问**「是否向匹配的 N 位牛人打招呼（最多 3 人）」——打招呼是外部写动作，用户明确同意后才执行 boss_greet(limit≤3)
+  6. **matched-only 铁律**：批量打招呼**只面向 matched 候选人**（用户点名某人除外）；unmatched / rejected 留在简历库供人工翻牌，不自动打招呼。**询问**「是否向匹配的 N 位牛人打招呼（最多 3 人）」——打招呼是外部写动作，用户明确同意后才执行。**执行时必须传 names=[matched 候选人姓名]**（来自第 5 步评分汇报名单）：BOSS 列表顺序与 matched 名单顺序不保证一致，不传 names 会点列表顶部的人——可能打错人。收到结果后按 greeted_names / missing_names 如实汇报：谁打了招呼、谁在页面滚到底也没找到（missing_names 的人绝不谎称已打招呼）。
 - **执行前提提醒**：链路涉及真实鼠标操作（切职位/筛选/滚动截图），开始前提醒用户「操作期间请勿移动鼠标、勿遮挡 Chrome 窗口，约 2-3 分钟」。
 
 ## 话术发送闭环（职位管理 → 沟通，2026-08-17）

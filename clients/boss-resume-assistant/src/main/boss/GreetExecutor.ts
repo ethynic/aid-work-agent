@@ -6,6 +6,11 @@
  * 当前视口点完后用 CDP mouseWheel 向下滚动加载更多（浏览类操作，不走 Win32），
  * 直到达到 limit 或滚到底（滚动前后列表文档 scrollOffsetY 不变判定到底）。
  *
+ * 定向模式（2026-08-18 修复：真机发现只认 limit 不认人，列表顺序与 matched 名单顺序
+ * 不保证一致，可能打错人）：传 names 姓名清单时，每轮 snapshot 后对可见按钮用 cardName.ts
+ * 的真机锚定规则配对卡片姓名，只点姓名 ∈ names 的按钮；姓名配对失败或不在名单的按钮
+ * 一律跳过（宁可不打，不能打错），滚动加载继续找，直到 names 全部完成或滚到底。
+ *
  * 安全设计（fail-loud）：
  * - 只点当前视口内可见的按钮（视口外的先滚动再点）
  * - 每次点击后校验「打招呼」按钮总数必须减少（成功会变成「继续沟通」）；
@@ -18,6 +23,7 @@ import {
   accumulateOwnerOffset,
   boundsCenter,
 } from './domSnapshot.js'
+import { GREET_TEXT, pairCardName, type GreetButtonRef } from './cardName.js'
 import { viewportOf } from './FilterSetter.js'
 import { CancelledError } from '../operations/types.js'
 
@@ -43,7 +49,18 @@ export interface GreetDeps {
   sleep?(ms: number): Promise<void>
 }
 
-const GREET_TEXT = '打招呼'
+/** greetVisible 结果 */
+export interface GreetOutcome {
+  /** 成功打招呼人数 */
+  greeted: number
+  /** 是否滚到底（false 表示被 limit 截断或定向名单全部完成） */
+  reachedEnd: boolean
+  /** 定向模式（传 names）时返回：实际打过招呼的姓名（按完成顺序） */
+  greetedNames?: string[]
+  /** 定向模式时返回：names 中滚到底也没找到（或被 limit 截断）的姓名 */
+  missingNames?: string[]
+}
+
 /** 单次滚动距离：远小于视口高（1905），保证相邻两屏有重叠不漏人 */
 const SCROLL_DELTA = 800
 
@@ -62,21 +79,52 @@ export class GreetExecutor {
 
   /**
    * 逐个点击「打招呼」，滚到底或达到 limit 结束。
-   * 返回成功数与是否到底（reachedEnd=false 表示被 limit 截断）。
+   *
+   * - 无 names：只按 limit 数量点击（历史行为，完全不变）。
+   * - 有 names：定向模式——只点姓名精确匹配（trim 后相等）names 的按钮；配对失败或不在
+   *   名单的按钮一律跳过；视口内无目标时滚动加载继续找，直到 names 全部完成或滚到底。
+   *   limit 缺省取 names.length，作为总上限保险（显式传更小值时截断，剩余进 missingNames）。
+   * 返回成功数与是否到底；定向模式额外返回 greetedNames / missingNames（谁打了、谁没找到）。
    */
-  async greetVisible(opts: { limit?: number } = {}): Promise<{ greeted: number; reachedEnd: boolean }> {
-    const limit = opts.limit ?? 10
+  async greetVisible(opts: { limit?: number; names?: string[] } = {}): Promise<GreetOutcome> {
+    const names = opts.names
+    if (names !== undefined && names.length === 0) {
+      throw new GreetError('names 不能是空数组：定向打招呼必须提供至少 1 个姓名')
+    }
+    const limit = opts.limit ?? (names ? names.length : 10)
+    // 定向待打名单（trim 后精确匹配）；非定向为 null（走历史路径）
+    const pending = names ? new Set(names.map((n) => n.trim())) : null
+    const greetedNames: string[] = []
     let greeted = 0
     for (;;) {
-      // 1. 点完当前视口内所有可见按钮
+      // 1. 点完当前视口内所有可见按钮（定向时只点姓名 ∈ names 的）
       for (;;) {
         if (this.deps.signal?.aborted) throw new CancelledError(`已取消：成功打招呼 ${greeted} 人后中止`)
-        if (greeted >= limit) return { greeted, reachedEnd: false }
+        if (pending !== null && pending.size === 0) return outcome(greeted, false, names, greetedNames)
+        if (greeted >= limit) return outcome(greeted, false, names, greetedNames)
         const snap = await this.deps.snapshot()
         const buttons = this.findGreetButtons(snap)
         if (buttons.length === 0) break
 
-        await this.deps.click(buttons[0]!, viewportOf(snap))
+        // 定向模式：从上往下找第一个「配对姓名 ∈ 名单」的按钮；配对失败/不在名单的按钮跳过不点
+        let target: GreetButtonRef | null = buttons[0]!
+        let targetName: string | null = null
+        if (pending !== null) {
+          target = null
+          const viewport = viewportOf(snap)
+          for (const btn of buttons) {
+            const name = pairCardName(snap, btn, viewport)
+            if (name !== null && pending.has(name)) {
+              target = btn
+              targetName = name
+              break
+            }
+          }
+          // 视口内没有目标：退出内层循环去滚动加载继续找
+          if (target === null) break
+        }
+
+        await this.deps.click(target.point, viewportOf(snap))
         await this.sleep(1500)
 
         const after = await this.deps.snapshot()
@@ -94,6 +142,10 @@ export class GreetExecutor {
           )
         }
         greeted++
+        if (targetName !== null) {
+          greetedNames.push(targetName)
+          pending!.delete(targetName)
+        }
         this.deps.onProgress?.(greeted)
       }
 
@@ -101,7 +153,7 @@ export class GreetExecutor {
       // 到底判定：比较滚动前后列表文档的 scrollOffsetY（不能比 strings——
       // strings 是全量已加载文本表，在已加载内容内滚动时不变，会误判到底）。
       // 滚不动时多试一次：列表底部可能异步加载更多。
-      if (!this.deps.scroll) return { greeted, reachedEnd: true }
+      if (!this.deps.scroll) return outcome(greeted, true, names, greetedNames)
       for (let attempt = 0; attempt < 2; attempt++) {
         const before = await this.deps.snapshot()
         // 真机实测实际滚动距离约为 deltaY 的 1.5 倍，且窗口可能只有 1270 高：取 min(800, 视口半高) 保证重叠
@@ -110,17 +162,17 @@ export class GreetExecutor {
         await this.sleep(attempt === 0 ? 1200 : 1800)
         const after = await this.deps.snapshot()
         if (scrollOffsetOf(before) !== scrollOffsetOf(after)) break
-        if (attempt === 1) return { greeted, reachedEnd: true }
+        if (attempt === 1) return outcome(greeted, true, names, greetedNames)
       }
     }
   }
 
-  /** 视口内全部「打招呼」按钮，按 y 从上到下排序 */
-  private findGreetButtons(snap: DomSnapshot): ClickPoint[] {
+  /** 视口内全部「打招呼」按钮，按 y 从上到下排序（含所在文档序号，定向模式配对姓名用） */
+  private findGreetButtons(snap: DomSnapshot): GreetButtonRef[] {
     const viewport = viewportOf(snap)
     const stringIndex = snap.strings.findIndex((s) => s.trim() === GREET_TEXT)
     if (stringIndex < 0) return []
-    const points: ClickPoint[] = []
+    const points: GreetButtonRef[] = []
     snap.documents.forEach((document, documentIndex) => {
       for (const { bounds } of findNodesByString(document, stringIndex)) {
         if (bounds[2] <= 0 || bounds[3] <= 0) continue
@@ -131,11 +183,24 @@ export class GreetExecutor {
         const x = offset.x + c.x - (document.scrollOffsetX ?? 0)
         const y = offset.y + c.y - (document.scrollOffsetY ?? 0)
         if (x < 0 || y < 0 || x > viewport.width || y > viewport.height) continue
-        points.push({ x, y })
+        points.push({ point: { x, y }, documentIndex })
       }
     })
-    return points.sort((a, b) => a.y - b.y)
+    return points.sort((a, b) => a.point.y - b.point.y)
   }
+}
+
+/** 统一构造结果：非定向模式保持 {greeted, reachedEnd} 两键；定向模式附 greetedNames/missingNames */
+function outcome(
+  greeted: number,
+  reachedEnd: boolean,
+  names: string[] | undefined,
+  greetedNames: string[],
+): GreetOutcome {
+  if (names === undefined) return { greeted, reachedEnd }
+  const greetedSet = new Set(greetedNames)
+  const missingNames = [...new Set(names.map((n) => n.trim()))].filter((n) => !greetedSet.has(n))
+  return { greeted, reachedEnd, greetedNames: [...greetedNames], missingNames }
 }
 
 /** 列表滚动位置：打招呼按钮所在文档的 scrollOffsetY；无按钮时取各文档最大值（列表是唯一滚动文档） */

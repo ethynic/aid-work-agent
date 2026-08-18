@@ -6,8 +6,8 @@
  *
  * 真机实证（2026-08-17，视口 1249x1277）：
  * - 卡片行结构：每行右侧「打招呼」按钮（x≈1162）视口内 7 个、y 间隔 184px；行左上「姓名 + 活跃状态」
- *   同行（刘草威@342,138 / 刚刚活跃@400,138 / 按钮 y=146）——姓名配对 = 找含「活跃」短文本节点
- *   （trim≤6 字、|y−按钮y|<40、x<按钮x），姓名 = 它左侧最近（同行 y±8、dx<120）的 2-4 字中文节点。
+ *   同行（刘草威@342,138 / 刚刚活跃@400,138 / 按钮 y=146）——姓名配对规则抽到共享模块 cardName.ts
+ *   （与 GreetExecutor 定向打招呼共用同一套锚定，保证读到的人和打招呼的人是同一个人）。
  * - 卡片点击走 CDP 浏览类点击（clickBrowse，点卡片主体列 x=600、按钮 y+70）即有效打开详情；
  *   不需要 Win32（卡片是浏览动作，BOSS 风控不拦 CDP 合成点击；写动作/筛选类仍必须 Win32）。
  *   两次真机验证：按钮 y=146 → 点击 (600,216)、y=330 → (600,400) 均成功打开。
@@ -27,8 +27,8 @@ import {
   findNodesByString,
   accumulateOwnerOffset,
   boundsCenter,
-  indexedValues,
 } from './domSnapshot.js'
+import { GREET_TEXT, pairCardName } from './cardName.js'
 import { viewportOf } from './FilterSetter.js'
 import { CancelledError } from '../operations/types.js'
 import {
@@ -112,20 +112,6 @@ export const CLOSE_POLL_TIMEOUT = 5000
 /** Escape 后轮询间隔（ms） */
 export const CLOSE_POLL_INTERVAL = 500
 
-const GREET_TEXT = '打招呼'
-/** 活跃状态文本特征：含「活跃」（OCR/DOM 均稳定），如「刚刚活跃」「今日活跃」 */
-const NAME_STATUS_PATTERN = /活跃/
-/** 活跃状态文本最大长度（trim 后字数）：真机「刚刚活跃」4 字，≤6 排除混入的长文本 */
-const STATUS_MAX_LEN = 6
-/** 活跃状态节点与「打招呼」按钮同行的判定带宽（|dy|<40；真机 dy≈8） */
-const STATUS_MAX_DY = 40
-/** 姓名节点与活跃状态节点同行的 y 容差（真机同行 dy≈0） */
-const NAME_SAME_LINE_BAND = 8
-/** 姓名节点在活跃状态节点左侧的最大 x 距离（真机 dx≈58） */
-const NAME_MAX_DX = 120
-/** 姓名文本模式：2-4 字中文（含·），排除 本科/上海/期望 等干扰词以外的杂文本 */
-const NAME_PATTERN = /^[\u4e00-\u9fa5·]{2,4}$/
-
 export class ResumeBatchReader {
   private readonly sleep: (ms: number) => Promise<void>
 
@@ -163,60 +149,11 @@ export class ResumeBatchReader {
     buttons.sort((a, b) => a.point.y - b.point.y)
     return buttons
       .map((btn) => ({
-        name: this.pairCardName(snap, btn, viewport),
+        name: pairCardName(snap, btn, viewport),
         greetButtonY: btn.point.y,
         clickPoint: { x: CARD_CLICK_X, y: btn.point.y + CARD_CLICK_DY },
       }))
       .filter((card) => card.clickPoint.y >= 0 && card.clickPoint.y <= viewport.height)
-  }
-
-  /**
-   * 姓名配对（真机锚定规则）：按钮同行上方带（|dy|<40、x<按钮x）内找含「活跃」的短文本节点（trim≤6 字），
-   * 姓名 = 它左侧最近（同行 y±8、dx<120）的 2-4 字中文节点。配对失败返回 null（OCR 启发式兜底）。
-   */
-  private pairCardName(
-    snap: DomSnapshot,
-    btn: { point: ClickPoint; documentIndex: number },
-    viewport: { width: number; height: number },
-  ): string | null {
-    const doc = snap.documents[btn.documentIndex]!
-    let offset: { x: number; y: number }
-    try {
-      offset = accumulateOwnerOffset(snap, btn.documentIndex)
-    } catch {
-      return null
-    }
-    // 该 document 内有 bounds 且视口可见的文本节点（屏幕坐标，取中心）
-    const texts: Array<{ t: string; x: number; y: number }> = []
-    for (const [nodeIndex, valueIndex] of indexedValues(doc.nodes.nodeValue, 'nodeValue')) {
-      const t = snap.strings[valueIndex]
-      if (typeof t !== 'string' || !t.trim()) continue
-      const layoutIndex = doc.layout.nodeIndex.indexOf(nodeIndex)
-      if (layoutIndex < 0) continue
-      const b = doc.layout.bounds[layoutIndex]!
-      if (!b || b[2]! <= 0 || b[3]! <= 0) continue
-      const c = boundsCenter([b[0]!, b[1]!, b[2]!, b[3]!])
-      const x = offset.x + c.x - (doc.scrollOffsetX ?? 0)
-      const y = offset.y + c.y - (doc.scrollOffsetY ?? 0)
-      if (x <= 0 || x > viewport.width || y <= 0 || y > viewport.height) continue
-      texts.push({ t: t.trim(), x: Math.round(x), y: Math.round(y) })
-    }
-    // 活跃状态节点：离按钮最近者优先（真机一行一个，防相邻行串扰）
-    const statuses = texts
-      .filter((n) => n.t.length <= STATUS_MAX_LEN && NAME_STATUS_PATTERN.test(n.t))
-      .filter((n) => Math.abs(n.y - btn.point.y) < STATUS_MAX_DY && n.x < btn.point.x)
-      .sort((a, b) => Math.abs(a.y - btn.point.y) - Math.abs(b.y - btn.point.y) || a.x - b.x)
-    const status = statuses[0]
-    if (!status) return null
-    // 姓名：状态左侧最近（x 最大）的合格中文节点
-    let best: { t: string; x: number } | null = null
-    for (const n of texts) {
-      if (!NAME_PATTERN.test(n.t)) continue
-      if (Math.abs(n.y - status.y) > NAME_SAME_LINE_BAND) continue
-      if (!(n.x < status.x) || status.x - n.x >= NAME_MAX_DX) continue
-      if (!best || n.x > best.x) best = { t: n.t, x: n.x }
-    }
-    return best?.t ?? null
   }
 
   /**

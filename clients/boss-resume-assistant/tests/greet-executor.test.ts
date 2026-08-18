@@ -239,3 +239,213 @@ test('页面没有可点按钮且无滚动 → 0 人到底，不报错', async (
   assert.equal(result.reachedEnd, true)
   assert.equal(r.clicks.length, 0)
 })
+
+// ---------- 定向模式（names）：先配对姓名再点击，配对失败一律跳过 ----------
+// 2026-08-18 真机修复：列表顺序与 matched 名单顺序不保证一致，只认 limit 会打错人。
+// 卡片行结构按真机锚定（同 resume-batch.test.ts）：姓名(342,y-8) + 活跃状态(400,y-8)
+// 同行 + 噪音「本科」+ 打招呼按钮(1162,y)，根视口 1249x1277。
+
+/** 卡片行定义：姓名（null = DOM 配对失败的卡片）+ 按钮中心 y（屏幕坐标） */
+interface NameRow {
+  name: string | null
+  buttonY: number
+}
+const ROW_A: NameRow = { name: '刘草威', buttonY: 146 }
+const ROW_B: NameRow = { name: '张三丰', buttonY: 330 }
+const ROW_NULL: NameRow = { name: null, buttonY: 514 }
+
+/** 构造带卡片行的 snapshot：bounds 为文档绝对坐标（行 y + offsetY），scrollOffsetY=offsetY */
+function namedSnap(rows: NameRow[], offsetY = 0): DomSnapshot {
+  const strings: string[] = ['']
+  const nvIndex: number[] = [0]
+  const nvValue: number[] = [0]
+  const layoutNodeIndex: number[] = [0]
+  const layoutBounds: Array<[number, number, number, number]> = [[0, 0, 1249, 1277]]
+  const intern = (s: string): number => {
+    let i = strings.indexOf(s)
+    if (i < 0) {
+      strings.push(s)
+      i = strings.length - 1
+    }
+    return i
+  }
+  let nextNi = 1
+  const addText = (s: string, bounds: [number, number, number, number]): void => {
+    const ni = nextNi++
+    nvIndex.push(ni)
+    nvValue.push(intern(s))
+    layoutNodeIndex.push(ni)
+    layoutBounds.push(bounds)
+  }
+  for (const row of rows) {
+    if (row.name !== null) addText(row.name, [317, row.buttonY - 18 + offsetY, 50, 20]) // 中心 (342, y-8)
+    addText('刚刚活跃', [370, row.buttonY - 18 + offsetY, 60, 20]) // 中心 (400, y-8)
+    addText('本科', [317, row.buttonY + 30 + offsetY, 40, 20]) // 噪音：同行带外
+    addText('\n                  打招呼', [1130, row.buttonY - 16 + offsetY, 64, 32]) // 中心 (1162, y)
+  }
+  return {
+    strings,
+    documents: [
+      {
+        nodes: {
+          nodeValue: { index: nvIndex, value: nvValue },
+          contentDocumentIndex: { index: [], value: [] },
+        },
+        layout: { nodeIndex: layoutNodeIndex, bounds: layoutBounds },
+        scrollOffsetY: offsetY,
+      },
+    ],
+  }
+}
+
+test('定向：names=[B] 时只点 B 的按钮，列表顶部的 A 与配对失败的卡片绝不点', async () => {
+  const r = recorder()
+  const executor = new GreetExecutor({
+    // 首屏 3 行（A/B/无名），点掉 B 后剩 2 行 → 名单完成立即返回
+    snapshot: snapshotQueue([namedSnap([ROW_A, ROW_B, ROW_NULL]), namedSnap([ROW_A, ROW_NULL])]),
+    click: r.click,
+    sleep: r.sleep,
+  })
+  const result = await executor.greetVisible({ names: ['张三丰'] })
+  assert.equal(result.greeted, 1)
+  assert.equal(result.reachedEnd, false) // 名单全部完成（未滚到底）
+  assert.deepEqual(result.greetedNames, ['张三丰'])
+  assert.deepEqual(result.missingNames, [])
+  // 只点了 B 行按钮 (1162, 330)：顶部的 A 与无名卡片被跳过（修复前会点 A——打错人）
+  assert.deepEqual(r.clicks, [{ x: 1162, y: 330 }])
+})
+
+test('定向：视口内多目标从上往下逐个点，点完 A 点 B（每点重新配对定位）', async () => {
+  const r = recorder()
+  const executor = new GreetExecutor({
+    // 定位[A,B] → 点 A → 校验[B] → 定位[B] → 点 B → 校验[] → 名单完成返回
+    snapshot: snapshotQueue([
+      namedSnap([ROW_A, ROW_B]),
+      namedSnap([ROW_B]),
+      namedSnap([ROW_B]),
+      namedSnap([]),
+    ]),
+    click: r.click,
+    sleep: r.sleep,
+  })
+  const result = await executor.greetVisible({ names: ['刘草威', '张三丰'] })
+  assert.equal(result.greeted, 2)
+  assert.deepEqual(result.greetedNames, ['刘草威', '张三丰'])
+  assert.deepEqual(result.missingNames, [])
+  assert.deepEqual(r.clicks, [
+    { x: 1162, y: 146 },
+    { x: 1162, y: 330 },
+  ])
+})
+
+test('定向：视口内无目标 → 滚动加载继续找（B 在下一屏），全找到后结束', async () => {
+  const r = recorder()
+  const scrolls: number[] = []
+  // B 在首屏视口外（bounds 绝对中心 y=1130），滚动 800 后屏幕 y=330 进入视口
+  const executor = new GreetExecutor({
+    // 内层定位[A] → 点 A → 校验[] → 定位[]（无按钮）→ 滚动前(0) → 滚动后(800) →
+    // 定位[B@800]（屏幕 y=330）→ 点 B → 校验[] → 名单完成返回
+    snapshot: snapshotQueue([
+      namedSnap([ROW_A], 0),
+      namedSnap([], 0),
+      namedSnap([], 0),
+      namedSnap([], 0),
+      namedSnap([ROW_B], 800),
+      namedSnap([ROW_B], 800),
+      namedSnap([], 800),
+    ]),
+    click: r.click,
+    sleep: r.sleep,
+    scroll: async (deltaY) => {
+      scrolls.push(deltaY)
+    },
+  })
+  const result = await executor.greetVisible({ names: ['刘草威', '张三丰'] })
+  assert.equal(result.greeted, 2)
+  assert.deepEqual(result.greetedNames, ['刘草威', '张三丰'])
+  assert.deepEqual(result.missingNames, [])
+  assert.deepEqual(r.clicks, [
+    { x: 1162, y: 146 },
+    { x: 1162, y: 330 },
+  ])
+  assert.equal(scrolls.length, 1) // 只滚了一次就找到 B
+})
+
+test('定向：names 含页面滚到底也不存在的人 → missingNames 如实返回，绝不点任何按钮', async () => {
+  const r = recorder()
+  let scrollCount = 0
+  const executor = new GreetExecutor({
+    // 视口只有 A（不在名单）→ 无目标滚动；两次滚动 offset 不变 → 到底
+    snapshot: snapshotQueue([
+      namedSnap([ROW_A], 0), // 定位：无目标
+      namedSnap([ROW_A], 0), // 滚动前
+      namedSnap([ROW_A], 0), // 滚动后（offset 不变）
+      namedSnap([ROW_A], 0), // 重试：滚动前
+      namedSnap([ROW_A], 0), // 滚动后（仍不变 → 到底）
+    ]),
+    click: r.click,
+    sleep: r.sleep,
+    scroll: async () => {
+      scrollCount++
+    },
+  })
+  const result = await executor.greetVisible({ names: ['王五'] })
+  assert.equal(result.greeted, 0)
+  assert.equal(result.reachedEnd, true)
+  assert.deepEqual(result.greetedNames, [])
+  assert.deepEqual(result.missingNames, ['王五'])
+  assert.equal(r.clicks.length, 0) // 不在名单的 A 绝不点（宁可不打，不能打错）
+  assert.equal(scrollCount, 2) // 滚到底判定含一次重试
+})
+
+test('定向：配对失败的卡片（无名行）绝不点，滚到底后进 missingNames', async () => {
+  const r = recorder()
+  const executor = new GreetExecutor({
+    // 视口只有无名卡：配对失败 → 无目标 → 无滚动依赖 → 视口点完即结束（到底）
+    snapshot: snapshotQueue([namedSnap([ROW_NULL]), namedSnap([ROW_NULL])]),
+    click: r.click,
+    sleep: r.sleep,
+  })
+  const result = await executor.greetVisible({ names: ['刘草威'] })
+  assert.equal(result.greeted, 0)
+  assert.equal(result.reachedEnd, true)
+  assert.deepEqual(result.missingNames, ['刘草威'])
+  assert.equal(r.clicks.length, 0)
+})
+
+test('定向：limit 小于 names 数量时作为总上限保险截断，剩余进 missingNames', async () => {
+  const r = recorder()
+  const executor = new GreetExecutor({
+    snapshot: snapshotQueue([namedSnap([ROW_A, ROW_B]), namedSnap([ROW_B])]),
+    click: r.click,
+    sleep: r.sleep,
+  })
+  const result = await executor.greetVisible({ limit: 1, names: ['刘草威', '张三丰'] })
+  assert.equal(result.greeted, 1)
+  assert.equal(result.reachedEnd, false)
+  assert.deepEqual(result.greetedNames, ['刘草威'])
+  assert.deepEqual(result.missingNames, ['张三丰']) // 被 limit 截断：没打也没找到
+  assert.equal(r.clicks.length, 1)
+})
+
+test('定向：names 空数组 → GreetError（非法入参 fail-loud）', async () => {
+  const r = recorder()
+  const executor = new GreetExecutor({ snapshot: snapshotQueue([namedSnap([])]), click: r.click, sleep: r.sleep })
+  await assert.rejects(executor.greetVisible({ names: [] }), (e: unknown) => {
+    assert.ok(e instanceof GreetError)
+    assert.match(e.message, /names 不能是空数组/)
+    return true
+  })
+  assert.equal(r.clicks.length, 0)
+})
+
+test('非定向模式结果不含 greetedNames/missingNames 键（契约零变化）', async () => {
+  const r = recorder()
+  const executor = new GreetExecutor({
+    snapshot: snapshotQueue([greetSnap([BTN1]), greetSnap([]), greetSnap([])]),
+    click: r.click,
+    sleep: r.sleep,
+  })
+  const result = await executor.greetVisible()
+  assert.deepEqual(Object.keys(result).sort(), ['greeted', 'reachedEnd'])
+})

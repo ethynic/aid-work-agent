@@ -26,7 +26,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from loguru import logger
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from src.local_tools import catalog, repository
 from src.services import recruiting_job_service, recruiting_match_service, recruiting_resume_service
@@ -282,12 +282,41 @@ class BossGotoTool(LocalToolProxyTool):
 
 class BossGreetInput(BaseModel):
     limit: int = Field(1, ge=1, le=3, description="打招呼人数，单次最多 3 人（授权上限，不可突破）")
+    names: Optional[List[str]] = Field(
+        None,
+        min_length=1,
+        max_length=3,
+        description=(
+            "定向打招呼：matched 候选人姓名清单（1-3 人）。传入后 CLI 先配对卡片姓名再点击，"
+            "只向姓名精确匹配的候选人打招呼，配对失败的卡片一律跳过（宁可不打，不能打错）；"
+            "结果按实际打过的人返回（greeted_names / missing_names），汇报必须以此为准"
+        ),
+    )
+
+    @field_validator("names")
+    @classmethod
+    def _normalize_names(cls, v: Optional[List[str]]) -> Optional[List[str]]:
+        """定向名单规整：strip 非空校验 + 去重（保持顺序）后透传 CLI，云端不解析姓名语义"""
+        if v is None:
+            return v
+        stripped = [name.strip() for name in v]
+        if any(not name for name in stripped):
+            raise ValueError("names 中每个姓名都必须是非空字符串")
+        deduped = list(dict.fromkeys(stripped))
+        if not deduped:
+            raise ValueError("names 去重后为空")
+        return deduped
 
 
 class BossGreetTool(LocalToolProxyTool):
     name = "boss_greet"
     display_name = "BOSS 打招呼"
-    description = "在用户本机 BOSS 直聘「推荐」页向牛人发起打招呼。外部可见写动作，单次最多 3 人，需用户在对话中明确授权数量"
+    description = (
+        "在用户本机 BOSS 直聘「推荐」页向牛人发起打招呼。外部可见写动作，单次最多 3 人，"
+        "需用户在对话中明确授权数量。定向模式：传 names 候选人姓名清单时先匹配卡片姓名再点击，"
+        "只向名单内的人打招呼（配对失败的卡片跳过），打给谁以返回的 greeted_names 为准，"
+        "missing_names 是滚到底也没找到的人"
+    )
     InputModel = BossGreetInput
     timeout_seconds = 600
 

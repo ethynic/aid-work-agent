@@ -67,9 +67,28 @@ export const TOOL_DEFS: BossToolDef[] = [
     description:
       '在 BOSS 直聘「推荐牛人」页逐个点击「打招呼」向候选人发起沟通（外部写动作，单次最大 3 人）。' +
       '当前屏点完自动向下滚动，到底或达到 limit 结束；触发付费墙（职位无开聊权益）会立即停止并返回 PAYWALL。' +
+      '定向模式：传 names 姓名清单时先配对卡片姓名再点击，只向姓名精确匹配（trim 相等）的候选人打招呼，' +
+      '配对失败的卡片一律跳过（宁可不打，不能打错）；结果返回 greeted_names（实际打过的人）与' +
+      ' missing_names（滚到底也没找到的人），汇报时必须以此为准、绝不声称给未打的人打过招呼。' +
       '前置要求：当前在推荐牛人列表页，否则返回 WRONG_PAGE。',
     zodShape: {
-      limit: z.number().int().min(1).max(3).default(1).describe('打招呼人数上限：默认 1，单次最大 3'),
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(3)
+        .default(1)
+        .describe('打招呼人数上限：默认 1，单次最大 3；定向模式（传 names）自动取 max(limit, names 数量)，默认 1 不会截断名单'),
+      names: z
+        .array(z.string().min(1))
+        .min(1)
+        .max(3)
+        .optional()
+        .describe(
+          '定向打招呼：候选人姓名清单（1-3 个，精确匹配卡片上的姓名）。' +
+            '推荐/筛选后向指定候选人打招呼必须传（列表顺序与名单顺序不保证一致，不传会打错人）；' +
+            '姓名配对失败的卡片一律跳过，打给谁以返回的 greeted_names 为准',
+        ),
     },
     annotations: { title: '打招呼', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   },

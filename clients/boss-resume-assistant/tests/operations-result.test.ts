@@ -334,6 +334,114 @@ test('greet 成功路径：effect=applied，data 含 greeted/reached_end', async
   assert.ok(r.run_id.length > 0)
 })
 
+/** 定向 greet 用 snapshot：根视口 1917x1905 + 「筛选」+ 卡片行（姓名/活跃状态/按钮，真机锚定坐标） */
+function greetNamedSnap(rows: Array<{ name: string | null; buttonY: number }>): DomSnapshot {
+  // node 0 根 / node 1 = 「筛选」（probe 前置校验用），其余为卡片行文本节点
+  const strings: string[] = ['', '筛选']
+  const nvIndex: number[] = [0, 1]
+  const nvValue: number[] = [0, 1]
+  const layoutNodeIndex: number[] = [0, 1]
+  const layoutBounds: Array<[number, number, number, number]> = [[0, 0, 1917, 1905], [100, 100, 50, 20]]
+  const intern = (s: string): number => {
+    let i = strings.indexOf(s)
+    if (i < 0) {
+      strings.push(s)
+      i = strings.length - 1
+    }
+    return i
+  }
+  let nextNi = 2
+  const addText = (s: string, bounds: [number, number, number, number]): void => {
+    const ni = nextNi++
+    nvIndex.push(ni)
+    nvValue.push(intern(s))
+    layoutNodeIndex.push(ni)
+    layoutBounds.push(bounds)
+  }
+  for (const row of rows) {
+    if (row.name !== null) addText(row.name, [317, row.buttonY - 18, 50, 20]) // 中心 (342, y-8)
+    addText('刚刚活跃', [370, row.buttonY - 18, 60, 20]) // 中心 (400, y-8)
+    addText('本科', [317, row.buttonY + 30, 40, 20]) // 噪音
+    addText('\n                  打招呼', [1130, row.buttonY - 16, 64, 32]) // 中心 (1162, y)
+  }
+  return {
+    strings,
+    documents: [
+      {
+        nodes: {
+          nodeValue: { index: nvIndex, value: nvValue },
+          contentDocumentIndex: { index: [], value: [] },
+        },
+        layout: { nodeIndex: layoutNodeIndex, bounds: layoutBounds },
+      },
+    ],
+  }
+}
+
+test('boss_greet：names 非法（空数组/超 3 个/含空串）→ INVALID_ARGUMENT，不连 Chrome', async () => {
+  const f = fakeFactory([])
+  const op = createBossGreetOperation(f.factory)
+  assert.equal((await op.execute({ names: [] }, silentCtx())).code, 'INVALID_ARGUMENT')
+  assert.equal((await op.execute({ names: ['刘草威', '张三丰', '王五', '赵六'] }, silentCtx())).code, 'INVALID_ARGUMENT')
+  assert.equal((await op.execute({ names: ['刘草威', '  '] }, silentCtx())).code, 'INVALID_ARGUMENT')
+  assert.equal(f.calls.length, 0)
+})
+
+test('greet 定向成功：names=[张三丰] 只点张三丰的按钮，data 含 greeted_names/missing_names', async () => {
+  const A = { name: '刘草威', buttonY: 146 }
+  const B = { name: '张三丰', buttonY: 330 }
+  // probe（含筛选）→ 定位[A,B]（只点 B）→ 校验[A]（B 变继续沟通）→ 名单完成
+  const f = fakeFactory([greetNamedSnap([A, B]), greetNamedSnap([A, B]), greetNamedSnap([A])])
+  const r = await createBossGreetOperation(f.factory).execute({ names: ['张三丰'] }, silentCtx())
+  assert.equal(r.success, true)
+  assert.equal(r.effect, 'applied')
+  // 只点了 B 行按钮 (1162, 330)：顶部的 A 被跳过（修复前会点 A——打错人）
+  assert.deepEqual(f.clicks, [{ x: 1162, y: 330 }])
+  assert.equal(r.data.greeted, 1)
+  assert.deepEqual(r.data.greeted_names, ['张三丰'])
+  assert.deepEqual(r.data.missing_names, [])
+  assert.match(r.message, /张三丰/)
+})
+
+test('greet 定向：MCP 默认 limit=1 不截断名单（operation 钳到 ≥ names 数量，2 人全打）', async () => {
+  const A = { name: '刘草威', buttonY: 146 }
+  const B = { name: '张三丰', buttonY: 330 }
+  // MCP schema 对省略的 limit 注入默认 1（zod .default(1)），SUBAGENT 链路只传 names——
+  // 修复前 limit=1 + names 2 人会在打完第 1 人后截断，第 2 人误报进 missing_names。
+  // probe → 定位[A,B] → 点 A → 校验[B] → 定位[B] → 点 B → 校验[] → 名单完成
+  const f = fakeFactory([
+    greetNamedSnap([A, B]),
+    greetNamedSnap([A, B]),
+    greetNamedSnap([B]),
+    greetNamedSnap([B]),
+    greetNamedSnap([]),
+  ])
+  const r = await createBossGreetOperation(f.factory).execute({ limit: 1, names: ['刘草威', '张三丰'] }, silentCtx())
+  assert.equal(r.success, true)
+  assert.equal(r.data.greeted, 2)
+  assert.deepEqual(r.data.greeted_names, ['刘草威', '张三丰'])
+  assert.deepEqual(r.data.missing_names, [])
+  assert.deepEqual(f.clicks, [
+    { x: 1162, y: 146 },
+    { x: 1162, y: 330 },
+  ])
+})
+
+test('greet 定向缺人：页面只有 A 但要找王五 → 0 人到底，missing_names=[王五]，message 如实说明', async () => {
+  const A = { name: '刘草威', buttonY: 146 }
+  // probe → 定位[A]（A 不在名单，无目标）→ 滚动两次 offset 均不变（0→0）→ 判到底返回
+  const f = fakeFactory([greetNamedSnap([A]), greetNamedSnap([A])])
+  const r = await createBossGreetOperation(f.factory).execute({ names: ['王五'] }, silentCtx())
+  assert.equal(r.success, true)
+  assert.equal(r.data.greeted, 0)
+  assert.equal(r.data.reached_end, true)
+  assert.deepEqual(r.data.greeted_names, [])
+  assert.deepEqual(r.data.missing_names, ['王五'])
+  assert.equal(f.clicks.length, 0)
+  assert.match(r.message, /王五/)
+  assert.match(r.message, /未找到/)
+})
+
 // ---------- errorMapping 全路径（每种 executor Error + 消息标记） ----------
 
 test('errorMapping：取消与主动 code', () => {

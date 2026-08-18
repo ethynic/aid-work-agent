@@ -208,6 +208,31 @@ class TestAuthCaps:
         assert tool.validate_parameters(limit=3) is True
         assert tool.validate_parameters() is True  # 默认 1
 
+    def test_greet_names_validation(self):
+        """greet 定向名单：>3 拒绝、空串项拒绝、空列表拒绝、None 合法、合法名单通过"""
+        # 超过 3 人 → 拒绝（授权上限不可突破）
+        with pytest.raises(ValidationError):
+            BossGreetTool.InputModel(names=["刘草威", "张三丰", "王五", "赵六"])
+        # 含空串/纯空白项 → 拒绝
+        with pytest.raises(ValidationError):
+            BossGreetTool.InputModel(names=["刘草威", "  "])
+        with pytest.raises(ValidationError):
+            BossGreetTool.InputModel(names=[""])
+        # 空列表 → 拒绝（定向必须至少 1 人）
+        with pytest.raises(ValidationError):
+            BossGreetTool.InputModel(names=[])
+        tool = BossGreetTool()
+        assert tool.validate_parameters(names=["刘草威", "张三丰", "王五", "赵六"]) is False
+        assert tool.validate_parameters(names=["刘草威", " "]) is False
+        # None（非定向）与合法名单（1-3 个非空姓名）均通过
+        assert tool.validate_parameters() is True
+        assert tool.validate_parameters(names=["刘草威", "张三丰"]) is True
+
+    def test_greet_names_normalized_before_forward(self):
+        """greet 定向名单透传前规整：strip + 去重（保持顺序），CLI 收到的是规整后名单"""
+        model = BossGreetTool.InputModel(names=[" 刘草威 ", "张三丰", "刘草威"])
+        assert model.names == ["刘草威", "张三丰"]
+
     def test_accept_resume_limit_hard_cap(self):
         """accept 单次上限 1：limit=2 Pydantic 拒绝"""
         with pytest.raises(ValidationError):
