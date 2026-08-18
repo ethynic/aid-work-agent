@@ -161,10 +161,13 @@ class KnowledgeBaseTool(BaseTool):
             else:
                 formatted_results = []
 
+            # _no_truncate: 检索结果每条含完整文本，保头保尾截断会丢失排名靠后的
+            # 中间结果（LLM 无法看到完整候选集）。声明不截断，让 LLM 看到全部结果。
             return {
                 "success": True,
                 "results": formatted_results,
-                "count": len(formatted_results)
+                "count": len(formatted_results),
+                "_no_truncate": True
             }
 
         except Exception as e:

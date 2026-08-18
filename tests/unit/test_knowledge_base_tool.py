@@ -124,3 +124,21 @@ async def test_kb_search_top_k_invalid_falls_back_to_default():
 
     assert result["success"] is True
     assert mock_retriever.retrieve.call_args.kwargs["top_k"] == 10
+
+
+async def test_kb_search_returns_no_truncate_flag():
+    """有结果时返回 _no_truncate=True，确保检索结果不被 agent 保头保尾截断"""
+    tool = _make_tool()
+    mock_retriever = MagicMock()
+    mock_retriever.retrieve = AsyncMock(return_value=[
+        {"doc_id": 1, "text": "x", "score": 0.9, "metadata": {}},
+    ])
+    tool._retriever = mock_retriever
+
+    mock_cm, _ = _mock_db([{"id": 1, "title": "t.txt", "file_path": None}])
+
+    with patch("src.tools.knowledge.knowledge_base_tool.get_db_connection", return_value=mock_cm):
+        result = await tool.execute(query="test")
+
+    assert result["success"] is True
+    assert result["_no_truncate"] is True
