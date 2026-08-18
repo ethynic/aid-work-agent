@@ -1,0 +1,256 @@
+添加客服账号
+最后更新：2023/12/05
+添加客服账号，并可设置客服名称和头像。目前一家企业最多可添加5000个客服账号。
+
+请求方式: POST(HTTPS)
+
+请求地址: https://qyapi.weixin.qq.com/cgi-bin/kf/account/add?access_token=ACCESS_TOKEN
+
+请求示例
+
+{
+    "name": "新建的客服账号",
+    "media_id": "294DpAog3YA5b9rTK4PjjfRfYLO0L5qpDHAJIzhhQ2jAEWjb9i661Q4lk8oFnPtmj"
+}
+参数说明:
+
+参数	必须	类型	说明
+access_token	是	string	调用接口凭证
+name	是	string	客服名称
+不多于16个字符
+media_id	是	string	客服头像临时素材。可以调用上传临时素材接口获取。
+不多于128个字节
+权限说明:
+调用的应用需要满足如下的权限
+
+应用类型	权限要求
+自建应用	配置到「 微信客服- 可调用接口的应用」中，且在管理后台「通过API管理会话消息」-「企业内部开发」对应的自建应用的「可管理的客服账号」处，配置至少一个客服账号
+第三方应用	具有“微信客服->管理账号、分配会话和收发消息”权限
+代开发自建应用	具有“微信客服->管理账号、分配会话和收发消息”权限
+注： 从2023年12月1日0点起，不再支持通过系统应用secret调用接口，存量企业暂不受影响 查看详情
+
+通过接口创建的客服账号，将自动拥有该客服账号的管理权限。企业可在管理后台“微信客服-通过API管理微信客服账号”处设置对应的客服账号通过API来管理。
+
+返回结果:
+
+{
+    "errcode": 0,
+    "errmsg": "ok",
+    "open_kfid": "wkAJ2GCAAAZSfhHCt7IFSvLKtMPxyJTw"
+}
+参数说明:
+
+参数	类型	说明
+errcode	int32	返回码
+errmsg	string	错误码描述
+open_kfid	string	新创建的客服账号ID
+
+
+
+
+删除客服账号
+最后更新：2023/11/30
+删除已有的客服账号
+
+请求方式: POST(HTTPS)
+
+请求地址: https://qyapi.weixin.qq.com/cgi-bin/kf/account/del?access_token=ACCESS_TOKEN
+
+请求示例
+
+{
+    "open_kfid": "wkAJ2GCAAAZSfhHCt7IFSvLKtMPxyJTw"
+}
+参数说明:
+
+参数	必须	类型	说明
+access_token	是	string	调用接口凭证
+open_kfid	是	string	客服账号ID。
+不多于64字节
+权限说明:
+调用的应用需要满足如下的权限
+
+应用类型	权限要求
+自建应用	配置到「 微信客服- 可调用接口的应用」中
+第三方应用	具有“微信客服->管理账号、分配会话和收发消息”权限
+代开发自建应用	具有“微信客服->管理账号、分配会话和收发消息”权限
+注： 从2023年12月1日0点起，不再支持通过系统应用secret调用接口，存量企业暂不受影响 查看详情
+
+只能通过API管理企业指定的客服账号。企业可在管理后台“微信客服-通过API管理微信客服账号”处设置对应的客服账号通过API来管理。
+操作的客服账号对应的接待人员应在应用的可见范围内
+返回结果:
+
+{
+    "errcode": 0,
+    "errmsg": "ok"
+}
+参数说明:
+
+参数	类型	说明
+errcode	int32	返回码
+errmsg	string	错误码描述
+
+
+
+
+修改客服账号
+最后更新：2023/11/30
+修改已有的客服账号，可修改客服名称和头像。
+
+请求方式: POST(HTTPS)
+
+请求地址: https://qyapi.weixin.qq.com/cgi-bin/kf/account/update?access_token=ACCESS_TOKEN
+
+请求示例
+
+{
+    "open_kfid": "wkAJ2GCAAAZSfhHCt7IFSvLKtMPxyJTw",
+    "name": "修改客服名",
+    "media_id": "294DpAog3YA5b9rTK4PjjfRfYLO0L5qpDHAJIzhhQ2jAEWjb9i661Q4lk8oFnPtmj"
+}
+参数说明:
+
+参数	必须	类型	说明
+access_token	是	string	调用接口凭证
+open_kfid	是	string	要修改的客服账号ID。
+不多于64字节
+name	否	string	新的客服名称，如不需要修改可不填。
+不多于16个字符
+media_id	否	string	新的客服头像临时素材，如不需要修改可不填。可以调用上传临时素材接口获取。
+不多于128个字节
+权限说明:
+调用的应用需要满足如下的权限
+
+应用类型	权限要求
+自建应用	配置到「 微信客服- 可调用接口的应用」中
+第三方应用	具有“微信客服->管理账号、分配会话和收发消息”权限
+代开发自建应用	具有“微信客服->管理账号、分配会话和收发消息”权限
+只能通过API管理企业指定的客服账号。企业可在管理后台“微信客服-通过API管理微信客服账号”处设置对应的客服账号通过API来管理。
+操作的客服账号对应的接待人员应在应用的可见范围内
+注： 从2023年12月1日0点起，不再支持通过系统应用secret调用接口，存量企业暂不受影响 查看详情
+
+返回结果:
+
+{
+    "errcode": 0,
+    "errmsg": "ok"
+}
+参数说明:
+
+参数	类型	说明
+errcode	int32	返回码
+errmsg	string	错误码描述
+
+
+
+
+获取客服账号列表
+最后更新：2023/11/30
+获取客服账号列表，包括客服账号的客服ID、名称和头像。
+
+请求方式: POST(HTTPS)
+
+请求地址: https://qyapi.weixin.qq.com/cgi-bin/kf/account/list?access_token=ACCESS_TOKEN
+
+请求示例：
+
+{
+	"offset": 0,
+    "limit": 100
+}
+当客服较多时，需要使用参数offset及limit 分页获取，注意offset是以0为起点，这里以图例简单说明：
+page_size/page_index图示说明当获取到的 account_list中的账号数量小于 指定的limit 的时候，表示已经没有更多的数据，此时应终止获取。
+
+参数说明:
+
+参数	必须	类型	说明
+access_token	是	string	调用接口凭证
+offset	否	uint32	分页，偏移量, 默认为0
+limit	否	uint32	分页，预期请求的数据量，默认为100，取值范围 1 ~ 100
+权限说明:
+调用的应用需要满足如下的权限
+
+应用类型	权限要求
+自建应用	配置到「 微信客服- 可调用接口的应用」中
+第三方应用	具有“微信客服->获取基础信息”权限
+代开发自建应用	具有“微信客服->获取基础信息”权限
+微信客服组件应用	具有“管理接入的微信客服->获取企业授权接入的客服账号->客服账号信息与链接”权限，仅可获取企业已授权的客服账号
+注： 从2023年12月1日0点起，不再支持通过系统应用secret调用接口，存量企业暂不受影响 查看详情
+
+返回结果:
+
+{
+    "errcode": 0,
+    "errmsg": "ok",
+	"account_list": [
+        {
+            "open_kfid": "wkAJ2GCAAASSm4_FhToWMFea0xAFfd3Q",
+            "name": "咨询客服",
+            "avatar": "https://wework.qpic.cn/wwhead/duc2TvpEgSSjibPZlNR6chpx9W3dtd9Ogp8XEmSNKGa6uufMWn2239HUPuwIFoYYZ7Ph580FPvo8/0",
+            "manage_privilege": false
+        }
+    ]
+}
+参数说明:
+
+参数	类型	说明
+errcode	int32	返回码
+errmsg	string	错误码描述
+account_list	obj[]	账号信息列表
+account_list.open_kfid	string	客服账号ID
+account_list.name	string	客服名称
+account_list.avatar	string	客服头像URL
+account_list.manage_privilege	bool	当前调用接口的应用身份，是否有该客服账号的管理权限（编辑客服账号信息、分配会话和收发消息）。组件应用不返回此字段
+
+
+
+获取客服账号链接
+最后更新：2024/03/04
+企业可通过此接口获取带有不同参数的客服链接，不同客服账号对应不同的客服链接。获取后，企业可将链接嵌入到网页等场景中，微信用户点击链接即可向对应的客服账号发起咨询。企业可依据参数来识别用户的咨询来源等。
+
+ 
+
+请求方式： POST（HTTPS）
+
+请求地址： https://qyapi.weixin.qq.com/cgi-bin/kf/add_contact_way?access_token=ACCESS_TOKEN
+
+请求示例：
+
+{
+	"open_kfid": "OPEN_KFID",
+    "scene": "12345"
+}
+参数说明：
+
+参数	必须	类型	说明
+access_token	是	string	调用接口凭证
+open_kfid	是	string	客服账号ID
+scene	否	string	场景值，字符串类型，由开发者自定义。
+不多于32字节
+字符串取值范围(正则表达式)：[0-9a-zA-Z_-]*
+1. 若scene非空，返回的客服链接开发者可拼接scene_param=SCENE_PARAM参数使用，用户进入会话事件会将SCENE_PARAM原样返回。其中SCENE_PARAM需要urlencode，且encode前的原始长度不能超过128字节。
+如 https://work.weixin.qq.com/kf/kfcbf8f8d07ac7215f?enc_scene=ENCGFSDF567DF&scene_param=a%3D1%26b%3D2
+2. 返回的客服链接，不能修改或复制参数到其他链接使用。否则进入会话事件参数校验不通过，导致无法回调。
+权限说明:
+调用的应用需要满足如下的权限
+
+应用类型	权限要求
+自建应用	配置到「 微信客服- 可调用接口的应用」中
+第三方应用	具有“微信客服->获取基础信息”权限
+代开发自建应用	具有“微信客服->获取基础信息”权限
+微信客服组件应用	具有“管理接入的微信客服->获取企业授权接入的客服账号->客服账号信息与链接”权限，仅可获取企业已授权的客服账号链接
+注： 从2023年12月1日0点起，不再支持通过系统应用secret调用接口，存量企业暂不受影响 查看详情
+
+返回结果：
+
+{
+   "errcode": 0,
+   "errmsg": "ok",
+   "url":"https://work.weixin.qq.com/kf/kfcbf8f8d07ac7215f?enc_scene=ENCGFSDF567DF"
+}
+参数说明：
+
+参数	类型	说明
+errcode	int32	返回码
+errmsg	string	对返回码的文本描述内容
+url	string	客服链接，开发者可将该链接嵌入到H5页面中，用户点击链接即可向对应的微信客服账号发起咨询。开发者也可根据该url自行生成需要的二维码图片
