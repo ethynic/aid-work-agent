@@ -116,6 +116,52 @@ class FillData(BaseModel):
     group_subtotals: Dict[str, Any] = Field(default_factory=dict)
     totals: Dict[str, Any] = Field(default_factory=dict)
     # totals 形如 {"grand_total": 10230, "per_capita": {"成人人均": 2280}}
+    # 所有将写入单元格的值必须是标量（per_capita 的值同理）；按列/档位分列的
+    # 合计没有嵌套表达方式，须拆成独立标量键（_validate_cell_scalars 前置拦截）
+
+
+def _validate_cell_scalars(fill_data: "FillData") -> Optional[str]:
+    """校验所有将写入单元格的值均为标量（openpyxl 只接受 str/int/float/bool/None）。
+
+    嵌套 dict/list 直达 cell.value 会抛 "Cannot convert ... to Excel"（线上事故：
+    交叉表合计按列分档传了嵌套 dict）。在 LLM 结构分析前拦截，返回带拆平指引的
+    错误消息，调用方 Agent 按提示修正 data 即可重试自愈。返回 None 表示通过。
+    """
+    def check(path: str, value) -> Optional[str]:
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return None
+        kind = "dict" if isinstance(value, dict) else type(value).__name__
+        return (
+            f"data.{path} 的值必须是标量（单元格只能填 str/int/float/bool），实际是 {kind}。"
+            "请拆平后重试：按列/档位分列的数值拆成独立标量键"
+            "（如 合计总价:{'40人':9520,'45人':10560} 拆成 合计总价_40人:9520、合计总价_45人:10560），"
+            "多值明细转为多行放入 rows"
+        )
+
+    for k, v in (fill_data.meta or {}).items():
+        err = check(f"meta.{k}", v)
+        if err:
+            return err
+    for idx, row in enumerate(fill_data.rows, 1):
+        for k, v in row.items():
+            err = check(f"rows[{idx}].{k}", v)
+            if err:
+                return err
+    for k, v in (fill_data.group_subtotals or {}).items():
+        err = check(f"group_subtotals.{k}", v)
+        if err:
+            return err
+    for k, v in (fill_data.totals or {}).items():
+        if k == "per_capita" and isinstance(v, dict):
+            for pk, pv in v.items():
+                err = check(f"totals.per_capita.{pk}", pv)
+                if err:
+                    return err
+        else:
+            err = check(f"totals.{k}", v)
+            if err:
+                return err
+    return None
 
 
 
@@ -468,25 +514,23 @@ def _row_was_deleted(orig_row: int, plan) -> bool:
 
 
 def _subtotal_hits_residue(final_r: int, plan) -> bool:
-    """小计最终行 final_r 是否落在某个收缩组（delta<0）被删除尾部区间的最终坐标内。
+    """小计最终行 final_r 是否撞上某分组**最终**明细行区（列式小计误判为行式 subtotal_row 的症状）。
 
-    fill_template 防御用：列式小计（小计与明细同行、靠竖向合并跨行显示）一旦被误判为
-    行式 subtotal_row，多个组的 subtotal_row 经 _final_row 重映射后会落到同一行，且该行
-    往往是别组（或本组）行数收缩后腾出的"残留尾行"。往这里写小计会被 _verify_render
-    当成"样例残留"硬报错。命中即应由调用方跳过该次写入（降级为留空——该格已被
-    _write_detail_row 清空，不会残留），用降级换不报错。
+    fill_template 防御用：合法行式小计在本组明细下方独立成行，经 _final_row 重映射后
+    不可能落进任何分组的最终明细区；列式小计（小计与明细同行、靠竖向合并显示）被误判
+    成 subtotal_row 时，其"小计行"本就是明细行，重映射后必然与（本组或别组的）明细行
+    重叠，写入会覆盖明细数据并触发 _verify_render"渲染不一致"硬报错。命中即由调用方
+    跳过写入（该格已是明细数据或已清空）。
+
+    注意不能拿"收缩组被删尾行的最终坐标"做判据：删行后下方内容整体上移，被删行的
+    最终坐标恰好被合法小计行本身占据——按最终坐标比对会误杀所有收缩组的合法小计。
     """
-    for g, rows, delta in plan:
-        if delta >= 0:
+    for g, rows, _delta in plan:
+        if not rows:
             continue
-        m_g = len(rows)
-        # 被删除的尾部区间原始坐标 [detail_first_row + m_g, detail_last_row]
-        res_first = g.detail_first_row + m_g
-        res_last = g.detail_last_row
-        if res_first > res_last:
-            continue
-        # 区间两端的最终行（上方组 delta 等量作用于二者，故两端 _final_row 相等）
-        if _final_row(res_first, plan) <= final_r <= _final_row(res_last, plan):
+        first_final = _final_row(g.detail_first_row, plan)
+        last_final = first_final + len(rows) - 1
+        if first_final <= final_r <= last_final:
             return True
     return False
 
@@ -786,8 +830,8 @@ def _render(ws, structure: SheetStructure, data: FillData) -> int:
     for g, rows, _delta in plan:
         if g.subtotal_row and g.subtotal_col:
             r = _final_row(g.subtotal_row, plan)
-            # 防御：小计最终行若撞上收缩组的残留尾行（列式小计误判为行式 subtotal_row 的典型症状），
-            # 跳过写入降级为留空，避免触发"样例残留"硬报错（该格已被 _write_detail_row 清空）
+            # 防御：小计最终行若撞上某分组最终明细区（列式小计误判为行式 subtotal_row 的典型症状），
+            # 跳过写入避免覆盖明细数据、触发"渲染不一致"硬报错（该格已是明细行数据）
             if _subtotal_hits_residue(r, plan):
                 logger.warning(
                     f"[excel_template_ai] 跳过分组 {g.name!r} 小计：最终行 R{r} 落入收缩组残留区，"
@@ -970,6 +1014,10 @@ def fill_with_sample(
     fill_data = data if isinstance(data, FillData) else FillData(**(data or {}))
     if not fill_data.rows:
         return {"success": False, "error": "data.rows 为空，无需填充"}
+
+    err = _validate_cell_scalars(fill_data)
+    if err:
+        return {"success": False, "error": err}
 
     try:
         structure = analyze_structure(sample_file_path, fill_data, llm_callable=llm_callable)

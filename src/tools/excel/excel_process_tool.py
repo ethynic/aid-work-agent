@@ -64,6 +64,10 @@ class ExcelProcessInput(BaseModel):
         None,
         description="按样例版式填充的结构化数据（AI 模板填充模式）。"
                     "形如 {meta:{...}, rows:[{...}], group_subtotals:{...}, totals:{...}}。"
+                    "**所有值必须是标量（str/int/float/bool），一格一值，不得嵌套 dict/list**："
+                    "totals 形如 {\"grand_total\": 9520, \"per_capita\": {\"成人人均\": 238}}；"
+                    "按列/人数档位分列的合计须拆成独立标量键（如 合计总价_40人: 9520），"
+                    "多值明细转为多行放入 rows。"
                     "提供 data + 样例附件(file_paths) 时走智能模板填充：AI 分析样例结构并按版式填入，"
                     "自动处理行数多/少/相等、保留样例样式。"
                     "**模板填充时数据必须放本字段（不要写进 instruction 文本）；普通数据导出不用本字段。**"
