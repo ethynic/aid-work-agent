@@ -136,14 +136,13 @@
         <!-- 渠道名称（用户自定义，用于区分同租户多个同类渠道） -->
         <div class="mb-3">
           <label class="text-sm text-muted mb-1 block">
-            渠道名称<span class="text-danger-500">*</span>
+            渠道名称 <span class="text-danger-500">*</span>
           </label>
           <BaseInput
             v-model="form.name"
-            placeholder="如：售前客服飞书、华东区企业微信"
+            placeholder="如有多个同类渠道，建议填写有辨识度的名称便于区分"
             maxlength="50"
           />
-          <p class="mt-1 text-xs text-muted">同一租户可能有多个同类渠道，建议填写有辨识度的名称便于区分</p>
         </div>
 
         <!-- 配置指引摘要 -->
@@ -234,9 +233,41 @@
           </div>
         </div>
 
-        <!-- 微信客服特有：客服账号管理提示 -->
+        <!-- 微信客服特有：客服账号管理（编辑模式内嵌完整管理；新增模式仅提示） -->
         <div v-if="form.channel_type === 'wecom_kf'" class="mt-3 pt-3 border-t border-default">
-          <p class="text-sm text-muted">
+          <template v-if="editingId">
+            <div class="bg-canvas rounded-lg p-3">
+              <div class="flex items-center justify-between mb-2">
+                <span class="text-sm font-medium text-default">客服账号</span>
+                <BaseButton intent="ghost" size="sm" @click="openKfAccountCreate({ config_id: editingId })">+ 添加客服账号</BaseButton>
+              </div>
+              <div v-if="(kfAccountMap[editingId] || []).length === 0" class="text-xs text-muted text-center py-2">
+                尚未配置客服账号，点击右上角添加
+              </div>
+              <div v-else class="space-y-2">
+                <div
+                  v-for="acc in kfAccountMap[editingId]"
+                  :key="acc.open_kfid"
+                  class="bg-surface border border-default rounded-md px-3 py-2 flex items-center justify-between gap-2"
+                >
+                  <div class="flex items-center gap-3 min-w-0 flex-wrap">
+                    <span class="text-sm font-medium text-default">{{ acc.name }}</span>
+                    <span class="text-xs text-muted font-mono">{{ acc.open_kfid }}</span>
+                    <span class="text-xs text-muted">绑定：{{ tenantUserName(acc.tenant_user_id) }}</span>
+                    <span v-if="acc.expire_at" class="text-xs text-muted">到期 {{ acc.expire_at }}</span>
+                    <span v-if="acc.credit_limit > 0" class="text-xs text-muted">积分 {{ acc.credit_used }}/{{ acc.credit_limit }}</span>
+                    <span class="text-xs text-muted">引流 {{ acc.referral_count }} 人</span>
+                  </div>
+                  <div class="flex items-center gap-1 flex-shrink-0">
+                    <BaseButton intent="ghost" size="sm" @click="viewKfQr({ config_id: editingId }, acc)">二维码</BaseButton>
+                    <BaseButton intent="ghost" size="sm" @click="openKfAccountEdit({ config_id: editingId }, acc)">编辑</BaseButton>
+                    <BaseButton intent="danger-ghost" size="sm" @click="handleDeleteKfAccount({ config_id: editingId }, acc)">删除</BaseButton>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </template>
+          <p v-else class="text-sm text-muted">
             微信客服账号请在保存渠道后，回到渠道列表点击「添加客服账号」管理：系统自动调用企业微信 API 创建账号、生成推广二维码，并支持绑定引流员工、设置到期日期与积分上限。
           </p>
         </div>
@@ -899,7 +930,7 @@ const quickGuideMap: Record<string, { title: string; steps: string[]; docUrl: st
       '前往企业微信管理后台 →「应用管理」→「微信客服」→ 确认已开启',
       '创建自建应用，记录 CorpID 和 Secret（不需要 AgentId）',
       '在「微信客服」→「通过 API 管理」中开启并授权自建应用',
-      '创建客服账号，记录 open_kfid',
+      '创建至少一个客服账号',
       '将下方回调地址填入「微信客服」→「API」→ 回调配置',
       '先在此页面保存凭证，再到企业微信后台点击保存完成验证',
     ],
