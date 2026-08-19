@@ -23,6 +23,9 @@ TRUSTED_PROVIDERS: Dict[str, Dict[str, Any]] = {
             "boss_accept_resume",
             "boss_reject_current",
             "boss_interview_demo",
+            # boss_interview_notify 为云端企微群通知（proxy_tool 覆写 execute 不建 invocation、不碰设备），
+            # 列入仅为与 LOCAL_PROXY_TOOL_NAMES 全集一致；运行时侧 manifestVerifier 不含它
+            "boss_interview_notify",
             "boss_list_jobs",
             "boss_select_job",
             # boss_jobs_list 为云端查询（proxy_tool 覆写 execute 不建 invocation、不碰设备），

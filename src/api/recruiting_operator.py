@@ -43,6 +43,7 @@ from src.api.auth import get_current_user
 from src.services import recruiting_resume_service as resume_service
 from src.services import recruiting_job_service as job_service
 from src.services import recruiting_match_service as match_service
+from src.services import recruiting_notify_service as notify_service
 # 兼容再导出：既有调用方（src/db/database.py 启动初始化、集成测试）沿用旧导入路径
 from src.services.recruiting_resume_service import (  # noqa: F401
     RESUME_SOURCES,
@@ -513,3 +514,79 @@ async def delete_job_script(script_id: str, request: Request):
     except Exception as e:
         logger.opt(exception=True).error(f"话术删除失败: {e}")
         return _error_response("话术删除失败", str(e))
+
+
+# ============== 面试邀约企微通知 API（Phase 1，设计 recruiting-interview-notify §3/§4） ==============
+
+class NotifySettingsRequest(BaseModel):
+    """通知设置更新请求。
+
+    webhook_url 三态：掩码（***开头）或空串=保留旧值；null=清除；其他非空=新明文（服务层加密存储）。
+    """
+
+    enabled: Optional[bool] = Field(None, description="总开关（默认 false，未开启不发通知）")
+    webhook_url: Optional[str] = Field(
+        None, description="企微机器人 webhook：新明文直接传；*** 掩码或空串=保留旧值；null=清除"
+    )
+    at_mobiles: Optional[List[str]] = Field(None, description="事后通报 @人 手机号列表")
+    pre_notify_enabled: Optional[bool] = Field(None, description="事前知会开关（默认 true）")
+
+
+class NotifyResendRequest(BaseModel):
+    log_id: int = Field(..., description="通知留痕日志 id（按留痕内容重发）")
+
+
+@router.get("/notify-settings")
+async def get_notify_settings(request: Request):
+    """通知设置（webhook_url 掩码返回；无配置返回默认值结构）"""
+    try:
+        tenant_id = _require_tenant()
+        if not tenant_id:
+            return _error_response("租户 ID 缺失", "tenant_id is None", 400)
+        data = notify_service.get_settings_masked(tenant_id)
+        return {"success": True, "data": data}
+    except Exception as e:
+        logger.opt(exception=True).error(f"通知设置查询失败: {e}")
+        return _error_response("通知设置查询失败", str(e))
+
+
+@router.put("/notify-settings")
+async def update_notify_settings(req: NotifySettingsRequest, request: Request):
+    """更新通知设置（掩码/空串保留旧 webhook；其余字段直更；返回掩码版）"""
+    try:
+        tenant_id = _require_tenant()
+        if not tenant_id:
+            return _error_response("租户 ID 缺失", "tenant_id is None", 400)
+        try:
+            data = notify_service.upsert_settings(
+                tenant_id,
+                enabled=req.enabled,
+                webhook_url=req.webhook_url,
+                at_mobiles=req.at_mobiles,
+                pre_notify_enabled=req.pre_notify_enabled,
+            )
+        except ValueError as e:
+            return _error_response(str(e), str(e), 400)
+        return {"success": True, "data": data}
+    except Exception as e:
+        logger.opt(exception=True).error(f"通知设置更新失败: {e}")
+        return _error_response("通知设置更新失败", str(e))
+
+
+@router.post("/notify-logs/resend")
+async def resend_notify_log(req: NotifyResendRequest, request: Request):
+    """按留痕补推通知：取日志 kind/content 重发并更新日志状态（用于发送失败后的补推）"""
+    try:
+        tenant_id = _require_tenant()
+        if not tenant_id:
+            return _error_response("租户 ID 缺失", "tenant_id is None", 400)
+        try:
+            result = await notify_service.resend_log(tenant_id, req.log_id)
+        except ValueError as e:
+            return _error_response(str(e), str(e), 400)
+        if result is None:
+            return _error_response("通知记录不存在", f"log_id={req.log_id} not found", 404)
+        return {"success": True, "data": result}
+    except Exception as e:
+        logger.opt(exception=True).error(f"通知补推失败: {e}")
+        return _error_response("通知补推失败", str(e))

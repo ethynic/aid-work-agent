@@ -531,3 +531,33 @@ CREATE TABLE IF NOT EXISTS customer_referrals (
 );
 CREATE INDEX IF NOT EXISTS idx_customer_referrals_tenant ON customer_referrals(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_customer_referrals_referrer ON customer_referrals(tenant_id, referrer_user_id);
+
+-- ============================================================================
+-- 2026-08-19 招聘面试邀约企微通知 Phase 1（两点式：邀约前知会 + 邀约后通报）
+-- 见 docs/design/recruiting/recruiting-interview-notify-design.md。
+-- bs_recruiting_notify_settings：租户通知配置（webhook_url 为 Fernet 密文，
+-- 主密钥同 wecom_personal_rpa secret_crypto；API 层只出掩码 ***+末4位）；
+-- at_mobiles 为事后通报 @人 手机号 JSON 数组；pre_notify_enabled 事前知会开关。
+-- bs_recruiting_notify_logs：通知留痕（kind=pre|done / candidates JSONB /
+-- content 全文 / status=sent|failed / error），failed 可走手动补推 API 重发。
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS bs_recruiting_notify_settings (
+    tenant_id TEXT PRIMARY KEY,
+    enabled BOOLEAN NOT NULL DEFAULT FALSE,          -- 总开关（未配置不发，避免空跑）
+    webhook_url TEXT,                                -- 企微机器人 webhook（Fernet 密文，禁止明文落库）
+    at_mobiles JSONB NOT NULL DEFAULT '[]'::jsonb,   -- 事后通报 @人 手机号（text 消息 mentioned_mobile_list）
+    pre_notify_enabled BOOLEAN NOT NULL DEFAULT TRUE, -- 事前知会开关（嫌吵可只留事后）
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS bs_recruiting_notify_logs (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    kind TEXT NOT NULL,                              -- pre=邀约前知会 / done=邀约后通报
+    candidates JSONB,                                -- 候选人名单 [{name,score,highlight,time}]
+    content TEXT NOT NULL,                           -- 发送的 markdown 全文（补推按此重发）
+    status TEXT NOT NULL,                            -- sent / failed
+    error TEXT,                                      -- 失败原因（用户可读）
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_bs_rnl_tenant ON bs_recruiting_notify_logs(tenant_id, created_at);

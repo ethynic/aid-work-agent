@@ -63,12 +63,13 @@ def _patch_repo(devices, invocation=None, events=None):
 
 class TestToolDefinitions:
     def test_all_tools_local_required(self):
-        """15 个 proxy 工具全部 LOCAL_REQUIRED + local_boss 分类，名称与受信 manifest 一致
+        """16 个 proxy 工具全部 LOCAL_REQUIRED + local_boss 分类，名称与受信 manifest 一致
 
-        含 Phase 3 新增的 boss_list_jobs / boss_select_job / boss_jobs_list；
-        其中 boss_jobs_list 是混合模式（云端查询逻辑 + 代理注册），execution_target 仍 LOCAL_REQUIRED
+        含 Phase 3 新增的 boss_list_jobs / boss_select_job / boss_jobs_list 与
+        面试通知 Phase 1 的 boss_interview_notify；其中 boss_jobs_list /
+        boss_interview_notify 是混合模式（云端执行逻辑 + 代理注册），execution_target 仍 LOCAL_REQUIRED
         """
-        assert len(LOCAL_PROXY_TOOL_CLASSES) == 15
+        assert len(LOCAL_PROXY_TOOL_CLASSES) == 16
         assert LOCAL_PROXY_TOOL_NAMES == set(catalog.allowed_tools("boss-recruiting"))
         for cls in LOCAL_PROXY_TOOL_CLASSES:
             tool = cls()

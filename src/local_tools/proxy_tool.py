@@ -29,7 +29,12 @@ from loguru import logger
 from pydantic import BaseModel, Field, field_validator
 
 from src.local_tools import catalog, repository
-from src.services import recruiting_job_service, recruiting_match_service, recruiting_resume_service
+from src.services import (
+    recruiting_job_service,
+    recruiting_match_service,
+    recruiting_notify_service,
+    recruiting_resume_service,
+)
 from src.tools.base import BaseTool, ExecutionTarget
 
 ONLINE_THRESHOLD_SECONDS = 30  # last_seen_at 距今 ≤30s 视为在线（与 api.py 一致）
@@ -352,6 +357,94 @@ class BossInterviewDemoTool(LocalToolProxyTool):
     display_name = "BOSS 约面试演示"
     description = "在用户本机 BOSS 直聘「沟通」页演示填写约面试信息。只填写不发送，不属于外部写动作"
     InputModel = BossInterviewDemoInput
+
+
+# ============== 面试邀约企微通知（两点式，Phase 1，设计 recruiting-interview-notify §2） ==============
+
+
+class BossInterviewNotifyCandidate(BaseModel):
+    """候选人条目：pre 用 name/score/highlight/time（拟时间），done 用 name/time（实际时间）"""
+
+    name: str = Field(..., min_length=1, max_length=30, description="候选人姓名")
+    score: Optional[int] = Field(None, ge=0, le=100, description="匹配分 0-100（pre 模板展示）")
+    highlight: Optional[str] = Field(None, max_length=100, description="候选人亮点一句话（pre 模板展示）")
+    time: Optional[str] = Field(None, max_length=50, description="面试时间（pre=拟安排 / done=实际安排）")
+
+
+class BossInterviewNotifyInput(BaseModel):
+    kind: Literal["pre", "done"] = Field(
+        ..., description="通知类型：pre=邀约前知会（拟邀名单+分数亮点+拟时间）/ done=邀约后通报（实际名单+面试时间）"
+    )
+    job_name: str = Field(..., min_length=1, max_length=50, description="职位名称")
+    candidates: List[BossInterviewNotifyCandidate] = Field(
+        ..., min_length=1, max_length=10, description="候选人名单（1-10 人，姓名与时间来自对话上下文）"
+    )
+    note: Optional[str] = Field(None, max_length=200, description="备注（pre 模板附加说明，可选）")
+
+
+class BossInterviewNotifyTool(LocalToolProxyTool):
+    """面试邀约企微通知（混合模式：纯云端发送，不查设备、不建 invocation）。
+
+    同 boss_jobs_list 的混合模式：覆写 execute 为纯云端逻辑（读通知配置 → 调
+    recruiting_notify_service.push_interview_notify 发企微群机器人 → 写留痕），
+    仅为复用 SUBAGENT tools.allowed 名称交集注册机制而留在 LOCAL_PROXY_TOOL_CLASSES。
+
+    设计调整（2026-08-19）：boss_interview_demo 入参只有 remark，无候选人名/日期，
+    候选人名只存在于 agent 对话上下文——因此事前知会与事后通报统一为本工具的
+    两种 kind（pre/done），由 SUBAGENT 链路规定调用；通知失败不阻塞邀约。
+    """
+
+    name = "boss_interview_notify"
+    display_name = "BOSS 面试邀约企微通知"
+    description = (
+        "向企微群机器人发送面试邀约通知（只发群知会，不操作 BOSS、不碰设备）。"
+        "kind=pre 事前知会：用户同意邀面后、执行邀约前调用，传拟邀候选人名单"
+        "（name/score/highlight）与拟安排时间（time）；kind=done 事后通报："
+        "boss_interview_demo 逐人完成后调用，传实际邀约名单与面试时间。"
+        "通知失败不阻塞邀约（工具仍返回 success，message 会说明失败原因，转告用户后继续）"
+    )
+    # 纯云端一次 HTTP 推送，留短 timeout；不走基类设备转发路
+    timeout_seconds = 30
+
+    InputModel = BossInterviewNotifyInput
+
+    async def execute(self, **kwargs) -> Dict[str, Any]:
+        tenant_id = kwargs.get("_trusted_tenant_id")
+        if not tenant_id:
+            return {"success": False, "code": "NO_IDENTITY",
+                    "message": "无法确定用户身份，请重新登录后再试"}
+        kind = kwargs.get("kind")
+        job_name = kwargs.get("job_name") or ""
+        # ToolExecutor 会按 InputModel 规范化参数（executor.py 强转），嵌套模型
+        # candidates 到达这里是 BossInterviewNotifyCandidate 实例而非 dict——
+        # 服务层按 dict 取值（c.get），此处统一 model_dump 为 dict（exclude_none
+        # 与服务层 _normalize_candidates 只留非 None 键的语义一致）
+        candidates = [
+            c.model_dump(exclude_none=True) if isinstance(c, BaseModel) else c
+            for c in (kwargs.get("candidates") or [])
+        ]
+        try:
+            result = await recruiting_notify_service.push_interview_notify(
+                tenant_id,
+                kind=kind,
+                job_name=job_name,
+                candidates=candidates,
+                note=kwargs.get("note"),
+            )
+        except Exception as e:  # noqa: BLE001 通知失败不阻塞邀约：转用户可读文案
+            logger.opt(exception=True).error(f"后端日志：boss_interview_notify 推送异常: {e}")
+            result = {"pushed": False, "error": f"通知服务异常: {type(e).__name__}"}
+
+        pushed = bool(result.get("pushed"))
+        if pushed:
+            message = "事前知会已发送至企微群" if kind == "pre" else "面试邀约通报已发送至企微群"
+        elif result.get("reason") == "未启用":
+            message = "企微通知未启用（可在通知设置开启），本次未发送群通知"
+        else:
+            message = f"通知发送失败（不影响邀约，可继续）：{result.get('error') or result.get('reason') or '未知原因'}"
+
+        data = {"pushed": pushed, "log_id": result.get("log_id")}
+        return {"success": True, "code": None, "message": message, "data": data}
 
 
 # ============== 职位切换与云端职位库（要求驱动闭环 Phase 3，设计 §5） ==============
@@ -974,6 +1067,7 @@ LOCAL_PROXY_TOOL_CLASSES = (
     BossAcceptResumeTool,
     BossRejectCurrentTool,
     BossInterviewDemoTool,
+    BossInterviewNotifyTool,
     BossListJobsTool,
     BossSelectJobTool,
     BossJobsListTool,

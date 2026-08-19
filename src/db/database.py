@@ -1373,6 +1373,18 @@ def _init_postgresql():
             except Exception as rollback_err:
                 logger.warning(f"Failed to rollback recruiting_operator transaction: {rollback_err}")
 
+        # 招聘面试邀约企微通知表（bs_recruiting_notify_settings / bs_recruiting_notify_logs，
+        # 面试邀约通知设计 Phase 1，见 docs/design/recruiting/recruiting-interview-notify-design.md）
+        try:
+            from src.services.recruiting_notify_service import init_recruiting_notify_tables
+            init_recruiting_notify_tables(conn)
+        except Exception as e:
+            logger.warning(f"Failed to initialize recruiting_notify tables: {e}")
+            try:
+                conn.rollback()
+            except Exception as rollback_err:
+                logger.warning(f"Failed to rollback recruiting_notify transaction: {rollback_err}")
+
         # Skill 表初始化由 SkillLoader._init_skill_tables() 统一处理，
         # 通过 SKILL.md 中的 init_script 字段声明，不再硬编码。
 
