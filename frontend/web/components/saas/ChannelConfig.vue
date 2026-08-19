@@ -70,7 +70,7 @@
               <div class="flex items-center gap-3 min-w-0 flex-wrap">
                 <span class="text-sm font-medium text-default">{{ acc.name }}</span>
                 <span class="text-xs text-muted font-mono">{{ acc.open_kfid }}</span>
-                <span class="text-xs text-muted">绑定：{{ tenantUserName(acc.tenant_user_id) }}</span>
+                <span class="text-xs text-muted">归属：{{ tenantUserName(acc.tenant_user_id) }}</span>
                 <span v-if="acc.expire_at" class="text-xs text-muted">到期 {{ acc.expire_at }}</span>
                 <span v-if="acc.credit_limit > 0" class="text-xs text-muted">积分 {{ acc.credit_used }}/{{ acc.credit_limit }}</span>
                 <span class="text-xs text-muted">引流 {{ acc.referral_count }} 人</span>
@@ -225,11 +225,11 @@
             </div>
           </div>
 
-          <!-- 关联数字员工 -->
-          <div>
+          <!-- 关联数字员工（wecom_kf 渠道由客服账号级"绑定数字员工"决定，隐藏主表字段避免误导） -->
+          <div v-if="form.channel_type !== 'wecom_kf'">
             <label class="text-sm text-muted mb-1 block">关联数字员工</label>
             <BaseSelect v-model="form.subagent_type">
-              <option value="">不绑定（默认）</option>
+              <option value="">不绑定</option>
               <option v-for="sa in availableSubagents" :key="sa" :value="sa">{{ subagentTypeLabel(sa) }} ({{ sa }})</option>
             </BaseSelect>
             <p class="mt-1 text-xs text-muted">选择该渠道消息由哪个数字员工处理</p>
@@ -256,7 +256,7 @@
                   <div class="flex items-center gap-3 min-w-0 flex-wrap">
                     <span class="text-sm font-medium text-default">{{ acc.name }}</span>
                     <span class="text-xs text-muted font-mono">{{ acc.open_kfid }}</span>
-                    <span class="text-xs text-muted">绑定：{{ tenantUserName(acc.tenant_user_id) }}</span>
+                    <span class="text-xs text-muted">归属：{{ tenantUserName(acc.tenant_user_id) }}</span>
                     <span v-if="acc.expire_at" class="text-xs text-muted">到期 {{ acc.expire_at }}</span>
                     <span v-if="acc.credit_limit > 0" class="text-xs text-muted">积分 {{ acc.credit_used }}/{{ acc.credit_limit }}</span>
                     <span class="text-xs text-muted">引流 {{ acc.referral_count }} 人</span>
@@ -271,7 +271,7 @@
             </div>
           </template>
           <p v-else class="text-sm text-muted">
-            微信客服账号请在保存渠道后，回到渠道列表点击「添加客服账号」管理：系统自动调用企业微信 API 创建账号、生成推广二维码，并支持绑定引流员工、设置到期日期与积分上限。
+            微信客服账号请在保存渠道后，回到渠道列表点击「添加客服账号」管理：系统自动调用企业微信 API 创建账号、生成推广二维码，并支持绑定归属用户、设置到期日期与积分上限。
           </p>
         </div>
 
@@ -299,7 +299,7 @@
       <div class="space-y-4">
         <!-- 创建成功二维码回显 -->
         <div v-if="createdQrData" class="bg-success-50 border border-success-200 rounded-lg p-4 flex flex-col items-center">
-          <p class="text-sm font-medium text-success-800 mb-2">客服账号创建成功！请下载二维码分享给绑定员工</p>
+          <p class="text-sm font-medium text-success-800 mb-2">客服账号创建成功！请下载二维码分享给归属用户</p>
           <p v-if="createdQrData.qr_title" class="text-sm font-medium text-default mb-2">{{ createdQrData.qr_title }}</p>
           <img :src="createdQrData.qr_data_url" alt="客服二维码" class="w-40 h-40 rounded-lg border border-default bg-white" />
           <p class="text-xs text-muted mt-2 break-all text-center">{{ createdQrData.contact_url }}</p>
@@ -345,17 +345,17 @@
             <p class="mt-0.5 text-xs text-muted">不传则使用租户 Logo 或默认占位图</p>
           </div>
           <div>
-            <label class="text-sm text-muted mb-1 block">绑定引流员工<span class="text-danger-500">*</span></label>
+            <label class="text-sm text-muted mb-1 block">归属用户 <span class="text-danger-500">*</span></label>
             <BaseSelect v-model="kfForm.tenant_user_id">
-              <option value="">请选择员工</option>
+              <option value="">请选择用户</option>
               <option v-for="u in tenantUsers" :key="u.user_id" :value="u.user_id">{{ tenantUserName(u.user_id) }}</option>
             </BaseSelect>
-            <p class="mt-0.5 text-xs text-muted">员工扫码后按此员工归因，可换绑</p>
+            <p class="mt-0.5 text-xs text-muted">微信侧客户扫码后归属到该用户名下</p>
           </div>
           <div>
-            <label class="text-sm text-muted mb-1 block">绑定子智能体</label>
+            <label class="text-sm text-muted mb-1 block">绑定数字员工 <span class="text-danger-500">*</span></label>
             <BaseSelect v-model="kfForm.subagent_type">
-              <option value="">不绑定（使用渠道默认）</option>
+              <option value="">请选择数字员工</option>
               <option v-for="sa in availableSubagents" :key="sa" :value="sa">{{ subagentTypeLabel(sa) }} ({{ sa }})</option>
             </BaseSelect>
           </div>
@@ -392,7 +392,7 @@
           <div class="col-span-2">
             <label class="text-sm text-muted mb-1 block">二维码标题</label>
             <BaseInput v-model="kfForm.qr_title" maxlength="50" placeholder="如：爱定义 - 小蔡老师" />
-            <p class="mt-0.5 text-xs text-muted">显示在二维码图片上方，便于区分不同员工</p>
+            <p class="mt-0.5 text-xs text-muted">显示在二维码图片上方，便于区分不同归属用户</p>
           </div>
         </div>
 
@@ -587,7 +587,7 @@ const copied = ref<Record<string, boolean>>({})
 const showGuideModal = ref(false)
 const guideChannel = ref('wecom')
 
-// ==================== 微信客服账号管理（引流） ====================
+// ==================== 微信客服账号管理 ====================
 
 // config_id → 账号列表（来自 GET /api/saas/wecom-kf/accounts）
 const kfAccountMap = ref<Record<string, any[]>>({})
@@ -629,7 +629,7 @@ const kfForm = ref({
 function tenantUserName(userId: string | null | undefined): string {
   if (!userId) return '-'
   const u = tenantUserMap.value[userId]
-  if (!u) return '已删除员工'
+  if (!u) return '已删除用户'
   return u.nickname || u.username || u.phone || userId
 }
 
@@ -640,7 +640,7 @@ async function loadTenantUsers() {
     tenantUserMap.value = {}
     for (const u of tenantUsers.value) tenantUserMap.value[u.user_id] = u
   } catch (e) {
-    console.error('加载员工列表失败:', e)
+    console.error('加载用户列表失败:', e)
   }
 }
 
@@ -784,7 +784,7 @@ async function handleEnsureContactWay(ch: any, acc: any) {
 async function handleKfSubmit() {
   const name = (kfForm.value.name || '').trim()
   if (!name) { kfFormError.value = '请填写客服名称'; return }
-  if (!kfForm.value.tenant_user_id) { kfFormError.value = '请选择绑定引流员工'; return }
+  if (!kfForm.value.tenant_user_id) { kfFormError.value = '请选择用户'; return }
 
   const payload: Record<string, any> = {
     name,
@@ -809,7 +809,7 @@ async function handleKfSubmit() {
       const ownerAccounts = kfAccountMap.value[kfOwnerConfigId.value || ''] || []
       const original = ownerAccounts.find((a: any) => a.open_kfid === kfEditingOpenKfid.value)
       if (original && original.tenant_user_id !== payload.tenant_user_id) {
-        if (!confirm('之前已扫码的客户仍绑定原用户，新扫码的客户会绑定新用户。确定换绑吗？')) {
+        if (!confirm('之前已扫码的客户仍归属原用户，新扫码的客户会归属新用户。确定换绑吗？')) {
           kfSubmitting.value = false
           return
         }
@@ -1019,7 +1019,7 @@ const fullGuideMap: Record<string, { steps: { title: string; desc: string; locat
       { title: '开启微信客服功能', desc: '登录企业微信管理后台，进入「应用管理」→「微信客服」，确认微信客服功能已开启。', location: '应用管理 → 微信客服' },
       { title: '创建自建应用', desc: '进入「应用管理」→「自建」→ 创建应用。记录 CorpID（「我的企业」→「企业信息」）和 Secret（应用详情页）。微信客服场景不需要 AgentId。', location: '应用管理 → 自建' },
       { title: '设置微信客服 API 管理', desc: '进入「微信客服」→「通过 API 管理」，开启「通过 API 管理微信客服账号」，将步骤 2 的自建应用设为「可调用接口的应用」。', location: '微信客服 → 通过 API 管理' },
-      { title: '创建客服账号', desc: '进入「微信客服」→「客服账号」→ 添加客服账号。创建后通过 API 获取 open_kfid（格式如 wkAAAA）。可创建多个客服账号绑定不同子智能体。', location: '微信客服 → 客服账号' },
+      { title: '创建客服账号', desc: '进入「微信客服」→「客服账号」→ 添加客服账号。创建后通过 API 获取 open_kfid（格式如 wkAAAA）。可创建多个客服账号绑定不同数字员工。', location: '微信客服 → 客服账号' },
       { title: '配置回调 URL', desc: '在「微信客服」→「API」中找到回调配置，填写回调 URL、Token、EncodingAESKey。注意：需先在本页面保存凭证后再到企微后台点保存。', location: '微信客服 → API → 回调配置' },
       { title: '配置可信 IP', desc: '在应用详情页找到「企业可信IP」，添加服务器公网 IP。', location: '应用详情 → 企业可信IP' },
       { title: '设置接待方式', desc: '进入「微信客服」→「客服账号」→ 选择客服账号 → 设置「接待方式」为「机器人+人工接待」。设置为「仅人工接待」时消息不会通过 API 推送。', location: '微信客服 → 客服账号 → 接待方式' },
