@@ -140,7 +140,7 @@
 
 系统存在两套会话存储体系，服务不同的接入场景。
 
-> **⚠️ 严格分离规则**：`chat_sessions`/`chat_messages` **只给 web 端**用；`channel_sessions`/`channel_messages` 等 `channel_` 前缀表**只给第三方渠道**用。**读写都按来源走对应表，严禁混用**（渠道消息绝不写/读 `chat_messages`，反之亦然）。上下文重建必须按会话来源分流（`is_channel_session` 判定），不能靠 fallback，否则迁移期残留数据会劫持真实对话。`chat_records` 是唯一两端共用的表（靠 `source_type` 区分），但不参与上下文重建。详见 [context-reconstruction-pitfalls.md](../research/context-reconstruction-pitfalls.md)。
+> **⚠️ 严格分离规则**：`chat_sessions`/`chat_messages` **只给 web 端**用；`channel_sessions`/`channel_messages` 等 `channel_` 前缀表**只给第三方渠道**用。**读写都按来源走对应表，严禁混用**（渠道消息绝不写/读 `chat_messages`，反之亦然）。上下文重建必须按会话来源分流（`is_channel_session` 判定），不能靠 fallback，否则迁移期残留数据会劫持真实对话。`chat_records` 是唯一两端共用的表（靠 `source_type` 区分），但不参与上下文重建。详见 [context-reconstruction-pitfalls.md](../incidents/context-reconstruction-pitfalls.md)。
 
 | 维度 | 网页端 | 渠道端 |
 |------|--------|--------|

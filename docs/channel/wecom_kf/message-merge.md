@@ -352,7 +352,7 @@ async def _processor(cancel_check, user_input_override=None):
 - [wecom_kf 设计文档](./wecom_kf_design.md)
 - [wecom_kf 部署指南](./wecom_kf_deployment_guide.md)
 - [并发消息串行化方案](../concurrent-message-serialization-plan.md)
-- [上下文重建陷阱](../../research/context-reconstruction-pitfalls.md)
+- [上下文重建陷阱](../../incidents/context-reconstruction-pitfalls.md)
 - [撤回消息处理开发计划](./message_recall_plan.md)
 
 ## 12. 撤回事件处理（与合并机制的交互）

@@ -23,11 +23,11 @@
 
     <!-- 渠道列表 -->
     <div v-else-if="channels.length > 0" class="space-y-4">
-      <div v-for="ch in channels" :key="ch.config_id" class="bg-surface rounded-lg border border-default p-5">
+      <div v-for="(ch, index) in channels" :key="ch.config_id" class="bg-surface rounded-lg border border-default p-5">
         <div class="flex items-center justify-between mb-3">
           <div class="flex items-center gap-3">
+            <span class="text-sm text-muted">{{ index + 1 }}</span>
             <span v-if="ch.name" class="text-sm font-medium text-default">{{ ch.name }}</span>
-            <span class="text-sm text-muted font-mono">{{ ch.id }}</span>
             <span class="text-sm text-default">{{ channelTypeLabel(ch.channel_type) }}</span>
             <BaseBadge :intent="ch.verified ? 'success' : 'warning'">
               {{ ch.verified ? '已验证' : '未验证' }}
@@ -37,7 +37,6 @@
             </BaseBadge>
           </div>
           <div class="flex items-center gap-2">
-            <BaseButton intent="ghost" size="sm" @click="showGuide(ch)">配置指南</BaseButton>
             <BaseButton intent="ghost" size="sm" @click="handleVerify(ch.config_id)">验证连接</BaseButton>
             <BaseButton intent="ghost" size="sm" @click="editChannel(ch)">编辑</BaseButton>
             <BaseButton intent="danger-ghost" size="sm" @click="handleDelete(ch.config_id)">删除</BaseButton>
@@ -388,58 +387,6 @@
       </template>
     </BaseModal>
 
-    <!-- ==================== 配置指南弹窗 ==================== -->
-    <BaseModal v-model="showGuideModal" :title="`${channelTypeLabel(guideChannel)} 接入指南`" size="xl" mode="view">
-      <!-- 步骤指引 -->
-      <div class="space-y-4">
-        <div v-for="(step, i) in fullGuide.steps" :key="i" class="flex gap-4">
-          <div class="flex-shrink-0 w-8 h-8 rounded-full bg-primary-100 text-primary-700 flex items-center justify-center text-sm font-bold">{{ i + 1 }}</div>
-          <div class="flex-1 pt-1">
-            <p class="font-medium text-default">{{ step.title }}</p>
-            <p class="text-sm text-muted mt-0.5">{{ step.desc }}</p>
-            <p v-if="step.location" class="text-xs text-primary-600 mt-1">位置：{{ step.location }}</p>
-          </div>
-        </div>
-      </div>
-
-      <!-- 回调地址 -->
-      <div class="mt-6 bg-canvas border border-default rounded-lg p-4">
-        <p class="font-medium text-default mb-2">回调地址</p>
-        <p class="text-sm text-muted mb-3">在 {{ channelTypeLabel(guideChannel) }} 后台配置接收消息时，URL 填入：</p>
-        <div class="flex items-center gap-2">
-          <code class="flex-1 bg-surface px-3 py-2 rounded text-sm text-primary-700 font-mono select-all break-all border border-default">{{ getCallbackUrl(guideChannel) }}</code>
-          <BaseButton intent="ghost" size="sm" @click="copyUrl(getCallbackUrl(guideChannel), 'guide')">{{ copied['guide'] ? '已复制' : '复制' }}</BaseButton>
-        </div>
-      </div>
-
-      <!-- 凭证说明表 -->
-      <div class="mt-6">
-        <p class="font-medium text-default mb-3">凭证字段说明</p>
-        <div class="table-scroll-wrapper">
-          <BaseTable :columns="guideFieldColumns" :data="channelFieldMap[guideChannel] || []" row-key="key">
-            <template #key="{ row }"><span class="font-mono text-xs">{{ row.key }}</span></template>
-            <template #label="{ row }">{{ row.label }}</template>
-            <template #location="{ row }"><span class="text-muted text-xs">{{ row.location || '-' }}</span></template>
-          </BaseTable>
-        </div>
-      </div>
-
-      <!-- 常见问题 -->
-      <div v-if="fullGuide.faq" class="mt-6">
-        <p class="font-medium text-default mb-3">常见问题</p>
-        <div class="space-y-3">
-          <div v-for="(item, i) in fullGuide.faq" :key="i">
-            <p class="text-sm font-medium text-default">Q: {{ item.q }}</p>
-            <p class="text-sm text-muted">A: {{ item.a }}</p>
-          </div>
-        </div>
-      </div>
-
-      <template #footer>
-        <BaseButton intent="secondary" @click="showGuideModal = false">关闭</BaseButton>
-      </template>
-    </BaseModal>
-
     <!-- ==================== 公钥展示弹窗（生成密钥对后） ==================== -->
     <BaseModal
       v-model="showPublicKeyModal"
@@ -486,7 +433,6 @@ import { useToast } from 'vue-toastification'
 import AppHeader from '@/components/AppHeader.vue'
 import BaseModal from '@/components/ui/BaseModal.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
-import BaseTable from '@/components/ui/BaseTable.vue'
 import BaseBadge from '@/components/ui/BaseBadge.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
@@ -549,8 +495,6 @@ const submitting = ref(false)
 const formError = ref('')
 const editingId = ref<string | null>(null)
 const copied = ref<Record<string, boolean>>({})
-const showGuideModal = ref(false)
-const guideChannel = ref('wecom')
 
 // ==================== 微信客服账号管理 ====================
 
@@ -611,21 +555,12 @@ async function loadKfAccounts() {
   try {
     const res = await listKfAccounts()
     const accounts = res.accounts || []
-    // 建立 open_kfid → config_id 映射（后端 /accounts 不含 config_id，从渠道配置反查）
-    const kfToConfig: Record<string, string> = {}
-    for (const ch of channels.value) {
-      if (ch.channel_type === 'wecom_kf' && ch.config?.kf_account) {
-        for (const kf of ch.config.kf_account) {
-          if (kf.open_kfid) kfToConfig[kf.open_kfid] = ch.config_id
-        }
-      }
-    }
+    // 后端 /accounts 已带 config_id，直接按归属渠道分组
     const map: Record<string, any[]> = {}
     for (const acc of accounts) {
-      const cid = kfToConfig[acc.open_kfid]
-      if (!cid) continue
-      if (!map[cid]) map[cid] = []
-      map[cid].push(acc)
+      if (!acc.config_id) continue
+      if (!map[acc.config_id]) map[acc.config_id] = []
+      map[acc.config_id].push(acc)
     }
     kfAccountMap.value = map
   } catch (e) {
@@ -943,76 +878,6 @@ const quickGuideMap: Record<string, { title: string; steps: string[]; docUrl: st
 
 const currentGuide = computed(() => quickGuideMap[form.value.channel_type] || { title: '', steps: [], docUrl: '' })
 
-// ==================== 完整配置指南（独立弹窗） ====================
-
-const fullGuideMap: Record<string, { steps: { title: string; desc: string; location?: string }[]; faq?: { q: string; a: string }[] }> = {
-  wecom: {
-    steps: [
-      { title: '创建自建应用', desc: '登录企业微信管理后台，进入「应用管理」→「自建」→ 点击「创建应用」。填写应用名称、描述、可见范围。', location: '应用管理 → 自建 → 创建应用' },
-      { title: '获取企业 ID', desc: '进入「我的企业」→「企业信息」，复制 CorpID（格式 ww 开头）。', location: '我的企业 → 企业信息' },
-      { title: '获取应用凭证', desc: '在应用详情页记录 AgentId 和 Secret（点击「查看」显示）。', location: '应用管理 → 应用详情' },
-      { title: '配置 API 接收消息', desc: '在应用详情页找到「接收消息」→ 点击「设置 API 接收」。将回调地址填入 URL，点击「随机获取」生成 Token 和 EncodingAESKey。', location: '应用详情 → 接收消息 → 设置 API 接收' },
-      { title: '配置可信 IP', desc: '在应用详情页找到「企业可信IP」，添加服务器公网 IP。', location: '应用详情 → 企业可信IP' },
-      { title: '申请通讯录权限', desc: '在应用权限中申请「获取成员详情」权限，管理员审批后生效。', location: '应用详情 → 权限' },
-      { title: '保存并验证', desc: '先在本页面保存凭证配置，然后回到企业微信后台点击「保存」。系统会自动验证回调地址。' },
-    ],
-    faq: [
-      { q: '回调 URL 验证失败？', a: '确保服务器已启动、凭证已在本页面保存、SSL 证书有效。先在本页面保存，再到企业微信后台点保存。' },
-      { q: '用户发消息没有回复？', a: '检查可信 IP 是否已配置、应用可见范围是否包含该用户、Agent 实例是否已启动并绑定企业微信渠道。' },
-    ],
-  },
-  wecom_kf: {
-    steps: [
-      { title: '开启微信客服功能', desc: '登录企业微信管理后台，进入「应用管理」→「微信客服」，确认微信客服功能已开启。', location: '应用管理 → 微信客服' },
-      { title: '创建自建应用', desc: '进入「应用管理」→「自建」→ 创建应用。记录 CorpID（「我的企业」→「企业信息」）和 Secret（应用详情页）。微信客服场景不需要 AgentId。', location: '应用管理 → 自建' },
-      { title: '设置微信客服 API 管理', desc: '进入「微信客服」→「通过 API 管理」，开启「通过 API 管理微信客服账号」，将步骤 2 的自建应用设为「可调用接口的应用」。', location: '微信客服 → 通过 API 管理' },
-      { title: '创建客服账号', desc: '进入「微信客服」→「客服账号」→ 添加客服账号。创建后通过 API 获取 open_kfid（格式如 wkAAAA）。可创建多个客服账号绑定不同数字员工。', location: '微信客服 → 客服账号' },
-      { title: '配置回调 URL', desc: '在「微信客服」→「API」中找到回调配置，填写回调 URL、Token、EncodingAESKey。注意：需先在本页面保存凭证后再到企微后台点保存。', location: '微信客服 → API → 回调配置' },
-      { title: '配置可信 IP', desc: '在应用详情页找到「企业可信IP」，添加服务器公网 IP。', location: '应用详情 → 企业可信IP' },
-      { title: '设置接待方式', desc: '进入「微信客服」→「客服账号」→ 选择客服账号 → 设置「接待方式」为「机器人+人工接待」。设置为「仅人工接待」时消息不会通过 API 推送。', location: '微信客服 → 客服账号 → 接待方式' },
-      { title: '保存并验证', desc: '先在本页面保存凭证配置，再回到企业微信后台点击「保存」完成验证。' },
-    ],
-    faq: [
-      { q: '回调 URL 验证失败？', a: '确保服务器已启动、凭证已在本页面保存、SSL 证书有效。先在本页面保存，再到企业微信后台点保存。' },
-      { q: '收不到客户消息？', a: '确认「通过 API 管理微信客服账号」已开启、自建应用在「可调用接口的应用」列表中、客服账号接待方式设为「机器人+人工接待」。' },
-      { q: 'Agent 回复发送失败？', a: '确认使用的是自建应用的 Secret（不是微信客服的 Secret，微信客服没有独立 Secret）、token 未过期、未超过 5 条消息限制。' },
-    ],
-  },
-  dingtalk: {
-    steps: [
-      { title: '创建钉钉应用', desc: '登录钉钉开放平台，进入「开发者后台」→ 创建「企业内部开发」应用。', location: '开发者后台 → 创建应用' },
-      { title: '启用机器人能力', desc: '在应用详情页点击「添加应用能力」→ 启用「机器人」。', location: '应用详情 → 添加应用能力' },
-      { title: '获取应用凭证', desc: '在「基础信息」页面记录 AppKey 和 AppSecret。', location: '基础信息页面' },
-      { title: '配置消息回调', desc: '在「事件与回调」中配置回调 URL，添加 im.message.receive_v1 事件。钉钉回调签名只用 AppSecret 做 HmacSHA256，不需要 Token / EncodingAESKey。', location: '事件与回调' },
-      { title: '保存并验证', desc: '先在本页面保存凭证配置，再到钉钉后台完成回调验证。' },
-    ],
-    faq: [
-      { q: '收不到消息？', a: '确认已启用机器人能力、已添加消息接收事件、回调 URL 配置正确。' },
-    ],
-  },
-  feishu: {
-    steps: [
-      { title: '创建飞书应用', desc: '登录飞书开放平台，进入「开发者后台」→ 创建「企业自建应用」。', location: '开发者后台 → 创建应用' },
-      { title: '启用机器人能力', desc: '在应用详情页点击「添加应用能力」→ 启用「机器人」。', location: '应用详情 → 添加应用能力' },
-      { title: '获取应用凭证', desc: '在「凭证与基础信息」页面记录 App ID 和 App Secret。', location: '凭证与基础信息' },
-      { title: '配置消息回调', desc: '在「事件与回调」中添加 im.message.receive_v1 事件，将回调地址填入请求地址，记录 Verification Token 和 Encrypt Key。', location: '事件与回调' },
-      { title: '配置权限', desc: '在「权限管理」中申请「获取用户信息」和「发送消息」权限。', location: '权限管理' },
-      { title: '保存并验证', desc: '先在本页面保存凭证配置，再到飞书后台完成回调验证。' },
-    ],
-    faq: [
-      { q: '回调验证不通过？', a: '飞书使用 challenge 验证，系统会自动处理。确保 Encrypt Key 和 Verification Token 填写正确。' },
-    ],
-  },
-}
-
-const fullGuide = computed(() => fullGuideMap[guideChannel.value] || { steps: [] })
-
-const guideFieldColumns = [
-  { key: 'key', label: '字段', width: '160px' },
-  { key: 'label', label: '说明' },
-  { key: 'location', label: '获取位置', width: '200px' },
-]
-
 // ==================== 回调地址 ====================
 
 function getCallbackUrl(channelType: string, configId?: string): string {
@@ -1078,11 +943,6 @@ function handleFileUpload(fieldKey: string, event: Event) {
     formError.value = `文件读取失败：${file.name}`
   }
   reader.readAsText(file)
-}
-
-function showGuide(ch: any) {
-  guideChannel.value = ch.channel_type
-  showGuideModal.value = true
 }
 
 async function loadChannels() {

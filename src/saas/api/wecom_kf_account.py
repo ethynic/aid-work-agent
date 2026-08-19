@@ -240,10 +240,11 @@ def _find_kf_entry(tenant_id: str, open_kfid: str) -> Tuple[Optional[str], Optio
     return None, None, None
 
 
-def _to_account_view(kf: Dict[str, Any], tenant_id: str) -> Dict[str, Any]:
-    """将 kf_account 条目转为 API 视图（含引流人数、累计积分）。"""
+def _to_account_view(kf: Dict[str, Any], tenant_id: str, config_id: str) -> Dict[str, Any]:
+    """将 kf_account 条目转为 API 视图（含归属渠道 config_id、引流人数、累计积分）。"""
     open_kfid = kf.get("open_kfid", "")
     return {
+        "config_id": config_id,
         "open_kfid": open_kfid,
         "name": kf.get("name", ""),
         "subagent_type": kf.get("subagent_type", ""),
@@ -377,7 +378,7 @@ async def list_kf_accounts(request: Request):
         for kf in cfg.get("config", {}).get("kf_account", []):
             if not kf.get("open_kfid"):
                 continue
-            accounts.append(_to_account_view(kf, tenant_id))
+            accounts.append(_to_account_view(kf, tenant_id, cfg["config_id"]))
     return {"success": True, "accounts": accounts}
 
 
@@ -446,7 +447,7 @@ async def update_kf_account(request: Request, open_kfid: str, body: KfAccountUpd
     await ChannelFactory.invalidate_adapter(tenant_id, "wecom_kf", config_id, close=True)
 
     logger.info(f"[wecom-kf] 客服账号已更新: open_kfid={open_kfid}, tenant={tenant_id}")
-    return {"success": True, "account": _to_account_view(kf, tenant_id)}
+    return {"success": True, "account": _to_account_view(kf, tenant_id, config_id)}
 
 
 @router.post("/accounts/{open_kfid}/contact-way")

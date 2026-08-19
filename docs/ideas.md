@@ -106,6 +106,15 @@
 
 ---
 
+## 故障复盘索引
+
+线上故障与生产事故的复盘文档（存放于 `docs/incidents/`）：
+
+| 故障主题 | 文档 | 关联功能 |
+|---------|------|---------|
+| 对话上下文重建避坑速查 | [context-reconstruction-pitfalls.md](incidents/context-reconstruction-pitfalls.md) | 消息历史加载/窗口裁剪 5 大陷阱(来源分流、最近N条、对齐user、表分离、默认值漂移) |
+| qwen3.7-flash 工具结果缓存数组化回显故障复盘 | [qwen-tool-message-cache-echo-incident.md](incidents/qwen-tool-message-cache-echo-incident.md) | 2026-08-19 线上故障：显式缓存"末尾标记"把 tool 消息 content 数组化（违反 OpenAI 兼容规范），qwen3.7-flash 概率性(~7%)按 Anthropic 语义回显工具结果。已修复为"从后往前找可安全标记文本消息"；缓存范围相对退化但绝对成本 ~0.001 元/次 |
+
 ## 调研报告索引
 
 以下调研报告为多项功能设计的前期研究，不单独对应开发任务：
@@ -120,7 +129,6 @@
 | 知识库行业产品调研与低改动快速增强建议 | [enterprise-knowledge-base-quick-wins.md](research/enterprise-knowledge-base-quick-wins.md) | 知识库能力增强（补充 Phase 1-2 之外的快速增强点） |
 | Text-to-SQL 调研 | [text-to-sql-data-analysis-agent-research.md](research/text-to-sql-data-analysis-agent-research.md) | 数据分析智能体 |
 | 企微客服 AI 绑定调研 | [wecom-kf-ai-chatbot-binding-research.md](research/wecom-kf-ai-chatbot-binding-research.md) | 企业微信客服 AI 绑定 |
-| 对话上下文重建避坑速查 | [context-reconstruction-pitfalls.md](research/context-reconstruction-pitfalls.md) | 消息历史加载/窗口裁剪 5 大陷阱(来源分流、最近N条、对齐user、表分离、默认值漂移) |
 | 前端样式调研 | [frontend-style-research.md](research/frontend/frontend-style-research.md) | 前端样式统一 |
 | 前端 Office 预览调研 | [frontend-office-preview-research.md](research/frontend/frontend-office-preview-research.md) | 前端 Office 预览 |
 | HTML 转 PPTX 技术调研 | [html-to-pptx-conversion-research.md](research/html-to-pptx-conversion-research.md) | PPT 技能 PPTX 导出 |
@@ -131,6 +139,8 @@
 | 微信搜一搜 RPA 命令行工具 | [设计](tools/wechat-souyisou-rpa-design.md) / [连续查询会话交接记录](tools/wechat-rpa-session-handoff.md) | 🔧 部分完成：正式 `collect` 已接入 HWND 会话状态机、10 分钟预算和 Per-Monitor V2；输入采用可信键盘导航与精确回读，详情候选采用可信 HWND 内 UIA 双语义筛选和物理 `ClickablePoint`。旧 `Ctrl+Tab`、像素 card band、视觉搜索框、比例 locator 与 `flow_probe` 固定坐标路径已删除。单条“中国黄金协会 / 周洲”已真机验证详情正确打开、等待、关闭并以 `inconclusive + session_closed=true` 安全结束；待继续验证连续 9→10、普通 1→2 和连续 20 条。[开发计划](tools/association-profile-enrichment-dev-plan.md) |
 | 协会官网优先资料补全 | [设计](tools/association-profile-enrichment-design.md) | 🔧 部分完成：新增严格 14 字段提取、自动站内导航、批量无界面 CLI 和 Excel 输出。输入支持文字/CSV/XLSX，解析协会清单并去重；官网按 HTTPS→HTTP 尝试，不可达时使用项目 WebSearchTool+LLM 补基础信息；微信补联系人手机。2026-08-03 已修复微信清理失败级联，并补充官网/网络回退字段级证据隔离、领导独立提取和稳定错误码。微信统一关闭完整插件并保留具体清理码，搜索输入使用可信键盘导航、粘贴回读和提交门禁，详情定位已改为 DPI-aware UIA；批处理显式传播熔断状态，所有手机证据绑定标准保持不变。此前 20 家结果因没有输入框回读证据已作废，断点续跑与新一轮真实 20 家稳定性复验仍待完成。浏览器固定 `headless=false`。2026-08-05 解析优化：按「给定信息说A就A」原则删除解析器的主观内容门禁（逐字 evidence_quote 校验、姓名-手机号绑定/最近距离判定、计数字段 token 校验、全字段拒绝门禁），只保留结构安全校验（JSON schema、字段类型、email/count/mobile 格式、source_url 域名边界、fallback 手机号业务隔离）；模型解析出的字段一律接受，真实性由模型负责，evidence_quote 仅作审计。单测 111 项通过。[开发计划](tools/association-profile-enrichment-dev-plan.md) / [本机演示手册](tools/association-enrichment-local-demo-guide.md) / [本地调查工作台 UI 设计](tools/association-enrichment-ui-design.md) / [UI 开发计划](tools/association-enrichment-ui-dev-plan.md) |
 | 懂车帝与汽车之家客户留资统一接入可行性调研 | [automotive-platform-lead-integration-research.md](research/automotive-platform-lead-integration-research.md) | CRM 智能体、汽车平台渠道集成 |
+| 抖音电商飞鸽客服接入 Agent 可行性调研 | [douyin-shop-pigeon-agent-customer-service-research.md](research/douyin-shop-pigeon-agent-customer-service-research.md) | 抖店/飞鸽客服渠道、Agent 自动接待、转人工 |
+| 小红书客服接入 Agent 可行性调研 | [xiaohongshu-agent-customer-service-integration-research.md](research/xiaohongshu-agent-customer-service-integration-research.md) | 小红书电商客服、专业号私信、小程序客服、Agent 自动接待与转人工 |
 | AI 智能体行业产品体验提升调研与「工作日报」方案设计 | [ai-agent-experience-daily-report-research.md](research/ai-agent-experience-daily-report-research.md) | 工作日报（个人日报 + 团队日报）、AI 价值证明、续费驱动 |
 | 从个人经验到组织能力：AI 智能体组织知识沉淀调研与方案设计 | [org-knowledge-sedimentation-research.md](research/org-knowledge-sedimentation-research.md) | 组织知识沉淀（三层知识架构 + 专家识别 + 自动抽取 + 主动推荐）、个人经验转组织资产、续费护城河 |
 | 微信公众号文章搜索「不依赖微信 App」可行性调研 | [wechat-article-search-without-app-feasibility.md](research/wechat-article-search-without-app-feasibility.md) | 搜一搜无 App 外通道；不依赖 App 全域关键词搜文章只能在「搜狗(免费不稳)/商业聚合API(付费稳)/回退App内搜一搜」间三角取舍，无完美解 |
