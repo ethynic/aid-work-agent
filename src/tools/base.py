@@ -10,6 +10,11 @@ from typing import Any, Dict, List, Optional, Type
 
 from pydantic import BaseModel
 
+# 工具自动目录：catalog=True 且定义了 name 的 BaseTool 子类在类定义时按 name 登记，
+# 供 registry.discover_tool_classes() 发现注册（docs/tools/tool-auto-discovery-design.md）。
+# 只收集类引用不实例化，避免 import 副作用；同 name 后定义覆盖先定义。
+_CATALOG: Dict[str, Type["BaseTool"]] = {}
+
 
 class ExecutionTarget(str, Enum):
     """工具执行位置（设计 docs/design/recruiting/recruiting-cli-agent-integration-design.md §4.1）"""
@@ -37,6 +42,21 @@ class BaseTool(ABC):
     category: str = "general"
     InputModel: Optional[Type[BaseModel]] = None  # Pydantic 参数模型
     execution_target: ExecutionTarget = ExecutionTarget.SERVER  # 执行位置，默认服务端，现有工具零改动
+    # 是否进入自动发现目录 _CATALOG。以下工具应显式设为 False 退出：
+    # 虚拟工具（create_plan/use_skill/skill_execute/clarify/delegate_to_subagent）、
+    # 特殊构造工具（定时任务工具，实例存 Agent 供后台 runner）、渠道层工具（speech_to_text）、
+    # 仅子智能体按需注册的工具（boss_* 本地代理）、测试替身/中间基类。
+    catalog: bool = True
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        """子类定义时自动登记进 _CATALOG（仅收集类，不实例化）。
+
+        __init_subclass__ 触发时子类类体属性已绑定到 cls，通过 cls 参数读取，
+        中间基类未定义 name（继承空串）自然跳过。
+        """
+        super().__init_subclass__(**kwargs)
+        if getattr(cls, "catalog", True) and getattr(cls, "name", None):
+            _CATALOG[cls.name] = cls
 
     @abstractmethod
     async def execute(self, **kwargs) -> Dict[str, Any]:

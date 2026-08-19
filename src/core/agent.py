@@ -28,7 +28,7 @@ from src.core.agent_logger import log_agent_iteration, log_skill_execute
 from src.core.redis_client import redis_client
 from src.core.temp_logger import tlog
 from src.llm.gateway import llm_gateway
-from src.tools.registry import ToolRegistry
+from src.tools.registry import ToolRegistry, discover_tool_classes
 from src.tools.executor import ToolExecutor
 from src.tools.base import ExecutionTarget
 from src.memory.short_term import ShortTermMemory
@@ -419,109 +419,31 @@ class Agent:
         self._skills_loaded_at = time.time()
 
     def _register_builtin_tools(self):
-        """Register built-in tools"""
-        from src.tools.email.email_tool import EmailSendTool, EmailReadTool, EmailListFoldersTool
-        from src.tools.ocr import PaddleOCRDocParsingTool
-        from src.tools.search.search_tool import WebSearchTool
-        from src.tools.browser import BrowserAutomationTool
-        from src.tools.file.read_tool import ReadTool
-        from src.tools.file.write_tool import WriteTool
-        from src.tools.file.edit_tool import EditTool
-        from src.tools.file.cp_tool import CpTool
-        from src.tools.file.grep_tool import GrepTool
-        from src.tools.llm.content_generate_tool import ContentGenerateTool
-        from src.tools.network.http_api import HttpApiTool
+        """Register built-in tools（自动发现注册，新工具零 agent.py 改动）
 
-        # 注册邮件工具（不传配置，运行时通过 user_id 从数据库读取）
-        self.tool_registry.register(EmailSendTool())
-        self.tool_registry.register(EmailReadTool())
-        self.tool_registry.register(EmailListFoldersTool())
-        self.tool_registry.register(PaddleOCRDocParsingTool())
-        self.tool_registry.register(WebSearchTool())
-        
-        # 注册浏览器工具
-        self.tool_registry.register(BrowserAutomationTool())
-        
-        # 注册文件工具
-        self.tool_registry.register(ReadTool())
-        self.tool_registry.register(WriteTool())
-        self.tool_registry.register(EditTool())
-        self.tool_registry.register(CpTool())
-        self.tool_registry.register(GrepTool())
+        遍历 src.tools 包收集 catalog=True 的工具类（见 docs/tools/tool-auto-discovery-design.md），
+        特殊工具（虚拟工具/定时任务等）集中在 _register_special_tools()。
+        """
+        for cls in discover_tool_classes().values():
+            self.tool_registry.register(cls())
+        self._register_special_tools()
 
-        # 注册LLM内容生成工具
-        self.tool_registry.register(ContentGenerateTool())
-        self.tool_registry.register(HttpApiTool())
+        logger.info(f"Registered {len(self.tool_registry._tools)} tools")
 
-        # 注册定时任务工具
+    def _register_special_tools(self):
+        """集中注册不进自动目录（catalog = False）的特殊工具"""
+        # 定时任务工具（实例存 self 供后台定时任务 runner 复用）
         from src.tools.scheduler.scheduled_task_tool import CreateScheduledTaskTool, ManageScheduledTaskTool
         self._create_scheduled_task_tool = CreateScheduledTaskTool()
         self._manage_scheduled_task_tool = ManageScheduledTaskTool()
         self.tool_registry.register(self._create_scheduled_task_tool)
         self.tool_registry.register(self._manage_scheduled_task_tool)
 
-        # 注册知识库工具
-        from src.tools.knowledge.knowledge_base_tool import KnowledgeBaseTool
-        self.tool_registry.register(KnowledgeBaseTool())
-
-        # 注册景点知识库搜索工具
-        from src.tools.knowledge.attraction_search_tool import AttractionSearchTool
-        self.tool_registry.register(AttractionSearchTool())
-
-        # 注册酒店知识库搜索工具
-        from src.tools.knowledge.hotel_search_tool import HotelSearchTool
-        self.tool_registry.register(HotelSearchTool())
-
-        # 注册 Word 文档处理工具
-        from src.tools.word.word_process_tool import WordProcessTool
-        self.tool_registry.register(WordProcessTool())
-
-        # 注册 Excel 电子表格处理工具
-        from src.tools.excel.excel_process_tool import ExcelProcessTool
-        self.tool_registry.register(ExcelProcessTool())
-
-        # 注册 PDF 文档处理工具
-        from src.tools.pdf.pdf_process_tool import PdfProcessTool
-        self.tool_registry.register(PdfProcessTool())
-
-        # 注册 x-to-image 内容转图片工具
-        from src.tools.image.x_to_image_tool import XToImageTool
-        self.tool_registry.register(XToImageTool())
-
-        # 注册 PPT 生成工具
-        from src.tools.ppt.ppt_process_tool import PptProcessTool
-        self.tool_registry.register(PptProcessTool())
-
-        # 注册视频创作提交工具（video-agent 子智能体使用，从 _video_params 读取前端参数）
-        from src.tools.video.submit_video_task_tool import SubmitVideoTaskTool
-        self.tool_registry.register(SubmitVideoTaskTool())
-
-        # 注册转人工客服工具
-        from src.tools.transfer_to_human import TransferToHumanTool
-        self.tool_registry.register(TransferToHumanTool())
-
-        # 注册 AI 外呼工具（Mock 实现）
-        from src.tools.phone.ai_call_tool import AICallTool
-        self.tool_registry.register(AICallTool())
-
-        # 语音转文字（ASR）已在渠道层（channel_routes.py）完成，不注册为 LLM 工具
-        # from src.tools.asr.speech_to_text_tool import SpeechToTextTool
-        # self.tool_registry.register(SpeechToTextTool())
-
-        # 注册智能数据分析工具
-        from src.tools.data_analysis.smart_analysis_tool import SmartDataAnalysisTool
-        self.tool_registry.register(SmartDataAnalysisTool())
-
-        # 注册聊天附件数据文件上传工具
-        from src.tools.data_analysis.upload_data_tool import UploadDataFileTool
-        self.tool_registry.register(UploadDataFileTool())
-
         # 注册提取的虚拟工具（不放入 tool_registry，由 agent loop 特殊处理）
         from src.tools.plan.create_plan_tool import CreatePlanTool
         from src.tools.skill.use_skill_tool import UseSkillTool
         from src.tools.skill.skill_execute_tool import SkillExecuteTool
         from src.tools.agent.clarify_tool import ClarifyTool
-        from src.tools.agent.delegate_tool import DelegateToSubagentTool
 
         self._create_plan_tool = CreatePlanTool(
             plan_manager=self.plan_manager,
@@ -549,8 +471,6 @@ class Agent:
         # 对于 MASTER 模式延迟初始化（因为 subagent_executor 在此方法之后创建）
         # 对于非 MASTER 模式设为 None
         self._delegate_tool = None  # 将在 _init_delegate_tool 中初始化
-
-        logger.info(f"Registered {len(self.tool_registry._tools)} tools")
 
     def _init_delegate_tool(self):
         """延迟初始化 delegate 工具（需要在 subagent_executor 创建后调用）"""
@@ -2477,7 +2397,7 @@ class Agent:
         # 设置工具的 user_id / tenant_id
         file_output_tools = []  # 注册下载的文件工具（write / cp）
         if user:
-            for tool_name in ("email_send", "email_read", "email_list_folders", "browser_automation"):
+            for tool_name in ("email_process", "browser_automation"):
                 tool = self.tool_registry.get_tool(tool_name)
                 if tool and hasattr(tool, 'set_user_id'):
                     tool.set_user_id(user.user_id)
@@ -3426,7 +3346,7 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                             elif tool_name == "web_search":
                                 results = result.get("results", [])
                                 yield make_event("progress", data=f"✅ {tool_display_name}完成，找到{len(results)}条结果")
-                            elif tool_name == "email_send":
+                            elif tool_name == "email_process":
                                 yield make_event("progress", data=f"✅ {tool_display_name}成功")
                             elif tool_name == "read":
                                 content = result.get("content", "")

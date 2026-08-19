@@ -21,7 +21,7 @@ class CreateScheduledTaskInput(BaseModel):
     task_prompt: str = Field(..., description=(
         "独立可执行的提示词，不依赖对话上下文。应包含完整的任务指令、所有必要信息（收件人、文件路径、操作步骤等）。"
         "如需专业领域能力，可在提示词中指示委派给子智能体。"
-        "示例：「1. 使用 email_read 读取未读邮件 2. 将邮件列表汇总为文本 3. 使用 email_send 发送汇总到 zhangsan@company.com」"
+        "示例：「1. 使用 email_process 读取未读邮件（action=read, unseen_only=true） 2. 将邮件列表汇总为文本 3. 使用 email_process 发送汇总到 zhangsan@company.com（action=send）」"
     ))
     schedule_type: str = Field(..., description="调度类型：daily每天, weekly每周, monthly每月, interval间隔, once一次性")
     time_config: Dict[str, Any] = Field(..., description="时间配置，必须从用户话语中解析，所有时间为北京时间")
@@ -83,6 +83,9 @@ def format_schedule_description(schedule_type: str, time_config: dict) -> str:
 class CreateScheduledTaskTool(BaseTool):
     """创建定时任务工具"""
 
+    # 不进自动目录：实例由 Agent._register_special_tools() 构造后存 self，
+    # 供后台定时任务 runner 复用（保持特殊注册路径）
+    catalog = False
     name = "create_scheduled_task"
     description = (
         "为用户创建定时执行的任务。当用户说「每天/每周/每月/定期/定时/每隔X小时」+ 某个操作时使用。"
@@ -235,6 +238,9 @@ class CreateScheduledTaskTool(BaseTool):
 class ManageScheduledTaskTool(BaseTool):
     """管理定时任务工具"""
 
+    # 不进自动目录：实例由 Agent._register_special_tools() 构造后存 self，
+    # 供后台定时任务 runner 复用（保持特殊注册路径）
+    catalog = False
     name = "manage_scheduled_task"
     description = "管理用户的定时任务：查看列表、暂停、恢复、取消、查看执行日志。"
     display_name = "管理定时任务"

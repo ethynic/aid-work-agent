@@ -264,7 +264,7 @@ class SubagentExecutor:
 
         # 设置子智能体邮件工具的 user_id（使工具能从数据库读取用户邮箱配置）
         if user_id:
-            for tool_name in ("email_send", "email_read", "email_list_folders", "browser_automation"):
+            for tool_name in ("email_process", "browser_automation"):
                 tool = subagent_instance.tool_registry.get_tool(tool_name)
                 if tool and hasattr(tool, 'set_user_id'):
                     tool.set_user_id(user_id)

@@ -90,9 +90,9 @@ class TestUser:
             role=UserRole.EMPLOYEE,
         )
         
-        # 员工默认权限
+        # 员工默认权限（邮件三合一后为 email_process）
         permissions = user.get_default_permissions()
-        assert "email_send" in permissions
+        assert "email_process" in permissions
 
 
 class TestShortTermMemory:

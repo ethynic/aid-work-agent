@@ -16,6 +16,8 @@ from src.tools.base import BaseTool
 class UseSkillTool(BaseTool):
     """加载技能工具"""
 
+    # 虚拟工具：不进 tool_registry，由 Agent._register_special_tools() 带参构造，agent loop 特殊处理
+    catalog = False
     name = "use_skill"
     description = "加载技能的操作指南（SKILL.md 正文）。加载后根据指南决定下一步：脚本执行类调用 skill_execute，引导式技能调用 content_generate 等工具。流程：use_skill → 按指南执行 → 直接给最终回复。"
     usage_guide = ""

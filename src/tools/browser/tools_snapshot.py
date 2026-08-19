@@ -25,6 +25,8 @@ class BrowserSnapshotInput(BaseModel):
 class BrowserSnapshotTool(BaseTool):
     """获取页面语义快照工具"""
 
+    # 旧版浏览器工具，保留兼容：不进自动目录（agent 只注册统一入口 browser_automation）
+    catalog = False
     name = "browser_snapshot"
     description = """获取当前页面的语义快照，返回结构化的页面表示。
 

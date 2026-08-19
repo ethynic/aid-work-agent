@@ -7,6 +7,7 @@ import pytest
 from src.prompts.manager import PromptManager
 from src.tools.file.cp_tool import CpInput
 from src.tools.ppt.ppt_process_tool import PptProcessInput
+from src.tools.registry import discover_tool_classes
 
 
 @pytest.fixture
@@ -95,5 +96,9 @@ def test_master_and_subagent_have_direct_ppt_tool_contracts():
     )
     config = (project_root / "configs" / "config.yaml").read_text(encoding="utf-8")
 
-    assert "self.tool_registry.register(PptProcessTool())" in agent_source
+    # 工具自动发现改造（docs/tools/tool-auto-discovery-design.md）后，
+    # ppt_process 不再在 agent.py 写死注册，改由 discover_tool_classes() 自动注册
+    # （黄金清单测试见 tests/unit/tools/test_tool_discovery.py）
+    assert "for cls in discover_tool_classes().values():" in agent_source
+    assert "ppt_process" in discover_tool_classes()
     assert "guizang-ppt-skill" in config

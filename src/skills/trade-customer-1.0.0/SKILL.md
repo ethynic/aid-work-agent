@@ -179,7 +179,7 @@ python scripts/customer_manager.py get-customer \
 
 ### 5. 记录邮件发送
 
-当使用 `email_send` 发送邮件后，记录邮件发送信息：
+当使用 `email_process`（action=send）发送邮件后，记录邮件发送信息：
 
 ```bash
 python scripts/customer_manager.py record-email \
@@ -244,7 +244,7 @@ python scripts/customer_manager.py save-customer ...
          ↓
 外贸智能体：使用 content_generate 生成邮件内容
          ↓
-外贸智能体：使用 email_send 发送邮件
+外贸智能体：使用 email_process 发送邮件（action=send）
          ↓
 【调用 skill_execute 记录邮件】
 python scripts/customer_manager.py record-email ...

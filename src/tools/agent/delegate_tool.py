@@ -35,6 +35,8 @@ class DelegateToSubagentInput(BaseModel):
 class DelegateToSubagentTool(BaseTool):
     """子智能体委派工具"""
 
+    # 虚拟工具：不进 tool_registry，由 Agent._init_delegate_tool() 延迟带参构造，agent loop 特殊处理
+    catalog = False
     name = "delegate_to_subagent"
     description = (
         "将任务委派给专业的子智能体执行。"

@@ -23,6 +23,8 @@ class ClarifyInput(BaseModel):
 class ClarifyTool(BaseTool):
     """澄清工具"""
 
+    # 虚拟工具：不进 tool_registry，由 Agent._register_special_tools() 构造，agent loop 特殊处理
+    catalog = False
     name = "clarify"
     description = "当信息缺失时向用户询问澄清"
     usage_guide = ""
