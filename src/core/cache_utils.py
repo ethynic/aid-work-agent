@@ -66,6 +66,10 @@ class CacheKeys:
     # video-agent：精修模式提示词草稿缓存（draft_only=True 时写入，draft_only=False 时优先读取）
     # video_prompt_draft:{session_id} -> PromptResult 序列化 dict（含 business_prompt/craft_prompt/model_params）
     VIDEO_PROMPT_DRAFT = "video_prompt_draft"
+    # 文件资产 / 企微客服 / 独立会话状态（登记前缀，消除管理后台"裸键"告警）
+    UPLOADED_FILE = "uploaded_file"        # uploaded_file:{file_id}（文件/图片元数据）
+    WECOM_KF = "wecom_kf"                  # wecom_kf:{corp_id}:{key}（企微客服，key 必须带企业维度）
+    STANDALONE_AGENT = "standalone_agent"  # standalone_agent:{session_id}:{agent_id}
 
 
 # ============== 通用缓存函数 ==============
