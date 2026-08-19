@@ -67,9 +67,11 @@ async function loadPdf() {
   pageCount.value = 0
 
   try {
-    const pdfjs = await import('pdfjs-dist')
+    // 飞书/企微等内置浏览器内核较旧（< Chrome 119），缺少 Promise.withResolvers 等 ES2024 API，
+    // 现代构建会直接抛错；legacy 构建自带 polyfill 且语法已降级
+    const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
     pdfjs.GlobalWorkerOptions.workerSrc = new URL(
-      'pdfjs-dist/build/pdf.worker.min.mjs',
+      'pdfjs-dist/legacy/build/pdf.worker.min.mjs',
       import.meta.url,
     ).toString()
 
