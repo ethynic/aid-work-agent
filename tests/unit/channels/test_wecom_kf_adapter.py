@@ -524,3 +524,85 @@ class TestSendFullTextAsImage:
         ok = await adapter._send_full_text_as_image("| A | B |\n|---|---|\n| 1 | 2 |", "user_1")
 
         assert ok is False
+
+
+class TestGetDefaultThumbMediaId:
+    """默认缩略图 media_id 的缓存键必须带企业维度（corp_id），防止多企业互相污染。
+
+    线上事故：企业 A 上传缩略图缓存后，企业 B 复用该 media_id 发送 link 消息，
+    微信侧校验 media_id 不属于企业 B，报 40007 invalid media_id。
+    """
+
+    @pytest.fixture
+    def real_thumb_adapter(self):
+        """与 adapter fixture 相同，但不 mock _get_default_thumb_media_id（走真实实现）。"""
+        from src.channels.wecom_kf.adapter import WeComKfAdapter
+
+        a = WeComKfAdapter(
+            corp_id="test_corp",
+            secret="test_secret_xxxxxxxxxxxxxxxx",
+            token="test_token",
+            encoding_aes_key="",
+            kf_account=[{"open_kfid": "kfXXX", "name": "测试客服"}],
+        )
+        a.current_open_kfid = "kfXXX"
+        a.api_client = MagicMock()
+        a.api_client.upload_media = AsyncMock(return_value={"errcode": 0, "media_id": "MEDIA_FAKE"})
+        a.api_client.send_msg = AsyncMock(return_value={"errcode": 0, "errmsg": "ok"})
+        return a
+
+    @pytest.mark.asyncio
+    async def test_cache_key_contains_corp_id(self, real_thumb_adapter, tmp_path):
+        """无缓存时上传并写入带企业维度的缓存键。"""
+        real_thumb_adapter.corp_id = "corp_a"
+        with patch("src.channels.wecom_kf.adapter.redis_client") as mock_redis, \
+             patch("src.channels.wecom_kf.adapter.WeComKfAdapter._generate_default_thumb", return_value=b"png"), \
+             patch("src.channels.wecom_kf.adapter.WeComKfAdapter._resolve_media_dir", return_value=str(tmp_path)):
+            mock_redis.get.return_value = None  # 无缓存
+            mid = await real_thumb_adapter._get_default_thumb_media_id()
+
+        assert mid == "MEDIA_FAKE"
+        key_args = mock_redis.make_key.call_args.args
+        assert key_args[0] == "wecom_kf"
+        assert "corp_a" in key_args[1]
+        # 缓存写入应使用带企业维度的 key
+        assert mock_redis.set.call_args.args[0] == mock_redis.make_key.return_value
+
+    @pytest.mark.asyncio
+    async def test_cache_hit_returns_cached(self, real_thumb_adapter):
+        """缓存命中时直接返回缓存 media_id，不触发上传。"""
+        real_thumb_adapter.corp_id = "corp_a"
+        with patch("src.channels.wecom_kf.adapter.redis_client") as mock_redis:
+            mock_redis.get.return_value = "CACHED_MEDIA"
+
+            mid = await real_thumb_adapter._get_default_thumb_media_id()
+
+        assert mid == "CACHED_MEDIA"
+        real_thumb_adapter.api_client.upload_media.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_different_corp_use_different_cache_key(self, tmp_path):
+        """不同企业的缓存键应不同（核心回归点）。"""
+        from src.channels.wecom_kf.adapter import WeComKfAdapter
+
+        key_suffixes = []
+        for corp in ("corp_a", "corp_b"):
+            a = WeComKfAdapter(
+                corp_id=corp,
+                secret="s",
+                token="t",
+                encoding_aes_key="",
+                kf_account=[{"open_kfid": "kf1", "name": "测试客服"}],
+            )
+            a.api_client = MagicMock()
+            a.api_client.upload_media = AsyncMock(return_value={"errcode": 0, "media_id": f"MEDIA_{corp}"})
+            with patch("src.channels.wecom_kf.adapter.redis_client") as mock_redis, \
+                 patch("src.channels.wecom_kf.adapter.WeComKfAdapter._generate_default_thumb", return_value=b"png"), \
+                 patch("src.channels.wecom_kf.adapter.WeComKfAdapter._resolve_media_dir", return_value="/tmp"):
+                mock_redis.get.return_value = None
+                await a._get_default_thumb_media_id()
+                key_suffixes.append(mock_redis.make_key.call_args.args[1])
+
+        assert key_suffixes[0] != key_suffixes[1]
+        assert "corp_a" in key_suffixes[0]
+        assert "corp_b" in key_suffixes[1]
