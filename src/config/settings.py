@@ -504,6 +504,9 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
         qwen_cfg["api_keys"] = os.getenv("QWEN_API_KEYS")
     if os.getenv("QWEN_MODEL_CODE"):
         qwen_cfg["model"] = os.getenv("QWEN_MODEL_CODE")
+    # 日报/周报/月报专用小模型（独立配置项，不影响主链路 QWEN_MODEL_CODE）
+    if os.getenv("QWEN_REPORT_MODEL_CODE"):
+        qwen_cfg["report_model"] = os.getenv("QWEN_REPORT_MODEL_CODE")
     if os.getenv("QWEN_BASE_URL"):
         qwen_cfg["base_url"] = os.getenv("QWEN_BASE_URL")
 
@@ -513,6 +516,9 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
         zhipu_cfg["api_keys"] = os.getenv("ZHIPU_API_KEYS")
     if os.getenv("ZHIPU_MODEL_CODE"):
         zhipu_cfg["model"] = os.getenv("ZHIPU_MODEL_CODE")
+    # 日报/周报/月报专用小模型（独立配置项，不影响主链路 ZHIPU_MODEL_CODE）
+    if os.getenv("ZHIPU_REPORT_MODEL_CODE"):
+        zhipu_cfg["report_model"] = os.getenv("ZHIPU_REPORT_MODEL_CODE")
     if os.getenv("ZHIPU_BASE_URL"):
         zhipu_cfg["base_url"] = os.getenv("ZHIPU_BASE_URL")
 
