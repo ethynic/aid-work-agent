@@ -530,9 +530,19 @@ class Agent:
             tool_registry=self.tool_registry,
         )
         self._use_skill_tool = UseSkillTool(skill_registry=self.skill_registry)
+        # 子智能体 LLM 覆盖（provider + model_code）注入技能子进程，供 travel-quote 等技能脚本 llm_client 使用，
+        # 与主链路 LLMGateway 的子智能体覆盖（见 __init__ 中 subagent_config.llm_provider 分支）保持一致
+        skill_llm_env = {}
+        if self.subagent_config and self.subagent_config.llm_provider:
+            skill_llm_env["SKILL_LLM_PROVIDER"] = self.subagent_config.llm_provider
+            model_codes = getattr(self.subagent_config, "llm_model_codes", None) or {}
+            model = model_codes.get(self.subagent_config.llm_provider)
+            if model:
+                skill_llm_env["SKILL_LLM_MODEL"] = model
         self._skill_execute_tool = SkillExecuteTool(
             skill_executor=self.skill_executor,
             skill_registry=self.skill_registry,
+            llm_env=skill_llm_env,
         )
         self._clarify_tool = ClarifyTool()
         # delegate_to_subagent 工具需要 subagent_registry 和 subagent_executor

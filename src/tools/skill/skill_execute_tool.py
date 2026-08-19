@@ -38,14 +38,17 @@ class SkillExecuteTool(BaseTool):
     category = "skill"
     InputModel = SkillExecuteInput
 
-    def __init__(self, skill_executor, skill_registry):
+    def __init__(self, skill_executor, skill_registry, llm_env=None):
         """
         Args:
             skill_executor: SkillExecutor 实例
             skill_registry: SkillRegistry 实例
+            llm_env: 子智能体 LLM 覆盖环境变量（SKILL_LLM_PROVIDER / SKILL_LLM_MODEL），
+                     注入技能子进程供技能脚本 llm_client 使用
         """
         self.skill_executor = skill_executor
         self.skill_registry = skill_registry
+        self.llm_env = llm_env or {}
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
         """
@@ -224,6 +227,7 @@ class SkillExecuteTool(BaseTool):
                 session_id=real_session_id,
                 user_id=real_user_id,
                 stdin_content=stdin_content,
+                env_extra=self.llm_env,
             )
 
             # 后端日志：诊断执行结果

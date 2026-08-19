@@ -23,7 +23,7 @@ triggers:
     - 发货
 llm_provider: deepseek
 deepseek_model_code: deepseek-v4-flash  # 指定使用模型，覆盖 .env 配置
-qwen_model_code: deepseek-v4-flash  # failover使用。指定使用模型，覆盖 .env 配置
+qwen_model_code: deepseek-v4-flash-0731  # failover使用。百炼平台的 deepseek-v4-flash-0731 为正式版
 tools:
   inherit: true
   additional:

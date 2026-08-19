@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 """LLM 调用客户端"""
 
+import os
 import time
 from typing import Any, Dict, Optional
 
@@ -11,10 +12,17 @@ from loguru import logger
 def call_llm(prompt: str, *, timeout: float = 300.0,
              max_tokens: Optional[int] = None, task: str = "",
              model_override: Optional[str] = None,
+             provider_override: Optional[str] = None,
              extra_body: Optional[Dict[str, Any]] = None) -> str:
     """调用 LLM（子进程安全，直接使用 SDK）"""
     from src.config.settings import settings
-    provider = settings.llm.provider
+    # provider/model 覆盖优先级：显式参数 > 技能子进程注入的 env（子智能体配置）> 全局默认
+    env_provider = os.environ.get("SKILL_LLM_PROVIDER")
+    provider = provider_override or env_provider or settings.llm.provider
+    # env 注入的 provider/model 成对出现：仅当 provider 确实来自 env 时才应用 env model，
+    # 避免显式覆盖 provider 后误用其它 provider 的模型
+    if model_override is None and provider == env_provider:
+        model_override = os.environ.get("SKILL_LLM_MODEL")
     started = time.perf_counter()
 
     try:

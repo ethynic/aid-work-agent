@@ -326,6 +326,7 @@ Follow the instructions in the skill above to complete the user's task."""
         workdir: Path,
         timeout: int = SKILL_COMMAND_TIMEOUT_SECONDS,
         stdin_content: Optional[bytes] = None,
+        env_extra: Optional[Dict[str, str]] = None,
     ) -> ExecutionResult:
         """
         执行命令
@@ -335,6 +336,7 @@ Follow the instructions in the skill above to complete the user's task."""
             workdir: 工作目录
             timeout: 超时时间（秒）
             stdin_content: 通过 stdin 传递给子进程的内容（bytes）
+            env_extra: 额外注入子进程的环境变量（如子智能体 LLM 覆盖）
 
         Returns:
             执行结果
@@ -344,6 +346,9 @@ Follow the instructions in the skill above to complete the user's task."""
         try:
             # 获取当前进程的环境变量，确保子进程继承所有环境变量（包括 .env 加载的）
             env = os.environ.copy()
+            # 注入子智能体 LLM 覆盖（provider/model），供技能脚本 llm_client 读取
+            if env_extra:
+                env.update(env_extra)
             # 强制子进程使用 UTF-8 编码，避免 Windows 上 GBK/cp936 导致中文乱码
             env['PYTHONIOENCODING'] = 'utf-8'
             env['PYTHONUTF8'] = '1'
@@ -430,6 +435,7 @@ Follow the instructions in the skill above to complete the user's task."""
         session_id: Optional[str] = None,
         user_id: Optional[str] = None,
         stdin_content: Optional[bytes] = None,
+        env_extra: Optional[Dict[str, str]] = None,
     ) -> ExecutionResult:
         """
         执行Skill命令
@@ -442,6 +448,7 @@ Follow the instructions in the skill above to complete the user's task."""
             session_id: 会话ID
             user_id: 用户ID
             stdin_content: 通过 stdin 传递给子进程的内容
+            env_extra: 额外注入子进程的环境变量（如子智能体 LLM 覆盖）
 
         Returns:
             执行结果
@@ -507,8 +514,9 @@ Follow the instructions in the skill above to complete the user's task."""
                 context.workdir,
                 timeout=SKILL_COMMAND_TIMEOUT_SECONDS,
                 stdin_content=stdin_content,
+                env_extra=env_extra,
             )
-            
+
             return result
             
         finally:

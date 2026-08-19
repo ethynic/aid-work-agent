@@ -40,6 +40,23 @@ def _make_settings(enable_thinking=False):
     return type('FakeSettings', (), {'llm': llm})()
 
 
+def _make_deepseek_settings():
+    """全局 provider 仍是 qwen，验证 provider_override / env 能切到 deepseek。"""
+    class _DeepSeekCfg:
+        model = 'deepseek-v4-flash'
+        base_url = 'https://api.deepseek.com'
+
+        def get_effective_keys(self):
+            return ['test-deepseek-key']
+
+    class _LLM:
+        provider = 'qwen'
+        enable_thinking = None
+        deepseek = _DeepSeekCfg()
+
+    return type('FakeSettings', (), {'llm': _LLM()})()
+
+
 class _Resp:
     def __init__(self, body):
         self._body = body
@@ -49,6 +66,13 @@ class _Resp:
 
     def json(self):
         return self._body
+
+
+@pytest.fixture(autouse=True)
+def _clear_skill_llm_env(monkeypatch):
+    """清空技能子进程 LLM 覆盖 env，保证用例确定性（env 优先级高于 settings）"""
+    monkeypatch.delenv('SKILL_LLM_PROVIDER', raising=False)
+    monkeypatch.delenv('SKILL_LLM_MODEL', raising=False)
 
 
 class TestCallLlmQwen:
@@ -121,3 +145,76 @@ class TestCallLlmQwen:
 
         llm_client.call_llm('p')
         assert 'enable_thinking' not in captured['payload']
+
+
+class TestCallLlmProviderOverride:
+    def test_provider_override_selects_deepseek(self, monkeypatch):
+        import llm_client
+        import httpx
+
+        captured = {}
+
+        def _fake_post(url, *, headers, json, timeout):
+            captured['url'] = url
+            captured['headers'] = headers
+            captured['payload'] = json
+            return _Resp({"choices": [{"message": {"content": "解析结果"}}]})
+
+        monkeypatch.setattr(settings_module, 'settings', _make_deepseek_settings())
+        monkeypatch.setattr(httpx, 'post', _fake_post)
+
+        result = llm_client.call_llm(
+            '测试prompt',
+            provider_override='deepseek',
+            model_override='deepseek-v4-flash',
+            task='test',
+        )
+
+        assert result == '解析结果'
+        assert captured['url'] == 'https://api.deepseek.com/chat/completions'
+        assert captured['headers']['Authorization'] == 'Bearer test-deepseek-key'
+        assert captured['payload']['model'] == 'deepseek-v4-flash'
+
+    def test_env_provider_and_model_fallback(self, monkeypatch):
+        import llm_client
+        import httpx
+
+        monkeypatch.setenv('SKILL_LLM_PROVIDER', 'deepseek')
+        monkeypatch.setenv('SKILL_LLM_MODEL', 'deepseek-v4-flash')
+        monkeypatch.setattr(settings_module, 'settings', _make_deepseek_settings())
+
+        captured = {}
+
+        def _fake_post(url, *, headers, json, **kw):
+            captured['url'] = url
+            captured['headers'] = headers
+            captured['payload'] = json
+            return _Resp({"choices": [{"message": {"content": "解析结果"}}]})
+
+        monkeypatch.setattr(httpx, 'post', _fake_post)
+
+        llm_client.call_llm('测试prompt', task='test')
+
+        assert captured['url'] == 'https://api.deepseek.com/chat/completions'
+        assert captured['headers']['Authorization'] == 'Bearer test-deepseek-key'
+        assert captured['payload']['model'] == 'deepseek-v4-flash'
+
+    def test_explicit_param_beats_env(self, monkeypatch):
+        import llm_client
+        import httpx
+
+        monkeypatch.setenv('SKILL_LLM_PROVIDER', 'deepseek')
+        monkeypatch.setenv('SKILL_LLM_MODEL', 'deepseek-v4-flash')
+        monkeypatch.setattr(settings_module, 'settings', _make_settings())
+
+        captured = {}
+
+        def _fake_post(url, *, headers, json, **kw):
+            captured['payload'] = json
+            return _Resp({"choices": [{"message": {"content": "ok"}}]})
+
+        monkeypatch.setattr(httpx, 'post', _fake_post)
+
+        # 显式 provider_override=qwen 应覆盖 env 里的 deepseek
+        llm_client.call_llm('p', provider_override='qwen', task='test')
+        assert captured['payload']['model'] == 'qwen3.7-flash'
