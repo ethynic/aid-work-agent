@@ -327,10 +327,10 @@ class TestCustomerReferralDB:
         assert result["referrers"][1]["referrer_name"] == "已删除员工"
         assert result["referrers"][1]["referral_count"] == 8
 
-        # 日期条件以占位符参数追加（start >= / end < 语义）
+        # 日期条件以占位符参数追加（start >= / end 含当日，SQL 内 +1 天）
         sql = cursor.execute.call_args_list[1][0][0]
         assert "cr.created_at >= %s" in sql
-        assert "cr.created_at < %s" in sql
+        assert "cr.created_at < (%s::date + INTERVAL '1 day')" in sql
 
     def test_count_referred_messages_sql(self):
         """count_referred_messages：三表 join + is_recalled=FALSE + 日期过滤"""
@@ -348,7 +348,7 @@ class TestCustomerReferralDB:
         assert "JOIN customer_referrals cr ON cr.customer_user_id = cs.user_id" in sql
         assert "cm.is_recalled = FALSE" in sql
         assert "cm.created_at >= %s" in sql
-        assert "cm.created_at < %s" in sql
+        assert "cm.created_at < (%s::date + INTERVAL '1 day')" in sql
         assert count == 158
 
     def test_sum_kf_account_credit_sql(self):

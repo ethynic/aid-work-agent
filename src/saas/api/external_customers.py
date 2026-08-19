@@ -98,7 +98,7 @@ async def get_referral_stats(
 
     Args:
         start_date: 起始日期（含当日），格式 YYYY-MM-DD
-        end_date: 结束日期（含当日，后端按 < 次日 语义处理）
+        end_date: 结束日期（含当日，后端按 < 次日 语义处理，SQL 内 +1 天），格式 YYYY-MM-DD
     """
     if not settings.saas.enabled:
         return {"success": False, "message": "未启用 SaaS 模式无法访问"}

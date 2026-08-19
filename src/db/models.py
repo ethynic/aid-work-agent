@@ -1652,8 +1652,8 @@ class CustomerReferralDB:
             date_cond += " AND cr.created_at >= %s"
             params.append(start_date)
         if end_date:
-            date_cond += " AND cr.created_at < %s"
-            # 含当日：end_date 视为当日零点，用 < 次日 语义由调用方传入次日，这里直接 < end_date
+            # end_date 含当日：< 次日零点 语义，SQL 内 +1 天，使传入当天也能统计到当天全天数据
+            date_cond += " AND cr.created_at < (%s::date + INTERVAL '1 day')"
             params.append(end_date)
 
         with get_db_connection() as conn:
@@ -1701,7 +1701,8 @@ class CustomerReferralDB:
             cond += " AND cm.created_at >= %s"
             params.append(start_date)
         if end_date:
-            cond += " AND cm.created_at < %s"
+            # end_date 含当日：< 次日零点 语义，SQL 内 +1 天
+            cond += " AND cm.created_at < (%s::date + INTERVAL '1 day')"
             params.append(end_date)
 
         with get_db_connection() as conn:
