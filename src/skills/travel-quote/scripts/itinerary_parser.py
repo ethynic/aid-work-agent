@@ -8,7 +8,7 @@ from typing import Any, Dict
 
 from loguru import logger
 
-from llm_client import call_llm
+from llm_client import call_llm, _debug_log
 
 
 def _llm_kwargs(task: str, max_tokens: int, timeout: float = 60.0) -> Dict[str, Any]:
@@ -18,9 +18,15 @@ def _llm_kwargs(task: str, max_tokens: int, timeout: float = 60.0) -> Dict[str, 
         "task": task,
     }
     try:
-        from src.config.settings import settings
-        if settings.llm.provider == "deepseek":
+        # 用生效 provider（含子智能体 SKILL_LLM_PROVIDER 覆盖）判断，避免全局
+        # 非 deepseek 而实际走 deepseek 时未关闭推理、推理模型返回空白 content
+        from llm_client import get_effective_provider
+        ep = get_effective_provider()
+        if ep == "deepseek":
             kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+            _debug_log(f"[itinerary_parser._llm_kwargs] task={task} effective_provider={ep} -> thinking DISABLED")
+        else:
+            _debug_log(f"[itinerary_parser._llm_kwargs] task={task} effective_provider={ep} -> thinking not touched")
     except Exception:
         pass
     return kwargs
@@ -172,12 +178,40 @@ def parse_itinerary(itinerary_text: str) -> dict:
    - 景点 name 优先使用行程安排中的主景点名；不要把小七孔改成大七孔，不要随意换同义景点
 9. 只返回 JSON，不要其他文字"""
 
-    raw = call_llm(
-        prompt,
-        **_llm_kwargs("itinerary_parse", max_tokens=4096),
-    )
+    # 行程解析是整条报价链路第一步，LLM 偶发空白/非法 JSON 不应直接杀死整次报价。
+    # 最多重试 2 次；仍失败则抛出最后一次错误（带 task 上下文，便于定位）。
+    last_error: Exception = ValueError("行程解析失败")
+    for attempt in range(2):
+        try:
+            raw = call_llm(
+                prompt,
+                **_llm_kwargs("itinerary_parse", max_tokens=4096),
+            )
+            _debug_log(f"[parse_itinerary] attempt={attempt + 1} LLM_CALL_OK raw_len={len(raw or '')} raw_head={raw[:100]!r}")
+        except Exception as e:
+            last_error = e
+            _debug_log(f"[parse_itinerary] attempt={attempt + 1} LLM_CALL_FAILED err={e!r}")
+            logger.warning(f"[travel-quote] 行程解析 LLM 调用失败(第{attempt + 1}次): {e}")
+            continue
 
-    json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', raw, re.DOTALL)
-    if json_match:
-        raw = json_match.group(1)
-    return json.loads(raw.strip())
+        if not raw or not raw.strip():
+            last_error = ValueError("行程解析 LLM 返回空内容")
+            _debug_log(f"[parse_itinerary] attempt={attempt + 1} EMPTY_RAW")
+            logger.warning(f"[travel-quote] 行程解析 LLM 返回空内容(第{attempt + 1}次)")
+            continue
+
+        json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', raw, re.DOTALL)
+        if json_match:
+            raw = json_match.group(1)
+        try:
+            parsed = json.loads(raw.strip())
+            _debug_log(f"[parse_itinerary] attempt={attempt + 1} JSON_OK keys={list(parsed)[:15]}")
+            return parsed
+        except json.JSONDecodeError as e:
+            last_error = e
+            _debug_log(f"[parse_itinerary] attempt={attempt + 1} JSON_FAILED raw_len={len(raw or '')} raw_head={raw[:100]!r} err={e}")
+            logger.warning(f"[travel-quote] 行程解析 JSON 失败(第{attempt + 1}次): {e}")
+            continue
+
+    _debug_log(f"[parse_itinerary] ALL_RETRIES_EXHAUSTED last_error={last_error!r}")
+    raise last_error

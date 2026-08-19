@@ -218,3 +218,68 @@ class TestCallLlmProviderOverride:
         # 显式 provider_override=qwen 应覆盖 env 里的 deepseek
         llm_client.call_llm('p', provider_override='qwen', task='test')
         assert captured['payload']['model'] == 'qwen3.7-flash'
+
+
+class TestGetEffectiveProvider:
+    def test_global_default(self, monkeypatch):
+        import llm_client
+        monkeypatch.setattr(settings_module, 'settings', _make_settings())
+        assert llm_client.get_effective_provider() == 'qwen'
+
+    def test_env_overrides_global(self, monkeypatch):
+        import llm_client
+        monkeypatch.setenv('SKILL_LLM_PROVIDER', 'deepseek')
+        monkeypatch.setattr(settings_module, 'settings', _make_settings())
+        assert llm_client.get_effective_provider() == 'deepseek'
+
+    def test_explicit_param_beats_env(self, monkeypatch):
+        import llm_client
+        monkeypatch.setenv('SKILL_LLM_PROVIDER', 'deepseek')
+        monkeypatch.setattr(settings_module, 'settings', _make_settings())
+        assert llm_client.get_effective_provider('qwen') == 'qwen'
+
+
+class TestCallLlmEmptyContent:
+    """LLM 返回空/纯空白 content 时必须抛带上下文的清晰错误，而不是让下游
+    json.loads 报晦涩的 "Expecting value: line 1 column 1 (char 0)"。"""
+
+    def test_empty_content_raises_clear_error(self, monkeypatch):
+        import llm_client
+        import httpx
+
+        def _fake_post(url, **kw):
+            return _Resp({"choices": [{"message": {"content": ""}}]})
+
+        monkeypatch.setattr(settings_module, 'settings', _make_settings())
+        monkeypatch.setattr(httpx, 'post', _fake_post)
+
+        with pytest.raises(ValueError, match=r'LLM 返回空内容.*task=test.*provider=qwen.*model=qwen3.7-flash'):
+            llm_client.call_llm('p', task='test')
+
+    def test_whitespace_content_raises(self, monkeypatch):
+        import llm_client
+        import httpx
+
+        def _fake_post(url, **kw):
+            return _Resp({"choices": [{"message": {"content": "\n   \n"}}]})
+
+        monkeypatch.setattr(settings_module, 'settings', _make_settings())
+        monkeypatch.setattr(httpx, 'post', _fake_post)
+
+        with pytest.raises(ValueError, match='LLM 返回空内容'):
+            llm_client.call_llm('p')
+
+    def test_deepseek_empty_content_raises(self, monkeypatch):
+        import llm_client
+        import httpx
+
+        def _fake_post(url, **kw):
+            return _Resp({"choices": [{"message": {"content": "  "}}]})
+
+        monkeypatch.setenv('SKILL_LLM_PROVIDER', 'deepseek')
+        monkeypatch.setenv('SKILL_LLM_MODEL', 'deepseek-v4-flash')
+        monkeypatch.setattr(settings_module, 'settings', _make_deepseek_settings())
+        monkeypatch.setattr(httpx, 'post', _fake_post)
+
+        with pytest.raises(ValueError, match='provider=deepseek.*model=deepseek-v4-flash'):
+            llm_client.call_llm('p')
