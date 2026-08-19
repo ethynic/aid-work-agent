@@ -1089,25 +1089,30 @@ def _default_llm(prompt: str, *, disable_thinking: bool = True) -> str:
     max_tokens = 4096
 
     if provider == "qwen":
-        import dashscope
+        import httpx
         keys = settings.llm.qwen.get_effective_keys()
         if not keys:
             raise ValueError("QWEN API key 未配置")
-        dashscope.api_key = keys[0]
         model = getattr(settings.llm.qwen, "model", None) or "qwen-plus"
-        kwargs = dict(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            result_format="message",
-            temperature=0.0,
-            max_tokens=max_tokens,
-        )
+        base_url = getattr(settings.llm.qwen, "base_url", None) or "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        api_url = f"{base_url.rstrip('/')}/chat/completions"
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.0,
+            "max_tokens": max_tokens,
+        }
+        # qwen3.x 系列走 OpenAI 兼容接口（原生 Generation 端点不适用），思考开关用 enable_thinking
         if disable_thinking:
-            kwargs["extra_body"] = {"enable_thinking": False}
-        resp = dashscope.Generation.call(**kwargs)
-        if resp.status_code != 200:
-            raise RuntimeError(f"LLM 调用失败: {resp.message}")
-        return resp.output.choices[0].message.content
+            payload["enable_thinking"] = False
+        resp = httpx.post(
+            api_url,
+            headers={"Authorization": f"Bearer {keys[0]}", "Content-Type": "application/json"},
+            json=payload,
+            timeout=120.0,
+        )
+        resp.raise_for_status()
+        return resp.json()["choices"][0]["message"]["content"]
 
     if provider in ("zhipu", "deepseek"):
         import httpx

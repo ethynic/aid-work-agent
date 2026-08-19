@@ -19,26 +19,34 @@ def call_llm(prompt: str, *, timeout: float = 300.0,
 
     try:
         if provider == 'qwen':
-            import dashscope
+            import httpx
             keys = settings.llm.qwen.get_effective_keys()
             if not keys:
                 raise ValueError("QWEN API key 未配置")
-            dashscope.api_key = keys[0]
             model = model_override or getattr(settings.llm.qwen, 'model', None) or 'qwen-plus'
-            kwargs = {
+            base_url = getattr(settings.llm.qwen, 'base_url', None) or 'https://dashscope.aliyuncs.com/compatible-mode/v1'
+            api_url = f"{base_url.rstrip('/')}/chat/completions"
+            payload = {
                 "model": model,
                 "messages": [{"role": "user", "content": prompt}],
-                "result_format": 'message',
                 "temperature": 0.0,
             }
+            # qwen 推理模型关闭思考（enable_thinking），与主链路 QwenProvider 行为一致。
+            # 不透传 extra_body：调用方传的是 deepseek 格式 thinking 参数，对 qwen 兼容接口无效，可能触发 400
+            if settings.llm.enable_thinking is not None:
+                payload["enable_thinking"] = settings.llm.enable_thinking
             if max_tokens is not None:
-                kwargs["max_tokens"] = max_tokens
-            resp = dashscope.Generation.call(**kwargs)
-            if resp.status_code == 200:
-                content = resp.output.choices[0].message.content
-                _log_llm_call(task, provider, model, prompt, started, True)
-                return content
-            raise RuntimeError(f"LLM 调用失败: {resp.message}")
+                payload["max_tokens"] = max_tokens
+            resp = httpx.post(
+                api_url,
+                headers={"Authorization": f"Bearer {keys[0]}", "Content-Type": "application/json"},
+                json=payload,
+                timeout=timeout,
+            )
+            resp.raise_for_status()
+            result = resp.json()
+            _log_llm_call(task, provider, model, prompt, started, True)
+            return result["choices"][0]["message"]["content"]
         elif provider == 'zhipu':
             import httpx
             keys = settings.llm.zhipu.get_effective_keys()
