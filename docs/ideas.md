@@ -103,6 +103,15 @@
 
 ---
 
+## 故障复盘索引
+
+线上故障与生产事故的复盘文档（存放于 `docs/incidents/`）：
+
+| 故障主题 | 文档 | 关联功能 |
+|---------|------|---------|
+| 对话上下文重建避坑速查 | [context-reconstruction-pitfalls.md](incidents/context-reconstruction-pitfalls.md) | 消息历史加载/窗口裁剪 5 大陷阱(来源分流、最近N条、对齐user、表分离、默认值漂移) |
+| qwen3.7-flash 工具结果缓存数组化回显故障复盘 | [qwen-tool-message-cache-echo-incident.md](incidents/qwen-tool-message-cache-echo-incident.md) | 2026-08-19 线上故障：显式缓存"末尾标记"把 tool 消息 content 数组化（违反 OpenAI 兼容规范），qwen3.7-flash 概率性(~7%)按 Anthropic 语义回显工具结果。已修复为"从后往前找可安全标记文本消息"；缓存范围相对退化但绝对成本 ~0.001 元/次 |
+
 ## 调研报告索引
 
 以下调研报告为多项功能设计的前期研究，不单独对应开发任务：
@@ -117,7 +126,6 @@
 | 知识库行业产品调研与低改动快速增强建议 | [enterprise-knowledge-base-quick-wins.md](research/enterprise-knowledge-base-quick-wins.md) | 知识库能力增强（补充 Phase 1-2 之外的快速增强点） |
 | Text-to-SQL 调研 | [text-to-sql-data-analysis-agent-research.md](research/text-to-sql-data-analysis-agent-research.md) | 数据分析智能体 |
 | 企微客服 AI 绑定调研 | [wecom-kf-ai-chatbot-binding-research.md](research/wecom-kf-ai-chatbot-binding-research.md) | 企业微信客服 AI 绑定 |
-| 对话上下文重建避坑速查 | [context-reconstruction-pitfalls.md](research/context-reconstruction-pitfalls.md) | 消息历史加载/窗口裁剪 5 大陷阱(来源分流、最近N条、对齐user、表分离、默认值漂移) |
 | 前端样式调研 | [frontend-style-research.md](research/frontend/frontend-style-research.md) | 前端样式统一 |
 | 前端 Office 预览调研 | [frontend-office-preview-research.md](research/frontend/frontend-office-preview-research.md) | 前端 Office 预览 |
 | HTML 转 PPTX 技术调研 | [html-to-pptx-conversion-research.md](research/html-to-pptx-conversion-research.md) | PPT 技能 PPTX 导出 |

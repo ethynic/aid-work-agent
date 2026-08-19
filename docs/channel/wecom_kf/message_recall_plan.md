@@ -291,4 +291,4 @@ LIMIT %s
 
 - [wecom_kf 消息合并处理机制](./message-merge.md)
 - [wecom_kf 设计文档](./wecom_kf_design.md)
-- [上下文重建陷阱](../../research/context-reconstruction-pitfalls.md)
+- [上下文重建陷阱](../../incidents/context-reconstruction-pitfalls.md)

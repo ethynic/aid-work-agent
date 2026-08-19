@@ -1414,6 +1414,22 @@ class Agent:
                     return style_id
         return None
 
+    @staticmethod
+    def _is_tool_result_echo(content: Any) -> bool:
+        """检测 qwen3-flash 概率性把工具结果按 Anthropic tool_result 语义回显为
+        最终回复的异常输出（2026-08-19 线上事故，
+        见 docs/incidents/qwen-tool-message-cache-echo-incident.md）。
+
+        特征：内容以 [{"id": ... 开头，且头部含 "tool_result" 字样。
+        正常业务回复几乎不可能同时命中两个条件，误报率可忽略。
+        """
+        if not isinstance(content, str):
+            return False
+        s = content.lstrip()
+        if not s.startswith('[{"id"'):
+            return False
+        return '"tool_result"' in s[:300]
+
     def _detect_source_type(self) -> str:
         """检测当前请求的 source_type（v3.1 Phase 4）。
 
@@ -2793,7 +2809,22 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                 llm_call_duration = time.time() - llm_call_start
                 logger.opt(exception=True).error(f"[AGENT] LLM call FAILED, session_id={session_id}, iteration={iteration}, duration={llm_call_duration:.2f}s, error: {type(e).__name__}")
                 raise
-            
+
+            # 兜底加固：模型偶发把工具结果按 tool_result 格式回显为最终回复
+            # （缓存优化事故的模型侧异常）。检测到即重试一次；重试失败沿用原响应，
+            # 保持与无此加固时一致的失败语义。
+            if not response.get("tool_calls") and self._is_tool_result_echo(response.get("content", "")):
+                logger.warning(f"[AGENT] 检测到 tool_result 回显异常，重试 LLM 调用, session_id={session_id}, iteration={iteration}")
+                try:
+                    response = await self.llm.chat_with_tools(
+                        system_prompt=system_prompt,
+                        messages=messages,
+                        tools=tools
+                    )
+                    logger.info(f"[AGENT] tool_result 回显重试完成, session_id={session_id}, iteration={iteration}, retry_content_head={(response.get('content', '') or '')[:100]}")
+                except Exception:
+                    logger.opt(exception=True).error(f"[AGENT] tool_result 回显重试失败，沿用原响应, session_id={session_id}, iteration={iteration}")
+
             tool_calls = response.get("tool_calls", [])
             content = response.get("content", "")
 
@@ -3891,7 +3922,20 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                     llm_call_duration = time.time() - llm_call_start
                     logger.opt(exception=True).error(f"[SUBAGENT] LLM call FAILED, execution_id={self.execution_id}, iteration={iteration}, duration={llm_call_duration:.2f}s, error: {e}")
                     raise
-                
+
+                # 兜底加固：同主循环，检测 tool_result 回显异常并重试一次
+                if not response.get("tool_calls") and self._is_tool_result_echo(response.get("content", "")):
+                    logger.warning(f"[SUBAGENT] 检测到 tool_result 回显异常，重试 LLM 调用, execution_id={self.execution_id}, iteration={iteration}")
+                    try:
+                        response = await self.llm.chat_with_tools(
+                            system_prompt=system_prompt,
+                            messages=messages,
+                            tools=tools
+                        )
+                        logger.info(f"[SUBAGENT] tool_result 回显重试完成, execution_id={self.execution_id}, iteration={iteration}, retry_content_head={(response.get('content', '') or '')[:100]}")
+                    except Exception:
+                        logger.opt(exception=True).error(f"[SUBAGENT] tool_result 回显重试失败，沿用原响应, execution_id={self.execution_id}, iteration={iteration}")
+
                 content = response.get("content", "")
                 tool_calls = response.get("tool_calls", [])
                 

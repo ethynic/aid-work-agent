@@ -109,8 +109,10 @@ class TestFormatMessagesCache:
         assert "cache_control" not in last_content[0]
 
     def test_cache_on_agent_loop_tool_result(self):
-        # 模拟 agent 循环：system + assistant tool_calls + tool 结果，
-        # 标记落在最后一条 tool 消息上，system 保持字符串 content
+        # 模拟 agent 循环：system + user + assistant tool_calls + tool 结果。
+        # 关键约束：tool 消息 content 必须保持纯字符串（OpenAI 兼容规范），
+        # 若把 tool 消息转成 content 数组，qwen3.7-flash 会把 tool_result 回显为文本。
+        # 因此缓存标记要跳过 tool / assistant(tool_calls)，落在前面的 user 消息上
         p = _StubProvider(api_key="k", model="qwen3.7-flash")
         messages = [
             {"role": "system", "content": "你是助手"},
@@ -127,14 +129,16 @@ class TestFormatMessagesCache:
         assert formatted[2]["role"] == "assistant"
         assert "tool_calls" in formatted[2]
         assert formatted[2]["content"] == ""
-        # 标记落在最后一条 tool 消息上
+        # tool 消息 content 保持纯字符串，绝不能被数组化
         last = formatted[-1]
         assert last["role"] == "tool"
         assert last["tool_call_id"] == "call_1"
-        assert isinstance(last["content"], list)
-        assert last["content"][0]["type"] == "text"
-        assert last["content"][0]["text"] == '{"city": "北京", "temp": 25}'
-        assert last["content"][0]["cache_control"] == {"type": "ephemeral"}
+        assert last["content"] == '{"city": "北京", "temp": 25}'
+        # 缓存标记落在前面的 user 消息"查一下天气"上
+        assert formatted[1]["role"] == "user"
+        assert isinstance(formatted[1]["content"], list)
+        assert formatted[1]["content"][0]["text"] == "查一下天气"
+        assert formatted[1]["content"][0]["cache_control"] == {"type": "ephemeral"}
 
     def test_non_qwen_model_not_cached(self):
         # 百炼第三方模型（deepseek 前缀）即便 use_cache=True 也不加 cache_control
