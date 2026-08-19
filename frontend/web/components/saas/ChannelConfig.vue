@@ -76,7 +76,10 @@
                 <span class="text-xs text-muted">引流 {{ acc.referral_count }} 人</span>
               </div>
               <div class="flex items-center gap-1 flex-shrink-0">
-                <BaseButton intent="ghost" size="sm" @click="viewKfQr(ch, acc)">二维码</BaseButton>
+                <BaseButton v-if="acc.contact_url" intent="ghost" size="sm" @click="viewKfQr(ch, acc)">二维码</BaseButton>
+                <BaseButton v-else intent="ghost" size="sm" :disabled="kfGeneratingQr === acc.open_kfid" @click="handleEnsureContactWay(ch, acc)">
+                  {{ kfGeneratingQr === acc.open_kfid ? '生成中...' : '生成链接' }}
+                </BaseButton>
                 <BaseButton intent="ghost" size="sm" @click="openKfAccountEdit(ch, acc)">编辑</BaseButton>
                 <BaseButton intent="danger-ghost" size="sm" @click="handleDeleteKfAccount(ch, acc)">删除</BaseButton>
               </div>
@@ -522,7 +525,7 @@ import BaseTable from '@/components/ui/BaseTable.vue'
 import BaseBadge from '@/components/ui/BaseBadge.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
-import { listChannels, createChannel, updateChannel, deleteChannel, verifyChannel, getAvailableSubagents, generateChannelKeypair, listTenantUsers, listKfAccounts, createKfAccount, updateKfAccount, deleteKfAccount } from '@/api/saasTenant'
+import { listChannels, createChannel, updateChannel, deleteChannel, verifyChannel, getAvailableSubagents, generateChannelKeypair, listTenantUsers, listKfAccounts, createKfAccount, updateKfAccount, deleteKfAccount, ensureKfContactWay } from '@/api/saasTenant'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 
 const route = useRoute()
@@ -603,6 +606,8 @@ const createdQrData = ref<any>(null)
 // 查看已保存账号的二维码弹窗
 const showKfQrModal = ref(false)
 const kfQrData = ref<any>({ qr_title: '', name: '', contact_url: '', qr_data_url: '' })
+// 正在生成链接的账号 open_kfid（历史账号缺 contact_url 时按需补齐）
+const kfGeneratingQr = ref('')
 
 const kfForm = ref({
   name: '',
@@ -758,6 +763,22 @@ function viewKfQr(_ch: any, acc: any) {
     qr_data_url: acc.qr_data_url || '',
   }
   showKfQrModal.value = true
+}
+
+async function handleEnsureContactWay(ch: any, acc: any) {
+  if (!confirm(`账号「${acc.name}」尚未生成客服链接。将为它重新生成专属二维码和链接，是否继续？`)) return
+  kfGeneratingQr.value = acc.open_kfid
+  try {
+    const res = await ensureKfContactWay(acc.open_kfid)
+    // 生成成功后：刷新列表 + 打开二维码弹窗
+    await loadKfAccounts()
+    const fresh = (kfAccountMap.value[ch.config_id] || []).find((a: any) => a.open_kfid === acc.open_kfid)
+    viewKfQr(ch, fresh || { ...acc, ...res })
+  } catch (e: any) {
+    alert(e?.message || '生成客服链接失败')
+  } finally {
+    kfGeneratingQr.value = ''
+  }
 }
 
 async function handleKfSubmit() {

@@ -449,6 +449,64 @@ async def update_kf_account(request: Request, open_kfid: str, body: KfAccountUpd
     return {"success": True, "account": _to_account_view(kf, tenant_id)}
 
 
+@router.post("/accounts/{open_kfid}/contact-way")
+async def ensure_kf_contact_way(request: Request, open_kfid: str):
+    """生成/补齐客服账号的联系方式（scene + 链接 + 二维码）。
+
+    历史账号（引流归因功能之前创建）可能缺失 contact_url / scene，
+    已存在则直接返回现有（幂等），缺失时重新调用 add_contact_way 生成新链接。
+    """
+    if not settings.saas.enabled:
+        raise HTTPException(status_code=400, detail="未启用 SaaS 模式无法访问")
+    admin = require_admin(request)
+    tenant_id = admin.get("tenant_id")
+    if not tenant_id:
+        raise HTTPException(status_code=400, detail="缺少租户信息")
+
+    config_id, config_dict, kf = _find_kf_entry(tenant_id, open_kfid)
+    if not config_id or kf is None:
+        raise HTTPException(status_code=404, detail="客服账号不存在")
+
+    existing_url = kf.get("contact_url", "")
+    existing_scene = kf.get("scene", "")
+    if existing_url and existing_scene:
+        return {
+            "success": True,
+            "open_kfid": open_kfid,
+            "scene": existing_scene,
+            "contact_url": existing_url,
+            "qr_data_url": _build_qr_data_url(existing_url),
+            "qr_title": kf.get("qr_title", ""),
+            "reused": True,
+        }
+
+    adapter, _, _ = await ChannelFactory.create_from_tenant_config(tenant_id, "wecom_kf", config_id=config_id)
+    if adapter is None:
+        raise HTTPException(status_code=500, detail="微信客服渠道适配器创建失败")
+
+    scene = _generate_scene(tenant_id)
+    way_result = await adapter.api_client.add_contact_way(open_kfid, scene)
+    contact_url = way_result.get("url", "")
+    if way_result.get("errcode", 0) != 0 or not contact_url:
+        raise HTTPException(status_code=400, detail=f"获取客服链接失败: {way_result.get('errmsg')}")
+
+    kf["scene"] = scene
+    kf["contact_url"] = contact_url
+    ChannelConfigDB.update(config_id, config_dict)
+    await ChannelFactory.invalidate_adapter(tenant_id, "wecom_kf", config_id, close=True)
+
+    logger.info(f"[wecom-kf] 客服账号补齐链接: open_kfid={open_kfid}, scene={scene}, tenant={tenant_id}")
+    return {
+        "success": True,
+        "open_kfid": open_kfid,
+        "scene": scene,
+        "contact_url": contact_url,
+        "qr_data_url": _build_qr_data_url(contact_url),
+        "qr_title": kf.get("qr_title", ""),
+        "reused": False,
+    }
+
+
 @router.delete("/accounts/{open_kfid}")
 async def delete_kf_account(request: Request, open_kfid: str):
     """删除客服账号：先企微 account/del，成功（或账号不存在）才删本地；失败回显 errmsg。"""

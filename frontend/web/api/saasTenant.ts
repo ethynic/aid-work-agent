@@ -437,6 +437,18 @@ export async function deleteKfAccount(openKfid: string): Promise<any> {
   return result
 }
 
+export async function ensureKfContactWay(openKfid: string): Promise<any> {
+  const res = await fetch(`${API_BASE}/wecom-kf/accounts/${encodeURIComponent(openKfid)}/contact-way`, {
+    method: 'POST',
+    headers: getSaasAuthHeader()
+  })
+  const result = await res.json()
+  if (!res.ok || !result.success) {
+    throw new Error(result.detail || result.error || '生成客服链接失败')
+  }
+  return result
+}
+
 export async function createTenantUser(data: { phone: string; username: string; department?: string; role?: string; tenant_id?: string }): Promise<any> {
   const res = await fetch(`${API_BASE}/users`, {
     method: 'POST',
