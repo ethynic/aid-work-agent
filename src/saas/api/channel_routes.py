@@ -1592,7 +1592,6 @@ async def _process_tenant_wecom_kf_messages(
         from src.saas.services.auto_register import ensure_user_registered
         from src.core.agent_router import agent_router
         from src.channels.wecom_kf.context import set_kf_context
-        from src.channels.wecom_kf.prompts import WECOM_KF_CHANNEL_PROMPT
         from src.models.message import UnifiedResponse
         # from src.core.temp_logger import tlog
 
@@ -2447,8 +2446,6 @@ async def _process_tenant_wecom_kf_messages(
                         tool_messages_collected=tool_messages_collected,
                         assistant_metadata=assistant_metadata,
                         send_response=send_response,
-                        # 临时停用渠道约束提示词（测试其对模板填充兜底行为的影响），恢复时改回 WECOM_KF_CHANNEL_PROMPT
-                        agent_extra_system_prompt=None,
                     )
                     _kf_tlog(
                         "process_and_persist完成: tenant={tenant}, session_id={session_id}, "

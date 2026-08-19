@@ -239,6 +239,7 @@ class WeComKfAdapter(ChannelAdapter):
         流程：markdown -> 优先整段长图 -> 逐块选择最优方式发送
           - 若 text 含 md 表格 或 图片引用：整段 md 渲染为单张长图，以 image 消息发送
             （规避 wecom_kf 单次咨询 5 次回复限制；失败降级为分段逻辑）
+          - 若纯文本超过单条 2048 字节、需要切分：同样整段渲染为长图（1 条）发送
           - 否则：segment_markdown 分段
             - text 块 -> 增强纯文本 -> 拆分 -> text 消息
             - table 块 -> 渲染图片 -> 上传 -> image 消息（降级为纯文本）
@@ -257,6 +258,14 @@ class WeComKfAdapter(ChannelAdapter):
                 sent = await self._send_full_text_as_image(text, message.reply_to)
                 if not sent:
                     # 长图渲染/发送失败，降级走分段逻辑
+                    all_success = await self._send_segmented(text, message.reply_to)
+                else:
+                    all_success = True
+            elif len(markdown_to_plain_text(text).encode("utf-8")) > self._max_bytes:
+                # 超过单条 2048 字节上限、需要切分的纯文本：直接整段渲染为长图（1 条），
+                # 不再按切分条数判断（渠道约束提示词已废除，产出长度由发送侧直接长图化兜底）
+                sent = await self._send_full_text_as_image(text, message.reply_to)
+                if not sent:
                     all_success = await self._send_segmented(text, message.reply_to)
                 else:
                     all_success = True
@@ -336,14 +345,19 @@ class WeComKfAdapter(ChannelAdapter):
         try:
             image_path = await self.renderer.render_markdown(markdown_text)
             if not image_path or not os.path.exists(image_path):
-                logger.warning("整段 markdown 长图渲染失败，降级走分段逻辑")
+                logger.error(
+                    f"[wecom_kf] 整段 markdown 长图渲染失败（Playwright/Chromium 异常或内容超限），"
+                    f"降级走分段逻辑: open_kfid={self.current_open_kfid}, "
+                    f"text_bytes={len(markdown_text.encode('utf-8'))}"
+                )
                 return False
 
             upload_result = await self.api_client.upload_media(image_path, "image")
             media_id = upload_result.get("media_id")
             if not media_id:
-                logger.warning(
-                    f"长图上传素材未返回 media_id，降级走分段逻辑: {upload_result.get('errmsg')}"
+                logger.error(
+                    f"[wecom_kf] 长图上传素材未返回 media_id，降级走分段逻辑: "
+                    f"open_kfid={self.current_open_kfid}, errmsg={upload_result.get('errmsg')}"
                 )
                 return False
 
@@ -356,14 +370,16 @@ class WeComKfAdapter(ChannelAdapter):
             if send_result.get("errcode", 0) == 0:
                 logger.info("整段 markdown 长图已发送")
                 return True
-            logger.warning(
-                f"长图 image 消息发送失败 errcode={send_result.get('errcode')} "
-                f"errmsg={send_result.get('errmsg')}，降级走分段逻辑"
+            logger.error(
+                f"[wecom_kf] 长图 image 消息发送失败，降级走分段逻辑: "
+                f"open_kfid={self.current_open_kfid}, "
+                f"errcode={send_result.get('errcode')}, errmsg={send_result.get('errmsg')}"
             )
             return False
         except Exception as e:
-            logger.opt(exception=True).warning(
-                f"整段 markdown 长图渲染/发送异常，降级走分段逻辑: {e}",
+            logger.opt(exception=True).error(
+                f"[wecom_kf] 整段 markdown 长图渲染/发送异常，降级走分段逻辑: "
+                f"open_kfid={self.current_open_kfid}: {e}",
             )
             return False
 

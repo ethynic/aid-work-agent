@@ -606,3 +606,61 @@ class TestGetDefaultThumbMediaId:
         assert key_suffixes[0] != key_suffixes[1]
         assert "corp_a" in key_suffixes[0]
         assert "corp_b" in key_suffixes[1]
+
+
+# ---------- 需切分的纯文本 -> 整段长图 ----------
+
+
+class TestLongPlainTextAsImage:
+    """纯文本超过单条 2048 字节、需要切分时整段转长图；单条装得下仍走分段。"""
+
+    @pytest.mark.asyncio
+    async def test_oversize_plain_text_triggers_full_image(self, adapter):
+        """约 2100 字节的纯文本（单条装不下）-> 整段长图，不走分段。"""
+        from src.models.message import UnifiedResponse
+
+        text = "好" * 700  # 700 汉字 ≈ 2100 字节 > 2048
+        resp = UnifiedResponse(message_id="msg_l1", reply_to="external_user_001", content={"text": text})
+
+        adapter._send_full_text_as_image = AsyncMock(return_value=True)
+        adapter._send_segmented = AsyncMock(return_value=True)
+
+        ok = await adapter.send_message(resp)
+
+        assert ok is True
+        adapter._send_full_text_as_image.assert_awaited_once()
+        adapter._send_segmented.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_oversize_plain_text_image_failure_falls_back(self, adapter):
+        """超长纯文本长图失败 -> 降级走分段逻辑。"""
+        from src.models.message import UnifiedResponse
+
+        text = "好" * 700
+        resp = UnifiedResponse(message_id="msg_l2", reply_to="external_user_001", content={"text": text})
+
+        adapter._send_full_text_as_image = AsyncMock(return_value=False)
+        adapter._send_segmented = AsyncMock(return_value=True)
+
+        ok = await adapter.send_message(resp)
+
+        assert ok is True
+        adapter._send_full_text_as_image.assert_awaited_once()
+        adapter._send_segmented.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_boundary_fits_single_message_stays_segmented(self, adapter):
+        """恰好在单条 2048 字节以内（无需切分）-> 走分段文本，不转长图。"""
+        from src.models.message import UnifiedResponse
+
+        text = "好" * 600  # 1800 字节 < 2048
+        resp = UnifiedResponse(message_id="msg_l3", reply_to="external_user_001", content={"text": text})
+
+        adapter._send_full_text_as_image = AsyncMock(return_value=True)
+        adapter._send_segmented = AsyncMock(return_value=True)
+
+        ok = await adapter.send_message(resp)
+
+        assert ok is True
+        adapter._send_full_text_as_image.assert_not_awaited()
+        adapter._send_segmented.assert_awaited_once()
