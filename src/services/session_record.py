@@ -698,6 +698,23 @@ def _persist_background_llm_record(
         logger.opt(exception=True).error(f"background_llm 计费落库失败: {e}")
 
 
+def _resolve_admin_user_id(user_id: Optional[str]) -> str:
+    """管理后台计费落库的 user_id 兜底：为空时取 ContextVar，仍为空用 "unknown" 占位
+
+    chat_records.user_id 在生产库为 NOT NULL，传 None 会违反约束导致计费落库失败
+    （报错 "null value in column user_id ... violates not-null constraint"）。
+    无认证上下文的调用方（离线脚本、无 token 后台任务）用 "unknown" 占位，
+    与 session_id 中的 user_id or 'unknown' 保持一致，保证计费不丢失。
+    """
+    if user_id:
+        return user_id
+    try:
+        from src.saas.context import get_current_user_id
+        return get_current_user_id() or "unknown"
+    except Exception:
+        return "unknown"
+
+
 def record_admin_llm_usage(
     response: Optional[Dict[str, Any]],
     *,
@@ -715,6 +732,7 @@ def record_admin_llm_usage(
     usage_breakdown.chat 写入分项单价/分项积分，与主路径格式对齐，
     便于统一 SQL 对账。失败只记日志，不影响已返回的响应。
     """
+    user_id = _resolve_admin_user_id(user_id)
     if not isinstance(response, dict):
         return
     usage = response.get("usage")
@@ -810,6 +828,7 @@ def record_admin_embedding_usage(
     usage_breakdown.embedding 写入分项单价/系数，与主路径格式对齐，
     便于统一 SQL 对账。失败只记日志，不影响已返回的响应。
     """
+    user_id = _resolve_admin_user_id(user_id)
     tokens = int(getattr(embedding_client, "last_usage_tokens", 0) or 0)
     if tokens <= 0:
         return
