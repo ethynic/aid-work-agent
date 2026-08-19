@@ -51,41 +51,6 @@
             {{ copied[ch.config_id] ? '已复制' : '复制' }}
           </BaseButton>
         </div>
-
-        <!-- 微信客服特有：客服账号管理 -->
-        <div v-if="ch.channel_type === 'wecom_kf'" class="mt-3 bg-canvas rounded-lg p-3">
-          <div class="flex items-center justify-between mb-2">
-            <span class="text-sm font-medium text-default">客服账号</span>
-            <BaseButton intent="ghost" size="sm" @click="openKfAccountCreate(ch)">+ 添加客服账号</BaseButton>
-          </div>
-          <div v-if="(kfAccountMap[ch.config_id] || []).length === 0" class="text-xs text-muted text-center py-2">
-            尚未配置客服账号，点击右上角添加
-          </div>
-          <div v-else class="space-y-2">
-            <div
-              v-for="acc in kfAccountMap[ch.config_id]"
-              :key="acc.open_kfid"
-              class="bg-surface border border-default rounded-md px-3 py-2 flex items-center justify-between gap-2"
-            >
-              <div class="flex items-center gap-3 min-w-0 flex-wrap">
-                <span class="text-sm font-medium text-default">{{ acc.name }}</span>
-                <span class="text-xs text-muted font-mono">{{ acc.open_kfid }}</span>
-                <span class="text-xs text-muted">归属：{{ tenantUserName(acc.tenant_user_id) }}</span>
-                <span v-if="acc.expire_at" class="text-xs text-muted">到期 {{ acc.expire_at }}</span>
-                <span v-if="acc.credit_limit > 0" class="text-xs text-muted">积分 {{ acc.credit_used }}/{{ acc.credit_limit }}</span>
-                <span class="text-xs text-muted">引流 {{ acc.referral_count }} 人</span>
-              </div>
-              <div class="flex items-center gap-1 flex-shrink-0">
-                <BaseButton v-if="acc.contact_url" intent="ghost" size="sm" @click="viewKfQr(ch, acc)">二维码</BaseButton>
-                <BaseButton v-else intent="ghost" size="sm" :disabled="kfGeneratingQr === acc.open_kfid" @click="handleEnsureContactWay(ch, acc)">
-                  {{ kfGeneratingQr === acc.open_kfid ? '生成中...' : '生成链接' }}
-                </BaseButton>
-                <BaseButton intent="ghost" size="sm" @click="openKfAccountEdit(ch, acc)">编辑</BaseButton>
-                <BaseButton intent="danger-ghost" size="sm" @click="handleDeleteKfAccount(ch, acc)">删除</BaseButton>
-              </div>
-            </div>
-          </div>
-        </div>
       </div>
     </div>
 
@@ -271,7 +236,7 @@
             </div>
           </template>
           <p v-else class="text-sm text-muted">
-            微信客服账号请在保存渠道后，回到渠道列表点击「添加客服账号」管理：系统自动调用企业微信 API 创建账号、生成推广二维码，并支持绑定归属用户、设置到期日期与积分上限。
+            微信客服账号请在保存渠道后，点击渠道的「编辑」按钮，在编辑弹窗中管理：系统自动调用企业微信 API 创建账号、生成推广二维码，并支持绑定归属用户、设置到期日期与积分上限。
           </p>
         </div>
 
@@ -525,7 +490,7 @@ import BaseTable from '@/components/ui/BaseTable.vue'
 import BaseBadge from '@/components/ui/BaseBadge.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
-import { listChannels, createChannel, updateChannel, deleteChannel, verifyChannel, getAvailableSubagents, generateChannelKeypair, listTenantUsers, listKfAccounts, createKfAccount, updateKfAccount, deleteKfAccount, ensureKfContactWay } from '@/api/saasTenant'
+import { listChannels, createChannel, updateChannel, deleteChannel, verifyChannel, getAvailableSubagents, generateChannelKeypair, listTenantUsers, listKfAccounts, createKfAccount, updateKfAccount, deleteKfAccount } from '@/api/saasTenant'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 
 const route = useRoute()
@@ -606,8 +571,6 @@ const createdQrData = ref<any>(null)
 // 查看已保存账号的二维码弹窗
 const showKfQrModal = ref(false)
 const kfQrData = ref<any>({ qr_title: '', name: '', contact_url: '', qr_data_url: '' })
-// 正在生成链接的账号 open_kfid（历史账号缺 contact_url 时按需补齐）
-const kfGeneratingQr = ref('')
 
 const kfForm = ref({
   name: '',
@@ -763,22 +726,6 @@ function viewKfQr(_ch: any, acc: any) {
     qr_data_url: acc.qr_data_url || '',
   }
   showKfQrModal.value = true
-}
-
-async function handleEnsureContactWay(ch: any, acc: any) {
-  if (!confirm(`账号「${acc.name}」尚未生成客服链接。将为它重新生成专属二维码和链接，是否继续？`)) return
-  kfGeneratingQr.value = acc.open_kfid
-  try {
-    const res = await ensureKfContactWay(acc.open_kfid)
-    // 生成成功后：刷新列表 + 打开二维码弹窗
-    await loadKfAccounts()
-    const fresh = (kfAccountMap.value[ch.config_id] || []).find((a: any) => a.open_kfid === acc.open_kfid)
-    viewKfQr(ch, fresh || { ...acc, ...res })
-  } catch (e: any) {
-    alert(e?.message || '生成客服链接失败')
-  } finally {
-    kfGeneratingQr.value = ''
-  }
 }
 
 async function handleKfSubmit() {
