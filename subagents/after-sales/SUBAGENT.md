@@ -21,6 +21,9 @@ triggers:
     - 快递
     - 签收
     - 发货
+llm_provider: deepseek
+deepseek_model_code: deepseek-v4-flash  # 指定使用模型，覆盖 .env 配置
+qwen_model_code: deepseek-v4-flash  # failover使用。指定使用模型，覆盖 .env 配置
 tools:
   inherit: true
   additional:

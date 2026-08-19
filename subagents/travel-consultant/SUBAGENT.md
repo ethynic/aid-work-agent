@@ -12,9 +12,9 @@ triggers:
   file_patterns:
     - "*.xls"
     - "*.xlsx"
-llm_provider: qwen
-deepseek_model_code: deepseek-v4-flash  # failover使用。指定使用模型，覆盖 .env 配置
-qwen_model_code: qwen3.7-flash  # 指定使用模型，覆盖 .env 配置
+llm_provider: deepseek
+deepseek_model_code: deepseek-v4-flash  # 指定使用模型，覆盖 .env 配置
+qwen_model_code: deepseek-v4-flash  # failover使用。指定使用模型，覆盖 .env 配置
 reply_style: human-like
 tools:
   inherit: true
