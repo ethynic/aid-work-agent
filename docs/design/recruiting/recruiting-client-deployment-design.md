@@ -98,6 +98,10 @@ aidwork-recruiting-client/           ← 交付目录（zip 发给客户）
 
 ## 7. Phase 划分（每阶段独立可验收）
 
+> **已先行落地**：`clients/README.md` 部署手册（编译新版本/安装/Chrome 调试实例/
+> 绑定服务器配对/doctor 自检/手工开机自启/升级卸载/常见问题）——一键脚本完成前，
+> 手工装机照该手册执行即可。
+
 | Phase | 内容 | 验收 |
 |---|---|---|
 | 1 安装闭环 | package.ps1（版本化+隔离冒烟）；install.ps1 全步骤；客户部署说明；uninstall.ps1 | 全新 Windows 虚拟机：一条命令装完 → Chrome 快捷方式登录 → pair → 注销重登后 runtime 自起 → Web 设备页在线 |
