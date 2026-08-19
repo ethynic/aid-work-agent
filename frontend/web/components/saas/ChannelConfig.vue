@@ -611,21 +611,12 @@ async function loadKfAccounts() {
   try {
     const res = await listKfAccounts()
     const accounts = res.accounts || []
-    // 建立 open_kfid → config_id 映射（后端 /accounts 不含 config_id，从渠道配置反查）
-    const kfToConfig: Record<string, string> = {}
-    for (const ch of channels.value) {
-      if (ch.channel_type === 'wecom_kf' && ch.config?.kf_account) {
-        for (const kf of ch.config.kf_account) {
-          if (kf.open_kfid) kfToConfig[kf.open_kfid] = ch.config_id
-        }
-      }
-    }
+    // 后端 /accounts 已带 config_id，直接按归属渠道分组
     const map: Record<string, any[]> = {}
     for (const acc of accounts) {
-      const cid = kfToConfig[acc.open_kfid]
-      if (!cid) continue
-      if (!map[cid]) map[cid] = []
-      map[cid].push(acc)
+      if (!acc.config_id) continue
+      if (!map[acc.config_id]) map[acc.config_id] = []
+      map[acc.config_id].push(acc)
     }
     kfAccountMap.value = map
   } catch (e) {
