@@ -239,16 +239,6 @@ display_name 必须使用用户能理解的业务文件名，不要使用工具�
 
     usage_guide = ""
 
-    def __init__(self) -> None:
-        self._user_id: Optional[str] = None
-        self._tenant_id: Optional[str] = None
-
-    def set_user_id(self, user_id: str) -> None:
-        self._user_id = user_id
-
-    def set_tenant_id(self, tenant_id: str) -> None:
-        self._tenant_id = tenant_id
-
     def get_display_name(self, tool_args: Optional[Dict[str, Any]] = None) -> str:
         base = self.display_name
         if tool_args:

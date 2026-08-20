@@ -99,16 +99,6 @@ class BrowserAutomationTool(BaseTool):
     category = "browser"
     InputModel = BrowserAutomationInput
 
-    def __init__(self) -> None:
-        self._tenant_id: Optional[str] = None
-        self._user_id: Optional[str] = None
-
-    def set_tenant_id(self, tenant_id: str) -> None:
-        self._tenant_id = tenant_id
-
-    def set_user_id(self, user_id: str) -> None:
-        self._user_id = user_id
-
     def get_display_name(self, tool_args: Optional[Dict[str, Any]] = None) -> str:
         """不显示任务、用户回复或表单正文。"""
         del tool_args
@@ -118,12 +108,14 @@ class BrowserAutomationTool(BaseTool):
         self, *, task: str, url: Optional[str] = None
     ) -> Any:
         """供同进程本地桌面入口调用；该方法不会暴露到 Agent tool schema。"""
-        return await self.execute(
-            task=task,
-            url=url,
-            headless=False,
-            _trusted_local_interactive=_LOCAL_INTERACTIVE_TRUST,
-        )
+        from src.tools.context import ExecutionContextFactory, tool_execution_scope
+        with tool_execution_scope(ExecutionContextFactory.for_agent_call()):
+            return await self.execute(
+                task=task,
+                url=url,
+                headless=False,
+                _trusted_local_interactive=_LOCAL_INTERACTIVE_TRUST,
+            )
 
     async def execute(self, **kwargs) -> Any:
         requested_headless = kwargs.get("headless")
@@ -148,16 +140,10 @@ class BrowserAutomationTool(BaseTool):
         if not task:
             return {"success": False, "error_code": "INVALID_INPUT", "error": "必须提供任务描述"}
 
-        tenant_id = kwargs.get("_trusted_tenant_id")
-        user_id = kwargs.get("_trusted_user_id")
-        try:
-            from src.saas.context import get_current_tenant_id, get_current_user_id
-            tenant_id = tenant_id or get_current_tenant_id()
-            user_id = user_id or get_current_user_id()
-        except Exception:
-            pass
-        tenant_id = tenant_id or self._tenant_id
-        user_id = user_id or self._user_id
+        from src.tools.context import current_tool_execution_context
+        context = current_tool_execution_context()
+        tenant_id = context.tenant_id if context else None
+        user_id = context.user_id if context else None
         if not tenant_id or not user_id:
             return {
                 "success": False,
@@ -168,7 +154,9 @@ class BrowserAutomationTool(BaseTool):
         manager = BrowserRunManager()
         # 私有属性只在本次 run manager 内存中生效，不进入持久化记录或用户输入面。
         manager.headless_override = requested_headless
-        audit_session_id = kwargs.get("_audit_session_id") or f"audit_{user_id}"
+        # session 只能来自可信边界构造的不可变上下文；模型参数或遗留私有参数
+        # 不得覆盖审计归属。
+        audit_session_id = context.session_id or f"audit_{user_id}"
         record = await manager.create(
             tenant_id=tenant_id,
             user_id=user_id,
@@ -195,8 +183,8 @@ class BrowserAutomationTool(BaseTool):
                         "success": False, "error_code": "TOOL_SUSPEND_FAILED",
                         "error": "当前无法安全保存人工接管状态，请稍后重试",
                     }
-                execution_id = kwargs.get("_agent_execution_id")
-                tool_call_id = kwargs.get("_tool_call_id")
+                execution_id = context.agent_execution_id
+                tool_call_id = context.tool_call_id
                 if not execution_id or not tool_call_id:
                     await manager.finalize(
                         record.tenant_id, record.run_id, RunState.FAILED,

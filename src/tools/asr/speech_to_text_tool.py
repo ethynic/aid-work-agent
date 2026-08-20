@@ -47,6 +47,8 @@ _NLS_META_DOMAIN = "nls-meta.cn-shanghai.aliyuncs.com"
 class SpeechToTextTool(BaseTool):
     """语音转文字工具 - 基于阿里云智能语音交互一句话识别 RESTful API"""
 
+    # 有意不注册为 LLM 工具：ASR 在渠道层（channel_routes.py）处理语音消息，不走 agent loop
+    catalog = False
     name = "speech_to_text"
     description = "将语音音频转为文字，支持中文普通话和英文。适用于语音消息识别，音频时长不超过60秒。参数需要提供音频文件的base64编码内容或本地文件路径。"
     usage_guide = "当需要处理语音消息时调用此工具。提供音频文件的base64编码内容或本地文件路径。"

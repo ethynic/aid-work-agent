@@ -4,7 +4,13 @@
 管理所有可用工具的注册和发现
 """
 
-from typing import Any, Dict, List, Optional, Type
+import importlib
+import inspect
+import pkgutil
+import threading
+from types import MappingProxyType
+
+from typing import Any, Collection, Dict, Iterable, List, Mapping, Optional, Set, Type
 
 from loguru import logger
 
@@ -32,6 +38,8 @@ class ToolRegistry:
         if not tool.name:
             raise ValueError("工具必须定义name属性")
         
+        if tool.name in self._tools:
+            raise ValueError(f"工具名称重复注册: {tool.name}")
         self._tools[tool.name] = tool
         # logger.info(f"注册工具: {tool.name}")
     
@@ -45,6 +53,20 @@ class ToolRegistry:
         if tool_name in self._tools:
             del self._tools[tool_name]
             logger.info(f"注销工具: {tool_name}")
+
+    def remove_many(self, names: Iterable[str]) -> None:
+        for name in names:
+            self._tools.pop(name, None)
+
+    def retain_only(self, names: Collection[str]) -> None:
+        allowed = set(names)
+        self._tools = {name: tool for name, tool in self._tools.items() if name in allowed}
+
+    def clear(self) -> None:
+        self._tools.clear()
+
+    def snapshot(self) -> Mapping[str, BaseTool]:
+        return MappingProxyType(dict(self._tools))
     
     def get_tool(self, tool_name: str) -> Optional[BaseTool]:
         """
@@ -141,8 +163,117 @@ tool_registry = ToolRegistry()
 def register_tool(tool: BaseTool) -> None:
     """
     注册工具到全局注册表
-    
+
     Args:
         tool: 工具实例
     """
     tool_registry.register(tool)
+
+
+# 已记录过导入失败的模块名（每个模块只 warning 一次，避免多 Agent 实例重复刷屏）
+_DISCOVERY_FAILED_MODULES: Set[str] = set()
+_DISCOVERY_LOCK = threading.RLock()
+
+
+def _is_first_party_module(module_name: str) -> bool:
+    """是否为首方 src 包（精确匹配 src / src.*，避免误伤 srcsomething 之类的第三方包名）"""
+    return module_name == "src" or module_name.startswith("src.")
+
+
+def _import_module_for_discovery(module_name: str):
+    """import 单个模块用于工具发现，失败语义分两级（见 docs/tools/tool-auto-discovery-design.md §2）：
+
+    - 第三方可选依赖缺失（ModuleNotFoundError 且缺失模块非首方 src 包）
+      → warning 一次并跳过，等价于"该模块内工具没被注册"（如精简部署未装 playwright）。
+    - 其余任何失败（首方模块导入错误、循环导入、语法错误、import 期异常）
+      → 视为代码缺陷，log 后原样抛出，与改造前 agent.py 显式 import 的响亮失败语义一致，
+      避免"核心工具因代码 bug 悄悄消失、用户表现为 AI 突然不会某功能"的静默降级。
+    """
+    try:
+        return importlib.import_module(module_name)
+    except ModuleNotFoundError as e:
+        missing = e.name or ""
+        if _is_first_party_module(missing):
+            logger.error(
+                f"[tool-discovery] 首方模块导入失败（代码缺陷，中止工具发现）: "
+                f"{module_name}: 缺失 {missing}: {e}"
+            )
+            raise
+        if module_name not in _DISCOVERY_FAILED_MODULES:
+            _DISCOVERY_FAILED_MODULES.add(module_name)
+            logger.warning(
+                f"[tool-discovery] 可选依赖缺失（{missing}），跳过该模块的工具注册: "
+                f"{module_name}: {e}"
+            )
+        return None
+    except Exception as e:
+        logger.error(
+            f"[tool-discovery] 模块导入失败（代码缺陷，中止工具发现）: {module_name}: {e}"
+        )
+        raise
+
+
+def _walk_and_import(package_path: List[str], prefix: str) -> Set[str]:
+    """递归 import 包下所有模块，触发工具类 __init_subclass__ 登记 _CATALOG。
+
+    先 import 各子包 __init__（多数工具经包导出链加载），再递归 import 包内其余模块
+    （覆盖包 __init__ 未导出、藏在模块深处的工具类）。逐模块失败语义见
+    _import_module_for_discovery：仅第三方可选依赖缺失降级跳过，首方缺陷中止发现。
+    """
+    successful_modules: Set[str] = set()
+    for module_info in sorted(pkgutil.iter_modules(package_path, prefix=prefix), key=lambda item: item.name):
+        # iter_modules 的 prefix 参数已拼进 module_info.name，无需再拼
+        module = _import_module_for_discovery(module_info.name)
+        if module is None:
+            continue
+        successful_modules.add(module_info.name)
+        if module_info.ispkg and getattr(module, "__path__", None):
+            successful_modules.update(
+                _walk_and_import(list(module.__path__), f"{module_info.name}.")
+            )
+    return successful_modules
+
+
+def discover_tool_classes() -> Dict[str, Type[BaseTool]]:
+    """遍历 src.tools 包，返回自动目录 _CATALOG 的排序快照。
+
+    Returns:
+        {工具名: 工具类}，按工具名排序（注册顺序确定），可直接 ``cls()`` 无参构造注册。
+
+    Raises:
+        TypeError: 目录中存在不可无参构造的工具类（开发期暴露，需修复该工具
+            的 __init__ 默认值，或为其设置 catalog = False 走手工注册）。
+    """
+    from .base import _CATALOG
+
+    with _DISCOVERY_LOCK:
+        package = importlib.import_module("src.tools")
+        successful_modules = _walk_and_import(list(package.__path__), "src.tools.")
+        successful_modules.add("src.tools")
+
+        grouped: Dict[str, List[Type[BaseTool]]] = {}
+        for cls in _CATALOG.values():
+            module = getattr(cls, "__module__", "") or ""
+            if module not in successful_modules:
+                continue
+            grouped.setdefault(cls.name, []).append(cls)
+
+        snapshot: Dict[str, Type[BaseTool]] = {}
+        for tool_name in sorted(grouped):
+            classes = {f"{cls.__module__}.{cls.__qualname__}": cls for cls in grouped[tool_name]}
+            if len(classes) > 1:
+                raise ValueError(
+                    f"[tool-discovery] 生产工具名称冲突 name={tool_name}: "
+                    + ", ".join(sorted(classes))
+                )
+            cls = next(iter(classes.values()))
+            try:
+                inspect.signature(cls).bind()
+            except (TypeError, ValueError) as e:
+                raise TypeError(
+                    f"[tool-discovery] 工具 {cls.__module__}.{cls.__qualname__}"
+                    f"（name={tool_name}）不可无参构造，无法自动注册；"
+                    f"请给 __init__ 参数补默认值，或设置 catalog = False 改为 Assembly: {e}"
+                ) from e
+            snapshot[tool_name] = cls
+        return snapshot

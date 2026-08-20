@@ -130,9 +130,14 @@ def test_shared_gateway_store_reserves_before_tool_side_effect():
             self.release = asyncio.Event()
             self.calls = 0
 
-        async def execute(self, _name, _parameters, user_permissions, *, redact_parameter_logs=False):
+        async def execute(
+            self, _name, _parameters, user_permissions, *,
+            redact_parameter_logs=False, context=None,
+        ):
             assert user_permissions == ["test_echo"]
             assert redact_parameter_logs is True
+            assert context.tenant_id == "tenant-1"
+            assert context.user_id == "user-1"
             self.calls += 1
             self.started.set()
             await self.release.wait()

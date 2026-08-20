@@ -78,7 +78,7 @@ class TestUser:
             role=UserRole.EMPLOYEE,
         )
         permissions = user.get_default_permissions()
-        assert "email_send" in permissions
+        assert "email_process" in permissions
 
 
 class TestTask:

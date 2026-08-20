@@ -58,17 +58,16 @@ class EmailCredentialDB:
                 logger.info(f"更新用户邮箱配置: user_id={user_id}")
                 return True
 
-            # 清除旧记录（包括软删除的），避免 UNIQUE 冲突
+            # UPDATE 未命中（首次绑定，或软删除后重绑）：
+            # 先清除旧记录（含软删除的，避免 UNIQUE 冲突），再插入新配置，同一事务内一次 commit。
+            # 注意：DELETE 后不能提前 return，否则新配置从未插入，
+            # 软删除后重绑会永远查不到配置（重绑丢配置 bug 修复）。
             cursor.execute("""
                 DELETE FROM user_email_settings WHERE user_id = %s
             """, (user_id,))
-
             if cursor.rowcount > 0:
-                conn.commit()
-                logger.info(f"恢复已删除邮箱配置: user_id={user_id}")
-                return True
+                logger.info(f"清除旧邮箱配置（含软删除记录）: user_id={user_id}")
 
-            # 真正不存在则插入
             cursor.execute("""
                 INSERT INTO user_email_settings (
                     user_id, email_address, smtp_server, smtp_port, smtp_user,

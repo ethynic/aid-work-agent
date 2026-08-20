@@ -10,6 +10,7 @@ from loguru import logger
 
 from .base import BaseTool
 from .registry import ToolRegistry
+from .context import ToolExecutionContext, tool_execution_scope
 
 
 class ToolExecutor:
@@ -38,6 +39,7 @@ class ToolExecutor:
         user_permissions: Optional[List[str]] = None,
         *,
         redact_parameter_logs: bool = False,
+        context: Optional[ToolExecutionContext] = None,
     ) -> Dict[str, Any]:
         """
         执行工具
@@ -115,7 +117,8 @@ class ToolExecutor:
                 # 避免受信身份与内部对象 repr 落日志
                 log_params = {k: v for k, v in parameters.items() if not k.startswith("_")}
                 logger.info(f"执行工具: {tool_name}, 参数: {log_params}")
-            result = await tool.execute(**parameters)
+            with tool_execution_scope(context):
+                result = await tool.execute(**parameters)
             logger.info(f"工具执行成功: {tool_name}")
             return result
         except Exception as e:
@@ -134,6 +137,8 @@ class ToolExecutor:
         self,
         tasks: List[Dict[str, Any]],
         user_permissions: Optional[List[str]] = None,
+        *,
+        context: Optional[ToolExecutionContext] = None,
     ) -> List[Dict[str, Any]]:
         """
         批量执行工具
@@ -155,6 +160,7 @@ class ToolExecutor:
                 tool_name=tool_name,
                 parameters=parameters,
                 user_permissions=user_permissions,
+                context=context,
             )
             
             results.append({

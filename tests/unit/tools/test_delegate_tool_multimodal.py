@@ -13,6 +13,8 @@ import tempfile
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
+from src.tools.context import ToolExecutionContext, tool_execution_scope
+
 pytestmark = [pytest.mark.tools, pytest.mark.unit]
 
 
@@ -23,6 +25,11 @@ _PNG_BYTES = (
     b"\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01"
     b"\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
 )
+
+
+class _AllowAuthorizer:
+    def authorize(self, context, name, config):
+        return True
 
 
 class TestDelegateToSubagentInput:
@@ -195,18 +202,24 @@ class TestDelegateToolExecutePassesImagePaths:
         tool = DelegateToSubagentTool(
             subagent_registry=registry,
             subagent_executor=executor,
+            authorizer=_AllowAuthorizer(),
         )
 
-        await tool.execute(
-            subagent_name="video-agent",
-            task_description="生成产品视频",
-            image_paths=["/tmp/a.png", "/tmp/b.jpg"],
-            session_id="sid",
-        )
+        with tool_execution_scope(ToolExecutionContext(
+            tenant_id="tenant", user_id="user", session_id="sid"
+        )):
+            await tool.execute(
+                subagent_name="video-agent",
+                task_description="生成产品视频",
+                image_paths=["/tmp/a.png", "/tmp/b.jpg"],
+                session_id="untrusted-session",
+            )
 
         # 验证 delegate 被调用时含 image_paths
         delegate_call = executor.delegate.call_args
         assert delegate_call.kwargs.get("image_paths") == ["/tmp/a.png", "/tmp/b.jpg"]
+        assert delegate_call.kwargs.get("session_id") == "sid"
+        assert delegate_call.kwargs.get("user_id") == "user"
 
     @pytest.mark.asyncio
     async def test_execute_without_image_paths_passes_none(self):
@@ -230,13 +243,15 @@ class TestDelegateToolExecutePassesImagePaths:
         tool = DelegateToSubagentTool(
             subagent_registry=registry,
             subagent_executor=executor,
+            authorizer=_AllowAuthorizer(),
         )
 
-        await tool.execute(
-            subagent_name="travel-consultant",
-            task_description="规划行程",
-            session_id="sid",
-        )
+        with tool_execution_scope(ToolExecutionContext(session_id="sid")):
+            await tool.execute(
+                subagent_name="travel-consultant",
+                task_description="规划行程",
+                session_id="sid",
+            )
 
         delegate_call = executor.delegate.call_args
         assert delegate_call.kwargs.get("image_paths") is None
@@ -263,14 +278,16 @@ class TestDelegateToolExecutePassesImagePaths:
         tool = DelegateToSubagentTool(
             subagent_registry=registry,
             subagent_executor=executor,
+            authorizer=_AllowAuthorizer(),
         )
 
-        await tool.execute(
-            subagent_name="video-agent",
-            task_description="test",
-            image_paths=["", None],
-            session_id="sid",
-        )
+        with tool_execution_scope(ToolExecutionContext(session_id="sid")):
+            await tool.execute(
+                subagent_name="video-agent",
+                task_description="test",
+                image_paths=["", None],
+                session_id="sid",
+            )
 
         # 全空被过滤为 None
         delegate_call = executor.delegate.call_args

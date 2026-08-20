@@ -141,16 +141,6 @@ cp(source_file_path="src/skills/xxx/assets/template.html", file_path="output/ppt
     category = "file"
     InputModel = CpInput
 
-    def __init__(self):
-        self._user_id: Optional[str] = None
-        self._tenant_id: Optional[str] = None
-
-    def set_user_id(self, user_id: str):
-        self._user_id = user_id
-
-    def set_tenant_id(self, tenant_id: str):
-        self._tenant_id = tenant_id
-
     def get_display_name(self, tool_args=None) -> str:
         base = self.display_name
         if tool_args:
@@ -253,7 +243,12 @@ cp(source_file_path="src/skills/xxx/assets/template.html", file_path="output/ppt
 
         mime_type = MIME_MAP.get(suffix, "text/plain")
 
-        upload_dir = _resolve_upload_dir(self._tenant_id, self._user_id)
+        from src.tools.context import current_tool_execution_context
+        context = current_tool_execution_context()
+        upload_dir = _resolve_upload_dir(
+            context.tenant_id if context else None,
+            context.user_id if context else None,
+        )
         dest_path = upload_dir / f"{file_id}{suffix}"
         shutil.copy2(str(file_path), str(dest_path))
 
@@ -381,9 +376,17 @@ cp(source_file_path="src/skills/xxx/assets/template.html", file_path="output/ppt
         Args:
             cp_result: cp execute 返回的 result dict（含 file_id / file_name / file_path）
         """
-        from src.tools._helpers import get_tool_execution_context
+        from src.tools.context import current_tool_execution_context
 
-        ctx = get_tool_execution_context()
+        context = current_tool_execution_context()
+        ctx = {
+            "tenant_id": context.tenant_id if context else None,
+            "user_id": context.user_id if context else None,
+            "session_id": context.session_id if context else None,
+            "channel": context.channel if context else None,
+            "subagent_id": context.subagent_id if context else None,
+            "chat_record_id": context.chat_record_id if context else None,
+        }
         if not ctx.get("tenant_id") or not ctx.get("user_id"):
             # 无租户/用户上下文（如系统调试场景），跳过登记
             logger.debug(

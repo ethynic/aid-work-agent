@@ -1,669 +1,256 @@
 """
-邮件工具
+邮件工具 — Agent 唯一入口（email_process）
 
-实现邮件发送和收取功能，使用用户的邮箱配置
+三合一（原 email_send / email_read / email_list_folders）：
+- action 确定性分发（send / read），不建 LLM 路由器
+- 文件夹列表并入 read 返回的 folders 字段
+- 网络同步 IO 全部走 email_lib，并用 asyncio.to_thread 包裹避免阻塞事件循环
 """
 
-import smtplib
+import asyncio
 import imaplib
-import email
-import base64
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-from email.header import decode_header
-from typing import Any, Dict, List, Optional
+import smtplib
+from typing import Any, Dict, List, Optional, Union
 
 from loguru import logger
 from pydantic import BaseModel, Field
 
 from src.tools.base import BaseTool
+from src.tools._helpers import sanitize_error
 from src.models.user import UserEmail
+from src.tools.email import email_lib
 
 
-class EmailSendInput(BaseModel):
-    """发送邮件参数"""
-    to: str = Field(..., description="收件人邮箱地址，多个地址用逗号分隔")
-    subject: str = Field(..., description="邮件主题")
-    body: str = Field(..., description="邮件正文内容")
-    cc: Optional[str] = Field("", description="抄送人邮箱地址，多个地址用逗号分隔（可选）")
+class EmailProcessInput(BaseModel):
+    """email_process 工具入参（按 action 区分参数组）"""
+    action: str = Field(..., description="操作类型：send=发送邮件 / read=读取邮件")
+    # ---- send 动作参数 ----
+    to: Optional[Union[str, List[str]]] = Field(
+        None, description="send 必填：收件人邮箱地址，字符串（多个用逗号分隔）或列表"
+    )
+    subject: Optional[str] = Field(None, description="send 必填：邮件主题")
+    body: Optional[str] = Field(None, description="send 必填：邮件正文内容")
+    cc: Optional[Union[str, List[str]]] = Field(
+        None, description="send 可选：抄送人邮箱地址，字符串（逗号分隔）或列表"
+    )
+    # ---- read 动作参数 ----
+    folder: Optional[str] = Field("INBOX", description="read 可选：邮件文件夹，默认INBOX")
+    limit: Optional[int] = Field(
+        10, description="read 可选：收取邮件数量，默认10封。查询近期邮件时可设大些，精确查找时设小值"
+    )
+    unseen_only: Optional[bool] = Field(
+        False, description="read 可选：是否只收取未读邮件，默认False。用户问'未读邮件'时设True"
+    )
+    from_filter: Optional[str] = Field("", description="read 可选：发件人过滤条件（本地过滤）")
+    subject_filter: Optional[str] = Field("", description="read 可选：主题过滤条件（本地过滤）")
+    body_preview_len: Optional[int] = Field(
+        500, description="read 可选：正文预览长度（字符），默认500"
+    )
 
 
-class EmailReadInput(BaseModel):
-    """读取邮件参数"""
-    folder: Optional[str] = Field("INBOX", description="邮件文件夹，默认INBOX")
-    limit: Optional[int] = Field(50, description="收取邮件数量，默认50封。查询近期邮件时建议设50以上，精确查找时设较小值")
-    unseen_only: Optional[bool] = Field(False, description="是否只收取未读邮件，默认False（收取全部）。用户问'未读邮件'时设True，问'收到哪些邮件'时设False")
-    from_filter: Optional[str] = Field("", description="发件人过滤条件（可选）")
-    subject_filter: Optional[str] = Field("", description="主题过滤条件（可选）")
+TOOL_DESCRIPTION = """邮件处理工具。通过用户绑定的邮箱发送和读取邮件。
+
+⚠️ 触发规则 — 遇到以下场景必须调用本工具：
+- 用户要求发送邮件（action="send"）
+- 用户要求查看/收取邮件、查未读邮件、按发件人或主题筛选邮件（action="read"）
+- 用户询问邮箱有哪些文件夹（action="read"，看返回的 folders 字段）
+
+参数说明（action 必填，按动作确定性分发）：
+- send 动作：to（收件人，必填）、subject（主题，必填）、body（正文，必填）、cc（抄送，可选）
+- read 动作：folder（默认INBOX）、limit（默认10封）、unseen_only（默认False）、
+  from_filter/subject_filter（可选，按发件人/主题筛选）、body_preview_len（正文预览长度，默认500）
+
+调用注意：
+- 未绑定邮箱时会返回错误提示，需引导用户先在设置中绑定邮箱
+- read 返回结构：emails（uid/subject/from/to/date/body_preview）+ folders（文件夹列表）+ count
+- 按发件人/主题筛选时工具会先只拉取邮件头做本地过滤，命中才拉取全文"""
 
 
-class EmailListFoldersInput(BaseModel):
-    """获取邮件夹列表参数（无参数）"""
-    pass
-
-
-def decode_imap_folder_name(name: str) -> str:
+def _clamp_int(value, default: int, low: int, high: int) -> int:
     """
-    解码 IMAP 文件夹名称 (modified UTF-7)
-    
-    IMAP 使用 modified UTF-7 编码非ASCII字符
-    例如: &XfJT0ZAB- 解码后为 "已发送邮件"
+    数值入参防御：宽容转换 + 夹紧到 [low, high]
+
+    主执行链（core/executor.py execute_task）对工具参数不做 Pydantic 校验，
+    LLM 可能传字符串/None/浮点/超大值，直接透传会在库层比较或切片时抛
+    TypeError（落入兜底文案）或造成资源放大（逐封拉全信），故在此归一。
     """
-    if not name:
-        return name
-    
-    # 如果没有 & 符号，说明是纯ASCII
-    if '&' not in name:
-        return name
-    
-    result = []
-    i = 0
-    while i < len(name):
-        if name[i] == '&':
-            # 查找结束符 '-'
-            end = name.find('-', i)
-            if end == -1:
-                result.append(name[i:])
-                break
-            
-            # 提取编码部分
-            encoded = name[i+1:end]
-            if encoded == '':  # '&-' 表示 '&' 字符
-                result.append('&')
-            else:
-                try:
-                    # modified UTF-7: 将 ',' 替换为 '/'
-                    encoded = encoded.replace(',', '/')
-                    # 添加填充
-                    padding = (4 - len(encoded) % 4) % 4
-                    encoded += '=' * padding
-                    # 解码 base64
-                    decoded = base64.b64decode(encoded)
-                    result.append(decoded.decode('utf-16-be'))
-                except Exception:
-                    result.append(name[i:end+1])
-            i = end + 1
-        else:
-            result.append(name[i])
-            i += 1
-    
-    return ''.join(result)
+    try:
+        num = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(low, min(high, num))
 
 
-class EmailSendTool(BaseTool):
-    """邮件发送工具"""
+# 发送失败白名单：类型命中返回固定安全文案，未命中走 fallback（不透传 str(e)）
+_SEND_SAFE_MESSAGES = {
+    email_lib.EmailLibError: "收件人地址无效，请检查收件人邮箱地址",
+    smtplib.SMTPAuthenticationError: "邮箱账号或密码（授权码）错误，请检查邮箱配置",
+    smtplib.SMTPConnectError: "无法连接SMTP服务器，请检查邮箱服务器配置",
+    smtplib.SMTPServerDisconnected: "SMTP服务器连接中断，请稍后重试",
+    ConnectionRefusedError: "无法连接SMTP服务器，请检查网络或端口配置",
+    TimeoutError: "连接SMTP服务器超时，请检查网络",
+    OSError: "网络异常，邮件发送失败",
+}
 
-    name = "email_send"
-    description = "发送邮件给指定收件人"
-    display_name = "发送邮件"
+# 读取失败白名单（imaplib.IMAP4.error 覆盖登录失败/命令失败等，统一固定文案）
+_READ_SAFE_MESSAGES = {
+    imaplib.IMAP4.error: "邮箱登录或读取失败，请检查邮箱配置",
+    ConnectionRefusedError: "无法连接IMAP服务器，请检查网络或端口配置",
+    TimeoutError: "连接IMAP服务器超时，请检查网络",
+    OSError: "网络异常，邮件收取失败",
+}
+
+
+class EmailProcessTool(BaseTool):
+    """邮件处理工具（send / read 确定性分发）"""
+
+    name = "email_process"
+    description = TOOL_DESCRIPTION
+    display_name = "邮件处理"
     category = "email"
-    InputModel = EmailSendInput
+    InputModel = EmailProcessInput
 
     def get_display_name(self, tool_args: Optional[Dict[str, Any]] = None) -> str:
-        """动态显示名，展示收件人"""
+        """动态显示名：按 action 展示收件人或文件夹+数量"""
         if tool_args:
-            to = tool_args.get("to", "")
-            if to:
-                return f"发送邮件至「{to}」"
+            action = tool_args.get("action")
+            if action == "send":
+                to = tool_args.get("to") or ""
+                if to:
+                    to_display = ", ".join(to) if isinstance(to, list) else to
+                    return f"发送邮件至「{to_display}」"
+                return "发送邮件"
+            if action == "read":
+                folder = tool_args.get("folder") or "INBOX"
+                limit = tool_args.get("limit", 10)
+                return f"读取邮件（{folder}，{limit}封）"
         return self.display_name
 
     def __init__(self, user_email: Optional[UserEmail] = None):
         """
-        初始化邮件发送工具
+        初始化邮件处理工具
 
         Args:
             user_email: 用户邮箱配置（可选，不传则运行时从数据库读取）
         """
         self.user_email = user_email
-        self._user_id: Optional[str] = None
-
-    def set_user_id(self, user_id: str):
-        """设置当前用户ID，用于从数据库读取邮箱配置"""
-        self._user_id = user_id
 
     def _resolve_user_email(self) -> Optional[UserEmail]:
         """获取用户邮箱配置：优先使用注入的配置，否则从DB读取"""
         if self.user_email:
             return self.user_email
-        if self._user_id:
+        from src.tools.context import current_tool_execution_context
+        context = current_tool_execution_context()
+        if context and context.user_id:
             from src.db.email_credential import EmailCredentialDB
-            return EmailCredentialDB.get_user_email_model(self._user_id)
+            return EmailCredentialDB.get_user_email_model(context.user_id)
         return None
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
         """
-        执行邮件发送
+        执行邮件处理（按 action 确定性分发）
 
         Args:
-            to: 收件人邮箱地址
-            subject: 邮件主题
-            body: 邮件正文
-            cc: 抄送人邮箱地址
+            action: send / read
+            其余参数见 EmailProcessInput
 
         Returns:
             执行结果
         """
-        user_email = self._resolve_user_email()
+        # 数据库凭据解析是同步调用；async 工具入口必须放到工作线程，避免
+        # 邮件调用前的账号查询阻塞同一 worker 上的其他请求。
+        user_email = await asyncio.to_thread(self._resolve_user_email)
         if not user_email:
             return {"success": False, "error": "未绑定邮箱，请先去设置中绑定邮箱"}
 
-        to = kwargs.get("to", "")
-        subject = kwargs.get("subject", "")
-        body = kwargs.get("body", "")
-        cc = kwargs.get("cc", "")
+        action = str(kwargs.get("action") or "").strip().lower()
+        if action == "send":
+            return await self._execute_send(user_email, **kwargs)
+        if action == "read":
+            return await self._execute_read(user_email, **kwargs)
+
+        return {
+            "success": False,
+            "error": f"不支持的操作类型: {action or '(空)'}，action 必须为 send 或 read",
+        }
+
+    async def _execute_send(self, user_email: UserEmail, **kwargs) -> Dict[str, Any]:
+        """发送邮件（同步 SMTP 调用经 to_thread 避免阻塞事件循环）"""
+        to = kwargs.get("to")
+        subject = kwargs.get("subject") or ""
+        body = kwargs.get("body") or ""
+        cc = kwargs.get("cc") or ""
 
         if not to or not subject:
-            return {
-                "success": False,
-                "error": "收件人和邮件主题为必填项",
-            }
+            return {"success": False, "error": "收件人和邮件主题为必填项"}
 
         try:
-            # 创建邮件
-            msg = MIMEMultipart()
-            msg["From"] = user_email.email_address
-            msg["Subject"] = subject
-
-            # 处理收件人（支持字符串或列表）
-            if isinstance(to, list):
-                to_str = ", ".join(to)
-                recipients = [addr.strip() for addr in to]
-            else:
-                to_str = to
-                recipients = [addr.strip() for addr in to.split(",")]
-            msg["To"] = to_str
-
-            # 处理抄送人（支持字符串或列表）
-            if cc:
-                if isinstance(cc, list):
-                    cc_str = ", ".join(cc)
-                    recipients.extend([addr.strip() for addr in cc])
-                else:
-                    cc_str = cc
-                    recipients.extend([addr.strip() for addr in cc.split(",")])
-                msg["Cc"] = cc_str if isinstance(cc, list) else cc
-
-            msg.attach(MIMEText(body, "plain", "utf-8"))
-
-            # 根据加密协议发送邮件
-            if user_email.smtp_encryption == "ssl":
-                # SSL/TLS 加密连接
-                with smtplib.SMTP_SSL(
-                    user_email.smtp_server,
-                    user_email.smtp_port
-                ) as server:
-                    server.login(
-                        user_email.smtp_user,
-                        user_email.smtp_password
-                    )
-                    server.sendmail(
-                        user_email.email_address,
-                        recipients,
-                        msg.as_string()
-                    )
-            elif user_email.smtp_encryption == "tls":
-                # STARTTLS 加密连接
-                with smtplib.SMTP(
-                    user_email.smtp_server,
-                    user_email.smtp_port
-                ) as server:
-                    server.ehlo()
-                    server.starttls()
-                    server.ehlo()
-                    server.login(
-                        user_email.smtp_user,
-                        user_email.smtp_password
-                    )
-                    server.sendmail(
-                        user_email.email_address,
-                        recipients,
-                        msg.as_string()
-                    )
-            else:
-                # 无加密连接（不推荐）
-                with smtplib.SMTP(
-                    user_email.smtp_server,
-                    user_email.smtp_port
-                ) as server:
-                    server.login(
-                        user_email.smtp_user,
-                        user_email.smtp_password
-                    )
-                    server.sendmail(
-                        user_email.email_address,
-                        recipients,
-                        msg.as_string()
-                    )
-
-            logger.info(f"邮件发送成功: from={user_email.email_address}, to={to}, encryption={user_email.smtp_encryption}")
-
-            return {
-                "success": True,
-                "message": f"邮件已成功发送给 {to}",
-                "details": {
-                    "from": user_email.email_address,
-                    "to": to,
-                    "cc": cc,
-                    "subject": subject,
-                },
-            }
-
+            details = await asyncio.to_thread(
+                email_lib.send_email, user_email, to, subject, body, cc
+            )
         except Exception as e:
-            logger.error(f"邮件发送失败: {e}")
+            logger.opt(exception=True).error(
+                f"邮件发送失败: from={user_email.email_address}, to={to}"
+            )
             return {
                 "success": False,
-                "error": f"邮件发送失败: {str(e)}",
+                "error": sanitize_error(
+                    e, safe_messages=_SEND_SAFE_MESSAGES, fallback="邮件发送失败，请稍后重试"
+                ),
             }
 
+        logger.info(
+            f"邮件发送成功: from={user_email.email_address}, to={details.get('to')}, "
+            f"encryption={user_email.smtp_encryption}"
+        )
+        return {
+            "success": True,
+            "message": f"邮件已成功发送给 {details.get('to')}",
+            "details": {
+                "from": details.get("from"),
+                "to": details.get("to"),
+                "cc": details.get("cc"),
+                "subject": details.get("subject"),
+            },
+        }
 
-class EmailReadTool(BaseTool):
-    """邮件收取工具"""
-
-    name = "email_read"
-    description = "收取用户邮箱中的邮件"
-    display_name = "读取邮件"
-    category = "email"
-    InputModel = EmailReadInput
-
-    def get_display_name(self, tool_args: Optional[Dict[str, Any]] = None) -> str:
-        """动态显示名，展示文件夹和数量"""
-        if tool_args:
-            folder = tool_args.get("folder", "INBOX")
-            limit = tool_args.get("limit", 10)
-            return f"读取邮件（{folder}，{limit}封）"
-        return self.display_name
-
-    def __init__(self, user_email: Optional[UserEmail] = None):
-        """
-        初始化邮件收取工具
-
-        Args:
-            user_email: 用户邮箱配置（可选，不传则运行时从数据库读取）
-        """
-        self.user_email = user_email
-        self._user_id: Optional[str] = None
-
-    def set_user_id(self, user_id: str):
-        """设置当前用户ID，用于从数据库读取邮箱配置"""
-        self._user_id = user_id
-
-    def _resolve_user_email(self) -> Optional[UserEmail]:
-        """获取用户邮箱配置：优先使用注入的配置，否则从DB读取"""
-        if self.user_email:
-            return self.user_email
-        if self._user_id:
-            from src.db.email_credential import EmailCredentialDB
-            return EmailCredentialDB.get_user_email_model(self._user_id)
-        return None
-
-    def _list_folders(self, mail) -> List[Dict[str, Any]]:
-        """列出所有邮件文件夹"""
-        try:
-            status, folders = mail.list()
-            if status != "OK":
-                return []
-            
-            result = []
-            for folder in folders:
-                if folder:
-                    # 解析文件夹信息
-                    folder_str = folder.decode() if isinstance(folder, bytes) else folder
-                    parts = folder_str.split('"')
-                    if len(parts) >= 3:
-                        folder_name = parts[-2] if parts[-2] else parts[-1].strip()
-                        result.append({"name": folder_name, "raw": folder_str})
-            return result
-        except Exception as e:
-            logger.error(f"列出文件夹失败: {e}")
-            return []
-
-    async def execute(self, **kwargs) -> Dict[str, Any]:
-        """
-        执行邮件收取
-
-        Args:
-            limit: 收取邮件数量
-            folder: 邮件文件夹
-            unseen_only: 是否只收取未读邮件
-            from_filter: 发件人过滤条件
-            subject_filter: 主题过滤条件
-
-        Returns:
-            执行结果
-        """
-        user_email = self._resolve_user_email()
-        if not user_email:
-            return {"success": False, "error": "未绑定邮箱，请先去设置中绑定邮箱"}
-
-        limit = kwargs.get("limit", 10)
-        folder = kwargs.get("folder", "INBOX")
+    async def _execute_read(self, user_email: UserEmail, **kwargs) -> Dict[str, Any]:
+        """读取邮件（同步 IMAP 调用经 to_thread 避免阻塞事件循环）"""
+        folder = kwargs.get("folder") or "INBOX"
+        limit = _clamp_int(kwargs.get("limit"), default=10, low=1, high=100)
         unseen_only = kwargs.get("unseen_only", False)
-        from_filter = kwargs.get("from_filter", "")
-        subject_filter = kwargs.get("subject_filter", "")
+        from_filter = kwargs.get("from_filter") or ""
+        subject_filter = kwargs.get("subject_filter") or ""
+        body_preview_len = _clamp_int(kwargs.get("body_preview_len"), default=500, low=1, high=5000)
 
         try:
-            # 根据加密协议连接IMAP服务器
-            if user_email.imap_encryption == "ssl":
-                # SSL/TLS 加密连接
-                mail = imaplib.IMAP4_SSL(
-                    user_email.imap_server,
-                    user_email.imap_port
-                )
-            elif user_email.imap_encryption == "tls":
-                # STARTTLS 加密连接
-                mail = imaplib.IMAP4(
-                    user_email.imap_server,
-                    user_email.imap_port
-                )
-                mail.starttls()
-            else:
-                # 无加密连接（不推荐）
-                mail = imaplib.IMAP4(
-                    user_email.imap_server,
-                    user_email.imap_port
-                )
-
-            imap_user, imap_password = user_email.get_imap_credentials()
-            mail.login(imap_user, imap_password)
-            mail.select(folder)
-
-            # 构建服务器端搜索条件（仅支持ASCII的条件）
-            server_criteria = []
-            local_from_filter = ""
-            local_subject_filter = ""
-            
-            if unseen_only:
-                server_criteria.append("UNSEEN")
-            
-            # 发件人和主题过滤在本地进行（避免编码问题）
-            if from_filter:
-                local_from_filter = from_filter
-            if subject_filter:
-                local_subject_filter = subject_filter
-
-            # 执行服务器端搜索（使用UID模式）
-            if server_criteria:
-                search_query = " ".join(server_criteria)
-                status, messages = mail.uid("search", None, search_query)
-            else:
-                status, messages = mail.uid("search", None, "ALL")
-
-            if status != "OK":
-                return {
-                    "success": False,
-                    "error": "搜索邮件失败",
-                }
-
-            logger.info(f"IMAP搜索返回原始数据: {messages}")
-            
-            # 尝试使用普通搜索模式作为对比
-            if not server_criteria:
-                status2, messages2 = mail.search(None, "ALL")
-                logger.info(f"普通搜索返回数据: {messages2}")
-                if status2 == "OK" and messages2[0]:
-                    normal_count = len(messages2[0].split())
-                    logger.info(f"普通搜索找到 {normal_count} 封邮件")
-
-            email_uids = messages[0].split() if messages[0] else []
-            total_found = len(email_uids)
-            logger.info(f"服务器搜索到 {total_found} 封邮件 (使用UID模式)")
-            
-            # 如果需要本地过滤，获取更多邮件
-            if local_from_filter or local_subject_filter:
-                fetch_limit = limit * 3
-            else:
-                # 无本地过滤时，按limit限制
-                fetch_limit = min(limit, total_found)
-            
-            email_uids = email_uids[-fetch_limit:]
-            logger.info(f"准备获取 {len(email_uids)} 封邮件")
-
-            emails = []
-            fetched_count = 0
-            for uid in reversed(email_uids):
-                # 使用 UID 同时获取 BODY.PEEK[] 和 INTERNALDATE
-                status, msg_data = mail.uid("fetch", uid, "(BODY.PEEK[] INTERNALDATE)")
-                if status != "OK":
-                    logger.warning(f"获取邮件 UID:{uid} 失败: {status}")
-                    continue
-
-                fetched_count += 1
-
-                # 提取 INTERNALDATE
-                internal_date = ""
-                for response_part in msg_data:
-                    if isinstance(response_part, bytes):
-                        part_str = response_part.decode(errors="ignore")
-                        if "INTERNALDATE" in part_str:
-                            # 解析 INTERNALDATE "DD-Mon-YYYY HH:MM:SS +ZZZZ"
-                            import re
-                            m = re.search(r'INTERNALDATE\s+"([^"]+)"', part_str)
-                            if m:
-                                try:
-                                    from email.utils import parsedate_to_datetime
-                                    dt = parsedate_to_datetime(m.group(1))
-                                    internal_date = dt.strftime("%Y-%m-%d %H:%M:%S")
-                                except Exception:
-                                    internal_date = m.group(1)
-
-                for response_part in msg_data:
-                    if isinstance(response_part, tuple):
-                        msg = email.message_from_bytes(response_part[1])
-
-                        # 解码主题
-                        subject = self._decode_header_value(msg["Subject"])
-
-                        # 获取发件人
-                        from_ = self._decode_header_value(msg.get("From", ""))
-
-                        # 本地过滤
-                        if local_from_filter and local_from_filter.lower() not in from_.lower():
-                            continue
-                        if local_subject_filter and local_subject_filter.lower() not in subject.lower():
-                            continue
-
-                        # 获取正文
-                        body = self._get_email_body(msg)
-
-                        # 优先使用 INTERNALDATE（服务器收到时间），其次用 Date 头
-                        date_str = internal_date or self._decode_header_value(msg.get("Date", ""))
-
-                        emails.append({
-                            "uid": uid.decode(),
-                            "subject": subject,
-                            "from": from_,
-                            "to": self._decode_header_value(msg.get("To", "")),
-                            "date": date_str,
-                            "body_preview": body[:200] if body else "",
-                        })
-
-                        # 达到限制数量后停止
-                        if len(emails) >= limit:
-                            break
-
-                if len(emails) >= limit:
-                    break
-
-            logger.info(f"成功获取 {fetched_count} 封邮件内容，返回 {len(emails)} 封")
-
-            mail.close()
-            mail.logout()
-
-            logger.info(f"收取邮件成功: {len(emails)}封")
-
-            return {
-                "success": True,
-                "emails": emails,
-                "count": len(emails),
-                "message": f"成功收取{len(emails)}封邮件",
-                "folder": folder,
-            }
-
+            return await asyncio.to_thread(
+                email_lib.read_emails,
+                user_email,
+                folder=folder,
+                limit=limit,
+                unseen_only=unseen_only,
+                from_filter=from_filter,
+                subject_filter=subject_filter,
+                body_preview_len=body_preview_len,
+            )
+        except email_lib.EmailLibError as e:
+            # 已知错误：message 为固定安全文案，可直接透传
+            logger.warning(f"邮件收取失败: {e}")
+            return {"success": False, "error": str(e)}
         except Exception as e:
-            logger.error(f"邮件收取失败: {e}")
+            logger.opt(exception=True).error(f"邮件收取失败: {e}")
             return {
                 "success": False,
-                "error": f"邮件收取失败: {str(e)}",
+                "error": sanitize_error(
+                    e, safe_messages=_READ_SAFE_MESSAGES, fallback="邮件收取失败，请稍后重试"
+                ),
             }
-
-    def _decode_header_value(self, value) -> str:
-        """解码邮件头部值"""
-        if not value:
-            return ""
-
-        # 确保输入是字符串（Header 对象需要先转 str）
-        if not isinstance(value, str):
-            value = str(value)
-
-        try:
-            decoded_parts = decode_header(value)
-            result = []
-            for part, encoding in decoded_parts:
-                if isinstance(part, bytes):
-                    result.append(part.decode(encoding or "utf-8", errors="ignore"))
-                else:
-                    result.append(part)
-            return "".join(result)
-        except Exception:
-            return value
-
-    def _get_email_body(self, msg) -> str:
-        """获取邮件正文"""
-        body = ""
-        
-        if msg.is_multipart():
-            for part in msg.walk():
-                content_type = part.get_content_type()
-                content_disposition = str(part.get("Content-Disposition", ""))
-                
-                # 跳过附件
-                if "attachment" in content_disposition:
-                    continue
-                
-                if content_type == "text/plain":
-                    try:
-                        payload = part.get_payload(decode=True)
-                        charset = part.get_content_charset() or "utf-8"
-                        body = payload.decode(charset, errors="ignore")
-                        break
-                    except Exception:
-                        continue
-        else:
-            try:
-                payload = msg.get_payload(decode=True)
-                charset = msg.get_content_charset() or "utf-8"
-                body = payload.decode(charset, errors="ignore")
-            except Exception:
-                pass
-        
-        return body
-
-
-class EmailListFoldersTool(BaseTool):
-    """列出邮件文件夹工具"""
-
-    name = "email_list_folders"
-    description = "列出邮箱中的所有文件夹及其邮件统计"
-    display_name = "获取邮件夹列表"
-    category = "email"
-    InputModel = EmailListFoldersInput
-
-    def __init__(self, user_email: Optional[UserEmail] = None):
-        self.user_email = user_email
-        self._user_id: Optional[str] = None
-
-    def set_user_id(self, user_id: str):
-        """设置当前用户ID，用于从数据库读取邮箱配置"""
-        self._user_id = user_id
-
-    def _resolve_user_email(self) -> Optional[UserEmail]:
-        """获取用户邮箱配置：优先使用注入的配置，否则从DB读取"""
-        if self.user_email:
-            return self.user_email
-        if self._user_id:
-            from src.db.email_credential import EmailCredentialDB
-            return EmailCredentialDB.get_user_email_model(self._user_id)
-        return None
-
-    async def execute(self, **kwargs) -> Dict[str, Any]:
-        """列出所有文件夹并统计邮件数量"""
-        user_email = self._resolve_user_email()
-        if not user_email:
-            return {"success": False, "error": "未绑定邮箱，请先去设置中绑定邮箱"}
-
-        try:
-            # 连接IMAP服务器
-            if user_email.imap_encryption == "ssl":
-                mail = imaplib.IMAP4_SSL(
-                    user_email.imap_server,
-                    user_email.imap_port
-                )
-            elif user_email.imap_encryption == "tls":
-                mail = imaplib.IMAP4(
-                    user_email.imap_server,
-                    user_email.imap_port
-                )
-                mail.starttls()
-            else:
-                mail = imaplib.IMAP4(
-                    user_email.imap_server,
-                    user_email.imap_port
-                )
-
-            imap_user, imap_password = user_email.get_imap_credentials()
-            mail.login(imap_user, imap_password)
-
-            # 获取所有文件夹
-            status, folders = mail.list()
-            if status != "OK":
-                return {"success": False, "error": "无法获取文件夹列表"}
-
-            result = []
-            for folder in folders:
-                if folder:
-                    folder_str = folder.decode() if isinstance(folder, bytes) else folder
-                    # 解析文件夹名称
-                    parts = folder_str.split('"')
-                    folder_name = parts[-2].strip() if len(parts) >= 3 else folder_str
-                    
-                    # 解码文件夹名称 (modified UTF-7)
-                    decoded_name = decode_imap_folder_name(folder_name)
-                    
-                    try:
-                        # 选择文件夹并统计邮件
-                        status, data = mail.select(folder_name, readonly=True)
-                        if status == "OK":
-                            total = int(data[0])
-                            # 获取未读邮件数
-                            status, unseen = mail.search(None, "UNSEEN")
-                            unseen_count = len(unseen[0].split()) if unseen[0] else 0
-                            
-                            result.append({
-                                "name": decoded_name,
-                                "original_name": folder_name,
-                                "total": total,
-                                "unseen": unseen_count,
-                            })
-                    except Exception as e:
-                        logger.warning(f"无法访问文件夹 {decoded_name}: {e}")
-
-            mail.logout()
-
-            return {
-                "success": True,
-                "folders": result,
-                "total_folders": len(result),
-                "message": f"找到 {len(result)} 个文件夹",
-            }
-
-        except Exception as e:
-            logger.error(f"列出文件夹失败: {e}")
-            return {"success": False, "error": f"列出文件夹失败: {str(e)}"}
 
 
 def create_email_tools(user_email: Optional[UserEmail] = None) -> List[BaseTool]:
     """
-    创建邮件工具实例
+    创建邮件工具实例（三合一后仅一个工具）
 
     Args:
         user_email: 用户邮箱配置（可选）
@@ -671,8 +258,4 @@ def create_email_tools(user_email: Optional[UserEmail] = None) -> List[BaseTool]
     Returns:
         邮件工具列表
     """
-    return [
-        EmailSendTool(user_email),
-        EmailReadTool(user_email),
-        EmailListFoldersTool(user_email),
-    ]
+    return [EmailProcessTool(user_email)]

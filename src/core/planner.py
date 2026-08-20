@@ -23,10 +23,10 @@ class Planner:
     - 管理任务执行顺序
     """
     
-    # 意图到工具的映射
+    # 意图到工具的映射（邮件三合一后 email_send/email_read 意图统一路由到 email_process）
     INTENT_TOOL_MAPPING = {
-        "email_send": "email_send",
-        "email_read": "email_read",
+        "email_send": "email_process",
+        "email_read": "email_process",
         "email_search": "email_search",
         "ocr_image": "ocr_image",
         "ocr_pdf": "ocr_pdf",
@@ -304,13 +304,14 @@ class Planner:
         
         if intent == "email_send":
             parameters = {
+                "action": "send",
                 "to": entities.get("收件人", ""),
                 "subject": entities.get("主题", ""),
                 "body": entities.get("正文", ""),
             }
         elif intent == "email_read":
             parameters = {
-                "filter": entities.get("筛选条件", ""),
+                "action": "read",
                 "limit": entities.get("数量", 10),
             }
         elif intent == "email_search":

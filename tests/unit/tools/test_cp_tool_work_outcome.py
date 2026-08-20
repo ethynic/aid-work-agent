@@ -14,6 +14,7 @@ from pathlib import Path
 from unittest.mock import patch, MagicMock, AsyncMock
 
 import pytest
+from src.tools.context import ToolExecutionContext, tool_execution_scope
 
 pytestmark = [pytest.mark.tools]
 
@@ -33,17 +34,9 @@ class TestRecordWorkOutcomeContextGate:
         cp_result = {"file_id": "f1", "file_name": "test.md", "file_path": "/tmp/test.md"}
 
         with (
-            patch("src.tools._helpers.get_tool_execution_context") as mock_ctx,
+            tool_execution_scope(ToolExecutionContext(user_id="u1", session_id="s1")),
             patch("src.reports.work_outcome_db.WorkOutcomeDB.create") as mock_create,
         ):
-            mock_ctx.return_value = {
-                "tenant_id": None,
-                "user_id": "u1",
-                "session_id": "s1",
-                "channel": None,
-                "subagent_id": None,
-                "chat_record_id": None,
-            }
             await tool._record_work_outcome(cp_result)
             mock_create.assert_not_called()
 
@@ -56,17 +49,9 @@ class TestRecordWorkOutcomeContextGate:
         cp_result = {"file_id": "f1", "file_name": "test.md", "file_path": "/tmp/test.md"}
 
         with (
-            patch("src.tools._helpers.get_tool_execution_context") as mock_ctx,
+            tool_execution_scope(ToolExecutionContext(tenant_id="t1", session_id="s1")),
             patch("src.reports.work_outcome_db.WorkOutcomeDB.create") as mock_create,
         ):
-            mock_ctx.return_value = {
-                "tenant_id": "t1",
-                "user_id": None,
-                "session_id": "s1",
-                "channel": None,
-                "subagent_id": None,
-                "chat_record_id": None,
-            }
             await tool._record_work_outcome(cp_result)
             mock_create.assert_not_called()
 
@@ -79,17 +64,9 @@ class TestRecordWorkOutcomeContextGate:
         cp_result = {"file_id": "f1", "file_name": "test.md", "file_path": "/tmp/test.md"}
 
         with (
-            patch("src.tools._helpers.get_tool_execution_context") as mock_ctx,
+            tool_execution_scope(ToolExecutionContext(tenant_id="t1", user_id="u1")),
             patch("src.reports.work_outcome_db.WorkOutcomeDB.create") as mock_create,
         ):
-            mock_ctx.return_value = {
-                "tenant_id": "t1",
-                "user_id": "u1",
-                "session_id": None,
-                "channel": None,
-                "subagent_id": None,
-                "chat_record_id": None,
-            }
             await tool._record_work_outcome(cp_result)
             mock_create.assert_not_called()
 
@@ -110,17 +87,16 @@ class TestRecordWorkOutcomeSuccess:
         }
 
         with (
-            patch("src.tools._helpers.get_tool_execution_context") as mock_ctx,
+            tool_execution_scope(ToolExecutionContext(
+                tenant_id="t1",
+                user_id="u1",
+                session_id="s_abc",
+                channel="web",
+                subagent_id="trade-specialist",
+                chat_record_id=123,
+            )),
             patch("src.reports.work_outcome_db.WorkOutcomeDB.create") as mock_create,
         ):
-            mock_ctx.return_value = {
-                "tenant_id": "t1",
-                "user_id": "u1",
-                "session_id": "s_abc",
-                "channel": "web",
-                "subagent_id": "trade-specialist",
-                "chat_record_id": 123,
-            }
             mock_create.return_value = {"id": 1, "outcome_id": "wo_abc"}
 
             await tool._record_work_outcome(cp_result)
@@ -155,10 +131,8 @@ class TestExecuteIsolatesRecordFailure:
             pytest.skip("configs/config.yaml not found")
 
         tool = CpTool()
-        tool.set_user_id("u1")
-        tool.set_tenant_id("t1")
-
         with (
+            tool_execution_scope(ToolExecutionContext(user_id="u1", tenant_id="t1")),
             patch.object(tool, "_register_download") as mock_reg,
             patch.object(tool, "_record_work_outcome", new_callable=AsyncMock) as mock_record,
         ):
@@ -189,4 +163,3 @@ class TestExecuteIsolatesRecordFailure:
         # 清理
         cleanup = PROJECT_ROOT / "storage" / "output" / "test_isolate_record.yaml"
         cleanup.unlink(missing_ok=True)
-

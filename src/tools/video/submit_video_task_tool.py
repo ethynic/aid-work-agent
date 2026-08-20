@@ -62,11 +62,13 @@ class SubmitVideoTaskTool(BaseTool):
         draft_only: bool = bool(kwargs.get("draft_only", False))
         # 视频参数由 agent 注入（前端工具栏选择 -> ChatRequest.video_params -> _current_video_params -> _video_params）
         video_params: Dict[str, Any] = kwargs.get("_video_params") or {}
-        # 调用方上下文：tenant_id / user_id / session_id 由 trusted 注入或 agent 状态提供
-        tenant_id: Optional[str] = kwargs.get("_trusted_tenant_id")
-        user_id: Optional[str] = kwargs.get("_trusted_user_id")
-        # session_id 没有专门的 trusted 注入；第一阶段从 video_params 中透传（前端 attach）
-        session_id: Optional[str] = video_params.get("session_id")
+        # 身份与会话只读可信执行边界构造的不可变上下文。video_params 是前端
+        # 业务参数，不能作为 session/user/tenant 的信任来源。
+        from src.tools.context import current_tool_execution_context
+        context = current_tool_execution_context()
+        tenant_id: Optional[str] = context.tenant_id if context else None
+        user_id: Optional[str] = context.user_id if context else None
+        session_id: Optional[str] = context.session_id if context else None
 
         # 临时 tlog：标记工具被调用（排查 LLM 嘴上说提交但没调工具）
         try:

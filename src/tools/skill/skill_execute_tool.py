@@ -31,6 +31,8 @@ class SkillExecuteInput(BaseModel):
 class SkillExecuteTool(BaseTool):
     """技能命令执行工具"""
 
+    # 控制工具：不进普通 registry，由 ToolControlSet 带依赖构造。
+    catalog = False
     name = "skill_execute"
     description = "在技能上下文中执行命令（仅当操作指南要求时才使用，如 python scripts/xxx.py）。引导式技能（无脚本的技能）通常不需要调用此工具。"
     usage_guide = ""

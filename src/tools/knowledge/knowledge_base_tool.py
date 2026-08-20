@@ -40,11 +40,6 @@ class KnowledgeBaseTool(BaseTool):
 
     def __init__(self):
         self._retriever = None  # 惰性初始化，首次使用时创建
-        self._tenant_id = None
-
-    def set_tenant_id(self, tenant_id: str):
-        """由 Agent 注入 tenant_id（子智能体线程中 ContextVar 不可用）"""
-        self._tenant_id = tenant_id
 
     @property
     def retriever(self):
@@ -99,14 +94,9 @@ class KnowledgeBaseTool(BaseTool):
                 "count": 0
             }
 
-        # 解析 tenant_id：优先 Agent 注入，回退 ContextVar
-        tenant_id = self._tenant_id
-        if not tenant_id:
-            try:
-                from src.saas.context import get_current_tenant_id
-                tenant_id = get_current_tenant_id()
-            except Exception:
-                pass
+        from src.tools.context import current_tool_execution_context
+        context = current_tool_execution_context()
+        tenant_id = context.tenant_id if context else None
 
         logger.info(f"后端日志：知识库检索 tenant_id={tenant_id}, query={query}, source_type={source_type}")
 

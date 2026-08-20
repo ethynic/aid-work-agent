@@ -243,9 +243,25 @@ class RemoteToolGateway:
         state = self.store.begin(tenant_id, body["idempotency_key"], user_id)
         if state == "cancelled": raise GatewayError("Invocation was cancelled before execution")
         if state != "running": raise GatewayError(f"Invocation cannot start from state: {state}")
+        from src.tools.context import ExecutionContextFactory
+        context = ExecutionContextFactory.for_remote_gateway(
+            authenticated_tenant_id=tenant_id,
+            authenticated_user_id=user_id,
+            correlation=correlation,
+        )
         parameters = dict(body["arguments"])
-        parameters.update({"_trusted_tenant_id": tenant_id, "_trusted_user_id": user_id, "_agent_execution_id": correlation["execution_id"], "_tool_call_id": correlation["invocation_id"]})
-        result = _public_result(await self.executor.execute(tool_name, parameters, user_permissions=[tool_name], redact_parameter_logs=True))
+        # 保留既有跨进程受信参数协议；context 是服务端工具的统一身份来源，
+        # `_trusted_*` 仅供尚未迁移协议的本地/远程边界适配器消费。
+        parameters.update({
+            "_trusted_tenant_id": tenant_id,
+            "_trusted_user_id": user_id,
+            "_agent_execution_id": correlation["execution_id"],
+            "_tool_call_id": correlation["invocation_id"],
+        })
+        result = _public_result(await self.executor.execute(
+            tool_name, parameters, user_permissions=[tool_name],
+            redact_parameter_logs=True, context=context,
+        ))
         response = {"protocol_version": version, "correlation": correlation, "status": "completed", "result": result}
         events = [submitted, {"seq": 2, "type": "running", "at": datetime.now(timezone.utc).isoformat()}, {"seq": 3, "type": "completed", "at": datetime.now(timezone.utc).isoformat(), "success": bool(result.get("success"))}]
         self.store.save(tenant_id, body["idempotency_key"], InvocationRecord(tenant_id, user_id, request_digest, response, events, "completed"))

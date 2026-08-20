@@ -23,6 +23,8 @@ class ClarifyInput(BaseModel):
 class ClarifyTool(BaseTool):
     """澄清工具"""
 
+    # 控制工具：不进普通 registry，由 ToolControlSet 构造。
+    catalog = False
     name = "clarify"
     description = "当信息缺失时向用户询问澄清"
     usage_guide = ""

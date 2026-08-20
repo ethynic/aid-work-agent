@@ -21,7 +21,15 @@ class EchoTool(BaseTool):
     parameters_schema = {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}
 
     async def execute(self, **kwargs):
-        return {"success": True, "echo": kwargs["text"], "tenant": kwargs["_trusted_tenant_id"]}
+        from src.tools.context import current_tool_execution_context
+        context = current_tool_execution_context()
+        return {
+            "success": True,
+            "echo": kwargs["text"],
+            "tenant": context.tenant_id,
+            "trusted_tenant": kwargs["_trusted_tenant_id"],
+            "trusted_user": kwargs["_trusted_user_id"],
+        }
 
 
 class ScriptedBackend:
@@ -59,7 +67,13 @@ def test_vertical_next_remote_result_final_and_duplicate():
         with pytest.raises(ValueError, match="Idempotency"): await turns.next(changed_next, "tenant-1", "user-1")
         assert first["outcome"]["type"] == "remote_tool_call"
         invoked = await gateway.invoke(invoke_request(first["outcome"]), "tenant-1", "user-1")
-        assert invoked["result"] == {"success": True, "echo": "hello", "tenant": "tenant-1"}
+        assert invoked["result"] == {
+            "success": True,
+            "echo": "hello",
+            "tenant": "tenant-1",
+            "trusted_tenant": "tenant-1",
+            "trusted_user": "user-1",
+        }
         assert await gateway.invoke(invoke_request(first["outcome"]), "tenant-1", "user-1") == invoked
         final = await turns.next(next_request("next-key-0002", {"type": "tool_result", "invocation_id": "invoke-1", "result": invoked["result"]}), "tenant-1", "user-1")
         assert final["outcome"] == {"type": "final", "message": "completed: hello"}

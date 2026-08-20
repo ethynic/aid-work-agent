@@ -7,6 +7,7 @@ import pytest
 from src.prompts.manager import PromptManager
 from src.tools.file.cp_tool import CpInput
 from src.tools.ppt.ppt_process_tool import PptProcessInput
+from src.tools.registry import discover_tool_classes
 
 
 @pytest.fixture
@@ -90,10 +91,14 @@ def test_documented_calls_match_public_tool_schemas():
 
 def test_master_and_subagent_have_direct_ppt_tool_contracts():
     project_root = Path(__file__).resolve().parents[3]
-    agent_source = (project_root / "src" / "core" / "agent.py").read_text(
+    assembly_source = (project_root / "src" / "tools" / "assembly.py").read_text(
         encoding="utf-8"
     )
     config = (project_root / "configs" / "config.yaml").read_text(encoding="utf-8")
 
-    assert "self.tool_registry.register(PptProcessTool())" in agent_source
+    # 工具自动发现改造（docs/tools/tool-auto-discovery-design.md）后，
+    # ppt_process 不再写死注册，由 discover_tool_classes() 经 assemble_agent_tools
+    # 统一装配进各 Agent（黄金清单测试见 tests/unit/tools/test_tool_discovery.py）
+    assert "discover_tool_classes()" in assembly_source
+    assert "ppt_process" in discover_tool_classes()
     assert "guizang-ppt-skill" in config
