@@ -39,12 +39,19 @@ llm:
   qwen:
     api_keys: ${QWEN_API_KEYS:-}
     model: ${QWEN_MODEL_CODE:-qwen3.7-flash}
+    # 日报/周报/月报生成专用小模型（独立于主链路 model，降低成本）
+    # 默认 qwen3.7-flash：Flash 系输出单价最低(0.8元/M)且支持显式缓存；未配置时 fallback 到 model
+    # 详见 docs/research/ai-agent-experience-daily-report-research.md §4.7.6 与 ext/qwen-llm-price.md
+    report_model: ${QWEN_REPORT_MODEL_CODE:-qwen3.7-flash}
     base_url: ${QWEN_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
     max_concurrent_per_key: 2
     queue_timeout: 30
   zhipu:
     api_keys: ${ZHIPU_API_KEYS:-}
     model: ${ZHIPU_MODEL_CODE:-glm-4}
+    # 日报/周报/月报生成专用小模型（独立于主链路 model，降低成本）
+    # 未配置时 fallback 到 model；详见 docs/research/ai-agent-experience-daily-report-research.md §4.7.6
+    report_model: ${ZHIPU_REPORT_MODEL_CODE:-}
     base_url: ${ZHIPU_BASE_URL:-https://open.bigmodel.cn/api/paas/v4}
     max_concurrent_per_key: 2
     queue_timeout: 30

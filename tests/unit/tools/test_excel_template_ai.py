@@ -367,11 +367,118 @@ def test_analyze_structure_parses_mock_llm(sample_path):
 
 
 def test_analyze_structure_rejects_missing_detail(sample_path):
-    """缺明细行区时 fail-loud"""
+    """缺明细行区且无法启发式推断时 fail-loud（单列 columns 不足以定位表头）"""
     bad = {"columns": [{"col": 1, "bind": "x"}]}  # 无 detail_first_row
     data = _data([{"x": 1}])
     with pytest.raises(ValueError):
         analyze_structure(str(sample_path), data, llm_callable=_mock_llm(bad))
+
+
+def test_analyze_infers_detail_when_llm_misses_rows(sample_path):
+    """LLM 漏填 detail_first_row/detail_last_row（groups 空数组）时，从网格启发式兜底推断。
+
+    生产根因：deepseek-v4-flash 偶发在 groups 为空时不返回明细行号，导致
+    「高校研学报价单」等简单模板直接结构分析失败。此处 mock LLM 返回与生产
+    完全一致的缺字段 JSON，断言能推断出 R4-R6 且不抛错。
+    """
+    from src.tools.excel.excel_template_ai import _infer_detail_region
+
+    llm_payload = {
+        "title": {"row": 1, "col": 1, "merge": "A1:E1"},
+        "meta_fields": [{"row": 2, "col": 1, "bind": "customer_name"}],
+        "columns": [
+            {"col": 1, "header": "类别", "bind": "category"},
+            {"col": 2, "header": "项目", "bind": "name"},
+            {"col": 3, "header": "单价", "bind": "unit_price"},
+            {"col": 4, "header": "数量", "bind": "quantity"},
+            {"col": 5, "header": "金额", "bind": "amount"},
+        ],
+        "groups": [],
+        "totals": [{"row": 7, "col": 5, "bind": "grand_total"}],
+    }
+    data = _data([{"category": "住宿"}])
+    s = analyze_structure(str(sample_path), data, llm_callable=_mock_llm(llm_payload))
+    assert s.detail_first_row == 4 and s.detail_last_row == 6
+    assert s.detail_template_row == 4
+    assert len(s.columns) == 5
+
+    # 直接验证启发式对网格的推断
+    from src.tools.excel.excel_template_ai import read_sample_grid, ColumnBinding
+    grid = read_sample_grid(str(sample_path))
+    cols = [ColumnBinding(col=1), ColumnBinding(col=2), ColumnBinding(col=3),
+            ColumnBinding(col=4), ColumnBinding(col=5)]
+    assert _infer_detail_region(grid, cols) == (4, 6)
+
+
+def test_infer_detail_region_single_column_fails(sample_path):
+    """单列 columns 无法定位表头行 → 推断失败 (0,0)（调用方据此保持 fail-loud）"""
+    from src.tools.excel.excel_template_ai import read_sample_grid, _infer_detail_region, ColumnBinding
+    grid = read_sample_grid(str(sample_path))
+    assert _infer_detail_region(grid, [ColumnBinding(col=1, header="类别")]) == (0, 0)
+
+
+def _build_styled_detail_sample(path: Path, *, header_styled: bool, detail_fills, detail_bold_col: int = 0):
+    """构造：表头 R1(5列，可选带样式) + 明细 R2-R4 + 合计 R5(A5="合计")。
+    detail_fills: [bool, bool, bool]，每条明细行是否整行填充（模拟斑马纹）；
+    detail_bold_col > 0 时明细该列加粗（模拟金额列加粗）。"""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    for i, h in enumerate(["类别", "项目", "单价", "数量", "金额"], 1):
+        c = ws.cell(row=1, column=i, value=h)
+        if header_styled:
+            c.font = Font(bold=True)
+            c.fill = PatternFill(fill_type="solid", start_color="4472C4", end_color="4472C4")
+    for r, row in enumerate([["住宿", "酒店A", 100, 2, 200],
+                             ["门票", "景点B", 50, 3, 150],
+                             ["餐饮", "午餐C", 30, 3, 90]], start=2):
+        for i, v in enumerate(row, 1):
+            c = ws.cell(row=r, column=i, value=v)
+            if detail_fills[r - 2]:
+                c.fill = PatternFill(fill_type="solid", start_color="FFF2CC", end_color="FFF2CC")
+            if i == detail_bold_col:
+                c.font = Font(bold=True)
+    ws["A5"] = "合计"
+    ws["E5"] = 440
+    wb.save(str(path))
+    return path
+
+
+def test_infer_detail_region_zebra_fill_not_truncated(tmp_path):
+    """带样式明细（第 2 行起斑马纹填充）不得被误判为合计行而截断明细区。
+
+    修复前 _row_is_total_or_styled 对"命中列带样式"一票否决，R3 带填充即 break，
+    推断成 (2,2)（K=1），R3-R4 样例残留静默留在输出且 _verify_render 拦不住。
+    """
+    from src.tools.excel.excel_template_ai import read_sample_grid, _infer_detail_region, ColumnBinding
+    p = _build_styled_detail_sample(tmp_path / "zebra.xlsx", header_styled=True,
+                                    detail_fills=[False, True, True])
+    grid = read_sample_grid(str(p))
+    cols = [ColumnBinding(col=i) for i in range(1, 6)]
+    assert _infer_detail_region(grid, cols) == (2, 4)
+
+
+def test_infer_detail_region_amount_bold_not_truncated(tmp_path):
+    """明细金额列加粗（全列有值）不得被当合计行截断 → 正确推断 (2,4)"""
+    from src.tools.excel.excel_template_ai import read_sample_grid, _infer_detail_region, ColumnBinding
+    p = _build_styled_detail_sample(tmp_path / "bold.xlsx", header_styled=True,
+                                    detail_fills=[False, False, False], detail_bold_col=5)
+    grid = read_sample_grid(str(p))
+    cols = [ColumnBinding(col=i) for i in range(1, 6)]
+    assert _infer_detail_region(grid, cols) == (2, 4)
+
+
+def test_infer_detail_region_unstyled_header_styled_detail_fails(tmp_path):
+    """表头无样式 + 明细带样式（样式化表格表头却无样式 → 置信不足）→ (0,0) fail-loud。
+
+    修复前会把明细第一行选为表头，明细区整体错位、样例残留静默留在输出；
+    现在低置信场景保持 fail-loud，不输出错误结果。
+    """
+    from src.tools.excel.excel_template_ai import read_sample_grid, _infer_detail_region, ColumnBinding
+    p = _build_styled_detail_sample(tmp_path / "unstyled_hdr.xlsx", header_styled=False,
+                                    detail_fills=[False, True, True])
+    grid = read_sample_grid(str(p))
+    cols = [ColumnBinding(col=i) for i in range(1, 6)]
+    assert _infer_detail_region(grid, cols) == (0, 0)
 
 
 def test_analyze_structure_rejects_bad_json(sample_path):
