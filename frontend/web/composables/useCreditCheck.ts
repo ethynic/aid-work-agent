@@ -16,7 +16,7 @@ import { useToast } from 'vue-toastification'
 import { getTenantBalance, type BalanceInfo } from '@/api/billing'
 import { useTenantAuth } from './useTenantAuth'
 
-// 当天提醒去重 key 前缀，完整 key: `credit_low_warn_{userId}_{YYYY-MM-DD}`
+// 当天提醒去重 key 前缀，完整 key: `credit_low_warn_{tenantId}_{userId}_{YYYY-MM-DD}`（含租户，避免平台管理员跨租户互斥）
 const LOW_WARN_KEY_PREFIX = 'credit_low_warn_'
 
 export type CreditCheckAction = 'login' | 'newSession' | 'sendMessage'
@@ -30,23 +30,23 @@ export interface CreditCheckResult {
   reason?: string
 }
 
-function getTodayKey(userId: string): string {
+function getTodayKey(tenantId: string, userId: string): string {
   const now = new Date()
   const ymd = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
-  return `${LOW_WARN_KEY_PREFIX}${userId}_${ymd}`
+  return `${LOW_WARN_KEY_PREFIX}${tenantId}_${userId}_${ymd}`
 }
 
-function hasWarnedToday(userId: string): boolean {
+function hasWarnedToday(tenantId: string, userId: string): boolean {
   try {
-    return localStorage.getItem(getTodayKey(userId)) === '1'
+    return localStorage.getItem(getTodayKey(tenantId, userId)) === '1'
   } catch {
     return false
   }
 }
 
-function markWarnedToday(userId: string): void {
+function markWarnedToday(tenantId: string, userId: string): void {
   try {
-    localStorage.setItem(getTodayKey(userId), '1')
+    localStorage.setItem(getTodayKey(tenantId, userId), '1')
   } catch {
     // localStorage 不可用时静默失败，不影响主流程
   }
@@ -54,7 +54,7 @@ function markWarnedToday(userId: string): void {
 
 export function useCreditCheck() {
   const toast = useToast()
-  const { admin } = useTenantAuth()
+  const { admin, tenant, getCurrentTenantId } = useTenantAuth()
 
   /**
    * 在关键动作前检查积分余额
@@ -71,8 +71,9 @@ export function useCreditCheck() {
    * @param action 触发场景，决定余额 ≤ 0 时是否真正阻断
    */
   async function checkCreditBeforeAction(action: CreditCheckAction): Promise<CreditCheckResult> {
-    // 平台管理员无租户属性，跳过余额检查（在 /portal 路径下代管理时也无 X-Tenant-Id）
-    if (admin.value?.role === 'platform_admin') {
+    // 平台管理员仅在无租户上下文时跳过（如 /portal 平台管理后台）；
+    // 在租户前台 /t/{tenant_id} 代管场景下，X-Tenant-Id 已注入，需继续检查对应租户余额
+    if (admin.value?.role === 'platform_admin' && !getCurrentTenantId()) {
       return { allowed: true, balance: null, reason: 'platform_admin_skipped' }
     }
 
@@ -92,6 +93,7 @@ export function useCreditCheck() {
 
     const creditBalance = balance.credit_balance ?? 0
     const userId = admin.value?.user_id || 'anonymous'
+    const tenantId = tenant.value?.tenant_id || 'unknown'
 
     // 余额耗尽：sendMessage / newSession 阻断，login 仅提醒
     if (creditBalance <= 0) {
@@ -105,13 +107,13 @@ export function useCreditCheck() {
       return { allowed: true, balance, reason: 'no_credit_warned' }
     }
 
-    // 待续费提醒（余额不足 7 天用量）：提示续费，当天去重
+    // 待续费提醒（余额不足 7 天用量）：提示续费，当天按租户+用户去重
     if (balance.renewal_pending) {
-      if (!hasWarnedToday(userId)) {
+      if (!hasWarnedToday(tenantId, userId)) {
         const estimatedDays = balance.estimated_days_left ?? -1
         const daysText = estimatedDays < 0 ? '暂无数据' : `${estimatedDays} 天`
         toast.success(`积分余额预计可用 ${daysText}，即将耗尽，请及时续费`)
-        markWarnedToday(userId)
+        markWarnedToday(tenantId, userId)
       }
       return { allowed: true, balance, reason: 'renewal_pending_warned' }
     }

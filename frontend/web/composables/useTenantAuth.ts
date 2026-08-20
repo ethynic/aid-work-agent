@@ -262,6 +262,7 @@ export function useTenantAuth() {
     init,
     setLogin,
     logout,
+    getCurrentTenantId,
     getAuthHeader
   }
 }
