@@ -20,6 +20,7 @@ import {
 } from '@/api/session'
 import { useDemoAuth } from './useDemoAuth'
 import { useTenantAuth } from './useTenantAuth'
+import { useCreditCheck } from './useCreditCheck'
 
 const sessions = ref<ChatSession[]>([])
 const currentSessionId = ref<string | null>(null)
@@ -116,7 +117,6 @@ export function useSession() {
     // 余额检查：仅在租户前台模式下生效，余额 ≤ 0 阻断创建会话
     if (window.location.pathname.startsWith('/t/')) {
       try {
-        const { useCreditCheck } = await import('./useCreditCheck')
         const { checkCreditBeforeAction } = useCreditCheck()
         const creditCheck = await checkCreditBeforeAction('newSession')
         if (!creditCheck.allowed) {

@@ -11,6 +11,7 @@ import { ref, computed } from 'vue'
 import { adminLogout as apiLogout } from '@/api/saasTenant'
 import { getTenantScopedKey, type SaasBaseKey } from '@/api/tenantStorage'
 import { credentialGet, credentialRemove, credentialSet } from '@/platform/credentialStore'
+import { useCreditCheck } from './useCreditCheck'
 
 export interface TenantAdmin {
   user_id: string
@@ -194,15 +195,9 @@ export function useTenantAuth() {
     // 登录成功后触发余额检查（仅提醒不阻断）
     // 平台管理员无租户属性，由 useCreditCheck 内部跳过（reason=platform_admin_skipped）
     // 异步触发，不阻塞登录主流程
-    import('./useCreditCheck').then(({ useCreditCheck }) => {
-      try {
-        const { checkCreditBeforeAction } = useCreditCheck()
-        checkCreditBeforeAction('login').catch((e) => {
-          console.warn('[useTenantAuth] 登录后余额检查失败:', e)
-        })
-      } catch (e) {
-        console.warn('[useTenantAuth] 余额检查初始化失败:', e)
-      }
+    const { checkCreditBeforeAction } = useCreditCheck()
+    checkCreditBeforeAction('login').catch((e) => {
+      console.warn('[useTenantAuth] 登录后余额检查失败:', e)
     })
   }
 
