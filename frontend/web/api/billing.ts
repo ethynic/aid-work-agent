@@ -255,6 +255,10 @@ export interface DailyUsageDetailItem {
   /** 文本模型（usage_breakdown.chat.model，仅平台管理员可见） */
   model?: string
   credit_cost: number
+  /** 渠道会话展示名（wecom_kf 为客服账号名，其它渠道为会话/群 id，web 端为 null） */
+  channel_label?: string
+  channel_chat_id?: string
+  channel_type?: string
   created_at: string
 }
 

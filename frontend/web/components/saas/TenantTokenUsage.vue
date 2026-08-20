@@ -103,6 +103,9 @@
               <template #session_title="{ row }">
                 <span :title="row.session_title">{{ row.session_title }}</span>
               </template>
+              <template #channel_label="{ row }">
+                <span :title="row.channel_label || ''">{{ row.channel_label || '-' }}</span>
+              </template>
               <template #user_message="{ row }">
                 <span :title="row.user_message">{{ truncateText(row.user_message) }}</span>
               </template>
@@ -313,6 +316,7 @@ const detailColumns = computed(() => {
     { key: 'user_message', label: '用户消息', width: '220px' },
     { key: 'assistant_message', label: '智能体回复', width: '220px' },
     { key: 'user_display', label: '用户', width: '200px' },
+    { key: 'channel_label', label: '渠道会话', width: '150px' },
     { key: 'source_type', label: '来源', width: '120px' },
   ]
   if (isPlatformAdmin.value) {

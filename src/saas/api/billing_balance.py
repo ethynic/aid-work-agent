@@ -17,6 +17,7 @@ from loguru import logger
 
 from src.config.settings import settings
 from src.saas.api.tenant_auth import require_admin, sanitize_error_info
+from src.saas.db.channel_config_db import ChannelConfigDB
 from src.saas.db.tenant_db import TenantDB
 from src.saas.services.renewal import compute_renewal_status
 from src.db.models import TenantRechargesDB
@@ -286,6 +287,8 @@ async def get_daily_usage_detail(
                     cr.credit_cost,
                     cr.model,
                     cr.usage_breakdown,
+                    chs.channel_chat_id,
+                    chs.channel_type,
                     cr.created_at
                 FROM chat_records cr
                 LEFT JOIN users u ON u.user_id = cr.user_id
@@ -324,6 +327,8 @@ async def get_daily_usage_detail(
                         user_display = main_name
                 else:
                     user_display = main_name
+                channel_chat_id = r.get("channel_chat_id")
+                channel_type = r.get("channel_type")
                 items.append({
                     "record_id": r.get("record_id"),
                     "session_id": r.get("session_id"),
@@ -333,6 +338,9 @@ async def get_daily_usage_detail(
                     "user_message": r.get("user_message") or "",
                     "assistant_message": r.get("assistant_message") or "",
                     "credit_cost": float(r.get("credit_cost") or 0),
+                    "channel_label": _resolve_channel_label(tenant_id, channel_type, channel_chat_id),
+                    "channel_chat_id": channel_chat_id,
+                    "channel_type": channel_type,
                     "created_at": r.get("created_at").strftime("%Y-%m-%d %H:%M:%S")
                         if r.get("created_at") else None,
                 })
@@ -364,6 +372,29 @@ async def get_daily_usage_detail(
 
 
 # ============== 辅助函数 ==============
+
+def _resolve_channel_label(tenant_id: str, channel_type: str, channel_chat_id: str) -> Optional[str]:
+    """渠道会话展示名解析（通用，不硬编码 wecom_kf）。
+
+    channel_chat_id 为空返回 None（前端显示 "-"）；wecom_kf 渠道反查客服账号名称，
+    未匹配回退显示 channel_chat_id 原始值；其它渠道暂直接返回 channel_chat_id，
+    将来各渠道需展示群名/会话名时在此函数扩展分支。
+    """
+    if not channel_chat_id:
+        return None
+    if channel_type == "wecom_kf":
+        try:
+            for cfg in ChannelConfigDB.list_by_tenant(tenant_id, "wecom_kf"):
+                for kf in cfg.get("config", {}).get("kf_account", []):
+                    if kf.get("open_kfid") == channel_chat_id:
+                        return kf.get("name") or channel_chat_id
+        except Exception as e:
+            logger.warning(
+                f"[billing] 客服账号反查失败: tenant={tenant_id}, "
+                f"open_kfid={channel_chat_id}, error={e}"
+            )
+    return channel_chat_id
+
 
 def _parse_breakdown_items(breakdown) -> list:
     """把 chat_records.usage_breakdown JSON 解析为 7 分项对账结构（仅平台管理员明细弹框使用）。

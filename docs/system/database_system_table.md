@@ -145,7 +145,7 @@
 | 维度 | 网页端 | 渠道端 |
 |------|--------|--------|
 | 存储表 | `chat_sessions` + `chat_messages` | `channel_sessions` + `channel_messages` |
-| 会话管理 | 用户可点击"新会话"按钮创建多个会话 | 无可操作按钮，按 `(tenant_id, channel_type, channel_user_id, subagent_id)` 四元组唯一确定，同一渠道同一子智能体下每个渠道用户只有一个会话 |
+| 会话管理 | 用户可点击"新会话"按钮创建多个会话 | 无可操作按钮，按 `(tenant_id, channel_type, channel_user_id, subagent_id, channel_chat_id)` 唯一确定。`channel_chat_id` 为空时退化为前四元组（wecom/dingtalk/feishu 等单会话场景）；非空时同一渠道用户可在不同客服账号/群下各自独立会话（如 wecom_kf 不同客服账号 open_kfid） |
 | 生命周期 | 用户主动创建/切换/删除 | 首次发消息时自动创建，无用户主动删除入口（代码层面支持删除） |
 | 用途 | 前端展示聊天历史 + 构建对话上下文 | 同上，但需额外记录渠道特有字段（渠道类型、渠道用户ID等） |
 
@@ -156,10 +156,13 @@
              ──→ 点击"新会话" ──→ 会话B（新的多轮对话）
              ──→ 删除会话A ──→ chat_sessions/chat_messages 记录删除
 
-渠道端：渠道用户 ──→ 首次发消息 ──→ 自动创建会话（唯一，按四元组确定）
-                  ──→ 持续对话 ──→ 所有消息追加到同一会话
+渠道端：渠道用户 ──→ 首次发消息 ──→ 自动创建会话（按五元组确定，channel_chat_id 非空时纳入唯一性）
+                  ──→ 持续对话 ──→ 消息追加到该渠道会话
+                  ──→ 换客服账号/群（channel_chat_id 变化）──→ 新建独立会话（独立上下文与计费归属）
                   ──→ 无可操作按钮，无用户主动删除入口
 ```
+
+> **多会话场景说明**：同一租户、同一渠道、同一子智能体下的同一渠道用户，可因 `channel_chat_id`（wecom_kf 为客服账号 `open_kfid`，其它渠道将来为会话/群 id）不同而建立多个会话。会话按 `channel_chat_id` 拆分后，各账号/群拥有独立上下文和独立积分计费归属，避免不同客服账号间的消费互相串扰。
 
 **`chat_records` 与两套会话的关系**：
 
@@ -185,9 +188,9 @@ chat_records（计费记录，独立存储，不随会话删除）
 企业微信、钉钉、飞书等第三方渠道的会话管理。与网页端会话（`chat_sessions`）的核心差异见 [3.5 节](#35-网页会话-vs-渠道会话)。
 
 **关键字段**：
-- `channel_type` — 渠道类型（`wecom` / `dingtalk` / `feishu`）
+- `channel_type` — 渠道类型（`wecom` / `wecom_kf` / `dingtalk` / `feishu`）
 - `channel_user_id` — 渠道侧的用户标识
-- `channel_chat_id` — 渠道侧的聊天标识
+- `channel_chat_id` — 渠道侧的聊天标识，**通用字段**：wecom_kf 渠道为客服账号 `open_kfid`，其它渠道为会话/群 id（dingtalk/feishu/wecom 群等）。为空时（单会话场景）不参与会话唯一性；非空时纳入 session_id 生成与会话查找，使同一渠道用户在不同账号/群下各自独立会话
 
 ### 4.2 `channel_messages` — 渠道消息表
 
@@ -573,7 +576,7 @@ tenants（租户）
 ├── tenant_channel_configs（渠道配置）
 ├── user_agent_permissions（用户授权）
 │
-├── channel_sessions（渠道会话，一用户一会话） ──→ channel_messages（渠道消息）
+├── channel_sessions（渠道会话，按 channel_chat_id 可多会话） ──→ channel_messages（渠道消息）
 │                                                 └── chat_records（计费记录，同上）  ← 独立存储
 │
 ├── knowledge_categories（知识分类） ──→ documents（文档）

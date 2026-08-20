@@ -118,17 +118,20 @@ def mock_db():
                         channel_type=row["channel_type"],
                         channel_user_id=row["channel_user_id"],
                         subagent_id=row.get("subagent_id", ""),
+                        channel_chat_id=row.get("channel_chat_id") or "",
                     )]
                 cursor.rowcount = 1 if cursor._fetch_rows else 0
 
             elif "select * from channel_sessions where tenant_id" in sql_lower:
                 tid, ctype, cuid = params[0], params[1], params[2]
                 said = params[3] if len(params) > 3 else ""
+                chat_id = params[4] if len(params) > 4 else ""
                 for row in memory_store["sessions"].values():
                     if (row.get("tenant_id") == tid and
                         row["channel_type"] == ctype and
                         row["channel_user_id"] == cuid and
-                        row.get("subagent_id", "") == said):
+                        row.get("subagent_id", "") == said and
+                        (row.get("channel_chat_id") or "") == chat_id):
                         cursor._fetch_rows = [row]
                         break
 
@@ -397,6 +400,63 @@ class TestSubagentIsolation:
             subagent_id="travel-agent",
         )
         assert session["subagent_id"] == "travel-agent"
+
+
+class TestChannelChatIdIsolation:
+    """渠道会话/群ID（channel_chat_id）隔离测试。
+
+    wecom_kf 场景：同一微信用户可从不同客服账号（open_kfid）进入，每个账号应
+    独立会话（独立上下文、独立积分），避免复用第一个账号的会话导致积分归属错乱。
+    channel_chat_id 为空时保持旧行为不变（wecom/dingtalk/feishu 不受影响）。
+    """
+
+    def test_different_channel_chat_id_get_different_sessions(self, session_manager, mock_db):
+        """同一用户不同 channel_chat_id 获得不同会话（不复用第一个账号的会话）"""
+        s1 = session_manager.get_or_create_session(
+            channel_type="wecom_kf",
+            channel_user_id="wx_user_001",
+            tenant_id=TEST_TENANT,
+            subagent_id="sales-assistant",
+            channel_chat_id="open_kfid_A",
+        )
+        s2 = session_manager.get_or_create_session(
+            channel_type="wecom_kf",
+            channel_user_id="wx_user_001",
+            tenant_id=TEST_TENANT,
+            subagent_id="sales-assistant",
+            channel_chat_id="open_kfid_B",
+        )
+        assert s1["session_id"] != s2["session_id"]
+        assert "open_kfid_A" in s1["session_id"]
+        assert "open_kfid_B" in s2["session_id"]
+        assert s1["channel_chat_id"] == "open_kfid_A"
+        assert s2["channel_chat_id"] == "open_kfid_B"
+
+    def test_same_channel_chat_id_gets_same_session(self, session_manager, mock_db):
+        """同一用户同一 channel_chat_id 重复调用获得相同会话"""
+        s1 = session_manager.get_or_create_session(
+            channel_type="wecom_kf",
+            channel_user_id="wx_user_001",
+            tenant_id=TEST_TENANT,
+            subagent_id="sales-assistant",
+            channel_chat_id="open_kfid_A",
+        )
+        s2 = session_manager.get_or_create_session(
+            channel_type="wecom_kf",
+            channel_user_id="wx_user_001",
+            tenant_id=TEST_TENANT,
+            subagent_id="sales-assistant",
+            channel_chat_id="open_kfid_A",
+        )
+        assert s1["session_id"] == s2["session_id"]
+        assert s1["channel_chat_id"] == s2["channel_chat_id"] == "open_kfid_A"
+
+    def test_session_id_format_with_chat_id(self, session_manager, mock_db):
+        """channel_chat_id 非空时 session_id 含 chat_id（位于 channel_user_id 前）"""
+        sid = session_manager._generate_session_id(
+            "mytenant", "wecom_kf", "user001", "sales-assistant", "open_kfid_x"
+        )
+        assert sid == "mytenant_wecom_kf_open_kfid_x_user001_sales-assistant"
 
 
 class TestIsChannelSession:

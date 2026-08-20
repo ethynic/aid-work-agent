@@ -51,6 +51,11 @@ def temp_tenant_for_detail():
                 "DELETE FROM channel_sessions WHERE tenant_id = %s AND channel_user_id LIKE 'detail_test_%%'",
                 (tenant_id,),
             )
+            # 清理 wecom_kf 客服配置测试数据
+            cursor.execute(
+                "DELETE FROM tenant_channel_configs WHERE tenant_id = %s AND config_id LIKE 'cfg_%%'",
+                (tenant_id,),
+            )
             conn.commit()
     except Exception:
         pass
@@ -128,8 +133,9 @@ def _insert_channel_session(
     channel_user_id: str | None = None,
     title: str | None = None,
     user_id: str | None = None,
+    channel_chat_id: str | None = None,
 ):
-    """直接 SQL 写入 channel_sessions，用于测试渠道会话标题 JOIN"""
+    """直接 SQL 写入 channel_sessions，用于测试渠道会话标题 JOIN / 渠道会话 label"""
     from src.db.database import get_db_connection
 
     if channel_user_id is None:
@@ -142,13 +148,33 @@ def _insert_channel_session(
         cursor.execute(
             """
             INSERT INTO channel_sessions
-            (session_id, tenant_id, channel_type, channel_user_id, user_id, title)
-            VALUES (%s, %s, %s, %s, %s, %s)
+            (session_id, tenant_id, channel_type, channel_user_id, user_id, title, channel_chat_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             """,
-            (session_id, tenant_id, channel_type, channel_user_id, user_id, title),
+            (session_id, tenant_id, channel_type, channel_user_id, user_id, title, channel_chat_id),
         )
         conn.commit()
     return channel_user_id
+
+
+def _insert_wecom_kf_config(tenant_id: str, kf_accounts: list[dict]):
+    """直接 SQL 写入 tenant_channel_configs（wecom_kf 渠道），用于客服账号名反查"""
+    from src.db.database import get_db_connection
+
+    config_id = f"cfg_{uuid.uuid4().hex[:12]}"
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO tenant_channel_configs
+            (config_id, tenant_id, channel_type, name, config, verified)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            """,
+            (config_id, tenant_id, "wecom_kf", "测试客服配置",
+             json.dumps({"kf_account": kf_accounts}, ensure_ascii=False), 1),
+        )
+        conn.commit()
+    return config_id
 
 
 class TestDailyUsageDetailAPI:
@@ -732,3 +758,173 @@ class TestDailyUsageDetailAPI:
         assert items[0]["session_title"] == expected_title, \
             f"渠道会话标题应从 channel_sessions 取，期望 '{expected_title}'，实际 '{items[0]['session_title']}'"
         assert items[0]["source_type"] == "wecom_kf"
+
+    def test_wecom_kf_channel_label_resolves_kf_account_name(self, temp_tenant_for_detail):
+        """场景 8：wecom_kf 会话 + channel_chat_id -> channel_label 反查客服账号名
+
+        明细返回 channel_chat_id / channel_type / channel_label 三字段；
+        存在匹配 open_kfid 的客服账号配置时，channel_label 为账号名。
+        """
+        from src.saas.api import billing_balance
+
+        tenant_id = temp_tenant_for_detail
+        today = datetime.now().strftime("%Y-%m-%d")
+        session_id = f"sess_{uuid.uuid4().hex[:8]}"
+        open_kfid = f"open_kfid_test_{uuid.uuid4().hex[:6]}"
+
+        # 1. 写入 wecom_kf 客服配置（含该 open_kfid 的客服账号）
+        _insert_wecom_kf_config(tenant_id, [
+            {"open_kfid": "open_kfid_other", "name": "其他老师"},
+            {"open_kfid": open_kfid, "name": "国腾-曹老师"},
+        ])
+
+        # 2. 写入 wecom_kf 渠道会话（channel_chat_id=open_kfid）
+        _insert_channel_session(
+            tenant_id=tenant_id,
+            session_id=session_id,
+            channel_type="wecom_kf",
+            title="国腾-曹老师的企微会话",
+            channel_chat_id=open_kfid,
+        )
+
+        # 3. 写入对应 chat_records
+        _insert_chat_record(
+            tenant_id=tenant_id,
+            user_id=f"detail_test_{uuid.uuid4().hex[:6]}",
+            session_id=session_id,
+            credit_cost=3,
+            source_type="wecom_kf",
+        )
+
+        def fake_require_admin(request):
+            return {
+                "user_id": "platform_admin_xxx",
+                "role": "platform_admin",
+                "tenant_id": tenant_id,
+            }
+
+        class FakeRequest:
+            pass
+
+        with patch("src.saas.api.billing_balance.require_admin", fake_require_admin), \
+             patch("src.saas.api.billing_balance.settings") as mock_settings:
+            mock_settings.saas.enabled = True
+
+            import asyncio
+            response = asyncio.get_event_loop().run_until_complete(
+                billing_balance.get_daily_usage_detail(
+                    FakeRequest(),
+                    date=today,
+                    page=1,
+                    page_size=20,
+                )
+            )
+
+        assert response["success"] is True
+        items = [it for it in response["items"] if it["session_id"] == session_id]
+        assert len(items) == 1
+        assert items[0]["channel_type"] == "wecom_kf"
+        assert items[0]["channel_chat_id"] == open_kfid
+        assert items[0]["channel_label"] == "国腾-曹老师", \
+            f"应从客服配置反查账号名，实际 '{items[0]['channel_label']}'"
+
+    def test_wecom_kf_channel_label_fallback_to_chat_id(self, temp_tenant_for_detail):
+        """场景 8b：wecom_kf 会话 + channel_chat_id 但无匹配配置 -> channel_label 回退原始值"""
+        from src.saas.api import billing_balance
+
+        tenant_id = temp_tenant_for_detail
+        today = datetime.now().strftime("%Y-%m-%d")
+        session_id = f"sess_{uuid.uuid4().hex[:8]}"
+        open_kfid = f"open_kfid_unknown_{uuid.uuid4().hex[:6]}"
+
+        _insert_channel_session(
+            tenant_id=tenant_id,
+            session_id=session_id,
+            channel_type="wecom_kf",
+            title="未配置客服的会话",
+            channel_chat_id=open_kfid,
+        )
+        _insert_chat_record(
+            tenant_id=tenant_id,
+            user_id=f"detail_test_{uuid.uuid4().hex[:6]}",
+            session_id=session_id,
+            credit_cost=2,
+            source_type="wecom_kf",
+        )
+
+        def fake_require_admin(request):
+            return {
+                "user_id": "platform_admin_xxx",
+                "role": "platform_admin",
+                "tenant_id": tenant_id,
+            }
+
+        class FakeRequest:
+            pass
+
+        with patch("src.saas.api.billing_balance.require_admin", fake_require_admin), \
+             patch("src.saas.api.billing_balance.settings") as mock_settings:
+            mock_settings.saas.enabled = True
+
+            import asyncio
+            response = asyncio.get_event_loop().run_until_complete(
+                billing_balance.get_daily_usage_detail(
+                    FakeRequest(),
+                    date=today,
+                    page=1,
+                    page_size=20,
+                )
+            )
+
+        assert response["success"] is True
+        items = [it for it in response["items"] if it["session_id"] == session_id]
+        assert len(items) == 1
+        assert items[0]["channel_chat_id"] == open_kfid
+        assert items[0]["channel_label"] == open_kfid, \
+            "未匹配客服配置时应回退显示 channel_chat_id 原始值"
+
+    def test_web_session_channel_label_none(self, temp_tenant_for_detail):
+        """场景 8c：web 会话（无 channel_sessions）-> channel_label 为 None（前端显示 "-"）"""
+        from src.saas.api import billing_balance
+
+        tenant_id = temp_tenant_for_detail
+        today = datetime.now().strftime("%Y-%m-%d")
+
+        _insert_chat_record(
+            tenant_id=tenant_id,
+            user_id=f"detail_test_{uuid.uuid4().hex[:6]}",
+            session_id=f"web_{uuid.uuid4().hex[:8]}",
+            credit_cost=1,
+            source_type="chat",
+        )
+
+        def fake_require_admin(request):
+            return {
+                "user_id": "platform_admin_xxx",
+                "role": "platform_admin",
+                "tenant_id": tenant_id,
+            }
+
+        class FakeRequest:
+            pass
+
+        with patch("src.saas.api.billing_balance.require_admin", fake_require_admin), \
+             patch("src.saas.api.billing_balance.settings") as mock_settings:
+            mock_settings.saas.enabled = True
+
+            import asyncio
+            response = asyncio.get_event_loop().run_until_complete(
+                billing_balance.get_daily_usage_detail(
+                    FakeRequest(),
+                    date=today,
+                    page=1,
+                    page_size=20,
+                )
+            )
+
+        assert response["success"] is True
+        # web 会话记录：channel_chat_id 为空 -> channel_label None
+        for it in response["items"]:
+            if it["source_type"] == "chat":
+                assert it["channel_chat_id"] is None
+                assert it["channel_label"] is None, "web 会话 channel_label 应为 None（前端显示 -）"

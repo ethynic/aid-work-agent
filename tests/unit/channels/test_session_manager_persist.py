@@ -268,7 +268,7 @@ class TestProcessAndPersist:
         ctx.__exit__.return_value = False
 
         with patch("src.channels.session.get_db_connection", return_value=ctx), \
-                patch("src.channels.session.delete_cached") as delete_cache:
+                patch("src.channels.session.delete_cached_pattern") as delete_cache:
             migrated = manager.rebind_existing_session_channel_user(
                 tenant_id="t1",
                 channel_type="wecom_personal_rpa",
