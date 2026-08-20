@@ -14,3 +14,9 @@
 MSG_EXPIRED = "本服务已到期，如需继续使用请联系工作人员开通。"
 MSG_CREDIT_EXHAUSTED = "本服务积分已用完，如需继续使用请联系工作人员充值。"
 
+# ============ 处理超时等待提示 ============
+# 智能体处理微信侧用户消息超过 N 秒未回复时，先发送提示语。
+# 延迟秒数与提示语可由渠道配置页（config.waiting_indicator）覆盖，此处为兜底默认值。
+DEFAULT_WAITING_INDICATOR_MESSAGE = "我正在处理您的问题，可能需要几分钟，请稍等下。"
+DEFAULT_WAITING_INDICATOR_DELAY_SECONDS = 15.0
+

@@ -239,6 +239,28 @@
           </p>
         </div>
 
+        <!-- 微信客服特有：处理超时等待提示（渠道级，所有客服账号统一生效） -->
+        <div v-if="form.channel_type === 'wecom_kf'" class="mt-3 pt-3 border-t border-default">
+          <div class="bg-canvas rounded-lg p-3 space-y-3">
+            <label class="flex items-center gap-2 text-sm text-default cursor-pointer">
+              <input type="checkbox" v-model="wi.enabled" class="w-4 h-4 rounded border-primary-200 text-primary-600 focus:ring-primary-500" />
+              <span class="font-medium">处理超时等待提示</span>
+              <span class="text-xs text-muted">智能体处理超过 N 秒未回复时，先发送提示语</span>
+            </label>
+            <div v-if="wi.enabled" class="grid grid-cols-1 md:grid-cols-2 gap-3 pl-6">
+              <div>
+                <label class="text-sm text-muted mb-1 block">超时秒数</label>
+                <BaseInput v-model="wi.delay_seconds" type="number" min="1" placeholder="15" />
+                <p class="mt-1 text-xs text-muted">处理超过该秒数未回复时，向用户发送提示语</p>
+              </div>
+              <div>
+                <label class="text-sm text-muted mb-1 block">提示语</label>
+                <BaseInput v-model="wi.message" placeholder="我正在处理您的问题，可能需要几分钟，请稍等下。" />
+              </div>
+            </div>
+          </div>
+        </div>
+
         <!-- 回调地址提示 -->
         <div v-if="tenant" class="mt-3 bg-primary-50 border border-primary-200 rounded-lg p-3">
           <p class="text-sm font-medium text-primary-800 mb-1">回调地址</p>
@@ -427,7 +449,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, inject } from 'vue'
+import { ref, reactive, computed, onMounted, inject } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useToast } from 'vue-toastification'
 import AppHeader from '@/components/AppHeader.vue'
@@ -736,6 +758,25 @@ const form = ref<{ channel_type: string; name: string; config: Record<string, an
   subagent_type: ''
 })
 
+// ==================== 微信客服处理超时等待提示（渠道级配置） ====================
+const DEFAULT_WAITING_MESSAGE = '我正在处理您的问题，可能需要几分钟，请稍等下。'
+// delay_seconds 用 string 存储（BaseInput modelValue 为 string），提交时转 number
+const wi = reactive({ enabled: true, delay_seconds: '15', message: '' })
+
+function resetWaitingIndicator() {
+  wi.enabled = true
+  wi.delay_seconds = '15'
+  wi.message = ''
+}
+
+function loadWaitingIndicator(cfg: Record<string, any> | undefined) {
+  const w = cfg || {}
+  wi.enabled = w.enabled !== false
+  const d = Number(w.delay_seconds)
+  wi.delay_seconds = Number.isFinite(d) && d > 0 ? String(d) : '15'
+  wi.message = String(w.message || '').trim() || ''
+}
+
 const isFullscreen = ref(false)
 const formInitialSnapshot = ref<Record<string, any>>({})
 
@@ -917,6 +958,7 @@ function openAddChannel() {
   form.value = { channel_type: 'wecom', name: '', config: {}, subagent_type: '' }
   formError.value = ''
   formInitialSnapshot.value = JSON.parse(JSON.stringify(form.value))
+  resetWaitingIndicator()
   isFullscreen.value = false
   showForm.value = true
 }
@@ -926,6 +968,7 @@ function editChannel(ch: any) {
   form.value = { channel_type: ch.channel_type, name: ch.name || '', config: { ...ch.config }, subagent_type: ch.subagent_type || '' }
   formError.value = ''
   formInitialSnapshot.value = JSON.parse(JSON.stringify(form.value))
+  loadWaitingIndicator(ch.config?.waiting_indicator)
   isFullscreen.value = false
   showForm.value = true
 }
@@ -987,6 +1030,16 @@ async function handleSubmit() {
     // 此处兜底防止用户通过 DevTools 改单选值提交 client）
     if (form.value.channel_type === 'wecom_personal_rpa') {
       payload.config.listen_mode = 'server'
+    }
+    // wecom_kf：写入处理超时等待提示（渠道级配置）
+    if (form.value.channel_type === 'wecom_kf') {
+      payload.config.waiting_indicator = wi.enabled
+        ? {
+            enabled: true,
+            delay_seconds: Number(wi.delay_seconds) > 0 ? Number(wi.delay_seconds) : 15,
+            message: wi.message || DEFAULT_WAITING_MESSAGE,
+          }
+        : { enabled: false }
     }
     if (editingId.value) {
       await updateChannel(editingId.value, payload as any)

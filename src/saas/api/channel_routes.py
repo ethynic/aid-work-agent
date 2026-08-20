@@ -34,7 +34,12 @@ from src.services.session_record import SessionRecordManager
 from src.core.storage import ensure_tenant_storage_dir, get_tenant_storage_path
 from src.core.temp_logger import tlog as _tlog
 from src.db.models import CustomerReferralDB
-from src.channels.wecom_kf.prompts import MSG_EXPIRED, MSG_CREDIT_EXHAUSTED
+from src.channels.wecom_kf.prompts import (
+    MSG_EXPIRED,
+    MSG_CREDIT_EXHAUSTED,
+    DEFAULT_WAITING_INDICATOR_MESSAGE,
+    DEFAULT_WAITING_INDICATOR_DELAY_SECONDS,
+)
 from src.saas.api.wecom_kf_account import resolve_scene
 
 
@@ -1582,6 +1587,44 @@ async def _is_kf_account_blocked(
     return False
 
 
+def _get_waiting_indicator_cfg(adapter) -> dict:
+    """读取渠道级 waiting_indicator 配置，返回 {delay_seconds, message}；未启用返回 {}。
+
+    配置存于 tenant_channel_configs.config.waiting_indicator（enabled/delay_seconds/message），
+    经 ChannelFactory 注入 adapter.waiting_indicator。字段缺省时回退默认常量。
+    """
+    wi = getattr(adapter, "waiting_indicator", None) or {}
+    if not wi.get("enabled", True):  # 未配置默认启用（开箱即用）
+        return {}
+    try:
+        delay = float(wi.get("delay_seconds", DEFAULT_WAITING_INDICATOR_DELAY_SECONDS))
+    except (TypeError, ValueError):
+        delay = DEFAULT_WAITING_INDICATOR_DELAY_SECONDS
+    if delay <= 0:
+        return {}
+    message = str(wi.get("message") or "").strip() or DEFAULT_WAITING_INDICATOR_MESSAGE
+    return {"delay_seconds": delay, "message": message}
+
+
+async def _process_with_waiting_indicator(adapter, ext_userid, cfg, coro):
+    """非取消式超时 watchdog：处理超过 cfg['delay_seconds'] 秒未完成时先发提示语，任务继续跑。
+
+    绝不能取消 coro —— session_queue 处理器持有 Redis 锁（watchdog 续期），
+    取消会穿透 try 泄漏锁/cancel 标志。用 shield 隔离取消，超时只发提示、不打断任务。
+    """
+    task = asyncio.create_task(coro)
+    try:
+        return await asyncio.wait_for(asyncio.shield(task), timeout=cfg["delay_seconds"])
+    except asyncio.TimeoutError:
+        try:
+            await adapter.send_waiting_indicator(ext_userid, cfg["message"])
+            _kf_tlog("等待提示已发送: user={user}", user=ext_userid)
+        except Exception as e:
+            logger.warning(f"[wecom_kf] 等待提示发送失败: {e}")
+        # 不取消 task；等其自然完成返回真实结果
+        return await task
+
+
 async def _process_tenant_wecom_kf_messages(
     tenant_id: str, config_id: str, open_kfid: str, adapter
 ) -> None:
@@ -2452,7 +2495,10 @@ async def _process_tenant_wecom_kf_messages(
                     user_metadata = {"msgid": msg_id, "msgtype": msgtype, "open_kfid": open_kfid}
 
                 try:
-                    result = await channel_session_manager.process_and_persist(
+                    # 处理超时等待提示：仅对真正走智能体的消息启用
+                    # （merged 场景 process 秒回不触发；watchdog 不取消任务，避免泄漏 Redis 锁）
+                    waiting_cfg = _get_waiting_indicator_cfg(adapter)
+                    process_call = channel_session_manager.process_and_persist(
                         session_id=session_id,
                         tenant_id=tenant_id,
                         user_content=user_content,
@@ -2467,6 +2513,12 @@ async def _process_tenant_wecom_kf_messages(
                         assistant_metadata=assistant_metadata,
                         send_response=send_response,
                     )
+                    if waiting_cfg:
+                        result = await _process_with_waiting_indicator(
+                            adapter, unified_msg.user_id, waiting_cfg, process_call
+                        )
+                    else:
+                        result = await process_call
                     _kf_tlog(
                         "process_and_persist完成: tenant={tenant}, session_id={session_id}, "
                         "status={status}, response_text_len={resp_len}, response_text={response_text}",

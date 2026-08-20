@@ -85,6 +85,9 @@ class WeComKfAdapter(ChannelAdapter):
         self._media_upload_dir: str = media_upload_dir
         self._tenant_id: str = ""
 
+        # 渠道级等待提示配置（config 顶层 waiting_indicator dict，经 ChannelFactory **config 注入，缺省空 dict）
+        self.waiting_indicator: Dict[str, Any] = kwargs.get("waiting_indicator") or {}
+
     @property
     def channel_type(self) -> str:
         return "wecom_kf"
