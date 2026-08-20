@@ -156,6 +156,11 @@ class SessionRecordService:
         # save() 直接返回 None，避免写入空 chat_record 噪声
         self.skip_save: bool = False
 
+        # 合并语义标记：merged_follower（被合并方）/ merged_owner（合并方）。
+        # 由 set_trace_merge_semantics 设置，save() 写入 usage_breakdown["merge"]，
+        # 供审计识别「token=0 仅含 ASR 计费」的合并跟随记录是正常现象而非计费丢失。
+        self.merge_semantics: Optional[Dict[str, str]] = None
+
     def create_progress_callback(self):
         """创建用于传递给Agent的progress_callback"""
         async def progress_callback(event: Dict[str, Any]):
@@ -287,7 +292,16 @@ class SessionRecordService:
         self.error_message = error_message
 
     def set_trace_merge_semantics(self, *, termination_reason=None, merge_role=None):
-        """同步更新内存和已落库 Trace metadata，不伪造 message_id。"""
+        """记录合并语义到内存（save() 写入 usage_breakdown）与 Trace metadata，不伪造 message_id。"""
+        metadata = {}
+        if termination_reason:
+            metadata["termination_reason"] = termination_reason
+        if merge_role:
+            metadata["merge_role"] = merge_role
+        # 内存标记不依赖 trace_collector：merged_follower 未走 agent 处理，
+        # trace_collector 恒为 None，此前直接 return 导致合并语义从未落库
+        self.merge_semantics = metadata if metadata else None
+
         collector = self.trace_collector
         if collector is None:
             return
@@ -296,11 +310,6 @@ class SessionRecordService:
         )
         try:
             from src.core.trace_persist import update_trace_metadata
-            metadata = {}
-            if termination_reason:
-                metadata["termination_reason"] = termination_reason
-            if merge_role:
-                metadata["merge_role"] = merge_role
             update_trace_metadata(collector.trace_id, metadata)
         except Exception as e:
             logger.debug(f"set_trace_merge_semantics persist failed: {e}")
@@ -424,6 +433,11 @@ class SessionRecordService:
                         "unit_price_per_call": asr_bd.get("unit_price_per_call"),
                         "usage_factor": asr_bd.get("usage_factor"),
                     })
+
+            # 合并语义标记（语音合并等场景）：merged_follower 记录 token 天然为 0，
+            # 仅含 ASR 等非 LLM 计费，标记便于审计/对账识别，避免误判为计费丢失
+            if self.merge_semantics:
+                usage_breakdown["merge"] = self.merge_semantics
 
             record = ChatRecordDB.create(
                 session_id=self.session_id,

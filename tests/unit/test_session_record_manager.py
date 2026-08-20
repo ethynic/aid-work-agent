@@ -42,6 +42,7 @@ def mock_chat_record_create():
             "total_token_count": kwargs.get("total_token_count") or 0,
             "prompt_tokens": kwargs.get("prompt_tokens") or 0,
             "completion_tokens": kwargs.get("completion_tokens") or 0,
+            "usage_breakdown": kwargs.get("usage_breakdown"),
         })
         return {"record_id": f"rec_{len(saved)}"}
 
@@ -130,6 +131,71 @@ class TestAsyncConcurrency:
         by_session = {s["session_id"]: s for s in mock_chat_record_create.saved}
         assert by_session["s1"]["asr_calls"] == 1
         assert by_session["s2"]["asr_calls"] == 2
+
+
+class TestMergeSemantics:
+    """语音合并场景：merged_follower / merged_owner 的 merge 语义必须落库到 usage_breakdown
+
+    背景：连续语音消息被 session_queue 合并，merged_follower 未走 agent 处理，
+    trace_collector 恒为 None。修复前 set_trace_merge_semantics 在
+    `if collector is None: return` 处直接返回，merge 语义从未落库，
+    导致审计无法区分「token=0 仅含 ASR 计费」的合并跟随记录是正常现象还是计费丢失。
+    """
+
+    def test_merge_follower_marker_saved_without_trace_collector(self, mock_chat_record_create):
+        """merged_follower（无 trace_collector）merge 语义仍须写入 usage_breakdown"""
+        record = SessionRecordManager.start_record(
+            session_id="sess_merge_follower",
+            user_id="u1",
+            user_message="[ASR识别结果] 有100个学生。",
+            tenant_id="t1",
+            source_type="wecom_kf",
+        )
+        # 真实场景：follower 的 ASR 识别已发生（按次计费），但无 LLM 调用（token=0）
+        record.add_asr_usage(calls=1)
+        record.set_trace_merge_semantics(
+            termination_reason="message_merged",
+            merge_role="merged_follower",
+        )
+        SessionRecordManager.end_record()
+
+        saved = mock_chat_record_create.saved[-1]
+        assert saved["session_id"] == "sess_merge_follower"
+        assert saved["asr_calls"] == 1
+        assert saved["total_token_count"] == 0
+        assert saved["usage_breakdown"]["merge"] == {
+            "termination_reason": "message_merged",
+            "merge_role": "merged_follower",
+        }
+
+    def test_merge_owner_marker_saved(self, mock_chat_record_create):
+        """merged_owner（合并方）记录也应带 merge 标记，且不影响 token 计费"""
+        record = SessionRecordManager.start_record(
+            session_id="sess_merge_owner",
+            user_id="u1",
+            user_message="[ASR识别结果] 去天眼。",
+            tenant_id="t1",
+            source_type="wecom_kf",
+        )
+        record.add_asr_usage(calls=1)
+        record.add_llm_usage({"prompt_tokens": 100, "completion_tokens": 10, "total_tokens": 110})
+        record.set_trace_merge_semantics(merge_role="merged_owner")
+        SessionRecordManager.end_record()
+
+        saved = mock_chat_record_create.saved[-1]
+        assert saved["total_token_count"] == 110
+        assert saved["asr_calls"] == 1
+        assert saved["usage_breakdown"]["merge"] == {"merge_role": "merged_owner"}
+
+    def test_no_merge_semantics_absent(self, mock_chat_record_create):
+        """未设置 merge 语义时 usage_breakdown 不含 merge 键"""
+        SessionRecordManager.start_record(
+            session_id="sess_normal", user_id="u1", user_message="正常消息", tenant_id="t1"
+        ).add_llm_usage({"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15})
+        SessionRecordManager.end_record()
+
+        saved = mock_chat_record_create.saved[-1]
+        assert "merge" not in (saved["usage_breakdown"] or {})
 
 
 class TestSyncCompatibility:
