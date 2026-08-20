@@ -207,8 +207,9 @@ class SubagentExecutor:
         if image_paths:
             logger.info(f"[SUBAGENT] image_paths: {image_paths}")
 
-        # 获取配置
-        config = self.registry.get(subagent_name)
+        # 获取配置（自定义智能体实时读库，确保跨 worker 配置一致）
+        from src.subagents.factory import AgentFactory
+        config = AgentFactory.get_runtime_config(self.registry, subagent_name)
         if not config:
             logger.error(f"[SUBAGENT] Subagent not found: {subagent_name}")
             return DelegationResponse(
