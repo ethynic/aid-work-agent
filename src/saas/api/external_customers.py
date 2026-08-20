@@ -81,6 +81,24 @@ async def list_external_users(
         page=page,
         page_size=page_size,
     )
+
+    # 客服账号名反查：wecom_kf 按 open_kfid 一次构建查找表（未匹配回退原始 id）
+    from src.saas.db.channel_config_db import ChannelConfigDB
+
+    kf_map = {}
+    for cfg in ChannelConfigDB.list_by_tenant(tenant_id, "wecom_kf"):
+        for kf in cfg.get("config", {}).get("kf_account", []):
+            open_kfid = kf.get("open_kfid")
+            if open_kfid:
+                kf_map.setdefault(open_kfid, kf.get("name") or open_kfid)
+
+    for u in result.get("users", []):
+        cid = u.get("channel_chat_id") or ""
+        if u.get("channel_type") == "wecom_kf" and cid:
+            u["kf_name"] = kf_map.get(cid, cid)
+        else:
+            u["kf_name"] = None
+
     return {"success": True, **result}
 
 
@@ -130,6 +148,8 @@ async def get_user_sessions(
     request: Request,
     user_id: str,
     instance_id: Optional[str] = None,
+    channel_type: Optional[str] = None,
+    channel_chat_id: Optional[str] = None,
     page: int = 1,
     page_size: int = 20,
 ):
@@ -138,6 +158,8 @@ async def get_user_sessions(
     Args:
         user_id: 用户ID
         instance_id: 数字员工实例ID筛选（可选）
+        channel_type: 渠道类型过滤（可选，与 channel_chat_id 组合精确定位某客服账号会话）
+        channel_chat_id: 渠道会话/客服账号ID过滤（可选，空串匹配 legacy NULL 会话）
         page: 页码
         page_size: 每页数量
     """
@@ -159,9 +181,10 @@ async def get_user_sessions(
     from src.channels.session import channel_session_manager
 
     sessions = channel_session_manager.list_sessions(
-        channel_type=None,
+        channel_type=channel_type,
         user_id=user_id,
         tenant_id=tenant_id,
+        channel_chat_id=channel_chat_id,
         limit=page_size,
     )
 

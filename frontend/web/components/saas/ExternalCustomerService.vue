@@ -62,9 +62,9 @@
           <div v-else>
             <div
               v-for="user in userList"
-              :key="user.user_id"
+              :key="`${user.user_id}__${user.channel_type || ''}__${user.channel_chat_id || ''}`"
               class="p-4 border-b border-default cursor-pointer transition-all"
-              :class="selectedUserId === user.user_id ? 'bg-primary-50 border-l-4 border-l-primary-500' : 'hover:bg-surface-hover'"
+              :class="isSelectedCombo(user) ? 'bg-primary-50 border-l-4 border-l-primary-500' : 'hover:bg-surface-hover'"
               @click="selectUser(user)"
             >
               <div class="flex items-center gap-3">
@@ -76,6 +76,7 @@
                 <div class="flex-1 min-w-0">
                   <div class="flex items-center gap-2">
                     <span class="font-medium text-default truncate">{{ user.nickname || user.username || '未知用户' }}</span>
+                    <span v-if="user.channel_type === 'wecom_kf'" class="text-xs px-2 py-0.5 rounded-full bg-primary-50 text-primary-600 shrink-0">{{ user.kf_name || '默认' }}</span>
                     <span class="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-muted shrink-0">{{ getUserSourceInfo(user.source).label }}</span>
                   </div>
                   <div class="text-xs text-muted mt-1">
@@ -112,7 +113,10 @@
               alt="头像"
             />
             <div>
-              <div class="font-medium text-default">{{ selectedUser.nickname || selectedUser.username || '未知用户' }}</div>
+              <div class="flex items-center gap-2">
+                <span class="font-medium text-default">{{ selectedUser.nickname || selectedUser.username || '未知用户' }}</span>
+                <span v-if="selectedUser.channel_type === 'wecom_kf'" class="text-xs px-2 py-0.5 rounded-full bg-primary-50 text-primary-600">{{ selectedUser.kf_name || '默认' }}</span>
+              </div>
               <div class="text-xs text-muted">创建于 {{ formatDate(selectedUser.created_at) }}</div>
             </div>
           </div>
@@ -435,8 +439,10 @@ const isPartiallyRecalled = (msg: any) => {
 const sessionList = ref<any[]>([])
 const selectedSessionId = ref('')
 
-// 选中状态
+// 选中状态（组合粒度：客户 × 渠道类型 × 客服账号）
 const selectedUserId = ref('')
+const selectedChannelChatId = ref('')
+const selectedChannelType = ref('')
 const selectedUser = ref<any>(null)
 
 // 默认头像
@@ -485,8 +491,19 @@ async function loadUsers() {
   }
 }
 
+// 判断列表行是否为当前选中的组合（客户 × 渠道 × 客服账号 三元匹配）
+function isSelectedCombo(user: any): boolean {
+  return (
+    selectedUserId.value === user.user_id &&
+    selectedChannelChatId.value === (user.channel_chat_id || '') &&
+    selectedChannelType.value === (user.channel_type || '')
+  )
+}
+
 async function selectUser(user: any) {
   selectedUserId.value = user.user_id
+  selectedChannelChatId.value = user.channel_chat_id || ''
+  selectedChannelType.value = user.channel_type || ''
   selectedUser.value = user
   messageList.value = []
   messageTotal.value = 0
@@ -500,8 +517,14 @@ async function selectUser(user: any) {
 async function loadUserSessions() {
   if (!selectedUserId.value) return
   try {
+    // 组合粒度：仅 wecom_kf 按客服账号（channel_chat_id）拆分过滤；
+    // 其它渠道组合为「客户 × 渠道」折叠行，channel_chat_id 不传，避免 NULL-or-empty
+    // 过滤漏掉非空 channel_chat_id（如 wecom_personal_rpa 的 conversation_id）的会话。
+    const isKfCombo = selectedChannelType.value === 'wecom_kf'
     const res = await getUserSessions({
       user_id: selectedUserId.value,
+      channel_type: selectedChannelType.value || undefined,
+      channel_chat_id: isKfCombo ? selectedChannelChatId.value : undefined,
       page: 1,
       page_size: 100,
     })
@@ -627,8 +650,14 @@ function drillIntoReferrer(row: any) {
   referrerFilterName.value = row.referrer_name || '该员工'
   userPage.value = 1
   selectedUserId.value = ''
+  selectedChannelChatId.value = ''
+  selectedChannelType.value = ''
   selectedUser.value = null
+  sessionList.value = []
+  selectedSessionId.value = ''
   messageList.value = []
+  messageTotal.value = 0
+  messagePage.value = 1
   activeTab.value = 'chat'
   loadUsers()
 }

@@ -90,6 +90,8 @@ export async function getReferralStats(params: {
 export async function getUserSessions(params: {
   user_id: string
   instance_id?: string
+  channel_type?: string
+  channel_chat_id?: string
   page?: number
   page_size?: number
 }): Promise<{
@@ -102,6 +104,9 @@ export async function getUserSessions(params: {
 }> {
   const searchParams = new URLSearchParams()
   if (params.instance_id) searchParams.set('instance_id', params.instance_id)
+  if (params.channel_type) searchParams.set('channel_type', params.channel_type)
+  // 空串必须显式传（匹配 legacy NULL 会话），不能用真值判断
+  if (params.channel_chat_id !== undefined) searchParams.set('channel_chat_id', params.channel_chat_id)
   if (params.page) searchParams.set('page', params.page.toString())
   if (params.page_size) searchParams.set('page_size', params.page_size.toString())
 

@@ -374,6 +374,11 @@ class UserDB:
     ) -> dict:
         """获取租户的外部用户列表（source 不为空的用户）
 
+        返回组合粒度：每个「用户 × 渠道会话（客服账号）」一行。
+        仅 wecom_kf 渠道按 channel_chat_id（open_kfid，客服账号）拆分，
+        其它渠道折叠为单个组合（channel_chat_id 为空），避免 wecom_personal_rpa
+        等渠道因 conversation_id 不稳定导致一个客户多行。
+
         Args:
             tenant_id: 租户ID
             username: 用户名搜索（可选）
@@ -386,6 +391,18 @@ class UserDB:
             {"users": [...], "total": int, "page": int, "page_size": int}
         """
         offset = (page - 1) * page_size
+        # 渠道会话组合子查询：wecom_kf 按客服账号拆分（legacy NULL 折叠为空），其它渠道折叠为空
+        cs_subquery = """
+            SELECT user_id,
+                   channel_type,
+                   CASE WHEN channel_type = 'wecom_kf' THEN COALESCE(channel_chat_id, '') ELSE '' END AS channel_chat_id,
+                   MIN(created_at) AS first_session_at,
+                   MAX(updated_at) AS last_session_at
+            FROM channel_sessions
+            WHERE user_id IS NOT NULL
+            GROUP BY user_id, channel_type,
+                     CASE WHEN channel_type = 'wecom_kf' THEN COALESCE(channel_chat_id, '') ELSE '' END
+        """
         with get_db_connection() as conn:
             cursor = conn.cursor()
 
@@ -408,38 +425,35 @@ class UserDB:
 
             where_clause = " AND ".join(conditions)
 
-            # 统计总数（去重，确保 LEFT JOIN 后总数正确）
+            # 统计总数：与列表查询同一套 FROM/JOIN/WHERE 结构，count == 组合行数
+            # customer_referrals.customer_user_id 有 UNIQUE、cs 子查询已按组合去重，外层 JOIN 单射。
             cursor.execute(f"""
                 SELECT COUNT(*) as cnt FROM (
                     SELECT u.user_id
                     FROM users u
+                    LEFT JOIN ({cs_subquery}) cs ON cs.user_id = u.user_id
                     LEFT JOIN customer_referrals cr ON cr.customer_user_id = u.user_id
                     WHERE {where_clause}
                 ) AS filtered
             """, params)
             total = cursor.fetchone()["cnt"]
 
-            # 查询列表：按该用户最近一次渠道会话的 updated_at 倒序排序
+            # 查询列表：按该组合最近一次渠道会话的 updated_at 倒序排序
             # 没有会话的用户排在最后（NULLS LAST）
-            # 同时返回该用户最早/最近一次渠道会话的 created_at / updated_at，
+            # 同时返回该组合最早/最近一次渠道会话的 created_at / updated_at，
             # 用于前端展示"[创建日期] ~ [更新日期]"。
             # 引流人关联：LEFT JOIN customer_referrals + users 返回 referrer_user_id / referrer_name。
             cursor.execute(f"""
                 SELECT u.user_id, u.username, u.nickname, u.avatar_url, u.source, u.tenant_id, u.created_at,
+                       cs.channel_type,
+                       cs.channel_chat_id,
                        cs.first_session_at,
                        cs.last_session_at,
                        cr.referrer_user_id,
                        ru.nickname AS referrer_nickname,
                        ru.username AS referrer_username
                 FROM users u
-                LEFT JOIN (
-                    SELECT user_id,
-                           MIN(created_at) AS first_session_at,
-                           MAX(updated_at) AS last_session_at
-                    FROM channel_sessions
-                    WHERE user_id IS NOT NULL
-                    GROUP BY user_id
-                ) cs ON cs.user_id = u.user_id
+                LEFT JOIN ({cs_subquery}) cs ON cs.user_id = u.user_id
                 LEFT JOIN customer_referrals cr ON cr.customer_user_id = u.user_id
                 LEFT JOIN users ru ON ru.user_id = cr.referrer_user_id
                 WHERE {where_clause}
@@ -450,6 +464,8 @@ class UserDB:
             users = [dict(row) for row in cursor.fetchall()]
 
         for u in users:
+            # 组合归一化：无会话用户 channel_type 为 None、channel_chat_id 为空串
+            u["channel_chat_id"] = u.get("channel_chat_id") or ""
             # 引流人名称：优先昵称，其次用户名，引流人被删除时显示"已删除员工"
             if u.get("referrer_user_id"):
                 u["referrer_name"] = (
