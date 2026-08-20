@@ -262,6 +262,13 @@ ON CONFLICT (model_name) DO NOTHING;
 INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m)
 VALUES ('deepseek-v4-pro', 9.0, 27.0, 0.3)
 ON CONFLICT (model_name) DO NOTHING;
+-- 阿里云百炼平台 deepseek-v4-flash-0731 是正式版，增加价格信息
+INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m)
+VALUES ('deepseek-v4-flash-0731', 3.0, 9.0, 0.1)
+ON CONFLICT (model_name) DO UPDATE SET
+  input_price_per_m = EXCLUDED.input_price_per_m,
+  output_price_per_m = EXCLUDED.output_price_per_m,
+  cached_input_price_per_m = EXCLUDED.cached_input_price_per_m;
 
 -- 视觉模型单价
 INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m)
