@@ -26,8 +26,8 @@ export enum UserSource {
 }
 
 export const UserSourceMap = {
-  [UserSource.WECOM_KF]: { label: '企业微信客服', color: 'blue' },
-  [UserSource.WECOM_PERSONAL_RPA]: { label: '微信RPA', color: 'green' },
+  [UserSource.WECOM_KF]: { label: '企微客服', color: 'blue' },
+  [UserSource.WECOM_PERSONAL_RPA]: { label: '企微RPA', color: 'green' },
 } as const;
 
 /**
