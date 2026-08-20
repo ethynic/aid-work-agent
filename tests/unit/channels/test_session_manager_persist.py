@@ -1,7 +1,7 @@
 """
 ChannelSessionManager.process_and_persist / add_messages_batch_transactional 单元测试
 
-背景（P0 改造，详见 docs/research/wecom-kf-context-loss-research.md）：
+背景（P0 改造，详见 docs/incidents/wecom-kf-context-loss-research.md）：
 - 旧路径在调用 session_queue.enqueue_and_process 之前立即写 user 消息，
   导致 L2 合并触发时 channel_messages 仍写入两条独立 user → 下次加载出现连续 user，
   LLM 上下文错乱（历史 assistant 失效）。

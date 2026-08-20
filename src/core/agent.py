@@ -2198,7 +2198,7 @@ class Agent:
 
             # 会话来源分流：渠道会话读 channel_messages，web 会话读 chat_messages，两者严格分离。
             # 历史误写会让渠道会话的 chat_messages 残留陈旧行，若误用作上下文会劫持真实对话
-            # （详见 docs/research/wecom-kf-context-loss-research.md §9）
+            # （详见 docs/incidents/wecom-kf-context-loss-research.md §9）
             from src.channels.session import channel_session_manager
             is_channel = channel_session_manager.is_channel_session(session_id)
             # 渠道会话不查 chat_messages（避免浪费 + 防止陈旧数据混入）

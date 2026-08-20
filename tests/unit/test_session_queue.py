@@ -1,7 +1,7 @@
 """
 SessionMessageQueue.enqueue_and_process 状态机单元测试
 
-背景（P0 改造，详见 docs/research/wecom-kf-context-loss-research.md §7、§8）：
+背景（P0 改造，详见 docs/incidents/wecom-kf-context-loss-research.md §7、§8）：
 本调度器是 L2 合并层，决定「同一 session 第二条消息到达时，合并、排队还是独立处理」。
 本次 P0 改造把返回值由 str 改为 EnqueueResult，暴露 status / was_merged / merged_input，
 让 channel_session_manager.process_and_persist 能据此决定 channel_messages 的正确写入方式。

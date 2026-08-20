@@ -1,7 +1,7 @@
 """
 Agent._reorder_messages_for_llm 连续 user 兜底回归测试
 
-背景（P0-3 兜底，详见 docs/research/wecom-kf-context-loss-research.md §3.3 / §7.6）：
+背景（P0-3 兜底，详见 docs/incidents/wecom-kf-context-loss-research.md §3.3 / §7.6）：
 历史脏数据 + 未改造渠道 + 合并 cancel 极端 race 都可能在 channel_messages 中产生
 连续 user 消息（user → user → assistant）。这种序列被 LLM API 视为新轮次输入，
 历史 assistant 上下文失效，agent 胡乱推断指代对象。

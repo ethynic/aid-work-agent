@@ -1,6 +1,6 @@
 # 对话上下文重建避坑速查
 
-> 本文件是 wecom_kf 上下文丢失两次复盘(详见 [wecom-kf-context-loss-research.md](./wecom-kf-context-loss-research.md) §9~§10)提炼的**高频陷阱**。修改「消息历史加载 / 上下文重建 / 窗口裁剪」相关代码前先看这里。
+> 本文件是 wecom_kf 上下文丢失两次复盘(详见 [wecom-kf-context-loss-research.md](../incidents/wecom-kf-context-loss-research.md) §9~§10)提炼的**高频陷阱**。修改「消息历史加载 / 上下文重建 / 窗口裁剪」相关代码前先看这里。
 
 ## 坑 1：「最近 N 条」窗口写反了(最常见)
 
