@@ -100,6 +100,10 @@ def should_process_kf_message(msgtype: str) -> bool:
     return msgtype in _PROCESSABLE_KF_MESSAGE_TYPES
 
 
+# 拦截非文字/语音消息时回复客户的固定话术
+KF_FILTER_HINT_MESSAGE = "我无法识别该类型文件，请用文字或语音描述您的需求。"
+
+
 def markdown_to_plain_text(md: str) -> str:
     """
     将 markdown 转为纯文本，适配微信客服 text 消息。

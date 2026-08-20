@@ -1907,11 +1907,31 @@ async def _process_tenant_wecom_kf_messages(
 
                 # 仅处理文字 + 语音消息：图片/视频/文件等附件消息直接过滤，
                 # 避免转发给智能体产生"看不了视频"等无效回复消耗积分
-                from src.channels.wecom_kf.message import should_process_kf_message
+                from src.channels.wecom_kf.message import (
+                    KF_FILTER_HINT_MESSAGE,
+                    should_process_kf_message,
+                )
                 if not should_process_kf_message(msg_type):
                     logger.info(
                         f"[wecom_kf] 跳过非文字/语音消息: msgid={msg_id}, msgtype={msg_type}"
                     )
+                    # 通知客户：无法识别该类型文件，请用文字或语音描述需求。
+                    # 按客户维度节流（复用 dedup，5 分钟窗口），避免连续发文件刷屏
+                    try:
+                        ext_user = msg.get("external_userid", "")
+                        if ext_user:
+                            dedup = _get_tenant_dedup(tenant_id)
+                            if not await dedup.is_duplicate(
+                                f"kf_filter_hint:{tenant_id}:{ext_user}"
+                            ):
+                                adapter.current_open_kfid = open_kfid
+                                await adapter.send_text(
+                                    KF_FILTER_HINT_MESSAGE, ext_user
+                                )
+                    except Exception as e:
+                        logger.warning(
+                            f"[wecom_kf] 发送文件类型提示失败: msgid={msg_id}, error={e}"
+                        )
                     continue
 
                 # 消息去重

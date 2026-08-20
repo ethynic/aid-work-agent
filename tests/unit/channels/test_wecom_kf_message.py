@@ -332,3 +332,10 @@ class TestShouldProcessKfMessage:
         assert should_process_kf_message("miniprogram") is False
         assert should_process_kf_message("") is False
         assert should_process_kf_message(None) is False
+
+
+class TestKfFilterHintMessage:
+    def test_filter_hint_message_defined(self):
+        """拦截非文字/语音消息时回复客户的固定话术已定义。"""
+        from src.channels.wecom_kf.message import KF_FILTER_HINT_MESSAGE
+        assert KF_FILTER_HINT_MESSAGE == "我无法识别该类型文件，请用文字或语音描述您的需求。"
