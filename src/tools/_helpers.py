@@ -16,12 +16,22 @@
 from contextvars import ContextVar
 from typing import Any, Dict, Optional, Tuple, Union
 
+from .context import (
+    ExecutionContextFactory,
+    ToolExecutionContext,
+    current_tool_execution_context,
+    tool_execution_scope,
+)
+
 __all__ = [
     "truncate_text",
     "sanitize_error",
     "get_tool_execution_context",
     "set_tool_execution_context",
     "clear_tool_execution_context",
+    "ExecutionContextFactory",
+    "ToolExecutionContext",
+    "tool_execution_scope",
 ]
 
 
@@ -93,7 +103,20 @@ def get_tool_execution_context() -> Dict[str, Optional[Any]]:
 
     任何字段都可能为 None（无上下文场景，如系统调试），调用方需自行判断是否跳过登记。
     """
-    # tenant_id / user_id 复用 src.saas.context
+    context = current_tool_execution_context()
+    if context is not None:
+        return {
+            "tenant_id": context.tenant_id,
+            "user_id": context.user_id,
+            "session_id": context.session_id,
+            "channel": context.channel,
+            "subagent_id": context.subagent_id,
+            "chat_record_id": context.chat_record_id,
+            "agent_execution_id": context.agent_execution_id,
+            "tool_call_id": context.tool_call_id,
+        }
+
+    # 兼容尚未迁移的非 ToolExecutor 调用；生产执行入口应始终显式传 context。
     try:
         from src.saas.context import get_current_tenant_id, get_current_user_id
         tenant_id = get_current_tenant_id()

@@ -51,11 +51,6 @@ class HotelSearchTool(BaseTool):
 
     def __init__(self):
         self._embedding_client = None
-        self._tenant_id = None
-
-    def set_tenant_id(self, tenant_id: str):
-        """由 Agent 注入 tenant_id（子智能体线程中 ContextVar 不可用）"""
-        self._tenant_id = tenant_id
 
     def _get_embedding_client(self):
         if self._embedding_client is None:
@@ -72,15 +67,10 @@ class HotelSearchTool(BaseTool):
         return client.embed_sync(text)
 
     def _resolve_tenant_id(self) -> Optional[str]:
-        """获取 tenant_id：优先 Agent 注入，其次 ContextVar（HTTP 请求场景）"""
-        tenant_id = self._tenant_id
-        if not tenant_id:
-            try:
-                from src.saas.context import get_current_tenant_id
-                tenant_id = get_current_tenant_id()
-            except Exception:
-                pass
-        return tenant_id
+        """从当前请求的不可变执行上下文获取租户。"""
+        from src.tools.context import current_tool_execution_context
+        context = current_tool_execution_context()
+        return context.tenant_id if context else None
 
     def _format_row(self, row, score: Optional[float]) -> Dict[str, Any]:
         """将数据库行格式化为统一的输出项"""

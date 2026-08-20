@@ -163,6 +163,7 @@ class TestMasterAgentToolResultTruncation:
         agent.skill_registry = MagicMock()
         agent.tool_executor = MagicMock()
         agent.tool_executor.execute = AsyncMock(return_value=tool_result_content)
+        agent._tool_controls = MagicMock()
         # LLM：第一轮返回工具调用(read)，第二轮返回普通回复（结束循环）
         agent.llm = MagicMock()
         agent.llm.chat_with_tools = AsyncMock(
@@ -308,7 +309,7 @@ class TestMasterAgentToolResultTruncation:
         agent.skill_registry.get.return_value = skill_obj
         use_skill_tool = MagicMock()
         use_skill_tool.execute = AsyncMock(return_value=skill_result)
-        agent._use_skill_tool = use_skill_tool
+        agent._tool_controls.get.return_value = use_skill_tool
         agent.llm.chat_with_tools = AsyncMock(
             side_effect=[
                 {
@@ -371,6 +372,7 @@ class TestSubagentToolResultTruncation:
         agent.skill_registry = MagicMock()
         agent.tool_executor = MagicMock()
         agent.tool_executor.execute = AsyncMock(return_value=tool_result_content)
+        agent._tool_controls = MagicMock()
         agent.llm = MagicMock()
         agent.llm.chat_with_tools = AsyncMock(
             side_effect=[
@@ -449,7 +451,7 @@ class TestSubagentToolResultTruncation:
         agent = self._make_agent(monkeypatch, None)
         use_skill_tool = MagicMock()
         use_skill_tool.execute = AsyncMock(return_value=skill_result)
-        agent._use_skill_tool = use_skill_tool
+        agent._tool_controls.get.return_value = use_skill_tool
         agent.llm.chat_with_tools = AsyncMock(
             side_effect=[
                 {

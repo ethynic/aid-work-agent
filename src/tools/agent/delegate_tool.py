@@ -6,6 +6,7 @@ DelegateToSubagentTool - 委派任务给子智能体
 将任务委派给专业的子智能体执行。
 """
 
+import asyncio
 import uuid
 from typing import Any, Dict, List, Optional
 
@@ -35,7 +36,7 @@ class DelegateToSubagentInput(BaseModel):
 class DelegateToSubagentTool(BaseTool):
     """子智能体委派工具"""
 
-    # 虚拟工具：不进 tool_registry，由 Agent._init_delegate_tool() 延迟带参构造，agent loop 特殊处理
+    # 控制工具：不进普通 Registry，由 ToolControlSet 晚绑定依赖，Agent loop 特殊处理。
     catalog = False
     name = "delegate_to_subagent"
     description = (
@@ -49,7 +50,7 @@ class DelegateToSubagentTool(BaseTool):
     category = "agent"
     InputModel = DelegateToSubagentInput
 
-    def __init__(self, subagent_registry, subagent_executor):
+    def __init__(self, subagent_registry, subagent_executor, authorizer=None):
         """
         Args:
             subagent_registry: SubagentRegistry 实例
@@ -57,6 +58,10 @@ class DelegateToSubagentTool(BaseTool):
         """
         self.subagent_registry = subagent_registry
         self.subagent_executor = subagent_executor
+        if authorizer is None:
+            from src.tools.delegation_policy import DelegationAuthorizer
+            authorizer = DelegationAuthorizer()
+        self.authorizer = authorizer
 
     def get_usage_guide(self, **kwargs) -> str:
         """动态生成委派工具使用指南，包含当前可用的子智能体列表"""
@@ -79,8 +84,7 @@ class DelegateToSubagentTool(BaseTool):
             task_description: 任务描述
             image_paths: 用户上传图片的完整路径列表（可选，传给多模态子智能体如 video-agent）
             context_needed: 上下文关键词（可选）
-            session_id: 会话ID（可选）
-            user_id: 用户ID（可选，传递给子智能体用于读取邮箱配置等）
+            session_id/user_id: 仅保留历史调用签名兼容，身份只从执行上下文读取
 
         Returns:
             委派结果字典
@@ -89,8 +93,11 @@ class DelegateToSubagentTool(BaseTool):
         task_description = kwargs.get("task_description", "")
         image_paths = kwargs.get("image_paths")
         context_needed = kwargs.get("context_needed")
-        session_id = kwargs.get("session_id")
-        user_id = kwargs.get("user_id")
+        # session/user 属于可信执行上下文；同名模型参数只保留 schema 兼容，不能作为身份来源。
+        from src.tools.context import current_tool_execution_context
+        execution_context = current_tool_execution_context()
+        session_id = execution_context.session_id if execution_context else None
+        user_id = execution_context.user_id if execution_context else None
 
         if not subagent_name:
             return {
@@ -108,12 +115,43 @@ class DelegateToSubagentTool(BaseTool):
         config = self.subagent_registry.get(subagent_name)
         if not config:
             from src.subagents.factory import AgentFactory
-            config = AgentFactory._load_single_from_db(self.subagent_registry, subagent_name)
+            config = await asyncio.to_thread(
+                AgentFactory._load_single_from_db,
+                self.subagent_registry,
+                subagent_name,
+            )
         if not config:
             return {
                 "success": False,
                 "error": f"Subagent '{subagent_name}' not found",
                 "available_subagents": self.subagent_registry.list_subagents()
+            }
+
+        # 生产 authorizer 会同步查询订阅数据库；这里是 async 工具入口，必须
+        # 移到工作线程，避免一次授权查询阻塞整个 worker 的事件循环。
+        try:
+            authorized = await asyncio.to_thread(
+                self.authorizer.authorize,
+                execution_context,
+                subagent_name,
+                config,
+            )
+        except Exception:
+            logger.opt(exception=True).error(
+                "后端日志：子智能体委派授权查询失败 subagent={}",
+                subagent_name,
+            )
+            return {
+                "success": False,
+                "error_code": "SUBAGENT_AUTHORIZATION_UNAVAILABLE",
+                "error": "暂时无法校验子智能体使用权限，请稍后重试",
+            }
+        if not authorized:
+            return {
+                "success": False,
+                "permission_denied": True,
+                "error_code": "SUBAGENT_PERMISSION_DENIED",
+                "error": "当前租户无权使用该子智能体",
             }
 
         try:

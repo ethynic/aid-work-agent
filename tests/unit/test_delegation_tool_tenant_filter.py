@@ -10,14 +10,18 @@
 本测试验证修复后 _get_tools() 与 _build_system_prompt() 使用同一份过滤逻辑。
 """
 
+import threading
 import unittest
 from unittest.mock import MagicMock, patch
 from types import SimpleNamespace
+
+import pytest
 
 from src.core.agent import Agent, AgentMode
 from src.subagents.registry import SubagentRegistry
 from src.tools.registry import ToolRegistry
 from src.core.skill_registry import SkillRegistry
+from src.tools.control_set import ControlToolDependencies, ToolControlSet
 
 
 def _make_subagent_config(name: str, dir_name: str, description: str):
@@ -48,6 +52,18 @@ def _build_minimal_master_agent(subagent_registry: SubagentRegistry) -> Agent:
     agent._skill_execute_tool = None
     agent._create_plan_tool = None
     agent._clarify_tool = None
+    agent._tool_controls = ToolControlSet(ControlToolDependencies(
+        plan_manager=MagicMock(),
+        skill_registry=agent.skill_registry,
+        skill_executor=MagicMock(),
+        tool_registry=agent.tool_registry,
+        subagent_registry=subagent_registry,
+        allow_delegate=True,
+    ))
+    agent._tool_controls.bind_delegate(
+        subagent_registry=subagent_registry,
+        subagent_executor=MagicMock(),
+    )
     return agent
 
 
@@ -214,6 +230,38 @@ class TestDelegationToolTenantFilter(unittest.TestCase):
                 mock_get_allowed_2.assert_called_once()
                 enum = _extract_delegate_tool(tools)["input_schema"]["properties"]["subagent_name"]["enum"]
                 self.assertEqual(enum, ["外贸获客智能体"])
+
+
+@pytest.mark.asyncio
+async def test_subscription_visibility_query_is_primed_off_event_loop():
+    registry = SubagentRegistry()
+    _register_subagents(registry, [
+        _make_subagent_config("旅游咨询顾问", "travel-advisor", "旅游行业 AI 顾问"),
+    ])
+    agent = _build_minimal_master_agent(registry)
+    event_loop_thread = threading.get_ident()
+    query_threads = []
+
+    def get_allowed(conn, tenant_id):
+        query_threads.append(threading.get_ident())
+        return ["travel-advisor"]
+
+    with (
+        patch("src.config.settings.settings.saas.enabled", True),
+        patch("src.config.settings.settings.demo.enabled", False),
+        patch("src.saas.context.get_current_tenant_id", return_value="tenant_001"),
+        patch("src.db.database.get_db_connection") as get_connection,
+        patch(
+            "src.saas.db.subscription_db.SubscriptionDB.get_allowed_subagent_types",
+            side_effect=get_allowed,
+        ),
+    ):
+        get_connection.return_value.__enter__.return_value = MagicMock()
+        await agent._prime_available_subagents_cache()
+        tools = agent._get_tools()
+
+    assert query_threads and query_threads[0] != event_loop_thread
+    assert _extract_delegate_tool(tools) is not None
 
 
 if __name__ == "__main__":

@@ -1,47 +1,76 @@
-# 设计：工具自动发现注册（消除 agent.py 写死的注册清单）
+# 工具发现、装配与执行上下文
 
-> 2026-08-19。#65。现状：`Agent._register_builtin_tools()` 约 40 行手工 `register(XxxTool())`，每加一个工具都要改 agent.py（启动链路文件，风险最高频次最多的改动点）。
-> 用户诉求：新工具零注册；按智能体配置决定可用工具。
+> 2026-08-19。#65 二期实现。总体设计见
+> [plan-agent-registration-decoupling.md](../plans/plan-agent-registration-decoupling.md)。
 
-## 现状事实（已核实）
+## 目标架构
 
-1. 写死清单：agent.py `_register_builtin_tools()`（约 423-542 行）逐个 import + register。
-2. **按配置过滤已存在**：`_filter_tools_by_config()` 按子智能体 `tools.allowed/excluded/inherit` 过滤；`_register_local_proxy_tools()` 已按 allowed 列表注册 boss 代理工具。本设计不改这两处。
-3. 三类特殊工具**不该进自动注册**：
-   - 构造需参数/自引用：CreateScheduledTaskTool/ManageScheduledTaskTool（存 self 供后台 runner 用）
-   - 虚拟工具（设计如此，不进 registry）：CreatePlanTool/UseSkillTool/SkillExecuteTool/ClarifyTool/DelegateToSubagentTool
-   - 有意不注册：SpeechToTextTool（渠道层处理）、LOCAL_PROXY_TOOL_CLASSES（仅子智能体按需）
-4. role 权限（user.py has_permission）不做工具级过滤，本次不改。
+工具系统分为四层，`Agent` 只负责生命周期和控制流：
 
-## 设计
+1. `BaseTool` Catalog：进程级工具类候选目录。
+2. `ToolRegistry`：每个 Agent 的普通工具实例集合。
+3. `assemble_agent_tools()`：普通工具、角色策略、本地代理和控制工具的唯一装配入口。
+4. `ToolExecutionContext`：单次调用的不可变身份和关联上下文。
 
-### 1. BaseTool 自动目录化
-`src/tools/base.py`：`BaseTool` 增加 `catalog: bool = True` 类属性 + `__init_subclass__`，子类定义即登记进模块级 `_CATALOG: Dict[str, Type[BaseTool]]`（按 name 去重，子类覆盖）。`catalog = False` 显式退出（用于上述三类特殊工具与测试替身）。**不实例化**——只收集类，避免 import 副作用。
+## Catalog
 
-### 2. 包遍历发现器
-`src/tools/registry.py` 新增 `discover_tool_classes() -> Dict[str, Type[BaseTool]]`：
-- `pkgutil.iter_modules(src.tools.__path__)` 逐包 import（目的是触发 `__init_subclass__`）
-- 单包 import 失败分两级（CR 修订，2026-08-19）：
-  - 第三方可选依赖缺失（`ModuleNotFoundError` 且缺失模块非首方 src 包，如 playwright 未装）→ warning 一次并跳过，行为等价于"没注册"
-  - 其余任何失败（首方模块导入错误、循环导入、语法错误、import 期异常）→ **原样抛出**。理由：改造前 agent.py 显式 import 下这类失败会让 Agent 启动响亮崩溃；若降级为 warning，重构引入的循环导入会静默蒸发核心工具（用户表现为"AI 突然不会某功能"，排查困难）。区分标准可执行：`e.name`（缺失模块名）非 `src`/`src.*` 即第三方可选依赖
-- 返回 `_CATALOG` 快照（按 name 排序，注册顺序确定）
-- 校验：cataloged 类必须可无参构造（`inspect.signature` 检查），不可则 discovery 期报错给开发者
+- `catalog=True` 且有 `name` 的类按 `module + qualname` 登记，不能按工具名覆盖。
+- discovery 在进程锁内递归 import，并只接纳完整 import 成功的 `src.tools.*` 模块。
+- 完成模块过滤后再按工具名分组；不同生产类同名立即报错并列出类路径。
+- 可选第三方依赖缺失允许 warning 后跳过；首方缺失、循环 import、语法和其他
+  import 异常直接中止启动。
+- 结果按工具名排序，并校验每个类可无参构造。
+- 当前 26 个普通工具全部来自 Catalog，包含两个无状态 scheduled 工具。
 
-### 3. agent.py 收敛
-`_register_builtin_tools()` 改为：
-```python
-for cls in discover_tool_classes().values():
-    self.tool_registry.register(cls())
-self._register_special_tools()   # 计划/技能/委派/定时任务等，集中到一个清晰方法
-```
-删除 40 行 import+register。特殊工具加 `catalog = False`。
+新增普通服务端工具只需新增 `BaseTool` 子类和测试；若构造需要依赖，设置
+`catalog=False`，由 Assembly 或控制工具集合显式构造。
 
-### 4. 兼容与验收
-- **黄金清单测试**：以 HEAD 注册结果为基准生成工具名快照，改造后 `discover+register` 的工具名集合与快照**完全一致**（特殊工具另行断言仍在 self._* 上）。
-- 启动链安全：`from src.core.agent import Agent`、`import src.main` 通过；tests/integration/test_agent_loop.py 通过。
-- 新增工具的流程从此 = 写类 + 放进 src/tools/ 包（包 `__init__.py` 导出），零 agent.py 改动。
+## Registry
 
-## 不做
+`ToolRegistry` 对重复名称默认报错，提供 `remove_many()`、`retain_only()`、
+`clear()` 和只读 `snapshot()`。调用方不得修改 `_tools`。
 
-- 不改 `_filter_tools_by_config` / 角色权限 / DB 子智能体工具选择逻辑（已满足"按配置注册"语义）。
-- 不迁移 local proxy / 虚拟工具的既有模式。
+## Assembly
+
+`ToolAssemblyRole` 只有 `MASTER`、`SUBAGENT`、`STANDALONE`。装配入口验证
+角色依赖组合，然后按固定顺序执行：
+
+1. 发现并实例化 Catalog 工具；
+2. 非 MASTER 仅在 allowed 命中轻量 manifest 时延迟加载 local proxy；
+3. 应用 inherit/allowed/excluded；
+4. 构造 `ToolControlSet`；
+5. 返回 Registry、Controls 及发现/最终名称快照。
+
+MASTER 路径不得 import `src.local_tools.proxy_tool`。本地代理名称放在无 repository、
+service 依赖的 `src/local_tools/manifest.py`。
+
+## 控制工具
+
+`ToolControlSet` 统一构造 create_plan、use_skill、skill_execute、clarify，并在 MASTER
+创建 `SubagentExecutor` 后晚绑定 delegate。它也是控制工具 definitions、guide 和动态
+display name 的唯一来源。
+
+delegate 使用双层安全边界：
+
+- schema：`None` 表示全量，非空序列表示白名单，空序列完全隐藏 delegate；
+- execute：`DelegationAuthorizer` 在创建 task record 前按本次 tenant 和订阅再次授权。
+
+## 请求级执行上下文
+
+所有生产执行入口通过 `ExecutionContextFactory` 构造 `ToolExecutionContext`，并作为
+`ToolExecutor.execute(..., context=...)` 的 keyword-only 参数传入。Executor 使用
+ContextVar token scope，异常和嵌套执行后精确恢复外层上下文；`execute_batch()` 原样
+向每项传播同一个 context。
+
+email、browser、knowledge、cp、write、scheduled 不保存 tenant/user/session 请求态，
+也没有身份 setter/fallback。Remote Gateway 从已验证 binding 构造 context；
+`_trusted_*` 只保留在 LOCAL_REQUIRED 跨进程协议中。
+
+## 验收契约
+
+- 26 项工具名、排序、schema、控制工具顺序和模式过滤保持稳定。
+- tests/ 替身和失败模块的半注册类不能进入生产快照。
+- MASTER 装配后 local proxy 实现未被加载。
+- A/B 并发身份隔离、异常 reset、嵌套和 batch 传播通过。
+- 空订阅不暴露 delegate，直接越权调用在 executor 前被拒绝。
+- 新增工具必须同步更新黄金清单并说明暴露面变化。

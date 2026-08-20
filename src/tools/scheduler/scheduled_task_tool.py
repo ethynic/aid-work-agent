@@ -6,12 +6,14 @@
 - ManageScheduledTaskTool: 管理已创建的定时任务（列表、暂停、恢复、取消、查看日志）
 """
 
-from typing import Any, Callable, Dict, Optional
+import asyncio
+from typing import Any, Dict, Optional
 
 from loguru import logger
 from pydantic import BaseModel, Field
 
 from src.tools.base import BaseTool
+from src.tools.context import current_tool_execution_context
 
 
 class CreateScheduledTaskInput(BaseModel):
@@ -83,10 +85,8 @@ def format_schedule_description(schedule_type: str, time_config: dict) -> str:
 class CreateScheduledTaskTool(BaseTool):
     """创建定时任务工具"""
 
-    # 不进自动目录：实例由 Agent._register_special_tools() 构造后存 self，
-    # 供后台定时任务 runner 复用（保持特殊注册路径）
-    catalog = False
     name = "create_scheduled_task"
+    assembly_order = 100  # 兼容历史 Agent 注册顺序：定时工具位于普通工具之后
     description = (
         "为用户创建定时执行的任务。当用户说「每天/每周/每月/定期/定时/每隔X小时」+ 某个操作时使用。"
         "创建前会先执行一次验证，只有验证通过才会创建定时任务。"
@@ -99,18 +99,6 @@ class CreateScheduledTaskTool(BaseTool):
     display_name = "创建定时任务"
     category = "scheduler"
     InputModel = CreateScheduledTaskInput
-
-    def __init__(self):
-        """初始化工具，额外上下文（user, session_id, send_progress）通过 set_context 注入"""
-        self._user = None
-        self._session_id = None
-        self._send_progress: Optional[Callable] = None
-
-    def set_context(self, user, session_id: str, send_progress: Optional[Callable] = None):
-        """注入运行时上下文（每次调用前由 agent 设置）"""
-        self._user = user
-        self._session_id = session_id
-        self._send_progress = send_progress
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
         """执行创建定时任务"""
@@ -134,7 +122,9 @@ class CreateScheduledTaskTool(BaseTool):
                 except (TypeError, ValueError):
                     time_config[key] = default
 
-        user_id = self._user.user_id if self._user else None
+        context = current_tool_execution_context()
+        user_id = context.user_id if context else None
+        session_id = context.session_id if context else None
 
         # 必须有用户信息才能创建定时任务
         if not user_id:
@@ -159,7 +149,9 @@ class CreateScheduledTaskTool(BaseTool):
         except Exception:
             pass
 
-        current_count = ScheduledTaskDB.count_by_user(user_id, "active")
+        current_count = await asyncio.to_thread(
+            ScheduledTaskDB.count_by_user, user_id, "active"
+        )
         if current_count >= max_tasks:
             return {
                 "success": False,
@@ -174,8 +166,6 @@ class CreateScheduledTaskTool(BaseTool):
             interval_seconds = time_config.get("interval_hours", 1) * 3600
 
         # 试执行（dry run）
-        if self._send_progress:
-            await self._send_progress("⏳ 正在验证任务是否可以执行...")
         executor = ScheduledTaskExecutor()
         try:
             dry_run_result = await executor.dry_run(
@@ -199,10 +189,8 @@ class CreateScheduledTaskTool(BaseTool):
             }
 
         # 试执行成功，创建定时任务
-        if self._send_progress:
-            await self._send_progress("✅ 验证通过，正在创建定时任务...")
-
-        task = ScheduledTaskDB.create(
+        task = await asyncio.to_thread(
+            ScheduledTaskDB.create,
             user_id=user_id,
             name=name,
             description=description,
@@ -210,7 +198,7 @@ class CreateScheduledTaskTool(BaseTool):
             schedule_type=schedule_type,
             cron_expression=cron_expression,
             interval_seconds=interval_seconds,
-            session_id=self._session_id,
+            session_id=session_id,
         )
 
         if not task:
@@ -238,22 +226,12 @@ class CreateScheduledTaskTool(BaseTool):
 class ManageScheduledTaskTool(BaseTool):
     """管理定时任务工具"""
 
-    # 不进自动目录：实例由 Agent._register_special_tools() 构造后存 self，
-    # 供后台定时任务 runner 复用（保持特殊注册路径）
-    catalog = False
     name = "manage_scheduled_task"
+    assembly_order = 100  # 兼容历史 Agent 注册顺序：定时工具位于普通工具之后
     description = "管理用户的定时任务：查看列表、暂停、恢复、取消、查看执行日志。"
     display_name = "管理定时任务"
     category = "scheduler"
     InputModel = ManageScheduledTaskInput
-
-    def __init__(self):
-        """初始化工具，额外上下文（user）通过 set_context 注入"""
-        self._user = None
-
-    def set_context(self, user):
-        """注入运行时上下文（每次调用前由 agent 设置）"""
-        self._user = user
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
         """执行管理定时任务"""
@@ -261,14 +239,15 @@ class ManageScheduledTaskTool(BaseTool):
 
         action = kwargs.get("action", "list")
         task_id = kwargs.get("task_id")
-        user_id = self._user.user_id if self._user else None
+        context = current_tool_execution_context()
+        user_id = context.user_id if context else None
 
         if not user_id:
             return {"success": False, "error": "用户未登录，无法操作定时任务", "debug": "user is None, cannot determine user_id"}
 
         try:
             if action == "list":
-                tasks = ScheduledTaskDB.list_by_user(user_id)
+                tasks = await asyncio.to_thread(ScheduledTaskDB.list_by_user, user_id)
                 if not tasks:
                     return {"success": True, "message": "您还没有创建任何定时任务"}
 
@@ -286,32 +265,53 @@ class ManageScheduledTaskTool(BaseTool):
                     "tasks": tasks
                 }
 
-            elif action == "pause":
+            elif action in {"pause", "resume", "cancel", "view_logs"}:
                 if not task_id:
-                    return {"success": False, "error": "请指定要暂停的任务ID"}
-                # 只写 DB，background reconcile ≤30s 内同步到调度器
-                if ScheduledTaskDB.update_status(task_id, "paused"):
-                    return {"success": True, "message": f"任务 {task_id} 已暂停（≤30s 生效）"}
-                return {"success": False, "error": f"暂停失败，任务可能不存在或已暂停"}
+                    action_labels = {
+                        "pause": "暂停", "resume": "恢复",
+                        "cancel": "取消", "view_logs": "查看日志",
+                    }
+                    return {
+                        "success": False,
+                        "error": f"请指定要{action_labels[action]}的任务ID",
+                    }
 
-            elif action == "resume":
-                if not task_id:
-                    return {"success": False, "error": "请指定要恢复的任务ID"}
-                if ScheduledTaskDB.update_status(task_id, "active"):
-                    return {"success": True, "message": f"任务 {task_id} 已恢复（≤30s 生效）"}
-                return {"success": False, "error": f"恢复失败，任务可能不存在或未暂停"}
+                # task_id 可由模型/用户提供，所有读写前必须用当前执行上下文的
+                # user_id 校验所有权，不能只依赖不可枚举的 ID 作为权限边界。
+                task = await asyncio.to_thread(ScheduledTaskDB.get_by_id, task_id)
+                if not task or task.get("user_id") != user_id:
+                    return {
+                        "success": False,
+                        "permission_denied": True,
+                        "error": "任务不存在或无权操作",
+                    }
 
-            elif action == "cancel":
-                if not task_id:
-                    return {"success": False, "error": "请指定要取消的任务ID"}
-                if ScheduledTaskDB.delete(task_id):
-                    return {"success": True, "message": f"任务 {task_id} 已取消"}
-                return {"success": False, "error": f"取消失败，任务可能不存在"}
+                if action == "pause":
+                    # 只写 DB，background reconcile ≤30s 内同步到调度器
+                    updated = await asyncio.to_thread(
+                        ScheduledTaskDB.update_status, task_id, "paused"
+                    )
+                    if updated:
+                        return {"success": True, "message": f"任务 {task_id} 已暂停（≤30s 生效）"}
+                    return {"success": False, "error": "暂停失败，任务可能不存在或已暂停"}
 
-            elif action == "view_logs":
-                if not task_id:
-                    return {"success": False, "error": "请指定要查看日志的任务ID"}
-                logs = ScheduledTaskLogDB.list_by_task(task_id, limit=20)
+                if action == "resume":
+                    updated = await asyncio.to_thread(
+                        ScheduledTaskDB.update_status, task_id, "active"
+                    )
+                    if updated:
+                        return {"success": True, "message": f"任务 {task_id} 已恢复（≤30s 生效）"}
+                    return {"success": False, "error": "恢复失败，任务可能不存在或未暂停"}
+
+                if action == "cancel":
+                    deleted = await asyncio.to_thread(ScheduledTaskDB.delete, task_id)
+                    if deleted:
+                        return {"success": True, "message": f"任务 {task_id} 已取消"}
+                    return {"success": False, "error": "取消失败，任务可能不存在"}
+
+                logs = await asyncio.to_thread(
+                    ScheduledTaskLogDB.list_by_task, task_id, 20
+                )
                 if not logs:
                     return {"success": True, "message": f"任务 {task_id} 暂无执行日志"}
                 log_list = []
@@ -333,4 +333,4 @@ class ManageScheduledTaskTool(BaseTool):
 
         except Exception as e:
             logger.opt(exception=True).error(f"后端日志：管理定时任务失败 action={action}, error={e}")
-            return {"success": False, "error": "操作失败", "debug": str(e)}
+            return {"success": False, "error": "操作失败"}

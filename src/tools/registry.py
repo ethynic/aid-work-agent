@@ -7,8 +7,10 @@
 import importlib
 import inspect
 import pkgutil
+import threading
+from types import MappingProxyType
 
-from typing import Any, Dict, List, Optional, Set, Type
+from typing import Any, Collection, Dict, Iterable, List, Mapping, Optional, Set, Type
 
 from loguru import logger
 
@@ -36,6 +38,8 @@ class ToolRegistry:
         if not tool.name:
             raise ValueError("工具必须定义name属性")
         
+        if tool.name in self._tools:
+            raise ValueError(f"工具名称重复注册: {tool.name}")
         self._tools[tool.name] = tool
         # logger.info(f"注册工具: {tool.name}")
     
@@ -49,6 +53,20 @@ class ToolRegistry:
         if tool_name in self._tools:
             del self._tools[tool_name]
             logger.info(f"注销工具: {tool_name}")
+
+    def remove_many(self, names: Iterable[str]) -> None:
+        for name in names:
+            self._tools.pop(name, None)
+
+    def retain_only(self, names: Collection[str]) -> None:
+        allowed = set(names)
+        self._tools = {name: tool for name, tool in self._tools.items() if name in allowed}
+
+    def clear(self) -> None:
+        self._tools.clear()
+
+    def snapshot(self) -> Mapping[str, BaseTool]:
+        return MappingProxyType(dict(self._tools))
     
     def get_tool(self, tool_name: str) -> Optional[BaseTool]:
         """
@@ -154,6 +172,7 @@ def register_tool(tool: BaseTool) -> None:
 
 # 已记录过导入失败的模块名（每个模块只 warning 一次，避免多 Agent 实例重复刷屏）
 _DISCOVERY_FAILED_MODULES: Set[str] = set()
+_DISCOVERY_LOCK = threading.RLock()
 
 
 def _is_first_party_module(module_name: str) -> bool:
@@ -194,20 +213,25 @@ def _import_module_for_discovery(module_name: str):
         raise
 
 
-def _walk_and_import(package_path: List[str], prefix: str) -> None:
+def _walk_and_import(package_path: List[str], prefix: str) -> Set[str]:
     """递归 import 包下所有模块，触发工具类 __init_subclass__ 登记 _CATALOG。
 
     先 import 各子包 __init__（多数工具经包导出链加载），再递归 import 包内其余模块
     （覆盖包 __init__ 未导出、藏在模块深处的工具类）。逐模块失败语义见
     _import_module_for_discovery：仅第三方可选依赖缺失降级跳过，首方缺陷中止发现。
     """
-    for module_info in pkgutil.iter_modules(package_path, prefix=prefix):
+    successful_modules: Set[str] = set()
+    for module_info in sorted(pkgutil.iter_modules(package_path, prefix=prefix), key=lambda item: item.name):
         # iter_modules 的 prefix 参数已拼进 module_info.name，无需再拼
         module = _import_module_for_discovery(module_info.name)
         if module is None:
             continue
+        successful_modules.add(module_info.name)
         if module_info.ispkg and getattr(module, "__path__", None):
-            _walk_and_import(list(module.__path__), f"{module_info.name}.")
+            successful_modules.update(
+                _walk_and_import(list(module.__path__), f"{module_info.name}.")
+            )
+    return successful_modules
 
 
 def discover_tool_classes() -> Dict[str, Type[BaseTool]]:
@@ -222,26 +246,34 @@ def discover_tool_classes() -> Dict[str, Type[BaseTool]]:
     """
     from .base import _CATALOG
 
-    package = importlib.import_module("src.tools")
-    _walk_and_import(list(package.__path__), "src.tools.")
+    with _DISCOVERY_LOCK:
+        package = importlib.import_module("src.tools")
+        successful_modules = _walk_and_import(list(package.__path__), "src.tools.")
+        successful_modules.add("src.tools")
 
-    snapshot: Dict[str, Type[BaseTool]] = {}
-    for tool_name in sorted(_CATALOG.keys()):
-        cls = _CATALOG[tool_name]
-        # 目录边界：只自动注册 src.tools 包内定义的工具类。测试替身（tests/）、
-        # 本地代理（src/local_tools）等其他位置的 BaseTool 子类虽会登记 _CATALOG，
-        # 但不进入发现快照，避免污染生产注册集。
-        module = getattr(cls, "__module__", "") or ""
-        if module != "src.tools" and not module.startswith("src.tools."):
-            continue
-        try:
-            # inspect.signature(cls) 已剥掉 self，bind() 无参可绑定 == 可无参构造
-            inspect.signature(cls).bind()
-        except (TypeError, ValueError) as e:
-            raise TypeError(
-                f"[tool-discovery] 工具 {cls.__module__}.{cls.__qualname__}"
-                f"（name={tool_name}）不可无参构造，无法自动注册；"
-                f"请给 __init__ 参数补默认值，或设置 catalog = False 改为手工注册: {e}"
-            ) from e
-        snapshot[tool_name] = cls
-    return snapshot
+        grouped: Dict[str, List[Type[BaseTool]]] = {}
+        for cls in _CATALOG.values():
+            module = getattr(cls, "__module__", "") or ""
+            if module not in successful_modules:
+                continue
+            grouped.setdefault(cls.name, []).append(cls)
+
+        snapshot: Dict[str, Type[BaseTool]] = {}
+        for tool_name in sorted(grouped):
+            classes = {f"{cls.__module__}.{cls.__qualname__}": cls for cls in grouped[tool_name]}
+            if len(classes) > 1:
+                raise ValueError(
+                    f"[tool-discovery] 生产工具名称冲突 name={tool_name}: "
+                    + ", ".join(sorted(classes))
+                )
+            cls = next(iter(classes.values()))
+            try:
+                inspect.signature(cls).bind()
+            except (TypeError, ValueError) as e:
+                raise TypeError(
+                    f"[tool-discovery] 工具 {cls.__module__}.{cls.__qualname__}"
+                    f"（name={tool_name}）不可无参构造，无法自动注册；"
+                    f"请给 __init__ 参数补默认值，或设置 catalog = False 改为 Assembly: {e}"
+                ) from e
+            snapshot[tool_name] = cls
+        return snapshot

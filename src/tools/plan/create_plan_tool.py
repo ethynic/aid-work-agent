@@ -27,7 +27,7 @@ class CreatePlanInput(BaseModel):
 class CreatePlanTool(BaseTool):
     """创建执行计划工具"""
 
-    # 虚拟工具：不进 tool_registry，由 Agent._register_special_tools() 带参构造，agent loop 特殊处理
+    # 控制工具：不进普通 registry，由 ToolControlSet 带依赖构造。
     catalog = False
     name = "create_plan"
     description = "为复杂任务创建执行计划。⚠️ 如果任务只需要一个工具或一个子智能体，直接调用该工具，不需要创建计划！只有当任务需要多个步骤协调时才使用。"

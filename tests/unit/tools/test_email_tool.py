@@ -460,16 +460,16 @@ class TestActionDispatch:
 # ============== user_id 运行时注入 ==============
 
 class TestUserIdInjection:
-    """user_id 注入后从数据库读取邮箱配置（子智能体/多用户场景）"""
+    """user_id 从请求级执行上下文读取。"""
 
     @pytest.mark.asyncio
     async def test_resolve_via_user_id(self, user_email):
-        """set_user_id 后 _resolve_user_email 从 DB 读取配置"""
+        from src.tools.context import ToolExecutionContext, tool_execution_scope
         tool = EmailProcessTool()
-        tool.set_user_id("user_123")
         with patch("src.db.email_credential.EmailCredentialDB.get_user_email_model",
                    return_value=user_email) as mock_get:
-            assert tool._resolve_user_email() is user_email
+            with tool_execution_scope(ToolExecutionContext(user_id="user_123")):
+                assert tool._resolve_user_email() is user_email
             mock_get.assert_called_once_with("user_123")
 
     @pytest.mark.asyncio
@@ -484,10 +484,11 @@ class TestUserIdInjection:
                    return_value=user_email), \
              patch.object(email_lib, "read_emails", return_value={
                  "success": True, "emails": [], "folders": [], "count": 0
-             }) as mock_read:
+            }) as mock_read:
+            from src.tools.context import ToolExecutionContext, tool_execution_scope
             tool = EmailProcessTool()
-            tool.set_user_id("user_456")
-            result = await tool.execute(action="read", limit=1)
+            with tool_execution_scope(ToolExecutionContext(user_id="user_456")):
+                result = await tool.execute(action="read", limit=1)
         assert result["success"] is True
         # 库层收到的是 DB 解析出的 UserEmail
         assert mock_read.call_args.args[0] is user_email

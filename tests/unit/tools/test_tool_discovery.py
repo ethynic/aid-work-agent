@@ -18,8 +18,8 @@
     Agent._register_builtin_tools(fake)
     print(sorted(fake.tool_registry._tools.keys()))
 
-改造后要求：自动发现（discover_tool_classes）+ 特殊注册（定时任务两工具）的
-工具名集合与该基线完全一致；catalog = False 的特殊工具不进 _CATALOG。
+改造后要求：26 个普通工具全部由 discover_tool_classes 自动发现，
+工具名集合与该基线完全一致；控制工具仍以 catalog=False 排除。
 新增可自动注册的工具时，应同步在 GOLDEN_TOOLS 中登记并在 PR 说明。
 """
 
@@ -59,16 +59,11 @@ GOLDEN_TOOLS = [
     "x_to_image",
 ]
 
-# 黄金清单中不由自动发现注册、而由 Agent._register_special_tools() 特殊注册的工具
-SPECIAL_REGISTERED_TOOLS = {
-    "create_scheduled_task",
-    "manage_scheduled_task",
-}
+# Phase 4 后 26 个普通工具全部由 Catalog 自动发现。
+SPECIAL_REGISTERED_TOOLS = set()
 
 # 显式 catalog = False、绝不进 _CATALOG 的工具名
 CATALOG_EXCLUDED_TOOLS = {
-    "create_scheduled_task",
-    "manage_scheduled_task",
     "create_plan",
     "use_skill",
     "skill_execute",
@@ -108,18 +103,10 @@ class TestDiscoveryGoldenList:
         assert list(discovered.keys()) == sorted(discovered.keys()), "discover 结果必须按名称排序（注册顺序确定）"
 
     def test_full_registration_matches_golden(self):
-        """自动发现 + 特殊注册 = 完整黄金清单（等价于改造前 Agent 注册结果）"""
-        from src.tools.scheduler.scheduled_task_tool import (
-            CreateScheduledTaskTool,
-            ManageScheduledTaskTool,
-        )
-
+        """自动发现结果 = 完整黄金清单（等价于改造前 Agent 注册结果）"""
         registry = ToolRegistry()
         for cls in discover_tool_classes().values():
             registry.register(cls())
-        # 模拟 Agent._register_special_tools() 的定时任务注册
-        registry.register(CreateScheduledTaskTool())
-        registry.register(ManageScheduledTaskTool())
 
         _assert_name_set_equal(registry.list_tools(), GOLDEN_TOOLS, "完整注册工具名集合")
 
@@ -129,7 +116,7 @@ class TestCatalogExclusions:
 
     def test_special_tools_not_in_catalog(self):
         discover_tool_classes()
-        leaked = CATALOG_EXCLUDED_TOOLS & set(_CATALOG.keys())
+        leaked = CATALOG_EXCLUDED_TOOLS & {cls.name for cls in _CATALOG.values()}
         assert not leaked, f"特殊工具不应进入 _CATALOG（应设 catalog = False）: {leaked}"
 
     def test_local_proxy_tools_not_in_catalog(self):
@@ -137,7 +124,7 @@ class TestCatalogExclusions:
         from src.local_tools.proxy_tool import LOCAL_PROXY_TOOL_NAMES
 
         discover_tool_classes()
-        leaked = LOCAL_PROXY_TOOL_NAMES & set(_CATALOG.keys())
+        leaked = LOCAL_PROXY_TOOL_NAMES & {cls.name for cls in _CATALOG.values()}
         assert not leaked, f"本地代理工具不应进入 _CATALOG: {leaked}"
 
     def test_legacy_browser_tools_not_in_catalog(self):
@@ -149,7 +136,7 @@ class TestCatalogExclusions:
             "browser_backtrack",
         }
         discover_tool_classes()
-        leaked = legacy_names & set(_CATALOG.keys())
+        leaked = legacy_names & {cls.name for cls in _CATALOG.values()}
         assert not leaked, f"旧版浏览器工具不应进入 _CATALOG: {leaked}"
 
 
@@ -168,7 +155,7 @@ class TestCatalogFalseSubclass:
 
     def test_catalog_false_subclass_excluded(self):
         probe_name = "__test_catalog_false_probe__"
-        assert probe_name not in _CATALOG, "前置条件失败：探针名已被占用"
+        assert probe_name not in {cls.name for cls in _CATALOG.values()}
         try:
             class ProbeOffCatalogTool(BaseTool):
                 catalog = False
@@ -177,16 +164,16 @@ class TestCatalogFalseSubclass:
                 async def execute(self, **kwargs):
                     return {"success": True}
 
-            assert probe_name not in _CATALOG, "catalog=False 子类不应进入 _CATALOG"
+            assert probe_name not in {cls.name for cls in _CATALOG.values()}
             assert probe_name not in discover_tool_classes()
         finally:
-            _CATALOG.pop(probe_name, None)
+            _CATALOG.pop(f"{ProbeOffCatalogTool.__module__}.{ProbeOffCatalogTool.__qualname__}", None)
 
     def test_catalog_true_subclass_registered_then_cleaned(self):
         """对照实验：默认 catalog=True 的子类会登记 _CATALOG（证明目录机制在工作），
         但因定义在 tests/ 模块不进入发现快照（发现边界=src.tools 包），测试后清理"""
         probe_name = "__test_catalog_true_probe__"
-        assert probe_name not in _CATALOG, "前置条件失败：探针名已被占用"
+        assert probe_name not in {cls.name for cls in _CATALOG.values()}
         try:
             class ProbeOnCatalogTool(BaseTool):
                 name = probe_name
@@ -194,12 +181,13 @@ class TestCatalogFalseSubclass:
                 async def execute(self, **kwargs):
                     return {"success": True}
 
-            assert _CATALOG.get(probe_name) is ProbeOnCatalogTool
+            identity = f"{ProbeOnCatalogTool.__module__}.{ProbeOnCatalogTool.__qualname__}"
+            assert _CATALOG.get(identity) is ProbeOnCatalogTool
             assert probe_name not in discover_tool_classes(), (
                 "tests/ 等非 src.tools 包内定义的工具类不应进入发现快照"
             )
         finally:
-            _CATALOG.pop(probe_name, None)
+            _CATALOG.pop(identity, None)
 
     def test_test_doubles_do_not_leak_into_discovery(self):
         """全量测试套件下 tests/ 内定义的测试替身（test_echo/compat_fail 等）
@@ -227,9 +215,10 @@ class TestCatalogFalseSubclass:
                 async def execute(self, **kwargs):
                     return {"success": True}
 
-            assert _CATALOG.get(probe_name) is LeafTool
+            identity = f"{LeafTool.__module__}.{LeafTool.__qualname__}"
+            assert _CATALOG.get(identity) is LeafTool
         finally:
-            _CATALOG.pop(probe_name, None)
+            _CATALOG.pop(identity, None)
 
 
 class TestNoArgConstructionValidation:
@@ -237,7 +226,7 @@ class TestNoArgConstructionValidation:
 
     def test_non_noarg_constructible_class_raises(self):
         probe_name = "__test_requires_ctor_args_probe__"
-        assert probe_name not in _CATALOG, "前置条件失败：探针名已被占用"
+        assert probe_name not in {cls.name for cls in _CATALOG.values()}
         try:
             class ProbeRequiresArgsTool(BaseTool):
                 name = probe_name
@@ -250,10 +239,37 @@ class TestNoArgConstructionValidation:
                 async def execute(self, **kwargs):
                     return {"success": True}
 
-            with pytest.raises(TypeError, match=probe_name):
-                discover_tool_classes()
+            import src.tools.registry as registry_mod
+            with pytest.MonkeyPatch.context() as monkeypatch:
+                monkeypatch.setattr(
+                    registry_mod,
+                    "_walk_and_import",
+                    lambda *args, **kwargs: {"src.tools.__test_probe__"},
+                )
+                with pytest.raises(TypeError, match=probe_name):
+                    discover_tool_classes()
         finally:
-            _CATALOG.pop(probe_name, None)
+            identity = f"{ProbeRequiresArgsTool.__module__}.{ProbeRequiresArgsTool.__qualname__}"
+            _CATALOG.pop(identity, None)
+
+    def test_candidate_from_unsuccessful_module_is_excluded(self):
+        """import 中途失败后已经触发类定义的候选不得污染发现快照。"""
+        probe_name = "__test_failed_module_probe__"
+        try:
+            class FailedModuleProbeTool(BaseTool):
+                name = probe_name
+                __module__ = "src.tools.__failed_module_probe__"
+
+                async def execute(self, **kwargs):
+                    return {"success": True}
+
+            assert probe_name not in discover_tool_classes()
+        finally:
+            identity = (
+                f"{FailedModuleProbeTool.__module__}."
+                f"{FailedModuleProbeTool.__qualname__}"
+            )
+            _CATALOG.pop(identity, None)
 
 
 class TestImportFailureSemantics:
@@ -303,3 +319,36 @@ class TestImportFailureSemantics:
 
         with pytest.raises(RuntimeError, match="boom"):
             registry_mod._import_module_for_discovery("src.tools.__fake__")
+
+
+class TestCatalogCollisionSafety:
+    def test_production_duplicate_name_fails_with_all_class_paths(self, monkeypatch):
+        import src.tools.registry as registry_mod
+
+        class DuplicateOne(BaseTool):
+            name = "__duplicate_probe__"
+            __module__ = "src.tools.__duplicate_probe__"
+            async def execute(self, **kwargs):
+                return {"success": True}
+
+        class DuplicateTwo(BaseTool):
+            name = "__duplicate_probe__"
+            __module__ = "src.tools.__duplicate_probe__"
+            async def execute(self, **kwargs):
+                return {"success": True}
+
+        identities = [
+            f"{DuplicateOne.__module__}.{DuplicateOne.__qualname__}",
+            f"{DuplicateTwo.__module__}.{DuplicateTwo.__qualname__}",
+        ]
+        monkeypatch.setattr(
+            registry_mod, "_walk_and_import",
+            lambda *args, **kwargs: {"src.tools.__duplicate_probe__"},
+        )
+        try:
+            with pytest.raises(ValueError, match="__duplicate_probe__") as exc:
+                discover_tool_classes()
+            assert all(identity in str(exc.value) for identity in identities)
+        finally:
+            for identity in identities:
+                _CATALOG.pop(identity, None)

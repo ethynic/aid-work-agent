@@ -13,6 +13,7 @@ from src.tools.browser.automation_tool import BrowserAutomationTool
 from src.tools.browser.orchestrator import BrowserOrchestrator
 from src.tools.browser.run_manager import RunState
 from src.tools.browser.run_store import RunRecord
+from src.tools.context import ToolExecutionContext, tool_execution_scope
 
 
 pytestmark = [pytest.mark.unit, pytest.mark.browser]
@@ -161,12 +162,11 @@ class _FakeOrchestrator:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("behavior", ["success", "error"])
 async def test_automation_tool_boundary_always_finalizes(monkeypatch, behavior):
-    set_tenant_context("tenant", "user")
     _FakeToolManager.instances.clear(); _FakeOrchestrator.behavior = behavior
     monkeypatch.setattr(automation_module, "BrowserRunManager", _FakeToolManager)
     monkeypatch.setattr(automation_module, "BrowserOrchestrator", _FakeOrchestrator)
-    try: result = await BrowserAutomationTool().execute(task="测试")
-    finally: clear_tenant_context()
+    with tool_execution_scope(ToolExecutionContext(tenant_id="tenant", user_id="user")):
+        result = await BrowserAutomationTool().execute(task="测试")
     assert result["success"] is (behavior == "success")
     if behavior == "error": assert "secret" not in result["error"]
     assert len(_FakeToolManager.instances[0].finalize_calls) == 1
@@ -192,24 +192,26 @@ async def test_missing_context_and_deprecated_parameters_do_not_start_browser(mo
 
 
 @pytest.mark.asyncio
-async def test_trusted_execution_context_overrides_stale_mutable_tool_identity(monkeypatch):
-    clear_tenant_context()
+async def test_execution_context_ignores_legacy_identity_parameters(monkeypatch):
     _FakeToolManager.instances.clear()
     _FakeOrchestrator.behavior = "success"
     monkeypatch.setattr(automation_module, "BrowserRunManager", _FakeToolManager)
     monkeypatch.setattr(automation_module, "BrowserOrchestrator", _FakeOrchestrator)
     tool = BrowserAutomationTool()
-    tool.set_tenant_id("stale-tenant")
-    tool.set_user_id("stale-user")
-    result = await tool.execute(
-        task="测试",
-        _trusted_tenant_id="trusted-tenant",
-        _trusted_user_id="trusted-user",
-        _audit_session_id="trusted-session",
-    )
+    with tool_execution_scope(ToolExecutionContext(
+        tenant_id="context-tenant",
+        user_id="context-user",
+        session_id="context-session",
+    )):
+        result = await tool.execute(
+            task="测试",
+            _trusted_tenant_id="legacy-tenant",
+            _trusted_user_id="legacy-user",
+            _audit_session_id="legacy-session",
+        )
     assert result["success"] is True
     assert _FakeToolManager.instances[0].create_calls == [
-        ("trusted-tenant", "trusted-user", "trusted-session", "server")
+        ("context-tenant", "context-user", "context-session", "server")
     ]
 
 
@@ -227,7 +229,6 @@ async def test_trusted_execution_context_overrides_stale_mutable_tool_identity(m
 async def test_headless_override_trust_boundary(
     monkeypatch, requested, interactive, trusted, expected, error_code,
 ):
-    set_tenant_context("tenant", "user")
     _FakeToolManager.instances.clear()
     _FakeOrchestrator.behavior = "success"
     monkeypatch.setattr(automation_module, "BrowserRunManager", _FakeToolManager)
@@ -241,10 +242,8 @@ async def test_headless_override_trust_boundary(
     }
     if requested is not None:
         kwargs["headless"] = requested
-    try:
+    with tool_execution_scope(ToolExecutionContext(tenant_id="tenant", user_id="user")):
         result = await BrowserAutomationTool().execute(**kwargs)
-    finally:
-        clear_tenant_context()
     if error_code:
         assert result["error_code"] == error_code
         assert _FakeToolManager.instances == []
@@ -255,16 +254,13 @@ async def test_headless_override_trust_boundary(
 
 @pytest.mark.asyncio
 async def test_headless_override_does_not_leak_between_runs(monkeypatch):
-    set_tenant_context("tenant", "user")
     _FakeToolManager.instances.clear()
     _FakeOrchestrator.behavior = "success"
     monkeypatch.setattr(automation_module, "BrowserRunManager", _FakeToolManager)
     monkeypatch.setattr(automation_module, "BrowserOrchestrator", _FakeOrchestrator)
-    try:
+    with tool_execution_scope(ToolExecutionContext(tenant_id="tenant", user_id="user")):
         first = await BrowserAutomationTool().execute(task="first", headless=True)
         second = await BrowserAutomationTool().execute(task="second")
-    finally:
-        clear_tenant_context()
     assert first["success"] is True
     assert second["success"] is True
     assert [manager.headless_override for manager in _FakeToolManager.instances] == [

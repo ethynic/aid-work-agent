@@ -20,11 +20,23 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from src.tools.context import ToolExecutionContext, _CURRENT_TOOL_CONTEXT, current_tool_execution_context
 
 pytestmark = [pytest.mark.tools]
 
 # 项目根目录，用于构造合法源路径
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+
+
+@pytest.fixture(autouse=True)
+def _isolated_tool_context():
+    token = _CURRENT_TOOL_CONTEXT.set(ToolExecutionContext())
+    yield
+    _CURRENT_TOOL_CONTEXT.reset(token)
+
+
+def _set_test_context(user_id=None, tenant_id=None):
+    _CURRENT_TOOL_CONTEXT.set(ToolExecutionContext(user_id=user_id, tenant_id=tenant_id))
 
 
 class TestCpToolBasic:
@@ -56,7 +68,7 @@ class TestCpToolBasic:
         dst_rel = "output/test_cp_config.yaml"
 
         tool = CpTool()
-        tool.set_user_id("test_user")
+        _set_test_context(user_id="test_user")
 
         # mock _register_download 避免 redis 依赖
         with patch.object(tool, "_register_download") as mock_reg:
@@ -395,8 +407,7 @@ class TestCpToolRegisterDownload:
             pytest.skip("configs/config.yaml not found")
 
         tool = CpTool()
-        tool.set_user_id("user_123")
-        tool.set_tenant_id("tenant_456")
+        _set_test_context(user_id="user_123", tenant_id="tenant_456")
 
         with patch.object(tool, "_register_download") as mock_reg:
             mock_reg.return_value = {
@@ -434,8 +445,7 @@ class TestCpToolRegisterDownload:
             pytest.skip("configs/config.yaml not found")
 
         tool = CpTool()
-        tool.set_user_id("user_redis_test")
-        tool.set_tenant_id("tenant_redis_test")
+        _set_test_context(user_id="user_redis_test", tenant_id="tenant_redis_test")
 
         mock_redis = MagicMock()
         mock_redis.make_key = MagicMock(return_value="uploaded_file:file_test123")
@@ -478,8 +488,7 @@ class TestCpToolRegisterDownload:
             pytest.skip("configs/config.yaml not found")
 
         tool = CpTool()
-        tool.set_user_id("user_vis_default")
-        tool.set_tenant_id("tenant_vis_default")
+        _set_test_context(user_id="user_vis_default", tenant_id="tenant_vis_default")
 
         with patch.object(tool, "_register_download") as mock_reg:
             mock_reg.return_value = {
@@ -518,8 +527,7 @@ class TestCpToolRegisterDownload:
             pytest.skip("configs/config.yaml not found")
 
         tool = CpTool()
-        tool.set_user_id("user_vis_true")
-        tool.set_tenant_id("tenant_vis_true")
+        _set_test_context(user_id="user_vis_true", tenant_id="tenant_vis_true")
 
         with patch.object(tool, "_register_download") as mock_reg:
             mock_reg.return_value = {
@@ -559,8 +567,7 @@ class TestCpToolRegisterDownload:
             pytest.skip("configs/config.yaml not found")
 
         tool = CpTool()
-        tool.set_user_id("user_vis_redis")
-        tool.set_tenant_id("tenant_vis_redis")
+        _set_test_context(user_id="user_vis_redis", tenant_id="tenant_vis_redis")
 
         mock_redis = MagicMock()
         mock_redis.make_key = MagicMock(return_value="uploaded_file:file_visredis")
@@ -625,18 +632,18 @@ class TestCpToolGetDisplayName:
 
 
 class TestCpToolUserIdTenantId:
-    """user_id / tenant_id 注入测试"""
+    """user_id / tenant_id 请求上下文测试"""
 
     def test_set_user_id(self):
         from src.tools.file.cp_tool import CpTool
 
-        tool = CpTool()
-        tool.set_user_id("u1")
-        assert tool._user_id == "u1"
+        CpTool()
+        _set_test_context(user_id="u1")
+        assert current_tool_execution_context().user_id == "u1"
 
     def test_set_tenant_id(self):
         from src.tools.file.cp_tool import CpTool
 
-        tool = CpTool()
-        tool.set_tenant_id("t1")
-        assert tool._tenant_id == "t1"
+        CpTool()
+        _set_test_context(tenant_id="t1")
+        assert current_tool_execution_context().tenant_id == "t1"

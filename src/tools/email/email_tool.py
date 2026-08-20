@@ -134,19 +134,16 @@ class EmailProcessTool(BaseTool):
             user_email: 用户邮箱配置（可选，不传则运行时从数据库读取）
         """
         self.user_email = user_email
-        self._user_id: Optional[str] = None
-
-    def set_user_id(self, user_id: str):
-        """设置当前用户ID，用于从数据库读取邮箱配置"""
-        self._user_id = user_id
 
     def _resolve_user_email(self) -> Optional[UserEmail]:
         """获取用户邮箱配置：优先使用注入的配置，否则从DB读取"""
         if self.user_email:
             return self.user_email
-        if self._user_id:
+        from src.tools.context import current_tool_execution_context
+        context = current_tool_execution_context()
+        if context and context.user_id:
             from src.db.email_credential import EmailCredentialDB
-            return EmailCredentialDB.get_user_email_model(self._user_id)
+            return EmailCredentialDB.get_user_email_model(context.user_id)
         return None
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
@@ -160,7 +157,9 @@ class EmailProcessTool(BaseTool):
         Returns:
             执行结果
         """
-        user_email = self._resolve_user_email()
+        # 数据库凭据解析是同步调用；async 工具入口必须放到工作线程，避免
+        # 邮件调用前的账号查询阻塞同一 worker 上的其他请求。
+        user_email = await asyncio.to_thread(self._resolve_user_email)
         if not user_email:
             return {"success": False, "error": "未绑定邮箱，请先去设置中绑定邮箱"}
 

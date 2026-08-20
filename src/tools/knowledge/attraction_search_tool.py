@@ -45,11 +45,6 @@ class AttractionSearchTool(BaseTool):
 
     def __init__(self):
         self._embedding_client = None
-        self._tenant_id = None
-
-    def set_tenant_id(self, tenant_id: str):
-        """由 Agent 注入 tenant_id（子智能体线程中 ContextVar 不可用）"""
-        self._tenant_id = tenant_id
 
     def _get_embedding_client(self):
         if self._embedding_client is None:
@@ -73,14 +68,9 @@ class AttractionSearchTool(BaseTool):
             return {"success": False, "error": "查询不能为空", "results": [], "count": 0}
 
         try:
-            # 获取 tenant_id：优先 ContextVar（HTTP请求场景），其次从 agent 注入（子智能体线程场景）
-            tenant_id = self._tenant_id
-            if not tenant_id:
-                try:
-                    from src.saas.context import get_current_tenant_id
-                    tenant_id = get_current_tenant_id()
-                except Exception:
-                    pass
+            from src.tools.context import current_tool_execution_context
+            context = current_tool_execution_context()
+            tenant_id = context.tenant_id if context else None
             if not tenant_id:
                 return {"success": False, "error": "无法确定租户ID", "results": [], "count": 0}
 
