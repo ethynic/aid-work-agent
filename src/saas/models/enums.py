@@ -159,8 +159,8 @@ class UserSource(str, Enum):
 
     数据库存储：TEXT
     - NULL / 空字符串 = 内部用户（管理员创建）
-    - wecom_kf = 企业微信客服
-    - wecom_personal_rpa = 微信RPA
+    - wecom_kf = 企微客服
+    - wecom_personal_rpa = 企微RPA
     """
     WECOM_KF = "wecom_kf"
     WECOM_PERSONAL_RPA = "wecom_personal_rpa"
@@ -172,8 +172,8 @@ class UserSource(str, Enum):
     @property
     def display_name(self) -> str:
         mapping = {
-            self.WECOM_KF: "企业微信客服",
-            self.WECOM_PERSONAL_RPA: "微信RPA",
+            self.WECOM_KF: "企微客服",
+            self.WECOM_PERSONAL_RPA: "企微RPA",
         }
         return mapping.get(self, "未知")
 
