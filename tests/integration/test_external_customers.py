@@ -339,7 +339,7 @@ class TestGetUserSessionsFilter:
 
 
 class TestNormalUserDataIsolation:
-    """普通用户（引流员工）数据隔离：只见自己负责的客服账号客户 + 自己引流的客户"""
+    """普通用户（引流员工）数据隔离：只看到自己负责的客服账号下的对话客户"""
 
     def _setup(self, temp_tenant_for_external):
         """构造数据：emp_A 负责 kf_A，emp_B 负责 kf_B；cust1 在 kf_A 聊、
@@ -388,8 +388,8 @@ class TestNormalUserDataIsolation:
         return _patch("src.saas.api.external_customers.require_admin", fake_require_admin), \
             _patch("src.saas.api.external_customers.settings")
 
-    def test_users_sees_own_account_and_own_referrals_only(self, temp_tenant_for_external):
-        """普通用户 /users：只见自己负责账号客户 + 自己引流客户，且带 referral_time"""
+    def test_users_sees_own_account_sessions_only(self, temp_tenant_for_external):
+        """普通用户 /users：只看到自己负责客服账号下的对话客户，自己引流客户在他人账号下的会话不可见"""
         from src.saas.api import external_customers
 
         d = self._setup(temp_tenant_for_external)
@@ -399,18 +399,15 @@ class TestNormalUserDataIsolation:
             resp = _call(external_customers.list_external_users, FakeRequest(), page=1, page_size=20)
 
         assert resp["success"] is True
-        assert resp["total"] == 2, "emp_A 应只看到 cust1（负责账号）+ cust2（自己引流）"
+        assert resp["total"] == 1, "emp_A 只能看到自己负责账号(kf_a)下会话的 cust1"
         user_ids = {r["user_id"] for r in resp["users"]}
         assert d["cust1"] in user_ids
-        assert d["cust2"] in user_ids
+        assert d["cust2"] not in user_ids, "自己引流但在他人工号(kf_b)下会话的客户不可见"
         assert d["cust3"] not in user_ids, "emp_B 负责的客户 emp_A 不可见"
 
         by_user = {r["user_id"]: r for r in resp["users"]}
         assert by_user[d["cust1"]]["kf_name"] == "客服-曹老师"
         assert by_user[d["cust1"]]["referrer_name"] is None
-        assert by_user[d["cust2"]]["referrer_name"] == "曹老师"
-        assert by_user[d["cust2"]]["referral_time"], "引流客户应返回首次访问时间（referral_time）"
-        assert by_user[d["cust2"]]["kf_name"] is None, "引流客户在他人账号下的行不得泄露该账号名称"
 
     def test_admin_sees_all(self, temp_tenant_for_external):
         """管理员 /users：全量可见（行为不变）"""

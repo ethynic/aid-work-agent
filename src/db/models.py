@@ -370,7 +370,6 @@ class UserDB:
         source: str = None,
         referrer_user_id: str = None,
         visible_kf_ids: Optional[list] = None,
-        current_user_id: str = None,
         channel_chat_id: str = None,
         page: int = 1,
         page_size: int = 20,
@@ -388,8 +387,7 @@ class UserDB:
             source: 用户来源筛选（可选）
             referrer_user_id: 引流员工筛选（可选，命中则只返回该员工引流的客户）
             visible_kf_ids: 普通用户可见的客服账号 open_kfid 列表（None 表示管理员全量可见）。
-                非 None 时，只返回「在该账号下有会话的客户 ∪ 由 current_user_id 引流的客户」
-            current_user_id: 普通用户（引流员工）自己的 user_id，与 visible_kf_ids 配套使用
+                非 None 时，只返回「在该账号下有会话的客户」，不返回客户在其他客服账号下的会话
             page: 页码，从1开始
             page_size: 每页数量
 
@@ -434,10 +432,9 @@ class UserDB:
                 params.append(referrer_user_id)
 
             if visible_kf_ids is not None:
-                # 普通用户可见范围：自己负责的客服账号下有会话的客户 ∪ 自己引流的客户
-                conditions.append("(cs.channel_chat_id = ANY(%s) OR cr.referrer_user_id = %s)")
+                # 普通用户（引流员工）只能看到自己负责的客服账号下的对话记录
+                conditions.append("cs.channel_chat_id = ANY(%s)")
                 params.append(visible_kf_ids)
-                params.append(current_user_id)
 
             where_clause = " AND ".join(conditions)
 

@@ -102,7 +102,6 @@ async def list_external_users(
         source=source,
         referrer_user_id=referrer_user_id,
         visible_kf_ids=visible_kf_ids,
-        current_user_id=admin.get("user_id") if visible_kf_ids is not None else None,
         channel_chat_id=channel_chat_id,
         page=page,
         page_size=page_size,
