@@ -222,7 +222,7 @@
                     <span class="text-xs text-muted font-mono">{{ acc.open_kfid }}</span>
                     <span class="text-xs text-muted">归属：{{ tenantUserName(acc.tenant_user_id) }}</span>
                     <span v-if="acc.expire_at" class="text-xs text-muted">到期 {{ acc.expire_at }}</span>
-                    <span v-if="acc.credit_limit > 0" class="text-xs text-muted">积分 {{ acc.credit_used }}/{{ acc.credit_limit }}</span>
+                    <span class="text-xs text-muted">积分 {{ acc.credit_used }}<template v-if="acc.credit_limit > 0">/{{ acc.credit_limit }}</template></span>
                     <span class="text-xs text-muted">引流 {{ acc.referral_count }} 人</span>
                   </div>
                   <div class="flex items-center gap-1 flex-shrink-0">
