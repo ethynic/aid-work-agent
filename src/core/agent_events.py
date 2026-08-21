@@ -63,6 +63,59 @@ def make_image_event(
     return make_event("images", images=list(images or []), placement=placement)
 
 
+# ============== 工具参数脱敏 ==============
+
+# 视为敏感、值需脱敏为 *** 的参数键名（统一小写 + 下划线归一后匹配）
+SENSITIVE_ARG_KEYS = frozenset({
+    "password", "passwd", "pwd",
+    "api_key", "apikey",
+    "token", "access_token",
+    "secret", "secret_key",
+    "authorization", "cookie", "cookies",
+    "credential", "credentials",
+    "private_key", "client_secret",
+})
+
+# 单字符串值超过该长度截断，避免文档正文等大段内容写入事件持久化链
+MAX_ARG_VALUE_LENGTH = 200
+
+# 嵌套深度上限，防止极端深层结构撑爆序列化
+MAX_ARG_NEST_DEPTH = 8
+
+
+def _is_sensitive_arg_key(key: str) -> bool:
+    return key.lower().replace("-", "_") in SENSITIVE_ARG_KEYS
+
+
+def mask_tool_args(args: Any, _depth: int = 0) -> Any:
+    """递归脱敏工具参数副本，供 SSE / 会话 metadata / trace 使用。
+
+    工具参数可能包含凭据（token/password/api_key）或文档正文、个人信息。
+    原始参数只进入 LLM 上下文与工具执行；事件链路统一使用本函数脱敏后的
+    副本，避免敏感信息落库。
+
+    - 敏感键名（password/token/api_key/secret 等）的值替换为 ``***``
+    - 超长字符串截断为前 MAX_ARG_VALUE_LENGTH 字符并附省略标记
+    - 嵌套深度超过 MAX_ARG_NEST_DEPTH 时整体替换为省略标记
+
+    返回新结构，不影响用于实际工具执行的原始参数。
+    """
+    if _depth > MAX_ARG_NEST_DEPTH:
+        return "…(嵌套过深)"
+    if isinstance(args, dict):
+        return {
+            key: ("***" if _is_sensitive_arg_key(key) else mask_tool_args(value, _depth + 1))
+            for key, value in args.items()
+        }
+    if isinstance(args, list):
+        return [mask_tool_args(item, _depth + 1) for item in args]
+    if isinstance(args, str):
+        if len(args) <= MAX_ARG_VALUE_LENGTH:
+            return args
+        return f"{args[:MAX_ARG_VALUE_LENGTH]}…(已截断，共 {len(args)} 字符)"
+    return args
+
+
 @dataclass
 class ContextCompressedEvent:
     """上下文压缩完成事件（Phase 7 §7.1）。
