@@ -1,6 +1,6 @@
 ---
-关联想法: 客户留资（售前咨询）——pre-sales 智能体 + lead-capture 技能
-关联设计: docs/channel/wecom_kf/lead-capture-design.md
+关联想法: 客户留资（售前咨询）——pre-sales 智能体 + record_lead_capture 工具
+关联设计: docs/subagent/pre-sales/lead-capture-design.md
 关联设计(上游): docs/channel/wecom_kf/wecom_kf_design.md
 状态: 📋 待开发
 创建日期: 2026-08-21
@@ -19,6 +19,13 @@
 > 6. **线索表单独新建** `bs_lead_capture_leads`（中性表名；若坚持渠道命名可 `bs_wecom_kf_leads`，实现相同）
 > 7. 员工二维码不区分微信/企微，`kf_account.employee_qr_file_id` 存 ImageRegistry file_id
 > 8. 统计做留资报表页（复用引流统计模式），不做定时汇总
+>
+> **v2.1 评审修订（2026-08-21，定稿）**：
+> 9. **不建 lead-capture 技能**（修订第 4 条）：留资策略写入 pre-sales SUBAGENT.md 正文（租户经 `prompt_versions` 覆盖），核心动作走 `record_lead_capture` 纯工具（参照 `transfer_to_human` 先例）
+> 10. **工作时间由提示词声明**：租户管理员写“本公司工作时间是周一到周五 X 点到 X 点”，LLM 按上下文注入的当前时间 + 星期判断
+> 11. 员工二维码注册：`source="user_upload", usage="attachment", ttl_seconds=PERMANENT_TTL`（显式永久，不用 source=knowledge_base hack）
+> 12. Phase 1 工具 `catalog=False`（不进任何智能体工具列表，仅单测验证），Phase 2 随 pre-sales 上线放开 `catalog=True`
+> 13. 建表加入 `src/saas/db/tables.py` 的 `init_saas_tables()`（启动自动建表），同时登记 deploy 两个 SQL 文件
 
 ---
 
@@ -26,10 +33,10 @@
 
 | 设计文档章节 | 开发需求 | 落地 Phase |
 |------------|---------|-----------|
-| §三 架构分层 | 渠道/智能体/技能/工具四层落地 | 各 Phase |
+| §三 架构分层 | 渠道/智能体/工具三层落地 | 各 Phase |
 | §四.1 pre-sales 智能体 | 新建 `subagents/pre-sales/SUBAGENT.md` | Phase 2 |
 | §四.2 after-sales 回归纯售后 | 清理 SUBAGENT.md 售前内容 | Phase 4 |
-| §五 lead-capture 技能 | 新建 `src/skills/lead-capture-1.0.0/` | Phase 2 |
+| §五 留资策略 | pre-sales SUBAGENT.md 提示词正文（触发判定 / 话术 / 工作时间） | Phase 2 |
 | §六 record_lead_capture 工具 | 新建工具（记录 + 防重复 + 返回二维码） | Phase 1 |
 | §七 会话状态机 | `channel_sessions.metadata.lead_capture` 注入/读写 | Phase 1 |
 | §八 有效客户判定 | 提示词驱动，代码不介入判定 | — |
@@ -43,12 +50,12 @@
 
 ```
 Phase 1（工具层：留资记录能力）
-  → Phase 2（技能 + 智能体：lead-capture 技能、pre-sales 智能体、员工二维码）
+  → Phase 2（智能体 + 配置：pre-sales 智能体提示词、员工二维码、工具放开 catalog）
   → Phase 3（运营侧：线索管理 + 留资统计报表页）
   → Phase 4（after-sales 回归纯售后 + 租户渠道账号切换）
 ```
 
-**Phase 1 完成即可验证"留资记录"链路**；**Phase 2 完成售前场景整体可上线**（新建 pre-sales、挂技能、绑渠道账号）；Phase 3 补齐运营管理；Phase 4 拆分 after-sales（涉及生产渠道账号切换，独立排期）。
+**Phase 1 完成即可验证"留资记录"链路**；**Phase 2 完成售前场景整体可上线**（新建 pre-sales、放开工具、绑渠道账号）；Phase 3 补齐运营管理；Phase 4 拆分 after-sales（涉及生产渠道账号切换，独立排期）。
 
 ---
 
@@ -58,15 +65,15 @@ Phase 1（工具层：留资记录能力）
 
 **决策确认**：单独新建，不与既有 `bs_customer_followup_leads`（lead-management 技能）混用。
 
-表结构（登记 `deploy/init-postgres.sql` + `deploy/db_update.sql`）：
+表结构（三处登记：`src/saas/db/tables.py` 的 `init_saas_tables()` + `deploy/init-postgres.sql` + `deploy/db_update.sql`）：
 
 ```sql
 CREATE TABLE IF NOT EXISTS bs_lead_capture_leads (
     id SERIAL PRIMARY KEY,
     lead_id TEXT UNIQUE NOT NULL,          -- lead_lc_<uuid12>
     tenant_id TEXT NOT NULL,               -- 租户隔离
-    user_id TEXT,                          -- 渠道侧 customer_user_id（ensure_user_registered 的 user_id）
-    customer_user_id TEXT,                 -- 微信侧 external_userid（老客户识别）
+    user_id TEXT,                          -- 租户侧注册用户（ensure_user_registered 生成；非 bs_ 规范的“创建用户”语义）
+    customer_user_id TEXT,                 -- 微信侧 external_userid（老客户识别；与 user_id 是两套 ID）
     channel_chat_id TEXT,                  -- open_kfid（来源客服账号）
     kf_account_name TEXT,                  -- 客服账号名快照
     contact_method TEXT,                   -- phone | qr
@@ -79,7 +86,6 @@ CREATE TABLE IF NOT EXISTS bs_lead_capture_leads (
     assignee_name TEXT,                    -- 归属员工姓名快照
     transferred_to TEXT,                   -- 留资后若转人工，记录 servicer_userid
     session_id TEXT,                       -- 产生线索的渠道会话
-    lead_created_at TIMESTAMP,             -- 留资成功时间（= created_at，冗余便于排序/统计）
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -91,13 +97,17 @@ CREATE INDEX IF NOT EXISTS idx_lc_leads_customer ON bs_lead_capture_leads(custom
 
 **合规**（database_dev.md）：`bs_` 前缀 ✓、`tenant_id` ✓、`user_id` ✓、`created_at` 默认值 ✓。
 
+**建表机制**：本项目 saas 侧表由 `src/saas/db/tables.py` 的 `init_saas_tables()` 在启动时自动建表（幂等）。技能方案取消后无 skill `init_tables()` 路径，**必须**把建表加入 `init_saas_tables()`，现有环境升级重启即生效，不依赖手工执行 db_update.sql。
+
+> 命名规范例外：`database_dev.md` 约定 `bs_[subagent]_[tablename]`（按此应为 `bs_pre_sales_leads`），本表按能力级中性命名 `bs_lead_capture_leads`（留资是跨智能体能力），已在设计文档显式登记为规范例外。
+
 #### 3.1.1 手机号加密存储
 
 手机号按项目安全原则**加密落库**：复用 `src/core/credential_codec.py`（渠道配置敏感字段同款）。列表/详情接口解密返回（权限内），日志/统计不打印明文。
 
 ### 3.2 `record_lead_capture` 工具
 
-**新建** `src/tools/lead_capture/record_lead_capture.py`（`catalog=True`，Catalog 自动发现，无需改 `agent.py`）。
+**新建** `src/tools/lead_capture/record_lead_capture.py`（Catalog 自动发现，无需改 `agent.py`；catalog 分阶段策略见下）。
 
 ```python
 class RecordLeadCaptureInput(BaseModel):
@@ -117,7 +127,7 @@ class RecordLeadCaptureInput(BaseModel):
 
 **description（给 LLM）**：描述"收集到客户手机号或客户选择添加员工微信时调用"，注明"调用后提示客户客服会联系/可添加下方微信"，"该客户已留资过则不要重复调用"。
 
-**注册评估**：若判断渠道无关智能体（如 web 端内部员工）会误调用，考虑 `catalog=False` 走 `control_set.py` 显式装配（与 `transfer_to_human` 的装配策略对齐）；Phase 1 默认 `catalog=True`，工具内渠道隔离兜底。
+**catalog 策略**：Phase 1 `catalog=False`——工具不进入任何智能体工具列表（含当前生产上兼顾售前咨询的 after-sales），仅单测直接实例化验证链路，避免无提示词约束下被误调用；Phase 2 随 pre-sales 上线改为 `catalog=True`，靠提示词规范 + 工具内 `get_kf_context` 渠道隔离兜底（与 `transfer_to_human` 的模式一致：它同样是 catalog=True + 工具内隔离，并未走 control_set 装配）。
 
 ### 3.3 会话状态注入（渠道层唯一改动）
 
@@ -125,45 +135,13 @@ class RecordLeadCaptureInput(BaseModel):
 
 ### 3.4 数据访问层
 
-新增 `src/saas/db/lead_capture_db.py`：`WeComLeadDB`（命名中性，如 `LeadCaptureDB`）——`create` / `get_by_id` / `list_by_tenant`（分页，`created_at DESC`）/ `update_stage` / `find_by_customer`（客户级防重复用）/ `stats`（日期段统计，Phase 3）。
+新增 `src/saas/db/lead_capture_db.py`：`LeadCaptureDB`——`create` / `get_by_id` / `list_by_tenant`（分页，`created_at DESC`）/ `update_stage` / `find_by_customer`（客户级防重复用）/ `stats`（日期段统计，Phase 3）。
 
 ---
 
-## 四、Phase 2：lead-capture 技能 + pre-sales 智能体 + 员工二维码
+## 四、Phase 2：pre-sales 智能体 + 员工二维码配置
 
-### 4.1 lead-capture 技能
-
-**新建** `src/skills/lead-capture-1.0.0/SKILL.md`（参照 `lead-management` / `after-sales-core` 技能结构）：
-
-```markdown
----
-name: lead-capture
-description: 客户留资技能：收集客户手机号或引导添加归属员工微信，形成销售线索。
-  适用于服务 C 端客户的智能体（售前咨询、旅游咨询等）。
----
-
-# 客户留资技能
-
-## 何时使用
-- 客户主动表达购买意向 / 主动索要联系方式
-- 客户需求字段（预算/数量/地区/交付时间）覆盖度达标
-- 客户主动询问"怎么联系 / 加微信 / 留电话"
-
-## 留资引导流程
-1. 判断是否已留资（若本会话已收集过，勿重复）
-2. 自然话术引出留资：留手机号 or 添加员工微信（两条都给客户自选）
-3. 收集客户手机号 / 确认客户选择加微信 → 调用 record_lead_capture 工具
-4. 工具返回成功 → 告知客户"客服专员会尽快联系"
-
-## 话术模板
-（留手机号话术 / 添加员工微信话术）
-```
-
-**关键**：技能以 SKILL.md 策略为主，**核心动作走 `record_lead_capture` 工具**（子进程脚本无法访问会话上下文）。`init_script` 留空（loader 对 `init_script` 为 Optional）。
-
-**挂载**：pre-sales 智能体 `skills.allowed` 加 `lead-capture`；后续旅游等智能体同样在 `skills.allowed` 加入即可复用。
-
-### 4.2 pre-sales 智能体
+### 4.1 pre-sales 智能体（含留资提示词）
 
 **新建** `subagents/pre-sales/SUBAGENT.md`（参照 `travel-consultant` / `after-sales` 格式）：
 
@@ -181,18 +159,29 @@ triggers:
     - 多少钱 / 价格 / 优惠 / 怎么买 / 下单 / 咨询产品
 tools:
   inherit: true
-skills:
-  allowed:
-    - lead-capture
 ---
-（正文：售前咨询人设 + 留资引导规范 + 调用 record_lead_capture 的指引）
+（正文：售前咨询人设 + 留资引导规范）
 ```
+
+**SUBAGENT.md 正文必须包含的留资规范**（不建技能，策略全在提示词，见设计 §五）：
+
+- **触发判定**：客户主动表达购买意向 / 主动索要联系方式 / 需求字段覆盖度达标；客户主动询问“怎么联系 / 加微信 / 留电话”为最高优先级
+- **留资话术模板**：留手机号 + 添加员工微信两条话术，客户自选
+- **工作时间声明**（默认口径，管理员可改）：
+  - “本公司工作时间是周一至周五 9:00-18:00。当前时间在工作时间内 → 优先引导添加员工微信；否则 → 优先引导留下手机号”
+  - 注明“上下文会注入当前时间与英文星期（如 Thursday=周四），据此判断”
+- **动作指引**：拿到手机号或客户选择加微信 → 调用 record_lead_capture；已留资勿重复调用；工具返回失败（未配置二维码）→ 降级仅引导留手机号
+- **需求字段收集**：对话中抽取预算/数量/地区/交付时间，随工具参数写入线索
+
+**租户自定义链路**：管理后台修改智能体提示词 → `prompt_versions` 表 → factory.py 加载 DB 定义覆盖 SUBAGENT.md 正文（无需改代码）。判定标准、话术、工作时间均可由租户调整。
 
 **渠道绑定**：租户管理员在渠道配置「客服账号」弹窗把售前账号 `subagent_type` 选为 `pre-sales`（`channel_routes` 按 `kf_config.subagent_type` 路由，无需改代码）。
 
-### 4.3 员工二维码配置 + 图片管线
+**工具放开**：本 Phase 将 `record_lead_capture` 的 `catalog` 改为 `True`。
 
-#### 4.3.1 配置字段
+### 4.2 员工二维码配置 + 图片管线
+
+#### 4.2.1 配置字段
 
 `tenant_channel_configs.config.kf_account[]` 每项新增（**不区分微信/企微，单一字段**）：
 
@@ -201,28 +190,31 @@ skills:
   "open_kfid": "...",
   "name": "售前客服",
   "tenant_user_id": "绑定员工 user_id",
-  "employee_qr_file_id": "file_xxx",       // 新增：员工二维码 ImageRegistry file_id
-  "employee_qr_display_name": "员工二维码.png"  // 新增：展示名
+  "employee_qr_file_id": "file_xxx"        // 新增：员工二维码 ImageRegistry file_id（展示名随 ImageRef 回显，无需冗余字段）
 }
 ```
 
-#### 4.3.2 上传/注册链路（复用 ImageRef 管线）
+#### 4.2.2 上传/注册链路（复用 ImageRef 管线）
 
 1. 前端 `ChannelConfig.vue` 客服账号编辑弹窗新增「员工二维码」上传
-2. 后端 `wecom_kf_account.py` 保存逻辑：接收图片 → 落盘 `storage/tenants/{tenant_id}/avatar/` → `ImageRegistry.register(..., source=..., usage=...)` → `file_id` → 写入 `kf_account.employee_qr_file_id`
+2. 后端 `wecom_kf_account.py` 保存逻辑：接收图片 → 落盘 `storage/tenants/{tenant_id}/avatar/` → `ImageRegistry.register(source="user_upload", usage="attachment", ttl_seconds=PERMANENT_TTL)` → `file_id` → 写入 `kf_account.employee_qr_file_id`
 3. 下发：`record_lead_capture(qr)` 返回 `ImageRef`；wecom_kf `send_message._send_image_file_as_image` 已支持按 file_id → upload_media → image 消息，微信侧直接显示可长按识别
 4. 回显：管理端用 `/api/files/{file_id}/download`
 
-#### 4.3.3 ⚠️ TTL 风险（必须处理）
+#### 4.2.3 图片注册 TTL 方案
 
-`ImageRegistry` 对 `tool_generated/web_fetch/user_upload` 的 `inline/embedded` 图有 24h `cleanup_temp` 清理。**员工二维码是长期资产，不能被清**：
-- 注册用 `source="knowledge_base"`（`PERMANENT_TTL=-1` 永久，cleanup 不清该 source），语义不完全贴切但实现最简
+`ImageRegistry`（src/core/image_asset.py）机制核实：
+- **Redis TTL**：`source != "knowledge_base"` 且未显式传 `ttl_seconds` 时默认 24h expire；**显式传 `ttl_seconds=PERMANENT_TTL(-1)` 则不调 expire，永久保留，与 source 无关**
+- **cleanup_temp**：仅清理 `source ∈ (tool_generated, web_fetch)` 且 `usage ∈ (inline, embedded)` 的图；`user_upload` / `attachment` 均不在清理范围
+
+**员工二维码注册参数**：`source="user_upload", usage="attachment", ttl_seconds=PERMANENT_TTL`——不设 TTL、不被 cleanup 清理，语义准确。
+
 - 换图/删号时显式清理旧 file_id
-- 备选：`ImageRegistry` 增加 `source="channel_asset"`（永久）枚举（需前后端 type 契约同步，成本高，暂缓）
+- ~~注册用 `source="knowledge_base"`~~：语义 hack，污染 `ImageRef.source` 枚举契约与前端来源标签，不采用；“新增 `channel_asset` 枚举”亦无必要（显式 TTL 参数即可满足）
 
-### 4.4 即时通知（Phase 2 配套）
+### 4.3 即时通知（Phase 2 配套）
 
-留资成功 → 通知归属客服。复用既有通知机制（企微应用消息 / 管理后台待办，实现时确认现有 `notification` 服务）。非工作时间自动转次日待办。
+留资成功 → 通知归属客服，复用 `src/services/notification_service.py`（企微应用消息 / 管理后台待办）。非工作时间自动转次日待办（通知侧按服务器时间判断，与对话侧提示词判断互不干扰）。
 
 ---
 
@@ -241,7 +233,7 @@ skills:
 
 **统计口径**（对齐引流统计 `CustomerReferralDB.referral_stats`）：
 - 总留资数 / 按 `contact_method` 分组 / 按 `assigned_to` 分组 + ratio
-- 过滤基准 = `bs_lead_capture_leads.lead_created_at`
+- 过滤基准 = `bs_lead_capture_leads.created_at`（已有索引；不设冗余的 lead_created_at 列）
 - 日期段：`start_date` / `end_date`（含当日，SQL `< 次日` +1 天）
 - 权限：普通用户（引流员工）仅见 `assigned_to == 自己` 的线索与统计（复用 `_resolve_visible_kf_ids` 隔离模式）
 
@@ -277,6 +269,7 @@ API 封装走 `getAuthHeader()`（自动带 X-Tenant-Id）。
 
 | 文件 | 变更 |
 |------|------|
+| `src/saas/db/tables.py` | `init_saas_tables()` 新增 `bs_lead_capture_leads` 建表（启动自动建表） |
 | `deploy/init-postgres.sql` | 新增 `bs_lead_capture_leads` 建表 |
 | `deploy/db_update.sql` | 追加 2026-08-21 增量：`CREATE TABLE IF NOT EXISTS bs_lead_capture_leads ...` |
 
@@ -293,13 +286,15 @@ API 封装走 `getAuthHeader()`（自动带 X-Tenant-Id）。
   - 成功写入 `bs_lead_capture_leads`（assigned_to 快照、手机号密文断言）
   - 二次调用（metadata 已 captured）→ 拒绝防重复
   - 非 wecom_kf 渠道（无 kf_context）→ 渠道受限失败
+  - catalog=False：工具不出现在任何智能体的工具定义列表（Registry 断言）
 - 单测 `tests/unit/db/test_lead_capture_db.py`：CRUD + 日期段统计 + 权限过滤
 - 回归：`test_wecom_kf_adapter.py`、channels 目录、`external_customers` 集成
 
-### Phase 2（技能 + 智能体 + 配置）
-- SKILL.md 加载：`SkillRegistry` 发现 `lead-capture`（无 init_script 加载正常）
-- `pre-sales/SUBAGENT.md`：loader 解析、`/chat/pre-sales` 路由、skills.allowed 生效
-- 渠道配置：上传→落盘→注册→file_id 写入；换图旧 file_id 清理
+### Phase 2（智能体 + 配置）
+- `pre-sales/SUBAGENT.md`：loader 解析、`/chat/pre-sales` 路由、留资规范正文完整性断言
+- prompt_versions 覆盖：DB 定义加载后自定义 system_prompt 生效（含租户自定义工作时间）
+- 工具可见性：catalog 改 True 后 pre-sales 工具列表含 record_lead_capture
+- 渠道配置：上传→落盘→注册→file_id 写入；注册参数断言（source=user_upload / usage=attachment / ttl 永久）；换图旧 file_id 清理
 - `record_lead_capture(qr)` 返回 ImageRef → send_message 图片下发（mock upload_media）
 - 前端：`cd frontend && npm run build` 0 错误；员工二维码上传回显
 
@@ -320,13 +315,13 @@ API 封装走 `getAuthHeader()`（自动带 X-Tenant-Id）。
 | # | 风险 | 应对 |
 |---|------|------|
 | 1 | 两张线索表割裂（`bs_lead_capture_leads` vs `bs_customer_followup_leads`） | 用户已确认单独新建；通过 `customer_user_id` 可关联，不产生依赖 |
-| 2 | 员工二维码被 ImageRegistry 临时清理（24h TTL） | `source=knowledge_base` 永久语义 + 换图/删号显式清理（§4.3.3） |
+| 2 | 员工二维码被 TTL 清理 | 显式 `ttl_seconds=PERMANENT_TTL` 永久注册 + `usage=attachment`（不在 cleanup 范围）；换图/删号显式清理（§4.2.3） |
 | 3 | 提示词判定不可靠（重复/漏留资） | 代码侧防重复兜底（metadata.lead_capture）；漏留资靠管理员调提示词 |
-| 4 | `record_lead_capture` 被非 wecom_kf 渠道误调用 | 工具内 `get_kf_context()` 渠道隔离；必要时 `catalog=False` 显式装配 |
+| 4 | 工具被误调用（非 wecom_kf 渠道 / Phase 1 期间的生产 after-sales） | Phase 1 `catalog=False` 对所有智能体不可见；Phase 2 放开后靠工具内 `get_kf_context()` 渠道隔离 + 提示词约束 |
 | 5 | 手机号明文泄露 | 加密落库、日志不打印、接口解密限权限内 |
 | 6 | 客服账号未配置员工二维码 | `record_lead_capture(qr)` 无 file_id → 失败，提示词仅引导留手机号 |
 | 7 | after-sales 拆分影响生产售后 | Phase 4 独立排期，三智能体 + 真机验证，租户账号切换配合 |
-| 8 | 子进程技能无法访问会话上下文 | 核心动作放工具（record_lead_capture），技能只做策略引导 |
+| 8 | 策略写在提示词，租户改动可能引入劣化话术 | `prompt_versions` 有版本记录可回滚；SUBAGENT.md 默认口径兜底 |
 
 ---
 
@@ -337,9 +332,9 @@ API 封装走 `getAuthHeader()`（自动带 X-Tenant-Id）。
 | `src/tools/lead_capture/record_lead_capture.py` | 新增：留资记录工具 | 1 |
 | `src/saas/db/lead_capture_db.py` | 新增：`LeadCaptureDB`（CRUD + 统计） | 1 / 3 |
 | `src/saas/api/channel_routes.py` | `set_kf_context` 注入 `lead_capture`（渠道层唯一改动） | 1 |
-| `deploy/init-postgres.sql` / `deploy/db_update.sql` | 建表 | 1 |
-| `src/skills/lead-capture-1.0.0/SKILL.md` | 新增：留资技能 | 2 |
-| `subagents/pre-sales/SUBAGENT.md` | 新增：售前咨询智能体 | 2 |
+| `src/saas/db/tables.py` | `init_saas_tables()` 新增建表 | 1 |
+| `deploy/init-postgres.sql` / `deploy/db_update.sql` | 建表登记 | 1 |
+| `subagents/pre-sales/SUBAGENT.md` | 新增：售前咨询智能体（含留资规范提示词） | 2 |
 | `src/saas/api/wecom_kf_account.py` | 员工二维码上传/保存 | 2 |
 | `frontend/web/components/saas/ChannelConfig.vue` | 客服账号表单加员工二维码上传 | 2 |
 | `src/saas/api/external_customers.py` | 新增 lead-stats / leads 接口 | 3 |
@@ -354,5 +349,5 @@ API 封装走 `getAuthHeader()`（自动带 X-Tenant-Id）。
 - **转人工**（`transfer_to_human.py`）：`record_lead_capture` 的参照实现——metadata 持久化 + get_kf_context 渠道隔离 + system 标记消息，直接复用其模式
 - **引流归因**（`customer_referrals`）：留资统计报表的模式参照；归因（客户从哪进）与留资（进来后如何转化）上下游关系，通过 `customer_user_id` 关联
 - **lead-management 技能**（`bs_customer_followup_leads`）：既有线索能力，本次独立新建不混用，避免数据割裂风险
-- **after-sales / travel-consultant 等智能体**：skills.allowed 挂载 `lead-capture` 即可复用留资能力
+- **after-sales / travel-consultant 等智能体**：需要留资时在其 SUBAGENT.md 提示词写入同样的留资规范即可复用（≥2 个智能体真实需要时再抽取技能）
 - **wecom_kf 渠道**：仅 `set_kf_context` 注入会话状态，不承载留资业务逻辑

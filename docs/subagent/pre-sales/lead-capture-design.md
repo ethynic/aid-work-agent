@@ -2,20 +2,26 @@
 关联想法: wecom_kf 售前咨询客户留资（手机号 / 员工微信二维码）
 关联设计: docs/channel/wecom_kf/wecom_kf_design.md
 关联设计(上游): docs/channel/wecom_kf/transfer_to_human_optimization.md
-状态: ✅ 已确认（产品方案，v2.0 架构调整）
+状态: ✅ 已确认（产品方案，v2.1 评审修订）
 创建日期: 2026-08-21
 ---
 
 # 客户留资（售前咨询）设计
 
-> 版本: v2.0 | 创建: 2026-08-21 | 状态: 已确认（4 项决策点 + v2.0 架构调整，见第十四、十五节）
-> 关联文档: [wecom_kf_design.md](wecom_kf_design.md) / [transfer_to_human_optimization.md](transfer_to_human_optimization.md) / [kf-account-referral-plan.md](kf-account-referral-plan.md) / [lead-capture-dev-plan.md](lead-capture-dev-plan.md)
+> 版本: v2.1 | 创建: 2026-08-21 | 状态: 已确认（含 v2.1 评审修订，见第十五节）
+> 关联文档: [wecom_kf_design.md](../../channel/wecom_kf/wecom_kf_design.md) / [transfer_to_human_optimization.md](../../channel/wecom_kf/transfer_to_human_optimization.md) / [kf-account-referral-plan.md](../../channel/wecom_kf/kf-account-referral-plan.md) / [lead-capture-dev-plan.md](lead-capture-dev-plan.md)
 
 > **v2.0 重构说明（2026-08-21）**：客户留资从「wecom_kf 渠道能力」调整为「**技能 + 智能体能力**」——
 > 1. wecom_kf 渠道回归**纯对话通道**，不实现留资业务逻辑；
 > 2. 新建 **pre-sales 售前咨询智能体** 承载售前留资；
 > 3. **after-sales 回归纯售后**（原为售前+售后双重职能）；
 > 4. 客户留资做成 **lead-capture 技能**，售前智能体跑通后可被旅游咨询等其他智能体复用。
+
+> **v2.1 评审修订（2026-08-21）**：
+> 1. **取消 lead-capture 技能**，改为纯工具方案（修订 v2.0 第 4 条）：留资策略（触发判定 / 话术 / 工作时间）写入 `pre-sales` SUBAGENT.md 正文，核心动作为 `record_lead_capture` 工具（参照 `transfer_to_human` 纯工具先例）
+> 2. **工作时间由租户管理员在自定义提示词中声明**（如"本公司工作时间是周一到周五 9:00-18:00"），LLM 依据上下文注入的当前时间判断（agent.py 已注入时间 + 星期）
+> 3. 员工二维码图片注册改用显式 `ttl_seconds=PERMANENT_TTL` 永久方案（替代 source=knowledge_base hack）
+> 4. Phase 1 工具 `catalog=False`（不进入任何智能体工具列表，仅单测验证），Phase 2 随 pre-sales 上线放开 `catalog=True`
 
 ---
 
@@ -31,9 +37,9 @@
 
 ### 1.2 渠道定位（核心架构约束）
 
-> **wecom_kf 只是对话通道，客户留资功能不在渠道层实现。** 留资的业务逻辑（判定、引导、记录、统计）全部落在**智能体层 + 技能层 + 工具层**，渠道只负责消息收发与提供会话上下文。
+> **wecom_kf 只是对话通道，客户留资功能不在渠道层实现。** 留资的业务逻辑（判定、引导、记录、统计）全部落在**智能体层 + 工具层**，渠道只负责消息收发与提供会话上下文。
 
-wecom_kf 的特殊性仅在于：**目前它是唯一面向 C 端用户的渠道**（web 会话、飞书、钉钉、企微应用均面向企业内部员工）。这意味着留资能力的载体必须是**可复用的技能/智能体**，而非绑定在 wecom_kf 上的渠道逻辑——未来接入其它 C 端渠道时，技能与工具可直接复用，无需重写渠道。
+wecom_kf 的特殊性仅在于：**目前它是唯一面向 C 端用户的渠道**（web 会话、飞书、钉钉、企微应用均面向企业内部员工）。这意味着留资能力的载体必须是**智能体 + 工具能力**，而非绑定在 wecom_kf 上的渠道逻辑——未来接入其它 C 端渠道或其它 C 端智能体时，工具与提示词规范可直接复用，无需重写渠道。
 
 ### 1.3 售前留资 vs 售后客服的核心差异
 
@@ -49,7 +55,7 @@ wecom_kf 会话本质是**一次性触点**：会话结束，微信侧客户就"
 
 ## 三、架构分层
 
-客户留资按四层架构落地，职责清晰、层层解耦：
+客户留资按三层架构落地，职责清晰、层层解耦（v2.1 起不再设技能层，见 §3.2）：
 
 ```
 ┌─────────────────────────────────────────────────────┐
@@ -60,21 +66,15 @@ wecom_kf 会话本质是**一次性触点**：会话结束，微信侧客户就"
                        │ channel_sessions（会话） + 会话上下文
 ┌──────────────────────▼──────────────────────────────┐
 │ ② 智能体层（subagents/）                           │
-│    pre-sales（新增）：售前咨询，挂载 lead-capture   │
+│    pre-sales（新增）：售前咨询 + 留资引导策略       │
+│    （触发判定 / 话术 / 工作时间，写入提示词正文）   │
 │    after-sales（调整）：回归纯售后                  │
-│    travel-consultant 等：可选挂载，复用留资能力     │
 └──────────────────────┬──────────────────────────────┘
-                       │ skills.allowed 挂载技能
+                       │ 提示词指导 LLM 调用工具
 ┌──────────────────────▼──────────────────────────────┐
-│ ③ 技能层（src/skills/lead-capture-1.0.0/）         │
-│    留资引导策略：触发判定 / 话术 / 需求字段收集     │
-│    指导 LLM 调用 record_lead_capture 工具           │
-└──────────────────────┬──────────────────────────────┘
-                       │ 调用工具
-┌──────────────────────▼──────────────────────────────┐
-│ ④ 工具层（src/tools/record_lead_capture.py）       │
-│    确定性动作：读会话状态→写线索→更新状态→          │
-│    返回员工二维码                                   │
+│ ③ 工具层（src/tools/lead_capture/）                │
+│    record_lead_capture：读会话状态、写线索、        │
+│    更新会话状态、返回员工二维码                     │
 │    唯一依赖渠道上下文的点（get_kf_context）         │
 └─────────────────────────────────────────────────────┘
 ```
@@ -84,16 +84,16 @@ wecom_kf 会话本质是**一次性触点**：会话结束，微信侧客户就"
 | 层 | 职责 | 留资相关改动 |
 |----|------|------------|
 | ① 渠道层（wecom_kf） | 消息收发、会话上下文注入 | `set_kf_context` 注入 `lead_capture` 会话状态；**无业务逻辑** |
-| ② 智能体层 | 人设、业务能力组织、技能挂载 | 新建 `pre-sales`；`after-sales` 清理售前内容 |
-| ③ 技能层 | 领域策略知识（SKILL.md） | 新建 `lead-capture` 技能，供多智能体复用 |
-| ④ 工具层 | 确定性动作（结构化输入输出） | 新增 `record_lead_capture` 工具 |
+| ② 智能体层 | 人设、业务能力组织、留资引导策略 | 新建 `pre-sales`（提示词含留资规范）；`after-sales` 清理售前内容 |
+| ③ 工具层 | 确定性动作（结构化输入输出） | 新增 `record_lead_capture` 工具 |
 
-### 3.2 为什么核心动作必须是「工具」而非「技能脚本」
+### 3.2 为什么纯工具、不建技能层
 
-技能的执行载体是**子进程 CLI 脚本**（`skill_execute`），子进程无法访问进程内的会话上下文（`get_kf_context` 是 contextvars）。而留资必须读写 `channel_sessions.metadata`、`get_kf_context`（open_kfid/租户/会话）、`ImageRegistry`（二维码）——这些都在**进程内**。因此：
-
-- **记录动作** = `record_lead_capture` **工具**（进程内，可访问会话上下文与数据库）
-- **引导策略** = `lead-capture` **技能**（SKILL.md 知识包，指导 LLM 何时调用工具、话术怎么说）
+- **技能脚本不可行**：技能的执行载体是**子进程 CLI 脚本**（`skill_execute`），子进程无法访问进程内的会话上下文（`get_kf_context` 是 contextvars）。而留资必须读写 `channel_sessions.metadata`、`get_kf_context`（open_kfid/租户/会话）、`ImageRegistry`（二维码）——这些都在**进程内**。因此核心动作（记录）必须是**工具**。
+- **策略也不必做成技能**：留资引导策略（判定标准 / 话术 / 工作时间）直接写入 `pre-sales` SUBAGENT.md 正文即可：
+  - **先例**：`transfer_to_human` 就是"纯工具 + 提示词承载策略"模式，线上已验证；
+  - **可调性**：决策点 1 要求判定标准由租户管理员调整，而管理员改的是智能体提示词（`prompt_versions` 覆盖 SUBAGENT.md 正文），SKILL.md 是代码目录文件、租户改不了——放技能里反而成了调不了的死角；
+  - **YAGNI**：跨渠道复用是假设性需求（工具硬依赖 wecom_kf 会话上下文），等第二个智能体真实需要同一套留资话术时再抽取技能（rule of three），届时抽象不迟。
 
 ---
 
@@ -101,7 +101,7 @@ wecom_kf 会话本质是**一次性触点**：会话结束，微信侧客户就"
 
 ### 4.1 pre-sales（新建）
 
-新建 `subagents/pre-sales/SUBAGENT.md`，定位**售前咨询**：产品讲解、需求挖掘、价格/优惠咨询、促成留资。挂载 `lead-capture` 技能。租户管理员在渠道配置中把售前客服账号的 `subagent_type` 绑定为 `pre-sales`。
+新建 `subagents/pre-sales/SUBAGENT.md`，定位**售前咨询**：产品讲解、需求挖掘、价格/优惠咨询、促成留资。SUBAGENT.md 正文包含**留资引导规范**（触发判定 / 话术 / 工作时间声明，见 §五）。租户管理员在渠道配置中把售前客服账号的 `subagent_type` 绑定为 `pre-sales`。
 
 ### 4.2 after-sales（回归纯售后）
 
@@ -111,29 +111,31 @@ wecom_kf 会话本质是**一次性触点**：会话结束，微信侧客户就"
 
 > 注意区分：after-sales 现有的**手机号核验**（场景 3：第三方渠道要求口述手机号）是**售后业务必需的身份核验**（查订单要身份），与售前的**销售线索留资**（营销转化）语义不同，保留不动。
 
-### 4.3 其他智能体可选挂载
+### 4.3 其他智能体复用
 
-任何服务 C 端客户的智能体（如 `travel-consultant` 旅游咨询）在 `skills.allowed` 挂载 `lead-capture` 技能即可复用留资能力，无需改渠道、无需改工具。
+其他服务 C 端客户的智能体（如 `travel-consultant`）需要留资时，在其 SUBAGENT.md 提示词中写入同样的留资引导规范即可获得能力（工具自动可用，无需改渠道、无需改工具）。若未来 ≥2 个智能体需要维护同一套留资话术，再考虑抽取为技能统一管理（rule of three）。
 
 ---
 
-## 五、留资技能（lead-capture）
+## 五、留资策略（pre-sales 提示词正文）
 
-`src/skills/lead-capture-1.0.0/SKILL.md`，**策略知识包**（参照 `lead-management` 技能结构）：
+留资引导策略写入 `subagents/pre-sales/SUBAGENT.md` 正文，不建独立技能（论证见 §3.2）：
 
 - **触发判定指南**：何时进入留资（客户主动表达购买意向 / 主动索要联系方式 / 需求字段覆盖度达标），与有效客户判定规则（§八）一致
 - **留资话术模板**：留手机号话术 + 引导添加员工微信话术（两条都给出，客户自选）
 - **需求字段收集**：在对话中抽取预算/数量/地区/交付时间等，写入线索
-- **动作指引**：何时调用 `record_lead_capture` 工具（拿到手机号或客户选择加微信时）；已留资客户不再重复引导
-- **可无脚本**：核心动作由工具完成，技能以 SKILL.md 策略为主（`init_script` 可选，参照 loader 对 `init_script` 的 Optional 语义）
+- **动作指引**：何时调用 `record_lead_capture` 工具（拿到手机号或客户选择加微信时）；已留资客户不再重复引导；工具返回失败（未配置二维码）时降级仅引导留手机号
+- **工作时间声明**：默认口径（如"本公司工作时间是周一到周五 9:00-18:00"）+ 按当前时间分流推荐（见 §九）
 
-**可复用性**：技能是领域知识包，与具体渠道解耦。pre-sales 跑通后，旅游等智能体只需在 `skills.allowed` 加入 `lead-capture` 即可获得留资能力。
+**租户自定义链路**：管理后台修改智能体提示词 → 写入 `prompt_versions` 表 → factory.py 加载 DB 定义时覆盖 SUBAGENT.md 默认正文。判定标准、话术、工作时间均可由租户管理员调整，无需改代码。
+
+**LLM 时间感知**：agent 主循环每轮注入"[当前时间: YYYY年MM月DD日 HH:MM:SS, Weekday, 今年是XXXX年]"（agent.py），模型据此判断是否处于工作时间。提示词中注明英文星期与中文的对应（如 Thursday=周四），避免误判。
 
 ---
 
 ## 六、留资工具（record_lead_capture）
 
-`src/tools/record_lead_capture.py`，确定性动作工具（`catalog=True`，Catalog 自动发现）：
+`src/tools/lead_capture/record_lead_capture.py`，确定性动作工具：
 
 | 输入 | 说明 |
 |------|------|
@@ -149,13 +151,17 @@ wecom_kf 会话本质是**一次性触点**：会话结束，微信侧客户就"
 | 更新状态 | `update_session(metadata.lead_capture=...)` |
 | 返回二维码 | `contact_method=qr` 时返回员工二维码 `ImageRef`，随回复图片下发 |
 
+**description（给 LLM，需写足引导）**：纯工具方案下，工具 description 是工具层唯一的 LLM 引导，须写明"收集到客户手机号或客户选择添加员工微信时调用""该客户已留资过则不要重复调用""返回失败（未配置二维码）时降级仅引导留手机号"。
+
+**catalog 策略**：Phase 1 `catalog=False`（工具不进入任何智能体工具列表，仅单测验证链路），避免生产 after-sales（当前兼顾售前咨询）在无提示词约束下误调用；Phase 2 随 `pre-sales` 智能体上线改为 `catalog=True`（与 `transfer_to_human` 的 catalog=True + 工具内 `get_kf_context` 渠道隔离同款模式）。
+
 ---
 
 ## 七、留资会话状态机
 
 **不做独立的"探索→判定→留资→完成"硬状态机模块**——判定标准由租户管理员改提示词决定（§八），代码无法也不应做硬判定。状态机退化为两层轻量协同：
 
-- **技能层**（策略）：引导留资的话术推进，全由 LLM 按 SKILL.md + 提示词执行
+- **智能体提示词**（策略）：引导留资的话术推进，由 LLM 按 pre-sales 提示词执行
 - **工具层**（状态）：仅在 `channel_sessions.metadata.lead_capture` 记录**结果状态**：
 
 ```jsonc
@@ -198,10 +204,14 @@ wecom_kf 会话本质是**一次性触点**：会话结束，微信侧客户就"
 
 | 场景 | 优先推荐 | 理由 |
 |------|---------|------|
-| 客服在线（工作时间） | 引导添加员工企微/微信 | 即时沟通，链路最短 |
-| 客服不在线（非工作时间） | 引导留下手机号 | 几小时内回拨，不受时间限制 |
+| 工作时间内（提示词声明） | 引导添加员工企微/微信 | 即时沟通，链路最短 |
+| 非工作时间 | 引导留下手机号 | 几小时内回拨，不受时间限制 |
+
+**工作时间判定来源**：租户管理员在智能体提示词中声明（如"本公司工作时间是周一到周五 9:00-18:00"，经 `prompt_versions` 覆盖 SUBAGENT.md 默认口径），LLM 依据上下文注入的当前时间与星期判断（见 §五）。管理员可随时改提示词调整口径。
 
 **企微原生"转接接待专员"（即现有转人工）已跑通**，可作为留资期高阶选项——客服在线时可直接转接会话。三者共用"客户需要人工介入"判定入口，互不冲突。
+
+> 注意区分：**"非工作时间留资 → 通知转次日待办"是通知侧代码逻辑**（notification_service 按服务器时间判断），与对话侧的提示词判断互不干扰，文档与实现中分开表述。
 
 ---
 
@@ -209,7 +219,7 @@ wecom_kf 会话本质是**一次性触点**：会话结束，微信侧客户就"
 
 - **配置位置**：渠道配置界面「客服账号」下（`kf_account` 新增 `employee_qr_file_id`），与现有客服推广二维码 `qr_data_url` 并列。**不区分微信/企微，单一「员工二维码」字段**（决策点 5）。
 - **归属关系**：二维码绑定客服账号的归属员工（`kf_account.tenant_user_id`），决定留资后通知谁跟进。
-- **读取**：技能不直接读渠道配置，由 `record_lead_capture` 工具从 `kf_config` 读取二维码 `file_id`，返回 `ImageRef` 随回复下发（微信侧直接显示，可长按识别）。
+- **读取**：由 `record_lead_capture` 工具从 `kf_config` 读取二维码 `file_id`，返回 `ImageRef` 随回复下发（微信侧直接显示，可长按识别）。
 - **归属合理性说明**：二维码虽配置在渠道侧，但"客服账号 → 归属员工 → 联系方式"是组织/账号维度数据，与引流归因的客服推广二维码并列管理，不违反"渠道只是通道"原则（渠道不实现留资逻辑，只承载配置数据）。
 
 ---
@@ -220,7 +230,9 @@ wecom_kf 会话本质是**一次性触点**：会话结束，微信侧客户就"
 
 **决策确认**：线索表**单独新建**，不与既有 `bs_customer_followup_leads`（lead-management 技能主表）混用，数据独立。
 
-**表名建议**：`bs_lead_capture_leads`（中性表名，对应技能名，渠道无关——技能被旅游等智能体复用时表名不产生渠道耦合误导）。若坚持渠道维度命名可用 `bs_wecom_kf_leads`，实现逻辑相同，仅表名差异。
+**表名**：`bs_lead_capture_leads`（能力级中性命名，渠道无关）。
+
+> **命名规范例外**：`database_dev.md` 约定业务表名为 `bs_[subagent]_[tablename]`（按此应为 `bs_pre_sales_leads`）。本表按能力命名，因留资是跨智能体能力而非 pre-sales 专属数据，此为**显式登记的规范例外**，后续同类"能力级"业务表可沿用此先例。
 
 > ⚠️ 与既有表的关系：`bs_customer_followup_leads` 是客户跟进智能体的线索主表。二者数据独立（各自按租户隔离），通过 `customer_user_id` 可在需要时关联。不产生主外键依赖。
 
@@ -228,8 +240,8 @@ wecom_kf 会话本质是**一次性触点**：会话结束，微信侧客户就"
 
 | 字段 | 说明 |
 |------|------|
-| `lead_id` / `tenant_id` / `user_id` | 主键 / 租户 / 渠道侧用户（合规必需字段） |
-| `customer_user_id` | 微信侧 external_userid（老客户识别） |
+| `lead_id` / `tenant_id` / `user_id` | 主键 / 租户 / 租户侧注册用户（ensure_user_registered 生成，合规必需；非 bs_ 规范的"创建用户"语义） |
+| `customer_user_id` | 微信侧 external_userid（老客户识别；与 user_id 是两套 ID 体系） |
 | `channel_chat_id` / `kf_account_name` | 来源客服账号（open_kfid + 名称快照） |
 | `contact_method` | `phone` \| `qr` |
 | `phone` | 手机号，**加密存储** |
@@ -241,7 +253,7 @@ wecom_kf 会话本质是**一次性触点**：会话结束，微信侧客户就"
 
 ### 11.3 通知与统计（决策点 4 调整）
 
-- **即时通知**：留资成功即通知归属客服（企微应用消息 / 后台待办），非工作时间自动转次日待办。
+- **即时通知**：留资成功即通知归属客服，复用 `src/services/notification_service.py`（企微应用消息 / 后台待办）。非工作时间自动转次日待办（通知侧按服务器时间判断，与对话侧提示词判断互不干扰）。
 - **统计报表页**（替代原"定时汇总"）：**留资统计报表**，按指定时间段统计（复用「外部接待客户」-「引流统计」Tab 模式：7d/30d/custom 日期段 + 统计卡片 + 客服账号分组表）。**不做定时汇总推送**。
 
 ---
@@ -271,8 +283,8 @@ wecom_kf 会话本质是**一次性触点**：会话结束，微信侧客户就"
 
 | 阶段 | 内容 | 载体 |
 |------|------|------|
-| **Phase 1** | 留资记录能力：线索表 + `record_lead_capture` 工具 + 会话状态注入 + 防重复 | 工具层（渠道零业务改动） |
-| **Phase 2** | `lead-capture` 技能 + `pre-sales` 智能体 + 员工二维码配置 + 留资话术 | 技能层 + 智能体层 + 渠道配置 |
+| **Phase 1** | 留资记录能力：线索表 + `record_lead_capture` 工具（`catalog=False`）+ 会话状态注入 + 防重复 | 工具层（渠道零业务改动） |
+| **Phase 2** | `pre-sales` 智能体（提示词含留资规范）+ 员工二维码配置 + 工具放开 `catalog=True` | 智能体层 + 工具层 + 渠道配置 |
 | **Phase 3** | 线索管理 + 留资统计报表页 | 运营侧（管理端 API + 前端） |
 | **Phase 4** | after-sales 回归纯售后（清理售前内容）+ 租户渠道账号切换 | 智能体层（需租户配合切换，独立排期） |
 
@@ -293,10 +305,13 @@ wecom_kf 会话本质是**一次性触点**：会话结束，微信侧客户就"
 | 5 | 员工二维码 | 不区分微信/企微，单一字段 |
 | 6 | 架构分层 | 渠道=通道；留资=技能+智能体能力；新建 pre-sales；after-sales 回归纯售后 |
 | 7 | 线索表 | 单独新建，不与 `bs_customer_followup_leads` 混用 |
+| 8 | 技能层 | 不建 lead-capture 技能，策略写入 pre-sales 提示词正文（v2.1） |
+| 9 | 工作时间 | 租户管理员在提示词中声明，LLM 按上下文注入的当前时间判断（v2.1） |
+| 10 | 员工二维码 TTL | 显式 `ttl_seconds=PERMANENT_TTL` 永久注册（v2.1） |
 
 ### 遗留（开发阶段确认）
 
-- 线索表名：`bs_lead_capture_leads`（建议） vs `bs_wecom_kf_leads`
-- `record_lead_capture` 是否加入主智能体 `AGENT_TOOLS`（若仅子智能体用则不必）
-- 员工二维码图片管线的 TTL 规避方案（见开发计划 §3.4）
+- pre-sales 提示词默认口径的最终文案（触发判定 / 话术 / 工作时间默认值，开发时定稿）
 - after-sales 回归纯售后的具体清理范围（与租户渠道账号切换联动）
+
+（原遗留项关闭：线索表已定名 `bs_lead_capture_leads`（规范例外已登记）；AGENT_TOOLS 为遗留提法，schema 由 InputModel 自动收集、无需维护；TTL 方案已定为显式 `ttl_seconds=PERMANENT_TTL`。）
