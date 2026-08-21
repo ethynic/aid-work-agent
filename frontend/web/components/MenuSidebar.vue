@@ -137,22 +137,35 @@
           <span>知识中心</span>
         </button>
 
-        <!-- 连接中心入口：一级菜单，仅租户管理员可见（手机端隐藏） -->
+        <!-- 连接中心入口：一级菜单 flyout trigger（全体租户用户可见，手机端隐藏） -->
         <button
-          v-if="isTenantAdmin && !props.isMobile"
-          @click="router.push(`/t/${tenantId}/connections`)"
+          v-if="isTenantMode && !props.isMobile"
+          :ref="el => setTriggerRef('connection', el)"
+          @mouseenter="openFlyout('connection')"
+          @mouseleave="scheduleClose()"
+          @click="toggleFlyout('connection')"
+          :aria-expanded="activeFlyout === 'connection'"
           :class="[
-            'w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors text-sm',
-            route.path === `/t/${tenantId}/connections`
+            'w-full flex items-center justify-between gap-3 px-3 py-2.5 rounded-lg transition-colors text-sm',
+            isConnectionActive
               ? 'bg-primary-50 text-primary-700 font-medium'
               : 'text-gray-600 hover:bg-gray-50'
           ]"
         >
-          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-            <!-- 插头/连接：象征连接外部系统 -->
-            <path d="M9 7V3M15 7V3M9 21v-4M15 21v-4M5 12H3M21 12h-2M7 9h10a2 2 0 012 2v2a2 2 0 01-2 2H7a2 2 0 01-2-2v-2a2 2 0 012-2z" />
+          <div class="flex items-center gap-3">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <!-- 插头/连接：象征连接外部系统 -->
+              <path d="M9 7V3M15 7V3M9 21v-4M15 21v-4M5 12H3M21 12h-2M7 9h10a2 2 0 012 2v2a2 2 0 01-2 2H7a2 2 0 01-2-2v-2a2 2 0 012-2z" />
+            </svg>
+            <span>连接中心</span>
+          </div>
+          <!-- Chevron 默认指向右，active 时 rotate-90 转为向下，提示「展开方向是右侧」 -->
+          <svg
+            :class="['w-4 h-4 transition-transform', activeFlyout === 'connection' ? 'rotate-90' : '']"
+            fill="none" stroke="currentColor" viewBox="0 0 24 24"
+          >
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
           </svg>
-          <span>连接中心</span>
         </button>
 
         <!-- 管理菜单 trigger：hover/click 触发右侧 flyout（仅租户管理员，手机端隐藏） -->
@@ -482,18 +495,6 @@
           <span>我的定时任务</span>
         </button>
 
-        <!-- 本地工具（仅租户模式：普通用户配对管理自己的本机 Runtime 设备） -->
-        <button
-          v-if="isTenantMode && tenantIsLoggedIn"
-          @click="showUserMenu = false; openLocalTools()"
-          class="w-full flex items-center gap-3 px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 transition-colors"
-        >
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-          </svg>
-          <span>本地工具</span>
-        </button>
-
         <!-- 设置（手机端隐藏：设置弹窗未适配手机端） -->
         <button
           v-if="!props.isMobile"
@@ -643,6 +644,24 @@
       <template v-else-if="activeFlyout === 'admin'">
         <button
           v-for="item in adminSubMenuItems"
+          :key="item.path"
+          @click="router.push(item.path); closeFlyout()"
+          :class="[
+            'w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-sm',
+            route.path === item.path
+              ? 'bg-primary-50 text-primary-700 font-medium'
+              : 'text-gray-600 hover:bg-gray-50'
+          ]"
+        >
+          <MenuIcon :icon="item.icon" />
+          <span>{{ item.label }}</span>
+        </button>
+      </template>
+
+      <!-- 连接中心子菜单 -->
+      <template v-else-if="activeFlyout === 'connection'">
+        <button
+          v-for="item in connectionSubMenuItems"
           :key="item.path"
           @click="router.push(item.path); closeFlyout()"
           :class="[
@@ -826,7 +845,7 @@ const renameInput = ref('')
 const renamingSessionId = ref<string | null>(null)
 
 // ============== Flyout 二级菜单状态机 ==============
-// 单一 activeFlyout 互斥：值域 'experience' | 'admin' | agent_id | null
+// 单一 activeFlyout 互斥：值域 'experience' | 'admin' | 'connection' | agent_id | null
 // hover 即打开、移出延迟 150ms 关闭；click 也切换；路由变化/收起态自动关
 const activeFlyout = ref<string | null>(null)
 // trigger 元素引用，用于 onClickOutside ignore 和 flyout 定位
@@ -928,10 +947,6 @@ const adminSubMenuItems = computed(() => {
   return [
     // 用户管理：人形 + 多人
     { path: `${base}/users`, label: '用户管理', icon: 'M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8zM22 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75' },
-    // 渠道配置：信号波
-    { path: `${base}/channels`, label: '渠道配置', icon: 'M5 12.55a11 11 0 0114 0M1.42 9a16 16 0 0121.16 0M8.53 16.11a6 6 0 016.95 0M12 20h.01' },
-    // 企微个人RPA：机器人
-    { path: `${base}/wecom-personal-rpa`, label: '企微个人RPA', icon: 'M12 4v3M5 8h14a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2v-8a2 2 0 012-2zM9 13h.01M15 13h.01M9 17h6' },
     // 企业设置：齿轮（简化版）
     { path: `${base}/settings`, label: '企业设置', icon: 'M12 8a4 4 0 100 8 4 4 0 000-8zM19.4 15a1.7 1.7 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.8-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1-1.5 1.7 1.7 0 00-1.8.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.8 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.5-1 1.7 1.7 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.8.3h0a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5h0a1.7 1.7 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.8v0a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z' },
     // 积分用量：柱状图
@@ -943,6 +958,36 @@ const adminSubMenuItems = computed(() => {
     // 定制提示词：文档+笔
     { path: `${base}/extras`, label: '定制提示词', icon: 'M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z' },
   ]
+})
+
+// 连接中心子菜单项（全体租户用户可见；adminOnly 项仅租户管理员可见）
+// icon 字段为统一的 SVG path 数据，使用 stroke="currentColor" 的细线描边风格
+const connectionSubMenuItems = computed(() => {
+  if (!tenantId.value) return []
+  const base = `/t/${tenantId.value}`
+  const all = [
+    // API配置：插头（原有连接中心页面）
+    { path: `${base}/connections`, label: 'API配置', icon: 'M9 7V3M15 7V3M9 21v-4M15 21v-4M5 12H3M21 12h-2M7 9h10a2 2 0 012 2v2a2 2 0 01-2 2H7a2 2 0 01-2-2v-2a2 2 0 012-2z', adminOnly: false },
+    // 渠道配置：信号波
+    { path: `${base}/channels`, label: '渠道配置', icon: 'M5 12.55a11 11 0 0114 0M1.42 9a16 16 0 0121.16 0M8.53 16.11a6 6 0 016.95 0M12 20h.01', adminOnly: true },
+    // 企微个人RPA：机器人
+    { path: `${base}/wecom-personal-rpa`, label: '企微个人RPA', icon: 'M12 4v3M5 8h14a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2v-8a2 2 0 012-2zM9 13h.01M15 13h.01M9 17h6', adminOnly: true },
+    // 本地工具：电脑
+    { path: `${base}/local-tools`, label: '本地工具', icon: 'M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z', adminOnly: false },
+  ]
+  return all.filter(item => !item.adminOnly || isTenantAdmin.value)
+})
+
+// 连接中心任一子页面是否激活（用于一级菜单 trigger 高亮）
+const isConnectionActive = computed(() => {
+  if (!tenantId.value) return false
+  const base = `/t/${tenantId.value}`
+  return [
+    `${base}/connections`,
+    `${base}/channels`,
+    `${base}/wecom-personal-rpa`,
+    `${base}/local-tools`,
+  ].includes(route.path)
 })
 
 // 当前子智能体（从路由参数获取）
@@ -1293,17 +1338,6 @@ async function confirmRename() {
 // 我的定时任务
 function openScheduledTasks() {
   window.open('/scheduled-tasks', '_blank')
-}
-
-// 本地工具设备管理（仅租户模式）
-function openLocalTools() {
-  if (tenantId.value) {
-    router.push(`/t/${tenantId.value}/local-tools`)
-  }
-  // 手机端点击后自动收起左侧菜单
-  if (props.isMobile) {
-    emit('collapse')
-  }
 }
 
 // 租户模式修改密码
