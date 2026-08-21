@@ -6,6 +6,7 @@
         <span class="text-muted text-xs w-4 inline-block text-center">{{ expanded ? '▼' : '▶' }}</span>
         <span class="text-primary-700">{{ keyLabel }}</span>
         <span class="text-muted text-xs ml-1">{{ typeLabel }}</span>
+        <JsonCopyButton :data="data" />
       </span>
       <div v-if="expanded" class="ml-4 border-l border-default pl-2">
         <template v-if="isArray">
@@ -40,6 +41,7 @@
         <span class="text-primary-700">{{ keyLabel }}:</span>
         <span class="text-success-700" :style="expanded && data.includes('\n') ? 'white-space: pre-wrap' : ''">"{{ expanded ? data : truncate(data) }}"</span>
         <span v-if="!expanded && data.length > (maxPreview || 80)" class="text-muted text-xs">...</span>
+        <JsonCopyButton :data="data" />
       </span>
     </template>
 
@@ -79,6 +81,7 @@
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
+import JsonCopyButton from './JsonCopyButton.vue'
 
 const props = withDefaults(defineProps<{
   data: any

@@ -16,7 +16,9 @@ function getAuthHeader(): Record<string, string> {
 export interface SessionSummary {
   session_id: string
   tenant_id: string | null
+  tenant_name: string | null
   user_id: string | null
+  user_name: string | null
   trace_count: number
   total_tokens: number
   error_count: number
