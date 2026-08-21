@@ -18,9 +18,13 @@
     Agent._register_builtin_tools(fake)
     print(sorted(fake.tool_registry._tools.keys()))
 
-改造后要求：26 个普通工具全部由 discover_tool_classes 自动发现，
+改造后要求：27 个普通工具全部由 discover_tool_classes 自动发现，
 工具名集合与该基线完全一致；控制工具仍以 catalog=False 排除。
 新增可自动注册的工具时，应同步在 GOLDEN_TOOLS 中登记并在 PR 说明。
+
+2026-08-21 追加 record_lead_capture（客户留资，Phase 2 随 pre-sales 智能体
+放开 catalog=True；渠道隔离靠 execute 内 get_kf_context 兜底，与
+transfer_to_human 同一模式）。
 """
 
 import pytest
@@ -28,7 +32,7 @@ import pytest
 from src.tools.base import BaseTool, _CATALOG
 from src.tools.registry import ToolRegistry, discover_tool_classes
 # ============================================================
-# 黄金清单：HEAD 手工注册清单的 26 个工具名（字母序）
+# 黄金清单：HEAD 手工注册清单的 26 个工具名（字母序）+ record_lead_capture
 # ============================================================
 GOLDEN_TOOLS = [
     "ai_call",
@@ -50,6 +54,7 @@ GOLDEN_TOOLS = [
     "pdf_process",
     "ppt_process",
     "read",
+    "record_lead_capture",
     "submit_video_task",
     "transfer_to_human",
     "upload_data_file",
@@ -59,7 +64,7 @@ GOLDEN_TOOLS = [
     "x_to_image",
 ]
 
-# Phase 4 后 26 个普通工具全部由 Catalog 自动发现。
+# 普通工具全部由 Catalog 自动发现（含 record_lead_capture）。
 SPECIAL_REGISTERED_TOOLS = set()
 
 # 显式 catalog = False、绝不进 _CATALOG 的工具名

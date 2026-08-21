@@ -9,7 +9,7 @@
 外部用户：指 users.source 不为空的客户，如 wecom_kf（企业微信客服）
 """
 
-from typing import List, Optional
+from typing import Dict, List, Optional
 from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Request
@@ -204,6 +204,134 @@ async def get_referral_stats(
         "total_messages": total_messages,
         "referrers": stats["referrers"],
     }
+
+
+# ============== 留资线索 ==============
+
+
+def _lead_assigned_to(admin: dict) -> Optional[str]:
+    """普通用户（引流员工）仅见/仅统计自己归属的线索；管理员返回 None 表示全量。"""
+    return admin.get("user_id") if admin.get("role") == "user" else None
+
+
+def _ensure_lead_visible(admin: dict, lead: Dict) -> Dict:
+    """普通用户仅能访问 assigned_to == 自己的线索，否则按不存在处理。"""
+    if admin.get("role") == "user" and lead.get("assigned_to") != admin.get("user_id"):
+        raise HTTPException(status_code=404, detail="线索不存在")
+    return lead
+
+
+@router.get("/lead-stats")
+async def get_lead_stats(
+    request: Request,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+):
+    """留资统计：总留资 / 按留资方式分组 / 按客服账号分组（供「留资线索」Tab 使用）。
+
+    过滤基准 = bs_lead_capture_leads.created_at；end_date 含当日（SQL 内 < 次日）。
+    """
+    if not settings.saas.enabled:
+        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
+
+    admin = require_admin(request)
+    tenant_id = admin.get("tenant_id")
+    if not tenant_id:
+        raise HTTPException(status_code=400, detail="缺少租户信息")
+
+    from src.saas.db.lead_capture_db import LeadCaptureDB
+
+    stats = LeadCaptureDB.stats(
+        tenant_id,
+        start_date=start_date,
+        end_date=end_date,
+        assigned_to=_lead_assigned_to(admin),
+    )
+    return {"success": True, **stats}
+
+
+@router.get("/leads")
+async def list_leads(
+    request: Request,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    channel_chat_id: Optional[str] = None,
+    stage: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 20,
+):
+    """留资线索列表（分页，created_at DESC，日期段/客服账号/阶段筛选）。"""
+    if not settings.saas.enabled:
+        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
+
+    admin = require_admin(request)
+    tenant_id = admin.get("tenant_id")
+    if not tenant_id:
+        raise HTTPException(status_code=400, detail="缺少租户信息")
+
+    from src.saas.db.lead_capture_db import LeadCaptureDB
+
+    result = LeadCaptureDB.list_by_tenant(
+        tenant_id,
+        page=page,
+        page_size=page_size,
+        start_date=start_date,
+        end_date=end_date,
+        channel_chat_id=channel_chat_id,
+        stage=stage,
+        assigned_to=_lead_assigned_to(admin),
+    )
+    return {"success": True, **result}
+
+
+@router.get("/leads/{lead_id}")
+async def get_lead_detail(request: Request, lead_id: str):
+    """线索详情（含解密手机号；普通用户仅能看自己的线索）。"""
+    if not settings.saas.enabled:
+        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
+
+    admin = require_admin(request)
+    tenant_id = admin.get("tenant_id")
+    if not tenant_id:
+        raise HTTPException(status_code=400, detail="缺少租户信息")
+
+    from src.saas.db.lead_capture_db import LeadCaptureDB
+
+    lead = LeadCaptureDB.get_by_id(lead_id, tenant_id)
+    if not lead:
+        raise HTTPException(status_code=404, detail="线索不存在")
+    _ensure_lead_visible(admin, lead)
+    return {"success": True, "lead": lead}
+
+
+class LeadStageUpdate(BaseModel):
+    stage: str = Field(..., description="目标阶段：new/contacting/converted/abandoned")
+
+
+@router.patch("/leads/{lead_id}")
+async def update_lead_stage(request: Request, lead_id: str, body: LeadStageUpdate):
+    """更新线索阶段（new -> contacting -> converted / abandoned）。"""
+    if not settings.saas.enabled:
+        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
+
+    admin = require_admin(request)
+    tenant_id = admin.get("tenant_id")
+    if not tenant_id:
+        raise HTTPException(status_code=400, detail="缺少租户信息")
+
+    from src.saas.db.lead_capture_db import LEAD_STAGES, LeadCaptureDB
+
+    if body.stage not in LEAD_STAGES:
+        raise HTTPException(status_code=400, detail="非法阶段值")
+    lead = LeadCaptureDB.get_by_id(lead_id, tenant_id)
+    if not lead:
+        raise HTTPException(status_code=404, detail="线索不存在")
+    _ensure_lead_visible(admin, lead)
+
+    ok = LeadCaptureDB.update_stage(lead_id, body.stage, tenant_id)
+    if not ok:
+        raise HTTPException(status_code=500, detail="更新线索阶段失败")
+    return {"success": True, "lead": LeadCaptureDB.get_by_id(lead_id, tenant_id)}
 
 
 @router.get("/users/{user_id}/sessions")

@@ -2245,6 +2245,8 @@ async def _process_tenant_wecom_kf_messages(
                     logger.warning(f"[wecom_kf] 自动注册失败: {e}")
 
                 # 设置工具可访问的上下文
+                # user_id：租户侧注册用户（ensure_user_registered 生成），供留资等工具记录线索归属
+                # lead_capture：会话留资状态机快照（已留资则工具拒绝重复留资）
                 set_kf_context({
                     "adapter": adapter,
                     "open_kfid": open_kfid,
@@ -2252,6 +2254,8 @@ async def _process_tenant_wecom_kf_messages(
                     "kf_config": kf_config,
                     "session_id": session_id,
                     "tenant_id": tenant_id,
+                    "user_id": user_id,
+                    "lead_capture": session_metadata.get("lead_capture"),
                 })
 
                 # 发送前校验微信远程会话状态，防止本地状态与远程不一致导致 95018

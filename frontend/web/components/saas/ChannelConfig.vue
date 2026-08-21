@@ -380,6 +380,24 @@
             <BaseInput v-model="kfForm.qr_title" maxlength="50" placeholder="如：爱定义 - 小蔡老师" />
             <p class="mt-0.5 text-xs text-muted">显示在二维码图片上方，便于区分不同归属用户</p>
           </div>
+          <div class="col-span-2">
+            <label class="text-sm text-muted mb-1 block">员工二维码（可选）</label>
+            <div class="flex items-center gap-3">
+              <img
+                v-if="kfForm.employeeQrPreview"
+                :src="kfForm.employeeQrPreview"
+                class="w-12 h-12 rounded-lg border border-default object-cover"
+              />
+              <input
+                type="file"
+                accept=".png,.jpg,.jpeg"
+                @change="handleEmployeeQrUpload"
+                class="text-sm text-default file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-primary-50 file:text-primary-700 hover:file:bg-primary-100 cursor-pointer"
+              />
+              <BaseButton v-if="kfForm.employeeQrPreview" intent="ghost" size="sm" @click="kfForm.employeeQrPreview = ''; kfForm.employee_qr_base64 = ''">移除</BaseButton>
+            </div>
+            <p class="mt-0.5 text-xs text-muted">客户选择添加员工微信时，此二维码随回复下发给客户扫码添加，建议用员工个人微信二维码</p>
+          </div>
         </div>
 
         <p v-if="kfFormError" class="p-3 bg-danger-50 border border-danger-200 rounded-lg text-danger-600 text-sm">{{ kfFormError }}</p>
@@ -553,6 +571,8 @@ const kfForm = ref({
   contact_url: '',
   avatar_base64: '',
   avatarPreview: '',
+  employee_qr_base64: '',
+  employeeQrPreview: '',
 })
 
 function tenantUserName(userId: string | null | undefined): string {
@@ -606,6 +626,8 @@ function resetKfForm() {
     contact_url: '',
     avatar_base64: '',
     avatarPreview: '',
+    employee_qr_base64: '',
+    employeeQrPreview: '',
   }
 }
 
@@ -636,6 +658,8 @@ function openKfAccountEdit(ch: any, acc: any) {
     contact_url: acc.contact_url || '',
     avatar_base64: '',
     avatarPreview: '',
+    employee_qr_base64: '',
+    employeeQrPreview: acc.employee_qr_download_url || '',
   }
   createdQrData.value = null
   kfFormError.value = ''
@@ -662,6 +686,21 @@ function handleAvatarUpload(event: Event) {
     kfForm.value.avatar_base64 = commaIdx >= 0 ? dataUrl.slice(commaIdx + 1) : dataUrl
   }
   reader.onerror = () => { kfFormError.value = '头像读取失败' }
+  reader.readAsDataURL(file)
+}
+
+function handleEmployeeQrUpload(event: Event) {
+  const target = event.target as HTMLInputElement
+  const file = target.files?.[0]
+  if (!file) return
+  const reader = new FileReader()
+  reader.onload = () => {
+    const dataUrl = String(reader.result || '')
+    kfForm.value.employeeQrPreview = dataUrl
+    const commaIdx = dataUrl.indexOf(',')
+    kfForm.value.employee_qr_base64 = commaIdx >= 0 ? dataUrl.slice(commaIdx + 1) : dataUrl
+  }
+  reader.onerror = () => { kfFormError.value = '员工二维码读取失败' }
   reader.readAsDataURL(file)
 }
 
@@ -701,6 +740,7 @@ async function handleKfSubmit() {
     qr_title: kfForm.value.qr_title || undefined,
   }
   if (kfForm.value.avatar_base64) payload.avatar_base64 = kfForm.value.avatar_base64
+  if (kfForm.value.employee_qr_base64) payload.employee_qr_base64 = kfForm.value.employee_qr_base64
   if (kfForm.value.servicer_userid_list) {
     payload.servicer_userid_list = kfForm.value.servicer_userid_list.split(/[,，]/).map((s: string) => s.trim()).filter(Boolean)
   }

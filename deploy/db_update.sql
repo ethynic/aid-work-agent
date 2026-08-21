@@ -547,3 +547,35 @@ ON CONFLICT (model_name) DO UPDATE SET
   input_price_per_m = EXCLUDED.input_price_per_m,
   output_price_per_m = EXCLUDED.output_price_per_m,
   cached_input_price_per_m = EXCLUDED.cached_input_price_per_m;
+
+-- ============================================================================
+-- 2026-08-21 客户留资线索表（pre-sales 售前咨询留资，lead_capture 能力级中性命名）
+-- 手机号加密落库（src/db/encryption.py）；与 src/saas/db/tables.py init_saas_tables()
+-- 和 deploy/init-postgres.sql 2026-08-21 条目保持一致。现有环境重启后 init_saas_tables()
+-- 自动建表，此条目作为全新环境/手工升级的登记。
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS bs_lead_capture_leads (
+    id SERIAL PRIMARY KEY,
+    lead_id TEXT UNIQUE NOT NULL,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT,
+    customer_user_id TEXT,
+    channel_chat_id TEXT,
+    kf_account_name TEXT,
+    contact_method TEXT,
+    phone TEXT,
+    contact_name TEXT,
+    demand_summary TEXT,
+    source TEXT DEFAULT 'lead_capture',
+    stage TEXT DEFAULT 'new',
+    assigned_to TEXT,
+    assignee_name TEXT,
+    transferred_to TEXT,
+    session_id TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_lc_leads_tenant ON bs_lead_capture_leads(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_lc_leads_created ON bs_lead_capture_leads(created_at);
+CREATE INDEX IF NOT EXISTS idx_lc_leads_assigned ON bs_lead_capture_leads(assigned_to);
+CREATE INDEX IF NOT EXISTS idx_lc_leads_customer ON bs_lead_capture_leads(customer_user_id);
