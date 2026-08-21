@@ -8,7 +8,7 @@
 - P1-2 修复：生产路径不缓存，provider 切换立即生效
 
 注：v3.1+ 模型映射表只收录现役主力（deepseek-v4-pro / deepseek-v4-flash，均 512K），
-其它 model_code（deepseek-chat / qwen-plus / glm-4 等）已不在表中，会走 fallback。
+其它 model_code（deepseek-chat / qwen3.7-flash / glm-4 等）已不在表中，会走 fallback。
 """
 
 import pytest

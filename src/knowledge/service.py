@@ -141,9 +141,9 @@ class KnowledgeBaseService:
             cache_creation_input_tokens = int(summary_usage.get("cache_creation_tokens", 0) or 0)
             # 知识库摘要使用主 gateway 默认模型
             try:
-                llm_model = getattr(settings.llm, "model_code", None) or "qwen-plus"
+                llm_model = getattr(settings.llm, "model_code", None) or "qwen3.7-flash"
             except Exception:
-                llm_model = "qwen-plus"
+                llm_model = "qwen3.7-flash"
             chat_bd: Dict[str, Any] = {}
             try:
                 llm_credit, chat_bd = calculate_credit_cost_with_breakdown(

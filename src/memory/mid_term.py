@@ -185,7 +185,7 @@ _PROVIDER_DEFAULTS = {
     "qwen": {
         "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
         "api_key_env": "QWEN_API_KEYS",
-        "default_model": "qwen-plus",
+        "default_model": "qwen3.7-flash",
     },
     "zhipu": {
         "base_url": "https://open.bigmodel.cn/api/paas/v4",

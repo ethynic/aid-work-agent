@@ -1201,7 +1201,7 @@ def _default_llm(prompt: str, *, disable_thinking: bool = True) -> str:
         keys = settings.llm.qwen.get_effective_keys()
         if not keys:
             raise ValueError("QWEN API key 未配置")
-        model = getattr(settings.llm.qwen, "model", None) or "qwen-plus"
+        model = getattr(settings.llm.qwen, "model", None) or "qwen3.7-flash"
         base_url = getattr(settings.llm.qwen, "base_url", None) or "https://dashscope.aliyuncs.com/compatible-mode/v1"
         api_url = f"{base_url.rstrip('/')}/chat/completions"
         payload = {

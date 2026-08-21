@@ -41,7 +41,7 @@ class QwenProvider(BaseLLMProvider):
     def __init__(
         self,
         api_key: str,
-        model: str = "qwen-plus",
+        model: str = "qwen3.7-flash",
         base_url: Optional[str] = None,
         **kwargs
     ):

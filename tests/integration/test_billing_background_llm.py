@@ -22,7 +22,7 @@ pytestmark = pytest.mark.integration
 def temp_tenant():
     """创建临时租户，测试后清理（不充值，仅用于 chat_records 归属）
 
-    同时把 settings.memory.mid_term.summary_llm.model 临时改为 qwen-plus
+    同时把 settings.memory.mid_term.summary_llm.model 临时改为 qwen3.7-flash
     （有单价配置），让 _persist_background_llm_record 内 calculate_credit_cost
     能算出非 0 积分；teardown 恢复原值。
     """
@@ -45,7 +45,7 @@ def temp_tenant():
 
     # 临时改用有单价的模型（deepseek-chat 未在 token_cost_prices 配置单价）
     original_model = settings.memory.mid_term.summary_llm.model
-    settings.memory.mid_term.summary_llm.model = "qwen-plus"
+    settings.memory.mid_term.summary_llm.model = "qwen3.7-flash"
 
     yield tenant_id
 
@@ -231,14 +231,14 @@ class TestCompressSessionBilling:
         MessageDB.create(session_id, "assistant", "好的，我马上帮您总结。")
 
         # 3) 构造 ContextCompressionService，覆盖 header_keep/tail_keep 避免 30+ 消息
-        #    summary_llm.model 用 qwen-plus（有单价配置，credit_cost > 0）
+        #    summary_llm.model 用 qwen3.7-flash（有单价配置，credit_cost > 0）
         cfg = MidTermMemoryConfig(
             enabled=True,
             header_keep=0,
             tail_keep=1,
             summary_max_tokens=100,
             summary_llm_retry=0,
-            summary_llm=SummaryLLMConfig(provider="deepseek", model="qwen-plus"),
+            summary_llm=SummaryLLMConfig(provider="deepseek", model="qwen3.7-flash"),
         )
         service = ContextCompressionService(settings_cfg=cfg)
 
