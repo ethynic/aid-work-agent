@@ -6,8 +6,10 @@
 
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass, replace
-from typing import Iterator, Optional
+from dataclasses import dataclass, field, replace
+from typing import Any, Iterator, Mapping, Optional
+
+from src.core.request_context import freeze_request_mapping
 
 
 @dataclass(frozen=True)
@@ -20,6 +22,10 @@ class ToolExecutionContext:
     chat_record_id: Optional[int] = None
     agent_execution_id: Optional[str] = None
     tool_call_id: Optional[str] = None
+    request_data: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "request_data", freeze_request_mapping(self.request_data))
 
     def derive(self, **changes) -> "ToolExecutionContext":
         """显式派生嵌套调用上下文，未指定字段保持不变。"""
@@ -52,7 +58,7 @@ class ExecutionContextFactory:
     def for_agent_call(
         *, tenant_id=None, user_id=None, session_id=None, channel=None,
         subagent_id=None, chat_record_id=None, agent_execution_id=None,
-        tool_call_id=None,
+        tool_call_id=None, request_data=None,
     ) -> ToolExecutionContext:
         if tenant_id is None or user_id is None:
             try:
@@ -61,11 +67,15 @@ class ExecutionContextFactory:
                 user_id = user_id or get_current_user_id()
             except Exception:
                 pass
+        if request_data is None:
+            parent = current_tool_execution_context()
+            request_data = parent.request_data if parent else {}
         return ToolExecutionContext(
             tenant_id=tenant_id, user_id=user_id, session_id=session_id,
             channel=channel, subagent_id=subagent_id,
             chat_record_id=chat_record_id, agent_execution_id=agent_execution_id,
             tool_call_id=tool_call_id,
+            request_data=request_data,
         )
 
     @staticmethod

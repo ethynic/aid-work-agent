@@ -215,6 +215,166 @@ class TestMasterAgentToolResultTruncation:
         assert "已截断" not in tool_msgs[0]["content"]
         assert tool_msgs[0]["content"] == json.dumps(short_result, ensure_ascii=False)
 
+    async def test_ordinary_tool_emits_one_standard_result_without_preview(self, monkeypatch):
+        """普通工具只执行一次；标准事件携带调用标识，正文仅由最终 LLM 回复。"""
+        raw_result = {"success": True, "content": "工具产生的原始正文"}
+        agent = self._make_agent(monkeypatch, raw_result)
+
+        events = [event async for event in agent._process_message_impl("生成内容", "sess")]
+
+        agent.tool_executor.execute.assert_awaited_once()
+        starts = [event for event in events if event.get("type") == "tool_start"]
+        results = [event for event in events if event.get("type") == "tool_result"]
+        responses = [event.get("data") for event in events if event.get("type") == "response"]
+        assert len(starts) == 1
+        assert starts[0]["toolCallId"] == "c1"
+        assert starts[0]["displayName"] == "read"
+        assert len(results) == 1
+        assert results[0]["result"] == raw_result
+        assert results[0]["toolCallId"] == "c1"
+        assert results[0]["displayName"] == "read"
+        assert responses == ["完成"]
+        assert not any("工具产生的原始正文" in str(event.get("data", "")) for event in events)
+
+    async def test_tool_start_does_not_expose_arguments_but_executor_receives_them(self, monkeypatch):
+        """工具参数只用于执行，不进入 SSE、会话 metadata 或 trace 的事件源。"""
+        agent = self._make_agent(monkeypatch, {"success": True})
+        agent.llm.chat_with_tools.side_effect = [
+            {
+                "tool_calls": [{
+                    "id": "secret-call",
+                    "type": "function",
+                    "function": {
+                        "name": "read",
+                        "arguments": '{"file_path":"sensitive/path.txt"}',
+                    },
+                }],
+                "content": "",
+                "usage": {},
+                "request_id": "r1",
+            },
+            {"tool_calls": [], "content": "完成", "usage": {}, "request_id": "r2"},
+        ]
+
+        events = [event async for event in agent._process_message_impl("读取文件", "sess")]
+
+        start = next(event for event in events if event.get("type") == "tool_start")
+        assert start["toolArgs"] == {}
+        assert agent.tool_executor.execute.await_args.args[:2] == (
+            "read", {"file_path": "sensitive/path.txt"}
+        )
+
+    async def test_scheduled_tool_uses_generic_plan_tracking(self, monkeypatch):
+        """定时工具不再走提前旁路，统一执行并完成当前计划任务。"""
+        result = {"success": True, "name": "日报", "message": "已创建"}
+        agent = self._make_agent(monkeypatch, result)
+        monkeypatch.setattr(
+            Agent, "_get_tools", lambda self: [{"name": "create_scheduled_task"}]
+        )
+        monkeypatch.setattr(
+            Agent, "_get_tool_display_name", lambda self, n, a: "创建定时任务"
+        )
+        agent.llm.chat_with_tools.side_effect = [
+            {
+                "tool_calls": [{
+                    "id": "c1",
+                    "type": "function",
+                    "function": {"name": "create_scheduled_task", "arguments": "{}"},
+                }],
+                "content": "",
+                "usage": {},
+                "request_id": "r1",
+            },
+            {"tool_calls": [], "content": "完成", "usage": {}, "request_id": "r2"},
+        ]
+        agent.plan_manager.get_plan.return_value = object()
+        task = MagicMock(task_id="task-1")
+        agent.plan_manager.get_next_pending_task.return_value = task
+
+        events = [event async for event in agent._process_message_impl("创建日报", "sess")]
+
+        agent.tool_executor.execute.assert_awaited_once()
+        agent.plan_manager.mark_task_running.assert_called_once_with("sess", "task-1")
+        agent.plan_manager.mark_task_completed.assert_called_once_with("sess", "task-1", result)
+        tool_results = [event for event in events if event.get("type") == "tool_result"]
+        assert len(tool_results) == 1
+        assert tool_results[0]["result"] == result
+
+        execution_context = agent.tool_executor.execute.await_args.kwargs["context"]
+        assert execution_context.session_id == "sess"
+        assert execution_context.tool_call_id == "c1"
+
+    async def test_failed_scheduled_tool_marks_plan_failed_and_enters_llm(self, monkeypatch):
+        """管理定时任务失败也走通用链：执行一次、失败计划、结果进入下一轮 LLM。"""
+        result = {"success": False, "error": "无权管理该任务"}
+        agent = self._make_agent(monkeypatch, result)
+        monkeypatch.setattr(
+            Agent, "_get_tools", lambda self: [{"name": "manage_scheduled_task"}]
+        )
+        agent.llm.chat_with_tools.side_effect = [
+            {
+                "tool_calls": [{
+                    "id": "scheduled-fail",
+                    "type": "function",
+                    "function": {"name": "manage_scheduled_task", "arguments": "{}"},
+                }],
+                "content": "",
+                "usage": {},
+                "request_id": "r1",
+            },
+            {"tool_calls": [], "content": "失败说明", "usage": {}, "request_id": "r2"},
+        ]
+        agent.plan_manager.get_plan.return_value = object()
+        agent.plan_manager.get_next_pending_task.return_value = MagicMock(task_id="task-2")
+
+        events = [event async for event in agent._process_message_impl("管理任务", "sess")]
+
+        agent.tool_executor.execute.assert_awaited_once()
+        agent.plan_manager.mark_task_completed.assert_not_called()
+        agent.plan_manager.mark_task_failed.assert_called_once_with(
+            "sess", "task-2", "无权管理该任务"
+        )
+        result_event = next(event for event in events if event.get("type") == "tool_result")
+        assert result_event["success"] is False
+        assert result_event["toolCallId"] == "scheduled-fail"
+        second_call_messages = agent.llm.chat_with_tools.call_args_list[1].kwargs["messages"]
+        tool_message = next(message for message in second_call_messages if message["role"] == "tool")
+        assert json.loads(tool_message["content"]) == result
+
+    async def test_same_name_calls_are_correlated_only_by_tool_call_id(self, monkeypatch):
+        """同一轮两个同名调用分别透传 ID 和结果，不依赖工具名缓存关联。"""
+        agent = self._make_agent(monkeypatch, None)
+        agent.tool_executor.execute = AsyncMock(side_effect=[
+            {"success": True, "content": "first"},
+            {"success": True, "content": "second"},
+        ])
+        agent.llm.chat_with_tools.side_effect = [
+            {
+                "tool_calls": [
+                    {"id": "same-1", "type": "function",
+                     "function": {"name": "read", "arguments": '{"file_path":"a"}'}},
+                    {"id": "same-2", "type": "function",
+                     "function": {"name": "read", "arguments": '{"file_path":"b"}'}},
+                ],
+                "content": "",
+                "usage": {},
+                "request_id": "r1",
+            },
+            {"tool_calls": [], "content": "完成", "usage": {}, "request_id": "r2"},
+        ]
+
+        events = [event async for event in agent._process_message_impl("读取两个文件", "sess")]
+
+        starts = [event for event in events if event.get("type") == "tool_start"]
+        results = [event for event in events if event.get("type") == "tool_result"]
+        assert [event["toolCallId"] for event in starts] == ["same-1", "same-2"]
+        assert [event["toolCallId"] for event in results] == ["same-1", "same-2"]
+        assert [event["result"]["content"] for event in results] == ["first", "second"]
+        second_call_messages = agent.llm.chat_with_tools.call_args_list[1].kwargs["messages"]
+        assert [message["tool_call_id"] for message in second_call_messages if message["role"] == "tool"] == [
+            "same-1", "same-2"
+        ]
+
     async def test_str_content_truncated(self, monkeypatch):
         """str 超大 content：直接截断。"""
         big_str = "y" * 20000
@@ -420,6 +580,43 @@ class TestSubagentToolResultTruncation:
         assert len(tool_msgs) == 1
         assert "已截断" not in tool_msgs[0]["content"]
         assert tool_msgs[0]["content"] == json.dumps(short_result, ensure_ascii=False)
+
+    async def test_generated_content_is_integrated_by_next_llm_turn(self, monkeypatch):
+        """子智能体不再维护工具名旁路，最终结果仍来自下一轮 LLM。"""
+        raw_result = {"success": True, "content": "原始生成正文"}
+        agent = self._make_agent(monkeypatch, raw_result)
+        monkeypatch.setattr(
+            Agent, "_get_tools", lambda self: [{"name": "content_generate"}]
+        )
+        agent.llm.chat_with_tools.side_effect = [
+            {
+                "tool_calls": [{
+                    "id": "c1",
+                    "type": "function",
+                    "function": {"name": "content_generate", "arguments": "{}"},
+                }],
+                "content": "",
+                "usage": {},
+                "request_id": "r1",
+            },
+            {
+                "tool_calls": [],
+                "content": "最终整合内容",
+                "usage": {},
+                "request_id": "r2",
+            },
+        ]
+
+        outcome = await agent.execute_as_subagent(
+            task_description="生成文案", parent_session_id="parent_sess"
+        )
+
+        agent.tool_executor.execute.assert_awaited_once()
+        assert outcome["result"] == {"content": "最终整合内容"}
+        assert "generated_contents" not in outcome
+        second_call_messages = agent.llm.chat_with_tools.call_args_list[1].kwargs["messages"]
+        tool_message = next(message for message in second_call_messages if message["role"] == "tool")
+        assert json.loads(tool_message["content"]) == raw_result
 
     async def test_dict_no_truncate_flag_not_truncated(self, monkeypatch):
         """子智能体：工具经返回 dict 中 _no_truncate: True 声明"文档型输出不截断"，

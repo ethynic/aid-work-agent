@@ -108,15 +108,9 @@ class ToolExecutor:
 
         # 执行工具
         try:
-            if tool_name == "browser_automation":
-                logger.info("执行工具: browser_automation, 参数已脱敏")
-            elif redact_parameter_logs:
-                logger.info(f"执行工具: {tool_name}, 参数已脱敏")
-            else:
-                # 过滤 _ 前缀的注入参数（_trusted_tenant_id/_progress_queue 等），
-                # 避免受信身份与内部对象 repr 落日志
-                log_params = {k: v for k, v in parameters.items() if not k.startswith("_")}
-                logger.info(f"执行工具: {tool_name}, 参数: {log_params}")
+            # 工具参数可能包含凭据、正文或个人信息，执行层默认只记录工具名。
+            # Remote Gateway 的 redact_parameter_logs 仍用于异常返回脱敏边界。
+            logger.info(f"执行工具: {tool_name}")
             with tool_execution_scope(context):
                 result = await tool.execute(**parameters)
             logger.info(f"工具执行成功: {tool_name}")

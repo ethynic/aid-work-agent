@@ -73,6 +73,22 @@ class TestToolExecutor:
         assert result["success"] is True
 
     @pytest.mark.asyncio
+    async def test_execute_does_not_log_tool_parameters(self, mock_tool, monkeypatch):
+        registry = ToolRegistry()
+        registry.register(mock_tool(
+            name="sensitive_tool",
+            execute_return={"success": True},
+        ))
+        executor = ToolExecutor(registry=registry)
+        logged = []
+        monkeypatch.setattr("src.tools.executor.logger.info", logged.append)
+
+        await executor.execute("sensitive_tool", {"token": "secret-value"})
+
+        assert any("sensitive_tool" in message for message in logged)
+        assert all("secret-value" not in message for message in logged)
+
+    @pytest.mark.asyncio
     async def test_execute_unknown_tool(self):
         registry = ToolRegistry()
         executor = ToolExecutor(registry=registry)

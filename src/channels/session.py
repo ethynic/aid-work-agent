@@ -16,6 +16,7 @@ from src.db.database import get_db_connection
 from src.models.message import ChannelType
 from src.core.cache_utils import CacheKeys, get_cached, set_cached, delete_cached, delete_cached_pattern
 from src.core.temp_logger import tlog
+from src.core.agent_events import extract_downloadable_file
 
 
 class ChannelSessionManager:
@@ -914,18 +915,9 @@ class ChannelSessionManager:
             if not isinstance(event, dict):
                 return
             event_type = event.get("type")
-            if (event_type == "tool_result"
-                    and event.get("toolName") in ("write", "cp")
-                    and event.get("success") is True):
-                result = event.get("result", {}) or {}
-                if result.get("file_id"):
-                    downloadable_files.append({
-                        "file_id": result["file_id"],
-                        "file_name": result.get("download_file_name") or result.get("file_name", "未命名文件"),
-                        "file_size": result.get("file_size", 0),
-                        "download_url": result.get("download_url", ""),
-                        "mime_type": result.get("mime_type", ""),
-                    })
+            downloadable_file = extract_downloadable_file(event)
+            if downloadable_file:
+                downloadable_files.append(downloadable_file)
             elif event_type == "tool_messages":
                 # 收集本轮 tool 消息序列（assistant with tool_calls + role:tool 配对）
                 tool_messages_collected.extend(event.get("messages", []))

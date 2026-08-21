@@ -19,6 +19,8 @@ interface StreamCallbacks {
   onResponse: (data: string) => void
   onComplete: () => void
   onError: (error: Error) => void
+  onToolStart: (toolName: string, toolArgs: object, displayName?: string, toolCallId?: string) => void
+  onToolResult: (toolName: string, result: any, success: boolean, displayName?: string, toolCallId?: string) => void
   disconnected: boolean
 }
 
@@ -35,9 +37,12 @@ vi.mock('@/api/agent', () => ({
       onResponse: (data: string) => void,
       onComplete: () => void,
       onError: (error: Error) => void,
+      onToolStart: StreamCallbacks['onToolStart'],
+      onToolResult: StreamCallbacks['onToolResult'],
     ): Promise<void> {
       streamRegistry.set(sessionId, {
-        onProgress, onResponse, onComplete, onError, disconnected: false,
+        onProgress, onResponse, onComplete, onError,
+        onToolStart, onToolResult, disconnected: false,
       })
       // 回调已注册到 registry，测试后续手动驱动 SSE 事件；
       // 立即 resolve 让 sendMessage 返回（状态翻转只由回调触发，不受 resolve 影响）
@@ -74,6 +79,19 @@ function emitResponse(sid: string, data: string) {
 }
 function emitComplete(sid: string) {
   streamRegistry.get(sid)?.onComplete()
+}
+function emitToolStart(
+  sid: string, toolName: string, displayName: string, toolCallId: string,
+) {
+  streamRegistry.get(sid)?.onToolStart(toolName, {}, displayName, toolCallId)
+}
+function emitToolResult(
+  sid: string, toolName: string, result: any, success: boolean,
+  displayName: string, toolCallId: string,
+) {
+  streamRegistry.get(sid)?.onToolResult(
+    toolName, result, success, displayName, toolCallId,
+  )
 }
 
 describe('useAgent 多会话后台流式', () => {
@@ -199,5 +217,43 @@ describe('useAgent 多会话后台流式', () => {
     emitResponse('session_A', '仍在生成')
     emitComplete('session_A')
     expect(agent.hasSessionUnreadCompletion('session_A')).toBe(true)
+  })
+
+  it('同名工具按 toolCallId 独立关联，并按结果形状消费文件和快捷选项', async () => {
+    const agent = useAgent()
+    await agent.sendMessage('执行两个同名工具', null, 'session_tools')
+    agent.sessionId.value = 'session_tools'
+
+    emitToolStart('session_tools', 'future_tool', '未来工具', 'call-1')
+    emitToolStart('session_tools', 'future_tool', '未来工具', 'call-2')
+    emitToolResult(
+      'session_tools', 'future_tool',
+      { success: true, file_id: 'hidden', visible: false },
+      true, '未来工具', 'call-1',
+    )
+    emitToolResult(
+      'session_tools', 'future_tool',
+      {
+        success: true,
+        file_id: 'file-2',
+        file_name: 'report.pdf',
+        data: { options: [
+          { key: '1', label: '选项一' },
+          { key: '2', label: '选项二' },
+        ] },
+      },
+      true, '未来工具', 'call-2',
+    )
+
+    const assistant = agent.messages.value.find(message => message.role === 'assistant')!
+    const toolProgress = assistant.progressMessages!.filter(
+      progress => progress.type === 'tool_start' || progress.type === 'tool_result',
+    )
+    expect(toolProgress.map(progress => progress.toolCallId)).toEqual([
+      'call-1', 'call-2', 'call-1', 'call-2',
+    ])
+    expect(toolProgress.every(progress => progress.displayName === '未来工具')).toBe(true)
+    expect(assistant.downloadableFiles?.map(file => file.file_id)).toEqual(['file-2'])
+    expect(assistant.quickOptions?.map(option => option.key)).toEqual(['1', '2'])
   })
 })

@@ -37,6 +37,7 @@ from src.tools.assembly import (
     assemble_agent_tools,
 )
 from src.tools.context import ExecutionContextFactory, tool_execution_scope
+from src.core.request_context import AgentRequestContext
 from src.memory.short_term import ShortTermMemory
 from src.memory.manager import MemoryManager
 from src.prompts import PromptManager
@@ -1940,7 +1941,7 @@ class Agent:
         cancel_check: Optional[Callable[[], bool]] = None,
         extra_system_prompt: Optional[str] = None,
         _continuation_tool_result: Optional[Dict[str, Any]] = None,
-        video_params: Optional[Dict[str, Any]] = None,
+        request_context: Optional[AgentRequestContext] = None,
         _defer_tool_names: Optional[set[str]] = None,
         _deferred_tool_call_id: Optional[str] = None,
     ) -> AsyncGenerator[dict, None]:
@@ -1955,11 +1956,8 @@ class Agent:
         See: docs/infrastructure/observability-channel-sessions-design.md
 
         Args:
-            video_params: 前端工具栏传入的视频创作参数（仅 video-agent 子智能体使用）。
-                         通过 _current_video_params 实例变量供工具读取，执行完成后清理。
+            request_context: 可信入口构造的通用请求级扩展上下文。
         """
-        # 视频创作参数存到实例变量，供工具执行时读取（同请求期间有效，finally 清理）
-        self._current_video_params = video_params
         trace_collector = None
         try:
             from src.services.session_record import SessionRecordManager
@@ -1998,6 +1996,7 @@ class Agent:
                 attachments=attachments,
                 cancel_check=cancel_check,
                 extra_system_prompt=extra_system_prompt,
+                request_context=request_context,
                 _continuation_tool_result=_continuation_tool_result,
                 _defer_tool_names=_defer_tool_names,
                 _deferred_tool_call_id=_deferred_tool_call_id,
@@ -2021,35 +2020,6 @@ class Agent:
                     trace_collector.on_complete(_record)
                 except Exception as e:
                     logger.debug(f"Trace on_complete failed: {e}")
-            # 清理视频创作参数（同请求期间持有，避免跨请求污染）
-            if hasattr(self, '_current_video_params'):
-                delattr(self, '_current_video_params')
-
-    def _format_video_params_for_llm(self, video_params: Dict[str, Any]) -> str:
-        """把前端工具栏选择的视频参数格式化为 LLM 可读说明文本
-
-        仅 video-agent 子智能体在 process_message 期间持有 _current_video_params。
-        注入到对话上下文后，LLM 能直接看到用户已确定的参数，避免重复询问时长/比例/模式。
-        """
-        mode = video_params.get("mode", "refine")
-        mode_label = "精修（refine）" if mode == "refine" else "敏捷（agile）"
-        duration = int(video_params.get("duration_sec", 5))
-        ratio = video_params.get("ratio", "9:16")
-        resolution = video_params.get("resolution", "720P")
-        card_count = int(video_params.get("card_count", 1))
-        prompt_model = video_params.get("prompt_model", "qwen-vl-plus")
-        return (
-            "<video-params>\n"
-            "用户已通过前端「视频生成参数」面板指定本次视频创作参数，请直接遵循，"
-            "除非用户明确表示要修改，否则不要向用户重复询问以下信息：\n"
-            f"- 创作模式：{mode_label}\n"
-            f"- 视频时长：{duration} 秒\n"
-            f"- 视频比例：{ratio}\n"
-            f"- 分辨率：{resolution}\n"
-            f"- 生成条数：{card_count} 条\n"
-            "</video-params>"
-        )
-
     async def _process_message_impl(
         self,
         user_input: str,
@@ -2058,6 +2028,7 @@ class Agent:
         attachments: Optional[List[Dict[str, Any]]] = None,
         cancel_check: Optional[Callable[[], bool]] = None,
         extra_system_prompt: Optional[str] = None,
+        request_context: Optional[AgentRequestContext] = None,
         _continuation_tool_result: Optional[Dict[str, Any]] = None,
         _defer_tool_names: Optional[set[str]] = None,
         _deferred_tool_call_id: Optional[str] = None,
@@ -2298,6 +2269,7 @@ class Agent:
                 else None
             ),
             agent_execution_id=getattr(self, "execution_id", None),
+            request_data=request_context.request_data if request_context else {},
         )
 
         # 子智能体环境变量注入：从 subagent_env_vars 表读取，设置为 os.environ，供 http_api 工具的 ${VAR} 替换
@@ -2431,15 +2403,17 @@ class Agent:
             marker_text = "\n".join(m.get("content", "") for m in system_markers)
             system_prompt = system_prompt + "\n\n" + marker_text
 
-        # 视频创作参数注入上下文（video-agent 前端工具栏选择）。
-        # 让 LLM 在对话轮次直接看到用户已确定的参数，避免重复询问时长/比例/模式。
-        video_params = getattr(self, '_current_video_params', None)
-        if video_params:
-            messages.append({
-                "role": "user",
-                "content": self._format_video_params_for_llm(video_params),
-            })
-            logger.info(f"[video_params] 注入视频创作参数到上下文: {video_params}")
+        # 可信入口提供的领域提示词增强。Agent 不感知具体业务类型。
+        if request_context:
+            for augmentation in request_context.prompt_augmentations:
+                messages.append({
+                    "role": "user",
+                    "content": augmentation,
+                })
+            logger.debug(
+                "注入请求级提示词增强: count={}",
+                len(request_context.prompt_augmentations),
+            )
 
         if auto_loaded_skill:
             skill_content = self.skill_registry.get_content(auto_loaded_skill)
@@ -2584,26 +2558,6 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
             tool_calls = response.get("tool_calls", [])
             content = response.get("content", "")
 
-            # 临时 tlog：追踪 video-agent 阶段三 LLM 响应（排查"嘴上说提交但没调工具"）
-            try:
-                from src.core.temp_logger import tlog
-                tool_names = [
-                    tc.get("function", {}).get("name", tc.get("name", ""))
-                    for tc in tool_calls
-                ] if tool_calls else []
-                tlog(
-                    "video-agent-阶段三",
-                    "LLM 响应 iteration={iter} has_tool_calls={has_tc} tool_names={names} "
-                    "content_len={clen} content_preview={preview}",
-                    iter=iteration,
-                    has_tc=bool(tool_calls),
-                    names=tool_names,
-                    clen=len(content) if content else 0,
-                    preview=(content or "")[:300],
-                )
-            except Exception:
-                pass
-
             # 后端日志：记录Agent迭代信息（关联LLM request_id）
             log_agent_iteration(
                 iteration=iteration,
@@ -2717,22 +2671,6 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
             
             # If no valid tool calls, we're done
             if not valid_tool_calls:
-                # 临时 tlog：LLM 没调工具直接退出，标记是否在 video-agent 上下文
-                try:
-                    from src.core.temp_logger import tlog
-                    has_vp = bool(getattr(self, '_current_video_params', None))
-                    tlog(
-                        "video-agent-阶段三",
-                        "LLM 未调用工具直接退出 iteration={iter} has_video_params={vp} "
-                        "is_master={master} content_preview={preview}",
-                        iter=iteration,
-                        vp=has_vp,
-                        master=self.is_master,
-                        preview=(content or "")[:300],
-                    )
-                except Exception:
-                    pass
-
                 # Store assistant response in memory
                 reasoning = response.get("reasoning_content")
                 if reasoning:
@@ -2810,13 +2748,15 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                 # 获取工具的用户友好名称
                 tool_display_name = self._get_tool_display_name(tool_name, tool_args)
                 # 发送工具开始执行事件
-                yield make_event("tool_start", toolName=tool_name, toolArgs=tool_args)
-                yield make_event("progress", data=f"🔧 正在执行 {tool_display_name}...")
-
-                if tool_name == "browser_automation":
-                    logger.info("Executing tool: browser_automation (arguments redacted)")
-                else:
-                    logger.info(f"Executing tool: {tool_name} with args: {json.dumps(tool_args, ensure_ascii=False)}")
+                yield make_event(
+                    "tool_start",
+                    toolName=tool_name,
+                    # 参数可能包含凭据、正文或个人信息；展示名已在后端生成，
+                    # SSE、会话 metadata 和 trace 均无需持有原始参数。
+                    toolArgs={},
+                    toolCallId=tool_id,
+                    displayName=tool_display_name,
+                )
 
                 # Fallback: 如果 LLM 调用了一个不在工具列表中但匹配 skill 名称的工具，
                 # 自动转为 use_skill 调用（LLM 有时会误把 skill 名称当成工具名直接调用）
@@ -2830,40 +2770,6 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                         tool_args = {"skill": original_name}
                         # 更新显示名称
                         tool_display_name = self._get_tool_display_name(tool_name, tool_args)
-
-                # Handle create_scheduled_task - 创建定时任务（通过独立 tool 执行）
-                if tool_name == "create_scheduled_task":
-                    task_result = await self.tool_executor.execute(
-                        tool_name, tool_args,
-                        context=_tool_context.derive(tool_call_id=tool_id),
-                    )
-                    success = task_result.get("success", False)
-                    yield make_event("tool_result", toolName=tool_name, result=task_result, success=success)
-                    if success:
-                        name = task_result.get("name", "")
-                        schedule_desc = task_result.get("schedule_description", "")
-                        yield make_event("progress", data=f"✅ 定时任务已创建: {name} ({schedule_desc})")
-                    else:
-                        yield make_event("progress", data=f"❌ 定时任务创建失败")
-                    tool_results.append({
-                        "tool_call_id": tool_id,
-                        "content": task_result
-                    })
-                    continue
-
-                # Handle manage_scheduled_task - 管理定时任务（通过独立 tool 执行）
-                if tool_name == "manage_scheduled_task":
-                    task_result = await self.tool_executor.execute(
-                        tool_name, tool_args,
-                        context=_tool_context.derive(tool_call_id=tool_id),
-                    )
-                    success = task_result.get("success", False)
-                    yield make_event("tool_result", toolName=tool_name, result=task_result, success=success)
-                    tool_results.append({
-                        "tool_call_id": tool_id,
-                        "content": task_result
-                    })
-                    continue
 
                 # Handle create_plan specially - create real plan and save to MD
                 if tool_name == "create_plan":
@@ -3084,12 +2990,6 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                         error = delegation_result.get("error", "未知错误")
                         yield make_event("progress", data=f"❌ {subagent_name}子智能体执行失败: {error}")
 
-                    # 如果子智能体生成了内容（content_generate），实时展示给用户
-                    if delegation_result.get("generated_contents"):
-                        for content in delegation_result["generated_contents"]:
-                            yield make_event("response", data=f"\n<!--process-->\n📝 **内容生成结果：**\n\n{content}\n\n<!--/process-->\n")
-
-
                     # 标记任务完成（澄清状态不标记为失败）
                     if delegate_task_id:
                         if delegation_result.get("success"):
@@ -3134,15 +3034,8 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                             else:
                                 result = _evt_payload
                     else:
-                        execution_args = tool_args
-                        # 注入视频创作参数（前端工具栏选择，供 submit_video_task 等工具读取）
-                        video_params = getattr(self, '_current_video_params', None)
-                        if video_params:
-                            if execution_args is tool_args:
-                                execution_args = dict(tool_args)
-                            execution_args["_video_params"] = video_params
                         result = await self.tool_executor.execute(
-                            tool_name, execution_args,
+                            tool_name, tool_args,
                             context=_tool_context.derive(
                                 tool_call_id=tool_id,
                                 agent_execution_id=(
@@ -3208,51 +3101,19 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                         return
 
                     # 发送工具执行完成事件
-                    tool_display_name = self._get_tool_display_name(tool_name, tool_args)
+                    # 普通工具只发送标准结果；结果原样进入下一轮 LLM。
                     if isinstance(result, dict):
                         success = result.get("success", True)
-                        yield make_event("tool_result", toolName=tool_name, result=result, success=success)
-                        if success:
-                            # 根据不同工具显示不同结果预览
-                            if tool_name == "content_generate":
-                                content = result.get("content", "")
-                                preview = content[:80] + "..." if len(content) > 80 else content
-                                yield make_event("progress", data=f"✅ {tool_display_name}完成\n📝 {preview}")
-                            elif tool_name == "web_search":
-                                results = result.get("results", [])
-                                yield make_event("progress", data=f"✅ {tool_display_name}完成，找到{len(results)}条结果")
-                            elif tool_name == "email_process":
-                                yield make_event("progress", data=f"✅ {tool_display_name}成功")
-                            elif tool_name == "read":
-                                content = result.get("content", "")
-                                preview = content[:80] + "..." if len(content) > 80 else content
-                                yield make_event("progress", data=f"✅ {tool_display_name}完成\n📄 {preview}")
-                            elif tool_name == "browser_automation":
-                                result_text = result.get("result", result.get("message", ""))
-                                if result_text:
-                                    preview = result_text[:80] + "..." if len(result_text) > 80 else result_text
-                                    yield make_event("progress", data=f"✅ {tool_display_name}完成\n{preview}")
-                                else:
-                                    yield make_event("progress", data=f"✅ {tool_display_name}成功")
-                            else:
-                                yield make_event("progress", data=f"✅ {tool_display_name}执行完成")
-                        else:
-                            error = result.get("error", "未知错误")
-                            yield make_event("progress", data=f"❌ {tool_display_name}失败: {error}")
                     else:
-                        yield make_event("tool_result", toolName=tool_name, result=result, success=True)
-                        yield make_event("progress", data=f"✅ {tool_display_name}执行完成")
-
-                    # 对于 content_generate 工具，将结果格式化为可展示的内容并立即输出
-                    if tool_name == "content_generate":
-                        if isinstance(result, dict):
-                            success = result.get("success")
-                            content = result.get("content", "")
-                            logger.info(f"[CONTENT_GEN] success={success}, content_len={len(content) if content else 0}")
-                            if success and content:
-                                yield make_event("response", data=f"\n<!--process-->\n📝 **内容生成结果：**\n\n{content}\n\n<!--/process-->\n")
-                        else:
-                            logger.warning(f"[CONTENT_GEN] Unexpected result type: {type(result)}")
+                        success = True
+                    yield make_event(
+                        "tool_result",
+                        toolName=tool_name,
+                        toolCallId=tool_id,
+                        displayName=tool_display_name,
+                        result=result,
+                        success=success,
+                    )
 
                     tool_results.append({
                         "tool_call_id": tool_id,
@@ -3280,7 +3141,7 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
 
                     # 标记任务完成（使用保存的task_id）
                     if current_task_id:
-                        if result.get("success", True):
+                        if success:
                             self.plan_manager.mark_task_completed(
                                 session_id, current_task_id, result
                             )
@@ -3288,6 +3149,8 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                             self.plan_manager.mark_task_failed(
                                 session_id, current_task_id,
                                 result.get("error", "Tool execution failed")
+                                if isinstance(result, dict)
+                                else "Tool execution failed"
                             )
 
                 except Exception as e:
@@ -3297,8 +3160,14 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                     logger.error(f"[AGENT] Tool execution error, session_id={session_id}, tool={tool_name}, error: {e}")
                     logger.error(f"[AGENT] Tool execution traceback:\n{error_trace}")
                     # 发送工具执行结果（失败）
-                    yield make_event("tool_result", toolName=tool_name, result={"error": error_msg}, success=False)
-                    yield make_event("progress", data=f"❌ {self._get_tool_display_name(tool_name, tool_args)}执行出错: {str(e)}")
+                    yield make_event(
+                        "tool_result",
+                        toolName=tool_name,
+                        toolCallId=tool_id,
+                        displayName=self._get_tool_display_name(tool_name, tool_args),
+                        result={"error": error_msg},
+                        success=False,
+                    )
                     tool_results.append({
                         "tool_call_id": tool_id,
                         "content": error_msg,
@@ -3427,6 +3296,7 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
         progress_callback=None,
         cancel_check=None,
         extra_system_prompt: Optional[str] = None,
+        request_context: Optional[AgentRequestContext] = None,
     ) -> str:
         """Process message and return complete response
 
@@ -3441,6 +3311,7 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                 Used by channel message serialization to cancel stale requests.
             extra_system_prompt: 渠道级额外提示词（如 wecom_kf 的渠道能力约束），
                 透传给 process_message → _build_system_prompt。
+            request_context: 可信入口构造的通用请求级扩展上下文。
         """
         # Store explicit record_service so the inner process_message()
         # can access it without relying on thread-local storage
@@ -3457,6 +3328,7 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                 user_input, session_id, user, attachments,
                 cancel_check=cancel_check,
                 extra_system_prompt=extra_system_prompt,
+                request_context=request_context,
             ):
                 if event.get("type") == "response":
                     response_parts.append(event.get("data", ""))
@@ -3505,7 +3377,7 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
             parent_session_id: 父智能体的session ID
             task_record: 任务记录（用于状态更新）
             progress_callback: 进度回调函数（保留兼容，内部收集事件并转发）
-            image_paths: 用户上传图片的完整路径列表（可选，多模态子智能体如 video-agent 用）
+            image_paths: 用户上传图片的完整路径列表（可选，供多模态子智能体使用）
                 传入时构造 OpenAI 多模态 content（text + image_url data:base64），
                 直接传给 LLM；不持久化到 memory/chat_messages 表。
 
@@ -3605,7 +3477,6 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
             final_result = None
             final_summary = ""
             subagent_plan_created = False
-            generated_content_list = []  # 存储所有生成的内容
             subagent_token_usage = {"input": 0, "output": 0, "cached": 0}
 
             while iteration < max_iterations:
@@ -3782,8 +3653,14 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                     # 发送工具执行进度
                     tool_display_name = self._get_tool_display_name(tool_name, tool_args)
                     # 发送工具开始执行事件
-                    await _emit_async(make_event("tool_start", toolName=tool_name, toolArgs=tool_args))
-                    await _emit_async(make_event("progress", data=f"🔧 [{self.subagent_config.name}] 正在执行 {tool_display_name}..."))
+                    await _emit_async(make_event(
+                        "tool_start",
+                        toolName=tool_name,
+                        # 与主 Agent 一致，不把原始参数送入事件持久化链。
+                        toolArgs={},
+                        toolCallId=tc.get("id", ""),
+                        displayName=tool_display_name,
+                    ))
 
                     # 处理 clarify - 子智能体需要向用户询问补充信息
                     # 与主智能体不同，子智能体的 clarify 不会直接对话用户，
@@ -3933,41 +3810,26 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                                     else:
                                         result = _evt_payload
                             else:
-                                execution_args = tool_args
-                                # 注入视频创作参数（前端工具栏选择，供 submit_video_task 等工具读取）
-                                video_params = getattr(self, '_current_video_params', None)
-                                if video_params:
-                                    if execution_args is tool_args:
-                                        execution_args = dict(tool_args)
-                                    execution_args["_video_params"] = video_params
                                 result = await self.tool_executor.execute(
-                                    tool_name, execution_args,
+                                    tool_name, tool_args,
                                     context=_subagent_tool_context.derive(
                                         tool_call_id=tc.get("id")
                                     ),
                                 )
                             tool_result = result
 
-                            # 发送工具执行完成进度
                             if isinstance(result, dict):
                                 success = result.get("success", True)
-                                # 发送工具执行结果
-                                await _emit_async(make_event("tool_result", toolName=tool_name, result=result, success=success))
-                                if success:
-                                    await _emit_async(make_event("progress", data=f"✅ [{self.subagent_config.name}] {tool_display_name}执行完成"))
-                                else:
-                                    error = result.get("error", "未知错误")
-                                    await _emit_async(make_event("progress", data=f"❌ [{self.subagent_config.name}] {tool_display_name}失败: {error}"))
                             else:
-                                await _emit_async(make_event("tool_result", toolName=tool_name, result=result, success=True))
-                                await _emit_async(make_event("progress", data=f"✅ [{self.subagent_config.name}] {tool_display_name}执行完成"))
-
-                            # 对于 content_generate 工具，保存生成的内容
-                            if tool_name == "content_generate" and isinstance(result, dict):
-                                generated_content = result.get("content", "")
-                                if generated_content:
-                                    generated_content_list.append(generated_content)
-                                    logger.info(f"[SUBAGENT] content_generate: saved content length={len(generated_content)}")
+                                success = True
+                            await _emit_async(make_event(
+                                "tool_result",
+                                toolName=tool_name,
+                                toolCallId=tc.get("id", ""),
+                                displayName=tool_display_name,
+                                result=result,
+                                success=success,
+                            ))
                             
                             # 同步到父智能体的计划管理器
                             if self.parent_plan_manager and subagent_plan_created:
@@ -3977,7 +3839,7 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                                     task = self.plan_manager.get_next_pending_task(self.session_id)
                                     if task:
                                         self.plan_manager.mark_task_running(self.session_id, task.task_id)
-                                        if result.get("success", True):
+                                        if success:
                                             self.plan_manager.mark_task_completed(
                                                 self.session_id, task.task_id, result
                                             )
@@ -3985,11 +3847,20 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                                             self.plan_manager.mark_task_failed(
                                                 self.session_id, task.task_id,
                                                 result.get("error", "Tool execution failed")
+                                                if isinstance(result, dict)
+                                                else "Tool execution failed"
                                             )
                         except Exception as e:
                             tool_result = {"error": str(e)}
                             # 发送工具执行结果（失败）
-                            await _emit_async(make_event("tool_result", toolName=tool_name, result={"error": str(e)}, success=False))
+                            await _emit_async(make_event(
+                                "tool_result",
+                                toolName=tool_name,
+                                toolCallId=tc.get("id", ""),
+                                displayName=tool_display_name,
+                                result={"error": str(e)},
+                                success=False,
+                            ))
 
                             # 标记任务失败
                             if self.parent_plan_manager and subagent_plan_created:
@@ -4025,23 +3896,9 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
 
             logger.info(f"[SUBAGENT] Task completed with summary: {final_summary[:200]}")
             
-            # 如果有生成的内容，合并到结果中
-            if generated_content_list and final_result:
-                combined_content = "\n\n".join(generated_content_list)
-                if isinstance(final_result, dict):
-                    final_result["generated_contents"] = generated_content_list
-                    final_result["combined_content"] = combined_content
-                else:
-                    final_result = {
-                        "content": str(final_result),
-                        "generated_contents": generated_content_list,
-                        "combined_content": combined_content
-                    }
-            
             return {
                 "result": final_result,
                 "summary": final_summary,
-                "generated_contents": generated_content_list,
                 "token_usage": subagent_token_usage,
                 "events": collected_events,
             }

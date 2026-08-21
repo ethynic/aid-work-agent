@@ -12,6 +12,28 @@ def make_event(event_type: str, **kwargs) -> Dict[str, Any]:
     return event
 
 
+def extract_downloadable_file(event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """从成功的工具结果事件中提取可下载文件，不依赖工具名称。"""
+    if event.get("type") != "tool_result" or event.get("success") is not True:
+        return None
+    result = event.get("result")
+    if not isinstance(result, dict):
+        return None
+    if not result.get("file_id") or result.get("visible") is False:
+        return None
+    return {
+        "file_id": result["file_id"],
+        "file_name": (
+            result.get("download_file_name")
+            or result.get("file_name")
+            or "未命名文件"
+        ),
+        "file_size": result.get("file_size", 0),
+        "download_url": result.get("download_url", ""),
+        "mime_type": result.get("mime_type", ""),
+    }
+
+
 def make_image_event(
     images: List[Dict[str, Any]],
     placement: str = "after_text",

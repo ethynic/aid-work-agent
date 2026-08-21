@@ -147,10 +147,10 @@
               :key="index"
               :class="[
                 'text-xs py-1 px-2 rounded text-gray-500',
-                getProgressClass(msg.type)
+                getProgressClass(msg)
               ]"
             >
-              <span class="mr-1">{{ getProgressIcon(msg.type) }}</span>
+              <span class="mr-1">{{ getProgressIcon(msg) }}</span>
               <span class="opacity-80">{{ formatProgressContent(msg) }}</span>
             </div>
           </div>
@@ -263,8 +263,11 @@ function toggleExpanded() {
   isExpanded.value = !isExpanded.value
 }
 
-function getProgressClass(type: string): string {
-  switch (type) {
+function getProgressClass(msg: ProgressMessage): string {
+  if (msg.type === 'tool_result' && msg.success === false) {
+    return 'bg-danger-50 text-danger-600'
+  }
+  switch (msg.type) {
     case 'error': return 'bg-danger-50 text-danger-600'
     case 'complete': return 'bg-success-50 text-success-600'
     case 'thinking': return 'bg-primary-50 text-primary-600'
@@ -274,8 +277,11 @@ function getProgressClass(type: string): string {
   }
 }
 
-function getProgressIcon(type: string): string {
-  switch (type) {
+function getProgressIcon(msg: ProgressMessage): string {
+  if (msg.type === 'tool_result' && msg.success === false) {
+    return '❌'
+  }
+  switch (msg.type) {
     case 'error': return '❌'
     case 'complete': return '✅'
     case 'thinking': return '🤔'
@@ -287,11 +293,15 @@ function getProgressIcon(type: string): string {
 
 function formatProgressContent(msg: ProgressMessage): string {
   if (msg.type === 'tool_start' && msg.toolName) {
-    return `🔧 需要调用工具【${msg.toolName}】`
+    return `🔧 需要调用工具【${msg.displayName || msg.toolName}】`
   }
   if (msg.type === 'tool_result' && msg.toolName) {
     const success = msg.success !== false
-    return success ? `✅ ${msg.toolName}执行完成` : `❌ ${msg.toolName}执行失败`
+    const name = msg.displayName || msg.toolName
+    const error = typeof msg.result?.error === 'string' ? msg.result.error : ''
+    return success
+      ? `✅ ${name}执行完成`
+      : `❌ ${name}执行失败${error ? `: ${error}` : ''}`
   }
 
   const cleaned = msg.content.replace(/[\u{1F300}-\u{1F9FF}]/gu, '').trim()

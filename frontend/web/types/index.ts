@@ -73,6 +73,8 @@ export interface ProgressMessage {
   content: string
   timestamp: number
   toolName?: string      // 工具名称
+  displayName?: string   // 后端提供的用户友好名称
+  toolCallId?: string    // 同一轮并行工具调用的唯一标识
   toolArgs?: object      // 工具参数
   result?: any           // 工具执行结果（仅 tool_result 类型）
   success?: boolean      // 是否成功（仅 tool_result 类型）
@@ -96,8 +98,8 @@ export type MessageStreamEvent =
   | { type: 'response'; data: string; timestamp: number }
   | { type: 'complete'; timestamp: number }
   | { type: 'error'; data: string; timestamp: number }
-  | { type: 'tool_start'; toolName: string; toolArgs: object; timestamp: number }
-  | { type: 'tool_result'; toolName: string; result: any; success: boolean; timestamp: number }
+  | { type: 'tool_start'; toolName: string; displayName?: string; toolCallId?: string; toolArgs: object; timestamp: number }
+  | { type: 'tool_result'; toolName: string; displayName?: string; toolCallId?: string; result: any; success: boolean; timestamp: number }
   | { type: 'thinking'; data: string; timestamp: number }
   | { type: 'clarification'; subagentName: string; question: string; timestamp: number }
   | { type: 'busy'; flag: string; message: string; instance_id: string; is_same_user: boolean; current_user_name: string }

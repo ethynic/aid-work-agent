@@ -97,8 +97,8 @@ export class SSEManager {
     onResponse: (data: string) => void,
     onComplete: () => void,
     onError: (error: Error) => void,
-    onToolStart?: (toolName: string, toolArgs: object) => void,
-    onToolResult?: (toolName: string, result: any, success: boolean) => void,
+    onToolStart?: (toolName: string, toolArgs: object, displayName?: string, toolCallId?: string) => void,
+    onToolResult?: (toolName: string, result: any, success: boolean, displayName?: string, toolCallId?: string) => void,
     onThinking?: (data: string) => void,
     onClarification?: (subagentName: string, question: string) => void,
     onImages?: (images: any[], placement: string) => void,
@@ -210,8 +210,8 @@ export class SSEManager {
       onResponse: (data: string) => void
       onComplete: () => void
       onError: (error: Error) => void
-      onToolStart?: (toolName: string, toolArgs: object) => void
-      onToolResult?: (toolName: string, result: any, success: boolean) => void
+      onToolStart?: (toolName: string, toolArgs: object, displayName?: string, toolCallId?: string) => void
+      onToolResult?: (toolName: string, result: any, success: boolean, displayName?: string, toolCallId?: string) => void
       onThinking?: (data: string) => void
       onClarification?: (subagentName: string, question: string) => void
       onImages?: (images: any[], placement: string) => void
@@ -251,10 +251,10 @@ export class SSEManager {
             callbacks.onError(new Error(event.data))
             break
           case 'tool_start':
-            callbacks.onToolStart?.(event.toolName, event.toolArgs)
+            callbacks.onToolStart?.(event.toolName, event.toolArgs, event.displayName, event.toolCallId)
             break
           case 'tool_result':
-            callbacks.onToolResult?.(event.toolName, event.result, event.success)
+            callbacks.onToolResult?.(event.toolName, event.result, event.success, event.displayName, event.toolCallId)
             break
           case 'thinking':
             callbacks.onThinking?.(event.data)

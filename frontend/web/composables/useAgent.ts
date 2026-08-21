@@ -242,9 +242,6 @@ export function useAgent() {
     const filesToSend = currentFiles.value.length > 0 ? [...currentFiles.value] : undefined
     currentFiles.value = []
 
-    // 缓存每个工具最后一次 tool_start 的 toolArgs，供 tool_result 回调恢复显示名（SSE 协议 tool_result 不携带 toolArgs）
-    const lastToolArgsMap = new Map<string, object>()
-
     // 流结束时若是后台会话（用户正在查看其他会话），标记完成小点
     const markUnreadIfBackground = () => {
       if (effectiveSessionId !== sessionId.value) {
@@ -316,75 +313,62 @@ export function useAgent() {
           markUnreadIfBackground()
         },
         // onToolStart - 工具开始执行
-        (toolName, toolArgs) => {
-          lastToolArgsMap.set(toolName, toolArgs || {})
-          const toolDisplayName = getToolDisplayName(toolName, toolArgs)
-          addProgress(state, `🔧 需要调用工具【${toolDisplayName}】`, 'tool_start', toolName, toolArgs)
+        (toolName, toolArgs, displayName, toolCallId) => {
+          const toolDisplayName = displayName || toolName
+          addProgress(
+            state,
+            `🔧 需要调用工具【${toolDisplayName}】`,
+            'tool_start',
+            toolName,
+            toolArgs,
+            undefined,
+            displayName,
+            toolCallId,
+          )
           state.inputHintState.value = 'working'
         },
         // onToolResult - 工具执行结果
-        (toolName, result, success) => {
-          const cachedArgs = lastToolArgsMap.get(toolName) || {}
-          const toolDisplayName = getToolDisplayName(toolName, cachedArgs)
+        (toolName, result, success, displayName, toolCallId) => {
+          const toolDisplayName = displayName || toolName
           if (success) {
-            // 提取下载文件信息到助手消息
-            const downloadToolNames = ['write', 'cp']
-            if (downloadToolNames.includes(toolName) && result?.file_id) {
-              // 仅当 visible !== false 时才在前端展示下载卡片
-              // visible 缺省（undefined）视为可见；仅 cp 显式返回 visible=false 时隐藏
-              if (result.visible !== false) {
-                const lastMsg = state.messages.value[state.messages.value.length - 1]
-                if (lastMsg && lastMsg.role === 'assistant') {
-                  if (!lastMsg.downloadableFiles) {
-                    lastMsg.downloadableFiles = []
-                  }
-                  // 按 file_id 去重
-                  if (!lastMsg.downloadableFiles.some(f => f.file_id === result.file_id)) {
-                    lastMsg.downloadableFiles.push({
-                      file_id: result.file_id,
-                      file_name: result.download_file_name || result.file_name || '未命名文件',
-                      file_size: result.file_size || 0,
-                      download_url: result.download_url || `/api/files/${result.file_id}/download`,
-                      mime_type: result.mime_type || '',
-                    })
-                  }
+            // 结构化消费者只依赖结果字段，不依赖生产该结果的工具名称。
+            if (result?.file_id && result.visible !== false) {
+              const lastMsg = state.messages.value[state.messages.value.length - 1]
+              if (lastMsg && lastMsg.role === 'assistant') {
+                if (!lastMsg.downloadableFiles) {
+                  lastMsg.downloadableFiles = []
+                }
+                // 按 file_id 去重
+                if (!lastMsg.downloadableFiles.some(f => f.file_id === result.file_id)) {
+                  lastMsg.downloadableFiles.push({
+                    file_id: result.file_id,
+                    file_name: result.download_file_name || result.file_name || '未命名文件',
+                    file_size: result.file_size || 0,
+                    download_url: result.download_url || `/api/files/${result.file_id}/download`,
+                    mime_type: result.mime_type || '',
+                  })
                 }
               }
             }
-            // 编号选择元数据（设计 §5.1 选择交互）：boss_jobs_list 成功结果带 data.options
-            // → 挂到助手消息渲染选项按钮（≥2 项才挂载，1 项 SUBAGENT 约定直用不列单；
+            // 编号选择元数据：成功结果带 data.options 时挂到助手消息渲染选项按钮；
             // 纯前端增强不进历史持久化，用户手动回复数字同样有效）
-            if (toolName === 'boss_jobs_list' || !toolName) {
-              const quickOptions = extractQuickOptions(result)
-              if (quickOptions.length) {
-                const lastMsg = state.messages.value[state.messages.value.length - 1]
-                if (lastMsg && lastMsg.role === 'assistant') {
-                  lastMsg.quickOptions = quickOptions
-                }
+            const quickOptions = extractQuickOptions(result)
+            if (quickOptions.length) {
+              const lastMsg = state.messages.value[state.messages.value.length - 1]
+              if (lastMsg && lastMsg.role === 'assistant') {
+                lastMsg.quickOptions = quickOptions
               }
             }
-            // 根据不同工具显示不同结果预览
-            if (toolName === 'web_search') {
-              const results = result?.results || []
-              addProgress(state, `✅ ${toolDisplayName}完成，找到${results.length}条结果`, 'tool_result', toolName, undefined, result)
-            } else if (toolName === 'email_send') {
-              addProgress(state, `✅ ${toolDisplayName}成功`, 'tool_result', toolName, undefined, result)
-            } else if (toolName === 'content_generate') {
-              const content = result?.content || ''
-              const preview = content.length > 100 ? content.slice(0, 100) + '...' : content
-              addProgress(state, `✅ ${toolDisplayName}完成\n📝 ${preview}`, 'tool_result', toolName, undefined, result)
-            } else if (toolName === 'read') {
-              const content = result?.content || ''
-              const preview = content.length > 100 ? content.slice(0, 100) + '...' : content
-              addProgress(state, `✅ ${toolDisplayName}完成\n📄 ${preview}`, 'tool_result', toolName, undefined, result)
-            } else if (toolName === 'browser_open') {
-              addProgress(state, `✅ ${toolDisplayName}成功`, 'tool_result', toolName, undefined, result)
-            } else {
-              addProgress(state, `✅ 【${toolDisplayName}】执行完成`, 'tool_result', toolName, undefined, result)
-            }
+            addProgress(
+              state, `✅ 【${toolDisplayName}】执行完成`, 'tool_result',
+              toolName, undefined, result, displayName, toolCallId, true,
+            )
           } else {
             const errorMsg = result?.error || '未知错误'
-            addProgress(state, `❌ ${toolDisplayName}失败: ${errorMsg}`, 'tool_result', toolName, undefined, result)
+            addProgress(
+              state, `❌ ${toolDisplayName}失败: ${errorMsg}`, 'tool_result',
+              toolName, undefined, result, displayName, toolCallId, false,
+            )
           }
         },
         // onThinking - LLM思考中
@@ -439,89 +423,27 @@ export function useAgent() {
     }
   }
 
-  function getToolDisplayName(toolName: string, toolArgs: object): string {
-    switch (toolName) {
-      case 'web_search': {
-        const keyword = (toolArgs as any)?.keyword || ''
-        return `网络搜索「${keyword.slice(0, 20)}...」`
-      }
-      case 'email_send': {
-        const to = (toolArgs as any)?.to || ''
-        return `发送邮件至「${to}」`
-      }
-      case 'email_read': {
-        const folder = (toolArgs as any)?.folder || 'INBOX'
-        const limit = (toolArgs as any)?.limit || 10
-        return `读取邮件（${folder}，${limit}封）`
-      }
-      case 'content_generate': {
-        const contentType = (toolArgs as any)?.content_type || ''
-        return `生成内容（${contentType}）`
-      }
-      case 'browser_open': {
-        const url = (toolArgs as any)?.url || ''
-        return `打开网页「${url.slice(0, 30)}...」`
-      }
-      case 'delegate_to_subagent': {
-        const subagentName = (toolArgs as any)?.subagent_name || ''
-        return `调用${subagentName}子智能体`
-      }
-      case 'skill_execute': {
-        const skill = (toolArgs as any)?.skill || ''
-        return `执行技能「${skill}」`
-      }
-      case 'use_skill': {
-        const skillName = (toolArgs as any)?.skill || ''
-        return `加载技能「${skillName}」`
-      }
-      case 'read': {
-        const filePath = (toolArgs as any)?.file_path || ''
-        return `读取文件「${filePath}」`
-      }
-      case 'write': {
-        const filePath = (toolArgs as any)?.file_path || ''
-        return filePath ? `写入文件「${filePath}」` : '生成文本文件'
-      }
-      case 'edit': {
-        const filePath = (toolArgs as any)?.file_path || ''
-        return `编辑文件「${filePath}」`
-      }
-      case 'cp': {
-        const src = (toolArgs as any)?.source_file_path || ''
-        return src ? `复制文件「${src.split('/').pop() || ''}」` : '复制文件'
-      }
-      case 'doc_summarize':
-        return '总结文档'
-      case 'doc_translate': {
-        const target = (toolArgs as any)?.target_lang || ''
-        return `翻译文档为${target}`
-      }
-      case 'ocr_image': {
-        const imagePath = (toolArgs as any)?.image_path || ''
-        return `识别图片文字「${imagePath}」`
-      }
-      case 'create_plan':
-        return '创建执行计划'
-      default:
-        return toolName
-    }
-  }
-
   function addProgress(
     state: SessionStreamState,
     content: string,
     type: ProgressMessage['type'],
     toolName?: string,
     toolArgs?: object,
-    result?: any
+    result?: any,
+    displayName?: string,
+    toolCallId?: string,
+    success?: boolean,
   ) {
     const newMsg: ProgressMessage = {
       type,
       content,
       timestamp: Date.now(),
       toolName,
+      displayName,
+      toolCallId,
       toolArgs,
-      result
+      result,
+      success,
     }
     state.progressMessages.value.push(newMsg)
 

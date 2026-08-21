@@ -1,8 +1,8 @@
 """视频创作提交工具
 
 video-agent 子智能体的"视频生成"入口。LLM 在 agent loop 中识别到用户要做视频创作时
-调用此工具；工具从 `_video_params`（agent 注入的上下文）读取前端工具栏选择的参数，
-调用 VideoChatService.handle_user_message 完成视频生成。
+调用此工具；工具从请求级工具执行上下文读取前端工具栏选择的参数，调用
+VideoChatService.handle_user_message 完成视频生成。
 
 精修模式两阶段调用（参考 subagents/video-agent/SUBAGENT.md）：
 - 阶段一/二（draft_only=True）：生成提示词草稿，存 Redis，返回草稿 Markdown，不提交视频
@@ -60,36 +60,23 @@ class SubmitVideoTaskTool(BaseTool):
         user_input: str = kwargs.get("user_input", "")
         image_file_ids: Optional[List[str]] = kwargs.get("image_file_ids")
         draft_only: bool = bool(kwargs.get("draft_only", False))
-        # 视频参数由 agent 注入（前端工具栏选择 -> ChatRequest.video_params -> _current_video_params -> _video_params）
-        video_params: Dict[str, Any] = kwargs.get("_video_params") or {}
-        # 身份与会话只读可信执行边界构造的不可变上下文。video_params 是前端
-        # 业务参数，不能作为 session/user/tenant 的信任来源。
         from src.tools.context import current_tool_execution_context
+        from src.video_request_context import VIDEO_REQUEST_DATA_KEY
+
         context = current_tool_execution_context()
         tenant_id: Optional[str] = context.tenant_id if context else None
         user_id: Optional[str] = context.user_id if context else None
         session_id: Optional[str] = context.session_id if context else None
-
-        # 临时 tlog：标记工具被调用（排查 LLM 嘴上说提交但没调工具）
-        try:
-            from src.core.temp_logger import tlog
-            tlog(
-                "video-agent-阶段三",
-                "submit_video_task.execute 被调用 draft_only={draft} session_id={sid} "
-                "user={uid} images={n_img} video_params={vp}",
-                draft=draft_only,
-                sid=session_id,
-                uid=user_id,
-                n_img=len(image_file_ids or []),
-                vp=video_params,
-            )
-        except Exception:
-            pass
+        # 身份、会话和视频业务参数都只读可信边界构造的不可变上下文。
+        # kwargs 中即使伪造同名内部参数也不会生效。
+        video_params = (
+            context.request_data.get(VIDEO_REQUEST_DATA_KEY, {})
+            if context else {}
+        )
 
         logger.info(
-            f"[submit_video_task] 收到视频创作请求: user_input={user_input[:50]}, "
-            f"draft_only={draft_only}, images={len(image_file_ids or [])}, "
-            f"video_params={video_params}, user={user_id}"
+            f"[submit_video_task] 收到视频创作请求: draft_only={draft_only}, "
+            f"images={len(image_file_ids or [])}"
         )
 
         if not user_input.strip():
@@ -101,6 +88,11 @@ class SubmitVideoTaskTool(BaseTool):
             return {
                 "success": False,
                 "error": "缺少会话上下文（session_id），无法创建视频任务",
+            }
+        if VIDEO_REQUEST_DATA_KEY not in context.request_data:
+            return {
+                "success": False,
+                "error": "缺少视频创作请求上下文，无法创建视频任务",
             }
 
         try:
