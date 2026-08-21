@@ -2050,7 +2050,7 @@ class Agent:
         import base64
         import tempfile
         from datetime import datetime
-        from src.core.agent_events import make_event, make_image_event
+        from src.core.agent_events import make_event, make_image_event, mask_tool_args
 
         # 后端日志：检查是否有待处理的澄清请求
         pending_clarification = (
@@ -2751,9 +2751,9 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                 yield make_event(
                     "tool_start",
                     toolName=tool_name,
-                    # 参数可能包含凭据、正文或个人信息；展示名已在后端生成，
-                    # SSE、会话 metadata 和 trace 均无需持有原始参数。
-                    toolArgs={},
+                    # 参数可能包含凭据、正文或个人信息；展示名已在后端生成。
+                    # 事件链路（SSE、会话 metadata、trace）统一持脱敏后的副本。
+                    toolArgs=mask_tool_args(tool_args),
                     toolCallId=tool_id,
                     displayName=tool_display_name,
                 )
@@ -3424,7 +3424,7 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                 logger.warning(f"[SUBAGENT] 环境变量注入失败: {e}")
 
         # 事件辅助函数 — 内部收集并转发给 progress_callback
-        from src.core.agent_events import make_event
+        from src.core.agent_events import make_event, mask_tool_args
         collected_events = []
 
         def _emit(event: dict):
@@ -3659,8 +3659,8 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                     await _emit_async(make_event(
                         "tool_start",
                         toolName=tool_name,
-                        # 与主 Agent 一致，不把原始参数送入事件持久化链。
-                        toolArgs={},
+                        # 与主 Agent 一致，事件链路持脱敏后的参数副本。
+                        toolArgs=mask_tool_args(tool_args),
                         toolCallId=tc.get("id", ""),
                         displayName=tool_display_name,
                     ))

@@ -83,9 +83,15 @@ const traces = ref<TraceSummary[]>([])
 const loading = ref(false)
 const showIntermediate = ref(false)
 const intermediateCount = computed(() => traces.value.filter(trace => trace.is_intermediate).length)
-const visibleTraces = computed(() => showIntermediate.value
-  ? traces.value
-  : traces.value.filter(trace => !trace.is_intermediate))
+const visibleTraces = computed(() => {
+  const filtered = showIntermediate.value
+    ? traces.value
+    : traces.value.filter(trace => !trace.is_intermediate)
+  // 显式按时间降序（最新在上），不依赖后端返回顺序
+  return [...filtered].sort((a, b) =>
+    (b.created_at || '').localeCompare(a.created_at || ''),
+  )
+})
 const effectiveTraceCount = computed(() => traces.value.filter(trace =>
   trace.display_state === 'message' || trace.is_persisted_message,
 ).length)

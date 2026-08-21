@@ -144,6 +144,34 @@ class TestProcessWithWaitingIndicator:
         assert result == {"status": "success"}
 
     @pytest.mark.asyncio
+    async def test_hint_returns_false_logs_failure_and_returns_result(self, monkeypatch):
+        """send_waiting_indicator 返回 False（errcode≠0）时记未送达日志，不抛错，主结果仍返回。"""
+        import src.saas.api.channel_routes as cr_module
+
+        calls = []
+        monkeypatch.setattr(cr_module, "_kf_tlog", lambda msg, **kw: calls.append((msg, kw)))
+        adapter = self._adapter(send_result=False)
+        result = await _process_with_waiting_indicator(
+            adapter, "ext_user", self._cfg(), self._slow_coro()
+        )
+        assert result == {"status": "success"}
+        assert any("未送达" in msg for msg, _ in calls), "返回 False 应记录未送达 tlog"
+
+    @pytest.mark.asyncio
+    async def test_hint_success_logs_sent(self, monkeypatch):
+        """send_waiting_indicator 返回 True 时记录已发送。"""
+        import src.saas.api.channel_routes as cr_module
+
+        calls = []
+        monkeypatch.setattr(cr_module, "_kf_tlog", lambda msg, **kw: calls.append((msg, kw)))
+        adapter = self._adapter(send_result=True)
+        result = await _process_with_waiting_indicator(
+            adapter, "ext_user", self._cfg(), self._slow_coro()
+        )
+        assert result == {"status": "success"}
+        assert any("已发送" in msg for msg, _ in calls)
+
+    @pytest.mark.asyncio
     async def test_coro_exception_propagates(self):
         """任务自身异常正常传播（由外层 try/except 处理）。"""
         adapter = self._adapter()

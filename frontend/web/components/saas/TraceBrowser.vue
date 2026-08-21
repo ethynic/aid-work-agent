@@ -72,13 +72,13 @@
                 </span>
               </template>
               <template #tenant_id="{ row }">
-                <span class="text-xs text-default font-mono break-all" :title="row.tenant_id || ''">
-                  {{ row.tenant_id || '-' }}
+                <span class="text-xs text-default break-all" :title="row.tenant_id || ''">
+                  {{ formatTenant(row) }}
                 </span>
               </template>
               <template #user_id="{ row }">
-                <span class="text-xs text-default font-mono break-all" :title="row.user_id || ''">
-                  {{ row.user_id || '-' }}
+                <span class="text-xs text-default break-all" :title="row.user_id || ''">
+                  {{ formatUser(row) }}
                 </span>
               </template>
               <template #first_input="{ row }">
@@ -150,8 +150,8 @@ const filterUserId = ref('')
 const columns: TableColumn[] = [
   { key: 'seq', label: '序号', width: '48px', thAlign: 'center', tdAlign: 'center' },
   { key: 'session_id', label: '会话ID', width: '280px', tdAlign: 'left' },
-  { key: 'tenant_id', label: '租户', width: '160px', tdAlign: 'left' },
-  { key: 'user_id', label: '用户', width: '192px', tdAlign: 'left' },
+  { key: 'tenant_id', label: '租户', width: '220px', tdAlign: 'left' },
+  { key: 'user_id', label: '用户', width: '240px', tdAlign: 'left' },
   { key: 'first_input', label: '首次输入', tdAlign: 'left' },
   { key: 'source_type', label: '来源', width: '96px', tdAlign: 'left' },
   { key: 'trace_count', label: 'Trace数', width: '80px', tdAlign: 'left' },
@@ -184,6 +184,16 @@ function sourceLabel(s: string | null): string {
 function sourceBadgeClass(s: string | null): string {
   if (!s) return 'bg-gray-100 text-gray-700'
   return SOURCE_BADGE_CLASSES[s] || 'bg-gray-100 text-gray-700'
+}
+
+function formatTenant(row: Record<string, any>): string {
+  if (!row.tenant_id) return '-'
+  return row.tenant_name ? `${row.tenant_name} (${row.tenant_id})` : row.tenant_id
+}
+
+function formatUser(row: Record<string, any>): string {
+  if (!row.user_id) return '-'
+  return row.user_name ? `${row.user_name} (${row.user_id})` : row.user_id
 }
 
 function goToSession(sessionId: string) {

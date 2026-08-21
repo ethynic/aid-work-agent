@@ -236,8 +236,8 @@ class TestMasterAgentToolResultTruncation:
         assert responses == ["完成"]
         assert not any("工具产生的原始正文" in str(event.get("data", "")) for event in events)
 
-    async def test_tool_start_does_not_expose_arguments_but_executor_receives_them(self, monkeypatch):
-        """工具参数只用于执行，不进入 SSE、会话 metadata 或 trace 的事件源。"""
+    async def test_tool_start_exposes_masked_args_but_executor_receives_raw(self, monkeypatch):
+        """事件源只携带脱敏后的参数副本（敏感键掩码），原始参数仍原样进入执行器。"""
         agent = self._make_agent(monkeypatch, {"success": True})
         agent.llm.chat_with_tools.side_effect = [
             {
@@ -246,7 +246,7 @@ class TestMasterAgentToolResultTruncation:
                     "type": "function",
                     "function": {
                         "name": "read",
-                        "arguments": '{"file_path":"sensitive/path.txt"}',
+                        "arguments": '{"file_path":"sensitive/path.txt","token":"raw-tok"}',
                     },
                 }],
                 "content": "",
@@ -259,9 +259,11 @@ class TestMasterAgentToolResultTruncation:
         events = [event async for event in agent._process_message_impl("读取文件", "sess")]
 
         start = next(event for event in events if event.get("type") == "tool_start")
-        assert start["toolArgs"] == {}
+        # 事件源持脱敏副本：敏感键被掩码，普通键原样透传
+        assert start["toolArgs"] == {"file_path": "sensitive/path.txt", "token": "***"}
+        # 执行器仍收到原始参数，功能不受影响
         assert agent.tool_executor.execute.await_args.args[:2] == (
-            "read", {"file_path": "sensitive/path.txt"}
+            "read", {"file_path": "sensitive/path.txt", "token": "raw-tok"}
         )
 
     async def test_scheduled_tool_uses_generic_plan_tracking(self, monkeypatch):
