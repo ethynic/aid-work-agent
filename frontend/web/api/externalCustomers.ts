@@ -40,6 +40,7 @@ export async function listExternalUsers(params: {
   username?: string
   source?: string
   referrer_user_id?: string
+  channel_chat_id?: string
   page?: number
   page_size?: number
 }): Promise<{
@@ -54,6 +55,7 @@ export async function listExternalUsers(params: {
   if (params.username) searchParams.set('username', params.username)
   if (params.source) searchParams.set('source', params.source)
   if (params.referrer_user_id) searchParams.set('referrer_user_id', params.referrer_user_id)
+  if (params.channel_chat_id) searchParams.set('channel_chat_id', params.channel_chat_id)
   if (params.page) searchParams.set('page', params.page.toString())
   if (params.page_size) searchParams.set('page_size', params.page_size.toString())
 
@@ -61,6 +63,19 @@ export async function listExternalUsers(params: {
     headers: getSaasAuthHeader()
   })
   if (!res.ok) throw new Error('获取外部用户列表失败')
+  return res.json()
+}
+
+// 获取客服账号列表（客服账号下拉框数据源）
+export async function listKfAccounts(): Promise<{
+  success: boolean
+  kf_accounts?: Array<{ open_kfid: string; name: string }>
+  message?: string
+}> {
+  const res = await fetch(`${API_BASE}/kf-accounts`, {
+    headers: getSaasAuthHeader()
+  })
+  if (!res.ok) throw new Error('获取客服账号列表失败')
   return res.json()
 }
 

@@ -44,9 +44,13 @@
               placeholder="搜索用户名"
               size="sm"
               clearable
-              class="flex-1"
+              class="w-32"
               @keyup.enter="handleSearch"
             />
+            <BaseSelect v-model="selectedKfId" size="sm" class="w-40">
+              <option value="">全部客服账号</option>
+              <option v-for="kf in kfAccounts" :key="kf.open_kfid" :value="kf.open_kfid">{{ kf.name }}</option>
+            </BaseSelect>
             <BaseButton size="sm" @click="handleSearch">搜索</BaseButton>
           </div>
         </div>
@@ -76,14 +80,23 @@
                 <div class="flex-1 min-w-0">
                   <div class="flex items-center gap-2">
                     <span class="font-medium text-default truncate">{{ user.nickname || user.username || '未知用户' }}</span>
-                    <span v-if="user.channel_type === 'wecom_kf'" class="text-xs px-2 py-0.5 rounded-full bg-primary-50 text-primary-600 shrink-0">{{ user.kf_name || '默认' }}</span>
+                    <span v-if="user.channel_type === 'wecom_kf' && user.kf_name" class="text-xs px-2 py-0.5 rounded-full bg-primary-50 text-primary-600 shrink-0">客服：{{ user.kf_name }}</span>
                     <span class="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-muted shrink-0">{{ getUserSourceInfo(user.source).label }}</span>
                   </div>
                   <div class="text-xs text-muted mt-1">
                     {{ formatSessionDateRange(user) }}
                   </div>
                   <div v-if="user.referrer_name" class="text-xs text-primary-600 mt-0.5">
-                    由 {{ user.referrer_name }} 引流
+                    <div class="relative group inline-flex items-center gap-1">
+                      <span class="cursor-default">由 {{ user.referrer_name }} 引流</span>
+                      <svg class="w-3.5 h-3.5 text-primary-500 cursor-help shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="10" />
+                        <path d="M12 16v-4M12 8h.01" />
+                      </svg>
+                      <div v-if="user.referral_time" class="hidden group-hover:block absolute left-0 bottom-full mb-1.5 z-10 w-max max-w-64 px-2 py-1.5 bg-gray-800 text-white text-xs rounded shadow-lg whitespace-normal">
+                        {{ formatDate(user.referral_time) }} 首次访问 {{ user.referrer_name }} 的客服账号
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -115,7 +128,7 @@
             <div>
               <div class="flex items-center gap-2">
                 <span class="font-medium text-default">{{ selectedUser.nickname || selectedUser.username || '未知用户' }}</span>
-                <span v-if="selectedUser.channel_type === 'wecom_kf'" class="text-xs px-2 py-0.5 rounded-full bg-primary-50 text-primary-600">{{ selectedUser.kf_name || '默认' }}</span>
+                <span v-if="selectedUser.channel_type === 'wecom_kf' && selectedUser.kf_name" class="text-xs px-2 py-0.5 rounded-full bg-primary-50 text-primary-600">客服：{{ selectedUser.kf_name }}</span>
               </div>
               <div class="text-xs text-muted">创建于 {{ formatDate(selectedUser.created_at) }}</div>
             </div>
@@ -340,12 +353,13 @@ import { ref, computed, onMounted, watch, nextTick, inject } from 'vue'
 import AppHeader from '@/components/AppHeader.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
+import BaseSelect from '@/components/ui/BaseSelect.vue'
 import BasePagination from '@/components/ui/BasePagination.vue'
 import BaseBadge from '@/components/ui/BaseBadge.vue'
 import BaseTable from '@/components/ui/BaseTable.vue'
 import DownloadFileCard from '@/components/DownloadFileCard.vue'
 import AttachmentPreviewPanel from '@/components/AttachmentPreviewPanel.vue'
-import { listExternalUsers, getUserSessions, getSessionMessages, getReferralStats } from '@/api/externalCustomers'
+import { listExternalUsers, getUserSessions, getSessionMessages, getReferralStats, listKfAccounts } from '@/api/externalCustomers'
 import AttachmentCard from './AttachmentCard.vue'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 import { useAmrPlayer } from '@/composables/useAmrPlayer'
@@ -402,6 +416,10 @@ const referrerFilterName = ref('')
 
 // 搜索条件
 const searchUsername = ref('')
+
+// 客服账号筛选（下拉框）：管理员可见全部，普通用户由后端只返回自己负责的账号
+const kfAccounts = ref<Array<{ open_kfid: string; name: string }>>([])
+const selectedKfId = ref('')
 
 // 客户列表
 const userList = ref<any[]>([])
@@ -470,6 +488,7 @@ async function loadUsers() {
     const res = await listExternalUsers({
       username: searchUsername.value || undefined,
       referrer_user_id: referrerFilterUserId.value || undefined,
+      channel_chat_id: selectedKfId.value || undefined,
       page: userPage.value,
       page_size: userPageSize.value,
     })
@@ -488,6 +507,17 @@ async function loadUsers() {
     toast.error(e.message || '获取客户列表失败')
   } finally {
     loadingUsers.value = false
+  }
+}
+
+async function loadKfAccounts() {
+  try {
+    const res = await listKfAccounts()
+    if (res.success) {
+      kfAccounts.value = res.kf_accounts || []
+    }
+  } catch (e: any) {
+    toast.error(e.message || '获取客服账号列表失败')
   }
 }
 
@@ -799,11 +829,15 @@ watch(messagePage, () => {
   }
 })
 
+// 客服账号下拉框切换 → 重新加载客户列表
+watch(selectedKfId, () => handleSearch())
+
 // 初始化
 onMounted(async () => {
   if (!isInitialized.value) {
     await init()
   }
+  await loadKfAccounts()
   await loadUsers()
 })
 </script>

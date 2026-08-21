@@ -336,3 +336,173 @@ class TestGetUserSessionsFilter:
         assert len(sessions) == 1, "空串过滤应只返回 wecom_kf legacy NULL 会话，不混入其它渠道"
         assert sessions[0]["session_id"] == sess_legacy
         assert sessions[0]["channel_type"] == "wecom_kf"
+
+
+class TestNormalUserDataIsolation:
+    """普通用户（引流员工）数据隔离：只见自己负责的客服账号客户 + 自己引流的客户"""
+
+    def _setup(self, temp_tenant_for_external):
+        """构造数据：emp_A 负责 kf_A，emp_B 负责 kf_B；cust1 在 kf_A 聊、
+        cust2 由 emp_A 引流但在 kf_B 聊、cust3 在 kf_B 聊且非 emp_A 引流"""
+        from src.saas.api import external_customers  # noqa: F401（复用函数引用）
+
+        tenant_id = temp_tenant_for_external
+        emp_a = f"ext_test_emp_a_{uuid.uuid4().hex[:4]}"
+        emp_b = f"ext_test_emp_b_{uuid.uuid4().hex[:4]}"
+        _insert_employee(tenant_id, emp_a, nickname="曹老师")
+        _insert_employee(tenant_id, emp_b, nickname="李老师")
+
+        kf_a = f"open_kfid_a_{uuid.uuid4().hex[:6]}"
+        kf_b = f"open_kfid_b_{uuid.uuid4().hex[:6]}"
+        _insert_wecom_kf_config(tenant_id, [
+            {"open_kfid": kf_a, "name": "客服-曹老师", "tenant_user_id": emp_a},
+            {"open_kfid": kf_b, "name": "客服-李老师", "tenant_user_id": emp_b},
+        ])
+
+        cust1 = _insert_user(tenant_id, f"ext_test_{uuid.uuid4().hex[:6]}", nickname="孙晨")
+        cust2 = _insert_user(tenant_id, f"ext_test_{uuid.uuid4().hex[:6]}", nickname="王芳")
+        cust3 = _insert_user(tenant_id, f"ext_test_{uuid.uuid4().hex[:6]}", nickname="赵强")
+
+        sess_cust1_a = f"sess_{uuid.uuid4().hex[:8]}"
+        sess_cust2_b = f"sess_{uuid.uuid4().hex[:8]}"
+        sess_cust3_b = f"sess_{uuid.uuid4().hex[:8]}"
+        _insert_channel_session(tenant_id, sess_cust1_a, cust1, channel_type="wecom_kf", channel_chat_id=kf_a)
+        _insert_channel_session(tenant_id, sess_cust2_b, cust2, channel_type="wecom_kf", channel_chat_id=kf_b)
+        _insert_channel_session(tenant_id, sess_cust3_b, cust3, channel_type="wecom_kf", channel_chat_id=kf_b)
+        _insert_referral(tenant_id, cust2, emp_a, kf_b)
+        _insert_referral(tenant_id, cust3, emp_b, kf_b)
+
+        return {
+            "tenant_id": tenant_id, "emp_a": emp_a, "emp_b": emp_b,
+            "kf_a": kf_a, "kf_b": kf_b, "cust1": cust1, "cust2": cust2, "cust3": cust3,
+            "sess_cust3_b": sess_cust3_b,
+        }
+
+    def _admin_ctx(self, tenant_id, user_id, role):
+        from unittest.mock import patch as _patch
+        from src.saas.api import external_customers
+
+        def fake_require_admin(request):
+            return {"user_id": user_id, "role": role, "tenant_id": tenant_id}
+
+        return _patch("src.saas.api.external_customers.require_admin", fake_require_admin), \
+            _patch("src.saas.api.external_customers.settings")
+
+    def test_users_sees_own_account_and_own_referrals_only(self, temp_tenant_for_external):
+        """普通用户 /users：只见自己负责账号客户 + 自己引流客户，且带 referral_time"""
+        from src.saas.api import external_customers
+
+        d = self._setup(temp_tenant_for_external)
+        admin_patch, settings_patch = self._admin_ctx(d["tenant_id"], d["emp_a"], "user")
+        with admin_patch, settings_patch as mock_settings:
+            mock_settings.saas.enabled = True
+            resp = _call(external_customers.list_external_users, FakeRequest(), page=1, page_size=20)
+
+        assert resp["success"] is True
+        assert resp["total"] == 2, "emp_A 应只看到 cust1（负责账号）+ cust2（自己引流）"
+        user_ids = {r["user_id"] for r in resp["users"]}
+        assert d["cust1"] in user_ids
+        assert d["cust2"] in user_ids
+        assert d["cust3"] not in user_ids, "emp_B 负责的客户 emp_A 不可见"
+
+        by_user = {r["user_id"]: r for r in resp["users"]}
+        assert by_user[d["cust1"]]["kf_name"] == "客服-曹老师"
+        assert by_user[d["cust1"]]["referrer_name"] is None
+        assert by_user[d["cust2"]]["referrer_name"] == "曹老师"
+        assert by_user[d["cust2"]]["referral_time"], "引流客户应返回首次访问时间（referral_time）"
+        assert by_user[d["cust2"]]["kf_name"] is None, "引流客户在他人账号下的行不得泄露该账号名称"
+
+    def test_admin_sees_all(self, temp_tenant_for_external):
+        """管理员 /users：全量可见（行为不变）"""
+        from src.saas.api import external_customers
+
+        d = self._setup(temp_tenant_for_external)
+        admin_patch, settings_patch = self._admin_ctx(d["tenant_id"], "admin_x", "tenant_admin")
+        with admin_patch, settings_patch as mock_settings:
+            mock_settings.saas.enabled = True
+            resp = _call(external_customers.list_external_users, FakeRequest(), page=1, page_size=20)
+
+        assert resp["success"] is True
+        assert resp["total"] == 3, "管理员应看到全部 3 个客户组合"
+        user_ids = {r["user_id"] for r in resp["users"]}
+        assert {d["cust1"], d["cust2"], d["cust3"]} <= user_ids
+
+    def test_kf_accounts_returns_only_own_for_user(self, temp_tenant_for_external):
+        """普通用户 /kf-accounts 只返回自己负责的账号；管理员返回全部"""
+        from src.saas.api import external_customers
+
+        d = self._setup(temp_tenant_for_external)
+
+        admin_patch, settings_patch = self._admin_ctx(d["tenant_id"], d["emp_a"], "user")
+        with admin_patch, settings_patch as mock_settings:
+            mock_settings.saas.enabled = True
+            resp_user = _call(external_customers.list_kf_accounts, FakeRequest())
+        assert resp_user["success"] is True
+        assert [k["open_kfid"] for k in resp_user["kf_accounts"]] == [d["kf_a"]]
+
+        admin_patch2, settings_patch2 = self._admin_ctx(d["tenant_id"], "admin_x", "tenant_admin")
+        with admin_patch2, settings_patch2 as mock_settings:
+            mock_settings.saas.enabled = True
+            resp_admin = _call(external_customers.list_kf_accounts, FakeRequest())
+        assert resp_admin["success"] is True
+        assert {k["open_kfid"] for k in resp_admin["kf_accounts"]} == {d["kf_a"], d["kf_b"]}
+
+    def test_sessions_deny_other_account_for_user(self, temp_tenant_for_external):
+        """普通用户 /users/{id}/sessions：自己账号可看，他人账号返回空"""
+        from src.saas.api import external_customers
+
+        d = self._setup(temp_tenant_for_external)
+        admin_patch, settings_patch = self._admin_ctx(d["tenant_id"], d["emp_a"], "user")
+        with admin_patch, settings_patch as mock_settings:
+            mock_settings.saas.enabled = True
+            # cust1 在自己负责的 kf_a 下 → 可见
+            resp_own = _call(external_customers.get_user_sessions, FakeRequest(),
+                             user_id=d["cust1"], channel_type="wecom_kf",
+                             channel_chat_id=d["kf_a"], page=1, page_size=20)
+            # cust2 在自己引流的 kf_b 下（他人账号）→ 空
+            resp_other = _call(external_customers.get_user_sessions, FakeRequest(),
+                               user_id=d["cust2"], channel_type="wecom_kf",
+                               channel_chat_id=d["kf_b"], page=1, page_size=20)
+
+        assert resp_own["success"] is True
+        assert len(resp_own["sessions"]) == 1
+        assert resp_own["sessions"][0]["channel_chat_id"] == d["kf_a"]
+        assert resp_other["success"] is True
+        assert resp_other["sessions"] == [], "普通用户不应看到他人客服账号的会话"
+
+    def test_messages_deny_other_account_session_for_user(self, temp_tenant_for_external):
+        """普通用户 /sessions/{id}/messages：访问他人账号会话 403"""
+        from fastapi import HTTPException
+        from src.saas.api import external_customers
+
+        d = self._setup(temp_tenant_for_external)
+        admin_patch, settings_patch = self._admin_ctx(d["tenant_id"], d["emp_a"], "user")
+        with admin_patch, settings_patch as mock_settings:
+            mock_settings.saas.enabled = True
+            try:
+                _call(external_customers.get_session_messages, FakeRequest(),
+                      session_id=d["sess_cust3_b"], page=1, page_size=50)
+                raise AssertionError("应抛出 403")
+            except HTTPException as e:
+                assert e.status_code == 403
+
+    def test_referral_stats_only_own_for_user(self, temp_tenant_for_external):
+        """普通用户 /referral-stats 只统计自己引流；管理员统计全部"""
+        from src.saas.api import external_customers
+
+        d = self._setup(temp_tenant_for_external)
+
+        admin_patch, settings_patch = self._admin_ctx(d["tenant_id"], d["emp_a"], "user")
+        with admin_patch, settings_patch as mock_settings:
+            mock_settings.saas.enabled = True
+            resp_user = _call(external_customers.get_referral_stats, FakeRequest())
+        assert resp_user["success"] is True
+        assert resp_user["total_referrals"] == 1, "普通用户只能看到自己引流的 1 个"
+        assert resp_user["referrers"][0]["referrer_user_id"] == d["emp_a"]
+
+        admin_patch2, settings_patch2 = self._admin_ctx(d["tenant_id"], "admin_x", "tenant_admin")
+        with admin_patch2, settings_patch2 as mock_settings:
+            mock_settings.saas.enabled = True
+            resp_admin = _call(external_customers.get_referral_stats, FakeRequest())
+        assert resp_admin["success"] is True
+        assert resp_admin["total_referrals"] == 2, "管理员应统计全部 2 个引流"

@@ -9,7 +9,7 @@
 外部用户：指 users.source 不为空的客户，如 wecom_kf（企业微信客服）
 """
 
-from typing import Optional
+from typing import List, Optional
 from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Request
@@ -21,6 +21,24 @@ from src.db.models import UserDB
 from src.config.settings import settings
 
 router = APIRouter(prefix="/api/saas/external-customers", tags=["外部接待客户"])
+
+
+def _resolve_visible_kf_ids(admin: dict, tenant_id: str) -> Optional[List[str]]:
+    """当前用户可见的客服账号 open_kfid 集合。
+
+    管理员（platform_admin / tenant_admin）返回 None 表示全量可见；
+    普通用户（引流员工）返回其负责的客服账号（kf_account.tenant_user_id == 自己）。
+    """
+    if admin.get("role") != "user":
+        return None
+    from src.saas.db.channel_config_db import ChannelConfigDB
+
+    ids = []
+    for cfg in ChannelConfigDB.list_by_tenant(tenant_id, "wecom_kf"):
+        for kf in cfg.get("config", {}).get("kf_account", []):
+            if kf.get("tenant_user_id") == admin.get("user_id") and kf.get("open_kfid"):
+                ids.append(kf["open_kfid"])
+    return ids
 
 
 # ============== 请求模型 ==============
@@ -52,6 +70,7 @@ async def list_external_users(
     username: Optional[str] = None,
     source: Optional[str] = None,
     referrer_user_id: Optional[str] = None,
+    channel_chat_id: Optional[str] = None,
     page: int = 1,
     page_size: int = 20,
 ):
@@ -61,6 +80,7 @@ async def list_external_users(
         username: 用户名/昵称搜索（可选）
         source: 用户来源筛选（可选）
         referrer_user_id: 引流员工筛选（可选，引流统计下钻时传入）
+        channel_chat_id: 客服账号（open_kfid）筛选（可选，客服账号下拉框筛选时传入）
         page: 页码
         page_size: 每页数量
     """
@@ -73,11 +93,17 @@ async def list_external_users(
     if not tenant_id:
         raise HTTPException(status_code=400, detail="缺少租户信息")
 
+    # 普通用户（引流员工）只能看到自己负责的客服账号相关客户 + 自己引流的客户
+    visible_kf_ids = _resolve_visible_kf_ids(admin, tenant_id)
+
     result = UserDB.list_external_users(
         tenant_id=tenant_id,
         username=username,
         source=source,
         referrer_user_id=referrer_user_id,
+        visible_kf_ids=visible_kf_ids,
+        current_user_id=admin.get("user_id") if visible_kf_ids is not None else None,
+        channel_chat_id=channel_chat_id,
         page=page,
         page_size=page_size,
     )
@@ -95,11 +121,46 @@ async def list_external_users(
     for u in result.get("users", []):
         cid = u.get("channel_chat_id") or ""
         if u.get("channel_type") == "wecom_kf" and cid:
-            u["kf_name"] = kf_map.get(cid, cid)
+            if visible_kf_ids is not None and cid not in visible_kf_ids:
+                # 普通用户：非自己负责的客服账号不反显账号名，避免泄露其它账号的名称/open_kfid
+                u["kf_name"] = None
+            else:
+                u["kf_name"] = kf_map.get(cid, cid)
         else:
             u["kf_name"] = None
 
     return {"success": True, **result}
+
+
+@router.get("/kf-accounts")
+async def list_kf_accounts(request: Request):
+    """客服账号列表（客服账号下拉框数据源）。
+
+    管理员返回租户全部客服账号；普通用户（引流员工）只返回自己负责的客服账号。
+    """
+    if not settings.saas.enabled:
+        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
+
+    admin = require_admin(request)
+    tenant_id = admin.get("tenant_id")
+
+    if not tenant_id:
+        raise HTTPException(status_code=400, detail="缺少租户信息")
+
+    from src.saas.db.channel_config_db import ChannelConfigDB
+
+    visible_kf_ids = _resolve_visible_kf_ids(admin, tenant_id)
+    kf_accounts = []
+    for cfg in ChannelConfigDB.list_by_tenant(tenant_id, "wecom_kf"):
+        for kf in cfg.get("config", {}).get("kf_account", []):
+            open_kfid = kf.get("open_kfid")
+            if not open_kfid:
+                continue
+            if visible_kf_ids is not None and open_kfid not in visible_kf_ids:
+                continue
+            kf_accounts.append({"open_kfid": open_kfid, "name": kf.get("name") or open_kfid})
+
+    return {"success": True, "kf_accounts": kf_accounts}
 
 
 @router.get("/referral-stats")
@@ -129,11 +190,14 @@ async def get_referral_stats(
 
     from src.db.models import CustomerReferralDB
 
+    # 普通用户（引流员工）只能看到自己引流的统计
+    referrer_user_id = admin.get("user_id") if admin.get("role") == "user" else None
+
     stats = CustomerReferralDB.referral_stats(
-        tenant_id, start_date=start_date, end_date=end_date
+        tenant_id, start_date=start_date, end_date=end_date, referrer_user_id=referrer_user_id
     )
     total_messages = CustomerReferralDB.count_referred_messages(
-        tenant_id, start_date=start_date, end_date=end_date
+        tenant_id, start_date=start_date, end_date=end_date, referrer_user_id=referrer_user_id
     )
     return {
         "success": True,
@@ -176,6 +240,11 @@ async def get_user_sessions(
     user = UserDB.get_by_id(user_id)
     if not user or user.get("tenant_id") != tenant_id:
         raise HTTPException(status_code=404, detail="用户不存在或不属于该租户")
+
+    # 普通用户（引流员工）只能看自己负责的客服账号下的会话；非自己账号直接返回空
+    visible_kf_ids = _resolve_visible_kf_ids(admin, tenant_id)
+    if visible_kf_ids is not None and channel_chat_id not in visible_kf_ids:
+        return {"success": True, "sessions": [], "total": 0, "page": page, "page_size": page_size}
 
     # 查询 channel_sessions（渠道会话表）
     from src.channels.session import channel_session_manager
@@ -231,6 +300,11 @@ async def get_session_messages(
         raise HTTPException(status_code=404, detail="会话不存在")
 
     if session.get("tenant_id") != tenant_id:
+        raise HTTPException(status_code=403, detail="无权访问此会话")
+
+    # 普通用户（引流员工）只能读自己负责的客服账号下的会话消息
+    visible_kf_ids = _resolve_visible_kf_ids(admin, tenant_id)
+    if visible_kf_ids is not None and session.get("channel_chat_id") not in visible_kf_ids:
         raise HTTPException(status_code=403, detail="无权访问此会话")
 
     result = channel_session_manager.get_messages_paginated(

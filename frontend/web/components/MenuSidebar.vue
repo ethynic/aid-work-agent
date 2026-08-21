@@ -621,9 +621,9 @@
           <span>工作成果</span>
         </button>
 
-        <!-- 外部接待客户：仅租户管理员可见 -->
+        <!-- 外部接待客户：所有租户用户可见（普通用户仅见自己负责的客服账号数据） -->
         <button
-          v-if="tenantId && isTenantAdmin"
+          v-if="tenantId"
           @click="router.push(`/t/${tenantId}/external-customers`); closeFlyout()"
           :class="[
             'w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-sm',
