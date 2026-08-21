@@ -1184,12 +1184,24 @@ def _serialize_structure(s: SheetStructure) -> Dict[str, Any]:
 # ============================================================
 
 
-def _default_llm(prompt: str, *, disable_thinking: bool = True) -> str:
+def _default_llm(
+    prompt: str,
+    *,
+    disable_thinking: bool = True,
+    return_usage: bool = False,
+):
     """默认 LLM 调用（deepseek-v4-pro 等思考模型）。
 
     结构分析**默认关闭思考**：与 travel-quote/attraction.py 一致——思考模型的思考 token
     也计入 max_tokens，开启时小 max_tokens 会截断输出 JSON；关闭后输出确定、不截断、几秒返回。
     复杂模板若分析不准，可传 disable_thinking=False 开启思考（届时需更大 max_tokens 与超时）。
+
+    return_usage=True 时返回 ``(content, usage_dict)`` 而非仅 content（Excel ETL M3
+    抽取层需要 usage 做计量上报）；默认 False 完全向后兼容。usage_dict 键与
+    OpenAI 兼容接口一致：prompt_tokens / completion_tokens / total_tokens（缺失键补 0），
+    并附加归一键：cached_tokens（prompt_tokens_details.cached_tokens /
+    prompt_cache_hit_tokens 两种形态统一，缓存计费扣减用）与 model（实际调用
+    模型名，计量落库取单价用——provider 可能是 qwen/zhipu，不能假设 deepseek）。
     """
     from src.config.settings import settings
     provider = settings.llm.provider
@@ -1220,7 +1232,13 @@ def _default_llm(prompt: str, *, disable_thinking: bool = True) -> str:
             timeout=120.0,
         )
         resp.raise_for_status()
-        return resp.json()["choices"][0]["message"]["content"]
+        data = resp.json()
+        content = data["choices"][0]["message"]["content"]
+        if return_usage:
+            usage = _normalize_usage(data.get("usage"))
+            usage["model"] = model
+            return content, usage
+        return content
 
     if provider in ("zhipu", "deepseek"):
         import httpx
@@ -1250,6 +1268,35 @@ def _default_llm(prompt: str, *, disable_thinking: bool = True) -> str:
             timeout=120.0,
         )
         resp.raise_for_status()
-        return resp.json()["choices"][0]["message"]["content"]
+        data = resp.json()
+        content = data["choices"][0]["message"]["content"]
+        if return_usage:
+            usage = _normalize_usage(data.get("usage"))
+            usage["model"] = model
+            return content, usage
+        return content
 
     raise ValueError(f"不支持的 LLM 提供商: {provider}")
+
+
+def _normalize_usage(raw_usage) -> Dict[str, Any]:
+    """OpenAI 兼容接口的 usage dict 容错归一（计量落库用）
+
+    保证三个基础键存在且为 int；缓存命中 token 统一归一到 ``cached_tokens``
+    （兼容 qwen/OpenAI 的 ``prompt_tokens_details.cached_tokens`` 与 deepseek 的
+    ``prompt_cache_hit_tokens`` 两种形态，计量按缓存单价扣减）。
+    """
+    usage = dict(raw_usage) if isinstance(raw_usage, dict) else {}
+    prompt_tokens = int(usage.get("prompt_tokens", 0) or 0)
+    completion_tokens = int(usage.get("completion_tokens", 0) or 0)
+    cached = usage.get("cached_tokens")
+    if not cached:
+        details = usage.get("prompt_tokens_details")
+        cached = details.get("cached_tokens") if isinstance(details, dict) else None
+    if not cached:
+        cached = usage.get("prompt_cache_hit_tokens")
+    usage["cached_tokens"] = int(cached or 0)
+    usage["prompt_tokens"] = prompt_tokens
+    usage["completion_tokens"] = completion_tokens
+    usage["total_tokens"] = int(usage.get("total_tokens", 0) or 0) or (prompt_tokens + completion_tokens)
+    return usage

@@ -349,6 +349,21 @@ Follow the instructions in the skill above to complete the user's task."""
             # 注入子智能体 LLM 覆盖（provider/model），供技能脚本 llm_client 读取
             if env_extra:
                 env.update(env_extra)
+            # 注入请求级上下文标识（租户/会话/用户），供技能子进程计量归属
+            # （record_skill_llm_usage 读 AID_* 环境变量回填 tenant/session/user）。
+            # 上下文缺失（后台调度等场景）不设置，子进程自行兜底。
+            try:
+                from src.tools.context import current_tool_execution_context
+                _tool_ctx = current_tool_execution_context()
+            except Exception:
+                _tool_ctx = None
+            if _tool_ctx is not None:
+                if _tool_ctx.tenant_id:
+                    env['AID_TENANT_ID'] = _tool_ctx.tenant_id
+                if _tool_ctx.session_id:
+                    env['AID_SESSION_ID'] = _tool_ctx.session_id
+                if _tool_ctx.user_id:
+                    env['AID_USER_ID'] = _tool_ctx.user_id
             # 强制子进程使用 UTF-8 编码，避免 Windows 上 GBK/cp936 导致中文乱码
             env['PYTHONIOENCODING'] = 'utf-8'
             env['PYTHONUTF8'] = '1'

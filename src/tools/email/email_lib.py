@@ -16,9 +16,11 @@
 import base64
 import email
 import imaplib
+import os
 import re
 import smtplib
 from contextlib import contextmanager
+from datetime import datetime
 from html import unescape
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -205,18 +207,25 @@ def list_folders(mail) -> List[Dict[str, Any]]:
     return result
 
 
-def search_uids(mail, unseen_only: bool = False) -> List[bytes]:
+def search_uids(mail, unseen_only: bool = False, since: str = "") -> List[bytes]:
     """
     服务器端 UID 搜索（仅 ASCII 安全条件）
 
     Args:
         mail: 已登录并 select 过文件夹的 IMAP 连接
         unseen_only: 是否只搜未读
+        since: 起始日期（D21，"YYYY-MM-DD"），走服务器端 SINCE 条件
+            （日期为 ASCII，可服务端过滤，解决月度批量定位）
 
     Returns:
         UID 列表（bytes，升序，旧→新）
     """
-    criteria = "UNSEEN" if unseen_only else "ALL"
+    criteria_parts = []
+    if unseen_only:
+        criteria_parts.append("UNSEEN")
+    if since:
+        criteria_parts.append(f"SINCE {format_imap_date(since)}")
+    criteria = " ".join(criteria_parts) if criteria_parts else "ALL"
     status, messages = mail.uid("search", None, criteria)
     if status != "OK":
         raise EmailLibError("搜索邮件失败")
@@ -224,6 +233,24 @@ def search_uids(mail, unseen_only: bool = False) -> List[bytes]:
     # 部分服务器空结果时返回 [None]，需同时防 messages 为空与首元素为 None
     data = messages[0] if messages and messages[0] else b""
     return data.split() if data else []
+
+
+# IMAP SINCE 条件要求的月份缩写固定为英文（strftime 的 %b 随进程 locale 变化，
+# 如 zh_CN 下 "01- 8月-2026" 会让服务器端过滤失效，故用固定映射表）
+_IMAP_MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+
+def format_imap_date(since: str) -> str:
+    """把 "YYYY-MM-DD" 转为 IMAP SINCE 条件要求的 "%d-%b-%Y"（如 01-Aug-2026）
+
+    月份缩写强制英文（IMAP 协议要求），与本机 locale 无关；非法格式抛 EmailLibError。
+    """
+    try:
+        dt = datetime.strptime(str(since).strip(), "%Y-%m-%d")
+    except ValueError:
+        raise EmailLibError("since 参数格式错误，应为 YYYY-MM-DD（如 2026-08-01）")
+    return f"{dt.day:02d}-{_IMAP_MONTHS[dt.month - 1]}-{dt.year:04d}"
 
 
 def _parse_message_bytes(msg_data) -> Optional[email.message.Message]:
@@ -292,6 +319,7 @@ def read_emails(
     from_filter: str = "",
     subject_filter: str = "",
     body_preview_len: int = 500,
+    since: str = "",
     timeout: int = CONNECT_TIMEOUT,
 ) -> Dict[str, Any]:
     """
@@ -300,9 +328,11 @@ def read_emails(
     带 from_filter/subject_filter 时：先对候选 UID 逐个只拉头字段（本地过滤），
     命中的才拉全信，避免对未命中邮件拉取整封原始字节（含附件）。
     无过滤时：直接按 limit 拉全信。
+    since（D21）：IMAP 服务器端 SINCE 条件，接收日期 >= since 的邮件。
 
     Returns:
         {"success": True, "emails": [...], "folders": [...], "count": n, "message", "folder"}
+        每封邮件含 attachments: [{filename, content_type, size}]（D21 附件元信息）
         或 {"success": False, "error": 固定安全文案}
     """
     with imap_session(user_email, timeout) as mail:
@@ -313,7 +343,7 @@ def read_emails(
         # 文件夹列表顺手返回（原 email_list_folders 工具能力并入 read）
         folders = list_folders(mail)
 
-        uids = search_uids(mail, unseen_only=unseen_only)
+        uids = search_uids(mail, unseen_only=unseen_only, since=since)
         total_found = len(uids)
 
         has_filter = bool(from_filter or subject_filter)
@@ -326,7 +356,8 @@ def read_emails(
         candidates = uids[-fetch_limit:] if fetch_limit > 0 else []
         logger.info(
             f"邮件读取: folder={folder}, 服务器共 {total_found} 封, "
-            f"候选 {len(candidates)} 封, 过滤={'是' if has_filter else '否'}"
+            f"候选 {len(candidates)} 封, 过滤={'是' if has_filter else '否'}, "
+            f"since={since or '无'}"
         )
 
         emails = []
@@ -369,6 +400,8 @@ def read_emails(
                 "to": decode_header_value(full_msg.get("To", "")),
                 "date": date_str,
                 "body_preview": body[:body_preview_len] if body else "",
+                # D21 附件元信息（walk 一遍 disposition 即得，不落盘不解码正文）
+                "attachments": list_attachments(full_msg),
             })
 
         logger.info(f"邮件读取完成: 返回 {len(emails)} 封 (folder={folder})")
@@ -520,3 +553,148 @@ def get_email_body(msg) -> str:
     if html:
         return html_to_text(html)
     return ""
+
+
+# ============== 附件（D21 元信息 / D22 下载） ==============
+
+# D22 单附件大小上限（25MB；webmail 常见上限，超限跳过并进报告）
+MAX_ATTACHMENT_SIZE = 25 * 1024 * 1024
+
+
+def decode_attachment_filename(part) -> str:
+    """解码附件文件名：get_filename 已处理 RFC2231 参数（中文分片/charset），
+    再过 decode_header_value 兜底 encoded-word（=?utf-8?B?...?=）形态。"""
+    filename = part.get_filename()
+    if not filename:
+        return ""
+    return decode_header_value(filename)
+
+
+def list_attachments(msg) -> List[Dict[str, Any]]:
+    """
+    附件元信息（D21）：[{filename, content_type, size}]，不落盘。
+
+    附件判定：Content-Disposition 含 attachment，或带 filename 的部分
+    （inline 图片等带名部分也算）；size 为传输解码后字节数。
+    """
+    attachments: List[Dict[str, Any]] = []
+    parts = msg.walk() if msg.is_multipart() else [msg]
+    for part in parts:
+        disposition = str(part.get("Content-Disposition", ""))
+        filename = decode_attachment_filename(part)
+        if "attachment" not in disposition and not filename:
+            continue
+        try:
+            payload = part.get_payload(decode=True)
+            size = len(payload) if payload else 0
+        except Exception:
+            size = 0
+        attachments.append({
+            "filename": filename,
+            "content_type": part.get_content_type(),
+            "size": size,
+        })
+    return attachments
+
+
+def _sanitize_attachment_filename(filename: str) -> str:
+    """附件落盘文件名净化：只取 basename，剔路径分隔符与 ..（防恶意文件名路径穿越）"""
+    name = str(filename or "").replace("\\", "/").split("/")[-1].strip()
+    if name in ("", ".", ".."):
+        return ""
+    return name
+
+
+def download_attachments(
+    user_email: UserEmail,
+    uid,
+    download_dir: str,
+    filenames: Optional[List[str]] = None,
+    folder: str = "INBOX",
+    max_size: int = MAX_ATTACHMENT_SIZE,
+    timeout: int = CONNECT_TIMEOUT,
+) -> Dict[str, Any]:
+    """
+    D22 下载指定邮件的附件到本地目录（BODY.PEEK 拉全信，不标已读，D24 邮箱无副作用）
+
+    Args:
+        user_email: 用户邮箱配置
+        uid: 邮件 UID（str/bytes/int）
+        download_dir: 落盘目录（不存在则创建）
+        filenames: 可选文件名过滤（与解码后的附件名精确匹配，忽略大小写）
+        folder: 邮件文件夹
+        max_size: 单附件大小上限（默认 25MB），超限跳过进 skipped
+        timeout: 连接超时
+
+    Returns:
+        {"success": True, "uid", "files": [{filename, path, size}],
+         "skipped": [{filename, reason}]}
+        或 {"success": False, "error": 固定安全文案}
+    """
+    uid_bytes = str(uid).encode() if isinstance(uid, (str, int)) else uid
+    wanted = {str(f).strip().lower() for f in (filenames or []) if str(f).strip()}
+
+    target_dir = os.path.abspath(str(download_dir))
+    os.makedirs(target_dir, exist_ok=True)
+
+    with imap_session(user_email, timeout) as mail:
+        status, _data = mail.select(folder)
+        if status != "OK":
+            return {"success": False, "error": f"无法打开邮件文件夹: {folder}"}
+
+        full_msg, _date = fetch_full_message(mail, uid_bytes)
+        if full_msg is None:
+            return {"success": False, "error": f"邮件不存在或获取失败: uid={uid_bytes.decode()}"}
+
+        files: List[Dict[str, Any]] = []
+        skipped: List[Dict[str, Any]] = []
+        existing = set(os.listdir(target_dir))
+
+        parts = full_msg.walk() if full_msg.is_multipart() else [full_msg]
+        for part in parts:
+            disposition = str(part.get("Content-Disposition", ""))
+            filename = decode_attachment_filename(part)
+            if "attachment" not in disposition and not filename:
+                continue
+
+            if wanted and filename.strip().lower() not in wanted:
+                continue
+
+            payload = part.get_payload(decode=True)
+            size = len(payload) if payload else 0
+            if size == 0:
+                skipped.append({"filename": filename, "reason": "附件内容为空"})
+                continue
+            if size > max_size:
+                skipped.append({
+                    "filename": filename,
+                    "reason": f"附件 {size} 字节超过 {max_size // (1024 * 1024)}MB 上限",
+                })
+                logger.warning(f"附件超过大小上限跳过: {filename}, {size} bytes")
+                continue
+
+            safe_name = _sanitize_attachment_filename(filename)
+            if not safe_name:
+                skipped.append({"filename": filename, "reason": "附件文件名非法"})
+                continue
+            # 同名附件去重：追加数字后缀（不覆盖先落盘文件）
+            out_name = safe_name
+            counter = 1
+            while out_name in existing:
+                stem, ext = os.path.splitext(safe_name)
+                out_name = f"{stem}({counter}){ext}"
+                counter += 1
+            existing.add(out_name)
+
+            out_path = os.path.join(target_dir, out_name)
+            with open(out_path, "wb") as f:
+                f.write(payload)
+            files.append({"filename": safe_name, "path": out_path, "size": size})
+            logger.info(f"附件下载: uid={uid_bytes.decode()}, {safe_name}, {size} bytes")
+
+    return {
+        "success": True,
+        "uid": uid_bytes.decode(),
+        "files": files,
+        "skipped": skipped,
+    }

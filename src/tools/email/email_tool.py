@@ -1,15 +1,17 @@
 """
 邮件工具 — Agent 唯一入口（email_process）
 
-三合一（原 email_send / email_read / email_list_folders）：
-- action 确定性分发（send / read），不建 LLM 路由器
-- 文件夹列表并入 read 返回的 folders 字段
+三合一（原 email_send / email_read / email_list_folders）+ 附件下载：
+- action 确定性分发（send / read / download_attachments），不建 LLM 路由器
+- 文件夹列表并入 read 返回的 folders 字段；附件元信息并入 emails[].attachments（D21）
+- download_attachments（D22）：uid + 文件名过滤 + 落盘目录，25MB 上限，BODY.PEEK 不标已读
 - 网络同步 IO 全部走 email_lib，并用 asyncio.to_thread 包裹避免阻塞事件循环
 """
 
 import asyncio
 import imaplib
 import smtplib
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from loguru import logger
@@ -21,9 +23,30 @@ from src.models.user import UserEmail
 from src.tools.email import email_lib
 
 
+def _resolve_download_dir(download_dir: str) -> str:
+    """download_dir 安全校验（D22）：LLM 传参不可信，落盘目录必须限制在项目 storage 内
+
+    与 cp_tool._resolve_and_validate_path 同款策略：相对路径挂 storage 下，
+    resolve() 规范化 .. 与符号链接后必须在允许目录内，防任意路径写入
+    （邮件正文可携带 prompt 注入，诱导 download_dir 指向系统目录）。
+    技能子进程（excel-to-template pipeline）直接调 email_lib，不经本校验。
+    """
+    p = Path(str(download_dir))
+    allowed_base = (Path(__file__).resolve().parents[3] / "storage").resolve()
+    if not p.is_absolute():
+        p = allowed_base / p
+    resolved = p.resolve()
+    if resolved != allowed_base and allowed_base not in resolved.parents:
+        raise ValueError(
+            f"附件下载目录超出允许范围（只能落在 {allowed_base} 内）；"
+            "请使用会话工作目录或项目 storage 下的路径"
+        )
+    return str(resolved)
+
+
 class EmailProcessInput(BaseModel):
     """email_process 工具入参（按 action 区分参数组）"""
-    action: str = Field(..., description="操作类型：send=发送邮件 / read=读取邮件")
+    action: str = Field(..., description="操作类型：send=发送邮件 / read=读取邮件 / download_attachments=下载附件")
     # ---- send 动作参数 ----
     to: Optional[Union[str, List[str]]] = Field(
         None, description="send 必填：收件人邮箱地址，字符串（多个用逗号分隔）或列表"
@@ -34,7 +57,7 @@ class EmailProcessInput(BaseModel):
         None, description="send 可选：抄送人邮箱地址，字符串（逗号分隔）或列表"
     )
     # ---- read 动作参数 ----
-    folder: Optional[str] = Field("INBOX", description="read 可选：邮件文件夹，默认INBOX")
+    folder: Optional[str] = Field("INBOX", description="read/download_attachments 可选：邮件文件夹，默认INBOX")
     limit: Optional[int] = Field(
         10, description="read 可选：收取邮件数量，默认10封。查询近期邮件时可设大些，精确查找时设小值"
     )
@@ -46,6 +69,21 @@ class EmailProcessInput(BaseModel):
     body_preview_len: Optional[int] = Field(
         500, description="read 可选：正文预览长度（字符），默认500"
     )
+    since: Optional[str] = Field(
+        None, description="read 可选：起始日期 YYYY-MM-DD（服务器端 SINCE 过滤），按月批量定位邮件时使用"
+    )
+    # ---- download_attachments 动作参数 ----
+    uid: Optional[Union[str, int]] = Field(
+        None, description="download_attachments 必填：邮件 UID（从 read 返回的 emails[].uid 获取）"
+    )
+    filenames: Optional[Union[str, List[str]]] = Field(
+        None, description="download_attachments 可选：附件文件名过滤（精确匹配，单个或列表），默认下载全部附件"
+    )
+    download_dir: Optional[str] = Field(
+        None,
+        description="download_attachments 必填：附件落盘目录（只允许项目 storage 内路径，"
+                    "通常传技能/会话工作目录）"
+    )
 
 
 TOOL_DESCRIPTION = """邮件处理工具。通过用户绑定的邮箱发送和读取邮件。
@@ -54,16 +92,23 @@ TOOL_DESCRIPTION = """邮件处理工具。通过用户绑定的邮箱发送和�
 - 用户要求发送邮件（action="send"）
 - 用户要求查看/收取邮件、查未读邮件、按发件人或主题筛选邮件（action="read"）
 - 用户询问邮箱有哪些文件夹（action="read"，看返回的 folders 字段）
+- 用户要求保存/下载某封邮件的附件（action="download_attachments"，需先 read 拿到 uid）
 
 参数说明（action 必填，按动作确定性分发）：
 - send 动作：to（收件人，必填）、subject（主题，必填）、body（正文，必填）、cc（抄送，可选）
 - read 动作：folder（默认INBOX）、limit（默认10封）、unseen_only（默认False）、
-  from_filter/subject_filter（可选，按发件人/主题筛选）、body_preview_len（正文预览长度，默认500）
+  from_filter/subject_filter（可选，按发件人/主题筛选）、body_preview_len（正文预览长度，默认500）、
+  since（可选，YYYY-MM-DD 起始日期，服务器端过滤，按月批量定位邮件）
+- download_attachments 动作：uid（必填，邮件UID）、download_dir（必填，落盘目录，
+  只允许项目 storage 内路径，如会话工作目录）、
+  filenames（可选，附件名过滤）、folder（可选，默认INBOX）；单附件超25MB跳过并在 skipped 中标注
 
 调用注意：
 - 未绑定邮箱时会返回错误提示，需引导用户先在设置中绑定邮箱
-- read 返回结构：emails（uid/subject/from/to/date/body_preview）+ folders（文件夹列表）+ count
-- 按发件人/主题筛选时工具会先只拉取邮件头做本地过滤，命中才拉取全文"""
+- read 返回结构：emails（uid/subject/from/to/date/body_preview/attachments）+ folders（文件夹列表）+ count；
+  attachments 为附件元信息 [{filename, content_type, size}]，不含附件内容
+- 按发件人/主题筛选时工具会先只拉取邮件头做本地过滤，命中才拉取全文
+- download_attachments 不会把邮件标记为已读（BODY.PEEK），可放心重复调用"""
 
 
 def _clamp_int(value, default: int, low: int, high: int) -> int:
@@ -102,7 +147,7 @@ _READ_SAFE_MESSAGES = {
 
 
 class EmailProcessTool(BaseTool):
-    """邮件处理工具（send / read 确定性分发）"""
+    """邮件处理工具（send / read / download_attachments 确定性分发）"""
 
     name = "email_process"
     description = TOOL_DESCRIPTION
@@ -124,6 +169,9 @@ class EmailProcessTool(BaseTool):
                 folder = tool_args.get("folder") or "INBOX"
                 limit = tool_args.get("limit", 10)
                 return f"读取邮件（{folder}，{limit}封）"
+            if action == "download_attachments":
+                uid = tool_args.get("uid") or ""
+                return f"下载邮件附件（UID {uid}）" if uid else "下载邮件附件"
         return self.display_name
 
     def __init__(self, user_email: Optional[UserEmail] = None):
@@ -168,10 +216,12 @@ class EmailProcessTool(BaseTool):
             return await self._execute_send(user_email, **kwargs)
         if action == "read":
             return await self._execute_read(user_email, **kwargs)
+        if action == "download_attachments":
+            return await self._execute_download_attachments(user_email, **kwargs)
 
         return {
             "success": False,
-            "error": f"不支持的操作类型: {action or '(空)'}，action 必须为 send 或 read",
+            "error": f"不支持的操作类型: {action or '(空)'}，action 必须为 send、read 或 download_attachments",
         }
 
     async def _execute_send(self, user_email: UserEmail, **kwargs) -> Dict[str, Any]:
@@ -222,6 +272,7 @@ class EmailProcessTool(BaseTool):
         from_filter = kwargs.get("from_filter") or ""
         subject_filter = kwargs.get("subject_filter") or ""
         body_preview_len = _clamp_int(kwargs.get("body_preview_len"), default=500, low=1, high=5000)
+        since = str(kwargs.get("since") or "").strip()
 
         try:
             return await asyncio.to_thread(
@@ -233,6 +284,7 @@ class EmailProcessTool(BaseTool):
                 from_filter=from_filter,
                 subject_filter=subject_filter,
                 body_preview_len=body_preview_len,
+                since=since,
             )
         except email_lib.EmailLibError as e:
             # 已知错误：message 为固定安全文案，可直接透传
@@ -244,6 +296,44 @@ class EmailProcessTool(BaseTool):
                 "success": False,
                 "error": sanitize_error(
                     e, safe_messages=_READ_SAFE_MESSAGES, fallback="邮件收取失败，请稍后重试"
+                ),
+            }
+
+    async def _execute_download_attachments(self, user_email: UserEmail, **kwargs) -> Dict[str, Any]:
+        """下载邮件附件（D22：uid + 文件名过滤 + 落盘目录，25MB 上限）"""
+        uid = kwargs.get("uid")
+        download_dir = kwargs.get("download_dir")
+        if uid is None or str(uid).strip() == "" or not download_dir:
+            return {"success": False, "error": "uid 和 download_dir 为必填项"}
+
+        folder = kwargs.get("folder") or "INBOX"
+        filenames = kwargs.get("filenames")
+        if isinstance(filenames, str):
+            filenames = [f.strip() for f in filenames.split(",") if f.strip()] or None
+
+        try:
+            safe_dir = _resolve_download_dir(download_dir)
+        except ValueError as e:
+            return {"success": False, "error": str(e)}
+
+        try:
+            return await asyncio.to_thread(
+                email_lib.download_attachments,
+                user_email,
+                uid,
+                safe_dir,
+                filenames=filenames,
+                folder=folder,
+            )
+        except email_lib.EmailLibError as e:
+            logger.warning(f"附件下载失败: {e}")
+            return {"success": False, "error": str(e)}
+        except Exception as e:
+            logger.opt(exception=True).error(f"附件下载失败: {e}")
+            return {
+                "success": False,
+                "error": sanitize_error(
+                    e, safe_messages=_READ_SAFE_MESSAGES, fallback="附件下载失败，请稍后重试"
                 ),
             }
 

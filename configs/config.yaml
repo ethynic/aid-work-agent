@@ -212,6 +212,7 @@ skills:
       - route-distance
       - guizang-ppt-skill
       - sms-verification
+      - excel-to-template
   # 子智能体默认配置（可在 SUBAGENT.md 中覆盖）
   subagent:
     default_allowed:
