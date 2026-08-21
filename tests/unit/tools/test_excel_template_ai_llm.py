@@ -98,3 +98,60 @@ class TestDefaultLlmQwen:
 
         with pytest.raises(ValueError, match='QWEN API key 未配置'):
             _default_llm('分析prompt')
+
+    def test_return_usage_carries_model_and_flattens_cached_tokens(self, monkeypatch):
+        """return_usage：usage 附带实际 model（计量取单价，provider 非必 deepseek），
+        并把 qwen/OpenAI 的 prompt_tokens_details.cached_tokens 归一到 cached_tokens"""
+        import httpx
+        from src.tools.excel.excel_template_ai import _default_llm
+
+        body = {
+            "choices": [{"message": {"content": "结构JSON"}}],
+            "usage": {
+                "prompt_tokens": 1000,
+                "completion_tokens": 200,
+                "total_tokens": 1200,
+                "prompt_tokens_details": {"cached_tokens": 800},
+            },
+        }
+
+        monkeypatch.setattr(settings_module, 'settings', _make_settings())
+        monkeypatch.setattr(httpx, 'post', lambda *a, **kw: _Resp(body))
+
+        content, usage = _default_llm('分析prompt', return_usage=True)
+
+        assert content == '结构JSON'
+        assert usage['prompt_tokens'] == 1000
+        assert usage['completion_tokens'] == 200
+        assert usage['total_tokens'] == 1200
+        assert usage['cached_tokens'] == 800        # 嵌套缓存命中归一
+        assert usage['model'] == 'qwen3.7-flash'    # 实际调用模型随 usage 透出
+
+    def test_return_usage_deepseek_cache_hit_form(self, monkeypatch):
+        """deepseek 的 prompt_cache_hit_tokens 形态同样归一到 cached_tokens"""
+        import httpx
+        from src.tools.excel.excel_template_ai import _default_llm
+
+        class _DsCfg:
+            model = 'deepseek-chat'
+
+            def get_effective_keys(self):
+                return ['ds-key']
+
+        class _LLM:
+            provider = 'deepseek'
+            deepseek = _DsCfg()
+
+        monkeypatch.setattr(
+            settings_module, 'settings', type('FakeSettings', (), {'llm': _LLM})()
+        )
+        body = {
+            "choices": [{"message": {"content": "ok"}}],
+            "usage": {"prompt_tokens": 500, "completion_tokens": 10,
+                      "prompt_cache_hit_tokens": 400},
+        }
+        monkeypatch.setattr(httpx, 'post', lambda *a, **kw: _Resp(body))
+
+        _, usage = _default_llm('p', return_usage=True)
+        assert usage['cached_tokens'] == 400
+        assert usage['model'] == 'deepseek-chat'

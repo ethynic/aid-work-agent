@@ -2879,14 +2879,17 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                             skill_task_id = task.task_id
                             self.plan_manager.mark_task_running(session_id, skill_task_id)
 
-                    skill_exec_result = await self._tool_controls.get("skill_execute").execute(
-                        skill=skill_name,
-                        command=command,
-                        files=files,
-                        content=content,
-                        session_id=session_id,
-                        workdir=session_workspace
-                    )
+                    # 包 tool_execution_scope：让 skill_executor 能读到请求级上下文
+                    # （子进程注入 AID_* 环境变量，供技能脚本计量归属），与 delegate 拦截包裹方式一致
+                    with tool_execution_scope(_tool_context.derive(tool_call_id=tool_id)):
+                        skill_exec_result = await self._tool_controls.get("skill_execute").execute(
+                            skill=skill_name,
+                            command=command,
+                            files=files,
+                            content=content,
+                            session_id=session_id,
+                            workdir=session_workspace
+                        )
 
                     # 后端日志：记录 skill_execute 执行结果
                     log_skill_execute(
@@ -3744,13 +3747,16 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                                 "content": json.dumps(tool_result, ensure_ascii=False)
                             })
                             continue
-                        skill_exec_result = await self._tool_controls.get("skill_execute").execute(
-                            skill=skill_name,
-                            command=command,
-                            files=files,
-                            content=content,
-                            session_id=self.session_id,
-                        )
+                        # 包 tool_execution_scope：与主循环 skill_execute 拦截一致，
+                        # 让 skill_executor 能读到子智能体请求级上下文（AID_* 子进程注入）
+                        with tool_execution_scope(_subagent_tool_context.derive(tool_call_id=tc.get("id", ""))):
+                            skill_exec_result = await self._tool_controls.get("skill_execute").execute(
+                                skill=skill_name,
+                                command=command,
+                                files=files,
+                                content=content,
+                                session_id=self.session_id,
+                            )
                         tool_result = skill_exec_result
                         # 后端日志：记录 skill_execute 执行结果
                         log_skill_execute(

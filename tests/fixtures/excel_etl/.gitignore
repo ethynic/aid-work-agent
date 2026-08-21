@@ -1,0 +1,3 @@
+# 由 build_fixtures.py 确定性生成（表头来自 src/tools/excel/assets/schema.json），
+# 不入库；需要时运行脚本重建
+生成标准模板格式.xlsx
