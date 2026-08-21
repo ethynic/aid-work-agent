@@ -1617,8 +1617,12 @@ async def _process_with_waiting_indicator(adapter, ext_userid, cfg, coro):
         return await asyncio.wait_for(asyncio.shield(task), timeout=cfg["delay_seconds"])
     except asyncio.TimeoutError:
         try:
-            await adapter.send_waiting_indicator(ext_userid, cfg["message"])
-            _kf_tlog("等待提示已发送: user={user}", user=ext_userid)
+            sent = await adapter.send_waiting_indicator(ext_userid, cfg["message"])
+            if not sent:
+                _kf_tlog("等待提示未送达: user={user}, sent=False", user=ext_userid, level="ERROR")
+                logger.warning(f"[wecom_kf] 等待提示未送达: user={ext_userid}, send_waiting_indicator 返回 False（errcode≠0）")
+            else:
+                _kf_tlog("等待提示已发送: user={user}", user=ext_userid)
         except Exception as e:
             logger.warning(f"[wecom_kf] 等待提示发送失败: {e}")
         # 不取消 task；等其自然完成返回真实结果
