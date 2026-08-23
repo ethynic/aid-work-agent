@@ -263,6 +263,25 @@
             class="w-full px-3 py-2 bg-canvas border border-default rounded-lg text-muted cursor-not-allowed tabular-nums" />
           <p class="text-xs text-muted mt-1">只读字段，通过充值/计费扣减自动维护</p>
         </div>
+
+        <!-- 知识库接入（租户级共享授权） -->
+        <div v-if="isEdit" class="col-span-2 pt-4 border-t border-default">
+          <div class="flex items-center justify-between mb-2">
+            <div>
+              <div class="text-sm font-medium text-default">知识库接入</div>
+              <div class="text-xs text-muted mt-0.5">接入其他租户共享的知识库（租户级授权），具体共享的分类在数字员工「知识库关联」中勾选</div>
+            </div>
+            <BaseButton size="sm" intent="ghost" @click="openShareDialog">管理</BaseButton>
+          </div>
+          <div v-if="sharedTenants.length > 0" class="flex flex-wrap gap-2">
+            <span v-for="st in sharedTenants" :key="st.from_tenant_id"
+              class="inline-flex items-center gap-1 px-2 py-1 text-xs rounded bg-primary-50 text-primary-700 border border-primary-200">
+              {{ st.from_company_name }}
+              <span class="text-muted">（来源租户）</span>
+            </span>
+          </div>
+          <div v-else class="text-xs text-muted">尚未接入其他租户的知识库</div>
+        </div>
       </div>
 
       <!-- 数字员工授权标签页 -->
@@ -390,6 +409,60 @@
       </div>
     </div>
 
+    <!-- 知识库接入弹窗（租户级共享授权） -->
+    <div v-if="showShareDialog" class="fixed inset-0 z-[60] flex items-center justify-center">
+      <div class="absolute inset-0 bg-black/50" @click="closeShareDialog"></div>
+      <div class="relative bg-white rounded-xl shadow-2xl w-full max-w-lg mx-4 p-6">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="text-lg font-bold text-default">知识库接入</h3>
+          <span class="text-xs text-muted">{{ currentTenant?.company_name }}</span>
+        </div>
+
+        <div class="text-xs text-muted mb-3">
+          接入其他租户的知识库（租户级授权）。具体共享哪些分类，在数字员工「知识库关联」弹框中勾选。
+        </div>
+
+        <div v-if="loadingShares" class="text-center py-6 text-muted text-sm">加载中...</div>
+        <div v-else>
+          <div class="text-sm font-medium text-default mb-2">已接入（可多个来源租户）</div>
+          <div v-if="sharedTenants.length === 0" class="text-xs text-muted mb-3">尚未接入其他租户的知识库</div>
+          <div v-else class="space-y-2 mb-3">
+            <div v-for="st in sharedTenants" :key="st.from_tenant_id"
+              class="flex items-center justify-between p-2 rounded-lg hover:bg-canvas">
+              <div class="flex items-center gap-2 text-sm text-default">
+                <svg class="w-4 h-4 text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg>
+                <span>{{ st.from_company_name }}</span>
+                <span class="text-xs text-muted">（来源租户）</span>
+              </div>
+              <button @click="handleRemoveShare(st.from_tenant_id)"
+                class="text-xs px-2 py-1 rounded border border-default text-muted hover:text-danger-600 hover:border-danger-200 transition-colors">移除</button>
+            </div>
+          </div>
+
+          <div class="text-sm font-medium text-default mb-2">＋ 添加共享租户</div>
+          <div class="flex items-center gap-2">
+            <select v-model="selectedShareTenant"
+              class="flex-1 px-3 py-2 bg-surface-hover border border-hover rounded-lg text-default focus:outline-none focus:border-primary-400">
+              <option value="">请选择来源租户</option>
+              <option v-for="t in otherTenants" :key="t.tenant_id" :value="t.tenant_id">
+                {{ t.company_name }}（{{ t.tenant_code }}）
+              </option>
+            </select>
+            <BaseButton size="sm" :disabled="!selectedShareTenant" @click="handleAddShare">添加</BaseButton>
+          </div>
+        </div>
+
+        <div v-if="shareError" class="mt-3 p-2 bg-danger-50 border border-danger-200 rounded text-danger-600 text-sm">{{ shareError }}</div>
+
+        <div class="flex gap-3 mt-6">
+          <BaseButton intent="secondary" class="flex-1" @click="closeShareDialog">取消</BaseButton>
+          <BaseButton :disabled="savingShares" class="flex-1" @click="handleSaveShares">
+            {{ savingShares ? '保存中...' : '保存' }}
+          </BaseButton>
+        </div>
+      </div>
+    </div>
+
     <!-- 知识库关联弹窗 -->
     <div v-if="showKnowledgeDialog" class="fixed inset-0 z-[60] flex items-center justify-center">
       <div class="absolute inset-0 bg-black/50" @click="showKnowledgeDialog = false"></div>
@@ -407,18 +480,41 @@
         <div v-else-if="knowledgeCategories.length === 0" class="text-center py-6 text-muted text-sm">
           该租户暂无知识库分类，请先在知识库管理中创建分类并上传文档。
         </div>
-        <div v-else class="space-y-2 max-h-[60vh] overflow-y-auto">
-          <label v-for="cat in knowledgeCategories" :key="cat.source_type"
-            class="flex items-start gap-2.5 p-2 rounded-lg hover:bg-canvas cursor-pointer transition-colors">
-            <input type="checkbox"
-              :value="cat.source_type"
-              v-model="knowledgeSelectedTypes"
-              class="mt-0.5 w-4 h-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
-            <div class="flex-1 min-w-0">
-              <div class="text-sm font-medium text-default">{{ cat.display_name || cat.source_type }}</div>
-              <div class="text-xs text-muted">{{ cat.source_type }} · {{ cat.document_count }} 篇文档</div>
+        <div v-else class="space-y-4 max-h-[60vh] overflow-y-auto">
+          <!-- 本租户分类 -->
+          <div v-if="knowledgeGroups.self.length">
+            <div class="text-xs font-medium text-muted mb-2">本租户</div>
+            <div class="space-y-1">
+              <label v-for="cat in knowledgeGroups.self" :key="selectionKey(cat)"
+                class="flex items-start gap-2.5 p-2 rounded-lg hover:bg-canvas cursor-pointer transition-colors">
+                <input type="checkbox"
+                  :value="selectionKey(cat)"
+                  v-model="knowledgeSelectedKeys"
+                  class="mt-0.5 w-4 h-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
+                <div class="flex-1 min-w-0">
+                  <div class="text-sm font-medium text-default">{{ cat.display_name || cat.source_type }}</div>
+                  <div class="text-xs text-muted">{{ cat.source_type }} · {{ cat.document_count }} 篇文档</div>
+                </div>
+              </label>
             </div>
-          </label>
+          </div>
+          <!-- 其他租户共享分类 -->
+          <div v-for="grp in knowledgeGroups.sharedGroups" :key="grp.key">
+            <div class="text-xs font-medium text-muted mb-2">{{ grp.title }}（共享）</div>
+            <div class="space-y-1">
+              <label v-for="cat in grp.items" :key="selectionKey(cat)"
+                class="flex items-start gap-2.5 p-2 rounded-lg hover:bg-canvas cursor-pointer transition-colors">
+                <input type="checkbox"
+                  :value="selectionKey(cat)"
+                  v-model="knowledgeSelectedKeys"
+                  class="mt-0.5 w-4 h-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
+                <div class="flex-1 min-w-0">
+                  <div class="text-sm font-medium text-default">{{ cat.display_name || cat.source_type }}</div>
+                  <div class="text-xs text-muted">{{ cat.source_type }} · {{ cat.document_count }} 篇文档</div>
+                </div>
+              </label>
+            </div>
+          </div>
         </div>
 
         <div v-if="knowledgeError" class="mt-3 p-2 bg-danger-50 border border-danger-200 rounded text-danger-600 text-sm">{{ knowledgeError }}</div>
@@ -499,7 +595,7 @@ import BasePagination from '@/components/ui/BasePagination.vue'
 import BaseModal from '@/components/ui/BaseModal.vue'
 import LogoUpload from '@/components/ui/LogoUpload.vue'
 import { listTenants, createTenant, updateTenant, deleteTenant, type TenantFormData } from '@/api/saasTenant'
-import { getAllAvailableAgents, getTenantAgentPermissions, setTenantAgentPermissions, getSubagentEnvVars, setSubagentEnvVars, getConfigFileStatus, uploadConfigFile, downloadConfigFile, deleteConfigFile, type AgentItem, type EnvVarItem, getSubagentKnowledgeSources, setSubagentKnowledgeSources, type KnowledgeSourceItem, listTenantKnowledgeCategories } from '@/api/saasPermissions'
+import { getAllAvailableAgents, getTenantAgentPermissions, setTenantAgentPermissions, getSubagentEnvVars, setSubagentEnvVars, getConfigFileStatus, uploadConfigFile, downloadConfigFile, deleteConfigFile, type AgentItem, type EnvVarItem, getSubagentKnowledgeSources, setSubagentKnowledgeSources, type KnowledgeSourceItem, listTenantKnowledgeCategories, getTenantKnowledgeShares, setTenantKnowledgeShares, type KnowledgeShareItem } from '@/api/saasPermissions'
 import TenantMigration from '@/components/saas/TenantMigration.vue'
 import TenantActivationCodes from '@/components/saas/TenantActivationCodes.vue'
 import { TenantStatus, TenantStatusMap } from '@/api/enums'
@@ -566,14 +662,59 @@ const savingEnvVars = ref(false)
 const envVarError = ref('')
 
 // 知识库关联弹窗
+interface KnowledgeCategoryItem {
+  source_type: string
+  display_name: string | null
+  document_count: number
+  owner_tenant_id?: string | null
+  owner_company_name?: string
+}
 const showKnowledgeDialog = ref(false)
 const knowledgeAgentId = ref('')
 const knowledgeAgentName = ref('')
-const knowledgeCategories = ref<{ source_type: string; display_name: string | null; document_count: number }[]>([])
-const knowledgeSelectedTypes = ref<string[]>([])
+const knowledgeCategories = ref<KnowledgeCategoryItem[]>([])
+// 勾选键格式：`${owner_tenant_id || '__self__'}:${source_type}`，区分本租户与共享来源
+const knowledgeSelectedKeys = ref<string[]>([])
 const loadingKnowledge = ref(false)
 const savingKnowledge = ref(false)
 const knowledgeError = ref('')
+
+// 分组：本租户 + 各来源租户共享分类
+const knowledgeGroups = computed(() => {
+  const self = knowledgeCategories.value.filter(c => !c.owner_tenant_id)
+  const shared = knowledgeCategories.value.filter(c => c.owner_tenant_id)
+  const sharedGroups: { key: string; title: string; items: KnowledgeCategoryItem[] }[] = []
+  const byOwner = new Map<string, KnowledgeCategoryItem[]>()
+  for (const c of shared) {
+    const owner = c.owner_tenant_id!
+    if (!byOwner.has(owner)) byOwner.set(owner, [])
+    byOwner.get(owner)!.push(c)
+  }
+  for (const [owner, items] of byOwner) {
+    sharedGroups.push({ key: owner, title: items[0].owner_company_name || owner, items })
+  }
+  return { self, sharedGroups }
+})
+
+function selectionKey(cat: KnowledgeCategoryItem): string {
+  return `${cat.owner_tenant_id || '__self__'}:${cat.source_type}`
+}
+
+function parseSelectionKey(key: string): { owner: string | null; source_type: string } {
+  const idx = key.indexOf(':')
+  const owner = idx < 0 ? '__self__' : key.slice(0, idx)
+  const source_type = idx < 0 ? key : key.slice(idx + 1)
+  return { owner: owner === '__self__' ? null : owner, source_type }
+}
+
+// 知识库接入弹窗（租户级共享授权）
+const showShareDialog = ref(false)
+const sharedTenants = ref<KnowledgeShareItem[]>([])
+const otherTenants = ref<any[]>([])
+const selectedShareTenant = ref('')
+const loadingShares = ref(false)
+const savingShares = ref(false)
+const shareError = ref('')
 
 // API 配置文件弹窗
 const configSupportedAgents = ['after-sales', 'order-processing']
@@ -839,22 +980,111 @@ async function handleSaveEnvVars() {
   }
 }
 
+async function openShareDialog() {
+  if (!currentTenant.value) return
+  shareError.value = ''
+  showShareDialog.value = true
+  loadingShares.value = true
+  try {
+    const [sharesRes, tenantsRes] = await Promise.all([
+      getTenantKnowledgeShares(currentTenant.value.tenant_id),
+      listTenants({ page: 1, page_size: 200 }),
+    ])
+    if (sharesRes.success) sharedTenants.value = sharesRes.data || []
+    const allTenants = (tenantsRes.success && tenantsRes.tenants) ? tenantsRes.tenants : []
+    otherTenants.value = allTenants.filter(t => t.tenant_id !== currentTenant.value.tenant_id)
+  } catch (e) {
+    console.error('加载知识库接入失败:', e)
+  } finally {
+    loadingShares.value = false
+  }
+}
+
+function closeShareDialog() {
+  showShareDialog.value = false
+  selectedShareTenant.value = ''
+}
+
+function handleRemoveShare(fromTenantId: string) {
+  sharedTenants.value = sharedTenants.value.filter(st => st.from_tenant_id !== fromTenantId)
+}
+
+function handleAddShare() {
+  if (!selectedShareTenant.value) return
+  if (sharedTenants.value.some(st => st.from_tenant_id === selectedShareTenant.value)) {
+    shareError.value = '该租户已在接入列表中'
+    return
+  }
+  const t = otherTenants.value.find(t => t.tenant_id === selectedShareTenant.value)
+  sharedTenants.value.push({
+    from_tenant_id: selectedShareTenant.value,
+    from_company_name: t?.company_name || selectedShareTenant.value,
+  })
+  selectedShareTenant.value = ''
+  shareError.value = ''
+}
+
+async function handleSaveShares() {
+  if (!currentTenant.value) return
+  savingShares.value = true
+  shareError.value = ''
+  try {
+    const res = await setTenantKnowledgeShares(
+      currentTenant.value.tenant_id,
+      sharedTenants.value.map(st => st.from_tenant_id),
+    )
+    if (res.success) {
+      toast.success('知识库接入保存成功')
+      closeShareDialog()
+    } else {
+      shareError.value = res.error || '保存失败'
+    }
+  } catch (e: any) {
+    shareError.value = e.message || '保存失败'
+  } finally {
+    savingShares.value = false
+  }
+}
+
 async function openKnowledgeDialog(agent: AgentItem) {
   if (!currentTenant.value) return
   knowledgeAgentId.value = agent.agent_id
   knowledgeAgentName.value = agent.name
   knowledgeError.value = ''
-  knowledgeSelectedTypes.value = []
+  knowledgeSelectedKeys.value = []
   showKnowledgeDialog.value = true
   loadingKnowledge.value = true
   try {
-    const [catRes, srcRes] = await Promise.all([
+    const [catRes, srcRes, shareRes] = await Promise.all([
       listTenantKnowledgeCategories(currentTenant.value.tenant_id),
       getSubagentKnowledgeSources(currentTenant.value.tenant_id, agent.agent_id),
+      getTenantKnowledgeShares(currentTenant.value.tenant_id),
     ])
-    knowledgeCategories.value = catRes.items || []
+    // 本租户分类（owner 为空）
+    knowledgeCategories.value = (catRes.items || []).map(c => ({ ...c, owner_tenant_id: null }))
+    // 已接入来源租户的共享分类（平台管理员跨租户浏览，带 owner 归属）
+    const shareList = shareRes.data || []
+    const sharedCatGroups: KnowledgeCategoryItem[][] = await Promise.all(
+      shareList.map(async (st) => {
+        try {
+          const r = await listTenantKnowledgeCategories(st.from_tenant_id)
+          return (r.items || []).map(c => ({
+            ...c,
+            owner_tenant_id: st.from_tenant_id,
+            owner_company_name: st.from_company_name,
+          }))
+        } catch (e) {
+          console.error('加载共享知识库分类失败:', e)
+          return []
+        }
+      })
+    )
+    knowledgeCategories.value = [...knowledgeCategories.value, ...sharedCatGroups.flat()]
+    // 回显已关联（含共享来源）
     if (srcRes.success && srcRes.data) {
-      knowledgeSelectedTypes.value = srcRes.data.map((s: KnowledgeSourceItem) => s.source_type)
+      knowledgeSelectedKeys.value = srcRes.data.map((s: KnowledgeSourceItem) =>
+        `${s.owner_tenant_id || '__self__'}:${s.source_type}`
+      )
     }
   } catch (e) {
     console.error('加载知识库关联失败:', e)
@@ -868,9 +1098,16 @@ async function handleSaveKnowledge() {
   savingKnowledge.value = true
   knowledgeError.value = ''
   try {
-    const sources: KnowledgeSourceItem[] = knowledgeSelectedTypes.value.map(st => {
-      const cat = knowledgeCategories.value.find(c => c.source_type === st)
-      return { source_type: st, display_name: cat?.display_name || st }
+    const sources: KnowledgeSourceItem[] = knowledgeSelectedKeys.value.map(key => {
+      const { owner, source_type } = parseSelectionKey(key)
+      const cat = knowledgeCategories.value.find(c =>
+        c.source_type === source_type && (c.owner_tenant_id || null) === owner
+      )
+      return {
+        source_type,
+        display_name: cat?.display_name || source_type,
+        owner_tenant_id: owner,
+      }
     })
     const res = await setSubagentKnowledgeSources(
       currentTenant.value.tenant_id,

@@ -693,6 +693,18 @@ CREATE TABLE IF NOT EXISTS subagent_knowledge_sources (
     UNIQUE(tenant_id, subagent_name)
 );
 
+-- 租户间知识库共享授权表（租户级授权：A -> B，整体授权，不涉及具体分类）
+-- 具体共享哪些分类由第二步 subagent_knowledge_sources.sources 的 owner_tenant_id 决定
+CREATE TABLE IF NOT EXISTS tenant_knowledge_shares (
+    id SERIAL PRIMARY KEY,
+    from_tenant_id TEXT NOT NULL,     -- 知识库提供租户（A）
+    to_tenant_id TEXT NOT NULL,       -- 知识库接收租户（B）
+    created_by TEXT,                  -- 创建人（平台管理员 user_id）
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (from_tenant_id, to_tenant_id)
+);
+CREATE INDEX IF NOT EXISTS idx_knowledge_shares_to ON tenant_knowledge_shares(to_tenant_id);
+
 -- subagent_template_files — 租户级子智能体模板文件关联
 -- 每个租户的每个子智能体可挂载多个模板文件（名称 + file_id + 元信息），
 -- 运行时注入 system prompt 末尾（### 相关模板位置信息）。

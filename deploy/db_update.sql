@@ -579,3 +579,18 @@ CREATE INDEX IF NOT EXISTS idx_lc_leads_tenant ON bs_lead_capture_leads(tenant_i
 CREATE INDEX IF NOT EXISTS idx_lc_leads_created ON bs_lead_capture_leads(created_at);
 CREATE INDEX IF NOT EXISTS idx_lc_leads_assigned ON bs_lead_capture_leads(assigned_to);
 CREATE INDEX IF NOT EXISTS idx_lc_leads_customer ON bs_lead_capture_leads(customer_user_id);
+-- ============================================================================
+-- 2026-08-23 租户间知识库共享授权表（tenant_knowledge_shares，租户级授权 A->B）
+-- 与 deploy/init-postgres.sql 2026-08-23 条目保持一致。租户级整体授权，
+-- 不涉及具体分类；具体共享哪些分类由 subagent_knowledge_sources.sources
+-- 的 owner_tenant_id 决定（第二步数字员工知识库关联）。
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS tenant_knowledge_shares (
+    id SERIAL PRIMARY KEY,
+    from_tenant_id TEXT NOT NULL,     -- 知识库提供租户（A）
+    to_tenant_id TEXT NOT NULL,       -- 知识库接收租户（B）
+    created_by TEXT,                  -- 创建人（平台管理员 user_id）
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (from_tenant_id, to_tenant_id)
+);
+CREATE INDEX IF NOT EXISTS idx_knowledge_shares_to ON tenant_knowledge_shares(to_tenant_id);

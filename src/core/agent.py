@@ -872,7 +872,12 @@ class Agent:
                     for src in ks:
                         st = src.get('source_type', '')
                         dn = src.get('display_name', st)
-                        lines.append(f"- {st}（{dn}）")
+                        owner_company = src.get('owner_company_name')
+                        if owner_company:
+                            # 共享来源：标注来源公司，LLM 感知内容归属
+                            lines.append(f"- {st}（{owner_company} · {dn}）")
+                        else:
+                            lines.append(f"- {st}（{dn}）")
                     lines.append("调用时必须传入正确的 source_type 参数。")
                     subagent_constraint += "\n".join(lines)
 
@@ -1010,7 +1015,11 @@ class Agent:
             return []
 
     def _load_knowledge_sources(self) -> list:
-        """加载租户级子智能体知识库关联"""
+        """加载租户级子智能体知识库关联
+
+        对共享来源项（owner_tenant_id 非空且非本租户）附加 owner_company_name，
+        供注入提示词时标注来源公司。
+        """
         if not self.subagent_config:
             return []
 
@@ -1033,11 +1042,29 @@ class Agent:
             from src.db.subagent_knowledge_source_db import SubagentKnowledgeSourceDB
             sources = SubagentKnowledgeSourceDB.get(tenant_id, subagent_name)
             if sources:
+                for s in sources:
+                    owner = s.get("owner_tenant_id")
+                    if owner and owner != tenant_id:
+                        s["owner_company_name"] = self._tenant_company_name(owner)
                 logger.debug(f"Loaded {len(sources)} knowledge sources for tenant {tenant_id}, subagent {subagent_name}")
             return sources
         except Exception as e:
             logger.warning(f"Failed to load knowledge sources: {e}")
             return []
+
+    @staticmethod
+    def _tenant_company_name(tenant_id: str) -> str:
+        """查询租户公司名；失败时回退为租户 ID。"""
+        try:
+            from src.saas.db.tenant_db import TenantDB
+            tenant = TenantDB.get_by_id(tenant_id)
+            if tenant:
+                name = tenant.get("company_name")
+                if name:
+                    return name
+        except Exception as e:
+            logger.warning(f"查询共享来源租户公司名失败: {e}")
+        return tenant_id
 
     def _load_long_term_memory(self, user: Optional[User] = None) -> str:
         """

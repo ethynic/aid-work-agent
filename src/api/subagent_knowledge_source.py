@@ -6,9 +6,10 @@
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
-from typing import List, Dict
+from typing import List, Dict, Optional
 from loguru import logger
 
+from src.db.database import get_db_connection
 from src.db.subagent_knowledge_source_db import SubagentKnowledgeSourceDB
 from src.saas.api.tenant_auth import require_admin
 from src.saas.context import get_current_tenant_id
@@ -22,6 +23,44 @@ router = APIRouter(prefix="/api/saas/tenant/subagent-knowledge", tags=["subagent
 class KnowledgeSourceItem(BaseModel):
     source_type: str = Field(..., min_length=1, max_length=100, description="知识库代号")
     display_name: str = Field(..., min_length=1, max_length=200, description="知识库名称")
+    owner_tenant_id: Optional[str] = Field(None, description="共享来源租户 ID；本租户项为空，共享项为来源租户 ID")
+
+
+def _validate_shared_source(tenant_id: str, item: KnowledgeSourceItem) -> Optional[str]:
+    """校验共享来源项（owner_tenant_id 非空时）。
+
+    与检索侧判定一致，避免"检索到却未授权关联"的越权：
+    - 来源租户不能是当前租户自身
+    - 租户级授权存在（tenant_knowledge_shares 中 from_tenant_id -> to_tenant_id）
+    - source_type 确实属于来源租户（knowledge_categories）
+
+    Returns:
+        错误信息；None 表示通过。
+    """
+    owner = item.owner_tenant_id
+    if not owner:
+        return None
+    if owner == tenant_id:
+        return f"知识库 {item.source_type} 的来源租户不能是当前租户"
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT
+                  EXISTS (SELECT 1 FROM tenant_knowledge_shares
+                          WHERE from_tenant_id = %s AND to_tenant_id = %s) AS authorized,
+                  EXISTS (SELECT 1 FROM knowledge_categories
+                          WHERE tenant_id = %s AND source_type = %s) AS has_cat
+            """, (owner, tenant_id, owner, item.source_type))
+            row = cursor.fetchone()
+    except Exception as e:
+        logger.error(f"校验共享知识库来源失败: {e}")
+        return "校验共享知识库来源失败"
+    if not row or not row["authorized"]:
+        return f"来源租户 {owner} 未授权共享知识库给当前租户"
+    if not row["has_cat"]:
+        return f"来源租户 {owner} 不存在知识库分类 {item.source_type}"
+    return None
 
 
 class SetKnowledgeSourcesRequest(BaseModel):
@@ -54,6 +93,11 @@ async def set_knowledge_sources(
     """设置某子智能体的知识库关联（全量覆盖）"""
     try:
         tenant_id = get_current_tenant_id()
+        # 校验共享来源项：未授权的共享分类直接拒绝，不落库
+        for s in req.sources:
+            err = _validate_shared_source(tenant_id, s)
+            if err:
+                return {"success": False, "error": err}
         sources_list = [s.model_dump() for s in req.sources]
         success = SubagentKnowledgeSourceDB.set(tenant_id, subagent_name, sources_list)
         if success:

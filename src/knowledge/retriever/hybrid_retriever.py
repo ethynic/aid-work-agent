@@ -9,6 +9,7 @@ from typing import List, Dict, Tuple, Optional, Any
 from loguru import logger
 
 from src.db.database import get_pooled_connection, return_pooled_connection
+from src.knowledge.retriever.tenant_range import build_tenant_range_conditions
 import psycopg2.extras
 
 
@@ -80,7 +81,8 @@ class HybridRetriever:
         top_k: int = 10,
         user_id: Optional[int] = None,
         tenant_id: Optional[str] = None,
-        source_type: Optional[str] = None
+        source_type: Optional[str] = None,
+        shared_ranges: Optional[List[Tuple[str, str]]] = None
     ) -> List[Dict[str, Any]]:
         """
         混合检索（加权 RRF 融合 + 向量相似度阈值 + 相关度截断）
@@ -91,6 +93,7 @@ class HybridRetriever:
             user_id: 用户 ID（权限控制，暂未实现）
             tenant_id: 租户ID，提供时只搜索该租户的文档
             source_type: 文档来源类型，提供时只搜索该类型的文档
+            shared_ranges: 已启用共享分类的精确 (from_tenant_id, source_type) 对
 
         Returns:
             检索结果列表
@@ -110,7 +113,10 @@ class HybridRetriever:
                     )
             except Exception:
                 logger.opt(exception=True).debug("Failed to record embedding usage")
-        raw_vector_results = await self.vector_db.search(query_embedding, top_k=top_k * 3, tenant_id=tenant_id, source_type=source_type)
+        raw_vector_results = await self.vector_db.search(
+            query_embedding, top_k=top_k * 3,
+            tenant_id=tenant_id, source_type=source_type, shared_ranges=shared_ranges,
+        )
 
         # 后端日志：输出原始向量检索结果（调优用）
         logger.info(
@@ -149,7 +155,10 @@ class HybridRetriever:
 
         # 3. FTS5 全文检索（关键词精确匹配）
         fts_query = self._preprocess_fts_query(query)
-        fts_results = self._fts_search(fts_query, top_k=top_k * 3, tenant_id=tenant_id, source_type=source_type)
+        fts_results = self._fts_search(
+            fts_query, top_k=top_k * 3,
+            tenant_id=tenant_id, source_type=source_type, shared_ranges=shared_ranges,
+        )
 
         # 后端日志：步骤3-FTS5全文检索详情
         logger.info(
@@ -263,11 +272,14 @@ class HybridRetriever:
         # 用 OR 连接关键词（FTS5 语法：匹配任一关键词即可）
         return " OR ".join(keywords)
 
-    def _fts_search(self, query: str, top_k: int, tenant_id: Optional[str] = None, source_type: Optional[str] = None) -> List[Tuple[int, float]]:
+    def _fts_search(self, query: str, top_k: int, tenant_id: Optional[str] = None, source_type: Optional[str] = None, shared_ranges: Optional[List[Tuple[str, str]]] = None) -> List[Tuple[int, float]]:
         """全文检索（PostgreSQL tsvector）"""
-        return self._postgres_fts_search(query, top_k, tenant_id=tenant_id, source_type=source_type)
+        return self._postgres_fts_search(
+            query, top_k,
+            tenant_id=tenant_id, source_type=source_type, shared_ranges=shared_ranges,
+        )
 
-    def _postgres_fts_search(self, query: str, top_k: int, tenant_id: Optional[str] = None, source_type: Optional[str] = None) -> List[Tuple[int, float]]:
+    def _postgres_fts_search(self, query: str, top_k: int, tenant_id: Optional[str] = None, source_type: Optional[str] = None, shared_ranges: Optional[List[Tuple[str, str]]] = None) -> List[Tuple[int, float]]:
         """PostgreSQL 全文检索（使用 tsvector + tsquery）"""
         conn = self._get_connection()
         try:
@@ -277,18 +289,17 @@ class HybridRetriever:
             processed_query = self._preprocess_fts_query(query)
 
             if tenant_id:
-                # 多租户模式：JOIN documents 过滤 tenant_id
-                source_type_condition = " AND d.source_type = %s" if source_type else ""
-                params = [processed_query, processed_query, tenant_id]
-                if source_type:
-                    params.append(source_type)
-                params.append(top_k)
+                # 多租户模式：JOIN documents 过滤本租户 + 已启用共享范围
+                range_sql, range_params = build_tenant_range_conditions(
+                    tenant_id, source_type, shared_ranges,
+                )
+                params = [processed_query, processed_query] + range_params + [top_k]
                 cursor.execute(f"""
                     SELECT c.id, ts_rank(c.text_vec, plainto_tsquery(%s)) as score
                     FROM chunks c
                     JOIN documents d ON c.doc_id = d.id
                     WHERE c.text_vec @@ plainto_tsquery(%s)
-                      AND d.tenant_id = %s{source_type_condition}
+                      AND {range_sql}
                     ORDER BY score DESC
                     LIMIT %s
                 """, params)

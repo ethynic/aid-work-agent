@@ -281,6 +281,44 @@ const KNOWLEDGE_BASE_URL = `${import.meta.env.VITE_API_BASE_URL || '/api'}/saas/
 export interface KnowledgeSourceItem {
   source_type: string
   display_name: string
+  owner_tenant_id?: string | null
+}
+
+// ==================== 租户间知识库共享授权（平台管理员） ====================
+
+const SHARE_BASE_URL = `${import.meta.env.VITE_API_BASE_URL || '/api'}/saas/tenant/knowledge-shares`
+
+export interface KnowledgeShareItem {
+  from_tenant_id: string
+  from_company_name: string
+}
+
+export async function getTenantKnowledgeShares(tenantId: string): Promise<{ success: boolean; data: KnowledgeShareItem[] }> {
+  const headers: Record<string, string> = {}
+  const tokenKey = getTokenKey()
+  const token = credentialGet(tokenKey)
+  if (token) headers['Authorization'] = `Bearer ${token}`
+  headers['X-Tenant-Id'] = tenantId
+  const res = await fetch(`${SHARE_BASE_URL}`, { headers })
+  if (!res.ok) throw new Error('获取知识库接入失败')
+  return res.json()
+}
+
+export async function setTenantKnowledgeShares(
+  tenantId: string, fromTenantIds: string[]
+): Promise<{ success: boolean; message?: string; error?: string }> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  const tokenKey = getTokenKey()
+  const token = credentialGet(tokenKey)
+  if (token) headers['Authorization'] = `Bearer ${token}`
+  headers['X-Tenant-Id'] = tenantId
+  const res = await fetch(`${SHARE_BASE_URL}`, {
+    method: 'PUT',
+    headers,
+    body: JSON.stringify({ from_tenants: fromTenantIds.map(id => ({ from_tenant_id: id })) }),
+  })
+  if (!res.ok) throw new Error('保存知识库接入失败')
+  return res.json()
 }
 
 export async function getSubagentKnowledgeSources(tenantId: string, subagentName: string): Promise<{ success: boolean; data: KnowledgeSourceItem[] }> {

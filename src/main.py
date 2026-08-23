@@ -1694,6 +1694,7 @@ from src.saas.api import channel_config, tenant_skills, channel_routes
 from src.saas.api import tenant_users, usage_reports, permissions, reply_styles, external_customers, tenant_migration
 from src.saas.api import context_compression_routes
 from src.saas.api import billing_recharges, billing_balance
+from src.saas.api.knowledge_share import router as knowledge_share_router
 from src.saas.api.wecom_kf_account import router as wecom_kf_account_router
 from src.saas.api.wecom_personal_rpa_routes import router as wecom_personal_rpa_router
 from src.saas.api.wecom_personal_rpa_admin import router as wecom_personal_rpa_admin_router
@@ -1716,6 +1717,7 @@ app.include_router(context_compression_routes.router)
 app.include_router(billing_recharges.router)
 app.include_router(billing_balance.router)
 app.include_router(wecom_kf_account_router)
+app.include_router(knowledge_share_router)
 # 协会客户端（docs/tools/association-client-design.md）
 from src.api import client_routes  # noqa: E402
 from src.saas.api import client_activation_mgmt  # noqa: E402
