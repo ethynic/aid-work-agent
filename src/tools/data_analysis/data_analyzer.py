@@ -832,23 +832,44 @@ class DataAnalyzer:
         ax.set_axisbelow(True)
 
     @staticmethod
-    def _style_legend(ax, t: dict, **kwargs):
-        """无框图例 + 文字配色。"""
-        leg = ax.legend(frameon=False, fontsize=10.5, **kwargs)
+    def _style_legend(ax, t: dict, handles=None):
+        """无框图例 + 文字配色。
+
+        图例锚定在坐标区右上角外侧（绘图区上方），向上生长：
+        无论数据多高、系列多少，图例都不可能进入绘图区与图形重叠。
+        少系列单行横排，多系列换行，控制宽度。
+        """
+        n_series = len(handles) if handles is not None else len(ax.get_legend_handles_labels()[1])
+        ncols = n_series if n_series <= 4 else max((n_series + 1) // 2, 1)
+        leg = ax.legend(handles=handles, frameon=False, fontsize=10.5,
+                        loc="lower right", bbox_to_anchor=(1.0, 1.02), ncols=ncols)
         if leg is not None:
             for txt in leg.get_texts():
                 txt.set_color(t["text"])
         return leg
 
     @staticmethod
+    def _avoid_title_legend_overlap(fig, ax, leg, title_artist):
+        """图例向上生长可能碰到主标题：实测两者包围盒，重叠时把主标题上移让位。"""
+        if leg is None or title_artist is None:
+            return
+        fig.canvas.draw()
+        leg_bb = leg.get_window_extent()
+        title_bb = title_artist.get_window_extent()
+        if leg_bb.overlaps(title_bb):
+            dy_px = leg_bb.y1 - title_bb.y0 + 10  # 留 10px 间隙（150dpi 下 15px），视觉上明显分离
+            title_artist.set_y(title_artist.get_position()[1] + dy_px / ax.bbox.height)
+
+    @staticmethod
     def _add_titles(ax, t: dict, title: str, subtitle: str = ""):
         """左对齐加粗主标题 + 灰色副标题（替代 matplotlib 默认居中标题）。"""
         ax.set_title("")
-        ax.text(0, 1.13, title, transform=ax.transAxes, fontsize=15,
-                color=t["text"], fontweight="bold")
+        title_artist = ax.text(0, 1.13, title, transform=ax.transAxes, fontsize=15,
+                               color=t["text"], fontweight="bold")
         if subtitle:
             ax.text(0, 1.05, subtitle, transform=ax.transAxes,
                     fontsize=10, color=t["subtext"])
+        return title_artist
 
     def _draw_bar_series(self, ax, xs, heights, width, color, t: dict):
         """画一组柱 + 柱顶/柱底数值标签。
@@ -960,6 +981,8 @@ class DataAnalyzer:
             Patch(facecolor=self._theme_color(t, i), linewidth=0, label=yc)
             for i, yc in enumerate(y_columns)
         ]
+        leg = None
+        title_artist = None
 
         if chart_type == "pie":
             values = df[y_columns[0]]
@@ -986,7 +1009,7 @@ class DataAnalyzer:
                 at.set_fontweight("bold")
                 at.set_path_effects([pe.withStroke(linewidth=2.5, foreground=t["text"])])
             ax.set_aspect("equal")
-            self._add_titles(ax, t, title, "占比构成")
+            title_artist = self._add_titles(ax, t, title, "占比构成")
 
         elif chart_type in ("bar", "grouped_bar"):
             width = 0.8 / len(y_columns) if len(y_columns) > 1 else 0.6
@@ -998,8 +1021,8 @@ class DataAnalyzer:
             ax.set_xticks(list(x_range))
             ax.set_xticklabels(x_labels, rotation=30, ha="right")
             self._apply_axes_style(ax, t)
-            self._style_legend(ax, t, handles=legend_handles, loc="upper right")
-            self._add_titles(ax, t, title)
+            leg = self._style_legend(ax, t, handles=legend_handles)
+            title_artist = self._add_titles(ax, t, title)
 
         elif chart_type == "stacked_bar":
             # 堆积柱有意用直角（非圆角）：FancyBboxPatch 不支持 bottom 堆叠，
@@ -1012,8 +1035,8 @@ class DataAnalyzer:
             ax.set_xticks(list(x_range))
             ax.set_xticklabels(x_labels, rotation=30, ha="right")
             self._apply_axes_style(ax, t)
-            self._style_legend(ax, t, handles=legend_handles, loc="upper right")
-            self._add_titles(ax, t, title)
+            leg = self._style_legend(ax, t, handles=legend_handles)
+            title_artist = self._add_titles(ax, t, title)
 
         elif chart_type == "line":
             # 数值/日期型 x 保留真实刻度（反映时间间隔），类别型用等距索引+标签
@@ -1029,8 +1052,8 @@ class DataAnalyzer:
                 ax.set_xticks(list(x_range))
                 ax.set_xticklabels(x_labels, rotation=30, ha="right")
             self._apply_axes_style(ax, t)
-            self._style_legend(ax, t, loc="upper right")
-            self._add_titles(ax, t, title)
+            leg = self._style_legend(ax, t)
+            title_artist = self._add_titles(ax, t, title)
 
         elif chart_type == "scatter":
             for i, y_col in enumerate(y_columns):
@@ -1038,12 +1061,15 @@ class DataAnalyzer:
                            alpha=0.7, s=42, linewidth=0, label=y_col, zorder=3)
             self._apply_axes_style(ax, t)
             if len(y_columns) > 1:
-                self._style_legend(ax, t, loc="upper right")
-            self._add_titles(ax, t, title)
+                leg = self._style_legend(ax, t)
+            title_artist = self._add_titles(ax, t, title)
 
         else:
             plt.close(fig)
             raise ValueError(f"不支持的图表类型: {chart_type}")
+
+        # 图例多行/过宽时可能顶到主标题，实测包围盒让位
+        self._avoid_title_legend_overlap(fig, ax, leg, title_artist)
 
         # 保存
         os.makedirs(self.CHART_OUTPUT_DIR, exist_ok=True)

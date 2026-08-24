@@ -305,6 +305,32 @@ ImageRegistry 管理的图片资产元信息（复用 cp 的 `uploaded_file:{fil
 **源文件**：`src/core/image_asset.py`
 **关联模块**：[image-asset-pipeline-design.md](image-asset-pipeline-design.md) §3 + §7.2
 
+`uploaded_file` 命名空间共三处写入方（file_id 全局唯一，多租户互不覆盖）：
+
+| 写入方 | 键模式 | TTL | 失效时机 |
+|--------|--------|-----|---------|
+| `/api/upload` 通用上传 | `uploaded_file:file_{uuid12}` | 86400s | TTL 自动过期 |
+| 子智能体模板文件 | `uploaded_file:file_{uuid12}` | -1（永久） | 删除模板时主动 delete（`src/api/subagent_template_file.py`） |
+| ImageRegistry 图片资产 | `uploaded_file:file_{uuid12}` | 86400s / 永久（knowledge_base） | `cleanup_temp` / 文档删除级联 |
+
+### 7.4.1 企微客服默认缩略图 media_id
+
+**存储**：Redis + 内存降级
+**键模式**：`wecom_kf:default_thumb_media_id:{corp_id}`
+**TTL**：3600s（1 小时）
+**失效时机**：TTL 自动过期兜底，下次发送 link 消息时重新上传
+**关键约束**：键**必须带企业维度**（`corp_id`）。media_id 是企业级临时素材，若不区分企业，多企业微信客服会互相读到对方企业的 media_id，发送时抛 40007 invalid media_id。
+**源文件**：`src/channels/wecom_kf/adapter.py`
+
+### 7.4.2 独立会话状态
+
+**存储**：Redis + 内存降级
+**键模式**：`standalone_agent:{session_id}:{agent_id}`
+**TTL**：3600s（1 小时）
+**失效时机**：`agent_router.cleanup_expired()` 定期清理；TTL 自动过期兜底
+**关键约束**：session_id 需含租户维度（如 `tenant_{tid}_{channel}_{user}`），避免跨租户串状态
+**源文件**：`src/core/agent_router.py`
+
 ### 7.5 定时任务调度器启动锁
 
 多 worker 环境下，确保只有单个 worker 启动 APScheduler 调度器，避免重复注册定时任务。

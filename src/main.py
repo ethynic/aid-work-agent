@@ -26,6 +26,7 @@ from src.core.agent import master_agent
 from src.core.agent_router import agent_router
 from src.core.redis_client import redis_client
 from src.core.session_queue import session_queue
+from src.core.agent_events import extract_downloadable_file
 from src.models.message import UnifiedMessage
 from src.db.database import init_database, init_postgres_pool, close_postgres_pool
 from src.api import auth, session as session_api, customer, scheduled_task, email_settings
@@ -1300,6 +1301,14 @@ async def chat_stream(http_request: Request, request: ChatRequest):
     resolved_subagent = _resolve_default_subagent(request.subagent, _tenant_id, current_user)
     agent = agent_router.get_agent(resolved_subagent, session_id, tenant_id=_tenant_id)
 
+    # 视频领域参数在 API 边界转换为通用、不可变的 Agent 请求上下文。
+    # Agent 本身不感知视频字段或格式化规则。
+    from src.video_request_context import build_video_agent_request_context
+    agent_request_context = build_video_agent_request_context(
+        request.video_params,
+        agent=agent,
+    )
+
     # 注入 tenant_id（供租户 skills 按需加载使用）
     if _tenant_id and not agent._init_tenant_id:
         agent._init_tenant_id = _tenant_id
@@ -1362,7 +1371,7 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                     user=agent_user,
                     attachments=attachments,
                     cancel_check=lambda: sse_manager.is_cancelled(session_id) or session_queue.check_cancel(session_id),
-                    video_params=request.video_params,
+                    request_context=agent_request_context,
                 ):
                     event_type = event.get("type")
                     if event_type == "tool_messages":
@@ -1486,20 +1495,10 @@ async def chat_stream(http_request: Request, request: ChatRequest):
 
                     # 提取可下载文件
                     downloadable_files = []
-                    download_tool_names = {"write", "cp"}
                     for evt in progress_events:
-                        if (evt.get("type") == "tool_result"
-                            and evt.get("toolName") in download_tool_names
-                            and evt.get("success") is True):
-                            result = evt.get("result", {})
-                            if result.get("file_id"):
-                                downloadable_files.append({
-                                    "file_id": result["file_id"],
-                                    "file_name": result.get("download_file_name") or result.get("file_name", "未命名文件"),
-                                    "file_size": result.get("file_size", 0),
-                                    "download_url": result.get("download_url", ""),
-                                    "mime_type": result.get("mime_type", ""),
-                                })
+                        downloadable_file = extract_downloadable_file(evt)
+                        if downloadable_file:
+                            downloadable_files.append(downloadable_file)
 
                     assistant_metadata = {"progressMessages": progress_events}
                     if downloadable_files:
@@ -1695,6 +1694,7 @@ from src.saas.api import channel_config, tenant_skills, channel_routes
 from src.saas.api import tenant_users, usage_reports, permissions, reply_styles, external_customers, tenant_migration
 from src.saas.api import context_compression_routes
 from src.saas.api import billing_recharges, billing_balance
+from src.saas.api.knowledge_share import router as knowledge_share_router
 from src.saas.api.wecom_kf_account import router as wecom_kf_account_router
 from src.saas.api.wecom_personal_rpa_routes import router as wecom_personal_rpa_router
 from src.saas.api.wecom_personal_rpa_admin import router as wecom_personal_rpa_admin_router
@@ -1717,6 +1717,7 @@ app.include_router(context_compression_routes.router)
 app.include_router(billing_recharges.router)
 app.include_router(billing_balance.router)
 app.include_router(wecom_kf_account_router)
+app.include_router(knowledge_share_router)
 # 协会客户端（docs/tools/association-client-design.md）
 from src.api import client_routes  # noqa: E402
 from src.saas.api import client_activation_mgmt  # noqa: E402

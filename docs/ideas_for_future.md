@@ -16,6 +16,7 @@
 
 | 能力面 | 状态 | 文档 |
 |---|---|---|
+| **Task Plane Phase 0+1 最小切片（首个落地）** | 📋 落地设计定稿（2026-08-19），已迁入 ideas.md #66 待开发 | [落地设计](system/enterprise-agent-platform/task-plane-phase0-1-landing-design.md) / [开发计划](plans/plan-task-plane-phase0-1.md) |
 | 七个能力面总体集成架构 | 📋 架构完成 | [总体架构](system/enterprise-agent-platform/enterprise-agent-platform-integration-design.md) |
 | Task / Session / Execution / Artifact 统一任务模型 | 📋 设计完成 | [Task 模型](system/enterprise-agent-platform/enterprise-task-model-design.md) |
 | 企业 Policy Engine | 📋 设计完成 | [Policy Engine](system/enterprise-agent-platform/enterprise-policy-engine-design.md) |

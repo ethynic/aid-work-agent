@@ -28,7 +28,9 @@ router = APIRouter(prefix="/api/monitor", tags=["可观测性追踪"])
 class SessionSummary(BaseModel):
     session_id: str
     tenant_id: Optional[str] = None
+    tenant_name: Optional[str] = None
     user_id: Optional[str] = None
+    user_name: Optional[str] = None
     trace_count: int = 0
     total_tokens: int = 0
     error_count: int = 0
@@ -187,6 +189,57 @@ def _trace_display_fields(row: Dict[str, Any]) -> Dict[str, Any]:
 
 # ============== API 端点 ==============
 
+def _build_user_display(username: Optional[str], nickname: Optional[str]) -> Optional[str]:
+    """组合用户显示名：微信侧 username 不可读（如'企业微信客服用户ds8Q'），需带 nickname。
+
+    两个字段都存在且不同时显示为 `nickname (username)`；否则取非空的那个。
+    """
+    uname = (username or "").strip()
+    nick = (nickname or "").strip()
+    if uname and nick and uname != nick:
+        return f"{nick} ({uname})"
+    return uname or nick or None
+
+
+def _attach_names(sessions: List[SessionSummary]) -> None:
+    """从主库补充租户名称和用户名称（obs_traces 在追踪库，名称在主库 tenants/users）"""
+    tenant_ids = sorted({s.tenant_id for s in sessions if s.tenant_id})
+    user_ids = sorted({s.user_id for s in sessions if s.user_id})
+    if not tenant_ids and not user_ids:
+        return
+
+    tenant_name_map: Dict[str, str] = {}
+    user_name_map: Dict[str, str] = {}
+
+    try:
+        from src.db.database import get_db_connection
+        with get_db_connection() as cur:
+            if tenant_ids:
+                ph = ",".join(["%s"] * len(tenant_ids))
+                cur.execute(
+                    f"SELECT tenant_id, company_name FROM tenants WHERE tenant_id IN ({ph})",
+                    tenant_ids,
+                )
+                tenant_name_map = {r["tenant_id"]: r["company_name"] for r in cur.fetchall() if r.get("company_name")}
+            if user_ids:
+                ph = ",".join(["%s"] * len(user_ids))
+                cur.execute(
+                    f"SELECT user_id, username, nickname FROM users WHERE user_id IN ({ph})",
+                    user_ids,
+                )
+                for r in cur.fetchall():
+                    name = _build_user_display(r.get("username"), r.get("nickname"))
+                    if name:
+                        user_name_map[r["user_id"]] = name
+    except Exception as e:
+        logger.warning(f"Failed to load tenant/user names for monitoring: {e}")
+        return
+
+    for s in sessions:
+        s.tenant_name = tenant_name_map.get(s.tenant_id or "")
+        s.user_name = user_name_map.get(s.user_id or "")
+
+
 @router.get("/sessions", response_model=SessionListResponse)
 async def list_traced_sessions(
     request: Request,
@@ -302,6 +355,8 @@ async def list_traced_sessions(
                     s.first_content = content_map.get(s.session_id)
                     if not s.first_content:
                         s.first_content = s.first_input
+
+            _attach_names(sessions)
 
             total_pages = (total + page_size - 1) // page_size
 

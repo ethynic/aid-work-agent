@@ -32,7 +32,7 @@ class TestResolveMaxTokens:
         gw = _new_gateway()
         with patch("src.llm.gateway.settings") as mock_settings:
             mock_settings.llm.model_max_tokens = {}
-            with patch.object(gw, "get_model_name", return_value="qwen-plus"):
+            with patch.object(gw, "get_model_name", return_value="qwen3.7-flash"):
                 assert gw._resolve_max_tokens(None) == DEFAULT_MAX_TOKENS
 
 
@@ -50,4 +50,4 @@ class TestClampMaxTokens:
     def test_unknown_model_keeps_value(self):
         with patch("src.llm.providers.qwen.settings") as mock_settings:
             mock_settings.llm.model_max_tokens = {}
-            assert _clamp_max_tokens("qwen-plus", 16384) == 16384
+            assert _clamp_max_tokens("qwen3.7-flash", 16384) == 16384

@@ -284,7 +284,9 @@ class SubagentRegistry:
 
         return "\n".join(lines) if lines else "(no subagents available)"
     
-    def get_delegation_tool_definition(self, available_subagents: Optional[List[str]] = None) -> Dict:
+    def get_delegation_tool_definition(
+        self, available_subagents: Optional[List[str]] = None
+    ) -> Optional[Dict]:
         """
         获取委派工具定义
         
@@ -297,7 +299,7 @@ class SubagentRegistry:
             工具定义字典
         """
         # 过滤可用的subagent
-        if available_subagents:
+        if available_subagents is not None:
             subagent_list = [
                 (name, self._configs[name])
                 for name in available_subagents
@@ -338,6 +340,13 @@ class SubagentRegistry:
                     "task_description": {
                         "type": "string",
                         "description": "详细描述要执行的任务"
+                    },
+                    "image_paths": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "用户上传图片的完整路径列表，仅当任务含图片且子智能体支持视觉时传入"
+                        ),
                     },
                     "context_needed": {
                         "type": "array",

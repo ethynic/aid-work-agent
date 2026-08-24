@@ -533,6 +533,7 @@ CREATE INDEX IF NOT EXISTS idx_customer_referrals_tenant ON customer_referrals(t
 CREATE INDEX IF NOT EXISTS idx_customer_referrals_referrer ON customer_referrals(tenant_id, referrer_user_id);
 
 -- ============================================================================
+
 -- 2026-08-19 招聘面试邀约企微通知 Phase 1（两点式：邀约前知会 + 邀约后通报）
 -- 见 docs/design/recruiting/recruiting-interview-notify-design.md。
 -- bs_recruiting_notify_settings：租户通知配置（webhook_url 为 Fernet 密文，
@@ -540,7 +541,9 @@ CREATE INDEX IF NOT EXISTS idx_customer_referrals_referrer ON customer_referrals
 -- at_mobiles 为事后通报 @人 手机号 JSON 数组；pre_notify_enabled 事前知会开关。
 -- bs_recruiting_notify_logs：通知留痕（kind=pre|done / candidates JSONB /
 -- content 全文 / status=sent|failed / error），failed 可走手动补推 API 重发。
--- ============================================================================
+-- 
+
+=====================================================================
 CREATE TABLE IF NOT EXISTS bs_recruiting_notify_settings (
     tenant_id TEXT PRIMARY KEY,
     enabled BOOLEAN NOT NULL DEFAULT FALSE,          -- 总开关（未配置不发，避免空跑）
@@ -561,3 +564,65 @@ CREATE TABLE IF NOT EXISTS bs_recruiting_notify_logs (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_bs_rnl_tenant ON bs_recruiting_notify_logs(tenant_id, created_at);
+=======
+-- 2026-08-20 阿里云百炼平台 deepseek-v4-flash-0731 是正式版，增加价格信息
+-- ============================================================================
+INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m)
+VALUES ('deepseek-v4-flash', 3.0, 9.0, 0.1)
+ON CONFLICT (model_name) DO UPDATE SET
+  input_price_per_m = EXCLUDED.input_price_per_m,
+  output_price_per_m = EXCLUDED.output_price_per_m,
+  cached_input_price_per_m = EXCLUDED.cached_input_price_per_m;
+INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m)
+VALUES ('deepseek-v4-flash-0731', 3.0, 9.0, 0.1)
+ON CONFLICT (model_name) DO UPDATE SET
+  input_price_per_m = EXCLUDED.input_price_per_m,
+  output_price_per_m = EXCLUDED.output_price_per_m,
+  cached_input_price_per_m = EXCLUDED.cached_input_price_per_m;
+
+-- ============================================================================
+-- 2026-08-21 客户留资线索表（pre-sales 售前咨询留资，lead_capture 能力级中性命名）
+-- 手机号加密落库（src/db/encryption.py）；与 src/saas/db/tables.py init_saas_tables()
+-- 和 deploy/init-postgres.sql 2026-08-21 条目保持一致。现有环境重启后 init_saas_tables()
+-- 自动建表，此条目作为全新环境/手工升级的登记。
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS bs_lead_capture_leads (
+    id SERIAL PRIMARY KEY,
+    lead_id TEXT UNIQUE NOT NULL,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT,
+    customer_user_id TEXT,
+    channel_chat_id TEXT,
+    kf_account_name TEXT,
+    contact_method TEXT,
+    phone TEXT,
+    contact_name TEXT,
+    demand_summary TEXT,
+    source TEXT DEFAULT 'lead_capture',
+    stage TEXT DEFAULT 'new',
+    assigned_to TEXT,
+    assignee_name TEXT,
+    transferred_to TEXT,
+    session_id TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_lc_leads_tenant ON bs_lead_capture_leads(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_lc_leads_created ON bs_lead_capture_leads(created_at);
+CREATE INDEX IF NOT EXISTS idx_lc_leads_assigned ON bs_lead_capture_leads(assigned_to);
+CREATE INDEX IF NOT EXISTS idx_lc_leads_customer ON bs_lead_capture_leads(customer_user_id);
+-- ============================================================================
+-- 2026-08-23 租户间知识库共享授权表（tenant_knowledge_shares，租户级授权 A->B）
+-- 与 deploy/init-postgres.sql 2026-08-23 条目保持一致。租户级整体授权，
+-- 不涉及具体分类；具体共享哪些分类由 subagent_knowledge_sources.sources
+-- 的 owner_tenant_id 决定（第二步数字员工知识库关联）。
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS tenant_knowledge_shares (
+    id SERIAL PRIMARY KEY,
+    from_tenant_id TEXT NOT NULL,     -- 知识库提供租户（A）
+    to_tenant_id TEXT NOT NULL,       -- 知识库接收租户（B）
+    created_by TEXT,                  -- 创建人（平台管理员 user_id）
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (from_tenant_id, to_tenant_id)
+);
+CREATE INDEX IF NOT EXISTS idx_knowledge_shares_to ON tenant_knowledge_shares(to_tenant_id);

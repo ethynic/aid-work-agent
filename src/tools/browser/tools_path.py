@@ -170,6 +170,8 @@ def get_path_tracker(session_id: str) -> PathTracker:
 class BrowserGetPathTool(BaseTool):
     """获取操作路径历史工具"""
 
+    # 旧版浏览器工具，保留兼容：不进自动目录（agent 只注册统一入口 browser_automation）
+    catalog = False
     name = "browser_get_path"
     description = """获取当前的浏览器操作路径历史。
 
@@ -223,6 +225,8 @@ class BrowserGetPathTool(BaseTool):
 class BrowserBacktrackTool(BaseTool):
     """回溯操作工具"""
 
+    # 旧版浏览器工具，保留兼容：不进自动目录（agent 只注册统一入口 browser_automation）
+    catalog = False
     name = "browser_backtrack"
     description = """回溯到之前的页面状态。
 

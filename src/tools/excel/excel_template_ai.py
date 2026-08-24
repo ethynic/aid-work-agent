@@ -284,6 +284,19 @@ def analyze_structure(
     has_single = (structure.detail_first_row > 0
                   and structure.detail_last_row >= structure.detail_first_row)
     if not structure.groups and not has_single:
+        # 兜底：LLM 偶发漏填单明细区行号（deepseek-v4-flash 在 groups 为空时不返回
+        # detail_first_row/detail_last_row），从网格启发式推断，避免简单模板误判失败。
+        if structure.columns:
+            first, last = _infer_detail_region(grid, structure.columns)
+            if first > 0 and last >= first:
+                structure.detail_first_row = first
+                structure.detail_last_row = last
+                structure.detail_template_row = structure.detail_template_row or first
+                logger.warning(
+                    f"[excel_template_ai] LLM 未返回明细行区，已按网格启发式推断 R{first}-R{last}"
+                )
+                has_single = True
+    if not structure.groups and not has_single:
         raise ValueError(
             "结构分析未能识别明细行区（需 groups 或 detail_first_row/detail_last_row）"
         )
@@ -330,7 +343,7 @@ def _build_analyze_prompt(grid_text: str, data_keys: Dict[str, List[str]], data:
    先判定小计是「行式」还是「列式」，二者处理方式完全不同：
    - **行式小计**：每组明细**下方有独立一行**"XX小计"（如"房餐车小计""门票小计"）。每个小计行对应一个分组：detail_first_row/detail_last_row 是该小计行**上方**紧邻的明细示例数据首末行，subtotal_row/subtotal_col 是小计行及其合计值所在列，match 用"明细行可用的键"指明哪些值归该组（常用 category）。detail_template_row 取该组明细首行。
    - **⚠️ 列式小计**：小计与明细**同行**——某列跨行竖向合并显示，如"商品类别总计/分类小计"列每组仅首行有值、下方合并居中。**此类列严禁设 subtotal_row/subtotal_col**，必须作为普通 columns 绑定列（bind=对应键名，如"商品类别总计"），组内非首行该键留空（竖向合并会自动居中显示）。误把列式小计设成 subtotal_row，会在明细行数变化时让小计落到相邻分组的残留行，触发"样例残留"报错。
-   **无分区小计的简单版式，groups 填空数组，改填 detail_first_row/detail_last_row。**
+   **无分区小计的简单版式：groups 填空数组，同时必须填 detail_first_row / detail_last_row（样例明细示例数据的首末行行号，如 12/14）。即使 groups 为空数组，detail_first_row 和 detail_last_row 也绝不能缺失或为 0，否则结构分析判定失败！**
 3. **meta_fields 的 (row,col) 是"标题单元格"（标题文字所在格），不是值格**。这类是左右结构：标题在左格、值要填到它**右侧相邻格**。渲染器会自动把值写到 col+1，所以你只需标注标题格。例如"日期："在 C2（col=3）、值要填到 D2，则 meta_fields 写 {{row:2,col:3,bind:"date"}}（col=3 是标题格 C2，渲染器自动写到 D2）。**千万不要把 col 写成值格或写进标题格的 bind——否则值会覆盖标题。** 若某字段值不在标题紧邻右侧（如隔一列、或在合并区右端），加 value_col 显式指定值格列。
 4. **totals**：合计行 + 人均/标量单元格。bind 用上面"合计可用的键"（grand_total 或 per_capita 的键名，如"成人人均"）。
 5. **bind 优先用上面给出的键**；键里没有的不要编造。
@@ -401,6 +414,101 @@ def _coerce_structure(parsed: Dict[str, Any], grid: Dict[str, Any]) -> SheetStru
         detail_template_row=tmpl if tmpl > 0 else first,
         totals=totals,
     )
+
+
+_TOTAL_HINTS = ("合计", "总计", "小计", "共计", "汇总")
+
+
+def _row_is_total_or_styled(cells: List[Dict[str, Any]], col_set: set) -> bool:
+    """判断一行是否应为非明细行（明细区数据行扫描的停止条件）。
+
+    非明细行（合计/小计/段标题）的特征按可靠性排序：
+    1. 命中列文本含"合计/总计/小计"等关键字（无样式合计行的兜底识别）；
+    2. 命中列 ≤ 1（只有一列有值，如合计行仅金额列有值）；
+    3. 带样式且命中列稀疏（不足 columns 的一半）——样式行但数据稀疏，疑似合计/段标题。
+
+    注意：全列有值的明细数据行即使带样式（斑马纹填充、金额列加粗）也判为明细，
+    否则"第 2 行起斑马纹"等常见版式会把明细区截断成 1 行，样例残留静默留在输出
+    （_verify_render 只校验推断出的明细区，拦不住区外的样例残留）。
+    """
+    hit = styled = 0
+    text_parts = []
+    for c in cells:
+        if c["col"] in col_set:
+            hit += 1
+            if c["bold"] or c["fill"]:
+                styled += 1
+            text_parts.append(str(c["value"]))
+    compact = "".join(text_parts).replace(" ", "").replace("　", "")
+    if any(kw in compact for kw in _TOTAL_HINTS):
+        return True
+    if hit <= 1:
+        return True
+    if styled and hit * 2 < len(col_set):
+        return True
+    return False
+
+
+def _infer_detail_region(grid: Dict[str, Any], columns: List[ColumnBinding]) -> Tuple[int, int]:
+    """LLM 漏填单明细区行号时的网格启发式兜底。
+
+    背景：deepseek-v4-flash 等模型偶发在 groups 为空数组时不返回
+    detail_first_row/detail_last_row，直接判失败会伤及本来简单的模板。
+    此函数从网格推断：(first_row, last_row)；无法可靠推断时返回 (0,0) 由调用方判失败。
+
+    推断思路（适用于无分区小计的简单版式）：
+    1. 表头行 = columns 列命中数最大的行中最靠上的一个（meta 区通常每行只命中
+       1-2 列，不会进入候选集）。样式化表格中表头若完全无样式则低置信 fail-loud，
+       避免把带样式的明细行误选为表头。
+    2. 明细区 = 表头行下方连续"任一 columns 列有值且非合计/段标题"的行
+       —— 合计/段标题行按关键字或稀疏命中排除；全列有值的明细行即使带样式
+       （斑马纹/金额加粗）也保留。
+    """
+    col_set = {c.col for c in columns}
+    if len(col_set) < 2:
+        return 0, 0
+    cells_by_row: Dict[int, List[Dict[str, Any]]] = {}
+    for c in grid["cells"]:
+        cells_by_row.setdefault(c["row"], []).append(c)
+
+    # 表头 = 命中数最大的一行中最靠上的一个：表头是明细区上方第一块全列命中的行，
+    # meta 区（左右结构"标签：值"）通常每行只 1-2 列命中，不会进入候选集。
+    # 用"位置"而非"样式最多"选表头——否则表头无样式、明细带样式（斑马纹/加粗）时，
+    # 样式多的明细行会抢走表头位，明细区整体错位、样例残留静默留在输出。
+    best_hits, best_row = -1, 0
+    for r, cells in cells_by_row.items():
+        row_cols = {c["col"] for c in cells}
+        hits = len(col_set & row_cols)
+        if hits > best_hits:
+            best_hits, best_row = hits, r
+    header_row = best_row
+    if best_hits < 2 or header_row <= 0:
+        return 0, 0
+
+    # 表头加固：样式化表格（任何命中列带样式）中，选出的表头行若完全无样式，
+    # 说明"表头无样式 + 明细带样式"——此情形置信度不足，返回 (0,0) 由调用方 fail-loud，
+    # 避免把明细第一行当表头导致样例残留静默留在输出。
+    header_styled = any(c["bold"] or c["fill"] for c in cells_by_row[header_row] if c["col"] in col_set)
+    if not header_styled and any(
+        c["bold"] or c["fill"]
+        for cells in cells_by_row.values()
+        for c in cells
+        if c["col"] in col_set
+    ):
+        return 0, 0
+
+    first = last = 0
+    for r in sorted(k for k in cells_by_row if k > header_row):
+        cells = cells_by_row[r]
+        row_cols = {c["col"] for c in cells}
+        if not (col_set & row_cols):
+            break
+        if _row_is_total_or_styled(cells, col_set):
+            break
+        if first == 0:
+            first = r
+        last = r
+    return first, last
 
 
 # ============================================================
@@ -1076,12 +1184,24 @@ def _serialize_structure(s: SheetStructure) -> Dict[str, Any]:
 # ============================================================
 
 
-def _default_llm(prompt: str, *, disable_thinking: bool = True) -> str:
+def _default_llm(
+    prompt: str,
+    *,
+    disable_thinking: bool = True,
+    return_usage: bool = False,
+):
     """默认 LLM 调用（deepseek-v4-pro 等思考模型）。
 
     结构分析**默认关闭思考**：与 travel-quote/attraction.py 一致——思考模型的思考 token
     也计入 max_tokens，开启时小 max_tokens 会截断输出 JSON；关闭后输出确定、不截断、几秒返回。
     复杂模板若分析不准，可传 disable_thinking=False 开启思考（届时需更大 max_tokens 与超时）。
+
+    return_usage=True 时返回 ``(content, usage_dict)`` 而非仅 content（Excel ETL M3
+    抽取层需要 usage 做计量上报）；默认 False 完全向后兼容。usage_dict 键与
+    OpenAI 兼容接口一致：prompt_tokens / completion_tokens / total_tokens（缺失键补 0），
+    并附加归一键：cached_tokens（prompt_tokens_details.cached_tokens /
+    prompt_cache_hit_tokens 两种形态统一，缓存计费扣减用）与 model（实际调用
+    模型名，计量落库取单价用——provider 可能是 qwen/zhipu，不能假设 deepseek）。
     """
     from src.config.settings import settings
     provider = settings.llm.provider
@@ -1089,25 +1209,36 @@ def _default_llm(prompt: str, *, disable_thinking: bool = True) -> str:
     max_tokens = 4096
 
     if provider == "qwen":
-        import dashscope
+        import httpx
         keys = settings.llm.qwen.get_effective_keys()
         if not keys:
             raise ValueError("QWEN API key 未配置")
-        dashscope.api_key = keys[0]
-        model = getattr(settings.llm.qwen, "model", None) or "qwen-plus"
-        kwargs = dict(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            result_format="message",
-            temperature=0.0,
-            max_tokens=max_tokens,
-        )
+        model = getattr(settings.llm.qwen, "model", None) or "qwen3.7-flash"
+        base_url = getattr(settings.llm.qwen, "base_url", None) or "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        api_url = f"{base_url.rstrip('/')}/chat/completions"
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.0,
+            "max_tokens": max_tokens,
+        }
+        # qwen3.x 系列走 OpenAI 兼容接口（原生 Generation 端点不适用），思考开关用 enable_thinking
         if disable_thinking:
-            kwargs["extra_body"] = {"enable_thinking": False}
-        resp = dashscope.Generation.call(**kwargs)
-        if resp.status_code != 200:
-            raise RuntimeError(f"LLM 调用失败: {resp.message}")
-        return resp.output.choices[0].message.content
+            payload["enable_thinking"] = False
+        resp = httpx.post(
+            api_url,
+            headers={"Authorization": f"Bearer {keys[0]}", "Content-Type": "application/json"},
+            json=payload,
+            timeout=120.0,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        content = data["choices"][0]["message"]["content"]
+        if return_usage:
+            usage = _normalize_usage(data.get("usage"))
+            usage["model"] = model
+            return content, usage
+        return content
 
     if provider in ("zhipu", "deepseek"):
         import httpx
@@ -1137,6 +1268,35 @@ def _default_llm(prompt: str, *, disable_thinking: bool = True) -> str:
             timeout=120.0,
         )
         resp.raise_for_status()
-        return resp.json()["choices"][0]["message"]["content"]
+        data = resp.json()
+        content = data["choices"][0]["message"]["content"]
+        if return_usage:
+            usage = _normalize_usage(data.get("usage"))
+            usage["model"] = model
+            return content, usage
+        return content
 
     raise ValueError(f"不支持的 LLM 提供商: {provider}")
+
+
+def _normalize_usage(raw_usage) -> Dict[str, Any]:
+    """OpenAI 兼容接口的 usage dict 容错归一（计量落库用）
+
+    保证三个基础键存在且为 int；缓存命中 token 统一归一到 ``cached_tokens``
+    （兼容 qwen/OpenAI 的 ``prompt_tokens_details.cached_tokens`` 与 deepseek 的
+    ``prompt_cache_hit_tokens`` 两种形态，计量按缓存单价扣减）。
+    """
+    usage = dict(raw_usage) if isinstance(raw_usage, dict) else {}
+    prompt_tokens = int(usage.get("prompt_tokens", 0) or 0)
+    completion_tokens = int(usage.get("completion_tokens", 0) or 0)
+    cached = usage.get("cached_tokens")
+    if not cached:
+        details = usage.get("prompt_tokens_details")
+        cached = details.get("cached_tokens") if isinstance(details, dict) else None
+    if not cached:
+        cached = usage.get("prompt_cache_hit_tokens")
+    usage["cached_tokens"] = int(cached or 0)
+    usage["prompt_tokens"] = prompt_tokens
+    usage["completion_tokens"] = completion_tokens
+    usage["total_tokens"] = int(usage.get("total_tokens", 0) or 0) or (prompt_tokens + completion_tokens)
+    return usage

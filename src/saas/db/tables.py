@@ -160,6 +160,48 @@ def init_saas_tables(conn):
         ON tenant_recharges(created_at DESC)
         """)
 
+        # 10. 客户留资线索表（售前咨询 lead_capture 能力，跨智能体中性命名）
+        # 设计文档：docs/subagent/pre-sales/lead-capture-design.md（规范例外：bs_[subagent]_[tablename] → 能力级命名）
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS bs_lead_capture_leads (
+            id SERIAL PRIMARY KEY,
+            lead_id TEXT UNIQUE NOT NULL,
+            tenant_id TEXT NOT NULL,
+            user_id TEXT,
+            customer_user_id TEXT,
+            channel_chat_id TEXT,
+            kf_account_name TEXT,
+            contact_method TEXT,
+            phone TEXT,
+            contact_name TEXT,
+            demand_summary TEXT,
+            source TEXT DEFAULT 'lead_capture',
+            stage TEXT DEFAULT 'new',
+            assigned_to TEXT,
+            assignee_name TEXT,
+            transferred_to TEXT,
+            session_id TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """)
+        cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_lc_leads_tenant
+        ON bs_lead_capture_leads(tenant_id)
+        """)
+        cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_lc_leads_created
+        ON bs_lead_capture_leads(created_at)
+        """)
+        cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_lc_leads_assigned
+        ON bs_lead_capture_leads(assigned_to)
+        """)
+        cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_lc_leads_customer
+        ON bs_lead_capture_leads(customer_user_id)
+        """)
+
         conn.commit()
         logger.info("PostgreSQL SaaS multi-tenant tables initialized")
     except Exception as e:

@@ -321,6 +321,13 @@ async def update_definition(request: Request, agent_id: str, body: UpdateDefinit
         )
         if not result:
             return _error(f"智能体 {agent_id} 不存在或更新失败")
+
+        # 刷新 master_agent 的 subagent_registry 内存配置，使 LLM/工具/技能等变更即时生效（无需重启容器）
+        from src.core.agent import get_master_agent
+        registry = get_master_agent().subagent_registry
+        if registry:
+            registry.load_from_db()
+
         return _success({"agent_id": agent_id})
     except HTTPException:
         raise

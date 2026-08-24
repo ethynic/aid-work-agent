@@ -109,4 +109,34 @@ describe('SSEManager 错误处理', () => {
     expect(capturedError.code).toBeUndefined()
     expect(capturedError.message).toContain('500')
   })
+
+  it('工具事件应透传 displayName 与 toolCallId', async () => {
+    const payload = [
+      'data: {"type":"tool_start","toolName":"future_tool","toolArgs":{},"displayName":"未来工具","toolCallId":"call-1","timestamp":1}',
+      'data: {"type":"tool_result","toolName":"future_tool","result":{"success":true},"success":true,"displayName":"未来工具","toolCallId":"call-1","timestamp":2}',
+      '',
+    ].join('\n\n')
+    const reader = {
+      read: vi.fn()
+        .mockResolvedValueOnce({ done: false, value: new TextEncoder().encode(payload) })
+        .mockResolvedValueOnce({ done: true, value: undefined }),
+    }
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      body: { getReader: () => reader },
+    } as any)
+    const onToolStart = vi.fn()
+    const onToolResult = vi.fn()
+
+    await new SSEManager().connect(
+      '测试消息', 'session_test', undefined, {},
+      () => {}, () => {}, () => {}, () => {},
+      onToolStart, onToolResult,
+    )
+
+    expect(onToolStart).toHaveBeenCalledWith('future_tool', {}, '未来工具', 'call-1')
+    expect(onToolResult).toHaveBeenCalledWith(
+      'future_tool', { success: true }, true, '未来工具', 'call-1',
+    )
+  })
 })

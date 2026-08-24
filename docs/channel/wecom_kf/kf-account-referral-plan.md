@@ -159,7 +159,7 @@ CREATE INDEX IF NOT EXISTS idx_customer_referrals_referrer ON customer_referrals
 
 #### 3.2.3 账号级积分消耗归集（`credit_limit` 依据，无需新表/新字段）
 
-wecom_kf 渠道的智能体回复已按 `SessionRecordManager.start_record(source_type="wecom_kf")` 计费，落 `chat_records`（含 `credit_cost`）；`channel_sessions.channel_chat_id` 存 `open_kfid`。因此按客服账号累计积分消耗可直接 SQL 归集：
+wecom_kf 渠道的智能体回复已按 `SessionRecordManager.start_record(source_type="wecom_kf")` 计费，落 `chat_records`（含 `credit_cost`）；`channel_sessions.channel_chat_id` 存 `open_kfid`。**会话唯一性已纳入 `channel_chat_id`**：同一微信用户从不同客服账号进入会各自独立会话（独立 session_id、独立上下文与积分归属），因此按客服账号累计积分消耗可直接 SQL 归集：
 
 ```sql
 SELECT COALESCE(SUM(cr.credit_cost), 0)

@@ -32,6 +32,8 @@ class BrowserFindAllInput(BaseModel):
 class BrowserFindTool(BaseTool):
     """根据语义描述查找元素工具"""
 
+    # 旧版浏览器工具，保留兼容：不进自动目录（agent 只注册统一入口 browser_automation）
+    catalog = False
     name = "browser_find"
     description = """根据语义描述查找页面元素。通过自然语言描述目标特征，自动在页面中寻找匹配元素。
 
@@ -195,6 +197,8 @@ class BrowserFindTool(BaseTool):
 class BrowserFindAllTool(BaseTool):
     """查找所有匹配元素工具"""
 
+    # 旧版浏览器工具，保留兼容：不进自动目录（agent 只注册统一入口 browser_automation）
+    catalog = False
     name = "browser_find_all"
     description = """查找所有匹配语义描述的元素。
 

@@ -164,6 +164,9 @@ _MODEL_CONTEXT_LIMITS: Dict[str, int] = {
     # 且长上下文性能在 150K 以下更稳定，保守打折避免阈值偏晚）
     "deepseek-v4-pro": 512_000,
     "deepseek-v4-flash": 512_000,
+    # Qwen3.7-flash（百炼 qwen provider，QWEN_MODEL_CODE 默认值）。官方分段计价
+    # 三档到 1M（32K/256K/1M），按 5 折保守取值与 deepseek 对齐（生产实测 prompt 244K 无异常）
+    "qwen3.7-flash": 512_000,
 }
 
 # 未知模型回退到的保守值（与现役主力模型对齐）
@@ -182,7 +185,7 @@ _PROVIDER_DEFAULTS = {
     "qwen": {
         "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
         "api_key_env": "QWEN_API_KEYS",
-        "default_model": "qwen-plus",
+        "default_model": "qwen3.7-flash",
     },
     "zhipu": {
         "base_url": "https://open.bigmodel.cn/api/paas/v4",

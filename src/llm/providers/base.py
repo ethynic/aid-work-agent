@@ -155,17 +155,30 @@ class BaseLLMProvider(ABC):
             else:
                 formatted.append({"role": role, "content": str(content)})
 
-        # 显式缓存：标记从「首条 system」改为「最后一条消息」。
+        # 显式缓存：标记从「首条 system」改为「最后一条可标记的文本消息」。
         # 末尾标记创建的缓存块覆盖整个消息数组，agent 循环下一轮前序块完整命中（10%），
         # 仅新增尾部按创建（125%）计费。仅 qwen 系文本模型生效（_is_qwen_model）。
+        # ⚠️ 关键约束：缓存标记只能加在「纯文本 content」的 user/assistant 消息上。
+        # tool 消息的 content 必须是纯字符串（OpenAI 兼容规范），若改写成 content 数组，
+        # qwen3-flash 会把 tool_result 序列化回显为文本（2026-08-19 线上事故）；
+        # assistant(tool_calls) 的 content 为空字符串，标记无意义。因此从后往前找第一条
+        # role 非 tool、无 tool_calls、content 非空的文本消息标记；找不到则不标记，
+        # 保正确性优于缓存收益。
         if use_cache and self._is_qwen_model() and formatted:
-            last = formatted[-1]
-            if isinstance(last["content"], str):
-                last["content"] = [{"type": "text", "text": last["content"],
-                                    "cache_control": {"type": "ephemeral"}}]
-            elif isinstance(last["content"], list) and last["content"]:
-                last["content"][-1] = {**last["content"][-1],
-                                       "cache_control": {"type": "ephemeral"}}
+            for _i in range(len(formatted) - 1, -1, -1):
+                _cand = formatted[_i]
+                if _cand.get("role") == "tool" or _cand.get("tool_calls"):
+                    continue
+                _cand_content = _cand.get("content")
+                if isinstance(_cand_content, str):
+                    if _cand_content.strip():
+                        _cand["content"] = [{"type": "text", "text": _cand_content,
+                                             "cache_control": {"type": "ephemeral"}}]
+                        break
+                elif isinstance(_cand_content, list) and _cand_content:
+                    _cand["content"][-1] = {**_cand["content"][-1],
+                                            "cache_control": {"type": "ephemeral"}}
+                    break
         return formatted
     
     def _format_tools(

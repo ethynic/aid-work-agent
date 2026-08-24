@@ -1033,6 +1033,54 @@ class TestToChart:
         assert result["theme_name"] == "财经风"
         assert os.path.exists(result["file_path"])
 
+    # ---------- 图例防重叠 ----------
+
+    def test_legend_outside_plot_area(self):
+        """图例锚定在绘图区外上方：无论系列数多少，包围盒都与坐标区零重叠"""
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from matplotlib.patches import Patch
+
+        from src.tools.data_analysis.data_analyzer import CHART_THEMES, DEFAULT_CHART_THEME
+
+        t = CHART_THEMES[DEFAULT_CHART_THEME]
+        for n_series in (1, 4, 10):
+            fig, ax = plt.subplots(figsize=(12, 6))
+            try:
+                handles = [Patch(facecolor="C0", label=f"系列{i}") for i in range(n_series)]
+                leg = DataAnalyzer._style_legend(ax, t, handles=handles)
+                fig.canvas.draw()
+                leg_bb = leg.get_window_extent()
+                ax_bb = ax.get_window_extent()
+                assert not leg_bb.overlaps(ax_bb), f"{n_series} 系列：图例与绘图区重叠"
+                # 图例整体位于绘图区上方，而非左侧/右侧/内部
+                assert leg_bb.y0 >= ax_bb.y1, f"{n_series} 系列：图例底边低于绘图区顶边"
+            finally:
+                plt.close(fig)
+
+    def test_legend_multi_row_shifts_title(self):
+        """多系列多行图例向上生长顶到主标题时，标题被上移让位，两者不重叠"""
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from matplotlib.patches import Patch
+
+        from src.tools.data_analysis.data_analyzer import CHART_THEMES, DEFAULT_CHART_THEME
+
+        t = CHART_THEMES[DEFAULT_CHART_THEME]
+        fig, ax = plt.subplots(figsize=(12, 6))
+        try:
+            handles = [Patch(facecolor="C0", label=f"超长系列名称第{i}项") for i in range(10)]
+            leg = DataAnalyzer._style_legend(ax, t, handles=handles)
+            title_artist = ax.text(0, 1.13, "这是一个非常长的主标题用于测试避让",
+                                   transform=ax.transAxes, fontsize=15, fontweight="bold")
+            DataAnalyzer._avoid_title_legend_overlap(fig, ax, leg, title_artist)
+            fig.canvas.draw()
+            assert not leg.get_window_extent().overlaps(title_artist.get_window_extent())
+        finally:
+            plt.close(fig)
+
 
 # ==================== _eval_expression 安全性 ====================
 

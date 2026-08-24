@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
-from llm_client import call_llm
+from llm_client import call_llm, _debug_log
 
 
 @dataclass
@@ -30,16 +30,22 @@ class UniqueAttraction:
 
 
 def _llm_kwargs(task: str, max_tokens: int, timeout: float = 20.0) -> Dict[str, Any]:
-    """景点解析使用 DeepSeek V4 Pro 关闭推理，其他 provider 保持兼容。"""
+    """deepseek 关闭推理，其他 provider 保持兼容。"""
     kwargs: Dict[str, Any] = {
         "timeout": timeout,
         "max_tokens": max_tokens,
         "task": task,
     }
     try:
-        from src.config.settings import settings
-        if settings.llm.provider == "deepseek":
+        # 用生效 provider（含子智能体 SKILL_LLM_PROVIDER 覆盖）判断，避免全局
+        # 非 deepseek 而实际走 deepseek 时未关闭推理、推理模型返回空白 content
+        from llm_client import get_effective_provider
+        ep = get_effective_provider()
+        if ep == "deepseek":
             kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+            _debug_log(f"[attraction._llm_kwargs] task={task} effective_provider={ep} -> thinking DISABLED")
+        else:
+            _debug_log(f"[attraction._llm_kwargs] task={task} effective_provider={ep} -> thinking not touched")
     except Exception:
         pass
     return kwargs

@@ -10,6 +10,7 @@ import logging
 from loguru import logger
 
 from src.db.database import DB_CONFIG, get_db_connection, get_pooled_connection, return_pooled_connection
+from src.knowledge.retriever.tenant_range import build_tenant_range_conditions
 import psycopg2.extras
 
 logger = logging.getLogger(__name__)
@@ -27,7 +28,8 @@ class VectorDatabase:
         query_embedding: List[float],
         top_k: int = 10,
         tenant_id: Optional[str] = None,
-        source_type: Optional[str] = None
+        source_type: Optional[str] = None,
+        shared_ranges: Optional[List[Tuple[str, str]]] = None
     ) -> List[Tuple[int, float]]:
         """
         向量相似度搜索
@@ -35,6 +37,7 @@ class VectorDatabase:
         Args:
             tenant_id: 租户ID，提供时只搜索该租户的文档
             source_type: 文档来源类型，提供时只搜索该类型的文档
+            shared_ranges: 已启用共享分类的精确 (from_tenant_id, source_type) 对
 
         Returns:
             List[(chunk_id, similarity)]
@@ -152,7 +155,8 @@ class VectorDBPostgreSQL(VectorDatabase):
         query_embedding: List[float],
         top_k: int = 10,
         tenant_id: Optional[str] = None,
-        source_type: Optional[str] = None
+        source_type: Optional[str] = None,
+        shared_ranges: Optional[List[Tuple[str, str]]] = None
     ) -> List[Tuple[int, float]]:
         """向量相似度搜索（使用余弦相似度）"""
         conn = self._get_connection()
@@ -162,25 +166,24 @@ class VectorDBPostgreSQL(VectorDatabase):
             # 将查询向量转换为 vector 类型字符串
             vector_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
 
-            source_type_condition = " AND d.source_type = %s" if source_type else ""
-
             if tenant_id:
-                # 指定租户：只查该租户的文档
-                params = [vector_str, tenant_id]
-                if source_type:
-                    params.append(source_type)
-                params.append(top_k)
+                # 指定租户：本租户 + 已启用共享范围
+                range_sql, range_params = build_tenant_range_conditions(
+                    tenant_id, source_type, shared_ranges,
+                )
+                params = [vector_str] + range_params + [top_k]
                 cursor.execute(f"""
                     SELECT cv.chunk_id, cv.embedding <=> %s::vector as distance
                     FROM chunks_vec cv
                     JOIN chunks c ON cv.chunk_id = c.id
                     JOIN documents d ON c.doc_id = d.id
-                    WHERE d.tenant_id = %s{source_type_condition}
+                    WHERE {range_sql}
                     ORDER BY distance
                     LIMIT %s
                 """, params)
             else:
                 # 未指定租户：只查 demo 或无租户的数据，绝不泄露其他租户数据
+                source_type_condition = " AND d.source_type = %s" if source_type else ""
                 params = [vector_str]
                 if source_type:
                     params.append(source_type)

@@ -22,10 +22,12 @@ export const TenantStatusMap = {
 /** 用户来源 */
 export enum UserSource {
   WECOM_KF = 'wecom_kf',
+  WECOM_PERSONAL_RPA = 'wecom_personal_rpa',
 }
 
 export const UserSourceMap = {
-  [UserSource.WECOM_KF]: { label: '企业微信客服', color: 'blue' },
+  [UserSource.WECOM_KF]: { label: '企微客服', color: 'blue' },
+  [UserSource.WECOM_PERSONAL_RPA]: { label: '企微RPA', color: 'green' },
 } as const;
 
 /**

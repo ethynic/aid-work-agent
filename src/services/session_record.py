@@ -9,6 +9,7 @@
 
 import time
 import json
+import os
 import contextvars
 from typing import Optional, List, Dict, Any, Callable, Coroutine, Any as AnyType
 from dataclasses import dataclass, field, asdict
@@ -156,6 +157,11 @@ class SessionRecordService:
         # save() 直接返回 None，避免写入空 chat_record 噪声
         self.skip_save: bool = False
 
+        # 合并语义标记：merged_follower（被合并方）/ merged_owner（合并方）。
+        # 由 set_trace_merge_semantics 设置，save() 写入 usage_breakdown["merge"]，
+        # 供审计识别「token=0 仅含 ASR 计费」的合并跟随记录是正常现象而非计费丢失。
+        self.merge_semantics: Optional[Dict[str, str]] = None
+
     def create_progress_callback(self):
         """创建用于传递给Agent的progress_callback"""
         async def progress_callback(event: Dict[str, Any]):
@@ -287,7 +293,16 @@ class SessionRecordService:
         self.error_message = error_message
 
     def set_trace_merge_semantics(self, *, termination_reason=None, merge_role=None):
-        """同步更新内存和已落库 Trace metadata，不伪造 message_id。"""
+        """记录合并语义到内存（save() 写入 usage_breakdown）与 Trace metadata，不伪造 message_id。"""
+        metadata = {}
+        if termination_reason:
+            metadata["termination_reason"] = termination_reason
+        if merge_role:
+            metadata["merge_role"] = merge_role
+        # 内存标记不依赖 trace_collector：merged_follower 未走 agent 处理，
+        # trace_collector 恒为 None，此前直接 return 导致合并语义从未落库
+        self.merge_semantics = metadata if metadata else None
+
         collector = self.trace_collector
         if collector is None:
             return
@@ -296,11 +311,6 @@ class SessionRecordService:
         )
         try:
             from src.core.trace_persist import update_trace_metadata
-            metadata = {}
-            if termination_reason:
-                metadata["termination_reason"] = termination_reason
-            if merge_role:
-                metadata["merge_role"] = merge_role
             update_trace_metadata(collector.trace_id, metadata)
         except Exception as e:
             logger.debug(f"set_trace_merge_semantics persist failed: {e}")
@@ -424,6 +434,11 @@ class SessionRecordService:
                         "unit_price_per_call": asr_bd.get("unit_price_per_call"),
                         "usage_factor": asr_bd.get("usage_factor"),
                     })
+
+            # 合并语义标记（语音合并等场景）：merged_follower 记录 token 天然为 0，
+            # 仅含 ASR 等非 LLM 计费，标记便于审计/对账识别，避免误判为计费丢失
+            if self.merge_semantics:
+                usage_breakdown["merge"] = self.merge_semantics
 
             record = ChatRecordDB.create(
                 session_id=self.session_id,
@@ -698,6 +713,164 @@ def _persist_background_llm_record(
         logger.opt(exception=True).error(f"background_llm 计费落库失败: {e}")
 
 
+def record_skill_llm_usage(
+    usage: Optional[Dict[str, Any]],
+    *,
+    tenant_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+    stage: Optional[str] = None,
+    model: Optional[str] = None,
+    source: str = "skill_llm",
+) -> None:
+    """skill 子进程内 LLM 调用的 usage 独立落库（Excel ETL M3 等计量，显式参数版）
+
+    skill 以子进程运行（skill_executor._execute_command），无 SessionRecordService，
+    技能脚本（如 excel-to-template pipeline.py）直接调用本函数把 LLM usage 写入
+    chat_records 并按 calculate_credit_cost 扣积分，确保公用云按任务对账。
+
+    与 record_background_llm_usage 的区别：后者优先累加到当前 SessionRecordService，
+    本函数为子进程显式参数版——参数缺省时回退读环境变量 AID_TENANT_ID /
+    AID_SESSION_ID / AID_USER_ID（由 skill_executor 从 ToolExecutionContext 注入）。
+
+    Args:
+        usage: LLM 调用返回的 token 用量 dict；空/None 直接返回
+        tenant_id/session_id/user_id: 计费归属；缺省回退 AID_* 环境变量，
+            user_id 仍为空时用 "unknown" 占位（chat_records.user_id 生产库 NOT NULL）
+        stage: 计量阶段（excel_etl 的 extract/repair/schema），拼进 user_message
+        model: 实际调用模型名（必须传准，否则单价算错）；未传时回退
+            usage["model"]（excel_template_ai._default_llm return_usage 已附带），
+            仍缺省兜底 deepseek-chat
+        source: 计费来源标识（默认 "skill_llm"），用于 session_id 拼接与追溯
+
+    异常只记 warning 不抛（对齐 _persist_background_llm_record 容错风格，
+    计量失败不能影响技能主流程）。
+    """
+    if not usage:
+        return
+    if tenant_id is None:
+        tenant_id = os.environ.get("AID_TENANT_ID") or None
+    if session_id is None:
+        session_id = os.environ.get("AID_SESSION_ID") or None
+    if user_id is None:
+        user_id = os.environ.get("AID_USER_ID") or None
+    try:
+        _persist_skill_llm_record(
+            dict(usage),
+            tenant_id=tenant_id,
+            session_id=session_id,
+            user_id=user_id,
+            stage=stage,
+            model=model,
+            source=source,
+        )
+    except Exception as e:
+        logger.opt(exception=True).warning(f"skill_llm 计量落库失败(忽略): {e}")
+
+
+def _persist_skill_llm_record(
+    usage: Dict[str, Any],
+    *,
+    tenant_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+    stage: Optional[str] = None,
+    model: Optional[str] = None,
+    source: str = "skill_llm",
+) -> None:
+    """skill 子进程 LLM 计量写入 chat_records（与 _persist_background_llm_record 同款路径）
+
+    source_type="skill_llm"（chat_records.source_type 为自由字符串无枚举约束）；
+    session_id 缺省拼 "skill_llm_{source}_{user_id|unknown}" 便于按 source+user 追溯；
+    stage 拼进 user_message（如 "[stage=extract] Excel ETL 抽取"）。
+    """
+    prompt_tokens = int(usage.get("prompt_tokens", 0) or 0)
+    completion_tokens = int(usage.get("completion_tokens", 0) or 0)
+    total_tokens = int(usage.get("total_tokens", 0) or 0) or (prompt_tokens + completion_tokens)
+    cached_input_tokens = int(usage.get("cached_tokens", 0) or 0)
+    cache_creation_input_tokens = int(usage.get("cache_creation_tokens", 0) or 0)
+
+    # 模型优先级：调用方显式传入 model > usage 附带的 model（_default_llm return_usage
+    # 产出，provider 可能是 qwen/zhipu，缺失时才兜底 deepseek-chat——单价按模型取，传错即错价）
+    llm_model = model or str(usage.get("model") or "") or "deepseek-chat"
+
+    credit_cost = 0.0
+    chat_bd: Dict[str, Any] = {}
+    try:
+        credit_cost, chat_bd = calculate_credit_cost_with_breakdown(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            model=llm_model,
+            cached_input_tokens=cached_input_tokens,
+            cache_creation_input_tokens=cache_creation_input_tokens,
+        )
+    except Exception as billing_err:
+        logger.warning(f"skill_llm 计费计算失败，credit_cost 降级为 0: {billing_err}")
+        credit_cost = 0.0
+        chat_bd = {}
+
+    usage_breakdown = {
+        "chat": {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "cached_input_tokens": cached_input_tokens,
+            "cache_creation_input_tokens": cache_creation_input_tokens,
+            "total_tokens": total_tokens,
+            "model": llm_model,
+            "credit": round(credit_cost, 2),
+        }
+    }
+    if chat_bd:
+        usage_breakdown["chat"].update({
+            "non_cached_input_tokens": chat_bd.get("non_cached_input_tokens", 0),
+            "unit_prices": chat_bd.get("unit_prices", {}),
+            "usage_factor": chat_bd.get("usage_factor"),
+            "credits": chat_bd.get("credits", {}),
+        })
+
+    effective_user_id = user_id or "unknown"
+    effective_session_id = session_id or f"skill_llm_{source}_{effective_user_id}"
+    user_message = f"[stage={stage}] Excel ETL LLM 调用" if stage else "Skill 子进程 LLM 调用"
+    ChatRecordDB.create(
+        session_id=effective_session_id,
+        tenant_id=tenant_id,
+        user_id=effective_user_id,
+        user_message=user_message,
+        assistant_message=None,
+        total_token_count=total_tokens,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        cached_input_tokens=cached_input_tokens,
+        model=llm_model,
+        provider="skill_subprocess",
+        source_type="skill_llm",
+        credit_cost=credit_cost,
+        usage_breakdown=usage_breakdown,
+        status="completed",
+    )
+    logger.info(
+        f"skill_llm (source={source}, stage={stage}) 计费: tenant={tenant_id}, "
+        f"user={effective_user_id}, tokens={total_tokens}, credit={credit_cost}"
+    )
+
+
+def _resolve_admin_user_id(user_id: Optional[str]) -> str:
+    """管理后台计费落库的 user_id 兜底：为空时取 ContextVar，仍为空用 "unknown" 占位
+
+    chat_records.user_id 在生产库为 NOT NULL，传 None 会违反约束导致计费落库失败
+    （报错 "null value in column user_id ... violates not-null constraint"）。
+    无认证上下文的调用方（离线脚本、无 token 后台任务）用 "unknown" 占位，
+    与 session_id 中的 user_id or 'unknown' 保持一致，保证计费不丢失。
+    """
+    if user_id:
+        return user_id
+    try:
+        from src.saas.context import get_current_user_id
+        return get_current_user_id() or "unknown"
+    except Exception:
+        return "unknown"
+
+
 def record_admin_llm_usage(
     response: Optional[Dict[str, Any]],
     *,
@@ -715,6 +888,7 @@ def record_admin_llm_usage(
     usage_breakdown.chat 写入分项单价/分项积分，与主路径格式对齐，
     便于统一 SQL 对账。失败只记日志，不影响已返回的响应。
     """
+    user_id = _resolve_admin_user_id(user_id)
     if not isinstance(response, dict):
         return
     usage = response.get("usage")
@@ -810,6 +984,7 @@ def record_admin_embedding_usage(
     usage_breakdown.embedding 写入分项单价/系数，与主路径格式对齐，
     便于统一 SQL 对账。失败只记日志，不影响已返回的响应。
     """
+    user_id = _resolve_admin_user_id(user_id)
     tokens = int(getattr(embedding_client, "last_usage_tokens", 0) or 0)
     if tokens <= 0:
         return

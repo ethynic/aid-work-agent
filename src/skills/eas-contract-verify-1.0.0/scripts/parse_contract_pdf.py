@@ -336,7 +336,7 @@ def _get_llm_config() -> Dict[str, str]:
         raise ValueError(f"不支持的 LLM 提供者: {provider}，请设置环境变量 LLM_PROVIDER 为 zhipu 或 qwen")
 
     prefix = provider.upper()
-    default_model = "glm-4" if provider == "zhipu" else "qwen-plus"
+    default_model = "glm-4" if provider == "zhipu" else "qwen3.7-flash"
     api_key = os.getenv(f"{prefix}_API_KEYS", "").strip().split(",")[0].strip()
     model = os.getenv(f"{prefix}_MODEL_CODE", default_model)
 

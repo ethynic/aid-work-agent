@@ -125,7 +125,7 @@ class TestKnowledgeEmbeddingBilling:
         )
         # 知识库摘要使用主 gateway 默认模型（settings.llm.model_code）
         from src.config.settings import settings
-        llm_model = getattr(settings.llm, "model_code", None) or "qwen-plus"
+        llm_model = getattr(settings.llm, "model_code", None) or "qwen3.7-flash"
         expected_llm_credit = calculate_credit_cost(
             prompt_tokens=100,
             completion_tokens=50,

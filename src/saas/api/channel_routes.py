@@ -34,7 +34,12 @@ from src.services.session_record import SessionRecordManager
 from src.core.storage import ensure_tenant_storage_dir, get_tenant_storage_path
 from src.core.temp_logger import tlog as _tlog
 from src.db.models import CustomerReferralDB
-from src.channels.wecom_kf.prompts import MSG_EXPIRED, MSG_CREDIT_EXHAUSTED
+from src.channels.wecom_kf.prompts import (
+    MSG_EXPIRED,
+    MSG_CREDIT_EXHAUSTED,
+    DEFAULT_WAITING_INDICATOR_MESSAGE,
+    DEFAULT_WAITING_INDICATOR_DELAY_SECONDS,
+)
 from src.saas.api.wecom_kf_account import resolve_scene
 
 
@@ -1582,6 +1587,48 @@ async def _is_kf_account_blocked(
     return False
 
 
+def _get_waiting_indicator_cfg(adapter) -> dict:
+    """读取渠道级 waiting_indicator 配置，返回 {delay_seconds, message}；未启用返回 {}。
+
+    配置存于 tenant_channel_configs.config.waiting_indicator（enabled/delay_seconds/message），
+    经 ChannelFactory 注入 adapter.waiting_indicator。字段缺省时回退默认常量。
+    """
+    wi = getattr(adapter, "waiting_indicator", None) or {}
+    if not wi.get("enabled", True):  # 未配置默认启用（开箱即用）
+        return {}
+    try:
+        delay = float(wi.get("delay_seconds", DEFAULT_WAITING_INDICATOR_DELAY_SECONDS))
+    except (TypeError, ValueError):
+        delay = DEFAULT_WAITING_INDICATOR_DELAY_SECONDS
+    if delay <= 0:
+        return {}
+    message = str(wi.get("message") or "").strip() or DEFAULT_WAITING_INDICATOR_MESSAGE
+    return {"delay_seconds": delay, "message": message}
+
+
+async def _process_with_waiting_indicator(adapter, ext_userid, cfg, coro):
+    """非取消式超时 watchdog：处理超过 cfg['delay_seconds'] 秒未完成时先发提示语，任务继续跑。
+
+    绝不能取消 coro —— session_queue 处理器持有 Redis 锁（watchdog 续期），
+    取消会穿透 try 泄漏锁/cancel 标志。用 shield 隔离取消，超时只发提示、不打断任务。
+    """
+    task = asyncio.create_task(coro)
+    try:
+        return await asyncio.wait_for(asyncio.shield(task), timeout=cfg["delay_seconds"])
+    except asyncio.TimeoutError:
+        try:
+            sent = await adapter.send_waiting_indicator(ext_userid, cfg["message"])
+            if not sent:
+                _kf_tlog("等待提示未送达: user={user}, sent=False", user=ext_userid, level="ERROR")
+                logger.warning(f"[wecom_kf] 等待提示未送达: user={ext_userid}, send_waiting_indicator 返回 False（errcode≠0）")
+            else:
+                _kf_tlog("等待提示已发送: user={user}", user=ext_userid)
+        except Exception as e:
+            logger.warning(f"[wecom_kf] 等待提示发送失败: {e}")
+        # 不取消 task；等其自然完成返回真实结果
+        return await task
+
+
 async def _process_tenant_wecom_kf_messages(
     tenant_id: str, config_id: str, open_kfid: str, adapter
 ) -> None:
@@ -1592,7 +1639,6 @@ async def _process_tenant_wecom_kf_messages(
         from src.saas.services.auto_register import ensure_user_registered
         from src.core.agent_router import agent_router
         from src.channels.wecom_kf.context import set_kf_context
-        from src.channels.wecom_kf.prompts import WECOM_KF_CHANNEL_PROMPT
         from src.models.message import UnifiedResponse
         # from src.core.temp_logger import tlog
 
@@ -1908,11 +1954,31 @@ async def _process_tenant_wecom_kf_messages(
 
                 # 仅处理文字 + 语音消息：图片/视频/文件等附件消息直接过滤，
                 # 避免转发给智能体产生"看不了视频"等无效回复消耗积分
-                from src.channels.wecom_kf.message import should_process_kf_message
+                from src.channels.wecom_kf.message import (
+                    KF_FILTER_HINT_MESSAGE,
+                    should_process_kf_message,
+                )
                 if not should_process_kf_message(msg_type):
                     logger.info(
                         f"[wecom_kf] 跳过非文字/语音消息: msgid={msg_id}, msgtype={msg_type}"
                     )
+                    # 通知客户：无法识别该类型文件，请用文字或语音描述需求。
+                    # 按客户维度节流（复用 dedup，5 分钟窗口），避免连续发文件刷屏
+                    try:
+                        ext_user = msg.get("external_userid", "")
+                        if ext_user:
+                            dedup = _get_tenant_dedup(tenant_id)
+                            if not await dedup.is_duplicate(
+                                f"kf_filter_hint:{tenant_id}:{ext_user}"
+                            ):
+                                adapter.current_open_kfid = open_kfid
+                                await adapter.send_text(
+                                    KF_FILTER_HINT_MESSAGE, ext_user
+                                )
+                    except Exception as e:
+                        logger.warning(
+                            f"[wecom_kf] 发送文件类型提示失败: msgid={msg_id}, error={e}"
+                        )
                     continue
 
                 # 消息去重
@@ -2179,6 +2245,8 @@ async def _process_tenant_wecom_kf_messages(
                     logger.warning(f"[wecom_kf] 自动注册失败: {e}")
 
                 # 设置工具可访问的上下文
+                # user_id：租户侧注册用户（ensure_user_registered 生成），供留资等工具记录线索归属
+                # lead_capture：会话留资状态机快照（已留资则工具拒绝重复留资）
                 set_kf_context({
                     "adapter": adapter,
                     "open_kfid": open_kfid,
@@ -2186,6 +2254,8 @@ async def _process_tenant_wecom_kf_messages(
                     "kf_config": kf_config,
                     "session_id": session_id,
                     "tenant_id": tenant_id,
+                    "user_id": user_id,
+                    "lead_capture": session_metadata.get("lead_capture"),
                 })
 
                 # 发送前校验微信远程会话状态，防止本地状态与远程不一致导致 95018
@@ -2433,7 +2503,10 @@ async def _process_tenant_wecom_kf_messages(
                     user_metadata = {"msgid": msg_id, "msgtype": msgtype, "open_kfid": open_kfid}
 
                 try:
-                    result = await channel_session_manager.process_and_persist(
+                    # 处理超时等待提示：仅对真正走智能体的消息启用
+                    # （merged 场景 process 秒回不触发；watchdog 不取消任务，避免泄漏 Redis 锁）
+                    waiting_cfg = _get_waiting_indicator_cfg(adapter)
+                    process_call = channel_session_manager.process_and_persist(
                         session_id=session_id,
                         tenant_id=tenant_id,
                         user_content=user_content,
@@ -2447,9 +2520,13 @@ async def _process_tenant_wecom_kf_messages(
                         tool_messages_collected=tool_messages_collected,
                         assistant_metadata=assistant_metadata,
                         send_response=send_response,
-                        # 临时停用渠道约束提示词（测试其对模板填充兜底行为的影响），恢复时改回 WECOM_KF_CHANNEL_PROMPT
-                        agent_extra_system_prompt=None,
                     )
+                    if waiting_cfg:
+                        result = await _process_with_waiting_indicator(
+                            adapter, unified_msg.user_id, waiting_cfg, process_call
+                        )
+                    else:
+                        result = await process_call
                     _kf_tlog(
                         "process_and_persist完成: tenant={tenant}, session_id={session_id}, "
                         "status={status}, response_text_len={resp_len}, response_text={response_text}",

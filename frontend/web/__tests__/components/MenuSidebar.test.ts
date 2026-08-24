@@ -406,4 +406,77 @@ describe('MenuSidebar - flyout 二级菜单', () => {
 
     windowOpenSpy.mockRestore()
   })
+
+  it('连接中心：普通租户用户可见 trigger，子菜单仅含 API配置/本地工具（管理项隐藏）', async () => {
+    // 普通用户（非管理员）
+    routeState.path = '/t/test-tenant/chat'
+    tenantIsLoggedIn.value = true
+    tenantAdmin.value = { username: 'user1', role: 'user' }
+    tenant.value = { company_name: '测试租户' }
+
+    const wrapper = mountAndTrack()
+    await flushPromises()
+
+    // 连接中心 trigger 普通用户可见
+    const trigger = findButtonByText(wrapper, '连接中心')
+    expect(trigger).toBeTruthy()
+
+    await trigger.trigger('mouseenter')
+    await flushPromises()
+
+    const flyout = findFlyout()
+    expect(flyout).not.toBeNull()
+    const flyoutText = flyout!.textContent || ''
+    expect(flyoutText).toContain('API配置')
+    expect(flyoutText).toContain('本地工具')
+    // 管理项对普通用户隐藏
+    expect(flyoutText).not.toContain('渠道配置')
+    expect(flyoutText).not.toContain('企微个人RPA')
+  })
+
+  it('连接中心：管理员子菜单含全部 4 项（API配置/渠道配置/企微个人RPA/本地工具）', async () => {
+    const wrapper = mountTenantSidebar()
+    await flushPromises()
+
+    const trigger = findButtonByText(wrapper, '连接中心')
+    expect(trigger).toBeTruthy()
+    await trigger.trigger('mouseenter')
+    await flushPromises()
+
+    const flyout = findFlyout()
+    expect(flyout).not.toBeNull()
+    const flyoutText = flyout!.textContent || ''
+    expect(flyoutText).toContain('API配置')
+    expect(flyoutText).toContain('渠道配置')
+    expect(flyoutText).toContain('企微个人RPA')
+    expect(flyoutText).toContain('本地工具')
+  })
+
+  it('连接中心：本地工具已从用户下拉菜单移除，子菜单点击可跳转', async () => {
+    const wrapper = mountTenantSidebar()
+    await flushPromises()
+
+    // 用户下拉菜单不再含「本地工具」
+    const userMenuBtn = findButtonByText(wrapper, 'admin')
+    expect(userMenuBtn).toBeTruthy()
+    await userMenuBtn!.trigger('click')
+    await flushPromises()
+    const userMenuBtns = Array.from(document.querySelectorAll('button'))
+      .map(b => b.textContent?.trim() || '')
+    expect(userMenuBtns).not.toContain('本地工具')
+
+    // 连接中心 flyout 内点击「本地工具」跳转
+    const trigger = findButtonByText(wrapper, '连接中心')
+    await trigger.trigger('mouseenter')
+    await flushPromises()
+    const localToolsBtn = Array.from(document.querySelectorAll('button'))
+      .find(b => b.textContent?.includes('本地工具')) as HTMLButtonElement | undefined
+    expect(localToolsBtn).toBeTruthy()
+    localToolsBtn!.click()
+    await nextTick()
+    await flushPromises()
+
+    expect(routerPush).toHaveBeenCalledTimes(1)
+    expect(routerPush.mock.calls[0][0]).toContain('/local-tools')
+  })
 })

@@ -262,6 +262,13 @@ ON CONFLICT (model_name) DO NOTHING;
 INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m)
 VALUES ('deepseek-v4-pro', 9.0, 27.0, 0.3)
 ON CONFLICT (model_name) DO NOTHING;
+-- 阿里云百炼平台 deepseek-v4-flash-0731 是正式版，增加价格信息
+INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m)
+VALUES ('deepseek-v4-flash-0731', 3.0, 9.0, 0.1)
+ON CONFLICT (model_name) DO UPDATE SET
+  input_price_per_m = EXCLUDED.input_price_per_m,
+  output_price_per_m = EXCLUDED.output_price_per_m,
+  cached_input_price_per_m = EXCLUDED.cached_input_price_per_m;
 
 -- 视觉模型单价
 INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m)
@@ -685,6 +692,18 @@ CREATE TABLE IF NOT EXISTS subagent_knowledge_sources (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(tenant_id, subagent_name)
 );
+
+-- 租户间知识库共享授权表（租户级授权：A -> B，整体授权，不涉及具体分类）
+-- 具体共享哪些分类由第二步 subagent_knowledge_sources.sources 的 owner_tenant_id 决定
+CREATE TABLE IF NOT EXISTS tenant_knowledge_shares (
+    id SERIAL PRIMARY KEY,
+    from_tenant_id TEXT NOT NULL,     -- 知识库提供租户（A）
+    to_tenant_id TEXT NOT NULL,       -- 知识库接收租户（B）
+    created_by TEXT,                  -- 创建人（平台管理员 user_id）
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (from_tenant_id, to_tenant_id)
+);
+CREATE INDEX IF NOT EXISTS idx_knowledge_shares_to ON tenant_knowledge_shares(to_tenant_id);
 
 -- subagent_template_files — 租户级子智能体模板文件关联
 -- 每个租户的每个子智能体可挂载多个模板文件（名称 + file_id + 元信息），
@@ -1543,6 +1562,36 @@ CREATE TABLE IF NOT EXISTS customer_referrals (
 );
 CREATE INDEX IF NOT EXISTS idx_customer_referrals_tenant ON customer_referrals(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_customer_referrals_referrer ON customer_referrals(tenant_id, referrer_user_id);
+
+-- =================== 客户留资线索（pre-sales 售前咨询留资）===================
+-- 2026-08-21：售前咨询客户留资线索表（lead_capture 能力级中性命名，跨智能体复用）。
+-- 手机号加密落库（src/db/encryption.py），列表/详情接口解密返回（权限内），日志不打印明文。
+-- 与 src/saas/db/tables.py init_saas_tables() / deploy/db_update.sql 2026-08-21 条目保持一致。
+CREATE TABLE IF NOT EXISTS bs_lead_capture_leads (
+    id SERIAL PRIMARY KEY,
+    lead_id TEXT UNIQUE NOT NULL,          -- lead_lc_<uuid12>
+    tenant_id TEXT NOT NULL,               -- 租户隔离
+    user_id TEXT,                          -- 租户侧注册用户（ensure_user_registered 生成）
+    customer_user_id TEXT,                 -- 微信侧 external_userid（老客户识别）
+    channel_chat_id TEXT,                  -- open_kfid（来源客服账号）
+    kf_account_name TEXT,                  -- 客服账号名快照
+    contact_method TEXT,                   -- phone | qr
+    phone TEXT,                            -- 手机号（加密存储）
+    contact_name TEXT,                     -- 客户姓名（对话中抽取，可选）
+    demand_summary TEXT,                   -- 需求摘要（对话中抽取，可选）
+    source TEXT DEFAULT 'lead_capture',    -- 固定来源标识
+    stage TEXT DEFAULT 'new',              -- new | contacting | converted | abandoned
+    assigned_to TEXT,                      -- 归属员工 user_id（= kf_account.tenant_user_id 快照）
+    assignee_name TEXT,                    -- 归属员工姓名快照
+    transferred_to TEXT,                   -- 留资后若转人工，记录 servicer_userid
+    session_id TEXT,                       -- 产生线索的渠道会话
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_lc_leads_tenant ON bs_lead_capture_leads(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_lc_leads_created ON bs_lead_capture_leads(created_at);
+CREATE INDEX IF NOT EXISTS idx_lc_leads_assigned ON bs_lead_capture_leads(assigned_to);
+CREATE INDEX IF NOT EXISTS idx_lc_leads_customer ON bs_lead_capture_leads(customer_user_id);
 
 -- 输出初始化完成信息
 DO $$

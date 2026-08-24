@@ -44,9 +44,13 @@
               placeholder="搜索用户名"
               size="sm"
               clearable
-              class="flex-1"
+              class="w-32"
               @keyup.enter="handleSearch"
             />
+            <BaseSelect v-model="selectedKfId" size="sm" class="w-40">
+              <option value="">全部客服账号</option>
+              <option v-for="kf in kfAccounts" :key="kf.open_kfid" :value="kf.open_kfid">{{ kf.name }}</option>
+            </BaseSelect>
             <BaseButton size="sm" @click="handleSearch">搜索</BaseButton>
           </div>
         </div>
@@ -62,9 +66,9 @@
           <div v-else>
             <div
               v-for="user in userList"
-              :key="user.user_id"
+              :key="`${user.user_id}__${user.channel_type || ''}__${user.channel_chat_id || ''}`"
               class="p-4 border-b border-default cursor-pointer transition-all"
-              :class="selectedUserId === user.user_id ? 'bg-primary-50 border-l-4 border-l-primary-500' : 'hover:bg-surface-hover'"
+              :class="isSelectedCombo(user) ? 'bg-primary-50 border-l-4 border-l-primary-500' : 'hover:bg-surface-hover'"
               @click="selectUser(user)"
             >
               <div class="flex items-center gap-3">
@@ -76,13 +80,23 @@
                 <div class="flex-1 min-w-0">
                   <div class="flex items-center gap-2">
                     <span class="font-medium text-default truncate">{{ user.nickname || user.username || '未知用户' }}</span>
+                    <span v-if="user.channel_type === 'wecom_kf' && user.kf_name" class="text-xs px-2 py-0.5 rounded-full bg-primary-50 text-primary-600 shrink-0">客服：{{ user.kf_name }}</span>
                     <span class="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-muted shrink-0">{{ getUserSourceInfo(user.source).label }}</span>
                   </div>
                   <div class="text-xs text-muted mt-1">
                     {{ formatSessionDateRange(user) }}
                   </div>
                   <div v-if="user.referrer_name" class="text-xs text-primary-600 mt-0.5">
-                    由 {{ user.referrer_name }} 引流
+                    <div class="relative group inline-flex items-center gap-1">
+                      <span class="cursor-default">由 {{ user.referrer_name }} 引流</span>
+                      <svg class="w-3.5 h-3.5 text-primary-500 cursor-help shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="10" />
+                        <path d="M12 16v-4M12 8h.01" />
+                      </svg>
+                      <div v-if="user.referral_time" class="hidden group-hover:block absolute left-0 bottom-full mb-1.5 z-10 w-max max-w-64 px-2 py-1.5 bg-gray-800 text-white text-xs rounded shadow-lg whitespace-normal">
+                        {{ formatDate(user.referral_time) }} 首次访问 {{ user.referrer_name }} 的客服账号
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -112,7 +126,10 @@
               alt="头像"
             />
             <div>
-              <div class="font-medium text-default">{{ selectedUser.nickname || selectedUser.username || '未知用户' }}</div>
+              <div class="flex items-center gap-2">
+                <span class="font-medium text-default">{{ selectedUser.nickname || selectedUser.username || '未知用户' }}</span>
+                <span v-if="selectedUser.channel_type === 'wecom_kf' && selectedUser.kf_name" class="text-xs px-2 py-0.5 rounded-full bg-primary-50 text-primary-600">客服：{{ selectedUser.kf_name }}</span>
+              </div>
               <div class="text-xs text-muted">创建于 {{ formatDate(selectedUser.created_at) }}</div>
             </div>
           </div>
@@ -328,6 +345,167 @@
         </div>
       </template>
     </div>
+
+    <!-- Tab3：留资线索 -->
+    <div v-show="activeTab === 'leads'" class="flex-1 overflow-y-auto p-6 bg-canvas">
+      <div v-if="leadsLoading" class="text-center py-12 text-muted">加载中...</div>
+      <template v-else>
+        <!-- 日期段选择 -->
+        <div class="flex flex-wrap items-center gap-4 mb-6 bg-surface border border-default rounded-lg p-4">
+          <div class="flex gap-2">
+            <BaseButton
+              v-for="p in rangePresets"
+              :key="p.key"
+              :intent="leadActiveRange === p.key ? 'primary' : 'ghost'"
+              size="sm"
+              @click="selectLeadRange(p.key)"
+            >
+              {{ p.label }}
+            </BaseButton>
+          </div>
+          <div v-if="leadActiveRange === 'custom'" class="flex items-center gap-2">
+            <input
+              type="date"
+              v-model="leadCustomStartDate"
+              class="block h-8 px-2 rounded-lg border border-default bg-surface text-sm text-default focus:outline-none focus:ring-2 focus:ring-primary-500"
+            />
+            <span class="text-muted text-sm">至</span>
+            <input
+              type="date"
+              v-model="leadCustomEndDate"
+              class="block h-8 px-2 rounded-lg border border-default bg-surface text-sm text-default focus:outline-none focus:ring-2 focus:ring-primary-500"
+            />
+            <BaseButton size="sm" @click="applyLeadCustomRange">查询</BaseButton>
+          </div>
+          <span class="ml-auto text-xs text-muted">过滤基准：留资时间（created_at）</span>
+        </div>
+
+        <!-- 统计卡片 -->
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+          <div class="bg-surface border border-default rounded-lg p-5">
+            <div class="text-muted text-sm">总留资数</div>
+            <div class="text-3xl font-bold text-default mt-1">{{ leadStats.total_leads ?? 0 }}</div>
+          </div>
+          <div
+            v-for="m in leadStats.by_contact_method || []"
+            :key="m.contact_method"
+            class="bg-surface border border-default rounded-lg p-5"
+          >
+            <div class="text-muted text-sm">{{ getMethodLabel(m.contact_method) }}</div>
+            <div class="text-3xl font-bold text-default mt-1">{{ m.count }}</div>
+            <div class="text-xs text-muted mt-1">占比 {{ formatRatio(m.ratio) }}</div>
+          </div>
+        </div>
+
+        <!-- 按客服账号统计 -->
+        <div class="bg-surface border border-default rounded-lg mb-6">
+          <div class="px-5 py-3 border-b border-default font-medium text-default">按客服账号</div>
+          <div class="table-scroll-wrapper">
+            <BaseTable :columns="leadKfColumns" :data="leadStats.by_kf_account || []" row-key="channel_chat_id">
+              <template #kf_account_name="{ row }">
+                <span>{{ row.kf_account_name || row.channel_chat_id || '-' }}</span>
+              </template>
+              <template #ratio="{ row }">{{ formatRatio(row.ratio) }}</template>
+              <template #empty>暂无数据</template>
+            </BaseTable>
+          </div>
+        </div>
+
+        <!-- 线索列表 -->
+        <div class="bg-surface border border-default rounded-lg">
+          <div class="px-5 py-3 border-b border-default flex flex-wrap items-center gap-3">
+            <span class="font-medium text-default">留资线索</span>
+            <div class="ml-auto flex items-center gap-2">
+              <BaseSelect v-model="leadKfFilter" size="sm" class="w-40">
+                <option value="">全部客服账号</option>
+                <option v-for="kf in kfAccounts" :key="kf.open_kfid" :value="kf.open_kfid">{{ kf.name }}</option>
+              </BaseSelect>
+              <BaseSelect v-model="leadStageFilter" size="sm" class="w-32">
+                <option value="">全部阶段</option>
+                <option v-for="(s, key) in leadStageOptions" :key="key" :value="key">{{ s.label }}</option>
+              </BaseSelect>
+            </div>
+          </div>
+          <div class="table-scroll-wrapper">
+            <BaseTable :columns="leadColumns" :data="leadList" row-key="lead_id">
+              <template #seq="{ index }">{{ seqNumber(index) }}</template>
+              <template #contact_method="{ row }">
+                <BaseBadge :intent="row.contact_method === 'qr' ? 'info' : 'neutral'">{{ getMethodLabel(row.contact_method) }}</BaseBadge>
+              </template>
+              <template #phone="{ row }">
+                <span :class="row.phone ? '' : 'text-muted'">{{ row.phone || '—' }}</span>
+              </template>
+              <template #stage="{ row }">
+                <BaseBadge :intent="getStageInfo(row.stage).intent">{{ getStageInfo(row.stage).label }}</BaseBadge>
+              </template>
+              <template #created_at="{ row }">{{ formatDate(row.created_at) }}</template>
+              <template #actions="{ row }">
+                <BaseButton intent="ghost" size="sm" @click="openLeadDetail(row)">详情</BaseButton>
+              </template>
+              <template #empty>暂无留资线索</template>
+            </BaseTable>
+          </div>
+          <div class="p-3 border-t border-default">
+            <BasePagination
+              :total="leadTotal"
+              v-model:current-page="leadPage"
+              :page-size="leadPageSize"
+              :show-size-changer="false"
+            />
+          </div>
+        </div>
+      </template>
+    </div>
+
+    <!-- 留资线索详情弹框 -->
+    <BaseModal v-model="leadDetailOpen" title="留资线索详情" size="md">
+      <div v-if="leadDetail" class="space-y-3 text-sm">
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <div class="text-muted text-xs mb-1">客户姓名</div>
+            <div class="text-default">{{ leadDetail.contact_name || '-' }}</div>
+          </div>
+          <div>
+            <div class="text-muted text-xs mb-1">手机号</div>
+            <div class="text-default">{{ leadDetail.phone || '-' }}</div>
+          </div>
+          <div>
+            <div class="text-muted text-xs mb-1">留资方式</div>
+            <div class="text-default">{{ getMethodLabel(leadDetail.contact_method) }}</div>
+          </div>
+          <div>
+            <div class="text-muted text-xs mb-1">阶段</div>
+            <div class="text-default">{{ getStageInfo(leadDetail.stage).label }}</div>
+          </div>
+          <div>
+            <div class="text-muted text-xs mb-1">客服账号</div>
+            <div class="text-default">{{ leadDetail.kf_account_name || '-' }}</div>
+          </div>
+          <div>
+            <div class="text-muted text-xs mb-1">归属员工</div>
+            <div class="text-default">{{ leadDetail.assignee_name || '-' }}</div>
+          </div>
+          <div class="col-span-2">
+            <div class="text-muted text-xs mb-1">留资时间</div>
+            <div class="text-default">{{ formatDate(leadDetail.created_at) }}</div>
+          </div>
+          <div class="col-span-2">
+            <div class="text-muted text-xs mb-1">需求摘要</div>
+            <div class="text-default whitespace-pre-wrap">{{ leadDetail.demand_summary || '-' }}</div>
+          </div>
+          <div class="col-span-2 flex items-center gap-2 pt-3 border-t border-default">
+            <span class="text-muted text-xs">更新阶段</span>
+            <BaseSelect v-model="leadDetailStage" size="sm" class="w-32">
+              <option v-for="(s, key) in leadStageOptions" :key="key" :value="key">{{ s.label }}</option>
+            </BaseSelect>
+            <BaseButton size="sm" @click="saveLeadStage">保存</BaseButton>
+          </div>
+        </div>
+      </div>
+      <template #footer>
+        <BaseButton intent="secondary" @click="leadDetailOpen = false">关闭</BaseButton>
+      </template>
+    </BaseModal>
   </div>
 </template>
 
@@ -336,12 +514,14 @@ import { ref, computed, onMounted, watch, nextTick, inject } from 'vue'
 import AppHeader from '@/components/AppHeader.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
+import BaseSelect from '@/components/ui/BaseSelect.vue'
 import BasePagination from '@/components/ui/BasePagination.vue'
 import BaseBadge from '@/components/ui/BaseBadge.vue'
 import BaseTable from '@/components/ui/BaseTable.vue'
+import BaseModal from '@/components/ui/BaseModal.vue'
 import DownloadFileCard from '@/components/DownloadFileCard.vue'
 import AttachmentPreviewPanel from '@/components/AttachmentPreviewPanel.vue'
-import { listExternalUsers, getUserSessions, getSessionMessages, getReferralStats } from '@/api/externalCustomers'
+import { listExternalUsers, getUserSessions, getSessionMessages, getReferralStats, listKfAccounts, getLeadStats, listLeads, getLeadDetail, updateLeadStage } from '@/api/externalCustomers'
 import AttachmentCard from './AttachmentCard.vue'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 import { useAmrPlayer } from '@/composables/useAmrPlayer'
@@ -372,8 +552,9 @@ const effectiveUser = computed(() => {
 const tabs = [
   { key: 'chat', label: '客户对话记录' },
   { key: 'stats', label: '引流统计' },
+  { key: 'leads', label: '留资线索' },
 ]
-const activeTab = ref<'chat' | 'stats'>('chat')
+const activeTab = ref<'chat' | 'stats' | 'leads'>('chat')
 
 // 引流统计（Tab2）
 const stats = ref<{ total_referrals: number; total_messages: number; referrers: any[] }>({ total_referrals: 0, total_messages: 0, referrers: [] })
@@ -398,6 +579,10 @@ const referrerFilterName = ref('')
 
 // 搜索条件
 const searchUsername = ref('')
+
+// 客服账号筛选（下拉框）：管理员可见全部，普通用户由后端只返回自己负责的账号
+const kfAccounts = ref<Array<{ open_kfid: string; name: string }>>([])
+const selectedKfId = ref('')
 
 // 客户列表
 const userList = ref<any[]>([])
@@ -435,8 +620,10 @@ const isPartiallyRecalled = (msg: any) => {
 const sessionList = ref<any[]>([])
 const selectedSessionId = ref('')
 
-// 选中状态
+// 选中状态（组合粒度：客户 × 渠道类型 × 客服账号）
 const selectedUserId = ref('')
+const selectedChannelChatId = ref('')
+const selectedChannelType = ref('')
 const selectedUser = ref<any>(null)
 
 // 默认头像
@@ -464,6 +651,7 @@ async function loadUsers() {
     const res = await listExternalUsers({
       username: searchUsername.value || undefined,
       referrer_user_id: referrerFilterUserId.value || undefined,
+      channel_chat_id: selectedKfId.value || undefined,
       page: userPage.value,
       page_size: userPageSize.value,
     })
@@ -485,8 +673,30 @@ async function loadUsers() {
   }
 }
 
+async function loadKfAccounts() {
+  try {
+    const res = await listKfAccounts()
+    if (res.success) {
+      kfAccounts.value = res.kf_accounts || []
+    }
+  } catch (e: any) {
+    toast.error(e.message || '获取客服账号列表失败')
+  }
+}
+
+// 判断列表行是否为当前选中的组合（客户 × 渠道 × 客服账号 三元匹配）
+function isSelectedCombo(user: any): boolean {
+  return (
+    selectedUserId.value === user.user_id &&
+    selectedChannelChatId.value === (user.channel_chat_id || '') &&
+    selectedChannelType.value === (user.channel_type || '')
+  )
+}
+
 async function selectUser(user: any) {
   selectedUserId.value = user.user_id
+  selectedChannelChatId.value = user.channel_chat_id || ''
+  selectedChannelType.value = user.channel_type || ''
   selectedUser.value = user
   messageList.value = []
   messageTotal.value = 0
@@ -500,8 +710,14 @@ async function selectUser(user: any) {
 async function loadUserSessions() {
   if (!selectedUserId.value) return
   try {
+    // 组合粒度：仅 wecom_kf 按客服账号（channel_chat_id）拆分过滤；
+    // 其它渠道组合为「客户 × 渠道」折叠行，channel_chat_id 不传，避免 NULL-or-empty
+    // 过滤漏掉非空 channel_chat_id（如 wecom_personal_rpa 的 conversation_id）的会话。
+    const isKfCombo = selectedChannelType.value === 'wecom_kf'
     const res = await getUserSessions({
       user_id: selectedUserId.value,
+      channel_type: selectedChannelType.value || undefined,
+      channel_chat_id: isKfCombo ? selectedChannelChatId.value : undefined,
       page: 1,
       page_size: 100,
     })
@@ -551,9 +767,12 @@ async function loadSessionMessages() {
 // ==================== 引流统计（Tab2） ====================
 
 function switchTab(key: string) {
-  activeTab.value = key as 'chat' | 'stats'
+  activeTab.value = key as 'chat' | 'stats' | 'leads'
   if (key === 'stats') {
     loadReferralStats()
+  } else if (key === 'leads') {
+    loadLeadStats()
+    loadLeads()
   }
 }
 
@@ -627,8 +846,14 @@ function drillIntoReferrer(row: any) {
   referrerFilterName.value = row.referrer_name || '该员工'
   userPage.value = 1
   selectedUserId.value = ''
+  selectedChannelChatId.value = ''
+  selectedChannelType.value = ''
   selectedUser.value = null
+  sessionList.value = []
+  selectedSessionId.value = ''
   messageList.value = []
+  messageTotal.value = 0
+  messagePage.value = 1
   activeTab.value = 'chat'
   loadUsers()
 }
@@ -639,6 +864,175 @@ function clearReferrerFilter() {
   userPage.value = 1
   loadUsers()
 }
+
+// ==================== 留资线索（Tab3） ====================
+
+// 留资方式与阶段展示映射（与后端 LEAD_STAGES 保持一致）
+const leadStageOptions: Record<string, { label: string; intent: any }> = {
+  new: { label: '待跟进', intent: 'info' },
+  contacting: { label: '跟进中', intent: 'warning' },
+  converted: { label: '已转化', intent: 'success' },
+  abandoned: { label: '已放弃', intent: 'neutral' },
+}
+function getStageInfo(stage: string | null | undefined): { label: string; intent: any } {
+  return leadStageOptions[stage || ''] || { label: stage || '未知', intent: 'neutral' }
+}
+function getMethodLabel(method: string | null | undefined): string {
+  if (method === 'phone') return '手机号'
+  if (method === 'qr') return '员工微信'
+  return method || '-'
+}
+
+const leadsLoading = ref(false)
+const leadStats = ref<{ total_leads: number; by_contact_method: any[]; by_kf_account: any[] }>({
+  total_leads: 0,
+  by_contact_method: [],
+  by_kf_account: [],
+})
+const leadActiveRange = ref<'7d' | '30d' | 'custom'>('30d')
+const leadCustomStartDate = ref('')
+const leadCustomEndDate = ref('')
+const leadKfFilter = ref('')
+const leadStageFilter = ref('')
+
+const leadList = ref<any[]>([])
+const leadTotal = ref(0)
+const leadPage = ref(1)
+const leadPageSize = ref(20)
+
+const leadDetail = ref<any>(null)
+const leadDetailOpen = ref(false)
+const leadDetailStage = ref('')
+
+function leadRangeParams(): { start_date?: string; end_date?: string } {
+  if (leadActiveRange.value === 'custom') {
+    return { start_date: leadCustomStartDate.value || undefined, end_date: leadCustomEndDate.value || undefined }
+  }
+  return computeRangeDates(leadActiveRange.value)
+}
+
+function selectLeadRange(key: string) {
+  leadActiveRange.value = key as '7d' | '30d' | 'custom'
+  if (key === 'custom') return
+  leadPage.value = 1
+  loadLeadStats()
+  loadLeads()
+}
+
+function applyLeadCustomRange() {
+  if (!leadCustomStartDate.value || !leadCustomEndDate.value) {
+    toast.error('请选择起止日期')
+    return
+  }
+  if (leadCustomStartDate.value > leadCustomEndDate.value) {
+    toast.error('起始日期不能晚于结束日期')
+    return
+  }
+  leadPage.value = 1
+  loadLeadStats()
+  loadLeads()
+}
+
+async function loadLeadStats() {
+  try {
+    const res = await getLeadStats(leadRangeParams())
+    if (res.success) {
+      leadStats.value = {
+        total_leads: res.total_leads || 0,
+        by_contact_method: res.by_contact_method || [],
+        by_kf_account: res.by_kf_account || [],
+      }
+    } else {
+      toast.error(res.message || '获取留资统计失败')
+    }
+  } catch (e: any) {
+    toast.error(e.message || '获取留资统计失败')
+  }
+}
+
+async function loadLeads() {
+  leadsLoading.value = true
+  try {
+    const res = await listLeads({
+      ...leadRangeParams(),
+      channel_chat_id: leadKfFilter.value || undefined,
+      stage: leadStageFilter.value || undefined,
+      page: leadPage.value,
+      page_size: leadPageSize.value,
+    })
+    if (res.success) {
+      leadList.value = res.leads || []
+      leadTotal.value = res.total || 0
+    } else {
+      toast.error(res.message || '获取留资线索列表失败')
+    }
+  } catch (e: any) {
+    toast.error(e.message || '获取留资线索列表失败')
+  } finally {
+    leadsLoading.value = false
+  }
+}
+
+function seqNumber(index: number): number {
+  return (leadPage.value - 1) * leadPageSize.value + index + 1
+}
+
+async function openLeadDetail(row: any) {
+  try {
+    const res = await getLeadDetail(row.lead_id)
+    if (res.success) {
+      leadDetail.value = res.lead
+      leadDetailStage.value = res.lead?.stage || ''
+      leadDetailOpen.value = true
+    } else {
+      toast.error(res.message || '获取线索详情失败')
+    }
+  } catch (e: any) {
+    toast.error(e.message || '获取线索详情失败')
+  }
+}
+
+async function saveLeadStage() {
+  if (!leadDetail.value) return
+  if (leadDetailStage.value === leadDetail.value.stage) return
+  try {
+    const res = await updateLeadStage(leadDetail.value.lead_id, leadDetailStage.value)
+    if (res.success) {
+      toast.success('线索阶段已更新')
+      leadDetailOpen.value = false
+      loadLeads()
+      loadLeadStats()
+    } else {
+      toast.error(res.message || '更新线索阶段失败')
+    }
+  } catch (e: any) {
+    toast.error(e.message || '更新线索阶段失败')
+  }
+}
+
+const leadColumns = [
+  { key: 'seq', label: '序号', width: '60px' },
+  { key: 'contact_name', label: '客户姓名' },
+  { key: 'phone', label: '手机号' },
+  { key: 'contact_method', label: '留资方式' },
+  { key: 'kf_account_name', label: '客服账号', tooltip: (row: any) => row.kf_account_name || row.channel_chat_id || '-' },
+  { key: 'assignee_name', label: '归属员工', tooltip: (row: any) => row.assignee_name || '-' },
+  { key: 'stage', label: '阶段' },
+  { key: 'created_at', label: '留资时间' },
+  { key: 'actions', label: '操作' },
+]
+const leadKfColumns = [
+  { key: 'kf_account_name', label: '客服账号', tooltip: (row: any) => row.kf_account_name || row.channel_chat_id || '-' },
+  { key: 'count', label: '留资数' },
+  { key: 'ratio', label: '占比' },
+]
+
+// 筛选变更 → 重置到第一页重新加载
+watch([leadKfFilter, leadStageFilter], () => {
+  leadPage.value = 1
+  loadLeads()
+})
+watch(leadPage, () => loadLeads())
 
 function formatDate(dateStr: string | null): string {
   if (!dateStr) return ''
@@ -770,11 +1164,15 @@ watch(messagePage, () => {
   }
 })
 
+// 客服账号下拉框切换 → 重新加载客户列表
+watch(selectedKfId, () => handleSearch())
+
 // 初始化
 onMounted(async () => {
   if (!isInitialized.value) {
     await init()
   }
+  await loadKfAccounts()
   await loadUsers()
 })
 </script>

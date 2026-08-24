@@ -20,6 +20,7 @@
 | [.claude/rules/dev_workflow.md](.claude/rules/dev_workflow.md) | **开发流程规范**：三智能体开发流程（开发→测试→CodeReview），非平凡任务必读 |
 | [.claude/rules/billing_audit.md](.claude/rules/billing_audit.md) | **计费审计规范**：LLM/Embedding/ASR/视频调用点全量扫描 + 已计费五条件核对 + 工具入口 vs 渠道入口分离 + 同步/异步核对。新增计费调用点、修改计费函数、定期审计必读 |
 | [.claude/rules/powershell.md](.claude/rules/powershell.md) | **PowerShell 脚本规范**：UTF-8 BOM、字符串插值用 `-f`、HTTP 用 curl.exe、外部 API 重试、写完强制 ParseFile 检查 |
+| [.claude/rules/docs_style.md](.claude/rules/docs_style.md) | **文档写作规范**：箭头统一用 `->`（U+2192）、破折号统一用 `--`；编辑文档前先探测实际字符，避免视觉相同字符导致 Edit 失败 |
 
 **回答简洁**：每个响应不超过 5000 个 token
 **代码输出**：只输出修改的部分，不要输出完整文件

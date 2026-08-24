@@ -1,0 +1,134 @@
+{
+  "version": "1.0",
+  "sheet_name": "Sheet1",
+  "template_fingerprint": "bafc074c586c21ddd60b3de6a57a523c2693582c5d43f53765916cbf376002f6",
+  "fields": [
+    {
+      "name": "增减类型",
+      "type": "enum",
+      "enum_values": ["增员", "减员"],
+      "required": true,
+      "template_header": ["增减类型", "类型", "操作类型"],
+      "description": "增员或减员。新增/入职/增员类来源填'增员'；减少/离职/减员类来源填'减员'。仅允许：增员、减员"
+    },
+    {
+      "name": "姓名",
+      "type": "string",
+      "required": true,
+      "template_header": ["姓名", "雇员姓名", "员工姓名"],
+      "description": "员工姓名，原样照抄"
+    },
+    {
+      "name": "身份证",
+      "type": "string",
+      "required": true,
+      "template_header": ["身份证", "身份证号", "身份证号码", "证件号码"],
+      "description": "18 位身份证号原样照抄（末位 X 保持大写）；源文件已脱敏的照抄原形式（含 * 或 XXXX 掩码，或 [ID_n] 占位符）；找不到填 null"
+    },
+    {
+      "name": "参保地",
+      "type": "string",
+      "required": false,
+      "template_header": ["参保地", "参保城市", "缴纳地"],
+      "description": "参保城市。省市区逗号串只取市一级（如 '安徽省,芜湖市,镜湖区' -> '芜湖市'）；直辖市（如 '上海市'）原样保留；找不到填 null"
+    },
+    {
+      "name": "手机号码",
+      "type": "string",
+      "required": false,
+      "template_header": ["手机号码", "手机号", "联系电话"],
+      "description": "11 位手机号原样照抄；找不到填 null"
+    },
+    {
+      "name": "参保年月",
+      "type": "ym",
+      "required": false,
+      "template_header": ["参保年月", "始缴年月", "缴费年月", "减员年月", "参保月份"],
+      "description": "参保/始缴年月，输出格式 YYYYMM（6 位数字，如 '2026/08' -> '202608'）；找不到填 null"
+    },
+    {
+      "name": "基本工资",
+      "type": "money",
+      "required": false,
+      "template_header": ["基本工资", "工资", "月工资"],
+      "description": "月基本工资，输出数字（单位元，不带千分位与单位符）；找不到填 null"
+    },
+    {
+      "name": "公积金基数",
+      "type": "money",
+      "required": false,
+      "template_header": ["公积金基数", "公积金缴存基数"],
+      "description": "公积金缴存基数，输出数字（单位元）；找不到填 null"
+    },
+    {
+      "name": "公积金比例",
+      "type": "ratio",
+      "required": false,
+      "template_header": ["公积金比例", "公积金比例-企业+个人", "缴存比例"],
+      "description": "企业:个人比例合并输出 'N%:N%'（企/个拆两列的合并，如 5 和 5 -> '5%:5%'）；单一比例输出 'N%'（如 5%）；找不到填 null"
+    },
+    {
+      "name": "劳动合同起始时间",
+      "type": "date",
+      "required": false,
+      "template_header": ["劳动合同起始时间", "合同起始日期", "入职日期", "劳动合同开始时间"],
+      "description": "日期，输出格式 YYYY-MM-DD（如 '2026/9/15' -> '2026-09-15'）；找不到填 null"
+    },
+    {
+      "name": "劳动合同终止时间",
+      "type": "date",
+      "required": false,
+      "template_header": ["劳动合同终止时间", "合同终止日期", "劳动合同结束时间"],
+      "description": "日期，输出格式 YYYY-MM-DD；找不到填 null"
+    },
+    {
+      "name": "岗位",
+      "type": "string",
+      "required": false,
+      "template_header": ["岗位", "职务", "工种"],
+      "description": "岗位名称原样照抄；找不到填 null"
+    },
+    {
+      "name": "学历",
+      "type": "string",
+      "required": false,
+      "template_header": ["学历", "文化程度", "最高学历"],
+      "description": "学历原样照抄（如 '大专'、'本科'）；找不到填 null"
+    },
+    {
+      "name": "备注",
+      "type": "string",
+      "required": false,
+      "template_header": ["备注", "备注说明", "说明"],
+      "description": "备注原样照抄；分段标记（如 '0806补充'）作为该段人员的备注；用工形式（如 '派遣'）写入备注；无则填 null"
+    },
+    {
+      "name": "离职方式",
+      "type": "string",
+      "required": false,
+      "template_header": ["离职方式", "离职原因", "下岗原因", "减员原因"],
+      "description": "归一化为 '主动离职'（个人原因离职/员工主动提出辞职）或 '合同到期'（合同期满/合同到期）；增员填 null"
+    },
+    {
+      "name": "用工信息结束时间",
+      "type": "date",
+      "required": false,
+      "template_header": ["用工信息结束时间", "离职日期", "用工结束时间"],
+      "description": "用工结束/离职日期，输出格式 YYYY-MM-DD；找不到填 null"
+    },
+    {
+      "name": "社保最后缴纳月",
+      "type": "ym",
+      "required": false,
+      "template_header": ["社保最后缴纳月", "社保缴至月份", "停缴年月"],
+      "description": "社保最后缴纳月份，输出格式 YYYYMM（如 '202607'、'2026/07' -> '202607'）；找不到填 null"
+    },
+    {
+      "name": "公积金最后缴纳月",
+      "type": "ym",
+      "required": false,
+      "template_header": ["公积金最后缴纳月", "公积金缴至月份"],
+      "description": "公积金最后缴纳月份，输出格式 YYYYMM；找不到填 null"
+    }
+  ]
+}

@@ -369,16 +369,25 @@ class UserDB:
         username: str = None,
         source: str = None,
         referrer_user_id: str = None,
+        visible_kf_ids: Optional[list] = None,
+        channel_chat_id: str = None,
         page: int = 1,
         page_size: int = 20,
     ) -> dict:
         """获取租户的外部用户列表（source 不为空的用户）
+
+        返回组合粒度：每个「用户 × 渠道会话（客服账号）」一行。
+        仅 wecom_kf 渠道按 channel_chat_id（open_kfid，客服账号）拆分，
+        其它渠道折叠为单个组合（channel_chat_id 为空），避免 wecom_personal_rpa
+        等渠道因 conversation_id 不稳定导致一个客户多行。
 
         Args:
             tenant_id: 租户ID
             username: 用户名搜索（可选）
             source: 用户来源筛选（可选）
             referrer_user_id: 引流员工筛选（可选，命中则只返回该员工引流的客户）
+            visible_kf_ids: 普通用户可见的客服账号 open_kfid 列表（None 表示管理员全量可见）。
+                非 None 时，只返回「在该账号下有会话的客户」，不返回客户在其他客服账号下的会话
             page: 页码，从1开始
             page_size: 每页数量
 
@@ -386,6 +395,18 @@ class UserDB:
             {"users": [...], "total": int, "page": int, "page_size": int}
         """
         offset = (page - 1) * page_size
+        # 渠道会话组合子查询：wecom_kf 按客服账号拆分（legacy NULL 折叠为空），其它渠道折叠为空
+        cs_subquery = """
+            SELECT user_id,
+                   channel_type,
+                   CASE WHEN channel_type = 'wecom_kf' THEN COALESCE(channel_chat_id, '') ELSE '' END AS channel_chat_id,
+                   MIN(created_at) AS first_session_at,
+                   MAX(updated_at) AS last_session_at
+            FROM channel_sessions
+            WHERE user_id IS NOT NULL
+            GROUP BY user_id, channel_type,
+                     CASE WHEN channel_type = 'wecom_kf' THEN COALESCE(channel_chat_id, '') ELSE '' END
+        """
         with get_db_connection() as conn:
             cursor = conn.cursor()
 
@@ -402,44 +423,51 @@ class UserDB:
                 conditions.append("u.source = %s")
                 params.append(source)
 
+            if channel_chat_id:
+                conditions.append("cs.channel_chat_id = %s")
+                params.append(channel_chat_id)
+
             if referrer_user_id:
                 conditions.append("cr.referrer_user_id = %s")
                 params.append(referrer_user_id)
 
+            if visible_kf_ids is not None:
+                # 普通用户（引流员工）只能看到自己负责的客服账号下的对话记录
+                conditions.append("cs.channel_chat_id = ANY(%s)")
+                params.append(visible_kf_ids)
+
             where_clause = " AND ".join(conditions)
 
-            # 统计总数（去重，确保 LEFT JOIN 后总数正确）
+            # 统计总数：与列表查询同一套 FROM/JOIN/WHERE 结构，count == 组合行数
+            # customer_referrals.customer_user_id 有 UNIQUE、cs 子查询已按组合去重，外层 JOIN 单射。
             cursor.execute(f"""
                 SELECT COUNT(*) as cnt FROM (
                     SELECT u.user_id
                     FROM users u
+                    LEFT JOIN ({cs_subquery}) cs ON cs.user_id = u.user_id
                     LEFT JOIN customer_referrals cr ON cr.customer_user_id = u.user_id
                     WHERE {where_clause}
                 ) AS filtered
             """, params)
             total = cursor.fetchone()["cnt"]
 
-            # 查询列表：按该用户最近一次渠道会话的 updated_at 倒序排序
+            # 查询列表：按该组合最近一次渠道会话的 updated_at 倒序排序
             # 没有会话的用户排在最后（NULLS LAST）
-            # 同时返回该用户最早/最近一次渠道会话的 created_at / updated_at，
+            # 同时返回该组合最早/最近一次渠道会话的 created_at / updated_at，
             # 用于前端展示"[创建日期] ~ [更新日期]"。
             # 引流人关联：LEFT JOIN customer_referrals + users 返回 referrer_user_id / referrer_name。
             cursor.execute(f"""
                 SELECT u.user_id, u.username, u.nickname, u.avatar_url, u.source, u.tenant_id, u.created_at,
+                       cs.channel_type,
+                       cs.channel_chat_id,
                        cs.first_session_at,
                        cs.last_session_at,
                        cr.referrer_user_id,
                        ru.nickname AS referrer_nickname,
-                       ru.username AS referrer_username
+                       ru.username AS referrer_username,
+                       cr.created_at AS referral_time
                 FROM users u
-                LEFT JOIN (
-                    SELECT user_id,
-                           MIN(created_at) AS first_session_at,
-                           MAX(updated_at) AS last_session_at
-                    FROM channel_sessions
-                    WHERE user_id IS NOT NULL
-                    GROUP BY user_id
-                ) cs ON cs.user_id = u.user_id
+                LEFT JOIN ({cs_subquery}) cs ON cs.user_id = u.user_id
                 LEFT JOIN customer_referrals cr ON cr.customer_user_id = u.user_id
                 LEFT JOIN users ru ON ru.user_id = cr.referrer_user_id
                 WHERE {where_clause}
@@ -450,6 +478,8 @@ class UserDB:
             users = [dict(row) for row in cursor.fetchall()]
 
         for u in users:
+            # 组合归一化：无会话用户 channel_type 为 None、channel_chat_id 为空串
+            u["channel_chat_id"] = u.get("channel_chat_id") or ""
             # 引流人名称：优先昵称，其次用户名，引流人被删除时显示"已删除员工"
             if u.get("referrer_user_id"):
                 u["referrer_name"] = (
@@ -1641,10 +1671,12 @@ class CustomerReferralDB:
         tenant_id: str,
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
+        referrer_user_id: Optional[str] = None,
     ) -> dict:
         """引流统计：总引流数 + 员工分组（referral_count / ratio）。
 
         过滤基准 = customer_referrals.created_at（引流发生时间）。
+        referrer_user_id 传入时（普通用户），仅统计该引流员工自己的数据。
         """
         date_cond = ""
         params: list = [tenant_id]
@@ -1652,9 +1684,12 @@ class CustomerReferralDB:
             date_cond += " AND cr.created_at >= %s"
             params.append(start_date)
         if end_date:
-            date_cond += " AND cr.created_at < %s"
-            # 含当日：end_date 视为当日零点，用 < 次日 语义由调用方传入次日，这里直接 < end_date
+            # end_date 含当日：< 次日零点 语义，SQL 内 +1 天，使传入当天也能统计到当天全天数据
+            date_cond += " AND cr.created_at < (%s::date + INTERVAL '1 day')"
             params.append(end_date)
+        if referrer_user_id:
+            date_cond += " AND cr.referrer_user_id = %s"
+            params.append(referrer_user_id)
 
         with get_db_connection() as conn:
             cursor = conn.cursor()
@@ -1692,6 +1727,7 @@ class CustomerReferralDB:
         tenant_id: str,
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
+        referrer_user_id: Optional[str] = None,
     ) -> int:
         """总对话消息数：customer_referrals.customer_user_id → channel_sessions.user_id
         → channel_messages.session_id，过滤 created_at 在日期段内（is_recalled=FALSE）。"""
@@ -1701,8 +1737,12 @@ class CustomerReferralDB:
             cond += " AND cm.created_at >= %s"
             params.append(start_date)
         if end_date:
-            cond += " AND cm.created_at < %s"
+            # end_date 含当日：< 次日零点 语义，SQL 内 +1 天
+            cond += " AND cm.created_at < (%s::date + INTERVAL '1 day')"
             params.append(end_date)
+        if referrer_user_id:
+            cond += " AND cr.referrer_user_id = %s"
+            params.append(referrer_user_id)
 
         with get_db_connection() as conn:
             cursor = conn.cursor()

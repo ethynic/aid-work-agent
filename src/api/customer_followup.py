@@ -477,7 +477,8 @@ async def list_records(
             conditions.append("r.followup_at >= %s")
             params.append(date_from)
         if date_to:
-            conditions.append("r.followup_at <= %s")
+            # date_to 含当日：< 次日零点 语义，SQL 内 +1 天，使传入当天也能统计到当天全天数据
+            conditions.append("r.followup_at < (%s::date + INTERVAL '1 day')")
             params.append(date_to)
 
         where = " AND ".join(conditions) if conditions else "1=1"

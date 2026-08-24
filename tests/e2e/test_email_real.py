@@ -25,9 +25,9 @@ class TestEmailReal:
 
     @pytest.mark.asyncio
     async def test_send_email(self):
-        """发送测试邮件"""
+        """发送测试邮件（email_process action=send）"""
         from src.models.user import UserEmail, EncryptionType
-        from src.tools.email import EmailSendTool
+        from src.tools.email import EmailProcessTool
 
         config = UserEmail(
             email_address=os.getenv("TEST_EMAIL_ADDRESS"),
@@ -41,8 +41,9 @@ class TestEmailReal:
             imap_encryption=EncryptionType(os.getenv("TEST_IMAP_ENCRYPTION", "ssl")),
         )
 
-        tool = EmailSendTool(config)
+        tool = EmailProcessTool(config)
         result = await tool.execute(
+            action="send",
             to=os.getenv("TEST_EMAIL_TO", config.email_address),
             subject="[测试] 自动化测试邮件",
             body="这是一封自动化测试邮件，请忽略。",
