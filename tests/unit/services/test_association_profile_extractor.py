@@ -39,8 +39,8 @@ def empty_profile():
     }
 
 
-def test_schema_has_exactly_the_requested_fourteen_fields():
-    assert len(PROFILE_FIELDS) == 14
+def test_schema_has_exactly_the_requested_sixteen_fields():
+    assert len(PROFILE_FIELDS) == 16
     assert set(PROFILE_FIELDS) == set(AssociationProfile.model_fields)
     assert {
         "web_exposure_count",
@@ -85,7 +85,7 @@ async def test_nonstandard_wording_is_not_rejected_by_fixed_semantic_anchors():
     evidence = {
         "supervising_unit": "文化和旅游部",
         "organization_level": "5A",
-        "president_name": "许萍",
+        "member_director_name": "许萍",
         "secretary_general_name": "王承展",
         "address": "北京市朝阳区",
         "official_wechat_account": "中国游协",
@@ -214,10 +214,12 @@ async def test_all_supported_fields_accept_real_chinese_utf8_evidence():
     evidence = {
         "supervising_unit": "文化和旅游部",
         "organization_level": "5A",
-        "president_name": "张华",
-        "president_mobile": "13912345678",
         "secretary_general_name": "王承展",
         "secretary_general_mobile": "18511597486",
+        "member_director_name": "张华",
+        "member_director_mobile": "13912345678",
+        "office_director_name": "李雷",
+        "office_director_mobile": "13812345678",
         "address": "北京市朝阳区",
         "email": "contact@example.org",
         "branch_count": "12",
@@ -304,9 +306,9 @@ async def test_value_is_accepted_without_verbatim_source_check():
 @pytest.mark.asyncio
 async def test_invalid_count_does_not_discard_verified_leadership():
     data = empty_profile()
-    data["president_name"] = {
-        "value": "张会长",
-        "evidence_quote": "现任会长张会长",
+    data["secretary_general_name"] = {
+        "value": "张秘书长",
+        "evidence_quote": "现任秘书长张秘书长",
         "source_url": URL,
     }
     data["brand_conference_consecutive_count"] = {
@@ -316,13 +318,13 @@ async def test_invalid_count_does_not_discard_verified_leadership():
     }
 
     result = await extract_association_profile(
-        [page("现任会长张会长。品牌会议连续举办九届。")],
+        [page("现任秘书长张秘书长。品牌会议连续举办九届。")],
         "www.caapa.org",
         MockGateway(json.dumps(data, ensure_ascii=False)),
     )
 
     assert result.status == "success"
-    assert result.profile.president_name == "张会长"
+    assert result.profile.secretary_general_name == "张秘书长"
     assert result.profile.brand_conference_consecutive_count is None
 
 
@@ -359,14 +361,14 @@ async def test_mobile_kept_when_not_bound_to_same_name_in_quote():
 
 
 @pytest.mark.asyncio
-async def test_president_mobile_kept_without_binding_check():
-    """删除绑定校验后，会长手机号只要格式正确即保留，不要求与姓名同证据。"""
-    content = "会长许萍\n秘书长王承展 18511597486"
+async def test_member_mobile_kept_without_binding_check():
+    """删除绑定校验后，会员部主任手机号只要格式正确即保留，不要求与姓名同证据。"""
+    content = "会员部主任许萍\n秘书长王承展 18511597486"
     data = empty_profile()
-    data["president_name"] = {
-        "value": "许萍", "evidence_quote": "会长许萍", "source_url": URL,
+    data["member_director_name"] = {
+        "value": "许萍", "evidence_quote": "会员部主任许萍", "source_url": URL,
     }
-    data["president_mobile"] = {
+    data["member_director_mobile"] = {
         "value": "18511597486",
         "evidence_quote": "秘书长王承展 18511597486",
         "source_url": URL,
@@ -375,8 +377,8 @@ async def test_president_mobile_kept_without_binding_check():
         [page(content)], "www.caapa.org", MockGateway(json.dumps(data, ensure_ascii=False)),
     )
     assert result.status == "success"
-    assert result.profile.president_name == "许萍"
-    assert result.profile.president_mobile == "18511597486"
+    assert result.profile.member_director_name == "许萍"
+    assert result.profile.member_director_mobile == "18511597486"
 
 
 @pytest.mark.asyncio
@@ -736,11 +738,11 @@ async def test_personal_member_evidence_only_fills_individual_member_count():
 
 
 @pytest.mark.asyncio
-async def test_organizational_page_extracts_president_and_secretary_roles():
+async def test_organizational_page_extracts_contact_roles():
     organizational_url = "https://www.caapa.org/About/Organizational.html"
     quote = (
-        "许萍 中国游艺机游乐园协会党支部书记、会长\n"
-        "王承展 中国游艺机游乐园协会秘书长"
+        "王承展 中国游艺机游乐园协会秘书长\n"
+        "许萍 中国游艺机游乐园协会会员服务部主任"
     )
     organizational_page = VerifiedOfficialPage(
         url=organizational_url,
@@ -749,14 +751,14 @@ async def test_organizational_page_extracts_president_and_secretary_roles():
         verified_official=True,
     )
     data = empty_profile()
-    data["president_name"] = {
-        "value": "许萍",
-        "evidence_quote": "许萍 中国游艺机游乐园协会党支部书记、会长",
-        "source_url": organizational_url,
-    }
     data["secretary_general_name"] = {
         "value": "王承展",
         "evidence_quote": "王承展 中国游艺机游乐园协会秘书长",
+        "source_url": organizational_url,
+    }
+    data["member_director_name"] = {
+        "value": "许萍",
+        "evidence_quote": "许萍 中国游艺机游乐园协会会员服务部主任",
         "source_url": organizational_url,
     }
 
@@ -767,8 +769,8 @@ async def test_organizational_page_extracts_president_and_secretary_roles():
     )
 
     assert result.status == "success"
-    assert result.profile.president_name == "许萍"
     assert result.profile.secretary_general_name == "王承展"
+    assert result.profile.member_director_name == "许萍"
 
 
 @pytest.mark.asyncio
@@ -875,14 +877,14 @@ async def test_integer_count_accepted_without_quote_token_check(value, quote):
         ("branch_count", False, None),
         ("branch_count", 1.5, None),
         ("branch_count", -1, None),
-        ("president_name", 1, "1"),
+        ("member_director_name", 1, "1"),
     ],
 )
 async def test_numeric_values_outside_integer_count_contract_clear_field(
     field_name, value, expected_value,
 ):
     """计数字段的 bool/float/负数 value：bool 直接归 None；float/负数归一化为
-    字符串后仍非 ASCII 数字，被 COUNT_FORMAT_INVALID 清空。president_name 无
+    字符串后仍非 ASCII 数字，被 COUNT_FORMAT_INVALID 清空。member_director_name 无
     格式校验，整数归一化为字符串后保留。结果均仍为 success。"""
     data = {name: None for name in PROFILE_FIELDS}
     data[field_name] = value

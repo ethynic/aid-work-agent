@@ -1,6 +1,6 @@
 {
   "name": "association-client",
-  "version": "1.0.0",
+  "version": "1.1.1",
   "private": true,
   "description": "协会信息收集助手桌面客户端",
   "main": "dist/electron/main.js",

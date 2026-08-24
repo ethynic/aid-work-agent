@@ -30,14 +30,27 @@ class DeepSeekProvider(BaseLLMProvider):
         api_key: str,
         model: str = "deepseek-chat",
         base_url: Optional[str] = None,
+        enable_thinking: bool = False,
         **kwargs
     ):
         super().__init__(api_key, model, base_url=base_url, **kwargs)
+        # v4 系混合模型默认带思考链：导航选航这类小任务思考耗时 20~95s/次且
+        # 会烧穿小 max_tokens 导致 content 为空（真机教训，2026-08 人口学会
+        # 探针）。默认关闭思考；必须用官方参数 thinking.type=disabled（v4-flash
+        # 与 v4-pro 均实测生效：95s/3500 token → 1.2s/9 token）。
+        # chat_template_kwargs 是 vLLM 本地部署用法，官方 API 不识别。
+        self.enable_thinking = enable_thinking
         self.api_url = f"{self.base_url or self.DEFAULT_BASE_URL}/chat/completions"
         self.headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
+
+    def _apply_thinking_control(self, request_body: Dict[str, Any]) -> None:
+        """按配置注入思考开关（官方 API 参数；chat_template_kwargs 是 vLLM
+        本地部署用法，官方 API 不识别，属软提示不保证生效——真机实测）。"""
+        if not self.enable_thinking:
+            request_body["thinking"] = {"type": "disabled"}
 
     async def chat(
         self,
@@ -60,6 +73,7 @@ class DeepSeekProvider(BaseLLMProvider):
             if tool_choice:
                 request_body["tool_choice"] = tool_choice
 
+        self._apply_thinking_control(request_body)
         request_body.update(kwargs)
 
         invoke_id = generate_request_id()
@@ -138,6 +152,7 @@ class DeepSeekProvider(BaseLLMProvider):
             if tool_choice:
                 request_body["tool_choice"] = tool_choice
 
+        self._apply_thinking_control(request_body)
         request_body.update(kwargs)
 
         invoke_id = generate_request_id()

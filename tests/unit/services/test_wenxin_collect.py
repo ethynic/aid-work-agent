@@ -41,7 +41,7 @@ def test_query_template_includes_all_required_fields():
     for keyword in (
         "地址", "邮箱", "官网", "主管单位", "单位等级",
         "会员数量", "分支机构", "公众号", "品牌会议",
-        "现任会长", "秘书长",
+        "秘书长", "会员服务", "办公室",
     ):
         assert keyword in query, f"QUERY_TMPL 缺少字段关键词：{keyword}"
 

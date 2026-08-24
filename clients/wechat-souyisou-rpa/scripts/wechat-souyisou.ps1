@@ -490,23 +490,38 @@ public static class WechatSouyisouWin32 {
             [DateTimeOffset]::UtcNow -lt $readyDeadline
         )
         if ($readySamples -lt 2) {
-            Add-Content -Path "$env:TEMP\wechat_diag.log" -Value "[$([DateTimeOffset]::Now.ToString('HH:mm:ss'))] collect search_wait INCONCLUSIVE: readySamples=$readySamples last_candidate_len=$($candidateText.Length) person_in_candidate=$([bool]$candidateText.Contains($PersonName)) query='$query' person=$PersonName assoc=$AssociationName"
+            # 区分两种"列表不就绪"：结果页已正常加载（栏目标记齐全）但人名不在
+            # 列表里 → 确定搜过了没有，返回 not_found（上层不重试，避免同一个人
+            # 白搜第二遍）；只有页面真没加载出来（无栏目标记）才返回 inconclusive
+            # 交由上层重试兜住偶发焦点/加载问题。
+            $candidateLines = @($candidateText -split '\r?\n' |
+                ForEach-Object { $_.Trim() })
+            $navigationMarkers = @('全部','文章','账号','相关搜索')
+            $markerMatches = @($navigationMarkers |
+                Where-Object { $candidateLines -contains $_ }).Count
+            $pageLoaded = $markerMatches -ge 3
+            $waitOutcome = if ($pageLoaded) { 'not_found' } else { 'inconclusive' }
+            Add-Content -Path "$env:TEMP\wechat_diag.log" -Value ("[{0}] collect search_wait {1}: readySamples={2} last_candidate_len={3} person_in_candidate={4} page_loaded={5} query='{6}' person={7} assoc={8}" -f `
+                [DateTimeOffset]::Now.ToString('HH:mm:ss'), $waitOutcome, $readySamples,
+                $candidateText.Length, [bool]$candidateText.Contains($PersonName),
+                $pageLoaded, $query, $PersonName, $AssociationName)
             $artifact=Protect-EvidenceArtifact $ArtifactDirectory @{
                 kind='result_page_unbounded';association_name=$AssociationName
                 person_name=$PersonName;text='';links=@();input_verified=[bool]$inputVerified
                 captured_at=[DateTimeOffset]::Now.ToString('o')
             }
             $detailArtifact=Protect-EvidenceArtifact $ArtifactDirectory @{
-                kind='collect_result';status='inconclusive';checked=0;failures=1
+                kind='collect_result';status=$waitOutcome;checked=0;failures=1
                 list_artifact_id=$artifact.artifact_id;records=@([pscustomobject]@{
                     stage='list_judge';reason='list_text_unavailable';text_length=0
+                    page_loaded=$pageLoaded
                 });found_result=$null;captured_at=[DateTimeOffset]::Now.ToString('o')
             }
             $stage='cleanup';$sessionCleanupAttempted=$true
             $cleanupResult=Complete-WeixinPluginSession `
                 ([ref]$sessionCleanupCompleted) $cleanupSession
             Write-Result @{
-                ok=$true;executed=$true;status='inconclusive';checked=0;failures=1
+                ok=$true;executed=$true;status=$waitOutcome;checked=0;failures=1
                 artifact_ref=$detailArtifact.artifact_ref
                 session_closed=[bool]$cleanupResult.session_closed
             }

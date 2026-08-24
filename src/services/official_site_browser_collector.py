@@ -23,7 +23,11 @@ from src.services.official_site_page_collector import (
 
 NAVIGATION_SELECTOR = (
     "a, button, [role='button'], [onclick], nav li, "
-    "[class*='menu'] li, [class*='nav'] li"
+    "[class*='menu'] li, [class*='nav'] li, "
+    "[class*='nav'] div, [class*='nav'] span, "
+    "[class*='menu'] div, [class*='menu'] span, "
+    "[class*='bar'] div, [class*='bar'] span, "
+    "[class*='side'] div, [class*='side'] span, [class*='tab']"
 )
 MAX_NAVIGATION_TARGETS_PER_STATE = 200
 MAX_COLLECTION_SECONDS = 90.0
@@ -117,13 +121,41 @@ def _target_is_safe_and_relevant(
 
 def _target_business_priority(target: BrowserNavigationTarget) -> int:
     haystack = f"{target.text} {target.href or ''}".lower()
+    # 新闻/通知类噪声零分（同 page_collector.NEWS_NOISE_TERMS）——真机教训：
+    # 「…相关负责人答记者问」新闻标题会拿满领导词权重，挤占采集预算。
+    if any(
+        (
+            term in haystack
+            if not term.isascii()
+            else re.search(
+                rf"(?<![a-z0-9_]){re.escape(term)}(?![a-z0-9_])",
+                haystack,
+            )
+        )
+        for term in (
+            "通知", "新闻", "动态", "公告", "报道", "资讯", "快讯", "会议",
+            "活动", "专题", "答记者问", "声明", "公示", "征集", "申报",
+            "要闻", "媒体", "news", "notice", "announcement", "event", "press",
+        )
+    ):
+        return 0
+    # 2026-08 扩充：领导页是秘书长姓名第一优先来源，领导类词全部提到 120/105，
+    # 学会镜像 + 机构泛化词 + 裸词兜底（与 HIGH_VALUE_LINK_TERMS 同步演进）。
     weighted_terms = (
-        (100, ("组织领导", "驻会领导", "领导集体", "领导班子", "领导机构", "协会领导",
-               "leadership", "leader")),
-        (90, ("协会设置", "组织架构", "组织机构", "机构设置", "秘书处",
-              "organization", "organisational", "organizational")),
-        (80, ("协会简介", "协会介绍", "协会概况", "关于协会",
-              "about", "profile", "introduction")),
+        (120, ("秘书长", "现任领导", "学会领导", "领导简介", "现任负责人",
+               "驻会负责人", "主要负责人", "负责人",
+               "组织领导", "驻会领导", "领导集体", "领导班子", "领导机构",
+               "协会领导", "leadership", "leader")),
+        (105, ("理事长", "理事会", "会长", "秘书处", "秘书局",
+               "办事机构", "职能部门", "内设机构", "部门设置", "工作机构",
+               "机构设置", "协会设置", "学会设置", "组织架构", "组织机构",
+               "organization", "organisational", "organizational",
+               "secretariat", "council", "governance")),
+        (85, ("协会简介", "协会介绍", "协会概况", "关于协会",
+              "学会简介", "学会介绍", "学会概况", "关于学会",
+              "关于我们", "关于",
+              "章程", "概况", "简介",
+              "about", "profile", "introduction", "overview")),
         (70, ("联系我们", "联系方式", "contact")),
         (60, ("分支机构", "专业委员会", "branch", "committee")),
         (20, ("会员", "member", "members", "membership")),
@@ -391,6 +423,14 @@ async def collect_official_pages_with_browser_driver(
 class PlaywrightNavigationDriver:
     """Browser driver 的 Playwright 实现；浏览器生命周期由调用方管理。"""
 
+    # SPA 加载占位文案（出现在正文开头时视为页面未渲染完成，继续轮询）
+    _LOADING_MARKERS = ("正在加载", "加载中", "请稍候", "载入中", "loading…", "loading...")
+
+    @classmethod
+    def _is_loading_placeholder(cls, content: str) -> bool:
+        head = (content or "").strip()[:200].lower()
+        return any(marker in head for marker in cls._LOADING_MARKERS)
+
     def __init__(self, page, *, navigation_timeout_ms: int = 8_000):
         if (
             not isinstance(navigation_timeout_ms, int)
@@ -406,6 +446,11 @@ class PlaywrightNavigationDriver:
         targets: list[BrowserNavigationTarget] = []
         occurrences: dict[tuple[str, str], int] = {}
         if hasattr(locator, "evaluate_all"):
+            # 可见性策略：可见元素全收；不可见元素只收带 href 的锚点——
+            # 悬浮菜单（hover 展开）的子项 display:none 但 DOM 里有 <a href>，
+            # 带 href 的目标可走 URL 直开不需要点击可见（真机教训：冶金教育
+            # 学会/人口学会官网导航全藏在悬浮菜单，targets=0/1 导致搜索空转）。
+            # 可见目标排序在前再截断，隐藏锚点永不挤掉可见目标。
             snapshots = await locator.evaluate_all(
                 """(elements, limit) => elements.map((element, index) => {
                     const style = window.getComputedStyle(element);
@@ -413,39 +458,59 @@ class PlaywrightNavigationDriver:
                     const visible = style.visibility !== 'hidden'
                         && style.display !== 'none'
                         && rect.width > 0 && rect.height > 0;
+                    // div/span 导航项必须是叶子（无子元素）——避开 nav 容器的
+                    // 包装层；a/li 豁免（折叠子菜单的 li 含子 span 仍要捕获）。
+                    const leafOk = element.tagName === 'A'
+                        || element.tagName === 'LI'
+                        || element.children.length === 0;
                     return {
                         index,
                         visible,
+                        leafOk,
                         text: (element.innerText || element.textContent || ''),
                         href: element.getAttribute('href')
                     };
-                }).filter((item) => item.visible).slice(0, limit)""",
+                }).filter((item) => item.leafOk
+                    && (item.visible || (item.href && item.text.trim())))
+                  .sort((a, b) => (b.visible ? 1 : 0) - (a.visible ? 1 : 0))
+                  .slice(0, limit)""",
                 MAX_NAVIGATION_TARGETS_PER_STATE,
             )
         else:
-            snapshots = []
+            visible_snapshots = []
+            hidden_snapshots = []
             target_count = await locator.count()
             for index in range(target_count):
                 element = locator.nth(index)
                 visible = await element.is_visible()
-                if not visible:
+                href = await element.get_attribute("href")
+                if not visible and not href:
                     continue
-                snapshots.append({
+                snapshot = {
                     "index": index,
-                    "visible": True,
+                    "visible": visible,
                     "text": await element.inner_text(),
-                    "href": await element.get_attribute("href"),
-                })
-                if len(snapshots) >= MAX_NAVIGATION_TARGETS_PER_STATE:
+                    "href": href,
+                }
+                (visible_snapshots if visible else hidden_snapshots).append(snapshot)
+                if (
+                    len(visible_snapshots) >= MAX_NAVIGATION_TARGETS_PER_STATE
+                    and len(hidden_snapshots) >= MAX_NAVIGATION_TARGETS_PER_STATE
+                ):
                     break
+            snapshots = (
+                visible_snapshots[:MAX_NAVIGATION_TARGETS_PER_STATE]
+                + hidden_snapshots[:MAX_NAVIGATION_TARGETS_PER_STATE]
+            )
         for snapshot in snapshots:
-            if not snapshot.get("visible"):
+            href = snapshot.get("href")
+            href = str(href) if href is not None else None
+            if not snapshot.get("visible") and not href:
+                # 无 href 的不可见元素（纯按钮/li）无法直开也无法点击，跳过
                 continue
             text = " ".join(str(snapshot.get("text") or "").split())[:500]
             if not text:
                 continue
-            href = snapshot.get("href")
-            href = str(href) if href is not None else None
             key = (text, href or "")
             occurrence = occurrences.get(key, 0)
             occurrences[key] = occurrence + 1
@@ -494,10 +559,17 @@ class PlaywrightNavigationDriver:
             if requested_url != loaded_url or not candidate_state.content.strip():
                 raise exc
             recovered_state = candidate_state
-        poll_count = max(0, min(self._navigation_timeout_ms, 3_000) // 250)
+        poll_count = max(0, min(self._navigation_timeout_ms, 9_000) // 250)
         state = recovered_state or await self._state()
         for _attempt in range(poll_count):
-            if state.content.strip() and state.navigation_targets:
+            # 慢 SPA 等待窗口 9s；内容仍是加载占位（真机：冶金教育学会
+            # 「正在加载系统资源」占位 + 1 个备案链接，菜单 8s 才渲染）时
+            # 继续等菜单渲染
+            if (
+                state.content.strip()
+                and state.navigation_targets
+                and not self._is_loading_placeholder(state.content)
+            ):
                 return state
             await self._page.wait_for_timeout(250)
             state = await self._state()
@@ -556,19 +628,35 @@ class PlaywrightNavigationDriver:
             if target.locator_index in matches
             else matches[target.occurrence]
         )
-        await locator.nth(match_index).click(
-            timeout=self._navigation_timeout_ms
-        )
+        # 点击被加载遮罩拦截时（真机：cpaw.org.cn 的 el-loading-mask 拦截
+        # pointer events 10s 超时）改用 force 直发事件重试一次
+        try:
+            await locator.nth(match_index).click(
+                timeout=min(self._navigation_timeout_ms, 5_000)
+            )
+        except Exception:
+            await locator.nth(match_index).click(
+                timeout=min(self._navigation_timeout_ms, 3_000), force=True
+            )
+        # 等加载遮罩消失（Element UI 的 el-loading-mask 覆盖期间内容未渲染）
+        for mask_selector in (".el-loading-mask", "[class*='loading-mask']"):
+            try:
+                await self._page.wait_for_selector(
+                    mask_selector, state="hidden",
+                    timeout=min(self._navigation_timeout_ms, 5_000),
+                )
+            except Exception:
+                pass
         try:
             await self._page.wait_for_load_state(
                 "domcontentloaded",
-                timeout=min(self._navigation_timeout_ms, 3_000),
+                timeout=min(self._navigation_timeout_ms, 6_000),
             )
         except Exception:
             pass
         # Vue/React SPA 路由切换后内容是异步渲染的，需要等到 content 稳定
         # （连续两次 content 不再变化）才返回，避免拿到空白或半加载页面。
-        poll_count = max(0, min(self._navigation_timeout_ms, 3_000) // 250)
+        poll_count = max(0, min(self._navigation_timeout_ms, 6_000) // 250)
         state = await self._state()
         if state.fingerprint != previous_state.fingerprint:
             # fingerprint 已变，但 SPA 内容可能还在加载；额外等待内容稳定。
@@ -594,6 +682,83 @@ class PlaywrightNavigationDriver:
                 break
             state = next_state
         return state
+
+    # 分页控件文本：精确匹配这些短文本的可见元素视为「下一页」按钮
+    _PAGER_NEXT_TEXTS = ("下一页", "下页", "›", "»", ">", "next")
+
+    async def flip_next(self, previous_state: BrowserPageState) -> BrowserPageState | None:
+        """点击分页控件的「下一页」（领导名单分页，真机：人口学会现任领导
+        第 3 页才是秘书长）。无分页控件、点击无效或已到末页返回 None。
+        """
+        try:
+            clicked = await self._page.evaluate(
+                """(texts) => {
+                    const els = document.querySelectorAll(
+                        'button, a, li, span, div, i'
+                    );
+                    for (const element of els) {
+                        const style = window.getComputedStyle(element);
+                        const rect = element.getBoundingClientRect();
+                        if (style.visibility === 'hidden'
+                            || style.display === 'none'
+                            || rect.width <= 0 || rect.height <= 0) continue;
+                        const cls = String(element.className || '');
+                        // 类名匹配不要求叶子——Element UI 的 btn-next 内含 <i>
+                        // 图标子元素、无文字，真机（人口学会翻页）曾因此漏点
+                        if (/btn-next/.test(cls)
+                            || /pagination[^ ]*next/i.test(cls)
+                            || /(?:^|\\s)next(?:\\s|$)/i.test(cls)) {
+                            element.click();
+                            return true;
+                        }
+                        if (element.children.length > 0) continue;
+                        const text = (element.innerText || '').trim();
+                        if (texts.includes(text) && text.length <= 4) {
+                            element.click();
+                            return true;
+                        }
+                    }
+                    return false;
+                }""",
+                list(self._PAGER_NEXT_TEXTS),
+            )
+        except Exception:
+            return None
+        if not clicked:
+            return None
+        await self._page.wait_for_timeout(800)
+        # 等加载遮罩消失（与 activate 同款；慢 SPA 点击后遮罩覆盖期间内容未渲染）
+        for mask_selector in (".el-loading-mask", "[class*='loading-mask']"):
+            try:
+                await self._page.wait_for_selector(
+                    mask_selector, state="hidden",
+                    timeout=min(self._navigation_timeout_ms, 5_000),
+                )
+            except Exception:
+                pass
+        state = await self._state()
+        # 先等「内容开始变化」——慢 SPA 点击后渲染延迟 2~3s，若直接进入稳定
+        # 轮询会把「尚未变化」误判为「已稳定」而放弃翻页（真机：人口学会
+        # 现任领导第 2→3 页，庄亚儿在第 3 页曾被这样丢掉）
+        change_polls = max(0, min(self._navigation_timeout_ms, 4_000) // 250)
+        for _attempt in range(change_polls):
+            if state.fingerprint != previous_state.fingerprint:
+                break
+            await self._page.wait_for_timeout(250)
+            state = await self._state()
+        if state.fingerprint == previous_state.fingerprint:
+            return None
+        # 再等内容稳定（防半加载）
+        poll_count = max(0, min(self._navigation_timeout_ms, 3_000) // 250)
+        for _attempt in range(poll_count):
+            await self._page.wait_for_timeout(250)
+            next_state = await self._state()
+            if next_state.fingerprint == state.fingerprint:
+                break
+            state = next_state
+        if state.fingerprint != previous_state.fingerprint:
+            return state
+        return None
 
 
 async def _guard_main_frame_navigation(

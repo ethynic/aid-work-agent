@@ -108,6 +108,37 @@ def test_discovers_all_required_high_value_sections_in_chinese_and_english():
     assert {urlparse(url).path for url in links} == set(expected_paths)
 
 
+def test_discovers_society_and_leadership_word_variants():
+    """学会镜像词 + 领导泛化词必须命中（人口学会/冶金教育学会等学会站点
+
+    曾因词表只有「协会」前缀被整体拦截，导致秘书长姓名只能依赖文心错值）。
+    """
+    variants = {
+        "/xhjj": "学会简介",
+        "/gxueh": "关于学会",
+        "/xhld": "学会领导",
+        "/xrld": "现任领导",
+        "/ldjj": "领导简介",
+        "/lsz": "理事长",
+        "/msc": "秘书处",
+        "/bsjg": "办事机构",
+        "/znbm": "职能部门",
+        "/bmsz": "部门设置",
+        "/nsjg": "内设机构",
+        "/fzr": "负责人",
+        "/lsh": "理事会",
+        "/zc": "章程",
+    }
+    page = snapshot(
+        links=[
+            OfficialPageLink(url=path, text=text)
+            for path, text in variants.items()
+        ]
+    )
+    links = discover_high_value_official_links([page], DOMAIN)
+    assert {urlparse(url).path for url in links} == set(variants)
+
+
 @pytest.mark.asyncio
 async def test_collection_deduplicates_and_honors_page_and_character_limits():
     seed = snapshot(

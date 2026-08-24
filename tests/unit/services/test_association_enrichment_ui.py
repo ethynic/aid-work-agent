@@ -255,7 +255,7 @@ async def test_session_fatal_stops_twenty_item_ui_run_and_exports_partial_rows(t
                 processing_status="partial",
                 processed_at="2026-08-03T00:00:00+00:00",
             )
-            row.values["president_mobile"] = error.recovered_mobile
+            row.values["secretary_general_mobile"] = error.recovered_mobile
             raise AssociationBatchAborted(row, error)
 
     manager = AssociationUiRunManager(
@@ -354,7 +354,7 @@ async def test_progress_does_not_regress_for_repeated_or_unknown_stage(tmp_path)
                 "正在使用可见浏览器采集官网",
                 "正在发现官网",
                 "临时重试",
-                "正在微信检索会长",
+                "正在微信检索秘书长",
             ):
                 self.progress(f"[{name}] {stage}")
                 observed.append(run.progress_percent())
@@ -402,8 +402,8 @@ def test_overall_progress_uses_current_stage_and_never_regresses_between_items()
         "正在发现官网",
         "正在使用可见浏览器采集官网",
         "正在使用网络检索补充基础信息",
-        "正在微信检索会长",
         "正在微信检索秘书长",
+        "正在微信检索办公室主任",
     ):
         run.current_stage = stage
         observed.append(run.progress_percent())

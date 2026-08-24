@@ -12,7 +12,7 @@
 3. 打开可见 Chromium，自动发现官网内的简介、领导、组织、联系等相关页面；
 4. 使用项目 LLM 提取官网字段；
 5. 官网不可访问时，尝试 `https → http`，仍失败则用普通网络检索补充基础信息；
-6. 如果找到了会长或秘书长姓名，自动驱动微信搜一搜查找手机号；
+6. 如果找到了秘书长、会员服务负责人或办公室/综合办负责人姓名，自动驱动微信搜一搜查找手机号；
 7. 每个联系人结束后关闭搜一搜，恢复微信主窗口；
 8. 将所有协会的结果、状态、来源和错误摘要写入一个 `.xlsx` 文件。
 
@@ -131,7 +131,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
 运行时的正常现象：
 
 - PowerShell 会依次显示“正在发现官网”“正在使用可见浏览器采集官网”
-  “正在微信检索会长/秘书长”“正在写入 Excel 结果”等阶段进度；
+  “正在微信检索秘书长/会员部主任/办公室主任”“正在写入 Excel 结果”等阶段进度；
 - 出现可见 Chromium 窗口并自动浏览协会官网；
 - Chromium 阶段结束后窗口自动关闭；
 - 微信被切换到前台，打开搜一搜并执行联系人查询；
@@ -155,10 +155,9 @@ JSON。这些进度不是报错；它们用于判断程序当前停留在哪个�
 对当前 Demo，建议把以下结果视为成功：
 
 - 官网基础字段已写入；
-- 会长或秘书长至少一人的手机号命中；
+- 秘书长、会员服务负责人或办公室/综合办负责人至少一人的手机号命中；
 - `source_summary` 包含 `official:` 和至少一个 `wechat:`；
-- 未命中的另一联系人明确记录为 `wechat:会长:not_found` 或
-  `wechat:秘书长:not_found`。
+- 未命中的联系人明确记录为 `wechat:秘书长:not_found` 等脱敏错误摘要。
 
 只有 `failed` 且业务字段全部为空，才属于整条流程失败。
 
@@ -171,8 +170,8 @@ Invoke-Item ".\demo-output\association-demo-one.xlsx"
 重点检查：
 
 - `association_name`：协会名称；
-- `president_name` / `secretary_general_name`：会长、秘书长；
-- `president_mobile` / `secretary_general_mobile`：手机号；
+- `secretary_general_name` / `member_director_name` / `office_director_name`：秘书长、会员服务负责人、办公室/综合办负责人姓名；
+- `secretary_general_mobile` / `member_director_mobile` / `office_director_mobile`：对应手机号；
 - `official_website`、地址、邮箱、会员数等基础信息；
 - `processing_status`：`complete`、`partial` 或 `failed`；
 - `source_summary`：使用过的官网、网络检索和微信来源；
@@ -310,7 +309,7 @@ CSV/XLSX 第一行没有受支持的协会名称列。将列名改为 `协会名
 搜索服务或 LLM 官网识别失败；当前程序会使用“协会名称”“协会名称 官网”
 “协会名称 官方网站”三种查询合并候选，并在 LLM 返回非 JSON 时自动重试。
 如果随后出现“正在使用网络检索补充基础信息”，说明没有确认到可靠官网，
-因此不会打开浏览器。只有基础信息中识别出会长或秘书长姓名后，程序才会
+因此不会打开浏览器。只有基础信息中识别出联系人姓名后，程序才会
 进入对应的微信检索阶段。
 
 ### 输出 Excel 无法保存

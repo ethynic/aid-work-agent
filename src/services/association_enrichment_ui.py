@@ -44,8 +44,9 @@ _STAGE_PROGRESS = (
     (("发现官网",), 0.10),
     (("可见浏览器", "官网采集"), 0.30),
     (("网络检索",), 0.35),
-    (("微信检索会长", "微信搜一搜·会长"), 0.60),
-    (("微信检索秘书长", "微信搜一搜·秘书长"), 0.80),
+    (("微信检索秘书长", "微信搜一搜·秘书长"), 0.60),
+    (("微信检索会员", "微信搜一搜·会员"), 0.70),
+    (("微信检索办公室", "微信搜一搜·办公室"), 0.80),
     (("写入 Excel",), 0.95),
 )
 
@@ -95,7 +96,7 @@ async def parse_association_evidence_with_llm(
             },
         ],
         temperature=0,
-        max_tokens=1200,
+        max_tokens=4000,
     )
     content = response.get("content")
     if not isinstance(content, str):

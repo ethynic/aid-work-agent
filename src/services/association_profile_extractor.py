@@ -1,4 +1,4 @@
-"""从已验证协会官网页面提取 14 字段结构化档案。"""
+"""从已验证协会官网页面提取 16 字段结构化档案。"""
 
 from __future__ import annotations
 
@@ -21,10 +21,12 @@ from pydantic import (
 PROFILE_FIELDS = (
     "supervising_unit",
     "organization_level",
-    "president_name",
-    "president_mobile",
     "secretary_general_name",
     "secretary_general_mobile",
+    "member_director_name",
+    "member_director_mobile",
+    "office_director_name",
+    "office_director_mobile",
     "address",
     "email",
     "branch_count",
@@ -46,6 +48,11 @@ COUNT_FIELDS = {
     "individual_member_count",
     "brand_conference_consecutive_count",
 }
+MOBILE_FIELDS = {
+    "secretary_general_mobile",
+    "member_director_mobile",
+    "office_director_mobile",
+}
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -58,13 +65,15 @@ class VerifiedOfficialPage(StrictModel):
 
 
 class AssociationProfile(StrictModel):
-    """14 个字段，每个是纯字符串或 None。LLM 只需返回扁平 JSON。"""
+    """16 个字段，每个是纯字符串或 None。LLM 只需返回扁平 JSON。"""
     supervising_unit: Optional[str] = None
     organization_level: Optional[str] = None
-    president_name: Optional[str] = None
-    president_mobile: Optional[str] = None
     secretary_general_name: Optional[str] = None
     secretary_general_mobile: Optional[str] = None
+    member_director_name: Optional[str] = None
+    member_director_mobile: Optional[str] = None
+    office_director_name: Optional[str] = None
+    office_director_mobile: Optional[str] = None
     address: Optional[str] = None
     email: Optional[str] = None
     branch_count: Optional[str] = None
@@ -228,7 +237,7 @@ def _validate_profile(
                     raise ValueError("COUNT_FORMAT_INVALID")
             elif field_name == "email" and not _EMAIL_RE.fullmatch(value):
                 raise ValueError("EMAIL_FORMAT_INVALID")
-            elif field_name in {"president_mobile", "secretary_general_mobile"}:
+            elif field_name in MOBILE_FIELDS:
                 normalized_mobile = _MOBILE_SEPARATOR_RE.sub("", value)
                 if not _MOBILE_RE.fullmatch(normalized_mobile):
                     raise ValueError("MOBILE_FORMAT_INVALID")

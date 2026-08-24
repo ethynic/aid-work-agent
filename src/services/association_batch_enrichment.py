@@ -24,52 +24,25 @@ AUDIT_FIELDS = (
 )
 OUTPUT_FIELDS = ("association_name",) + PROFILE_FIELDS + AUDIT_FIELDS[1:]
 
-# 当前暂未采集但需要出现在 Excel 中的额外职务占位列（姓名+手机成对）。
-# 这些列目前始终为空，待后续扩展采集时填充。
-EXTRA_ROLE_PLACEHOLDER_FIELDS = (
-    "deputy_secretary_general_name",
-    "deputy_secretary_general_mobile",
-    "vice_secretary_general_name",
-    "vice_secretary_general_mobile",
-    "academic_director_name",
-    "academic_director_mobile",
-    "member_director_name",
-    "member_director_mobile",
-    "conference_office_director_name",
-    "conference_office_director_mobile",
-    "network_info_director_name",
-    "network_info_director_mobile",
-    "general_office_director_name",
-    "general_office_director_mobile",
-    "office_director_name",
-    "office_director_mobile",
+# 采集目标联系角色（姓名+手机成对）：秘书长、会员服务相关部门负责人、办公室/综合办负责人。
+# 会长及其他职务不采——聚焦能联系上的实操对接人。每项：(检索/展示角色词, 姓名字段, 手机号字段)。
+CONTACT_ROLES = (
+    ("秘书长", "secretary_general_name", "secretary_general_mobile"),
+    ("会员部主任", "member_director_name", "member_director_mobile"),
+    ("办公室主任", "office_director_name", "office_director_mobile"),
 )
 
-# Excel 中文表头：按客户提供的参考表排列，未采集的职务列输出为空。
+# Excel 中文表头：非人员基础信息列 + 3 个采集目标联系角色列（姓名+手机）。
 _EXCEL_HEADERS: tuple[tuple[str, str | None], ...] = (
     ("客户名称", "association_name"),
     ("主管单位", "supervising_unit"),
     ("单位等级", "organization_level"),
-    ("会长\n姓名", "president_name"),
-    ("会长\n手机", "president_mobile"),
     ("秘书长\n姓名", "secretary_general_name"),
     ("秘书长\n手机", "secretary_general_mobile"),
-    ("常务副秘书长\n姓名", "deputy_secretary_general_name"),
-    ("常务副秘书长\n手机", "deputy_secretary_general_mobile"),
-    ("副秘书长\n姓名", "vice_secretary_general_name"),
-    ("副秘书长\n手机", "vice_secretary_general_mobile"),
-    ("学术部主任\n姓名", "academic_director_name"),
-    ("学术部主任\n手机", "academic_director_mobile"),
-    ("会员部主任\n姓名", "member_director_name"),
-    ("会员部主任\n手机", "member_director_mobile"),
-    ("会议会展办主任\n姓名", "conference_office_director_name"),
-    ("会议会展办主任\n手机", "conference_office_director_mobile"),
-    ("网络信息部主任\n姓名", "network_info_director_name"),
-    ("网络信息部主任\n手机", "network_info_director_mobile"),
-    ("综合办主任\n姓名", "general_office_director_name"),
-    ("综合办主任\n手机", "general_office_director_mobile"),
-    ("办公室主任\n姓名", "office_director_name"),
-    ("办公室主任\n手机", "office_director_mobile"),
+    ("会员服务负责人\n姓名", "member_director_name"),
+    ("会员服务负责人\n手机", "member_director_mobile"),
+    ("办公室/综合办负责人\n姓名", "office_director_name"),
+    ("办公室/综合办负责人\n手机", "office_director_mobile"),
     ("单位地址", "address"),
     ("单位邮箱", "email"),
     ("分支机构数量", "branch_count"),
@@ -95,7 +68,7 @@ FallbackProfileProvider = Callable[
     [str], Awaitable[Mapping[str, str | None]]
 ]
 WechatMobileProvider = Callable[[str, str, str], Awaitable[str | None]]
-WechatLeaderNameProvider = Callable[[str, str, str], Awaitable[str | None]]
+WechatLeaderNameProvider = Callable[[str, str], Awaitable[str | None]]
 WenxinSecretaryMobileProvider = Callable[[str, str], Awaitable[str | None]]
 ProgressReporter = Callable[[str], None]
 
@@ -372,69 +345,43 @@ class AssociationBatchEnricher:
         else:
             self._progress(f"[{association_name}] 【2/4】跳过官网采集（未获取到官网URL）")
 
-        # 会长/秘书长姓名仍为空时，用微信搜一搜搜索列表文本让 LLM 解析姓名。
+        # 目标联系角色姓名仍为空时，用微信搜一搜搜索列表文本让 LLM 解析姓名。
         if self._wechat_leader_name:
-            if not row.values.get("president_name"):
+            for role, name_field, _mobile_field in CONTACT_ROLES:
+                if row.values.get(name_field):
+                    continue
                 try:
-                    self._progress(f"[{association_name}] 【3/4】正在微信搜索会长姓名")
-                    name = await self._wechat_leader_name(
-                        association_name, "会长", ""
-                    )
+                    self._progress(f"[{association_name}] 【3/4】正在微信搜索{role}姓名")
+                    name = await self._wechat_leader_name(association_name, role)
                     if name:
-                        row.values["president_name"] = name
-                        row.sources.append("wechat_search:会长")
-                        self._progress(f"[{association_name}] 【3/4】微信搜索到会长姓名：{name}")
+                        row.values[name_field] = name
+                        row.sources.append(f"wechat_search:{role}")
+                        self._progress(f"[{association_name}] 【3/4】微信搜索到{role}姓名：{name}")
                     else:
-                        row.errors.append("profile:president_not_found")
-                        self._progress(f"[{association_name}] 【3/4】微信未搜索到会长姓名")
+                        row.errors.append(f"profile:{name_field.removesuffix('_name')}_not_found")
+                        self._progress(f"[{association_name}] 【3/4】微信未搜索到{role}姓名")
                 except Exception as exc:
                     error_code = getattr(exc, "error_code", type(exc).__name__)
                     stage = getattr(exc, "stage", "unknown")
-                    row.errors.append(f"wechat_search:会长:{error_code}:{stage}")
-                    self._progress(f"[{association_name}] 【3/4】微信搜索会长失败：{error_code}:{stage}")
-                    if getattr(exc, "session_fatal", False):
-                        self._finalize_row(row)
-                        raise AssociationBatchAborted(row, exc) from exc
-            if not row.values.get("secretary_general_name"):
-                try:
-                    self._progress(f"[{association_name}] 【3/4】正在微信搜索秘书长姓名")
-                    known_president = str(row.values.get("president_name") or "")
-                    name = await self._wechat_leader_name(
-                        association_name, "秘书长", known_president
-                    )
-                    if name:
-                        row.values["secretary_general_name"] = name
-                        row.sources.append("wechat_search:秘书长")
-                        self._progress(f"[{association_name}] 【3/4】微信搜索到秘书长姓名：{name}")
-                    else:
-                        row.errors.append("profile:secretary_general_not_found")
-                        self._progress(f"[{association_name}] 【3/4】微信未搜索到秘书长姓名")
-                except Exception as exc:
-                    error_code = getattr(exc, "error_code", type(exc).__name__)
-                    stage = getattr(exc, "stage", "unknown")
-                    row.errors.append(f"wechat_search:秘书长:{error_code}:{stage}")
-                    self._progress(f"[{association_name}] 【3/4】微信搜索秘书长失败：{error_code}:{stage}")
+                    row.errors.append(f"wechat_search:{role}:{error_code}:{stage}")
+                    self._progress(f"[{association_name}] 【3/4】微信搜索{role}失败：{error_code}:{stage}")
                     if getattr(exc, "session_fatal", False):
                         self._finalize_row(row)
                         raise AssociationBatchAborted(row, exc) from exc
         else:
             self._progress(f"[{association_name}] 【3/4】跳过微信搜领导（未启用 wechat_leader_name）")
-            if not row.values.get("president_name"):
-                row.errors.append("profile:president_not_found")
-            if not row.values.get("secretary_general_name"):
-                row.errors.append("profile:secretary_general_not_found")
+            for _role, name_field, _mobile_field in CONTACT_ROLES:
+                if not row.values.get(name_field):
+                    row.errors.append(f"profile:{name_field.removesuffix('_name')}_not_found")
 
-        for role, name_field, mobile_field in (
-            ("会长", "president_name", "president_mobile"),
-            ("秘书长", "secretary_general_name", "secretary_general_mobile"),
-        ):
+        for role, name_field, mobile_field in CONTACT_ROLES:
             person_name = row.values.get(name_field)
             if not person_name or row.values.get(mobile_field):
                 if not person_name:
                     self._progress(f"[{association_name}] 【4/4】跳过{role}手机号检索（无姓名）")
                 continue
             # 秘书长手机号：先走文心快速路径（公开网更易命中），命中即跳过微信兜底。
-            # 会长不参与（秘书长才是实际联系人，会长公开手机号概率低）。
+            # 其余角色直接走微信兜底（公开手机号概率低，不值得先文心）。
             if role == "秘书长" and self._wenxin_secretary_mobile is not None:
                 try:
                     self._progress(f"[{association_name}] 【4/4】正在文心查秘书长（{person_name}）手机号")

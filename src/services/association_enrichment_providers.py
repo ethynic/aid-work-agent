@@ -13,6 +13,7 @@ from urllib.parse import urlparse, urlunparse
 
 from src.llm.gateway import llm_gateway
 from src.services.association_profile_extractor import (
+    MOBILE_FIELDS,
     PROFILE_FIELDS,
     _parse_json_object,
     extract_association_profile,
@@ -22,6 +23,7 @@ from src.services.official_site_browser_collector import (
 )
 from src.services.llm_usage_meter import record_usage
 from src.services.association_batch_enrichment import WechatRpaError
+from src.services.association_evidence_log import evidence_log
 
 
 _WECHAT_SESSION_FATAL_CODES = {
@@ -171,7 +173,7 @@ class ProjectAssociationProviders:
                     rejected.append(f"{name}:WEB_FALLBACK_NULL_EVIDENCE_INVALID")
                 result[name] = None
                 continue
-            if name in {"president_mobile", "secretary_general_mobile"}:
+            if name in MOBILE_FIELDS:
                 result[name] = None
                 rejected.append(f"{name}:WEB_FALLBACK_MOBILE_FORBIDDEN")
                 continue
@@ -215,34 +217,66 @@ class ProjectAssociationProviders:
             entry_url,
             domain,
             headless=headless,
-            max_pages=4,
-            max_navigation_attempts=12,
+            max_pages=8,
+            max_navigation_attempts=20,
             navigation_timeout_ms=10_000,
             audit_callback=self._audit,
         )
-        result = await extract_association_profile(pages, domain, gateway=self._gateway)
-        if result.status != "success" and result.reason_code in {
-            "STRICT_JSON_INVALID", "PROFILE_SCHEMA_INVALID", "INVALID_EVIDENCE",
-        }:
-            result = await extract_association_profile(pages, domain, gateway=self._gateway)
+        # 主提取抛异常（如 PROFILE_SCHEMA_INVALID）不应拖垮整步——页面已采到，
+        # 领导页兜底提取仍可产出秘书长。真机教训：家具协会曾因 schema 异常
+        # 整个 Step2 报错，损失全部官网字段。
+        try:
+            result = await extract_association_profile(
+                pages, domain, gateway=self._gateway
+            )
+            if result.status != "success" and result.reason_code in {
+                "STRICT_JSON_INVALID", "PROFILE_SCHEMA_INVALID", "INVALID_EVIDENCE",
+            }:
+                result = await extract_association_profile(
+                    pages, domain, gateway=self._gateway
+                )
+        except Exception:
+            result = None
         values = {name: None for name in PROFILE_FIELDS}
-        if result.status == "success" and result.profile is not None:
+        if (
+            result is not None
+            and result.status == "success"
+            and result.profile is not None
+        ):
             values.update({
                 name: getattr(result.profile, name)
                 for name in PROFILE_FIELDS
             })
         if not (
-            values.get("president_name")
-            and values.get("secretary_general_name")
+            values.get("secretary_general_name")
+            and values.get("member_director_name")
+            and values.get("office_director_name")
         ):
-            leadership_pages = [
-                page
-                for page in pages
-                if any(
-                    term in f"{page.title}\n{page.content}"
-                    for term in ("会长", "秘书长", "组织领导", "领导班子")
+            # 标题命中领导词的页面优先（「第六届理事会名单」这类真领导页
+            # 排在仅正文提及的页面之前），内容命中作为准入。
+            leadership_title_terms = (
+                "秘书长", "领导", "理事会", "会长", "理事长", "负责人",
+                "组织机构", "机构", "秘书处", "会员部", "会员服务", "办公室",
+            )
+            leadership_content_terms = leadership_title_terms + ("综合办", "驻会")
+
+            def _leadership_rank(page):
+                title_hit = any(
+                    term in page.title for term in leadership_title_terms
                 )
-            ]
+                return 0 if title_hit else 1
+
+            leadership_pages = sorted(
+                (
+                    page
+                    for page in pages
+                    if any(
+                        term in f"{page.title}\n{page.content}"
+                        for term in leadership_content_terms
+                    )
+                ),
+                key=_leadership_rank,
+            )
             try:
                 focused = await self._extract_leadership(
                     leadership_pages[:2], domain
@@ -258,8 +292,58 @@ class ProjectAssociationProviders:
             for name, value in focused.items():
                 if value and not values.get(name):
                     values[name] = value
-        if result.status != "success" and not any(values.values()):
-            raise ValueError(result.reason_code or "OFFICIAL_EXTRACTION_FAILED")
+        # 秘书长是官网必须优先拿到的字段（文心给的姓名可能过期/错误，靠官网纠正）。
+        # 词表采集没拿到时，用 LLM 逐层导航搜索领导页（4层/8点击/60s 封顶），
+        # 找到后再跑一次领导提取。仅补秘书长缺失，不重复跑已命中的字段。
+        if not values.get("secretary_general_name"):
+            try:
+                from src.services.official_site_leadership_search import (
+                    search_leadership_pages_with_playwright,
+                )
+
+                found_pages = await search_leadership_pages_with_playwright(
+                    entry_url,
+                    domain,
+                    self._gateway,
+                    association_name=association_name,
+                    audit_callback=self._audit,
+                )
+            except Exception as exc:
+                self._audit(
+                    association=domain,
+                    stage="领导页搜索",
+                    kind="leadership_search_failed",
+                    summary=type(exc).__name__,
+                )
+                found_pages = []
+            if found_pages:
+                try:
+                    # 搜索侧已按强标记密度排序并截断到 MAX_FOUND_PAGES，
+                    # 这里全量交给提取器——真机教训（人口学会）：取前 3 会把
+                    # 「秘书长在第 3 页」的翻页尾部页挤掉。
+                    focused_search = await self._extract_leadership(
+                        found_pages, domain
+                    )
+                except (
+                    KeyError, TypeError, ValueError, json.JSONDecodeError
+                ) as exc:
+                    self._audit(
+                        association=domain,
+                        stage="官网领导独立提取",
+                        kind="official_leadership_failed",
+                        summary=(str(exc) if re.fullmatch(r"[A-Z][A-Z0-9_]+", str(exc)) else type(exc).__name__),
+                    )
+                    focused_search = {}
+                for name, value in focused_search.items():
+                    if value and not values.get(name):
+                        values[name] = value
+        if (
+            result is None or result.status != "success"
+        ) and not any(values.values()):
+            raise ValueError(
+                (result.reason_code if result is not None else None)
+                or "OFFICIAL_EXTRACTION_FAILED"
+            )
         return values
 
     async def _extract_leadership(
@@ -268,14 +352,32 @@ class ProjectAssociationProviders:
         verified_domain: str,
     ) -> dict[str, str | None]:
         if not pages:
-            return {"president_name": None, "secretary_general_name": None}
+            return {
+                "secretary_general_name": None,
+                "member_director_name": None,
+                "office_director_name": None,
+            }
         parsed = await self._strict_json_chat(
             messages=[
                 {
                     "role": "system",
                     "content": (
-                        "只从给定协会官网页面提取现任会长和秘书长姓名，只输出严格JSON。"
-                        "顶层键必须恰好为president_name、secretary_general_name；"
+                        "只从给定协会官网页面提取现任秘书长、会员服务相关部门负责人、"
+                        "办公室或综合办负责人的姓名，只输出严格JSON。"
+                        "判定规则："
+                        "①只提取现任——换届/历任/名誉/顾问名单里的人不取，同一人多届"
+                        "任职时取最新表述；"
+                        "②秘书长优先取正式「秘书长」；若无正式秘书长，「代秘书长」或"
+                        "「主持秘书处工作的副秘书长」按秘书长提取；同时存在正式与"
+                        "代秘书长时（如换届过渡期），正式秘书长填秘书长字段；"
+                        "③兼职秘书长（如高校教授兼任）正常提取；"
+                        "④一人兼任多职时按其实际职务填对应字段——如「胡艳 代秘书长"
+                        "兼办公室主任」在有正式秘书长的情况下，胡艳填办公室负责人"
+                        "字段而非秘书长字段；"
+                        "⑤会员服务相关部门指会员部/会员服务部/会员组织部等，"
+                        "办公室指办公室/综合办公室/综合办。"
+                        "顶层键必须恰好为secretary_general_name、member_director_name、"
+                        "office_director_name；"
                         "每个值必须恰好包含value、evidence_quote、source_url。"
                         "未找到时三个值均为null，不得输出其他字段。"
                     ),
@@ -295,12 +397,20 @@ class ProjectAssociationProviders:
                     ),
                 },
             ],
-            max_tokens=800,
+            max_tokens=4000,
         )
-        if set(parsed) != {"president_name", "secretary_general_name"}:
+        if set(parsed) != {
+            "secretary_general_name",
+            "member_director_name",
+            "office_director_name",
+        }:
             raise ValueError("LEADERSHIP_SCHEMA_INVALID")
         result: dict[str, str | None] = {}
-        for field_name in ("president_name", "secretary_general_name"):
+        for field_name in (
+            "secretary_general_name",
+            "member_director_name",
+            "office_director_name",
+        ):
             try:
                 evidence = parsed[field_name]
                 if not isinstance(evidence, dict) or set(evidence) != {
@@ -318,24 +428,37 @@ class ProjectAssociationProviders:
                 result[field_name] = None
         return result
 
-    async def _collect_wenxin_query(self, query: str) -> dict | None:
+    async def _collect_wenxin_query(
+        self, query: str, *, association_name: str = ""
+    ) -> dict | None:
         """进程内对文心发送任意 query，返回 {ok, answer, note} 或 None。
 
         用 exe 内嵌的 playwright 连接 9222 常驻浏览器（由 ensure_wenxin_browser
         保证就绪）。不再 spawn 外部 python——PyInstaller onefile 打包后无客户机
         python 可用，进程内调用让打包 exe 真正自包含（客户机零安装）。任何失败
         返回 None——文心只是优化信息源，不可让它拖垮整步。
+        association_name 仅用于证据日志归属（落该协会的证据文件）。
         """
+        evidence_log(association_name, "文心·问句", query)
         try:
             from runtime.wenxin_collector import collect_query
 
-            return await asyncio.wait_for(
+            result = await asyncio.wait_for(
                 collect_query(query),
                 timeout=_WENXIN_COLLECT_TIMEOUT_SECONDS,
             )
         except Exception:
             # playwright/CDP 异常或超时；文心非关键，降级兜底不拖垮整步。
+            evidence_log(association_name, "文心·回答", "<采集失败/超时>")
             return None
+        if isinstance(result, dict):
+            note = result.get("note") or ""
+            evidence_log(
+                association_name,
+                "文心·回答",
+                result.get("answer") if result.get("ok") else f"<失败 note={note}>",
+            )
+        return result
 
     async def _collect_wenxin(self, association_name: str) -> dict | None:
         """文心联网采集协会基础信息原文（QUERY_TMPL 提问）。"""
@@ -344,7 +467,10 @@ class ProjectAssociationProviders:
         except ImportError:
             # 测试/无 runtime 环境降级（同 _collect_wenxin_query 的 import 容错）
             return None
-        return await self._collect_wenxin_query(QUERY_TMPL.format(name=association_name))
+        return await self._collect_wenxin_query(
+            QUERY_TMPL.format(name=association_name),
+            association_name=association_name,
+        )
 
     def _wechat_script_path(self, filename: str) -> Path:
         """wechat ps1 路径：打包下从 _MEIPASS/scripts/，dev 下从源码仓库解析。
@@ -378,11 +504,18 @@ class ProjectAssociationProviders:
         对外接口（dict[str, str|None]）不变。
         """
         # 手机号始终不由本步返回——人员手机号由微信搜一搜精确取证，避免幻觉。
-        # 会长/秘书长姓名：文心联网原文路径返回（联网核实，可靠）；文心采集失败走
-        # DeepSeek 直出兜底时不返回（不联网，姓名易过期/幻觉，交给官网组织领导页或
-        # 微信搜一搜精确获取）。
-        _mobile_locked = ("president_mobile", "secretary_general_mobile")
-        _leader_name_locked = ("president_name", "secretary_general_name")
+        # 联系角色姓名：文心联网原文路径返回（联网核实，可靠）；文心采集失败走
+        # DeepSeek 直出兜底时不返回（不联网，姓名易过期/幻觉，交给官网或微信精确获取）。
+        _mobile_locked = (
+            "secretary_general_mobile",
+            "member_director_mobile",
+            "office_director_mobile",
+        )
+        _leader_name_locked = (
+            "secretary_general_name",
+            "member_director_name",
+            "office_director_name",
+        )
 
         # 1) 文心联网采集原文（含"官网网址：..."），根治官网幻觉
         wenxin = await self._collect_wenxin(association_name)
@@ -395,7 +528,7 @@ class ProjectAssociationProviders:
 
         if has_raw_text:
             # 2a) 有原文：DeepSeek 从原文提取，官网从原文「官网网址」取，不再靠模型瞎猜；
-            #     会长/秘书长从原文「现任会长/秘书长」提取（联网核实，可靠）
+            #     三个联系人姓名从原文提取（联网核实，可靠）
             search_fields = [
                 name for name in PROFILE_FIELDS if name not in _mobile_locked
             ]
@@ -406,7 +539,8 @@ class ProjectAssociationProviders:
                 "每个值是字符串或 null。"
                 "official_website 必须从原文「官网网址」一行提取该协会真实的官网完整网址"
                 "（原文未给出网址则设为 null，严禁照搬示例域名后缀猜测）。"
-                "president_name、secretary_general_name 只取原文明确写明的现任会长、秘书长姓名，"
+                "secretary_general_name、member_director_name、office_director_name 只取原文"
+                "明确写明的现任秘书长、会员服务相关部门负责人、办公室或综合办负责人姓名，"
                 "注意区分现任与离任/前任，原文未明确给出则设为 null。"
                 "不要返回手机号。"
             )
@@ -419,7 +553,7 @@ class ProjectAssociationProviders:
             )
         else:
             # 2b) 文心失败：fallback 原 DeepSeek 直出（保底，无浏览器/服务端环境不崩）。
-            #     不联网，姓名易过期/幻觉，故只抽基础信息，会长/秘书长交给官网/微信取证。
+            #     不联网，姓名易过期/幻觉，故只抽基础信息，联系人姓名交给官网/微信取证。
             search_fields = [
                 name for name in PROFILE_FIELDS
                 if name not in _mobile_locked + _leader_name_locked
@@ -466,7 +600,7 @@ class ProjectAssociationProviders:
         # 手机号始终强制 null——人员手机号由微信搜一搜精确取证，不让模型猜测
         for locked in _mobile_locked:
             values[locked] = None
-        # 文心采集失败走 DeepSeek 直出时，会长/秘书长也强制 null
+        # 文心采集失败走 DeepSeek 直出时，三个联系人姓名也强制 null
         # （不联网易过期/幻觉；交给官网组织领导页或微信搜一搜精确获取）
         if not has_raw_text:
             for locked in _leader_name_locked:
@@ -478,15 +612,18 @@ class ProjectAssociationProviders:
     ) -> str | None:
         """文心联网搜秘书长手机号（仅秘书长手机号快速路径）。
 
-        用 _SECRETARY_MOBILE_QUERY_TMPL 提问，从回答里纯正则提取手机号
-        （1[3-9] 开头 11 位，天然排除座机/传真/400/800）。命中返回合法手机号，
-        未命中/文心失败/无手机号返回 None——由 enricher 落回微信搜一搜兜底。
-        文心只给怀疑是该秘书长本人的号码（不会给其他人），故纯正则即可定位。
+        用 _SECRETARY_MOBILE_QUERY_TMPL 提问，文心回答可能含**多个**手机号
+        （协会其他人/办公室座机旁列出的手机），纯正则取第一个会拿错人。
+        改为：正则先圈出候选手机号 → LLM 结合上下文判别哪个确属该秘书长本人
+        （姓名与号码需同段/同条目/明确绑定）→ 只在 LLM 明确绑定时返回。
+        未命中/文心失败/LLM 无法确认均返回 None——由 enricher 落回微信搜一搜兜底。
         """
         query = _SECRETARY_MOBILE_QUERY_TMPL.format(
             association=association_name, name=secretary_name
         )
-        wenxin = await self._collect_wenxin_query(query)
+        wenxin = await self._collect_wenxin_query(
+            query, association_name=association_name
+        )
         raw = wenxin.get("answer") if (
             isinstance(wenxin, dict)
             and wenxin.get("ok")
@@ -504,9 +641,11 @@ class ProjectAssociationProviders:
                 ),
             )
             return None
-        # 纯正则提取手机号：1 开头 11 位，天然排除座机(0开头/带区号)/传真/400/800
-        mobiles = re.findall(r"(?<!\d)1[3-9]\d{9}(?!\d)", raw)
-        if not mobiles:
+        # 正则仅圈候选：1 开头 11 位，天然排除座机(0开头/带区号)/传真/400/800
+        candidates = list(dict.fromkeys(
+            re.findall(r"(?<!\d)1[3-9]\d{9}(?!\d)", raw)
+        ))
+        if not candidates:
             self._audit(
                 association=association_name,
                 stage="秘书长手机号·文心",
@@ -514,14 +653,65 @@ class ProjectAssociationProviders:
                 summary="回答中无手机号",
             )
             return None
-        mobile = list(dict.fromkeys(mobiles))[0]  # 去重保序取第一个
+        # LLM 判别：回答可能混有多个号码，必须明确绑定到该秘书长本人才返回
+        try:
+            parsed = await self._strict_json_chat(
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "下面是文心联网检索到的原文，其中可能包含多个手机号"
+                            "（可能属于协会其他人、办公室或其他人员）。"
+                            f"请判断哪一个手机号明确属于{association_name}现任秘书长"
+                            f"{secretary_name}本人——姓名与号码需出现在同一段落/同一条目，"
+                            "或有明确的职务绑定表述。"
+                            "只输出JSON：{\"mobile\":\"号码\"}。"
+                            "找不到明确属于该秘书长本人的号码时输出{\"mobile\":null}，"
+                            "严禁猜测。"
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": (
+                            f"协会：{association_name}\n"
+                            f"秘书长：{secretary_name}\n"
+                            f"候选手机号：{','.join(candidates)}\n\n"
+                            f"检索原文：\n{raw[:4000]}"
+                        ),
+                    },
+                ],
+                max_tokens=2000,
+            )
+        except Exception as exc:
+            self._audit(
+                association=association_name,
+                stage="秘书长手机号·文心",
+                kind="wenxin_mobile_llm_failed",
+                summary=type(exc).__name__,
+            )
+            return None
+        mobile = parsed.get("mobile")
+        # 只接受 LLM 从候选中选出的号码（防止模型幻觉编造不在原文里的号码）
+        if (
+            isinstance(mobile, str)
+            and mobile.strip()
+            and mobile.strip() in candidates
+        ):
+            mobile = mobile.strip()
+            self._audit(
+                association=association_name,
+                stage="秘书长手机号·文心",
+                kind="wenxin_mobile_found",
+                summary=f"{mobile[:3]}****{mobile[-4:]}",  # 脱敏：_audit 不自动脱敏
+            )
+            return mobile
         self._audit(
             association=association_name,
             stage="秘书长手机号·文心",
-            kind="wenxin_mobile_found",
-            summary=f"{mobile[:3]}****{mobile[-4:]}",  # 脱敏：_audit 不自动脱敏
+            kind="wenxin_mobile_unconfirmed",
+            summary="LLM 未确认候选中有该秘书长本人的号码",
         )
-        return mobile
+        return None
 
     async def wechat_mobile(
         self, association_name: str, person_name: str, role: str
@@ -562,6 +752,11 @@ class ProjectAssociationProviders:
         # 发焦点/加载问题。fatal 错误（超时、returncode!=0、非 dict 响应、会话
         # 未关闭）在 _run_wechat_collect_once 内直接 raise，不会走到重试。
         for mobile_attempt in range(2):
+            evidence_log(
+                association_name,
+                f"微信搜手机·第{mobile_attempt + 1}次·查询词（{role}）",
+                f"{association_name} {person_name} 联系人",
+            )
             payload = await self._run_wechat_collect_once(
                 script,
                 child_environment,
@@ -781,11 +976,11 @@ class ProjectAssociationProviders:
         return payload
 
     async def wechat_search_leader_name(
-        self, association_name: str, role: str, known_president: str = ""
+        self, association_name: str, role: str
     ) -> str | None:
-        """用微信搜一搜搜索协会领导姓名。
+        """用微信搜一搜搜索协会联系人姓名。
 
-        搜 "协会名 会长" 或 "协会名 秘书长"，复制列表文本，让 LLM 解析出姓名。
+        搜 "协会名 秘书长" 等角色词，复制列表文本，让 LLM 解析出姓名。
         搜索完关闭搜一搜窗口。不进详情、不找手机号。
         """
         try:
@@ -815,6 +1010,11 @@ class ProjectAssociationProviders:
         )
         list_text = ""
         for search_attempt in range(2):
+            evidence_log(
+                association_name,
+                f"微信搜姓名·第{search_attempt + 1}次·查询词",
+                f"{association_name} {role}",
+            )
             process = await asyncio.create_subprocess_exec(
                 "powershell.exe",
                 "-NoProfile",
@@ -860,6 +1060,11 @@ class ProjectAssociationProviders:
                     list_text = await self._read_wechat_search_list_text(artifact_ref)
                 except Exception:
                     pass
+            evidence_log(
+                association_name,
+                f"微信搜姓名·第{search_attempt + 1}次·列表文本（{role}）",
+                list_text or "<空>",
+            )
             if list_text.strip():
                 break
             # 搜索列表为空（搜一搜结果没读到/没加载）：重试一次，等于重发
@@ -882,15 +1087,13 @@ class ProjectAssociationProviders:
                 summary="搜索列表文本为空",
             )
             return None
-        # LLM 从列表文本解析领导姓名
-        president_hint = f"当前会长是{known_president}，" if known_president else ""
+        # LLM 从列表文本解析联系人姓名
         parsed = await self._strict_json_chat(
             messages=[
                 {
                     "role": "system",
                     "content": (
                         f"从下面微信搜一搜的搜索结果中，找出这个协会现任{role}的姓名。"
-                        f"{president_hint}"
                         "只输出JSON：{\"name\":\"姓名\"}。找不到时输出{\"name\":null}。"
                         "注意区分现任和前任，只提取最新的。"
                     ),
@@ -900,7 +1103,7 @@ class ProjectAssociationProviders:
                     "content": f"协会：{association_name}\n角色：{role}\n\n搜索结果：\n{list_text[:4000]}",
                 },
             ],
-            max_tokens=1000,
+            max_tokens=2000,
         )
         name = parsed.get("name")
         if isinstance(name, str) and name.strip():
@@ -1111,6 +1314,26 @@ class ProjectAssociationProviders:
         records = artifact.get("records")
         if not isinstance(records, list):
             records = []
+        # 证据日志：列表页复制文本 + 每条详情页复制文本（含 OCR 兜底文本），
+        # 与 ps1 侧复制的内容一一对应，供人工核对取证依据。
+        evidence_log(
+            association_name,
+            f"微信搜手机·列表文本（{person_name}）",
+            list_artifact.get("text") or artifact.get("text") or "<空>",
+        )
+        for record in records:
+            if not isinstance(record, dict):
+                continue
+            ordinal = record.get("ordinal") or "?"
+            detail_text = record.get("text") or "<空>"
+            ocr_text = record.get("ocr_text")
+            if ocr_text:
+                detail_text = f"{detail_text}\n---- OCR 文本 ----\n{ocr_text}"
+            evidence_log(
+                association_name,
+                f"微信搜手机·详情文本·第{ordinal}条（{person_name}）",
+                detail_text,
+            )
         llm_usages = artifact.get("llm_usages")
         if isinstance(llm_usages, list):
             for usage in llm_usages:

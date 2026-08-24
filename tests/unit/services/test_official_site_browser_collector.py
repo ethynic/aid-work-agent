@@ -1003,10 +1003,11 @@ async def test_fake_locator_hidden_items_do_not_consume_visible_target_limit():
         FakePage()
     )._state()
 
-    assert [item.locator_index for item in page_state.navigation_targets] == [
-        hidden_count,
-        hidden_count + 1,
-    ]
+    # 可见目标必须不被隐藏锚点挤掉（排在最前）；隐藏带 href 锚点也纳入
+    # （悬浮菜单子项靠它发现），但受上限约束。
+    indexes = [item.locator_index for item in page_state.navigation_targets]
+    assert indexes[:2] == [hidden_count, hidden_count + 1]
+    assert len(indexes) == MAX_NAVIGATION_TARGETS_PER_STATE + 2
 
 
 @pytest.mark.asyncio

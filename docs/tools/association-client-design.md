@@ -175,7 +175,7 @@ CREATE TABLE IF NOT EXISTS client_usage_logs (
     client_name TEXT,                                -- 客户端名快照
     session_id TEXT,                                 -- 客户端会话ID（一次协会收集任务）
     association_name TEXT,                           -- 协会名
-    role TEXT,                                       -- 角色（会长/秘书长，微信RPA用）
+    role TEXT,                                       -- 角色（秘书长/会员部主任/办公室主任，微信RPA用）
     stage TEXT,                                      -- 流水线阶段（search_profile/official_site/official_profile/wechat_search_leader/wechat_mobile/judge/ocr）
     status TEXT,                                     -- 结果状态（success/failed/not_found/inconclusive/aborted）
     model TEXT,                                      -- 使用的模型
@@ -376,7 +376,7 @@ Content-Type: application/json
       "level": "INFO",
       "stage": "wechat_mobile",
       "association_name": "中国黄金协会",
-      "message": "微信检索会长手机号",
+      "message": "微信检索秘书长手机号",
       "detail": {...}
     }
   ]
@@ -658,7 +658,7 @@ association-client.exe collect --input input.csv --output result.xlsx
 {"event":"progress","association":"中国黄金协会","step":"official_site","status":"running","progress":25,"message":"搜索官网","timestamp":"..."}
 {"event":"progress","association":"中国黄金协会","step":"official_profile","status":"success","progress":50,"message":"官网采集完成","timestamp":"..."}
 {"event":"billing","association":"中国黄金协会","stage":"profile_extraction","raw_credit_cost":0.4,"credit_cost":2.0,"balance_after":4498.0,"timestamp":"..."}
-{"event":"log","level":"INFO","association":"中国黄金协会","message":"会长姓名：张三","timestamp":"..."}
+{"event":"log","level":"INFO","association":"中国黄金协会","message":"秘书长姓名：张三","timestamp":"..."}
 {"event":"error","association":"中国黄金协会","stage":"wechat_mobile","error_code":"WECHAT_RPA_TIMEOUT","message":"微信RPA超时","timestamp":"..."}
 {"event":"complete","session_id":"uuid","total_consumed":15.5,"output":"C:\\Users\\xxx\\Desktop\\result.xlsx","timestamp":"..."}
 ```
@@ -1320,8 +1320,8 @@ export function clearConfig(): void {
 │  │ ● 中国黄金协会                       ████████ 100% │  │
 │  │   ├─ 搜索基础信息 ✅                消耗 2.5 积分   │  │
 │  │   ├─ 采集官网 ✅                    消耗 8.0 积分   │  │
-│  │   ├─ 微信搜会长 ✅                  消耗 3.0 积分   │  │
-│  │   └─ 微信取证 🔄会长手机号检索中...                 │  │
+│  │   ├─ 微信搜秘书长 ✅                消耗 3.0 积分   │  │
+│  │   └─ 微信取证 🔄秘书长手机号检索中...               │  │
 │  │                                                     │  │
 │  │ ○ 中国机械工业协会                   等待中          │  │
 │  └────────────────────────────────────────────────────┘  │
@@ -1331,8 +1331,8 @@ export function clearConfig(): void {
 │  ┌────────────────────────────────────────────────────┐  │
 │  │ [12:00:01] 开始收集 中国黄金协会                     │  │
 │  │ [12:00:05] 搜索官网完成，找到 xxx.com               │  │
-│  │ [12:00:10] 会长：张三                               │  │
-│  │ [12:00:15] 微信检索会长手机号...                    │  │
+│  │ [12:00:10] 秘书长：张三                             │  │
+│  │ [12:00:15] 微信检索秘书长手机号...                  │  │
 │  └────────────────────────────────────────────────────┘  │
 └──────────────────────────────────────────────────────────┘
 ```
@@ -1464,12 +1464,12 @@ nsis:
    - extract_association_profile → ProxyLLMGateway.chat(抽取14字段)
      → POST /api/client/v1/llm/chat → 扣积分 → 返回
    - stdout: {"event":"progress","step":"official_profile","status":"success"}
-6. 步骤3：wechat_search_leader_name（微信搜领导姓名，若会长/秘书长仍空）
+6. 步骤3：wechat_search_leader_name（微信搜联系人姓名，若秘书长/会员服务/办公室负责人仍空）
    - spawn powershell.exe wechat-souyisou.ps1 -Command search ...
    - PowerShell 操作微信搜一搜 → 复制列表文本 → read-artifact.ps1 读取
    - ProxyLLMGateway.chat(解析姓名) → POST /api/client/v1/llm/chat → 扣积分 → 返回
    - stdout: {"event":"progress","step":"wechat_search_leader","status":"success"}
-7. 步骤4：wechat_mobile（微信RPA取证手机号，若有会长/秘书长姓名）
+7. 步骤4：wechat_mobile（微信RPA取证手机号，若有联系人姓名）
    - spawn powershell.exe wechat-souyisou.ps1 -Command collect -UseProjectLlm ...
    - PowerShell 操作微信 → judge 调 llm_judge.py → ProxyLLMGateway.chat
      → POST /api/client/v1/llm/chat → 扣积分 → 返回

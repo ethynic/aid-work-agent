@@ -11,6 +11,9 @@ wenxin-reuse-session-anti-captcha）：
 - textarea.ci-textarea 回车发送
 - .cosd-markdown-content 取最新回答，文本连续 1.5s 不变判完成
 - 文心无需登录；首次若弹验证码，返回 note=captcha 由上层决定
+- 每个协会开新 tab 拿全新会话（旧会话上下文变长会降准）；先开新 tab 并就绪、
+  再关旧 wenxin tab，始终至少留一个 tab，浏览器常驻不关。新 tab 复用同一
+  profile/cookie 会话，不会像新开浏览器那样触发验证码
 
 9222 常驻浏览器由 runtime/wenxin_browser.py 的 ensure_wenxin_browser() 保证。
 scripts/wenxin_collect.py 是本模块的 stdin/stdout IO 入口（开发期 probe 用）。
@@ -25,7 +28,7 @@ CDP_URL = "http://localhost:9222"
 QUERY_TMPL = (
     "给出{name}的以下信息:地址、邮箱、官网网址、主管单位、单位等级、"
     "会员数量、分支机构数量、公众号名称、品牌会议连续次数，"
-    "以及现任会长和秘书长的姓名，"
+    "以及现任秘书长、会员服务相关部门负责人、办公室或综合办负责人的姓名，"
     "官网直接给网址字符串，不要超链接。"
 )
 START_WAIT_SECONDS = 20    # 等新回答开始
@@ -50,12 +53,19 @@ async def collect_query(query: str) -> dict[str, Any]:
             return {"ok": False, "note": f"cdp_attach_failed:{type(exc).__name__}"}
 
         ctx = browser.contexts[0] if browser.contexts else await browser.new_context()
-        page = next((p for p in ctx.pages if "wenxin" in p.url), None)
-        if page is None:
-            page = ctx.pages[0] if ctx.pages else await ctx.new_page()
-            await page.goto("https://wenxin.baidu.com/", wait_until="domcontentloaded", timeout=30000)
-            await asyncio.sleep(3)
+        # 每个协会开新 tab 拿全新会话（旧会话上下文变长，联网回答易失准）。
+        # 先开新 tab 并就绪，再关旧 wenxin tab —— 始终至少留一个 tab，不整关浏览器。
+        # 只关 URL 含 wenxin 的旧 tab，不碰官网采集等其他域页面（同一 9222 浏览器）。
+        stale_pages = [p for p in ctx.pages if "wenxin" in (p.url or "")]
+        page = await ctx.new_page()
+        await page.goto("https://wenxin.baidu.com/", wait_until="domcontentloaded", timeout=30000)
+        await asyncio.sleep(3)
         await page.bring_to_front()
+        for stale in stale_pages:
+            try:
+                await stale.close()
+            except Exception:
+                pass
 
         before = await page.evaluate(
             "() => document.querySelectorAll('.cosd-markdown-content').length"

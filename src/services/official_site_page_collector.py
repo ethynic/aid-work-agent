@@ -18,22 +18,62 @@ from src.services.association_profile_extractor import (
 
 
 DEFAULT_MAX_PAGES = 12
+# 高价值栏目词表（准入门禁 + 计分共用）。2026-08 扩充：
+# - 「学会」全套镜像——很多目标是 XX学会（人口学会/冶金教育学会等），
+#   原词表只有「协会」前缀，学会站点全被拦在门外；
+# - 领导泛化词（现任领导/理事长/负责人/理事会/秘书长…）——领导页是
+#   秘书长姓名的第一优先来源，召回优先于精确；
+# - 机构泛化词（办事机构/职能部门/内设机构/部门设置…）——秘书处介绍
+#   常挂在这些栏目下；
+# - 裸词（领导/秘书/理事/概况/简介/章程）兜底长尾。
 HIGH_VALUE_LINK_TERMS = (
-    "协会简介",
-    "协会介绍",
-    "协会概况",
-    "关于协会",
+    # —— 领导类（最高召回）——
     "组织领导",
     "驻会领导",
     "领导集体",
     "领导班子",
     "领导机构",
     "协会领导",
+    "学会领导",
+    "现任领导",
+    "领导简介",
+    "现任负责人",
+    "主要负责人",
+    "驻会负责人",
+    "负责人",
+    "理事长",
+    "会长",
+    "秘书长",
+    "秘书处",
+    "理事会",
+    "领导",
+    # —— 机构/组织类 ——
     "协会设置",
+    "学会设置",
     "组织架构",
     "组织机构",
     "机构设置",
-    "秘书处",
+    "办事机构",
+    "职能部门",
+    "内设机构",
+    "部门设置",
+    "工作机构",
+    "机构人员",
+    # —— 简介类（协会+学会镜像 + 裸词）——
+    "协会简介",
+    "协会介绍",
+    "协会概况",
+    "学会简介",
+    "学会介绍",
+    "学会概况",
+    "关于协会",
+    "关于学会",
+    "关于我们",
+    "关于",
+    "章程",
+    "概况",
+    "简介",
+    # —— 其他 ——
     "分支机构",
     "专业委员会",
     "联系我们",
@@ -42,9 +82,13 @@ HIGH_VALUE_LINK_TERMS = (
     "about",
     "profile",
     "introduction",
+    "overview",
     "organization",
     "organisational",
     "organizational",
+    "governance",
+    "council",
+    "secretariat",
     "leadership",
     "leader",
     "contact",
@@ -57,6 +101,14 @@ HIGH_VALUE_LINK_TERMS = (
 UNSAFE_LINK_ACTION_TERMS = (
     "登录", "注册", "退出", "删除", "提交", "报名", "支付", "下载",
     "login", "register", "logout", "delete", "submit", "pay", "download",
+)
+# 新闻/通知类噪声词：命中即零分（不入队列）。真机教训（循环经济协会）：
+# 「生态环境司相关负责人答记者问」这类新闻标题含「负责人/组织架构」，
+# 拿满权重挤占页面预算。本轮目标只有领导页，新闻栏目一律不进。
+NEWS_NOISE_TERMS = (
+    "通知", "新闻", "动态", "公告", "报道", "资讯", "快讯", "会议", "活动",
+    "专题", "答记者问", "声明", "公示", "征集", "申报", "要闻", "媒体",
+    "news", "notice", "announcement", "event", "press",
 )
 
 
@@ -131,6 +183,18 @@ def _normalized_same_domain_url(raw_url: str, base_url: str, verified_domain: st
 def _link_priority(link: OfficialPageLink, normalized_url: str) -> int:
     haystack = f"{link.text} {urlparse(normalized_url).path}".lower()
     if any(term in haystack for term in UNSAFE_LINK_ACTION_TERMS):
+        return 0
+    if any(
+        (
+            term in haystack
+            if not term.isascii()
+            else re.search(
+                rf"(?<![a-z0-9_]){re.escape(term)}(?![a-z0-9_])",
+                haystack,
+            )
+        )
+        for term in NEWS_NOISE_TERMS
+    ):
         return 0
     return sum(
         1
