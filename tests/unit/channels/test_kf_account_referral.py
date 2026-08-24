@@ -397,3 +397,117 @@ class TestKfAccountUtils:
         assert _is_account_not_exists({"errcode": 48002, "errmsg": "account not exist"})
         assert not _is_account_not_exists({"errcode": 0, "errmsg": "ok"})
         assert not _is_account_not_exists({"errcode": -1, "errmsg": "system error"})
+
+
+# ============ 6. create_kf_account 目标渠道定位（同租户多条 wecom_kf 配置） ============
+
+
+class TestCreateKfAccountConfigId:
+    def _mock_adapter(self, open_kfid="wk_new_1"):
+        adapter = MagicMock()
+        adapter.api_client = MagicMock()
+        adapter.api_client.account_add = AsyncMock(
+            return_value={"errcode": 0, "open_kfid": open_kfid}
+        )
+        adapter.api_client.add_contact_way = AsyncMock(
+            return_value={"errcode": 0, "url": f"https://work.weixin.qq.com/kfid/{open_kfid}"}
+        )
+        return adapter
+
+    def _patches(self, configs, adapter, config_id):
+        mock_create = AsyncMock(return_value=(adapter, config_id, None))
+        mock_update = MagicMock(return_value=True)
+        patches = [
+            patch("src.saas.api.wecom_kf_account.settings.saas.enabled", True),
+            patch(
+                "src.saas.api.wecom_kf_account.require_admin",
+                return_value={"tenant_id": "t1", "user_id": "u1"},
+            ),
+            patch(
+                "src.saas.api.wecom_kf_account.ChannelConfigDB.list_by_tenant",
+                return_value=configs,
+            ),
+            patch(
+                "src.saas.api.wecom_kf_account.ChannelFactory.create_from_tenant_config",
+                mock_create,
+            ),
+            patch(
+                "src.saas.api.wecom_kf_account._resolve_avatar_media_id",
+                AsyncMock(return_value="MEDIA_1"),
+            ),
+            patch(
+                "src.saas.api.wecom_kf_account._build_qr_data_url",
+                return_value="data:image/png;base64,xxx",
+            ),
+            patch("src.saas.api.wecom_kf_account.ChannelConfigDB.update", mock_update),
+            patch(
+                "src.saas.api.wecom_kf_account.ChannelFactory.invalidate_adapter",
+                AsyncMock(),
+            ),
+        ]
+        return patches, mock_create, mock_update
+
+    @pytest.mark.asyncio
+    async def test_create_writes_to_specified_config(self):
+        """传 config_id 时，账号写入指定渠道配置（同租户多条 wecom_kf 配置归属正确）"""
+        from src.saas.api.wecom_kf_account import KfAccountCreate, create_kf_account
+
+        cfg_a = {"config_id": "cfg_a", "config": {"kf_account": []}}
+        cfg_b = {"config_id": "cfg_b", "config": {"kf_account": []}}
+        adapter = self._mock_adapter()
+        patches, mock_create, mock_update = self._patches([cfg_a, cfg_b], adapter, "cfg_b")
+        body = KfAccountCreate(
+            config_id="cfg_b", name="高老师", tenant_user_id="u1",
+            subagent_type="pre-sales", allow_agent_transfer=True,
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7]:
+            result = await create_kf_account(MagicMock(), body)
+
+        # adapter 用指定 config_id 构建（企微调用走该渠道凭证）
+        assert mock_create.call_args.kwargs["config_id"] == "cfg_b"
+        # 写入 cfg_b 配置
+        update_args = mock_update.call_args.args
+        assert update_args[0] == "cfg_b"
+        new_kf = update_args[1]["kf_account"][-1]
+        assert new_kf["name"] == "高老师"
+        assert new_kf["open_kfid"] == "wk_new_1"
+        assert result["success"] is True
+
+    @pytest.mark.asyncio
+    async def test_create_specified_config_not_found_404(self):
+        """指定的 config_id 不存在 → 404，不调用企微"""
+        from fastapi import HTTPException
+        from src.saas.api.wecom_kf_account import KfAccountCreate, create_kf_account
+
+        cfg_a = {"config_id": "cfg_a", "config": {"kf_account": []}}
+        adapter = self._mock_adapter()
+        patches, mock_create, mock_update = self._patches([cfg_a], adapter, "cfg_b")
+        body = KfAccountCreate(
+            config_id="cfg_b", name="高老师", tenant_user_id="u1",
+            allow_agent_transfer=True,
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7]:
+            with pytest.raises(HTTPException) as exc:
+                await create_kf_account(MagicMock(), body)
+        assert exc.value.status_code == 404
+        # 企微创建未被调用
+        assert not adapter.api_client.account_add.await_args_list
+
+    @pytest.mark.asyncio
+    async def test_create_falls_back_to_verified_config(self):
+        """不传 config_id 时回退到租户第一个已验证的 wecom_kf 配置（兼容历史单渠道场景）"""
+        from src.saas.api.wecom_kf_account import KfAccountCreate, create_kf_account
+
+        cfg_a = {"config_id": "cfg_a", "verified": 0, "config": {"kf_account": []}}
+        cfg_b = {"config_id": "cfg_b", "verified": 1, "config": {"kf_account": []}}
+        adapter = self._mock_adapter()
+        patches, mock_create, mock_update = self._patches([cfg_a, cfg_b], adapter, "cfg_b")
+        body = KfAccountCreate(
+            name="高老师", tenant_user_id="u1", allow_agent_transfer=True,
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7]:
+            result = await create_kf_account(MagicMock(), body)
+
+        update_args = mock_update.call_args.args
+        assert update_args[0] == "cfg_b"
+        assert result["success"] is True

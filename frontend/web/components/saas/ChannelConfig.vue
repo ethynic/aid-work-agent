@@ -762,7 +762,8 @@ async function handleKfSubmit() {
       toast.success('客服账号已更新')
       showKfModal.value = false
     } else {
-      const res = await createKfAccount(payload)
+      // 传当前编辑渠道 config_id，确保账号写入该渠道（同租户多条 wecom_kf 配置时归属正确）
+      const res = await createKfAccount({ ...payload, config_id: kfOwnerConfigId.value })
       createdQrData.value = {
         open_kfid: res.open_kfid,
         name: res.name || '',

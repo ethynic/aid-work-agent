@@ -47,6 +47,7 @@ from src.channels.wecom_kf.prompts import MSG_EXPIRED, MSG_CREDIT_EXHAUSTED  # n
 # ============== 请求模型 ==============
 
 class KfAccountCreate(BaseModel):
+    config_id: Optional[str] = Field(None, description="目标渠道配置 config_id（编辑页当前渠道），缺省取租户第一个已验证的 wecom_kf 配置")
     name: str = Field(..., min_length=1, max_length=16, description="客服账号名称，不超过16字符")
     tenant_user_id: str = Field(..., description="绑定引流员工 user_id")
     avatar_base64: Optional[str] = Field(None, description="头像 base64（可选，缺省走租户logo/默认占位兜底）")
@@ -366,7 +367,21 @@ async def create_kf_account(request: Request, body: KfAccountCreate):
     if not tenant_id:
         raise HTTPException(status_code=400, detail="缺少租户信息")
 
-    cfg = await _get_wecom_kf_config(tenant_id)
+    # 优先写入前端当前编辑的渠道配置（支持同租户多条 wecom_kf 配置），
+    # 缺省 config_id 时回退到租户第一个已验证的配置（兼容历史单渠道场景）
+    if body.config_id:
+        cfg = next(
+            (
+                c
+                for c in ChannelConfigDB.list_by_tenant(tenant_id, "wecom_kf")
+                if c.get("config_id") == body.config_id
+            ),
+            None,
+        )
+        if not cfg:
+            raise HTTPException(status_code=404, detail="微信客服渠道配置不存在")
+    else:
+        cfg = await _get_wecom_kf_config(tenant_id)
     config_id = cfg["config_id"]
     config_dict = cfg.get("config", {})
 
