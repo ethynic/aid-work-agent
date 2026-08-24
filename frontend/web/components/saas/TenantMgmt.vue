@@ -424,31 +424,20 @@
 
         <div v-if="loadingShares" class="text-center py-6 text-muted text-sm">加载中...</div>
         <div v-else>
-          <div class="text-sm font-medium text-default mb-2">已接入（可多个来源租户）</div>
-          <div v-if="sharedTenants.length === 0" class="text-xs text-muted mb-3">尚未接入其他租户的知识库</div>
-          <div v-else class="space-y-2 mb-3">
-            <div v-for="st in sharedTenants" :key="st.from_tenant_id"
-              class="flex items-center justify-between p-2 rounded-lg hover:bg-canvas">
-              <div class="flex items-center gap-2 text-sm text-default">
-                <svg class="w-4 h-4 text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg>
-                <span>{{ st.from_company_name }}</span>
-                <span class="text-xs text-muted">（来源租户）</span>
-              </div>
-              <button @click="handleRemoveShare(st.from_tenant_id)"
-                class="text-xs px-2 py-1 rounded border border-default text-muted hover:text-danger-600 hover:border-danger-200 transition-colors">移除</button>
-            </div>
-          </div>
-
-          <div class="text-sm font-medium text-default mb-2">＋ 添加共享租户</div>
-          <div class="flex items-center gap-2">
-            <select v-model="selectedShareTenant"
-              class="flex-1 px-3 py-2 bg-surface-hover border border-hover rounded-lg text-default focus:outline-none focus:border-primary-400">
-              <option value="">请选择来源租户</option>
-              <option v-for="t in otherTenants" :key="t.tenant_id" :value="t.tenant_id">
-                {{ t.company_name }}（{{ t.tenant_code }}）
-              </option>
-            </select>
-            <BaseButton size="sm" :disabled="!selectedShareTenant" @click="handleAddShare">添加</BaseButton>
+          <div class="text-sm font-medium text-default mb-2">选择要接入的租户（可多选）</div>
+          <div v-if="otherTenants.length === 0" class="text-xs text-muted mb-3">暂无可接入的其他租户</div>
+          <div v-else class="space-y-1 mb-3 max-h-[45vh] overflow-y-auto">
+            <label v-for="t in otherTenants" :key="t.tenant_id"
+              class="flex items-center gap-2 p-2 rounded-lg hover:bg-canvas cursor-pointer">
+              <input
+                type="checkbox"
+                :value="t.tenant_id"
+                v-model="selectedShareTenantIds"
+                class="w-4 h-4 text-primary-600 border-hover rounded focus:ring-primary-500"
+              />
+              <span class="text-sm text-default">{{ t.company_name }}</span>
+              <span class="text-xs text-muted">（{{ t.tenant_code }}）</span>
+            </label>
           </div>
         </div>
 
@@ -711,7 +700,7 @@ function parseSelectionKey(key: string): { owner: string | null; source_type: st
 const showShareDialog = ref(false)
 const sharedTenants = ref<KnowledgeShareItem[]>([])
 const otherTenants = ref<any[]>([])
-const selectedShareTenant = ref('')
+const selectedShareTenantIds = ref<string[]>([])
 const loadingShares = ref(false)
 const savingShares = ref(false)
 const shareError = ref('')
@@ -983,6 +972,7 @@ async function handleSaveEnvVars() {
 async function openShareDialog() {
   if (!currentTenant.value) return
   shareError.value = ''
+  selectedShareTenantIds.value = []
   showShareDialog.value = true
   loadingShares.value = true
   try {
@@ -991,6 +981,7 @@ async function openShareDialog() {
       listTenants({ page: 1, page_size: 200 }),
     ])
     if (sharesRes.success) sharedTenants.value = sharesRes.data || []
+    selectedShareTenantIds.value = sharedTenants.value.map(st => st.from_tenant_id)
     const allTenants = (tenantsRes.success && tenantsRes.tenants) ? tenantsRes.tenants : []
     otherTenants.value = allTenants.filter(t => t.tenant_id !== currentTenant.value.tenant_id)
   } catch (e) {
@@ -1002,26 +993,7 @@ async function openShareDialog() {
 
 function closeShareDialog() {
   showShareDialog.value = false
-  selectedShareTenant.value = ''
-}
-
-function handleRemoveShare(fromTenantId: string) {
-  sharedTenants.value = sharedTenants.value.filter(st => st.from_tenant_id !== fromTenantId)
-}
-
-function handleAddShare() {
-  if (!selectedShareTenant.value) return
-  if (sharedTenants.value.some(st => st.from_tenant_id === selectedShareTenant.value)) {
-    shareError.value = '该租户已在接入列表中'
-    return
-  }
-  const t = otherTenants.value.find(t => t.tenant_id === selectedShareTenant.value)
-  sharedTenants.value.push({
-    from_tenant_id: selectedShareTenant.value,
-    from_company_name: t?.company_name || selectedShareTenant.value,
-  })
-  selectedShareTenant.value = ''
-  shareError.value = ''
+  selectedShareTenantIds.value = []
 }
 
 async function handleSaveShares() {
@@ -1031,9 +1003,14 @@ async function handleSaveShares() {
   try {
     const res = await setTenantKnowledgeShares(
       currentTenant.value.tenant_id,
-      sharedTenants.value.map(st => st.from_tenant_id),
+      selectedShareTenantIds.value,
     )
     if (res.success) {
+      // 保存成功后同步主页面回显区（sharedTenants 是弹窗打开时加载的旧值）
+      sharedTenants.value = selectedShareTenantIds.value.map(id => {
+        const t = otherTenants.value.find(t => t.tenant_id === id)
+        return { from_tenant_id: id, from_company_name: t?.company_name || id }
+      })
       toast.success('知识库接入保存成功')
       closeShareDialog()
     } else {
