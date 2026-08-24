@@ -877,9 +877,10 @@ async function openEditDialog(tenant: any) {
   selectedAgentIds.value = []
   loadingAgents.value = true
   try {
-    const [agentsRes, permissionsRes] = await Promise.all([
+    const [agentsRes, permissionsRes, sharesRes] = await Promise.all([
       getAllAvailableAgents(),
       getTenantAgentPermissions(tenant.tenant_id),
+      getTenantKnowledgeShares(tenant.tenant_id),
     ])
     if (agentsRes.success && agentsRes.data) {
       availableAgents.value = agentsRes.data
@@ -890,6 +891,7 @@ async function openEditDialog(tenant: any) {
       const availableAgentIds = availableAgents.value.map(a => a.agent_id)
       selectedAgentIds.value = allSelectedIds.filter(id => availableAgentIds.includes(id))
     }
+    if (sharesRes.success) sharedTenants.value = sharesRes.data || []
   } catch (e) {
     console.error('加载数字员工授权失败:', e)
   } finally {
