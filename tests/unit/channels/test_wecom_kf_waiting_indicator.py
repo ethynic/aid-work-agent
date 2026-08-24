@@ -51,17 +51,13 @@ def _adapter_with(wi):
 
 
 class TestGetWaitingIndicatorCfg:
-    def test_empty_config_returns_defaults(self):
-        """未配置（空 dict）默认启用，返回默认 15s + 固定话术。"""
-        cfg = _get_waiting_indicator_cfg(_adapter_with({}))
-        assert cfg["delay_seconds"] == DEFAULT_WAITING_INDICATOR_DELAY_SECONDS
-        assert cfg["message"] == DEFAULT_WAITING_INDICATOR_MESSAGE
+    def test_empty_config_returns_empty(self):
+        """未配置（空 dict）默认不启用，返回 {}。"""
+        assert _get_waiting_indicator_cfg(_adapter_with({})) == {}
 
-    def test_no_attribute_returns_defaults(self):
-        """adapter 无 waiting_indicator 属性时同样回退默认。"""
-        cfg = _get_waiting_indicator_cfg(SimpleNamespace())
-        assert cfg["delay_seconds"] == DEFAULT_WAITING_INDICATOR_DELAY_SECONDS
-        assert cfg["message"] == DEFAULT_WAITING_INDICATOR_MESSAGE
+    def test_no_attribute_returns_empty(self):
+        """adapter 无 waiting_indicator 属性时同样默认不启用。"""
+        assert _get_waiting_indicator_cfg(SimpleNamespace()) == {}
 
     def test_disabled_returns_empty(self):
         """enabled=false 时返回 {}，不启用。"""
@@ -69,12 +65,14 @@ class TestGetWaitingIndicatorCfg:
 
     def test_zero_or_negative_delay_disabled(self):
         """delay_seconds<=0 时返回 {}。"""
-        assert _get_waiting_indicator_cfg(_adapter_with({"delay_seconds": 0})) == {}
-        assert _get_waiting_indicator_cfg(_adapter_with({"delay_seconds": -5})) == {}
+        assert _get_waiting_indicator_cfg(_adapter_with({"enabled": True, "delay_seconds": 0})) == {}
+        assert _get_waiting_indicator_cfg(_adapter_with({"enabled": True, "delay_seconds": -5})) == {}
 
     def test_invalid_delay_falls_back_to_default(self):
-        """非数字 delay_seconds 容错回退默认 15s。"""
-        cfg = _get_waiting_indicator_cfg(_adapter_with({"delay_seconds": "abc"}))
+        """启用时非数字 delay_seconds 容错回退默认 15s。"""
+        cfg = _get_waiting_indicator_cfg(
+            _adapter_with({"enabled": True, "delay_seconds": "abc"})
+        )
         assert cfg["delay_seconds"] == DEFAULT_WAITING_INDICATOR_DELAY_SECONDS
 
     def test_custom_values_passed_through(self):
@@ -85,9 +83,17 @@ class TestGetWaitingIndicatorCfg:
         assert cfg == {"delay_seconds": 30.0, "message": "请稍等~"}
 
     def test_blank_message_falls_back_to_default(self):
-        """message 空白/缺失回退默认话术。"""
-        cfg = _get_waiting_indicator_cfg(_adapter_with({"delay_seconds": 10, "message": "   "}))
+        """启用时 message 空白/缺失回退默认话术。"""
+        cfg = _get_waiting_indicator_cfg(
+            _adapter_with({"enabled": True, "delay_seconds": 10, "message": "   "})
+        )
         assert cfg["message"] == DEFAULT_WAITING_INDICATOR_MESSAGE
+
+    def test_missing_enabled_but_custom_values_returns_empty(self):
+        """无 enabled 字段（老渠道遗留）即使有 delay/message 也默认不启用。"""
+        assert _get_waiting_indicator_cfg(
+            _adapter_with({"delay_seconds": 10, "message": "请稍等"})
+        ) == {}
 
 
 # ---------- 非取消式 watchdog ----------

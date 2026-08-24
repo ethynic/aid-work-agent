@@ -801,17 +801,17 @@ const form = ref<{ channel_type: string; name: string; config: Record<string, an
 // ==================== 微信客服处理超时等待提示（渠道级配置） ====================
 const DEFAULT_WAITING_MESSAGE = '我正在处理您的问题，可能需要几分钟，请稍等下。'
 // delay_seconds 用 string 存储（BaseInput modelValue 为 string），提交时转 number
-const wi = reactive({ enabled: true, delay_seconds: '15', message: '' })
+const wi = reactive({ enabled: false, delay_seconds: '15', message: '' })
 
 function resetWaitingIndicator() {
-  wi.enabled = true
+  wi.enabled = false
   wi.delay_seconds = '15'
   wi.message = ''
 }
 
 function loadWaitingIndicator(cfg: Record<string, any> | undefined) {
   const w = cfg || {}
-  wi.enabled = w.enabled !== false
+  wi.enabled = w.enabled === true
   const d = Number(w.delay_seconds)
   wi.delay_seconds = Number.isFinite(d) && d > 0 ? String(d) : '15'
   wi.message = String(w.message || '').trim() || ''

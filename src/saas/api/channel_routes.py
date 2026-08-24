@@ -1591,10 +1591,11 @@ def _get_waiting_indicator_cfg(adapter) -> dict:
     """读取渠道级 waiting_indicator 配置，返回 {delay_seconds, message}；未启用返回 {}。
 
     配置存于 tenant_channel_configs.config.waiting_indicator（enabled/delay_seconds/message），
-    经 ChannelFactory 注入 adapter.waiting_indicator。字段缺省时回退默认常量。
+    经 ChannelFactory 注入 adapter.waiting_indicator。仅当 enabled=true（用户勾选）时启用，
+    未配置或未勾选默认不启用。
     """
     wi = getattr(adapter, "waiting_indicator", None) or {}
-    if not wi.get("enabled", True):  # 未配置默认启用（开箱即用）
+    if not wi.get("enabled", False):  # 未配置/未勾选默认不启用
         return {}
     try:
         delay = float(wi.get("delay_seconds", DEFAULT_WAITING_INDICATOR_DELAY_SECONDS))
