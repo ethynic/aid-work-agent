@@ -514,7 +514,7 @@ class WeComKfAdapter(ChannelAdapter):
     async def _send_image_ref_as_image(self, ref: Dict[str, Any], user_id: str) -> bool:
         """将 ImageRef 图片（content.images）作为企微 image 消息发送。
 
-        ImageRef（如 record_lead_capture 返回的员工二维码）由 ImageRegistry 写入
+        ImageRef（如 record_lead_capture 返回的顾问二维码）由 ImageRegistry 写入
         Redis uploaded_file:{file_id}，与 _send_image_file_as_image 同命名空间。
         企微 image 消息只接受 media_id，先上传临时素材再发送；失败仅记 warning，
         不降级为 link（二维码场景用户需要的是图片本身）。

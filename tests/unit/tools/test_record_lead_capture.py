@@ -7,7 +7,7 @@
 - 手机号校验（缺省 / 格式异常）
 - 成功留资（写线索 + 更新会话状态机）
 - 已留资客户再次明确要求留资（加微信/留手机号）-> 视为新需求，正常落库并通知（注明上次留资时间）
-- 员工二维码（qr 下发 ImageRef；未配置 → 降级仅引导留手机号）
+- 顾问二维码（qr 下发 ImageRef；未配置 → 降级仅引导留手机号）
 """
 import pytest
 from contextlib import contextmanager
@@ -315,7 +315,7 @@ class TestRecordLeadCaptureExecute:
         ref = ImageRef(
             file_id="file_employee_qr",
             download_url="/api/files/file_employee_qr/download",
-            display_name="员工二维码.png",
+            display_name="顾问二维码.png",
             source="user_upload",
         )
         mock_registry = MagicMock()
@@ -350,20 +350,20 @@ class TestRecordLeadCaptureExecute:
 
     @pytest.mark.asyncio
     async def test_qr_without_employee_qr_returns_downgrade(self):
-        """contact_method=qr 但未配置员工二维码 → 无副作用降级（不写线索、不置状态机）"""
+        """contact_method=qr 但未配置顾问二维码 → 无副作用降级（不写线索、不置状态机）"""
         ctx = _make_ctx(kf_config={"name": "售前客服", "tenant_user_id": "emp_001"})
         with _patch_execute(ctx) as (tool, mocks):
             result = await tool.execute(contact_method="qr")
 
         assert result["success"] is False
-        assert "未配置员工二维码" in result["error"]
+        assert "未配置顾问二维码" in result["error"]
         # 降级必须无副作用：不写线索、不更新会话状态机，允许后续引导留手机号
         mocks["lead_db_create"].assert_not_called()
         mocks["update_session"].assert_not_called()
 
     @pytest.mark.asyncio
     async def test_qr_success_returns_employee_qr_image(self):
-        """contact_method=qr 且配置了员工二维码 → 返回 ImageRef 随回复下发"""
+        """contact_method=qr 且配置了顾问二维码 → 返回 ImageRef 随回复下发"""
         from src.core.image_asset import ImageRef
 
         ctx = _make_ctx(
@@ -376,7 +376,7 @@ class TestRecordLeadCaptureExecute:
         ref = ImageRef(
             file_id="file_employee_qr",
             download_url="/api/files/file_employee_qr/download",
-            display_name="员工二维码.png",
+            display_name="顾问二维码.png",
             source="user_upload",
         )
         mock_registry = MagicMock()

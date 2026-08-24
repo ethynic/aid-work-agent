@@ -38,7 +38,7 @@ router = APIRouter(prefix="/api/saas/wecom-kf", tags=["微信客服账号管理"
 MAX_AVATAR_BYTES = 2 * 1024 * 1024  # 头像上限 2MB
 _AVATAR_SUFFIXES = (".png", ".jpg", ".jpeg")
 _DEFAULT_CREDIT_LIMIT = 0  # 0 = 不限
-MAX_EMPLOYEE_QR_BYTES = 2 * 1024 * 1024  # 员工二维码上限 2MB
+MAX_EMPLOYEE_QR_BYTES = 2 * 1024 * 1024  # 顾问二维码上限 2MB
 
 # 校验时直接复用 prompts.py 里的固定话术，避免两处定义漂移
 from src.channels.wecom_kf.prompts import MSG_EXPIRED, MSG_CREDIT_EXHAUSTED  # noqa: E402,F401
@@ -58,7 +58,7 @@ class KfAccountCreate(BaseModel):
     expire_at: Optional[str] = Field(None, description="到期日期 YYYY-MM-DD，空=不限制")
     credit_limit: int = Field(0, ge=0, description="积分上限，0=不限")
     qr_title: Optional[str] = Field(None, description="二维码标题")
-    employee_qr_base64: Optional[str] = Field(None, description="员工二维码 base64（可选，用于留资时下发员工微信二维码）")
+    employee_qr_base64: Optional[str] = Field(None, description="顾问二维码 base64（可选，用于留资时下发员工微信二维码）")
 
 
 class KfAccountUpdate(BaseModel):
@@ -72,7 +72,7 @@ class KfAccountUpdate(BaseModel):
     expire_at: Optional[str] = Field(None, description="到期日期 YYYY-MM-DD，传 null 清除限制")
     credit_limit: Optional[int] = Field(None, ge=0, description="积分上限，0=不限")
     qr_title: Optional[str] = Field(None, description="二维码标题")
-    employee_qr_base64: Optional[str] = Field(None, description="员工二维码 base64（传 null 不清除；传新值替换旧图）")
+    employee_qr_base64: Optional[str] = Field(None, description="顾问二维码 base64（传 null 不清除；传新值替换旧图）")
 
 
 # ============== 场景反查（channel_routes 复用） ==============
@@ -145,24 +145,24 @@ async def _decode_avatar(avatar_base64: Optional[str]) -> Optional[bytes]:
 
 
 def _decode_employee_qr(employee_qr_base64: Optional[str]) -> Optional[bytes]:
-    """解码员工二维码 base64，校验大小与图片类型。非法返回 None。"""
+    """解码顾问二维码 base64，校验大小与图片类型。非法返回 None。"""
     if not employee_qr_base64:
         return None
     try:
         data = base64.b64decode(employee_qr_base64)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"员工二维码 base64 解码失败: {e}")
+        raise HTTPException(status_code=400, detail=f"顾问二维码 base64 解码失败: {e}")
     if len(data) > MAX_EMPLOYEE_QR_BYTES:
-        raise HTTPException(status_code=400, detail="员工二维码图片超过 2MB 限制")
+        raise HTTPException(status_code=400, detail="顾问二维码图片超过 2MB 限制")
     is_png = data[:8] == b"\x89PNG\r\n\x1a\n"
     is_jpeg = data[:3] == b"\xff\xd8\xff"
     if not (is_png or is_jpeg):
-        raise HTTPException(status_code=400, detail="员工二维码仅支持 PNG/JPG 格式")
+        raise HTTPException(status_code=400, detail="顾问二维码仅支持 PNG/JPG 格式")
     return data
 
 
 async def _register_employee_qr(tenant_id: str, qr_bytes: bytes, user_id: str) -> str:
-    """将员工二维码 bytes 注册到 ImageRegistry，返回 file_id。
+    """将顾问二维码 bytes 注册到 ImageRegistry，返回 file_id。
 
     注册参数（设计 §4.2.3）：source="user_upload", usage="attachment",
     ttl_seconds=PERMANENT_TTL -- 不设 TTL、不被 cleanup 清理，语义准确。
@@ -181,7 +181,7 @@ async def _register_employee_qr(tenant_id: str, qr_bytes: bytes, user_id: str) -
             source_path=tmp_path,
             tenant_id=tenant_id,
             user_id=user_id,
-            display_name="员工二维码",
+            display_name="顾问二维码",
             source="user_upload",
             usage="attachment",
             ttl_seconds=ImageRegistry.PERMANENT_TTL,
@@ -195,7 +195,7 @@ async def _register_employee_qr(tenant_id: str, qr_bytes: bytes, user_id: str) -
 
 
 async def _cleanup_employee_qr(file_id: Optional[str]) -> None:
-    """删除员工二维码图片资产（磁盘文件 + Redis 元数据）。失败仅告警不阻断主流程。"""
+    """删除顾问二维码图片资产（磁盘文件 + Redis 元数据）。失败仅告警不阻断主流程。"""
     if not file_id:
         return
     try:
@@ -209,9 +209,9 @@ async def _cleanup_employee_qr(file_id: Optional[str]) -> None:
             path = await registry.resolve_local_path(ref)
             path.unlink(missing_ok=True)
         redis_client.delete(redis_client.make_key("uploaded_file", file_id))
-        logger.info(f"[wecom-kf] 员工二维码已清理: file_id={file_id}")
+        logger.info(f"[wecom-kf] 顾问二维码已清理: file_id={file_id}")
     except Exception as e:
-        logger.warning(f"[wecom-kf] 员工二维码清理失败 file_id={file_id}: {e}")
+        logger.warning(f"[wecom-kf] 顾问二维码清理失败 file_id={file_id}: {e}")
 
 
 async def _upload_avatar_bytes(api_client, avatar_bytes: bytes) -> str:
@@ -543,7 +543,7 @@ async def update_kf_account(request: Request, open_kfid: str, body: KfAccountUpd
     if body.qr_title is not None:
         kf["qr_title"] = body.qr_title
 
-    # 员工二维码：传新图替换旧图（显式清理旧 file_id，见设计 §4.2.3）
+    # 顾问二维码：传新图替换旧图（显式清理旧 file_id，见设计 §4.2.3）
     if body.employee_qr_base64:
         qr_bytes = _decode_employee_qr(body.employee_qr_base64)
         if qr_bytes:
@@ -642,7 +642,7 @@ async def delete_kf_account(request: Request, open_kfid: str):
     if del_result.get("errcode", 0) != 0 and not _is_account_not_exists(del_result):
         raise HTTPException(status_code=400, detail=f"企微删除客服账号失败: {del_result.get('errmsg')}")
 
-    # 清理员工二维码图片资产
+    # 清理顾问二维码图片资产
     await _cleanup_employee_qr(kf.get("employee_qr_file_id"))
 
     # 从配置移除

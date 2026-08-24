@@ -381,7 +381,7 @@
             <p class="mt-0.5 text-xs text-muted">显示在二维码图片上方，便于区分不同归属用户</p>
           </div>
           <div class="col-span-2">
-            <label class="text-sm text-muted mb-1 block">员工二维码（可选）</label>
+            <label class="text-sm text-muted mb-1 block">顾问二维码（可选）</label>
             <div class="flex items-center gap-3">
               <img
                 v-if="kfForm.employeeQrPreview"
@@ -729,7 +729,7 @@ function handleEmployeeQrUpload(event: Event) {
     const commaIdx = dataUrl.indexOf(',')
     kfForm.value.employee_qr_base64 = commaIdx >= 0 ? dataUrl.slice(commaIdx + 1) : dataUrl
   }
-  reader.onerror = () => { kfFormError.value = '员工二维码读取失败' }
+  reader.onerror = () => { kfFormError.value = '顾问二维码读取失败' }
   reader.readAsDataURL(file)
 }
 

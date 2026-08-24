@@ -17,13 +17,13 @@
 > 4. **留资做成 `lead-capture` 技能**，pre-sales 跑通后可被旅游等智能体复用
 > 5. **wecom_kf 渠道不实现留资业务逻辑**，仅注入会话状态上下文
 > 6. **线索表单独新建** `bs_lead_capture_leads`（中性表名；若坚持渠道命名可 `bs_wecom_kf_leads`，实现相同）
-> 7. 员工二维码不区分微信/企微，`kf_account.employee_qr_file_id` 存 ImageRegistry file_id
+> 7. 顾问二维码不区分微信/企微，`kf_account.employee_qr_file_id` 存 ImageRegistry file_id
 > 8. 统计做留资报表页（复用引流统计模式），不做定时汇总
 >
 > **v2.1 评审修订（2026-08-21，定稿）**：
 > 9. **不建 lead-capture 技能**（修订第 4 条）：留资策略写入 pre-sales SUBAGENT.md 正文（租户经 `prompt_versions` 覆盖），核心动作走 `record_lead_capture` 纯工具（参照 `transfer_to_human` 先例）
 > 10. **工作时间由提示词声明**：租户管理员写“本公司工作时间是周一到周五 X 点到 X 点”，LLM 按上下文注入的当前时间 + 星期判断
-> 11. 员工二维码注册：`source="user_upload", usage="attachment", ttl_seconds=PERMANENT_TTL`（显式永久，不用 source=knowledge_base hack）
+> 11. 顾问二维码注册：`source="user_upload", usage="attachment", ttl_seconds=PERMANENT_TTL`（显式永久，不用 source=knowledge_base hack）
 > 12. Phase 1 工具 `catalog=False`（不进任何智能体工具列表，仅单测验证），Phase 2 随 pre-sales 上线放开 `catalog=True`
 > 13. 建表加入 `src/saas/db/tables.py` 的 `init_saas_tables()`（启动自动建表），同时登记 deploy 两个 SQL 文件
 
@@ -40,7 +40,7 @@
 | §六 record_lead_capture 工具 | 新建工具（记录 + 防重复 + 返回二维码） | Phase 1 |
 | §七 会话状态机 | `channel_sessions.metadata.lead_capture` 注入/读写 | Phase 1 |
 | §八 有效客户判定 | 提示词驱动，代码不介入判定 | — |
-| §十 员工二维码配置 | `kf_account.employee_qr_file_id` + 图片管线 | Phase 2 |
+| §十 顾问二维码配置 | `kf_account.employee_qr_file_id` + 图片管线 | Phase 2 |
 | §十一 数据闭环 | 线索表 + 即时通知 + 统计报表页 | Phase 1 + 3 |
 | §十二 老客户识别 | 会话级防重复（Phase 1）+ 客户级识别（Phase 3） | Phase 1 + 3 |
 
@@ -50,7 +50,7 @@
 
 ```
 Phase 1（工具层：留资记录能力）
-  → Phase 2（智能体 + 配置：pre-sales 智能体提示词、员工二维码、工具放开 catalog）
+  → Phase 2（智能体 + 配置：pre-sales 智能体提示词、顾问二维码、工具放开 catalog）
   → Phase 3（运营侧：线索管理 + 留资统计报表页）
   → Phase 4（after-sales 回归纯售后 + 租户渠道账号切换）
 ```
@@ -123,7 +123,7 @@ class RecordLeadCaptureInput(BaseModel):
 3. **防重复**：读 `channel_session_manager.get_session(session_id).metadata.lead_capture`，已 `captured` → 拒绝「该客户已留资，勿重复引导」
 4. 生成 `lead_id`，INSERT `bs_lead_capture_leads`（`assigned_to` 取 `kf_config.tenant_user_id`，`user_id` 取 `kf_context` 的租户侧用户）
 5. `update_session(session_id, metadata={"lead_capture": {...}})` 写入状态
-6. `contact_method=qr`：从 `kf_config.employee_qr_file_id` 读取员工二维码，返回 `images=[ImageRef]`（Phase 2 启用；无 file_id 返回失败「未配置员工二维码，请仅引导留手机号」）
+6. `contact_method=qr`：从 `kf_config.employee_qr_file_id` 读取顾问二维码，返回 `images=[ImageRef]`（Phase 2 启用；无 file_id 返回失败「未配置顾问二维码，请仅引导留手机号」）
 
 **description（给 LLM）**：描述"收集到客户手机号或客户选择添加员工微信时调用"，注明"调用后提示客户客服会联系/可添加下方微信"，"该客户已留资过则不要重复调用"。
 
@@ -139,7 +139,7 @@ class RecordLeadCaptureInput(BaseModel):
 
 ---
 
-## 四、Phase 2：pre-sales 智能体 + 员工二维码配置
+## 四、Phase 2：pre-sales 智能体 + 顾问二维码配置
 
 ### 4.1 pre-sales 智能体（含留资提示词）
 
@@ -179,7 +179,7 @@ tools:
 
 **工具放开**：本 Phase 将 `record_lead_capture` 的 `catalog` 改为 `True`。
 
-### 4.2 员工二维码配置 + 图片管线
+### 4.2 顾问二维码配置 + 图片管线
 
 #### 4.2.1 配置字段
 
@@ -190,13 +190,13 @@ tools:
   "open_kfid": "...",
   "name": "售前客服",
   "tenant_user_id": "绑定员工 user_id",
-  "employee_qr_file_id": "file_xxx"        // 新增：员工二维码 ImageRegistry file_id（展示名随 ImageRef 回显，无需冗余字段）
+  "employee_qr_file_id": "file_xxx"        // 新增：顾问二维码 ImageRegistry file_id（展示名随 ImageRef 回显，无需冗余字段）
 }
 ```
 
 #### 4.2.2 上传/注册链路（复用 ImageRef 管线）
 
-1. 前端 `ChannelConfig.vue` 客服账号编辑弹窗新增「员工二维码」上传
+1. 前端 `ChannelConfig.vue` 客服账号编辑弹窗新增「顾问二维码」上传
 2. 后端 `wecom_kf_account.py` 保存逻辑：接收图片 → 落盘 `storage/tenants/{tenant_id}/avatar/` → `ImageRegistry.register(source="user_upload", usage="attachment", ttl_seconds=PERMANENT_TTL)` → `file_id` → 写入 `kf_account.employee_qr_file_id`
 3. 下发：`record_lead_capture(qr)` 返回 `ImageRef`；wecom_kf `send_message._send_image_file_as_image` 已支持按 file_id → upload_media → image 消息，微信侧直接显示可长按识别
 4. 回显：管理端用 `/api/files/{file_id}/download`
@@ -207,7 +207,7 @@ tools:
 - **Redis TTL**：`source != "knowledge_base"` 且未显式传 `ttl_seconds` 时默认 24h expire；**显式传 `ttl_seconds=PERMANENT_TTL(-1)` 则不调 expire，永久保留，与 source 无关**
 - **cleanup_temp**：仅清理 `source ∈ (tool_generated, web_fetch)` 且 `usage ∈ (inline, embedded)` 的图；`user_upload` / `attachment` 均不在清理范围
 
-**员工二维码注册参数**：`source="user_upload", usage="attachment", ttl_seconds=PERMANENT_TTL`——不设 TTL、不被 cleanup 清理，语义准确。
+**顾问二维码注册参数**：`source="user_upload", usage="attachment", ttl_seconds=PERMANENT_TTL`——不设 TTL、不被 cleanup 清理，语义准确。
 
 - 换图/删号时显式清理旧 file_id
 - ~~注册用 `source="knowledge_base"`~~：语义 hack，污染 `ImageRef.source` 枚举契约与前端来源标签，不采用；“新增 `channel_asset` 枚举”亦无必要（显式 TTL 参数即可满足）
@@ -296,7 +296,7 @@ API 封装走 `getAuthHeader()`（自动带 X-Tenant-Id）。
 - 工具可见性：catalog 改 True 后 pre-sales 工具列表含 record_lead_capture
 - 渠道配置：上传→落盘→注册→file_id 写入；注册参数断言（source=user_upload / usage=attachment / ttl 永久）；换图旧 file_id 清理
 - `record_lead_capture(qr)` 返回 ImageRef → send_message 图片下发（mock upload_media）
-- 前端：`cd frontend && npm run build` 0 错误；员工二维码上传回显
+- 前端：`cd frontend && npm run build` 0 错误；顾问二维码上传回显
 
 ### Phase 3（运营侧）
 - `lead-stats`/`leads`/`patch` 接口单测 + 集成；普通用户隔离测试（复用引流统计隔离测试模式）
@@ -315,11 +315,11 @@ API 封装走 `getAuthHeader()`（自动带 X-Tenant-Id）。
 | # | 风险 | 应对 |
 |---|------|------|
 | 1 | 两张线索表割裂（`bs_lead_capture_leads` vs `bs_customer_followup_leads`） | 用户已确认单独新建；通过 `customer_user_id` 可关联，不产生依赖 |
-| 2 | 员工二维码被 TTL 清理 | 显式 `ttl_seconds=PERMANENT_TTL` 永久注册 + `usage=attachment`（不在 cleanup 范围）；换图/删号显式清理（§4.2.3） |
+| 2 | 顾问二维码被 TTL 清理 | 显式 `ttl_seconds=PERMANENT_TTL` 永久注册 + `usage=attachment`（不在 cleanup 范围）；换图/删号显式清理（§4.2.3） |
 | 3 | 提示词判定不可靠（重复/漏留资） | 代码侧防重复兜底（metadata.lead_capture）；漏留资靠管理员调提示词 |
 | 4 | 工具被误调用（非 wecom_kf 渠道 / Phase 1 期间的生产 after-sales） | Phase 1 `catalog=False` 对所有智能体不可见；Phase 2 放开后靠工具内 `get_kf_context()` 渠道隔离 + 提示词约束 |
 | 5 | 手机号明文泄露 | 加密落库、日志不打印、接口解密限权限内 |
-| 6 | 客服账号未配置员工二维码 | `record_lead_capture(qr)` 无 file_id → 失败，提示词仅引导留手机号 |
+| 6 | 客服账号未配置顾问二维码 | `record_lead_capture(qr)` 无 file_id → 失败，提示词仅引导留手机号 |
 | 7 | after-sales 拆分影响生产售后 | Phase 4 独立排期，三智能体 + 真机验证，租户账号切换配合 |
 | 8 | 策略写在提示词，租户改动可能引入劣化话术 | `prompt_versions` 有版本记录可回滚；SUBAGENT.md 默认口径兜底 |
 
@@ -335,8 +335,8 @@ API 封装走 `getAuthHeader()`（自动带 X-Tenant-Id）。
 | `src/saas/db/tables.py` | `init_saas_tables()` 新增建表 | 1 |
 | `deploy/init-postgres.sql` / `deploy/db_update.sql` | 建表登记 | 1 |
 | `subagents/pre-sales/SUBAGENT.md` | 新增：售前咨询智能体（含留资规范提示词） | 2 |
-| `src/saas/api/wecom_kf_account.py` | 员工二维码上传/保存 | 2 |
-| `frontend/web/components/saas/ChannelConfig.vue` | 客服账号表单加员工二维码上传 | 2 |
+| `src/saas/api/wecom_kf_account.py` | 顾问二维码上传/保存 | 2 |
+| `frontend/web/components/saas/ChannelConfig.vue` | 客服账号表单加顾问二维码上传 | 2 |
 | `src/saas/api/external_customers.py` | 新增 lead-stats / leads 接口 | 3 |
 | `frontend/web/components/saas/ExternalCustomerService.vue` | 新增「留资线索」Tab | 3 |
 | `frontend/web/api/*.ts` | 新增留资 API 封装（X-Tenant-Id） | 3 |

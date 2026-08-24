@@ -55,7 +55,7 @@ class RecordLeadCaptureTool(BaseTool):
         "- 客户已留资过但仍明确要求留资（再次留下手机号或要求加微信）："
         "视为新的跟进需求，正常登记并通知员工（注明上次留资时间）\n"
         "- 客户未明确要求留资时，不要重复引导客户留资\n"
-        "- 工具返回失败（如未配置员工二维码）时，降级仅引导客户留下手机号\n"
+        "- 工具返回失败（如未配置顾问二维码）时，降级仅引导客户留下手机号\n"
         "- 调用成功后提示客户：客服会尽快联系 / 可添加下方微信"
     )
     usage_guide = ""
@@ -126,19 +126,19 @@ class RecordLeadCaptureTool(BaseTool):
         lead_state = session_metadata.get("lead_capture") or {}
         previous_captured_at = lead_state.get("captured_at")
 
-        # contact_method=qr 时先校验员工二维码可用性，再落库：
+        # contact_method=qr 时先校验顾问二维码可用性，再落库：
         # 未配置或读取失败必须「无副作用降级」，避免写入一条无二维码可发的 qr 线索。
         qr_ref = None
         if contact_method == "qr":
             employee_qr_file_id = kf_config.get("employee_qr_file_id")
             if not employee_qr_file_id:
                 logger.info(
-                    f"留资(qr)降级为手机号：未配置员工二维码 "
+                    f"留资(qr)降级为手机号：未配置顾问二维码 "
                     f"tenant={tenant_id}, open_kfid={open_kfid}"
                 )
                 return {
                     "success": False,
-                    "error": "当前客服账号未配置员工二维码，请仅引导客户留下手机号",
+                    "error": "当前客服账号未配置顾问二维码，请仅引导客户留下手机号",
                     "hint": "请改为引导客户留下手机号，并说明客服会尽快联系",
                 }
             try:
@@ -148,16 +148,16 @@ class RecordLeadCaptureTool(BaseTool):
                     employee_qr_file_id
                 )
             except Exception as e:
-                logger.warning(f"读取员工二维码失败 open_kfid={open_kfid}: {e}")
+                logger.warning(f"读取顾问二维码失败 open_kfid={open_kfid}: {e}")
                 qr_ref = None
             if not qr_ref:
                 logger.info(
-                    f"留资(qr)降级为手机号：员工二维码资产缺失 "
+                    f"留资(qr)降级为手机号：顾问二维码资产缺失 "
                     f"tenant={tenant_id}, open_kfid={open_kfid}"
                 )
                 return {
                     "success": False,
-                    "error": "员工二维码读取失败，请仅引导客户留下手机号",
+                    "error": "顾问二维码读取失败，请仅引导客户留下手机号",
                     "hint": "请改为引导客户留下手机号，并说明客服会尽快联系",
                 }
 
@@ -205,7 +205,7 @@ class RecordLeadCaptureTool(BaseTool):
         except Exception as e:
             logger.warning(f"留资后更新会话状态失败 session={session_id}: {e}")
 
-        # 通知归属员工（注明上次留资时间，回头客场景）；qr 时随回复下发员工二维码
+        # 通知归属员工（注明上次留资时间，回头客场景）；qr 时随回复下发顾问二维码
         await self._notify_lead_capture(
             lead_id, tenant_id, assigned_to, assignee_name, contact_method,
             previous_captured_at=previous_captured_at,
