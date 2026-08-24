@@ -12,7 +12,18 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-export const RUNTIME_VERSION = '0.1.0'
+/** 运行时版本（读 package.json，src/dist 两种布局兜底；不手写字符串防漂移误导排障） */
+export const RUNTIME_VERSION: string = (() => {
+  const here = path.dirname(fileURLToPath(import.meta.url))
+  for (const p of [path.join(here, '..', 'package.json'), path.join(here, '..', '..', 'package.json')]) {
+    try {
+      if (existsSync(p)) return String(JSON.parse(readFileSync(p, 'utf8')).version ?? '0.0.0')
+    } catch {
+      // 读失败试下一个候选
+    }
+  }
+  return '0.0.0'
+})()
 export const PLATFORM = 'win32-x64'
 
 export interface RuntimeConfig {

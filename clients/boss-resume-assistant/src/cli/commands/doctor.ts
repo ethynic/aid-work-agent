@@ -45,7 +45,7 @@ export async function doctorCommand(opts: DoctorCommandOptions): Promise<number>
     await gw.connect(endpoint)
     connected = check(true, `CDP 端点可连（${endpoint}）`)
   } catch (e) {
-    check(false, `CDP 端点可连（${endpoint}）`, '请确认 Chrome 已带 --remote-debugging-port 启动')
+    check(false, `CDP 端点可连（${endpoint}）`, '调试 Chrome 未运行；执行任意 boss 操作时会自动拉起（首次需在弹出的 Chrome 中登录 BOSS），或手动带 --remote-debugging-port 启动')
   }
 
   // ③ 能 attach zhipin.com 页面

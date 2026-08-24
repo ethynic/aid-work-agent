@@ -11,7 +11,7 @@
 | 项 | 要求 | 检查方式 |
 |---|---|---|
 | 操作系统 | Windows 10/11 x64 | — |
-| Node.js | **22 LTS 或更高** | `node -v`；未装去 https://nodejs.org 下 LTS 安装 |
+| Node.js | **20 或更高（当前 LTS 24.x，开发验证环境即 v24；老版本如 v16 无法运行）** | `node -v`；未装/过旧去 https://nodejs.org 下 LTS 安装（覆盖安装即可，package.json 已声明 engines>=20） |
 | Chrome | 已安装并可登录 BOSS 直聘 | — |
 | 网络 | 能访问服务端地址（如 https://agent2.aidingyi.cn） | 浏览器打开该地址 |
 
@@ -51,10 +51,19 @@ npm install -g <tgz 文件路径>
 
 验证：`aid-runtime status`（应显示配置目录与配对状态；未配对属正常，见 §五）
 
-## 四、Chrome 调试实例（关键步骤，缺了工具连不上浏览器）
+## 四、Chrome 调试实例（v0.2.1 起自动拉起，手工方式仅兜底）
 
-Chrome 136+ 出于安全限制，**默认用户数据目录下会静默忽略调试端口参数**——必须用
-独立数据目录起一个「调试实例」：
+**默认无需任何手工配置**：首次执行任意 BOSS 操作时，CLI 检测调试端口（默认 9222）不通
+会自动拉起一个**固定持久 profile**（`C:\chrome-debug`）的 Chrome 调试实例并打开
+zhipin.com（ChromeLauncher：App Paths 注册表/常见路径定位 chrome.exe → detached
+spawn → 轮询端口就绪 ≤15s；找不到 Chrome/拉起失败/超时一律 fail-open 按原错误上报）。
+用户**只需在弹出的窗口里登录一次 BOSS**。用户偏好自己管理时设 `AID_BOSS_AUTO_CHROME=0` 关闭。
+
+背景：Chrome 136+ 默认用户数据目录会静默忽略调试端口参数，必须独立数据目录。当初
+「CLI 绝不启动 Chrome」决策针对的是临时 profile（指纹/登录态每次全新，触发 BOSS 风控）；
+固定持久 profile 与手动开快捷方式完全等价，不属禁区（ChromeAttacher 决策 6 修订二）。
+
+手工兜底（自动拉起失败的少数情况）：
 
 1. 新建桌面快捷方式，目标填：
    ```
@@ -106,10 +115,16 @@ runtime **不需要保持命令行窗口**——用仓库自带的脚本注册�
 # 2. 注册并启动（管理员不需要，当前用户即可）
 powershell -ExecutionPolicy Bypass -File clients\scripts\register_runtime_task.ps1
 ```
-- 日志位置：`%APPDATA%\aidwork-tool-runtime\logs\runtime.log`（`runtime.old.log` 为轮转前一代）
+- 日志位置：`%APPDATA%\aidwork-tool-runtime\logs\runtime.log`（`runtime.old.log` 为轮转前一代）；
+  runtime 的 stderr 与其调用的 boss CLI 子进程 stderr 都汇入该文件（自动脱敏：token/长 base64 打码）
+- **远程排障采集**：让客户双击 `clients/release/collect_logs.bat` → 桌面生成
+  「aidwork-诊断包-时间戳.zip」（日志 + config.json + 环境/包版本 + status/doctor 输出；
+  绝不含 credentials.bin），发回即可分析
 - bat 优先用 npm 全局命令 `aid-runtime`，找不到时回退开发机仓库路径（客户机走前者）
 - 临时停止：`Stop-ScheduledTask -TaskName AidWorkToolRuntime`（同时结束 bat 宿主 cmd 进程）；
   彻底移除：`Unregister-ScheduledTask -TaskName AidWorkToolRuntime`
+- **重启（升级后必做）**：`Stop-ScheduledTask -TaskName AidWorkToolRuntime; Start-ScheduledTask -TaskName AidWorkToolRuntime`。
+  不要用 Stop-Process 杀 node 进程来重启——会带走整个任务宿主（自愈循环无法接手），任务变 Ready 需手动 Start
 - **不要**做成 Windows 系统服务（SYSTEM/Session 0 无法操作用户桌面的 Chrome 与鼠标，
   任务计划的登录任务是唯一正确形态）
 
@@ -118,7 +133,7 @@ powershell -ExecutionPolicy Bypass -File clients\scripts\register_runtime_task.p
 ```bash
 # 升级（配置与配对凭证自动保留，无需重新配对）
 npm install -g <新版本 tgz 路径>
-# 然后重启 runtime 进程（结束旧进程再 aid-runtime start，或注销重登）
+# 然后重启后台任务（见 §六：Stop-ScheduledTask + Start-ScheduledTask）
 
 # 卸载
 npm rm -g agent-tool-runtime

@@ -8,6 +8,7 @@
  */
 import { CdpGateway } from '../cdp/CdpGateway.js'
 import { DEFAULT_CDP_PORT } from '../chrome/ChromeAttacher.js'
+import { ensureDebugChrome } from '../chrome/ChromeLauncher.js'
 import { WinMouseClicker } from '../input/WinMouseClicker.js'
 import type { DomSnapshot, ClickPoint } from '../boss/domSnapshot.js'
 import { randomUUID } from 'node:crypto'
@@ -80,6 +81,12 @@ export const defaultSessionFactory: BossSessionFactory = async (ctx) => {
   const clicker = new WinMouseClicker()
   ctx.progress({ stage: 'connect', message: `连接 Chrome 调试端口（${endpoint}）` })
   try {
+    // 端口不通时自动拉起固定 profile 调试实例（fail-open，拉不起则由下方 connect 报原有错误；
+    // 包 withAbort 使拉起等待期间用户取消依然立即生效）
+    const launched = await withAbort(ensureDebugChrome(ctx.cdpPort ?? DEFAULT_CDP_PORT), ctx.signal)
+    if (launched) {
+      ctx.progress({ stage: 'connect', message: '已自动拉起调试 Chrome 并打开 BOSS 直聘；首次使用请在该窗口登录一次' })
+    }
     await withAbort(gw.connect(endpoint), ctx.signal)
     ctx.progress({ stage: 'attach', message: 'attach BOSS 页面' })
     await withAbort(gw.attachToRecommendPage(), ctx.signal)

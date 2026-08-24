@@ -130,3 +130,6 @@ plans/cron_user*
 frontend/e2e/.auth/
 frontend/playwright-report/
 frontend/test-results/
+
+# 客户端分发包（tgz 二进制不入库，脚本与手册入库）
+clients/release/*.tgz

@@ -65,7 +65,9 @@ export async function runConformance(options) {
       command: spawnSpec.command,
       args: spawnSpec.args,
       cwd: spawnSpec.cwd,
-      env: spawnSpec.env,
+      // 未显式指定时全量继承：SDK Windows 默认只给 12 个白名单 env，测试注入的
+      // 开关变量（如 AID_BOSS_AUTO_CHROME）会被丢掉导致测试隔离失效
+      env: spawnSpec.env ?? { ...process.env },
       stderr: 'pipe',
     })
     const stderrChunks = []

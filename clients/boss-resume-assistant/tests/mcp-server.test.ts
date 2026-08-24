@@ -50,6 +50,9 @@ async function startClient(args: string[]): Promise<Client> {
     command: process.execPath,
     args,
     stderr: 'pipe',
+    // SDK Windows 下默认只继承 12 个白名单 env（防注入），AID_BOSS_AUTO_CHROME 测试开关
+    // 不在其中——不显式透传则 MCP 子进程会真拉起 Chrome，破坏测试隔离
+    env: Object.fromEntries(Object.entries(process.env).filter((e): e is [string, string] => e[1] !== undefined)),
   })
   transport.stderr?.on('data', () => {}) // 丢弃 server stderr 日志
   const client = new Client({ name: 'mcp-server-test', version: '0.1.0' }, { capabilities: {} })
