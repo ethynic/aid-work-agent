@@ -52,7 +52,9 @@ class RecordLeadCaptureTool(BaseTool):
         "- 客户主动要求添加员工微信/企微，或选择扫码添加\n"
         "- 已按判定规则识别为有意向客户并完成需求收集\n\n"
         "注意事项：\n"
-        "- 该客户已留资过则不要重复调用（工具会拒绝重复留资）\n"
+        "- 客户已留资过但仍明确要求留资（再次留下手机号或要求加微信）："
+        "视为新的跟进需求，正常登记并通知员工（注明上次留资时间）\n"
+        "- 客户未明确要求留资时，不要重复引导客户留资\n"
         "- 工具返回失败（如未配置员工二维码）时，降级仅引导客户留下手机号\n"
         "- 调用成功后提示客户：客服会尽快联系 / 可添加下方微信"
     )
@@ -112,7 +114,9 @@ class RecordLeadCaptureTool(BaseTool):
 
         from src.channels.session import channel_session_manager
 
-        # 防重复：读会话 metadata.lead_capture，已留资则拒绝
+        # 已留资客户再次明确要求留资（加微信/留手机号）视为新的跟进需求，正常登记；
+        # 仅记录上次留资时间用于通知正文，让员工结合历史需求跟进（不拒绝、不防重）。
+        # 客户未明确要求时，由 Agent 引导策略避免重复引导留资，工具不在本层判断。
         try:
             session = channel_session_manager.get_session_by_id(session_id)
         except Exception as e:
@@ -120,19 +124,10 @@ class RecordLeadCaptureTool(BaseTool):
             session = None
         session_metadata = (session or {}).get("metadata") or {}
         lead_state = session_metadata.get("lead_capture") or {}
-        if lead_state.get("stage") == "captured":
-            logger.info(
-                f"客户留资被拒绝（重复留资）: tenant={tenant_id}, session={session_id}"
-            )
-            return {
-                "success": False,
-                "error": "该客户已留资，请勿重复引导",
-                "hint": "该客户此前已留过资，继续正常对话即可",
-            }
+        previous_captured_at = lead_state.get("captured_at")
 
         # contact_method=qr 时先校验员工二维码可用性，再落库：
-        # 未配置或读取失败必须「无副作用降级」，否则会写入一条无手机号的 qr 线索
-        # 并置 captured 状态，导致后续引导客户留手机号时被防重复逻辑拒绝，降级失效。
+        # 未配置或读取失败必须「无副作用降级」，避免写入一条无二维码可发的 qr 线索。
         qr_ref = None
         if contact_method == "qr":
             employee_qr_file_id = kf_config.get("employee_qr_file_id")
@@ -210,11 +205,12 @@ class RecordLeadCaptureTool(BaseTool):
         except Exception as e:
             logger.warning(f"留资后更新会话状态失败 session={session_id}: {e}")
 
-        # contact_method=qr：下发员工二维码（可用性已在落库前校验，qr_ref 必非空）
+        # 通知归属员工（注明上次留资时间，回头客场景）；qr 时随回复下发员工二维码
+        await self._notify_lead_capture(
+            lead_id, tenant_id, assigned_to, assignee_name, contact_method,
+            previous_captured_at=previous_captured_at,
+        )
         if contact_method == "qr":
-            await self._notify_lead_capture(
-                lead_id, tenant_id, assigned_to, assignee_name, contact_method
-            )
             logger.info(
                 f"客户留资成功(qr): lead_id={lead_id}, tenant={tenant_id}, "
                 f"open_kfid={open_kfid}"
@@ -224,10 +220,6 @@ class RecordLeadCaptureTool(BaseTool):
                 "message": "已为客户登记留资，请引导客户添加下方员工微信",
                 "images": [qr_ref.model_dump()],
             }
-
-        await self._notify_lead_capture(
-            lead_id, tenant_id, assigned_to, assignee_name, contact_method
-        )
         logger.info(
             f"客户留资成功: lead_id={lead_id}, tenant={tenant_id}, "
             f"method=phone, open_kfid={open_kfid}"
@@ -244,12 +236,16 @@ class RecordLeadCaptureTool(BaseTool):
         assigned_to: Optional[str],
         assignee_name: Optional[str],
         contact_method: str,
+        previous_captured_at: Optional[str] = None,
     ) -> None:
         """留资成功后即时通知归属员工（复用 notification_service 邮件通知）。
 
         设计 §4.3：通知侧按服务器时间判断工作时间，非工作时间留资的邮件正文
         提示次日跟进。员工邮箱取 user_email_settings.email_address，未配置则
         跳过。通知失败不影响留资结果，仅记录日志。
+
+        previous_captured_at：该客户此前留资时间，非空时在通知正文注明，
+        提示员工结合历史需求跟进（回头客场景）。
         """
         try:
             if not assigned_to:
@@ -272,11 +268,17 @@ class RecordLeadCaptureTool(BaseTool):
             is_work_time = now.weekday() < 5 and 9 <= now.hour < 18
             method_label = "手机号" if contact_method == "phone" else "员工微信"
             work_note = "" if is_work_time else "（当前为非工作时间，请于下一个工作日跟进）"
+            previous_note = ""
+            if previous_captured_at:
+                previous_note = (
+                    f"该客户此前已于 {previous_captured_at} 留资，"
+                    f"请结合历史需求跟进。"
+                )
             msg = NotificationMessage(
                 title=f"[客户留资] 新线索 {lead_id[:12]}",
                 content=(
                     f"归属员工「{assignee_name or '-'}」：客户已通过{method_label}"
-                    f"方式留资，线索号 {lead_id}，请及时跟进。{work_note}"
+                    f"方式留资，线索号 {lead_id}，请及时跟进。{previous_note}{work_note}"
                 ),
                 urgency="medium",
                 recipient=email,

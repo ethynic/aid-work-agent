@@ -6,7 +6,7 @@
 - 渠道隔离（非 wecom_kf 渠道返回友好失败提示）
 - 手机号校验（缺省 / 格式异常）
 - 成功留资（写线索 + 更新会话状态机）
-- 防重复（会话 metadata.lead_capture 已 captured → 拒绝）
+- 已留资客户再次明确要求留资（加微信/留手机号）-> 视为新需求，正常落库并通知（注明上次留资时间）
 - 员工二维码（qr 下发 ImageRef；未配置 → 降级仅引导留手机号）
 """
 import pytest
@@ -128,8 +128,10 @@ class TestRecordLeadCaptureToolDefinition:
         assert "input_schema" in defn
         required = defn["input_schema"].get("required", [])
         assert "contact_method" in required
-        # description 明确注明防重复与降级语义
-        assert "不要重复调用" in tool.description
+        # description 明确注明重复留资与降级语义
+        assert "已留资过" in tool.description
+        assert "上次留资时间" in tool.description
+        assert "不要重复引导客户留资" in tool.description
 
     def test_tool_in_catalog_registry(self):
         """catalog=True：工具出现在 discover_tool_classes 发现的目录中（Phase 2 放开）。"""
@@ -270,9 +272,10 @@ class TestRecordLeadCaptureExecute:
         mocks["notify_send"].assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_dedup_rejects_already_captured(self):
-        """会话 metadata.lead_capture 已 captured → 拒绝防重复"""
+    async def test_dedup_phone_recapture_creates_new_lead_with_history_note(self):
+        """已留资客户再次留下手机号 -> 视为新跟进需求，正常落库并通知（注明上次留资时间）"""
         ctx = _make_ctx()
+        email_cred = {"email_address": "emp@example.com"}
         with _patch_execute(
             ctx,
             session_metadata={
@@ -283,13 +286,67 @@ class TestRecordLeadCaptureExecute:
                     "captured_at": "2026-08-21 10:00:00",
                 }
             },
+            email_cred=email_cred,
         ) as (tool, mocks):
             result = await tool.execute(contact_method="phone", phone="13800138000")
 
-        assert result["success"] is False
-        assert "已留资" in result["error"]
-        mocks["lead_db_create"].assert_not_called()
-        mocks["update_session"].assert_not_called()
+        assert result["success"] is True
+        # 正常落库新线索 + 更新会话状态 + 通知员工
+        mocks["lead_db_create"].assert_called_once()
+        mocks["update_session"].assert_called_once()
+        mocks["notify_send"].assert_called_once()
+        # 通知正文注明上次留资时间，提示结合历史需求跟进
+        content = mocks["notify_send"].call_args[0][0].content
+        assert "2026-08-21 10:00:00" in content
+        assert "结合历史需求跟进" in content
+
+    @pytest.mark.asyncio
+    async def test_recapture_qr_creates_new_lead_with_history_note(self):
+        """已留资客户再次明确要求加微信 -> 视为新需求，正常落库 + 下发二维码 + 通知注明上次留资时间"""
+        from src.core.image_asset import ImageRef
+
+        ctx = _make_ctx(
+            kf_config={
+                "name": "售前客服",
+                "tenant_user_id": "emp_001",
+                "employee_qr_file_id": "file_employee_qr",
+            }
+        )
+        ref = ImageRef(
+            file_id="file_employee_qr",
+            download_url="/api/files/file_employee_qr/download",
+            display_name="员工二维码.png",
+            source="user_upload",
+        )
+        mock_registry = MagicMock()
+        mock_registry.get_ref_by_file_id = AsyncMock(return_value=ref)
+
+        with _patch_execute(
+            ctx,
+            session_metadata={
+                "lead_capture": {
+                    "stage": "captured",
+                    "lead_id": "lead_lc_old123",
+                    "contact_method": "qr",
+                    "captured_at": "2026-08-21 10:00:00",
+                }
+            },
+            email_cred={"email_address": "emp@example.com"},
+        ) as (tool, mocks):
+            with patch("src.core.image_asset.get_image_registry", return_value=mock_registry):
+                result = await tool.execute(contact_method="qr")
+
+        assert result["success"] is True
+        assert "员工微信" in result["message"]
+        assert result["images"][0]["file_id"] == "file_employee_qr"
+        assert result["images"][0]["source"] == "user_upload"
+        # 客户明确要求加微信视为新需求：正常落库新线索 + 更新会话状态 + 通知员工（注明上次留资时间）
+        mocks["lead_db_create"].assert_called_once()
+        mocks["update_session"].assert_called_once()
+        mocks["notify_send"].assert_called_once()
+        content = mocks["notify_send"].call_args[0][0].content
+        assert "2026-08-21 10:00:00" in content
+        assert "结合历史需求跟进" in content
 
     @pytest.mark.asyncio
     async def test_qr_without_employee_qr_returns_downgrade(self):
