@@ -664,3 +664,170 @@ class TestLongPlainTextAsImage:
         assert ok is True
         adapter._send_full_text_as_image.assert_not_awaited()
         adapter._send_segmented.assert_awaited_once()
+
+
+# ---------- images（ImageRef：客户留资二维码等）发送 ----------
+
+
+def _make_image_response(file_id="file_qr1", size_bytes=1024, text=""):
+    """构造 content.images 含单个 ImageRef dict 的 UnifiedResponse。"""
+    return UnifiedResponse(
+        message_id="msg_img_001",
+        reply_to="external_user_001",
+        content={"text": text, "images": [{"file_id": file_id, "size_bytes": size_bytes}]},
+    )
+
+
+class TestSendImageRefAsImage:
+    """content.images 中的 ImageRef 图片（客户留资二维码）应作为 image 消息发送。"""
+
+    @pytest.mark.asyncio
+    async def test_image_ref_sent_as_image(self, adapter, tmp_path):
+        """正常路径：ImageRef 图片 -> upload_media + send_msg(msgtype=image)。"""
+        img_path = tmp_path / "qr.png"
+        img_path.write_bytes(b"fake-qr")
+
+        with patch("src.channels.wecom_kf.adapter.redis_client") as mock_redis, \
+             patch("src.channels.wecom_kf.adapter.os.path.exists", return_value=True):
+            mock_redis.make_key.return_value = "key:uploaded_file:file_qr1"
+            mock_redis.hgetall.return_value = {"path": str(img_path)}
+
+            result = await adapter.send_message(_make_image_response())
+
+        assert result is True
+        adapter.api_client.upload_media.assert_awaited_once()
+        upload_args = adapter.api_client.upload_media.call_args
+        assert upload_args.args[0] == str(img_path)
+        assert upload_args.args[1] == "image"
+        send_call = adapter.api_client.send_msg.call_args
+        assert send_call.kwargs["msgtype"] == "image"
+        assert send_call.kwargs["content"] == {"media_id": "MEDIA_FAKE"}
+        assert send_call.kwargs["touser"] == "external_user_001"
+        assert send_call.kwargs["open_kfid"] == "kfXXX"
+
+    @pytest.mark.asyncio
+    async def test_image_ref_no_file_id_skipped(self, adapter):
+        """ImageRef 缺 file_id -> 跳过，不报错。"""
+        resp = UnifiedResponse(
+            message_id="msg_img_2",
+            reply_to="external_user_001",
+            content={"text": "", "images": [{}]},
+        )
+        with patch("src.channels.wecom_kf.adapter.redis_client") as mock_redis:
+            result = await adapter.send_message(resp)
+        assert result is True
+        adapter.api_client.upload_media.assert_not_awaited()
+        adapter.api_client.send_msg.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_image_ref_over_2mb_skipped(self, adapter):
+        """ImageRef 超过企微 image 2MB 限制 -> 跳过发送。"""
+        with patch("src.channels.wecom_kf.adapter.redis_client") as mock_redis:
+            mock_redis.make_key.return_value = "k"
+            mock_redis.hgetall.return_value = {}
+            result = await adapter.send_message(
+                _make_image_response(size_bytes=3 * 1024 * 1024)
+            )
+        assert result is True
+        adapter.api_client.upload_media.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_image_ref_no_redis_meta_skipped(self, adapter):
+        """Redis 无该 file_id 元数据 -> 跳过。"""
+        with patch("src.channels.wecom_kf.adapter.redis_client") as mock_redis:
+            mock_redis.make_key.return_value = "k"
+            mock_redis.hgetall.return_value = {}
+            result = await adapter.send_message(_make_image_response())
+        assert result is True
+        adapter.api_client.upload_media.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_image_ref_local_path_missing_skipped(self, adapter):
+        """本地文件已被清理 -> 跳过。"""
+        with patch("src.channels.wecom_kf.adapter.redis_client") as mock_redis, \
+             patch("src.channels.wecom_kf.adapter.os.path.exists", return_value=False):
+            mock_redis.make_key.return_value = "k"
+            mock_redis.hgetall.return_value = {"path": "/nonexistent/qr.png"}
+            result = await adapter.send_message(_make_image_response())
+        assert result is True
+        adapter.api_client.upload_media.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_image_ref_upload_no_media_id_failed(self, adapter, tmp_path):
+        """upload_media 未返回 media_id -> 发送失败（返回 False）。"""
+        img_path = tmp_path / "qr.png"
+        img_path.write_bytes(b"x")
+        adapter.api_client.upload_media = AsyncMock(
+            return_value={"errcode": 40001, "errmsg": "invalid credential"}
+        )
+
+        with patch("src.channels.wecom_kf.adapter.redis_client") as mock_redis, \
+             patch("src.channels.wecom_kf.adapter.os.path.exists", return_value=True):
+            mock_redis.make_key.return_value = "k"
+            mock_redis.hgetall.return_value = {"path": str(img_path)}
+            result = await adapter.send_message(_make_image_response())
+        assert result is False
+        adapter.api_client.send_msg.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_image_ref_send_errcode_nonzero_failed(self, adapter, tmp_path):
+        """image 消息发送 errcode!=0 -> 返回 False。"""
+        img_path = tmp_path / "qr.png"
+        img_path.write_bytes(b"x")
+        adapter.api_client.send_msg = AsyncMock(return_value={"errcode": 40001, "errmsg": "fail"})
+
+        with patch("src.channels.wecom_kf.adapter.redis_client") as mock_redis, \
+             patch("src.channels.wecom_kf.adapter.os.path.exists", return_value=True):
+            mock_redis.make_key.return_value = "k"
+            mock_redis.hgetall.return_value = {"path": str(img_path)}
+            result = await adapter.send_message(_make_image_response())
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_image_ref_exception_returns_false(self, adapter, tmp_path):
+        """上传抛异常 -> 捕获并返回 False。"""
+        img_path = tmp_path / "qr.png"
+        img_path.write_bytes(b"x")
+        adapter.api_client.upload_media = AsyncMock(side_effect=RuntimeError("boom"))
+
+        with patch("src.channels.wecom_kf.adapter.redis_client") as mock_redis, \
+             patch("src.channels.wecom_kf.adapter.os.path.exists", return_value=True):
+            mock_redis.make_key.return_value = "k"
+            mock_redis.hgetall.return_value = {"path": str(img_path)}
+            result = await adapter.send_message(_make_image_response())
+        assert result is False
+
+
+class TestSendMessageWithImagesAndText:
+    """text + images 混合：先发文本，再发二维码图片。"""
+
+    @pytest.mark.asyncio
+    async def test_text_then_image_ref(self, adapter, tmp_path):
+        """文本回复 + 客户留资二维码应同时发送（图片以 image 消息发出）。"""
+        img_path = tmp_path / "qr.png"
+        img_path.write_bytes(b"x")
+        adapter._send_segmented = AsyncMock(return_value=True)
+
+        resp = UnifiedResponse(
+            message_id="msg_img_mix",
+            reply_to="external_user_001",
+            content={
+                "text": "没问题！二维码在下面了",
+                "images": [{"file_id": "file_qrmix", "size_bytes": 1024}],
+            },
+        )
+
+        with patch("src.channels.wecom_kf.adapter.redis_client") as mock_redis, \
+             patch("src.channels.wecom_kf.adapter.os.path.exists", return_value=True):
+            mock_redis.make_key.return_value = "k"
+            mock_redis.hgetall.return_value = {"path": str(img_path)}
+            result = await adapter.send_message(resp)
+
+        assert result is True
+        # 文本走分段正常发送
+        adapter._send_segmented.assert_awaited_once()
+        # 图片以 image 消息发送
+        adapter.api_client.upload_media.assert_awaited_once()
+        send_call = adapter.api_client.send_msg.call_args
+        assert send_call.kwargs["msgtype"] == "image"
+        assert send_call.kwargs["content"] == {"media_id": "MEDIA_FAKE"}

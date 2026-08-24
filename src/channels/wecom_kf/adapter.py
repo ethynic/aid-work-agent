@@ -275,6 +275,15 @@ class WeComKfAdapter(ChannelAdapter):
             else:
                 all_success = await self._send_segmented(text, message.reply_to)
 
+        # 发送 images（ImageRef：客户留资二维码等）
+        # 企微客服 image 消息只接受 media_id，先上传临时素材再发送；
+        # 单图失败不阻断后续发送，记 warning
+        images = message.get_images()
+        for ref in images:
+            success = await self._send_image_ref_as_image(ref, message.reply_to)
+            if not success:
+                all_success = False
+
         # 发送可下载文件链接
         thumb_media_id = ""
         if message.downloadable_files:
@@ -501,6 +510,65 @@ class WeComKfAdapter(ChannelAdapter):
                 f"图片文件 image 消息发送异常，降级为 link: file_id={file_id}, err={e}"
             )
             return (False, False)
+
+    async def _send_image_ref_as_image(self, ref: Dict[str, Any], user_id: str) -> bool:
+        """将 ImageRef 图片（content.images）作为企微 image 消息发送。
+
+        ImageRef（如 record_lead_capture 返回的员工二维码）由 ImageRegistry 写入
+        Redis uploaded_file:{file_id}，与 _send_image_file_as_image 同命名空间。
+        企微 image 消息只接受 media_id，先上传临时素材再发送；失败仅记 warning，
+        不降级为 link（二维码场景用户需要的是图片本身）。
+
+        Args:
+            ref: ImageRef 的 dict 形式（来自 UnifiedResponse.get_images()）
+            user_id: 接收用户 ID
+
+        Returns:
+            True 发送成功或无可发送内容（跳过），False 已尝试但发送失败
+        """
+        file_id = ref.get("file_id") if isinstance(ref, dict) else None
+        if not file_id:
+            # 无可发送内容，不视为失败
+            return True
+        # 企微临时素材 image 限制 2MB
+        if (ref.get("size_bytes") or 0) > 2 * 1024 * 1024:
+            logger.warning(f"图片 ref 超过 2MB 跳过 image 发送: file_id={file_id}")
+            return True
+
+        key = redis_client.make_key("uploaded_file", file_id)
+        file_meta = redis_client.hgetall(key)
+        if not file_meta:
+            logger.warning(f"图片 ref 未在 Redis 找到，跳过: file_id={file_id}")
+            return True
+        file_path = file_meta.get("path")
+        if not file_path or not os.path.exists(file_path):
+            logger.warning(f"图片 ref 本地文件不存在，跳过: file_id={file_id}")
+            return True
+
+        try:
+            upload_result = await self.api_client.upload_media(file_path, "image")
+            media_id = upload_result.get("media_id")
+            if not media_id:
+                logger.warning(
+                    f"图片 ref 上传素材未返回 media_id，跳过: file_id={file_id}"
+                )
+                return False
+            send_result = await self.api_client.send_msg(
+                touser=user_id,
+                open_kfid=self.current_open_kfid,
+                msgtype="image",
+                content={"media_id": media_id},
+            )
+            if send_result.get("errcode", 0) != 0:
+                logger.warning(
+                    f"图片 ref image 消息发送失败 errcode={send_result.get('errcode')}, "
+                    f"file_id={file_id}"
+                )
+                return False
+            return True
+        except Exception as e:
+            logger.warning(f"图片 ref image 消息发送异常: file_id={file_id}, err={e}")
+            return False
 
     async def _send_link_message(self, block, user_id: str) -> bool:
         """发送 link 消息卡片，失败时降级为纯文本 URL。"""
