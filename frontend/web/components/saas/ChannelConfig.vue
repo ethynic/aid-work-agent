@@ -610,6 +610,35 @@ async function loadKfAccounts() {
   }
 }
 
+// 账号视图（_to_account_view）转存储格式，剔除 config_id / qr_data_url / referral_count 等派生字段，
+// 避免这些只读字段写回 config JSON 造成脏数据
+function kfViewToStorage(acc: any) {
+  const out: any = {
+    name: acc.name || '',
+    open_kfid: acc.open_kfid,
+    subagent_type: acc.subagent_type || '',
+    allow_agent_transfer: acc.allow_agent_transfer !== false,
+    tenant_user_id: acc.tenant_user_id || '',
+    scene: acc.scene || '',
+    contact_url: acc.contact_url || '',
+    expire_at: acc.expire_at || null,
+    credit_limit: acc.credit_limit ?? 0,
+    qr_title: acc.qr_title || '',
+  }
+  if (acc.welcome_message) out.welcome_message = acc.welcome_message
+  if (acc.servicer_userid_list?.length) out.servicer_userid_list = acc.servicer_userid_list
+  if (acc.employee_qr_file_id) out.employee_qr_file_id = acc.employee_qr_file_id
+  return out
+}
+
+// 创建/编辑/删除客服账号后，同步当前编辑渠道表单的 kf_account，
+// 保证保存渠道时 payload 携带最新账号（后端亦以数据库为准，双保险）
+function syncKfAccountsToForm() {
+  if (!editingId.value || !kfOwnerConfigId.value || kfOwnerConfigId.value !== editingId.value) return
+  const accounts = (kfAccountMap.value[kfOwnerConfigId.value] || []).map(kfViewToStorage)
+  form.value.config.kf_account = accounts
+}
+
 function resetKfForm() {
   kfForm.value = {
     name: '',
@@ -774,6 +803,7 @@ async function handleKfSubmit() {
       toast.success('客服账号创建成功')
     }
     await loadKfAccounts()
+    syncKfAccountsToForm()
   } catch (e: any) {
     kfFormError.value = e.message || '操作失败'
   } finally {
@@ -787,6 +817,7 @@ async function handleDeleteKfAccount(_ch: any, acc: any) {
     await deleteKfAccount(acc.open_kfid)
     toast.success('删除成功')
     await loadKfAccounts()
+    syncKfAccountsToForm()
   } catch (e: any) {
     toast.error(e.message || '删除失败')
   }

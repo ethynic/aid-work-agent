@@ -164,6 +164,13 @@ async def update_channel(config_id: str, request: Request, body: ChannelConfigUp
     if existing["channel_type"] == "wecom_personal_rpa":
         _validate_rpa_required_fields(body.config)
 
+    # wecom_kf：客服账号（kf_account）由 /wecom-kf/accounts 独立接口管理创建/编辑/删除，
+    # 渠道保存只更新凭证、等待提示等渠道级配置。保存时以数据库现有 kf_account 为准，
+    # 防止前端编辑页打开时的旧快照整体覆盖 config 导致新建账号被丢弃（客户扫码链接失效）。
+    if existing["channel_type"] == "wecom_kf":
+        body.config = dict(body.config)
+        body.config["kf_account"] = (existing.get("config") or {}).get("kf_account") or []
+
     success = ChannelConfigDB.update(config_id, body.config, subagent_type=body.subagent_type, name=body.name)
     if success:
         # 配置变更后失效缓存的 adapter，下次回调重建
