@@ -541,9 +541,9 @@ CREATE INDEX IF NOT EXISTS idx_customer_referrals_referrer ON customer_referrals
 -- at_mobiles 为事后通报 @人 手机号 JSON 数组；pre_notify_enabled 事前知会开关。
 -- bs_recruiting_notify_logs：通知留痕（kind=pre|done / candidates JSONB /
 -- content 全文 / status=sent|failed / error），failed 可走手动补推 API 重发。
--- 
+--
 
-=====================================================================
+-- =====================================================================
 CREATE TABLE IF NOT EXISTS bs_recruiting_notify_settings (
     tenant_id TEXT PRIMARY KEY,
     enabled BOOLEAN NOT NULL DEFAULT FALSE,          -- 总开关（未配置不发，避免空跑）
@@ -564,7 +564,7 @@ CREATE TABLE IF NOT EXISTS bs_recruiting_notify_logs (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_bs_rnl_tenant ON bs_recruiting_notify_logs(tenant_id, created_at);
-=======
+-- =======
 -- 2026-08-20 阿里云百炼平台 deepseek-v4-flash-0731 是正式版，增加价格信息
 -- ============================================================================
 INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m)
