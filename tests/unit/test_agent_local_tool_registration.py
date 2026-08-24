@@ -19,6 +19,16 @@ pytestmark = pytest.mark.unit
 
 SUBAGENTS_DIR = Path(__file__).parent.parent.parent / "subagents"
 
+from src.local_tools.manifest import LOCAL_PROXY_TOOL_NAMES as _MANIFEST_NAMES
+
+
+def test_manifest_matches_proxy_tool_classes():
+    """manifest.py 静态清单必须与 LOCAL_PROXY_TOOL_CLASSES 完全一致——
+    新增代理工具漏更 manifest 会导致装配（tools/assembly.py）不注册（2026-08-19 合并时踩过）"""
+    from src.local_tools.proxy_tool import LOCAL_PROXY_TOOL_CLASSES
+    assert _MANIFEST_NAMES == {c.name for c in LOCAL_PROXY_TOOL_CLASSES}
+
+
 BOSS_TOOLS = {
     "boss_filter",
     "boss_clear_filter",
