@@ -22,6 +22,8 @@ export const DEFAULT_DEBUG_PROFILE_DIR = 'C:\\chrome-debug'
 
 /** 拉起后打开的初始页（attach 逻辑按 zhipin.com 识别页面） */
 export const DEFAULT_INITIAL_URL = 'https://www.zhipin.com'
+/** 拉起后页面加载缓冲：端口就绪 ≠ 页面渲染完，冷启动下立即 attach 会扑空（真机 2026-08-24） */
+const LAUNCH_SETTLE_MS = 4000
 
 /** 端口就绪等待上限：覆盖冷启动慢的机器 */
 const READY_TIMEOUT_MS = 15_000
@@ -129,7 +131,10 @@ export async function ensureDebugChrome(
     const deadline = Date.now() + READY_TIMEOUT_MS
     while (Date.now() < deadline) {
       await sleep(PROBE_INTERVAL_MS)
-      if (await probePort(port, fetchImpl)) return true
+      if (await probePort(port, fetchImpl)) {
+        await sleep(LAUNCH_SETTLE_MS) // 等初始页渲染（冷启动页面晚于端口就绪）
+        return true
+      }
     }
     return false
   } catch {

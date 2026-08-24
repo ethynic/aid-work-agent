@@ -48,6 +48,8 @@ export function createBossSendToOperation(
           const searcher = new ChatSearchExecutor({
             snapshot: session.snapshot,
             click: session.click,
+            clickBrowse: session.clickBrowse,
+            pressEscape: session.pressEscape,
             typeChar: session.typeChar,
             signal: ctx.signal,
           })
@@ -57,6 +59,7 @@ export function createBossSendToOperation(
           const sender = new ChatSendExecutor({
             snapshot: session.snapshot,
             click: session.click,
+            clickBrowse: session.clickBrowse,
             typeChar: session.typeChar,
             signal: ctx.signal,
           })
