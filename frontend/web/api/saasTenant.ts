@@ -330,13 +330,18 @@ export async function deleteChannel(configId: string): Promise<{ success: boolea
   return res.json()
 }
 
+export interface SubagentOption {
+  agent_id: string
+  name: string
+}
+
 export async function getAvailableSubagents(opts?: {
   /**
    * 平台管理员代管理时手动指定目标租户（平台后台路径 /portal/* 不会自动注入 X-Tenant-Id）。
    * 不传则走 getSaasAuthHeader 的默认逻辑（/t/* 路径自动从 URL 提取）。
    */
   tenantId?: string
-}): Promise<{ success: boolean; subagents: string[] }> {
+}): Promise<{ success: boolean; subagents: SubagentOption[] }> {
   const headers: Record<string, string> = { ...getSaasAuthHeader() }
   if (opts?.tenantId) {
     headers['X-Tenant-Id'] = opts.tenantId

@@ -344,14 +344,11 @@ def _to_account_view(kf: Dict[str, Any], tenant_id: str, config_id: str) -> Dict
 
 
 async def _get_wecom_kf_config(tenant_id: str) -> Dict[str, Any]:
-    """获取租户 wecom_kf 配置（优先已验证），未配置/未验证时抛 400。"""
+    """获取租户 wecom_kf 配置（优先已验证），未配置时抛 400。"""
     configs = ChannelConfigDB.list_by_tenant(tenant_id, "wecom_kf")
     if not configs:
         raise HTTPException(status_code=400, detail="请先配置并保存微信客服渠道")
-    cfg = next((c for c in configs if c.get("verified")), configs[0])
-    if not cfg.get("verified"):
-        raise HTTPException(status_code=400, detail="微信客服渠道尚未验证，请先点击「验证连接」")
-    return cfg
+    return next((c for c in configs if c.get("verified")), configs[0])
 
 
 # ============== API 端点 ==============

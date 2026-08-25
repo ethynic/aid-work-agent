@@ -219,7 +219,7 @@
           <label class="form-label">关联数字员工（可选）</label>
           <BaseSelect v-model="createForm.subagentType" :disabled="!createForm.tenantId">
             <option value="">不关联</option>
-            <option v-for="s in availableSubagents" :key="s" :value="s">{{ s }}</option>
+            <option v-for="s in availableSubagents" :key="s.agent_id" :value="s.agent_id">{{ s.name }} ({{ s.agent_id }})</option>
           </BaseSelect>
           <div v-if="createForm.tenantId && availableSubagents.length === 0 && subagentsLoaded" class="mt-1 text-xs text-muted">
             该租户暂无已订阅数字员工
@@ -334,7 +334,7 @@ import {
   rotateClientSecret, pauseClient, resumeClient,
   type RpaClientRow, type RegisterClientResult,
 } from '@/api/wecomPersonalRpa'
-import { listTenants, getAvailableSubagents } from '@/api/saasTenant'
+import { listTenants, getAvailableSubagents, type SubagentOption } from '@/api/saasTenant'
 
 const toast = useToast()
 const { isLoggedIn, admin } = useTenantAuth()
@@ -538,7 +538,7 @@ const tenantOptions = ref<Array<{ tenant_id: string; company_name: string; statu
 const tenantsLoaded = ref(false)
 
 // 当前选中租户的可用数字员工列表（按订阅过滤）
-const availableSubagents = ref<string[]>([])
+const availableSubagents = ref<SubagentOption[]>([])
 const subagentsLoaded = ref(false)
 
 async function loadTenantOptions() {

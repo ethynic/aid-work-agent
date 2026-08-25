@@ -83,6 +83,7 @@
         <div class="flex items-center gap-2 mb-3">
           <BaseButton @click="handleSubmit">保存</BaseButton>
           <BaseButton intent="secondary" @click="handleSaveAndClose">保存并关闭</BaseButton>
+          <BaseButton v-if="editingId" intent="ghost" @click="handleVerify(editingId)">验证连接</BaseButton>
         </div>
 
         <p v-if="!editingId" class="text-sm text-muted mb-3">选择 IM 平台，然后填写应用凭证</p>
@@ -194,7 +195,7 @@
             <label class="text-sm text-muted mb-1 block">关联数字员工</label>
             <BaseSelect v-model="form.subagent_type">
               <option value="">不绑定</option>
-              <option v-for="sa in availableSubagents" :key="sa" :value="sa">{{ subagentTypeLabel(sa) }} ({{ sa }})</option>
+              <option v-for="sa in availableSubagents" :key="sa.agent_id" :value="sa.agent_id">{{ sa.name }} ({{ sa.agent_id }})</option>
             </BaseSelect>
             <p class="mt-1 text-xs text-muted">选择该渠道消息由哪个数字员工处理</p>
           </div>
@@ -342,7 +343,7 @@
             <label class="text-sm text-muted mb-1 block">绑定数字员工 <span class="text-danger-500">*</span></label>
             <BaseSelect v-model="kfForm.subagent_type">
               <option value="">请选择数字员工</option>
-              <option v-for="sa in availableSubagents" :key="sa" :value="sa">{{ subagentTypeLabel(sa) }} ({{ sa }})</option>
+              <option v-for="sa in availableSubagents" :key="sa.agent_id" :value="sa.agent_id">{{ sa.name }} ({{ sa.agent_id }})</option>
             </BaseSelect>
           </div>
           <div class="col-span-2">
@@ -476,7 +477,7 @@ import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseBadge from '@/components/ui/BaseBadge.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
-import { listChannels, createChannel, updateChannel, deleteChannel, verifyChannel, getAvailableSubagents, generateChannelKeypair, listTenantUsers, listKfAccounts, createKfAccount, updateKfAccount, deleteKfAccount } from '@/api/saasTenant'
+import { listChannels, createChannel, updateChannel, deleteChannel, verifyChannel, getAvailableSubagents, type SubagentOption, generateChannelKeypair, listTenantUsers, listKfAccounts, createKfAccount, updateKfAccount, deleteKfAccount } from '@/api/saasTenant'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 
 const route = useRoute()
@@ -529,7 +530,7 @@ async function handleLogout() {
 }
 const loading = ref(true)
 const channels = ref<any[]>([])
-const availableSubagents = ref<string[]>([])
+const availableSubagents = ref<SubagentOption[]>([])
 const showForm = ref(false)
 const submitting = ref(false)
 const formError = ref('')
@@ -1004,14 +1005,17 @@ function getCallbackUrl(channelType: string, configId?: string): string {
   return `${base}/${channelType}/callback`
 }
 
-function subagentTypeLabel(type: string): string {
-  // 将目录名转为人可读标签
-  const map: Record<string, string> = {
-    'travel-consultant': '旅游咨询顾问',
-    'trade-specialist': '外贸获客智能体',
-    'contract-archive-review': '合同档案审查',
+const subagentNameMap = computed<Record<string, string>>(() => {
+  const map: Record<string, string> = {}
+  for (const sa of availableSubagents.value) {
+    map[sa.agent_id] = sa.name
   }
-  return map[type] || type
+  return map
+})
+
+function subagentTypeLabel(type: string): string {
+  // 优先用后端返回的中文名，未命中的兜底显示目录名
+  return subagentNameMap.value[type] || type
 }
 
 function copyUrl(url: string, id?: string) {
@@ -1082,7 +1086,8 @@ async function loadAvailableSubagents() {
   }
 }
 
-async function handleSubmit() {
+// 保存渠道（仅保存，不关闭弹窗）。返回是否保存成功
+async function saveChannel(): Promise<boolean> {
   submitting.value = true
   formError.value = ''
   try {
@@ -1090,8 +1095,7 @@ async function handleSubmit() {
     const trimmedName = (form.value.name || '').trim()
     if (!trimmedName) {
       formError.value = '请填写渠道名称'
-      submitting.value = false
-      return
+      return false
     }
     const payload: Record<string, any> = {
       name: trimmedName,
@@ -1116,19 +1120,34 @@ async function handleSubmit() {
     if (editingId.value) {
       await updateChannel(editingId.value, payload as any)
     } else {
-      await createChannel({ channel_type: form.value.channel_type, name: trimmedName, config: payload.config, subagent_type: payload.subagent_type } as any)
+      const res = await createChannel({ channel_type: form.value.channel_type, name: trimmedName, config: payload.config, subagent_type: payload.subagent_type } as any)
+      // 新增保存后切换为编辑态，再次点「保存」变为更新而非重复创建
+      const createdId = res?.channel?.config_id
+      if (createdId) editingId.value = createdId
     }
-    closeModal()
+    // 保存后重拍快照，标记无未保存修改
+    formInitialSnapshot.value = JSON.parse(JSON.stringify(form.value))
     await loadChannels()
+    return true
   } catch (e: any) {
     formError.value = e.message || '保存失败'
+    return false
   } finally {
     submitting.value = false
   }
 }
 
+// 保存按钮：仅保存，不关闭弹窗
+async function handleSubmit() {
+  const isCreate = !editingId.value
+  const ok = await saveChannel()
+  if (ok) toast.success(isCreate ? '创建成功' : '保存成功')
+}
+
+// 保存并关闭按钮：保存后关闭弹窗
 async function handleSaveAndClose() {
-  await handleSubmit()
+  const ok = await saveChannel()
+  if (ok) closeModal()
 }
 
 async function handleVerify(configId: string) {

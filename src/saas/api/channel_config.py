@@ -17,6 +17,7 @@ except ImportError:  # psycopg2 未安装（开发/测试场景）
     IntegrityError = None  # type: ignore[assignment,misc]
 
 from src.channels.wecom_personal_rpa.archive import credential_codec as rpa_credential_codec
+from src.core import master_agent
 from src.saas.api.tenant_auth import require_admin
 from src.saas.db.channel_config_db import ChannelConfigDB
 from src.saas.db.subscription_db import SubscriptionDB
@@ -382,7 +383,20 @@ async def get_available_subagents(request: Request):
     try:
         with get_db_connection() as conn:
             subagent_types = SubscriptionDB.get_allowed_subagent_types(conn, tenant_id)
-        return {"success": True, "subagents": subagent_types}
+
+        # 构建 agent_id -> 中文名 映射（主智能体 main 固定为 CEO智能体）
+        name_map = {"main": "CEO智能体"}
+        registry = master_agent.subagent_registry
+        if registry:
+            registry.load_from_db()
+            for item in registry.get_all_subagents_with_type():
+                name_map[item["agent_id"]] = item.get("name") or item["agent_id"]
+
+        result = [
+            {"agent_id": t, "name": name_map.get(t, t)}
+            for t in subagent_types
+        ]
+        return {"success": True, "subagents": result}
     except Exception as e:
         logger.error(f"获取可用数字员工列表失败: {e}")
         return {"success": False, "subagents": [], "message": str(e)}
