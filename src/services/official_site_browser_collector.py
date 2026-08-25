@@ -23,12 +23,15 @@ from src.services.official_site_page_collector import (
 
 NAVIGATION_SELECTOR = (
     "a, button, [role='button'], [onclick], nav li, "
-    "[class*='menu'] li, [class*='nav'] li, "
-    "[class*='nav'] div, [class*='nav'] span, "
-    "[class*='menu'] div, [class*='menu'] span, "
-    "[class*='bar'] div, [class*='bar'] span, "
-    "[class*='side'] div, [class*='side'] span, [class*='tab']"
+    "[class*='menu' i] li, [class*='nav' i] li, "
+    "[class*='nav' i] div, [class*='nav' i] span, "
+    "[class*='menu' i] div, [class*='menu' i] span, "
+    "[class*='bar' i] div, [class*='bar' i] span, "
+    "[class*='side' i] div, [class*='side' i] span, [class*='tab' i]"
 )
+# class 匹配必须带 i 标志（大小写不敏感）：真机（残疾人康复协会）侧栏容器
+# class 为「MenuList」（大写 M），大小写敏感的 [class*='menu'] 匹配不上，
+# 整个侧栏（含「理事会领导」）从导航探测里消失。
 MAX_NAVIGATION_TARGETS_PER_STATE = 200
 MAX_COLLECTION_SECONDS = 90.0
 MAX_SINGLE_PATH_SECONDS = 20.0
@@ -156,6 +159,9 @@ def _target_business_priority(target: BrowserNavigationTarget) -> int:
               "关于我们", "关于",
               "章程", "概况", "简介",
               "about", "profile", "introduction", "overview")),
+        # 80：历程/大事记类页面常载换届记录（「选举XX为会长、秘书长为XX」），
+        # 真机：焊接协会官网无领导名单页，秘书长只在「关于协会→发展历程」里。
+        (80, ("历程", "大事记", "沿革", "会史", "年鉴", "milestone")),
         (70, ("联系我们", "联系方式", "contact")),
         (60, ("分支机构", "专业委员会", "branch", "committee")),
         (20, ("会员", "member", "members", "membership")),
@@ -561,6 +567,7 @@ class PlaywrightNavigationDriver:
             recovered_state = candidate_state
         poll_count = max(0, min(self._navigation_timeout_ms, 9_000) // 250)
         state = recovered_state or await self._state()
+        prev_nav_count = -1
         for _attempt in range(poll_count):
             # 慢 SPA 等待窗口 9s；内容仍是加载占位（真机：冶金教育学会
             # 「正在加载系统资源」占位 + 1 个备案链接，菜单 8s 才渲染）时
@@ -570,7 +577,15 @@ class PlaywrightNavigationDriver:
                 and state.navigation_targets
                 and not self._is_loading_placeholder(state.content)
             ):
-                return state
+                if recovered_state is not None:
+                    # goto 超时恢复路径：已等满整个导航超时，页面可读即返回
+                    return state
+                # 菜单渐进渲染（真机：冶金教育学会 open 返回时 targets=1，
+                # +3s 才到 8，首轮条件即满足导致提前返回壳状态）：导航数量
+                # 仍在增长时继续等，连续两轮一致才算渲染完成
+                if len(state.navigation_targets) == prev_nav_count:
+                    return state
+                prev_nav_count = len(state.navigation_targets)
             await self._page.wait_for_timeout(250)
             state = await self._state()
         return state
@@ -621,6 +636,11 @@ class PlaywrightNavigationDriver:
             href = snapshot.get("href")
             if text == target.text and (href or "") == (target.href or ""):
                 matches.append(int(snapshot["index"]))
+        if not matches and target.occurrence == 0:
+            # 悬浮菜单站（真机：焊接协会）：hover 展开的子菜单在页面重载/回位后
+            # 收起，目标文字在可见元素里扫不到。逐个 hover 导航项展开菜单再找，
+            # 模拟真人操作。
+            matches = await self._hover_sweep_for(locator, target)
         if target.occurrence >= len(matches):
             return None
         match_index = (
@@ -685,6 +705,56 @@ class PlaywrightNavigationDriver:
 
     # 分页控件文本：精确匹配这些短文本的可见元素视为「下一页」按钮
     _PAGER_NEXT_TEXTS = ("下一页", "下页", "›", "»", ">", "next")
+
+    async def _hover_sweep_for(self, locator, target: BrowserNavigationTarget) -> list[int]:
+        """逐个 hover 导航项展开悬浮子菜单，在其中寻找目标文字。
+
+        悬浮菜单站（真机：焊接协会 china-weldnet.com）的「关于协会」子菜单
+        （协会介绍/发展历程/组织架构…）只在 hover 时展开，页面重载或 BFS 回位
+        后收起，activate 在可见元素里匹配不到目标会静默失败、浪费点击预算。
+        hover 后子菜单成为可见 DOM，重新扫描即可命中。
+        """
+        try:
+            nav_count = await locator.count()
+        except Exception:
+            return []
+        swept = 0
+        for index in range(min(nav_count, MAX_NAVIGATION_TARGETS_PER_STATE)):
+            try:
+                await locator.nth(index).hover(timeout=600)
+            except Exception:
+                continue
+            swept += 1
+            # hover 后等子菜单展开动画
+            await self._page.wait_for_timeout(300)
+            try:
+                snapshots = await locator.evaluate_all(
+                    """(elements, limit) => elements.map((element, index) => {
+                        const style = window.getComputedStyle(element);
+                        const rect = element.getBoundingClientRect();
+                        return {
+                            index,
+                            visible: style.visibility !== 'hidden'
+                                && style.display !== 'none'
+                                && rect.width > 0 && rect.height > 0,
+                            text: (element.innerText || element.textContent || ''),
+                            href: element.getAttribute('href')
+                        };
+                    }).filter((item) => item.visible).slice(0, limit)""",
+                    MAX_NAVIGATION_TARGETS_PER_STATE,
+                )
+            except Exception:
+                continue
+            for snapshot in snapshots:
+                if not snapshot.get("visible"):
+                    continue
+                text = " ".join(
+                    str(snapshot.get("text") or "").split()
+                )[:500]
+                href = snapshot.get("href")
+                if text == target.text and (href or "") == (target.href or ""):
+                    return [int(snapshot["index"])]
+        return []
 
     async def flip_next(self, previous_state: BrowserPageState) -> BrowserPageState | None:
         """点击分页控件的「下一页」（领导名单分页，真机：人口学会现任领导

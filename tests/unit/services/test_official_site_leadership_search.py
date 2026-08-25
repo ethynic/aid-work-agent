@@ -301,6 +301,27 @@ async def test_browser_drift_repositions_before_activate():
     assert driver.mismatch_activate == 0
 
 
+def test_secretary_binding_count():
+    """绑定计数：名单页的「秘书长-姓名」表述计 1，新闻标题裸词计 0。
+
+    真机教训：焊接协会首页新闻「秘书长工作会议」×3 曾把真名单页
+    （绑定×1）挤到收录榜尾；冶金教育学会名单页是职务行+姓名行分离
+    （「秘书长\n孙建林（兼）」），不带换行模式的正则计 0。
+    """
+    from src.services.official_site_leadership_search import (
+        _secretary_binding_count,
+    )
+
+    assert _secretary_binding_count("会议选举俞培根为会长，秘书长为李连胜。") == 1
+    assert _secretary_binding_count("会长：张三\n秘书长：王建琪\n副会长：李四") == 1
+    assert _secretary_binding_count("秘书长\n\n孙建林（兼）") == 1
+    assert _secretary_binding_count("秘书长\n孙建林") == 1
+    # 新闻标题/会议通知类裸词不计数
+    assert _secretary_binding_count("关于召开会长（理事长）、秘书长工作会的通知") == 0
+    assert _secretary_binding_count("学会秘书处地址：北京市海淀区") == 0
+    assert _secretary_binding_count("") == 0
+
+
 def test_leadership_markers():
     """强标记命中即领导页；单一弱标记（会长单位/理事长新闻/页脚秘书处）不算。"""
     pad = "协会简介正文。" * 60  # 满足内容长度门槛（导航壳页面不算领导页）

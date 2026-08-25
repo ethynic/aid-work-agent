@@ -56,8 +56,8 @@ def test_clickable_selector_and_public_wrapper_have_no_site_specific_config():
         "[role='button']",
         "[onclick]",
         "nav li",
-        "[class*='menu'] li",
-        "[class*='nav'] li",
+        "[class*='menu' i] li",
+        "[class*='nav' i] li",
     ):
         assert selector in NAVIGATION_SELECTOR
     signature = inspect.signature(collect_official_pages_with_playwright)
@@ -734,10 +734,14 @@ async def test_playwright_open_waits_for_delayed_spa_content_and_navigation():
             waits.append(milliseconds)
 
     delayed_target = target("协会介绍")
+    final = state(ENTRY, "首页", "SPA最终正文", (delayed_target,))
     states = [
         state(ENTRY, "首页", "", ()),
         state(ENTRY, "首页", "壳页面", ()),
-        state(ENTRY, "首页", "SPA最终正文", (delayed_target,)),
+        final,
+        # 导航数量稳定确认轮（真机：冶金教育学会菜单渐进渲染 1→8，
+        # 首轮条件即满足会提前返回壳状态，需连续两轮数量一致才算完成）
+        final,
     ]
     driver = browser_collector_module.PlaywrightNavigationDriver(
         FakePage(), navigation_timeout_ms=1_000,
@@ -748,8 +752,8 @@ async def test_playwright_open_waits_for_delayed_spa_content_and_navigation():
 
     assert result.content == "SPA最终正文"
     assert result.navigation_targets == (delayed_target,)
-    assert waits == [250, 250]
-    assert driver._state.await_count == 3
+    assert waits == [250, 250, 250]
+    assert driver._state.await_count == 4
 
 
 @pytest.mark.asyncio

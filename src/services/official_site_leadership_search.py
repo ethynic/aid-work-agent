@@ -2,7 +2,7 @@
 
 背景：1 万家协会官网对「领导页」有几百种叫法，硬编码词表永远列不完。
 本模块把当前页面的导航栏列表交给 LLM 判断「哪些链接最可能通向领导/
-组织机构/负责人页面」，逐层点击（最多 4 层、8 次点击、60 秒），页面
+组织机构/负责人页面」，逐层点击（最多 4 层、10 次点击、300 秒），页面
 内容出现领导标记（秘书长/秘书处/领导班子/理事长…）即收录为领导页，
 交给上层 _extract_leadership 提取姓名。
 
@@ -43,7 +43,10 @@ LEADERSHIP_STRONG_MARKERS = (
 LEADERSHIP_WEAK_MARKERS = ("会长", "负责人", "理事", "理事长", "秘书处")
 
 MAX_DEPTH = 4                # 最多点 4 层（入口→关于→概况→现任领导）
-MAX_TOTAL_CLICKS = 8         # 全程最多点击次数
+# 全程最多点击次数。真机教训（焊接协会）：「关于协会」悬浮菜单里 发展历程
+# 排 LLM 候选第 3 位，每节点只点前 2 个永远轮不到它（秘书长只在发展历程）。
+# 预算 8→10 且每节点取前 3 候选；点回已访问页会被 fingerprint 快速跳过。
+MAX_TOTAL_CLICKS = 10
 # 最多收录 5 个领导页交给提取器。真机教训（人口学会）：强标记密度并列时按
 # 插入序取前 3，会把「秘书长在第 3 页」的翻页页挤出名额外；交给提取器的
 # 页越多，翻页链尾部的名单页越不会丢（5 页 × ~3K 字 ≈ 提取成本可控）。
@@ -58,6 +61,22 @@ def _strong_marker_count(content: str) -> int:
     if not content:
         return 0
     return sum(marker in content for marker in LEADERSHIP_STRONG_MARKERS)
+
+
+# 秘书长-姓名绑定模式：名单页的标志性表述（「秘书长为李连胜」「秘书长：王建琪」，
+# 以及职务行+姓名行分离的「秘书长\n孙建林（兼）」，真机：冶金教育学会）。
+# 新闻标题只出现「秘书长工作会议」这类无绑定用法（真机：焊接协会首页新闻
+# 秘书长×3 把真名单页挤到榜尾），绑定计数是比裸词计数锐利得多的排序信号。
+_SECRETARY_BINDING_PATTERNS = (
+    re.compile(r"秘书长[为：:]\s*[一-龥·]{2,4}"),
+    re.compile(r"秘书长[ \t]*\n+[ \t]*[一-龥·（(][一-龥·()（）]{1,7}"),
+)
+
+
+def _secretary_binding_count(content: str) -> int:
+    if not content:
+        return 0
+    return sum(len(pattern.findall(content)) for pattern in _SECRETARY_BINDING_PATTERNS)
 
 
 # 名单页内容长度门槛：侧栏/导航文字本身就含「现任领导」等强标记，纯导航壳
@@ -159,7 +178,10 @@ async def _llm_pick_navigation(
                 "负责人」页面（里面会有现任秘书长等负责人姓名）。"
                 "下面给出当前页面的可选导航链接，判断哪些最可能逐步通向该页面。"
                 "优先选文字含「领导/理事/秘书/组织/机构/关于/概况/简介/章程/"
-                "负责人」的链接；跳过新闻、通知、动态、下载、登录、业务办理类。"
+                "负责人/历程/大事记/沿革」的链接——「发展历程/大事记」类页面"
+                "常载换届记录，里面会有「选举XX为会长、秘书长为XX」的表述"
+                "（真机：焊接协会秘书长只在发展历程页）；"
+                "跳过新闻、通知、动态、下载、登录、业务办理类。"
                 '只输出严格JSON：{"click":[链接序号,...]}，最多3个、按可能性从高到低；'
                 '没有合适的输出 {"click":[]}'
             ),
@@ -389,7 +411,8 @@ async def search_leadership_pages_with_driver(
         )
         if not picks:
             continue
-        for index in picks[:2]:
+        # 每节点点前 3 个候选（真机：焊接协会发展历程排第 3、点前 2 轮不到）
+        for index in picks[:3]:
             if clicks >= max_total_clicks or monotonic() >= deadline:
                 break
             target = targets[index]
@@ -454,12 +477,13 @@ async def search_leadership_pages_with_driver(
         kind="leadership_search_done",
         summary=f"点击{clicks}次，找到{len(found)}个领导页",
     )
-    # 排序：秘书长出现次数优先于泛强标记——真机（人口学会）多个页强标记
-    # 密度并列（侧栏「现任领导」+正文 1 处「秘书长」都算 2），并列时真正的
-    # 名单页（秘书长正文多）应排前。
+    # 排序：秘书长-姓名绑定（「秘书长为/：X」）最优先——新闻页裸词计数
+    # （标题「秘书长工作会议」×3）会压过真名单页（绑定×1）；其次裸词计数
+    # 与泛强标记密度（真机：人口学会侧栏标记并列、焊接协会新闻标题刷词）。
     ranked = sorted(
         found,
         key=lambda page: (
+            _secretary_binding_count(page.content),
             page.content.count("秘书长"),
             _strong_marker_count(page.content),
         ),
