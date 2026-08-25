@@ -41,6 +41,7 @@ def update_hotel(params: dict) -> dict:
     init_tables()
 
     tenant_id = params.get('tenant_id', '')
+    subagent_id = params.get('subagent_id', '')
     internal = params.get('internal_data') or {}
     overrides = params.get('hotel_overrides') or []
 
@@ -64,7 +65,9 @@ def update_hotel(params: dict) -> dict:
         raise ValueError("total_people 缺失或为 0，无法计算")
 
     # —— 1. 用酒店名反查 doc_id 并覆写 hotel_stays（与 generate.py 共用同一逻辑）——
-    name_overrides = resolve_hotel_overrides(tenant_id, hotel_stays, overrides)
+    name_overrides = resolve_hotel_overrides(
+        tenant_id, hotel_stays, overrides, subagent_id=subagent_id or None,
+    )
 
     # —— 2. 用 calculate_hotel_stays 重算所有住宿行（顺序与 hotel_stays 一致）——
     new_hotel_items, single_supplement = calculate_hotel_stays(

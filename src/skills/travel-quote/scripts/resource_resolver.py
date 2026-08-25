@@ -5,9 +5,9 @@
 from loguru import logger
 
 
-def resolve_resources(parsed: dict, tenant_id: str) -> dict:
+def resolve_resources(parsed: dict, tenant_id: str, subagent_id: str = '') -> dict:
     """将 LLM 解析出的名称/偏好转换为知识库 doc_id"""
-    logger.info(f"[travel-quote] resolve_resources tenant_id={tenant_id}")
+    logger.info(f"[travel-quote] resolve_resources tenant_id={tenant_id}, subagent_id={subagent_id}")
     result = {"attraction_doc_ids": [], "attraction_matches": [], "hotel_doc_id": None, "hotel_stays": []}
 
     # 景点匹配
@@ -39,7 +39,7 @@ def resolve_resources(parsed: dict, tenant_id: str) -> dict:
             retriever = AttractionRetriever()
             seen_doc_ids = set()
             for name in attraction_names:
-                matches = retriever.search(tenant_id, name, top_k=1)
+                matches = retriever.search(tenant_id, name, top_k=1, subagent_id=subagent_id)
                 if matches:
                     doc_id = matches[0]["doc_id"]
                     match_info = {
@@ -80,7 +80,7 @@ def resolve_resources(parsed: dict, tenant_id: str) -> dict:
                 city = stay.get("city", "")
                 area = stay.get("area", "")
                 query = f"{city} {area} 酒店 {hotel_pref}".strip()
-                matches = retriever.search(tenant_id, query, top_k=1)
+                matches = retriever.search(tenant_id, query, top_k=1, subagent_id=subagent_id)
                 stay["hotel_doc_id"] = matches[0]["doc_id"] if matches else None
                 if matches:
                     logger.info(f"[travel-quote] 酒店匹配: '{city} {area}' → doc_id={matches[0]['doc_id']}")
@@ -93,7 +93,7 @@ def resolve_resources(parsed: dict, tenant_id: str) -> dict:
         try:
             from hotel_retriever import HotelRetriever
             retriever = HotelRetriever()
-            matches = retriever.search(tenant_id, hotel_pref, top_k=1)
+            matches = retriever.search(tenant_id, hotel_pref, top_k=1, subagent_id=subagent_id)
             if matches:
                 result["hotel_doc_id"] = matches[0]["doc_id"]
                 logger.info(f"[travel-quote] 酒店匹配: '{hotel_pref}' → doc_id={matches[0]['doc_id']}")

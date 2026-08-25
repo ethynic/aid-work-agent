@@ -585,6 +585,7 @@ def resolve_hotel_overrides(
     hotel_stays: list,
     overrides: list,
     allow_city_fallback: bool = False,
+    subagent_id: Optional[str] = None,
 ) -> dict:
     """按酒店名反查 doc_id 并覆写到 hotel_stays 对应城市；同时透传客户指定的房型。
 
@@ -654,7 +655,7 @@ def resolve_hotel_overrides(
         city = target_city_by_override[index]
         hotel_name = ov['hotel_name']
         room_type = (ov.get('room_type') or '').strip() or None
-        matches = retriever.search_by_name(tenant_id, hotel_name, top_k=10)
+        matches = retriever.search_by_name(tenant_id, hotel_name, top_k=10, subagent_id=subagent_id)
 
         exact_matches = []
         for m in matches:

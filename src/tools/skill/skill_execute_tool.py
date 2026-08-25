@@ -162,6 +162,16 @@ class SkillExecuteTool(BaseTool):
         except Exception:
             pass
 
+        # 解析 subagent_id（数字员工级共享启用需要；主智能体直接调用时为空，不启用共享）
+        subagent_id = None
+        try:
+            from src.tools.context import current_tool_execution_context
+            ctx = current_tool_execution_context()
+            if ctx:
+                subagent_id = ctx.subagent_id
+        except Exception:
+            pass
+
         if not resolved_tenant_id and real_session_id:
             # 方式1：从 chat_sessions 表查询（Web端会话）
             from src.db.models import SessionDB
@@ -200,21 +210,26 @@ class SkillExecuteTool(BaseTool):
             if isinstance(content_text, list):
                 content_text = _json.dumps(content_text, ensure_ascii=False)
 
-            # 自动注入 tenant_id 到 content JSON 中
+            # 自动注入 tenant_id / subagent_id 到 content JSON 中
             try:
                 content_obj = _json.loads(content_text)
                 if isinstance(content_obj, dict):
                     if resolved_tenant_id:
                         content_obj["tenant_id"] = resolved_tenant_id
+                    if subagent_id:
+                        content_obj["subagent_id"] = subagent_id
                     content_text = _json.dumps(content_obj, ensure_ascii=False)
             except (_json.JSONDecodeError, TypeError):
                 pass  # 非 JSON 内容，跳过
 
             stdin_content = str(content_text).encode("utf-8", errors="surrogatepass")
         else:
-            # 无 content 时，构造只含 tenant_id 的 JSON 通过 stdin 传给子进程
-            if resolved_tenant_id:
-                stdin_content = _json.dumps({"tenant_id": resolved_tenant_id}).encode("utf-8")
+            # 无 content 时，构造含 tenant_id / subagent_id 的 JSON 通过 stdin 传给子进程
+            payload = {"tenant_id": resolved_tenant_id} if resolved_tenant_id else {}
+            if subagent_id:
+                payload["subagent_id"] = subagent_id
+            if payload:
+                stdin_content = _json.dumps(payload).encode("utf-8")
 
         try:
             # 后端日志：诊断实际提交给执行器的命令

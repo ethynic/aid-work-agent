@@ -16,6 +16,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 SCRIPTS_DIR = PROJECT_ROOT / 'src' / 'skills' / 'travel-quote' / 'scripts'
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 import hotel_retriever  # noqa: E402
 
@@ -100,3 +102,56 @@ class TestSearchByNameTitleFallback:
             results = retriever.search_by_name("t1", "A酒店")
 
         assert results[0]["metadata"] == {"sub_region": "云岩区"}
+
+
+class TestSearchByNameSharedRange:
+    """跨租户知识库共享：search_by_name 传 subagent_id 时，租户范围须含共享源租户。
+
+    复现修复前 bug：检索只按本租户 d.tenant_id 过滤，租户 B 接入租户 A 知识库后
+    读不到 A 的酒店文档（返回 0 条）。
+    """
+
+    def test_with_subagent_uses_any_with_shared_tenants(self):
+        """传 subagent_id 时用 d.tenant_id = ANY(%s)，参数含本租户 + 共享源租户"""
+        retriever = hotel_retriever.HotelRetriever()
+        fake = FakeConn()
+        with patch.object(retriever, '_get_conn', return_value=fake), \
+             patch('src.knowledge.retriever.tenant_range.load_shared_ranges',
+                   return_value=[('tenant_A', 'hotel_resource')]):
+            retriever.search_by_name("tenant_B", "天合盛景", top_k=5,
+                                     subagent_id="travel-consultant")
+
+        sql = fake.last_sql
+        assert "d.tenant_id = ANY(%s)" in sql
+        # 参数：source_type, [本租户, 共享源], text_pattern, title_pattern, top_k
+        assert fake.last_args[0] == "hotel_resource"
+        assert fake.last_args[1] == ["tenant_B", "tenant_A"]
+        assert fake.last_args.count("%天合盛景%") == 2
+        assert fake.last_args[-1] == 5
+
+    def test_shared_ranges_filtered_by_source_type(self):
+        """load_shared_ranges 以本检索器 source_type 为参数调用，由它内部按分类过滤"""
+        retriever = hotel_retriever.HotelRetriever()
+        fake = FakeConn()
+        with patch.object(retriever, '_get_conn', return_value=fake), \
+             patch('src.knowledge.retriever.tenant_range.load_shared_ranges',
+                   return_value=[('tenant_A', 'hotel_resource')]) as m_load:
+            retriever.search_by_name("tenant_B", "天合盛景", subagent_id="travel-consultant")
+
+        m_load.assert_called_once_with("tenant_B", "travel-consultant", "hotel_resource")
+        # load_shared_ranges 返回的即过滤后共享源，全部加入租户范围
+        assert fake.last_args[1] == ["tenant_B", "tenant_A"]
+
+    def test_without_subagent_keeps_own_tenant_only(self):
+        """不传 subagent_id（主智能体直接调用）时保持原行为：只搜本租户 d.tenant_id = %s"""
+        retriever = hotel_retriever.HotelRetriever()
+        fake = FakeConn()
+        with patch.object(retriever, '_get_conn', return_value=fake):
+            retriever.search_by_name("tenant_B", "天合盛景", top_k=5)
+
+        sql = fake.last_sql
+        assert "d.tenant_id = %s" in sql
+        assert "ANY(" not in sql
+        # 参数：source_type, tenant_id, text_pattern, title_pattern, top_k
+        assert fake.last_args[0] == "hotel_resource"
+        assert fake.last_args[1] == "tenant_B"

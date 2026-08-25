@@ -2,8 +2,14 @@
 检索租户范围 SQL 构建函数测试。
 
 验证 build_tenant_range_conditions：本租户 + 已启用共享精确对（§6.1 设计约束）。
+验证 load_shared_ranges：数字员工级启用 ∩ 租户级授权的交集计算。
 """
-from src.knowledge.retriever.tenant_range import build_tenant_range_conditions
+from unittest.mock import patch
+
+from src.knowledge.retriever.tenant_range import (
+    build_tenant_range_conditions,
+    load_shared_ranges,
+)
 
 
 def test_range_own_tenant_without_source_type():
@@ -67,3 +73,76 @@ def test_range_custom_alias():
         "(documents.tenant_id = %s AND documents.source_type = %s)"
     )
     assert params == ["B", "A1", "industry"]
+
+
+# ---------------------------------------------------------------
+# load_shared_ranges：数字员工级启用 ∩ 租户级授权
+# ---------------------------------------------------------------
+
+class _FakeCursor:
+    def __init__(self, row):
+        self._row = row
+
+    def execute(self, sql, args=None):
+        self.sql = sql
+        self.args = args
+
+    def fetchone(self):
+        return self._row
+
+
+class _FakeConn:
+    def __init__(self, row):
+        self._row = row
+
+    def cursor(self):
+        return _FakeCursor(self._row)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+class TestLoadSharedRanges:
+    """数字员工级启用 ∩ 租户级授权的交集计算（无快照，撤销立即生效）"""
+
+    def test_empty_tenant_or_subagent(self):
+        """tenant_id / subagent_id 任一为空（主智能体直接调用）时不启用共享"""
+        assert load_shared_ranges(None, None, None) == []
+        assert load_shared_ranges("B", None, None) == []
+        assert load_shared_ranges(None, "travel", None) == []
+
+    def test_intersection_filters_unapproved_owner(self):
+        """只保留 owner_tenant_id 在租户级授权（share_owners）内的 source"""
+        row = {
+            "sources": [
+                {"owner_tenant_id": "A1", "source_type": "hotel_resource"},
+                {"owner_tenant_id": "A2", "source_type": "attraction_resource"},
+                {"owner_tenant_id": "A3", "source_type": "file"},      # 租户级未授权
+                {"owner_tenant_id": None, "source_type": "local"},     # 本租户资源，无 owner
+            ],
+            "share_owners": ["A1", "A2"],
+        }
+        with patch("src.db.database.get_db_connection", return_value=_FakeConn(row)):
+            ranges = load_shared_ranges("B", "travel-consultant", None)
+        assert ranges == [("A1", "hotel_resource"), ("A2", "attraction_resource")]
+
+    def test_source_type_filter(self):
+        """传 source_type 时只返回该分类的共享项"""
+        row = {
+            "sources": [
+                {"owner_tenant_id": "A1", "source_type": "hotel_resource"},
+                {"owner_tenant_id": "A1", "source_type": "attraction_resource"},
+            ],
+            "share_owners": ["A1"],
+        }
+        with patch("src.db.database.get_db_connection", return_value=_FakeConn(row)):
+            ranges = load_shared_ranges("B", "travel-consultant", "hotel_resource")
+        assert ranges == [("A1", "hotel_resource")]
+
+    def test_db_error_returns_empty(self):
+        """数据库异常时降级为空共享范围，不阻断检索"""
+        with patch("src.db.database.get_db_connection", side_effect=Exception("conn fail")):
+            assert load_shared_ranges("B", "travel", None) == []

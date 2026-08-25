@@ -50,6 +50,7 @@ def generate_quote(params: dict) -> dict:
     init_tables()
 
     tenant_id = params.get('tenant_id', '')
+    subagent_id = params.get('subagent_id', '')
     itinerary_text = params.get('itinerary_text', '')
     start_date = params.get('start_date', date.today().isoformat())
     course_name = params.get('course_name', '')
@@ -61,7 +62,7 @@ def generate_quote(params: dict) -> dict:
         parsed = parse_itinerary(itinerary_text)
         logger.info(f"[travel-quote] 行程解析结果: {json.dumps(parsed, ensure_ascii=False)}")
 
-        resources = resolve_resources(parsed, tenant_id)
+        resources = resolve_resources(parsed, tenant_id, subagent_id)
 
         region_name = parsed.get('region_name') or ''
         total_people = parsed.get('total_people') or 30
@@ -123,6 +124,7 @@ def generate_quote(params: dict) -> dict:
                 hotel_stays,
                 overrides,
                 allow_city_fallback=True,
+                subagent_id=subagent_id,
             )
             logger.info(f"[travel-quote] 应用酒店指定: {name_overrides}")
         else:
