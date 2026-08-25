@@ -459,6 +459,8 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  // 卸载时关闭附件预览框，避免模块级单例状态残留到重新挂载的对话界面
+  closePreview()
 })
 
 async function handleSend(content: string) {
@@ -586,6 +588,8 @@ watch(effectiveIsLoggedIn, async (loggedIn) => {
 
 // 监听当前会话变化，通过 switchSession 保存/恢复消息
 watch(currentSessionId, async (newSessionId) => {
+  // 会话切换/新建时关闭附件预览框（预览框内容属于旧会话，避免残留到新会话）
+  closePreview()
   if (skipNextSwitch.value) {
     skipNextSwitch.value = false
     return
