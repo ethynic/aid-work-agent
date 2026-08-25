@@ -31,6 +31,7 @@ TABLE_DEFINITIONS = {
             vehicle_type_label TEXT,
             seats_max INT NOT NULL,
             daily_rate DECIMAL(10,2),
+            season_type TEXT DEFAULT 'default',
             pricing_mode TEXT DEFAULT 'per_km',
             per_km_rate DECIMAL(10,2),
             driver_meal_allowance DECIMAL(10,2),

@@ -626,3 +626,11 @@ CREATE TABLE IF NOT EXISTS tenant_knowledge_shares (
     UNIQUE (from_tenant_id, to_tenant_id)
 );
 CREATE INDEX IF NOT EXISTS idx_knowledge_shares_to ON tenant_knowledge_shares(to_tenant_id);
+-- ============================================================================
+-- 2026-08-25 bs_travel_quote_vehicles 补 season_type 列（车辆价格分淡旺季）
+-- 服务器测试环境报 psycopg2 UndefinedColumn: season_type——淡旺季功能新增时，
+-- meals/guides/seasons 三表都加了 season_type，唯独 vehicles 建表定义漏了该列，
+-- 且 db_update.sql 无任何 travel_quote 增量语句，导致已存在表缺列。
+-- 与 src/skills/travel-quote/scripts/db.py 的 vehicles 表定义保持一致。
+-- ============================================================================
+ALTER TABLE bs_travel_quote_vehicles ADD COLUMN IF NOT EXISTS season_type TEXT DEFAULT 'default';
