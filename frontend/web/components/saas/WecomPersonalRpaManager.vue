@@ -429,7 +429,7 @@ const allClients = ref<RpaClientSummary[]>([])
 const loadingClients = ref(false)
 const clientKeyword = ref('')
 const clientPage = ref(1)
-const clientPageSize = ref(10)
+const clientPageSize = ref(20)
 
 const filteredClients = computed(() => {
   const kw = clientKeyword.value.trim().toLowerCase()
@@ -605,7 +605,7 @@ const loadingBindings = ref(false)
 const bindingStatusFilter = ref('')
 const bindingKeyword = ref('')
 const bindingPage = ref(1)
-const bindingPageSize = ref(10)
+const bindingPageSize = ref(20)
 
 const bindingStatusOptions = [
   { value: 'pending', label: '待确认' },

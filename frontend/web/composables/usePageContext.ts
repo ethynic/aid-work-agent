@@ -20,9 +20,9 @@ import { ref } from 'vue'
  *   })
  * ```
  */
-export function usePageContext(fetchData: () => Promise<void>) {
+export function usePageContext(fetchData: () => Promise<void>, defaultPageSize = 20) {
   const currentPage = ref(1)
-  const pageSize = ref(10)
+  const pageSize = ref(defaultPageSize)
   const searchKeyword = ref('')
   const loading = ref(false)
 
