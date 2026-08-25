@@ -230,7 +230,7 @@ def init_tables():
             conn.commit()
             logger.info("[order_tool] 订单处理表初始化完成")
     except Exception as e:
-        logger.error(f"[order_tool] 表初始化失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"[order_tool] 表初始化失败: {e}")
         raise
 
 
@@ -373,7 +373,7 @@ def create_order(args):
             "created_at": now.isoformat(),
         }
     except Exception as e:
-        logger.error(f"创建订单失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"创建订单失败: {e}")
         return {"success": False, "error": f"创建订单失败: {str(e)}"}
 
 
@@ -488,7 +488,7 @@ def get_order(args):
             "status_history": status_history,
         }
     except Exception as e:
-        logger.error(f"查询订单详情失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"查询订单详情失败: {e}")
         return {"success": False, "error": f"查询订单详情失败: {str(e)}"}
 
 
@@ -582,7 +582,7 @@ def list_orders(args):
             "page_size": page_size,
         }
     except Exception as e:
-        logger.error(f"查询订单列表失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"查询订单列表失败: {e}")
         return {"success": False, "error": f"查询订单列表失败: {str(e)}"}
 
 
@@ -680,7 +680,7 @@ def update_order(args):
             "updated_at": now.isoformat(),
         }
     except Exception as e:
-        logger.error(f"更新订单失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"更新订单失败: {e}")
         return {"success": False, "error": f"更新订单失败: {str(e)}"}
 
 
@@ -761,7 +761,7 @@ def cancel_order(args):
             "updated_at": now.isoformat(),
         }
     except Exception as e:
-        logger.error(f"取消订单失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"取消订单失败: {e}")
         return {"success": False, "error": f"取消订单失败: {str(e)}"}
 
 
@@ -823,7 +823,7 @@ def change_status(args):
             "updated_at": now.isoformat(),
         }
     except Exception as e:
-        logger.error(f"变更订单状态失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"变更订单状态失败: {e}")
         return {"success": False, "error": f"变更订单状态失败: {str(e)}"}
 
 
@@ -903,7 +903,7 @@ def create_approval(args):
             "created_at": now.isoformat(),
         }
     except Exception as e:
-        logger.error(f"创建审批记录失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"创建审批记录失败: {e}")
         return {"success": False, "error": f"创建审批记录失败: {str(e)}"}
 
 
@@ -971,7 +971,7 @@ def approve_order(args):
             "order_status": "approved",
         }
     except Exception as e:
-        logger.error(f"审批通过失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"审批通过失败: {e}")
         return {"success": False, "error": f"审批通过失败: {str(e)}"}
 
 
@@ -1039,7 +1039,7 @@ def reject_order(args):
             "order_status": "rejected",
         }
     except Exception as e:
-        logger.error(f"审批拒绝失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"审批拒绝失败: {e}")
         return {"success": False, "error": f"审批拒绝失败: {str(e)}"}
 
 
@@ -1079,7 +1079,7 @@ def get_status_history(args):
             "total": len(history),
         }
     except Exception as e:
-        logger.error(f"查询状态历史失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"查询状态历史失败: {e}")
         return {"success": False, "error": f"查询状态历史失败: {str(e)}"}
 
 
@@ -1163,7 +1163,7 @@ def stats(args):
             "group_stats": group_stats,
         }
     except Exception as e:
-        logger.error(f"订单统计失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"订单统计失败: {e}")
         return {"success": False, "error": f"订单统计失败: {str(e)}"}
 
 

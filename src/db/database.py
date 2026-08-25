@@ -614,6 +614,14 @@ def init_logs_tables():
             _logs_connection_pool.putconn(conn, close=False)
 
 
+def _is_lock_timeout_error(exc: Exception) -> bool:
+    """判断异常是否为 PostgreSQL 锁等待超时（SQLSTATE 55P03 或消息含 lock timeout）"""
+    if getattr(exc, "pgcode", None) == "55P03":
+        return True
+    msg = str(exc).lower()
+    return "lock timeout" in msg or "锁超时" in msg
+
+
 def _apply_db_updates(conn):
     """
     执行 deploy/db_update.sql 中的增量更新
@@ -831,60 +839,86 @@ def _apply_db_updates(conn):
         logger.info(f"开始执行数据库更新，共 {len(statements)} 条语句")
 
         executed = 0
+        failed = []
+        lock_retry_times = 3
         for i, stmt in enumerate(statements):
-            # 为每条语句创建保存点，允许单条失败不影响其他语句
             savepoint_name = f"sp_{i}"
-            try:
-                cursor.execute(f"SAVEPOINT {savepoint_name}")
-                cursor.execute(stmt)
-                executed += 1
-            except Exception as e:
-                logger.error(f"执行 SQL 语句失败: {stmt[:100]}... 错误: {e}")
-                # 回滚到保存点，清除错误状态
+            for attempt in range(lock_retry_times + 1):
                 try:
-                    cursor.execute(f"ROLLBACK TO SAVEPOINT {savepoint_name}")
-                except Exception as rollback_err:
-                    logger.error(f"回滚保存点失败: {rollback_err}")
-                    # 如果回滚失败，整个事务可能已无效，需要回滚整个事务
-                    conn.rollback()
-                    # 重新建立保存点以继续
+                    # 为每条语句创建保存点，允许单条失败不影响其他语句
                     cursor.execute(f"SAVEPOINT {savepoint_name}")
-                continue
+                    cursor.execute(stmt)
+                    executed += 1
+                    break
+                except Exception as e:
+                    # 回滚到保存点，清除错误状态
+                    try:
+                        cursor.execute(f"ROLLBACK TO SAVEPOINT {savepoint_name}")
+                    except Exception as rollback_err:
+                        logger.error(f"回滚保存点失败: {rollback_err}")
+                        # 如果回滚失败，整个事务可能已无效，需要回滚整个事务
+                        conn.rollback()
+                        # 重新建立保存点以继续
+                        cursor.execute(f"SAVEPOINT {savepoint_name}")
+                    # 锁超时：DDL 等 ACCESS EXCLUSIVE 锁期间可能被并发事务阻塞，
+                    # 等待锁释放后重试，避免偶发锁冲突导致语句被永久跳过
+                    if _is_lock_timeout_error(e) and attempt < lock_retry_times:
+                        wait_sec = (attempt + 1) * 5
+                        logger.warning(
+                            f"数据库更新语句因锁超时失败（第 {attempt + 1}/{lock_retry_times} 次重试）: "
+                            f"{stmt[:80]}... 等待 {wait_sec}s 后重试"
+                        )
+                        time.sleep(wait_sec)
+                        continue
+                    failed.append((i, stmt, str(e)))
+                    logger.error(f"执行 SQL 语句失败: {stmt[:100]}... 错误: {e}")
+                    break
 
-        logger.info(f"数据库更新完成，成功执行 {executed}/{len(statements)} 条语句")
+        if failed:
+            # 有语句失败时不更新哈希记录，保持旧哈希。下次启动（文件哈希不同）
+            # 会自动重跑全部语句，所有语句均幂等（IF NOT EXISTS / ON CONFLICT），
+            # 避免 DDL 因偶发锁冲突被"永久跳过"
+            logger.error(
+                f"数据库更新有 {len(failed)}/{len(statements)} 条语句失败（成功 {executed} 条），"
+                f"本次不更新哈希记录，下次启动将重试"
+            )
+            for idx, failed_stmt, err in failed:
+                logger.error(f"  失败语句[{idx}]: {failed_stmt[:100]}... 错误: {err}")
+        else:
+            logger.info(f"数据库更新完成，成功执行 {executed}/{len(statements)} 条语句")
 
-        # 更新或插入哈希记录
-        try:
-            # 确保 file_hash 列存在
-            cursor.execute("""
-                SELECT column_name FROM information_schema.columns
-                WHERE table_name = '_db_update_applied' AND column_name = 'file_hash'
-            """)
-            has_file_hash = cursor.fetchone() is not None
+            # 更新或插入哈希记录
+            try:
+                # 确保 file_hash 列存在
+                cursor.execute("""
+                    SELECT column_name FROM information_schema.columns
+                    WHERE table_name = '_db_update_applied' AND column_name = 'file_hash'
+                """)
+                has_file_hash = cursor.fetchone() is not None
 
-            if not has_file_hash:
-                logger.warning("file_hash 列不存在，尝试添加")
-                try:
-                    cursor.execute("ALTER TABLE _db_update_applied ADD COLUMN file_hash TEXT")
-                    logger.info("成功添加 file_hash 列")
-                except Exception as add_col_err:
-                    logger.error(f"添加 file_hash 列失败: {add_col_err}")
-                    # 无法添加列，跳过插入哈希记录
-                    logger.warning("跳过插入哈希记录（列不存在）")
-                    return
+                if not has_file_hash:
+                    logger.warning("file_hash 列不存在，尝试添加")
+                    try:
+                        cursor.execute("ALTER TABLE _db_update_applied ADD COLUMN file_hash TEXT")
+                        logger.info("成功添加 file_hash 列")
+                    except Exception as add_col_err:
+                        logger.error(f"添加 file_hash 列失败: {add_col_err}")
+                        # 无法添加列，跳过插入哈希记录
+                        logger.warning("跳过插入哈希记录（列不存在）")
+                        return
 
-            cursor.execute("""
-                INSERT INTO _db_update_applied (id, file_hash)
-                VALUES ('db_update', %s)
-                ON CONFLICT (id) DO UPDATE
-                SET file_hash = EXCLUDED.file_hash,
-                    applied_at = CURRENT_TIMESTAMP
-            """, (file_hash,))
+                cursor.execute("""
+                    INSERT INTO _db_update_applied (id, file_hash)
+                    VALUES ('db_update', %s)
+                    ON CONFLICT (id) DO UPDATE
+                    SET file_hash = EXCLUDED.file_hash,
+                        applied_at = CURRENT_TIMESTAMP
+                """, (file_hash,))
 
-            logger.info(f"数据库更新记录已更新，哈希: {file_hash}")
-        except Exception as e:
-            logger.error(f"更新哈希记录失败: {e}")
-            # 插入失败不影响已执行的更新，继续执行（释放锁）
+                logger.info(f"数据库更新记录已更新，哈希: {file_hash}")
+            except Exception as e:
+                logger.error(f"更新哈希记录失败: {e}")
+                # 插入失败不影响已执行的更新，继续执行（释放锁）
 
     finally:
         # 释放 advisory lock
@@ -1348,6 +1382,42 @@ def _init_postgresql():
                 conn.rollback()
             except Exception as rollback_err:
                 logger.warning(f"Failed to rollback video_agent transaction: {rollback_err}")
+
+        # 招聘操作智能体职位库表（bs_recruiting_operator_jobs / bs_recruiting_operator_job_scripts）
+        # 注意：必须在简历库表之前初始化（resumes.job_id 外键引用 jobs 表，
+        # 简历-职位匹配 Phase 1 关联严密化）
+        try:
+            from src.services.recruiting_job_service import init_recruiting_job_tables
+            init_recruiting_job_tables(conn)
+        except Exception as e:
+            logger.warning(f"Failed to initialize recruiting_operator job tables: {e}")
+            try:
+                conn.rollback()
+            except Exception as rollback_err:
+                logger.warning(f"Failed to rollback recruiting_operator job transaction: {rollback_err}")
+
+        # 招聘操作智能体表（bs_recruiting_operator_resumes 简历库）
+        try:
+            from src.services.recruiting_resume_service import init_recruiting_operator_tables
+            init_recruiting_operator_tables(conn)
+        except Exception as e:
+            logger.warning(f"Failed to initialize recruiting_operator tables: {e}")
+            try:
+                conn.rollback()
+            except Exception as rollback_err:
+                logger.warning(f"Failed to rollback recruiting_operator transaction: {rollback_err}")
+
+        # 招聘面试邀约企微通知表（bs_recruiting_notify_settings / bs_recruiting_notify_logs，
+        # 面试邀约通知设计 Phase 1，见 docs/design/recruiting/recruiting-interview-notify-design.md）
+        try:
+            from src.services.recruiting_notify_service import init_recruiting_notify_tables
+            init_recruiting_notify_tables(conn)
+        except Exception as e:
+            logger.warning(f"Failed to initialize recruiting_notify tables: {e}")
+            try:
+                conn.rollback()
+            except Exception as rollback_err:
+                logger.warning(f"Failed to rollback recruiting_notify transaction: {rollback_err}")
 
         # Skill 表初始化由 SkillLoader._init_skill_tables() 统一处理，
         # 通过 SKILL.md 中的 init_script 字段声明，不再硬编码。

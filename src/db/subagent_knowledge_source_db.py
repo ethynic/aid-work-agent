@@ -17,7 +17,7 @@ class SubagentKnowledgeSourceDB:
     """租户级子智能体知识库关联"""
 
     @staticmethod
-    def get(tenant_id: str, subagent_name: str) -> List[Dict[str, str]]:
+    def get(tenant_id: str, subagent_name: str) -> List[Dict[str, Any]]:
         """获取某租户某子智能体关联的知识库列表"""
         with get_db_connection() as conn:
             cursor = conn.cursor()
@@ -31,7 +31,7 @@ class SubagentKnowledgeSourceDB:
             return []
 
     @staticmethod
-    def set(tenant_id: str, subagent_name: str, sources: List[Dict[str, str]]) -> bool:
+    def set(tenant_id: str, subagent_name: str, sources: List[Dict[str, Any]]) -> bool:
         """UPSERT 某租户某子智能体的知识库关联（全量覆盖）"""
         with get_db_connection() as conn:
             cursor = conn.cursor()

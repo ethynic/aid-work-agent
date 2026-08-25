@@ -47,6 +47,18 @@ def test_known_model_returns_exact_value(service, monkeypatch):
     assert limit == 512_000
 
 
+def test_qwen_model_returns_exact_value(service, monkeypatch):
+    """qwen3.7-flash → 512000（qwen provider 不触发 unknown warning，命中映射表）"""
+    from src.config.settings import LLMConfig, LLMProviderConfig
+    fake_llm = LLMConfig(provider="qwen")
+    fake_llm.qwen = LLMProviderConfig(api_keys=["x"], model="qwen3.7-flash")
+    monkeypatch.setattr("src.memory.mid_term.settings.llm", fake_llm)
+    service._model_limit_cache = None
+
+    limit = service._get_model_limit()
+    assert limit == 512_000
+
+
 def test_settings_change_reflects_without_injection(service, monkeypatch):
     """P1-2：生产路径（_model_limit_cache=None）不缓存，settings 切换立即生效"""
     from src.config.settings import LLMConfig, LLMProviderConfig

@@ -17,7 +17,11 @@ const runtime = Object.freeze({
 })
 
 const bridgeVersion = Number(readArgument('aidagent-bridge-version'))
-if (bridgeVersion !== 2) throw new Error('unsupported Agent Desktop bridge version')
+if (bridgeVersion !== 3) throw new Error('unsupported Agent Desktop bridge version')
+
+const startup = Object.freeze({
+  getState: () => ipcRenderer.invoke('desktop:startup:get-state') as Promise<Readonly<{ secureStorageAvailable: boolean; online: boolean }>>,
+})
 
 const credentials = Object.freeze({
   hydrate: () => ipcRenderer.invoke('desktop:credentials:hydrate') as Promise<Record<string, string>>,
@@ -48,4 +52,4 @@ const updates = Object.freeze({
   restartAndInstall: () => ipcRenderer.invoke('desktop:update:restart-and-install') as Promise<void>,
 })
 
-contextBridge.exposeInMainWorld('agentDesktop', Object.freeze({ version: 2 as const, runtime, credentials, system, updates }))
+contextBridge.exposeInMainWorld('agentDesktop', Object.freeze({ version: 3 as const, runtime, startup, credentials, system, updates }))

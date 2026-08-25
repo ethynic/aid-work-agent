@@ -18,21 +18,37 @@ class _KeySlot:
 
     def __init__(self, key: str, max_concurrent: int):
         self.key = key
-        self.semaphore = asyncio.Semaphore(max_concurrent)
         self.max_concurrent = max_concurrent
+        # 信号量按事件循环惰性重绑：KeyPool 是进程级单例，主 HTTP 事件循环与
+        # APScheduler 后台线程的独立循环（asyncio.new_event_loop）会交替使用，
+        # Python 3.10+ 的 asyncio 原语首次 await 即绑定所在循环，跨循环复用会抛
+        # "is bound to a different event loop"。_semaphore 为 None 表示未绑定。
+        self._semaphore: Optional[asyncio.Semaphore] = None
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
         # 统计用（可选）
         self._total_calls: int = 0
         self._active_calls: int = 0
 
+    def _ensure_loop(self) -> asyncio.Semaphore:
+        """返回绑定到当前运行循环的信号量（跨循环时重绑）"""
+        loop = asyncio.get_running_loop()
+        if self._semaphore is None or self._loop is not loop:
+            self._semaphore = asyncio.Semaphore(self.max_concurrent)
+            self._loop = loop
+        return self._semaphore
+
     @property
     def available(self) -> bool:
         """当前 Key 是否有空闲并发槽"""
-        return self.semaphore._value > 0  # type: ignore[attr-defined]
+        if self._semaphore is None:
+            return True
+        return self._semaphore._value > 0  # type: ignore[attr-defined]
 
     async def acquire(self, timeout: float) -> bool:
         """尝试获取并发槽，超时返回 False"""
+        sem = self._ensure_loop()
         try:
-            await asyncio.wait_for(self.semaphore.acquire(), timeout=timeout)
+            await asyncio.wait_for(sem.acquire(), timeout=timeout)
             self._active_calls += 1
             self._total_calls += 1
             return True
@@ -40,7 +56,8 @@ class _KeySlot:
             return False
 
     def release(self) -> None:
-        self.semaphore.release()
+        sem = self._ensure_loop()
+        sem.release()
         self._active_calls -= 1
 
 
@@ -79,7 +96,9 @@ class KeyPool:
         ]
         self._queue_timeout = queue_timeout
         self._round_robin_idx = 0
-        self._lock = asyncio.Lock()
+        # 锁按事件循环惰性重绑（原因同 _KeySlot._semaphore）
+        self._lock: Optional[asyncio.Lock] = None
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
 
         logger.info(
             f"KeyPool 初始化完成：{len(keys)} 个 Key，"
@@ -112,12 +131,23 @@ class KeyPool:
                 f"本 Key 累计调用: {slot._total_calls}，当前活跃: {slot._active_calls}"
             )
 
+    def _ensure_loop(self) -> asyncio.Lock:
+        """返回绑定到当前运行循环的锁（跨循环时重绑锁与各槽位信号量）"""
+        loop = asyncio.get_running_loop()
+        if self._lock is None or self._loop is not loop:
+            self._lock = asyncio.Lock()
+            self._loop = loop
+            for slot in self._slots:
+                slot._ensure_loop()
+        return self._lock
+
     async def _get_slot(self) -> _KeySlot:
         """轮询找到可用 Key 槽位"""
         n = len(self._slots)
+        lock = self._ensure_loop()
 
         # 快速路径：按轮询顺序找一个有空闲的 Key
-        async with self._lock:
+        async with lock:
             start = self._round_robin_idx
             for i in range(n):
                 idx = (start + i) % n
@@ -182,7 +212,8 @@ class KeyPool:
 
     async def _try_acquire_slot(self, slot: _KeySlot) -> None:
         """尝试获取指定槽位（用于并发等待）"""
-        await slot.semaphore.acquire()
+        sem = slot._ensure_loop()
+        await sem.acquire()
         slot._active_calls += 1
         slot._total_calls += 1
 

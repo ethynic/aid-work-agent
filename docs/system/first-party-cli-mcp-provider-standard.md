@@ -165,10 +165,10 @@ terminal user        any MCP Host
 平台级执行位置：
 
 - `SERVER`：数据和依赖在云端，例如解析已上传 PDF；
-- `LOCAL_REQUIRED`：依赖本地文件、应用、登录态或硬件，例如 BOSS/本地文件；
+- `LOCAL_REQUIRED`：依赖用户/企业侧设备的文件、应用、登录态或硬件，例如 BOSS/本地文件；“LOCAL”不限定为当前 UI 所在电脑，也可以是已授权的专用电脑或 VM；
 - `EITHER`：两侧都有正式实现，必须依据数据位置、用户策略和授权显式选择。
 
-Provider manifest 声明执行位置；最终路由由 Host 决定，LLM 不传 `execution_target`。不得因一侧失败而静默把敏感数据或动作切到另一侧。
+Provider manifest 声明执行位置；最终路由由 aid-work-agent 的服务端策略结合用户选择、设备能力和授权决定，LLM 不传 `execution_target` 或 `device_id`。任务创建后固定执行节点，不得因一侧或一个节点失败而静默把敏感数据或动作切到另一侧/另一节点。
 
 ## 8. aid-work-agent Desktop 的 Host 约束
 
@@ -181,7 +181,7 @@ Provider manifest 声明执行位置；最终路由由 Host 决定，LLM 不传 
 5. Desktop 专属 UI 可以展示状态和授权，但不得创造 Desktop-only tool schema。
 6. 第一方 CLI 若只能被自有 Desktop 调用，视为架构违规。
 
-Web Agent 使用 Local Tool Runtime 作为 Host；Desktop 未来可内嵌同一 Runtime core。两者 transport 不同，但 Provider 接口相同。
+Web Agent 使用 Local Tool Runtime 作为 Host；Desktop 可内嵌同一 Runtime core 作为当前电脑执行 Host，也必须能通过后台选择另一台运行 `agent-tool-runtime` 的授权电脑。Desktop 与远端 Runtime 不建立 P2P 私有协议，统一经云端 invocation/claim 中转，Provider 接口保持相同。
 
 ## 9. 安全与生命周期
 

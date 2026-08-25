@@ -3,7 +3,7 @@
 > 编号：#37（系统功能）
 > 状态：📋 待开发
 > 创建日期：2026-07-16
-> 关联：[docs/system/saas/multi-tenant-saas-design.md](./multi-tenant-saas-design.md)、[docs/system/database_system_table.md](../database_system_table.md)
+> 关联：[docs/system/saas/multi-tenant-saas-design.md](./multi-tenant-saas-design.md)、[docs/system/database_system_table.md](../database_system_table.md)、[LLM 计费接入设计](./llm-billing-integration-design.md)（Embedding/ASR/视频提示词/background_runner/对话内后台 LLM 计费接入）
 
 ---
 

@@ -102,7 +102,7 @@ def test_build_messages_empty_string_summary_not_injected(monkeypatch):
     fake_cs.get_active_summary.return_value = ""  # 空字符串
     monkeypatch.setattr("src.memory.mid_term.get_compression_service", lambda: fake_cs)
 
-    messages = agent._build_messages("sess")
+    messages, _ = agent._build_messages("sess")
     # 不应包含 [📋 之前对话摘要]
     assert all("之前对话摘要" not in (m.get("content") or "") for m in messages)
 
@@ -125,7 +125,7 @@ def test_build_messages_get_active_summary_exception_no_crash(monkeypatch):
     fake_cs.get_active_summary.side_effect = RuntimeError("cs down")
     monkeypatch.setattr("src.memory.mid_term.get_compression_service", lambda: fake_cs)
 
-    messages = agent._build_messages("sess")
+    messages, _ = agent._build_messages("sess")
     assert isinstance(messages, list)
     # 不应注入摘要对
     assert all("之前对话摘要" not in (m.get("content") or "") for m in messages)

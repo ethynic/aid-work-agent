@@ -19,6 +19,8 @@ from typing import Optional
 
 from loguru import logger
 
+from src.core.storage import ensure_tenant_storage_dir
+
 
 class WeComKfRenderer:
     """将 markdown 渲染为图片（复用 x_to_image 服务的浏览器池与长图后处理）。"""
@@ -113,9 +115,25 @@ class WeComKfRenderer:
     # 渲染视窗宽度（适配微信气泡）
     _VIEWPORT_WIDTH = 440
 
-    def __init__(self, upload_dir: str = "./storage/uploads/wecom_kf"):
+    def __init__(
+        self,
+        upload_dir: str = "./storage/uploads/wecom_kf",
+        tenant_id: str = "",
+    ):
         self._upload_dir = upload_dir
+        self._tenant_id = tenant_id or ""
         os.makedirs(self._upload_dir, exist_ok=True)
+
+    def set_tenant_id(self, tenant_id: str) -> None:
+        """设置租户 ID（由 adapter 注入），设置后落盘走 tenants 规范。"""
+        self._tenant_id = tenant_id or ""
+
+    def _resolve_save_dir(self) -> str:
+        """解析最终保存目录：有租户走 tenants 规范，无租户回退旧路径。"""
+        if self._tenant_id:
+            return ensure_tenant_storage_dir(self._tenant_id, "conversation")
+        os.makedirs(self._upload_dir, exist_ok=True)
+        return self._upload_dir
 
     async def is_available(self) -> bool:
         """检查 Playwright + Chromium 是否可用（委托给 browser_pool）。"""
@@ -147,7 +165,7 @@ class WeComKfRenderer:
 
             content_hash = hashlib.md5(markdown_table.encode()).hexdigest()[:12]
             output_path = os.path.join(
-                self._upload_dir, f"table_{content_hash}.png"
+                self._resolve_save_dir(), f"table_{content_hash}.png"
             )
 
             async with browser_pool.acquire_page(width=self._VIEWPORT_WIDTH) as page:
@@ -162,7 +180,7 @@ class WeComKfRenderer:
             logger.info(f"表格已渲染为图片: {output_path} ({file_size} bytes)")
             return output_path
         except Exception as e:
-            logger.error(f"表格渲染失败: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"表格渲染失败: {e}")
             return None
 
     async def render_markdown(self, markdown_text: str) -> Optional[str]:
@@ -208,7 +226,7 @@ class WeComKfRenderer:
             )
             full_html = self.HTML_TEMPLATE.format(html_content=html)
         except Exception as e:
-            logger.error(f"markdown 转 HTML 失败: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"markdown 转 HTML 失败: {e}")
             return None
 
         # 3. 临时目录 + browser_pool 生成页图
@@ -219,7 +237,7 @@ class WeComKfRenderer:
                     full_html, width=self._VIEWPORT_WIDTH, out_dir=work_dir
                 )
             except Exception as e:
-                logger.error(f"browser_pool.shoot 失败: {e}", exc_info=True)
+                logger.opt(exception=True).error(f"browser_pool.shoot 失败: {e}")
                 return None
 
             # 4. 后处理:空白检测 + 高度截断 + 体积控制
@@ -238,7 +256,7 @@ class WeComKfRenderer:
                     [page_path], inp, work_dir, renderer_name="wecom_kf_md"
                 )
             except Exception as e:
-                logger.error(f"finalize_long_image 失败: {e}", exc_info=True)
+                logger.opt(exception=True).error(f"finalize_long_image 失败: {e}")
                 return None
 
             if not result.success or not result.image_path:
@@ -247,13 +265,13 @@ class WeComKfRenderer:
 
             # 5. 把最终长图 move 到持久化目录
             final_path = os.path.join(
-                self._upload_dir, os.path.basename(result.image_path)
+                self._resolve_save_dir(), os.path.basename(result.image_path)
             )
             try:
                 shutil.move(result.image_path, final_path)
             except Exception as e:
-                logger.error(
-                    f"移动长图到持久化目录失败: {e}", exc_info=True
+                logger.opt(exception=True).error(
+                    f"移动长图到持久化目录失败: {e}"
                 )
                 return None
             logger.info(

@@ -1,0 +1,1 @@
+{ "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "agent-turn-input.schema.json", "title": "AgentTurnInput", "oneOf": [{"$ref":"agent-turn-user-message.schema.json"},{"$ref":"agent-turn-tool-result.schema.json"}] }

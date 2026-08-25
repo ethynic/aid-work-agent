@@ -201,7 +201,7 @@ async def list_leads(
 
         return JsonResponse(success=True, data={"total": total, "page": page, "page_size": page_size, "items": items})
     except Exception as e:
-        logger.error(f"list_leads 失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"list_leads 失败: {e}")
         return JsonResponse(success=False, error="查询线索失败", debug=sanitize_error_info(str(e)))
 
 
@@ -239,7 +239,7 @@ async def get_lead(lead_id: str, tenant_id: Optional[str] = Query(None)):
 
         return JsonResponse(success=True, data=lead)
     except Exception as e:
-        logger.error(f"get_lead 失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"get_lead 失败: {e}")
         return JsonResponse(success=False, error="查询线索详情失败", debug=sanitize_error_info(str(e)))
 
 
@@ -267,7 +267,7 @@ async def create_lead(lead: LeadCreateRequest, user_id: str = Query(...), tenant
 
         return JsonResponse(success=True, data={"lead_id": lead_id})
     except Exception as e:
-        logger.error(f"create_lead 失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"create_lead 失败: {e}")
         return JsonResponse(success=False, error="创建线索失败", debug=sanitize_error_info(str(e)))
 
 
@@ -309,7 +309,7 @@ async def update_lead(lead_id: str, body: LeadUpdateRequest, tenant_id: Optional
 
         return JsonResponse(success=True, data={"lead_id": lead_id, "message": "更新成功"})
     except Exception as e:
-        logger.error(f"update_lead 失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"update_lead 失败: {e}")
         return JsonResponse(success=False, error="更新线索失败", debug=sanitize_error_info(str(e)))
 
 
@@ -372,7 +372,7 @@ async def update_lead_stage(lead_id: str, body: StageUpdateRequest, tenant_id: O
             "days_in_previous_stage": days_prev,
         })
     except Exception as e:
-        logger.error(f"update_lead_stage 失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"update_lead_stage 失败: {e}")
         return JsonResponse(success=False, error="变更阶段失败", debug=sanitize_error_info(str(e)))
 
 
@@ -397,7 +397,7 @@ async def delete_lead(lead_id: str, reason: Optional[str] = Query(None), tenant_
 
         return JsonResponse(success=True, data={"lead_id": lead_id, "message": "线索已标记为丢失"})
     except Exception as e:
-        logger.error(f"delete_lead 失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"delete_lead 失败: {e}")
         return JsonResponse(success=False, error="删除线索失败", debug=sanitize_error_info(str(e)))
 
 
@@ -444,7 +444,7 @@ async def assign_lead(lead_id: str, body: AssignRequest, tenant_id: Optional[str
 
         return JsonResponse(success=True, data={"lead_id": lead_id, "assigned_to": assigned_to, "rule": rule})
     except Exception as e:
-        logger.error(f"assign_lead 失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"assign_lead 失败: {e}")
         return JsonResponse(success=False, error="分配线索失败", debug=sanitize_error_info(str(e)))
 
 
@@ -477,7 +477,8 @@ async def list_records(
             conditions.append("r.followup_at >= %s")
             params.append(date_from)
         if date_to:
-            conditions.append("r.followup_at <= %s")
+            # date_to 含当日：< 次日零点 语义，SQL 内 +1 天，使传入当天也能统计到当天全天数据
+            conditions.append("r.followup_at < (%s::date + INTERVAL '1 day')")
             params.append(date_to)
 
         where = " AND ".join(conditions) if conditions else "1=1"
@@ -498,7 +499,7 @@ async def list_records(
 
         return JsonResponse(success=True, data={"items": items})
     except Exception as e:
-        logger.error(f"list_records 失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"list_records 失败: {e}")
         return JsonResponse(success=False, error="查询跟进记录失败", debug=sanitize_error_info(str(e)))
 
 
@@ -535,7 +536,7 @@ async def create_record(body: FollowupRecordRequest, user_id: str = Query(...), 
 
         return JsonResponse(success=True, data={"record_id": record_id})
     except Exception as e:
-        logger.error(f"create_record 失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"create_record 失败: {e}")
         return JsonResponse(success=False, error="创建跟进记录失败", debug=sanitize_error_info(str(e)))
 
 
@@ -572,7 +573,7 @@ async def list_reps(
 
         return JsonResponse(success=True, data={"items": items, "total": len(items)})
     except Exception as e:
-        logger.error(f"list_reps 失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"list_reps 失败: {e}")
         return JsonResponse(success=False, error="查询销售人员失败", debug=sanitize_error_info(str(e)))
 
 
@@ -596,7 +597,7 @@ async def create_rep(body: SalesRepCreateRequest, tenant_id: Optional[str] = Que
 
         return JsonResponse(success=True, data={"rep_id": rep_id})
     except Exception as e:
-        logger.error(f"create_rep 失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"create_rep 失败: {e}")
         return JsonResponse(success=False, error="创建销售人员失败", debug=sanitize_error_info(str(e)))
 
 
@@ -633,7 +634,7 @@ async def update_rep(rep_id: str, body: SalesRepUpdateRequest, tenant_id: Option
 
         return JsonResponse(success=True, data={"rep_id": rep_id, "message": "更新成功"})
     except Exception as e:
-        logger.error(f"update_rep 失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"update_rep 失败: {e}")
         return JsonResponse(success=False, error="更新销售人员失败", debug=sanitize_error_info(str(e)))
 
 
@@ -670,7 +671,7 @@ async def list_assign_rules(
 
         return JsonResponse(success=True, data={"items": items, "total": len(items)})
     except Exception as e:
-        logger.error(f"list_assign_rules 失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"list_assign_rules 失败: {e}")
         return JsonResponse(success=False, error="查询分配规则失败", debug=sanitize_error_info(str(e)))
 
 
@@ -699,7 +700,7 @@ async def create_assign_rule(body: AssignRuleCreateRequest, tenant_id: Optional[
 
         return JsonResponse(success=True, data={"rule_id": rule_id})
     except Exception as e:
-        logger.error(f"create_assign_rule 失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"create_assign_rule 失败: {e}")
         return JsonResponse(success=False, error="创建分配规则失败", debug=sanitize_error_info(str(e)))
 
 
@@ -738,7 +739,7 @@ async def update_assign_rule(rule_id: str, body: AssignRuleUpdateRequest, tenant
 
         return JsonResponse(success=True, data={"rule_id": rule_id, "message": "更新成功"})
     except Exception as e:
-        logger.error(f"update_assign_rule 失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"update_assign_rule 失败: {e}")
         return JsonResponse(success=False, error="更新分配规则失败", debug=sanitize_error_info(str(e)))
 
 
@@ -803,7 +804,7 @@ async def batch_assign_leads(body: BatchAssignRequest, tenant_id: Optional[str] 
             "total": len(leads), "assigned": assigned, "skipped": skipped, "rule": body.rule,
         })
     except Exception as e:
-        logger.error(f"batch_assign_leads 失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"batch_assign_leads 失败: {e}")
         return JsonResponse(success=False, error="批量分配失败", debug=sanitize_error_info(str(e)))
 
 
@@ -852,7 +853,7 @@ async def call_lead(
 
         return JsonResponse(success=result.get("success", False), data=result)
     except Exception as e:
-        logger.error(f"call_lead 失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"call_lead 失败: {e}")
         return JsonResponse(success=False, error="发起外呼失败", debug=sanitize_error_info(str(e)))
 
 
@@ -888,7 +889,7 @@ async def list_call_records(
 
         return JsonResponse(success=True, data={"items": items})
     except Exception as e:
-        logger.error(f"list_call_records 失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"list_call_records 失败: {e}")
         return JsonResponse(success=False, error="查询外呼记录失败", debug=sanitize_error_info(str(e)))
 
 
@@ -933,7 +934,7 @@ async def evaluate_record(record_id: str, tenant_id: Optional[str] = Query(None)
 
         return JsonResponse(success=True, data={"record_id": record_id, "quality_score": score})
     except Exception as e:
-        logger.error(f"evaluate_record 失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"evaluate_record 失败: {e}")
         return JsonResponse(success=False, error="评估失败", debug=sanitize_error_info(str(e)))
 
 
@@ -969,7 +970,7 @@ async def get_overdue(tenant_id: Optional[str] = Query(None)):
 
         return JsonResponse(success=True, data={"items": items, "total": len(items)})
     except Exception as e:
-        logger.error(f"get_overdue 失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"get_overdue 失败: {e}")
         return JsonResponse(success=False, error="获取逾期跟进失败", debug=sanitize_error_info(str(e)))
 
 
@@ -1050,7 +1051,7 @@ async def _auto_assign_rep_api(
 
             return min(available, key=lambda r: r['active_lead_count'])['user_id']
     except Exception as e:
-        logger.error(f"_auto_assign_rep_api 失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"_auto_assign_rep_api 失败: {e}")
         return None
 
 
@@ -1129,5 +1130,5 @@ async def get_dashboard(tenant_id: Optional[str] = Query(None), user_id: Optiona
             "overdue_followups": overdue,
         })
     except Exception as e:
-        logger.error(f"get_dashboard 失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"get_dashboard 失败: {e}")
         return JsonResponse(success=False, error="获取仪表板数据失败", debug=sanitize_error_info(str(e)))

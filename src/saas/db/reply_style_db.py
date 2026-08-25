@@ -119,7 +119,7 @@ class ReplyStyleDB:
                 return ReplyStyleDB.get_active(style_id, tenant_id)
             except Exception as e:
                 conn.rollback()
-                logger.error(f"Failed to create new version: type={type(e).__name__} value={e!r} args={e.args}", exc_info=True)
+                logger.opt(exception=True).error(f"Failed to create new version: type={type(e).__name__} value={e!r} args={e.args}")
                 raise
 
     @staticmethod

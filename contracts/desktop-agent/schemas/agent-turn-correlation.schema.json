@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aid.example/contracts/desktop-agent/1.0/agent-turn-correlation.schema.json",
+  "title": "AgentTurnCorrelation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["task_id", "session_ref", "execution_id", "attempt_id", "action_id", "invocation_id", "artifact_id", "evidence_stream_id", "release_id", "policy_decision_id"],
+  "properties": {
+    "task_id": { "type": "string", "minLength": 1 },
+    "session_ref": { "type": "string", "minLength": 1 },
+    "execution_id": { "type": "string", "minLength": 1 },
+    "attempt_id": { "type": "string", "minLength": 1 },
+    "action_id": { "type": "string", "minLength": 1 },
+    "invocation_id": { "type": "string", "minLength": 1 },
+    "artifact_id": { "type": "string", "minLength": 1 },
+    "evidence_stream_id": { "type": "string", "minLength": 1 },
+    "release_id": { "type": "string", "minLength": 1 },
+    "policy_decision_id": { "type": "string", "minLength": 1 }
+  }
+}

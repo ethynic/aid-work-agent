@@ -163,6 +163,27 @@ def _migrate_knowledge_categories(
             "inserted": inserted, "skipped": skipped, "deleted": deleted}
 
 
+def _build_target_knowledge_path(target_tenant: str, src_path: str, target_storage: str) -> tuple:
+    """构造知识库文档迁移的目标路径（新规范）。
+
+    知识库文档属于 `knowledge` 场景，目标路径统一落到
+    `storage/tenants/{target_tenant}/knowledge/{basename}`。
+
+    Returns:
+        (tgt_rel, full_tgt) 元组：
+          - tgt_rel: 相对路径，写入 `documents.file_path`
+          - full_tgt: 磁盘写入路径（`{target_storage}/{target_tenant}/knowledge/{basename}`）
+    """
+    from src.core.storage import get_tenant_storage_path, normalize_tenant_id
+
+    basename = os.path.basename(src_path)
+    tgt_rel = get_tenant_storage_path(target_tenant, "knowledge", basename)
+    # full_tgt 必须与 tgt_rel 走同一 normalize_tenant_id 剥离 tenant_ 前缀，
+    # 否则 tgt_rel=tenants/b/... 与 full_tgt=tenants/tenant_b/... 不一致
+    full_tgt = os.path.join(target_storage, normalize_tenant_id(target_tenant), "knowledge", basename)
+    return tgt_rel, full_tgt
+
+
 def _migrate_kb(
     source_conn, target_conn, source_tenant: str, target_tenant: str,
     mode: str, dry_run: bool, source_storage: str, target_storage: str,
@@ -216,9 +237,6 @@ def _migrate_kb(
         cur.execute("SELECT * FROM chunks WHERE doc_id = ANY(%s) ORDER BY id", (source_doc_ids,))
         all_source_chunks = cur.fetchall()
 
-    # 构建源 doc_id -> uuid 映射
-    doc_id_to_uuid = {d["id"]: d.get("uuid") for d in source_docs}
-
     # 插入文档
     doc_columns = [
         "user_id", "tenant_id", "title", "source_type", "file_type", "file_path",
@@ -227,8 +245,14 @@ def _migrate_kb(
         "summary", "uuid", "created_at", "updated_at",
     ]
     doc_rows = []
+    # 源 doc_id -> 实际插入的 doc_uuid（含随机 fallback）。
+    # 修复既有 bug：源文档 uuid 为空时，插入阶段与后续 chunk 关联 / file_path
+    # 更新阶段各自生成不同随机 uuid，导致 get() 命中 None、chunk 丢失、file_path 更新被跳过。
+    # 统一用插入阶段生成的 doc_uuid 作为映射键，三处对齐。
+    doc_id_to_uuid: Dict[int, str] = {}
     for d in source_docs:
         doc_uuid = d.get("uuid") or f"doc_{uuid_mod.uuid4().hex[:12]}"
+        doc_id_to_uuid[d["id"]] = doc_uuid
         doc_rows.append((
             d.get("user_id"), target_tenant, d["title"], d["source_type"], d["file_type"],
             d.get("file_path"), d.get("file_size"), d.get("total_chunks"),
@@ -313,30 +337,20 @@ def _migrate_kb(
             logger.warning(f"源文件不存在: {full_src}")
             continue
 
-        # 目标路径：替换 tenant_id
-        if target_storage:
-            tgt_path = src_path.replace(source_tenant, target_tenant)
-            # 兼容 file_path 中已包含 target_storage 前缀的情况：
-            # 数据库中存的是 storage/uploads/...，target_storage 也是 storage/uploads
-            # 直接 join 会变成 storage/uploads/storage/uploads/...（多一层前缀）
-            if tgt_path.startswith(target_storage):
-                full_tgt = tgt_path
-            else:
-                full_tgt = os.path.join(target_storage, tgt_path) if not os.path.isabs(tgt_path) else tgt_path
-        else:
-            full_tgt = src_path.replace(source_tenant, target_tenant)
+        # 目标路径：新规范 storage/tenants/{target_tenant}/knowledge/{basename}
+        tgt_rel, full_tgt = _build_target_knowledge_path(target_tenant, src_path, target_storage)
 
         os.makedirs(os.path.dirname(full_tgt), exist_ok=True)
         shutil.copy2(full_src, full_tgt)
         files_copied += 1
 
-        # 更新目标 documents.file_path
-        new_doc_id = doc_uuid_to_new_id.get(d.get("uuid") or f"doc_{uuid_mod.uuid4().hex[:12]}")
+        # 更新目标 documents.file_path（存相对路径，与知识库 API 存储格式一致）
+        new_doc_id = doc_uuid_to_new_id.get(doc_id_to_uuid.get(d["id"]))
         if new_doc_id and target_storage:
             with target_conn.cursor() as cur:
                 cur.execute(
                     "UPDATE documents SET file_path = %s WHERE id = %s",
-                    (tgt_path, new_doc_id),
+                    (tgt_rel, new_doc_id),
                 )
 
     return {
@@ -457,8 +471,8 @@ def run_migration(
     if source_storage is None:
         source_storage = os.getenv("SOURCE_STORAGE", "/app/source_storage")
     if target_storage is None:
-        from src.config.settings import settings
-        target_storage = str(settings.storage.uploads_dir) if hasattr(settings, 'storage') else "storage/uploads"
+        from src.core.storage import get_tenants_storage_root
+        target_storage = get_tenants_storage_root()
 
     source_config = _get_db_config(source_db)
     target_config = _get_db_config(target_db)

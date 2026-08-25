@@ -14,7 +14,7 @@ triggers:
     - "*.xlsx"
 llm_provider: deepseek
 deepseek_model_code: deepseek-v4-flash  # 指定使用模型，覆盖 .env 配置
-qwen_model_code: deepseek-v4-flash  # failover使用。指定使用模型，覆盖 .env 配置
+qwen_model_code: deepseek-v4-flash-0731  # failover使用。百炼平台的 deepseek-v4-flash-0731 为正式版
 reply_style: human-like
 tools:
   inherit: true
@@ -513,3 +513,4 @@ skill_execute(
 10. **行程中不出现价格**：在粗略行程、详细行程、行程调整等任何非报价阶段，**绝对不允许**提及任何价格信息（门票价格、项目费用、餐标、房费等）。价格只在客户明确要求报价时，通过 travel-quote 技能生成（客户直接问酒店价格时例外：可用 `hotel_search` 工具的价格明细表据实回答，但仍不得写入行程）。从知识库搜索结果中看到的价格信息，不要写到行程里
 11. **行程未变不重复报价**：客户再次要求报价时，**先核对当前行程是否与上一次报价时的行程完全一致**（人数、天数、景点、游玩项目、城市均无变化）。如果行程没有变化、且本轮会话中已经生成过报价单，**禁止再次调用 `travel-quote`**，直接从上下文中找到上一次报价时 `travel-quote` 返回的 `file_path`，重新用 `cp` 注册下载，并告知客户"行程没变，沿用上次那份报价"即可。只有行程确实发生了变化（哪怕只是某天的景点或项目调整），才允许重新调用 `travel-quote` 生成新报价单
 12. **换酒店走 update_hotel.py**：客户对已生成的报价提出换酒店需求时，**禁止重跑 `travel-quote` 的 generate.py**（会导致其他类别重新匹配、结果不可控），改用 `travel-quote` 的 `update_hotel.py` 局部更新。调用方式和参数细节见 SKILL.md「酒店局部更新」
+13. **禁止自编命令查库**：报价相关数据一律通过 `travel-quote` 技能的 `generate.py` / `update_hotel.py` 获取，**禁止**用 `skill_execute` 提交自编的 `python -c` 内联脚本或 SQL 直接查询 `bs_travel_quote_*` 表（例如 `SELECT tenant_id, region_name, COUNT(*) ...`、`SELECT ... season_type ...`）。这些表结构可能与你的预期不同（`region_name` 只在部分表存在，`season_type`、`seats_min`、`overtime_rate` 等列已移除），会触发 `UndefinedColumn` 报错。需要了解价格数据、校验配置或检查数据是否齐全时，直接调用 `generate.py` 生成报价，或在管理后台对应页面查看

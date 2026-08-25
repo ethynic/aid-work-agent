@@ -20,6 +20,7 @@ import tempfile
 from src.saas.api.tenant_auth import require_admin
 from src.saas.db.tenant_db import TenantDB
 from src.saas.db.subscription_db import SubscriptionDB
+from src.saas.services.renewal import enrich_tenants_with_renewal
 from src.saas.models.tenant import TenantCreate, TenantUpdate
 from src.config.settings import settings
 from src.db.models import UserDB, TokenDB
@@ -173,6 +174,8 @@ async def list_tenants(request: Request, page: int = 1, page_size: int = 20):
         return {"success": False, "message": "权限不足"}
 
     result = TenantDB.list_tenants(page=page, page_size=page_size)
+    # 补充续费状态计算列：日均使用积分 / 预估可用天数 / 是否待续费
+    enrich_tenants_with_renewal(result["tenants"])
     return {"success": True, **result}
 
 
@@ -227,7 +230,7 @@ async def create_tenant(request: Request, body: TenantCreate):
         return response
 
     except Exception as e:
-        logger.error(f"创建租户异常: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"创建租户异常: {e}")
         return {"success": False, "error": "创建租户失败", "debug": sanitize_error_info(str(e))}
 
 
@@ -335,7 +338,7 @@ async def update_tenant(request: Request, tenant_id: str, body: TenantUpdate):
             return response
         return {"success": False, "error": "更新失败", "debug": "TenantDB.update returned False"}
     except Exception as e:
-        logger.error(f"更新租户异常: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"更新租户异常: {e}")
         return {"success": False, "error": "更新失败", "debug": sanitize_error_info(str(e))}
 
 
@@ -363,7 +366,7 @@ async def delete_tenant(request: Request, tenant_id: str):
             return {"success": True, "message": "删除成功"}
         return {"success": False, "error": "删除失败", "debug": "TenantDB.delete returned False"}
     except Exception as e:
-        logger.error(f"删除租户异常: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"删除租户异常: {e}")
         return {"success": False, "error": "删除失败", "debug": sanitize_error_info(str(e))}
 
 
@@ -443,7 +446,7 @@ async def upload_tenant_logo(request: Request, file: UploadFile = File(...)):
             "download_url": ref.download_url,
         }
     except Exception as e:
-        logger.error(f"租户 Logo 上传异常: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"租户 Logo 上传异常: {e}")
         return {"success": False, "error": "上传失败", "debug": sanitize_error_info(str(e))}
     finally:
         # register 用 move=True，成功后临时文件已被移走；失败时清理

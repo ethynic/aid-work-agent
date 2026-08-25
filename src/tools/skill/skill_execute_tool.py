@@ -31,6 +31,8 @@ class SkillExecuteInput(BaseModel):
 class SkillExecuteTool(BaseTool):
     """技能命令执行工具"""
 
+    # 控制工具：不进普通 registry，由 ToolControlSet 带依赖构造。
+    catalog = False
     name = "skill_execute"
     description = "在技能上下文中执行命令（仅当操作指南要求时才使用，如 python scripts/xxx.py）。引导式技能（无脚本的技能）通常不需要调用此工具。"
     usage_guide = ""
@@ -38,14 +40,17 @@ class SkillExecuteTool(BaseTool):
     category = "skill"
     InputModel = SkillExecuteInput
 
-    def __init__(self, skill_executor, skill_registry):
+    def __init__(self, skill_executor, skill_registry, llm_env=None):
         """
         Args:
             skill_executor: SkillExecutor 实例
             skill_registry: SkillRegistry 实例
+            llm_env: 子智能体 LLM 覆盖环境变量（SKILL_LLM_PROVIDER / SKILL_LLM_MODEL），
+                     注入技能子进程供技能脚本 llm_client 使用
         """
         self.skill_executor = skill_executor
         self.skill_registry = skill_registry
+        self.llm_env = llm_env or {}
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
         """
@@ -157,6 +162,16 @@ class SkillExecuteTool(BaseTool):
         except Exception:
             pass
 
+        # 解析 subagent_id（数字员工级共享启用需要；主智能体直接调用时为空，不启用共享）
+        subagent_id = None
+        try:
+            from src.tools.context import current_tool_execution_context
+            ctx = current_tool_execution_context()
+            if ctx:
+                subagent_id = ctx.subagent_id
+        except Exception:
+            pass
+
         if not resolved_tenant_id and real_session_id:
             # 方式1：从 chat_sessions 表查询（Web端会话）
             from src.db.models import SessionDB
@@ -195,21 +210,26 @@ class SkillExecuteTool(BaseTool):
             if isinstance(content_text, list):
                 content_text = _json.dumps(content_text, ensure_ascii=False)
 
-            # 自动注入 tenant_id 到 content JSON 中
+            # 自动注入 tenant_id / subagent_id 到 content JSON 中
             try:
                 content_obj = _json.loads(content_text)
                 if isinstance(content_obj, dict):
                     if resolved_tenant_id:
                         content_obj["tenant_id"] = resolved_tenant_id
+                    if subagent_id:
+                        content_obj["subagent_id"] = subagent_id
                     content_text = _json.dumps(content_obj, ensure_ascii=False)
             except (_json.JSONDecodeError, TypeError):
                 pass  # 非 JSON 内容，跳过
 
             stdin_content = str(content_text).encode("utf-8", errors="surrogatepass")
         else:
-            # 无 content 时，构造只含 tenant_id 的 JSON 通过 stdin 传给子进程
-            if resolved_tenant_id:
-                stdin_content = _json.dumps({"tenant_id": resolved_tenant_id}).encode("utf-8")
+            # 无 content 时，构造含 tenant_id / subagent_id 的 JSON 通过 stdin 传给子进程
+            payload = {"tenant_id": resolved_tenant_id} if resolved_tenant_id else {}
+            if subagent_id:
+                payload["subagent_id"] = subagent_id
+            if payload:
+                stdin_content = _json.dumps(payload).encode("utf-8")
 
         try:
             # 后端日志：诊断实际提交给执行器的命令
@@ -224,6 +244,7 @@ class SkillExecuteTool(BaseTool):
                 session_id=real_session_id,
                 user_id=real_user_id,
                 stdin_content=stdin_content,
+                env_extra=self.llm_env,
             )
 
             # 后端日志：诊断执行结果
@@ -267,7 +288,7 @@ class SkillExecuteTool(BaseTool):
             # 构建 error 字段：优先使用 result.error，fallback 到 stderr
             exec_error = result.error or result.stderr or f"exit_code={result.exit_code}"
 
-            return {
+            resp = {
                 "success": result.success,
                 "stdout": result.stdout,
                 "stderr": result.stderr,
@@ -276,6 +297,17 @@ class SkillExecuteTool(BaseTool):
                 "timed_out": result.timed_out,
                 "error": exec_error
             }
+            # 脚本可通过 stdout JSON 中的 _no_truncate 声明输出不宜截断
+            # （如 load_api_config 返回外部 API 说明文档，LLM 需完整内容才能调用接口）。
+            # 提升到返回结果顶层，供 agent 工具结果截断逻辑识别豁免。
+            if result.stdout:
+                try:
+                    stdout_obj = _json.loads(result.stdout)
+                    if isinstance(stdout_obj, dict) and stdout_obj.get("_no_truncate"):
+                        resp["_no_truncate"] = True
+                except (_json.JSONDecodeError, TypeError):
+                    pass
+            return resp
 
         except Exception as e:
             logger.error(f"Skill execute failed: {e}")

@@ -14,8 +14,9 @@ from loguru import logger
 
 from src.db.database import get_db_connection
 from src.models.message import ChannelType
-from src.core.cache_utils import CacheKeys, get_cached, set_cached, delete_cached
+from src.core.cache_utils import CacheKeys, get_cached, set_cached, delete_cached, delete_cached_pattern
 from src.core.temp_logger import tlog
+from src.core.agent_events import extract_downloadable_file
 
 
 class ChannelSessionManager:
@@ -85,7 +86,8 @@ class ChannelSessionManager:
                     metadata JSONB,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     is_recalled BOOLEAN NOT NULL DEFAULT FALSE,
-                    recalled_at TIMESTAMP
+                    recalled_at TIMESTAMP,
+                    status TEXT NOT NULL DEFAULT 'active'
                 )
             """)
 
@@ -104,9 +106,40 @@ class ChannelSessionManager:
         self._initialized = True
         logger.info("PostgreSQL: channel_sessions 表初始化完成")
 
-    def _generate_session_id(self, tenant_id: str, channel_type: str, channel_user_id: str, subagent_id: str = "") -> str:
-        """生成会话ID（包含租户和智能体信息，确保跨租户跨智能体唯一）"""
+    def _generate_session_id(
+        self,
+        tenant_id: str,
+        channel_type: str,
+        channel_user_id: str,
+        subagent_id: str = "",
+        channel_chat_id: str = "",
+    ) -> str:
+        """生成会话ID（包含租户、智能体与渠道会话信息，确保跨租户跨智能体跨客服账号唯一）。
+
+        channel_chat_id 非空时纳入 session_id（如 wecom_kf 的 open_kfid），
+        使同一渠道用户可在不同客服账号/群下建立独立会话；为空时保持历史格式不变。
+        """
+        if channel_chat_id:
+            return f"{tenant_id}_{channel_type}_{channel_chat_id}_{channel_user_id}_{subagent_id}"
         return f"{tenant_id}_{channel_type}_{channel_user_id}_{subagent_id}"
+
+    @staticmethod
+    def _session_cache_args(
+        tenant_id: str,
+        channel_type: str,
+        channel_user_id: str,
+        subagent_id: str = "",
+        channel_chat_id: str = "",
+    ) -> tuple:
+        """构造渠道会话缓存 key 的参数列表。
+
+        channel_chat_id 非空时纳入 key（与 session_id 拆分保持一致），
+        为空时保持历史 key 不变，避免旧缓存失效与其它渠道行为漂移。
+        """
+        parts = [tenant_id, channel_type, channel_user_id, subagent_id]
+        if channel_chat_id:
+            parts.append(channel_chat_id)
+        return tuple(parts)
 
     @staticmethod
     def _parse_json_field(value: Optional[str], default: Any = None) -> Any:
@@ -144,11 +177,12 @@ class ChannelSessionManager:
         Returns:
             会话信息字典
         """
-        session_id = self._generate_session_id(tenant_id, channel_type, channel_user_id, subagent_id)
+        session_id = self._generate_session_id(tenant_id, channel_type, channel_user_id, subagent_id, channel_chat_id or "")
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cache_args = self._session_cache_args(tenant_id, channel_type, channel_user_id, subagent_id, channel_chat_id or "")
 
-        # 优先从缓存获取（缓存 key 包含 tenant_id 和 subagent_id）
-        cached = get_cached(CacheKeys.CHANNEL_SESSION, tenant_id, channel_type, channel_user_id, subagent_id)
+        # 优先从缓存获取（缓存 key 包含 tenant_id、subagent_id，channel_chat_id 非空时亦纳入）
+        cached = get_cached(CacheKeys.CHANNEL_SESSION, *cache_args)
         if cached is not None:
             # 缓存命中：仍需校验 user_id/username 是否需要同步（user_id 可能因
             # 跨租户复用修复等原因发生变化）。仅当传入新值且与缓存不同时才回写。
@@ -182,17 +216,23 @@ class ChannelSessionManager:
                         conn.commit()
                 except Exception:
                     logger.warning(f"[channel_session] 缓存命中时回写 user_id 失败: session_id={session_id}")
-                set_cached(CacheKeys.CHANNEL_SESSION, tenant_id, channel_type, channel_user_id, subagent_id, value=cached, ttl=600)
+                set_cached(CacheKeys.CHANNEL_SESSION, *cache_args, value=cached, ttl=600)
             return cached
 
         with get_db_connection() as conn:
             cursor = conn.cursor()
 
-            # 按租户+渠道+用户+智能体查找已存在的会话
-            cursor.execute("""
+            # 按租户+渠道+用户+智能体查找已存在的会话（channel_chat_id 非空时须精确匹配，
+            # 同一用户在不同客服账号/群下各自独立会话，避免复用其它账号的会话导致归属错乱）
+            lookup_sql = """
                 SELECT * FROM channel_sessions
                 WHERE tenant_id = %s AND channel_type = %s AND channel_user_id = %s AND subagent_id = %s
-            """, (tenant_id, channel_type, channel_user_id, subagent_id))
+            """
+            lookup_params: tuple = (tenant_id, channel_type, channel_user_id, subagent_id)
+            if channel_chat_id:
+                lookup_sql += " AND channel_chat_id = %s"
+                lookup_params = (tenant_id, channel_type, channel_user_id, subagent_id, channel_chat_id)
+            cursor.execute(lookup_sql, lookup_params)
 
             row = cursor.fetchone()
 
@@ -227,7 +267,7 @@ class ChannelSessionManager:
                     result["username"] = new_username
                 result["context_data"] = self._parse_json_field(result.get("context_data"), {})
                 result["metadata"] = self._parse_json_field(result.get("metadata"))
-                set_cached(CacheKeys.CHANNEL_SESSION, tenant_id, channel_type, channel_user_id, subagent_id, value=result, ttl=600)
+                set_cached(CacheKeys.CHANNEL_SESSION, *cache_args, value=result, ttl=600)
                 return result
 
             else:
@@ -274,7 +314,7 @@ class ChannelSessionManager:
                     "updated_at": ts_row["updated_at"],
                     "last_message_at": ts_row["last_message_at"],
                 }
-                set_cached(CacheKeys.CHANNEL_SESSION, tenant_id, channel_type, channel_user_id, subagent_id, value=result, ttl=600)
+                set_cached(CacheKeys.CHANNEL_SESSION, *cache_args, value=result, ttl=600)
                 return result
 
     def rebind_existing_session_channel_user(
@@ -324,13 +364,15 @@ class ChannelSessionManager:
                 migrated = cursor.rowcount > 0
                 conn.commit()
             if migrated:
-                delete_cached(
+                # 按渠道用户前缀清缓存：rebind 可能涉及多个 subagent / channel_chat_id 会话，
+                # 用 pattern 一次性删除旧/新用户的全部缓存，避免精确 key 遗漏
+                delete_cached_pattern(
                     CacheKeys.CHANNEL_SESSION, tenant_id, channel_type,
-                    old_channel_user_id, subagent_id,
+                    old_channel_user_id, "",
                 )
-                delete_cached(
+                delete_cached_pattern(
                     CacheKeys.CHANNEL_SESSION, tenant_id, channel_type,
-                    new_channel_user_id, subagent_id,
+                    new_channel_user_id, "",
                 )
             return migrated
         except Exception as e:
@@ -346,6 +388,7 @@ class ChannelSessionManager:
         channel_user_id: str,
         tenant_id: str = "",
         subagent_id: str = "",
+        channel_chat_id: str = "",
     ) -> Optional[Dict[str, Any]]:
         """
         获取渠道会话（优先从 Redis 缓存读取，TTL 10分钟）
@@ -355,16 +398,18 @@ class ChannelSessionManager:
             channel_user_id: 渠道用户ID
             tenant_id: 租户ID
             subagent_id: 关联的子智能体ID
+            channel_chat_id: 渠道会话/群ID（wecom_kf 为 open_kfid），非空时精确匹配该会话
 
         Returns:
             会话信息字典
         """
+        cache_args = self._session_cache_args(tenant_id, channel_type, channel_user_id, subagent_id, channel_chat_id or "")
         # 优先从缓存获取
-        cached = get_cached(CacheKeys.CHANNEL_SESSION, tenant_id, channel_type, channel_user_id, subagent_id)
+        cached = get_cached(CacheKeys.CHANNEL_SESSION, *cache_args)
         if cached is not None:
             return cached
 
-        session_id = self._generate_session_id(tenant_id, channel_type, channel_user_id, subagent_id)
+        session_id = self._generate_session_id(tenant_id, channel_type, channel_user_id, subagent_id, channel_chat_id or "")
 
         with get_db_connection() as conn:
             cursor = conn.cursor()
@@ -379,7 +424,7 @@ class ChannelSessionManager:
             result["context_data"] = self._parse_json_field(result.get("context_data"), {})
             result["metadata"] = self._parse_json_field(result.get("metadata"))
             # 写入缓存
-            set_cached(CacheKeys.CHANNEL_SESSION, tenant_id, channel_type, channel_user_id, subagent_id, value=result, ttl=600)
+            set_cached(CacheKeys.CHANNEL_SESSION, *cache_args, value=result, ttl=600)
             return result
 
     def is_channel_session(self, session_id: str) -> bool:
@@ -453,12 +498,15 @@ class ChannelSessionManager:
             # 更新成功后清除缓存，确保下次读取获取最新数据
             if success:
                 cursor.execute("""
-                    SELECT tenant_id, channel_type, channel_user_id, subagent_id
+                    SELECT tenant_id, channel_type, channel_user_id, subagent_id, channel_chat_id
                     FROM channel_sessions WHERE session_id = %s
                 """, (session_id,))
                 row = cursor.fetchone()
                 if row:
-                    delete_cached(CacheKeys.CHANNEL_SESSION, row["tenant_id"], row["channel_type"], row["channel_user_id"], row["subagent_id"])
+                    delete_cached(CacheKeys.CHANNEL_SESSION, *self._session_cache_args(
+                        row["tenant_id"], row["channel_type"], row["channel_user_id"],
+                        row["subagent_id"] or "", row["channel_chat_id"] or "",
+                    ))
 
             return success
 
@@ -724,9 +772,8 @@ class ChannelSessionManager:
                     conn.rollback()
                 except Exception as rollback_err:
                     logger.error(f"Failed to rollback channel_messages batch insert: {rollback_err}")
-                logger.error(
+                logger.opt(exception=True).error(
                     f"后端日志：channel_messages 批量写入失败 session={session_id}: {e}",
-                    exc_info=True,
                 )
                 return None
 
@@ -869,18 +916,9 @@ class ChannelSessionManager:
             if not isinstance(event, dict):
                 return
             event_type = event.get("type")
-            if (event_type == "tool_result"
-                    and event.get("toolName") in ("write", "cp")
-                    and event.get("success") is True):
-                result = event.get("result", {}) or {}
-                if result.get("file_id"):
-                    downloadable_files.append({
-                        "file_id": result["file_id"],
-                        "file_name": result.get("download_file_name") or result.get("file_name", "未命名文件"),
-                        "file_size": result.get("file_size", 0),
-                        "download_url": result.get("download_url", ""),
-                        "mime_type": result.get("mime_type", ""),
-                    })
+            downloadable_file = extract_downloadable_file(event)
+            if downloadable_file:
+                downloadable_files.append(downloadable_file)
             elif event_type == "tool_messages":
                 # 收集本轮 tool 消息序列（assistant with tool_calls + role:tool 配对）
                 tool_messages_collected.extend(event.get("messages", []))
@@ -958,9 +996,8 @@ class ChannelSessionManager:
                 agent_attachments=agent_attachments or [],
             )
         except Exception as e:
-            logger.error(
+            logger.opt(exception=True).error(
                 f"后端日志：process_and_persist enqueue_and_process 异常 session={session_id}: {e}",
-                exc_info=True,
             )
             # enqueue 异常：user 写入已推迟，调用 mark_error 记录失败
             if record_service is not None:
@@ -1123,9 +1160,8 @@ class ChannelSessionManager:
                 session_queue.mark_responding(session_id)
                 await send_response("", downloadable_files)
             except Exception as send_err:
-                logger.error(
+                logger.opt(exception=True).error(
                     f"后端日志：批量写入失败后 send_response 异常 session={session_id}: {send_err}",
-                    exc_info=True,
                 )
             finally:
                 session_queue.mark_idle(session_id)
@@ -1195,9 +1231,8 @@ class ChannelSessionManager:
                 agent_images = []
             send_ok = await send_response(response_text, downloadable_files, agent_images)
         except Exception as e:
-            logger.error(
+            logger.opt(exception=True).error(
                 f"后端日志：send_response 异常 session={session_id}: {e}",
-                exc_info=True,
             )
         finally:
             session_queue.mark_idle(session_id)
@@ -1304,9 +1339,8 @@ class ChannelSessionManager:
                     tenant_id=tenant_id,
                 )
         except Exception as e:
-            logger.error(
+            logger.opt(exception=True).error(
                 f"后端日志：_ensure_last_not_orphan_user 异常 session={session_id}: {e}",
-                exc_info=True,
             )
 
     def find_session(
@@ -1333,7 +1367,8 @@ class ChannelSessionManager:
             cursor.execute("""
                 SELECT * FROM channel_sessions
                 WHERE tenant_id = %s AND channel_type = %s AND channel_user_id = %s
-            """, (tenant_id, channel_type, channel_user_id))
+                  AND channel_chat_id = %s
+            """, (tenant_id, channel_type, channel_user_id, channel_chat_id))
             row = cursor.fetchone()
             if not row:
                 return None
@@ -1349,6 +1384,16 @@ class ChannelSessionManager:
             cursor.execute("""
                 SELECT column_name FROM information_schema.columns
                 WHERE table_name = 'channel_messages' AND column_name = 'is_recalled'
+            """)
+            return cursor.fetchone() is not None
+
+    def _has_status_column(self) -> bool:
+        """检查 channel_messages 表是否有 status 列（迁移兼容性，软删除标记）"""
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT column_name FROM information_schema.columns
+                WHERE table_name = 'channel_messages' AND column_name = 'status'
             """)
             return cursor.fetchone() is not None
 
@@ -1385,10 +1430,15 @@ class ChannelSessionManager:
             has_recall_column = self._has_is_recalled_column()
             recall_condition = "" if (include_recalled or not has_recall_column) else "AND is_recalled = FALSE"
 
+            # 失效消息过滤（status='invalid'，隐藏命令"新会话"软删除标记）。
+            # 失效消息不再进入 LLM 上下文，但历史记录保留供外部接待页面查看。
+            has_status_column = self._has_status_column()
+            status_clause = " AND status = 'active'" if has_status_column else ""
+
             if before_message_id:
                 cursor.execute(f"""
                     SELECT * FROM channel_messages
-                    WHERE session_id = {placeholder} {recall_condition} AND id < (
+                    WHERE session_id = {placeholder} {recall_condition} {status_clause} AND id < (
                         SELECT id FROM channel_messages WHERE message_id = {placeholder}
                     )
                     {compacted_clause}
@@ -1404,6 +1454,7 @@ class ChannelSessionManager:
                         SELECT * FROM channel_messages
                         WHERE session_id = {placeholder} {recall_condition}
                         {compacted_clause}
+                        {status_clause}
                         ORDER BY id DESC
                         LIMIT {limit}
                     ) AS recent
@@ -1749,6 +1800,7 @@ class ChannelSessionManager:
         channel_type: Optional[str] = None,
         user_id: Optional[str] = None,
         tenant_id: Optional[str] = None,
+        channel_chat_id: Optional[str] = None,
         limit: int = 50,
     ) -> List[Dict[str, Any]]:
         """
@@ -1758,6 +1810,8 @@ class ChannelSessionManager:
             channel_type: 渠道类型过滤
             user_id: 用户ID过滤
             tenant_id: 租户ID过滤
+            channel_chat_id: 渠道会话/群ID过滤（可选）。None 不过滤；
+                空串匹配 NULL 或空串（legacy 会话）；非空精确匹配
             limit: 限制条数
 
         Returns:
@@ -1780,6 +1834,13 @@ class ChannelSessionManager:
             if user_id:
                 conditions.append(f"user_id = %s")
                 values.append(user_id)
+
+            if channel_chat_id is not None:
+                if channel_chat_id == "":
+                    conditions.append("(channel_chat_id IS NULL OR channel_chat_id = '')")
+                else:
+                    conditions.append("channel_chat_id = %s")
+                    values.append(channel_chat_id)
 
             where_clause = " AND ".join(conditions) if conditions else "1=1"
 
@@ -1822,12 +1883,14 @@ class ChannelSessionManager:
 
             if updated_count > 0:
                 cursor.execute("""
-                    SELECT subagent_id FROM channel_sessions
+                    SELECT subagent_id, channel_chat_id FROM channel_sessions
                     WHERE tenant_id = %s AND channel_type = %s AND channel_user_id = %s
                 """, (tenant_id, channel_type, channel_user_id))
                 for row in cursor.fetchall():
-                    delete_cached(CacheKeys.CHANNEL_SESSION, tenant_id, channel_type,
-                                  channel_user_id, row["subagent_id"] or "")
+                    delete_cached(CacheKeys.CHANNEL_SESSION, *self._session_cache_args(
+                        tenant_id, channel_type, channel_user_id,
+                        row["subagent_id"] or "", row["channel_chat_id"] or "",
+                    ))
 
             return updated_count
 
@@ -2029,5 +2092,61 @@ class ChannelSessionManager:
                     f"sid={session_id}, err={cache_err}"
                 )
             logger.info(f"后端日志：channel_messages + chat_context_summaries 已清空: session_id={session_id}")
-            return deleted# 全局会话管理器
+            return deleted
+
+    def soft_delete_messages(self, session_id: str, tenant_id: Optional[str] = None) -> bool:
+        """
+        软删除会话中的消息（status 置为 invalid），保留历史记录供外部接待页面查看。
+
+        隐藏命令“新会话”触发本方法：消息不物理删除，但 LLM 上下文重建
+        （get_messages）会过滤 status='invalid' 的消息，达到“新会话”效果；
+        同时将 chat_context_summaries 中该会话的 active 摘要置为 superseded，
+        否则重建上下文会读到旧压缩摘要（且后续压缩因部分唯一索引
+        (session_id, source_type) WHERE status='active' 无法插入新摘要）。
+
+        Args:
+            session_id: 会话ID
+            tenant_id: 租户ID（可选，提供时额外校验租户归属）
+
+        Returns:
+            是否有消息被标记为失效
+        """
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+
+            if tenant_id:
+                cursor.execute("""
+                    UPDATE channel_messages SET status = 'invalid'
+                    WHERE session_id = %s AND tenant_id = %s
+                """, (session_id, tenant_id))
+                updated = cursor.rowcount > 0
+                cursor.execute("""
+                    UPDATE chat_context_summaries
+                    SET status = 'superseded', superseded_at = CURRENT_TIMESTAMP
+                    WHERE session_id = %s AND tenant_id = %s AND status = 'active'
+                """, (session_id, tenant_id))
+            else:
+                cursor.execute("""
+                    UPDATE channel_messages SET status = 'invalid'
+                    WHERE session_id = %s
+                """, (session_id,))
+                updated = cursor.rowcount > 0
+                cursor.execute("""
+                    UPDATE chat_context_summaries
+                    SET status = 'superseded', superseded_at = CURRENT_TIMESTAMP
+                    WHERE session_id = %s AND status = 'active'
+                """, (session_id,))
+
+            conn.commit()
+            # 失效该会话的消息列表缓存，避免读到软删除前的旧消息
+            try:
+                from src.core.cache_utils import delete_cached_pattern
+                delete_cached_pattern(CacheKeys.SESSION_MSGS, session_id, "")
+            except Exception as cache_err:
+                logger.warning(
+                    f"channel_messages 软删除后失效 SESSION_MSGS 缓存失败: "
+                    f"sid={session_id}, err={cache_err}"
+                )
+            logger.info(f"后端日志：channel_messages 已软删除（status=invalid）: session_id={session_id}")
+            return updated# 全局会话管理器
 channel_session_manager = ChannelSessionManager()

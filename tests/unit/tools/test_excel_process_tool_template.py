@@ -119,8 +119,10 @@ async def test_execute_fill_tenant_injection(sample_path):
         res = await tool.execute(data=data, file_paths=[str(sample_path)])
     assert res["success"]
     fp = Path(res["file_path"])
-    assert "tenant_test_tt" in fp.parts
-    assert "user_test_uu" in fp.parts
+    # 新规范：user_id 不进路径，目录结构为 storage/tenants/{tenant_id}/conversation/
+    # 按 storage.normalize_tenant_id 规范，磁盘目录剥离 tenant_ 前缀（tenant_test_tt -> test_tt）
+    assert "test_tt" in fp.parts
+    assert "conversation" in fp.parts
 
 
 @pytest.mark.asyncio
@@ -138,6 +140,37 @@ async def test_input_schema_has_data_field():
     """ExcelProcessInput 暴露 data 字段供 agent 调用"""
     schema = ExcelProcessTool().to_tool_definition()["input_schema"]
     assert "data" in schema.get("properties", {})
+    # 标量契约写进入参描述，Agent 首次调用即知道 totals 不得嵌套
+    desc = schema["properties"]["data"].get("description", "")
+    assert "标量" in desc
+    assert "合计总价_40人" in desc
+
+
+@pytest.mark.asyncio
+async def test_execute_nested_totals_returns_actionable_error(sample_path):
+    """线上事故回归：交叉表合计按列分档的嵌套 totals dict 不再以
+    'Cannot convert ... to Excel' 崩溃，而是返回带拆平指引的友好错误（Agent 可自愈重试）"""
+    data = {
+        "rows": [
+            {"序号": "1", "费用项目": "研学课程服务费", "单价标准": "178元/人",
+             "40人（元）": 7120, "45人（元）": 8010, "49人（元）": 8722},
+        ],
+        "totals": {
+            "合计总价": {"40人（元）": 9520, "45人（元）": 10560, "49人（元）": 11392},
+            "人均费用（含包车分摊）": {"40人（元）": "238 元/人"},
+        },
+    }
+    tool = ExcelProcessTool()
+    with patch("src.tools.excel.excel_template_ai._default_llm", _mock_llm()):
+        res = await tool.execute(data=data, file_paths=[str(sample_path)],
+                                 output_name="山东政法学院研学报价单（40人C档）.xlsx")
+
+    assert not res["success"]
+    assert "data.totals.合计总价" in res["error"]
+    assert "标量" in res["error"]
+    assert "拆平" in res["error"]
+    assert "Cannot convert" not in res["error"]
+    assert res.get("failed_at") == "fill_template"
 
 
 @pytest.mark.asyncio

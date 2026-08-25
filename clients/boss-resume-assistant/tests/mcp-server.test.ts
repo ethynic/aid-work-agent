@@ -27,6 +27,13 @@ const EXPECTED_TOOLS = [
   'boss_accept_resume',
   'boss_reject_current',
   'boss_interview_demo',
+  'boss_send_to',
+  'boss_send_current',
+  'boss_list_jobs',
+  'boss_select_job',
+  'boss_filter_options',
+  'boss_resume_detail',
+  'boss_resume_batch',
 ]
 
 /** 找一个空闲端口（listen 0 后立即关闭） */
@@ -43,6 +50,9 @@ async function startClient(args: string[]): Promise<Client> {
     command: process.execPath,
     args,
     stderr: 'pipe',
+    // SDK Windows 下默认只继承 12 个白名单 env（防注入），AID_BOSS_AUTO_CHROME 测试开关
+    // 不在其中——不显式透传则 MCP 子进程会真拉起 Chrome，破坏测试隔离
+    env: Object.fromEntries(Object.entries(process.env).filter((e): e is [string, string] => e[1] !== undefined)),
   })
   transport.stderr?.on('data', () => {}) // 丢弃 server stderr 日志
   const client = new Client({ name: 'mcp-server-test', version: '0.1.0' }, { capabilities: {} })
@@ -72,7 +82,7 @@ test('initialize：serverInfo + instructions（含关键前提与写动作上限
   }
 })
 
-test('list_tools：7 个 tool，名称与 annotations 正确', async () => {
+test('list_tools：14 个 tool，名称与 annotations 正确', async () => {
   const client = await startClient([CLI, 'mcp', '--stdio', '--cdp-port', String(await freePort())])
   try {
     const { tools } = await client.listTools()

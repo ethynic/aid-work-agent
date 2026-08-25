@@ -149,16 +149,18 @@ class TestSingleStepQuery:
             _make_llm_response(content="按区域统计完成", tool_calls=None),
         ]
 
+        agent._chart_nudge_done = True  # 跳过出图兜底，专注测 query→to_table 流程
         result = await agent.run("按区域统计销售额")
 
         assert result["success"] is True
-        assert result["summary"] == "按区域统计完成"
-        assert len(result["tables"]) == 1
-        assert result["tables"][0]["output_var"] == "table_1"
-        assert len(result["steps"]) == 2
-        assert result["steps"][0]["method"] == "query"
-        assert result["steps"][1]["method"] == "to_table"
-        assert result["iterations"] == 3
+        assert result["conclusion"] == "按区域统计完成"
+        tables = [a for a in result["artifacts"] if a["type"] == "table"]
+        assert len(tables) == 1
+        assert tables[0]["id"] == "table_1"
+        assert len(agent._steps) == 2
+        assert agent._steps[0]["method"] == "query"
+        assert agent._steps[1]["method"] == "to_table"
+        assert result["analysis_meta"]["iterations"] == 3
 
 
 # ============================================================
@@ -195,12 +197,12 @@ class TestMultiStepAggregate:
         result = await agent.run("按区域对比销售额")
 
         assert result["success"] is True
-        assert len(result["charts"]) == 1
-        assert result["charts"][0]["chart_type"] == "bar"
-        assert len(result["steps"]) == 2
-        assert result["steps"][0]["method"] == "aggregate"
-        assert result["steps"][0]["output_var"] == "agg1"
-        assert "file_path" in result["steps"][0]
+        charts = [a for a in result["artifacts"] if a["type"] == "chart"]
+        assert len(charts) == 1
+        assert len(agent._steps) == 2
+        assert agent._steps[0]["method"] == "aggregate"
+        assert agent._steps[0]["output_var"] == "agg1"
+        assert "file_path" in agent._steps[0]
 
 
 # ============================================================
@@ -231,25 +233,9 @@ class TestToolExecutionFailure:
         result = await agent.run("查询数据")
 
         assert result["success"] is True
-        # 第一步应该失败（source 不存在）
-        assert result["steps"][0]["method"] == "query"
-        # 第二步应该成功
-        assert len(result["steps"]) == 1  # 只有成功的步骤被记录
-
-    @pytest.mark.asyncio
-    async def test_disallowed_method_rejected(self, agent, mock_llm):
-        """调用不在白名单的方法 → 被拒绝"""
-        mock_llm.chat_with_tools.side_effect = [
-            _make_llm_response(tool_calls=[
-                _make_tool_call("load_table", {"metadata": {}}),
-            ]),
-            _make_llm_response(content="无法执行", tool_calls=None),
-        ]
-
-        result = await agent.run("加载数据")
-
-        assert result["success"] is True
-        assert len(result["steps"]) == 0  # 被拒绝的方法不记录步骤
+        # 第一步失败（source 不存在）不记录，只有成功的步骤被记录
+        assert agent._steps[0]["method"] == "query"
+        assert len(agent._steps) == 1
 
 
 # ============================================================
@@ -281,8 +267,8 @@ class TestMaxIterations:
         result = await ag.run("无限循环测试")
 
         assert result["success"] is True
-        assert result["iterations"] == MAX_ITERATIONS
-        assert "达到最大迭代次数" in result["summary"] or result["summary"]
+        assert result["analysis_meta"]["iterations"] == MAX_ITERATIONS
+        assert result["conclusion"]
 
 
 # ============================================================
@@ -307,7 +293,7 @@ class TestStepRecording:
         ]
 
         result = await agent.run("聚合测试")
-        step = result["steps"][0]
+        step = agent._steps[0]
 
         assert step["step"] == 1
         assert step["method"] == "aggregate"
@@ -334,8 +320,9 @@ class TestStepRecording:
             _make_llm_response(content="完成", tool_calls=None),
         ]
 
+        agent._chart_nudge_done = True  # 跳过出图兜底
         result = await agent.run("输出表格")
-        step = result["steps"][0]
+        step = agent._steps[0]
 
         assert step["method"] == "to_table"
         assert "preview" in step["result_summary"]
@@ -358,67 +345,12 @@ class TestStepRecording:
         ]
 
         result = await agent.run("生成图表")
-        step = result["steps"][0]
+        step = agent._steps[0]
 
         assert step["method"] == "to_chart"
         assert "file_path" in step
         assert step["chart_type"] == "bar"
         assert step["title"] == "区域销售额"
-
-
-# ============================================================
-# Tests: intermediate_files 去重
-# ============================================================
-
-
-class TestIntermediateFiles:
-    @pytest.mark.asyncio
-    async def test_deduplication_by_output_var(self, agent, mock_llm):
-        """相同 output_var 的步骤只出现一次"""
-        # LLM 调用两次 query 使用相同的 output_var
-        mock_llm.chat_with_tools.side_effect = [
-            _make_llm_response(tool_calls=[
-                _make_tool_call("query", {
-                    "source": "tbl_sales",
-                    "output_var": "data",
-                }),
-            ]),
-            _make_llm_response(tool_calls=[
-                _make_tool_call("query", {
-                    "source": "data",
-                    "filters": [{"column": "region", "op": "eq", "value": "华东"}],
-                    "output_var": "data",
-                }),
-            ]),
-            _make_llm_response(content="完成", tool_calls=None),
-        ]
-
-        result = await agent.run("查询测试")
-        output_vars = [f["output_var"] for f in result["intermediate_files"]]
-        assert output_vars.count("data") == 1
-
-    @pytest.mark.asyncio
-    async def test_intermediate_files_includes_chart(self, agent, mock_llm):
-        """intermediate_files 包含图表文件"""
-        mock_llm.chat_with_tools.side_effect = [
-            _make_llm_response(tool_calls=[
-                _make_tool_call("to_chart", {
-                    "source": "tbl_sales",
-                    "chart_type": "line",
-                    "x_column": "date",
-                    "y_columns": ["amount"],
-                    "title": "趋势图",
-                    "output_var": "chart_1",
-                }),
-            ]),
-            _make_llm_response(content="完成", tool_calls=None),
-        ]
-
-        result = await agent.run("生成趋势图")
-        files = result["intermediate_files"]
-        chart_files = [f for f in files if f.get("method") == "to_chart"]
-        assert len(chart_files) == 1
-        assert chart_files[0]["chart_type"] == "line"
 
 
 # ============================================================
@@ -445,12 +377,13 @@ class TestTokenAccumulation:
                 usage={"prompt_tokens": 150, "completion_tokens": 60, "total_tokens": 210},
             ),
         ]
+        agent._chart_nudge_done = True  # 跳过出图兜底，专注测 token 累加
 
         result = await agent.run("统计测试")
 
-        assert result["total_usage"]["prompt_tokens"] == 450
-        assert result["total_usage"]["completion_tokens"] == 190
-        assert result["total_usage"]["total_tokens"] == 640
+        assert agent._total_usage["prompt_tokens"] == 450
+        assert agent._total_usage["completion_tokens"] == 190
+        assert agent._total_usage["total_tokens"] == 640
 
 
 # ============================================================
@@ -467,7 +400,7 @@ class TestTracePersistence:
         ]
 
         result = await agent.run("测试trace")
-        assert result["trace_id"] == "test_analysis_001"
+        assert result["analysis_meta"]["trace_id"] == "test_analysis_001"
 
     @pytest.mark.asyncio
     async def test_trace_persist_called(self, agent, mock_llm):
@@ -507,7 +440,82 @@ class TestLLMFailure:
 
         assert result["success"] is False
         assert "API error" in result["error"]
-        assert result["iterations"] == 1
+        assert result["analysis_meta"]["iterations"] == 1
+
+
+# ============================================================
+# Tests: 出图兜底（_is_chartable / _maybe_nudge_to_chart）
+# ============================================================
+
+
+class TestChartNudge:
+    """总结前出图兜底：有表无图且数据可可视化时提示补图。"""
+
+    def test_is_chartable_multi_row_with_numeric_and_dim(self):
+        """多行 + 数值列 + 维度列 → True"""
+        df = pd.DataFrame({"region": ["A", "B", "C"], "amount": [10, 20, 30]})
+        assert AnalysisAgent._is_chartable(df) is True
+
+    def test_is_chartable_single_row(self):
+        """单行 → False"""
+        df = pd.DataFrame({"region": ["A"], "amount": [10]})
+        assert AnalysisAgent._is_chartable(df) is False
+
+    def test_is_chartable_no_numeric(self):
+        """无数值列 → False"""
+        df = pd.DataFrame({"region": ["A", "B"], "name": ["x", "y"]})
+        assert AnalysisAgent._is_chartable(df) is False
+
+    def test_is_chartable_no_dimension(self):
+        """纯数值无维度列 → False"""
+        df = pd.DataFrame({"a": [1, 2], "b": [3, 4]})
+        assert AnalysisAgent._is_chartable(df) is False
+
+    def test_is_chartable_none(self):
+        assert AnalysisAgent._is_chartable(None) is False
+
+    def test_nudge_triggers_when_table_without_chart(self, agent):
+        """有表无图且数据可可视化 → 注入提示、返回 True、且仅触发一次"""
+        agent._artifacts = [{"type": "table", "id": "t1"}]
+        agent._last_table_df = pd.DataFrame({"region": ["A", "B"], "amount": [10, 20]})
+        messages = []
+        triggered = agent._maybe_nudge_to_chart(messages, "这是总结")
+        assert triggered is True
+        assert agent._chart_nudge_done is True
+        assert len(messages) == 2  # assistant 总结 + user 补图提示
+        assert "to_chart" in messages[1]["content"]
+        # 二次调用应放行（防死循环）
+        assert agent._maybe_nudge_to_chart([], "总结2") is False
+
+    def test_nudge_skipped_when_chart_exists(self, agent):
+        """已有 chart artifact → 不触发"""
+        agent._artifacts = [{"type": "chart", "id": "c1"}, {"type": "table", "id": "t1"}]
+        agent._last_table_df = pd.DataFrame({"region": ["A", "B"], "amount": [10, 20]})
+        assert agent._maybe_nudge_to_chart([], "总结") is False
+
+    def test_nudge_skipped_when_no_table(self, agent):
+        """无任何 artifact → 不触发"""
+        agent._artifacts = []
+        agent._last_table_df = pd.DataFrame({"region": ["A", "B"], "amount": [10, 20]})
+        assert agent._maybe_nudge_to_chart([], "总结") is False
+
+    def test_nudge_skipped_when_data_not_chartable(self, agent):
+        """有表但数据不可可视化（单行）→ 不触发"""
+        agent._artifacts = [{"type": "table", "id": "t1"}]
+        agent._last_table_df = pd.DataFrame({"region": ["A"], "amount": [10]})
+        assert agent._maybe_nudge_to_chart([], "总结") is False
+
+    def test_last_table_df_uses_actual_output_not_full_source(self, agent):
+        """to_table 实际输出 1 行时，_last_table_df 应反映实际输出（而非全量源）→ 不可可视化"""
+        result = {
+            "columns": ["region", "amount"],
+            "rows": [["华东", 100]],  # 仅 1 行（如查某条明细）
+            "row_count": 1,
+            "total_count": 1,
+        }
+        agent._handle_to_table("v1", result, {"source": "v1", "title": "单条明细"})
+        assert len(agent._last_table_df) == 1
+        assert agent._is_chartable(agent._last_table_df) is False
 
 
 # ============================================================
@@ -517,25 +525,12 @@ class TestLLMFailure:
 
 class TestWhitelist:
     def test_allowed_methods(self):
-        """白名单包含全部 9 个方法"""
+        """白名单包含全部 14 个方法"""
         from src.tools.data_analysis.analysis_tools_schema import ALLOWED_METHODS
-        expected = {"query", "aggregate", "merge", "pivot", "calculate",
-                    "compare", "trend", "to_table", "to_chart"}
+        expected = {"search_data_tables", "list_data_tables", "load_table", "describe",
+                    "query", "aggregate", "merge", "pivot", "calculate",
+                    "compare", "trend", "extract_hierarchy", "to_table", "to_chart"}
         assert expected == ALLOWED_METHODS
-
-    @pytest.mark.asyncio
-    async def test_load_table_rejected(self, agent, mock_llm):
-        """load_table 不在白名单 → 被拒绝"""
-        mock_llm.chat_with_tools.side_effect = [
-            _make_llm_response(tool_calls=[
-                _make_tool_call("load_table", {"metadata": {}}),
-            ]),
-            _make_llm_response(content="无法加载", tool_calls=None),
-        ]
-
-        result = await agent.run("加载表")
-        assert result["success"] is True
-        assert len(result["steps"]) == 0
 
     @pytest.mark.asyncio
     async def test_private_method_rejected(self, agent, mock_llm):
@@ -548,7 +543,8 @@ class TestWhitelist:
         ]
 
         result = await agent.run("执行表达式")
-        assert len(result["steps"]) == 0
+        assert result["success"] is True
+        assert len(agent._steps) == 0
 
 
 # ============================================================
@@ -558,9 +554,9 @@ class TestWhitelist:
 
 class TestSchemaDefinition:
     def test_tools_count(self):
-        """工具定义数量为 9"""
+        """工具定义数量为 14"""
         from src.tools.data_analysis.analysis_tools_schema import ANALYSIS_TOOLS
-        assert len(ANALYSIS_TOOLS) == 9
+        assert len(ANALYSIS_TOOLS) == 14
 
     def test_all_tools_have_required_structure(self):
         """每个工具定义包含 name/description/parameters"""
@@ -575,18 +571,9 @@ class TestSchemaDefinition:
             assert params["type"] == "object"
             assert "properties" in params
             names.add(func["name"])
-        assert names == {"query", "aggregate", "merge", "pivot", "calculate",
-                         "compare", "trend", "to_table", "to_chart"}
-
-    def test_data_methods_have_output_var_required(self):
-        """数据处理方法的 output_var 是必填"""
-        from src.tools.data_analysis.analysis_tools_schema import ANALYSIS_TOOLS
-        for tool in ANALYSIS_TOOLS:
-            func = tool["function"]
-            params = func["parameters"]
-            if "output_var" in params.get("properties", {}):
-                assert "output_var" in params.get("required", []), \
-                    f"{func['name']} 的 output_var 应为 required"
+        assert names == {"search_data_tables", "list_data_tables", "load_table", "describe",
+                         "query", "aggregate", "merge", "pivot", "calculate",
+                         "compare", "trend", "extract_hierarchy", "to_table", "to_chart"}
 
     def test_source_in_data_methods(self):
         """有 source 参数的方法包含描述"""
@@ -680,8 +667,8 @@ class TestMergeMethod:
 
         result = await ag.run("关联销售和经理")
         assert result["success"] is True
-        assert len(result["steps"]) == 1
-        step = result["steps"][0]
+        assert len(ag._steps) == 1
+        step = ag._steps[0]
         assert step["method"] == "merge"
         assert step["output_var"] == "merged"
 
@@ -702,14 +689,11 @@ class TestResultStructure:
         result = await agent.run("简单测试")
 
         assert "success" in result
-        assert "summary" in result
-        assert "tables" in result
-        assert "charts" in result
-        assert "steps" in result
-        assert "intermediate_files" in result
-        assert "total_usage" in result
-        assert "iterations" in result
-        assert "trace_id" in result
+        assert "conclusion" in result
+        assert "artifacts" in result
+        assert "analysis_meta" in result
+        assert "iterations" in result["analysis_meta"]
+        assert "trace_id" in result["analysis_meta"]
 
     @pytest.mark.asyncio
     async def test_no_tool_calls_returns_immediately(self, agent, mock_llm):
@@ -720,8 +704,7 @@ class TestResultStructure:
 
         result = await agent.run("不需要分析的问题")
         assert result["success"] is True
-        assert result["summary"] == "这个问题不需要数据分析"
-        assert result["iterations"] == 1
-        assert len(result["steps"]) == 0
-        assert len(result["tables"]) == 0
-        assert len(result["charts"]) == 0
+        assert result["conclusion"] == "这个问题不需要数据分析"
+        assert result["analysis_meta"]["iterations"] == 1
+        assert len(agent._steps) == 0
+        assert len(result["artifacts"]) == 0

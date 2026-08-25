@@ -5,11 +5,18 @@
  * cli 元数据供薄 renderer 使用：write=true 的命令在执行前打印 ⚠️ 写动作提示。
  */
 import { createBossFilterOperation, createBossClearFilterOperation } from './bossFilter.js'
+import { createBossFilterOptionsOperation } from './bossFilterOptions.js'
 import { createBossGotoOperation } from './bossGoto.js'
 import { createBossGreetOperation } from './bossGreet.js'
 import { createBossAcceptResumeOperation } from './bossAcceptResume.js'
 import { createBossRejectCurrentOperation } from './bossRejectCurrent.js'
 import { createBossInterviewDemoOperation } from './bossInterviewDemo.js'
+import { createBossSendToOperation } from './bossSendTo.js'
+import { createBossSendCurrentOperation } from './bossSendCurrent.js'
+import { createBossListJobsOperation } from './bossListJobs.js'
+import { createBossSelectJobOperation } from './bossSelectJob.js'
+import { createBossResumeDetailOperation } from './bossResumeDetail.js'
+import { createBossResumeBatchOperation } from './bossResumeBatch.js'
 import type { BossOperation } from './types.js'
 
 export interface OperationEntry {
@@ -24,12 +31,19 @@ export interface OperationEntry {
 
 export const OPERATIONS: Record<string, OperationEntry> = {
   boss_filter: { operation: createBossFilterOperation(), cli: { write: true } },
+  boss_filter_options: { operation: createBossFilterOptionsOperation(), cli: { write: false } },
   boss_clear_filter: { operation: createBossClearFilterOperation(), cli: { write: true } },
   boss_goto: { operation: createBossGotoOperation(), cli: { write: false } },
   boss_greet: { operation: createBossGreetOperation(), cli: { write: true } },
   boss_accept_resume: { operation: createBossAcceptResumeOperation(), cli: { write: true } },
   boss_reject_current: { operation: createBossRejectCurrentOperation(), cli: { write: true } },
   boss_interview_demo: { operation: createBossInterviewDemoOperation(), cli: { write: false } },
+  boss_send_to: { operation: createBossSendToOperation(), cli: { write: true } },
+  boss_send_current: { operation: createBossSendCurrentOperation(), cli: { write: true } },
+  boss_list_jobs: { operation: createBossListJobsOperation(), cli: { write: false } },
+  boss_select_job: { operation: createBossSelectJobOperation(), cli: { write: true } },
+  boss_resume_detail: { operation: createBossResumeDetailOperation(), cli: { write: false } },
+  boss_resume_batch: { operation: createBossResumeBatchOperation(), cli: { write: false } },
 }
 
 export const OPERATION_NAMES = Object.keys(OPERATIONS)

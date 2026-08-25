@@ -88,7 +88,7 @@ async def get_options(request: Request):
         ]
         return _ok(opts_dict)
     except Exception as e:
-        logger.error(f"视频生成-查询选项失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"视频生成-查询选项失败: {e}")
         return _fail("查询选项失败", e)
 
 
@@ -98,7 +98,7 @@ async def list_scenes(request: Request):
     try:
         return _ok({"items": _service.list_scenes()})
     except Exception as e:
-        logger.error(f"视频生成-场景列表失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"视频生成-场景列表失败: {e}")
         return _fail("查询场景失败", e)
 
 
@@ -127,7 +127,7 @@ async def create_session(request: Request):
     except KeyError as e:
         return _fail(f"缺少必填参数: {e}")
     except Exception as e:
-        logger.error(f"视频生成-创建会话失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"视频生成-创建会话失败: {e}")
         return _fail("创建会话失败", e)
 
 
@@ -138,7 +138,7 @@ async def list_sessions(request: Request):
         limit = int(request.query_params.get("limit", 20))
         return _ok({"items": _service.list_sessions(_tenant_id(request), limit=limit)})
     except Exception as e:
-        logger.error(f"视频生成-会话列表失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"视频生成-会话列表失败: {e}")
         return _fail("查询会话列表失败", e)
 
 
@@ -151,7 +151,7 @@ async def get_session(request: Request, session_id: str):
             return _fail("会话不存在或无权限")
         return _ok(result)
     except Exception as e:
-        logger.error(f"视频生成-会话详情失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"视频生成-会话详情失败: {e}")
         return _fail("查询会话详情失败", e)
 
 
@@ -166,5 +166,5 @@ async def get_download_url(request: Request, card_id: str):
             return _fail("成片尚未就绪或不可用")
         return _ok({"download_url": _download_url(file_id), "file_id": file_id})
     except Exception as e:
-        logger.error(f"视频生成-下载URL失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"视频生成-下载URL失败: {e}")
         return _fail("获取下载地址失败", e)

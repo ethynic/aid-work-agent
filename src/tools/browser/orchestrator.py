@@ -208,6 +208,13 @@ class BrowserOrchestrator:
             max_tokens=1000,
         )
 
+        from src.services.session_record import record_background_llm_usage
+        record_background_llm_usage(
+            response.get("usage") if isinstance(response, dict) else None,
+            source="browser_orchestrator",
+            model=llm_gateway.get_model_name(),
+        )
+
         content = response.get("content", "")
         logger.debug("[Orchestrator] LLM 返回长度: {}", len(content))
 

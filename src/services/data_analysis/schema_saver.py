@@ -75,7 +75,27 @@ async def save_schema_to_knowledge(
         from src.config.settings import get_embedding_api_key
         embedding_api_key = get_embedding_api_key()
         embedding_client = TextEmbeddingV3Client(api_key=embedding_api_key)
+        embedding_client.reset_usage()
         embeddings = await embedding_client.embed_batch([schema_text])
+
+        # 补计费：schema 向量化消耗（对话内累加到当前记录，管理后台独立落库）
+        emb_tokens = int(getattr(embedding_client, "last_usage_tokens", 0) or 0)
+        if emb_tokens > 0:
+            try:
+                from src.services.session_record import (
+                    SessionRecordManager, record_admin_embedding_usage,
+                )
+                record = SessionRecordManager.get_current_record()
+                if record:
+                    record.add_embedding_usage(emb_tokens, model=embedding_client.model)
+                else:
+                    record_admin_embedding_usage(
+                        embedding_client,
+                        tenant_id=tenant_id,
+                        source_label="save_schema_to_knowledge",
+                    )
+            except Exception:
+                logger.opt(exception=True).debug("Failed to record schema embedding usage")
 
         metadata = {
             "connector_id": connector_id,
@@ -153,5 +173,5 @@ async def save_schema_to_knowledge(
         return {"success": True, "doc_id": doc_id, "message": "Schema 已保存到知识库"}
 
     except Exception as e:
-        logger.error(f"保存 schema 到知识库失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"保存 schema 到知识库失败: {e}")
         return {"success": False, "error": str(e)}

@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.core.image_asset import ImageRef
+from src.tools.context import ToolExecutionContext, tool_execution_scope
 from src.tools.knowledge.attraction_search_tool import AttractionSearchTool
 
 pytestmark = pytest.mark.tools
@@ -78,13 +79,6 @@ def _make_mock_conn(fetchall_side_effects):
     return mock_conn
 
 
-def _make_tool_with_tenant():
-    """构造 AttractionSearchTool 并注入 tenant_id，绕开 ContextVar"""
-    tool = AttractionSearchTool()
-    tool.set_tenant_id(TENANT_ID)
-    return tool
-
-
 # ============================================================
 # 测试用例
 # ============================================================
@@ -105,9 +99,12 @@ async def test_search_returns_cover_image_when_metadata_has_cover():
             get_ref_by_file_id=AsyncMock(return_value=expected_ref)
         ),
     ):
-        tool = _make_tool_with_tenant()
+        tool = AttractionSearchTool()
         # 跳过 _embed（绕开 dashscope）
-        with patch.object(AttractionSearchTool, "_embed", return_value=[0.1] * 1024):
+        with (
+            patch.object(AttractionSearchTool, "_embed", return_value=[0.1] * 1024),
+            tool_execution_scope(ToolExecutionContext(tenant_id=TENANT_ID)),
+        ):
             result = await tool.execute(query="黄果树", top_k=20)
 
     assert result["success"] is True
@@ -133,8 +130,11 @@ async def test_search_returns_null_when_no_cover():
         "src.tools.knowledge.attraction_search_tool.get_image_registry",
         return_value=MagicMock(get_ref_by_file_id=AsyncMock(return_value=None)),
     ):
-        tool = _make_tool_with_tenant()
-        with patch.object(AttractionSearchTool, "_embed", return_value=[0.1] * 1024):
+        tool = AttractionSearchTool()
+        with (
+            patch.object(AttractionSearchTool, "_embed", return_value=[0.1] * 1024),
+            tool_execution_scope(ToolExecutionContext(tenant_id=TENANT_ID)),
+        ):
             result = await tool.execute(query="黄果树", top_k=20)
 
     assert result["success"] is True
@@ -154,8 +154,11 @@ async def test_search_returns_null_when_images_meta_not_dict():
         "src.tools.knowledge.attraction_search_tool.get_image_registry",
         return_value=MagicMock(get_ref_by_file_id=AsyncMock(return_value=None)),
     ):
-        tool = _make_tool_with_tenant()
-        with patch.object(AttractionSearchTool, "_embed", return_value=[0.1] * 1024):
+        tool = AttractionSearchTool()
+        with (
+            patch.object(AttractionSearchTool, "_embed", return_value=[0.1] * 1024),
+            tool_execution_scope(ToolExecutionContext(tenant_id=TENANT_ID)),
+        ):
             result = await tool.execute(query="黄果树", top_k=20)
 
     assert result["success"] is True
@@ -178,8 +181,11 @@ async def test_search_resolve_failure_does_not_block():
         "src.tools.knowledge.attraction_search_tool.get_image_registry",
         return_value=boom_registry,
     ):
-        tool = _make_tool_with_tenant()
-        with patch.object(AttractionSearchTool, "_embed", return_value=[0.1] * 1024):
+        tool = AttractionSearchTool()
+        with (
+            patch.object(AttractionSearchTool, "_embed", return_value=[0.1] * 1024),
+            tool_execution_scope(ToolExecutionContext(tenant_id=TENANT_ID)),
+        ):
             result = await tool.execute(query="黄果树", top_k=20)
 
     assert result["success"] is True

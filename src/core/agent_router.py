@@ -28,6 +28,12 @@ class AgentRouter:
     缓存元信息同步到 Redis，使各 worker 能感知其他 worker 中的实例。
     """
 
+    # 自定义智能体（subagent_definitions DB 定义，from_db=True）的运行时字段，用于检测配置是否被修改
+    _CONFIG_CHANGE_FIELDS = (
+        "llm_provider", "llm_model_codes", "tools", "skills",
+        "context", "reply_style", "chat_toolbar",
+    )
+
     def __init__(self):
         # 使用现有全局单例，避免重复初始化
         # master_agent 内部通过 ShortTermMemory 的 Dict[session_id, deque] 实现会话隔离
@@ -36,6 +42,35 @@ class AgentRouter:
 
     def _redis_key(self, cache_key: str) -> str:
         return redis_client.make_key("standalone_agent", cache_key)
+
+    @staticmethod
+    def _config_changed(old, new) -> bool:
+        """比较两个 SubagentConfig 的运行时字段，判断配置是否被修改"""
+        return any(
+            getattr(old, f) != getattr(new, f)
+            for f in AgentRouter._CONFIG_CHANGE_FIELDS
+        )
+
+    def _should_rebuild(self, cached: Agent, subagent_name: str) -> bool:
+        """
+        判断缓存的自定义智能体实例是否需要重建。
+
+        自定义智能体配置存于数据库，可被管理后台修改，而进程内 Agent 实例的
+        subagent_config 在构造时固定且无法跨 worker 感知变更。因此每次消息进入时
+        实时读取最新 DB 配置比对：配置变了 → 重建实例立即生效（无需重启）；
+        配置没变 → 复用实例以保留会话状态。内置（文件系统）智能体永远复用。
+        """
+        if not getattr(cached.subagent_config, "from_db", False):
+            return False
+        registry = self.master_agent.subagent_registry if self.master_agent.subagent_registry else None
+        if not registry:
+            return False
+        from src.subagents.factory import AgentFactory
+        latest = AgentFactory.get_runtime_config(registry, subagent_name)
+        if latest is None:
+            # DB 无定义（已删除/无 system_prompt）时复用旧实例，避免中断进行中的会话
+            return False
+        return AgentRouter._config_changed(cached.subagent_config, latest)
 
     def get_agent(
         self,
@@ -58,6 +93,19 @@ class AgentRouter:
             return self.master_agent
 
         cache_key = f"{session_id}:{subagent_name}"
+        cached = self._standalone_cache.get(cache_key)
+        if cached is not None:
+            # 自定义智能体：配置被修改则重建实例（下一条消息立即生效），未修改则复用保持会话状态
+            if self._should_rebuild(cached, subagent_name):
+                logger.info(f"[AgentRouter] Rebuilding standalone agent (config changed): {cache_key}")
+                self._standalone_cache.pop(cache_key, None)
+                try:
+                    redis_client.delete(self._redis_key(cache_key))
+                except Exception:
+                    pass
+            else:
+                return cached
+
         if cache_key not in self._standalone_cache:
             # 检查 Redis 中是否有其他 worker 已创建该 standalone agent
             try:

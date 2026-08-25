@@ -177,7 +177,7 @@ async def list_personal_reports(
         )
         return {"success": True, "data": reports, "total": len(reports)}
     except Exception as e:
-        logger.error(f"获取历史日报列表失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"获取历史日报列表失败: {e}")
         raise HTTPException(status_code=500, detail="获取历史日报列表失败")
 
 
@@ -192,7 +192,7 @@ async def get_preferences(request: Request):
         prefs = WorkReportPreferenceDB.get(tenant_id, user["user_id"])
         return {"success": True, "data": prefs}
     except Exception as e:
-        logger.error(f"获取推送配置失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"获取推送配置失败: {e}")
         raise HTTPException(status_code=500, detail="获取推送配置失败")
 
 
@@ -236,7 +236,7 @@ async def update_preferences(request: Request, body: UpdatePreferencesRequest):
         prefs = WorkReportPreferenceDB.upsert(tenant_id, user["user_id"], **fields)
         return {"success": True, "data": prefs}
     except Exception as e:
-        logger.error(f"更新推送配置失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"更新推送配置失败: {e}")
         raise HTTPException(status_code=500, detail="更新推送配置失败")
 
 
@@ -262,7 +262,7 @@ async def _get_or_generate_personal(
         if existing:
             return {"success": True, "data": existing, "cached": True}
     except Exception as e:
-        logger.error(f"查询个人日报缓存失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"查询个人日报缓存失败: {e}")
 
     # 2. 不自动生成（指定日期查询场景）
     if not auto_generate:
@@ -303,10 +303,9 @@ async def _generate_personal_report(
         )
         return {"success": True, "data": report, "cached": False}
     except Exception as e:
-        logger.error(
+        logger.opt(exception=True).error(
             f"生成个人日报失败: tenant={tenant_id}, user={user_id}, "
             f"date={report_date}, type={report_type}, error={e}",
-            exc_info=True,
         )
         raise HTTPException(status_code=500, detail=f"生成日报失败：{e}")
 
@@ -342,7 +341,7 @@ async def get_team_today(request: Request, report_type: str = Query("daily")):
         )
         return {"success": True, "data": existing, "cached": existing is not None}
     except Exception as e:
-        logger.error(f"查询团队日报缓存失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"查询团队日报缓存失败: {e}")
         raise HTTPException(status_code=500, detail="查询团队日报失败")
 
 
@@ -365,7 +364,7 @@ async def get_team_by_date(request: Request, report_date: str, report_type: str 
         )
         return {"success": True, "data": existing, "cached": existing is not None}
     except Exception as e:
-        logger.error(f"查询团队日报缓存失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"查询团队日报缓存失败: {e}")
         raise HTTPException(status_code=500, detail="查询团队日报失败")
 
 
@@ -421,9 +420,8 @@ async def _generate_team_report(
         )
         return {"success": True, "data": report, "cached": False}
     except Exception as e:
-        logger.error(
+        logger.opt(exception=True).error(
             f"生成团队日报失败: tenant={tenant_id}, date={report_date}, "
             f"type={report_type}, error={e}",
-            exc_info=True,
         )
         raise HTTPException(status_code=500, detail=f"生成团队日报失败：{e}")

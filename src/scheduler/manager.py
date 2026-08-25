@@ -71,7 +71,7 @@ class ScheduledTaskManager:
                 self._register_job(task)
                 registered_count += 1
             except Exception as e:
-                logger.error(f"后端日志：注册定时任务失败 task_id={task['task_id']}, {e}", exc_info=True)
+                logger.opt(exception=True).error(f"后端日志：注册定时任务失败 task_id={task['task_id']}, {e}")
 
         self._scheduler.start()
         self._running = True
@@ -239,6 +239,22 @@ class ScheduledTaskManager:
         except Exception as e:
             logger.error(f"后端日志：注册视频生成轮询任务失败: {e}")
 
+        # ===== skill_ws 临时工作目录残留清理（每日 03:30）=====
+        # 正常路径由 agent.process_message 结束时删除工作目录；
+        # 本任务兜底清理进程崩溃 / 异常退出遗留的 skill_ws_* 目录
+        try:
+            self._scheduler.add_job(
+                self._run_skill_ws_cleanup,
+                CronTrigger(hour=3, minute=30, timezone="Asia/Shanghai"),
+                id="job_system_skill_ws_cleanup",
+                name="Skill Workspace Cleanup",
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info("后端日志：已注册技能工作目录清理任务 (cron=03:30)")
+        except Exception as e:
+            logger.error(f"后端日志：注册技能工作目录清理任务失败: {e}")
+
     def _run_memory_summarizer(self):
         """执行每日记忆总结（APScheduler 回调）"""
         try:
@@ -248,7 +264,7 @@ class ScheduledTaskManager:
             stats = loop.run_until_complete(run_memory_summarization())
             logger.info(f"后端日志：每日记忆总结完成: {stats}")
         except Exception as e:
-            logger.error(f"后端日志：每日记忆总结失败: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"后端日志：每日记忆总结失败: {e}")
         finally:
             try:
                 loop.close()
@@ -264,7 +280,7 @@ class ScheduledTaskManager:
             stats = loop.run_until_complete(run_background_compression_scan())
             logger.info(f"后端日志：上下文压缩扫描完成: {stats}")
         except Exception as e:
-            logger.error(f"后端日志：上下文压缩扫描失败: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"后端日志：上下文压缩扫描失败: {e}")
         finally:
             try:
                 loop.close()
@@ -314,11 +330,10 @@ class ScheduledTaskManager:
                         try:
                             ScheduledTaskDB.clear_manual_trigger(tid)
                         except Exception as e:
-                            logger.error(f"后端日志：清除手动触发标记失败 task_id={tid}, {e}", exc_info=True)
+                            logger.opt(exception=True).error(f"后端日志：清除手动触发标记失败 task_id={tid}, {e}")
                 except Exception as e:
-                    logger.error(
+                    logger.opt(exception=True).error(
                         f"后端日志：reconcile 处理单任务失败 task_id={tid}（跳过该任务，继续对账）: {e}",
-                        exc_info=True,
                     )
 
             # 清理 DB 中已不存在的任务（被 cancel/delete）
@@ -327,7 +342,7 @@ class ScheduledTaskManager:
                     self.remove_task(tid)
                     self._reconcile_seen.pop(tid, None)
         except Exception as e:
-            logger.error(f"后端日志：reconcile 对账失败: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"后端日志：reconcile 对账失败: {e}")
 
     def _fire_once(self, task_id: str, trigger_type: str = "manual"):
         """立即执行一次任务（独立线程 + 新 event loop）。
@@ -342,9 +357,8 @@ class ScheduledTaskManager:
                 asyncio.set_event_loop(loop)
                 loop.run_until_complete(_executor.execute(task_id, trigger_type=trigger_type))
             except Exception as e:
-                logger.error(
+                logger.opt(exception=True).error(
                     f"后端日志：_fire_once 执行失败 task_id={task_id}, trigger={trigger_type}, {e}",
-                    exc_info=True,
                 )
             finally:
                 try:
@@ -366,7 +380,7 @@ class ScheduledTaskManager:
             if cleaned > 0:
                 logger.debug(f"后端日志：Memory cleanup cleaned {cleaned} expired sessions")
         except Exception as e:
-            logger.error(f"后端日志：会话记忆清理异常: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"后端日志：会话记忆清理异常: {e}")
 
     # ===== D15：dedup_cleanup 回调（同步，保留 psycopg2 降级）=====
     def _run_dedup_cleanup(self):
@@ -386,7 +400,47 @@ class ScheduledTaskManager:
                 f"后端日志：Channel dedup cleanup error (DB connection issue, will retry next cycle): {e}"
             )
         except Exception as e:
-            logger.error(f"后端日志：Channel dedup cleanup error: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"后端日志：Channel dedup cleanup error: {e}")
+
+    # ===== skill_ws 残留清理回调（同步）=====
+    def _run_skill_ws_cleanup(self):
+        """清理租户 temp 下超过 3 天的 skill_ws_* 残留目录（APScheduler 回调）。
+
+        正常路径由 agent.process_message 结束时删除工作目录；
+        本任务兜底处理进程崩溃 / 异常退出遗留的目录。
+        """
+        try:
+            import shutil
+            import time
+            from pathlib import Path
+
+            from src.core.storage import get_tenants_storage_root
+
+            tenants_root = Path(get_tenants_storage_root())
+            if not tenants_root.exists():
+                return 0
+
+            max_age_seconds = 3 * 24 * 3600  # 3 天
+            now = time.time()
+            cleaned = 0
+            for ws_dir in tenants_root.glob("*/temp/skill_ws_*"):
+                try:
+                    if not ws_dir.is_dir():
+                        continue
+                    # 目录 mtime 随最后写入更新；超过 3 天视为无活跃使用的残留
+                    if now - ws_dir.stat().st_mtime <= max_age_seconds:
+                        continue
+                    shutil.rmtree(ws_dir, ignore_errors=True)
+                    cleaned += 1
+                    logger.info(f"后端日志：清理过期技能工作目录 {ws_dir}")
+                except Exception as e:
+                    logger.warning(f"后端日志：清理技能工作目录失败 {ws_dir}: {e}")
+            if cleaned > 0:
+                logger.info(f"后端日志：skill_ws 残留清理完成，共清理 {cleaned} 个目录")
+            return cleaned
+        except Exception as e:
+            logger.opt(exception=True).error(f"后端日志：skill_ws 残留清理任务异常: {e}")
+            return 0
 
     # ===== D14：wecom_kf_timeout 回调（async tick + 新 event loop）=====
     def _run_wecom_kf_timeout(self):
@@ -400,7 +454,7 @@ class ScheduledTaskManager:
             asyncio.set_event_loop(loop)
             loop.run_until_complete(self._wecom_kf_tick())
         except Exception as e:
-            logger.error(f"后端日志：微信客服超时检查异常: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"后端日志：微信客服超时检查异常: {e}")
         finally:
             try:
                 loop.close()
@@ -553,19 +607,17 @@ class ScheduledTaskManager:
                     await adapter.close()
 
                 except Exception as e:
-                    logger.error(
+                    logger.opt(exception=True).error(
                         f"[wecom_kf] 超时检查处理单个会话异常: "
                         f"session_id={session.get('session_id', 'unknown')}: {e}",
-                        exc_info=True
                     )
         except Exception as e:
             try:
                 raw_sql = cursor.query.decode() if cursor and cursor.query else None
             except Exception:
                 raw_sql = None
-            logger.error(
+            logger.opt(exception=True).error(
                 f"[wecom_kf] 超时检查异常: {e} | raw_sql={raw_sql}",
-                exc_info=True
             )
 
     # ===== D10：S1 发布调度回调（占位，随 S1 落地）=====
@@ -579,7 +631,7 @@ class ScheduledTaskManager:
             stats = loop.run_until_complete(dispatcher.dispatch_once())
             logger.info(f"后端日志：社媒发布调度完成: {stats}")
         except Exception as e:
-            logger.error(f"后端日志：社媒发布调度失败: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"后端日志：社媒发布调度失败: {e}")
         finally:
             try:
                 loop.close()
@@ -605,7 +657,7 @@ class ScheduledTaskManager:
             )
             logger.info(f"后端日志：工作成果复盘完成 batch_id={batch_id}")
         except Exception as e:
-            logger.error(f"后端日志：工作成果复盘失败: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"后端日志：工作成果复盘失败: {e}")
         finally:
             try:
                 loop.close()
@@ -632,7 +684,7 @@ class ScheduledTaskManager:
             asyncio.set_event_loop(loop)
             loop.run_until_complete(self._video_gen_poll_tick())
         except Exception as e:
-            logger.error(f"后端日志：视频生成轮询异常: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"后端日志：视频生成轮询异常: {e}")
             try:
                 from src.core.temp_logger import tlog
                 tlog("video-agent-阶段三", "background_runner 轮询异常 err={err}", err=str(e), level="ERROR")
@@ -659,7 +711,7 @@ class ScheduledTaskManager:
             if n > 0:
                 logger.info(f"后端日志：视频生成轮询处理 {n} 条 card")
         except Exception as e:
-            logger.error(f"后端日志：视频生成轮询 tick 异常: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"后端日志：视频生成轮询 tick 异常: {e}")
             try:
                 from src.core.temp_logger import tlog
                 tlog("video-agent-阶段三", "background_runner tick 异常 err={err}", err=str(e), level="ERROR")
@@ -699,7 +751,7 @@ class ScheduledTaskManager:
             logger.info(f"后端日志：定时任务已移除 task_id={task_id}")
             return True
         except Exception as e:
-            logger.error(f"后端日志：移除定时任务失败 task_id={task_id}, {e}", exc_info=True)
+            logger.opt(exception=True).error(f"后端日志：移除定时任务失败 task_id={task_id}, {e}")
             return False
 
     def _register_job(self, task: dict) -> Optional[str]:
@@ -761,7 +813,7 @@ class ScheduledTaskManager:
             asyncio.set_event_loop(loop)
             loop.run_until_complete(_executor.execute(task_id, trigger_type="scheduled"))
         except Exception as e:
-            logger.error(f"后端日志：定时任务执行异常 task_id={task_id}, {e}", exc_info=True)
+            logger.opt(exception=True).error(f"后端日志：定时任务执行异常 task_id={task_id}, {e}")
         finally:
             try:
                 loop.close()

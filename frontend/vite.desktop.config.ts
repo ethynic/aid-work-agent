@@ -1,38 +1,16 @@
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import path from 'path'
+import { frontendAliases } from './config/aliases'
+import { moduleManifest } from './config/moduleManifest'
 
-function desktopModuleManifest() {
-  return {
-    name: 'desktop-module-manifest',
-    generateBundle(_: unknown, bundle: Record<string, { type: string; modules?: Record<string, unknown> }>) {
-      const modules = new Set<string>()
-      for (const output of Object.values(bundle)) {
-        if (output.type !== 'chunk' || !output.modules) continue
-        for (const moduleId of Object.keys(output.modules)) {
-          const cleanId = moduleId.split('?')[0]
-          if (path.isAbsolute(cleanId)) {
-            modules.add(path.relative(process.cwd(), cleanId).replaceAll('\\', '/'))
-          }
-        }
-      }
-      this.emitFile({
-        type: 'asset',
-        fileName: 'desktop-module-manifest.json',
-        source: `${JSON.stringify([...modules].sort(), null, 2)}\n`
-      })
-    }
-  }
-}
-
-export default defineConfig(() => {
+export default defineConfig(({ command }) => {
+  const legacyDevelopmentEntry = command === 'serve' && process.env.VITE_DESKTOP_LEGACY_UI === '1'
   return {
     base: '/',
-    plugins: [vue(), desktopModuleManifest()],
+    plugins: [vue(), moduleManifest('desktop-module-manifest.json')],
     resolve: {
-      alias: {
-        '@': path.resolve(__dirname, 'src')
-      }
+      alias: frontendAliases,
     },
     build: {
       outDir: 'dist-desktop',
@@ -40,13 +18,10 @@ export default defineConfig(() => {
       manifest: true,
       cssCodeSplit: true,
       rollupOptions: {
-        input: path.resolve(__dirname, 'desktop.html'),
+        input: path.resolve(__dirname, legacyDevelopmentEntry ? 'desktop.legacy.html' : 'desktop.html'),
         output: {
           manualChunks: {
             'vue-vendor': ['vue', 'vue-router'],
-            'markdown-renderer': ['marked', 'marked-highlight', 'highlight.js'],
-            'ui-libs': ['vue-toastification'],
-            'http-client': ['axios'],
           }
         }
       }

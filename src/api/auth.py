@@ -400,10 +400,12 @@ async def login(request: Request, body: LoginRequest):
     is_phone = identifier.isdigit() and len(identifier) == 11
 
     # 同时匹配 username 或 phone，避免用户名是 11 位数字时误识别
+    # 同 phone/username 可能有多条记录（不同 tenant_id 的同号用户），
+    # 必须显式排序否则 PostgreSQL 返回顺序不确定
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT * FROM users WHERE username = %s OR phone = %s LIMIT 1",
+            "SELECT * FROM users WHERE username = %s OR phone = %s ORDER BY created_at DESC LIMIT 1",
             (identifier, identifier)
         )
         row = cursor.fetchone()
@@ -469,9 +471,17 @@ async def login(request: Request, body: LoginRequest):
                     is_admin = True
 
     if is_admin:
-        # 平台管理员直接登录，确保 role 为 platform_admin
-        if user.get("role") != "platform_admin":
-            UserDB.update(user["user_id"], role="platform_admin")
+        # 平台管理员直接登录
+        # 优先复用已有的 platform_admin 记录（tenant_id 为空，符合不变量），
+        # 避免把同 phone 的租户用户重复提升为 platform_admin
+        phone_for_admin = user.get("phone")
+        if phone_for_admin:
+            pa = UserDB.get_platform_admin_by_phone(phone_for_admin)
+            if pa and pa["user_id"] != user["user_id"]:
+                user = pa
+        # 确保 role 为 platform_admin 且 tenant_id 为空（platform_admin 不变量）
+        if user.get("role") != "platform_admin" or user.get("tenant_id") is not None:
+            UserDB.update(user["user_id"], role="platform_admin", tenant_id=None)
             user = UserDB.get_by_id(user["user_id"])
         token = generate_token(user["user_id"])
         return LoginResponse(
@@ -571,9 +581,14 @@ async def unified_login(request: Request, body: UnifiedLoginRequest):
                 cursor.execute("SELECT * FROM users WHERE user_id = %s", (user_id,))
                 user = dict(cursor.fetchone())
 
-        # 确保角色为 platform_admin
-        if user.get("role") != "platform_admin":
-            UserDB.update(user["user_id"], role="platform_admin")
+        # 优先复用已有的 platform_admin 记录（tenant_id 为空，符合不变量），
+        # 避免把同 phone 的租户用户重复提升为 platform_admin
+        pa = UserDB.get_platform_admin_by_phone(identifier)
+        if pa and pa["user_id"] != user["user_id"]:
+            user = pa
+        # 确保 role 为 platform_admin 且 tenant_id 为空（platform_admin 不变量）
+        if user.get("role") != "platform_admin" or user.get("tenant_id") is not None:
+            UserDB.update(user["user_id"], role="platform_admin", tenant_id=None)
             user = UserDB.get_by_id(user["user_id"])
 
         # 查询 tenant_code 对应租户（平台管理员代管理）
@@ -644,10 +659,12 @@ async def unified_login(request: Request, body: UnifiedLoginRequest):
     user = None
 
     # 同时匹配 username 或 phone，避免用户名是 11 位数字时误识别
+    # 同 phone/username 可能有多条记录（不同 tenant_id 的同号用户），
+    # 必须显式排序否则 PostgreSQL 返回顺序不确定
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT * FROM users WHERE username = %s OR phone = %s LIMIT 1",
+            "SELECT * FROM users WHERE username = %s OR phone = %s ORDER BY created_at DESC LIMIT 1",
             (identifier, identifier)
         )
         row = cursor.fetchone()

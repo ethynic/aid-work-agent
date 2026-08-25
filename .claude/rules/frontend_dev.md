@@ -6,7 +6,7 @@
 
 ### 变体定义
 
-所有组件样式变体定义在 `frontend/src/variants/` 目录：
+所有组件样式变体定义在 `frontend/web/variants/` 目录：
 
 | 文件 | 用途 |
 |------|------|
@@ -21,7 +21,7 @@
 
 ### 基础 UI 组件
 
-所有基础组件在 `frontend/src/components/ui/` 目录，是最薄的渲染壳：
+所有基础组件在 `frontend/web/components/ui/` 目录，是最薄的渲染壳：
 
 | 组件 | 用途 |
 |------|------|
@@ -247,7 +247,7 @@ function handleToggleSidebar() {
 
 ### 业务子菜单图标规范
 
-租户前台侧边栏的"业务子菜单"（如"商品管理 / 车辆价格 / 订单管理"等）的图标，**不依赖数据库 `subagent_definitions.business_pages[].icon` 字段**，而是由前端在 `frontend/src/components/ui/BusinessPageIcon.vue` 中按 `page.title` 关键字匹配，**统一渲染固定 SVG 图标库**。
+租户前台侧边栏的"业务子菜单"（如"商品管理 / 车辆价格 / 订单管理"等）的图标，**不依赖数据库 `subagent_definitions.business_pages[].icon` 字段**，而是由前端在 `frontend/web/components/ui/BusinessPageIcon.vue` 中按 `page.title` 关键字匹配，**统一渲染固定 SVG 图标库**。
 
 **原因**：
 - 数据库历史数据中的 `icon` 字段可能含 emoji、Python 转义字符、英文单词等不一致内容，清理成本高
@@ -272,9 +272,9 @@ function handleToggleSidebar() {
 - 新增规则后，Vite HMR 立即生效，无需重启后端
 
 ### 枚举值定义规范
-**涉及到字段枚举值的判断代码，必须以 `frontend/src/api/enums.ts` 为准。**
+**涉及到字段枚举值的判断代码，必须以 `frontend/web/api/enums.ts` 为准。**
 
-所有 SaaS 相关表字段的枚举值（如租户状态、订阅状态、支付状态等）统一在 `frontend/src/api/enums.ts` 中定义。
+所有 SaaS 相关表字段的枚举值（如租户状态、订阅状态、支付状态等）统一在 `frontend/web/api/enums.ts` 中定义。
 
 ```typescript
 // ✅ 正确：使用枚举 + 映射表
@@ -309,7 +309,7 @@ export enum TenantStatus {
 
 3. **前端显示值不受此限制**：显示值通常为中文，通过映射表实现（如 `TenantStatusMap`）。
 
-**如需修改字段枚举值，注意前后端协调修改**：同时更新 `frontend/src/api/enums.ts`（前端）和 `src/saas/models/enums.py`（后端）。
+**如需修改字段枚举值，注意前后端协调修改**：同时更新 `frontend/web/api/enums.ts`（前端）和 `src/saas/models/enums.py`（后端）。
 
 ### 时间显示规范
 
@@ -336,7 +336,7 @@ npm run build
 ### 测试目录结构
 
 ```
-frontend/src/__tests__/      # 前端测试（Vitest + Vue Test Utils + MSW）
+frontend/web/__tests__/      # 前端测试（Vitest + Vue Test Utils + MSW）
 ├── setup.ts                 # jsdom 环境 + MSW 启动
 ├── mocks/                   # API mock（handlers.ts、server.ts、fixtures.ts）
 ├── composables/             # Composable 逻辑测试
@@ -346,7 +346,7 @@ frontend/src/__tests__/      # 前端测试（Vitest + Vue Test Utils + MSW）
 
 ### 为新功能编写测试
 
-**前端组件/Composable 测试**，在 `frontend/src/__tests__/` 对应目录添加 `.test.ts` 文件。API 请求由 MSW 自动拦截（配置在 `mocks/handlers.ts`）。
+**前端组件/Composable 测试**，在 `frontend/web/__tests__/` 对应目录添加 `.test.ts` 文件。API 请求由 MSW 自动拦截（配置在 `mocks/handlers.ts`）。
 
 ## 语言说明
 
@@ -443,7 +443,7 @@ export async function listDocuments(): Promise<DocumentListResponse> {
 ### ImageRef 类型契约
 
 ```typescript
-// frontend/src/types/index.ts
+// frontend/web/types/index.ts
 export interface ImageRef {
   file_id: string
   download_url: string  // = /api/files/{file_id}/download

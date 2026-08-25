@@ -467,6 +467,74 @@ def test_fill_empty_rows_returns_error(sample_path, tmp_path):
 
 
 # ============================================================
+# 非标量值前置拦截（线上事故回归：嵌套 dict 写单元格 → "Cannot convert ... to Excel"）
+# ============================================================
+
+
+def _llm_must_not_be_called(prompt):
+    raise AssertionError("校验失败不应触发 LLM 结构分析调用")
+
+
+def test_nested_totals_dict_rejected_before_llm(sample_path):
+    """交叉表合计按列分档传嵌套 dict → 前置拦截并给出拆平指引，不触发 LLM、不崩 openpyxl"""
+    data = {
+        "rows": [{"费用项目": "研学课程服务费", "40人（元）": 7120}],
+        "totals": {"合计总价": {"40人（元）": 9520, "45人（元）": 10560, "49人（元）": 11392}},
+    }
+    res = fill_with_sample(str(sample_path), data, llm_callable=_llm_must_not_be_called)
+    assert not res["success"]
+    assert "data.totals.合计总价" in res["error"]
+    assert "标量" in res["error"]
+    assert "拆平" in res["error"]
+    assert "Cannot convert" not in res["error"]
+
+
+def test_nested_row_value_rejected(sample_path):
+    data = {
+        "rows": [{"费用项目": {"课程": 1}, "40人（元）": 7120}],
+        "totals": {},
+    }
+    res = fill_with_sample(str(sample_path), data, llm_callable=_llm_must_not_be_called)
+    assert not res["success"]
+    assert "data.rows[1].费用项目" in res["error"]
+    assert "标量" in res["error"]
+
+
+def test_nested_meta_and_per_capita_rejected(sample_path):
+    data = {
+        "rows": [{"a": 1}],
+        "meta": {"报价日期": ["2026-08-18"]},
+        "totals": {"per_capita": {"人均费用": {"40人（元）": 238}}},
+    }
+    res = fill_with_sample(str(sample_path), data, llm_callable=_llm_must_not_be_called)
+    assert not res["success"]
+    # meta 先于 totals 被检出
+    assert "data.meta.报价日期" in res["error"]
+
+    data2 = {
+        "rows": [{"a": 1}],
+        "meta": {},
+        "totals": {"per_capita": {"人均费用": {"40人（元）": 238}}},
+    }
+    res2 = fill_with_sample(str(sample_path), data2, llm_callable=_llm_must_not_be_called)
+    assert not res2["success"]
+    assert "data.totals.per_capita.人均费用" in res2["error"]
+
+
+def test_scalar_data_still_passes_validation(sample_path, tmp_path):
+    """标量数据（含 None/bool/str/int/float）不受新校验影响"""
+    rows = [
+        {"category": "住宿", "name": "酒店X", "unit_price": 200, "quantity": 2, "amount": 400},
+        {"category": None, "name": "含None", "unit_price": 0.5, "quantity": True, "amount": 0},
+    ]
+    data = FillData(rows=rows, meta={"customer_name": "张三", "date": "2026-08-18"},
+                    totals={"grand_total": 9999, "per_capita": {"成人人均": 238}})
+    res = fill_with_sample(str(sample_path), data,
+                           output_dir=str(tmp_path), llm_callable=_mock_llm())
+    assert res["success"], res
+
+
+# ============================================================
 # 显式 columns 优先（脱离 LLM 列推断）
 # ============================================================
 
@@ -666,6 +734,35 @@ def test_group_subtotals_numeric_fallback(grouped_path, tmp_path):
     # 分组2（门票）M=1<K=2 删1行：明细上移到行7，小计行从9上移到8
     assert ws["A7"].value == "门票/项目"
     assert ws["A8"].value == "门票小计" and ws["F8"].value == 200
+
+
+def test_column_style_subtotal_misjudged_skipped(grouped_path, tmp_path):
+    """列式小计误判为 subtotal_row（小计行=明细行8）→ 防御跳过写入：
+    明细数据不被覆盖、渲染不硬报错；合法小计（行6）照常写入"""
+    structure = {
+        **GROUPED_STRUCTURE,
+        "groups": [
+            GROUPED_STRUCTURE["groups"][0],
+            {**GROUPED_STRUCTURE["groups"][1], "subtotal_row": 8},  # 误判：把明细行8当小计行
+        ],
+    }
+    rows = [
+        {"category": "住宿", "name": "酒店X", "unit_price": 200, "quantity": 2, "unit": "间", "amount": 400},
+        {"category": "餐饮", "name": "午餐Y", "unit_price": 40, "quantity": 3, "unit": "人", "amount": 120},
+        {"category": "门票/项目", "name": "景点V", "unit_price": 160, "quantity": 2, "unit": "人", "amount": 320},
+        {"category": "门票/项目", "name": "景点W", "unit_price": 80, "quantity": 2, "unit": "人", "amount": 160},
+    ]
+    res = fill_with_sample(
+        str(grouped_path), _gdata(rows),
+        output_dir=str(tmp_path), llm_callable=_mock_llm(structure),
+    )
+    assert res["success"], res
+    wb = openpyxl.load_workbook(res["file_path"])
+    ws = wb.active
+    # 合法小计（行6，不在任何明细区）正常写入
+    assert ws["F6"].value == 1000
+    # 误判小计的行8仍是明细数据，未被小计值 480 覆盖
+    assert ws["B8"].value == "景点W" and ws["F8"].value == 160
 
 
 def test_unmatched_rows_go_to_first_group(grouped_path, tmp_path):

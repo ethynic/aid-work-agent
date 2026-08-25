@@ -456,7 +456,8 @@ class SkillLoader:
         # 优先级 2: 租户级 .env
         tenant_id = os.environ.get("CURRENT_TENANT_ID")
         if tenant_id:
-            tenant_env = Path(f"storage/tenants/{tenant_id}/skills/{skill.name}/.env")
+            from src.core.storage import normalize_tenant_id
+            tenant_env = Path(f"storage/tenants/{normalize_tenant_id(tenant_id)}/skills/{skill.name}/.env")
             if tenant_env.exists():
                 env_files.append(tenant_env)
 

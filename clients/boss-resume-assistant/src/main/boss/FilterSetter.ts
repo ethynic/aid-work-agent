@@ -72,8 +72,49 @@ const ROW_DEFS: Array<{ key: 'experience' | 'educations' | 'salary'; labelPrefix
   { key: 'salary', labelPrefix: '薪资待遇', multi: false },
 ]
 
-const FILTER_BUTTON_PATTERN = /^筛选(·\d+)?$/
+/** 推荐牛人列表页特征：「筛选」/「筛选·N」按钮（与 bossGreet/JobSwitcher 同源判定；operation 前置校验复用） */
+export const FILTER_BUTTON_PATTERN = /^筛选(·\d+)?$/
 const FILTER_BADGE_PATTERN = /^筛选·(\d+)$/
+
+/** 选项文本归一化（精确匹配前）：去空白 + 去 K/k 单位字母 + 大写（兼容「15k-20k」≡「15-20K」≡「15-20k」） */
+export function normalizeOptionText(s: string): string {
+  return s.replace(/[\sKk]/g, '').toUpperCase()
+}
+
+/** 解析「数值区间」档位：5-10年 / 15-30K / 15k-30k → {min,max}；「5年以上」→ {min, max:∞哨兵}；非数值（本科/应届生）→ null */
+function parseNumericRange(text: string): { min: number; max: number } | null {
+  const t = text.replace(/\s+/g, '').replace(/[Kk]/g, '')
+  let m = /^(\d+(?:\.\d+)?)[-~](\d+(?:\.\d+)?)/.exec(t)
+  if (m) return { min: Number(m[1]), max: Number(m[2]) }
+  m = /^(\d+(?:\.\d+)?)年?以上/.exec(t) // 「5年以上」：数字与「以上」之间带「年」
+  if (m) return { min: Number(m[1]), max: 99999 }
+  return null
+}
+
+/**
+ * 保底档位映射（2026-08-17 用户定调：**必须映射到页面上真实存在的选项**，不能让 LLM 瞎编）：
+ * LLM 未先查 boss_filter_options 时可能传页面不存在的档位（如 15-30K，页面只有 10-20K/20-50K）。
+ * 只在双方都能解析出数值区间时生效（经验/薪资；学历等非数值仍报错并列出可选值）。
+ * 规则 = 保下限：薪资/经验下限是常见硬约束——在「下限 ≥ 用户下限」的档位里取下限最近者
+ * （并列取重叠更大者）；全部低于用户下限时取重叠最大者（并列取下限更近者）。
+ */
+export function pickClosestOption(requested: string, available: string[]): string | null {
+  const rq = parseNumericRange(requested)
+  if (!rq) return null
+  const cands = available
+    .map((opt) => ({ opt, r: parseNumericRange(opt) }))
+    .filter((c): c is { opt: string; r: { min: number; max: number } } => c.r !== null)
+  if (cands.length === 0) return null
+  const overlap = (c: { min: number; max: number }) =>
+    Math.max(0, Math.min(rq.max, c.max) - Math.max(rq.min, c.min))
+  const eligible = cands.filter((c) => c.r.min >= rq.min - 1e-9)
+  if (eligible.length > 0) {
+    eligible.sort((a, b) => a.r.min - b.r.min || overlap(b.r) - overlap(a.r))
+    return eligible[0]!.opt
+  }
+  cands.sort((a, b) => overlap(b.r) - overlap(a.r) || Math.abs(rq.min - a.r.min) - Math.abs(rq.min - b.r.min))
+  return cands[0]!.opt
+}
 
 /** 面板中其他常见行标签（真机 2026-08-05 面板实拍）：只参与行带收紧，不支持点击设置 */
 const EXTRA_ROW_LABEL_PREFIXES = ['年龄', '活跃度', '性别', '近期没有看过', '求职意向']
@@ -112,12 +153,17 @@ export class FilterSetter {
   /**
    * 应用筛选条件（替换语义）。返回生效的筛选条件数（与「筛选·N」徽章比对通过）。
    *
+   * 档位匹配策略（2026-08-17 用户定调：判断交 AI，CLI 只精确执行）：先按原文定位，0 命中时按
+   * 归一化精确匹配兜底（15k-20k ≡ 15-20K）；仍不中则报错并列出该行全部可选档位——调用方
+   * （LLM）应先用 boss_filter_options/probeOptions 读可选档位，把用户口语化要求映射成最接近
+   * 的档位再传精确值，绝不让用户看页面。
+   *
    * 进面板后先点「清除」再选选项：选项是切换式控件，上次运行残留的已选状态下
    * 直接点同名选项会变成反选（2026-08-06 chat 演示实测：筛选·5 残留 + 同 spec
    * 再 apply → 5 项全被点掉，徽章校验失败）。先清除保证从空白态开始，幂等。
    * 任一步失败抛 FilterSetError。
    */
-  async apply(spec: FilterSpec): Promise<{ filterCount: number }> {
+  async apply(spec: FilterSpec): Promise<{ filterCount: number; substitutions: Array<{ row: string; requested: string; matched: string }> }> {
     if (this.deps.signal?.aborted) throw new CancelledError()
     const rows: Array<{ labelPrefix: string; options: string[] }> = []
     for (const def of ROW_DEFS) {
@@ -142,11 +188,34 @@ export class FilterSetter {
     await this.deps.click(clearBtn, viewportOf(snap))
     await this.sleep(500)
 
-    // 3. 逐项行锚定点击（每项 fresh snapshot，页面可能重排）
+    // 3. 逐项行锚定点击（每项 fresh snapshot，页面可能重排）。
+    //    先按原文走 locateRowOption（保留折行放宽/诱饵消歧等既有行为）；0 命中进入保底链：
+    //    归一化精确匹配（15k-20k ≡ 15-20K）→ 数值保底映射到页面真实存在的最接近档位
+    //    （记 substitution 由调用方转述用户）；数值都不兼容（如学历「大专以上」）才报错
+    //    并列出该行全部可选档位（AI 据此自纠重试）
+    const substitutions: Array<{ row: string; requested: string; matched: string }> = []
     for (const row of rows) {
       for (const option of row.options) {
         snap = await this.deps.snapshot()
-        const point = this.locateRowOption(snap, row.labelPrefix, option)
+        let point: ClickPoint
+        try {
+          point = this.locateRowOption(snap, row.labelPrefix, option)
+        } catch (err) {
+          const available = this.rowOptionTexts(snap, row.labelPrefix)
+          const exact = available.find((t) => normalizeOptionText(t) === normalizeOptionText(option))
+          const closest = exact ?? pickClosestOption(option, available)
+          if (!closest) {
+            throw new FilterSetError(
+              `${row.labelPrefix} 没有匹配的选项「${option}」，该行可选：${available.join('、') || '（未解析到选项）'}；` +
+                '请从可选值中选择最接近用户要求的档位重试（可先用 boss_filter_options 查询全部可选档位）' +
+                `（原始定位错误：${err instanceof Error ? err.message : String(err)}）`,
+            )
+          }
+          if (!exact) {
+            substitutions.push({ row: row.labelPrefix, requested: option, matched: closest })
+          }
+          point = this.locateRowOption(snap, row.labelPrefix, closest)
+        }
         await this.deps.click(point, viewportOf(snap))
         await this.sleep(500)
       }
@@ -168,7 +237,7 @@ export class FilterSetter {
         `筛选结果校验失败：期望「筛选·${expected}」，实际 ${count === null ? '未找到徽章（面板可能未提交）' : `筛选·${count}`}`,
       )
     }
-    return { filterCount: count }
+    return { filterCount: count, substitutions }
   }
 
   /**
@@ -187,6 +256,28 @@ export class FilterSetter {
   }
 
   /**
+   * 探查筛选面板全部可选档位（boss_filter_options 工具，2026-08-17 用户定调「判断交 AI」）：
+   * 开面板 → describePanel 读各行选项 → 点「筛选」把面板收起还原页面。
+   * 返回的选项交给调用方（LLM），由它把用户口语化要求（如 15k-20k / 5年以上 / 本科及以上）
+   * 映射成最接近的精确档位后再调 apply。0 行可读 → FilterSetError（页面结构异常）。
+   */
+  async probeOptions(): Promise<PanelRowInfo[]> {
+    if (this.deps.signal?.aborted) throw new CancelledError()
+    const snap = await this.ensurePanelOpen()
+    const rows = this.describePanel(snap)
+    const readable = rows.filter((r) => r.options.length > 0)
+    if (readable.length === 0) {
+      throw new FilterSetError('筛选面板未解析到任何可选档位（面板可能未打开或页面结构已变），请人工查看')
+    }
+    // 收起面板还原页面（面板开着时点「筛选」= 关闭；不触发任何筛选变更）
+    const closeSnap = await this.deps.snapshot()
+    const button = this.locateUniqueText(closeSnap, (s) => FILTER_BUTTON_PATTERN.test(s), '筛选按钮')
+    await this.deps.click(button, viewportOf(closeSnap))
+    await this.sleep(800)
+    return readable
+  }
+
+  /**
    * 面板结构探针：一次性输出各支持行的全部可见选项及坐标（只读，不点击）。
    *
    * 两道消歧：
@@ -195,6 +286,12 @@ export class FilterSetter {
    * 2. 几何级：与 locateRowOption 同一套行带/x 规则。
    * 宽松模式：行标签缺失/多命中的行直接跳过（探针用于人工核对，不 fail-loud）。
    */
+  /** 某行的全部可见选项文本（describePanel 同源几何：行带 + 容器消歧），供档位就近匹配/错误提示 */
+  private rowOptionTexts(snap: DomSnapshot, labelPrefix: string): string[] {
+    const row = this.describePanel(snap).find((r) => r.label.startsWith(labelPrefix))
+    return row ? row.options.map((o) => o.text) : []
+  }
+
   describePanel(snap: DomSnapshot): PanelRowInfo[] {
     // 1. 行标签命中（每行恰好 1 个才收）
     const labelHits = new Map<string, VisibleHit>()

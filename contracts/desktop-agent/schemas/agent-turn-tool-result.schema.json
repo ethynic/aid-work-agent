@@ -1,0 +1,1 @@
+{ "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "agent-turn-tool-result.schema.json", "title": "AgentTurnToolResult", "type":"object", "additionalProperties":false, "required":["type","invocation_id","result"], "properties":{"type":{"const":"tool_result"},"invocation_id":{"type":"string","minLength":1},"result":{"type":"object"}} }

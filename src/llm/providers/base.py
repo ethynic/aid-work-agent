@@ -94,16 +94,37 @@ class BaseLLMProvider(ABC):
         """
         pass
     
+    def _is_qwen_model(self) -> bool:
+        """判断当前模型是否为 qwen 系文本模型（model 名 qwen 前缀，排除视觉模型），
+        用于显式缓存/思考开关判定。
+
+        排除 qwen-vl / qwen3-vl 视觉模型：
+        - 视觉模型无思考模式，写入 enable_thinking 可能被 API 拒绝（400）
+        - qwen-vl-max / qwen-vl-plus 不在显式缓存（cache_control）官方支持列表，
+          对其加缓存标记同样有 400 风险（视频提示词路径默认用 qwen-vl-plus）
+
+        百炼 provider 同时承载 deepseek/kimi/glm 等第三方模型，其缓存参数语义与
+        qwen 系不同，必须按 model 名前缀判定，不能按 provider 判定。
+        """
+        name = str(self.model or "").lower()
+        return name.startswith("qwen") and "vl" not in name
+
     def _format_messages(
         self,
-        messages: List[Dict[str, Any]]
+        messages: List[Dict[str, Any]],
+        use_cache: bool = False,
     ) -> List[Dict[str, Any]]:
         """
         格式化消息（子类可覆盖）
-        
+
         Args:
             messages: 原始消息列表
-        
+            use_cache: 是否启用显式缓存。仅 qwen provider 传入 True（且 model 为 qwen 系时生效），
+                在消息数组最后一条消息的 content 上追加 cache_control: ephemeral——末尾标记创建的
+                缓存块覆盖整个消息数组（system + 全部历史 + 工具结果），agent 循环下一轮追加新消息后
+                前序块完整命中（10% 计费），仅新增尾部按创建（125%）计费。
+                其他 provider 保持默认 False，行为与改动前完全一致。
+
         Returns:
             格式化后的消息列表
         """
@@ -111,7 +132,7 @@ class BaseLLMProvider(ABC):
         for msg in messages:
             role = msg.get("role", "user")
             content = msg.get("content", "")
-            
+
             # 处理不同类型的消息
             if role == "tool":
                 # 工具结果消息 - 必须包含tool_call_id
@@ -133,7 +154,31 @@ class BaseLLMProvider(ABC):
                 formatted.append({"role": role, "content": content})
             else:
                 formatted.append({"role": role, "content": str(content)})
-        
+
+        # 显式缓存：标记从「首条 system」改为「最后一条可标记的文本消息」。
+        # 末尾标记创建的缓存块覆盖整个消息数组，agent 循环下一轮前序块完整命中（10%），
+        # 仅新增尾部按创建（125%）计费。仅 qwen 系文本模型生效（_is_qwen_model）。
+        # ⚠️ 关键约束：缓存标记只能加在「纯文本 content」的 user/assistant 消息上。
+        # tool 消息的 content 必须是纯字符串（OpenAI 兼容规范），若改写成 content 数组，
+        # qwen3-flash 会把 tool_result 序列化回显为文本（2026-08-19 线上事故）；
+        # assistant(tool_calls) 的 content 为空字符串，标记无意义。因此从后往前找第一条
+        # role 非 tool、无 tool_calls、content 非空的文本消息标记；找不到则不标记，
+        # 保正确性优于缓存收益。
+        if use_cache and self._is_qwen_model() and formatted:
+            for _i in range(len(formatted) - 1, -1, -1):
+                _cand = formatted[_i]
+                if _cand.get("role") == "tool" or _cand.get("tool_calls"):
+                    continue
+                _cand_content = _cand.get("content")
+                if isinstance(_cand_content, str):
+                    if _cand_content.strip():
+                        _cand["content"] = [{"type": "text", "text": _cand_content,
+                                             "cache_control": {"type": "ephemeral"}}]
+                        break
+                elif isinstance(_cand_content, list) and _cand_content:
+                    _cand["content"][-1] = {**_cand["content"][-1],
+                                            "cache_control": {"type": "ephemeral"}}
+                    break
         return formatted
     
     def _format_tools(

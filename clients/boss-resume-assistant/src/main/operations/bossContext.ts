@@ -8,6 +8,7 @@
  */
 import { CdpGateway } from '../cdp/CdpGateway.js'
 import { DEFAULT_CDP_PORT } from '../chrome/ChromeAttacher.js'
+import { ensureDebugChrome } from '../chrome/ChromeLauncher.js'
 import { WinMouseClicker } from '../input/WinMouseClicker.js'
 import type { DomSnapshot, ClickPoint } from '../boss/domSnapshot.js'
 import { randomUUID } from 'node:crypto'
@@ -29,14 +30,22 @@ import { mapExecutorError } from './errorMapping.js'
 export interface BossSession {
   /** 采集 fresh DOMSnapshot（页面动态变化，每次定位前重新采集） */
   snapshot(): Promise<DomSnapshot>
-  /** Win32 真实鼠标点击（viewport 为页面截图尺寸，device px） */
+  /** Win32 真实鼠标点击（viewport 为页面截图尺寸，device px）。写动作按钮/筛选类控件专用：
+   *  BOSS 反作弊 SDK 选择性拦截 CDP 合成点击，这类动作必须借真实光标 */
   click(point: ClickPoint, viewport: { width: number; height: number }): Promise<void>
+  /** CDP 浏览类点击（mousePressed+mouseReleased，device px）。与 Win32 click 的区别：
+   *  浏览动作（点牛人卡片打开简历详情等）真机实证 CDP 有效且不被拦、不占用真实鼠标；
+   *  写动作/筛选类控件仍必须走 click（Win32），不得混用 */
+  clickBrowse(point: ClickPoint): Promise<void>
   /** CDP mouseWheel 滚动（浏览类操作，不占用真实鼠标） */
   mouseWheel(x: number, y: number, deltaY: number): Promise<void>
   /** 按 Escape（CDP dispatchKey，关简历预览弹层用） */
   pressEscape(): Promise<void>
   /** CDP char 事件逐字输入（调用方保证焦点已在目标输入框） */
   typeChar(ch: string): Promise<void>
+  /** 无 clip 整页截图（Page.captureScreenshot png）。输出即 device px，与 DOMSnapshot bounds 同坐标系，
+   *  按 device 坐标直接裁剪即可，绝不做 DPI 换算（设计 §10.8 真机实证：整页 1249x1277 = viewport bounds） */
+  captureFullpage(): Promise<Buffer>
   /** 当前 BOSS 标签页 URL（Target.getTargets 实时取） */
   getUrl(): Promise<string>
   /** 断开 CDP 连接（不关闭 Chrome）；必须幂等、绝不 throw */
@@ -72,6 +81,12 @@ export const defaultSessionFactory: BossSessionFactory = async (ctx) => {
   const clicker = new WinMouseClicker()
   ctx.progress({ stage: 'connect', message: `连接 Chrome 调试端口（${endpoint}）` })
   try {
+    // 端口不通时自动拉起固定 profile 调试实例（fail-open，拉不起则由下方 connect 报原有错误；
+    // 包 withAbort 使拉起等待期间用户取消依然立即生效）
+    const launched = await withAbort(ensureDebugChrome(ctx.cdpPort ?? DEFAULT_CDP_PORT), ctx.signal)
+    if (launched) {
+      ctx.progress({ stage: 'connect', message: '已自动拉起调试 Chrome 并打开 BOSS 直聘；首次使用请在该窗口登录一次' })
+    }
     await withAbort(gw.connect(endpoint), ctx.signal)
     ctx.progress({ stage: 'attach', message: 'attach BOSS 页面' })
     await withAbort(gw.attachToRecommendPage(), ctx.signal)
@@ -84,6 +99,11 @@ export const defaultSessionFactory: BossSessionFactory = async (ctx) => {
   return {
     snapshot: async () => (await gw.captureDomSnapshot()) as DomSnapshot,
     click: (point, viewport) => clicker.click(point, viewport),
+    clickBrowse: async (point) => {
+      // 浏览类点击（真机 2026-08-17 实证：牛人卡片 CDP 点击有效打开简历详情；写动作按钮走 Win32 click）
+      await gw.dispatchMouse({ type: 'mousePressed', x: point.x, y: point.y, button: 'left', clickCount: 1 })
+      await gw.dispatchMouse({ type: 'mouseReleased', x: point.x, y: point.y, button: 'left', clickCount: 1 })
+    },
     mouseWheel: async (x, y, deltaY) => {
       await gw.dispatchMouse({ type: 'mouseWheel', x, y, deltaX: 0, deltaY })
     },
@@ -94,6 +114,7 @@ export const defaultSessionFactory: BossSessionFactory = async (ctx) => {
     typeChar: async (ch) => {
       await gw.dispatchKey({ type: 'char', key: ch, text: ch })
     },
+    captureFullpage: async () => Buffer.from(await gw.captureScreenshot({ format: 'png' }), 'base64'),
     getUrl: async () => {
       const targets = await gw.getTargets()
       return targets.find((t) => t.type === 'page' && t.url.includes('zhipin.com'))?.url ?? ''

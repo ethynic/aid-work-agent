@@ -164,6 +164,9 @@ _MODEL_CONTEXT_LIMITS: Dict[str, int] = {
     # 且长上下文性能在 150K 以下更稳定，保守打折避免阈值偏晚）
     "deepseek-v4-pro": 512_000,
     "deepseek-v4-flash": 512_000,
+    # Qwen3.7-flash（百炼 qwen provider，QWEN_MODEL_CODE 默认值）。官方分段计价
+    # 三档到 1M（32K/256K/1M），按 5 折保守取值与 deepseek 对齐（生产实测 prompt 244K 无异常）
+    "qwen3.7-flash": 512_000,
 }
 
 # 未知模型回退到的保守值（与现役主力模型对齐）
@@ -182,7 +185,7 @@ _PROVIDER_DEFAULTS = {
     "qwen": {
         "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
         "api_key_env": "QWEN_API_KEYS",
-        "default_model": "qwen-plus",
+        "default_model": "qwen3.7-flash",
     },
     "zhipu": {
         "base_url": "https://open.bigmodel.cn/api/paas/v4",
@@ -852,6 +855,9 @@ class ContextCompressionService:
         self,
         existing_summary: Optional[str],
         new_messages: List[Dict[str, Any]],
+        *,
+        tenant_id: Optional[str] = None,
+        user_id: Optional[str] = None,
     ) -> Optional[str]:
         """调用摘要 LLM，独立超时 + 重试 M 次。失败返回 None。
 
@@ -864,6 +870,10 @@ class ContextCompressionService:
         Args:
             existing_summary: 既有的 active 摘要（增量合并用）
             new_messages: COMPRESS 区消息（已预处理）
+            tenant_id: 租户 ID（v3.2.2 P1 修复：从 SessionMeta 透传，
+                       background_runner 调度场景无 HTTP 上下文，需显式传入
+                       才能让 record_background_llm_usage 把计费归属到租户）
+            user_id: 用户 ID（同上）
 
         Returns:
             摘要文本；重试耗尽仍失败时返回 None
@@ -901,6 +911,18 @@ class ContextCompressionService:
                     )
                     self._actual_provider = provider_cfg
                     self._actual_model = model_cfg
+                    # 累加 LLM 用量到当前 SessionRecordService（对话内后台 LLM 调用计费）
+                    # v3.2.2 P1 修复：background_runner 调度场景透传 tenant_id/user_id，
+                    # 让兜底落库路径能归属租户
+                    from src.services.session_record import record_background_llm_usage
+                    record_background_llm_usage(
+                        _usage,
+                        tenant_id=tenant_id,
+                        user_id=user_id,
+                        source="mid_term_summary",
+                        user_message="上下文压缩扫描摘要",
+                        model=model_cfg,
+                    )
                 else:
                     # fallback 到主 gateway（仅首次记录 warning）
                     if attempt == 1:
@@ -921,6 +943,17 @@ class ContextCompressionService:
                     # fallback 到主 gateway，provider/model 以 gateway 实际为准
                     self._actual_provider = getattr(gateway, "provider_name", None) or "main"
                     self._actual_model = model_cfg
+                    # 累加 LLM 用量到当前 SessionRecordService（对话内后台 LLM 调用计费）
+                    # v3.2.2 P1 修复：background_runner 调度场景透传 tenant_id/user_id
+                    from src.services.session_record import record_background_llm_usage
+                    record_background_llm_usage(
+                        (result or {}).get("usage"),
+                        tenant_id=tenant_id,
+                        user_id=user_id,
+                        source="mid_term_summary",
+                        user_message="上下文压缩扫描摘要",
+                        model=model_cfg,
+                    )
 
                 content = (content or "").strip()
                 if content:
@@ -1330,7 +1363,14 @@ class ContextCompressionService:
 
         # 6) 摘要 LLM（失败 → 降级）
         existing_summary = self.get_active_summary(session_id, source_type)
-        summary_text = await self._call_summary_llm(existing_summary, processed_compress)
+        # v3.2.2 P1 修复：透传 SessionMeta 的 tenant_id/user_id，让 background_runner
+        # 调度场景（无 HTTP 上下文）的计费能归属到具体租户
+        summary_text = await self._call_summary_llm(
+            existing_summary,
+            processed_compress,
+            tenant_id=meta.tenant_id,
+            user_id=meta.user_id,
+        )
         fallback_used = False
         llm_tokens_used: Optional[int] = None
         if summary_text is None:

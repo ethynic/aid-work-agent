@@ -1,0 +1,240 @@
+/**
+ * 外部接待客户 API
+ */
+
+import { getTenantScopedKey } from './tenantStorage'
+import { credentialGet } from '@/platform/credentialStore'
+
+const API_BASE = `${import.meta.env.VITE_API_BASE_URL || '/api'}/saas/external-customers`
+
+export function getSaasAuthHeader(): Record<string, string> {
+  const headers: Record<string, string> = {}
+
+  // 根据路由获取对应的 token（租户前台按 tenant_id 隔离，portal 共用）
+  const path = window.location.pathname
+  let tokenKey: string
+  if (import.meta.env.VITE_DESKTOP_TARGET !== 'true' && path.startsWith('/portal')) {
+    tokenKey = 'portal_token'
+  } else if (path.startsWith('/t/')) {
+    tokenKey = getTenantScopedKey('saas_token')
+  } else {
+    tokenKey = 'saas_token'
+  }
+  const token = credentialGet(tokenKey)
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`
+  }
+
+  // 从 URL 路径获取 tenant_id，添加到 Header
+  const match = path.match(/^\/t\/([^/]+)/)
+  const tenantId = match ? match[1] : null
+  if (tenantId) {
+    headers['X-Tenant-Id'] = tenantId
+  }
+
+  return headers
+}
+
+// 获取外部用户列表
+export async function listExternalUsers(params: {
+  username?: string
+  source?: string
+  referrer_user_id?: string
+  channel_chat_id?: string
+  page?: number
+  page_size?: number
+}): Promise<{
+  success: boolean
+  users?: any[]
+  total?: number
+  page?: number
+  page_size?: number
+  message?: string
+}> {
+  const searchParams = new URLSearchParams()
+  if (params.username) searchParams.set('username', params.username)
+  if (params.source) searchParams.set('source', params.source)
+  if (params.referrer_user_id) searchParams.set('referrer_user_id', params.referrer_user_id)
+  if (params.channel_chat_id) searchParams.set('channel_chat_id', params.channel_chat_id)
+  if (params.page) searchParams.set('page', params.page.toString())
+  if (params.page_size) searchParams.set('page_size', params.page_size.toString())
+
+  const res = await fetch(`${API_BASE}/users?${searchParams}`, {
+    headers: getSaasAuthHeader()
+  })
+  if (!res.ok) throw new Error('获取外部用户列表失败')
+  return res.json()
+}
+
+// 获取客服账号列表（客服账号下拉框数据源）
+export async function listKfAccounts(): Promise<{
+  success: boolean
+  kf_accounts?: Array<{ open_kfid: string; name: string }>
+  message?: string
+}> {
+  const res = await fetch(`${API_BASE}/kf-accounts`, {
+    headers: getSaasAuthHeader()
+  })
+  if (!res.ok) throw new Error('获取客服账号列表失败')
+  return res.json()
+}
+
+// 获取引流统计（总引流数 / 总对话消息数 / 员工维度分组）
+export async function getReferralStats(params: {
+  start_date?: string
+  end_date?: string
+}): Promise<{
+  success: boolean
+  total_referrals?: number
+  total_messages?: number
+  referrers?: any[]
+  message?: string
+}> {
+  const searchParams = new URLSearchParams()
+  if (params.start_date) searchParams.set('start_date', params.start_date)
+  if (params.end_date) searchParams.set('end_date', params.end_date)
+
+  const res = await fetch(`${API_BASE}/referral-stats?${searchParams}`, {
+    headers: getSaasAuthHeader()
+  })
+  if (!res.ok) throw new Error('获取引流统计失败')
+  return res.json()
+}
+
+// 获取留资统计（总留资 / 按留资方式 / 按客服账号，含 ratio 与日期段）
+export async function getLeadStats(params: {
+  start_date?: string
+  end_date?: string
+}): Promise<{
+  success: boolean
+  total_leads?: number
+  by_contact_method?: Array<{ contact_method: string; count: number; ratio: number }>
+  by_kf_account?: Array<{ channel_chat_id: string; kf_account_name: string; count: number; ratio: number }>
+  message?: string
+}> {
+  const searchParams = new URLSearchParams()
+  if (params.start_date) searchParams.set('start_date', params.start_date)
+  if (params.end_date) searchParams.set('end_date', params.end_date)
+
+  const res = await fetch(`${API_BASE}/lead-stats?${searchParams}`, {
+    headers: getSaasAuthHeader()
+  })
+  if (!res.ok) throw new Error('获取留资统计失败')
+  return res.json()
+}
+
+// 获取留资线索列表（分页，created_at DESC，日期段/客服账号/阶段筛选）
+export async function listLeads(params: {
+  start_date?: string
+  end_date?: string
+  channel_chat_id?: string
+  stage?: string
+  page?: number
+  page_size?: number
+}): Promise<{
+  success: boolean
+  leads?: any[]
+  total?: number
+  page?: number
+  page_size?: number
+  message?: string
+}> {
+  const searchParams = new URLSearchParams()
+  if (params.start_date) searchParams.set('start_date', params.start_date)
+  if (params.end_date) searchParams.set('end_date', params.end_date)
+  if (params.channel_chat_id) searchParams.set('channel_chat_id', params.channel_chat_id)
+  if (params.stage) searchParams.set('stage', params.stage)
+  if (params.page) searchParams.set('page', params.page.toString())
+  if (params.page_size) searchParams.set('page_size', params.page_size.toString())
+
+  const res = await fetch(`${API_BASE}/leads?${searchParams}`, {
+    headers: getSaasAuthHeader()
+  })
+  if (!res.ok) throw new Error('获取留资线索列表失败')
+  return res.json()
+}
+
+// 获取线索详情（含解密手机号）
+export async function getLeadDetail(lead_id: string): Promise<{
+  success: boolean
+  lead?: any
+  message?: string
+}> {
+  const res = await fetch(`${API_BASE}/leads/${lead_id}`, {
+    headers: getSaasAuthHeader()
+  })
+  if (!res.ok) throw new Error('获取线索详情失败')
+  return res.json()
+}
+
+// 更新线索阶段（new -> contacting -> converted / abandoned）
+export async function updateLeadStage(lead_id: string, stage: string): Promise<{
+  success: boolean
+  lead?: any
+  message?: string
+}> {
+  const res = await fetch(`${API_BASE}/leads/${lead_id}`, {
+    method: 'PATCH',
+    headers: { ...getSaasAuthHeader(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ stage })
+  })
+  if (!res.ok) throw new Error('更新线索阶段失败')
+  return res.json()
+}
+
+// 获取用户的会话列表
+export async function getUserSessions(params: {
+  user_id: string
+  instance_id?: string
+  channel_type?: string
+  channel_chat_id?: string
+  page?: number
+  page_size?: number
+}): Promise<{
+  success: boolean
+  sessions?: any[]
+  total?: number
+  page?: number
+  page_size?: number
+  message?: string
+}> {
+  const searchParams = new URLSearchParams()
+  if (params.instance_id) searchParams.set('instance_id', params.instance_id)
+  if (params.channel_type) searchParams.set('channel_type', params.channel_type)
+  // 空串必须显式传（匹配 legacy NULL 会话），不能用真值判断
+  if (params.channel_chat_id !== undefined) searchParams.set('channel_chat_id', params.channel_chat_id)
+  if (params.page) searchParams.set('page', params.page.toString())
+  if (params.page_size) searchParams.set('page_size', params.page_size.toString())
+
+  const res = await fetch(`${API_BASE}/users/${params.user_id}/sessions?${searchParams}`, {
+    headers: getSaasAuthHeader()
+  })
+  if (!res.ok) throw new Error('获取用户会话列表失败')
+  return res.json()
+}
+
+// 获取会话的消息列表
+export async function getSessionMessages(params: {
+  session_id: string
+  content_search?: string
+  page?: number
+  page_size?: number
+}): Promise<{
+  success: boolean
+  messages?: any[]
+  total?: number
+  page?: number
+  page_size?: number
+  message?: string
+}> {
+  const searchParams = new URLSearchParams()
+  if (params.content_search) searchParams.set('content_search', params.content_search)
+  if (params.page) searchParams.set('page', params.page.toString())
+  if (params.page_size) searchParams.set('page_size', params.page_size.toString())
+
+  const res = await fetch(`${API_BASE}/sessions/${params.session_id}/messages?${searchParams}`, {
+    headers: getSaasAuthHeader()
+  })
+  if (!res.ok) throw new Error('获取会话消息列表失败')
+  return res.json()
+}

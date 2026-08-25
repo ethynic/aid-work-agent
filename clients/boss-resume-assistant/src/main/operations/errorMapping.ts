@@ -10,6 +10,11 @@ import { ConsentError } from '../boss/ResumeConsentExecutor.js'
 import { NavError } from '../boss/PageNavigator.js'
 import { ChatRejectError } from '../boss/ChatRejectExecutor.js'
 import { InterviewDemoError } from '../boss/InterviewDemoExecutor.js'
+import { ChatSendError } from '../boss/ChatSendExecutor.js'
+import { ChatSearchError } from '../boss/ChatSearchExecutor.js'
+import { JobSwitchError } from '../boss/JobSwitcher.js'
+import { ResumeReadError } from '../boss/ResumeReader.js'
+import { ResumeBatchError } from '../boss/ResumeBatchReader.js'
 import { WinClickError } from '../input/WinMouseClicker.js'
 import { CancelledError, CodedOperationError, type ErrorCode } from './types.js'
 
@@ -84,8 +89,8 @@ export function mapExecutorError(err: unknown): MappedError {
       message: `${message}（写动作已发出但结果无法确认，请人工查看页面后再决定下一步，系统不会自动重试）`,
     }
   }
-  if (err instanceof WinClickError && message.includes('未找到 scripts/win-click.ps1')) {
-    return { code: 'INTERNAL_ERROR', message: `点击脚本缺失：${message}` }
+  if (err instanceof WinClickError && message.includes('未找到 scripts/')) {
+    return { code: 'INTERNAL_ERROR', message: `PowerShell 脚本缺失：${message}` }
   }
   if (
     err instanceof GreetError ||
@@ -94,6 +99,11 @@ export function mapExecutorError(err: unknown): MappedError {
     err instanceof NavError ||
     err instanceof ChatRejectError ||
     err instanceof InterviewDemoError ||
+    err instanceof ChatSendError ||
+    err instanceof ChatSearchError ||
+    err instanceof JobSwitchError ||
+    err instanceof ResumeReadError ||
+    err instanceof ResumeBatchError ||
     err instanceof WinClickError
   ) {
     return { code: 'UI_CHANGED', message }

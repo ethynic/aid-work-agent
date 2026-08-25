@@ -179,7 +179,7 @@ def main():
     except httpx.TimeoutException:
         print(json.dumps({"success": False, "error": "API 请求超时，请稍后重试"}, ensure_ascii=False))
     except Exception as e:
-        logger.error(f"route_distance error: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"route_distance error: {e}")
         print(json.dumps({"success": False, "error": f"网络异常，无法计算导航距离"}, ensure_ascii=False))
 
 

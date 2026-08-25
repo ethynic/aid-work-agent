@@ -1,6 +1,10 @@
-# Agent Desktop Windows 客户端
+# Agent Desktop 跨平台客户端
 
-本目录是 Windows Electron 客户端。renderer 直接使用 `frontend/dist-desktop` 的 Agent/租户构建，不包含平台 `/portal`、Python 服务或 browser runtime；凭证使用 safeStorage，正式签名包支持受控自动更新。
+本目录是 Electron 桌面客户端。renderer 使用 `frontend/dist-desktop` 的独立 Desktop Shell，
+不包含 Web/Portal 页面、Python 服务或 browser runtime；凭证使用 safeStorage，正式签名包支持受控自动更新。
+
+Phase C 提供 Windows 可执行开发 smoke，以及 macOS traffic-light、Dock activate、应用菜单的
+driver contract 和 TypeScript compile 证据。Windows 环境不能替代 macOS arm64/x64 真机启动或截图。
 
 ## Windows 开发运行
 
@@ -69,6 +73,7 @@ npm run package:win:dev
 
 ## 尚未覆盖
 
+- Windows 已使用锁定的 Electron 43.1.0 完成可执行 dev smoke，输出 `AGENT_DESKTOP_SMOKE_PASS`。
 - macOS 本 Phase 尚未验证，按计划在 Mac 设备单独补验。
 - 自动更新代码与左下角交互已实现；正式代码签名证书、真实更新源、灰度和回滚仍需发布环境配置与真机验收。开发包允许 unsigned，但固定禁用真实更新且不可对外发布。
 - browser runtime 不属于 Phase 2，未接入且不影响 Agent 主链路。

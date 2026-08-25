@@ -183,7 +183,7 @@ def init_tables():
             conn.commit()
             logger.info("[complaint_tool] 投诉处理表初始化完成")
     except Exception as e:
-        logger.error(f"[complaint_tool] 表初始化失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"[complaint_tool] 表初始化失败: {e}")
         raise
 
 
@@ -210,7 +210,7 @@ def analyze_sentiment(args):
             "suggested_response_tone": result.suggested_response_tone,
         }
     except Exception as e:
-        logger.error(f"情绪分析失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"情绪分析失败: {e}")
         return {"success": False, "error": f"情绪分析失败: {str(e)}"}
 
 
@@ -254,7 +254,7 @@ def classify_complaint(args):
             "suggested_tags": result.tags,
         }
     except Exception as e:
-        logger.error(f"投诉分类失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"投诉分类失败: {e}")
         return {"success": False, "error": f"投诉分类失败: {str(e)}"}
 
 
@@ -345,7 +345,7 @@ def create_complaint(args):
             "created_at": now.isoformat(),
         }
     except Exception as e:
-        logger.error(f"创建投诉记录失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"创建投诉记录失败: {e}")
         return {"success": False, "error": f"创建投诉记录失败: {str(e)}"}
 
 
@@ -413,7 +413,7 @@ def update_complaint(args):
             "updated_at": now.isoformat(),
         }
     except Exception as e:
-        logger.error(f"更新投诉状态失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"更新投诉状态失败: {e}")
         return {"success": False, "error": f"更新投诉状态失败: {str(e)}"}
 
 
@@ -494,7 +494,7 @@ def match_cases(args):
             "match_count": len(results),
         }
     except Exception as e:
-        logger.error(f"案例匹配失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"案例匹配失败: {e}")
         return {"success": False, "error": f"案例匹配失败: {str(e)}"}
 
 
@@ -594,7 +594,7 @@ def escalate_complaint(args):
             "notification_channel": notification_channel,
         }
     except Exception as e:
-        logger.error(f"升级投诉失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"升级投诉失败: {e}")
         return {"success": False, "error": f"升级投诉失败: {str(e)}"}
 
 
@@ -668,7 +668,7 @@ def list_complaints(args):
             "total": len(complaints),
         }
     except Exception as e:
-        logger.error(f"查询投诉列表失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"查询投诉列表失败: {e}")
         return {"success": False, "error": f"查询投诉列表失败: {str(e)}"}
 
 
@@ -732,7 +732,7 @@ def get_complaint(args):
             "first_response_at": row[23].isoformat() if row[23] else None,
         }
     except Exception as e:
-        logger.error(f"查询投诉详情失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"查询投诉详情失败: {e}")
         return {"success": False, "error": f"查询投诉详情失败: {str(e)}"}
 
 
@@ -793,7 +793,7 @@ def create_followup(args):
             "status": "pending",
         }
     except Exception as e:
-        logger.error(f"创建跟进任务失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"创建跟进任务失败: {e}")
         return {"success": False, "error": f"创建跟进任务失败: {str(e)}"}
 
 
@@ -869,7 +869,7 @@ def stats(args):
             "group_stats": group_stats,
         }
     except Exception as e:
-        logger.error(f"投诉统计失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"投诉统计失败: {e}")
         return {"success": False, "error": f"投诉统计失败: {str(e)}"}
 
 
@@ -909,7 +909,7 @@ def add_interaction(args):
             "created_at": now.isoformat(),
         }
     except Exception as e:
-        logger.error(f"记录交互失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"记录交互失败: {e}")
         return {"success": False, "error": f"记录交互失败: {str(e)}"}
 
 

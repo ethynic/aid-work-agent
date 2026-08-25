@@ -273,11 +273,13 @@ class IntentEngine:
     ) -> Optional[IntentResult]:
         """
         基于LLM的意图识别
-        
+
+        # TODO(billing): 启用前需补 record_background_llm_usage
+
         Args:
             user_input: 用户输入
             context: 对话上下文
-        
+
         Returns:
             意图结果或None
         """

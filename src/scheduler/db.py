@@ -60,7 +60,7 @@ class ScheduledTaskDB:
                 logger.info(f"后端日志：定时任务创建 task_id={task_id}, user_id={user_id}, name={name}")
                 return ScheduledTaskDB.get_by_id(task_id)
             except Exception as e:
-                logger.error(f"后端日志：创建定时任务失败 {e}", exc_info=True)
+                logger.opt(exception=True).error(f"后端日志：创建定时任务失败 {e}")
                 return None
 
     @staticmethod
@@ -267,7 +267,7 @@ class ScheduledTaskLogDB:
                 logger.info(f"后端日志：定时任务日志创建 log_id={log_id}, task_id={task_id}, status={status}")
                 return ScheduledTaskLogDB.get_by_id(log_id)
             except Exception as e:
-                logger.error(f"后端日志：创建定时任务日志失败 {e}", exc_info=True)
+                logger.opt(exception=True).error(f"后端日志：创建定时任务日志失败 {e}")
                 return None
 
     @staticmethod

@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["vitest/globals"]
+  },
+  "include": [
+    "desktop/**/*.ts",
+    "desktop/**/*.tsx",
+    "desktop/**/*.vue",
+    "shared/**/*.ts",
+    "shared/**/*.tsx",
+    "shared/**/*.vue"
+  ]
+}

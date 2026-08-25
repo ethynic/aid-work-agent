@@ -39,7 +39,11 @@ class ExcelParser(BaseParser):
 
             wb.close()
 
-            text = "\n".join(paragraphs)
+            # 用空行（\n\n）分隔，让每个数据行成为独立段落：
+            # 旧实现用 \n 连接，TextChunker 会把 \n 视作空白合并，整表几十行 SKU
+            # 粘成一个大"段落"，超过 6000 字符被硬切，单个商品语义被稀释（检索不到）。
+            # 独立段落可让 chunker 按行粒度切块，每个商品成为独立检索单元。
+            text = "\n\n".join(paragraphs)
             metadata = {
                 "sheet_count": total_sheets,
                 "sheets": wb.sheetnames if hasattr(wb, 'sheetnames') else [],
@@ -50,5 +54,5 @@ class ExcelParser(BaseParser):
             return ParseResult(text=text, metadata=metadata)
 
         except Exception as e:
-            logger.error(f"后端日志：Excel 文档解析失败: {file_path}, error: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"后端日志：Excel 文档解析失败: {file_path}, error: {e}")
             raise

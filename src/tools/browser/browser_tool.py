@@ -60,6 +60,8 @@ class BrowserScreenshotInput(BaseModel):
 class BrowserOpenTool(BaseTool):
     """打开网页工具"""
 
+    # 旧版浏览器工具，保留兼容：不进自动目录（agent 只注册统一入口 browser_automation）
+    catalog = False
     name = "browser_open"
     description = "打开指定网址的网页，等待页面加载完成"
     usage_guide = """工具使用规范（重要！）
@@ -185,6 +187,8 @@ class BrowserClickTool(BaseTool):
     请使用 semantic 版本的 BrowserClickTool（browser_click with description parameter）
     """
 
+    # 旧版浏览器工具，保留兼容：不进自动目录（agent 只注册统一入口 browser_automation）
+    catalog = False
     name = "browser_click"
     description = """点击网页中的指定元素（CSS选择器版本 - 已废弃）
 
@@ -295,6 +299,8 @@ class BrowserFillTool(BaseTool):
     请使用 semantic 版本的 BrowserFillTool（browser_fill with field parameter）
     """
 
+    # 旧版浏览器工具，保留兼容：不进自动目录（agent 只注册统一入口 browser_automation）
+    catalog = False
     name = "browser_fill"
     description = """填写网页表单中的输入框、文本域等元素（CSS选择器版本 - 已废弃）
 
@@ -399,6 +405,8 @@ class BrowserFillTool(BaseTool):
 class BrowserGetContentTool(BaseTool):
     """获取页面内容工具"""
 
+    # 旧版浏览器工具，保留兼容：不进自动目录（agent 只注册统一入口 browser_automation）
+    catalog = False
     name = "browser_get_content"
     description = "获取网页的内容，支持多种格式输出（默认Markdown格式）。可获取整个页面或特定元素的内容，并返回最终URL"
     display_name = "获取网页内容"
@@ -646,6 +654,8 @@ class BrowserGetContentTool(BaseTool):
 class BrowserNavigateTool(BaseTool):
     """页面导航工具"""
 
+    # 旧版浏览器工具，保留兼容：不进自动目录（agent 只注册统一入口 browser_automation）
+    catalog = False
     name = "browser_navigate"
     description = "在当前页面进行导航操作：前进、后退、刷新"
     display_name = "网页导航"
@@ -728,6 +738,8 @@ class BrowserNavigateTool(BaseTool):
 class BrowserCloseTool(BaseTool):
     """关闭浏览器工具"""
 
+    # 旧版浏览器工具，保留兼容：不进自动目录（agent 只注册统一入口 browser_automation）
+    catalog = False
     name = "browser_close"
     description = "[已弃用] 关闭旧版浏览器会话；主 Agent 不再注册此工具"
     display_name = "关闭浏览器"
@@ -781,6 +793,8 @@ class BrowserCloseTool(BaseTool):
 class BrowserScreenshotTool(BaseTool):
     """网页截图工具"""
 
+    # 旧版浏览器工具，保留兼容：不进自动目录（agent 只注册统一入口 browser_automation）
+    catalog = False
     name = "browser_screenshot"
     description = "对当前网页进行截图并保存"
     display_name = "网页截图"

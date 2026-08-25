@@ -149,6 +149,13 @@ async def recommend_pages(request: Request, body: dict) -> JSONResponse:
             temperature=0.1,
             max_tokens=2048,
         )
+        from src.services.session_record import record_admin_llm_usage
+        record_admin_llm_usage(
+            result,
+            tenant_id=getattr(request.state, "tenant_id", None),
+            user_id=getattr(request.state, "user_id", None),
+            source_label="recommend_pages",
+        )
         content = result.get("content", "")
 
         # 分层提取 JSON

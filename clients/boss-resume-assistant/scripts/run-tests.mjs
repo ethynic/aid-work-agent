@@ -43,6 +43,9 @@ for (const f of files) console.log('  ' + path.relative(root, f))
 const result = spawnSync(process.execPath, ['--test', ...files], {
   stdio: 'inherit',
   cwd: root,
+  // 测试环境禁用 Chrome 自动拉起：mcp 测试用随机/悬挂端口，若不禁会真拉起 Chrome
+  // 并因等待端口就绪把并发锁挂住（子进程再 spawn 的 MCP 进程继续继承此变量）
+  env: { ...process.env, AID_BOSS_AUTO_CHROME: '0' },
 })
 
 process.exit(result.status ?? 1)

@@ -56,7 +56,7 @@ class ScheduledTaskExecutor:
                 logger.info(f"后端日志：定时任务专属会话创建 session_id={session_id}, user_id={user_id}")
                 return SessionDB.get_by_id(session_id)
             except Exception as e:
-                logger.error(f"后端日志：创建定时任务专属会话失败 {e}", exc_info=True)
+                logger.opt(exception=True).error(f"后端日志：创建定时任务专属会话失败 {e}")
                 return None
 
     def _build_user(self, user_id: str) -> Optional[Dict[str, Any]]:
@@ -70,7 +70,7 @@ class ScheduledTaskExecutor:
             MessageDB.create(session_id, "user", user_input)
             MessageDB.create(session_id, "assistant", assistant_response, metadata=metadata)
         except Exception as e:
-            logger.error(f"后端日志：保存定时任务执行结果到会话失败 session_id={session_id}, {e}", exc_info=True)
+            logger.opt(exception=True).error(f"后端日志：保存定时任务执行结果到会话失败 session_id={session_id}, {e}")
 
     async def execute(self, task_id: str, trigger_type: str = "scheduled") -> Dict[str, Any]:
         """
@@ -167,7 +167,7 @@ class ScheduledTaskExecutor:
             import traceback
             error_trace = traceback.format_exc()
 
-            logger.error(f"后端日志：定时任务执行失败 task_id={task_id}, error={error_msg}", exc_info=True)
+            logger.opt(exception=True).error(f"后端日志：定时任务执行失败 task_id={task_id}, error={error_msg}")
 
             # 5. 记录失败日志
             log = ScheduledTaskLogDB.create(
@@ -247,5 +247,5 @@ class ScheduledTaskExecutor:
 
         except Exception as e:
             error_msg = str(e)
-            logger.error(f"后端日志：定时任务试执行失败 user_id={user_id}, error={error_msg}", exc_info=True)
+            logger.opt(exception=True).error(f"后端日志：定时任务试执行失败 user_id={user_id}, error={error_msg}")
             return {"success": False, "result": "", "error": error_msg}

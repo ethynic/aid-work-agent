@@ -198,6 +198,8 @@ class PromptEngine:
             logger.info(f"[PromptEngine] 使用自定义提示词模型: {prompt_model_code}")
         else:
             self._llm = llm_gateway
+        # 最近一次 LLM 调用的 usage（供调用方接入计费）
+        self.last_usage: Optional[Dict[str, Any]] = None
 
     async def generate_prompt_refine(
         self,
@@ -232,6 +234,7 @@ class PromptEngine:
         ]
         logger.info(f"[PromptEngine] 精修模式调用文本模型, user_input={user_input[:50]}")
         resp = await self._llm.chat(messages=messages, temperature=0.7, max_tokens=2000)
+        self.last_usage = resp.get("usage") if isinstance(resp, dict) else None
         content = resp.get("content") or ""
         obj = _extract_json_object(content)
         if obj is None:
@@ -277,6 +280,7 @@ class PromptEngine:
         ]
         logger.info(f"[PromptEngine] 敏捷模式调用文本模型, count={count}, user_input={user_input[:50]}")
         resp = await self._llm.chat(messages=messages, temperature=0.9, max_tokens=4000)
+        self.last_usage = resp.get("usage") if isinstance(resp, dict) else None
         content = resp.get("content") or ""
         arr = _extract_json_array(content)
         if arr is None:

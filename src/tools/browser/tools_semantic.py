@@ -127,6 +127,8 @@ async def wait_for_page_stable(page, timeout: int = 5000):
 class BrowserClickTool(BaseTool):
     """点击页面元素（自然语言驱动）"""
 
+    # 旧版浏览器工具，保留兼容：不进自动目录（agent 只注册统一入口 browser_automation）
+    catalog = False
     name = "browser_click"
     description = """点击页面上的元素。通过自然语言描述要点击的元素，系统自动在快照中查找匹配元素并点击。
 
@@ -291,6 +293,8 @@ class BrowserClickTool(BaseTool):
 class BrowserFillTool(BaseTool):
     """填写表单字段（自然语言驱动）"""
 
+    # 旧版浏览器工具，保留兼容：不进自动目录（agent 只注册统一入口 browser_automation）
+    catalog = False
     name = "browser_fill"
     description = """填写表单字段。通过自然语言描述要填写的字段和值，系统自动查找匹配元素并填写。
 
@@ -477,6 +481,8 @@ class BrowserFillTool(BaseTool):
 class BrowserSelectTool(BaseTool):
     """选择下拉选项（自然语言驱动）"""
 
+    # 旧版浏览器工具，保留兼容：不进自动目录（agent 只注册统一入口 browser_automation）
+    catalog = False
     name = "browser_select"
     description = """在下拉列表中选择选项。通过自然语言描述要选择的选项，系统自动查找并选择。
 

@@ -10,6 +10,7 @@
 两者都限定 chunk_index=0（酒店信息摘要，已向量化）。
 """
 
+import asyncio
 import json
 from typing import Dict, Any, List, Optional
 
@@ -50,11 +51,6 @@ class HotelSearchTool(BaseTool):
 
     def __init__(self):
         self._embedding_client = None
-        self._tenant_id = None
-
-    def set_tenant_id(self, tenant_id: str):
-        """由 Agent 注入 tenant_id（子智能体线程中 ContextVar 不可用）"""
-        self._tenant_id = tenant_id
 
     def _get_embedding_client(self):
         if self._embedding_client is None:
@@ -66,31 +62,15 @@ class HotelSearchTool(BaseTool):
         return self._embedding_client
 
     def _embed(self, text: str) -> List[float]:
-        import dashscope
-        from src.config.settings import get_embedding_api_key
-
-        dashscope.api_key = get_embedding_api_key()
-
-        resp = dashscope.TextEmbedding.call(
-            model="text-embedding-v3",
-            input=text,
-            dimension=1024,
-            text_type="document",
-        )
-        if resp.status_code != 200:
-            raise RuntimeError(f"Embedding API 调用失败: {resp.message}")
-        return resp.output["embeddings"][0]["embedding"]
+        """使用 TextEmbeddingV3Client 同步向量化（累加 usage 到 client）"""
+        client = self._get_embedding_client()
+        return client.embed_sync(text)
 
     def _resolve_tenant_id(self) -> Optional[str]:
-        """获取 tenant_id：优先 Agent 注入，其次 ContextVar（HTTP 请求场景）"""
-        tenant_id = self._tenant_id
-        if not tenant_id:
-            try:
-                from src.saas.context import get_current_tenant_id
-                tenant_id = get_current_tenant_id()
-            except Exception:
-                pass
-        return tenant_id
+        """从当前请求的不可变执行上下文获取租户。"""
+        from src.tools.context import current_tool_execution_context
+        context = current_tool_execution_context()
+        return context.tenant_id if context else None
 
     def _format_row(self, row, score: Optional[float]) -> Dict[str, Any]:
         """将数据库行格式化为统一的输出项"""
@@ -160,7 +140,16 @@ class HotelSearchTool(BaseTool):
             # 第二步：名称无命中 → 向量语义搜索兜底
             if not rows:
                 used_vector = True
-                embedding = self._embed(query)
+                client = self._get_embedding_client()
+                client.reset_usage()
+                # _embed 内部含 TextEmbedding.call 同步阻塞 + 重试 sleep，必须 to_thread 化避免卡事件循环
+                embedding = await asyncio.to_thread(self._embed, query)
+                # 累加 embedding usage 到当前 SessionRecordService（对话内检索计费）
+                if client.last_usage_tokens > 0:
+                    from src.services.session_record import SessionRecordManager
+                    record = SessionRecordManager.get_current_record()
+                    if record:
+                        record.add_embedding_usage(client.last_usage_tokens, model=client.model)
                 embedding_str = "[" + ",".join(str(v) for v in embedding) + "]"
                 with get_db_connection() as conn:
                     cursor = conn.cursor()
@@ -201,5 +190,5 @@ class HotelSearchTool(BaseTool):
             }
 
         except Exception as e:
-            logger.error(f"酒店搜索失败: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"酒店搜索失败: {e}")
             return {"success": False, "error": str(e), "results": [], "count": 0}

@@ -114,7 +114,7 @@ async def get_long_term_memory(
         }
 
     except Exception as e:
-        logger.error(f"获取长期记忆失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"获取长期记忆失败: {e}")
         return {
             "success": False,
             "error": "获取长期记忆失败",
@@ -161,7 +161,7 @@ async def update_long_term_memory(
             "error": str(e),
         }
     except Exception as e:
-        logger.error(f"更新长期记忆失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"更新长期记忆失败: {e}")
         return {
             "success": False,
             "error": "更新长期记忆失败",

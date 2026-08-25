@@ -2,6 +2,7 @@
 知识库 API 路由
 """
 
+import json
 import os
 import shutil
 import uuid
@@ -17,6 +18,7 @@ from src.api import auth
 from src.knowledge.service import knowledge_service
 from src.saas.context import get_current_tenant_id
 from src.config.settings import settings
+from src.db.database import get_db_connection
 
 router = APIRouter(prefix="/api/knowledge", tags=["knowledge"])
 
@@ -222,7 +224,7 @@ async def upload_document(
         )
 
     except Exception as e:
-        logger.error(f"后端日志：文档上传失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"后端日志：文档上传失败: {e}")
         # 清理已保存的文件
         if file_path.exists():
             file_path.unlink()
@@ -322,7 +324,7 @@ async def upload_documents_batch(
                 ))
 
         except Exception as e:
-            logger.error(f"后端日志：文档上传失败: {filename}: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"后端日志：文档上传失败: {filename}: {e}")
             # 清理已保存的文件
             if file_path.exists():
                 file_path.unlink()
@@ -453,22 +455,87 @@ async def get_document_chunks(doc_id: int):
     })
 
 
+def _has_shared_access(to_tenant_id: str, from_tenant_id: str, source_type: str) -> bool:
+    """校验 B 租户（to_tenant_id）是否对 A 租户（from_tenant_id）该分类拥有已启用的共享下载权限。
+
+    与检索侧 `_load_shared_ranges` 判定一致（租户级授权 ∩ 数字员工级启用），避免
+    下载权限与检索权限不一致：能搜到却不能下载，或反之。
+    同时满足才放行：
+    1. tenant_knowledge_shares 中存在 (from_tenant_id -> to_tenant_id)
+    2. subagent_knowledge_sources.sources 中某 JSONB 项含
+       owner_tenant_id=from_tenant_id 且 source_type=source_type
+    """
+    if not to_tenant_id or not from_tenant_id or not source_type:
+        return False
+    try:
+        conn_cm = get_db_connection()
+        conn = conn_cm.__enter__()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT EXISTS (
+                    SELECT 1 FROM tenant_knowledge_shares
+                    WHERE from_tenant_id = %s AND to_tenant_id = %s
+                ) AND EXISTS (
+                    SELECT 1 FROM subagent_knowledge_sources
+                    WHERE tenant_id = %s
+                      AND sources @> %s::jsonb
+                ) AS granted
+            """, (
+                from_tenant_id, to_tenant_id,
+                to_tenant_id,
+                json.dumps([{"owner_tenant_id": from_tenant_id, "source_type": source_type}],
+                           ensure_ascii=False),
+            ))
+            row = cursor.fetchone()
+            return bool(row["granted"]) if row else False
+        finally:
+            conn_cm.__exit__(None, None, None)
+    except Exception as e:
+        logger.warning(f"后端日志：校验共享下载权限失败: {e}")
+        return False
+
+
+def _can_download_document(doc_row: dict, current_tenant_id: Optional[str]) -> bool:
+    """下载权限判定：
+    - 当前租户匹配文档 tenant_id -> 允许
+    - 无租户上下文（demo/命令行）-> 仅允许 demo 或无租户文档
+    - 否则校验共享访问（租户级授权 ∩ 数字员工级启用）
+    """
+    doc_tenant_id = doc_row.get("tenant_id")
+    source_type = doc_row.get("source_type") or ""
+    if current_tenant_id:
+        if doc_tenant_id == current_tenant_id:
+            return True
+        if doc_tenant_id and source_type:
+            return _has_shared_access(current_tenant_id, doc_tenant_id, source_type)
+        return False
+    return doc_tenant_id in (None, "demo")
+
+
 @router.get("/documents/{doc_id}/download")
 async def download_document(doc_id: int):
     """
     下载/预览原始文档文件
 
     - 新窗口打开或下载原文
+    - 做租户隔离与共享范围校验：仅本租户文档或已启用共享分类可下载
     """
-    # 查询文档的 file_path
+    # 查询文档的 file_path + 租户归属（用于权限校验）
     with knowledge_service._get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT file_path, title FROM documents WHERE id = %s", (doc_id,))
+        cursor.execute(
+            "SELECT file_path, title, tenant_id, source_type FROM documents WHERE id = %s",
+            (doc_id,)
+        )
         row = cursor.fetchone()
 
-    # row 是 dict: {"file_path": ..., "title": ...}，对应 SELECT file_path, title
+    # row 是 dict: {"file_path": ..., "title": ..., "tenant_id": ..., "source_type": ...}
     if not row or not row.get("file_path"):
         raise HTTPException(status_code=404, detail="文档不存在或文件已丢失")
+
+    if not _can_download_document(row, get_current_tenant_id()):
+        raise HTTPException(status_code=403, detail="无权访问该文档")
 
     file_path = row["file_path"]
     title = row.get("title") or f"document_{doc_id}"

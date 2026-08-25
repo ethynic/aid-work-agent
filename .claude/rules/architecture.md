@@ -52,7 +52,12 @@
 3. 在类上设置 `name`、`description`、`display_name`、`InputModel`
 4. 实现 `async execute(self, **kwargs) -> Dict[str, Any]`
 5. 可选择重写 `get_display_name()` 用于动态显示名称
-6. 在 `Agent._register_builtin_tools()` 中注册
+6. 保持 `catalog=True` 且支持无参构造；Catalog 会自动发现，Assembly 会按 Agent
+   角色和配置生成最终 Registry，无需修改 `agent.py`
+
+有构造依赖或会改变 Agent 状态机的控制工具必须设置 `catalog=False`，并在
+`src/tools/control_set.py` 中显式装配和评审。请求级 tenant/user/session 从
+`ToolExecutionContext` 读取，禁止写入共享工具实例或新增身份 setter。
 
 **Schema 来源**：每个工具类通过 `InputModel`（Pydantic BaseModel）或 `parameters_schema` 定义参数 schema，`ToolRegistry.get_tool_definitions()` 自动收集。不再需要手动维护 `schemas.py`。
 
@@ -129,11 +134,11 @@ context:
 
 **2. 创建 Vue 组件**
 
-在 `frontend/src/components/<domain>/` 目录下创建组件，遵循 [list-page-convention.md](./list-page-convention.md) 规范。
+在 `frontend/web/components/<domain>/` 目录下创建组件，遵循 [list-page-convention.md](./list-page-convention.md) 规范。
 
 **3. 注册路由**
 
-在 `frontend/src/main.ts` 中注册路由，每个业务域的路由需要注册两份（demo 模式 + tenant 模式），参照现有模式。
+在 `frontend/web/main.ts` 中注册路由，每个业务域的路由需要注册两份（demo 模式 + tenant 模式），参照现有模式。
 
 **4. 发布**
 

@@ -16,6 +16,7 @@ import pytest
 # 若直接先 import hotel_search_tool 会形成循环（工具 → src.db → master_agent 构造 → 再 import 工具）。
 import src.db.database  # noqa: F401
 from src.tools.knowledge.hotel_search_tool import HotelSearchTool
+from src.tools.context import ToolExecutionContext, tool_execution_scope
 from src.db.database import get_db_connection
 
 pytestmark = pytest.mark.integration
@@ -107,10 +108,10 @@ class TestHotelSearchRealDB:
         本测试正是验证这一能力在真实库上成立。
         """
         tool = HotelSearchTool()
-        tool.set_tenant_id(TENANT_ID)
         # 用酒店名前半段做模糊检索，验证 ILIKE 命中
         q = HOTEL_NAME[:4] if len(HOTEL_NAME) > 4 else HOTEL_NAME
-        result = await tool.execute(query=q, top_k=10)
+        with tool_execution_scope(ToolExecutionContext(tenant_id=TENANT_ID)):
+            result = await tool.execute(query=q, top_k=10)
 
         assert result["success"] is True
         assert result["count"] >= 1
@@ -132,8 +133,8 @@ class TestHotelSearchRealDB:
     async def test_price_table_associated_by_doc_id(self):
         """多条结果时每条都带 price_table 字段（按 doc_id 关联，缺失为空串）"""
         tool = HotelSearchTool()
-        tool.set_tenant_id(TENANT_ID)
-        result = await tool.execute(query="酒店", top_k=5)
+        with tool_execution_scope(ToolExecutionContext(tenant_id=TENANT_ID)):
+            result = await tool.execute(query="酒店", top_k=5)
 
         assert result["success"] is True
         for r in result["results"]:
@@ -149,8 +150,10 @@ class TestHotelSearchRealDB:
         注：假常量向量排序无意义，本用例只覆盖向量分支 SQL 可执行 + 结构正确。
         """
         tool = HotelSearchTool()
-        tool.set_tenant_id(TENANT_ID)
-        with patch.object(tool, "_embed", return_value=[0.1] * 1024):
+        with (
+            patch.object(tool, "_embed", return_value=[0.1] * 1024),
+            tool_execution_scope(ToolExecutionContext(tenant_id=TENANT_ID)),
+        ):
             result = await tool.execute(query="zzzqqqxx非酒店随机词", top_k=5)
 
         assert result["success"] is True

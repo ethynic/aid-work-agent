@@ -158,7 +158,7 @@ class PptProcessTool(BaseTool):
                 return await asyncio.to_thread(self._apply_quality_validation, result)
             return result
         except Exception as e:
-            logger.error(f"[PptProcess] 执行失败: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"[PptProcess] 执行失败: {e}")
             return {"success": False, "error": self._format_user_error(e)}
 
     def _detect_mode(self, normalized: NormalizedPptInput) -> str:
@@ -405,7 +405,7 @@ class PptProcessTool(BaseTool):
                 spec = SlideDeckSpecBuilder().from_planner(plan)
                 return await asyncio.to_thread(self._render_node_spec, spec)
             except Exception as e:
-                logger.error(f"[PptProcess] PptxGenJS 渲染失败: {e}", exc_info=True)
+                logger.opt(exception=True).error(f"[PptProcess] PptxGenJS 渲染失败: {e}")
                 if not config.renderer_fallback:
                     return {"success": False, "error": "PPT渲染服务暂不可用，请稍后重试"}
                 warning = (

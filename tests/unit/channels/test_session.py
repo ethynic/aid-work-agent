@@ -118,17 +118,20 @@ def mock_db():
                         channel_type=row["channel_type"],
                         channel_user_id=row["channel_user_id"],
                         subagent_id=row.get("subagent_id", ""),
+                        channel_chat_id=row.get("channel_chat_id") or "",
                     )]
                 cursor.rowcount = 1 if cursor._fetch_rows else 0
 
             elif "select * from channel_sessions where tenant_id" in sql_lower:
                 tid, ctype, cuid = params[0], params[1], params[2]
                 said = params[3] if len(params) > 3 else ""
+                chat_id = params[4] if len(params) > 4 else ""
                 for row in memory_store["sessions"].values():
                     if (row.get("tenant_id") == tid and
                         row["channel_type"] == ctype and
                         row["channel_user_id"] == cuid and
-                        row.get("subagent_id", "") == said):
+                        row.get("subagent_id", "") == said and
+                        (row.get("channel_chat_id") or "") == chat_id):
                         cursor._fetch_rows = [row]
                         break
 
@@ -155,6 +158,10 @@ def mock_db():
             elif "select * from channel_messages" in sql_lower:
                 sid = params[0]
                 rows = [r for r in memory_store["messages"] if r["session_id"] == sid]
+                # 模拟 status 软删除过滤（隐藏命令"新会话"标记的 invalid 消息不入 LLM 上下文）。
+                # SQL 含 "status = 'active'" 时才过滤，缺失 status 的行按 active 处理。
+                if "status = 'active'" in sql_lower:
+                    rows = [r for r in rows if r.get("status", "active") != "invalid"]
                 # 生产用子查询「ORDER BY id DESC LIMIT N」取最近 N 条再正序返回。
                 # memory_store 按插入顺序（=id ASC），最近 N 条即末尾 N 条，保持 ASC。
                 import re as _re
@@ -399,6 +406,63 @@ class TestSubagentIsolation:
         assert session["subagent_id"] == "travel-agent"
 
 
+class TestChannelChatIdIsolation:
+    """渠道会话/群ID（channel_chat_id）隔离测试。
+
+    wecom_kf 场景：同一微信用户可从不同客服账号（open_kfid）进入，每个账号应
+    独立会话（独立上下文、独立积分），避免复用第一个账号的会话导致积分归属错乱。
+    channel_chat_id 为空时保持旧行为不变（wecom/dingtalk/feishu 不受影响）。
+    """
+
+    def test_different_channel_chat_id_get_different_sessions(self, session_manager, mock_db):
+        """同一用户不同 channel_chat_id 获得不同会话（不复用第一个账号的会话）"""
+        s1 = session_manager.get_or_create_session(
+            channel_type="wecom_kf",
+            channel_user_id="wx_user_001",
+            tenant_id=TEST_TENANT,
+            subagent_id="sales-assistant",
+            channel_chat_id="open_kfid_A",
+        )
+        s2 = session_manager.get_or_create_session(
+            channel_type="wecom_kf",
+            channel_user_id="wx_user_001",
+            tenant_id=TEST_TENANT,
+            subagent_id="sales-assistant",
+            channel_chat_id="open_kfid_B",
+        )
+        assert s1["session_id"] != s2["session_id"]
+        assert "open_kfid_A" in s1["session_id"]
+        assert "open_kfid_B" in s2["session_id"]
+        assert s1["channel_chat_id"] == "open_kfid_A"
+        assert s2["channel_chat_id"] == "open_kfid_B"
+
+    def test_same_channel_chat_id_gets_same_session(self, session_manager, mock_db):
+        """同一用户同一 channel_chat_id 重复调用获得相同会话"""
+        s1 = session_manager.get_or_create_session(
+            channel_type="wecom_kf",
+            channel_user_id="wx_user_001",
+            tenant_id=TEST_TENANT,
+            subagent_id="sales-assistant",
+            channel_chat_id="open_kfid_A",
+        )
+        s2 = session_manager.get_or_create_session(
+            channel_type="wecom_kf",
+            channel_user_id="wx_user_001",
+            tenant_id=TEST_TENANT,
+            subagent_id="sales-assistant",
+            channel_chat_id="open_kfid_A",
+        )
+        assert s1["session_id"] == s2["session_id"]
+        assert s1["channel_chat_id"] == s2["channel_chat_id"] == "open_kfid_A"
+
+    def test_session_id_format_with_chat_id(self, session_manager, mock_db):
+        """channel_chat_id 非空时 session_id 含 chat_id（位于 channel_user_id 前）"""
+        sid = session_manager._generate_session_id(
+            "mytenant", "wecom_kf", "user001", "sales-assistant", "open_kfid_x"
+        )
+        assert sid == "mytenant_wecom_kf_open_kfid_x_user001_sales-assistant"
+
+
 class TestIsChannelSession:
     """is_channel_session 判定测试。
 
@@ -448,3 +512,88 @@ class TestGetMessagesKeepsNewest:
         msgs = session_manager.get_messages(sid, limit=3)
         contents = [m["content"] for m in msgs]
         assert contents == ["msg2", "msg3", "msg4"], f"应保留最近3条, 实际: {contents}"
+
+
+class TestGetMessagesFiltersInvalid:
+    """get_messages 软删除过滤测试（隐藏命令"新会话"标记 status='invalid' 的消息不入 LLM 上下文）"""
+
+    def test_excludes_all_invalid(self, session_manager, mock_db):
+        """全部消息失效后，get_messages 返回空列表（新会话效果）"""
+        sid = "test_tenant_wecom_kf_user1_travel-consultant"
+        mock_db["sessions"][sid] = {"session_id": sid}
+        session_manager.add_message(sid, role="user", content="msg1", tenant_id="test_tenant")
+        session_manager.add_message(sid, role="assistant", content="msg2", tenant_id="test_tenant")
+        for m in mock_db["messages"]:
+            m["status"] = "invalid"
+        with patch.object(session_manager, "_has_status_column", return_value=True):
+            msgs = session_manager.get_messages(sid, limit=10)
+        assert msgs == []
+
+    def test_keeps_active_excludes_invalid(self, session_manager, mock_db):
+        """仅失效消息被过滤，正常（active）消息保留"""
+        sid = "test_tenant_wecom_kf_user1_travel-consultant"
+        mock_db["sessions"][sid] = {"session_id": sid}
+        session_manager.add_message(sid, role="user", content="msg1", tenant_id="test_tenant")
+        session_manager.add_message(sid, role="assistant", content="msg2", tenant_id="test_tenant")
+        mock_db["messages"][0]["status"] = "invalid"  # 第一条失效
+        with patch.object(session_manager, "_has_status_column", return_value=True):
+            msgs = session_manager.get_messages(sid, limit=10)
+        assert [m["content"] for m in msgs] == ["msg2"]
+
+
+class TestSoftDeleteMessages:
+    """soft_delete_messages 软删除测试"""
+
+    def test_marks_messages_invalid_and_summaries_superseded(self, session_manager):
+        """channel_messages 置 status='invalid'，chat_context_summaries 置 superseded"""
+        executed = []
+        cursor = MagicMock()
+        cursor.rowcount = 3
+
+        def fake_execute(sql, params=None):
+            executed.append((sql, params))
+
+        cursor.execute = fake_execute
+        conn = MagicMock()
+        conn.cursor.return_value = cursor
+
+        with patch("src.channels.session.get_db_connection") as mock_conn:
+            mock_conn.return_value.__enter__ = MagicMock(return_value=conn)
+            mock_conn.return_value.__exit__ = MagicMock(return_value=False)
+            with patch("src.core.cache_utils.delete_cached_pattern") as mock_cache:
+                result = session_manager.soft_delete_messages("sid_test", "tenant_test")
+
+        assert result is True
+        sqls = [s for s, _ in executed]
+        assert any("UPDATE channel_messages" in s and "status = 'invalid'" in s for s in sqls), sqls
+        assert any(
+            "UPDATE chat_context_summaries" in s and "status = 'superseded'" in s
+            for s in sqls
+        ), sqls
+        # 失效 SESSION_MSGS 缓存
+        mock_cache.assert_called_once()
+
+    def test_no_tenant(self, session_manager):
+        """无 tenant_id 时按 session_id 单独过滤"""
+        executed = []
+        cursor = MagicMock()
+        cursor.rowcount = 0
+
+        def fake_execute(sql, params=None):
+            executed.append((sql, params))
+
+        cursor.execute = fake_execute
+        conn = MagicMock()
+        conn.cursor.return_value = cursor
+
+        with patch("src.channels.session.get_db_connection") as mock_conn:
+            mock_conn.return_value.__enter__ = MagicMock(return_value=conn)
+            mock_conn.return_value.__exit__ = MagicMock(return_value=False)
+            result = session_manager.soft_delete_messages("sid_test")
+
+        assert result is False  # 无消息被标记
+        sqls = [s for s, _ in executed]
+        # 无租户分支：UPDATE 不带 tenant_id
+        assert any(
+            "UPDATE channel_messages" in s and "tenant_id" not in s for s in sqls
+        ), sqls

@@ -107,14 +107,12 @@ class User(BaseModel):
         """
         role_permissions = {
             UserRole.EMPLOYEE: [
-                "email_send",
-                "email_read",
+                "email_process",
                 "ocr_image",
                 "web_search",
             ],
             UserRole.MANAGER: [
-                "email_send",
-                "email_read",
+                "email_process",
                 "ocr_image",
                 "ocr_pdf",
                 "web_search",
@@ -122,8 +120,7 @@ class User(BaseModel):
                 "data_export",
             ],
             UserRole.ADMIN: [
-                "email_send",
-                "email_read",
+                "email_process",
                 "email_search",
                 "ocr_image",
                 "ocr_pdf",

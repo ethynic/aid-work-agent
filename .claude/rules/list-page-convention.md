@@ -32,7 +32,7 @@
 
 ### 公共 CSS 类
 
-列表页布局、搜索区、表格滚动条、表单字段、弹框表单等通用样式已提取到 `frontend/src/styles/page-common.css`（已在 `style.css` 中全局引入）：
+列表页布局、搜索区、表格滚动条、表单字段、弹框表单等通用样式已提取到 `frontend/web/styles/page-common.css`（已在 `style.css` 中全局引入）：
 
 | 类名 | 用途 |
 |------|------|
@@ -84,7 +84,7 @@
 
 ### 表格组件
 
-列表页表格**必须使用** `BaseTable.vue` 组件（`frontend/src/components/ui/BaseTable.vue`），禁止手写原生 `<table>` 或引入第三方表格组件。
+列表页表格**必须使用** `BaseTable.vue` 组件（`frontend/web/components/ui/BaseTable.vue`），禁止手写原生 `<table>` 或引入第三方表格组件。
 
 - 统一通过 `:columns` 和 `:data` 传入列定义与数据，使用 `row-key` 指定唯一键。
 - 统一由 `BaseTable` 提供斑马线、表头样式、单元格 `title` 提示、空状态等基础能力。
@@ -266,7 +266,7 @@ async function handleScroll() {
 
 ### 6.6 判断手机端
 
-使用 `useMobile` composable（`frontend/src/composables/useMobile.ts`），断点 768px：
+使用 `useMobile` composable（`frontend/web/composables/useMobile.ts`），断点 768px：
 
 ```ts
 import { useMobile } from '@/composables/useMobile'
@@ -277,7 +277,7 @@ const { isMobile } = useMobile()
 
 ### 6.7 参考实现
 
-`frontend/src/components/AllSessions.vue` 是本规范的参考实现，包含完整的累积加载、行号分流、滚动监听、加载状态隔离逻辑。
+`frontend/web/components/AllSessions.vue` 是本规范的参考实现，包含完整的累积加载、行号分流、滚动监听、加载状态隔离逻辑。
 
 ---
 
@@ -299,7 +299,7 @@ const { isMobile } = useMobile()
 
 ## 8. 公共 Composable：`usePageContext`
 
-列表页的分页序号计算、搜索、刷新等通用逻辑已封装为 `usePageContext` composable（`frontend/src/composables/usePageContext.ts`）：
+列表页的分页序号计算、搜索、刷新等通用逻辑已封装为 `usePageContext` composable（`frontend/web/composables/usePageContext.ts`）：
 
 ```ts
 import { usePageContext } from '@/composables/usePageContext'
@@ -322,7 +322,7 @@ const { currentPage, pageSize, seqNumber, handleSearch, refresh } =
 
 ## 9. 公共 Composable：`useTableSelection`
 
-表格批量选择逻辑已封装为 `useTableSelection` composable（`frontend/src/composables/useTableSelection.ts`）：
+表格批量选择逻辑已封装为 `useTableSelection` composable（`frontend/web/composables/useTableSelection.ts`）：
 
 ### 基本用法
 

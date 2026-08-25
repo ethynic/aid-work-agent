@@ -2,14 +2,14 @@
 租户余额查询与用量明细 API（#37 租户积分充值与计费）
 
 路由：/api/saas/billing/*
-- GET /balance    当前租户积分余额 + 近 7 天日均消耗 + 预估可用天数
+- GET /balance    当前租户积分余额 + 日均消耗（动态 n 天窗口）+ 预估可用天数 + 是否待续费
 - GET /usage      用量明细列表（按日聚合，含 credit_cost）
 - GET /recharges  本租户充值记录列表（只读）
 
 权限：tenant_admin / user / platform_admin（代管理需带 X-Tenant-Id）
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Request, Query
@@ -17,7 +17,9 @@ from loguru import logger
 
 from src.config.settings import settings
 from src.saas.api.tenant_auth import require_admin, sanitize_error_info
+from src.saas.db.channel_config_db import ChannelConfigDB
 from src.saas.db.tenant_db import TenantDB
+from src.saas.services.renewal import compute_renewal_status
 from src.db.models import TenantRechargesDB
 from src.db.database import get_db_connection
 
@@ -44,22 +46,17 @@ async def get_balance(request: Request):
             return {"success": False, "message": "租户不存在"}
 
         credit_balance = float(tenant.get("credit_balance") or 0)
-
-        # 近 7 天日均消耗
-        daily_avg_cost_7d = _compute_daily_avg_cost(tenant_id, days=7)
-        estimated_days_left: Optional[int]
-        if daily_avg_cost_7d > 0:
-            estimated_days_left = max(0, int(credit_balance / daily_avg_cost_7d))
-        else:
-            # 日均为 0 时返回 -1（前端可显示"暂无数据"）
-            estimated_days_left = -1 if credit_balance > 0 else 0
+        renewal = compute_renewal_status(tenant)
 
         return {
             "success": True,
             "balance": {
                 "credit_balance": credit_balance,
-                "daily_avg_cost_7d": daily_avg_cost_7d,
-                "estimated_days_left": estimated_days_left,
+                "daily_avg_cost": renewal["daily_avg_cost"],
+                # 兼容旧字段名，值为动态 n 日均（开通 > 30 天取 30，否则取开通天数）
+                "daily_avg_cost_7d": renewal["daily_avg_cost"],
+                "estimated_days_left": renewal["estimated_days_left"],
+                "renewal_pending": renewal["renewal_pending"],
             },
         }
     except Exception as e:
@@ -288,6 +285,10 @@ async def get_daily_usage_detail(
                     cr.cached_input_tokens,
                     cr.completion_tokens,
                     cr.credit_cost,
+                    cr.model,
+                    cr.usage_breakdown,
+                    chs.channel_chat_id,
+                    chs.channel_type,
                     cr.created_at
                 FROM chat_records cr
                 LEFT JOIN users u ON u.user_id = cr.user_id
@@ -326,6 +327,8 @@ async def get_daily_usage_detail(
                         user_display = main_name
                 else:
                     user_display = main_name
+                channel_chat_id = r.get("channel_chat_id")
+                channel_type = r.get("channel_type")
                 items.append({
                     "record_id": r.get("record_id"),
                     "session_id": r.get("session_id"),
@@ -335,14 +338,25 @@ async def get_daily_usage_detail(
                     "user_message": r.get("user_message") or "",
                     "assistant_message": r.get("assistant_message") or "",
                     "credit_cost": float(r.get("credit_cost") or 0),
+                    "channel_label": _resolve_channel_label(tenant_id, channel_type, channel_chat_id),
+                    "channel_chat_id": channel_chat_id,
+                    "channel_type": channel_type,
                     "created_at": r.get("created_at").strftime("%Y-%m-%d %H:%M:%S")
                         if r.get("created_at") else None,
                 })
-                # token 三列仅平台管理员可见，租户管理员不返回
+                # token 三列 + usage_breakdown 7 分项仅平台管理员可见，租户管理员不返回
                 if reveal_tokens:
                     items[-1]["prompt_tokens"] = int(r.get("prompt_tokens") or 0)
                     items[-1]["cached_input_tokens"] = int(r.get("cached_input_tokens") or 0)
                     items[-1]["completion_tokens"] = int(r.get("completion_tokens") or 0)
+                    items[-1]["breakdown_items"] = _parse_breakdown_items(r.get("usage_breakdown"))
+                    # 文本模型：优先 usage_breakdown.chat.model（summary_llm 为 mid_term 摘要等场景），
+                    # 老数据 breakdown 无 model 时回退到 chat_records.model 列
+                    _bd = r.get("usage_breakdown") or {}
+                    items[-1]["model"] = (
+                        (_bd.get("chat") or _bd.get("summary_llm") or {}).get("model")
+                        or r.get("model")
+                    )
 
         return {
             "success": True,
@@ -359,26 +373,124 @@ async def get_daily_usage_detail(
 
 # ============== 辅助函数 ==============
 
-def _compute_daily_avg_cost(tenant_id: str, days: int = 7) -> float:
-    """计算近 N 天日均积分消耗（2 位小数）
+def _resolve_channel_label(tenant_id: str, channel_type: str, channel_chat_id: str) -> Optional[str]:
+    """渠道会话展示名解析（通用，不硬编码 wecom_kf）。
 
-    若 N 天内无消耗记录返回 0.0。
+    channel_chat_id 为空返回 None（前端显示 "-"）；wecom_kf 渠道反查客服账号名称，
+    未匹配回退显示 channel_chat_id 原始值；其它渠道暂直接返回 channel_chat_id，
+    将来各渠道需展示群名/会话名时在此函数扩展分支。
     """
-    start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d 00:00:00")
-    placeholder = "%s"
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            f"""
-            SELECT COALESCE(SUM(credit_cost), 0) AS total
-            FROM chat_records
-            WHERE tenant_id = {placeholder}
-              AND created_at >= {placeholder}
-            """,
-            (tenant_id, start_date),
+    if not channel_chat_id:
+        return None
+    if channel_type == "wecom_kf":
+        try:
+            for cfg in ChannelConfigDB.list_by_tenant(tenant_id, "wecom_kf"):
+                for kf in cfg.get("config", {}).get("kf_account", []):
+                    if kf.get("open_kfid") == channel_chat_id:
+                        return kf.get("name") or channel_chat_id
+        except Exception as e:
+            logger.warning(
+                f"[billing] 客服账号反查失败: tenant={tenant_id}, "
+                f"open_kfid={channel_chat_id}, error={e}"
+            )
+    return channel_chat_id
+
+
+def _parse_breakdown_items(breakdown) -> list:
+    """把 chat_records.usage_breakdown JSON 解析为 7 分项对账结构（仅平台管理员明细弹框使用）。
+
+    返回固定 7 项列表，每项：
+    {
+        "key": 分项标识（non_cached_input / cached_input / cache_creation_input / output / video / asr / embedding）,
+        "label": 分项中文名,
+        "qty": 数量（token / 秒 / 次），
+        "unit_price": 单价原始值（每百万 token 或 每秒/每次），
+        "usage_factor": 用量系数,
+        "credit": 积分消耗,
+        "is_per_million": 单价是否为每百万类（chat 分项 / embedding，前端需 ÷1M 换算）,
+    }
+    无对应分项或字段缺失时为 None，前端按 "-" 兜底（旧记录无 unit_prices/usage_factor/credits）。
+    """
+    breakdown = breakdown or {}
+    chat = breakdown.get("chat") or breakdown.get("summary_llm") or {}
+    video = breakdown.get("video") or {}
+    asr = breakdown.get("asr") or {}
+    emb = breakdown.get("embedding") or {}
+
+    unit_prices = chat.get("unit_prices") or {}
+    credits = chat.get("credits") or {}
+    chat_factor = chat.get("usage_factor")
+
+    # 老数据（2026-08-14 前）chat 分项无 non_cached_input_tokens 单独字段，
+    # 用 prompt_tokens - cached_input_tokens 兜底计算（cached 缺失视为 0 -> 即全量 prompt）
+    non_cached_qty = chat.get("non_cached_input_tokens")
+    if non_cached_qty is None and chat.get("prompt_tokens") is not None:
+        non_cached_qty = max(
+            int(chat.get("prompt_tokens") or 0) - int(chat.get("cached_input_tokens") or 0), 0
         )
-        row = cursor.fetchone() or {}
-        total_cost = float(row.get("total") or 0)
-    if total_cost <= 0:
-        return 0.0
-    return round(total_cost / days, 2)
+
+    return [
+        {
+            "key": "non_cached_input",
+            "label": "未命中缓存输入",
+            "qty": non_cached_qty,
+            "unit_price": unit_prices.get("input_per_m"),
+            "usage_factor": chat_factor,
+            "credit": credits.get("non_cached_input"),
+            "is_per_million": True,
+        },
+        {
+            "key": "cached_input",
+            "label": "命中缓存输入",
+            "qty": chat.get("cached_input_tokens"),
+            "unit_price": unit_prices.get("cached_input_per_m"),
+            "usage_factor": chat_factor,
+            "credit": credits.get("cached_input"),
+            "is_per_million": True,
+        },
+        {
+            "key": "cache_creation_input",
+            "label": "缓存创建输入",
+            "qty": chat.get("cache_creation_input_tokens"),
+            "unit_price": unit_prices.get("cache_creation_input_per_m"),
+            "usage_factor": chat_factor,
+            "credit": credits.get("cache_creation_input"),
+            "is_per_million": True,
+        },
+        {
+            "key": "output",
+            "label": "输出",
+            "qty": chat.get("completion_tokens"),
+            "unit_price": unit_prices.get("output_per_m"),
+            "usage_factor": chat_factor,
+            "credit": credits.get("output"),
+            "is_per_million": True,
+        },
+        {
+            "key": "video",
+            "label": "视频模型",
+            "qty": video.get("duration_seconds"),
+            "unit_price": video.get("unit_price_per_second"),
+            "usage_factor": video.get("usage_factor"),
+            "credit": video.get("credit"),
+            "is_per_million": False,
+        },
+        {
+            "key": "asr",
+            "label": "ASR",
+            "qty": asr.get("calls"),
+            "unit_price": asr.get("unit_price_per_call"),
+            "usage_factor": asr.get("usage_factor"),
+            "credit": asr.get("credit"),
+            "is_per_million": False,
+        },
+        {
+            "key": "embedding",
+            "label": "向量模型",
+            "qty": emb.get("tokens"),
+            "unit_price": emb.get("unit_price_per_m"),
+            "usage_factor": emb.get("usage_factor"),
+            "credit": emb.get("credit"),
+            "is_per_million": True,
+        },
+    ]

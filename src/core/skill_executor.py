@@ -326,6 +326,7 @@ Follow the instructions in the skill above to complete the user's task."""
         workdir: Path,
         timeout: int = SKILL_COMMAND_TIMEOUT_SECONDS,
         stdin_content: Optional[bytes] = None,
+        env_extra: Optional[Dict[str, str]] = None,
     ) -> ExecutionResult:
         """
         执行命令
@@ -335,6 +336,7 @@ Follow the instructions in the skill above to complete the user's task."""
             workdir: 工作目录
             timeout: 超时时间（秒）
             stdin_content: 通过 stdin 传递给子进程的内容（bytes）
+            env_extra: 额外注入子进程的环境变量（如子智能体 LLM 覆盖）
 
         Returns:
             执行结果
@@ -344,6 +346,24 @@ Follow the instructions in the skill above to complete the user's task."""
         try:
             # 获取当前进程的环境变量，确保子进程继承所有环境变量（包括 .env 加载的）
             env = os.environ.copy()
+            # 注入子智能体 LLM 覆盖（provider/model），供技能脚本 llm_client 读取
+            if env_extra:
+                env.update(env_extra)
+            # 注入请求级上下文标识（租户/会话/用户），供技能子进程计量归属
+            # （record_skill_llm_usage 读 AID_* 环境变量回填 tenant/session/user）。
+            # 上下文缺失（后台调度等场景）不设置，子进程自行兜底。
+            try:
+                from src.tools.context import current_tool_execution_context
+                _tool_ctx = current_tool_execution_context()
+            except Exception:
+                _tool_ctx = None
+            if _tool_ctx is not None:
+                if _tool_ctx.tenant_id:
+                    env['AID_TENANT_ID'] = _tool_ctx.tenant_id
+                if _tool_ctx.session_id:
+                    env['AID_SESSION_ID'] = _tool_ctx.session_id
+                if _tool_ctx.user_id:
+                    env['AID_USER_ID'] = _tool_ctx.user_id
             # 强制子进程使用 UTF-8 编码，避免 Windows 上 GBK/cp936 导致中文乱码
             env['PYTHONIOENCODING'] = 'utf-8'
             env['PYTHONUTF8'] = '1'
@@ -430,6 +450,7 @@ Follow the instructions in the skill above to complete the user's task."""
         session_id: Optional[str] = None,
         user_id: Optional[str] = None,
         stdin_content: Optional[bytes] = None,
+        env_extra: Optional[Dict[str, str]] = None,
     ) -> ExecutionResult:
         """
         执行Skill命令
@@ -442,6 +463,7 @@ Follow the instructions in the skill above to complete the user's task."""
             session_id: 会话ID
             user_id: 用户ID
             stdin_content: 通过 stdin 传递给子进程的内容
+            env_extra: 额外注入子进程的环境变量（如子智能体 LLM 覆盖）
 
         Returns:
             执行结果
@@ -507,8 +529,9 @@ Follow the instructions in the skill above to complete the user's task."""
                 context.workdir,
                 timeout=SKILL_COMMAND_TIMEOUT_SECONDS,
                 stdin_content=stdin_content,
+                env_extra=env_extra,
             )
-            
+
             return result
             
         finally:
@@ -714,7 +737,7 @@ Follow the instructions in the skill above to complete the user's task."""
         1. 原路径
         2. test_uploads/ 目录
         3. 项目根目录
-        4. uploads/ 目录
+        4. storage/tenants/ 租户附件根目录
         
         Args:
             file_path: 文件路径（可能是相对或绝对路径）
@@ -732,8 +755,7 @@ Follow the instructions in the skill above to complete the user's task."""
         search_dirs = [
             Path.cwd(),  # 当前工作目录
             Path.cwd() / "test_uploads",  # test_uploads 目录
-            Path.cwd() / settings.storage.uploads_dir,  # 新存储目录: storage/uploads
-            Path.cwd() / "uploads",  # 旧目录（向后兼容）
+            Path.cwd() / "storage" / "tenants",  # 新租户附件根目录: storage/tenants
             self.workspace,  # 执行器工作空间
         ]
         

@@ -32,6 +32,7 @@ from src.channels.wecom_kf.message import (
 )
 from src.channels.wecom_kf.renderer import WeComKfRenderer
 from src.core.redis_client import redis_client
+from src.core.storage import ensure_tenant_storage_dir
 from src.models.message import MessageType, UnifiedMessage, UnifiedResponse
 
 
@@ -82,10 +83,33 @@ class WeComKfAdapter(ChannelAdapter):
         self._renderer: Optional[WeComKfRenderer] = None
         self._render_enabled: bool = kwargs.get("render_tables", True)
         self._media_upload_dir: str = media_upload_dir
+        self._tenant_id: str = ""
+
+        # 渠道级等待提示配置（config 顶层 waiting_indicator dict，经 ChannelFactory **config 注入，缺省空 dict）
+        self.waiting_indicator: Dict[str, Any] = kwargs.get("waiting_indicator") or {}
 
     @property
     def channel_type(self) -> str:
         return "wecom_kf"
+
+    async def set_tenant_id(self, tenant_id: str) -> None:
+        """
+        注入租户 ID（由 ChannelFactory 在创建 adapter 后调用）。
+
+        设置后媒体文件将存到 `storage/tenants/{tenant_id}/conversation/`，
+        遵循 `backend_dev.md` 租户附件存储规范。
+        """
+        self._tenant_id = tenant_id or ""
+        # 渲染器懒加载；若已创建则同步 tenant_id，未创建时创建时传入
+        if self._renderer is not None and hasattr(self._renderer, "set_tenant_id"):
+            self._renderer.set_tenant_id(self._tenant_id)
+
+    def _resolve_media_dir(self) -> str:
+        """解析媒体文件存储目录：有租户走 tenants 规范，无租户回退旧路径。"""
+        if self._tenant_id:
+            return ensure_tenant_storage_dir(self._tenant_id, "conversation")
+        os.makedirs(self._media_upload_dir, exist_ok=True)
+        return self._media_upload_dir
 
     # ==================== 默认缩略图 ====================
 
@@ -137,14 +161,18 @@ class WeComKfAdapter(ChannelAdapter):
         return crc ^ 0xFFFFFFFF
 
     async def _get_default_thumb_media_id(self) -> str:
-        """获取默认缩略图的 media_id，带缓存（1小时内有效）。"""
-        cache_key = redis_client.make_key("wecom_kf", "default_thumb_media_id")
+        """获取默认缩略图的 media_id，带缓存（1小时内有效）。
+
+        缓存键带企业维度（corp_id）：media_id 是企业级素材，若多企业微信客服
+        共用一个键，会互相读到对方企业的 media_id，发送时报 40007 invalid media_id。
+        """
+        cache_key = redis_client.make_key("wecom_kf", f"default_thumb_media_id:{self.corp_id}")
         cached = redis_client.get(cache_key)
         if cached:
             return cached
 
         png_data = self._generate_default_thumb()
-        thumb_path = os.path.join(self._media_upload_dir, "_default_thumb.png")
+        thumb_path = os.path.join(self._resolve_media_dir(), "_default_thumb.png")
         os.makedirs(os.path.dirname(thumb_path), exist_ok=True)
         with open(thumb_path, "wb") as f:
             f.write(png_data)
@@ -199,7 +227,10 @@ class WeComKfAdapter(ChannelAdapter):
     @property
     def renderer(self) -> WeComKfRenderer:
         if self._renderer is None:
-            self._renderer = WeComKfRenderer(upload_dir=self._media_upload_dir)
+            self._renderer = WeComKfRenderer(
+                upload_dir=self._media_upload_dir,
+                tenant_id=self._tenant_id,
+            )
         return self._renderer
 
     # ==================== 消息发送 ====================
@@ -211,6 +242,7 @@ class WeComKfAdapter(ChannelAdapter):
         流程：markdown -> 优先整段长图 -> 逐块选择最优方式发送
           - 若 text 含 md 表格 或 图片引用：整段 md 渲染为单张长图，以 image 消息发送
             （规避 wecom_kf 单次咨询 5 次回复限制；失败降级为分段逻辑）
+          - 若纯文本超过单条 2048 字节、需要切分：同样整段渲染为长图（1 条）发送
           - 否则：segment_markdown 分段
             - text 块 -> 增强纯文本 -> 拆分 -> text 消息
             - table 块 -> 渲染图片 -> 上传 -> image 消息（降级为纯文本）
@@ -232,8 +264,25 @@ class WeComKfAdapter(ChannelAdapter):
                     all_success = await self._send_segmented(text, message.reply_to)
                 else:
                     all_success = True
+            elif len(markdown_to_plain_text(text).encode("utf-8")) > self._max_bytes:
+                # 超过单条 2048 字节上限、需要切分的纯文本：直接整段渲染为长图（1 条），
+                # 不再按切分条数判断（渠道约束提示词已废除，产出长度由发送侧直接长图化兜底）
+                sent = await self._send_full_text_as_image(text, message.reply_to)
+                if not sent:
+                    all_success = await self._send_segmented(text, message.reply_to)
+                else:
+                    all_success = True
             else:
                 all_success = await self._send_segmented(text, message.reply_to)
+
+        # 发送 images（ImageRef：客户留资二维码等）
+        # 企微客服 image 消息只接受 media_id，先上传临时素材再发送；
+        # 单图失败不阻断后续发送，记 warning
+        images = message.get_images()
+        for ref in images:
+            success = await self._send_image_ref_as_image(ref, message.reply_to)
+            if not success:
+                all_success = False
 
         # 发送可下载文件链接
         thumb_media_id = ""
@@ -308,14 +357,19 @@ class WeComKfAdapter(ChannelAdapter):
         try:
             image_path = await self.renderer.render_markdown(markdown_text)
             if not image_path or not os.path.exists(image_path):
-                logger.warning("整段 markdown 长图渲染失败，降级走分段逻辑")
+                logger.error(
+                    f"[wecom_kf] 整段 markdown 长图渲染失败（Playwright/Chromium 异常或内容超限），"
+                    f"降级走分段逻辑: open_kfid={self.current_open_kfid}, "
+                    f"text_bytes={len(markdown_text.encode('utf-8'))}"
+                )
                 return False
 
             upload_result = await self.api_client.upload_media(image_path, "image")
             media_id = upload_result.get("media_id")
             if not media_id:
-                logger.warning(
-                    f"长图上传素材未返回 media_id，降级走分段逻辑: {upload_result.get('errmsg')}"
+                logger.error(
+                    f"[wecom_kf] 长图上传素材未返回 media_id，降级走分段逻辑: "
+                    f"open_kfid={self.current_open_kfid}, errmsg={upload_result.get('errmsg')}"
                 )
                 return False
 
@@ -328,15 +382,16 @@ class WeComKfAdapter(ChannelAdapter):
             if send_result.get("errcode", 0) == 0:
                 logger.info("整段 markdown 长图已发送")
                 return True
-            logger.warning(
-                f"长图 image 消息发送失败 errcode={send_result.get('errcode')} "
-                f"errmsg={send_result.get('errmsg')}，降级走分段逻辑"
+            logger.error(
+                f"[wecom_kf] 长图 image 消息发送失败，降级走分段逻辑: "
+                f"open_kfid={self.current_open_kfid}, "
+                f"errcode={send_result.get('errcode')}, errmsg={send_result.get('errmsg')}"
             )
             return False
         except Exception as e:
-            logger.warning(
-                f"整段 markdown 长图渲染/发送异常，降级走分段逻辑: {e}",
-                exc_info=True,
+            logger.opt(exception=True).error(
+                f"[wecom_kf] 整段 markdown 长图渲染/发送异常，降级走分段逻辑: "
+                f"open_kfid={self.current_open_kfid}: {e}",
             )
             return False
 
@@ -455,6 +510,65 @@ class WeComKfAdapter(ChannelAdapter):
                 f"图片文件 image 消息发送异常，降级为 link: file_id={file_id}, err={e}"
             )
             return (False, False)
+
+    async def _send_image_ref_as_image(self, ref: Dict[str, Any], user_id: str) -> bool:
+        """将 ImageRef 图片（content.images）作为企微 image 消息发送。
+
+        ImageRef（如 record_lead_capture 返回的顾问二维码）由 ImageRegistry 写入
+        Redis uploaded_file:{file_id}，与 _send_image_file_as_image 同命名空间。
+        企微 image 消息只接受 media_id，先上传临时素材再发送；失败仅记 warning，
+        不降级为 link（二维码场景用户需要的是图片本身）。
+
+        Args:
+            ref: ImageRef 的 dict 形式（来自 UnifiedResponse.get_images()）
+            user_id: 接收用户 ID
+
+        Returns:
+            True 发送成功或无可发送内容（跳过），False 已尝试但发送失败
+        """
+        file_id = ref.get("file_id") if isinstance(ref, dict) else None
+        if not file_id:
+            # 无可发送内容，不视为失败
+            return True
+        # 企微临时素材 image 限制 2MB
+        if (ref.get("size_bytes") or 0) > 2 * 1024 * 1024:
+            logger.warning(f"图片 ref 超过 2MB 跳过 image 发送: file_id={file_id}")
+            return True
+
+        key = redis_client.make_key("uploaded_file", file_id)
+        file_meta = redis_client.hgetall(key)
+        if not file_meta:
+            logger.warning(f"图片 ref 未在 Redis 找到，跳过: file_id={file_id}")
+            return True
+        file_path = file_meta.get("path")
+        if not file_path or not os.path.exists(file_path):
+            logger.warning(f"图片 ref 本地文件不存在，跳过: file_id={file_id}")
+            return True
+
+        try:
+            upload_result = await self.api_client.upload_media(file_path, "image")
+            media_id = upload_result.get("media_id")
+            if not media_id:
+                logger.warning(
+                    f"图片 ref 上传素材未返回 media_id，跳过: file_id={file_id}"
+                )
+                return False
+            send_result = await self.api_client.send_msg(
+                touser=user_id,
+                open_kfid=self.current_open_kfid,
+                msgtype="image",
+                content={"media_id": media_id},
+            )
+            if send_result.get("errcode", 0) != 0:
+                logger.warning(
+                    f"图片 ref image 消息发送失败 errcode={send_result.get('errcode')}, "
+                    f"file_id={file_id}"
+                )
+                return False
+            return True
+        except Exception as e:
+            logger.warning(f"图片 ref image 消息发送异常: file_id={file_id}, err={e}")
+            return False
 
     async def _send_link_message(self, block, user_id: str) -> bool:
         """发送 link 消息卡片，失败时降级为纯文本 URL。"""

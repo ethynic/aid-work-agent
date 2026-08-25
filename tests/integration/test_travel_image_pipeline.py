@@ -214,9 +214,9 @@ async def test_attraction_search_returns_cover_image(mock_image_ref):
     - 断言 result.results[0].cover_image 是 dict 含 file_id
     """
     from src.tools.knowledge.attraction_search_tool import AttractionSearchTool
+    from src.tools.context import ToolExecutionContext, tool_execution_scope
 
     tool = AttractionSearchTool()
-    tool.set_tenant_id("tenant_test")  # 注入 tenant_id，避免走 ContextVar
 
     # 模拟数据库返回一行景点，metadata 含 images.cover
     cover_file_id = "file_cover123abc"
@@ -283,6 +283,8 @@ async def test_attraction_search_returns_cover_image(mock_image_ref):
         return_value=MagicMock(
             get_ref_by_file_id=AsyncMock(return_value=mock_image_ref),
         ),
+    ), tool_execution_scope(
+        ToolExecutionContext(tenant_id="tenant_test")
     ):
         result = await tool.execute(query="黄果树", top_k=5)
 

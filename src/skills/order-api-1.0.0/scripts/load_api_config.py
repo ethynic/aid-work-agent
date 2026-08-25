@@ -55,11 +55,14 @@ def load_api_config():
         }, ensure_ascii=False))
         return
 
+    # tenant_id 数据库带 `tenant_` 前缀，存储规范要求目录不带前缀，统一剥离（与 src.core.storage.normalize_tenant_id 一致）
+    if tenant_id.startswith("tenant_"):
+        tenant_id = tenant_id[len("tenant_"):]
     config_path = os.path.join(
         os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
             os.path.abspath(__file__)
         )))),
-        "storage", "tenants", tenant_id, "order-api.md"
+        "storage", "tenants", tenant_id, "templates", "order-api.md"
     )
 
     if not os.path.exists(config_path):
@@ -76,7 +79,10 @@ def load_api_config():
     print(json.dumps({
         "success": True,
         "content": content,
-        "configured": True
+        "configured": True,
+        # API 说明文档是 LLM 调用外部订单系统接口的唯一依据，超长也须完整返回；
+        # 声明 _no_truncate，agent 工具结果截断逻辑据此豁免（截断会导致 LLM 无法完成获取）。
+        "_no_truncate": True
     }, ensure_ascii=False))
 
 

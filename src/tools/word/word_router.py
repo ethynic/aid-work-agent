@@ -21,18 +21,21 @@ ROUTING_PROMPT_PREFIX = """你是 Word 文档处理工具的内部路由器。�
 4. md_to_word - 将Markdown文本转换为Word文档
 5. modify - 修改Word文档内容（替换文本、增删段落/表格等）
 6. format - 格式化Word文档（字体、段落格式、页面设置、页眉页脚）
-7. fill_template - 填充Word模板中的变量占位符（{{变量名}} 或 [变量名]）
+7. fill_template - 填充Word模板中的变量占位符（支持多种语法：{{变量名}}、{变量名}、【变量名】、[变量名]、%变量名%；variables 的值可为字符串做普通替换，也可为数组按表格行循环填充，数组元素为对象、键为字段名）
 8. list_templates - 列出可用的文档模板
 9. diff - 对比两个Word文档的差异
+10. scan_placeholders - 扫描Word模板中的占位符变量
 
 ## 判断规则
 
 - context 中包含 Markdown 格式内容（# 标题、| 表格、- 列表等）且要求生成/导出 Word → md_to_word
+- file_paths 中有 .docx 且 context 要求**按该文件的格式/样式/模板生成**新 Word → md_to_word，且 params 带 "template_file": "<file_paths 中那个 docx 的原样路径/file_id>"（注意区分：仅要求读取/修改该 docx 本身时不是这种情况）
 - context 要求读取/查看/了解 Word 文件内容 → read（如果有文件）
 - context 要求分析 Word 文件结构 → analyze
 - context 要求修改/编辑/替换 Word 文件 → modify
 - context 要求格式化/排版 Word 文件 → format
 - context 要求填充模板/替换变量 → fill_template
+- context 要求查看/列出模板里有哪些占位符/变量/待填项 → scan_placeholders（可与 fill_template 组合：先扫描再填充，输出 "scan_placeholders,fill_template"）
 - context 要求对比/比较两个文件 → diff
 - context 要求查看模板 → list_templates
 - 有文件且只要求转为 Markdown → word_to_md
@@ -49,6 +52,17 @@ ROUTING_PROMPT_PREFIX = """你是 Word 文档处理工具的内部路由器。�
     "output_name": "从内容推断的文件名.docx"
   },
   "reason": "用户要求将行程安排生成Word，context中包含完整的Markdown表格内容"
+}
+
+如果是 md_to_word 且用户上传了 docx 模板、要求按该模板的格式/样式生成（template_file 用法）：
+{
+  "task": "md_to_word",
+  "params": {
+    "template_file": "/storage/tenants/t1/conversation/file_abc123.docx",
+    "title": "从内容中提取的标题",
+    "output_name": "从内容推断的文件名.docx"
+  },
+  "reason": "用户上传了docx模板并要求按模板格式生成Word，context中包含完整Markdown内容，附件docx作为格式参考"
 }
 
 如果是 modify 操作，params 中应包含 operations 列表：
@@ -74,14 +88,24 @@ ROUTING_PROMPT_PREFIX = """你是 Word 文档处理工具的内部路由器。�
   "reason": "用户要求将文档字体设为宋体14号"
 }
 
-如果是 fill_template 操作：
+如果是 fill_template 操作（variables 值可为字符串；订单明细等列表数据传数组，
+模板行内用 {{#列表名}}...{{/列表名}} 标记循环区间、{{字段名}} 引用条目字段）：
 {
   "task": "fill_template",
   "params": {
-    "variables": {"甲方": "XX公司", "日期": "2026年5月"}
+    "variables": {
+      "甲方": "XX公司",
+      "日期": "2026年5月",
+      "items": [
+        {"名称": "A商品", "数量": "2"},
+        {"名称": "B商品", "数量": "5"}
+      ]
+    }
   },
-  "reason": "用户要求填充模板变量"
+  "reason": "用户要求填充模板变量，items 为订单明细列表按表格行循环填充"
 }
+
+如果是 scan_placeholders 操作，params 可以为空对象 {}。
 
 如果是 diff 操作：
 {
@@ -134,6 +158,13 @@ class WordRouter:
                 max_tokens=512,
             )
 
+            from src.services.session_record import record_background_llm_usage
+            record_background_llm_usage(
+                response.get("usage") if isinstance(response, dict) else None,
+                source="word_router",
+                model=gateway.get_model_name(),
+            )
+
             content = response.get("content", "")
             if not content:
                 logger.warning("[WordRouter] LLM 返回空内容")
@@ -174,7 +205,8 @@ class WordRouter:
 
             # 校验 task 是否为有效操作
             valid_tasks = {"read", "analyze", "word_to_md", "md_to_word",
-                           "modify", "format", "fill_template", "list_templates", "diff"}
+                           "modify", "format", "fill_template", "scan_placeholders",
+                           "list_templates", "diff"}
 
             # 支持逗号分隔的多操作
             tasks = [t.strip() for t in task.split(",") if t.strip()]

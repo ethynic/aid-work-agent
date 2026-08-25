@@ -129,7 +129,12 @@ class UserDB:
         placeholder = "%s"
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(f"SELECT * FROM users WHERE phone = {placeholder}", (phone,))
+            # 同一 phone 可能存在多条记录（不同 tenant_id 的同号用户、历史重复创建的 platform_admin）
+            # 必须显式排序，否则 PostgreSQL 返回顺序不确定，导致不同 worker / 不同请求拿到不同用户
+            cursor.execute(
+                f"SELECT * FROM users WHERE phone = {placeholder} ORDER BY created_at DESC LIMIT 1",
+                (phone,),
+            )
             row = cursor.fetchone()
             user = dict(row) if row else None
             if user and not bypass_cache:
@@ -137,6 +142,25 @@ class UserDB:
                 safe_user = {k: v for k, v in user.items() if k != "password_hash"}
                 set_cached(CacheKeys.USER, f"phone:{phone}", value=safe_user, ttl=600)
             return user
+
+    @staticmethod
+    def get_platform_admin_by_phone(phone: str) -> Optional[Dict[str, Any]]:
+        """查找 phone 对应的 platform_admin 记录（tenant_id 为空，符合 platform_admin 不变量）
+
+        平台管理员应全局唯一（按 phone）：tenant_id 为空、role=platform_admin。
+        本方法用于登录/自动建号时避免重复创建/转换。
+        """
+        placeholder = "%s"
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                f"SELECT * FROM users WHERE phone = {placeholder} "
+                f"AND role = 'platform_admin' AND tenant_id IS NULL "
+                f"ORDER BY created_at DESC LIMIT 1",
+                (phone,),
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
 
     @staticmethod
     def get_by_phone_in_tenant(phone: str, tenant_id: str) -> Optional[Dict[str, Any]]:
@@ -204,6 +228,21 @@ class UserDB:
         ts = get_current_timestamp()
         values = list(updates.values()) + [user_id]
 
+        # phone 变更时需要清理按 phone 维度的缓存（user:phone:{phone}），
+        # 该 key 不在 invalidate_user_cache 默认清理范围（默认只清 user:{user_id}），
+        # 不清理会导致 get_by_phone 在缓存 TTL 内仍返回旧记录
+        old_phone = None
+        if "phone" in updates:
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    f"SELECT phone FROM users WHERE user_id = {placeholder}",
+                    (user_id,),
+                )
+                row = cursor.fetchone()
+                if row:
+                    old_phone = row["phone"] if isinstance(row, dict) else row[0]
+
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(f"UPDATE users SET {set_clause}, updated_at = {ts} WHERE user_id = {placeholder}",
@@ -213,6 +252,13 @@ class UserDB:
             if result:
                 # 清除用户缓存，下次查询从数据库重新加载
                 invalidate_user_cache(user_id)
+                # phone 变更时同步清理 phone 维度缓存
+                if "phone" in updates:
+                    new_phone = updates["phone"]
+                    if old_phone:
+                        delete_cached(CacheKeys.USER, f"phone:{old_phone}")
+                    if new_phone:
+                        delete_cached(CacheKeys.USER, f"phone:{new_phone}")
             return result
 
     # 别名方法，保持向后兼容
@@ -322,15 +368,26 @@ class UserDB:
         tenant_id: str,
         username: str = None,
         source: str = None,
+        referrer_user_id: str = None,
+        visible_kf_ids: Optional[list] = None,
+        channel_chat_id: str = None,
         page: int = 1,
         page_size: int = 20,
     ) -> dict:
         """获取租户的外部用户列表（source 不为空的用户）
 
+        返回组合粒度：每个「用户 × 渠道会话（客服账号）」一行。
+        仅 wecom_kf 渠道按 channel_chat_id（open_kfid，客服账号）拆分，
+        其它渠道折叠为单个组合（channel_chat_id 为空），避免 wecom_personal_rpa
+        等渠道因 conversation_id 不稳定导致一个客户多行。
+
         Args:
             tenant_id: 租户ID
             username: 用户名搜索（可选）
             source: 用户来源筛选（可选）
+            referrer_user_id: 引流员工筛选（可选，命中则只返回该员工引流的客户）
+            visible_kf_ids: 普通用户可见的客服账号 open_kfid 列表（None 表示管理员全量可见）。
+                非 None 时，只返回「在该账号下有会话的客户」，不返回客户在其他客服账号下的会话
             page: 页码，从1开始
             page_size: 每页数量
 
@@ -338,6 +395,18 @@ class UserDB:
             {"users": [...], "total": int, "page": int, "page_size": int}
         """
         offset = (page - 1) * page_size
+        # 渠道会话组合子查询：wecom_kf 按客服账号拆分（legacy NULL 折叠为空），其它渠道折叠为空
+        cs_subquery = """
+            SELECT user_id,
+                   channel_type,
+                   CASE WHEN channel_type = 'wecom_kf' THEN COALESCE(channel_chat_id, '') ELSE '' END AS channel_chat_id,
+                   MIN(created_at) AS first_session_at,
+                   MAX(updated_at) AS last_session_at
+            FROM channel_sessions
+            WHERE user_id IS NOT NULL
+            GROUP BY user_id, channel_type,
+                     CASE WHEN channel_type = 'wecom_kf' THEN COALESCE(channel_chat_id, '') ELSE '' END
+        """
         with get_db_connection() as conn:
             cursor = conn.cursor()
 
@@ -354,39 +423,70 @@ class UserDB:
                 conditions.append("u.source = %s")
                 params.append(source)
 
+            if channel_chat_id:
+                conditions.append("cs.channel_chat_id = %s")
+                params.append(channel_chat_id)
+
+            if referrer_user_id:
+                conditions.append("cr.referrer_user_id = %s")
+                params.append(referrer_user_id)
+
+            if visible_kf_ids is not None:
+                # 普通用户（引流员工）只能看到自己负责的客服账号下的对话记录
+                conditions.append("cs.channel_chat_id = ANY(%s)")
+                params.append(visible_kf_ids)
+
             where_clause = " AND ".join(conditions)
 
-            # 统计总数（去重，确保 LEFT JOIN 后总数正确）
+            # 统计总数：与列表查询同一套 FROM/JOIN/WHERE 结构，count == 组合行数
+            # customer_referrals.customer_user_id 有 UNIQUE、cs 子查询已按组合去重，外层 JOIN 单射。
             cursor.execute(f"""
                 SELECT COUNT(*) as cnt FROM (
-                    SELECT u.user_id FROM users u WHERE {where_clause}
+                    SELECT u.user_id
+                    FROM users u
+                    LEFT JOIN ({cs_subquery}) cs ON cs.user_id = u.user_id
+                    LEFT JOIN customer_referrals cr ON cr.customer_user_id = u.user_id
+                    WHERE {where_clause}
                 ) AS filtered
             """, params)
             total = cursor.fetchone()["cnt"]
 
-            # 查询列表：按该用户最近一次渠道会话的 updated_at 倒序排序
+            # 查询列表：按该组合最近一次渠道会话的 updated_at 倒序排序
             # 没有会话的用户排在最后（NULLS LAST）
-            # 同时返回该用户最早/最近一次渠道会话的 created_at / updated_at，
+            # 同时返回该组合最早/最近一次渠道会话的 created_at / updated_at，
             # 用于前端展示"[创建日期] ~ [更新日期]"。
+            # 引流人关联：LEFT JOIN customer_referrals + users 返回 referrer_user_id / referrer_name。
             cursor.execute(f"""
                 SELECT u.user_id, u.username, u.nickname, u.avatar_url, u.source, u.tenant_id, u.created_at,
+                       cs.channel_type,
+                       cs.channel_chat_id,
                        cs.first_session_at,
-                       cs.last_session_at
+                       cs.last_session_at,
+                       cr.referrer_user_id,
+                       ru.nickname AS referrer_nickname,
+                       ru.username AS referrer_username,
+                       cr.created_at AS referral_time
                 FROM users u
-                LEFT JOIN (
-                    SELECT user_id,
-                           MIN(created_at) AS first_session_at,
-                           MAX(updated_at) AS last_session_at
-                    FROM channel_sessions
-                    WHERE user_id IS NOT NULL
-                    GROUP BY user_id
-                ) cs ON cs.user_id = u.user_id
+                LEFT JOIN ({cs_subquery}) cs ON cs.user_id = u.user_id
+                LEFT JOIN customer_referrals cr ON cr.customer_user_id = u.user_id
+                LEFT JOIN users ru ON ru.user_id = cr.referrer_user_id
                 WHERE {where_clause}
                 ORDER BY cs.last_session_at DESC NULLS LAST, u.created_at DESC
                 LIMIT %s OFFSET %s
             """, params + [page_size, offset])
 
             users = [dict(row) for row in cursor.fetchall()]
+
+        for u in users:
+            # 组合归一化：无会话用户 channel_type 为 None、channel_chat_id 为空串
+            u["channel_chat_id"] = u.get("channel_chat_id") or ""
+            # 引流人名称：优先昵称，其次用户名，引流人被删除时显示"已删除员工"
+            if u.get("referrer_user_id"):
+                u["referrer_name"] = (
+                    u.get("referrer_nickname") or u.get("referrer_username") or "已删除员工"
+                )
+            else:
+                u["referrer_name"] = None
         return {"users": users, "total": total, "page": page, "page_size": page_size}
 
     @staticmethod
@@ -1012,7 +1112,10 @@ class ChatRecordDB:
         error_message: str = None,
         duration_ms: int = 0,
         source_type: str = "chat",
-        credit_cost: float = 0.0
+        credit_cost: float = 0.0,
+        embedding_tokens: int = 0,
+        asr_calls: int = 0,
+        usage_breakdown: dict = None,
     ) -> Optional[Dict[str, Any]]:
         """创建新的会话记录
 
@@ -1033,11 +1136,13 @@ class ChatRecordDB:
                     (record_id, session_id, tenant_id, user_id, user_message, assistant_message,
                      total_token_count, prompt_tokens, completion_tokens, cached_input_tokens,
                      model, provider, execution_details, agent_iterations, subagent_calls,
-                     status, error_message, duration_ms, source_type, credit_cost)
+                     status, error_message, duration_ms, source_type, credit_cost,
+                     embedding_tokens, asr_calls, usage_breakdown)
                     VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder},
                             {placeholder}, {placeholder}, {placeholder}, {placeholder},
                             {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder},
-                            {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})
+                            {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder},
+                            {placeholder}, {placeholder}, {placeholder})
                     RETURNING *
                 """, (
                     record_id, session_id, tenant_id, user_id, user_message, assistant_message,
@@ -1046,7 +1151,10 @@ class ChatRecordDB:
                     json.dumps(execution_details) if execution_details else None,
                     agent_iterations,
                     json.dumps(subagent_calls) if subagent_calls else None,
-                    status, error_message, duration_ms, source_type, credit_cost
+                    status, error_message, duration_ms, source_type, credit_cost,
+                    embedding_tokens or 0,
+                    asr_calls or 0,
+                    json.dumps(usage_breakdown) if usage_breakdown else None,
                 ))
                 row = cursor.fetchone()
 
@@ -1500,6 +1608,173 @@ class ChatRecordDB:
             set_cached(CacheKeys.TENANT_USAGE, tenant_id, month_str, str(page), str(page_size),
                        value=result, ttl=600)
             return result
+
+
+# ============== 微信客服引流归因（customer_referrals） ==============
+
+
+class CustomerReferralDB:
+    """C端客户→引流员工 first-touch 归因
+
+    扫码 enter_session 事件按 scene 反查绑定员工后写入。UNIQUE(customer_user_id) +
+    INSERT ... ON CONFLICT DO NOTHING 保证一个 C 端客户只归属第一个扫码的引流员工。
+    """
+
+    @staticmethod
+    def record(
+        tenant_id: str,
+        referrer_user_id: str,
+        customer_user_id: str,
+        open_kfid: str,
+        scene: str,
+    ) -> bool:
+        """写入引流归因。重复扫码（同一 customer_user_id）不覆盖，返回是否新写入。"""
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO customer_referrals (tenant_id, referrer_user_id, customer_user_id, open_kfid, scene)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (customer_user_id) DO NOTHING
+                """,
+                (tenant_id, referrer_user_id, customer_user_id, open_kfid, scene),
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+
+    @staticmethod
+    def get_by_customer(customer_user_id: str) -> Optional[Dict[str, Any]]:
+        """按 C 端客户 user_id 查询归因记录。"""
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM customer_referrals WHERE customer_user_id = %s",
+                (customer_user_id,),
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    @staticmethod
+    def count_by_open_kfid(tenant_id: str, open_kfid: str) -> int:
+        """客服账号的引流人数（列表页展示用，口径：扫码即算）。"""
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT COUNT(*) AS cnt FROM customer_referrals WHERE tenant_id = %s AND open_kfid = %s",
+                (tenant_id, open_kfid),
+            )
+            row = cursor.fetchone()
+            return row["cnt"] if isinstance(row, dict) else row[0]
+
+    @staticmethod
+    def referral_stats(
+        tenant_id: str,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        referrer_user_id: Optional[str] = None,
+    ) -> dict:
+        """引流统计：总引流数 + 员工分组（referral_count / ratio）。
+
+        过滤基准 = customer_referrals.created_at（引流发生时间）。
+        referrer_user_id 传入时（普通用户），仅统计该引流员工自己的数据。
+        """
+        date_cond = ""
+        params: list = [tenant_id]
+        if start_date:
+            date_cond += " AND cr.created_at >= %s"
+            params.append(start_date)
+        if end_date:
+            # end_date 含当日：< 次日零点 语义，SQL 内 +1 天，使传入当天也能统计到当天全天数据
+            date_cond += " AND cr.created_at < (%s::date + INTERVAL '1 day')"
+            params.append(end_date)
+        if referrer_user_id:
+            date_cond += " AND cr.referrer_user_id = %s"
+            params.append(referrer_user_id)
+
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                f"SELECT COUNT(*) AS cnt FROM customer_referrals cr WHERE cr.tenant_id = %s{date_cond}",
+                params,
+            )
+            row = cursor.fetchone()
+            total = row["cnt"] if isinstance(row, dict) else row[0]
+
+            cursor.execute(
+                f"""
+                SELECT cr.referrer_user_id,
+                       u.nickname AS referrer_nickname,
+                       u.username AS referrer_username,
+                       COUNT(*) AS referral_count
+                FROM customer_referrals cr
+                LEFT JOIN users u ON u.user_id = cr.referrer_user_id
+                WHERE cr.tenant_id = %s{date_cond}
+                GROUP BY cr.referrer_user_id, u.nickname, u.username
+                ORDER BY referral_count DESC
+                """,
+                params,
+            )
+            referrers = []
+            for r in cursor.fetchall():
+                d = dict(r)
+                d["referrer_name"] = d.get("referrer_nickname") or d.get("referrer_username") or "已删除员工"
+                d["ratio"] = round(d["referral_count"] * 100.0 / total, 1) if total else 0.0
+                referrers.append(d)
+        return {"total_referrals": total, "referrers": referrers}
+
+    @staticmethod
+    def count_referred_messages(
+        tenant_id: str,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        referrer_user_id: Optional[str] = None,
+    ) -> int:
+        """总对话消息数：customer_referrals.customer_user_id → channel_sessions.user_id
+        → channel_messages.session_id，过滤 created_at 在日期段内（is_recalled=FALSE）。"""
+        cond = "cr.tenant_id = %s AND cm.is_recalled = FALSE"
+        params: list = [tenant_id]
+        if start_date:
+            cond += " AND cm.created_at >= %s"
+            params.append(start_date)
+        if end_date:
+            # end_date 含当日：< 次日零点 语义，SQL 内 +1 天
+            cond += " AND cm.created_at < (%s::date + INTERVAL '1 day')"
+            params.append(end_date)
+        if referrer_user_id:
+            cond += " AND cr.referrer_user_id = %s"
+            params.append(referrer_user_id)
+
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                f"""
+                SELECT COUNT(*) AS cnt
+                FROM channel_messages cm
+                JOIN channel_sessions cs ON cs.session_id = cm.session_id
+                JOIN customer_referrals cr ON cr.customer_user_id = cs.user_id
+                WHERE {cond}
+                """,
+                params,
+            )
+            row = cursor.fetchone()
+            return row["cnt"] if isinstance(row, dict) else row[0]
+
+    @staticmethod
+    def sum_kf_account_credit(tenant_id: str, open_kfid: str) -> float:
+        """账号级积分消耗归集（credit_limit 依据）：wecom_kf 渠道该 open_kfid 账号累计 credit_cost。"""
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT COALESCE(SUM(cr.credit_cost), 0) AS total_cost
+                FROM chat_records cr
+                JOIN channel_sessions cs ON cs.session_id = cr.session_id
+                WHERE cs.tenant_id = %s AND cs.channel_type = 'wecom_kf' AND cs.channel_chat_id = %s
+                """,
+                (tenant_id, open_kfid),
+            )
+            row = cursor.fetchone()
+            return float(row["total_cost"] if isinstance(row, dict) else row[0])
 
 
 # ============== 短信验证码 ==============
@@ -2005,10 +2280,14 @@ class TokenCostPriceDB:
 
         Returns:
             {"model_name", "input_price_per_m", "cached_input_price_per_m",
-             "output_price_per_m", "price_per_second", "price_per_second_by_resolution"} 或 None
+             "output_price_per_m", "price_per_second", "price_per_second_by_resolution",
+             "embedding_price_per_m", "asr_price_per_call", "tiered_pricing"} 或 None
             cached_input_price_per_m 为 NULL 表示该模型计费不区分缓存命中
             price_per_second 为 NULL 表示该模型不按秒计费（文本模型）
             price_per_second_by_resolution 为 NULL 表示视频模型不按分辨率区分，用 price_per_second
+            embedding_price_per_m 为 NULL 表示该模型非 embedding 模型（无向量单价）
+            asr_price_per_call 为 NULL 表示该模型非 ASR 模型（无语音识别单价）
+            tiered_pricing 为 NULL 表示该模型不分段计价（走 input/output/cached 统一单价）
         """
         if not model_name:
             return None
@@ -2018,7 +2297,8 @@ class TokenCostPriceDB:
             cursor.execute(
                 f"""
                 SELECT model_name, input_price_per_m, cached_input_price_per_m,
-                       output_price_per_m, price_per_second, price_per_second_by_resolution
+                       output_price_per_m, price_per_second, price_per_second_by_resolution,
+                       embedding_price_per_m, asr_price_per_call, tiered_pricing
                 FROM token_cost_prices
                 WHERE model_name = {placeholder}
                 """,

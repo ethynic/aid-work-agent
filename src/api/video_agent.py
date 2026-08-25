@@ -127,7 +127,7 @@ async def list_assets(
 
         return {"success": True, "data": {"items": items, "total": total, "page": page, "page_size": page_size}}
     except Exception as e:
-        logger.error(f"素材库列表查询失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"素材库列表查询失败: {e}")
         return _error_response("素材库列表查询失败", str(e))
 
 
@@ -149,7 +149,7 @@ async def get_asset(asset_id: int, request: Request):
                 return _error_response("素材不存在", f"asset_id={asset_id} not found", 404)
             return {"success": True, "data": dict(row)}
     except Exception as e:
-        logger.error(f"素材详情查询失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"素材详情查询失败: {e}")
         return _error_response("素材详情查询失败", str(e))
 
 
@@ -171,7 +171,7 @@ async def delete_asset(asset_id: int, request: Request):
                 return _error_response("素材不存在", f"asset_id={asset_id} not found", 404)
         return {"success": True}
     except Exception as e:
-        logger.error(f"素材删除失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"素材删除失败: {e}")
         return _error_response("素材删除失败", str(e))
 
 
@@ -210,7 +210,7 @@ async def manual_upload_asset(req: ManualUploadAssetRequest, request: Request):
 
         return {"success": True, "data": {"id": asset_id}}
     except Exception as e:
-        logger.error(f"手动上传素材失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"手动上传素材失败: {e}")
         return _error_response("手动上传素材失败", str(e))
 
 
@@ -250,7 +250,7 @@ async def list_videos(
 
         return {"success": True, "data": {"items": items, "total": total, "page": page, "page_size": page_size}}
     except Exception as e:
-        logger.error(f"视频库列表查询失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"视频库列表查询失败: {e}")
         return _error_response("视频库列表查询失败", str(e))
 
 
@@ -293,7 +293,7 @@ async def get_video(video_id: int, request: Request):
             video["source_prompt"] = prompt_detail
             return {"success": True, "data": video}
     except Exception as e:
-        logger.error(f"视频详情查询失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"视频详情查询失败: {e}")
         return _error_response("视频详情查询失败", str(e))
 
 
@@ -319,7 +319,7 @@ async def delete_video(video_id: int, request: Request):
                 return _error_response("视频不存在", f"video_id={video_id} not found", 404)
         return {"success": True}
     except Exception as e:
-        logger.error(f"视频删除失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"视频删除失败: {e}")
         return _error_response("视频删除失败", str(e))
 
 
@@ -368,7 +368,7 @@ async def list_prompts(
 
         return {"success": True, "data": {"items": items, "total": total, "page": page, "page_size": page_size}}
     except Exception as e:
-        logger.error(f"提示词库列表查询失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"提示词库列表查询失败: {e}")
         return _error_response("提示词库列表查询失败", str(e))
 
 
@@ -393,7 +393,7 @@ async def get_prompt(prompt_id: int, request: Request):
             item["metadata"] = _parse_json_field(item.get("metadata"))
             return {"success": True, "data": item}
     except Exception as e:
-        logger.error(f"提示词详情查询失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"提示词详情查询失败: {e}")
         return _error_response("提示词详情查询失败", str(e))
 
 
@@ -456,7 +456,7 @@ async def promote_prompt(prompt_id: int, request: Request):
         logger.info(f"提示词升级模版: src_id={prompt_id}, new_id={new_id}, operator={user.get('user_id')}")
         return {"success": True, "data": {"id": new_id, "promoted_from_kept_id": prompt_id}}
     except Exception as e:
-        logger.error(f"提示词升级模版失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"提示词升级模版失败: {e}")
         return _error_response("提示词升级模版失败", str(e))
 
 
@@ -478,5 +478,5 @@ async def delete_prompt(prompt_id: int, request: Request):
                 return _error_response("提示词不存在", f"prompt_id={prompt_id} not found", 404)
         return {"success": True}
     except Exception as e:
-        logger.error(f"提示词删除失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"提示词删除失败: {e}")
         return _error_response("提示词删除失败", str(e))

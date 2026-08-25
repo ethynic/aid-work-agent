@@ -159,18 +159,21 @@ class UserSource(str, Enum):
 
     数据库存储：TEXT
     - NULL / 空字符串 = 内部用户（管理员创建）
-    - wecom_kf = 企业微信客服
+    - wecom_kf = 企微客服
+    - wecom_personal_rpa = 企微RPA
     """
     WECOM_KF = "wecom_kf"
+    WECOM_PERSONAL_RPA = "wecom_personal_rpa"
 
     @classmethod
     def all_values(cls) -> list[str]:
-        return [cls.WECOM_KF.value]
+        return [cls.WECOM_KF.value, cls.WECOM_PERSONAL_RPA.value]
 
     @property
     def display_name(self) -> str:
         mapping = {
-            self.WECOM_KF: "企业微信客服",
+            self.WECOM_KF: "企微客服",
+            self.WECOM_PERSONAL_RPA: "企微RPA",
         }
         return mapping.get(self, "未知")
 
@@ -253,6 +256,13 @@ class ChatRecordSourceType(str, Enum):
     - report_team_weekly    = 团队周报生成
     - report_personal_monthly = 个人月报生成
     - report_team_monthly   = 团队月报生成
+    - video_gen             = 视频创作生成（按秒计费，video-agent 主链路）
+    - video_prompt          = 视频提示词 LLM 调用（qwen-vl 等，按 token 计费，
+                              用户可能多次调整提示词后放弃创建视频，独立计费）
+    - knowledge_embedding   = 知识库文档向量化/摘要（离线处理，用户上传文档触发，
+                              非 dialog 内调用，独立 chat_records）
+    - background_llm        = background_runner 后台 LLM 调用（长期记忆摘要、
+                              工作成果复盘、上下文压缩扫描等定时任务）
 
     report_* 系列由 src/reports/generator.py 写入，用于在用量页区分
     报告类 LLM 调用与普通对话调用。
@@ -270,6 +280,10 @@ class ChatRecordSourceType(str, Enum):
     REPORT_TEAM_WEEKLY = "report_team_weekly"
     REPORT_PERSONAL_MONTHLY = "report_personal_monthly"
     REPORT_TEAM_MONTHLY = "report_team_monthly"
+    VIDEO_GEN = "video_gen"
+    VIDEO_PROMPT = "video_prompt"
+    KNOWLEDGE_EMBEDDING = "knowledge_embedding"
+    BACKGROUND_LLM = "background_llm"
 
     @classmethod
     def all_values(cls) -> list[str]:
@@ -306,5 +320,9 @@ class ChatRecordSourceType(str, Enum):
             self.REPORT_TEAM_WEEKLY: "团队周报",
             self.REPORT_PERSONAL_MONTHLY: "个人月报",
             self.REPORT_TEAM_MONTHLY: "团队月报",
+            self.VIDEO_GEN: "视频生成",
+            self.VIDEO_PROMPT: "视频提示词",
+            self.KNOWLEDGE_EMBEDDING: "知识库向量化",
+            self.BACKGROUND_LLM: "后台 LLM 任务",
         }
         return mapping.get(self, "未知")

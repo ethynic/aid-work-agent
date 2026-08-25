@@ -71,5 +71,5 @@ def inspect_pdf(file_path: str) -> Dict[str, Any]:
             result["warnings"].append(f"pypdf 检查失败，已使用 PyMuPDF 结果: {pypdf_error}")
         return result
     except Exception as e:
-        logger.error(f"[PdfInspector] 检查失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"[PdfInspector] 检查失败: {e}")
         return {"success": False, "error": f"PDF检查失败: {e}", "encrypted": encrypted}

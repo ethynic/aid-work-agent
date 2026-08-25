@@ -196,7 +196,7 @@ class VideoGenService:
                     # 兜底非预期异常（如 provider 返回非 JSON），防止单条失败导致整批 session 回滚丢失
                     error_msg = f"提交异常: {exc}"
                     provider_status = "FAILED"
-                    logger.error(f"视频生成 card 提交非预期异常 session={session_id} idx={idx}: {exc}", exc_info=True)
+                    logger.opt(exception=True).error(f"视频生成 card 提交非预期异常 session={session_id} idx={idx}: {exc}")
 
                 cur.execute(
                     """INSERT INTO gen_cards

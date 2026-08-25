@@ -1,15 +1,28 @@
-﻿#!/bin/bash
+#!/bin/bash
 
 # ==============================================================================
-# AI 数字员工系统 - 快速更新脚本（不重建 Docker 镜像）
+# AI 数字员工系统（在线开发环境 agent3）- 快速更新脚本（不重建 Docker 镜像）
 # 用途: 仅更新代码，快速重启服务
+# ==============================================================================
+# 变更记录：
+#   1. 前端编译输出到 dist.new，编译期间 nginx 继续服务旧 dist，build 完成后
+#      原子切换（两步 mv），消除原「rm -rf dist/* → npm run build」造成的 ~30s 前端空窗
+#   2. 前端编译（后台）与后端重启（up）并行，总停机时间 ≈ 后端重启耗时
+#   3. 保留「前端无变更跳过编译」判断；前端无变更时直接重启后端
+#   4. 用 up --force-recreate --remove-orphans 替代 down + up，省去全停窗口
+#   5. up 后用 docker update 施加 cgroup 资源限制（compose 非 swarm 会忽略
+#      deploy.resources，资源值在脚本内维护，为唯一来源）
 # ==============================================================================
 
 set -e
 
 echo "=========================================="
-echo "  AI 数字员工系统 - 快速更新"
+echo "  AI 数字员工系统（在线开发） - 快速更新"
 echo "=========================================="
+
+FRONTEND_DIR="/var/www/agent3/frontend"
+DIST_DIR="$FRONTEND_DIR/dist"
+BUILD_LOG="/var/www/agent3/log/frontend-build.log"
 
 # 配置 Git 安全目录（避免所有权检查错误）
 git config --global --add safe.directory /var/www/agent3 2>/dev/null || true
@@ -18,61 +31,87 @@ git config --global --add safe.directory /var/www/agent3 2>/dev/null || true
 echo "[1] 拉取最新代码..."
 cd "/var/www/agent3"
 OLD_HEAD=$(git rev-parse HEAD)
-echo "更新前版本: $(git log -1 --format='%cd %s' --date=format:'%Y-%m-%d %H:%M:%S')"
+echo "更新前版本: $(git log -1 --format='%cd %s' --date='format:%Y-%m-%d %H:%M:%S')"
 git fetch --all
 git reset --hard origin/master
-echo "更新后版本: $(git log -1 --format='%cd %s' --date=format:'%Y-%m-%d %H:%M:%S')"
+echo "更新后版本: $(git log -1 --format='%cd %s' --date='format:%Y-%m-%d %H:%M:%S')"
 NEW_HEAD=$(git rev-parse HEAD)
-# chmod -R 777 .
 find . -type d -name "__pycache__" -exec chmod -R 777 {} + 2>/dev/null || true
 
-# 清除 Python 字节码缓存（避免旧代码运行）
+# 1.1 清除 Python 字节码缓存（避免旧代码运行）
 echo "[1.1] 清除 Python .pyc 缓存..."
 find . -type f -name "*.pyc" -delete
 find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 
-# 2. 判断前端是否需要编译
+# 2. 判断前端是否需要编译；需要时编译到 dist.new（后台，与后端重启并行）
+FRONTEND_PID=""
 if [ "$OLD_HEAD" != "$NEW_HEAD" ]; then
     FRONTEND_CHANGED=$(git diff --name-only "$OLD_HEAD" "$NEW_HEAD" -- frontend/ | wc -l)
 else
     FRONTEND_CHANGED=0
 fi
 
-if [ "$FRONTEND_CHANGED" -gt 0 ] || [ ! -d "frontend/dist" ]; then
-    echo "[2] 前端编译..."
-    rm -rf frontend/dist/*
-    docker run --rm -v /var/www/agent3/frontend:/app -w /app node:22-alpine npm install
-    docker run --rm -v /var/www/agent3/frontend:/app -w /app node:22-alpine npm run build
+if [ "$FRONTEND_CHANGED" -gt 0 ] || [ ! -d "$DIST_DIR" ]; then
+    echo "[2] 前端有变更，编译到 dist.new（后台）..."
+    # 依赖安装 + 类型/边界检查在前台（不产出 dist，服务不受影响；失败即中止避免白停）
+    docker run --rm -v "$FRONTEND_DIR":/app -w /app node:22-alpine npm install
+    docker run --rm -v "$FRONTEND_DIR":/app -w /app node:22-alpine npm run typecheck
+    docker run --rm -v "$FRONTEND_DIR":/app -w /app node:22-alpine \
+        node scripts/check-dependency-boundaries.mjs --scope=web
+    # vite build + 产物校验放后台，与后端重启并行
+    rm -rf "$DIST_DIR.new"
+    mkdir -p "$(dirname "$BUILD_LOG")"
+    (
+      docker run --rm -v "$FRONTEND_DIR":/app -w /app node:22-alpine \
+          npx vite build --outDir dist.new \
+        && docker run --rm -v "$FRONTEND_DIR":/app -w /app node:22-alpine \
+            node scripts/verify-web-build.mjs /app/dist.new
+    ) > "$BUILD_LOG" 2>&1 &
+    FRONTEND_PID=$!
 else
-   echo "[2] 前端代码无变更，跳过编译。"
+    echo "[2] 前端代码无变更，跳过编译。"
 fi
 
-# 3. 停止旧容器（释放数据库连接）
-echo "[3] 停止旧容器..."
-docker compose -f docker-compose.dev.yml down --remove-orphans
+# 3. 后端重启（与前端编译并行；前端无变更时直接重启）
+#    不先 down：up --force-recreate 会自动 stop→remove→create，避免全停窗口
+echo "[3] 重启后端服务..."
+docker compose -f docker-compose.dev.yml up -d --force-recreate --remove-orphans --wait
 
-# 4. 启动新容器
-#    --force-recreate：强制走"删了重建"路径，避免 compose 协调器在 down 之后偶发误报
-#                       container name conflict（容器最终会被正确拉起，但脚本会中断）
-#    --wait：等所有容器 healthy 才返回，与 set -e 配合更可预测
-echo "[4] 启动后端服务..."
-docker compose -f docker-compose.dev.yml up -d --force-recreate
+# 4. 施加资源限制（docker compose 非 swarm 会忽略 deploy.resources，改用 docker update
+#    显式施加 cgroup 限制；资源值在本脚本内维护，为唯一来源；本环境无 background）
+echo "[4] 施加容器资源限制..."
+docker update --cpus 1 --memory 1G --memory-reservation 512M aid-agent-api3
 
 # 5. 修复容器内 /tmp 权限（python:3.11-slim 的 /tmp 是 tmpfs 且默认 755，
 #    Dockerfile 的 chmod 不生效，entrypoint 已处理；此处作为运行时兜底）
-#    -u root：必须以 root 身份执行，否则 appuser 在 tmpfs 上无权限改 /tmp
-#    兜底链：先尝试 chmod（多数 tmpfs 上 root 可改），失败则 mount remount
 echo "[5] 修复容器 /tmp 权限..."
 if ! docker exec -u root aid-agent-api3 chmod 1777 /tmp 2>/dev/null; then
-    echo "  chmod 失败，尝试 mount remount..."
-    docker exec -u root aid-agent-api3 mount -o remount,mode=1777 /tmp 2>/dev/null || \
-        echo "  警告：两种方式均失败，appuser 可能无法写入 /tmp"
+  echo "  chmod 失败，尝试 mount remount..."
+  docker exec -u root aid-agent-api3 mount -o remount,mode=1777 /tmp 2>/dev/null || \
+      echo "  警告：两种方式均失败，appuser 可能无法写入 /tmp"
 fi
 docker exec -u root aid-agent-api3 ls -ld /tmp || true
 
-# 6. 增量安装 requirements.txt 中新增的依赖（快速更新脚本不重建镜像，
+# 6. 等待前端编译完成并原子切换（仅前端有变更时）
+if [ -n "$FRONTEND_PID" ]; then
+    echo "[6] 等待前端编译完成..."
+    if ! wait "$FRONTEND_PID"; then
+        echo "  错误：前端编译失败，详见 $BUILD_LOG"
+        echo "  后端已更新但前端仍为旧版本，请检查后重跑本脚本"
+        exit 1
+    fi
+
+    echo "[6.1] 原子切换前端 dist..."
+    rm -rf "$DIST_DIR.old"
+    [ -d "$DIST_DIR" ] && mv "$DIST_DIR" "$DIST_DIR.old"
+    mv "$DIST_DIR.new" "$DIST_DIR"
+    rm -rf "$DIST_DIR.old"
+fi
+chmod 777 "$DIST_DIR" # dist 目录需要 777 权限，否则无法ftp上传微信验证文件
+
+# 7. 增量安装 requirements.txt 中新增的依赖（快速更新脚本不重建镜像，
 #    新依赖不会自动安装；下次重建镜像后可移除此步骤）
-echo "[6] 增量安装新增依赖..."
+echo "[7] 增量安装新增依赖..."
 docker exec -u root aid-agent-api3 \
     pip install --no-cache-dir -r /app/requirements.txt \
     -i https://mirrors.cloud.tencent.com/pypi/simple \

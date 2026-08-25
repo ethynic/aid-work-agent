@@ -6,6 +6,7 @@ Word 工具核心库
 - 样式操作（StyleManager）
 - 文件操作（WordFileHandler）
 - 跨 run 文本替换算法
+- 全文档段落迭代（iter_all_paragraphs / paragraph_text_runs，覆盖嵌套表格/文本框/超链接）
 """
 
 import json
@@ -17,6 +18,8 @@ from docx import Document
 from docx.shared import Pt, Cm, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
+from docx.text.paragraph import Paragraph
+from docx.text.run import Run
 
 # 常见中文字体映射
 CHINESE_FONTS = {
@@ -129,6 +132,78 @@ def replace_text_cross_run(runs, target: str, replacement: str) -> int:
             runs[run_end].text = runs[run_end].text[char_end + 1:]
 
     return len(occurrences)
+
+
+def iter_all_paragraphs(doc: Document) -> List[Paragraph]:
+    """
+    全文档段落迭代器（文档序），修复只遍历顶层段落/表格时的扫描盲区。
+
+    覆盖范围：
+    - 正文所有 w:p：用 body.iter(qn('w:p')) 递归一把抓，
+      天然包含嵌套表格、内容控件（w:sdt）内的段落、文本框（w:txbxContent）内的段落
+    - 各 section 的页眉/页脚（含 first_page / even_page 变体）中的所有 w:p，
+      同样覆盖其中的表格和文本框段落
+
+    已知限制（明确不支持）：
+    - 脚注/尾注位于独立的 XML part，python-docx 不解析，不在遍历范围内
+
+    Returns:
+        Paragraph 列表（每个 w:p 用 doc 作 parent 包装，本场景只改 run 文本）
+    """
+    paragraphs: List[Paragraph] = []
+
+    # 正文：body 递归迭代覆盖嵌套表格 / sdt / txbxContent 内的所有段落
+    for p_el in doc.element.body.iter(qn('w:p')):
+        paragraphs.append(Paragraph(p_el, doc))
+
+    # 页眉页脚：仅访问有自定义定义的（is_linked_to_previous=False），
+    # 避免触发 python-docx 懒创建空的 header/footer part；个别属性访问可能抛异常，逐个 try
+    for section in doc.sections:
+        for hf in (section.header, section.footer,
+                   section.first_page_header, section.first_page_footer,
+                   section.even_page_header, section.even_page_footer):
+            try:
+                if hf.is_linked_to_previous:
+                    continue
+                for p_el in hf._element.iter(qn('w:p')):
+                    paragraphs.append(Paragraph(p_el, doc))
+            except Exception:
+                continue
+
+    return paragraphs
+
+
+def paragraph_text_runs(para: Paragraph) -> List[Run]:
+    """
+    返回该段落文档序的全部含文本 run，供 replace_text_cross_run 使用。
+
+    与 paragraph.runs 的区别：paragraph.runs 只取 w:p 直接子级的 w:r，
+    本函数额外覆盖 w:hyperlink（超链接）、w:ins（修订插入）等容器内的 run，
+    修复超链接内占位符漏替换的问题。
+
+    注意：run 自身不再下钻（文本框嵌套在 run 的 drawing 内，其段落由
+    iter_all_paragraphs 单独覆盖，避免重复处理）；嵌套 w:p 同样跳过。
+    """
+    runs: List[Run] = []
+    for r_el in _iter_runs_excluding_nested(para._element):
+        run = Run(r_el, para)
+        if run.text:
+            runs.append(run)
+    return runs
+
+
+def _iter_runs_excluding_nested(el):
+    """递归收集元素内文档序的 w:r，不进入 w:r 内部（避免文本框 run 重复），跳过嵌套 w:p"""
+    for child in el.iterchildren():
+        tag = child.tag
+        if tag == qn('w:r'):
+            yield child
+        elif tag == qn('w:p'):
+            # 嵌套段落（文本框内）：由 iter_all_paragraphs 单独覆盖
+            continue
+        elif isinstance(tag, str):
+            # 常规容器（w:hyperlink、w:ins、w:sdt 等）继续下钻；跳过注释等非元素节点
+            yield from _iter_runs_excluding_nested(child)
 
 
 class StyleManager:
@@ -260,8 +335,8 @@ class WordFileHandler:
     def get_session_dir() -> Path:
         """获取当前用户会话的文件存储目录。
 
-        目录结构: storage/uploads/{tenant_id}/conversation/
-        无租户时: storage/uploads/conversation/
+        目录结构: storage/tenants/{tenant_id}/conversation/
+        无租户时: storage/tenants/_anonymous/conversation/
 
         与用户上传文件共用同一目录，生成的文件天然支持下载和预览。
         """
@@ -289,16 +364,45 @@ class WordFileHandler:
 
     @staticmethod
     def resolve_path(file_path: str) -> str:
-        """解析文件路径（支持相对路径）"""
+        """解析文件路径（支持相对路径或 file_id）
+
+        查找顺序：
+        1. 原路径直接命中（含绝对路径）
+        2. Redis 元数据命中（file_id -> uploaded_file:{file_id}.path，最可靠）
+        3. 新路径 storage/tenants/{tenant}/conversation/{file}（含 _anonymous 兜底）
+        """
         p = Path(file_path)
+        # 防路径穿越：含 .. 的相对路径不得进行 exists 检查或路径拼接
+        # （Path.exists() 和 Path()/.. 都会自动 resolve 后命中项目外系统文件）
+        if not p.is_absolute() and ".." in p.parts:
+            return str(p.absolute())
         if p.exists():
             return str(p.absolute())
-        # 尝试在 uploads 目录下查找
+
+        # Redis 元数据命中：file_id 上传时写了 uploaded_file:{file_id} 永久元数据
+        # 适用于所有走 cp/upload/subagent_template_file 上传的文件，不依赖目录扫描
         try:
-            from src.config.settings import settings
-            uploads = Path(settings.storage.uploads_dir) / file_path
-            if uploads.exists():
-                return str(uploads.absolute())
+            from src.core.storage import resolve_path_via_redis
+            redis_path = resolve_path_via_redis(file_path)
+            if redis_path:
+                return redis_path
+        except ImportError:
+            pass
+
+        # 优先在新路径下查找
+        try:
+            from src.core.storage import _TENANTS_ROOT
+            project_root = Path(__file__).resolve().parents[3]
+            tenants_root = project_root / _TENANTS_ROOT
+            if tenants_root.exists():
+                # 防路径穿越：file_path 含 .. 或绝对路径时跳过新路径扫描
+                fp_obj = Path(file_path)
+                if not fp_obj.is_absolute() and ".." not in fp_obj.parts:
+                    for d1 in tenants_root.iterdir():
+                        if d1.is_dir():
+                            candidate = d1 / "conversation" / file_path
+                            if candidate.exists():
+                                return str(candidate.absolute())
         except (ImportError, AttributeError):
             pass
         return str(p.absolute())

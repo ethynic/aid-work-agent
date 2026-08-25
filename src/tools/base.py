@@ -10,6 +10,15 @@ from typing import Any, Dict, List, Optional, Type
 
 from pydantic import BaseModel
 
+# 工具自动目录：catalog=True 且定义了 name 的 BaseTool 子类按稳定类身份登记，
+# 供 registry.discover_tool_classes() 发现注册（docs/tools/tool-auto-discovery-design.md）。
+# 只收集类引用不实例化；工具名冲突由 discovery 在生产边界过滤后统一报错。
+_CATALOG: Dict[str, Type["BaseTool"]] = {}
+
+
+def catalog_class_identity(cls: Type["BaseTool"]) -> str:
+    return f"{cls.__module__}.{cls.__qualname__}"
+
 
 class ExecutionTarget(str, Enum):
     """工具执行位置（设计 docs/design/recruiting/recruiting-cli-agent-integration-design.md §4.1）"""
@@ -37,6 +46,23 @@ class BaseTool(ABC):
     category: str = "general"
     InputModel: Optional[Type[BaseModel]] = None  # Pydantic 参数模型
     execution_target: ExecutionTarget = ExecutionTarget.SERVER  # 执行位置，默认服务端，现有工具零改动
+    # Agent 装配顺序优先级。默认工具按名称稳定排序；较大值用于兼容历史上后置注册的工具。
+    assembly_order: int = 0
+    # 是否进入自动发现目录 _CATALOG。以下工具应显式设为 False 退出：
+    # 虚拟工具（create_plan/use_skill/skill_execute/clarify/delegate_to_subagent）、
+    # 有构造依赖的控制工具、渠道层工具（speech_to_text）、
+    # 仅子智能体按需注册的工具（boss_* 本地代理）、测试替身/中间基类。
+    catalog: bool = True
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        """子类定义时自动登记进 _CATALOG（仅收集类，不实例化）。
+
+        __init_subclass__ 触发时子类类体属性已绑定到 cls，通过 cls 参数读取，
+        中间基类未定义 name（继承空串）自然跳过。
+        """
+        super().__init_subclass__(**kwargs)
+        if getattr(cls, "catalog", True) and getattr(cls, "name", None):
+            _CATALOG[catalog_class_identity(cls)] = cls
 
     @abstractmethod
     async def execute(self, **kwargs) -> Dict[str, Any]:
@@ -154,3 +180,53 @@ class BaseTool(ABC):
             if param not in kwargs or kwargs[param] is None:
                 missing.append(param)
         return missing
+
+    def get_validation_errors(self, **kwargs) -> List[str]:
+        """
+        获取参数校验的可读错误信息列表（覆盖所有 Pydantic 错误类型，含类型错误）。
+
+        原先 `get_missing_parameters` 只提取 `missing`/`value_error` 两类错误，
+        当 LLM 传了类型错误（如 headers 传 JSON 字符串导致 `dict_type`）时会返回
+        空列表，生成误导性的"缺少必需参数: []"，LLM 无法自纠导致死循环。
+
+        Args:
+            **kwargs: 工具参数
+
+        Returns:
+            可读错误信息列表，如
+            ["headers: Input should be a valid dictionary（实际输入类型: str）"]
+        """
+        if self.InputModel is not None:
+            try:
+                self.InputModel(**kwargs)
+                return []
+            except Exception as e:
+                errors: List[str] = []
+                if hasattr(e, 'errors'):
+                    for err in e.errors():
+                        loc = '.'.join(str(x) for x in err.get('loc', ()))
+                        msg = err.get('msg', '') or '参数无效'
+                        input_type = self._describe_validation_input(err)
+                        if loc:
+                            errors.append(f"{loc}: {msg}（实际输入类型: {input_type}）")
+                        else:
+                            errors.append(f"{msg}（实际输入类型: {input_type}）")
+                return errors
+
+        # 旧的 schema 校验路径：无 InputModel，仅按必填字段判断
+        required = self.parameters_schema.get("required", [])
+        errors = []
+        for param in required:
+            if param not in kwargs or kwargs[param] is None:
+                errors.append(f"{param}: 缺少必需参数（实际输入类型: 未提供）")
+        return errors
+
+    @staticmethod
+    def _describe_validation_input(err: Dict[str, Any]) -> str:
+        """从 Pydantic 错误条目中提取实际输入类型描述，便于 LLM 自纠。"""
+        if err.get("type") == "missing":
+            return "未提供"
+        raw = err.get("input")
+        if raw is None:
+            return "None"
+        return type(raw).__name__

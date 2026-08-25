@@ -99,11 +99,18 @@ class PPTPlanner:
                 max_tokens=4096,
             )
 
+            from src.services.session_record import record_background_llm_usage
+            record_background_llm_usage(
+                response.get("usage") if isinstance(response, dict) else None,
+                source="ppt_planner",
+                model=gateway.get_model_name(),
+            )
+
             content = response.get("content", "")
             return self._parse_json(content)
 
         except Exception as e:
-            logger.error(f"[PPTPlanner] LLM 调用失败: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"[PPTPlanner] LLM 调用失败: {e}")
             return {"error": f"LLM 规划失败: {e}"}
 
     def _parse_json(self, text: str) -> Dict[str, Any]:

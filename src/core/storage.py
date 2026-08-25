@@ -19,6 +19,10 @@
 """
 
 import os
+from pathlib import Path
+from typing import Optional
+
+from loguru import logger
 
 
 # 仓库根目录下的统一存储根
@@ -26,17 +30,40 @@ _STORAGE_ROOT = "storage"
 _TENANTS_ROOT = os.path.join(_STORAGE_ROOT, "tenants")
 
 
+def get_tenants_storage_root() -> str:
+    """获取租户存储根目录（`storage/tenants`，相对路径）。
+
+    供租户数据迁移工具等需要引用租户存储根的调用方使用，
+    避免在业务代码中硬编码 `storage/tenants` 路径字符串。
+    """
+    return _TENANTS_ROOT
+
+
+def normalize_tenant_id(tenant_id: str) -> str:
+    """规范化租户 ID 用于存储路径：剥离 `tenant_` 前缀。
+
+    数据库 `tenants.tenant_id` 带 `tenant_` 前缀（如 `tenant_ea24cd1a1097`），
+    而存储规范要求 `storage/tenants/{tid}/{scene}/` 中 {tid} 不带前缀。
+    统一在此剥离，避免带前缀与不带前缀目录并存导致读写路径错位。
+
+    特殊值（`_anonymous` / `demo` 等）不以 `tenant_` 开头，原样返回。
+    """
+    if tenant_id.startswith("tenant_") and len(tenant_id) > len("tenant_"):
+        return tenant_id[len("tenant_"):]
+    return tenant_id
+
+
 def get_tenant_storage_dir(tenant_id: str, scene: str) -> str:
     """获取租户某场景的目录路径（相对路径，不保证存在）。
 
     Args:
-        tenant_id: 租户 ID
+        tenant_id: 租户 ID（自动剥离 `tenant_` 前缀，见 normalize_tenant_id）
         scene: 业务场景子目录名（conversation / knowledge / export / ...）
 
     Returns:
         `storage/tenants/{tenant_id}/{scene}`
     """
-    return os.path.join(_TENANTS_ROOT, tenant_id, scene)
+    return os.path.join(_TENANTS_ROOT, normalize_tenant_id(tenant_id), scene)
 
 
 def ensure_tenant_storage_dir(tenant_id: str, scene: str) -> str:
@@ -80,3 +107,38 @@ def get_tenant_storage_abs_path(tenant_id: str, scene: str, filename: str) -> st
     """
     rel = get_tenant_storage_path(tenant_id, scene, filename)
     return os.path.abspath(rel)
+
+
+def resolve_path_via_redis(file_id: str) -> Optional[str]:
+    """通过 Redis uploaded_file:{file_id} 元数据查磁盘路径
+
+    Agent 传给工具的 file_paths 经常是 file_id（如 file_e300d0d5befc），
+    而不是磁盘路径。file_id 上传时（cp/upload/subagent_template_file）
+    在 Redis `uploaded_file:{file_id}` 写了永久元数据，path 字段是绝对路径，
+    直接命中最可靠，不依赖目录扫描。
+
+    Args:
+        file_id: 文件 ID，形如 `file_xxxxxxxxxxx`
+
+    Returns:
+        命中且文件存在 -> 返回绝对路径字符串；否则返回 None，调用方走目录扫描兜底。
+
+    Note:
+        Redis 不可用或 key 不存在时返回 None，不抛异常（降级到目录扫描）。
+        仅 `file_` 前缀的 ID 才查 Redis，其他直接返回 None。
+    """
+    if not file_id or not file_id.startswith("file_"):
+        return None
+    try:
+        from src.core.redis_client import redis_client
+        key = redis_client.make_key("uploaded_file", file_id)
+        info = redis_client.hgetall(key)
+        if not info:
+            return None
+        path = info.get("path")
+        if path and Path(path).exists():
+            return str(Path(path).absolute())
+        return None
+    except Exception as e:
+        logger.warning(f"[storage] Redis 元数据查询失败: {e}")
+        return None

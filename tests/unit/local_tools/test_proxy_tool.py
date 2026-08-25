@@ -21,6 +21,8 @@ from src.local_tools.proxy_tool import (
     BossFilterTool,
     BossGotoTool,
     BossGreetTool,
+    BossJobsListTool,
+    BossSelectJobTool,
 )
 from src.tools.base import ExecutionTarget
 
@@ -61,8 +63,13 @@ def _patch_repo(devices, invocation=None, events=None):
 
 class TestToolDefinitions:
     def test_all_tools_local_required(self):
-        """7 个 proxy 工具全部 LOCAL_REQUIRED + local_boss 分类，名称与受信 manifest 一致"""
-        assert len(LOCAL_PROXY_TOOL_CLASSES) == 7
+        """16 个 proxy 工具全部 LOCAL_REQUIRED + local_boss 分类，名称与受信 manifest 一致
+
+        含 Phase 3 新增的 boss_list_jobs / boss_select_job / boss_jobs_list 与
+        面试通知 Phase 1 的 boss_interview_notify；其中 boss_jobs_list /
+        boss_interview_notify 是混合模式（云端执行逻辑 + 代理注册），execution_target 仍 LOCAL_REQUIRED
+        """
+        assert len(LOCAL_PROXY_TOOL_CLASSES) == 16
         assert LOCAL_PROXY_TOOL_NAMES == set(catalog.allowed_tools("boss-recruiting"))
         for cls in LOCAL_PROXY_TOOL_CLASSES:
             tool = cls()
@@ -70,6 +77,79 @@ class TestToolDefinitions:
             assert tool.category == "local_boss"
             assert tool.display_name
             assert tool.description
+
+    def test_select_job_requires_job_name(self):
+        """boss_select_job 的 job_name 必填（min_length=1），空名拒绝"""
+        from pydantic import ValidationError as VE
+
+        with pytest.raises(VE):
+            BossSelectJobTool.InputModel(job_name="")
+        tool = BossSelectJobTool()
+        assert tool.validate_parameters(job_name="PHP开发工程师（Laravel）") is True
+        assert tool.validate_parameters() is False  # 缺 job_name
+        assert tool.validate_parameters(job_name="") is False
+
+
+class TestBossJobsListCloudMode:
+    """boss_jobs_list 混合模式：execute 纯云端查询，不查设备、不建 invocation"""
+
+    @staticmethod
+    def _jobs(*rows):
+        return [dict(r) for r in rows]
+
+    async def test_missing_identity(self):
+        result = await BossJobsListTool().execute()
+        assert result["success"] is False
+        assert result["code"] == "NO_IDENTITY"
+
+    async def test_cloud_query_never_touches_device_or_invocation(self):
+        """云端分支：只查 job service（list_jobs 已附统计），全程不碰 repository（设备闸门/invocation）"""
+        jobs = self._jobs(
+            {"id": "job-1", "job_name": "PHP开发工程师（Laravel）", "status": "active",
+             "match_threshold": 70, "job_requirements": {"experience": "3-5年"},
+             "resume_count": 3, "matched_count": 1},
+            {"id": "job-2", "job_name": "Java后端", "status": "paused",
+             "match_threshold": 75, "job_requirements": None,
+             "resume_count": 0, "matched_count": 0},
+        )
+        with patch("src.local_tools.proxy_tool.recruiting_job_service.list_jobs",
+                   return_value=jobs) as mock_list, \
+             patch(f"{REPO}.list_devices") as mock_devices, \
+             patch(f"{REPO}.create_invocation") as mock_create:
+            result = await BossJobsListTool().execute(**_kwargs())
+        assert result["success"] is True
+        mock_list.assert_called_once_with(TENANT)
+        mock_devices.assert_not_called()
+        mock_create.assert_not_called()
+        # paused 过滤：只返回 active
+        assert result["data"]["jobs"] == [
+            {"job_id": "job-1", "job_name": "PHP开发工程师（Laravel）", "status": "active",
+             "match_threshold": 70, "job_requirements": {"experience": "3-5年"},
+             "resume_count": 3, "matched_count": 1},
+        ]
+        assert "PHP开发工程师（Laravel）" in result["message"]
+
+    async def test_no_active_jobs_returns_empty_with_hint(self):
+        """无 active 职位 → 空列表 + 引导去职位管理创建"""
+        with patch("src.local_tools.proxy_tool.recruiting_job_service.list_jobs",
+                   return_value=self._jobs(
+                       {"id": "job-2", "job_name": "Java后端", "status": "paused",
+                        "match_threshold": 75, "job_requirements": None,
+                        "resume_count": 0, "matched_count": 0},
+                   )):
+            result = await BossJobsListTool().execute(**_kwargs())
+        assert result["success"] is True
+        assert result["data"]["jobs"] == []
+        assert "职位管理" in result["message"]
+
+    async def test_infra_error_returns_failed(self):
+        """职位库查询异常 → FAILED 用户可读文案，不抛 psycopg2 原文"""
+        with patch("src.local_tools.proxy_tool.recruiting_job_service.list_jobs",
+                   side_effect=RuntimeError("relation does not exist")):
+            result = await BossJobsListTool().execute(**_kwargs())
+        assert result["success"] is False
+        assert result["code"] == "FAILED"
+        assert "职位库查询失败" in result["message"]
 
 
 class TestDeviceGate:
@@ -128,6 +208,31 @@ class TestAuthCaps:
         assert tool.validate_parameters(limit=4) is False
         assert tool.validate_parameters(limit=3) is True
         assert tool.validate_parameters() is True  # 默认 1
+
+    def test_greet_names_validation(self):
+        """greet 定向名单：>3 拒绝、空串项拒绝、空列表拒绝、None 合法、合法名单通过"""
+        # 超过 3 人 → 拒绝（授权上限不可突破）
+        with pytest.raises(ValidationError):
+            BossGreetTool.InputModel(names=["刘草威", "张三丰", "王五", "赵六"])
+        # 含空串/纯空白项 → 拒绝
+        with pytest.raises(ValidationError):
+            BossGreetTool.InputModel(names=["刘草威", "  "])
+        with pytest.raises(ValidationError):
+            BossGreetTool.InputModel(names=[""])
+        # 空列表 → 拒绝（定向必须至少 1 人）
+        with pytest.raises(ValidationError):
+            BossGreetTool.InputModel(names=[])
+        tool = BossGreetTool()
+        assert tool.validate_parameters(names=["刘草威", "张三丰", "王五", "赵六"]) is False
+        assert tool.validate_parameters(names=["刘草威", " "]) is False
+        # None（非定向）与合法名单（1-3 个非空姓名）均通过
+        assert tool.validate_parameters() is True
+        assert tool.validate_parameters(names=["刘草威", "张三丰"]) is True
+
+    def test_greet_names_normalized_before_forward(self):
+        """greet 定向名单透传前规整：strip + 去重（保持顺序），CLI 收到的是规整后名单"""
+        model = BossGreetTool.InputModel(names=[" 刘草威 ", "张三丰", "刘草威"])
+        assert model.names == ["刘草威", "张三丰"]
 
     def test_accept_resume_limit_hard_cap(self):
         """accept 单次上限 1：limit=2 Pydantic 拒绝"""

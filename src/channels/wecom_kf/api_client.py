@@ -135,6 +135,75 @@ class WeComKfApiClient:
                     return {"errcode": -1, "errmsg": str(e)}
         return {"errcode": -1, "errmsg": "unknown error"}
 
+    # ==================== 客服账号管理 ====================
+
+    async def account_add(self, name: str, media_id: str) -> Dict[str, Any]:
+        """
+        创建客服账号。
+
+        Args:
+            name: 客服账号名称，不超过 16 个字符
+            media_id: 客服头像临时素材 media_id（必须，通过 upload_media 获取）
+
+        Returns:
+            {"errcode": 0, "open_kfid": "wkxxxxxx"} 或错误
+        """
+        body = {"name": name, "media_id": media_id}
+        result = await self._request("POST", "/cgi-bin/kf/account/add", json_body=body)
+        if result.get("errcode", 0) != 0:
+            logger.error(f"微信客服创建账号失败: errcode={result.get('errcode')}, errmsg={result.get('errmsg')}")
+        return result
+
+    async def account_del(self, open_kfid: str) -> Dict[str, Any]:
+        """删除客服账号。"""
+        body = {"open_kfid": open_kfid}
+        result = await self._request("POST", "/cgi-bin/kf/account/del", json_body=body)
+        if result.get("errcode", 0) != 0:
+            logger.error(f"微信客服删除账号失败: errcode={result.get('errcode')}, errmsg={result.get('errmsg')}")
+        return result
+
+    async def account_update(self, open_kfid: str, name: Optional[str] = None, media_id: Optional[str] = None) -> Dict[str, Any]:
+        """更新客服账号名称/头像，未提供的字段保持不变。"""
+        body: Dict[str, Any] = {"open_kfid": open_kfid}
+        if name is not None:
+            body["name"] = name
+        if media_id is not None:
+            body["media_id"] = media_id
+        result = await self._request("POST", "/cgi-bin/kf/account/update", json_body=body)
+        if result.get("errcode", 0) != 0:
+            logger.error(f"微信客服更新账号失败: errcode={result.get('errcode')}, errmsg={result.get('errmsg')}")
+        return result
+
+    async def account_list(self, offset: int = 0, limit: int = 100) -> Dict[str, Any]:
+        """
+        获取客服账号列表。
+
+        Returns:
+            {"errcode": 0, "account_list": [{"open_kfid": "...", "name": "...", "avatar": "..."}]}
+        """
+        body = {"offset": offset, "limit": limit}
+        result = await self._request("POST", "/cgi-bin/kf/account/list", json_body=body)
+        if result.get("errcode", 0) != 0:
+            logger.error(f"微信客服获取账号列表失败: errcode={result.get('errcode')}, errmsg={result.get('errmsg')}")
+        return result
+
+    async def add_contact_way(self, open_kfid: str, scene: str) -> Dict[str, Any]:
+        """
+        获取客服账号的接待二维码/链接。
+
+        Args:
+            open_kfid: 客服账号 ID
+            scene: 场景值，[0-9a-zA-Z_-]* 且长度不超过 32 字节，用于区分客户来源
+
+        Returns:
+            {"errcode": 0, "url": "https://work.weixin.qq.com/kfid/xxx"}
+        """
+        body = {"open_kfid": open_kfid, "scene": scene}
+        result = await self._request("POST", "/cgi-bin/kf/add_contact_way", json_body=body)
+        if result.get("errcode", 0) != 0:
+            logger.error(f"微信客服获取接待二维码失败: errcode={result.get('errcode')}, errmsg={result.get('errmsg')}")
+        return result
+
     # ==================== 消息同步 ====================
 
     async def sync_msg(self, open_kfid: str, cursor: str = "", limit: int = 100, voice_format: int = 0) -> Dict[str, Any]:

@@ -2,13 +2,14 @@ import { existsSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs
 import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { app, BrowserWindow, dialog, ipcMain, nativeTheme, net, protocol, safeStorage, screen, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, net, protocol, safeStorage, screen, shell } from 'electron'
 import type { IpcMainInvokeEvent } from 'electron'
 import electronUpdater from 'electron-updater'
 import { EncryptedCredentialStore, isAllowedCredentialKey, isAllowedCredentialValue } from './credentials.js'
 import { resolveApiConfiguration } from './apiConfiguration.js'
 import { DesktopUpdater, type UpdateAdapter } from './desktopUpdater.js'
 import { resolveUpdateConfiguration } from './updateConfiguration.js'
+import { applicationMenuTemplate, resolvePlatformWindowOptions, shouldQuitWhenAllWindowsClosed } from './platform.js'
 import { normalizeDownloadUrl, normalizeExternalUrl, readDownloadBody, safeSuggestedName } from './systemCapabilities.js'
 import {
   createContentSecurityPolicy,
@@ -118,6 +119,10 @@ function registerDesktopIpc(): void {
       throw new Error('desktop IPC sender rejected')
     }
   }
+  ipcMain.handle('desktop:startup:get-state', (event) => {
+    assertTrustedSender(event)
+    return { secureStorageAvailable: safeStorage.isEncryptionAvailable(), online: net.isOnline() }
+  })
   ipcMain.handle('desktop:credentials:hydrate', (event) => {
     assertTrustedSender(event)
     return credentialStore!.load()
@@ -248,10 +253,11 @@ async function createWindow(): Promise<BrowserWindow> {
     minHeight: 500,
     show: !smokeMode,
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#111827' : '#ffffff',
+    ...resolvePlatformWindowOptions(process.platform),
     webPreferences: {
       ...createSecureWebPreferences(preloadPath),
       additionalArguments: [
-        '--aidagent-bridge-version=2',
+        '--aidagent-bridge-version=3',
         `--aidagent-api-base-url=${apiBaseUrl}`,
         `--aidagent-smoke-mode=${smokeMode ? '1' : '0'}`,
       ],
@@ -328,6 +334,7 @@ if (!hasSingleInstanceLock) {
     contentSecurityPolicy = createContentSecurityPolicy(apiBaseUrl)
     logLifecycle('api-configuration-loaded', configuration.source)
     nativeTheme.themeSource = 'system'
+    Menu.setApplicationMenu(Menu.buildFromTemplate(applicationMenuTemplate(process.platform)))
     initializeDesktopUpdater()
     registerDesktopIpc()
     await registerRendererProtocol()
@@ -351,7 +358,8 @@ if (!hasSingleInstanceLock) {
   })
 
   app.on('window-all-closed', () => {
-    desktopUpdater?.stop()
-    if (process.platform !== 'darwin') app.quit()
+    if (shouldQuitWhenAllWindowsClosed(process.platform)) app.quit()
   })
+
+  app.on('before-quit', () => desktopUpdater?.stop())
 }

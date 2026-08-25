@@ -124,13 +124,16 @@ class LLMConfig(BaseModel):
     failover: FailoverConfig = Field(default_factory=FailoverConfig)
     # 各模型 max_tokens 上限映射表（gateway 未显式指定时按模型取默认值，空字典时用全局默认 16384）
     model_max_tokens: Dict[str, int] = Field(default_factory=dict)
+    # qwen 推理模型是否关闭思考模式；None=不写参数（默认关闭思考，1-2s 响应），见 config.yaml llm.enable_thinking
+    enable_thinking: Optional[bool] = None
+    # 是否启用显式缓存（cache_control: ephemeral），命中按输入单价 10% 计费，见 config.yaml llm.context_cache
+    context_cache: bool = True
     # 注：wanx 已迁移到 settings.video_gen.wanx，请改用 settings.video_gen.wanx.*
 
 
 class StorageConfig(BaseModel):
     """存储配置（所有业务数据集中于此，便于备份和迁移）"""
     base_dir: str = "storage"  # 存储根目录
-    uploads_dir: str = "storage/uploads"  # 上传文件根目录
     # 注意：代码内部使用字节单位，.env 中配置使用 MB 单位
     max_knowledge_file_size: int = 50 * 1024 * 1024  # 知识库文件大小限制（默认 50MB），支持 .env 覆盖
     max_general_file_size: int = 20 * 1024 * 1024  # 通用上传文件大小限制（默认 20MB），支持 .env 覆盖
@@ -350,9 +353,15 @@ class BillingConfig(BaseModel):
     - usage_factor: 用量系数，token 成本价 × 系数 = 积分用量（向上取整）
     - video_gen_usage_factor: 视频创作用量系数，视频秒数 × 单价 × 系数 = 积分用量（向上取整）
       视频创作智能体（video-agent）按秒计费专用，区别于主业务按 token 计费
+    - embedding_usage_factor: 向量模型用量系数，embedding token × 单价 × 系数 = 积分用量
+      知识库向量化、检索 query 向量化等场景使用 text-embedding-v3 等模型计费
+    - asr_usage_factor: 语音识别用量系数，ASR 调用次数 × 单价 × 系数 = 积分用量
+      阿里云 NLS 一句话识别按次计费
     """
     usage_factor: int = 100
     video_gen_usage_factor: int = 33
+    embedding_usage_factor: int = 100
+    asr_usage_factor: int = 100
 
 
 class ClientConfig(BaseModel):
@@ -363,6 +372,15 @@ class ClientConfig(BaseModel):
     """
     credit_multiplier: float = 5.0
     llm_request_timeout: int = 120
+
+
+class DesktopAgentConfig(BaseModel):
+    """Desktop D1 is disabled until a strong server-side ticket secret is provided."""
+    enabled: bool = False
+    authorization_ticket_secret: str = ""
+    authorization_ticket_ttl_seconds: int = 120
+    policy_revision: str = "desktop-d1-v1"
+    allowed_remote_tools: List[str] = Field(default_factory=list)
 
 
 class Settings(BaseModel):
@@ -383,6 +401,7 @@ class Settings(BaseModel):
     billing: BillingConfig = Field(default_factory=BillingConfig)
     video_gen: VideoGenConfig = Field(default_factory=VideoGenConfig)
     client: ClientConfig = Field(default_factory=ClientConfig)
+    desktop_agent: DesktopAgentConfig = Field(default_factory=DesktopAgentConfig)
 
     # 认证相关配置（从环境变量加载）
     qb_token: str = ""  # 平台管理员超级token（明文，仅用于向后兼容，推荐使用 qb_token_hash）
@@ -485,6 +504,9 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
         qwen_cfg["api_keys"] = os.getenv("QWEN_API_KEYS")
     if os.getenv("QWEN_MODEL_CODE"):
         qwen_cfg["model"] = os.getenv("QWEN_MODEL_CODE")
+    # 日报/周报/月报专用小模型（独立配置项，不影响主链路 QWEN_MODEL_CODE）
+    if os.getenv("QWEN_REPORT_MODEL_CODE"):
+        qwen_cfg["report_model"] = os.getenv("QWEN_REPORT_MODEL_CODE")
     if os.getenv("QWEN_BASE_URL"):
         qwen_cfg["base_url"] = os.getenv("QWEN_BASE_URL")
 
@@ -494,6 +516,9 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
         zhipu_cfg["api_keys"] = os.getenv("ZHIPU_API_KEYS")
     if os.getenv("ZHIPU_MODEL_CODE"):
         zhipu_cfg["model"] = os.getenv("ZHIPU_MODEL_CODE")
+    # 日报/周报/月报专用小模型（独立配置项，不影响主链路 ZHIPU_MODEL_CODE）
+    if os.getenv("ZHIPU_REPORT_MODEL_CODE"):
+        zhipu_cfg["report_model"] = os.getenv("ZHIPU_REPORT_MODEL_CODE")
     if os.getenv("ZHIPU_BASE_URL"):
         zhipu_cfg["base_url"] = os.getenv("ZHIPU_BASE_URL")
 
@@ -524,6 +549,14 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
         yaml_config.setdefault("app", {})["debug"] = True
     if os.getenv("PUBLIC_BASE_URL"):
         yaml_config.setdefault("app", {})["public_base_url"] = os.getenv("PUBLIC_BASE_URL")
+
+    desktop_cfg = yaml_config.setdefault("desktop_agent", {})
+    if os.getenv("DESKTOP_AGENT_ENABLED") is not None:
+        desktop_cfg["enabled"] = os.getenv("DESKTOP_AGENT_ENABLED", "").lower() in ("true", "1", "yes")
+    if os.getenv("DESKTOP_AGENT_AUTHORIZATION_SECRET") is not None:
+        desktop_cfg["authorization_ticket_secret"] = os.getenv("DESKTOP_AGENT_AUTHORIZATION_SECRET")
+    if os.getenv("DESKTOP_AGENT_ALLOWED_REMOTE_TOOLS") is not None:
+        desktop_cfg["allowed_remote_tools"] = [item.strip() for item in os.getenv("DESKTOP_AGENT_ALLOWED_REMOTE_TOOLS", "").split(",") if item.strip()]
 
     # 文件上传大小限制（.env 中单位为 MB，代码内部转换为字节）
     if os.getenv("STORAGE_MAX_KNOWLEDGE_FILE_SIZE"):
@@ -625,6 +658,16 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
     if os.getenv("VIDEO_GEN_USAGE_FACTOR") is not None:
         try:
             billing_cfg["video_gen_usage_factor"] = int(os.getenv("VIDEO_GEN_USAGE_FACTOR"))
+        except ValueError:
+            pass
+    if os.getenv("EMBEDDING_USAGE_FACTOR") is not None:
+        try:
+            billing_cfg["embedding_usage_factor"] = int(os.getenv("EMBEDDING_USAGE_FACTOR"))
+        except ValueError:
+            pass
+    if os.getenv("ASR_USAGE_FACTOR") is not None:
+        try:
+            billing_cfg["asr_usage_factor"] = int(os.getenv("ASR_USAGE_FACTOR"))
         except ValueError:
             pass
 

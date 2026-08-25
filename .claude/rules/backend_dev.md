@@ -9,8 +9,13 @@ from loguru import logger
 # 后端日志：复杂业务逻辑长期保留
 logger.info('后端日志：开始处理用户请求')
 
-# 后端日志：异常捕获
-logger.error(f'后端日志：数据库连接失败: {e}', exc_info=True)
+# 后端日志：异常捕获（必须用 opt(exception=True) 或 logger.exception，才能把堆栈写入错误日志库）
+logger.opt(exception=True).error(f'后端日志：数据库连接失败: {e}')
+
+# 注意：loguru 不识别标准库 logging 的 exc_info=True 参数！
+# ❌ logger.error(f'...: {e}', exc_info=True) 不会捕获堆栈，
+#    exc_info 只是普通 kwarg 被塞进 extra，record['exception'] 恒为 None，
+#    log_error 表的 traceback 列永远为空。正确写法见上。
 
 # 临时调试日志（bug 修复后删除）
 logger.debug(f'临时调试：请求参数 {params}')
@@ -334,7 +339,7 @@ class TenantStatus(IntEnum):
 
 3. **前端显示值不受此限制**：显示值通常为中文，通过映射表实现（如 `TenantStatusMap`）。
 
-**如需修改字段枚举值，注意前后端协调修改**：同时更新 `src/saas/models/enums.py`（后端）和 `frontend/src/api/enums.ts`（前端）。
+**如需修改字段枚举值，注意前后端协调修改**：同时更新 `src/saas/models/enums.py`（后端）和 `frontend/web/api/enums.ts`（前端）。
 
 ## 业务数据表（bs_）CRUD 规范
 
@@ -601,4 +606,3 @@ ref: ImageRef = await registry.register(
 - `PERMANENT_TTL(-1)` 不调用 `redis_client.expire`（内存降级版 seconds≤0 立即删键）；只有正数 TTL 才调 expire
 - Redis key 与 `cp_tool._register_download` 完全同命名空间（`uploaded_file:{file_id}`），现有 `/api/files/{file_id}/download` 路由可直接下载
 - ImageRegistry 是惰性单例（`get_image_registry()`），模块顶层**无**实例化副作用，import 该模块不会拉起 master_agent
-

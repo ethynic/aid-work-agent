@@ -2,8 +2,8 @@
 /**
  * BOSS 招聘操作 CLI 入口。
  *
- * 7 个真机验证成功的操作命令（filter / greet / goto / accept / reject / interview，
- * 其中 filter 含设置与 --clear 两种用法）+ 3 个标准 Provider 命令（mcp / doctor / version）。
+ * 操作命令（filter / greet / goto / accept / reject / interview / send-to / send-current /
+ * list-jobs / select-job / resume-detail / resume-batch，其中 filter 含设置与 --clear 两种用法）+ 3 个标准 Provider 命令（mcp / doctor / version）。
  * 操作命令只是薄 renderer，业务能力在 src/main/operations/，与 MCP tool handler 共享。
  *
  * 用法：
@@ -14,6 +14,12 @@
  *   node dist/src/cli/index.js accept [--limit N] [--no-preview]
  *   node dist/src/cli/index.js reject
  *   node dist/src/cli/index.js interview [--remark "..."]
+ *   node dist/src/cli/index.js send-to <姓名> --message <消息> [--dry-run]
+ *   node dist/src/cli/index.js send-current --message <消息> [--dry-run]
+ *   node dist/src/cli/index.js list-jobs
+ *   node dist/src/cli/index.js select-job <职位名>
+ *   node dist/src/cli/index.js resume-detail [--name <姓名>] [--save-image <path>]
+ *   node dist/src/cli/index.js resume-batch [--limit N] [--save-dir <目录>]
  *   node dist/src/cli/index.js mcp --stdio
  *   node dist/src/cli/index.js doctor
  *   node dist/src/cli/index.js version [--json]
@@ -27,6 +33,7 @@ import { parseArgs, flagString, hasFlag } from './args.js'
 const USAGE = `BOSS 招聘操作 CLI
 
 操作命令：
+  filter-options                 查询筛选面板全部可选档位（只读；给 AI/用户选精确档位用；开收面板借鼠标约 2 秒）
   filter [--experience 5-10年] [--education 本科,硕士,博士] [--salary 10-20K]   自动设置筛选面板（Win32 真实鼠标，期间勿动鼠标）
   filter --clear              清除全部筛选（开面板 → 清除 → 确定，期间勿动鼠标）
   greet [--limit N]           逐个打招呼（默认 10 上限，最大 100；当前屏点完自动滚动，到底结束；真实写动作，期间勿动鼠标）
@@ -34,6 +41,12 @@ const USAGE = `BOSS 招聘操作 CLI
   accept [--limit N] [--no-preview]   逐个打开「对方想发送附件简历」的会话并点「同意」接收简历，同意后自动点开预览再关闭（默认 20 上限，最大 100；不在沟通页自动先跳转）
   reject                    把沟通页当前会话的候选人标记为「不合适」（弹确认层自动点确定；真实写动作，期间勿动鼠标）
   interview [--remark "..."]  约面试表单填充演示：逐字填备注+选明天日期后点取消关闭（绝不点发送；期间勿动鼠标）
+  send-to <姓名> --message <消息> [--dry-run]   搜索找人 → 进入对话 → 输入并发送消息（默认真发送；--dry-run 只输入不发送；期间勿动鼠标）
+  send-current --message <消息> [--dry-run]     向当前已选会话输入并发送消息（前提已选会话；默认真发送；--dry-run 只输入不发送；期间勿动鼠标）
+  list-jobs                    列出当前招聘者的所有职位（打开职位下拉解析；只读，但借用真实鼠标点开下拉，期间勿动鼠标）
+  select-job <职位名>          切换到指定职位（精确职位名，可用 list-jobs 查看；真实写动作，期间勿动鼠标）
+  resume-detail [--name <姓名>] [--save-image <path>]   读取当前打开的候选人简历详情（canvas 截图拼接 OCR；--name 候选人姓名，缺省从 OCR 首行自动识别；前提先点开候选人详情；只读，但滚动借用真实鼠标，期间勿动鼠标）
+  resume-batch [--limit N] [--save-dir <目录>]   批量打开推荐牛人卡片并读取简历（默认 1 份，最大 10；逐个点开→读取→关闭→下一份；只读，但滚动借用真实鼠标约 30 秒/份，期间勿动鼠标）
 
 Provider 命令：
   mcp --stdio                 启动标准本地 MCP server（stdout 只承载协议，供 Codex/WorkBuddy 等 Host 使用）
@@ -68,6 +81,12 @@ async function main(): Promise<number> {
   const command = args.positional[0]
 
   switch (command) {
+    case 'filter-options': {
+      const cdpPort = parseCdpPort(args)
+      if (cdpPort === 'invalid') return 2
+      const { filterOptionsCommand } = await import('./commands/filterOptions.js')
+      return filterOptionsCommand({ cdpPort })
+    }
     case 'filter': {
       const educationRaw = flagString(args, 'education')
       const educations = educationRaw
@@ -136,6 +155,80 @@ async function main(): Promise<number> {
       if (cdpPort === 'invalid') return 2
       const { interviewCommand } = await import('./commands/interview.js')
       return interviewCommand({ remark: flagString(args, 'remark'), cdpPort })
+    }
+    case 'send-to': {
+      const to = args.positional[1]
+      if (!to) {
+        console.error('send-to 缺少联系人姓名：send-to <姓名> --message <消息> [--dry-run]')
+        return 2
+      }
+      const message = flagString(args, 'message')
+      if (!message) {
+        console.error('send-to 缺少 --message <消息>')
+        return 2
+      }
+      const cdpPort = parseCdpPort(args)
+      if (cdpPort === 'invalid') return 2
+      const { sendToCommand } = await import('./commands/sendTo.js')
+      return sendToCommand({ to, message, dryRun: hasFlag(args, 'dry-run'), cdpPort })
+    }
+    case 'send-current': {
+      const message = flagString(args, 'message')
+      if (!message) {
+        console.error('send-current 缺少 --message <消息>')
+        return 2
+      }
+      const cdpPort = parseCdpPort(args)
+      if (cdpPort === 'invalid') return 2
+      const { sendCurrentCommand } = await import('./commands/sendCurrent.js')
+      return sendCurrentCommand({ message, dryRun: hasFlag(args, 'dry-run'), cdpPort })
+    }
+    case 'list-jobs': {
+      const cdpPort = parseCdpPort(args)
+      if (cdpPort === 'invalid') return 2
+      const { listJobsCommand } = await import('./commands/listJobs.js')
+      return listJobsCommand({ cdpPort })
+    }
+    case 'select-job': {
+      const jobName = args.positional[1]
+      if (!jobName) {
+        console.error('select-job 缺少职位名：select-job <职位名>（可用 list-jobs 查看精确职位名）')
+        return 2
+      }
+      const cdpPort = parseCdpPort(args)
+      if (cdpPort === 'invalid') return 2
+      const { selectJobCommand } = await import('./commands/selectJob.js')
+      return selectJobCommand({ jobName, cdpPort })
+    }
+    case 'resume-detail': {
+      const cdpPort = parseCdpPort(args)
+      if (cdpPort === 'invalid') return 2
+      const { resumeDetailCommand } = await import('./commands/resumeDetail.js')
+      return resumeDetailCommand({
+        name: flagString(args, 'name'),
+        saveImage: flagString(args, 'save-image'),
+        cdpPort,
+      })
+    }
+    case 'resume-batch': {
+      const limitRaw = flagString(args, 'limit')
+      let limit: number | undefined
+      if (limitRaw !== undefined) {
+        limit = Number(limitRaw)
+        if (!Number.isInteger(limit) || limit <= 0 || limit > 10) {
+          console.error(`resume-batch --limit 必须是 1-10 的整数（默认 1）：${limitRaw}`)
+          return 2
+        }
+      }
+      const saveDir = flagString(args, 'save-dir')
+      if (saveDir === '') {
+        console.error('resume-batch --save-dir 不能为空')
+        return 2
+      }
+      const cdpPort = parseCdpPort(args)
+      if (cdpPort === 'invalid') return 2
+      const { resumeBatchCommand } = await import('./commands/resumeBatch.js')
+      return resumeBatchCommand({ limit, saveDir, cdpPort })
     }
     case 'mcp': {
       const cdpPort = parseCdpPort(args)

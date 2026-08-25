@@ -63,6 +63,10 @@ class SentimentService:
                 max_tokens=500,
             )
 
+            # 累加 LLM 用量到当前 SessionRecordService（对话内后台 LLM 调用计费）
+            from src.services.session_record import record_background_llm_usage
+            record_background_llm_usage(response.get("usage") if isinstance(response, dict) else None)
+
             content = response.get("content", "")
             if not content:
                 return self._default_result()
@@ -80,7 +84,7 @@ class SentimentService:
                 suggested_response_tone=result.get("suggested_response_tone", ""),
             )
         except Exception as e:
-            logger.error(f"情绪分析失败: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"情绪分析失败: {e}")
             return self._default_result()
 
     async def analyze_batch(self, texts: List[str]) -> List[SentimentResult]:

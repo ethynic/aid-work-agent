@@ -1,0 +1,9 @@
+{
+  "protocol_version": "1.0",
+  "correlation": {
+    "task_id": "task_example", "session_ref": "session_example", "execution_id": "execution_example", "attempt_id": "attempt_example",
+    "action_id": "action_example", "invocation_id": "invocation_example", "artifact_id": "artifact_none", "evidence_stream_id": "evidence_example",
+    "release_id": "release_example", "policy_decision_id": "policy_example"
+  },
+  "outcome": { "type": "final", "message": "Done", "artifacts": [] }
+}

@@ -106,7 +106,7 @@ class WorkDailyReportDB:
                 return {"id": row["id"], "report_id": row["report_id"]}
             except Exception as e:
                 conn.rollback()
-                logger.error(f"work_daily_reports UPSERT 失败: {e}", exc_info=True)
+                logger.opt(exception=True).error(f"work_daily_reports UPSERT 失败: {e}")
                 raise
 
     @staticmethod
@@ -238,7 +238,7 @@ class WorkReportPreferenceDB:
                 return _row_to_preferences(row)
             except Exception as e:
                 conn.rollback()
-                logger.error(f"work_report_preferences UPSERT 失败: {e}", exc_info=True)
+                logger.opt(exception=True).error(f"work_report_preferences UPSERT 失败: {e}")
                 raise
 
 

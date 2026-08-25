@@ -787,6 +787,10 @@ class SessionMessageQueue:
             )
             # 等待合并窗口，期间可能有追加消息
             await self._wait_merge_window(session_id)
+            # 合并输入已确定，清除取消标记（可能由追加消息在窗口内 set_cancel 设置）。
+            # 否则本次处理继承取消状态，cancel_check 立即返回 True，
+            # agent 第一轮迭代即退出，返回空响应（与 _handle_cancel_and_reprocess 同源问题）。
+            self._clear_cancel(session_id)
             # 获取最终合并后的输入
             final_input = self.get_merged_input(session_id, user_input)
             final_meta = self.get_merged_attachments_meta(session_id)
@@ -829,9 +833,8 @@ class SessionMessageQueue:
                     if asyncio.iscoroutine(response):
                         response = await response
                 except Exception as e:
-                    logger.error(
+                    logger.opt(exception=True).error(
                         f"[SessionQueue] processor 异常 session={session_id[:20]}...: {e}",
-                        exc_info=True,
                     )
                     error_result = EnqueueResult(
                         status="error",
@@ -873,9 +876,8 @@ class SessionMessageQueue:
                         on_before_reprocess,
                     )
                 except Exception as e:
-                    logger.error(
+                    logger.opt(exception=True).error(
                         f"[SessionQueue] cancel 重处理异常 session={session_id[:20]}...: {e}",
-                        exc_info=True,
                     )
                     self.release_lock(session_id, lock_value)
                     return EnqueueResult(
@@ -942,9 +944,8 @@ class SessionMessageQueue:
                             if asyncio.iscoroutine(pending_response):
                                 pending_response = await pending_response
                         except Exception as e:
-                            logger.error(
+                            logger.opt(exception=True).error(
                                 f"[SessionQueue] pending processor 异常 session={session_id[:20]}...: {e}",
-                                exc_info=True,
                             )
                             self.release_lock(session_id, lock_value)
                             return EnqueueResult(

@@ -33,7 +33,7 @@ class TestGenerateHotelOverrideLocationFallback:
         import hotel_retriever
 
         class FakeRetriever:
-            def search_by_name(self, tenant_id, name_query, top_k=10):
+            def search_by_name(self, tenant_id, name_query, top_k=10, subagent_id=None):
                 return [{
                     "doc_id": 101 if name_query.startswith("西江") else 202,
                     "title": name_query,
@@ -149,7 +149,7 @@ def patched_modules(monkeypatch):
             "荔波四季花园酒店": 999,
         }
 
-        def search_by_name(self, tenant_id, name_query, top_k=5):
+        def search_by_name(self, tenant_id, name_query, top_k=5, subagent_id=None):
             # 精确匹配返回 1 条，未匹配返回空
             if name_query in self.NAME_TO_DOC:
                 doc_id = self.NAME_TO_DOC[name_query]
@@ -320,7 +320,7 @@ class TestUpdateHotelValidation:
         monkeypatch.setattr(update_hotel, 'init_tables', lambda: None)
 
         class FakeRetriever:
-            def search_by_name(self, tenant_id, name, top_k=5):
+            def search_by_name(self, tenant_id, name, top_k=5, subagent_id=None):
                 return [{"doc_id": 1, "title": "x", "info": f"酒店名称：{name}\n"}]
 
             def get_price_table(self, doc_id):
@@ -349,7 +349,7 @@ class TestUpdateHotelValidation:
         monkeypatch.setattr(update_hotel, 'init_tables', lambda: None)
 
         class FakeRetriever:
-            def search_by_name(self, tenant_id, name, top_k=5):
+            def search_by_name(self, tenant_id, name, top_k=5, subagent_id=None):
                 return [{"doc_id": 1, "title": "x", "info": f"酒店名称：{name}\n"}]
 
             def get_price_table(self, doc_id):
@@ -370,7 +370,7 @@ class TestUpdateHotelValidation:
         monkeypatch.setattr(update_hotel, 'init_tables', lambda: None)
 
         class FakeRetriever:
-            def search_by_name(self, tenant_id, name, top_k=5):
+            def search_by_name(self, tenant_id, name, top_k=5, subagent_id=None):
                 return [{"doc_id": 1, "title": "x", "info": f"酒店名称：{name}\n"}]
 
             def get_price_table(self, doc_id):

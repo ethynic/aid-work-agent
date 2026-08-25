@@ -82,7 +82,7 @@ async def create_pairing_ticket(request: Request):
         )
         return {"success": True, "code": result["code"], "expires_at": _iso(result["expires_at"])}
     except Exception as e:
-        logger.error(f"后端日志：创建配对码失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"后端日志：创建配对码失败: {e}")
         raise _http_error(500, "创建配对码失败，请稍后重试", e)
 
 
@@ -113,7 +113,7 @@ async def list_devices(request: Request):
             )
         return {"success": True, "devices": items}
     except Exception as e:
-        logger.error(f"后端日志：查询设备列表失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"后端日志：查询设备列表失败: {e}")
         raise _http_error(500, "查询设备列表失败，请稍后重试", e)
 
 
@@ -131,7 +131,7 @@ async def select_device(device_id: str, request: Request):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"后端日志：选定设备失败 device={device_id}: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"后端日志：选定设备失败 device={device_id}: {e}")
         raise _http_error(500, "选定设备失败，请稍后重试", e)
 
 
@@ -150,7 +150,7 @@ async def revoke_device(device_id: str, request: Request):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"后端日志：撤销设备失败 device={device_id}: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"后端日志：撤销设备失败 device={device_id}: {e}")
         raise _http_error(500, "撤销设备失败，请稍后重试", e)
 
 
@@ -176,7 +176,7 @@ async def runtime_pair(body: PairRequest):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"后端日志：设备配对失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"后端日志：设备配对失败: {e}")
         raise _http_error(500, "设备配对失败，请稍后重试", e)
 
 
@@ -201,7 +201,7 @@ async def runtime_heartbeat(body: HeartbeatRequest, device: Dict = Depends(_requ
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"后端日志：设备心跳失败 device={device['id']}: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"后端日志：设备心跳失败 device={device['id']}: {e}")
         raise _http_error(500, "心跳失败，请稍后重试", e)
 
 
@@ -262,7 +262,7 @@ async def runtime_claim(wait: int = 20, device: Dict = Depends(_require_device))
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"后端日志：设备领取 invocation 失败 device={device_id}: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"后端日志：设备领取 invocation 失败 device={device_id}: {e}")
         raise _http_error(500, "领取任务失败，请稍后重试", e)
 
 
@@ -284,7 +284,7 @@ async def runtime_started(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"后端日志：标记 invocation 开始失败 id={invocation_id}: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"后端日志：标记 invocation 开始失败 id={invocation_id}: {e}")
         raise _http_error(500, "标记开始失败，请稍后重试", e)
 
 
@@ -314,7 +314,7 @@ async def runtime_progress(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"后端日志：上报进度失败 id={invocation_id}: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"后端日志：上报进度失败 id={invocation_id}: {e}")
         raise _http_error(500, "上报进度失败，请稍后重试", e)
 
 
@@ -346,5 +346,5 @@ async def runtime_result(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"后端日志：写入 invocation 终态失败 id={invocation_id}: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"后端日志：写入 invocation 终态失败 id={invocation_id}: {e}")
         raise _http_error(500, "写入结果失败，请稍后重试", e)

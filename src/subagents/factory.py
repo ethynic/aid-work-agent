@@ -142,11 +142,11 @@ class AgentFactory:
             ValueError: 智能体不存在
         """
         from src.core.agent import Agent
-        
-        config = self.registry.get(agent_name)
+
+        config = AgentFactory.get_runtime_config(self.registry, agent_name)
         if not config:
             raise ValueError(f"Agent not found: {agent_name}")
-        
+
         # 创建子智能体实例
         agent = Agent(
             is_master=False,
@@ -187,11 +187,8 @@ class AgentFactory:
         if not registry:
             return None
 
-        config = registry.get(name)
-
-        # registry 中没有，尝试从 DB 按需加载
-        if not config:
-            config = AgentFactory._load_single_from_db(registry, name)
+        # 自定义智能体实时读库，确保跨 worker 配置一致
+        config = AgentFactory.get_runtime_config(registry, name)
 
         if not config:
             return None
@@ -203,6 +200,27 @@ class AgentFactory:
             session_id=session_id,
             tenant_id=tenant_id,
         )
+
+    @staticmethod
+    def get_runtime_config(registry, name: str) -> Optional[SubagentConfig]:
+        """
+        执行期获取最新配置（跨 worker 一致的方案 A）。
+
+        自定义智能体（from_db=True，配置存于 subagent_definitions 表）每次强制从数据库
+        实时重读，避免 worker 进程内 registry._configs 缓存旧配置导致修改模型/工具等不生效；
+        内置（文件系统 SUBAGENT.md）智能体走内存缓存，零影响。
+
+        注意：仅限「真正执行智能体」的入口调用（委托、standalone 对话创建），
+        列表展示/描述等非执行场景继续用 registry.get() 的内存缓存。
+        """
+        config = registry.get(name)
+        if config is None:
+            # 内存没有（如创建后未刷新 registry），按 agent_id 从 DB 按需加载
+            return AgentFactory._load_single_from_db(registry, name)
+        if getattr(config, "from_db", False):
+            # 自定义智能体：实时重读 DB 定义；DB 行已删除时回退内存旧配置，避免中断进行中的委托
+            return AgentFactory._load_single_from_db(registry, config.dir_name) or config
+        return config
 
     @staticmethod
     def _load_single_from_db(registry, agent_id: str) -> Optional[SubagentConfig]:

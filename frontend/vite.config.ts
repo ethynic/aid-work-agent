@@ -1,15 +1,14 @@
 import { defineConfig, loadEnv } from 'vite'
 import vue from '@vitejs/plugin-vue'
-import path from 'path'
+import { frontendAliases } from './config/aliases'
+import { moduleManifest } from './config/moduleManifest'
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
   return {
-    plugins: [vue()],
+    plugins: [vue(), moduleManifest('web-module-manifest.json')],
     resolve: {
-      alias: {
-        '@': path.resolve(__dirname, 'src')
-      }
+      alias: frontendAliases,
     },
     build: {
       cssCodeSplit: true,

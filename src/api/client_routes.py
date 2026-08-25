@@ -212,7 +212,7 @@ async def llm_chat(
             response_format=req.response_format,
         )
     except Exception as e:
-        logger.error(f"客户端LLM代理调用失败 binding={binding.binding_id}: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"客户端LLM代理调用失败 binding={binding.binding_id}: {e}")
         raise HTTPException(status_code=502, detail=f"LLM_PROVIDER_ERROR: {type(e).__name__}")
 
     usage = response.get("usage") or {}
@@ -281,7 +281,7 @@ async def ocr_parse(
 
         return {"text": text, "image_count": 1}
     except Exception as e:
-        logger.error(f"客户端OCR代理失败 binding={binding.binding_id}: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"客户端OCR代理失败 binding={binding.binding_id}: {e}")
         ClientUsageLogDB.record_non_llm_usage(
             tenant_id=binding.tenant_id,
             binding_id=binding.binding_id,

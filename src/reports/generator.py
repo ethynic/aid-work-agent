@@ -118,12 +118,16 @@ class ReportGenerator:
         )
         prompt_tokens = usage["prompt_tokens"]
         completion_tokens = usage["completion_tokens"]
+        cached_input_tokens = int(usage.get("cached_tokens", 0) or 0)
+        cache_creation_input_tokens = int(usage.get("cache_creation_tokens", 0) or 0)
 
         # 3. 计算积分
         credit_cost = calculate_credit_cost(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             model=report_model,
+            cached_input_tokens=cached_input_tokens,
+            cache_creation_input_tokens=cache_creation_input_tokens,
         )
 
         # 4. 落库 work_daily_reports
@@ -228,10 +232,14 @@ class ReportGenerator:
             )
             prompt_tokens = usage["prompt_tokens"]
             completion_tokens = usage["completion_tokens"]
+            cached_input_tokens = int(usage.get("cached_tokens", 0) or 0)
+            cache_creation_input_tokens = int(usage.get("cache_creation_tokens", 0) or 0)
             credit_cost = calculate_credit_cost(
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
                 model=report_model,
+                cached_input_tokens=cached_input_tokens,
+                cache_creation_input_tokens=cache_creation_input_tokens,
             )
         else:
             summary_text = f"本期团队无活跃成员，无{type_label}摘要。"
@@ -426,8 +434,7 @@ class ReportGenerator:
         except Exception as e:
             # 写 chat_records 失败不应该让报告生成失败
             # 报告已落库 work_daily_reports，用户能看到；只是用量页缺一条记录
-            logger.error(
+            logger.opt(exception=True).error(
                 f"报告 chat_records 写入失败（不影响报告本身）: scope={scope}, "
                 f"type={report_type}, date={report_date}, error={e}",
-                exc_info=True,
             )

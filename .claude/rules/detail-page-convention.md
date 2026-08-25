@@ -46,7 +46,7 @@
 
 ### 关闭弹框脏检测
 
-已封装为 `useModalCloseGuard` composable（`frontend/src/composables/useModalCloseGuard.ts`）：
+已封装为 `useModalCloseGuard` composable（`frontend/web/composables/useModalCloseGuard.ts`）：
 
 ```ts
 import { useModalCloseGuard } from '@/composables/useModalCloseGuard'

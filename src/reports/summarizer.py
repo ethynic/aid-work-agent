@@ -105,15 +105,22 @@ async def summarize_personal(
         usage = result.get("usage") or {}
         prompt_tokens = int(usage.get("prompt_tokens") or 0)
         completion_tokens = int(usage.get("completion_tokens") or 0)
+        cached_input_tokens = int(usage.get("cached_tokens") or 0)
+        cache_creation_input_tokens = int(usage.get("cache_creation_tokens") or 0)
 
         logger.info(
             f"个人{type_label}摘要生成: user={user_name}, model={report_model}, "
             f"prompt_tokens={prompt_tokens}, completion_tokens={completion_tokens}, "
             f"duration={duration_ms:.0f}ms"
         )
-        return content, {"prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens}
+        return content, {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "cached_tokens": cached_input_tokens,
+            "cache_creation_tokens": cache_creation_input_tokens,
+        }
     except Exception as e:
-        logger.error(f"个人{type_label}摘要生成失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"个人{type_label}摘要生成失败: {e}")
         raise
 
 
@@ -205,15 +212,22 @@ async def summarize_team(
         usage = result.get("usage") or {}
         prompt_tokens = int(usage.get("prompt_tokens") or 0)
         completion_tokens = int(usage.get("completion_tokens") or 0)
+        cached_input_tokens = int(usage.get("cached_tokens") or 0)
+        cache_creation_input_tokens = int(usage.get("cache_creation_tokens") or 0)
 
         logger.info(
             f"团队{type_label}摘要生成: tenant={tenant_name}, model={report_model}, "
             f"prompt_tokens={prompt_tokens}, completion_tokens={completion_tokens}, "
             f"duration={duration_ms:.0f}ms"
         )
-        return content, {"prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens}
+        return content, {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "cached_tokens": cached_input_tokens,
+            "cache_creation_tokens": cache_creation_input_tokens,
+        }
     except Exception as e:
-        logger.error(f"团队{type_label}摘要生成失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"团队{type_label}摘要生成失败: {e}")
         raise
 
 

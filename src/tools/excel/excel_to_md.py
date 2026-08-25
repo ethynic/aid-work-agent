@@ -54,7 +54,7 @@ def excel_to_markdown(file_path: str, sheet_name: Optional[str] = None,
             "truncated": truncated,
         }
     except Exception as e:
-        logger.error(f"[ExcelToMd] 转换失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"[ExcelToMd] 转换失败: {e}")
         return {"success": False, "error": f"Excel 转 Markdown 失败: {e}"}
 
 

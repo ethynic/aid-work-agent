@@ -64,6 +64,10 @@ class ExcelProcessInput(BaseModel):
         None,
         description="按样例版式填充的结构化数据（AI 模板填充模式）。"
                     "形如 {meta:{...}, rows:[{...}], group_subtotals:{...}, totals:{...}}。"
+                    "**所有值必须是标量（str/int/float/bool），一格一值，不得嵌套 dict/list**："
+                    "totals 形如 {\"grand_total\": 9520, \"per_capita\": {\"成人人均\": 238}}；"
+                    "按列/人数档位分列的合计须拆成独立标量键（如 合计总价_40人: 9520），"
+                    "多值明细转为多行放入 rows。"
                     "提供 data + 样例附件(file_paths) 时走智能模板填充：AI 分析样例结构并按版式填入，"
                     "自动处理行数多/少/相等、保留样例样式。"
                     "**模板填充时数据必须放本字段（不要写进 instruction 文本）；普通数据导出不用本字段。**"
@@ -115,7 +119,7 @@ TOOL_DESCRIPTION = """Excel电子表格处理工具。处理Excel(.xlsx/.csv)文
 - 如果当前对话中已有表格数据（由其他工具生成或用户提供），必须将其完整放入 content 中
 - output_name 可传入业务文件名
 - 如果还没有表格数据，Agent 应先通过其他方式准备好数据，再调用本工具
-- 用户上传的附件路径放在 file_paths 中
+- file_paths 支持直接传 file_id（如 file_xxx，推荐，工具自动解析为真实路径）或文件相对路径，禁止自行拼接 storage/uploads 等目录路径
 工具会自动判断并执行合适的操作。
 
 📦 生成文件后必须用 cp 注册下载（重要）：
@@ -168,27 +172,34 @@ class ExcelProcessTool(BaseTool):
         return tenant_id, user_id
 
     def _resolve_output_dir(self) -> Optional[str]:
-        """注入的 tenant/user 优先构造输出目录；都未注入返回 None（让 save_temp 走 ContextVar）。
-        镜像 ExcelFileHandler.get_session_dir 的路径逻辑，用注入的 id。"""
+        """注入的 tenant 优先构造输出目录；未注入返回 None（让 save_temp 走 ContextVar）。
+
+        路径: storage/tenants/{tenant_id}/conversation/
+        无 tenant_id: storage/tenants/_anonymous/conversation/
+        """
         if not self._tenant_id and not self._user_id:
             return None
         try:
-            from src.config.settings import settings
-            project_root = Path(__file__).resolve().parents[3]
-            upload_root = Path(settings.storage.uploads_dir)
-            if not upload_root.is_absolute():
-                upload_root = project_root / upload_root
-            parts = [str(upload_root)]
-            if self._tenant_id:
-                parts.append(self._tenant_id)
-            if self._user_id:
-                parts.append(self._user_id)
-            d = Path(*parts)
-            d.mkdir(parents=True, exist_ok=True)
-            return str(d)
+            from src.core.storage import ensure_tenant_storage_dir
+            tid = self._tenant_id or "_anonymous"
+            # user_id 不进路径，仅作元数据
+            return str(ensure_tenant_storage_dir(tid, "conversation"))
         except Exception as e:
             logger.warning(f"[ExcelProcess] 解析输出目录失败，回退默认: {e}")
             return None
+
+    def _resolve_file(self, file_path: str) -> str:
+        """解析 file_id 或相对路径为磁盘绝对路径
+
+        Agent 传的 file_paths 可能是 file_id（如 file_e300d0d5befc）或相对路径，
+        不能直接当磁盘路径用。通过 ExcelFileHandler.resolve_path 走 Redis 元数据
+        + 新旧目录兜底扫描，找不到抛 FileNotFoundError。
+        """
+        from src.tools.excel.excel_lib import ExcelFileHandler
+        resolved = ExcelFileHandler.resolve_path(file_path)
+        if not Path(resolved).exists():
+            raise FileNotFoundError(f"文件不存在: {file_path}")
+        return resolved
 
     def _get_router(self):
         if self._router is None:
@@ -483,7 +494,10 @@ class ExcelProcessTool(BaseTool):
         if not ctx.file_paths:
             return {"success": False, "error": "read 操作需要 file_paths 参数"}
 
-        file_path = ctx.file_paths[0]
+        try:
+            file_path = self._resolve_file(ctx.file_paths[0])
+        except FileNotFoundError as e:
+            return {"success": False, "error": str(e)}
 
         # 精确范围读取 或 公式读取 → 使用 read_sheet（结构化数据）
         if params.get("range") or params.get("include_formulas"):
@@ -506,7 +520,11 @@ class ExcelProcessTool(BaseTool):
         if not ctx.file_paths:
             return {"success": False, "error": "to_md 操作需要 file_paths 参数"}
 
-        file_path = ctx.file_paths[0]
+        try:
+            file_path = self._resolve_file(ctx.file_paths[0])
+        except FileNotFoundError as e:
+            return {"success": False, "error": str(e)}
+
         return excel_to_markdown(
             file_path,
             sheet_name=params.get("sheet_name"),
@@ -578,7 +596,10 @@ class ExcelProcessTool(BaseTool):
         if not ctx.file_paths:
             return {"success": False, "error": "modify 操作需要 file_paths 参数"}
 
-        file_path = ctx.file_paths[0]
+        try:
+            file_path = self._resolve_file(ctx.file_paths[0])
+        except FileNotFoundError as e:
+            return {"success": False, "error": str(e)}
         operations = params.get("operations", [])
         if not operations:
             return {"success": False, "error": "modify 操作需要 params.operations 参数"}
@@ -607,7 +628,10 @@ class ExcelProcessTool(BaseTool):
         if not ctx.file_paths:
             return {"success": False, "error": "format 操作需要 file_paths 参数"}
 
-        file_path = ctx.file_paths[0]
+        try:
+            file_path = self._resolve_file(ctx.file_paths[0])
+        except FileNotFoundError as e:
+            return {"success": False, "error": str(e)}
         operations = params.get("format_operations") or params.get("operations", [])
         if not operations:
             return {"success": False, "error": "format 操作需要 params.format_operations 参数"}
@@ -634,11 +658,17 @@ class ExcelProcessTool(BaseTool):
         template_name = params.get("template_name")
         template_file = params.get("template_file")
         if template_file:
-            template_path = template_file
+            try:
+                template_path = self._resolve_file(template_file)
+            except FileNotFoundError as e:
+                return {"success": False, "error": str(e)}
         elif template_name:
             template_path = str(Path("storage/excel_templates") / f"{template_name}.xlsx")
         elif ctx.file_paths:
-            template_path = ctx.file_paths[0]
+            try:
+                template_path = self._resolve_file(ctx.file_paths[0])
+            except FileNotFoundError as e:
+                return {"success": False, "error": str(e)}
         else:
             return {"success": False, "error": "fill_template 需要指定模板（template_file / template_name / file_paths）"}
 
@@ -673,8 +703,13 @@ class ExcelProcessTool(BaseTool):
         if not ctx.file_paths or len(ctx.file_paths) < 2:
             return {"success": False, "error": "merge 操作需要 file_paths 中包含至少 2 个文件"}
 
+        try:
+            resolved_paths = [self._resolve_file(fp) for fp in ctx.file_paths]
+        except FileNotFoundError as e:
+            return {"success": False, "error": str(e)}
+
         result = merge_files(
-            ctx.file_paths,
+            resolved_paths,
             output_name=params.get("output_name"),
             merge_mode=params.get("merge_mode", "sheets"),
         )
@@ -690,7 +725,10 @@ class ExcelProcessTool(BaseTool):
         if not ctx.file_paths:
             return {"success": False, "error": "convert 操作需要 file_paths 参数"}
 
-        file_path = ctx.file_paths[0]
+        try:
+            file_path = self._resolve_file(ctx.file_paths[0])
+        except FileNotFoundError as e:
+            return {"success": False, "error": str(e)}
         target_format = params.get("target_format", "xlsx")
 
         result = convert_format(

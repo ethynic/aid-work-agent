@@ -183,7 +183,7 @@ def create_ticket(
             "priority": priority,
         }
     except Exception as e:
-        logger.error(f"创建售后工单失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"创建售后工单失败: {e}")
         return {"success": False, "error": f"创建工单失败: {e}"}
 
 
@@ -227,7 +227,7 @@ def query_ticket(ticket_id: str, tenant_id: Optional[str] = None) -> Dict[str, A
                 }
             return {"success": False, "error": f"未找到工单: {ticket_id}"}
     except Exception as e:
-        logger.error(f"查询工单失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"查询工单失败: {e}")
         return {"success": False, "error": f"查询工单失败: {e}"}
 
 
@@ -279,7 +279,7 @@ def list_tickets(
 
             return {"success": True, "count": len(tickets), "tickets": tickets}
     except Exception as e:
-        logger.error(f"列出工单失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"列出工单失败: {e}")
         return {"success": False, "error": f"列出工单失败: {e}"}
 
 
@@ -333,7 +333,7 @@ def create_return(
             "status": "pending",
         }
     except Exception as e:
-        logger.error(f"创建退换货记录失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"创建退换货记录失败: {e}")
         return {"success": False, "error": f"创建退换货记录失败: {e}"}
 
 
@@ -386,7 +386,7 @@ def query_returns(
 
             return {"success": True, "count": len(records), "returns": records}
     except Exception as e:
-        logger.error(f"查询退换货记录失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"查询退换货记录失败: {e}")
         return {"success": False, "error": f"查询退换货记录失败: {e}"}
 
 

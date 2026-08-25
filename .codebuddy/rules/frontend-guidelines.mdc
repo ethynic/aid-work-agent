@@ -42,7 +42,7 @@ export const someAPI = {
 
 ```bash
 # 检查是否在 API 定义中使用了 cachedRequest
-grep -rn "cachedRequest" frontend/src/services/api.js
+grep -rn "cachedRequest" frontend/web/services/api.js
 ```
 
 ## 页面布局一致性规范

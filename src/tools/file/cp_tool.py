@@ -97,19 +97,17 @@ MIME_MAP = {
 
 
 def _resolve_upload_dir(tenant_id: Optional[str], user_id: Optional[str]) -> Path:
-    """根据 tenant_id 和 user_id 确定文件存储目录"""
-    from src.main import UPLOAD_DIR
+    """根据 tenant_id 确定文件存储目录（遵循租户附件存储规范）
 
-    if tenant_id and user_id:
-        upload_dir = UPLOAD_DIR / tenant_id / user_id
-    elif tenant_id:
-        upload_dir = UPLOAD_DIR / tenant_id
-    elif user_id:
-        upload_dir = UPLOAD_DIR / user_id
-    else:
-        upload_dir = UPLOAD_DIR / "conversation"
-    upload_dir.mkdir(parents=True, exist_ok=True)
-    return upload_dir
+    路径: storage/tenants/{tenant_id}/conversation/
+    无 tenant_id: storage/tenants/_anonymous/conversation/
+
+    user_id 不进入路径，避免目录碎片化。
+    """
+    from src.core.storage import ensure_tenant_storage_dir
+    tid = tenant_id or "_anonymous"
+    _ = user_id  # 保留参数兼容性，但不进路径
+    return Path(ensure_tenant_storage_dir(tid, "conversation"))
 
 
 class CpTool(BaseTool):
@@ -142,16 +140,6 @@ cp(source_file_path="src/skills/xxx/assets/template.html", file_path="output/ppt
     display_name = "复制文件"
     category = "file"
     InputModel = CpInput
-
-    def __init__(self):
-        self._user_id: Optional[str] = None
-        self._tenant_id: Optional[str] = None
-
-    def set_user_id(self, user_id: str):
-        self._user_id = user_id
-
-    def set_tenant_id(self, tenant_id: str):
-        self._tenant_id = tenant_id
 
     def get_display_name(self, tool_args=None) -> str:
         base = self.display_name
@@ -255,7 +243,12 @@ cp(source_file_path="src/skills/xxx/assets/template.html", file_path="output/ppt
 
         mime_type = MIME_MAP.get(suffix, "text/plain")
 
-        upload_dir = _resolve_upload_dir(self._tenant_id, self._user_id)
+        from src.tools.context import current_tool_execution_context
+        context = current_tool_execution_context()
+        upload_dir = _resolve_upload_dir(
+            context.tenant_id if context else None,
+            context.user_id if context else None,
+        )
         dest_path = upload_dir / f"{file_id}{suffix}"
         shutil.copy2(str(file_path), str(dest_path))
 
@@ -355,9 +348,8 @@ cp(source_file_path="src/skills/xxx/assets/template.html", file_path="output/ppt
                 try:
                     await self._record_work_outcome(result)
                 except Exception as e:
-                    logger.warning(
+                    logger.opt(exception=True).warning(
                         f"cp 工具实时登记工作成果失败（不影响主流程）: {e}",
-                        exc_info=True,
                     )
 
                 return result
@@ -384,9 +376,17 @@ cp(source_file_path="src/skills/xxx/assets/template.html", file_path="output/ppt
         Args:
             cp_result: cp execute 返回的 result dict（含 file_id / file_name / file_path）
         """
-        from src.tools._helpers import get_tool_execution_context
+        from src.tools.context import current_tool_execution_context
 
-        ctx = get_tool_execution_context()
+        context = current_tool_execution_context()
+        ctx = {
+            "tenant_id": context.tenant_id if context else None,
+            "user_id": context.user_id if context else None,
+            "session_id": context.session_id if context else None,
+            "channel": context.channel if context else None,
+            "subagent_id": context.subagent_id if context else None,
+            "chat_record_id": context.chat_record_id if context else None,
+        }
         if not ctx.get("tenant_id") or not ctx.get("user_id"):
             # 无租户/用户上下文（如系统调试场景），跳过登记
             logger.debug(

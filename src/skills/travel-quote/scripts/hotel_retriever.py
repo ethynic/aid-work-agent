@@ -9,7 +9,7 @@
 """
 
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
 
@@ -42,45 +42,49 @@ class HotelRetriever:
         return get_db_connection()
 
     def _embed(self, text: str) -> List[float]:
-        """同步调用 embedding（适配子进程场景）"""
-        import dashscope
-        from src.config.settings import get_embedding_api_key
-
-        dashscope.api_key = get_embedding_api_key()
-
-        resp = dashscope.TextEmbedding.call(
-            model="text-embedding-v3",
-            input=text,
-            dimension=1024,
-            text_type="document",
-        )
-        if resp.status_code != 200:
-            raise RuntimeError(f"Embedding API 调用失败: {resp.message}")
-        return resp.output["embeddings"][0]["embedding"]
+        """使用 TextEmbeddingV3Client 同步向量化（累加 usage 到 client）"""
+        client = self._get_embedding_client()
+        return client.embed_sync(text)
 
     # ----------------------------------------------------------
     # 搜索
     # ----------------------------------------------------------
 
-    def search_by_name(self, tenant_id: str, name_query: str, top_k: int = 5) -> List[Dict]:
+    def _tenant_scope(self, tenant_id: Optional[str], subagent_id: Optional[str]) -> Tuple[str, list]:
+        """构建租户范围 SQL 与参数：本租户 + 已启用共享源租户。
+
+        仅子智能体 + 租户模式（subagent_id 非空）生效，与通用知识库检索的
+        shared_ranges 语义一致；tenant_id 为空时退回原逻辑 d.tenant_id = %s。
+        """
+        if not tenant_id or not subagent_id:
+            return "d.tenant_id = %s", [tenant_id]
+        tenant_ids = [tenant_id]
+        from src.knowledge.retriever.tenant_range import load_shared_ranges
+        for from_tenant_id, st in load_shared_ranges(tenant_id, subagent_id, self.SOURCE_TYPE):
+            if from_tenant_id not in tenant_ids:
+                tenant_ids.append(from_tenant_id)
+        return "d.tenant_id = ANY(%s)", [tenant_ids]
+
+    def search_by_name(self, tenant_id: str, name_query: str, top_k: int = 5, subagent_id: Optional[str] = None) -> List[Dict]:
         """精确/模糊名称匹配（ILIKE）
 
         同时匹配 chunk0 文本（info_text）和 document 标题，避免 info_text
         漏写酒店名称行时按酒店名搜不到（标题兜底）。
         """
         pattern = f'%{name_query}%'
+        tenant_sql, tenant_params = self._tenant_scope(tenant_id, subagent_id)
         with self._get_conn() as conn:
-            conn.execute("""
+            conn.execute(f"""
                 SELECT c.doc_id, c.text, d.title, d.metadata, d.file_path, d.created_at
                 FROM chunks c
                 JOIN documents d ON c.doc_id = d.id
                 WHERE d.source_type = %s
-                  AND d.tenant_id = %s
+                  AND {tenant_sql}
                   AND c.chunk_index = 0
                   AND (c.text ILIKE %s OR d.title ILIKE %s)
                 ORDER BY d.id
                 LIMIT %s
-            """, (self.SOURCE_TYPE, tenant_id, pattern, pattern, top_k))
+            """, (self.SOURCE_TYPE, *tenant_params, pattern, pattern, top_k))
             rows = conn.fetchall()
 
         results = []
@@ -101,13 +105,25 @@ class HotelRetriever:
             })
         return results
 
-    def search_by_vector(self, tenant_id: str, query: str, top_k: int = 5) -> List[Dict]:
+    def search_by_vector(self, tenant_id: str, query: str, top_k: int = 5, subagent_id: Optional[str] = None) -> List[Dict]:
         """向量语义搜索"""
+        client = self._get_embedding_client()
+        client.reset_usage()
         embedding = self._embed(query)
+        # 累加 embedding usage 到当前 SessionRecordService（对话内检索计费）
+        if client.last_usage_tokens > 0:
+            try:
+                from src.services.session_record import SessionRecordManager
+                record = SessionRecordManager.get_current_record()
+                if record:
+                    record.add_embedding_usage(client.last_usage_tokens, model=client.model)
+            except Exception:
+                logger.opt(exception=True).debug("Failed to record embedding usage")
         embedding_str = "[" + ",".join(str(v) for v in embedding) + "]"
 
+        tenant_sql, tenant_params = self._tenant_scope(tenant_id, subagent_id)
         with self._get_conn() as conn:
-            conn.execute("""
+            conn.execute(f"""
                 SELECT cv.chunk_id,
                        cv.embedding <=> %s::vector AS distance,
                        c.doc_id, c.text, d.title, d.metadata, d.file_path, d.created_at
@@ -115,11 +131,11 @@ class HotelRetriever:
                 JOIN chunks c ON cv.chunk_id = c.id
                 JOIN documents d ON c.doc_id = d.id
                 WHERE d.source_type = %s
-                  AND d.tenant_id = %s
+                  AND {tenant_sql}
                   AND c.chunk_index = 0
                 ORDER BY distance
                 LIMIT %s
-            """, (embedding_str, self.SOURCE_TYPE, tenant_id, top_k))
+            """, (embedding_str, self.SOURCE_TYPE, *tenant_params, top_k))
             rows = conn.fetchall()
 
         results = []
@@ -142,31 +158,32 @@ class HotelRetriever:
         logger.info(f"[HotelRetriever] vector search '{query}' → {len(results)} results (tenant={tenant_id})")
         return results
 
-    def search(self, tenant_id: str, query: str, top_k: int = 5) -> List[Dict]:
+    def search(self, tenant_id: str, query: str, top_k: int = 5, subagent_id: Optional[str] = None) -> List[Dict]:
         """组合搜索：名称匹配优先，无结果再走向量搜索"""
-        name_results = self.search_by_name(tenant_id, query, top_k)
+        name_results = self.search_by_name(tenant_id, query, top_k, subagent_id=subagent_id)
         if name_results:
             return name_results
-        return self.search_by_vector(tenant_id, query, top_k)
+        return self.search_by_vector(tenant_id, query, top_k, subagent_id=subagent_id)
 
-    def list_all(self, tenant_id: str, limit: int = 200, offset: int = 0) -> Dict:
-        """列出所有酒店知识库文档（分页）"""
+    def list_all(self, tenant_id: str, limit: int = 200, offset: int = 0, subagent_id: Optional[str] = None) -> Dict:
+        """列出所有酒店知识库文档（分页，含已启用共享范围）"""
+        tenant_sql, tenant_params = self._tenant_scope(tenant_id, subagent_id)
         with self._get_conn() as conn:
             conn.execute(
-                "SELECT COUNT(*) AS cnt FROM documents WHERE source_type = %s AND tenant_id = %s",
-                (self.SOURCE_TYPE, tenant_id),
+                f"SELECT COUNT(*) AS cnt FROM documents d WHERE d.source_type = %s AND {tenant_sql}",
+                (self.SOURCE_TYPE, *tenant_params),
             )
             total = conn.fetchone()["cnt"]
 
-            conn.execute("""
+            conn.execute(f"""
                 SELECT d.id AS doc_id, d.title, d.file_path, d.metadata, d.created_at,
                        c.text AS info
                 FROM documents d
                 LEFT JOIN chunks c ON c.doc_id = d.id AND c.chunk_index = 0
-                WHERE d.source_type = %s AND d.tenant_id = %s
+                WHERE d.source_type = %s AND {tenant_sql}
                 ORDER BY d.id
                 LIMIT %s OFFSET %s
-            """, (self.SOURCE_TYPE, tenant_id, limit, offset))
+            """, (self.SOURCE_TYPE, *tenant_params, limit, offset))
             rows = conn.fetchall()
 
         items = []

@@ -193,3 +193,54 @@ class TestEmailSettingsCRUD:
         assert config["email_address"] == "new@example.com"
         assert config["smtp_server"] == "smtp.new.com"
         assert config["smtp_port"] == 587
+
+    def test_rebind_after_delete_restores_config(self, test_user_for_email):
+        """回归（Phase 0 邮件工具整改）：软删除后重绑必须能读到新配置
+
+        历史 bug：upsert 的 DELETE 分支提前 return True，新配置从未插入，
+        导致用户解绑再绑定后永远"未绑定邮箱"。
+        """
+        from src.db.email_credential import EmailCredentialDB
+
+        user_id = test_user_for_email
+
+        config1 = {
+            "email_address": "old@example.com",
+            "smtp_server": "smtp.old.com",
+            "smtp_port": 465,
+            "smtp_user": "old@example.com",
+            "smtp_password": "old_password",
+            "smtp_encryption": "ssl",
+            "imap_server": "imap.old.com",
+            "imap_port": 993,
+            "imap_encryption": "ssl"
+        }
+        config2 = {
+            "email_address": "new@example.com",
+            "smtp_server": "smtp.new.com",
+            "smtp_port": 587,
+            "smtp_user": "new@example.com",
+            "smtp_password": "new_password",
+            "smtp_encryption": "tls",
+            "imap_server": "imap.new.com",
+            "imap_port": 993,
+            "imap_encryption": "ssl"
+        }
+
+        # 1. 首次绑定
+        assert EmailCredentialDB.upsert(user_id, config1) is True
+        assert EmailCredentialDB.get_by_user(user_id)["email_address"] == "old@example.com"
+
+        # 2. 解绑（软删除）→ 查询为空
+        assert EmailCredentialDB.delete(user_id) is True
+        assert EmailCredentialDB.get_by_user(user_id) is None
+
+        # 3. 重绑：必须插入新配置（而非停留在 DELETE 早退）
+        assert EmailCredentialDB.upsert(user_id, config2) is True
+
+        # 4. 能读到新配置
+        config = EmailCredentialDB.get_by_user(user_id)
+        assert config is not None
+        assert config["email_address"] == "new@example.com"
+        assert config["smtp_server"] == "smtp.new.com"
+        assert config["smtp_port"] == 587

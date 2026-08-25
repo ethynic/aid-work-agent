@@ -5,8 +5,12 @@ ToolRegistry 和 ToolExecutor 单元测试
 import pytest
 
 pytestmark = pytest.mark.tools
+from typing import Optional
 from unittest.mock import AsyncMock, MagicMock
 
+from pydantic import BaseModel, Field
+
+from src.tools.base import BaseTool
 from src.tools.registry import ToolRegistry
 from src.tools.executor import ToolExecutor
 
@@ -69,6 +73,22 @@ class TestToolExecutor:
         assert result["success"] is True
 
     @pytest.mark.asyncio
+    async def test_execute_does_not_log_tool_parameters(self, mock_tool, monkeypatch):
+        registry = ToolRegistry()
+        registry.register(mock_tool(
+            name="sensitive_tool",
+            execute_return={"success": True},
+        ))
+        executor = ToolExecutor(registry=registry)
+        logged = []
+        monkeypatch.setattr("src.tools.executor.logger.info", logged.append)
+
+        await executor.execute("sensitive_tool", {"token": "secret-value"})
+
+        assert any("sensitive_tool" in message for message in logged)
+        assert all("secret-value" not in message for message in logged)
+
+    @pytest.mark.asyncio
     async def test_execute_unknown_tool(self):
         registry = ToolRegistry()
         executor = ToolExecutor(registry=registry)
@@ -87,3 +107,70 @@ class TestToolExecutor:
             {"tool_name": "tool_b", "parameters": {}},
         ])
         assert len(results) == 2
+
+
+class _SearchInput(BaseModel):
+    """类型规范化测试用工具参数"""
+    query: str = Field(..., description="查询")
+    top_k: Optional[int] = Field(10, description="返回数量")
+
+
+class _SearchToolForCoerce(BaseTool):
+    name = "search_coerce"
+    description = "test"
+    InputModel = _SearchInput
+
+    def __init__(self):
+        self.last_kwargs = None
+
+    async def execute(self, **kwargs):
+        self.last_kwargs = dict(kwargs)
+        return {"success": True}
+
+
+class TestToolExecutorTypeCoercion:
+    """ToolExecutor 参数类型规范化测试（LLM 把整数以字符串传出时强转）"""
+
+    @pytest.mark.asyncio
+    async def test_string_int_coerced_to_int(self):
+        """top_k="10" 字符串被强转为 int 10，注入参数保留"""
+        registry = ToolRegistry()
+        tool = _SearchToolForCoerce()
+        registry.register(tool)
+        executor = ToolExecutor(registry=registry)
+
+        result = await executor.execute(
+            "search_coerce",
+            {"query": "x", "top_k": "10", "_trusted_tenant_id": "t1"},
+        )
+
+        assert result["success"] is True
+        assert tool.last_kwargs["top_k"] == 10
+        assert isinstance(tool.last_kwargs["top_k"], int)
+        # 内部注入参数必须原样保留
+        assert tool.last_kwargs["_trusted_tenant_id"] == "t1"
+
+    @pytest.mark.asyncio
+    async def test_unset_field_not_filled_with_default(self):
+        """未显式传入的字段不填充默认值，避免改变 kwargs 语义"""
+        registry = ToolRegistry()
+        tool = _SearchToolForCoerce()
+        registry.register(tool)
+        executor = ToolExecutor(registry=registry)
+
+        await executor.execute("search_coerce", {"query": "x"})
+
+        assert "top_k" not in tool.last_kwargs
+
+    @pytest.mark.asyncio
+    async def test_float_integer_value_coerced(self):
+        """浮点整数值（如 3.0）被强转为 int"""
+        registry = ToolRegistry()
+        tool = _SearchToolForCoerce()
+        registry.register(tool)
+        executor = ToolExecutor(registry=registry)
+
+        await executor.execute("search_coerce", {"query": "x", "top_k": 3.0})
+
+        assert tool.last_kwargs["top_k"] == 3
+        assert isinstance(tool.last_kwargs["top_k"], int)

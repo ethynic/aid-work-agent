@@ -146,7 +146,7 @@ async def list_work_outcomes(
         )
         return {"success": True, "data": result}
     except Exception as e:
-        logger.error(f"查询工作成果列表失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"查询工作成果列表失败: {e}")
         raise HTTPException(status_code=500, detail="查询工作成果列表失败")
 
 
@@ -182,7 +182,7 @@ async def get_work_outcome_stats(
         )
         return {"success": True, "data": stats}
     except Exception as e:
-        logger.error(f"查询工作成果统计失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"查询工作成果统计失败: {e}")
         raise HTTPException(status_code=500, detail="查询工作成果统计失败")
 
 
@@ -199,7 +199,7 @@ async def get_work_outcome(request: Request, outcome_id: str):
             WorkOutcomeDB.get_by_outcome_id, outcome_id
         )
     except Exception as e:
-        logger.error(f"查询工作成果详情失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"查询工作成果详情失败: {e}")
         raise HTTPException(status_code=500, detail="查询工作成果详情失败")
 
     if not outcome:
@@ -233,7 +233,7 @@ async def delete_work_outcome(request: Request, outcome_id: str):
             WorkOutcomeDB.get_by_outcome_id, outcome_id
         )
     except Exception as e:
-        logger.error(f"删除前查询工作成果失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"删除前查询工作成果失败: {e}")
         raise HTTPException(status_code=500, detail="删除工作成果失败")
 
     if not outcome or outcome.get("tenant_id") != tenant_id:
@@ -244,7 +244,7 @@ async def delete_work_outcome(request: Request, outcome_id: str):
             WorkOutcomeDB.delete_by_outcome_id, outcome_id
         )
     except Exception as e:
-        logger.error(f"删除工作成果失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"删除工作成果失败: {e}")
         raise HTTPException(status_code=500, detail="删除工作成果失败")
 
     if not deleted:
@@ -303,5 +303,5 @@ async def run_review_manually(
             },
         }
     except Exception as e:
-        logger.error(f"手动触发工作成果复盘失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"手动触发工作成果复盘失败: {e}")
         raise HTTPException(status_code=500, detail="手动触发工作成果复盘失败")

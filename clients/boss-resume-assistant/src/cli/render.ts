@@ -5,10 +5,12 @@
  * AbortController（Ctrl+C 触发 abort）→ progress 打印「⠿ stage message」→
  * 调 operation → 按 result 打印成功/失败 → 退出码（成功 0 / 参数 2 / 其余 1）。
  */
-import type { BossOperation, OpContext } from '../main/operations/types.js'
+import type { BossOperation, OperationResult, OpContext } from '../main/operations/types.js'
 
 export interface CliRunOptions {
   cdpPort?: number
+  /** 成功时的附加渲染（在 ✅ 结果行之后调用，如 resume-detail 打印简历全文） */
+  onSuccess?: (result: OperationResult) => void
 }
 
 /**
@@ -39,6 +41,7 @@ export async function runCliOperation<Args>(
     const result = await operation.execute(args, ctx)
     if (result.success) {
       console.log(`✅ ${result.message}`)
+      opts.onSuccess?.(result)
       return 0
     }
     console.error(`❌ ${result.message}（code=${result.code}${result.retryable ? '，可重试' : '，不可自动重试'}）`)

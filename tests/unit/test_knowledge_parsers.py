@@ -58,6 +58,40 @@ class TestExcelParser:
         parser = ExcelParser()
         assert ".xlsx" in parser.supported_extensions()
 
+    @pytest.mark.asyncio
+    async def test_excel_parse_data_rows_are_own_paragraphs(self, tmp_path):
+        """每个数据行用空行（\\n\\n）分隔成独立段落，保证 TextChunker 能按行粒度切块"""
+        from openpyxl import Workbook
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "SKU"
+        ws.append(["SKU编号", "名称", "描述"])
+        ws.append(["YD0001", "防晒冰袖", "冰丝凉感面料，UPF50+防晒，透气吸汗，高弹贴合，不卷边不滑落，户外骑行、跑步、开车、日常通勤均可，男女同款多色可选" * 5])
+        ws.append(["YD0002", "跑步鞋", "网面透气鞋面，橡胶软底大底，轻便舒适，透气不闷脚，日常穿搭、通勤、散步、短途出行均可，百搭显瘦" * 5])
+        file_path = tmp_path / "test.xlsx"
+        wb.save(file_path)
+
+        parser = ExcelParser()
+        result = await parser.parse(str(file_path))
+        text = result.text
+
+        # 段落之间用空行分隔
+        assert "\n\n" in text
+
+        # 每个数据行是独立段落（不在同一段里）
+        paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
+        assert paragraphs[0].startswith("## 工作表: SKU")
+        assert any(p.startswith("YD0001 | 防晒冰袖") for p in paragraphs)
+        assert any(p.startswith("YD0002 | 跑步鞋") for p in paragraphs)
+
+        # 用 TextChunker 验证：数据行足够长时能切成多个 chunk
+        # （旧实现 \n join 会把行合并成大段落，超长后按 6000 字符硬切，单个商品被稀释）
+        from src.knowledge.chunker import TextChunker
+        chunker = TextChunker(chunk_size=512, overlap=64)
+        chunks = chunker.chunk(text)
+        assert len(chunks) >= 2
+
 
 class TestPPTParser:
     """PPT 解析器测试"""

@@ -148,6 +148,13 @@ class SchemaExtractor:
                 max_tokens=4096,
             )
 
+            from src.services.session_record import record_background_llm_usage
+            record_background_llm_usage(
+                response.get("usage") if isinstance(response, dict) else None,
+                source="schema_extract",
+                model=gateway.get_model_name(),
+            )
+
             content = response.get("content", "")
             schema = self._parse_json_response(content)
 
@@ -159,7 +166,7 @@ class SchemaExtractor:
                 return schema
 
         except Exception as e:
-            logger.error(f"LLM schema 提取失败: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"LLM schema 提取失败: {e}")
 
         # LLM 失败时返回基础 schema（best-effort）
         return self._build_fallback_schema(sheet_info, table_name_hint)
@@ -195,6 +202,13 @@ class SchemaExtractor:
                 max_tokens=4096,
             )
 
+            from src.services.session_record import record_background_llm_usage
+            record_background_llm_usage(
+                response.get("usage") if isinstance(response, dict) else None,
+                source="schema_infer_relations",
+                model=gateway.get_model_name(),
+            )
+
             content = response.get("content", "")
             relations = self._parse_json_response(content)
 
@@ -204,7 +218,7 @@ class SchemaExtractor:
                 return relations["relations"]
 
         except Exception as e:
-            logger.error(f"LLM 关系推断失败: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"LLM 关系推断失败: {e}")
 
         return []
 

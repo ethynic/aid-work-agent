@@ -1,0 +1,5 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "agent-turn-next-response.schema.json", "title": "AgentTurnNextResponse", "x-protocol-version": "1.0",
+  "type": "object", "additionalProperties": false, "required": ["protocol_version", "correlation", "outcome"],
+  "properties": { "protocol_version": { "const": "1.0" }, "correlation": { "$ref": "agent-turn-correlation.schema.json" }, "outcome": { "$ref": "agent-turn-outcome.schema.json" } }
+}

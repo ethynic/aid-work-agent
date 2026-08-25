@@ -25,11 +25,12 @@ class TaskType:
     MODIFY = "modify"
     FORMAT = "format"
     FILL_TEMPLATE = "fill_template"
+    SCAN_PLACEHOLDERS = "scan_placeholders"
     LIST_TEMPLATES = "list_templates"
     DIFF = "diff"
 
     ALL = {READ, ANALYZE, WORD_TO_MD, MD_TO_WORD, MODIFY, FORMAT,
-           FILL_TEMPLATE, LIST_TEMPLATES, DIFF}
+           FILL_TEMPLATE, SCAN_PLACEHOLDERS, LIST_TEMPLATES, DIFF}
 
 
 class WordProcessInput(BaseModel):
@@ -97,7 +98,9 @@ TOOL_DESCRIPTION = """Word文档处理工具。所有与Word文档(.docx)相关�
 - 如果需要将对话内容转为Word，必须在 content 或 context 中包含完整的 Markdown 文本
 - output_name 可传入业务文件名；不传时工具会从 Markdown 标题推断
 - 用户上传的附件路径放在 file_paths 中
-- 生成Word时无需指定模板路径，系统会自动使用内置默认模板。不要向用户索要模板路径。
+- 生成Word时无需指定模板路径：若用户上传了docx模板并要求按该模板的格式/样式生成，工具会自动将该附件作为格式参考；未提供模板时自动使用内置默认模板
+- 模板填充支持多占位符语法（{{变量}}、{变量}、【变量】、[变量]、%变量%）；variables 值可为字符串（普通替换）或数组（表格行循环填充，数组元素为对象、键为字段名）
+- 填充模板前可先用扫描查看模板里有哪些占位符（scan_placeholders，只读操作）
 工具会自动判断并执行合适的操作。
 
 📦 生成文件后必须用 cp 注册下载（重要）：
@@ -106,7 +109,7 @@ TOOL_DESCRIPTION = """Word文档处理工具。所有与Word文档(.docx)相关�
     cp(source_file_path="<本工具返回的 file_path>", display_name="<面向用户的业务文件名>")
 cp 会把文件复制到下载目录、在前端对话中展示下载卡片。
 display_name 必须使用用户能理解的业务文件名，不要使用工具临时文件名。
-仅读取/分析/转Markdown/对比（read/analyze/word_to_md/diff）不产生新文件，无需调用 cp。"""
+仅读取/分析/转Markdown/对比/扫描占位符（read/analyze/word_to_md/diff/scan_placeholders）不产生新文件，无需调用 cp。"""
 
 
 class WordProcessTool(BaseTool):
@@ -136,6 +139,19 @@ class WordProcessTool(BaseTool):
             from src.tools.word.word_router import WordRouter
             self._router = WordRouter()
         return self._router
+
+    def _resolve_file(self, file_path: str) -> str:
+        """解析 file_id 或相对路径为磁盘绝对路径
+
+        Agent 传的 file_paths 可能是 file_id（如 file_e300d0d5befc）或相对路径，
+        不能直接当磁盘路径用。通过 WordFileHandler.resolve_path 走 Redis 元数据
+        + 新旧目录兜底扫描，找不到抛 FileNotFoundError。
+        """
+        from src.tools.word.word_lib import WordFileHandler
+        resolved = WordFileHandler.resolve_path(file_path)
+        if not Path(resolved).exists():
+            raise FileNotFoundError(f"文件不存在: {file_path}")
+        return resolved
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
         context = kwargs.get("context")
@@ -198,7 +214,7 @@ class WordProcessTool(BaseTool):
             except FileNotFoundError as e:
                 return {"success": False, "error": str(e)}
             except Exception as e:
-                logger.error(f"Word pipeline error at {op}: {e}", exc_info=True)
+                logger.opt(exception=True).error(f"Word pipeline error at {op}: {e}")
                 return {"success": False, "error": f"操作 {op} 执行失败: {str(e)}"}
 
             if not step_result.get("success", True):
@@ -263,6 +279,7 @@ class WordProcessTool(BaseTool):
             "modify": self._handle_modify,
             "format": self._handle_format,
             "fill_template": self._handle_fill_template,
+            "scan_placeholders": self._handle_scan_placeholders,
             "list_templates": self._handle_list_templates,
             "diff": self._handle_diff,
         }
@@ -296,7 +313,7 @@ class WordProcessTool(BaseTool):
             router = self._get_router()
             return await router.route(context, file_paths)
         except Exception as e:
-            logger.error(f"[WordProcess] LLM 路由异常: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"[WordProcess] LLM 路由异常: {e}")
             return {"task": "", "error": f"路由服务异常: {e}"}
 
     def _resolve_task_deterministic(
@@ -421,7 +438,8 @@ class WordProcessTool(BaseTool):
 
     def _update_context(self, ctx: PipelineContext, op: str, result: Dict) -> None:
         """根据操作结果更新 pipeline 上下文"""
-        if op in ("read", "analyze", "word_to_md", "diff"):
+        # scan_placeholders 归入读类操作：只读不产生新文件，结果无 content 类字段，不强求设置
+        if op in ("read", "analyze", "word_to_md", "diff", "scan_placeholders"):
             ctx.read_content = (
                 result.get("content")
                 or result.get("markdown")
@@ -462,10 +480,17 @@ class WordProcessTool(BaseTool):
                     merged["download_url"] = r["download_url"]
                 if op == "fill_template":
                     merged["variables_replaced"] = r.get("variables_replaced", 0)
+                    merged["total"] = r.get("total", 0)
+                    merged["per_variable"] = r.get("per_variable", {})
+                    merged["unmatched_variables"] = r.get("unmatched_variables", [])
+                    merged["remaining_placeholders"] = r.get("remaining_placeholders", [])
                 if op == "modify":
                     merged["operations_applied"] = r.get("operations_applied", 0)
                 if op == "format":
                     merged["operations_applied"] = r.get("operations_applied", 0)
+            elif op == "scan_placeholders":
+                merged["placeholders"] = r.get("placeholders", [])
+                merged["variable_names"] = r.get("variable_names", [])
             elif op == "list_templates":
                 merged["templates"] = r.get("templates", [])
 
@@ -482,7 +507,11 @@ class WordProcessTool(BaseTool):
         if not ctx.file_paths:
             return {"success": False, "error": "read 操作需要 file_paths 参数"}
 
-        file_path = ctx.file_paths[0]
+        try:
+            file_path = self._resolve_file(ctx.file_paths[0])
+        except FileNotFoundError as e:
+            return {"success": False, "error": str(e)}
+
         return read_content(file_path)
 
     async def _handle_analyze(self, ctx: PipelineContext, params: Dict) -> Dict:
@@ -491,7 +520,11 @@ class WordProcessTool(BaseTool):
         if not ctx.file_paths:
             return {"success": False, "error": "analyze 操作需要 file_paths 参数"}
 
-        file_path = ctx.file_paths[0]
+        try:
+            file_path = self._resolve_file(ctx.file_paths[0])
+        except FileNotFoundError as e:
+            return {"success": False, "error": str(e)}
+
         result = analyze_structure(file_path, detailed=params.get("detailed", False))
         if result.get("success"):
             return {"success": True, "structure": result}
@@ -503,7 +536,11 @@ class WordProcessTool(BaseTool):
         if not ctx.file_paths:
             return {"success": False, "error": "word_to_md 操作需要 file_paths 参数"}
 
-        file_path = ctx.file_paths[0]
+        try:
+            file_path = self._resolve_file(ctx.file_paths[0])
+        except FileNotFoundError as e:
+            return {"success": False, "error": str(e)}
+
         md_text = convert(file_path)
         return {
             "success": True,
@@ -516,15 +553,35 @@ class WordProcessTool(BaseTool):
 
         md_text = ctx.content or ctx.context
         if not md_text and ctx.file_paths:
-            md_path = ctx.file_paths[0]
-            if Path(md_path).exists():
-                md_text = Path(md_path).read_text(encoding="utf-8")
+            # file_paths[0] 可能是 file_id 或相对路径，走 _resolve_file 解析
+            # 解析失败时不阻塞流程（md_text 可能在其他途径被填充），由后续 if not md_text 兜底
+            # .docx/.doc 附件是格式参考（template_file）而非 Markdown 源，跳过不按文本读取
+            try:
+                md_path = self._resolve_file(ctx.file_paths[0])
+                if not md_path.lower().endswith((".doc", ".docx")):
+                    md_text = Path(md_path).read_text(encoding="utf-8")
+            except (FileNotFoundError, OSError):
+                md_text = None
 
         if not md_text:
             return {"success": False, "error": "md_to_word 需要提供 context（Markdown文本）或 file_paths（.md文件路径）"}
 
         md_text = self._extract_markdown_body(md_text)
         template = params.get("template")
+        # template_file：用户上传的 docx 格式参考文件（file_id 或路径），优先于命名模板 template。
+        # 走 _resolve_file 解析（支持 Redis 元数据 + 多目录兜底），失败时 fail loud 不静默回退默认模板
+        template_file = params.get("template_file")
+        if template_file:
+            try:
+                resolved_template = self._resolve_file(str(template_file))
+            except (FileNotFoundError, OSError) as e:
+                return {"success": False, "error": f"格式参考模板解析失败: {e}"}
+            if not resolved_template.lower().endswith(".docx"):
+                return {
+                    "success": False,
+                    "error": f"格式参考模板解析失败: 仅支持 .docx 格式参考模板，实际为 {Path(resolved_template).name}",
+                }
+            template = resolved_template
         title = params.get("title") or self._extract_title(md_text)
         author = params.get("author", "")
         output_name = (
@@ -572,7 +629,11 @@ class WordProcessTool(BaseTool):
         if not ctx.file_paths:
             return {"success": False, "error": "modify 操作需要 file_paths 参数"}
 
-        file_path = ctx.file_paths[0]
+        try:
+            file_path = self._resolve_file(ctx.file_paths[0])
+        except FileNotFoundError as e:
+            return {"success": False, "error": str(e)}
+
         operations = params.get("operations", [])
         if not operations:
             return {"success": False, "error": "modify 操作需要 params.operations 参数"}
@@ -598,7 +659,11 @@ class WordProcessTool(BaseTool):
         if not ctx.file_paths:
             return {"success": False, "error": "format 操作需要 file_paths 参数"}
 
-        file_path = ctx.file_paths[0]
+        try:
+            file_path = self._resolve_file(ctx.file_paths[0])
+        except FileNotFoundError as e:
+            return {"success": False, "error": str(e)}
+
         operations = params.get("format_operations") or params.get("operations", [])
         if not operations:
             return {"success": False, "error": "format 操作需要 params.format_operations 参数"}
@@ -624,22 +689,55 @@ class WordProcessTool(BaseTool):
         if not ctx.file_paths:
             return {"success": False, "error": "fill_template 操作需要 file_paths 参数"}
 
-        file_path = ctx.file_paths[0]
+        try:
+            file_path = self._resolve_file(ctx.file_paths[0])
+        except FileNotFoundError as e:
+            return {"success": False, "error": str(e)}
+
         variables = params.get("variables", {})
-        if not variables:
+        if not isinstance(variables, dict) or not variables:
             return {"success": False, "error": "fill_template 操作需要 params.variables 参数"}
 
         doc, info = WordFileHandler.copy_and_open(file_path)
 
-        count = fill_template(doc, variables)
+        fill_result = fill_template(doc, variables)
+        total = fill_result.get("total", 0)
 
         output_name = params.get("output_name") or (Path(file_path).stem + "_filled.docx")
         save_result = WordFileHandler.save_temp(doc, file_name=output_name)
         save_result["success"] = True
-        save_result["variables_replaced"] = count
-        save_result["message"] = f"已替换{count}个模板变量"
+        save_result["variables_replaced"] = total
+        save_result["total"] = total
+        save_result["per_variable"] = fill_result.get("per_variable", {})
+        save_result["unmatched_variables"] = fill_result.get("unmatched_variables", [])
+        save_result["remaining_placeholders"] = fill_result.get("remaining_placeholders", [])
+        save_result["message"] = (
+            f"已替换{total}个占位符（{len(fill_result.get('per_variable', {}))}个变量）"
+        )
 
         return save_result
+
+    async def _handle_scan_placeholders(self, ctx: PipelineContext, params: Dict) -> Dict:
+        """扫描模板中的占位符变量（只读操作，不产生新文件）"""
+        from src.tools.word.template_manager import scan_placeholders, unique_variable_names
+        from src.tools.word.word_lib import WordFileHandler
+
+        if not ctx.file_paths:
+            return {"success": False, "error": "scan_placeholders 操作需要 file_paths 参数"}
+
+        try:
+            file_path = self._resolve_file(ctx.file_paths[0])
+        except FileNotFoundError as e:
+            return {"success": False, "error": str(e)}
+
+        doc, info = WordFileHandler.copy_and_open(file_path)
+        placeholders = scan_placeholders(doc)
+
+        return {
+            "success": True,
+            "placeholders": placeholders,
+            "variable_names": unique_variable_names(placeholders),
+        }
 
     async def _handle_list_templates(self, ctx: PipelineContext, params: Dict) -> Dict:
         from src.tools.word.template_manager import list_templates
@@ -653,5 +751,11 @@ class WordProcessTool(BaseTool):
         if not ctx.file_paths or len(ctx.file_paths) < 2:
             return {"success": False, "error": "diff 操作需要 file_paths 参数（两个文件路径：[旧版本, 新版本]）"}
 
+        try:
+            file_path_old = self._resolve_file(ctx.file_paths[0])
+            file_path_new = self._resolve_file(ctx.file_paths[1])
+        except FileNotFoundError as e:
+            return {"success": False, "error": str(e)}
+
         output_format = params.get("output_format", "text")
-        return diff(ctx.file_paths[0], ctx.file_paths[1], output_format=output_format)
+        return diff(file_path_old, file_path_new, output_format=output_format)

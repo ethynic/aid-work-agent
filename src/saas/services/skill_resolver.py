@@ -11,6 +11,7 @@ from typing import List, Dict, Any
 from loguru import logger
 
 from src.config.settings import settings
+from src.core.storage import normalize_tenant_id
 
 
 class SkillResolver:
@@ -27,6 +28,7 @@ class SkillResolver:
         路径解析以项目根为基准（不依赖 cwd），避免容器内 cwd 不可写时
         mkdir 报 PermissionError。配置项支持相对路径（相对项目根）和绝对路径。
         """
+        tenant_id = normalize_tenant_id(tenant_id)
         configured = Path(settings.saas.tenant_skills_dir)
         if configured.is_absolute():
             base_dir = configured / tenant_id / "skills"

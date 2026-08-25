@@ -151,6 +151,13 @@ class ExcelRouter:
                 max_tokens=512,
             )
 
+            from src.services.session_record import record_background_llm_usage
+            record_background_llm_usage(
+                response.get("usage") if isinstance(response, dict) else None,
+                source="excel_router",
+                model=gateway.get_model_name(),
+            )
+
             content = response.get("content", "")
             if not content:
                 logger.warning("[ExcelRouter] LLM 返回空内容")

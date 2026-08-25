@@ -712,3 +712,195 @@ class TestHttpApiFileUpload:
         )
         assert result["success"] is False
         assert "文件准备失败" in result["error"]
+
+
+class TestCoerceJsonObject:
+    def test_parse_valid_json_object_string(self):
+        from src.tools.network.http_api import _coerce_json_object
+
+        assert _coerce_json_object('{"a": 1}') == {"a": 1}
+
+    def test_parse_valid_json_list_string(self):
+        from src.tools.network.http_api import _coerce_json_object
+
+        assert _coerce_json_object('[1, 2, 3]') == [1, 2, 3]
+
+    def test_invalid_json_string_kept_unchanged(self):
+        from src.tools.network.http_api import _coerce_json_object
+
+        # 非 JSON 字符串（如普通文本 body）原样返回，不破坏既有行为
+        assert _coerce_json_object("hello world") == "hello world"
+
+    def test_non_string_kept_unchanged(self):
+        from src.tools.network.http_api import _coerce_json_object
+
+        assert _coerce_json_object({"a": 1}) == {"a": 1}
+        assert _coerce_json_object(None) is None
+        assert _coerce_json_object(123) == 123
+
+    def test_empty_string_kept_unchanged(self):
+        from src.tools.network.http_api import _coerce_json_object
+
+        assert _coerce_json_object("") == ""
+        assert _coerce_json_object("   ") == "   "
+
+
+class TestHttpApiJsonStringTolerance:
+    """#1 修复：LLM 把 headers/body 等整体序列化成 JSON 字符串传参时兼容处理"""
+
+    def test_validate_parameters_accepts_string_headers(self):
+        from src.tools.network.http_api import HttpApiTool
+
+        tool = HttpApiTool()
+        # 修复前：headers 传 JSON 字符串会 dict_type 校验失败
+        assert tool.validate_parameters(
+            method="GET",
+            url="https://api.example.com/data",
+            headers='{"Authorization": "Bearer xxx"}',
+        ) is True
+
+    def test_validate_parameters_accepts_string_body(self):
+        from src.tools.network.http_api import HttpApiTool
+
+        tool = HttpApiTool()
+        assert tool.validate_parameters(
+            method="POST",
+            url="https://api.example.com/data",
+            body='{"customer": "123"}',
+        ) is True
+
+    def test_validate_parameters_accepts_string_query_params(self):
+        from src.tools.network.http_api import HttpApiTool
+
+        tool = HttpApiTool()
+        assert tool.validate_parameters(
+            method="GET",
+            url="https://api.example.com/data",
+            query_params='{"page": "1"}',
+        ) is True
+
+    def test_validate_parameters_still_rejects_invalid_json_string_headers(self):
+        """非 JSON 字符串保持原样，仍应校验失败（headers 必须是字典）。"""
+        from src.tools.network.http_api import HttpApiTool
+
+        tool = HttpApiTool()
+        assert tool.validate_parameters(
+            method="GET",
+            url="https://api.example.com/data",
+            headers="Authorization Bearer xxx",  # 不是合法 JSON
+        ) is False
+
+    @pytest.mark.asyncio
+    async def test_execute_coerces_string_headers_and_substitutes(self):
+        from src.tools.network.http_api import HttpApiTool
+
+        tool = HttpApiTool()
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"data": "ok"}
+
+        with patch.dict(os.environ, {"TEST_API_TOKEN": "sk-secret123"}):
+            with patch("src.tools.network.http_api.httpx.AsyncClient") as mock_client_cls:
+                mock_client = AsyncMock()
+                mock_client.request = AsyncMock(return_value=mock_response)
+                mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+                mock_client.__aexit__ = AsyncMock(return_value=False)
+                mock_client_cls.return_value = mock_client
+
+                result = await tool.execute(
+                    method="GET",
+                    url="https://api.example.com/data",
+                    headers='{"Authorization": "Bearer ${TEST_API_TOKEN}"}',
+                )
+                assert result["success"] is True
+                call_kwargs = mock_client.request.call_args
+                assert call_kwargs[1]["headers"] == {
+                    "Authorization": "Bearer sk-secret123"
+                }
+
+    @pytest.mark.asyncio
+    async def test_execute_coerces_string_body_to_json_object(self):
+        """body 传 JSON 字符串时，httpx 的 json= 应收到解析后的字典而非字符串字面量。"""
+        from src.tools.network.http_api import HttpApiTool
+
+        tool = HttpApiTool()
+        mock_response = MagicMock()
+        mock_response.status_code = 201
+        mock_response.json.return_value = {"id": 1}
+
+        with patch("src.tools.network.http_api.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.request = AsyncMock(return_value=mock_response)
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_client
+
+            result = await tool.execute(
+                method="POST",
+                url="https://api.example.com/data",
+                body='{"customer": "123"}',
+            )
+            assert result["success"] is True
+            call_kwargs = mock_client.request.call_args
+            assert call_kwargs[1]["json"] == {"customer": "123"}
+
+    @pytest.mark.asyncio
+    async def test_execute_coerces_string_query_params(self):
+        from src.tools.network.http_api import HttpApiTool
+
+        tool = HttpApiTool()
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"data": "ok"}
+
+        with patch("src.tools.network.http_api.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.request = AsyncMock(return_value=mock_response)
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_client
+
+            result = await tool.execute(
+                method="GET",
+                url="https://api.example.com/search",
+                query_params='{"page": "1", "size": "10"}',
+            )
+            assert result["success"] is True
+            call_kwargs = mock_client.request.call_args
+            assert call_kwargs[1]["params"] == {"page": "1", "size": "10"}
+
+    def test_get_validation_errors_includes_type_error(self):
+        """#2 修复：类型错误（dict_type）纳入校验错误，不再返回误导性空列表。"""
+        from src.tools.network.http_api import HttpApiTool
+
+        tool = HttpApiTool()
+        errors = tool.get_validation_errors(
+            method="GET",
+            url="https://api.example.com/data",
+            headers="Authorization Bearer xxx",  # 非法 headers（非 JSON 字符串/字典）
+        )
+        assert errors, "应返回可读校验错误，而非空列表"
+        joined = "; ".join(errors)
+        assert "headers" in joined
+        assert "实际输入类型" in joined
+        assert "str" in joined
+
+    def test_get_validation_errors_empty_when_valid(self):
+        from src.tools.network.http_api import HttpApiTool
+
+        tool = HttpApiTool()
+        assert tool.get_validation_errors(
+            method="GET",
+            url="https://api.example.com/data",
+            headers={"Authorization": "Bearer xxx"},
+        ) == []
+
+    def test_get_validation_errors_missing_url(self):
+        from src.tools.network.http_api import HttpApiTool
+
+        tool = HttpApiTool()
+        errors = tool.get_validation_errors(method="GET")
+        assert errors
+        joined = "; ".join(errors)
+        assert "url" in joined
+        assert "未提供" in joined

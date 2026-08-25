@@ -75,7 +75,11 @@ max_requests_jitter = 100   # 随机抖动，避免所有 worker 同时重启
 preload_app = False
 
 # ── 自动重载 ───────────────────────────────────────────
-reload = True
+# 始终关闭。gunicorn 仅用于服务端环境（生产/测试/在线开发），多 worker 下
+# 任何 .py 变更（如部署脚本 git reset 改写源码）都会触发全部 worker 同时
+# 重新初始化，在多环境共享的低配服务器上会造成内存/Swap 风暴、服务长时间无响应。
+# 本地开发用 uvicorn --reload（docker-compose.local.yml），不走本文件，天然支持热重载。
+reload = False
 
 # ── 性能优化 ───────────────────────────────────────────
 # 使用内存文件系统存储 worker 临时文件，提高进程间通信性能

@@ -268,7 +268,7 @@ def paddleocr_doc_parsing(
             params["fileType"] = resolved_file_type
 
     except (ValueError, FileNotFoundError, RuntimeError) as e:
-        logger.error(f"PaddleOCR文件处理错误: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"PaddleOCR文件处理错误: {e}")
         return {
             "success": False,
             "error": "文件处理失败",
@@ -278,7 +278,7 @@ def paddleocr_doc_parsing(
     try:
         result = _make_paddleocr_request(api_url, token, params)
     except RuntimeError as e:
-        logger.error(f"PaddleOCR API调用失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"PaddleOCR API调用失败: {e}")
         return {
             "success": False,
             "error": "PaddleOCR API调用失败",
@@ -288,7 +288,7 @@ def paddleocr_doc_parsing(
     try:
         texts = _extract_markdown_texts(result)
     except ValueError as e:
-        logger.error(f"PaddleOCR结果解析错误: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"PaddleOCR结果解析错误: {e}")
         return {
             "success": False,
             "error": "结果解析失败",

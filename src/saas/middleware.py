@@ -78,6 +78,7 @@ class TenantContextMiddleware(BaseHTTPMiddleware):
 
         # 设置上下文
         request.state.tenant_id = tenant_id
+        request.state.user_id = user_id
         set_tenant_context(tenant_id, user_id=user_id)
 
         try:

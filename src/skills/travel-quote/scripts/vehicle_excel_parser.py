@@ -8,7 +8,7 @@
 """
 
 import json
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
@@ -134,12 +134,12 @@ class VehicleExcelParser:
             self._gateway = LLMGateway()
         return self._gateway
 
-    async def parse_sheet_by_name(self, file_path: str, sheet_name: str) -> List[Dict]:
+    async def parse_sheet_by_name(self, file_path: str, sheet_name: str, tenant_id: Optional[str] = None, user_id: Optional[str] = None) -> List[Dict]:
         """读取指定 Sheet 的原始内容并解析。"""
         raw_text = sheet_to_raw_text(file_path, sheet_name)
-        return await self.parse_sheet(sheet_name, raw_text)
+        return await self.parse_sheet(sheet_name, raw_text, tenant_id=tenant_id, user_id=user_id)
 
-    async def parse_sheet(self, sheet_name: str, raw_text: str) -> List[Dict]:
+    async def parse_sheet(self, sheet_name: str, raw_text: str, tenant_id: Optional[str] = None, user_id: Optional[str] = None) -> List[Dict]:
         """用 LLM 解析单个 Sheet 的原始文本，返回结构化车辆数据。"""
         if not raw_text or len(raw_text.strip()) < 10:
             return []
@@ -154,6 +154,15 @@ class VehicleExcelParser:
                 max_tokens=8192,
             )
 
+            from src.services.session_record import record_background_llm_usage
+            record_background_llm_usage(
+                response.get("usage") if isinstance(response, dict) else None,
+                source="vehicle_excel_parser",
+                model=gateway.get_model_name(),
+                tenant_id=tenant_id,
+                user_id=user_id,
+            )
+
             content = response.get("content", "")
             if not content:
                 logger.warning(f"[VehicleExcelParser] Sheet '{sheet_name}' LLM 返回空内容")
@@ -162,7 +171,7 @@ class VehicleExcelParser:
             return self._parse_llm_output(content, sheet_name)
 
         except Exception as e:
-            logger.error(f"[VehicleExcelParser] Sheet '{sheet_name}' LLM 调用失败: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"[VehicleExcelParser] Sheet '{sheet_name}' LLM 调用失败: {e}")
             return []
 
     def _parse_llm_output(self, content: str, sheet_name: str) -> List[Dict]:
@@ -233,7 +242,7 @@ class VehicleExcelParser:
         except (ValueError, TypeError):
             return None
 
-    async def parse_excel_sheets(self, file_path: str) -> List[Dict]:
+    async def parse_excel_sheets(self, file_path: str, tenant_id: Optional[str] = None, user_id: Optional[str] = None) -> List[Dict]:
         """处理 Excel 文件：逐 Sheet 解析车辆价格数据。"""
         import openpyxl
 
@@ -264,7 +273,7 @@ class VehicleExcelParser:
             logger.info(f"[VehicleExcelParser] 解析 Sheet {idx}/{len(valid_sheets)}: '{sheet_name}' ({len(raw_text)} 字符)...")
 
             try:
-                parsed = await self.parse_sheet(sheet_name, raw_text)
+                parsed = await self.parse_sheet(sheet_name, raw_text, tenant_id=tenant_id, user_id=user_id)
                 if parsed:
                     all_parsed.extend(parsed)
                     logger.info(f"[VehicleExcelParser] Sheet '{sheet_name}' 解析完成，得到 {len(parsed)} 条车辆记录")

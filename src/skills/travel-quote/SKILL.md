@@ -28,6 +28,14 @@ skill_execute(
 
 **必须通过 `content` 参数传递 JSON**，不要用命令行参数。
 
+### ⚠️ 核心规则：禁止自编命令直接查库
+
+1. **本技能只允许执行两个命令**：`python scripts/generate.py`（生成报价）和 `python scripts/update_hotel.py`（换酒店）。**禁止**编写任何其他 `python -c` / SQL 命令通过 `skill_execute` 提交。
+2. **禁止直接查询 `bs_travel_quote_*` 表**：不要编写 `SELECT ... FROM bs_travel_quote_vehicles/meals/guides/fees/seasons` 之类的内联脚本去检查数据、统计行数、按租户/区域分组等。所有报价相关的数据读取、统计、校验都由 `generate.py` 在内部完成。
+3. **禁止修改表结构或数据**：不要执行 `ALTER TABLE`、`CREATE`/`DROP`、`UPDATE`/`DELETE` 等写操作。
+4. **为什么**：直接查库的脚本极易引用不存在的列名（如 `region_name` 只存在于部分表；`season_type`、`seats_min`、`overtime_rate` 等列已从代码 DDL 移除，仅历史库中残留），会触发 `UndefinedColumn` 报错；且绕过技能内部逻辑拿到的数据与报价口径可能不一致。
+5. **你需要了解价格数据时**：直接调用 `generate.py` 拿报价结果，或使用管理后台对应页面（车辆价格 / 景点门票 / 酒店房型 / 餐标价格 / 导游费用 / 其他费用）。真实表结构是后端职责，你只需按本文档传入 JSON 参数。
+
 ## 输入参数（JSON）
 
 ```json

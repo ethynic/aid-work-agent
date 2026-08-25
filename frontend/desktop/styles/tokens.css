@@ -1,0 +1,23 @@
+:root {
+  color-scheme: dark;
+  --d-bg: #0b0e10;
+  --d-surface: #11161a;
+  --d-surface-raised: #171d21;
+  --d-line: #293238;
+  --d-line-strong: #3b484f;
+  --d-text: #e8ece9;
+  --d-text-muted: #8f9a9d;
+  --d-accent: #b9f13d;
+  --d-accent-ink: #101507;
+  --d-warning: #f3bc4b;
+  --d-danger: #ff6b5f;
+  --d-ready: #70d8aa;
+  --d-focus: #d7ff78;
+  --d-titlebar-height: 48px;
+  --d-sidebar-width: 216px;
+  --d-statusbar-height: 34px;
+  --d-radius: 3px;
+  --d-font-display: "Bahnschrift", "DIN Alternate", "Microsoft YaHei UI", sans-serif;
+  --d-font-body: "IBM Plex Sans", "Segoe UI Variable", "Microsoft YaHei UI", sans-serif;
+  --d-font-mono: "Cascadia Mono", "SFMono-Regular", monospace;
+}

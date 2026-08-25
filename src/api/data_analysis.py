@@ -181,7 +181,7 @@ async def create_connector(req: ConnectorCreate, request: Request):
         return {"success": True, "connector": {**result, "name": req.name, "db_type": req.db_type}}
 
     except Exception as e:
-        logger.error(f"创建连接器失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"创建连接器失败: {e}")
         return _error_response("创建连接器失败", debug=str(e))
 
 
@@ -215,7 +215,7 @@ async def list_connectors(request: Request):
         connectors = await asyncio.to_thread(_list)
         return {"success": True, "connectors": connectors}
     except Exception as e:
-        logger.error(f"获取连接器列表失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"获取连接器列表失败: {e}")
         return _error_response("获取连接器列表失败", debug=str(e))
 
 
@@ -264,7 +264,7 @@ async def update_connector(connector_id: str, req: ConnectorUpdate, request: Req
         return {"success": True, "message": "更新成功"}
 
     except Exception as e:
-        logger.error(f"更新连接器失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"更新连接器失败: {e}")
         return _error_response("更新连接器失败", debug=str(e))
 
 
@@ -314,7 +314,7 @@ async def delete_connector(connector_id: str, request: Request):
         return {"success": True, "message": "删除成功"}
 
     except Exception as e:
-        logger.error(f"删除连接器失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"删除连接器失败: {e}")
         return _error_response("删除连接器失败", debug=str(e))
 
 
@@ -403,7 +403,7 @@ async def get_connector_tables(connector_id: str, request: Request):
         tables = await asyncio.to_thread(db_connector.list_tables, config)
         return {"success": True, "tables": tables}
     except Exception as e:
-        logger.error(f"获取远程表列表失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"获取远程表列表失败: {e}")
         return _error_response("获取远程表列表失败", debug=str(e))
 
 
@@ -477,7 +477,7 @@ async def import_connector_tables(connector_id: int, request: Request):
         return {"success": True, "schemas": schemas}
 
     except Exception as e:
-        logger.error(f"导入表结构失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"导入表结构失败: {e}")
         return _error_response("导入表结构失败", debug=str(e))
 
 
@@ -512,7 +512,7 @@ async def upload_excel(
 ):
     """
     上传 Excel/CSV 文件，解析结构并用 LLM 推断 schema，返回供用户确认。
-    不保存到知识库。源文件持久化到 storage/uploads/{tenant_id}/data_sources/，
+    不保存到知识库。源文件持久化到 storage/tenants/{tenant_id}/data_sources/，
     供后续数据分析时加载数据使用。
 
     采用 SSE 流式响应：推送解析、推断进度，最终 complete 事件携带 schemas。
@@ -529,12 +529,9 @@ async def upload_excel(
     async def event_generator():
         total_start = time.monotonic()
         try:
-            # 持久化源文件到 storage/uploads/{tenant_id}/data_sources/
-            from src.config.settings import settings
-            from pathlib import Path as _Path
-            _project_root = _Path(__file__).resolve().parent.parent.parent
-            persist_dir = _project_root / settings.storage.uploads_dir / (tenant_id or "_global") / "data_sources"
-            persist_dir.mkdir(parents=True, exist_ok=True)
+            # 持久化源文件到 storage/tenants/{tenant_id}/data_sources/
+            from src.core.storage import ensure_tenant_storage_dir
+            persist_dir = Path(ensure_tenant_storage_dir(tenant_id or "_anonymous", "data_sources")).absolute()
             file_id = uuid.uuid4().hex[:12]
             persist_path = persist_dir / f"{file_id}{ext}"
 
@@ -607,7 +604,7 @@ async def upload_excel(
             logger.warning(f"[upload_excel] value error: {e}")
             yield _sse_event({"type": "error", "message": str(e)})
         except Exception as e:
-            logger.error(f"上传文件解析失败: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"上传文件解析失败: {e}")
             yield _sse_event({"type": "error", "message": "文件解析失败"})
         finally:
             try:
@@ -727,7 +724,7 @@ async def list_schemas(request: Request):
         schemas = await asyncio.to_thread(_list)
         return {"success": True, "schemas": schemas}
     except Exception as e:
-        logger.error(f"获取 schema 列表失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"获取 schema 列表失败: {e}")
         return _error_response("获取 schema 列表失败", debug=str(e))
 
 
@@ -742,7 +739,21 @@ async def update_schema(doc_id: int, req: SchemaSave, request: Request):
         from src.config.settings import get_embedding_api_key
         embedding_api_key = get_embedding_api_key()
         embedding_client = TextEmbeddingV3Client(api_key=embedding_api_key)
+        embedding_client.reset_usage()
         embeddings = await embedding_client.embed_batch([schema_text])
+
+        # 补计费：schema 重新向量化消耗（管理后台独立落库）
+        if int(getattr(embedding_client, "last_usage_tokens", 0) or 0) > 0:
+            try:
+                from src.services.session_record import record_admin_embedding_usage
+                record_admin_embedding_usage(
+                    embedding_client,
+                    tenant_id=tenant_id,
+                    user_id=getattr(request.state, "user_id", None),
+                    source_label="update_schema",
+                )
+            except Exception:
+                logger.opt(exception=True).debug("Failed to record schema embedding usage")
 
         metadata = {
             "connector_id": req.connector_id,
@@ -802,7 +813,7 @@ async def update_schema(doc_id: int, req: SchemaSave, request: Request):
         return {"success": True, "message": "Schema 已更新"}
 
     except Exception as e:
-        logger.error(f"更新 schema 失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"更新 schema 失败: {e}")
         return _error_response("更新 schema 失败", debug=str(e))
 
 
@@ -834,7 +845,7 @@ async def delete_schema(doc_id: int, request: Request):
 
         return {"success": True, "message": "Schema 已删除"}
     except Exception as e:
-        logger.error(f"删除 schema 失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"删除 schema 失败: {e}")
         return _error_response("删除 schema 失败", debug=str(e))
 
 
@@ -858,7 +869,7 @@ async def infer_relations(request: Request):
         relations = await schema_extractor.infer_relations(schemas)
         return {"success": True, "relations": relations}
     except Exception as e:
-        logger.error(f"推断关联关系失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"推断关联关系失败: {e}")
         return _error_response("推断关联关系失败", debug=str(e))
 
 
@@ -940,7 +951,7 @@ async def batch_save_relations(req: RelationBatch, request: Request):
         return {"success": True, "message": f"已保存 {len(req.relations)} 条关联关系"}
 
     except Exception as e:
-        logger.error(f"批量保存关联关系失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"批量保存关联关系失败: {e}")
         return _error_response("保存关联关系失败", debug=str(e))
 
 
@@ -977,7 +988,7 @@ async def list_relations(request: Request):
         relations = await asyncio.to_thread(_list)
         return {"success": True, "relations": relations}
     except Exception as e:
-        logger.error(f"获取关联关系列表失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"获取关联关系列表失败: {e}")
         return _error_response("获取关联关系列表失败", debug=str(e))
 
 
@@ -1038,7 +1049,7 @@ async def add_relation(req: RelationItem, request: Request):
         return {"success": True, "message": "关联关系已添加"}
 
     except Exception as e:
-        logger.error(f"添加关联关系失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"添加关联关系失败: {e}")
         return _error_response("添加关联关系失败", debug=str(e))
 
 
@@ -1098,7 +1109,7 @@ async def delete_relation(request: Request):
         return {"success": True, "message": "关联关系已删除"}
 
     except Exception as e:
-        logger.error(f"删除关联关系失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"删除关联关系失败: {e}")
         return _error_response("删除关联关系失败", debug=str(e))
 
 

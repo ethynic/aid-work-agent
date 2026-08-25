@@ -1,0 +1,5 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "agent-turn-final.schema.json", "title": "AgentTurnFinal",
+  "type": "object", "additionalProperties": false, "required": ["type", "message"],
+  "properties": { "type": { "const": "final" }, "message": { "type": "string" }, "artifacts": { "type": "array", "items": { "type": "object" } } }
+}

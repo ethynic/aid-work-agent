@@ -41,6 +41,7 @@ def update_hotel(params: dict) -> dict:
     init_tables()
 
     tenant_id = params.get('tenant_id', '')
+    subagent_id = params.get('subagent_id', '')
     internal = params.get('internal_data') or {}
     overrides = params.get('hotel_overrides') or []
 
@@ -64,7 +65,9 @@ def update_hotel(params: dict) -> dict:
         raise ValueError("total_people 缺失或为 0，无法计算")
 
     # —— 1. 用酒店名反查 doc_id 并覆写 hotel_stays（与 generate.py 共用同一逻辑）——
-    name_overrides = resolve_hotel_overrides(tenant_id, hotel_stays, overrides)
+    name_overrides = resolve_hotel_overrides(
+        tenant_id, hotel_stays, overrides, subagent_id=subagent_id or None,
+    )
 
     # —— 2. 用 calculate_hotel_stays 重算所有住宿行（顺序与 hotel_stays 一致）——
     new_hotel_items, single_supplement = calculate_hotel_stays(
@@ -146,7 +149,9 @@ def update_hotel(params: dict) -> dict:
         "trip_days": trip_days,
         "rows": rows,
         "合计_费用小计": cost_per_person,
-        "合计_随队老师": teacher_total,
+        # 顶层 合计_随队老师 = 所有老师总价（与 generate.py:250 一致）；
+        # teacher_total（÷ teacher_count 的人均版）只供 internal_data.teacher_total 字段使用
+        "合计_随队老师": teacher_total_sum,
         "人均报价": quote_per_person,
         "总价": quote_total,
         "file_path": os.path.abspath(file_path),
@@ -213,6 +218,9 @@ def main():
         print(json.dumps({
             "success": True,
             "data": result,
+            # 更新后的报价结果须完整返回（schema 与 generate.py 一致）：rows 供 LLM 复述，
+            # 新的 internal_data 须原样回传给下一次 update_hotel 调用，截断成非法 JSON 会断链。
+            "_no_truncate": True
         }, ensure_ascii=False, indent=2, default=str))
 
     except json.JSONDecodeError as e:

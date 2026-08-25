@@ -252,7 +252,7 @@ def send_sms(
                     "debug": "sms sender not available",
                 }
         except Exception as e:
-            logger.error(f"短信通道检查异常: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"短信通道检查异常: {e}")
             return {
                 "success": False,
                 "error": "短信通道检查失败",
@@ -269,8 +269,8 @@ def send_sms(
     try:
         ok = send_sms_code(mobile)
     except Exception as e:
-        logger.error(
-            f"短信验证码发送异常 mobile={mobile}: {e}", exc_info=True
+        logger.opt(exception=True).error(
+            f"短信验证码发送异常 mobile={mobile}: {e}"
         )
         return {
             "success": False,
@@ -356,8 +356,8 @@ def verify_sms(
     try:
         ok = verify_sms_code(mobile, code_str)
     except Exception as e:
-        logger.error(
-            f"短信验证码校验异常 mobile={mobile}: {e}", exc_info=True
+        logger.opt(exception=True).error(
+            f"短信验证码校验异常 mobile={mobile}: {e}"
         )
         return {
             "success": False,

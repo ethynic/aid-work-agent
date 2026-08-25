@@ -119,7 +119,7 @@ async def md_to_docx(
             response["download_url"] = download_info["download_url"]
         return response
     except Exception as e:
-        logger.error(f"Markdown转Word失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"Markdown转Word失败: {e}")
         return {"success": False, "error": "转换失败，请稍后重试", "debug": sanitize_error_info(str(e))}
 
 
@@ -135,7 +135,7 @@ async def docx_to_md(
         md_text = convert(request.file_path)
         return {"success": True, "markdown": md_text}
     except Exception as e:
-        logger.error(f"Word转Markdown失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"Word转Markdown失败: {e}")
         return {"success": False, "error": "转换失败，请稍后重试", "debug": sanitize_error_info(str(e))}
 
 
@@ -150,7 +150,7 @@ async def read_word(
 
         return read_content(request.file_path)
     except Exception as e:
-        logger.error(f"读取Word文档失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"读取Word文档失败: {e}")
         return {"success": False, "error": "读取失败，请稍后重试", "debug": sanitize_error_info(str(e))}
 
 
@@ -165,7 +165,7 @@ async def analyze_word(
 
         return analyze_structure(request.file_path)
     except Exception as e:
-        logger.error(f"分析Word文档失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"分析Word文档失败: {e}")
         return {"success": False, "error": "分析失败，请稍后重试", "debug": sanitize_error_info(str(e))}
 
 
@@ -202,7 +202,7 @@ async def modify_word(
             response["download_url"] = download_info["download_url"]
         return response
     except Exception as e:
-        logger.error(f"修改Word文档失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"修改Word文档失败: {e}")
         return {"success": False, "error": "修改失败，请稍后重试", "debug": sanitize_error_info(str(e))}
 
 
@@ -239,7 +239,7 @@ async def format_word(
             response["download_url"] = download_info["download_url"]
         return response
     except Exception as e:
-        logger.error(f"格式化Word文档失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"格式化Word文档失败: {e}")
         return {"success": False, "error": "格式化失败，请稍后重试", "debug": sanitize_error_info(str(e))}
 
 
@@ -256,7 +256,7 @@ async def fill_template(
         from pathlib import Path
 
         doc, info = WordFileHandler.copy_and_open(request.file_path)
-        count = do_fill(doc, request.variables)
+        fill_result = do_fill(doc, request.variables)
 
         output_name = request.output_name or (Path(request.file_path).stem + "_filled.docx")
         save_result = WordFileHandler.save_temp(doc, file_name=output_name)
@@ -269,14 +269,17 @@ async def fill_template(
             "success": True,
             "file_path": save_result["file_path"],
             "file_size": save_result["file_size"],
-            "variables_replaced": count,
+            "variables_replaced": fill_result.get("total", 0),
+            "per_variable": fill_result.get("per_variable", {}),
+            "unmatched_variables": fill_result.get("unmatched_variables", []),
+            "remaining_placeholders": fill_result.get("remaining_placeholders", []),
         }
         if download_info:
             response["file_id"] = download_info["file_id"]
             response["download_url"] = download_info["download_url"]
         return response
     except Exception as e:
-        logger.error(f"填充模板失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"填充模板失败: {e}")
         return {"success": False, "error": "填充失败，请稍后重试", "debug": sanitize_error_info(str(e))}
 
 
@@ -291,7 +294,7 @@ async def diff_word(
 
         return diff(request.file_path_old, request.file_path_new, output_format=request.output_format)
     except Exception as e:
-        logger.error(f"文档对比失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"文档对比失败: {e}")
         return {"success": False, "error": "对比失败，请稍后重试", "debug": sanitize_error_info(str(e))}
 
 
@@ -306,5 +309,5 @@ async def list_templates(
         templates = list_templates()
         return {"success": True, "templates": templates}
     except Exception as e:
-        logger.error(f"获取模板列表失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"获取模板列表失败: {e}")
         return {"success": False, "error": "获取模板列表失败", "debug": sanitize_error_info(str(e))}

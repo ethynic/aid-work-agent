@@ -47,6 +47,8 @@ _NLS_META_DOMAIN = "nls-meta.cn-shanghai.aliyuncs.com"
 class SpeechToTextTool(BaseTool):
     """语音转文字工具 - 基于阿里云智能语音交互一句话识别 RESTful API"""
 
+    # 有意不注册为 LLM 工具：ASR 在渠道层（channel_routes.py）处理语音消息，不走 agent loop
+    catalog = False
     name = "speech_to_text"
     description = "将语音音频转为文字，支持中文普通话和英文。适用于语音消息识别，音频时长不超过60秒。参数需要提供音频文件的base64编码内容或本地文件路径。"
     usage_guide = "当需要处理语音消息时调用此工具。提供音频文件的base64编码内容或本地文件路径。"
@@ -117,7 +119,7 @@ class SpeechToTextTool(BaseTool):
                     None, self._read_file, audio_content
                 )
             except Exception as e:
-                logger.error(f"读取音频文件失败: {e}", exc_info=True)
+                logger.opt(exception=True).error(f"读取音频文件失败: {e}")
                 return {
                     "success": False,
                     "error": "读取音频文件失败",
@@ -142,7 +144,7 @@ class SpeechToTextTool(BaseTool):
             try:
                 audio_bytes = base64.b64decode(audio_content)
             except Exception as e:
-                logger.error(f"base64 解码失败: {e}", exc_info=True)
+                logger.opt(exception=True).error(f"base64 解码失败: {e}")
                 return {
                     "success": False,
                     "error": "base64 解码失败，请提供合法的 base64 音频内容",
@@ -345,6 +347,15 @@ class SpeechToTextTool(BaseTool):
                     if status_code == 20000000:
                         text = result_json.get("result", "")
                         logger.info("后端日志：语音转文字成功 text={}", text[:100])
+                        # 补计费：ASR 调用成功后累加到当前 SessionRecordService
+                        # （工具内部统一计费，覆盖 agent 主循环与渠道侧所有入口）
+                        try:
+                            from src.services.session_record import SessionRecordManager
+                            record = SessionRecordManager.get_current_record()
+                            if record:
+                                record.add_asr_usage(calls=1)
+                        except Exception:
+                            logger.opt(exception=True).debug("Failed to record ASR usage")
                         return {
                             "success": True,
                             "text": text,
@@ -366,14 +377,14 @@ class SpeechToTextTool(BaseTool):
                         }
 
         except aiohttp.ClientError as e:
-            logger.error("后端日志：阿里云 ASR 网络错误: {}", e, exc_info=True)
+            logger.opt(exception=True).error("后端日志：阿里云 ASR 网络错误: {}", e)
             return {
                 "success": False,
                 "error": "阿里云 ASR 网络错误，请稍后重试",
                 "debug": sanitize_error_info(str(e)),
             }
         except Exception as e:
-            logger.error("后端日志：阿里云 ASR 未知错误: {}", e, exc_info=True)
+            logger.opt(exception=True).error("后端日志：阿里云 ASR 未知错误: {}", e)
             return {
                 "success": False,
                 "error": "语音转文字失败",

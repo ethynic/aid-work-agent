@@ -1,0 +1,1 @@
+{ "$schema":"https://json-schema.org/draft/2020-12/schema", "$id":"remote-tool-catalog-response.schema.json", "title":"RemoteToolCatalogResponse", "type":"object", "additionalProperties":false, "required":["protocol_version","tools"], "properties":{"protocol_version":{"const":"1.0"},"tools":{"type":"array","items":{"$ref":"remote-tool-descriptor.schema.json"}}} }

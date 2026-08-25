@@ -66,7 +66,7 @@ async def list_subagents(request: Request):
         return {"success": True, "data": items}
 
     except Exception as e:
-        logger.error(f"列出数字员工失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"列出数字员工失败: {e}")
         return {"success": False, "error": "列出数字员工失败", "debug": str(e)}
 
 
@@ -86,7 +86,7 @@ async def list_available_skills(request: Request):
         return {"success": True, "data": skills}
 
     except Exception as e:
-        logger.error(f"获取技能列表失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"获取技能列表失败: {e}")
         return {"success": False, "error": "获取技能列表失败", "debug": str(e)}
 
 
@@ -141,7 +141,7 @@ async def get_subagent_detail(request: Request, agent_id: str):
         return {"success": True, "data": data}
 
     except Exception as e:
-        logger.error(f"获取数字员工详情失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"获取数字员工详情失败: {e}")
         return {"success": False, "error": "获取数字员工详情失败", "debug": str(e)}
 
 
@@ -167,7 +167,7 @@ async def get_subagent_content(request: Request, agent_id: str):
         return {"success": True, "data": content}
 
     except Exception as e:
-        logger.error(f"获取数字员工内容失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"获取数字员工内容失败: {e}")
         return {"success": False, "error": "获取数字员工内容失败", "debug": str(e)}
 
 
@@ -190,5 +190,5 @@ async def list_available_tools(request: Request):
         return {"success": True, "data": tools}
 
     except Exception as e:
-        logger.error(f"获取工具列表失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"获取工具列表失败: {e}")
         return {"success": False, "error": "获取工具列表失败", "debug": str(e)}

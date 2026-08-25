@@ -58,6 +58,16 @@ def resolve_font_name(name: str) -> str:
     return FONT_MAP.get(name, name)
 
 
+def _resolve_path_via_redis(file_id: str) -> Optional[str]:
+    """[已废弃] 薄包装，调用 src.core.storage.resolve_path_via_redis
+
+    保留是为了向后兼容（test 直接从此模块导入 _resolve_path_via_redis）。
+    新代码请直接 from src.core.storage import resolve_path_via_redis。
+    """
+    from src.core.storage import resolve_path_via_redis
+    return resolve_path_via_redis(file_id)
+
+
 def parse_color(color_str: str) -> Optional[str]:
     """解析颜色字符串，返回 6 位 hex（不含 #）"""
     if not color_str:
@@ -172,30 +182,19 @@ class ExcelFileHandler:
 
     @staticmethod
     def get_session_dir() -> Path:
-        """获取当前用户会话的文件存储目录"""
+        """获取当前用户会话的文件存储目录（遵循租户附件存储规范）
+
+        路径: storage/tenants/{tenant_id}/conversation/
+        无租户时: storage/tenants/_anonymous/conversation/
+        """
         try:
-            from src.config.settings import settings
+            from src.core.storage import ensure_tenant_storage_dir
             from src.saas.context import get_current_tenant_id, get_current_user_id
-
-            project_root = Path(__file__).resolve().parents[3]
-            upload_root = Path(settings.storage.uploads_dir)
-            if not upload_root.is_absolute():
-                upload_root = project_root / upload_root
-
             tenant_id = get_current_tenant_id()
-            user_id = get_current_user_id()
-
-            if tenant_id and user_id:
-                save_dir = upload_root / tenant_id / user_id
-            elif tenant_id:
-                save_dir = upload_root / tenant_id
-            elif user_id:
-                save_dir = upload_root / user_id
-            else:
-                save_dir = upload_root / "conversation"
-
-            save_dir.mkdir(parents=True, exist_ok=True)
-            return save_dir
+            # user_id 不进路径，仅作元数据
+            _ = get_current_user_id()
+            tid = tenant_id or "_anonymous"
+            return Path(ensure_tenant_storage_dir(tid, "conversation"))
         except Exception as e:
             logger.warning(f"[ExcelFileHandler] 获取会话目录失败，使用临时目录: {e}")
             import tempfile
@@ -218,15 +217,40 @@ class ExcelFileHandler:
 
     @staticmethod
     def resolve_path(file_path: str) -> str:
-        """解析文件路径（支持相对路径）"""
+        """解析文件路径（支持相对路径或 file_id）
+
+        查找顺序：
+        1. 原路径直接命中（含绝对路径）
+        2. Redis 元数据命中（file_id -> uploaded_file:{file_id}.path，最可靠）
+        3. 新路径 storage/tenants/{tenant}/conversation/{file}
+        """
         p = Path(file_path)
+        # 防路径穿越：含 .. 的相对路径不得进行 exists 检查或路径拼接
+        # （Path.exists() 和 Path()/.. 都会自动 resolve 后命中项目外系统文件）
+        if not p.is_absolute() and ".." in p.parts:
+            return str(p.absolute())
         if p.exists():
             return str(p.absolute())
+
+        # Redis 元数据命中：file_id 上传时写了 uploaded_file:{file_id} 永久元数据
+        # 适用于所有走 cp/upload/subagent_template_file 上传的文件，不依赖目录扫描
+        redis_path = _resolve_path_via_redis(file_path)
+        if redis_path:
+            return redis_path
+
         try:
-            from src.config.settings import settings
-            uploads = Path(settings.storage.uploads_dir) / file_path
-            if uploads.exists():
-                return str(uploads.absolute())
+            from src.core.storage import _TENANTS_ROOT
+            project_root = Path(__file__).resolve().parents[3]
+            tenants_root = project_root / _TENANTS_ROOT
+            if tenants_root.exists():
+                # 防路径穿越：file_path 含 .. 或绝对路径时跳过新路径扫描
+                fp_obj = Path(file_path)
+                if not fp_obj.is_absolute() and ".." not in fp_obj.parts:
+                    for d1 in tenants_root.iterdir():
+                        if d1.is_dir():
+                            candidate = d1 / "conversation" / file_path
+                            if candidate.exists():
+                                return str(candidate.absolute())
         except (ImportError, AttributeError):
             pass
         return str(p.absolute())

@@ -17,9 +17,12 @@
     "noFallthroughCasesInSwitch": true,
     "baseUrl": ".",
     "paths": {
-      "@/*": ["src/*"]
+      "@/*": ["web/*"],
+      "@web/*": ["web/*"],
+      "@desktop/*": ["desktop/*"],
+      "@shared/*": ["shared/*"]
     }
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.vue"],
+  "include": ["web/**/*.ts", "web/**/*.tsx", "web/**/*.vue", "desktop/**/*.ts", "desktop/**/*.tsx", "desktop/**/*.vue", "shared/**/*.ts", "shared/**/*.tsx", "shared/**/*.vue"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }

@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional, Union
 
 import httpx
 from loguru import logger
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from src.tools._helpers import truncate_text
 from src.tools._spill import spill_large_content
@@ -31,7 +31,10 @@ class HttpApiInput(BaseModel):
     )
     headers: Optional[Dict[str, str]] = Field(
         default=None,
-        description="请求头字典，键值对形式。支持 ${ENV_VAR} 凭据占位符。",
+        description=(
+            "请求头字典，键值对形式，需传 JSON 对象（如 {\"Authorization\": \"Bearer xxx\"}），"
+            "不要整体传 JSON 字符串。支持 ${ENV_VAR} 凭据占位符。"
+        ),
     )
     query_params: Optional[Dict[str, str]] = Field(
         default=None,
@@ -60,6 +63,20 @@ class HttpApiInput(BaseModel):
         default=True,
         description="是否跟随重定向，默认 true",
     )
+
+    @field_validator(
+        "headers",
+        "query_params",
+        "form_data",
+        "files",
+        "body",
+        mode="before",
+    )
+    @classmethod
+    def _coerce_json_string_args(cls, value: Any) -> Any:
+        """容错：LLM 有时把 headers/body 等整体序列化成 JSON 字符串传参，
+        校验前先把合法 JSON 字符串解析为对象，避免 dict_type 校验失败。"""
+        return _coerce_json_object(value)
 
 
 class HttpApiTool(BaseTool):
@@ -90,11 +107,13 @@ class HttpApiTool(BaseTool):
     async def execute(self, **kwargs) -> Dict[str, Any]:
         method = kwargs.get("method", "GET").upper()
         url = kwargs.get("url", "")
-        headers = kwargs.get("headers")
-        query_params = kwargs.get("query_params")
-        body = kwargs.get("body")
-        form_data = kwargs.get("form_data")
-        files = kwargs.get("files")
+        # LLM 有时把 headers/body 等整体序列化成 JSON 字符串传参，先统一解析为对象，
+        # 否则 body 为字符串时 httpx json= 会二次编码成 JSON 字符串字面量
+        headers = _coerce_json_object(kwargs.get("headers"))
+        query_params = _coerce_json_object(kwargs.get("query_params"))
+        body = _coerce_json_object(kwargs.get("body"))
+        form_data = _coerce_json_object(kwargs.get("form_data"))
+        files = _coerce_json_object(kwargs.get("files"))
         timeout = kwargs.get("timeout", 30)
         follow_redirects = kwargs.get("follow_redirects", True)
 
@@ -232,6 +251,25 @@ def _resolve_file_path(file_path: str) -> Optional[Path]:
 
     logger.warning(f"文件不存在: {file_path}")
     return None
+
+
+def _coerce_json_object(value: Any) -> Any:
+    """把 JSON 字符串形式的参数解析为对象。
+
+    LLM（如 qwen）在函数调用里有时会把 headers/body/query_params 等整体
+    序列化成 JSON 字符串传参（例如 headers='{"Authorization": "Bearer xxx"}'、
+    body='{"customer": "123"}'）。这里对合法 JSON 字符串做 json.loads，
+    解析失败或非字符串则原样返回，不破坏现有行为。
+    """
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return value
+        try:
+            return json.loads(stripped)
+        except (ValueError, TypeError):
+            return value
+    return value
 
 
 def _substitute_env_vars(text: str) -> str:

@@ -27,7 +27,12 @@ from src.config.settings import settings
 from src.db.database import get_db_connection
 from src.db.models import ChatRecordDB, SessionDB, TokenCostPriceDB
 from src.reports.work_outcome_db import WorkOutcomeDB
-from src.services.billing import calculate_video_credit_cost
+from src.services.billing import (
+    calculate_credit_cost,
+    calculate_credit_cost_with_breakdown,
+    calculate_video_credit_cost,
+    calculate_video_credit_cost_with_breakdown,
+)
 from src.video_agent.prompt_engine import PromptEngine, PromptResult, get_prompt_engine
 from src.video_gen.base import VideoGenRequest
 from src.video_gen.factory import build_provider
@@ -237,6 +242,14 @@ class VideoChatService:
                         ratio=params.ratio,
                         resolution=params.resolution,
                     )
+                    self._record_prompt_llm_usage(
+                        tenant_id=tenant_id,
+                        user_id=user_id,
+                        session_id=session_id,
+                        user_input=user_input,
+                        usage=self._prompt_engine.last_usage,
+                        model=params.prompt_model or "qwen-vl-max",
+                    )
                     self._save_draft_to_redis(session_id, result)
                     prompt_draft = self._format_prompt_draft_md(result)
                 else:
@@ -250,6 +263,14 @@ class VideoChatService:
                             duration_sec=params.duration_sec,
                             ratio=params.ratio,
                             resolution=params.resolution,
+                        )
+                        self._record_prompt_llm_usage(
+                            tenant_id=tenant_id,
+                            user_id=user_id,
+                            session_id=session_id,
+                            user_input=user_input,
+                            usage=self._prompt_engine.last_usage,
+                            model=params.prompt_model or "qwen-vl-max",
                         )
                     else:
                         # 草稿命中后清除（一次性使用，避免下次 submit 复用旧草稿）
@@ -276,6 +297,14 @@ class VideoChatService:
                     ratio=params.ratio,
                     resolution=params.resolution,
                 )
+                self._record_prompt_llm_usage(
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    session_id=session_id,
+                    user_input=user_input,
+                    usage=self._prompt_engine.last_usage,
+                    model=params.prompt_model or "qwen-vl-max",
+                )
                 for idx, result in enumerate(results):
                     card = await self._submit_video_generation(
                         tenant_id=tenant_id,
@@ -290,7 +319,7 @@ class VideoChatService:
             else:
                 error = f"未知创作模式: {params.mode}"
         except Exception as e:
-            logger.error(f"[VideoChatService] handle_user_message 失败: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"[VideoChatService] handle_user_message 失败: {e}")
             error = str(e)
 
         logger.info(
@@ -648,6 +677,14 @@ class VideoChatService:
             ratio=params.ratio,
             resolution=params.resolution,
         )
+        self._record_prompt_llm_usage(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            session_id=session_id,
+            user_input=combined_input,
+            usage=self._prompt_engine.last_usage,
+            model=params.prompt_model or "qwen-vl-max",
+        )
         # 溯源：在 model_params 中记录 source_video_file_id
         result.model_params["source_video_file_id"] = source_video_file_id
         card = await self._submit_video_generation(
@@ -665,6 +702,87 @@ class VideoChatService:
             "waiting": card.provider_status in ("PENDING", "RUNNING"),
             "error": None,
         }
+
+    # ------------------------------------------------------------------
+    # 视频提示词 LLM 独立计费（source_type=video_prompt）
+    # ------------------------------------------------------------------
+    def _record_prompt_llm_usage(
+        self,
+        tenant_id: Optional[str],
+        user_id: Optional[str],
+        session_id: str,
+        user_input: str,
+        usage: Optional[Dict[str, Any]],
+        model: Optional[str],
+    ) -> None:
+        """把视频提示词 LLM 调用独立写入 chat_records（source_type=video_prompt）
+
+        用户可能多次调整提示词后放弃创建视频，需独立计费，不与最终视频生成计费合并。
+        失败只记日志，不影响已返回的响应。
+        """
+        if not usage:
+            return
+        try:
+            prompt_tokens = int(usage.get("prompt_tokens", 0) or 0)
+            completion_tokens = int(usage.get("completion_tokens", 0) or 0)
+            total_tokens = int(usage.get("total_tokens", 0) or 0)
+            cached_input_tokens = int(usage.get("cached_tokens", 0) or 0)
+
+            credit_cost = 0.0
+            chat_bd: Dict[str, Any] = {}
+            try:
+                credit_cost, chat_bd = calculate_credit_cost_with_breakdown(
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    model=model,
+                    cached_input_tokens=cached_input_tokens,
+                )
+            except Exception as billing_err:
+                logger.error(f"视频提示词计费计算失败，credit_cost 降级为 0: {billing_err}")
+                credit_cost = 0.0
+                chat_bd = {}
+
+            usage_breakdown = {
+                "chat": {
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "cached_input_tokens": cached_input_tokens,
+                    "total_tokens": total_tokens,
+                    "model": model,
+                    "credit": round(credit_cost, 2),
+                }
+            }
+            if chat_bd:
+                usage_breakdown["chat"].update({
+                    "non_cached_input_tokens": chat_bd.get("non_cached_input_tokens", 0),
+                    "unit_prices": chat_bd.get("unit_prices", {}),
+                    "usage_factor": chat_bd.get("usage_factor"),
+                    "credits": chat_bd.get("credits", {}),
+                })
+
+            ChatRecordDB.create(
+                session_id=session_id,
+                tenant_id=tenant_id,
+                user_id=user_id,
+                user_message=user_input[:500] if user_input else None,
+                assistant_message=None,
+                total_token_count=total_tokens,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                cached_input_tokens=cached_input_tokens,
+                model=model,
+                provider="qwen",
+                source_type="video_prompt",
+                credit_cost=credit_cost,
+                usage_breakdown=usage_breakdown,
+                status="completed",
+            )
+            logger.info(
+                f"[VideoChatService] 视频提示词 LLM 计费: session={session_id}, "
+                f"tenant={tenant_id}, tokens={total_tokens}, credit={credit_cost}, model={model}"
+            )
+        except Exception as e:
+            logger.opt(exception=True).error(f"[VideoChatService] 视频提示词 LLM 计费落库失败: {e}")
 
     # ------------------------------------------------------------------
     # 工具方法
@@ -759,6 +877,23 @@ class VideoChatService:
             chat_records.id，失败返回 None
         """
         try:
+            cost_per_second = execution_details.get("cost_per_second_yuan", 0.0)
+            duration_seconds = execution_details.get("seconds", 0.0)
+            resolution = execution_details.get("resolution")
+            try:
+                usage_factor = getattr(settings.billing, "video_gen_usage_factor", 33) or 33
+            except Exception:
+                usage_factor = 33
+
+            video_breakdown = {
+                "model": model,
+                "duration_seconds": duration_seconds,
+                "resolution": resolution,
+                "unit_price_per_second": cost_per_second,
+                "usage_factor": usage_factor,
+                "credit": round(credit_cost, 2),
+            }
+
             record = ChatRecordDB.create(
                 session_id=session_id,
                 tenant_id=tenant_id,
@@ -769,10 +904,11 @@ class VideoChatService:
                 status=status,
                 source_type="video_gen",
                 credit_cost=credit_cost,
+                usage_breakdown={"video": video_breakdown},
             )
             return record.get("id") if record else None
         except Exception as e:
-            logger.error(f"[VideoChatService] 写 chat_records 失败: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"[VideoChatService] 写 chat_records 失败: {e}")
             return None
 
     def _update_chat_record_status(
@@ -823,7 +959,7 @@ class VideoChatService:
                 except Exception as cache_err:
                     logger.warning(f"退还积分后失效租户缓存失败: {cache_err}")
         except Exception as e:
-            logger.error(f"[VideoChatService] 更新 chat_records 状态失败: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"[VideoChatService] 更新 chat_records 状态失败: {e}")
 
     def _insert_prompt_library(
         self,

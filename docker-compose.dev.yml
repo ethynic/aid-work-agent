@@ -1,5 +1,6 @@
-# AID Work Agent 在线开发环境 Docker Compose 配置
-# 基于 docker-compose.prod.yml 修改，避免与生产环境端口和路径冲突
+# AID Work Agent 在线开发环境。用于各种第三方系统对接的调试，本地开发环境无法提供回调链接。发版周期是随时。
+# 注意1，本环境的数据库和在线测试环境（docker-compose.test.yml）共用一个数据库（aid_work_agent2）。
+# 注意2，本环境没有 background_runner 后台服务（如果本环境启用 background_runner，会和在线测试环境的 background_runner 处理同一个数据库的定时任务 `scheduled_tasks` 表，可能导致双触发、来回增删job等问题），本环境如果提交后台任务，会由在线测试环境的 background_runner 处理。
 
 services:
   # FastAPI 后端服务
@@ -72,16 +73,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
-    
-    # 资源限制（生产环境推荐配置）
-    deploy:
-      resources:
-        limits:
-          cpus: '2'
-          memory: 2G
-        reservations:
-          cpus: '1'
-          memory: 1G
     
     # 日志配置
     logging:

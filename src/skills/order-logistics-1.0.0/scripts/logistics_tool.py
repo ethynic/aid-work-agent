@@ -121,7 +121,7 @@ def init_tables():
             conn.commit()
             logger.info("[logistics_tool] 物流发货表初始化完成")
     except Exception as e:
-        logger.error(f"[logistics_tool] 表初始化失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"[logistics_tool] 表初始化失败: {e}")
         raise
 
 
@@ -205,7 +205,7 @@ def create_shipment(args):
             "created_at": now.isoformat(),
         }
     except Exception as e:
-        logger.error(f"创建发货记录失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"创建发货记录失败: {e}")
         return {"success": False, "error": f"创建发货记录失败: {str(e)}"}
 
 
@@ -281,7 +281,7 @@ def update_tracking(args):
             "updated_at": now.isoformat(),
         }
     except Exception as e:
-        logger.error(f"更新物流追踪失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"更新物流追踪失败: {e}")
         return {"success": False, "error": f"更新物流追踪失败: {str(e)}"}
 
 
@@ -331,7 +331,7 @@ def get_shipment(args):
             "shipment": shipment,
         }
     except Exception as e:
-        logger.error(f"查询发货详情失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"查询发货详情失败: {e}")
         return {"success": False, "error": f"查询发货详情失败: {str(e)}"}
 
 
@@ -412,7 +412,7 @@ def list_shipments(args):
             "page_size": page_size,
         }
     except Exception as e:
-        logger.error(f"查询发货列表失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"查询发货列表失败: {e}")
         return {"success": False, "error": f"查询发货列表失败: {str(e)}"}
 
 
@@ -468,7 +468,7 @@ def query_tracking(args):
             "shipment": shipment,
         }
     except Exception as e:
-        logger.error(f"查询物流追踪失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"查询物流追踪失败: {e}")
         return {"success": False, "error": f"查询物流追踪失败: {str(e)}"}
 
 
@@ -562,7 +562,7 @@ def confirm_delivery(args):
             "delivered_at": now.isoformat(),
         }
     except Exception as e:
-        logger.error(f"确认签收失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"确认签收失败: {e}")
         return {"success": False, "error": f"确认签收失败: {str(e)}"}
 
 

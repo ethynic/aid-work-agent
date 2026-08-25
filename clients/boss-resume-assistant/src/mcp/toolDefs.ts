@@ -1,12 +1,12 @@
 /**
- * 7 个 MCP tool 的契约定义（实施规格 m02 §6 / 标准 §5）。
+ * 13 个 MCP tool 的契约定义（实施规格 m02 §6 / 标准 §5 / 设计 §10.8）。
  *
  * zodShape 是 registerTool 的输入；manifest digest 用同一来源推导的 JSON Schema，
  * 保证「Host 看到的 schema」与「manifest digest 的 schema」同源（SDK 1.30.0 内部同样
  * 用 zod v4 toJSONSchema 生成 list_tools 的 inputSchema）。
  *
  * 写动作硬上限在 schema 层收紧（设计 §14）：greet 单次最大 3、accept 最大 1、reject 固定 1；
- * CLI/operation 层的上限（100）不变。
+ * resume_batch 因单份约 30 秒滚动+OCR 也收紧到 3；CLI/operation 层的上限（10）不变。
  */
 import { z } from 'zod'
 
@@ -32,7 +32,10 @@ export const TOOL_DEFS: BossToolDef[] = [
     title: '设置筛选条件',
     description:
       '在 BOSS 直聘「推荐牛人」页设置筛选面板：经验要求/学历要求/薪资待遇（替换语义，先清除残留再选）。' +
-      '写动作：会改动页面上的筛选状态。至少提供一个条件。',
+      '写动作：会改动页面上的筛选状态。至少提供一个条件。' +
+      '数值档位（经验/薪资）自动保底映射：传了页面不存在的档位时按「保下限」规则映射到最接近的真实档位' +
+      '（如要 15-30K 而页面只有 10-20K/20-50K 会选 20-50K），结果 substitutions 注明实际档位，务必向用户转述；' +
+      '建议先用 boss_filter_options 查实际档位选更准；学历等非数值选项必须精确，传错报错并列出该行全部可选档位。',
     zodShape: {
       experience: z.string().min(1).optional().describe('经验要求行选项，如 "5-10年"'),
       educations: z.array(z.string().min(1)).optional().describe('学历要求行选项（多选），如 ["本科","硕士"]'),
@@ -64,9 +67,28 @@ export const TOOL_DEFS: BossToolDef[] = [
     description:
       '在 BOSS 直聘「推荐牛人」页逐个点击「打招呼」向候选人发起沟通（外部写动作，单次最大 3 人）。' +
       '当前屏点完自动向下滚动，到底或达到 limit 结束；触发付费墙（职位无开聊权益）会立即停止并返回 PAYWALL。' +
+      '定向模式：传 names 姓名清单时先配对卡片姓名再点击，只向姓名精确匹配（trim 相等）的候选人打招呼，' +
+      '配对失败的卡片一律跳过（宁可不打，不能打错）；结果返回 greeted_names（实际打过的人）与' +
+      ' missing_names（滚到底也没找到的人），汇报时必须以此为准、绝不声称给未打的人打过招呼。' +
       '前置要求：当前在推荐牛人列表页，否则返回 WRONG_PAGE。',
     zodShape: {
-      limit: z.number().int().min(1).max(3).default(1).describe('打招呼人数上限：默认 1，单次最大 3'),
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(3)
+        .default(1)
+        .describe('打招呼人数上限：默认 1，单次最大 3；定向模式（传 names）自动取 max(limit, names 数量)，默认 1 不会截断名单'),
+      names: z
+        .array(z.string().min(1))
+        .min(1)
+        .max(3)
+        .optional()
+        .describe(
+          '定向打招呼：候选人姓名清单（1-3 个，精确匹配卡片上的姓名）。' +
+            '推荐/筛选后向指定候选人打招呼必须传（列表顺序与名单顺序不保证一致，不传会打错人）；' +
+            '姓名配对失败的卡片一律跳过，打给谁以返回的 greeted_names 为准',
+        ),
     },
     annotations: { title: '打招呼', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   },
@@ -101,6 +123,103 @@ export const TOOL_DEFS: BossToolDef[] = [
       remark: z.string().min(1).max(140).optional().describe('备注内容（缺省用默认文案，表单上限 140 字）'),
     },
     annotations: { title: '约面试表单填充演示', readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+  },
+  {
+    name: 'boss_send_to',
+    title: '搜索找人并发送消息',
+    description:
+      '在 BOSS 直聘「沟通」页搜索联系人姓名 → 进入对话 → 逐字输入消息并发送（外部写动作）。' +
+      '默认真发送；dry_run=true 时只输入不点发送（测试链路）。' +
+      '前置要求：当前在沟通页（不在时自动跳转）；搜索结果中存在该姓名的联系人，否则报错。',
+    zodShape: {
+      to: z.string().min(1).describe('联系人姓名（搜索关键词）'),
+      message: z.string().min(1).describe('要发送的消息内容'),
+      dry_run: z.boolean().default(false).describe('只输入不点发送（测试链路，默认 false 真发送）'),
+    },
+    annotations: { title: '搜索找人并发送消息', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  },
+  {
+    name: 'boss_send_current',
+    title: '向当前会话发送消息',
+    description:
+      '在 BOSS 直聘「沟通」页向当前已选中的会话逐字输入消息并发送（外部写动作）。' +
+      '默认真发送；dry_run=true 时只输入不点发送（测试链路）。' +
+      '前置要求：当前在沟通页且已选中一个会话（右侧面板有发送按钮），否则返回 WRONG_PAGE（请先选会话）。',
+    zodShape: {
+      message: z.string().min(1).describe('要发送的消息内容'),
+      dry_run: z.boolean().default(false).describe('只输入不点发送（测试链路，默认 false 真发送）'),
+    },
+    annotations: { title: '向当前会话发送消息', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  },
+  {
+    name: 'boss_list_jobs',
+    title: '列出当前招聘者所有职位',
+    description:
+      '在 BOSS 直聘「推荐牛人」页打开职位下拉，解析并返回当前招聘者的全部职位列表（职位名/城市/薪资/点击坐标/是否待开放）。' +
+      '只读：不改变任何职位状态（但会借用真实鼠标点开下拉，操作期间勿动鼠标）。' +
+      '每个职位标注 pending（待开放/未发布，项右侧有「待」徽章）——切到待开放职位会导致页面异常，select-job 会拒绝这类职位。' +
+      '用于在 select-job 前确认精确职位名（用户口述的职位名可能不精确）。前置要求：当前在推荐牛人页，否则返回 WRONG_PAGE。',
+    zodShape: {},
+    annotations: { title: '列出当前招聘者所有职位', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  {
+    name: 'boss_select_job',
+    title: '切换当前招聘职位',
+    description:
+      '在 BOSS 直聘「推荐牛人」页切换当前招聘职位到指定职位名（精确匹配，外部写动作）。' +
+      'job_name 必须是 list-jobs 返回的精确职位名（CLI 内部不做模糊匹配，匹配 0 或多个都报错）。' +
+      '若目标职位待开放（pending=true），点击前直接拒绝（切到未发布职位会致页面异常），请改选已开放职位。' +
+      '前置要求：当前在推荐牛人页，否则返回 WRONG_PAGE。切换后会校验职位框文本已变更，未生效则报错。',
+    zodShape: {
+      job_name: z.string().min(1).describe('目标职位名（精确，用 list-jobs 查看，如 "PHP开发工程师"）'),
+    },
+    annotations: { title: '切换当前招聘职位', readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  {
+    name: 'boss_filter_options',
+    title: '查询筛选可选档位',
+    description:
+      '只读探查 BOSS 直聘「推荐牛人」页筛选面板的全部可选档位（经验要求/学历要求/薪资待遇各行选项），' +
+      '读完后自动收起面板还原页面。用于把用户口语化的筛选要求（如 15k-20k、5年以上、本科及以上）' +
+      '映射成页面实际存在的精确档位，再调 boss_filter。前置要求：当前在推荐牛人页，否则返回 WRONG_PAGE。' +
+      '开/收面板借用真实鼠标约 2 秒，期间勿动鼠标。',
+    zodShape: {},
+    annotations: { title: '查询筛选可选档位', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  {
+    name: 'boss_resume_detail',
+    title: '读取候选人简历详情入库',
+    description:
+      '读取 BOSS 直聘当前打开的候选人在线简历详情（推荐牛人页或沟通页均可，前提已点开候选人详情，否则 WRONG_PAGE）。' +
+      '简历是 canvas 像素渲染（DOM 抓不到文字），通过「滚动分段截图 → 重叠拼接 → Windows OCR」提取。' +
+      '结果按简历库契约返回：candidate_name（入参优先，缺省从 OCR 首行自动识别，识别失败报错）、' +
+      'job_name（推荐页当前招聘职位）、ocr_text 全文（Windows OCR 水平，可能含 ~20% 错字）、' +
+      'images 拼接长图 base64（供云端入库，图片绝不进对话上下文）。' +
+      '只读：无外部写副作用；但滚动借用真实鼠标约 1-2 秒，操作期间勿动鼠标、勿遮挡 Chrome 窗口。' +
+      '可选 save_image_to 保存拼接长图（PNG）。',
+    zodShape: {
+      candidate_name: z.string().min(1).max(30).optional().describe(
+        '候选人姓名（会话上下文已知时建议传入，更可靠）；缺省从 OCR 首行自动识别，识别失败报错要求传参',
+      ),
+      save_image_to: z.string().min(1).optional().describe('可选：拼接长图保存路径（PNG）；缺省不保留图片'),
+    },
+    annotations: { title: '读取候选人简历详情入库', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  {
+    name: 'boss_resume_batch',
+    title: '批量读取牛人简历入库',
+    description:
+      '在 BOSS 直聘「推荐牛人」页逐个点开当前视口的牛人卡片 → 读取在线简历（滚动分段截图拼接 OCR）→ 自动关闭 → 下一份。' +
+      '结果 resumes 数组按简历库契约返回（candidate_name 从卡片行 DOM 配对，失败用 OCR 首行启发式兜底；job_name 取当前招聘职位；' +
+      '含 ocr_text 全文与拼接长图 base64），云端自动逐份存入简历库，只返回紧凑摘要。' +
+      '单份失败（打开超时/读取失败/姓名无法确定）记入 failures 后继续下一份。' +
+      '前置要求：当前在推荐牛人列表页，否则返回 WRONG_PAGE。' +
+      '只读：无外部写副作用；但每份简历滚动借用真实鼠标约 30 秒，操作期间勿动鼠标、勿遮挡 Chrome 窗口。',
+    zodShape: {
+      limit: z.number().int().min(1).max(3).default(1).describe('读取份数上限：默认 1，单次最大 3（每份约 30 秒滚动+OCR）'),
+      save_dir: z.string().min(1).optional().describe('可选：拼接长图保存目录（每份存 <姓名>.png）；缺省不保留图片'),
+    },
+    annotations: { title: '批量读取牛人简历入库', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
 ]
 

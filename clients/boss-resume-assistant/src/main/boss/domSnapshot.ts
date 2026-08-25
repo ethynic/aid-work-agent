@@ -22,6 +22,8 @@ export interface DomDocument {
     contentDocumentIndex: SparseOrDense<number>
     /** DOMSnapshot 恒返回的父节点索引（nodeIndex → parent nodeIndex），探针的容器级消歧用 */
     parentIndex?: SparseOrDense<number>
+    /** 节点标签名（指向 strings 的下标，大写如 'INPUT'）；按元素类型过滤用（如定位无文本的搜索框 INPUT） */
+    nodeName?: SparseOrDense<number>
   }
   layout: {
     nodeIndex: number[]

@@ -61,7 +61,7 @@ async def get_email_settings(current_user: dict = Depends(get_current_user)):
         return {"success": True, "data": safe_config, "bound": True}
 
     except Exception as e:
-        logger.error(f"获取邮箱配置失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"获取邮箱配置失败: {e}")
         return {"success": False, "error": "获取邮箱配置失败"}
 
 
@@ -97,10 +97,11 @@ async def save_email_settings(
         )
 
         # 2. 发送测试邮件给自己
-        from src.tools.email.email_tool import EmailSendTool
+        from src.tools.email.email_tool import EmailProcessTool
 
-        test_tool = EmailSendTool(test_email)
+        test_tool = EmailProcessTool(test_email)
         test_result = await test_tool.execute(
+            action="send",
             to=request.email_address,
             subject="邮箱绑定测试 - AID Work Agent",
             body=f"这是一封测试邮件，用于验证您的邮箱配置是否正确。\n\n如果您看到了这封邮件，说明配置成功！\n\n发送时间: {__import__('datetime').datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
@@ -125,7 +126,7 @@ async def save_email_settings(
         }
 
     except Exception as e:
-        logger.error(f"保存邮箱配置失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"保存邮箱配置失败: {e}")
         return {"success": False, "error": f"保存邮箱配置失败: {str(e)}"}
 
 
@@ -146,5 +147,5 @@ async def delete_email_settings(current_user: dict = Depends(get_current_user)):
         return {"success": True, "message": "邮箱配置已删除"}
 
     except Exception as e:
-        logger.error(f"删除邮箱配置失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"删除邮箱配置失败: {e}")
         return {"success": False, "error": "删除邮箱配置失败"}

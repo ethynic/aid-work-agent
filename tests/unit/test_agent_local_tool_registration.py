@@ -3,7 +3,9 @@
 覆盖（对应 m05-implementation-spec.md §7）：
 - master agent 注册表无 boss 工具
 - inherit=true 子智能体无 boss 工具
-- recruiting-operator 配置下 7 个 boss 工具齐全且只有这 7 个
+- recruiting-operator 配置下 16 个 boss 工具齐全且只有这 16 个
+  （Phase 3 新增 boss_list_jobs / boss_select_job / boss_jobs_list；
+  面试通知 Phase 1 新增 boss_interview_notify）
 - SUBAGENT.md 加载：frontmatter 解析正确、system_prompt 取 body
   （防 architecture.md 记录的「frontmatter 未闭合导致静默不加载」陷阱）
 """
@@ -17,6 +19,16 @@ pytestmark = pytest.mark.unit
 
 SUBAGENTS_DIR = Path(__file__).parent.parent.parent / "subagents"
 
+from src.local_tools.manifest import LOCAL_PROXY_TOOL_NAMES as _MANIFEST_NAMES
+
+
+def test_manifest_matches_proxy_tool_classes():
+    """manifest.py 静态清单必须与 LOCAL_PROXY_TOOL_CLASSES 完全一致——
+    新增代理工具漏更 manifest 会导致装配（tools/assembly.py）不注册（2026-08-19 合并时踩过）"""
+    from src.local_tools.proxy_tool import LOCAL_PROXY_TOOL_CLASSES
+    assert _MANIFEST_NAMES == {c.name for c in LOCAL_PROXY_TOOL_CLASSES}
+
+
 BOSS_TOOLS = {
     "boss_filter",
     "boss_clear_filter",
@@ -25,6 +37,15 @@ BOSS_TOOLS = {
     "boss_accept_resume",
     "boss_reject_current",
     "boss_interview_demo",
+    "boss_interview_notify",
+    "boss_list_jobs",
+    "boss_select_job",
+    "boss_jobs_list",
+    "boss_resume_detail",
+    "boss_resume_batch",
+    "boss_send_to",
+    "boss_send_current",
+    "boss_filter_options",
 }
 
 
@@ -71,8 +92,11 @@ class TestLocalToolVisibility:
         agent = _make_agent(is_master=False, config=config)
         assert not (set(agent.tool_registry._tools.keys()) & BOSS_TOOLS)
 
-    def test_recruiting_operator_has_exactly_seven_boss_tools(self):
-        """recruiting-operator 配置下：7 个 boss 工具齐全且只有这 7 个"""
+    def test_recruiting_operator_has_exactly_sixteen_boss_tools(self):
+        """recruiting-operator 配置下：16 个 boss 工具齐全且只有这 16 个
+
+        boss_jobs_list / boss_interview_notify 为混合模式（云端执行逻辑 + 代理注册），同样以 LOCAL_REQUIRED 注册
+        """
         config = _load_recruiting_config()
         agent = _make_agent(is_master=False, config=config)
         assert set(agent.tool_registry._tools.keys()) == BOSS_TOOLS

@@ -83,6 +83,27 @@ def parse_kf_message(msg: Dict[str, Any]) -> UnifiedMessage:
     )
 
 
+# 微信客服仅处理文字 + 语音消息；图片/视频/文件等附件消息即使转发给
+# 智能体也无法识别，会产生"看不了视频"等无效回复消耗积分，渠道层直接过滤
+_PROCESSABLE_KF_MESSAGE_TYPES = ("text", "voice")
+
+
+def should_process_kf_message(msgtype: str) -> bool:
+    """判断微信客服消息类型是否需要交给智能体处理。
+
+    Args:
+        msgtype: 微信客服 sync_msg 的 msgtype 字段
+
+    Returns:
+        True 表示需要处理（text/voice），False 表示应在渠道层过滤
+    """
+    return msgtype in _PROCESSABLE_KF_MESSAGE_TYPES
+
+
+# 拦截非文字/语音消息时回复客户的固定话术
+KF_FILTER_HINT_MESSAGE = "我无法识别该类型文件，请用文字或语音描述您的需求。"
+
+
 def markdown_to_plain_text(md: str) -> str:
     """
     将 markdown 转为纯文本，适配微信客服 text 消息。

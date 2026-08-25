@@ -162,7 +162,7 @@ def init_tables():
             conn.commit()
             logger.info("[inventory_tool] 库存管理表初始化完成")
     except Exception as e:
-        logger.error(f"[inventory_tool] 表初始化失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"[inventory_tool] 表初始化失败: {e}")
         raise
 
 
@@ -230,7 +230,7 @@ def create_product(args):
             "created_at": now.isoformat(),
         }
     except Exception as e:
-        logger.error(f"创建商品失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"创建商品失败: {e}")
         return {"success": False, "error": f"创建商品失败: {str(e)}"}
 
 
@@ -307,7 +307,7 @@ def get_product(args):
             "inventory": inventory,
         }
     except Exception as e:
-        logger.error(f"查询商品详情失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"查询商品详情失败: {e}")
         return {"success": False, "error": f"查询商品详情失败: {str(e)}"}
 
 
@@ -389,7 +389,7 @@ def list_products(args):
             "page_size": page_size,
         }
     except Exception as e:
-        logger.error(f"查询商品列表失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"查询商品列表失败: {e}")
         return {"success": False, "error": f"查询商品列表失败: {str(e)}"}
 
 
@@ -457,7 +457,7 @@ def update_product(args):
             "updated_at": now.isoformat(),
         }
     except Exception as e:
-        logger.error(f"更新商品失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"更新商品失败: {e}")
         return {"success": False, "error": f"更新商品失败: {str(e)}"}
 
 
@@ -509,7 +509,7 @@ def check_stock(args):
             "last_synced_at": row[6].isoformat() if row[6] else None,
         }
     except Exception as e:
-        logger.error(f"查询库存失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"查询库存失败: {e}")
         return {"success": False, "error": f"查询库存失败: {str(e)}"}
 
 
@@ -594,7 +594,7 @@ def reserve_stock(args):
             "created_at": now.isoformat(),
         }
     except Exception as e:
-        logger.error(f"预留库存失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"预留库存失败: {e}")
         return {"success": False, "error": f"预留库存失败: {str(e)}"}
 
 
@@ -662,7 +662,7 @@ def commit_reservation(args):
             "updated_at": now.isoformat(),
         }
     except Exception as e:
-        logger.error(f"提交预留失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"提交预留失败: {e}")
         return {"success": False, "error": f"提交预留失败: {str(e)}"}
 
 
@@ -720,7 +720,7 @@ def release_reservation(args):
             "updated_at": now.isoformat(),
         }
     except Exception as e:
-        logger.error(f"释放预留失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"释放预留失败: {e}")
         return {"success": False, "error": f"释放预留失败: {str(e)}"}
 
 
@@ -785,7 +785,7 @@ def update_stock(args):
             "updated_at": now.isoformat(),
         }
     except Exception as e:
-        logger.error(f"调整库存失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"调整库存失败: {e}")
         return {"success": False, "error": f"调整库存失败: {str(e)}"}
 
 
@@ -857,7 +857,7 @@ def sync_from_external(args):
 
         return result
     except Exception as e:
-        logger.error(f"外部库存同步失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"外部库存同步失败: {e}")
         return {"success": False, "error": f"外部库存同步失败: {str(e)}"}
 
 
@@ -924,7 +924,7 @@ def list_low_stock(args):
             "page_size": page_size,
         }
     except Exception as e:
-        logger.error(f"查询低库存预警失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"查询低库存预警失败: {e}")
         return {"success": False, "error": f"查询低库存预警失败: {str(e)}"}
 
 

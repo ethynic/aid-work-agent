@@ -207,8 +207,9 @@ class SubagentExecutor:
         if image_paths:
             logger.info(f"[SUBAGENT] image_paths: {image_paths}")
 
-        # 获取配置
-        config = self.registry.get(subagent_name)
+        # 获取配置（自定义智能体实时读库，确保跨 worker 配置一致）
+        from src.subagents.factory import AgentFactory
+        config = AgentFactory.get_runtime_config(self.registry, subagent_name)
         if not config:
             logger.error(f"[SUBAGENT] Subagent not found: {subagent_name}")
             return DelegationResponse(
@@ -261,13 +262,6 @@ class SubagentExecutor:
         )
         self._subagent_instances[execution_id] = subagent_instance
         logger.info(f"[SUBAGENT] Subagent Agent instance created")
-
-        # 设置子智能体邮件工具的 user_id（使工具能从数据库读取用户邮箱配置）
-        if user_id:
-            for tool_name in ("email_send", "email_read", "email_list_folders", "browser_automation"):
-                tool = subagent_instance.tool_registry.get_tool(tool_name)
-                if tool and hasattr(tool, 'set_user_id'):
-                    tool.set_user_id(user_id)
 
         # 在子线程启动执行
         async_task = asyncio.create_task(
@@ -355,7 +349,7 @@ class SubagentExecutor:
                     raise
                 except Exception as e:
                     exec_duration = time.time() - exec_start_time
-                    logger.error(f"[SUBAGENT] execute_as_subagent FAILED, execution_id={record.execution_id}, duration={exec_duration:.2f}s, error: {e}", exc_info=True)
+                    logger.opt(exception=True).error(f"[SUBAGENT] execute_as_subagent FAILED, execution_id={record.execution_id}, duration={exec_duration:.2f}s, error: {e}")
                     raise
 
                 # 更新结果
@@ -452,7 +446,7 @@ class SubagentExecutor:
             
         except Exception as e:
             wait_duration = time.time() - wait_start
-            logger.error(f"[SUBAGENT] wait_for_result ERROR, execution_id={execution_id}, duration={wait_duration:.2f}s, error: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"[SUBAGENT] wait_for_result ERROR, execution_id={execution_id}, duration={wait_duration:.2f}s, error: {e}")
             raise
         
         logger.warning(f"[SUBAGENT] Wait for result timed out: {execution_id}")

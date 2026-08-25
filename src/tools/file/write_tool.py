@@ -191,19 +191,17 @@ def _strip_code_fences(content: str) -> str:
 
 
 def _resolve_upload_dir(tenant_id: Optional[str], user_id: Optional[str]) -> Path:
-    """根据 tenant_id 和 user_id 确定文件存储目录"""
-    from src.main import UPLOAD_DIR
+    """根据 tenant_id 确定文件存储目录（遵循租户附件存储规范）
 
-    if tenant_id and user_id:
-        upload_dir = UPLOAD_DIR / tenant_id / user_id
-    elif tenant_id:
-        upload_dir = UPLOAD_DIR / tenant_id
-    elif user_id:
-        upload_dir = UPLOAD_DIR / user_id
-    else:
-        upload_dir = UPLOAD_DIR / "conversation"
-    upload_dir.mkdir(parents=True, exist_ok=True)
-    return upload_dir
+    路径: storage/tenants/{tenant_id}/conversation/
+    无 tenant_id: storage/tenants/_anonymous/conversation/
+
+    user_id 不进入路径，避免目录碎片化。
+    """
+    from src.core.storage import ensure_tenant_storage_dir
+    tid = tenant_id or "_anonymous"
+    _ = user_id  # 保留参数兼容性，但不进路径
+    return Path(ensure_tenant_storage_dir(tid, "conversation"))
 
 
 # ---------------------------------------------------------------------------
@@ -240,16 +238,6 @@ display_name 必须使用用户能理解的业务文件名，不要使用工具�
     InputModel = WriteInput
 
     usage_guide = ""
-
-    def __init__(self) -> None:
-        self._user_id: Optional[str] = None
-        self._tenant_id: Optional[str] = None
-
-    def set_user_id(self, user_id: str) -> None:
-        self._user_id = user_id
-
-    def set_tenant_id(self, tenant_id: str) -> None:
-        self._tenant_id = tenant_id
 
     def get_display_name(self, tool_args: Optional[Dict[str, Any]] = None) -> str:
         base = self.display_name
@@ -342,6 +330,13 @@ display_name 必须使用用户能理解的业务文件名，不要使用工具�
 
         response = await llm_gateway.chat(
             messages=messages, temperature=0.7, max_tokens=65536
+        )
+
+        from src.services.session_record import record_background_llm_usage
+        record_background_llm_usage(
+            response.get("usage") if isinstance(response, dict) else None,
+            source="write_tool",
+            model=llm_gateway.get_model_name(),
         )
 
         if isinstance(response, dict):
