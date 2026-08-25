@@ -778,7 +778,7 @@ async function handleKfSubmit() {
     subagent_type: kfForm.value.subagent_type || undefined,
     welcome_message: kfForm.value.welcome_message || undefined,
     allow_agent_transfer: kfForm.value.allow_agent_transfer,
-    expire_at: kfForm.value.expire_at || undefined,
+    expire_at: kfForm.value.expire_at || null,
     credit_limit: kfForm.value.credit_limit === '' ? 0 : Number(kfForm.value.credit_limit) || 0,
     qr_title: kfForm.value.qr_title || undefined,
   }
