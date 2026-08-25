@@ -35,10 +35,10 @@ router = APIRouter(prefix="/api/saas/wecom-kf", tags=["微信客服账号管理"
 
 # ============== 常量 ==============
 
-MAX_AVATAR_BYTES = 2 * 1024 * 1024  # 头像上限 2MB
+MAX_AVATAR_BYTES = 1 * 1024 * 1024  # 头像上限 1MB
 _AVATAR_SUFFIXES = (".png", ".jpg", ".jpeg")
 _DEFAULT_CREDIT_LIMIT = 0  # 0 = 不限
-MAX_EMPLOYEE_QR_BYTES = 2 * 1024 * 1024  # 顾问二维码上限 2MB
+MAX_EMPLOYEE_QR_BYTES = 1 * 1024 * 1024  # 顾问二维码上限 1MB
 
 # 校验时直接复用 prompts.py 里的固定话术，避免两处定义漂移
 from src.channels.wecom_kf.prompts import MSG_EXPIRED, MSG_CREDIT_EXHAUSTED  # noqa: E402,F401
@@ -153,7 +153,7 @@ def _decode_employee_qr(employee_qr_base64: Optional[str]) -> Optional[bytes]:
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"顾问二维码 base64 解码失败: {e}")
     if len(data) > MAX_EMPLOYEE_QR_BYTES:
-        raise HTTPException(status_code=400, detail="顾问二维码图片超过 2MB 限制")
+        raise HTTPException(status_code=400, detail=f"顾问二维码图片超过 {MAX_EMPLOYEE_QR_BYTES // 1024 // 1024}MB 限制")
     is_png = data[:8] == b"\x89PNG\r\n\x1a\n"
     is_jpeg = data[:3] == b"\xff\xd8\xff"
     if not (is_png or is_jpeg):

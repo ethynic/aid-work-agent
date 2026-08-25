@@ -704,10 +704,17 @@ function resetKfFormForCreate() {
   kfFormError.value = ''
 }
 
+const MAX_IMAGE_BYTES = 1024 * 1024  // 头像/顾问二维码上传上限 1MB
+
 function handleAvatarUpload(event: Event) {
   const target = event.target as HTMLInputElement
   const file = target.files?.[0]
   if (!file) return
+  if (file.size > MAX_IMAGE_BYTES) {
+    kfFormError.value = '头像图片不能超过 1MB'
+    target.value = ''
+    return
+  }
   const reader = new FileReader()
   reader.onload = () => {
     const dataUrl = String(reader.result || '')
@@ -724,6 +731,11 @@ function handleEmployeeQrUpload(event: Event) {
   const target = event.target as HTMLInputElement
   const file = target.files?.[0]
   if (!file) return
+  if (file.size > MAX_IMAGE_BYTES) {
+    kfFormError.value = '顾问二维码图片不能超过 1MB'
+    target.value = ''
+    return
+  }
   const reader = new FileReader()
   reader.onload = () => {
     const dataUrl = String(reader.result || '')

@@ -35,7 +35,7 @@
           删除
         </BaseButton>
       </div>
-      <p class="text-xs text-muted">建议尺寸 200x200，支持 JPG/PNG/WebP/SVG，≤2MB</p>
+      <p class="text-xs text-muted">建议尺寸 200x200，支持 JPG/PNG/WebP/SVG，≤1MB</p>
     </div>
 
     <!-- 隐藏的文件输入 -->
@@ -69,7 +69,7 @@ const uploading = ref(false)
 
 // 允许的扩展名（与后端 _LOGO_ALLOWED_EXTS 一致）
 const ALLOWED_EXTS = ['.jpg', '.jpeg', '.png', '.webp', '.svg']
-const MAX_SIZE = 2 * 1024 * 1024  // 2MB
+const MAX_SIZE = 1 * 1024 * 1024  // 1MB
 
 // 监听 modelValue 变化，更新预览 URL
 watch(
