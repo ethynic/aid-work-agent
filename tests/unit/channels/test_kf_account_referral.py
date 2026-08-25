@@ -399,6 +399,148 @@ class TestKfAccountUtils:
         assert not _is_account_not_exists({"errcode": -1, "errmsg": "system error"})
 
 
+class TestKfAvatarPersistence:
+    """客服头像本地持久化（avatar_file_id）：创建/编辑注册到 ImageRegistry，视图回显"""
+
+    def test_to_account_view_returns_avatar(self):
+        """_to_account_view 返回 avatar_file_id / avatar_download_url（编辑弹框回显依据）"""
+        from src.saas.api.wecom_kf_account import _to_account_view
+
+        kf = {"open_kfid": "wk_1", "name": "高老师", "avatar_file_id": "file_abc"}
+        view = _to_account_view(kf, "t1", "cfg_a")
+        assert view["avatar_file_id"] == "file_abc"
+        assert view["avatar_download_url"] == "/api/files/file_abc/download"
+
+    def test_to_account_view_avatar_empty_when_missing(self):
+        """本地无 avatar_file_id（历史账号/走 logo 兜底）时，头像字段为空"""
+        from src.saas.api.wecom_kf_account import _to_account_view
+
+        kf = {"open_kfid": "wk_1", "name": "高老师"}
+        view = _to_account_view(kf, "t1", "cfg_a")
+        assert view["avatar_file_id"] is None
+        assert view["avatar_download_url"] == ""
+
+    @pytest.mark.asyncio
+    async def test_create_with_avatar_registers_local(self):
+        """创建账号带自定义头像时，注册本地 avatar_file_id 并写入配置"""
+        from src.saas.api.wecom_kf_account import KfAccountCreate, create_kf_account
+
+        cfg = {"config_id": "cfg_a", "config": {"kf_account": []}}
+        adapter = MagicMock()
+        adapter.api_client = MagicMock()
+        adapter.api_client.account_add = AsyncMock(return_value={"errcode": 0, "open_kfid": "wk_ava"})
+        adapter.api_client.add_contact_way = AsyncMock(
+            return_value={"errcode": 0, "url": "https://work.weixin.qq.com/kfid/wk_ava"}
+        )
+        mock_update = MagicMock(return_value=True)
+        mock_register = AsyncMock(return_value="file_ava")
+        patches = [
+            patch("src.saas.api.wecom_kf_account.settings.saas.enabled", True),
+            patch(
+                "src.saas.api.wecom_kf_account.require_admin",
+                return_value={"tenant_id": "t1", "user_id": "u1"},
+            ),
+            patch(
+                "src.saas.api.wecom_kf_account.ChannelConfigDB.list_by_tenant",
+                return_value=[cfg],
+            ),
+            patch(
+                "src.saas.api.wecom_kf_account.ChannelFactory.create_from_tenant_config",
+                AsyncMock(return_value=(adapter, "cfg_a", None)),
+            ),
+            patch(
+                "src.saas.api.wecom_kf_account._decode_avatar",
+                AsyncMock(return_value=b"\x89PNG\r\n\x1a\nfake-avatar"),
+            ),
+            patch(
+                "src.saas.api.wecom_kf_account._resolve_avatar_media_id",
+                AsyncMock(return_value="MEDIA_1"),
+            ),
+            patch("src.saas.api.wecom_kf_account._register_avatar", mock_register),
+            patch(
+                "src.saas.api.wecom_kf_account._build_qr_data_url",
+                return_value="data:image/png;base64,xxx",
+            ),
+            patch("src.saas.api.wecom_kf_account.ChannelConfigDB.update", mock_update),
+            patch(
+                "src.saas.api.wecom_kf_account.ChannelFactory.invalidate_adapter",
+                AsyncMock(),
+            ),
+        ]
+        body = KfAccountCreate(
+            config_id="cfg_a", name="高老师", tenant_user_id="u1",
+            avatar_base64="cG5n", allow_agent_transfer=True,
+        )
+        with (
+            patches[0], patches[1], patches[2], patches[3], patches[4],
+            patches[5], patches[6], patches[7], patches[8], patches[9],
+        ):
+            await create_kf_account(MagicMock(), body)
+
+        mock_register.assert_awaited_once()
+        new_kf = mock_update.call_args.args[1]["kf_account"][-1]
+        assert new_kf["avatar_file_id"] == "file_ava"
+
+    @pytest.mark.asyncio
+    async def test_update_avatar_registers_and_cleans_old(self):
+        """编辑头像时注册新 file_id、清理旧 file_id，且企微 account_update 被调用"""
+        from src.saas.api.wecom_kf_account import KfAccountUpdate, update_kf_account
+
+        kf = {"open_kfid": "wk_1", "name": "高老师", "avatar_file_id": "file_old"}
+        config_dict = {"kf_account": [kf]}
+        adapter = MagicMock()
+        adapter.api_client = MagicMock()
+        adapter.api_client.account_update = AsyncMock(return_value={"errcode": 0})
+        mock_update = MagicMock()
+        mock_register = AsyncMock(return_value="file_new")
+        mock_clean = AsyncMock()
+        patches = [
+            patch("src.saas.api.wecom_kf_account.settings.saas.enabled", True),
+            patch(
+                "src.saas.api.wecom_kf_account.require_admin",
+                return_value={"tenant_id": "t1", "user_id": "u1"},
+            ),
+            patch(
+                "src.saas.api.wecom_kf_account._find_kf_entry",
+                return_value=("cfg_a", config_dict, kf),
+            ),
+            patch(
+                "src.saas.api.wecom_kf_account.ChannelFactory.create_from_tenant_config",
+                AsyncMock(return_value=(adapter, "cfg_a", None)),
+            ),
+            patch(
+                "src.saas.api.wecom_kf_account._decode_avatar",
+                AsyncMock(return_value=b"\x89PNG\r\n\x1a\nfake-avatar"),
+            ),
+            patch(
+                "src.saas.api.wecom_kf_account._resolve_avatar_media_id",
+                AsyncMock(return_value="MEDIA_NEW"),
+            ),
+            patch("src.saas.api.wecom_kf_account._register_avatar", mock_register),
+            patch("src.saas.api.wecom_kf_account._cleanup_avatar", mock_clean),
+            patch("src.saas.api.wecom_kf_account.ChannelConfigDB.update", mock_update),
+            patch(
+                "src.saas.api.wecom_kf_account.ChannelFactory.invalidate_adapter",
+                AsyncMock(),
+            ),
+            patch(
+                "src.saas.api.wecom_kf_account._to_account_view",
+                return_value={},
+            ),
+        ]
+        body = KfAccountUpdate(name="高老师", avatar_base64="cG5n")
+        with (
+            patches[0], patches[1], patches[2], patches[3], patches[4],
+            patches[5], patches[6], patches[7], patches[8], patches[9], patches[10],
+        ):
+            await update_kf_account(MagicMock(), "wk_1", body)
+
+        adapter.api_client.account_update.assert_awaited_once()
+        mock_register.assert_awaited_once()
+        mock_clean.assert_awaited_once_with("file_old")
+        assert kf["avatar_file_id"] == "file_new"
+
+
 # ============ 6. create_kf_account 目标渠道定位（同租户多条 wecom_kf 配置） ============
 
 

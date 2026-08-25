@@ -629,6 +629,7 @@ function kfViewToStorage(acc: any) {
   if (acc.welcome_message) out.welcome_message = acc.welcome_message
   if (acc.servicer_userid_list?.length) out.servicer_userid_list = acc.servicer_userid_list
   if (acc.employee_qr_file_id) out.employee_qr_file_id = acc.employee_qr_file_id
+  if (acc.avatar_file_id) out.avatar_file_id = acc.avatar_file_id
   return out
 }
 
@@ -687,7 +688,7 @@ function openKfAccountEdit(ch: any, acc: any) {
     scene: acc.scene || '',
     contact_url: acc.contact_url || '',
     avatar_base64: '',
-    avatarPreview: '',
+    avatarPreview: acc.avatar_download_url || '',
     employee_qr_base64: '',
     employeeQrPreview: acc.employee_qr_download_url || '',
   }

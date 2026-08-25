@@ -214,6 +214,59 @@ async def _cleanup_employee_qr(file_id: Optional[str]) -> None:
         logger.warning(f"[wecom-kf] 顾问二维码清理失败 file_id={file_id}: {e}")
 
 
+async def _register_avatar(tenant_id: str, avatar_bytes: bytes, user_id: str) -> str:
+    """将客服头像 bytes 注册到 ImageRegistry，返回 file_id（本地持久化，供编辑弹框回显）。
+
+    与顾问二维码同策略：source="user_upload", usage="attachment", 永久 TTL，
+    账号删除时由 _cleanup_avatar 主动清理。
+    """
+    suffix = ".png" if avatar_bytes[:8] == b"\x89PNG\r\n\x1a\n" else ".jpg"
+    from src.core.storage import ensure_tenant_storage_dir, get_tenant_storage_abs_path
+
+    ensure_tenant_storage_dir(tenant_id, "temp")
+    tmp_path = get_tenant_storage_abs_path(tenant_id, "temp", f"_kf_avatar_{uuid.uuid4().hex[:8]}{suffix}")
+    try:
+        with open(tmp_path, "wb") as f:
+            f.write(avatar_bytes)
+        # PERMANENT_TTL 是 ImageRegistry 类属性，不是模块级导出，必须从类上取
+        from src.core.image_asset import ImageRegistry, get_image_registry
+
+        ref = await get_image_registry().register(
+            source_path=tmp_path,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            display_name="客服头像",
+            source="user_upload",
+            usage="attachment",
+            ttl_seconds=ImageRegistry.PERMANENT_TTL,
+        )
+        return ref.file_id
+    finally:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+
+
+async def _cleanup_avatar(file_id: Optional[str]) -> None:
+    """删除客服头像图片资产（磁盘文件 + Redis 元数据）。失败仅告警不阻断主流程。"""
+    if not file_id:
+        return
+    try:
+        from src.core.redis_client import redis_client
+        from src.core.image_asset import get_image_registry
+
+        registry = get_image_registry()
+        ref = await registry.get_ref_by_file_id(file_id)
+        if ref:
+            path = await registry.resolve_local_path(ref)
+            path.unlink(missing_ok=True)
+        redis_client.delete(redis_client.make_key("uploaded_file", file_id))
+        logger.info(f"[wecom-kf] 客服头像已清理: file_id={file_id}")
+    except Exception as e:
+        logger.warning(f"[wecom-kf] 客服头像清理失败 file_id={file_id}: {e}")
+
+
 async def _upload_avatar_bytes(api_client, avatar_bytes: bytes) -> str:
     """将头像 bytes 写入临时文件并上传企微，返回 media_id。"""
     suffix = ".png" if avatar_bytes[:8] == b"\x89PNG\r\n\x1a\n" else ".jpg"
@@ -332,6 +385,12 @@ def _to_account_view(kf: Dict[str, Any], tenant_id: str, config_id: str) -> Dict
         "servicer_userid_list": kf.get("servicer_userid_list", []),
         "allow_agent_transfer": kf.get("allow_agent_transfer", True),
         "qr_data_url": _build_qr_data_url(kf.get("contact_url", "")),
+        "avatar_file_id": kf.get("avatar_file_id"),
+        "avatar_download_url": (
+            f"/api/files/{kf['avatar_file_id']}/download"
+            if kf.get("avatar_file_id")
+            else ""
+        ),
         "employee_qr_file_id": kf.get("employee_qr_file_id"),
         "employee_qr_download_url": (
             f"/api/files/{kf['employee_qr_file_id']}/download"
@@ -429,6 +488,11 @@ async def create_kf_account(request: Request, body: KfAccountCreate):
         new_kf["welcome_message"] = body.welcome_message
     if body.servicer_userid_list:
         new_kf["servicer_userid_list"] = body.servicer_userid_list
+    # 头像本地持久化：仅管理员自定义上传时注册（走租户 logo / 默认占位兜底时不落本地）
+    if avatar_bytes:
+        new_kf["avatar_file_id"] = await _register_avatar(
+            tenant_id, avatar_bytes, admin.get("user_id", "")
+        )
     if body.employee_qr_base64:
         qr_bytes = _decode_employee_qr(body.employee_qr_base64)
         if qr_bytes:
@@ -515,6 +579,12 @@ async def update_kf_account(request: Request, open_kfid: str, body: KfAccountUpd
         media_result = await adapter.api_client.account_update(open_kfid, media_id=media_id)
         if media_result.get("errcode", 0) != 0:
             raise HTTPException(status_code=400, detail=f"企微更新客服头像失败: {media_result.get('errmsg')}")
+        # 头像本地持久化：注册新图 + 清理旧图，保证编辑弹框可回显
+        new_avatar_id = await _register_avatar(tenant_id, avatar_bytes, admin.get("user_id", ""))
+        old_avatar_id = kf.get("avatar_file_id")
+        if old_avatar_id and old_avatar_id != new_avatar_id:
+            await _cleanup_avatar(old_avatar_id)
+        kf["avatar_file_id"] = new_avatar_id
 
     # 本地字段（换绑 tenant_user_id 仅影响后续新扫码归因）
     if body.tenant_user_id is not None:
@@ -639,8 +709,9 @@ async def delete_kf_account(request: Request, open_kfid: str):
     if del_result.get("errcode", 0) != 0 and not _is_account_not_exists(del_result):
         raise HTTPException(status_code=400, detail=f"企微删除客服账号失败: {del_result.get('errmsg')}")
 
-    # 清理顾问二维码图片资产
+    # 清理顾问二维码 + 头像图片资产
     await _cleanup_employee_qr(kf.get("employee_qr_file_id"))
+    await _cleanup_avatar(kf.get("avatar_file_id"))
 
     # 从配置移除
     kf_accounts = [k for k in config_dict.get("kf_account", []) if k.get("open_kfid") != open_kfid]
