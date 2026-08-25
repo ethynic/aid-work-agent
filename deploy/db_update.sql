@@ -1,6 +1,10 @@
 -- 数据库加表、加字段等SQL语句，记录在本文件，以便升级部署
 -- 所有SQL语句必须幂等安全（可重复执行），使用 IF NOT EXISTS、DROP TABLE IF EXISTS 等保护措施
 
+-- 2026-08-25，channel_messages 增加 status 列：隐藏命令"新会话"软删除标记（active/invalid），
+-- 失效消息不进入 LLM 上下文但历史记录保留，外部接待页面仍可查看
+ALTER TABLE channel_messages ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active';
+
 -- 2026-08-05 视频生成 MVP：新增 gen_sessions / gen_cards 表
 -- 详情见 docs/system/content-production/mvp-design.md §3
 -- gen_sessions：一次抽卡会话（选场景+上传产品图+填文案+生成N条）

@@ -16,14 +16,22 @@ from typing import Optional, Dict, Any, Callable, Awaitable
 Handler = Callable[[str, str], Awaitable[str]]
 
 
-async def _handle_new_session(session_id: str, tenant_id: str) -> str:
-    """清空当前会话的 channel_messages"""
+async def _handle_clear_session(session_id: str, tenant_id: str) -> str:
+    """清空会话：物理删除 channel_messages，历史记录不保留"""
     from src.channels.session import channel_session_manager
     channel_session_manager.delete_messages(session_id, tenant_id)
-    return "会话上下文已清空，开始新会话。"
+    return "会话消息已清空，开始新会话。"
+
+
+async def _handle_new_session(session_id: str, tenant_id: str) -> str:
+    """新会话：软删除 channel_messages（status=invalid），历史记录保留、不进入新上下文"""
+    from src.channels.session import channel_session_manager
+    channel_session_manager.soft_delete_messages(session_id, tenant_id)
+    return "已开启新会话，历史聊天记录已保留。"
 
 
 HIDDEN_COMMANDS: Dict[str, Handler] = {
+    "清空会话": _handle_clear_session,
     "新会话": _handle_new_session,
 }
 

@@ -86,7 +86,8 @@ class ChannelSessionManager:
                     metadata JSONB,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     is_recalled BOOLEAN NOT NULL DEFAULT FALSE,
-                    recalled_at TIMESTAMP
+                    recalled_at TIMESTAMP,
+                    status TEXT NOT NULL DEFAULT 'active'
                 )
             """)
 
@@ -1386,6 +1387,16 @@ class ChannelSessionManager:
             """)
             return cursor.fetchone() is not None
 
+    def _has_status_column(self) -> bool:
+        """检查 channel_messages 表是否有 status 列（迁移兼容性，软删除标记）"""
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT column_name FROM information_schema.columns
+                WHERE table_name = 'channel_messages' AND column_name = 'status'
+            """)
+            return cursor.fetchone() is not None
+
     def get_messages(
         self,
         session_id: str,
@@ -1419,10 +1430,15 @@ class ChannelSessionManager:
             has_recall_column = self._has_is_recalled_column()
             recall_condition = "" if (include_recalled or not has_recall_column) else "AND is_recalled = FALSE"
 
+            # 失效消息过滤（status='invalid'，隐藏命令"新会话"软删除标记）。
+            # 失效消息不再进入 LLM 上下文，但历史记录保留供外部接待页面查看。
+            has_status_column = self._has_status_column()
+            status_clause = " AND status = 'active'" if has_status_column else ""
+
             if before_message_id:
                 cursor.execute(f"""
                     SELECT * FROM channel_messages
-                    WHERE session_id = {placeholder} {recall_condition} AND id < (
+                    WHERE session_id = {placeholder} {recall_condition} {status_clause} AND id < (
                         SELECT id FROM channel_messages WHERE message_id = {placeholder}
                     )
                     {compacted_clause}
@@ -1438,6 +1454,7 @@ class ChannelSessionManager:
                         SELECT * FROM channel_messages
                         WHERE session_id = {placeholder} {recall_condition}
                         {compacted_clause}
+                        {status_clause}
                         ORDER BY id DESC
                         LIMIT {limit}
                     ) AS recent
@@ -2075,5 +2092,61 @@ class ChannelSessionManager:
                     f"sid={session_id}, err={cache_err}"
                 )
             logger.info(f"后端日志：channel_messages + chat_context_summaries 已清空: session_id={session_id}")
-            return deleted# 全局会话管理器
+            return deleted
+
+    def soft_delete_messages(self, session_id: str, tenant_id: Optional[str] = None) -> bool:
+        """
+        软删除会话中的消息（status 置为 invalid），保留历史记录供外部接待页面查看。
+
+        隐藏命令“新会话”触发本方法：消息不物理删除，但 LLM 上下文重建
+        （get_messages）会过滤 status='invalid' 的消息，达到“新会话”效果；
+        同时将 chat_context_summaries 中该会话的 active 摘要置为 superseded，
+        否则重建上下文会读到旧压缩摘要（且后续压缩因部分唯一索引
+        (session_id, source_type) WHERE status='active' 无法插入新摘要）。
+
+        Args:
+            session_id: 会话ID
+            tenant_id: 租户ID（可选，提供时额外校验租户归属）
+
+        Returns:
+            是否有消息被标记为失效
+        """
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+
+            if tenant_id:
+                cursor.execute("""
+                    UPDATE channel_messages SET status = 'invalid'
+                    WHERE session_id = %s AND tenant_id = %s
+                """, (session_id, tenant_id))
+                updated = cursor.rowcount > 0
+                cursor.execute("""
+                    UPDATE chat_context_summaries
+                    SET status = 'superseded', superseded_at = CURRENT_TIMESTAMP
+                    WHERE session_id = %s AND tenant_id = %s AND status = 'active'
+                """, (session_id, tenant_id))
+            else:
+                cursor.execute("""
+                    UPDATE channel_messages SET status = 'invalid'
+                    WHERE session_id = %s
+                """, (session_id,))
+                updated = cursor.rowcount > 0
+                cursor.execute("""
+                    UPDATE chat_context_summaries
+                    SET status = 'superseded', superseded_at = CURRENT_TIMESTAMP
+                    WHERE session_id = %s AND status = 'active'
+                """, (session_id,))
+
+            conn.commit()
+            # 失效该会话的消息列表缓存，避免读到软删除前的旧消息
+            try:
+                from src.core.cache_utils import delete_cached_pattern
+                delete_cached_pattern(CacheKeys.SESSION_MSGS, session_id, "")
+            except Exception as cache_err:
+                logger.warning(
+                    f"channel_messages 软删除后失效 SESSION_MSGS 缓存失败: "
+                    f"sid={session_id}, err={cache_err}"
+                )
+            logger.info(f"后端日志：channel_messages 已软删除（status=invalid）: session_id={session_id}")
+            return updated# 全局会话管理器
 channel_session_manager = ChannelSessionManager()

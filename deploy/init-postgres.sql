@@ -151,7 +151,8 @@ CREATE TABLE IF NOT EXISTS channel_messages (
     metadata JSONB,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     is_recalled BOOLEAN NOT NULL DEFAULT FALSE,
-    recalled_at TIMESTAMP
+    recalled_at TIMESTAMP,
+    status TEXT NOT NULL DEFAULT 'active'   -- 消息状态：active（正常）/ invalid（软删除失效，隐藏命令"新会话"标记，历史记录保留但不再进入 LLM 上下文）
 );
 
 CREATE INDEX IF NOT EXISTS idx_channel_sessions_tenant_channel ON channel_sessions(tenant_id, channel_type, channel_user_id);
@@ -214,6 +215,8 @@ ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS compacted BOOLEAN DEFAULT FAL
 ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS compacted_by TEXT;
 ALTER TABLE channel_messages ADD COLUMN IF NOT EXISTS compacted BOOLEAN DEFAULT FALSE;
 ALTER TABLE channel_messages ADD COLUMN IF NOT EXISTS compacted_by TEXT;
+-- 隐藏命令"新会话"软删除：status='invalid' 的消息不进入 LLM 上下文，历史记录保留
+ALTER TABLE channel_messages ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active';
 
 -- v3.1: session 级上下文 token 缓存（Agent 主循环每次 LLM 调用后写入最后一次 prompt+completion tokens）
 -- 压缩服务 _should_compress 优先读此字段，避免每次全量 count_tokens
