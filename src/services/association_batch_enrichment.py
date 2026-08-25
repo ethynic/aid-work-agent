@@ -71,6 +71,10 @@ WechatMobileProvider = Callable[[str, str, str], Awaitable[str | None]]
 WechatLeaderNameProvider = Callable[[str, str], Awaitable[str | None]]
 WenxinSecretaryMobileProvider = Callable[[str, str], Awaitable[str | None]]
 ProgressReporter = Callable[[str], None]
+# 每个协会开始前的余额守卫：抛异常即熔断批次（客户端注入余额查询，
+# 余额不足停止后续协会，充值后重跑；真机教训：中途 402 被当单协会失败
+# 吞掉后，后续协会仍会白跑文心/微信等不计费步骤且无任何提醒）
+CreditGuard = Callable[[], Awaitable[None]]
 
 
 class WechatRpaError(RuntimeError):
@@ -279,6 +283,7 @@ class AssociationBatchEnricher:
         wenxin_secretary_mobile_provider: WenxinSecretaryMobileProvider | None = None,
         headless: bool = False,
         progress_reporter: ProgressReporter | None = None,
+        credit_guard: CreditGuard | None = None,
     ):
         if headless is not False:
             raise ValueError("VISIBLE_BROWSER_REQUIRED")
@@ -290,6 +295,7 @@ class AssociationBatchEnricher:
         self._wenxin_secretary_mobile = wenxin_secretary_mobile_provider
         self._headless = headless
         self._progress_reporter = progress_reporter
+        self._credit_guard = credit_guard
 
     def _progress(self, message: str) -> None:
         if self._progress_reporter is not None:
@@ -444,6 +450,29 @@ class AssociationBatchEnricher:
     ) -> AssociationBatchResult:
         rows = AssociationBatchResult()
         for association_name in deduplicate_association_names(association_names):
+            # 余额守卫：每个协会开始前检查（充值前停止、充值后重跑）
+            if self._credit_guard is not None:
+                try:
+                    await self._credit_guard()
+                except Exception as exc:
+                    error_code = (
+                        getattr(exc, "error_code", None) or type(exc).__name__
+                    )
+                    rows.append(
+                        AssociationEnrichmentRow(
+                            association_name=association_name,
+                            processing_status="aborted",
+                            errors=[f"credit_guard:{error_code}"],
+                            processed_at=datetime.now(timezone.utc).isoformat(),
+                        )
+                    )
+                    rows.aborted = True
+                    rows.abort_error_code = error_code
+                    self._progress(
+                        f"[{association_name}] 余额不足停止采集"
+                        f"（{error_code}），充值后重新运行即可继续"
+                    )
+                    break
             try:
                 rows.append(await self.enrich_one(association_name))
             except AssociationBatchAborted as exc:

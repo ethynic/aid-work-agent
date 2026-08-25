@@ -180,6 +180,24 @@ def _query_balance(server_url: str, access_token: str) -> Optional[float]:
         pass
     return None
 
+
+def _make_credit_guard(server_url: str, access_token: str):
+    """余额守卫：每个协会开始前检查租户积分，不足即抛 NoCreditError 停止批次。
+
+    查询失败（网络抖动返回 None）不阻断——沿用 402 兜底（服务端每次 LLM
+    调用前扣减校验），透支上限被压到一个协会的消耗内。
+    """
+
+    async def _guard():
+        balance = _query_balance(server_url, access_token)
+        if balance is not None and balance <= 0:
+            raise NoCreditError(
+                f"积分余额不足（{balance:.2f}），已停止后续协会采集，"
+                f"充值后重新运行即可继续"
+            )
+
+    return _guard
+
 async def cmd_collect(args: argparse.Namespace) -> int:
     """协会信息收集主流程。"""
     access_token = get_access_token()
@@ -268,9 +286,26 @@ async def cmd_collect(args: argparse.Namespace) -> int:
             wenxin_secretary_mobile_provider=providers.wenxin_search_secretary_mobile,
             headless=False,
             progress_reporter=reporter,
+            credit_guard=_make_credit_guard(server_url, access_token),
         )
 
         rows = await enricher.enrich_many(names)
+        if rows.aborted:
+            # 余额不足等批次熔断：明确提示 + 服务端遥测，充值后重跑即可
+            remaining = [
+                r.association_name
+                for r in rows
+                if r.processing_status == "aborted"
+            ]
+            emit_error(
+                association="",
+                error_code=rows.abort_error_code or "BATCH_ABORTED",
+                message=(
+                    f"批次已停止（{rows.abort_error_code}），"
+                    f"未处理协会：{'、'.join(remaining) or '无'}；充值后重新运行即可继续"
+                ),
+                session_fatal=True,
+            )
         emit_log("INFO", "正在写入 Excel 结果")
         output = str(write_enrichment_workbook(rows, args.output))
 
@@ -282,6 +317,7 @@ async def cmd_collect(args: argparse.Namespace) -> int:
         complete_count = sum(1 for r in rows if r.processing_status == "complete")
         partial_count = sum(1 for r in rows if r.processing_status == "partial")
         failed_count = sum(1 for r in rows if r.processing_status == "failed")
+        aborted_count = sum(1 for r in rows if r.processing_status == "aborted")
 
         emit_complete(
             session_id=session_id,
@@ -292,10 +328,13 @@ async def cmd_collect(args: argparse.Namespace) -> int:
                 "complete": complete_count,
                 "partial": partial_count,
                 "failed": failed_count,
+                "aborted": aborted_count,
             },
         )
 
-        # 退出码：全部成功 0，部分失败 2，全失败 1
+        # 退出码：全部成功 0，部分失败 2，全失败 1，余额不足熔断 3
+        if rows.aborted:
+            return 3
         if failed_count == len(rows):
             return 1
         if failed_count > 0:

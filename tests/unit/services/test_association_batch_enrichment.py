@@ -1161,6 +1161,79 @@ async def test_official_secretary_found_skips_llm_leadership_search(
 
 
 @pytest.mark.asyncio
+async def test_credit_guard_stops_batch_before_next_association():
+    """余额守卫抛异常 → 当前协会标 aborted、批次熔断，后续协会不再处理。
+
+    真机教训：中途 402（NoCreditError）被当单协会失败吞掉后，后续协会仍会
+    白跑文心/微信等不计费步骤且无提醒——守卫把透支/白跑范围压到一个协会。
+    """
+
+    async def collect(_url, _headless, **_kwargs):
+        raise AssertionError("no official URL")
+
+    async def fallback(_name):
+        return {"address": "北京市"}
+
+    async def wechat(_association, _person, _role):
+        return None
+
+    guard_calls = []
+
+    class _NoCredit(RuntimeError):
+        error_code = "NO_CREDIT"
+
+    async def guard():
+        guard_calls.append(1)
+        if len(guard_calls) >= 2:
+            raise _NoCredit("积分余额不足（0.00）")
+
+    enricher = AssociationBatchEnricher(
+        official_profile_collector=collect,
+        fallback_profile_provider=fallback,
+        wechat_mobile_provider=wechat,
+        credit_guard=guard,
+    )
+    rows = await enricher.enrich_many(["协会一", "协会二", "协会三"])
+
+    assert guard_calls and len(guard_calls) == 2  # 第二个协会开始前拦停
+    assert [r.association_name for r in rows] == ["协会一", "协会二"]
+    assert rows[0].processing_status == "partial"
+    assert rows[1].processing_status == "aborted"
+    assert "credit_guard:NO_CREDIT" in rows[1].errors
+    assert rows.aborted is True
+    assert rows.abort_error_code == "NO_CREDIT"
+    # 协会三未处理
+
+
+@pytest.mark.asyncio
+async def test_credit_guard_pass_keeps_batch_running():
+    """守卫通过（余额充足）→ 批次正常跑完全部协会。"""
+
+    async def collect(_url, _headless, **_kwargs):
+        raise AssertionError("no official URL")
+
+    async def fallback(_name):
+        return {"address": "北京市"}
+
+    async def wechat(_association, _person, _role):
+        return None
+
+    async def guard():
+        return None
+
+    enricher = AssociationBatchEnricher(
+        official_profile_collector=collect,
+        fallback_profile_provider=fallback,
+        wechat_mobile_provider=wechat,
+        credit_guard=guard,
+    )
+    rows = await enricher.enrich_many(["协会一", "协会二"])
+
+    assert [r.association_name for r in rows] == ["协会一", "协会二"]
+    assert rows.aborted is False
+
+
+@pytest.mark.asyncio
 async def test_official_secretary_miss_emits_audit_event(monkeypatch, tmp_path):
     """官网跑完整链路（词表+LLM搜索）仍无秘书长 → 记 official_secretary_miss
     审计事件（协会名+官网 URL），供后续程序优化统计。"""
