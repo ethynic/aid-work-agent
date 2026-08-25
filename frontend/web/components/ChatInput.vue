@@ -1,7 +1,7 @@
 <template>
   <div class="max-w-none md:max-w-4xl mx-auto">
     <div class="relative">
-      <!-- 子智能体快捷按钮（点击即发送预设消息，与手动输入同链路） -->
+      <!-- 子智能体快捷按钮（点击将预设消息填入输入框，用户补充后手动发送，避免预设指令不完整直接执行） -->
       <div v-if="quickPrompts && quickPrompts.length > 0" class="mb-2 flex flex-wrap gap-2">
         <button
           v-for="p in quickPrompts"
@@ -9,7 +9,7 @@
           type="button"
           :disabled="disabled"
           class="px-3 py-1.5 bg-white border border-gray-200 rounded-full text-sm text-gray-600 hover:border-primary-300 hover:text-primary-600 transition-all disabled:opacity-50"
-          @click="emit('send', p.message)"
+          @click="fillQuickPrompt(p.message)"
         >
           {{ p.label }}
         </button>
@@ -242,6 +242,17 @@ function handleSend() {
     inputRef.value.style.height = 'auto'
   }
 }
+
+/** 快捷按钮点击：把预设消息填入输入框并聚焦，用户补充细节后手动发送 */
+function fillQuickPrompt(message: string) {
+  inputText.value = message
+  nextTick(() => {
+    autoResize()
+    inputRef.value?.focus()
+  })
+}
+
+defineExpose({ fillQuickPrompt })
 
 function newLine() {
   // Allow default behavior for Shift+Enter

@@ -8,22 +8,18 @@
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
           </svg>
         </div>
-        <h3 class="text-lg font-semibold text-gray-800 mb-2">开始新对话</h3>
+        <h3 class="text-lg font-semibold text-gray-800 mb-2">{{ subagentName ? `开始与${subagentName}对话` : '开始新对话' }}</h3>
         <p class="text-gray-500 max-w-md mb-6 text-sm md:text-base leading-relaxed">
-          输入您的问题或任务，AI助手将为您处理。可以上传文件进行智能分析。
+          {{ greeting?.summary }}
         </p>
-        <div class="flex flex-wrap justify-center gap-3">
+        <div v-if="greeting?.prompts.length" class="flex flex-wrap justify-center gap-3">
           <button
-            @click="$emit('quick-prompt', '帮我写一份周报')"
+            v-for="p in greeting.prompts"
+            :key="p.label"
+            @click="$emit('quick-prompt', p.message)"
             class="px-4 py-2 bg-white border border-gray-200 rounded-xl text-sm text-gray-600 hover:border-primary-300 hover:text-primary-600 hover:shadow-message transition-all"
           >
-            帮我写一份周报
-          </button>
-          <button
-            @click="$emit('quick-prompt', '分析上传的文件')"
-            class="px-4 py-2 bg-white border border-gray-200 rounded-xl text-sm text-gray-600 hover:border-primary-300 hover:text-primary-600 hover:shadow-message transition-all"
-          >
-            分析上传的文件
+            {{ p.label }}
           </button>
         </div>
       </div>
@@ -55,15 +51,23 @@
 <script setup lang="ts">
 import { ref, watch, nextTick } from 'vue'
 import type { ChatMessage, InputHintState } from '@/types'
+import { DEFAULT_GREETING, type SubagentGreeting } from '@/utils/sessionGreetings'
 import MessageItem from './MessageItem.vue'
 
 interface Props {
   messages: ChatMessage[]
   isProcessing: boolean
   inputHintState: InputHintState
+  /** 当前数字员工显示名称（空态标题展示；无则主智能体） */
+  subagentName?: string | null
+  /** 当前数字员工的空态摘要与快捷按钮；无则渲染默认兜底 */
+  greeting?: SubagentGreeting | null
 }
 
-const props = defineProps<Props>()
+const props = withDefaults(defineProps<Props>(), {
+  subagentName: null,
+  greeting: () => DEFAULT_GREETING,
+})
 defineEmits<{
   (e: 'quick-prompt', prompt: string): void
   /** 消息内动作触发的发送（如 §5.1 编号选择按钮），与输入框/空态快捷按钮同链路 */
