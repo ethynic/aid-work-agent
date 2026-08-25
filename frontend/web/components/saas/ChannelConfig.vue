@@ -407,7 +407,7 @@
       <template #footer>
         <BaseButton intent="secondary" @click="showKfModal = false">关闭</BaseButton>
         <BaseButton :disabled="kfSubmitting" @click="handleKfSubmit">
-          {{ kfSubmitting ? '保存中...' : (kfEditingOpenKfid ? '保存修改' : '创建客服账号') }}
+          {{ kfSubmitting ? '保存中...' : '保存' }}
         </BaseButton>
       </template>
     </BaseModal>
