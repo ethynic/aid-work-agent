@@ -231,23 +231,26 @@ class KnowledgeBaseService:
     # ========== 分类管理 ==========
 
     def list_categories(self, tenant_id: str) -> List[Dict[str, Any]]:
-        """获取分类列表，含文档数统计"""
+        """获取分类列表，含文档数统计。返回扁平结构（含 parent_id），树形由前端组装。
+        文档数统计：顶级分类=该 source_type 全部文档（含子分类文档）；子分类=直接归属该子分类的文档。"""
         try:
             with self._get_db_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
-                    SELECT kc.id, kc.source_type, kc.display_name, kc.created_at,
-                           COALESCE(doc_cnt.document_count, 0) AS document_count
+                    SELECT kc.id, kc.source_type, kc.display_name, kc.parent_id, kc.created_at,
+                           CASE WHEN kc.parent_id IS NULL THEN
+                               -- 顶级分类：统计该 source_type 全部文档（含子分类文档）
+                               (SELECT COUNT(*) FROM documents d
+                                WHERE d.tenant_id = %s AND d.source_type = kc.source_type)
+                           ELSE
+                               -- 子分类：仅统计直接归属（sub_category）的文档
+                               (SELECT COUNT(*) FROM documents d
+                                WHERE d.tenant_id = %s AND d.sub_category = kc.source_type)
+                           END AS document_count
                     FROM knowledge_categories kc
-                    LEFT JOIN (
-                        SELECT tenant_id, source_type, COUNT(*) AS document_count
-                        FROM documents
-                        WHERE tenant_id = %s
-                        GROUP BY tenant_id, source_type
-                    ) doc_cnt ON kc.tenant_id = doc_cnt.tenant_id AND kc.source_type = doc_cnt.source_type
                     WHERE kc.tenant_id = %s
                     ORDER BY kc.created_at ASC
-                """, (tenant_id, tenant_id))
+                """, (tenant_id, tenant_id, tenant_id))
                 rows = cursor.fetchall()
                 result = []
                 for row in rows:
@@ -260,20 +263,27 @@ class KnowledgeBaseService:
             logger.error(f"获取分类列表失败: {e}", exc_info=True)
             return []
 
-    def create_category(self, tenant_id: str, source_type: str, display_name: str) -> Dict[str, Any]:
-        """创建分类"""
+    def create_category(self, tenant_id: str, source_type: str, display_name: str, parent_id: Optional[int] = None) -> Dict[str, Any]:
+        """创建分类，parent_id 非空时创建为子分类"""
         import re
         if not re.match(r'^[a-z][a-z0-9_-]*$', source_type):
             return {"success": False, "error": "source_type 格式错误，仅允许小写字母开头，后续为小写字母、数字、下划线或连字符"}
         try:
             with self._get_db_connection() as conn:
                 cursor = conn.cursor()
+                if parent_id is not None:
+                    cursor.execute(
+                        "SELECT id FROM knowledge_categories WHERE id = %s AND tenant_id = %s",
+                        (parent_id, tenant_id)
+                    )
+                    if not cursor.fetchone():
+                        return {"success": False, "error": "父分类不存在", "status": 404}
                 category_uuid = f"kc_{uuid.uuid4().hex[:12]}"
                 cursor.execute("""
-                    INSERT INTO knowledge_categories (tenant_id, source_type, display_name, uuid)
-                    VALUES (%s, %s, %s, %s)
+                    INSERT INTO knowledge_categories (tenant_id, source_type, display_name, parent_id, uuid)
+                    VALUES (%s, %s, %s, %s, %s)
                     RETURNING id, created_at
-                """, (tenant_id, source_type, display_name or source_type, category_uuid))
+                """, (tenant_id, source_type, display_name or source_type, parent_id, category_uuid))
                 row = cursor.fetchone()
                 conn.commit()
                 d = dict(row)
@@ -284,6 +294,7 @@ class KnowledgeBaseService:
                     "id": d["id"],
                     "source_type": source_type,
                     "display_name": display_name or source_type,
+                    "parent_id": parent_id,
                     "created_at": d.get("created_at", "")
                 }
         except Exception as e:
@@ -311,10 +322,16 @@ class KnowledgeBaseService:
             return {"success": False, "error": "更新分类失败"}
 
     def delete_category(self, category_id: int, tenant_id: str) -> Dict[str, Any]:
-        """删除分类（仅删记录，不删文档）"""
+        """删除分类（仅删记录，不删文档；含子分类的分类禁止删除）"""
         try:
             with self._get_db_connection() as conn:
                 cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT 1 FROM knowledge_categories WHERE parent_id = %s AND tenant_id = %s LIMIT 1",
+                    (category_id, tenant_id)
+                )
+                if cursor.fetchone():
+                    return {"success": False, "error": "该分类下存在子分类，请先删除子分类", "status": 400}
                 cursor.execute("""
                     DELETE FROM knowledge_categories WHERE id = %s AND tenant_id = %s
                 """, (category_id, tenant_id))
@@ -332,7 +349,8 @@ class KnowledgeBaseService:
         file_filename: str,
         user_id: Optional[int] = None,
         tenant_id: Optional[str] = None,
-        source_type: Optional[str] = None
+        source_type: Optional[str] = None,
+        sub_category: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         上传并处理文档
@@ -342,12 +360,47 @@ class KnowledgeBaseService:
             file_filename: 原始文件名
             user_id: 用户 ID
             tenant_id: 租户 ID
-            source_type: 文档来源类型，默认 "file"
+            source_type: 文档来源类型（恒为顶级分类代号），默认 "file"
+            sub_category: 文档直接所属分类的 source_type 代号（挂子分类时传），顶级分类下为 None
 
         Returns:
             处理结果
         """
         try:
+            # 0. 校验子分类归属：sub_category 对应分类必须存在、同租户，
+            #    且其祖先根分类的 source_type 等于入参 source_type（source_type 恒为顶级分类代号）
+            if sub_category:
+                with self._get_db_connection() as conn:
+                    cur = conn.cursor()
+                    cur.execute(
+                        "SELECT source_type, parent_id FROM knowledge_categories WHERE source_type = %s AND tenant_id = %s",
+                        (sub_category, tenant_id)
+                    )
+                    cat = cur.fetchone()
+                    if not cat:
+                        raise ValueError("子分类不存在")
+                    if cat["parent_id"] is None:
+                        # source_type 租户内全局唯一，命中顶级分类说明 sub_category 传了顶级分类自身
+                        raise ValueError("所选分类是顶级分类，不能作为子分类")
+                    root_source_type = cat["source_type"]
+                    parent_id = cat["parent_id"]
+                    depth = 0
+                    while parent_id is not None and depth < 100:
+                        cur.execute(
+                            "SELECT source_type, parent_id FROM knowledge_categories WHERE id = %s AND tenant_id = %s",
+                            (parent_id, tenant_id)
+                        )
+                        parent = cur.fetchone()
+                        if not parent:
+                            raise ValueError("子分类层级异常")
+                        root_source_type = parent["source_type"]
+                        parent_id = parent["parent_id"]
+                        depth += 1
+                if not source_type:
+                    raise ValueError("选择子分类时必须同时选择顶级分类")
+                if source_type != root_source_type:
+                    raise ValueError("子分类不属于所选顶级分类")
+
             # 1. 解析文档
             parser = parser_factory.get_parser(file_path)
             if not parser:
@@ -391,16 +444,17 @@ class KnowledgeBaseService:
                 doc_uuid = f"doc_{uuid.uuid4().hex[:12]}"
                 cursor.execute("""
                     INSERT INTO documents (
-                        user_id, tenant_id, title, source_type, file_type, file_path,
+                        user_id, tenant_id, title, source_type, sub_category, file_type, file_path,
                         file_size, total_chunks, embedding_model,
                         raw_text, metadata, summary, uuid
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING id
                 """, (
                     user_id,
                     tenant_id,
                     file_filename,
                     source_type or "file",
+                    sub_category,
                     ext,
                     file_path,
                     os.path.getsize(file_path) if os.path.exists(file_path) else 0,
@@ -524,7 +578,7 @@ class KnowledgeBaseService:
             logger.error(f"后端日志：文档删除失败: {e}", exc_info=True)
             return {"success": False, "error": str(e)}
 
-    def count_documents(self, user_id: Optional[int] = None, tenant_id: Optional[str] = None, source_type: Optional[str] = None) -> int:
+    def count_documents(self, user_id: Optional[int] = None, tenant_id: Optional[str] = None, source_type: Optional[str] = None, sub_category: Optional[str] = None) -> int:
         """获取文档总数"""
         try:
             with self._get_db_connection() as conn:
@@ -542,6 +596,9 @@ class KnowledgeBaseService:
                 if source_type is not None:
                     conditions.append("source_type = %s")
                     params.append(source_type)
+                if sub_category is not None:
+                    conditions.append("sub_category = %s")
+                    params.append(sub_category)
 
                 where_clause = " AND ".join(conditions)
                 if where_clause:
@@ -562,7 +619,8 @@ class KnowledgeBaseService:
         tenant_id: Optional[str] = None,
         limit: int = 100,
         offset: int = 0,
-        source_type: Optional[str] = None
+        source_type: Optional[str] = None,
+        sub_category: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """获取文档列表"""
         try:
@@ -582,13 +640,16 @@ class KnowledgeBaseService:
                 if source_type is not None:
                     conditions.append(f"source_type = {placeholder}")
                     params.append(source_type)
+                if sub_category is not None:
+                    conditions.append(f"sub_category = {placeholder}")
+                    params.append(sub_category)
 
                 where_clause = ""
                 if conditions:
                     where_clause = "WHERE " + " AND ".join(conditions)
 
                 cursor.execute(f"""
-                    SELECT id, title, source_type, file_type, file_path, file_size,
+                    SELECT id, title, source_type, sub_category, file_type, file_path, file_size,
                            total_chunks, created_at, summary
                     FROM documents
                     {where_clause}

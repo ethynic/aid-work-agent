@@ -1,6 +1,14 @@
 -- 数据库加表、加字段等SQL语句，记录在本文件，以便升级部署
 -- 所有SQL语句必须幂等安全（可重复执行），使用 IF NOT EXISTS、DROP TABLE IF EXISTS 等保护措施
 
+-- 2026-08-25，知识库分类支持多级（树形）：knowledge_categories 增加 parent_id（自引用，NULL=顶级），
+-- documents 增加 sub_category（文档直接所属分类的 source_type 代号，顶级分类下为 NULL；
+-- source_type 恒为顶级分类代号，检索/共享/LLM 提示词仍按 source_type 精确匹配，不受影响）
+ALTER TABLE knowledge_categories ADD COLUMN IF NOT EXISTS parent_id INTEGER REFERENCES knowledge_categories(id);
+CREATE INDEX IF NOT EXISTS idx_knowledge_categories_parent ON knowledge_categories(tenant_id, parent_id);
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS sub_category TEXT;
+CREATE INDEX IF NOT EXISTS idx_documents_sub_category ON documents(tenant_id, sub_category);
+
 -- 2026-08-25，channel_messages 增加 status 列：隐藏命令"新会话"软删除标记（active/invalid），
 -- 失效消息不进入 LLM 上下文但历史记录保留，外部接待页面仍可查看
 ALTER TABLE channel_messages ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active';

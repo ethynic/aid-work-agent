@@ -221,14 +221,18 @@ chunks_vec（向量）      chunks_fts（全文搜索）
 
 租户级知识库分类，按 `source_type` 区分不同来源（如 `upload`、`url`、`attraction_resource` 等）。
 
-**关系**：`documents.source_type` → `knowledge_categories.source_type`（逻辑关联）
+**关键字段**：
+- `parent_id` — 父分类 ID（自引用，NULL=顶级分类，支持任意级树形分类；`UNIQUE(tenant_id, source_type)` 保留，子分类 source_type 租户内仍全局唯一）
+
+**关系**：`documents.source_type` → `knowledge_categories.source_type`（逻辑关联，恒为**顶级**分类代号）；`documents.sub_category` → 子分类 `knowledge_categories.source_type`
 
 ### 5.2 `documents` — 文档表
 
 上传文档或知识条目的元数据，包含文件信息、处理状态和摘要。
 
 **关键字段**：
-- `source_type` — 来源类型
+- `source_type` — 来源类型（**恒为顶级分类代号**，使 LLM 提示词注入/跨租户共享/检索过滤按 source_type 精确匹配的逻辑零改动）
+- `sub_category` — 文档直接所属子分类代号（顶级分类下的文档为 NULL；检索/共享/LLM 均按 source_type=顶级，不受影响）
 - `file_type` / `file_path` / `file_size` — 文件信息
 - `total_chunks` — 分块数量
 - `embedding_model` — 使用的嵌入模型

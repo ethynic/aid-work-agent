@@ -1039,15 +1039,16 @@ async function openKnowledgeDialog(agent: AgentItem) {
       getSubagentKnowledgeSources(currentTenant.value.tenant_id, agent.agent_id),
       getTenantKnowledgeShares(currentTenant.value.tenant_id),
     ])
-    // 本租户分类（owner 为空）
-    knowledgeCategories.value = (catRes.items || []).map(c => ({ ...c, owner_tenant_id: null }))
+    // 本租户分类（owner 为空）——只展示顶级分类，保持一级勾选现状（子分类文档归属顶级分类，共享顶级即共享全部）
+    knowledgeCategories.value = (catRes.items || []).filter(c => c.parent_id == null).map(c => ({ ...c, owner_tenant_id: null }))
     // 已接入来源租户的共享分类（平台管理员跨租户浏览，带 owner 归属）
     const shareList = shareRes.data || []
     const sharedCatGroups: KnowledgeCategoryItem[][] = await Promise.all(
       shareList.map(async (st) => {
         try {
           const r = await listTenantKnowledgeCategories(st.from_tenant_id)
-          return (r.items || []).map(c => ({
+          // 共享分类同样只展示顶级分类
+          return (r.items || []).filter(c => c.parent_id == null).map(c => ({
             ...c,
             owner_tenant_id: st.from_tenant_id,
             owner_company_name: st.from_company_name,

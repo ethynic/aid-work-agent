@@ -425,6 +425,7 @@ CREATE TABLE IF NOT EXISTS knowledge_categories (
     tenant_id TEXT NOT NULL,
     source_type TEXT NOT NULL,
     display_name TEXT,
+    parent_id INTEGER REFERENCES knowledge_categories(id),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     uuid TEXT UNIQUE,
@@ -432,6 +433,7 @@ CREATE TABLE IF NOT EXISTS knowledge_categories (
 );
 
 CREATE INDEX IF NOT EXISTS idx_knowledge_categories_tenant ON knowledge_categories(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_knowledge_categories_parent ON knowledge_categories(tenant_id, parent_id);
 
 -- 文档表
 CREATE TABLE IF NOT EXISTS documents (
@@ -440,6 +442,7 @@ CREATE TABLE IF NOT EXISTS documents (
     tenant_id TEXT,
     title TEXT,
     source_type TEXT,
+    sub_category TEXT,
     file_type TEXT,
     file_path TEXT,
     file_size INTEGER,
@@ -460,6 +463,7 @@ CREATE TABLE IF NOT EXISTS documents (
 
 CREATE INDEX IF NOT EXISTS idx_documents_user ON documents(user_id);
 CREATE INDEX IF NOT EXISTS idx_documents_tenant ON documents(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_documents_sub_category ON documents(tenant_id, sub_category);
 
 -- 文本块表
 CREATE TABLE IF NOT EXISTS chunks (
