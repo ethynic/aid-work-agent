@@ -603,7 +603,9 @@ async def update_kf_account(request: Request, open_kfid: str, body: KfAccountUpd
             kf.pop("servicer_userid_list", None)
     if body.allow_agent_transfer is not None:
         kf["allow_agent_transfer"] = body.allow_agent_transfer
-    if body.expire_at is not None:
+    # 用 model_fields_set 区分"未传"与"显式传 null"：传 null 时 body.expire_at 为 None，
+    # 若用 `is not None` 判断会跳过赋值，导致无法清除到期日期
+    if "expire_at" in body.model_fields_set:
         kf["expire_at"] = body.expire_at or None
     if body.credit_limit is not None:
         kf["credit_limit"] = body.credit_limit
