@@ -344,6 +344,20 @@ class ProjectAssociationProviders:
                 (result.reason_code if result is not None else None)
                 or "OFFICIAL_EXTRACTION_FAILED"
             )
+        # 官网未拿到秘书长：记审计事件供后续程序优化（客户端经遥测上报到
+        # 服务端 client_usage_logs，stage=官网采集 + audit_kind=
+        # official_secretary_miss，SQL 可按协会/官网域名聚合统计）
+        if not values.get("secretary_general_name"):
+            self._audit(
+                association=association_name or domain,
+                stage="官网采集",
+                kind="official_secretary_miss",
+                summary=f"官网未拿到秘书长：{domain}",
+                detail={
+                    "official_url": entry_url,
+                    "association_name": association_name,
+                },
+            )
         return values
 
     async def _extract_leadership(

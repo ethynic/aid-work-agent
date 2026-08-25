@@ -1161,6 +1161,86 @@ async def test_official_secretary_found_skips_llm_leadership_search(
 
 
 @pytest.mark.asyncio
+async def test_official_secretary_miss_emits_audit_event(monkeypatch, tmp_path):
+    """官网跑完整链路（词表+LLM搜索）仍无秘书长 → 记 official_secretary_miss
+    审计事件（协会名+官网 URL），供后续程序优化统计。"""
+    import src.services.association_enrichment_providers as module
+    from src.services.association_profile_extractor import (
+        AssociationProfile,
+        ExtractionResult,
+    )
+
+    providers = ProjectAssociationProviders(repository_root=tmp_path)
+    events = []
+    providers._audit = lambda **event: events.append(event)
+
+    async def collect(*_args, **_kwargs):
+        return []
+
+    async def extract(*_args, **_kwargs):
+        return ExtractionResult(
+            status="success",
+            profile=AssociationProfile(**{name: None for name in PROFILE_FIELDS}),
+        )
+
+    async def fake_search(*_args, **_kwargs):
+        return []
+
+    monkeypatch.setattr(module, "collect_official_pages_with_playwright", collect)
+    monkeypatch.setattr(module, "extract_association_profile", extract)
+    monkeypatch.setattr(
+        "src.services.official_site_leadership_search.search_leadership_pages_with_playwright",
+        fake_search,
+    )
+
+    result = await providers.collect_official_profile(
+        "https://example.cn", False, association_name="测试学会"
+    )
+
+    assert result["secretary_general_name"] is None
+    miss_events = [e for e in events if e.get("kind") == "official_secretary_miss"]
+    assert len(miss_events) == 1
+    assert miss_events[0]["detail"] == {
+        "official_url": "https://example.cn",
+        "association_name": "测试学会",
+    }
+
+
+@pytest.mark.asyncio
+async def test_official_secretary_found_no_miss_audit(monkeypatch, tmp_path):
+    """拿到秘书长 → 不发 official_secretary_miss（避免噪声）。"""
+    import src.services.association_enrichment_providers as module
+    from src.services.association_profile_extractor import (
+        AssociationProfile,
+        ExtractionResult,
+    )
+
+    providers = ProjectAssociationProviders(repository_root=tmp_path)
+    events = []
+    providers._audit = lambda **event: events.append(event)
+
+    async def collect(*_args, **_kwargs):
+        return []
+
+    profile_kwargs = {name: None for name in PROFILE_FIELDS}
+    profile_kwargs["secretary_general_name"] = "王建琪"
+
+    async def extract(*_args, **_kwargs):
+        return ExtractionResult(
+            status="success", profile=AssociationProfile(**profile_kwargs)
+        )
+
+    monkeypatch.setattr(module, "collect_official_pages_with_playwright", collect)
+    monkeypatch.setattr(module, "extract_association_profile", extract)
+
+    await providers.collect_official_profile(
+        "https://example.cn", False, association_name="测试学会"
+    )
+
+    assert not [e for e in events if e.get("kind") == "official_secretary_miss"]
+
+
+@pytest.mark.asyncio
 async def test_wechat_nonzero_exit_audits_failure_and_available_artifact(
     monkeypatch, tmp_path
 ):

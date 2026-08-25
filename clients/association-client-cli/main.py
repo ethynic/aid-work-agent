@@ -222,11 +222,19 @@ async def cmd_collect(args: argparse.Namespace) -> int:
 
         def _audit_to_log(**event):
             # 审计事件落到 app.log，便于排查采集分支（文心原文 wenxin_collected /
-            # 降级 wenxin_fallback）、原文长度、失败 note（captcha/cdp_attach_failed 等）
+            # 降级 wenxin_fallback）、原文长度、失败 note（captcha/cdp_attach_failed 等）。
+            # association/stage/kind/detail 透传给遥测：经 /api/client/v1/logs 落到
+            # 服务端 client_usage_logs（官网未拿到秘书长等事件按 audit_kind 可查）
+            extra = {"stage": event.get("stage", ""), "audit_kind": event.get("kind", "")}
+            detail = event.get("detail")
+            if detail:
+                extra["audit_detail"] = detail
             emit_log(
                 "INFO",
                 f"[audit] stage={event.get('stage', '')} kind={event.get('kind', '')} "
                 f"summary={event.get('summary', '')}",
+                association=event.get("association", "") or "",
+                **extra,
             )
 
         providers = ProjectAssociationProviders(

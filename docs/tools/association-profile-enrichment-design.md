@@ -128,6 +128,28 @@ NAVIGATION_SELECTOR 的全部 class 匹配加 CSS `i` 标志（大小写不敏�
 问题（iamac、野生动物站点超时；针灸死链；青年科技文心无 URL），待拿到
 正确 URL 后可复验。
 
+### 2026-08-25（续三）：官网未拿到秘书长的服务端记录
+
+`collect_official_profile` 跑完整链路（词表采集 + LLM 领导页搜索 + 提取）仍无
+秘书长时，发审计事件 `official_secretary_miss`（stage=官网采集，detail 含
+协会名 + 官网 URL）。客户端 `_audit_to_log` 透传 association/stage/kind/detail
+给遥测，经既有 `POST /api/client/v1/logs` 落到服务端 `client_usage_logs` 表
+（无需新端点/新表）；服务端批处理与 UI 的 audit 通道同样收到。按协会/域名
+聚合的统计 SQL：
+
+```sql
+SELECT association_name,
+       detail::jsonb->'audit_detail'->>'official_url' AS official_url,
+       count(*) AS miss_count, max(created_at) AS last_miss
+FROM client_usage_logs
+WHERE stage = '官网采集'
+  AND detail::jsonb->>'audit_kind' = 'official_secretary_miss'
+GROUP BY 1, 2
+ORDER BY miss_count DESC;
+```
+
+官网完全不可达（超时/死链抛异常）不在此事件内——走既有 ERROR 日志链路。
+
 ## 2026-08-12：文心秘书长手机号改为 LLM 判别归属
 
 文心联网回答常含**多个**手机号（协会其他人/办公室条目），原「纯正则取第一个」
