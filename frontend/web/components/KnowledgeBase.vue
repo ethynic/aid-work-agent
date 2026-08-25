@@ -765,6 +765,14 @@ function subCategoriesOf(sourceType: string): CategoryTreeNode[] {
   return top?.children || []
 }
 
+// 当前选中分类的 id（添加分类时用作默认父分类）：子分类优先，其次顶级分类，未选中则顶级
+function getSelectedCategoryId(): string {
+  const targetSourceType = selectedSubCategory.value || selectedSourceType.value
+  if (!targetSourceType) return ''
+  const cat = categories.value.find(c => c.source_type === targetSourceType)
+  return cat ? String(cat.id) : ''
+}
+
 function openUploadModal() {
   uploadSourceType.value = selectedSourceType.value || ''
   uploadSubCategory.value = selectedSubCategory.value || ''
@@ -774,7 +782,7 @@ function openUploadModal() {
 function openAddCategory() {
   newCategorySourceType.value = ''
   newCategoryDisplayName.value = ''
-  newCategoryParentId.value = ''
+  newCategoryParentId.value = getSelectedCategoryId()
   newCategoryError.value = ''
   showAddCategoryModal.value = true
 }
