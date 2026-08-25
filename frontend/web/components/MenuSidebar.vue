@@ -119,22 +119,35 @@
           </svg>
         </button>
 
-        <!-- 知识中心入口：一级菜单，仅租户管理员可见（手机端隐藏） -->
+        <!-- 知识中心入口：一级菜单 flyout trigger（仅租户管理员可见，手机端隐藏） -->
         <button
           v-if="isTenantAdmin && !props.isMobile"
-          @click="router.push(`/t/${tenantId}/knowledge`)"
+          :ref="el => setTriggerRef('knowledge', el)"
+          @mouseenter="openFlyout('knowledge')"
+          @mouseleave="scheduleClose()"
+          @click="toggleFlyout('knowledge')"
+          :aria-expanded="activeFlyout === 'knowledge'"
           :class="[
-            'w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors text-sm',
-            route.path === `/t/${tenantId}/knowledge`
+            'w-full flex items-center justify-between gap-3 px-3 py-2.5 rounded-lg transition-colors text-sm',
+            isKnowledgeCenterActive
               ? 'bg-primary-50 text-primary-700 font-medium'
               : 'text-gray-600 hover:bg-gray-50'
           ]"
         >
-          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-            <!-- 书本：象征知识库 -->
-            <path d="M4 19.5A2.5 2.5 0 016.5 17H20M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z" />
+          <div class="flex items-center gap-3">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <!-- 书本：象征知识库 -->
+              <path d="M4 19.5A2.5 2.5 0 016.5 17H20M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z" />
+            </svg>
+            <span>知识中心</span>
+          </div>
+          <!-- Chevron 默认指向右，active 时 rotate-90 转为向下，提示「展开方向是右侧」 -->
+          <svg
+            :class="['w-4 h-4 transition-transform', activeFlyout === 'knowledge' ? 'rotate-90' : '']"
+            fill="none" stroke="currentColor" viewBox="0 0 24 24"
+          >
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
           </svg>
-          <span>知识中心</span>
         </button>
 
         <!-- 连接中心入口：一级菜单 flyout trigger（全体租户用户可见，手机端隐藏） -->
@@ -676,6 +689,26 @@
         </button>
       </template>
 
+      <!-- 知识中心子菜单 -->
+      <template v-else-if="activeFlyout === 'knowledge'">
+        <button
+          v-if="tenantId"
+          @click="router.push(`/t/${tenantId}/knowledge`); closeFlyout()"
+          :class="[
+            'w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-sm',
+            route.path === `/t/${tenantId}/knowledge`
+              ? 'bg-primary-50 text-primary-700 font-medium'
+              : 'text-gray-600 hover:bg-gray-50'
+          ]"
+        >
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <!-- 书本：象征知识库 -->
+            <path d="M4 19.5A2.5 2.5 0 016.5 17H20M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z" />
+          </svg>
+          <span>知识库</span>
+        </button>
+      </template>
+
       <!-- 业务数据子菜单（按 agent_id 找回 pages） -->
       <template v-else>
         <div
@@ -845,7 +878,7 @@ const renameInput = ref('')
 const renamingSessionId = ref<string | null>(null)
 
 // ============== Flyout 二级菜单状态机 ==============
-// 单一 activeFlyout 互斥：值域 'experience' | 'admin' | 'connection' | agent_id | null
+// 单一 activeFlyout 互斥：值域 'experience' | 'admin' | 'connection' | 'knowledge' | agent_id | null
 // hover 即打开、移出延迟 150ms 关闭；click 也切换；路由变化/收起态自动关
 const activeFlyout = ref<string | null>(null)
 // trigger 元素引用，用于 onClickOutside ignore 和 flyout 定位
@@ -976,6 +1009,12 @@ const connectionSubMenuItems = computed(() => {
     { path: `${base}/local-tools`, label: '本地工具', icon: 'M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z', adminOnly: false },
   ]
   return all.filter(item => !item.adminOnly || isTenantAdmin.value)
+})
+
+// 知识中心任一子页面是否激活（用于一级菜单 trigger 高亮）
+const isKnowledgeCenterActive = computed(() => {
+  if (!tenantId.value) return false
+  return route.path === `/t/${tenantId.value}/knowledge`
 })
 
 // 连接中心任一子页面是否激活（用于一级菜单 trigger 高亮）
