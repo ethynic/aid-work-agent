@@ -271,6 +271,52 @@ class TestIdleFirstMessage:
             + repr(result.merged_input)
         )
 
+    @pytest.mark.asyncio
+    async def test_merge_window_set_cancel_does_not_blank_processing(
+        self, q, fake_redis
+    ):
+        """合并窗口内第二条消息 set_cancel + append_merge（真实场景）→
+        首条消息处理时 cancel 标记必须已清除，processor 正常执行并返回非空回复。
+
+        为什么重要：真实场景下第二条消息会同时 set_cancel（通知首条消息重跑合并输入）
+        和 append_merge。首条消息的 _wait_merge_window 检测到取消后 break，
+        若不清除取消标记就调 processor，agent 第一轮迭代 cancel_check() 立即返回 True，
+        直接 return 空 -> 用户收到空回复（2026-08-25 生产事故根因）。
+        回归锁定：窗口期取消后本次处理不能被取消标记打断。
+        """
+        q.MERGE_WINDOW = 0.5  # 加速：注入窗口缩短
+        seen_cancel_check = []
+
+        async def processor(cancel_check, user_input_override=None):
+            seen_cancel_check.append(cancel_check() if cancel_check else None)
+            return user_input_override or "reply"
+
+        async def inject_during_window():
+            await asyncio.sleep(0.15)
+            # 模拟真实场景：第二条消息到达 -> set_cancel + append_merge
+            q.set_cancel("sid_merge_cancel")
+            q.append_merge("sid_merge_cancel", "B")
+
+        inject_task = asyncio.create_task(inject_during_window())
+
+        result = await q.enqueue_and_process(
+            session_id="sid_merge_cancel",
+            user_input="A",
+            processor=processor,
+        )
+        await inject_task
+
+        assert result.status == "success"
+        assert result.response_text != "", (
+            "窗口内 set_cancel 后，本次处理不应被取消标记打断而返回空回复"
+        )
+        assert result.merged_input == "A\n\n[用户追加消息] B"
+        assert result.was_merged is True
+        assert seen_cancel_check and seen_cancel_check[0] is False, (
+            "处理时 cancel_check 必须为 False（取消标记已被清除），"
+            "否则 agent 第一轮迭代即退出，返回空响应"
+        )
+
 
 # ============================================================
 # 路径 2：处理中态 + 允许取消（尚未 mark_responding） → 被合并方
