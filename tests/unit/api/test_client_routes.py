@@ -2,7 +2,7 @@
 协会客户端服务端 API 单测。
 
 重点覆盖：
-- 计费 ×10 公式（record_llm_usage：raw_credit × multiplier = credit_cost）
+- 计费 ×25 公式（record_llm_usage：raw_credit × multiplier = credit_cost）
 - 激活码生成格式与 hash 校验
 - 鉴权中间件 verify_client_token 逻辑
 - 激活流程状态流转
@@ -24,14 +24,14 @@ from src.db.client_binding_db import (
 )
 
 
-# ============== 计费 ×10 公式 ==============
+# ============== 计费 ×25 公式 ==============
 
 class TestClientCreditMultiplier:
     """客户端积分膨胀系数测试。"""
 
     def test_multiplier_default_is_5(self):
         """默认系数 5.0"""
-        assert _client_credit_multiplier() == 10.0
+        assert _client_credit_multiplier() == 25.0
 
     def test_multiplier_from_settings(self):
         """从 settings.client.credit_multiplier 读取"""
@@ -40,20 +40,20 @@ class TestClientCreditMultiplier:
             assert _client_credit_multiplier() == 8.0
 
     def test_multiplier_fallback_on_error(self):
-        """settings 异常时回退到 10.0"""
+        """settings 异常时回退到 25.0"""
         with patch("src.db.client_binding_db.settings") as mock_settings:
             # 让 getattr 触发异常（PropertyAccessError 或任意异常）
             type(mock_settings.client).credit_multiplier = property(lambda self: (_ for _ in ()).throw(RuntimeError("boom")))
-            assert _client_credit_multiplier() == 10.0
+            assert _client_credit_multiplier() == 25.0
 
 
 class TestRecordLlmUsageBilling:
-    """record_llm_usage 计费公式：raw_credit × 10 = credit_cost，2位小数向上取整。"""
+    """record_llm_usage 计费公式：raw_credit × 25 = credit_cost，2位小数向上取整。"""
 
     @patch("src.db.client_binding_db.calculate_credit_cost")
     @patch("src.db.client_binding_db.get_db_connection")
-    def test_credit_cost_is_10x_raw(self, mock_conn, mock_calc):
-        """credit_cost = ceil(raw_credit × 10 × 100) / 100"""
+    def test_credit_cost_is_25x_raw(self, mock_conn, mock_calc):
+        """credit_cost = ceil(raw_credit × 25 × 100) / 100"""
         mock_calc.return_value = 0.40  # 标准积分
         cursor = MagicMock()
         # UPDATE RETURNING 的 fetchone（INSERT RETURNING 结果未被消费）
@@ -69,14 +69,14 @@ class TestRecordLlmUsageBilling:
         )
 
         assert result["raw_credit_cost"] == 0.40
-        # 0.40 × 10 = 4.00
-        assert result["credit_cost"] == 4.00
+        # 0.40 × 25 = 10.00
+        assert result["credit_cost"] == 10.00
         assert result["balance_after"] == 98.0
 
     @patch("src.db.client_binding_db.calculate_credit_cost")
     @patch("src.db.client_binding_db.get_db_connection")
     def test_credit_cost_rounds_up(self, mock_conn, mock_calc):
-        """2位小数向上取整：0.001 × 10 = 0.01"""
+        """2位小数向上取整：0.001 × 25 = 0.025 → ceil → 0.03"""
         mock_calc.return_value = 0.001
         cursor = MagicMock()
         cursor.fetchone.return_value = {"credit_balance": 99.99}
@@ -86,8 +86,8 @@ class TestRecordLlmUsageBilling:
             tenant_id="t", binding_id="b", model="m", provider="p",
             usage={"prompt_tokens": 1},
         )
-        # ceil(0.001 × 10 × 100) / 100 = ceil(1.0) / 100 = 0.01
-        assert result["credit_cost"] == 0.01
+        # ceil(0.001 × 25 × 100) / 100 = ceil(2.5) / 100 = 0.03
+        assert result["credit_cost"] == 0.03
 
     @patch("src.db.client_binding_db.calculate_credit_cost")
     @patch("src.db.client_binding_db.get_db_connection")
@@ -109,17 +109,17 @@ class TestRecordLlmUsageBilling:
     @patch("src.db.client_binding_db.get_db_connection")
     def test_balance_after_returned_when_deducted(self, mock_conn, mock_calc):
         """扣费后返回 balance_after"""
-        mock_calc.return_value = 1.0  # raw=1, cost=10
+        mock_calc.return_value = 1.0  # raw=1, cost=25
         cursor = MagicMock()
-        cursor.fetchone.return_value = {"credit_balance": 90.0}
+        cursor.fetchone.return_value = {"credit_balance": 75.0}
         mock_conn.return_value.__enter__.return_value.cursor.return_value = cursor
 
         result = ClientUsageLogDB.record_llm_usage(
             tenant_id="t", binding_id="b", model="m", provider="p",
             usage={"prompt_tokens": 100},
         )
-        assert result["credit_cost"] == 10.0
-        assert result["balance_after"] == 90.0
+        assert result["credit_cost"] == 25.0
+        assert result["balance_after"] == 75.0
 
 
 # ============== 激活码生成与校验 ==============

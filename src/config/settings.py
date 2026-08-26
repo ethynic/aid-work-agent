@@ -367,10 +367,10 @@ class BillingConfig(BaseModel):
 class ClientConfig(BaseModel):
     """协会客户端配置（docs/tools/association-client-design.md）
 
-    - credit_multiplier: 客户端积分膨胀系数，标准积分 × 此系数 = 客户端实扣（默认10倍）
+    - credit_multiplier: 客户端积分膨胀系数，标准积分 × 此系数 = 客户端实扣（默认25倍）
     - llm_request_timeout: 客户端 LLM 代理请求超时（秒）
     """
-    credit_multiplier: float = 10.0
+    credit_multiplier: float = 25.0
     llm_request_timeout: int = 120
 
 

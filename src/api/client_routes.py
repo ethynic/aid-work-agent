@@ -5,7 +5,7 @@
 路由前缀：/api/client/v1
 - POST /activate      激活码激活（无需鉴权）
 - GET  /credits       积分余额查询
-- POST /llm/chat      LLM 代理（计费 ×10）
+- POST /llm/chat      LLM 代理（计费 ×25）
 - POST /ocr/parse     OCR 代理（不扣费，记录调用）
 - POST /logs          日志上报
 """
@@ -194,14 +194,14 @@ async def get_credits_detail(
     }
 
 
-# ============== LLM 代理（计费 ×10） ==============
+# ============== LLM 代理（计费 ×25） ==============
 
 @router.post("/llm/chat")
 async def llm_chat(
     req: LlmChatRequest,
     binding: ClientBinding = Depends(_require_binding),
 ):
-    """LLM 代理：调用 llm_gateway 并计费（×10 系数扣减租户余额）。"""
+    """LLM 代理：调用 llm_gateway 并计费（×25 系数扣减租户余额）。"""
     _check_credit(binding)
 
     try:
@@ -222,7 +222,7 @@ async def llm_chat(
     model = response.get("model") or llm_gateway.get_model_name()
     provider = response.get("provider") or llm_gateway.get_provider_name()
 
-    # 计费 ×10 同事务扣减
+    # 计费 ×25 同事务扣减
     billing = ClientUsageLogDB.record_llm_usage(
         tenant_id=binding.tenant_id,
         binding_id=binding.binding_id,
