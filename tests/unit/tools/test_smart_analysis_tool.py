@@ -134,13 +134,17 @@ class TestExecuteWithMock:
         """mock AnalysisAgent 返回成功结果"""
         mock_result = {
             "success": True,
-            "summary": "分析完成：共统计5个区域",
-            "tables": [{"columns": ["区域", "金额"], "rows": [["华东", 100]], "row_count": 1}],
-            "charts": [],
-            "steps": [],
-            "intermediate_files": [],
-            "total_usage": {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150},
-            "iterations": 3,
+            "conclusion": "分析完成：共统计5个区域",
+            "artifacts": [
+                {"id": "t1", "type": "table", "title": "区域汇总", "preview": [["区域", "金额"], ["华东", 100]]},
+            ],
+            "analysis_meta": {
+                "iterations": 3,
+                "duration_ms": 150,
+                "tokens_used": 150,
+                "tables_used": ["t1"],
+                "trace_id": "analysis_test",
+            },
         }
 
         mock_gateway = MagicMock()
@@ -162,9 +166,9 @@ class TestExecuteWithMock:
             )
 
             assert result["success"] is True
-            assert result["summary"] == "分析完成：共统计5个区域"
-            assert len(result["tables"]) == 1
-            assert result["iterations"] == 3
+            assert result["conclusion"] == "分析完成：共统计5个区域"
+            assert len(result["artifacts"]) == 1
+            assert result["analysis_meta"]["iterations"] == 3
 
     @pytest.mark.asyncio
     async def test_execute_load_table_failure(self):
@@ -208,22 +212,23 @@ class TestExecuteWithMock:
         """验证返回结果包含图表信息"""
         mock_result = {
             "success": True,
-            "summary": "趋势分析完成",
-            "tables": [],
-            "charts": [
+            "conclusion": "趋势分析完成",
+            "artifacts": [
                 {
-                    "file_path": "storage/analysis_charts/trend.png",
+                    "id": "c1",
+                    "type": "chart",
                     "chart_type": "line",
                     "title": "月度趋势",
+                    "file_path": "storage/analysis_charts/trend.png",
                 }
             ],
-            "steps": [
-                {"step": 1, "method": "trend", "description": "月度趋势"},
-                {"step": 2, "method": "to_chart", "description": "生成line图表"},
-            ],
-            "intermediate_files": [],
-            "total_usage": {"prompt_tokens": 200, "completion_tokens": 100, "total_tokens": 300},
-            "iterations": 2,
+            "analysis_meta": {
+                "iterations": 2,
+                "duration_ms": 300,
+                "tokens_used": 300,
+                "tables_used": [],
+                "trace_id": "analysis_test",
+            },
         }
 
         with patch("src.tools.data_analysis.data_analyzer.DataAnalyzer") as MockAnalyzer, \
@@ -242,7 +247,37 @@ class TestExecuteWithMock:
             )
 
             assert result["success"] is True
-            assert len(result["charts"]) == 1
-            assert result["charts"][0]["chart_type"] == "line"
-            assert len(result["steps"]) == 2
+            assert len(result["artifacts"]) == 1
+            assert result["artifacts"][0]["chart_type"] == "line"
+            assert result["analysis_meta"]["iterations"] == 2
+
+    @pytest.mark.asyncio
+    async def test_execute_empty_conclusion_degrades_to_failure(self):
+        """AnalysisAgent 返回 success=True 但结论为空 → 降级为失败，
+        防止主智能体误判为"知识库中无相关数据"（2026-08 生产事故归因）。"""
+        mock_result = {
+            "success": True,
+            "conclusion": "",
+            "artifacts": [],
+            "analysis_meta": {"iterations": 5, "duration_ms": 60000, "tokens_used": 15000, "tables_used": [], "trace_id": "analysis_empty"},
+        }
+
+        with patch("src.tools.data_analysis.data_analyzer.DataAnalyzer") as MockAnalyzer, \
+             patch("src.tools.data_analysis.analysis_agent.AnalysisAgent") as MockAgent, \
+             patch("src.core.master_agent") as mock_master:
+            mock_master.llm_gateway = MagicMock()
+            mock_analyzer_instance = MockAnalyzer.return_value
+            mock_analyzer_instance.load_table = AsyncMock()
+            mock_agent_instance = MockAgent.return_value
+            mock_agent_instance.run = AsyncMock(return_value=mock_result)
+
+            tool = SmartDataAnalysisTool()
+            result = await tool.execute(
+                requirement="各品类同比分析",
+                tables_metadata=[{"table_id": "t1"}],
+            )
+
+            assert result["success"] is False
+            assert "未产出有效结论" in result["error"]
+            assert result["conclusion"] == result["error"]
 

@@ -63,6 +63,8 @@ class AnalysisAgent:
         self._spans: List[SpanRecord] = []
         # 出图兜底：总结前若"有表无图且数据可可视化"则提示补图（仅触发一次）
         self._chart_nudge_done: bool = False
+        # 空总结兜底：无工具调用且 content 为空（推理烧穿 max_tokens 的典型特征）时重试一次
+        self._empty_summary_retried: bool = False
         self._last_table_df = None
 
         # 如果传入了预加载的表，标记为已加载
@@ -99,7 +101,9 @@ class AnalysisAgent:
                     tool_choice="auto",
                     system_prompt=ANALYSIS_SYSTEM_PROMPT,
                     temperature=0.1,
-                    max_tokens=4000,
+                    # 4000 曾导致推理模型烧穿预算返回空结论（2026-08 生产事故），
+                    # 提升到与网关默认一致，复杂分析（多品类同比等）才够用
+                    max_tokens=16384,
                     model="deepseek-v4-pro",
                 )
             except Exception as e:
@@ -137,6 +141,27 @@ class AnalysisAgent:
                 # 出图兜底：若已输出表格但无图表且数据可可视化，提示补图（仅一次）
                 if self._maybe_nudge_to_chart(messages, content):
                     continue
+                if not content.strip():
+                    # 空总结：推理模型烧穿 max_tokens 时 content 为空（2026-08 生产事故
+                    # 特征：completion 恰达上限 + content 空）。重试一次；仍空则明确失败，
+                    # 绝不让主智能体拿到空结论误判为"知识库无数据"
+                    if not self._empty_summary_retried:
+                        self._empty_summary_retried = True
+                        messages.append({"role": "assistant", "content": content})
+                        messages.append({
+                            "role": "user",
+                            "content": "（系统提示）你上一步没有输出任何分析结论（可能因输出长度超限被截断）。"
+                                       "请直接给出简洁的最终分析结论；如确需补充计算可再调用工具，但不要重复已完成步骤。",
+                        })
+                        logger.warning(f"[AnalysisAgent] 空总结（iteration={iteration}），重试一次")
+                        continue
+                    logger.error(f"[AnalysisAgent] 空总结重试后仍为空（iteration={iteration}），返回失败")
+                    return self._build_result(
+                        success=False,
+                        error="分析模型输出为空（可能因输出长度超限被截断），请重试或简化分析需求",
+                        iterations=iterations,
+                        start_time=start_time,
+                    )
                 summary = content
                 break
 

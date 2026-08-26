@@ -118,6 +118,7 @@
 |---------|------|---------|
 | 对话上下文重建避坑速查 | [context-reconstruction-pitfalls.md](incidents/context-reconstruction-pitfalls.md) | 消息历史加载/窗口裁剪 5 大陷阱(来源分流、最近N条、对齐user、表分离、默认值漂移) |
 | qwen3.7-flash 工具结果缓存数组化回显故障复盘 | [qwen-tool-message-cache-echo-incident.md](incidents/qwen-tool-message-cache-echo-incident.md) | 2026-08-19 线上故障：显式缓存"末尾标记"把 tool 消息 content 数组化（违反 OpenAI 兼容规范），qwen3.7-flash 概率性(~7%)按 Anthropic 语义回显工具结果。已修复为"从后往前找可安全标记文本消息"；缓存范围相对退化但绝对成本 ~0.001 元/次 |
+| 数据分析智能体 max_tokens 截断致空结论误判"无数据" | [analysis-agent-empty-conclusion-incident.md](incidents/analysis-agent-empty-conclusion-incident.md) | 2026-08-26 生产故障：AnalysisAgent 硬编码 max_tokens=4000，deepseek-v4-pro 推理模型烧穿预算返回空结论（completion 恰达上限 + content 空），主智能体误判"知识库无2025-07数据"。已修复：max_tokens 4000→16384 + 空总结重试兜底（仍空返回明确失败）+ execute 出口空结论降级失败 |
 
 ## 调研报告索引
 
