@@ -85,24 +85,14 @@ try {
     }
 
     if ($ClickX -ge 0 -and $ClickY -ge 0) {
-        # 5c. 物理坐标点击（截图分析得出的目标中心点），带前台守卫的 down/up 防撕裂
-        if (-not (& $mainGuard)) { throw 'FOREGROUND_LOST' }
-        [void][WeixinProbeWin32]::SetCursorPos($ClickX, $ClickY)
-        Start-Sleep -Milliseconds 120
-        if (-not (& $mainGuard)) { throw 'FOREGROUND_LOST' }
-        $downFailure = $null
-        $downDone = $false
-        try {
-            [WeixinProbeWin32]::mouse_event(0x0002, 0, 0, 0, [IntPtr]::Zero)  # LEFTDOWN
-            $downDone = $true
-            if (-not (& $mainGuard)) { throw 'FOREGROUND_LOST' }
-        } catch { $downFailure = $_ } finally {
-            if ($downDone) { [WeixinProbeWin32]::mouse_event(0x0004, 0, 0, 0, [IntPtr]::Zero) }  # LEFTUP
-        }
-        if ($downFailure) { throw $downFailure }
-        Write-Host "[5c] 已点击 ($ClickX, $ClickY)"
+        # 5c. 物理坐标点击（截图分析得出的目标中心点）。
+        # 2026-08-26 起改用 PostMessage 投递：RDP 会话下 SetCursorPos+mouse_event 不可靠
+        # （客户端指针纠偏会拆散 down/up）；搜索结果项在 overlay 面板窗口上，投给 overlay。
+        $overlayHwnd = Get-WeixinSearchOverlayHwnd
+        if ($overlayHwnd -eq 0) { throw 'SEARCH_OVERLAY_NOT_FOUND' }
+        Send-WeixinPostMessageClick -Hwnd $overlayHwnd -ScreenX $ClickX -ScreenY $ClickY
+        Write-Host "[5c] 已 PostMessage 点击 ($ClickX, $ClickY) overlay=$overlayHwnd"
         Start-Sleep -Milliseconds 900
-        if (-not (& $mainGuard)) { throw 'FOREGROUND_LOST' }
 
         # 5d. 点击后验证：搜索面板窗口消失 + 截图
         $overlayGone = $true

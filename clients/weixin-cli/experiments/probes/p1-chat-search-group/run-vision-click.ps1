@@ -142,20 +142,12 @@ try {
 
     if ($DryRun) { Write-Host "PROBE_RESULT: DRY_RUN"; return }
 
-    if (-not (& $mainGuard)) { throw 'FOREGROUND_LOST' }
-    [void][WeixinProbeWin32]::SetCursorPos($screenX, $screenY)
-    Start-Sleep -Milliseconds 150
-    if (-not (& $mainGuard)) { throw 'FOREGROUND_LOST' }
-    $downDone = $false; $downFailure = $null
-    try {
-        [WeixinProbeWin32]::mouse_event(0x0002, 0, 0, 0, [IntPtr]::Zero)
-        $downDone = $true
-        if (-not (& $mainGuard)) { throw 'FOREGROUND_LOST' }
-    } catch { $downFailure = $_ } finally {
-        if ($downDone) { [WeixinProbeWin32]::mouse_event(0x0004, 0, 0, 0, [IntPtr]::Zero) }
-    }
-    if ($downFailure) { throw $downFailure }
-    Write-Host "[8] clicked ($screenX, $screenY)"
+    # 2026-08-26 起改用 PostMessage 投递点击：RDP 会话下 SetCursorPos+mouse_event 会被
+    # 客户端指针纠偏拆散 down/up；且搜索结果项在 overlay 面板窗口上，必须投给 overlay。
+    $overlayHwnd = Get-WeixinSearchOverlayHwnd
+    if ($overlayHwnd -eq 0) { throw 'SEARCH_OVERLAY_NOT_FOUND' }
+    Send-WeixinPostMessageClick -Hwnd $overlayHwnd -ScreenX $screenX -ScreenY $screenY
+    Write-Host "[8] postmessage-clicked ($screenX, $screenY) overlay=$overlayHwnd"
     Start-Sleep -Milliseconds 1000
 
     $overlayGone = $true

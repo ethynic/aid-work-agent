@@ -76,22 +76,15 @@ function Invoke-KimiVision([string]$ImagePath) {
 }
 
 function Click-ScreenPoint([int]$pngX, [int]$pngY, [int]$winLeft, [int]$winTop, $mainGuard) {
+    # 2026-08-26 起改用 PostMessage 投递点击（Send-WeixinPostMessageClick）：
+    # RDP 会话下客户端指针位置是权威值，SetCursorPos+mouse_event 的 down/up 会被拆到
+    # 不同窗口导致点击落空/误点；PostMessage 光标无关、不要求前台，正常桌面同样适用。
+    # mainGuard 参数保留仅为兼容调用方，不再需要前台守卫。
     $screenX = $winLeft + $pngX
     $screenY = $winTop + $pngY
-    if (-not (& $mainGuard)) { throw 'FOREGROUND_LOST' }
-    [void][WeixinProbeWin32]::SetCursorPos($screenX, $screenY)
-    Start-Sleep -Milliseconds 150
-    if (-not (& $mainGuard)) { throw 'FOREGROUND_LOST' }
-    $downDone = $false; $failure = $null
-    try {
-        [WeixinProbeWin32]::mouse_event(0x0002, 0, 0, 0, [IntPtr]::Zero)
-        $downDone = $true
-        if (-not (& $mainGuard)) { throw 'FOREGROUND_LOST' }
-    } catch { $failure = $_ } finally {
-        if ($downDone) { [WeixinProbeWin32]::mouse_event(0x0004, 0, 0, 0, [IntPtr]::Zero) }
-    }
-    if ($failure) { throw $failure }
-    Write-Host "      clicked screen ($screenX, $screenY)"
+    if ($script:WeixinMainHwndForClick -eq 0) { throw 'MAIN_HWND_NOT_SET' }
+    Send-WeixinPostMessageClick -Hwnd $script:WeixinMainHwndForClick -ScreenX $screenX -ScreenY $screenY
+    Write-Host "      postmessage-clicked screen ($screenX, $screenY)"
     Start-Sleep -Milliseconds 300
 }
 
@@ -104,6 +97,7 @@ try {
     $windows = @(Get-VisibleWindowList)
     $main = Select-WeixinMainWindow $windows
     $mainHwnd = [int64]$main.Hwnd
+    $script:WeixinMainHwndForClick = $mainHwnd
     Write-Host "[1] main hwnd=$mainHwnd"
     if (-not (Invoke-WeixinActivation $mainHwnd)) { throw 'WX_ACTIVATION_FAILED' }
     $mainGuard = { [WeixinProbeWin32]::GetForegroundWindow().ToInt64() -eq $mainHwnd }

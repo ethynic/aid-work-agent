@@ -34,6 +34,8 @@ public static class WeixinProbeWin32 {
  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h,out RECT r);
  [DllImport("user32.dll")] public static extern bool SetCursorPos(int x,int y);
  [DllImport("user32.dll")] public static extern void mouse_event(uint f,uint x,uint y,uint d,IntPtr e);
+ [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h,uint m,IntPtr w,IntPtr l);
+ [DllImport("user32.dll")] public static extern bool ScreenToClient(IntPtr h,ref POINT p);
  [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr c);
  [DllImport("user32.dll")] public static extern IntPtr GetThreadDpiAwarenessContext();
  [DllImport("user32.dll")] public static extern bool AreDpiAwarenessContextsEqual(IntPtr a,IntPtr b);
@@ -42,6 +44,7 @@ public static class WeixinProbeWin32 {
  // SendInput：逐字输入 Unicode 字符（KEYEVENTF_UNICODE 不依赖 IME/键盘布局）
  [DllImport("user32.dll",SetLastError=true)] public static extern uint SendInput(uint n, INPUT[] p, int cb);
  public struct RECT { public int Left,Top,Right,Bottom; }
+ public struct POINT { public int X, Y; }
  [StructLayout(LayoutKind.Sequential)] public struct INPUT { public uint type; public INPUTUNION u; }
  [StructLayout(LayoutKind.Explicit)] public struct INPUTUNION { [FieldOffset(0)] public KEYBDINPUT ki; [FieldOffset(0)] public MOUSEINPUT mi; }
  [StructLayout(LayoutKind.Sequential)] public struct KEYBDINPUT { public ushort wVk; public ushort wScan; public uint dwFlags; public uint time; public IntPtr dwExtraInfo; }
@@ -230,6 +233,43 @@ function Send-WeixinPasteText {
     param([Parameter(Mandatory)][string]$Text, [Parameter(Mandatory)][scriptblock]$ForegroundGuard)
     Set-ClipboardTextRetry $Text
     Send-WeixinKeyChord @('CTRL', 'V') $ForegroundGuard
+}
+
+function Send-WeixinPostMessageClick {
+    # 光标无关的点击：ScreenToClient 换算后直接 PostMessage 投递 WM_MOUSEMOVE/LBUTTONDOWN/UP。
+    # 2026-08-26 真机实测结论：RDP 会话中客户端指针位置是权威值，脚本 SetCursorPos 移动
+    # 会话光标后 ~50ms 内会被 RDP 拉回客户端停放位置，SetCursorPos+mouse_event 的 down/up
+    # 会被拆到不同窗口（点击落空、误点其他窗口、前台被抢）。PostMessage 不经过系统光标，
+    # 免疫该问题，且不要求目标窗口在前台。已在微信 4.x 会话列表点击进会话、输入框聚焦
+    # 上验证有效。RDP/远程会话下优先用本函数，不要用 SetCursorPos+mouse_event。
+    param(
+        [Parameter(Mandatory)][int64]$Hwnd,
+        [Parameter(Mandatory)][int]$ScreenX,   # 物理屏幕坐标（Per-Monitor V2 下与截图像素一致）
+        [Parameter(Mandatory)][int]$ScreenY
+    )
+    $pt = New-Object WeixinProbeWin32+POINT
+    $pt.X = $ScreenX; $pt.Y = $ScreenY
+    if (-not [WeixinProbeWin32]::ScreenToClient([IntPtr]$Hwnd, [ref]$pt)) { throw 'SCREEN_TO_CLIENT_FAILED' }
+    $lp = [IntPtr](($pt.Y -shl 16) -bor ($pt.X -band 0xFFFF))
+    [void][WeixinProbeWin32]::PostMessage([IntPtr]$Hwnd, 0x0200, [IntPtr]::Zero, $lp)  # WM_MOUSEMOVE
+    Start-Sleep -Milliseconds 60
+    [void][WeixinProbeWin32]::PostMessage([IntPtr]$Hwnd, 0x0201, [IntPtr]1, $lp)       # WM_LBUTTONDOWN (MK_LBUTTON)
+    Start-Sleep -Milliseconds 60
+    [void][WeixinProbeWin32]::PostMessage([IntPtr]$Hwnd, 0x0202, [IntPtr]::Zero, $lp)  # WM_LBUTTONUP
+}
+
+function Get-WeixinSearchOverlayHwnd {
+    # Ctrl+F 搜索结果面板是独立顶层窗口（Qt51514QWindowToolSaveBits），结果项在它上面，
+    # PostMessage 点击必须投递给该窗口；投给主窗口会被当作"点击面板外"而关闭面板。
+    # 返回 [int64] hwnd，未找到返回 0。
+    foreach ($w in @(Get-VisibleWindowList)) {
+        $id = Get-WindowIdentityByHwnd ([int64]$w.Hwnd)
+        if ($null -ne $id -and [string]$id.ClassName -eq 'Qt51514QWindowToolSaveBits' -and
+            (Test-WeixinExecutablePath ([string]$id.ProcessPath))) {
+            return [int64]$id.Hwnd
+        }
+    }
+    return [int64]0
 }
 
 function Get-WeixinUiaDump {
