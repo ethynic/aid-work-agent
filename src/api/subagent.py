@@ -5,16 +5,26 @@
 仅包含只读 GET 操作。
 """
 
+import json
+import re
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Request
 from loguru import logger
 
 from src.core.agent import master_agent
+from src.core.cache_utils import CacheKeys, get_cached, set_cached
+from src.llm.gateway import llm_gateway
+from src.reports.summarizer import get_report_model
 from src.saas.context import get_current_tenant_id
 from src.saas.permissions.checker import get_allowed_agent_ids_for_user
 
 router = APIRouter(prefix="/api/subagents", tags=["数字员工"])
+
+# 数字员工空态摘要缓存 TTL（7 天）：智能体能力变更低频，长缓存避免重复计费
+_GREETING_TTL = 7 * 24 * 3600
+# 快捷按钮上限：空态固定展示 2 个
+_GREETING_MAX_PROMPTS = 2
 
 
 # ============== API 接口（只读） ==============
@@ -88,6 +98,161 @@ async def list_available_skills(request: Request):
     except Exception as e:
         logger.opt(exception=True).error(f"获取技能列表失败: {e}")
         return {"success": False, "error": "获取技能列表失败", "debug": str(e)}
+
+
+def _parse_greeting_llm_output(content: str) -> Optional[Dict[str, Any]]:
+    """解析 LLM 生成的空态摘要 JSON，容错 markdown code fence / 前后杂质"""
+    if not content:
+        return None
+    text = content.strip()
+    # 剥离 ```json ... ``` 包裹
+    fence = re.search(r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL)
+    if fence:
+        text = fence.group(1).strip()
+    try:
+        data = json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        # 兜底：提取第一个 { ... } 块
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if not match:
+            return None
+        try:
+            data = json.loads(match.group(0))
+        except (json.JSONDecodeError, ValueError):
+            return None
+    if not isinstance(data, dict):
+        return None
+    summary = str(data.get("summary") or "").strip()
+    raw_prompts = data.get("prompts")
+    if not isinstance(raw_prompts, list):
+        raw_prompts = []
+    prompts = []
+    for item in raw_prompts[: _GREETING_MAX_PROMPTS]:
+        if not isinstance(item, dict):
+            continue
+        label = str(item.get("label") or "").strip()
+        message = str(item.get("message") or "").strip()
+        if label and message:
+            prompts.append({"label": label[:20], "message": message[:100]})
+    if not summary:
+        return None
+    return {"summary": summary, "prompts": prompts}
+
+
+def _build_greeting_input(config) -> Dict[str, Any]:
+    """从 SubagentConfig 组装 LLM 输入：描述 + 可用工具/技能/业务页面"""
+    allowed_tools = config.get_allowed_tools()
+    excluded_tools = config.get_excluded_tools()
+    tools_str = "、".join(allowed_tools) if allowed_tools else "继承主智能体工具集"
+    if excluded_tools:
+        tools_str += f"（排除：{'、'.join(excluded_tools)}）"
+    skills = config.get_allowed_skills()
+    skills_str = "、".join(skills) if skills else "无"
+    pages = [p.get("title", "") for p in (config.business_pages or []) if isinstance(p, dict)]
+    pages_str = "、".join(pages) if pages else "无"
+    return {
+        "name": config.name,
+        "description": config.description,
+        "tools_str": tools_str,
+        "skills_str": skills_str,
+        "pages_str": pages_str,
+    }
+
+
+@router.get("/{agent_id}/greeting")
+async def get_subagent_greeting(request: Request, agent_id: str):
+    """获取数字员工「新会话空态」摘要与快捷操作按钮
+
+    缓存优先（subagent_greeting:{agent_id}，TTL 7 天）；未命中时用
+    description + tools/skills 调用小模型（report_model）生成，并把计费
+    归属到当前访问的租户用户；LLM 失败/解析失败时降级为 description + 通用按钮。
+    """
+    try:
+        # 缓存命中直接返回
+        cached = get_cached(CacheKeys.SUBAGENT_GREETING, agent_id)
+        if cached is not None:
+            return {"success": True, "data": cached, "source": "cache"}
+
+        # 主智能体无 registry 配置，直接用通用兜底
+        if agent_id == "main":
+            data = {"summary": "系统主智能体，具备通用能力和工具", "prompts": [
+                {"label": "帮我写一份周报", "message": "帮我写一份周报"},
+                {"label": "分析上传的文件", "message": "分析上传的文件"},
+            ]}
+            return {"success": True, "data": data, "source": "fallback"}
+
+        registry = master_agent.subagent_registry
+        if not registry:
+            return {"success": False, "error": "子智能体注册表未初始化", "debug": "subagent_registry is None"}
+
+        registry.load_from_db()
+        config = registry.get(agent_id)
+        if not config:
+            # 不存在的智能体直接兜底，避免缓存无效项
+            return {"success": False, "error": f"数字员工不存在: {agent_id}", "debug": f"agent_id={agent_id} not found"}
+
+        info = _build_greeting_input(config)
+        report_model = get_report_model()
+
+        system_prompt = (
+            "你是企业智能体系统的文案助手。请根据给定数字员工的能力信息，生成该员工在新会话页面的"
+            "能力摘要文字和 2 个快捷操作按钮。\n"
+            f"【数字员工名称】{info['name']}\n"
+            f"【功能描述】{info['description']}\n"
+            f"【可用工具】{info['tools_str']}\n"
+            f"【可用技能】{info['skills_str']}\n"
+            f"【业务页面】{info['pages_str']}\n"
+            "【要求】\n"
+            "1. summary：一段 40-80 字的中文能力摘要，向用户说明该员工能做什么，直接可展示、口语化、不啰嗦。\n"
+            "2. prompts：恰好 2 个按钮。每个含 label（按钮文案，≤6 字）和 message（点击后发送给该员工的完整指令，"
+            "必须限定在该员工能力范围内，可执行）。\n"
+            "3. 只输出 JSON，不要输出任何解释文字，格式：{\"summary\": \"...\", \"prompts\": [{\"label\": \"...\", \"message\": \"...\"}]}"
+        )
+
+        usage = {}
+        data = None
+        try:
+            result = await llm_gateway.chat(
+                messages=[{"role": "user", "content": system_prompt}],
+                temperature=0.3,
+                max_tokens=512,
+                model=report_model,
+            )
+            usage = result.get("usage") if isinstance(result, dict) else None
+            data = _parse_greeting_llm_output(result.get("content", "") or "")
+        except Exception as e:
+            logger.opt(exception=True).error(f"数字员工空态摘要生成失败: agent={agent_id}: {e}")
+
+        # 生成成功：写缓存 + 计费归属当前访问者
+        if data:
+            set_cached(CacheKeys.SUBAGENT_GREETING, agent_id, value=data, ttl=_GREETING_TTL)
+            try:
+                from src.services.session_record import record_background_llm_usage
+                record_background_llm_usage(
+                    usage,
+                    tenant_id=request.state.tenant_id,
+                    user_id=request.state.user_id,
+                    source="subagent_greeting",
+                    user_message=f"[数字员工空态] {info['name']} 摘要生成",
+                    model=report_model,
+                )
+            except Exception as e:
+                logger.opt(exception=True).error(f"数字员工空态摘要计费失败: {e}")
+            return {"success": True, "data": data, "source": "llm"}
+
+        # 兜底：description + 通用按钮，不阻塞 UI
+        data = {
+            "summary": info["description"] or "输入您的问题或任务，AI助手将为您处理。可以上传文件进行智能分析。",
+            "prompts": [
+                {"label": "帮我写一份周报", "message": "帮我写一份周报"},
+                {"label": "分析上传的文件", "message": "分析上传的文件"},
+            ],
+        }
+        return {"success": True, "data": data, "source": "fallback"}
+
+    except Exception as e:
+        logger.opt(exception=True).error(f"获取数字员工空态摘要失败: {e}")
+        return {"success": False, "error": "获取数字员工空态摘要失败", "debug": str(e)}
 
 
 @router.get("/{agent_id}")

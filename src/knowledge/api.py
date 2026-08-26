@@ -52,6 +52,7 @@ class DocumentResponse(BaseModel):
     id: int
     title: Optional[str] = None
     source_type: Optional[str] = None
+    sub_category: Optional[str] = None
     file_type: Optional[str] = None
     file_path: Optional[str] = None
     file_size: Optional[int] = None
@@ -87,6 +88,7 @@ class CategoryResponse(BaseModel):
     id: int
     source_type: str
     display_name: Optional[str] = None
+    parent_id: Optional[int] = None
     document_count: int = 0
     created_at: Optional[str] = None
 
@@ -94,6 +96,7 @@ class CategoryResponse(BaseModel):
 class CreateCategoryRequest(BaseModel):
     source_type: str
     display_name: Optional[str] = None
+    parent_id: Optional[int] = None
 
 
 class UpdateCategoryRequest(BaseModel):
@@ -115,7 +118,8 @@ async def create_category(request: CreateCategoryRequest, http_request: Request 
     result = knowledge_service.create_category(
         tenant_id=tenant_id,
         source_type=request.source_type,
-        display_name=request.display_name
+        display_name=request.display_name,
+        parent_id=request.parent_id
     )
     if not result.get("success"):
         status_code = result.get("status", 400)
@@ -147,6 +151,7 @@ async def delete_category(category_id: int, http_request: Request = None):
 async def upload_document(
     file: UploadFile = File(...),
     source_type: Optional[str] = Form(None),
+    sub_category: Optional[str] = Form(None),
     http_request: Request = None
 ):
     """
@@ -155,6 +160,7 @@ async def upload_document(
     - 支持格式：docx, xlsx, pptx, pdf, txt, md, json, yaml, yml, log, csv, xml, ini, properties, conf, config
     - 自动解析、分块、向量化
     - 返回文档 ID
+    - source_type: 顶级分类代号；sub_category: 直接所属子分类代号（可选）
     """
     # 验证文件格式
     ext = Path(file.filename or "unknown").suffix.lower()
@@ -199,7 +205,8 @@ async def upload_document(
             file_filename=file.filename or "unknown",
             user_id=user_id,
             tenant_id=tenant_id,
-            source_type=source_type
+            source_type=source_type,
+            sub_category=sub_category
         )
 
         if not result.get("success"):
@@ -242,6 +249,7 @@ async def upload_document(
 async def upload_documents_batch(
     files: list[UploadFile] = File(...),
     source_type: Optional[str] = Form(None),
+    sub_category: Optional[str] = Form(None),
     http_request: Request = None
 ):
     """
@@ -250,6 +258,7 @@ async def upload_documents_batch(
     - 支持格式：docx, xlsx, pptx, pdf, txt, md, json, yaml, yml, log, csv, xml, ini, properties, conf, config
     - 自动解析、分块、向量化
     - 返回每个文件的处理结果和错误信息
+    - source_type: 顶级分类代号；sub_category: 直接所属子分类代号（可选）
     """
     max_size = settings.storage.max_knowledge_file_size
     max_size_mb = max_size / 1024 / 1024
@@ -303,7 +312,8 @@ async def upload_documents_batch(
                 file_filename=filename,
                 user_id=user_id,
                 tenant_id=tenant_id,
-                source_type=source_type
+                source_type=source_type,
+                sub_category=sub_category
             )
 
             if not result.get("success"):
@@ -345,13 +355,15 @@ async def list_documents(
     limit: int = 100,
     offset: int = 0,
     source_type: Optional[str] = None,
+    sub_category: Optional[str] = None,
     http_request: Request = None
 ):
     """
     获取知识库文档列表
 
     - 支持分页查询
-    - 支持按 source_type 过滤
+    - 支持按 source_type 过滤（顶级分类）
+    - 支持按 sub_category 过滤（子分类）
     - 返回 {items, total} 格式
     - 仅做租户隔离，同一租户内所有用户共享可见
     """
@@ -361,9 +373,10 @@ async def list_documents(
         tenant_id=tenant_id,
         limit=limit,
         offset=offset,
-        source_type=source_type
+        source_type=source_type,
+        sub_category=sub_category
     )
-    total = knowledge_service.count_documents(tenant_id=tenant_id, source_type=source_type)
+    total = knowledge_service.count_documents(tenant_id=tenant_id, source_type=source_type, sub_category=sub_category)
 
     return {
         "items": [DocumentResponse(**doc) for doc in documents],

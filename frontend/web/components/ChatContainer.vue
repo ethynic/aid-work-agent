@@ -38,7 +38,9 @@
               :messages="messages"
               :is-processing="isProcessing"
               :input-hint-state="inputHintState"
-              @quick-prompt="handleSend"
+              :subagent-name="currentSubagentName"
+              :greeting="emptyStateGreeting"
+              @quick-prompt="handleQuickPrompt"
               @send="handleSend"
             />
           </div>
@@ -46,6 +48,7 @@
           <!-- Input Area -->
           <div class="flex-shrink-0 border-t border-gray-200 bg-white p-2 md:p-4 pb-[max(0.5rem,env(safe-area-inset-bottom))] shadow-sticky z-10">
             <ChatInput
+              ref="chatInputRef"
               @send="handleSend"
               @upload="handleUpload"
               @remove="handleRemoveFile"
@@ -97,6 +100,8 @@ import AttachmentPreviewPanel from './AttachmentPreviewPanel.vue'
 
 import { useAgent } from '@/composables/useAgent'
 import { quickPromptsForSubagent } from '@/utils/quickPrompts'
+import { greetingForSubagent, DEFAULT_GREETING, type SubagentGreeting } from '@/utils/sessionGreetings'
+import { getSubagentGreeting } from '@/api/subagent'
 import { useDemoAuth } from '@/composables/useDemoAuth'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 import { useSession } from '@/composables/useSession'
@@ -289,6 +294,43 @@ const currentSubagentType = computed<string | null>(() => {
 // 子智能体快捷按钮（utils/quickPrompts.ts；无配置不渲染）
 const currentQuickPrompts = computed(() => quickPromptsForSubagent(currentSubagentType.value))
 
+// 当前数字员工显示名称（空态标题用）
+const currentSubagentName = computed(() => currentSubagent.value?.name || null)
+
+// 后端 LLM 生成的空态摘要（仅静态配置未命中时异步拉取，Redis 缓存 7 天）
+const llmGreeting = ref<SubagentGreeting | null>(null)
+
+// 会话空态摘要 + 快捷按钮：
+// 1. 静态配置（12 个内置智能体人工配置）优先，不发请求
+// 2. 未配置的智能体先用 description + 通用按钮兜底渲染，同时异步请求后端 LLM 生成，成功后替换
+const emptyStateGreeting = computed<SubagentGreeting>(() => {
+  const config = greetingForSubagent(currentSubagentType.value)
+  if (config) return config
+  if (llmGreeting.value) return llmGreeting.value
+  return {
+    summary: currentSubagent.value?.description || DEFAULT_GREETING.summary,
+    prompts: DEFAULT_GREETING.prompts,
+  }
+})
+
+// 监听智能体类型：静态配置未命中时向后端请求空态摘要（用递增序号防止旧请求覆盖新智能体）
+let greetingFetchSeq = 0
+watch(currentSubagentType, async (type) => {
+  const seq = ++greetingFetchSeq
+  llmGreeting.value = null
+  if (!type) return
+  if (greetingForSubagent(type)) return  // 静态配置命中不发请求
+  try {
+    const res = await getSubagentGreeting(type)
+    if (seq !== greetingFetchSeq) return  // 已切换到其他智能体，丢弃过期响应
+    if (res.success && res.data) {
+      llmGreeting.value = { summary: res.data.summary, prompts: res.data.prompts }
+    }
+  } catch (e) {
+    console.error('前端日志：获取数字员工空态摘要失败', e)
+  }
+})
+
 // 判断是否为租户模式
 const isTenantMode = computed(() => route.path.startsWith('/t/'))
 
@@ -459,7 +501,15 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  // 卸载时关闭附件预览框，避免模块级单例状态残留到重新挂载的对话界面
+  closePreview()
 })
+
+/** 空态快捷按钮点击：把提示词填入输入框，用户补充细节后手动发送 */
+const chatInputRef = ref<InstanceType<typeof ChatInput> | null>(null)
+function handleQuickPrompt(message: string) {
+  chatInputRef.value?.fillQuickPrompt(message)
+}
 
 async function handleSend(content: string) {
   //console.log(`[${now()}] [handleSend] start, content length=${content.length}, currentSessionId=`, currentSessionId.value)
@@ -586,6 +636,8 @@ watch(effectiveIsLoggedIn, async (loggedIn) => {
 
 // 监听当前会话变化，通过 switchSession 保存/恢复消息
 watch(currentSessionId, async (newSessionId) => {
+  // 会话切换/新建时关闭附件预览框（预览框内容属于旧会话，避免残留到新会话）
+  closePreview()
   if (skipNextSwitch.value) {
     skipNextSwitch.value = false
     return

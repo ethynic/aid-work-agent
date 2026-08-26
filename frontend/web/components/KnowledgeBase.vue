@@ -11,7 +11,7 @@
 
       <div class="flex-1 flex flex-col min-w-0">
         <AppHeader
-          title="知识中心"
+          title="知识库"
           :is-logged-in="effectiveIsLoggedIn"
           :user="effectiveUser"
           @toggle-sidebar="isSidebarCollapsed = !isSidebarCollapsed"
@@ -38,29 +38,20 @@
                   <span class="text-xs text-muted">{{ totalAllDocuments }}</span>
                 </button>
 
-                <!-- 分类列表 -->
-                <button
-                  v-for="cat in categories"
-                  :key="cat.id"
-                  @click="selectCategory(cat.source_type)"
-                  :class="[
-                    'w-full text-left px-3 py-2 rounded-lg text-sm transition-colors flex items-center justify-between group mt-0.5',
-                    selectedSourceType === cat.source_type ? 'bg-primary-50 text-primary-700 font-medium' : 'text-default hover:bg-surface-hover'
-                  ]"
-                >
-                  <span class="truncate" :title="cat.display_name || cat.source_type">{{ cat.display_name || cat.source_type }}</span>
-                  <span class="flex items-center gap-1">
-                    <span class="text-xs text-muted">{{ cat.document_count }}</span>
-                    <span class="hidden group-hover:flex items-center gap-0.5">
-                      <button @click.stop="openRenameCategory(cat)" class="p-0.5 rounded hover:bg-primary-100 text-muted hover:text-primary-600">
-                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
-                      </button>
-                      <button @click.stop="handleDeleteCategory(cat)" class="p-0.5 rounded hover:bg-danger-100 text-muted hover:text-danger-600">
-                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-                      </button>
-                    </span>
-                  </span>
-                </button>
+                <!-- 分类树 -->
+                <div class="mt-0.5">
+                  <CategoryTreeItem
+                    v-for="cat in categoryTree"
+                    :key="cat.id"
+                    :category="cat"
+                    :depth="0"
+                    :selected-source-type="selectedSourceType"
+                    :selected-sub-category="selectedSubCategory"
+                    @select="handleCategorySelect"
+                    @rename="openRenameCategory"
+                    @delete="handleDeleteCategory"
+                  />
+                </div>
               </div>
               <div class="p-2 border-t border-default">
                 <button @click="openAddCategory" class="w-full px-3 py-2 text-sm text-primary-600 hover:bg-primary-50 rounded-lg transition-colors text-center">
@@ -78,7 +69,7 @@
                 </div>
                 <div class="page-toolbar-right">
                   <BaseButton :disabled="selectedArr.length === 0" intent="danger" @click="handleBatchDelete">批量删除 ({{ selectedArr.length }})</BaseButton>
-                  <BaseButton @click="showUploadModal = true">上传文档</BaseButton>
+                  <BaseButton @click="openUploadModal">上传文档</BaseButton>
                 </div>
               </div>
 
@@ -232,6 +223,28 @@
         </div>
 
         <div class="p-6">
+          <!-- 分类选择 -->
+          <div class="mb-4 space-y-3">
+            <div>
+              <label class="text-sm text-muted mb-1 block">顶级分类（可选）</label>
+              <BaseSelect v-model="uploadSourceType" @change="uploadSubCategory = ''">
+                <option value="">不分类（全部）</option>
+                <option v-for="cat in categoryTree" :key="cat.id" :value="cat.source_type">
+                  {{ cat.display_name || cat.source_type }}
+                </option>
+              </BaseSelect>
+            </div>
+            <div v-if="uploadSourceType">
+              <label class="text-sm text-muted mb-1 block">子分类（可选）</label>
+              <BaseSelect v-model="uploadSubCategory">
+                <option value="">不选子分类</option>
+                <option v-for="cat in subCategoriesOf(uploadSourceType)" :key="cat.id" :value="cat.source_type">
+                  {{ cat.display_name || cat.source_type }}
+                </option>
+              </BaseSelect>
+            </div>
+          </div>
+
           <div @dragover.prevent="isDragging = true" @dragleave.prevent="isDragging = false" @drop.prevent="handleDrop"
             :class="['border-2 border-dashed rounded-xl p-8 text-center transition-all', isDragging ? 'border-primary-500 bg-primary-50' : 'border-default hover:border-hover']">
             <input ref="fileInputRef" type="file" multiple
@@ -332,6 +345,15 @@
           <label class="text-sm text-muted mb-1 block">分类名称</label>
           <BaseInput v-model="newCategoryDisplayName" placeholder="如: 合同文档, 政策文件" />
         </div>
+        <div>
+          <label class="text-sm text-muted mb-1 block">父分类（可选，留空为顶级分类）</label>
+          <BaseSelect v-model="newCategoryParentId">
+            <option value="">顶级分类</option>
+            <option v-for="cat in categories" :key="cat.id" :value="String(cat.id)">
+              {{ cat.display_name || cat.source_type }} ({{ cat.source_type }})
+            </option>
+          </BaseSelect>
+        </div>
       </div>
       <template #footer>
         <BaseButton intent="secondary" @click="showAddCategoryModal = false">取消</BaseButton>
@@ -410,10 +432,17 @@ import AppHeader from './AppHeader.vue'
 import MenuSidebar from './MenuSidebar.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
+import BaseSelect from '@/components/ui/BaseSelect.vue'
 import BaseTable from '@/components/ui/BaseTable.vue'
 import BaseModal from '@/components/ui/BaseModal.vue'
 import BasePagination from '@/components/ui/BasePagination.vue'
 import BaseBadge from '@/components/ui/BaseBadge.vue'
+import CategoryTreeItem from './knowledge/CategoryTreeItem.vue'
+
+interface CategoryTreeNode extends CategoryResponse {
+  children: CategoryTreeNode[]
+  rootSourceType?: string
+}
 import { usePageContext } from '@/composables/usePageContext'
 import { useTableSelection } from '@/composables/useTableSelection'
 import { type SubagentListItem } from '@/api/subagent'
@@ -466,12 +495,15 @@ const columns = [
 
 // ========== 分类状态 ==========
 const categories = ref<CategoryResponse[]>([])
+const categoryTree = ref<CategoryTreeNode[]>([])
 const selectedSourceType = ref<string | null>(null)
+const selectedSubCategory = ref<string | null>(null)
 
 // 添加分类
 const showAddCategoryModal = ref(false)
 const newCategorySourceType = ref('')
 const newCategoryDisplayName = ref('')
+const newCategoryParentId = ref('')
 const newCategoryError = ref('')
 const isCreatingCategory = ref(false)
 
@@ -496,6 +528,8 @@ const searchResults = ref<SearchResultItem[]>([])
 const isSearching = ref(false)
 const searchError = ref('')
 const showUploadModal = ref(false)
+const uploadSourceType = ref('')
+const uploadSubCategory = ref('')
 const selectedFiles = ref<File[]>([])
 const isDragging = ref(false)
 const isUploading = ref(false)
@@ -663,26 +697,92 @@ const groupedSearchResults = computed(() => {
 
 // ========== 分类操作 ==========
 
+function buildCategoryTree(flat: CategoryResponse[]): CategoryTreeNode[] {
+  const map = new Map<number, CategoryTreeNode>()
+  const roots: CategoryTreeNode[] = []
+  for (const c of flat) {
+    map.set(c.id, { ...c, children: [] })
+  }
+  for (const node of map.values()) {
+    if (node.parent_id != null && map.has(node.parent_id)) {
+      map.get(node.parent_id)!.children.push(node)
+    } else {
+      roots.push(node)
+    }
+  }
+  // 为每个节点标注所属根分类的 source_type（子分类点击/高亮时使用）
+  const assignRoot = (nodes: CategoryTreeNode[], rootSourceType: string) => {
+    for (const node of nodes) {
+      node.rootSourceType = rootSourceType
+      assignRoot(node.children, rootSourceType)
+    }
+  }
+  for (const root of roots) {
+    assignRoot([root], root.source_type)
+  }
+  return roots
+}
+
+function findCategoryNode(nodes: CategoryTreeNode[], id: number): CategoryTreeNode | null {
+  for (const node of nodes) {
+    if (node.id === id) return node
+    const found = findCategoryNode(node.children, id)
+    if (found) return found
+  }
+  return null
+}
+
 async function loadCategories() {
   try {
     const result = await listCategories()
     categories.value = result.items || []
+    categoryTree.value = buildCategoryTree(categories.value)
   } catch (e) {
     console.error('加载分类列表失败:', e)
   }
 }
 
-function selectCategory(sourceType: string | null) {
+function selectCategory(sourceType: string | null, subCategory: string | null = null) {
   selectedSourceType.value = sourceType
+  selectedSubCategory.value = subCategory
   currentPage.value = 1
   clearSearch()
   clearSelection()
   loadDocuments()
 }
 
+function handleCategorySelect(cat: CategoryTreeNode) {
+  if (cat.parent_id === null) {
+    selectCategory(cat.source_type, null)
+  } else {
+    selectCategory(cat.rootSourceType || cat.source_type, cat.source_type)
+  }
+}
+
+// 某顶级分类下的直接子分类（用于上传弹框级联选择）
+function subCategoriesOf(sourceType: string): CategoryTreeNode[] {
+  const top = categoryTree.value.find(c => c.source_type === sourceType)
+  return top?.children || []
+}
+
+// 当前选中分类的 id（添加分类时用作默认父分类）：子分类优先，其次顶级分类，未选中则顶级
+function getSelectedCategoryId(): string {
+  const targetSourceType = selectedSubCategory.value || selectedSourceType.value
+  if (!targetSourceType) return ''
+  const cat = categories.value.find(c => c.source_type === targetSourceType)
+  return cat ? String(cat.id) : ''
+}
+
+function openUploadModal() {
+  uploadSourceType.value = selectedSourceType.value || ''
+  uploadSubCategory.value = selectedSubCategory.value || ''
+  showUploadModal.value = true
+}
+
 function openAddCategory() {
   newCategorySourceType.value = ''
   newCategoryDisplayName.value = ''
+  newCategoryParentId.value = getSelectedCategoryId()
   newCategoryError.value = ''
   showAddCategoryModal.value = true
 }
@@ -695,7 +795,8 @@ async function handleCreateCategory() {
   }
   isCreatingCategory.value = true
   try {
-    await createCategory(st, newCategoryDisplayName.value.trim() || st)
+    const parentId = newCategoryParentId.value ? Number(newCategoryParentId.value) : null
+    await createCategory(st, newCategoryDisplayName.value.trim() || st, parentId)
     showAddCategoryModal.value = false
     await loadCategories()
     toast.success('分类创建成功')
@@ -734,11 +835,18 @@ async function handleRenameCategory() {
 }
 
 async function handleDeleteCategory(cat: CategoryResponse) {
+  const node = findCategoryNode(categoryTree.value, cat.id)
+  if (node && node.children.length > 0) {
+    toast.error('该分类下存在子分类，请先删除子分类')
+    return
+  }
   if (!confirm(`删除分类"${cat.display_name || cat.source_type}"不会删除已上传的文档，确定删除？`)) return
   try {
     await deleteCategory(cat.id)
-    if (selectedSourceType.value === cat.source_type) {
+    if (selectedSourceType.value === cat.source_type || selectedSubCategory.value === cat.source_type) {
       selectedSourceType.value = null
+      selectedSubCategory.value = null
+      loadDocuments()
     }
     await loadCategories()
     toast.success('分类已删除')
@@ -752,7 +860,7 @@ async function handleDeleteCategory(cat: CategoryResponse) {
 async function loadDocuments() {
   isLoading.value = true
   try {
-    const result = await listDocuments(pageSize.value, (currentPage.value - 1) * pageSize.value, selectedSourceType.value || undefined)
+    const result = await listDocuments(pageSize.value, (currentPage.value - 1) * pageSize.value, selectedSourceType.value || undefined, selectedSubCategory.value || undefined)
     documents.value = result.items
     totalDocuments.value = result.total
     // 选中"全部"分类时，total 才是全部文档的总数
@@ -856,7 +964,8 @@ async function handleUpload() {
 
   const filesToUpload = [...selectedFiles.value]
   const totalFiles = filesToUpload.length
-  const currentSourceType = selectedSourceType.value || undefined
+  const currentSourceType = uploadSourceType.value || undefined
+  const currentSubCategory = uploadSubCategory.value || undefined
 
   uploadProgress.value = {
     total: totalFiles,
@@ -874,7 +983,7 @@ async function handleUpload() {
       uploadProgress.value.currentFileName = file.name
 
       try {
-        const result = await uploadDocument(file, currentSourceType)
+        const result = await uploadDocument(file, currentSourceType, currentSubCategory)
         successResults.push(result)
         await loadDocuments()
       } catch (error: any) {

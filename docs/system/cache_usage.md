@@ -331,6 +331,15 @@ ImageRegistry 管理的图片资产元信息（复用 cp 的 `uploaded_file:{fil
 **关键约束**：session_id 需含租户维度（如 `tenant_{tid}_{channel}_{user}`），避免跨租户串状态
 **源文件**：`src/core/agent_router.py`
 
+### 7.4.3 数字员工空态摘要
+
+**存储**：Redis + 内存降级
+**键模式**：`subagent_greeting:{agent_id}`
+**TTL**：604800s（7 天）
+**失效时机**：管理后台更新/删除数字员工时主动 `delete_cached`（`src/api/admin_subagent.py`）；TTL 自动过期兜底
+**关键约束**：LLM（report_model 小模型）按需生成、缓存复用，避免重复计费；全局缓存（不含租户维度），智能体能力变更频率极低。前端静态配置（`frontend/web/utils/sessionGreetings.ts`）优先于本缓存，仅未配置的智能体走此接口
+**源文件**：`src/api/subagent.py`
+
 ### 7.5 定时任务调度器启动锁
 
 多 worker 环境下，确保只有单个 worker 启动 APScheduler 调度器，避免重复注册定时任务。
@@ -420,6 +429,7 @@ PostgreSQL（持久化，权威数据源）
 ├── instance_status:{instance_id}    # 实例状态
 ├── uploaded_file:file_{uuid12}      # 图片/文件资产元信息（Hash，与 cp 共用）
 ├── image_fetch_url:{sha256(url)}    # Web 图片抓取去重
+├── subagent_greeting:{agent_id}     # 数字员工空态摘要（LLM 生成缓存）
 └── sched_task_lock:manager          # 定时任务调度器启动锁
 
 内存缓存（无 Redis 键前缀）：

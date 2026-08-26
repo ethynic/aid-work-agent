@@ -280,7 +280,7 @@
     <BaseModal
       v-model="showKfModal"
       :title="kfEditingOpenKfid ? '客服账号 - 编辑' : '客服账号 - 新增'"
-      size="lg"
+      size="lgx"
       :close-on-overlay="false"
     >
       <div class="space-y-4">
@@ -298,7 +298,7 @@
         </div>
 
         <!-- 编辑模式：不可变字段只读展示 -->
-        <div v-if="kfEditingOpenKfid" class="bg-canvas border border-default rounded-lg p-3 grid grid-cols-2 gap-3 text-xs">
+        <div v-if="kfEditingOpenKfid" class="bg-canvas border border-default rounded-lg p-3 grid grid-cols-3 gap-3 text-xs">
           <div>
             <label class="text-muted block mb-0.5">open_kfid（不可改）</label>
             <span class="text-default font-mono">{{ kfForm.open_kfid }}</span>
@@ -307,13 +307,13 @@
             <label class="text-muted block mb-0.5">场景 scene（不可改）</label>
             <span class="text-default font-mono">{{ kfForm.scene }}</span>
           </div>
-          <div class="col-span-2">
+          <div>
             <label class="text-muted block mb-0.5">客服链接（不可改）</label>
             <span class="text-default break-all">{{ kfForm.contact_url }}</span>
           </div>
         </div>
 
-        <div class="grid grid-cols-2 gap-4">
+        <div class="grid grid-cols-4 gap-4">
           <div>
             <label class="text-sm text-muted mb-1 block">客服名称<span class="text-danger-500">*</span></label>
             <BaseInput v-model="kfForm.name" maxlength="16" placeholder="如：售前咨询" />
@@ -346,7 +346,7 @@
               <option v-for="sa in availableSubagents" :key="sa.agent_id" :value="sa.agent_id">{{ sa.name }} ({{ sa.agent_id }})</option>
             </BaseSelect>
           </div>
-          <div class="col-span-2">
+          <div class="col-span-4">
             <label class="text-sm text-muted mb-1 block">欢迎语</label>
             <BaseInput v-model="kfForm.welcome_message" placeholder="您好，请问有什么可以帮您？" />
           </div>
@@ -376,12 +376,12 @@
             <BaseInput v-model="kfForm.credit_limit" type="number" min="0" placeholder="0=无上限" />
             <p class="mt-0.5 text-xs text-muted">0 表示不限制；超过上限自动拦截</p>
           </div>
-          <div class="col-span-2">
+          <div class="col-span-4">
             <label class="text-sm text-muted mb-1 block">二维码标题</label>
             <BaseInput v-model="kfForm.qr_title" maxlength="50" placeholder="如：爱定义 - 小蔡老师" />
             <p class="mt-0.5 text-xs text-muted">显示在二维码图片上方，便于区分不同归属用户</p>
           </div>
-          <div class="col-span-2">
+          <div class="col-span-4">
             <label class="text-sm text-muted mb-1 block">顾问二维码（可选）</label>
             <div class="flex items-center gap-3">
               <img
@@ -784,9 +784,10 @@ async function handleKfSubmit() {
   }
   if (kfForm.value.avatar_base64) payload.avatar_base64 = kfForm.value.avatar_base64
   if (kfForm.value.employee_qr_base64) payload.employee_qr_base64 = kfForm.value.employee_qr_base64
-  if (kfForm.value.servicer_userid_list) {
-    payload.servicer_userid_list = kfForm.value.servicer_userid_list.split(/[,，]/).map((s: string) => s.trim()).filter(Boolean)
-  }
+  // 始终传完整列表（空数组表示清空接待人员），后端与企微接待人员做同步
+  payload.servicer_userid_list = kfForm.value.servicer_userid_list
+    ? kfForm.value.servicer_userid_list.split(/[,，]/).map((s: string) => s.trim()).filter(Boolean)
+    : []
 
   kfSubmitting.value = true
   kfFormError.value = ''
@@ -819,7 +820,7 @@ async function handleKfSubmit() {
     await loadKfAccounts()
     syncKfAccountsToForm()
   } catch (e: any) {
-    kfFormError.value = e.message || '操作失败'
+    toast.error(e.message || '操作失败')
   } finally {
     kfSubmitting.value = false
   }

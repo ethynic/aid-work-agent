@@ -10,7 +10,7 @@
 """
 import asyncio
 import time
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 from loguru import logger
@@ -93,7 +93,13 @@ class WeComKfApiClient:
 
     # ==================== 通用请求 ====================
 
-    async def _request(self, method: str, path: str, json_body: Optional[Dict] = None) -> Dict[str, Any]:
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        json_body: Optional[Dict] = None,
+        extra_params: Optional[Dict] = None,
+    ) -> Dict[str, Any]:
         """发送请求（带 token 自动刷新重试）"""
         url = f"{self.BASE_URL}{path}"
         max_retries = 2
@@ -103,6 +109,8 @@ class WeComKfApiClient:
                 client = await self._get_client()
 
                 params = {"access_token": token}
+                if extra_params:
+                    params.update(extra_params)
                 if method == "GET":
                     response = await client.get(url, params=params)
                 else:
@@ -202,6 +210,86 @@ class WeComKfApiClient:
         result = await self._request("POST", "/cgi-bin/kf/add_contact_way", json_body=body)
         if result.get("errcode", 0) != 0:
             logger.error(f"微信客服获取接待二维码失败: errcode={result.get('errcode')}, errmsg={result.get('errmsg')}")
+        return result
+
+    # ==================== 通讯录成员 ====================
+
+    async def get_user(self, userid: str) -> Dict[str, Any]:
+        """
+        查询企业微信成员，用于校验人工接待人员 userid 是否在通讯录中存在。
+
+        Args:
+            userid: 成员 userid（大小写敏感）
+
+        Returns:
+            {"errcode": 0, "userid": "...", "name": "...", ...} 或错误
+        """
+        result = await self._request("GET", "/cgi-bin/user/get", extra_params={"userid": userid})
+        if result.get("errcode", 0) != 0:
+            logger.error(
+                f"微信客服查询成员失败: userid={userid}, "
+                f"errcode={result.get('errcode')}, errmsg={result.get('errmsg')}"
+            )
+        return result
+
+    # ==================== 接待人员管理 ====================
+
+    async def servicer_add(self, open_kfid: str, userid_list: List[str]) -> Dict[str, Any]:
+        """
+        添加客服账号接待人员（单次最多 100 个，超过需分批）。
+
+        Args:
+            open_kfid: 客服账号 ID
+            userid_list: 接待人员 userid 列表
+
+        Returns:
+            {"errcode": 0, "result_list": [{"userid": "...", "errcode": 0, "errmsg": "success"}]}
+        """
+        body = {"open_kfid": open_kfid, "userid_list": userid_list}
+        result = await self._request("POST", "/cgi-bin/kf/servicer/add", json_body=body)
+        if result.get("errcode", 0) != 0:
+            logger.error(
+                f"微信客服添加接待人员失败: open_kfid={open_kfid}, "
+                f"errcode={result.get('errcode')}, errmsg={result.get('errmsg')}"
+            )
+        return result
+
+    async def servicer_del(self, open_kfid: str, userid_list: List[str]) -> Dict[str, Any]:
+        """
+        从客服账号删除接待人员（单次最多 100 个，超过需分批）。
+
+        Args:
+            open_kfid: 客服账号 ID
+            userid_list: 待删除接待人员 userid 列表
+
+        Returns:
+            {"errcode": 0, "result_list": [{"userid": "...", "errcode": 0, "errmsg": "success"}]}
+        """
+        body = {"open_kfid": open_kfid, "userid_list": userid_list}
+        result = await self._request("POST", "/cgi-bin/kf/servicer/del", json_body=body)
+        if result.get("errcode", 0) != 0:
+            logger.error(
+                f"微信客服删除接待人员失败: open_kfid={open_kfid}, "
+                f"errcode={result.get('errcode')}, errmsg={result.get('errmsg')}"
+            )
+        return result
+
+    async def servicer_list(self, open_kfid: str) -> Dict[str, Any]:
+        """
+        获取客服账号接待人员列表。
+
+        Args:
+            open_kfid: 客服账号 ID
+
+        Returns:
+            {"errcode": 0, "servicer_list": [{"userid": "...", "status": 0}]}
+        """
+        result = await self._request("GET", "/cgi-bin/kf/servicer/list", extra_params={"open_kfid": open_kfid})
+        if result.get("errcode", 0) != 0:
+            logger.error(
+                f"微信客服获取接待人员列表失败: open_kfid={open_kfid}, "
+                f"errcode={result.get('errcode')}, errmsg={result.get('errmsg')}"
+            )
         return result
 
     # ==================== 消息同步 ====================

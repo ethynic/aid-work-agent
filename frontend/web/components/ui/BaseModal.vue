@@ -55,7 +55,7 @@ import { modal } from '@/variants/modal'
 const props = withDefaults(defineProps<{
   modelValue: boolean
   title?: string
-  size?: 'sm' | 'md' | 'lg' | 'xl'
+  size?: 'sm' | 'md' | 'lg' | 'lgx' | 'xl'
   scrollable?: boolean
   /**
    * 弹框模式，决定点击遮罩层和关闭按钮的行为：

@@ -69,10 +69,13 @@ export interface DocumentListResponse {
 /**
  * 获取知识库文档列表（分页）
  */
-export async function listDocuments(limit = 100, offset = 0, sourceType?: string): Promise<DocumentListResponse> {
+export async function listDocuments(limit = 100, offset = 0, sourceType?: string, subCategory?: string): Promise<DocumentListResponse> {
   let url = `${API_BASE}/documents?limit=${limit}&offset=${offset}`
   if (sourceType) {
     url += `&source_type=${encodeURIComponent(sourceType)}`
+  }
+  if (subCategory) {
+    url += `&sub_category=${encodeURIComponent(subCategory)}`
   }
   const response = await fetch(url, {
     headers: { ...getAuthHeader() }
@@ -97,11 +100,14 @@ export async function deleteDocument(docId: number): Promise<ApiResponse> {
 /**
  * 上传知识库文档（单文件）
  */
-export async function uploadDocument(file: File, sourceType?: string): Promise<UploadResponse> {
+export async function uploadDocument(file: File, sourceType?: string, subCategory?: string): Promise<UploadResponse> {
   const formData = new FormData()
   formData.append('file', file)
   if (sourceType) {
     formData.append('source_type', sourceType)
+  }
+  if (subCategory) {
+    formData.append('sub_category', subCategory)
   }
 
   const response = await fetch(`${API_BASE}/upload`, {
@@ -128,13 +134,16 @@ export async function uploadDocument(file: File, sourceType?: string): Promise<U
 /**
  * 批量上传知识库文档（多文件）
  */
-export async function uploadDocumentsBatch(files: File[], sourceType?: string): Promise<BatchUploadResponse> {
+export async function uploadDocumentsBatch(files: File[], sourceType?: string, subCategory?: string): Promise<BatchUploadResponse> {
   const formData = new FormData()
   files.forEach(file => {
     formData.append('files', file)
   })
   if (sourceType) {
     formData.append('source_type', sourceType)
+  }
+  if (subCategory) {
+    formData.append('sub_category', subCategory)
   }
 
   const response = await fetch(`${API_BASE}/upload/batch`, {
@@ -210,6 +219,7 @@ export interface CategoryResponse {
   id: number
   source_type: string
   display_name: string | null
+  parent_id: number | null
   document_count: number
   created_at: string | null
 }
@@ -234,14 +244,14 @@ export async function listCategories(): Promise<CategoryListResponse> {
 /**
  * 创建知识库分类
  */
-export async function createCategory(sourceType: string, displayName?: string): Promise<any> {
+export async function createCategory(sourceType: string, displayName?: string, parentId?: number | null): Promise<any> {
   const response = await fetch(`${API_BASE}/categories`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       ...getAuthHeader()
     },
-    body: JSON.stringify({ source_type: sourceType, display_name: displayName || sourceType })
+    body: JSON.stringify({ source_type: sourceType, display_name: displayName || sourceType, parent_id: parentId ?? null })
   })
   const result = await response.json()
   if (!response.ok) {

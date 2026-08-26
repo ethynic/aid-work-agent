@@ -109,6 +109,21 @@ export async function listAvailableTools(): Promise<{
   return handleResponse(response)
 }
 
+export interface SubagentGreetingData {
+  summary: string
+  prompts: Array<{ label: string; message: string }>
+}
+
+/**
+ * 获取数字员工「新会话空态」摘要与快捷按钮（LLM 生成 + Redis 缓存，见 src/api/subagent.py）
+ */
+export async function getSubagentGreeting(agentId: string): Promise<{ success: boolean; data?: SubagentGreetingData; source?: string; error?: string }> {
+  const response = await fetch(`${API_BASE}/${encodeURIComponent(agentId)}/greeting`, {
+    headers: getAuthHeader(),
+  })
+  return handleResponse(response)
+}
+
 // ============== 租户定制 extra_md（Phase 4 起 DB 驱动） ==============
 // 后端：src/api/subagent_extra.py，路径 /api/v1/subagents/{name}/extra
 

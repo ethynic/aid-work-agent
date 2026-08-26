@@ -105,6 +105,84 @@ def _is_account_not_exists(result: Dict[str, Any]) -> bool:
     return "不存在" in errmsg or "not exist" in errmsg
 
 
+def _raise_servicer_op_error(result: Dict[str, Any], action: str) -> None:
+    """servicer add/del 返回 result_list 含逐 userid 结果，任一失败即抛 400。"""
+    if result.get("errcode", 0) != 0:
+        raise HTTPException(status_code=400, detail=f"企微{action}失败: {result.get('errmsg')}")
+    failures = [
+        item for item in result.get("result_list", []) if item.get("errcode", 0) != 0
+    ]
+    if failures:
+        detail = "；".join(
+            f"{item.get('userid') or item.get('department_id', '?')}: {item.get('errmsg')}"
+            for item in failures
+        )
+        raise HTTPException(status_code=400, detail=f"企微{action}失败: {detail}")
+
+
+async def _servicer_add_batched(adapter, open_kfid: str, userid_list: List[str]) -> None:
+    """分批调用企微添加接待人员（单次上限 100 个），任一失败抛 400。"""
+    batch_size = 100
+    for i in range(0, len(userid_list), batch_size):
+        chunk = userid_list[i : i + batch_size]
+        result = await adapter.api_client.servicer_add(open_kfid, chunk)
+        _raise_servicer_op_error(result, "添加接待人员")
+
+
+async def _servicer_del_batched(adapter, open_kfid: str, userid_list: List[str]) -> None:
+    """分批调用企微删除接待人员（单次上限 100 个），任一失败抛 400。"""
+    batch_size = 100
+    for i in range(0, len(userid_list), batch_size):
+        chunk = userid_list[i : i + batch_size]
+        result = await adapter.api_client.servicer_del(open_kfid, chunk)
+        _raise_servicer_op_error(result, "删除接待人员")
+
+
+async def _sync_kf_servicers(adapter, open_kfid: str, target_userid_list: List[str]) -> None:
+    """将客服账号接待人员同步为目标列表，与企微保持一致；任一企微报错抛 400。
+
+    1. 校验每个目标 userid 在企业微信通讯录存在（user/get），否则抛 400（拦 60111）
+    2. 对比企微当前接待人员，新增未配置的（servicer/add）、删除多余的（servicer/del）
+    调用方在本地配置写入前执行，同步失败则整个保存失败，保证本地与企微一致。
+    """
+    # 用 set 去重；后续用企微返回的 canonical userid 构建目标集合，
+    # 避免用户输入大小写与企微存储大小写不一致时 add/del 反复
+    target_set = set(target_userid_list)
+    canonical_set: set = set()
+
+    for userid in sorted(target_set):
+        user_result = await adapter.api_client.get_user(userid)
+        if user_result.get("errcode", 0) != 0:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"人工接待人员 {userid} 在企业微信通讯录中不存在"
+                    f"（{user_result.get('errmsg')}），请核对企微 userid"
+                ),
+            )
+        # user/get 返回 canonical userid；响应无该字段时回退原始输入
+        canonical_set.add(user_result.get("userid") or userid)
+
+    list_result = await adapter.api_client.servicer_list(open_kfid)
+    if list_result.get("errcode", 0) != 0:
+        raise HTTPException(
+            status_code=400, detail=f"获取企微接待人员列表失败: {list_result.get('errmsg')}"
+        )
+    current_set = {
+        item.get("userid")
+        for item in list_result.get("servicer_list", [])
+        if item.get("userid")
+    }
+
+    to_add = canonical_set - current_set
+    if to_add:
+        await _servicer_add_batched(adapter, open_kfid, sorted(to_add))
+
+    to_del = current_set - canonical_set
+    if to_del:
+        await _servicer_del_batched(adapter, open_kfid, sorted(to_del))
+
+
 def _build_qr_data_url(contact_url: str) -> str:
     """用 qrcode 库生成二维码 PNG → base64 data URL（无公网文件端点，避免鉴权漏洞）。"""
     try:
@@ -471,6 +549,17 @@ async def create_kf_account(request: Request, body: KfAccountCreate):
             pass
         raise HTTPException(status_code=400, detail=f"获取客服链接失败: {way_result.get('errmsg')}")
 
+    # 3.5 同步接待人员（创建时指定的人工接待人员）；企微报错则回滚账号避免残留孤儿账号
+    if body.servicer_userid_list:
+        try:
+            await _sync_kf_servicers(adapter, open_kfid, body.servicer_userid_list)
+        except HTTPException:
+            try:
+                await adapter.api_client.account_del(open_kfid)
+            except Exception:
+                pass
+            raise
+
     # 4. 写配置
     new_kf: Dict[str, Any] = {
         "name": body.name,
@@ -597,6 +686,9 @@ async def update_kf_account(request: Request, open_kfid: str, body: KfAccountUpd
         else:
             kf.pop("welcome_message", None)
     if body.servicer_userid_list is not None:
+        # 同步企微接待人员（校验 userid 存在 + add 新增 + del 删除），
+        # 企微报错则抛 400 使保存失败，不写本地配置，保证与企微一致
+        await _sync_kf_servicers(adapter, open_kfid, body.servicer_userid_list)
         if body.servicer_userid_list:
             kf["servicer_userid_list"] = body.servicer_userid_list
         else:

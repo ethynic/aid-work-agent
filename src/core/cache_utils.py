@@ -68,6 +68,7 @@ class CacheKeys:
     VIDEO_PROMPT_DRAFT = "video_prompt_draft"
     # 文件资产 / 企微客服 / 独立会话状态（登记前缀，消除管理后台"裸键"告警）
     UPLOADED_FILE = "uploaded_file"        # uploaded_file:{file_id}（文件/图片元数据）
+    SUBAGENT_GREETING = "subagent_greeting"  # subagent_greeting:{agent_id}（数字员工空态摘要+快捷按钮，LLM 生成后缓存）
     WECOM_KF = "wecom_kf"                  # wecom_kf:{corp_id}:{key}（企微客服，key 必须带企业维度）
     STANDALONE_AGENT = "standalone_agent"  # standalone_agent:{session_id}:{agent_id}
 

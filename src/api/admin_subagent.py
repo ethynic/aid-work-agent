@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 from src.api.auth import get_current_user
 from src.config.settings import settings
 from src.core.agent import master_agent
+from src.core.cache_utils import CacheKeys, delete_cached
 from src.services.subagent_definition_service import SubagentDefinitionService
 from src.saas.permissions.checker import get_allowed_agent_ids_for_user, is_platform_admin
 
@@ -356,6 +357,9 @@ async def update_subagent(request: Request, agent_id: str, body: CreateSubagentR
         # 刷新 registry
         registry.load_from_db()
 
+        # 能力/描述变更，清空态摘要缓存，下次访问重新生成
+        delete_cached(CacheKeys.SUBAGENT_GREETING, agent_id)
+
         logger.info(f"后端日志：管理员 {admin.get('phone')} 更新数字员工 {agent_id}")
         return {
             "success": True,
@@ -392,6 +396,9 @@ async def delete_subagent(request: Request, agent_id: str):
 
         # 刷新 registry
         registry.load_from_db()
+
+        # 删除定义后清空空态摘要缓存
+        delete_cached(CacheKeys.SUBAGENT_GREETING, agent_id)
 
         logger.info(f"后端日志：管理员 {admin.get('phone')} 删除数字员工 {agent_id}")
         return {"success": True, "message": f"已删除数字员工: {agent_id}"}

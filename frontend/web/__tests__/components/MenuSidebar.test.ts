@@ -479,4 +479,43 @@ describe('MenuSidebar - flyout 二级菜单', () => {
     expect(routerPush).toHaveBeenCalledTimes(1)
     expect(routerPush.mock.calls[0][0]).toContain('/local-tools')
   })
+
+  it('知识中心：管理员 hover 后 flyout 含知识库子项，点击跳转 /knowledge 并关闭', async () => {
+    const wrapper = mountTenantSidebar()
+    await flushPromises()
+
+    const trigger = findButtonByText(wrapper, '知识中心')
+    expect(trigger).toBeTruthy()
+    await trigger.trigger('mouseenter')
+    await flushPromises()
+
+    const flyout = findFlyout()
+    expect(flyout).not.toBeNull()
+    const flyoutText = flyout!.textContent || ''
+    expect(flyoutText).toContain('知识库')
+
+    // 点击「知识库」子项跳转并关闭 flyout
+    const kbBtn = Array.from(document.querySelectorAll('button'))
+      .find(b => b.textContent?.includes('知识库')) as HTMLButtonElement | undefined
+    expect(kbBtn).toBeTruthy()
+    kbBtn!.click()
+    await nextTick()
+    await flushPromises()
+
+    expect(routerPush).toHaveBeenCalledTimes(1)
+    expect(routerPush.mock.calls[0][0]).toContain('/knowledge')
+    expect(findFlyout()).toBeNull()
+  })
+
+  it('知识中心：普通用户（非管理员）不渲染 trigger', async () => {
+    routeState.path = '/t/test-tenant/chat'
+    tenantIsLoggedIn.value = true
+    tenantAdmin.value = { username: 'user1', role: 'user' }
+    tenant.value = { company_name: '测试租户' }
+
+    const wrapper = mountAndTrack()
+    await flushPromises()
+
+    expect(findButtonByText(wrapper, '知识中心')).toBeFalsy()
+  })
 })

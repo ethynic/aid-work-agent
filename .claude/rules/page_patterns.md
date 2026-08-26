@@ -260,7 +260,7 @@ focus:ring-primary-500
 
 ### 3.5 弹窗最大高度
 
-`BaseModal` 默认 `scrollable=true`，body 区域 `max-h-[70vh]`。
+`BaseModal` 默认 `scrollable=true`，弹框总高上限 `max-h-[90vh]`，body 区域通过 `flex-1 min-h-0` 填满剩余空间并带纵向滚动条。
 
 ---
 

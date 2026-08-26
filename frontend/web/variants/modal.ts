@@ -3,7 +3,7 @@ import { tv, type VariantProps } from 'tailwind-variants'
 export const modal = tv({
   slots: {
     overlay: 'fixed inset-0 z-50 flex items-center justify-center bg-black/40',
-    content: 'bg-white rounded-xl shadow-xl w-full overflow-hidden',
+    content: 'bg-white rounded-xl shadow-xl w-full max-h-[90vh] flex flex-col overflow-hidden',
     header: 'flex items-center justify-between px-6 py-4 border-b border-default',
     title: 'text-lg font-semibold text-default',
     body: 'px-6 py-4 overflow-y-auto',
@@ -15,10 +15,11 @@ export const modal = tv({
       sm: { content: 'max-w-sm' },
       md: { content: 'max-w-lg' },
       lg: { content: 'max-w-2xl' },
-      xl: { content: 'w-[90vw] h-[90vh]' },
+      lgx: { content: 'w-[85vw] h-[80vh]' },
+      xl: { content: 'w-[92vw] h-[95vh]' },
     },
     scrollable: {
-      true: { body: 'max-h-[70vh]' },
+      true: { body: 'flex-1 min-h-0' },
     },
   },
   defaultVariants: {

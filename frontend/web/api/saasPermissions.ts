@@ -349,7 +349,7 @@ export async function setSubagentKnowledgeSources(
   return res.json()
 }
 
-export async function listTenantKnowledgeCategories(tenantId: string): Promise<{ items: { id: number; source_type: string; display_name: string | null; document_count: number }[] }> {
+export async function listTenantKnowledgeCategories(tenantId: string): Promise<{ items: { id: number; source_type: string; display_name: string | null; parent_id: number | null; document_count: number }[] }> {
   const headers: Record<string, string> = {}
   const tokenKey = getTokenKey()
   const token = credentialGet(tokenKey)

@@ -1,15 +1,13 @@
 /**
  * 子智能体聊天快捷按钮配置（ChatInput 顶部的常驻 chips）。
  *
- * 按 subagent_type 映射一组预设动作：点击即等价于用户手动发送 message。
- * 演示闭环（2026-08-17）：招聘操作智能体的「筛选简历」一键触发
- * 切职位 → 设筛选 → 批量读简历入库 →（询问后）打招呼，链路见
- * subagents/recruiting-operator/SUBAGENT.md「一键筛选简历」。
+ * 按 subagent_type 映射一组预设动作：点击将 message 填入输入框，
+ * 由用户补充细节后手动发送，避免预设指令不完整直接执行。
  */
 export interface QuickPrompt {
   /** 按钮文案 */
   label: string
-  /** 点击后发送的消息（与手动输入走同一发送链路） */
+  /** 点击后填入输入框的预设消息 */
   message: string
 }
 
