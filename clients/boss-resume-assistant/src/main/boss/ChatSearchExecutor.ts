@@ -16,7 +16,9 @@
  * 关键结论（会话列表滚动 CDP mouseWheel + Win32 mouse_event 双失效，BOSS 非标准滚动）→ 改用搜索找人。
  *
  * 安全设计（fail-loud）：搜索框 0/多个、进入对话后无发送按钮 → 抛 ChatSearchError，绝不盲点。
- * 写动作（点图标/搜索框/结果卡片）走 Win32（deps.click）；逐字输入姓名走 CDP（typeChar）。
+ * 通道（2026-08-26 决策）：点击/输入类第一优先 Win32 真实事件（防爬）。点图标/结果卡片走
+ * deps.click；搜索框聚焦+姓名输入走 deps.clickAndType（原子：点击聚焦后紧接真实键盘逐字）。
+ * 2026-08-24 曾因误判「Win32 DPI 换算偏差」全改 CDP——实为用户移动窗口致输入框不可见，已回退。
  */
 import {
   type DomSnapshot,
@@ -42,15 +44,11 @@ export interface ChatSearchDeps {
   snapshot(): Promise<DomSnapshot>
   /** Win32 真实鼠标点击（viewport 为页面截图尺寸，device px） */
   click(point: ClickPoint, viewport: { width: number; height: number }): Promise<void>
-  /** CDP 浏览类点击（可选）。搜索入口/搜索框聚焦用 CDP：真机 2026-08-24 实证 CDP 点击
-   *  能唤起搜索弹层，而 Win32 物理点击存在 DPI/页面缩放换算偏差可能点偏——入口点击是
-   *  浏览类动作（无业务写效应）。缺省回退 click */
-  clickBrowse?(point: ClickPoint): Promise<void>
+  /** Win32 原子「真实鼠标点击聚焦 + 真实键盘逐字输入」（一次调用完成，防焦点被抢） */
+  clickAndType(point: ClickPoint, viewport: { width: number; height: number }, text: string): Promise<void>
   /** 按 Escape（可选）：openContact 开头清场——搜索弹层是开关型（toggle），残留弹层会让
    *  「点击入口」变成关闭，diff 永远为空。缺省跳过 */
   pressEscape?(): Promise<void>
-  /** CDP char 事件逐字输入（调用方保证焦点已在目标输入框） */
-  typeChar(ch: string): Promise<void>
   /** 协作式取消信号：入口检查一次，触发即抛 CancelledError */
   signal?: AbortSignal
   /** 可注入 sleep（测试） */
@@ -71,10 +69,6 @@ const SEARCH_OPEN_DELAY = 1400
 const SEARCH_RESULT_DELAY = 4000
 /** 点结果卡片后等进入对话（ms） */
 const ENTER_CHAT_DELAY = 2000
-/** 点击搜索框后等待聚焦（ms） */
-const SEARCH_FOCUS_DELAY = 500
-/** 逐字输入间隔（ms，拟人节奏；风控拦鼠标合成事件不拦键盘） */
-const TYPE_INTERVAL_MS = 200
 
 /** 候选聚簇：中心距离 <12px 视为同一目标的嵌套元素（如 34x34 容器与内部 13x13 svg），
  *  每簇取面积最大者代表——点击坐标等价 */
@@ -209,8 +203,7 @@ export class ChatSearchExecutor {
       await this.sleep(400)
     }
 
-    // 1. 点搜索入口（锚点动态定位）。CDP 点击优先：真机 2026-08-24 实证 Win32 物理点击
-    //    存在 DPI/页面缩放换算偏差（点了但页面无响应），CDP 点击稳定唤起弹层
+    // 1. 点搜索入口（锚点动态定位，Win32 真实鼠标——2026-08-26 决策：点击类第一优先 Win32 防爬）
     const snap0 = await this.deps.snapshot()
     const fieldsBefore = this.collectFieldLike(snap0)
     const entry = this.locateSearchEntry(snap0)
@@ -221,15 +214,15 @@ export class ChatSearchExecutor {
           : `顶栏搜索入口候选 ${entry.count} 个无法唯一定位（${this.lastEntryDiag}），请人工查看`,
       )
     }
-    await this.clickBrowseFirst(entry.point!, viewportOf(snap0))
+    await this.deps.click(entry.point!, viewportOf(snap0))
     await this.sleep(SEARCH_OPEN_DELAY)
 
     // 2. 定位搜索框：diff「点击后新增的输入条形态元素」（不挑标签——BOSS 已改版为
     //    contenteditable DIV，不再是 <input>；形态=左栏内、视口上部、宽而矮的条）；
-    //    无新增时重试一次点击再 diff（弹层偶发不响应首击，浏览类动作重试安全）
+    //    无新增时重试一次点击再 diff（弹层偶发不响应首击，重试安全——首击只开弹层无写效应）
     let box = this.findSearchField(await this.deps.snapshot(), fieldsBefore)
     if (!box.point && box.count === 0) {
-      await this.clickBrowseFirst(entry.point!, viewportOf(snap0))
+      await this.deps.click(entry.point!, viewportOf(snap0))
       await this.sleep(SEARCH_OPEN_DELAY)
       box = this.findSearchField(await this.deps.snapshot(), fieldsBefore)
     }
@@ -240,17 +233,12 @@ export class ChatSearchExecutor {
           : `点击搜索入口后新增 ${box.count} 个候选输入条，无法唯一定位，请人工查看`,
       )
     }
-    await this.clickBrowseFirst(box.point, viewportOf(snap0))
-    await this.sleep(SEARCH_FOCUS_DELAY)
 
-    // 3. CDP 逐字输入姓名（风控拦鼠标合成事件，不拦键盘 char 事件）。
-    //    输入后立即校验文字落地（真机 2026-08-24：搜索框聚焦失败时 typeChar 落空，
-    //    带病继续会把聊天消息输进搜索框——姓名每个字符都必须出现在页面 strings）
-    for (const ch of name) {
-      if (this.deps.signal?.aborted) throw new CancelledError('已取消：输入搜索姓名时中止')
-      await this.deps.typeChar(ch)
-      await this.sleep(TYPE_INTERVAL_MS)
-    }
+    // 3. Win32 原子「点击搜索框聚焦 + 真实键盘逐字输入姓名」（同一次 ps1 调用，防焦点被抢）。
+    //    输入后校验文字落地（聚焦失败时输入会落空，带病继续会把聊天消息输进搜索框——
+    //    姓名每个字符都必须出现在页面 strings）
+    if (this.deps.signal?.aborted) throw new CancelledError('已取消：输入搜索姓名时中止')
+    await this.deps.clickAndType(box.point, viewportOf(snap0), name)
     await this.sleep(SEARCH_RESULT_DELAY)
     const snapTyped = await this.deps.snapshot()
     const charsPresent = new Set(snapTyped.strings.filter((s) => typeof s === 'string' && s.trim().length === 1))
@@ -261,8 +249,8 @@ export class ChatSearchExecutor {
       )
     }
 
-    // 4. 定位目标姓名的搜索结果项（「联系人」标签下方带的公司名唯一命中），CDP 点击优先
-    //    （真机 2026-08-24：结果卡片点击与入口一样存在 Win32 DPI 偏差，点偏后误进错误会话）
+    // 4. 定位目标姓名的搜索结果项（「联系人」标签下方带的公司名唯一命中），Win32 点击
+    //    （结果卡片是切换会话的写动作，第一优先 Win32 真实鼠标）
     const { point: target, count: targetCount } = this.locateTargetResult(snapTyped)
     if (targetCount !== 1) {
       throw new ChatSearchError(
@@ -271,7 +259,7 @@ export class ChatSearchExecutor {
           : `搜索「${name}」在结果列表有 ${targetCount} 个可见命中，无法唯一定位，请人工查看`,
       )
     }
-    await this.clickBrowseFirst(target!, viewportOf(snapTyped))
+    await this.deps.click(target!, viewportOf(snapTyped))
     await this.sleep(ENTER_CHAT_DELAY)
 
     // 5. 强校验进入对话：发送按钮唯一 + 搜索浮层已关闭（「联系人」标签消失——点击结果
@@ -286,12 +274,6 @@ export class ChatSearchExecutor {
           : `点击结果卡片后搜索浮层未关闭、对话未切换到「${name}」（结果点击未生效），请人工查看`,
       )
     }
-  }
-
-  /** CDP 浏览类点击优先（入口/搜索框聚焦——真机实证 Win32 换算有 DPI 偏差），缺省回退 Win32 */
-  private async clickBrowseFirst(point: ClickPoint, viewport: { width: number; height: number }): Promise<void> {
-    if (this.deps.clickBrowse) return this.deps.clickBrowse(point)
-    return this.deps.click(point, viewport)
   }
 
   /**

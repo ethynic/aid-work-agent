@@ -47,7 +47,7 @@ function fakeFactory(snaps: DomSnapshot[], opts: { url?: string; throwOnCreate?:
     clickBrowse: async () => {},
     mouseWheel: async () => {},
     pressEscape: async () => {},
-    typeChar: async () => {},
+    clickAndType: async () => {},
     captureFullpage: async () => Buffer.alloc(0),
     getUrl: async () => opts.url ?? 'https://www.zhipin.com/web/chat/recommend',
     close: async () => {},

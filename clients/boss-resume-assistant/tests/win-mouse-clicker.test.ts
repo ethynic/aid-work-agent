@@ -50,3 +50,36 @@ test('ps1 守卫失败（exit 2 遮挡）→ WinClickError 带 exitCode', async 
     return true
   })
 })
+
+test('clickAndType：传 -Text 中文原文，timeout 随文本长度放大', async () => {
+  const calls: Array<{ args: string[]; timeout: number }> = []
+  const clicker = new WinMouseClicker({
+    scriptPath: 'C:\\proj\\scripts\\win-click.ps1',
+    execFileImpl: async (_file, args, opts) => {
+      calls.push({ args, timeout: opts.timeout })
+      return { stdout: '已点击', stderr: '' }
+    },
+  })
+  const text = '你好，请查收简历'
+  await clicker.clickAndType({ x: 1016, y: 1195 }, VP, text)
+  assert.equal(calls.length, 1)
+  const { args, timeout } = calls[0]!
+  assert.equal(args[args.indexOf('-X') + 1], '1016')
+  assert.equal(args[args.indexOf('-Y') + 1], '1195')
+  assert.equal(args[args.indexOf('-Text') + 1], text)
+  // timeout = 30000 + 字数×500（中文按 code unit 计）
+  assert.equal(timeout, 30000 + text.length * 500)
+})
+
+test('clickAndType：空文本 / 坐标超视口 → WinClickError，不调 ps1', async () => {
+  let called = 0
+  const clicker = new WinMouseClicker({
+    execFileImpl: async () => {
+      called++
+      return { stdout: '', stderr: '' }
+    },
+  })
+  await assert.rejects(clicker.clickAndType({ x: 100, y: 100 }, VP, ''), WinClickError)
+  await assert.rejects(clicker.clickAndType({ x: 9999, y: 100 }, VP, '你好'), WinClickError)
+  assert.equal(called, 0)
+})

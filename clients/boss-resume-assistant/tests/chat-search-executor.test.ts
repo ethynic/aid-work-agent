@@ -1,6 +1,6 @@
 /**
  * ChatSearchExecutor 单测：搜索找人链路（点搜索图标 → 输入姓名 → 点结果项公司名 → 进入对话）。
- * fake 注入 snapshot/click/typeChar。
+ * fake 注入 snapshot/click/clickAndType。
  *
  * 真机关键（2026-08-13）：搜索结果浮层姓名是逐字节点（反爬），但**公司名是连续字符串且 "_" 开头**，
  * 故 locateTargetResult 找「联系人」标签下方的公司名（"_" 开头）点击，不靠姓名匹配。
@@ -53,20 +53,20 @@ function snapshotQueue(snaps: DomSnapshot[]): () => Promise<DomSnapshot> {
 
 interface FakeDeps {
   clicks: ClickPoint[]
-  typed: string[]
+  clickAndTypes: Array<{ point: ClickPoint; text: string }>
   click: (p: ClickPoint) => Promise<void>
-  typeChar: (ch: string) => Promise<void>
+  clickAndType: (p: ClickPoint, viewport: { width: number; height: number }, text: string) => Promise<void>
   sleep: (ms: number) => Promise<void>
 }
 
 function recorder(): FakeDeps {
   const clicks: ClickPoint[] = []
-  const typed: string[] = []
+  const clickAndTypes: Array<{ point: ClickPoint; text: string }> = []
   return {
     clicks,
-    typed,
+    clickAndTypes,
     click: async (p: ClickPoint) => { clicks.push(p) },
-    typeChar: async (ch: string) => { typed.push(ch) },
+    clickAndType: async (p: ClickPoint, _viewport: { width: number; height: number }, text: string) => { clickAndTypes.push({ point: p, text }) },
     sleep: async () => {},
   }
 }
@@ -88,13 +88,15 @@ test('正常找人：点搜索图标 → 搜索框 → 输入姓名 → 点结�
       searchSnap({ items: [{ text: '联系人', bounds: CONTACTS_LABEL }, { text: '_测试公司', bounds: COMPANY }, { text: '张', bounds: [300, 188, 16, 16] }, { text: '三', bounds: [318, 188, 16, 16] }] }), // snap2：联系人标签 + 结果项公司名
       searchSnap({ items: [{ text: '发送', bounds: SEND_BTN }] }), // snap3：进入对话
     ]),
-    click: r.click, typeChar: r.typeChar, sleep: r.sleep,
+    click: r.click, clickAndType: r.clickAndType, sleep: r.sleep,
   })
   await executor.openContact({ name: NAME })
   assert.deepEqual(r.clicks[0], SEARCH_ENTRY_HIT)
   assert.deepEqual(r.clicks[r.clicks.length - 1], COMPANY_HIT)
-  assert.ok(r.clicks.some((c) => c.x === 368 && c.y === 141), '应点击搜索框 (368,141)')
-  assert.equal(r.typed.join(''), NAME)
+  // 搜索框聚焦+姓名输入走同一次 clickAndType（点 (368,141) + 输入姓名）
+  assert.equal(r.clickAndTypes.length, 1)
+  assert.deepEqual(r.clickAndTypes[0]!.point, { x: 368, y: 141 })
+  assert.equal(r.clickAndTypes[0]!.text, NAME)
 })
 
 test('diff 定位：点前已有左栏 INPUT（收缩态），点后新增一个 → 点新增的（分辨率无关）', async () => {
@@ -107,13 +109,14 @@ test('diff 定位：点前已有左栏 INPUT（收缩态），点后新增一个
       searchSnap({ items: [{ text: '联系人', bounds: CONTACTS_LABEL }, { text: '_测试公司', bounds: COMPANY }, { text: '张', bounds: [300, 188, 16, 16] }, { text: '三', bounds: [318, 188, 16, 16] }] }),
       searchSnap({ items: [{ text: '发送', bounds: SEND_BTN }] }),
     ]),
-    click: r.click, typeChar: r.typeChar, sleep: r.sleep,
+    click: r.click, clickAndType: r.clickAndType, sleep: r.sleep,
   })
   await executor.openContact({ name: NAME })
   // 点击的是新增的搜索框 center (368,141)，不是收缩态那个 (430,142)
   assert.deepEqual(r.clicks[0], SEARCH_ENTRY_HIT)
   assert.deepEqual(r.clicks[r.clicks.length - 1], COMPANY_HIT)
-  assert.ok(r.clicks.some((c) => c.x === 368 && c.y === 141), '应点击搜索框 (368,141)')
+  assert.equal(r.clickAndTypes.length, 1)
+  assert.deepEqual(r.clickAndTypes[0]!.point, { x: 368, y: 141 })
 })
 
 test('diff 定位：点图标弹出的 INPUT 在右列（cx>=850，点错图标开了别的弹层）→ 不当搜索框', async () => {
@@ -121,29 +124,29 @@ test('diff 定位：点图标弹出的 INPUT 在右列（cx>=850，点错图标�
   const RIGHT_POPUP_INPUT: [number, number, number, number] = [1000, 130, 240, 30] // 右列弹层表单输入框
   const executor = new ChatSearchExecutor({
     snapshot: snapshotQueue([searchSnap(), searchSnap({ layout: [RIGHT_POPUP_INPUT] })]),
-    click: r.click, typeChar: r.typeChar, sleep: r.sleep,
+    click: r.click, clickAndType: r.clickAndType, sleep: r.sleep,
   })
   await assert.rejects(executor.openContact({ name: NAME }), /未发现新增的搜索输入条|未找到搜索框/)
   assert.ok(r.clicks.length === 1 || r.clicks.length === 2, `入口点击次数应 1 或 2（含重试），实际 ${r.clicks.length}`)
-  assert.equal(r.typed.length, 0)
+  assert.equal(r.clickAndTypes.length, 0)
 })
 
 test('搜索框非唯一（doc0 有 2 个 INPUT）→ ChatSearchError，不点结果', async () => {
   const r = recorder()
   const executor = new ChatSearchExecutor({
     snapshot: snapshotQueue([searchSnap(), searchSnap({ layout: [SEARCH_BOX, [248, 150, 240, 30]] })]),
-    click: r.click, typeChar: r.typeChar, sleep: r.sleep,
+    click: r.click, clickAndType: r.clickAndType, sleep: r.sleep,
   })
   await assert.rejects(executor.openContact({ name: NAME }), /2 个候选输入条|2 个候选搜索框/)
   assert.deepEqual(r.clicks.length >= 1, true)
-  assert.equal(r.typed.length, 0)
+  assert.equal(r.clickAndTypes.length, 0)
 })
 
 test('点击搜索图标后未找到搜索框 → ChatSearchError', async () => {
   const r = recorder()
   const executor = new ChatSearchExecutor({
     snapshot: snapshotQueue([searchSnap(), searchSnap()]),
-    click: r.click, typeChar: r.typeChar, sleep: r.sleep,
+    click: r.click, clickAndType: r.clickAndType, sleep: r.sleep,
   })
   await assert.rejects(executor.openContact({ name: NAME }), /未发现新增的搜索输入条|未找到搜索框/)
   assert.ok(r.clicks.length >= 1, '入口已点击（无搜索框时含重试）')
@@ -157,21 +160,22 @@ test('搜索后无结果项公司名（搜索无结果）→ ChatSearchError，�
       searchSnap({ layout: [SEARCH_BOX] }),
       searchSnap({ items: [{ text: '联系人', bounds: CONTACTS_LABEL }, { text: '张', bounds: [300, 188, 16, 16] }, { text: '三', bounds: [318, 188, 16, 16] }] }), // snap2：只有联系人标签，无公司名
     ]),
-    click: r.click, typeChar: r.typeChar, sleep: r.sleep,
+    click: r.click, clickAndType: r.clickAndType, sleep: r.sleep,
   })
   await assert.rejects(executor.openContact({ name: NAME }), /未在结果列表找到该姓名的可见项/)
-  assert.equal(r.typed.join(''), NAME)
-  assert.deepEqual(r.clicks, [SEARCH_ENTRY_HIT, { x: 368, y: 141 }])
+  assert.equal(r.clickAndTypes.length, 1)
+  assert.equal(r.clickAndTypes[0]!.text, NAME)
+  assert.deepEqual(r.clicks, [SEARCH_ENTRY_HIT])
 })
 
 test('搜索后无「联系人」标签（浮层未开/异常）→ ChatSearchError', async () => {
   const r = recorder()
   const executor = new ChatSearchExecutor({
     snapshot: snapshotQueue([searchSnap(), searchSnap({ layout: [SEARCH_BOX] }), searchSnap({ items: [{ text: '张', bounds: [300, 188, 16, 16] }, { text: '三', bounds: [318, 188, 16, 16] }] })]),
-    click: r.click, typeChar: r.typeChar, sleep: r.sleep,
+    click: r.click, clickAndType: r.clickAndType, sleep: r.sleep,
   })
   await assert.rejects(executor.openContact({ name: NAME }), /未在结果列表找到该姓名的可见项/)
-  assert.deepEqual(r.clicks, [SEARCH_ENTRY_HIT, { x: 368, y: 141 }])
+  assert.deepEqual(r.clicks, [SEARCH_ENTRY_HIT])
 })
 
 test('多个结果项公司名（多个匹配）→ ChatSearchError（无法唯一定位）', async () => {
@@ -183,10 +187,10 @@ test('多个结果项公司名（多个匹配）→ ChatSearchError（无法唯�
       // snap2：2 个公司名（2 个结果项）
       searchSnap({ items: [{ text: '联系人', bounds: CONTACTS_LABEL }, { text: '_甲公司', bounds: COMPANY }, { text: '_乙公司', bounds: [304, 242, 200, 16] }, { text: '张', bounds: [300, 188, 16, 16] }, { text: '三', bounds: [318, 188, 16, 16] }] }),
     ]),
-    click: r.click, typeChar: r.typeChar, sleep: r.sleep,
+    click: r.click, clickAndType: r.clickAndType, sleep: r.sleep,
   })
   await assert.rejects(executor.openContact({ name: NAME }), /有 2 个可见命中/)
-  assert.deepEqual(r.clicks, [SEARCH_ENTRY_HIT, { x: 368, y: 141 }])
+  assert.deepEqual(r.clicks, [SEARCH_ENTRY_HIT])
 })
 
 test('点结果项后未进入对话（无发送按钮）→ ChatSearchError', async () => {
@@ -198,30 +202,31 @@ test('点结果项后未进入对话（无发送按钮）→ ChatSearchError', a
       searchSnap({ items: [{ text: '联系人', bounds: CONTACTS_LABEL }, { text: '_测试公司', bounds: COMPANY }, { text: '张', bounds: [300, 188, 16, 16] }, { text: '三', bounds: [318, 188, 16, 16] }] }),
       searchSnap(), // snap3：未进入对话，无发送按钮
     ]),
-    click: r.click, typeChar: r.typeChar, sleep: r.sleep,
+    click: r.click, clickAndType: r.clickAndType, sleep: r.sleep,
   })
   await assert.rejects(executor.openContact({ name: NAME }), /未进入对话/)
   assert.deepEqual(r.clicks[0], SEARCH_ENTRY_HIT)
   assert.deepEqual(r.clicks[r.clicks.length - 1], COMPANY_HIT)
-  assert.ok(r.clicks.some((c) => c.x === 368 && c.y === 141), '应点击搜索框 (368,141)')
+  assert.equal(r.clickAndTypes.length, 1)
+  assert.deepEqual(r.clickAndTypes[0]!.point, { x: 368, y: 141 })
 })
 
 test('取消（signal 已 abort）→ CancelledError，不点不输入', async () => {
   const r = recorder()
   const executor = new ChatSearchExecutor({
     snapshot: snapshotQueue([searchSnap()]),
-    click: r.click, typeChar: r.typeChar, sleep: r.sleep, signal: AbortSignal.abort(),
+    click: r.click, clickAndType: r.clickAndType, sleep: r.sleep, signal: AbortSignal.abort(),
   })
   await assert.rejects(executor.openContact({ name: NAME }), (e: unknown) => { assert.equal((e as Error).name, 'CancelledError'); return true })
   assert.equal(r.clicks.length, 0)
-  assert.equal(r.typed.length, 0)
+  assert.equal(r.clickAndTypes.length, 0)
 })
 
 test('搜索框在右列（cx>=850）→ 视为未找到搜索框', async () => {
   const r = recorder()
   const executor = new ChatSearchExecutor({
     snapshot: snapshotQueue([searchSnap(), searchSnap({ layout: [[880, 126, 240, 30]] })]),
-    click: r.click, typeChar: r.typeChar, sleep: r.sleep,
+    click: r.click, clickAndType: r.clickAndType, sleep: r.sleep,
   })
   await assert.rejects(executor.openContact({ name: NAME }), /未发现新增的搜索输入条|未找到搜索框/)
 })
@@ -235,24 +240,26 @@ test('findSearchBox 按 nodeName=INPUT 过滤：多个大 DIV 满足几何但只
       searchSnap({ items: [{ text: '联系人', bounds: CONTACTS_LABEL }, { text: '_测试公司', bounds: COMPANY }, { text: '张', bounds: [300, 188, 16, 16] }, { text: '三', bounds: [318, 188, 16, 16] }] }),
       searchSnap({ items: [{ text: '发送', bounds: SEND_BTN }] }),
     ]),
-    click: r.click, typeChar: r.typeChar, sleep: r.sleep,
+    click: r.click, clickAndType: r.clickAndType, sleep: r.sleep,
   })
   await executor.openContact({ name: NAME })
   assert.deepEqual(r.clicks[0], SEARCH_ENTRY_HIT)
   assert.deepEqual(r.clicks[r.clicks.length - 1], COMPANY_HIT)
-  assert.ok(r.clicks.some((c) => c.x === 368 && c.y === 141), '应点击搜索框 (368,141)')
-  assert.equal(r.typed.join(''), NAME)
+  // 搜索框聚焦+姓名输入走同一次 clickAndType（点 (368,141) + 输入姓名）
+  assert.equal(r.clickAndTypes.length, 1)
+  assert.deepEqual(r.clickAndTypes[0]!.point, { x: 368, y: 141 })
+  assert.equal(r.clickAndTypes[0]!.text, NAME)
 })
 
 test('顶栏无「批量」锚点且无唯一 svg → 报未找到搜索入口，不点任何东西', async () => {
   const r = recorder()
   const executor = new ChatSearchExecutor({
     snapshot: snapshotQueue([searchSnap({ noAnchor: true }), searchSnap({ noAnchor: true })]),
-    click: r.click, typeChar: r.typeChar, sleep: r.sleep,
+    click: r.click, clickAndType: r.clickAndType, sleep: r.sleep,
   })
   await assert.rejects(executor.openContact({ name: NAME }), /未找到顶栏搜索入口/)
   assert.deepEqual(r.clicks, [])
-  assert.equal(r.typed.length, 0)
+  assert.equal(r.clickAndTypes.length, 0)
 })
 
 test('真机嵌套形态：容器 DIV 34x34 + 内部 svg 13x13 双命中 → 聚簇唯一定位点容器中心', async () => {
@@ -265,10 +272,11 @@ test('真机嵌套形态：容器 DIV 34x34 + 内部 svg 13x13 双命中 → 聚
       searchSnap({ items: [{ text: '联系人', bounds: CONTACTS_LABEL }, { text: '_测试公司', bounds: COMPANY }, { text: '张', bounds: [300, 188, 16, 16] }, { text: '三', bounds: [318, 188, 16, 16] }] }),
       searchSnap({ items: [{ text: '发送', bounds: SEND_BTN }] }),
     ]),
-    click: r.click, typeChar: r.typeChar, sleep: r.sleep,
+    click: r.click, clickAndType: r.clickAndType, sleep: r.sleep,
   })
   await executor.openContact({ name: NAME })
   // 聚簇取最大者（DIV 34x34）代表，点其中心 (520,141)——与点 svg(519.5,141.5) 等价
   assert.deepEqual(r.clicks[0], { x: 520, y: 141 })
-  assert.equal(r.typed.join(''), NAME)
+  assert.equal(r.clickAndTypes.length, 1)
+  assert.equal(r.clickAndTypes[0]!.text, NAME)
 })

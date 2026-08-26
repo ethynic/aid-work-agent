@@ -37,12 +37,14 @@ export interface BossSession {
    *  浏览动作（点牛人卡片打开简历详情等）真机实证 CDP 有效且不被拦、不占用真实鼠标；
    *  写动作/筛选类控件仍必须走 click（Win32），不得混用 */
   clickBrowse(point: ClickPoint): Promise<void>
+  /** Win32 原子「真实鼠标点击聚焦 + 真实键盘逐字输入」（一次 ps1 调用内完成）。
+   *  2026-08-26 决策：点击/输入类操作第一优先 Win32 真实事件防风控；此前 08-24 误判的
+   *  「DPI 换算偏差」实为用户移动窗口致输入框不可见，换算本身无偏差 */
+  clickAndType(point: ClickPoint, viewport: { width: number; height: number }, text: string): Promise<void>
   /** CDP mouseWheel 滚动（浏览类操作，不占用真实鼠标） */
   mouseWheel(x: number, y: number, deltaY: number): Promise<void>
   /** 按 Escape（CDP dispatchKey，关简历预览弹层用） */
   pressEscape(): Promise<void>
-  /** CDP char 事件逐字输入（调用方保证焦点已在目标输入框） */
-  typeChar(ch: string): Promise<void>
   /** 无 clip 整页截图（Page.captureScreenshot png）。输出即 device px，与 DOMSnapshot bounds 同坐标系，
    *  按 device 坐标直接裁剪即可，绝不做 DPI 换算（设计 §10.8 真机实证：整页 1249x1277 = viewport bounds） */
   captureFullpage(): Promise<Buffer>
@@ -111,9 +113,7 @@ export const defaultSessionFactory: BossSessionFactory = async (ctx) => {
       await gw.dispatchKey({ type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
       await gw.dispatchKey({ type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
     },
-    typeChar: async (ch) => {
-      await gw.dispatchKey({ type: 'char', key: ch, text: ch })
-    },
+    clickAndType: (point, viewport, text) => clicker.clickAndType(point, viewport, text),
     captureFullpage: async () => Buffer.from(await gw.captureScreenshot({ format: 'png' }), 'base64'),
     getUrl: async () => {
       const targets = await gw.getTargets()
