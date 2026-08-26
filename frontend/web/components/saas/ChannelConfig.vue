@@ -784,9 +784,10 @@ async function handleKfSubmit() {
   }
   if (kfForm.value.avatar_base64) payload.avatar_base64 = kfForm.value.avatar_base64
   if (kfForm.value.employee_qr_base64) payload.employee_qr_base64 = kfForm.value.employee_qr_base64
-  if (kfForm.value.servicer_userid_list) {
-    payload.servicer_userid_list = kfForm.value.servicer_userid_list.split(/[,，]/).map((s: string) => s.trim()).filter(Boolean)
-  }
+  // 始终传完整列表（空数组表示清空接待人员），后端与企微接待人员做同步
+  payload.servicer_userid_list = kfForm.value.servicer_userid_list
+    ? kfForm.value.servicer_userid_list.split(/[,，]/).map((s: string) => s.trim()).filter(Boolean)
+    : []
 
   kfSubmitting.value = true
   kfFormError.value = ''
