@@ -34,7 +34,7 @@ public static class WeixinProbeWin32 {
  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h,out RECT r);
  [DllImport("user32.dll")] public static extern bool SetCursorPos(int x,int y);
  [DllImport("user32.dll")] public static extern void mouse_event(uint f,uint x,uint y,uint d,IntPtr e);
- [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h,uint m,IntPtr w,IntPtr l);
+ [DllImport("user32.dll",CharSet=CharSet.Unicode)] public static extern bool PostMessage(IntPtr h,uint m,IntPtr w,IntPtr l);
  [DllImport("user32.dll")] public static extern bool ScreenToClient(IntPtr h,ref POINT p);
  [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr c);
  [DllImport("user32.dll")] public static extern IntPtr GetThreadDpiAwarenessContext();
@@ -270,6 +270,35 @@ function Get-WeixinSearchOverlayHwnd {
         }
     }
     return [int64]0
+}
+
+function Send-WeixinPostMessageText {
+    # 光标/剪贴板/前台无关的文本输入：逐字符 PostMessage WM_CHAR。
+    # 2026-08-26 实测：微信 4.x 输入框接受 WM_CHAR（含中文，需 PostMessageW 即
+    # CharSet.Unicode，ANSI 版会按 GBK 转码成乱码）；窗口非前台时也能正常输入。
+    # 注意：退格/回车等控制键不能用 WM_CHAR（无效），要用 Send-WeixinPostMessageKey。
+    param([Parameter(Mandatory)][int64]$Hwnd, [Parameter(Mandatory)][string]$Text)
+    foreach ($ch in $Text.ToCharArray()) {
+        [void][WeixinProbeWin32]::PostMessage([IntPtr]$Hwnd, 0x0102, [IntPtr][int][char]$ch, [IntPtr]1)  # WM_CHAR
+        Start-Sleep -Milliseconds 30
+    }
+}
+
+function Send-WeixinPostMessageKey {
+    # 光标/前台无关的单键投递：WM_KEYDOWN + WM_KEYUP，lParam bit16-23 为扫描码。
+    # 2026-08-26 实测可用：Enter（Vk=0x0D ScanCode=0x1C，微信输入框=发送）、
+    # Backspace（Vk=0x08 ScanCode=0x0E）。Ctrl+A 之类的组合键不可行：Qt 从
+    # GetKeyState 读修饰键状态，PostMessage 不改变物理键盘状态。
+    param(
+        [Parameter(Mandatory)][int64]$Hwnd,
+        [Parameter(Mandatory)][int]$Vk,
+        [Parameter(Mandatory)][int]$ScanCode
+    )
+    $lpDown = [IntPtr](1 -bor ($ScanCode -shl 16))
+    $lpUp = [IntPtr]((1 -bor ($ScanCode -shl 16)) -bor 0xC0000000)
+    [void][WeixinProbeWin32]::PostMessage([IntPtr]$Hwnd, 0x0100, [IntPtr]$Vk, $lpDown)  # WM_KEYDOWN
+    Start-Sleep -Milliseconds 40
+    [void][WeixinProbeWin32]::PostMessage([IntPtr]$Hwnd, 0x0101, [IntPtr]$Vk, $lpUp)    # WM_KEYUP
 }
 
 function Get-WeixinUiaDump {

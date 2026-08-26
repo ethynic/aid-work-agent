@@ -21,8 +21,9 @@ Locate TWO elements and return their CENTER click coordinates:
 2. "send_button": the send button (usually bottom-right, labeled "发送" / Send)
 Coordinate origin = top-left corner of the screenshot. Unit = pixel.
 Return ONLY a single JSON object, no markdown, no explanation:
-{"input_box": {"x": <int>, "y": <int>}, "send_button": {"x": <int>, "y": <int>}, "found": <true|false>}
-If either element cannot be located, return {"input_box":{"x":0,"y":0},"send_button":{"x":0,"y":0},"found":false}.
+{"input_box": {"x": <int>, "y": <int>}, "send_button": {"x": <int>, "y": <int>}, "input_empty": <true|false>, "found": <true|false>}
+"input_empty": whether the input box currently contains NO draft text (empty = true).
+If either element cannot be located, return {"input_box":{"x":0,"y":0},"send_button":{"x":0,"y":0},"input_empty":false,"found":false}.
 Coordinates are INSIDE the screenshot image (not the screen).
 '@
 
@@ -120,8 +121,10 @@ try {
 
     # Kimi 定位输入框 + 发送按钮
     $loc = Invoke-KimiVision $shotPath
-    Write-Host "[3] vision found=$($loc.found)"
+    Write-Host "[3] vision found=$($loc.found) input_empty=$($loc.input_empty)"
     if (-not $loc.found) { throw 'VISION_NOT_FOUND' }
+    # 输入框有残留草稿时禁止直接输入（文本会追加到草稿后面），需人工清空后重跑
+    if ($loc.input_empty -eq $false) { throw 'INPUT_NOT_EMPTY' }
     $inboxX = [int]$loc.input_box.x; $inboxY = [int]$loc.input_box.y
     $sendX = [int]$loc.send_button.x; $sendY = [int]$loc.send_button.y
     Write-Host ("[3] input_box png=({0},{1}) screen=({2},{3})" -f $inboxX,$inboxY,($winLeft+$inboxX),($winTop+$inboxY))
@@ -152,19 +155,17 @@ try {
     Write-Host "[5a] 点击输入框"
     Click-ScreenPoint $inboxX $inboxY $winLeft $winTop $mainGuard
 
-    # 5b 清空 + 粘贴
-    Send-WeixinKeyChord @('CTRL', 'A') $mainGuard; Start-Sleep -Milliseconds 120
-    Send-WeixinKeyChord @('DEL') $mainGuard; Start-Sleep -Milliseconds 150
-    $script:originalClipboard = Get-ClipboardTextSafe
-    Send-WeixinPasteText $Message $mainGuard
+    # 5b 文本输入：PostMessage WM_CHAR 逐字投递，不经剪贴板/物理键盘，
+    # 不要求微信是前台窗口（RDP 会话、用户正在其他窗口打字均不受影响）。
+    # 前置保障：步骤 [3] 已用视觉确认输入框无残留草稿（input_empty=true）。
+    Send-WeixinPostMessageText -Hwnd $mainHwnd -Text $Message
     Start-Sleep -Milliseconds 400
-    Write-Host "[5b] 已粘贴 '$Message'"
+    Write-Host "[5b] 已投递文本 '$Message'"
 
-    # 5c 回车发送（微信默认 Enter=发送）
-    # 视觉定位的"发送按钮"坐标在本次实验被误识为语音通话按钮，点击不可靠；
-    # Enter 键是微信最稳定的发送路径，绕过发送按钮识别不准的问题。
-    Write-Host "[5c] 回车发送（Enter）"
-    Send-WeixinKeyChord @('ENTER') $mainGuard
+    # 5c 回车发送：PostMessage WM_KEYDOWN/UP Return（视觉定位的"发送按钮"曾被误识为
+    # 语音通话按钮，点击不可靠；Enter 是微信最稳定的发送路径）。
+    Write-Host "[5c] 回车发送（PostMessage Enter）"
+    Send-WeixinPostMessageKey -Hwnd $mainHwnd -Vk 0x0D -ScanCode 0x1C
     Start-Sleep -Milliseconds 800
 
     # 6 发送后截图，Kimi 二次确认最后一条消息是否为 $Message
@@ -177,6 +178,5 @@ try {
     Write-Host "[6] after-send shot: $afterPath"
     Write-Host "PROBE_RESULT: SENT (请人工核对 $afterPath 最后一条消息是否为 '$Message')"
 } finally {
-    if ($null -ne $script:originalClipboard) { try { Set-ClipboardTextRetry $script:originalClipboard } catch {} }
     [void]$mutex.ReleaseMutex(); $mutex.Dispose()
 }
