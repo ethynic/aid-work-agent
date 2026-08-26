@@ -126,7 +126,7 @@
                                   class="w-4 h-4 rounded border-primary-200 text-primary-600 focus:ring-primary-500"
                                   :checked="additionalTools.includes(tool.id)" @change="toggleTool(tool.id)" />
                                 <span class="font-medium text-gray-700">{{ tool.name }}</span>
-                                <span class="text-gray-400 truncate flex-1">{{ tool.description }}</span>
+                                <span class="text-gray-400 truncate flex-1" :title="tool.description">{{ tool.description }}</span>
                               </label>
                               <div v-if="availableTools.length === 0" class="text-sm text-gray-400 py-2">加载中...</div>
                             </div>
@@ -145,7 +145,7 @@
                           <input type="checkbox" :checked="additionalTools.includes(tool.id)"
                             @change="toggleTool(tool.id)" />
                           <span class="font-medium text-gray-700">{{ tool.name }}</span>
-                          <span class="text-gray-400 truncate flex-1">{{ tool.description }}</span>
+                          <span class="text-gray-400 truncate flex-1" :title="tool.description">{{ tool.description }}</span>
                         </label>
                         <div v-if="availableTools.length === 0" class="text-xs text-gray-400 py-1">加载中...</div>
                       </div>
@@ -165,7 +165,7 @@
                                 class="w-4 h-4 rounded border-primary-200 text-primary-600 focus:ring-primary-500"
                                 :checked="form.skills?.allowed?.includes(skill.id)" @change="toggleSkill(skill.id)" />
                               <span class="font-medium text-gray-700">{{ skill.name }}</span>
-                              <span class="text-gray-400 truncate flex-1">{{ skill.description }}</span>
+                              <span class="text-gray-400 truncate flex-1" :title="skill.description">{{ skill.description }}</span>
                             </label>
                             <div v-if="availableSkills.length === 0" class="text-sm text-gray-400 py-2">加载中...</div>
                           </div>
@@ -178,7 +178,7 @@
                         <input type="checkbox" :checked="form.skills?.allowed?.includes(skill.id)"
                           @change="toggleSkill(skill.id)" />
                         <span class="font-medium text-gray-700">{{ skill.name }}</span>
-                        <span class="text-gray-400 truncate flex-1">{{ skill.description }}</span>
+                        <span class="text-gray-400 truncate flex-1" :title="skill.description">{{ skill.description }}</span>
                       </label>
                       <div v-if="availableSkills.length === 0" class="text-xs text-gray-400 py-1">加载中...</div>
                     </div>
