@@ -5,7 +5,7 @@
 路由前缀：/api/client/v1
 - POST /activate      激活码激活（无需鉴权）
 - GET  /credits       积分余额查询
-- POST /llm/chat      LLM 代理（计费 ×5）
+- POST /llm/chat      LLM 代理（计费 ×10）
 - POST /ocr/parse     OCR 代理（不扣费，记录调用）
 - POST /logs          日志上报
 """
@@ -194,14 +194,14 @@ async def get_credits_detail(
     }
 
 
-# ============== LLM 代理（计费 ×5） ==============
+# ============== LLM 代理（计费 ×10） ==============
 
 @router.post("/llm/chat")
 async def llm_chat(
     req: LlmChatRequest,
     binding: ClientBinding = Depends(_require_binding),
 ):
-    """LLM 代理：调用 llm_gateway 并计费（×5 系数扣减租户余额）。"""
+    """LLM 代理：调用 llm_gateway 并计费（×10 系数扣减租户余额）。"""
     _check_credit(binding)
 
     try:
@@ -216,10 +216,13 @@ async def llm_chat(
         raise HTTPException(status_code=502, detail=f"LLM_PROVIDER_ERROR: {type(e).__name__}")
 
     usage = response.get("usage") or {}
-    model = llm_gateway.get_model_name()
-    provider = llm_gateway.get_provider_name()
+    # failover 切到备用 provider 时，计费必须按实际响应的模型计价：qwen 的
+    # parse_response 带 "model" 字段，优先取；deepseek 不带则回退主 provider 名
+    # （计费金额按 model 查价目表，记错模型 = 记错单价）
+    model = response.get("model") or llm_gateway.get_model_name()
+    provider = response.get("provider") or llm_gateway.get_provider_name()
 
-    # 计费 ×5 同事务扣减
+    # 计费 ×10 同事务扣减
     billing = ClientUsageLogDB.record_llm_usage(
         tenant_id=binding.tenant_id,
         binding_id=binding.binding_id,

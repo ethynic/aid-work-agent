@@ -13,7 +13,7 @@
 - **本地命令行工具（PyInstaller exe）**：承载完整 5 步业务逻辑（文心联网采集基础信息→采集官网→微信搜一搜搜领导姓名→微信RPA取证手机号），LLM/OCR 能力通过 HTTP 调用服务端代理（服务端计费）
 - **服务端（aid-work-agent）**：LLM 代理网关 + 积分计费 + 激活鉴权 + 日志接收
 
-客户端与客户租户绑定，消耗的积分按 **5 倍系数** 计入该租户的通用积分池。
+客户端与客户租户绑定，消耗的积分按 **10 倍系数** 计入该租户的通用积分池。
 
 ---
 
@@ -54,7 +54,7 @@
 │         ▼                ▼                ▼               ▼       │
 │     client_bindings   tenants.          llm_gateway    client_logs│
 │         表          credit_balance       (Qwen/Zhipu       表     │
-│                          (×5)            /DeepSeek)             │
+│                          (×10)           /DeepSeek)             │
 │                                                │                   │
 │                                                ▼                   │
 │                                         token_cost_prices         │
@@ -68,7 +68,7 @@
 |--------|------|------|
 | 客户端形态 | **Electron 桌面应用** | 与 boss-resume-assistant 技术栈一致；能 spawn 子进程、内嵌本地 SQLite、直接复用 HTML UI |
 | 积分归属 | **共用租户通用积分池** `tenants.credit_balance` | 复用现有计费链路，改动最小 |
-| 5倍系数含义 | **实际扣租户积分 = 标准积分 × 5** | 客户端消耗直接乘以5后扣减租户余额 |
+| 10倍系数含义 | **实际扣租户积分 = 标准积分 × 10** | 客户端消耗直接乘以10后扣减租户余额 |
 | 租户绑定方式 | **一次性激活码** | 适合"发码给客户"的交付场景；激活后换取绑定令牌 |
 | 业务逻辑载体 | **本地命令行工具（PyInstaller exe）** | 客户端只调命令行，不直接含业务逻辑；命令行含完整5步流水线 |
 | LLM 调用方式 | **客户端→服务端代理→模型提供商** | 服务端集中计费、集中管控 Key |
@@ -88,7 +88,7 @@
 | `clients/wechat-souyisou-rpa/scripts/llm_judge.py` | **改造为HTTP调用**服务端代理端点 |
 | `clients/association-enrichment-ui/static/index.html`（UI参考） | **UI 风格参考**，重写为 Electron renderer |
 | `src/llm/gateway.py`（LLM网关） | **服务端使用**，新增的代理端点调用它 |
-| `src/services/billing.py`（积分计算） | **服务端使用**，代理端点调用，增加5倍系数 |
+| `src/services/billing.py`（积分计算） | **服务端使用**，代理端点调用，增加10倍系数 |
 | `src/channels/wecom_personal_rpa/auth.py`（HMAC鉴权） | **参考**，客户端激活后的令牌鉴权可简化为 Bearer Token |
 | `clients/agent-desktop/electron/*`（Electron壳） | **参考** security/credentials/config 模式 |
 
@@ -194,7 +194,7 @@ CREATE INDEX IF NOT EXISTS idx_client_usage_logs_tenant ON client_usage_logs(ten
 CREATE INDEX IF NOT EXISTS idx_client_usage_logs_binding ON client_usage_logs(binding_id, created_at);
 ```
 
-> **注意**：积分扣减仍然走现有 `tenants.credit_balance`（同事务原子扣减，复用 `ChatRecordDB` 的扣费逻辑或新增平行的 `ClientUsageLogDB`）。`source_type = 'client'` 用于区分。`raw_credit_cost` 记录标准成本（便于审计），`credit_cost` 记录实扣（×5后）。
+> **注意**：积分扣减仍然走现有 `tenants.credit_balance`（同事务原子扣减，复用 `ChatRecordDB` 的扣费逻辑或新增平行的 `ClientUsageLogDB`）。`source_type = 'client'` 用于区分。`raw_credit_cost` 记录标准成本（便于审计），`credit_cost` 记录实扣（×10后）。
 
 ### 2.2 新增 API 端点
 
@@ -293,7 +293,7 @@ Content-Type: application/json
 2. **余额检查**：`tenants.credit_balance <= 0` → 返回 `402 NO_CREDIT`（阻断）
 3. 调用 `llm_gateway.chat(messages=..., temperature=..., max_tokens=..., response_format=...)`
 4. 取 `response["usage"]`（标准化后的 prompt_tokens / completion_tokens / cached_tokens）
-5. **积分计算（×5 系数）**：
+5. **积分计算（×10 系数）**：
    ```python
    raw_credit = calculate_credit_cost(usage, model)  # 现有函数
    credit_cost = math.ceil(raw_credit * CLIENT_CREDIT_MULTIPLIER * 100) / 100  # CLIENT_CREDIT_MULTIPLIER = 5
@@ -453,14 +453,14 @@ def verify_client_token(access_token: str) -> ClientBinding | None:
     return binding
 ```
 
-### 2.4 计费逻辑（×5 系数）
+### 2.4 计费逻辑（×10 系数）
 
 新增配置项 `src/config/settings.py`：
 
 ```python
 class ClientConfig(BaseModel):
     """客户端场景配置"""
-    credit_multiplier: float = 5.0  # 积分膨胀系数，客户端消耗 = 标准积分 × 此系数
+    credit_multiplier: float = 10.0  # 积分膨胀系数，客户端消耗 = 标准积分 × 此系数
     llm_request_timeout: int = 120  # 客户端 LLM 代理请求超时（秒）
     max_image_size_mb: int = 10     # OCR 图片大小上限
 
@@ -492,7 +492,7 @@ async def proxy_llm_chat(request, binding: ClientBinding):
         response_format=payload.get("response_format"),
     )
 
-    # 计算积分（标准 + ×5）
+    # 计算积分（标准 + ×10）
     usage = response.get("usage", {})
     model = llm_gateway.get_model_name()
     raw_credit = calculate_credit_cost(usage, model)  # 复用现有函数
@@ -1453,7 +1453,7 @@ nsis:
    - 进程内 await runtime.wenxin_collector.collect_one → attach 常开调试浏览器(9222) → 文心一言联网采集协会基础信息原文
      （含"官网网址：..."），根治 DeepSeek 不联网直出官网的幻觉
    - ProxyLLMGateway.chat() → POST /api/client/v1/llm/chat
-     → 服务端 llm_gateway(DeepSeek) 按原文解析成结构化字段 → 扣积分（×5）→ 返回
+     → 服务端 llm_gateway(DeepSeek) 按原文解析成结构化字段 → 扣积分（×10）→ 返回
      （文心是网页信息源，不引入文心 API、无文心计费；DeepSeek 解析那步才计费）
    - 文心失败（浏览器未就绪/验证码/超时）→ fallback 原 DeepSeek 直出，不至于整步空
    - 获取地址/邮箱/官网URL/主管单位等基础字段（不含人员/手机号）
@@ -1521,7 +1521,7 @@ nsis:
 | C3 | 同一时刻只允许一个收集任务 | RPA 会占用微信前台；`AssociationBatchEnricher` 串行执行 |
 | C4 | 所有 stdout 输出手机号必须脱敏 | 防止明文进入日志 |
 | C5 | access_token 用 safeStorage 加密存储 | 安全基线 |
-| C6 | 5倍系数在服务端计算，客户端不可篡改 | 计费可信 |
+| C6 | 10倍系数在服务端计算，客户端不可篡改 | 计费可信 |
 | C7 | 余额 ≤ 0 时服务端拒绝 LLM 调用，客户端必须停止 | 硬阻断 |
 | C8 | OCR 不收费（credit_cost=0），但记录调用次数；联网搜索已合并进 LLM 调用（计费） | 成本由服务端承担（OCR）；搜索随 LLM 计费 |
 | C9 | Playwright Chromium 由客户预装，不打包进 exe | 包体控制；CLI 启动检测缺失则 fail-loud 提示 |
@@ -1547,7 +1547,7 @@ nsis:
 ```python
 # src/config/settings.py 新增
 class ClientConfig(BaseModel):
-    credit_multiplier: float = 5.0
+    credit_multiplier: float = 10.0
     llm_request_timeout: int = 120
     max_image_size_mb: int = 10
 
@@ -1599,13 +1599,13 @@ MVP 方案：积分查询也通过 CLI 转发（`cli.exe credits`），避免 re
 | `deploy/db_update.sql`（追加） | 3 张新表 DDL |
 | `src/api/client_auth.py` | `verify_client_token` 中间件 |
 | `src/api/client_routes.py` | 客户端 API 路由（激活/积分/LLM含enable_search/OCR/日志） |
-| `src/api/client_llm_proxy.py` | LLM 代理逻辑（计费 ×5） |
+| `src/api/client_llm_proxy.py` | LLM 代理逻辑（计费 ×10） |
 | `src/saas/api/client_activation_mgmt.py` | 管理端：生成/管理激活码 |
 | `src/db/client_binding_db.py` | `client_bindings` / `client_activation_codes` DB 访问层 |
 | `src/db/client_usage_db.py` | `client_usage_logs` DB 访问层 |
 | `frontend/src/components/tenant/ClientActivationManager.vue` | ★ 后台「租户管理-编辑租户」内的激活码管理组件 |
 | `tests/unit/api/test_client_routes.py` | 单测 |
-| `tests/unit/api/test_client_llm_proxy.py` | 计费单测（验证 ×5） |
+| `tests/unit/api/test_client_llm_proxy.py` | 计费单测（验证 ×10） |
 
 ### 8.2 服务端修改
 
