@@ -4,7 +4,7 @@
 设计文档：docs/tools/association-client-design.md §2
 - client_activation_codes：激活码（一次性，绑定租户）
 - client_bindings：激活后的长期绑定凭证（access_token 鉴权）
-- client_usage_logs：客户端 LLM/OCR 调用消耗明细 + 计费（×25 系数同事务扣减租户余额）
+- client_usage_logs：客户端 LLM/OCR 调用消耗明细 + 计费（×10 系数同事务扣减租户余额）
 """
 
 from __future__ import annotations
@@ -25,11 +25,11 @@ from src.services.billing import calculate_credit_cost
 
 
 def _client_credit_multiplier() -> float:
-    """客户端积分膨胀系数（标准积分 × 此系数 = 客户端实扣，默认25倍）。"""
+    """客户端积分膨胀系数（标准积分 × 此系数 = 客户端实扣，默认10倍）。"""
     try:
-        return float(getattr(settings.client, "credit_multiplier", 25.0) or 25.0)
+        return float(getattr(settings.client, "credit_multiplier", 10.0) or 10.0)
     except Exception:
-        return 25.0
+        return 10.0
 
 # 激活码字符集（去除易混淆字符 0/O/1/I/l）
 _ACTIVATION_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
@@ -274,7 +274,7 @@ class ClientBindingDB:
 
 
 class ClientUsageLogDB:
-    """客户端消耗日志 DB 访问层（含计费 ×25 同事务扣减）。"""
+    """客户端消耗日志 DB 访问层（含计费 ×10 同事务扣减）。"""
 
     @staticmethod
     def record_llm_usage(
@@ -289,7 +289,7 @@ class ClientUsageLogDB:
         stage: str = "llm",
         status: str = "success",
     ) -> dict[str, float]:
-        """记录一次 LLM 调用消耗，同事务扣减租户余额（×25 系数）。
+        """记录一次 LLM 调用消耗，同事务扣减租户余额（×10 系数）。
 
         Returns:
             {"raw_credit_cost": float, "credit_cost": float, "balance_after": float}
@@ -309,7 +309,7 @@ class ClientUsageLogDB:
             cached_input_tokens=cached_tokens,
             cache_creation_input_tokens=cache_creation_tokens,
         )
-        # 客户端 ×25 系数，2 位小数向上取整
+        # 客户端 ×10 系数，2 位小数向上取整
         credit_cost = math.ceil(raw_credit * _client_credit_multiplier() * 100) / 100
 
         balance_after: Optional[float] = None

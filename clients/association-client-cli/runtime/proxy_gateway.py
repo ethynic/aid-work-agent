@@ -2,7 +2,7 @@
 ProxyLLMGateway —— 客户端 CLI 的 LLM 网关适配器。
 
 将 llm_gateway.chat() 调用代理到服务端 /api/client/v1/llm/chat，
-服务端集中计费（×25 系数扣减租户余额）。
+服务端集中计费（×10 系数扣减租户余额）。
 
 设计文档：docs/tools/association-client-design.md §3.3
 """
