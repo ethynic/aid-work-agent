@@ -15,7 +15,8 @@ export const modal = tv({
       sm: { content: 'max-w-sm' },
       md: { content: 'max-w-lg' },
       lg: { content: 'max-w-2xl' },
-      xl: { content: 'w-[90vw] h-[90vh]' },
+      lgx: { content: 'w-[85vw] h-[80vh]' },
+      xl: { content: 'w-[92vw] h-[95vh]' },
     },
     scrollable: {
       true: { body: 'flex-1 min-h-0' },
