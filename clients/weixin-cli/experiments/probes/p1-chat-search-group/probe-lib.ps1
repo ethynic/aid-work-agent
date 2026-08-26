@@ -36,6 +36,7 @@ public static class WeixinProbeWin32 {
  [DllImport("user32.dll")] public static extern void mouse_event(uint f,uint x,uint y,uint d,IntPtr e);
  [DllImport("user32.dll",CharSet=CharSet.Unicode)] public static extern bool PostMessage(IntPtr h,uint m,IntPtr w,IntPtr l);
  [DllImport("user32.dll")] public static extern bool ScreenToClient(IntPtr h,ref POINT p);
+ [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr h,IntPtr dc,uint f);
  [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr c);
  [DllImport("user32.dll")] public static extern IntPtr GetThreadDpiAwarenessContext();
  [DllImport("user32.dll")] public static extern bool AreDpiAwarenessContextsEqual(IntPtr a,IntPtr b);
@@ -256,6 +257,43 @@ function Send-WeixinPostMessageClick {
     [void][WeixinProbeWin32]::PostMessage([IntPtr]$Hwnd, 0x0201, [IntPtr]1, $lp)       # WM_LBUTTONDOWN (MK_LBUTTON)
     Start-Sleep -Milliseconds 60
     [void][WeixinProbeWin32]::PostMessage([IntPtr]$Hwnd, 0x0202, [IntPtr]::Zero, $lp)  # WM_LBUTTONUP
+}
+
+function Get-WeixinWindowSnapshot {
+    # 窗口截图：优先 PrintWindow(PW_RENDERFULLCONTENT=2)，窗口被遮挡/不在前台也能
+    # 从窗口绘制缓存出图（2026-08-26 实测微信 4.x 支持，遮挡 90% 仍完整清晰）；
+    # 失败或产出全黑（部分 GPU 渲染窗口的已知问题）时回退 CopyFromScreen（要求可见）。
+    # 图像与窗口 rect 同尺寸同原点，坐标换算与 CopyFromScreen 一致。
+    # 返回 @(left, top, width, height, usedPrintWindow)。
+    param([Parameter(Mandatory)][int64]$Hwnd, [Parameter(Mandatory)][string]$Path)
+    $rect = New-Object WeixinProbeWin32+RECT
+    if (-not [WeixinProbeWin32]::GetWindowRect([IntPtr]$Hwnd, [ref]$rect)) { throw 'WINDOW_RECT_FAILED' }
+    $w = $rect.Right - $rect.Left; $h = $rect.Bottom - $rect.Top
+    $bmp = New-Object Drawing.Bitmap $w, $h
+    $g = [Drawing.Graphics]::FromImage($bmp)
+    $printed = $false
+    try {
+        $hdc = $g.GetHdc()
+        try { $printed = [WeixinProbeWin32]::PrintWindow([IntPtr]$Hwnd, $hdc, 2) }
+        finally { $g.ReleaseHdc($hdc) }
+        if ($printed) {
+            $black = 0; $total = 0
+            foreach ($py in @([int]($h * 0.3), [int]($h * 0.5), [int]($h * 0.7))) {
+                foreach ($px in @([int]($w * 0.3), [int]($w * 0.5), [int]($w * 0.7))) {
+                    $total++
+                    $c = $bmp.GetPixel($px, $py)
+                    if ($c.R -lt 10 -and $c.G -lt 10 -and $c.B -lt 10) { $black++ }
+                }
+            }
+            if ($black -eq $total) { $printed = $false }
+        }
+    } catch { $printed = $false }
+    if (-not $printed) {
+        $g.CopyFromScreen($rect.Left, $rect.Top, 0, 0, (New-Object Drawing.Size $w, $h))
+    }
+    $bmp.Save($Path, [Drawing.Imaging.ImageFormat]::Png)
+    $g.Dispose(); $bmp.Dispose()
+    return @($rect.Left, $rect.Top, $w, $h, $printed)
 }
 
 function Get-WeixinSearchOverlayHwnd {

@@ -105,19 +105,12 @@ try {
     if (-not (& $mainGuard)) { throw 'MAIN_NOT_FOREGROUND' }
     Write-Host "[1] 当前微信打开的会话即测试目标（请确认目标正确）"
 
-    # 截图
-    $rect = New-Object WeixinProbeWin32+RECT
-    [void][WeixinProbeWin32]::GetWindowRect([IntPtr]$mainHwnd, [ref]$rect)
-    $winLeft = $rect.Left; $winTop = $rect.Top
-    $w = $rect.Right - $rect.Left; $h = $rect.Bottom - $rect.Top
+    # 截图（PrintWindow 优先，窗口被遮挡/非前台也能出图；失败回退 CopyFromScreen）
     Add-Type -AssemblyName System.Drawing
-    $bmp = New-Object Drawing.Bitmap $w, $h
-    $g = [Drawing.Graphics]::FromImage($bmp)
-    $g.CopyFromScreen($winLeft, $winTop, 0, 0, (New-Object Drawing.Size $w, $h))
     $shotPath = Join-Path $env:TEMP 'weixin-probe-p2-shot.png'
-    $bmp.Save($shotPath, [Drawing.Imaging.ImageFormat]::Png)
-    $g.Dispose(); $bmp.Dispose()
-    Write-Host ("[2] shot: {0} rect=({1},{2},{3}x{4})" -f $shotPath,$winLeft,$winTop,$w,$h)
+    $snap = Get-WeixinWindowSnapshot $mainHwnd $shotPath
+    $winLeft = [int]$snap[0]; $winTop = [int]$snap[1]; $w = [int]$snap[2]; $h = [int]$snap[3]
+    Write-Host ("[2] shot: {0} rect=({1},{2},{3}x{4}) printwindow={5}" -f $shotPath,$winLeft,$winTop,$w,$h,$snap[4])
 
     # Kimi 定位输入框 + 发送按钮
     $loc = Invoke-KimiVision $shotPath
@@ -169,12 +162,8 @@ try {
     Start-Sleep -Milliseconds 800
 
     # 6 发送后截图，Kimi 二次确认最后一条消息是否为 $Message
-    $bmp3 = New-Object Drawing.Bitmap $w, $h
-    $g3 = [Drawing.Graphics]::FromImage($bmp3)
-    $g3.CopyFromScreen($winLeft, $winTop, 0, 0, (New-Object Drawing.Size $w, $h))
     $afterPath = Join-Path $env:TEMP 'weixin-probe-p2-after-send.png'
-    $bmp3.Save($afterPath, [Drawing.Imaging.ImageFormat]::Png)
-    $g3.Dispose(); $bmp3.Dispose()
+    Get-WeixinWindowSnapshot $mainHwnd $afterPath | Out-Null
     Write-Host "[6] after-send shot: $afterPath"
     Write-Host "PROBE_RESULT: SENT (请人工核对 $afterPath 最后一条消息是否为 '$Message')"
 } finally {
