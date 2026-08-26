@@ -2,18 +2,22 @@
  * 沟通页发消息执行器（设计文档 §10.6，CLI send-to / send-current 子命令的发消息段）。
  *
  * 沟通页当前会话底部有「发送」按钮（视口右半区唯一），其左上是聊天输入框。
- * 流程：定位发送按钮 → 由发送按钮 center + 固定偏移定位输入框激活点 → Win32 点击聚焦 →
- * CDP char 逐字输入消息 →（dry-run 只输入不发送 / 真发送点「发送」按钮）。
+ * 流程：定位发送按钮 → 由发送按钮 center + 固定偏移定位输入框激活点 →
+ * Win32 原子「点击聚焦 + 真实键盘逐字输入」（clickAndType）→
+ * （dry-run 只输入不发送 / 真发送点「发送」按钮）。
+ *
+ * 通道决策（2026-08-26，用户定调）：点击/输入类操作**第一优先 Win32 真实事件**，防爬是关键。
+ * 2026-08-24 曾把激活点/输入改 CDP（当时以为 Win32 有 DPI 换算偏差）——后经用户澄清：
+ * 偏差实为**窗口被移动、输入框不在可见范围**所致，换算本身无偏差，已全部回退 Win32。
  *
  * 真机校准（2026-08-13，窗口 1249x1277）：
  * - 发送按钮：DOMSnapshot 文本「发送」，cx>视口宽一半（右半区，分辨率无关）视口内唯一命中；真机 center (1146,1233)
- * - 输入框激活点 = 发送按钮 center + ACTIVATE_OFFSET；Win32 点击聚焦；真机 (1016,1195)
- * - 逐字输入：CDP dispatchKey(type=char)，每字 ~200ms；风控拦鼠标合成事件不拦键盘
+ * - 输入框激活点 = 发送按钮 center + ACTIVATE_OFFSET；真机 (1016,1195)
  * - 聊天输入框 value 进了 DOMSnapshot strings（dry-run 可校验输入内容）
  * - 发送校验（TODO 真机验证）：点发送后输入框应清空（strings 不再含消息）；未清空=UNKNOWN 不重试
  *
  * 安全设计（fail-loud）：发送按钮 0/多个不盲发；发送后校验不过不重试，请人工查看。
- * 所有写动作（点击激活点、点发送）走 Win32（deps.click）；逐字输入走 CDP（typeChar）。
+ * 点击与逐字输入均走 Win32（deps.click / deps.clickAndType）。
  */
 import {
   type DomSnapshot,
@@ -37,11 +41,8 @@ export interface ChatSendDeps {
   snapshot(): Promise<DomSnapshot>
   /** Win32 真实鼠标点击（viewport 为页面截图尺寸，device px） */
   click(point: ClickPoint, viewport: { width: number; height: number }): Promise<void>
-  /** CDP 浏览类点击（可选）。输入框激活点聚焦用 CDP：真机 2026-08-24 实证 Win32 物理点击
-   *  存在 DPI/缩放换算偏差（激活点没点中，字符全部落空但被宽松校验假放行） */
-  clickBrowse?(point: ClickPoint): Promise<void>
-  /** CDP char 事件逐字输入（调用方保证焦点已在目标输入框） */
-  typeChar(ch: string): Promise<void>
+  /** Win32 原子「真实鼠标点击聚焦 + 真实键盘逐字输入」（一次调用完成，防焦点被抢） */
+  clickAndType(point: ClickPoint, viewport: { width: number; height: number }, text: string): Promise<void>
   /** 协作式取消信号：入口检查一次，触发即抛 CancelledError */
   signal?: AbortSignal
   /** 可注入 sleep（测试） */
@@ -52,14 +53,10 @@ export interface ChatSendDeps {
 const SEND_TEXT = '发送'
 /** 发送按钮 center → 输入框激活点的偏移（device px，真机校准 2026-08-13：发送按钮 (1146,1233) → 激活点 (1016,1195)） */
 const ACTIVATE_OFFSET = { dx: -130, dy: -38 }
-/** 点击激活点后等待输入框聚焦（ms） */
-const FOCUS_DELAY = 500
 /** 逐字输入后等待输入落地（ms） */
 const TYPE_SETTLE_DELAY = 600
 /** 点发送后等待发送完成（ms） */
 const SEND_DELAY = 1500
-/** 逐字输入间隔（ms，拟人节奏；风控拦鼠标合成事件不拦键盘） */
-const TYPE_INTERVAL_MS = 200
 
 /**
  * 沟通页底部发送按钮（cx > 视口宽一半的右半区内唯一「发送」文本）。
@@ -121,19 +118,11 @@ export class ChatSendExecutor {
       )
     }
 
-    // 2. 点击输入框激活点（发送按钮 center + 偏移），聚焦聊天输入框。CDP 点击优先：
-    //    真机 2026-08-24 实证 Win32 点击存在 DPI/缩放偏差——激活点没点中时字符全部落空
+    // 2. Win32 原子「点击输入框激活点聚焦 + 真实键盘逐字输入消息」（发送按钮 center + 偏移）。
+    //    点击与输入同一次 ps1 调用内完成，避免间隙被抢焦点（2026-08-26 决策：防爬第一优先 Win32）
+    if (this.deps.signal?.aborted) throw new CancelledError('已取消：输入消息时中止')
     const activate: ClickPoint = { x: sendBtn.x + ACTIVATE_OFFSET.dx, y: sendBtn.y + ACTIVATE_OFFSET.dy }
-    if (this.deps.clickBrowse) await this.deps.clickBrowse(activate)
-    else await this.deps.click(activate, viewportOf(snap))
-    await this.sleep(FOCUS_DELAY)
-
-    // 3. CDP 逐字输入消息（风控拦鼠标合成事件，不拦键盘 char 事件）
-    for (const ch of message) {
-      if (this.deps.signal?.aborted) throw new CancelledError('已取消：输入消息时中止')
-      await this.deps.typeChar(ch)
-      await this.sleep(TYPE_INTERVAL_MS)
-    }
+    await this.deps.clickAndType(activate, viewportOf(snap), message)
     await this.sleep(TYPE_SETTLE_DELAY)
 
     // 4. dry-run：校验输入落地即结束，不点发送。聊天输入框是 contenteditable（反爬逐字

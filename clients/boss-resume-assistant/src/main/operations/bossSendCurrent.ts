@@ -51,8 +51,7 @@ export function createBossSendCurrentOperation(
           const sender = new ChatSendExecutor({
             snapshot: session.snapshot,
             click: session.click,
-            clickBrowse: session.clickBrowse,
-            typeChar: session.typeChar,
+            clickAndType: session.clickAndType,
             signal: ctx.signal,
           })
           ctx.progress({

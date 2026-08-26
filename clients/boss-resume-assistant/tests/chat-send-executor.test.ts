@@ -1,6 +1,6 @@
 /**
- * ChatSendExecutor 单测：发消息链路（定位发送按钮 → 激活输入框 → 逐字输入 → dry-run/真发送）。
- * fake 注入 snapshot/click/typeChar（与 greet/chat-reject 测试同范式）。
+ * ChatSendExecutor 单测：发消息链路（定位发送按钮 → 激活输入框+逐字输入 → dry-run/真发送）。
+ * fake 注入 snapshot/click/clickAndType（与 greet/chat-reject 测试同范式）。
  */
 import assert from 'node:assert/strict'
 import test from 'node:test'
@@ -46,23 +46,23 @@ function snapshotQueue(snaps: DomSnapshot[]): () => Promise<DomSnapshot> {
 
 interface FakeDeps {
   clicks: ClickPoint[]
-  typed: string[]
+  clickAndTypes: Array<{ point: ClickPoint; text: string }>
   click: (p: ClickPoint) => Promise<void>
-  typeChar: (ch: string) => Promise<void>
+  clickAndType: (p: ClickPoint, viewport: { width: number; height: number }, text: string) => Promise<void>
   sleep: (ms: number) => Promise<void>
 }
 
 function recorder(): FakeDeps {
   const clicks: ClickPoint[] = []
-  const typed: string[] = []
+  const clickAndTypes: Array<{ point: ClickPoint; text: string }> = []
   return {
     clicks,
-    typed,
+    clickAndTypes,
     click: async (p: ClickPoint) => {
       clicks.push(p)
     },
-    typeChar: async (ch: string) => {
-      typed.push(ch)
+    clickAndType: async (p: ClickPoint, _viewport: { width: number; height: number }, text: string) => {
+      clickAndTypes.push({ point: p, text })
     },
     sleep: async () => {},
   }
@@ -80,16 +80,16 @@ test('dry-run：定位发送按钮 → 点击激活点 → 逐字输入 → 校�
       chatSnap([{ text: '发送', bounds: SEND_BTN }, { text: MSG, bounds: [200, 1180, 800, 30] }]), // dry-run 校验：strings 含 message
     ]),
     click: r.click,
-    typeChar: r.typeChar,
+    clickAndType: r.clickAndType,
     sleep: r.sleep,
   })
   const result = await executor.sendMessage({ message: MSG, dryRun: true })
   assert.equal(result.sent, false)
-  // 只点了激活点，没点发送按钮
-  assert.equal(r.clicks.length, 1)
-  assert.deepEqual(r.clicks[0], { x: 1016, y: 1195 })
-  // 逐字输入完整
-  assert.equal(r.typed.join(''), MSG)
+  // 激活点点击+输入走同一次 clickAndType（Win32 原子），没点发送按钮
+  assert.equal(r.clicks.length, 0)
+  assert.equal(r.clickAndTypes.length, 1)
+  assert.deepEqual(r.clickAndTypes[0]!.point, { x: 1016, y: 1195 })
+  assert.equal(r.clickAndTypes[0]!.text, MSG)
 })
 
 test('真发送：输入后点发送按钮，发送后输入框清空（strings 不含 message）→ sent=true', async () => {
@@ -101,17 +101,16 @@ test('真发送：输入后点发送按钮，发送后输入框清空（strings 
       chatSnap([{ text: '发送', bounds: SEND_BTN }]), // 发送后校验：strings 不含 message（已清空）
     ]),
     click: r.click,
-    typeChar: r.typeChar,
+    clickAndType: r.clickAndType,
     sleep: r.sleep,
   })
   const result = await executor.sendMessage({ message: MSG })
   assert.equal(result.sent, true)
-  // 2 次点击：激活点 + 发送按钮
-  assert.deepEqual(r.clicks, [
-    { x: 1016, y: 1195 },
-    { x: 1146, y: 1233 },
-  ])
-  assert.equal(r.typed.join(''), MSG)
+  // clickAndType 1 次（激活点+输入）+ click 1 次（发送按钮）
+  assert.equal(r.clickAndTypes.length, 1)
+  assert.deepEqual(r.clickAndTypes[0]!.point, { x: 1016, y: 1195 })
+  assert.equal(r.clickAndTypes[0]!.text, MSG)
+  assert.deepEqual(r.clicks, [{ x: 1146, y: 1233 }])
 })
 
 test('发送校验失败（发送后输入框未清空，strings 仍含 message）→ ChatSendError（含无法确认 → EXECUTION_UNKNOWN）', async () => {
@@ -123,7 +122,7 @@ test('发送校验失败（发送后输入框未清空，strings 仍含 message�
       chatSnap([{ text: '发送', bounds: SEND_BTN }, { text: MSG, bounds: [200, 1180, 800, 30] }]), // 发送后仍含 message
     ]),
     click: r.click,
-    typeChar: r.typeChar,
+    clickAndType: r.clickAndType,
     sleep: r.sleep,
   })
   await assert.rejects(executor.sendMessage({ message: MSG }), (e: unknown) => {
@@ -131,8 +130,9 @@ test('发送校验失败（发送后输入框未清空，strings 仍含 message�
     assert.match((e as Error).message, /无法确认/)
     return true
   })
-  // 点了激活点 + 发送按钮（发送动作已发出，但结果未知）
-  assert.equal(r.clicks.length, 2)
+  // 已完成激活输入（clickAndType）+ 点了发送按钮（发送动作已发出，但结果未知）
+  assert.equal(r.clickAndTypes.length, 1)
+  assert.equal(r.clicks.length, 1)
 })
 
 test('无发送按钮（cx>850 视口内 0 个）→ ChatSendError，不点不输入', async () => {
@@ -140,7 +140,7 @@ test('无发送按钮（cx>850 视口内 0 个）→ ChatSendError，不点不�
   const executor = new ChatSendExecutor({
     snapshot: snapshotQueue([chatSnap([])]),
     click: r.click,
-    typeChar: r.typeChar,
+    clickAndType: r.clickAndType,
     sleep: r.sleep,
   })
   await assert.rejects(executor.sendMessage({ message: MSG }), (e: unknown) => {
@@ -149,7 +149,7 @@ test('无发送按钮（cx>850 视口内 0 个）→ ChatSendError，不点不�
     return true
   })
   assert.equal(r.clicks.length, 0)
-  assert.equal(r.typed.length, 0)
+  assert.equal(r.clickAndTypes.length, 0)
 })
 
 test('左列的「发送」不算数（cx<=850 被排除）→ 视为无发送按钮', async () => {
@@ -158,7 +158,7 @@ test('左列的「发送」不算数（cx<=850 被排除）→ 视为无发送�
     // cx=400 在左列区域（<=850），被排除 → 0 个有效发送按钮
     snapshot: snapshotQueue([chatSnap([{ text: '发送', bounds: [340, 1100, 120, 36] }])]),
     click: r.click,
-    typeChar: r.typeChar,
+    clickAndType: r.clickAndType,
     sleep: r.sleep,
   })
   await assert.rejects(executor.sendMessage({ message: MSG }), /0 个/)
@@ -175,7 +175,7 @@ test('多个发送按钮（cx>850）→ 歧义 ChatSendError，不点不输入',
       ]),
     ]),
     click: r.click,
-    typeChar: r.typeChar,
+    clickAndType: r.clickAndType,
     sleep: r.sleep,
   })
   await assert.rejects(executor.sendMessage({ message: MSG }), (e: unknown) => {
@@ -194,12 +194,13 @@ test('真发送前发送按钮消失（页面切换/弹层）→ ChatSendError�
       chatSnap([]), // 真发送前重新定位：发送按钮消失
     ]),
     click: r.click,
-    typeChar: r.typeChar,
+    clickAndType: r.clickAndType,
     sleep: r.sleep,
   })
   await assert.rejects(executor.sendMessage({ message: MSG }), /发送按钮消失/)
-  // 只点了激活点（输入已完成但未点发送）
-  assert.equal(r.clicks.length, 1)
+  // 激活输入已完成（clickAndType），未点发送
+  assert.equal(r.clickAndTypes.length, 1)
+  assert.equal(r.clicks.length, 0)
 })
 
 test('dry-run 输入校验失败（strings 不含 message）→ ChatSendError', async () => {
@@ -210,11 +211,12 @@ test('dry-run 输入校验失败（strings 不含 message）→ ChatSendError', 
       chatSnap([{ text: '发送', bounds: SEND_BTN }]), // dry-run 校验：strings 不含 message（输入未落地）
     ]),
     click: r.click,
-    typeChar: r.typeChar,
+    clickAndType: r.clickAndType,
     sleep: r.sleep,
   })
   await assert.rejects(executor.sendMessage({ message: MSG, dryRun: true }), /输入未落地/)
-  assert.equal(r.clicks.length, 1)
+  assert.equal(r.clickAndTypes.length, 1)
+  assert.equal(r.clicks.length, 0)
 })
 
 test('取消（signal 已 abort）→ CancelledError，不点不输入', async () => {
@@ -222,7 +224,7 @@ test('取消（signal 已 abort）→ CancelledError，不点不输入', async (
   const executor = new ChatSendExecutor({
     snapshot: snapshotQueue([chatSnap([{ text: '发送', bounds: SEND_BTN }])]),
     click: r.click,
-    typeChar: r.typeChar,
+    clickAndType: r.clickAndType,
     sleep: r.sleep,
     signal: AbortSignal.abort(),
   })

@@ -48,9 +48,8 @@ export function createBossSendToOperation(
           const searcher = new ChatSearchExecutor({
             snapshot: session.snapshot,
             click: session.click,
-            clickBrowse: session.clickBrowse,
+            clickAndType: session.clickAndType,
             pressEscape: session.pressEscape,
-            typeChar: session.typeChar,
             signal: ctx.signal,
           })
           ctx.progress({ stage: 'execute', message: `搜索联系人「${to}」并进入对话` })
@@ -59,8 +58,7 @@ export function createBossSendToOperation(
           const sender = new ChatSendExecutor({
             snapshot: session.snapshot,
             click: session.click,
-            clickBrowse: session.clickBrowse,
-            typeChar: session.typeChar,
+            clickAndType: session.clickAndType,
             signal: ctx.signal,
           })
           ctx.progress({

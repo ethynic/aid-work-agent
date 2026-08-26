@@ -49,6 +49,27 @@
           class="px-3 py-1.5 bg-primary-600 text-white rounded-lg text-sm hover:bg-primary-700 transition-colors disabled:opacity-50">
           刷新
         </button>
+
+        <!-- 垂直分隔线：区分「列表筛选」与「Trace 直达」 -->
+        <div class="w-px h-6 bg-gray-200"></div>
+
+        <!-- Trace 直达：输入有效 trace_id 回车直达详情页（非搜索，不参与列表筛选） -->
+        <div class="flex items-center gap-1.5">
+          <svg class="w-4 h-4 text-primary-600 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M14 4h6m0 0v6m0-6L10 14M20 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h4"/>
+          </svg>
+          <input
+            v-model="traceIdInput"
+            @keyup.enter="jumpToTrace"
+            placeholder="Trace ID 直达"
+            title="输入 trace_id（tr_ 开头 + 16 位十六进制），回车直达详情页"
+            class="px-3 py-1.5 border border-primary-300 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary-500 w-44"
+          />
+          <button @click="jumpToTrace"
+            class="px-2.5 py-1.5 bg-primary-600 text-white rounded-lg text-sm hover:bg-primary-700 transition-colors whitespace-nowrap">
+            跳转
+          </button>
+        </div>
       </div>
     </div>
 
@@ -127,6 +148,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { useToast } from 'vue-toastification'
 import { getTracedSessions, type SessionSummary } from '@/api/monitor'
 import { formatDateTimeWithSeconds as formatDateTime } from '@/utils/date'
 import { formatTokensAuto as formatTokens } from '@/utils/formatTokens'
@@ -134,6 +156,7 @@ import BasePagination from '@/components/ui/BasePagination.vue'
 import BaseTable, { type TableColumn } from '@/components/ui/BaseTable.vue'
 
 const router = useRouter()
+const toast = useToast()
 
 const sessions = ref<SessionSummary[]>([])
 const loading = ref(false)
@@ -146,6 +169,7 @@ const timeRange = ref('')
 const search = ref('')
 const filterTenantId = ref('')
 const filterUserId = ref('')
+const traceIdInput = ref('')
 
 const columns: TableColumn[] = [
   { key: 'seq', label: '序号', width: '48px', thAlign: 'center', tdAlign: 'center' },
@@ -198,6 +222,18 @@ function formatUser(row: Record<string, any>): string {
 
 function goToSession(sessionId: string) {
   router.push(`/portal/monitoring/${sessionId}`)
+}
+
+// Trace 直达：格式合法则跳转详情页（存在性由详情页自行判断），不参与列表筛选
+function jumpToTrace() {
+  const tid = traceIdInput.value.trim()
+  if (!tid) return
+  // 与后端 src/core/trace_collector.py 的 trace_id 生成格式保持一致（tr_ + 16 位十六进制）
+  if (!/^tr_[0-9a-f]{16}$/i.test(tid)) {
+    toast.error('无效的 Trace ID，格式应为 tr_ 开头 + 16 位十六进制字符')
+    return
+  }
+  router.push(`/portal/monitoring/trace/${encodeURIComponent(tid)}`)
 }
 
 async function loadData() {

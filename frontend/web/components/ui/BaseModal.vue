@@ -8,6 +8,18 @@
           </h3>
           <div class="flex items-center gap-1">
             <slot name="header-extra"></slot>
+            <button
+              class="w-7 h-7 flex items-center justify-center rounded text-muted hover:text-default hover:bg-surface-hover transition-colors"
+              :title="isFullscreen ? '退出全屏' : '全屏'"
+              @click="toggleFullscreen"
+            >
+              <svg v-if="!isFullscreen" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
+              </svg>
+              <svg v-else class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 14h6v6m10-10h-6V4M14 10l7-7M3 21l7-7"/>
+              </svg>
+            </button>
             <button :class="slots.close()" @click="handleCloseClick">
               <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
@@ -101,10 +113,19 @@ const modalClass = computed(() => {
   return Object.entries(props.class).filter(([, v]) => v).map(([k]) => k).join(' ')
 })
 const contentClass = computed(() => {
-  if (!props.contentClass) return ''
-  if (typeof props.contentClass === 'string') return props.contentClass
-  return Object.entries(props.contentClass).filter(([, v]) => v).map(([k]) => k).join(' ')
+  const classes: string[] = []
+  if (props.contentClass) {
+    if (typeof props.contentClass === 'string') classes.push(props.contentClass)
+    else classes.push(...Object.entries(props.contentClass).filter(([, v]) => v).map(([k]) => k))
+  }
+  if (isFullscreen.value) classes.push('modal-fullscreen')
+  return classes.join(' ')
 })
+
+const isFullscreen = ref(false)
+function toggleFullscreen() {
+  isFullscreen.value = !isFullscreen.value
+}
 
 const showDirtyConfirm = ref(false)
 
@@ -163,6 +184,9 @@ function confirmDiscard() {
 
 watch(() => props.modelValue, (val) => {
   document.body.style.overflow = val ? 'hidden' : ''
-  if (!val) showDirtyConfirm.value = false
+  if (!val) {
+    showDirtyConfirm.value = false
+    isFullscreen.value = false
+  }
 })
 </script>

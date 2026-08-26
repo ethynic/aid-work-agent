@@ -40,7 +40,7 @@ export function createBossInterviewDemoOperation(
           const executor = new InterviewDemoExecutor({
             snapshot: session.snapshot,
             click: session.click,
-            typeChar: session.typeChar,
+            clickAndType: session.clickAndType,
             signal: ctx.signal,
           })
           ctx.progress({ stage: 'execute', message: '填备注 + 选明天日期（只填不发送）' })

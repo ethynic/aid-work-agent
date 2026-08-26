@@ -68,16 +68,7 @@
       size="xl"
       :close-on-overlay="false"
       :mode="editingId ? 'edit' : 'create'"
-      :content-class="{ 'modal-fullscreen': isFullscreen }"
     >
-      <template #header-extra>
-        <BaseButton intent="ghost" size="sm" class="modal-fullscreen-btn" title="全屏" @click="toggleFullscreen">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
-          </svg>
-        </BaseButton>
-      </template>
-
       <div>
         <!-- 操作按钮区（第一行） -->
         <div class="flex items-center gap-2 mb-3">
@@ -864,16 +855,10 @@ function loadWaitingIndicator(cfg: Record<string, any> | undefined) {
   wi.message = String(w.message || '').trim() || ''
 }
 
-const isFullscreen = ref(false)
 const formInitialSnapshot = ref<Record<string, any>>({})
-
-function toggleFullscreen() {
-  isFullscreen.value = !isFullscreen.value
-}
 
 function closeModal() {
   showForm.value = false
-  isFullscreen.value = false
   formInitialSnapshot.value = {}
 }
 
@@ -1049,7 +1034,6 @@ function openAddChannel() {
   formError.value = ''
   formInitialSnapshot.value = JSON.parse(JSON.stringify(form.value))
   resetWaitingIndicator()
-  isFullscreen.value = false
   showForm.value = true
 }
 
@@ -1059,7 +1043,6 @@ function editChannel(ch: any) {
   formError.value = ''
   formInitialSnapshot.value = JSON.parse(JSON.stringify(form.value))
   loadWaitingIndicator(ch.config?.waiting_indicator)
-  isFullscreen.value = false
   showForm.value = true
 }
 

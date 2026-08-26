@@ -25,7 +25,8 @@
           <div class="flex items-start justify-between gap-4">
             <div class="flex-1 min-w-0">
               <div class="flex items-center gap-2 mb-2">
-                <span class="text-xs text-muted font-medium">Trace {{ idx + 1 }}</span>
+                <span class="text-xs text-muted font-mono">Trace {{ idx + 1 }}</span>
+                <span class="text-xs text-muted font-mono" :title="trace.trace_id">{{ trace.trace_id }}</span>
                 <span :class="statusClass(trace.status)" class="px-2 py-0.5 rounded text-xs font-medium">
                   {{ statusLabel(trace.status) }}
                 </span>
@@ -42,11 +43,11 @@
                 </span>
               </div>
               <div class="mb-1">
-                <span class="text-xs text-muted">用户：</span>
+                <span class="text-sm text-muted">用户：</span>
                 <span :class="['text-sm text-default', trace.recall_type === 'full' ? 'line-through text-muted' : '']">{{ trace.input || '(空)' }}</span>
               </div>
               <div class="mb-2">
-                <span class="text-xs text-muted">回复：</span>
+                <span class="text-sm text-muted">回复：</span>
                 <span class="text-sm text-default">{{ trace.output ? (trace.output.length > 200 ? trace.output.substring(0, 200) + '...' : trace.output) : '(空)' }}</span>
               </div>
               <div class="flex items-center gap-4 text-xs text-muted">

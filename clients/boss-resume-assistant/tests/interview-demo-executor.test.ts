@@ -41,15 +41,15 @@ function snapshotQueue(snaps: DomSnapshot[]): () => Promise<DomSnapshot> {
 
 function recorder() {
   const clicks: ClickPoint[] = []
-  const typed: string[] = []
+  const clickAndTypes: Array<{ point: ClickPoint; text: string }> = []
   return {
     clicks,
-    typed,
+    clickAndTypes,
     click: async (p: ClickPoint) => {
       clicks.push(p)
     },
-    typeChar: async (ch: string) => {
-      typed.push(ch)
+    clickAndType: async (p: ClickPoint, _viewport: { width: number; height: number }, text: string) => {
+      clickAndTypes.push({ point: p, text })
     },
     sleep: async () => {},
   }
@@ -110,10 +110,10 @@ test('完整流程：开表单→逐字填备注→选明天→取消关闭，�
   const result = await executor.run()
   assert.deepEqual(result, { remark: REMARK, date: dateStr(tomorrow) })
   // 逐字输入 13 字
-  assert.equal(r.typed.join(''), REMARK)
-  // 点击序列：约面试 → 备注聚焦点 → 日期下拉 → 日期单元格 → 取消（无发送）
+  assert.equal(r.clickAndTypes.length === 1 && r.clickAndTypes[0]!.text, REMARK)
+  // 点击序列：约面试 → 日期下拉 → 日期单元格 → 取消（无发送）；备注聚焦+输入走 clickAndType
   const clicks = r.clicks.map((p) => `${Math.round(p.x)},${Math.round(p.y)}`)
-  assert.deepEqual(clicks, ['1506,1615', '1015,958', '842,1084', '1006,1338', '1163,1290'])
+  assert.deepEqual(clicks, ['1506,1615', '842,1084', '1006,1338', '1163,1290'])
 })
 
 test('跨月：明天是 1 号时先点下月箭头再选「1」', async () => {
@@ -127,9 +127,9 @@ test('跨月：明天是 1 号时先点下月箭头再选「1」', async () => {
   const result = await executor.run()
   assert.equal(result.date, '2026-09-01')
   const clicks = r.clicks.map((p) => `${Math.round(p.x)},${Math.round(p.y)}`)
-  // 第 4 个点是下月箭头（标签 +455/+85），第 5 个是日期「1」
-  assert.equal(clicks[3], '1067,1169')
-  assert.equal(clicks[4], '1006,1338')
+  // 第 3 个点是下月箭头（标签 +455/+85），第 4 个是日期「1」（聚焦点已并入 clickAndType）
+  assert.equal(clicks[2], '1067,1169')
+  assert.equal(clicks[3], '1006,1338')
 })
 
 test('表单已打开（残留状态）：报错不动作', async () => {
@@ -144,7 +144,7 @@ test('表单已打开（残留状态）：报错不动作', async () => {
     return true
   })
   assert.equal(r.clicks.length, 0)
-  assert.equal(r.typed.length, 0)
+  assert.equal(r.clickAndTypes.length, 0)
 })
 
 test('找不到「约面试」（未打开会话）：报错不动作', async () => {
@@ -162,7 +162,7 @@ test('点击约面试后表单未打开：报错（点击可能被拦截）', as
   })
   await assert.rejects(executor.run(), /表单未打开/)
   assert.equal(r.clicks.length, 1)
-  assert.equal(r.typed.length, 0)
+  assert.equal(r.clickAndTypes.length, 0)
 })
 
 test('逐字输入后字数不符：报错（输入未完整落地）', async () => {
@@ -177,8 +177,8 @@ test('逐字输入后字数不符：报错（输入未完整落地）', async ()
   ])
   const executor = new InterviewDemoExecutor({ snapshot: snapshotQueue(snaps), ...r })
   await assert.rejects(executor.run(), /输入未完整落地/)
-  assert.equal(r.typed.join(''), REMARK) // 字都敲了但页面没接收全
-  assert.equal(r.clicks.length, 2) // 约面试 + 聚焦，不继续点日期
+  assert.equal(r.clickAndTypes.length === 1 && r.clickAndTypes[0]!.text, REMARK) // 字都敲了但页面没接收全
+  assert.equal(r.clicks.length, 1) // 约面试；聚焦+输入走 clickAndType，不继续点日期
 })
 
 test('日历里找不到日期单元格：报错且绝不点发送', async () => {

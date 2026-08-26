@@ -408,19 +408,19 @@ Win32 通道实现要点：
 - **搜索找人（ChatSearchExecutor.openContact）流程**：
   1. 点搜索图标：坐标 `(519,135)`，**GetCursorPos 校准的固定常量**——该图标是 CSS 背景图，DOMSnapshot 抓不到节点，无法几何定位，只能用真机标定值（窗口尺寸/布局变化需重新校准）。
   2. 等 ~1400ms 弹层后定位搜索框：点图标后弹出的 doc0 INPUT，靠几何定位（DOMSnapshot 不暴露 tagName）——doc0 layout bounds 中 cx<850、y∈[100,200]、w>200 的**唯一**节点；0 或多个 fail-loud。真机搜索框 center `(368,141)`。
-  3. Win32 点击搜索框聚焦 → CDP `typeChar` 逐字输入姓名（200ms/字，风控拦鼠标不拦键盘）→ 等 ~1100ms 出结果。
+  3. Win32 `clickAndType` 原子「点击搜索框聚焦 + 真实键盘逐字输入姓名」（200ms/字）→ 等结果异步渲染。
   4. 等搜索结果异步渲染（`SEARCH_RESULT_DELAY=2500ms`）后，按目标姓名定位结果项：DOMSnapshot 找 `trim===姓名` 的可见节点（cx<850 左侧结果区、视口内）唯一命中点击。
   5. 真机修正（2026-08-13）：曾因 `sleep` 太早（1100ms）误判"结果卡片人名 DOMSnapshot 抓不到（视口内 0 命中）"，实为延时不够（结果项异步渲染，等够后项有 layout bounds）；且不再点固定第一项（旧实现 cx=287、y=联系人+24 的偏移）——目标未必在第一项会点错人，改为直接按目标姓名定位。
   6. 等 ~2000ms 后校验进入对话：发送按钮出现（locateSendButton 命中 1 个）；0 个（结果不存在/点击未生效）或多个 fail-loud。
 - **发消息（ChatSendExecutor.sendMessage）流程**：
   - 定位发送按钮：DOMSnapshot 文本「发送」，cx>850（LIST_MAX_X）视口内**唯一**命中；0/多个 fail-loud。真机 center `(1146,1233)`。
-  - 激活输入框：发送按钮 center + 固定偏移 `(-130,-38)` → Win32 点击聚焦（输入框无独立可定位节点，靠发送按钮反推激活点）。真机激活点 `(1016,1195)`。
-  - CDP `typeChar` 逐字输入消息 → 聊天输入框 value 进了 DOMSnapshot strings（dry-run 可校验输入内容）。
+  - 激活输入框+输入：发送按钮 center + 固定偏移 `(-130,-38)`（真机 `(1016,1195)`，输入框无独立可定位节点，靠发送按钮反推）→ Win32 `clickAndType` 原子「点击聚焦 + SendInput 逐字真实键入」。
+  - 聊天输入框 value 进了 DOMSnapshot strings（dry-run 可校验输入内容）。
 - **dry-run**：输入后校验 `strings` 含 message 即返回（sent=false，effect=none），不点发送。
 - **真发送校验（TODO 真机验证）**：点发送按钮（Win32 写动作）后，期望输入框清空（strings 不再含 message）；若仍含 message → `EXECUTION_UNKNOWN`（消息「无法确认是否发出」），系统**不自动重试**，请人工查看。注意：发送成功后消息会作为聊天气泡出现在历史里（也在 strings），本 naive 校验的真机可区分性待验证，必要时改为查消息气泡出现等更稳信号。
 - **坐标鲁棒性策略**：动态元素（搜索框、发送按钮、搜索结果项）一律 fresh DOMSnapshot 几何/文本定位，不写死坐标；仅搜索图标（CSS 背景，DOMSnapshot 抓不到节点）写死真机标定常量（GetCursorPos 校准）。写死的常量均带校准来源注释。
 - **fail-loud 校验点**：搜索框 0/多个、目标姓名结果项 0/多个（视口内）、点结果后无发送按钮、发送按钮 0/多个、发送后输入框未清空（UNKNOWN）——任一歧义抛错，绝不盲发。
-- **通道**：所有写动作（点搜索图标/搜索框/结果卡片/激活点/发送按钮）走 Win32（deps.click）；逐字输入走 CDP（typeChar）；永不 Runtime.*/Playwright（methodPolicy 白名单）。
+- **通道（2026-08-26 用户定调：点击/输入第一优先 Win32，防爬是关键）**：所有点击（搜索图标/结果卡片/发送按钮等）走 Win32（deps.click）；键盘输入走 Win32 `clickAndType`（一次 ps1 调用原子完成：拟人点击聚焦 500ms → SendInput KEYEVENTF_UNICODE 逐字真实键入 200ms/字，中文走 wScan 全 16 位——keybd_event 的 bScan 单字节装不下中文；§17 坑10 的「禁 SendInput」仅指鼠标绝对坐标）。CDP `typeChar` 通道已移除。**回退记录**：2026-08-24 曾因误判「Win32 DPI 换算偏差」把搜索入口/搜索框聚焦/结果卡片/激活点全改 CDP 点击——后经用户澄清实为**窗口被移动、输入框不在可见范围**所致（§17 坑22），换算本身无偏差，2026-08-26 全部回退 Win32 并真机复验（搜索找人 + dry-run 输入链路通过，245/245 测试绿）。永不 Runtime.*/Playwright（methodPolicy 白名单）。
 - **为什么用搜索找人定位会话**：会话列表**可滚动**（`CHAT_LIST_SCROLL_POINT={x:550,y:900}` + CDP `mouseWheel` + `ResumeConsentExecutor.listSignatureOf` 判到底，接受简历场景已真机验证有效），并非不能滚。但已知姓名精确找人时，搜索（`ChatSearchExecutor`）比"滚动逐屏翻找 + 文本匹配"更直接可靠——滚动翻找必须正确用 `listSignatureOf`（cx<850 全文本 y 签名）判到底，若误用局部人名序列会混入导航/推荐卡片标签误判"到底"提前退出（本次实验曾因此误判，实为诊断方法错而非滚动失效）。搜索与滚动互补，非"滚动失效才搜索"。
 
 ### 10.7 职位切换（list-jobs / select-job）
@@ -565,6 +565,8 @@ clients/boss-resume-assistant/
 
    2026-08-05 demo 实证：筛选面板「5-10年 / 本科 / 硕士 / 博士 / 10-20K → 确定」全流程经 DOMSnapshot 定位 + Win32 点击一次通过，列表正确刷新（筛选·5 生效）。写动作通道归属待 Phase 7 真机验证。执行规范见 §10.3。
 
+9. **点击/输入第一优先 Win32（2026-08-26 用户定调，防爬优先）**：在决策 8 双通道基础上收紧——**所有点击与键盘输入默认走 Win32 真实事件**（`WinMouseClicker.click` / `clickAndType`），CDP `Input.*` 仅限纯浏览类（卡片/Escape/滚动，真机实证放行）。键盘输入用 ps1 内 SendInput `KEYEVENTF_UNICODE` 逐字真实键入（keybd_event 装不下中文），与点击聚焦**同进程原子执行**（防间隙抢焦点）。2026-08-24 曾把聊天链路点击改 CDP 优先（误判 Win32 DPI 偏差，实为窗口被移动致输入框不可见，§17 坑22），已回退并真机复验。
+
 ## 17. 附录：真机踩坑清单
 
 2026-08-05 前后真机联调沉淀，全部已闭环。排查新问题时先对照此表。
@@ -592,3 +594,4 @@ clients/boss-resume-assistant/
 | 19 | REPL 管道输入冲垮操作 | Node readline 在管道/快速输入下会把已缓冲的行**全部立即派发**（`rl.pause()` 挡不住），且 stdin EOF 立刻触发 `close`——若 close 直接退出，进行中的操作会被 `gw.close()` 半途中断（报「CDP socket is not connected」）。chat REPL 用「输入队列 + 串行处理 + close 置标志等队列排空」 |
 | 20 | 筛选面板右列卡片诱饵恰好落进行带 | 弹层背后的卡片文本仍带布局 bounds，右列卡片（cx≈1444+）在行标签右缘之右，y 也可能恰好落进行带（2026-08-07：卡片「本科」cy=622.5 落进学历要求行带 ±34.75，报 2 命中）。纯几何无法排除，`locateRowOption` 与 `describePanel` 一样上「行标签 LCA = 面板容器」结构级消歧，容器外命中一律排除 |
 | 21 | 筛选行选项过多折行，第二行落出行带 | 经验要求行 8+ 个选项折成两行时，第二行选项（5-10年 cy=770）超出按行距推导的行带（±34.75）报 0 命中（2026-08-07 真机）。紧行带 0 命中时放宽下界到「下一行标签上沿」（上沿仍收紧、容器/x 规则不变），仍要求唯一命中 |
+| 22 | 误判 Win32 DPI 换算偏差，聊天链路点击被改 CDP | 2026-08-24 在另一台机器「点击执行但页面无响应」被归因为 Win32 DPI/缩放换算偏差，搜索入口/搜索框/结果卡片/激活点全改 CDP 点击——**实为用户移动了窗口、目标输入框不在可见范围**，换算本身无偏差（GetWindowRect 每次实时校准，比例换算覆盖任意 DPI）。教训：①排查「点了没反应」先确认目标在可见视口内且 WindowFromPoint 归属正确；②点击/输入第一优先 Win32（2026-08-26 用户定调），CDP 仅纯浏览类。已回退并真机复验 |

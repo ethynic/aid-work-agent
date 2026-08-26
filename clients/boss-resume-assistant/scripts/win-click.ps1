@@ -1,17 +1,20 @@
-﻿# Win32 真实鼠标点击（设计文档 §10.3 通道 2 / §17 踩坑 6~13）
-# 用法: powershell -File scripts/win-click.ps1 -X 904 -Y 700 [-CssW 1917] [-CssH 1905]
+﻿# Win32 真实鼠标点击 + 可选真实键盘逐字输入（设计文档 §10.3 通道 2 / §17 踩坑 6~13）
+# 用法: powershell -File scripts/win-click.ps1 -X 904 -Y 700 [-CssW 1917] [-CssH 1905] [-Text "你好"]
 # 输入为 page 坐标（DOMSnapshot device px，与截图 PNG 同尺寸），脚本内部：
 #   1. GetWindowRect(Chrome_RenderWidgetHostHWND) 实时取渲染视口屏幕矩形（每次校准，不缓存）
 #   2. scale = 视口宽 / CssW 换算屏幕坐标（自动覆盖 150% DPI 缩放）
 #   3. WindowFromPoint 落点守卫：目标点必须归属 Chrome_RenderWidgetHostHWND，
 #      否则 SetWindowPos 抬窗重试一次，仍不行 exit 2（fail-loud，不盲点）
 #   4. SetCursorPos 拟人分步移动 + 悬停 + mouse_event down/up
+#   5. -Text 非空：点击聚焦后（500ms）SendInput KEYEVENTF_UNICODE 逐字真实键入（200ms/字）
+#      —— 点击与输入同进程原子完成，避免两次调用之间焦点被别的窗口抢走
 # 退出码：0=已点击；1=窗口/参数错误；2=落点被遮挡（守卫拒绝）
 param(
   [Parameter(Mandatory=$true)][int]$X,
   [Parameter(Mandatory=$true)][int]$Y,
   [double]$CssW = 1917,
   [double]$CssH = 1905,
+  [string]$Text = "",
   [string]$TitleKeyword = "BOSS直聘 - Google Chrome"
 )
 
@@ -42,15 +45,46 @@ public class Win32 {
     [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(POINT p);
     [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
     [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extra);
+    [DllImport("user32.dll", SetLastError = true)] public static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
 
     public const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
     public const uint MOUSEEVENTF_LEFTUP   = 0x0004;
     public const uint SWP_NOMOVE = 0x0002;
     public const uint SWP_NOSIZE = 0x0001;
     public static readonly IntPtr HWND_TOP = IntPtr.Zero;
+    public const uint INPUT_KEYBOARD = 1;
+    public const uint KEYEVENTF_KEYUP = 0x0002;
+    public const uint KEYEVENTF_UNICODE = 0x0004;
 
     [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
     [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X, Y; }
+    [StructLayout(LayoutKind.Sequential)]
+    public struct MOUSEINPUT { public int dx, dy; public uint mouseData, dwFlags, time; public IntPtr dwExtraInfo; }
+    [StructLayout(LayoutKind.Sequential)]
+    public struct KEYBDINPUT { public ushort wVk, wScan; public uint dwFlags, time; public IntPtr dwExtraInfo; }
+    // 官方 INPUT 是联合体：type(4)+pad(4)+最大成员 MOUSEINPUT(32) = 40 字节（x64）。
+    // 用 Explicit 布局还原，cbSize 必须 = Marshal.SizeOf(INPUT) = 40，否则 SendInput 拒绝
+    [StructLayout(LayoutKind.Explicit)]
+    public struct INPUT {
+        [FieldOffset(0)] public uint type;
+        [FieldOffset(8)] public MOUSEINPUT mi;
+        [FieldOffset(8)] public KEYBDINPUT ki;
+    }
+
+    // Unicode 真实键盘输入（中文/emoji 走 wScan 全 16 位）。
+    // 注意：keybd_event 的 bScan 是单字节装不下中文，必须 SendInput；
+    // §17 坑10 的「禁 SendInput」仅指鼠标绝对坐标（多显示器 VIRTUALDESK），键盘无此问题
+    public static void TypeUnicode(char ch) {
+        INPUT[] inputs = new INPUT[2];
+        inputs[0].type = INPUT_KEYBOARD;
+        inputs[0].ki.wScan = ch;
+        inputs[0].ki.dwFlags = KEYEVENTF_UNICODE;
+        inputs[1].type = INPUT_KEYBOARD;
+        inputs[1].ki.wScan = ch;
+        inputs[1].ki.dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP;
+        uint sent = SendInput(2, inputs, Marshal.SizeOf(typeof(INPUT)));
+        if (sent != 2) throw new Exception("SendInput 键入失败（GetLastError=" + Marshal.GetLastWin32Error() + "）");
+    }
 
     public static IntPtr FindWindowByTitle(string keyword) {
         IntPtr found = IntPtr.Zero;
@@ -164,4 +198,15 @@ Start-Sleep -Milliseconds 500
 Start-Sleep -Milliseconds 70
 [Win32]::mouse_event([Win32]::MOUSEEVENTF_LEFTUP, 0, 0, 0, [UIntPtr]::Zero)
 Write-Output "已点击"
+
+# 点击后真实键盘逐字输入（-Text 非空时）。点完立即在同一进程键入：此刻 Chrome 刚被前台化
+# 且落点守卫刚通过，焦点必在目标输入框——拆成两次进程调用会在间隙被抢焦点
+if ($Text.Length -gt 0) {
+  Start-Sleep -Milliseconds 500   # 等点击聚焦稳定（与原 FOCUS_DELAY 一致）
+  foreach ($ch in $Text.ToCharArray()) {
+    [Win32]::TypeUnicode($ch)
+    Start-Sleep -Milliseconds 200 # 拟人逐字节奏（与 CDP typeChar 时代一致）
+  }
+  Write-Output "已输入 $($Text.Length) 字"
+}
 exit 0

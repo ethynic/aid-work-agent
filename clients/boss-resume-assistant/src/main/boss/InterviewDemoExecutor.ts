@@ -10,7 +10,7 @@
  * - 「选择日期」placeholder 和备注 placeholder 都是无布局节点的文本，不能按文本定位；
  *   备注用右下角「/140」字数计数器锚定（点其左上 300/40 处聚焦 textarea），
  *   日期下拉用「面试时间」标签锚定（点其右侧 230px 处）
- * - CDP Input.dispatchKeyEvent(type=char, text=字) 逐字输入中文畅通（风控不拦键盘）
+ * - 备注输入走 Win32 clickAndType（点击聚焦 + SendInput 真实键盘逐字，2026-08-26 决策）
  * - 日历日期数字在日历区域内唯一；选中后日期框显示 YYYY-MM-DD 文本（可校验）
  * - fail-loud：每步都有结果校验，任何一步不符合预期立即停止请人工查看
  */
@@ -36,8 +36,8 @@ export interface InterviewDemoDeps {
   snapshot(): Promise<DomSnapshot>
   /** Win32 真实鼠标点击 */
   click(point: ClickPoint, viewport: { width: number; height: number }): Promise<void>
-  /** CDP char 事件逐字输入（调用方保证焦点已在目标输入框） */
-  typeChar(ch: string): Promise<void>
+  /** Win32 原子「真实鼠标点击聚焦 + 真实键盘逐字输入」（2026-08-26 决策：输入类第一优先 Win32） */
+  clickAndType(point: ClickPoint, viewport: { width: number; height: number }, text: string): Promise<void>
   /** 协作式取消信号：入口检查一次，触发即抛 CancelledError */
   signal?: AbortSignal
   sleep?(ms: number): Promise<void>
@@ -51,8 +51,6 @@ const REMARK_COUNTER = '/140'
 const TIME_LABEL = '面试时间'
 const CANCEL_TEXT = '取消'
 const DEFAULT_REMARK = '请带好身份证和简历准时面试'
-/** 逐字输入间隔（拟人节奏，demo 可视化效果） */
-const TYPE_INTERVAL_MS = 150
 
 export class InterviewDemoExecutor {
   private readonly sleep: (ms: number) => Promise<void>
@@ -87,13 +85,9 @@ export class InterviewDemoExecutor {
     const counter = this.uniqueText(snap1, REMARK_COUNTER)
     if (!counter) throw new InterviewDemoError('表单已打开但未找到备注「/140」计数器，表单结构可能已变')
 
-    // 3. 聚焦备注 textarea 并逐字输入
-    await this.deps.click({ x: counter.x - 300, y: counter.y - 40 }, viewportOf(snap1))
-    await this.sleep(500)
-    for (const ch of remark) {
-      await this.deps.typeChar(ch)
-      await this.sleep(TYPE_INTERVAL_MS)
-    }
+    // 3. 聚焦备注 textarea 并逐字输入（Win32 原子：点击聚焦后紧接真实键盘逐字）
+    if (this.deps.signal?.aborted) throw new CancelledError()
+    await this.deps.clickAndType({ x: counter.x - 300, y: counter.y - 40 }, viewportOf(snap1), remark)
 
     // 4. 校验字数（textarea 内容不在 DOM 文本节点里，用计数器数字验证输入落地）
     const snap2 = await this.deps.snapshot()
