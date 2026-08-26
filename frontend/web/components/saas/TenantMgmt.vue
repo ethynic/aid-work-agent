@@ -130,15 +130,7 @@
       size="xl"
       :mode="isEdit ? 'edit' : 'create'"
       :is-dirty="isFormDirty"
-      :content-class="{ 'modal-fullscreen': isFullscreen }"
     >
-      <template #header-extra>
-        <button class="modal-fullscreen-btn" title="全屏" @click="toggleFullscreen">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
-          </svg>
-        </button>
-      </template>
 
       <!-- 标签页 -->
       <div class="mb-4 border-b border-default">
@@ -622,11 +614,6 @@ const submitting = ref(false)
 const formError = ref('')
 const tenantCodeError = ref('')
 const currentTenant = ref<any>(null)
-const isFullscreen = ref(false)
-
-function toggleFullscreen() {
-  isFullscreen.value = !isFullscreen.value
-}
 
 // 脏数据检测
 const originalFormData = ref<any>(null)

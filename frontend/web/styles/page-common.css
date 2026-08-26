@@ -284,31 +284,6 @@
   gap: 0.25rem;
 }
 
-/* 全屏按钮 */
-.modal-fullscreen-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 1.75rem;
-  height: 1.75rem;
-  border: none;
-  background: transparent;
-  border-radius: 0.25rem;
-  cursor: pointer;
-  color: var(--text-muted);
-  transition: background-color 0.15s, color 0.15s;
-}
-
-.modal-fullscreen-btn:hover {
-  background-color: var(--color-gray-100);
-  color: var(--text-primary);
-}
-
-.modal-fullscreen-btn svg {
-  width: 1rem;
-  height: 1rem;
-}
-
 /* 关闭按钮 */
 .modal-close-btn {
   display: flex;
