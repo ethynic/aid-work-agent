@@ -133,3 +133,26 @@ def test_collect_one_delegates_to_collect_query(monkeypatch):
 
     assert captured["query"] == wenxin.QUERY_TMPL.format(name="中国黄金协会")
     assert result == {"ok": True, "answer": "stub", "note": ""}
+
+
+def test_looks_like_replan_detects_wenxin_refusal_answers():
+    """拒答特征识别：文心「规划/拒答」型回答（无实际信息）应触发同会话重发。
+
+    真机（2026-08-26 银行保险资产管理业协会）：首答输出 replan JSON 拒答；
+    同一会话原样重发同一提示词第二次即给出完整信息。若该特征识别被破坏，
+    该协会这类「文心犯傻」场景将永远拿不到官网。
+    """
+    wenxin = _load_wenxin()
+    looks_like_replan = wenxin.looks_like_replan
+    replan_answer = (
+        "现有网页素材未覆盖邮箱、官网网址等关键信息，无法完整满足用户全部"
+        '查询需求，需要重新规划检索。{"rewrite_query": "查询协会信息", '
+        '"replan_reason": "部分关键信息缺失"}'
+    )
+    assert looks_like_replan(replan_answer) is True
+    assert looks_like_replan("需要重新规划检索") is True
+    # 正常回答（有实际信息）不触发重发
+    normal_answer = "地址：北京市西城区。官网网址：www.example.cn。秘书长：张三。"
+    assert looks_like_replan(normal_answer) is False
+    assert looks_like_replan("") is False
+    assert looks_like_replan(None) is False

@@ -32,6 +32,7 @@ from runtime.wenxin_collector import (  # noqa: E402
     START_WAIT_SECONDS,
     STABLE_TICKS,
     collect_one,
+    looks_like_replan,
 )
 
 

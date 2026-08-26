@@ -487,6 +487,37 @@ class TestChartNudge:
         # 二次调用应放行（防死循环）
         assert agent._maybe_nudge_to_chart([], "总结2") is False
 
+
+# ============================================================
+# Tests: 空总结兜底（content 空 + 无 tool_calls 时重试一次）
+# ============================================================
+
+
+class TestEmptySummaryFallback:
+    """无工具调用且 content 为空（推理烧穿 max_tokens 的典型特征）时的重试与失败兜底。"""
+
+    async def test_empty_summary_retries_then_success(self, agent, mock_llm):
+        """首次空总结 → 重试 → 第二次正常输出 → success=True"""
+        mock_llm.chat_with_tools.side_effect = [
+            _make_llm_response(content=""),  # 第一次：空（模拟烧穿截断）
+            _make_llm_response(content="2025年7月各品类毛利同比：A品类上涨12%，B品类下降5%"),
+        ]
+        result = await agent.run("各品类毛利同比分析")
+        assert result["success"] is True
+        assert "同比" in result["conclusion"]
+        assert mock_llm.chat_with_tools.call_count == 2
+
+    async def test_empty_summary_retries_then_fails(self, agent, mock_llm):
+        """首次空总结 → 重试 → 第二次仍空 → 返回失败，绝不把空串当结论"""
+        mock_llm.chat_with_tools.side_effect = [
+            _make_llm_response(content=""),
+            _make_llm_response(content=""),
+        ]
+        result = await agent.run("各品类毛利同比分析")
+        assert result["success"] is False
+        assert "输出为空" in result["error"]
+        assert mock_llm.chat_with_tools.call_count == 2
+
     def test_nudge_skipped_when_chart_exists(self, agent):
         """已有 chart artifact → 不触发"""
         agent._artifacts = [{"type": "chart", "id": "c1"}, {"type": "table", "id": "t1"}]

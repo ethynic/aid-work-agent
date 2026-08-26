@@ -86,6 +86,14 @@ class SmartDataAnalysisTool(BaseTool):
             logger.opt(exception=True).error(f"[SmartDataAnalysisTool] AnalysisAgent 运行失败: {e}")
             return {"success": False, "error": f"分析执行失败: {e}"}
 
+        # 主智能体防线：success=True 但结论为空时降级为失败。
+        # 防止空结论被主智能体误判为"知识库中无相关数据"（2026-08 生产事故归因）。
+        if result.get("success") and not str(result.get("conclusion", "")).strip():
+            logger.error(f"[SmartDataAnalysisTool] 分析返回空结论（trace={result.get('analysis_meta', {}).get('trace_id')}），降级为失败")
+            result["success"] = False
+            result["error"] = "分析未产出有效结论（输出可能被截断），请重试或简化分析需求"
+            result["conclusion"] = result["error"]
+
         return result
 
     def get_display_name(self, tool_args=None) -> str:

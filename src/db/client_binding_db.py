@@ -364,17 +364,24 @@ class ClientUsageLogDB:
         association_name: Optional[str] = None,
         status: str = "success",
         detail: Optional[dict] = None,
+        created_at: Optional[datetime] = None,
     ) -> None:
-        """记录非 LLM 调用（OCR/WebSearch），credit_cost=0。"""
+        """记录非 LLM 调用（OCR/WebSearch/客户端遥测日志），credit_cost=0。
+
+        created_at：事件真实发生时间（客户端遥测是批量 flush 的，用 flush
+        时刻当事件时间会把整批行标成同一秒，真机对账时时间线严重失真）；
+        None 时回退 DB 默认当前时间。
+        """
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 """INSERT INTO client_usage_logs
-                   (tenant_id, binding_id, session_id, association_name, stage, status, detail, credit_cost)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, 0)""",
+                   (tenant_id, binding_id, session_id, association_name, stage, status, detail, credit_cost, created_at)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, 0, COALESCE(%s, NOW()))""",
                 (
                     tenant_id, binding_id, session_id, association_name, stage, status,
                     json.dumps(detail, ensure_ascii=False) if detail else None,
+                    created_at,
                 ),
             )
             conn.commit()

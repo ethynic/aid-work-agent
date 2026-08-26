@@ -311,6 +311,14 @@ async def upload_logs(
     """批量上报客户端运行日志（记录到 client_usage_logs 的 detail 字段）。"""
     accepted = 0
     for entry in req.logs:
+        # 遥测是批量 flush 的，created_at 用事件自带时间戳（真机对账教训：
+        # 用 flush 时刻会让整批行同一秒，时间线失真）；解析失败回退 DB 当前时间
+        event_time = None
+        if entry.timestamp:
+            try:
+                event_time = datetime.fromisoformat(entry.timestamp)
+            except (TypeError, ValueError):
+                event_time = None
         ClientUsageLogDB.record_non_llm_usage(
             tenant_id=binding.tenant_id,
             binding_id=binding.binding_id,
@@ -319,6 +327,7 @@ async def upload_logs(
             association_name=entry.association_name,
             status=entry.level.lower() if entry.level in ("ERROR", "WARNING") else "success",
             detail={"message": entry.message, "level": entry.level, **(entry.detail or {})},
+            created_at=event_time,
         )
         accepted += 1
     return {"accepted": accepted}
