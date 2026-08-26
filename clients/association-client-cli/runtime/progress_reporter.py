@@ -179,10 +179,13 @@ class CliProgressReporter:
             # 同步到 gateway（让 billing 事件带上 association）
             if self.gateway:
                 self.gateway.current_association = self.current_association
-                # 从 action 推断 stage
+                # 从 action 推断 stage。注意措辞必须与 enricher 实际消息对齐：
+                # 第2步消息是「正在打开官网采集：...」（官网采集），曾因判断词
+                # 写成「采集官网」（词序反了）永不匹配，官网链路全部 LLM 计费
+                # 行被错标 search_profile（真机 2026-08-26 对账发现）
                 if "基础信息" in action:
                     self.gateway.current_stage = "search_profile"
-                elif "采集官网" in action:
+                elif "官网采集" in action or "采集官网" in action:
                     self.gateway.current_stage = "official_profile"
                 elif "微信搜索" in action:
                     self.gateway.current_stage = "wechat_search_leader"
