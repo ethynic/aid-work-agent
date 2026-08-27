@@ -94,7 +94,7 @@ class CategoryResponse(BaseModel):
 
 
 class CreateCategoryRequest(BaseModel):
-    source_type: str
+    source_type: Optional[str] = None  # 分类英文代号，不传时后端自动生成
     display_name: Optional[str] = None
     parent_id: Optional[int] = None
 

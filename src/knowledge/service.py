@@ -263,11 +263,14 @@ class KnowledgeBaseService:
             logger.error(f"获取分类列表失败: {e}", exc_info=True)
             return []
 
-    def create_category(self, tenant_id: str, source_type: str, display_name: str, parent_id: Optional[int] = None) -> Dict[str, Any]:
-        """创建分类，parent_id 非空时创建为子分类"""
+    def create_category(self, tenant_id: str, source_type: Optional[str] = None, display_name: Optional[str] = None, parent_id: Optional[int] = None) -> Dict[str, Any]:
+        """创建分类，parent_id 非空时创建为子分类；source_type 为空时自动生成唯一代号"""
         import re
-        if not re.match(r'^[a-z][a-z0-9_-]*$', source_type):
-            return {"success": False, "error": "source_type 格式错误，仅允许小写字母开头，后续为小写字母、数字、下划线或连字符"}
+        if source_type is not None:
+            if not re.match(r'^[a-z][a-z0-9_-]*$', source_type):
+                return {"success": False, "error": "source_type 格式错误，仅允许小写字母开头，后续为小写字母、数字、下划线或连字符"}
+        else:
+            source_type = f"k_{uuid.uuid4().hex[:12]}"
         try:
             with self._get_db_connection() as conn:
                 cursor = conn.cursor()

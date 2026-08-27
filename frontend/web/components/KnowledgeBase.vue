@@ -325,13 +325,7 @@
     <BaseModal v-model="showAddCategoryModal" title="添加分类" size="md" mode="create">
       <div class="space-y-4">
         <div>
-          <label class="text-sm text-muted mb-1 block">英文代号 <span class="text-danger-500">*</span></label>
-          <BaseInput v-model="newCategorySourceType" placeholder="如: contract, policy" />
-          <p v-if="newCategoryError" class="text-xs text-danger-500 mt-1">{{ newCategoryError }}</p>
-          <p v-else class="text-xs text-muted mt-1">仅允许小写字母开头，后续为小写字母、数字、下划线或连字符</p>
-        </div>
-        <div>
-          <label class="text-sm text-muted mb-1 block">分类名称</label>
+          <label class="text-sm text-muted mb-1 block">分类名称 <span class="text-danger-500">*</span></label>
           <BaseInput v-model="newCategoryDisplayName" placeholder="如: 合同文档, 政策文件" />
         </div>
         <div>
@@ -339,7 +333,7 @@
           <BaseSelect v-model="newCategoryParentId">
             <option value="">顶级分类</option>
             <option v-for="cat in categories" :key="cat.id" :value="String(cat.id)">
-              {{ cat.display_name || cat.source_type }} ({{ cat.source_type }})
+              {{ cat.display_name || cat.source_type }}
             </option>
           </BaseSelect>
         </div>
@@ -488,12 +482,10 @@ const categoryTree = ref<CategoryTreeNode[]>([])
 const selectedSourceType = ref<string | null>(null)
 const selectedSubCategory = ref<string | null>(null)
 
-// 添加分类
+// 添加分类（英文代号由后端自动生成，无需用户填写）
 const showAddCategoryModal = ref(false)
-const newCategorySourceType = ref('')
 const newCategoryDisplayName = ref('')
 const newCategoryParentId = ref('')
-const newCategoryError = ref('')
 const isCreatingCategory = ref(false)
 
 // 重命名分类
@@ -769,23 +761,21 @@ function openUploadModal() {
 }
 
 function openAddCategory() {
-  newCategorySourceType.value = ''
   newCategoryDisplayName.value = ''
   newCategoryParentId.value = getSelectedCategoryId()
-  newCategoryError.value = ''
   showAddCategoryModal.value = true
 }
 
 async function handleCreateCategory() {
-  const st = newCategorySourceType.value.trim()
-  if (!/^[a-z][a-z0-9_-]*$/.test(st)) {
-    newCategoryError.value = '格式错误：仅允许小写字母开头，后续为小写字母、数字、下划线或连字符'
+  const name = newCategoryDisplayName.value.trim()
+  if (!name) {
+    toast.error('分类名称不能为空')
     return
   }
   isCreatingCategory.value = true
   try {
     const parentId = newCategoryParentId.value ? Number(newCategoryParentId.value) : null
-    await createCategory(st, newCategoryDisplayName.value.trim() || st, parentId)
+    await createCategory(name, parentId)
     showAddCategoryModal.value = false
     await loadCategories()
     toast.success('分类创建成功')

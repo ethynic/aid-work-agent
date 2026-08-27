@@ -242,16 +242,16 @@ export async function listCategories(): Promise<CategoryListResponse> {
 }
 
 /**
- * 创建知识库分类
+ * 创建知识库分类（英文代号由后端自动生成）
  */
-export async function createCategory(sourceType: string, displayName?: string, parentId?: number | null): Promise<any> {
+export async function createCategory(displayName: string, parentId?: number | null): Promise<any> {
   const response = await fetch(`${API_BASE}/categories`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       ...getAuthHeader()
     },
-    body: JSON.stringify({ source_type: sourceType, display_name: displayName || sourceType, parent_id: parentId ?? null })
+    body: JSON.stringify({ display_name: displayName, parent_id: parentId ?? null })
   })
   const result = await response.json()
   if (!response.ok) {

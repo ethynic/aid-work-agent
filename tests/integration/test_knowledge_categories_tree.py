@@ -49,6 +49,17 @@ class TestKnowledgeCategoryTree:
         assert result["success"] is False
         assert result.get("status") == 404
 
+    def test_create_category_auto_source_type(self, tenant_id):
+        """不传 source_type 时自动生成唯一代号（前端添加分类不再要求手填英文代号）"""
+        result = knowledge_service.create_category(tenant_id, None, "自动代号分类")
+        assert result["success"] is True
+        assert result["source_type"].startswith("k_")
+        assert result["display_name"] == "自动代号分类"
+        # 自动生成的代号在租户内唯一，可重复创建不冲突
+        result2 = knowledge_service.create_category(tenant_id, None, "自动代号分类2")
+        assert result2["success"] is True
+        assert result2["source_type"] != result["source_type"]
+
     def test_create_child_cross_tenant_rejected(self, tenant_id):
         """跨租户引用父分类被拒绝"""
         other_tid = f"kb_tree_other_{uuid.uuid4().hex[:8]}"
