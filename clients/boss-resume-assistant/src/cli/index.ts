@@ -9,7 +9,8 @@
  * 用法：
  *   node dist/src/cli/index.js filter [--experience 5-10年] [--education 本科,硕士,博士] [--salary 10-20K]
  *   node dist/src/cli/index.js filter --clear
- *   node dist/src/cli/index.js greet [--limit N]
+ *   node dist/src/cli/index.js greet --names 冯修业,李四 [--limit N]
+ *   node dist/src/cli/index.js greet --all [--limit N]
  *   node dist/src/cli/index.js goto recommend|chat
  *   node dist/src/cli/index.js accept [--limit N] [--no-preview]
  *   node dist/src/cli/index.js reject
@@ -29,6 +30,7 @@
  * 退出只断开连接，绝不关闭你的 Chrome。
  */
 import { parseArgs, flagString, hasFlag } from './args.js'
+import { parseGreetNames, validateCommandArgs } from './validate.js'
 
 const USAGE = `BOSS 招聘操作 CLI
 
@@ -36,7 +38,8 @@ const USAGE = `BOSS 招聘操作 CLI
   filter-options                 查询筛选面板全部可选档位（只读；给 AI/用户选精确档位用；开收面板借鼠标约 2 秒）
   filter [--experience 5-10年] [--education 本科,硕士,博士] [--salary 10-20K]   自动设置筛选面板（Win32 真实鼠标，期间勿动鼠标）
   filter --clear              清除全部筛选（开面板 → 清除 → 确定，期间勿动鼠标）
-  greet [--limit N]           逐个打招呼（默认 10 上限，最大 100；当前屏点完自动滚动，到底结束；真实写动作，期间勿动鼠标）
+  greet --names <姓名>[,<姓名2>,<姓名3>] [--limit N]   定向打招呼：只打姓名精确匹配的人（1-3 人，半角/全角逗号分隔；配对失败一律跳过——宁可不打，不能打错；真实写动作，期间勿动鼠标）
+  greet --all [--limit N]       全量打招呼：从推荐列表顶部逐个点击（默认 10 上限，最大 100；当前屏点完自动滚动，到底结束；必须显式 --all 确认全量意图；真实写动作，期间勿动鼠标）
   goto recommend|chat         点击左侧菜单跳转页面：recommend=推荐牛人，chat=沟通（看打招呼回复）；已在目标页自动跳过
   accept [--limit N] [--no-preview]   逐个打开「对方想发送附件简历」的会话并点「同意」接收简历，同意后自动点开预览再关闭（默认 20 上限，最大 100；不在沟通页自动先跳转）
   reject                    把沟通页当前会话的候选人标记为「不合适」（弹确认层自动点确定；真实写动作，期间勿动鼠标）
@@ -55,6 +58,7 @@ Provider 命令：
 
 全局参数：
   --cdp-port <端口>             Chrome 调试端口（默认 9222）
+  --help / -h                   查看本用法说明（任何命令可用；未知参数会被拒绝而不是静默忽略）
 
 Chrome 准备（CLI 不启动 Chrome，只 attach 你日常的 Chrome）：
   1. 关闭所有 Chrome 窗口
@@ -79,6 +83,21 @@ function parseCdpPort(args: ReturnType<typeof parseArgs>): number | undefined | 
 async function main(): Promise<number> {
   const args = parseArgs(process.argv.slice(2))
   const command = args.positional[0]
+
+  // --help/-h 短路：任何命令（含未知命令）先打用法退出 0，必须先于参数校验生效。
+  // 真机事故根因之一：`greet --help` 的 help 曾被静默忽略、按默认参数执行了真实写动作
+  if (args.flags.has('help') || args.flags.has('h')) {
+    console.log(USAGE)
+    return 0
+  }
+
+  // 参数校验 fail-loud（validate.ts）：未知 flag / 多余位置参数 / greet 缺显式意图 → 拒绝执行。
+  // 解析器曾静默忽略未知参数，是两起真机事故（greet --help 误执行 / greet 冯修业 姓名被丢弃）的共同根因
+  const validation = validateCommandArgs(command, args)
+  if (!validation.ok) {
+    console.error(validation.message)
+    return 2
+  }
 
   switch (command) {
     case 'filter-options': {
@@ -113,10 +132,22 @@ async function main(): Promise<number> {
           return 2
         }
       }
+      // 定向名单取值（合法性已由 validateCommandArgs 用同一 parseGreetNames 校验过；
+      // 此处再查一次是为防御校验层被绕过的直接调用路径，fail-loud 不吞错）
+      const namesRaw = flagString(args, 'names')
+      let names: string[] | undefined
+      if (namesRaw !== undefined) {
+        const parsed = parseGreetNames(namesRaw)
+        if (!parsed.ok) {
+          console.error(parsed.message)
+          return 2
+        }
+        names = parsed.names
+      }
       const cdpPort = parseCdpPort(args)
       if (cdpPort === 'invalid') return 2
       const { greetCommand } = await import('./commands/greet.js')
-      return greetCommand({ limit, cdpPort })
+      return greetCommand({ limit, names, all: hasFlag(args, 'all'), cdpPort })
     }
     case 'goto': {
       const target = args.positional[1]

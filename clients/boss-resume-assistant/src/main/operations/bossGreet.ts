@@ -1,7 +1,9 @@
 /**
  * boss_greet operation（设计 §10.2）：推荐牛人页逐个点击「打招呼」（写动作）。
  *
- * 前置校验：必须在推荐牛人列表页（否则 0 按钮会被误报成「已滚到底」）→ WRONG_PAGE。
+ * 前置校验：必须在推荐牛人列表页——URL 含 /web/chat/recommend 才继续（2026-08-26 修坑 17：
+ * 曾用「存在『筛选』按钮文案」判定，沟通页 DOM 内嵌推荐 iframe 时文案同样命中、校验误通过，
+ * 结果 0 人成功还报「完成」；URL 判定不受 iframe 影响）→ 否则 WRONG_PAGE。
  * 只点当前视口内可见按钮，点完自动滚动加载；每点一个校验按钮数减少，否则 fail-loud。
  * operation 层 limit 上限 100；MCP schema 用 maximum=3 收紧（设计 §14）。
  *
@@ -25,8 +27,8 @@ export interface BossGreetArgs {
   names?: string[]
 }
 
-/** 推荐牛人列表页特征：「筛选」/「筛选·N」按钮存在 */
-const FILTER_BUTTON_PATTERN = /^筛选(·\d+)?$/
+/** 推荐牛人列表页 URL 特征（goto 命令已实证可区分：推荐页含 /web/chat/recommend，沟通页是 /web/chat/index） */
+const RECOMMEND_URL_PART = '/web/chat/recommend'
 /** 定向名单上限（与 MCP schema 的 max=3 一致） */
 const NAMES_MAX = 3
 
@@ -60,14 +62,17 @@ export function createBossGreetOperation(
           return null
         },
         async (session, tracker) => {
-          // 前置校验：必须在推荐牛人列表页
-          const probe = await session.snapshot()
-          if (!probe.strings.some((s) => FILTER_BUTTON_PATTERN.test(s.trim()))) {
+          // 前置校验：必须在推荐牛人列表页（URL 判定，坑 17）。
+          // 不用「筛选」按钮文案判定：沟通页 DOM 内嵌推荐 iframe 时文案同样命中、误通过，
+          // 结果 0 人成功还报「完成」；URL 不受 iframe 影响（goto 已实证两页 URL 可区分）
+          const url = await session.getUrl()
+          if (!url.includes(RECOMMEND_URL_PART)) {
             throw new CodedOperationError(
               'WRONG_PAGE',
-              '当前页面不是推荐牛人列表页（未找到「筛选」按钮），请先用 boss_goto 切换到「推荐牛人」页',
+              `当前页面不是推荐牛人列表页（当前 URL: ${url || '未识别'}），请先用 goto recommend（或 boss_goto）切换到「推荐牛人」页再打招呼`,
             )
           }
+          const probe = await session.snapshot()
           // 滚动点取实际视口中心（不能硬编码：窗口矮时落点出视口，滚轮不生效会误判到底）
           const vp = viewportOf(probe)
           const scrollPoint = { x: Math.floor(vp.width / 2), y: Math.floor(vp.height / 2) }

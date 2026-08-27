@@ -54,7 +54,10 @@ export function createBossResumeBatchOperation(
           return null
         },
         async (session) => {
-          // 前置校验：必须在推荐牛人列表页（同 boss_greet：无「筛选」按钮即 WRONG_PAGE）。
+          // 前置校验：必须在推荐牛人列表页（无「筛选」按钮即 WRONG_PAGE）。
+          // 已知局限（坑 17）：仍用文案判定——沟通页 DOM 内嵌推荐 iframe 时文案同样命中、会误通过
+          // （本 op 只读、无外部写副作用）；boss_greet 已于 2026-08-26 改 URL 判定（/web/chat/recommend），
+          // 本 op 待跟进同样改造。
           // 已打开的简历详情弹层不算错页：boss_resume_detail 读完不关详情，ResumeBatchReader
           // 入口会先 Escape 关掉残留弹层再点卡片（关不掉 fail-loud，防止把残留简历误记到卡片姓名下）。
           const probe = await session.snapshot()

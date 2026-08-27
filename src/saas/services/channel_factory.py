@@ -45,6 +45,30 @@ def _is_expired(entry: Dict[str, Any]) -> bool:
     return time.time() - entry.get("created_at", 0) > _CACHE_TTL_SECONDS
 
 
+async def _is_cache_stale(entry: Dict[str, Any], config_id: str) -> bool:
+    """缓存配置是否已过期：比对 DB 当前 updated_at 与缓存时记录版本。
+
+    Gunicorn 多 worker 兜底：invalidate_adapter 只清处理修改请求所在 worker 的
+    进程内缓存，其他 worker 下次回调靠本方法发现配置变更并强制重建。
+    DB 读取失败时保守返回 False（沿用缓存，不阻断业务）。
+    该方法位于缓存命中快速路径上（每个回调都会走到），同步 DB 查询用
+    asyncio.to_thread 包裹，避免阻塞事件循环。
+    """
+    try:
+        current_updated_at = await asyncio.to_thread(
+            ChannelConfigDB.get_config_version, config_id
+        )
+    except Exception as e:
+        logger.warning(
+            f"[ChannelFactory] 配置版本校验失败，沿用缓存: config={config_id}, error={e}"
+        )
+        return False
+    if current_updated_at is None:
+        # 配置已被删除：视为过期，触发重建（重建时 _load_config 返回 None 会清缓存）
+        return True
+    return current_updated_at != entry.get("cfg_updated_at")
+
+
 async def _build_adapter(tenant_id: str, channel_type: str, config: dict) -> Any:
     """构造 adapter 实例（同步构造 + 异步后置初始化）"""
     adapter = ChannelFactory.create_adapter(channel_type, config)
@@ -142,16 +166,19 @@ class ChannelFactory:
 
         cache_key = (tenant_id, channel_type, effective_config_id)
 
-        # Step 2: 快速路径（命中未过期的缓存）
+        # Step 2: 快速路径（命中未过期且配置版本未变化的缓存）
         entry = _ADAPTER_CACHE.get(cache_key)
-        if entry and not _is_expired(entry):
+        if entry and not _is_expired(entry) and not await _is_cache_stale(entry, effective_config_id):
             return entry["adapter"], entry["config_id"], entry.get("subagent_type")
 
         # Step 3: 锁内双重检查 + build（锁粒度收窄到 (t, c, config_id)）
         async with _get_cache_lock(tenant_id, channel_type, effective_config_id):
             entry = _ADAPTER_CACHE.get(cache_key)
-            if entry and not _is_expired(entry):
+            if entry and not _is_expired(entry) and not await _is_cache_stale(entry, effective_config_id):
                 return entry["adapter"], entry["config_id"], entry.get("subagent_type")
+            if entry:
+                # 缓存已过期（TTL 或配置版本变化）：清掉旧实例，走重建
+                _ADAPTER_CACHE.pop(cache_key, None)
 
             # 显式调用此时才 _load_config（None 调用上面已加载过）
             if cfg is None:
@@ -173,6 +200,7 @@ class ChannelFactory:
                 "adapter": adapter,
                 "config_id": used_config_id,
                 "subagent_type": cfg.get("subagent_type"),
+                "cfg_updated_at": cfg.get("updated_at"),
                 "created_at": time.time(),
             }
             _ADAPTER_CACHE[cache_key] = entry

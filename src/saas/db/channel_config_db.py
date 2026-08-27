@@ -106,6 +106,25 @@ class ChannelConfigDB:
                 return None
 
     @staticmethod
+    def get_config_version(config_id: str) -> Optional[Any]:
+        """获取渠道配置的 updated_at 版本（轻量查询）。
+
+        ChannelFactory 用它做 adapter 缓存跨 worker 失效校验：比对 DB 当前版本与
+        缓存时的版本，发现配置变更即强制重建 adapter（invalidate_adapter 只能清
+        处理修改请求所在 worker 的进程内缓存）。
+        """
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT updated_at FROM tenant_channel_configs WHERE config_id = %s",
+                (config_id,),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+            return row["updated_at"] if isinstance(row, dict) else row[0]
+
+    @staticmethod
     def get_by_id(config_id: str) -> Optional[Dict[str, Any]]:
         """根据 ID 获取渠道配置。
 

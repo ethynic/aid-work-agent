@@ -273,13 +273,34 @@ test('connect 失败（ECONNREFUSED cause）→ CHROME_UNAVAILABLE，retryable=t
   assert.equal(r.effect, 'none')
 })
 
-test('greet 前置校验非推荐页 → WRONG_PAGE，retryable=true', async () => {
-  const f = fakeFactory([snapWithTexts(['沟通', '消息'])])
-  const r = await createBossGreetOperation(f.factory).execute({ limit: 1 }, silentCtx())
+test('greet 前置校验：URL 是沟通页 → WRONG_PAGE，不执行任何点击（坑 17 回归：DOM 里有「筛选」和「打招呼」也不放行）', async () => {
+  // 修复前用「存在『筛选』按钮文案」判定页面：沟通页 DOM 内嵌推荐 iframe 时文案命中、
+  // 校验误通过，0 人成功还报「完成」。URL 判定不受 iframe 影响——本用例 snapshot 故意
+  // 带「筛选」与「打招呼」按钮，只有 URL 判定能拦住
+  const BTN: [number, number, number, number] = [1690, 208, 64, 32]
+  const f = fakeFactory([greetSnap([BTN])], { url: 'https://www.zhipin.com/web/chat/index' })
+  const r = await createBossGreetOperation(f.factory).execute({ limit: 5 }, silentCtx())
   assert.equal(r.success, false)
   assert.equal(r.code, 'WRONG_PAGE')
   assert.equal(r.retryable, true)
   assert.equal(r.effect, 'none')
+  assert.match(r.message, /goto recommend|boss_goto/)
+  assert.equal(f.clicks.length, 0) // URL 关未过：任何点击都不发生
+})
+
+test('greet 前置校验：URL 是推荐页 → 通过 URL 判定正常执行', async () => {
+  const BTN: [number, number, number, number] = [1690, 208, 64, 32]
+  // probe → locate(1btn) → 点完无按钮 → 滚动探测(2 次签名不变=到底)
+  const f = fakeFactory(
+    [greetSnap([BTN]), greetSnap([BTN]), greetSnap([]), greetSnap([]), greetSnap([])],
+    { url: 'https://www.zhipin.com/web/chat/recommend' },
+  )
+  const r = await createBossGreetOperation(f.factory).execute({ limit: 5 }, silentCtx())
+  assert.equal(r.success, true)
+  assert.equal(r.code, 'OK')
+  assert.equal(r.effect, 'applied')
+  assert.equal(r.data.greeted, 1)
+  assert.equal(f.clicks.length, 1)
 })
 
 test('greet 付费墙（未成功任何人）→ PAYWALL，effect=none，retryable=false', async () => {

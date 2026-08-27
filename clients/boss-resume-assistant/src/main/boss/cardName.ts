@@ -23,6 +23,9 @@ import {
 /** 「打招呼」按钮文本（DOM 抓取的原始文本 trim 后精确相等） */
 export const GREET_TEXT = '打招呼'
 
+/** 「继续沟通」按钮文本（打招呼成功后按钮原地翻转的文案，GreetExecutor 点击后位置校验用） */
+export const CONTINUE_TEXT = '继续沟通'
+
 /** 按钮同排窄带（|dy|）：只覆盖姓名/状态所在排（真机姓名 dy≈8），学历年龄在 dy≈19-27 排外 */
 const NAME_ROW_MAX_DY = 16
 /** 姓名列区间（x < 360）：真机姓名列 x≈332-342；状态/学历列 x≈384-413 不在区间 */

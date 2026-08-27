@@ -223,26 +223,15 @@
         </div>
 
         <div class="p-6">
-          <!-- 分类选择 -->
-          <div class="mb-4 space-y-3">
-            <div>
-              <label class="text-sm text-muted mb-1 block">顶级分类（可选）</label>
-              <BaseSelect v-model="uploadSourceType" @change="uploadSubCategory = ''">
-                <option value="">不分类（全部）</option>
-                <option v-for="cat in categoryTree" :key="cat.id" :value="cat.source_type">
-                  {{ cat.display_name || cat.source_type }}
-                </option>
-              </BaseSelect>
-            </div>
-            <div v-if="uploadSourceType">
-              <label class="text-sm text-muted mb-1 block">子分类（可选）</label>
-              <BaseSelect v-model="uploadSubCategory">
-                <option value="">不选子分类</option>
-                <option v-for="cat in subCategoriesOf(uploadSourceType)" :key="cat.id" :value="cat.source_type">
-                  {{ cat.display_name || cat.source_type }}
-                </option>
-              </BaseSelect>
-            </div>
+          <!-- 分类提示：文档归入左侧当前选中的分类，弹框内不再重复选择 -->
+          <div class="mb-4 p-3 bg-canvas rounded-lg">
+            <p class="text-sm text-default">
+              文档将上传到分类：
+              <span v-if="uploadSourceType" class="font-medium text-primary-600">
+                {{ categoryDisplayName(uploadSourceType) }}<template v-if="uploadSubCategory"> / {{ categoryDisplayName(uploadSubCategory) }}</template>
+              </span>
+              <span v-else class="text-muted">不分类（全部）</span>
+            </p>
           </div>
 
           <div @dragover.prevent="isDragging = true" @dragleave.prevent="isDragging = false" @drop.prevent="handleDrop"
@@ -759,10 +748,10 @@ function handleCategorySelect(cat: CategoryTreeNode) {
   }
 }
 
-// 某顶级分类下的直接子分类（用于上传弹框级联选择）
-function subCategoriesOf(sourceType: string): CategoryTreeNode[] {
-  const top = categoryTree.value.find(c => c.source_type === sourceType)
-  return top?.children || []
+// 分类显示名称（用于上传弹框提示）
+function categoryDisplayName(sourceType: string): string {
+  const cat = categories.value.find(c => c.source_type === sourceType)
+  return cat?.display_name || sourceType
 }
 
 // 当前选中分类的 id（添加分类时用作默认父分类）：子分类优先，其次顶级分类，未选中则顶级

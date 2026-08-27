@@ -8,7 +8,7 @@ SaaS 企业信息管理 API
 - 租户增删改查（仅平台管理员）
 """
 
-from fastapi import APIRouter, HTTPException, Request, UploadFile, File
+from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Form
 from pydantic import BaseModel, Field
 from typing import Optional
 from datetime import datetime
@@ -371,11 +371,18 @@ async def delete_tenant(request: Request, tenant_id: str):
 
 
 @router.post("/logo")
-async def upload_tenant_logo(request: Request, file: UploadFile = File(...)):
+async def upload_tenant_logo(
+    request: Request,
+    file: UploadFile = File(...),
+    tenant_id: Optional[str] = Form(None),
+):
     """上传租户 Logo 图片
 
     鉴权：require_admin（平台管理员或租户管理员均可）。
-    平台管理员代管时通过 X-Tenant-Id header 指定目标租户，由 TenantContextMiddleware 处理。
+    目标租户解析优先级：
+    1. 租户管理员登录 -> 使用账号自身 tenant_id
+    2. 平台管理员 + X-Tenant-Id header（租户前台页面，中间件/require_admin 已切换）
+    3. 平台管理员 + multipart form 显式 tenant_id（管理后台编辑弹框，无 X-Tenant-Id）
 
     流程：
     1. 校验扩展名和大小
@@ -389,9 +396,15 @@ async def upload_tenant_logo(request: Request, file: UploadFile = File(...)):
         return {"success": False, "error": "未启用 SaaS 模式无法访问", "debug": "SaaS mode disabled"}
 
     admin = require_admin(request)
-    tenant_id = admin.get("tenant_id")
+    # 优先 admin 上下文（租户管理员自身 / 平台管理员 + X-Tenant-Id），其次 form 显式传入
+    tenant_id = admin.get("tenant_id") or tenant_id
     if not tenant_id:
         return {"success": False, "error": "无法确定目标租户", "debug": "Missing tenant_id in admin context"}
+
+    # 平台管理员通过 form 显式指定租户时，校验租户存在，防止伪造/越权
+    if admin.get("role") == "platform_admin" and not admin.get("tenant_id"):
+        if not TenantDB.get_by_id(tenant_id):
+            return {"success": False, "error": "目标租户不存在", "debug": f"Tenant {tenant_id} not found"}
 
     # 1. 校验文件名扩展
     filename = file.filename or ""
