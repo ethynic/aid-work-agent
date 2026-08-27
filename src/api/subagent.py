@@ -15,7 +15,7 @@ from loguru import logger
 from src.core.agent import master_agent
 from src.core.cache_utils import CacheKeys, get_cached, set_cached
 from src.llm.gateway import llm_gateway
-from src.reports.summarizer import get_report_model
+from src.reports.summarizer import get_lite_model
 from src.saas.context import get_current_tenant_id
 from src.saas.permissions.checker import get_allowed_agent_ids_for_user
 
@@ -164,7 +164,7 @@ async def get_subagent_greeting(request: Request, agent_id: str):
     """获取数字员工「新会话空态」摘要与快捷操作按钮
 
     缓存优先（subagent_greeting:{agent_id}，TTL 7 天）；未命中时用
-    description + tools/skills 调用小模型（report_model）生成，并把计费
+    description + tools/skills 调用小模型（lite_model）生成，并把计费
     归属到当前访问的租户用户；LLM 失败/解析失败时降级为 description + 通用按钮。
     """
     try:
@@ -192,7 +192,7 @@ async def get_subagent_greeting(request: Request, agent_id: str):
             return {"success": False, "error": f"数字员工不存在: {agent_id}", "debug": f"agent_id={agent_id} not found"}
 
         info = _build_greeting_input(config)
-        report_model = get_report_model()
+        lite_model = get_lite_model()
 
         system_prompt = (
             "你是企业智能体系统的文案助手。请根据给定数字员工的能力信息，生成该员工在新会话页面的"
@@ -212,11 +212,10 @@ async def get_subagent_greeting(request: Request, agent_id: str):
         usage = {}
         data = None
         try:
-            result = await llm_gateway.chat(
+            result = await llm_gateway.chat_lite(
                 messages=[{"role": "user", "content": system_prompt}],
                 temperature=0.3,
                 max_tokens=512,
-                model=report_model,
             )
             usage = result.get("usage") if isinstance(result, dict) else None
             data = _parse_greeting_llm_output(result.get("content", "") or "")
@@ -234,7 +233,7 @@ async def get_subagent_greeting(request: Request, agent_id: str):
                     user_id=request.state.user_id,
                     source="subagent_greeting",
                     user_message=f"[数字员工空态] {info['name']} 摘要生成",
-                    model=report_model,
+                    model=lite_model,
                 )
             except Exception as e:
                 logger.opt(exception=True).error(f"数字员工空态摘要计费失败: {e}")

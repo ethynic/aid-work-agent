@@ -507,8 +507,8 @@ generator.generate_report(tenant_id, user_id, report_type, scope)
     │
     ├── 1. aggregator.aggregate(...)      # 从 chat_records 聚合输入数据（纯读）
     │
-    ├── 2. summarizer.summarize(prompt)   # 调 LLM 网关，走 deepseek-v4-flash
-    │      └── gateway.chat_with_tools(model=report_model, ...)
+    ├── 2. summarizer.summarize(prompt)   # 调 LLM 网关，走 lite_model（小模型）
+    │      └── gateway.chat_lite(...)
     │
     ├── 3. 计算 credit_cost               # 按 token 用量和计价表计算
     │
@@ -528,65 +528,64 @@ generator.generate_report(tenant_id, user_id, report_type, scope)
 2. **计费一致**：报告生成不搞特殊通道，复用现有计费/扣减/审计链路，降低维护成本
 3. **可关闭性**：租户若觉得报告不划算，可通过 `work_report_preferences` 关闭订阅，立即停止该项消耗
 
-#### 4.7.6 日报专用小模型配置
+#### 4.7.6 轻量小模型配置（lite_model，2026-08-27 由 report_model 重构）
 
-**背景**：`.env` 中 `DEEPSEEK_MODEL_CODE=deepseek-v4-pro` 是主链路（员工日常对话）使用的思考模型，能力强但成本高。日报/周报/月报是聚合摘要任务，不需要强推理能力，应该走 `deepseek-v4-flash` 降低成本。直接覆盖 `DEEPSEEK_MODEL_CODE` 会影响主链路质量，因此**必须新增独立配置项**。
+**背景**：`.env` 中 `DEEPSEEK_MODEL_CODE=deepseek-v4-flash` 是主链路（员工日常对话）使用的思考模型，能力强但成本高。日报/周报/月报、夜间工作成果复盘、简历匹配评分、数字员工空态摘要等都是**聚合/结构化任务**，不需要强推理能力，应走便宜的小模型（如 `qwen3.7-flash`，价格约为 deepseek-v4-flash 的 1/8）降低成本。直接覆盖 `DEEPSEEK_MODEL_CODE` 会影响主链路质量，因此**必须独立配置**。
 
-**配置项设计**：
+**配置项设计**（全局单配置，非 per-provider）：
 
-| 层级 | 配置项 | 默认值 | 说明 |
-|------|-------|--------|------|
-| 环境变量 | `DEEPSEEK_REPORT_MODEL_CODE` | `deepseek-v4-flash` | 日报/周报/月报专用模型，独立于主链路 |
-| YAML | `configs/config.yaml` `llm.deepseek.report_model` | `${DEEPSEEK_REPORT_MODEL_CODE:-deepseek-v4-flash}` | 与 `model` 字段并列 |
-| Settings | `src/config/settings.py` `LLMProviderConfig.report_model: Optional[str]` | `None`（未配置时 fallback 到 `model`） | 支持其他 provider 复用此字段 |
+| 层级 | 配置项 | 说明 |
+|------|-------|------|
+| 环境变量 | `LITE_MODEL_CODE` | 支持 `provider/model`（如 `qwen/qwen3.7-flash`，跨 provider 用该 provider 的 key/base_url）或纯模型名（如 `deepseek-v4-flash`，用当前主 provider） |
+| YAML | `configs/config.yaml` `llm.lite_model` | `${LITE_MODEL_CODE:-}`，未配置时 fallback 到主 provider 的 `model` |
+| Settings | `src/config/settings.py` `LLMConfig.lite_model: Optional[str]` + `get_lite_target()` / `get_lite_model()` | 解析 `provider/model` -> `(provider, model)`；纯模型名 -> `(当前 provider, 模型名)`；非法/空 -> 主 provider 的 model |
 
 **`.env.example` 新增**：
 
 ```bash
-# 日报/周报/月报生成专用模型（小模型，降低成本；不影响主链路 DEEPSEEK_MODEL_CODE）
-# 主链路推荐 deepseek-v4-pro（思考模型），报告生成推荐 deepseek-v4-flash（快速模型）
-DEEPSEEK_REPORT_MODEL_CODE=deepseek-v4-flash
+# 轻量小模型 LITE_MODEL_CODE（低成本简单任务：日报/复盘/评分/空态摘要），独立于主链路 MODEL_CODE
+# 支持两种写法：
+#   - "provider/model"（如 "qwen/qwen3.7-flash"）：跨 provider 调用，用该 provider 的 key/base_url
+#   - 纯模型名（如 "deepseek-v4-flash"）：用当前主 provider
+# 未配置时 fallback 到主模型 model
+LITE_MODEL_CODE=qwen/qwen3.7-flash
 ```
 
-**`configs/config.yaml` 修改**（`llm.deepseek` 下新增 `report_model` 字段）：
+**`configs/config.yaml` 修改**（`llm` 顶层新增 `lite_model` 字段）：
 
 ```yaml
 llm:
   provider: ${LLM_PROVIDER:-deepseek}
+  lite_model: ${LITE_MODEL_CODE:-}   # 轻量小模型：provider/model 或纯模型名
   deepseek:
     api_keys: ${DEEPSEEK_API_KEYS}
-    model: ${DEEPSEEK_MODEL_CODE:-deepseek-v4-flash}            # 主链路模型
-    report_model: ${DEEPSEEK_REPORT_MODEL_CODE:-deepseek-v4-flash}  # 报告专用小模型
+    model: ${DEEPSEEK_MODEL_CODE:-deepseek-v4-flash}   # 主链路模型
     base_url: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
 ```
 
-**`src/config/settings.py` 修改**：`LLMProviderConfig` 新增 `report_model: Optional[str] = None` 字段，加载逻辑同 `model`（读 `DEEPSEEK_REPORT_MODEL_CODE` 环境变量）。
+**`src/config/settings.py` 修改**：`LLMProviderConfig` **移除** `report_model`；`LLMConfig` 新增 `lite_model: Optional[str] = None` 与 `get_lite_target()`（解析逻辑见上表）。
 
-**调用方式**：
+**调用方式**（统一走 `gateway.chat_lite`）：
 
 ```python
 # src/reports/summarizer.py
-from src.config.settings import create_settings
+from src.reports.summarizer import get_lite_model   # 转发 settings.llm.get_lite_model()
+from src.llm.gateway import llm_gateway
 
-_settings = create_settings()
-
-def _get_report_model() -> str:
-    """获取报告专用模型，未配置时 fallback 到主模型"""
-    provider_cfg = _settings.llm.deepseek  # 或当前 provider
-    return provider_cfg.report_model or provider_cfg.model
-
-async def summarize(prompt: str, ...) -> str:
-    model = _get_report_model()
-    response = await gateway.chat_with_tools(
-        messages=[{"role": "user", "content": prompt}],
-        model=model,
-        ...
-    )
-    # response.model / response.prompt_tokens / response.completion_tokens 用于写 chat_records
-    return response.content, response.usage
+lite_model = get_lite_model()   # 仅用于日志/计费/落库
+result = await llm_gateway.chat_lite(
+    messages=[{"role": "user", "content": prompt}],
+    temperature=0.3,
+    max_tokens=2048,
+)
 ```
 
-**Provider 切换兼容**：若 `LLM_PROVIDER=qwen`，则 `qwen` provider 也应支持 `report_model` 字段（如 `qwen-turbo`），配置项对应改为 `QWEN_REPORT_MODEL_CODE`；`zhipu` 同理（如 `glm-4-flash`）。MVP 阶段只需支持 deepseek，后续按需扩展。
+`chat_lite` 内部按 `get_lite_target()` 路由：
+- **同 provider**（纯模型名 / 未配置）：走 `self.chat` 完整链路（含 failover），显式传 `model=lite_model`
+- **跨 provider**（`provider/model`）：构建独立 key_pool + provider 直连，**不参与 failover**（指定即专用）
+- **deepseek target**：自动加 `thinking={"type": "disabled"}`（DeepSeek V4 思考模型，轻量结构化任务关思考，统一收口到 chat_lite，调用方无需关心 provider）
+
+**跨 provider 约束**：`provider/model` 写法指定即专用、不走 failover，因为 failover 链只包含主 provider 同源的备用 provider，与跨 provider 小模型路由语义不同。
 
 ### 4.8 实施分阶段建议
 

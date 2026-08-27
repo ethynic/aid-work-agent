@@ -20,7 +20,7 @@ from src.db.models import ChatRecordDB
 from src.reports.aggregator import aggregate_personal, aggregate_team
 from src.reports.db import WorkDailyReportDB
 from src.reports.summarizer import (
-    get_report_model,
+    get_lite_model,
     summarize_personal,
     summarize_team,
 )
@@ -72,7 +72,7 @@ class ReportGenerator:
             报告 dict（含 report_id / summary_text / metrics 等）
         """
         start_ts = time.perf_counter()
-        report_model = get_report_model()
+        lite_model = get_lite_model()
         type_label = {"daily": "日报", "weekly": "周报", "monthly": "月报"}.get(report_type, "报告")
 
         # 1. 聚合数据
@@ -92,7 +92,7 @@ class ReportGenerator:
                 target_user_id=user_id,
                 metrics=empty_report["metrics"],
                 summary_text=empty_report["summary_text"],
-                model=report_model,
+                model=lite_model,
                 token_cost=0,
                 credit_cost=0.0,
                 is_regenerate=is_regenerate,
@@ -104,7 +104,7 @@ class ReportGenerator:
                 "report_date": report_date.isoformat(),
                 "target_user_id": user_id,
                 **empty_report,
-                "model": report_model,
+                "model": lite_model,
                 "credit_cost": 0.0,
             }
 
@@ -125,7 +125,7 @@ class ReportGenerator:
         credit_cost = calculate_credit_cost(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
-            model=report_model,
+            model=lite_model,
             cached_input_tokens=cached_input_tokens,
             cache_creation_input_tokens=cache_creation_input_tokens,
         )
@@ -140,7 +140,7 @@ class ReportGenerator:
             target_user_id=user_id,
             metrics=metrics,
             summary_text=summary_text,
-            model=report_model,
+            model=lite_model,
             token_cost=prompt_tokens + completion_tokens,
             credit_cost=credit_cost,
             is_regenerate=is_regenerate,
@@ -159,7 +159,7 @@ class ReportGenerator:
             assistant_message=summary_text,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
-            model=report_model,
+            model=lite_model,
             duration_ms=duration_ms,
             source_type=source_type,
             credit_cost=credit_cost,
@@ -167,7 +167,7 @@ class ReportGenerator:
 
         logger.info(
             f"个人{type_label}生成完成: tenant={tenant_id}, user={user_id}, "
-            f"date={report_date}, model={report_model}, credit_cost={credit_cost}, "
+            f"date={report_date}, model={lite_model}, credit_cost={credit_cost}, "
             f"duration={duration_ms}ms"
         )
 
@@ -179,7 +179,7 @@ class ReportGenerator:
             "target_user_id": user_id,
             "metrics": metrics,
             "summary_text": summary_text,
-            "model": report_model,
+            "model": lite_model,
             "token_cost": prompt_tokens + completion_tokens,
             "credit_cost": credit_cost,
         }
@@ -212,7 +212,7 @@ class ReportGenerator:
         - summarize_team 基于采样后的对话生成团队摘要
         """
         start_ts = time.perf_counter()
-        report_model = get_report_model()
+        lite_model = get_lite_model()
         type_label = {"daily": "日报", "weekly": "周报", "monthly": "月报"}.get(report_type, "报告")
 
         # 1. 聚合数据（含采样后的 members_dialogs）
@@ -237,7 +237,7 @@ class ReportGenerator:
             credit_cost = calculate_credit_cost(
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
-                model=report_model,
+                model=lite_model,
                 cached_input_tokens=cached_input_tokens,
                 cache_creation_input_tokens=cache_creation_input_tokens,
             )
@@ -257,7 +257,7 @@ class ReportGenerator:
             target_user_id=None,
             metrics=metrics,
             summary_text=summary_text,
-            model=report_model,
+            model=lite_model,
             token_cost=prompt_tokens + completion_tokens,
             credit_cost=credit_cost,
             is_regenerate=is_regenerate,
@@ -281,7 +281,7 @@ class ReportGenerator:
             assistant_message=summary_text,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
-            model=report_model,
+            model=lite_model,
             duration_ms=duration_ms,
             source_type=source_type,
             credit_cost=credit_cost,
@@ -290,7 +290,7 @@ class ReportGenerator:
 
         logger.info(
             f"团队{type_label}生成完成: tenant={tenant_id}, date={report_date}, "
-            f"active_users={active_users}, model={report_model}, "
+            f"active_users={active_users}, model={lite_model}, "
             f"credit_cost={credit_cost}, duration={duration_ms}ms, "
             f"input_truncated={agg.get('input_truncated')}, "
             f"input_member_count={agg.get('input_member_count')}, "
@@ -305,7 +305,7 @@ class ReportGenerator:
             "target_user_id": None,
             "metrics": metrics,
             "summary_text": summary_text,
-            "model": report_model,
+            "model": lite_model,
             "token_cost": prompt_tokens + completion_tokens,
             "credit_cost": credit_cost,
         }

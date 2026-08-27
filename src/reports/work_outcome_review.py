@@ -1,7 +1,7 @@
 """
 每日工作成果复盘任务（层2）
 
-扫描"当日有对话但无文件型成果"的会话，用 DEEPSEEK_REPORT_MODEL_CODE 小模型
+扫描"当日有对话但无文件型成果"的会话，用 LITE_MODEL_CODE 轻量小模型
 分析会话内容，提取 action / decision / other 类成果（source=scheduled_review）。
 
 设计文档：docs/system/work-outcome-record-design.md §6
@@ -26,7 +26,7 @@ from loguru import logger
 
 from src.core.temp_logger import tlog
 from src.db.database import get_db_connection
-from src.reports.summarizer import get_report_model
+from src.reports.summarizer import get_lite_model
 from src.reports.work_outcome_db import WorkOutcomeDB
 
 
@@ -306,22 +306,21 @@ async def _review_session_with_llm(
     system_prompt = _load_review_prompt()
     user_prompt = _format_session_for_review(messages, session)
 
-    # 3. 调用 DEEPSEEK 小模型（非流式，JSON 输出）
+    # 3. 调用 lite_model 小模型（非流式，JSON 输出）
     from src.llm.gateway import llm_gateway
-    report_model = get_report_model()
+    lite_model = get_lite_model()
     try:
-        result = await llm_gateway.chat(
+        result = await llm_gateway.chat_lite(
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            model=report_model,
             temperature=0.1,  # 低温度保证稳定
             max_tokens=2048,
         )
     except Exception as e:
         logger.opt(exception=True).error(
-            f"复盘小模型调用失败: session={session.session_id}, model={report_model}, "
+            f"复盘小模型调用失败: session={session.session_id}, model={lite_model}, "
             f"error={e}",
         )
         return []
@@ -334,7 +333,7 @@ async def _review_session_with_llm(
         source="work_outcome_review",
         user_message=f"工作成果复盘: session={session.session_id}",
         usage=result.get("usage") if isinstance(result, dict) else None,
-        model=report_model,
+        model=lite_model,
     )
     outcomes = _parse_review_response(content)
 

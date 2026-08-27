@@ -337,7 +337,7 @@ ImageRegistry 管理的图片资产元信息（复用 cp 的 `uploaded_file:{fil
 **键模式**：`subagent_greeting:{agent_id}`
 **TTL**：604800s（7 天）
 **失效时机**：管理后台更新/删除数字员工时主动 `delete_cached`（`src/api/admin_subagent.py`）；TTL 自动过期兜底
-**关键约束**：LLM（report_model 小模型）按需生成、缓存复用，避免重复计费；全局缓存（不含租户维度），智能体能力变更频率极低。前端静态配置（`frontend/web/utils/sessionGreetings.ts`）优先于本缓存，仅未配置的智能体走此接口
+**关键约束**：LLM（lite_model 小模型）按需生成、缓存复用，避免重复计费；全局缓存（不含租户维度），智能体能力变更频率极低。前端静态配置（`frontend/web/utils/sessionGreetings.ts`）优先于本缓存，仅未配置的智能体走此接口
 **源文件**：`src/api/subagent.py`
 
 ### 7.5 定时任务调度器启动锁

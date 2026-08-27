@@ -130,6 +130,10 @@ class _StubGateway:
             return {"content": self.content, "usage": self.usage}
         return {"content": json.dumps(self.payload, ensure_ascii=False), "usage": self.usage}
 
+    async def chat_lite(self, **kwargs):
+        # 评分服务已改走 chat_lite；真实网关内部解析 model/thinking，stub 复刻 chat 行为即可
+        return await self.chat(**kwargs)
+
 
 def _call(coro):
     """同步驱动 async 函数（独立新 event loop，避免跨文件事件循环状态污染）"""
@@ -551,9 +555,9 @@ class TestBilling:
         assert kwargs["tenant_id"] == ctx["tenant_id"]
         assert kwargs["user_id"] == "u_billing"  # user_id 从 resume 行取
         assert f"resume_id={rid}" in kwargs["user_message"]
-        # model 显式传报告模型名（不传会误用 mid_term 摘要单价）
-        from src.reports.summarizer import get_report_model
-        assert kwargs["model"] == get_report_model()
+        # model 显式传 lite 模型名（不传会误用 mid_term 摘要单价）
+        from src.reports.summarizer import get_lite_model
+        assert kwargs["model"] == get_lite_model()
 
     def test_no_billing_when_skipped(self, temp_tenant, monkeypatch):
         """skipped（未调 LLM）绝不计费"""

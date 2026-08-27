@@ -23,6 +23,12 @@ agent:
 # 各备用 provider 有独立环境变量（如 DEEPSEEK_*、QWEN_*），用于 failover
 llm:
   provider: ${LLM_PROVIDER:-deepseek}
+  # 轻量小模型（低成本简单任务：报告/复盘/评分/空态摘要），独立于主链路 model。
+  # 写法：
+  #   - "provider/model"（如 "qwen/qwen3.7-flash"）：跨 provider 调用，用该 provider 的 key/base_url
+  #   - 纯模型名（如 "deepseek-v4-flash"）：用当前主 provider
+  # 未配置时 fallback 到主模型 model；详见 docs/research/ai-agent-experience-daily-report-research.md §4.7.6
+  lite_model: ${LITE_MODEL_CODE:-}
   # qwen 推理模型（qwen3.x-flash/plus 系）是否关闭思考模式；默认 false（关闭思考，1-2s 响应）。
   # 仅 qwen provider 的 qwen 系模型生效；置 None 时不写该参数（不影响非 qwen 推理模型）
   enable_thinking: false
@@ -39,28 +45,18 @@ llm:
   qwen:
     api_keys: ${QWEN_API_KEYS:-}
     model: ${QWEN_MODEL_CODE:-qwen3.7-flash}
-    # 日报/周报/月报生成专用小模型（独立于主链路 model，降低成本）
-    # 默认 qwen3.7-flash：Flash 系输出单价最低(0.8元/M)且支持显式缓存；未配置时 fallback 到 model
-    # 详见 docs/research/ai-agent-experience-daily-report-research.md §4.7.6 与 ext/qwen-llm-price.md
-    report_model: ${QWEN_REPORT_MODEL_CODE:-qwen3.7-flash}
     base_url: ${QWEN_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
     max_concurrent_per_key: 2
     queue_timeout: 30
   zhipu:
     api_keys: ${ZHIPU_API_KEYS:-}
     model: ${ZHIPU_MODEL_CODE:-glm-4}
-    # 日报/周报/月报生成专用小模型（独立于主链路 model，降低成本）
-    # 未配置时 fallback 到 model；详见 docs/research/ai-agent-experience-daily-report-research.md §4.7.6
-    report_model: ${ZHIPU_REPORT_MODEL_CODE:-}
     base_url: ${ZHIPU_BASE_URL:-https://open.bigmodel.cn/api/paas/v4}
     max_concurrent_per_key: 2
     queue_timeout: 30
   deepseek:
     api_keys: ${DEEPSEEK_API_KEYS:-}
     model: ${DEEPSEEK_MODEL_CODE:-deepseek-v4-flash}
-    # 日报/周报/月报生成专用小模型（独立于主链路 model，降低成本）
-    # 未配置时 fallback 到 model；详见 docs/research/ai-agent-experience-daily-report-research.md §4.7.6
-    report_model: ${DEEPSEEK_REPORT_MODEL_CODE:-}
     base_url: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
     max_concurrent_per_key: 2
     queue_timeout: 30

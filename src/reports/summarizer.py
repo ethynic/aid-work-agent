@@ -1,9 +1,9 @@
 """
 LLM 摘要生成器
 
-使用 deepseek-v4-flash 小模型生成日报/周报/月报摘要。
-- 通过 LLMProviderConfig.get_report_model() 获取专用模型，未配置时 fallback 到主模型
-- 调用 LLM Gateway 的 chat() 接口，通过 kwargs 传 model 覆盖默认模型
+使用轻量小模型（lite_model）生成日报/周报/月报摘要。
+- 通过 LLMConfig.get_lite_model() 获取专用模型，未配置时 fallback 到主模型
+- 调用 LLM Gateway 的 chat_lite() 接口，自动按 lite_model 配置路由 provider 与模型
 """
 
 import time
@@ -15,17 +15,13 @@ from src.config.settings import create_settings
 from src.llm.gateway import llm_gateway
 
 
-def get_report_model() -> str:
-    """获取报告专用模型名
+def get_lite_model() -> str:
+    """获取轻量小模型名（lite_model）
 
-    优先级：当前 provider 的 report_model > 当前 provider 的 model
+    优先级：lite_model 配置（支持 "provider/model" 跨 provider）> 当前 provider 的 model
     """
     settings = create_settings()
-    provider_name = settings.llm.provider
-    provider_cfg = getattr(settings.llm, provider_name, None)
-    if provider_cfg is None:
-        return ""
-    return provider_cfg.get_report_model()
+    return settings.llm.get_lite_model()
 
 
 async def summarize_personal(
@@ -48,7 +44,7 @@ async def summarize_personal(
         (摘要正文, usage_dict)
         usage_dict: {"prompt_tokens": int, "completion_tokens": int}
     """
-    report_model = get_report_model()
+    lite_model = get_lite_model()
     type_label = {"daily": "日报", "weekly": "周报", "monthly": "月报"}.get(report_type, "报告")
 
     # 构造对话摘要输入：每条对话的 user_message（截断到 200 字）+ 关键工具调用
@@ -94,11 +90,10 @@ async def summarize_personal(
 
     start_time = time.perf_counter()
     try:
-        result = await llm_gateway.chat(
+        result = await llm_gateway.chat_lite(
             messages=[{"role": "user", "content": system_prompt}],
             temperature=0.3,
             max_tokens=2048,
-            model=report_model,
         )
         duration_ms = (time.perf_counter() - start_time) * 1000
         content = result.get("content", "") or ""
@@ -109,7 +104,7 @@ async def summarize_personal(
         cache_creation_input_tokens = int(usage.get("cache_creation_tokens") or 0)
 
         logger.info(
-            f"个人{type_label}摘要生成: user={user_name}, model={report_model}, "
+            f"个人{type_label}摘要生成: user={user_name}, model={lite_model}, "
             f"prompt_tokens={prompt_tokens}, completion_tokens={completion_tokens}, "
             f"duration={duration_ms:.0f}ms"
         )
@@ -151,7 +146,7 @@ async def summarize_team(
     Returns:
         (摘要正文, usage_dict)
     """
-    report_model = get_report_model()
+    lite_model = get_lite_model()
     type_label = {"daily": "日报", "weekly": "周报", "monthly": "月报"}.get(report_type, "报告")
     period = {"daily": "今日", "weekly": "本周", "monthly": "本月"}.get(report_type, "本期")
 
@@ -201,11 +196,10 @@ async def summarize_team(
 
     start_time = time.perf_counter()
     try:
-        result = await llm_gateway.chat(
+        result = await llm_gateway.chat_lite(
             messages=[{"role": "user", "content": system_prompt}],
             temperature=0.3,
             max_tokens=4096,
-            model=report_model,
         )
         duration_ms = (time.perf_counter() - start_time) * 1000
         content = result.get("content", "") or ""
@@ -216,7 +210,7 @@ async def summarize_team(
         cache_creation_input_tokens = int(usage.get("cache_creation_tokens") or 0)
 
         logger.info(
-            f"团队{type_label}摘要生成: tenant={tenant_name}, model={report_model}, "
+            f"团队{type_label}摘要生成: tenant={tenant_name}, model={lite_model}, "
             f"prompt_tokens={prompt_tokens}, completion_tokens={completion_tokens}, "
             f"duration={duration_ms:.0f}ms"
         )
