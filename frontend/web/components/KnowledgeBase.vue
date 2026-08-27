@@ -79,6 +79,7 @@
                   <BaseButton v-if="isSearchMode" size="sm" intent="secondary" @click="clearSearch">显示全部</BaseButton>
                 </div>
                 <div class="page-toolbar-right">
+                  <BaseButton :disabled="selectedArr.length === 0" intent="secondary" @click="openMoveModal">移动 ({{ selectedArr.length }})</BaseButton>
                   <BaseButton :disabled="selectedArr.length === 0" intent="danger" @click="handleBatchDelete">批量删除 ({{ selectedArr.length }})</BaseButton>
                   <BaseButton @click="openUploadModal">上传文档</BaseButton>
                 </div>
@@ -319,6 +320,39 @@
       </template>
     </BaseModal>
 
+    <!-- Move Documents Modal -->
+    <BaseModal v-model="showMoveModal" title="移动文档到分类" size="md" mode="create">
+      <div class="mb-4 p-3 bg-canvas rounded-lg">
+        <p class="text-sm text-default">
+          将把 <span class="font-medium text-primary-600">{{ selectedArr.length }}</span> 个文档移动到目标分类
+        </p>
+      </div>
+      <div v-if="moveTargetSourceType" class="mb-4 p-3 bg-primary-50 rounded-lg">
+        <p class="text-sm text-default">
+          目标分类：<span class="font-medium text-primary-700">{{ moveCategoryPath.join(' / ') }}</span>
+        </p>
+      </div>
+      <div class="max-h-[50vh] overflow-auto border border-default rounded-lg p-2">
+        <CategoryTreeItem
+          v-for="cat in categoryTree"
+          :key="cat.id"
+          :category="cat"
+          :depth="0"
+          :selected-source-type="moveTargetSourceType"
+          :selected-sub-category="moveTargetSubCategory"
+          :show-actions="false"
+          :default-expanded="true"
+          @select="handleMoveCategorySelect"
+        />
+      </div>
+      <template #footer>
+        <BaseButton intent="secondary" @click="showMoveModal = false">取消</BaseButton>
+        <BaseButton :disabled="!moveTargetSourceType || isMoving" @click="confirmMove">
+          {{ isMoving ? '移动中...' : `移动到目标分类 (${selectedArr.length})` }}
+        </BaseButton>
+      </template>
+    </BaseModal>
+
     <!-- Add Category Modal -->
     <BaseModal v-model="showAddCategoryModal" title="添加分类" size="md" mode="create">
       <div class="space-y-4">
@@ -430,6 +464,7 @@ import { type SubagentListItem } from '@/api/subagent'
 import { getMyAllowedAgents } from '@/api/saasPermissions'
 import {
   listDocuments, deleteDocument, uploadDocument, searchDocuments, getDocumentDownloadUrl,
+  moveDocuments,
   type DocumentResponse, type SearchResultItem,
   listCategories, createCategory, updateCategory, deleteCategory,
   type CategoryResponse,
@@ -553,6 +588,12 @@ const uploadErrors = ref<{ filename: string; error: string }[]>([])
 const documentToDelete = ref<DocumentResponse | null>(null)
 const showDeleteConfirm = ref(false)
 const isDeleting = ref(false)
+
+// ========== 移动文档 ==========
+const showMoveModal = ref(false)
+const moveTargetSourceType = ref<string | null>(null)
+const moveTargetSubCategory = ref<string | null>(null)
+const isMoving = ref(false)
 
 const uploadProgress = ref({
   total: 0,
@@ -1090,6 +1131,71 @@ async function handleBatchDelete() {
     toast.error(error.response?.data?.error || '批量删除失败')
   } finally {
     isDeleting.value = false
+  }
+}
+
+// ========== 移动文档 ==========
+
+function openMoveModal() {
+  moveTargetSourceType.value = null
+  moveTargetSubCategory.value = null
+  showMoveModal.value = true
+}
+
+// 与左侧分类树选中语义一致：顶级分类 -> (source_type, null)；子分类 -> (rootSourceType, source_type)
+function handleMoveCategorySelect(cat: CategoryTreeNode) {
+  if (cat.parent_id === null) {
+    moveTargetSourceType.value = cat.source_type
+    moveTargetSubCategory.value = null
+  } else {
+    moveTargetSourceType.value = cat.rootSourceType || cat.source_type
+    moveTargetSubCategory.value = cat.source_type
+  }
+}
+
+// 移动弹框展示目标分类的完整路径（一级/二级/三级），从目标分类向上追溯父级
+const moveCategoryPath = computed(() => {
+  const target = moveTargetSubCategory.value || moveTargetSourceType.value
+  if (!target) return []
+  const path: string[] = []
+  let current = categories.value.find(c => c.source_type === target)
+  while (current) {
+    path.unshift(current.display_name || current.source_type)
+    current = current.parent_id != null
+      ? categories.value.find(c => c.id === current!.parent_id)
+      : undefined
+  }
+  return path
+})
+
+async function confirmMove() {
+  if (!moveTargetSourceType.value || selectedArr.value.length === 0) return
+  // 所选文档均已位于目标分类时无需移动
+  const targetSub = moveTargetSubCategory.value ?? null
+  const allAlreadyInTarget = documents.value
+    .filter(d => selectedArr.value.includes(d.id))
+    .every(d => d.source_type === moveTargetSourceType.value && (d.sub_category ?? null) === targetSub)
+  if (allAlreadyInTarget) {
+    toast.warning('所选文档已在目标分类中')
+    return
+  }
+  isMoving.value = true
+  try {
+    const result = await moveDocuments(selectedArr.value, moveTargetSourceType.value, moveTargetSubCategory.value)
+    showMoveModal.value = false
+    clearSelection()
+    await loadDocuments()
+    await loadCategories()
+    if (result.skipped > 0) {
+      toast.success(`移动成功（${result.moved} 个），${result.skipped} 个已在目标分类`)
+    } else {
+      toast.success(`成功移动 ${result.moved} 个文档`)
+    }
+  } catch (error: any) {
+    console.error('前端日志：移动文档失败', error)
+    toast.error(error.message || '移动失败')
+  } finally {
+    isMoving.value = false
   }
 }
 

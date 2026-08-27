@@ -95,6 +95,12 @@ class CategoryResponse(BaseModel):
     created_at: Optional[str] = None
 
 
+class MoveDocumentsRequest(BaseModel):
+    doc_ids: List[int]
+    source_type: str  # 目标顶级分类代号（必须传）
+    sub_category: Optional[str] = None  # 目标直接所属子分类代号，顶级分类下为 None
+
+
 class CreateCategoryRequest(BaseModel):
     source_type: Optional[str] = None  # 分类英文代号，不传时后端自动生成
     display_name: Optional[str] = None
@@ -428,6 +434,28 @@ async def search_documents(
         results=[SearchResultItem(**r) for r in result.get("results", [])],
         count=result.get("count", 0)
     )
+
+
+@router.post("/documents/move")
+async def move_documents(request: MoveDocumentsRequest, http_request: Request = None):
+    """批量移动文档到目标分类（更新 source_type + sub_category，chunks/向量无需改动）"""
+    tenant_id = get_current_tenant_id()
+    result = knowledge_service.move_documents(
+        tenant_id=tenant_id,
+        doc_ids=request.doc_ids,
+        source_type=request.source_type,
+        sub_category=request.sub_category
+    )
+    if not result.get("success"):
+        return JSONResponse(
+            status_code=result.get("status", 400),
+            content={
+                "success": False,
+                "error": result.get("error", "移动失败"),
+                "debug": result.get("debug", result.get("error", ""))
+            }
+        )
+    return JSONResponse(content={"success": True, "moved": result["moved"], "skipped": result["skipped"]})
 
 
 @router.delete("/documents/{doc_id}")

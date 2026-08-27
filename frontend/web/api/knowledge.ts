@@ -9,6 +9,7 @@ export interface DocumentResponse {
   id: number
   title: string
   source_type: string
+  sub_category: string | null
   file_type: string
   file_path: string | null
   file_size: number | null
@@ -95,6 +96,44 @@ export async function deleteDocument(docId: number): Promise<ApiResponse> {
     headers: { ...getAuthHeader() }
   })
   return response.json()
+}
+
+export interface MoveDocumentsResponse {
+  success: boolean
+  moved: number
+  skipped: number
+  error?: string
+  debug?: string
+}
+
+/**
+ * 批量移动知识库文档到目标分类
+ * @param docIds 文档 ID 列表
+ * @param sourceType 目标顶级分类代号
+ * @param subCategory 目标直接所属子分类代号（顶级分类下传 null）
+ */
+export async function moveDocuments(
+  docIds: number[],
+  sourceType: string,
+  subCategory?: string | null
+): Promise<MoveDocumentsResponse> {
+  const response = await fetch(`${API_BASE}/documents/move`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...getAuthHeader()
+    },
+    body: JSON.stringify({
+      doc_ids: docIds,
+      source_type: sourceType,
+      sub_category: subCategory ?? null
+    })
+  })
+  const result = await response.json()
+  if (!response.ok || result.success === false) {
+    throw new Error(result.error || '移动文档失败')
+  }
+  return result
 }
 
 /**
