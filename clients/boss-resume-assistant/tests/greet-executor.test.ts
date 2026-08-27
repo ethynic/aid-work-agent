@@ -259,8 +259,13 @@ const ROW_A: NameRow = { name: '刘草威', buttonY: 146 }
 const ROW_B: NameRow = { name: '张三丰', buttonY: 330 }
 const ROW_NULL: NameRow = { name: null, buttonY: 514 }
 
-/** 构造带卡片行的 snapshot：bounds 为文档绝对坐标（行 y + offsetY），scrollOffsetY=offsetY */
-function namedSnap(rows: NameRow[], offsetY = 0): DomSnapshot {
+/** 构造带卡片行的 snapshot：bounds 为文档绝对坐标（行 y + offsetY），scrollOffsetY=offsetY；
+ *  extras 为附加文本节点（「为你推荐」区块头、翻转后的「继续沟通」按钮等，bounds 同为文档绝对坐标） */
+function namedSnap(
+  rows: NameRow[],
+  offsetY = 0,
+  extras: Array<{ t: string; at: [number, number, number, number] }> = [],
+): DomSnapshot {
   const strings: string[] = ['']
   const nvIndex: number[] = [0]
   const nvValue: number[] = [0]
@@ -288,6 +293,7 @@ function namedSnap(rows: NameRow[], offsetY = 0): DomSnapshot {
     addText('本科', [317, row.buttonY + 30 + offsetY, 40, 20]) // 噪音：同行带外
     addText('\n                  打招呼', [1130, row.buttonY - 16 + offsetY, 64, 32]) // 中心 (1162, y)
   }
+  for (const { t, at } of extras) addText(t, at)
   return {
     strings,
     documents: [
@@ -489,4 +495,202 @@ test('非定向模式结果不含 greetedNames/missingNames 键（契约零变�
   })
   const result = await executor.greetVisible()
   assert.deepEqual(Object.keys(result).sort(), ['greeted', 'reachedEnd'])
+})
+
+// ---------- 点击后校验（2026-08-27 真机事故修复） ----------
+// 事故：定向 greet --names 高长磊,尚志刚，点击高长磊实际成功（按钮翻转「继续沟通」），但页面
+// 同时插入「为你推荐」区块带来 2 个新「打招呼」按钮，总数 6→7 不降反升，旧「总数必须减少」
+// 校验误报 EXECUTION_UNKNOWN 中止（尚志刚没被打）。修复：定向按目标验证（彻底放弃计数），
+// 非定向放宽为「位置证据 | 计数证据」任一。
+
+test('定向事故回归：点击成功但「为你推荐」区块新增按钮（总数 6→7）→ 按目标验证判成功，不误报', async () => {
+  const r = recorder()
+  // before：首屏 6 行，高长磊在顶部
+  const before = namedSnap([
+    { name: '高长磊', buttonY: 146 },
+    { name: '张三丰', buttonY: 330 },
+    { name: '李建国', buttonY: 514 },
+    { name: '王小明', buttonY: 698 },
+    { name: '赵铁柱', buttonY: 882 },
+    { name: '钱多多', buttonY: 1066 },
+  ])
+  // after：高长磊按钮翻转为「继续沟通」，推荐区块插入 2 张无关新卡（孙悟空/周伯通）→ 7 个按钮
+  const after = namedSnap(
+    [
+      { name: '张三丰', buttonY: 146 },
+      { name: '李建国', buttonY: 330 },
+      { name: '王小明', buttonY: 514 },
+      { name: '赵铁柱', buttonY: 698 },
+      { name: '钱多多', buttonY: 882 },
+      { name: '孙悟空', buttonY: 1066 },
+      { name: '周伯通', buttonY: 1250 },
+    ],
+    0,
+    [
+      { t: '为你推荐 与', at: [600, 1190, 300, 24] },
+      { t: '继续沟通', at: [1130, 130, 64, 32] }, // 高长磊按钮原位翻转
+    ],
+  )
+  const executor = new GreetExecutor({
+    snapshot: snapshotQueue([before, after]),
+    click: r.click,
+    sleep: r.sleep,
+  })
+  const result = await executor.greetVisible({ names: ['高长磊'] })
+  assert.equal(result.greeted, 1)
+  assert.deepEqual(result.greetedNames, ['高长磊'])
+  assert.deepEqual(result.missingNames, [])
+  assert.deepEqual(r.clicks, [{ x: 1162, y: 146 }]) // 只点了高长磊的按钮
+})
+
+test('定向：点击未生效（after 快照目标按钮仍在、能配对出目标姓名）→ 按目标 fail-loud，消息含目标姓名', async () => {
+  const r = recorder()
+  const snap = namedSnap([
+    { name: '高长磊', buttonY: 146 },
+    { name: '张三丰', buttonY: 330 },
+  ])
+  const executor = new GreetExecutor({
+    // 点击后页面无变化：高长磊的按钮仍在且能配对 → 点击未生效
+    snapshot: snapshotQueue([snap, snap]),
+    click: r.click,
+    sleep: r.sleep,
+  })
+  await assert.rejects(executor.greetVisible({ names: ['高长磊'] }), (e: unknown) => {
+    assert.ok(e instanceof GreetError)
+    assert.match(e.message, /高长磊/)
+    assert.match(e.message, /仍在页面上/)
+    return true
+  })
+  assert.equal(r.clicks.length, 1) // 不再盲点下一个
+})
+
+/** 构造同时含「打招呼」与「继续沟通」按钮的 snapshot（bounds 为文档绝对坐标；视口 1917x1905） */
+function greetContinueSnap(
+  buttons: Array<[number, number, number, number]>,
+  continueButtons: Array<[number, number, number, number]> = [],
+): DomSnapshot {
+  // 两种按钮文案各占一个 string 下标（trim 后精确相等），节点分别引用对应下标
+  const idx = [0, ...buttons.map((_, i) => i + 1), ...continueButtons.map((_, i) => buttons.length + 1 + i)]
+  return {
+    strings: ['', '打招呼', '继续沟通'],
+    documents: [
+      {
+        nodes: {
+          nodeValue: {
+            index: idx,
+            value: [0, ...buttons.map(() => 1), ...continueButtons.map(() => 2)],
+          },
+          contentDocumentIndex: { index: [], value: [] },
+        },
+        layout: {
+          nodeIndex: idx,
+          bounds: [[0, 0, 1917, 1905], ...buttons, ...continueButtons],
+        },
+        scrollOffsetY: 0,
+      },
+    ],
+  }
+}
+
+// 6 个按钮（中心 y=224..1104，间距 176），点击第 1 个 (1722,224) 后剩 5 + 底部新增 2 = 7
+const SIX_BTNS: Array<[number, number, number, number]> = [
+  [1690, 208, 64, 32],
+  [1690, 384, 64, 32],
+  [1690, 560, 64, 32],
+  [1690, 736, 64, 32],
+  [1690, 912, 64, 32],
+  [1690, 1088, 64, 32],
+]
+const SEVEN_BTNS: Array<[number, number, number, number]> = [
+  [1690, 384, 64, 32],
+  [1690, 560, 64, 32],
+  [1690, 736, 64, 32],
+  [1690, 912, 64, 32],
+  [1690, 1088, 64, 32],
+  [1690, 1264, 64, 32], // 新增（中心 1280）
+  [1690, 1440, 64, 32], // 新增（中心 1456）
+]
+
+test('非定向：点击成功但总数 6→7（懒加载/推荐区块新增）→ 点击位置附近出现「继续沟通」→ 位置证据判成功', async () => {
+  const r = recorder()
+  const executor = new GreetExecutor({
+    // 点击 (1722,224) 后该按钮原地翻转为「继续沟通」（Δ=0,0 ≤ 容差），总数 6→7 不降反升
+    snapshot: snapshotQueue([greetContinueSnap(SIX_BTNS), greetContinueSnap(SEVEN_BTNS, [[1690, 208, 64, 32]])]),
+    click: r.click,
+    sleep: r.sleep,
+  })
+  const result = await executor.greetVisible({ limit: 1 })
+  assert.equal(result.greeted, 1)
+  assert.equal(r.clicks.length, 1)
+})
+
+test('非定向：总数不降（6→7）且点击位置附近无「继续沟通」（远处的「继续沟通」不算位置证据）→ 仍 UNKNOWN fail-loud', async () => {
+  const r = recorder()
+  const executor = new GreetExecutor({
+    // 两个「继续沟通」都在远处：中心 (1722,800) Δy=576>40、(1022,224) Δx=700>100，均超出容差
+    snapshot: snapshotQueue([
+      greetContinueSnap(SIX_BTNS),
+      greetContinueSnap(SEVEN_BTNS, [
+        [1690, 784, 64, 32],
+        [990, 208, 64, 32],
+      ]),
+    ]),
+    click: r.click,
+    sleep: r.sleep,
+  })
+  await assert.rejects(executor.greetVisible({ limit: 5 }), (e: unknown) => {
+    assert.ok(e instanceof GreetError)
+    assert.match(e.message, /按钮数未减少/)
+    assert.match(e.message, /继续沟通/)
+    return true
+  })
+  assert.equal(r.clicks.length, 1)
+})
+
+test('findGreetButtons 同文案多下标坑修复：strings 表中「打招呼」出现 2 个下标时全部找到（旧实现只认第一个）', async () => {
+  const r = recorder()
+  // strings: ['', '打招呼', '打招呼']——同文案两个下标（模拟不同节点分别 intern），
+  // BTN1 引用下标 1、BTN2 引用下标 2。旧实现 findIndex 只取下标 1 → 只找到 BTN1（1 个按钮），
+  // 点完后 after 无下标 1 的节点 → 误判成功收场但 BTN2 永远漏点；修复后 2 个都找到逐个点击。
+  const dupSnap = (
+    first: [number, number, number, number] | null,
+    second: [number, number, number, number] | null,
+  ): DomSnapshot => {
+    const idx = [0]
+    const value = [0]
+    const bounds: Array<[number, number, number, number]> = [[0, 0, 1917, 1905]]
+    if (first) {
+      idx.push(1)
+      value.push(1)
+      bounds.push(first)
+    }
+    if (second) {
+      idx.push(idx.length)
+      value.push(2)
+      bounds.push(second)
+    }
+    return {
+      strings: ['', '打招呼', '打招呼'],
+      documents: [
+        {
+          nodes: { nodeValue: { index: idx, value }, contentDocumentIndex: { index: [], value: [] } },
+          layout: { nodeIndex: idx, bounds },
+          scrollOffsetY: 0,
+        },
+      ],
+    }
+  }
+  const executor = new GreetExecutor({
+    // 定位[B1,B2] → 点 B1 → 校验[B2] → 定位[B2] → 点 B2 → 校验[] → 定位[]（无 scroll 即结束）
+    snapshot: snapshotQueue([dupSnap(BTN1, BTN2), dupSnap(null, BTN2), dupSnap(null, BTN2), dupSnap(null, null)]),
+    click: r.click,
+    sleep: r.sleep,
+  })
+  const result = await executor.greetVisible()
+  assert.equal(result.greeted, 2)
+  assert.equal(result.reachedEnd, true)
+  assert.deepEqual(r.clicks, [
+    { x: 1722, y: 224 },
+    { x: 1722, y: 500 },
+  ])
 })

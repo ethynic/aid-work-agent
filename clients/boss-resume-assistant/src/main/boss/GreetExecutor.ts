@@ -13,8 +13,15 @@
  *
  * 安全设计（fail-loud）：
  * - 只点当前视口内可见的按钮（视口外的先滚动再点）
- * - 每次点击后校验「打招呼」按钮总数必须减少（成功会变成「继续沟通」）；
- *   未减少说明可能弹了确认层/被风控拦截，立即停止并提示人工查看，绝不盲点下一个
+ * - 每次点击后校验成功证据（2026-08-27 真机事故修复：点击高长磊实际成功，但页面同时插入
+ *   「为你推荐」区块带来 2 个新「打招呼」按钮，总数 6→7 不降反升，旧「总数必须减少」
+ *   校验误报 EXECUTION_UNKNOWN 中止。滚动懒加载/推荐区块插入都会新增按钮，按总数校验
+ *   必然误报）：
+ *   - 定向模式（传 names）：彻底放弃计数校验，按目标验证——after 快照中任一可见「打招呼」
+ *     按钮仍配对出目标姓名 → 点击未生效，立即停止；无按钮配对出目标 → 成功
+ *     （新增的无关按钮与验证无关）。
+ *   - 非定向模式：计数证据（总数较点击前减少，原规则）| 位置证据（点击位置附近出现
+ *     「继续沟通」按钮）任一满足即成功；两者都不满足才报 UNKNOWN 停止。
  */
 import {
   type DomSnapshot,
@@ -23,7 +30,7 @@ import {
   accumulateOwnerOffset,
   boundsCenter,
 } from './domSnapshot.js'
-import { GREET_TEXT, pairCardName, type GreetButtonRef } from './cardName.js'
+import { GREET_TEXT, CONTINUE_TEXT, pairCardName, type GreetButtonRef } from './cardName.js'
 import { viewportOf } from './FilterSetter.js'
 import { CancelledError } from '../operations/types.js'
 
@@ -69,6 +76,13 @@ const SCROLL_DELTA = 800
  * 命中即给出可操作的错误信息，而不是泛泛的「按钮数未减少」。
  */
 const PAYWALL_MARKERS = ['该职位无开聊权益', '商品价格', '扫码支付']
+
+/**
+ * 非定向模式点击后「位置证据」容差（device px）：after 快照中「继续沟通」按钮 center 与
+ * 点击点比较的允许偏差。按钮翻转为「继续沟通」且卡片基本不动，容忍轻微 reflow。
+ */
+const VERIFY_ROW_DY = 40
+const VERIFY_COL_DX = 100
 
 export class GreetExecutor {
   private readonly sleep: (ms: number) => Promise<void>
@@ -134,12 +148,36 @@ export class GreetExecutor {
               '请关闭弹层并切换到有开聊权益的职位后重试',
           )
         }
-        const remaining = this.findGreetButtons(after).length
-        if (remaining >= buttons.length) {
-          throw new GreetError(
-            `第 ${greeted + 1} 个打招呼点击后按钮数未减少（${buttons.length}→${remaining}）：` +
-              '可能出现确认弹层或点击被拦截，已停止，请人工查看页面',
+        // 点击后校验（2026-08-27 真机事故修复）：滚动懒加载/「为你推荐」区块插入都会新增按钮，
+        // 「全局总数必须减少」必然误报。定向模式按目标验证，非定向放宽为「位置证据 | 计数证据」任一。
+        if (targetName !== null) {
+          // 定向模式：彻底放弃计数校验——只要没有任何可见「打招呼」按钮再配对出目标姓名即成功，
+          // 推荐区块/懒加载新增的无关按钮与验证无关
+          const afterViewport = viewportOf(after)
+          const targetStillVisible = this.findGreetButtons(after).some(
+            (btn) => pairCardName(after, btn, afterViewport) === targetName,
           )
+          if (targetStillVisible) {
+            throw new GreetError(
+              `第 ${greeted + 1} 个打招呼点击后目标「${targetName}」的按钮仍在页面上：` +
+                '可能出现确认弹层或点击被拦截（若「为你推荐」区块出现同名卡片也会触发此判定），已停止，请人工查看页面',
+            )
+          }
+        } else {
+          // 非定向模式：计数证据（原规则，保留）或位置证据（点击点附近出现「继续沟通」）任一满足即成功
+          const remaining = this.findGreetButtons(after).length
+          const flippedNearClick = this.findButtonsByExactText(after, CONTINUE_TEXT).some(
+            (b) =>
+              Math.abs(b.point.y - target.point.y) <= VERIFY_ROW_DY &&
+              Math.abs(b.point.x - target.point.x) <= VERIFY_COL_DX,
+          )
+          if (remaining >= buttons.length && !flippedNearClick) {
+            throw new GreetError(
+              `第 ${greeted + 1} 个打招呼点击后按钮数未减少（${buttons.length}→${remaining}）且点击位置附近未翻转为「继续沟通」：` +
+                '可能出现确认弹层或点击被拦截，已停止，请人工查看页面' +
+                '（列表若同时插入「为你推荐」区块或懒加载新卡，总数校验不可靠，已同时校验点击位置翻转证据）',
+            )
+          }
         }
         greeted++
         if (targetName !== null) {
@@ -169,22 +207,33 @@ export class GreetExecutor {
 
   /** 视口内全部「打招呼」按钮，按 y 从上到下排序（含所在文档序号，定向模式配对姓名用） */
   private findGreetButtons(snap: DomSnapshot): GreetButtonRef[] {
+    return this.findButtonsByExactText(snap, GREET_TEXT)
+  }
+
+  /**
+   * 视口内全部指定文案按钮（trim 后精确相等），按 y 从上到下排序（含所在文档序号，配对姓名用）。
+   * 坑修复（2026-08-27）：原实现 findIndex 只取第一个匹配的 string 下标——strings 表中同文案
+   * 可出现多个下标（不同节点分别 intern），只认第一个会漏掉其余按钮；现遍历全部下标
+   * （与 ChatSendExecutor.locateSendButton 同款 forEach 写法）。
+   */
+  private findButtonsByExactText(snap: DomSnapshot, text: string): GreetButtonRef[] {
     const viewport = viewportOf(snap)
-    const stringIndex = snap.strings.findIndex((s) => s.trim() === GREET_TEXT)
-    if (stringIndex < 0) return []
     const points: GreetButtonRef[] = []
-    snap.documents.forEach((document, documentIndex) => {
-      for (const { bounds } of findNodesByString(document, stringIndex)) {
-        if (bounds[2] <= 0 || bounds[3] <= 0) continue
-        // bounds 是文档绝对坐标（不随滚动变化，真机实测：滚动后 bounds 不动、scrollOffsetY 变），
-        // 屏幕坐标 = owner 偏移 + bounds - 文档滚动偏移；只收视口内的：视口外的按钮 Win32 点不到
-        const offset = accumulateOwnerOffset(snap, documentIndex)
-        const c = boundsCenter(bounds)
-        const x = offset.x + c.x - (document.scrollOffsetX ?? 0)
-        const y = offset.y + c.y - (document.scrollOffsetY ?? 0)
-        if (x < 0 || y < 0 || x > viewport.width || y > viewport.height) continue
-        points.push({ point: { x, y }, documentIndex })
-      }
+    snap.strings.forEach((s, stringIndex) => {
+      if (s.trim() !== text) return
+      snap.documents.forEach((document, documentIndex) => {
+        for (const { bounds } of findNodesByString(document, stringIndex)) {
+          if (bounds[2] <= 0 || bounds[3] <= 0) continue
+          // bounds 是文档绝对坐标（不随滚动变化，真机实测：滚动后 bounds 不动、scrollOffsetY 变），
+          // 屏幕坐标 = owner 偏移 + bounds - 文档滚动偏移；只收视口内的：视口外的按钮 Win32 点不到
+          const offset = accumulateOwnerOffset(snap, documentIndex)
+          const c = boundsCenter(bounds)
+          const x = offset.x + c.x - (document.scrollOffsetX ?? 0)
+          const y = offset.y + c.y - (document.scrollOffsetY ?? 0)
+          if (x < 0 || y < 0 || x > viewport.width || y > viewport.height) continue
+          points.push({ point: { x, y }, documentIndex })
+        }
+      })
     })
     return points.sort((a, b) => a.point.y - b.point.y)
   }
