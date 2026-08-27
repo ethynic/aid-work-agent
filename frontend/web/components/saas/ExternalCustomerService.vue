@@ -525,7 +525,7 @@ import { listExternalUsers, getUserSessions, getSessionMessages, getReferralStat
 import AttachmentCard from './AttachmentCard.vue'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 import { useAmrPlayer } from '@/composables/useAmrPlayer'
-import { getUserSourceInfo } from '@/api/enums'
+// import { getUserSourceInfo } from '@/api/enums'
 import { formatFileSize } from '@/utils/file'
 import type { DownloadableFile } from '@/types'
 import { useToast } from 'vue-toastification'
