@@ -1,5 +1,5 @@
 /**
- * 13 个 MCP tool 的契约定义（实施规格 m02 §6 / 标准 §5 / 设计 §10.8）。
+ * 16 个 MCP tool 的契约定义（实施规格 m02 §6 / 标准 §5 / 设计 §10.8 / §10.9；boss_open_chat 2026-08-27）。
  *
  * zodShape 是 registerTool 的输入；manifest digest 用同一来源推导的 JSON Schema，
  * 保证「Host 看到的 schema」与「manifest digest 的 schema」同源（SDK 1.30.0 内部同样
@@ -150,6 +150,37 @@ export const TOOL_DEFS: BossToolDef[] = [
       dry_run: z.boolean().default(false).describe('只输入不点发送（测试链路，默认 false 真发送）'),
     },
     annotations: { title: '向当前会话发送消息', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  },
+  {
+    name: 'boss_read_chat',
+    title: '读取会话消息与未读清单',
+    description:
+      '读取 BOSS 直聘「沟通」页当前会话的消息流（谁发了什么：me/them/system + 正文 + 时间 + 我方消息已读状态）' +
+      '与左侧列表全部未读会话清单（姓名/未读条数/时间/最后一条预览，含视口外全部）及左导航「沟通」总未读徽章。' +
+      '纯只读：单次快照，不点击、不输入、不切换会话。可选 contact 校验当前打开的会话是否为该联系人（trim 全等），' +
+      '不匹配时报错（会话存在但未打开请先切换；不存在则返回可用联系人名单）——本工具绝不自动切换会话。' +
+      '前置要求：当前已在沟通页（不在时返回 WRONG_PAGE，请先 boss_goto chat，不自动跳转）且已打开一个会话。',
+    zodShape: {
+      contact: z.string().min(1).max(30).optional().describe(
+        '可选：联系人姓名。校验当前打开的会话是否为该联系人；不匹配时报错并列出可用联系人，绝不自动切换会话',
+      ),
+    },
+    annotations: { title: '读取会话消息与未读清单', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  {
+    name: 'boss_open_chat',
+    title: '打开指定联系人的会话',
+    description:
+      '在 BOSS 直聘「沟通」页切换到指定联系人的会话（不发任何消息）：已在目标会话时零点击返回（via=already）；' +
+      '否则优先搜索找人进入对话，搜索失败回退点击左侧会话列表项（视口外自动滚动）。' +
+      '返回 via=already/search/list 告知实际路径；打开后用 boss_read_chat 读取消息。' +
+      '联系人不存在/同名多命中/切换未生效会报错（附可用联系人名单），绝不盲点。' +
+      '前置要求：当前已在沟通页（不在时返回 WRONG_PAGE，请先 boss_goto chat，不自动跳转）。' +
+      '无外部写副作用（只切换显示的会话），但搜索/列表点击与姓名输入借用真实鼠标约 3-10 秒，期间勿动鼠标。',
+    zodShape: {
+      contact: z.string().min(1).max(30).describe('联系人姓名（精确，与头部/会话列表姓名 trim 全等）'),
+    },
+    annotations: { title: '打开指定联系人的会话', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
   {
     name: 'boss_list_jobs',

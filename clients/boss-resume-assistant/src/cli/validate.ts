@@ -27,6 +27,8 @@ const COMMAND_FLAGS: Readonly<Record<string, readonly string[]>> = {
   interview: ['remark'],
   'send-to': ['message', 'dry-run'],
   'send-current': ['message', 'dry-run'],
+  'read-chat': [], // 无专属 flag（只带 0-1 个可选姓名位置参数）
+  'open-chat': [], // 无专属 flag（必带 1 个姓名位置参数；缺失/空白在 command 层 fail-loud）
   'list-jobs': [],
   'select-job': [],
   'resume-detail': ['name', 'save-image'],
@@ -44,6 +46,8 @@ const COMMAND_POSITIONALS: Readonly<Record<string, number>> = {
   goto: 1, // goto recommend|chat
   'send-to': 1, // send-to <姓名>
   'select-job': 1, // select-job <职位名>
+  'read-chat': 1, // read-chat [姓名]（可选，缺省读当前会话）
+  'open-chat': 1, // open-chat <姓名>（必填）
 }
 
 /** greet 定向名单上限（与 operation 层 bossGreet、MCP schema 的 3 人硬上限一致，CLI 提前拦） */

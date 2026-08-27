@@ -45,6 +45,9 @@ export interface BossSession {
   mouseWheel(x: number, y: number, deltaY: number): Promise<void>
   /** 按 Escape（CDP dispatchKey，关简历预览弹层用） */
   pressEscape(): Promise<void>
+  /** 清空当前聚焦输入框（CDP ctrl+a 全选 + Delete，可选）：搜索框输入未落地的清空重试用。
+   *  可选成员——旧测试替身/精简会话可不提供，缺省搜索执行器输入校验失败直接报错 */
+  clearInput?(): Promise<void>
   /** 无 clip 整页截图（Page.captureScreenshot png）。输出即 device px，与 DOMSnapshot bounds 同坐标系，
    *  按 device 坐标直接裁剪即可，绝不做 DPI 换算（设计 §10.8 真机实证：整页 1249x1277 = viewport bounds） */
   captureFullpage(): Promise<Buffer>
@@ -112,6 +115,14 @@ export const defaultSessionFactory: BossSessionFactory = async (ctx) => {
     pressEscape: async () => {
       await gw.dispatchKey({ type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
       await gw.dispatchKey({ type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+    },
+    // 清空当前聚焦输入框：ctrl+a（modifiers=2 即 Ctrl 位掩码）全选 + Delete 删除。
+    // 2026-08-27 聚焦竞态修复：搜索框 Win32 输入偶发未落地，ChatSearchExecutor 清空后重试一次
+    clearInput: async () => {
+      await gw.dispatchKey({ type: 'keyDown', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2 })
+      await gw.dispatchKey({ type: 'keyUp', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2 })
+      await gw.dispatchKey({ type: 'keyDown', key: 'Delete', code: 'Delete', windowsVirtualKeyCode: 46 })
+      await gw.dispatchKey({ type: 'keyUp', key: 'Delete', code: 'Delete', windowsVirtualKeyCode: 46 })
     },
     clickAndType: (point, viewport, text) => clicker.clickAndType(point, viewport, text),
     captureFullpage: async () => Buffer.from(await gw.captureScreenshot({ format: 'png' }), 'base64'),

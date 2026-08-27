@@ -44,11 +44,12 @@ export function createBossSendToOperation(
         },
         async (session, tracker) => {
           await ensureChatPage(session, ctx)
-          // 1. 搜索找人并进入对话
+          // 1. 搜索找人并进入对话（clearInput 注入：输入未落地时清空重试一次，2026-08-27 聚焦竞态修复）
           const searcher = new ChatSearchExecutor({
             snapshot: session.snapshot,
             click: session.click,
             clickAndType: session.clickAndType,
+            clearInput: session.clearInput,
             pressEscape: session.pressEscape,
             signal: ctx.signal,
           })

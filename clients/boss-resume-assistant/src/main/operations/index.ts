@@ -13,6 +13,8 @@ import { createBossRejectCurrentOperation } from './bossRejectCurrent.js'
 import { createBossInterviewDemoOperation } from './bossInterviewDemo.js'
 import { createBossSendToOperation } from './bossSendTo.js'
 import { createBossSendCurrentOperation } from './bossSendCurrent.js'
+import { createBossReadChatOperation } from './bossReadChat.js'
+import { createBossOpenChatOperation } from './bossOpenChat.js'
 import { createBossListJobsOperation } from './bossListJobs.js'
 import { createBossSelectJobOperation } from './bossSelectJob.js'
 import { createBossResumeDetailOperation } from './bossResumeDetail.js'
@@ -40,6 +42,8 @@ export const OPERATIONS: Record<string, OperationEntry> = {
   boss_interview_demo: { operation: createBossInterviewDemoOperation(), cli: { write: false } },
   boss_send_to: { operation: createBossSendToOperation(), cli: { write: true } },
   boss_send_current: { operation: createBossSendCurrentOperation(), cli: { write: true } },
+  boss_read_chat: { operation: createBossReadChatOperation(), cli: { write: false } },
+  boss_open_chat: { operation: createBossOpenChatOperation(), cli: { write: false } },
   boss_list_jobs: { operation: createBossListJobsOperation(), cli: { write: false } },
   boss_select_job: { operation: createBossSelectJobOperation(), cli: { write: true } },
   boss_resume_detail: { operation: createBossResumeDetailOperation(), cli: { write: false } },

@@ -405,6 +405,7 @@ Win32 通道实现要点：
 
 真机校准（2026-08-13，窗口 1249x1277）：
 
+- **搜索框定位范式（2026-08-27 真机诊断重写，v0.2.3 的 diff 范式已废弃）**：搜索框现为**原生 <input>**——点搜索入口后左栏收缩条**原位变形**为 INPUT（真机 @(198,124,339,34)，与点击前 DIV 几乎重合），没有「新增节点」可 diff。现行定位：单快照直接识别（①INPUT+形态（cx<68%/cy<45%/w>max(150,8%)/h≤60）唯一；②多 INPUT 取与入口 |Δy|≤80 邻近唯一；③0 INPUT 回退 contenteditable DIV 唯一且 cx<44% 防聊天气泡容器误命中）。输入落地校验失败（聚焦竞态）→ clearInput（CDP ctrl+a modifiers=2 + Delete 清空）→ 300ms → fresh 重定位 → 再输入 → 再校验，仍败 fail-loud。
 - **搜索找人（ChatSearchExecutor.openContact）流程**：
   1. 点搜索图标：坐标 `(519,135)`，**GetCursorPos 校准的固定常量**——该图标是 CSS 背景图，DOMSnapshot 抓不到节点，无法几何定位，只能用真机标定值（窗口尺寸/布局变化需重新校准）。
   2. 等 ~1400ms 弹层后定位搜索框：点图标后弹出的 doc0 INPUT，靠几何定位（DOMSnapshot 不暴露 tagName）——doc0 layout bounds 中 cx<850、y∈[100,200]、w>200 的**唯一**节点；0 或多个 fail-loud。真机搜索框 center `(368,141)`。
@@ -434,6 +435,56 @@ Win32 通道实现要点：
 - **切换校验（iframe 重载轮询）**：点击职位项后推荐列表 iframe（doc2）重新加载新职位的牛人，职位框/筛选按钮会**暂时从 snapshot 消失**（重载中）。固定延时校验会误判「职位框未知」；`selectJob` 改用**轮询**校验（最多 `ceil(8000/800)=10` 次 snapshot，首次立即查、之后每 800ms 一次，等职位框重现且文本=目标再判定成功，超时 fail-loud）。切自身（iframe 不重载）首次立即通过。
 - **list-jobs / select-job 设计**：用户传的 job_name 可能不精确（如「PHP」想切「PHP开发工程师」），匹配判断放调用方 AI：① `list-jobs`（只读）打开下拉→等待→解析返回职位列表（职位名/城市/薪资/点击坐标/`pending` 待开放标记），AI 据此选精确职位名并避开待开放职位；② `select-job`（写动作）精确名匹配（按 nodeIndex 排除职位框）→ pending 前置拒绝 → Win32 点击 → 轮询校验。AI 匹配不到时自然回复用户「职位在 BOSS 中不存在」+ 列出可用职位。
 - **坐标缓存可行性（记录，当前未实现）**：动态坐标并非都禁缓存——**可缓存的判断标准**：① 控件为固定布局（sticky/fixed，不随列表滚动而移动）；② 运行环境窗口几何不变（真实场景由系统自动操作，无人为缩放/拖动窗口）。两者都满足则坐标稳定、可缓存。**职位框/筛选栏属可缓存**：固定在推荐牛人页顶部，下方牛人列表滚动不影响其位置；系统自动操作窗口不变，坐标恒定。**不可缓存的反例**：随滚动/列表渲染变化的坐标（牛人卡片、滚动后才露出的元素）。**失效保护策略**（引入缓存时必备）：给缓存设 TTL；或点击缓存坐标后校验未达预期（如点职位框后下拉未展开/落点错位）则丢弃缓存、回退动态识别。CLI 内部不做模糊匹配（精确相等，判断交给 AI）。当前实现仍用动态定位 + iframe 重载轮询校验（无需维护缓存失效即稳健）；此条作为后续优化可行性记录，每次 list-jobs 仍重新打开下拉解析。
+
+### 10.9 沟通会话消息读取与未读清单（真机实验，2026-08-27，开发待做）
+
+> 历史 §10.8（简历读取章节）已随早期重构移除，源码注释中「§10.8」旧引用一律失效。
+
+实验背景：已有 send-to/send-current 发消息能力，缺「读对方回了什么」。真机实验（沟通页
+/web/chat/index，杨鸿杰会话，只读探针 .tmp/chat-read-*.mjs）结论：
+
+- **消息全部在主文档 doc[0]**（非 iframe；doc1=隐藏 srcdoc、doc2=推荐 iframe（坑17 来源）、
+  doc3~5=搜索 iframe 系）。一次 captureSnapshot 即可读全，**无需任何输入/滚动**。
+- **DOM 模型**（class 为实测稳定语义名，非混淆 hash）：`.chat-conversation > .conversation-main >
+  .conversation-message > .chat-message-list > .message-item`（消息组：时间行+气泡行）；
+  气泡行 `.item-myself`（我方）/`.item-friend`（对方）/`.item-system`（职位卡片）；
+  正文 `SPAN.text-content > #text` **整串连续**（非输入框那种逐字碎片）；时间戳是
+  `.message-item` 直接子行（全宽高~20 文本，格式 `" 10:56"` 带前导空格）；「已读」是
+  `.item-myself` 行内 `I.status.status-read` 结构子节点。
+- **发送方区分首选结构信号**：#text 向上爬 ≤4 层祖先 class 含 item-myself/item-friend。
+  几何交叉校验：面板 bounds 中线（真机 888）我方 cx≥846 右侧、对方 cx≤722 左侧；
+  **LIST_MAX_X=850 在聊天面板失效**（面板起点 x=548），勿沿用。
+- **多副本坑**：同一消息文本同时存在于左列表预览（x≈264，含「[送达]」前缀）与聊天气泡；
+  同名候选人还可能出现在 doc2 推荐 iframe。必须限定 doc[0] + `.conversation-message` 子树。
+- **未读清单**：左列表 `SPAN.badge-count > #text` 纯数字（x≈243 固定列），**含视口外全量可读**
+  （实测 37 徽章，26 个在视口外；列表容器高 8580 未虚拟化）；徽章向上找高 60~100 的 DIV
+  祖先=会话项，项内 x≈264 短文本=姓名、x≈497=时间、第二行=最后一条预览。左导航「沟通」
+  总徽章（如 214）须 exact 匹配（includes 会命中几十个 SVG path 数据）。
+- **头部识别带** `.base-info-single-container`：姓名/年龄经验/在线简历/附件简历 tab/经历/
+  沟通职位/期望全可读。
+- Chrome 151 的 DOMSnapshot attributes 为 dense 嵌套数组（attributes[nodeIdx]=[nameIdx,valIdx,...]），
+  indexedValues 兼容。
+
+**推荐实现**（boss_read_chat operation + CLI read-chat + MCP tool）：
+- 输入 `{ contact?: string }`：缺省读当前会话；给姓名只在 `.user-list` 子树匹配会话项，
+  未命中 fail-loud 返回可用姓名列表，**不自动点击切换**（切换属写操作走既有点击链路）。
+- 返回 `{ contact, messages: [{sender:'me'|'them'|'system', text, ts?, read?}], unread:
+  [{name, count, time?, lastPreview?}], totalUnreadBadge? }`。
+- fail-loud：面板容器缺失（不在沟通页/未开会话）、姓名未命中、文本节点不在 .text-content
+  内（结构漂移）。**每会话切换后 nodeIndex 全变，必须 fresh snapshot，禁缓存**。
+
+**待后续真机验证**：长会话历史是否虚拟化裁剪（需滚动加载）；「对方未读」status-unread
+变体；图片/附件消息气泡形态（列表预览已见 `_简历.pdf` 文件名节点）；dpr≠1 坐标折算。
+
+### 10.10 沟通会话切换（open-chat，2026-08-27）
+
+CLI `open-chat <姓名>` / MCP `boss_open_chat`（contact 必填）：切换到指定联系人的会话，**搜索优先、会话列表点击兜底**（用户定调：搜索必须稳定）。readonly（无业务写效应，借鼠标）。
+
+- **already**：头部（`.base-info-single-container`，与 read-chat 共享 `headerContactOf`）已是目标 → 零点击返回。
+- **search**：ChatSearchExecutor.openContact（§10.6 链路）；成功后**身份校验**（fresh snapshot 头部 === 目标，CR 修复：openContact 只证明"进入了某个对话"，错卡会开别人会话）——不符则带原因进兜底。
+- **list 兜底**：先 Escape+400ms 清残留搜索浮层（否则列表被遮挡，Win32 点击会点浮层）；doc[0] 左列表区（x∈[188,548)）找唯一姓名文本 → 视口外先 CDP mouseWheel 滚动（`.user-list` 容器 bounds 中心，方向按目标 y，≤15 轮每轮重定位）→ Win32 点击（姓名中心 x+60 行热区）→ 轮询 500ms×8 头部校验。
+- fail-loud：不存在（附可用联系人名单）/同名多命中列坐标/两路都失败汇总/头部 4s 未切换。
+- **已知注意**：clearInput 作用于"当前聚焦元素"，聚焦竞态且焦点恰在聊天输入框时 ctrl+a+Delete 会清未发送草稿（readonly 工具的 UI 副作用，真机未观察到，标注待验）。
 
 ## 11. 状态机与恢复
 
