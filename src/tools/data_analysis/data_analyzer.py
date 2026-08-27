@@ -15,6 +15,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.patches import FancyBboxPatch, Patch
+from matplotlib.ticker import FuncFormatter
 import matplotlib.patheffects as pe
 import numpy as np
 import pandas as pd
@@ -811,10 +812,20 @@ class DataAnalyzer:
 
     @staticmethod
     def _fmt_value(v) -> str:
-        """数值格式化：整数显示整数，否则保留 1 位小数。"""
+        """数值格式化：大数值按 万/亿 缩写（中文 BI 通用惯例），避免长数字标签互相重叠。
+
+        |v| >= 1 亿 → "X.XX亿"；>= 1 万 → "X.XX万"（去掉多余的 0）；
+        小数值保持原逻辑：整数显示整数，否则保留 1 位小数。
+        """
         if v != v:  # NaN
             return ""
-        if float(v).is_integer():
+        v = float(v)
+        av = abs(v)
+        if av >= 1e8:
+            return f"{v / 1e8:.2f}".rstrip("0").rstrip(".") + "亿"
+        if av >= 1e4:
+            return f"{v / 1e4:.2f}".rstrip("0").rstrip(".") + "万"
+        if v.is_integer():
             return str(int(v))
         return f"{v:.1f}"
 
@@ -824,6 +835,8 @@ class DataAnalyzer:
         ax.set_facecolor(t["bg"])
         ax.tick_params(axis="x", length=0, pad=8, labelsize=10, colors=t["label"])
         ax.tick_params(axis="y", length=0, labelsize=9, colors=t["subtext"])
+        # Y 轴刻度同样按 万/亿 缩写，与柱上数值标签口径一致
+        ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: DataAnalyzer._fmt_value(v)))
         for sp in ("top", "right", "left"):
             ax.spines[sp].set_visible(False)
         ax.spines["bottom"].set_color(t["grid"])
@@ -896,15 +909,17 @@ class DataAnalyzer:
         neg_vals = [h for h in heights if h == h and h < 0]
         pos_step = max((max(pos_vals) if pos_vals else 1) * 0.02, 0.1)
         neg_step = max((abs(min(neg_vals)) if neg_vals else 1) * 0.02, 0.1)
+        # 分组柱中矮柱的标签可能被相邻高柱遮挡：加背景色描边光晕，保证任意底色上可读
+        stroke = [pe.withStroke(linewidth=2.5, foreground=t["bg"])]
         for xi, h in zip(xs, heights):
             if h != h:  # NaN
                 continue
             if h >= 0:
                 ax.text(xi, h + pos_step, self._fmt_value(h), ha="center", va="bottom",
-                        fontsize=9, color=t["label"], zorder=4)
+                        fontsize=9, color=t["label"], zorder=4, path_effects=stroke)
             else:
                 ax.text(xi, h - neg_step, self._fmt_value(h), ha="center", va="top",
-                        fontsize=9, color=t["label"], zorder=4)
+                        fontsize=9, color=t["label"], zorder=4, path_effects=stroke)
 
     def to_chart(
         self,
