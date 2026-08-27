@@ -1,0 +1,23 @@
+{
+  "probe_id": "p4-history-capture",
+  "risk_level": "P1",
+  "hypothesis": "微信 4.x 当前打开会话的聊天记录，可通过 PostMessage WM_MOUSEWHEEL 翻页 + PrintWindow 截图 + 本地 RapidOCR（PP-OCR onnxruntime）识别文本，并按文本框 x 坐标区分我方（右侧绿气泡）/对方（左侧灰气泡）/时间分割线，多页重叠去重合并为完整文本记录，全程不占光标、剪贴板，窗口被遮挡也能工作。",
+  "allowed_actions": [
+    "snapshot_printwindow",
+    "scroll_wheel_postmessage",
+    "ocr_local_rapidocr",
+    "write_text_file_temp",
+    "scroll_restore_to_bottom"
+  ],
+  "forbidden_actions": [
+    "send_message",
+    "modify_or_delete_messages",
+    "capture_non_current_chat",
+    "clipboard_use",
+    "foreground_input_injection"
+  ],
+  "target": "用户当前在微信主窗口打开的会话（脚本不切换会话），对方名称仅作输出标签用",
+  "success_criteria": "1) WM_MOUSEWHEEL 投递可上下翻页且结束后滚回底部；2) PrintWindow 在窗口被遮挡时仍出完整图；3) OCR 输出行带 [我]/[对方]/[时间] 标签，会话列表/标题栏/输入区内容不混入；4) 多页重叠行去重合并；5) 结果保存为 UTF-8 文本文件。",
+  "cleanup": "finally 中滚轮回底部，恢复用户原始视图位置；不写剪贴板、不留草稿。",
+  "notes": "2026-08-26 真机验证。已验证结论：① WM_MOUSEWHEEL 的 lParam 用屏幕物理坐标，delta=±120/格；② 发言人区分按聊天区中线（窗口宽 63%），右=我；③ RapidOCR 中文识别置信度 0.92-1.00，截图是理想输入；④ 搜索面板/右键菜单/双击/拖拽选字对 PostMessage 均无响应，复制单条消息走不通，OCR 是唯一可行提取路径。已知边界：纯表情/图片消息 OCR 不到；长消息换行产生多行未合并；时间分割线稀疏，非每条消息都有精确时间戳；标签阈值按比例换算自 2100x1771 参考窗口。OCR 依赖仓库 venv 的 rapidocr_onnxruntime（pip install 进 venv，离线运行）。"
+}
