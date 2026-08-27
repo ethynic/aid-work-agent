@@ -222,95 +222,82 @@
     </main>
 
     <!-- Upload Modal -->
-    <div v-if="showUploadModal" class="fixed inset-0 bg-black/40 flex items-center justify-center z-50" @click.self="showUploadModal = false">
-      <div class="bg-white rounded-2xl w-full max-w-lg mx-4 shadow-2xl">
-        <div class="flex items-center justify-between px-6 py-4 border-b border-default">
-          <h2 class="text-sm font-semibold text-default">上传文档</h2>
-          <button @click="showUploadModal = false" class="p-2 text-muted hover:text-default hover:bg-surface-hover rounded-lg transition-colors">
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
+    <BaseModal v-model="showUploadModal" title="上传文档" size="md" mode="create">
+      <!-- 分类提示：文档归入左侧当前选中的分类，弹框内不再重复选择 -->
+      <div class="mb-4 p-3 bg-canvas rounded-lg">
+        <p class="text-sm text-default">
+          文档将上传到分类：
+          <span v-if="uploadSourceType" class="font-medium text-primary-600">
+            {{ uploadCategoryPath.join(' / ') }}
+          </span>
+          <span v-else class="text-muted">不分类（全部）</span>
+        </p>
+      </div>
+
+      <div @dragover.prevent="isDragging = true" @dragleave.prevent="isDragging = false" @drop.prevent="handleDrop"
+        :class="['border-2 border-dashed rounded-xl p-8 text-center transition-all', isDragging ? 'border-primary-500 bg-primary-50' : 'border-default hover:border-hover']">
+        <input ref="fileInputRef" type="file" multiple
+          accept=".docx,.xlsx,.pptx,.pdf,.txt,.md,.json,.yaml,.yml,.log,.csv,.xml,.ini,.properties,.conf,.config"
+          @change="handleFileSelect" class="hidden" />
+
+        <svg v-if="selectedFiles.length === 0" class="w-12 h-12 mx-auto text-muted mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+        </svg>
+
+        <div v-if="selectedFiles.length === 0" class="space-y-2">
+          <p class="text-default font-medium">拖拽文件到此处，或<span @click="fileInputRef?.click()" class="text-primary-600 hover:text-primary-500 cursor-pointer">点击选择</span></p>
+          <p class="text-sm text-muted">支持多文件上传，单文件不超过 {{ MAX_FILE_SIZE_MB }}MB</p>
+          <p class="text-xs text-muted">支持格式：docx, xlsx, pptx, pdf, txt, md, json, yaml, yml, log, csv, xml, ini, properties, conf, config 等</p>
         </div>
 
-        <div class="p-6">
-          <!-- 分类提示：文档归入左侧当前选中的分类，弹框内不再重复选择 -->
-          <div class="mb-4 p-3 bg-canvas rounded-lg">
-            <p class="text-sm text-default">
-              文档将上传到分类：
-              <span v-if="uploadSourceType" class="font-medium text-primary-600">
-                {{ categoryDisplayName(uploadSourceType) }}<template v-if="uploadSubCategory"> / {{ categoryDisplayName(uploadSubCategory) }}</template>
-              </span>
-              <span v-else class="text-muted">不分类（全部）</span>
-            </p>
-          </div>
-
-          <div @dragover.prevent="isDragging = true" @dragleave.prevent="isDragging = false" @drop.prevent="handleDrop"
-            :class="['border-2 border-dashed rounded-xl p-8 text-center transition-all', isDragging ? 'border-primary-500 bg-primary-50' : 'border-default hover:border-hover']">
-            <input ref="fileInputRef" type="file" multiple
-              accept=".docx,.xlsx,.pptx,.pdf,.txt,.md,.json,.yaml,.yml,.log,.csv,.xml,.ini,.properties,.conf,.config"
-              @change="handleFileSelect" class="hidden" />
-
-            <svg v-if="selectedFiles.length === 0" class="w-12 h-12 mx-auto text-muted mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-            </svg>
-
-            <div v-if="selectedFiles.length === 0" class="space-y-2">
-              <p class="text-default font-medium">拖拽文件到此处，或<span @click="fileInputRef?.click()" class="text-primary-600 hover:text-primary-500 cursor-pointer">点击选择</span></p>
-              <p class="text-sm text-muted">支持多文件上传，单文件不超过 {{ MAX_FILE_SIZE_MB }}MB</p>
-              <p class="text-xs text-muted">支持格式：docx, xlsx, pptx, pdf, txt, md, json, yaml, yml, log, csv, xml, ini, properties, conf, config 等</p>
-            </div>
-
-            <div v-else class="space-y-3">
-              <div class="space-y-2 max-h-48 overflow-y-auto">
-                <div v-for="(file, index) in selectedFiles" :key="index" class="flex items-center justify-between gap-3 px-3 py-2 bg-canvas rounded-lg">
-                  <div class="flex items-center gap-3 min-w-0 flex-1">
-                    <div :class="getFileIconClassByExt(file.name)" class="w-8 h-8 rounded flex items-center justify-center flex-shrink-0">
-                      <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                      </svg>
-                    </div>
-                    <div class="text-left min-w-0 flex-1">
-                      <p class="text-default font-medium text-sm truncate" :title="file.name">{{ file.name }}</p>
-                      <p class="text-xs text-muted">{{ formatFileSize(file.size) }}</p>
-                    </div>
-                  </div>
-                  <button @click.stop="removeFile(index)" class="p-1 text-muted hover:text-default hover:bg-surface-hover rounded flex-shrink-0">
-                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                  </button>
+        <div v-else class="space-y-3">
+          <div class="space-y-2 max-h-48 overflow-y-auto">
+            <div v-for="(file, index) in selectedFiles" :key="index" class="flex items-center justify-between gap-3 px-3 py-2 bg-canvas rounded-lg">
+              <div class="flex items-center gap-3 min-w-0 flex-1">
+                <div :class="getFileIconClassByExt(file.name)" class="w-8 h-8 rounded flex items-center justify-center flex-shrink-0">
+                  <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  </svg>
+                </div>
+                <div class="text-left min-w-0 flex-1">
+                  <p class="text-default font-medium text-sm truncate" :title="file.name">{{ file.name }}</p>
+                  <p class="text-xs text-muted">{{ formatFileSize(file.size) }}</p>
                 </div>
               </div>
-              <div class="flex items-center justify-between">
-                <p class="text-sm text-muted">已选择 {{ selectedFiles.length }} 个文件</p>
-                <button @click.stop="clearFiles" class="text-sm text-muted hover:text-default">清空全部</button>
-              </div>
+              <button @click.stop="removeFile(index)" class="p-1 text-muted hover:text-default hover:bg-surface-hover rounded flex-shrink-0">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
             </div>
           </div>
-
-          <div v-if="uploadError" class="mt-3 p-3 bg-danger-50 rounded-lg">
-            <p class="text-sm text-danger-500">{{ uploadError }}</p>
+          <div class="flex items-center justify-between">
+            <p class="text-sm text-muted">已选择 {{ selectedFiles.length }} 个文件</p>
+            <button @click.stop="clearFiles" class="text-sm text-muted hover:text-default">清空全部</button>
           </div>
-          <div v-if="uploadErrors.length > 0" class="mt-3 p-3 bg-warning-50 rounded-lg">
-            <p class="text-sm text-warning-600 font-medium mb-2">以下文件上传失败：</p>
-            <ul class="text-sm text-warning-700 space-y-1">
-              <li v-for="(err, index) in uploadErrors" :key="index" class="flex items-start gap-2">
-                <span class="text-warning-500">•</span>
-                <span>{{ err.filename }}: {{ err.error }}</span>
-              </li>
-            </ul>
-          </div>
-        </div>
-
-        <div class="flex justify-end gap-3 px-6 py-4 border-t border-default bg-canvas rounded-b-2xl">
-          <BaseButton intent="secondary" @click="handleCancelUpload">取消</BaseButton>
-          <BaseButton :disabled="selectedFiles.length === 0 || isUploading" @click="handleUpload">
-            {{ uploadButtonText }}
-          </BaseButton>
         </div>
       </div>
-    </div>
+
+      <div v-if="uploadError" class="mt-3 p-3 bg-danger-50 rounded-lg">
+        <p class="text-sm text-danger-500">{{ uploadError }}</p>
+      </div>
+      <div v-if="uploadErrors.length > 0" class="mt-3 p-3 bg-warning-50 rounded-lg">
+        <p class="text-sm text-warning-600 font-medium mb-2">以下文件上传失败：</p>
+        <ul class="text-sm text-warning-700 space-y-1">
+          <li v-for="(err, index) in uploadErrors" :key="index" class="flex items-start gap-2">
+            <span class="text-warning-500">•</span>
+            <span>{{ err.filename }}: {{ err.error }}</span>
+          </li>
+        </ul>
+      </div>
+
+      <template #footer>
+        <BaseButton intent="secondary" @click="handleCancelUpload">取消</BaseButton>
+        <BaseButton :disabled="selectedFiles.length === 0 || isUploading" @click="handleUpload">
+          {{ uploadButtonText }}
+        </BaseButton>
+      </template>
+    </BaseModal>
 
     <!-- Delete Document Confirmation Modal -->
     <BaseModal v-model="showDeleteConfirm" title="删除文档" size="md" mode="view">
@@ -793,11 +780,20 @@ function handleCategorySelect(cat: CategoryTreeNode) {
   }
 }
 
-// 分类显示名称（用于上传弹框提示）
-function categoryDisplayName(sourceType: string): string {
-  const cat = categories.value.find(c => c.source_type === sourceType)
-  return cat?.display_name || sourceType
-}
+// 上传弹框展示当前选中分类的完整路径（一级/二级/三级），从选中分类向上追溯父级
+const uploadCategoryPath = computed(() => {
+  const target = uploadSubCategory.value || uploadSourceType.value
+  if (!target) return []
+  const path: string[] = []
+  let current = categories.value.find(c => c.source_type === target)
+  while (current) {
+    path.unshift(current.display_name || current.source_type)
+    current = current.parent_id != null
+      ? categories.value.find(c => c.id === current!.parent_id)
+      : undefined
+  }
+  return path
+})
 
 // 当前选中分类的 id（添加分类时用作默认父分类）：子分类优先，其次顶级分类，未选中则顶级
 function getSelectedCategoryId(): string {
