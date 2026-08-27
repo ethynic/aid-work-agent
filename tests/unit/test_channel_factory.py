@@ -12,6 +12,8 @@ ChannelFactory 单元测试
 - invalidate_tenant(t) 失效该租户所有 (channel, config) 组合
 """
 
+from datetime import datetime, timedelta
+
 import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
 
@@ -255,6 +257,8 @@ class TestChannelFactoryCacheIsolation:
         from src.saas.services import channel_factory
         from src.saas.services.channel_factory import ChannelFactory
 
+        _t1 = datetime(2026, 8, 27, 10, 0, 0)
+        _t2 = datetime(2026, 8, 27, 10, 1, 0)
         mock_cfg_a = {
             "config_id": "chan_a",
             "tenant_id": "tenant_x",
@@ -262,6 +266,7 @@ class TestChannelFactoryCacheIsolation:
             "config": {"app_id": "cli_a"},
             "subagent_type": "travel-consultant",
             "verified": 1,
+            "updated_at": _t1,
         }
         mock_cfg_b = {
             "config_id": "chan_b",
@@ -270,6 +275,7 @@ class TestChannelFactoryCacheIsolation:
             "config": {"app_id": "cli_b"},
             "subagent_type": "trade-specialist",
             "verified": 1,
+            "updated_at": _t2,
         }
 
         adapter_a = MagicMock(name="adapter_a")
@@ -280,6 +286,10 @@ class TestChannelFactoryCacheIsolation:
             mock_db.get_by_id.side_effect = lambda cid: {
                 "chan_a": mock_cfg_a,
                 "chan_b": mock_cfg_b,
+            }.get(cid)
+            mock_db.get_config_version.side_effect = lambda cid: {
+                "chan_a": _t1,
+                "chan_b": _t2,
             }.get(cid)
 
             # 按 config 创建不同 adapter（用 config["app_id"] 区分）
@@ -326,6 +336,7 @@ class TestChannelFactoryCacheIsolation:
         from src.saas.services import channel_factory
         from src.saas.services.channel_factory import ChannelFactory
 
+        _t1 = datetime(2026, 8, 27, 10, 0, 0)
         mock_cfg_a = {
             "config_id": "chan_a",
             "tenant_id": "tenant_x",
@@ -333,6 +344,7 @@ class TestChannelFactoryCacheIsolation:
             "config": {"app_id": "cli_a"},
             "subagent_type": "travel-consultant",
             "verified": 1,
+            "updated_at": _t1,
         }
         mock_cfg_b = {
             "config_id": "chan_b",
@@ -341,6 +353,7 @@ class TestChannelFactoryCacheIsolation:
             "config": {"app_id": "cli_b"},
             "subagent_type": "trade-specialist",
             "verified": 1,
+            "updated_at": _t1,
         }
 
         adapter_a = MagicMock(name="adapter_a")
@@ -353,6 +366,7 @@ class TestChannelFactoryCacheIsolation:
                 "chan_a": mock_cfg_a,
                 "chan_b": mock_cfg_b,
             }.get(cid)
+            mock_db.get_config_version.return_value = _t1
 
             def _create_adapter(channel_type, config):
                 return adapter_a if config.get("app_id") == "cli_a" else adapter_b
@@ -366,6 +380,13 @@ class TestChannelFactoryCacheIsolation:
                     "tenant_x", "feishu", config_id="chan_b"
                 )
                 assert len(channel_factory._ADAPTER_CACHE) == 2
+
+                # 版本一致：再次调用应命中缓存，不再重建
+                assert ChannelFactory.create_adapter.call_count == 2
+                await ChannelFactory.create_from_tenant_config(
+                    "tenant_x", "feishu", config_id="chan_a"
+                )
+                assert ChannelFactory.create_adapter.call_count == 2
 
                 # 失效 chan_a
                 await ChannelFactory.invalidate_adapter(
@@ -385,6 +406,7 @@ class TestChannelFactoryCacheIsolation:
         from src.saas.services import channel_factory
         from src.saas.services.channel_factory import ChannelFactory
 
+        _t1 = datetime(2026, 8, 27, 10, 0, 0)
         mock_cfg_a = {
             "config_id": "chan_a",
             "tenant_id": "tenant_x",
@@ -392,6 +414,7 @@ class TestChannelFactoryCacheIsolation:
             "config": {"app_id": "cli_a"},
             "subagent_type": "travel-consultant",
             "verified": 1,
+            "updated_at": _t1,
         }
         # 另一个未 verified 的配置，确保 None 调用解析到 chan_a
         mock_cfg_b_unverified = {
@@ -401,6 +424,7 @@ class TestChannelFactoryCacheIsolation:
             "config": {"app_id": "cli_b"},
             "subagent_type": "trade-specialist",
             "verified": 0,
+            "updated_at": _t1,
         }
 
         adapter_a = MagicMock(name="adapter_a")
@@ -408,6 +432,7 @@ class TestChannelFactoryCacheIsolation:
         with patch("src.saas.services.channel_factory.ChannelConfigDB") as mock_db:
             mock_db.list_by_tenant.return_value = [mock_cfg_a, mock_cfg_b_unverified]
             mock_db.get_by_id.return_value = mock_cfg_a
+            mock_db.get_config_version.return_value = _t1
 
             with patch.object(ChannelFactory, "create_adapter", return_value=adapter_a):
                 # 1) None 调用：解析到 chan_a（verified 优先），缓存键为 (t, c, "chan_a")
@@ -438,6 +463,7 @@ class TestChannelFactoryCacheIsolation:
         from src.saas.services import channel_factory
         from src.saas.services.channel_factory import ChannelFactory
 
+        _t1 = datetime(2026, 8, 27, 10, 0, 0)
         mock_cfg_a = {
             "config_id": "chan_a",
             "tenant_id": "tenant_x",
@@ -445,6 +471,7 @@ class TestChannelFactoryCacheIsolation:
             "config": {"app_id": "cli_a"},
             "subagent_type": None,
             "verified": 1,
+            "updated_at": _t1,
         }
         mock_cfg_b = {
             "config_id": "chan_b",
@@ -453,6 +480,7 @@ class TestChannelFactoryCacheIsolation:
             "config": {"app_id": "cli_b"},
             "subagent_type": None,
             "verified": 1,
+            "updated_at": _t1,
         }
         # 另一渠道的配置，不应被清掉
         mock_cfg_other_channel = {
@@ -462,6 +490,7 @@ class TestChannelFactoryCacheIsolation:
             "config": {"app_key": "k_c"},
             "subagent_type": None,
             "verified": 1,
+            "updated_at": _t1,
         }
         # 另一租户的配置，不应被清掉
         mock_cfg_other_tenant = {
@@ -471,6 +500,7 @@ class TestChannelFactoryCacheIsolation:
             "config": {"app_id": "cli_d"},
             "subagent_type": None,
             "verified": 1,
+            "updated_at": _t1,
         }
 
         adapters = {
@@ -491,6 +521,7 @@ class TestChannelFactoryCacheIsolation:
 
         with patch("src.saas.services.channel_factory.ChannelConfigDB") as mock_db:
             mock_db.get_by_id.side_effect = lambda cid: configs_map.get(cid)
+            mock_db.get_config_version.return_value = _t1
 
             def _create_adapter(channel_type, config):
                 # 按 app_id/app_key 反查 config_id
@@ -538,6 +569,7 @@ class TestChannelFactoryCacheIsolation:
         from src.saas.services import channel_factory
         from src.saas.services.channel_factory import ChannelFactory
 
+        _t1 = datetime(2026, 8, 27, 10, 0, 0)
         mock_cfg_fsh_a = {
             "config_id": "chan_fa",
             "tenant_id": "tenant_x",
@@ -545,6 +577,7 @@ class TestChannelFactoryCacheIsolation:
             "config": {"app_id": "cli_fa"},
             "subagent_type": None,
             "verified": 1,
+            "updated_at": _t1,
         }
         mock_cfg_fsh_b = {
             "config_id": "chan_fb",
@@ -553,6 +586,7 @@ class TestChannelFactoryCacheIsolation:
             "config": {"app_id": "cli_fb"},
             "subagent_type": None,
             "verified": 1,
+            "updated_at": _t1,
         }
         mock_cfg_dt = {
             "config_id": "chan_dt",
@@ -561,6 +595,7 @@ class TestChannelFactoryCacheIsolation:
             "config": {"app_key": "k_dt"},
             "subagent_type": None,
             "verified": 1,
+            "updated_at": _t1,
         }
         mock_cfg_other_tenant = {
             "config_id": "chan_ot",
@@ -569,6 +604,7 @@ class TestChannelFactoryCacheIsolation:
             "config": {"app_id": "cli_ot"},
             "subagent_type": None,
             "verified": 1,
+            "updated_at": _t1,
         }
 
         adapters = {
@@ -589,6 +625,7 @@ class TestChannelFactoryCacheIsolation:
 
         with patch("src.saas.services.channel_factory.ChannelConfigDB") as mock_db:
             mock_db.get_by_id.side_effect = lambda cid: configs_map.get(cid)
+            mock_db.get_config_version.return_value = _t1
 
             def _create_adapter(channel_type, config):
                 for cid, cfg in configs_map.items():
@@ -628,3 +665,148 @@ class TestChannelFactoryCacheIsolation:
                 adapters["chan_dt"].close.assert_awaited_once()
                 # tenant_y 的 adapter 没被 close
                 adapters["chan_ot"].close.assert_not_awaited()
+
+
+class TestChannelFactoryConfigVersion:
+    """配置版本校验：跨 Gunicorn worker 兜底，DB 配置变更后缓存即时失效重建"""
+
+    async def test_config_updated_rebuilds_adapter(self):
+        """DB updated_at 变化（模拟其他 worker 已改配置但本 worker 内存仍是旧 adapter）时强制重建"""
+        from src.saas.services import channel_factory
+        from src.saas.services.channel_factory import ChannelFactory
+
+        _t1 = datetime(2026, 8, 27, 10, 0, 0)
+        _t2 = datetime(2026, 8, 27, 10, 5, 0)
+        cfg_v1 = {
+            "config_id": "chan_v",
+            "tenant_id": "tenant_v",
+            "channel_type": "wecom_kf",
+            "config": {"credit_limit": 100},
+            "subagent_type": "sales-assistant",
+            "verified": 1,
+            "updated_at": _t1,
+        }
+        cfg_v2 = {
+            "config_id": "chan_v",
+            "tenant_id": "tenant_v",
+            "channel_type": "wecom_kf",
+            "config": {"credit_limit": 0},
+            "subagent_type": "sales-assistant",
+            "verified": 1,
+            "updated_at": _t2,
+        }
+
+        adapter_v1 = MagicMock(name="adapter_v1")
+        adapter_v2 = MagicMock(name="adapter_v2")
+
+        with patch("src.saas.services.channel_factory.ChannelConfigDB") as mock_db:
+            # 第一次调用：DB 返回 v1 版本
+            mock_db.get_by_id.return_value = cfg_v1
+            mock_db.get_config_version.return_value = _t1
+
+            def _create_adapter(channel_type, config):
+                # 按 config 内容区分新旧 adapter
+                return adapter_v1 if config.get("credit_limit") == 100 else adapter_v2
+
+            with patch.object(ChannelFactory, "create_adapter", side_effect=_create_adapter):
+                ret1 = await ChannelFactory.create_from_tenant_config(
+                    "tenant_v", "wecom_kf", config_id="chan_v"
+                )
+                assert ret1[0] is adapter_v1
+                assert ChannelFactory.create_adapter.call_count == 1
+
+                # 配置被其他 worker 修改：DB 版本变为 t2，本 worker 缓存仍是旧 adapter
+                mock_db.get_by_id.return_value = cfg_v2
+                mock_db.get_config_version.return_value = _t2
+
+                ret2 = await ChannelFactory.create_from_tenant_config(
+                    "tenant_v", "wecom_kf", config_id="chan_v"
+                )
+                # 版本不一致 → 强制重建，返回新配置的新 adapter
+                assert ret2[0] is adapter_v2
+                assert ChannelFactory.create_adapter.call_count == 2
+                # 旧缓存被替换为新版本
+                assert channel_factory._ADAPTER_CACHE[
+                    ("tenant_v", "wecom_kf", "chan_v")
+                ]["cfg_updated_at"] == _t2
+
+                # 第三次调用版本一致 → 命中缓存，不再重建
+                ret3 = await ChannelFactory.create_from_tenant_config(
+                    "tenant_v", "wecom_kf", config_id="chan_v"
+                )
+                assert ret3[0] is adapter_v2
+                assert ChannelFactory.create_adapter.call_count == 2
+
+    async def test_db_read_error_keeps_cache(self):
+        """DB 版本查询失败时保守沿用缓存，不阻断业务"""
+        from src.saas.services.channel_factory import ChannelFactory
+
+        _t1 = datetime(2026, 8, 27, 10, 0, 0)
+        cfg = {
+            "config_id": "chan_e",
+            "tenant_id": "tenant_e",
+            "channel_type": "feishu",
+            "config": {"app_id": "cli_e"},
+            "subagent_type": None,
+            "verified": 1,
+            "updated_at": _t1,
+        }
+        adapter1 = MagicMock(name="adapter1")
+
+        with patch("src.saas.services.channel_factory.ChannelConfigDB") as mock_db:
+            mock_db.get_by_id.return_value = cfg
+            mock_db.get_config_version.return_value = _t1
+
+            with patch.object(ChannelFactory, "create_adapter", return_value=adapter1):
+                ret1 = await ChannelFactory.create_from_tenant_config(
+                    "tenant_e", "feishu", config_id="chan_e"
+                )
+                assert ret1[0] is adapter1
+
+                # DB 版本查询抛异常：沿用缓存，不重建不报错
+                mock_db.get_config_version.side_effect = RuntimeError("db down")
+
+                ret2 = await ChannelFactory.create_from_tenant_config(
+                    "tenant_e", "feishu", config_id="chan_e"
+                )
+                assert ret2[0] is adapter1
+                assert ChannelFactory.create_adapter.call_count == 1
+
+    async def test_config_deleted_rebuild_returns_none(self):
+        """配置被删除（版本查询返回 None）时强制重建，重建后返回 None 并清缓存"""
+        from src.saas.services import channel_factory
+        from src.saas.services.channel_factory import ChannelFactory
+
+        _t1 = datetime(2026, 8, 27, 10, 0, 0)
+        cfg = {
+            "config_id": "chan_d",
+            "tenant_id": "tenant_d",
+            "channel_type": "dingtalk",
+            "config": {"app_key": "k_d"},
+            "subagent_type": None,
+            "verified": 1,
+            "updated_at": _t1,
+        }
+        adapter1 = MagicMock(name="adapter1")
+
+        with patch("src.saas.services.channel_factory.ChannelConfigDB") as mock_db:
+            mock_db.get_by_id.return_value = cfg
+            mock_db.get_config_version.return_value = _t1
+
+            with patch.object(ChannelFactory, "create_adapter", return_value=adapter1):
+                ret1 = await ChannelFactory.create_from_tenant_config(
+                    "tenant_d", "dingtalk", config_id="chan_d"
+                )
+                assert ret1[0] is adapter1
+                assert ("tenant_d", "dingtalk", "chan_d") in channel_factory._ADAPTER_CACHE
+
+                # 配置被删除：版本查询返回 None，get_by_id 也返回 None
+                mock_db.get_config_version.return_value = None
+                mock_db.get_by_id.return_value = None
+
+                ret2 = await ChannelFactory.create_from_tenant_config(
+                    "tenant_d", "dingtalk", config_id="chan_d"
+                )
+                assert ret2 == (None, None, None)
+                # 旧缓存被清掉
+                assert ("tenant_d", "dingtalk", "chan_d") not in channel_factory._ADAPTER_CACHE
