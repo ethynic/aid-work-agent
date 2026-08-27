@@ -42,6 +42,35 @@ def _get_tenant_id(request: Request) -> str:
     return tenant_id
 
 
+def _resolve_travel_shared_tenant_ids(tenant_id: str, source_type: str) -> List[str]:
+    """聚合该租户所有子智能体已启用共享的来源租户 ID（∩ 租户级授权），含本租户。
+
+    独立 API（/search/hotels、/kb/attractions 等）无子智能体上下文，无法直接走
+    load_shared_ranges(tenant_id, subagent_id)，故枚举该租户全部子智能体的共享
+    配置后聚合去重，得到检索租户范围。授权撤销后交集为空，共享项自动失效。
+    """
+    from src.knowledge.retriever.tenant_range import load_shared_ranges
+
+    tenant_ids: List[str] = [tenant_id]
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT subagent_name FROM subagent_knowledge_sources WHERE tenant_id = %s",
+                (tenant_id,),
+            )
+            subagent_names = [r["subagent_name"] for r in cursor.fetchall()]
+    except Exception as e:
+        logger.warning(f"[TravelQuote] 加载共享子智能体列表失败: {e}")
+        subagent_names = []
+
+    for subagent_name in subagent_names:
+        for from_tenant_id, _st in load_shared_ranges(tenant_id, subagent_name, source_type):
+            if from_tenant_id not in tenant_ids:
+                tenant_ids.append(from_tenant_id)
+    return tenant_ids
+
+
 def _save_upload_to_storage(content: bytes, filename: str, tenant_id: str) -> str:
     """保存上传文件到 storage 目录，返回相对路径（storage/...）"""
     from pathlib import Path
@@ -1822,7 +1851,8 @@ async def search_hotels(request: Request, q: str = Query(..., min_length=1), top
     try:
         from hotel_retriever import HotelRetriever
         retriever = HotelRetriever()
-        results = retriever.search(tenant_id, q, top_k)
+        shared_tenant_ids = _resolve_travel_shared_tenant_ids(tenant_id, HotelRetriever.SOURCE_TYPE)
+        results = retriever.search(tenant_id, q, top_k, shared_tenant_ids=shared_tenant_ids)
         return {"success": True, "data": results}
     except Exception as e:
         logger.opt(exception=True).error(f"[TravelQuoteSearch] 酒店搜索失败: {e}")
@@ -1843,7 +1873,8 @@ async def list_hotels_kb(request: Request, limit: int = Query(200), offset: int 
     try:
         from hotel_retriever import HotelRetriever
         retriever = HotelRetriever()
-        result = retriever.list_all(tenant_id, limit, offset)
+        shared_tenant_ids = _resolve_travel_shared_tenant_ids(tenant_id, HotelRetriever.SOURCE_TYPE)
+        result = retriever.list_all(tenant_id, limit, offset, shared_tenant_ids=shared_tenant_ids)
         return {"success": True, "data": result}
     except Exception as e:
         logger.opt(exception=True).error(f"[TravelQuoteKB] 列出酒店失败: {e}")
@@ -1864,7 +1895,8 @@ async def list_attractions_kb(request: Request, limit: int = Query(200), offset:
     try:
         from attraction_retriever import AttractionRetriever
         retriever = AttractionRetriever()
-        result = retriever.list_all(tenant_id, limit, offset)
+        shared_tenant_ids = _resolve_travel_shared_tenant_ids(tenant_id, AttractionRetriever.SOURCE_TYPE)
+        result = retriever.list_all(tenant_id, limit, offset, shared_tenant_ids=shared_tenant_ids)
         return {"success": True, "data": result}
     except Exception as e:
         logger.opt(exception=True).error(f"[TravelQuoteKB] 列出景点失败: {e}")
@@ -1885,7 +1917,8 @@ async def search_attractions(request: Request, q: str = Query(..., min_length=1)
     try:
         from attraction_retriever import AttractionRetriever
         retriever = AttractionRetriever()
-        results = retriever.search(tenant_id, q, top_k)
+        shared_tenant_ids = _resolve_travel_shared_tenant_ids(tenant_id, AttractionRetriever.SOURCE_TYPE)
+        results = retriever.search(tenant_id, q, top_k, shared_tenant_ids=shared_tenant_ids)
         return {"success": True, "data": results}
     except Exception as e:
         logger.opt(exception=True).error(f"[TravelQuoteSearch] 景点搜索失败: {e}")

@@ -726,6 +726,82 @@ class TestResultStructure:
         assert "iterations" in result["analysis_meta"]
         assert "trace_id" in result["analysis_meta"]
 
+
+# ============================================================
+# Tests: 跨租户共享检索范围（_build_tenant_scope / _load_shared_ranges）
+# ============================================================
+
+
+class TestSharedTenantScope:
+    def _make_agent(self, tenant_id=None, subagent_id=None):
+        analyzer = _loaded_analyzer()
+        return AnalysisAgent(
+            llm_gateway=MagicMock(),
+            analyzer=analyzer,
+            analysis_id="test_shared",
+            tables_metadata=[],
+            tenant_id=tenant_id,
+            subagent_id=subagent_id,
+        )
+
+    def test_no_tenant_returns_empty_scope(self):
+        """无 tenant_id → 空 SQL、空参数（无租户过滤）"""
+        ag = self._make_agent(tenant_id=None, subagent_id="travel-quote")
+        sql, params = ag._build_tenant_scope()
+        assert sql == ""
+        assert params == []
+
+    def test_tenant_without_subagent_degenerates_to_own_tenant(self):
+        """有 tenant 无 subagent（主智能体场景）→ 仅本租户"""
+        ag = self._make_agent(tenant_id="t_own", subagent_id=None)
+        sql, params = ag._build_tenant_scope()
+        assert sql == "AND tenant_id = %s"
+        assert params == ["t_own"]
+
+    @patch("src.knowledge.retriever.tenant_range.load_shared_ranges")
+    def test_tenant_with_subagent_aggregates_shared_owners(self, mock_load):
+        """有 tenant + subagent → 聚合已启用共享来源租户为 ANY 条件"""
+        mock_load.return_value = [("t_shared_a", "data-analysis-metadata"), ("t_shared_b", "data-analysis-metadata")]
+        ag = self._make_agent(tenant_id="t_own", subagent_id="travel-quote")
+        sql, params = ag._build_tenant_scope()
+        assert sql == "AND tenant_id = ANY(%s)"
+        assert params == [["t_own", "t_shared_a", "t_shared_b"]]
+
+    @patch("src.knowledge.retriever.tenant_range.load_shared_ranges")
+    def test_load_shared_ranges_called_with_source_type(self, mock_load):
+        """_load_shared_ranges 固定传 data-analysis-metadata 分类"""
+        mock_load.return_value = [("t_shared_a", "data-analysis-metadata")]
+        ag = self._make_agent(tenant_id="t_own", subagent_id="travel-quote")
+        ag._load_shared_ranges()
+        mock_load.assert_called_once_with("t_own", "travel-quote", "data-analysis-metadata")
+
+    @pytest.mark.asyncio
+    @patch("src.knowledge.retriever.tenant_range.load_shared_ranges")
+    async def test_search_data_tables_passes_shared_ranges_to_retriever(self, mock_load, mock_llm):
+        """search_data_tables 语义检索应把共享范围传给 retriever.retrieve"""
+        mock_load.return_value = [("t_shared_a", "data-analysis-metadata")]
+        analyzer = _loaded_analyzer()
+        ag = AnalysisAgent(
+            llm_gateway=mock_llm,
+            analyzer=analyzer,
+            analysis_id="test_search_shared",
+            tables_metadata=[],
+            tenant_id="t_own",
+            subagent_id="travel-quote",
+        )
+        fake_retriever = MagicMock()
+        fake_retriever.retrieve = AsyncMock(return_value=[])
+        ag._retriever = fake_retriever
+
+        result = await ag._handle_search_data_tables("销售数据", top_k=5)
+
+        assert result["success"] is True
+        fake_retriever.retrieve.assert_awaited_once()
+        kwargs = fake_retriever.retrieve.await_args.kwargs
+        assert kwargs["tenant_id"] == "t_own"
+        assert kwargs["source_type"] == "data-analysis-metadata"
+        assert kwargs["shared_ranges"] == [("t_shared_a", "data-analysis-metadata")]
+
     @pytest.mark.asyncio
     async def test_no_tool_calls_returns_immediately(self, agent, mock_llm):
         """LLM 不调用任何工具 → 直接返回"""

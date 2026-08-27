@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 
 from src.tools.base import BaseTool
 from src.db.database import get_db_connection
+from src.knowledge.retriever.tenant_range import load_shared_ranges
 
 
 class HotelSearchInput(BaseModel):
@@ -72,6 +73,23 @@ class HotelSearchTool(BaseTool):
         context = current_tool_execution_context()
         return context.tenant_id if context else None
 
+    def _resolve_subagent_id(self) -> Optional[str]:
+        """从当前请求的不可变执行上下文获取子智能体 ID（共享检索前提）。"""
+        from src.tools.context import current_tool_execution_context
+        context = current_tool_execution_context()
+        return context.subagent_id if context else None
+
+    def _build_tenant_scope(self, tenant_id: Optional[str], subagent_id: Optional[str]) -> tuple:
+        """构建租户范围 SQL 与参数：本租户 + 已启用共享来源租户（与通用知识库检索的
+        shared_ranges 语义一致，仅子智能体 + 租户模式生效）。subagent_id 为空时退化为本租户。"""
+        if not tenant_id or not subagent_id:
+            return "d.tenant_id = %s", [tenant_id]
+        tenant_ids = [tenant_id]
+        for from_tenant_id, _st in load_shared_ranges(tenant_id, subagent_id, self.SOURCE_TYPE):
+            if from_tenant_id not in tenant_ids:
+                tenant_ids.append(from_tenant_id)
+        return "d.tenant_id = ANY(%s)", [tenant_ids]
+
     def _format_row(self, row, score: Optional[float]) -> Dict[str, Any]:
         """将数据库行格式化为统一的输出项"""
         meta = row["metadata"]
@@ -118,23 +136,25 @@ class HotelSearchTool(BaseTool):
             tenant_id = self._resolve_tenant_id()
             if not tenant_id:
                 return {"success": False, "error": "无法确定租户ID", "results": [], "count": 0}
+            subagent_id = self._resolve_subagent_id()
+            tenant_sql, tenant_params = self._build_tenant_scope(tenant_id, subagent_id)
 
             # 第一步：名称匹配（ILIKE），精确命中具体酒店
             rows: List[Any] = []
             used_vector = False
             with get_db_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute("""
+                cursor.execute(f"""
                     SELECT c.doc_id, c.text, d.title, d.metadata, d.file_path
                     FROM chunks c
                     JOIN documents d ON c.doc_id = d.id
                     WHERE d.source_type = %s
-                      AND d.tenant_id = %s
+                      AND {tenant_sql}
                       AND c.chunk_index = 0
                       AND c.text ILIKE %s
                     ORDER BY d.id
                     LIMIT %s
-                """, (self.SOURCE_TYPE, tenant_id, f'%{query}%', top_k))
+                """, (self.SOURCE_TYPE, *tenant_params, f'%{query}%', top_k))
                 rows = cursor.fetchall()
 
             # 第二步：名称无命中 → 向量语义搜索兜底
@@ -153,18 +173,18 @@ class HotelSearchTool(BaseTool):
                 embedding_str = "[" + ",".join(str(v) for v in embedding) + "]"
                 with get_db_connection() as conn:
                     cursor = conn.cursor()
-                    cursor.execute("""
+                    cursor.execute(f"""
                         SELECT cv.embedding <=> %s::vector AS distance,
                                c.doc_id, c.text, d.title, d.metadata, d.file_path
                         FROM chunks_vec cv
                         JOIN chunks c ON cv.chunk_id = c.id
                         JOIN documents d ON c.doc_id = d.id
                         WHERE d.source_type = %s
-                          AND d.tenant_id = %s
+                          AND {tenant_sql}
                           AND c.chunk_index = 0
                         ORDER BY distance
                         LIMIT %s
-                    """, (embedding_str, self.SOURCE_TYPE, tenant_id, top_k))
+                    """, (embedding_str, self.SOURCE_TYPE, *tenant_params, top_k))
                     rows = cursor.fetchall()
 
             # 批量取价格明细表（chunk_index=1）
