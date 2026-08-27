@@ -1093,7 +1093,7 @@ def _default_llm(
     本函数默认 False（关思考，供 M3 抽取层等确定性场景）；结构分析
     （analyze_structure）因成败关键且版式多变，显式传 True 开启思考。
     思考模型的思考 token 也计入 max_tokens，故 enable_thinking=True 时
-    预算自动放大到 16384、超时放宽到 240s，避免截断。
+    预算自动放大到 65536、超时放宽到 240s，避免截断。
 
     return_usage=True 时返回 ``(content, usage_dict)`` 而非仅 content（Excel ETL M3
     抽取层需要 usage 做计量上报）；默认 False 完全向后兼容。usage_dict 键与
@@ -1104,9 +1104,9 @@ def _default_llm(
     """
     from src.config.settings import settings
     provider = settings.llm.provider
-    # 关思考时这是纯输出预算，结构 JSON 很短，4096 足够；
-    # 开思考时思考 token 也计入 max_tokens（deepseek 计费口径），需放大预算并放宽超时
-    max_tokens = 16384 if enable_thinking else 4096
+    # 预算按"开思考×4倍"原则给足：思考 token 计入 max_tokens（deepseek 计费口径），
+    # 小预算会被思考吃光致 content 空/JSON 截断（真机事故 2026-08 济南无回复）
+    max_tokens = 65536 if enable_thinking else 16384
     timeout = 240.0 if enable_thinking else 120.0
 
     if provider == "qwen":

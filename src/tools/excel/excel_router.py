@@ -148,7 +148,11 @@ class ExcelRouter:
             response = await gateway.chat(
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0,
-                max_tokens=512,
+                # 预算给足（4096→16384）：思考 token 计入 max_tokens，小预算会被吃光
+                # 致 content 空截断；路由是微判定任务，显式关思考（提速+省token），
+                # 预算只是保险丝
+                max_tokens=16384,
+                enable_thinking=False,
             )
 
             from src.services.session_record import record_background_llm_usage

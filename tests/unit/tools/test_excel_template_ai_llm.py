@@ -69,7 +69,7 @@ class TestDefaultLlmQwen:
         assert captured['headers']['Authorization'] == 'Bearer test-qwen-key'
         assert captured['payload']['model'] == 'qwen3.7-flash'
         assert captured['payload']['enable_thinking'] is False
-        assert captured['payload']['max_tokens'] == 4096
+        assert captured['payload']['max_tokens'] == 16384
         assert captured['payload']['temperature'] == 0.0
         assert captured['payload']['messages'] == [{"role": "user", "content": "分析prompt"}]
 
