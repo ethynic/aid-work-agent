@@ -175,7 +175,7 @@ def _call_llm(
         else:
             content, usage = result, {}
     else:
-        content, usage = _default_llm(prompt, disable_thinking=True, return_usage=True)
+        content, usage = _default_llm(prompt, enable_thinking=False, return_usage=True)
     if on_usage is not None:
         try:
             on_usage(usage, stage)

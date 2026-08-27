@@ -170,10 +170,10 @@ def extract_schema_from_template(
 # ------------------------------------------------------------
 
 
-def _call_llm(prompt: str, *, disable_thinking: bool = True) -> Tuple[str, Dict[str, Any]]:
+def _call_llm(prompt: str, *, enable_thinking: bool = False) -> Tuple[str, Dict[str, Any]]:
     """默认 LLM 调用：复用 excel_template_ai._default_llm（qwen/zhipu/deepseek 分支），
     return_usage=True 取回 usage 供计量（含 model / cached_tokens 归一键）。禁止在本模块复制 provider 逻辑。"""
-    return _default_llm(prompt, disable_thinking=disable_thinking, return_usage=True)
+    return _default_llm(prompt, enable_thinking=enable_thinking, return_usage=True)
 
 
 def _invoke_llm(

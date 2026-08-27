@@ -2,7 +2,7 @@
 
 覆盖 qwen 分支改用 OpenAI 兼容接口（compatible-mode）：
 - 与主链路 QwenProvider 一致走 /chat/completions，避免 qwen3.x 系列在原生 Generation 端点报 400 url error
-- disable_thinking 通过 enable_thinking 字段控制思考开关
+- enable_thinking 参数控制思考开关（False 时注入 enable_thinking=False）
 """
 import importlib
 import sys
@@ -73,7 +73,7 @@ class TestDefaultLlmQwen:
         assert captured['payload']['temperature'] == 0.0
         assert captured['payload']['messages'] == [{"role": "user", "content": "分析prompt"}]
 
-    def test_disable_thinking_false_omits_param(self, monkeypatch):
+    def test_enable_thinking_true_omits_param(self, monkeypatch):
         import httpx
         from src.tools.excel.excel_template_ai import _default_llm
 
@@ -86,7 +86,7 @@ class TestDefaultLlmQwen:
         monkeypatch.setattr(settings_module, 'settings', _make_settings())
         monkeypatch.setattr(httpx, 'post', _fake_post)
 
-        _default_llm('分析prompt', disable_thinking=False)
+        _default_llm('分析prompt', enable_thinking=True)
         assert 'enable_thinking' not in captured['payload']
 
     def test_missing_key_raises(self, monkeypatch):
