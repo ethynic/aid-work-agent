@@ -53,14 +53,29 @@ test('manifest 字段完整且与静态 provider-manifest.json 同源（上位�
   assert.equal(m.provider_version, pkg.version)
   assert.equal(m.schema_digest, computeSchemaDigest())
 
-  // M1 只列 weixin_probe（未过门禁的能力不得占位，设计 §10.3）
-  assert.deepEqual(TOOL_NAMES, ['weixin_probe'])
-  assert.equal(m.tools.length, 1)
+  // M2：weixin_probe + chat_search/message_send/history_read/unread_list
+  assert.deepEqual(TOOL_NAMES, [
+    'weixin_probe',
+    'weixin_chat_search',
+    'weixin_message_send',
+    'weixin_history_read',
+    'weixin_unread_list',
+  ])
+  assert.equal(m.tools.length, 5)
   const probe = m.tools[0]!
   assert.equal(probe.name, 'weixin_probe')
   assert.ok(probe.title.length > 0 && probe.description.length > 0)
   assert.equal(probe.inputSchema.type, 'object')
   assert.equal(probe.annotations.readOnlyHint, true)
+
+  // M2 注解语义：message_send 是唯一写动作（readOnly=false 且非幂等），其余只读
+  const byName = new Map(m.tools.map((t) => [t.name, t]))
+  const send = byName.get('weixin_message_send')!
+  assert.equal(send.annotations.readOnlyHint, false)
+  assert.equal(send.annotations.idempotentHint, false)
+  for (const n of ['weixin_chat_search', 'weixin_history_read', 'weixin_unread_list']) {
+    assert.equal(byName.get(n)!.annotations.readOnlyHint, true, `${n} 应为只读`)
+  }
 })
 
 test('tool schema 单一来源：manifestTools 的 inputSchema 由 toolDefs 推导（改 toolDefs 即改 digest）', () => {
@@ -84,5 +99,11 @@ test('version --json 输出与 buildManifest/computeSchemaDigest 同源', () => 
   const parsed = JSON.parse(out)
   assert.equal(parsed.schema_digest, computeSchemaDigest())
   assert.equal(parsed.provider_id, 'ai.aidwork.weixin')
-  assert.deepEqual(parsed.tools.map((t: { name: string }) => t.name), ['weixin_probe'])
+  assert.deepEqual(parsed.tools.map((t: { name: string }) => t.name), [
+    'weixin_probe',
+    'weixin_chat_search',
+    'weixin_message_send',
+    'weixin_history_read',
+    'weixin_unread_list',
+  ])
 })

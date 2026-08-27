@@ -24,10 +24,12 @@ import { redactSensitive } from '../security/redaction.js'
  * server instructions（上位规范 §5.4 / 设计 §8：前 512 字符内含关键前提、副作用和写动作上限）
  */
 const INSTRUCTIONS =
-  '微信操作 Provider（当前版本仅提供只读环境探测 weixin_probe）。前提：仅 Windows（win32-x64）；' +
+  '微信操作 Provider。工具：weixin_probe（只读环境探测）、weixin_chat_search（搜索好友/群，返回 5 分钟有效的 target_ref）、' +
+  'weixin_message_send（写：发 1 条文本消息）、weixin_history_read（读聊天记录，会打开会话并清除未读角标）、' +
+  'weixin_unread_list（未读会话列表）。前提：仅 Windows（win32-x64）；' +
   '需要已登录且未锁屏的微信 Windows 客户端（Weixin.exe）与交互桌面会话。' +
-  '副作用预告：后续版本的自动化操作会占用前台窗口与剪贴板，操作期间请勿移动鼠标、勿操作键盘；' +
-  '写动作（发消息、关注公众号）单次单目标且有硬上限，结果 effect=unknown 时系统不会自动重试，请人工确认。' +
+  '副作用预告：自动化会占用前台窗口（PostMessage 注入，不占剪贴板），操作期间请勿移动鼠标、勿操作键盘；' +
+  '写动作单次单目标且有硬上限（1 条、≤500 字），结果 effect=unknown 时系统不会自动重试，请人工确认。' +
   '结果约定：structuredContent 含 success/code/message/effect/data/retryable/run_id，' +
   'effect ∈ none|applied|partial|unknown。'
 

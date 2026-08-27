@@ -75,3 +75,13 @@ test('version --json：机器可读 manifest（含 schema_digest）', () => {
   assert.equal(parsed.provider_id, 'ai.aidwork.weixin')
   assert.match(parsed.schema_digest, /^sha256:[0-9a-f]{64}$/)
 })
+
+test('send --json：参数错误也输出 OperationResult JSON（AI 组合链路可解析），退出码 2', () => {
+  // 缺 target_ref/text：operation 校验阶段即失败，不触达真实微信
+  const { status, stdout } = runCli(['send', '--domain', 'chat', '--json'])
+  assert.equal(status, 2)
+  const parsed = JSON.parse(stdout.trim().split('\n').pop()!)
+  assert.equal(parsed.success, false)
+  assert.equal(parsed.code, 'INVALID_ARGUMENT')
+  assert.equal(typeof parsed.run_id, 'string')
+})

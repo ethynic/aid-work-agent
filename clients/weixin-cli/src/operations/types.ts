@@ -90,6 +90,8 @@ export class CodedOperationError extends Error {
   constructor(
     readonly code: ErrorCode,
     message: string,
+    /** 写动作失败时的 effect 显式覆盖（设计 §6.2：如取消发生在动作发出后且无法确认 → CANCELLED/unknown） */
+    readonly effectOverride?: Effect,
   ) {
     super(message)
     this.name = 'CodedOperationError'

@@ -74,11 +74,17 @@ test('initialize：serverInfo + instructions（前 512 字符内含仅 Windows/�
   }
 })
 
-test('list_tools：weixin_probe，readOnly 注解 + 中文标题 + object inputSchema', async () => {
+test('list_tools：5 个 M2 tool，readOnly 注解 + 中文标题 + object inputSchema', async () => {
   const client = await startClient()
   try {
     const { tools } = await client.listTools()
-    assert.deepEqual(tools.map((t) => t.name), ['weixin_probe'])
+    assert.deepEqual(tools.map((t) => t.name), [
+      'weixin_probe',
+      'weixin_chat_search',
+      'weixin_message_send',
+      'weixin_history_read',
+      'weixin_unread_list',
+    ])
     const probe = tools[0]!
     assert.equal(probe.annotations?.readOnlyHint, true)
     assert.equal(probe.annotations?.destructiveHint, false)

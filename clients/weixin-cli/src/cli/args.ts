@@ -43,8 +43,8 @@ export function hasFlag(args: ParsedArgs, key: string): boolean {
   return args.flags.has(key)
 }
 
-/** 合法 --domain 值（设计 §4.1：search 必须显式指定；read/get-url 当前仅 article 域） */
-export const CLI_DOMAINS = ['souyisou', 'article', 'chat'] as const
+/** 合法 --domain 值（设计 §4.1：search 必须显式指定；M2 落地 chat / chat-history / unread） */
+export const CLI_DOMAINS = ['souyisou', 'article', 'chat', 'chat-history', 'unread'] as const
 export type CliDomain = (typeof CLI_DOMAINS)[number]
 
 /**

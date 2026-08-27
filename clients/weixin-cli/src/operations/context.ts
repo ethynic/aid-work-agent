@@ -7,6 +7,7 @@
 import { randomUUID } from 'node:crypto'
 import {
   CancelledError,
+  CodedOperationError,
   failResult,
   okResult,
   writeEffect,
@@ -78,7 +79,11 @@ export async function runWeixinOperation(
     return okResult(runId, outcome.message, effect, outcome.data ?? {})
   } catch (err) {
     const mapped = mapExecutorError(err)
-    const effect = kind === 'readonly' ? 'none' : writeEffect(false, mapped.code, tracker.completed)
+    const effect =
+      kind === 'readonly'
+        ? 'none'
+        : (err instanceof CodedOperationError && err.effectOverride) ||
+          writeEffect(false, mapped.code, tracker.completed)
     const data: Record<string, unknown> = {}
     if (kind === 'write' && tracker.completed > 0) data.completed = tracker.completed
     return failResult(runId, mapped.code, mapped.message, effect, data)
