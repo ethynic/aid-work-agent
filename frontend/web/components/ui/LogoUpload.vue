@@ -57,6 +57,8 @@ import { uploadTenantLogo } from '@/api/saasTenant'
 const props = defineProps<{
   /** Logo 文件 ID（无 Logo 时为 null） */
   modelValue: string | null | undefined
+  /** 目标租户 ID：管理后台平台管理员代管时必传；租户前台从 URL 自动带 X-Tenant-Id，可省略 */
+  tenantId?: string
 }>()
 
 const emit = defineEmits<{
@@ -111,7 +113,7 @@ async function handleFileChange(e: Event) {
 
   uploading.value = true
   try {
-    const res = await uploadTenantLogo(file)
+    const res = await uploadTenantLogo(file, props.tenantId)
     if (res.success && res.file_id) {
       emit('update:modelValue', res.file_id)
     } else {

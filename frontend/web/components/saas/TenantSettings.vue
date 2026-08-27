@@ -21,7 +21,7 @@
           <div class="space-y-4">
             <div>
               <label class="block text-sm text-default mb-1">Logo</label>
-              <LogoUpload v-model="form.logo_file_id" />
+              <LogoUpload v-model="form.logo_file_id" :tenant-id="tenantId" />
             </div>
             <div>
               <label class="block text-sm text-default mb-1">企业名称</label>

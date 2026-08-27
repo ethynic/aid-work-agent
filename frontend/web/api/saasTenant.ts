@@ -208,20 +208,33 @@ export async function deleteTenant(tenantId: string): Promise<{ success: boolean
  * 仅注册图片资产返回 file_id，不立即改租户表；点保存才把 file_id 写入 tenants 表。
  *
  * @param file 图片文件（JPG/PNG/WebP/SVG，≤2MB）
+ * @param tenantId 目标租户 ID。管理后台（/portal/*，无 X-Tenant-Id）编辑租户时必传；
+ *                 租户前台（/t/:tenant_id/*）由 getSaasAuthHeader 自动带 X-Tenant-Id，可省略
  * @returns { success, file_id, download_url }
  */
-export async function uploadTenantLogo(file: File): Promise<{
+export async function uploadTenantLogo(file: File, tenantId?: string): Promise<{
   success: boolean
   file_id?: string
   download_url?: string
   error?: string
   debug?: string
 }> {
+  const headers = getSaasAuthHeader()
+  // 目标租户：显式传入 > getSaasAuthHeader 已带的 X-Tenant-Id（租户前台）
+  const targetTenantId = tenantId || headers['X-Tenant-Id']
+  if (!targetTenantId) {
+    throw new Error('无法确定目标租户，请先保存租户后再上传 Logo')
+  }
+
   const formData = new FormData()
   formData.append('file', file)
+  formData.append('tenant_id', targetTenantId)  // 后端兜底通道
+  if (!headers['X-Tenant-Id']) {
+    headers['X-Tenant-Id'] = targetTenantId
+  }
   const res = await fetch(`${API_BASE}/tenants/logo`, {
     method: 'POST',
-    headers: getSaasAuthHeader(),
+    headers,
     body: formData
   })
   const result = await res.json()

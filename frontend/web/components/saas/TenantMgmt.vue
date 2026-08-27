@@ -189,7 +189,7 @@
       <div v-show="activeTab === 'basic'" class="grid grid-cols-2 gap-x-6 gap-y-4">
         <div class="col-span-2">
           <label class="text-sm text-muted mb-1 block">Logo</label>
-          <LogoUpload v-model="formData.logo_file_id" />
+          <LogoUpload v-model="formData.logo_file_id" :tenant-id="currentTenant?.tenant_id" />
         </div>
         <div>
           <label class="text-sm text-muted mb-1 block">企业名称 <span class="text-danger-500">*</span></label>
