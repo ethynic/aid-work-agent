@@ -128,7 +128,7 @@
             <div>
               <div class="flex items-center gap-2">
                 <span class="font-medium text-default">{{ selectedUser.nickname || selectedUser.username || '未知用户' }}</span>
-                <span v-if="selectedUser.channel_type === 'wecom_kf' && selectedUser.kf_name" class="text-xs px-2 py-0.5 rounded-full bg-primary-50 text-primary-600">客服：{{ selectedUser.kf_name }}</span>
+                <span v-if="selectedUser.channel_type === 'wecom_kf' && selectedUser.kf_name" class="text-xs px-2 py-0.5 rounded-full bg-primary-50 text-primary-600">账号：{{ selectedUser.kf_name }}</span>
               </div>
               <div class="text-xs text-muted">创建于 {{ formatDate(selectedUser.created_at) }}</div>
             </div>
