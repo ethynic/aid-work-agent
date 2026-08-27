@@ -1,6 +1,6 @@
 <template>
   <Teleport to="body">
-    <div v-if="modelValue" :class="[slots.overlay(), modalClass]" @click.self="handleOverlayClick">
+    <div v-if="modelValue" :class="[slots.overlay(), modalClass]" @mousedown="onOverlayMouseDown" @click.self="handleOverlayClick">
       <div :class="[slots.content(), contentClass]">
         <div :class="slots.header()">
           <h3 :class="slots.title()">
@@ -160,7 +160,18 @@ function tryClose() {
   // mode === 'create'：不关闭
 }
 
+// 记录 mousedown 是否落在遮罩层上（弹框外）
+let overlayMouseDown = false
+
+function onOverlayMouseDown(e: MouseEvent) {
+  overlayMouseDown = e.target === e.currentTarget
+}
+
 function handleOverlayClick() {
+  // 从弹框内拖拽选择文本、在弹框外松开鼠标时，浏览器会把 click 派发到
+  // mousedown 与 mouseup 的共同祖先（即遮罩层），触发 @click.self。
+  // 此时 mousedown 实际发生在弹框内部，应忽略，不能关闭弹框。
+  if (!overlayMouseDown) return
   tryClose()
 }
 
