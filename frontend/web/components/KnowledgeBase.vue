@@ -75,7 +75,7 @@
             <div class="flex-1 flex flex-col min-w-0">
               <div class="page-toolbar mb-3">
                 <div class="page-toolbar-left">
-                  <BaseInput v-model="searchQuery" placeholder="在当前选中分类（含子级）中搜索文档" size="sm" class="w-96" @keyup.enter="handleSearchInput" @input="handleSearchInput" />
+                  <BaseInput v-model="searchQuery" placeholder="在当前选中分类（含子级）中搜索文档" size="sm" class="w-[300px]" @keyup.enter="handleSearchInput" @input="handleSearchInput" />
                   <BaseButton v-if="isSearchMode" size="sm" intent="secondary" @click="clearSearch">显示全部</BaseButton>
                 </div>
                 <div class="page-toolbar-right">
