@@ -30,14 +30,16 @@ class DeepSeekProvider(BaseLLMProvider):
         api_key: str,
         model: str = "deepseek-chat",
         base_url: Optional[str] = None,
-        enable_thinking: bool = False,
+        enable_thinking: bool = True,
         **kwargs
     ):
         super().__init__(api_key, model, base_url=base_url, **kwargs)
-        # v4 系混合模型默认带思考链：导航选航这类小任务思考耗时 20~95s/次且
-        # 会烧穿小 max_tokens 导致 content 为空（真机教训，2026-08 人口学会
-        # 探针）。默认关闭思考；必须用官方参数 thinking.type=disabled（v4-flash
-        # 与 v4-pro 均实测生效：95s/3500 token → 1.2s/9 token）。
+        # 默认开启思考：Agent 主链路依赖思考能力（网关单例所有 deepseek 调用
+        # 共用同一实例，实例级默认即主链路默认）。例外是导航选航这类小任务：
+        # 思考耗时 20~95s/次且会烧穿小 max_tokens 导致 content 为空（真机教训，
+        # 2026-08 人口学会探针），由调用点显式传 enable_thinking=False 关闭
+        # （调用级优先于实例默认）。关闭必须用官方参数 thinking.type=disabled
+        # （v4-flash 与 v4-pro 均实测生效：95s/3500 token → 1.2s/9 token）。
         # chat_template_kwargs 是 vLLM 本地部署用法，官方 API 不识别。
         self.enable_thinking = enable_thinking
         self.api_url = f"{self.base_url or self.DEFAULT_BASE_URL}/chat/completions"
@@ -46,10 +48,14 @@ class DeepSeekProvider(BaseLLMProvider):
             "Content-Type": "application/json",
         }
 
-    def _apply_thinking_control(self, request_body: Dict[str, Any]) -> None:
+    def _apply_thinking_control(
+        self, request_body: Dict[str, Any], enable_thinking: Optional[bool] = None
+    ) -> None:
         """按配置注入思考开关（官方 API 参数；chat_template_kwargs 是 vLLM
-        本地部署用法，官方 API 不识别，属软提示不保证生效——真机实测）。"""
-        if not self.enable_thinking:
+        本地部署用法，官方 API 不识别，属软提示不保证生效——真机实测）。
+        调用级传 enable_thinking 时优先于实例默认。"""
+        effective = self.enable_thinking if enable_thinking is None else enable_thinking
+        if not effective:
             request_body["thinking"] = {"type": "disabled"}
 
     async def chat(
@@ -59,6 +65,7 @@ class DeepSeekProvider(BaseLLMProvider):
         tool_choice: Optional[str] = None,
         temperature: float = 0.7,
         max_tokens: int = 16384,
+        enable_thinking: Optional[bool] = None,
         **kwargs
     ) -> Dict[str, Any]:
         request_body = {
@@ -73,7 +80,7 @@ class DeepSeekProvider(BaseLLMProvider):
             if tool_choice:
                 request_body["tool_choice"] = tool_choice
 
-        self._apply_thinking_control(request_body)
+        self._apply_thinking_control(request_body, enable_thinking=enable_thinking)
         request_body.update(kwargs)
 
         invoke_id = generate_request_id()
@@ -137,6 +144,7 @@ class DeepSeekProvider(BaseLLMProvider):
         tool_choice: Optional[str] = None,
         temperature: float = 0.7,
         max_tokens: int = 16384,
+        enable_thinking: Optional[bool] = None,
         **kwargs
     ) -> AsyncGenerator[str, None]:
         request_body = {
@@ -152,7 +160,7 @@ class DeepSeekProvider(BaseLLMProvider):
             if tool_choice:
                 request_body["tool_choice"] = tool_choice
 
-        self._apply_thinking_control(request_body)
+        self._apply_thinking_control(request_body, enable_thinking=enable_thinking)
         request_body.update(kwargs)
 
         invoke_id = generate_request_id()

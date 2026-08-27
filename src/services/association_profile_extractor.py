@@ -312,6 +312,7 @@ async def extract_association_profile(
             ],
             temperature=0,
             max_tokens=4000,
+            enable_thinking=False,  # 官网事实提取小任务关思考（真机教训：思考烧穿 max_tokens）
         )
         if not isinstance(response, dict) or not isinstance(response.get("content"), str):
             raise ValueError("invalid gateway response")
