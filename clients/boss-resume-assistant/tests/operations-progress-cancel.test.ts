@@ -12,7 +12,9 @@ import type { BossSession } from '../src/main/operations/bossContext.js'
 import type { OpContext, ProgressEvent } from '../src/main/operations/types.js'
 import type { DomSnapshot, ClickPoint } from '../src/main/boss/domSnapshot.js'
 
-/** 依调用序返回 snapshot 队列，用完后重复最后一个 */
+/** 依调用序返回 snapshot 队列，用完后重复最后一个。
+ * 默认 URL 是沟通页（accept 的 ensureChatPage 用）；greet 用例必须显式传推荐页 URL——
+ * greet 前置校验按 URL 判定（坑 17），默认沟通页会被 WRONG_PAGE 拒绝 */
 function fakeSession(snaps: DomSnapshot[], opts: { url?: string } = {}) {
   const clicks: ClickPoint[] = []
   let i = 0
@@ -85,16 +87,19 @@ test('greet：onProgress 逐人回调，current/total 逐人推进', async () =>
   const ac = new AbortController()
   const ctx: OpContext = { signal: ac.signal, progress: (p) => events.push(p) }
   // probe → 3 轮（locate + after）→ 滚动探测
-  const { session } = fakeSession([
-    greetSnap([BTN1, BTN2, BTN3]),
-    greetSnap([BTN1, BTN2, BTN3]),
-    greetSnap([BTN2, BTN3]),
-    greetSnap([BTN2, BTN3]),
-    greetSnap([BTN3]),
-    greetSnap([BTN3]),
-    greetSnap([]),
-    greetSnap([]),
-  ])
+  const { session } = fakeSession(
+    [
+      greetSnap([BTN1, BTN2, BTN3]),
+      greetSnap([BTN1, BTN2, BTN3]),
+      greetSnap([BTN2, BTN3]),
+      greetSnap([BTN2, BTN3]),
+      greetSnap([BTN3]),
+      greetSnap([BTN3]),
+      greetSnap([]),
+      greetSnap([]),
+    ],
+    { url: 'https://www.zhipin.com/web/chat/recommend' },
+  )
   const op = createBossGreetOperation(async () => session)
   const r = await op.execute({ limit: 3 }, ctx)
   assert.equal(r.success, true)
@@ -119,15 +124,18 @@ test('greet：打完 2 人后 abort → CANCELLED + partial + completed=2', asyn
       if (p.stage === 'execute' && p.current === 2) ac.abort()
     },
   }
-  const { session } = fakeSession([
-    greetSnap([BTN1, BTN2, BTN3]),
-    greetSnap([BTN1, BTN2, BTN3]),
-    greetSnap([BTN2, BTN3]),
-    greetSnap([BTN2, BTN3]),
-    greetSnap([BTN3]),
-    greetSnap([BTN3]),
-    greetSnap([]),
-  ])
+  const { session } = fakeSession(
+    [
+      greetSnap([BTN1, BTN2, BTN3]),
+      greetSnap([BTN1, BTN2, BTN3]),
+      greetSnap([BTN2, BTN3]),
+      greetSnap([BTN2, BTN3]),
+      greetSnap([BTN3]),
+      greetSnap([BTN3]),
+      greetSnap([]),
+    ],
+    { url: 'https://www.zhipin.com/web/chat/recommend' },
+  )
   const op = createBossGreetOperation(async () => session)
   const r = await op.execute({ limit: 5 }, ctx)
   assert.equal(r.success, false)

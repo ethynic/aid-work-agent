@@ -1,5 +1,5 @@
 /**
- * CLI argv 极简解析（纯函数，可单测）：--key value / --flag / 位置参数。
+ * CLI argv 极简解析（纯函数，可单测）：--key value / --flag / 位置参数 / -h 短 flag。
  */
 
 export interface ParsedArgs {
@@ -12,6 +12,12 @@ export function parseArgs(argv: string[]): ParsedArgs {
   const flags = new Map<string, string | boolean>()
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!
+    if (arg === '-h') {
+      // -h 是唯一的单横线短 flag（--help 的别名，任何命令可用）。
+      // 只特判 -h、不做通用单横线解析：通用化会把 `--limit -3` 这类负值误吞成 flag
+      flags.set('h', true)
+      continue
+    }
     if (arg.startsWith('--')) {
       const key = arg.slice(2)
       const next = argv[i + 1]

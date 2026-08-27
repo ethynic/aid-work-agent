@@ -14,6 +14,7 @@
 4. **点击/输入第一优先 Win32**（2026-08-26 用户定调：防爬是关键）：**所有点击与键盘输入默认走 Win32 真实事件**（`WinMouseClicker.click` / `clickAndType`）；CDP `Input.*` 仅限纯浏览类（点卡片开详情、Escape、滚动——真机实证放行）。**教训（§17 坑22）**：2026-08-24 曾误判「Win32 DPI 换算偏差」把聊天链路点击改 CDP——实为用户移动窗口致输入框不可见，换算无偏差，已全部回退。
 5. **fail-loud**：任何歧义（命中 0 个/多个/点击后状态未变）立即抛错请人工查看，**绝不盲点、绝不盲发**；写动作 `UNKNOWN` 不自动重试。
 6. **永不关闭用户 Chrome**：`close()` 只断开 CDP 连接。
+7. **CLI 参数校验 fail-loud（2026-08-26 事故教训）**：所有子命令未知 flag / 多余位置参数一律 exit 2 拒绝（`src/cli/validate.ts` 的 `validateCommandArgs`，白名单表 `COMMAND_FLAGS`/`COMMAND_POSITIONALS`）；`--help`/`-h` 任意位置显示用法 exit 0；**写动作命令必须显式意图**（greet 需 `--names 甲,乙` 定向或 `--all` 全量，二选一，禁默认全量——曾因 fail-open 解析让 `greet --help` 直接真实执行误打 6+1 人）。**新增命令必须同步两张表 + cli-validate 测试**，漏登记则新命令参数被当未知参数拒绝。
 
 ## 3. 坐标体系（用项目工具，禁自己造轮子）
 
