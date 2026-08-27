@@ -277,7 +277,12 @@ def analyze_structure(
     }
 
     prompt = _build_analyze_prompt(grid_text, data_keys, data)
-    raw = (llm_callable or _default_llm)(prompt)
+    if llm_callable is not None:
+        raw = llm_callable(prompt)
+    else:
+        # 结构分析是本链路成败关键且模板版式多变，默认开思考（预算见 _default_llm）；
+        # M3 抽取层（excel_extract）/技能管线仍按各自需要显式传 disable_thinking
+        raw = _default_llm(prompt, disable_thinking=False)
     parsed = _extract_json(raw)
     structure = _coerce_structure(parsed, grid)
 
@@ -1084,9 +1089,10 @@ def _default_llm(
 ):
     """默认 LLM 调用（deepseek-v4-pro 等思考模型）。
 
-    结构分析**默认关闭思考**：与 travel-quote/attraction.py 一致——思考模型的思考 token
-    也计入 max_tokens，开启时小 max_tokens 会截断输出 JSON；关闭后输出确定、不截断、几秒返回。
-    复杂模板若分析不准，可传 disable_thinking=False 开启思考（届时需更大 max_tokens 与超时）。
+    函数默认仍为关闭思考（disable_thinking=True，供 M3 抽取层等确定性场景向后兼容）；
+    思考模型的思考 token 也计入 max_tokens，故调用方传 disable_thinking=False 时
+    预算自动放大到 16384、超时放宽到 240s，避免截断。结构分析（analyze_structure）
+    因成败关键且版式多变，显式传 False 开启思考。
 
     return_usage=True 时返回 ``(content, usage_dict)`` 而非仅 content（Excel ETL M3
     抽取层需要 usage 做计量上报）；默认 False 完全向后兼容。usage_dict 键与
@@ -1097,8 +1103,10 @@ def _default_llm(
     """
     from src.config.settings import settings
     provider = settings.llm.provider
-    # 关闭思考时这是纯输出预算；结构 JSON 很短，4096 足够
-    max_tokens = 4096
+    # 关思考时这是纯输出预算，结构 JSON 很短，4096 足够；
+    # 开思考时思考 token 也计入 max_tokens（deepseek 计费口径），需放大预算并放宽超时
+    max_tokens = 4096 if disable_thinking else 16384
+    timeout = 120.0 if disable_thinking else 240.0
 
     if provider == "qwen":
         import httpx
@@ -1121,7 +1129,7 @@ def _default_llm(
             api_url,
             headers={"Authorization": f"Bearer {keys[0]}", "Content-Type": "application/json"},
             json=payload,
-            timeout=120.0,
+            timeout=timeout,
         )
         resp.raise_for_status()
         data = resp.json()
@@ -1157,7 +1165,7 @@ def _default_llm(
             api_url,
             headers={"Authorization": f"Bearer {keys[0]}", "Content-Type": "application/json"},
             json=payload,
-            timeout=120.0,
+            timeout=timeout,
         )
         resp.raise_for_status()
         data = resp.json()

@@ -53,7 +53,7 @@ STRUCTURE = {
 
 def _mock_llm():
     payload = json.dumps(STRUCTURE, ensure_ascii=False)
-    return lambda prompt: payload
+    return lambda prompt, **kwargs: payload
 
 
 @pytest.fixture
