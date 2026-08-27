@@ -205,11 +205,15 @@ async def llm_chat(
     _check_credit(binding)
 
     try:
+        # 协会客户端场景=信息收集小任务（JSON 抽取/解析），统一关思考：
+        # CLI 侧 ProxyLLMGateway 不透传 thinking 参数，开关只能在服务端端点定；
+        # 思考会显著拉长耗时并多扣积分 token，且烧穿小 max_tokens 致 content 为空
         response = await llm_gateway.chat(
             messages=req.messages,
             temperature=req.temperature,
             max_tokens=req.max_tokens,
             response_format=req.response_format,
+            enable_thinking=False,
         )
     except Exception as e:
         logger.opt(exception=True).error(f"客户端LLM代理调用失败 binding={binding.binding_id}: {e}")

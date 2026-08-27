@@ -97,6 +97,7 @@ async def parse_association_evidence_with_llm(
         ],
         temperature=0,
         max_tokens=4000,
+        enable_thinking=False,  # 协会名抽取小任务关思考（提速+防思考烧穿max_tokens）
     )
     content = response.get("content")
     if not isinstance(content, str):

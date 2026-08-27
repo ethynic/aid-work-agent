@@ -118,6 +118,7 @@ class ProjectAssociationProviders:
                 messages=retry_messages,
                 temperature=0,
                 max_tokens=max_tokens,
+                enable_thinking=False,  # 严格JSON抽取小任务关思考（提速+防思考烧穿max_tokens）
             )
             try:
                 content = response["content"]
