@@ -196,15 +196,22 @@ export function getDocumentDownloadUrl(docId: number): string {
 
 /**
  * 搜索知识库文档（混合检索：向量 + FTS5 + RRF）
+ * @param source_type 顶级分类代号，限定搜索范围（含其下所有子级）
+ * @param sub_category 直接选中分类代号，后端展开为含其所有子级；不传时全分类搜索
  */
-export async function searchDocuments(query: string, top_k = 10): Promise<SearchResponse> {
+export async function searchDocuments(
+  query: string,
+  top_k = 10,
+  source_type?: string,
+  sub_category?: string
+): Promise<SearchResponse> {
   const response = await fetch(`${API_BASE}/search_documents`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       ...getAuthHeader()
     },
-    body: JSON.stringify({ query, top_k })
+    body: JSON.stringify({ query, top_k, source_type, sub_category })
   })
   if (!response.ok) {
     const error = await response.json()

@@ -75,7 +75,7 @@
             <div class="flex-1 flex flex-col min-w-0">
               <div class="page-toolbar mb-3">
                 <div class="page-toolbar-left">
-                  <BaseInput v-model="searchQuery" placeholder="搜索文档..." size="sm" class="w-80" @keyup.enter="handleSearchInput" @input="handleSearchInput" />
+                  <BaseInput v-model="searchQuery" placeholder="在当前选中分类（含子级）中搜索文档" size="sm" class="w-96" @keyup.enter="handleSearchInput" @input="handleSearchInput" />
                   <BaseButton v-if="isSearchMode" size="sm" intent="secondary" @click="clearSearch">显示全部</BaseButton>
                 </div>
                 <div class="page-toolbar-right">
@@ -659,7 +659,13 @@ async function performSearch(query: string) {
   isSearching.value = true
   searchError.value = ''
   try {
-    const result = await searchDocuments(query)
+    // 跟随当前选中分类：选中子分类时后端会展开为含其所有子级
+    const result = await searchDocuments(
+      query,
+      10,
+      selectedSourceType.value || undefined,
+      selectedSubCategory.value || undefined
+    )
     if (result.success) {
       searchResults.value = result.results
     } else {

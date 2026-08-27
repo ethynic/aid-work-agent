@@ -228,37 +228,88 @@ class KnowledgeBaseService:
         """获取数据库连接（使用统一的数据库连接管理）"""
         return get_db_connection()
 
+    @staticmethod
+    def _collect_subtree_source_types(rows: List[Dict[str, Any]], category_source_type: str) -> List[str]:
+        """给定分类行（含 id/source_type/parent_id），返回 category_source_type 自身 + 所有后代 source_type。
+        内存建树后 DFS 收集，供 list_categories / list_documents / count_documents 共用，保证三处语义一致。"""
+        children = {}  # parent_id -> [child_id]
+        source_type_by_id = {}
+        target_id = None
+        for r in rows:
+            source_type_by_id[r["id"]] = r["source_type"]
+            children.setdefault(r["parent_id"], []).append(r["id"])
+            if r["source_type"] == category_source_type:
+                target_id = r["id"]
+        # source_type 租户内唯一，命中不到说明该分类不存在（可能被删除），退化为仅自身
+        if target_id is None:
+            return [category_source_type]
+        result = [category_source_type]
+        stack = list(children.get(target_id, []))
+        while stack:
+            cid = stack.pop()
+            result.append(source_type_by_id[cid])
+            stack.extend(children.get(cid, []))
+        return result
+
+    def _get_category_subtree_source_types(self, tenant_id: str, category_source_type: str) -> List[str]:
+        """返回 category_source_type 自身 + 其所有后代分类的 source_type 列表。
+        供 list_categories / list_documents / count_documents 共用，保证三处语义一致。
+        实现：一次 SELECT 该租户全部分类 (source_type, parent_id)，内存建树后 DFS 收集后代。"""
+        with self._get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT id, source_type, parent_id FROM knowledge_categories WHERE tenant_id = %s",
+                (tenant_id,)
+            )
+            rows = cursor.fetchall()
+        return self._collect_subtree_source_types(rows, category_source_type)
+
     # ========== 分类管理 ==========
 
     def list_categories(self, tenant_id: str) -> List[Dict[str, Any]]:
         """获取分类列表，含文档数统计。返回扁平结构（含 parent_id），树形由前端组装。
-        文档数统计：顶级分类=该 source_type 全部文档（含子分类文档）；子分类=直接归属该子分类的文档。"""
+        文档数统计：每级分类 = 其下所有子级（含自身）的文档总数，与列表过滤语义一致。"""
         try:
             with self._get_db_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
-                    SELECT kc.id, kc.source_type, kc.display_name, kc.parent_id, kc.created_at,
-                           CASE WHEN kc.parent_id IS NULL THEN
-                               -- 顶级分类：统计该 source_type 全部文档（含子分类文档）
-                               (SELECT COUNT(*) FROM documents d
-                                WHERE d.tenant_id = %s AND d.source_type = kc.source_type)
-                           ELSE
-                               -- 子分类：仅统计直接归属（sub_category）的文档
-                               (SELECT COUNT(*) FROM documents d
-                                WHERE d.tenant_id = %s AND d.sub_category = kc.source_type)
-                           END AS document_count
+                    SELECT kc.id, kc.source_type, kc.display_name, kc.parent_id, kc.created_at
                     FROM knowledge_categories kc
                     WHERE kc.tenant_id = %s
                     ORDER BY kc.created_at ASC
-                """, (tenant_id, tenant_id, tenant_id))
+                """, (tenant_id,))
                 rows = cursor.fetchall()
-                result = []
-                for row in rows:
-                    d = dict(row)
-                    if d.get("created_at"):
-                        d["created_at"] = d["created_at"].isoformat()
-                    result.append(d)
-                return result
+                # 文档按 (source_type, sub_category) 分组计数，供内存统计，替代逐分类子查询
+                cursor.execute("""
+                    SELECT source_type, sub_category, COUNT(*) AS cnt
+                    FROM documents
+                    WHERE tenant_id = %s
+                    GROUP BY source_type, sub_category
+                """, (tenant_id,))
+                doc_rows = cursor.fetchall()
+
+            source_type_count = {}   # source_type -> 文档总数（顶级分类口径）
+            sub_category_count = {}  # sub_category -> 直接归属文档数
+            for dr in doc_rows:
+                source_type_count[dr["source_type"]] = source_type_count.get(dr["source_type"], 0) + dr["cnt"]
+                sc = dr["sub_category"]
+                if sc:
+                    sub_category_count[sc] = sub_category_count.get(sc, 0) + dr["cnt"]
+
+            result = []
+            for row in rows:
+                d = dict(row)
+                if d["parent_id"] is None:
+                    # 顶级分类：该 source_type 全部文档（子级文档 source_type 恒为顶级，天然包含）
+                    d["document_count"] = source_type_count.get(d["source_type"], 0)
+                else:
+                    # 子分类：自身 + 所有后代分类的 sub_category 文档数之和
+                    subtree = self._collect_subtree_source_types(rows, d["source_type"])
+                    d["document_count"] = sum(sub_category_count.get(s, 0) for s in subtree)
+                if d.get("created_at"):
+                    d["created_at"] = d["created_at"].isoformat()
+                result.append(d)
+            return result
         except Exception as e:
             logger.error(f"获取分类列表失败: {e}", exc_info=True)
             return []
@@ -600,8 +651,14 @@ class KnowledgeBaseService:
                     conditions.append("source_type = %s")
                     params.append(source_type)
                 if sub_category is not None:
-                    conditions.append("sub_category = %s")
-                    params.append(sub_category)
+                    if tenant_id is not None:
+                        # 展开为自身 + 所有后代分类，保证与 list_documents 语义一致
+                        subtree = self._get_category_subtree_source_types(tenant_id, sub_category)
+                        conditions.append("sub_category = ANY(%s)")
+                        params.append(subtree)
+                    else:
+                        conditions.append("sub_category = %s")
+                        params.append(sub_category)
 
                 where_clause = " AND ".join(conditions)
                 if where_clause:
@@ -644,8 +701,14 @@ class KnowledgeBaseService:
                     conditions.append(f"source_type = {placeholder}")
                     params.append(source_type)
                 if sub_category is not None:
-                    conditions.append(f"sub_category = {placeholder}")
-                    params.append(sub_category)
+                    if tenant_id is not None:
+                        # 展开为自身 + 所有后代分类，与 count_documents / list_categories 语义一致
+                        subtree = self._get_category_subtree_source_types(tenant_id, sub_category)
+                        conditions.append(f"sub_category = ANY({placeholder})")
+                        params.append(subtree)
+                    else:
+                        conditions.append(f"sub_category = {placeholder}")
+                        params.append(sub_category)
 
                 where_clause = ""
                 if conditions:
@@ -717,7 +780,8 @@ class KnowledgeBaseService:
         user_id: Optional[int] = None,
         tenant_id: Optional[str] = None,
         top_k: int = 10,
-        source_type: Optional[str] = None
+        source_type: Optional[str] = None,
+        sub_category: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         根据内容搜索文档（混合检索：向量 + FTS5 + RRF）
@@ -727,7 +791,8 @@ class KnowledgeBaseService:
             user_id: 用户 ID（权限控制，暂未实现）
             tenant_id: 租户 ID
             top_k: 返回结果数量
-            source_type: 文档来源类型，提供时只搜索该类型的文档
+            source_type: 顶级分类代号，提供时只搜索该分类（含其下所有子级）
+            sub_category: 直接选中分类代号，展开为自身 + 所有后代分类再过滤（不传时全分类搜索）
 
         Returns:
             搜索结果
@@ -759,8 +824,19 @@ class KnowledgeBaseService:
                     conn=conn
                 )
 
+                # 选中子分类时展开为自身 + 所有后代，与分类树过滤语义一致
+                sub_categories = None
+                if sub_category:
+                    if tenant_id is not None:
+                        sub_categories = self._get_category_subtree_source_types(tenant_id, sub_category)
+                    else:
+                        sub_categories = [sub_category]
+
                 # 执行混合检索
-                results = await retriever.retrieve(query=query, top_k=top_k, user_id=user_id, tenant_id=tenant_id, source_type=source_type)
+                results = await retriever.retrieve(
+                    query=query, top_k=top_k, user_id=user_id, tenant_id=tenant_id,
+                    source_type=source_type, sub_categories=sub_categories,
+                )
 
                 # 提取文档标题
                 if results:

@@ -64,6 +64,8 @@ class DocumentResponse(BaseModel):
 class SearchRequest(BaseModel):
     query: str
     top_k: Optional[int] = 10
+    source_type: Optional[str] = None  # 顶级分类代号，选中分类时限定搜索范围
+    sub_category: Optional[str] = None  # 直接选中分类代号，后端展开为含其所有子级
 
 
 class SearchResultItem(BaseModel):
@@ -406,7 +408,9 @@ async def search_documents(
         query=request.query,
         user_id=user_id,
         tenant_id=tenant_id,
-        top_k=request.top_k or 10
+        top_k=request.top_k or 10,
+        source_type=request.source_type,
+        sub_category=request.sub_category,
     )
 
     if not result.get("success"):
