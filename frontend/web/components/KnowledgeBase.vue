@@ -21,11 +21,14 @@
         <div class="flex-1 overflow-hidden p-6">
           <div class="h-full flex gap-4">
             <!-- 左侧分类导航 -->
-            <div class="w-52 flex-shrink-0 flex flex-col bg-white rounded-xl border border-default">
+            <div
+              class="flex-shrink-0 flex flex-col bg-white rounded-xl border border-default relative"
+              :style="categoryPanelStyle"
+            >
               <div class="px-3 py-3 border-b border-default">
                 <span class="text-sm font-medium text-default">文档分类</span>
               </div>
-              <div class="flex-1 overflow-y-auto p-2">
+              <div class="flex-1 overflow-auto p-2">
                 <!-- 全部 -->
                 <button
                   @click="selectCategory(null)"
@@ -39,7 +42,7 @@
                 </button>
 
                 <!-- 分类树 -->
-                <div class="mt-0.5">
+                <div class="mt-0.5 min-w-max">
                   <CategoryTreeItem
                     v-for="cat in categoryTree"
                     :key="cat.id"
@@ -57,6 +60,14 @@
                 <button @click="openAddCategory" class="w-full px-3 py-2 text-sm text-primary-600 hover:bg-primary-50 rounded-lg transition-colors text-center">
                   + 添加分类
                 </button>
+              </div>
+
+              <!-- 拖拽调整宽度的手柄 -->
+              <div
+                class="hidden md:block absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize z-10 group hover:bg-primary-200/60 active:bg-primary-300/60 transition-colors"
+                @mousedown="startCategoryResize"
+              >
+                <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-0.5 h-8 bg-gray-300 rounded-full opacity-0 group-hover:opacity-100 group-hover:bg-primary-400 transition-opacity"></div>
               </div>
             </div>
 
@@ -481,6 +492,42 @@ const categories = ref<CategoryResponse[]>([])
 const categoryTree = ref<CategoryTreeNode[]>([])
 const selectedSourceType = ref<string | null>(null)
 const selectedSubCategory = ref<string | null>(null)
+
+// ========== 分类树宽度拖拽 ==========
+const CATEGORY_PANEL_MIN_WIDTH = 180
+const CATEGORY_PANEL_MAX_WIDTH = 400
+// 默认宽度与原 w-52（208px）一致
+const categoryPanelWidth = ref(208)
+
+const categoryPanelStyle = computed(() => ({
+  width: `${categoryPanelWidth.value}px`,
+  minWidth: `${CATEGORY_PANEL_MIN_WIDTH}px`,
+}))
+
+function startCategoryResize(e: MouseEvent) {
+  e.preventDefault()
+  const startX = e.clientX
+  const startWidth = categoryPanelWidth.value
+
+  function onMouseMove(ev: MouseEvent) {
+    // 分类树在左侧，向右拖 = 变宽，向左拖 = 变窄
+    const delta = ev.clientX - startX
+    const maxWidth = Math.min(CATEGORY_PANEL_MAX_WIDTH, window.innerWidth * 0.4)
+    categoryPanelWidth.value = Math.min(Math.max(startWidth + delta, CATEGORY_PANEL_MIN_WIDTH), maxWidth)
+  }
+
+  function onMouseUp() {
+    document.removeEventListener('mousemove', onMouseMove)
+    document.removeEventListener('mouseup', onMouseUp)
+    document.body.style.cursor = ''
+    document.body.style.userSelect = ''
+  }
+
+  document.body.style.cursor = 'col-resize'
+  document.body.style.userSelect = 'none'
+  document.addEventListener('mousemove', onMouseMove)
+  document.addEventListener('mouseup', onMouseUp)
+}
 
 // 添加分类（英文代号由后端自动生成，无需用户填写）
 const showAddCategoryModal = ref(false)

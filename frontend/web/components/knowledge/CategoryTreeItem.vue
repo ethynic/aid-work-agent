@@ -6,7 +6,7 @@
       :style="{ paddingLeft: ((depth ?? 0) * 14 + 8) + 'px' }"
       @click="handleSelect"
     >
-      <div class="flex items-center min-w-0 flex-1">
+      <div class="flex items-center flex-1">
         <button
           v-if="hasChildren"
           class="flex-shrink-0 mr-1 text-muted hover:text-default rounded p-0.5"
@@ -18,7 +18,7 @@
           </svg>
         </button>
         <span v-else class="w-4 flex-shrink-0 mr-1" />
-        <span class="truncate" :title="category.display_name || category.source_type">{{ category.display_name || category.source_type }}</span>
+        <span class="whitespace-nowrap" :title="category.display_name || category.source_type">{{ category.display_name || category.source_type }}&nbsp;&nbsp;</span>
       </div>
       <div class="flex items-center gap-1 flex-shrink-0">
         <span class="text-xs text-muted">{{ category.document_count }}</span>
