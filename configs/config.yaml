@@ -95,7 +95,7 @@ video_gen:
     task_max_age_hours: 24                  # 万相 task_id 查询有效期
   minimax:
     api_key: ${MINIMAX_API_KEY:-}           # 必须独立配置（不与 Qwen 共用）
-    model: ${MINIMAX_MODEL_CODE:-MiniMax-H3}
+    model: ${MINIMAX_VIDEO_MODEL_CODE:-MiniMax-H3}
     base_url: ${MINIMAX_BASE_URL:-https://api.minimaxi.com}
     poll_interval_seconds: 30
     task_max_age_hours: 168                 # MiniMax 7 天查询窗口

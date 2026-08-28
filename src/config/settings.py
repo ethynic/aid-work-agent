@@ -584,8 +584,8 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
     vg_minimax = vg_cfg.setdefault("minimax", {})
     if os.getenv("MINIMAX_API_KEY"):
         vg_minimax["api_key"] = os.getenv("MINIMAX_API_KEY")
-    if os.getenv("MINIMAX_MODEL_CODE"):
-        vg_minimax["model"] = os.getenv("MINIMAX_MODEL_CODE")
+    if os.getenv("MINIMAX_VIDEO_MODEL_CODE"):
+        vg_minimax["model"] = os.getenv("MINIMAX_VIDEO_MODEL_CODE")
     if os.getenv("MINIMAX_BASE_URL"):
         vg_minimax["base_url"] = os.getenv("MINIMAX_BASE_URL")
 
