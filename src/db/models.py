@@ -2281,13 +2281,16 @@ class TokenCostPriceDB:
         Returns:
             {"model_name", "input_price_per_m", "cached_input_price_per_m",
              "output_price_per_m", "price_per_second", "price_per_second_by_resolution",
-             "embedding_price_per_m", "asr_price_per_call", "tiered_pricing"} 或 None
+             "embedding_price_per_m", "asr_price_per_call", "tiered_pricing",
+             "is_multimodal"} 或 None
             cached_input_price_per_m 为 NULL 表示该模型计费不区分缓存命中
             price_per_second 为 NULL 表示该模型不按秒计费（文本模型）
             price_per_second_by_resolution 为 NULL 表示视频模型不按分辨率区分，用 price_per_second
             embedding_price_per_m 为 NULL 表示该模型非 embedding 模型（无向量单价）
             asr_price_per_call 为 NULL 表示该模型非 ASR 模型（无语音识别单价）
             tiered_pricing 为 NULL 表示该模型不分段计价（走 input/output/cached 统一单价）
+            is_multimodal 为 TRUE 表示模型原生支持图片输入（收到用户上传图片可直接进
+            content 数组原生理解）；FALSE 表示纯文本模型（图片需先 OCR 识别文字）
         """
         if not model_name:
             return None
@@ -2298,7 +2301,8 @@ class TokenCostPriceDB:
                 f"""
                 SELECT model_name, input_price_per_m, cached_input_price_per_m,
                        output_price_per_m, price_per_second, price_per_second_by_resolution,
-                       embedding_price_per_m, asr_price_per_call, tiered_pricing
+                       embedding_price_per_m, asr_price_per_call, tiered_pricing,
+                       is_multimodal
                 FROM token_cost_prices
                 WHERE model_name = {placeholder}
                 """,
@@ -2306,6 +2310,30 @@ class TokenCostPriceDB:
             )
             row = cursor.fetchone()
             return dict(row) if row else None
+
+    @staticmethod
+    def list_multimodal_models() -> List[Dict[str, Any]]:
+        """查询所有原生多模态模型（is_multimodal=TRUE）
+
+        供图片路由使用：模型在返回清单内时，用户上传图片可直接进 content
+        数组原生理解；不在清单内（或查不到）的纯文本模型维持先 OCR。
+
+        Returns:
+            [{"model_name", "input_price_per_m", "output_price_per_m",
+              "cached_input_price_per_m", "is_multimodal"}, ...]，按 model_name 排序
+        """
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT model_name, input_price_per_m, cached_input_price_per_m,
+                       output_price_per_m, is_multimodal
+                FROM token_cost_prices
+                WHERE is_multimodal = TRUE
+                ORDER BY model_name
+                """
+            )
+            return [dict(row) for row in cursor.fetchall()]
 
 
 # ============== 租户充值流水 ==============

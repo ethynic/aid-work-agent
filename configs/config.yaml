@@ -50,7 +50,7 @@ llm:
     queue_timeout: 30
   zhipu:
     api_keys: ${ZHIPU_API_KEYS:-}
-    model: ${ZHIPU_MODEL_CODE:-glm-4}
+    model: ${ZHIPU_MODEL_CODE:-GLM-5.3-Flash}
     base_url: ${ZHIPU_BASE_URL:-https://open.bigmodel.cn/api/paas/v4}
     max_concurrent_per_key: 2
     queue_timeout: 30

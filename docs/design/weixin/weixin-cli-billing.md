@@ -32,8 +32,11 @@ base64 截图）做 UI 元素定位。现状两个问题：
 
 - 价目表：PostgreSQL `token_cost_prices`（全平台统一价，无 tenant_id），列含
   `input_price_per_m / output_price_per_m / cached_input_price_per_m / tiered_pricing(JSONB 分档)
-  / price_per_second / embedding_price_per_m / asr_price_per_call`；种子在 `deploy/init-postgres.sql`。
-  **当前无任何 kimi/moonshot 行**，单价缺失时 `calculate_credit_cost` 返回 0（记 warning，不阻断）。
+  / price_per_second / embedding_price_per_m / asr_price_per_call / is_multimodal`；
+  种子在 `deploy/init-postgres.sql`。**`is_multimodal`（2026-08-28 新增）**：TRUE 表示模型原生
+  支持图片输入（目前为 kimi-k3、GLM-5.3-Flash、qwen-vl-max、qwen-vl-plus、qwen3-vl-flash），供后续图片路由——多模态模型收到用户上传
+  图片可直接进 content 数组原生理解，纯文本模型维持先 OCR 识别文字。
+  单价缺失时 `calculate_credit_cost` 返回 0（记 warning，不阻断）。
 - failover 计价：计费模型优先取响应自带 `model` 字段（qwen `parse_response` 带），deepseek
   回退主 provider 名（commit `1566caf5` 修复 failover 切备用 provider 记错单价的问题）。
 - `src/llm/llm_call_logger.py` 只是调用日志，不做扣费。

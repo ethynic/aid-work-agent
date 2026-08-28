@@ -28,7 +28,7 @@ class ZhipuProvider(BaseLLMProvider):
     def __init__(
         self,
         api_key: str,
-        model: str = "glm-4",
+        model: str = "GLM-5.3-Flash",
         base_url: Optional[str] = None,
         **kwargs
     ):

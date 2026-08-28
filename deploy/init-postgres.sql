@@ -251,6 +251,7 @@ CREATE TABLE IF NOT EXISTS token_cost_prices (
     embedding_price_per_m NUMERIC(10,4), -- 向量模型单价（元/百万 token），用于 text-embedding-v3 等
     asr_price_per_call NUMERIC(10,4), -- 语音识别单价（元/次），用于阿里云 NLS 一句话识别
     tiered_pricing JSONB, -- 分段计价模型单价（按单次请求输入 token 数分档），[{"max_input": 32768, "input_per_m": 0.2, "cached_input_per_m": 0.04, "output_per_m": 0.8}, ...]
+    is_multimodal BOOLEAN NOT NULL DEFAULT FALSE, -- 是否原生多模态（支持图片输入）；TRUE 的模型收到用户上传图片可直接进 content 数组原生理解，FALSE 维持先 OCR
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -273,18 +274,30 @@ ON CONFLICT (model_name) DO UPDATE SET
   output_price_per_m = EXCLUDED.output_price_per_m,
   cached_input_price_per_m = EXCLUDED.cached_input_price_per_m;
 
--- 视觉模型单价
+-- 视觉模型单价（qwen3.7-plus 为文本模型，见 src/api/video_gen.py 标注；3 个 vl 模型 is_multimodal=TRUE）
 INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m)
 VALUES ('qwen3.7-plus', 2.0, 8.0, 0.4)
 ON CONFLICT (model_name) DO NOTHING;
-INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m)
-VALUES ('qwen-vl-max', 1.6, 4.0, 0.32)
+INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m, is_multimodal)
+VALUES ('qwen-vl-max', 1.6, 4.0, 0.32, TRUE)
 ON CONFLICT (model_name) DO NOTHING;
-INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m)
-VALUES ('qwen-vl-plus', 0.8, 2.0, 0.16)
+INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m, is_multimodal)
+VALUES ('qwen-vl-plus', 0.8, 2.0, 0.16, TRUE)
 ON CONFLICT (model_name) DO NOTHING;
-INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m)
-VALUES ('qwen3-vl-flash',0.6, 6, 0.012)    -- 按顶格 128K<Token≤256K 计算
+INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m, is_multimodal)
+VALUES ('qwen3-vl-flash',0.6, 6, 0.012, TRUE)    -- 按顶格 128K<Token≤256K 计算
+ON CONFLICT (model_name) DO NOTHING;
+
+-- GLM-5.3-Flash（zhipu 默认模型，2026-08-28 起；GLM-5 系列首个原生多模态模型，is_multimodal=TRUE）
+-- 智谱官方定价：输入 0.8 元/M、输出 2.8 元/M；缓存命中价官方公布 0.23 元/M，暂按输入价 0.8 填待确认
+INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m, is_multimodal)
+VALUES ('GLM-5.3-Flash', 0.8, 2.8, 0.8, TRUE)
+ON CONFLICT (model_name) DO NOTHING;
+
+-- kimi-k3（Moonshot 视觉推理模型，weixin-cli 客户端代理端点白名单路由用，is_multimodal=TRUE）
+-- 单价 2026-08-27 用户确认口径：输入 20 元/M、输出 100 元/M；缓存价未公布，按输入价计
+INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m, is_multimodal)
+VALUES ('kimi-k3', 20.0, 100.0, 20.0, TRUE)
 ON CONFLICT (model_name) DO NOTHING;
 
 -- 视频模型按秒计费单价

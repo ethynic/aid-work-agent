@@ -499,6 +499,7 @@ prompt_drafts（草稿，每 Prompt 最多一条，未发布的修改）
 - `model_name` — 模型名称
 - `input_price_per_m` — 输入 Token 单价（每百万 Token 价格，元）
 - `output_price_per_m` — 输出 Token 单价（每百万 Token 价格，元）
+- `is_multimodal` — 是否原生多模态（支持图片输入），2026-08-28 新增；TRUE 的模型（当前 kimi-k3、GLM-5.3-Flash、qwen-vl-max、qwen-vl-plus、qwen3-vl-flash）收到用户上传图片可直接进 content 数组原生理解，FALSE 维持先 OCR
 
 ### 11.2 `remote_credentials` — 远程连接凭据表
 

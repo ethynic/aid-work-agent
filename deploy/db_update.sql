@@ -649,3 +649,28 @@ ON CONFLICT (model_name) DO UPDATE SET
   input_price_per_m = EXCLUDED.input_price_per_m,
   output_price_per_m = EXCLUDED.output_price_per_m,
   cached_input_price_per_m = EXCLUDED.cached_input_price_per_m;
+
+-- ============================================================================
+-- 2026-08-28 token_cost_prices 增加 is_multimodal 多模态标识列 + GLM-5.3-Flash 价目行
+-- is_multimodal=TRUE 表示模型原生支持图片输入（视觉理解）：后续用户上传图片时，
+-- 多模态模型可将图片直接进 content 数组原生理解，纯文本模型维持先 OCR 识别文字。
+-- zhipu 默认模型本次从 glm-4 切换为 GLM-5.3-Flash（GLM-5 系列首个原生多模态模型）。
+-- GLM-5.3-Flash 单价（智谱官方 2026-08-26 公布）：输入 0.8 元/M tokens、输出 2.8 元/M tokens；
+-- 缓存命中价用户口径未给，暂按输入价 0.8 填（官方公布缓存命中 0.23 元/M，待确认后再调）。
+-- ============================================================================
+ALTER TABLE token_cost_prices ADD COLUMN IF NOT EXISTS is_multimodal BOOLEAN NOT NULL DEFAULT FALSE;
+
+INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m, is_multimodal)
+VALUES ('GLM-5.3-Flash', 0.8, 2.8, 0.8, TRUE)
+ON CONFLICT (model_name) DO UPDATE SET
+  input_price_per_m = EXCLUDED.input_price_per_m,
+  output_price_per_m = EXCLUDED.output_price_per_m,
+  cached_input_price_per_m = EXCLUDED.cached_input_price_per_m,
+  is_multimodal = EXCLUDED.is_multimodal;
+
+-- 已有多模态模型补标：
+-- kimi-k3（Moonshot 视觉推理模型，weixin-cli 视觉定位用）；
+-- qwen-vl-max / qwen-vl-plus / qwen3-vl-flash（百炼视觉模型，video_agent 提示词生成已原生传图，
+-- 见 src/api/video_gen.py 模型清单「视觉模型」标注）
+UPDATE token_cost_prices SET is_multimodal = TRUE
+WHERE model_name IN ('kimi-k3', 'qwen-vl-max', 'qwen-vl-plus', 'qwen3-vl-flash');
