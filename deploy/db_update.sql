@@ -638,3 +638,14 @@ CREATE TABLE IF NOT EXISTS tenant_knowledge_shares (
     UNIQUE (from_tenant_id, to_tenant_id)
 );
 CREATE INDEX IF NOT EXISTS idx_knowledge_shares_to ON tenant_knowledge_shares(to_tenant_id);
+-- ============================================================================
+-- 2026-08-27 kimi-k3（Moonshot 视觉推理模型，weixin-cli 客户端代理端点白名单路由用）
+-- 单价：输入 20 元/M tokens、输出 100 元/M tokens（2026-08-27 用户提供口径）；
+-- 缓存输入价官方未公布，暂按输入价计（weixin-cli 视觉定位不建显式缓存，缓存命中价基本用不到）。
+-- ============================================================================
+INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m)
+VALUES ('kimi-k3', 20.0, 100.0, 20.0)
+ON CONFLICT (model_name) DO UPDATE SET
+  input_price_per_m = EXCLUDED.input_price_per_m,
+  output_price_per_m = EXCLUDED.output_price_per_m,
+  cached_input_price_per_m = EXCLUDED.cached_input_price_per_m;

@@ -121,6 +121,9 @@ class LLMConfig(BaseModel):
     qwen: LLMProviderConfig = Field(default_factory=LLMProviderConfig)
     zhipu: LLMProviderConfig = Field(default_factory=LLMProviderConfig)
     deepseek: LLMProviderConfig = Field(default_factory=LLMProviderConfig)
+    # Moonshot（Kimi）：首期仅供客户端代理端点按 model 白名单显式路由（如 kimi-k3 视觉定位），
+    # 不参与 LLM_PROVIDER 主链路默认值，见 docs/design/weixin/weixin-cli-billing.md
+    moonshot: LLMProviderConfig = Field(default_factory=LLMProviderConfig)
     failover: FailoverConfig = Field(default_factory=FailoverConfig)
     # 各模型 max_tokens 上限映射表（gateway 未显式指定时按模型取默认值，空字典时用全局默认 16384）
     model_max_tokens: Dict[str, int] = Field(default_factory=dict)
@@ -521,6 +524,15 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
         zhipu_cfg["report_model"] = os.getenv("ZHIPU_REPORT_MODEL_CODE")
     if os.getenv("ZHIPU_BASE_URL"):
         zhipu_cfg["base_url"] = os.getenv("ZHIPU_BASE_URL")
+
+    # Moonshot（Kimi）：客户端代理端点 model 白名单路由用（weixin-cli 视觉定位）
+    moonshot_cfg = yaml_config.setdefault("llm", {}).setdefault("moonshot", {})
+    if os.getenv("MOONSHOT_API_KEYS"):
+        moonshot_cfg["api_keys"] = os.getenv("MOONSHOT_API_KEYS")
+    if os.getenv("MOONSHOT_MODEL_CODE"):
+        moonshot_cfg["model"] = os.getenv("MOONSHOT_MODEL_CODE")
+    if os.getenv("MOONSHOT_BASE_URL"):
+        moonshot_cfg["base_url"] = os.getenv("MOONSHOT_BASE_URL")
 
     # 视频生成（多 provider：wanx / minimax）：保留 llm.wanx 兼容旧 yaml，但实际值迁移到 video_gen.wanx
     # 兼容桥接：先把 llm.wanx 复制到 video_gen.wanx（若 video_gen.wanx 未配置），再让 env 覆盖

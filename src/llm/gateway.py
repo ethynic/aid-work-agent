@@ -15,6 +15,7 @@ from src.config.settings import settings
 from .key_pool import KeyPool
 from .providers.base import BaseLLMProvider
 from .providers.deepseek import DeepSeekProvider
+from .providers.moonshot import MoonshotProvider
 from .providers.qwen import QwenProvider
 from .providers.zhipu import ZhipuProvider
 
@@ -31,6 +32,8 @@ def _build_key_pool(provider_name: str) -> KeyPool:
         cfg = settings.llm.zhipu
     elif provider_name == "deepseek":
         cfg = settings.llm.deepseek
+    elif provider_name == "moonshot":
+        cfg = settings.llm.moonshot
     else:
         raise ValueError(f"不支持的LLM提供者: {provider_name}")
 
@@ -74,6 +77,12 @@ def _build_provider(provider_name: str, api_key: str, model: Optional[str] = Non
             model=model or settings.llm.deepseek.model,
             base_url=settings.llm.deepseek.base_url,
         )
+    elif provider_name == "moonshot":
+        return MoonshotProvider(
+            api_key=api_key,
+            model=model or settings.llm.moonshot.model,
+            base_url=settings.llm.moonshot.base_url,
+        )
     raise ValueError(f"不支持的LLM提供者: {provider_name}")
 
 
@@ -94,9 +103,11 @@ class LLMGateway:
         "qwen": QwenProvider,
         "zhipu": ZhipuProvider,
         "deepseek": DeepSeekProvider,
+        "moonshot": MoonshotProvider,
     }
 
-    def __init__(self, provider_name: Optional[str] = None, model_codes: Optional[Dict[str, str]] = None):
+    def __init__(self, provider_name: Optional[str] = None, model_codes: Optional[Dict[str, str]] = None,
+                 use_failover: bool = True):
         """
         初始化LLM网关
 
@@ -104,6 +115,9 @@ class LLMGateway:
             provider_name: 指定提供者名称，默认使用配置中的提供者
             model_codes: 各 provider 的 model_code 覆盖，如 {'deepseek': 'deepseek-v4-pro', 'qwen': 'qwen3.7-plus'}。
                         未列出的 provider 使用全局默认 model。仅当指定 provider_name 时生效。
+            use_failover: 是否启用全局 failover 链。模型绑定型调用（如客户端代理指定 kimi-k3
+                        视觉模型）必须传 False——跨 provider 降级到文本模型既无法完成视觉
+                        任务，又会按错误模型计价。
         """
         self.provider_name = provider_name or settings.llm.provider
         if self.provider_name not in self.PROVIDERS:
@@ -113,7 +127,8 @@ class LLMGateway:
         self._model_codes: Dict[str, str] = model_codes or {}
 
         self._failover_enabled = (
-            hasattr(settings.llm, 'failover')
+            use_failover
+            and hasattr(settings.llm, 'failover')
             and settings.llm.failover.enabled
         )
 
@@ -454,6 +469,8 @@ class LLMGateway:
             return settings.llm.zhipu.model
         elif self.provider_name == "deepseek":
             return settings.llm.deepseek.model
+        elif self.provider_name == "moonshot":
+            return settings.llm.moonshot.model
         return "unknown"
 
     def key_pool_stats(self) -> List[dict]:

@@ -194,12 +194,14 @@ aid-weixin lab list|run ...        # 仅开发包/人工实验，不注册 MCP
 | 类别 | code | 语义 |
 |---|---|---|
 | 输入 | `INVALID_ARGUMENT` | schema、范围或组合非法 |
+| 配置 | `CONFIG_MISSING` | 环境变量/激活凭据缺失或失效（服务端代理模式） |
 | 环境 | `WINDOWS_REQUIRED` / `INTERACTIVE_SESSION_REQUIRED` | 平台或桌面会话不满足 |
 | 微信 | `WEIXIN_NOT_FOUND` / `NOT_LOGGED_IN` / `WINDOW_AMBIGUOUS` | 客户端或账号状态不满足 |
 | 安全 | `FOREGROUND_LOST` / `WINDOW_UNTRUSTED` | 不能确认输入目标，立即停止 |
 | 页面 | `UI_CHANGED` / `RESULT_TIMEOUT` / `CONTENT_UNAVAILABLE` | UI 或内容无法验证 |
 | 目标 | `TARGET_NOT_FOUND` / `TARGET_AMBIGUOUS` / `TARGET_REF_STALE` | 不能唯一确定好友、群或公众号 |
 | 风控 | `BLOCKED` / `RISK_CONTROL` | 验证码、风险提示或人工确认 |
+| 计费 | `INSUFFICIENT_CREDIT` | 服务端代理计费 402 余额不足（见 [计费关联设计](weixin-cli-billing.md)） |
 | 生命周期 | `BUSY` / `CANCELLED` / `SESSION_CLEANUP_FAILED` | 单飞、取消或窗口收口失败 |
 | 写动作 | `EXECUTION_UNKNOWN` | 动作可能已发出但写后校验失败 |
 | 兜底 | `INTERNAL_ERROR` | 未分类实现错误 |

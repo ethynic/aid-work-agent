@@ -37,6 +37,12 @@ class QwenProvider(BaseLLMProvider):
 
     # 默认 OpenAI 兼容端点，可通过 base_url 覆盖
     DEFAULT_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    # 日志/错误信息中的 provider 标识（子类如 MoonshotProvider 覆写）
+    PROVIDER_NAME = "qwen"
+    DISPLAY_NAME = "通义千问"
+    # content 为空时是否回退 reasoning_content：仅推理模型子类（如 MoonshotProvider）
+    # 开启；默认 False 保持 qwen 存量行为（思考内容不混入 content）不变
+    REASONING_CONTENT_FALLBACK = False
 
     def __init__(
         self,
@@ -108,6 +114,9 @@ class QwenProvider(BaseLLMProvider):
         # 合并额外参数
         request_body.update(kwargs)
 
+        # 子类钩子：按 provider/模型特性最终调整请求体（如 moonshot 对 kimi 推理模型省略 temperature）
+        self._adjust_request_body(request_body)
+
         invoke_id = generate_request_id()
         start_time = time.perf_counter()
         parsed = None
@@ -128,7 +137,7 @@ class QwenProvider(BaseLLMProvider):
             duration_ms = (time.perf_counter() - start_time) * 1000
             log_llm_invoke(
                 request_id=result.get("id", invoke_id),
-                provider="qwen",
+                provider=self.PROVIDER_NAME,
                 model=self.model,
                 request_params=request_body,
                 response_data=result,
@@ -142,7 +151,7 @@ class QwenProvider(BaseLLMProvider):
             duration_ms = (time.perf_counter() - start_time) * 1000
             log_llm_invoke(
                 request_id=invoke_id,
-                provider="qwen",
+                provider=self.PROVIDER_NAME,
                 model=self.model,
                 request_params=request_body,
                 error=f"HTTP {e.response.status_code}: {e.response.text[:2000]}",
@@ -151,28 +160,36 @@ class QwenProvider(BaseLLMProvider):
             # 注意：用 loguru 占位符而非 f-string 嵌入 {e}，否则响应体中的 {"error":...}
             # 会被 loguru 内部 message.format() 当占位符解析，抛 KeyError 遮蔽原始异常
             logger.error(
-                "通义千问API请求失败: {etype} | status={status} | body={body}",
+                "{name}API请求失败: {etype} | status={status} | body={body}",
+                name=self.DISPLAY_NAME,
                 etype=type(e).__name__,
                 status=e.response.status_code,
                 body=e.response.text[:1000],
             )
-            raise RuntimeError(f"通义千问API请求失败: {e.response.text}")
+            raise RuntimeError(f"{self.DISPLAY_NAME}API请求失败: {e.response.text}")
         except Exception as e:
             duration_ms = (time.perf_counter() - start_time) * 1000
             log_llm_invoke(
                 request_id=invoke_id,
-                provider="qwen",
+                provider=self.PROVIDER_NAME,
                 model=self.model,
                 request_params=request_body,
                 error=str(e),
                 duration_ms=round(duration_ms, 2),
             )
             logger.error(
-                "通义千问调用异常: {etype}: {err}",
+                "{name}调用异常: {etype}: {err}",
+                name=self.DISPLAY_NAME,
                 etype=type(e).__name__,
                 err=e,
             )
             raise
+
+    def _adjust_request_body(self, request_body: Dict[str, Any]) -> None:
+        """请求体最终调整钩子（默认无操作，子类按 provider/模型特性覆盖）。
+
+        在 request_body.update(kwargs) 之后调用，provider 级约束优先于调用方参数。
+        """
 
     async def stream_chat(
         self,
@@ -220,6 +237,9 @@ class QwenProvider(BaseLLMProvider):
 
         request_body.update(kwargs)
 
+        # 子类钩子（同 chat，见 _adjust_request_body）
+        self._adjust_request_body(request_body)
+
         invoke_id = generate_request_id()
         start_time = time.perf_counter()
         full_content = ""
@@ -252,7 +272,7 @@ class QwenProvider(BaseLLMProvider):
             duration_ms = (time.perf_counter() - start_time) * 1000
             log_llm_invoke(
                 request_id=invoke_id,
-                provider="qwen",
+                provider=self.PROVIDER_NAME,
                 model=self.model,
                 request_params=request_body,
                 response_data={"content": full_content, "stream": True},
@@ -263,7 +283,7 @@ class QwenProvider(BaseLLMProvider):
             duration_ms = (time.perf_counter() - start_time) * 1000
             log_llm_invoke(
                 request_id=invoke_id,
-                provider="qwen",
+                provider=self.PROVIDER_NAME,
                 model=self.model,
                 request_params=request_body,
                 error=f"HTTP {e.response.status_code}: {e.response.text[:2000]}",
@@ -271,24 +291,26 @@ class QwenProvider(BaseLLMProvider):
             )
             # 用 loguru 占位符而非 f-string 嵌入 {e}，避免响应体含 {"error":...} 触发 KeyError
             logger.error(
-                "通义千问流式API请求失败: {etype} | status={status} | body={body}",
+                "{name}流式API请求失败: {etype} | status={status} | body={body}",
+                name=self.DISPLAY_NAME,
                 etype=type(e).__name__,
                 status=e.response.status_code,
                 body=e.response.text[:1000],
             )
-            raise RuntimeError(f"通义千问流式API请求失败: {e.response.text}")
+            raise RuntimeError(f"{self.DISPLAY_NAME}流式API请求失败: {e.response.text}")
         except Exception as e:
             duration_ms = (time.perf_counter() - start_time) * 1000
             log_llm_invoke(
                 request_id=invoke_id,
-                provider="qwen",
+                provider=self.PROVIDER_NAME,
                 model=self.model,
                 request_params=request_body,
                 error=str(e),
                 duration_ms=round(duration_ms, 2),
             )
             logger.error(
-                "通义千问流式调用异常: {etype}: {err}",
+                "{name}流式调用异常: {etype}: {err}",
+                name=self.DISPLAY_NAME,
                 etype=type(e).__name__,
                 err=e,
             )
@@ -328,6 +350,11 @@ class QwenProvider(BaseLLMProvider):
             content = ""
             tool_calls = []
             finish_reason = "stop"
+
+        # 推理模型（kimi-k3 等）答案在 content，为空则回退 reasoning_content
+        # （仅 REASONING_CONTENT_FALLBACK 开启的子类生效，qwen 存量行为不变）
+        if not content and self.REASONING_CONTENT_FALLBACK:
+            content = (choices[0].get("message", {}) if choices else {}).get("reasoning_content", "") or ""
 
         result = {
             "content": content,

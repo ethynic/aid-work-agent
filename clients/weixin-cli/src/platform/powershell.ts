@@ -13,6 +13,7 @@
  */
 import { spawn } from 'node:child_process'
 import { CancelledError, CodedOperationError, type ErrorCode } from '../operations/types.js'
+import { resolveDriverProxyEnv } from './serverProxy.js'
 
 export const DRIVER_JSON_PREFIX = 'DRIVER_JSON:'
 export const DEFAULT_DRIVER_TIMEOUT_MS = 300_000
@@ -36,6 +37,7 @@ export type RunPowerShellDriverFn = (opts: PowerShellScriptOptions) => Promise<R
 
 /** 驱动允许透传的错误码（白名单；其余一律归并 INTERNAL_ERROR，防止驱动自造不稳定 code） */
 const DRIVER_ERROR_CODES: ReadonlySet<string> = new Set<ErrorCode>([
+  'CONFIG_MISSING',
   'WEIXIN_NOT_FOUND',
   'NOT_LOGGED_IN',
   'WINDOW_AMBIGUOUS',
@@ -47,6 +49,7 @@ const DRIVER_ERROR_CODES: ReadonlySet<string> = new Set<ErrorCode>([
   'TARGET_AMBIGUOUS',
   'BUSY',
   'EXECUTION_UNKNOWN',
+  'INSUFFICIENT_CREDIT',
   'INTERNAL_ERROR',
 ])
 
@@ -62,7 +65,19 @@ export async function runPowerShellScript(opts: PowerShellScriptOptions): Promis
       reject(new CancelledError())
       return
     }
-    const child = spawn('powershell.exe', args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
+    // 服务端代理凭据（server_url/token）经环境变量传给驱动，不进命令行参数
+    void (async () => {
+      try {
+        return await resolveDriverProxyEnv()
+      } catch {
+        return {} // 代理凭据解析失败不阻断驱动启动；驱动侧按 CONFIG_MISSING fail closed
+      }
+    })().then((proxyEnv) => {
+    const child = spawn('powershell.exe', args, {
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, ...proxyEnv },
+    })
     let stdout = ''
     let stderr = ''
     let settled = false
@@ -104,6 +119,7 @@ export async function runPowerShellScript(opts: PowerShellScriptOptions): Promis
         return
       }
       resolve({ stdout, stderr, exitCode: code })
+    })
     })
   })
 }

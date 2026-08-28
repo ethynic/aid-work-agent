@@ -64,6 +64,14 @@ llm:
     base_url: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
     max_concurrent_per_key: 2
     queue_timeout: 30
+  # Moonshot（Kimi）：仅供客户端代理端点按 model 白名单显式路由（weixin-cli kimi-k3 视觉定位，
+  # 见 docs/design/weixin/weixin-cli-billing.md），不参与主链路 provider/failover 默认值
+  moonshot:
+    api_keys: ${MOONSHOT_API_KEYS:-}
+    model: ${MOONSHOT_MODEL_CODE:-kimi-k3}
+    base_url: ${MOONSHOT_BASE_URL:-https://api.moonshot.cn/v1}
+    max_concurrent_per_key: 2
+    queue_timeout: 30
   failover:
     enabled: ${LLM_FAILOVER_ENABLED:-true}   # 是否启用 failover（通过 .env 的 LLM_FAILOVER_ENABLED 控制，生产环境建议 true）
     providers:                    # failover 优先级链（不含主 provider）

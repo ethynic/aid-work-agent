@@ -5,7 +5,7 @@
 路由前缀：/api/client/v1
 - POST /activate      激活码激活（无需鉴权）
 - GET  /credits       积分余额查询
-- POST /llm/chat      LLM 代理（计费 ×10）
+- POST /llm/chat      LLM 代理（计费 ×10；可选 model 白名单路由，如 kimi-k3 视觉模型）
 - POST /ocr/parse     OCR 代理（不扣费，记录调用）
 - POST /logs          日志上报
 """
@@ -15,7 +15,7 @@ from __future__ import annotations
 import os
 import tempfile
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, File, Header, HTTPException, UploadFile
 from loguru import logger
@@ -27,9 +27,47 @@ from src.db.client_binding_db import (
     ClientBindingDB,
     ClientUsageLogDB,
 )
-from src.llm.gateway import llm_gateway
+from src.llm.gateway import LLMGateway, llm_gateway
 
 router = APIRouter(prefix="/api/client/v1", tags=["协会客户端"])
+
+
+# 客户端可指定模型的白名单：model -> provider（首期仅 kimi-k3 视觉模型，走 moonshot 网关，
+# 供 weixin-cli 视觉定位使用，见 docs/design/weixin/weixin-cli-billing.md §4.1）。
+# 未传 model 的请求仍走全局默认 llm_gateway，行为与改动前完全一致。
+CLIENT_MODEL_PROVIDER_MAP: Dict[str, str] = {
+    "kimi-k3": "moonshot",
+}
+
+# 按 model 缓存专用网关实例（KeyPool 级并发控制需跨请求复用）
+_model_gateways: Dict[str, LLMGateway] = {}
+
+
+def _get_model_gateway(model: str) -> LLMGateway:
+    """按白名单返回指定模型的专用网关实例（懒构建 + 缓存）。
+
+    fail closed 双重校验：
+    1. model 必须在 CLIENT_MODEL_PROVIDER_MAP 白名单内；
+    2. model 必须在 token_cost_prices 有非零定价行——单价缺失时
+       calculate_credit_cost 返回 0 等于免单，必须拒绝。
+    """
+    provider = CLIENT_MODEL_PROVIDER_MAP.get(model)
+    if not provider:
+        raise HTTPException(status_code=400, detail=f"MODEL_NOT_ALLOWED: 模型 {model} 不在客户端可用白名单")
+
+    from src.db.models import TokenCostPriceDB
+
+    price = TokenCostPriceDB.get_by_model_name(model)
+    if not price or not (float(price.get("input_price_per_m") or 0) > 0 and float(price.get("output_price_per_m") or 0) > 0):
+        raise HTTPException(status_code=400, detail=f"MODEL_NOT_PRICED: 模型 {model} 未配置计费单价，暂不可用")
+
+    if model not in _model_gateways:
+        # use_failover=False：prompt 与模型绑定（视觉定位），跨 provider 降级到文本模型
+        # 既无法完成任务又会按错误模型计价
+        _model_gateways[model] = LLMGateway(
+            provider_name=provider, model_codes={provider: model}, use_failover=False,
+        )
+    return _model_gateways[model]
 
 
 # ============== 请求/响应模型 ==============
@@ -47,6 +85,9 @@ class LlmChatRequest(BaseModel):
     response_format: Optional[dict[str, Any]] = None
     purpose: str = "unknown"
     association: Optional[str] = None
+    # 可选模型指定：仅放行 CLIENT_MODEL_PROVIDER_MAP 白名单（如 kimi-k3 视觉模型），
+    # 未传时走全局默认 llm_gateway
+    model: Optional[str] = None
 
 
 class LogEntry(BaseModel):
@@ -201,11 +242,16 @@ async def llm_chat(
     req: LlmChatRequest,
     binding: ClientBinding = Depends(_require_binding),
 ):
-    """LLM 代理：调用 llm_gateway 并计费（×10 系数扣减租户余额）。"""
+    """LLM 代理：调用 llm_gateway 并计费（×10 系数扣减租户余额）。
+
+    req.model 传入时走白名单专用网关（如 kimi-k3 → moonshot），未传走全局默认网关。
+    """
     _check_credit(binding)
 
+    gateway = _get_model_gateway(req.model) if req.model else llm_gateway
+
     try:
-        response = await llm_gateway.chat(
+        response = await gateway.chat(
             messages=req.messages,
             temperature=req.temperature,
             max_tokens=req.max_tokens,
@@ -219,8 +265,8 @@ async def llm_chat(
     # failover 切到备用 provider 时，计费必须按实际响应的模型计价：qwen 的
     # parse_response 带 "model" 字段，优先取；deepseek 不带则回退主 provider 名
     # （计费金额按 model 查价目表，记错模型 = 记错单价）
-    model = response.get("model") or llm_gateway.get_model_name()
-    provider = response.get("provider") or llm_gateway.get_provider_name()
+    model = response.get("model") or gateway.get_model_name()
+    provider = response.get("provider") or gateway.get_provider_name()
 
     # 计费 ×10 同事务扣减
     billing = ClientUsageLogDB.record_llm_usage(

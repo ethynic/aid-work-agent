@@ -15,10 +15,14 @@
 $script:DriverPs1Dir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $script:DriverPs1Dir '..\..\experiments\probes\p1-chat-search-group\probe-lib.ps1')
 
-# Kimi (Moonshot) vision config：环境变量优先，缺省沿用 probe 脚本里的 key（仓库历史已有，保持现状）
-$script:KimiApiKey = if ($env:AID_WEIXIN_KIMI_API_KEY) { $env:AID_WEIXIN_KIMI_API_KEY } else { 'sk-Eqn3ctEHy5mJWCwmEl9IGxERm9TZiHcq6LKII6xbkglxVsTc' }
+# Kimi (Moonshot) vision config：两种调用路径，见 docs/design/weixin/weixin-cli-billing.md。
+# 1) 代理模式（默认）：TS 层注入 AID_WEIXIN_SERVER_URL + AID_WEIXIN_ACCESS_TOKEN，
+#    走服务端 /api/client/v1/llm/chat 集中计费（×10 系数扣租户积分），本机不持有 Kimi key；
+# 2) 降级模式（仅开发调试，不计费不入账）：显式设置 AID_WEIXIN_KIMI_API_KEY 时本机直调 Moonshot。
+# 两者都未配置时 Invoke-KimiVision 以 CONFIG_MISSING 失败并指导用户设置环境变量。
+$script:KimiApiKey = [string]$env:AID_WEIXIN_KIMI_API_KEY
 $script:KimiApiBase = 'https://api.moonshot.cn/v1/chat/completions'
-$script:KimiModel = 'kimi-k3'   # 推理模型：答案在 content，为空则读 reasoning_content；temperature 必须为 1/省略
+$script:KimiModel = 'kimi-k3'   # 推理模型：答案在 content，为空则读 reasoning_content；temperature 必须为 1/省略（服务端 provider 统一省略）
 
 function Write-DriverJson([object]$Payload) {
     # -InputObject 传参：避免管道对单元素数组的解包怪癖
@@ -60,9 +64,28 @@ function Invoke-KimiVision {
         [Parameter(Mandatory)][string]$UserText,
         [string]$ArtifactPrefix = 'weixin-driver-vision'
     )
+    # TS 层激活/绑定了服务端但拿不到 token 时，通过 AID_WEIXIN_PROXY_ERROR 传入原因
+    if (-not [string]::IsNullOrWhiteSpace($env:AID_WEIXIN_PROXY_ERROR)) {
+        Throw-DriverError 'CONFIG_MISSING' ('服务端代理凭据不可用：' + $env:AID_WEIXIN_PROXY_ERROR)
+    }
+    $useDirect = -not [string]::IsNullOrWhiteSpace($script:KimiApiKey)
+    $serverUrl = ([string]$env:AID_WEIXIN_SERVER_URL).TrimEnd('/')
+    $useProxy = (-not $useDirect) -and (-not [string]::IsNullOrWhiteSpace($serverUrl))
+    if ($useDirect) {
+        $apiUrl = $script:KimiApiBase
+        $authToken = $script:KimiApiKey
+    } elseif ($useProxy) {
+        $authToken = [string]$env:AID_WEIXIN_ACCESS_TOKEN
+        if ([string]::IsNullOrWhiteSpace($authToken)) {
+            Throw-DriverError 'CONFIG_MISSING' '已配置 AID_WEIXIN_SERVER_URL 但缺少 AID_WEIXIN_ACCESS_TOKEN（应由 CLI 自动注入；直接运行 ps1 时请改用 AID_WEIXIN_KIMI_API_KEY 降级模式）'
+        }
+        $apiUrl = $serverUrl + '/api/client/v1/llm/chat'
+    } else {
+        Throw-DriverError 'CONFIG_MISSING' '未配置 Kimi 调用凭据：生产用法请设置 AID_WEIXIN_SERVER_URL + AID_WEIXIN_ACTIVATION_CODE（走服务端代理计费）；开发调试可设 AID_WEIXIN_KIMI_API_KEY="sk-..." 本机直调（不计费）'
+    }
     $b64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($ImagePath))
     $dataUrl = 'data:image/png;base64,' + $b64
-    $payload = @{
+    $payloadObj = @{
         model = $script:KimiModel
         messages = @(
             @{ role = 'system'; content = $SystemPrompt },
@@ -72,13 +95,15 @@ function Invoke-KimiVision {
             )}
         )
         max_tokens = 4096
-    } | ConvertTo-Json -Depth 8
+    }
+    if ($useProxy) { $payloadObj.purpose = 'weixin-vision-' + $ArtifactPrefix }
+    $payload = $payloadObj | ConvertTo-Json -Depth 8
     $utf8NoBom = New-Object Text.UTF8Encoding($false)
     $reqPath = Join-Path $env:TEMP ($ArtifactPrefix + '-req.json')
     [IO.File]::WriteAllText($reqPath, $payload, $utf8NoBom)
     $respPath = Join-Path $env:TEMP ($ArtifactPrefix + '-resp.json')
-    $curlArgs = @('-s', '-X', 'POST', $script:KimiApiBase,
-        '-H', "Authorization: Bearer $script:KimiApiKey",
+    $curlArgs = @('-s', '-X', 'POST', $apiUrl,
+        '-H', "Authorization: Bearer $authToken",
         '-H', 'Content-Type: application/json',
         '--data-binary', "@$reqPath",
         '-o', $respPath, '-w', '%{http_code}', '--max-time', '180')
@@ -88,6 +113,9 @@ function Invoke-KimiVision {
         if ($LASTEXITCODE -ne 0) { Throw-DriverError 'INTERNAL_ERROR' ("Kimi 视觉请求失败 exit=$LASTEXITCODE http=$http") }
         if ($http -eq '200') { break }
         $errBody = if (Test-Path $respPath) { Get-Content $respPath -Raw -Encoding UTF8 } else { '<no body>' }
+        # 服务端代理计费的业务性拒绝：402 余额不足 / 401 凭据失效，重试无意义
+        if ($http -eq '402') { Throw-DriverError 'INSUFFICIENT_CREDIT' '积分余额不足，请充值后重试（Kimi 视觉走服务端代理计费）' }
+        if ($http -eq '401') { Throw-DriverError 'CONFIG_MISSING' '服务端 access_token 无效或已吊销：请删除 %APPDATA%\aid-weixin\binding.json 并重新设置 AID_WEIXIN_ACTIVATION_CODE 激活' }
         if ($http -eq '429' -and $attempt -lt 4) {
             Write-Host ("[vision] HTTP 429 (attempt {0}/4), retrying in 25s..." -f $attempt)
             Start-Sleep -Seconds 25
@@ -96,8 +124,13 @@ function Invoke-KimiVision {
         Throw-DriverError 'INTERNAL_ERROR' ("Kimi 视觉 HTTP $http body=" + $errBody.Substring(0, [Math]::Min(300, $errBody.Length)))
     }
     $resp = (Get-Content $respPath -Raw -Encoding UTF8) | ConvertFrom-Json
-    $content = [string]$resp.choices[0].message.content
-    if ([string]::IsNullOrWhiteSpace($content)) { $content = [string]$resp.choices[0].message.reasoning_content }
+    if ($useProxy) {
+        # 代理端点已剥离 choices 包装，直接返回 content（服务端 provider 已做 reasoning_content 兜底）
+        $content = [string]$resp.content
+    } else {
+        $content = [string]$resp.choices[0].message.content
+        if ([string]::IsNullOrWhiteSpace($content)) { $content = [string]$resp.choices[0].message.reasoning_content }
+    }
     $stripped = $content -replace '(?s)^```(?:json)?\s*', '' -replace '(?s)\s*```$', ''
     $m = [regex]::Match($stripped, '(?s)\{[\s\S]*\}')
     if (-not $m.Success) { Throw-DriverError 'INTERNAL_ERROR' ("Kimi 视觉响应无 JSON：" + $content.Substring(0, [Math]::Min(200, $content.Length))) }

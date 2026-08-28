@@ -56,6 +56,18 @@ test('EXECUTION_UNKNOWN 在白名单内（写动作 unknown 语义透传）', ()
   )
 })
 
+test('INSUFFICIENT_CREDIT / CONFIG_MISSING 在白名单内（服务端代理 402/凭据缺失透传）', () => {
+  const e1 = assertCoded(
+    () => parseDriverOutcome(r('DRIVER_JSON: {"ok":false,"code":"INSUFFICIENT_CREDIT","message":"积分余额不足"}')),
+    'INSUFFICIENT_CREDIT',
+  )
+  assert.equal(e1.message, '积分余额不足')
+  assertCoded(
+    () => parseDriverOutcome(r('DRIVER_JSON: {"ok":false,"code":"CONFIG_MISSING","message":"未配置激活码"}')),
+    'CONFIG_MISSING',
+  )
+})
+
 test('非零退出且无 DRIVER_JSON → INTERNAL_ERROR（带 stderr 摘要）', () => {
   const e = assertCoded(() => parseDriverOutcome(r('some progress logs', 1, 'boom happened')), 'INTERNAL_ERROR')
   assert.ok(e.message.includes('boom happened'))

@@ -259,6 +259,7 @@ class FailoverGateway:
             "qwen": self._settings.llm.qwen,
             "zhipu": self._settings.llm.zhipu,
             "deepseek": self._settings.llm.deepseek,
+            "moonshot": self._settings.llm.moonshot,
         }
         return mapping.get(name)
 

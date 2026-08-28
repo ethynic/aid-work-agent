@@ -14,6 +14,8 @@ export type Effect = 'none' | 'applied' | 'partial' | 'unknown'
 export type ErrorCode =
   // 输入
   | 'INVALID_ARGUMENT'
+  // 配置（环境变量/激活凭据缺失或失效）
+  | 'CONFIG_MISSING'
   // 环境
   | 'WINDOWS_REQUIRED'
   | 'INTERACTIVE_SESSION_REQUIRED'
@@ -35,6 +37,8 @@ export type ErrorCode =
   // 风控
   | 'BLOCKED'
   | 'RISK_CONTROL'
+  // 计费（服务端代理模式：402 余额不足，见 docs/design/weixin/weixin-cli-billing.md）
+  | 'INSUFFICIENT_CREDIT'
   // 生命周期
   | 'BUSY'
   | 'CANCELLED'

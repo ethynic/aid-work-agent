@@ -122,6 +122,151 @@ class TestRecordLlmUsageBilling:
         assert result["balance_after"] == 90.0
 
 
+# ============== 客户端 model 白名单路由（kimi-k3 → moonshot） ==============
+
+class TestClientModelWhitelist:
+    """LlmChatRequest.model 白名单 + 定价 fail closed 校验。"""
+
+    def test_model_not_in_whitelist_rejected(self):
+        """白名单外模型（如 gpt-4o）→ 400 MODEL_NOT_ALLOWED"""
+        from fastapi import HTTPException
+
+        from src.api.client_routes import _get_model_gateway
+
+        with pytest.raises(HTTPException) as exc:
+            _get_model_gateway("gpt-4o")
+        assert exc.value.status_code == 400
+        assert "MODEL_NOT_ALLOWED" in exc.value.detail
+
+    @patch("src.db.models.TokenCostPriceDB.get_by_model_name")
+    def test_model_without_price_rejected(self, mock_price):
+        """kimi-k3 无定价行 → 400 MODEL_NOT_PRICED（无单价 = 免单，fail closed）"""
+        from fastapi import HTTPException
+
+        from src.api.client_routes import _get_model_gateway
+
+        mock_price.return_value = None
+        with pytest.raises(HTTPException) as exc:
+            _get_model_gateway("kimi-k3")
+        assert exc.value.status_code == 400
+        assert "MODEL_NOT_PRICED" in exc.value.detail
+
+        # 单价为 0 同样拒绝
+        mock_price.return_value = {"model_name": "kimi-k3", "input_price_per_m": 0, "output_price_per_m": 0}
+        with pytest.raises(HTTPException) as exc:
+            _get_model_gateway("kimi-k3")
+        assert exc.value.status_code == 400
+
+    @patch("src.api.client_routes.LLMGateway")
+    @patch("src.db.models.TokenCostPriceDB.get_by_model_name")
+    def test_kimi_k3_routes_to_moonshot_gateway(self, mock_price, mock_gw_cls):
+        """kimi-k3 有定价行 → 构建 moonshot 专用网关（model_codes 覆盖为 kimi-k3）"""
+        from src.api import client_routes
+
+        mock_price.return_value = {
+            "model_name": "kimi-k3", "input_price_per_m": 21.0, "output_price_per_m": 105.0,
+        }
+        client_routes._model_gateways.pop("kimi-k3", None)
+        try:
+            client_routes._get_model_gateway("kimi-k3")
+            mock_gw_cls.assert_called_once_with(
+                provider_name="moonshot", model_codes={"moonshot": "kimi-k3"}, use_failover=False,
+            )
+            # 第二次调用复用缓存实例，不重复构建
+            client_routes._get_model_gateway("kimi-k3")
+            assert mock_gw_cls.call_count == 1
+        finally:
+            client_routes._model_gateways.pop("kimi-k3", None)
+
+
+class TestClientLlmChatMoonshotBilling:
+    """kimi-k3 代理调用的计费链路：record_llm_usage 按响应 model=kimi-k3 计价 ×10。"""
+
+    @patch("src.db.client_binding_db.get_db_connection")
+    @patch("src.db.client_binding_db.calculate_credit_cost")
+    @patch("src.api.client_routes._get_model_gateway")
+    def test_kimi_k3_chat_billed_with_response_model(self, mock_get_gw, mock_calc, mock_conn):
+        """扣费 = calculate_credit_cost(kimi-k3 usage) × 10，ceil 2 位；model/provider 记 kimi-k3/moonshot"""
+        import asyncio
+        from types import SimpleNamespace
+
+        from src.api.client_routes import LlmChatRequest, llm_chat
+
+        # 模拟 moonshot 网关：返回 kimi-k3 的 usage
+        gateway = SimpleNamespace()
+        gateway.get_model_name = lambda: "kimi-k3"
+        gateway.get_provider_name = lambda: "moonshot"
+
+        async def fake_chat(**kwargs):
+            return {
+                "content": '{"x": 100, "y": 200, "found": true}',
+                "usage": {"prompt_tokens": 1500, "completion_tokens": 50, "total_tokens": 1550},
+            }
+
+        gateway.chat = fake_chat
+        mock_get_gw.return_value = gateway
+
+        # 计费：raw=2.15 → credit = ceil(2.15×10×100)/100 = 21.5
+        mock_calc.return_value = 2.15
+        cursor = MagicMock()
+        cursor.fetchone.return_value = {"credit_balance": 978.5}
+        mock_conn.return_value.__enter__.return_value.cursor.return_value = cursor
+
+        binding = SimpleNamespace(
+            binding_id="cb_wx", tenant_id="tenant_wx",
+            tenant={"credit_balance": 1000.0},
+        )
+        req = LlmChatRequest(
+            messages=[{"role": "user", "content": [{"type": "text", "text": "locate"}]}],
+            max_tokens=4096,
+            purpose="weixin-vision-test",
+            model="kimi-k3",
+        )
+        result = asyncio.run(llm_chat(req, binding))
+
+        # 计费函数按 kimi-k3 调用（model 来自网关 get_model_name）
+        assert mock_calc.call_args.kwargs["model"] == "kimi-k3"
+        assert result["model"] == "kimi-k3"
+        assert result["provider"] == "moonshot"
+        assert result["billing"]["raw_credit_cost"] == 2.15
+        assert result["billing"]["credit_cost"] == 21.5
+        assert result["billing"]["balance_after"] == 978.5
+
+    @patch("src.api.client_routes._get_model_gateway")
+    def test_no_model_uses_default_gateway(self, mock_get_gw):
+        """未传 model 时不走白名单路由（_get_model_gateway 不被调用）"""
+        import asyncio
+        from types import SimpleNamespace
+
+        from src.api import client_routes
+        from src.api.client_routes import LlmChatRequest
+
+        gateway = SimpleNamespace()
+        gateway.get_model_name = lambda: "deepseek-v4-flash"
+        gateway.get_provider_name = lambda: "deepseek"
+
+        async def fake_chat(**kwargs):
+            return {"content": "ok", "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
+
+        gateway.chat = fake_chat
+
+        binding = SimpleNamespace(
+            binding_id="cb_1", tenant_id="t1", tenant={"credit_balance": 100.0},
+        )
+        req = LlmChatRequest(messages=[{"role": "user", "content": "hi"}])
+
+        with patch.object(client_routes, "llm_gateway", gateway), \
+             patch("src.db.client_binding_db.get_db_connection") as mock_conn, \
+             patch("src.db.client_binding_db.calculate_credit_cost", return_value=0.01):
+            cursor = MagicMock()
+            cursor.fetchone.return_value = {"credit_balance": 99.9}
+            mock_conn.return_value.__enter__.return_value.cursor.return_value = cursor
+            result = asyncio.run(client_routes.llm_chat(req, binding))
+
+        mock_get_gw.assert_not_called()
+        assert result["model"] == "deepseek-v4-flash"
+
+
 # ============== 激活码生成与校验 ==============
 
 class TestActivationCodeGeneration:
