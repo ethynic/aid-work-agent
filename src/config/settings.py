@@ -6,7 +6,7 @@
 
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import yaml
 from pydantic import BaseModel, Field, validator
@@ -15,14 +15,14 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+# 受支持的 LLM provider 名称（与 gateway.PROVIDERS / config.yaml llm.* 保持一致）
+_LLM_PROVIDERS = ("qwen", "zhipu", "deepseek")
+
+
 class LLMProviderConfig(BaseModel):
     """LLM提供者配置"""
     api_keys: List[str] = Field(default_factory=list)  # 多 Key 池
     model: str = ""
-    # 日报/周报/月报生成专用小模型（独立于主链路 model，降低成本）
-    # 未配置（None / 空字符串）时，调用方应 fallback 到 model
-    # 详见 docs/research/ai-agent-experience-daily-report-research.md §4.7.6
-    report_model: Optional[str] = None
     base_url: Optional[str] = None
     # Key 池并发控制
     max_concurrent_per_key: int = 2   # 每个 Key 最大并发数
@@ -44,10 +44,6 @@ class LLMProviderConfig(BaseModel):
     def get_effective_keys(self) -> List[str]:
         """获取有效的 Key 列表（已去重、去空）"""
         return self.api_keys
-
-    def get_report_model(self) -> str:
-        """获取报告专用模型，未配置时 fallback 到主模型 model"""
-        return self.report_model or self.model
 
 
 class CircuitBreakerConfig(BaseModel):
@@ -125,6 +121,13 @@ class LLMConfig(BaseModel):
     # 不参与 LLM_PROVIDER 主链路默认值，见 docs/design/weixin/weixin-cli-billing.md
     moonshot: LLMProviderConfig = Field(default_factory=LLMProviderConfig)
     failover: FailoverConfig = Field(default_factory=FailoverConfig)
+    # 轻量小模型（低成本简单任务：报告/复盘/评分/空态摘要），独立于主链路 model。
+    # 支持两种写法：
+    #   - "provider/model"（如 "qwen/qwen3.7-flash"）：跨 provider 调用，用该 provider 的 key/base_url
+    #   - 纯模型名（如 "deepseek-v4-flash"）：用当前主 provider
+    # 未配置（None / 空字符串）时 fallback 到当前主 provider 的 model。
+    # 详见 docs/research/ai-agent-experience-daily-report-research.md §4.7.6
+    lite_model: Optional[str] = None
     # 各模型 max_tokens 上限映射表（gateway 未显式指定时按模型取默认值，空字典时用全局默认 16384）
     model_max_tokens: Dict[str, int] = Field(default_factory=dict)
     # qwen 推理模型是否关闭思考模式；None=不写参数（默认关闭思考，1-2s 响应），见 config.yaml llm.enable_thinking
@@ -132,6 +135,40 @@ class LLMConfig(BaseModel):
     # 是否启用显式缓存（cache_control: ephemeral），命中按输入单价 10% 计费，见 config.yaml llm.context_cache
     context_cache: bool = True
     # 注：wanx 已迁移到 settings.video_gen.wanx，请改用 settings.video_gen.wanx.*
+
+    def get_lite_target(self) -> Tuple[str, str]:
+        """解析 lite_model 配置，返回 (provider_name, model_name)
+
+        优先级：
+        1. "provider/model"（如 "qwen/qwen3.7-flash"）-> 跨 provider，校验 provider 合法
+        2. 纯模型名 -> (当前 provider, 模型名)
+        3. 未配置 / 非法 -> (当前 provider, 当前 provider 的 model)
+        """
+        raw = (self.lite_model or "").strip()
+        if raw:
+            if "/" in raw:
+                provider, model = raw.split("/", 1)
+                provider = provider.strip()
+                model = model.strip()
+                if provider in _LLM_PROVIDERS and model:
+                    return provider, model
+                # 非法 provider/model 组合：警告并降级
+                from loguru import logger
+                logger.warning(
+                    f"lite_model 配置非法，降级用当前主 provider: "
+                    f"{raw!r}（provider 须为 {_LLM_PROVIDERS}，model 非空）"
+                )
+            else:
+                # 纯模型名：用当前主 provider
+                return self.provider, raw
+        # 未配置：fallback 到当前主 provider 的 model
+        provider_cfg = getattr(self, self.provider, None)
+        main_model = provider_cfg.model if provider_cfg else ""
+        return self.provider, main_model
+
+    def get_lite_model(self) -> str:
+        """返回 lite_model 的纯模型名（未配置时 fallback 到主模型）"""
+        return self.get_lite_target()[1]
 
 
 class StorageConfig(BaseModel):
@@ -488,6 +525,10 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
     if os.getenv("LLM_PROVIDER"):
         yaml_config.setdefault("llm", {})["provider"] = os.getenv("LLM_PROVIDER")
 
+    # 轻量小模型（lite_model），支持 "provider/model" 跨 provider 写法，见 LLMConfig.get_lite_target
+    if os.getenv("LITE_MODEL_CODE"):
+        yaml_config.setdefault("llm", {})["lite_model"] = os.getenv("LITE_MODEL_CODE")
+
     # 各 provider 独立环境变量覆盖（主 provider、failover 备用 provider 或子智能体指定）
     # DeepSeek
     ds_cfg = yaml_config.setdefault("llm", {}).setdefault("deepseek", {})
@@ -497,9 +538,6 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
         ds_cfg["model"] = os.getenv("DEEPSEEK_MODEL_CODE")
     if os.getenv("DEEPSEEK_BASE_URL"):
         ds_cfg["base_url"] = os.getenv("DEEPSEEK_BASE_URL")
-    # 日报/周报/月报专用小模型（独立配置项，不影响主链路 DEEPSEEK_MODEL_CODE）
-    if os.getenv("DEEPSEEK_REPORT_MODEL_CODE"):
-        ds_cfg["report_model"] = os.getenv("DEEPSEEK_REPORT_MODEL_CODE")
 
     # Qwen
     qwen_cfg = yaml_config.setdefault("llm", {}).setdefault("qwen", {})
@@ -507,9 +545,6 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
         qwen_cfg["api_keys"] = os.getenv("QWEN_API_KEYS")
     if os.getenv("QWEN_MODEL_CODE"):
         qwen_cfg["model"] = os.getenv("QWEN_MODEL_CODE")
-    # 日报/周报/月报专用小模型（独立配置项，不影响主链路 QWEN_MODEL_CODE）
-    if os.getenv("QWEN_REPORT_MODEL_CODE"):
-        qwen_cfg["report_model"] = os.getenv("QWEN_REPORT_MODEL_CODE")
     if os.getenv("QWEN_BASE_URL"):
         qwen_cfg["base_url"] = os.getenv("QWEN_BASE_URL")
 
@@ -519,9 +554,6 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
         zhipu_cfg["api_keys"] = os.getenv("ZHIPU_API_KEYS")
     if os.getenv("ZHIPU_MODEL_CODE"):
         zhipu_cfg["model"] = os.getenv("ZHIPU_MODEL_CODE")
-    # 日报/周报/月报专用小模型（独立配置项，不影响主链路 ZHIPU_MODEL_CODE）
-    if os.getenv("ZHIPU_REPORT_MODEL_CODE"):
-        zhipu_cfg["report_model"] = os.getenv("ZHIPU_REPORT_MODEL_CODE")
     if os.getenv("ZHIPU_BASE_URL"):
         zhipu_cfg["base_url"] = os.getenv("ZHIPU_BASE_URL")
 

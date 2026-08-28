@@ -6,7 +6,7 @@
       :style="{ paddingLeft: ((depth ?? 0) * 14 + 8) + 'px' }"
       @click="handleSelect"
     >
-      <div class="flex items-center min-w-0 flex-1">
+      <div class="flex items-center flex-1">
         <button
           v-if="hasChildren"
           class="flex-shrink-0 mr-1 text-muted hover:text-default rounded p-0.5"
@@ -18,11 +18,11 @@
           </svg>
         </button>
         <span v-else class="w-4 flex-shrink-0 mr-1" />
-        <span class="truncate" :title="category.display_name || category.source_type">{{ category.display_name || category.source_type }}</span>
+        <span class="whitespace-nowrap" :title="category.display_name || category.source_type">{{ category.display_name || category.source_type }}&nbsp;&nbsp;</span>
       </div>
       <div class="flex items-center gap-1 flex-shrink-0">
         <span class="text-xs text-muted">{{ category.document_count }}</span>
-        <span class="hidden group-hover:flex items-center gap-0.5">
+        <span v-if="showActions" class="hidden group-hover:flex items-center gap-0.5">
           <button @click.stop="$emit('rename', category)" class="p-0.5 rounded hover:bg-primary-100 text-muted hover:text-primary-600">
             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
           </button>
@@ -41,6 +41,8 @@
         :depth="(depth ?? 0) + 1"
         :selected-source-type="selectedSourceType"
         :selected-sub-category="selectedSubCategory"
+        :show-actions="showActions"
+        :default-expanded="defaultExpanded"
         @select="handleChildSelect"
         @rename="$emit('rename', $event)"
         @delete="$emit('delete', $event)"
@@ -58,12 +60,17 @@ interface CategoryTreeNode extends CategoryResponse {
   rootSourceType?: string
 }
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   category: CategoryTreeNode
   depth?: number
   selectedSourceType: string | null
   selectedSubCategory: string | null
-}>()
+  showActions?: boolean
+  defaultExpanded?: boolean
+}>(), {
+  showActions: true,
+  defaultExpanded: false
+})
 
 const emit = defineEmits<{
   (e: 'select', category: CategoryTreeNode): void
@@ -71,8 +78,8 @@ const emit = defineEmits<{
   (e: 'delete', category: CategoryTreeNode): void
 }>()
 
-// 顶级分类默认展开，子分类默认折叠
-const expanded = ref((props.depth ?? 0) === 0)
+// 默认顶级分类展开、子分类折叠；defaultExpanded=true 时（如移动弹框）全部展开
+const expanded = ref(props.defaultExpanded ? true : (props.depth ?? 0) === 0)
 
 const hasChildren = computed(() => (props.category.children?.length || 0) > 0)
 

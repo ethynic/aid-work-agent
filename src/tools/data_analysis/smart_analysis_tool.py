@@ -48,11 +48,21 @@ class SmartDataAnalysisTool(BaseTool):
         from src.tools.data_analysis.data_analyzer import DataAnalyzer
         analyzer = DataAnalyzer(session_id=session_id)
 
-        # 2. 解析 tenant_id
+        # 2. 解析 tenant_id / subagent_id（subagent_id 用于共享知识库检索范围）
         tenant_id = None
+        subagent_id = None
         try:
             from src.saas.context import get_current_tenant_id
             tenant_id = get_current_tenant_id()
+        except Exception:
+            pass
+        try:
+            from src.tools.context import current_tool_execution_context
+            context = current_tool_execution_context()
+            if context:
+                subagent_id = context.subagent_id
+                if not tenant_id:
+                    tenant_id = context.tenant_id
         except Exception:
             pass
 
@@ -80,6 +90,7 @@ class SmartDataAnalysisTool(BaseTool):
                 analysis_id=analysis_id,
                 tables_metadata=tables_metadata,
                 tenant_id=tenant_id,
+                subagent_id=subagent_id,
             )
             result = await agent.run(requirement)
         except Exception as e:

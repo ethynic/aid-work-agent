@@ -69,12 +69,12 @@
 **核心思路**：
 
 - **层1 解决"文件型成果实时记录"问题**：所有智能体输出文件都会调用 `cp` 工具注册下载，在 `cp` 内部同步写一条 `work_outcomes` 记录。无 LLM 调用，延时 <5ms，对主响应无感知。文件型成果是公司最关心的产出，必须 100% 覆盖且实时。
-- **层2 解决"非文件型成果覆盖"问题**：业务操作型（修改订单、调整客户信息）和决策建议型没有文件，无法靠 `cp` 捕获。每天半夜 02:30 跑一次定时任务，扫描当天有对话但**未产生文件型成果**的会话，用 `DEEPSEEK_REPORT_MODEL_CODE` 小模型分析会话内容，判断是否产生了 action/decision 类成果并提取摘要。准确度不高也可接受--因为主要的文件型成果已经实时记录了。
+- **层2 解决"非文件型成果覆盖"问题**：业务操作型（修改订单、调整客户信息）和决策建议型没有文件，无法靠 `cp` 捕获。每天半夜 02:30 跑一次定时任务，扫描当天有对话但**未产生文件型成果**的会话，用 `LITE_MODEL_CODE` 小模型分析会话内容，判断是否产生了 action/decision 类成果并提取摘要。准确度不高也可接受--因为主要的文件型成果已经实时记录了。
 
 **为什么用小模型而非主模型**：
 - 复盘任务在半夜跑，不占用高峰期算力。
 - 非文件型成果是"锦上添花"，准确度要求低于文件型。
-- 与工作日报使用相同的 `DEEPSEEK_REPORT_MODEL_CODE` 配置，无需新增依赖。
+- 与工作日报使用相同的 `LITE_MODEL_CODE` 配置，无需新增依赖。
 - 小模型成本低，可以扫所有未登记会话。
 
 ### 2.4 source 字段区分来源
@@ -100,7 +100,7 @@
     │
     └─ 复盘层（层2）：每日 02:30 定时任务
         ├─ 扫描当日有对话但无文件型成果的会话
-        ├─ 用 DEEPSEEK_REPORT_MODEL_CODE 小模型分析会话内容
+        ├─ 用 LITE_MODEL_CODE 小模型分析会话内容
         └─ 提取 action/decision/other 成果写入 work_outcomes 表（source=scheduled_review）
 
 查询层（API + 前端）
@@ -402,7 +402,7 @@ def _has_file_outcome(session_id: str) -> bool:
 
 ### 6.5 小模型调用提示词
 
-通过 LLM Gateway 调用 `DEEPSEEK_REPORT_MODEL_CODE`（参考 `src/reports/generator.py` 中工作日报的调用方式）。
+通过 LLM Gateway 的 `chat_lite` 调用轻量小模型（`LITE_MODEL_CODE`，参考 `src/reports/generator.py` 中工作日报的调用方式）。
 
 ```python
 async def _review_session_with_llm(session: SessionInfo, target_date: date) -> List[Dict]:
@@ -416,17 +416,14 @@ async def _review_session_with_llm(session: SessionInfo, target_date: date) -> L
     system_prompt = REVIEW_SYSTEM_PROMPT
     user_prompt = _format_session_for_review(messages, session)
 
-    # 3. 调用 DEEPSEEK 小模型（非流式，JSON 输出）
-    from src.llm.gateway import LLMGateway
-    gateway = LLMGateway()
-    response = await gateway.chat(
+    # 3. 调用 lite 小模型（非流式，JSON 输出；chat_lite 按 LITE_MODEL_CODE 路由 provider/模型）
+    from src.llm.gateway import llm_gateway
+    response = await llm_gateway.chat_lite(
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
-        model_code=settings.llm.report_model_code,  # DEEPSEEK_REPORT_MODEL_CODE
         temperature=0.1,  # 低温度保证稳定
-        response_format="json",
     )
 
     # 4. 解析 JSON，过滤低置信度结果
@@ -742,7 +739,7 @@ async def list_work_outcomes(
 | `chat_records` 表 | **关联**：`work_outcomes.chat_record_id` 关联对话上下文 |
 | `channel_sessions` 表 | **关联**：`work_outcomes.session_id` 同时支持 web 和第三方渠道会话 |
 | 工作日报定时任务 | **错峰**：日报 02:00、成果 02:30、去重清理 03:00，互不冲突 |
-| `DEEPSEEK_REPORT_MODEL_CODE` 配置 | **复用**：与工作日报同款小模型配置，无需新增 |
+| `LITE_MODEL_CODE` 配置 | **复用**：与工作日报同款小模型配置，无需新增 |
 | 组织知识沉淀（调研中） | **演进**：工作成果可成为组织知识库的来源之一 |
 
 ### 10.3 不做的事

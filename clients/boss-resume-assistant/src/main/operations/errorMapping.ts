@@ -12,6 +12,8 @@ import { ChatRejectError } from '../boss/ChatRejectExecutor.js'
 import { InterviewDemoError } from '../boss/InterviewDemoExecutor.js'
 import { ChatSendError } from '../boss/ChatSendExecutor.js'
 import { ChatSearchError } from '../boss/ChatSearchExecutor.js'
+import { ChatReadError } from '../boss/ChatReadExecutor.js'
+import { ChatOpenError } from '../boss/ChatOpenExecutor.js'
 import { JobSwitchError } from '../boss/JobSwitcher.js'
 import { ResumeReadError } from '../boss/ResumeReader.js'
 import { ResumeBatchError } from '../boss/ResumeBatchReader.js'
@@ -46,6 +48,21 @@ const NOT_LOGGED_IN_MARKERS = ['请确认已登录', 'no BOSS page target found'
 
 /** 参数类 FilterSetError 标记（规格 §3） */
 const FILTER_ARG_MARKERS = ['行为单选', '未提供任何筛选条件']
+
+/**
+ * ChatReadError 前置类标记（§10.9）：未打开会话 / 会话存在但未切换 / 联系人不存在。
+ * 属「页面状态与预期不符」而非页面改版——按 WRONG_PAGE 处理（可重试：用户打开/切换会话后再读即可）
+ */
+const CHAT_READ_PRECONDITION_MARKERS = ['未打开会话', '存在但未打开', '不存在']
+
+/**
+ * ChatOpenError 前置类标记（2026-08-27）：「会话列表中不存在」属联系人/页面状态问题——
+ * WRONG_PAGE 可重试（用户确认姓名/创建会话后重试）；其余（同名多命中/滚动失败/头部未切换）
+ * 是切换未生效或结构异常 → UI_CHANGED（不可自动重试，人工查看）。
+ * 注意 ChatOpenError 的判定块必须在 POST_WRITE_VERIFY_MARKERS 之前（其文案会内嵌搜索失败
+ * 原因，可能含写后校验标记词，但本 operation 是 readonly，不应误判 EXECUTION_UNKNOWN）。
+ */
+const CHAT_OPEN_PRECONDITION_MARKERS = ['会话列表中不存在']
 
 function causeCode(err: unknown): string | undefined {
   const cause = (err as { cause?: { code?: unknown } } | null)?.cause
@@ -83,6 +100,20 @@ export function mapExecutorError(err: unknown): MappedError {
   if (err instanceof FilterSetError && FILTER_ARG_MARKERS.some((m) => message.includes(m))) {
     return { code: 'INVALID_ARGUMENT', message }
   }
+  if (err instanceof ChatReadError && CHAT_READ_PRECONDITION_MARKERS.some((m) => message.includes(m))) {
+    return { code: 'WRONG_PAGE', message }
+  }
+  if (err instanceof ChatOpenError) {
+    // 前置类（会话列表中不存在）→ WRONG_PAGE 可重试（确认姓名/创建会话后重试）；
+    // 其余（同名多命中/滚动失败/头部未切换）→ UI_CHANGED（不可自动重试，人工查看）。
+    // 本块必须在 POST_WRITE_VERIFY_MARKERS 之前：ChatOpenError 的兜底文案会内嵌搜索路径失败
+    // 原因（可能含「未关闭」等写后校验标记词），但 open-chat 是 readonly 无外部写效应，
+    // 不能被误判为 EXECUTION_UNKNOWN
+    if (CHAT_OPEN_PRECONDITION_MARKERS.some((m) => message.includes(m))) {
+      return { code: 'WRONG_PAGE', message }
+    }
+    return { code: 'UI_CHANGED', message }
+  }
   if (POST_WRITE_VERIFY_MARKERS.some((m) => message.includes(m))) {
     return {
       code: 'EXECUTION_UNKNOWN',
@@ -101,6 +132,7 @@ export function mapExecutorError(err: unknown): MappedError {
     err instanceof InterviewDemoError ||
     err instanceof ChatSendError ||
     err instanceof ChatSearchError ||
+    err instanceof ChatReadError ||
     err instanceof JobSwitchError ||
     err instanceof ResumeReadError ||
     err instanceof ResumeBatchError ||

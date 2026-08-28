@@ -199,7 +199,10 @@ async def _llm_pick_navigation(
         # 烧穿导致 content 为空（真机：60 目标列表时 300/800 都打满、空输出），
         # 逐层导航静默退化到词表兜底。按实际生成量计费，上限只是保险丝。
         response = await gateway.chat(
-            messages=messages, temperature=0, max_tokens=4000
+            messages=messages,
+            temperature=0,
+            max_tokens=4000,
+            enable_thinking=False,  # 导航选航小任务关思考（真机 95s→1.2s，防烧穿 max_tokens）
         )
         content = response.get("content") if isinstance(response, dict) else None
         if not isinstance(content, str):

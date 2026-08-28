@@ -5,10 +5,10 @@
  * 输入姓名后结果按「联系人/职位/...」分类，点「联系人」下第一张结果卡片进入对话。
  *
  * 真机校准（2026-08-13，窗口 1249x1277）：
- * - 搜索图标：SEARCH_ICON_POINT。GetCursorPos 校准值——CSS 背景图标在 DOMSnapshot 里抓不到节点，
- *   无法几何定位，只能用真机标定的固定坐标（窗口尺寸/布局变化时需重新校准）。
- * - 搜索框：点入口后弹出的 INPUT（点击前后 diff 新增定位，无绝对坐标依赖）。
- * - 搜索结果项：输入姓名后等异步渲染（SEARCH_RESULT_DELAY=2500ms），结果项有 layout bounds，
+ * - 搜索图标：批量锚点动态定位（locateSearchEntry，2026-08-24 重写，分辨率/DPI 自适应）。
+ * - 搜索框（2026-08-27 诊断后范式变更，见 findSearchField 注释）：点入口后左栏顶部收缩条
+ *   **原位变形**为原生 <input>——不 diff 新增节点，直接按 tag=INPUT + 形态识别。
+ * - 搜索结果项：输入姓名后等异步渲染（SEARCH_RESULT_DELAY=4000ms），结果项有 layout bounds，
  *   直接按目标姓名在视口内（cx<850）唯一定位点击。真机修正（2026-08-13）：曾因 sleep 太早（1100ms）
  *   误判"结果卡片人名 DOMSnapshot 抓不到"，实为延时不够；且不再点固定第一项（目标未必在第一项，会点错人）。
  * - 进入对话校验：发送按钮出现（locateSendButton 命中 1 个）。
@@ -19,6 +19,8 @@
  * 通道（2026-08-26 决策）：点击/输入类第一优先 Win32 真实事件（防爬）。点图标/结果卡片走
  * deps.click；搜索框聚焦+姓名输入走 deps.clickAndType（原子：点击聚焦后紧接真实键盘逐字）。
  * 2026-08-24 曾因误判「Win32 DPI 换算偏差」全改 CDP——实为用户移动窗口致输入框不可见，已回退。
+ * 输入落地重试（2026-08-27 聚焦竞态）：clickAndType 后校验姓名字符出现在 strings，未落地时
+ * clearInput（CDP ctrl+a + Delete）清空后重新定位+重输一次，仍失败才报错（详见 typeNameWithRetry）。
  */
 import {
   type DomSnapshot,
@@ -46,8 +48,11 @@ export interface ChatSearchDeps {
   click(point: ClickPoint, viewport: { width: number; height: number }): Promise<void>
   /** Win32 原子「真实鼠标点击聚焦 + 真实键盘逐字输入」（一次调用完成，防焦点被抢） */
   clickAndType(point: ClickPoint, viewport: { width: number; height: number }, text: string): Promise<void>
+  /** 清空当前聚焦输入框（可选）：CDP ctrl+a 全选 + Delete。输入未落地的清空重试用——
+   *  未提供时输入校验失败直接报错（不清空重打会与残留文本拼接，不能盲重试） */
+  clearInput?(): Promise<void>
   /** 按 Escape（可选）：openContact 开头清场——搜索弹层是开关型（toggle），残留弹层会让
-   *  「点击入口」变成关闭，diff 永远为空。缺省跳过 */
+   *  「点击入口」变成关闭。缺省跳过 */
   pressEscape?(): Promise<void>
   /** 协作式取消信号：入口检查一次，触发即抛 CancelledError */
   signal?: AbortSignal
@@ -59,9 +64,12 @@ export interface ChatSearchDeps {
 const SEARCH_BOX_MIN_W_RATIO = 0.08
 /** 搜索框 y 上限（视口比例）：点开的搜索浮层必在页面上部 */
 const SEARCH_BOX_MAX_CY_RATIO = 0.4
-/** INPUT 近似相等阈值（device px）：diff 判定「同一输入框」用（位置微动/宽度展开视为变化而非新增） */
-const INPUT_SAME_POS_TOL = 12
-const INPUT_SAME_SIZE_TOL = 48
+/** 多 INPUT 候选时与搜索入口的 y 邻近带（device px）：搜索框在入口正下方原位变形，真机 Δy≈0 */
+const SEARCH_BOX_ENTRY_Y_BAND = 80
+/** DIV 兜底的 cx 上限（视口比例）：会话列表列右界≈聊天面板起点（真机 548/1249≈0.44）。
+ *  contenteditable DIV 兜底必须限定在列表列——聊天面板的消息气泡容器（真机 .text DIV
+ *  192x36 @x=626）同样满足「宽而矮」形态且 cy 可落入上部带，只靠 68% 左栏带会误命中 */
+const SEARCH_FALLBACK_MAX_CX_RATIO = 0.44
 /** 点搜索图标后等弹层（ms） */
 const SEARCH_OPEN_DELAY = 1400
 /** 输入姓名后等搜索结果异步渲染（ms）。真机修正（2026-08-13）：搜索结果项（公司名）bounds 异步渲染较慢，
@@ -69,6 +77,8 @@ const SEARCH_OPEN_DELAY = 1400
 const SEARCH_RESULT_DELAY = 4000
 /** 点结果卡片后等进入对话（ms） */
 const ENTER_CHAT_DELAY = 2000
+/** 输入未落地清空后等待输入框稳定（ms） */
+const CLEAR_INPUT_SETTLE = 300
 
 /** 候选聚簇：中心距离 <12px 视为同一目标的嵌套元素（如 34x34 容器与内部 13x13 svg），
  *  每簇取面积最大者代表——点击坐标等价 */
@@ -96,12 +106,6 @@ function isFieldShape(b: [number, number, number, number], viewport: { width: nu
   const cy = b[1]! + b[3]! / 2
   return cx < viewport.width * 0.68 && cy < viewport.height * 0.45
     && b[2]! > Math.max(150, viewport.width * SEARCH_BOX_MIN_W_RATIO) && b[3]! <= 60
-}
-
-/** 两 INPUT bounds 是否「同一输入框」（位置/尺寸在容差内：微动或收缩态展开） */
-function isSameInput(a: [number, number, number, number], b: [number, number, number, number]): boolean {
-  return Math.abs(a[0] - b[0]) <= INPUT_SAME_POS_TOL && Math.abs(a[1] - b[1]) <= INPUT_SAME_POS_TOL
-    && Math.abs(a[2] - b[2]) <= INPUT_SAME_SIZE_TOL && Math.abs(a[3] - b[3]) <= INPUT_SAME_SIZE_TOL
 }
 
 export class ChatSearchExecutor {
@@ -197,7 +201,7 @@ export class ChatSearchExecutor {
     if (!name) throw new ChatSearchError('搜索姓名不能为空')
 
     // 0. 清场：搜索弹层是开关型（toggle），若此前有残留弹层（中断/重试），点击入口会变成
-    //    「关闭」，diff 永远为空——先 Escape 关掉保证「点击=打开」语义
+    //    「关闭」，后续就找不到 INPUT 搜索框——先 Escape 关掉保证「点击=打开」语义
     if (this.deps.pressEscape) {
       await this.deps.pressEscape()
       await this.sleep(400)
@@ -205,7 +209,6 @@ export class ChatSearchExecutor {
 
     // 1. 点搜索入口（锚点动态定位，Win32 真实鼠标——2026-08-26 决策：点击类第一优先 Win32 防爬）
     const snap0 = await this.deps.snapshot()
-    const fieldsBefore = this.collectFieldLike(snap0)
     const entry = this.locateSearchEntry(snap0)
     if (entry.count !== 1) {
       throw new ChatSearchError(
@@ -217,37 +220,27 @@ export class ChatSearchExecutor {
     await this.deps.click(entry.point!, viewportOf(snap0))
     await this.sleep(SEARCH_OPEN_DELAY)
 
-    // 2. 定位搜索框：diff「点击后新增的输入条形态元素」（不挑标签——BOSS 已改版为
-    //    contenteditable DIV，不再是 <input>；形态=左栏内、视口上部、宽而矮的条）；
-    //    无新增时重试一次点击再 diff（弹层偶发不响应首击，重试安全——首击只开弹层无写效应）
-    let box = this.findSearchField(await this.deps.snapshot(), fieldsBefore)
+    // 2. 定位搜索框：直接识别 INPUT 形态（2026-08-27 范式变更，见 findSearchField 注释）；
+    //    未命中时重试一次点击再找（弹层偶发不响应首击，重试安全——首击只开弹层无写效应）
+    let box = this.findSearchField(await this.deps.snapshot(), entry.point!)
     if (!box.point && box.count === 0) {
       await this.deps.click(entry.point!, viewportOf(snap0))
       await this.sleep(SEARCH_OPEN_DELAY)
-      box = this.findSearchField(await this.deps.snapshot(), fieldsBefore)
+      box = this.findSearchField(await this.deps.snapshot(), entry.point!)
     }
     if (!box.point) {
       throw new ChatSearchError(
         box.count === 0
-          ? `点击搜索入口(入口@${Math.round(entry.point!.x)},${Math.round(entry.point!.y)})后未发现新增的搜索输入条：搜索弹层未打开或页面结构已变，请人工查看`
-          : `点击搜索入口后新增 ${box.count} 个候选输入条，无法唯一定位，请人工查看`,
+          ? `点击搜索入口(入口@${Math.round(entry.point!.x)},${Math.round(entry.point!.y)})后未发现搜索输入框（无唯一 INPUT，亦无唯一输入条形态元素）：搜索弹层未打开或页面结构已变，请人工查看`
+          : `点击搜索入口后发现 ${box.count} 个候选搜索输入框，无法唯一定位，请人工查看`,
       )
     }
 
     // 3. Win32 原子「点击搜索框聚焦 + 真实键盘逐字输入姓名」（同一次 ps1 调用，防焦点被抢）。
-    //    输入后校验文字落地（聚焦失败时输入会落空，带病继续会把聊天消息输进搜索框——
-    //    姓名每个字符都必须出现在页面 strings）
+    //    输入后校验文字落地（聚焦失败时输入会落空，带病继续会把聊天消息输进搜索框）；
+    //    未落地时清空重试一次（2026-08-27 真机诊断：框已在 DOM 但点击聚焦偶发落空/浮层未完全可交互）
     if (this.deps.signal?.aborted) throw new CancelledError('已取消：输入搜索姓名时中止')
-    await this.deps.clickAndType(box.point, viewportOf(snap0), name)
-    await this.sleep(SEARCH_RESULT_DELAY)
-    const snapTyped = await this.deps.snapshot()
-    const charsPresent = new Set(snapTyped.strings.filter((s) => typeof s === 'string' && s.trim().length === 1))
-    const missingChars = [...new Set(name.split(''))].filter((ch) => !charsPresent.has(ch))
-    if (missingChars.length > 0) {
-      throw new ChatSearchError(
-        `搜索姓名「${name}」未落地（页面未见输入字符 ${JSON.stringify(missingChars)}）：搜索框未聚焦或输入被拦，已停止，请人工查看`,
-      )
-    }
+    const snapTyped = await this.typeNameWithRetry(name, box.point, viewportOf(snap0), entry.point!)
 
     // 4. 定位目标姓名的搜索结果项（「联系人」标签下方带的公司名唯一命中），Win32 点击
     //    （结果卡片是切换会话的写动作，第一优先 Win32 真实鼠标）
@@ -277,42 +270,107 @@ export class ChatSearchExecutor {
   }
 
   /**
-   * 搜索输入条定位（2026-08-24 重写）：diff「点击入口后新增的输入条形态元素」。
-   * BOSS 已把搜索框从 <input> 改为 contenteditable DIV——不能按标签找，按形态：
-   * 左栏内（cx<视口 68%）、视口上部（cy<45%）、宽条（w>视口 8%）且矮（h≤60）。
-   * 新增多个时优先唯一 INPUT；无新增回退：现存 INPUT 中满足形态者唯一命中
-   * （兼容旧版 <input> 页面）。
+   * 搜索框定位（2026-08-27 真机诊断后范式变更：放弃 diff，直接识别）。
+   *
+   * 旧「diff 新增输入条」范式从根上失效：沟通页真机（2026-08-27 晚）实测，点击搜索入口后
+   * 左栏顶部收缩条**原位变形**为原生 <input>（INPUT@(198,124,339,34)，位置/尺寸与点击前的
+   * DIV 几乎相同）——没有「新增」节点可 diff，旧范式两种真机失败：①把变形前后的容器都算
+   * 「新增」误报 2 个候选；②0 新增靠「现存唯一 INPUT」回退分支侥幸命中。
+   *
+   * 新范式（与 diff 无关，单快照即可判定）：
+   * 1) doc 内 tag=INPUT 且满足输入条形态（isFieldShape：左栏 cx<68%、上部 cy<45%、
+   *    宽 w>max(150,视口8%)、矮 h≤60）的元素唯一 → 命中；
+   * 2) 多个 INPUT：取与搜索入口 y 邻近（|Δy|≤80，搜索框在入口正下方原位变形，真机 Δy≈0）
+   *    的唯一者；仍不唯一 → fail-loud 报候选数，绝不盲点；
+   * 3) 0 个 INPUT：回退「宽而矮 DIV」形态唯一命中（**按形态识别，不校验 contenteditable 属性**
+   *    ——attributes 字段非各版本快照恒有，形态已足够消歧；兼容 2026-08-13~08-24 期间的
+   *    contenteditable 版页面；限定列表列 cx<44% 排除聊天面板气泡容器误命中），不唯一 → 0 处理。
    */
   private findSearchField(
     snap: DomSnapshot,
-    fieldsBefore: Array<[number, number, number, number]>,
+    entry: ClickPoint,
   ): { point: ClickPoint | null; count: number } {
     const viewport = viewportOf(snap)
-    const current = this.collectFieldLike(snap)
-    const added = current.filter((b) => !fieldsBefore.some((o) => isSameInput(o, b)))
-    if (added.length === 1) {
-      const b = added[0]!
-      return { point: { x: b[0]! + b[2]! / 2, y: b[1]! + b[3]! / 2 }, count: 1 }
-    }
-    if (added.length > 1) {
-      // 弹层内多个新增（如输入条+按钮条）：真 INPUT 优先；无 INPUT 则不唯一 fail-loud
-      const inputs = this.collectVisibleInputs(snap).filter((b) => isFieldShape(b, viewport) && added.some((a) => isSameInput(a, b)))
+    const inputs = this.collectVisibleInputs(snap).filter((b) => isFieldShape(b, viewport))
+    if (inputs.length > 0) {
       if (inputs.length === 1) {
         const b = inputs[0]!
         return { point: { x: b[0]! + b[2]! / 2, y: b[1]! + b[3]! / 2 }, count: 1 }
       }
-      return { point: null, count: added.length }
+      const near = inputs.filter((b) => Math.abs(b[1]! + b[3]! / 2 - entry.y) <= SEARCH_BOX_ENTRY_Y_BAND)
+      if (near.length === 1) {
+        const b = near[0]!
+        return { point: { x: b[0]! + b[2]! / 2, y: b[1]! + b[3]! / 2 }, count: 1 }
+      }
+      return { point: null, count: inputs.length }
     }
-    // 回退：现存唯一 INPUT 形态命中（旧版页面 <input> 常驻）
-    const hits: ClickPoint[] = []
-    for (const b of this.collectVisibleInputs(snap)) {
-      if (!isFieldShape(b, viewport)) continue
-      hits.push({ x: b[0]! + b[2]! / 2, y: b[1]! + b[3]! / 2 })
+    // 0 INPUT：回退 DIV 形态（旧版 contenteditable 页面；按形态识别不校验属性）——列表列内
+    // （cx<44%，排除聊天面板气泡容器误命中，见 SEARCH_FALLBACK_MAX_CX_RATIO 注释）唯一命中才用
+    const fields = this.collectFieldLike(snap).filter(
+      (b) => b[0]! + b[2]! / 2 < viewport.width * SEARCH_FALLBACK_MAX_CX_RATIO,
+    )
+    if (fields.length === 1) {
+      const b = fields[0]!
+      return { point: { x: b[0]! + b[2]! / 2, y: b[1]! + b[3]! / 2 }, count: 1 }
     }
-    return { point: hits.length === 1 ? hits[0]! : null, count: hits.length }
+    return { point: null, count: 0 }
   }
 
-  /** 输入条形态（视口相对）：左栏内、上部、宽而矮——INPUT 与 contenteditable DIV 通吃 */
+  /** 姓名字符在页面 strings 中的缺失清单（逐字节点反爬形态：每个字符是独立单字字符串） */
+  private missingCharsOf(snap: DomSnapshot, name: string): string[] {
+    const charsPresent = new Set(snap.strings.filter((s) => typeof s === 'string' && s.trim().length === 1))
+    return [...new Set(name.split(''))].filter((ch) => !charsPresent.has(ch))
+  }
+
+  /**
+   * 输入姓名并校验落地；未落地时清空重试一次。
+   * 2026-08-27 真机诊断「聚焦竞态」：搜索框已在 DOM 出现，但 Win32 点击聚焦偶发落空（或浮层
+   * 未完全可交互），输入落到了别处/被吞。此时直接报错太脆——清空（clearInput=CDP ctrl+a+Delete，
+   * 作用于当前聚焦元素，可清掉部分落地的残字）→ 等稳定 → 重新 fresh snapshot 定位搜索框
+   * （浮层位置可能微动，不复用旧坐标）→ 再 clickAndType 一次 → 再校验；仍失败才 fail-loud
+   * （报错文案注明已重试，提示人工查看）。未注入 clearInput 时无清空手段，直接报错——
+   * 不清空重打会把姓名拼进残留文本，更危险。
+   */
+  private async typeNameWithRetry(
+    name: string,
+    firstBox: ClickPoint,
+    viewport: { width: number; height: number },
+    entry: ClickPoint,
+  ): Promise<DomSnapshot> {
+    await this.deps.clickAndType(firstBox, viewport, name)
+    await this.sleep(SEARCH_RESULT_DELAY)
+    let snapTyped = await this.deps.snapshot()
+    let missing = this.missingCharsOf(snapTyped, name)
+    if (missing.length === 0) return snapTyped
+
+    if (!this.deps.clearInput) {
+      throw new ChatSearchError(
+        `搜索姓名「${name}」未落地（页面未见输入字符 ${JSON.stringify(missing)}）：搜索框未聚焦或输入被拦，已停止，请人工查看`,
+      )
+    }
+    await this.deps.clearInput()
+    await this.sleep(CLEAR_INPUT_SETTLE)
+    const snapRetry = await this.deps.snapshot()
+    const box = this.findSearchField(snapRetry, entry)
+    if (!box.point) {
+      throw new ChatSearchError(
+        `搜索姓名「${name}」首次输入未落地（页面未见输入字符 ${JSON.stringify(missing)}），清空重试时未再找到搜索输入框：搜索浮层可能已关闭，请人工查看`,
+      )
+    }
+    await this.deps.clickAndType(box.point, viewportOf(snapRetry), name)
+    await this.sleep(SEARCH_RESULT_DELAY)
+    snapTyped = await this.deps.snapshot()
+    missing = this.missingCharsOf(snapTyped, name)
+    if (missing.length > 0) {
+      throw new ChatSearchError(
+        `搜索姓名「${name}」未落地（页面未见输入字符 ${JSON.stringify(missing)}）：已清空重试一次仍失败，搜索框未聚焦或输入被拦，请人工查看`,
+      )
+    }
+    return snapTyped
+  }
+
+  /** 输入条形态（视口相对）：左栏内、上部、宽而矮——0 INPUT 时的 contenteditable DIV 回退用
+   *  （2026-08-27 范式：主路径已改为直接识别 INPUT，本函数只服务旧版页面兜底） */
   private collectFieldLike(snap: DomSnapshot): Array<[number, number, number, number]> {
     const viewport = viewportOf(snap)
     const out: Array<[number, number, number, number]> = []

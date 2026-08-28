@@ -9,6 +9,7 @@ export interface DocumentResponse {
   id: number
   title: string
   source_type: string
+  sub_category: string | null
   file_type: string
   file_path: string | null
   file_size: number | null
@@ -95,6 +96,44 @@ export async function deleteDocument(docId: number): Promise<ApiResponse> {
     headers: { ...getAuthHeader() }
   })
   return response.json()
+}
+
+export interface MoveDocumentsResponse {
+  success: boolean
+  moved: number
+  skipped: number
+  error?: string
+  debug?: string
+}
+
+/**
+ * 批量移动知识库文档到目标分类
+ * @param docIds 文档 ID 列表
+ * @param sourceType 目标顶级分类代号
+ * @param subCategory 目标直接所属子分类代号（顶级分类下传 null）
+ */
+export async function moveDocuments(
+  docIds: number[],
+  sourceType: string,
+  subCategory?: string | null
+): Promise<MoveDocumentsResponse> {
+  const response = await fetch(`${API_BASE}/documents/move`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...getAuthHeader()
+    },
+    body: JSON.stringify({
+      doc_ids: docIds,
+      source_type: sourceType,
+      sub_category: subCategory ?? null
+    })
+  })
+  const result = await response.json()
+  if (!response.ok || result.success === false) {
+    throw new Error(result.error || '移动文档失败')
+  }
+  return result
 }
 
 /**
@@ -196,15 +235,22 @@ export function getDocumentDownloadUrl(docId: number): string {
 
 /**
  * 搜索知识库文档（混合检索：向量 + FTS5 + RRF）
+ * @param source_type 顶级分类代号，限定搜索范围（含其下所有子级）
+ * @param sub_category 直接选中分类代号，后端展开为含其所有子级；不传时全分类搜索
  */
-export async function searchDocuments(query: string, top_k = 10): Promise<SearchResponse> {
+export async function searchDocuments(
+  query: string,
+  top_k = 10,
+  source_type?: string,
+  sub_category?: string
+): Promise<SearchResponse> {
   const response = await fetch(`${API_BASE}/search_documents`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       ...getAuthHeader()
     },
-    body: JSON.stringify({ query, top_k })
+    body: JSON.stringify({ query, top_k, source_type, sub_category })
   })
   if (!response.ok) {
     const error = await response.json()
@@ -242,16 +288,16 @@ export async function listCategories(): Promise<CategoryListResponse> {
 }
 
 /**
- * 创建知识库分类
+ * 创建知识库分类（英文代号由后端自动生成）
  */
-export async function createCategory(sourceType: string, displayName?: string, parentId?: number | null): Promise<any> {
+export async function createCategory(displayName: string, parentId?: number | null): Promise<any> {
   const response = await fetch(`${API_BASE}/categories`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       ...getAuthHeader()
     },
-    body: JSON.stringify({ source_type: sourceType, display_name: displayName || sourceType, parent_id: parentId ?? null })
+    body: JSON.stringify({ display_name: displayName, parent_id: parentId ?? null })
   })
   const result = await response.json()
   if (!response.ok) {

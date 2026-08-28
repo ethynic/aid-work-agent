@@ -24,6 +24,13 @@ export interface DomDocument {
     parentIndex?: SparseOrDense<number>
     /** 节点标签名（指向 strings 的下标，大写如 'INPUT'）；按元素类型过滤用（如定位无文本的搜索框 INPUT） */
     nodeName?: SparseOrDense<number>
+    /**
+     * 元素属性（指向 strings 的下标）：Chrome 151 真机实测（.tmp/chat-snapshot-01.json，2026-08-27）
+     * 为 **dense 嵌套数组** —— attributes[nodeIdx] = [nameIdx, valIdx, nameIdx, valIdx, ...]，
+     * name/val 都是 strings 下标；无属性节点为空数组 []（非 undefined），共 5203 项与节点数一致。
+     * 类型按 indexedValues 兼容 sparse {index,value}（value 为扁平下标对数组），但真机只见过 dense。
+     */
+    attributes?: SparseOrDense<number[]>
   }
   layout: {
     nodeIndex: number[]
@@ -172,4 +179,33 @@ export function isDescendantOf(document: DomDocument, nodeIndex: number, ancesto
     cur = next
   }
   return false
+}
+
+/**
+ * 拼出某节点的 class 属性值（无 attributes 字段 / 节点无 class 属性 → undefined）。
+ * class 为实测稳定语义名时（如沟通页 .conversation-message / .item-myself，设计 §10.9 真机验证），
+ * 这是比几何更精确的定位信号；其它页面的 class 若为混淆 hash 不可依赖（铁律不变）。
+ * 注意：dense 形状按 nodeIndex 直取（O(1)）——若在全节点循环里调用，勿改成 indexedValues 全表扫（O(n²)）。
+ */
+export function classOf(snapshot: DomSnapshot, documentIndex: number, nodeIndex: number): string | undefined {
+  const document = snapshot.documents[documentIndex]
+  const attrs = document?.nodes?.attributes
+  if (!attrs) return undefined
+  let pairs: number[] | undefined
+  if (Array.isArray(attrs)) {
+    // dense：attributes[nodeIdx] 即该节点属性对（Chrome 151 真机形状，见上方字段注释）
+    pairs = attrs[nodeIndex]
+  } else if (Array.isArray(attrs.index) && Array.isArray(attrs.value)) {
+    // sparse：{index,value} 按下标对齐取该节点条目（真机未见过，形状兼容用）
+    const pos = attrs.index.indexOf(nodeIndex)
+    pairs = pos >= 0 ? attrs.value[pos] : undefined
+  } else {
+    return undefined
+  }
+  if (!Array.isArray(pairs)) return undefined
+  // pairs = [nameIdx, valIdx, ...]（Chrome 151 实测形状，见 DomDocument.nodes.attributes 注释）
+  for (let i = 0; i + 1 < pairs.length; i += 2) {
+    if (snapshot.strings[pairs[i]!] === 'class') return snapshot.strings[pairs[i + 1]!]
+  }
+  return undefined
 }

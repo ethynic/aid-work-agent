@@ -61,6 +61,20 @@
               <span class="text-muted text-xs">时间</span>
               <div class="text-default mt-1">{{ formatDateTime(trace.created_at) }}</div>
             </div>
+            <div>
+              <span class="text-muted text-xs">租户ID</span>
+              <a
+                v-if="trace.tenant_id"
+                :href="getTenantUrl(trace.tenant_id)"
+                target="_blank"
+                class="text-primary-600 hover:text-primary-700 hover:underline font-mono mt-1 inline-block"
+              >{{ trace.tenant_id }}</a>
+              <div v-else class="text-default mt-1 font-mono">-</div>
+            </div>
+            <div>
+              <span class="text-muted text-xs">智能体ID</span>
+              <div class="text-default mt-1 font-mono">{{ trace.subagent_id || '-' }}</div>
+            </div>
           </div>
           <div v-if="trace.tags.length > 0" class="mt-3 flex gap-1">
             <span v-for="tag in trace.tags" :key="tag"
@@ -277,6 +291,10 @@ const lastLlmInput = computed(() => {
 
 function goBack() {
   router.back()
+}
+
+function getTenantUrl(tenantId: string): string {
+  return `${window.location.origin}/t/${tenantId}`
 }
 
 async function copyLlmJson() {

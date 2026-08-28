@@ -40,12 +40,14 @@ class AnalysisAgent:
         analysis_id: str,
         tables_metadata: Optional[List[Dict]] = None,
         tenant_id: Optional[str] = None,
+        subagent_id: Optional[str] = None,
     ):
         self.llm = llm_gateway
         self.analyzer = analyzer
         self.analysis_id = analysis_id
         self.tables_metadata = tables_metadata or []
         self.tenant_id = tenant_id
+        self.subagent_id = subagent_id
 
         self._loaded_table_ids: set = set()
         self._search_count: int = 0
@@ -703,6 +705,24 @@ class AnalysisAgent:
             )
         return self._retriever
 
+    def _load_shared_ranges(self) -> List[tuple]:
+        """读取已启用共享分类（本租户 + 子智能体维度），仅子智能体 + 租户模式生效。"""
+        from src.knowledge.retriever.tenant_range import load_shared_ranges
+
+        return load_shared_ranges(self.tenant_id, self.subagent_id, "data-analysis-metadata")
+
+    def _build_tenant_scope(self) -> tuple:
+        """构建租户范围 SQL 与参数：本租户 + 已启用共享来源租户。subagent_id 为空时退化为本租户。"""
+        if not self.tenant_id:
+            return "", []
+        if not self.subagent_id:
+            return "AND tenant_id = %s", [self.tenant_id]
+        tenant_ids = [self.tenant_id]
+        for from_tenant_id, _st in self._load_shared_ranges():
+            if from_tenant_id not in tenant_ids:
+                tenant_ids.append(from_tenant_id)
+        return "AND tenant_id = ANY(%s)", [tenant_ids]
+
     async def _handle_search_data_tables(self, query: str, top_k: int = 5) -> Dict[str, Any]:
         """语义搜索数据表。"""
         if not query:
@@ -710,11 +730,16 @@ class AnalysisAgent:
 
         try:
             retriever = self._get_retriever()
+            # 共享检索范围：本租户 + 已启用共享来源租户（仅子智能体 + 租户模式生效）
+            shared_ranges = []
+            if self.tenant_id and self.subagent_id:
+                shared_ranges = await asyncio.to_thread(self._load_shared_ranges)
             results = await retriever.retrieve(
                 query=query,
                 top_k=top_k,
                 tenant_id=self.tenant_id,
                 source_type="data-analysis-metadata",
+                shared_ranges=shared_ranges,
             )
 
             if not results:
@@ -897,30 +922,34 @@ class AnalysisAgent:
             return result
 
     def _query_data_tables_list(self, keyword: str = "") -> List[Dict]:
-        """查询所有数据表列表。"""
+        """查询所有数据表列表（本租户 + 已启用共享来源租户）。"""
         from src.db.database import get_db_connection
 
+        tenant_sql, tenant_params = self._build_tenant_scope()
         with get_db_connection() as conn:
             cursor = conn.cursor()
             if keyword:
                 cursor.execute(
-                    """
+                    f"""
                     SELECT id, title, summary, metadata
                     FROM documents
                     WHERE source_type = 'data-analysis-metadata'
                       AND (title ILIKE %s OR summary ILIKE %s)
+                      {tenant_sql}
                     ORDER BY created_at DESC
                     """,
-                    (f"%{keyword}%", f"%{keyword}%"),
+                    (f"%{keyword}%", f"%{keyword}%", *tenant_params),
                 )
             else:
                 cursor.execute(
-                    """
+                    f"""
                     SELECT id, title, summary, metadata
                     FROM documents
                     WHERE source_type = 'data-analysis-metadata'
+                      {tenant_sql}
                     ORDER BY created_at DESC
                     """,
+                    tenant_params,
                 )
 
             results = []
@@ -944,18 +973,20 @@ class AnalysisAgent:
             return results
 
     def _fetch_single_table_metadata(self, table_id: str) -> Optional[Dict]:
-        """查询单个表的完整 metadata，构造 DataAnalyzer 所需格式。"""
+        """查询单个表的完整 metadata，构造 DataAnalyzer 所需格式（本租户 + 已启用共享来源租户）。"""
         from src.db.database import get_db_connection
 
+        tenant_sql, tenant_params = self._build_tenant_scope()
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                """
+                f"""
                 SELECT id, title, summary, metadata
                 FROM documents
                 WHERE id = %s AND source_type = 'data-analysis-metadata'
+                  {tenant_sql}
                 """,
-                (int(table_id),),
+                (int(table_id), *tenant_params),
             )
             row = cursor.fetchone()
             if not row:

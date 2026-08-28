@@ -8,7 +8,7 @@ HotelRetriever.search_by_name 单元测试
 """
 import sys
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -155,3 +155,56 @@ class TestSearchByNameSharedRange:
         # 参数：source_type, tenant_id, text_pattern, title_pattern, top_k
         assert fake.last_args[0] == "hotel_resource"
         assert fake.last_args[1] == "tenant_B"
+
+
+class TestSharedTenantIdsOverride:
+    """独立 API（无子智能体上下文）场景：调用方传已聚合好的 shared_tenant_ids 列表，
+    检索直接使用该列表（含本租户），不再走 load_shared_ranges。"""
+
+    def test_search_by_name_uses_aggregated_list(self):
+        retriever = hotel_retriever.HotelRetriever()
+        fake = FakeConn()
+        with patch.object(retriever, '_get_conn', return_value=fake):
+            retriever.search_by_name("tenant_B", "天合盛景", top_k=5,
+                                     shared_tenant_ids=["tenant_B", "tenant_A"])
+
+        sql = fake.last_sql
+        assert "d.tenant_id = ANY(%s)" in sql
+        # 参数：source_type, [本租户, 共享源...], text_pattern, title_pattern, top_k
+        assert fake.last_args[0] == "hotel_resource"
+        assert fake.last_args[1] == ["tenant_B", "tenant_A"]
+
+    def test_search_forwards_to_both_paths(self):
+        """组合 search 把 shared_tenant_ids 透传给 name/vector 两个子方法"""
+        retriever = hotel_retriever.HotelRetriever()
+        fake = FakeConn()
+        client = MagicMock()
+        client.embed_sync = MagicMock(return_value=[0.1] * 128)
+        client.reset_usage = MagicMock()
+        client.last_usage_tokens = 0
+        with patch.object(retriever, '_get_conn', return_value=fake), \
+             patch.object(retriever, '_get_embedding_client', return_value=client):
+            retriever.search("tenant_B", "天合盛景", top_k=5,
+                             shared_tenant_ids=["tenant_B", "tenant_A"])
+
+        # 名称无结果 → 落入向量路径，参数为 (embedding, source_type, tenant_ids, top_k)
+        assert "d.tenant_id = ANY(%s)" in fake.last_sql
+        assert ["tenant_B", "tenant_A"] in fake.last_args
+
+    def test_list_all_uses_aggregated_list(self):
+        retriever = hotel_retriever.HotelRetriever()
+        fake = FakeConn(rows=[{
+            "cnt": 2,
+            "doc_id": 1,
+            "title": "酒店：A酒店",
+            "file_path": "",
+            "metadata": {},
+            "created_at": None,
+            "info": "",
+        }])
+        with patch.object(retriever, '_get_conn', return_value=fake):
+            retriever.list_all("tenant_B", limit=10, offset=0,
+                               shared_tenant_ids=["tenant_B", "tenant_A"])
+
+        assert "d.tenant_id = ANY(%s)" in fake.last_sql
+        assert fake.last_args[1] == ["tenant_B", "tenant_A"]

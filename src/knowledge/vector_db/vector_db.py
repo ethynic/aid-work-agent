@@ -156,6 +156,7 @@ class VectorDBPostgreSQL(VectorDatabase):
         top_k: int = 10,
         tenant_id: Optional[str] = None,
         source_type: Optional[str] = None,
+        sub_categories: Optional[List[str]] = None,
         shared_ranges: Optional[List[Tuple[str, str]]] = None
     ) -> List[Tuple[int, float]]:
         """向量相似度搜索（使用余弦相似度）"""
@@ -167,17 +168,22 @@ class VectorDBPostgreSQL(VectorDatabase):
             vector_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
 
             if tenant_id:
-                # 指定租户：本租户 + 已启用共享范围
+                # 指定租户：本租户 + 已启用共享范围 + 选中分类子树
                 range_sql, range_params = build_tenant_range_conditions(
                     tenant_id, source_type, shared_ranges,
                 )
-                params = [vector_str] + range_params + [top_k]
+                params = [vector_str] + range_params
+                sub_cat_sql = ""
+                if sub_categories:
+                    sub_cat_sql = " AND d.sub_category = ANY(%s)"
+                    params.append(sub_categories)
+                params.append(top_k)
                 cursor.execute(f"""
                     SELECT cv.chunk_id, cv.embedding <=> %s::vector as distance
                     FROM chunks_vec cv
                     JOIN chunks c ON cv.chunk_id = c.id
                     JOIN documents d ON c.doc_id = d.id
-                    WHERE {range_sql}
+                    WHERE {range_sql}{sub_cat_sql}
                     ORDER BY distance
                     LIMIT %s
                 """, params)

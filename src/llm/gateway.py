@@ -324,6 +324,93 @@ class LLMGateway:
             )
             raise
 
+    async def chat_lite(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None,
+        temperature: float = 0.7,
+        max_tokens: Optional[int] = None,
+        **kwargs
+    ) -> Dict[str, Any]:
+        """用轻量小模型（lite_model）调用，支持跨 provider。
+
+        lite_model 配置格式见 LLMConfig.get_lite_target：
+        - "provider/model"（如 "qwen/qwen3.7-flash"）：跨 provider 调用，用该 provider 的
+          key/base_url 构建独立 Provider 直连，不参与主链路 failover（指定即专用）
+        - 纯模型名 / 未配置：走当前 provider 的完整链路（含 failover），显式传 model 覆盖
+
+        对 deepseek target 自动加 thinking={"type": "disabled"}（DeepSeek V4 思考模型，
+        轻量结构化任务无需思考，统一收口到此方法，调用方无需关心 provider）。
+
+        Returns:
+            与 chat() 一致的响应字典
+        """
+        import time
+        from src.config.settings import settings as _settings
+
+        lite_provider, lite_model = _settings.llm.get_lite_target()
+        if not lite_model:
+            raise ValueError(
+                f"lite_model 解析失败：provider={lite_provider}，模型名为空；"
+                f"请检查 LITE_MODEL_CODE / llm.lite_model 配置"
+            )
+
+        # max_tokens 是 chat_lite 显式形参，无需从 kwargs 取出；
+        # kwargs 中若有调用方误传的 model，丢弃（模型由 lite_model 决定）
+        kwargs.pop("model", None)
+
+        if lite_provider == self.provider_name:
+            # 当前 provider：走完整链路（含 failover）
+            if lite_provider == "deepseek":
+                kwargs.setdefault("thinking", {"type": "disabled"})
+            return await self.chat(
+                messages=messages,
+                tools=tools,
+                tool_choice=tool_choice,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                model=lite_model,
+                **kwargs,
+            )
+
+        # 跨 provider：指定即专用，不参与 failover
+        max_tokens = self._resolve_max_tokens(max_tokens, model=lite_model)
+        if lite_provider == "deepseek":
+            kwargs.setdefault("thinking", {"type": "disabled"})
+        chat_start = time.time()
+        key_pool = _build_key_pool(lite_provider)
+        try:
+            async with key_pool.acquire() as api_key:
+                provider = _build_provider(lite_provider, api_key, model=lite_model)
+                result = await provider.chat(
+                    messages=messages,
+                    tools=tools,
+                    tool_choice=tool_choice,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    **kwargs,
+                )
+        except Exception as e:
+            logger.opt(exception=True).error(
+                "[LLM] chat_lite() failed (cross-provider), provider={p}, model={m}, error: {et}: {err}",
+                p=lite_provider, m=lite_model, et=type(e).__name__, err=e,
+            )
+            raise
+        chat_duration = time.time() - chat_start
+        try:
+            from src.services.llm_usage_meter import record_response_usage
+            record_response_usage(result)
+        except Exception:
+            # Usage accounting is observational and must not break LLM calls.
+            pass
+        logger.info(
+            "[LLM] chat_lite() completed, provider={p}, model={m}, duration={d:.2f}s, "
+            "has_content={c}",
+            p=lite_provider, m=lite_model, d=chat_duration, c=bool(result.get("content")),
+        )
+        return result
+
     async def stream_chat(
         self,
         messages: List[Dict[str, Any]],
@@ -436,14 +523,18 @@ class LLMGateway:
             )
             raise
 
-    def _resolve_max_tokens(self, max_tokens: Optional[int]) -> int:
-        """未显式指定 max_tokens 时，按当前生效模型从配置表取上限作为默认值。
+    def _resolve_max_tokens(self, max_tokens: Optional[int], model: Optional[str] = None) -> int:
+        """未显式指定 max_tokens 时，按指定模型从配置表取上限作为默认值。
+
+        Args:
+            max_tokens: 调用方显式指定值
+            model: 用于查表的模型名，未指定时用当前生效模型（get_model_name）
 
         配置表 llm.model_max_tokens 未覆盖的模型回退到 DEFAULT_MAX_TOKENS。
         """
         if max_tokens is not None:
             return max_tokens
-        model = self.get_model_name()
+        model = model or self.get_model_name()
         limit = settings.llm.model_max_tokens.get(model)
         if limit:
             logger.info(f"[LLM] model={model} 未指定 max_tokens，使用配置上限 {limit}")

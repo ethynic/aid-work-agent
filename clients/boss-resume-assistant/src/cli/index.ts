@@ -3,7 +3,7 @@
  * BOSS 招聘操作 CLI 入口。
  *
  * 操作命令（filter / greet / goto / accept / reject / interview / send-to / send-current /
- * list-jobs / select-job / resume-detail / resume-batch，其中 filter 含设置与 --clear 两种用法）+ 3 个标准 Provider 命令（mcp / doctor / version）。
+ * read-chat / open-chat / list-jobs / select-job / resume-detail / resume-batch，其中 filter 含设置与 --clear 两种用法） + 3 个标准 Provider 命令（mcp / doctor / version）。
  * 操作命令只是薄 renderer，业务能力在 src/main/operations/，与 MCP tool handler 共享。
  *
  * 用法：
@@ -17,6 +17,8 @@
  *   node dist/src/cli/index.js interview [--remark "..."]
  *   node dist/src/cli/index.js send-to <姓名> --message <消息> [--dry-run]
  *   node dist/src/cli/index.js send-current --message <消息> [--dry-run]
+ *   node dist/src/cli/index.js read-chat [姓名]
+ *   node dist/src/cli/index.js open-chat <姓名>
  *   node dist/src/cli/index.js list-jobs
  *   node dist/src/cli/index.js select-job <职位名>
  *   node dist/src/cli/index.js resume-detail [--name <姓名>] [--save-image <path>]
@@ -46,6 +48,8 @@ const USAGE = `BOSS 招聘操作 CLI
   interview [--remark "..."]  约面试表单填充演示：逐字填备注+选明天日期后点取消关闭（绝不点发送；期间勿动鼠标）
   send-to <姓名> --message <消息> [--dry-run]   搜索找人 → 进入对话 → 输入并发送消息（默认真发送；--dry-run 只输入不发送；期间勿动鼠标）
   send-current --message <消息> [--dry-run]     向当前已选会话输入并发送消息（前提已选会话；默认真发送；--dry-run 只输入不发送；期间勿动鼠标）
+  read-chat [姓名]   读取当前会话消息（谁发了什么+时间+已读）与全部未读会话清单（只读）
+  open-chat <姓名>   切换到指定联系人的会话（已在目标会话零点击；优先搜索找人，失败回退点击会话列表，视口外自动滚动；无外部写副作用，但搜索/列表点击与输入借用真实鼠标，期间勿动鼠标；打开后可 read-chat）
   list-jobs                    列出当前招聘者的所有职位（打开职位下拉解析；只读，但借用真实鼠标点开下拉，期间勿动鼠标）
   select-job <职位名>          切换到指定职位（精确职位名，可用 list-jobs 查看；真实写动作，期间勿动鼠标）
   resume-detail [--name <姓名>] [--save-image <path>]   读取当前打开的候选人简历详情（canvas 截图拼接 OCR；--name 候选人姓名，缺省从 OCR 首行自动识别；前提先点开候选人详情；只读，但滚动借用真实鼠标，期间勿动鼠标）
@@ -213,6 +217,23 @@ async function main(): Promise<number> {
       if (cdpPort === 'invalid') return 2
       const { sendCurrentCommand } = await import('./commands/sendCurrent.js')
       return sendCurrentCommand({ message, dryRun: hasFlag(args, 'dry-run'), cdpPort })
+    }
+    case 'read-chat': {
+      const cdpPort = parseCdpPort(args)
+      if (cdpPort === 'invalid') return 2
+      const { readChatCommand } = await import('./commands/readChat.js')
+      return readChatCommand({ contact: args.positional[1], cdpPort })
+    }
+    case 'open-chat': {
+      const contact = args.positional[1]
+      if (!contact || !contact.trim()) {
+        console.error('open-chat 缺少联系人姓名：open-chat <姓名>')
+        return 2
+      }
+      const cdpPort = parseCdpPort(args)
+      if (cdpPort === 'invalid') return 2
+      const { openChatCommand } = await import('./commands/openChat.js')
+      return openChatCommand({ contact, cdpPort })
     }
     case 'list-jobs': {
       const cdpPort = parseCdpPort(args)

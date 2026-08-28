@@ -80,13 +80,13 @@
                 <div class="flex-1 min-w-0">
                   <div class="flex items-center gap-2">
                     <span class="font-medium text-default truncate">{{ user.nickname || user.username || '未知用户' }}</span>
-                    <span v-if="user.channel_type === 'wecom_kf' && user.kf_name" class="text-xs px-2 py-0.5 rounded-full bg-primary-50 text-primary-600 shrink-0">客服：{{ user.kf_name }}</span>
-                    <span class="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-muted shrink-0">{{ getUserSourceInfo(user.source).label }}</span>
+                    <span v-if="user.channel_type === 'wecom_kf' && user.kf_name" class="text-xs px-2 py-0.5 rounded-full bg-primary-50 text-primary-600 shrink-0 ml-auto">账号：{{ user.kf_name }}</span>
                   </div>
                   <div class="text-xs text-muted mt-1">
                     {{ formatSessionDateRange(user) }}
                   </div>
-                  <div v-if="user.referrer_name" class="text-xs text-primary-600 mt-0.5">
+                  <!-- 引流信息，产品反馈说不重要，先隐藏 -->
+                  <!--div v-if="user.referrer_name" class="text-xs text-primary-600 mt-0.5">
                     <div class="relative group inline-flex items-center gap-1">
                       <span class="cursor-default">由 {{ user.referrer_name }} 引流</span>
                       <svg class="w-3.5 h-3.5 text-primary-500 cursor-help shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -97,7 +97,7 @@
                         {{ formatDate(user.referral_time) }} 首次访问 {{ user.referrer_name }} 的客服账号
                       </div>
                     </div>
-                  </div>
+                  </div-->
                 </div>
               </div>
             </div>
@@ -128,7 +128,7 @@
             <div>
               <div class="flex items-center gap-2">
                 <span class="font-medium text-default">{{ selectedUser.nickname || selectedUser.username || '未知用户' }}</span>
-                <span v-if="selectedUser.channel_type === 'wecom_kf' && selectedUser.kf_name" class="text-xs px-2 py-0.5 rounded-full bg-primary-50 text-primary-600">客服：{{ selectedUser.kf_name }}</span>
+                <span v-if="selectedUser.channel_type === 'wecom_kf' && selectedUser.kf_name" class="text-xs px-2 py-0.5 rounded-full bg-primary-50 text-primary-600">账号：{{ selectedUser.kf_name }}</span>
               </div>
               <div class="text-xs text-muted">创建于 {{ formatDate(selectedUser.created_at) }}</div>
             </div>
@@ -525,7 +525,7 @@ import { listExternalUsers, getUserSessions, getSessionMessages, getReferralStat
 import AttachmentCard from './AttachmentCard.vue'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 import { useAmrPlayer } from '@/composables/useAmrPlayer'
-import { getUserSourceInfo } from '@/api/enums'
+// import { getUserSourceInfo } from '@/api/enums'
 import { formatFileSize } from '@/utils/file'
 import type { DownloadableFile } from '@/types'
 import { useToast } from 'vue-toastification'

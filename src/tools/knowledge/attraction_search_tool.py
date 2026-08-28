@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 from src.tools.base import BaseTool
 from src.db.database import get_db_connection
 from src.core.image_asset import get_image_registry
+from src.knowledge.retriever.tenant_range import load_shared_ranges
 
 
 class AttractionSearchInput(BaseModel):
@@ -60,6 +61,17 @@ class AttractionSearchTool(BaseTool):
         client = self._get_embedding_client()
         return client.embed_sync(text)
 
+    def _build_tenant_scope(self, tenant_id: Optional[str], subagent_id: Optional[str]) -> tuple:
+        """构建租户范围 SQL 与参数：本租户 + 已启用共享来源租户（与通用知识库检索的
+        shared_ranges 语义一致，仅子智能体 + 租户模式生效）。subagent_id 为空时退化为本租户。"""
+        if not tenant_id or not subagent_id:
+            return "d.tenant_id = %s", [tenant_id]
+        tenant_ids = [tenant_id]
+        for from_tenant_id, _st in load_shared_ranges(tenant_id, subagent_id, "attraction_resource"):
+            if from_tenant_id not in tenant_ids:
+                tenant_ids.append(from_tenant_id)
+        return "d.tenant_id = ANY(%s)", [tenant_ids]
+
     async def execute(self, **kwargs) -> Dict[str, Any]:
         query = kwargs.get("query")
         top_k = kwargs.get("top_k", 8)
@@ -71,8 +83,10 @@ class AttractionSearchTool(BaseTool):
             from src.tools.context import current_tool_execution_context
             context = current_tool_execution_context()
             tenant_id = context.tenant_id if context else None
+            subagent_id = context.subagent_id if context else None
             if not tenant_id:
                 return {"success": False, "error": "无法确定租户ID", "results": [], "count": 0}
+            tenant_sql, tenant_params = self._build_tenant_scope(tenant_id, subagent_id)
 
             # 向量化查询（_embed 内部含 TextEmbedding.call 同步阻塞 + 重试 sleep，必须 to_thread 化避免卡事件循环）
             client = self._get_embedding_client()
@@ -89,18 +103,18 @@ class AttractionSearchTool(BaseTool):
             # 向量语义搜索，限定景点知识库
             with get_db_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute("""
+                cursor.execute(f"""
                     SELECT cv.embedding <=> %s::vector AS distance,
                            c.doc_id, c.text, d.title, d.metadata, d.file_path
                     FROM chunks_vec cv
                     JOIN chunks c ON cv.chunk_id = c.id
                     JOIN documents d ON c.doc_id = d.id
                     WHERE d.source_type = 'attraction_resource'
-                      AND d.tenant_id = %s
+                      AND {tenant_sql}
                       AND c.chunk_index = 0
                     ORDER BY distance
                     LIMIT %s
-                """, (embedding_str, tenant_id, top_k))
+                """, (embedding_str, *tenant_params, top_k))
                 rows = cursor.fetchall()
 
             # 批量查询 chunk_index=2 的项目/服务信息，避免 N+1

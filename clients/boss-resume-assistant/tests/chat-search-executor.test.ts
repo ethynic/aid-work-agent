@@ -1,6 +1,11 @@
 /**
- * ChatSearchExecutor 单测：搜索找人链路（点搜索图标 → 输入姓名 → 点结果项公司名 → 进入对话）。
- * fake 注入 snapshot/click/clickAndType。
+ * ChatSearchExecutor 单测：搜索找人链路（点搜索图标 → 定位搜索框 → 输入姓名 → 点结果项公司名 → 进入对话）。
+ * fake 注入 snapshot/click/clickAndType/clearInput。
+ *
+ * 搜索框定位范式（2026-08-27 真机诊断后）：点击入口后左栏收缩条**原位变形**为 INPUT——
+ * 无"新增"节点可 diff，改为直接识别（tag=INPUT + 形态；多 INPUT 取入口 y 邻近唯一者；
+ * 0 INPUT 回退 contenteditable DIV 形态唯一命中）。
+ * 输入落地：clickAndType 后校验姓名字符在 strings；未落地时 clearInput 清空重试一次。
  *
  * 真机关键（2026-08-13）：搜索结果浮层姓名是逐字节点（反爬），但**公司名是连续字符串且 "_" 开头**，
  * 故 locateTargetResult 找「联系人」标签下方的公司名（"_" 开头）点击，不靠姓名匹配。
@@ -54,19 +59,24 @@ function snapshotQueue(snaps: DomSnapshot[]): () => Promise<DomSnapshot> {
 interface FakeDeps {
   clicks: ClickPoint[]
   clickAndTypes: Array<{ point: ClickPoint; text: string }>
+  clearInputCalls: number
   click: (p: ClickPoint) => Promise<void>
   clickAndType: (p: ClickPoint, viewport: { width: number; height: number }, text: string) => Promise<void>
+  clearInput: () => Promise<void>
   sleep: (ms: number) => Promise<void>
 }
 
 function recorder(): FakeDeps {
   const clicks: ClickPoint[] = []
   const clickAndTypes: Array<{ point: ClickPoint; text: string }> = []
+  const state = { clearInputCalls: 0 }
   return {
     clicks,
     clickAndTypes,
+    get clearInputCalls() { return state.clearInputCalls },
     click: async (p: ClickPoint) => { clicks.push(p) },
     clickAndType: async (p: ClickPoint, _viewport: { width: number; height: number }, text: string) => { clickAndTypes.push({ point: p, text }) },
+    clearInput: async () => { state.clearInputCalls++ },
     sleep: async () => {},
   }
 }
@@ -99,57 +109,171 @@ test('正常找人：点搜索图标 → 搜索框 → 输入姓名 → 点结�
   assert.equal(r.clickAndTypes[0]!.text, NAME)
 })
 
-test('diff 定位：点前已有左栏 INPUT（收缩态），点后新增一个 → 点新增的（分辨率无关）', async () => {
+// 2026-08-27 真机诊断（INPUT 原位变形模型）：点搜索入口后，左栏顶部收缩条 DIV @(198,124,339,34)
+// 原位变形为 INPUT（位置/尺寸几乎不变）——没有"新增"节点，diff 范式失效，改为直接识别 INPUT。
+const MORPH_DIV: [number, number, number, number] = [198, 124, 339, 34] // 点击前的收缩条 DIV
+const MORPH_INPUT: [number, number, number, number] = [198, 124, 339, 34] // 点击后原位变形出的 INPUT
+
+test('INPUT 原位变形：点击前是 DIV 收缩条，点击后原位变 INPUT → 直接按 INPUT+形态定位（不做 diff）', async () => {
   const r = recorder()
-  const SHRUNK: [number, number, number, number] = [400, 128, 60, 28] // 顶栏收缩态输入框（cx=430<850）
   const executor = new ChatSearchExecutor({
     snapshot: snapshotQueue([
-      searchSnap({ layout: [SHRUNK] }), // snap0：点前已有收缩态 INPUT
-      searchSnap({ layout: [SHRUNK, SEARCH_BOX] }), // snap1：点后新增展开搜索框
+      searchSnap({ divs: [MORPH_DIV] }), // snap0：点前只有 DIV 收缩条（无 INPUT）
+      searchSnap({ layout: [MORPH_INPUT] }), // snap1：原位变形为 INPUT（与 DIV 几乎同位置）
       searchSnap({ items: [{ text: '联系人', bounds: CONTACTS_LABEL }, { text: '_测试公司', bounds: COMPANY }, { text: '张', bounds: [300, 188, 16, 16] }, { text: '三', bounds: [318, 188, 16, 16] }] }),
       searchSnap({ items: [{ text: '发送', bounds: SEND_BTN }] }),
     ]),
     click: r.click, clickAndType: r.clickAndType, sleep: r.sleep,
   })
   await executor.openContact({ name: NAME })
-  // 点击的是新增的搜索框 center (368,141)，不是收缩态那个 (430,142)
   assert.deepEqual(r.clicks[0], SEARCH_ENTRY_HIT)
   assert.deepEqual(r.clicks[r.clicks.length - 1], COMPANY_HIT)
   assert.equal(r.clickAndTypes.length, 1)
+  // INPUT @(198,124,339,34) 中心 (367.5,141)
+  assert.deepEqual(r.clickAndTypes[0]!.point, { x: 367.5, y: 141 })
+  assert.equal(r.clickAndTypes[0]!.text, NAME)
+})
+
+test('INPUT 原位变形失败模式回归：变形后页面同时存在旧收缩 DIV 与新 INPUT → 不误报"2 个候选"（diff 范式两真机失败之一）', async () => {
+  const r = recorder()
+  const executor = new ChatSearchExecutor({
+    snapshot: snapshotQueue([
+      searchSnap({ divs: [MORPH_DIV] }),
+      // snap1：INPUT 原位出现，包裹容器 DIV（339 宽）仍在——diff 会误判"新增 2 个"，直接识别只认 INPUT
+      searchSnap({ layout: [MORPH_INPUT], divs: [MORPH_DIV] }),
+      searchSnap({ items: [{ text: '联系人', bounds: CONTACTS_LABEL }, { text: '_测试公司', bounds: COMPANY }, { text: '张', bounds: [300, 188, 16, 16] }, { text: '三', bounds: [318, 188, 16, 16] }] }),
+      searchSnap({ items: [{ text: '发送', bounds: SEND_BTN }] }),
+    ]),
+    click: r.click, clickAndType: r.clickAndType, sleep: r.sleep,
+  })
+  await executor.openContact({ name: NAME })
+  assert.deepEqual(r.clickAndTypes[0]!.point, { x: 367.5, y: 141 })
+})
+
+test('多 INPUT：仅一个与搜索入口 y 相邻（|Δy|≤80）→ 取该唯一邻近者（另一个在远处）', async () => {
+  const r = recorder()
+  const FAR_INPUT: [number, number, number, number] = [248, 385, 240, 30] // cy=400，距入口 y=141 有 259px
+  const executor = new ChatSearchExecutor({
+    snapshot: snapshotQueue([
+      searchSnap(),
+      searchSnap({ layout: [SEARCH_BOX, FAR_INPUT] }),
+      searchSnap({ items: [{ text: '联系人', bounds: CONTACTS_LABEL }, { text: '_测试公司', bounds: COMPANY }, { text: '张', bounds: [300, 188, 16, 16] }, { text: '三', bounds: [318, 188, 16, 16] }] }),
+      searchSnap({ items: [{ text: '发送', bounds: SEND_BTN }] }),
+    ]),
+    click: r.click, clickAndType: r.clickAndType, sleep: r.sleep,
+  })
+  await executor.openContact({ name: NAME })
+  assert.deepEqual(r.clickAndTypes.length, 1)
+  // 邻近带的 SEARCH_BOX（cy=141，Δy=0）胜出，不是远处的 (368,400)
   assert.deepEqual(r.clickAndTypes[0]!.point, { x: 368, y: 141 })
 })
 
-test('diff 定位：点图标弹出的 INPUT 在右列（cx>=850，点错图标开了别的弹层）→ 不当搜索框', async () => {
+test('多 INPUT 且都在入口邻近带内 → 无法唯一 → ChatSearchError（fail-loud）', async () => {
+  const r = recorder()
+  const executor = new ChatSearchExecutor({
+    snapshot: snapshotQueue([searchSnap(), searchSnap({ layout: [SEARCH_BOX, [248, 150, 240, 30]] })]),
+    click: r.click, clickAndType: r.clickAndType, sleep: r.sleep,
+  })
+  await assert.rejects(executor.openContact({ name: NAME }), /2 个候选搜索输入框/)
+  assert.ok(r.clicks.length >= 1)
+  assert.equal(r.clickAndTypes.length, 0)
+})
+
+test('0 INPUT 回退：DIV 输入条形态唯一命中（旧版 contenteditable 页面兼容，按形态识别不校验属性）', async () => {
+  const r = recorder()
+  const DIV_FIELD: [number, number, number, number] = [248, 126, 240, 30] // contenteditable DIV 搜索框
+  const executor = new ChatSearchExecutor({
+    snapshot: snapshotQueue([
+      searchSnap(),
+      searchSnap({ divs: [DIV_FIELD] }), // 无 INPUT，只有 DIV 形态输入条
+      searchSnap({ items: [{ text: '联系人', bounds: CONTACTS_LABEL }, { text: '_测试公司', bounds: COMPANY }, { text: '张', bounds: [300, 188, 16, 16] }, { text: '三', bounds: [318, 188, 16, 16] }] }),
+      searchSnap({ items: [{ text: '发送', bounds: SEND_BTN }] }),
+    ]),
+    click: r.click, clickAndType: r.clickAndType, sleep: r.sleep,
+  })
+  await executor.openContact({ name: NAME })
+  assert.deepEqual(r.clickAndTypes.length, 1)
+  assert.deepEqual(r.clickAndTypes[0]!.point, { x: 368, y: 141 })
+})
+
+test('输入未落地（聚焦竞态）→ clearInput 清空重试一次成功', async () => {
+  const r = recorder()
+  const executor = new ChatSearchExecutor({
+    snapshot: snapshotQueue([
+      searchSnap(), // snap0：点图标前
+      searchSnap({ layout: [SEARCH_BOX] }), // snap1：搜索框弹出
+      // snap2（第一次输入后）：姓名字符未出现（聚焦落空）——只有联系人标签无姓名字符
+      searchSnap({ items: [{ text: '联系人', bounds: CONTACTS_LABEL }, { text: '稍', bounds: [300, 188, 16, 16] }, { text: '后', bounds: [318, 188, 16, 16] }] }),
+      searchSnap({ layout: [SEARCH_BOX] }), // snap3（清空后重定位）：搜索框仍在
+      // snap4（第二次输入后）：姓名 3/3 字符出现 + 联系人标签 + 结果公司名
+      searchSnap({ items: [{ text: '联系人', bounds: CONTACTS_LABEL }, { text: '_测试公司', bounds: COMPANY }, { text: '张', bounds: [300, 188, 16, 16] }, { text: '三', bounds: [318, 188, 16, 16] }] }),
+      searchSnap({ items: [{ text: '发送', bounds: SEND_BTN }] }),
+    ]),
+    click: r.click, clickAndType: r.clickAndType, clearInput: r.clearInput, sleep: r.sleep,
+  })
+  await executor.openContact({ name: NAME })
+  assert.equal(r.clearInputCalls, 1, '清空恰好一次')
+  assert.equal(r.clickAndTypes.length, 2, '输入恰好两次（首次未落地+重试）')
+  assert.deepEqual(r.clickAndTypes[0]!.point, { x: 368, y: 141 })
+  assert.deepEqual(r.clickAndTypes[1]!.point, { x: 368, y: 141 })
+  assert.equal(r.clickAndTypes[1]!.text, NAME)
+  assert.deepEqual(r.clicks[r.clicks.length - 1], COMPANY_HIT)
+})
+
+test('输入未落地且重试仍失败 → ChatSearchError（文案注明已重试一次）', async () => {
+  const r = recorder()
+  const executor = new ChatSearchExecutor({
+    snapshot: snapshotQueue([
+      searchSnap(),
+      searchSnap({ layout: [SEARCH_BOX] }),
+      // 第一次输入后：无姓名字符
+      searchSnap({ items: [{ text: '稍', bounds: [300, 188, 16, 16] }] }),
+      searchSnap({ layout: [SEARCH_BOX] }),
+      // 第二次输入后：仍无姓名字符（队列耗尽后重复本快照）
+      searchSnap({ items: [{ text: '后', bounds: [318, 188, 16, 16] }] }),
+    ]),
+    click: r.click, clickAndType: r.clickAndType, clearInput: r.clearInput, sleep: r.sleep,
+  })
+  await assert.rejects(executor.openContact({ name: NAME }), /已清空重试一次仍失败/)
+  assert.equal(r.clearInputCalls, 1)
+  assert.equal(r.clickAndTypes.length, 2)
+})
+
+test('输入未落地且未注入 clearInput → 直接报错（不清空重打会拼接残留文本）', async () => {
+  const r = recorder()
+  const executor = new ChatSearchExecutor({
+    snapshot: snapshotQueue([
+      searchSnap(),
+      searchSnap({ layout: [SEARCH_BOX] }),
+      searchSnap({ items: [{ text: '稍', bounds: [300, 188, 16, 16] }] }),
+    ]),
+    click: r.click, clickAndType: r.clickAndType, sleep: r.sleep,
+  })
+  await assert.rejects(executor.openContact({ name: NAME }), /未落地/)
+  assert.equal(r.clearInputCalls, 0)
+  assert.equal(r.clickAndTypes.length, 1)
+})
+
+test('点击搜索图标后未找到搜索框（无 INPUT 亦无 DIV 形态输入条）→ ChatSearchError', async () => {
+  const r = recorder()
+  const executor = new ChatSearchExecutor({
+    snapshot: snapshotQueue([searchSnap(), searchSnap()]),
+    click: r.click, clickAndType: r.clickAndType, sleep: r.sleep,
+  })
+  await assert.rejects(executor.openContact({ name: NAME }), /未发现搜索输入框/)
+  assert.ok(r.clicks.length >= 1, '入口已点击（无搜索框时含重试）')
+})
+
+test('点图标弹出的 INPUT 在右列（cx>=850，点错图标开了别的弹层）→ 形态过滤不当搜索框', async () => {
   const r = recorder()
   const RIGHT_POPUP_INPUT: [number, number, number, number] = [1000, 130, 240, 30] // 右列弹层表单输入框
   const executor = new ChatSearchExecutor({
     snapshot: snapshotQueue([searchSnap(), searchSnap({ layout: [RIGHT_POPUP_INPUT] })]),
     click: r.click, clickAndType: r.clickAndType, sleep: r.sleep,
   })
-  await assert.rejects(executor.openContact({ name: NAME }), /未发现新增的搜索输入条|未找到搜索框/)
+  await assert.rejects(executor.openContact({ name: NAME }), /未发现搜索输入框/)
   assert.ok(r.clicks.length === 1 || r.clicks.length === 2, `入口点击次数应 1 或 2（含重试），实际 ${r.clicks.length}`)
   assert.equal(r.clickAndTypes.length, 0)
-})
-
-test('搜索框非唯一（doc0 有 2 个 INPUT）→ ChatSearchError，不点结果', async () => {
-  const r = recorder()
-  const executor = new ChatSearchExecutor({
-    snapshot: snapshotQueue([searchSnap(), searchSnap({ layout: [SEARCH_BOX, [248, 150, 240, 30]] })]),
-    click: r.click, clickAndType: r.clickAndType, sleep: r.sleep,
-  })
-  await assert.rejects(executor.openContact({ name: NAME }), /2 个候选输入条|2 个候选搜索框/)
-  assert.deepEqual(r.clicks.length >= 1, true)
-  assert.equal(r.clickAndTypes.length, 0)
-})
-
-test('点击搜索图标后未找到搜索框 → ChatSearchError', async () => {
-  const r = recorder()
-  const executor = new ChatSearchExecutor({
-    snapshot: snapshotQueue([searchSnap(), searchSnap()]),
-    click: r.click, clickAndType: r.clickAndType, sleep: r.sleep,
-  })
-  await assert.rejects(executor.openContact({ name: NAME }), /未发现新增的搜索输入条|未找到搜索框/)
-  assert.ok(r.clicks.length >= 1, '入口已点击（无搜索框时含重试）')
 })
 
 test('搜索后无结果项公司名（搜索无结果）→ ChatSearchError，不点结果', async () => {
@@ -228,7 +352,7 @@ test('搜索框在右列（cx>=850）→ 视为未找到搜索框', async () => 
     snapshot: snapshotQueue([searchSnap(), searchSnap({ layout: [[880, 126, 240, 30]] })]),
     click: r.click, clickAndType: r.clickAndType, sleep: r.sleep,
   })
-  await assert.rejects(executor.openContact({ name: NAME }), /未发现新增的搜索输入条|未找到搜索框/)
+  await assert.rejects(executor.openContact({ name: NAME }), /未发现搜索输入框/)
 })
 
 test('findSearchBox 按 nodeName=INPUT 过滤：多个大 DIV 满足几何但只 1 INPUT → 唯一（真机 bug 回归）', async () => {

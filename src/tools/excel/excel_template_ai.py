@@ -277,7 +277,12 @@ def analyze_structure(
     }
 
     prompt = _build_analyze_prompt(grid_text, data_keys, data)
-    raw = (llm_callable or _default_llm)(prompt)
+    if llm_callable is not None:
+        raw = llm_callable(prompt)
+    else:
+        # 结构分析是本链路成败关键且模板版式多变，默认开思考（预算见 _default_llm）；
+        # M3 抽取层（excel_extract）/技能管线等确定性场景不传参保持默认关闭
+        raw = _default_llm(prompt, enable_thinking=True)
     parsed = _extract_json(raw)
     structure = _coerce_structure(parsed, grid)
 
@@ -1079,14 +1084,16 @@ def _serialize_structure(s: SheetStructure) -> Dict[str, Any]:
 def _default_llm(
     prompt: str,
     *,
-    disable_thinking: bool = True,
+    enable_thinking: bool = False,
     return_usage: bool = False,
 ):
     """默认 LLM 调用（deepseek-v4-pro 等思考模型）。
 
-    结构分析**默认关闭思考**：与 travel-quote/attraction.py 一致——思考模型的思考 token
-    也计入 max_tokens，开启时小 max_tokens 会截断输出 JSON；关闭后输出确定、不截断、几秒返回。
-    复杂模板若分析不准，可传 disable_thinking=False 开启思考（届时需更大 max_tokens 与超时）。
+    思考开关统一命名为 enable_thinking（与网关 Provider、settings.llm 同名），
+    本函数默认 False（关思考，供 M3 抽取层等确定性场景）；结构分析
+    （analyze_structure）因成败关键且版式多变，显式传 True 开启思考。
+    思考模型的思考 token 也计入 max_tokens，故 enable_thinking=True 时
+    预算自动放大到 65536、超时放宽到 240s，避免截断。
 
     return_usage=True 时返回 ``(content, usage_dict)`` 而非仅 content（Excel ETL M3
     抽取层需要 usage 做计量上报）；默认 False 完全向后兼容。usage_dict 键与
@@ -1097,8 +1104,10 @@ def _default_llm(
     """
     from src.config.settings import settings
     provider = settings.llm.provider
-    # 关闭思考时这是纯输出预算；结构 JSON 很短，4096 足够
-    max_tokens = 4096
+    # 预算按"开思考×4倍"原则给足：思考 token 计入 max_tokens（deepseek 计费口径），
+    # 小预算会被思考吃光致 content 空/JSON 截断（真机事故 2026-08 济南无回复）
+    max_tokens = 65536 if enable_thinking else 16384
+    timeout = 240.0 if enable_thinking else 120.0
 
     if provider == "qwen":
         import httpx
@@ -1115,13 +1124,13 @@ def _default_llm(
             "max_tokens": max_tokens,
         }
         # qwen3.x 系列走 OpenAI 兼容接口（原生 Generation 端点不适用），思考开关用 enable_thinking
-        if disable_thinking:
+        if not enable_thinking:
             payload["enable_thinking"] = False
         resp = httpx.post(
             api_url,
             headers={"Authorization": f"Bearer {keys[0]}", "Content-Type": "application/json"},
             json=payload,
-            timeout=120.0,
+            timeout=timeout,
         )
         resp.raise_for_status()
         data = resp.json()
@@ -1151,13 +1160,13 @@ def _default_llm(
             "temperature": 0.0,
             "max_tokens": max_tokens,
         }
-        if provider == "deepseek" and disable_thinking:
+        if provider == "deepseek" and not enable_thinking:
             payload["thinking"] = {"type": "disabled"}
         resp = httpx.post(
             api_url,
             headers={"Authorization": f"Bearer {keys[0]}", "Content-Type": "application/json"},
             json=payload,
-            timeout=120.0,
+            timeout=timeout,
         )
         resp.raise_for_status()
         data = resp.json()

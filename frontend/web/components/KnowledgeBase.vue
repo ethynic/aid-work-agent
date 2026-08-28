@@ -21,11 +21,14 @@
         <div class="flex-1 overflow-hidden p-6">
           <div class="h-full flex gap-4">
             <!-- 左侧分类导航 -->
-            <div class="w-52 flex-shrink-0 flex flex-col bg-white rounded-xl border border-default">
+            <div
+              class="flex-shrink-0 flex flex-col bg-white rounded-xl border border-default relative"
+              :style="categoryPanelStyle"
+            >
               <div class="px-3 py-3 border-b border-default">
                 <span class="text-sm font-medium text-default">文档分类</span>
               </div>
-              <div class="flex-1 overflow-y-auto p-2">
+              <div class="flex-1 overflow-auto p-2">
                 <!-- 全部 -->
                 <button
                   @click="selectCategory(null)"
@@ -39,7 +42,7 @@
                 </button>
 
                 <!-- 分类树 -->
-                <div class="mt-0.5">
+                <div class="mt-0.5 min-w-max">
                   <CategoryTreeItem
                     v-for="cat in categoryTree"
                     :key="cat.id"
@@ -58,16 +61,25 @@
                   + 添加分类
                 </button>
               </div>
+
+              <!-- 拖拽调整宽度的手柄 -->
+              <div
+                class="hidden md:block absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize z-10 group hover:bg-primary-200/60 active:bg-primary-300/60 transition-colors"
+                @mousedown="startCategoryResize"
+              >
+                <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-0.5 h-8 bg-gray-300 rounded-full opacity-0 group-hover:opacity-100 group-hover:bg-primary-400 transition-opacity"></div>
+              </div>
             </div>
 
             <!-- 右侧文档列表 -->
             <div class="flex-1 flex flex-col min-w-0">
               <div class="page-toolbar mb-3">
                 <div class="page-toolbar-left">
-                  <BaseInput v-model="searchQuery" placeholder="搜索文档..." size="sm" class="w-80" @keyup.enter="handleSearchInput" @input="handleSearchInput" />
+                  <BaseInput v-model="searchQuery" placeholder="在当前选中分类（含子级）中搜索文档" size="sm" class="w-[300px]" @keyup.enter="handleSearchInput" @input="handleSearchInput" />
                   <BaseButton v-if="isSearchMode" size="sm" intent="secondary" @click="clearSearch">显示全部</BaseButton>
                 </div>
                 <div class="page-toolbar-right">
+                  <BaseButton :disabled="selectedArr.length === 0" intent="secondary" @click="openMoveModal">移动 ({{ selectedArr.length }})</BaseButton>
                   <BaseButton :disabled="selectedArr.length === 0" intent="danger" @click="handleBatchDelete">批量删除 ({{ selectedArr.length }})</BaseButton>
                   <BaseButton @click="openUploadModal">上传文档</BaseButton>
                 </div>
@@ -211,95 +223,82 @@
     </main>
 
     <!-- Upload Modal -->
-    <div v-if="showUploadModal" class="fixed inset-0 bg-black/40 flex items-center justify-center z-50" @click.self="showUploadModal = false">
-      <div class="bg-white rounded-2xl w-full max-w-lg mx-4 shadow-2xl">
-        <div class="flex items-center justify-between px-6 py-4 border-b border-default">
-          <h2 class="text-sm font-semibold text-default">上传文档</h2>
-          <button @click="showUploadModal = false" class="p-2 text-muted hover:text-default hover:bg-surface-hover rounded-lg transition-colors">
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
+    <BaseModal v-model="showUploadModal" title="上传文档" size="md" mode="create">
+      <!-- 分类提示：文档归入左侧当前选中的分类，弹框内不再重复选择 -->
+      <div class="mb-4 p-3 bg-canvas rounded-lg">
+        <p class="text-sm text-default">
+          文档将上传到分类：
+          <span v-if="uploadSourceType" class="font-medium text-primary-600">
+            {{ uploadCategoryPath.join(' / ') }}
+          </span>
+          <span v-else class="text-muted">不分类（全部）</span>
+        </p>
+      </div>
+
+      <div @dragover.prevent="isDragging = true" @dragleave.prevent="isDragging = false" @drop.prevent="handleDrop"
+        :class="['border-2 border-dashed rounded-xl p-8 text-center transition-all', isDragging ? 'border-primary-500 bg-primary-50' : 'border-default hover:border-hover']">
+        <input ref="fileInputRef" type="file" multiple
+          accept=".docx,.xlsx,.pptx,.pdf,.txt,.md,.json,.yaml,.yml,.log,.csv,.xml,.ini,.properties,.conf,.config"
+          @change="handleFileSelect" class="hidden" />
+
+        <svg v-if="selectedFiles.length === 0" class="w-12 h-12 mx-auto text-muted mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+        </svg>
+
+        <div v-if="selectedFiles.length === 0" class="space-y-2">
+          <p class="text-default font-medium">拖拽文件到此处，或<span @click="fileInputRef?.click()" class="text-primary-600 hover:text-primary-500 cursor-pointer">点击选择</span></p>
+          <p class="text-sm text-muted">支持多文件上传，单文件不超过 {{ MAX_FILE_SIZE_MB }}MB</p>
+          <p class="text-xs text-muted">支持格式：docx, xlsx, pptx, pdf, txt, md, json, yaml, yml, log, csv, xml, ini, properties, conf, config 等</p>
         </div>
 
-        <div class="p-6">
-          <!-- 分类提示：文档归入左侧当前选中的分类，弹框内不再重复选择 -->
-          <div class="mb-4 p-3 bg-canvas rounded-lg">
-            <p class="text-sm text-default">
-              文档将上传到分类：
-              <span v-if="uploadSourceType" class="font-medium text-primary-600">
-                {{ categoryDisplayName(uploadSourceType) }}<template v-if="uploadSubCategory"> / {{ categoryDisplayName(uploadSubCategory) }}</template>
-              </span>
-              <span v-else class="text-muted">不分类（全部）</span>
-            </p>
-          </div>
-
-          <div @dragover.prevent="isDragging = true" @dragleave.prevent="isDragging = false" @drop.prevent="handleDrop"
-            :class="['border-2 border-dashed rounded-xl p-8 text-center transition-all', isDragging ? 'border-primary-500 bg-primary-50' : 'border-default hover:border-hover']">
-            <input ref="fileInputRef" type="file" multiple
-              accept=".docx,.xlsx,.pptx,.pdf,.txt,.md,.json,.yaml,.yml,.log,.csv,.xml,.ini,.properties,.conf,.config"
-              @change="handleFileSelect" class="hidden" />
-
-            <svg v-if="selectedFiles.length === 0" class="w-12 h-12 mx-auto text-muted mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-            </svg>
-
-            <div v-if="selectedFiles.length === 0" class="space-y-2">
-              <p class="text-default font-medium">拖拽文件到此处，或<span @click="fileInputRef?.click()" class="text-primary-600 hover:text-primary-500 cursor-pointer">点击选择</span></p>
-              <p class="text-sm text-muted">支持多文件上传，单文件不超过 {{ MAX_FILE_SIZE_MB }}MB</p>
-              <p class="text-xs text-muted">支持格式：docx, xlsx, pptx, pdf, txt, md, json, yaml, yml, log, csv, xml, ini, properties, conf, config 等</p>
-            </div>
-
-            <div v-else class="space-y-3">
-              <div class="space-y-2 max-h-48 overflow-y-auto">
-                <div v-for="(file, index) in selectedFiles" :key="index" class="flex items-center justify-between gap-3 px-3 py-2 bg-canvas rounded-lg">
-                  <div class="flex items-center gap-3 min-w-0 flex-1">
-                    <div :class="getFileIconClassByExt(file.name)" class="w-8 h-8 rounded flex items-center justify-center flex-shrink-0">
-                      <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                      </svg>
-                    </div>
-                    <div class="text-left min-w-0 flex-1">
-                      <p class="text-default font-medium text-sm truncate" :title="file.name">{{ file.name }}</p>
-                      <p class="text-xs text-muted">{{ formatFileSize(file.size) }}</p>
-                    </div>
-                  </div>
-                  <button @click.stop="removeFile(index)" class="p-1 text-muted hover:text-default hover:bg-surface-hover rounded flex-shrink-0">
-                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                  </button>
+        <div v-else class="space-y-3">
+          <div class="space-y-2 max-h-48 overflow-y-auto">
+            <div v-for="(file, index) in selectedFiles" :key="index" class="flex items-center justify-between gap-3 px-3 py-2 bg-canvas rounded-lg">
+              <div class="flex items-center gap-3 min-w-0 flex-1">
+                <div :class="getFileIconClassByExt(file.name)" class="w-8 h-8 rounded flex items-center justify-center flex-shrink-0">
+                  <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  </svg>
+                </div>
+                <div class="text-left min-w-0 flex-1">
+                  <p class="text-default font-medium text-sm truncate" :title="file.name">{{ file.name }}</p>
+                  <p class="text-xs text-muted">{{ formatFileSize(file.size) }}</p>
                 </div>
               </div>
-              <div class="flex items-center justify-between">
-                <p class="text-sm text-muted">已选择 {{ selectedFiles.length }} 个文件</p>
-                <button @click.stop="clearFiles" class="text-sm text-muted hover:text-default">清空全部</button>
-              </div>
+              <button @click.stop="removeFile(index)" class="p-1 text-muted hover:text-default hover:bg-surface-hover rounded flex-shrink-0">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
             </div>
           </div>
-
-          <div v-if="uploadError" class="mt-3 p-3 bg-danger-50 rounded-lg">
-            <p class="text-sm text-danger-500">{{ uploadError }}</p>
+          <div class="flex items-center justify-between">
+            <p class="text-sm text-muted">已选择 {{ selectedFiles.length }} 个文件</p>
+            <button @click.stop="clearFiles" class="text-sm text-muted hover:text-default">清空全部</button>
           </div>
-          <div v-if="uploadErrors.length > 0" class="mt-3 p-3 bg-warning-50 rounded-lg">
-            <p class="text-sm text-warning-600 font-medium mb-2">以下文件上传失败：</p>
-            <ul class="text-sm text-warning-700 space-y-1">
-              <li v-for="(err, index) in uploadErrors" :key="index" class="flex items-start gap-2">
-                <span class="text-warning-500">•</span>
-                <span>{{ err.filename }}: {{ err.error }}</span>
-              </li>
-            </ul>
-          </div>
-        </div>
-
-        <div class="flex justify-end gap-3 px-6 py-4 border-t border-default bg-canvas rounded-b-2xl">
-          <BaseButton intent="secondary" @click="handleCancelUpload">取消</BaseButton>
-          <BaseButton :disabled="selectedFiles.length === 0 || isUploading" @click="handleUpload">
-            {{ uploadButtonText }}
-          </BaseButton>
         </div>
       </div>
-    </div>
+
+      <div v-if="uploadError" class="mt-3 p-3 bg-danger-50 rounded-lg">
+        <p class="text-sm text-danger-500">{{ uploadError }}</p>
+      </div>
+      <div v-if="uploadErrors.length > 0" class="mt-3 p-3 bg-warning-50 rounded-lg">
+        <p class="text-sm text-warning-600 font-medium mb-2">以下文件上传失败：</p>
+        <ul class="text-sm text-warning-700 space-y-1">
+          <li v-for="(err, index) in uploadErrors" :key="index" class="flex items-start gap-2">
+            <span class="text-warning-500">•</span>
+            <span>{{ err.filename }}: {{ err.error }}</span>
+          </li>
+        </ul>
+      </div>
+
+      <template #footer>
+        <BaseButton intent="secondary" @click="handleCancelUpload">取消</BaseButton>
+        <BaseButton :disabled="selectedFiles.length === 0 || isUploading" @click="handleUpload">
+          {{ uploadButtonText }}
+        </BaseButton>
+      </template>
+    </BaseModal>
 
     <!-- Delete Document Confirmation Modal -->
     <BaseModal v-model="showDeleteConfirm" title="删除文档" size="md" mode="view">
@@ -321,17 +320,44 @@
       </template>
     </BaseModal>
 
+    <!-- Move Documents Modal -->
+    <BaseModal v-model="showMoveModal" title="移动文档到分类" size="md" mode="create">
+      <div class="mb-4 p-3 bg-canvas rounded-lg">
+        <p class="text-sm text-default">
+          将把 <span class="font-medium text-primary-600">{{ selectedArr.length }}</span> 个文档移动到目标分类
+        </p>
+      </div>
+      <div v-if="moveTargetSourceType" class="mb-4 p-3 bg-primary-50 rounded-lg">
+        <p class="text-sm text-default">
+          目标分类：<span class="font-medium text-primary-700">{{ moveCategoryPath.join(' / ') }}</span>
+        </p>
+      </div>
+      <div class="max-h-[50vh] overflow-auto border border-default rounded-lg p-2">
+        <CategoryTreeItem
+          v-for="cat in categoryTree"
+          :key="cat.id"
+          :category="cat"
+          :depth="0"
+          :selected-source-type="moveTargetSourceType"
+          :selected-sub-category="moveTargetSubCategory"
+          :show-actions="false"
+          :default-expanded="true"
+          @select="handleMoveCategorySelect"
+        />
+      </div>
+      <template #footer>
+        <BaseButton intent="secondary" @click="showMoveModal = false">取消</BaseButton>
+        <BaseButton :disabled="!moveTargetSourceType || isMoving" @click="confirmMove">
+          {{ isMoving ? '移动中...' : `移动到目标分类 (${selectedArr.length})` }}
+        </BaseButton>
+      </template>
+    </BaseModal>
+
     <!-- Add Category Modal -->
     <BaseModal v-model="showAddCategoryModal" title="添加分类" size="md" mode="create">
       <div class="space-y-4">
         <div>
-          <label class="text-sm text-muted mb-1 block">英文代号 <span class="text-danger-500">*</span></label>
-          <BaseInput v-model="newCategorySourceType" placeholder="如: contract, policy" />
-          <p v-if="newCategoryError" class="text-xs text-danger-500 mt-1">{{ newCategoryError }}</p>
-          <p v-else class="text-xs text-muted mt-1">仅允许小写字母开头，后续为小写字母、数字、下划线或连字符</p>
-        </div>
-        <div>
-          <label class="text-sm text-muted mb-1 block">分类名称</label>
+          <label class="text-sm text-muted mb-1 block">分类名称 <span class="text-danger-500">*</span></label>
           <BaseInput v-model="newCategoryDisplayName" placeholder="如: 合同文档, 政策文件" />
         </div>
         <div>
@@ -339,7 +365,7 @@
           <BaseSelect v-model="newCategoryParentId">
             <option value="">顶级分类</option>
             <option v-for="cat in categories" :key="cat.id" :value="String(cat.id)">
-              {{ cat.display_name || cat.source_type }} ({{ cat.source_type }})
+              {{ cat.display_name || cat.source_type }}
             </option>
           </BaseSelect>
         </div>
@@ -438,6 +464,7 @@ import { type SubagentListItem } from '@/api/subagent'
 import { getMyAllowedAgents } from '@/api/saasPermissions'
 import {
   listDocuments, deleteDocument, uploadDocument, searchDocuments, getDocumentDownloadUrl,
+  moveDocuments,
   type DocumentResponse, type SearchResultItem,
   listCategories, createCategory, updateCategory, deleteCategory,
   type CategoryResponse,
@@ -488,12 +515,46 @@ const categoryTree = ref<CategoryTreeNode[]>([])
 const selectedSourceType = ref<string | null>(null)
 const selectedSubCategory = ref<string | null>(null)
 
-// 添加分类
+// ========== 分类树宽度拖拽 ==========
+const CATEGORY_PANEL_MIN_WIDTH = 180
+const CATEGORY_PANEL_MAX_WIDTH = 400
+// 默认宽度与原 w-52（208px）一致
+const categoryPanelWidth = ref(208)
+
+const categoryPanelStyle = computed(() => ({
+  width: `${categoryPanelWidth.value}px`,
+  minWidth: `${CATEGORY_PANEL_MIN_WIDTH}px`,
+}))
+
+function startCategoryResize(e: MouseEvent) {
+  e.preventDefault()
+  const startX = e.clientX
+  const startWidth = categoryPanelWidth.value
+
+  function onMouseMove(ev: MouseEvent) {
+    // 分类树在左侧，向右拖 = 变宽，向左拖 = 变窄
+    const delta = ev.clientX - startX
+    const maxWidth = Math.min(CATEGORY_PANEL_MAX_WIDTH, window.innerWidth * 0.4)
+    categoryPanelWidth.value = Math.min(Math.max(startWidth + delta, CATEGORY_PANEL_MIN_WIDTH), maxWidth)
+  }
+
+  function onMouseUp() {
+    document.removeEventListener('mousemove', onMouseMove)
+    document.removeEventListener('mouseup', onMouseUp)
+    document.body.style.cursor = ''
+    document.body.style.userSelect = ''
+  }
+
+  document.body.style.cursor = 'col-resize'
+  document.body.style.userSelect = 'none'
+  document.addEventListener('mousemove', onMouseMove)
+  document.addEventListener('mouseup', onMouseUp)
+}
+
+// 添加分类（英文代号由后端自动生成，无需用户填写）
 const showAddCategoryModal = ref(false)
-const newCategorySourceType = ref('')
 const newCategoryDisplayName = ref('')
 const newCategoryParentId = ref('')
-const newCategoryError = ref('')
 const isCreatingCategory = ref(false)
 
 // 重命名分类
@@ -527,6 +588,12 @@ const uploadErrors = ref<{ filename: string; error: string }[]>([])
 const documentToDelete = ref<DocumentResponse | null>(null)
 const showDeleteConfirm = ref(false)
 const isDeleting = ref(false)
+
+// ========== 移动文档 ==========
+const showMoveModal = ref(false)
+const moveTargetSourceType = ref<string | null>(null)
+const moveTargetSubCategory = ref<string | null>(null)
+const isMoving = ref(false)
 
 const uploadProgress = ref({
   total: 0,
@@ -620,7 +687,13 @@ async function performSearch(query: string) {
   isSearching.value = true
   searchError.value = ''
   try {
-    const result = await searchDocuments(query)
+    // 跟随当前选中分类：选中子分类时后端会展开为含其所有子级
+    const result = await searchDocuments(
+      query,
+      10,
+      selectedSourceType.value || undefined,
+      selectedSubCategory.value || undefined
+    )
     if (result.success) {
       searchResults.value = result.results
     } else {
@@ -748,11 +821,20 @@ function handleCategorySelect(cat: CategoryTreeNode) {
   }
 }
 
-// 分类显示名称（用于上传弹框提示）
-function categoryDisplayName(sourceType: string): string {
-  const cat = categories.value.find(c => c.source_type === sourceType)
-  return cat?.display_name || sourceType
-}
+// 上传弹框展示当前选中分类的完整路径（一级/二级/三级），从选中分类向上追溯父级
+const uploadCategoryPath = computed(() => {
+  const target = uploadSubCategory.value || uploadSourceType.value
+  if (!target) return []
+  const path: string[] = []
+  let current = categories.value.find(c => c.source_type === target)
+  while (current) {
+    path.unshift(current.display_name || current.source_type)
+    current = current.parent_id != null
+      ? categories.value.find(c => c.id === current!.parent_id)
+      : undefined
+  }
+  return path
+})
 
 // 当前选中分类的 id（添加分类时用作默认父分类）：子分类优先，其次顶级分类，未选中则顶级
 function getSelectedCategoryId(): string {
@@ -769,23 +851,21 @@ function openUploadModal() {
 }
 
 function openAddCategory() {
-  newCategorySourceType.value = ''
   newCategoryDisplayName.value = ''
   newCategoryParentId.value = getSelectedCategoryId()
-  newCategoryError.value = ''
   showAddCategoryModal.value = true
 }
 
 async function handleCreateCategory() {
-  const st = newCategorySourceType.value.trim()
-  if (!/^[a-z][a-z0-9_-]*$/.test(st)) {
-    newCategoryError.value = '格式错误：仅允许小写字母开头，后续为小写字母、数字、下划线或连字符'
+  const name = newCategoryDisplayName.value.trim()
+  if (!name) {
+    toast.error('分类名称不能为空')
     return
   }
   isCreatingCategory.value = true
   try {
     const parentId = newCategoryParentId.value ? Number(newCategoryParentId.value) : null
-    await createCategory(st, newCategoryDisplayName.value.trim() || st, parentId)
+    await createCategory(name, parentId)
     showAddCategoryModal.value = false
     await loadCategories()
     toast.success('分类创建成功')
@@ -1051,6 +1131,71 @@ async function handleBatchDelete() {
     toast.error(error.response?.data?.error || '批量删除失败')
   } finally {
     isDeleting.value = false
+  }
+}
+
+// ========== 移动文档 ==========
+
+function openMoveModal() {
+  moveTargetSourceType.value = null
+  moveTargetSubCategory.value = null
+  showMoveModal.value = true
+}
+
+// 与左侧分类树选中语义一致：顶级分类 -> (source_type, null)；子分类 -> (rootSourceType, source_type)
+function handleMoveCategorySelect(cat: CategoryTreeNode) {
+  if (cat.parent_id === null) {
+    moveTargetSourceType.value = cat.source_type
+    moveTargetSubCategory.value = null
+  } else {
+    moveTargetSourceType.value = cat.rootSourceType || cat.source_type
+    moveTargetSubCategory.value = cat.source_type
+  }
+}
+
+// 移动弹框展示目标分类的完整路径（一级/二级/三级），从目标分类向上追溯父级
+const moveCategoryPath = computed(() => {
+  const target = moveTargetSubCategory.value || moveTargetSourceType.value
+  if (!target) return []
+  const path: string[] = []
+  let current = categories.value.find(c => c.source_type === target)
+  while (current) {
+    path.unshift(current.display_name || current.source_type)
+    current = current.parent_id != null
+      ? categories.value.find(c => c.id === current!.parent_id)
+      : undefined
+  }
+  return path
+})
+
+async function confirmMove() {
+  if (!moveTargetSourceType.value || selectedArr.value.length === 0) return
+  // 所选文档均已位于目标分类时无需移动
+  const targetSub = moveTargetSubCategory.value ?? null
+  const allAlreadyInTarget = documents.value
+    .filter(d => selectedArr.value.includes(d.id))
+    .every(d => d.source_type === moveTargetSourceType.value && (d.sub_category ?? null) === targetSub)
+  if (allAlreadyInTarget) {
+    toast.warning('所选文档已在目标分类中')
+    return
+  }
+  isMoving.value = true
+  try {
+    const result = await moveDocuments(selectedArr.value, moveTargetSourceType.value, moveTargetSubCategory.value)
+    showMoveModal.value = false
+    clearSelection()
+    await loadDocuments()
+    await loadCategories()
+    if (result.skipped > 0) {
+      toast.success(`移动成功（${result.moved} 个），${result.skipped} 个已在目标分类`)
+    } else {
+      toast.success(`成功移动 ${result.moved} 个文档`)
+    }
+  } catch (error: any) {
+    console.error('前端日志：移动文档失败', error)
+    toast.error(error.message || '移动失败')
+  } finally {
+    isMoving.value = false
   }
 }
 

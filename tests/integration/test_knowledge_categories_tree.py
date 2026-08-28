@@ -30,10 +30,23 @@ class TestKnowledgeCategoryTree:
             cur = conn.cursor()
             cur.execute(
                 "INSERT INTO documents (tenant_id, title, source_type, sub_category, file_type, file_path) "
-                "VALUES (%s, %s, %s, %s, %s, %s)",
+                "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
                 (tenant_id, title, source_type, sub_category, "txt", "/tmp/test.txt"),
             )
+            doc_id = cur.fetchone()["id"]
             conn.commit()
+        return doc_id
+
+    def _insert_chunk(self, doc_id, text):
+        with get_db_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT INTO chunks (doc_id, chunk_index, text, tokens) VALUES (%s, 0, %s, %s) RETURNING id",
+                (doc_id, text, 10),
+            )
+            chunk_id = cur.fetchone()["id"]
+            conn.commit()
+        return chunk_id
 
     def test_create_top_and_child_category(self, tenant_id):
         """创建顶级分类 + 子分类"""
@@ -48,6 +61,17 @@ class TestKnowledgeCategoryTree:
         result = knowledge_service.create_category(tenant_id, "orphan", "孤立分类", parent_id=999999)
         assert result["success"] is False
         assert result.get("status") == 404
+
+    def test_create_category_auto_source_type(self, tenant_id):
+        """不传 source_type 时自动生成唯一代号（前端添加分类不再要求手填英文代号）"""
+        result = knowledge_service.create_category(tenant_id, None, "自动代号分类")
+        assert result["success"] is True
+        assert result["source_type"].startswith("k_")
+        assert result["display_name"] == "自动代号分类"
+        # 自动生成的代号在租户内唯一，可重复创建不冲突
+        result2 = knowledge_service.create_category(tenant_id, None, "自动代号分类2")
+        assert result2["success"] is True
+        assert result2["source_type"] != result["source_type"]
 
     def test_create_child_cross_tenant_rejected(self, tenant_id):
         """跨租户引用父分类被拒绝"""
@@ -147,3 +171,74 @@ class TestKnowledgeCategoryTree:
         # 顶级分类下所有文档（含子分类）
         docs_all = knowledge_service.list_documents(tenant_id=tenant_id, source_type="product")
         assert len(docs_all) == 2
+
+    def test_document_count_subcategory_includes_grandchild(self, tenant_id):
+        """二级分类 document_count 含三级文档（每级统计其下所有子级）"""
+        top = knowledge_service.create_category(tenant_id, "product", "产品资料")
+        child = knowledge_service.create_category(tenant_id, "manual", "产品手册", parent_id=top["id"])
+        grandchild = knowledge_service.create_category(tenant_id, "spec", "规格书", parent_id=child["id"])
+        self._insert_doc(tenant_id, "二级文档", "product", "manual")
+        self._insert_doc(tenant_id, "三级文档", "product", "spec")
+        cats = knowledge_service.list_categories(tenant_id)
+        top_cat = next(c for c in cats if c["id"] == top["id"])
+        child_cat = next(c for c in cats if c["id"] == child["id"])
+        grandchild_cat = next(c for c in cats if c["id"] == grandchild["id"])
+        assert top_cat["document_count"] == 2  # 自身 + 二级 + 三级
+        assert child_cat["document_count"] == 2  # 自身 manual + 后代 spec
+        assert grandchild_cat["document_count"] == 1  # 无子级，仅自身
+
+    def test_list_documents_subcategory_includes_descendants(self, tenant_id):
+        """点子分类文档列表含三级文档；点三级只含自身；document_count 与列表 total 对齐"""
+        top = knowledge_service.create_category(tenant_id, "product", "产品资料")
+        child = knowledge_service.create_category(tenant_id, "manual", "产品手册", parent_id=top["id"])
+        grandchild = knowledge_service.create_category(tenant_id, "spec", "规格书", parent_id=child["id"])
+        self._insert_doc(tenant_id, "二级文档", "product", "manual")
+        self._insert_doc(tenant_id, "三级文档", "product", "spec")
+        # 点二级分类 -> 含自身 + 三级文档
+        docs = knowledge_service.list_documents(tenant_id=tenant_id, source_type="product", sub_category="manual")
+        assert len(docs) == 2
+        assert {d["sub_category"] for d in docs} == {"manual", "spec"}
+        # 点三级分类 -> 仅自身文档
+        docs_gc = knowledge_service.list_documents(tenant_id=tenant_id, source_type="product", sub_category="spec")
+        assert len(docs_gc) == 1
+        assert docs_gc[0]["sub_category"] == "spec"
+        # count 与 list 对齐（交叉验证）
+        assert knowledge_service.count_documents(
+            tenant_id=tenant_id, source_type="product", sub_category="manual"
+        ) == len(docs)
+        assert knowledge_service.count_documents(
+            tenant_id=tenant_id, source_type="product", sub_category="spec"
+        ) == len(docs_gc)
+
+    def test_search_subcategory_filters_descendants(self, tenant_id):
+        """搜索跟随选中分类：sub_categories 集合只检索选中分类（含子级）的文档"""
+        from src.knowledge.retriever.hybrid_retriever import HybridRetriever
+        top = knowledge_service.create_category(tenant_id, "product", "产品资料")
+        child = knowledge_service.create_category(tenant_id, "manual", "产品手册", parent_id=top["id"])
+        grandchild = knowledge_service.create_category(tenant_id, "spec", "规格书", parent_id=child["id"])
+        # 每级各挂 1 个文档（含 1 个 chunk），text 用英文关键词保证 simple 分词命中
+        doc_top = self._insert_doc(tenant_id, "顶级文档", "product", None)
+        doc_child = self._insert_doc(tenant_id, "二级文档", "product", "manual")
+        doc_gc = self._insert_doc(tenant_id, "三级文档", "product", "spec")
+        for doc_id in (doc_top, doc_child, doc_gc):
+            self._insert_chunk(doc_id, "This document is about a dinosaur.")
+
+        with get_db_connection() as conn:
+            retriever = HybridRetriever(vector_db=None, embedding_client=None, conn=conn)
+            # 选中顶级分类：source_type 过滤天然含全部子级（sub_categories 为空）
+            r_all = retriever._postgres_fts_search(
+                "dinosaur", top_k=10, tenant_id=tenant_id, source_type="product"
+            )
+            assert len(r_all) == 3
+            # 选中二级分类：子树 = [manual, spec]，返回二级 + 三级文档
+            r_child = retriever._postgres_fts_search(
+                "dinosaur", top_k=10, tenant_id=tenant_id, source_type="product",
+                sub_categories=["manual", "spec"]
+            )
+            assert len(r_child) == 2
+            # 选中三级分类：子树 = [spec]，只返回三级文档
+            r_gc = retriever._postgres_fts_search(
+                "dinosaur", top_k=10, tenant_id=tenant_id, source_type="product",
+                sub_categories=["spec"]
+            )
+            assert len(r_gc) == 1

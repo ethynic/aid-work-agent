@@ -228,46 +228,137 @@ class KnowledgeBaseService:
         """获取数据库连接（使用统一的数据库连接管理）"""
         return get_db_connection()
 
+    @staticmethod
+    def _collect_subtree_source_types(rows: List[Dict[str, Any]], category_source_type: str) -> List[str]:
+        """给定分类行（含 id/source_type/parent_id），返回 category_source_type 自身 + 所有后代 source_type。
+        内存建树后 DFS 收集，供 list_categories / list_documents / count_documents 共用，保证三处语义一致。"""
+        children = {}  # parent_id -> [child_id]
+        source_type_by_id = {}
+        target_id = None
+        for r in rows:
+            source_type_by_id[r["id"]] = r["source_type"]
+            children.setdefault(r["parent_id"], []).append(r["id"])
+            if r["source_type"] == category_source_type:
+                target_id = r["id"]
+        # source_type 租户内唯一，命中不到说明该分类不存在（可能被删除），退化为仅自身
+        if target_id is None:
+            return [category_source_type]
+        result = [category_source_type]
+        stack = list(children.get(target_id, []))
+        while stack:
+            cid = stack.pop()
+            result.append(source_type_by_id[cid])
+            stack.extend(children.get(cid, []))
+        return result
+
+    def _get_category_subtree_source_types(self, tenant_id: str, category_source_type: str) -> List[str]:
+        """返回 category_source_type 自身 + 其所有后代分类的 source_type 列表。
+        供 list_categories / list_documents / count_documents 共用，保证三处语义一致。
+        实现：一次 SELECT 该租户全部分类 (source_type, parent_id)，内存建树后 DFS 收集后代。"""
+        with self._get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT id, source_type, parent_id FROM knowledge_categories WHERE tenant_id = %s",
+                (tenant_id,)
+            )
+            rows = cursor.fetchall()
+        return self._collect_subtree_source_types(rows, category_source_type)
+
+    def _validate_sub_category(self, tenant_id: str, source_type: Optional[str], sub_category: Optional[str]) -> None:
+        """校验 sub_category 归属：对应分类必须存在、同租户、非顶级分类，
+        且其祖先根分类的 source_type 等于入参 source_type（source_type 恒为顶级分类代号）。
+        无效时抛 ValueError，供 upload_document / move_documents 复用。"""
+        if not sub_category:
+            return
+        with self._get_db_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT source_type, parent_id FROM knowledge_categories WHERE source_type = %s AND tenant_id = %s",
+                (sub_category, tenant_id)
+            )
+            cat = cur.fetchone()
+            if not cat:
+                raise ValueError("子分类不存在")
+            if cat["parent_id"] is None:
+                # source_type 租户内全局唯一，命中顶级分类说明 sub_category 传了顶级分类自身
+                raise ValueError("所选分类是顶级分类，不能作为子分类")
+            root_source_type = cat["source_type"]
+            parent_id = cat["parent_id"]
+            depth = 0
+            while parent_id is not None and depth < 100:
+                cur.execute(
+                    "SELECT source_type, parent_id FROM knowledge_categories WHERE id = %s AND tenant_id = %s",
+                    (parent_id, tenant_id)
+                )
+                parent = cur.fetchone()
+                if not parent:
+                    raise ValueError("子分类层级异常")
+                root_source_type = parent["source_type"]
+                parent_id = parent["parent_id"]
+                depth += 1
+        if not source_type:
+            raise ValueError("选择子分类时必须同时选择顶级分类")
+        if source_type != root_source_type:
+            raise ValueError("子分类不属于所选顶级分类")
+
     # ========== 分类管理 ==========
 
     def list_categories(self, tenant_id: str) -> List[Dict[str, Any]]:
         """获取分类列表，含文档数统计。返回扁平结构（含 parent_id），树形由前端组装。
-        文档数统计：顶级分类=该 source_type 全部文档（含子分类文档）；子分类=直接归属该子分类的文档。"""
+        文档数统计：每级分类 = 其下所有子级（含自身）的文档总数，与列表过滤语义一致。"""
         try:
             with self._get_db_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
-                    SELECT kc.id, kc.source_type, kc.display_name, kc.parent_id, kc.created_at,
-                           CASE WHEN kc.parent_id IS NULL THEN
-                               -- 顶级分类：统计该 source_type 全部文档（含子分类文档）
-                               (SELECT COUNT(*) FROM documents d
-                                WHERE d.tenant_id = %s AND d.source_type = kc.source_type)
-                           ELSE
-                               -- 子分类：仅统计直接归属（sub_category）的文档
-                               (SELECT COUNT(*) FROM documents d
-                                WHERE d.tenant_id = %s AND d.sub_category = kc.source_type)
-                           END AS document_count
+                    SELECT kc.id, kc.source_type, kc.display_name, kc.parent_id, kc.created_at
                     FROM knowledge_categories kc
                     WHERE kc.tenant_id = %s
                     ORDER BY kc.created_at ASC
-                """, (tenant_id, tenant_id, tenant_id))
+                """, (tenant_id,))
                 rows = cursor.fetchall()
-                result = []
-                for row in rows:
-                    d = dict(row)
-                    if d.get("created_at"):
-                        d["created_at"] = d["created_at"].isoformat()
-                    result.append(d)
-                return result
+                # 文档按 (source_type, sub_category) 分组计数，供内存统计，替代逐分类子查询
+                cursor.execute("""
+                    SELECT source_type, sub_category, COUNT(*) AS cnt
+                    FROM documents
+                    WHERE tenant_id = %s
+                    GROUP BY source_type, sub_category
+                """, (tenant_id,))
+                doc_rows = cursor.fetchall()
+
+            source_type_count = {}   # source_type -> 文档总数（顶级分类口径）
+            sub_category_count = {}  # sub_category -> 直接归属文档数
+            for dr in doc_rows:
+                source_type_count[dr["source_type"]] = source_type_count.get(dr["source_type"], 0) + dr["cnt"]
+                sc = dr["sub_category"]
+                if sc:
+                    sub_category_count[sc] = sub_category_count.get(sc, 0) + dr["cnt"]
+
+            result = []
+            for row in rows:
+                d = dict(row)
+                if d["parent_id"] is None:
+                    # 顶级分类：该 source_type 全部文档（子级文档 source_type 恒为顶级，天然包含）
+                    d["document_count"] = source_type_count.get(d["source_type"], 0)
+                else:
+                    # 子分类：自身 + 所有后代分类的 sub_category 文档数之和
+                    subtree = self._collect_subtree_source_types(rows, d["source_type"])
+                    d["document_count"] = sum(sub_category_count.get(s, 0) for s in subtree)
+                if d.get("created_at"):
+                    d["created_at"] = d["created_at"].isoformat()
+                result.append(d)
+            return result
         except Exception as e:
             logger.error(f"获取分类列表失败: {e}", exc_info=True)
             return []
 
-    def create_category(self, tenant_id: str, source_type: str, display_name: str, parent_id: Optional[int] = None) -> Dict[str, Any]:
-        """创建分类，parent_id 非空时创建为子分类"""
+    def create_category(self, tenant_id: str, source_type: Optional[str] = None, display_name: Optional[str] = None, parent_id: Optional[int] = None) -> Dict[str, Any]:
+        """创建分类，parent_id 非空时创建为子分类；source_type 为空时自动生成唯一代号"""
         import re
-        if not re.match(r'^[a-z][a-z0-9_-]*$', source_type):
-            return {"success": False, "error": "source_type 格式错误，仅允许小写字母开头，后续为小写字母、数字、下划线或连字符"}
+        if source_type is not None:
+            if not re.match(r'^[a-z][a-z0-9_-]*$', source_type):
+                return {"success": False, "error": "source_type 格式错误，仅允许小写字母开头，后续为小写字母、数字、下划线或连字符"}
+        else:
+            source_type = f"k_{uuid.uuid4().hex[:12]}"
         try:
             with self._get_db_connection() as conn:
                 cursor = conn.cursor()
@@ -367,39 +458,8 @@ class KnowledgeBaseService:
             处理结果
         """
         try:
-            # 0. 校验子分类归属：sub_category 对应分类必须存在、同租户，
-            #    且其祖先根分类的 source_type 等于入参 source_type（source_type 恒为顶级分类代号）
-            if sub_category:
-                with self._get_db_connection() as conn:
-                    cur = conn.cursor()
-                    cur.execute(
-                        "SELECT source_type, parent_id FROM knowledge_categories WHERE source_type = %s AND tenant_id = %s",
-                        (sub_category, tenant_id)
-                    )
-                    cat = cur.fetchone()
-                    if not cat:
-                        raise ValueError("子分类不存在")
-                    if cat["parent_id"] is None:
-                        # source_type 租户内全局唯一，命中顶级分类说明 sub_category 传了顶级分类自身
-                        raise ValueError("所选分类是顶级分类，不能作为子分类")
-                    root_source_type = cat["source_type"]
-                    parent_id = cat["parent_id"]
-                    depth = 0
-                    while parent_id is not None and depth < 100:
-                        cur.execute(
-                            "SELECT source_type, parent_id FROM knowledge_categories WHERE id = %s AND tenant_id = %s",
-                            (parent_id, tenant_id)
-                        )
-                        parent = cur.fetchone()
-                        if not parent:
-                            raise ValueError("子分类层级异常")
-                        root_source_type = parent["source_type"]
-                        parent_id = parent["parent_id"]
-                        depth += 1
-                if not source_type:
-                    raise ValueError("选择子分类时必须同时选择顶级分类")
-                if source_type != root_source_type:
-                    raise ValueError("子分类不属于所选顶级分类")
+            # 0. 校验子分类归属（分类存在、同租户、非顶级分类、祖先根分类 source_type 等于入参 source_type）
+            self._validate_sub_category(tenant_id, source_type, sub_category)
 
             # 1. 解析文档
             parser = parser_factory.get_parser(file_path)
@@ -578,6 +638,43 @@ class KnowledgeBaseService:
             logger.error(f"后端日志：文档删除失败: {e}", exc_info=True)
             return {"success": False, "error": str(e)}
 
+    def move_documents(self, tenant_id: str, doc_ids: List[int],
+                       source_type: str, sub_category: Optional[str]) -> Dict[str, Any]:
+        """批量移动文档到目标分类（仅 UPDATE documents.source_type + sub_category，chunks/向量无需改动）。
+        返回 {success, moved, skipped}；skipped = 传入数与实际更新数之差（含他租户文档、已在目标分类的文档）。"""
+        if not doc_ids:
+            return {"success": False, "error": "未选择文档", "status": 400}
+        if not source_type:
+            return {"success": False, "error": "目标顶级分类不能为空", "status": 400}
+        try:
+            self._validate_sub_category(tenant_id, source_type, sub_category)
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                if sub_category is None:
+                    # 防御：documents.source_type 恒为顶级分类代号，sub_category 为空时目标必须是本租户顶级分类
+                    cursor.execute(
+                        "SELECT 1 FROM knowledge_categories WHERE tenant_id = %s AND source_type = %s AND parent_id IS NULL",
+                        (tenant_id, source_type)
+                    )
+                    if not cursor.fetchone():
+                        return {"success": False, "error": "目标顶级分类不存在", "status": 400}
+                cursor.execute(
+                    "UPDATE documents SET source_type = %s, sub_category = %s, updated_at = CURRENT_TIMESTAMP "
+                    "WHERE id = ANY(%s) AND tenant_id = %s "
+                    "AND NOT (source_type = %s AND COALESCE(sub_category, '') = COALESCE(%s, ''))",
+                    (source_type, sub_category, doc_ids, tenant_id, source_type, sub_category)
+                )
+                moved = cursor.rowcount
+                conn.commit()
+            skipped = len(doc_ids) - moved
+            logger.info(f"后端日志：文档移动成功，doc_ids={doc_ids}, 目标={source_type}/{sub_category}, moved={moved}, skipped={skipped}")
+            return {"success": True, "moved": moved, "skipped": skipped}
+        except ValueError as e:
+            return {"success": False, "error": str(e), "status": 400}
+        except Exception as e:
+            logger.error(f"后端日志：文档移动失败: {e}", exc_info=True)
+            return {"success": False, "error": "移动文档失败", "debug": sanitize_error_info(str(e))}
+
     def count_documents(self, user_id: Optional[int] = None, tenant_id: Optional[str] = None, source_type: Optional[str] = None, sub_category: Optional[str] = None) -> int:
         """获取文档总数"""
         try:
@@ -597,8 +694,14 @@ class KnowledgeBaseService:
                     conditions.append("source_type = %s")
                     params.append(source_type)
                 if sub_category is not None:
-                    conditions.append("sub_category = %s")
-                    params.append(sub_category)
+                    if tenant_id is not None:
+                        # 展开为自身 + 所有后代分类，保证与 list_documents 语义一致
+                        subtree = self._get_category_subtree_source_types(tenant_id, sub_category)
+                        conditions.append("sub_category = ANY(%s)")
+                        params.append(subtree)
+                    else:
+                        conditions.append("sub_category = %s")
+                        params.append(sub_category)
 
                 where_clause = " AND ".join(conditions)
                 if where_clause:
@@ -641,8 +744,14 @@ class KnowledgeBaseService:
                     conditions.append(f"source_type = {placeholder}")
                     params.append(source_type)
                 if sub_category is not None:
-                    conditions.append(f"sub_category = {placeholder}")
-                    params.append(sub_category)
+                    if tenant_id is not None:
+                        # 展开为自身 + 所有后代分类，与 count_documents / list_categories 语义一致
+                        subtree = self._get_category_subtree_source_types(tenant_id, sub_category)
+                        conditions.append(f"sub_category = ANY({placeholder})")
+                        params.append(subtree)
+                    else:
+                        conditions.append(f"sub_category = {placeholder}")
+                        params.append(sub_category)
 
                 where_clause = ""
                 if conditions:
@@ -714,7 +823,8 @@ class KnowledgeBaseService:
         user_id: Optional[int] = None,
         tenant_id: Optional[str] = None,
         top_k: int = 10,
-        source_type: Optional[str] = None
+        source_type: Optional[str] = None,
+        sub_category: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         根据内容搜索文档（混合检索：向量 + FTS5 + RRF）
@@ -724,7 +834,8 @@ class KnowledgeBaseService:
             user_id: 用户 ID（权限控制，暂未实现）
             tenant_id: 租户 ID
             top_k: 返回结果数量
-            source_type: 文档来源类型，提供时只搜索该类型的文档
+            source_type: 顶级分类代号，提供时只搜索该分类（含其下所有子级）
+            sub_category: 直接选中分类代号，展开为自身 + 所有后代分类再过滤（不传时全分类搜索）
 
         Returns:
             搜索结果
@@ -756,8 +867,19 @@ class KnowledgeBaseService:
                     conn=conn
                 )
 
+                # 选中子分类时展开为自身 + 所有后代，与分类树过滤语义一致
+                sub_categories = None
+                if sub_category:
+                    if tenant_id is not None:
+                        sub_categories = self._get_category_subtree_source_types(tenant_id, sub_category)
+                    else:
+                        sub_categories = [sub_category]
+
                 # 执行混合检索
-                results = await retriever.retrieve(query=query, top_k=top_k, user_id=user_id, tenant_id=tenant_id, source_type=source_type)
+                results = await retriever.retrieve(
+                    query=query, top_k=top_k, user_id=user_id, tenant_id=tenant_id,
+                    source_type=source_type, sub_categories=sub_categories,
+                )
 
                 # 提取文档标题
                 if results:

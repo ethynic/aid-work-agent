@@ -677,8 +677,14 @@ class ExcelProcessTool(BaseTool):
         # 新路径：结构化 data → 智能模板填充（AI 分析样例结构 + 行数不匹配 + 样式保留）
         data = params.get("data") or ctx.data
         if data:
+            import asyncio
             from src.tools.excel.excel_template_ai import fill_with_sample
-            return fill_with_sample(
+            # fill_with_sample 是纯同步重活（含阻塞式 LLM 结构分析与 openpyxl 渲染），
+            # 必须丢线程池执行：直接在协程里调用会阻塞事件循环心跳，
+            # Gunicorn WORKER_TIMEOUT 到点直接 SIGABRT worker，客户请求无声夭折
+            # （2026-08-27 "济南"无回复事故根因）
+            return await asyncio.to_thread(
+                fill_with_sample,
                 template_path, data,
                 output_name=output_name,
                 output_dir=self._resolve_output_dir(),

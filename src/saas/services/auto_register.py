@@ -187,17 +187,24 @@ def _extract_wx_unionid(user_info: Optional[Dict[str, Any]] = None) -> Optional[
 
 def _update_user_info_from_channel(existing_user_id: str,
                                    user_info: Dict[str, Any]):
-    """用渠道用户信息更新已有用户的昵称、头像、微信信息"""
+    """用渠道用户信息更新已有用户的昵称、头像、微信信息。
+
+    渠道（企微/钉钉/飞书）是用户昵称与头像的权威来源，只要渠道返回非空且与
+    现值不同即覆盖更新，避免首次获取的异常值（如企微 customer/batchget 偶发
+    返回客服账号名，2026-08-27 小腾老师事件）被永久固化。
+    wx_openid/wx_unionid 是不可变身份标识，仅在为空时补写。
+    """
     user = UserDB.get_by_id(existing_user_id)
     if not user:
         return
 
     updates = {}
-    # 更新 nickname（微信昵称等）
-    if user_info.get("name") and not user.get("nickname"):
-        updates["nickname"] = user_info["name"]
-    if user_info.get("avatar") and not user.get("avatar_url"):
-        updates["avatar_url"] = user_info["avatar"]
+    new_name = (user_info.get("name") or "").strip()
+    new_avatar = (user_info.get("avatar") or "").strip()
+    if new_name and new_name != user.get("nickname"):
+        updates["nickname"] = new_name
+    if new_avatar and new_avatar != user.get("avatar_url"):
+        updates["avatar_url"] = new_avatar
     if user_info.get("wx_openid") and not user.get("wx_openid"):
         updates["wx_openid"] = user_info["wx_openid"]
     if user_info.get("wx_unionid") and not user.get("wx_unionid"):

@@ -79,6 +79,49 @@ test('位置参数放行：goto/send-to/select-job 恰好 1 个位置参数 → 
   assert.equal(v(['select-job', '前端开发']).ok, true)
 })
 
+// ---------- read-chat（0-1 个可选姓名位置参数，无专属 flag） ----------
+
+test('read-chat 裸命令 / 带姓名 → ok（姓名是可选位置参数）', () => {
+  assert.equal(v(['read-chat']).ok, true)
+  assert.equal(v(['read-chat', '杨鸿杰']).ok, true)
+})
+
+test('read-chat 未知 flag 拒绝：read-chat 杨鸿杰 --limit 3 → 拒绝（无专属 flag）', () => {
+  const r = v(['read-chat', '杨鸿杰', '--limit', '3'])
+  assert.equal(r.ok, false)
+  if (!r.ok) {
+    assert.match(r.message, /不认识的参数 --limit/)
+    assert.match(r.message, /read-chat --help/)
+  }
+})
+
+test('read-chat 多余位置参数拒绝：read-chat 张三 李四 → 拒绝（最多 1 个姓名）', () => {
+  const r = v(['read-chat', '张三', '李四'])
+  assert.equal(r.ok, false)
+  if (!r.ok) assert.match(r.message, /李四/)
+})
+
+// ---------- open-chat（1 个必填姓名位置参数，无专属 flag） ----------
+
+test('open-chat 带姓名 → ok（姓名是必填位置参数）', () => {
+  assert.equal(v(['open-chat', '杨鸿杰']).ok, true)
+})
+
+test('open-chat 未知 flag 拒绝：open-chat 杨鸿杰 --message hi → 拒绝（无专属 flag）', () => {
+  const r = v(['open-chat', '杨鸿杰', '--message', 'hi'])
+  assert.equal(r.ok, false)
+  if (!r.ok) {
+    assert.match(r.message, /不认识的参数 --message/)
+    assert.match(r.message, /open-chat --help/)
+  }
+})
+
+test('open-chat 多余位置参数拒绝：open-chat 张三 李四 → 拒绝（最多 1 个姓名）', () => {
+  const r = v(['open-chat', '张三', '李四'])
+  assert.equal(r.ok, false)
+  if (!r.ok) assert.match(r.message, /李四/)
+})
+
 // ---------- greet 显式意图（--names / --all 二选一） ----------
 
 test('greet 裸命令（不带 --names 也不带 --all）→ 拒绝，消息解释不再默认全量', () => {
