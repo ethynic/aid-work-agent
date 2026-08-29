@@ -9,6 +9,7 @@
 
 | 状态 | 含义 |
 |------|------|
+| ⛔ 已停止 | 方案或前提已作废，不继续开发 |
 | 🔧 部分完成 | 已开始开发，部分阶段完成 |
 | 📋 待开发 | 设计完成或进行中，尚未开始编码 |
 | 💡 灵感 | 早期想法，尚未正式设计 |
@@ -21,8 +22,8 @@
 |---|------|------|------|---------|---------|
 | 1 | 可观测性与质量保障 | 🔧 部分完成 | 分布式追踪 + LLM 质量评估 + 实时监控 + 结构化告警。Phase 1 全部完成（含渠道追踪方案 C：TraceCollector 下沉到 `Agent.process_message`，从 record_service 自动读 source_type，渠道零改造）。1.6（单测/e2e）和 1.7（JSONL 双写迁移）已取消：obs 系统每日真实流量运行已事实验证；JSONL 与 obs 永久并行。Phase 2-4 未开始。2026-07-07 | [设计](infrastructure/observability-design.md) / [延伸设计](infrastructure/observability-channel-sessions-design.md) | [计划](infrastructure/observability-dev-plan.md) / [延伸计划](infrastructure/observability-channel-sessions-dev-plan.md) |
 | 61 | skill_ws 临时工作目录清理机制 | ✅ 已完成 | 修复技能执行工作目录 `skill_ws_*` 创建后永不清理的临时文件泄漏（每月堆积，2026-08-13 迁移核对时发现）。**根因**：`agent.py` 用 `tempfile.mkdtemp(prefix="skill_ws_{session}_")` 在租户 `temp/` 下创建会话工作目录存放上传附件，全代码库无清理逻辑（`cleanup_temp` 仅覆盖图片资产）。**修复**：① `Agent.process_message` 正常结束（环境变量清理后）删除本次会话创建的 `session_workspace`；② `scheduler/manager.py` 新增每日 03:30 定时任务 `job_system_skill_ws_cleanup`（`_run_skill_ws_cleanup`）兜底清理 `storage/tenants/*/temp/skill_ws_*` 超过 3 天的残留（进程崩溃/异常退出遗留）。4 新增单测 + 相邻回归（background_runner 19 + agent 29）全绿，import/启动链路安全。2026-08-13 | — | — |
-| 65 | 母体 Agent 收敛（agent.py Kernel 化） | 📋 待开发 | 决策（2026-08-19）：**不设 agent.py 专项重构、不阻塞其他工作**，采用「冻结增长 + 伴生绞杀」。核实现状：4284 行（08-12 审计 4113，一周 +170）、44 个类/函数、领域关键词约 208 处。立即项（1-2 天）：P1 新逻辑禁入 agent.py + P2 行数结构守卫（基线 4284 只降不升）；首批拆分 ActionDispatcher/ContinuationManager 并入 Task Plane Phase 0/1 交付物（双写接入点天然重合）；完整 Kernel 化不设专项、随灯塔工作流按需拆。每次拆分必须行为回归全绿（P5）、拆出模块不得含领域特例（P6）。同步确认未来规划启动顺序：Task Plane Phase 0+1 最小切片 → 多智能体协作 Phase 0-2。 | [原则](system/agent-kernel-convergence-principles.md) | — |
-| 66 | Task Plane Phase 0+1 最小切片（企业任务执行操作系统落地） | 📋 待开发 | 上位架构（七能力面）的首个落地切片，2026-08-19 设计定稿。**交付**：①旁路 Task/Execution 影子索引（6 新表 enterprise_tasks/task_session_links/agent_executions/agent_release_snapshots/policy_shadow_decisions/task_plane_outbox + chat_records 关联列），TaskPlaneRecorder 照抄 TraceCollector 方案 C 挂 process_message 零侵入，Web/渠道/scheduler/CLI 全入口覆盖；②AgentRelease 最小快照 + Policy shadow 决策（check_agent_access 与积分阻断 4 检查点，只记录不拦截）——解决多智能体协作 Phase 0/1 的两个开工前置；③P0 安全债：scheduled_tasks/logs 补租户回填、知识库删除/chunks/下载对象级租户条件、obs_traces.total_cost 与计费闭环；④契约冻结 contracts/task-plane/ + 工具 effect/幂等清单；⑤Kernel 原则 P1/P2/P4 交付（agent.py 接线 ≤20 行 + 行数守卫 4284 + 工具分发 seam 抽取 Phase K）。双开关 task_plane.enabled/policy_shadow 默认关，断 PG 降级不影响对话。总量 2.5-4 周（1 后端），Phase 0-A 安全债可独立先发。 | [设计](system/enterprise-agent-platform/task-plane-phase0-1-landing-design.md) | [计划](plans/plan-task-plane-phase0-1.md) |
+| 65 | 母体 Agent 收敛（agent.py Kernel 化） | 📋 待开发 | **不设专项重构、不阻塞其他工作**，继续采用“冻结增长 + 有真实需求时伴生拆分”。Task Plane 已停止，不再作为拆分驱动力或实施顺序前置。保留与领域无关的行数守卫、依赖方向和纯 helper 候选；ActionDispatcher、ContinuationManager 等只有在具体功能需要时另行评估，每次拆分必须行为回归全绿。 | [原则](system/agent-kernel-convergence-principles.md) | — |
+| 66 | Task Plane Phase 0+1 | ⛔ 已停止 | **2026-08-28 决策生效：设计作废，停止合并与部署。** 根假设“一个 Session 自动对应一个 Task”不能表达单会话多任务、闲聊或跨会话任务，且 Task 的权威来源、完成标准和纠错边界均未定义。`feature/task-plane-phase0-1@bdaecd09` 不得整体 merge/cherry-pick；所有 Task 专属 runtime、契约、六表、接线、统计和测试列入删除。旧 Task 设计与计划已删除。未来不继续 Task UI、识别器或抽象，只有真实业务边界明确后才另立新项目。 | [暂停与处置报告](research/task-plane-suspension-and-disposition-report.md) | — |
 
 
 ## 系统功能

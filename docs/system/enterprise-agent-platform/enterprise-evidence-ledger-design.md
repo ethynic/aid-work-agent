@@ -4,11 +4,13 @@
 >
 > 日期：2026-08-12
 >
-> 状态：架构设计基线，待分阶段实现
+> 状态：⚠️ 待重新复核；Task 相关前提已失效
 >
 > 适用范围：Web、Agent Desktop、企业微信、钉钉、飞书、Cloud Agent、Local Agent Coordinator、Server ToolExecutor、`agent-tool-runtime`
 >
-> 关联设计：[企业 Task 模型](./enterprise-task-model-design.md)、[工作成果记录](../work-outcome-record-design.md)、[社媒发布调度](../digital-employee/publish-dispatcher-design.md)
+> 关联设计：[工作成果记录](../work-outcome-record-design.md)、[社媒发布调度](../digital-employee/publish-dispatcher-design.md)
+>
+> **2026-08-28 决策：** Task Plane 与统一 Task 模型已作废。本文只能围绕具体副作用动作、外部回执和业务系统事实独立复核，不得以 Task/Execution 为权威前置。见[暂停与处置报告](../../research/task-plane-suspension-and-disposition-report.md)。
 
 ## 1. 决策摘要
 
@@ -111,7 +113,7 @@ Intent 中敏感值可存加密 blob 或仅存 digest；审批 UI 通过受控�
 
 Evidence Entry 是追加式事实，最小字段：
 
-- 归属：tenant/task/session/execution/action/attempt。
+- 归属：可信 tenant、具体 action/attempt；会话及其他跨模块关联待独立重设。
 - 类型：intent、policy、approval、dispatch、receipt、observation、verification、artifact、compensation、attestation。
 - 来源：用户、Cloud Agent、Desktop、Runtime、服务器 ToolExecutor、外部系统、审核人。
 - 内容：结构化摘要、payload digest、可选加密 blob 引用。
@@ -163,7 +165,7 @@ FAILED | STATUS_UNKNOWN
 
 - Policy 拒绝是终止，不得让 LLM 改写参数绕过同一规则。
 - Approval 只批准冻结 Intent；任何 `input_digest`、resource、tool/schema digest 或目标节点改变都回到 `PROPOSED`。
-- `SUBMITTED` 只表示外部系统受理，不能映射为 Task 完成。
+- `SUBMITTED` 只表示外部系统受理，不能映射为具体业务目标完成。
 - `STATUS_UNKNOWN` 不允许自动重新 dispatch 非幂等动作。
 - Compensation 是新的 Action，引用 `compensates_action_id`，不修改原事实。
 
@@ -187,15 +189,15 @@ Tool/Provider 必须声明 Effect contract；未知工具默认按高风险处�
 
 ## 7. 数据模型建议
 
+> 2026-08-28：以下 Evidence 自身的动作、尝试与追加式证据结构仍是研究材料；所有原 `task_id` / `execution_id` 关联已删除。跨模块关联和事件信封暂停，实施前必须另行设计，不能沿用已作废 Task 契约。
+
 ### 7.1 动作与尝试
 
 ```sql
 CREATE TABLE agent_action_intents (
     action_id TEXT PRIMARY KEY,
     tenant_id TEXT NOT NULL,
-    task_id TEXT,
     session_ref JSONB,
-    execution_id TEXT NOT NULL,
     parent_action_id TEXT,
     compensates_action_id TEXT,
     effect TEXT NOT NULL,
@@ -314,8 +316,6 @@ CREATE TABLE evidence_entries (
     evidence_stream_id TEXT NOT NULL,
     sequence BIGINT NOT NULL,
     entry_type TEXT NOT NULL,
-    task_id TEXT,
-    execution_id TEXT,
     action_id TEXT,
     attempt_id TEXT,
     actor_type TEXT NOT NULL,
@@ -352,7 +352,6 @@ CREATE TABLE evidence_blobs (
 CREATE TABLE evidence_bundles (
     bundle_id TEXT PRIMARY KEY,
     tenant_id TEXT NOT NULL,
-    task_id TEXT,
     action_id TEXT,
     claim_type TEXT NOT NULL,
     claim_summary TEXT NOT NULL,
@@ -421,13 +420,15 @@ Local Coordinator 在动作前向服务器申请策略决策和 action envelope�
 
 ### 9.3 `agent-tool-runtime`
 
-Runtime 使用同一 action envelope 和本地 journal，但没有会话/Task 权威。它只能为已固定 `target_node_id` 的 Attempt 提供执行证据；服务器 claim 时复核 provider/tool/schema digest、节点策略和租户绑定。
+Runtime 使用同一 action envelope 和本地 journal，但不拥有会话或业务对象权威。它只能为已固定 `target_node_id` 的 Attempt 提供执行证据；服务器 claim 时复核 provider/tool/schema digest、节点策略和租户绑定。
 
 ### 9.4 Web 与消息渠道
 
 Web、企业微信、钉钉和飞书主要产生用户指令、补充信息和审批决定证据。渠道消息事件必须保留原 channel message ID、发送者身份映射和撤回状态。渠道“回复了同意”只有在审批协议明确匹配审批 ID、Intent digest 和授权身份时，才能转为 ApprovalDecision。
 
 ## 10. API 与事件契约
+
+> 本节只描述 Evidence 专属动作接口。跨模块事件信封和关联键已暂停，暂无替代方案；不得沿用已作废的 Task 事件信封。
 
 ### 10.1 内部 API
 
@@ -461,7 +462,7 @@ Claim 返回短期 action token，绑定 tenant/action/attempt/node/tool digest/
 - `action.compensation_started/completed`
 - `evidence.bundle_completed`
 
-事件信封沿用 Task 设计的 tenant/task/session/execution/sequence/trace 字段。事件总线用于集成，Ledger Entry 才是审计事实；消费者不能通过重放普通事件改写 Ledger。
+原计划沿用 Task 事件信封的方案已作废，不实施。Evidence 事件关联和序列协议暂停，暂无替代方案。
 
 ## 11. 权限、多租户与隐私
 
@@ -497,28 +498,28 @@ Claim 返回短期 action token，绑定 tenant/action/attempt/node/tool digest/
 - 先锁定 Action/Evidence JSON Schema、错误码和 canonical hash 规则。
 - 给发布、发送、审批、删除、更新、支付、GUI control 建立 P0 高风险清单。
 
-### Phase 1：Shadow Ledger
+### Phase 1：Shadow Ledger（暂停待独立复核）
 
-- 新增表、append service、outbox、hash 校验和 Evidence Bundle 查询。
+- 在 Evidence 自身关联键、事件信封和权威边界重新定稿前，不新增表、outbox 或 append service。
 - 只旁路记录，不阻断现有工具；选择社媒审核/发布、浏览器 run、合同审批做 adapter。
 - 对比现有业务表和 Ledger，监控漏记、错序、重复和敏感字段泄漏。
 
-### Phase 2：高风险强制门禁
+### Phase 2：高风险强制门禁（暂停）
 
 - 发布/发送/审批/改业务数据接入冻结 Intent、服务器 Policy、Approval hash、幂等和验证。
 - 社媒现有 `review_records`/publish snapshot/attempt 表保持业务权威，事务 outbox 生成 Evidence Entry。
 - `work_outcomes` 增加 evidence bundle 关联；没有验证的 action outcome 明确标“推断/未验证”。
 
-### Phase 3：统一 Tool Middleware
+### Phase 3：统一 Tool Middleware（暂停）
 
 - Cloud Agent 所有 server tools 通过 Action Gateway。
 - Desktop Local Tool Host 和 `agent-tool-runtime` 支持 action envelope、设备签名、journal、fencing 和结果补传。
 - 本地文件读取等低风险动作按策略只记摘要/采样；写、删、发、GUI 操作强制记录。
 
-### Phase 4：治理与合规
+### Phase 4：治理与合规（暂停）
 
 - Evidence 工作台、争议处置、补偿任务、Bundle 导出、保留策略和 WORM root export。
-- 业务级完整度指标、Golden Tasks 回放和高风险动作审计告警。
+- 业务级完整度指标、Golden Cases 回放和高风险动作审计告警。
 
 ### 13.1 兼容规则
 
