@@ -1,6 +1,5 @@
 """定时任务 REST API"""
 
-import re
 from typing import Optional
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import JSONResponse
@@ -8,6 +7,7 @@ from loguru import logger
 from pydantic import BaseModel
 
 from src.scheduler.db import ScheduledTaskDB, ScheduledTaskLogDB
+from src.scheduler.error_sanitizer import sanitize_scheduled_task_error
 from src.api.auth import get_current_user
 from src.saas.context import get_current_tenant_id
 
@@ -16,20 +16,8 @@ router = APIRouter(prefix="/api/scheduled-tasks", tags=["定时任务"])
 
 
 def _sanitize_error(error_msg: str) -> str:
-    """过滤敏感信息"""
-    if not error_msg:
-        return error_msg
-    patterns = [
-        r'password["\s:=]+\S+', r'passwd["\s:=]+\S+',
-        r'secret["\s:=]+\S+', r'token["\s:=]+\S+',
-        r'api[_-]?key["\s:=]+\S+', r'access[_-]?key["\s:=]+\S+',
-        r'private[_-]?key["\s:=]+\S+', r'auth[_-]?token["\s:=]+\S+',
-    ]
-    sanitized = error_msg
-    for pattern in patterns:
-        sanitized = re.sub(pattern, lambda m: m.group(0).split('=')[0] + '=***',
-                          sanitized, flags=re.IGNORECASE)
-    return sanitized
+    """过滤敏感信息（统一委托独立脱敏模块，含引号/未闭合/截断保守遮蔽）"""
+    return sanitize_scheduled_task_error(error_msg)
 
 
 def _get_request_identity(request: Request) -> tuple[str, str]:

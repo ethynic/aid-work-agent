@@ -17,6 +17,7 @@ from src.tools.context import (
     ToolExecutionContext,
     current_tool_execution_context,
 )
+from src.scheduler.error_sanitizer import sanitize_scheduled_task_error
 
 
 def _resolve_runtime_tenant_id(context: Optional[ToolExecutionContext]) -> Optional[str]:
@@ -205,14 +206,16 @@ class CreateScheduledTaskTool(BaseTool):
             return {
                 "success": False,
                 "error": "任务验证过程出错，无法创建定时任务",
-                "debug": str(e)
+                "debug": sanitize_scheduled_task_error(str(e))
             }
 
         if not dry_run_result.get("success"):
+            # debug 会随工具结果进入会话返回给用户：先脱敏再截断——
+            # 先截断会把凭据切成两半，后半段脱离键名后无法再被识别遮蔽
             return {
                 "success": False,
                 "error": "任务验证失败，当前无法完成此类定时任务",
-                "debug": dry_run_result.get("error", "未知错误")[:500]
+                "debug": sanitize_scheduled_task_error(dry_run_result.get("error", "未知错误"))[:500]
             }
 
         # 试执行成功，创建定时任务

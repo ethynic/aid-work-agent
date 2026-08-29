@@ -2,33 +2,17 @@
 
 import json
 import uuid
-import re
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 
 from loguru import logger
 from src.db.database import get_db_connection, get_current_timestamp
+from src.scheduler.error_sanitizer import sanitize_scheduled_task_error
 
 
 def _sanitize_error(error_msg: str) -> str:
-    """过滤敏感信息"""
-    if not error_msg:
-        return error_msg
-    patterns = [
-        r'password["\s:=]+\S+',
-        r'passwd["\s:=]+\S+',
-        r'secret["\s:=]+\S+',
-        r'token["\s:=]+\S+',
-        r'api[_-]?key["\s:=]+\S+',
-        r'access[_-]?key["\s:=]+\S+',
-        r'private[_-]?key["\s:=]+\S+',
-        r'auth[_-]?token["\s:=]+\S+',
-    ]
-    sanitized = error_msg
-    for pattern in patterns:
-        sanitized = re.sub(pattern, lambda m: m.group(0).split('=')[0] + '=***',
-                          sanitized, flags=re.IGNORECASE)
-    return sanitized
+    """过滤敏感信息（统一委托独立脱敏模块，含引号/未闭合/截断保守遮蔽）"""
+    return sanitize_scheduled_task_error(error_msg)
 
 
 class ScheduledTaskDB:

@@ -183,6 +183,63 @@ async def test_manage_task_does_not_expose_internal_exception():
 
 
 @pytest.mark.asyncio
+async def test_create_dry_run_failure_debug_sanitized():
+    """试执行失败：dry_run error 中的凭据在 debug 返回前被遮蔽（工具结果直达用户会话）"""
+    from src.scheduler.executor import ScheduledTaskExecutor
+
+    tool = _make_tool()
+    with (
+        patch("src.scheduler.db.ScheduledTaskDB.count_by_user", return_value=0),
+        patch.object(
+            ScheduledTaskExecutor,
+            "dry_run",
+            AsyncMock(return_value={
+                "success": False, "result": "",
+                "error": "认证失败 api_key=sk-leak-99 已拒绝",
+            }),
+        ),
+        patch("src.scheduler.db.ScheduledTaskDB.create") as create_mock,
+        tool_execution_scope(ToolExecutionContext(user_id="user-a")),
+    ):
+        result = await tool.execute(
+            name="每日报告", task_prompt="生成日报",
+            schedule_type="daily", time_config={"hour": 9},
+        )
+
+    assert result["success"] is False
+    assert "sk-leak-99" not in result["debug"]
+    assert "api_key=***" in result["debug"]
+    create_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_create_dry_run_exception_debug_sanitized():
+    """试执行抛异常：str(e) 中的凭据在 debug 返回前被遮蔽"""
+    from src.scheduler.executor import ScheduledTaskExecutor
+
+    tool = _make_tool()
+    with (
+        patch("src.scheduler.db.ScheduledTaskDB.count_by_user", return_value=0),
+        patch.object(
+            ScheduledTaskExecutor,
+            "dry_run",
+            AsyncMock(side_effect=RuntimeError('连接失败 password="hunter-xy 未闭合')),
+        ),
+        patch("src.scheduler.db.ScheduledTaskDB.create") as create_mock,
+        tool_execution_scope(ToolExecutionContext(user_id="user-a")),
+    ):
+        result = await tool.execute(
+            name="每日报告", task_prompt="生成日报",
+            schedule_type="daily", time_config={"hour": 9},
+        )
+
+    assert result["success"] is False
+    assert "hunter-xy" not in result["debug"]
+    assert "password=***" in result["debug"]
+    create_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_create_passes_tenant_to_dry_run_and_create():
     """上下文租户透传：dry_run 执行身份与 create 落库租户一致且来自请求上下文"""
     tool = _make_tool()
