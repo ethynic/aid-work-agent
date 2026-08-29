@@ -78,9 +78,11 @@ def calculate_vehicle_cost(items: list, tenant_id: str, region_names: List[str],
                            total_people: int, trip_days: int, season_type: str,
                            vehicle_count: Optional[int],
                            route_distance_km: Optional[float] = None,
-                           leg_details: list = None) -> Tuple[list, int]:
+                           leg_details: list = None,
+                           subagent_id: str = '') -> Tuple[list, int]:
     """计算交通费用"""
-    vehicles = query_by_region("bs_travel_quote_vehicles", tenant_id, region_names)
+    vehicles = query_by_region("bs_travel_quote_vehicles", tenant_id, region_names,
+                               subagent_id=subagent_id)
     if not vehicles:
         return items, 0
 

@@ -4,19 +4,27 @@
 
 from typing import List
 
-from db import get_db
+from db import get_db, shared_tenant_ids
 
 
 def calculate_meal_cost(items: list, tenant_id: str, region_names: List[str],
                         total_people: int, trip_days: int,
                         meal_tier: str, season_type: str,
-                        teacher_count: int = 0) -> list:
+                        teacher_count: int = 0, subagent_id: str = '') -> list:
     """计算餐饮费用"""
+    tenant_ids = shared_tenant_ids(tenant_id, subagent_id)
+    if len(tenant_ids) > 1:
+        tenant_sql = "tenant_id = ANY(%s)"
+        tenant_param = tenant_ids
+    else:
+        tenant_sql = "tenant_id = %s"
+        tenant_param = tenant_id
+
     with get_db() as conn:
-        params = [tenant_id, meal_tier]
+        params = [tenant_param, meal_tier]
         season_filter = " AND (season_type='default' OR season_type=%s)"
         params.append(season_type)
-        region_filter = " AND (region_name IS NULL"
+        region_filter = " AND (region_name IS NULL OR region_name = ''"
         if region_names:
             placeholders = ','.join(['%s'] * len(region_names))
             region_filter += f" OR region_name IN ({placeholders})"
@@ -24,8 +32,9 @@ def calculate_meal_cost(items: list, tenant_id: str, region_names: List[str],
         region_filter += ")"
 
         conn.execute(
-            f"SELECT * FROM bs_travel_quote_meals WHERE tenant_id=%s AND is_active=true "
-            f"AND meal_tier=%s {season_filter} {region_filter} ORDER BY region_name IS NULL",
+            f"SELECT * FROM bs_travel_quote_meals WHERE {tenant_sql} AND is_active=true "
+            f"AND meal_tier=%s {season_filter} {region_filter} "
+            f"ORDER BY (region_name IS NULL OR region_name = '')",
             tuple(params)
         )
         meals = conn.fetchall()
