@@ -388,7 +388,7 @@
               />
               <BaseButton v-if="kfForm.employeeQrPreview" intent="ghost" size="sm" @click="kfForm.employeeQrPreview = ''; kfForm.employee_qr_base64 = ''">移除</BaseButton>
             </div>
-            <p class="mt-0.5 text-xs text-muted">客户选择添加员工微信时，此二维码随回复下发给客户扫码添加，建议用员工个人微信二维码</p>
+            <p class="mt-0.5 text-xs text-muted">客户选择添加微信时，此二维码随回复下发给客户扫码添加，支持微信或企业微信二维码</p>
           </div>
         </div>
 
