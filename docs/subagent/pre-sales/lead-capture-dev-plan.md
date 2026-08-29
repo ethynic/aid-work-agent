@@ -111,7 +111,7 @@ CREATE INDEX IF NOT EXISTS idx_lc_leads_customer ON bs_lead_capture_leads(custom
 
 ```python
 class RecordLeadCaptureInput(BaseModel):
-    contact_method: str = Field(..., description="留资方式：phone（客户提供了手机号）| qr（客户选择添加员工微信）")
+    contact_method: str = Field(..., description="留资方式：phone（客户提供了手机号）| qr（客户选择添加顾问微信）")
     phone: Optional[str] = Field(None, description="客户手机号，contact_method=phone 时必填")
     contact_name: Optional[str] = Field(None, description="客户姓名（对话中提取，可选）")
     demand_summary: Optional[str] = Field(None, description="客户基本需求摘要（对话中提取，可选）")
@@ -125,7 +125,7 @@ class RecordLeadCaptureInput(BaseModel):
 5. `update_session(session_id, metadata={"lead_capture": {...}})` 写入状态
 6. `contact_method=qr`：从 `kf_config.employee_qr_file_id` 读取顾问二维码，返回 `images=[ImageRef]`（Phase 2 启用；无 file_id 返回失败「未配置顾问二维码，请仅引导留手机号」）
 
-**description（给 LLM）**：描述"收集到客户手机号或客户选择添加员工微信时调用"，注明"调用后提示客户客服会联系/可添加下方微信"，"该客户已留资过则不要重复调用"。
+**description（给 LLM）**：描述"收集到客户手机号或客户选择添加顾问微信时调用"，注明"调用后提示客户客服会联系/可添加下方微信"，"该客户已留资过则不要重复调用"。
 
 **catalog 策略**：Phase 1 `catalog=False`——工具不进入任何智能体工具列表（含当前生产上兼顾售前咨询的 after-sales），仅单测直接实例化验证链路，避免无提示词约束下被误调用；Phase 2 随 pre-sales 上线改为 `catalog=True`，靠提示词规范 + 工具内 `get_kf_context` 渠道隔离兜底（与 `transfer_to_human` 的模式一致：它同样是 catalog=True + 工具内隔离，并未走 control_set 装配）。
 
@@ -166,9 +166,9 @@ tools:
 **SUBAGENT.md 正文必须包含的留资规范**（不建技能，策略全在提示词，见设计 §五）：
 
 - **触发判定**：客户主动表达购买意向 / 主动索要联系方式 / 需求字段覆盖度达标；客户主动询问“怎么联系 / 加微信 / 留电话”为最高优先级
-- **留资话术模板**：留手机号 + 添加员工微信两条话术，客户自选
+- **留资话术模板**：留手机号 + 添加顾问微信两条话术，客户自选
 - **工作时间声明**（默认口径，管理员可改）：
-  - “本公司工作时间是周一至周五 9:00-18:00。当前时间在工作时间内 → 优先引导添加员工微信；否则 → 优先引导留下手机号”
+  - “本公司工作时间是周一至周五 9:00-18:00。当前时间在工作时间内 → 优先引导添加顾问微信；否则 → 优先引导留下手机号”
   - 注明“上下文会注入当前时间与英文星期（如 Thursday=周四），据此判断”
 - **动作指引**：拿到手机号或客户选择加微信 → 调用 record_lead_capture；已留资勿重复调用；工具返回失败（未配置二维码）→ 降级仅引导留手机号
 - **需求字段收集**：对话中抽取预算/数量/地区/交付时间，随工具参数写入线索

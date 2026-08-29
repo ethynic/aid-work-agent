@@ -58,7 +58,7 @@ class KfAccountCreate(BaseModel):
     expire_at: Optional[str] = Field(None, description="到期日期 YYYY-MM-DD，空=不限制")
     credit_limit: int = Field(0, ge=0, description="积分上限，0=不限")
     qr_title: Optional[str] = Field(None, description="二维码标题")
-    employee_qr_base64: Optional[str] = Field(None, description="顾问二维码 base64（可选，用于留资时下发员工微信二维码）")
+    employee_qr_base64: Optional[str] = Field(None, description="顾问二维码 base64（可选，用于留资时下发顾问微信二维码）")
 
 
 class KfAccountUpdate(BaseModel):

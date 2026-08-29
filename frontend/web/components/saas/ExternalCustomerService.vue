@@ -879,7 +879,7 @@ function getStageInfo(stage: string | null | undefined): { label: string; intent
 }
 function getMethodLabel(method: string | null | undefined): string {
   if (method === 'phone') return '手机号'
-  if (method === 'qr') return '员工微信'
+  if (method === 'qr') return '顾问微信'
   return method || '-'
 }
 

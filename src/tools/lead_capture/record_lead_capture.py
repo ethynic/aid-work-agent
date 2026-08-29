@@ -1,6 +1,6 @@
 """客户留资记录工具
 
-供 Agent 在微信客服售前咨询场景调用：将客户手机号或"选择添加员工微信"
+供 Agent 在微信客服售前咨询场景调用：将客户手机号或"选择添加顾问微信"
 记入留资线索表（bs_lead_capture_leads），并把会话状态机置为已留资。
 
 渠道隔离完全由 execute 段的 get_kf_context() 判断：非微信客服渠道返回友好
@@ -24,7 +24,7 @@ _PHONE_RE = re.compile(r"^1[3-9]\d{9}$")
 class RecordLeadCaptureInput(BaseModel):
     contact_method: str = Field(
         ...,
-        description="留资方式：phone（客户提供了手机号）| qr（客户选择添加员工微信）",
+        description="留资方式：phone（客户提供了手机号）| qr（客户选择添加顾问微信）",
     )
     phone: Optional[str] = Field(
         None, description="客户手机号，contact_method=phone 时必填"
@@ -40,16 +40,16 @@ class RecordLeadCaptureInput(BaseModel):
 class RecordLeadCaptureTool(BaseTool):
     """客户留资记录工具
 
-    收集到客户手机号或客户选择添加员工微信时调用，记录线索并防止重复留资。
+    收集到客户手机号或客户选择添加顾问微信时调用，记录线索并防止重复留资。
     """
 
     name = "record_lead_capture"
     description = (
         "为客户登记留资（记录线索），在售前咨询场景下收集到客户手机号、"
-        "或客户选择添加员工微信时调用。\n\n"
+        "或客户选择添加顾问微信时调用。\n\n"
         "适用场景：\n"
         "- 客户主动留下手机号，或同意客服稍后电话联系\n"
-        "- 客户主动要求添加员工微信/企微，或选择扫码添加\n"
+        "- 客户主动要求添加顾问微信/企微，或选择扫码添加\n"
         "- 已按判定规则识别为有意向客户并完成需求收集\n\n"
         "注意事项：\n"
         "- 客户已留资过但仍明确要求留资（再次留下手机号或要求加微信）："
@@ -217,7 +217,7 @@ class RecordLeadCaptureTool(BaseTool):
             )
             return {
                 "success": True,
-                "message": "已为客户登记留资，请引导客户添加下方员工微信",
+                "message": "已为客户登记留资，请引导客户添加下方顾问微信",
                 "images": [qr_ref.model_dump()],
             }
         logger.info(
@@ -266,7 +266,7 @@ class RecordLeadCaptureTool(BaseTool):
 
             now = datetime.now()
             is_work_time = now.weekday() < 5 and 9 <= now.hour < 18
-            method_label = "手机号" if contact_method == "phone" else "员工微信"
+            method_label = "手机号" if contact_method == "phone" else "顾问微信"
             work_note = "" if is_work_time else "（当前为非工作时间，请于下一个工作日跟进）"
             previous_note = ""
             if previous_captured_at:
