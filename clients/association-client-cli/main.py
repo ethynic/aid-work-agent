@@ -43,6 +43,7 @@ from runtime.progress_reporter import (  # noqa: E402
     emit_error,
     emit_log,
     emit_start,
+    emit_stopped,
 )
 from runtime.proxy_gateway import NoCreditError, ProxyLLMGateway  # noqa: E402
 
@@ -289,7 +290,15 @@ async def cmd_collect(args: argparse.Namespace) -> int:
             credit_guard=_make_credit_guard(server_url, access_token),
         )
 
-        rows = await enricher.enrich_many(names)
+        # 增量结果文件：每处理完一个协会立即追加一行，
+        # 进程中途被杀（含强杀）也不丢已采成果
+        partial_path = Path(str(args.output) + ".partial.jsonl")
+        try:
+            partial_path.unlink(missing_ok=True)  # 清掉同一路径上次的残留
+        except OSError:
+            pass
+
+        rows = await enricher.enrich_many(names, partial_path=partial_path)
         if rows.aborted:
             # 余额不足等批次熔断：明确提示 + 服务端遥测，充值后重跑即可
             remaining = [
@@ -308,6 +317,34 @@ async def cmd_collect(args: argparse.Namespace) -> int:
             )
         emit_log("INFO", "正在写入 Excel 结果")
         output = str(write_enrichment_workbook(rows, args.output))
+
+        if rows.stopped:
+            # 用户停止：已完成结果照常写入 Excel，发 stopped 事件让前端
+            # 展示部分结果并把未处理名单回填输入框；退出码 2（前端视为非异常）
+            completed = [
+                r.association_name
+                for r in rows
+                if r.processing_status in ("complete", "partial")
+            ]
+            failed = [
+                r.association_name for r in rows if r.processing_status == "failed"
+            ]
+            remaining = [
+                r.association_name for r in rows if r.processing_status == "stopped"
+            ]
+            emit_log(
+                "INFO",
+                f"用户停止：完成 {len(completed)}、失败 {len(failed)}、"
+                f"未处理 {len(remaining)}，部分结果已保存",
+            )
+            emit_stopped(
+                session_id=session_id,
+                completed=completed,
+                failed=failed,
+                remaining=remaining,
+                output=output,
+            )
+            return 2
 
         # 真实总消耗 = 任务前余额 - 任务后余额（含微信 judge 子进程的消耗）
         balance_after = _query_balance(server_url, access_token)

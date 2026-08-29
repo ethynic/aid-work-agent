@@ -2,7 +2,7 @@
 NDJSON 进度上报 —— stdout 输出换行分隔的 JSON 事件，供 Electron 客户端实时解析。
 
 事件类型（设计文档 §3.2.3 / §9.1）：
-    start / progress / billing / log / error / complete
+    start / progress / billing / log / error / complete / stopped
 """
 
 from __future__ import annotations
@@ -157,6 +157,25 @@ def emit_complete(
     })
 
 
+def emit_stopped(
+    session_id: str,
+    completed: list[str],
+    failed: list[str],
+    remaining: list[str],
+    output: str = "",
+) -> None:
+    """用户停止后的结果汇报：已完成/失败/未处理名单 + 部分结果 Excel 路径。"""
+    _emit({
+        "event": "stopped",
+        "session_id": session_id,
+        "completed": completed,
+        "failed": failed,
+        "remaining": remaining,
+        "output": output,
+        "timestamp": _now(),
+    })
+
+
 class CliProgressReporter:
     """适配 AssociationBatchEnricher 的 progress_reporter 回调。
 
@@ -168,6 +187,19 @@ class CliProgressReporter:
         self.current_association: str = ""
         self.total_consumed: float = 0.0
         self.gateway = None  # 由 main.py 注入，用于同步 current_association
+
+    def report_final(self, association: str, status: str) -> None:
+        """enricher 每协会处理完成后的最终状态回调（success/failed）。
+
+        让客户端进度图标实时从 ● 变成 ✓/✗（此前 __call__ 永远发 running，
+        图标永远停在运行中状态）。
+        """
+        emit_progress(
+            association=association,
+            step="batch",
+            status=status,
+            message="处理完成" if status == "success" else "处理失败",
+        )
 
     def __call__(self, message: str) -> None:
         """enricher 进度回调（message 格式 [协会名] 正在...）。"""

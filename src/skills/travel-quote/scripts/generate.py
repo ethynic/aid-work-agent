@@ -134,7 +134,7 @@ def generate_quote(params: dict) -> dict:
     region_names = [region_name] if region_name else []
 
     # Step 2: 季节
-    season_type, season_multiplier = determine_season(tenant_id, start_date)
+    season_type, season_multiplier = determine_season(tenant_id, start_date, subagent_id)
 
     # Step 3: 距离计算
     route_distance_km, leg_details = _calculate_route_distance(
@@ -146,7 +146,8 @@ def generate_quote(params: dict) -> dict:
     # Step 4: 交通
     items, actual_vehicle_count = calculate_vehicle_cost(
         items, tenant_id, region_names, total_people, trip_days,
-        season_type, vehicle_count, route_distance_km, leg_details
+        season_type, vehicle_count, route_distance_km, leg_details,
+        subagent_id=subagent_id
     )
     if actual_vehicle_count == 0:
         actual_vehicle_count = vehicle_count or 1
@@ -174,19 +175,21 @@ def generate_quote(params: dict) -> dict:
     # Step 7: 餐饮
     items = calculate_meal_cost(
         items, tenant_id, region_names, total_people, trip_days,
-        meal_tier, season_type, teacher_count=teacher_count
+        meal_tier, season_type, teacher_count=teacher_count,
+        subagent_id=subagent_id
     )
 
     # Step 8: 导游
     items = calculate_guide_cost(
         items, tenant_id, region_names, guide_type, trip_days, season_type,
-        total_people=total_people
+        total_people=total_people, subagent_id=subagent_id
     )
 
     # Step 9: 其他费用
     items = calculate_other_fees(
         items, tenant_id, total_people, trip_days,
-        actual_vehicle_count, include_insurance, teacher_count=teacher_count
+        actual_vehicle_count, include_insurance, teacher_count=teacher_count,
+        subagent_id=subagent_id
     )
 
     # 过滤价格为0的项目

@@ -2,18 +2,27 @@
 # -*- coding: utf-8 -*-
 """其他固定费用计算"""
 
-from db import get_db
+from db import get_db, shared_tenant_ids
 
 
 def calculate_other_fees(items: list, tenant_id: str, total_people: int,
                          trip_days: int, vehicle_count: int,
-                         include_insurance: bool, teacher_count: int = 0) -> list:
+                         include_insurance: bool, teacher_count: int = 0,
+                         subagent_id: str = '') -> list:
     """计算其他固定费用"""
+    tenant_ids = shared_tenant_ids(tenant_id, subagent_id)
+    if len(tenant_ids) > 1:
+        tenant_sql = "tenant_id = ANY(%s)"
+        tenant_param = tenant_ids
+    else:
+        tenant_sql = "tenant_id = %s"
+        tenant_param = tenant_id
+
     with get_db() as conn:
         conn.execute(
-            "SELECT * FROM bs_travel_quote_fees WHERE tenant_id=%s AND is_active=true "
+            f"SELECT * FROM bs_travel_quote_fees WHERE {tenant_sql} AND is_active=true "
             "ORDER BY COALESCE(sort_order, id)",
-            (tenant_id,)
+            (tenant_param,)
         )
         fees = conn.fetchall()
 

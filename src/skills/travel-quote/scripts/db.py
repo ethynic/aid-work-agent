@@ -127,13 +127,47 @@ def init_tables():
     logger.info("[travel-quote] 数据库表初始化完成")
 
 
+def shared_tenant_ids(tenant_id: str, subagent_id: str = '') -> List[str]:
+    """返回 [本租户] + 该 subagent 全部共享来源租户（去重）。
+
+    仅子智能体 + 租户模式（subagent_id 非空）生效，与通用知识库检索的
+    load_shared_ranges 语义一致：不传 source_type 时聚合该 subagent 启用的
+    所有 (from_tenant_id, source_type) 对。subagent_id 为空或读取异常时
+    退化为仅本租户（异常用 logger.warning 记录，不影响主流程）。
+    """
+    tenant_ids = [tenant_id]
+    if not subagent_id or not tenant_id:
+        return tenant_ids
+    try:
+        from src.knowledge.retriever.tenant_range import load_shared_ranges
+        for from_tenant_id, _st in load_shared_ranges(tenant_id, subagent_id):
+            if from_tenant_id and from_tenant_id not in tenant_ids:
+                tenant_ids.append(from_tenant_id)
+    except Exception as e:
+        logger.warning(f"[travel-quote] 加载共享定价来源租户失败: {e}")
+    return tenant_ids
+
+
 def query_by_region(table: str, tenant_id: str, region_names: List[str],
-                    season_type: str = None, extra_where: str = "") -> List[Dict]:
-    """区域感知查询：优先匹配区域，无匹配取全国通用"""
+                    season_type: str = None, extra_where: str = "",
+                    subagent_id: str = '') -> List[Dict]:
+    """区域感知查询：优先匹配区域，无匹配取全国通用。
+
+    subagent_id 非空时聚合该 subagent 全部共享来源租户，用 tenant_id = ANY(%s)
+    一次查出本租户 + 共享源租户的定价表数据。
+    """
+    tenant_ids = shared_tenant_ids(tenant_id, subagent_id)
+    if len(tenant_ids) > 1:
+        tenant_sql = "tenant_id = ANY(%s)"
+        tenant_param = tenant_ids
+    else:
+        tenant_sql = "tenant_id = %s"
+        tenant_param = tenant_id
+
     with get_db() as conn:
         if region_names:
             placeholders = ','.join(['%s'] * len(region_names))
-            params = [tenant_id]
+            params = [tenant_param]
             season_filter = ""
             if season_type:
                 season_filter = " AND (season_type=%s OR season_type='default')"
@@ -141,8 +175,9 @@ def query_by_region(table: str, tenant_id: str, region_names: List[str],
             params.extend(region_names)
 
             conn.execute(
-                f"SELECT * FROM {table} WHERE tenant_id=%s AND is_active=true "
-                f"{season_filter} AND (region_name IN ({placeholders}) OR region_name IS NULL) "
+                f"SELECT * FROM {table} WHERE {tenant_sql} AND is_active=true "
+                f"{season_filter} AND (region_name IN ({placeholders}) "
+                f"OR region_name IS NULL OR region_name = '') "
                 f"{extra_where} ORDER BY created_at DESC",
                 tuple(params)
             )
@@ -151,15 +186,16 @@ def query_by_region(table: str, tenant_id: str, region_names: List[str],
                 region_rows = [r for r in rows if r.get('region_name')]
                 return region_rows if region_rows else rows
 
-        params = [tenant_id]
+        params = [tenant_param]
         season_filter = ""
         if season_type:
             season_filter = " AND (season_type=%s OR season_type='default')"
             params.append(season_type)
 
         conn.execute(
-            f"SELECT * FROM {table} WHERE tenant_id=%s AND is_active=true "
-            f"{season_filter} AND region_name IS NULL {extra_where} ORDER BY created_at DESC",
+            f"SELECT * FROM {table} WHERE {tenant_sql} AND is_active=true "
+            f"{season_filter} AND (region_name IS NULL OR region_name = '') "
+            f"{extra_where} ORDER BY created_at DESC",
             tuple(params)
         )
         return conn.fetchall()

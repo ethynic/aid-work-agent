@@ -4,19 +4,27 @@
  * 设计文档 §4.2。
  */
 
-import { spawn, type ChildProcess } from 'node:child_process'
+import { spawn, execFile, type ChildProcess } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { EventEmitter } from 'node:events'
+import { writeFileSync, unlinkSync } from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
 
 /** CLI stdout 输出的 NDJSON 事件（设计文档 §9.1） */
 export interface CliEvent {
-  event: 'start' | 'progress' | 'billing' | 'log' | 'error' | 'complete'
+  event: 'start' | 'progress' | 'billing' | 'log' | 'error' | 'complete' | 'stopped'
   [key: string]: unknown
 }
 
 export class CliRunner extends EventEmitter {
+  /** 优雅停止宽限期（毫秒）：写停止文件后等待 CLI 保存部分结果退出，超时再强杀进程树 */
+  static killGraceMs = 8000
+
   private process: ChildProcess | null = null
+  /** 协作式停止文件路径（通过 ASSOCIATION_STOP_FILE 传给 CLI） */
+  private stopFilePath: string | null = null
 
   /**
    * @param cliPath CLI 可执行文件路径（打包模式 exe，开发模式 'python'）
@@ -70,11 +78,16 @@ export class CliRunner extends EventEmitter {
       args.push('--associations', associations.join(','))
     }
 
+    // 协作式停止文件：kill() 时写入该文件，CLI 轮询到后保存部分结果优雅退出
+    this.stopFilePath = path.join(os.tmpdir(), `association-cli-stop-${randomUUID()}`)
+    try { unlinkSync(this.stopFilePath) } catch { /* 不存在则忽略 */ }
+
     this.process = spawn(this.cliPath, args, {
       windowsHide: false,
       env: {
         ...process.env,
         ASSOCIATION_CLIENT_ACCESS_TOKEN: accessToken,
+        ASSOCIATION_STOP_FILE: this.stopFilePath,
       },
     })
 
@@ -108,23 +121,54 @@ export class CliRunner extends EventEmitter {
     })
 
     this.process.on('close', (code: number | null) => {
+      this.cleanupStopFile()
       this.emit('close', code ?? 0)
       this.process = null
     })
 
     this.process.on('error', (err: Error) => {
+      this.cleanupStopFile()
       this.emit('event', { event: 'error', error_code: 'CLI_SPAWN_FAILED', message: err.message })
       this.emit('close', 1)
       this.process = null
     })
   }
 
-  /** 终止当前收集任务。 */
+  /**
+   * 终止当前收集任务。
+   *
+   * 先写停止文件触发 CLI 协作式停止（保存部分结果、发 stopped 事件后自行退出）；
+   * 宽限期（killGraceMs）内未退出则强杀：Windows 用 taskkill /T /F 杀整棵进程树
+   * （PyInstaller bootloader → python → powershell → llm-judge），非 Windows 兜底
+   * process.kill()。CLI 进程退出后 close 事件里清理停止文件。
+   */
   kill(): void {
-    if (this.process) {
-      this.process.kill()
-      this.process = null
+    const proc = this.process
+    if (!proc) return
+    if (this.stopFilePath) {
+      try { writeFileSync(this.stopFilePath, 'stop', 'utf-8') } catch { /* 忽略 */ }
     }
+    const pid = proc.pid
+    const timer = setTimeout(() => {
+      // 宽限期内已优雅退出则无需强杀
+      if (proc.exitCode !== null || proc.signalCode !== null) return
+      if (process.platform === 'win32' && pid != null) {
+        execFile('taskkill', ['/PID', String(pid), '/T', '/F'], () => {
+          // 进程可能已退出，taskkill 报错忽略
+        })
+      } else {
+        try { proc.kill() } catch { /* 忽略 */ }
+      }
+    }, CliRunner.killGraceMs)
+    timer.unref?.()
+    // 不置空 this.process：等 close 事件统一复位（stdout 管道可能被子进程继承）
+  }
+
+  /** 清理协作式停止文件（best-effort）。 */
+  private cleanupStopFile(): void {
+    if (!this.stopFilePath) return
+    try { unlinkSync(this.stopFilePath) } catch { /* 忽略 */ }
+    this.stopFilePath = null
   }
 
   /** 同步运行命令（等进程退出，收集 stdout）——公开方法。 */

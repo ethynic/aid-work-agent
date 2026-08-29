@@ -13,6 +13,7 @@ from loguru import logger
 
 from src.config.settings import settings
 from .base import BaseLLMProvider
+from ..error_detail import describe_exception
 from ..llm_call_logger import generate_request_id, log_llm_invoke
 
 
@@ -174,14 +175,13 @@ class QwenProvider(BaseLLMProvider):
                 provider=self.PROVIDER_NAME,
                 model=self.model,
                 request_params=request_body,
-                error=str(e),
+                error=describe_exception(e),
                 duration_ms=round(duration_ms, 2),
             )
             logger.error(
-                "{name}调用异常: {etype}: {err}",
+                "{name}调用异常: {err}",
                 name=self.DISPLAY_NAME,
-                etype=type(e).__name__,
-                err=e,
+                err=describe_exception(e),
             )
             raise
 
@@ -305,14 +305,13 @@ class QwenProvider(BaseLLMProvider):
                 provider=self.PROVIDER_NAME,
                 model=self.model,
                 request_params=request_body,
-                error=str(e),
+                error=describe_exception(e),
                 duration_ms=round(duration_ms, 2),
             )
             logger.error(
-                "{name}流式调用异常: {etype}: {err}",
+                "{name}流式调用异常: {err}",
                 name=self.DISPLAY_NAME,
-                etype=type(e).__name__,
-                err=e,
+                err=describe_exception(e),
             )
             raise
 

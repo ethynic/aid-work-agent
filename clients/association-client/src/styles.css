@@ -451,6 +451,11 @@ body {
   color: #fff;
 }
 
+.progress-icon.stopped {
+  background: #faad14;
+  color: #fff;
+}
+
 @keyframes pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.5; }

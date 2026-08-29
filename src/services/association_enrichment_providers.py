@@ -58,6 +58,79 @@ _WENXIN_COLLECT_TIMEOUT_SECONDS = 180
 _SECRETARY_MOBILE_QUERY_TMPL = "{association} {name} 联系人手机号"
 
 
+def _load_stop_flag():
+    """客户端 CLI 的协作式停止标志模块（runtime.stop_flag）。
+
+    仓库内其他入口（enrichment-ui / enrichment-cli / 服务端）没有该模块，
+    返回 None 时 _communicate_with_timeout 走原 wait_for 路径，行为零变化。
+    """
+    try:
+        from runtime import stop_flag
+    except Exception:
+        return None
+    return stop_flag
+
+
+async def _kill_and_reap_process(
+    process: asyncio.subprocess.Process,
+    communicate_task: "asyncio.Task[tuple[bytes, bytes]]",
+) -> None:
+    """kill 子进程并收割 communicate 任务（避免悬挂任务告警）。"""
+    try:
+        process.kill()
+    except ProcessLookupError:
+        pass
+    try:
+        await process.wait()
+    except Exception:
+        pass
+    if not communicate_task.done():
+        communicate_task.cancel()
+        try:
+            await communicate_task
+        except BaseException:
+            pass
+
+
+async def _await_with_stop_polling(
+    coro,
+    timeout_seconds: float,
+    stop_flag,
+    interval: float = 1.0,
+):
+    """停止感知的协程等待：轮询 任务完成 / 停止文件 / 超时。
+
+    用于文心联网采集这类进程内长任务（非子进程，无法靠 _communicate_with_timeout
+    覆盖）：命中停止文件则取消任务并抛 stop_flag.UserStoppedError；超时语义与
+    asyncio.wait_for 一致（取消任务、抛 TimeoutError，由调用方按采集失败降级）。
+    """
+    task = asyncio.ensure_future(coro)
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout_seconds
+    try:
+        while True:
+            if stop_flag.is_set():
+                task.cancel()
+                try:
+                    await task
+                except BaseException:
+                    pass
+                raise stop_flag.UserStoppedError("USER_STOPPED")
+            if task.done():
+                return task.result()
+            if loop.time() >= deadline:
+                task.cancel()
+                try:
+                    await task
+                except BaseException:
+                    pass
+                raise TimeoutError()
+            await asyncio.sleep(interval)
+    finally:
+        if not task.done():
+            task.cancel()
+
+
 class ProjectAssociationProviders:
     """复用 llm_gateway、可见 Playwright 与微信 PowerShell。"""
 
@@ -192,21 +265,43 @@ class ProjectAssociationProviders:
         timeout_seconds: float,
         error_code: str,
     ) -> tuple[bytes, bytes]:
-        try:
-            return await asyncio.wait_for(
-                process.communicate(),
-                timeout=timeout_seconds,
-            )
-        except TimeoutError:
+        stop_flag = _load_stop_flag()
+        if stop_flag is None or not stop_flag.configured():
             try:
-                process.kill()
-            except ProcessLookupError:
-                # The child may exit between wait_for timing out and kill().
-                # It still exceeded the caller's deadline, so preserve the
-                # stable timeout contract while reaping it below.
-                pass
-            await process.wait()
-            raise RuntimeError(error_code) from None
+                return await asyncio.wait_for(
+                    process.communicate(),
+                    timeout=timeout_seconds,
+                )
+            except TimeoutError:
+                try:
+                    process.kill()
+                except ProcessLookupError:
+                    # The child may exit between wait_for timing out and kill().
+                    # It still exceeded the caller's deadline, so preserve the
+                    # stable timeout contract while reaping it below.
+                    pass
+                await process.wait()
+                raise RuntimeError(error_code) from None
+        # 客户端协作式停止：轮询等待（进程退出 / 停止文件 / 超时）。
+        # 命中停止文件则 kill 子进程并抛 UserStoppedError（穿透业务层
+        # except Exception，由 enrich_many 收尾保存部分结果）。
+        communicate_task = asyncio.ensure_future(process.communicate())
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout_seconds
+        try:
+            while True:
+                if stop_flag.is_set():
+                    await _kill_and_reap_process(process, communicate_task)
+                    raise stop_flag.UserStoppedError("USER_STOPPED")
+                if communicate_task.done():
+                    return communicate_task.result()
+                if loop.time() >= deadline:
+                    await _kill_and_reap_process(process, communicate_task)
+                    raise RuntimeError(error_code) from None
+                await asyncio.sleep(1.0)
+        finally:
+            if not communicate_task.done():
+                communicate_task.cancel()
 
     async def collect_official_profile(
         self, entry_url: str, headless: bool, *, association_name: str = ""
@@ -460,10 +555,22 @@ class ProjectAssociationProviders:
         try:
             from runtime.wenxin_collector import collect_query
 
-            result = await asyncio.wait_for(
-                collect_query(query),
-                timeout=_WENXIN_COLLECT_TIMEOUT_SECONDS,
-            )
+            stop_flag = _load_stop_flag()
+            if stop_flag is not None and stop_flag.configured():
+                # 客户端协作式停止：文心采集最长 180s，是单协会耗时大头；
+                # 轮询等待让「停止」在采集中途也能生效（否则 8s 宽限后只能强杀，
+                # 最终 Excel 来不及写）。UserStoppedError 继承 BaseException，
+                # 穿透下面的 except Exception 直达 enrich_many 收尾。
+                result = await _await_with_stop_polling(
+                    collect_query(query),
+                    _WENXIN_COLLECT_TIMEOUT_SECONDS,
+                    stop_flag,
+                )
+            else:
+                result = await asyncio.wait_for(
+                    collect_query(query),
+                    timeout=_WENXIN_COLLECT_TIMEOUT_SECONDS,
+                )
         except Exception:
             # playwright/CDP 异常或超时；文心非关键，降级兜底不拖垮整步。
             evidence_log(association_name, "文心·回答", "<采集失败/超时>")

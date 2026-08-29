@@ -12,6 +12,7 @@ from typing import Any, AsyncGenerator, Dict, List, Optional
 from loguru import logger
 
 from src.config.settings import settings
+from .error_detail import describe_exception
 from .key_pool import KeyPool
 from .providers.base import BaseLLMProvider
 from .providers.deepseek import DeepSeekProvider
@@ -200,10 +201,11 @@ class LLMGateway:
             call_duration = time.time() - call_start
             # 用 loguru 占位符而非 f-string 嵌入 {e}，避免异常消息含 {"error":...} 时
             # loguru 内部 message.format() 把 {error} 当占位符解析抛 KeyError，遮蔽原始异常
+            # err 用 describe_exception 提取，避免 httpx.ConnectError 等 str(e) 为空导致日志空白
             logger.opt(exception=True).error(
-                "[LLM] _call_with_pool error, provider={p}, fn={fn}, duration={d:.2f}s, error: {et}: {err}",
+                "[LLM] _call_with_pool error, provider={p}, fn={fn}, duration={d:.2f}s, error: {err}",
                 p=self.provider_name, fn=fn_name, d=call_duration,
-                et=type(e).__name__, err=e,
+                err=describe_exception(e),
             )
             raise
 
@@ -240,16 +242,24 @@ class LLMGateway:
                     raise
                 except Exception as e:
                     stream_duration = time.time() - stream_start
-                    logger.opt(exception=True).error(f"[LLM] _stream_with_pool error during iteration, provider={self.provider_name}, fn={fn_name}, duration={stream_duration:.2f}s, chunks={chunk_count}, error: {e}")
+                    logger.opt(exception=True).error(
+                        "[LLM] _stream_with_pool error during iteration, provider={p}, fn={fn}, duration={d:.2f}s, chunks={c}, error: {err}",
+                        p=self.provider_name, fn=fn_name, d=stream_duration, c=chunk_count,
+                        err=describe_exception(e),
+                    )
                     raise
-                    
+
         except asyncio.TimeoutError as e:
             stream_duration = time.time() - stream_start
             logger.error(f"[LLM] _stream_with_pool timeout (acquire key), provider={self.provider_name}, fn={fn_name}, duration={stream_duration:.2f}s")
             raise
         except Exception as e:
             stream_duration = time.time() - stream_start
-            logger.opt(exception=True).error(f"[LLM] _stream_with_pool error (acquire key), provider={self.provider_name}, fn={fn_name}, duration={stream_duration:.2f}s, error: {e}")
+            logger.opt(exception=True).error(
+                "[LLM] _stream_with_pool error (acquire key), provider={p}, fn={fn}, duration={d:.2f}s, error: {err}",
+                p=self.provider_name, fn=fn_name, d=stream_duration,
+                err=describe_exception(e),
+            )
             raise
 
     # ------------------------------------------------------------------
@@ -319,8 +329,8 @@ class LLMGateway:
             chat_duration = time.time() - chat_start
             # 用 loguru 占位符而非 f-string 嵌入 {e}，避免异常消息含 {"error":...} 触发 KeyError
             logger.opt(exception=True).error(
-                "[LLM] chat() failed, duration={d:.2f}s, error: {et}: {err}",
-                d=chat_duration, et=type(e).__name__, err=e,
+                "[LLM] chat() failed, duration={d:.2f}s, error: {err}",
+                d=chat_duration, err=describe_exception(e),
             )
             raise
 
@@ -393,8 +403,8 @@ class LLMGateway:
                 )
         except Exception as e:
             logger.opt(exception=True).error(
-                "[LLM] chat_lite() failed (cross-provider), provider={p}, model={m}, error: {et}: {err}",
-                p=lite_provider, m=lite_model, et=type(e).__name__, err=e,
+                "[LLM] chat_lite() failed (cross-provider), provider={p}, model={m}, error: {err}",
+                p=lite_provider, m=lite_model, err=describe_exception(e),
             )
             raise
         chat_duration = time.time() - chat_start
@@ -518,8 +528,8 @@ class LLMGateway:
             cwt_duration = time.time() - cwt_start
             # 用 loguru 占位符而非 f-string 嵌入 {e}，避免异常消息含 {"error":...} 触发 KeyError
             logger.opt(exception=True).error(
-                "[LLM] chat_with_tools() failed, duration={d:.2f}s, error: {et}: {err}",
-                d=cwt_duration, et=type(e).__name__, err=e,
+                "[LLM] chat_with_tools() failed, duration={d:.2f}s, error: {err}",
+                d=cwt_duration, err=describe_exception(e),
             )
             raise
 
