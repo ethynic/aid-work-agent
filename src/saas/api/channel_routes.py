@@ -96,11 +96,15 @@ router = APIRouter(tags=["租户渠道回调"])
 # 每个租户有独立的消息去重器
 _tenant_dedup_cache: dict[str, MessageDeduplicator] = {}
 
+# 旧消息过滤阈值：超过 30 分钟的消息没有回复价值（客户早已离开，回复大概率发不出），
+# cursor 到期/回调缺失积压时 sync_msg 会重放 3 天窗口内全部消息，从源头丢弃避免 95013 刷屏。
+OLD_MESSAGE_MAX_AGE = 1800  # 30 分钟（秒）
+
 
 def _get_tenant_dedup(tenant_id: str) -> MessageDeduplicator:
     """获取或创建租户级别的消息去重器"""
     if tenant_id not in _tenant_dedup_cache:
-        _tenant_dedup_cache[tenant_id] = MessageDeduplicator(ttl_seconds=300)
+        _tenant_dedup_cache[tenant_id] = MessageDeduplicator(ttl_seconds=3600)
     return _tenant_dedup_cache[tenant_id]
 
 
@@ -1953,6 +1957,24 @@ async def _process_tenant_wecom_kf_messages(
                     logger.debug(f"[wecom_kf] 跳过非客户消息: msgid={msg_id}, origin={msg_origin}")
                     continue
 
+                # ===== 旧消息过滤：超过 30 分钟没有回复价值，直接丢弃 =====
+                # 场景：cursor 到期 / 回调缺失积压时 sync_msg 会返回 3 天窗口内全部消息，
+                # 旧消息多为已结束会话(remote=4)重放，回复发不出(trans(1) -> 95013)且客户早已离开。
+                # send_time 为 Unix 秒级时间戳。过滤发生在合并之前，逐条判定更精确。
+                send_time = msg.get("send_time")
+                if send_time:
+                    try:
+                        elapsed = time.time() - int(send_time)
+                    except (TypeError, ValueError):
+                        elapsed = 0  # send_time 异常时按不过滤处理
+                    if elapsed > OLD_MESSAGE_MAX_AGE:
+                        logger.info(
+                            f"[wecom_kf] 丢弃超过30分钟的旧消息: msgid={msg_id}, "
+                            f"send_time={send_time}, elapsed={elapsed:.0f}s"
+                        )
+                        continue
+                # ===== 旧消息过滤结束 =====
+
                 # 仅处理文字 + 语音消息：图片/视频/文件等附件消息直接过滤，
                 # 避免转发给智能体产生"看不了视频"等无效回复消耗积分
                 from src.channels.wecom_kf.message import (
@@ -2133,10 +2155,22 @@ async def _process_tenant_wecom_kf_messages(
                                     f"session_id={session_id}"
                                 )
                                 continue
-                            elif actual_state in (0, 4):
-                                # 微信侧状态为未处理(0)或已结束(4)，尝试切回智能助手
+                            elif actual_state == 4:
+                                # 会话已结束，微信禁止变更状态（errcode=95013），不调 trans。
+                                # 同步本地状态后跳过 AI 处理
+                                channel_session_manager.update_session(
+                                    session_id=session_id,
+                                    metadata={"service_state": 4},
+                                )
                                 logger.info(
-                                    f"[wecom_kf] 超时失败会话微信侧状态={actual_state}，"
+                                    f"[wecom_kf] 超时失败会话已结束(remote=4)，跳过AI处理: "
+                                    f"session_id={session_id}"
+                                )
+                                continue
+                            elif actual_state == 0:
+                                # 微信侧状态为未处理(0)，尝试切回智能助手
+                                logger.info(
+                                    f"[wecom_kf] 超时失败会话微信侧状态=0，"
                                     f"尝试切回智能助手: session_id={session_id}"
                                 )
                                 recover_result = await adapter.api_client.trans_service_state(
@@ -2191,8 +2225,20 @@ async def _process_tenant_wecom_kf_messages(
                                     f"session_id={session_id}"
                                 )
                                 # 继续正常 AI 处理（不 continue）
-                            elif actual_state in (0, 4):
-                                # 微信侧状态为未处理(0)或已结束(4)，尝试切回智能助手
+                            elif actual_state == 4:
+                                # 会话已结束，微信禁止变更状态（errcode=95013），不调 trans。
+                                # 同步本地状态后跳过 AI 处理
+                                channel_session_manager.update_session(
+                                    session_id=session_id,
+                                    metadata={"service_state": 4},
+                                )
+                                logger.info(
+                                    f"[wecom_kf] 远程状态校准：会话已结束(remote=4)，跳过AI处理: "
+                                    f"session_id={session_id}"
+                                )
+                                continue
+                            elif actual_state == 0:
+                                # 微信侧状态为未处理(0)，尝试切回智能助手
                                 recover_result = await adapter.api_client.trans_service_state(
                                     open_kfid=open_kfid,
                                     external_userid=unified_msg.user_id,
@@ -2204,13 +2250,13 @@ async def _process_tenant_wecom_kf_messages(
                                         metadata={"service_state": 1},
                                     )
                                     logger.info(
-                                        f"[wecom_kf] 远程状态={actual_state}，已切回智能助手: "
+                                        f"[wecom_kf] 远程状态=0，已切回智能助手: "
                                         f"session_id={session_id}"
                                     )
                                     # 继续正常 AI 处理（不 continue）
                                 else:
                                     logger.warning(
-                                        f"[wecom_kf] 远程状态={actual_state}，切回智能助手失败: "
+                                        f"[wecom_kf] 远程状态=0，切回智能助手失败: "
                                         f"session_id={session_id}, errcode={recover_result.get('errcode')}"
                                     )
                                     continue
@@ -2271,10 +2317,22 @@ async def _process_tenant_wecom_kf_messages(
                         f"remote_service_state={remote_service_state}"
                     )
                     if remote_service_state != 1:
-                        # 远程状态 0(未处理)或 4(已结束)：尝试切回智能助手
-                        if remote_service_state in (0, 4):
+                        if remote_service_state == 4:
+                            # 会话已结束，微信禁止变更状态（errcode=95013）。
+                            # 不调 trans、不跑 AI（回复大概率发不出，白耗积分），同步本地状态。
+                            channel_session_manager.update_session(
+                                session_id=session_id,
+                                metadata={"service_state": 4},
+                            )
                             logger.info(
-                                f"[wecom_kf] 远程状态={remote_service_state}，尝试切回智能助手: "
+                                f"[wecom_kf] 会话已结束(remote=4)，跳过AI处理: "
+                                f"session_id={session_id}"
+                            )
+                            continue
+                        # 远程状态 0(未处理)：可切回智能助手，行为不变
+                        if remote_service_state == 0:
+                            logger.info(
+                                f"[wecom_kf] 远程状态=0，尝试切回智能助手: "
                                 f"session_id={session_id}"
                             )
                             recover_result = await adapter.api_client.trans_service_state(

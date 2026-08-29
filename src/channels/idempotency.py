@@ -23,10 +23,11 @@ class MessageDeduplicator:
     使用 PostgreSQL 实现，支持多 worker / 多进程部署场景。
     """
 
-    def __init__(self, ttl_seconds: int = 300):
+    def __init__(self, ttl_seconds: int = 3600):
         """
         Args:
-            ttl_seconds: 去重记录的 TTL（秒），默认 5 分钟
+            ttl_seconds: 去重记录的 TTL（秒），默认 1 小时
+                （5 分钟窗口只能拦截回调重试，拦不住 cursor 到期触发的 3 天窗口全量重放）
         """
         self._ttl = ttl_seconds
         self._ensure_table()

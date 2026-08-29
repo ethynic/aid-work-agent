@@ -1,7 +1,8 @@
 """微信客服消息同步游标管理器
 
 使用 Redis 存储每个客服账号的消息同步游标，支持多 worker 共享。
-TTL 默认 3 天，与微信客服消息保留期一致。
+TTL 默认 30 天。本地增量游标仅记录"上次同步到哪"，与微信消息保留期无耦合，
+TTL 必须远大于微信 3 天保留期，否则 cursor 先于保留期到期会触发 3 天窗口全量重放。
 """
 from typing import Optional
 
@@ -13,7 +14,7 @@ from src.core.redis_client import RedisClient
 class CursorManager:
     """管理每个客服账号的消息同步游标"""
 
-    CURSOR_TTL = 259200  # 3 天（秒）
+    CURSOR_TTL = 2592000  # 30 天（本地增量游标，与微信消息保留期无关，应远大于 3 天）
     KEY_PREFIX = "wecom_kf_cursor:"
 
     def __init__(self, redis_client: RedisClient):
