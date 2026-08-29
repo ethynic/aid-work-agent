@@ -12,6 +12,7 @@ import httpx
 from loguru import logger
 
 from .base import BaseLLMProvider
+from ..error_detail import describe_exception
 from ..llm_call_logger import generate_request_id, log_llm_invoke
 
 
@@ -122,7 +123,7 @@ class DeepSeekProvider(BaseLLMProvider):
                 error=f"HTTP {e.response.status_code}: {e.response.text[:2000]}",
                 duration_ms=round(duration_ms, 2),
             )
-            logger.error("DeepSeek API请求失败: {}: {}", type(e).__name__, e)
+            logger.error("DeepSeek API请求失败: {}", describe_exception(e))
             raise RuntimeError(f"DeepSeek API请求失败: {e.response.text}") from None
         except Exception as e:
             duration_ms = (time.perf_counter() - start_time) * 1000
@@ -131,10 +132,10 @@ class DeepSeekProvider(BaseLLMProvider):
                 provider="deepseek",
                 model=self.model,
                 request_params=request_body,
-                error=str(e),
+                error=describe_exception(e),
                 duration_ms=round(duration_ms, 2),
             )
-            logger.error("DeepSeek 调用异常: {}: {}", type(e).__name__, e)
+            logger.error("DeepSeek 调用异常: {}", describe_exception(e))
             raise
 
     async def stream_chat(
@@ -211,7 +212,7 @@ class DeepSeekProvider(BaseLLMProvider):
                 error=f"HTTP {e.response.status_code}: {e.response.text[:2000]}",
                 duration_ms=round(duration_ms, 2),
             )
-            logger.error("DeepSeek 流式API请求失败: {}: {}", type(e).__name__, e)
+            logger.error("DeepSeek 流式API请求失败: {}", describe_exception(e))
             raise RuntimeError(f"DeepSeek 流式API请求失败: {e.response.text}") from None
         except Exception as e:
             duration_ms = (time.perf_counter() - start_time) * 1000
@@ -220,10 +221,10 @@ class DeepSeekProvider(BaseLLMProvider):
                 provider="deepseek",
                 model=self.model,
                 request_params=request_body,
-                error=str(e),
+                error=describe_exception(e),
                 duration_ms=round(duration_ms, 2),
             )
-            logger.error("DeepSeek 流式调用异常: {}: {}", type(e).__name__, e)
+            logger.error("DeepSeek 流式调用异常: {}", describe_exception(e))
             raise
 
     def _parse_response(self, response: Dict[str, Any]) -> Dict[str, Any]:

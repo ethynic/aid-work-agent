@@ -12,6 +12,7 @@ import httpx
 from loguru import logger
 
 from .base import BaseLLMProvider
+from ..error_detail import describe_exception
 from ..llm_call_logger import generate_request_id, log_llm_invoke
 
 
@@ -128,7 +129,7 @@ class ZhipuProvider(BaseLLMProvider):
                 error=f"HTTP {e.response.status_code}: {e.response.text[:2000]}",
                 duration_ms=round(duration_ms, 2),
             )
-            logger.error(f"智谱GLM API请求失败: {type(e).__name__}: {e}")
+            logger.error("智谱GLM API请求失败: {}", describe_exception(e))
             raise RuntimeError(f"智谱GLM API请求失败: {e.response.text}")
         except Exception as e:
             duration_ms = (time.perf_counter() - start_time) * 1000
@@ -137,10 +138,10 @@ class ZhipuProvider(BaseLLMProvider):
                 provider="zhipu",
                 model=self.model,
                 request_params=request_body,
-                error=str(e),
+                error=describe_exception(e),
                 duration_ms=round(duration_ms, 2),
             )
-            logger.error(f"智谱GLM调用异常: {type(e).__name__}: {e}")
+            logger.error("智谱GLM调用异常: {}", describe_exception(e))
             raise
     
     async def stream_chat(
@@ -228,7 +229,7 @@ class ZhipuProvider(BaseLLMProvider):
                 error=f"HTTP {e.response.status_code}: {e.response.text[:2000]}",
                 duration_ms=round(duration_ms, 2),
             )
-            logger.error(f"智谱GLM流式API请求失败: {type(e).__name__}: {e}")
+            logger.error("智谱GLM流式API请求失败: {}", describe_exception(e))
             raise RuntimeError(f"智谱GLM流式API请求失败: {e.response.text}")
         except Exception as e:
             duration_ms = (time.perf_counter() - start_time) * 1000
@@ -237,10 +238,10 @@ class ZhipuProvider(BaseLLMProvider):
                 provider="zhipu",
                 model=self.model,
                 request_params=request_body,
-                error=str(e),
+                error=describe_exception(e),
                 duration_ms=round(duration_ms, 2),
             )
-            logger.error(f"智谱GLM流式调用异常: {type(e).__name__}: {e}")
+            logger.error("智谱GLM流式调用异常: {}", describe_exception(e))
             raise
 
     def _parse_response(self, response: Dict[str, Any]) -> Dict[str, Any]:
