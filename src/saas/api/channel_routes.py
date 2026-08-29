@@ -108,6 +108,21 @@ def _get_tenant_dedup(tenant_id: str) -> MessageDeduplicator:
     return _tenant_dedup_cache[tenant_id]
 
 
+def _is_stale_kf_message(msg: dict) -> bool:
+    """send_time 超过 OLD_MESSAGE_MAX_AGE 视为过期（无回复价值）。
+
+    客户消息（origin=3）与员工消息（origin=5）共用同一过滤口径，
+    防止 cursor 丢失全量重放时旧员工消息污染上下文。
+    """
+    send_time = msg.get("send_time")
+    if not send_time:
+        return False
+    try:
+        return (time.time() - int(send_time)) > OLD_MESSAGE_MAX_AGE
+    except (TypeError, ValueError):
+        return False
+
+
 def _merge_consecutive_user_messages(msg_list: list) -> list:
     """
     合并同一批次中同一用户连续发送的文本消息。
@@ -1753,6 +1768,7 @@ async def _process_tenant_wecom_kf_messages(
 
             # 预处理：过滤非客户消息 + 去重，得到有效消息列表
             valid_msgs = []
+            servicer_msgs_to_persist = []  # 本页员工消息（origin=5），按 send_time 正序，供穿插入库
             recalled_msgids_in_batch = set()  # 本批次内被用户撤回的消息 msgid（供后续剔除用）
             for msg in result.get("msg_list", []):
                 msg_id = msg.get("msgid", "")
@@ -1954,25 +1970,24 @@ async def _process_tenant_wecom_kf_messages(
 
                 # 跳过非客户消息（origin=3 是客户，origin=4 是接待人员）
                 if msg.get("origin") != 3:
-                    logger.debug(f"[wecom_kf] 跳过非客户消息: msgid={msg_id}, origin={msg_origin}")
+                    # 员工消息（origin=5）：收集入库（只持久化不触发 AI），
+                    # 同样过滤 30 分钟旧消息，避免 cursor 重放时旧员工消息污染上下文
+                    if msg.get("origin") == 5 and not _is_stale_kf_message(msg):
+                        dedup = _get_tenant_dedup(tenant_id)
+                        if not await dedup.is_duplicate(f"servicer:{msg_id}"):
+                            servicer_msgs_to_persist.append(msg)
                     continue
 
                 # ===== 旧消息过滤：超过 30 分钟没有回复价值，直接丢弃 =====
                 # 场景：cursor 到期 / 回调缺失积压时 sync_msg 会返回 3 天窗口内全部消息，
                 # 旧消息多为已结束会话(remote=4)重放，回复发不出(trans(1) -> 95013)且客户早已离开。
                 # send_time 为 Unix 秒级时间戳。过滤发生在合并之前，逐条判定更精确。
-                send_time = msg.get("send_time")
-                if send_time:
-                    try:
-                        elapsed = time.time() - int(send_time)
-                    except (TypeError, ValueError):
-                        elapsed = 0  # send_time 异常时按不过滤处理
-                    if elapsed > OLD_MESSAGE_MAX_AGE:
-                        logger.info(
-                            f"[wecom_kf] 丢弃超过30分钟的旧消息: msgid={msg_id}, "
-                            f"send_time={send_time}, elapsed={elapsed:.0f}s"
-                        )
-                        continue
+                if _is_stale_kf_message(msg):
+                    logger.info(
+                        f"[wecom_kf] 丢弃超过30分钟的旧消息: msgid={msg_id}, "
+                        f"send_time={msg.get('send_time')}"
+                    )
+                    continue
                 # ===== 旧消息过滤结束 =====
 
                 # 仅处理文字 + 语音消息：图片/视频/文件等附件消息直接过滤，
@@ -2038,6 +2053,17 @@ async def _process_tenant_wecom_kf_messages(
 
             for msg in merged_msgs:
                 msg_id = msg.get("msgid", "")
+
+                # 先入库 send_time 早于本条客户消息的员工消息，保证时间正序穿插，
+                # 避免把员工回复错配给后到的客户提问（C1→S1→C2→S2 必须保序）
+                while servicer_msgs_to_persist and (
+                    servicer_msgs_to_persist[0].get("send_time", 0)
+                    < msg.get("send_time", 0)
+                ):
+                    _smsg = servicer_msgs_to_persist.pop(0)
+                    await _persist_kf_servicer_message(
+                        _smsg, open_kfid, tenant_id, subagent_type
+                    )
 
                 # 设置当前客服上下文（供发送消息使用）
                 adapter.current_open_kfid = open_kfid
@@ -2154,6 +2180,10 @@ async def _process_tenant_wecom_kf_messages(
                                     f"[wecom_kf] 超时失败会话仍在人工接待中，跳过AI处理: "
                                     f"session_id={session_id}"
                                 )
+                                await _persist_kf_context_customer_message(
+                                    unified_msg, msg, session_id, open_kfid, tenant_id,
+                                    "customer_human",
+                                )
                                 continue
                             elif actual_state == 4:
                                 # 会话已结束，微信禁止变更状态（errcode=95013），不调 trans。
@@ -2165,6 +2195,10 @@ async def _process_tenant_wecom_kf_messages(
                                 logger.info(
                                     f"[wecom_kf] 超时失败会话已结束(remote=4)，跳过AI处理: "
                                     f"session_id={session_id}"
+                                )
+                                await _persist_kf_context_customer_message(
+                                    unified_msg, msg, session_id, open_kfid, tenant_id,
+                                    "customer_ended",
                                 )
                                 continue
                             elif actual_state == 0:
@@ -2193,12 +2227,20 @@ async def _process_tenant_wecom_kf_messages(
                                         f"[wecom_kf] 超时失败会话切回智能助手失败: "
                                         f"session_id={session_id}, errcode={recover_result.get('errcode')}"
                                     )
+                                    await _persist_kf_context_customer_message(
+                                        unified_msg, msg, session_id, open_kfid, tenant_id,
+                                        "customer_human",
+                                    )
                                     continue
                             else:
                                 # 微信侧是待接入池(2)，不允许机器人发消息
                                 logger.warning(
                                     f"[wecom_kf] 超时失败会话微信侧状态={actual_state}，"
                                     f"不允许发送消息: session_id={session_id}"
+                                )
+                                await _persist_kf_context_customer_message(
+                                    unified_msg, msg, session_id, open_kfid, tenant_id,
+                                    "customer_human",
                                 )
                                 continue
                         except Exception as e:
@@ -2236,6 +2278,10 @@ async def _process_tenant_wecom_kf_messages(
                                     f"[wecom_kf] 远程状态校准：会话已结束(remote=4)，跳过AI处理: "
                                     f"session_id={session_id}"
                                 )
+                                await _persist_kf_context_customer_message(
+                                    unified_msg, msg, session_id, open_kfid, tenant_id,
+                                    "customer_ended",
+                                )
                                 continue
                             elif actual_state == 0:
                                 # 微信侧状态为未处理(0)，尝试切回智能助手
@@ -2259,15 +2305,27 @@ async def _process_tenant_wecom_kf_messages(
                                         f"[wecom_kf] 远程状态=0，切回智能助手失败: "
                                         f"session_id={session_id}, errcode={recover_result.get('errcode')}"
                                     )
+                                    await _persist_kf_context_customer_message(
+                                        unified_msg, msg, session_id, open_kfid, tenant_id,
+                                        "customer_human",
+                                    )
                                     continue
                             elif actual_state == 3:
                                 # 微信侧仍是人工接待，检查是否要退出人工服务
                                 if adapter.should_exit_human(unified_msg.text or "", kf_config):
                                     await _exit_kf_human_service(adapter, open_kfid, unified_msg.user_id, session_id)
+                                    await _persist_kf_context_customer_message(
+                                        unified_msg, msg, session_id, open_kfid, tenant_id,
+                                        "customer_human",
+                                    )
                                     continue
                                 logger.info(
                                     f"[wecom_kf] 会话仍在人工接待中，跳过AI处理: "
                                     f"session_id={session_id}, user={unified_msg.user_id}"
+                                )
+                                await _persist_kf_context_customer_message(
+                                    unified_msg, msg, session_id, open_kfid, tenant_id,
+                                    "customer_human",
                                 )
                                 continue
                             else:
@@ -2275,6 +2333,10 @@ async def _process_tenant_wecom_kf_messages(
                                 logger.warning(
                                     f"[wecom_kf] 远程状态={actual_state}，不允许发送消息: "
                                     f"session_id={session_id}"
+                                )
+                                await _persist_kf_context_customer_message(
+                                    unified_msg, msg, session_id, open_kfid, tenant_id,
+                                    "customer_human",
                                 )
                                 continue
                         except Exception as e:
@@ -2328,6 +2390,10 @@ async def _process_tenant_wecom_kf_messages(
                                 f"[wecom_kf] 会话已结束(remote=4)，跳过AI处理: "
                                 f"session_id={session_id}"
                             )
+                            await _persist_kf_context_customer_message(
+                                unified_msg, msg, session_id, open_kfid, tenant_id,
+                                "customer_ended",
+                            )
                             continue
                         # 远程状态 0(未处理)：可切回智能助手，行为不变
                         if remote_service_state == 0:
@@ -2355,6 +2421,10 @@ async def _process_tenant_wecom_kf_messages(
                                     f"[wecom_kf] 远程状态切回智能助手失败: "
                                     f"session_id={session_id}, errcode={recover_result.get('errcode')}"
                                 )
+                                await _persist_kf_context_customer_message(
+                                    unified_msg, msg, session_id, open_kfid, tenant_id,
+                                    "customer_human",
+                                )
                                 continue
                         else:
                             logger.warning(
@@ -2365,6 +2435,10 @@ async def _process_tenant_wecom_kf_messages(
                             channel_session_manager.update_session(
                                 session_id=session_id,
                                 metadata={"service_state": remote_service_state},
+                            )
+                            await _persist_kf_context_customer_message(
+                                unified_msg, msg, session_id, open_kfid, tenant_id,
+                                "customer_human",
                             )
                             continue
                 except Exception as e:
@@ -2619,6 +2693,14 @@ async def _process_tenant_wecom_kf_messages(
 
                 processed_messages += 1
 
+            # flush 剩余员工消息（晚于本页最后一条客户消息；
+            # 跨页时它们早于下页首条客户消息，顺序仍正确）
+            while servicer_msgs_to_persist:
+                _smsg = servicer_msgs_to_persist.pop(0)
+                await _persist_kf_servicer_message(
+                    _smsg, open_kfid, tenant_id, subagent_type
+                )
+
             # 更新 cursor
             adapter.cursor_manager.set_cursor(open_kfid, cursor)
 
@@ -2642,6 +2724,108 @@ async def _process_tenant_wecom_kf_messages(
             tenant=tenant_id,
             error=str(e),
             level="ERROR",
+        )
+
+
+async def _persist_kf_servicer_message(
+    msg: dict, open_kfid: str, tenant_id: str, subagent_type: str
+) -> None:
+    """员工消息（origin=5）落库到 channel_messages：只持久化，不触发 AI。
+
+    content 前缀 `[人工客服] ` 让 LLM 明确区分「客户发言」与「人工客服发言」，
+    避免把员工消息误当客户提问。员工姓名 MVP 用固定前缀，servicer_userid 存
+    metadata 供后续按企微 API 反查。员工消息仅文本入库（语音/图片/文件跳过）。
+    异常吞掉不影响主流程（去重 key 已在收集时标记，TTL 内不重试、过期后重拉可补）。
+    """
+    try:
+        external_userid = msg.get("external_userid", "")
+        if not external_userid:
+            return
+        # 员工消息仅文本入库（与 should_process_kf_message 口径一致）
+        if msg.get("msgtype") != "text":
+            return
+        text = msg.get("text", {}).get("content", "")
+        if not text:
+            return
+
+        session = channel_session_manager.get_or_create_session(
+            channel_type="wecom_kf",
+            channel_user_id=external_userid,
+            tenant_id=tenant_id,
+            subagent_id=subagent_type or "",
+            channel_chat_id=open_kfid,
+        )
+        session_id = session["session_id"]
+
+        metadata = {
+            "source": "servicer",
+            "servicer_userid": msg.get("servicer_userid", ""),
+            "msgid": msg.get("msgid", ""),
+            "open_kfid": open_kfid,
+        }
+        channel_session_manager.add_message(
+            session_id=session_id,
+            role="user",
+            content=f"[人工客服] {text}",
+            message_type="text",
+            tenant_id=tenant_id,
+            metadata=metadata,
+        )
+        _kf_tlog(
+            "员工消息落库: tenant={tenant}, session_id={sid}, msgid={mid}, "
+            "servicer={servicer}, text={text}",
+            tenant=tenant_id,
+            sid=session_id,
+            mid=msg.get("msgid", ""),
+            servicer=msg.get("servicer_userid", ""),
+            text=text[:100],
+        )
+    except Exception as e:
+        logger.warning(
+            f"[wecom_kf] 员工消息落库失败（去重已标记，TTL 内不重试、过期后重拉可补）: "
+            f"msgid={msg.get('msgid')}, error={e}"
+        )
+
+
+async def _persist_kf_context_customer_message(
+    unified_msg, msg: dict, session_id: str, open_kfid: str, tenant_id: str, source: str
+) -> None:
+    """人工期/已结束期客户消息落库到 channel_messages：只持久化，不触发 AI。
+
+    source 取值 customer_human（人工接待期）/ customer_ended（已结束会话积压），
+    仅用于前端展示与事后排查，不影响 LLM 上下文重建（都是 role=user）。
+    语音占位符（`[语音消息]`）在人工期不做 ASR，过滤不落库。
+    """
+    try:
+        text = getattr(unified_msg, "text", None)
+        if not text or text.startswith("[语音消息"):
+            return  # 语音占位符不入库（人工期不做 ASR）
+
+        metadata = {
+            "source": source,
+            "msgid": msg.get("msgid", ""),
+            "open_kfid": open_kfid,
+        }
+        channel_session_manager.add_message(
+            session_id=session_id,
+            role="user",
+            content=text,
+            message_type="text",
+            tenant_id=tenant_id,
+            metadata=metadata,
+        )
+        _kf_tlog(
+            "人工期/已结束客户消息落库: tenant={tenant}, session_id={sid}, msgid={mid}, "
+            "source={source}, text={text}",
+            tenant=tenant_id,
+            sid=session_id,
+            mid=msg.get("msgid", ""),
+            source=source,
+            text=text[:100],
+        )
+    except Exception as e:
+        logger.warning(
+            f"[wecom_kf] 客户消息落库失败: msgid={msg.get('msgid')}, source={source}, error={e}"
         )
 
 
