@@ -341,7 +341,12 @@ class ScheduledTaskLogDB:
 
     @staticmethod
     def get_by_id(log_id: str) -> Optional[Dict[str, Any]]:
-        """根据日志ID获取日志"""
+        """根据日志ID获取日志
+
+        返回数据库原始行：历史遗留行的 error 字段可能含明文凭据。本方法仅供
+        create() 内部回读（写入前已脱敏）；若新增调用方把结果返回给用户/LLM，
+        必须先过 sanitize_scheduled_task_log_rows。
+        """
         placeholder = "%s"
         with get_db_connection() as conn:
             cursor = conn.cursor()

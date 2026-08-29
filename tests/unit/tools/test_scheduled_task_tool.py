@@ -328,3 +328,106 @@ async def test_manage_task_update_carries_tenant_and_user_conditions():
     assert update_mock.call_args.kwargs == {
         "tenant_id": "tenant_a", "user_id": "user-a"
     }
+
+
+@pytest.mark.asyncio
+async def test_manage_view_logs_masks_historical_plaintext():
+    """view_logs：历史明文行的 error_message 进入消息前脱敏，明文不泄漏"""
+    tool = ManageScheduledTaskTool()
+    historical_logs = [
+        {
+            "log_id": "slog_hist1",
+            "status": "failed",
+            "started_at": "2026-08-01 09:00:00",
+            "duration_ms": 120,
+            "trigger_type": "scheduled",
+            "error_message": "登录失败 password=hunter2@prod x",
+        },
+        {
+            "log_id": "slog_hist2",
+            "status": "failed",
+            "started_at": "2026-08-02 09:00:00",
+            "duration_ms": 80,
+            "trigger_type": "manual",
+            "error_message": "连接失败 api_key=sk-live-42",
+        },
+    ]
+    with (
+        patch(
+            "src.scheduler.db.ScheduledTaskDB.get_by_id",
+            return_value={"task_id": "task-a", "user_id": "user-a"},
+        ),
+        patch(
+            "src.scheduler.db.ScheduledTaskLogDB.list_by_task",
+            return_value=historical_logs,
+        ),
+        tool_execution_scope(ToolExecutionContext(user_id="user-a")),
+    ):
+        result = await tool.execute(action="view_logs", task_id="task-a")
+
+    assert result["success"] is True
+    message = result["message"]
+    assert "hunter2@prod" not in message
+    assert "sk-live-42" not in message
+    assert "password=***" in message
+    assert "api_key=***" in message
+
+
+@pytest.mark.asyncio
+async def test_manage_view_logs_truncation_never_leaks_plaintext():
+    """view_logs 截断发生在脱敏之后：超长明文凭据不会被切成漏出片段"""
+    tool = ManageScheduledTaskTool()
+    secret = "S" * 300
+    logs = [{
+        "log_id": "slog_long",
+        "status": "failed",
+        "started_at": "2026-08-03 09:00:00",
+        "duration_ms": 10,
+        "trigger_type": "scheduled",
+        "error_message": f"登录失败 password={secret} x",
+    }]
+    with (
+        patch(
+            "src.scheduler.db.ScheduledTaskDB.get_by_id",
+            return_value={"task_id": "task-a", "user_id": "user-a"},
+        ),
+        patch(
+            "src.scheduler.db.ScheduledTaskLogDB.list_by_task",
+            return_value=logs,
+        ),
+        tool_execution_scope(ToolExecutionContext(user_id="user-a")),
+    ):
+        result = await tool.execute(action="view_logs", task_id="task-a")
+
+    assert result["success"] is True
+    assert "SSS" not in result["message"]
+    assert "password=***" in result["message"]
+
+
+@pytest.mark.asyncio
+async def test_manage_view_logs_idempotent_on_already_sanitized_text():
+    """view_logs 幂等：新写入已脱敏（password=***）的日志文本再过边界不变"""
+    tool = ManageScheduledTaskTool()
+    logs = [{
+        "log_id": "slog_new1",
+        "status": "failed",
+        "started_at": "2026-08-04 09:00:00",
+        "duration_ms": 5,
+        "trigger_type": "scheduled",
+        "error_message": "登录失败 password=*** x",
+    }]
+    with (
+        patch(
+            "src.scheduler.db.ScheduledTaskDB.get_by_id",
+            return_value={"task_id": "task-a", "user_id": "user-a"},
+        ),
+        patch(
+            "src.scheduler.db.ScheduledTaskLogDB.list_by_task",
+            return_value=logs,
+        ),
+        tool_execution_scope(ToolExecutionContext(user_id="user-a")),
+    ):
+        result = await tool.execute(action="view_logs", task_id="task-a")
+
+    assert result["success"] is True
+    assert "错误: 登录失败 password=*** x" in result["message"]

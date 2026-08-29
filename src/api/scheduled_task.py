@@ -7,7 +7,10 @@ from loguru import logger
 from pydantic import BaseModel
 
 from src.scheduler.db import ScheduledTaskDB, ScheduledTaskLogDB
-from src.scheduler.error_sanitizer import sanitize_scheduled_task_error
+from src.scheduler.error_sanitizer import (
+    sanitize_scheduled_task_error,
+    sanitize_scheduled_task_log_rows,
+)
 from src.api.auth import get_current_user
 from src.saas.context import get_current_tenant_id
 
@@ -307,6 +310,9 @@ async def get_task_logs(request: Request, task_id: str, limit: int = 20):
         logs = ScheduledTaskLogDB.list_by_task(
             task_id, limit=limit, tenant_id=tenant_id, user_id=user_id
         )
+        # 历史日志兜底脱敏：遗留行的 error_message/error_trace 可能含明文凭据，
+        # 返回前在边界统一净化（新写入已脱敏，本操作幂等），库内数据不动
+        sanitize_scheduled_task_log_rows(logs)
         return {"success": True, "data": {"logs": logs, "total": len(logs)}}
     except HTTPException:
         raise
@@ -325,6 +331,8 @@ async def get_user_logs(request: Request, limit: int = 50):
         user_id, tenant_id = _get_request_identity(request)
         # 租户过滤：tenant_id='' 的遗留未回填行在具体租户视图 fail-closed 不可见
         logs = ScheduledTaskLogDB.list_by_user(user_id, limit=limit, tenant_id=tenant_id)
+        # 历史日志兜底脱敏：同 get_task_logs，返回前在边界统一净化
+        sanitize_scheduled_task_log_rows(logs)
         return {"success": True, "data": {"logs": logs, "total": len(logs)}}
     except HTTPException:
         raise

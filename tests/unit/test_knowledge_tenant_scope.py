@@ -4,12 +4,20 @@
 无租户上下文（None）收窄到 demo/无主文档（与检索侧 vector_db/hybrid_retriever
 及下载侧 _can_download_document 口径一致）。本测试用假连接捕获 execute 的 SQL
 文本与参数，离线断言收窄条件与占位符/参数一致性。
+
+平台管理员全局视图（global_view）：认证 platform_admin 且无租户上下文时，
+list/count/delete/chunks/search 不携带租户过滤（恢复 master 全局口径），
+与「未认证 None → demo/NULL 收窄」显式区分，None 一种取值不再承载两种身份。
 """
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
+from types import SimpleNamespace
 
 import pytest
+from starlette.requests import Request
+from starlette.responses import Response
 
 from src.knowledge.service import KnowledgeBaseService
+from src.saas.context import set_tenant_context
 
 
 class _FakeCursor:
@@ -135,3 +143,296 @@ class TestDeleteTenantScope:
         assert cur.executed[0][1] == [7, "t1"]
         assert cur.executed[1][1] == [7, 7, "t1"]
         assert cur.executed[2][1] == [7, "t1"]
+
+
+class TestGlobalAdminViewScope:
+    """platform_admin + tenant None + global_view=True → SQL 无租户过滤（恢复 master 全局形态）"""
+
+    def test_list_global_view_no_tenant_filter(self):
+        _, executed = _run("list_documents", rows=[{"id": 1, "created_at": None}], tenant_id=None, global_view=True)
+        sql = _flat(executed[0][0])
+        assert "tenant_id" not in sql
+        assert executed[0][1] == []
+
+    def test_count_global_view_no_tenant_filter(self):
+        _, executed = _run("count_documents", rows=[{"count": 5}], tenant_id=None, global_view=True)
+        sql = _flat(executed[0][0])
+        assert "tenant_id" not in sql
+        assert not executed[0][1]
+
+    def test_global_view_ignored_when_tenant_present(self):
+        """global_view 不改变有租户上下文时的作用域（指定租户优先）"""
+        _, executed = _run("list_documents", tenant_id="t1", global_view=True)
+        sql, params = executed[0]
+        assert "tenant_id = %s" in _flat(sql)
+        assert params == ["t1"]
+
+    def test_get_chunks_global_view_no_tenant_filter(self):
+        cur = _FakeCursor(rows=[{
+            "id": 1, "chunk_index": 0, "text": "x", "tokens": 1,
+            "metadata": None, "has_vector": False, "vector_text": None,
+        }])
+        svc = KnowledgeBaseService()
+        with patch.object(KnowledgeBaseService, "_get_db_connection", return_value=_FakeConn(cur)):
+            result = svc.get_document_chunks(7, tenant_id=None, global_view=True)
+        assert len(result) == 1
+        sql, params = cur.executed[0]
+        assert "tenant_id" not in _flat(sql)
+        assert params == [7]  # 仅 doc_id，无租户参数
+
+    @pytest.mark.asyncio
+    async def test_delete_global_view_no_tenant_filter(self):
+        cur = _FakeCursor(rows=[{"file_path": "nonexistent_kb_guard.txt"}])
+        svc = KnowledgeBaseService()
+        with patch.object(KnowledgeBaseService, "_get_db_connection", return_value=_FakeConn(cur)), \
+             patch("src.knowledge.service.get_vector_db", return_value=AsyncMock()):
+            result = await svc.delete_document(7, tenant_id=None, global_view=True)
+
+        assert result["success"] is True
+        sqls = [_flat(s) for s, _ in cur.executed]
+        assert len(sqls) == 3
+        for sql in sqls:
+            assert "tenant_id" not in sql
+        assert cur.executed[0][1] == [7]
+        assert cur.executed[1][1] == [7, 7]
+        assert cur.executed[2][1] == [7]
+
+    @pytest.mark.asyncio
+    async def test_search_global_view_title_lookup_no_tenant_filter(self):
+        """search 标题回查在全局视图下不携带租户过滤（检索器走 mock）"""
+        retriever = MagicMock()
+        retriever.retrieve = AsyncMock(return_value=[{"doc_id": 11, "chunk_id": 111, "text": "片段", "score": 0.9}])
+        cur = _FakeCursor(rows=[{"id": 11, "title": "x", "file_type": "txt", "file_path": "/tmp/x.txt"}])
+        svc = KnowledgeBaseService()
+        with patch.object(KnowledgeBaseService, "_get_db_connection", return_value=_FakeConn(cur)), \
+             patch("src.knowledge.service.get_vector_db", return_value=MagicMock()), \
+             patch("src.knowledge.retriever.hybrid_retriever.HybridRetriever", return_value=retriever), \
+             patch("src.config.settings.get_embedding_api_key", return_value="test-key"):
+            result = await svc.search_documents("q", tenant_id=None, global_view=True)
+
+        assert result["success"] is True
+        sql, params = cur.executed[0]
+        assert "tenant_id" not in _flat(sql)
+        assert params == [11]
+
+    @pytest.mark.asyncio
+    async def test_search_none_tenant_narrowed_by_default(self):
+        """默认（非全局视图）搜索标题回查仍收窄 demo/NULL（既有防泄漏行为保持）"""
+        retriever = MagicMock()
+        retriever.retrieve = AsyncMock(return_value=[{"doc_id": 11, "chunk_id": 111, "text": "片段", "score": 0.9}])
+        cur = _FakeCursor(rows=[{"id": 11, "title": "x", "file_type": "txt", "file_path": "/tmp/x.txt"}])
+        svc = KnowledgeBaseService()
+        with patch.object(KnowledgeBaseService, "_get_db_connection", return_value=_FakeConn(cur)), \
+             patch("src.knowledge.service.get_vector_db", return_value=MagicMock()), \
+             patch("src.knowledge.retriever.hybrid_retriever.HybridRetriever", return_value=retriever), \
+             patch("src.config.settings.get_embedding_api_key", return_value="test-key"):
+            result = await svc.search_documents("q", tenant_id=None)
+
+        assert result["success"] is True
+        sql = _flat(cur.executed[0][0])
+        assert "tenant_id = 'demo' OR tenant_id IS NULL" in sql
+
+
+def _make_api_request(user_role="unset", path="/api/knowledge/documents", headers=None, method="GET"):
+    """构造带 state.user_role 与 headers 的最小 Request 假件（模拟中间件认证后写入）"""
+    raw_headers = [
+        (k.lower().encode("latin-1"), v.encode("latin-1"))
+        for k, v in (headers or {}).items()
+    ]
+    scope = {
+        "type": "http", "method": method, "path": path, "raw_path": path.encode(),
+        "headers": raw_headers, "query_string": b"", "server": ("testserver", 80),
+        "scheme": "http", "http_version": "1.1",
+    }
+    request = Request(scope)
+    if user_role != "unset":
+        request.state.user_role = user_role
+    return request
+
+
+class TestIsGlobalAdminViewHelper:
+    """四种身份语义的 API 层判定：未认证 None / demo / platform_admin 全局 / 指定租户"""
+
+    def setup_method(self):
+        set_tenant_context(None, None)
+
+    def teardown_method(self):
+        set_tenant_context(None, None)
+
+    def test_platform_admin_with_none_tenant_is_global(self):
+        from src.knowledge.api import _is_global_admin_view
+        set_tenant_context(None, "admin-1")
+        assert _is_global_admin_view(_make_api_request(user_role="platform_admin")) is True
+
+    def test_platform_admin_with_specified_tenant_not_global(self):
+        """admin 经 X-Tenant-Id 代管指定租户 → 该租户作用域，非全局"""
+        from src.knowledge.api import _is_global_admin_view
+        set_tenant_context("t2", "admin-1")
+        assert _is_global_admin_view(_make_api_request(user_role="platform_admin")) is False
+
+    def test_employee_not_global(self):
+        from src.knowledge.api import _is_global_admin_view
+        set_tenant_context(None, "u1")
+        assert _is_global_admin_view(_make_api_request(user_role="employee")) is False
+
+    def test_unauthenticated_not_global(self):
+        """未认证（state 无 user_role，非 SaaS 模式同理）→ 收窄"""
+        from src.knowledge.api import _is_global_admin_view
+        set_tenant_context(None, None)
+        assert _is_global_admin_view(_make_api_request()) is False
+
+    def test_demo_tenant_not_global(self):
+        """demo 公共身份（tenant='demo'）→ demo 作用域，非全局"""
+        from src.knowledge.api import _is_global_admin_view
+        set_tenant_context("demo", "u1")
+        assert _is_global_admin_view(_make_api_request(user_role="employee")) is False
+
+    def test_missing_request_not_global(self):
+        from src.knowledge.api import _is_global_admin_view
+        set_tenant_context(None, None)
+        assert _is_global_admin_view(None) is False
+
+
+class TestKnowledgeApiScopeCombination:
+    """API 处理器 + 中间件组合：伪造 header 的知识库删除/读取被 403 拦截；admin 指定租户按该租户过滤"""
+
+    @staticmethod
+    def _auth_patches(user_row, token_user="user-1"):
+        return patch("src.api.auth.verify_token", return_value=token_user), \
+            patch("src.saas.middleware.get_db_connection",
+                  return_value=_FakeConn(_FakeCursor([user_row])))
+
+    @pytest.mark.asyncio
+    async def test_forged_header_delete_blocked_403(self):
+        """普通用户伪造他人租户 header → 知识库删除被中间件 403 拦截，service 不被调用"""
+        from src.knowledge import api as kb_api
+        from src.saas.middleware import TenantContextMiddleware
+
+        request = _make_api_request(
+            path="/api/knowledge/documents/7", method="DELETE",
+            headers={"Authorization": "Bearer good-token", "X-Tenant-Id": "t2"})
+        scope_calls = {"service_called": False}
+
+        async def call_next(req):
+            with patch.object(kb_api.knowledge_service, "delete_document", AsyncMock()) as m:
+                await kb_api.delete_document(7, http_request=req)
+                scope_calls["service_called"] = m.called
+            return Response("ok")
+
+        mw = TenantContextMiddleware(None)
+        verify_patch, db_patch = self._auth_patches({"role": "employee", "tenant_id": "t1"})
+        with verify_patch, db_patch, \
+                patch("src.saas.db.tenant_db.TenantDB.get_by_id", return_value={"tenant_id": "t2"}):
+            response = await mw.dispatch(request, call_next)
+
+        assert response.status_code == 403
+        assert scope_calls["service_called"] is False
+
+    @pytest.mark.asyncio
+    async def test_forged_header_chunks_read_blocked_403(self):
+        """普通用户伪造他人租户 header → 知识库分块读取被 403 拦截"""
+        from src.saas.middleware import TenantContextMiddleware
+
+        request = _make_api_request(
+            path="/api/knowledge/documents/7/chunks",
+            headers={"Authorization": "Bearer good-token", "X-Tenant-Id": "t2"})
+        invoked = {"handler": False}
+
+        async def call_next(req):
+            invoked["handler"] = True
+            return Response("ok")
+
+        mw = TenantContextMiddleware(None)
+        verify_patch, db_patch = self._auth_patches({"role": "tenant_admin", "tenant_id": "t1"})
+        with verify_patch, db_patch, \
+                patch("src.saas.db.tenant_db.TenantDB.get_by_id", return_value={"tenant_id": "t2"}):
+            response = await mw.dispatch(request, call_next)
+
+        assert response.status_code == 403
+        assert invoked["handler"] is False
+
+    @pytest.mark.asyncio
+    async def test_own_tenant_header_delete_scoped_to_own_tenant(self):
+        """普通用户 header==自身租户 → 放行，删除作用域为该租户（global_view=False）"""
+        from src.knowledge import api as kb_api
+        from src.saas.middleware import TenantContextMiddleware
+
+        request = _make_api_request(
+            path="/api/knowledge/documents/7", method="DELETE",
+            headers={"Authorization": "Bearer good-token", "X-Tenant-Id": "t1"})
+        calls = {}
+
+        async def call_next(req):
+            with patch.object(
+                kb_api.knowledge_service, "delete_document",
+                AsyncMock(return_value={"success": True, "message": "已删除"})
+            ) as m:
+                resp = await kb_api.delete_document(7, http_request=req)
+                calls["kwargs"] = m.call_args.kwargs
+            return resp
+
+        mw = TenantContextMiddleware(None)
+        verify_patch, db_patch = self._auth_patches({"role": "employee", "tenant_id": "t1"})
+        with verify_patch, db_patch:
+            response = await mw.dispatch(request, call_next)
+
+        assert response.status_code == 200
+        assert calls["kwargs"]["tenant_id"] == "t1"
+        assert calls["kwargs"]["global_view"] is False
+
+    @pytest.mark.asyncio
+    async def test_admin_specified_tenant_scoped(self):
+        """admin + X-Tenant-Id 指定租户 → 处理器按该租户过滤（global_view=False）"""
+        from src.knowledge import api as kb_api
+
+        request = _make_api_request(user_role="platform_admin", path="/api/knowledge/documents")
+        calls = {}
+        set_tenant_context("t2", "admin-1")
+        try:
+            with patch.object(kb_api.knowledge_service, "list_documents", MagicMock(return_value=[])) as m_list, \
+                 patch.object(kb_api.knowledge_service, "count_documents", MagicMock(return_value=0)):
+                await kb_api.list_documents(http_request=request)
+                calls["list_kwargs"] = m_list.call_args.kwargs
+        finally:
+            set_tenant_context(None, None)
+
+        assert calls["list_kwargs"]["tenant_id"] == "t2"
+        assert calls["list_kwargs"]["global_view"] is False
+
+    @pytest.mark.asyncio
+    async def test_platform_admin_global_list_view(self):
+        """认证 platform_admin 无 X-Tenant-Id → 全局视图（tenant None + global_view=True）"""
+        from src.knowledge import api as kb_api
+
+        request = _make_api_request(user_role="platform_admin", path="/api/knowledge/documents")
+        calls = {}
+        set_tenant_context(None, "admin-1")
+        try:
+            with patch.object(kb_api.knowledge_service, "list_documents", MagicMock(return_value=[])) as m_list, \
+                 patch.object(kb_api.knowledge_service, "count_documents", MagicMock(return_value=0)):
+                await kb_api.list_documents(http_request=request)
+                calls["list_kwargs"] = m_list.call_args.kwargs
+        finally:
+            set_tenant_context(None, None)
+
+        assert calls["list_kwargs"]["tenant_id"] is None
+        assert calls["list_kwargs"]["global_view"] is True
+
+    @pytest.mark.asyncio
+    async def test_unauthenticated_list_stays_narrowed(self):
+        """未认证（无 user_role）→ global_view=False，保持 demo/NULL 收窄"""
+        from src.knowledge import api as kb_api
+
+        request = _make_api_request(path="/api/knowledge/documents")
+        calls = {}
+        set_tenant_context(None, None)
+        try:
+            with patch.object(kb_api.knowledge_service, "list_documents", MagicMock(return_value=[])) as m_list, \
+                 patch.object(kb_api.knowledge_service, "count_documents", MagicMock(return_value=0)):
+                await kb_api.list_documents(http_request=request)
+                calls["list_kwargs"] = m_list.call_args.kwargs
+        finally:
+            set_tenant_context(None, None)
+
+        assert calls["list_kwargs"]["tenant_id"] is None
+        assert calls["list_kwargs"]["global_view"] is False

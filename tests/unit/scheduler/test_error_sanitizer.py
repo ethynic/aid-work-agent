@@ -16,7 +16,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.scheduler.error_sanitizer import sanitize_scheduled_task_error
+from src.scheduler.error_sanitizer import (
+    sanitize_scheduled_task_error,
+    sanitize_scheduled_task_log_rows,
+)
 
 # ==================== 键名 × 分隔符矩阵 ====================
 
@@ -281,3 +284,49 @@ def test_api_boundary_wrapper_delegates():
     out = _sanitize_error("调用第三方失败 Authorization: Bearer tkn-leak-88")
     assert "tkn-leak-88" not in out
     assert "Bearer=***" in out
+
+
+# ==================== 日志行级读取边界兜底脱敏 ====================
+
+
+def test_log_rows_historical_plaintext_masked():
+    """历史遗留行（未脱敏明文）：行级 helper 遮蔽 error_message/error_trace"""
+    rows = [
+        {
+            "log_id": "slog_old1",
+            "status": "failed",
+            "error_message": "登录失败 password=hunter2@prod x",
+            "error_trace": 'Traceback: requests.HTTPError api_key="sk-live-42"',
+        },
+        {"log_id": "slog_old2", "status": "success", "error_message": None},
+    ]
+    out = sanitize_scheduled_task_log_rows(rows)
+    assert "hunter2@prod" not in out[0]["error_message"]
+    assert "password=***" in out[0]["error_message"]
+    assert "sk-live-42" not in out[0]["error_trace"]
+    assert "api_key=***" in out[0]["error_trace"]
+    # 无错误字段/空值行不受影响
+    assert out[1]["error_message"] is None
+
+
+def test_log_rows_sanitization_idempotent():
+    """幂等：新写入已脱敏（password=***）的行经边界再脱敏保持不变"""
+    rows = [{
+        "log_id": "slog_new1",
+        "status": "failed",
+        "error_message": "登录失败 password=*** x",
+        "error_trace": "Traceback: password=***",
+    }]
+    before = dict(rows[0])
+    out = sanitize_scheduled_task_log_rows(rows)
+    assert out[0]["error_message"] == before["error_message"]
+    assert out[0]["error_trace"] == before["error_trace"]
+
+
+def test_log_rows_missing_fields_untouched():
+    """不含 error 字段的行（如统计行/mock 缺列）原样返回，不抛错"""
+    rows = [{"log_id": "slog_x", "status": "success"},
+            {"log_id": "slog_y", "error_message": "", "error_trace": None}]
+    out = sanitize_scheduled_task_log_rows(rows)
+    assert out == rows
+    assert sanitize_scheduled_task_log_rows([]) == []

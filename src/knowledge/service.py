@@ -592,7 +592,7 @@ class KnowledgeBaseService:
                 "document_id": None
             }
 
-    async def delete_document(self, doc_id: int, tenant_id: Optional[str] = None) -> Dict[str, Any]:
+    async def delete_document(self, doc_id: int, tenant_id: Optional[str] = None, global_view: bool = False) -> Dict[str, Any]:
         """删除文档
 
         对象级租户校验（安全加固设计 §2.4）：SQL 本体携带租户条件，不依赖路由参数
@@ -601,10 +601,14 @@ class KnowledgeBaseService:
         - 有租户上下文：仅能删除本租户文档
         - 无租户上下文（demo/无租户模式）：仅能删除 demo/无主文档，与检索侧
           （hybrid_retriever/vector_db）及下载侧口径一致，绝不触碰真实租户数据
+        - global_view=True（认证 platform_admin 全局视图）且无租户上下文：
+          不携带租户过滤，恢复平台管理员跨租户管理文档的原行为
         """
         # 租户作用域条件（常量拼接，无用户输入插值；无租户上下文时收窄到 demo/无主文档）
         if tenant_id:
             scope_sql, scope_params = "tenant_id = %s", [tenant_id]
+        elif global_view:
+            scope_sql, scope_params = "1=1", []
         else:
             scope_sql, scope_params = "(tenant_id = 'demo' OR tenant_id IS NULL)", []
         try:
@@ -699,12 +703,13 @@ class KnowledgeBaseService:
             logger.error(f"后端日志：文档移动失败: {e}", exc_info=True)
             return {"success": False, "error": "移动文档失败", "debug": sanitize_error_info(str(e))}
 
-    def count_documents(self, user_id: Optional[int] = None, tenant_id: Optional[str] = None, source_type: Optional[str] = None, sub_category: Optional[str] = None) -> int:
+    def count_documents(self, user_id: Optional[int] = None, tenant_id: Optional[str] = None, source_type: Optional[str] = None, sub_category: Optional[str] = None, global_view: bool = False) -> int:
         """获取文档总数
 
         租户作用域（安全加固设计 §2.4）：有租户上下文只统计本租户；无租户上下文
         （demo/无租户模式）收窄到 demo/无主文档，与 list_documents/检索侧口径一致，
-        绝不统计真实租户文档。
+        绝不统计真实租户文档。global_view=True（认证 platform_admin 全局视图）且
+        无租户上下文时不携带租户过滤（恢复平台管理员全局统计的原行为）。
         """
         try:
             with self._get_db_connection() as conn:
@@ -716,6 +721,9 @@ class KnowledgeBaseService:
                 if tenant_id:
                     conditions.append("tenant_id = %s")
                     params.append(tenant_id)
+                elif global_view:
+                    # 平台管理员全局视图：不携带租户过滤
+                    pass
                 else:
                     # 常量拼接，无用户输入插值；无租户上下文时收窄到 demo/无主文档
                     conditions.append("(tenant_id = 'demo' OR tenant_id IS NULL)")
@@ -755,13 +763,15 @@ class KnowledgeBaseService:
         limit: int = 100,
         offset: int = 0,
         source_type: Optional[str] = None,
-        sub_category: Optional[str] = None
+        sub_category: Optional[str] = None,
+        global_view: bool = False
     ) -> List[Dict[str, Any]]:
         """获取文档列表
 
         租户作用域（安全加固设计 §2.4）：有租户上下文只返回本租户文档；无租户上下文
         （demo/无租户模式）收窄到 demo/无主文档，与 count_documents/检索侧口径一致，
-        绝不返回真实租户文档。
+        绝不返回真实租户文档。global_view=True（认证 platform_admin 全局视图）且
+        无租户上下文时不携带租户过滤（恢复平台管理员全局列表的原行为）。
         """
         try:
             with self._get_db_connection() as conn:
@@ -774,6 +784,9 @@ class KnowledgeBaseService:
                 if tenant_id:
                     conditions.append(f"tenant_id = {placeholder}")
                     params.append(tenant_id)
+                elif global_view:
+                    # 平台管理员全局视图：不携带租户过滤
+                    pass
                 else:
                     # 常量拼接，无用户输入插值；无租户上下文时收窄到 demo/无主文档
                     conditions.append("(tenant_id = 'demo' OR tenant_id IS NULL)")
@@ -821,17 +834,20 @@ class KnowledgeBaseService:
             logger.error(f"后端日志：获取文档列表失败: {e}", exc_info=True)
             return []
 
-    def get_document_chunks(self, doc_id: int, tenant_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    def get_document_chunks(self, doc_id: int, tenant_id: Optional[str] = None, global_view: bool = False) -> List[Dict[str, Any]]:
         """获取文档的所有分块（含向量数据）
 
         对象级租户校验（安全加固设计 §2.4）：chunks 表无 tenant_id 列，经 JOIN
         documents 携带租户条件。跨租户文档返回空，对外表现为「文档不存在或没有
         分块」，不泄漏存在性；无租户上下文（demo/无租户模式）仅可见 demo/无主
-        文档，与检索侧口径一致。
+        文档，与检索侧口径一致。global_view=True（认证 platform_admin 全局视图）
+        且无租户上下文时不携带租户过滤（恢复平台管理员跨租户查看的原行为）。
         """
         # 租户作用域条件（常量拼接，无用户输入插值；无租户上下文时收窄到 demo/无主文档）
         if tenant_id:
             scope_sql, scope_params = "d.tenant_id = %s", [tenant_id]
+        elif global_view:
+            scope_sql, scope_params = "1=1", []
         else:
             scope_sql, scope_params = "(d.tenant_id = 'demo' OR d.tenant_id IS NULL)", []
         try:
@@ -876,7 +892,8 @@ class KnowledgeBaseService:
         tenant_id: Optional[str] = None,
         top_k: int = 10,
         source_type: Optional[str] = None,
-        sub_category: Optional[str] = None
+        sub_category: Optional[str] = None,
+        global_view: bool = False
     ) -> Dict[str, Any]:
         """
         根据内容搜索文档（混合检索：向量 + FTS5 + RRF）
@@ -888,6 +905,8 @@ class KnowledgeBaseService:
             top_k: 返回结果数量
             source_type: 顶级分类代号，提供时只搜索该分类（含其下所有子级）
             sub_category: 直接选中分类代号，展开为自身 + 所有后代分类再过滤（不传时全分类搜索）
+            global_view: 认证 platform_admin 全局视图（且无租户上下文）时，
+                标题回查不携带租户过滤（恢复平台管理员全局搜索口径）
 
         Returns:
             搜索结果
@@ -945,6 +964,12 @@ class KnowledgeBaseService:
                             SELECT id, title, file_type, file_path FROM documents
                             WHERE id IN ({placeholders}) AND tenant_id = %s
                         """, list(doc_ids) + [tenant_id])
+                    elif global_view:
+                        # 平台管理员全局视图：不携带租户过滤（恢复原全局口径）
+                        cursor.execute(f"""
+                            SELECT id, title, file_type, file_path FROM documents
+                            WHERE id IN ({placeholders})
+                        """, list(doc_ids))
                     else:
                         # 无租户上下文同样收窄到 demo/无主文档（检索侧 hybrid_retriever/
                         # vector_db 已收窄，此处兜底防上游口径漂移，§2.4）

@@ -5,7 +5,7 @@
 """
 
 import re
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 
 # 敏感键名 + 分隔符的前缀匹配：
@@ -164,3 +164,22 @@ def sanitize_scheduled_task_error(error_msg: Optional[str]) -> Optional[str]:
         parts.append(f"{match.group('key')}=***")
         cursor = _credential_value_end(error_msg, match.end())
     return "".join(parts)
+
+
+# 日志行中可能携带凭据的错误字段（历史遗留行未脱敏，读取返回边界兜底）
+_LOG_ERROR_FIELDS = ("error_message", "error_trace")
+
+
+def sanitize_scheduled_task_log_rows(log_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """日志行读取返回边界的兜底脱敏。
+
+    新写入路径（ScheduledTaskLogDB.create）已对 error_message/error_trace 脱敏，
+    但历史遗留行仍是明文；API/工具层把日志行返回给用户/LLM 前统一调用本函数
+    净化出站副本，库内数据保持原样。脱敏幂等（已脱敏文本再脱敏不变），
+    对不含这些字段的行无操作。
+    """
+    for log in log_rows or []:
+        for field in _LOG_ERROR_FIELDS:
+            if log.get(field):
+                log[field] = sanitize_scheduled_task_error(log[field])
+    return log_rows

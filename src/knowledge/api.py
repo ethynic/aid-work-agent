@@ -111,6 +111,22 @@ class UpdateCategoryRequest(BaseModel):
     display_name: str
 
 
+def _is_global_admin_view(http_request: Optional[Request]) -> bool:
+    """平台管理员全局视图判定：认证后 role=platform_admin 且当前无租户上下文
+    （未通过 X-Tenant-Id 代管指定租户，platform_admin 自身 tenant_id 为空）。
+
+    True 时知识库 list/count/search/delete/chunks 恢复无租户过滤的全局口径；
+    未认证、普通用户、admin 代管指定租户、非 SaaS 模式（中间件未挂载，
+    state 恒无 user_role）一律 False，保持 demo/NULL 收窄防泄漏行为。
+    """
+    if http_request is None:
+        return False
+    return (
+        getattr(http_request.state, "user_role", None) == "platform_admin"
+        and get_current_tenant_id() is None
+    )
+
+
 @router.get("/categories")
 async def list_categories(http_request: Request = None):
     """获取知识库分类列表"""
@@ -382,9 +398,13 @@ async def list_documents(
         limit=limit,
         offset=offset,
         source_type=source_type,
-        sub_category=sub_category
+        sub_category=sub_category,
+        global_view=_is_global_admin_view(http_request)
     )
-    total = knowledge_service.count_documents(tenant_id=tenant_id, source_type=source_type, sub_category=sub_category)
+    total = knowledge_service.count_documents(
+        tenant_id=tenant_id, source_type=source_type, sub_category=sub_category,
+        global_view=_is_global_admin_view(http_request)
+    )
 
     return {
         "items": [DocumentResponse(**doc) for doc in documents],
@@ -417,6 +437,7 @@ async def search_documents(
         top_k=request.top_k or 10,
         source_type=request.source_type,
         sub_category=request.sub_category,
+        global_view=_is_global_admin_view(http_request),
     )
 
     if not result.get("success"):
@@ -459,7 +480,7 @@ async def move_documents(request: MoveDocumentsRequest, http_request: Request = 
 
 
 @router.delete("/documents/{doc_id}")
-async def delete_document(doc_id: int):
+async def delete_document(doc_id: int, http_request: Request = None):
     """
     删除知识库文档
 
@@ -469,7 +490,10 @@ async def delete_document(doc_id: int):
     - 对象级租户校验：跨租户文档统一按「文档不存在」响应，不泄漏存在性
     """
     # 租户上下文由 TenantMiddleware 注入；service 层 SQL 本体再校验一次（防 TOCTOU）
-    result = await knowledge_service.delete_document(doc_id, tenant_id=get_current_tenant_id())
+    result = await knowledge_service.delete_document(
+        doc_id, tenant_id=get_current_tenant_id(),
+        global_view=_is_global_admin_view(http_request),
+    )
 
     if not result.get("success"):
         return JSONResponse(
@@ -485,14 +509,17 @@ async def delete_document(doc_id: int):
 
 
 @router.get("/documents/{doc_id}/chunks")
-async def get_document_chunks(doc_id: int):
+async def get_document_chunks(doc_id: int, http_request: Request = None):
     """
     获取文档的所有分块（用于调试）
 
     - 对象级租户校验：跨租户文档统一按 404「文档不存在或没有分块」响应，不泄漏存在性
     """
     # 租户上下文由 TenantMiddleware 注入；service 层经 JOIN documents 校验归属（防 TOCTOU）
-    chunks = knowledge_service.get_document_chunks(doc_id, tenant_id=get_current_tenant_id())
+    chunks = knowledge_service.get_document_chunks(
+        doc_id, tenant_id=get_current_tenant_id(),
+        global_view=_is_global_admin_view(http_request),
+    )
 
     if not chunks:
         raise HTTPException(status_code=404, detail="文档不存在或没有分块")

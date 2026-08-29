@@ -17,7 +17,10 @@ from src.tools.context import (
     ToolExecutionContext,
     current_tool_execution_context,
 )
-from src.scheduler.error_sanitizer import sanitize_scheduled_task_error
+from src.scheduler.error_sanitizer import (
+    sanitize_scheduled_task_error,
+    sanitize_scheduled_task_log_rows,
+)
 
 
 def _resolve_runtime_tenant_id(context: Optional[ToolExecutionContext]) -> Optional[str]:
@@ -364,6 +367,10 @@ class ManageScheduledTaskTool(BaseTool):
                 )
                 if not logs:
                     return {"success": True, "message": f"任务 {task_id} 暂无执行日志"}
+                # 历史日志兜底脱敏：遗留行的 error_message 可能含明文凭据，先净化
+                # 再进消息文本（新写入已脱敏，本操作幂等）；先脱敏再截断，
+                # 截断不会把明文凭据切成两段漏出
+                sanitize_scheduled_task_log_rows(logs)
                 log_list = []
                 for log in logs:
                     status_icon = "✅" if log["status"] == "success" else "❌"
