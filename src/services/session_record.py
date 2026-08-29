@@ -479,6 +479,23 @@ class SessionRecordService:
                     f"duration={self.get_duration_ms()}ms"
                 )
 
+            # 观测成本闭环：回填 obs_traces.total_cost。先写内存 trace（覆盖
+            # persist worker 未处理时序，UPSERT 携带该值），再 UPDATE 已落库行
+            # （覆盖 worker 已处理时序）。obs_traces 是技术诊断数据而非计费权威，
+            # 最终金额以本函数写入的 chat_records / billing 链路为准。
+            # best-effort：失败只记 debug 日志，不影响 save() 主流程与返回值。
+            if self.trace_collector is not None and credit_cost:
+                try:
+                    trace_id = getattr(self.trace_collector, "trace_id", None)
+                    if trace_id:
+                        trace_obj = getattr(self.trace_collector, "trace", None)
+                        if trace_obj is not None:
+                            trace_obj.total_cost = credit_cost
+                        from src.core.trace_persist import update_total_cost
+                        update_total_cost(trace_id, credit_cost)
+                except Exception as cost_err:
+                    logger.debug(f"obs_traces.total_cost 回填失败: {cost_err}")
+
             return record
 
         except Exception as e:

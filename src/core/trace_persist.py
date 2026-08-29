@@ -15,6 +15,9 @@ _worker_started = False
 _pending_metadata_updates = {}
 _pending_metadata_lock = threading.Lock()
 _PENDING_METADATA_MAX = 10000
+_pending_total_cost_updates = {}
+_pending_total_cost_lock = threading.Lock()
+_PENDING_TOTAL_COST_MAX = 10000
 
 
 def _remember_pending_metadata(trace_id: str, metadata: dict) -> None:
@@ -25,6 +28,15 @@ def _remember_pending_metadata(trace_id: str, metadata: dict) -> None:
         while len(_pending_metadata_updates) > _PENDING_METADATA_MAX:
             oldest_trace_id = next(iter(_pending_metadata_updates))
             _pending_metadata_updates.pop(oldest_trace_id, None)
+
+
+def _remember_pending_total_cost(trace_id: str, total_cost: float) -> None:
+    """登记 INSERT 前成本补丁并限制故障期间的进程内缓存上限。"""
+    with _pending_total_cost_lock:
+        _pending_total_cost_updates[trace_id] = total_cost
+        while len(_pending_total_cost_updates) > _PENDING_TOTAL_COST_MAX:
+            oldest_trace_id = next(iter(_pending_total_cost_updates))
+            _pending_total_cost_updates.pop(oldest_trace_id, None)
 
 
 def schedule_persist(trace: 'TraceRecord'):
@@ -59,6 +71,9 @@ def _do_persist(trace):
         with get_logs_connection() as cur:
 
             # UPSERT trace
+            # total_cost 为参数而非字面量 0：初始取 trace.total_cost（默认 0），
+            # session_record.save() 算出真实积分成本后回填内存 trace，
+            # 本 UPSERT 随之携带真实值（覆盖计费先完成、trace 后落库的时序）。
             cur.execute("""
                 INSERT INTO obs_traces
                     (trace_id, session_id, tenant_id, user_id, subagent_id,
@@ -68,13 +83,14 @@ def _do_persist(trace):
                      user_message_id,
                      created_at, updated_at)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s,
-                        %s, 0, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s,
                         NOW(), NOW())
                 ON CONFLICT (trace_id) DO UPDATE SET
                     output = EXCLUDED.output,
                     status = EXCLUDED.status,
                     error_message = EXCLUDED.error_message,
                     total_tokens = EXCLUDED.total_tokens,
+                    total_cost = EXCLUDED.total_cost,
                     duration_ms = EXCLUDED.duration_ms,
                     agent_iterations = EXCLUDED.agent_iterations,
                     tool_calls_count = EXCLUDED.tool_calls_count,
@@ -91,7 +107,8 @@ def _do_persist(trace):
                     "provider": trace.provider,
                     **(getattr(trace, "metadata", None) or {}),
                 }, ensure_ascii=False),
-                trace.tags, trace.total_tokens, trace.duration_ms,
+                trace.tags, trace.total_tokens, getattr(trace, "total_cost", 0),
+                trace.duration_ms,
                 trace.agent_iterations, len(trace.spans),
                 trace.status, trace.error_message, trace.source_type,
                 getattr(trace, 'user_message_id', None),
@@ -107,6 +124,17 @@ def _do_persist(trace):
                     "SET metadata = COALESCE(metadata, '{}'::jsonb) || %s::jsonb, "
                     "updated_at = NOW() WHERE trace_id = %s",
                     (json.dumps(pending_metadata, ensure_ascii=False), trace.trace_id),
+                )
+
+            # update_total_cost 可能在本 INSERT 提交前执行而 UPDATE 0 行。
+            # 与 metadata 使用同一 pending 补丁模式，在当前事务提交前补写真实成本。
+            with _pending_total_cost_lock:
+                pending_total_cost = _pending_total_cost_updates.pop(trace.trace_id, None)
+            if pending_total_cost is not None:
+                cur.execute(
+                    "UPDATE obs_traces SET total_cost = %s, updated_at = NOW() "
+                    "WHERE trace_id = %s",
+                    (pending_total_cost, trace.trace_id),
                 )
 
             # INSERT spans
@@ -182,6 +210,41 @@ def update_user_message_id(trace_id: str, user_message_id: str):
         logger.debug(
             f"update_user_message_id failed (trace_id={trace_id}, "
             f"user_message_id={user_message_id}): {e}"
+        )
+
+
+def update_total_cost(trace_id: str, total_cost: float):
+    """
+    回填 obs_traces.total_cost（观测成本闭环）。
+
+    session_record.save() 在算出真实积分成本（credit_cost）后调用。与
+    update_user_message_id 一样覆盖 trace_persist worker 先后两种时序：
+    - worker 未处理：调用方已先把 total_cost 写入内存 trace，worker UPSERT 携带该值
+    - worker 已处理：本函数 UPDATE 已落库行补救
+    - worker 事务在途（UPDATE 0 行）：登记 pending 补丁，worker 在提交前补写
+
+    obs_traces 是技术诊断数据，total_cost 不是计费权威，最终金额以
+    billing / chat_records 链路为准。
+
+    best-effort：失败只记 warning 并登记 pending 补丁，不影响对话主流程
+    （最坏情况 total_cost 保持 0，观测口径降级，属可接受）。
+    """
+    try:
+        from src.db.database import get_logs_connection
+        with get_logs_connection() as cur:
+            cur.execute(
+                "UPDATE obs_traces "
+                "SET total_cost = %s, updated_at = NOW() "
+                "WHERE trace_id = %s",
+                (total_cost, trace_id),
+            )
+            if cur.rowcount == 0:
+                _remember_pending_total_cost(trace_id, total_cost)
+            cur.commit()
+    except Exception as e:
+        _remember_pending_total_cost(trace_id, total_cost)
+        logger.warning(
+            f"update_total_cost failed (trace_id={trace_id}): {e}"
         )
 
 

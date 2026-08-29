@@ -52,6 +52,10 @@ class TraceRecord:
     tags: List[str] = field(default_factory=list)
     spans: List[SpanRecord] = field(default_factory=list)
     total_tokens: int = 0
+    # 真实积分成本：初始 0，由 session_record.save() 算出 credit_cost 后回填
+    # （内存 + DB 双写，覆盖 trace_persist worker 先后写入两种时序）。
+    # 仅作观测统计口径，不是计费权威（最终金额以 billing / chat_records 链路为准）。
+    total_cost: float = 0
     model: Optional[str] = None
     provider: Optional[str] = None
     agent_iterations: int = 0
