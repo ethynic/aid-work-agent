@@ -76,6 +76,7 @@ async def test_db_has_phone_skips_adapter():
     mock_get.assert_called_once_with("u123")
     adapter.get_user_info.assert_not_called()
     assert result.user_id == "u123"
+    assert result.tenant_id == "t1"
     assert result.phone == "13900139000"
     assert result.channel_type == "feishu"
     assert result.channel_user_id == "ou_xxx"
@@ -103,7 +104,28 @@ async def test_db_no_phone_adapter_returns_mobile_writes_back():
     adapter.get_user_info.assert_awaited_once_with("staffid_xxx")
     mock_update.assert_called_once_with("u123", phone="13800138000")
     assert result.phone == "13800138000"
+    assert result.tenant_id == "t1"
     assert result.channel_type == "wecom"
+
+
+@pytest.mark.asyncio
+async def test_empty_tenant_id_passthrough_not_collapsed_to_none():
+    """tenant_id=""（明确公共用户）必须原样透传，不得被 ``or None`` 合并吞掉"""
+    adapter = _make_adapter(mobile="13800138000")
+
+    with patch(
+        "src.channels.agent_user_builder.UserDB.get_by_id",
+        return_value=_make_user_record(phone="13900139000"),
+    ):
+        result = await build_agent_user_for_channel(
+            channel_type="feishu",
+            channel_user_id="ou_xxx",
+            tenant_id="",
+            adapter=adapter,
+            user_id="u123",
+        )
+
+    assert result.tenant_id == ""
 
 
 @pytest.mark.asyncio

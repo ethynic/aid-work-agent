@@ -68,6 +68,8 @@ class User(BaseModel):
     """
     user_id: str = Field(..., description="用户唯一ID")
     name: str = Field(..., description="用户姓名")
+    # None=租户未知（必须 fail-closed）；空串=明确公共用户。不可用 ``or None`` 合并。
+    tenant_id: Optional[str] = Field(None, description="租户ID；空串表示明确公共用户")
     role: UserRole = Field(default=UserRole.EMPLOYEE, description="用户角色")
     department_id: Optional[str] = Field(None, description="部门ID")
     department_name: Optional[str] = Field(None, description="部门名称")
@@ -148,6 +150,7 @@ class User(BaseModel):
         return {
             "user_id": self.user_id,
             "name": self.name,
+            "tenant_id": self.tenant_id,
             "role": self.role,
             "department_id": self.department_id,
             "department_name": self.department_name,

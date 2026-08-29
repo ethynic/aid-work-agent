@@ -67,7 +67,7 @@ class ExistingAgentBackend:
         from src.models.user import User
         await self._require_owned_session(correlation["session_ref"], tenant_id, user_id)
         agent = self._agent(correlation["session_ref"], tenant_id)
-        user = User(user_id=user_id, name=user_id)
+        user = User(user_id=user_id, name=user_id, tenant_id=tenant_id)
         if turn_input.get("type") == "user_message":
             events = agent.process_message(
                 str(turn_input.get("content", "")),

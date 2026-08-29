@@ -71,6 +71,15 @@ class TestUser:
         assert user.name == "测试用户"
         assert user.role == UserRole.EMPLOYEE
 
+    def test_tenant_id_serialization_preserves_unknown_and_public(self):
+        unknown = User(user_id="u_unknown", name="未知")
+        public = User(user_id="u_public", name="公共", tenant_id="")
+
+        assert unknown.to_dict()["tenant_id"] is None
+        assert public.to_dict()["tenant_id"] == ""
+        assert User.from_dict(unknown.to_dict()).tenant_id is None
+        assert User.from_dict(public.to_dict()).tenant_id == ""
+
     def test_has_permission(self):
         user = User(
             user_id="test_user",

@@ -102,7 +102,9 @@ async def build_agent_user_for_channel(
     # 3. 短路判断：DB 有 phone 且 name 非占位符，直接返回
     name_is_placeholder = _is_placeholder_name(name, channel_type)
     if phone and not name_is_placeholder:
-        return _build_user(user_id, name, phone, channel_type, channel_user_id)
+        return _build_user(
+            user_id, name, phone, channel_type, channel_user_id, tenant_id
+        )
 
     # 4. 调渠道 API 获取（phone 缺失或 name 是占位符）
     info = await _fetch_user_info_from_channel(
@@ -132,7 +134,9 @@ async def build_agent_user_for_channel(
                     f"user_id={user_id}, err={e}"
                 )
 
-    return _build_user(user_id, name, phone or None, channel_type, channel_user_id)
+    return _build_user(
+        user_id, name, phone or None, channel_type, channel_user_id, tenant_id
+    )
 
 
 async def _fetch_user_info_from_channel(
@@ -166,11 +170,13 @@ def _build_user(
     phone: Optional[str],
     channel_type: str,
     channel_user_id: str,
+    tenant_id: str,
 ) -> User:
     """构造 User 对象"""
     return User(
         user_id=user_id,
         name=name,
+        tenant_id=tenant_id,
         phone=phone,
         channel_type=channel_type,
         channel_user_id=channel_user_id,
