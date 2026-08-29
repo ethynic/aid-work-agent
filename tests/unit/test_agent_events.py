@@ -7,12 +7,19 @@
 - 非 list 输入（None 兜底）
 - 事件结构与 make_event 一致（含 type/timestamp）
 - mask_tool_args 脱敏（敏感键、大小写、超长截断、嵌套深度、不改原参数）
+- 工具结果内容处理纯函数（自 agent.py 迁入）：
+  _truncate_tool_content / _extract_image_refs_from_tool_result /
+  _normalize_image_placement，以及 agent.py re-export 等价性
 """
 import pytest
 
+import src.core.agent_events as agent_events_module
 from src.core.agent_events import (
     MAX_ARG_NEST_DEPTH,
     MAX_ARG_VALUE_LENGTH,
+    _extract_image_refs_from_tool_result,
+    _normalize_image_placement,
+    _truncate_tool_content,
     make_event,
     make_image_event,
     mask_tool_args,
@@ -173,3 +180,126 @@ def _flatten_values(obj):
             yield from _flatten_values(v)
     else:
         yield obj
+
+
+class TestTruncateToolContent:
+    """_truncate_tool_content：超长工具结果截断"""
+
+    def test_below_threshold_returns_unchanged(self):
+        """阈值以下（含恰好等于阈值）原样返回"""
+        content = "a" * 12000
+        assert _truncate_tool_content(content) == content
+        assert _truncate_tool_content("short") == "short"
+
+    def test_over_threshold_keeps_head_and_tail(self):
+        """超长内容保留头部 + 尾部 + 省略标记"""
+        content = "a" * 13000
+        result = _truncate_tool_content(content)
+        assert result.startswith("a" * 6000)
+        assert result.endswith("a" * 2000)
+        assert "...[已截断：共 13000 字符，省略 5000 字符]..." in result
+
+    def test_custom_params(self):
+        """自定义 max_chars / head_chars / threshold 生效"""
+        result = _truncate_tool_content("a" * 100, max_chars=30, head_chars=10, threshold=50)
+        assert result.startswith("a" * 10)
+        assert result.endswith("a" * 20)
+        assert "...[已截断：共 100 字符，省略 70 字符]..." in result
+
+
+class TestExtractImageRefs:
+    """_extract_image_refs_from_tool_result：ImageRef 提取"""
+
+    def test_top_level_images(self):
+        """顶层 images 列表：含 file_id 的 dict 被提取"""
+        img1 = {"file_id": "f1", "url": "u1"}
+        img2 = {"file_id": "f2"}
+        result = {"images": [img1, img2, {"no_file_id": True}, "not_dict"]}
+        assert _extract_image_refs_from_tool_result(result) == [img1, img2]
+
+    def test_top_level_cover_image(self):
+        """顶层 cover_image：单个 dict 被提取，无 file_id / None 不提取"""
+        cover = {"file_id": "cover1"}
+        assert _extract_image_refs_from_tool_result({"cover_image": cover}) == [cover]
+        assert _extract_image_refs_from_tool_result({"cover_image": {"url": "x"}}) == []
+        assert _extract_image_refs_from_tool_result({"cover_image": None}) == []
+
+    def test_nested_results_cover_image(self):
+        """results 列表中每项的 cover_image 被提取"""
+        cover_a = {"file_id": "ca"}
+        cover_b = {"file_id": "cb"}
+        result = {
+            "results": [
+                {"name": "a", "cover_image": cover_a},
+                {"name": "b", "cover_image": cover_b},
+                {"name": "c", "cover_image": None},
+                {"name": "d"},
+                "not_dict",
+            ]
+        }
+        assert _extract_image_refs_from_tool_result(result) == [cover_a, cover_b]
+
+    def test_non_dict_input_returns_empty(self):
+        """非 dict 输入一律返回空列表"""
+        assert _extract_image_refs_from_tool_result(None) == []
+        assert _extract_image_refs_from_tool_result("some string") == []
+        assert _extract_image_refs_from_tool_result([1, 2, 3]) == []
+        assert _extract_image_refs_from_tool_result(42) == []
+        assert _extract_image_refs_from_tool_result({}) == []
+
+
+class TestNormalizeImagePlacement:
+    """_normalize_image_placement：placement 默认值补齐"""
+
+    def test_fills_missing_and_falsy_placement(self):
+        """placement 缺失 / 空串 / None 统一补 after_text"""
+        refs = [
+            {"file_id": "f1"},
+            {"file_id": "f2", "placement": ""},
+            {"file_id": "f3", "placement": None},
+        ]
+        ret = _normalize_image_placement(refs)
+        assert ret is refs
+        assert all(ref["placement"] == "after_text" for ref in refs)
+
+    def test_keeps_existing_placement(self):
+        """已有非空 placement 保留原值"""
+        refs = [
+            {"file_id": "f1", "placement": "before_text"},
+            {"file_id": "f2", "placement": "inline"},
+        ]
+        _normalize_image_placement(refs)
+        assert refs[0]["placement"] == "before_text"
+        assert refs[1]["placement"] == "inline"
+
+    def test_empty_list(self):
+        """空列表原样返回"""
+        assert _normalize_image_placement([]) == []
+
+
+class TestAgentReExportEquivalence:
+    """re-export 等价性：agent.py 的名字与 agent_events 模块指向同一函数对象。
+
+    注意：src.core.agent 在模块级初始化 LLM 网关，缺少 API Key 的本地环境
+    无法导入（基线已知问题），此时跳过本类，不影响纯函数测试独立运行。
+    """
+
+    def _get_agent_module(self):
+        try:
+            import src.core.agent as agent_module
+        except ValueError as exc:
+            # 模块级 LLM 网关初始化失败（缺 API Key），属本地环境基线问题
+            pytest.skip(f"src.core.agent 无法导入：{exc}")
+        return agent_module
+
+    def test_agent_reexports_same_objects(self):
+        agent_module = self._get_agent_module()
+        assert agent_module._truncate_tool_content is agent_events_module._truncate_tool_content
+        assert (
+            agent_module._extract_image_refs_from_tool_result
+            is agent_events_module._extract_image_refs_from_tool_result
+        )
+        assert (
+            agent_module._normalize_image_placement
+            is agent_events_module._normalize_image_placement
+        )
