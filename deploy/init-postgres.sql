@@ -2,18 +2,17 @@
 -- 用于 AID Work Agent 数据库初始化
 -- 包含核心业务表、SaaS 多租户表，及渠道(wecom_rpa)/社媒/视频/工作报告等全部系统表
 -- 不含 bs_ 开头的业务表（由子智能体初始化时自动创建）
--- 单实例方案：通过修改下方 \c 指令切换目标数据库（生产库 / 测试库）
 --
--- 切换数据库：修改下面这一行 \c 即可
---   生产库：\c aid_work_agent
---   测试库：\c aid_work_agent2
+-- 目标数据库：请勿在本文件中写 \c 切库——历史上这里的 \c 曾把对测试库执行的
+-- 初始化静默重定向到生产库。统一用 psql -d 显式指定目标库执行：
+--   生产库：docker exec -i aid-postgres psql -U aid_user -d aid_work_agent -f 本文件
+--   测试库：docker exec -i aid-postgres psql -U aid_user -d aid_work_agent2 -f 本文件
 -- 注意：目标数据库及用户需提前手动创建，例如首次初始化测试库时执行：
 --   CREATE USER aid_user2 WITH PASSWORD 'Aid_2026';
 --   CREATE DATABASE aid_work_agent2 OWNER aid_user2;
 --   ALTER USER aid_user2 SET statement_timeout = '30000';
 
--- ============== 指定目标数据库（切换数据库时修改这一行）==============
-\c aid_work_agent
+-- ============== 目标数据库由 psql -d 参数指定（见上） ==============
 
 -- 启用 pgvector 扩展（用于向量搜索）
 CREATE EXTENSION IF NOT EXISTS vector;
