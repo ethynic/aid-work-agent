@@ -18,10 +18,12 @@ window.addEventListener('unhandledrejection', (e) => {
 const state = {
   config: null,
   cliRunning: false,
+  stopping: false,  // 已点击停止、等待 CLI 退出（优雅停止或强杀）
   associations: [],
   progressMap: new Map(),
   totalConsumed: 0,
   lastOutput: '',
+  currentOutputPath: '',  // 本次任务的 Excel 输出路径（强杀时用于提示 partial 增量文件）
   inputFilePath: '',  // 上传的输入文件路径
   guiLog: [],         // GUI 内存日志（{time,level,message}），供导出诊断包
 }
@@ -154,6 +156,7 @@ async function handleStart() {
   const now = new Date()
   const ts = `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}_${String(now.getHours()).padStart(2,'0')}${String(now.getMinutes()).padStart(2,'0')}${String(now.getSeconds()).padStart(2,'0')}`
   const outputPath = `${desktopPath}\\协会收集结果_${ts}.xlsx`
+  state.currentOutputPath = outputPath
 
   // 重置状态
   state.associations = hasText ? associations : []  // 文件模式时 count 由 start 事件补全
@@ -168,6 +171,8 @@ async function handleStart() {
   $('result-section').classList.add('hidden')
   $('btn-start').classList.add('hidden')
   $('btn-stop').classList.remove('hidden')
+  resetStopButton()
+  state.stopping = false
   $('progress-status').textContent = '运行中'
   $('progress-status').className = 'log-status running'
 
@@ -181,7 +186,20 @@ async function handleStart() {
   }
 }
 
+function resetStopButton() {
+  const btn = $('btn-stop')
+  btn.disabled = false
+  btn.textContent = '停止'
+}
+
 function handleStop() {
+  if (!state.cliRunning || state.stopping) return
+  state.stopping = true
+  // 立即反馈：停止可能要先等 CLI 保存部分结果（优雅停止宽限期）
+  const btn = $('btn-stop')
+  btn.disabled = true
+  btn.textContent = '正在停止…'
+  appendLog('INFO', '正在停止任务：已完成的协会结果会被保留，请稍候…')
   client.cli.kill()
 }
 
@@ -212,6 +230,9 @@ function handleCliEvent(evt) {
       break
     case 'complete':
       handleCompleteEvent(evt)
+      break
+    case 'stopped':
+      handleStoppedEvent(evt)
       break
   }
 }
@@ -253,8 +274,10 @@ function handleBillingEvent(evt) {
 
 function handleCompleteEvent(evt) {
   state.cliRunning = false
+  state.stopping = false
   $('btn-start').classList.remove('hidden')
   $('btn-stop').classList.add('hidden')
+  resetStopButton()
   $('progress-status').textContent = '完成'
   $('progress-status').className = 'log-status success'
 
@@ -283,10 +306,80 @@ function handleCompleteEvent(evt) {
   refreshCredits()
 }
 
-function handleCliClose(code) {
+// 用户停止：CLI 优雅收尾后发来 completed/failed/remaining 名单 + 部分结果 Excel 路径
+function handleStoppedEvent(evt) {
   state.cliRunning = false
+  state.stopping = false
   $('btn-start').classList.remove('hidden')
   $('btn-stop').classList.add('hidden')
+  resetStopButton()
+  $('progress-status').textContent = '已停止'
+  $('progress-status').className = 'log-status'
+
+  const completed = evt.completed || []
+  const failed = evt.failed || []
+  const remaining = evt.remaining || []
+  const total = completed.length + failed.length + remaining.length
+
+  // 未处理协会在进度区标记为「已停止」（还没出现过 progress 事件的先补建行）
+  for (const name of remaining) {
+    let item = state.progressMap.get(name)
+    if (!item) {
+      const index = state.progressMap.size + 1
+      item = { steps: [], status: 'stopped', index, element: null }
+      state.progressMap.set(name, item)
+      item.element = createProgressItem(name, index, total || state.associations.length)
+      $('progress-list').appendChild(item.element)
+    }
+    item.status = 'stopped'
+    updateProgressItem(item)
+  }
+
+  $('result-summary').innerHTML = `
+    <div class="result-stat success"><div class="stat-num">${completed.length}</div><div class="stat-label">已完成</div></div>
+    <div class="result-stat failed"><div class="stat-num">${failed.length}</div><div class="stat-label">失败</div></div>
+    <div class="result-stat partial"><div class="stat-num">${remaining.length}</div><div class="stat-label">未处理</div></div>
+  `
+  if (evt.output) {
+    state.lastOutput = evt.output
+    $('result-output-path').textContent = evt.output
+    $('result-output').classList.remove('hidden')
+  }
+  $('result-section').classList.remove('hidden')
+  $('result-section').scrollIntoView({ behavior: 'smooth', block: 'start' })
+
+  // 未处理名单填回输入框（清掉文件选择），方便用户直接补跑
+  if (remaining.length > 0) {
+    $('associations-input').value = remaining.join('\n')
+    $('input-file-name').textContent = ''
+    state.inputFilePath = ''
+  }
+  appendLog('INFO', `⏹ 任务已停止：完成 ${completed.length}/${total} 个，部分结果已保存${evt.output ? '：' + evt.output : ''}`)
+  refreshCredits()
+}
+
+function handleCliClose(code) {
+  state.cliRunning = false
+  const wasStopping = state.stopping
+  state.stopping = false
+  $('btn-start').classList.remove('hidden')
+  $('btn-stop').classList.add('hidden')
+  resetStopButton()
+  if (wasStopping) {
+    // 用户主动停止：优雅停止时 stopped 事件已先展示结果；
+    // 强杀（taskkill）时退出码可能非 0/2，也按「已停止」归类，不报异常退出
+    if ($('progress-status').textContent !== '已停止') {
+      $('progress-status').textContent = '已停止'
+      $('progress-status').className = 'log-status'
+      appendLog('INFO', `任务已停止（CLI 退出码 ${code}）`)
+      // 强杀路径（无 stopped 事件）：最终 Excel 可能没来得及写，
+      // 但每个协会完成时已增量落盘 partial JSONL，提示用户可追溯
+      if (state.currentOutputPath) {
+        appendLog('INFO', `已完成的协会数据已增量保存：${state.currentOutputPath}.partial.jsonl（JSONL 格式，每行一个协会）`)
+      }
+    }
+    return
+  }
   if (code !== 0 && code !== 2) {
     appendLog('ERROR', `CLI 进程退出（代码 ${code}）`)
     $('progress-status').textContent = '异常退出'
@@ -313,7 +406,7 @@ function createProgressItem(name, index, total) {
 function updateProgressItem(item) {
   const icon = item.element.querySelector('.progress-icon')
   icon.className = `progress-icon ${item.status}`
-  icon.textContent = item.status === 'success' ? '✓' : item.status === 'failed' ? '✗' : '●'
+  icon.textContent = item.status === 'success' ? '✓' : item.status === 'failed' ? '✗' : item.status === 'stopped' ? '■' : '●'
 
   const stepsEl = item.element.querySelector('.progress-steps')
   const lastStep = item.steps[item.steps.length - 1]

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -113,14 +114,75 @@ class AssociationBatchResult(list["AssociationEnrichmentRow"]):
         *,
         aborted: bool = False,
         abort_error_code: str | None = None,
+        stopped: bool = False,
     ):
         super().__init__(rows)
         self.aborted = aborted
         self.abort_error_code = abort_error_code
+        # 用户主动停止（客户端「停止」按钮写停止文件）：已完成行保留，
+        # 未处理行标记为 stopped
+        self.stopped = stopped
 
 
 def _redact(text: str) -> str:
     return _MOBILE_RE.sub(lambda match: f"{match.group()[:3]}****{match.group()[-4:]}", text)
+
+
+def _user_stop_requested() -> bool:
+    """客户端 CLI 注入了停止文件（ASSOCIATION_STOP_FILE）且文件已存在。
+
+    非客户端环境（enrichment-ui / enrichment-cli / 服务端）没有 runtime.stop_flag
+    模块，恒返回 False，行为零变化。
+    """
+    try:
+        from runtime import stop_flag
+    except Exception:
+        return False
+    try:
+        return stop_flag.is_set()
+    except Exception:
+        return False
+
+
+def _is_user_stopped(exc: BaseException) -> bool:
+    """是否为用户停止信号（runtime.stop_flag.UserStoppedError）。
+
+    按类名判断而非 import 后 isinstance：本模块在仓库内被多处复用，
+    不能硬依赖客户端 CLI 的 runtime 包。
+    """
+    return type(exc).__name__ == "UserStoppedError"
+
+
+def _stopped_row(association_name: str) -> "AssociationEnrichmentRow":
+    """未处理（用户停止）的占位行。"""
+    return AssociationEnrichmentRow(
+        association_name=association_name,
+        processing_status="stopped",
+        errors=["user_stopped"],
+        processed_at=datetime.now(timezone.utc).isoformat(),
+    )
+
+
+def _append_partial_row(
+    partial_path: str | Path | None,
+    row: "AssociationEnrichmentRow",
+) -> None:
+    """把已处理协会的结果行追加到增量 JSONL 文件。
+
+    进程任何时候被杀，已完成成果都已落盘；最终 Excel 写完后该文件保留供追溯。
+    落盘失败不影响采集主流程。
+    """
+    if not partial_path:
+        return
+    try:
+        path = Path(partial_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as stream:
+            stream.write(
+                json.dumps(row.as_excel_row(), ensure_ascii=False, default=str) + "\n"
+            )
+    except Exception:
+        pass
 
 
 def _excel_safe_value(value: object) -> object:
@@ -445,11 +507,50 @@ class AssociationBatchEnricher:
         )
         row.processed_at = datetime.now(timezone.utc).isoformat()
 
+    def _report_row_final(self, row: "AssociationEnrichmentRow") -> None:
+        """每协会处理结束后上报最终状态（success/failed）。
+
+        客户端借此把进度图标实时从 ● 变成 ✓/✗；reporter 无 report_final
+        方法（其他入口的纯 callable reporter）时跳过，行为不变。
+        """
+        hook = getattr(self._progress_reporter, "report_final", None)
+        if hook is None:
+            return
+        try:
+            status = (
+                "success"
+                if row.processing_status in ("complete", "partial")
+                else "failed"
+            )
+            hook(row.association_name, status)
+        except Exception:
+            # 进度上报故障不能改变采集行为
+            pass
+
     async def enrich_many(
-        self, association_names: Sequence[str]
+        self,
+        association_names: Sequence[str],
+        *,
+        partial_path: str | Path | None = None,
     ) -> AssociationBatchResult:
         rows = AssociationBatchResult()
-        for association_name in deduplicate_association_names(association_names):
+        names = deduplicate_association_names(association_names)
+
+        def _record(row: AssociationEnrichmentRow) -> None:
+            rows.append(row)
+            _append_partial_row(partial_path, row)
+
+        for index, association_name in enumerate(names):
+            # 协作式停止：客户端「停止」按钮写入停止文件后，在下一个协会开始前
+            # 跳出——当前及剩余协会标记为 stopped，已完成结果保留返回。
+            if _user_stop_requested():
+                rows.stopped = True
+                for rest_name in names[index:]:
+                    _record(_stopped_row(rest_name))
+                self._progress(
+                    f"[{association_name}] 用户停止采集，已完成结果已保留"
+                )
+                break
             # 余额守卫：每个协会开始前检查（充值前停止、充值后重跑）
             if self._credit_guard is not None:
                 try:
@@ -458,7 +559,7 @@ class AssociationBatchEnricher:
                     error_code = (
                         getattr(exc, "error_code", None) or type(exc).__name__
                     )
-                    rows.append(
+                    _record(
                         AssociationEnrichmentRow(
                             association_name=association_name,
                             processing_status="aborted",
@@ -474,14 +575,17 @@ class AssociationBatchEnricher:
                     )
                     break
             try:
-                rows.append(await self.enrich_one(association_name))
+                row = await self.enrich_one(association_name)
+                _record(row)
+                self._report_row_final(row)
             except AssociationBatchAborted as exc:
-                rows.append(exc.row)
+                _record(exc.row)
+                self._report_row_final(exc.row)
                 rows.aborted = True
                 rows.abort_error_code = exc.error.error_code
                 break
             except Exception as exc:
-                rows.append(
+                _record(
                     AssociationEnrichmentRow(
                         association_name=association_name,
                         processing_status="failed",
@@ -489,6 +593,16 @@ class AssociationBatchEnricher:
                         processed_at=datetime.now(timezone.utc).isoformat(),
                     )
                 )
+            except BaseException as exc:
+                # 用户停止（子进程轮询点命中停止文件抛出 UserStoppedError）：
+                # 当前协会标记 stopped，剩余协会同样标记，保留已完成结果。
+                if not _is_user_stopped(exc):
+                    raise
+                rows.stopped = True
+                _record(_stopped_row(association_name))
+                for rest_name in names[index + 1:]:
+                    _record(_stopped_row(rest_name))
+                break
         return rows
 
     @staticmethod
