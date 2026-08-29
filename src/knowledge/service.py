@@ -592,14 +592,29 @@ class KnowledgeBaseService:
                 "document_id": None
             }
 
-    async def delete_document(self, doc_id: int) -> Dict[str, Any]:
-        """删除文档"""
+    async def delete_document(self, doc_id: int, tenant_id: Optional[str] = None) -> Dict[str, Any]:
+        """删除文档
+
+        对象级租户校验（安全加固设计 §2.4）：SQL 本体携带租户条件，不依赖路由参数
+        或上游查询结果。对当前上下文不可见（跨租户/无主）的文档一律按「文档不存在」
+        处理，不泄漏存在性：
+        - 有租户上下文：仅能删除本租户文档
+        - 无租户上下文（demo/无租户模式）：仅能删除 demo/无主文档，与检索侧
+          （hybrid_retriever/vector_db）及下载侧口径一致，绝不触碰真实租户数据
+        """
+        # 租户作用域条件（常量拼接，无用户输入插值；无租户上下文时收窄到 demo/无主文档）
+        if tenant_id:
+            scope_sql, scope_params = "tenant_id = %s", [tenant_id]
+        else:
+            scope_sql, scope_params = "(tenant_id = 'demo' OR tenant_id IS NULL)", []
         try:
             with self._get_db_connection() as conn:
                 cursor = conn.cursor()
 
-                # 获取文件路径
-                cursor.execute("SELECT file_path FROM documents WHERE id = %s", (doc_id,))
+                # 获取文件路径（带租户条件，跨租户文档视为不存在）
+                cursor.execute(
+                    f"SELECT file_path FROM documents WHERE id = %s AND {scope_sql}",
+                    [doc_id] + scope_params)
                 row = cursor.fetchone()
                 if not row:
                     return {"success": False, "error": "文档不存在"}
@@ -607,15 +622,24 @@ class KnowledgeBaseService:
                 # row 是 dict: {"file_path": ...}，对应 SELECT file_path
                 file_path = row["file_path"]
 
-                # 删除向量（复用同一个数据库连接，避免锁冲突）
+                # 删除向量（复用同一个数据库连接，避免锁冲突；文档归属已在上方按租户校验）
                 vector_db = get_vector_db(dimension=1024, conn=conn)
                 await vector_db.delete_by_doc(doc_id)
 
-                # 删除 chunks（FTS 触发器会自动删除）
-                cursor.execute("DELETE FROM chunks WHERE doc_id = %s", (doc_id,))
+                # 删除 chunks（FTS 触发器会自动删除；chunks 表无 tenant_id 列，
+                # 经 documents 子查询携带租户条件）
+                cursor.execute(
+                    f"""
+                    DELETE FROM chunks
+                    WHERE doc_id = %s
+                      AND doc_id IN (SELECT id FROM documents WHERE id = %s AND {scope_sql})
+                    """,
+                    [doc_id, doc_id] + scope_params)
 
-                # 删除文档记录
-                cursor.execute("DELETE FROM documents WHERE id = %s", (doc_id,))
+                # 删除文档记录（带租户条件）
+                cursor.execute(
+                    f"DELETE FROM documents WHERE id = %s AND {scope_sql}",
+                    [doc_id] + scope_params)
 
                 conn.commit()
 
@@ -676,7 +700,12 @@ class KnowledgeBaseService:
             return {"success": False, "error": "移动文档失败", "debug": sanitize_error_info(str(e))}
 
     def count_documents(self, user_id: Optional[int] = None, tenant_id: Optional[str] = None, source_type: Optional[str] = None, sub_category: Optional[str] = None) -> int:
-        """获取文档总数"""
+        """获取文档总数
+
+        租户作用域（安全加固设计 §2.4）：有租户上下文只统计本租户；无租户上下文
+        （demo/无租户模式）收窄到 demo/无主文档，与 list_documents/检索侧口径一致，
+        绝不统计真实租户文档。
+        """
         try:
             with self._get_db_connection() as conn:
                 cursor = conn.cursor()
@@ -684,9 +713,12 @@ class KnowledgeBaseService:
                 conditions = []
                 params = []
 
-                if tenant_id is not None:
+                if tenant_id:
                     conditions.append("tenant_id = %s")
                     params.append(tenant_id)
+                else:
+                    # 常量拼接，无用户输入插值；无租户上下文时收窄到 demo/无主文档
+                    conditions.append("(tenant_id = 'demo' OR tenant_id IS NULL)")
                 if user_id:
                     conditions.append("user_id = %s")
                     params.append(user_id)
@@ -725,7 +757,12 @@ class KnowledgeBaseService:
         source_type: Optional[str] = None,
         sub_category: Optional[str] = None
     ) -> List[Dict[str, Any]]:
-        """获取文档列表"""
+        """获取文档列表
+
+        租户作用域（安全加固设计 §2.4）：有租户上下文只返回本租户文档；无租户上下文
+        （demo/无租户模式）收窄到 demo/无主文档，与 count_documents/检索侧口径一致，
+        绝不返回真实租户文档。
+        """
         try:
             with self._get_db_connection() as conn:
                 cursor = conn.cursor()
@@ -734,9 +771,12 @@ class KnowledgeBaseService:
                 conditions = []
                 params = []
 
-                if tenant_id is not None:
+                if tenant_id:
                     conditions.append(f"tenant_id = {placeholder}")
                     params.append(tenant_id)
+                else:
+                    # 常量拼接，无用户输入插值；无租户上下文时收窄到 demo/无主文档
+                    conditions.append("(tenant_id = 'demo' OR tenant_id IS NULL)")
                 if user_id:
                     conditions.append(f"user_id = {placeholder}")
                     params.append(user_id)
@@ -781,22 +821,34 @@ class KnowledgeBaseService:
             logger.error(f"后端日志：获取文档列表失败: {e}", exc_info=True)
             return []
 
-    def get_document_chunks(self, doc_id: int) -> List[Dict[str, Any]]:
-        """获取文档的所有分块（含向量数据）"""
+    def get_document_chunks(self, doc_id: int, tenant_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        """获取文档的所有分块（含向量数据）
+
+        对象级租户校验（安全加固设计 §2.4）：chunks 表无 tenant_id 列，经 JOIN
+        documents 携带租户条件。跨租户文档返回空，对外表现为「文档不存在或没有
+        分块」，不泄漏存在性；无租户上下文（demo/无租户模式）仅可见 demo/无主
+        文档，与检索侧口径一致。
+        """
+        # 租户作用域条件（常量拼接，无用户输入插值；无租户上下文时收窄到 demo/无主文档）
+        if tenant_id:
+            scope_sql, scope_params = "d.tenant_id = %s", [tenant_id]
+        else:
+            scope_sql, scope_params = "(d.tenant_id = 'demo' OR d.tenant_id IS NULL)", []
         try:
             with self._get_db_connection() as conn:
                 cursor = conn.cursor()
 
-                cursor.execute("""
+                cursor.execute(f"""
                     SELECT c.id, c.chunk_index, c.text, c.tokens, c.metadata,
                            cv.embedding IS NOT NULL AS has_vector,
                            CASE WHEN cv.embedding IS NOT NULL
                                 THEN cv.embedding::text ELSE NULL END AS vector_text
                     FROM chunks c
+                    JOIN documents d ON d.id = c.doc_id AND {scope_sql}
                     LEFT JOIN chunks_vec cv ON c.id = cv.chunk_id
                     WHERE c.doc_id = %s
                     ORDER BY c.chunk_index
-                """, (doc_id,))
+                """, scope_params + [doc_id])
 
                 rows = cursor.fetchall()
 
@@ -894,8 +946,12 @@ class KnowledgeBaseService:
                             WHERE id IN ({placeholders}) AND tenant_id = %s
                         """, list(doc_ids) + [tenant_id])
                     else:
+                        # 无租户上下文同样收窄到 demo/无主文档（检索侧 hybrid_retriever/
+                        # vector_db 已收窄，此处兜底防上游口径漂移，§2.4）
                         cursor.execute(f"""
-                            SELECT id, title, file_type, file_path FROM documents WHERE id IN ({placeholders})
+                            SELECT id, title, file_type, file_path FROM documents
+                            WHERE id IN ({placeholders})
+                              AND (tenant_id = 'demo' OR tenant_id IS NULL)
                         """, list(doc_ids))
 
                     # 转换为 dict 以便访问列名

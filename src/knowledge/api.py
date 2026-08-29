@@ -466,8 +466,10 @@ async def delete_document(doc_id: int):
     - 级联删除所有 chunks
     - 级联删除所有向量
     - 删除文件
+    - 对象级租户校验：跨租户文档统一按「文档不存在」响应，不泄漏存在性
     """
-    result = await knowledge_service.delete_document(doc_id)
+    # 租户上下文由 TenantMiddleware 注入；service 层 SQL 本体再校验一次（防 TOCTOU）
+    result = await knowledge_service.delete_document(doc_id, tenant_id=get_current_tenant_id())
 
     if not result.get("success"):
         return JSONResponse(
@@ -486,8 +488,11 @@ async def delete_document(doc_id: int):
 async def get_document_chunks(doc_id: int):
     """
     获取文档的所有分块（用于调试）
+
+    - 对象级租户校验：跨租户文档统一按 404「文档不存在或没有分块」响应，不泄漏存在性
     """
-    chunks = knowledge_service.get_document_chunks(doc_id)
+    # 租户上下文由 TenantMiddleware 注入；service 层经 JOIN documents 校验归属（防 TOCTOU）
+    chunks = knowledge_service.get_document_chunks(doc_id, tenant_id=get_current_tenant_id())
 
     if not chunks:
         raise HTTPException(status_code=404, detail="文档不存在或没有分块")
