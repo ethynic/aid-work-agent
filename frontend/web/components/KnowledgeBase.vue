@@ -75,7 +75,7 @@
             <div class="flex-1 flex flex-col min-w-0">
               <div class="page-toolbar mb-3">
                 <div class="page-toolbar-left">
-                  <BaseInput v-model="searchQuery" placeholder="在当前选中分类（含子级）中搜索文档" size="sm" class="w-[300px]" @keyup.enter="handleSearchInput" @input="handleSearchInput" />
+                  <BaseInput v-model="searchQuery" placeholder="在当前选中分类（含子级）中搜索文档" size="sm" class="w-[400px]" @keyup.enter="handleSearchInput" @input="handleSearchInput" />
                   <BaseButton v-if="isSearchMode" size="sm" intent="secondary" @click="clearSearch">显示全部</BaseButton>
                 </div>
                 <div class="page-toolbar-right">
@@ -405,7 +405,7 @@
         <span class="ml-2 text-muted">加载中...</span>
       </div>
       <div v-else-if="chunkList.length === 0" class="text-center text-muted py-12">暂无分块数据</div>
-      <div v-else class="space-y-3 max-h-[60vh] overflow-y-auto">
+      <div v-else class="space-y-3 overflow-y-auto">
         <div v-for="chunk in chunkList" :key="chunk.chunk_id" class="border border-default rounded-lg p-4">
           <div class="flex items-center justify-between mb-2">
             <div class="flex items-center gap-3">
