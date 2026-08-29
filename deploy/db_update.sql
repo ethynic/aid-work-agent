@@ -674,3 +674,20 @@ ON CONFLICT (model_name) DO UPDATE SET
 -- 见 src/api/video_gen.py 模型清单「视觉模型」标注）
 UPDATE token_cost_prices SET is_multimodal = TRUE
 WHERE model_name IN ('kimi-k3', 'qwen-vl-max', 'qwen-vl-plus', 'qwen3-vl-flash');
+
+-- ============================================================================
+-- 2026-08-29 定时任务租户隔离：scheduled_tasks/scheduled_task_logs 补 tenant_id
+-- tenant_id 默认 ''（与 channel_sessions 惯例一致），按 users.user_id（全局唯一 user_
+-- 前缀，跨租户无碰撞）回填任务属主租户；日志按任务链回填。回填后仍为 '' 的行属
+-- 用户已删除/无租户的遗留数据，租户视图 fail-closed 不可见（API/工具层 tenant
+-- 过滤查不到），平台管理员可经 SQL 处理。与 deploy/init-postgres.sql 建表定义一致。
+-- 全语句幂等（IF NOT EXISTS / 回填仅命中 tenant_id=''）。
+-- ============================================================================
+ALTER TABLE scheduled_tasks ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT '';
+UPDATE scheduled_tasks st SET tenant_id = u.tenant_id
+  FROM users u WHERE st.user_id = u.user_id AND u.tenant_id IS NOT NULL AND st.tenant_id = '';
+ALTER TABLE scheduled_task_logs ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT '';
+UPDATE scheduled_task_logs sl SET tenant_id = st.tenant_id
+  FROM scheduled_tasks st WHERE sl.task_id = st.task_id AND sl.tenant_id = '';
+CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_tenant ON scheduled_tasks(tenant_id, status);
+CREATE INDEX IF NOT EXISTS idx_scheduled_task_logs_tenant ON scheduled_task_logs(tenant_id, created_at DESC);

@@ -379,9 +379,12 @@ CREATE INDEX IF NOT EXISTS idx_tokens_token ON tokens(token);
 CREATE INDEX IF NOT EXISTS idx_tokens_user ON tokens(user_id, expires_at);
 
 -- 定时任务表
+-- tenant_id：任务属主租户。''=公共用户（无租户上下文）或遗留未解析行；
+-- 租户视图按 tenant_id 过滤时 '' 行 fail-closed 不可见。与 deploy/db_update.sql 对应增量节一致。
 CREATE TABLE IF NOT EXISTS scheduled_tasks (
     id SERIAL PRIMARY KEY,
     task_id TEXT UNIQUE NOT NULL,
+    tenant_id TEXT NOT NULL DEFAULT '',
     user_id TEXT,
     name TEXT,
     description TEXT,
@@ -406,11 +409,14 @@ CREATE TABLE IF NOT EXISTS scheduled_tasks (
 
 CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_user ON scheduled_tasks(user_id, status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_next_run ON scheduled_tasks(next_run_at, status);
+CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_tenant ON scheduled_tasks(tenant_id, status);
 
 -- 定时任务执行日志表
+-- tenant_id：随任务属主租户落库（''=公共用户或遗留未回填行），按任务链回填
 CREATE TABLE IF NOT EXISTS scheduled_task_logs (
     id SERIAL PRIMARY KEY,
     log_id TEXT UNIQUE NOT NULL,
+    tenant_id TEXT NOT NULL DEFAULT '',
     task_id TEXT,
     user_id TEXT,
     session_id TEXT,
@@ -429,6 +435,7 @@ CREATE TABLE IF NOT EXISTS scheduled_task_logs (
 
 CREATE INDEX IF NOT EXISTS idx_scheduled_task_logs_task ON scheduled_task_logs(task_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_scheduled_task_logs_user ON scheduled_task_logs(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_scheduled_task_logs_tenant ON scheduled_task_logs(tenant_id, created_at DESC);
 
 -- ============== 知识库表 ==============
 

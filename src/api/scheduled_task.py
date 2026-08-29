@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from src.scheduler.db import ScheduledTaskDB, ScheduledTaskLogDB
 from src.api.auth import get_current_user
+from src.saas.context import get_current_tenant_id
 
 
 router = APIRouter(prefix="/api/scheduled-tasks", tags=["定时任务"])
@@ -31,12 +32,28 @@ def _sanitize_error(error_msg: str) -> str:
     return sanitized
 
 
-def _get_user_id(request: Request) -> str:
-    """从请求中获取用户ID"""
+def _get_request_identity(request: Request) -> tuple[str, str]:
+    """返回请求级 user/tenant 身份；租户来源缺失或无法验证时 fail-closed。
+
+    租户优先取请求上下文（TenantMiddleware 注入），SaaS 部署下缺失时回退认证
+    用户行上的 tenant_id（''=平台管理员/公共用户），两处来源都缺失视为上下文
+    不可信，403 拒绝，绝不把未知身份隐式当成公共租户。
+    非 SaaS 部署无租户语义，统一解析为 ''（与工具层 _resolve_runtime_tenant_id
+    一致），否则 demo 等用户行自带租户时，工具创建的 '' 任务在 API 视图不可见。
+    """
     user = get_current_user(request)
-    if not user:
+    if not user or not user.get("user_id"):
         raise HTTPException(status_code=401, detail="未登录")
-    return user.get("user_id", "")
+    tenant_id = get_current_tenant_id()
+    if tenant_id is None:
+        from src.config.settings import settings
+        if not settings.saas.enabled:
+            tenant_id = ""
+        elif "tenant_id" in user:
+            tenant_id = user.get("tenant_id") or ""
+        else:
+            raise HTTPException(status_code=403, detail="租户上下文缺失")
+    return str(user["user_id"]), str(tenant_id)
 
 
 # ==================== CRUD ====================
@@ -45,12 +62,15 @@ def _get_user_id(request: Request) -> str:
 async def list_tasks(request: Request, status: Optional[str] = None):
     """获取当前用户的定时任务列表"""
     try:
-        user_id = _get_user_id(request)
-        tasks = ScheduledTaskDB.list_by_user(user_id, status=status)
+        user_id, tenant_id = _get_request_identity(request)
+        # 租户过滤：tenant_id='' 的遗留未回填行在具体租户视图 fail-closed 不可见
+        tasks = ScheduledTaskDB.list_by_user(user_id, status=status, tenant_id=tenant_id)
 
         # 获取每个任务的统计
         for task in tasks:
-            stats = ScheduledTaskLogDB.get_stats(task["task_id"])
+            stats = ScheduledTaskLogDB.get_stats(
+                task["task_id"], tenant_id=tenant_id, user_id=user_id
+            )
             task["stats"] = stats
 
         return {"success": True, "data": {"tasks": tasks, "total": len(tasks)}}
@@ -68,8 +88,8 @@ async def list_tasks(request: Request, status: Optional[str] = None):
 async def get_user_stats(request: Request):
     """获取当前用户的定时任务统计"""
     try:
-        user_id = _get_user_id(request)
-        tasks = ScheduledTaskDB.list_by_user(user_id)
+        user_id, tenant_id = _get_request_identity(request)
+        tasks = ScheduledTaskDB.list_by_user(user_id, tenant_id=tenant_id)
 
         active_count = sum(1 for t in tasks if t["status"] == "active")
         paused_count = sum(1 for t in tasks if t["status"] == "paused")
@@ -104,15 +124,16 @@ async def get_user_stats(request: Request):
 async def get_task(request: Request, task_id: str):
     """获取任务详情"""
     try:
-        user_id = _get_user_id(request)
-        task = ScheduledTaskDB.get_by_id(task_id)
+        user_id, tenant_id = _get_request_identity(request)
+        # 属主与租户条件进 SQL：跨租户/跨用户任务直接查不到（不泄露存在性）
+        task = ScheduledTaskDB.get_by_id(task_id, tenant_id=tenant_id, user_id=user_id)
 
         if not task:
             return {"success": False, "error": "任务不存在"}
-        if task["user_id"] != user_id:
-            return {"success": False, "error": "无权访问此任务"}
 
-        stats = ScheduledTaskLogDB.get_stats(task_id)
+        stats = ScheduledTaskLogDB.get_stats(
+            task_id, tenant_id=tenant_id, user_id=user_id
+        )
         task["stats"] = stats
 
         return {"success": True, "data": task}
@@ -130,15 +151,17 @@ async def get_task(request: Request, task_id: str):
 async def pause_task(request: Request, task_id: str):
     """暂停任务（只写 DB，background reconcile ≤30s 内同步到调度器）"""
     try:
-        user_id = _get_user_id(request)
-        task = ScheduledTaskDB.get_by_id(task_id)
-        if not task or task["user_id"] != user_id:
+        user_id, tenant_id = _get_request_identity(request)
+        task = ScheduledTaskDB.get_by_id(task_id, tenant_id=tenant_id, user_id=user_id)
+        if not task:
             return {"success": False, "error": "任务不存在或无权操作"}
 
         if task["status"] != "active":
             return {"success": False, "error": f"任务状态异常（当前: {task['status']}），无法暂停"}
 
-        if ScheduledTaskDB.update_status(task_id, "paused"):
+        if ScheduledTaskDB.update_status(
+            task_id, "paused", tenant_id=tenant_id, user_id=user_id
+        ):
             return {"success": True, "message": "任务已暂停（≤30s 生效）"}
         return {"success": False, "error": "暂停失败"}
     except HTTPException:
@@ -155,15 +178,17 @@ async def pause_task(request: Request, task_id: str):
 async def resume_task(request: Request, task_id: str):
     """恢复任务（只写 DB，background reconcile ≤30s 内同步到调度器）"""
     try:
-        user_id = _get_user_id(request)
-        task = ScheduledTaskDB.get_by_id(task_id)
-        if not task or task["user_id"] != user_id:
+        user_id, tenant_id = _get_request_identity(request)
+        task = ScheduledTaskDB.get_by_id(task_id, tenant_id=tenant_id, user_id=user_id)
+        if not task:
             return {"success": False, "error": "任务不存在或无权操作"}
 
         if task["status"] != "paused":
             return {"success": False, "error": f"任务状态异常（当前: {task['status']}），无法恢复"}
 
-        if ScheduledTaskDB.update_status(task_id, "active"):
+        if ScheduledTaskDB.update_status(
+            task_id, "active", tenant_id=tenant_id, user_id=user_id
+        ):
             return {"success": True, "message": "任务已恢复（≤30s 生效）"}
         return {"success": False, "error": "恢复失败"}
     except HTTPException:
@@ -180,12 +205,12 @@ async def resume_task(request: Request, task_id: str):
 async def cancel_task(request: Request, task_id: str):
     """取消任务（只写 DB，background reconcile ≤30s 内从调度器移除）"""
     try:
-        user_id = _get_user_id(request)
-        task = ScheduledTaskDB.get_by_id(task_id)
-        if not task or task["user_id"] != user_id:
+        user_id, tenant_id = _get_request_identity(request)
+        task = ScheduledTaskDB.get_by_id(task_id, tenant_id=tenant_id, user_id=user_id)
+        if not task:
             return {"success": False, "error": "任务不存在或无权操作"}
 
-        if ScheduledTaskDB.delete(task_id):
+        if ScheduledTaskDB.delete(task_id, tenant_id=tenant_id, user_id=user_id):
             return {"success": True, "message": "任务已取消"}
         return {"success": False, "error": "取消失败"}
     except HTTPException:
@@ -202,12 +227,14 @@ async def cancel_task(request: Request, task_id: str):
 async def trigger_task(request: Request, task_id: str):
     """手动触发执行一次（写 manual_trigger_at=NOW()，background reconcile ≤30s 内执行）"""
     try:
-        user_id = _get_user_id(request)
-        task = ScheduledTaskDB.get_by_id(task_id)
-        if not task or task["user_id"] != user_id:
+        user_id, tenant_id = _get_request_identity(request)
+        task = ScheduledTaskDB.get_by_id(task_id, tenant_id=tenant_id, user_id=user_id)
+        if not task:
             return {"success": False, "error": "任务不存在或无权操作"}
 
-        if ScheduledTaskDB.request_manual_trigger(task_id):
+        if ScheduledTaskDB.request_manual_trigger(
+            task_id, tenant_id=tenant_id, user_id=user_id
+        ):
             return {"success": True, "message": "已触发执行（≤30s 内生效）"}
         return {"success": False, "error": "触发失败（任务可能不存在或非 active/paused 状态）"}
     except HTTPException:
@@ -230,9 +257,9 @@ async def update_task_schedule(request: Request, task_id: str, body: UpdateSched
     """更新任务调度时间"""
     from src.tools.scheduler.scheduled_task_tool import generate_cron_expression
     try:
-        user_id = _get_user_id(request)
-        task = ScheduledTaskDB.get_by_id(task_id)
-        if not task or task["user_id"] != user_id:
+        user_id, tenant_id = _get_request_identity(request)
+        task = ScheduledTaskDB.get_by_id(task_id, tenant_id=tenant_id, user_id=user_id)
+        if not task:
             return {"success": False, "error": "任务不存在或无权操作"}
 
         time_config = body.time_config or {}
@@ -251,9 +278,14 @@ async def update_task_schedule(request: Request, task_id: str, body: UpdateSched
         cron_expression = generate_cron_expression(schedule_type, time_config)
         interval_seconds = time_config.get("interval_hours", 1) * 3600 if schedule_type == "interval" else None
 
-        # 更新数据库（background reconcile ≤30s 内按 updated_at 变化自动重注册）
-        ScheduledTaskDB.update_schedule(task_id, cron_expression=cron_expression,
-                                        interval_seconds=interval_seconds)
+        # 更新数据库（background reconcile ≤30s 内按 updated_at 变化自动重注册）；
+        # 租户+用户条件进 UPDATE 本身，防止校验与写入之间的 TOCTOU
+        if not ScheduledTaskDB.update_schedule(
+            task_id, cron_expression=cron_expression,
+            interval_seconds=interval_seconds,
+            tenant_id=tenant_id, user_id=user_id,
+        ):
+            return {"success": False, "error": "任务不存在或无权操作"}
 
         logger.info(f"后端日志：定时任务调度已更新 task_id={task_id}, cron={cron_expression}, "
                     f"schedule_type={schedule_type}, time_config={time_config}")
@@ -279,12 +311,14 @@ async def update_task_schedule(request: Request, task_id: str, body: UpdateSched
 async def get_task_logs(request: Request, task_id: str, limit: int = 20):
     """获取任务的执行日志"""
     try:
-        user_id = _get_user_id(request)
-        task = ScheduledTaskDB.get_by_id(task_id)
-        if not task or task["user_id"] != user_id:
+        user_id, tenant_id = _get_request_identity(request)
+        task = ScheduledTaskDB.get_by_id(task_id, tenant_id=tenant_id, user_id=user_id)
+        if not task:
             return {"success": False, "error": "任务不存在或无权操作"}
 
-        logs = ScheduledTaskLogDB.list_by_task(task_id, limit=limit)
+        logs = ScheduledTaskLogDB.list_by_task(
+            task_id, limit=limit, tenant_id=tenant_id, user_id=user_id
+        )
         return {"success": True, "data": {"logs": logs, "total": len(logs)}}
     except HTTPException:
         raise
@@ -300,8 +334,9 @@ async def get_task_logs(request: Request, task_id: str, limit: int = 20):
 async def get_user_logs(request: Request, limit: int = 50):
     """获取当前用户的所有执行日志"""
     try:
-        user_id = _get_user_id(request)
-        logs = ScheduledTaskLogDB.list_by_user(user_id, limit=limit)
+        user_id, tenant_id = _get_request_identity(request)
+        # 租户过滤：tenant_id='' 的遗留未回填行在具体租户视图 fail-closed 不可见
+        logs = ScheduledTaskLogDB.list_by_user(user_id, limit=limit, tenant_id=tenant_id)
         return {"success": True, "data": {"logs": logs, "total": len(logs)}}
     except HTTPException:
         raise

@@ -13,7 +13,30 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 from src.tools.base import BaseTool
-from src.tools.context import current_tool_execution_context
+from src.tools.context import (
+    ToolExecutionContext,
+    current_tool_execution_context,
+)
+
+
+def _resolve_runtime_tenant_id(context: Optional[ToolExecutionContext]) -> Optional[str]:
+    """解析工具调用的可信租户；未知身份绝不降级成公共租户。
+
+    优先取请求级工具执行上下文的 tenant_id（''=明确公共用户，由可信边界构造时
+    从请求租户解析注入）；非 SaaS 部署无租户语义，视为公共租户；
+    SaaS 部署下上下文缺失（None）时 fail-closed 返回 None，由调用方拒绝操作。
+    """
+    tenant_id = context.tenant_id if context else None
+    if tenant_id is not None:
+        return tenant_id
+    try:
+        from src.config.settings import settings
+
+        if not settings.saas.enabled:
+            return ""
+    except Exception:
+        pass
+    return None
 
 
 class CreateScheduledTaskInput(BaseModel):
@@ -125,10 +148,13 @@ class CreateScheduledTaskTool(BaseTool):
         context = current_tool_execution_context()
         user_id = context.user_id if context else None
         session_id = context.session_id if context else None
+        tenant_id = _resolve_runtime_tenant_id(context)
 
         # 必须有用户信息才能创建定时任务
         if not user_id:
             return {"success": False, "error": "用户未登录，无法创建定时任务", "debug": "user is None, cannot determine user_id"}
+        if tenant_id is None:
+            return {"success": False, "error": "租户上下文缺失，无法创建定时任务"}
 
         # 参数校验
         if not name or not task_prompt:
@@ -150,7 +176,7 @@ class CreateScheduledTaskTool(BaseTool):
             pass
 
         current_count = await asyncio.to_thread(
-            ScheduledTaskDB.count_by_user, user_id, "active"
+            ScheduledTaskDB.count_by_user, user_id, "active", tenant_id=tenant_id
         )
         if current_count >= max_tasks:
             return {
@@ -165,13 +191,14 @@ class CreateScheduledTaskTool(BaseTool):
         if schedule_type == "interval":
             interval_seconds = time_config.get("interval_hours", 1) * 3600
 
-        # 试执行（dry run）
+        # 试执行（dry run）：执行身份租户与随后创建的任务行租户保持一致
         executor = ScheduledTaskExecutor()
         try:
             dry_run_result = await executor.dry_run(
                 user_id=user_id,
                 task_prompt=task_prompt,
                 user_input=description or name,
+                tenant_id=tenant_id,
             )
         except Exception as e:
             logger.opt(exception=True).error(f"后端日志：定时任务试执行异常 user_id={user_id}, error={e}")
@@ -189,6 +216,7 @@ class CreateScheduledTaskTool(BaseTool):
             }
 
         # 试执行成功，创建定时任务
+        # 创建时必须写入租户（''=公共用户/无租户上下文），否则新任务在租户视图不可见
         task = await asyncio.to_thread(
             ScheduledTaskDB.create,
             user_id=user_id,
@@ -199,6 +227,7 @@ class CreateScheduledTaskTool(BaseTool):
             cron_expression=cron_expression,
             interval_seconds=interval_seconds,
             session_id=session_id,
+            tenant_id=tenant_id,
         )
 
         if not task:
@@ -241,13 +270,19 @@ class ManageScheduledTaskTool(BaseTool):
         task_id = kwargs.get("task_id")
         context = current_tool_execution_context()
         user_id = context.user_id if context else None
+        tenant_id = _resolve_runtime_tenant_id(context)
 
         if not user_id:
             return {"success": False, "error": "用户未登录，无法操作定时任务", "debug": "user is None, cannot determine user_id"}
+        if tenant_id is None:
+            return {"success": False, "error": "租户上下文缺失，无法操作定时任务"}
 
         try:
             if action == "list":
-                tasks = await asyncio.to_thread(ScheduledTaskDB.list_by_user, user_id)
+                # 与 API 列表一致的租户过滤：tenant_id='' 遗留行在具体租户视图不可见
+                tasks = await asyncio.to_thread(
+                    ScheduledTaskDB.list_by_user, user_id, tenant_id=tenant_id
+                )
                 if not tasks:
                     return {"success": True, "message": "您还没有创建任何定时任务"}
 
@@ -277,8 +312,12 @@ class ManageScheduledTaskTool(BaseTool):
                     }
 
                 # task_id 可由模型/用户提供，所有读写前必须用当前执行上下文的
-                # user_id 校验所有权，不能只依赖不可枚举的 ID 作为权限边界。
-                task = await asyncio.to_thread(ScheduledTaskDB.get_by_id, task_id)
+                # user_id+tenant_id 校验所有权（条件进 SQL，越权行直接查不到），
+                # 不能只依赖不可枚举的 ID 作为权限边界。
+                task = await asyncio.to_thread(
+                    ScheduledTaskDB.get_by_id,
+                    task_id, tenant_id=tenant_id, user_id=user_id,
+                )
                 if not task or task.get("user_id") != user_id:
                     return {
                         "success": False,
@@ -287,9 +326,11 @@ class ManageScheduledTaskTool(BaseTool):
                     }
 
                 if action == "pause":
-                    # 只写 DB，background reconcile ≤30s 内同步到调度器
+                    # 只写 DB，background reconcile ≤30s 内同步到调度器；
+                    # 租户+用户条件进 UPDATE 本身，防止校验与写入之间的 TOCTOU
                     updated = await asyncio.to_thread(
-                        ScheduledTaskDB.update_status, task_id, "paused"
+                        ScheduledTaskDB.update_status,
+                        task_id, "paused", tenant_id=tenant_id, user_id=user_id,
                     )
                     if updated:
                         return {"success": True, "message": f"任务 {task_id} 已暂停（≤30s 生效）"}
@@ -297,20 +338,26 @@ class ManageScheduledTaskTool(BaseTool):
 
                 if action == "resume":
                     updated = await asyncio.to_thread(
-                        ScheduledTaskDB.update_status, task_id, "active"
+                        ScheduledTaskDB.update_status,
+                        task_id, "active", tenant_id=tenant_id, user_id=user_id,
                     )
                     if updated:
                         return {"success": True, "message": f"任务 {task_id} 已恢复（≤30s 生效）"}
                     return {"success": False, "error": "恢复失败，任务可能不存在或未暂停"}
 
                 if action == "cancel":
-                    deleted = await asyncio.to_thread(ScheduledTaskDB.delete, task_id)
+                    deleted = await asyncio.to_thread(
+                        ScheduledTaskDB.delete,
+                        task_id, tenant_id=tenant_id, user_id=user_id,
+                    )
                     if deleted:
                         return {"success": True, "message": f"任务 {task_id} 已取消"}
                     return {"success": False, "error": "取消失败，任务可能不存在"}
 
+                # view_logs：日志查询同样带租户+用户条件，与任务校验双层隔离
                 logs = await asyncio.to_thread(
-                    ScheduledTaskLogDB.list_by_task, task_id, 20
+                    ScheduledTaskLogDB.list_by_task,
+                    task_id, 20, tenant_id=tenant_id, user_id=user_id,
                 )
                 if not logs:
                     return {"success": True, "message": f"任务 {task_id} 暂无执行日志"}

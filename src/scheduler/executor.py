@@ -93,6 +93,9 @@ class ScheduledTaskExecutor:
         task_name = task["name"]
         max_retries = task["max_retries"]
         retry_count = task["retry_count"]
+        # 任务行租户：回填与创建时落库；''=公共用户或遗留未回填
+        task_tenant_fallback = task.get("tenant_id")
+        task_tenant_id = task_tenant_fallback or ""
 
         started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         start_time = time.time()
@@ -108,7 +111,8 @@ class ScheduledTaskExecutor:
                 task_id=task_id, user_id=user_id, session_id=cron_session_id,
                 status="failed", trigger_type=trigger_type,
                 error_message=error_msg, started_at=started_at,
-                completed_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                completed_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                tenant_id=task_tenant_id
             )
             ScheduledTaskDB.update_after_run(task_id, success=False, result_summary=error_msg)
             return {"success": False, "error": error_msg}
@@ -121,9 +125,12 @@ class ScheduledTaskExecutor:
             user_obj = None
             try:
                 from src.models.user import User
+                # 执行身份携带任务行租户（None=未知，''=公共用户）。
+                # 与 users 行租户的冲突校验属调度上下文安全项，此处先落简单记账版本。
                 user_obj = User(
                     user_id=user_dict["user_id"],
-                    username=user_dict.get("username", ""),
+                    name=user_dict.get("username") or user_dict.get("phone") or user_id,
+                    tenant_id=task_tenant_fallback,
                     phone=user_dict.get("phone", ""),
                     role=user_dict.get("role", "employee")
                 )
@@ -140,12 +147,13 @@ class ScheduledTaskExecutor:
             completed_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             result_summary = result[:500] if result else "（无输出）"
 
-            # 4. 记录成功日志
+            # 4. 记录成功日志（租户随任务属主落库，保证日志可按租户过滤）
             log = ScheduledTaskLogDB.create(
                 task_id=task_id, user_id=user_id, session_id=cron_session_id,
                 status="success", trigger_type=trigger_type,
                 result_summary=result_summary, duration_ms=duration_ms,
-                started_at=started_at, completed_at=completed_at
+                started_at=started_at, completed_at=completed_at,
+                tenant_id=task_tenant_id
             )
             ScheduledTaskDB.update_after_run(task_id, success=True, result_summary=result_summary)
 
@@ -169,12 +177,13 @@ class ScheduledTaskExecutor:
 
             logger.opt(exception=True).error(f"后端日志：定时任务执行失败 task_id={task_id}, error={error_msg}")
 
-            # 5. 记录失败日志
+            # 5. 记录失败日志（租户随任务属主落库）
             log = ScheduledTaskLogDB.create(
                 task_id=task_id, user_id=user_id, session_id=cron_session_id,
                 status="failed", trigger_type=trigger_type,
                 error_message=error_msg, error_trace=error_trace,
-                duration_ms=duration_ms, started_at=started_at, completed_at=completed_at
+                duration_ms=duration_ms, started_at=started_at, completed_at=completed_at,
+                tenant_id=task_tenant_id
             )
             ScheduledTaskDB.update_after_run(task_id, success=False, result_summary=f"失败: {error_msg[:200]}")
 
@@ -207,9 +216,14 @@ class ScheduledTaskExecutor:
                     "log_id": log.get("log_id") if log else ""}
 
     async def dry_run(self, user_id: str, task_prompt: str,
-                      user_input: str = "") -> Dict[str, Any]:
+                      user_input: str = "",
+                      tenant_id: Optional[str] = None) -> Dict[str, Any]:
         """
         试执行（创建定时任务前的验证）
+
+        tenant_id：调用方（工具层）已解析的可信租户（''=公共用户，None=未知），
+        用于构建执行身份，与随后创建的任务行租户保持一致。
+        与 users 行租户的冲突校验属调度上下文安全项，此处先落简单记账版本。
 
         Returns: {"success": bool, "result": str, "error": str}
         """
@@ -227,7 +241,8 @@ class ScheduledTaskExecutor:
                     from src.models.user import User
                     user_obj = User(
                         user_id=user_dict["user_id"],
-                        username=user_dict.get("username", ""),
+                        name=user_dict.get("username") or user_dict.get("phone") or user_id,
+                        tenant_id=tenant_id,
                         phone=user_dict.get("phone", ""),
                         role=user_dict.get("role", "employee")
                     )

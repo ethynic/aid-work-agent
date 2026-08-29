@@ -25,23 +25,23 @@ def _make_tool():
 
 
 def _patch_deps(task_dict):
-    """mock DB 与试执行依赖，返回 (patches, create_mock) 供断言"""
+    """mock DB 与试执行依赖，返回 (patches, create_mock, dry_run_mock) 供断言"""
     from src.scheduler.executor import ScheduledTaskExecutor
 
     create_mock = MagicMock(return_value=task_dict)
+    dry_run_mock = AsyncMock(return_value={"success": True, "result": "ok"})
     patches = [
         patch("src.scheduler.db.ScheduledTaskDB.count_by_user", return_value=0),
         patch("src.scheduler.db.ScheduledTaskDB.create", create_mock),
         patch.object(
             ScheduledTaskExecutor,
             "dry_run",
-            new_callable=AsyncMock,
-            return_value={"success": True, "result": "ok"},
+            dry_run_mock,
         ),
     ]
     for p in patches:
         p.start()
-    return patches, create_mock
+    return patches, create_mock, dry_run_mock
 
 
 @pytest.mark.asyncio
@@ -49,7 +49,7 @@ async def test_interval_hours_string_coerced_to_int():
     """interval_hours="2"（字符串）被强转为 int，interval_seconds=7200 而非字符串乘法"""
     tool = _make_tool()
     task_dict = {"task_id": "t1", "next_run_at": None}
-    patches, create_mock = _patch_deps(task_dict)
+    patches, create_mock, dry_run_mock = _patch_deps(task_dict)
 
     try:
         with tool_execution_scope(ToolExecutionContext(user_id="u1", session_id="session_1")):
@@ -66,6 +66,8 @@ async def test_interval_hours_string_coerced_to_int():
     call_kwargs = create_mock.call_args.kwargs
     assert call_kwargs["interval_seconds"] == 7200
     assert isinstance(call_kwargs["interval_seconds"], int)
+    # 试执行身份租户与创建落库租户一致（非 SaaS 部署无租户语义 → ''）
+    assert dry_run_mock.await_args.kwargs["tenant_id"] == call_kwargs["tenant_id"] == ""
     # 调度描述不再出现字符串乘法痕迹
     assert "每隔 2 小时" in result["schedule_description"]
 
@@ -75,7 +77,7 @@ async def test_hour_minute_string_does_not_crash_format():
     """hour/minute 以字符串传入时 :02d 格式化不再抛 ValueError"""
     tool = _make_tool()
     task_dict = {"task_id": "t2", "next_run_at": None}
-    patches, _ = _patch_deps(task_dict)
+    patches, _, _ = _patch_deps(task_dict)
 
     try:
         with tool_execution_scope(ToolExecutionContext(user_id="u1", session_id="session_1")):
@@ -96,7 +98,7 @@ async def test_invalid_numeric_value_falls_back_to_default():
     """非法数值（hour="abc"）回退默认 9，不崩溃"""
     tool = _make_tool()
     task_dict = {"task_id": "t3", "next_run_at": None}
-    patches, _ = _patch_deps(task_dict)
+    patches, _, _ = _patch_deps(task_dict)
 
     try:
         with tool_execution_scope(ToolExecutionContext(user_id="u1", session_id="session_1")):
@@ -178,3 +180,94 @@ async def test_manage_task_does_not_expose_internal_exception():
         result = await tool.execute(action="list")
 
     assert result == {"success": False, "error": "操作失败"}
+
+
+@pytest.mark.asyncio
+async def test_create_passes_tenant_to_dry_run_and_create():
+    """上下文租户透传：dry_run 执行身份与 create 落库租户一致且来自请求上下文"""
+    tool = _make_tool()
+    task_dict = {"task_id": "t4", "next_run_at": None}
+    patches, create_mock, dry_run_mock = _patch_deps(task_dict)
+
+    try:
+        with tool_execution_scope(
+            ToolExecutionContext(user_id="u1", session_id="session_1", tenant_id="tenant_a")
+        ):
+            result = await tool.execute(
+                name="每日报告", task_prompt="生成日报",
+                schedule_type="daily", time_config={"hour": 9},
+            )
+    finally:
+        for p in patches:
+            p.stop()
+
+    assert result["success"] is True
+    assert create_mock.call_args.kwargs["tenant_id"] == "tenant_a"
+    assert dry_run_mock.await_args.kwargs["tenant_id"] == "tenant_a"
+
+
+@pytest.mark.asyncio
+async def test_create_rejects_when_tenant_context_missing_in_saas():
+    """SaaS 部署下租户上下文缺失（None）时 fail-closed：拒绝创建且不触达 DB"""
+    from src.config.settings import settings as app_settings
+
+    tool = _make_tool()
+    create_mock = MagicMock()
+    count_mock = MagicMock()
+    with (
+        patch.object(app_settings.saas, "enabled", True),
+        patch("src.scheduler.db.ScheduledTaskDB.count_by_user", count_mock),
+        patch("src.scheduler.db.ScheduledTaskDB.create", create_mock),
+        tool_execution_scope(ToolExecutionContext(user_id="u1", session_id="session_1")),
+    ):
+        result = await tool.execute(
+            name="每日报告", task_prompt="生成日报",
+            schedule_type="daily", time_config={"hour": 9},
+        )
+
+    assert result["success"] is False
+    assert "租户上下文缺失" in result["error"]
+    count_mock.assert_not_called()
+    create_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_manage_task_rejects_when_tenant_context_missing_in_saas():
+    """SaaS 部署下租户上下文缺失（None）时 fail-closed：拒绝管理操作"""
+    from src.config.settings import settings as app_settings
+
+    tool = ManageScheduledTaskTool()
+    list_mock = MagicMock()
+    with (
+        patch.object(app_settings.saas, "enabled", True),
+        patch("src.scheduler.db.ScheduledTaskDB.list_by_user", list_mock),
+        tool_execution_scope(ToolExecutionContext(user_id="user-a")),
+    ):
+        result = await tool.execute(action="list")
+
+    assert result["success"] is False
+    assert "租户上下文缺失" in result["error"]
+    list_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_manage_task_update_carries_tenant_and_user_conditions():
+    """pause 等写操作把租户+用户条件传进 UPDATE 本身（防 TOCTOU）"""
+    tool = ManageScheduledTaskTool()
+    update_mock = MagicMock(return_value=True)
+    with (
+        patch(
+            "src.scheduler.db.ScheduledTaskDB.get_by_id",
+            return_value={"task_id": "task-a", "user_id": "user-a"},
+        ),
+        patch("src.scheduler.db.ScheduledTaskDB.update_status", update_mock),
+        tool_execution_scope(
+            ToolExecutionContext(user_id="user-a", tenant_id="tenant_a")
+        ),
+    ):
+        result = await tool.execute(action="pause", task_id="task-a")
+
+    assert result["success"] is True
+    assert update_mock.call_args.kwargs == {
+        "tenant_id": "tenant_a", "user_id": "user-a"
+    }
