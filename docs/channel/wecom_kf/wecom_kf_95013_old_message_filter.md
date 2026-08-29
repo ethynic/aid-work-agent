@@ -241,6 +241,6 @@ if remote_service_state in (0, 4):
 ## 关联文档
 
 - 旧报告：[wecom_kf_95013_conversation_end_investigation.md](./wecom_kf_95013_conversation_end_investigation.md)（定位有误，本文档为准）
-- 员工-客户对话可见性：[wecom_kf_servicer_conversation_visibility.md](./wecom_kf_servicer_conversation_visibility.md)（#61）
+- 员工-客户对话可见性：[wecom_kf_servicer_conversation_visibility_v3.md](./wecom_kf_servicer_conversation_visibility_v3.md)（#61）
 - 微信客服发送消息接口官网说明：[微信客服发送消息接口官网说明.txt](./微信客服发送消息接口官网说明.txt)（service_state 状态机 / sync_msg cursor 机制原文）
 - ideas.md 登记：#60「微信客服 95013 (conversation end) 错误修复」
