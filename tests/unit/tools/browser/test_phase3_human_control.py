@@ -450,7 +450,13 @@ async def test_resume_events_do_not_persist_browser_result_body(monkeypatch):
         "src.tools.browser.agent_resume_coordinator.get_owned_runtime",
         lambda tenant_id, run_id: asyncio.sleep(0, result=runtime),
     )
-    result = await AgentResumeCoordinator(store=store).resume("tenant-a", "assist-a")
+    async def continuation_callback(*args):
+        return None
+
+    # 隔离其他测试导入 src.main 后安装的进程级 continuation callback。
+    result = await AgentResumeCoordinator(
+        store=store, continuation_callback=continuation_callback
+    ).resume("tenant-a", "assist-a")
     assert result["success"] is True
     assert "sensitive page body" not in repr(store.events)
     assert any(event["type"] == "tool_result" for event in store.events)
