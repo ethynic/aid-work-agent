@@ -1191,10 +1191,7 @@ class Agent:
         # 优先从 SessionRecordService 读（最准确，由调用方在请求入口写入）
         try:
             from src.services.session_record import SessionRecordManager
-            _record = (
-                getattr(self, '_explicit_record_service', None)
-                or SessionRecordManager.get_current_record()
-            )
+            _record = SessionRecordManager.get_current_record()
             if _record and getattr(_record, "source_type", None):
                 return _record.source_type
         except Exception:
@@ -1902,6 +1899,7 @@ class Agent:
         request_context: Optional[AgentRequestContext] = None,
         _defer_tool_names: Optional[set[str]] = None,
         _deferred_tool_call_id: Optional[str] = None,
+        _record_service=None,
     ) -> AsyncGenerator[dict, None]:
         """
         Process a user message and yield AgentEvent dicts (trace-wrapped).
@@ -1915,12 +1913,16 @@ class Agent:
 
         Args:
             request_context: 可信入口构造的通用请求级扩展上下文。
+            _record_service: 调用方显式传入的 SessionRecordService（随协程
+                参数传递，共享 Agent 的并发请求不会互相覆盖）；缺省时回落
+                读当前上下文（ContextVar）的 record。
         """
         trace_collector = None
+        _record = None
         try:
             from src.services.session_record import SessionRecordManager
-            _record = getattr(self, '_explicit_record_service', None) \
-                      or SessionRecordManager.get_current_record()
+            # 显式 record 随协程参数传递，避免共享 Agent 的并发请求互相覆盖。
+            _record = _record_service or SessionRecordManager.get_current_record()
             if _record:
                 try:
                     from src.core.trace_collector import TraceCollector
@@ -2535,7 +2537,7 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
             # 累加 token 用量到 SessionRecordService（纯内存操作，异常隔离）
             try:
                 from src.services.session_record import SessionRecordManager
-                _record = getattr(self, '_explicit_record_service', None) or SessionRecordManager.get_current_record()
+                _record = SessionRecordManager.get_current_record()
                 if _record:
                     _record.add_llm_usage(response.get("usage", {}))
                     _record.increment_iterations()
@@ -3274,9 +3276,15 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                 透传给 process_message → _build_system_prompt。
             request_context: 可信入口构造的通用请求级扩展上下文。
         """
-        # Store explicit record_service so the inner process_message()
-        # can access it without relying on thread-local storage
-        self._explicit_record_service = record_service
+        # 请求级 record 隔离：显式 record_service 写入 ContextVar 而非共享
+        # Agent 实例属性——并发请求共用同一 Agent 实例，实例属性会互相覆盖。
+        # finally 用 token 恢复进入前值而非无条件清空：本方法可能在已持有
+        # record 的请求协程内被嵌套 await，清空会把外层请求的 record 一并清掉。
+        from src.services.session_record import SessionRecordManager
+        record_token = (
+            SessionRecordManager.set_current_record(record_service)
+            if record_service is not None else None
+        )
         # Phase 2 P2.3 CodeReview P0 修复：每次调用前清空，供渠道层读取
         # （process_message 内部的 collected_images 是局部变量，外部无法访问；
         #  通过 images 事件 + 实例属性桥接，让 channels/session.process_and_persist
@@ -3290,6 +3298,7 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                 cancel_check=cancel_check,
                 extra_system_prompt=extra_system_prompt,
                 request_context=request_context,
+                _record_service=record_service,
             ):
                 if event.get("type") == "response":
                     response_parts.append(event.get("data", ""))
@@ -3310,7 +3319,8 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                         await progress_callback(event)
             return "".join(response_parts)
         finally:
-            self._explicit_record_service = None
+            if record_token is not None:
+                SessionRecordManager.reset_current_record(record_token)
     
     def _update_task_record(self, record) -> None:
         """
@@ -3536,7 +3546,7 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                 # 累加子智能体 token 用量到 SessionRecordService（纯内存操作，异常隔离）
                 try:
                     from src.services.session_record import SessionRecordManager
-                    _record = getattr(self, '_explicit_record_service', None) or SessionRecordManager.get_current_record()
+                    _record = SessionRecordManager.get_current_record()
                     if _record:
                         _record.add_llm_usage(response.get("usage", {}))
                         _record.increment_iterations()

@@ -53,7 +53,6 @@ def test_video_boundary_builds_immutable_generic_context_with_prompt_contract():
 @pytest.mark.asyncio
 async def test_same_agent_concurrent_requests_keep_contexts_isolated():
     agent = object.__new__(Agent)
-    agent._explicit_record_service = None
     arrivals = 0
     all_arrived = asyncio.Event()
     observed = {}
@@ -94,7 +93,6 @@ async def test_same_agent_concurrent_requests_keep_contexts_isolated():
 @pytest.mark.asyncio
 async def test_video_and_plain_request_do_not_leak_after_cancel():
     agent = object.__new__(Agent)
-    agent._explicit_record_service = None
     release = asyncio.Event()
     observed = []
 
@@ -129,7 +127,6 @@ async def test_video_and_plain_request_do_not_leak_after_cancel():
 @pytest.mark.asyncio
 async def test_failed_video_request_leaves_no_agent_request_state():
     agent = object.__new__(Agent)
-    agent._explicit_record_service = None
 
     async def fake_impl(self, **kwargs):
         assert kwargs["request_context"].request_data["video_params"]["mode"] == "agile"

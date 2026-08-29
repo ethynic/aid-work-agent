@@ -533,6 +533,23 @@ class SessionRecordManager:
         return cls._local.get()
 
     @classmethod
+    def set_current_record(cls, record: Optional["SessionRecordService"]) -> "contextvars.Token":
+        """把已有 record 设为当前上下文的记录服务，返回恢复用 token。
+
+        供请求级隔离使用：如 Agent.process_message_sync 把渠道入口创建的
+        record_service 挂到 ContextVar（替代共享 Agent 实例属性——并发请求
+        会互相覆盖实例属性）。调用方必须在 finally 中 reset_current_record(token)
+        恢复进入前值：本调用可能发生在已有 record 的请求协程内（嵌套执行），
+        无条件清空会把外层请求的 record 一并清掉。
+        """
+        return cls._local.set(record)
+
+    @classmethod
+    def reset_current_record(cls, token: "contextvars.Token") -> None:
+        """恢复 set_current_record 之前的上下文值（token 须配对使用）"""
+        cls._local.reset(token)
+
+    @classmethod
     def end_record(cls) -> Optional[Dict[str, Any]]:
         """结束当前记录并保存"""
         record = cls._local.get()

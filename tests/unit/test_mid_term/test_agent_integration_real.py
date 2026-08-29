@@ -25,48 +25,36 @@ def _make_minimal_agent():
 # ============== _detect_source_type 真实代码测试 ==============
 
 
-def test_detect_source_type_real_code_priority_explicit_record():
-    """验证 _detect_source_type 的优先级 1：_explicit_record_service 优先于 get_current_record
+def test_detect_source_type_real_code_uses_current_record():
+    """验证 _detect_source_type 从 SessionRecordManager.get_current_record() 读当前请求 record
 
-    mutation: 如果有人改顺序把 get_current_record 放前面，此测试会失败。
+    mutation: 如果有人绕过请求级 ContextVar（如改回共享 Agent 实例属性，
+    并发请求会互相覆盖），此测试会失败。
     """
     agent = _make_minimal_agent()
 
-    fake_explicit = MagicMock()
-    fake_explicit.source_type = "feishu"
-    agent._explicit_record_service = fake_explicit
-
-    fake_implicit = MagicMock()
-    fake_implicit.source_type = "dingtalk"
-
-    import src.services.session_record as sr_mod
-    orig = sr_mod.SessionRecordManager.get_current_record
-    sr_mod.SessionRecordManager.get_current_record = staticmethod(lambda: fake_implicit)
-    try:
-        result = agent._detect_source_type()
-        # 显式 record 必须赢
-        assert result == "feishu", (
-            "_explicit_record_service 应优先于 get_current_record"
-        )
-    finally:
-        sr_mod.SessionRecordManager.get_current_record = orig
-
-
-def test_detect_source_type_real_code_no_explicit_uses_current_record():
-    """验证优先级 2：无 _explicit_record_service 时，用 get_current_record"""
-    agent = _make_minimal_agent()
-    # 不设 _explicit_record_service
-    if hasattr(agent, "_explicit_record_service"):
-        del agent._explicit_record_service
-
     fake_record = MagicMock()
-    fake_record.source_type = "wecom_kf"
+    fake_record.source_type = "feishu"
 
     import src.services.session_record as sr_mod
     orig = sr_mod.SessionRecordManager.get_current_record
     sr_mod.SessionRecordManager.get_current_record = staticmethod(lambda: fake_record)
     try:
-        assert agent._detect_source_type() == "wecom_kf"
+        result = agent._detect_source_type()
+        assert result == "feishu", "当前上下文 record 的 source_type 应被采用"
+    finally:
+        sr_mod.SessionRecordManager.get_current_record = orig
+
+
+def test_detect_source_type_real_code_no_record_defaults_chat():
+    """验证无当前 record 时走默认 'chat'"""
+    agent = _make_minimal_agent()
+
+    import src.services.session_record as sr_mod
+    orig = sr_mod.SessionRecordManager.get_current_record
+    sr_mod.SessionRecordManager.get_current_record = staticmethod(lambda: None)
+    try:
+        assert agent._detect_source_type() == "chat"
     finally:
         sr_mod.SessionRecordManager.get_current_record = orig
 
@@ -77,8 +65,6 @@ def test_detect_source_type_real_code_session_record_exception_falls_back():
     mutation: 如果有人删了 try/except，此测试会从「返回 chat」变成「抛异常」
     """
     agent = _make_minimal_agent()
-    if hasattr(agent, "_explicit_record_service"):
-        del agent._explicit_record_service
 
     import src.services.session_record as sr_mod
     orig = sr_mod.SessionRecordManager.get_current_record

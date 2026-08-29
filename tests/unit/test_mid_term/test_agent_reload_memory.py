@@ -150,18 +150,21 @@ def test_detect_source_type_record_exception_defaults_chat():
         sr_mod.SessionRecordManager.get_current_record = orig
 
 
-def test_detect_source_type_explicit_record_service_wins():
-    """显式 _explicit_record_service 优先级最高"""
+def test_detect_source_type_record_service_wins():
+    """请求级 record（ContextVar）的 source_type 优先于默认 'chat'"""
     from src.core.agent import Agent, AgentMode
+    from src.services.session_record import SessionRecordManager
 
     agent = Agent.__new__(Agent)
     agent.mode = AgentMode.MASTER
 
     fake_record = MagicMock()
     fake_record.source_type = "feishu"
-    agent._explicit_record_service = fake_record
-
-    assert agent._detect_source_type() == "feishu"
+    token = SessionRecordManager.set_current_record(fake_record)
+    try:
+        assert agent._detect_source_type() == "feishu"
+    finally:
+        SessionRecordManager.reset_current_record(token)
 
 
 def test_detect_source_type_record_without_source_type_falls_back():
