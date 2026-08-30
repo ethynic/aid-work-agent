@@ -2,13 +2,14 @@
 
 X-Tenant-Id 头必须先走完整认证链（Bearer token → verify_token → 查 users 行
 拿 role+tenant_id）才可能被采纳：
-- platform_admin：可采纳任意存在租户（代管理）
+- platform_admin：可采纳任意存在租户（代管理）；指定不存在租户 → 403（不静默回退全局视图）
 - tenant_admin/普通用户：仅当 header 值等于自身 tenant_id 时采纳，否则请求被拒（403）
 - 无有效 token：header 一律不采纳，按原回退逻辑处理（匿名语义不变）
 - 认证成功后 request.state.user_role 暴露给下游（知识库平台管理员全局视图输入）
 """
 
 from unittest.mock import MagicMock, patch
+from types import SimpleNamespace
 
 import pytest
 from starlette.requests import Request
@@ -73,6 +74,10 @@ def _setup_auth(user_row, token_user="user-1"):
 
 def _tenant_exists():
     return patch("src.saas.db.tenant_db.TenantDB.get_by_id", return_value={"tenant_id": "t2"})
+
+
+def _tenant_missing():
+    return patch("src.saas.db.tenant_db.TenantDB.get_by_id", return_value=None)
 
 
 def _make_call_next():
@@ -174,6 +179,137 @@ class TestUserTenantHeaderAdoption:
 
         assert response.status_code == 200
         assert calls["tenant_id"] == "t2"
+
+    @pytest.mark.asyncio
+    async def test_platform_admin_nonexistent_tenant_403(self):
+        """platform_admin + 不存在租户 header（_adopt_header_tenant 路径）→ 403，
+        绝不静默回退全局视图（指定租户的意图不得扩大为全部租户）"""
+        request = _make_request("/api/chat/x", {
+            "Authorization": "Bearer good-token", "X-Tenant-Id": "ghost"})
+        call_next, calls = _make_call_next()
+        mw = TenantContextMiddleware(None)
+        verify_patch, db_patch = _setup_auth({"role": "platform_admin", "tenant_id": None})
+
+        with verify_patch, db_patch, _tenant_missing():
+            response = await mw.dispatch(request, call_next)
+
+        assert response.status_code == 403
+        assert "无权访问指定租户".encode("utf-8") in response.body
+        assert calls["invoked"] is False  # 业务处理未执行
+
+    @pytest.mark.asyncio
+    async def test_platform_admin_nonexistent_tenant_403_api_fallback_path(self):
+        """其他 /api 路径（知识库等，_resolve_user_tenant）同样拒绝，两路径行为统一"""
+        request = _make_request("/api/knowledge/documents", {
+            "Authorization": "Bearer good-token", "X-Tenant-Id": "ghost"})
+        call_next, calls = _make_call_next()
+        mw = TenantContextMiddleware(None)
+        verify_patch, db_patch = _setup_auth({"role": "platform_admin", "tenant_id": None})
+
+        with verify_patch, db_patch, _tenant_missing():
+            response = await mw.dispatch(request, call_next)
+
+        assert response.status_code == 403
+        assert calls["invoked"] is False
+
+    @pytest.mark.asyncio
+    async def test_platform_admin_nonexistent_tenant_403_sessions_path(self):
+        """/api/sessions 路径（_resolve_session_tenant → _adopt_header_tenant）同样拒绝"""
+        request = _make_request("/api/sessions/list", {
+            "Authorization": "Bearer good-token", "X-Tenant-Id": "ghost"})
+        call_next, calls = _make_call_next()
+        mw = TenantContextMiddleware(None)
+        verify_patch, db_patch = _setup_auth({"role": "platform_admin", "tenant_id": None})
+
+        with verify_patch, db_patch, _tenant_missing():
+            response = await mw.dispatch(request, call_next)
+
+        assert response.status_code == 403
+        assert calls["invoked"] is False
+
+    @pytest.mark.asyncio
+    async def test_platform_admin_no_header_still_global(self):
+        """platform_admin 无 header → 保持全局语义（合法入口，不 403）"""
+        request = _make_request("/api/knowledge/documents", {
+            "Authorization": "Bearer good-token"})
+        call_next, calls = _make_call_next()
+        mw = TenantContextMiddleware(None)
+        verify_patch, db_patch = _setup_auth({"role": "platform_admin", "tenant_id": None})
+
+        with verify_patch, db_patch, \
+                patch("src.config.settings.settings", SimpleNamespace(demo=None)):
+            response = await mw.dispatch(request, call_next)
+
+        assert response.status_code == 200
+        assert calls["tenant_id"] is None
+
+    @pytest.mark.asyncio
+    async def test_employee_nonexistent_tenant_header_403(self):
+        """普通用户 + 不存在租户 header → 同样 403（不查租户存在性，直接身份不匹配拒绝）"""
+        request = _make_request("/api/chat/x", {
+            "Authorization": "Bearer good-token", "X-Tenant-Id": "ghost"})
+        call_next, calls = _make_call_next()
+        mw = TenantContextMiddleware(None)
+        verify_patch, db_patch = _setup_auth({"role": "employee", "tenant_id": "t1"})
+
+        with verify_patch, db_patch, _tenant_missing() as tenant_mock:
+            response = await mw.dispatch(request, call_next)
+
+        assert response.status_code == 403
+        assert calls["invoked"] is False
+        assert not tenant_mock.called  # 非 platform_admin 不做租户存在性查询
+
+    @pytest.mark.asyncio
+    async def test_empty_header_treated_as_absent_admin_global(self):
+        """空串 X-Tenant-Id 按无 header 处理：admin → 全局语义。
+
+        判定理由（评审结论，非缺陷）：空串不指定任何租户，不存在「指定租户的
+        意图被静默扩大为全部租户」的风险面——admin 本就有权通过省略 header 获得
+        全局视图；前端以空串表示「未选择租户」是常见合法模式，403 反而破坏之。
+        """
+        request = _make_request("/api/chat/x", {
+            "Authorization": "Bearer good-token", "X-Tenant-Id": ""})
+        call_next, calls = _make_call_next()
+        mw = TenantContextMiddleware(None)
+        verify_patch, db_patch = _setup_auth({"role": "platform_admin", "tenant_id": None})
+
+        with verify_patch, db_patch, _tenant_missing() as tenant_mock, \
+                patch("src.config.settings.settings", SimpleNamespace(demo=None)):
+            response = await mw.dispatch(request, call_next)
+
+        assert response.status_code == 200
+        assert calls["tenant_id"] is None  # 全局语义
+        assert not tenant_mock.called  # 空串不做租户存在性查询
+
+    @pytest.mark.asyncio
+    async def test_empty_header_treated_as_absent_employee_own_tenant(self):
+        """空串 X-Tenant-Id 按无 header 处理：employee → 回退自身租户（不放大不拒绝）"""
+        request = _make_request("/api/chat/x", {
+            "Authorization": "Bearer good-token", "X-Tenant-Id": ""})
+        call_next, calls = _make_call_next()
+        mw = TenantContextMiddleware(None)
+        verify_patch, db_patch = _setup_auth({"role": "employee", "tenant_id": "t1"})
+
+        with verify_patch, db_patch, _tenant_missing() as tenant_mock:
+            response = await mw.dispatch(request, call_next)
+
+        assert response.status_code == 200
+        assert calls["tenant_id"] == "t1"
+        assert not tenant_mock.called
+
+    @pytest.mark.asyncio
+    async def test_empty_header_anonymous_ignored(self):
+        """空串 X-Tenant-Id 按无 header 处理：匿名 → 忽略不 403"""
+        request = _make_request("/api/chat/x", {"X-Tenant-Id": ""})
+        call_next, calls = _make_call_next()
+        mw = TenantContextMiddleware(None)
+
+        with _tenant_missing() as tenant_mock:
+            response = await mw.dispatch(request, call_next)
+
+        assert response.status_code == 200
+        assert calls["tenant_id"] is None
+        assert not tenant_mock.called
 
     @pytest.mark.asyncio
     async def test_anonymous_header_ignored_not_denied(self):
@@ -336,6 +472,39 @@ class TestSaasAdminAndCallbackUnchanged:
 
         assert response.status_code == 200
         assert calls["tenant_id"] == "t2"
+        assert calls["user_role"] == "platform_admin"
+
+    @pytest.mark.asyncio
+    async def test_admin_flow_platform_admin_nonexistent_tenant_403(self):
+        """/api/saas/ 管理流：platform_admin 指定不存在租户 → 403（与 _adopt_header_tenant
+        行为统一），不静默回退全局视图"""
+        request = _make_request("/api/saas/tenants", {
+            "Authorization": "Bearer admin-token", "X-Tenant-Id": "ghost"})
+        call_next, calls = _make_call_next()
+        mw = TenantContextMiddleware(None)
+        verify_patch, db_patch = _setup_auth({"role": "platform_admin", "tenant_id": None})
+
+        with verify_patch, db_patch, _tenant_missing():
+            response = await mw.dispatch(request, call_next)
+
+        assert response.status_code == 403
+        assert "无权访问指定租户".encode("utf-8") in response.body
+        assert calls["invoked"] is False
+
+    @pytest.mark.asyncio
+    async def test_admin_flow_platform_admin_no_header_global(self):
+        """/api/saas/ 管理流：platform_admin 无 header → 全局语义（不 403）"""
+        request = _make_request("/api/saas/tenants", {
+            "Authorization": "Bearer admin-token"})
+        call_next, calls = _make_call_next()
+        mw = TenantContextMiddleware(None)
+        verify_patch, db_patch = _setup_auth({"role": "platform_admin", "tenant_id": None})
+
+        with verify_patch, db_patch:
+            response = await mw.dispatch(request, call_next)
+
+        assert response.status_code == 200
+        assert calls["tenant_id"] is None
         assert calls["user_role"] == "platform_admin"
 
     @pytest.mark.asyncio

@@ -83,7 +83,8 @@ class HybridRetriever:
         tenant_id: Optional[str] = None,
         source_type: Optional[str] = None,
         sub_categories: Optional[List[str]] = None,
-        shared_ranges: Optional[List[Tuple[str, str]]] = None
+        shared_ranges: Optional[List[Tuple[str, str]]] = None,
+        global_view: bool = False
     ) -> List[Dict[str, Any]]:
         """
         混合检索（加权 RRF 融合 + 向量相似度阈值 + 相关度截断）
@@ -96,6 +97,8 @@ class HybridRetriever:
             source_type: 文档来源类型，提供时只搜索该类型的文档
             sub_categories: 直接选中分类（含其子级）的 source_type 集合，提供时只搜索这些分类的文档
             shared_ranges: 已启用共享分类的精确 (from_tenant_id, source_type) 对
+            global_view: 认证 platform_admin 全局视图；True 且 tenant_id 为 None 时
+                向量/全文两路均不携带租户收窄条件（跨租户检索）。
 
         Returns:
             检索结果列表
@@ -119,6 +122,7 @@ class HybridRetriever:
             query_embedding, top_k=top_k * 3,
             tenant_id=tenant_id, source_type=source_type,
             sub_categories=sub_categories, shared_ranges=shared_ranges,
+            global_view=global_view,
         )
 
         # 后端日志：输出原始向量检索结果（调优用）
@@ -162,6 +166,7 @@ class HybridRetriever:
             fts_query, top_k=top_k * 3,
             tenant_id=tenant_id, source_type=source_type,
             sub_categories=sub_categories, shared_ranges=shared_ranges,
+            global_view=global_view,
         )
 
         # 后端日志：步骤3-FTS5全文检索详情
@@ -276,15 +281,16 @@ class HybridRetriever:
         # 用 OR 连接关键词（FTS5 语法：匹配任一关键词即可）
         return " OR ".join(keywords)
 
-    def _fts_search(self, query: str, top_k: int, tenant_id: Optional[str] = None, source_type: Optional[str] = None, sub_categories: Optional[List[str]] = None, shared_ranges: Optional[List[Tuple[str, str]]] = None) -> List[Tuple[int, float]]:
+    def _fts_search(self, query: str, top_k: int, tenant_id: Optional[str] = None, source_type: Optional[str] = None, sub_categories: Optional[List[str]] = None, shared_ranges: Optional[List[Tuple[str, str]]] = None, global_view: bool = False) -> List[Tuple[int, float]]:
         """全文检索（PostgreSQL tsvector）"""
         return self._postgres_fts_search(
             query, top_k,
             tenant_id=tenant_id, source_type=source_type,
             sub_categories=sub_categories, shared_ranges=shared_ranges,
+            global_view=global_view,
         )
 
-    def _postgres_fts_search(self, query: str, top_k: int, tenant_id: Optional[str] = None, source_type: Optional[str] = None, sub_categories: Optional[List[str]] = None, shared_ranges: Optional[List[Tuple[str, str]]] = None) -> List[Tuple[int, float]]:
+    def _postgres_fts_search(self, query: str, top_k: int, tenant_id: Optional[str] = None, source_type: Optional[str] = None, sub_categories: Optional[List[str]] = None, shared_ranges: Optional[List[Tuple[str, str]]] = None, global_view: bool = False) -> List[Tuple[int, float]]:
         """PostgreSQL 全文检索（使用 tsvector + tsquery）"""
         conn = self._get_connection()
         try:
@@ -310,6 +316,22 @@ class HybridRetriever:
                     JOIN documents d ON c.doc_id = d.id
                     WHERE c.text_vec @@ plainto_tsquery(%s)
                       AND {range_sql}{sub_cat_sql}
+                    ORDER BY score DESC
+                    LIMIT %s
+                """, params)
+            elif global_view:
+                # 平台管理员全局视图（tenant_id 为 None）：跨租户检索，
+                # 不携带任何租户收窄条件（无租户参数）
+                source_type_condition = " AND d.source_type = %s" if source_type else ""
+                params = [processed_query, processed_query]
+                if source_type:
+                    params.append(source_type)
+                params.append(top_k)
+                cursor.execute(f"""
+                    SELECT c.id, ts_rank(c.text_vec, plainto_tsquery(%s)) as score
+                    FROM chunks c
+                    JOIN documents d ON c.doc_id = d.id
+                    WHERE c.text_vec @@ plainto_tsquery(%s){source_type_condition}
                     ORDER BY score DESC
                     LIMIT %s
                 """, params)

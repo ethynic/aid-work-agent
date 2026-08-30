@@ -29,7 +29,8 @@ class VectorDatabase:
         top_k: int = 10,
         tenant_id: Optional[str] = None,
         source_type: Optional[str] = None,
-        shared_ranges: Optional[List[Tuple[str, str]]] = None
+        shared_ranges: Optional[List[Tuple[str, str]]] = None,
+        global_view: bool = False
     ) -> List[Tuple[int, float]]:
         """
         向量相似度搜索
@@ -38,6 +39,8 @@ class VectorDatabase:
             tenant_id: 租户ID，提供时只搜索该租户的文档
             source_type: 文档来源类型，提供时只搜索该类型的文档
             shared_ranges: 已启用共享分类的精确 (from_tenant_id, source_type) 对
+            global_view: 认证 platform_admin 全局视图；True 且 tenant_id 为 None 时
+                不携带任何租户收窄条件（跨租户检索）
 
         Returns:
             List[(chunk_id, similarity)]
@@ -157,7 +160,8 @@ class VectorDBPostgreSQL(VectorDatabase):
         tenant_id: Optional[str] = None,
         source_type: Optional[str] = None,
         sub_categories: Optional[List[str]] = None,
-        shared_ranges: Optional[List[Tuple[str, str]]] = None
+        shared_ranges: Optional[List[Tuple[str, str]]] = None,
+        global_view: bool = False
     ) -> List[Tuple[int, float]]:
         """向量相似度搜索（使用余弦相似度）"""
         conn = self._get_connection()
@@ -184,6 +188,23 @@ class VectorDBPostgreSQL(VectorDatabase):
                     JOIN chunks c ON cv.chunk_id = c.id
                     JOIN documents d ON c.doc_id = d.id
                     WHERE {range_sql}{sub_cat_sql}
+                    ORDER BY distance
+                    LIMIT %s
+                """, params)
+            elif global_view:
+                # 平台管理员全局视图（tenant_id 为 None）：跨租户检索，
+                # 不携带任何租户收窄条件（无租户参数）
+                source_type_condition = " AND d.source_type = %s" if source_type else ""
+                params = [vector_str]
+                if source_type:
+                    params.append(source_type)
+                params.append(top_k)
+                cursor.execute(f"""
+                    SELECT cv.chunk_id, cv.embedding <=> %s::vector as distance
+                    FROM chunks_vec cv
+                    JOIN chunks c ON cv.chunk_id = c.id
+                    JOIN documents d ON c.doc_id = d.id
+                    WHERE 1=1{source_type_condition}
                     ORDER BY distance
                     LIMIT %s
                 """, params)

@@ -7,15 +7,16 @@
 --
 -- 禁止事项：
 --   1. 严禁对生产库 aid_work_agent 或任何其他库执行本文件（生产库已核实无下列对象；
---      本文件第 0 步有 current_database() 强制断言，连错库会自动中止）
+--      事务首条有 current_database() 强制断言 + 文件首行 \set ON_ERROR_STOP on，
+--      连错库或漏传命令行参数都会自动中止）
 --   2. 严禁混入应用启动、初始化脚本或任何自动执行链路；只能由运维人工审查后执行
 --   3. 严禁使用 CASCADE；遇到外键报错说明环境与盘点时不符，应停下重新盘点
 --
 -- 安全断言（任一不符自动中止并回滚，DROP 不会执行）：
---   A0. 当前库必须是 aid_work_agent2
+--   A0. 当前库必须是 aid_work_agent2（事务内首条）
 --   A1. 六张表若存在必须为 0 行（存在即加 ACCESS EXCLUSIVE 锁，防检查后写入）
---   A2. chat_records 若存在关联列，非空行数必须为 0（列删除 DDL 自身会取
---       ACCESS EXCLUSIVE，检查不再额外锁表，见第 1 步说明）
+--   A2. chat_records 若存在关联列，先加 ACCESS EXCLUSIVE 锁再断言非空行数为 0
+--       （消除检查与删列之间的竞态；锁等待受 lock_timeout 约束）
 --   断言与 DROP 在同一事务内，RAISE EXCEPTION 触发整体回滚
 --
 -- 盘点结论（2026-08-30 首次执行前核实；本迁移已于 2026-08-30 在 aid_work_agent2
@@ -25,17 +26,11 @@
 -- 执行方式（服务器上）：
 --   docker exec -i aid-postgres psql -U aid_user -d aid_work_agent2 \
 --     -v ON_ERROR_STOP=1 < deploy/cleanup-task-plane-aid_work_agent2.sql
+-- 文件首行已内置 \set ON_ERROR_STOP on：即使调用方漏传 -v，任一断言失败也会立即
+-- 中止整个脚本，不会继续执行后续 DROP。
 -- ==============================================================================
 
--- ------------------------------------------------------------------------------
--- 第 0 步：目标库强制断言（独立于事务，最先执行）
--- ------------------------------------------------------------------------------
-DO $$
-BEGIN
-    IF current_database() <> 'aid_work_agent2' THEN
-        RAISE EXCEPTION '安全断言失败：当前库为 %，本迁移仅允许在 aid_work_agent2 执行（严禁生产库）', current_database();
-    END IF;
-END $$;
+\set ON_ERROR_STOP on
 
 -- ------------------------------------------------------------------------------
 -- 可选备份（六表均 0 行，仅需留 schema 以备回滚；按需去掉注释执行）
@@ -47,15 +42,23 @@ END $$;
 --   > /var/backups/task-plane-schema-before-cleanup-$(date +%Y%m%d).sql
 
 -- ------------------------------------------------------------------------------
--- 第 1 步：断言 + 删除（同一事务；顺序：锁表断言 → 索引 → 关联列 → 子表 → 主表）
+-- 第 1 步：断言 + 删除（同一事务；顺序：库断言 → 锁表断言 → 索引 → 关联列 → 子表 → 主表）
 --
 -- lock_timeout：目标库与运行中的测试环境共享，任何锁等待超过 10s 立即失败回滚，
--- 避免迁移锁与业务写入互相排队；列删除 DDL 自身会短暂取 ACCESS EXCLUSIVE，
--- 故 A2 断言不再显式锁 chat_records。
+-- 避免迁移锁与业务写入互相排队。
+-- 目标库断言放在事务内首条：断言失败即回滚整个事务，DROP 无机会执行。
 -- ------------------------------------------------------------------------------
 SET lock_timeout = '10s';
 
 BEGIN;
+
+-- A0：目标库强制断言（严禁生产库）
+DO $$
+BEGIN
+    IF current_database() <> 'aid_work_agent2' THEN
+        RAISE EXCEPTION '安全断言失败：当前库为 %，本迁移仅允许在 aid_work_agent2 执行（严禁生产库）', current_database();
+    END IF;
+END $$;
 
 -- A1：六张旁路表——存在则锁表并断言 0 行（不存在视为已清理，跳过）
 DO $$
@@ -92,6 +95,9 @@ BEGIN
                    WHERE table_schema='public' AND table_name='chat_records' AND column_name='execution_id')
         INTO has_exec;
     IF has_task OR has_exec THEN
+        -- 消除检查与删列之间的竞态：先取排他锁再计数，检查后写入的并发事务
+        -- 会被 lock_timeout 拦住或阻塞在本事务之后（事务内 DDL 很快完成）
+        LOCK TABLE public.chat_records IN ACCESS EXCLUSIVE MODE;
         cond := CASE
             WHEN has_task AND has_exec  THEN 'task_id IS NOT NULL OR execution_id IS NOT NULL'
             WHEN has_task               THEN 'task_id IS NOT NULL'

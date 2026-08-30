@@ -906,7 +906,8 @@ class KnowledgeBaseService:
             source_type: 顶级分类代号，提供时只搜索该分类（含其下所有子级）
             sub_category: 直接选中分类代号，展开为自身 + 所有后代分类再过滤（不传时全分类搜索）
             global_view: 认证 platform_admin 全局视图（且无租户上下文）时，
-                标题回查不携带租户过滤（恢复平台管理员全局搜索口径）
+                检索层（向量/全文）与标题回查均不携带租户过滤（恢复平台
+                管理员全局搜索口径）
 
         Returns:
             搜索结果
@@ -946,10 +947,11 @@ class KnowledgeBaseService:
                     else:
                         sub_categories = [sub_category]
 
-                # 执行混合检索
+                # 执行混合检索（global_view 透传给检索层：向量/全文两路放开租户收窄）
                 results = await retriever.retrieve(
                     query=query, top_k=top_k, user_id=user_id, tenant_id=tenant_id,
                     source_type=source_type, sub_categories=sub_categories,
+                    global_view=global_view,
                 )
 
                 # 提取文档标题

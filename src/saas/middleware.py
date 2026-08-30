@@ -13,10 +13,13 @@
 
 X-Tenant-Id 头采纳规则（防伪造）：仅在完整认证链（Bearer token → verify_token
 → 查 users 行）通过后生效：
-- platform_admin：可指定任意「存在」的租户（代管理）
+- platform_admin：可指定任意「存在」的租户（代管理）；目标租户不存在（如拼写
+  错误）同样抛 TenantHeaderDenied 由 dispatch 拒绝（403），绝不静默回退全局
+  视图——否则「指定租户」的意图会被扩大为「全部租户」
 - 其他角色：仅当 header 值等于自身 tenant_id 时采纳；不一致抛 TenantHeaderDenied
   由 dispatch 拒绝（403）
 - 无有效 token：header 一律不采纳，按原回退逻辑处理（匿名语义不变）
+- platform_admin 无 X-Tenant-Id 头：保持全局语义（合法入口，不 403）
 """
 
 import re
@@ -36,9 +39,12 @@ _TENANT_CALLBACK_PATTERN = re.compile(r"^/t/([^/]+)/")
 
 
 class TenantHeaderDenied(Exception):
-    """X-Tenant-Id 头与请求者身份不匹配（已认证的非平台管理员试图指定他人租户）
+    """X-Tenant-Id 头与请求者身份不匹配（已认证用户试图指定他人/不存在的租户）
 
-    由 dispatch 外层捕获并返回 403；携带 user_id 供日志记录（不记租户值）。
+    覆盖两种情形，行为统一由 dispatch 外层捕获并返回 403 固定文案：
+    - 已认证的非 platform_admin 指定他人租户
+    - 已认证的 platform_admin 指定不存在的租户（不回退全局视图）
+    携带 user_id 供日志记录（不记租户值，不泄漏租户存在性）。
     """
 
     def __init__(self, user_id: Optional[str] = None):
@@ -157,11 +163,14 @@ class TenantContextMiddleware(BaseHTTPMiddleware):
             if role == "platform_admin":
                 x_tenant_id = request.headers.get("X-Tenant-Id")
                 if x_tenant_id:
-                    # 验证目标租户存在
+                    # 验证目标租户存在；不存在（如拼写错误）拒绝请求，
+                    # 与 _adopt_header_tenant 行为统一，防止静默回退全局视图
                     from src.saas.db.tenant_db import TenantDB
                     target_tenant = TenantDB.get_by_id(x_tenant_id)
-                    if target_tenant:
-                        return x_tenant_id, user_id
+                    if not target_tenant:
+                        raise TenantHeaderDenied(user_id=user_id)
+                    return x_tenant_id, user_id
+                # 无 header：保持全局语义（合法入口，不 403）
                 return None, user_id
 
             # tenant_admin 返回其 tenant_id
@@ -203,13 +212,17 @@ class TenantContextMiddleware(BaseHTTPMiddleware):
     ) -> Optional[str]:
         """在已认证前提下裁决 X-Tenant-Id 是否可采纳（调用方保证 role 非空）
 
-        - platform_admin：任意「存在」的租户可采纳（代管理）；不存在则返回 None（走回退）
+        - platform_admin：任意「存在」的租户可采纳（代管理）；目标租户不存在
+          （如拼写错误）抛 TenantHeaderDenied 拒绝请求，不静默回退全局视图
         - 其他角色：仅当 header 值等于自身 tenant_id 时采纳；不一致抛 TenantHeaderDenied
         """
         if role == "platform_admin":
             from src.saas.db.tenant_db import TenantDB
             target_tenant = TenantDB.get_by_id(x_tenant_id)
-            return x_tenant_id if target_tenant else None
+            if not target_tenant:
+                # 指定租户的意图不得静默扩大为全部租户：不存在即拒绝
+                raise TenantHeaderDenied(user_id=user_id)
+            return x_tenant_id
 
         if x_tenant_id == user_tenant_id:
             return x_tenant_id
