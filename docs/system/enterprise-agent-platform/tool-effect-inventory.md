@@ -4,7 +4,7 @@
 > 盘点基线：2026-08-19，`src/core/agent.py` 4284 行
 > 用途：独立的工具副作用、幂等性和盲重试风险审查资料。每个工具均逐一打开源码核实，非按名猜测。
 >
-> 2026-08-28：Task Plane 已停止。本清单不归属于 Task/Plane，不创建业务对象，不自动授权重试；代码变化后必须重新核对。[运行时安全加固设计](../agent-runtime-safety-hardening-design.md)
+> 本清单是独立安全审计资料，不创建业务对象、不自动授权重试；代码变化后必须重新核对。[运行时安全加固设计](../agent-runtime-safety-hardening-design.md)
 
 ---
 

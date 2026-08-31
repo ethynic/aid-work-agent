@@ -261,7 +261,7 @@ created → policy_pending → queued → assigned → claimed → running
 | `execution_nodes` | id, tenant_id, kind, ownership_scope/id, status, trust_level, credential_version, node_lease_expires_at |
 | `node_capability_snapshots` | node_id, version, reported, effective, registry_revision, digest, created_at |
 | `node_routes` | tenant/user/department, provider/tool scope, preferred_node_id, priority |
-| `tool_invocations` | tenant/task/session/execution, tool/provider/schema, target, affinity_reason, policy_decision_id, state, effect |
+| `tool_invocations` | tenant/session_ref/invocation_id, tool/provider/schema, target, affinity_reason, policy_decision_id, state, effect |
 | `tool_invocation_attempts` | invocation_id, attempt_no, claim_hash, authorization_jti_hash, lease, started/finished, result |
 | `tool_invocation_events` | invocation_id, attempt_id, seq, kind, progress, sanitized_payload |
 | `node_reservations` | node_id, slot_type, invocation_id, lease_expires_at |

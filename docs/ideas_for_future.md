@@ -14,19 +14,18 @@
 
 ## 企业 Agent 平台长期设想
 
-> 2026-08-28：Task Plane 及统一 Task 模型已停止并作废。不得按原顺序继续开发；详见[暂停与处置报告](research/task-plane-suspension-and-disposition-report.md)。其余文档中的 Task 前提均不再有效，后续只能按各自已经明确的事实对象独立复核。
+> 各能力面必须以自身可量化的客户问题、验收指标和可见产品结果独立立项，不设置统一业务任务模型作为共同前置。
 
 | 能力面 | 状态 | 文档 |
 |---|---|---|
-| **Task Plane Phase 0+1** | ⛔ 已停止，设计作废，不合并不部署 | [暂停与处置报告](research/task-plane-suspension-and-disposition-report.md) |
-| 原七能力面总体集成架构 | ⚠️ 待复核，Task 主线已删除 | [总体架构](system/enterprise-agent-platform/enterprise-agent-platform-integration-design.md) |
-| 企业 Policy Engine | ⚠️ 待独立复核，不得依赖 Task 前置 | [Policy Engine](system/enterprise-agent-platform/enterprise-policy-engine-design.md) |
-| Server / Desktop / Runtime 执行网络 | ⚠️ 待独立复核，不得依赖 Task 前置 | [Execution Fabric](system/enterprise-agent-platform/enterprise-execution-fabric-design.md) |
-| 企业动作与业务结果证据 | ⚠️ 待复核，关联模型与实施阶段暂停 | [Evidence Ledger](system/enterprise-agent-platform/enterprise-evidence-ledger-design.md) |
-| 企业记忆与知识治理 | ⚠️ 待复核，跨模块关联暂停 | [Memory & Knowledge](system/enterprise-agent-platform/enterprise-memory-knowledge-design.md) |
-| Agent 发布评测与运营 | ⚠️ 待复核，统一运行关联暂停 | [Evaluation & Operations](system/enterprise-agent-platform/enterprise-agent-evaluation-operations-design.md) |
+| 六能力面总体集成架构 | 📋 架构设计，按能力独立评审 | [总体架构](system/enterprise-agent-platform/enterprise-agent-platform-integration-design.md) |
+| 企业 Policy Engine | 📋 待独立评审 | [Policy Engine](system/enterprise-agent-platform/enterprise-policy-engine-design.md) |
+| Server / Desktop / Runtime 执行网络 | 📋 待独立评审 | [Execution Fabric](system/enterprise-agent-platform/enterprise-execution-fabric-design.md) |
+| 企业动作与业务结果证据 | 📋 待独立评审 | [Evidence Ledger](system/enterprise-agent-platform/enterprise-evidence-ledger-design.md) |
+| 企业记忆与知识治理 | 📋 待独立评审 | [Memory & Knowledge](system/enterprise-agent-platform/enterprise-memory-knowledge-design.md) |
+| Agent 发布评测与运营 | 📋 待独立评审 | [Evaluation & Operations](system/enterprise-agent-platform/enterprise-agent-evaluation-operations-design.md) |
 
-原“Contract → Task/Release/Policy → Collaboration …”顺序失效。各能力必须按真实业务场景独立验证边界；不得把 Task 当作已解决前置。服务器继续权威管理租户、账号、计费、LLM 和企业策略；`DEVICE_OWNED` 会话的原设备、Coordinator 与 workspace 不因跨端接续而变化。
+各能力必须按真实业务场景独立验证边界。服务器继续权威管理租户、账号、计费、LLM 和企业策略；`DEVICE_OWNED` 会话的原设备、Coordinator 与 workspace 不因跨端接续而变化。
 
 ## 企业多智能体协作体系
 

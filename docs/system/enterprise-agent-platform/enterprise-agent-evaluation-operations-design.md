@@ -313,23 +313,23 @@ eval_runs
   status, trigger, started_by, started_at, completed_at
 
 eval_case_results
-  result_id, run_id, case_id, execution_id, status,
+  result_id, run_id, case_id, trace_id, status,
   latency_ms, token_usage, credit_cost, failure_category, evidence_ref
 
 eval_scores
   result_id, scorer_id, scorer_version, score_name, value,
   threshold, passed, reasoning_ref, created_at
 
-execution_version_snapshots
-  execution_id, release_id, resolved_manifest_hash, context_snapshot_id,
-  device_id_hash, workspace_fingerprint_hash, trace_id
+run_version_snapshots
+  trace_id, release_id, resolved_manifest_hash, context_snapshot_id,
+  device_id_hash, workspace_fingerprint_hash
 
 business_outcome_events
-  event_id, tenant_id, execution_id, outcome_type, business_ref_hash,
+  event_id, tenant_id, trace_id, outcome_type, business_ref_hash,
   status, verifier, evidence_ref, occurred_at
 
 human_feedback
-  feedback_id, tenant_id, execution_id, actor_id, rubric_version,
+  feedback_id, tenant_id, trace_id, actor_id, rubric_version,
   rating, correction_ref, created_at
 ```
 
@@ -341,9 +341,7 @@ human_feedback
 - `chat_record_id`：Token、积分和对话审计。
 - `work_outcome.outcome_id`：现有交付摘要，逐步映射为 `business_outcome_event/artifact_id`。
 - `prompt_id/version`：来自现有 Prompt Registry。
-- `execution_id`：新任务模型中的一次执行，是跨系统主要关联键。
-
-短期可在 Trace metadata 增加 `execution_id/release_id/context_snapshot_id`，但应设为正式列并建立索引，避免长期依赖 JSON 查询。
+评估关联以现有 `trace_id`、`chat_record_id` 和具体业务系统引用为准，不引入统一业务任务或执行主键。短期可在 Trace metadata 增加 `release_id/context_snapshot_id`，后续再根据查询量决定是否提升为正式列。
 
 ## 10. API 与事件契约
 
@@ -369,7 +367,7 @@ POST /api/eval/runs
 GET  /api/eval/runs/{run_id}
 GET  /api/eval/runs/{run_id}/comparison?baseline_release_id=
 POST /api/eval/results/{id}/human-review
-POST /api/eval/incidents/{execution_id}/create-regression-case
+POST /api/eval/incidents/{trace_id}/create-regression-case
 ```
 
 ### 10.3 Operations API
@@ -400,7 +398,7 @@ drift.detected
 audit_export.generated
 ```
 
-统一 envelope：`event_id/schema_version/tenant_id/correlation_id/occurred_at/actor/release_id/execution_id`。消费者必须幂等。
+统一 envelope：`event_id/schema_version/tenant_id/correlation_id/occurred_at/actor/release_id/trace_id`。消费者必须幂等。
 
 ## 11. 评估与发布生命周期
 
@@ -498,7 +496,7 @@ audit_export.generated
 ### Phase E0：数据安全与关联键（1–2 周）
 
 - Trace 持久化前脱敏/分类，停止默认无差别保存敏感工具输入输出。
-- 给 execution 建立 `execution_id/release_id/context_snapshot_id`，关联 chat record、trace 和 work outcome。
+- 通过现有 `trace_id` 关联 chat record、版本快照和 work outcome，不新增统一执行主实体。
 - 保存所有 LLM call span，而非只保留最后一次；设置合理采样和 retention。
 - 真实成本通过 billing 事实关联到 Trace，不在观测库重复估算。
 
@@ -586,7 +584,7 @@ audit_export.generated
 3. Trace 原文默认 retention 和采样比例，需要结合合同、成本和数据等级确定。
 4. 自动回滚的默认范围：建议安全红线全局立即回滚，质量/成本按租户 canary 暂停。
 5. LLM Judge 是否使用生产模型之外的独立模型；建议独立且保存 Judge release。
-6. `work_outcomes` 是扩表演进还是迁移到统一 Task/Artifact/Evidence 模型；建议兼容读、逐步迁移。
+6. `work_outcomes` 与 Evidence 如何按具体业务引用建立兼容关联，避免复制业务系统的权威状态。
 7. Desktop 本地评估是否首期支持 macOS 与 Windows；建议协议统一，先以无副作用 fixtures 覆盖两端。
 
 ## 19. 相关现有文档

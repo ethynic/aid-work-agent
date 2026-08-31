@@ -6,8 +6,6 @@
 >
 > 关联：[真诚建议 §10 把大型母体 Agent 收敛为稳定 Kernel](../research/aid-work-agent-honest-advice.md) / [运行时安全加固设计](agent-runtime-safety-hardening-design.md)
 >
-> **2026-08-28 更新：** Task Plane 已停止，不能再作为 Kernel 拆分驱动力、交付载体或实施顺序前置。本文仅保留“冻结增长、行为等价、领域隔离”等独立原则。
-
 ## 1. 背景与核实数据
 
 2026-08-19 核实：
@@ -26,8 +24,6 @@
 2. 无驱动力的重构容易产出投机抽象；只有确定的安全修复或已经批准的具体功能，才构成拆分驱动力；
 3. 已抽出的纯 helper 只有在证明无领域依赖、行为等价且回归全绿时才可保留。
 
-原“Task Plane 先行 → 多智能体协作跟进”的顺序已失效。各项目按自身边界重新评估，不为旧路线提前拆分。
-
 ## 3. 原则
 
 | # | 原则 | 内容 |
@@ -38,7 +34,7 @@
 | P4 | **候选拆分目标** | ActionDispatcher、ContinuationManager、TurnEngine 仅作为候选；由具体功能证明必要性后另行设计 |
 | P5 | **拆分即等价** | 每次拆分前先固化行为回归（现有 agent 单测 + 相邻回归），拆分前后全绿才算完成；禁止「顺手改行为」——行为变更与结构拆分不得混在同一个提交 |
 | P6 | **Kernel 不认识领域** | 拆出的模块不得包含 video/travel/BOSS/wecom 等领域特例；数值上限、权限规则、状态迁移、必填字段、格式验证、幂等/重试条件等确定性规则优先从 Prompt 移入代码（战略文档 §10.3） |
-| P7 | **完整 Kernel 化不设专项** | ContextAssembler / IntentCompiler / TurnEngine / CapabilityResolver / ResultInterpreter / ResponseComposer 等完整边界（战略文档 §10.2）不排专门项目，随灯塔工作流与各平面落地按需拆 |
+| P7 | **完整 Kernel 化不设专项** | ContextAssembler / IntentCompiler / TurnEngine / CapabilityResolver / ResultInterpreter / ResponseComposer 等完整边界（战略文档 §10.2）不排专门项目，随灯塔工作流与具体功能落地按需拆 |
 
 ## 4. 执行顺序
 
@@ -49,5 +45,4 @@
 ## 5. 追踪
 
 - 本原则登记于 `docs/ideas.md` 基础设施区（#65）。
-- Task Plane 相关交付约束已撤销；结构守卫需去除 `src/task_plane` 专属断言后按独立安全加固重新审查。
 - 每完成一次 seam 拆分，在 `docs/ideas.md` #65 条目更新进度与最新行数基线。

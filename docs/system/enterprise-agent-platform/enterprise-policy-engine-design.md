@@ -27,7 +27,7 @@
 - 租户隔离、订阅、用户授权、设备归属和 Provider 信任在执行前统一求交。
 - 支持 RBAC、ABAC、逐次审批、批量审批、双人审批、职责分离和紧急停止。
 - 让 LLM 只能选择经过过滤的工具，且 LLM 输出永远不能作为授权依据。
-- 每次决策、审批和执行都可关联到 tenant/task/session/execution/invocation 和策略版本。
+- 每次决策、审批和执行都可关联到 tenant、session_ref、invocation 和策略版本。
 - 支持策略灰度、模拟评估、差异分析、快速撤销和安全缓存。
 
 ### 2.2 非目标

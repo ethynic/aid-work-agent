@@ -9,7 +9,6 @@
 
 建立跨 Web 与 Desktop 共用的 **Agent Collaboration Plane**。它管理“谁负责、如何拆解、哪些成员并行、成员如何通信、何时停止、如何综合”，但不复制既有平台职责：
 
-- Task Plane 仍是业务任务、Execution、Artifact 的权威；
 - Policy Plane 决定成员与工具权限；
 - Execution Fabric 决定工具在哪里执行；
 - Evidence Ledger 证明动作和结果；
@@ -38,7 +37,7 @@
 | `AgentDefinition` | 角色、人设、方法论、能力要求 | Server |
 | `AgentRelease` | 冻结 Prompt、模型策略、Skills、Tools、Policy schema 的发布版本 | Server |
 | `AgentTeamTemplate` | 负责人、成员角色、协作策略、默认预算和验收规则 | Server |
-| `AgentRun` | 一次协调运行，绑定 Task/Session/Execution、owner 与 release | 所属 Coordinator |
+| `AgentRun` | 一次协调运行，绑定会话引用、owner 与 release | 所属 Coordinator |
 | `AgentInstance` | 本次运行中的 root/child 实例，含稳定 path | 所属 Coordinator |
 | `WorkAssignment` | 给某成员的目标、约束、输入、成功标准和依赖 | 所属 Coordinator |
 | `ContextPackage` | 显式传递的最小上下文及引用 | 所属 Coordinator |
@@ -98,7 +97,7 @@ Desktop 使用等价 schema 的加密本地 event store。云端只保存策略�
 
 ```text
 objective, scope, exclusions, success_criteria
-task/session/execution references
+session and AgentRun references
 input artifact/evidence references
 known facts with source and freshness
 authority/policy/budget snapshot
@@ -124,7 +123,7 @@ expected output schema
 
 默认团队最大并发为 3、最大深度为 2，租户管理员可在平台上限内收窄或申请提高。调度器同时执行：
 
-- 平台/租户/用户/Task/AgentRun 五级并发限制；
+- 平台/租户/用户/AgentRun 四级并发限制；
 - token、积分、wall time、模型调用和工具调用预算；
 - 队列优先级与租户公平性；
 - 成员失败预算和退避；

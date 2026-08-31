@@ -4,14 +4,12 @@
 >
 > 日期：2026-08-12
 >
-> 状态：⚠️ 待重新复核；Task 相关前提已失效
+> 状态：架构设计稿，待独立评审
 >
 > 适用范围：Web、Agent Desktop、企业微信、钉钉、飞书、Cloud Agent、Local Agent Coordinator、Server ToolExecutor、`agent-tool-runtime`
 >
 > 关联设计：[工作成果记录](../work-outcome-record-design.md)、[社媒发布调度](../digital-employee/publish-dispatcher-design.md)
 >
-> **2026-08-28 决策：** Task Plane 与统一 Task 模型已作废。本文只能围绕具体副作用动作、外部回执和业务系统事实独立复核，不得以 Task/Execution 为权威前置。见[暂停与处置报告](../../research/task-plane-suspension-and-disposition-report.md)。
-
 ## 1. 决策摘要
 
 企业 Agent 不能以“工具返回 success”作为业务完成依据。平台需要一套服务器权威、追加式、可校验的 Evidence Ledger，将每个有业务副作用的动作完整表达为：
@@ -189,7 +187,7 @@ Tool/Provider 必须声明 Effect contract；未知工具默认按高风险处�
 
 ## 7. 数据模型建议
 
-> 2026-08-28：以下 Evidence 自身的动作、尝试与追加式证据结构仍是研究材料；所有原 `task_id` / `execution_id` 关联已删除。跨模块关联和事件信封暂停，实施前必须另行设计，不能沿用已作废 Task 契约。
+> Evidence 只围绕具体副作用动作、外部回执和业务系统事实建模，不依赖统一业务任务或执行主实体。
 
 ### 7.1 动作与尝试
 

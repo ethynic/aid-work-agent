@@ -12,7 +12,7 @@
 ## 2. Phase 0：契约与安全基线（1.5～2 周）
 
 - 建立 `contracts/agent-collaboration/`，定义 AgentRun、Instance、Assignment、Message、Event、Budget、ContextPackage、ResultEnvelope。
-- 将 `tenant_id/task_id/session_ref/execution_id/agent_release_id/policy_revision/protocol_version` 设为必填。
+- 将 `tenant_id/session_ref/agent_run_id/agent_release_id/policy_revision/protocol_version` 设为必填。
 - 定义命令幂等、event seq、mailbox seq、ACK、lease epoch 和 fencing token。
 - 固化 `single_delegate/parallel_specialists/pipeline/maker_checker/map_reduce` 策略枚举。
 - Python/TypeScript schema 生成或 conformance tests，禁止两端手写漂移。
@@ -35,7 +35,7 @@
 
 - 实现 `spawn/send/follow_up/wait/interrupt/list/publish`。
 - root 非阻塞等待，成员完成/消息/输入事件唤醒 Coordinator。
-- 默认并发 3、深度 1；接入租户/用户/Task/团队预算和公平队列。
+- 默认并发 3、深度 1；接入租户/用户/AgentRun/团队预算和公平队列。
 - 建立 artifact-first 结果协议与 root synthesis record。
 - 为失败、超时、预算耗尽和成员无响应定义收敛策略。
 
@@ -49,7 +49,7 @@
 - 首批内置模板：深度调研团队、方案制作+独立复核团队、批量资料处理团队。
 - 子级 spawn 开放至深度 2，但只能在模板/Policy 上限内。
 
-验收：模板 release 可复现；子级不能扩大数据、工具或节点权限；团队成本完整归集到 Task/租户。
+验收：模板 release 可复现；子级不能扩大数据、工具或节点权限；团队成本完整归集到 AgentRun/租户。
 
 ## 6. Phase 4：Web 协作界面（2～3 周）
 
