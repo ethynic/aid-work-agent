@@ -99,16 +99,24 @@ public class Win32 {
     }
 
     public static IntPtr FindRenderWidget(IntPtr parent) {
+        // 2026-08-31 真机修正：可见集合里取**面积最大**的，而非第一个可见——
+        // Chrome 151 实测存在多个可见 render widget（弹层/扩展面等小部件），
+        // 第一个可见可能是 96px 高的小部件，导致全部 Win32 点击换算错位集体打偏
         IntPtr firstHidden = IntPtr.Zero;
         IntPtr found = IntPtr.Zero;
+        long bestArea = 0;
         EnumChildWindows(parent, (h, l) => {
             var sb = new StringBuilder(256);
             GetClassName(h, sb, 256);
-            // Chrome 会保留多个 render widget（当前标签页可见 + 后台标签页隐藏），
-            // 必须优先取可见的，否则取到隐藏实例会误判「标签页在后台」
             if (sb.ToString() == "Chrome_RenderWidgetHostHWND") {
-                if (IsWindowVisible(h)) { found = h; return false; }
-                if (firstHidden == IntPtr.Zero) firstHidden = h;
+                RECT r;
+                GetWindowRect(h, out r);
+                long area = (long)(r.Right - r.Left) * (long)(r.Bottom - r.Top);
+                if (IsWindowVisible(h)) {
+                    if (area > bestArea) { bestArea = area; found = h; }
+                } else if (firstHidden == IntPtr.Zero) {
+                    firstHidden = h;
+                }
             }
             return true;
         }, IntPtr.Zero);

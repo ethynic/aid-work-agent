@@ -14,6 +14,7 @@ import { ChatSendError } from '../boss/ChatSendExecutor.js'
 import { ChatSearchError } from '../boss/ChatSearchExecutor.js'
 import { ChatReadError } from '../boss/ChatReadExecutor.js'
 import { ChatOpenError } from '../boss/ChatOpenExecutor.js'
+import { OverlayDismissError } from '../boss/OverlayDismissExecutor.js'
 import { JobSwitchError } from '../boss/JobSwitcher.js'
 import { ResumeReadError } from '../boss/ResumeReader.js'
 import { ResumeBatchError } from '../boss/ResumeBatchReader.js'
@@ -114,6 +115,14 @@ export function mapExecutorError(err: unknown): MappedError {
     }
     return { code: 'UI_CHANGED', message }
   }
+  if (err instanceof OverlayDismissError) {
+    // 白名单违规（「立即领取」类）→ INVALID_ARGUMENT（编排契约错误，重试无意义）；
+    // 未找到控件/点击后未关闭 → UI_CHANGED（弹层状态异常，人工查看）
+    if (message.includes('不在关闭语义白名单内')) {
+      return { code: 'INVALID_ARGUMENT', message }
+    }
+    return { code: 'UI_CHANGED', message }
+  }
   if (POST_WRITE_VERIFY_MARKERS.some((m) => message.includes(m))) {
     return {
       code: 'EXECUTION_UNKNOWN',
@@ -133,6 +142,7 @@ export function mapExecutorError(err: unknown): MappedError {
     err instanceof ChatSendError ||
     err instanceof ChatSearchError ||
     err instanceof ChatReadError ||
+    err instanceof OverlayDismissError ||
     err instanceof JobSwitchError ||
     err instanceof ResumeReadError ||
     err instanceof ResumeBatchError ||

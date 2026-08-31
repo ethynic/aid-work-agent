@@ -32,6 +32,10 @@ TRUSTED_PROVIDERS: Dict[str, Dict[str, Any]] = {
             # 2026-08-27 随 boss-cli 0.2.4 新增，设备执行、非云端混合模式
             "boss_read_chat",
             "boss_open_chat",
+            # boss_overlay_inspect / boss_overlay_dismiss 为弹层自愈原语（2026-08-31），
+            # 仅供云端自愈编排内部调用，不进 SUBAGENT 白名单（agent 不可见）
+            "boss_overlay_inspect",
+            "boss_overlay_dismiss",
             # boss_jobs_list 为云端查询（proxy_tool 覆写 execute 不建 invocation、不碰设备），
             # 列入仅为与 LOCAL_PROXY_TOOL_NAMES 全集一致；运行时侧 manifestVerifier 不含它
             "boss_jobs_list",

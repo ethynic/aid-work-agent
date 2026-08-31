@@ -19,6 +19,8 @@ import { createBossListJobsOperation } from './bossListJobs.js'
 import { createBossSelectJobOperation } from './bossSelectJob.js'
 import { createBossResumeDetailOperation } from './bossResumeDetail.js'
 import { createBossResumeBatchOperation } from './bossResumeBatch.js'
+import { createBossOverlayInspectOperation } from './bossOverlayInspect.js'
+import { createBossOverlayDismissOperation } from './bossOverlayDismiss.js'
 import type { BossOperation } from './types.js'
 
 export interface OperationEntry {
@@ -48,6 +50,9 @@ export const OPERATIONS: Record<string, OperationEntry> = {
   boss_select_job: { operation: createBossSelectJobOperation(), cli: { write: true } },
   boss_resume_detail: { operation: createBossResumeDetailOperation(), cli: { write: false } },
   boss_resume_batch: { operation: createBossResumeBatchOperation(), cli: { write: false } },
+  // 弹层自愈原语（2026-08-31）：仅供云端自愈编排内部调用，不进 SUBAGENT 白名单（agent 不可见）
+  boss_overlay_inspect: { operation: createBossOverlayInspectOperation(), cli: { write: false } },
+  boss_overlay_dismiss: { operation: createBossOverlayDismissOperation(), cli: { write: false } },
 }
 
 export const OPERATION_NAMES = Object.keys(OPERATIONS)

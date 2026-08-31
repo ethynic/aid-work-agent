@@ -31,6 +31,8 @@ const EXPECTED_TOOLS = [
   'boss_send_current',
   'boss_read_chat',
   'boss_open_chat',
+  'boss_overlay_inspect',
+  'boss_overlay_dismiss',
   'boss_list_jobs',
   'boss_select_job',
   'boss_filter_options',

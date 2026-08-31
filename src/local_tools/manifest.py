@@ -7,4 +7,5 @@ LOCAL_PROXY_TOOL_NAMES = frozenset({
     "boss_jobs_list", "boss_resume_detail", "boss_resume_batch",
     "boss_send_to", "boss_send_current", "boss_interview_notify",
     "boss_read_chat", "boss_open_chat",
+    "boss_overlay_inspect", "boss_overlay_dismiss",
 })

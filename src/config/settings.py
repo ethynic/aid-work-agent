@@ -444,8 +444,14 @@ class BossToolBillingConfig(BaseModel):
         "boss_select_job": 0.5,
         "boss_filter": 0.5,
         # 其余（goto/clear_filter/filter_options/list_jobs/read_chat/open_chat/
-        # jobs_list/interview_notify/interview_demo）默认 0
+        # jobs_list/interview_notify/interview_demo/overlay_inspect/overlay_dismiss）默认 0
     })
+
+    # 弹层自愈（overlay heal，2026-08-31）：本地工具失败（UI_CHANGED/BUSY）后云端自动
+    # 「导出弹层候选 → 启发式/LLM 选关闭控件 → 关闭 → 重试原操作一次」。
+    # 用了 LLM，费用高于单次工具调用；仅在自愈真正救回操作（重试成功）时收取。
+    overlay_heal_enabled: bool = True
+    overlay_heal_price: float = 2.0
 
 
 class DesktopAgentConfig(BaseModel):

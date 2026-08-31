@@ -1,8 +1,8 @@
-agent-tool-runtime 0.2.5（内含 boss-cli 0.2.5）
+agent-tool-runtime 0.2.6（内含 boss-cli 0.2.6）
 构建日期：2026-08-31
 
 本目录文件
-- agent-tool-runtime-0.2.5.tgz   安装包（BOSS 直聘操作能力已内含，只需装这一个）
+- agent-tool-runtime-0.2.6.tgz   安装包（BOSS 直聘操作能力已内含，只需装这一个）
 - start_runtime.bat / register_runtime_task.ps1   后台运行与开机自启
 - collect_logs.bat / collect_logs.ps1   诊断包采集
 - 安装手册.md   按手册从上到下执行即可
@@ -10,11 +10,13 @@ agent-tool-runtime 0.2.5（内含 boss-cli 0.2.5）
 环境要求
 - Windows 10/11 x64、Node ≥ 20、本机 Chrome（无需管理员权限）
 
-0.2.5 相对 0.2.3 的变化
+0.2.6 相对 0.2.3 的变化
 - 新增 boss_read_chat：读取「沟通」页当前会话消息流 + 全部未读会话清单（只读）
 - 新增 boss_open_chat：切换到指定联系人会话（不发消息，只读）
 - boss_send_to 发消息统一走 open-chat 会话切换链路（already 零点击/搜索/列表兜底
   + 头部身份校验防串会话），不再单独维护一套搜索找人代码
+- 弹层自愈：工具失败（疑似弹层遮挡）时云端自动「识别弹层→关闭→重试一次」，
+  新增只读原语 boss_overlay_inspect / boss_overlay_dismiss（仅云端自愈编排内部调用）
 - 搜索框定位稳定化（页面改版修复）与若干真机定位修复
 - 升级方式：先停止本机 Runtime，再 npm install -g 新 tgz 覆盖安装，配置与配对自动保留
 

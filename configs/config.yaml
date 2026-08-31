@@ -306,6 +306,10 @@ boss_tool_billing:
     # 以下工具默认免费（未列出走 default_credit_price）：
     # boss_goto / boss_clear_filter / boss_filter_options / boss_list_jobs /
     # boss_read_chat / boss_open_chat / boss_jobs_list / boss_interview_notify / boss_interview_demo
+  # 弹层自愈：工具失败（疑似弹层遮挡）时云端自动「识别弹层→关闭→重试一次」，
+  # 用了 LLM 故费用高于单次调用；仅在自愈真正救回操作（重试成功）时收取
+  overlay_heal_enabled: true
+  overlay_heal_price: 2.0
 
 wecom:
   waiting_indicator:

@@ -1,5 +1,6 @@
 /**
- * 16 个 MCP tool 的契约定义（实施规格 m02 §6 / 标准 §5 / 设计 §10.8 / §10.9；boss_open_chat 2026-08-27）。
+ * 18 个 MCP tool 的契约定义（实施规格 m02 §6 / 标准 §5 / 设计 §10.8 / §10.9；boss_open_chat
+ * 2026-08-27；boss_overlay_inspect/dismiss 弹层自愈原语 2026-08-31）。
  *
  * zodShape 是 registerTool 的输入；manifest digest 用同一来源推导的 JSON Schema，
  * 保证「Host 看到的 schema」与「manifest digest 的 schema」同源（SDK 1.30.0 内部同样
@@ -183,6 +184,29 @@ export const TOOL_DEFS: BossToolDef[] = [
       contact: z.string().min(1).max(30).describe('联系人姓名（精确，与头部/会话列表姓名 trim 全等）'),
     },
     annotations: { title: '打开指定联系人的会话', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  {
+    name: 'boss_overlay_inspect',
+    title: '导出弹层识别候选清单',
+    description:
+      '采集当前页面主文档全部文本节点（text + 坐标 + class），供上层判断是否存在遮挡弹层' +
+      '（广告/功能引导弹窗）并定位关闭控件。纯只读单次快照，不点击、不输入、不滚屏，无页面前置。' +
+      '弹层盖顶导致其它工具失败（UI_CHANGED/BUSY）时，先调本工具导出候选再决定关闭动作。',
+    zodShape: {},
+    annotations: { title: '导出弹层识别候选清单', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  {
+    name: 'boss_overlay_dismiss',
+    title: '关闭页面弹层',
+    description:
+      '点击关闭当前页面最上层的弹窗/引导弹层：按传入的关闭控件文本定位并真实鼠标点击，' +
+      '点击后校验弹层已消失。⚠️ 仅接受关闭语义白名单文案（关闭/知道了/我知道了/以后再说/下次再说/' +
+      '暂不/取消/跳过/不再提醒/残忍拒绝/稍后再说/× 等），非白名单文本直接拒绝——' +
+      '绝不点击「领取/立即打开/开通」类按钮，不产生任何业务副作用。',
+    zodShape: {
+      text: z.string().min(1).max(20).describe('关闭控件的精确文本（必须在关闭语义白名单内，与页面文本 trim 全等）'),
+    },
+    annotations: { title: '关闭页面弹层', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
   {
     name: 'boss_list_jobs',

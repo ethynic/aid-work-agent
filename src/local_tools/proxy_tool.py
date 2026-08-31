@@ -32,6 +32,7 @@ from src.config.settings import settings
 from src.db.client_binding_db import ClientUsageLogDB
 from src.local_tools import catalog, repository
 from src.services import (
+    overlay_heal_service,
     recruiting_job_service,
     recruiting_match_service,
     recruiting_notify_service,
@@ -46,6 +47,12 @@ UNKNOWN_EFFECT_NOTICE = "实际效果未知，禁止重试，请提示用户人�
 # effect 附加提示（message 已含则不重复）
 _TERMINAL_SUCCEEDED = "succeeded"
 
+# 弹层自愈（overlay heal，2026-08-31）：触发错误码——弹层遮挡的典型症状。
+# EXECUTION_UNKNOWN（写后结果不明）/ WRONG_PAGE（前置不满足）等绝不自愈重试
+HEALABLE_ERROR_CODES = frozenset({"UI_CHANGED", "BUSY"})
+# 自愈专项费在台账中的 tool_name（非真实工具；仅在自愈真正救回操作时收取）
+OVERLAY_HEAL_TOOL_NAME = "boss_overlay_heal"
+
 
 class LocalToolProxyTool(BaseTool):
     """LOCAL_REQUIRED 本地代理工具基类：云端创建 invocation，本机 Runtime 执行"""
@@ -56,6 +63,8 @@ class LocalToolProxyTool(BaseTool):
     category = "local_boss"
     provider_key = "boss-recruiting"
     timeout_seconds = 180  # 默认 3 分钟；写动作（greet/accept）子类改为 10 分钟
+    # 弹层自愈主体标记：False 的工具失败后不再触发自愈（overlay 原语自身防递归）
+    heal_eligible = True
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
         tenant_id = kwargs.get("_trusted_tenant_id")
@@ -91,7 +100,24 @@ class LocalToolProxyTool(BaseTool):
                 return {"success": False, "code": "NO_CREDIT", "message": blocked_message,
                         "effect": None, "data": None, "invocation_id": None}
 
-        # 3. 创建 invocation
+        # 3. 下发 + 轮询终态
+        result = await self._dispatch_and_wait(tenant_id, user_id, device, args, progress_queue, credit_price)
+
+        # 4. 弹层自愈：失败且为可自愈码（UI_CHANGED/BUSY，弹层遮挡的典型症状）→ 关闭弹层后重试一次
+        if not result.get("success") and result.get("code") in HEALABLE_ERROR_CODES and self.heal_eligible:
+            result = await self._heal_overlay(tenant_id, user_id, device, args, progress_queue, credit_price, result)
+        return result
+
+    async def _dispatch_and_wait(
+        self,
+        tenant_id: str,
+        user_id: str,
+        device: Dict[str, Any],
+        args: Dict[str, Any],
+        progress_queue: Optional[asyncio.Queue],
+        credit_price: float,
+    ) -> Dict[str, Any]:
+        """创建 invocation + 轮询 events/state 至终态/超时：终态映射 + 按价计费（成功时）"""
         invocation_id = await asyncio.to_thread(
             repository.create_invocation,
             tenant_id, user_id, str(device["id"]), self.name, args,
@@ -106,7 +132,6 @@ class LocalToolProxyTool(BaseTool):
             "text": f"⏳ 已下发到本机执行：{self.display_name}",
         })
 
-        # 4. 轮询 events + state 至终态/超时
         seq_cursor = 0
         loop = asyncio.get_event_loop()
         deadline = loop.time() + self.timeout_seconds
@@ -291,6 +316,133 @@ class LocalToolProxyTool(BaseTool):
                 f"invocation={invocation_id}: {e}"
             )
         return result
+
+    # ==================== 弹层自愈（overlay heal，2026-08-31） ====================
+
+    async def _heal_overlay(
+        self,
+        tenant_id: str,
+        user_id: str,
+        device: Dict[str, Any],
+        args: Dict[str, Any],
+        progress_queue: Optional[asyncio.Queue],
+        credit_price: float,
+        original_result: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """失败后的弹层自愈：导出候选 → 启发式/LLM 选关闭控件 → 关闭 → 重试原操作一次。
+
+        设计（docs/design/recruiting/boss-overlay-heal-design.md）：
+        - 仅 UI_CHANGED/BUSY 触发（execute 已保证）；EXECUTION_UNKNOWN 副作用不明绝不重试
+        - 自愈任何环节失败都返回原结果（data.heal 附加说明），绝不掩盖原始错误
+        - 关闭控件双重白名单校验（本服务 + CLI 端），LLM 只能挑关闭语义控件，绝不误点领取/开通
+        - 重试成功才收自愈专项费 overlay_heal_price（LLM 成本），原工具费按重试结果正常计
+        """
+        cfg = settings.boss_tool_billing
+        if not cfg.overlay_heal_enabled:
+            return original_result
+        logger.warning(
+            f"后端日志：本地工具失败且疑似弹层遮挡，触发弹层自愈 tool={self.name} "
+            f"code={original_result.get('code')}"
+        )
+        self._push_progress(progress_queue, {
+            "type": "progress",
+            "text": "检测到页面异常（疑似弹层遮挡），正在尝试智能识别关闭…",
+        })
+        try:
+            inspect_result = await BossOverlayInspectTool().execute(
+                _trusted_tenant_id=tenant_id, _trusted_user_id=user_id, _progress_queue=progress_queue)
+            inspect_data = (inspect_result.get("data") or {}) if inspect_result.get("success") else {}
+            candidates = inspect_data.get("candidates")
+            icon_candidates = inspect_data.get("icon_candidates")
+            if not candidates and not icon_candidates:
+                logger.info(f"后端日志：弹层自愈放弃（候选清单为空/导出失败）tool={self.name}")
+                return self._with_heal_info(original_result, dismissed_text=None, llm_used=False)
+
+            dismiss_text = overlay_heal_service.pick_heuristic(candidates or [], icon_candidates)
+            llm_used = False
+            if not dismiss_text:
+                llm_used = True
+                dismiss_text = await overlay_heal_service.pick_dismiss_text_with_llm(
+                    tenant_id, user_id, candidates or [], icon_candidates)
+            if not dismiss_text:
+                self._push_progress(progress_queue, {
+                    "type": "progress",
+                    "text": "未识别到可安全关闭的弹层，请人工查看页面",
+                })
+                return self._with_heal_info(original_result, dismissed_text=None, llm_used=llm_used)
+
+            dismiss_result = await BossOverlayDismissTool().execute(
+                _trusted_tenant_id=tenant_id, _trusted_user_id=user_id,
+                _progress_queue=progress_queue, text=dismiss_text)
+            if not dismiss_result.get("success"):
+                self._push_progress(progress_queue, {
+                    "type": "progress",
+                    "text": f"弹层「{dismiss_text}」关闭失败，请人工查看页面",
+                })
+                return self._with_heal_info(original_result, dismissed_text=dismiss_text,
+                                            llm_used=llm_used, dismissed=False)
+
+            self._push_progress(progress_queue, {
+                "type": "progress",
+                "text": f"已关闭弹层「{dismiss_text}」，正在重试：{self.display_name}",
+            })
+            retry_result = await self._dispatch_and_wait(
+                tenant_id, user_id, device, args, progress_queue, credit_price)
+            healed = bool(retry_result.get("success"))
+            if healed:
+                heal_price = self._heal_price()
+                if heal_price > 0:
+                    try:
+                        await asyncio.to_thread(
+                            ClientUsageLogDB.record_tool_usage,
+                            tenant_id=tenant_id,
+                            tool_name=OVERLAY_HEAL_TOOL_NAME,
+                            credit_cost=heal_price,
+                            device_id=str(device["id"]),
+                            invocation_id=retry_result.get("invocation_id"),
+                        )
+                    except Exception as e:  # noqa: BLE001 计费失败不影响自愈结果
+                        logger.opt(exception=True).error(
+                            f"后端日志：弹层自愈计费落账失败 tool={self.name}: {e}")
+            else:
+                self._push_progress(progress_queue, {
+                    "type": "progress",
+                    "text": "弹层已关闭但重试仍失败，请人工查看页面",
+                })
+            return self._with_heal_info(retry_result, dismissed_text=dismiss_text,
+                                        llm_used=llm_used, dismissed=True, healed=healed)
+        except Exception as e:  # noqa: BLE001 自愈异常绝不吞掉原错误
+            logger.opt(exception=True).error(
+                f"后端日志：弹层自愈异常（返回原错误）tool={self.name}: {e}")
+            return self._with_heal_info(original_result, dismissed_text=None, llm_used=False)
+
+    @staticmethod
+    def _with_heal_info(
+        result: Dict[str, Any],
+        dismissed_text: Optional[str],
+        llm_used: bool,
+        dismissed: Optional[bool] = None,
+        healed: Optional[bool] = None,
+    ) -> Dict[str, Any]:
+        """把自愈过程信息附进 data.heal（data 为 None/dict 时合并；其余形状保持原样）"""
+        info: Dict[str, Any] = {"attempted": True, "dismissed_text": dismissed_text, "llm_used": llm_used}
+        if dismissed is not None:
+            info["dismissed"] = dismissed
+        if healed is not None:
+            info["healed"] = healed
+        data = result.get("data")
+        if data is None or isinstance(data, dict):
+            return {**result, "data": {**(data or {}), "heal": info}}
+        return result
+
+    def _heal_price(self) -> float:
+        cfg = settings.boss_tool_billing
+        if not cfg.overlay_heal_enabled:
+            return 0.0
+        try:
+            return max(0.0, float(cfg.overlay_heal_price))
+        except (TypeError, ValueError):
+            return 0.0
 
     # ==================== 进度 ====================
 
@@ -1190,6 +1342,46 @@ class BossOpenChatTool(LocalToolProxyTool):
     InputModel = BossOpenChatInput
 
 
+# ============== 弹层自愈原语（2026-08-31，仅供云端自愈编排内部调用，不进 SUBAGENT 白名单） ==============
+
+
+class BossOverlayInspectTool(LocalToolProxyTool):
+    """导出主文档文本节点清单（只读）：弹层识别原料，是否弹层/点哪个的判断在云端做。"""
+
+    name = "boss_overlay_inspect"
+    display_name = "BOSS 导出弹层候选"
+    description = (
+        "采集用户本机 BOSS 直聘页面主文档全部文本节点（text/坐标/class），供上层判断是否存在"
+        "遮挡弹层并定位关闭控件。纯只读单次快照，不点击不输入。仅供弹层自愈编排内部调用"
+    )
+    heal_eligible = False  # overlay 原语自身失败不再递归自愈
+
+    class InputModel(BaseModel):
+        pass
+
+
+class BossOverlayDismissInput(BaseModel):
+    text: str = Field(
+        ..., min_length=1, max_length=20,
+        description="关闭控件的精确文本（必须在关闭语义白名单内，与页面文本 trim 全等）",
+    )
+
+
+class BossOverlayDismissTool(LocalToolProxyTool):
+    """按白名单关闭文案点击弹层关闭控件并校验消失（页面内 UI 状态变化，无外部业务副作用）。"""
+
+    name = "boss_overlay_dismiss"
+    display_name = "BOSS 关闭弹层"
+    description = (
+        "点击关闭当前页面最上层的弹窗/引导弹层：按传入的关闭控件文本定位并真实鼠标点击，"
+        "点击后校验弹层消失。仅接受关闭语义白名单文案（关闭/知道了/以后再说/取消/跳过/× 等，"
+        "非白名单直接拒绝），绝不点击领取/开通类按钮。仅供弹层自愈编排内部调用"
+    )
+    heal_eligible = False
+
+    InputModel = BossOverlayDismissInput
+
+
 LOCAL_PROXY_TOOL_CLASSES = (
     BossFilterTool,
     BossClearFilterTool,
@@ -1209,6 +1401,8 @@ LOCAL_PROXY_TOOL_CLASSES = (
     BossSendCurrentTool,
     BossReadChatTool,
     BossOpenChatTool,
+    BossOverlayInspectTool,
+    BossOverlayDismissTool,
 )
 
 LOCAL_PROXY_TOOL_NAMES = frozenset(cls.name for cls in LOCAL_PROXY_TOOL_CLASSES)

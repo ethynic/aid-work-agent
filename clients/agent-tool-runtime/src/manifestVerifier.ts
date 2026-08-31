@@ -28,6 +28,8 @@ export const TRUSTED_MANIFEST = {
     'boss_resume_batch',
     'boss_read_chat',
     'boss_open_chat',
+    'boss_overlay_inspect',
+    'boss_overlay_dismiss',
   ],
   execution_target: 'local_required',
 } as const
