@@ -414,6 +414,40 @@ class ClientConfig(BaseModel):
     llm_request_timeout: int = 120
 
 
+class BossToolBillingConfig(BaseModel):
+    """BOSS 本地工具按次计费（2026-08-31 租户交付；台账/扣费复用协会 client_usage_logs 模式）
+
+    与 LLM token 计费是两个独立维度：租户的真实推理成本（主智能体/招聘子智能体/简历评分
+    的 LLM token）已全部经 chat_records 管线计费；本配置是本地自动化动作的附加计费维度，
+    用于分摊设备占用、本机 OCR 算力与 BOSS 权益（开聊权益）消耗。
+    所有价格可经 config.yaml 的 boss_tool_billing 节覆盖，价格设 0 即免费。
+
+    - enabled: 总开关（False 时全免费，不查余额不扣费）
+    - default_credit_price: 未列入 tool_credit_prices 的工具单次价格（默认 0=免费）
+    - tool_credit_prices: 按工具名单次价格（积分）。只在工具成功时扣，
+      失败/超时/取消不扣；默认值依据：外部写动作（消耗 BOSS 开聊权益/真实触达候选人）
+      与重只读（滚动+截图+OCR+存储，每份简历约 30 秒）收费，纯导航/探查免费
+    """
+    enabled: bool = True
+    default_credit_price: float = 0.0
+    tool_credit_prices: Dict[str, float] = Field(default_factory=lambda: {
+        # 外部写动作
+        "boss_greet": 1.0,
+        "boss_send_to": 1.0,
+        "boss_send_current": 1.0,
+        "boss_accept_resume": 1.0,
+        "boss_reject_current": 0.5,
+        # 重只读（截图+OCR+落库）
+        "boss_resume_detail": 1.0,
+        "boss_resume_batch": 2.0,
+        # 页面筛选操作
+        "boss_select_job": 0.5,
+        "boss_filter": 0.5,
+        # 其余（goto/clear_filter/filter_options/list_jobs/read_chat/open_chat/
+        # jobs_list/interview_notify/interview_demo）默认 0
+    })
+
+
 class DesktopAgentConfig(BaseModel):
     """Desktop D1 is disabled until a strong server-side ticket secret is provided."""
     enabled: bool = False
@@ -441,6 +475,7 @@ class Settings(BaseModel):
     billing: BillingConfig = Field(default_factory=BillingConfig)
     video_gen: VideoGenConfig = Field(default_factory=VideoGenConfig)
     client: ClientConfig = Field(default_factory=ClientConfig)
+    boss_tool_billing: BossToolBillingConfig = Field(default_factory=BossToolBillingConfig)
     desktop_agent: DesktopAgentConfig = Field(default_factory=DesktopAgentConfig)
 
     # 认证相关配置（从环境变量加载）

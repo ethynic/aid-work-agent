@@ -28,6 +28,8 @@ from typing import Any, Dict, List, Literal, Optional, Tuple
 from loguru import logger
 from pydantic import BaseModel, Field, field_validator
 
+from src.config.settings import settings
+from src.db.client_binding_db import ClientUsageLogDB
 from src.local_tools import catalog, repository
 from src.services import (
     recruiting_job_service,
@@ -81,7 +83,15 @@ class LocalToolProxyTool(BaseTool):
         if device is None:
             return {"success": False, "code": "DEVICE_UNAVAILABLE", "message": gate_error}
 
-        # 2. 创建 invocation
+        # 2. 计费预检（仅收费工具：SaaS 模式下余额 ≤0 阻断，不建 invocation、设备不出工）
+        credit_price = self._tool_credit_price()
+        if credit_price > 0:
+            blocked_message = await self._tenant_credit_blocked(tenant_id)
+            if blocked_message:
+                return {"success": False, "code": "NO_CREDIT", "message": blocked_message,
+                        "effect": None, "data": None, "invocation_id": None}
+
+        # 3. 创建 invocation
         invocation_id = await asyncio.to_thread(
             repository.create_invocation,
             tenant_id, user_id, str(device["id"]), self.name, args,
@@ -96,7 +106,7 @@ class LocalToolProxyTool(BaseTool):
             "text": f"⏳ 已下发到本机执行：{self.display_name}",
         })
 
-        # 3. 轮询 events + state 至终态/超时
+        # 4. 轮询 events + state 至终态/超时
         seq_cursor = 0
         loop = asyncio.get_event_loop()
         deadline = loop.time() + self.timeout_seconds
@@ -114,7 +124,12 @@ class LocalToolProxyTool(BaseTool):
                 repository.get_invocation, invocation_id, tenant_id
             )
             if invocation and invocation["state"] in repository.TERMINAL_STATES:
-                return self._map_terminal(invocation)
+                result = self._map_terminal(invocation)
+                if credit_price > 0 and result.get("success"):
+                    result = await self._bill_success(
+                        tenant_id, str(device["id"]), invocation_id, credit_price, result
+                    )
+                return result
 
             if loop.time() >= deadline:
                 # TIMEOUT 是 proxy 本地码：云端状态机由 request_cancel 推进，不受影响
@@ -206,6 +221,75 @@ class LocalToolProxyTool(BaseTool):
 
         if effect == "unknown" and UNKNOWN_EFFECT_NOTICE not in result["message"]:
             result["message"] = f"{result['message']}；{UNKNOWN_EFFECT_NOTICE}"
+        return result
+
+    # ==================== 计费（boss_tool_billing，协会 client_usage_logs 同款台账） ====================
+
+    def _tool_credit_price(self) -> float:
+        """当前工具单次积分价格：总开关关 → 0；未列入价目表 → default_credit_price（默认 0）"""
+        cfg = settings.boss_tool_billing
+        if not cfg.enabled:
+            return 0.0
+        try:
+            return max(0.0, float(cfg.tool_credit_prices.get(self.name, cfg.default_credit_price)))
+        except (TypeError, ValueError):
+            return 0.0
+
+    async def _tenant_credit_blocked(self, tenant_id: str) -> Optional[str]:
+        """扣费前余额预检（语义同 main._check_tenant_credit_blocked）：返回阻断文案或 None。
+
+        SaaS 模式未启用 / 租户不存在：不阻断；余额 ≤0：阻断（invocation 不创建，
+        设备不出工）；检查异常：不阻断避免误伤（与对话入口同一容错取向）。
+        """
+        if not settings.saas.enabled:
+            return None
+        try:
+            from src.saas.db.tenant_db import TenantDB
+            tenant = await asyncio.to_thread(TenantDB.get_by_id, tenant_id)
+            if not tenant:
+                return None
+            if float(tenant.get("credit_balance") or 0) <= 0:
+                logger.warning(
+                    f"后端日志：租户 {tenant_id} 积分余额耗尽，阻断本地工具调用 tool={self.name}"
+                )
+                return "积分余额已耗尽，无法执行该操作，请联系管理员充值后再试"
+        except Exception as e:
+            logger.opt(exception=True).error(f"后端日志：本地工具计费预检异常 tool={self.name}: {e}")
+            return None
+        return None
+
+    async def _bill_success(
+        self,
+        tenant_id: str,
+        device_id: str,
+        invocation_id: str,
+        credit_price: float,
+        result: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """成功终态扣费：写 client_usage_logs 台账 + 同事务扣租户余额 + 回写 invocation.credit_cost。
+
+        计费环节任何异常只记日志、绝不影响工具成功结果（先出活再记账）。
+        """
+        try:
+            usage = await asyncio.to_thread(
+                ClientUsageLogDB.record_tool_usage,
+                tenant_id=tenant_id,
+                tool_name=self.name,
+                credit_cost=credit_price,
+                invocation_id=invocation_id,
+                device_id=device_id,
+            )
+            await asyncio.to_thread(
+                repository.set_invocation_credit_cost, invocation_id, usage["credit_cost"]
+            )
+            data = result.get("data")
+            if isinstance(data, dict):
+                result = {**result, "data": {**data, "credit_cost": usage["credit_cost"]}}
+        except Exception as e:
+            logger.opt(exception=True).error(
+                f"后端日志：本地工具计费落账失败（不影响工具结果）tool={self.name} "
+                f"invocation={invocation_id}: {e}"
+            )
         return result
 
     # ==================== 进度 ====================
@@ -931,13 +1015,15 @@ def _resume_match_brief(tenant_id: str, candidate_name: str) -> Optional[Dict[st
 
 
 class BossSendToTool(LocalToolProxyTool):
-    """搜索找人发消息（外部写动作）。话术模式：script_title 引用「职位管理」话术，
+    """向指定联系人发消息（外部写动作）。会话打开复用统一切换链路（already/搜索/列表兜底+身份校验，
+    与 boss_open_chat 同源）；话术模式：script_title 引用「职位管理」话术，
     返回话术原文 + 该候选人简历摘录（SCRIPT_NEEDS_FILL），LLM 填好 {{占位符}} 后带 message 重调完成发送。"""
 
     name = "boss_send_to"
-    display_name = "BOSS 搜索找人发消息"
+    display_name = "BOSS 向联系人发消息"
     description = (
-        "在用户本机 BOSS 直聘「沟通」页搜索联系人姓名并进入对话，逐字输入消息并发送（外部写动作；"
+        "在用户本机 BOSS 直聘「沟通」页打开指定联系人的会话（统一会话切换：已在目标会话零点击/"
+        "搜索找人/会话列表兜底，头部身份校验防串会话，返回 via 路径），逐字输入消息并发送（外部写动作；"
         "dry_run=true 只输入不发送）。话术模式：不传 message 而传 script_title（「职位管理」里的话术标题）时，"
         "返回话术原文与该候选人简历摘录（code=SCRIPT_NEEDS_FILL），把 {{占位符}} 替换成具体内容后，"
         "再带完整 message 调用本工具完成发送。前置：当前在沟通页（不在时自动跳转）。"
@@ -1060,6 +1146,50 @@ class BossSendCurrentTool(LocalToolProxyTool):
         return await super().execute(**kwargs)
 
 
+# ============== 沟通会话读取与切换（只读，2026-08-27 随 boss-cli read-chat/open-chat 新增） ==============
+
+
+class BossReadChatInput(BaseModel):
+    contact: Optional[str] = Field(
+        None, min_length=1, max_length=30,
+        description="可选：联系人姓名，校验当前打开的会话是否为该联系人；不匹配时报错并列出可用联系人，绝不自动切换会话",
+    )
+
+
+class BossReadChatTool(LocalToolProxyTool):
+    """读取当前会话消息流 + 全部未读会话清单（只读，设备执行单次快照）。"""
+
+    name = "boss_read_chat"
+    display_name = "BOSS 读取会话消息"
+    description = (
+        "读取用户本机 BOSS 直聘「沟通」页当前会话的消息流（谁发了什么：me/them/system + 正文 + 时间 + 我方已读状态）"
+        "与左侧全部未读会话清单（姓名/未读条数/最后一条预览）及总未读徽章。纯只读，不点击、不切换会话；"
+        "传 contact 时校验当前会话身份，不匹配报错。前置：已在沟通页（不在时先 boss_goto chat）且已打开一个会话"
+    )
+    InputModel = BossReadChatInput
+
+
+class BossOpenChatInput(BaseModel):
+    contact: str = Field(
+        ..., min_length=1, max_length=30,
+        description="联系人姓名（精确，与头部/会话列表姓名 trim 全等）",
+    )
+
+
+class BossOpenChatTool(LocalToolProxyTool):
+    """切换到指定联系人会话（无外部写副作用）：already 零点击 / search 搜索优先 / list 会话列表兜底。"""
+
+    name = "boss_open_chat"
+    display_name = "BOSS 打开会话"
+    description = (
+        "在用户本机 BOSS 直聘「沟通」页切换到指定联系人的会话（不发消息，无外部写副作用）。"
+        "已在目标会话时零点击返回；优先搜索找人进入对话，失败回退点击左侧会话列表项（视口外自动滚动），"
+        "返回 via=already/search/list 告知实际路径。打开后用 boss_read_chat 读取消息。"
+        "前置：已在沟通页（不在时先 boss_goto chat）。操作借用真实鼠标约 3-10 秒，期间勿动鼠标"
+    )
+    InputModel = BossOpenChatInput
+
+
 LOCAL_PROXY_TOOL_CLASSES = (
     BossFilterTool,
     BossClearFilterTool,
@@ -1077,6 +1207,8 @@ LOCAL_PROXY_TOOL_CLASSES = (
     BossResumeBatchTool,
     BossSendToTool,
     BossSendCurrentTool,
+    BossReadChatTool,
+    BossOpenChatTool,
 )
 
 LOCAL_PROXY_TOOL_NAMES = frozenset(cls.name for cls in LOCAL_PROXY_TOOL_CLASSES)

@@ -3,9 +3,10 @@
 覆盖（对应 m05-implementation-spec.md §7）：
 - master agent 注册表无 boss 工具
 - inherit=true 子智能体无 boss 工具
-- recruiting-operator 配置下 16 个 boss 工具齐全且只有这 16 个
+- recruiting-operator 配置下 18 个 boss 工具齐全且只有这 18 个
   （Phase 3 新增 boss_list_jobs / boss_select_job / boss_jobs_list；
-  面试通知 Phase 1 新增 boss_interview_notify）
+  面试通知 Phase 1 新增 boss_interview_notify；
+  boss-cli 0.2.4 新增沟通会话只读能力 boss_read_chat / boss_open_chat）
 - SUBAGENT.md 加载：frontmatter 解析正确、system_prompt 取 body
   （防 architecture.md 记录的「frontmatter 未闭合导致静默不加载」陷阱）
 """
@@ -46,6 +47,8 @@ BOSS_TOOLS = {
     "boss_send_to",
     "boss_send_current",
     "boss_filter_options",
+    "boss_read_chat",
+    "boss_open_chat",
 }
 
 
@@ -92,8 +95,8 @@ class TestLocalToolVisibility:
         agent = _make_agent(is_master=False, config=config)
         assert not (set(agent.tool_registry._tools.keys()) & BOSS_TOOLS)
 
-    def test_recruiting_operator_has_exactly_sixteen_boss_tools(self):
-        """recruiting-operator 配置下：16 个 boss 工具齐全且只有这 16 个
+    def test_recruiting_operator_has_exactly_eighteen_boss_tools(self):
+        """recruiting-operator 配置下：18 个 boss 工具齐全且只有这 18 个
 
         boss_jobs_list / boss_interview_notify 为混合模式（云端执行逻辑 + 代理注册），同样以 LOCAL_REQUIRED 注册
         """

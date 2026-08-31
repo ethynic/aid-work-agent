@@ -243,6 +243,17 @@ def create_invocation(
         return invocation_id
 
 
+def set_invocation_credit_cost(invocation_id: str, credit_cost: float) -> None:
+    """计费成功后把实扣积分回写 invocation 行（与 client_usage_logs.detail 的 invocation_id 双向对账）"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE local_tool_invocations SET credit_cost = %s WHERE id = %s",
+            (credit_cost, int(invocation_id)),
+        )
+        conn.commit()
+
+
 def get_invocation(invocation_id: str, tenant_id: str) -> Optional[Dict[str, Any]]:
     """按 id+tenant 查询 invocation。M0.5 proxy 轮询终态使用"""
     with get_db_connection() as conn:

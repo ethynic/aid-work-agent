@@ -1,7 +1,9 @@
 {
   "name": "boss-resume-assistant",
-  "version": "0.2.3",
-  "engines": { "node": ">=20" },
+  "version": "0.2.5",
+  "engines": {
+    "node": ">=20"
+  },
   "description": "BOSS 招聘操作 CLI（7 个真机验证操作 + MCP）",
   "type": "module",
   "scripts": {

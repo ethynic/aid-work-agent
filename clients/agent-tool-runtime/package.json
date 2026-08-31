@@ -1,7 +1,9 @@
 {
   "name": "agent-tool-runtime",
-  "version": "0.2.3",
-  "engines": { "node": ">=20" },
+  "version": "0.2.5",
+  "engines": {
+    "node": ">=20"
+  },
   "private": true,
   "description": "本地工具 Runtime：配对/心跳/长轮询领取云端 invocation，经 MCP stdio 调用本地 Provider（BOSS 招聘）执行",
   "type": "module",

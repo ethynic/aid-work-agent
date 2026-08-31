@@ -104,9 +104,15 @@ function happySnaps(tomorrow: Date): DomSnapshot[] {
 }
 
 test('完整流程：开表单→逐字填备注→选明天→取消关闭，绝不点发送', async () => {
-  const tomorrow = new Date(Date.now() + 86400000)
+  // 固定 now 使明天为月中 11 号：真实时钟落在月末时（明天=1号）会走跨月路径，
+  // 该路径已由下一条用例单独覆盖，本用例只验证常规选日
+  const tomorrow = new Date('2026-09-11T12:00:00')
   const r = recorder()
-  const executor = new InterviewDemoExecutor({ snapshot: snapshotQueue(happySnaps(tomorrow)), ...r })
+  const executor = new InterviewDemoExecutor({
+    snapshot: snapshotQueue(happySnaps(tomorrow)),
+    ...r,
+    now: () => new Date('2026-09-10T12:00:00').getTime(),
+  })
   const result = await executor.run()
   assert.deepEqual(result, { remark: REMARK, date: dateStr(tomorrow) })
   // 逐字输入 13 字

@@ -1138,6 +1138,7 @@ CREATE TABLE IF NOT EXISTS local_tool_invocations (
     claimed_at TIMESTAMP,
     started_at TIMESTAMP,
     finished_at TIMESTAMP,
+    credit_cost NUMERIC(12,2),                  -- BOSS 本地工具按次计费实扣积分（成功时回写）
     PRIMARY KEY (id)
 );
 CREATE INDEX IF NOT EXISTS idx_lt_inv_device_state ON local_tool_invocations USING btree (device_id, state);

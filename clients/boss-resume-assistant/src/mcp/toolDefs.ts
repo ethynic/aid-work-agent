@@ -126,17 +126,19 @@ export const TOOL_DEFS: BossToolDef[] = [
   },
   {
     name: 'boss_send_to',
-    title: '搜索找人并发送消息',
+    title: '打开联系人会话并发送消息',
     description:
-      '在 BOSS 直聘「沟通」页搜索联系人姓名 → 进入对话 → 逐字输入消息并发送（外部写动作）。' +
+      '在 BOSS 直聘「沟通」页打开指定联系人的会话后逐字输入消息并发送（外部写动作）。' +
+      '打开会话走统一切换链路（与 boss_open_chat 同源）：已在目标会话零点击（via=already）/' +
+      '搜索找人（via=search）/ 会话列表兜底（via=list），带头部身份校验防止串错会话。' +
       '默认真发送；dry_run=true 时只输入不点发送（测试链路）。' +
-      '前置要求：当前在沟通页（不在时自动跳转）；搜索结果中存在该姓名的联系人，否则报错。',
+      '前置要求：当前在沟通页（不在时自动跳转）；联系人存在且可达，否则报错。',
     zodShape: {
-      to: z.string().min(1).describe('联系人姓名（搜索关键词）'),
+      to: z.string().min(1).describe('联系人姓名（精确，与会话列表/头部姓名 trim 全等）'),
       message: z.string().min(1).describe('要发送的消息内容'),
       dry_run: z.boolean().default(false).describe('只输入不点发送（测试链路，默认 false 真发送）'),
     },
-    annotations: { title: '搜索找人并发送消息', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    annotations: { title: '打开联系人会话并发送消息', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   },
   {
     name: 'boss_send_current',

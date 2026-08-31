@@ -26,6 +26,8 @@ export const TRUSTED_MANIFEST = {
     'boss_select_job',
     'boss_resume_detail',
     'boss_resume_batch',
+    'boss_read_chat',
+    'boss_open_chat',
   ],
   execution_target: 'local_required',
 } as const

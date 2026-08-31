@@ -297,6 +297,8 @@ CREATE TABLE IF NOT EXISTS local_tool_invocations (
 );
 CREATE INDEX IF NOT EXISTS idx_lt_inv_device_state ON local_tool_invocations(device_id, state);
 CREATE INDEX IF NOT EXISTS idx_lt_inv_tenant_user ON local_tool_invocations(tenant_id, user_id);
+-- BOSS 本地工具按次计费（2026-08-31）：成功调用实扣积分回写，与 client_usage_logs(detail→invocation_id) 对账
+ALTER TABLE local_tool_invocations ADD COLUMN IF NOT EXISTS credit_cost NUMERIC(12,2);
 
 CREATE TABLE IF NOT EXISTS local_tool_events (
     id BIGSERIAL PRIMARY KEY,

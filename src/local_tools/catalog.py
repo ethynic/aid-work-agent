@@ -28,6 +28,10 @@ TRUSTED_PROVIDERS: Dict[str, Dict[str, Any]] = {
             "boss_interview_notify",
             "boss_list_jobs",
             "boss_select_job",
+            # boss_read_chat / boss_open_chat 为沟通页只读能力（读消息流/未读清单、切会话），
+            # 2026-08-27 随 boss-cli 0.2.4 新增，设备执行、非云端混合模式
+            "boss_read_chat",
+            "boss_open_chat",
             # boss_jobs_list 为云端查询（proxy_tool 覆写 execute 不建 invocation、不碰设备），
             # 列入仅为与 LOCAL_PROXY_TOOL_NAMES 全集一致；运行时侧 manifestVerifier 不含它
             "boss_jobs_list",

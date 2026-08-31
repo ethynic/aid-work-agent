@@ -36,6 +36,10 @@ _ACTIVATION_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 _ACTIVATION_CODE_PREFIX = "AC-"
 _ACTIVATION_CODE_LENGTH = 12
 
+# BOSS 本地工具计费在 client_usage_logs 中的固定标记（stage / binding_id 哨兵）
+BOSS_TOOL_USAGE_STAGE = "boss_tool"
+BOSS_TOOL_BINDING_SENTINEL = "boss-local-runtime"
+
 
 class ClientActivationCodeDB:
     """激活码 DB 访问层。"""
@@ -353,6 +357,70 @@ class ClientUsageLogDB:
             f"balance_after={balance_after}"
         )
         return {"raw_credit_cost": raw_credit, "credit_cost": credit_cost, "balance_after": balance_after}
+
+    @staticmethod
+    def record_tool_usage(
+        *,
+        tenant_id: str,
+        tool_name: str,
+        credit_cost: float,
+        invocation_id: Optional[str] = None,
+        device_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        status: str = "success",
+    ) -> dict[str, Any]:
+        """记录一次 BOSS 本地工具调用消耗，同事务扣减租户余额（协会同款台账）。
+
+        复用 client_usage_logs：stage='boss_tool'，model=工具名，provider='boss-recruiting'；
+        工具调用没有 client_bindings 行，binding_id 用固定哨兵 'boss-local-runtime'，
+        invocation_id/device_id 放 detail JSON 供对账（local_tool_invocations.credit_cost 反向回写）。
+
+        Returns:
+            {"credit_cost": float, "balance_after": Optional[float]}
+        """
+        credit_cost = math.ceil(float(credit_cost) * 100) / 100
+        if credit_cost <= 0:
+            return {"credit_cost": 0.0, "balance_after": None}
+
+        detail = json.dumps(
+            {"invocation_id": invocation_id, "device_id": device_id}, ensure_ascii=False
+        )
+        balance_after: Optional[float] = None
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """INSERT INTO client_usage_logs
+                   (tenant_id, binding_id, session_id, stage, status,
+                    model, provider, raw_credit_cost, credit_cost, detail)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                   RETURNING id""",
+                (
+                    tenant_id, BOSS_TOOL_BINDING_SENTINEL, session_id, BOSS_TOOL_USAGE_STAGE, status,
+                    tool_name, "boss-recruiting", credit_cost, credit_cost, detail,
+                ),
+            )
+            # 同事务原子扣减租户余额（与 record_llm_usage / ChatRecordDB.create 同一模式）
+            cursor.execute(
+                "UPDATE tenants SET credit_balance = credit_balance - %s WHERE tenant_id = %s "
+                "RETURNING credit_balance",
+                (credit_cost, tenant_id),
+            )
+            row = cursor.fetchone()
+            if row:
+                balance_after = float(row["credit_balance"]) if row["credit_balance"] is not None else None
+            conn.commit()
+
+        # 失效租户缓存（确保余额阻断读到最新值）
+        try:
+            invalidate_tenant_cache(tenant_id)
+        except Exception as e:
+            logger.warning(f"BOSS工具扣费后失效租户缓存失败 tenant={tenant_id}: {e}")
+
+        logger.info(
+            f"BOSS工具计费 tenant={tenant_id} tool={tool_name} invocation={invocation_id} "
+            f"cost={credit_cost} balance_after={balance_after}"
+        )
+        return {"credit_cost": credit_cost, "balance_after": balance_after}
 
     @staticmethod
     def record_non_llm_usage(
