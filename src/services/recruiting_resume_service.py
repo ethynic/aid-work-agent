@@ -365,18 +365,27 @@ def list_resumes(
     page_size: int = 20,
     keyword: Optional[str] = None,
     job_name: Optional[str] = None,
+    job_id: Optional[str] = None,
     status: Optional[str] = None,
     fetched_at_from: Optional[str] = None,
     fetched_at_to: Optional[str] = None,
 ) -> Dict[str, Any]:
     """简历列表（分页 + 筛选，轻量不含 ocr_text，按 created_at DESC），返回 {total, items, page, page_size}。
 
-    状态/日期格式非法抛 ValueError，由调用方转 400。
+    job_id 非空时按职位硬关联精确匹配（与 job_name 文本筛选可叠加）。
+    状态/日期/job_id 格式非法抛 ValueError，由调用方转 400。
     """
     if status and status not in RESUME_STATUSES:
         raise ValueError(f"状态值非法: status={status} not in {RESUME_STATUSES}")
     fetched_from = _parse_date_bound(fetched_at_from, is_to=False) if fetched_at_from else None
     fetched_to = _parse_date_bound(fetched_at_to, is_to=True) if fetched_at_to else None
+    # job_id 先转规范 UUID（非法格式 400 而非 DB 层 DataError 500），不做租户校验（筛选条件而已）
+    job_uuid: Optional[str] = None
+    if job_id:
+        try:
+            job_uuid = str(uuid.UUID(str(job_id)))
+        except (ValueError, AttributeError, TypeError):
+            raise ValueError(f"job_id 格式非法: {job_id}")
 
     with get_db_connection() as conn:
         cursor = conn.cursor()
@@ -390,6 +399,9 @@ def list_resumes(
         if job_name:
             conditions.append("job_name = %s")
             params.append(job_name)
+        if job_uuid:
+            conditions.append("job_id = %s")
+            params.append(job_uuid)
         if status:
             conditions.append("status = %s")
             params.append(status)
@@ -448,11 +460,18 @@ def update_resume(
     *,
     candidate_name: Optional[str] = None,
     job_name: Optional[str] = None,
+    job_id: Optional[str] = None,
     candidate_info: Optional[Dict[str, Any]] = None,
     status: Optional[str] = None,
     remark: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
-    """更新简历（仅传的字段：status/remark/job_name/candidate_name/candidate_info），updated_at=NOW()。
+    """更新简历（仅传的字段：status/remark/job_name/job_id/candidate_name/candidate_info），updated_at=NOW()。
+
+    job_id 三态语义（职位硬关联）：
+    - None（未传）= 不修改关联
+    - 空串 = 清除关联（job_id 置 NULL，job_name 一并置 NULL）
+    - 非空 = 经 _lookup_job_id 校验（格式非法/不存在/非本租户抛 ValueError 中文消息）
+      后写 job_id，并回填该职位的 canonical job_name（覆盖 job_name 入参）
 
     状态非法 / 无待更新字段抛 ValueError；记录不存在返回 None。
     """
@@ -467,7 +486,23 @@ def update_resume(
         if candidate_name is not None:
             sets.append("candidate_name = %s")
             params.append(candidate_name.strip() or None)
-        if job_name is not None:
+        if job_id is not None:
+            # 注意：job_name 赋值必须互斥（同一 UPDATE SET 子句对同列二次赋值，
+            # PG 报 multiple assignments to same column → 500），故 job_name 入参用 elif 兜底
+            if not job_id.strip():
+                # 空串 = 清除职位关联（FK 列与显示冗余名一并置空，job_name 入参被覆盖）
+                sets.append("job_id = %s")
+                params.append(None)
+                sets.append("job_name = %s")
+                params.append(None)
+            else:
+                # 非空 = 校验属本租户后硬关联，回填 canonical job_name（覆盖 job_name 入参，与 create 对齐）
+                job_uuid, canonical_job_name = _lookup_job_id(tenant_id, job_id)
+                sets.append("job_id = %s")
+                params.append(job_uuid)
+                sets.append("job_name = %s")
+                params.append(canonical_job_name)
+        elif job_name is not None:
             sets.append("job_name = %s")
             params.append(job_name.strip() or None)
         if candidate_info is not None:

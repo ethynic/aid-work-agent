@@ -2,7 +2,7 @@
 招聘操作智能体职位库 API 集成测试
 
 覆盖 /api/recruiting-operator 职位库 CRUD（jobs + job_scripts）：
-- 预置：列表首次访问自动插入「PHP开发工程师（Laravel）」+ 13 条话术（幂等，仅一次）
+- 空库：列表/详情不预置任何数据（空职位库是合法状态，付费租户自行创建）
 - 职位 CRUD：创建 / 更新（重名 400）/ 删除（级联删话术）
 - 话术 CRUD：创建（分类校验）/ 更新 / 删除
 - 租户隔离：B 租户看不到 A 的职位，不可详情/更新/删除/挂话术
@@ -128,13 +128,13 @@ def _count_rows(table: str, tenant_id: str) -> int:
         return cursor.fetchone()["cnt"]
 
 
-# ============== 1. 默认职位预置 ==============
+# ============== 1. 空职位库（不预置数据） ==============
 
-class TestDefaultJobSeeding:
-    """列表/详情首次访问自动预置默认职位"""
+class TestEmptyJobLibrary:
+    """空租户不预置任何数据（列表/详情均返回空，demo 预置已删除）"""
 
-    def test_list_first_time_seeds_default_job_and_scripts(self, temp_tenant_with_user):
-        """空租户首次列表：自动插入 PHP 职位 + 13 条话术（3/4/3/3 四分类）"""
+    def test_list_empty_tenant_returns_empty_list(self, temp_tenant_with_user):
+        """空租户列表：返回空列表，不插入任何职位与话术"""
         from src.api import recruiting_operator
 
         ctx = temp_tenant_with_user
@@ -142,29 +142,13 @@ class TestDefaultJobSeeding:
             response = _unpack(_call(recruiting_operator.list_jobs(request=None)))
 
         assert response["success"] is True
-        items = response["data"]["items"]
-        assert len(items) == 1
-        job = items[0]
-        assert job["job_name"] == "PHP开发工程师（Laravel）"
-        assert "PHP 8" in (job["notes"] or "")
-        assert job["script_count"] == 13
-        assert job["categories"] == ["初次开场", "了解摸底", "追问细节", "邀约推进"]
-        assert job["tenant_id"] == ctx["tenant_id"]
+        assert response["data"]["items"] == []
+        # DB 层确认无预置数据
+        assert _count_rows("bs_recruiting_operator_jobs", ctx["tenant_id"]) == 0
+        assert _count_rows("bs_recruiting_operator_job_scripts", ctx["tenant_id"]) == 0
 
-        # 详情：13 条话术 + 分类分组形状
-        with _mock_tenant_ctx(ctx["tenant_id"]):
-            detail_resp = _unpack(_call(recruiting_operator.get_job(job["id"], request=None)))
-        assert detail_resp["success"] is True
-        detail = detail_resp["data"]
-        assert len(detail["scripts"]) == 13
-        group_counts = {g["category"]: len(g["scripts"]) for g in detail["script_groups"]}
-        assert group_counts == {"初次开场": 3, "了解摸底": 4, "追问细节": 3, "邀约推进": 3}
-        # 话术字段齐全，content 支持 {{占位符}}
-        assert all(s["title"] and s["content"] for s in detail["scripts"])
-        assert any("{{" in s["content"] for s in detail["scripts"])
-
-    def test_list_seeding_idempotent(self, temp_tenant_with_user):
-        """再次列表不重复插入（仍 1 个职位 13 条话术）"""
+    def test_repeated_list_stays_empty(self, temp_tenant_with_user):
+        """反复列表/详情访问也不预置（幂等空态）"""
         from src.api import recruiting_operator
 
         ctx = temp_tenant_with_user
@@ -172,12 +156,13 @@ class TestDefaultJobSeeding:
             with _mock_tenant_ctx(ctx["tenant_id"]):
                 response = _unpack(_call(recruiting_operator.list_jobs(request=None)))
             assert response["success"] is True
+            assert response["data"]["items"] == []
 
-        assert _count_rows("bs_recruiting_operator_jobs", ctx["tenant_id"]) == 1
-        assert _count_rows("bs_recruiting_operator_job_scripts", ctx["tenant_id"]) == 13
+        assert _count_rows("bs_recruiting_operator_jobs", ctx["tenant_id"]) == 0
+        assert _count_rows("bs_recruiting_operator_job_scripts", ctx["tenant_id"]) == 0
 
-    def test_seeding_skipped_when_job_exists(self, temp_tenant_with_user):
-        """已有职位（非默认名）时不预置默认职位"""
+    def test_created_job_listed_without_seeding(self, temp_tenant_with_user):
+        """显式创建职位后列表只含自建职位（无任何预置职位混入）"""
         from src.api import recruiting_operator
 
         ctx = temp_tenant_with_user
@@ -190,7 +175,6 @@ class TestDefaultJobSeeding:
             list_resp = _unpack(_call(recruiting_operator.list_jobs(request=None)))
         names = [j["job_name"] for j in list_resp["data"]["items"]]
         assert names == ["资深后端工程师"]
-        assert "PHP开发工程师（Laravel）" not in names
 
 
 # ============== 2. 职位 + 话术 CRUD 全链 ==============
@@ -611,8 +595,7 @@ class TestJobListStatsAndRequirementOptions:
             init_recruiting_operator_tables(conn)  # 本模块 fixture 只建 jobs 表，简历统计需 resumes 表
             conn.commit()
 
-        jobs = recruiting_job_service.list_jobs(ctx["tenant_id"])  # 预置 PHP 职位
-        php = jobs[0]
+        php = recruiting_job_service.create_job(ctx["tenant_id"], job_name="统计用职位")
         for name in ("统计甲", "统计乙", "统计丙"):
             recruiting_resume_service.create_resume_record(
                 ctx["tenant_id"], ctx["user_id"],
@@ -709,14 +692,14 @@ class TestTenantIsolation:
         tenant_id_b = tenant_b["tenant_id"]
 
         try:
-            # 列表不可见（B 租户首次列表只会有自己的默认预置职位，绝无 A 的自建职位）
+            # 列表不可见（B 租户空职位库：只返回自己的空列表，绝无 A 的自建职位）
             with _mock_tenant_ctx(tenant_id_b):
                 list_resp = _unpack(_call(recruiting_operator.list_jobs(request=None)))
                 assert list_resp["success"] is True
                 names = [j["job_name"] for j in list_resp["data"]["items"]]
                 assert "A租户专属职位" not in names
-                # B 租户的预置职位是独立一份（各租户各自预置）
-                assert names == ["PHP开发工程师（Laravel）"]
+                # B 租户未自建职位 → 空列表（不预置任何数据）
+                assert names == []
 
                 # 详情 / 更新 / 删除 / 挂话术均 404
                 get_resp = _unpack(_call(recruiting_operator.get_job(job_id_a, request=None)))

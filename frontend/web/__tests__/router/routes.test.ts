@@ -30,6 +30,7 @@ describe('entry route responsibilities', () => {
         "/prompts",
         "/trade-specialist",
         "/travel-consultant",
+        "/recruiting-operator",
         "/customer-followup",
         "/complaint",
         "/after-sales",
@@ -100,11 +101,45 @@ describe('entry route responsibilities', () => {
         "prompts",
         "trade-specialist",
         "travel-consultant",
+        "recruiting-operator",
         "customer-followup",
         "complaint",
         "after-sales",
       ]
     `)
+  })
+
+  it('keeps recruiting operator list pages and routed detail pages for demo and tenant', () => {
+    // 职位/简历均为「纯列表页 + 路由化详情页」结构：详情子路由跟在列表子路由后
+    const demoChildren = childPaths(agentRoutes, '/recruiting-operator')
+    expect(demoChildren).toEqual([
+      'resumes',
+      'resumes/:resumeId',
+      'jobs',
+      'jobs/:jobId',
+    ])
+
+    const tenantChildren = agentRoutes.find((route) => route.path === '/t/:tenant_id')?.children ?? []
+    const recruiting = tenantChildren.find((route) => route.path === 'recruiting-operator')
+    expect(recruiting?.children?.map((route) => route.path)).toEqual([
+      'resumes',
+      'resumes/:resumeId',
+      'jobs',
+      'jobs/:jobId',
+    ])
+    expect(recruiting?.children?.map((route) => route.name)).toEqual([
+      'tenant-recruiting-operator-resumes',
+      'tenant-recruiting-operator-resume-detail',
+      'tenant-recruiting-operator-jobs',
+      'tenant-recruiting-operator-job-detail',
+    ])
+
+    // 详情路径可被路由正确解析（页面跳转用 path 拼接，兼容 demo 与租户前台）
+    const router = createRouter({ history: createMemoryHistory(), routes: agentRoutes })
+    expect(router.resolve('/recruiting-operator/jobs/job-1').name).toBe('recruiting-operator-job-detail')
+    expect(router.resolve('/recruiting-operator/resumes/12').name).toBe('recruiting-operator-resume-detail')
+    expect(router.resolve('/t/acme/recruiting-operator/jobs/job-1').name).toBe('tenant-recruiting-operator-job-detail')
+    expect(router.resolve('/t/acme/recruiting-operator/resumes/12').name).toBe('tenant-recruiting-operator-resume-detail')
   })
 
   it('keeps Agent and tenant routes in Desktop without importing a Portal route', async () => {

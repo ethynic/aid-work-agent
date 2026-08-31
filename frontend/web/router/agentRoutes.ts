@@ -57,7 +57,9 @@ export const agentRoutes: RouteRecordRaw[] = [
     component: () => import('@/components/BaseBusinessLayout.vue'),
     children: [
       { path: 'resumes', name: 'recruiting-operator-resumes', component: () => import('@/components/recruiting/ResumeLibrary.vue') },
+      { path: 'resumes/:resumeId', name: 'recruiting-operator-resume-detail', component: () => import('@/components/recruiting/ResumeDetail.vue') },
       { path: 'jobs', name: 'recruiting-operator-jobs', component: () => import('@/components/recruiting/JobLibrary.vue') },
+      { path: 'jobs/:jobId', name: 'recruiting-operator-job-detail', component: () => import('@/components/recruiting/JobDetail.vue') },
     ]
   },
   {
@@ -148,7 +150,9 @@ export const agentRoutes: RouteRecordRaw[] = [
         component: () => import('@/components/BaseBusinessLayout.vue'),
         children: [
           { path: 'resumes', name: 'tenant-recruiting-operator-resumes', component: () => import('@/components/recruiting/ResumeLibrary.vue') },
+          { path: 'resumes/:resumeId', name: 'tenant-recruiting-operator-resume-detail', component: () => import('@/components/recruiting/ResumeDetail.vue') },
           { path: 'jobs', name: 'tenant-recruiting-operator-jobs', component: () => import('@/components/recruiting/JobLibrary.vue') },
+          { path: 'jobs/:jobId', name: 'tenant-recruiting-operator-job-detail', component: () => import('@/components/recruiting/JobDetail.vue') },
         ]
       },
       {

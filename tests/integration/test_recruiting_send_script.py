@@ -83,15 +83,39 @@ def _cli_success_result(payload=None):
     }
 
 
+# 职位库已不做 demo 预置，测试显式自建职位 + 用到的四条话术（标题/分类与原预置一致）
+_PHP_JOB_NAME = "PHP开发工程师（Laravel）"
+
+
+def _seed_php_job(ctx) -> None:
+    """给测试租户显式创建 PHP 职位与四条话术（替代已删除的 ensure_default_job 预置）"""
+    from src.services import recruiting_job_service
+
+    job = recruiting_job_service.create_job(ctx["tenant_id"], job_name=_PHP_JOB_NAME)
+    for category, title, content in (
+        ("初次开场", "开场·技术栈匹配",
+         "您好！我们团队主力技术栈是 PHP 8 + Laravel，方便聊聊您最近的项目吗？"),
+        ("初次开场", "开场·简历亮点切入",
+         "您好！看了您的简历，{{简历亮点}} 方面的经验让我印象很深，很想和您聊聊。"),
+        ("了解摸底", "摸底·AI 编程工具（重点）",
+         "您日常开发中会用哪些 AI 编程工具？能举个例子说说它怎么帮您提效的吗？"),
+        ("邀约推进", "邀约·面试安排",
+         "想约您一次技术面（1 小时左右，会聊 Laravel 实战），您这周什么时间方便？"),
+    ):
+        recruiting_job_service.create_script(
+            ctx["tenant_id"], job["id"], category=category, title=title, content=content,
+        )
+
+
 class TestScriptMode:
     def test_need_fill_with_resume_excerpt(self, temp_tenant_with_user):
         """script_title → SCRIPT_NEEDS_FILL：话术原文 + 该候选人简历摘录（占位符交给 LLM）"""
-        from src.services import recruiting_job_service, recruiting_resume_service
+        from src.services import recruiting_resume_service
         from src.local_tools.proxy_tool import BossSendToTool
 
         ctx = temp_tenant_with_user
-        # 触发预置（PHP 职位 + 13 条话术）+ 造一份张三丰简历
-        recruiting_job_service.list_jobs(ctx["tenant_id"])
+        # 显式建职位话术 + 造一份张三丰简历
+        _seed_php_job(ctx)
         recruiting_resume_service.create_resume_record(
             ctx["tenant_id"], ctx["user_id"],
             candidate_name="张三丰", job_name="PHP开发工程师（Laravel）",
@@ -111,11 +135,10 @@ class TestScriptMode:
 
     def test_title_contains_match(self, temp_tenant_with_user):
         """标题包含匹配：只给「AI 编程工具」能命中「摸底·AI 编程工具（重点）」"""
-        from src.services import recruiting_job_service
         from src.local_tools.proxy_tool import BossSendToTool
 
         ctx = temp_tenant_with_user
-        recruiting_job_service.list_jobs(ctx["tenant_id"])
+        _seed_php_job(ctx)
         r = _call(BossSendToTool().execute(
             _trusted_tenant_id=ctx["tenant_id"], _trusted_user_id=ctx["user_id"],
             to="李四", script_title="AI 编程工具",
@@ -127,11 +150,10 @@ class TestScriptMode:
         assert "李四" in r["resume_hint"]
 
     def test_script_not_found_lists_titles(self, temp_tenant_with_user):
-        from src.services import recruiting_job_service
         from src.local_tools.proxy_tool import BossSendToTool
 
         ctx = temp_tenant_with_user
-        recruiting_job_service.list_jobs(ctx["tenant_id"])
+        _seed_php_job(ctx)
         r = _call(BossSendToTool().execute(
             _trusted_tenant_id=ctx["tenant_id"], _trusted_user_id=ctx["user_id"],
             to="王五", script_title="不存在的开场",
@@ -189,10 +211,10 @@ class TestScriptNeedFillMatchFields:
             KEY_INFO_STR_MAX_CHARS,
             BossSendToTool,
         )
-        from src.services import recruiting_job_service, recruiting_resume_service
+        from src.services import recruiting_resume_service
 
         ctx = temp_tenant_with_user
-        recruiting_job_service.list_jobs(ctx["tenant_id"])
+        _seed_php_job(ctx)
         record = recruiting_resume_service.create_resume_record(
             ctx["tenant_id"], ctx["user_id"],
             candidate_name="刘草威", job_name="PHP开发工程师（Laravel）",
@@ -231,10 +253,10 @@ class TestScriptNeedFillMatchFields:
     def test_need_fill_unscored_resume_returns_null_match_fields(self, temp_tenant_with_user):
         """简历未评分（评分失败留 NULL 的兜底路）：match_score/key_info=null，excerpt 路径不崩"""
         from src.local_tools.proxy_tool import BossSendToTool
-        from src.services import recruiting_job_service, recruiting_resume_service
+        from src.services import recruiting_resume_service
 
         ctx = temp_tenant_with_user
-        recruiting_job_service.list_jobs(ctx["tenant_id"])
+        _seed_php_job(ctx)
         recruiting_resume_service.create_resume_record(
             ctx["tenant_id"], ctx["user_id"],
             candidate_name="何先生", job_name="PHP开发工程师（Laravel）",
@@ -253,10 +275,10 @@ class TestScriptNeedFillMatchFields:
         """简历在库但 OCR 正文为空：给 resume_hint（明示空正文）而非 resume_excerpt；
         match_score / key_info 为该简历评分结果，正常携带"""
         from src.local_tools.proxy_tool import BossSendToTool
-        from src.services import recruiting_job_service, recruiting_resume_service
+        from src.services import recruiting_resume_service
 
         ctx = temp_tenant_with_user
-        recruiting_job_service.list_jobs(ctx["tenant_id"])
+        _seed_php_job(ctx)
         record = recruiting_resume_service.create_resume_record(
             ctx["tenant_id"], ctx["user_id"],
             candidate_name="王五", job_name="PHP开发工程师（Laravel）",
@@ -281,10 +303,9 @@ class TestScriptNeedFillMatchFields:
     def test_need_fill_no_resume_null_match_fields_with_hint(self, temp_tenant_with_user):
         """无简历：match_score/key_info=null + resume_hint 引导"""
         from src.local_tools.proxy_tool import BossSendToTool
-        from src.services import recruiting_job_service
 
         ctx = temp_tenant_with_user
-        recruiting_job_service.list_jobs(ctx["tenant_id"])
+        _seed_php_job(ctx)
         r = _call(BossSendToTool().execute(
             _trusted_tenant_id=ctx["tenant_id"], _trusted_user_id=ctx["user_id"],
             to="赵六", script_title="开场·技术栈匹配",
@@ -315,11 +336,10 @@ class TestMessageModePassthrough:
         assert called["message"] == "您好，我们是 Laravel 团队"
 
     def test_send_current_need_fill(self, temp_tenant_with_user):
-        from src.services import recruiting_job_service
         from src.local_tools.proxy_tool import BossSendCurrentTool
 
         ctx = temp_tenant_with_user
-        recruiting_job_service.list_jobs(ctx["tenant_id"])
+        _seed_php_job(ctx)
         r = _call(BossSendCurrentTool().execute(
             _trusted_tenant_id=ctx["tenant_id"], _trusted_user_id=ctx["user_id"],
             script_title="邀约·面试安排",
@@ -342,12 +362,11 @@ class TestScriptJobScoping:
     """话术只在所属职位下解析（Phase 1 设计 §4.3）：必须先定位唯一职位，绝不跨职位混用"""
 
     def test_single_job_omission_resolves(self, temp_tenant_with_user):
-        """租户恰好只有一个职位时省略 job_name 可解析（预置 PHP 职位）"""
-        from src.services import recruiting_job_service
+        """租户恰好只有一个职位时省略 job_name 可解析（测试自建单职位）"""
         from src.local_tools.proxy_tool import BossSendToTool
 
         ctx = temp_tenant_with_user
-        recruiting_job_service.list_jobs(ctx["tenant_id"])  # 触发预置（单职位）
+        _seed_php_job(ctx)  # 仅一个职位
         r = _call(BossSendToTool().execute(
             _trusted_tenant_id=ctx["tenant_id"], _trusted_user_id=ctx["user_id"],
             to="候选人", script_title="开场·技术栈匹配",
@@ -361,7 +380,7 @@ class TestScriptJobScoping:
         from src.local_tools.proxy_tool import BossSendToTool
 
         ctx = temp_tenant_with_user
-        recruiting_job_service.list_jobs(ctx["tenant_id"])  # 预置 PHP 职位
+        _seed_php_job(ctx)  # 自建 PHP 职位
         recruiting_job_service.create_job(ctx["tenant_id"], job_name="Java后端工程师")
 
         r = _call(BossSendToTool().execute(
@@ -380,7 +399,7 @@ class TestScriptJobScoping:
         from src.local_tools.proxy_tool import BossSendCurrentTool
 
         ctx = temp_tenant_with_user
-        recruiting_job_service.list_jobs(ctx["tenant_id"])
+        _seed_php_job(ctx)
         recruiting_job_service.create_job(ctx["tenant_id"], job_name="Java后端工程师")
 
         r = _call(BossSendCurrentTool().execute(
@@ -399,7 +418,7 @@ class TestScriptJobScoping:
         from src.local_tools.proxy_tool import BossSendToTool
 
         ctx = temp_tenant_with_user
-        recruiting_job_service.list_jobs(ctx["tenant_id"])  # 预置 A：PHP 职位（13 条话术）
+        _seed_php_job(ctx)  # 自建 A：PHP 职位（四条话术）
         job_b = recruiting_job_service.create_job(ctx["tenant_id"], job_name="Java后端工程师")
         recruiting_job_service.create_script(
             ctx["tenant_id"], job_b["id"],

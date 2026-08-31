@@ -6,6 +6,7 @@
 - 列表：分页 / keyword/job_name/status/fetched_at 区间筛选 / 轻量不含 ocr_text / 职位下拉
 - 详情：含 ocr_text、images、candidate_info
 - 更新：状态流转 + 非法状态 400 / remark 等字段
+- job_id 硬关联：create 带合法/他租户 job_id / list job_id 筛选 / update job_id 三态
 - 删除
 - 租户隔离：另一租户不可见 / 不可改删
 
@@ -367,7 +368,7 @@ class TestListResumesAPI:
 
         with _mock_tenant_ctx(ctx["tenant_id"]):
             response = _unpack(_call(recruiting_operator.list_resumes(
-                request=None, page=1, page_size=2, keyword=None, job_name=None,
+                request=None, page=1, page_size=2, keyword=None, job_name=None, job_id=None,
                 status=None, fetched_at_from=None, fetched_at_to=None,
             )))
 
@@ -391,7 +392,7 @@ class TestListResumesAPI:
 
         with _mock_tenant_ctx(ctx["tenant_id"]):
             response = _unpack(_call(recruiting_operator.list_resumes(
-                request=None, page=1, page_size=20, keyword="小明", job_name=None,
+                request=None, page=1, page_size=20, keyword="小明", job_name=None, job_id=None,
                 status=None, fetched_at_from=None, fetched_at_to=None,
             )))
 
@@ -411,12 +412,12 @@ class TestListResumesAPI:
         with _mock_tenant_ctx(ctx["tenant_id"]):
             # % 是字面字符：只命中名字里真的含 % 的记录
             response_pct = _unpack(_call(recruiting_operator.list_resumes(
-                request=None, page=1, page_size=20, keyword="%", job_name=None,
+                request=None, page=1, page_size=20, keyword="%", job_name=None, job_id=None,
                 status=None, fetched_at_from=None, fetched_at_to=None,
             )))
             # 尾随反斜杠：正常返回空结果而不是 500（ILIKE 报错）
             response_bs = _unpack(_call(recruiting_operator.list_resumes(
-                request=None, page=1, page_size=20, keyword="小\\", job_name=None,
+                request=None, page=1, page_size=20, keyword="小\\", job_name=None, job_id=None,
                 status=None, fetched_at_from=None, fetched_at_to=None,
             )))
 
@@ -436,7 +437,7 @@ class TestListResumesAPI:
 
         with _mock_tenant_ctx(ctx["tenant_id"]):
             response = _unpack(_call(recruiting_operator.list_resumes(
-                request=None, page=1, page_size=20, keyword=None, job_name="后端",
+                request=None, page=1, page_size=20, keyword=None, job_name="后端", job_id=None,
                 status="shortlisted", fetched_at_from=None, fetched_at_to=None,
             )))
 
@@ -457,7 +458,7 @@ class TestListResumesAPI:
 
         with _mock_tenant_ctx(ctx["tenant_id"]):
             response = _unpack(_call(recruiting_operator.list_resumes(
-                request=None, page=1, page_size=20, keyword=None, job_name=None,
+                request=None, page=1, page_size=20, keyword=None, job_name=None, job_id=None,
                 status=None, fetched_at_from="2026-08-09", fetched_at_to="2026-08-11",
             )))
 
@@ -472,7 +473,7 @@ class TestListResumesAPI:
         ctx = temp_tenant_with_user
         with _mock_tenant_ctx(ctx["tenant_id"]):
             response = _unpack(_call(recruiting_operator.list_resumes(
-                request=None, page=1, page_size=20, keyword=None, job_name=None,
+                request=None, page=1, page_size=20, keyword=None, job_name=None, job_id=None,
                 status=None, fetched_at_from="bad-date", fetched_at_to=None,
             )))
 
@@ -637,6 +638,197 @@ class TestResumeDetailPatchDeleteAPI:
         assert response["error"] == "简历不存在"
 
 
+# ============== job_id 硬关联测试 ==============
+
+class TestJobIdLinkageAPI:
+    """简历 job_id 硬关联：create 带合法/他租户 job_id / list job_id 筛选 / update job_id 三态"""
+
+    def test_create_resume_with_job_id_links_and_backfills_name(self, temp_tenant_with_user):
+        """create 带 job_id：校验属本租户后硬关联，并回填 canonical job_name"""
+        from src.api import recruiting_operator
+
+        ctx = temp_tenant_with_user
+        job = recruiting_operator.job_service.create_job(ctx["tenant_id"], job_name="关联测试职位")
+        req = recruiting_operator.CreateResumeRequest(candidate_name="关联甲", job_id=job["id"])
+
+        with _mock_tenant_ctx(ctx["tenant_id"]), _mock_user(ctx["user_id"]):
+            response = _unpack(_call(recruiting_operator.create_resume(req, request=None)))
+
+        assert response["success"] is True
+        data = response["data"]
+        assert data["job_id"] == job["id"]
+        assert data["job_name"] == "关联测试职位"
+
+    def test_create_resume_with_cross_tenant_job_id_returns_400(self, temp_tenant_with_user):
+        """create 带他租户 job_id → 400（绝不静默降级为未关联）"""
+        from src.api import recruiting_operator
+        from src.saas.db.tenant_db import TenantDB
+        from src.db.database import get_db_connection
+
+        ctx_a = temp_tenant_with_user
+        tenant_code_b = f"T{uuid.uuid4().hex[:6].upper()}"
+        tenant_b = TenantDB.create(
+            company_name=f"关联测试租户B-{tenant_code_b}",
+            tenant_code=tenant_code_b,
+            contact_name="测试B",
+            contact_phone="13800000001",
+        )
+        if not tenant_b:
+            pytest.skip("无法创建测试租户B")
+        tenant_id_b = tenant_b["tenant_id"]
+        try:
+            job_b = recruiting_operator.job_service.create_job(tenant_id_b, job_name="B租户职位")
+            req = recruiting_operator.CreateResumeRequest(candidate_name="越权甲", job_id=job_b["id"])
+            with _mock_tenant_ctx(ctx_a["tenant_id"]), _mock_user(ctx_a["user_id"]):
+                response = _unpack(_call(recruiting_operator.create_resume(req, request=None)))
+
+            assert response["success"] is False
+            assert "不属于本租户" in response["error"]
+        finally:
+            try:
+                with get_db_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "DELETE FROM bs_recruiting_operator_jobs WHERE tenant_id = %s", (tenant_id_b,))
+                    conn.commit()
+            except Exception:
+                pass
+            TenantDB.delete(tenant_id_b)
+            try:
+                with get_db_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("DELETE FROM tenants WHERE tenant_id = %s", (tenant_id_b,))
+                    conn.commit()
+            except Exception:
+                pass
+
+    def test_list_filter_by_job_id_hit_and_miss(self, temp_tenant_with_user):
+        """list job_id 筛选：命中该职位关联简历；其他职位 id / 无关联简历不命中"""
+        from src.api import recruiting_operator
+
+        ctx = temp_tenant_with_user
+        job_hit = recruiting_operator.job_service.create_job(ctx["tenant_id"], job_name="命中职位")
+        job_miss = recruiting_operator.job_service.create_job(ctx["tenant_id"], job_name="落空职位")
+        recruiting_operator.resume_service.create_resume_record(
+            ctx["tenant_id"], ctx["user_id"], candidate_name="命中甲", job_id=job_hit["id"])
+        recruiting_operator.resume_service.create_resume_record(
+            ctx["tenant_id"], ctx["user_id"], candidate_name="命中乙", job_id=job_hit["id"])
+        recruiting_operator.resume_service.create_resume_record(
+            ctx["tenant_id"], ctx["user_id"], candidate_name="未关联丙")
+
+        with _mock_tenant_ctx(ctx["tenant_id"]):
+            hit = _unpack(_call(recruiting_operator.list_resumes(
+                request=None, page=1, page_size=20, keyword=None, job_name=None,
+                job_id=job_hit["id"], status=None, fetched_at_from=None, fetched_at_to=None)))
+            miss = _unpack(_call(recruiting_operator.list_resumes(
+                request=None, page=1, page_size=20, keyword=None, job_name=None,
+                job_id=job_miss["id"], status=None, fetched_at_from=None, fetched_at_to=None)))
+
+        assert hit["success"] is True
+        assert hit["data"]["total"] == 2
+        assert {it["candidate_name"] for it in hit["data"]["items"]} == {"命中甲", "命中乙"}
+        assert miss["success"] is True
+        assert miss["data"]["total"] == 0
+
+    def test_list_filter_by_invalid_job_id_returns_400(self, temp_tenant_with_user):
+        """list job_id 格式非法 → 400（而非 DB 层 500）"""
+        from src.api import recruiting_operator
+
+        ctx = temp_tenant_with_user
+        with _mock_tenant_ctx(ctx["tenant_id"]):
+            response = _unpack(_call(recruiting_operator.list_resumes(
+                request=None, page=1, page_size=20, keyword=None, job_name=None,
+                job_id="not-a-uuid", status=None, fetched_at_from=None, fetched_at_to=None)))
+
+        assert response["success"] is False
+        assert "job_id 格式非法" in response["error"]
+
+    def test_patch_job_id_three_states(self, temp_tenant_with_user):
+        """update job_id 三态：非空=关联+回填规范名 / 不传=不修改 / 空串=清除关联"""
+        from src.api import recruiting_operator
+
+        ctx = temp_tenant_with_user
+        job = recruiting_operator.job_service.create_job(ctx["tenant_id"], job_name="三态测试职位")
+        resume_id = _insert_resume(ctx["tenant_id"], ctx["user_id"], candidate_name="三态甲")
+
+        # 1. 非空 → 硬关联并回填 job_name（同时带 job_name 也合法：canonical 名覆盖，不产生同列二次赋值 500）
+        req = recruiting_operator.UpdateResumeRequest(job_id=job["id"], job_name="自定义别名")
+        with _mock_tenant_ctx(ctx["tenant_id"]):
+            linked = _unpack(_call(recruiting_operator.update_resume(resume_id, req, request=None)))
+        assert linked["success"] is True
+        assert linked["data"]["job_id"] == job["id"]
+        assert linked["data"]["job_name"] == "三态测试职位"
+
+        # 2. 不传 job_id → 不修改（关联保持）
+        req = recruiting_operator.UpdateResumeRequest(remark="不改关联")
+        with _mock_tenant_ctx(ctx["tenant_id"]):
+            untouched = _unpack(_call(recruiting_operator.update_resume(resume_id, req, request=None)))
+        assert untouched["success"] is True
+        assert untouched["data"]["job_id"] == job["id"]
+        assert untouched["data"]["job_name"] == "三态测试职位"
+
+        # 3. 空串 → 清除关联（job_id / job_name 均置 NULL）
+        req = recruiting_operator.UpdateResumeRequest(job_id="")
+        with _mock_tenant_ctx(ctx["tenant_id"]):
+            cleared = _unpack(_call(recruiting_operator.update_resume(resume_id, req, request=None)))
+        assert cleared["success"] is True
+        assert cleared["data"]["job_id"] is None
+        assert cleared["data"]["job_name"] is None
+
+    def test_patch_job_id_cross_tenant_returns_400(self, temp_tenant_with_user):
+        """update 带他租户 job_id → 400，原关联保持不变"""
+        from src.api import recruiting_operator
+        from src.saas.db.tenant_db import TenantDB
+        from src.db.database import get_db_connection
+
+        ctx_a = temp_tenant_with_user
+        job_a = recruiting_operator.job_service.create_job(ctx_a["tenant_id"], job_name="A自有职位")
+        resume_id = _insert_resume(ctx_a["tenant_id"], ctx_a["user_id"], candidate_name="越权乙")
+        with _mock_tenant_ctx(ctx_a["tenant_id"]):
+            linked = _unpack(_call(recruiting_operator.update_resume(
+                resume_id, recruiting_operator.UpdateResumeRequest(job_id=job_a["id"]), request=None)))
+        assert linked["success"] is True
+
+        tenant_code_b = f"T{uuid.uuid4().hex[:6].upper()}"
+        tenant_b = TenantDB.create(
+            company_name=f"关联更新测试租户B-{tenant_code_b}",
+            tenant_code=tenant_code_b,
+            contact_name="测试B",
+            contact_phone="13800000001",
+        )
+        if not tenant_b:
+            pytest.skip("无法创建测试租户B")
+        tenant_id_b = tenant_b["tenant_id"]
+        try:
+            job_b = recruiting_operator.job_service.create_job(tenant_id_b, job_name="B租户职位")
+            req = recruiting_operator.UpdateResumeRequest(job_id=job_b["id"])
+            with _mock_tenant_ctx(ctx_a["tenant_id"]):
+                response = _unpack(_call(recruiting_operator.update_resume(resume_id, req, request=None)))
+
+            assert response["success"] is False
+            assert "不属于本租户" in response["error"]
+            # 原关联未被破坏
+            record = recruiting_operator.resume_service.get_resume(ctx_a["tenant_id"], resume_id)
+            assert record["job_id"] == job_a["id"]
+        finally:
+            try:
+                with get_db_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "DELETE FROM bs_recruiting_operator_jobs WHERE tenant_id = %s", (tenant_id_b,))
+                    conn.commit()
+            except Exception:
+                pass
+            TenantDB.delete(tenant_id_b)
+            try:
+                with get_db_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("DELETE FROM tenants WHERE tenant_id = %s", (tenant_id_b,))
+                    conn.commit()
+            except Exception:
+                pass
+
+
 # ============== 租户隔离测试 ==============
 
 class TestTenantIsolation:
@@ -667,7 +859,7 @@ class TestTenantIsolation:
             # 列表不可见
             with _mock_tenant_ctx(tenant_id_b):
                 list_resp = _unpack(_call(recruiting_operator.list_resumes(
-                    request=None, page=1, page_size=20, keyword="A租户候选人", job_name=None,
+                    request=None, page=1, page_size=20, keyword="A租户候选人", job_name=None, job_id=None,
                     status=None, fetched_at_from=None, fetched_at_to=None,
                 )))
                 assert list_resp["success"] is True
@@ -719,12 +911,16 @@ class TestReEvaluateResumeAPI:
             ocr_text="张三 本科 5年 PHP/Laravel 开发经验，现任 xx科技",
         )
 
+        async def _stub_chat(self, **kwargs):
+            return {"content": json_mod.dumps({
+                "score": 75, "match_summary": "技术栈匹配",
+                "key_info": {"education": "本科", "core_skills": ["PHP"]},
+            }, ensure_ascii=False), "usage": None}
+
         class _StubGateway:
-            async def chat(self, **kwargs):
-                return {"content": json_mod.dumps({
-                    "score": 75, "match_summary": "技术栈匹配",
-                    "key_info": {"education": "本科", "core_skills": ["PHP"]},
-                }, ensure_ascii=False), "usage": None}
+            # 评分走 chat_lite（lite_model 改造后统一收口），stub 两个方法名都对齐
+            chat = _stub_chat
+            chat_lite = _stub_chat
 
         monkeypatch.setattr(recruiting_match_service, "llm_gateway", _StubGateway())
 

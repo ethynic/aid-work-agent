@@ -134,12 +134,16 @@ def _stub_match_llm(monkeypatch):
     （默认阈值 70 → matched）；usage 置 None 让计费落库分支 no-op。
     """
     class _StubMatchGateway:
-        async def chat(self, **kwargs):
+        async def _chat(self, **kwargs):
             return {"content": json.dumps({
                 "score": 82,
                 "match_summary": "PHP/Laravel 经验匹配，本科，5 年经验",
                 "key_info": {"education": "本科", "core_skills": ["PHP", "Laravel"]},
             }, ensure_ascii=False), "usage": None}
+
+        # 评分走 chat_lite（lite_model 改造后统一收口），stub 两个方法名都对齐
+        chat = _chat
+        chat_lite = _chat
 
     monkeypatch.setattr(recruiting_match_service, "llm_gateway", _StubMatchGateway())
 

@@ -10,16 +10,16 @@
 - 端点函数签名与响应格式保持不变（前端与既有集成测试兼容）
 
 一套 CRUD API（表 bs_recruiting_operator_resumes）：
-- 简历列表（分页 + keyword/job_name/status/fetched_at 区间筛选，轻量不含 ocr_text）
+- 简历列表（分页 + keyword/job_name/job_id/status/fetched_at 区间筛选，轻量不含 ocr_text）
 - 职位下拉（distinct job_name）
-- 创建（支持 images=file_id 引用 与 images_base64 直传两路合并，base64 落盘转 file_id）
+- 创建（支持 images=file_id 引用 与 images_base64 直传两路合并，base64 落盘转 file_id；job_id 硬关联）
 - 详情（含 ocr_text / images / candidate_info）
-- 更新（status / remark / job_name / candidate_name / candidate_info）
+- 更新（status / remark / job_name / job_id / candidate_name / candidate_info）
 - 删除
 
 一套职位库 CRUD API（表 bs_recruiting_operator_jobs / bs_recruiting_operator_job_scripts，
 服务层 src/services/recruiting_job_service.py，前端「职位库」业务页）：
-- 职位列表（首次访问自动预置「PHP开发工程师（Laravel）」+ 13 条话术；含简历/匹配统计）
+- 职位列表（含简历/匹配统计；不做预置数据，空职位库是合法状态）
 - 职位 CRUD（删职位级联删其话术）
 - 话术 CRUD（固定四分类：初次开场/了解摸底/追问细节/邀约推进）
 - 职位要求档位候选（静态：经验/学历/薪资下拉，简历-职位匹配 Phase 5）
@@ -106,7 +106,8 @@ class ResumeImageBase64(BaseModel):
 
 class CreateResumeRequest(BaseModel):
     candidate_name: str = Field(..., description="候选人姓名")
-    job_name: Optional[str] = Field(None, description="关联职位")
+    job_name: Optional[str] = Field(None, description="关联职位名（显示用；与 job_id 二选一，job_id 优先回填规范名）")
+    job_id: Optional[str] = Field(None, description="关联职位 id（硬关联，须为本租户职位；服务层校验并回填规范职位名）")
     candidate_info: Optional[Dict[str, Any]] = Field(None, description="基本信息（学历/工作年限/期望薪资/城市等，key 灵活）")
     ocr_text: Optional[str] = Field(None, description="OCR 全文")
     images: Optional[List[ResumeImageRef]] = Field(None, description="已上传图片引用列表（有序）")
@@ -118,7 +119,14 @@ class CreateResumeRequest(BaseModel):
 
 class UpdateResumeRequest(BaseModel):
     candidate_name: Optional[str] = Field(None, description="候选人姓名")
-    job_name: Optional[str] = Field(None, description="关联职位")
+    job_name: Optional[str] = Field(None, description="关联职位名（显示用）")
+    job_id: Optional[str] = Field(
+        None,
+        description=(
+            "关联职位 id 三态：不传=不修改；空串=清除关联（job_id/job_name 置 NULL）；"
+            "非空=校验属本租户后硬关联并回填规范职位名"
+        ),
+    )
     candidate_info: Optional[Dict[str, Any]] = Field(None, description="基本信息")
     status: Optional[str] = Field(None, description="状态：new/viewed/shortlisted/interviewed/rejected")
     remark: Optional[str] = Field(None, description="备注")
@@ -132,7 +140,8 @@ async def list_resumes(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     keyword: Optional[str] = Query(None, description="按候选人姓名模糊搜索"),
-    job_name: Optional[str] = Query(None, description="按关联职位筛选"),
+    job_name: Optional[str] = Query(None, description="按关联职位名筛选（文本精确匹配）"),
+    job_id: Optional[str] = Query(None, description="按关联职位 id 筛选（硬关联精确匹配）"),
     status: Optional[str] = Query(None, description="按状态筛选"),
     fetched_at_from: Optional[str] = Query(None, description="获取日期起（YYYY-MM-DD 或 ISO）"),
     fetched_at_to: Optional[str] = Query(None, description="获取日期止（YYYY-MM-DD 或 ISO）"),
@@ -147,7 +156,8 @@ async def list_resumes(
             data = resume_service.list_resumes(
                 tenant_id,
                 page=page, page_size=page_size, keyword=keyword, job_name=job_name,
-                status=status, fetched_at_from=fetched_at_from, fetched_at_to=fetched_at_to,
+                job_id=job_id, status=status,
+                fetched_at_from=fetched_at_from, fetched_at_to=fetched_at_to,
             )
         except ValueError as e:
             return _error_response(str(e), str(e), 400)
@@ -189,6 +199,7 @@ async def create_resume(req: CreateResumeRequest, request: Request):
                 user_id,
                 candidate_name=req.candidate_name,
                 job_name=req.job_name,
+                job_id=req.job_id,
                 candidate_info=req.candidate_info,
                 ocr_text=req.ocr_text,
                 images=[item.model_dump() for item in (req.images or [])],
@@ -224,7 +235,7 @@ async def get_resume(resume_id: int, request: Request):
 
 @router.patch("/resumes/{resume_id}")
 async def update_resume(resume_id: int, req: UpdateResumeRequest, request: Request):
-    """更新简历（仅传的字段：status/remark/job_name/candidate_name/candidate_info），updated_at=NOW()"""
+    """更新简历（仅传的字段：status/remark/job_name/job_id/candidate_name/candidate_info），updated_at=NOW()"""
     try:
         tenant_id = _require_tenant()
         if not tenant_id:
@@ -236,6 +247,7 @@ async def update_resume(resume_id: int, req: UpdateResumeRequest, request: Reque
                 resume_id,
                 candidate_name=req.candidate_name,
                 job_name=req.job_name,
+                job_id=req.job_id,
                 candidate_info=req.candidate_info,
                 status=req.status,
                 remark=req.remark,
@@ -326,7 +338,7 @@ class UpdateJobScriptRequest(BaseModel):
 
 @router.get("/jobs")
 async def list_jobs(request: Request):
-    """职位列表（按 created_at DESC，含话术数与已用分类、简历数与匹配数；首次访问自动预置默认职位）"""
+    """职位列表（按 created_at DESC，含话术数与已用分类、简历数与匹配数；空职位库返回空列表）"""
     try:
         tenant_id = _require_tenant()
         if not tenant_id:

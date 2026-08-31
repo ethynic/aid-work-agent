@@ -328,7 +328,7 @@ def _load_job_context(
 
     返回 {job_id, job_name, notes, match_threshold, job_requirements, opening_scripts}；
     未命中任何职位返回 None（调用方按 job_name 文本评分，阈值用默认 70）。
-    直查 SQL 不走 list_jobs/get_job（它们入口会预置默认职位，评分路径绝不建职位）。
+    直查 SQL 不走 list_jobs/get_job（职位服务面向管理页 CRUD，评分路径绝不建职位）。
     """
     job_row = None
     with get_db_connection() as conn:

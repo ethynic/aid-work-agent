@@ -2,7 +2,7 @@
  * 招聘操作智能体 API 客户端（简历库 + 职位库）
  *
  * 对应后端 src/api/recruiting_operator.py（prefix /api/recruiting-operator）：
- * - 简历列表（分页 + keyword/job_name/status/日期区间筛选）
+ * - 简历列表（分页 + keyword/job_name/job_id/status/日期区间筛选）
  * - 职位下拉（distinct job_name）
  * - 创建（file_id 引用 + base64 直传两路）/ 详情 / 更新 / 删除
  * - 职位库（职位 CRUD + 每职位常用沟通话术 CRUD，固定四分类）
@@ -103,6 +103,8 @@ export interface ReEvaluateResult {
 export interface CreateResumeRequest {
   candidate_name: string
   job_name?: string
+  /** 关联职位 id（硬关联，须为本租户职位；后端校验非法/他租户返回 400 并回填规范职位名） */
+  job_id?: string
   candidate_info?: Record<string, any>
   ocr_text?: string
   images?: ResumeImage[]
@@ -115,6 +117,13 @@ export interface CreateResumeRequest {
 export interface UpdateResumeRequest {
   candidate_name?: string
   job_name?: string
+  /**
+   * 关联职位 id 三态：
+   * - 不传（undefined）= 不修改关联
+   * - 空串 '' = 清除关联（后端 job_id/job_name 置 NULL）
+   * - 非空 = 校验属本租户后硬关联，并回填规范职位名
+   */
+  job_id?: string
   candidate_info?: Record<string, any>
   status?: ResumeStatus
   remark?: string
@@ -127,6 +136,8 @@ export async function listResumes(params: {
   page_size?: number
   keyword?: string
   job_name?: string
+  /** 按关联职位 id 筛选（硬关联精确匹配，职位选择器用） */
+  job_id?: string
   status?: ResumeStatus
   fetched_at_from?: string
   fetched_at_to?: string
@@ -136,6 +147,7 @@ export async function listResumes(params: {
   if (params.page_size) search.set('page_size', String(params.page_size))
   if (params.keyword) search.set('keyword', params.keyword)
   if (params.job_name) search.set('job_name', params.job_name)
+  if (params.job_id) search.set('job_id', params.job_id)
   if (params.status) search.set('status', params.status)
   if (params.fetched_at_from) search.set('fetched_at_from', params.fetched_at_from)
   if (params.fetched_at_to) search.set('fetched_at_to', params.fetched_at_to)

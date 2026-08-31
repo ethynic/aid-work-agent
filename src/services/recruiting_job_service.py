@@ -10,7 +10,7 @@
 - 职位 = 职位名称 + 备注（tech stack / 团队说明等），tenant_id+job_name 唯一
 - 话术 = 招聘 HR 在 BOSS 上与候选人聊天的常用模板，固定四分类（初次开场/了解摸底/
   追问细节/邀约推进），content 支持 {{占位符}}（复制后手动替换）
-- 首个职位「PHP开发工程师（Laravel）」及其 13 条话术由 ensure_default_job 自动预置
+- 不做任何预置数据：空职位库是合法状态（付费租户自行创建职位与话术）
 
 调用方：HTTP API（src/api/recruiting_operator.py，前端「职位库」业务页）
 """
@@ -39,94 +39,6 @@ DEFAULT_MATCH_THRESHOLD = 70
 # Phase 3 由 boss_filter_options 校准兜底，见设计 §2.1）
 _REQUIREMENTS_STR_KEYS = ("experience", "salary", "notes")
 _REQUIREMENTS_LIST_KEYS = ("educations", "keywords")
-
-# 预置职位：PHP开发工程师（Laravel）
-DEFAULT_JOB_NAME = "PHP开发工程师（Laravel）"
-DEFAULT_JOB_NOTES = "技术栈：PHP 8 / Laravel / MySQL / Redis / Vue；团队鼓励使用 AI 编程工具提效"
-
-# 预置 13 条话术（sort_order 按列表序，分类内自上而下即推荐使用顺序）
-_DEFAULT_SCRIPTS: List[Dict[str, str]] = [
-    # ── 初次开场 ──
-    {
-        "category": "初次开场",
-        "title": "开场·技术栈匹配",
-        "content": "您好！看到您的 PHP 开发经验和我们很匹配。我们团队主力技术栈是 PHP 8 + Laravel，"
-                   "做企业级 SaaS 应用，后端也涉及 MySQL/Redis。不知道您最近的项目主要用什么框架？"
-                   "方便的话简单聊聊～",
-    },
-    {
-        "category": "初次开场",
-        "title": "开场·活跃候选人",
-        "content": "您好，看到您刚刚活跃～我们正在招 PHP 开发工程师（Laravel 方向），坐标上海，薪资 15-25K。"
-                   "您如果有兴趣了解，可以发一份简历给我，我给您详细介绍下团队和项目情况。",
-    },
-    {
-        "category": "初次开场",
-        "title": "开场·简历亮点切入",
-        "content": "您好！看了您的简历，您在 {{简历中的具体亮点（须来自简历摘录，勿编造）}} 方面的经验让我印象很深。"
-                   "我们正好在做类似方向的产品，用的是 Laravel 框架，很想和您聊聊，看是否有合作的机会。",
-    },
-    # ── 了解摸底 ──
-    {
-        "category": "了解摸底",
-        "title": "摸底·项目规模与职责",
-        "content": "您用 Laravel 做过最大的项目是什么体量（日活/QPS/代码规模）？您主要负责哪些模块？",
-    },
-    {
-        "category": "了解摸底",
-        "title": "摸底·框架深度",
-        "content": "您对 Laravel 的服务容器、队列（Horizon）、事件系统、Eloquent 性能优化这块的实战经验怎么样？"
-                   "有没有印象深刻的踩坑或调优经历？",
-    },
-    {
-        "category": "了解摸底",
-        "title": "摸底·AI 编程工具（重点）",
-        "content": "我们团队很鼓励用 AI 编程工具提效（Cursor、Claude Code、Copilot 这类）。"
-                   "您日常开发中会用哪些 AI 工具？能举个具体例子说说它怎么帮您提效的吗"
-                   "（比如生成样板代码/写测试/排查问题）？",
-    },
-    {
-        "category": "了解摸底",
-        "title": "摸底·工程素养",
-        "content": "您平时写代码有做单元测试和 Code Review 的习惯吗？团队用什么协作流程（Git flow / CI/CD）？",
-    },
-    # ── 追问细节 ──
-    {
-        "category": "追问细节",
-        "title": "追问·AI 工具边界",
-        "content": "您觉得 AI 辅助编程对代码质量是提升还是风险？您一般怎么把控 AI 生成代码的质量"
-                   "（比如 review 要点/测试覆盖）？",
-    },
-    {
-        "category": "追问细节",
-        "title": "追问·Laravel 具体实现",
-        "content": "{{接着候选人说到的模块追问}}：这块当时为什么这么设计？如果流量翻十倍，"
-                   "您觉得哪里会先出问题，会怎么改造？",
-    },
-    {
-        "category": "追问细节",
-        "title": "追问·稳定性与线上",
-        "content": "您有处理过线上事故吗？当时是怎么定位和解决的？平时怎么做监控和告警？",
-    },
-    # ── 邀约推进 ──
-    {
-        "category": "邀约推进",
-        "title": "邀约·交换联系方式",
-        "content": "聊下来感觉匹配度不错～方便加个微信或者电话细聊吗？我这边也同步推一下简历给用人经理，"
-                   "争取尽快给您安排面试。",
-    },
-    {
-        "category": "邀约推进",
-        "title": "邀约·面试安排",
-        "content": "用人经理看了您的背景觉得挺合适的，想约您一次技术面（1 小时左右，会聊 Laravel 实战和 "
-                   "AI 工具使用）。您这周什么时间段方便？",
-    },
-    {
-        "category": "邀约推进",
-        "title": "邀约·薪资沟通",
-        "content": "面试流程这边没什么问题了。想了解下您的期望薪资和到岗时间，我这边好去帮您争取～",
-    },
-]
 
 
 class JobServiceError(ValueError):
@@ -205,54 +117,6 @@ def ensure_tables() -> None:
     with get_db_connection() as conn:
         init_recruiting_job_tables(conn)
         conn.commit()
-
-
-# ============== 预置数据 ==============
-
-def ensure_default_job(tenant_id: str) -> None:
-    """该租户 jobs 表为空时，预置「PHP开发工程师（Laravel）」+ 13 条话术。
-
-    幂等：仅 count==0 时插入；并发插入由 tenant_id+job_name 唯一约束兜底（冲突静默放弃）。
-    在 list_jobs / get_job 入口调用（与 resume service 幂等建表同位置风格）。
-    """
-    ensure_tables()
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT COUNT(*) AS cnt FROM bs_recruiting_operator_jobs WHERE tenant_id = %s",
-            (tenant_id,),
-        )
-        if cursor.fetchone()["cnt"] > 0:
-            return
-
-        cursor.execute(
-            """
-            INSERT INTO bs_recruiting_operator_jobs (tenant_id, job_name, notes)
-            VALUES (%s, %s, %s)
-            ON CONFLICT (tenant_id, job_name) DO NOTHING
-            RETURNING id
-            """,
-            (tenant_id, DEFAULT_JOB_NAME, DEFAULT_JOB_NOTES),
-        )
-        row = cursor.fetchone()
-        if row is None:
-            # 并发下已被其他请求插入：无任何变更，直接放弃
-            conn.rollback()
-            return
-        job_id = row["id"]
-        for idx, script in enumerate(_DEFAULT_SCRIPTS):
-            cursor.execute(
-                """
-                INSERT INTO bs_recruiting_operator_job_scripts
-                    (tenant_id, job_id, category, title, content, sort_order)
-                VALUES (%s, %s, %s, %s, %s, %s)
-                """,
-                (tenant_id, job_id, script["category"], script["title"],
-                 script["content"], idx),
-            )
-        conn.commit()
-
-    logger.info(f"职位库预置默认职位: tenant={tenant_id}, job={DEFAULT_JOB_NAME}, scripts={len(_DEFAULT_SCRIPTS)}")
 
 
 # ============== 内部辅助 ==============
@@ -426,8 +290,7 @@ def count_job_resumes(tenant_id: str) -> Dict[str, Dict[str, int]]:
 
 
 def list_jobs(tenant_id: str) -> List[Dict[str, Any]]:
-    """职位列表（按 created_at DESC，含话术数与已用分类、简历数与匹配数），入口自动预置默认职位"""
-    ensure_default_job(tenant_id)
+    """职位列表（按 created_at DESC，含话术数与已用分类、简历数与匹配数）；空职位库返回空列表"""
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
@@ -473,7 +336,6 @@ def list_jobs(tenant_id: str) -> List[Dict[str, Any]]:
 def get_job(tenant_id: str, job_id: str) -> Optional[Dict[str, Any]]:
     """职位详情（含全部话术平铺 scripts + 按分类分组 script_groups），不存在返回 None"""
     job_uuid = _to_uuid(job_id, "job_id")
-    ensure_default_job(tenant_id)
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(

@@ -110,9 +110,8 @@ class TestBossJobsListTool:
         from src.services import recruiting_job_service, recruiting_resume_service
 
         ctx = temp_tenant_with_user
-        # 预置 PHP 职位（active）补上要求；另建一个 paused 职位不应出现
-        jobs = recruiting_job_service.list_jobs(ctx["tenant_id"])
-        php = next(j for j in jobs if j["job_name"] == "PHP开发工程师（Laravel）")
+        # 显式建 PHP 职位（active）补上要求；另建一个 paused 职位不应出现
+        php = recruiting_job_service.create_job(ctx["tenant_id"], job_name="PHP开发工程师（Laravel）")
         recruiting_job_service.update_job(
             ctx["tenant_id"], php["id"],
             job_requirements={"experience": "3-5年", "educations": ["本科"], "salary": "10-20K"},
@@ -158,8 +157,8 @@ class TestBossJobsListTool:
         from src.services import recruiting_job_service
 
         ctx = temp_tenant_with_user
-        # 先经 list_jobs 预置默认 PHP 职位（job_requirements 保持 null → 不崩 + 「要求未配置」）
-        recruiting_job_service.list_jobs(ctx["tenant_id"])
+        # 显式建 PHP 职位（job_requirements 保持 null → 不崩 + 「要求未配置」）
+        recruiting_job_service.create_job(ctx["tenant_id"], job_name="PHP开发工程师（Laravel）")
         recruiting_job_service.create_job(
             ctx["tenant_id"], job_name="全栈工程师",
             job_requirements={"educations": ["本科", "硕士"]},  # 仅学历（顿号连接）
@@ -187,6 +186,7 @@ class TestBossJobsListTool:
         from src.services import recruiting_job_service
 
         ctx = temp_tenant_with_user
+        recruiting_job_service.create_job(ctx["tenant_id"], job_name="PHP开发工程师（Laravel）")
         for job in recruiting_job_service.list_jobs(ctx["tenant_id"]):
             recruiting_job_service.update_job(ctx["tenant_id"], job["id"], status="paused")
 
@@ -204,8 +204,7 @@ class TestBossJobsListTool:
         from src.services import recruiting_job_service, recruiting_resume_service
 
         ctx = temp_tenant_with_user
-        jobs = recruiting_job_service.list_jobs(ctx["tenant_id"])  # 预置 PHP 职位（active）
-        php = jobs[0]
+        php = recruiting_job_service.create_job(ctx["tenant_id"], job_name="PHP开发工程师（Laravel）")
         # create_resume_record 不做 job_name→job_id 自动关联（仅工具落库路解析），job_id 保持 NULL
         recruiting_resume_service.create_resume_record(
             ctx["tenant_id"], ctx["user_id"],
