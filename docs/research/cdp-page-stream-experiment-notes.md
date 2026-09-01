@@ -1,7 +1,8 @@
 # CDP 页面实时帧（page stream）实验纪要
 
 > 用途：独立会话开发「登录辅助与页面实时帧」前的快速对齐材料（简要版）。
-> 完整设计：[login-assist-page-stream-design.md](../design/recruiting/login-assist-page-stream-design.md)（含产品流程 §2 / 落点 §4）。
+> 完整设计：[网页操作实时视图设计](../design/recruiting/login-assist-page-stream-design.md)（v3 已冻结通用 `page-stream/1.0`，Boss CDP 为首期）。
+> 开发计划：[web-operation-live-view-dev-plan.md](../plans/recruiting/web-operation-live-view-dev-plan.md)。
 > 状态：实验完成、方案定型，**待开发**。本文只记「已经实验过什么、结论是什么」。
 
 ## 1. 背景与目标
@@ -33,11 +34,11 @@
 | 变化检测（md5 比对） | 静止页 20 帧仅推 1 帧 | 同左 |
 | 1fps 带宽 | 峰值 ~0.11Mbps，静止页≈0 | 峰值 ~0.38Mbps |
 
-## 3. 技术要点（已实证，开发时直接沿用）
+## 3. 技术要点（实验事实与产品取舍）
 
-- **raw CDP WebSocket**：Node ≥22 原生 `WebSocket`，零新增依赖；`Page.captureScreenshot {format:'jpeg', quality:70, clip}` 出帧
-- **md5 变化检测**：帧内容 hash 比对，静止页几乎零推流（带宽大头被消掉）
-- **播放端 MJPEG**：本地/云端 `multipart/x-mixed-replace` 服务 + 浏览器 `<img src>` 直接播，零前端依赖
+- **raw CDP WebSocket**：实验用 Node 原生 WebSocket；产品 Runtime 基线 Node ≥20，显式依赖 `ws`，不依赖传递依赖
+- **SHA-256 变化检测**：帧内容 hash 比对，静止页几乎零推流；实验曾用 MD5，产品统一使用 SHA-256
+- **MJPEG 仅为实验播放器**：实验用 `multipart/x-mixed-replace` 验证可看性；产品跨网络协议唯一使用 WSS `page-stream/1.0` 的 metadata + binary JPEG
 - **帧率余量**：单帧 ~40ms 可支撑 10fps+，产品按 1-2fps 设计即可，带宽忽略不计
 - **路线结论**：CDP 页面帧优于桌面帧流——画面只含 BOSS 页面（隐私面小）、无锁屏/遮挡限制、无 GPU/WGC 依赖；桌面流（WGC/GDI）保留给「人工接管看整个桌面」场景（原 R1，本期不做）
 
@@ -45,17 +46,21 @@
 
 - CDP 帧只覆盖网页内容；BOSS 弹**原生系统对话框**（罕见）不在画面内——届时再评估桌面流
 - 二维码 1-2 分钟过期：刷新循环必须自动化（刷新点击已真机验证，勿再人肉）
-- 登录辅助页链接等同临时登录凭证：必须短期有效 + 租户/用户隔离
+- 观看 ticket 等同临时凭证：必须短期、一次性、租户/用户隔离，并经 WebSocket subprotocol 传递；产品不生成可分享链接
 - ⚠️ 实验探针脚本 `.tmp/probe-frame-stream.mjs` 未入库已被清理——需重建（约 30 分钟，参数本文已固化）；今后探针请放 `scripts/` 入库
 
-## 5. 待开发清单（新会话的活）
+## 5. 待开发清单（2026-09-01 v3 设计同步）
+
+> 下表替代 2026-08-31 的“HTTPS 推帧 + 企微登录链接”产品化设想。实验结论不变；正式方案要求
+> 用户在 Web Agent/第一方客户端显式同意后才建立 producer WSS，第三方渠道暂不开放。
 
 | 层 | 内容 |
 |---|---|
-| aid-runtime | `page_stream` 能力：帧循环（CDP jpeg + clip 配置 + md5 变化检测）→ 经现有出站 HTTPS 通道推云端；登录监听循环（过期刷新/成功检测/弹窗关闭复用 overlay 原语） |
-| 云端 | 帧接收 API（租户/用户隔离）+ 登录辅助页（拉最新帧或 MJPEG 代理）+ 登录状态回调 |
-| 工具 | `boss_login_qr`（触发登录辅助 + 返回辅助页链接）/ `boss_login_status`（查登录态）——**新工具必须同步 catalog 受信清单 + manifest 白名单**（项目纪律） |
-| 渠道 | 企微等渠道推「扫码登录」卡片消息（链接指向登录辅助页） |
+| aid-runtime | 独立 stream-control loop + `BossCdpPageFrameSource`；consent 后才截图并通过 producer WSS 上行；登录监听继续负责过期刷新/成功检测/overlay heal |
+| 云端 | offer/session/consent 控制面 + 独立内存 `PageStreamGateway`；JPEG 仅保留最新帧，不进 DB/Redis/磁盘 |
+| Web/第一方客户端 | 可信同意卡片 + 通用只读 viewer；未点击时零截图、零 producer 连接 |
+| 工具 | `boss_login_qr` / `boss_login_status` 只负责登录业务；新工具仍须同步 catalog、Runtime manifest、Boss manifest 和子智能体白名单 |
+| 渠道 | 企微/钉钉/飞书等第三方渠道暂不生成链接或帧；只提示回到 Web Agent/第一方客户端查看 |
 
 ## 6. 建议验收标准
 
