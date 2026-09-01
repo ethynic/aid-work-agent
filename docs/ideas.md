@@ -22,6 +22,7 @@
 |---|------|------|------|---------|---------|
 | 1 | 可观测性与质量保障 | 🔧 部分完成 | 分布式追踪 + LLM 质量评估 + 实时监控 + 结构化告警。Phase 1 全部完成（含渠道追踪方案 C：TraceCollector 下沉到 `Agent.process_message`，从 record_service 自动读 source_type，渠道零改造）。1.6（单测/e2e）和 1.7（JSONL 双写迁移）已取消：obs 系统每日真实流量运行已事实验证；JSONL 与 obs 永久并行。Phase 2-4 未开始。2026-07-07 | [设计](infrastructure/observability-design.md) / [延伸设计](infrastructure/observability-channel-sessions-design.md) | [计划](infrastructure/observability-dev-plan.md) / [延伸计划](infrastructure/observability-channel-sessions-dev-plan.md) |
 | 65 | 母体 Agent 收敛（agent.py Kernel 化） | 📋 待开发 | **不设专项重构、不阻塞其他工作**，继续采用“冻结增长 + 有真实需求时伴生拆分”。保留与领域无关的行数守卫、依赖方向和纯 helper 候选；ActionDispatcher、ContinuationManager 等只有在具体功能需要时另行评估，每次拆分必须行为回归全绿。 | [原则](system/agent-kernel-convergence-principles.md) | — |
+| 70 | 数据库增量升级脚本 YAML 化 | 🔧 部分完成 | 将 deploy/db_update.sql 全量哈希重跑机制改为 deploy/db_update.yaml + datetime 增量执行（last_datetime），免手动清理、结构强制拦截遗漏时间与顺序颠倒、启动只执行新增块。一个块 = 一个逻辑批次（逻辑相关放一起，不相关分开放）。格式选型 YAML block scalar（SQL 零转义，复用项目已有 PyYAML 生态）。执行粒度 = datetime 块，全部成功才更新 last_datetime，advisory lock + SAVEPOINT + 锁超时重试保留。现有 SQL 由运维手动执行完，无需转换与迁移。2026-09-01 开发进行中：database.py 改造 + db_update.yaml 初始模板 + 单测重写 + rules 更新已就绪，待测试智能体与 CR 智能体独立验证。 | [设计](system/database-db-update-incremental-design.md) | — |
 
 
 ## 系统功能

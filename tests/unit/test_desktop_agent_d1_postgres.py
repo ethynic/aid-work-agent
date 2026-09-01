@@ -107,6 +107,6 @@ def test_d1_ddl_has_repeat_safe_constraints_and_reservation_state():
     assert d1.count("ALTER COLUMN response_json DROP NOT NULL") == 2
     assert d1.count("UNIQUE (tenant_id, idempotency_key)") == 2
     assert "status IN ('pending', 'running', 'cancelled', 'completed')" in d1
-    assert "desktop_remote_tool_invocations" not in Path("deploy/db_update.sql").read_text(encoding="utf-8")
+    assert "desktop_remote_tool_invocations" not in Path("deploy/db_update.yaml").read_text(encoding="utf-8")
     for script in ("agent_update.sh", "agent2_update.sh", "agent3_update.sh"):
         assert "desktop_agent_d1.sql" not in Path("deploy", script).read_text(encoding="utf-8")
