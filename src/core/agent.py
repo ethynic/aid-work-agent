@@ -376,8 +376,8 @@ class Agent:
         from src.local_tools import repository
 
         execution_args = dict(tool_args)
-        execution_args["_trusted_tenant_id"] = tenant_id
-        execution_args["_trusted_user_id"] = user_id
+        execution_args.update(_trusted_tenant_id=tenant_id, _trusted_user_id=user_id,
+                              _session_id=self.session_id)  # session 落 invocation 行，write_result 计费写台账归属（P2）
         progress_queue: asyncio.Queue = asyncio.Queue()
         execution_args["_progress_queue"] = progress_queue
         context = context or ExecutionContextFactory.for_agent_call(

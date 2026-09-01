@@ -1127,6 +1127,7 @@ CREATE TABLE IF NOT EXISTS local_tool_invocations (
     device_id UUID NOT NULL,
     tool_name TEXT NOT NULL,
     arguments_json JSONB NOT NULL,
+    session_id TEXT,                            -- 触发本次调用的会话（客户端计费台账归属，2026-09-01 P2；无会话来源为 NULL）
     state TEXT DEFAULT 'queued' NOT NULL,
     effect TEXT,
     claim_token_hash TEXT,

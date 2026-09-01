@@ -277,6 +277,49 @@ class ClientBindingDB:
         return row
 
 
+# 台账 detail.arguments 序列化上限（字符）：boss 参数（筛选条件/职位名/姓名等）量级很小，
+# 上限只为防异常调用方塞入超大 payload 撑爆台账行；超长降级为截断文本（保证 detail 仍合法 JSON）
+TOOL_USAGE_ARGS_MAX_CHARS = 1000
+
+
+def _compact_arguments(arguments: Any) -> Any:
+    """参数快照规整：原始 JSON 值直接放行；序列化失败降级为文本；超限降级为 {_truncated: 文本}。"""
+    if arguments is None:
+        return None
+    try:
+        text = json.dumps(arguments, ensure_ascii=False)
+    except (TypeError, ValueError):
+        return str(arguments)  # 不可 JSON 序列化（异常调用方）：转文本，保证 detail 仍是合法 JSON
+    if len(text) <= TOOL_USAGE_ARGS_MAX_CHARS:
+        return arguments
+    return {"_truncated": text[:TOOL_USAGE_ARGS_MAX_CHARS] + "…(截断)"}
+
+
+def _build_tool_usage_detail(
+    *,
+    invocation_id: Optional[str],
+    device_id: Optional[str],
+    command: str,
+    arguments: Any,
+    user_id: Optional[str],
+) -> str:
+    """boss_tool 台账 detail JSON：{invocation_id, device_id, command, arguments, user_id}。
+
+    command/arguments 让计费行免 join invocation 表即可回答"调了哪个命令、什么参数"
+    （P2 §4.2）；arguments 经 _compact_arguments 截断防超大 payload。
+    """
+    return json.dumps(
+        {
+            "invocation_id": invocation_id,
+            "device_id": device_id,
+            "command": command,
+            "arguments": _compact_arguments(arguments),
+            "user_id": user_id,
+        },
+        ensure_ascii=False,
+    )
+
+
 class ClientUsageLogDB:
     """客户端消耗日志 DB 访问层（含计费 ×10 同事务扣减）。"""
 
@@ -369,6 +412,8 @@ class ClientUsageLogDB:
         device_id: Optional[str] = None,
         session_id: Optional[str] = None,
         status: str = "success",
+        user_id: Optional[str] = None,
+        arguments: Any = None,
     ) -> Optional[float]:
         """在调用方事务内落一行 boss_tool 台账并同事务扣减租户余额，返回 balance_after。
 
@@ -376,12 +421,18 @@ class ClientUsageLogDB:
         docs/design/billing/client-billing-integration-design.md §4.1）：调用方负责
         commit/回滚与租户缓存失效。租户不存在时仍落台账行（对账可见）但余额不动，
         返回 None，调用方必须告警。
+
+        detail 形状见 _build_tool_usage_detail（含命令/参数/user 归属）。
         """
         credit_cost = math.ceil(float(credit_cost) * 100) / 100
         if credit_cost <= 0:
             return None
-        detail = json.dumps(
-            {"invocation_id": invocation_id, "device_id": device_id}, ensure_ascii=False
+        detail = _build_tool_usage_detail(
+            invocation_id=invocation_id,
+            device_id=device_id,
+            command=tool_name,
+            arguments=arguments,
+            user_id=user_id,
         )
         cursor.execute(
             """INSERT INTO client_usage_logs
@@ -413,6 +464,7 @@ class ClientUsageLogDB:
         device_id: Optional[str] = None,
         session_id: Optional[str] = None,
         status: str = "success",
+        user_id: Optional[str] = None,
     ) -> dict[str, Any]:
         """记录一次 BOSS 本地工具调用消耗，同事务扣减租户余额（协会同款台账）。
 
@@ -439,6 +491,7 @@ class ClientUsageLogDB:
                 device_id=device_id,
                 session_id=session_id,
                 status=status,
+                user_id=user_id,
             )
             conn.commit()
         if balance_after is None:
@@ -456,7 +509,7 @@ class ClientUsageLogDB:
 
         logger.info(
             f"BOSS工具计费 tenant={tenant_id} tool={tool_name} invocation={invocation_id} "
-            f"cost={credit_cost} balance_after={balance_after}"
+            f"session={session_id} user={user_id} cost={credit_cost} balance_after={balance_after}"
         )
         return {"credit_cost": credit_cost, "balance_after": balance_after}
 

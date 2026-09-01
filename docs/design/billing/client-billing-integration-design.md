@@ -88,7 +88,7 @@ DB 层 `client_usage_logs.tenant_id` 近 14 天 **无一行 NULL**（写入侧 `
 
 不新增列（`detail` JSONB + 既有列够用，免 DDL）：
 
-- **session_id**：`src/core/agent.py:378-382` 给代理工具注入 `execution_args["_session_id"] = self.session_id`（值已在手，:384）；`desktop_agent/gateway.py` 同步补注入。`proxy_tool` 透传给 `record_tool_usage`（签名已支持，:369）。
+- **session_id**：`src/core/agent.py:378-382` 给代理工具注入 `execution_args["_session_id"] = self.session_id`（值已在手，:384）；`proxy_tool` 透传 `create_invocation` 落 `local_tool_invocations.session_id` 列（db_update.yaml 增量 + init-postgres.sql 同步），`write_result` 计费时写入台账。`desktop_agent/gateway.py` **不注入**（实现偏差记录，2026-09-01）：网关目录只放行 SERVER/EITHER 工具（gateway.py catalog 过滤 LOCAL_REQUIRED），代理工具不经过网关，无 session 概念，无需注入。
 - **detail JSON 扩展**：`record_tool_usage` 的 detail 从 `{invocation_id, device_id}` 扩为 `{invocation_id, device_id, command: tool_name, arguments: <截断脱敏后参数>, user_id}`。arguments 取 `local_tool_invocations.arguments_json`，截断规则沿用 `proxy_tool` 的 key_info 截断取向：整体序列化 ≤1000 字符，超长截断加省略标记。boss 参数含候选人姓名等个人信息，仅同租户管理员/平台管理员可见（与 chat_records 的 user_message 同权限级别），不脱敏内容只限长度。
 - **日志行**：`BOSS工具计费` loguru 行补 `session=`、`user=` 字段（`client_binding_db.py:419`）。
 - 管理后台客户端用量页（`/api/saas/client-usage-logs/list`）补显 command/参数摘要列。

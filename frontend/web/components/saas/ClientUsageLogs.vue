@@ -72,6 +72,9 @@
             <template #stage="{ row }">
               <span class="text-xs text-muted" :title="row.stage">{{ row.stage || '-' }}</span>
             </template>
+            <template #command="{ row }">
+              <span class="text-xs text-default" :title="detailCommand(row)">{{ truncate(detailCommand(row), 24) }}</span>
+            </template>
             <template #status="{ row }">
               <BaseBadge :intent="statusIntent(row.status)">{{ statusLabel(row.status) }}</BaseBadge>
             </template>
@@ -119,6 +122,13 @@
         <div>
           <div class="text-muted mb-1">消息</div>
           <div class="bg-gray-50 border border-default rounded p-2 break-all">{{ extractMessage(detailItem) }}</div>
+        </div>
+        <div v-if="detailCommand(detailItem) !== '-'">
+          <div class="text-muted mb-1">命令参数</div>
+          <div class="bg-gray-50 border border-default rounded p-2 break-all text-xs">
+            <div class="text-default">{{ detailCommand(detailItem) }}</div>
+            <pre v-if="detailArguments(detailItem)" class="whitespace-pre-wrap mt-1 text-muted">{{ detailArguments(detailItem) }}</pre>
+          </div>
         </div>
         <div>
           <div class="text-muted mb-1">detail</div>
@@ -194,6 +204,7 @@ const columns = [
   { key: 'tenant_name', label: '租户', width: '130px' },
   { key: 'association_name', label: '协会', width: '150px' },
   { key: 'stage', label: '阶段', width: '130px' },
+  { key: 'command', label: '命令', width: '170px' },
   { key: 'status', label: '状态', width: '90px' },
   { key: 'message', label: '消息', width: '' },
   { key: 'credit_cost', label: '积分', width: '90px' },
@@ -290,6 +301,24 @@ function extractMessage(row: any): string {
   if (d && typeof d === 'object' && d.message) return String(d.message)
   if (row.error_code) return row.error_code
   return '-'
+}
+
+// 命令名（boss 工具计费行 detail.command；与 model 列同值，语义化展示）
+function detailCommand(row: any): string {
+  const d = row?.detail
+  if (d && typeof d === 'object' && d.command) return String(d.command)
+  return '-'
+}
+
+// 参数摘要（boss 工具计费行 detail.arguments：JSON 或 {_truncated: 文本}）
+function detailArguments(row: any): string {
+  const d = row?.detail
+  if (!d || typeof d !== 'object' || d.arguments == null) return ''
+  try {
+    return JSON.stringify(d.arguments, null, 2)
+  } catch {
+    return String(d.arguments)
+  }
 }
 
 function formatDetail(d: any): string {

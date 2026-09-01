@@ -229,18 +229,24 @@ def create_invocation(
     device_id: str,
     tool_name: str,
     arguments: Dict[str, Any],
+    session_id: Optional[str] = None,
 ) -> str:
-    """创建 invocation（state=queued），返回 id。M0.5 路由层使用"""
+    """创建 invocation（state=queued），返回 id。M0.5 路由层使用
+
+    session_id：触发调用的会话（proxy 透传 _trusted 身份同源的 _session_id），
+    write_result 计费时写入 client_usage_logs.session_id，让 boss_tool 台账行可归属到
+    会话/用户（P2 客户端计费统一接入，设计 §4.2）；无会话来源（联调/API 直建）为 NULL。
+    """
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
             """
             INSERT INTO local_tool_invocations
-                (tenant_id, user_id, device_id, tool_name, arguments_json)
-            VALUES (%s, %s, %s, %s, %s)
+                (tenant_id, user_id, device_id, tool_name, arguments_json, session_id)
+            VALUES (%s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
-            (tenant_id, user_id, device_id, tool_name, Json(arguments)),
+            (tenant_id, user_id, device_id, tool_name, Json(arguments), session_id),
         )
         invocation_id = str(cursor.fetchone()["id"])
         conn.commit()
@@ -506,10 +512,14 @@ def write_result(
                         credit_cost=bill_price,
                         invocation_id=str(row["id"]),
                         device_id=str(row["device_id"]) if row.get("device_id") else None,
+                        session_id=row.get("session_id"),
+                        user_id=row.get("user_id"),
+                        arguments=row.get("arguments_json"),
                     )
                     billed_tenant_id = row["tenant_id"]
                     logger.info(
                         f"后端日志：BOSS工具计费（落库侧） tenant={row['tenant_id']} "
+                        f"user={row.get('user_id')} session={row.get('session_id')} "
                         f"tool={row['tool_name']} invocation={row['id']} "
                         f"cost={bill_price} balance_after={balance_after}"
                     )

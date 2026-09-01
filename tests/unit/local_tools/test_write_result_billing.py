@@ -17,6 +17,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+import json
+
+from src.db.client_binding_db import (
+    TOOL_USAGE_ARGS_MAX_CHARS,
+    _compact_arguments,
+    _build_tool_usage_detail,
+)
 from src.local_tools import repository
 
 pytestmark = pytest.mark.unit
@@ -25,6 +32,41 @@ INVOCATION_ID = "11111111-1111-1111-1111-111111111111"
 TENANT = "tenant_t1"
 DEVICE = "dev-1"
 HASH = "h" * 64
+
+
+class TestCompactArguments:
+    """台账 detail.arguments 规整（P2 §4.2）：命令参数免 join invocation 即可对账"""
+
+    def test_none_passthrough(self):
+        assert _compact_arguments(None) is None
+
+    def test_normal_json_passthrough(self):
+        args = {"salary": "3-5K", "educations": ["本科"], "limit": 1}
+        assert _compact_arguments(args) == args
+
+    def test_oversized_truncated_to_valid_text(self):
+        big = {"k": "x" * (TOOL_USAGE_ARGS_MAX_CHARS * 2)}
+        out = _compact_arguments(big)
+        assert set(out.keys()) == {"_truncated"}
+        assert out["_truncated"].endswith("…(截断)")
+        # 降级结果必须仍是可序列化 JSON（detail 整体合法）
+        json.dumps(out, ensure_ascii=False)
+
+    def test_unserializable_degrades_to_str(self):
+        out = _compact_arguments({1, 2})  # set 不可 JSON 序列化
+        assert out == "{1, 2}"
+        json.dumps(out, ensure_ascii=False)
+
+
+class TestBuildToolUsageDetail:
+    def test_detail_shape(self):
+        detail = json.loads(_build_tool_usage_detail(
+            invocation_id=INVOCATION_ID, device_id=DEVICE,
+            command="boss_filter", arguments={"salary": "3-5K"}, user_id="user-9",
+        ))
+        assert detail == {"invocation_id": INVOCATION_ID, "device_id": DEVICE,
+                          "command": "boss_filter", "arguments": {"salary": "3-5K"},
+                          "user_id": "user-9"}
 
 
 class _FakeCursor:
@@ -89,11 +131,12 @@ def _run_write_result(current_row, updated_row, *, success=True, price=1.0,
 
 class TestSucceededBilling:
     def test_priced_tool_bills_once(self):
-        """succeeded + 收价工具：台账恰一次、UPDATE 带 credit_cost、失效租户缓存"""
+        """succeeded + 收价工具：台账恰一次（带 session/命令/参数/user）+ 回写 + 失效缓存"""
         updated = {"id": INVOCATION_ID, "state": "succeeded", "credit_cost": 1.0}
         row, conn, ledger, cache = _run_write_result(
             {"id": INVOCATION_ID, "state": "running", "claim_token_hash": HASH,
              "tenant_id": TENANT, "tool_name": "boss_greet", "device_id": DEVICE,
+             "user_id": "user-9", "session_id": "sess-9", "arguments_json": {"limit": 1},
              "credit_cost": None},
             updated,
         )
@@ -105,6 +148,10 @@ class TestSucceededBilling:
         assert kwargs["credit_cost"] == 1.0
         assert kwargs["invocation_id"] == INVOCATION_ID
         assert kwargs["device_id"] == DEVICE
+        # P2：台账行会话/用户/命令参数归属
+        assert kwargs["session_id"] == "sess-9"
+        assert kwargs["user_id"] == "user-9"
+        assert kwargs["arguments"] == {"limit": 1}
         sql, params = conn.cursor_obj.updates()[-1]
         assert "credit_cost = %s" in sql
         assert 1.0 in params

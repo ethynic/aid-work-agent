@@ -39,7 +39,8 @@ def _online_device():
 
 
 def _kwargs(**extra):
-    return {"_trusted_tenant_id": TENANT, "_trusted_user_id": USER, **extra}
+    return {"_trusted_tenant_id": TENANT, "_trusted_user_id": USER,
+            "_session_id": "sess-v1", **extra}
 
 
 def _invocation(state="succeeded", data=None, credit_cost=None):
@@ -97,7 +98,8 @@ class TestPriceResolution:
 
 class TestSuccessAttachesCost:
     async def test_success_attaches_credit_cost_from_invocation(self, monkeypatch):
-        """计费本体在 write_result 落库侧：proxy 只把 invocation.credit_cost 附进 data"""
+        """计费本体在 write_result 落库侧：proxy 只把 invocation.credit_cost 附进 data；
+        session 随 create_invocation 落 invocation 行（供落库计费写台账归属）"""
         monkeypatch.setattr(settings.saas, "enabled", True)
         record = MagicMock()
         repo_patch, repo = _patch_repo(
@@ -109,6 +111,8 @@ class TestSuccessAttachesCost:
         assert result["success"] is True
         record.assert_not_called()  # 轮询侧不再计费
         repo["set_invocation_credit_cost"].assert_not_called()
+        # _session_id 透传 create_invocation（末位参数）
+        assert repo["create_invocation"].call_args.args[-1] == "sess-v1"
         # data 附带实扣
         assert result["data"] == {"foo": 1, "credit_cost": 1.0}
 

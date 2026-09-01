@@ -45,7 +45,8 @@ def _online_device():
 
 
 def _kwargs(**extra):
-    return {"_trusted_tenant_id": TENANT, "_trusted_user_id": USER, **extra}
+    return {"_trusted_tenant_id": TENANT, "_trusted_user_id": USER,
+            "_session_id": "sess-v1", **extra}
 
 
 def _inv(state="succeeded", data=None, error_code=None, error_message=None):
@@ -200,9 +201,12 @@ class TestHealOrchestration:
         names = [c.args[3] for c in repo["create_invocation"].call_args_list]
         assert names == ["boss_greet", "boss_overlay_inspect", "boss_overlay_dismiss", "boss_greet"]
         # 计费分工（2026-09-01 迁移）：重试成功的原工具费在 write_result 落库侧，
-        # proxy 只收无独立 invocation 的自愈专项费
+        # proxy 只收无独立 invocation 的自愈专项费；归属字段 session/user 随行
         billed = {c.kwargs["tool_name"]: c.kwargs["credit_cost"] for c in record.call_args_list}
         assert billed == {"boss_overlay_heal": 2.0}
+        heal_call = record.call_args_list[0]
+        assert heal_call.kwargs["session_id"] == "sess-v1"
+        assert heal_call.kwargs["user_id"] == USER
 
     async def test_execution_unknown_never_heals(self, monkeypatch):
         """EXECUTION_UNKNOWN（写后结果不明）绝不自愈重试"""

@@ -8,4 +8,7 @@
 # 执行：启动时只执行 datetime 晚于 _db_update_applied.last_datetime 的块，文件可无限累积无需清理
 # 校验：字段缺失/时间格式错/重复/倒序/备注或 SQL 为空 会拒绝启动（fail-fast）
 # 历史脚本（原 db_update.sql）已由运维手动在存量数据库执行完毕，本文件仅记录切换后的新增量脚本
-[]
+- datetime: "2026-09-01 15:40:00"
+  remark: "local_tool_invocations 增加 session_id：客户端计费台账归属会话（P2 客户端计费统一接入，write_result 计费时写入 client_usage_logs.session_id）"
+  statements: |
+    ALTER TABLE local_tool_invocations ADD COLUMN IF NOT EXISTS session_id TEXT;

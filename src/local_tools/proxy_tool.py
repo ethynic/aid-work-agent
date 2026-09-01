@@ -77,6 +77,7 @@ class LocalToolProxyTool(BaseTool):
     async def execute(self, **kwargs) -> Dict[str, Any]:
         tenant_id = kwargs.get("_trusted_tenant_id")
         user_id = kwargs.get("_trusted_user_id")
+        session_id = kwargs.get("_session_id")
         progress_queue = kwargs.get("_progress_queue")
 
         if not tenant_id or not user_id:
@@ -109,17 +110,18 @@ class LocalToolProxyTool(BaseTool):
                         "effect": None, "data": None, "invocation_id": None}
 
         # 3. 下发 + 轮询终态
-        result = await self._dispatch_and_wait(tenant_id, user_id, device, args, progress_queue)
+        result = await self._dispatch_and_wait(tenant_id, user_id, session_id, device, args, progress_queue)
 
         # 4. 弹层自愈：失败且为可自愈码（UI_CHANGED/BUSY，弹层遮挡的典型症状）→ 关闭弹层后重试一次
         if not result.get("success") and result.get("code") in HEALABLE_ERROR_CODES and self.heal_eligible:
-            result = await self._heal_overlay(tenant_id, user_id, device, args, progress_queue, result)
+            result = await self._heal_overlay(tenant_id, user_id, session_id, device, args, progress_queue, result)
         return result
 
     async def _dispatch_and_wait(
         self,
         tenant_id: str,
         user_id: str,
+        session_id: Optional[str],
         device: Dict[str, Any],
         args: Dict[str, Any],
         progress_queue: Optional[asyncio.Queue],
@@ -127,11 +129,11 @@ class LocalToolProxyTool(BaseTool):
         """创建 invocation + 轮询 events/state 至终态/超时：终态映射（计费在 write_result 落库侧）"""
         invocation_id = await asyncio.to_thread(
             repository.create_invocation,
-            tenant_id, user_id, str(device["id"]), self.name, args,
+            tenant_id, user_id, str(device["id"]), self.name, args, session_id,
         )
         logger.info(
             f"后端日志：本地工具 invocation 已创建 id={invocation_id} "
-            f"tool={self.name} device={device['id']} tenant={tenant_id}"
+            f"tool={self.name} device={device['id']} tenant={tenant_id} session={session_id}"
         )
         self._push_progress(progress_queue, {
             "type": "started",
@@ -301,6 +303,7 @@ class LocalToolProxyTool(BaseTool):
         self,
         tenant_id: str,
         user_id: str,
+        session_id: Optional[str],
         device: Dict[str, Any],
         args: Dict[str, Any],
         progress_queue: Optional[asyncio.Queue],
@@ -364,7 +367,7 @@ class LocalToolProxyTool(BaseTool):
                 "text": f"已关闭弹层「{dismiss_text}」，正在重试：{self.display_name}",
             })
             retry_result = await self._dispatch_and_wait(
-                tenant_id, user_id, device, args, progress_queue)
+                tenant_id, user_id, session_id, device, args, progress_queue)
             healed = bool(retry_result.get("success"))
             if healed:
                 heal_price = self._heal_price()
@@ -377,6 +380,8 @@ class LocalToolProxyTool(BaseTool):
                             credit_cost=heal_price,
                             device_id=str(device["id"]),
                             invocation_id=retry_result.get("invocation_id"),
+                            session_id=session_id,
+                            user_id=user_id,
                         )
                     except Exception as e:  # noqa: BLE001 计费失败不影响自愈结果
                         logger.opt(exception=True).error(
