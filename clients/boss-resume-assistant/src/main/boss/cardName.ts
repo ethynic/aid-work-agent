@@ -1,8 +1,13 @@
 /**
- * 推荐牛人卡片行「打招呼按钮 → 候选人姓名」配对（共享模块）。
+ * 推荐牛人卡片「按钮定位 + 姓名配对」（共享模块）。
+ *
+ * 模块内容：findButtonsByExactText（视口内按文案找卡片按钮）+ pairCardName（按钮→同排
+ * 姓名配对）。两者同域：都产出/消费 GreetButtonRef，共同构成「卡片识别」能力——
+ * doctor 配对自检与业务执行器共用同一实现（2026-09-01 上移共享），保证「测的就是
+ * 真实跑的那份代码」，规则变更不会出现自检与执行漂移。
  *
  * 配对规则（2026-09-01 相对化修订：旧规则姓名列绝对像素 x<360 按开发机 1278 宽窗口校准，
- * 自动拉起的调试 Chrome 窗口尺寸不同时姓名列右移全部配不上——定向打招呼滚遍全列表
+ * 自动拉起的调试 Chrome 窗口尺寸不同时姓名列 x 右移全部配不上——定向打招呼滚遍全列表
  * 也「找不到」目标；改为「按钮同排窄带（|dy|<16）内、按钮左侧 60% 区域、排除状态词、
  * 姓名模式匹配取 x 最小」，不依赖窗口宽度/DPI）：
  * 按钮同排窄带的姓名区内，取符合姓名模式的节点（x 最小优先）。
@@ -13,14 +18,17 @@
  * 使用方（同一套锚定规则，保证「读到的人」与「打招呼的人」是同一个人）：
  * - ResumeBatchReader：批量读简历时给卡片配姓名（配对失败用 OCR 首行启发式兜底）
  * - GreetExecutor：定向打招呼时按姓名匹配卡片（配对失败的按钮一律跳过，宁可不打不能打错）
+ * - doctor 配对自检：只读报告当前页配对率（0 配对=布局失配，定向打招呼必然找不到人）
  */
 import {
   type DomSnapshot,
   type ClickPoint,
   accumulateOwnerOffset,
   boundsCenter,
+  findNodesByString,
   indexedValues,
 } from './domSnapshot.js'
+import { viewportOf } from './FilterSetter.js'
 
 /** 「打招呼」按钮文本（DOM 抓取的原始文本 trim 后精确相等） */
 export const GREET_TEXT = '打招呼'
@@ -90,4 +98,32 @@ export function pairCardName(
     if (!best || n.x < best.x) best = { t: n.t, x: n.x }
   }
   return best?.t ?? null
+}
+
+/**
+ * 视口内全部指定文案按钮（trim 后精确相等），按 y 从上到下排序（含所在文档序号，配对姓名用）。
+ * 从 GreetExecutor 私有方法上移共享（2026-09-01）：doctor 配对自检与 greet 共用同一实现。
+ * 坑修复（2026-08-27）：原实现 findIndex 只取第一个匹配的 string 下标——strings 表中同文案
+ * 可出现多个下标（不同节点分别 intern），只认第一个会漏掉其余按钮；现遍历全部下标。
+ */
+export function findButtonsByExactText(snap: DomSnapshot, text: string): GreetButtonRef[] {
+  const viewport = viewportOf(snap)
+  const points: GreetButtonRef[] = []
+  snap.strings.forEach((s, stringIndex) => {
+    if (s.trim() !== text) return
+    snap.documents.forEach((document, documentIndex) => {
+      for (const { bounds } of findNodesByString(document, stringIndex)) {
+        if (bounds[2] <= 0 || bounds[3] <= 0) continue
+        // bounds 是文档绝对坐标（不随滚动变化，真机实测：滚动后 bounds 不动、scrollOffsetY 变），
+        // 屏幕坐标 = owner 偏移 + bounds - 文档滚动偏移；只收视口内的：视口外的按钮 Win32 点不到
+        const offset = accumulateOwnerOffset(snap, documentIndex)
+        const c = boundsCenter(bounds)
+        const x = offset.x + c.x - (document.scrollOffsetX ?? 0)
+        const y = offset.y + c.y - (document.scrollOffsetY ?? 0)
+        if (x < 0 || y < 0 || x > viewport.width || y > viewport.height) continue
+        points.push({ point: { x, y }, documentIndex })
+      }
+    })
+  })
+  return points.sort((a, b) => a.point.y - b.point.y)
 }

@@ -1,7 +1,10 @@
 @echo off
 chcp 65001 >nul
-rem AidWork runtime 后台自愈启动器（任务计划程序登录时调用，无窗口运行）
-rem 优先用 npm 全局安装的 aid-runtime；开发机回退仓库 dist 直接 node 运行
+rem AidWork runtime auto-restart launcher (called by Task Scheduler at logon, windowless)
+rem Prefers globally installed aid-runtime; dev fallback: repo dist via node.
+rem 2026-09-01: runtime now writes logs/runtime.log itself (with rotation), so this
+rem script no longer redirects output (avoids double-writing). Only loop lines are
+rem logged here. When run manually by double-click, output still shows in this window.
 setlocal
 set PATH=%PATH%;%APPDATA%\npm
 set LOGDIR=%APPDATA%\aidwork-tool-runtime\logs
@@ -12,9 +15,9 @@ if exist "%LOG%" for %%F in ("%LOG%") do if %%~zF GTR 5242880 ren "%LOG%" runtim
 set RT_CMD=aid-runtime
 where %RT_CMD% >nul 2>nul
 if errorlevel 1 set RT_CMD=node C:\repos\aid-work-agent\clients\agent-tool-runtime\dist\src\cli.js
-echo [%date% %time%] 自愈循环启动，命令: %RT_CMD% >> "%LOG%"
+echo [%date% %time%] watcher loop start, cmd: %RT_CMD% >> "%LOG%"
 :loop
-%RT_CMD% start >> "%LOG%" 2>&1
-echo [%date% %time%] runtime 退出，10 秒后自动拉起 >> "%LOG%"
+%RT_CMD% start
+echo [%date% %time%] runtime exited, restart in 10s >> "%LOG%"
 timeout /t 10 /nobreak >nul
 goto loop

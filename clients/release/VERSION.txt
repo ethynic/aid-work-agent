@@ -1,8 +1,8 @@
-agent-tool-runtime 0.2.8（内含 boss-cli 0.2.8）
+agent-tool-runtime 0.2.9（内含 boss-cli 0.2.9）
 构建日期：2026-09-01
 
 本目录文件
-- agent-tool-runtime-0.2.8.tgz   安装包（BOSS 直聘操作能力已内含，只需装这一个）
+- agent-tool-runtime-0.2.9.tgz   安装包（BOSS 直聘操作能力已内含，只需装这一个）
 - start_runtime.bat / register_runtime_task.ps1   后台运行与开机自启
 - collect_logs.bat / collect_logs.ps1   诊断包采集
 - 安装手册.md   按手册从上到下执行即可
@@ -10,23 +10,21 @@ agent-tool-runtime 0.2.8（内含 boss-cli 0.2.8）
 环境要求
 - Windows 10/11 x64、Node ≥ 20、本机 Chrome（无需管理员权限）
 
-0.2.8 相对 0.2.7 的变化（真机事故修复：定向打招呼“一直往下滑找不到人”+ CDP 断连误报）
-- 姓名配对锚定去绝对像素：旧规则“姓名列 x<360”按单一窗口尺寸校准，Chrome 窗口宽度/
-  分辨率不同时（尤其自动拉起的调试 Chrome）全部卡片配不上 → 定向打招呼滚遍全列表也
-  找不到目标。改为相对锚定（按钮同排、按钮左侧 60% 区域、排除状态词），任意窗口宽度可用
-- 侧栏菜单与沟通页“列表/面板”分界同步相对化（x<200 / x=850 两处同源问题）
-- 定向查找滚动上限 30 屏：目标不在当前列表时不再无限滚到底（此前最长滚 4 分钟+）
-- 滚动查找实时进度上报：“正在查找「姓名」…已滚动 N 屏”（此前滚动期间零进度，用户
-  误以为故障手动关闭 Chrome → CDP 断连）
-- CDP 断连错误（socket is not connected / disconnected / session mismatch）从
-  “未预期错误”改为可重试的“Chrome 调试端口不可用”，提示重开 Chrome 后重试
-- collect_logs.bat：在压缩包里直接双击时给出“请先解压”的人话提示（不再报 PowerShell 天书）
+0.2.9 相对 0.2.8 的变化（客户端可观测性补强——任何启动方式都有日志/诊断证据）
+- runtime 进程内直接写日志文件（logs/runtime.log，超 5MB 自动轮转 runtime.old.log）：
+  此前只有经 start_runtime.bat 启动才有文件，手动控制台跑 aid-runtime 时日志随窗口
+  关闭全丢，排障只能靠服务端反推；boss CLI（[boss-mcp] 工具调用行）的输出也一并落盘
+- start_runtime.bat 不再重定向输出（避免与进程内写文件双写），日志行改英文消除乱码
+- doctor 新增「姓名配对自检」：直接报告当前页 N 个打招呼按钮配对成功几个、姓名清单；
+  配对为 0（页面布局与锚定规则失配）时明确报错并提示发诊断包
+- collect_logs 诊断包增强：新增 node 进程清单 processes.txt（排查旧 runtime 未停、双
+  runtime 并存）；修复版本号读取为空的问题（PowerShell 对无 BOM UTF-8 按 GBK 误读，
+  导致 JSON 解析失败）；zip 内文件名 ASCII 化（env_info.txt 等，解压不再乱码）
 - 升级方式：先停止本机 Runtime（stop_runtime 或 Stop-ScheduledTask），再
   npm install -g 新 tgz 覆盖安装，配置与配对自动保留，最后重新启动 Runtime
 
-0.2.7 相对 0.2.6 的变化
-- goto 跳转幂等修复：已在目标页时零点击直接成功；菜单点击未生效时（如已在沟通页
-  的推荐/会话子页）自动改用 CDP 页内直跳到目标页并二次校验，不再误报
-  EXECUTION_UNKNOWN（协议白名单新增 Page.navigate，审计脱敏覆盖）
-- read-chat 每条消息携带原始聊天时间戳：BOSS 时间分隔行（如「08-25 18:13」）按
-  会话语序向后继承到每条消息，云端正可据此把真实沟通时间写入简历沟通记录
+0.2.8 相对 0.2.7 的变化（真机事故修复：定向打招呼“一直往下滑找不到人”+ CDP 断连误报）
+- 姓名配对锚定去绝对像素（任意窗口宽度可用）；侧栏菜单与沟通页列表/面板分界同步相对化
+- 定向查找滚动上限 30 屏 + 实时进度上报（“正在查找「姓名」…已滚动 N 屏”）
+- CDP 断连错误改为可重试的“Chrome 调试端口不可用”（不再报未预期错误）
+- collect_logs.bat：在压缩包里直接双击时提示先解压

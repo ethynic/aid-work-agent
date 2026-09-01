@@ -23,14 +23,8 @@
  *   - 非定向模式：计数证据（总数较点击前减少，原规则）| 位置证据（点击位置附近出现
  *     「继续沟通」按钮）任一满足即成功；两者都不满足才报 UNKNOWN 停止。
  */
-import {
-  type DomSnapshot,
-  type ClickPoint,
-  findNodesByString,
-  accumulateOwnerOffset,
-  boundsCenter,
-} from './domSnapshot.js'
-import { GREET_TEXT, CONTINUE_TEXT, pairCardName, type GreetButtonRef } from './cardName.js'
+import { type DomSnapshot, type ClickPoint, findNodesByString } from './domSnapshot.js'
+import { GREET_TEXT, CONTINUE_TEXT, pairCardName, findButtonsByExactText, type GreetButtonRef } from './cardName.js'
 import { viewportOf } from './FilterSetter.js'
 import { CancelledError } from '../operations/types.js'
 
@@ -182,7 +176,7 @@ export class GreetExecutor {
         } else {
           // 非定向模式：计数证据（原规则，保留）或位置证据（点击点附近出现「继续沟通」）任一满足即成功
           const remaining = this.findGreetButtons(after).length
-          const flippedNearClick = this.findButtonsByExactText(after, CONTINUE_TEXT).some(
+          const flippedNearClick = findButtonsByExactText(after, CONTINUE_TEXT).some(
             (b) =>
               Math.abs(b.point.y - target.point.y) <= VERIFY_ROW_DY &&
               Math.abs(b.point.x - target.point.x) <= VERIFY_COL_DX,
@@ -232,35 +226,7 @@ export class GreetExecutor {
 
   /** 视口内全部「打招呼」按钮，按 y 从上到下排序（含所在文档序号，定向模式配对姓名用） */
   private findGreetButtons(snap: DomSnapshot): GreetButtonRef[] {
-    return this.findButtonsByExactText(snap, GREET_TEXT)
-  }
-
-  /**
-   * 视口内全部指定文案按钮（trim 后精确相等），按 y 从上到下排序（含所在文档序号，配对姓名用）。
-   * 坑修复（2026-08-27）：原实现 findIndex 只取第一个匹配的 string 下标——strings 表中同文案
-   * 可出现多个下标（不同节点分别 intern），只认第一个会漏掉其余按钮；现遍历全部下标
-   * （与 ChatSendExecutor.locateSendButton 同款 forEach 写法）。
-   */
-  private findButtonsByExactText(snap: DomSnapshot, text: string): GreetButtonRef[] {
-    const viewport = viewportOf(snap)
-    const points: GreetButtonRef[] = []
-    snap.strings.forEach((s, stringIndex) => {
-      if (s.trim() !== text) return
-      snap.documents.forEach((document, documentIndex) => {
-        for (const { bounds } of findNodesByString(document, stringIndex)) {
-          if (bounds[2] <= 0 || bounds[3] <= 0) continue
-          // bounds 是文档绝对坐标（不随滚动变化，真机实测：滚动后 bounds 不动、scrollOffsetY 变），
-          // 屏幕坐标 = owner 偏移 + bounds - 文档滚动偏移；只收视口内的：视口外的按钮 Win32 点不到
-          const offset = accumulateOwnerOffset(snap, documentIndex)
-          const c = boundsCenter(bounds)
-          const x = offset.x + c.x - (document.scrollOffsetX ?? 0)
-          const y = offset.y + c.y - (document.scrollOffsetY ?? 0)
-          if (x < 0 || y < 0 || x > viewport.width || y > viewport.height) continue
-          points.push({ point: { x, y }, documentIndex })
-        }
-      })
-    })
-    return points.sort((a, b) => a.point.y - b.point.y)
+    return findButtonsByExactText(snap, GREET_TEXT)
   }
 }
 

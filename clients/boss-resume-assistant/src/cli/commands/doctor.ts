@@ -5,13 +5,17 @@
  *   node dist/src/cli/index.js doctor [--cdp-port 9222]
  *
  * 检查 ① win-click.ps1 存在 ② CDP 端点可连 ③ 能 attach zhipin.com 页面
- * ④ 页面含登录态特征（「筛选」按钮或侧边菜单文案）。任一失败退出码 1。
- * 只读：绝不点击、不产生任何业务写动作。
+ * ④ 页面含登录态特征（「筛选」按钮或侧边菜单文案）
+ * ⑤ 姓名配对自检（2026-09-01 新增）：推荐页视口内「打招呼」按钮与卡片姓名配对——
+ *   配对率低说明页面布局与锚定规则失配，定向打招呼会「滚遍列表也找不到人」。
+ *   任一失败退出码 1。只读：绝不点击、不产生任何业务写动作。
  */
 import { CdpGateway } from '../../main/cdp/CdpGateway.js'
 import { DEFAULT_CDP_PORT } from '../../main/chrome/ChromeAttacher.js'
 import { WinMouseClicker } from '../../main/input/WinMouseClicker.js'
 import type { DomSnapshot } from '../../main/boss/domSnapshot.js'
+import { viewportOf } from '../../main/boss/FilterSetter.js'
+import { GREET_TEXT, findButtonsByExactText, pairCardName } from '../../main/boss/cardName.js'
 
 export interface DoctorCommandOptions {
   cdpPort?: number
@@ -59,12 +63,32 @@ export async function doctorCommand(opts: DoctorCommandOptions): Promise<number>
     }
   }
 
-  // ④ 页面含登录态特征
+  // ④ 页面含登录态特征 + ⑤ 姓名配对自检（共用同一份 snapshot，只读）
   if (attached) {
     try {
       const snap = (await gw.captureDomSnapshot()) as DomSnapshot
       const hit = snap.strings.some((s) => LOGIN_MARKERS.some((p) => p.test(s.trim())))
       check(hit, '页面登录态特征（筛选按钮/侧边菜单）', hit ? '' : '未找到，可能未登录或未打开 BOSS 页面')
+
+      // ⑤ 姓名配对自检：视口内「打招呼」按钮 → pairCardName 配对率
+      // 0 个按钮：可能已全部打过招呼/列表为空/不在推荐页——跳过不算失败
+      // 0 配对且有按钮：锚定规则与当前页面布局失配 → 定向打招呼必然「找不到人」，fail
+      const buttons = findButtonsByExactText(snap, GREET_TEXT)
+      if (buttons.length === 0) {
+        console.log('ℹ️ 姓名配对自检：当前视口无「打招呼」按钮（可能已全部打过招呼或不在推荐牛人页），跳过')
+      } else {
+        const viewport = viewportOf(snap)
+        const names = buttons.map((b) => pairCardName(snap, b, viewport))
+        const paired = names.filter((n): n is string => n !== null)
+        if (paired.length === 0) {
+          check(false, `姓名配对自检（${buttons.length} 个「打招呼」按钮配对成功 0）`,
+            '锚定规则与当前页面布局失配：定向打招呼将「滚遍列表也找不到人」，请把 collect_logs 诊断包发给管理员')
+        } else if (paired.length < buttons.length) {
+          console.log(`✅ 姓名配对自检：${buttons.length} 个「打招呼」按钮配对成功 ${paired.length}（${paired.join('、')}）；${buttons.length - paired.length} 个未配上（无中文名卡片属正常，fail-safe 跳过）`)
+        } else {
+          console.log(`✅ 姓名配对自检：${buttons.length} 个「打招呼」按钮全部配对成功（${paired.join('、')}）`)
+        }
+      }
     } catch (e) {
       check(false, '页面登录态特征（筛选按钮/侧边菜单）', e instanceof Error ? e.message : String(e))
     }

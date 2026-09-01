@@ -9,7 +9,7 @@
  */
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
-import { logError, logInfo } from './log.js'
+import { logError, logInfo, logProviderChunk } from './log.js'
 
 export class ProviderCrashError extends Error {
   constructor(message: string) {
@@ -82,7 +82,9 @@ export class ProviderManager {
     const transport = new StdioClientTransport({
       command: process.execPath,
       args: [this.entry, 'mcp', '--stdio'],
-      stderr: 'inherit',
+      // pipe 而非 inherit：[boss-mcp] 工具调用行经 logProviderChunk 转发（控制台 + 文件落盘），
+      // 脱离 start_runtime.bat 重定向启动时排障证据不再丢失（2026-09-01）
+      stderr: 'pipe',
     })
     const client = new Client(
       { name: 'agent-tool-runtime', version: '0.1.0' },
@@ -109,6 +111,9 @@ export class ProviderManager {
     }
     this.client = client
     this.transport = transport
+    // provider stderr（[boss-mcp] 启动/工具行）转发：控制台 + 日志文件（PassThrough 缓冲，
+    // spawn 早于 connect 的行 attach 后仍可收到）
+    transport.stderr?.on('data', (chunk: Buffer) => logProviderChunk(chunk.toString()))
     logInfo(`Provider 已启动 pid=${transport.pid ?? '?'} entry=${this.entry}`)
   }
 
