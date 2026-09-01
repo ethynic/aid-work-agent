@@ -53,6 +53,10 @@ export interface BossSession {
   captureFullpage(): Promise<Buffer>
   /** 当前 BOSS 标签页 URL（Target.getTargets 实时取） */
   getUrl(): Promise<string>
+  /** CDP 页内导航（Page.navigate）。goto 幂等兜底专用：点击菜单未触发 SPA 路由变化时，
+   *  在 /web/chat 区内直跳目标页（不动鼠标键盘）。可选成员——旧测试替身可不提供，
+   *  PageNavigator 缺省时点击未生效仍走原有 fail-loud 报错 */
+  pageNavigate?(url: string): Promise<void>
   /** 断开 CDP 连接（不关闭 Chrome）；必须幂等、绝不 throw */
   close(): Promise<void>
 }
@@ -130,6 +134,10 @@ export const defaultSessionFactory: BossSessionFactory = async (ctx) => {
       const targets = await gw.getTargets()
       return targets.find((t) => t.type === 'page' && t.url.includes('zhipin.com'))?.url ?? ''
     },
+    pageNavigate: async (url) => {
+      await gw.pageEnable()
+      await gw.pageNavigate(url)
+    },
     close: () => gw.close().catch(() => {}),
   }
 }
@@ -194,6 +202,7 @@ export async function ensureChatPage(session: BossSession, ctx: OpContext): Prom
     snapshot: session.snapshot,
     click: session.click,
     getUrl: session.getUrl,
+    pageNavigate: session.pageNavigate,
     signal: ctx.signal,
   })
   await navigator.navigate('chat')

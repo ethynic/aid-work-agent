@@ -27,18 +27,21 @@ pytestmark = pytest.mark.integration
 
 @pytest.fixture(scope="module", autouse=True)
 def _ensure_tables():
-    """模块级幂等建表（时间线两表 FK 引用简历表，须在 jobs/resumes 之后建）"""
+    """模块级幂等建表（时间线两表 FK 引用简历表，须在 jobs/resumes 之后建；
+    企微通知留痕表 resume_id 也引用简历表，一并初始化）"""
     from src.db.database import get_db_connection
     from src.services.recruiting_job_service import init_recruiting_job_tables
     from src.api.recruiting_operator import (
         init_recruiting_operator_tables,
         init_recruiting_timeline_tables,
     )
+    from src.services.recruiting_notify_service import init_recruiting_notify_tables
 
     with get_db_connection() as conn:
         init_recruiting_job_tables(conn)
         init_recruiting_operator_tables(conn)
         init_recruiting_timeline_tables(conn)
+        init_recruiting_notify_tables(conn)
         conn.commit()
 
 
@@ -71,6 +74,10 @@ def temp_tenant_with_user():
             )
             cursor.execute(
                 "DELETE FROM bs_recruiting_operator_resume_invitations WHERE tenant_id = %s",
+                (tenant_id,),
+            )
+            cursor.execute(
+                "DELETE FROM bs_recruiting_notify_logs WHERE tenant_id = %s",
                 (tenant_id,),
             )
             cursor.execute(
@@ -671,3 +678,167 @@ class TestInvitationAPIs:
         assert list_resp["error"] == "简历不存在"
         assert create_resp["success"] is False
         assert create_resp["error"] == "简历不存在"
+
+    def test_delete_invitation_success(self, temp_tenant_with_user):
+        """删除本租户邀约记录成功（2026-09-01 暴露删除入口）"""
+        from src.api import recruiting_operator
+        from src.db.database import get_db_connection
+
+        ctx = temp_tenant_with_user
+        resume_id = _insert_resume(ctx["tenant_id"], ctx["user_id"])
+        req = recruiting_operator.CreateInvitationRequest(status="pending", method="电话面试")
+        with _mock_tenant_ctx(ctx["tenant_id"]), _mock_user(ctx["user_id"]):
+            created = _unpack(_call(
+                recruiting_operator.create_invitation(resume_id, req, request=None)))
+        invitation_id = created["data"]["id"]
+
+        with _mock_tenant_ctx(ctx["tenant_id"]):
+            response = _unpack(_call(recruiting_operator.delete_invitation(invitation_id, request=None)))
+
+        assert response["success"] is True
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT id FROM bs_recruiting_operator_resume_invitations WHERE id = %s",
+                (invitation_id,),
+            )
+            assert cursor.fetchone() is None
+
+    def test_delete_invitation_cross_tenant_returns_404(self, temp_tenant_with_user):
+        """租户隔离：B 租户删除 A 租户邀约记录返回 404"""
+        from src.api import recruiting_operator
+        from src.saas.db.tenant_db import TenantDB
+        from src.db.database import get_db_connection
+
+        ctx_a = temp_tenant_with_user
+        resume_id_a = _insert_resume(ctx_a["tenant_id"], ctx_a["user_id"])
+        req = recruiting_operator.CreateInvitationRequest(status="pending")
+        with _mock_tenant_ctx(ctx_a["tenant_id"]), _mock_user(ctx_a["user_id"]):
+            created = _unpack(_call(
+                recruiting_operator.create_invitation(resume_id_a, req, request=None)))
+        invitation_id_a = created["data"]["id"]
+
+        tenant_code_b = f"T{uuid.uuid4().hex[:6].upper()}"
+        tenant_b = TenantDB.create(
+            company_name=f"邀约删除测试租户B-{tenant_code_b}",
+            tenant_code=tenant_code_b,
+            contact_name="测试B",
+            contact_phone="13800000001",
+        )
+        if not tenant_b:
+            pytest.skip("无法创建测试租户B")
+        tenant_id_b = tenant_b["tenant_id"]
+        try:
+            with _mock_tenant_ctx(tenant_id_b):
+                response = _unpack(_call(
+                    recruiting_operator.delete_invitation(invitation_id_a, request=None)))
+
+            assert response["success"] is False
+            assert response["error"] == "邀约记录不存在"
+            # A 租户的邀约记录未被误删
+            from src.services import recruiting_resume_timeline_service
+            assert recruiting_resume_timeline_service.list_invitations(ctx_a["tenant_id"], resume_id_a)
+        finally:
+            TenantDB.delete(tenant_id_b)
+            try:
+                with get_db_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("DELETE FROM tenants WHERE tenant_id = %s", (tenant_id_b,))
+                    conn.commit()
+            except Exception:
+                pass
+
+
+# ============== 3. 企微通知留痕 API（与简历联动，2026-09-01） ==============
+
+def _insert_notify_log(tenant_id: str, resume_id, kind: str, content: str) -> int:
+    """直接插入通知留痕（resume_id 可为 None=多候选人推送），返回 id"""
+    from src.db.database import get_db_connection
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO bs_recruiting_notify_logs
+                (tenant_id, kind, candidates, content, status, error, resume_id)
+            VALUES (%s, %s, '[]'::jsonb, %s, 'sent', NULL, %s)
+            RETURNING id
+            """,
+            (tenant_id, kind, content, resume_id),
+        )
+        row = cursor.fetchone()
+        conn.commit()
+        return row["id"]
+
+
+class TestResumeNotifyLogsAPI:
+    """GET /resumes/{id}/notify-logs 测试（租户隔离 + 简历 404）"""
+
+    def test_list_notify_logs_by_resume(self, temp_tenant_with_user):
+        """返回该简历关联的留痕（created_at DESC），投影 kind/status/content/error/created_at"""
+        from src.api import recruiting_operator
+
+        ctx = temp_tenant_with_user
+        resume_id = _insert_resume(ctx["tenant_id"], ctx["user_id"])
+        pre_id = _insert_notify_log(ctx["tenant_id"], resume_id, "pre", "【面试邀约知会】...")
+        done_id = _insert_notify_log(ctx["tenant_id"], resume_id, "done", "【面试邀约已完成】...")
+        # 不关联该简历的留痕（多候选人推送）→ 不出现在结果里
+        _insert_notify_log(ctx["tenant_id"], None, "done", "【多候选人通报】...")
+
+        with _mock_tenant_ctx(ctx["tenant_id"]):
+            response = _unpack(_call(recruiting_operator.list_resume_notify_logs(resume_id, request=None)))
+
+        assert response["success"] is True
+        items = response["data"]["items"]
+        assert [it["id"] for it in items] == [done_id, pre_id]  # 最新在前
+        assert items[0]["kind"] == "done" and items[1]["kind"] == "pre"
+        assert items[0]["status"] == "sent"
+        assert set(items[0].keys()) == {"id", "kind", "status", "content", "error", "created_at"}
+
+    def test_notify_logs_cross_tenant_invisible(self, temp_tenant_with_user):
+        """租户隔离：B 租户查询 A 租户简历的留痕 → 404（子资源先查简历归属，fail-closed）"""
+        from src.api import recruiting_operator
+        from src.saas.db.tenant_db import TenantDB
+        from src.db.database import get_db_connection
+
+        ctx_a = temp_tenant_with_user
+        resume_id_a = _insert_resume(ctx_a["tenant_id"], ctx_a["user_id"])
+        _insert_notify_log(ctx_a["tenant_id"], resume_id_a, "pre", "A租户的通知")
+
+        tenant_code_b = f"T{uuid.uuid4().hex[:6].upper()}"
+        tenant_b = TenantDB.create(
+            company_name=f"留痕测试租户B-{tenant_code_b}",
+            tenant_code=tenant_code_b,
+            contact_name="测试B",
+            contact_phone="13800000001",
+        )
+        if not tenant_b:
+            pytest.skip("无法创建测试租户B")
+        tenant_id_b = tenant_b["tenant_id"]
+        try:
+            with _mock_tenant_ctx(tenant_id_b):
+                response = _unpack(_call(
+                    recruiting_operator.list_resume_notify_logs(resume_id_a, request=None)))
+
+            assert response["success"] is False
+            assert response["error"] == "简历不存在"
+        finally:
+            TenantDB.delete(tenant_id_b)
+            try:
+                with get_db_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("DELETE FROM tenants WHERE tenant_id = %s", (tenant_id_b,))
+                    conn.commit()
+            except Exception:
+                pass
+
+    def test_notify_logs_resume_not_found_returns_404(self, temp_tenant_with_user):
+        """简历不存在 → 404"""
+        from src.api import recruiting_operator
+
+        ctx = temp_tenant_with_user
+        with _mock_tenant_ctx(ctx["tenant_id"]):
+            response = _unpack(_call(recruiting_operator.list_resume_notify_logs(99999999, request=None)))
+
+        assert response["success"] is False
+        assert response["error"] == "简历不存在"

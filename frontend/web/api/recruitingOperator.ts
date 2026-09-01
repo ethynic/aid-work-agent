@@ -528,3 +528,37 @@ export async function updateInvitation(
   })
   return res.json()
 }
+
+export async function deleteInvitation(invitationId: number): Promise<ApiMutationResponse> {
+  const res = await fetch(`${API_BASE}/recruiting-operator/invitations/${invitationId}`, {
+    method: 'DELETE',
+    headers: { ...getAuthHeader() },
+  })
+  return res.json()
+}
+
+// ============== 企微通知留痕（与简历联动，2026-09-01） ==============
+
+/** 通知类型：pre=邀约前知会 / done=邀约后通报 */
+export type NotifyKind = 'pre' | 'done'
+
+/** 企微通知留痕（单候选人推送时关联简历；轻量投影，不取 candidates JSONB） */
+export interface NotifyLog {
+  id: number
+  kind: NotifyKind | string
+  /** sent=已发送 / failed=发送失败（可走管理端补推） */
+  status: 'sent' | 'failed' | string
+  content: string
+  error?: string | null
+  created_at?: string
+}
+
+/** 某简历的企微通知留痕列表（created_at DESC，最近 20 条） */
+export async function listResumeNotifyLogs(
+  resumeId: number,
+): Promise<{ success: boolean; data?: { items: NotifyLog[] }; error?: string }> {
+  const res = await fetch(`${API_BASE}/recruiting-operator/resumes/${resumeId}/notify-logs`, {
+    headers: { ...getAuthHeader() },
+  })
+  return res.json()
+}

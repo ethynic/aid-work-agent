@@ -281,7 +281,7 @@ export function yangSnapshot(opts: YangSnapshotOpts = {}): DomSnapshot {
                     ] },
                   ],
                 },
-                // 消息组 2：我方消息 + I.status「已读」（无时间行 → ts 缺省）
+                // 消息组 2：我方消息 + I.status「已读」（无时间行 → ts 向后继承组 1 的 10:56）
                 {
                   tag: 'DIV',
                   cls: 'message-item',

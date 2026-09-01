@@ -10,7 +10,8 @@
 - bs_recruiting_notify_settings：租户通知配置（webhook_url Fernet 密文存储，
   API 层只出掩码 ***+末4位，沿 channel_config 范式）
 - bs_recruiting_notify_logs：通知留痕（kind=pre|done / candidates JSONB / content /
-  status=sent|failed / error），用于查询与手动补推
+  status=sent|failed / error / resume_id 单候选人推送关联的简历，ON DELETE SET NULL），
+  用于查询与手动补推
 
 关键约定：
 - boss_interview_demo 入参只有 remark（无候选人名/日期），名单只存在于 agent 对话
@@ -55,6 +56,7 @@ def init_recruiting_notify_tables(conn) -> None:
         )
     """)
     # 通知留痕：sent / failed，failed 可走手动补推 API 重发
+    # resume_id：单候选人推送时关联的简历（多候选人推送为 NULL，语义见 push_interview_notify）
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS bs_recruiting_notify_logs (
             id BIGSERIAL PRIMARY KEY,
@@ -64,6 +66,7 @@ def init_recruiting_notify_tables(conn) -> None:
             content TEXT NOT NULL,
             status TEXT NOT NULL,
             error TEXT,
+            resume_id BIGINT REFERENCES bs_recruiting_operator_resumes(id) ON DELETE SET NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -71,6 +74,12 @@ def init_recruiting_notify_tables(conn) -> None:
         CREATE INDEX IF NOT EXISTS idx_bs_rnl_tenant
         ON bs_recruiting_notify_logs(tenant_id, created_at)
     """)
+    # 老库补列（幂等）：resume_id 关联列是后加的，建表语句对已存在的表不生效
+    cursor.execute(
+        "ALTER TABLE bs_recruiting_notify_logs "
+        "ADD COLUMN IF NOT EXISTS resume_id BIGINT "
+        "REFERENCES bs_recruiting_operator_resumes(id) ON DELETE SET NULL"
+    )
     logger.info("recruiting_notify 通知表已就绪 (bs_recruiting_notify_settings / bs_recruiting_notify_logs)")
 
 
@@ -246,18 +255,22 @@ def format_done_content(job_name: str, candidates: List[Dict[str, Any]]) -> str:
 def _insert_log(
     tenant_id: str, kind: str, candidates: List[Dict[str, Any]],
     content: str, status: str, error: Optional[str],
+    resume_id: Optional[int] = None,
 ) -> int:
-    """写通知留痕，返回日志 id（独立连接，失败由调用方兜底）"""
+    """写通知留痕，返回日志 id（独立连接，失败由调用方兜底）。
+
+    resume_id：单候选人推送时关联的简历 id，多候选人推送传 None（列语义，不强制）。
+    """
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
             """
             INSERT INTO bs_recruiting_notify_logs
-                (tenant_id, kind, candidates, content, status, error)
-            VALUES (%s, %s, %s, %s, %s, %s)
+                (tenant_id, kind, candidates, content, status, error, resume_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
-            (tenant_id, kind, psycopg2.extras.Json(candidates), content, status, error),
+            (tenant_id, kind, psycopg2.extras.Json(candidates), content, status, error, resume_id),
         )
         log_id = cursor.fetchone()["id"]
         conn.commit()
@@ -275,6 +288,25 @@ def get_log(tenant_id: str, log_id: int) -> Optional[Dict[str, Any]]:
         )
         row = cursor.fetchone()
     return dict(row) if row else None
+
+
+def list_notify_logs_by_resume(tenant_id: str, resume_id: int) -> List[Dict[str, Any]]:
+    """某简历的企微通知留痕列表（created_at DESC, id DESC 次级键保序，最近 20 条）。
+
+    供简历详情页「企微通知留痕」展示（kind=pre 事前知会 / done 事后通报）。
+    轻量投影：不取 candidates JSONB（姓名已在 content 模板里）。
+    """
+    ensure_tables()
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id, kind, status, content, error, created_at "
+            "FROM bs_recruiting_notify_logs "
+            "WHERE tenant_id = %s AND resume_id = %s "
+            "ORDER BY created_at DESC, id DESC LIMIT 20",
+            (tenant_id, resume_id),
+        )
+        return [dict(row) for row in cursor.fetchall()]
 
 
 def _update_log_status(tenant_id: str, log_id: int, status: str, error: Optional[str]) -> None:
@@ -299,8 +331,12 @@ def _normalize_candidates(candidates: List[Dict[str, Any]]) -> List[Dict[str, An
 async def push_interview_notify(
     tenant_id: str, kind: str, job_name: str,
     candidates: List[Dict[str, Any]], note: Optional[str] = None,
+    resume_id: Optional[int] = None,
 ) -> Dict[str, Any]:
     """面试邀约企微通知编排（kind=pre 事前知会 / done 事后通报）。
+
+    resume_id：可选，单候选人推送时关联的简历 id（写入留痕，供简历详情页「企微通知留痕」
+    查询）；多候选人推送由调用方决定不传（NULL）。解析失败/无简历传 None 不阻塞推送。
 
     返回 {pushed, log_id?, reason?, error?}：
     - 未配置 / 未 enabled → {pushed: False, reason: "未启用"}（不写日志，避免空跑堆积）
@@ -340,7 +376,7 @@ async def push_interview_notify(
         status = "sent" if ok else "failed"
         log_id = await asyncio.to_thread(
             _insert_log, tenant_id, kind, _normalize_candidates(candidates),
-            content, status, None if ok else (err or "发送失败"),
+            content, status, None if ok else (err or "发送失败"), resume_id,
         )
         result: Dict[str, Any] = {"pushed": ok, "log_id": log_id}
         if not ok:

@@ -53,12 +53,13 @@ test('classOf：按 Chrome 151 attributes 嵌套数组形状拼出 class；无 c
 
 // ---------- 主场景（真机杨鸿杰会话复刻） ----------
 
-test('杨鸿杰场景：system 职位卡(10:56) + 我方消息(已读/无 ts) + 对方消息(11:04)，精确断言', async () => {
+test('杨鸿杰场景：system 职位卡(10:56) + 我方消息(已读，ts 继承 10:56) + 对方消息(11:04)，精确断言', async () => {
   const r = await executorOf(yangSnapshot()).read()
   assert.equal(r.contact, '杨鸿杰')
   assert.deepEqual(r.messages, [
     { sender: 'system', text: '8月27日 沟通的职位-PHP 开发工程师', ts: '10:56' },
-    { sender: 'me', text: '你好，我们正在诚招PHP 开发工程师，想跟你沟通一下', read: true },
+    // 时间行向后继承（真机：时间分隔行描述其后所有消息）：组 2 无自身时间行 → 继承组 1 的 10:56
+    { sender: 'me', text: '你好，我们正在诚招PHP 开发工程师，想跟你沟通一下', ts: '10:56', read: true },
     { sender: 'them', text: '您好，请问该岗位是外包嘛', ts: '11:04' },
   ])
 })
@@ -78,7 +79,7 @@ test('杨鸿杰场景：总徽章=214；SVG path 数字串 / 「新」徽章 / x
 
 // ---------- 双消息会话（组时间挂载与噪声过滤） ----------
 
-test('双消息会话：无时间行组 ts 缺省；窄行时间文本与非 text-content 文本按噪声忽略', async () => {
+test('双消息会话：无时间行组 ts 向后继承上一时间行；窄行时间文本与非 text-content 文本按噪声忽略', async () => {
   const snap = buildChatSnapshot([
     { tag: 'DIV', cls: 'base-info-single-container', bounds: [548, 110, 680, 60], children: [
       { tag: '#text', text: '王五', bounds: [578, 120, 40, 18] },
@@ -130,9 +131,10 @@ test('双消息会话：无时间行组 ts 缺省；窄行时间文本与非 tex
   assert.equal(r.contact, '王五')
   assert.deepEqual(r.messages, [
     { sender: 'them', text: '你好，在吗', ts: '09:00' },
-    { sender: 'me', text: '在的' },
-    { sender: 'me', text: '稍等' },
-    { sender: 'me', text: '重发一条' }, // 同行 draft-hint 文本被忽略，text-content 正文保留
+    // 组 2/3 无自身时间行 → 向后继承组 1 的 09:00（真机：时间分隔行描述其后所有消息）
+    { sender: 'me', text: '在的', ts: '09:00' },
+    { sender: 'me', text: '稍等', ts: '09:00' },
+    { sender: 'me', text: '重发一条', ts: '09:00' }, // 同行 draft-hint 文本被忽略，text-content 正文保留
   ])
   assert.deepEqual(r.unread, [])
   assert.equal(r.totalUnreadBadge, undefined) // 无纯数字导航徽章 → 缺省

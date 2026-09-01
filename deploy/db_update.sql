@@ -731,3 +731,14 @@ CREATE INDEX IF NOT EXISTS idx_bs_rorcl_tenant_resume
     ON bs_recruiting_operator_resume_comm_logs(tenant_id, resume_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_bs_rorinv_tenant_resume
     ON bs_recruiting_operator_resume_invitations(tenant_id, resume_id);
+
+-- ============================================================================
+-- 2026-09-01 面试邀约企微通知与简历联动（A4）
+-- bs_recruiting_notify_logs 加 resume_id：单候选人推送时关联的简历 id，
+--   供简历详情页「企微通知留痕」按简历查询；多候选人推送为 NULL（列语义）。
+--   删简历置 NULL（ON DELETE SET NULL），通知留痕不随简历删除丢失。
+-- 老库幂等加列；服务层 init_recruiting_notify_tables 同步幂等 ALTER 双路兜底。
+-- ============================================================================
+ALTER TABLE bs_recruiting_notify_logs
+    ADD COLUMN IF NOT EXISTS resume_id BIGINT
+    REFERENCES bs_recruiting_operator_resumes(id) ON DELETE SET NULL;

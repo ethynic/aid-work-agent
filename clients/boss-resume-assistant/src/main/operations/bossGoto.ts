@@ -39,6 +39,7 @@ export function createBossGotoOperation(
             snapshot: session.snapshot,
             click: session.click,
             getUrl: session.getUrl,
+            pageNavigate: session.pageNavigate,
             signal: ctx.signal,
           })
           ctx.progress({ stage: 'navigate', message: `跳转「${args.target === 'recommend' ? '推荐牛人' : '沟通'}」` })

@@ -56,6 +56,24 @@ export function formatDate(t?: string): string {
   return t.slice(0, 10)
 }
 
+/** 面试时间展示：带时分（区别于 formatDate 只到日期），空值显示 '-' */
+export function formatDateTime(t?: string | null): string {
+  if (!t) return '-'
+  return t.slice(0, 16).replace('T', ' ')
+}
+
+/** 邀约状态徽标配色：pending 绿（待推进）/ confirmed info / done success / noshow danger / cancelled neutral */
+export function invitationStatusIntent(status?: string): 'success' | 'info' | 'danger' | 'neutral' {
+  const map: Record<string, 'success' | 'info' | 'danger' | 'neutral'> = {
+    pending: 'success',
+    confirmed: 'info',
+    done: 'success',
+    noshow: 'danger',
+    cancelled: 'neutral',
+  }
+  return map[status || ''] || 'neutral'
+}
+
 // ============== 路由路径（兼容 demo 与租户前台两套路由） ==============
 
 /** 招聘模块路由基路径：租户前台（/t/:tenant_id 前缀）带租户段，demo 直连 */

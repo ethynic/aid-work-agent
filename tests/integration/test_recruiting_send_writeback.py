@@ -2,6 +2,7 @@
 
 - 真发送（sent=true 且非 dry_run）+ 简历库有同名简历 → comm_logs 新增 1 行（direction=out / channel=boss / content=message 全文 / user_id=受信用户）
 - 无同名简历 / dry_run / sent=false → 不回写；回写失败 → 发送结果 success 不受影响
+- 话术模式（script_title）与缺 message（INVALID_ARGS）→ 不触达设备基类、不触发回写钩子
 - monkeypatch 基类 execute 模拟设备成功结果，不碰真设备/DB invocation
 """
 import uuid as uuid_module
@@ -204,3 +205,47 @@ class TestSendToWriteback:
         assert _comm_log_count(ctx["tenant_id"]) == 1
         logs = recruiting_resume_timeline_service.list_comm_logs(ctx["tenant_id"], latest["id"])
         assert len(logs) == 1  # 旧的「王重八」简历不写
+
+    def test_script_mode_never_hits_device_or_writeback(self, temp_tenant_with_user):
+        """话术模式（script_title → SCRIPT_NEEDS_FILL）：不触达设备基类、不触发回写钩子"""
+        from src.local_tools.proxy_tool import BossSendToTool, LocalToolProxyTool
+        from src.services import recruiting_job_service
+        from src.services import recruiting_resume_service
+
+        ctx = temp_tenant_with_user
+        recruiting_resume_service.create_resume_record(
+            ctx["tenant_id"], ctx["user_id"], candidate_name="张三丰",
+        )
+        job = recruiting_job_service.create_job(ctx["tenant_id"], job_name="PHP开发工程师（Laravel）")
+        recruiting_job_service.create_script(
+            ctx["tenant_id"], job["id"], category="初次开场", title="开场·Laravel",
+            content="您好，我们主栈 Laravel，{{年限}} 年经验方便聊聊吗？",
+        )
+
+        device_execute = AsyncMock(return_value=_device_success_payload())
+        with patch.object(LocalToolProxyTool, "execute", new=device_execute):
+            r = _call(BossSendToTool().execute(
+                _trusted_tenant_id=ctx["tenant_id"], _trusted_user_id=ctx["user_id"],
+                to="张三丰", script_title="开场·Laravel",
+            ))
+        # 话术模式只返回话术待填结果，绝不触达设备，也绝不回写
+        assert r["success"] is False
+        assert r["code"] == "SCRIPT_NEEDS_FILL"
+        device_execute.assert_not_awaited()
+        assert _comm_log_count(ctx["tenant_id"]) == 0
+
+    def test_missing_message_never_hits_device_or_writeback(self, temp_tenant_with_user):
+        """缺 message（无 script_title → INVALID_ARGS）：不触达设备基类、不触发回写钩子"""
+        from src.local_tools.proxy_tool import BossSendToTool, LocalToolProxyTool
+
+        ctx = temp_tenant_with_user
+        device_execute = AsyncMock(return_value=_device_success_payload())
+        with patch.object(LocalToolProxyTool, "execute", new=device_execute):
+            r = _call(BossSendToTool().execute(
+                _trusted_tenant_id=ctx["tenant_id"], _trusted_user_id=ctx["user_id"],
+                to="张三丰",
+            ))
+        assert r["success"] is False
+        assert r["code"] == "INVALID_ARGS"
+        device_execute.assert_not_awaited()
+        assert _comm_log_count(ctx["tenant_id"]) == 0

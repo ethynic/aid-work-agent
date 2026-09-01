@@ -24,6 +24,8 @@ import {
   listInvitations,
   createInvitation,
   updateInvitation,
+  deleteInvitation,
+  listResumeNotifyLogs,
 } from '@/api/recruitingOperator'
 
 // 捕获最近一次请求的 url（含 query）与 body
@@ -138,6 +140,14 @@ describe('recruitingOperator api - 简历时间线六函数（第④期）', () 
         state.body = (await request.json()) as Record<string, unknown>
         return HttpResponse.json({ success: true, data: { id: 1 } })
       }),
+      http.delete('/api/recruiting-operator/invitations/:invitationId', ({ request }) => {
+        state.method = 'DELETE'; state.url = new URL(request.url); state.body = {}
+        return HttpResponse.json({ success: true })
+      }),
+      http.get('/api/recruiting-operator/resumes/:resumeId/notify-logs', ({ request }) => {
+        state.method = 'GET'; state.url = new URL(request.url); state.body = {}
+        return HttpResponse.json({ success: true, data: { items: [] } })
+      }),
     )
     return {
       get method() { return state.method },
@@ -199,5 +209,19 @@ describe('recruitingOperator api - 简历时间线六函数（第④期）', () 
     expect(cap.method).toBe('PATCH')
     expect(cap.url.pathname).toBe('/api/recruiting-operator/invitations/33')
     expect(cap.body).toEqual({ status: 'confirmed' })
+  })
+
+  it('deleteInvitation：DELETE 独立 invitations 路径', async () => {
+    const cap = captureTimelineRequest()
+    await deleteInvitation(33)
+    expect(cap.method).toBe('DELETE')
+    expect(cap.url.pathname).toBe('/api/recruiting-operator/invitations/33')
+  })
+
+  it('listResumeNotifyLogs：GET 简历子资源 notify-logs 路径', async () => {
+    const cap = captureTimelineRequest()
+    await listResumeNotifyLogs(12)
+    expect(cap.method).toBe('GET')
+    expect(cap.url.pathname).toBe('/api/recruiting-operator/resumes/12/notify-logs')
   })
 })

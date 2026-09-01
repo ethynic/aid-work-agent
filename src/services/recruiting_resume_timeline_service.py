@@ -149,12 +149,12 @@ def _validate_invitation_status(status: str) -> str:
 # ============== 沟通记录 ==============
 
 def list_comm_logs(tenant_id: str, resume_id: int) -> List[Dict[str, Any]]:
-    """某简历的沟通记录列表（created_at DESC，最新在前）"""
+    """某简历的沟通记录列表（created_at DESC, id DESC 次级键保序，最新在前）"""
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
             "SELECT * FROM bs_recruiting_operator_resume_comm_logs "
-            "WHERE tenant_id = %s AND resume_id = %s ORDER BY created_at DESC",
+            "WHERE tenant_id = %s AND resume_id = %s ORDER BY created_at DESC, id DESC",
             (tenant_id, resume_id),
         )
         return [_row_to_timeline_item(row) for row in cursor.fetchall()]
@@ -216,12 +216,12 @@ def delete_comm_log(tenant_id: str, log_id: int) -> bool:
 # ============== 邀约记录 ==============
 
 def list_invitations(tenant_id: str, resume_id: int) -> List[Dict[str, Any]]:
-    """某简历的邀约记录列表（created_at DESC，最新在前；一简历可多次邀约）"""
+    """某简历的邀约记录列表（created_at DESC, id DESC 次级键保序；一简历可多次邀约）"""
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
             "SELECT * FROM bs_recruiting_operator_resume_invitations "
-            "WHERE tenant_id = %s AND resume_id = %s ORDER BY created_at DESC",
+            "WHERE tenant_id = %s AND resume_id = %s ORDER BY created_at DESC, id DESC",
             (tenant_id, resume_id),
         )
         return [_row_to_timeline_item(row) for row in cursor.fetchall()]
@@ -328,8 +328,8 @@ def update_invitation(
 def delete_invitation(tenant_id: str, invitation_id: int) -> bool:
     """删除一条邀约记录（仅本租户），返回是否删除成功。
 
-    本期 API 未暴露删除入口（邀约流转用状态位：cancelled/noshow），
-    保留服务函数供后续工具/管理链路复用。
+    API 已暴露删除入口（DELETE /invitations/{invitation_id}，误录入的邀约可删除；
+    正常流转仍用状态位：cancelled/noshow）。
     """
     with get_db_connection() as conn:
         cursor = conn.cursor()

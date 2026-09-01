@@ -17,13 +17,19 @@
       >
         <div class="flex items-start justify-between gap-2 mb-2">
           <div class="flex items-center gap-2 flex-wrap">
-            <BaseBadge :intent="statusIntent(inv.status)">
+            <BaseBadge :intent="invitationStatusIntent(inv.status)">
               {{ INVITATION_STATUSES[inv.status] || inv.status }}
             </BaseBadge>
             <span class="text-xs text-muted">发起于 {{ formatDate(inv.created_at) }}</span>
           </div>
           <div class="flex items-center gap-2 flex-shrink-0">
             <BaseButton intent="secondary" size="sm" class="whitespace-nowrap text-xs" @click="openEditModal(inv)">编辑</BaseButton>
+            <BaseButton
+              intent="danger-ghost"
+              size="sm"
+              class="whitespace-nowrap text-xs"
+              @click="handleDelete(inv)"
+            >删除</BaseButton>
           </div>
         </div>
         <div class="space-y-1">
@@ -63,6 +69,33 @@
         尚未发起邀约，点击右上角「新增邀约」添加
       </div>
     </template>
+
+    <!-- ============== 企微通知留痕（单候选人推送时关联本简历，created_at DESC） ============== -->
+    <div class="pt-2">
+      <div class="text-sm font-semibold text-default mb-2">企微通知留痕</div>
+      <div v-if="notifyLoading" class="rounded-lg border border-default bg-white p-4 text-muted text-sm">加载中...</div>
+      <template v-else>
+        <div
+          v-for="log in notifyLogs"
+          :key="log.id"
+          class="rounded-lg border border-default bg-white p-4 mb-2"
+        >
+          <div class="flex items-center gap-2 flex-wrap mb-1.5">
+            <BaseBadge :intent="log.kind === 'pre' ? 'info' : 'success'">
+              {{ log.kind === 'pre' ? '事前知会' : '事后通报' }}
+            </BaseBadge>
+            <BaseBadge :intent="log.status === 'sent' ? 'neutral' : 'danger'">
+              {{ log.status === 'sent' ? '已发送' : '发送失败' }}
+            </BaseBadge>
+            <span class="text-xs text-muted">{{ formatDateTime(log.created_at) }}</span>
+          </div>
+          <p class="text-sm text-muted leading-relaxed whitespace-pre-wrap break-all">{{ notifySummary(log.content) }}</p>
+        </div>
+        <div v-if="!notifyLogs.length" class="rounded-lg border border-default bg-white p-4 text-muted text-sm">
+          暂无通知记录
+        </div>
+      </template>
+    </div>
 
     <!-- ============== 新增/编辑邀约弹框 ============== -->
     <BaseModal v-model="showModal" :title="form.id ? '编辑邀约' : '新增邀约'">
@@ -115,11 +148,13 @@
 
 <script setup lang="ts">
 /**
- * 简历详情「邀约信息」tab 子组件（第④期）。
+ * 简历详情「邀约信息」tab 子组件（第④期；2026-09-01 加删除 + 企微通知留痕区）。
  *
  * - 父组件 ResumeDetail 传 resumeId，tab 首次激活（v-if 挂载）时拉取列表
  * - 状态徽标：pending 绿（待推进）/ confirmed info / done success / noshow danger / cancelled neutral
- * - 卡片上状态下拉即时 PATCH 保存（失败 toast，回滚显示）；编辑复用新增弹框回填
+ *   （invitationStatusIntent 共享自 recruitingDisplay，与简历状态徽标区分）
+ * - 卡片上状态下拉即时 PATCH 保存（失败 toast，回滚显示）；编辑复用新增弹框回填；删除二次确认
+ * - 底部「企微通知留痕」：单候选人推送面试通知时关联本简历的留痕（pre 事前知会 / done 事后通报）
  */
 import { ref, onMounted } from 'vue'
 import { useToast } from 'vue-toastification'
@@ -132,35 +167,19 @@ import {
   listInvitations,
   createInvitation,
   updateInvitation,
+  deleteInvitation,
+  listResumeNotifyLogs,
   INVITATION_STATUSES,
   type Invitation,
+  type NotifyLog,
 } from '@/api/recruitingOperator'
-import { formatDate } from './recruitingDisplay'
+import { formatDate, formatDateTime, invitationStatusIntent } from './recruitingDisplay'
 
 const props = defineProps<{
   resumeId: number
 }>()
 
 const toast = useToast()
-
-// ============== 状态徽标配色 ==============
-
-function statusIntent(status?: string): 'success' | 'info' | 'danger' | 'neutral' {
-  const map: Record<string, 'success' | 'info' | 'danger' | 'neutral'> = {
-    pending: 'success',
-    confirmed: 'info',
-    done: 'success',
-    noshow: 'danger',
-    cancelled: 'neutral',
-  }
-  return map[status || ''] || 'neutral'
-}
-
-// 时间展示：面试时间带时分（区别于 formatDate 只到日期）
-function formatDateTime(t?: string | null): string {
-  if (!t) return '-'
-  return t.slice(0, 16).replace('T', ' ')
-}
 
 // ============== 列表加载 ==============
 
@@ -303,7 +322,51 @@ async function handleStatusChange(inv: Invitation, nextStatus: string) {
   }
 }
 
+// ============== 删除（误录入的邀约） ==============
+
+async function handleDelete(inv: Invitation) {
+  if (!confirm('确定删除这条邀约记录？')) return
+  try {
+    const res = await deleteInvitation(inv.id)
+    if (res.success) {
+      toast.success('邀约已删除')
+      await loadInvitations()
+    } else {
+      toast.error(res.error || '删除失败')
+    }
+  } catch (e: any) {
+    toast.error(e.message || '删除异常')
+  }
+}
+
+// ============== 企微通知留痕（与列表同批拉取，失败不阻塞邀约卡片展示） ==============
+
+const notifyLogs = ref<NotifyLog[]>([])
+const notifyLoading = ref(true)
+
+async function loadNotifyLogs() {
+  notifyLoading.value = true
+  try {
+    const res = await listResumeNotifyLogs(props.resumeId)
+    if (res.success && res.data) {
+      notifyLogs.value = res.data.items
+    } else {
+      toast.error(res.error || '加载通知留痕失败')
+    }
+  } catch (e: any) {
+    toast.error(e.message || '加载通知留痕异常')
+  } finally {
+    notifyLoading.value = false
+  }
+}
+
+// content 摘要：群通知 markdown 全文较长，列表里只展示前 80 字
+function notifySummary(content: string): string {
+  return content.length > 80 ? `${content.slice(0, 80)}…` : content
+}
+
 onMounted(() => {
   loadInvitations()
+  loadNotifyLogs()
 })
 </script>

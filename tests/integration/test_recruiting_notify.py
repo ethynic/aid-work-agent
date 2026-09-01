@@ -28,9 +28,14 @@ WEBHOOK_PLAIN = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=abcd1234ef
 def _ensure_tables():
     """模块级幂等建表（测试库可能未跑过服务启动初始化）"""
     from src.db.database import get_db_connection
+    from src.services.recruiting_job_service import init_recruiting_job_tables
+    from src.api.recruiting_operator import init_recruiting_operator_tables
     from src.services.recruiting_notify_service import init_recruiting_notify_tables
 
     with get_db_connection() as conn:
+        # notify_logs.resume_id FK 引用简历表（2026-09-01 联动加列），必须先建 jobs → resumes
+        init_recruiting_job_tables(conn)
+        init_recruiting_operator_tables(conn)
         init_recruiting_notify_tables(conn)
         conn.commit()
 
@@ -58,6 +63,9 @@ def temp_tenant():
             cur = conn.cursor()
             cur.execute("DELETE FROM bs_recruiting_notify_logs WHERE tenant_id = %s", (tenant_id,))
             cur.execute("DELETE FROM bs_recruiting_notify_settings WHERE tenant_id = %s", (tenant_id,))
+            # 简历/职位联动测试可能建了简历（notify_logs.resume_id FK 随删置 NULL，先清日志已兜底）
+            cur.execute("DELETE FROM bs_recruiting_operator_resumes WHERE tenant_id = %s", (tenant_id,))
+            cur.execute("DELETE FROM bs_recruiting_operator_jobs WHERE tenant_id = %s", (tenant_id,))
             conn.commit()
     except Exception:
         pass
@@ -312,6 +320,141 @@ class TestPushInterviewNotify:
         )
         assert result["pushed"] is False and result["reason"] == "事前知会未启用"
         send_markdown.assert_not_awaited()
+
+
+class TestNotifyResumeLink:
+    """通知留痕与简历联动（2026-09-01）：resume_id 列写入 + 按简历查询"""
+
+    def _insert_resume(self, tenant_id: str, candidate_name: str) -> int:
+        from src.services import recruiting_resume_service
+
+        record = recruiting_resume_service.create_resume_record(
+            tenant_id, "u_notify_link", candidate_name=candidate_name,
+        )
+        return record["id"]
+
+    async def test_single_candidate_push_persists_resume_id(self, temp_tenant, monkeypatch):
+        """单候选人推送 + resume_id → 留痕行落 resume_id（FK 关联真实简历）"""
+        from src.services import recruiting_notify_service as svc
+
+        resume_id = self._insert_resume(temp_tenant, "陈远健")
+        svc.upsert_settings(temp_tenant, webhook_url=WEBHOOK_PLAIN, enabled=True)
+        monkeypatch.setattr(svc.wecom_bot, "send_markdown", AsyncMock(return_value=(True, None)))
+
+        result = await svc.push_interview_notify(
+            temp_tenant, "done", "PHP开发工程师",
+            [{"name": "陈远健", "time": "8月20日（周三）15:00"}],
+            resume_id=resume_id,
+        )
+        assert result["pushed"] is True
+        row = _get_log_row(temp_tenant, result["log_id"])
+        assert row["resume_id"] == resume_id
+
+    async def test_multi_candidate_push_defaults_resume_id_null(self, temp_tenant, monkeypatch):
+        """不传 resume_id（多候选人推送语义）→ 留痕行 resume_id 为 NULL"""
+        from src.services import recruiting_notify_service as svc
+
+        svc.upsert_settings(temp_tenant, webhook_url=WEBHOOK_PLAIN, enabled=True)
+        monkeypatch.setattr(svc.wecom_bot, "send_markdown", AsyncMock(return_value=(True, None)))
+
+        result = await svc.push_interview_notify(
+            temp_tenant, "pre", "PHP开发工程师", CANDIDATES_PRE
+        )
+        assert result["pushed"] is True
+        row = _get_log_row(temp_tenant, result["log_id"])
+        assert row["resume_id"] is None
+
+    async def test_list_notify_logs_by_resume(self, temp_tenant, monkeypatch):
+        """按简历查询留痕：只返回关联该简历的日志（created_at DESC, id DESC），跨简历/跨租户不可见"""
+        from src.services import recruiting_notify_service as svc
+
+        resume_id = self._insert_resume(temp_tenant, "陈远健")
+        svc.upsert_settings(temp_tenant, webhook_url=WEBHOOK_PLAIN, enabled=True)
+        send_markdown = AsyncMock(return_value=(True, None))
+        monkeypatch.setattr(svc.wecom_bot, "send_markdown", send_markdown)
+
+        pre = await svc.push_interview_notify(
+            temp_tenant, "pre", "PHP开发工程师", [{"name": "陈远健", "score": 90}], resume_id=resume_id
+        )
+        done = await svc.push_interview_notify(
+            temp_tenant, "done", "PHP开发工程师", [{"name": "陈远健", "time": "8月20日"}], resume_id=resume_id
+        )
+        # 同租户但不关联该简历的推送 → 不出现在结果里
+        other = await svc.push_interview_notify(
+            temp_tenant, "done", "PHP开发工程师", CANDIDATES_DONE
+        )
+        assert pre["pushed"] and done["pushed"] and other["pushed"]
+
+        items = svc.list_notify_logs_by_resume(temp_tenant, resume_id)
+        assert [it["id"] for it in items] == [done["log_id"], pre["log_id"]]  # 最新在前
+        assert items[0]["kind"] == "done" and items[1]["kind"] == "pre"
+        # 轻量投影：只取六列
+        assert set(items[0].keys()) == {"id", "kind", "status", "content", "error", "created_at"}
+
+        # 租户隔离：他租户按同一 resume_id 查询 → 空列表
+        other_tenant_id = f"T{uuid_module.uuid4().hex[:6].upper()}X"
+        assert svc.list_notify_logs_by_resume(other_tenant_id, resume_id) == []
+
+    async def test_tool_single_candidate_resolves_resume_id(self, temp_tenant, monkeypatch):
+        """工具 execute：candidates 恰 1 人 → 解析姓名为 resume_id 传入 push（简历库有此人）"""
+        from src.local_tools import proxy_tool
+        from src.services import recruiting_resume_service
+
+        record = recruiting_resume_service.create_resume_record(
+            temp_tenant, "u1", candidate_name="常晓飞",
+        )
+        push = AsyncMock(return_value={"pushed": True, "log_id": 9})
+        monkeypatch.setattr(proxy_tool.recruiting_notify_service, "push_interview_notify", push)
+        result = await proxy_tool.BossInterviewNotifyTool().execute(
+            _trusted_tenant_id=temp_tenant, kind="done", job_name="PHP开发工程师",
+            candidates=[{"name": "常晓飞", "time": "8月21日"}],
+        )
+        assert result["success"] is True
+        push.assert_awaited_once()
+        assert push.await_args.kwargs["resume_id"] == record["id"]
+
+    async def test_tool_multi_candidate_passes_resume_id_none(self, temp_tenant, monkeypatch):
+        """工具 execute：多候选人 → 不解析，push 收到 resume_id=None（列语义：单候选人才关联）"""
+        from src.local_tools import proxy_tool
+
+        push = AsyncMock(return_value={"pushed": True, "log_id": 10})
+        monkeypatch.setattr(proxy_tool.recruiting_notify_service, "push_interview_notify", push)
+        await proxy_tool.BossInterviewNotifyTool().execute(
+            _trusted_tenant_id=temp_tenant, kind="pre", job_name="PHP开发工程师",
+            candidates=CANDIDATES_PRE,
+        )
+        assert push.await_args.kwargs["resume_id"] is None
+
+    async def test_tool_resolve_failure_not_blocking(self, temp_tenant, monkeypatch):
+        """工具 execute：简历解析抛异常 → resume_id=None 且推送照常（不阻塞邀约）"""
+        from src.local_tools import proxy_tool
+
+        def _boom(*_args, **_kwargs):
+            raise RuntimeError("db down")
+
+        monkeypatch.setattr(proxy_tool, "_find_resume_id_by_name", _boom)
+        push = AsyncMock(return_value={"pushed": True, "log_id": 11})
+        monkeypatch.setattr(proxy_tool.recruiting_notify_service, "push_interview_notify", push)
+        result = await proxy_tool.BossInterviewNotifyTool().execute(
+            _trusted_tenant_id=temp_tenant, kind="pre", job_name="PHP开发工程师",
+            candidates=[{"name": "陈远健"}],
+        )
+        assert result["success"] is True
+        push.assert_awaited_once()
+        assert push.await_args.kwargs["resume_id"] is None
+
+    async def test_tool_no_resume_in_library_passes_none(self, temp_tenant, monkeypatch):
+        """工具 execute：简历库无该姓名 → resume_id=None，推送照常"""
+        from src.local_tools import proxy_tool
+
+        push = AsyncMock(return_value={"pushed": True, "log_id": 12})
+        monkeypatch.setattr(proxy_tool.recruiting_notify_service, "push_interview_notify", push)
+        result = await proxy_tool.BossInterviewNotifyTool().execute(
+            _trusted_tenant_id=temp_tenant, kind="pre", job_name="PHP开发工程师",
+            candidates=[{"name": "查无此人"}],
+        )
+        assert result["success"] is True
+        assert push.await_args.kwargs["resume_id"] is None
 
 
 class TestNotifyToolExecute:

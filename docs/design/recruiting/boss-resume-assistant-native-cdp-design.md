@@ -164,6 +164,7 @@ Page.enable
 Page.disable
 Page.getFrameTree
 Page.captureScreenshot
+Page.navigate
 Network.enable
 Network.disable
 Network.getResponseBody

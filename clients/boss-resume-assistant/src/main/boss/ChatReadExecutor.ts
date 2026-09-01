@@ -33,7 +33,7 @@ export interface ChatMessage {
   /** 发送方：me=我方（item-myself）/ them=对方（item-friend）/ system=系统卡片（item-system） */
   sender: 'me' | 'them' | 'system'
   text: string
-  /** 所属 message-item 组的时间行（如 "08-25 18:13" / "10:56" / "昨天 09:11"）；组无时间行则缺省 */
+  /** 消息时间（所属组的时间行，组无时间行则向后继承上一时间行；如 "08-25 18:13" / "10:56" / "昨天 09:11"；会话无任何时间行时缺省） */
   ts?: string
   /** 仅我方消息：行内 I.status 带「已读」（class 含 status-read）时为 true */
   read?: boolean

@@ -304,6 +304,9 @@ async function saveStatus() {
     } else {
       toast.error(res.error || '状态更新失败')
     }
+  } catch (e: any) {
+    // 网络异常兜底：不再让 Promise 拒绝悬空
+    toast.error(e.message || '状态更新异常')
   } finally {
     savingStatus.value = false
   }
@@ -320,6 +323,9 @@ async function saveRemark() {
     } else {
       toast.error(res.error || '备注保存失败')
     }
+  } catch (e: any) {
+    // 网络异常兜底：不再让 Promise 拒绝悬空
+    toast.error(e.message || '备注保存异常')
   } finally {
     savingRemark.value = false
   }

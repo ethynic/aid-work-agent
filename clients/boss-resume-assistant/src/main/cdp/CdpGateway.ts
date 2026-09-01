@@ -127,6 +127,11 @@ export class CdpGateway {
     return this.socket.send('Page.getFrameTree', {}, this.pageSessionId)
   }
 
+  /** 页内导航到指定 URL（Page.navigate）。goto 幂等兜底专用：点击菜单未触发路由变化时直跳目标页 */
+  async pageNavigate(url: string): Promise<void> {
+    await this.socket.send('Page.navigate', { url }, this.pageSessionId)
+  }
+
   async captureScreenshot(opts: { format?: 'png' | 'jpeg'; captureBeyondViewport?: boolean } = {}): Promise<string> {
     const result = await this.socket.send<{ data: string }>(
       'Page.captureScreenshot',

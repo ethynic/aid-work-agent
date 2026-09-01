@@ -14,6 +14,9 @@ export const ALLOWED_METHODS = new Set<string>([
   'Page.enable',
   'Page.disable',
   'Page.getFrameTree',
+  // 页内导航（goto 幂等兜底）：点击左侧菜单未触发 SPA 路由时，在 /web/chat 区内
+  // 用 Page.navigate 直跳目标页。2026-08-19 真机实证：/web/chat 区内导航不被拦
+  'Page.navigate',
   'Page.captureScreenshot',
   'Network.enable',
   'Network.disable',

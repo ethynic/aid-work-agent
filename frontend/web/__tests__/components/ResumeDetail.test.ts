@@ -21,6 +21,7 @@ vi.mock('vue-toastification', () => ({ useToast: () => ({ success: vi.fn(), erro
 const getResumeMock = vi.fn()
 const listCommLogsMock = vi.fn()
 const listInvitationsMock = vi.fn()
+const listResumeNotifyLogsMock = vi.fn()
 
 vi.mock('@/api/recruitingOperator', () => ({
   // recruitingDisplay（共享展示工具）运行时会用到
@@ -36,6 +37,9 @@ vi.mock('@/api/recruitingOperator', () => ({
   listInvitations: (...args: unknown[]) => listInvitationsMock(...args),
   createInvitation: vi.fn(),
   updateInvitation: vi.fn(),
+  deleteInvitation: vi.fn(),
+  // 企微通知留痕（2026-09-01，邀约信息 tab 底部留痕区）
+  listResumeNotifyLogs: (...args: unknown[]) => listResumeNotifyLogsMock(...args),
   // 中文标签常量（新 tab 子组件模板直接引用）
   COMM_DIRECTIONS: { out: '发出', in: '收到' },
   COMM_CHANNELS: { boss: 'BOSS 直聘', wecom: '企业微信', phone: '电话', other: '其他' },
@@ -71,8 +75,10 @@ describe('ResumeDetail 挂载冒烟', () => {
     getResumeMock.mockReset()
     listCommLogsMock.mockReset()
     listInvitationsMock.mockReset()
+    listResumeNotifyLogsMock.mockReset()
     listCommLogsMock.mockResolvedValue({ success: true, data: { items: [] } })
     listInvitationsMock.mockResolvedValue({ success: true, data: { items: [] } })
+    listResumeNotifyLogsMock.mockResolvedValue({ success: true, data: { items: [] } })
   })
 
   it('加载详情并渲染简历详情 tab（图片画廊 + 基本信息）', async () => {
@@ -212,5 +218,43 @@ describe('ResumeDetail 挂载冒烟', () => {
     expect(wrapper.text()).toContain('候选人已确认')
     // 状态流转下拉（卡片上直接改状态）
     expect(wrapper.text()).toContain('流转状态')
+  })
+
+  it('邀约信息 tab：邀约卡片带删除按钮 + 底部企微通知留痕区（kind 徽标 + 状态 + 内容）', async () => {
+    getResumeMock.mockResolvedValue({ success: true, data: { ...RESUME_FIXTURE } })
+    listInvitationsMock.mockResolvedValue({
+      success: true,
+      data: {
+        items: [{ id: 5, resume_id: 12, status: 'pending', created_at: '2026-08-31T09:00:00+00:00' }],
+      },
+    })
+    listResumeNotifyLogsMock.mockResolvedValue({
+      success: true,
+      data: {
+        items: [
+          {
+            id: 71,
+            kind: 'pre',
+            status: 'sent',
+            content: '【面试邀约知会】PHP开发工程师 拟邀约候选人面试',
+            created_at: '2026-08-31T10:00:00+00:00',
+          },
+        ],
+      },
+    })
+    const wrapper = mount(ResumeDetail)
+    await flushPromises()
+
+    await findTabButton(wrapper, '邀约信息').trigger('click')
+    await flushPromises()
+
+    // 企微通知留痕：以简历 id 拉取 + kind 徽标 + 状态徽标 + 内容摘要
+    expect(listResumeNotifyLogsMock).toHaveBeenCalledWith(12)
+    expect(wrapper.text()).toContain('企微通知留痕')
+    expect(wrapper.text()).toContain('事前知会')
+    expect(wrapper.text()).toContain('已发送')
+    expect(wrapper.text()).toContain('【面试邀约知会】PHP开发工程师 拟邀约候选人面试')
+    // 邀约卡片带删除入口（删除走原生 confirm，冒烟只断言按钮存在）
+    expect(wrapper.text()).toContain('删除')
   })
 })

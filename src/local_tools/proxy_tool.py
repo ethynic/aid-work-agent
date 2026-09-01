@@ -662,6 +662,19 @@ class BossInterviewNotifyTool(LocalToolProxyTool):
             c.model_dump(exclude_none=True) if isinstance(c, BaseModel) else c
             for c in (kwargs.get("candidates") or [])
         ]
+        # 单候选人推送 → 按姓名解析简历 id 关联留痕（简历详情页「企微通知留痕」联动，2026-09-01）。
+        # 多候选人不解析（留痕列语义：单候选人才关联）；解析失败/无简历 → None，绝不阻塞推送
+        resume_id: Optional[int] = None
+        if len(candidates) == 1:
+            name = str((candidates[0] or {}).get("name") or "").strip()
+            if name:
+                try:
+                    resume_id = await asyncio.to_thread(_find_resume_id_by_name, tenant_id, name)
+                except Exception as e:  # noqa: BLE001 简历解析失败不影响通知推送
+                    logger.opt(exception=True).error(
+                        f"后端日志：boss_interview_notify 解析候选人简历失败（不阻塞推送）: {e}"
+                    )
+                    resume_id = None
         try:
             result = await recruiting_notify_service.push_interview_notify(
                 tenant_id,
@@ -669,6 +682,7 @@ class BossInterviewNotifyTool(LocalToolProxyTool):
                 job_name=job_name,
                 candidates=candidates,
                 note=kwargs.get("note"),
+                resume_id=resume_id,
             )
         except Exception as e:  # noqa: BLE001 通知失败不阻塞邀约：转用户可读文案
             logger.opt(exception=True).error(f"后端日志：boss_interview_notify 推送异常: {e}")

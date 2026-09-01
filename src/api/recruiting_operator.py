@@ -27,7 +27,8 @@
 一套简历时间线 API（表 bs_recruiting_operator_resume_comm_logs / bs_recruiting_operator_resume_invitations，
 服务层 src/services/recruiting_resume_timeline_service.py，第④期，前端简历详情页两 tab）：
 - 沟通记录：GET/POST /resumes/{resume_id}/comm-logs、DELETE /comm-logs/{log_id}
-- 邀约记录：GET/POST /resumes/{resume_id}/invitations、PATCH /invitations/{invitation_id}
+- 邀约记录：GET/POST /resumes/{resume_id}/invitations、PATCH/DELETE /invitations/{invitation_id}
+- 企微通知留痕：GET /resumes/{resume_id}/notify-logs（单候选人推送时关联该简历的留痕）
 - 本期仅页面手动补录；agent 端 boss_send_to 自动回写为下一期
 
 所有 API 必须遵循租户隔离规范（[backend_dev.md SaaS 租户隔离规范]）：
@@ -465,6 +466,37 @@ async def update_invitation(invitation_id: int, req: UpdateInvitationRequest, re
     except Exception as e:
         logger.opt(exception=True).error(f"邀约记录更新失败: {e}")
         return _error_response("邀约记录更新失败", str(e))
+
+
+@router.delete("/invitations/{invitation_id}")
+async def delete_invitation(invitation_id: int, request: Request):
+    """删除一条邀约记录（仅本租户，误录入的邀约可删除）"""
+    try:
+        tenant_id = _require_tenant()
+        if not tenant_id:
+            return _error_response("租户 ID 缺失", "tenant_id is None", 400)
+        if not timeline_service.delete_invitation(tenant_id, invitation_id):
+            return _error_response("邀约记录不存在", f"invitation_id={invitation_id} not found", 404)
+        return {"success": True}
+    except Exception as e:
+        logger.opt(exception=True).error(f"邀约记录删除失败: {e}")
+        return _error_response("邀约记录删除失败", str(e))
+
+
+@router.get("/resumes/{resume_id}/notify-logs")
+async def list_resume_notify_logs(resume_id: int, request: Request):
+    """某简历的企微通知留痕列表（kind=pre 事前知会 / done 事后通报，created_at DESC，最近 20 条）"""
+    try:
+        tenant_id = _require_tenant()
+        if not tenant_id:
+            return _error_response("租户 ID 缺失", "tenant_id is None", 400)
+        if resume_service.get_resume(tenant_id, resume_id) is None:
+            return _error_response("简历不存在", f"resume_id={resume_id} not found", 404)
+        items = notify_service.list_notify_logs_by_resume(tenant_id, resume_id)
+        return {"success": True, "data": {"items": items}}
+    except Exception as e:
+        logger.opt(exception=True).error(f"企微通知留痕查询失败: {e}")
+        return _error_response("企微通知留痕查询失败", str(e))
 
 
 # ============== 职位库请求模型 ==============
