@@ -16,7 +16,11 @@ from typing import Any, Callable, Dict, List, Optional
 
 from loguru import logger
 
-from src.channels.base import ChannelAdapter, build_public_url
+from src.channels.base import (
+    ChannelAdapter,
+    StatusDeliveryResult,
+    build_public_url,
+)
 from src.channels.wecom_personal_rpa.action_client import deliver_actions
 from src.channels.wecom_personal_rpa.message import parse_rpa_message
 from src.channels.wecom_personal_rpa.schemas import (
@@ -169,18 +173,12 @@ class WeComPersonalRpaAdapter(ChannelAdapter):
             )
             return False
 
-        search_name = str(self._reply.get("conversation_search_name") or "").strip()
-        sender_stable_id = str(self._reply.get("sender_stable_id") or "").strip()
-        if (
-            not search_name
-            or search_name.lower() == "unknown"
-            or (sender_stable_id and search_name == sender_stable_id)
-        ):
-            # external_userid 无法在企微桌面端搜索。宁可拒发，也不能让客户端
-            # 误搜/误发给同名或其他联系人；等待姓名解析或管理员人工维护后重试。
+        error = self._validate_reply_target()
+        if error:
             logger.error(
-                "RPA send_message 拒绝投递：缺少可靠会话搜索名 account_id={}",
+                "RPA send_message 拒绝投递 account_id={} error={}",
                 self._reply.get("account_id"),
+                error,
             )
             return False
 
@@ -211,6 +209,75 @@ class WeComPersonalRpaAdapter(ChannelAdapter):
             return False
 
         return bool(delivered)
+
+    def _validate_reply_target(self) -> str:
+        """校验回复上下文与目标会话搜索名；返回错误描述，合法返回空串。
+
+        external_userid 无法在企微桌面端搜索。宁可拒发，也不能让客户端
+        误搜/误发给同名或其他联系人；等待姓名解析或管理员人工维护后重试。
+        """
+        if not self._reply:
+            return "reply context not set"
+        search_name = str(self._reply.get("conversation_search_name") or "").strip()
+        sender_stable_id = str(self._reply.get("sender_stable_id") or "").strip()
+        if (
+            not search_name
+            or search_name.lower() == "unknown"
+            or (sender_stable_id and search_name == sender_stable_id)
+        ):
+            return "missing reliable conversation search name"
+        return ""
+
+    async def send_status_message(
+        self, message: UnifiedResponse, *, reserve_for_final: int = 1
+    ) -> StatusDeliveryResult:
+        """低优先级 status/verbose 发送（Phase 3，设计 §9.4）。
+
+        RPA 桌面端无平台 5 次回复限制，也无内部限流器，直接单条纯文本投递；
+        幂等键由 pre_send 注入的 request_id 决定（verbose 为
+        ``{eventId}:verbose:1``，final 为 ``{eventId}:final``，二者不得共用，
+        否则 outbox 去重会吞掉后发消息）。
+        """
+        from src.channels.wecom_personal_rpa.schemas import SendTextAction
+
+        error = self._validate_reply_target()
+        if error:
+            logger.error(
+                "RPA send_status_message 拒绝投递 account_id={} error={}",
+                (self._reply or {}).get("account_id"),
+                error,
+            )
+            return StatusDeliveryResult.failed(f"reply target rejected: {error}")
+
+        text = (message.text or "").strip()
+        if not text:
+            return StatusDeliveryResult.suppressed_unsupported("empty verbose text")
+
+        request_id = self._reply["request_id"] or f"req_{uuid.uuid4().hex[:16]}"
+        try:
+            delivered = await deliver_actions(
+                tenant_id=self.tenant_id,
+                account_id=self._reply["account_id"],
+                conversation_id=self._reply["conversation_id"],
+                request_id=request_id,
+                session_id=self._reply["session_id"],
+                actions=[SendTextAction(text=text)],
+                reply_context={
+                    "sender_display_name": self._reply.get("sender_display_name"),
+                    "sender_stable_id": self._reply.get("sender_stable_id"),
+                    "conversation_search_name": self._reply.get("conversation_search_name"),
+                    "inbound_text": self._reply.get("inbound_text"),
+                    "agent_reply_text": text,
+                },
+            )
+        except Exception as e:  # noqa: BLE001 - best-effort：异常收敛为 failed
+            logger.error(f"RPA send_status_message 投递异常 request_id={request_id}: {e}")
+            return StatusDeliveryResult.failed(f"deliver_actions exception: {e}")
+        return (
+            StatusDeliveryResult.sent()
+            if delivered
+            else StatusDeliveryResult.failed("deliver_actions returned False")
+        )
 
     # ==================== 用户信息 ====================
 

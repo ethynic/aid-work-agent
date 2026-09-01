@@ -12,6 +12,46 @@ def make_event(event_type: str, **kwargs) -> Dict[str, Any]:
     return event
 
 
+# verbose 事件来源白名单（设计 §4。2026-09-01 产品决策：system watchdog 已删除，
+# 运行期只产生 "policy"；"system" 白名单仅向后兼容保留）
+_VERBOSE_SOURCES = ("policy", "system")
+
+
+def make_verbose_event(event_id: str, data: str, source: str) -> Dict[str, Any]:
+    """构造用户可见中间消息（verbose）事件（Phase 1，设计 §4 最小事件结构）。
+
+    返回恰好五个字段：{"type", "eventId", "data", "source", "timestamp"}，
+    不得夹带 phase/etaSeconds 等扩展字段。本工厂是文案约束的最后一道防线。
+
+    Args:
+        event_id: 调用方生成的本轮唯一 id（``verbose_`` + uuid/ULID 风格），
+            原样透传；工厂不做去重、不补全（调用点不得传常量 id）。
+        data: 提示文案，必须通过 1~60 字 / 单句 / 无换行 / 无路径命令等校验，
+            违规抛 ValueError（整体拒绝，不做局部清洗）。
+        source: 仅允许 "policy" | "system"，其他值抛 ValueError。
+
+    契约冻结：tests/unit/test_verbose_feedback_contract.py（契约 1）。
+    """
+    # 延迟导入避免循环依赖（verbose_feedback 顶层 import 本模块的 make_verbose_event）
+    from src.core.verbose_feedback import validate_feedback_text
+
+    if source not in _VERBOSE_SOURCES:
+        raise ValueError(
+            f"verbose source 仅允许 policy|system，实际: {source!r}"
+        )
+    if not validate_feedback_text(data):
+        raise ValueError(
+            "verbose data 违反内容约束（1~60 字/单句/无换行/无路径/命令/敏感键等），"
+            f"已整体拒绝: len={len(data) if isinstance(data, str) else '非字符串'}"
+        )
+    return make_event(
+        "verbose",
+        eventId=event_id,
+        data=data,
+        source=source,
+    )
+
+
 def extract_downloadable_file(event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """从成功的工具结果事件中提取可下载文件，不依赖工具名称。"""
     if event.get("type") != "tool_result" or event.get("success") is not True:

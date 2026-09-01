@@ -17,6 +17,18 @@ chat:
 # 智能体全局配置
 agent:
   reply_style: human-like  # 默认回复风格 ID，对应 src/prompts/styles/{style_id}.md
+  # 用户可见中间消息（verbose）配置（Phase 1，docs/system/agent-intermediate-feedback-design.md §11）
+  # 2026-09-01 产品决策：全局默认启用；force_disabled=true 为最高优先级 kill switch
+  # （紧急回滚用，覆盖请求级/渠道级/旧 waiting_indicator 全部配置，修改后需重启生效）。
+  # 文案仅来自工具/Skill/delegate 等策略，无系统兜底（system watchdog 已删除）；
+  # fallback_message 仅作 policy 文案违规时的降级模板。
+  verbose_feedback:
+    force_disabled: false
+    enabled: true
+    max_per_turn: 1
+    max_text_chars: 60
+    delivery_timeout_seconds: 5
+    fallback_message: "正在处理你的请求，复杂任务可能需要一点时间，请耐心等待。"
 
 # LLM配置
 # 主 provider 通过 LLM_PROVIDER + API_KEYS + MODEL_CODE + BASE_URL 四个环境变量统一控制

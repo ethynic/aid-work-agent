@@ -1,13 +1,15 @@
 """
-微信客服处理超时等待提示单元测试
+微信客服等待提示单元测试（Phase 3 已迁移到 verbose 新机制）
 
 覆盖：
 - WeComKfAdapter 构造时接收 config.waiting_indicator（渠道级配置注入）
-- _get_waiting_indicator_cfg 配置读取/容错
-- _process_with_waiting_indicator 非取消式 watchdog（超时发提示、不取消任务）
+- _get_waiting_indicator_cfg 配置读取/容错（读兼容保留，route 层不再走旧 watchdog）
+- 旧 waiting_indicator 配置 → resolve_verbose_feedback_config 映射（enabled/delay_seconds/
+  message 原样保留语义）
+- 旧配置经新机制只触发一次提示（route 外层旧 watchdog 已移除，无双发）
+- _process_with_waiting_indicator 已删除（import 失败即锁定迁移完成）
 """
 
-import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -18,10 +20,8 @@ from src.channels.wecom_kf.prompts import (
     DEFAULT_WAITING_INDICATOR_DELAY_SECONDS,
     DEFAULT_WAITING_INDICATOR_MESSAGE,
 )
-from src.saas.api.channel_routes import (
-    _get_waiting_indicator_cfg,
-    _process_with_waiting_indicator,
-)
+from src.channels.verbose_dispatcher import resolve_verbose_feedback_config
+from src.saas.api.channel_routes import _get_waiting_indicator_cfg
 
 
 # ---------- adapter 构造 ----------
@@ -43,7 +43,7 @@ class TestAdapterWaitingIndicator:
         assert a.waiting_indicator == {}
 
 
-# ---------- 配置读取 ----------
+# ---------- 配置读取（读兼容保留） ----------
 
 
 def _adapter_with(wi):
@@ -96,97 +96,114 @@ class TestGetWaitingIndicatorCfg:
         ) == {}
 
 
-# ---------- 非取消式 watchdog ----------
+# ---------- 旧配置映射到新 verbose 机制（Phase 3） ----------
 
 
-class TestProcessWithWaitingIndicator:
-    async def _fast_coro(self):
-        return {"status": "success"}
+class TestLegacyWaitingIndicatorMapping:
+    """旧 waiting_indicator 配置经 resolve_verbose_feedback_config 映射进新机制。
+    2026-09-01 产品决策：system watchdog 删除后 delay 已无运行时含义，
+    仅保留 enabled（含 delay<=0 显式关闭）与 message→fallback_message 语义。"""
 
-    async def _slow_coro(self):
-        await asyncio.sleep(0.1)
-        return {"status": "success"}
-
-    def _cfg(self, delay=0.02, message="请稍等"):
-        return {"delay_seconds": delay, "message": message}
-
-    def _adapter(self, send_result=True):
-        adapter = SimpleNamespace()
-        adapter.send_waiting_indicator = AsyncMock(return_value=send_result)
-        return adapter
-
-    @pytest.mark.asyncio
-    async def test_fast_coro_no_hint(self):
-        """处理快速完成时不发提示、返回原结果。"""
-        adapter = self._adapter()
-        result = await _process_with_waiting_indicator(
-            adapter, "ext_user", self._cfg(), self._fast_coro()
+    def test_enabled_legacy_config_maps_to_verbose(self):
+        cfg = resolve_verbose_feedback_config(
+            legacy_waiting_indicator={
+                "enabled": True, "delay_seconds": 20, "message": "请稍候",
+            }
         )
-        assert result == {"status": "success"}
-        adapter.send_waiting_indicator.assert_not_awaited()
+        assert cfg.effective_enabled is True
+        assert cfg.fallback_message == "请稍候"
 
-    @pytest.mark.asyncio
-    async def test_slow_coro_sends_hint_once_and_not_cancelled(self):
-        """处理超时发提示恰好 1 次，且任务未被取消、最终返回结果。"""
-        adapter = self._adapter()
-        result = await _process_with_waiting_indicator(
-            adapter, "ext_user", self._cfg(), self._slow_coro()
+    def test_disabled_legacy_config_stays_disabled(self):
+        cfg = resolve_verbose_feedback_config(
+            legacy_waiting_indicator={"enabled": False, "delay_seconds": 10}
         )
-        assert result == {"status": "success"}  # 未被取消 → 正常返回
-        adapter.send_waiting_indicator.assert_awaited_once_with("ext_user", "请稍等")
+        assert cfg.effective_enabled is False
 
-    @pytest.mark.asyncio
-    async def test_hint_failure_does_not_propagate(self):
-        """提示语发送失败时仅记日志，不向上抛，主结果仍返回。"""
-
-        async def _fail_hint(*args, **kwargs):
-            raise RuntimeError("send failed")
-
-        adapter = SimpleNamespace()
-        adapter.send_waiting_indicator = _fail_hint
-        result = await _process_with_waiting_indicator(
-            adapter, "ext_user", self._cfg(), self._slow_coro()
+    def test_invalid_delay_treated_as_enabled(self):
+        """delay 非法值不再回退默认，直接视为启用（delay 已无运行时含义）。"""
+        cfg = resolve_verbose_feedback_config(
+            legacy_waiting_indicator={"enabled": True, "delay_seconds": "abc"}
         )
-        assert result == {"status": "success"}
+        assert cfg.effective_enabled is True
 
-    @pytest.mark.asyncio
-    async def test_hint_returns_false_logs_failure_and_returns_result(self, monkeypatch):
-        """send_waiting_indicator 返回 False（errcode≠0）时记未送达日志，不抛错，主结果仍返回。"""
-        import src.saas.api.channel_routes as cr_module
-
-        calls = []
-        monkeypatch.setattr(cr_module, "_kf_tlog", lambda msg, **kw: calls.append((msg, kw)))
-        adapter = self._adapter(send_result=False)
-        result = await _process_with_waiting_indicator(
-            adapter, "ext_user", self._cfg(), self._slow_coro()
+    def test_blank_message_maps_to_legacy_default(self):
+        cfg = resolve_verbose_feedback_config(
+            legacy_waiting_indicator={"enabled": True, "message": "  "}
         )
-        assert result == {"status": "success"}
-        assert any("未送达" in msg for msg, _ in calls), "返回 False 应记录未送达 tlog"
+        assert cfg.fallback_message == DEFAULT_WAITING_INDICATOR_MESSAGE
 
-    @pytest.mark.asyncio
-    async def test_hint_success_logs_sent(self, monkeypatch):
-        """send_waiting_indicator 返回 True 时记录已发送。"""
-        import src.saas.api.channel_routes as cr_module
 
-        calls = []
-        monkeypatch.setattr(cr_module, "_kf_tlog", lambda msg, **kw: calls.append((msg, kw)))
-        adapter = self._adapter(send_result=True)
-        result = await _process_with_waiting_indicator(
-            adapter, "ext_user", self._cfg(), self._slow_coro()
-        )
-        assert result == {"status": "success"}
-        assert any("已发送" in msg for msg, _ in calls)
+class TestOldWatchdogRemoved:
+    """route 外层旧 watchdog 已删除：继续 import 必须失败，锁定迁移完成、避免双发。"""
 
-    @pytest.mark.asyncio
-    async def test_coro_exception_propagates(self):
-        """任务自身异常正常传播（由外层 try/except 处理）。"""
-        adapter = self._adapter()
-
-        async def _fail_coro():
-            await asyncio.sleep(0.02)
-            raise ValueError("agent boom")
-
-        with pytest.raises(ValueError, match="agent boom"):
-            await _process_with_waiting_indicator(
-                adapter, "ext_user", self._cfg(delay=0.01), _fail_coro()
+    def test_process_with_waiting_indicator_no_longer_importable(self):
+        with pytest.raises(ImportError):
+            from src.saas.api.channel_routes import (  # noqa: F401
+                _process_with_waiting_indicator,
             )
+
+
+class TestLegacyConfigTriggersNewMechanismOnce:
+    """原意图保留：旧配置继续生效且只发一次（走新 verbose 机制，无双发）。"""
+
+    @pytest.mark.asyncio
+    async def test_legacy_config_sends_exactly_one_status_message(self):
+        """旧 waiting_indicator 启用时：解析出的 verbose 配置生效，dispatcher
+        对唯一一条 verbose 事件恰好发起一次 send_status_message；旧
+        send_waiting_indicator 不再被调用（route 层已不消费）。"""
+        import asyncio
+
+        from src.channels.verbose_dispatcher import (
+            ChannelVerboseDispatcher,
+            verbose_delivery_id,
+        )
+        from src.core.verbose_feedback import VerboseFeedbackState
+        from src.core.agent_events import make_verbose_event
+
+        adapter = SimpleNamespace()
+        adapter.send_waiting_indicator = AsyncMock(return_value=True)
+        adapter.send_status_message = AsyncMock(
+            return_value=SimpleNamespace(
+                status="sent", reason="", is_sent=True, suppressed=False
+            )
+        )
+
+        verbose_cfg = resolve_verbose_feedback_config(
+            legacy_waiting_indicator={
+                "enabled": True, "delay_seconds": 0.05, "message": "请稍候",
+            }
+        )
+        assert verbose_cfg.effective_enabled is True
+
+        state = VerboseFeedbackState()
+        from src.channels.session import ChannelSessionManager
+
+        manager = ChannelSessionManager.__new__(ChannelSessionManager)
+        send_verbose = manager.make_send_verbose(
+            adapter=adapter,
+            event_id="msg_legacy_1",
+            reply_to="ext_user_legacy",
+            log_tag="[wecom_kf]",
+        )
+
+        event = make_verbose_event(
+            event_id="verbose_legacy_1", data="请稍候", source="system"
+        )
+        assert state.try_emit(event) is True
+
+        dispatcher = ChannelVerboseDispatcher(
+            send_verbose=send_verbose,
+            state=state,
+            timeout_seconds=verbose_cfg.delivery_timeout_seconds,
+        )
+        assert dispatcher.submit(event) is True
+        await dispatcher.close_and_drain(timeout=2.0)
+
+        # 只发一次，且走的是新机制（send_status_message），旧指示器方法零调用
+        assert adapter.send_status_message.await_count == 1
+        adapter.send_waiting_indicator.assert_not_awaited()
+        assert dispatcher.outcome == "sent"
+
+        # 晚到重复事件不再改写/重发（状态冻结）
+        assert dispatcher.submit(event) is False
+        assert adapter.send_status_message.await_count == 1

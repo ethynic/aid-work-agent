@@ -1,4 +1,4 @@
-import type { MessageStreamEvent } from '@/types'
+import type { MessageStreamEvent, VerboseMessage } from '@/types'
 
 // 上传文件接口
 export interface UploadedFile {
@@ -103,6 +103,7 @@ export class SSEManager {
     onClarification?: (subagentName: string, question: string) => void,
     onImages?: (images: any[], placement: string) => void,
     onBrowserHumanRequired?: (event: Extract<MessageStreamEvent, { type: 'browser_human_required' }>) => void,
+    onVerbose?: (message: VerboseMessage) => void,
     subagent?: string | null,
     instance_id?: string | null,
     video_params?: Record<string, any> | null
@@ -175,7 +176,7 @@ export class SSEManager {
         if (done) {
           // 处理缓冲区中剩余的数据
           if (buffer.trim()) {
-            this.parseSSELine(buffer, { onProgress, onResponse, onComplete, onError, onToolStart, onToolResult, onThinking, onClarification, onImages, onBrowserHumanRequired })
+            this.parseSSELine(buffer, { onProgress, onResponse, onComplete, onError, onToolStart, onToolResult, onThinking, onClarification, onImages, onBrowserHumanRequired, onVerbose })
           }
           break
         }
@@ -188,7 +189,7 @@ export class SSEManager {
         buffer = messages.pop() || '' // 保留最后一条不完整的消息
 
         for (const msg of messages) {
-          this.parseSSELine(msg, { onProgress, onResponse, onComplete, onError, onToolStart, onToolResult, onThinking, onClarification, onImages, onBrowserHumanRequired })
+          this.parseSSELine(msg, { onProgress, onResponse, onComplete, onError, onToolStart, onToolResult, onThinking, onClarification, onImages, onBrowserHumanRequired, onVerbose })
         }
       }
     } catch (error) {
@@ -216,6 +217,7 @@ export class SSEManager {
       onClarification?: (subagentName: string, question: string) => void
       onImages?: (images: any[], placement: string) => void
       onBrowserHumanRequired?: (event: Extract<MessageStreamEvent, { type: 'browser_human_required' }>) => void
+      onVerbose?: (message: VerboseMessage) => void
     }
   ) {
     // 处理多行数据
@@ -258,6 +260,16 @@ export class SSEManager {
             break
           case 'thinking':
             callbacks.onThinking?.(event.data)
+            break
+          case 'verbose':
+            // 用户可见中间消息（Phase 2，设计 §4/§8.2）：与技术 progress 隔离，
+            // 原样交给 onVerbose，不进执行详情
+            callbacks.onVerbose?.({
+              eventId: event.eventId,
+              data: event.data,
+              source: event.source,
+              timestamp: event.timestamp,
+            })
             break
           case 'clarification':
             callbacks.onClarification?.(event.subagentName, event.question)

@@ -42,6 +42,9 @@ export interface ChatMessage {
   attachments?: AttachmentInfo[]  // 附件列表
   downloadableFiles?: DownloadableFile[]  // 可下载文件列表
   images?: ImageRef[]  // Agent 推送的图片列表（Phase 2 P2.4）
+  /** 用户可见中间消息（设计 §8.2/§10，后端持久化于 assistant metadata.verboseMessages；
+   *  Phase 2 裁决：前端默认不消费/不渲染，仅声明形状供历史恢复使用） */
+  verboseMessages?: VerboseMessage[]
   browserAssistance?: BrowserHumanAssistance
   quickOptions?: QuickOption[]  // 编号选择按钮（§5.1 选择交互；纯前端增强，不持久化到历史）
 }
@@ -80,6 +83,14 @@ export interface ProgressMessage {
   success?: boolean      // 是否成功（仅 tool_result 类型）
 }
 
+/** 用户可见中间消息（verbose，设计 §4 最小事件结构；每轮最多一条，与技术 progress 隔离） */
+export interface VerboseMessage {
+  eventId: string
+  data: string
+  source: 'policy' | 'system'
+  timestamp: number
+}
+
 export interface SendMessageRequest {
   message: string
   session_id: string
@@ -101,6 +112,7 @@ export type MessageStreamEvent =
   | { type: 'tool_start'; toolName: string; displayName?: string; toolCallId?: string; toolArgs: object; timestamp: number }
   | { type: 'tool_result'; toolName: string; displayName?: string; toolCallId?: string; result: any; success: boolean; timestamp: number }
   | { type: 'thinking'; data: string; timestamp: number }
+  | { type: 'verbose'; eventId: string; data: string; source: 'policy' | 'system'; timestamp: number }
   | { type: 'clarification'; subagentName: string; question: string; timestamp: number }
   | { type: 'busy'; flag: string; message: string; instance_id: string; is_same_user: boolean; current_user_name: string }
   | { type: 'images'; images: ImageRef[]; placement: 'after_text' | 'before_text' | 'inline'; timestamp: number }

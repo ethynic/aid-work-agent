@@ -25,13 +25,38 @@ import httpx
 from loguru import logger
 
 from src.channels._image_text_renderer import render_text_with_image_placeholders
-from src.channels.base import ChannelAdapter, build_public_url, format_file_size
+from src.channels.base import (
+    ChannelAdapter,
+    StatusDeliveryResult,
+    build_public_url,
+    format_file_size,
+)
 from src.channels.feishu.crypto import FeishuCrypto
 from src.channels.feishu.media import FeishuMedia
 from src.channels.feishu.message_builder import FeishuMessageBuilder
 from src.core.cache_utils import CacheKeys
 from src.core.redis_client import redis_client
 from src.models.message import ChannelType, MessageType, UnifiedMessage, UnifiedResponse
+
+# 原子预留限流 Lua（Phase 3，设计 §9.3）：单次往返内完成
+# 「清窗口 → 查余额 → 校验 reserve_for_final → 扣减」，杜绝先查后发的 TOCTOU。
+# KEYS[1]=限流 ZSET key；ARGV: 1=window_start 2=now 3=reserve 4=max 5=ttl 6=member
+_RESERVE_RATE_LIMIT_LUA = """
+local key = KEYS[1]
+local window_start = tonumber(ARGV[1])
+local now = tonumber(ARGV[2])
+local reserve = tonumber(ARGV[3])
+local max_n = tonumber(ARGV[4])
+local ttl = tonumber(ARGV[5])
+redis.call('ZREMRANGEBYSCORE', key, 0, window_start)
+local count = redis.call('ZCARD', key)
+if count + 1 + reserve > max_n then
+    return 0
+end
+redis.call('ZADD', key, now, ARGV[6])
+redis.call('EXPIRE', key, ttl)
+return 1
+"""
 
 
 FEISHU_BASE_URL = "https://open.feishu.cn"
@@ -203,6 +228,57 @@ class FeishuAdapter(ChannelAdapter):
             window.popleft()
         if len(window) >= self._rate_limit_max:
             logger.warning(f"Rate limit exceeded for user {user_id}")
+            return False
+        window.append(now)
+        return True
+
+    def _reserve_rate_limit(self, user_id: str, reserve_for_final: int = 1) -> bool:
+        """低优先级 status 消息的原子预留限流（Phase 3，设计 §9.3）。
+
+        Redis 路径：Lua 脚本一次往返原子完成「校验预留 + 扣减」；Redis 不可用时
+        降级进程内 deque（同步临界区，无 await）。额度不足返回 False（抑制
+        verbose、不占额度），final 仍可经 _check_rate_limit 正常发送。
+        """
+        reserve = max(0, int(reserve_for_final))
+        now = time.time()
+        window_start = now - self._rate_limit_window
+
+        # 优先使用 Redis（多 worker 共享，Lua 原子预留）
+        if redis_client._connected and redis_client._client:
+            try:
+                key = redis_client.make_key(
+                    CacheKeys.CHANNEL_RATE_LIMIT, f"feishu:{user_id}"
+                )
+                client = redis_client._client
+                member = f"{now}:{uuid.uuid4().hex[:8]}"
+                allowed = client.eval(
+                    _RESERVE_RATE_LIMIT_LUA, 1, key,
+                    window_start, now, reserve,
+                    self._rate_limit_max, int(self._rate_limit_window) + 10,
+                    member,
+                )
+                if int(allowed) == 1:
+                    return True
+                logger.warning(
+                    f"[Feishu] status 消息预留限流抑制（Redis）: user={user_id}, "
+                    f"reserve={reserve}"
+                )
+                return False
+            except Exception as e:
+                logger.warning(
+                    f"[Feishu] Redis 预留限流降级到内存: user={user_id}, error={e}"
+                )
+
+        # 内存降级（单 worker 内有效，同步临界区）
+        window = self._rate_limiter[user_id]
+        while window and window[0] < window_start:
+            window.popleft()
+        remaining = self._rate_limit_max - len(window)
+        if remaining < 1 + reserve:
+            logger.warning(
+                f"[Feishu] status 消息预留限流抑制: user={user_id}, "
+                f"remaining={remaining}, need={1 + reserve}"
+            )
             return False
         window.append(now)
         return True
@@ -624,6 +700,29 @@ class FeishuAdapter(ChannelAdapter):
         2. 即使用户已触发速率限制，等待提示也应发出（改善 UX）
         """
         return await self.send_text(message, user_id)
+
+    async def send_status_message(
+        self, message: UnifiedResponse, *, reserve_for_final: int = 1
+    ) -> StatusDeliveryResult:
+        """低优先级 status/verbose 发送（Phase 3，设计 §9.3）。
+
+        先经 _reserve_rate_limit 原子预留 final 额度（Redis Lua / 内存临界区），
+        再单条纯文本发送；额度不足返回 suppressed_rate_limit（不发送、不占额度）。
+        """
+        text = (message.text or "").strip()
+        if not text:
+            return StatusDeliveryResult.suppressed_unsupported("empty verbose text")
+        if not self._reserve_rate_limit(message.reply_to, reserve_for_final):
+            return StatusDeliveryResult.suppressed_rate_limit(
+                "insufficient quota after final reservation"
+            )
+        try:
+            ok = await self.send_text(text, message.reply_to)
+        except Exception as e:  # noqa: BLE001 - best-effort：异常收敛为 failed
+            return StatusDeliveryResult.failed(f"send_text exception: {e}")
+        return StatusDeliveryResult.sent() if ok else StatusDeliveryResult.failed(
+            "send_text returned False"
+        )
 
     async def _send_with_retry(
         self, msg_body: Dict[str, Any], user_id: str, max_retries: int = 3

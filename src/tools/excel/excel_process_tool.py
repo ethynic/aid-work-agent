@@ -153,6 +153,21 @@ class ExcelProcessTool(BaseTool):
         """由 Agent 注入 user_id。"""
         self._user_id = user_id
 
+    def get_user_feedback(self, tool_args: dict) -> Optional["LongRunningFeedback"]:
+        """verbose 长任务等待提示（设计 §5 首批策略，服务端专用钩子）。
+
+        仅 ``task=fill_template`` 的模板填充/生成路径视为长任务（支持逗号
+        分隔多任务）；read / to_md / list_templates / 简单 export 等短操作
+        返回 None（继承 BaseTool 默认，不产生业务提示）。文案为用户已认可的
+        默认值；最终是否发送仍由编排层 validate_feedback_text 统一校验。
+        """
+        task = str((tool_args or {}).get("task") or "")
+        tasks = {t.strip() for t in task.split(",") if t.strip()}
+        if "fill_template" not in tasks:
+            return None
+        from src.core.verbose_feedback import LongRunningFeedback
+        return LongRunningFeedback(start_message="正在读取 Excel 模板并生成实际文件，可能需要一些时间，请稍候。")
+
     def _resolve_tenant_user(self):
         """双轨获取 tenant_id/user_id：注入优先，ContextVar 兜底（HTTP 请求场景）。"""
         tenant_id = self._tenant_id

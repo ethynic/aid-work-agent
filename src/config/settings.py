@@ -328,6 +328,37 @@ class SkillsConfig(BaseModel):
     subagent: SubagentSkillsConfig = Field(default_factory=SubagentSkillsConfig)
 
 
+class AgentVerboseFeedbackConfig(BaseModel):
+    """Agent 用户可见中间消息（verbose）配置（Phase 1）
+
+    详见 docs/system/agent-intermediate-feedback-design.md §11。
+    字段语义与 src/core/verbose_feedback.VerboseFeedbackConfig（运行期冻结副本）
+    一致；默认开启（2026-09-01 产品决策，替代原"首版灰度前关闭"策略）。
+    force_disabled 是最高优先级全局 kill switch：置 true 后任何请求级、渠道级
+    或旧 waiting_indicator 配置都不能启用 verbose。
+    2026-09-01 产品决策：system watchdog（8 秒兜底）已删除，verbose 仅由策略
+    （Skill metadata / Tool get_user_feedback / delegate 固定文案）产生，
+    fallback_message 仅作 policy 文案违规时的降级模板。
+    """
+    force_disabled: bool = False
+    enabled: bool = True
+    max_per_turn: int = 1
+    max_text_chars: int = 60
+    delivery_timeout_seconds: float = 5
+    fallback_message: str = "正在处理你的请求，复杂任务可能需要一点时间，请耐心等待。"
+
+
+class AgentConfig(BaseModel):
+    """智能体全局配置（config.yaml agent 节，有类型声明）
+
+    兼容说明：此前 agent 节依赖 Settings.Config.extra="allow" + _AttrDict 动态挂载，
+    消费点仅 _resolve_reply_style 的 getattr(settings, 'agent', None) /
+    getattr(agent_cfg, 'reply_style', None)，改为声明式模型后两条访问路径行为不变。
+    """
+    reply_style: str = ""  # 默认回复风格 ID，对应 src/prompts/styles/{style_id}.md；空表示不注入
+    verbose_feedback: AgentVerboseFeedbackConfig = Field(default_factory=AgentVerboseFeedbackConfig)
+
+
 class AppConfig(BaseModel):
     """应用配置"""
     name: str = "aid-work-agent"
@@ -471,6 +502,7 @@ class Settings(BaseModel):
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     auth: AuthConfig = Field(default_factory=AuthConfig)
     skills: SkillsConfig = Field(default_factory=SkillsConfig)
+    agent: AgentConfig = Field(default_factory=AgentConfig)
     saas: SaasConfig = Field(default_factory=SaasConfig)
     demo: DemoConfig = Field(default_factory=DemoConfig)
     cors: CorsConfig = Field(default_factory=CorsConfig)

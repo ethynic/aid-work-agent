@@ -71,7 +71,12 @@ async def _is_cache_stale(entry: Dict[str, Any], config_id: str) -> bool:
 
 async def _build_adapter(tenant_id: str, channel_type: str, config: dict) -> Any:
     """构造 adapter 实例（同步构造 + 异步后置初始化）"""
-    adapter = ChannelFactory.create_adapter(channel_type, config)
+    build_config = dict(config or {})
+    # 渠道级 verbose_feedback 子配置（Phase 3，设计 §11）：非敏感配置统一挂到
+    # adapter 实例属性，避免每个 adapter 构造器重复实现。必须从构造参数中移除——
+    # wecom/dingtalk/feishu 构造器不接受未知关键字参数。
+    verbose_feedback_cfg = build_config.pop("verbose_feedback", None)
+    adapter = ChannelFactory.create_adapter(channel_type, build_config)
     # 若 adapter 支持接收 tenant_id（用于租户隔离存储路径等），注入
     if hasattr(adapter, "set_tenant_id"):
         try:
@@ -79,6 +84,14 @@ async def _build_adapter(tenant_id: str, channel_type: str, config: dict) -> Any
         except Exception as e:
             logger.warning(
                 f"adapter.set_tenant_id 失败: tenant={tenant_id}, type={channel_type}, error={e}"
+            )
+    if verbose_feedback_cfg is not None:
+        try:
+            adapter.verbose_feedback = verbose_feedback_cfg
+        except Exception as e:
+            logger.warning(
+                f"adapter.verbose_feedback 注入失败: tenant={tenant_id}, "
+                f"type={channel_type}, error={e}"
             )
     return adapter
 

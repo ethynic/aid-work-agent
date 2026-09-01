@@ -1,5 +1,5 @@
 import { ref, computed, shallowReactive, type Ref } from 'vue'
-import type { ChatMessage, InputHintState, ProgressMessage } from '@/types'
+import type { ChatMessage, InputHintState, ProgressMessage, VerboseMessage } from '@/types'
 import { SSEManager, uploadFile, type UploadedFile } from '@/api/agent'
 import { getSessionMessages } from '@/api/session'
 import { extractQuickOptions } from '@/utils/quickOptions'
@@ -26,6 +26,8 @@ interface SessionStreamState {
   isProcessing: Ref<boolean>
   currentResponse: Ref<string>
   inputHintState: Ref<InputHintState>
+  /** 本轮 live verbose 中间提示（Phase 2，设计 §8.2；每轮最多一条，按 eventId 覆盖） */
+  liveVerbose: Ref<VerboseMessage | null>
   /** 后台完成且用户尚未查看 → 会话列表显示完成小点 */
   hasUnreadCompletion: Ref<boolean>
   /** 是否已从 DB 加载过历史消息（或已有实时消息），避免重复请求 */
@@ -64,6 +66,7 @@ function getStreamState(sid: string): SessionStreamState {
       isProcessing: ref(false),
       currentResponse: ref(''),
       inputHintState: ref<InputHintState>('idle'),
+      liveVerbose: ref<VerboseMessage | null>(null),
       hasUnreadCompletion: ref(false),
       dbLoaded: false,
       cancelledByUser: false,
@@ -85,6 +88,8 @@ const progressMessages = computed<ProgressMessage[]>({
 })
 const isProcessing = computed<boolean>(() => getStreamState(sessionId.value).isProcessing.value)
 const currentResponse = computed<string>(() => getStreamState(sessionId.value).currentResponse.value)
+// 当前查看会话的 live verbose 中间提示（每会话独立，多会话互不串扰）
+const liveVerbose = computed<VerboseMessage | null>(() => getStreamState(sessionId.value).liveVerbose.value)
 const inputHintState = computed<InputHintState>({
   get: () => getStreamState(sessionId.value).inputHintState.value,
   set: (v) => { getStreamState(sessionId.value).inputHintState.value = v }
@@ -221,6 +226,7 @@ export function useAgent() {
     }
     state.currentResponse.value = ''
     state.progressMessages.value = []
+    state.liveVerbose.value = null
     state.inputHintState.value = 'thinking'
 
     // 添加空的助手消息占位
@@ -267,6 +273,8 @@ export function useAgent() {
         },
         // onResponse - AI响应内容
         (data) => {
+          // response 开始：关闭 live verbose 占位（设计 §8.2，response 后隐藏）
+          state.liveVerbose.value = null
           state.currentResponse.value += data
           if (assistantMessageIndex < state.messages.value.length) {
             state.messages.value[assistantMessageIndex].content = state.currentResponse.value
@@ -277,6 +285,7 @@ export function useAgent() {
         },
         // onComplete
         () => {
+          state.liveVerbose.value = null
           if (state.cancelledByUser) {
             addProgress(state, '⚠️ 已停止', 'error')
             state.cancelledByUser = false
@@ -294,6 +303,7 @@ export function useAgent() {
         },
         // onError
         (err) => {
+          state.liveVerbose.value = null
           // 识别 SSE 403 NO_CREDIT 错误，显示友好 toast 提示
           const errWithCode = err as Error & { code?: string; status?: number }
           if (errWithCode.code === 'NO_CREDIT' || errWithCode.status === 403) {
@@ -399,6 +409,7 @@ export function useAgent() {
         },
         // onBrowserHumanRequired - 结构化卡片独立于 LLM 文本渲染
         (event) => {
+          state.liveVerbose.value = null
           const lastMsg = state.messages.value[state.messages.value.length - 1]
           if (lastMsg?.role === 'assistant') {
             lastMsg.browserAssistance = { ...event, state: 'pending' }
@@ -407,12 +418,20 @@ export function useAgent() {
           state.inputHintState.value = 'idle'
           addProgress(state, '等待你在浏览器中完成操作', 'progress')
         },
+        // onVerbose - 用户可见中间消息（Phase 2，设计 §8.2）
+        // 后端每轮最多一条；这里按 eventId 覆盖去重（后来者覆盖）纯属防御，
+        // 只写当前 session 状态，不进 progressMessages / debug 执行详情
+        (message) => {
+          if (!message?.eventId) return
+          state.liveVerbose.value = message
+        },
         subagent,
         instanceId,
         // 视频创作参数：仅 video-agent 子智能体使用，其他智能体忽略
         subagent === 'video-agent' ? { ...useVideoGenParams().params.value } : null
       )
     } catch (err) {
+      state.liveVerbose.value = null
       if (effectiveSessionId === sessionId.value) {
         error.value = (err as Error).message
       }
@@ -566,6 +585,7 @@ export function useAgent() {
     progressMessages,
     isProcessing,
     currentResponse,
+    liveVerbose,
     error,
     sessionId,
     currentFiles,

@@ -6,9 +6,13 @@
 
 from abc import ABC, abstractmethod
 from enum import Enum
-from typing import Any, Dict, List, Optional, Type
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Type
 
 from pydantic import BaseModel
+
+if TYPE_CHECKING:
+    # 仅类型标注用，运行时不导入（避免与 src.core.verbose_feedback 潜在的导入环）
+    from src.core.verbose_feedback import LongRunningFeedback
 
 # 工具自动目录：catalog=True 且定义了 name 的 BaseTool 子类按稳定类身份登记，
 # 供 registry.discover_tool_classes() 发现注册（docs/tools/tool-auto-discovery-design.md）。
@@ -111,6 +115,25 @@ class BaseTool(ABC):
             显示名
         """
         return self.display_name or self.name
+
+    def get_user_feedback(self, tool_args: dict) -> Optional["LongRunningFeedback"]:
+        """长任务等待提示钩子（verbose Phase 1，服务端专用方法）。
+
+        默认返回 None（短任务，不产生业务提示）。个别执行路径真实稳定超过
+        等待阈值的长任务工具（如 Excel 模板填充的 AI 分析路径，Phase 4 接入）
+        可重写本方法，按 tool_args 动态返回 LongRunningFeedback。
+
+        ⚠️ 上下文隔离（设计 §6.2）：本方法是服务端编排层专用钩子，只由
+        resolve_feedback_policy 调用；to_tool_definition 生成的 tool schema
+        不包含它，LLM 永远不可见。
+
+        Args:
+            tool_args: 本次工具调用参数（用于按任务类型动态判定）
+
+        Returns:
+            LongRunningFeedback（长任务，start_message 为等待文案）或 None（短任务）
+        """
+        return None
 
     def get_usage_guide(self, **kwargs) -> str:
         """

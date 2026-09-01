@@ -39,10 +39,11 @@
     class="message-enter-active message-ai-wrapper"
   >
     <div class="message-ai-content">
-      <!-- AI 正在输入提示（白框内无内容时显示） -->
+      <!-- AI 正在输入提示（白框内无内容时显示）；
+           verbose 中间提示（Phase 2）原地替换占位文案，不新增聊天气泡 -->
       <div v-if="showInputHint" class="flex items-center gap-2">
         <span class="inline-block w-1.5 h-1.5 rounded-full bg-primary-400 animate-pulse"></span>
-        <span class="text-xs text-muted">{{ inputHintState === 'thinking' ? '对方正在输入中...' : '对方正在输入中...' }}</span>
+        <span class="text-xs text-muted verbose-hint" aria-live="polite">{{ liveHintText }}</span>
       </div>
 
       <!-- before_text 图片：文本上方（Phase 2 P2.7） -->
@@ -176,6 +177,7 @@ import { useDebugMode } from '@/composables/useDebugMode'
 import HumanAssistanceCard from './browser/HumanAssistanceCard.vue'
 import { useDemoAuth } from '@/composables/useDemoAuth'
 import { useTenantAuth } from '@/composables/useTenantAuth'
+import { useAgent } from '@/composables/useAgent'
 
 interface Props {
   message: ChatMessage
@@ -248,6 +250,13 @@ const showInputHint = computed(() => {
     (props.inputHintState === 'thinking' || props.inputHintState === 'working')
   )
 })
+
+// verbose 中间提示（Phase 2，设计 §8.2）：assistant 正文为空且处理中时，
+// 用当前会话的 live verbose 文案替换「对方正在输入中...」占位（同一占位区，
+// 不新增聊天气泡）；response 开始后 showInputHint 变 false 自动隐藏。
+// 历史 metadata 中的 verboseMessages 不在此展示（默认不在已完成消息下展开）。
+const { liveVerbose } = useAgent()
+const liveHintText = computed(() => liveVerbose.value?.data || '对方正在输入中...')
 
 const hasProgress = computed(() => {
   return props.message.progressMessages && props.message.progressMessages.length > 0
@@ -403,6 +412,14 @@ function handlePreview(attachment: AttachmentInfo) {
   border-radius: 12px;
   padding: 12px 16px;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+/* verbose 中间提示最多两行，超出省略（设计 §8.2） */
+.verbose-hint {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 /* 桌面端适配 */

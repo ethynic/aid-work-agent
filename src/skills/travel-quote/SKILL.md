@@ -4,6 +4,9 @@ description: 旅游行程报价技能，专门用于研学/旅游场景，传入
 metadata:
   version: "2.0.0"
   author: aid-work-agent
+  user_feedback:
+    long_running: true
+    start_message: "正在生成报价单，这可能需要一点时间，请耐心等待。"
 dependencies:
   - openpyxl>=3.1.0
 ---

@@ -56,6 +56,12 @@ from src.core.agent_events import (  # noqa: F401
     _normalize_image_placement,
     _truncate_tool_content,
 )
+# verbose 反馈内核（Phase 1）：逻辑在 verbose_feedback 模块，agent.py 只做接线
+from src.core.verbose_feedback import (  # noqa: F401
+    VerboseFeedbackConfig, VerboseFeedbackObserver, VerboseFeedbackState,
+    build_policy_verbose_event, default_feedback_config,
+    iter_with_verbose_feedback, prepare_turn_feedback,
+)
 
 _available_subagents_cache: ContextVar[
     Optional[Tuple[Tuple[int, Optional[str], bool, bool], List[str]]]
@@ -1900,6 +1906,9 @@ class Agent:
         _defer_tool_names: Optional[set[str]] = None,
         _deferred_tool_call_id: Optional[str] = None,
         _record_service=None,
+        verbose_config: Optional[VerboseFeedbackConfig] = None,
+        verbose_state: Optional[VerboseFeedbackState] = None,
+        verbose_observer: Optional[VerboseFeedbackObserver] = None,
     ) -> AsyncGenerator[dict, None]:
         """
         Process a user message and yield AgentEvent dicts (trace-wrapped).
@@ -1916,6 +1925,7 @@ class Agent:
             _record_service: 调用方显式传入的 SessionRecordService（随协程
                 参数传递，共享 Agent 的并发请求不会互相覆盖）；缺省时回落
                 读当前上下文（ContextVar）的 record。
+            verbose_config/state/observer: 可选 verbose 反馈参数（Phase 1），默认 None。
         """
         trace_collector = None
         _record = None
@@ -1960,6 +1970,9 @@ class Agent:
                 _continuation_tool_result=_continuation_tool_result,
                 _defer_tool_names=_defer_tool_names,
                 _deferred_tool_call_id=_deferred_tool_call_id,
+                verbose_config=verbose_config,
+                verbose_state=verbose_state,
+                verbose_observer=verbose_observer,
             ):
                 if trace_collector:
                     try:
@@ -1992,6 +2005,9 @@ class Agent:
         _continuation_tool_result: Optional[Dict[str, Any]] = None,
         _defer_tool_names: Optional[set[str]] = None,
         _deferred_tool_call_id: Optional[str] = None,
+        verbose_config: Optional[VerboseFeedbackConfig] = None,
+        verbose_state: Optional[VerboseFeedbackState] = None,
+        verbose_observer: Optional[VerboseFeedbackObserver] = None,
     ) -> AsyncGenerator[dict, None]:
         """
         Process a user message and yield AgentEvent dicts.
@@ -2692,7 +2708,13 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                     toolCallId=deferred["id"],
                 )
                 return
-            
+
+            # verbose：长任务 policy 唯一注入点（Phase 1，逻辑在 verbose_feedback，时机见设计 §5）
+            if verbose_config is not None and verbose_state is not None and verbose_config.effective_enabled:
+                policy_event = build_policy_verbose_event(self, valid_tool_calls, verbose_config, verbose_state)
+                if policy_event is not None:
+                    yield policy_event
+
             # Execute each tool call
             tool_results = []
             for tool_index, tc in enumerate(valid_tool_calls):
@@ -3249,6 +3271,28 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
         async for event in self.process_message(**process_kwargs):
             yield event
     
+    def process_message_with_feedback(
+        self,
+        *,
+        surface: str,
+        config: Optional[VerboseFeedbackConfig] = None,
+        state: Optional[VerboseFeedbackState] = None,
+        observer: Optional[VerboseFeedbackObserver] = None,
+        **kwargs,
+    ):
+        """显式 verbose 反馈包装入口（Web/渠道专用，设计 §6.3/§8.1）：内层获得
+        policy 注入能力，外层 wrapper 做事件过滤/观测（2026-09-01 起无系统兜底）。
+        config/state 缺省时取全局配置/新建；kwargs 原样透传 process_message 全部参数。
+        """
+        if surface not in ("web", "channel"):
+            raise ValueError(f"surface 仅允许 web|channel，实际: {surface!r}")
+        cfg = config if config is not None else default_feedback_config()
+        turn_state = state if state is not None else VerboseFeedbackState()
+        inner = self.process_message(
+            verbose_config=cfg, verbose_state=turn_state, verbose_observer=observer, **kwargs)
+        return iter_with_verbose_feedback(
+            inner, surface=surface, config=cfg, state=turn_state, observer=observer)
+
     async def process_message_sync(
         self,
         user_input: str,
@@ -3260,6 +3304,9 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
         cancel_check=None,
         extra_system_prompt: Optional[str] = None,
         request_context: Optional[AgentRequestContext] = None,
+        feedback_state: Optional[VerboseFeedbackState] = None,
+        verbose_config: Optional[VerboseFeedbackConfig] = None,
+        verbose_observer: Optional[VerboseFeedbackObserver] = None,
     ) -> str:
         """Process message and return complete response
 
@@ -3275,6 +3322,8 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
             extra_system_prompt: 渠道级额外提示词（如 wecom_kf 的渠道能力约束），
                 透传给 process_message → _build_system_prompt。
             request_context: 可信入口构造的通用请求级扩展上下文。
+            feedback_state: 渠道 owner 生命周期的 verbose 状态（设计 §7），外部传入时
+                必须原样复用（禁止内部另建）；verbose_config/observer 为可选配置/钩子。
         """
         # 请求级 record 隔离：显式 record_service 写入 ContextVar 而非共享
         # Agent 实例属性——并发请求共用同一 Agent 实例，实例属性会互相覆盖。
@@ -3291,15 +3340,25 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
         #  能拿到 ImageRef 列表写入 UnifiedResponse.content.images）
         self._last_response_images: List[Dict[str, Any]] = []
         logger.info(f"[DEBUG] Agent.process_message_sync: user_input={user_input!r}, attachments={attachments}, session_id={session_id}")
+        # verbose 包装（Phase 1，设计 §6.3）：仅存在用户投递 callback 时启用，scheduler 等无用户表面不受影响。
+        feedback_enabled, cfg, turn_state = prepare_turn_feedback(progress_callback, feedback_state, verbose_config)
         try:
             response_parts = []
-            async for event in self.process_message(
+            event_iter = self.process_message(
                 user_input, session_id, user, attachments,
                 cancel_check=cancel_check,
                 extra_system_prompt=extra_system_prompt,
                 request_context=request_context,
                 _record_service=record_service,
-            ):
+                verbose_config=cfg if feedback_enabled else None,
+                verbose_state=turn_state,
+                verbose_observer=verbose_observer,
+            )
+            if feedback_enabled:
+                event_iter = iter_with_verbose_feedback(
+                    event_iter, surface="channel", config=cfg,
+                    state=turn_state, observer=verbose_observer)
+            async for event in event_iter:
                 if event.get("type") == "response":
                     response_parts.append(event.get("data", ""))
                 # Phase 2 P2.3 CodeReview P0 修复：累积 images 事件到实例属性

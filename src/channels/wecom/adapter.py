@@ -22,7 +22,12 @@ from typing import Any, Dict, List, Optional
 import httpx
 from loguru import logger
 
-from src.channels.base import ChannelAdapter, build_public_url, format_file_size
+from src.channels.base import (
+    ChannelAdapter,
+    StatusDeliveryResult,
+    build_public_url,
+    format_file_size,
+)
 from src.channels.wecom.crypto import WeComCrypto
 from src.channels.wecom.media import WeComMedia
 from src.channels.wecom.message_builder import WeComMessageBuilder
@@ -155,6 +160,38 @@ class WeComAdapter(ChannelAdapter):
             window.popleft()
         if len(window) >= self._rate_limit_max:
             logger.warning(f"Rate limit exceeded for user {user_id}")
+            return False
+        window.append(now)
+        return True
+
+    def _reserve_rate_limit(self, user_id: str, reserve_for_final: int = 1) -> bool:
+        """低优先级 status 消息的原子预留限流（Phase 3，设计 §9.3）。
+
+        在**不含 await 的同步临界区**内完成「校验本次发送后剩余额度 ≥
+        reserve_for_final 才扣减并发送」：``len(window) + 1 + reserve <= max``。
+        额度只剩 final 预留时返回 False（抑制 verbose，不占额度），保证 final
+        仍可经 _check_rate_limit 正常发送。
+
+        Args:
+            user_id: 目标用户 ID
+            reserve_for_final: 需为 final 保留的额度数
+
+        Returns:
+            True 表示已扣减额度、允许发送；False 表示抑制
+        """
+        if not self._rate_limit_enabled:
+            return True
+        reserve = max(0, int(reserve_for_final))
+        now = time.time()
+        window = self._rate_limiter.setdefault(user_id, deque())
+        while window and window[0] < now - 60:
+            window.popleft()
+        remaining = self._rate_limit_max - len(window)
+        if remaining < 1 + reserve:
+            logger.warning(
+                f"[WeCom] status 消息预留限流抑制: user={user_id}, "
+                f"remaining={remaining}, need={1 + reserve}"
+            )
             return False
         window.append(now)
         return True
@@ -413,6 +450,29 @@ class WeComAdapter(ChannelAdapter):
         2. 即使用户已触发速率限制，等待提示也应发出（改善 UX）
         """
         return await self.send_text(message, user_id)
+
+    async def send_status_message(
+        self, message: UnifiedResponse, *, reserve_for_final: int = 1
+    ) -> StatusDeliveryResult:
+        """低优先级 status/verbose 发送（Phase 3，设计 §9.3）。
+
+        先经 _reserve_rate_limit 原子预留 final 额度（同步临界区，无 TOCTOU），
+        再单条纯文本发送；额度不足返回 suppressed_rate_limit（不发送、不占额度）。
+        """
+        text = (message.text or "").strip()
+        if not text:
+            return StatusDeliveryResult.suppressed_unsupported("empty verbose text")
+        if not self._reserve_rate_limit(message.reply_to, reserve_for_final):
+            return StatusDeliveryResult.suppressed_rate_limit(
+                "insufficient quota after final reservation"
+            )
+        try:
+            ok = await self.send_text(text, message.reply_to)
+        except Exception as e:  # noqa: BLE001 - best-effort：异常收敛为 failed
+            return StatusDeliveryResult.failed(f"send_text exception: {e}")
+        return StatusDeliveryResult.sent() if ok else StatusDeliveryResult.failed(
+            "send_text returned False"
+        )
 
     async def _send_with_retry(self, msg_data: Dict[str, Any]) -> bool:
         """

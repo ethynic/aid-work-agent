@@ -29,6 +29,8 @@ from src.saas.db.tenant_db import TenantDB
 from src.saas.db.channel_config_db import ChannelConfigDB
 from src.saas.services.channel_factory import ChannelFactory
 from src.channels.session import channel_session_manager
+from src.channels.verbose_dispatcher import resolve_verbose_feedback_config
+from src.channels.wecom_kf.budget import WeComKfReplyBudget
 from src.channels.idempotency import MessageDeduplicator
 from src.services.session_record import SessionRecordManager
 from src.core.storage import ensure_tenant_storage_dir, get_tenant_storage_path
@@ -537,6 +539,17 @@ async def _process_tenant_wecom_background(
             reply_to=message.user_id,
             log_tag="[Tenant WeCom]",
         )
+        # verbose 中间消息（Phase 3，设计 §11）：配置优先级
+        # 渠道 config.verbose_feedback > 全局 agent.verbose_feedback > 代码默认
+        _verbose_cfg = resolve_verbose_feedback_config(
+            channel_cfg=getattr(adapter, "verbose_feedback", None),
+        )
+        _send_verbose = channel_session_manager.make_send_verbose(
+            adapter=adapter,
+            event_id=message.message_id,
+            reply_to=message.user_id,
+            log_tag="[Tenant WeCom]",
+        )
 
         from src.channels.agent_user_builder import build_agent_user_for_channel
         agent_user = await build_agent_user_for_channel(
@@ -557,6 +570,8 @@ async def _process_tenant_wecom_background(
             agent_user=agent_user,
             record_service=record_service,
             send_response=send_response,
+            send_verbose=_send_verbose,
+            verbose_feedback_config=_verbose_cfg,
         )
 
         SessionRecordManager.end_record()
@@ -909,6 +924,17 @@ async def _process_tenant_dingtalk_background(
             extra_content={"conversation_type": conversation_type},
             log_tag="[Tenant DingTalk]",
         )
+        # verbose 中间消息（Phase 3）：conversation_type / reply_target 与 final 一致（群聊同规则）
+        _verbose_cfg = resolve_verbose_feedback_config(
+            channel_cfg=getattr(adapter, "verbose_feedback", None),
+        )
+        _send_verbose = channel_session_manager.make_send_verbose(
+            adapter=adapter,
+            event_id=message.message_id,
+            reply_to=reply_target,
+            extra_content={"conversation_type": conversation_type},
+            log_tag="[Tenant DingTalk]",
+        )
 
         from src.channels.agent_user_builder import build_agent_user_for_channel
         agent_user = await build_agent_user_for_channel(
@@ -929,6 +955,8 @@ async def _process_tenant_dingtalk_background(
             agent_user=agent_user,
             record_service=record_service,
             send_response=send_response,
+            send_verbose=_send_verbose,
+            verbose_feedback_config=_verbose_cfg,
         )
 
         SessionRecordManager.end_record()
@@ -1058,6 +1086,16 @@ async def _process_tenant_feishu_background(
             reply_to=message.user_id,
             log_tag="[Tenant Feishu]",
         )
+        # verbose 中间消息（Phase 3，设计 §11）
+        _verbose_cfg = resolve_verbose_feedback_config(
+            channel_cfg=getattr(adapter, "verbose_feedback", None),
+        )
+        _send_verbose = channel_session_manager.make_send_verbose(
+            adapter=adapter,
+            event_id=message.message_id,
+            reply_to=message.user_id,
+            log_tag="[Tenant Feishu]",
+        )
 
         from src.channels.agent_user_builder import build_agent_user_for_channel
         agent_user = await build_agent_user_for_channel(
@@ -1078,6 +1116,8 @@ async def _process_tenant_feishu_background(
             agent_user=agent_user,
             record_service=record_service,
             send_response=send_response,
+            send_verbose=_send_verbose,
+            verbose_feedback_config=_verbose_cfg,
         )
 
         SessionRecordManager.end_record()
@@ -1626,29 +1666,10 @@ def _get_waiting_indicator_cfg(adapter) -> dict:
     return {"delay_seconds": delay, "message": message}
 
 
-async def _process_with_waiting_indicator(adapter, ext_userid, cfg, coro):
-    """非取消式超时 watchdog：处理超过 cfg['delay_seconds'] 秒未完成时先发提示语，任务继续跑。
-
-    绝不能取消 coro —— session_queue 处理器持有 Redis 锁（watchdog 续期），
-    取消会穿透 try 泄漏锁/cancel 标志。用 shield 隔离取消，超时只发提示、不打断任务。
-    """
-    task = asyncio.create_task(coro)
-    try:
-        return await asyncio.wait_for(asyncio.shield(task), timeout=cfg["delay_seconds"])
-    except asyncio.TimeoutError:
-        try:
-            sent = await adapter.send_waiting_indicator(ext_userid, cfg["message"])
-            if not sent:
-                _kf_tlog("等待提示未送达: user={user}, sent=False", user=ext_userid, level="ERROR")
-                logger.warning(f"[wecom_kf] 等待提示未送达: user={ext_userid}, send_waiting_indicator 返回 False（errcode≠0）")
-            else:
-                _kf_tlog("等待提示已发送: user={user}", user=ext_userid)
-        except Exception as e:
-            logger.warning(f"[wecom_kf] 等待提示发送失败: {e}")
-        # 不取消 task；等其自然完成返回真实结果
-        return await task
-
-
+# Phase 3（设计 §11）：route 外层旧 watchdog _process_with_waiting_indicator 已移除，
+# 旧 waiting_indicator 配置经 resolve_verbose_feedback_config 映射进新 verbose 机制
+#（enabled/delay_seconds/message 语义原样保留），避免双发。各 adapter 的
+# send_waiting_indicator 方法本体保留不删（其他调用方兼容）。
 async def _process_tenant_wecom_kf_messages(
     tenant_id: str, config_id: str, open_kfid: str, adapter
 ) -> None:
@@ -2590,11 +2611,31 @@ async def _process_tenant_wecom_kf_messages(
                 logger.info(f"[微信消息] 进入会话队列: session_id={session_id}, user_input_len={len(user_input)}")
 
                 # 处理消息 + 持久化（P0-1 / P0-2 统一在 process_and_persist 内完成）
+                # verbose 配置解析（Phase 3，设计 §11）：渠道 config.verbose_feedback
+                # > 旧 waiting_indicator 映射（enabled/delay_seconds/message 原样保留语义）
+                # > 全局 agent.verbose_feedback > 代码默认
+                _verbose_cfg = resolve_verbose_feedback_config(
+                    channel_cfg=getattr(adapter, "verbose_feedback", None),
+                    legacy_waiting_indicator=getattr(adapter, "waiting_indicator", None),
+                )
+                # owner 级 5 次回复预算（设计 §9.3）：verbose/final 共享；
+                # verbose 关闭时不注入预算，final 行为与历史完全一致
+                _kf_reply_budget = (
+                    WeComKfReplyBudget(total=5) if _verbose_cfg.effective_enabled else None
+                )
                 _base_send_response = channel_session_manager.make_send_response(
                     adapter=adapter,
                     message_id=msg_id,
                     reply_to=unified_msg.user_id,
                     log_tag="[wecom_kf]",
+                    reply_budget=_kf_reply_budget,
+                )
+                _send_verbose = channel_session_manager.make_send_verbose(
+                    adapter=adapter,
+                    event_id=msg_id,
+                    reply_to=unified_msg.user_id,
+                    log_tag="[wecom_kf]",
+                    reply_budget=_kf_reply_budget,
                 )
 
                 async def send_response(response_text, downloadable_files, images=None):
@@ -2636,10 +2677,9 @@ async def _process_tenant_wecom_kf_messages(
                     user_metadata = {"msgid": msg_id, "msgtype": msgtype, "open_kfid": open_kfid}
 
                 try:
-                    # 处理超时等待提示：仅对真正走智能体的消息启用
-                    # （merged 场景 process 秒回不触发；watchdog 不取消任务，避免泄漏 Redis 锁）
-                    waiting_cfg = _get_waiting_indicator_cfg(adapter)
-                    process_call = channel_session_manager.process_and_persist(
+                    # 处理消息（Phase 3：等待提示由 verbose 机制接管——旧 waiting_indicator
+                    # 配置经 resolve_verbose_feedback_config 映射进新机制，只发一次，无双发）
+                    result = await channel_session_manager.process_and_persist(
                         session_id=session_id,
                         tenant_id=tenant_id,
                         user_content=user_content,
@@ -2653,13 +2693,9 @@ async def _process_tenant_wecom_kf_messages(
                         tool_messages_collected=tool_messages_collected,
                         assistant_metadata=assistant_metadata,
                         send_response=send_response,
+                        send_verbose=_send_verbose,
+                        verbose_feedback_config=_verbose_cfg,
                     )
-                    if waiting_cfg:
-                        result = await _process_with_waiting_indicator(
-                            adapter, unified_msg.user_id, waiting_cfg, process_call
-                        )
-                    else:
-                        result = await process_call
                     _kf_tlog(
                         "process_and_persist完成: tenant={tenant}, session_id={session_id}, "
                         "status={status}, response_text_len={resp_len}, response_text={response_text}",

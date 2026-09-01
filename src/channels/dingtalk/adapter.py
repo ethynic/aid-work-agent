@@ -26,7 +26,7 @@ import httpx
 from loguru import logger
 
 from src.channels._image_text_renderer import render_text_with_image_placeholders
-from src.channels.base import ChannelAdapter, build_public_url
+from src.channels.base import ChannelAdapter, StatusDeliveryResult, build_public_url
 from src.channels.dingtalk.crypto import DingTalkCrypto
 from src.channels.dingtalk.media import DingTalkMedia
 from src.channels.dingtalk.message_builder import DingTalkMessageBuilder
@@ -161,6 +161,29 @@ class DingTalkAdapter(ChannelAdapter):
             window.popleft()
         if len(window) >= self._rate_limit_max:
             logger.warning(f"[DingTalk] 速率限制已触发: user={user_id}")
+            return False
+        window.append(now)
+        return True
+
+    def _reserve_rate_limit(self, user_id: str, reserve_for_final: int = 1) -> bool:
+        """低优先级 status 消息的原子预留限流（Phase 3，设计 §9.3）。
+
+        在**不含 await 的同步临界区**内完成「校验本次发送后剩余额度 ≥
+        reserve_for_final 才扣减」：``len(window) + 1 + reserve <= max``。
+        额度只剩 final 预留时返回 False（抑制 verbose、不占额度），
+        final 仍可经 _check_rate_limit 正常发送。
+        """
+        reserve = max(0, int(reserve_for_final))
+        now = time.time()
+        window = self._rate_limiter[user_id]
+        while window and window[0] < now - self._rate_limit_window:
+            window.popleft()
+        remaining = self._rate_limit_max - len(window)
+        if remaining < 1 + reserve:
+            logger.warning(
+                f"[DingTalk] status 消息预留限流抑制: user={user_id}, "
+                f"remaining={remaining}, need={1 + reserve}"
+            )
             return False
         window.append(now)
         return True
@@ -466,6 +489,32 @@ class DingTalkAdapter(ChannelAdapter):
     async def send_waiting_indicator(self, user_id: str, message: str) -> bool:
         """发送等待提示（绕过应用层速率限制）"""
         return await self.send_text(message, user_id, "1")
+
+    async def send_status_message(
+        self, message: UnifiedResponse, *, reserve_for_final: int = 1
+    ) -> StatusDeliveryResult:
+        """低优先级 status/verbose 发送（Phase 3，设计 §9.3）。
+
+        先经 _reserve_rate_limit 原子预留 final 额度（同步临界区），再单条纯文本
+        发送；conversation_type / reply_to 与 final 一致（群聊同规则，由
+        make_send_verbose 经 extra_content 透传）。额度不足返回
+        suppressed_rate_limit，不发送、不占额度。
+        """
+        text = (message.text or "").strip()
+        if not text:
+            return StatusDeliveryResult.suppressed_unsupported("empty verbose text")
+        conversation_type = str((message.content or {}).get("conversation_type", "1"))
+        if not self._reserve_rate_limit(message.reply_to, reserve_for_final):
+            return StatusDeliveryResult.suppressed_rate_limit(
+                "insufficient quota after final reservation"
+            )
+        try:
+            ok = await self.send_text(text, message.reply_to, conversation_type)
+        except Exception as e:  # noqa: BLE001 - best-effort：异常收敛为 failed
+            return StatusDeliveryResult.failed(f"send_text exception: {e}")
+        return StatusDeliveryResult.sent() if ok else StatusDeliveryResult.failed(
+            "send_text returned False"
+        )
 
     async def _send_with_retry(
         self,

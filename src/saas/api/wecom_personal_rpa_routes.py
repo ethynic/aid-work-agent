@@ -734,16 +734,40 @@ async def _process_inbound_message(
             pass
 
         # send_response 回调：通过工厂方法构造（含 RPA 的 set_reply_context 钩子）
+        # Phase 3（设计 §9.4）：pre_send 接收唯一投递 ID——final 由
+        # make_send_response 传入 f"{event_id}:final"，verbose 由
+        # make_send_verbose 传入 f"{verbose_eventId}:verbose:1"。
+        # verbose/final 的 request_id 不同，outbox dedup_key 随之分离，
+        # 后发消息不会被去重吞掉（不依赖 UnifiedResponse.message_id）。
         send_response = channel_session_manager.make_send_response(
             adapter=adapter,
             message_id=env.event_id,
             reply_to=um.user_id,
             log_tag="[RPA]",
-            pre_send=lambda: adapter.set_reply_context(
+            pre_send=lambda delivery_id=None: adapter.set_reply_context(
                 account_id=env.account_id,
                 conversation_id=conversation_id,
                 session_id=session_id,
-                request_id=env.event_id,
+                request_id=delivery_id or f"{env.event_id}:final",
+                tenant_id=tenant_id,
+                sender_display_name=authoritative_display_name,
+                sender_stable_id=sender_stable_id,
+                conversation_search_name=conversation_search_name,
+                inbound_text=user_text,
+            ),
+        )
+        # verbose 发送闭包：复用同一回复上下文，request_id 由 dispatcher 以
+        # delivery_id（{eventId}:verbose:1）注入，与 final 幂等键分离
+        send_verbose = channel_session_manager.make_send_verbose(
+            adapter=adapter,
+            event_id=env.event_id,
+            reply_to=um.user_id,
+            log_tag="[RPA]",
+            pre_send=lambda delivery_id=None: adapter.set_reply_context(
+                account_id=env.account_id,
+                conversation_id=conversation_id,
+                session_id=session_id,
+                request_id=delivery_id or f"{env.event_id}:verbose:1",
                 tenant_id=tenant_id,
                 sender_display_name=authoritative_display_name,
                 sender_stable_id=sender_stable_id,
@@ -768,6 +792,7 @@ async def _process_inbound_message(
                 agent=agent,
                 record_service=record,
                 send_response=send_response,
+                send_verbose=send_verbose,
             )
         except Exception as e:
             logger.opt(exception=True).error(

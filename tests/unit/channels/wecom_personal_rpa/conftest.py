@@ -29,18 +29,21 @@ def _ensure_stub(name: str, **attrs) -> None:
 
 
 # psycopg2（含 pool / extras 子模块）—— database.py 模块加载期引用
-_psycopg2 = types.ModuleType("psycopg2")
-_psycopg2.extensions = MagicMock()
-sys.modules.setdefault("psycopg2", _psycopg2)
-
-_psycopg2_pool = types.ModuleType("psycopg2.pool")
-_psycopg2_pool.ThreadedConnectionPool = MagicMock()
-sys.modules.setdefault("psycopg2.pool", _psycopg2_pool)
-
-_psycopg2_extras = types.ModuleType("psycopg2.extras")
-_psycopg2_extras.RealDictCursor = MagicMock()
-_psycopg2_extras.Json = MagicMock()
-sys.modules.setdefault("psycopg2.extras", _psycopg2_extras)
+# 注意：必须在真实包可导入时不注入 stub，否则会污染同进程后续测试
+# （如 test_idempotency 依赖真实的 psycopg2.IntegrityError）。
+_ensure_stub(
+    "psycopg2",
+    extensions=MagicMock(),
+)
+_ensure_stub(
+    "psycopg2.pool",
+    ThreadedConnectionPool=MagicMock(),
+)
+_ensure_stub(
+    "psycopg2.extras",
+    RealDictCursor=MagicMock(),
+    Json=MagicMock(),
+)
 
 # bcrypt —— db.models 加载期引用
 _ensure_stub("bcrypt")

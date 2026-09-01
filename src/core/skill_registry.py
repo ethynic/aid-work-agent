@@ -13,7 +13,7 @@ Skill Registry - Skill注册表
 """
 
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 from loguru import logger
 
 from src.core.skill_loader import SkillLoader, Skill
@@ -194,6 +194,25 @@ class SkillRegistry:
             Skill对象，如果不存在返回None
         """
         return self._skills.get(name)
+
+    def get_user_feedback(self, name: str) -> Optional[Dict[str, Any]]:
+        """读取 Skill 的 user_feedback 等待提示策略（编排侧专用，Phase 1）。
+
+        数据来源：SKILL.md frontmatter 的 ``metadata.user_feedback``
+        （long_running / start_message），由 SkillLoader 解析后单独保存在
+        Skill.metadata 字段——只供本访问器读取，不渲染进 Skill 正文、
+        get_descriptions 或 Agent system prompt（设计 §6.2 上下文隔离）。
+
+        Returns:
+            user_feedback 字典（如 {"long_running": True, "start_message": "..."}）；
+            Skill 不存在 / metadata 缺失 / 字段非字典时返回 None。
+        """
+        skill = self.get(name)
+        if skill is None:
+            return None
+        metadata = getattr(skill, "metadata", None) or {}
+        feedback = metadata.get("user_feedback") if isinstance(metadata, dict) else None
+        return feedback if isinstance(feedback, dict) else None
     
     def get_content(self, name: str, substitutions: Optional[Dict[str, str]] = None) -> Optional[str]:
         """

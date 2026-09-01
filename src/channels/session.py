@@ -5,6 +5,7 @@
 支持租户隔离：tenant_id 参与 session_id 生成和所有查询，防止跨租户数据串扰。
 """
 
+import inspect
 import json
 import uuid
 from datetime import datetime
@@ -17,6 +18,39 @@ from src.models.message import ChannelType
 from src.core.cache_utils import CacheKeys, get_cached, set_cached, delete_cached, delete_cached_pattern
 from src.core.temp_logger import tlog
 from src.core.agent_events import extract_downloadable_file
+from src.core.verbose_feedback import VerboseFeedbackConfig, VerboseFeedbackState
+from src.channels.verbose_dispatcher import (
+    ChannelVerboseDispatcher,
+    build_channel_verbose_metadata_entries,
+    final_delivery_id,
+    verbose_delivery_id,
+)
+
+
+def _invoke_pre_send(pre_send: Callable[..., Any], delivery_id: str) -> None:
+    """按 pre_send 签名注入 delivery_id（设计 §9.4 唯一投递 ID）。
+
+    兼容两种钩子形态：``pre_send()``（既有零参 lambda，行为不变）与
+    ``pre_send(delivery_id)``（企微个人 RPA 等需要把唯一投递 ID 写入
+    set_reply_context(request_id=...) 的渠道）。签名解析失败时回退零参调用。
+    """
+    try:
+        takes_arg = False
+        for param in inspect.signature(pre_send).parameters.values():
+            if param.kind in (
+                param.POSITIONAL_ONLY,
+                param.POSITIONAL_OR_KEYWORD,
+                param.KEYWORD_ONLY,
+            ):
+                takes_arg = True
+                break
+        if takes_arg:
+            pre_send(delivery_id)
+        else:
+            pre_send()
+    except (TypeError, ValueError):
+        # 内建函数等无法解析签名：保守回退零参
+        pre_send()
 
 
 class ChannelSessionManager:
@@ -820,6 +854,8 @@ class ChannelSessionManager:
         tool_messages_collected: Optional[List[Dict[str, Any]]] = None,
         assistant_metadata: Optional[Dict[str, Any]] = None,
         agent_extra_system_prompt: Optional[str] = None,
+        send_verbose: Optional[Callable[[Dict[str, Any], str], Awaitable[Any]]] = None,
+        verbose_feedback_config: Optional[VerboseFeedbackConfig] = None,
     ) -> Dict[str, Any]:
         """
         统一渠道消息处理路径。覆盖 P0-1（事务化批量写入）+ P0-2（user 写入推迟）+ 异常兜底。
@@ -833,6 +869,15 @@ class ChannelSessionManager:
                - 构造 batch：[user, *tool_messages, assistant]，事务化批量写入
                - 写入失败 / send_response 失败时补一条 assistant 占位，避免下次加载出现连续 user
                - mark_responding → send_response → mark_idle
+
+        verbose（Phase 3，设计 §7/§9/§10）：
+            - owner 生命周期创建一次 VerboseFeedbackState 并显式传入每次
+              process_message_sync 重跑（cancel/merge 重跑复用，已 emitted/sent 不重置）；
+            - verbose 事件经 callback 旁路进入 ChannelVerboseDispatcher（惰性启动，
+              容量 1 队列，串行发送，单次 5 秒超时），全程绝不调用 mark_responding；
+            - final 持久化前 close_and_drain 冻结投递结果，verboseMessages 按
+              eventId 去重合并进 assistant metadata（其余键保留、系统字段优先）；
+            - merged follower 不执行 owner processor，不创建 dispatcher、不发 verbose。
 
         Args:
             session_id: 渠道会话 ID
@@ -858,6 +903,13 @@ class ChannelSessionManager:
             agent_extra_system_prompt: 渠道级额外提示词（如 wecom_kf 的渠道能力约束），
                                 透传给 agent.process_message_sync → _build_system_prompt。
                                 None 时行为不变（web/其他渠道默认）。
+            send_verbose: async (verbose_event: dict, delivery_id: str) -> StatusDeliveryResult
+                                由 make_send_verbose 构造的低优先级发送闭包；None 时
+                                verbose 只记录进 metadata（delivery=suppressed_unsupported），
+                                不发送。缺省行为与 Phase 2 之前完全一致。
+            verbose_feedback_config: 本轮冻结配置（渠道配置解析产物）；None 时
+                                process_message_sync 回落全局配置（feedback_state
+                                始终显式传入，保证 owner 级复用）。
 
         Returns:
             {
@@ -875,6 +927,11 @@ class ChannelSessionManager:
         # 若外部传入 tool_messages_collected 引用，则复用；否则新建（同时供 collect_files_callback 写入）
         if tool_messages_collected is None:
             tool_messages_collected = []
+
+        # ===== verbose（Phase 3）：owner 生命周期状态，所有 cancel/merge 重跑复用 =====
+        verbose_state = VerboseFeedbackState()
+        verbose_events: List[Dict[str, Any]] = []
+        dispatcher: Optional[ChannelVerboseDispatcher] = None
 
         # 积分余额硬阻断：SaaS 模式下余额 ≤ 0 拒绝渠道消息处理（#37 Phase 4）
         # 命中时通过 send_response 发送提示并返回 status='no_credit'，避免调用 LLM 扣费
@@ -916,6 +973,29 @@ class ChannelSessionManager:
             if not isinstance(event, dict):
                 return
             event_type = event.get("type")
+            if event_type == "verbose":
+                # verbose 旁路（设计 §9）：只接受本轮 state 注册的本体事件
+                #（policy 在 agent 内部 try_emit 后 yield，event is state.event），
+                # 迟到重复/伪造事件直接丢弃，绝不影响文件/tool 收集与主流程。
+                if event is verbose_state.event:
+                    verbose_events.append(event)
+                    if send_verbose is not None:
+                        nonlocal dispatcher
+                        # 惰性启动：首个 verbose 事件才创建 dispatcher（merged
+                        # follower 不进 owner processor，因此永不创建 task）
+                        if dispatcher is None:
+                            dispatcher = ChannelVerboseDispatcher(
+                                send_verbose=send_verbose,
+                                state=verbose_state,
+                                timeout_seconds=(
+                                    verbose_feedback_config.delivery_timeout_seconds
+                                    if isinstance(verbose_feedback_config, VerboseFeedbackConfig)
+                                    else 5.0
+                                ),
+                            )
+                        # callback 侧只校验 + put_nowait，绝不 await adapter
+                        dispatcher.submit(event)
+                return
             downloadable_file = extract_downloadable_file(event)
             if downloadable_file:
                 downloadable_files.append(downloadable_file)
@@ -950,7 +1030,13 @@ class ChannelSessionManager:
                 "record_service": record_service,
                 "progress_callback": collect_files_callback,
                 "cancel_check": cancel_check,
+                # owner 级 verbose 状态（设计 §7）：每次重跑 attempt 显式复用同一
+                # 实例，process_message_sync 收到外部 state 时禁止另建；
+                # verbose_config 缺省时由 process_message_sync 回落全局配置。
+                "feedback_state": verbose_state,
             }
+            if isinstance(verbose_feedback_config, VerboseFeedbackConfig):
+                kwargs["verbose_config"] = verbose_feedback_config
             if agent_extra_system_prompt is not None:
                 kwargs["extra_system_prompt"] = agent_extra_system_prompt
             if agent_user is not None:
@@ -1007,6 +1093,13 @@ class ChannelSessionManager:
                     logger.warning(
                         f"后端日志：enqueue 异常后 record_service.mark_error 失败: {mark_err}"
                     )
+            # 取消/异常路径显式关闭 dispatcher，不残留 task（设计 §9.2 步骤 7）
+            if dispatcher is not None:
+                try:
+                    await dispatcher.cancel_and_await()
+                except Exception as close_err:
+                    logger.warning(f"[VERBOSE] dispatcher 收尾失败 session={session_id}: {close_err}")
+            verbose_state.close()
             return {
                 "status": "error",
                 "response_text": "",
@@ -1017,6 +1110,14 @@ class ChannelSessionManager:
 
         # ===== 合并/排队：不写任何消息，直接返回 =====
         if result.status == "merged":
+            # merged follower 不执行 owner processor，正常不会创建 dispatcher；
+            # 防御性收尾，保证任何路径不留 task。
+            if dispatcher is not None:
+                try:
+                    await dispatcher.cancel_and_await()
+                except Exception as close_err:
+                    logger.warning(f"[VERBOSE] merged 路径 dispatcher 收尾失败: {close_err}")
+            verbose_state.close()
             if record_service is not None:
                 record_service.set_trace_merge_semantics(
                     termination_reason="message_merged",
@@ -1059,6 +1160,22 @@ class ChannelSessionManager:
             #     mm_n=len(result.merged_attachments_meta) if result.merged_attachments_meta else 0,
             #     wm_n=len(attachments_to_write) if attachments_to_write else 0,
             # )
+
+        # ===== final 持久化前：drain dispatcher 并冻结 verbose metadata（设计 §9.2 步骤 5）=====
+        # 必须在构造 DB batch 之前完成：drain 超时会 cancel 并 await 实际发送 task，
+        # 保证投递结果冻结后不再有晚到发送与落库竞态。
+        if dispatcher is not None:
+            try:
+                drain_timeout = None
+                if isinstance(verbose_feedback_config, VerboseFeedbackConfig):
+                    drain_timeout = verbose_feedback_config.delivery_timeout_seconds + 1.0
+                await dispatcher.close_and_drain(timeout=drain_timeout)
+            except Exception as drain_err:
+                logger.warning(
+                    f"[VERBOSE] dispatcher drain 失败 session={session_id}: {drain_err}"
+                )
+        verbose_state.close()
+        verbose_entries = build_channel_verbose_metadata_entries(verbose_events, dispatcher)
 
         # 构造批量写入的消息序列
         batch: List[Dict[str, Any]] = []
@@ -1109,6 +1226,13 @@ class ChannelSessionManager:
         final_assistant_metadata = assistant_metadata
         if final_assistant_metadata is None and downloadable_files:
             final_assistant_metadata = {"downloadableFiles": downloadable_files}
+        # verboseMessages 合并（设计 §10）：浅复制调用方 metadata（未知字段保留），
+        # verboseMessages 为系统字段，按 eventId 去重后覆盖写入。本轮无 verbose 时
+        # 不写该键，metadata 结构与历史消息完全一致（verbose 关闭零行为变化）。
+        if verbose_entries:
+            merged_metadata = dict(final_assistant_metadata) if final_assistant_metadata else {}
+            merged_metadata["verboseMessages"] = verbose_entries
+            final_assistant_metadata = merged_metadata
 
         batch.append({
             "role": "assistant",
@@ -1260,7 +1384,8 @@ class ChannelSessionManager:
         reply_to: str,
         extra_content: Optional[Dict[str, Any]] = None,
         log_tag: str = "Channel",
-        pre_send: Optional[Callable[[], None]] = None,
+        pre_send: Optional[Callable[..., None]] = None,
+        reply_budget: Optional[Any] = None,
     ) -> Callable[..., Awaitable[bool]]:
         """
         构造 send_response 回调，供 process_and_persist 使用。
@@ -1274,7 +1399,11 @@ class ChannelSessionManager:
             reply_to: 回复目标（用户/群会话ID）
             extra_content: 额外的 content 字段（如 dingtalk 的 conversation_type）
             log_tag: 日志前缀（如 "[Tenant WeCom]"）
-            pre_send: 发送前的钩子（如 RPA 的 set_reply_context 注入）
+            pre_send: 发送前的钩子（如 RPA 的 set_reply_context 注入）。支持两种签名：
+                      ``pre_send()``（零参，行为不变）或 ``pre_send(delivery_id)``
+                      （接收唯一投递 ID ``{message_id}:final``，设计 §9.4）
+            reply_budget: 可选 owner 级回复预算（如 wecom_kf WeComKfReplyBudget），
+                      注入 content 私有键由 wecom_kf adapter 消费；None 时行为不变
 
         Returns:
             async callable (response_text: str, downloadable_files: list, images: list = []) -> bool
@@ -1294,10 +1423,14 @@ class ChannelSessionManager:
             )
             try:
                 if pre_send is not None:
-                    pre_send()
+                    _invoke_pre_send(pre_send, final_delivery_id(message_id))
                 content: Dict[str, Any] = {"text": response_text}
                 if extra_content is not None:
                     content.update(extra_content)
+                if reply_budget is not None:
+                    # 私有约定键：仅 wecom_kf adapter 消费（owner 级 5 次回复预算），
+                    # 其他渠道忽略；不入库（UnifiedResponse.content 不参与持久化）
+                    content["_kf_reply_budget"] = reply_budget
                 # Phase 2 P2.3 CodeReview P0 修复：把 agent 累积的 ImageRef 写入 content.images
                 # 渠道适配器通过 message.get_images() 读取
                 if images:
@@ -1319,6 +1452,85 @@ class ChannelSessionManager:
                 return False
 
         return _send_response
+
+    def make_send_verbose(
+        self,
+        *,
+        adapter: Any,
+        event_id: str,
+        reply_to: str,
+        extra_content: Optional[Dict[str, Any]] = None,
+        log_tag: str = "[Verbose]",
+        pre_send: Optional[Callable[..., None]] = None,
+        reply_budget: Optional[Any] = None,
+    ) -> Callable[[Dict[str, Any], str], Awaitable[Any]]:
+        """构造 send_verbose 闭包（Phase 3，设计 §9.3）。
+
+        由 ChannelVerboseDispatcher 串行调用：``send_verbose(event, delivery_id)``。
+        内部走 adapter 的低优先级 ``send_status_message(reserve_for_final=1)``，
+        只构造纯文本 UnifiedResponse，不携带文件/图片/Markdown 长图；绝不调用
+        普通 send_message（否则 verbose 可能占掉内部限流器最后一个额度）。
+        任何异常都收敛为 StatusDeliveryResult，不向 dispatcher 泄漏。
+
+        Args:
+            adapter: 渠道适配器（需实现 send_status_message；未实现的渠道由基类
+                     默认实现返回 suppressed_unsupported，不发送）
+            event_id: 渠道入站消息 ID（与 make_send_response 的 message_id 同源）
+            reply_to: 回复目标（与 final 一致，群聊同规则）
+            extra_content: 额外 content 字段（如 dingtalk conversation_type，
+                     保证群聊投递目标/conversation type 与 final 一致）
+            pre_send: 发送前钩子，接收 delivery_id ``{eventId}:verbose:1``
+                     （RPA set_reply_context 用）
+            reply_budget: wecom_kf owner 级回复预算（可选）
+        """
+        from src.channels.base import StatusDeliveryResult
+        from src.models.message import UnifiedResponse
+
+        async def _send_verbose(
+            verbose_event: Dict[str, Any], delivery_id: str = ""
+        ) -> StatusDeliveryResult:
+            event = verbose_event if isinstance(verbose_event, dict) else {}
+            text = str(event.get("data") or "").strip()
+            if not text:
+                return StatusDeliveryResult.suppressed_unsupported("empty verbose text")
+            # kill switch 第二次读取（设计 §11）：dispatcher 真正发送前再读一次
+            # 全局配置，force_disabled 时抑制尚未发送的在途提示
+            try:
+                from src.core.verbose_feedback import default_feedback_config
+
+                if default_feedback_config().force_disabled:
+                    return StatusDeliveryResult.suppressed_unsupported("force_disabled")
+            except Exception:
+                pass
+            try:
+                if pre_send is not None:
+                    _invoke_pre_send(
+                        pre_send, delivery_id or verbose_delivery_id(event)
+                    )
+                content: Dict[str, Any] = {"text": text}
+                if extra_content is not None:
+                    content.update(extra_content)
+                if reply_budget is not None:
+                    content["_kf_reply_budget"] = reply_budget
+                response = UnifiedResponse(
+                    message_id=f"verbose_{event_id}",
+                    reply_to=reply_to,
+                    content=content,
+                )
+                result = await adapter.send_status_message(response, reserve_for_final=1)
+                if isinstance(result, StatusDeliveryResult):
+                    return result
+                # 防御：不规范 bool 返回按真值收敛
+                return (
+                    StatusDeliveryResult.sent()
+                    if result
+                    else StatusDeliveryResult.failed("adapter returned falsy")
+                )
+            except Exception as e:  # noqa: BLE001 - best-effort：不向 dispatcher 泄漏
+                logger.warning(f"{log_tag} send_verbose 异常 delivery_id={delivery_id}: {e}")
+                return StatusDeliveryResult.failed(f"send_verbose exception: {e}")
+
+        return _send_verbose
 
     def _ensure_last_not_orphan_user(self, session_id: str, tenant_id: str) -> None:
         """

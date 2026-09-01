@@ -282,6 +282,9 @@ async def _continue_browser_agent(record, browser_result: dict) -> None:
         if event_type in {
             "response", "progress", "tool_start", "tool_result", "thinking",
             "clarification", "images", "browser_human_required",
+            # Phase 2（设计 §8.1）：continuation 只透传原生 verbose 事件；
+            # 此路径不经 verbose 包装入口，只透传原生 verbose（MVP 约束）。
+            "verbose",
         }:
             await store.append_event(
                 record.tenant_id, record.continuation_id, event
@@ -1166,6 +1169,54 @@ async def download_file(file_id: str):
 
 # ==================== SSE Chat API ====================
 
+# Web 端 verbose metadata 的 delivery 冻结命名（设计 §10）：Web 无法可靠确认
+# DOM 是否实际渲染，记录「已随 SSE 流式下发」而非展示事实；契约测试冻结该值
+# （tests/unit/test_verbose_feedback_contract.py）。
+WEB_VERBOSE_DELIVERY = "streamed"
+
+
+def _resolve_web_verbose_config(override: Optional[Any] = None):
+    """解析 Web SSE 本轮的 verbose 配置（Phase 2，设计 §11 优先级）。
+
+    默认读全局 ``settings.agent.verbose_feedback``（2026-09-01 起全局默认启用）；``override``
+    是函数级显式覆盖入口（请求体无承载字段，不新增 API 字段；供测试与内部
+    调用注入已冻结的 VerboseFeedbackConfig）。force_disabled 的最高优先级由
+    ``effective_enabled`` 在内核层保证，此处不做二次判定。
+    """
+    from src.core.verbose_feedback import VerboseFeedbackConfig, default_feedback_config
+
+    if isinstance(override, VerboseFeedbackConfig):
+        return override
+    return default_feedback_config()
+
+
+def _build_verbose_metadata_entries(verbose_events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """把本轮收集的 verbose 事件折叠为 assistant metadata 的 ``verboseMessages`` 条目。
+
+    - 按 ``eventId`` 去重（保留首条；后端每轮最多一条，此处为防御性去重）；
+    - 每条仅保留 eventId/data/source/timestamp 五字段 + ``delivery``（Web 端冻结
+      为 ``WEB_VERBOSE_DELIVERY``），不透传其余内部字段；
+    - 返回空列表表示本轮无 verbose，调用方保持 metadata 无该键（历史消息结构不变）。
+    """
+    entries: List[Dict[str, Any]] = []
+    seen_event_ids = set()
+    for event in verbose_events or []:
+        if not isinstance(event, dict):
+            continue
+        event_id = event.get("eventId")
+        if not event_id or event_id in seen_event_ids:
+            continue
+        seen_event_ids.add(event_id)
+        entries.append({
+            "eventId": event_id,
+            "data": event.get("data"),
+            "source": event.get("source"),
+            "timestamp": event.get("timestamp"),
+            "delivery": WEB_VERBOSE_DELIVERY,
+        })
+    return entries
+
+
 @app.post("/api/chat/stream")
 async def chat_stream(http_request: Request, request: ChatRequest):
     """
@@ -1347,6 +1398,7 @@ async def chat_stream(http_request: Request, request: ChatRequest):
 
         response_parts = []
         progress_events = []
+        verbose_events = []  # 用户可见中间消息（verbose），与技术 progress 严格分开收集
         tool_messages_collected = []  # 收集本轮 tool 消息序列，供事务持久化
         error_occurred = None
         suspended_for_browser = False
@@ -1365,7 +1417,11 @@ async def chat_stream(http_request: Request, request: ChatRequest):
             # 直接在 FastAPI event loop 中迭代 agent
             session_queue.mark_responding(session_id)
             try:
-                async for event in agent.process_message(
+                # Phase 2（设计 §8.1）：使用显式 verbose 反馈包装入口（surface="web"）。
+                # verbose 事件作为独立 SSE 帧原样透传（下方统一 yield），并单独收集。
+                async for event in agent.process_message_with_feedback(
+                    surface="web",
+                    config=_resolve_web_verbose_config(),
                     user_input=full_message,
                     session_id=session_id,
                     user=agent_user,
@@ -1428,6 +1484,10 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                     # 收集 response 和 progress 数据
                     if event_type == "response":
                         response_parts.append(event.get("data", ""))
+                    elif event_type == "verbose":
+                        # verbose 与 progress/tool_* 隔离：只收集进 verbose_events，
+                        # 不进 progressMessages、不进 debug 执行详情（设计 §8.1）
+                        verbose_events.append(event)
                     elif event_type == "tool_result":
                         record_service.handle_progress_event(event)
                         progress_events.append(event)
@@ -1503,6 +1563,13 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                     assistant_metadata = {"progressMessages": progress_events}
                     if downloadable_files:
                         assistant_metadata["downloadableFiles"] = downloadable_files
+
+                    # Phase 2（设计 §10）：verboseMessages 合并进 assistant metadata。
+                    # 不覆盖 progressMessages / downloadableFiles / 调用方其他键；
+                    # 本轮无 verbose 时不写入该键，历史消息结构不变。
+                    verbose_entries = _build_verbose_metadata_entries(verbose_events)
+                    if verbose_entries and "verboseMessages" not in assistant_metadata:
+                        assistant_metadata["verboseMessages"] = verbose_entries
 
                     # 构造事务消息列表：user + 本轮 tool 消息序列 + assistant 最终回复
                     # 助手回复完成时间，作为 assistant / tool 消息的 created_at

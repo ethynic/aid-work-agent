@@ -18,7 +18,13 @@ from typing import Any, Dict, List, Optional
 import httpx
 from loguru import logger
 
-from src.channels.base import ChannelAdapter, build_public_url, format_file_size
+from src.channels.base import (
+    ChannelAdapter,
+    StatusDeliveryResult,
+    build_public_url,
+    format_file_size,
+)
+from src.channels.wecom_kf.budget import WeComKfReplyBudget
 from src.channels.wecom.crypto import WeComCrypto
 from src.channels.wecom.message_builder import WeComMessageBuilder
 from src.channels.wecom_kf.api_client import WeComKfApiClient
@@ -252,9 +258,16 @@ class WeComKfAdapter(ChannelAdapter):
         all_success = True
         text = message.text
 
+        # owner 级回复预算（Phase 3，设计 §9.3）：由 make_send_response /
+        # make_send_verbose 注入 content 私有键；无预算注入时行为与历史完全一致。
+        budget: Optional[WeComKfReplyBudget] = message.content.pop("_kf_reply_budget", None)
+
         if text:
+            if budget is not None:
+                # 预算约束正文：恰好至多 1 条额度，正文优先（规则 2/3）
+                all_success = await self._send_body_with_budget(text, message.reply_to, budget)
             # 如果渲染功能关闭，走原有的纯文本全流程
-            if not self._render_enabled:
+            elif not self._render_enabled:
                 all_success = await self._send_as_plain_text(text, message.reply_to)
             elif contains_table_or_image(text):
                 # 含表格或图片：优先整段渲染为长图，一次性发送
@@ -280,6 +293,10 @@ class WeComKfAdapter(ChannelAdapter):
         # 单图失败不阻断后续发送，记 warning
         images = message.get_images()
         for ref in images:
+            if budget is not None and not budget.consume(1):
+                # 超预算资产不发送并记录 suppressed_reply_budget（规则 4）
+                budget.record_suppressed("image_ref", file_id=(ref or {}).get("file_id", ""))
+                continue
             success = await self._send_image_ref_as_image(ref, message.reply_to)
             if not success:
                 all_success = False
@@ -289,6 +306,12 @@ class WeComKfAdapter(ChannelAdapter):
         if message.downloadable_files:
             thumb_media_id = await self._get_default_thumb_media_id()
         for file_info in message.downloadable_files:
+            if budget is not None and not budget.consume(1):
+                # 超预算资产不发送并记录 suppressed_reply_budget（规则 4）
+                budget.record_suppressed(
+                    "downloadable_file", file_id=file_info.file_id, file_name=file_info.file_name
+                )
+                continue
             # 图片文件优先作为 image 消息直接发送（用户在微信侧直接看到图片）
             # 失败/不满足前置条件时降级为 link 卡片或纯文本链接
             mime_type = (file_info.mime_type or "").lower()
@@ -340,6 +363,116 @@ class WeComKfAdapter(ChannelAdapter):
             if not success:
                 all_success = False
         return all_success
+
+    # ==================== 低优先级 status / 预算正文（Phase 3） ====================
+
+    async def send_status_message(
+        self, message: UnifiedResponse, *, reserve_for_final: int = 1
+    ) -> StatusDeliveryResult:
+        """低优先级 status/verbose 发送（Phase 3，设计 §9.3 规则 1/5）。
+
+        wecom_kf 无内部限流器，预算控制即平台 5 次回复限制：发送前必须能同时
+        满足「verbose 本身 1 次 + 为 final 预留 reserve_for_final 次」，否则
+        suppressed_rate_limit（不发送、不扣减）。正文为纯文本单条，reply target /
+        open_kfid 与 final 一致。
+        """
+        text = (message.text or "").strip()
+        if not text:
+            return StatusDeliveryResult.suppressed_unsupported("empty verbose text")
+        budget: Optional[WeComKfReplyBudget] = message.content.pop("_kf_reply_budget", None)
+        if budget is None:
+            # 无法保证 final 至少一次正文投递（规则 5）：不发送
+            return StatusDeliveryResult.suppressed_unsupported(
+                "reply budget not provided; cannot reserve for final"
+            )
+        need = 1 + max(0, int(reserve_for_final))
+        if not budget.can_reserve(need):
+            return StatusDeliveryResult.suppressed_rate_limit(
+                f"reply budget remaining={budget.remaining} < need={need}"
+            )
+        try:
+            result = await self.api_client.send_msg(
+                touser=message.reply_to,
+                open_kfid=self.current_open_kfid,
+                msgtype="text",
+                content={"content": text},
+            )
+        except Exception as e:  # noqa: BLE001 - best-effort：异常收敛为 failed
+            return StatusDeliveryResult.failed(f"send_msg exception: {e}")
+        if result.get("errcode", 0) != 0:
+            # 失败不扣预算（规则 1：成功才扣 1）
+            return StatusDeliveryResult.failed(
+                f"send_msg errcode={result.get('errcode')}, errmsg={result.get('errmsg')}"
+            )
+        budget.consume(1)
+        return StatusDeliveryResult.sent()
+
+    async def _send_body_with_budget(
+        self, text: str, user_id: str, budget: WeComKfReplyBudget
+    ) -> bool:
+        """预算约束下的 final 正文发送（设计 §9.3 规则 2/3）。
+
+        正文优先且至多消耗 1 条额度：短纯文本单条直发；超长/含表格或图片优先
+        合成 1 张长图，失败则单条截断纯文本并附「内容较长，请在 Web 端查看」；
+        不得无预算地自动分段。即使预算被占尽也保证正文发出（final 权威，
+        verbose 侧预留保证正常情况下 remaining >= 1）。
+        """
+        plain = markdown_to_plain_text(text)
+        needs_image = contains_table_or_image(text) or len(plain.encode("utf-8")) > self._max_bytes
+
+        if self._render_enabled and needs_image:
+            sent = await self._send_full_text_as_image(text, user_id)
+            if sent:
+                budget.consume(1)
+                return True
+            # 长图渲染/发送失败：单条截断纯文本兜底（规则 3）
+            part = self._truncate_to_single_message(plain)
+            ok = await self._send_text_single(part, user_id)
+            if ok:
+                budget.consume(1)
+            return ok
+
+        if not self._render_enabled:
+            # 渲染关闭：单条截断纯文本（超长部分不再分段）
+            part = self._truncate_to_single_message(plain)
+        else:
+            part = plain
+        ok = await self._send_text_single(part, user_id)
+        if ok:
+            budget.consume(1)
+        return ok
+
+    async def _send_text_single(self, text_content: str, user_id: str) -> bool:
+        """单条 text 消息直发（不拆分），供预算正文路径使用。"""
+        if not text_content or not text_content.strip():
+            return True
+        result = await self.api_client.send_msg(
+            touser=user_id,
+            open_kfid=self.current_open_kfid,
+            msgtype="text",
+            content={"content": text_content},
+        )
+        return result.get("errcode", 0) == 0
+
+    def _truncate_to_single_message(self, text: str) -> str:
+        """把正文截断为单条可发送文本并附「内容较长，请在 Web 端查看」提示。
+
+        按 UTF-8 字节截断（保留多字节字符完整），为提示语预留字节空间，
+        确保总长不超过微信客服单条 2048 字节上限。
+        """
+        suffix = "\n（内容较长，请在 Web 端查看）"
+        budget_bytes = max(256, self._max_bytes - len(suffix.encode("utf-8")))
+        encoded = text.encode("utf-8")
+        if len(encoded) <= budget_bytes:
+            return text + suffix
+        truncated = encoded[:budget_bytes]
+        # 回退到完整 UTF-8 字符边界
+        while truncated:
+            try:
+                return truncated.decode("utf-8") + suffix
+            except UnicodeDecodeError:
+                truncated = truncated[:-1]
+        return suffix
 
     async def _send_full_text_as_image(self, markdown_text: str, user_id: str) -> bool:
         """将整段 markdown 渲染为长图并以单个 image 消息发送。
