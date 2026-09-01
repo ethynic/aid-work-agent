@@ -31,9 +31,16 @@ def _remember_pending_metadata(trace_id: str, metadata: dict) -> None:
 
 
 def _remember_pending_total_cost(trace_id: str, total_cost: float) -> None:
-    """登记 INSERT 前成本补丁并限制故障期间的进程内缓存上限。"""
+    """登记 INSERT 前成本补丁并限制故障期间的进程内缓存上限。
+
+    同一 trace 重复登记（重复回填/连接反复失败）时按最大值合并：迟到的
+    较低值不允许覆盖已登记的较高值，与数据库 GREATEST 写入保持同一语义。
+    更新已有 key 不改变插入顺序，有界淘汰仍按原始顺序丢最旧。
+    """
     with _pending_total_cost_lock:
-        _pending_total_cost_updates[trace_id] = total_cost
+        _pending_total_cost_updates[trace_id] = max(
+            _pending_total_cost_updates.get(trace_id, 0), total_cost
+        )
         while len(_pending_total_cost_updates) > _PENDING_TOTAL_COST_MAX:
             oldest_trace_id = next(iter(_pending_total_cost_updates))
             _pending_total_cost_updates.pop(oldest_trace_id, None)
@@ -74,6 +81,7 @@ def _do_persist(trace):
             # total_cost 为参数而非字面量 0：初始取 trace.total_cost（默认 0），
             # session_record.save() 算出真实积分成本后回填内存 trace，
             # 本 UPSERT 随之携带真实值（覆盖计费先完成、trace 后落库的时序）。
+            # 冲突分支对现值与传入值取大：迟到的 0/旧快照不回退已落库真实成本。
             cur.execute("""
                 INSERT INTO obs_traces
                     (trace_id, session_id, tenant_id, user_id, subagent_id,
@@ -90,7 +98,10 @@ def _do_persist(trace):
                     status = EXCLUDED.status,
                     error_message = EXCLUDED.error_message,
                     total_tokens = EXCLUDED.total_tokens,
-                    total_cost = EXCLUDED.total_cost,
+                    total_cost = GREATEST(
+                        COALESCE(obs_traces.total_cost, 0),
+                        COALESCE(EXCLUDED.total_cost, 0)
+                    ),
                     duration_ms = EXCLUDED.duration_ms,
                     agent_iterations = EXCLUDED.agent_iterations,
                     tool_calls_count = EXCLUDED.tool_calls_count,
@@ -127,13 +138,15 @@ def _do_persist(trace):
                 )
 
             # update_total_cost 可能在本 INSERT 提交前执行而 UPDATE 0 行。
-            # 与 metadata 使用同一 pending 补丁模式，在当前事务提交前补写真实成本。
+            # 与 metadata 使用同一 pending 补丁模式，在当前事务提交前补写真实成本；
+            # 重放同样只增不减，防止较低补丁回退 UPSERT 刚落库的较高值。
             with _pending_total_cost_lock:
                 pending_total_cost = _pending_total_cost_updates.pop(trace.trace_id, None)
             if pending_total_cost is not None:
                 cur.execute(
-                    "UPDATE obs_traces SET total_cost = %s, updated_at = NOW() "
-                    "WHERE trace_id = %s",
+                    "UPDATE obs_traces "
+                    "SET total_cost = GREATEST(COALESCE(total_cost, 0), %s), "
+                    "updated_at = NOW() WHERE trace_id = %s",
                     (pending_total_cost, trace.trace_id),
                 )
 
@@ -226,6 +239,9 @@ def update_total_cost(trace_id: str, total_cost: float):
     obs_traces 是技术诊断数据，total_cost 不是计费权威，最终金额以
     billing / chat_records 链路为准。
 
+    UPDATE 对现值与传入值取大（COALESCE 兼容历史可空行）：迟到的较低值
+    或 0 不回退已落库真实成本；如需下调历史观测成本应走显式修正脚本。
+
     best-effort：失败只记 warning 并登记 pending 补丁，不影响对话主流程
     （最坏情况 total_cost 保持 0，观测口径降级，属可接受）。
     """
@@ -234,8 +250,8 @@ def update_total_cost(trace_id: str, total_cost: float):
         with get_logs_connection() as cur:
             cur.execute(
                 "UPDATE obs_traces "
-                "SET total_cost = %s, updated_at = NOW() "
-                "WHERE trace_id = %s",
+                "SET total_cost = GREATEST(COALESCE(total_cost, 0), %s), "
+                "updated_at = NOW() WHERE trace_id = %s",
                 (total_cost, trace_id),
             )
             if cur.rowcount == 0:

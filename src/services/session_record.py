@@ -490,7 +490,11 @@ class SessionRecordService:
                     if trace_id:
                         trace_obj = getattr(self.trace_collector, "trace", None)
                         if trace_obj is not None:
-                            trace_obj.total_cost = credit_cost
+                            # 只增不减：内存 trace 与数据库写入保持同一语义，
+                            # 迟到的较低回填不把共享 trace 对象的成本回退
+                            trace_obj.total_cost = max(
+                                trace_obj.total_cost or 0, credit_cost
+                            )
                         from src.core.trace_persist import update_total_cost
                         update_total_cost(trace_id, credit_cost)
                 except Exception as cost_err:
