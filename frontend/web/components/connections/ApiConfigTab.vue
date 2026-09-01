@@ -102,15 +102,10 @@ const toast = useToast()
 
 const tenantId = computed(() => route.params.tenant_id as string)
 
-// 支持 API 配置文件的数字员工 agent_id 列表
-// 后端无对应接口返回该标识，沿用 TenantMgmt.vue 的硬编码列表
-const configSupportedAgents = ['after-sales', 'order-processing']
-
 const loadingAgents = ref(false)
 const availableAgents = ref<AgentItem[]>([])
-const supportedAgents = computed(() =>
-  availableAgents.value.filter(a => configSupportedAgents.includes(a.agent_id)),
-)
+// API 配置面向所有数字员工开放（上传由管理员操作，无需按数字员工过滤）
+const supportedAgents = computed(() => availableAgents.value)
 
 const selectedAgentId = ref<string>('')
 const selectedAgentName = ref<string>('')

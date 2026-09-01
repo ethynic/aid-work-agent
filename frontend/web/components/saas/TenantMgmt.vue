@@ -309,7 +309,6 @@
               title="知识库关联"
             >知识库</button>
             <button
-              v-if="configSupportedAgents.includes(agent.agent_id)"
               :disabled="!isAgentAuthorized(agent.agent_id)"
               @click="openConfigFileDialog(agent)"
               class="ml-1 text-xs px-2 py-1 rounded border border-info-200 bg-info-50 text-info-700 hover:bg-info-100 hover:border-info-400 transition-colors disabled:border-default disabled:bg-surface disabled:text-muted disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-surface disabled:hover:border-default disabled:hover:text-muted"
@@ -693,7 +692,6 @@ const savingShares = ref(false)
 const shareError = ref('')
 
 // API 配置文件弹窗
-const configSupportedAgents = ['after-sales', 'order-processing']
 const showConfigFileDialog = ref(false)
 const configFileAgentId = ref('')
 const configFileAgentName = ref('')
