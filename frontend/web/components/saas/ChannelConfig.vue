@@ -231,23 +231,22 @@
           </p>
         </div>
 
-        <!-- 微信客服特有：处理超时等待提示（渠道级，所有客服账号统一生效） -->
+        <!-- 微信客服特有：处理等待提示（渠道级，所有客服账号统一生效）。
+             2026-09-01 起 watchdog（超时秒数兜底）已删除：开关实际控制"智能中间反馈"
+             （Excel 模板填充/技能/子智能体等长任务开始时的服务端策略提示语），
+             旧 delay_seconds 不再写入；message 仅作策略文案违规时的降级兜底。 -->
         <div v-if="form.channel_type === 'wecom_kf'" class="mt-3 pt-3 border-t border-default">
           <div class="bg-canvas rounded-lg p-3 space-y-3">
             <label class="flex items-center gap-2 text-sm text-default cursor-pointer">
               <input type="checkbox" v-model="wi.enabled" class="w-4 h-4 rounded border-primary-200 text-primary-600 focus:ring-primary-500" />
-              <span class="font-medium">处理超时等待提示</span>
-              <span class="text-xs text-muted">智能体处理超过 N 秒未回复时，先发送提示语</span>
+              <span class="font-medium">处理等待提示（智能反馈）</span>
+              <span class="text-xs text-muted">长任务处理时（如 Excel 模板填充、技能执行）先向客户发送等待提示</span>
             </label>
-            <div v-if="wi.enabled" class="grid grid-cols-1 md:grid-cols-2 gap-3 pl-6">
+            <div v-if="wi.enabled" class="grid grid-cols-1 gap-3 pl-6">
               <div>
-                <label class="text-sm text-muted mb-1 block">超时秒数</label>
-                <BaseInput v-model="wi.delay_seconds" type="number" min="1" placeholder="15" />
-                <p class="mt-1 text-xs text-muted">处理超过该秒数未回复时，向用户发送提示语</p>
-              </div>
-              <div>
-                <label class="text-sm text-muted mb-1 block">提示语</label>
+                <label class="text-sm text-muted mb-1 block">兜底提示语（可选）</label>
                 <BaseInput v-model="wi.message" placeholder="我正在处理您的问题，可能需要几分钟，请稍等下。" />
+                <p class="mt-1 text-xs text-muted">仅在策略提示语异常时作为降级文案，正常提示由各工具/技能给出，一般无需修改</p>
               </div>
             </div>
           </div>
@@ -836,22 +835,20 @@ const form = ref<{ channel_type: string; name: string; config: Record<string, an
   subagent_type: ''
 })
 
-// ==================== 微信客服处理超时等待提示（渠道级配置） ====================
+// ==================== 微信客服处理等待提示（渠道级配置） ====================
+// 2026-09-01 watchdog 删除后：enabled 即"智能中间反馈"开关；delay_seconds 已无
+// 运行时含义（后端仅识别 <=0 为显式关闭），不再读取/写入；message 仅作降级兜底。
 const DEFAULT_WAITING_MESSAGE = '我正在处理您的问题，可能需要几分钟，请稍等下。'
-// delay_seconds 用 string 存储（BaseInput modelValue 为 string），提交时转 number
-const wi = reactive({ enabled: false, delay_seconds: '15', message: '' })
+const wi = reactive({ enabled: false, message: '' })
 
 function resetWaitingIndicator() {
   wi.enabled = false
-  wi.delay_seconds = '15'
   wi.message = ''
 }
 
 function loadWaitingIndicator(cfg: Record<string, any> | undefined) {
   const w = cfg || {}
   wi.enabled = w.enabled === true
-  const d = Number(w.delay_seconds)
-  wi.delay_seconds = Number.isFinite(d) && d > 0 ? String(d) : '15'
   wi.message = String(w.message || '').trim() || ''
 }
 
@@ -1104,14 +1101,10 @@ async function saveChannel(): Promise<boolean> {
     if (form.value.channel_type === 'wecom_personal_rpa') {
       payload.config.listen_mode = 'server'
     }
-    // wecom_kf：写入处理超时等待提示（渠道级配置）
+    // wecom_kf：写入处理等待提示（渠道级配置）；不写 delay_seconds（watchdog 已删除）
     if (form.value.channel_type === 'wecom_kf') {
       payload.config.waiting_indicator = wi.enabled
-        ? {
-            enabled: true,
-            delay_seconds: Number(wi.delay_seconds) > 0 ? Number(wi.delay_seconds) : 15,
-            message: wi.message || DEFAULT_WAITING_MESSAGE,
-          }
+        ? { enabled: true, message: wi.message || DEFAULT_WAITING_MESSAGE }
         : { enabled: false }
     }
     if (editingId.value) {
