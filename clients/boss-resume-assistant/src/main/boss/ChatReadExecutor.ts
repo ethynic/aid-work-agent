@@ -33,7 +33,7 @@ export interface ChatMessage {
   /** 发送方：me=我方（item-myself）/ them=对方（item-friend）/ system=系统卡片（item-system） */
   sender: 'me' | 'them' | 'system'
   text: string
-  /** 所属 message-item 组的时间行（如 "10:56"）；组无时间行则缺省 */
+  /** 所属 message-item 组的时间行（如 "08-25 18:13" / "10:56" / "昨天 09:11"）；组无时间行则缺省 */
   ts?: string
   /** 仅我方消息：行内 I.status 带「已读」（class 含 status-read）时为 true */
   read?: boolean
@@ -89,6 +89,17 @@ const NAV_MAX_X = 188
 const ROW_Y_TOLERANCE = 6
 /** 会话项徽章向上找 DIV 祖先的层数（真机 #text→SPAN→DIV 名字区→geek-item 约 4 层） */
 const MAX_ITEM_CLIMB = 12
+
+/**
+ * 时间行文本判定：真机消息组的时间分隔行为「MM-DD HH:MM」（如 "08-25 18:13"）；
+ * 兼容「HH:MM」（当日消息组）、「今天/昨天[ HH:MM]」「M月D日[ HH:MM]」（跨日/跨年会话）。
+ * 空串与非时间文本一律不匹配（防把普通短文本误挂为时间）。
+ */
+export function isTimeRowText(text: string): boolean {
+  const t = text.trim()
+  if (!t) return false
+  return /^(?:\d{2}-\d{2}|\d{1,2}月\d{1,2}日|今天|昨天)?(?: ?\d{1,2}:\d{2})?$/.test(t)
+}
 
 interface TextNode {
   nodeIndex: number
@@ -289,8 +300,9 @@ function readMessages(ctx: DocCtx, areaNode: number): ChatMessage[] {
       continue
     }
 
-    // 时间行：短文本匹配 H:M 且所在行（DIV 祖先）宽≈消息区宽、高≤24 → 挂到所属 message-item 组
-    if (/^\d{1,2}:\d{2}$/.test(trimmed) && ctx.parents) {
+    // 时间行：短文本匹配时间格式（真机「MM-DD HH:MM」，兼容「HH:MM」「今天/昨天 HH:MM」「M月D日[ HH:MM]」）
+    // 且所在行（DIV 祖先）宽≈消息区宽、高≤24 → 挂到所属 message-item 组
+    if (isTimeRowText(trimmed) && ctx.parents) {
       let rowOk = false
       let cur: number | undefined = tn.nodeIndex
       for (let i = 0; i < MAX_CLIMB && cur !== undefined; i++) {
@@ -319,12 +331,13 @@ function readMessages(ctx: DocCtx, areaNode: number): ChatMessage[] {
     )
   }
 
-  // 合并：按 y 升序输出；时间挂组、已读挂行
+  // 合并：按 y 升序输出；时间行向后继承（BOSS 时间分隔行描述其后所有消息，直到下一时间行）、已读挂行
   drafts.sort((a, b) => a.y - b.y)
+  let lastTs: string | undefined
   return drafts.map((d) => {
     const msg: ChatMessage = { ...d.msg }
-    const ts = d.group !== null ? groupTs.get(d.group) : undefined
-    if (ts !== undefined) msg.ts = ts
+    if (d.group !== null && groupTs.has(d.group)) lastTs = groupTs.get(d.group)
+    if (lastTs !== undefined) msg.ts = lastTs
     if (msg.sender === 'me' && readRows.has(d.senderRow)) msg.read = true
     return msg
   })

@@ -693,3 +693,41 @@ UPDATE scheduled_task_logs sl SET tenant_id = st.tenant_id
   FROM scheduled_tasks st WHERE sl.task_id = st.task_id AND sl.tenant_id = '';
 CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_tenant ON scheduled_tasks(tenant_id, status);
 CREATE INDEX IF NOT EXISTS idx_scheduled_task_logs_tenant ON scheduled_task_logs(tenant_id, created_at DESC);
+
+-- ============================================================================
+-- 2026-08-31 招聘操作智能体简历时间线（第④期）：沟通记录 / 邀约记录
+-- bs_recruiting_operator_resume_comm_logs：简历沟通记录时间线（页面手动补录；
+--   agent 端 boss_send_to 自动回写为下一期）。direction: out=我方发出/in=候选人来信；
+--   channel: boss/wecom/phone/other。
+-- bs_recruiting_operator_resume_invitations：面试邀约记录（一简历可多次邀约，
+--   流转用状态位：pending待确认/confirmed已确认/done已到面/noshow未到面/cancelled已取消）。
+-- 注意：两表 FK 引用 bs_recruiting_operator_resumes(id)（删简历级联清记录），
+--   必须在简历表建表语句之后执行；服务层启动幂等建表双路兜底
+--   （src/db/database.py 启动注册 + src/services/recruiting_resume_timeline_service.py）。
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS bs_recruiting_operator_resume_comm_logs (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    resume_id BIGINT NOT NULL REFERENCES bs_recruiting_operator_resumes(id) ON DELETE CASCADE, -- 删简历级联清沟通记录
+    direction TEXT NOT NULL,                 -- out=我方发出 / in=候选人来信
+    channel TEXT NOT NULL DEFAULT 'boss',    -- boss/wecom/phone/other
+    content TEXT NOT NULL,                   -- 沟通内容全文
+    user_id TEXT,                            -- 补录操作人
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE TABLE IF NOT EXISTS bs_recruiting_operator_resume_invitations (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    resume_id BIGINT NOT NULL REFERENCES bs_recruiting_operator_resumes(id) ON DELETE CASCADE, -- 删简历级联清邀约
+    interview_at TIMESTAMPTZ,                -- 面试时间（可空：还没约到具体时间）
+    interviewer TEXT,                        -- 面试官
+    method TEXT,                             -- 面试方式（自由文本：现场/电话/视频面试等）
+    status TEXT NOT NULL DEFAULT 'pending',  -- pending/confirmed/done/noshow/cancelled
+    notes TEXT,                              -- 备注
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_bs_rorcl_tenant_resume
+    ON bs_recruiting_operator_resume_comm_logs(tenant_id, resume_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_bs_rorinv_tenant_resume
+    ON bs_recruiting_operator_resume_invitations(tenant_id, resume_id);

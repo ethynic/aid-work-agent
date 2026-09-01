@@ -145,9 +145,14 @@ const DEFAULT_REQUIREMENT_OPTIONS: JobRequirementOptions = {
 const requirementOptions = ref<JobRequirementOptions>({ ...DEFAULT_REQUIREMENT_OPTIONS })
 
 async function loadRequirementOptions() {
-  const res = await getRequirementOptions()
-  if (res.success && res.data) {
-    requirementOptions.value = res.data
+  // 拉取失败静默走本地兜底档位（DEFAULT_REQUIREMENT_OPTIONS），不弹错误打断表单
+  try {
+    const res = await getRequirementOptions()
+    if (res.success && res.data) {
+      requirementOptions.value = res.data
+    }
+  } catch {
+    // 静默：网络异常时本地兜底候选可用
   }
 }
 

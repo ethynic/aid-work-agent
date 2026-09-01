@@ -6,6 +6,7 @@
  * - 职位下拉（distinct job_name）
  * - 创建（file_id 引用 + base64 直传两路）/ 详情 / 更新 / 删除
  * - 职位库（职位 CRUD + 每职位常用沟通话术 CRUD，固定四分类）
+ * - 简历时间线（沟通记录 CRUD / 邀约记录 CRUD，第④期，简历详情页两 tab）
  */
 import { getAuthHeader } from './auth'
 
@@ -375,6 +376,155 @@ export async function deleteJobScript(scriptId: string): Promise<ApiMutationResp
   const res = await fetch(`${API_BASE}/recruiting-operator/scripts/${scriptId}`, {
     method: 'DELETE',
     headers: { ...getAuthHeader() },
+  })
+  return res.json()
+}
+
+// ============== 简历时间线类型（沟通记录 / 邀约记录，第④期） ==============
+
+/** 沟通方向：out=我方发出 / in=候选人来信 */
+export type CommDirection = 'out' | 'in'
+
+/** 沟通渠道：boss=BOSS直聘 / wecom=企业微信 / phone=电话 / other=其他 */
+export type CommChannel = 'boss' | 'wecom' | 'phone' | 'other'
+
+/** 邀约状态：pending待确认 / confirmed已确认 / done已到面 / noshow未到面 / cancelled已取消 */
+export type InvitationStatus = 'pending' | 'confirmed' | 'done' | 'noshow' | 'cancelled'
+
+/** 沟通方向中文标签（顺序即下拉顺序） */
+export const COMM_DIRECTIONS: Record<string, string> = {
+  out: '发出',
+  in: '收到',
+}
+
+/** 沟通渠道中文标签（顺序即下拉顺序） */
+export const COMM_CHANNELS: Record<string, string> = {
+  boss: 'BOSS 直聘',
+  wecom: '企业微信',
+  phone: '电话',
+  other: '其他',
+}
+
+/** 邀约状态中文标签（顺序即下拉顺序） */
+export const INVITATION_STATUSES: Record<string, string> = {
+  pending: '待确认',
+  confirmed: '已确认',
+  done: '已到面',
+  noshow: '未到面',
+  cancelled: '已取消',
+}
+
+/** 沟通记录（简历时间线，created_at DESC） */
+export interface CommLog {
+  id: number
+  tenant_id?: string
+  resume_id: number
+  direction: CommDirection | string
+  channel: CommChannel | string
+  content: string
+  /** 补录操作人 */
+  user_id?: string | null
+  created_at?: string
+}
+
+/** 邀约记录（一简历可多次邀约，created_at DESC） */
+export interface Invitation {
+  id: number
+  tenant_id?: string
+  resume_id: number
+  interview_at?: string | null
+  interviewer?: string | null
+  method?: string | null
+  status: InvitationStatus | string
+  notes?: string | null
+  created_at?: string
+  updated_at?: string
+}
+
+export interface CreateCommLogRequest {
+  direction: CommDirection | string
+  channel?: CommChannel | string
+  content: string
+}
+
+export interface CreateInvitationRequest {
+  /** 面试时间 ISO 字符串（datetime-local 值需补秒后传） */
+  interview_at?: string
+  interviewer?: string
+  method?: string
+  status?: InvitationStatus | string
+  notes?: string
+}
+
+/** 仅传的字段更新（undefined = 不修改该字段） */
+export interface UpdateInvitationRequest {
+  interview_at?: string
+  interviewer?: string
+  method?: string
+  status?: InvitationStatus | string
+  notes?: string
+}
+
+// ============== 简历时间线 API 封装 ==============
+
+export async function listCommLogs(
+  resumeId: number,
+): Promise<{ success: boolean; data?: { items: CommLog[] }; error?: string }> {
+  const res = await fetch(`${API_BASE}/recruiting-operator/resumes/${resumeId}/comm-logs`, {
+    headers: { ...getAuthHeader() },
+  })
+  return res.json()
+}
+
+export async function createCommLog(
+  resumeId: number,
+  req: CreateCommLogRequest,
+): Promise<ApiDetailResponse<CommLog>> {
+  const res = await fetch(`${API_BASE}/recruiting-operator/resumes/${resumeId}/comm-logs`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
+    body: JSON.stringify(req),
+  })
+  return res.json()
+}
+
+export async function deleteCommLog(logId: number): Promise<ApiMutationResponse> {
+  const res = await fetch(`${API_BASE}/recruiting-operator/comm-logs/${logId}`, {
+    method: 'DELETE',
+    headers: { ...getAuthHeader() },
+  })
+  return res.json()
+}
+
+export async function listInvitations(
+  resumeId: number,
+): Promise<{ success: boolean; data?: { items: Invitation[] }; error?: string }> {
+  const res = await fetch(`${API_BASE}/recruiting-operator/resumes/${resumeId}/invitations`, {
+    headers: { ...getAuthHeader() },
+  })
+  return res.json()
+}
+
+export async function createInvitation(
+  resumeId: number,
+  req: CreateInvitationRequest,
+): Promise<ApiDetailResponse<Invitation>> {
+  const res = await fetch(`${API_BASE}/recruiting-operator/resumes/${resumeId}/invitations`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
+    body: JSON.stringify(req),
+  })
+  return res.json()
+}
+
+export async function updateInvitation(
+  invitationId: number,
+  req: UpdateInvitationRequest,
+): Promise<ApiDetailResponse<Invitation>> {
+  const res = await fetch(`${API_BASE}/recruiting-operator/invitations/${invitationId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
+    body: JSON.stringify(req),
   })
   return res.json()
 }

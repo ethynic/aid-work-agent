@@ -1407,6 +1407,18 @@ def _init_postgresql():
             except Exception as rollback_err:
                 logger.warning(f"Failed to rollback recruiting_operator transaction: {rollback_err}")
 
+        # 招聘操作智能体简历时间线表（沟通记录/邀约记录，第④期）
+        # 注意：FK 引用简历表，必须在 init_recruiting_operator_tables 之后初始化
+        try:
+            from src.services.recruiting_resume_timeline_service import init_recruiting_timeline_tables
+            init_recruiting_timeline_tables(conn)
+        except Exception as e:
+            logger.warning(f"Failed to initialize recruiting_resume_timeline tables: {e}")
+            try:
+                conn.rollback()
+            except Exception as rollback_err:
+                logger.warning(f"Failed to rollback recruiting_resume_timeline transaction: {rollback_err}")
+
         # 招聘面试邀约企微通知表（bs_recruiting_notify_settings / bs_recruiting_notify_logs，
         # 面试邀约通知设计 Phase 1，见 docs/design/recruiting/recruiting-interview-notify-design.md）
         try:

@@ -24,6 +24,12 @@
 - 话术 CRUD（固定四分类：初次开场/了解摸底/追问细节/邀约推进）
 - 职位要求档位候选（静态：经验/学历/薪资下拉，简历-职位匹配 Phase 5）
 
+一套简历时间线 API（表 bs_recruiting_operator_resume_comm_logs / bs_recruiting_operator_resume_invitations，
+服务层 src/services/recruiting_resume_timeline_service.py，第④期，前端简历详情页两 tab）：
+- 沟通记录：GET/POST /resumes/{resume_id}/comm-logs、DELETE /comm-logs/{log_id}
+- 邀约记录：GET/POST /resumes/{resume_id}/invitations、PATCH /invitations/{invitation_id}
+- 本期仅页面手动补录；agent 端 boss_send_to 自动回写为下一期
+
 所有 API 必须遵循租户隔离规范（[backend_dev.md SaaS 租户隔离规范]）：
 - 通过 get_current_tenant_id() 取租户
 - 所有查询带 tenant_id 过滤
@@ -44,6 +50,7 @@ from src.services import recruiting_resume_service as resume_service
 from src.services import recruiting_job_service as job_service
 from src.services import recruiting_match_service as match_service
 from src.services import recruiting_notify_service as notify_service
+from src.services import recruiting_resume_timeline_service as timeline_service
 # 兼容再导出：既有调用方（src/db/database.py 启动初始化、集成测试）沿用旧导入路径
 from src.services.recruiting_resume_service import (  # noqa: F401
     RESUME_SOURCES,
@@ -53,6 +60,9 @@ from src.services.recruiting_resume_service import (  # noqa: F401
 from src.services.recruiting_job_service import (  # noqa: F401
     SCRIPT_CATEGORIES,
     init_recruiting_job_tables,
+)
+from src.services.recruiting_resume_timeline_service import (  # noqa: F401
+    init_recruiting_timeline_tables,
 )
 
 router = APIRouter(prefix="/api/recruiting-operator", tags=["招聘操作智能体-简历库"])
@@ -295,6 +305,166 @@ async def re_evaluate_resume(resume_id: int, request: Request):
     except Exception as e:
         logger.opt(exception=True).error(f"简历重新评分失败: {e}")
         return _error_response("简历重新评分失败", str(e))
+
+
+# ============== 简历时间线（沟通记录 / 邀约记录）请求模型（第④期） ==============
+
+class CreateCommLogRequest(BaseModel):
+    direction: str = Field(..., description="沟通方向：out=我方发出 / in=候选人来信")
+    channel: str = Field("boss", description="沟通渠道：boss=BOSS直聘 / wecom=企业微信 / phone=电话 / other=其他")
+    content: str = Field(..., description="沟通内容全文")
+    occurred_at: Optional[str] = Field(
+        None,
+        description="沟通发生时间（ISO 字符串，可选）——回写历史聊天时传原始时间戳；缺省=当前时间",
+    )
+
+
+class CreateInvitationRequest(BaseModel):
+    interview_at: Optional[str] = Field(None, description="面试时间（ISO 字符串，可空）")
+    interviewer: Optional[str] = Field(None, description="面试官")
+    method: Optional[str] = Field(None, description="面试方式（自由文本：现场/电话/视频面试等）")
+    status: str = Field(
+        "pending",
+        description="邀约状态：pending=待确认 / confirmed=已确认 / done=已到面 / noshow=未到面 / cancelled=已取消",
+    )
+    notes: Optional[str] = Field(None, description="备注")
+
+
+class UpdateInvitationRequest(BaseModel):
+    """仅传的字段更新（None=不修改该字段）"""
+
+    interview_at: Optional[str] = Field(None, description="面试时间（ISO 字符串；不传=不修改）")
+    interviewer: Optional[str] = Field(None, description="面试官（不传=不修改）")
+    method: Optional[str] = Field(None, description="面试方式（不传=不修改）")
+    status: Optional[str] = Field(None, description="邀约状态（不传=不修改）")
+    notes: Optional[str] = Field(None, description="备注（不传=不修改）")
+
+
+# ============== 简历时间线 API（沟通记录 / 邀约记录，第④期） ==============
+
+@router.get("/resumes/{resume_id}/comm-logs")
+async def list_comm_logs(resume_id: int, request: Request):
+    """某简历的沟通记录列表（created_at DESC）"""
+    try:
+        tenant_id = _require_tenant()
+        if not tenant_id:
+            return _error_response("租户 ID 缺失", "tenant_id is None", 400)
+        if resume_service.get_resume(tenant_id, resume_id) is None:
+            return _error_response("简历不存在", f"resume_id={resume_id} not found", 404)
+        items = timeline_service.list_comm_logs(tenant_id, resume_id)
+        return {"success": True, "data": {"items": items}}
+    except Exception as e:
+        logger.opt(exception=True).error(f"沟通记录列表查询失败: {e}")
+        return _error_response("沟通记录列表查询失败", str(e))
+
+
+@router.post("/resumes/{resume_id}/comm-logs")
+async def create_comm_log(resume_id: int, req: CreateCommLogRequest, request: Request):
+    """补录一条沟通记录（操作人取当前登录用户）"""
+    try:
+        tenant_id = _require_tenant()
+        if not tenant_id:
+            return _error_response("租户 ID 缺失", "tenant_id is None", 400)
+        if resume_service.get_resume(tenant_id, resume_id) is None:
+            return _error_response("简历不存在", f"resume_id={resume_id} not found", 404)
+
+        user = get_current_user(request)
+        user_id = user.get("user_id") if user else None
+
+        try:
+            record = timeline_service.create_comm_log(
+                tenant_id, resume_id,
+                direction=req.direction, channel=req.channel,
+                content=req.content, user_id=user_id,
+                occurred_at=req.occurred_at,
+            )
+        except ValueError as e:
+            return _error_response(str(e), str(e), 400)
+
+        return {"success": True, "data": record}
+    except Exception as e:
+        logger.opt(exception=True).error(f"沟通记录补录失败: {e}")
+        return _error_response("沟通记录补录失败", str(e))
+
+
+@router.delete("/comm-logs/{log_id}")
+async def delete_comm_log(log_id: int, request: Request):
+    """删除一条沟通记录（仅本租户）"""
+    try:
+        tenant_id = _require_tenant()
+        if not tenant_id:
+            return _error_response("租户 ID 缺失", "tenant_id is None", 400)
+        if not timeline_service.delete_comm_log(tenant_id, log_id):
+            return _error_response("沟通记录不存在", f"log_id={log_id} not found", 404)
+        return {"success": True}
+    except Exception as e:
+        logger.opt(exception=True).error(f"沟通记录删除失败: {e}")
+        return _error_response("沟通记录删除失败", str(e))
+
+
+@router.get("/resumes/{resume_id}/invitations")
+async def list_invitations(resume_id: int, request: Request):
+    """某简历的邀约记录列表（created_at DESC，一简历可多次邀约）"""
+    try:
+        tenant_id = _require_tenant()
+        if not tenant_id:
+            return _error_response("租户 ID 缺失", "tenant_id is None", 400)
+        if resume_service.get_resume(tenant_id, resume_id) is None:
+            return _error_response("简历不存在", f"resume_id={resume_id} not found", 404)
+        items = timeline_service.list_invitations(tenant_id, resume_id)
+        return {"success": True, "data": {"items": items}}
+    except Exception as e:
+        logger.opt(exception=True).error(f"邀约记录列表查询失败: {e}")
+        return _error_response("邀约记录列表查询失败", str(e))
+
+
+@router.post("/resumes/{resume_id}/invitations")
+async def create_invitation(resume_id: int, req: CreateInvitationRequest, request: Request):
+    """发起一条邀约记录"""
+    try:
+        tenant_id = _require_tenant()
+        if not tenant_id:
+            return _error_response("租户 ID 缺失", "tenant_id is None", 400)
+        if resume_service.get_resume(tenant_id, resume_id) is None:
+            return _error_response("简历不存在", f"resume_id={resume_id} not found", 404)
+
+        try:
+            record = timeline_service.create_invitation(
+                tenant_id, resume_id,
+                interview_at=req.interview_at, interviewer=req.interviewer,
+                method=req.method, status=req.status, notes=req.notes,
+            )
+        except ValueError as e:
+            return _error_response(str(e), str(e), 400)
+
+        return {"success": True, "data": record}
+    except Exception as e:
+        logger.opt(exception=True).error(f"邀约记录创建失败: {e}")
+        return _error_response("邀约记录创建失败", str(e))
+
+
+@router.patch("/invitations/{invitation_id}")
+async def update_invitation(invitation_id: int, req: UpdateInvitationRequest, request: Request):
+    """更新邀约（仅传的字段：interview_at/interviewer/method/status/notes），updated_at=NOW()"""
+    try:
+        tenant_id = _require_tenant()
+        if not tenant_id:
+            return _error_response("租户 ID 缺失", "tenant_id is None", 400)
+        try:
+            record = timeline_service.update_invitation(
+                tenant_id, invitation_id,
+                interview_at=req.interview_at, interviewer=req.interviewer,
+                method=req.method, status=req.status, notes=req.notes,
+            )
+        except ValueError as e:
+            return _error_response(str(e), str(e), 400)
+        if record is None:
+            return _error_response("邀约记录不存在", f"invitation_id={invitation_id} not found", 404)
+
+        return {"success": True, "data": record}
+    except Exception as e:
+        logger.opt(exception=True).error(f"邀约记录更新失败: {e}")
+        return _error_response("邀约记录更新失败", str(e))
 
 
 # ============== 职位库请求模型 ==============

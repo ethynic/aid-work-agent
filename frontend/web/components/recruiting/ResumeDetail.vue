@@ -1,5 +1,5 @@
 <template>
-  <!-- 简历详情页：简历详情 / 匹配评估 两个 tab（从 ResumeLibrary 原地 v-if 切换拆出，路由化） -->
+  <!-- 简历详情页：简历详情 / 匹配评估 / 沟通记录 / 邀约信息 四个 tab（第④期扩为四 tab） -->
   <div class="page-container p-5">
     <!-- ============== 顶部工具栏 ============== -->
     <div class="page-toolbar">
@@ -176,6 +176,16 @@
             </div>
           </div>
         </div>
+
+        <!-- ── 沟通记录：时间线 + 补录（第④期，v-if 懒挂载：tab 首次激活才拉数据） ── -->
+        <div v-else-if="activeTab === 'comm-logs'" class="max-w-3xl">
+          <ResumeCommTab :resume-id="detail.id" />
+        </div>
+
+        <!-- ── 邀约信息：邀约卡片 + 状态流转（第④期，v-if 懒挂载） ── -->
+        <div v-else-if="activeTab === 'invitations'" class="max-w-3xl">
+          <ResumeInviteTab :resume-id="detail.id" />
+        </div>
       </div>
     </template>
 
@@ -190,6 +200,8 @@ import { useToast } from 'vue-toastification'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
 import BaseBadge from '@/components/ui/BaseBadge.vue'
+import ResumeCommTab from './ResumeCommTab.vue'
+import ResumeInviteTab from './ResumeInviteTab.vue'
 import {
   getResume,
   updateResume,
@@ -214,11 +226,13 @@ const resumeId = computed(() => Number(route.params.resumeId))
 
 // ============== Tab 切换 ==============
 
-type TabKey = 'resume-detail' | 'match-evaluation'
+type TabKey = 'resume-detail' | 'match-evaluation' | 'comm-logs' | 'invitations'
 
 const tabs: Array<{ key: TabKey; label: string }> = [
   { key: 'resume-detail', label: '简历详情' },
   { key: 'match-evaluation', label: '匹配评估' },
+  { key: 'comm-logs', label: '沟通记录' },
+  { key: 'invitations', label: '邀约信息' },
 ]
 
 const activeTab = ref<TabKey>('resume-detail')
@@ -241,6 +255,10 @@ async function loadDetail() {
       detail.value = null
       toast.error(res.error || '加载简历详情失败')
     }
+  } catch (e: any) {
+    // 网络异常兜底：不再让 Promise 拒绝悬空，明确报错
+    detail.value = null
+    toast.error(e.message || '加载简历详情异常')
   } finally {
     loading.value = false
   }
@@ -251,7 +269,13 @@ const currentImage = computed(() => detailImages.value[currentImageIndex.value] 
 const infoEntries = computed(() => Object.entries(detail.value?.candidate_info || {}))
 
 function goBack() {
-  router.push(resumeListPath(route))
+  // 优先浏览器后退（回到列表时保住上一页的 URL query 筛选条件）；
+  // 无历史（新标签直接打开详情）时回列表默认页
+  if ((window.history.state as { back?: string } | null)?.back) {
+    router.back()
+  } else {
+    router.push(resumeListPath(route))
+  }
 }
 
 // 跳关联职位详情（job_id 为空时工具栏已隐藏入口）

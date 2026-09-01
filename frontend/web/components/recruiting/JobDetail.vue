@@ -252,6 +252,10 @@ async function loadJob() {
       job.value = null
       toast.error(res.error || '加载职位详情失败')
     }
+  } catch (e: any) {
+    // 网络异常兜底：置空详情并明确报错，由 onMounted 据此跳过关联简历加载
+    job.value = null
+    toast.error(e.message || '加载职位详情异常')
   } finally {
     loading.value = false
   }
@@ -263,7 +267,13 @@ function onJobSaved(saved: JobDetail) {
 }
 
 function goBack() {
-  router.push(jobListPath(route))
+  // 优先浏览器后退（回到列表时保住上一页的 URL query 筛选条件）；
+  // 无历史（新标签直接打开详情）时回列表默认页
+  if ((window.history.state as { back?: string } | null)?.back) {
+    router.back()
+  } else {
+    router.push(jobListPath(route))
+  }
 }
 
 // ============== Tab 切换 ==============
@@ -361,6 +371,8 @@ async function loadLinkedResumes() {
     } else {
       toast.error(res.error || '加载关联简历失败')
     }
+  } catch (e: any) {
+    toast.error(e.message || '加载关联简历异常')
   } finally {
     loadingResumes.value = false
   }
@@ -452,8 +464,11 @@ async function copyScript(script: JobScript) {
   }
 }
 
-onMounted(() => {
-  loadJob()
-  loadLinkedResumes()
+onMounted(async () => {
+  await loadJob()
+  // 职位加载失败（不存在/网络异常）时不再发起关联简历查询：job_id 必无效，避免双 toast
+  if (job.value) {
+    loadLinkedResumes()
+  }
 })
 </script>
