@@ -29,7 +29,7 @@ import {
 } from './domSnapshot.js'
 import { viewportOf } from './FilterSetter.js'
 import { REJECT_REASON_OPTIONS } from '../actions/reasonMapping.js'
-import { LIST_MAX_X } from './ResumeConsentExecutor.js'
+import { listMaxX } from './ResumeConsentExecutor.js'
 import { CancelledError } from '../operations/types.js'
 
 export class ChatRejectError extends Error {
@@ -126,6 +126,7 @@ export class ChatRejectExecutor {
 
   /** 右侧面板头部候选人姓名：识别带（cx>LIST_MAX_X, 130≤y≤400）内最上再最左的可见文本 */
   private panelHeaderName(snap: DomSnapshot): string | null {
+    const viewport = viewportOf(snap)
     let best: { x: number; y: number; text: string } | null = null
     snap.documents.forEach((document, documentIndex) => {
       const valueByNode = new Map<number, number>()
@@ -147,7 +148,7 @@ export class ChatRejectExecutor {
         if (!text) return
         const x = offset.x + b[0]! + b[2]! / 2 - (document.scrollOffsetX ?? 0)
         const y = offset.y + b[1]! + b[3]! / 2 - (document.scrollOffsetY ?? 0)
-        if (x <= LIST_MAX_X || y < HEADER_MIN_Y || y > HEADER_MAX_Y) return
+        if (x <= listMaxX(viewport.width) || y < HEADER_MIN_Y || y > HEADER_MAX_Y) return
         if (!best || y < best.y - 1 || (Math.abs(y - best.y) <= 1 && x < best.x)) {
           best = { x, y, text }
         }
@@ -205,7 +206,7 @@ export class ChatRejectExecutor {
           const c = boundsCenter(bounds)
           const x = offset.x + c.x - (document.scrollOffsetX ?? 0)
           const y = offset.y + c.y - (document.scrollOffsetY ?? 0)
-          if (x <= LIST_MAX_X || x > viewport.width || y < 0 || y > viewport.height) continue
+          if (x <= listMaxX(viewport.width) || x > viewport.width || y < 0 || y > viewport.height) continue
           hits.push({ x, y })
         }
       })

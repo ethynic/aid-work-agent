@@ -93,6 +93,16 @@ export function createBossGreetOperation(
               tracker.completed = done
               ctx.progress({ stage: 'execute', current: done, total, message: `已打招呼 ${done}/${total} 人` })
             },
+            // 定向查找滚动进度：让用户/云端看到「正在找人」而非只有鼠标疯滚
+            // （2026-09-01 真机事故：4 分钟滚动零进度事件，用户恐慌关窗 → CDP 断连）
+            onSearchProgress: targetNames
+              ? (screens) => {
+                  ctx.progress({
+                    stage: 'execute',
+                    message: `正在列表中查找「${targetNames.join('、')}」…已滚动 ${screens} 屏`,
+                  })
+                }
+              : undefined,
           })
           const result = await executor.greetVisible({ limit: effectiveLimit, names: targetNames })
           if (targetNames) {
@@ -102,7 +112,13 @@ export function createBossGreetOperation(
               `完成：定向打招呼成功 ${greeted.length} 人${greeted.length > 0 ? `（${greeted.join('、')}）` : ''}`,
             ]
             if (missing.length > 0) {
-              parts.push(`未找到 ${missing.length} 人（${missing.join('、')}）${result.reachedEnd ? '，已滚到底' : ''}`)
+              // 滚动上限而停：明确提示目标大概率不在当前筛选结果里，建议换筛选条件而非干等
+              const stopNote = result.stoppedByLimit
+                ? '（已达滚动查找上限 30 屏，目标可能不在当前筛选结果中，建议调整筛选或换职位后重试）'
+                : result.reachedEnd
+                  ? '，已滚到底'
+                  : ''
+              parts.push(`未找到 ${missing.length} 人（${missing.join('、')}）${stopNote}`)
             }
             return {
               message: parts.join('；'),
@@ -111,6 +127,7 @@ export function createBossGreetOperation(
                 reached_end: result.reachedEnd,
                 greeted_names: greeted,
                 missing_names: missing,
+                stopped_by_limit: result.stoppedByLimit ?? false,
               },
             }
           }

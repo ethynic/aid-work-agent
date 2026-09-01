@@ -52,6 +52,10 @@ export interface GreetDeps {
   signal?: AbortSignal
   /** 每成功打完 1 人回调一次（done 为累计成功数） */
   onProgress?(done: number): void
+  /** 定向模式滚动查找时每滚一屏回调一次（screens 为累计屏数）。
+   *  2026-09-01 真机事故：定向找人滚动期间零进度事件，用户只看到鼠标疯滚几分钟
+   *  （服务端心跳一直停在上一个 stage），误以为出问题手动关掉 Chrome → CDP 断连 */
+  onSearchProgress?(screens: number): void
   /** 可注入 sleep（测试） */
   sleep?(ms: number): Promise<void>
 }
@@ -66,10 +70,19 @@ export interface GreetOutcome {
   greetedNames?: string[]
   /** 定向模式时返回：names 中滚到底也没找到（或被 limit 截断）的姓名 */
   missingNames?: string[]
+  /** 定向模式滚动查找达到 MAX_SCROLL_ROUNDS 上限而停止（未滚到底）。提示用户目标可能不在当前筛选结果中 */
+  stoppedByLimit?: boolean
 }
 
 /** 单次滚动距离：远小于视口高（1905），保证相邻两屏有重叠不漏人 */
 const SCROLL_DELTA = 800
+
+/**
+ * 定向模式滚动查找上限（屏）。2026-09-01 真机事故：目标不在当前列表时滚到底要 4 分钟+，
+ * 用户全程只看到鼠标疯滚（无进度提示），恐慌关窗导致 CDP 断连。到上限即停止并按
+ * missing_names 返回——宁可少打不能打错，也绝不无限滚。
+ */
+const MAX_SCROLL_ROUNDS = 30
 
 /**
  * 付费墙弹层特征文案（真机 2026-08-05：点击「打招呼」后弹「该职位无开聊权益」购买弹层）。
@@ -110,6 +123,9 @@ export class GreetExecutor {
     const pending = names ? new Set(names.map((n) => n.trim())) : null
     const greetedNames: string[] = []
     let greeted = 0
+    // 定向模式滚动查找计数（屏）；到 MAX_SCROLL_ROUNDS 停止（防无限滚）
+    let scrollRounds = 0
+    let stoppedByLimit = false
     for (;;) {
       // 1. 点完当前视口内所有可见按钮（定向时只点姓名 ∈ names 的）
       for (;;) {
@@ -192,6 +208,11 @@ export class GreetExecutor {
       // strings 是全量已加载文本表，在已加载内容内滚动时不变，会误判到底）。
       // 滚不动时多试一次：列表底部可能异步加载更多。
       if (!this.deps.scroll) return outcome(greeted, true, names, greetedNames)
+      if (pending !== null && scrollRounds >= MAX_SCROLL_ROUNDS) {
+        // 定向查找滚动上限：再滚下去只会让用户盯着疯滚的鼠标更久（真机事故见 MAX_SCROLL_ROUNDS 注释）
+        stoppedByLimit = true
+        return outcome(greeted, false, names, greetedNames, stoppedByLimit)
+      }
       for (let attempt = 0; attempt < 2; attempt++) {
         const before = await this.deps.snapshot()
         // 真机实测实际滚动距离约为 deltaY 的 1.5 倍，且窗口可能只有 1270 高：取 min(800, 视口半高) 保证重叠
@@ -201,6 +222,10 @@ export class GreetExecutor {
         const after = await this.deps.snapshot()
         if (scrollOffsetOf(before) !== scrollOffsetOf(after)) break
         if (attempt === 1) return outcome(greeted, true, names, greetedNames)
+      }
+      if (pending !== null) {
+        scrollRounds++
+        this.deps.onSearchProgress?.(scrollRounds)
       }
     }
   }
@@ -245,11 +270,12 @@ function outcome(
   reachedEnd: boolean,
   names: string[] | undefined,
   greetedNames: string[],
-): GreetOutcome {
+  stoppedByLimit = false,
+) {
   if (names === undefined) return { greeted, reachedEnd }
   const greetedSet = new Set(greetedNames)
   const missingNames = [...new Set(names.map((n) => n.trim()))].filter((n) => !greetedSet.has(n))
-  return { greeted, reachedEnd, greetedNames: [...greetedNames], missingNames }
+  return { greeted, reachedEnd, greetedNames: [...greetedNames], missingNames, stoppedByLimit }
 }
 
 /** 列表滚动位置：打招呼按钮所在文档的 scrollOffsetY；无按钮时取各文档最大值（列表是唯一滚动文档） */

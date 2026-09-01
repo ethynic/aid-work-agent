@@ -694,3 +694,118 @@ test('findGreetButtons 同文案多下标坑修复：strings 表中「打招呼�
     { x: 1722, y: 500 },
   ])
 })
+
+// ---------- 2026-09-01 真机事故修复：配对相对锚定 + 滚动查找上限 + 查找进度 ----------
+
+/** 宽窗口卡片行 snapshot 构造（2026-09-01 事故场景：自动拉起的调试 Chrome 窗口更宽，
+ *  整个列表区右移，姓名列绝对 x 远超旧规则上限 360 → 旧规则全部配不上 → 定向打招呼
+ *  滚遍全列表也找不到目标）。姓名中心 x=760、按钮中心 x=2500（比例 0.30，同真机布局） */
+function wideNamedSnap(rows: NameRow[], offsetY = 0): DomSnapshot {
+  const strings: string[] = ['']
+  const nvIndex: number[] = [0]
+  const nvValue: number[] = [0]
+  const layoutNodeIndex: number[] = [0]
+  const layoutBounds: Array<[number, number, number, number]> = [[0, 0, 2700, 1277]]
+  const intern = (s: string): number => {
+    let i = strings.indexOf(s)
+    if (i < 0) {
+      strings.push(s)
+      i = strings.length - 1
+    }
+    return i
+  }
+  let nextNi = 1
+  const addText = (s: string, bounds: [number, number, number, number]): void => {
+    const ni = nextNi++
+    nvIndex.push(ni)
+    nvValue.push(intern(s))
+    layoutNodeIndex.push(ni)
+    layoutBounds.push(bounds)
+  }
+  for (const row of rows) {
+    if (row.name !== null) addText(row.name, [735, row.buttonY - 18 + offsetY, 50, 20]) // 中心 (760, y-8)
+    if (row.status !== null) addText(row.status ?? '刚刚活跃', [820, row.buttonY - 18 + offsetY, 60, 20]) // 中心 (850, y-8)
+    addText('\n                  打招呼', [2468, row.buttonY - 16 + offsetY, 64, 32]) // 中心 (2500, y)
+  }
+  return {
+    strings,
+    documents: [
+      {
+        nodes: { nodeValue: { index: nvIndex, value: nvValue }, contentDocumentIndex: { index: [], value: [] } },
+        layout: { nodeIndex: layoutNodeIndex, bounds: layoutBounds },
+        scrollOffsetY: offsetY,
+      },
+    ],
+  }
+}
+
+test('配对相对锚定：宽窗口（姓名 x=760 > 旧上限 360）仍能配上——不再依赖窗口宽度', async () => {
+  const r = recorder()
+  const executor = new GreetExecutor({
+    snapshot: snapshotQueue([wideNamedSnap([{ name: '曹鹤洋', buttonY: 146 }]), wideNamedSnap([])]),
+    click: r.click,
+    sleep: r.sleep,
+  })
+  const result = await executor.greetVisible({ names: ['曹鹤洋'] })
+  assert.equal(result.greeted, 1)
+  assert.deepEqual(result.greetedNames, ['曹鹤洋'])
+  assert.deepEqual(r.clicks.map((c) => c.x), [2500])
+})
+
+test('配对 fail-safe：无姓名行（只有状态文本）绝不把「刚刚活跃」误当姓名点击', async () => {
+  const r = recorder()
+  // 行有按钮、有状态「刚刚活跃」、但无姓名节点：状态词被排除后无候选 → null → 跳过不点
+  const executor = new GreetExecutor({
+    snapshot: snapshotQueue([wideNamedSnap([{ name: null, buttonY: 146 }]), wideNamedSnap([{ name: null, buttonY: 146 }])]),
+    click: r.click,
+    sleep: r.sleep,
+  })
+  const result = await executor.greetVisible({ names: ['刚刚活跃'] })
+  assert.equal(result.greeted, 0)
+  assert.deepEqual(result.missingNames, ['刚刚活跃'])
+  assert.deepEqual(r.clicks, [])
+})
+
+test('定向滚动上限：一直滚不到底时最多 30 屏即停止（stoppedByLimit），不再无限滚', async () => {
+  const r = recorder()
+  // snapshot 每次调用 offsetY 递增 → 永远「滚得动」（滚不到底），模拟超长列表
+  let offset = 0
+  const snapshot = async () => wideNamedSnap([{ name: '刘草威', buttonY: 146 }], (offset += 800))
+  const screens: number[] = []
+  const executor = new GreetExecutor({
+    snapshot,
+    click: r.click,
+    scroll: async () => {},
+    sleep: r.sleep,
+    onSearchProgress: (s) => screens.push(s),
+  })
+  const result = await executor.greetVisible({ names: ['王五'] })
+  assert.equal(result.greeted, 0)
+  assert.deepEqual(result.missingNames, ['王五'])
+  assert.equal(result.stoppedByLimit, true)
+  assert.equal(result.reachedEnd, false)
+  // 每滚一屏回调一次，恰好 30 次后停止
+  assert.equal(screens.length, 30)
+  assert.deepEqual(screens.slice(0, 3), [1, 2, 3])
+  assert.deepEqual(r.clicks, [])
+})
+
+test('定向滚动到底（未触发上限）不置 stoppedByLimit，onSearchProgress 正常逐屏回调', async () => {
+  const r = recorder()
+  // 前 5 次 snapshot offsetY 递增（滚动有效），之后固定 → 第 6 次起判定到底
+  let calls = 0
+  const snapshot = async () => wideNamedSnap([{ name: '刘草威', buttonY: 146 }], Math.min(calls++, 5) * 800)
+  const screens: number[] = []
+  const executor = new GreetExecutor({
+    snapshot,
+    click: r.click,
+    scroll: async () => {},
+    sleep: r.sleep,
+    onSearchProgress: (s) => screens.push(s),
+  })
+  const result = await executor.greetVisible({ names: ['王五'] })
+  assert.deepEqual(result.missingNames, ['王五'])
+  assert.equal(result.reachedEnd, true)
+  assert.equal(result.stoppedByLimit, false)
+  assert.ok(screens.length > 0 && screens.length < 30)
+})

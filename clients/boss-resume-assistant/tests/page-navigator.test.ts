@@ -88,13 +88,23 @@ test('页面没有菜单文案（未登录/页面异常）→ NavError，不盲�
   })
 })
 
-test('侧栏区命中多个同文案（布局异常）→ 无法唯一确定，fail-loud', async () => {
-  const dup = { text: '沟通', bounds: [60, 400, 80, 32] as [number, number, number, number] }
+test('侧栏区命中多个同文案但 x 分散 → 取最左命中（2026-09-01 相对化：诱饵/真菜单共存是宽窗口常态，最左恒为真菜单）', async () => {
+  const decoy = { text: '沟通', bounds: [60, 400, 80, 32] as [number, number, number, number] } // cx=100
+  const { clicks, deps: d } = deps([navSnap([{ text: '沟通', bounds: [53, 356, 80, 32] }, decoy])], [RECOMMEND_URL, CHAT_URL])
+  const nav = new PageNavigator(d)
+  const r = await nav.navigate('chat')
+  assert.equal(r.clicked, true)
+  // 点的是最左命中（menu cx=93），诱饵（cx=100）被排除
+  assert.deepEqual(clicks, [{ x: 93, y: 372 }])
+})
+
+test('侧栏区最左命中并列（Δx<5，布局异常）→ 无法确定，fail-loud', async () => {
+  const dup = { text: '沟通', bounds: [55, 400, 80, 32] as [number, number, number, number] } // cx=95，与 menu cx=93 并列
   const { clicks, deps: d } = deps([navSnap([{ text: '沟通', bounds: [53, 356, 80, 32] }, dup])], [RECOMMEND_URL, RECOMMEND_URL])
   const nav = new PageNavigator(d)
   await assert.rejects(nav.navigate('chat'), (e: unknown) => {
     assert.ok(e instanceof NavError)
-    assert.match(e.message, /无法唯一确定/)
+    assert.match(e.message, /不唯一/)
     return true
   })
   assert.equal(clicks.length, 0)

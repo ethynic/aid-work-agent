@@ -22,7 +22,7 @@ import {
   boundsCenter,
 } from './domSnapshot.js'
 import { viewportOf } from './FilterSetter.js'
-import { LIST_MAX_X } from './ResumeConsentExecutor.js'
+import { listMaxX } from './ResumeConsentExecutor.js'
 import { CancelledError } from '../operations/types.js'
 
 export class InterviewDemoError extends Error {
@@ -72,7 +72,7 @@ export class InterviewDemoExecutor {
     }
 
     // 1. 定位并点击「约面试」（右侧面板唯一）
-    const btn = this.uniqueText(snap0, INVITE_BUTTON, (x) => x > LIST_MAX_X)
+    const btn = this.uniqueText(snap0, INVITE_BUTTON, (x) => x > listMaxX(viewportOf(snap0).width))
     if (!btn) throw new InterviewDemoError('未找到唯一的「约面试」按钮：请先在沟通页打开一个会话')
     await this.deps.click(btn, viewportOf(snap0))
     await this.sleep(1500)

@@ -41,8 +41,21 @@ const POST_WRITE_VERIFY_MARKERS = [
   '未跳转',
 ]
 
-/** Chrome 连接失败标记：fetch ECONNREFUSED（cause.code）/ fetch failed / CDP 超时 */
-const CHROME_UNAVAILABLE_MARKERS = ['ECONNREFUSED', 'fetch failed', 'timed out', 'timeout']
+/**
+ * Chrome 连接失败标记：fetch ECONNREFUSED（cause.code）/ fetch failed / CDP 超时 /
+ * CDP 断连（2026-09-01 真机事故：用户在长任务执行中关掉调试 Chrome，报错被兜底成
+ * INTERNAL_ERROR「未预期错误」误导排障方向——断连属环境问题，可重试）
+ */
+const CHROME_UNAVAILABLE_MARKERS = [
+  'ECONNREFUSED',
+  'fetch failed',
+  'timed out',
+  'timeout',
+  'socket is not connected',
+  'WebSocket disconnected',
+  'socket closed',
+  'session mismatch',
+]
 
 /** 未登录/未打开 BOSS 页面标记 */
 const NOT_LOGGED_IN_MARKERS = ['请确认已登录', 'no BOSS page target found']

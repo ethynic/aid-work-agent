@@ -49,8 +49,16 @@ const AGREE_TEXT = '同意'
 const PREVIEW_TEXT = '点击预览附件简历'
 /** 简历预览弹层标志文案：弹层打开时成组出现（≥2），关闭后只剩聊天页自身的 1 个（真机实测） */
 const MODAL_MARKERS = ['个人优势', '工作经历', '教育经历', '项目经历']
-/** 左列会话列表与右侧聊天面板的分界（真机：列表命中 cx≈549~567，面板文案 cx≥1013）；ChatRejectExecutor 同用 */
-export const LIST_MAX_X = 850
+/**
+ * 左列会话列表与右侧聊天面板的分界（2026-09-01 相对化修订：旧规则绝对像素 cx=850 按真机
+ * 1917 宽窗口校准——列表命中 cx≈549~567、面板文案 cx≥1013；另一真机 1249 宽窗口实测
+ * 列表右缘≈547/面板起点≈548。两点换算比例一致（850/1917≈547/1249≈0.44）：沟通页整体
+ * 随窗口等比缩放，绝对分界在其它窗口宽度必然失配，比例分界恒落在列表右缘与面板左缘
+ * 之间的宽松带内）。ChatRejectExecutor / InterviewDemoExecutor 同用。
+ */
+export function listMaxX(viewportWidth: number): number {
+  return (viewportWidth * 850) / 1917
+}
 /** 处理条「同意」与提示文案同一行的容差（消息卡片按钮 Δy≈95，被此排除） */
 const SAME_ROW_DY = 30
 
@@ -144,7 +152,7 @@ export class ResumeConsentExecutor {
       const snap = await this.deps.snapshot()
       const viewport = viewportOf(snap)
       const candidates = this.findText(snap, PREVIEW_TEXT).filter(
-        (h) => h.x > LIST_MAX_X && h.x < viewport.width && h.y > 0 && h.y < viewport.height,
+        (h) => h.x > listMaxX(viewport.width) && h.x < viewport.width && h.y > 0 && h.y < viewport.height,
       )
       if (candidates.length > 0) {
         const bottom = candidates.reduce((a, b) => (a.y > b.y ? a : b)) // 最下方 = 最新送达
@@ -176,7 +184,7 @@ export class ResumeConsentExecutor {
     const hits: ClickPoint[] = []
     for (const text of MARKER_TEXTS) {
       for (const hit of this.findText(snap, text)) {
-        if (hit.x > 0 && hit.x < LIST_MAX_X && hit.y > 0 && hit.y < viewport.height) {
+        if (hit.x > 0 && hit.x < listMaxX(viewport.width) && hit.y > 0 && hit.y < viewport.height) {
           hits.push({ x: hit.x, y: hit.y })
         }
       }
@@ -191,11 +199,11 @@ export class ResumeConsentExecutor {
   private locateAgreeButton(snap: DomSnapshot): ClickPoint | null {
     const viewport = viewportOf(snap)
     const panelMarkers = MARKER_TEXTS.flatMap((t) => this.findText(snap, t)).filter(
-      (h) => h.x > LIST_MAX_X && h.x < viewport.width && h.y > 0 && h.y < viewport.height,
+      (h) => h.x > listMaxX(viewport.width) && h.x < viewport.width && h.y > 0 && h.y < viewport.height,
     )
     if (panelMarkers.length === 0) return null
     const agrees = this.findText(snap, AGREE_TEXT).filter(
-      (h) => h.x > LIST_MAX_X && h.x < viewport.width && h.y > 0 && h.y < viewport.height,
+      (h) => h.x > listMaxX(viewport.width) && h.x < viewport.width && h.y > 0 && h.y < viewport.height,
     )
     for (const marker of panelMarkers) {
       const sameRow = agrees.find((a) => Math.abs(a.y - marker.y) <= SAME_ROW_DY && a.x > marker.x)
@@ -212,7 +220,7 @@ export class ResumeConsentExecutor {
   private countVisibleAgree(snap: DomSnapshot): number {
     const viewport = viewportOf(snap)
     return this.findText(snap, AGREE_TEXT).filter(
-      (h) => h.x > LIST_MAX_X && h.x < viewport.width && h.y > 0 && h.y < viewport.height,
+      (h) => h.x > listMaxX(viewport.width) && h.x < viewport.width && h.y > 0 && h.y < viewport.height,
     ).length
   }
 
@@ -249,19 +257,20 @@ function modalMarkerCount(snap: DomSnapshot): number {
  */
 function listSignatureOf(snap: DomSnapshot): string {
   const ys: number[] = []
+  const listBoundary = listMaxX(viewportOf(snap).width)
   for (const document of snap.documents) {
-    collectListYs(document, ys)
+    collectListYs(document, ys, listBoundary)
   }
   return ys.sort((a, b) => a - b).join(',')
 }
 
-function collectListYs(document: DomDocument, ys: number[]): void {
+function collectListYs(document: DomDocument, ys: number[], listBoundary: number): void {
   const scrollY = document.scrollOffsetY ?? 0
   document.layout.nodeIndex.forEach((nodeIndex, layoutIndex) => {
     const b = document.layout.bounds[layoutIndex]
     if (!b || b[2]! <= 0 || b[3]! <= 0) return
     const cx = b[0]! + b[2]! / 2
-    if (cx >= LIST_MAX_X) return
+    if (cx >= listBoundary) return
     ys.push(Math.round(b[1]! + b[3]! / 2 - scrollY))
   })
 }

@@ -37,8 +37,13 @@ const TARGETS: Record<NavTarget, { menuText: string; urlPattern: string; label: 
   chat: { menuText: '沟通', urlPattern: '/web/chat/index', label: '沟通' },
 }
 
-/** 左侧导航栏屏幕 x 上限（真机：菜单项 cx≈93~114，顶部诱饵 cx≥303） */
-const SIDEBAR_MAX_X = 200
+/**
+ * 侧栏候选区相对上限：命中 x < 视口宽×35%（2026-09-01 相对化修订：旧规则绝对像素
+ * x<200 按 1278 宽窗口校准——菜单 cx≈93~114、顶部诱饵 cx≥303；窗口更宽/页面居中时
+ * 侧栏整体右移，绝对阈值必然失配，goto 报「侧栏无命中」）。过滤后取 x 最小者：
+ * 左侧栏是整页最左区域，真菜单恒为最小 x 命中；顶部诱饵在其右侧（Δx≈200+）被排除。
+ */
+const SIDEBAR_RELATIVE_MAX = 0.35
 
 export interface NavDeps {
   snapshot(): Promise<DomSnapshot>
@@ -96,7 +101,7 @@ export class PageNavigator {
     return { clicked: true }
   }
 
-  /** 左侧菜单项唯一定位：仅主文档、精确文案、侧栏 x 区内、视口内 */
+  /** 左侧菜单项唯一定位：仅主文档、精确文案、侧栏候选区内、视口内，取 x 最小命中 */
   private locateMenuItem(snap: DomSnapshot, menuText: string): ClickPoint {
     const viewport = viewportOf(snap)
     const stringIndex = snap.strings.findIndex((s) => s.trim() === menuText)
@@ -109,17 +114,23 @@ export class PageNavigator {
       const c = boundsCenter(bounds)
       const x = c.x - (snap.documents[0]!.scrollOffsetX ?? 0)
       const y = c.y - (snap.documents[0]!.scrollOffsetY ?? 0)
-      if (x <= 0 || x >= SIDEBAR_MAX_X || y <= 0 || y >= viewport.height) continue
+      if (x <= 0 || x >= viewport.width * SIDEBAR_RELATIVE_MAX || y <= 0 || y >= viewport.height) continue
       hits.push({ x, y })
     }
     if (hits.length === 0) {
-      throw new NavError(`左侧导航栏中找不到「${menuText}」菜单项（x<${SIDEBAR_MAX_X} 无命中），页面布局可能已变`)
-    }
-    if (hits.length > 1) {
       throw new NavError(
-        `左侧导航栏中「${menuText}」命中 ${hits.length} 个（${hits.map((p) => `(${Math.round(p.x)},${Math.round(p.y)})`).join(' ')}），无法唯一确定，已停止`,
+        `左侧导航栏中找不到「${menuText}」菜单项（视口左 35% 区域无命中），页面布局可能已变`,
       )
     }
-    return hits[0]!
+    // 取 x 最小命中：真菜单在侧栏最左，顶部/其他区域同文案诱饵恒在其右侧被排除
+    hits.sort((a, b) => a.x - b.x)
+    const best = hits[0]!
+    const ambiguous = hits.filter((p) => p.x - best.x < 5)
+    if (ambiguous.length > 1) {
+      throw new NavError(
+        `左侧导航栏中「${menuText}」最左命中不唯一（${ambiguous.map((p) => `(${Math.round(p.x)},${Math.round(p.y)})`).join(' ')}），无法确定，已停止`,
+      )
+    }
+    return best
   }
 }
