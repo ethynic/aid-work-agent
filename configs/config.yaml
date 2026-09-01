@@ -335,23 +335,6 @@ client_usage_report:
   #   "my-client:weixin_add_friend": 1.0   # 带 client_name 前缀：同命令按客户端差异化定价
   #   weixin_send_message: 0.5             # 纯命令名：所有客户端通用
 
-wecom:
-  waiting_indicator:
-    enabled: true
-    delay_seconds: 5
-    messages:
-      - "全力思考中..."
-      - "让我推演一下..."
-      - "正在筹划，请稍候..."
-      - "正在参详您的问题..."
-      - "稍等一下下..."
-      - "仔细规划中..."
-      - "正在检索相关信息..."
-      - "请稍等片刻..."
-      - "正在为您查询..."
-      - "让我核对一下..."
-      - "收到，我来看看..."
-
 # Desktop Agent D1：默认关闭；启用时必须通过环境变量提供至少 32 字节的签名密钥。
 desktop_agent:
   enabled: ${DESKTOP_AGENT_ENABLED:-false}

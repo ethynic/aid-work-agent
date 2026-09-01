@@ -618,17 +618,3 @@ class TestDingTalkAdapterMisc:
 
         info = await adapter.get_user_info("user_001")
         assert info == {}
-
-    @pytest.mark.asyncio
-    async def test_send_waiting_indicator(self, adapter):
-        """发送等待提示"""
-        mock_client = MockAsyncClient()
-        adapter._http_client = mock_client
-        adapter._access_token = "token"
-        adapter._token_expires = time.time() + 3600
-
-        result = await adapter.send_waiting_indicator("user_001", "思考中...")
-        assert result is True
-        # 等待提示应发送到单聊
-        call = mock_client.post_calls[0]
-        assert "oToMessages/batchSend" in call["url"]

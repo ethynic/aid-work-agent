@@ -486,10 +486,6 @@ class DingTalkAdapter(ChannelAdapter):
         msg_body = self.message_builder.build_file(media_id, file_name, file_type)
         return await self._send_with_retry(msg_body, user_id, conversation_type)
 
-    async def send_waiting_indicator(self, user_id: str, message: str) -> bool:
-        """发送等待提示（绕过应用层速率限制）"""
-        return await self.send_text(message, user_id, "1")
-
     async def send_status_message(
         self, message: UnifiedResponse, *, reserve_for_final: int = 1
     ) -> StatusDeliveryResult:

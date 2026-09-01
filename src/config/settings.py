@@ -406,18 +406,6 @@ class SmsConfig(BaseModel):
     qb_sms_code: str = ""  # 短信验证码 bypass 码（用于测试/演示）
 
 
-class WeComWaitingIndicatorConfig(BaseModel):
-    """企业微信等待提示配置"""
-    enabled: bool = True
-    delay_seconds: float = 5
-    messages: List[str] = Field(default_factory=lambda: ["正在思考中..."])
-
-
-class WeComConfig(BaseModel):
-    """企业微信渠道配置"""
-    waiting_indicator: WeComWaitingIndicatorConfig = Field(default_factory=WeComWaitingIndicatorConfig)
-
-
 class BillingConfig(BaseModel):
     """积分计费配置（#37 租户积分充值与计费）
 
@@ -528,7 +516,6 @@ class Settings(BaseModel):
     sms: SmsConfig = Field(default_factory=SmsConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)
     redis: RedisConfig = Field(default_factory=RedisConfig)
-    wecom: WeComConfig = Field(default_factory=WeComConfig)
     billing: BillingConfig = Field(default_factory=BillingConfig)
     video_gen: VideoGenConfig = Field(default_factory=VideoGenConfig)
     client: ClientConfig = Field(default_factory=ClientConfig)
@@ -774,16 +761,6 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
         yaml_config.setdefault("sms", {})["template_yzm"] = os.getenv("SMS_TEMPLATE_YZM")
     if os.getenv("QBSMSCODE"):
         yaml_config.setdefault("sms", {})["qb_sms_code"] = os.getenv("QBSMSCODE")
-
-    # 企业微信等待提示配置：环境变量覆盖
-    wecom_cfg = yaml_config.setdefault("wecom", {}).setdefault("waiting_indicator", {})
-    if os.getenv("WECOM_WAITING_INDICATOR_ENABLED") is not None:
-        wecom_cfg["enabled"] = os.getenv("WECOM_WAITING_INDICATOR_ENABLED", "").lower() in ("true", "1", "yes")
-    if os.getenv("WECOM_WAITING_INDICATOR_DELAY_SECONDS") is not None:
-        try:
-            wecom_cfg["delay_seconds"] = float(os.getenv("WECOM_WAITING_INDICATOR_DELAY_SECONDS"))
-        except ValueError:
-            pass
 
     # 积分计费配置：环境变量覆盖
     billing_cfg = yaml_config.setdefault("billing", {})

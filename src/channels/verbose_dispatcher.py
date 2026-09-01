@@ -85,16 +85,12 @@ def resolve_verbose_feedback_config(
     2. 请求级显式 ``request_override``（VerboseFeedbackConfig，测试/内部调用）；
     3. 渠道级 ``channel_cfg``（tenant config.verbose_feedback，键：
        enabled / fallback_message）；
-    4. 旧 wecom_kf ``legacy_waiting_indicator`` 映射（键：enabled /
-       delay_seconds / message）。2026-09-01 产品决策删除 system watchdog 后，
-       delay 已无运行时含义，最终语义固定为：
+    4. 旧 wecom_kf ``legacy_waiting_indicator`` 映射（键：enabled / message）。
+       2026-09-01 产品决策删除 system watchdog 后，超时秒数（delay_seconds /
+       initial_delay_seconds）已无任何运行时含义并被忽略，最终语义固定为：
        - ``enabled`` 缺省或 false → 视为该渠道级显式关闭；
-       - ``delay_seconds``（或 ``initial_delay_seconds``）<= 0 → 显式关闭
-         （沿用旧 ``_get_waiting_indicator_cfg`` 语义）；
-       - delay 非法值（非数字/缺失）→ 不再回退默认启用/禁用，直接视为启用
-         （delay 已不参与任何运行时行为）；
-       - ``message`` 映射为 ``fallback_message``（watchdog 删除后仅作 policy
-         文案违规时的降级模板），空白回退旧默认话术；
+       - ``message`` 映射为 ``fallback_message``（仅作 policy 文案违规时的
+         降级模板），空白回退旧默认话术；
     5. 全局 ``global_cfg``（缺省读 settings.agent.verbose_feedback）；
     6. 代码默认（2026-09-01 起随全局模型默认启用；渠道/旧配置显式关闭仍可盖过）。
 
@@ -137,17 +133,9 @@ def resolve_verbose_feedback_config(
             continue
         enabled = bool(source.get("enabled", False))
         if not enabled:
-            # 与旧 _get_waiting_indicator_cfg 语义一致：未勾选 enabled 不启用
+            # 与旧语义一致：未勾选 enabled 即该渠道级显式关闭，盖过全局默认开启
             return _explicit_off()
-        # delay 仅保留"<=0 视为显式关闭"的兼容判断；非法值视为启用（无运行时含义）
-        raw_delay = source.get("initial_delay_seconds")
-        if raw_delay is None:
-            raw_delay = source.get("delay_seconds")
-        try:
-            if float(raw_delay) <= 0:
-                return _explicit_off()
-        except (TypeError, ValueError):
-            pass
+        # watchdog 已删除：delay_seconds/initial_delay_seconds 一律忽略（无运行时含义）
         message = source.get("fallback_message")
         if message is None:
             message = source.get("message")

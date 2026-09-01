@@ -387,13 +387,13 @@ class TestResolveVerboseFeedbackConfig:
         )
         assert cfg.effective_enabled is False
 
-    def test_legacy_delay_zero_stays_disabled(self):
-        """旧配置 delay<=0 等价显式关闭，同样不穿透全局默认开启。"""
+    def test_legacy_delay_zero_ignored_enabled(self):
+        """watchdog 删除后 delay 一律忽略：开关开即启用，不再因 delay<=0 关闭。"""
         cfg = resolve_verbose_feedback_config(
             legacy_waiting_indicator={"enabled": True, "delay_seconds": 0},
             global_cfg=VerboseFeedbackConfig(enabled=True),
         )
-        assert cfg.effective_enabled is False
+        assert cfg.effective_enabled is True
 
     def test_force_disabled_beats_everything(self):
         """force_disabled=true 覆盖请求、渠道与旧 waiting indicator（回归 #13）。"""
@@ -407,12 +407,12 @@ class TestResolveVerboseFeedbackConfig:
         assert cfg.force_disabled is True
 
     def test_legacy_semantics_preserved(self):
-        # delay<=0 视为不启用（与旧 _get_waiting_indicator_cfg 一致）
+        # watchdog 删除后 delay 一律忽略，开关开即启用
         cfg = resolve_verbose_feedback_config(
             legacy_waiting_indicator={"enabled": True, "delay_seconds": 0},
             global_cfg=VerboseFeedbackConfig(),
         )
-        assert cfg.effective_enabled is False
+        assert cfg.effective_enabled is True
         # 空白 message 回退旧默认话术
         cfg2 = resolve_verbose_feedback_config(
             legacy_waiting_indicator={"enabled": True, "delay_seconds": 10, "message": " "},

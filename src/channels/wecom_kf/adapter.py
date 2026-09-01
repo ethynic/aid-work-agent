@@ -758,10 +758,6 @@ class WeComKfAdapter(ChannelAdapter):
         )
         return result.get("errcode", 0) == 0
 
-    async def send_waiting_indicator(self, user_id: str, message: str) -> bool:
-        """发送等待提示消息"""
-        return await self.send_text(message, user_id)
-
     async def send_long_message(self, text: str, user_id: str) -> bool:
         """发送长消息（自动拆分）"""
         plain_text = markdown_to_plain_text(text)

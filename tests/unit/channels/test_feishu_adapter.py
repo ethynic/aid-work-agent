@@ -485,24 +485,3 @@ class TestTokenRefreshRetry:
 # ---------- 补充：欢迎消息 / 速率限制绕过 ----------
 
 
-class TestWaitingIndicatorBypassesRateLimit:
-    @pytest.mark.asyncio
-    async def test_send_waiting_indicator_bypasses_rate_limit(self, adapter):
-        """send_waiting_indicator 绕过 send_long_message 的速率限制
-
-        send_long_message 会检查 _check_rate_limit，但 send_waiting_indicator
-        调用的是 send_text（不检查 rate limit），因此即使用户被限流，等待提示仍能发出。
-        """
-        mock_client = MockAsyncClient(MockResponse(json_data={"code": 0}))
-        adapter._http_client = mock_client
-        adapter._access_token = "tok"
-        adapter._token_expires = time.time() + 3600
-        adapter._rate_limit_max = 0  # 普通消息全部被限流
-
-        # send_long_message 被 rate limit 拦截
-        result_long = await adapter.send_long_message("hello", "ou_user")
-        assert result_long is False
-
-        # send_waiting_indicator 绕过限流（因为它调用 send_text，不检查 rate limit）
-        result_waiting = await adapter.send_waiting_indicator("ou_user", "处理中…")
-        assert result_waiting is True

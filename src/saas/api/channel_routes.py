@@ -39,8 +39,6 @@ from src.db.models import CustomerReferralDB
 from src.channels.wecom_kf.prompts import (
     MSG_EXPIRED,
     MSG_CREDIT_EXHAUSTED,
-    DEFAULT_WAITING_INDICATOR_MESSAGE,
-    DEFAULT_WAITING_INDICATOR_DELAY_SECONDS,
 )
 from src.saas.api.wecom_kf_account import resolve_scene
 
@@ -1646,30 +1644,10 @@ async def _is_kf_account_blocked(
     return False
 
 
-def _get_waiting_indicator_cfg(adapter) -> dict:
-    """读取渠道级 waiting_indicator 配置，返回 {delay_seconds, message}；未启用返回 {}。
-
-    配置存于 tenant_channel_configs.config.waiting_indicator（enabled/delay_seconds/message），
-    经 ChannelFactory 注入 adapter.waiting_indicator。仅当 enabled=true（用户勾选）时启用，
-    未配置或未勾选默认不启用。
-    """
-    wi = getattr(adapter, "waiting_indicator", None) or {}
-    if not wi.get("enabled", False):  # 未配置/未勾选默认不启用
-        return {}
-    try:
-        delay = float(wi.get("delay_seconds", DEFAULT_WAITING_INDICATOR_DELAY_SECONDS))
-    except (TypeError, ValueError):
-        delay = DEFAULT_WAITING_INDICATOR_DELAY_SECONDS
-    if delay <= 0:
-        return {}
-    message = str(wi.get("message") or "").strip() or DEFAULT_WAITING_INDICATOR_MESSAGE
-    return {"delay_seconds": delay, "message": message}
-
-
-# Phase 3（设计 §11）：route 外层旧 watchdog _process_with_waiting_indicator 已移除，
-# 旧 waiting_indicator 配置经 resolve_verbose_feedback_config 映射进新 verbose 机制
-#（enabled/delay_seconds/message 语义原样保留），避免双发。各 adapter 的
-# send_waiting_indicator 方法本体保留不删（其他调用方兼容）。
+# Phase 3（设计 §11）：route 外层旧 watchdog _process_with_waiting_indicator 及其
+# 配置读取助手 _get_waiting_indicator_cfg 已删除；旧 waiting_indicator 配置仅保留
+# enabled 开关语义，经 resolve_verbose_feedback_config 映射进新 verbose 机制
+#（开关开→启用、开关关→显式关闭），超时秒数（delay_seconds）随 watchdog 一并下线。
 async def _process_tenant_wecom_kf_messages(
     tenant_id: str, config_id: str, open_kfid: str, adapter
 ) -> None:
