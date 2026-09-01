@@ -1,14 +1,24 @@
-agent-tool-runtime 0.2.6（内含 boss-cli 0.2.6）
-构建日期：2026-08-31
+agent-tool-runtime 0.2.7（内含 boss-cli 0.2.7）
+构建日期：2026-09-01
 
 本目录文件
-- agent-tool-runtime-0.2.6.tgz   安装包（BOSS 直聘操作能力已内含，只需装这一个）
+- agent-tool-runtime-0.2.7.tgz   安装包（BOSS 直聘操作能力已内含，只需装这一个）
 - start_runtime.bat / register_runtime_task.ps1   后台运行与开机自启
 - collect_logs.bat / collect_logs.ps1   诊断包采集
 - 安装手册.md   按手册从上到下执行即可
 
 环境要求
 - Windows 10/11 x64、Node ≥ 20、本机 Chrome（无需管理员权限）
+
+0.2.7 相对 0.2.6 的变化
+- goto 跳转幂等修复：已在目标页时零点击直接成功；菜单点击未生效时（如已在沟通页
+  的推荐/会话子页）自动改用 CDP 页内直跳到目标页并二次校验，不再误报
+  EXECUTION_UNKNOWN（协议白名单新增 Page.navigate，审计脱敏覆盖）
+- read-chat 每条消息携带原始聊天时间戳：BOSS 时间分隔行（如「08-25 18:13」）按
+  会话语序向后继承到每条消息，云端正可据此把真实沟通时间写入简历沟通记录
+- 内部：修正 chat-read 2 个过时测试断言（对齐时间戳继承语义），测试全量 348 绿
+- 升级方式：先停止本机 Runtime（stop_runtime 或 Stop-ScheduledTask），再
+  npm install -g 新 tgz 覆盖安装，配置与配对自动保留，最后重新启动 Runtime
 
 0.2.6 相对 0.2.3 的变化
 - 新增 boss_read_chat：读取「沟通」页当前会话消息流 + 全部未读会话清单（只读）
@@ -18,7 +28,6 @@ agent-tool-runtime 0.2.6（内含 boss-cli 0.2.6）
 - 弹层自愈：工具失败（疑似弹层遮挡）时云端自动「识别弹层→关闭→重试一次」，
   新增只读原语 boss_overlay_inspect / boss_overlay_dismiss（仅云端自愈编排内部调用）
 - 搜索框定位稳定化（页面改版修复）与若干真机定位修复
-- 升级方式：先停止本机 Runtime，再 npm install -g 新 tgz 覆盖安装，配置与配对自动保留
 
 服务端地址（配对时使用）
 - https://agent2.aidingyi.cn
