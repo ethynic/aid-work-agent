@@ -45,7 +45,7 @@ pytestmark = pytest.mark.agent
 
 # 设计 §5 / 任务书给定的审核文案（逐字冻结，不得改写）
 APPROVED_TRAVEL_MESSAGE = "正在生成报价单，这可能需要一点时间，请耐心等待。"
-APPROVED_EXCEL_TOOL_MESSAGE = "正在生成 Excel 模板文件，请稍候。"
+APPROVED_EXCEL_TOOL_MESSAGE = "正在读取 Excel 模板并生成实际文件，可能需要一些时间，请稍候。"
 
 SKILLS_DIR = Path(__file__).resolve().parents[2] / "src" / "skills"
 
