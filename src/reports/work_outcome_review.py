@@ -106,6 +106,21 @@ async def run_daily_review(target_date: Optional[date] = None) -> str:
         n=len(sessions),
     )
 
+    # 1.5 跳过 tenant_id 为空的会话（复盘仅对租户有效）
+    # SQL 已过滤 tenant_id IS NOT NULL，此处 Python 侧双保险，防止残留脏数据/空串
+    valid_sessions = [s for s in sessions if s.tenant_id]
+    skipped_no_tenant = len(sessions) - len(valid_sessions)
+    if skipped_no_tenant:
+        logger.info(
+            f"工作成果复盘跳过 {skipped_no_tenant} 个无租户会话（tenant_id 为空）"
+        )
+        tlog(
+            "work_outcome_review",
+            "跳过 {n} 个无租户会话: tenant_id 为空",
+            n=skipped_no_tenant,
+        )
+    sessions = valid_sessions
+
     # 2. 过滤掉已经产生 file 型 cp_realtime 成果的会话
     # 注：_has_file_outcome 内部走同步 DB 查询，必须用 to_thread 包裹，
     # 否则会阻塞事件循环（API 入口 run_review_manually 在主事件循环中调用本函数）。
@@ -141,7 +156,7 @@ async def run_daily_review(target_date: Optional[date] = None) -> str:
                         await asyncio.to_thread(
                             WorkOutcomeDB.create,
                             tenant_id=session.tenant_id,
-                            user_id=session.user_id or "",
+                            user_id=session.user_id,
                             subagent_id=session.subagent_id,
                             session_id=session.session_id,
                             channel=session.channel,

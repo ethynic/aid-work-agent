@@ -749,3 +749,10 @@ ALTER TABLE bs_recruiting_notify_logs
 --   init-postgres.sql 定义本就可空，src/db/database.py 旧建表定义带 NOT NULL 已同步修正，
 --   此处对已存在的表执行 DROP NOT NULL（幂等）。
 ALTER TABLE chat_records ALTER COLUMN user_id DROP NOT NULL;
+
+-- 2026-09-01，work_outcomes.user_id / session_id 去掉 NOT NULL 约束
+-- 背景：复盘任务（work_outcome_review）对无 user 的会话（渠道/历史会话）自动提取成果，
+--   之前用空串兜底规避约束，现允许 NULL（无明确用户/会话归属，语义更真实）。
+--   tenant_id 保持必填（复盘仅对租户有效，无租户会话直接跳过）。
+ALTER TABLE work_outcomes ALTER COLUMN user_id DROP NOT NULL;
+ALTER TABLE work_outcomes ALTER COLUMN session_id DROP NOT NULL;
