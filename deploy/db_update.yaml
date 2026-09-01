@@ -1,0 +1,11 @@
+# deploy/db_update.yaml
+# 数据库增量升级脚本：每个逻辑批次一个条目（一个块 = 一个逻辑批次），datetime 必须唯一且严格递增
+# 所有 SQL 必须幂等安全（IF NOT EXISTS / DROP ... IF EXISTS / ON CONFLICT），可重复执行
+# 字段说明：
+#   datetime  增量判断基准，格式 YYYY-MM-DD HH:MM:SS（到秒），必须加引号写字符串，唯一且严格递增
+#   remark    变更说明（必填，非空）
+#   statements SQL 正文（block scalar，零转义），块内每句以分号结尾，统一缩进
+# 执行：启动时只执行 datetime 晚于 _db_update_applied.last_datetime 的块，文件可无限累积无需清理
+# 校验：字段缺失/时间格式错/重复/倒序/备注或 SQL 为空 会拒绝启动（fail-fast）
+# 历史脚本（原 db_update.sql）已由运维手动在存量数据库执行完毕，本文件仅记录切换后的新增量脚本
+[]

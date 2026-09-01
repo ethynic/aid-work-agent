@@ -120,15 +120,27 @@ def init_tables():
 
 | 文件 | 用途 | 要求 |
 |------|------|------|
-| `deploy/init-postgres.sql` | 全新环境的数据库初始化 | 在 `CREATE TABLE` 语句中添加新字段/新表，保证新部署能直接创建完整表结构 |
-| `deploy/db_update.sql` | 现有环境的增量升级 | 所有增量变更都必须记录在此文件，**不要单独创建其它迁移文件**。每条变更前添加注释，包含变更日期和简单说明 |
+| `deploy/init-postgres.sql` | 全新环境的数据库初始化 | 在 `CREATE TABLE` 语句中添加新字段/新表，保证新部署能直接创建完整表结构（全量累积，不清理） |
+| `deploy/db_update.yaml` | 现有环境的增量升级 | 所有增量变更都必须记录在此文件，**不要单独创建其它迁移文件**。每个逻辑批次一个条目，`datetime` 必须唯一且严格递增 |
 
-**示例 `db_update.sql` 条目**：
+**`db_update.yaml` 格式规范**：
 
-```sql
--- 2026-4-25，chat_sessions 增加 subagent_id 字段，记录会话关联的数字员工ID
-ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS subagent_id TEXT;
+```yaml
+- datetime: "2026-09-01 10:30:00"   # 增量基准，格式 YYYY-MM-DD HH:MM:SS，必须加引号，唯一且严格递增
+  remark: "chat_sessions 增加 subagent_id 字段，记录会话关联的数字员工ID"
+  statements: |
+    ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS subagent_id TEXT;
+    CREATE INDEX IF NOT EXISTS idx_chat_sessions_subagent ON chat_sessions(tenant_id, subagent_id);
 ```
+
+要求：
+
+- **一个块 = 一个逻辑批次**：逻辑相关的脚本放同一块；逻辑无关的独立新增一块，`datetime` 取当前时刻并保证严格递增。禁止 `datetime` 重复或倒序。
+- `datetime` 必须加引号写字符串（避免 YAML 解析成时间对象），格式 `YYYY-MM-DD HH:MM:SS`（到秒），统一定长，增量判断靠字符串比较。
+- 所有 SQL 必须幂等安全（`IF NOT EXISTS` / `DROP ... IF EXISTS` / `ON CONFLICT`），可重复执行。
+- `statements` 用 block scalar（`|`）书写，SQL 零转义，块内每句以分号结尾，统一缩进。
+- **增量执行免清理**：启动时只执行 `datetime` 晚于 `_db_update_applied.last_datetime` 的块，文件可无限累积，**无需手动清理过期脚本**。
+- **校验 fail-fast**：字段缺失 / 时间格式错 / 重复 / 倒序 / 备注或 SQL 为空，都会拒绝启动（启动报错），必须修复后才能启动，绝不静默跳过。
 
 ## 业务数据表必需字段
 

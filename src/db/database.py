@@ -622,65 +622,145 @@ def _is_lock_timeout_error(exc: Exception) -> bool:
     return "lock timeout" in msg or "锁超时" in msg
 
 
-def _apply_db_updates(conn):
-    """
-    执行 deploy/db_update.sql 中的增量更新
-    使用文件哈希检测变化，确保每次文件变化后只执行一次
-    """
-    from pathlib import Path
-    import hashlib
-    import time
-
-    project_root = Path(__file__).parent.parent.parent
-    update_file = project_root / "deploy" / "db_update.sql"
-
-    if not update_file.exists():
-        logger.warning(f"数据库更新文件不存在: {update_file}")
-        return
-
-    # 计算当前文件哈希
-    try:
-        file_content = update_file.read_text(encoding='utf-8')
-        file_hash = hashlib.sha256(file_content.encode('utf-8')).hexdigest()[:32]
-    except Exception as e:
-        logger.error(f"读取数据库更新文件失败: {e}")
-        return
-
-    # 解析 SQL 语句，支持 $$ 定界符块（如 DO $$ ... $$）
+def _split_sql_statements(text: str) -> list:
+    """将 SQL 文本切分为单条语句，支持 $$ 定界符块（如 DO $$ ... $$）与 -- 注释。"""
     statements = []
     current = []
     in_dollar_quote = False
-    lines = file_content.split('\n')
 
-    for line in lines:
+    for line in text.split("\n"):
         stripped = line.strip()
-        if not stripped or stripped.startswith('--'):
+        if not stripped or stripped.startswith("--"):
             continue
 
         # 在 $$ 块内不剥离行内注释（块内容可能包含 --）
-        if not in_dollar_quote and '--' in stripped:
-            stripped = stripped.split('--')[0].strip()
+        if not in_dollar_quote and "--" in stripped:
+            stripped = stripped.split("--")[0].strip()
             if not stripped:
                 continue
 
         current.append(stripped)
 
         # 跟踪 $$ 定界符状态
-        dollar_count = stripped.count('$$')
+        dollar_count = stripped.count("$$")
         if dollar_count % 2 == 1:
             in_dollar_quote = not in_dollar_quote
 
         # 仅在 $$ 块外遇到分号时才切断语句
-        if not in_dollar_quote and stripped.endswith(';'):
-            statement = ' '.join(current)
-            statements.append(statement)
+        if not in_dollar_quote and stripped.endswith(";"):
+            statements.append(" ".join(current))
             current = []
 
     if current:
-        statement = ' '.join(current)
-        if not statement.endswith(';'):
-            statement += ';'
+        statement = " ".join(current)
+        if not statement.endswith(";"):
+            statement += ";"
         statements.append(statement)
+
+    return statements
+
+
+def _load_db_update_blocks(path):
+    """加载并校验 deploy/db_update.yaml，返回有序块列表。
+
+    每块为 {"datetime": str, "remark": str, "statements": str}。
+    校验失败（字段缺失/时间格式错/重复/倒序/备注或 SQL 为空）抛 ValueError，
+    由调用方 fail-fast 拒绝启动，绝不静默跳过脚本。
+    """
+    import re
+    from datetime import datetime as dt
+
+    try:
+        import yaml
+    except ImportError as e:
+        raise ValueError("缺少 PyYAML 依赖，无法读取 db_update.yaml") from e
+
+    with open(path, encoding="utf-8") as f:
+        raw = yaml.safe_load(f)
+
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise ValueError(f"db_update.yaml 顶层必须是数组，实际是 {type(raw).__name__}")
+
+    blocks = []
+    seen = set()
+    prev = None
+    for i, item in enumerate(raw, start=1):
+        if not isinstance(item, dict):
+            raise ValueError(f"db_update.yaml 第 {i} 个块不是对象")
+
+        try:
+            dt_raw = item["datetime"]
+            remark = item["remark"]
+            statements = item["statements"]
+        except KeyError as e:
+            raise ValueError(f"db_update.yaml 第 {i} 个块缺少字段 {e.args[0]}") from e
+
+        # 兼容 YAML 未加引号被解析成 datetime 对象
+        if isinstance(dt_raw, dt):
+            dt_str = dt_raw.strftime("%Y-%m-%d %H:%M:%S")
+        elif isinstance(dt_raw, str):
+            dt_str = dt_raw.strip()
+        else:
+            raise ValueError(f"db_update.yaml 第 {i} 个块 datetime 类型非法: {type(dt_raw).__name__}")
+
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", dt_str):
+            raise ValueError(
+                f"db_update.yaml 第 {i} 个块 datetime 格式非法: {dt_str!r}（应为 YYYY-MM-DD HH:MM:SS）"
+            )
+        try:
+            dt.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            raise ValueError(f"db_update.yaml 第 {i} 个块 datetime 不是合法时间: {dt_str!r}")
+
+        if dt_str in seen:
+            raise ValueError(f"db_update.yaml 第 {i} 个块 datetime 重复: {dt_str}")
+        seen.add(dt_str)
+
+        if prev is not None and dt_str <= prev:
+            raise ValueError(f"db_update.yaml 第 {i} 个块 datetime 未严格递增: {prev} -> {dt_str}")
+        prev = dt_str
+
+        if not remark or not str(remark).strip():
+            raise ValueError(f"db_update.yaml 第 {i} 个块 remark 为空")
+        if not isinstance(statements, str) or not statements.strip():
+            raise ValueError(f"db_update.yaml 第 {i} 个块 statements 为空")
+
+        blocks.append({
+            "datetime": dt_str,
+            "remark": str(remark).strip(),
+            "statements": str(statements),
+        })
+
+    return blocks
+
+
+def _apply_db_updates(conn, update_file=None):
+    """
+    执行 deploy/db_update.yaml 中的增量更新
+    只执行 datetime 晚于 _db_update_applied.last_datetime 的块，文件可无限累积无需清理
+    """
+    import time
+
+    project_root = Path(__file__).parent.parent.parent
+    if update_file is None:
+        update_file = project_root / "deploy" / "db_update.yaml"
+
+    if not update_file.exists():
+        logger.warning(f"数据库更新文件不存在: {update_file}")
+        return
+
+    # 加载并校验（格式错误即 fail-fast，绝不静默跳过脚本）
+    try:
+        blocks = _load_db_update_blocks(update_file)
+    except Exception as e:
+        logger.error(f"数据库更新文件校验失败，拒绝启动: {e}")
+        raise
+
+    if not blocks:
+        logger.info("数据库更新文件无有效块")
+        return
 
     cursor = conn.cursor()
 
@@ -690,32 +770,25 @@ def _apply_db_updates(conn):
     except Exception:
         pass  # 忽略回滚失败（可能没有活动事务）
 
-    # 创建更新记录表（包含文件哈希）
+    # 创建更新记录表（新环境直接建新结构，存量环境补充 last_datetime 列）
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS _db_update_applied (
             id TEXT PRIMARY KEY,
-            file_hash TEXT NOT NULL,
+            file_hash TEXT,
+            last_datetime TEXT,
             applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
-
-    # 检查并升级表结构（兼容旧版本）
     try:
-        # 检查 file_hash 列是否存在
         cursor.execute("""
             SELECT column_name FROM information_schema.columns
-            WHERE table_name = '_db_update_applied' AND column_name = 'file_hash'
+            WHERE table_name = '_db_update_applied' AND column_name = 'last_datetime'
         """)
-        has_file_hash = cursor.fetchone() is not None
-
-        if not has_file_hash:
-            logger.info("升级 _db_update_applied 表结构，添加 file_hash 列")
-            cursor.execute("ALTER TABLE _db_update_applied ADD COLUMN file_hash TEXT")
-            # 为现有记录设置默认值（空字符串）
-            cursor.execute("UPDATE _db_update_applied SET file_hash = '' WHERE file_hash IS NULL")
+        if cursor.fetchone() is None:
+            logger.info("升级 _db_update_applied 表结构，添加 last_datetime 列")
+            cursor.execute("ALTER TABLE _db_update_applied ADD COLUMN IF NOT EXISTS last_datetime TEXT")
     except Exception as e:
         logger.warning(f"检查/升级表结构失败: {e}")
-        # 继续执行，后面的查询可能会失败，但会由错误处理机制捕获
 
     # 清理旧的记录（旧版本使用 id='initial'）
     try:
@@ -725,69 +798,28 @@ def _apply_db_updates(conn):
     except Exception as e:
         logger.warning(f"清理旧记录失败: {e}")
 
-    # 检查当前哈希是否已应用
+    # 读取 last_datetime，过滤待执行块并按时间排序
     try:
-        # 首先检查 file_hash 列是否存在（避免 UndefinedColumn 错误）
-        cursor.execute("""
-            SELECT column_name FROM information_schema.columns
-            WHERE table_name = '_db_update_applied' AND column_name = 'file_hash'
-        """)
-        has_file_hash = cursor.fetchone() is not None
-
-        if not has_file_hash:
-            logger.warning("file_hash 列不存在，无法检查哈希记录，将继续执行更新")
-            # 列不存在，无法检查哈希，继续执行更新
-        else:
-            cursor.execute("""
-                SELECT file_hash FROM _db_update_applied WHERE id = 'db_update'
-            """)
-            row = cursor.fetchone()
-            if row and row['file_hash'] == file_hash:
-                logger.info("数据库更新文件未变化，跳过执行")
-                return
+        cursor.execute("SELECT last_datetime FROM _db_update_applied WHERE id = 'db_update'")
+        row = cursor.fetchone()
+        last_datetime = (row["last_datetime"] or "") if row else ""
     except Exception as e:
-        # 如果查询失败（例如表不存在），继续执行
-        logger.warning(f"检查哈希记录失败，将继续执行更新: {e}")
+        logger.warning(f"读取 last_datetime 失败，视为空: {e}")
+        last_datetime = ""
 
-    # 如果文件没有实际语句（只有注释或空），只更新哈希记录
-    if len(statements) == 0:
-        logger.info("数据库更新文件无有效语句，只更新哈希记录")
-        try:
-            # 确保 file_hash 列存在
-            cursor.execute("""
-                SELECT column_name FROM information_schema.columns
-                WHERE table_name = '_db_update_applied' AND column_name = 'file_hash'
-            """)
-            has_file_hash = cursor.fetchone() is not None
+    pending = [b for b in blocks if b["datetime"] > last_datetime]
+    pending.sort(key=lambda b: b["datetime"])
 
-            if not has_file_hash:
-                logger.warning("file_hash 列不存在，尝试添加")
-                try:
-                    cursor.execute("ALTER TABLE _db_update_applied ADD COLUMN file_hash TEXT")
-                    logger.info("成功添加 file_hash 列")
-                except Exception as add_col_err:
-                    logger.error(f"添加 file_hash 列失败: {add_col_err}")
-                    # 无法添加列，跳过插入哈希记录
-                    logger.warning("跳过插入哈希记录（列不存在）")
-                    return
-
-            cursor.execute("""
-                INSERT INTO _db_update_applied (id, file_hash)
-                VALUES ('db_update', %s)
-                ON CONFLICT (id) DO UPDATE
-                SET file_hash = EXCLUDED.file_hash,
-                    applied_at = CURRENT_TIMESTAMP
-            """, (file_hash,))
-        except Exception as e:
-            logger.error(f"更新哈希记录失败: {e}")
-            # 插入失败不影响主流程
-        # 不在这里提交，由外部事务统一提交
+    if not pending:
+        logger.info(f"数据库更新无新增块（last_datetime={last_datetime or '空'}）")
         return
 
-    # 哈希不同且存在有效语句，需要执行更新，使用 advisory lock 防止多 worker 并发执行
-    # 使用固定的 advisory lock key (123456)
+    for b in pending:
+        b["statements_list"] = _split_sql_statements(b["statements"])
+
+    # 使用 advisory lock 防止多 worker 并发执行，使用固定的 advisory lock key (123456)
     lock_key = 123456
-    logger.info(f"数据库更新文件有变化，尝试获取 advisory lock (key={lock_key})")
+    logger.info(f"数据库更新文件有 {len(pending)} 个新增块，尝试获取 advisory lock (key={lock_key})")
 
     # 使用 pg_try_advisory_lock 非阻塞尝试，如果失败则等待
     max_retries = 10  # 降低到 10 次（原 30 次），减少等待时间
@@ -801,123 +833,96 @@ def _apply_db_updates(conn):
                 logger.warning("pg_try_advisory_lock 查询返回空结果，视为未获取锁")
                 locked = False
             else:
-                locked = result['locked']
+                locked = result["locked"]
             if locked:
                 break
         except Exception as lock_err:
-            logger.warning(f"尝试获取 advisory lock 时发生错误 (重试 {retry+1}/{max_retries}): {lock_err}")
+            logger.warning(f"尝试获取 advisory lock 时发生错误 (重试 {retry + 1}/{max_retries}): {lock_err}")
             locked = False
-        logger.info(f"等待 advisory lock (重试 {retry+1}/{max_retries})")
+        logger.info(f"等待 advisory lock (重试 {retry + 1}/{max_retries})")
         time.sleep(retry_interval)
     else:
         logger.warning("无法获取 advisory lock，跳过数据库更新（可能由其他进程执行）")
         return
 
     try:
-        # 获取锁后再次检查哈希（可能已被其他进程更新）
+        # 获取锁后重读 last_datetime（可能已被其他进程更新）
         try:
-            # 首先检查 file_hash 列是否存在
-            cursor.execute("""
-                SELECT column_name FROM information_schema.columns
-                WHERE table_name = '_db_update_applied' AND column_name = 'file_hash'
-            """)
-            has_file_hash = cursor.fetchone() is not None
-
-            if not has_file_hash:
-                logger.warning("file_hash 列不存在，无法检查哈希记录，将继续执行更新")
-                # 列不存在，无法检查哈希，继续执行更新
-            else:
-                cursor.execute("SELECT file_hash FROM _db_update_applied WHERE id = 'db_update'")
-                row = cursor.fetchone()
-                if row and row['file_hash'] == file_hash:
-                    logger.info("其他进程已执行更新，跳过")
+            cursor.execute("SELECT last_datetime FROM _db_update_applied WHERE id = 'db_update'")
+            row = cursor.fetchone()
+            current_last = (row["last_datetime"] or "") if row else ""
+            if current_last:
+                pending = [b for b in pending if b["datetime"] > current_last]
+                if not pending:
+                    logger.info("其他进程已执行全部新增块，跳过")
                     return
         except Exception as e:
-            logger.warning(f"获取锁后检查哈希失败，将继续执行更新: {e}")
-            # 哈希检查失败，继续执行更新
+            logger.warning(f"获取锁后检查 last_datetime 失败，将继续执行更新: {e}")
 
-        logger.info(f"开始执行数据库更新，共 {len(statements)} 条语句")
+        logger.info(f"开始执行数据库更新，共 {len(pending)} 个块")
 
         executed = 0
         failed = []
         lock_retry_times = 3
-        for i, stmt in enumerate(statements):
-            savepoint_name = f"sp_{i}"
-            for attempt in range(lock_retry_times + 1):
-                try:
-                    # 为每条语句创建保存点，允许单条失败不影响其他语句
-                    cursor.execute(f"SAVEPOINT {savepoint_name}")
-                    cursor.execute(stmt)
-                    executed += 1
-                    break
-                except Exception as e:
-                    # 回滚到保存点，清除错误状态
+        for block in pending:
+            for i, stmt in enumerate(block["statements_list"]):
+                savepoint_name = f"sp_{executed}"
+                for attempt in range(lock_retry_times + 1):
                     try:
-                        cursor.execute(f"ROLLBACK TO SAVEPOINT {savepoint_name}")
-                    except Exception as rollback_err:
-                        logger.error(f"回滚保存点失败: {rollback_err}")
-                        # 如果回滚失败，整个事务可能已无效，需要回滚整个事务
-                        conn.rollback()
-                        # 重新建立保存点以继续
+                        # 为每条语句创建保存点，允许单条失败不影响其他语句
                         cursor.execute(f"SAVEPOINT {savepoint_name}")
-                    # 锁超时：DDL 等 ACCESS EXCLUSIVE 锁期间可能被并发事务阻塞，
-                    # 等待锁释放后重试，避免偶发锁冲突导致语句被永久跳过
-                    if _is_lock_timeout_error(e) and attempt < lock_retry_times:
-                        wait_sec = (attempt + 1) * 5
-                        logger.warning(
-                            f"数据库更新语句因锁超时失败（第 {attempt + 1}/{lock_retry_times} 次重试）: "
-                            f"{stmt[:80]}... 等待 {wait_sec}s 后重试"
-                        )
-                        time.sleep(wait_sec)
-                        continue
-                    failed.append((i, stmt, str(e)))
-                    logger.error(f"执行 SQL 语句失败: {stmt[:100]}... 错误: {e}")
-                    break
+                        cursor.execute(stmt)
+                        executed += 1
+                        break
+                    except Exception as e:
+                        # 回滚到保存点，清除错误状态
+                        try:
+                            cursor.execute(f"ROLLBACK TO SAVEPOINT {savepoint_name}")
+                        except Exception as rollback_err:
+                            logger.error(f"回滚保存点失败: {rollback_err}")
+                            # 如果回滚失败，整个事务可能已无效，需要回滚整个事务
+                            conn.rollback()
+                            # 重新建立保存点以继续
+                            cursor.execute(f"SAVEPOINT {savepoint_name}")
+                        # 锁超时：DDL 等 ACCESS EXCLUSIVE 锁期间可能被并发事务阻塞，
+                        # 等待锁释放后重试，避免偶发锁冲突导致语句被永久跳过
+                        if _is_lock_timeout_error(e) and attempt < lock_retry_times:
+                            wait_sec = (attempt + 1) * 5
+                            logger.warning(
+                                f"数据库更新语句因锁超时失败（第 {attempt + 1}/{lock_retry_times} 次重试）: "
+                                f"{stmt[:80]}... 等待 {wait_sec}s 后重试"
+                            )
+                            time.sleep(wait_sec)
+                            continue
+                        failed.append((block["datetime"], stmt, str(e)))
+                        logger.error(f"执行 SQL 语句失败 [{block['datetime']}]: {stmt[:100]}... 错误: {e}")
+                        break
 
         if failed:
-            # 有语句失败时不更新哈希记录，保持旧哈希。下次启动（文件哈希不同）
-            # 会自动重跑全部语句，所有语句均幂等（IF NOT EXISTS / ON CONFLICT），
-            # 避免 DDL 因偶发锁冲突被"永久跳过"
+            # 有语句失败时不更新 last_datetime，下次启动重跑本次所有待执行块
+            # 所有语句均幂等（IF NOT EXISTS / ON CONFLICT），重跑无害
             logger.error(
-                f"数据库更新有 {len(failed)}/{len(statements)} 条语句失败（成功 {executed} 条），"
-                f"本次不更新哈希记录，下次启动将重试"
+                f"数据库更新有 {len(failed)} 条语句失败（成功 {executed} 条），"
+                f"本次不更新 last_datetime，下次启动将重试"
             )
-            for idx, failed_stmt, err in failed:
-                logger.error(f"  失败语句[{idx}]: {failed_stmt[:100]}... 错误: {err}")
+            for dt_str, failed_stmt, err in failed:
+                logger.error(f"  失败语句[{dt_str}]: {failed_stmt[:100]}... 错误: {err}")
         else:
-            logger.info(f"数据库更新完成，成功执行 {executed}/{len(statements)} 条语句")
+            logger.info(f"数据库更新完成，成功执行 {executed} 条语句")
 
-            # 更新或插入哈希记录
+            # 全部成功：记录 last_datetime = 本次最大 datetime
+            new_last = pending[-1]["datetime"]
             try:
-                # 确保 file_hash 列存在
                 cursor.execute("""
-                    SELECT column_name FROM information_schema.columns
-                    WHERE table_name = '_db_update_applied' AND column_name = 'file_hash'
-                """)
-                has_file_hash = cursor.fetchone() is not None
-
-                if not has_file_hash:
-                    logger.warning("file_hash 列不存在，尝试添加")
-                    try:
-                        cursor.execute("ALTER TABLE _db_update_applied ADD COLUMN file_hash TEXT")
-                        logger.info("成功添加 file_hash 列")
-                    except Exception as add_col_err:
-                        logger.error(f"添加 file_hash 列失败: {add_col_err}")
-                        # 无法添加列，跳过插入哈希记录
-                        logger.warning("跳过插入哈希记录（列不存在）")
-                        return
-
-                cursor.execute("""
-                    INSERT INTO _db_update_applied (id, file_hash)
-                    VALUES ('db_update', %s)
+                    INSERT INTO _db_update_applied (id, file_hash, last_datetime)
+                    VALUES ('db_update', '', %s)
                     ON CONFLICT (id) DO UPDATE
-                    SET file_hash = EXCLUDED.file_hash,
+                    SET last_datetime = EXCLUDED.last_datetime,
                         applied_at = CURRENT_TIMESTAMP
-                """, (file_hash,))
-
-                logger.info(f"数据库更新记录已更新，哈希: {file_hash}")
+                """, (new_last,))
+                logger.info(f"数据库更新记录已更新，last_datetime: {new_last}")
             except Exception as e:
-                logger.error(f"更新哈希记录失败: {e}")
+                logger.error(f"更新 last_datetime 记录失败: {e}")
                 # 插入失败不影响已执行的更新，继续执行（释放锁）
 
     finally:
@@ -929,7 +934,7 @@ def _apply_db_updates(conn):
                 logger.warning(f"pg_advisory_unlock 查询返回空结果，无法确认锁是否释放 (key={lock_key})")
                 unlocked = False
             else:
-                unlocked = result['unlocked']
+                unlocked = result["unlocked"]
             if not unlocked:
                 logger.warning(f"释放 advisory lock 失败 (key={lock_key})")
 
@@ -938,7 +943,7 @@ def _init_postgresql():
     """初始化服务模块表并应用增量更新。
 
     核心表结构（users/chat_records 等）由 deploy/init-postgres.sql 全量创建，
-    此处不再内联建表；存量环境的结构升级统一走 deploy/db_update.sql。
+    此处不再内联建表；存量环境的结构升级统一走 deploy/db_update.yaml。
     """
     with get_db_connection() as conn:
         conn.commit()
@@ -1053,7 +1058,7 @@ def _init_postgresql():
         # Skill 表初始化由 SkillLoader._init_skill_tables() 统一处理，
         # 通过 SKILL.md 中的 init_script 字段声明，不再硬编码。
 
-        # 执行增量数据库更新（db_update.sql）
+        # 执行增量数据库更新（db_update.yaml）
         _apply_db_updates(conn)
         conn.commit()
 
