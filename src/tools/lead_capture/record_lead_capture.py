@@ -56,7 +56,8 @@ class RecordLeadCaptureTool(BaseTool):
         "视为新的跟进需求，正常登记并通知员工（注明上次留资时间）\n"
         "- 客户未明确要求留资时，不要重复引导客户留资\n"
         "- 工具返回失败（如未配置顾问二维码）时，降级仅引导客户留下手机号\n"
-        "- 调用成功后提示客户：客服会尽快联系 / 可添加下方微信"
+        "- 调用成功后提示客户：客服会尽快联系。contact_method=qr 时顾问二维码图片"
+        "已随回复自动发送给客户，无需再引导客户添加微信或复制/下载该图片"
     )
     usage_guide = ""
     display_name = "客户留资"
@@ -217,7 +218,8 @@ class RecordLeadCaptureTool(BaseTool):
             )
             return {
                 "success": True,
-                "message": "已为客户登记留资，请引导客户添加下方顾问微信",
+                "message": "已为客户登记留资，顾问二维码图片已随本次回复发送给客户，"
+                "请勿再次复制或下载该二维码文件",
                 "images": [qr_ref.model_dump()],
             }
         logger.info(

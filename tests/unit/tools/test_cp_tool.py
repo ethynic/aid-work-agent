@@ -165,7 +165,7 @@ class TestCpToolBasic:
 
     @pytest.mark.asyncio
     async def test_copy_register_download_false_without_file_path(self):
-        """不注册下载且不传 file_path → 返回错误字符串"""
+        """不注册下载且不传 file_path → 返回结构化失败 dict"""
         from src.tools.file.cp_tool import CpTool
 
         src_file = PROJECT_ROOT / "configs" / "config.yaml"
@@ -178,8 +178,9 @@ class TestCpToolBasic:
             register_download=False,
         )
 
-        assert isinstance(result, str)
-        assert "不注册下载时需要提供 file_path" in result
+        assert isinstance(result, dict)
+        assert result["success"] is False
+        assert "不注册下载时需要提供 file_path" in result["error"]
 
 
 class TestCpToolSourceErrors:
@@ -187,7 +188,7 @@ class TestCpToolSourceErrors:
 
     @pytest.mark.asyncio
     async def test_source_not_found(self):
-        """源文件不存在 → 返回错误字符串"""
+        """源文件不存在 → 返回结构化失败 dict"""
         from src.tools.file.cp_tool import CpTool
 
         tool = CpTool()
@@ -195,54 +196,76 @@ class TestCpToolSourceErrors:
             source_file_path=str(PROJECT_ROOT / "nonexistent_file_xyz.txt"),
         )
 
-        assert isinstance(result, str)
-        assert "复制文件失败" in result
-        assert "源文件不存在" in result
+        assert isinstance(result, dict)
+        assert result["success"] is False
+        assert "源文件不存在" in result["error"]
 
     @pytest.mark.asyncio
-    async def test_source_path_traversal_relative(self):
-        """源含 .. 路径穿越（相对路径解析后超出项目根）→ 返回错误字符串"""
+    async def test_source_relative_path_traversal_exists(self):
+        """源相对路径含 ..（解析后指向存在的系统文件）→ 允许复制（源不做穿越限制）"""
         from src.tools.file.cp_tool import CpTool
 
         tool = CpTool()
-        # 相对路径 ../../../etc/passwd 从项目根解析后超出范围
-        result = await tool.execute(
-            source_file_path="../../../etc/passwd",
-        )
+        _set_test_context(user_id="test_user")
+        # ../../../etc/passwd 从容器项目根解析后指向 /etc/passwd（存在且是文件）
+        # 源路径已放宽为任意存在的文件，防穿越只在目标路径
+        with patch.object(tool, "_register_download") as mock_reg:
+            mock_reg.return_value = {
+                "success": True,
+                "file_id": "file_trav001",
+                "file_name": "passwd",
+                "file_size": 100,
+                "download_url": "/api/files/file_trav001/download",
+                "file_path": "/tmp/upload/passwd",
+            }
+            result = await tool.execute(
+                source_file_path="../../../etc/passwd",
+            )
 
-        assert isinstance(result, str)
-        assert "复制文件失败" in result
-        assert "超出允许范围" in result
+        assert isinstance(result, dict)
+        # 成功契约：register_download=True 时返回含 download_url 的结果 dict（无 success 字段，agent 默认成功）
+        assert "download_url" in result
+        assert result["file_id"] == "file_trav001"
 
     @pytest.mark.asyncio
     async def test_source_absolute_path_outside_project_root(self):
-        """源是绝对路径但在项目根外 → 返回错误字符串"""
+        """源是项目根外存在的绝对路径（/etc/passwd）→ 允许复制（源不再限制在项目根内）"""
         from src.tools.file.cp_tool import CpTool
 
         tool = CpTool()
-        # Linux/macOS 绝对路径
-        result = await tool.execute(
-            source_file_path="/etc/passwd",
-        )
+        _set_test_context(user_id="test_user")
+        with patch.object(tool, "_register_download") as mock_reg:
+            mock_reg.return_value = {
+                "success": True,
+                "file_id": "file_abs001",
+                "file_name": "passwd",
+                "file_size": 100,
+                "download_url": "/api/files/file_abs001/download",
+                "file_path": "/tmp/upload/passwd",
+            }
+            result = await tool.execute(
+                source_file_path="/etc/passwd",
+            )
 
-        assert isinstance(result, str)
-        assert "复制文件失败" in result
+        assert isinstance(result, dict)
+        # 成功契约：register_download=True 时返回含 download_url 的结果 dict（无 success 字段，agent 默认成功）
+        assert "download_url" in result
+        assert result["file_id"] == "file_abs001"
 
     @pytest.mark.asyncio
     async def test_source_absolute_path_outside_project_root_windows(self):
-        """源是 Windows 绝对路径但在项目根外 → 返回错误字符串"""
+        """源是 Windows 绝对路径（本环境不存在）→ 返回结构化失败 dict"""
         from src.tools.file.cp_tool import CpTool
 
         tool = CpTool()
-        # Windows 绝对路径（如果测试环境不是 Windows 则文件不存在，但路径安全检查先于文件存在检查）
         result = await tool.execute(
             source_file_path="C:/Windows/system32/drivers/etc/hosts",
         )
 
-        assert isinstance(result, str)
-        assert "复制文件失败" in result
-        # 应该命中"超出允许范围"或"源文件不存在"，关键是不能成功复制
-        assert "超出允许范围" in result or "源文件不存在" in result
+        assert isinstance(result, dict)
+        assert result["success"] is False
+        # 源文件不存在（Windows 路径在 Linux 容器内不存在）
+        assert "源文件不存在" in result["error"]
 
 
 class TestCpToolOverwrite:
@@ -250,7 +273,7 @@ class TestCpToolOverwrite:
 
     @pytest.mark.asyncio
     async def test_target_exists_no_overwrite(self, tmp_path):
-        """目标已存在 + overwrite=False → 返回错误字符串"""
+        """目标已存在 + overwrite=False → 返回结构化失败 dict"""
         from src.tools.file.cp_tool import CpTool
 
         src_file = PROJECT_ROOT / "configs" / "config.yaml"
@@ -272,8 +295,9 @@ class TestCpToolOverwrite:
                 register_download=False,
             )
 
-            assert isinstance(result, str)
-            assert "目标文件已存在" in result
+            assert isinstance(result, dict)
+            assert result["success"] is False
+            assert "目标文件已存在" in result["error"]
         finally:
             dst_file.unlink(missing_ok=True)
 
@@ -314,7 +338,7 @@ class TestCpToolForbiddenExtensions:
 
     @pytest.mark.asyncio
     async def test_forbidden_extension_exe(self, tmp_path):
-        """源后缀在 FORBIDDEN_EXTENSIONS（如 .exe）→ 返回错误字符串"""
+        """源后缀在 FORBIDDEN_EXTENSIONS（如 .exe）→ 返回结构化失败 dict"""
         from src.tools.file.cp_tool import CpTool
 
         # 创建 .exe 源文件
@@ -329,15 +353,16 @@ class TestCpToolForbiddenExtensions:
                 file_path="output/test.exe",
             )
 
-            assert isinstance(result, str)
-            assert "不允许复制" in result
-            assert ".exe" in result
+            assert isinstance(result, dict)
+            assert result["success"] is False
+            assert "不允许复制" in result["error"]
+            assert ".exe" in result["error"]
         finally:
             exe_file.unlink(missing_ok=True)
 
     @pytest.mark.asyncio
     async def test_forbidden_extension_py(self, tmp_path):
-        """源后缀 .py 在 FORBIDDEN_EXTENSIONS → 返回错误字符串"""
+        """源后缀 .py 在 FORBIDDEN_EXTENSIONS → 返回结构化失败 dict"""
         from src.tools.file.cp_tool import CpTool
 
         py_file = PROJECT_ROOT / "test_forbidden_script.py"
@@ -351,9 +376,10 @@ class TestCpToolForbiddenExtensions:
                 file_path="output/test.py",
             )
 
-            assert isinstance(result, str)
-            assert "不允许复制" in result
-            assert ".py" in result
+            assert isinstance(result, dict)
+            assert result["success"] is False
+            assert "不允许复制" in result["error"]
+            assert ".py" in result["error"]
         finally:
             py_file.unlink(missing_ok=True)
 
@@ -479,8 +505,8 @@ class TestCpToolRegisterDownload:
         mock_redis.expire.assert_called_once_with("uploaded_file:file_test123", 86400)
 
     @pytest.mark.asyncio
-    async def test_default_visible_is_false(self, tmp_path):
-        """cp 默认 visible=False，_register_download 收到 visible=False 且 execute 返回 dict 含 visible=False"""
+    async def test_default_visible_is_true(self, tmp_path):
+        """cp 默认 visible=True（文件交付标准入口），_register_download 收到 visible=True 且 execute 返回 dict 含 visible=True"""
         from src.tools.file.cp_tool import CpTool
 
         src_file = PROJECT_ROOT / "configs" / "config.yaml"
@@ -490,6 +516,11 @@ class TestCpToolRegisterDownload:
         tool = CpTool()
         _set_test_context(user_id="user_vis_default", tenant_id="tenant_vis_default")
 
+        # 前置清理：防止上次运行残留文件导致"目标已存在"分支静默返回失败
+        (PROJECT_ROOT / "storage" / "output" / "test_vis_default.yaml").unlink(
+            missing_ok=True
+        )
+
         with patch.object(tool, "_register_download") as mock_reg:
             mock_reg.return_value = {
                 "success": True,
@@ -498,7 +529,7 @@ class TestCpToolRegisterDownload:
                 "file_size": 100,
                 "download_url": "/api/files/file_vis_default/download",
                 "file_path": "/tmp/upload/config.yaml",
-                "visible": False,
+                "visible": True,
             }
             result = await tool.execute(
                 source_file_path=str(src_file),
@@ -508,10 +539,10 @@ class TestCpToolRegisterDownload:
 
         assert isinstance(result, dict)
         mock_reg.assert_called_once()
-        # 关键：未传 visible 时，_register_download 收到 visible=False
-        assert mock_reg.call_args.kwargs["visible"] is False
-        # execute 返回 dict 也带上 visible=False
-        assert result["visible"] is False
+        # 关键：未传 visible 时，_register_download 收到 visible=True（默认值）
+        assert mock_reg.call_args.kwargs["visible"] is True
+        # execute 返回 dict 也带上 visible=True
+        assert result["visible"] is True
 
         # 清理
         cleanup = PROJECT_ROOT / "storage" / "output" / "test_vis_default.yaml"

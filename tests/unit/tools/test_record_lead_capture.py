@@ -337,7 +337,7 @@ class TestRecordLeadCaptureExecute:
                 result = await tool.execute(contact_method="qr")
 
         assert result["success"] is True
-        assert "顾问微信" in result["message"]
+        assert "随本次回复发送给客户" in result["message"]
         assert result["images"][0]["file_id"] == "file_employee_qr"
         assert result["images"][0]["source"] == "user_upload"
         # 客户明确要求加微信视为新需求：正常落库新线索 + 更新会话状态 + 通知员工（注明上次留资时间）
@@ -387,7 +387,7 @@ class TestRecordLeadCaptureExecute:
                 result = await tool.execute(contact_method="qr")
 
         assert result["success"] is True
-        assert "添加下方顾问微信" in result["message"]
+        assert "请勿再次复制或下载" in result["message"]
         assert result["images"][0]["file_id"] == "file_employee_qr"
         assert result["images"][0]["source"] == "user_upload"
 

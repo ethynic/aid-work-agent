@@ -136,7 +136,14 @@ cp(source_file_path="src/skills/xxx/assets/template.html", file_path="output/ppt
 
 任何需要复制文件内容的场景都用本工具：拷贝模板生成新文件、复制用户上传文件、
 把工具/skill 生成的文件注册到下载系统等。交付用户的文件必须传 display_name，
-避免前端展示临时文件名。零 token 消耗（不读源文件内容到上下文）。"""
+避免前端展示临时文件名。零 token 消耗（不读源文件内容到上下文）。
+
+重要约束（避免误用）：
+- 源路径必须是本地真实存在的文件（如 /tmp/xxx.xlsx、storage/.../xxx.pdf）。
+  download_url（形如 /api/files/xxx/download）是 HTTP 下载链接，不是本地文件路径，
+  不能作为源路径复制，也不存在对应的本地源文件。
+- 工具返回结果中 images 字段已交付的图片（如客户留资下发的顾问二维码），系统已自动
+  把图片随回复发送给用户，无需再用本工具复制或下载该图片。"""
     display_name = "复制文件"
     category = "file"
     InputModel = CpInput
@@ -296,7 +303,10 @@ cp(source_file_path="src/skills/xxx/assets/template.html", file_path="output/ppt
             # 2. 源后缀安全检查
             src_suffix = src.suffix.lower()
             if src_suffix in FORBIDDEN_EXTENSIONS:
-                return f"不允许复制 {src_suffix} 类型的文件"
+                return {
+                    "success": False,
+                    "error": f"不允许复制 {src_suffix} 类型的文件",
+                }
 
             # 3. 解析目标路径
             dst = self._resolve_target(file_path, src.suffix, register_download)
@@ -307,12 +317,18 @@ cp(source_file_path="src/skills/xxx/assets/template.html", file_path="output/ppt
                 if dst_suffix in FORBIDDEN_EXTENSIONS:
                     if dst.exists():
                         dst.unlink(missing_ok=True)
-                    return f"不允许生成 {dst_suffix} 类型的文件"
+                    return {
+                        "success": False,
+                        "error": f"不允许生成 {dst_suffix} 类型的文件",
+                    }
 
             # 5. 目标已存在 + overwrite=False（仅当用户指定了 file_path 时检查，
             #    自动分配的临时文件是 mkstemp 创建的，本身就是空的，不需要检查）
             if file_path and dst.exists() and not overwrite:
-                return f"目标文件已存在: {dst}，设置 overwrite=True 覆盖"
+                return {
+                    "success": False,
+                    "error": f"目标文件已存在: {dst}，设置 overwrite=True 覆盖",
+                }
 
             # 6. 执行复制
             dst.parent.mkdir(parents=True, exist_ok=True)
@@ -331,7 +347,10 @@ cp(source_file_path="src/skills/xxx/assets/template.html", file_path="output/ppt
                     dst.unlink(missing_ok=True)
 
                 if not download_info.get("success"):
-                    return f"复制文件失败: 注册下载失败"
+                    return {
+                        "success": False,
+                        "error": "复制文件失败: 注册下载失败",
+                    }
 
                 result = {
                     "file_path": download_info["file_path"],
@@ -363,7 +382,10 @@ cp(source_file_path="src/skills/xxx/assets/template.html", file_path="output/ppt
 
         except Exception as e:
             logger.error(f"复制文件失败: {e}")
-            return f"复制文件失败: {e}"
+            return {
+                "success": False,
+                "error": f"复制文件失败: {e}",
+            }
 
     async def _record_work_outcome(self, cp_result: Dict[str, Any]) -> None:
         """cp 内嵌的工作成果实时登记（层1）
