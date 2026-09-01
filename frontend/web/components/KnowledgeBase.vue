@@ -142,7 +142,7 @@
                           </svg>
                         </div>
                         <div class="flex-1 min-w-0">
-                          <h3 @click="openDocument(group.chunks[0].doc_id)" class="text-sm font-medium text-primary-600 hover:text-primary-700 hover:underline cursor-pointer truncate" :title="'点击打开原文: ' + group.title">{{ group.title }}</h3>
+                          <h3 @click="openDocument(group.chunks[0].doc_id, group.title)" class="text-sm font-medium text-primary-600 hover:text-primary-700 hover:underline cursor-pointer truncate" :title="'点击下载原文: ' + group.title">{{ group.title }}</h3>
                           <p class="text-xs text-muted">{{ group.chunks.length }} 个相关片段</p>
                         </div>
                       </div>
@@ -185,7 +185,7 @@
                               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                             </svg>
                           </div>
-                          <span @click="openDocument(row.id)" class="text-sm font-medium text-primary-600 hover:text-primary-700 hover:underline cursor-pointer block" :title="'点击打开原文: ' + row.title">{{ row.title }}</span>
+                          <span @click="openDocument(row.id, row.title)" class="text-sm font-medium text-primary-600 hover:text-primary-700 hover:underline cursor-pointer block" :title="'点击下载原文: ' + row.title">{{ row.title }}</span>
                         </div>
                       </template>
                       <template #summary="{ row }">
@@ -463,7 +463,7 @@ import { useTableSelection } from '@/composables/useTableSelection'
 import { type SubagentListItem } from '@/api/subagent'
 import { getMyAllowedAgents } from '@/api/saasPermissions'
 import {
-  listDocuments, deleteDocument, uploadDocument, searchDocuments, getDocumentDownloadUrl,
+  listDocuments, deleteDocument, uploadDocument, searchDocuments, downloadDocument,
   moveDocuments,
   type DocumentResponse, type SearchResultItem,
   listCategories, createCategory, updateCategory, deleteCategory,
@@ -1224,9 +1224,12 @@ function getFileIconClassByExt(filename: string): string {
   return getFileIconClass(ext)
 }
 
-function openDocument(docId: number) {
-  const url = getDocumentDownloadUrl(docId)
-  window.open(url, '_blank')
+async function openDocument(docId: number, title: string) {
+  try {
+    await downloadDocument(docId, title)
+  } catch (e) {
+    toast.error(e instanceof Error ? e.message : '文档下载失败')
+  }
 }
 
 async function openChunkDetail(row: DocumentResponse) {

@@ -227,10 +227,38 @@ export async function getDocumentChunks(docId: number): Promise<ChunkListRespons
 }
 
 /**
- * 获取文档下载/预览 URL
+ * 下载文档原文（带租户认证 header）
+ *
+ * window.open 新标签导航不会携带 X-Tenant-Id / Authorization header，
+ * 导致后端租户校验失败（403 无权访问该文档），必须 fetch + blob 触发下载。
  */
-export function getDocumentDownloadUrl(docId: number): string {
-  return `${API_BASE}/documents/${docId}/download`
+export async function downloadDocument(docId: number, fallbackName: string): Promise<void> {
+  const response = await fetch(`${API_BASE}/documents/${docId}/download`, {
+    headers: { ...getAuthHeader() }
+  })
+  if (!response.ok) {
+    const body = await response.json().catch(() => null)
+    throw new Error(body?.detail || `下载失败: ${response.status}`)
+  }
+  const blob = await response.blob()
+  const blobUrl = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = blobUrl
+  a.download = getDownloadName(response.headers.get('Content-Disposition')) || fallbackName
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  setTimeout(() => URL.revokeObjectURL(blobUrl), 1000)
+}
+
+function getDownloadName(header: string | null): string | null {
+  if (!header) return null
+  // 优先 RFC5987 编码文件名 filename*=UTF-8''...
+  const star = /filename\*=UTF-8''([^;]+)/i.exec(header)
+  if (star) return decodeURIComponent(star[1])
+  const plain = /filename="?([^"]+)"?/i.exec(header)
+  if (plain) return plain[1]
+  return null
 }
 
 /**
