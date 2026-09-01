@@ -147,6 +147,30 @@ class TestExcelToolFeedback:
         """task 支持逗号分隔多任务（与路由器同款解析），含 fill_template 即长任务。"""
         assert self._tool().get_user_feedback({"task": "read,fill_template"}) is not None
 
+    def test_smart_template_fill_args_marks_long(self):
+        """新调用约定（schema 无 task 字段）：data + file_paths 即智能模板填充。
+
+        回归 tr_030d9e9e708f4ad5：该形态实测走 _fast_path_route → fill_template
+        耗时 131s，但旧钩子只认 task 参数导致无等待提示。
+        """
+        args = {
+            "file_paths": ["file_05006c623864"],
+            "instruction": "按报价单模板生成40人红色主题研学报价单",
+            "data": {"meta": {"产品类型": "高校研学成团定制"}, "rows": []},
+        }
+        assert self._tool().get_user_feedback(args) == (
+            LongRunningFeedback(start_message=APPROVED_EXCEL_TOOL_MESSAGE)
+        )
+
+    def test_smart_template_fill_partial_args_return_none(self):
+        """data / file_paths 缺一不可（与 _fast_path_route 判定一致），均为短任务。"""
+        tool = self._tool()
+        data = {"meta": {"人数": "40人"}}
+        assert tool.get_user_feedback({"data": data}) is None
+        assert tool.get_user_feedback({"file_paths": ["file_x"]}) is None
+        assert tool.get_user_feedback({"data": {}, "file_paths": ["file_x"]}) is None
+        assert tool.get_user_feedback({"data": data, "file_paths": []}) is None
+
     def test_resolves_through_policy_via_tool_registry(self):
         tool = self._tool()
         agent = SimpleNamespace(

@@ -156,15 +156,22 @@ class ExcelProcessTool(BaseTool):
     def get_user_feedback(self, tool_args: dict) -> Optional["LongRunningFeedback"]:
         """verbose 长任务等待提示（设计 §5 首批策略，服务端专用钩子）。
 
-        仅 ``task=fill_template`` 的模板填充/生成路径视为长任务（支持逗号
-        分隔多任务）；read / to_md / list_templates / 简单 export 等短操作
-        返回 None（继承 BaseTool 默认，不产生业务提示）。文案为用户已认可的
-        默认值；最终是否发送仍由编排层 validate_feedback_text 统一校验。
+        模板填充/生成路径视为长任务；其余 read / to_md / list_templates /
+        简单 export 等短操作返回 None（继承 BaseTool 默认，不产生业务提示）。
+        长任务判定与 _fast_path_route 对齐两条入口：
+        - 旧版显式 ``task=fill_template``（支持逗号分隔多任务）；
+        - 新调用约定（工具 schema 无 task 字段）：``data`` + 样例附件
+          （file_paths）即智能模板填充（tr_030d9e9e708f4ad5 实证 131s 无提示）。
+        文案为用户已认可的默认值；最终是否发送仍由编排层
+        validate_feedback_text 统一校验。
         """
         task = str((tool_args or {}).get("task") or "")
         tasks = {t.strip() for t in task.split(",") if t.strip()}
         if "fill_template" not in tasks:
-            return None
+            args = tool_args if isinstance(tool_args, dict) else {}
+            data = args.get("data")
+            if not (isinstance(data, dict) and data and args.get("file_paths")):
+                return None
         from src.core.verbose_feedback import LongRunningFeedback
         return LongRunningFeedback(start_message="正在读取 Excel 模板并生成实际文件，可能需要一些时间，请稍候。")
 
