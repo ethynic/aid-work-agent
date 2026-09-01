@@ -244,12 +244,16 @@ def create_invocation(
 
 
 def set_invocation_credit_cost(invocation_id: str, credit_cost: float) -> None:
-    """计费成功后把实扣积分回写 invocation 行（与 client_usage_logs.detail 的 invocation_id 双向对账）"""
+    """计费成功后把实扣积分回写 invocation 行（与 client_usage_logs.detail 的 invocation_id 双向对账）。
+
+    invocation id 是 UUID 字符串（create_invocation 返回 str(row["id"])），绝不能 int() 转换——
+    历史bug：int(UUID) 恒抛 ValueError 被调用方吞掉，导致该对账回写从未成功过。
+    """
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
             "UPDATE local_tool_invocations SET credit_cost = %s WHERE id = %s",
-            (credit_cost, int(invocation_id)),
+            (credit_cost, invocation_id),
         )
         conn.commit()
 

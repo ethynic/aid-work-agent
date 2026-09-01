@@ -37,6 +37,7 @@ from src.services import (
     recruiting_match_service,
     recruiting_notify_service,
     recruiting_resume_service,
+    recruiting_resume_timeline_service,
 )
 from src.tools.base import BaseTool, ExecutionTarget
 
@@ -1166,6 +1167,62 @@ def _resume_match_brief(tenant_id: str, candidate_name: str) -> Optional[Dict[st
     }
 
 
+def _find_resume_id_by_name(tenant_id: str, candidate_name: str) -> Optional[int]:
+    """按姓名定位简历 id（list_resumes 关键词搜索 + 精确名优先 + 同名取最新），无简历返回 None。
+
+    _resume_match_brief 的轻量版：boss_send_to 发送成功后回写沟通记录只用 resume_id，
+    不取评分/摘录，避免多查一次 get_resume。
+    """
+    data = recruiting_resume_service.list_resumes(
+        tenant_id, keyword=candidate_name, page=1, page_size=5
+    )
+    items = data.get("items") or []
+    # 精确同名优先；列表按 created_at DESC 返回，exact[0] 即「精确名优先 + 同名取最新」
+    exact = [r for r in items if r.get("candidate_name") == candidate_name] or items
+    return exact[0]["id"] if exact else None
+
+
+async def _writeback_send_to_comm_log(kwargs: Dict[str, Any], result: Dict[str, Any]) -> None:
+    """boss_send_to 真发送成功后，尽力把本次 message 回写为该候选人简历的沟通记录（2026-09-01）。
+
+    触发条件（全部满足才写）：工具结果 success + 设备真发送（data.sent=true）+ 非试跑
+    （data.dry_run=false）+ 受信租户身份非空 + to / message 非空。
+    落库：direction='out' / channel='boss' / content=message 全文 / user_id=受信用户（可空）/
+    occurred_at 缺省（NOW）。简历库无该姓名 → 静默跳过（debug 留痕）。
+    回写是「发送成功后的留痕」：任何异常（DB 不可用等）只 warning 吞掉，绝不改变发送结果的
+    success / 返回值，也不向 data 加键（不改结果契约）。
+    """
+    try:
+        if not result.get("success"):
+            return
+        data = result.get("data") or {}
+        if not (isinstance(data, dict) and data.get("sent") and not data.get("dry_run")):
+            return
+        tenant_id = kwargs.get("_trusted_tenant_id")
+        candidate_name = (kwargs.get("to") or "").strip()
+        message = (kwargs.get("message") or "").strip()
+        if not tenant_id or not candidate_name or not message:
+            return
+        resume_id = await asyncio.to_thread(_find_resume_id_by_name, tenant_id, candidate_name)
+        if not resume_id:
+            # 简历库里没有该姓名：静默跳过（发送已成功，不能因无简历报错）
+            logger.debug(
+                f"后端日志：boss_send_to 回写沟通记录跳过（简历库无该姓名）"
+                f"tenant={tenant_id} to={candidate_name}"
+            )
+            return
+        await asyncio.to_thread(
+            recruiting_resume_timeline_service.create_comm_log,
+            tenant_id, resume_id, "out", "boss", message,
+            kwargs.get("_trusted_user_id"),
+        )
+    except Exception as e:
+        logger.opt(exception=True).warning(
+            f"后端日志：boss_send_to 发送成功但沟通记录回写失败（不影响发送结果）"
+            f"to={kwargs.get('to')}: {e}"
+        )
+
+
 class BossSendToTool(LocalToolProxyTool):
     """向指定联系人发消息（外部写动作）。会话打开复用统一切换链路（already/搜索/列表兜底+身份校验，
     与 boss_open_chat 同源）；话术模式：script_title 引用「职位管理」话术，
@@ -1243,11 +1300,19 @@ class BossSendToTool(LocalToolProxyTool):
         if not (kwargs.get("message") or "").strip():
             return {"success": False, "code": "INVALID_ARGS",
                     "message": "缺少 message（最终消息全文）；或改用 script_title 话术模式"}
-        return await super().execute(**kwargs)
+        # 走到这里必为 message 模式（话术模式在前面已 return），设备结果 data={to, via, sent, dry_run}
+        result = await super().execute(**kwargs)
+        # 发送成功后尽力回写沟通记录（真发送才写；失败只留日志，绝不影响发送结果）
+        await _writeback_send_to_comm_log(kwargs, result)
+        return result
 
 
 class BossSendCurrentTool(LocalToolProxyTool):
-    """向当前会话发消息（外部写动作）。话术模式同 BossSendToTool（无候选人姓名，不带简历摘录）。"""
+    """向当前会话发消息（外部写动作）。话术模式同 BossSendToTool（无候选人姓名，不带简历摘录）。
+
+    不做发送后沟通记录自动回写：设备结果 data 仅 {sent, dry_run}，无联系人姓名，
+    无法定位简历（2026-09-01 决策，暂不回写）。
+    """
 
     name = "boss_send_current"
     display_name = "BOSS 向当前会话发消息"
