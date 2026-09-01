@@ -1,6 +1,6 @@
 # 电商ERP接口文档
 
-本文档涵盖电商ERP系统的委托登录、数据读取类接口（列表、详情）和订单写入类接口（创建、修改）。后端数据库为 MySQL 5.7。
+本文档涵盖电商ERP系统（应用编号11022）的委托登录、数据读取类接口（列表、详情）和订单写入类接口（创建、修改）。后端数据库为 MySQL 5.7。
 
 本系统采用**委托登录**鉴权：AI 智能体（代理人）持 `agent_token` 代表终端用户（委托人）访问，业务接口须同时携带 `agent_token + client_token`。
 
@@ -66,15 +66,15 @@ POST，Body 为 `application/json`
 
 | component 类型 | value 格式 | 匹配方式 |
 |----------------|-----------|----------|
-| `input` | 字符串 | LIKE 模糊查询 |
+| `input` | 数组 `["值"]` | LIKE 模糊查询（**必须传数组**，见下方说明） |
 | `datetime` | 数组 `[开始, 结束]` | 时间范围查询 |
 | `integer` / `number` / `currency` | 数组 `[最小值, 最大值]` | 数值范围查询 |
 
 多个 filter 之间为 **AND** 关系。不指定 `component`，默认为 `input`。
 
-**input 组件 value 为数组的注意事项**
+**input 组件 value 必须传数组（重要）**
 
-`component: input` 的 `value` 默认为字符串，也可传单元素数组（如 `["运动背包"]`），后端按 `LIKE %%值%%` 拼接。可选字段：
+`component: input` 的 `value` **必须传数组**（如 `["运动背包"]`、`["13916323347"]`），后端按 `LIKE %%值%%` 模糊拼接。**切勿传字符串**：后端会逐字符遍历 value，字符串会被拆成单字符 `OR LIKE`，导致匹配所有含任一字符的记录（例如传 `"13916323347"` 会命中任意手机号）。可选字段：
 
 | 字段 | 类型 | 默认 | 说明 |
 |------|------|------|------|
@@ -209,7 +209,7 @@ POST https://erp11022.aidingyi.cn/api/v1/erp.module/module_listing_view
 {
   "module": "kehuxinxi",
   "filters": [
-    { "attr": "kehushouji", "value": "13916323347" }
+    { "attr": "kehushouji", "value": ["13916323347"], "component": "input" }
   ],
   "page": 1,
   "limit": 20
@@ -402,7 +402,7 @@ POST https://erp11022.aidingyi.cn/api/v1/erp.module/module_listing_view
 {
   "module": "kehudingdan",
   "filters": [
-    { "attr": "shouji", "display_name": "手机", "value": "13916323347", "component": "input" },
+    { "attr": "shouji", "display_name": "手机", "value": ["13916323347"], "component": "input" },
     { "attr": "xiadanshijian", "display_name": "下单时间", "value": ["2026-06-02 00:00:00", "2026-06-04 23:59:59"], "component": "datetime" }
   ],
   "page": 1,
