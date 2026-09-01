@@ -1078,10 +1078,13 @@ CREATE TABLE IF NOT EXISTS client_usage_logs (
     credit_cost NUMERIC(12,2) DEFAULT 0,
     error_code TEXT,
     detail TEXT,
+    client_ref_id TEXT,                        -- C 模式标准上报幂等键（P4，客户端计费统一接入；tenant 内唯一）
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (id)
 );
 CREATE INDEX IF NOT EXISTS idx_client_usage_logs_binding ON client_usage_logs USING btree (binding_id, created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_client_usage_logs_tenant_ref
+    ON client_usage_logs (tenant_id, client_ref_id) WHERE client_ref_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_client_usage_logs_status ON client_usage_logs USING btree (status, created_at);
 CREATE INDEX IF NOT EXISTS idx_client_usage_logs_tenant ON client_usage_logs USING btree (tenant_id, created_at);
 

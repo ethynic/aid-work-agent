@@ -8,20 +8,24 @@
 - POST /llm/chat      LLM 代理（计费 ×10；可选 model 白名单路由，如 kimi-k3 视觉模型）
 - POST /ocr/parse     OCR 代理（不扣费，记录调用）
 - POST /logs          日志上报
+- POST /usage/report  通用用量上报（C 模式，客户端计费统一接入 P4）
 """
 
 from __future__ import annotations
 
+import math
 import os
+from decimal import Decimal, ROUND_CEILING
 import tempfile
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional
 
 from fastapi import APIRouter, Depends, File, Header, HTTPException, UploadFile
 from loguru import logger
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, model_validator
 
 from src.api.client_auth import ClientBinding, get_client_token_from_header, verify_client_token
+from src.config.settings import settings
 from src.db.client_binding_db import (
     ClientActivationCodeDB,
     ClientBindingDB,
@@ -383,3 +387,124 @@ async def upload_logs(
         )
         accepted += 1
     return {"accepted": accepted}
+
+
+# ============== 通用用量上报（C 模式，客户端计费统一接入 P4，设计 §4.4） ==============
+
+
+class UsageReportItem(BaseModel):
+    """单条用量上报：客户端只报事实（命令/参数摘要/次数），金额由服务端价目表计算。"""
+
+    client_ref_id: str = Field(
+        ..., min_length=8, max_length=100,
+        description="客户端幂等键（UUID 等），租户内唯一；重复上报返回首次结果不重复扣费",
+    )
+    command: str = Field(..., min_length=1, max_length=100, description="命令名，如 weixin_add_friend")
+    kind: Literal["action", "llm", "custom"] = Field("action", description="动作类别")
+    quantity: int = Field(1, ge=1, le=1000, description="次数（单价 × quantity 计费）")
+    arguments_summary: Optional[dict[str, Any]] = Field(
+        None, description="参数摘要（事实存档，进台账 detail.arguments；≤1000 字符截断）",
+    )
+    session_id: Optional[str] = Field(None, max_length=100, description="客户端本地会话标识（可选）")
+    occurred_at: Optional[str] = Field(
+        None, max_length=40,
+        description="事件真实发生时间 ISO 字符串（仅存档进 detail；计费时间轴以服务端接收时间为准）",
+    )
+    detail: Optional[dict[str, Any]] = Field(
+        None,
+        description="其它补充存档字段（进台账 detail，整体 >1500 字符丢弃；"
+                    "command/quantity 等计费事实键以服务端为准，传了也不会生效）",
+    )
+
+
+class UsageReportRequest(BaseModel):
+    reports: list[UsageReportItem] = Field(..., min_length=1, max_length=100)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _wrap_single(cls, data: Any) -> Any:
+        """兼容单条上报：直接传单个报告对象等价于 reports:[对象]。"""
+        if isinstance(data, dict) and "reports" not in data:
+            return {"reports": [data]}
+        return data
+
+
+def _report_unit_price(command: str, client_name: Optional[str]) -> float:
+    """价目匹配优先级：client_name:command（同命令按客户端差异化定价）> command > default。"""
+    cfg = settings.client_usage_report
+    prices = cfg.command_credit_prices
+    unit = None
+    if client_name:
+        unit = prices.get(f"{client_name}:{command}")
+    if unit is None:
+        unit = prices.get(command, cfg.default_credit_price)
+    try:
+        return max(0.0, float(unit))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+@router.post("/usage/report")
+async def report_usage(req: UsageReportRequest, binding: ClientBinding = Depends(_require_binding)):
+    """C 模式标准用量上报：本地自主执行的客户端按事实上报，服务端按价目表计费。
+
+    - payload 不含金额字段：金额 = 单价（服务端价目表）× quantity，客户端永远不上报金额
+    - client_ref_id 租户内幂等（唯一索引兜底）：重复上报返回首次结果，不重复扣费
+    - 批量 ≤100 条逐条处理，单条失败不影响其余（部分成功语义，逐条返回结果）
+    - 不做余额阻断：动作已在客户端本地发生，拒绝上报无法撤回，照常落账（余额可为负，
+      由充值/提醒机制兜底）
+    """
+    cfg = settings.client_usage_report
+    if not cfg.enabled:
+        raise HTTPException(status_code=404, detail="USAGE_REPORT_DISABLED")
+
+    client_name = binding.client_name or "unknown-client"
+    results: list[dict[str, Any]] = []
+    accepted = 0
+    for item in req.reports:
+        unit = _report_unit_price(item.command, client_name)
+        # Decimal 十进制计价防浮点错收：math.ceil(0.1*3*100)/100 会因二进制表示
+        # 多收一分（0.31），价目表是首个管理员可配任意小数单价 × quantity 的矩阵
+        cost = float(
+            (Decimal(str(unit)) * item.quantity).quantize(
+                Decimal("0.01"), rounding=ROUND_CEILING)
+        )
+        try:
+            r = ClientUsageLogDB.record_client_report(
+                tenant_id=binding.tenant_id,
+                binding_id=binding.binding_id,
+                client_name=client_name,
+                command=item.command,
+                kind=item.kind,
+                quantity=item.quantity,
+                credit_cost=cost,
+                client_ref_id=item.client_ref_id,
+                session_id=item.session_id,
+                arguments=item.arguments_summary,
+                occurred_at=item.occurred_at,
+                extra_detail=item.detail,
+            )
+            results.append({
+                "client_ref_id": item.client_ref_id,
+                "success": True,
+                "duplicate": r["duplicate"],
+                "credit_cost": r["credit_cost"],
+                "balance_after": r["balance_after"],
+            })
+            accepted += 1
+        except Exception as e:  # noqa: BLE001 单条失败隔离，不拖垮批次其余条目
+            logger.opt(exception=True).error(
+                f"后端日志：客户端上报计费落账失败 client={client_name} "
+                f"command={item.command} ref={item.client_ref_id}: {e}"
+            )
+            results.append({
+                "client_ref_id": item.client_ref_id,
+                "success": False,
+                "error": "RECORD_FAILED",
+            })
+    return {
+        "success": accepted == len(results),
+        "accepted": accepted,
+        "failed": len(results) - accepted,
+        "results": results,
+    }

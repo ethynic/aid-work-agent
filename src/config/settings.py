@@ -485,6 +485,25 @@ class BossToolBillingConfig(BaseModel):
     overlay_heal_price: float = 2.0
 
 
+class ClientUsageReportConfig(BaseModel):
+    """客户端通用用量上报（C 模式，客户端计费统一接入 P4，2026-09）
+
+    面向"本地自主执行、不经服务端下发"的未来客户端：客户端经
+    POST /api/client/v1/usage/report 上报事实（命令/参数摘要/次数），
+    金额由服务端按本价目表计算——客户端永远不上报金额（设计 §4.0/§4.4）。
+    幂等：client_ref_id 唯一索引（tenant + client_ref_id），重复上报返回首次结果。
+
+    - enabled: 总开关（默认关，有真实 C 模式客户端接入再开启）
+    - default_credit_price: 未列入 command_credit_prices 的命令单次价格（默认 0=免费）
+    - command_credit_prices: 命令单价（积分/次），key 匹配优先级
+      "client_name:command"（同命令按客户端差异化定价）> "command"；
+      quantity>1 时按 单价×数量 计费，ceil 到分
+    """
+    enabled: bool = False
+    default_credit_price: float = 0.0
+    command_credit_prices: Dict[str, float] = Field(default_factory=dict)
+
+
 class DesktopAgentConfig(BaseModel):
     """Desktop D1 is disabled until a strong server-side ticket secret is provided."""
     enabled: bool = False
@@ -514,6 +533,7 @@ class Settings(BaseModel):
     video_gen: VideoGenConfig = Field(default_factory=VideoGenConfig)
     client: ClientConfig = Field(default_factory=ClientConfig)
     boss_tool_billing: BossToolBillingConfig = Field(default_factory=BossToolBillingConfig)
+    client_usage_report: ClientUsageReportConfig = Field(default_factory=ClientUsageReportConfig)
     desktop_agent: DesktopAgentConfig = Field(default_factory=DesktopAgentConfig)
 
     # 认证相关配置（从环境变量加载）

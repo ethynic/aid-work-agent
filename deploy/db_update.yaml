@@ -12,3 +12,9 @@
   remark: "local_tool_invocations 增加 session_id：客户端计费台账归属会话（P2 客户端计费统一接入，write_result 计费时写入 client_usage_logs.session_id）"
   statements: |
     ALTER TABLE local_tool_invocations ADD COLUMN IF NOT EXISTS session_id TEXT;
+- datetime: "2026-09-01 17:10:00"
+  remark: "client_usage_logs 增加 client_ref_id（C 模式标准上报幂等键）+ 部分唯一索引（客户端计费统一接入 P4，设计 §4.4）"
+  statements: |
+    ALTER TABLE client_usage_logs ADD COLUMN IF NOT EXISTS client_ref_id TEXT;
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_client_usage_logs_tenant_ref
+        ON client_usage_logs (tenant_id, client_ref_id) WHERE client_ref_id IS NOT NULL;

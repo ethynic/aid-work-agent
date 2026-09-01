@@ -121,7 +121,7 @@ DB 层 `client_usage_logs.tenant_id` 近 14 天 **无一行 NULL**（写入侧 `
   "quantity": 1,
   "occurred_at": "2026-09-01T12:00:00+08:00",
   "session_id": "可选，客户端本地会话标识",
-  "detail": {"任意事实字段，≤2000 字符"}
+  "detail": {"补充存档字段，整体 >1500 字符丢弃；计费事实键以服务端为准"}
 }
 ```
 

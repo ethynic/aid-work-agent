@@ -514,6 +514,131 @@ class ClientUsageLogDB:
         return {"credit_cost": credit_cost, "balance_after": balance_after}
 
     @staticmethod
+    def record_client_report(
+        *,
+        tenant_id: str,
+        binding_id: str,
+        client_name: str,
+        command: str,
+        kind: str = "action",
+        quantity: int = 1,
+        credit_cost: float,
+        client_ref_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        arguments: Optional[dict] = None,
+        occurred_at: Optional[str] = None,
+        extra_detail: Optional[dict] = None,
+    ) -> dict[str, Any]:
+        """C 模式标准上报落账（幂等）：写 client_usage_logs + 同事务扣减租户余额。
+
+        客户端通用用量上报（P4 §4.4）：客户端只报事实（命令/参数摘要/次数），
+        金额由服务端价目表计算后经 credit_cost 传入。幂等：client_ref_id 在租户内
+        唯一（部分唯一索引兜底），重复上报返回首次结果且不重复扣费。
+        extra_detail 仅作补充存档且整体 ≤1500 字符（超长丢弃），事实保留键
+        （command/kind/quantity/arguments/client_ref_id/occurred_at）恒以服务端值为准，
+        客户端 extra_detail 无法覆盖（防审计对账被伪造字段误导）。
+
+        Returns:
+            {"credit_cost": float, "balance_after": Optional[float], "duplicate": bool}
+        """
+        credit_cost = math.ceil(float(credit_cost) * 100) / 100
+        if extra_detail:
+            try:
+                if len(json.dumps(extra_detail, ensure_ascii=False)) > 1500:
+                    extra_detail = {"_truncated": "detail 超长已丢弃"}
+            except (TypeError, ValueError):
+                extra_detail = None  # 不可序列化的补充字段直接丢弃，不影响落账
+        detail = json.dumps(
+            {
+                # 客户端补充字段在前，服务端事实保留键在后覆盖——客户端不可伪造计费事实
+                **(extra_detail or {}),
+                "command": command,
+                "kind": kind,
+                "quantity": quantity,
+                "arguments": _compact_arguments(arguments),
+                "client_ref_id": client_ref_id,
+                "occurred_at": occurred_at,
+                # C 模式无服务端用户身份：置 None 防客户端伪造 user_id 误导明细页归属
+                "user_id": None,
+            },
+            ensure_ascii=False,
+        )
+        stage = f"{client_name}_{kind}"[:50]
+        balance_after: Optional[float] = None
+
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+
+            if client_ref_id:
+                cursor.execute(
+                    """SELECT credit_cost FROM client_usage_logs
+                       WHERE tenant_id = %s AND client_ref_id = %s""",
+                    (tenant_id, client_ref_id),
+                )
+                existing = cursor.fetchone()
+                if existing:
+                    conn.commit()
+                    return {"credit_cost": float(existing["credit_cost"] or 0),
+                            "balance_after": None, "duplicate": True}
+
+            try:
+                cursor.execute(
+                    """INSERT INTO client_usage_logs
+                       (tenant_id, binding_id, client_name, session_id, client_ref_id,
+                        stage, status, model, provider, raw_credit_cost, credit_cost, detail)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                    (
+                        tenant_id, binding_id, client_name, session_id, client_ref_id,
+                        stage, "success", command, "client-report",
+                        credit_cost, credit_cost, detail,
+                    ),
+                )
+                if credit_cost > 0:
+                    cursor.execute(
+                        "UPDATE tenants SET credit_balance = credit_balance - %s "
+                        "WHERE tenant_id = %s RETURNING credit_balance",
+                        (credit_cost, tenant_id),
+                    )
+                    row = cursor.fetchone()
+                    if row and row["credit_balance"] is not None:
+                        balance_after = float(row["credit_balance"])
+                conn.commit()
+            except Exception as e:
+                # 并发同 ref_id 落到唯一索引：回滚后按幂等重复处理
+                # （pgcode 23505 = unique_violation，不依赖异常消息文案）
+                conn.rollback()
+                if client_ref_id and getattr(e, "pgcode", None) == "23505":
+                    cursor.execute(
+                        """SELECT credit_cost FROM client_usage_logs
+                           WHERE tenant_id = %s AND client_ref_id = %s""",
+                        (tenant_id, client_ref_id),
+                    )
+                    existing = cursor.fetchone()
+                    if existing:
+                        return {"credit_cost": float(existing["credit_cost"] or 0),
+                                "balance_after": None, "duplicate": True}
+                raise
+
+        if balance_after is None and credit_cost > 0:
+            # UPDATE tenants 影响 0 行：租户不存在（如测试租户污染），余额未扣——当场告警
+            logger.error(
+                f"后端日志：客户端上报计费扣减失败（租户不存在，余额未扣） "
+                f"tenant={tenant_id} command={command} ref={client_ref_id}"
+            )
+
+        try:
+            invalidate_tenant_cache(tenant_id)
+        except Exception as e:
+            logger.warning(f"客户端上报扣费后失效租户缓存失败 tenant={tenant_id}: {e}")
+
+        logger.info(
+            f"客户端上报计费 tenant={tenant_id} binding={binding_id} command={command} "
+            f"quantity={quantity} session={session_id} ref={client_ref_id} "
+            f"cost={credit_cost} balance_after={balance_after}"
+        )
+        return {"credit_cost": credit_cost, "balance_after": balance_after, "duplicate": False}
+
+    @staticmethod
     def record_non_llm_usage(
         *,
         tenant_id: str,

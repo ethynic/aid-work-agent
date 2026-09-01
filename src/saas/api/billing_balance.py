@@ -363,7 +363,7 @@ async def get_daily_usage_detail(
                     cl.model AS command,
                     NULLIF(cl.detail, '')::jsonb->'arguments' AS arguments
                 FROM client_usage_logs cl
-                LEFT JOIN users u2 ON u2.user_id = NULLIF(cl.detail, '')::jsonb->>'user_id'
+                LEFT JOIN users u2 ON u2.user_id = NULLIF(cl.detail, '')::jsonb->>'user_id' AND u2.tenant_id = cl.tenant_id
                 WHERE cl.tenant_id = %s AND DATE(cl.created_at) = %s AND cl.credit_cost > 0
             """
             merged_params = (tenant_id, date, tenant_id, date)

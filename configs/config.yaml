@@ -323,6 +323,18 @@ boss_tool_billing:
   overlay_heal_enabled: true
   overlay_heal_price: 2.0
 
+client_usage_report:
+  # 客户端通用用量上报（C 模式，2026-09 客户端计费统一接入 P4）：面向"本地自主执行、
+  # 不经服务端下发"的未来客户端，POST /api/client/v1/usage/report 上报事实（命令/参数
+  # 摘要/次数），金额由服务端按下表计算，客户端永远不上报金额；client_ref_id 幂等防重。
+  # 默认关闭：当前 boss（B 动作模式）与协会采集（A 代理模式）都不走此端点，有真实
+  # C 模式客户端接入再开启并配价。
+  enabled: false
+  default_credit_price: 0.0  # 未列出命令的单次价格（价格设 0 = 免费）
+  # command_credit_prices:
+  #   "my-client:weixin_add_friend": 1.0   # 带 client_name 前缀：同命令按客户端差异化定价
+  #   weixin_send_message: 0.5             # 纯命令名：所有客户端通用
+
 wecom:
   waiting_indicator:
     enabled: true
