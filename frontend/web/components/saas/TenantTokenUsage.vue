@@ -67,6 +67,11 @@
               </template>
               <template #session_count="{ row }">{{ row.session_count }}</template>
               <template #message_count="{ row }">{{ row.message_count }}</template>
+              <template #client_call_count="{ row }">
+                <span :title="row.client_credit_cost != null ? `客户端消耗 ${formatCredit(row.client_credit_cost)} 积分` : ''">
+                  {{ row.client_call_count || 0 }}
+                </span>
+              </template>
               <template #empty>暂无数据</template>
             </BaseTable>
           </div>
@@ -100,17 +105,30 @@
               <template #index="{ index }">
                 {{ (detailCurrentPage - 1) * detailPageSize + index + 1 }}
               </template>
+              <template #usage_type="{ row }">
+                <span v-if="row.usage_type === 'client'"
+                      class="text-xs px-1.5 py-0.5 rounded bg-primary-50 text-primary-600 border border-primary-200">客户端</span>
+                <span v-else class="text-xs text-muted">对话</span>
+              </template>
               <template #session_title="{ row }">
-                <span :title="row.session_title">{{ row.session_title }}</span>
+                <!-- client 行会话列改显来源（BOSS 工具/协会采集等 stage 标签） -->
+                <span v-if="row.usage_type === 'client'" class="text-xs text-default" :title="row.source_type">{{ row.source_type }}</span>
+                <span v-else :title="row.session_title">{{ row.session_title }}</span>
               </template>
               <template #channel_label="{ row }">
-                <span :title="row.channel_label || ''">{{ row.channel_label || '-' }}</span>
+                <!-- client 行来源已在会话列展示，渠道列避免重复 -->
+                <span v-if="row.usage_type === 'client'">-</span>
+                <span v-else :title="row.channel_label || ''">{{ row.channel_label || '-' }}</span>
               </template>
               <template #user_message="{ row }">
-                <span :title="row.user_message">{{ truncateText(row.user_message) }}</span>
+                <!-- client 行消息列改显命令名 -->
+                <span v-if="row.usage_type === 'client'" class="text-default font-medium" :title="row.command">{{ row.command || '-' }}</span>
+                <span v-else :title="row.user_message">{{ truncateText(row.user_message) }}</span>
               </template>
               <template #assistant_message="{ row }">
-                <span :title="row.assistant_message">{{ truncateText(row.assistant_message) }}</span>
+                <!-- client 行回复列改显参数摘要（JSON，悬停看全量） -->
+                <span v-if="row.usage_type === 'client'" class="text-xs text-muted" :title="row.arguments">{{ truncateText(row.arguments, 40) }}</span>
+                <span v-else :title="row.assistant_message">{{ truncateText(row.assistant_message) }}</span>
               </template>
               <template #model="{ row }">
                 <span :title="row.model">{{ row.model || '-' }}</span>
@@ -220,6 +238,7 @@ const columns = [
   { key: 'credit_cost', label: '消耗积分', width: '120px' },
   { key: 'session_count', label: '会话数', width: '100px' },
   { key: 'message_count', label: '消息数', width: '100px' },
+  { key: 'client_call_count', label: '客户端调用', width: '100px' },
 ]
 
 function seqNumber(index: number): number {
@@ -307,14 +326,16 @@ const bdDetailCols = [
   { key: 'bd_embedding', dataKey: 'embedding', label: '向量模型', width: '220px' },
 ]
 
-// 弹窗列定义：usage_breakdown 7 分项（未命中缓存输入/命中缓存输入/缓存创建输入/输出/视频模型/ASR/向量模型）仅平台管理员可见
+// 弹窗列定义：类型列区分智能体对话与客户端调用（P3 双表口径）；usage_breakdown 7 分项
+// （未命中缓存输入/命中缓存输入/缓存创建输入/输出/视频模型/ASR/向量模型）仅平台管理员可见
 const detailColumns = computed(() => {
   const cols: Array<{ key: string; label: string; width: string; tooltip?: (row: Record<string, any>) => string | undefined }> = [
     { key: 'index', label: '序号', width: '60px' },
+    { key: 'usage_type', label: '类型', width: '80px' },
     { key: 'created_at', label: '创建时间', width: '160px' },
-    { key: 'session_title', label: '会话标题', width: '180px' },
-    { key: 'user_message', label: '用户消息', width: '220px' },
-    { key: 'assistant_message', label: '智能体回复', width: '220px' },
+    { key: 'session_title', label: '会话/来源', width: '180px' },
+    { key: 'user_message', label: '消息/命令', width: '220px' },
+    { key: 'assistant_message', label: '回复/参数', width: '220px' },
     { key: 'user_display', label: '用户', width: '200px' },
     { key: 'channel_label', label: '渠道会话', width: '150px' },
     { key: 'source_type', label: '来源', width: '120px' },

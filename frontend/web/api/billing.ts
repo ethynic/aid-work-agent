@@ -95,12 +95,17 @@ export interface UsageItem {
   credit_cost: number
   session_count: number
   message_count: number
+  /** P3 双表口径：客户端调用（boss 工具/协会采集等 client_usage_logs 计费行） */
+  chat_credit_cost?: number
+  client_credit_cost?: number
+  client_call_count?: number
 }
 
 export interface UsageSummary {
   total_credit_cost: number
   total_session_count: number
   total_message_count: number
+  total_client_call_count?: number
 }
 
 export interface UsageResponse {
@@ -241,12 +246,17 @@ export interface BreakdownItem {
 
 export interface DailyUsageDetailItem {
   record_id: string
+  /** 行类型：chat=智能体对话（默认），client=客户端调用（boss 工具/协会采集等） */
+  usage_type?: 'chat' | 'client'
   session_id: string
   session_title: string
   user_display: string
   source_type: string
   user_message: string
   assistant_message: string
+  /** 仅 client 行：命令名与参数摘要（boss_filter 等；arguments 为 JSON 字符串） */
+  command?: string
+  arguments?: string
   // 以下字段仅平台管理员可见，租户管理员调用时不返回
   prompt_tokens?: number
   cached_input_tokens?: number

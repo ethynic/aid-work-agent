@@ -261,3 +261,77 @@ class TestBillingBalanceAPI:
             assert "payment_order_id" not in it
         # 至少一条 credits=1000
         assert any(it["credits"] == 1000 for it in items)
+
+
+class TestUsageUnionClientLogs:
+    """P3 双表口径：/usage 聚合并入 client_usage_logs 计费行（cost>0），遥测行不进"""
+
+    def test_usage_unions_client_usage_logs(self, temp_tenant_with_data):
+        from src.saas.api import billing_balance
+        from src.db.database import get_db_connection
+
+        tenant_id = temp_tenant_with_data
+        detail = ('{"invocation_id": "inv-1", "device_id": "dev-1", '
+                  '"command": "boss_filter", "user_id": "test_user"}')
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            # boss_tool 计费行 0.5 积分（带独立 session_id，验证 FILTER 后客户端行不占会话数）
+            cursor.execute(
+                """INSERT INTO client_usage_logs
+                   (tenant_id, binding_id, session_id, stage, status, model, provider,
+                    raw_credit_cost, credit_cost, detail)
+                   VALUES (%s, 'boss-local-runtime', 'sess_client_u1', 'boss_tool', 'success',
+                           'boss_filter', 'boss-recruiting', 0.5, 0.5, %s)""",
+                (tenant_id, detail),
+            )
+            # 遥测行 cost=0：不应进聚合
+            cursor.execute(
+                """INSERT INTO client_usage_logs
+                   (tenant_id, binding_id, session_id, stage, status, model, provider,
+                    raw_credit_cost, credit_cost, detail)
+                   VALUES (%s, 'cb_telemetry', NULL, 'log', 'success', NULL, NULL, 0, 0, '{}')""",
+                (tenant_id,),
+            )
+            conn.commit()
+
+        try:
+            def fake_require_admin(request):
+                return {"user_id": "test_user", "role": "tenant_admin", "tenant_id": tenant_id}
+
+            class FakeRequest:
+                pass
+
+            with patch("src.saas.api.billing_balance.require_admin", fake_require_admin), \
+                 patch("src.saas.api.billing_balance.settings") as mock_settings:
+                mock_settings.saas.enabled = True
+
+                import asyncio
+                response = asyncio.get_event_loop().run_until_complete(
+                    billing_balance.get_usage(
+                        FakeRequest(),
+                        date_from=None,
+                        date_to=None,
+                        session_id=None,
+                        model=None,
+                        page=1,
+                        page_size=20,
+                    )
+                )
+
+            assert response["success"] is True
+            items = response["items"]
+            # chat 5 + client 0.5，遥测 0 不计入
+            assert sum(it["credit_cost"] for it in items) == 5.5
+            today_item = items[0]  # 按日倒序，今天在前
+            assert today_item["chat_credit_cost"] == 5.0
+            assert today_item["client_credit_cost"] == 0.5
+            assert today_item["client_call_count"] == 1
+            summary = response["summary"]
+            assert summary["total_credit_cost"] == 5.5
+            assert summary["total_client_call_count"] == 1
+            assert summary["total_session_count"] == 1  # 客户端行不占会话数
+        finally:
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM client_usage_logs WHERE tenant_id = %s", (tenant_id,))
+                conn.commit()

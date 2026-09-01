@@ -928,3 +928,96 @@ class TestDailyUsageDetailAPI:
             if it["source_type"] == "chat":
                 assert it["channel_chat_id"] is None
                 assert it["channel_label"] is None, "web 会话 channel_label 应为 None（前端显示 -）"
+
+
+class TestClientUsageRowsMerged:
+    """P3 双类型明细：client_usage_logs 计费行并入每日明细（usage_type='client'），
+    遥测行（cost=0）不进；client 行不挂 token/breakdown 字段"""
+
+    def test_client_rows_included_with_command_arguments(self, temp_tenant_for_detail):
+        from src.saas.api import billing_balance
+        from src.db.database import get_db_connection
+
+        tenant_id = temp_tenant_for_detail
+        today = datetime.now().strftime("%Y-%m-%d")
+        detail = ('{"invocation_id": "inv-9", "device_id": "dev-9", "command": "boss_filter", '
+                  '"arguments": {"salary": "3-5K", "educations": ["本科"]}, '
+                  '"user_id": "detail_test_u9"}')
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """INSERT INTO client_usage_logs
+                   (tenant_id, binding_id, session_id, stage, status, model, provider,
+                    raw_credit_cost, credit_cost, detail)
+                   VALUES (%s, 'boss-local-runtime', 'sess_client_1', 'boss_tool', 'success',
+                           'boss_filter', 'boss-recruiting', 0.5, 0.5, %s)""",
+                (tenant_id, detail),
+            )
+            # 遥测行 cost=0：不应并入明细
+            cursor.execute(
+                """INSERT INTO client_usage_logs
+                   (tenant_id, binding_id, session_id, stage, status, model, provider,
+                    raw_credit_cost, credit_cost, detail)
+                   VALUES (%s, 'cb_t', 'sess_x', 'log', 'success', NULL, NULL, 0, 0, '{}')""",
+                (tenant_id,),
+            )
+            conn.commit()
+
+        try:
+            _insert_chat_record(
+                tenant_id=tenant_id,
+                user_id=f"detail_test_{uuid.uuid4().hex[:6]}",
+                session_id=f"sess_{uuid.uuid4().hex[:8]}",
+                credit_cost=2,
+            )
+
+            def fake_require_admin(request):
+                return {
+                    "user_id": "platform_admin_xxx",
+                    "role": "platform_admin",
+                    "tenant_id": tenant_id,
+                }
+
+            class FakeRequest:
+                pass
+
+            with patch("src.saas.api.billing_balance.require_admin", fake_require_admin), \
+                 patch("src.saas.api.billing_balance.settings") as mock_settings:
+                mock_settings.saas.enabled = True
+
+                import asyncio
+                response = asyncio.get_event_loop().run_until_complete(
+                    billing_balance.get_daily_usage_detail(
+                        FakeRequest(),
+                        date=today,
+                        page=1,
+                        page_size=20,
+                    )
+                )
+
+            assert response["success"] is True
+            items = response["items"]
+            client_items = [it for it in items if it.get("usage_type") == "client"]
+            chat_items = [it for it in items if it.get("usage_type") == "chat"]
+            assert len(client_items) == 1, "只有 cost>0 的 client 行并入，遥测行不进"
+            assert len(chat_items) >= 1, "chat 行仍应返回"
+            assert response["total"] == len(items)
+
+            ci = client_items[0]
+            assert ci["record_id"].startswith("client-"), "client 行 record_id 加前缀防撞 key"
+            assert ci["command"] == "boss_filter"
+            assert ci["source_type"] == "BOSS 工具", "boss_tool stage 应映射为中文标签"
+            assert json.loads(ci["arguments"]) == {"salary": "3-5K", "educations": ["本科"]}
+            assert ci["session_id"] == "sess_client_1"
+            assert ci["user_display"] == "detail_test_u9", "无 users 行时 user_display 兜底 detail.user_id"
+            assert "prompt_tokens" not in ci, "client 行不挂 token 字段"
+            assert "breakdown_items" not in ci, "client 行不挂 breakdown 分项"
+            # chat 行仍带完整字段
+            ch = chat_items[0]
+            assert ch["model"] == "test-model"
+            assert "command" not in ch
+        finally:
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM client_usage_logs WHERE tenant_id = %s", (tenant_id,))
+                conn.commit()

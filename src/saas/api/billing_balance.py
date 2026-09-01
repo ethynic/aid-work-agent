@@ -9,6 +9,7 @@
 权限：tenant_admin / user / platform_admin（代管理需带 X-Tenant-Id）
 """
 
+import json
 from datetime import datetime
 from typing import Optional
 
@@ -76,7 +77,9 @@ async def get_usage(
 ):
     """用量明细（按日聚合，含 credit_cost）
 
-    按 DATE(created_at) 分组，返回每日消耗积分、会话数、消息数。
+    双表口径（P3 §4.3）：chat_records（智能体对话）+ client_usage_logs（客户端计费行，
+    credit_cost>0）UNION 后按 DATE(created_at) 分组，返回每日消耗积分、会话数、消息数、
+    客户端调用数（及 chat/client 分项消耗）。
     """
     if not settings.saas.enabled:
         return {"success": False, "message": "未启用 SaaS 模式无法访问"}
@@ -87,6 +90,9 @@ async def get_usage(
         return {"success": False, "message": "未关联租户"}
 
     try:
+        # 双表口径（P3 客户端计费统一接入 §4.3）：智能体对话 chat_records + 客户端计费
+        # client_usage_logs UNION 后按日聚合。此前只聚 chat_records，boss 工具/协会 LLM
+        # 的客户端消耗不上页面（与日均消耗的双表口径自相矛盾）。credit_cost>0 排除遥测行。
         where_clauses: list = ["tenant_id = %s"]
         params: list = [tenant_id]
         if date_from:
@@ -101,7 +107,35 @@ async def get_usage(
         if model:
             where_clauses.append("model = %s")
             params.append(model)
-        where_sql = " AND ".join(where_clauses)
+        chat_where_sql = " AND ".join(where_clauses)
+
+        # 客户端台账侧等价过滤（model 列存命令名，boss_filter/boss_greet 等）
+        client_where_clauses: list = ["tenant_id = %s", "credit_cost > 0"]
+        client_params: list = [tenant_id]
+        if date_from:
+            client_where_clauses.append("created_at >= %s")
+            client_params.append(f"{date_from} 00:00:00")
+        if date_to:
+            client_where_clauses.append("created_at <= %s")
+            client_params.append(f"{date_to} 23:59:59")
+        if session_id:
+            client_where_clauses.append("session_id = %s")
+            client_params.append(session_id)
+        if model:
+            client_where_clauses.append("model = %s")
+            client_params.append(model)
+        client_where_sql = " AND ".join(client_where_clauses)
+
+        union_sql = f"""
+            SELECT created_at, credit_cost, session_id, 'chat' AS usage_type
+            FROM chat_records
+            WHERE {chat_where_sql}
+            UNION ALL
+            SELECT created_at, credit_cost, session_id, 'client' AS usage_type
+            FROM client_usage_logs
+            WHERE {client_where_sql}
+        """
+        union_params = (*params, *client_params)
 
         offset = (page - 1) * page_size
         with get_db_connection() as conn:
@@ -110,59 +144,62 @@ async def get_usage(
             cursor.execute(
                 f"""
                 SELECT COUNT(*) AS cnt FROM (
-                    SELECT 1 FROM chat_records
-                    WHERE {where_sql}
-                    GROUP BY DATE(created_at)
+                    SELECT 1 FROM ({union_sql}) t GROUP BY DATE(created_at)
                 ) AS grouped
                 """,
-                params,
+                union_params,
             )
             total = int(cursor.fetchone()["cnt"] or 0)
 
-            # 按日聚合
+            # 按日聚合：会话数/消息数只统计智能体对话，客户端调用单列
             cursor.execute(
                 f"""
                 SELECT
                     DATE(created_at) AS date,
                     COALESCE(SUM(credit_cost), 0) AS credit_cost,
-                    COUNT(DISTINCT session_id) AS session_count,
-                    COUNT(*) AS message_count
-                FROM chat_records
-                WHERE {where_sql}
+                    COALESCE(SUM(credit_cost) FILTER (WHERE usage_type = 'chat'), 0) AS chat_credit_cost,
+                    COALESCE(SUM(credit_cost) FILTER (WHERE usage_type = 'client'), 0) AS client_credit_cost,
+                    COUNT(DISTINCT session_id) FILTER (WHERE usage_type = 'chat') AS session_count,
+                    COUNT(*) FILTER (WHERE usage_type = 'chat') AS message_count,
+                    COUNT(*) FILTER (WHERE usage_type = 'client') AS client_call_count
+                FROM ({union_sql}) t
                 GROUP BY DATE(created_at)
                 ORDER BY DATE(created_at) DESC
                 LIMIT %s OFFSET %s
                 """,
-                (*params, page_size, offset),
+                (*union_params, page_size, offset),
             )
             items = [
                 {
-                    "date": str(row["date"]) if row.get("date") else None,
+                    "date": str(row.get("date")) if row.get("date") else None,
                     "credit_cost": float(row.get("credit_cost") or 0),
+                    "chat_credit_cost": float(row.get("chat_credit_cost") or 0),
+                    "client_credit_cost": float(row.get("client_credit_cost") or 0),
                     "session_count": int(row.get("session_count") or 0),
                     "message_count": int(row.get("message_count") or 0),
+                    "client_call_count": int(row.get("client_call_count") or 0),
                 }
                 for row in cursor.fetchall()
             ]
 
             # 全量汇总（不受分页影响，与 items 列表使用相同筛选条件）
-            # 单独 COUNT/SUM 查询，避免窗口函数带来的复杂度
             cursor.execute(
                 f"""
                 SELECT
                     COALESCE(SUM(credit_cost), 0) AS total_credit_cost,
-                    COUNT(DISTINCT session_id) AS total_session_count,
-                    COUNT(*) AS total_message_count
-                FROM chat_records
-                WHERE {where_sql}
+                    COUNT(DISTINCT session_id) FILTER (WHERE usage_type = 'chat') AS total_session_count,
+                    COUNT(*) FILTER (WHERE usage_type = 'chat') AS total_message_count,
+                    COUNT(*) FILTER (WHERE usage_type = 'client') AS total_client_call_count
+                FROM ({union_sql}) t
                 """,
-                params,
+                union_params,
             )
             summary_row = cursor.fetchone() or {}
             summary = {
                 "total_credit_cost": float(summary_row.get("total_credit_cost") or 0),
                 "total_session_count": int(summary_row.get("total_session_count") or 0),
                 "total_message_count": int(summary_row.get("total_message_count") or 0),
+                "total_client_call_count": int(summary_row.get("total_client_call_count") or 0),
             }
 
         return {
@@ -216,11 +253,13 @@ async def get_daily_usage_detail(
     page: int = Query(1, ge=1, description="页码，从 1 开始"),
     page_size: int = Query(20, ge=1, le=200, description="每页记录数"),
 ):
-    """查询某日 chat_records 明细（平台管理员 + 租户管理员可访问）
+    """查询某日用量明细，chat（智能体对话）+ client（客户端调用）双类型行
+    （平台管理员 + 租户管理员可访问）
 
-    返回字段：record_id、session_id、session_title（JOIN chat_sessions）、
-    user_display（JOIN users，含 nickname/username/phone）、source_type、
-    prompt_tokens、cached_input_tokens、completion_tokens、credit_cost、created_at
+    返回字段：record_id、usage_type（chat/client）、session_id、session_title
+    （JOIN chat_sessions，client 行为 stage 中文标签）、user_display（JOIN users）、
+    source_type、user_message、assistant_message、credit_cost、created_at；
+    client 行附 command/arguments（取自 detail），不返回 token/breakdown 字段
 
     权限：platform_admin + tenant_admin。
     - 平台管理员需带 X-Tenant-Id 代管理目标租户，可看到全部字段。
@@ -255,23 +294,20 @@ async def get_daily_usage_detail(
         with get_db_connection() as conn:
             cursor = conn.cursor()
 
-            # 总数
-            cursor.execute(
-                """SELECT COUNT(*) AS cnt FROM chat_records
-                   WHERE tenant_id = %s AND DATE(created_at) = %s""",
-                (tenant_id, date),
-            )
-            total = int(cursor.fetchone()["cnt"] or 0)
-
             # 明细（LEFT JOIN users / chat_sessions / channel_sessions，容忍 user_id/session_id 缺失）
             # users 表 nickname 字段：渠道用户（wecom_kf 等）常无 phone、username 是系统生成 ID，
             # nickname 才是可读名；web 端用户通常有 username + phone。三种字段都取，后端拼好展示字符串
             # session_title：web 端会话在 chat_sessions，渠道会话在 channel_sessions（按规范分离），
             # 用 COALESCE 取非空标题，避免渠道会话标题显示空
-            cursor.execute(
-                """
+            #
+            # 双类型明细（P3 客户端计费统一接入 §4.3）：chat（智能体对话）+ client（客户端计费行，
+            # credit_cost>0 排除遥测行）。client 行 source_type=stage 标签（boss_tool→BOSS 工具），
+            # command/arguments 取自 detail，用户经 detail->>'user_id' 反查 users。两子查询列按位对齐，
+            # record_id 加 'client-' 前缀防与 chat record_id 撞 key。
+            merged_sql = """
                 SELECT
                     cr.record_id,
+                    cr.created_at,
                     cr.session_id,
                     COALESCE(cs.title, chs.title) AS session_title,
                     cr.user_id,
@@ -289,16 +325,59 @@ async def get_daily_usage_detail(
                     cr.usage_breakdown,
                     chs.channel_chat_id,
                     chs.channel_type,
-                    cr.created_at
+                    'chat' AS usage_type,
+                    NULL AS command,
+                    NULL AS arguments
                 FROM chat_records cr
                 LEFT JOIN users u ON u.user_id = cr.user_id
                 LEFT JOIN chat_sessions cs ON cs.session_id = cr.session_id
                 LEFT JOIN channel_sessions chs ON chs.session_id = cr.session_id
                 WHERE cr.tenant_id = %s AND DATE(cr.created_at) = %s
-                ORDER BY cr.created_at DESC
-                LIMIT %s OFFSET %s
-                """,
-                (tenant_id, date, page_size, offset),
+                UNION ALL
+                SELECT
+                    ('client-' || cl.id::TEXT) AS record_id,
+                    cl.created_at,
+                    cl.session_id,
+                    NULL AS session_title,
+                    NULLIF(cl.detail, '')::jsonb->>'user_id' AS user_id,
+                    u2.username,
+                    u2.phone,
+                    u2.nickname,
+                    CASE cl.stage
+                        WHEN 'boss_tool' THEN 'BOSS 工具'
+                        WHEN 'llm' THEN '客户端 LLM'
+                        WHEN 'ocr' THEN 'OCR 识别'
+                        ELSE cl.stage
+                    END AS source_type,
+                    NULL AS user_message,
+                    NULL AS assistant_message,
+                    NULL AS prompt_tokens,
+                    NULL AS cached_input_tokens,
+                    NULL AS completion_tokens,
+                    cl.credit_cost,
+                    cl.model,
+                    NULL AS usage_breakdown,
+                    NULL AS channel_chat_id,
+                    NULL AS channel_type,
+                    'client' AS usage_type,
+                    cl.model AS command,
+                    NULLIF(cl.detail, '')::jsonb->'arguments' AS arguments
+                FROM client_usage_logs cl
+                LEFT JOIN users u2 ON u2.user_id = NULLIF(cl.detail, '')::jsonb->>'user_id'
+                WHERE cl.tenant_id = %s AND DATE(cl.created_at) = %s AND cl.credit_cost > 0
+            """
+            merged_params = (tenant_id, date, tenant_id, date)
+
+            # 总数（chat + client 两类行）
+            cursor.execute(
+                f"SELECT COUNT(*) AS cnt FROM ({merged_sql}) merged",
+                merged_params,
+            )
+            total = int(cursor.fetchone()["cnt"] or 0)
+
+            cursor.execute(
+                f"SELECT * FROM ({merged_sql}) merged ORDER BY created_at DESC LIMIT %s OFFSET %s",
+                (*merged_params, page_size, offset),
             )
             rows = cursor.fetchall()
             items = []
@@ -329,8 +408,10 @@ async def get_daily_usage_detail(
                     user_display = main_name
                 channel_chat_id = r.get("channel_chat_id")
                 channel_type = r.get("channel_type")
+                usage_type = r.get("usage_type") or "chat"
                 items.append({
                     "record_id": r.get("record_id"),
+                    "usage_type": usage_type,
                     "session_id": r.get("session_id"),
                     "session_title": r.get("session_title") or "-",
                     "user_display": user_display,
@@ -344,8 +425,16 @@ async def get_daily_usage_detail(
                     "created_at": r.get("created_at").strftime("%Y-%m-%d %H:%M:%S")
                         if r.get("created_at") else None,
                 })
-                # token 三列 + usage_breakdown 7 分项仅平台管理员可见，租户管理员不返回
-                if reveal_tokens:
+                # 客户端行附加命令/参数（arguments 从 jsonb 来已是 dict/list，序列化为字符串供前端直接展示）
+                if usage_type == "client":
+                    args_val = r.get("arguments")
+                    if isinstance(args_val, (dict, list)):
+                        args_val = json.dumps(args_val, ensure_ascii=False)
+                    items[-1]["command"] = r.get("command")
+                    items[-1]["arguments"] = args_val
+                # token 三列 + usage_breakdown 7 分项仅平台管理员可见，租户管理员不返回；
+                # client 行无 token/breakdown（命令计费与 token 无关），不挂这些键
+                if reveal_tokens and usage_type == "chat":
                     items[-1]["prompt_tokens"] = int(r.get("prompt_tokens") or 0)
                     items[-1]["cached_input_tokens"] = int(r.get("cached_input_tokens") or 0)
                     items[-1]["completion_tokens"] = int(r.get("completion_tokens") or 0)
