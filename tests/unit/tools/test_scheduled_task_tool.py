@@ -1,8 +1,11 @@
 """
-CreateScheduledTaskTool 单元测试
+CreateScheduledTaskTool / ManageScheduledTaskTool 单元测试
 
 验证 time_config 嵌套 dict 内部数值字段（interval_hours/hour/minute/day）
 以字符串传入时被强转为 int，防止字符串乘法与 :02d 格式化崩溃。
+
+进入业务分支的用例统一携带可信租户上下文（tenant_id="tenant_a"）：
+SaaS 部署下缺租户按安全设计 fail-closed 拒绝（该行为由专项用例覆盖）。
 """
 from unittest.mock import AsyncMock, MagicMock, patch
 import asyncio
@@ -52,7 +55,9 @@ async def test_interval_hours_string_coerced_to_int():
     patches, create_mock, dry_run_mock = _patch_deps(task_dict)
 
     try:
-        with tool_execution_scope(ToolExecutionContext(user_id="u1", session_id="session_1")):
+        with tool_execution_scope(
+            ToolExecutionContext(user_id="u1", session_id="session_1", tenant_id="tenant_a")
+        ):
             result = await tool.execute(
                 name="定时检查", task_prompt="执行检查",
                 schedule_type="interval", time_config={"interval_hours": "2"},
@@ -66,8 +71,11 @@ async def test_interval_hours_string_coerced_to_int():
     call_kwargs = create_mock.call_args.kwargs
     assert call_kwargs["interval_seconds"] == 7200
     assert isinstance(call_kwargs["interval_seconds"], int)
-    # 试执行身份租户与创建落库租户一致（非 SaaS 部署无租户语义 → ''）
-    assert dry_run_mock.await_args.kwargs["tenant_id"] == call_kwargs["tenant_id"] == ""
+    # 落库身份来自可信上下文：user_id + tenant_id 成对
+    assert call_kwargs["user_id"] == "u1"
+    assert call_kwargs["tenant_id"] == "tenant_a"
+    # 试执行身份租户与创建落库租户一致且同源
+    assert dry_run_mock.await_args.kwargs["tenant_id"] == call_kwargs["tenant_id"]
     # 调度描述不再出现字符串乘法痕迹
     assert "每隔 2 小时" in result["schedule_description"]
 
@@ -77,10 +85,12 @@ async def test_hour_minute_string_does_not_crash_format():
     """hour/minute 以字符串传入时 :02d 格式化不再抛 ValueError"""
     tool = _make_tool()
     task_dict = {"task_id": "t2", "next_run_at": None}
-    patches, _, _ = _patch_deps(task_dict)
+    patches, create_mock, _ = _patch_deps(task_dict)
 
     try:
-        with tool_execution_scope(ToolExecutionContext(user_id="u1", session_id="session_1")):
+        with tool_execution_scope(
+            ToolExecutionContext(user_id="u1", session_id="session_1", tenant_id="tenant_a")
+        ):
             result = await tool.execute(
                 name="每日报告", task_prompt="生成日报",
                 schedule_type="daily", time_config={"hour": "9", "minute": "30"},
@@ -90,6 +100,9 @@ async def test_hour_minute_string_does_not_crash_format():
             p.stop()
 
     assert result["success"] is True
+    # 落库身份来自可信上下文：user_id + tenant_id 成对
+    assert create_mock.call_args.kwargs["user_id"] == "u1"
+    assert create_mock.call_args.kwargs["tenant_id"] == "tenant_a"
     assert "每天 09:30" in result["schedule_description"]
 
 
@@ -98,10 +111,12 @@ async def test_invalid_numeric_value_falls_back_to_default():
     """非法数值（hour="abc"）回退默认 9，不崩溃"""
     tool = _make_tool()
     task_dict = {"task_id": "t3", "next_run_at": None}
-    patches, _, _ = _patch_deps(task_dict)
+    patches, create_mock, _ = _patch_deps(task_dict)
 
     try:
-        with tool_execution_scope(ToolExecutionContext(user_id="u1", session_id="session_1")):
+        with tool_execution_scope(
+            ToolExecutionContext(user_id="u1", session_id="session_1", tenant_id="tenant_a")
+        ):
             result = await tool.execute(
                 name="每日报告", task_prompt="生成日报",
                 schedule_type="daily", time_config={"hour": "abc"},
@@ -111,6 +126,9 @@ async def test_invalid_numeric_value_falls_back_to_default():
             p.stop()
 
     assert result["success"] is True
+    # 落库身份来自可信上下文：user_id + tenant_id 成对
+    assert create_mock.call_args.kwargs["user_id"] == "u1"
+    assert create_mock.call_args.kwargs["tenant_id"] == "tenant_a"
     assert "每天 09:00" in result["schedule_description"]
 
 
@@ -127,7 +145,7 @@ async def test_concurrent_sessions_do_not_cross_identity():
         return {"success": True, "result": "ok"}
 
     def create(**kwargs):
-        created.append((kwargs["user_id"], kwargs["session_id"]))
+        created.append((kwargs["user_id"], kwargs["tenant_id"], kwargs["session_id"]))
         return {"task_id": kwargs["user_id"], "next_run_at": None}
 
     with (
@@ -140,13 +158,16 @@ async def test_concurrent_sessions_do_not_cross_identity():
                 "create_scheduled_task",
                 {"name": user, "task_prompt": "检查", "schedule_type": "daily",
                  "time_config": {"hour": 9}},
-                context=ToolExecutionContext(user_id=user, session_id=session),
+                context=ToolExecutionContext(
+                    user_id=user, session_id=session, tenant_id="tenant_a"
+                ),
             )
             for user, session in (("user-a", "session-a"), ("user-b", "session-b"))
         ))
 
+    # 并发会话身份不串：user/session 成对匹配，且落库租户同为可信上下文租户
     assert set(created) == {
-        ("user-a", "session-a"), ("user-b", "session-b")
+        ("user-a", "tenant_a", "session-a"), ("user-b", "tenant_a", "session-b")
     }
 
 
@@ -157,13 +178,20 @@ async def test_manage_task_rejects_other_user_before_update():
         patch(
             "src.scheduler.db.ScheduledTaskDB.get_by_id",
             return_value={"task_id": "task-b", "user_id": "user-b"},
-        ),
+        ) as get_by_id_mock,
         patch("src.scheduler.db.ScheduledTaskDB.update_status") as update_status,
-        tool_execution_scope(ToolExecutionContext(user_id="user-a")),
+        tool_execution_scope(
+            ToolExecutionContext(user_id="user-a", tenant_id="tenant_a")
+        ),
     ):
         result = await tool.execute(action="pause", task_id="task-b")
 
     assert result["permission_denied"] is True
+    # 属主校验条件进查询本身：task_id + 租户 + 用户成对传给 get_by_id
+    assert get_by_id_mock.call_args.args == ("task-b",)
+    assert get_by_id_mock.call_args.kwargs == {
+        "tenant_id": "tenant_a", "user_id": "user-a"
+    }
     update_status.assert_not_called()
 
 
@@ -174,12 +202,17 @@ async def test_manage_task_does_not_expose_internal_exception():
         patch(
             "src.scheduler.db.ScheduledTaskDB.list_by_user",
             side_effect=RuntimeError("database password leaked"),
+        ) as list_mock,
+        tool_execution_scope(
+            ToolExecutionContext(user_id="user-a", tenant_id="tenant_a")
         ),
-        tool_execution_scope(ToolExecutionContext(user_id="user-a")),
     ):
         result = await tool.execute(action="list")
 
     assert result == {"success": False, "error": "操作失败"}
+    # 异常发生在带租户过滤的列表查询上（真正进入业务分支）
+    assert list_mock.call_args.args == ("user-a",)
+    assert list_mock.call_args.kwargs == {"tenant_id": "tenant_a"}
 
 
 @pytest.mark.asyncio
@@ -188,18 +221,17 @@ async def test_create_dry_run_failure_debug_sanitized():
     from src.scheduler.executor import ScheduledTaskExecutor
 
     tool = _make_tool()
+    dry_run_mock = AsyncMock(return_value={
+        "success": False, "result": "",
+        "error": "认证失败 api_key=sk-leak-99 已拒绝",
+    })
     with (
-        patch("src.scheduler.db.ScheduledTaskDB.count_by_user", return_value=0),
-        patch.object(
-            ScheduledTaskExecutor,
-            "dry_run",
-            AsyncMock(return_value={
-                "success": False, "result": "",
-                "error": "认证失败 api_key=sk-leak-99 已拒绝",
-            }),
-        ),
+        patch("src.scheduler.db.ScheduledTaskDB.count_by_user", return_value=0) as count_mock,
+        patch.object(ScheduledTaskExecutor, "dry_run", dry_run_mock),
         patch("src.scheduler.db.ScheduledTaskDB.create") as create_mock,
-        tool_execution_scope(ToolExecutionContext(user_id="user-a")),
+        tool_execution_scope(
+            ToolExecutionContext(user_id="user-a", tenant_id="tenant_a")
+        ),
     ):
         result = await tool.execute(
             name="每日报告", task_prompt="生成日报",
@@ -209,6 +241,10 @@ async def test_create_dry_run_failure_debug_sanitized():
     assert result["success"] is False
     assert "sk-leak-99" not in result["debug"]
     assert "api_key=***" in result["debug"]
+    # 真正进入试执行分支：配额查询与试执行身份均携带可信租户
+    assert count_mock.call_args.args == ("user-a", "active")
+    assert count_mock.call_args.kwargs == {"tenant_id": "tenant_a"}
+    assert dry_run_mock.await_args.kwargs["tenant_id"] == "tenant_a"
     create_mock.assert_not_called()
 
 
@@ -218,15 +254,14 @@ async def test_create_dry_run_exception_debug_sanitized():
     from src.scheduler.executor import ScheduledTaskExecutor
 
     tool = _make_tool()
+    dry_run_mock = AsyncMock(side_effect=RuntimeError('连接失败 password="hunter-xy 未闭合'))
     with (
-        patch("src.scheduler.db.ScheduledTaskDB.count_by_user", return_value=0),
-        patch.object(
-            ScheduledTaskExecutor,
-            "dry_run",
-            AsyncMock(side_effect=RuntimeError('连接失败 password="hunter-xy 未闭合')),
-        ),
+        patch("src.scheduler.db.ScheduledTaskDB.count_by_user", return_value=0) as count_mock,
+        patch.object(ScheduledTaskExecutor, "dry_run", dry_run_mock),
         patch("src.scheduler.db.ScheduledTaskDB.create") as create_mock,
-        tool_execution_scope(ToolExecutionContext(user_id="user-a")),
+        tool_execution_scope(
+            ToolExecutionContext(user_id="user-a", tenant_id="tenant_a")
+        ),
     ):
         result = await tool.execute(
             name="每日报告", task_prompt="生成日报",
@@ -236,6 +271,10 @@ async def test_create_dry_run_exception_debug_sanitized():
     assert result["success"] is False
     assert "hunter-xy" not in result["debug"]
     assert "password=***" in result["debug"]
+    # 真正进入试执行分支：配额查询与试执行身份均携带可信租户
+    assert count_mock.call_args.args == ("user-a", "active")
+    assert count_mock.call_args.kwargs == {"tenant_id": "tenant_a"}
+    assert dry_run_mock.await_args.kwargs["tenant_id"] == "tenant_a"
     create_mock.assert_not_called()
 
 
@@ -356,16 +395,27 @@ async def test_manage_view_logs_masks_historical_plaintext():
         patch(
             "src.scheduler.db.ScheduledTaskDB.get_by_id",
             return_value={"task_id": "task-a", "user_id": "user-a"},
-        ),
+        ) as get_by_id_mock,
         patch(
             "src.scheduler.db.ScheduledTaskLogDB.list_by_task",
             return_value=historical_logs,
+        ) as list_logs_mock,
+        tool_execution_scope(
+            ToolExecutionContext(user_id="user-a", tenant_id="tenant_a")
         ),
-        tool_execution_scope(ToolExecutionContext(user_id="user-a")),
     ):
         result = await tool.execute(action="view_logs", task_id="task-a")
 
     assert result["success"] is True
+    # 真正执行到日志查询：任务属主校验与日志查询均带租户+用户双层条件
+    assert get_by_id_mock.call_args.args == ("task-a",)
+    assert get_by_id_mock.call_args.kwargs == {
+        "tenant_id": "tenant_a", "user_id": "user-a"
+    }
+    assert list_logs_mock.call_args.args == ("task-a", 20)
+    assert list_logs_mock.call_args.kwargs == {
+        "tenant_id": "tenant_a", "user_id": "user-a"
+    }
     message = result["message"]
     assert "hunter2@prod" not in message
     assert "sk-live-42" not in message
@@ -390,16 +440,26 @@ async def test_manage_view_logs_truncation_never_leaks_plaintext():
         patch(
             "src.scheduler.db.ScheduledTaskDB.get_by_id",
             return_value={"task_id": "task-a", "user_id": "user-a"},
-        ),
+        ) as get_by_id_mock,
         patch(
             "src.scheduler.db.ScheduledTaskLogDB.list_by_task",
             return_value=logs,
+        ) as list_logs_mock,
+        tool_execution_scope(
+            ToolExecutionContext(user_id="user-a", tenant_id="tenant_a")
         ),
-        tool_execution_scope(ToolExecutionContext(user_id="user-a")),
     ):
         result = await tool.execute(action="view_logs", task_id="task-a")
 
     assert result["success"] is True
+    # 真正执行到日志查询：属主校验与日志查询均带租户+用户条件
+    assert get_by_id_mock.call_args.kwargs == {
+        "tenant_id": "tenant_a", "user_id": "user-a"
+    }
+    assert list_logs_mock.call_args.args == ("task-a", 20)
+    assert list_logs_mock.call_args.kwargs == {
+        "tenant_id": "tenant_a", "user_id": "user-a"
+    }
     assert "SSS" not in result["message"]
     assert "password=***" in result["message"]
 
@@ -420,14 +480,24 @@ async def test_manage_view_logs_idempotent_on_already_sanitized_text():
         patch(
             "src.scheduler.db.ScheduledTaskDB.get_by_id",
             return_value={"task_id": "task-a", "user_id": "user-a"},
-        ),
+        ) as get_by_id_mock,
         patch(
             "src.scheduler.db.ScheduledTaskLogDB.list_by_task",
             return_value=logs,
+        ) as list_logs_mock,
+        tool_execution_scope(
+            ToolExecutionContext(user_id="user-a", tenant_id="tenant_a")
         ),
-        tool_execution_scope(ToolExecutionContext(user_id="user-a")),
     ):
         result = await tool.execute(action="view_logs", task_id="task-a")
 
     assert result["success"] is True
+    # 真正执行到日志查询：属主校验与日志查询均带租户+用户条件
+    assert get_by_id_mock.call_args.kwargs == {
+        "tenant_id": "tenant_a", "user_id": "user-a"
+    }
+    assert list_logs_mock.call_args.args == ("task-a", 20)
+    assert list_logs_mock.call_args.kwargs == {
+        "tenant_id": "tenant_a", "user_id": "user-a"
+    }
     assert "错误: 登录失败 password=*** x" in result["message"]

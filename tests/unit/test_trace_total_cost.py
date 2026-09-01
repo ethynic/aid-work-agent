@@ -8,6 +8,8 @@ obs_traces.total_cost 观测成本闭环单元测试（不依赖 PG，mock 连�
 4. 重复回填：幂等（第二次 UPDATE 同值，不登记 pending）
 5. 失败降级：update 抛异常时 save() 主流程不受影响、返回值不变、降级日志无敏感值
 6. 有界性：pending 队列超界时按插入顺序丢弃最旧条目
+7. 单调性：所有写入/合并点只增不减，迟到的低值或 0 不得回退已落地高值
+   （数据库 UPSERT/UPDATE 用 GREATEST；pending 内存合并与 trace 内存回填取最大值）
 """
 
 from contextlib import contextmanager
@@ -58,9 +60,11 @@ def test_update_total_cost_sql_and_params_when_row_exists():
     cursor.execute.assert_called_once()
     sql_arg, params_arg = cursor.execute.call_args[0]
     assert "UPDATE obs_traces" in sql_arg
-    assert "total_cost = %s" in sql_arg
+    # 单调写入：现值与传入值取大，迟到的低值不允许直接覆盖（旧覆盖语义不得复现）
+    assert "total_cost = GREATEST(COALESCE(total_cost, 0), %s)" in sql_arg
+    assert "SET total_cost = %s" not in sql_arg
     assert "trace_id = %s" in sql_arg
-    # 参数顺序：(total_cost, trace_id)
+    # 参数顺序保持不变：(total_cost, trace_id)
     assert params_arg == (1.23, "tr_abc123")
     cursor.commit.assert_called_once()
     # 命中已落库行，无需 pending 补丁
@@ -87,8 +91,12 @@ def test_upsert_carries_memory_total_cost():
     assert "INSERT INTO obs_traces" in sql_arg
     # 18 个业务参数全部参数化（total_cost 不再是字面量 0）
     assert sql_arg.count("%s") == 18
-    # ON CONFLICT 分支同步覆盖 total_cost
-    assert "total_cost = EXCLUDED.total_cost" in sql_arg
+    # ON CONFLICT 分支只增不减：现值与 EXCLUDED 值取大，迟到的 0 不具覆盖语义
+    assert "total_cost = GREATEST(" in sql_arg
+    assert "COALESCE(obs_traces.total_cost, 0)" in sql_arg
+    assert "COALESCE(EXCLUDED.total_cost, 0)" in sql_arg
+    # 旧覆盖语义不得复现：不允许 EXCLUDED 直接盖掉已落库高值
+    assert "total_cost = EXCLUDED.total_cost" not in sql_arg
     # 参数位置：..., total_tokens(9), total_cost(10), duration_ms(11), ...
     assert params_arg[9] == 100
     assert params_arg[10] == 2.5
@@ -114,10 +122,10 @@ def test_update_total_cost_zero_row_registers_pending_replayed_by_upsert():
 
     calls = persist_cursor.execute.call_args_list
     assert "INSERT INTO obs_traces" in calls[0][0][0]
-    # 第二条语句即 pending 补写 UPDATE
+    # 第二条语句即 pending 补写 UPDATE（同样只增不减）
     replay_sql, replay_params = calls[1][0]
     assert "UPDATE obs_traces" in replay_sql
-    assert "total_cost = %s" in replay_sql
+    assert "total_cost = GREATEST(COALESCE(total_cost, 0), %s)" in replay_sql
     assert replay_params == (0.75, "tr_race")
     persist_cursor.commit.assert_called_once()
     # 补丁已消费，不留残留
@@ -227,6 +235,25 @@ def test_save_backfills_memory_trace_and_calls_update_total_cost():
     update_mock.assert_called_once_with(collector.trace_id, 0.42)
 
 
+def test_save_memory_backfill_never_lowers_high_total_cost():
+    """内存 trace 已为高值时，较低的 credit_cost 回填不降低它（只增不减）"""
+    collector = TraceCollector("sid_cost", "t1", "user_1", "机密用户输入内容", "chat")
+    # 模拟较早快照已把高值写入共享 trace 对象（如重复计费/重试场景）
+    collector.trace.total_cost = 2.0
+    record = _make_record_service(collector)
+
+    create_patch, _ = _mock_chat_record_create()
+    with create_patch, _mock_billing_cost(0.42), \
+            patch("src.core.trace_persist.update_total_cost") as update_mock:
+        result = record.save()
+
+    assert result == {"record_id": "rec_cost_1"}
+    # 内存 trace 保留高值，不因迟到的较低回填而回退
+    assert collector.trace.total_cost == 2.0
+    # DB 回填仍携带本次真实金额（数据库 GREATEST 负责防回退，调用语义不变）
+    update_mock.assert_called_once_with(collector.trace_id, 0.42)
+
+
 def test_save_degradation_update_raises_does_not_affect_result():
     """update_total_cost 抛异常：save() 返回值不变，降级 debug 日志无敏感值"""
     collector = TraceCollector("sid_cost", "t1", "user_1", "机密用户输入内容", "chat")
@@ -295,3 +322,30 @@ def test_pending_total_cost_updates_are_bounded():
         "tr_bounded_2", "tr_bounded_3", "tr_bounded_4",
     }
     assert _pending_total_cost_updates["tr_bounded_4"] == 4.0
+
+
+# ============================================================
+# 单调性：pending 合并只增不减
+# ============================================================
+
+
+def test_pending_total_cost_merge_is_monotonic_and_keeps_order():
+    """同一 trace 依次登记 0.75 → 0.25 → 1.20，结果依次为 0.75 → 0.75 → 1.20
+
+    迟到的较低值不覆盖已登记高值；更新已有 key 不改变插入顺序
+    （有界淘汰仍按原始顺序丢最旧）。
+    """
+    _remember_pending_total_cost("tr_first", 0.10)
+    _remember_pending_total_cost("tr_mono", 0.75)
+    assert _pending_total_cost_updates["tr_mono"] == 0.75
+
+    # 迟到的较低值不回退已登记高值
+    _remember_pending_total_cost("tr_mono", 0.25)
+    assert _pending_total_cost_updates["tr_mono"] == 0.75
+
+    # 较高值可继续推进
+    _remember_pending_total_cost("tr_mono", 1.20)
+    assert _pending_total_cost_updates["tr_mono"] == 1.20
+
+    # 更新已有 key 不改变插入顺序（tr_mono 的多次更新不会把它挪到队首）
+    assert list(_pending_total_cost_updates) == ["tr_first", "tr_mono"]
