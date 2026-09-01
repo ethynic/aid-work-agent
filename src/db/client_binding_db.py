@@ -359,6 +359,51 @@ class ClientUsageLogDB:
         return {"raw_credit_cost": raw_credit, "credit_cost": credit_cost, "balance_after": balance_after}
 
     @staticmethod
+    def insert_tool_usage_row(
+        cursor,
+        *,
+        tenant_id: str,
+        tool_name: str,
+        credit_cost: float,
+        invocation_id: Optional[str] = None,
+        device_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        status: str = "success",
+    ) -> Optional[float]:
+        """在调用方事务内落一行 boss_tool 台账并同事务扣减租户余额，返回 balance_after。
+
+        供 repository.write_result 结果落库同事务计费复用（2026-09-01 计费时机迁移，
+        docs/design/billing/client-billing-integration-design.md §4.1）：调用方负责
+        commit/回滚与租户缓存失效。租户不存在时仍落台账行（对账可见）但余额不动，
+        返回 None，调用方必须告警。
+        """
+        credit_cost = math.ceil(float(credit_cost) * 100) / 100
+        if credit_cost <= 0:
+            return None
+        detail = json.dumps(
+            {"invocation_id": invocation_id, "device_id": device_id}, ensure_ascii=False
+        )
+        cursor.execute(
+            """INSERT INTO client_usage_logs
+               (tenant_id, binding_id, session_id, stage, status,
+                model, provider, raw_credit_cost, credit_cost, detail)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+            (
+                tenant_id, BOSS_TOOL_BINDING_SENTINEL, session_id, BOSS_TOOL_USAGE_STAGE, status,
+                tool_name, "boss-recruiting", credit_cost, credit_cost, detail,
+            ),
+        )
+        cursor.execute(
+            "UPDATE tenants SET credit_balance = credit_balance - %s WHERE tenant_id = %s "
+            "RETURNING credit_balance",
+            (credit_cost, tenant_id),
+        )
+        row = cursor.fetchone()
+        if row and row["credit_balance"] is not None:
+            return float(row["credit_balance"])
+        return None
+
+    @staticmethod
     def record_tool_usage(
         *,
         tenant_id: str,
@@ -382,33 +427,26 @@ class ClientUsageLogDB:
         if credit_cost <= 0:
             return {"credit_cost": 0.0, "balance_after": None}
 
-        detail = json.dumps(
-            {"invocation_id": invocation_id, "device_id": device_id}, ensure_ascii=False
-        )
         balance_after: Optional[float] = None
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(
-                """INSERT INTO client_usage_logs
-                   (tenant_id, binding_id, session_id, stage, status,
-                    model, provider, raw_credit_cost, credit_cost, detail)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                   RETURNING id""",
-                (
-                    tenant_id, BOSS_TOOL_BINDING_SENTINEL, session_id, BOSS_TOOL_USAGE_STAGE, status,
-                    tool_name, "boss-recruiting", credit_cost, credit_cost, detail,
-                ),
+            balance_after = ClientUsageLogDB.insert_tool_usage_row(
+                cursor,
+                tenant_id=tenant_id,
+                tool_name=tool_name,
+                credit_cost=credit_cost,
+                invocation_id=invocation_id,
+                device_id=device_id,
+                session_id=session_id,
+                status=status,
             )
-            # 同事务原子扣减租户余额（与 record_llm_usage / ChatRecordDB.create 同一模式）
-            cursor.execute(
-                "UPDATE tenants SET credit_balance = credit_balance - %s WHERE tenant_id = %s "
-                "RETURNING credit_balance",
-                (credit_cost, tenant_id),
-            )
-            row = cursor.fetchone()
-            if row:
-                balance_after = float(row["credit_balance"]) if row["credit_balance"] is not None else None
             conn.commit()
+        if balance_after is None:
+            # UPDATE tenants 影响 0 行：租户不存在（如测试租户污染），余额未扣——当场告警
+            logger.error(
+                f"后端日志：本地工具计费扣减失败（租户不存在，余额未扣） "
+                f"tenant={tenant_id} tool={tool_name} invocation={invocation_id}"
+            )
 
         # 失效租户缓存（确保余额阻断读到最新值）
         try:

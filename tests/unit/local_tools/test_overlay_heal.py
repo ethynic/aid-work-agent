@@ -3,7 +3,7 @@
 覆盖：
 - overlay_heal_service.pick_heuristic：白名单+弹层类名直选 / 无类名特征不盲选 / 非白名单拒绝
 - pick_dismiss_text_with_llm：合法选择 / 非白名单防幻觉拦截 / found=false 放弃 / 围栏 JSON 容忍
-- 编排：UI_CHANGED 失败 → inspect → heuristic → dismiss → 重试成功 → data.heal + 双笔计费
+- 编排：UI_CHANGED 失败 → inspect → heuristic → dismiss → 重试成功 → data.heal + 自愈专项费
 - EXECUTION_UNKNOWN 不触发自愈；heal 关闭时不发起 inspect；候选为空放弃并保留原错误
 - overlay 原语自身 heal_eligible=False、零计费（不递归不扣费）
 """
@@ -178,7 +178,7 @@ class TestPickWithLlm:
 
 class TestHealOrchestration:
     async def test_heal_success_flow(self, monkeypatch):
-        """UI_CHANGED 失败 → inspect → 启发式命中 → dismiss → 重试成功 → data.heal + 双笔计费"""
+        """UI_CHANGED 失败 → inspect → 启发式命中 → dismiss → 重试成功 → data.heal + 自愈专项费"""
         monkeypatch.setattr(settings.saas, "enabled", False)  # 跳过余额预检
         rows = {
             "g1": _inv(state="failed", error_code="UI_CHANGED", error_message="头部未切换"),
@@ -199,9 +199,10 @@ class TestHealOrchestration:
         # 下发序列：greet(败) → overlay_inspect → overlay_dismiss → greet(重试成功)
         names = [c.args[3] for c in repo["create_invocation"].call_args_list]
         assert names == ["boss_greet", "boss_overlay_inspect", "boss_overlay_dismiss", "boss_greet"]
-        # 双笔计费：重试成功的原工具费 + 自愈专项费
+        # 计费分工（2026-09-01 迁移）：重试成功的原工具费在 write_result 落库侧，
+        # proxy 只收无独立 invocation 的自愈专项费
         billed = {c.kwargs["tool_name"]: c.kwargs["credit_cost"] for c in record.call_args_list}
-        assert billed == {"boss_greet": 1.0, "boss_overlay_heal": 2.0}
+        assert billed == {"boss_overlay_heal": 2.0}
 
     async def test_execution_unknown_never_heals(self, monkeypatch):
         """EXECUTION_UNKNOWN（写后结果不明）绝不自愈重试"""

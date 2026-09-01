@@ -77,11 +77,12 @@ DB 层 `client_usage_logs.tenant_id` 近 14 天 **无一行 NULL**（写入侧 `
 
 把 BOSS 工具计费从 `proxy_tool` 轮询侧迁到 `repository.write_result`（`src/local_tools/repository.py:441`，Runtime 回写结果的唯一入口，幂等）：
 
-- `write_result` 落 succeeded 终态时，同事务内完成：查价目（`settings.boss_tool_billing.tool_credit_prices`，价格查询函数从 proxy_tool 抽到公共处）→ `UPDATE local_tool_invocations SET credit_cost=%s WHERE id=%s AND credit_cost IS NULL`（影响 0 行 = 已计费，幂等闸门）→ INSERT `client_usage_logs` → `UPDATE tenants SET credit_balance = credit_balance - %s` → 提交。任一步失败整体回滚，Runtime 收到失败后按既有重试重写 result（write_result 对已终态幂等返回），计费随事务自然重试，**不需要额外对账清扫任务**。
-- `proxy_tool._bill_success` 退役为"读取已计费金额"：`_map_terminal` 后 invocation 行已带 `credit_cost`（write_result 写入），直接放进 `result.data.credit_cost` 返回给 LLM；不再发起第二次计费。`_tenant_credit_blocked` 余额预检保留。
-- 弹层自愈专项费 `boss_overlay_heal` 无独立 invocation，保留 `record_tool_usage` 直记路径（`proxy_tool.py:397-407`）。
-- `UPDATE tenants` 影响 0 行（租户不存在）时：不回滚工具结果（先出活再记账的原则不变），但必须 `logger.error` 告警"租户不存在，余额未扣减"，让 tenant_t1 类脏数据当场暴露。
-- `state='unknown'` 维持不收费；对账报表中将 succeeded 未计费数固定为 0 作为验收标准。
+- `write_result` 落 succeeded 终态时，同事务内完成：查价目（`settings.boss_tool_billing.tool_credit_prices`，取价统一走 `src/local_tools/pricing.py`，与 proxy 预检同源）→ 台账 INSERT（`ClientUsageLogDB.insert_tool_usage_row`，事务内助手）→ `UPDATE tenants` 扣减 → `credit_cost` 回写，与状态迁移同一事务提交。行锁（`SELECT ... FOR UPDATE`）串行化同一 claim_token 的并发重叠写（设备 HTTP 超时重试），后到事务读到终态走幂等短路——**恰好计费一次，不需要额外对账清扫任务**。
+- **计费异常降级（实现定稿，2026-09-01）**：台账落账异常时回滚计费半程、重取行加锁后照常落工具终态（credit_cost 留 NULL），Runtime 收 200 不重试。取舍理由：设备执行结果是用户可见的一等产物，宁可漏一笔小钱也不能因计费故障吞掉结果/卡死 invocation。降级行即待补账对象，见 §6 验收口径。
+- `proxy_tool._bill_success` 退役为 `_attach_credit_cost`：`get_invocation` 已带 `credit_cost`，成功结果把实扣金额附进 `data.credit_cost` 返回给 LLM；不再发起第二次计费。`_tenant_credit_blocked` 余额预检保留。
+- 弹层自愈专项费 `boss_overlay_heal` 无独立 invocation，保留 `record_tool_usage` 直记路径（`proxy_tool.py`）；租户缺失同样当场告警。
+- `UPDATE tenants` 影响 0 行（租户不存在）时：不回滚工具结果，台账行照落（对账可见），`logger.error` 告警"租户不存在，余额未扣减"，让 tenant_t1 类脏数据当场暴露。
+- `state='unknown'`（含租约过期清扫）维持不收费；免费工具回写 `credit_cost=0` 占位。混合模式工具（boss_jobs_list / boss_interview_notify 不建 invocation）不经 write_result，价目表对它们配价无效——价目表只应包含走本机 invocation 链路的工具。
 
 ### 4.2 P2 台账字段补全：命令 + 参数 + 会话/用户归属
 
@@ -149,11 +150,22 @@ DB 层 `client_usage_logs.tenant_id` 近 14 天 **无一行 NULL**（写入侧 `
 | P4 | usage/report 通用上报端点 + 幂等键 + 接入清单文档 | `src/api/client_routes.py`、`src/db/client_binding_db.py`、`clients/README.md` | P2（无实例前可缓） |
 | 清理 | agent2 tenant_t1 存量行处理（待确认） | SQL 脚本 + 留档 | 随 P1 |
 
-测试要点：P1 幂等（同 invocation 重复 write_result / 轮询与落库并发只扣一次）、SSE 中断后 result 晚到仍计费、余额原子性；P2 参数截断、desktop 链路 session 注入；P3 两表口径与日均一致（对账 SQL：页面日合计 == chat+client 两表日合计）、credit_cost=0 遥测行不进清单；P4 幂等重放、越权（跨租户 token）拒绝。
+测试要点：P1 幂等（同 invocation 重复 write_result / 并发重叠写 FOR UPDATE 串行化只扣一次）、SSE 中断后 result 晚到仍计费、余额原子性、计费异常降级（结果保留、credit_cost 留 NULL）；P2 参数截断、desktop 链路 session 注入；P3 两表口径与日均一致（对账 SQL：页面日合计 == chat+client 两表日合计）、credit_cost=0 遥测行不进清单；P4 幂等重放、越权（跨租户 token）拒绝。
 
 ## 6. 验收口径
 
-1. 对账 SQL：`succeeded 可计费 invocation 数 == client_usage_logs(boss_tool) 计费行数`（agent2 近 30 天回补后成立，此后每日成立）；
+1. 对账 SQL（P1 上线后持续为 0，非 0 即待补账/告警行）：
+   ```sql
+   -- 计费工具的 succeeded invocation 必须有 credit_cost 回写（NULL=降级待补账；0=免费占位正常）
+   SELECT i.id, i.tenant_id, i.tool_name, i.finished_at
+   FROM local_tool_invocations i
+   WHERE i.state = 'succeeded' AND i.credit_cost IS NULL
+     AND i.tool_name IN ('boss_greet','boss_send_to','boss_send_current','boss_accept_resume',
+                         'boss_reject_current','boss_select_job','boss_filter',
+                         'boss_resume_detail','boss_resume_batch');
+   -- 台账 vs invocation 双向对账：client_usage_logs(detail->>'invocation_id') 与 credit_cost 一一对应
+   ```
+   注：迁移前存量漏计费行（credit_cost NULL 的历史 succeeded）不回补（宁可少收不可错收），用 `finished_at < 上线时间` 排除。
 2. 计费页面任一日消耗 == `chat_records + client_usage_logs(credit_cost>0)` 当日合计，与日均口径一致；
 3. 任一 boss 计费行可在详情页直接看到：租户、用户、会话、命令、参数、消耗、余额；
-4. tenant_t1 类孤儿租户写入时产生 error 告警。
+4. tenant_t1 类孤儿租户写入时产生 error 告警（"租户不存在，余额未扣"）。

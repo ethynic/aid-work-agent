@@ -63,9 +63,9 @@ class TestWriteResult:
             row = repository.write_result(INVOCATION_ID, TENANT, HASH, True, effect="applied")
 
         assert row["state"] == "succeeded"
-        # 只有一次 SELECT，没有 UPDATE（幂等短路）
+        # 只有一次 SELECT，没有 UPDATE 语句（幂等短路；SELECT 自身的 FOR UPDATE 行锁不算）
         assert len(executed) == 1
-        assert "UPDATE" not in executed[0]
+        assert not any(sql.lstrip().startswith("UPDATE") for sql in executed)
 
     def test_wrong_claim_token_rejected(self):
         """claim token 不匹配：返回 None，不迁移状态"""
@@ -75,7 +75,8 @@ class TestWriteResult:
 
     def test_success_transitions_to_succeeded(self):
         """running + hash 匹配 + success=True：迁移到 succeeded"""
-        current = {"id": INVOCATION_ID, "state": "running", "claim_token_hash": HASH}
+        current = {"id": INVOCATION_ID, "state": "running", "claim_token_hash": HASH,
+                   "tenant_id": TENANT, "tool_name": "boss_goto", "credit_cost": None}
         updated = {"id": INVOCATION_ID, "state": "succeeded", "effect": "applied",
                    "claim_token_hash": HASH}
         with _patch_conn([current, updated]):

@@ -15,6 +15,12 @@ LLM/前端直接渲染编号选择列表）。
 其中 boss_resume_detail / boss_resume_batch 额外做云端后处理：CLI 成功结果（截图+OCR payload）
 在工具层直接落简历库（batch 逐份落库），只把紧凑摘要返回给 LLM（图片字节不进上下文）。
 
+计费（2026-09-01 时机迁移，docs/design/billing/client-billing-integration-design.md §4.1）：
+按次计费已从本模块轮询侧迁到 repository.write_result（Runtime 回写结果权威落库点，
+同事务计费，会话断开/轮询死亡不再漏计费）。本模块只负责：扣费前余额预检（NO_CREDIT
+不建 invocation）、把 invocation.credit_cost 实扣金额附进 LLM 可见的 data、弹层自愈
+专项费（无独立 invocation，仍走 record_tool_usage 直记）。
+
 安全约束：
 - 设备闸门在 create_invocation 之前（repository.create_invocation 本身不校验
   设备归属，属 M0.3 CR 遗留，本层必须先校验 selected+active+在线+provider）
@@ -31,6 +37,7 @@ from pydantic import BaseModel, Field, field_validator
 from src.config.settings import settings
 from src.db.client_binding_db import ClientUsageLogDB
 from src.local_tools import catalog, repository
+from src.local_tools.pricing import overlay_heal_price, tool_credit_price
 from src.services import (
     overlay_heal_service,
     recruiting_job_service,
@@ -102,11 +109,11 @@ class LocalToolProxyTool(BaseTool):
                         "effect": None, "data": None, "invocation_id": None}
 
         # 3. 下发 + 轮询终态
-        result = await self._dispatch_and_wait(tenant_id, user_id, device, args, progress_queue, credit_price)
+        result = await self._dispatch_and_wait(tenant_id, user_id, device, args, progress_queue)
 
         # 4. 弹层自愈：失败且为可自愈码（UI_CHANGED/BUSY，弹层遮挡的典型症状）→ 关闭弹层后重试一次
         if not result.get("success") and result.get("code") in HEALABLE_ERROR_CODES and self.heal_eligible:
-            result = await self._heal_overlay(tenant_id, user_id, device, args, progress_queue, credit_price, result)
+            result = await self._heal_overlay(tenant_id, user_id, device, args, progress_queue, result)
         return result
 
     async def _dispatch_and_wait(
@@ -116,9 +123,8 @@ class LocalToolProxyTool(BaseTool):
         device: Dict[str, Any],
         args: Dict[str, Any],
         progress_queue: Optional[asyncio.Queue],
-        credit_price: float,
     ) -> Dict[str, Any]:
-        """创建 invocation + 轮询 events/state 至终态/超时：终态映射 + 按价计费（成功时）"""
+        """创建 invocation + 轮询 events/state 至终态/超时：终态映射（计费在 write_result 落库侧）"""
         invocation_id = await asyncio.to_thread(
             repository.create_invocation,
             tenant_id, user_id, str(device["id"]), self.name, args,
@@ -151,11 +157,7 @@ class LocalToolProxyTool(BaseTool):
             )
             if invocation and invocation["state"] in repository.TERMINAL_STATES:
                 result = self._map_terminal(invocation)
-                if credit_price > 0 and result.get("success"):
-                    result = await self._bill_success(
-                        tenant_id, str(device["id"]), invocation_id, credit_price, result
-                    )
-                return result
+                return self._attach_credit_cost(invocation, result)
 
             if loop.time() >= deadline:
                 # TIMEOUT 是 proxy 本地码：云端状态机由 request_cancel 推进，不受影响
@@ -249,17 +251,11 @@ class LocalToolProxyTool(BaseTool):
             result["message"] = f"{result['message']}；{UNKNOWN_EFFECT_NOTICE}"
         return result
 
-    # ==================== 计费（boss_tool_billing，协会 client_usage_logs 同款台账） ====================
+    # ==================== 计费（落库侧 write_result 同事务计费，本模块只预检/附带金额） ====================
 
     def _tool_credit_price(self) -> float:
-        """当前工具单次积分价格：总开关关 → 0；未列入价目表 → default_credit_price（默认 0）"""
-        cfg = settings.boss_tool_billing
-        if not cfg.enabled:
-            return 0.0
-        try:
-            return max(0.0, float(cfg.tool_credit_prices.get(self.name, cfg.default_credit_price)))
-        except (TypeError, ValueError):
-            return 0.0
+        """当前工具单次积分价格（取价统一走 pricing 模块，与 write_result 落库计费同源）"""
+        return tool_credit_price(self.name)
 
     async def _tenant_credit_blocked(self, tenant_id: str) -> Optional[str]:
         """扣费前余额预检（语义同 main._check_tenant_credit_blocked）：返回阻断文案或 None。
@@ -284,38 +280,19 @@ class LocalToolProxyTool(BaseTool):
             return None
         return None
 
-    async def _bill_success(
-        self,
-        tenant_id: str,
-        device_id: str,
-        invocation_id: str,
-        credit_price: float,
-        result: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        """成功终态扣费：写 client_usage_logs 台账 + 同事务扣租户余额 + 回写 invocation.credit_cost。
+    @staticmethod
+    def _attach_credit_cost(invocation: Dict[str, Any], result: Dict[str, Any]) -> Dict[str, Any]:
+        """把 write_result 落库侧同事务计费的实扣金额附进 LLM 可见的 data。
 
-        计费环节任何异常只记日志、绝不影响工具成功结果（先出活再记账）。
+        仅成功结果且实扣金额存在（>0）时附加；credit_cost 为 NULL（计费降级/历史行）
+        或 0（免费工具）时保持 data 原形，不给上下文添噪音。
         """
-        try:
-            usage = await asyncio.to_thread(
-                ClientUsageLogDB.record_tool_usage,
-                tenant_id=tenant_id,
-                tool_name=self.name,
-                credit_cost=credit_price,
-                invocation_id=invocation_id,
-                device_id=device_id,
-            )
-            await asyncio.to_thread(
-                repository.set_invocation_credit_cost, invocation_id, usage["credit_cost"]
-            )
-            data = result.get("data")
-            if isinstance(data, dict):
-                result = {**result, "data": {**data, "credit_cost": usage["credit_cost"]}}
-        except Exception as e:
-            logger.opt(exception=True).error(
-                f"后端日志：本地工具计费落账失败（不影响工具结果）tool={self.name} "
-                f"invocation={invocation_id}: {e}"
-            )
+        credit_cost = invocation.get("credit_cost")
+        if not result.get("success") or not credit_cost:
+            return result
+        data = result.get("data")
+        if isinstance(data, dict):
+            return {**result, "data": {**data, "credit_cost": float(credit_cost)}}
         return result
 
     # ==================== 弹层自愈（overlay heal，2026-08-31） ====================
@@ -327,7 +304,6 @@ class LocalToolProxyTool(BaseTool):
         device: Dict[str, Any],
         args: Dict[str, Any],
         progress_queue: Optional[asyncio.Queue],
-        credit_price: float,
         original_result: Dict[str, Any],
     ) -> Dict[str, Any]:
         """失败后的弹层自愈：导出候选 → 启发式/LLM 选关闭控件 → 关闭 → 重试原操作一次。
@@ -388,7 +364,7 @@ class LocalToolProxyTool(BaseTool):
                 "text": f"已关闭弹层「{dismiss_text}」，正在重试：{self.display_name}",
             })
             retry_result = await self._dispatch_and_wait(
-                tenant_id, user_id, device, args, progress_queue, credit_price)
+                tenant_id, user_id, device, args, progress_queue)
             healed = bool(retry_result.get("success"))
             if healed:
                 heal_price = self._heal_price()
@@ -437,13 +413,7 @@ class LocalToolProxyTool(BaseTool):
         return result
 
     def _heal_price(self) -> float:
-        cfg = settings.boss_tool_billing
-        if not cfg.overlay_heal_enabled:
-            return 0.0
-        try:
-            return max(0.0, float(cfg.overlay_heal_price))
-        except (TypeError, ValueError):
-            return 0.0
+        return overlay_heal_price()
 
     # ==================== 进度 ====================
 

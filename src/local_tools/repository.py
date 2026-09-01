@@ -4,13 +4,17 @@
 所有查询/更新必带 tenant_id（claim 同时带 device_id）。
 """
 
+import math
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
 from psycopg2.extras import Json
 
+from src.core.cache_utils import invalidate_tenant_cache
+from src.db.client_binding_db import ClientUsageLogDB
 from src.db.database import get_db_connection
+from src.local_tools.pricing import tool_credit_price
 
 # 终态：写 result 时遇到终态直接幂等返回
 TERMINAL_STATES = ("succeeded", "failed", "cancelled", "unknown", "expired")
@@ -265,7 +269,7 @@ def get_invocation(invocation_id: str, tenant_id: str) -> Optional[Dict[str, Any
         cursor.execute(
             """
             SELECT id, tenant_id, user_id, device_id, tool_name, arguments_json,
-                   state, effect, result_json, error_code, error_message,
+                   state, effect, result_json, error_code, error_message, credit_cost,
                    created_at, claimed_at, started_at, finished_at
             FROM local_tool_invocations
             WHERE id = %s AND tenant_id = %s
@@ -449,15 +453,26 @@ def write_result(
     data: Optional[Dict[str, Any]] = None,
     retryable: Optional[bool] = None,
 ) -> Optional[Dict[str, Any]]:
-    """写入终态（幂等：已终态直接返回当前记录）。
+    """写入终态（幂等）+ succeeded 首次落终态时同事务按次计费。
 
     state 映射：success→succeeded；code='EXECUTION_UNKNOWN'→unknown；其余失败→failed。
     hash 不匹配或不存在返回 None。
+
+    计费（2026-09-01 时机迁移，docs/design/billing/client-billing-integration-design.md §4.1）：
+    计费点从 proxy_tool 轮询侧迁到本函数——Runtime 回写结果是 invocation 的权威落库
+    时刻，会话断开/轮询协程死亡不再漏计费（agent2 实证 8/25 单日 37 次成功 0 计费）。
+    succeeded 首次落终态时同事务完成「台账 INSERT + 租户扣减 + credit_cost 回写」；
+    本函数对已终态幂等短路，保证恰好计费一次。免费工具回写 credit_cost=0 占位
+    （succeeded 且 credit_cost IS NULL 即计费降级，对账 SQL 可直接揪出）；计费异常
+    降级为只落终态（credit_cost 留 NULL），绝不吞掉设备执行结果。
     """
+    billed_tenant_id: Optional[str] = None
     with get_db_connection() as conn:
         cursor = conn.cursor()
+        # FOR UPDATE 行锁：挡住同一 claim_token 并发重叠写（设备 HTTP 超时重试等）——
+        # 后到事务在此阻塞，等先到事务提交后读到终态走幂等短路，杜绝双份台账双倍扣款
         cursor.execute(
-            "SELECT * FROM local_tool_invocations WHERE id = %s AND tenant_id = %s",
+            "SELECT * FROM local_tool_invocations WHERE id = %s AND tenant_id = %s FOR UPDATE",
             (invocation_id, tenant_id),
         )
         row = cursor.fetchone()
@@ -476,6 +491,55 @@ def write_result(
         else:
             new_state = "failed"
 
+        # 计费预判：仅 succeeded 首次落终态。price>0 落台账+扣费；price=0（免费）仅回写占位。
+        # 先 ceil 到分再判断，与 insert_tool_usage_row 的台账舍入保持同一数值
+        bill_price: Optional[float] = None
+        if success and row.get("credit_cost") is None:
+            bill_price = math.ceil(tool_credit_price(row.get("tool_name")) * 100) / 100
+            if bill_price > 0:
+                balance_after: Optional[float] = None
+                try:
+                    balance_after = ClientUsageLogDB.insert_tool_usage_row(
+                        cursor,
+                        tenant_id=row["tenant_id"],
+                        tool_name=row["tool_name"],
+                        credit_cost=bill_price,
+                        invocation_id=str(row["id"]),
+                        device_id=str(row["device_id"]) if row.get("device_id") else None,
+                    )
+                    billed_tenant_id = row["tenant_id"]
+                    logger.info(
+                        f"后端日志：BOSS工具计费（落库侧） tenant={row['tenant_id']} "
+                        f"tool={row['tool_name']} invocation={row['id']} "
+                        f"cost={bill_price} balance_after={balance_after}"
+                    )
+                    if balance_after is None:
+                        # UPDATE tenants 影响 0 行：租户不存在（如测试租户污染），余额未扣——当场告警
+                        logger.error(
+                            f"后端日志：本地工具计费扣减失败（租户不存在，余额未扣） "
+                            f"tenant={row['tenant_id']} tool={row['tool_name']} invocation={row['id']}"
+                        )
+                except Exception:
+                    # 计费异常绝不吞工具结果：回滚计费半程，降级为只落终态
+                    # （credit_cost 留 NULL = 待补账，对账 SQL 见设计文档 §6）
+                    conn.rollback()
+                    billed_tenant_id = None
+                    bill_price = None
+                    logger.opt(exception=True).error(
+                        f"后端日志：本地工具计费落账失败，降级为只落终态（待对账补账） "
+                        f"tool={row.get('tool_name')} invocation={row['id']}"
+                    )
+                    # rollback 释放了行锁：重取行并重新加锁——若并发重复写已落终态则幂等返回，
+                    # 否则后续 UPDATE 仍在锁保护下执行
+                    cursor.execute(
+                        "SELECT * FROM local_tool_invocations WHERE id = %s AND tenant_id = %s FOR UPDATE",
+                        (invocation_id, tenant_id),
+                    )
+                    row = cursor.fetchone()
+                    if not row or row["state"] in TERMINAL_STATES:
+                        conn.commit()
+                        return dict(row) if row else None
+
         result_json = {
             "success": success,
             "code": code,
@@ -483,8 +547,7 @@ def write_result(
             "data": data,
             "retryable": retryable,
         }
-        cursor.execute(
-            """
+        sql = """
             UPDATE local_tool_invocations
             SET state = %s,
                 effect = %s,
@@ -492,22 +555,30 @@ def write_result(
                 error_code = %s,
                 error_message = %s,
                 finished_at = NOW(),
-                lease_expires_at = NULL
-            WHERE id = %s
-            RETURNING *
-            """,
-            (
-                new_state,
-                effect,
-                Json(result_json),
-                None if success else code,
-                None if success else message,
-                invocation_id,
-            ),
-        )
+                lease_expires_at = NULL"""
+        params: List[Any] = [
+            new_state,
+            effect,
+            Json(result_json),
+            None if success else code,
+            None if success else message,
+        ]
+        if bill_price is not None:
+            sql += ",\n                credit_cost = %s"
+            params.append(bill_price)
+        sql += "\n            WHERE id = %s\n            RETURNING *"
+        params.append(invocation_id)
+        cursor.execute(sql, tuple(params))
         updated = dict(cursor.fetchone())
         conn.commit()
-        return updated
+
+    if billed_tenant_id:
+        # 失效租户缓存（确保余额阻断读到最新值，与 record_llm_usage 同一模式）
+        try:
+            invalidate_tenant_cache(billed_tenant_id)
+        except Exception as e:
+            logger.warning(f"BOSS工具扣费后失效租户缓存失败 tenant={billed_tenant_id}: {e}")
+    return updated
 
 
 def request_cancel(invocation_id: str, tenant_id: str) -> bool:
