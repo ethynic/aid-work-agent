@@ -742,3 +742,10 @@ CREATE INDEX IF NOT EXISTS idx_bs_rorinv_tenant_resume
 ALTER TABLE bs_recruiting_notify_logs
     ADD COLUMN IF NOT EXISTS resume_id BIGINT
     REFERENCES bs_recruiting_operator_resumes(id) ON DELETE SET NULL;
+
+-- 2026-09-01，chat_records.user_id 去掉 NOT NULL 约束
+-- 背景：报表生成（report_team_monthly 等 source_type）无登录用户上下文，
+--   ChatRecordDB.create 传入 user_id=None 触发 "null value in column user_id" 报错。
+--   init-postgres.sql 定义本就可空，src/db/database.py 旧建表定义带 NOT NULL 已同步修正，
+--   此处对已存在的表执行 DROP NOT NULL（幂等）。
+ALTER TABLE chat_records ALTER COLUMN user_id DROP NOT NULL;

@@ -770,7 +770,7 @@ def record_skill_llm_usage(
     Args:
         usage: LLM 调用返回的 token 用量 dict；空/None 直接返回
         tenant_id/session_id/user_id: 计费归属；缺省回退 AID_* 环境变量，
-            user_id 仍为空时用 "unknown" 占位（chat_records.user_id 生产库 NOT NULL）
+            user_id 仍为空时用 "unknown" 占位（保证计费归属可追溯）
         stage: 计量阶段（excel_etl 的 extract/repair/schema），拼进 user_message
         model: 实际调用模型名（必须传准，否则单价算错）；未传时回退
             usage["model"]（excel_template_ai._default_llm return_usage 已附带），
@@ -891,10 +891,9 @@ def _persist_skill_llm_record(
 def _resolve_admin_user_id(user_id: Optional[str]) -> str:
     """管理后台计费落库的 user_id 兜底：为空时取 ContextVar，仍为空用 "unknown" 占位
 
-    chat_records.user_id 在生产库为 NOT NULL，传 None 会违反约束导致计费落库失败
-    （报错 "null value in column user_id ... violates not-null constraint"）。
+    chat_records.user_id 允许为 NULL（2026-09-01 已去掉 NOT NULL 约束）。
     无认证上下文的调用方（离线脚本、无 token 后台任务）用 "unknown" 占位，
-    与 session_id 中的 user_id or 'unknown' 保持一致，保证计费不丢失。
+    与 session_id 中的 user_id or 'unknown' 保持一致，保证计费归属可追溯。
     """
     if user_id:
         return user_id
