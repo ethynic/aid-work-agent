@@ -226,7 +226,8 @@ class WeComKfApiClient:
         """
         result = await self._request("GET", "/cgi-bin/user/get", extra_params={"userid": userid})
         if result.get("errcode", 0) != 0:
-            logger.error(
+            # userid 输入错误（如 errcode=60111 userid not found）属于业务输入问题，非系统故障，记 info 即可
+            logger.info(
                 f"微信客服查询成员失败: userid={userid}, "
                 f"errcode={result.get('errcode')}, errmsg={result.get('errmsg')}"
             )
