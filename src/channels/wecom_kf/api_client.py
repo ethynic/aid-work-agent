@@ -159,7 +159,12 @@ class WeComKfApiClient:
         body = {"name": name, "media_id": media_id}
         result = await self._request("POST", "/cgi-bin/kf/account/add", json_body=body)
         if result.get("errcode", 0) != 0:
-            logger.error(f"微信客服创建账号失败: errcode={result.get('errcode')}, errmsg={result.get('errmsg')}")
+            errcode = result.get("errcode")
+            errmsg = result.get("errmsg")
+            hint = ""
+            if errcode == 48002:
+                hint = "。48002 错误，自建应用没有权限创建客服账号，检查要点：1. “微信客服”应用下的 “API” ，要勾选自建应用；2. 自建应用下需要手动创建第一个客服账号。"
+            logger.error(f"微信客服创建账号失败: errcode={errcode}, errmsg={errmsg}{hint}")
         return result
 
     async def account_del(self, open_kfid: str) -> Dict[str, Any]:
