@@ -214,34 +214,6 @@ class LeadCaptureDB:
             return cursor.rowcount > 0
 
     @staticmethod
-    def find_by_customer(
-        customer_user_id: str, tenant_id: str
-    ) -> Optional[Dict[str, Any]]:
-        """客户级防重复：按微信侧 external_userid 反查已有线索。
-
-        用于老客户识别（Phase 3 增强）——同一客户已留资则不再引导。
-        """
-        if not customer_user_id:
-            return None
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                SELECT * FROM bs_lead_capture_leads
-                WHERE customer_user_id = %s AND tenant_id = %s
-                ORDER BY created_at DESC
-                LIMIT 1
-                """,
-                (customer_user_id, tenant_id),
-            )
-            row = cursor.fetchone()
-            if not row:
-                return None
-            d = dict(row)
-            d["phone"] = _decrypt_phone(d.get("phone"))
-            return d
-
-    @staticmethod
     def stats(
         tenant_id: str,
         start_date: Optional[str] = None,

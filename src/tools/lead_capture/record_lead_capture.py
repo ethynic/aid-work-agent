@@ -40,7 +40,8 @@ class RecordLeadCaptureInput(BaseModel):
 class RecordLeadCaptureTool(BaseTool):
     """客户留资记录工具
 
-    收集到客户手机号或客户选择添加顾问微信时调用，记录线索并防止重复留资。
+    收集到客户手机号或客户选择添加顾问微信时调用，记录线索。已留资客户再次
+    明确要求留资（加微信/留手机号）视为新的跟进需求，正常登记（不防重）。
     """
 
     name = "record_lead_capture"

@@ -2354,7 +2354,7 @@ async def _process_tenant_wecom_kf_messages(
 
                 # 设置工具可访问的上下文
                 # user_id：租户侧注册用户（ensure_user_registered 生成），供留资等工具记录线索归属
-                # lead_capture：会话留资状态机快照（已留资则工具拒绝重复留资）
+                # lead_capture：会话留资状态机快照（已留资客户再次留资正常登记，不拒绝）
                 set_kf_context({
                     "adapter": adapter,
                     "open_kfid": open_kfid,

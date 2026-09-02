@@ -5,7 +5,6 @@
 - get_by_id：按 lead_id 查询（可选租户校验）
 - list_by_tenant：日期段/客服账号/阶段/归属筛选 + 分页 + created_at DESC
 - update_stage：合法阶段流转 / 非法阶段拒绝
-- find_by_customer：客户级防重复反查
 - stats：总留资 + 按留资方式分组 + 按客服账号分组（含 ratio）
 """
 import pytest
@@ -248,33 +247,6 @@ class TestUpdateStage:
             )
 
         assert result is False
-        mock_get_db.assert_not_called()
-
-
-class TestFindByCustomer:
-    def test_find_by_customer_queries_latest(self, mock_encryption):
-        from src.saas.db.lead_capture_db import LeadCaptureDB
-
-        mock_cursor, mock_conn = _mock_db(fetchone=dict(LEAD_ROW))
-        with patch("src.saas.db.lead_capture_db.get_db_connection") as mock_get_db:
-            mock_get_db.return_value.__enter__.return_value = mock_conn
-            result = LeadCaptureDB.find_by_customer("wx_ext_user_1", "tenant_001")
-
-        sql, params = mock_cursor.execute.call_args[0]
-        assert "customer_user_id = %s" in sql
-        assert "tenant_id = %s" in sql
-        assert "ORDER BY created_at DESC" in sql
-        assert "LIMIT 1" in sql
-        assert params == ("wx_ext_user_1", "tenant_001")
-        assert result["phone"] == "13800138000"
-
-    def test_find_by_customer_empty_returns_none(self, mock_encryption):
-        from src.saas.db.lead_capture_db import LeadCaptureDB
-
-        with patch("src.saas.db.lead_capture_db.get_db_connection") as mock_get_db:
-            result = LeadCaptureDB.find_by_customer("", "tenant_001")
-
-        assert result is None
         mock_get_db.assert_not_called()
 
 
