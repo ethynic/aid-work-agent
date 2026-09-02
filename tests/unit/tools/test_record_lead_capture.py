@@ -400,3 +400,71 @@ class TestRecordLeadCaptureExecute:
 
         assert result["success"] is False
         assert "保存失败" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_success_phone_returns_assignee_phone(self):
+        """归属员工配置了手机号 -> 成功结果返回 assignee_phone 供外部系统委托登录。"""
+        ctx = _make_ctx()
+        with _patch_execute(ctx) as (tool, mocks):
+            mocks["get_user"].return_value = {
+                "nickname": "李老师",
+                "username": "lilaoshi",
+                "phone": "13800138001",
+            }
+            result = await tool.execute(contact_method="phone", phone="13800138000")
+
+        assert result["success"] is True
+        assert result["assignee_phone"] == "13800138001"
+
+    @pytest.mark.asyncio
+    async def test_success_phone_assignee_phone_none_when_user_has_no_phone(self):
+        """归属员工无手机号 -> assignee_phone 为 None（优雅降级，不阻塞留资）。"""
+        ctx = _make_ctx()
+        with _patch_execute(ctx) as (tool, mocks):
+            result = await tool.execute(contact_method="phone", phone="13800138000")
+
+        assert result["success"] is True
+        assert result["assignee_phone"] is None
+
+    @pytest.mark.asyncio
+    async def test_success_phone_assignee_phone_none_when_no_owner(self):
+        """客服账号未配置归属用户（tenant_user_id 为空）-> assignee_phone 为 None。"""
+        ctx = _make_ctx(kf_config={"name": "售前客服"})
+        with _patch_execute(ctx) as (tool, mocks):
+            result = await tool.execute(contact_method="phone", phone="13800138000")
+
+        assert result["success"] is True
+        assert result["assignee_phone"] is None
+
+    @pytest.mark.asyncio
+    async def test_success_qr_returns_assignee_phone(self):
+        """qr 留资成功同样返回 assignee_phone。"""
+        from src.core.image_asset import ImageRef
+
+        ctx = _make_ctx(
+            kf_config={
+                "name": "售前客服",
+                "tenant_user_id": "emp_001",
+                "employee_qr_file_id": "file_employee_qr",
+            }
+        )
+        ref = ImageRef(
+            file_id="file_employee_qr",
+            download_url="/api/files/file_employee_qr/download",
+            display_name="顾问二维码.png",
+            source="user_upload",
+        )
+        mock_registry = MagicMock()
+        mock_registry.get_ref_by_file_id = AsyncMock(return_value=ref)
+
+        with _patch_execute(ctx) as (tool, mocks):
+            mocks["get_user"].return_value = {
+                "nickname": "李老师",
+                "username": "lilaoshi",
+                "phone": "13800138001",
+            }
+            with patch("src.core.image_asset.get_image_registry", return_value=mock_registry):
+                result = await tool.execute(contact_method="qr")
+
+        assert result["success"] is True
+        assert result["assignee_phone"] == "13800138001"

@@ -343,6 +343,191 @@ class TestParseResponse:
         assert result["success"] is False
         assert result["status_code"] == 500
 
+    def test_parse_business_error_code_nonzero_reclassifies_failure(self):
+        """HTTP 200 + Code!=0 -> 重分类为 success=False 并记 error（进入 log_error 表）。
+
+        外部 ERP 接口用 HTTP 200 承载业务失败（如 {"Code": -1, "Error": "非空内容"}），
+        http_api 层识别为业务错误并标记失败，管理员在 /portal/error-logs 直接可见，
+        无需翻 LLM 上下文。
+        """
+        from src.tools.network.http_api import _parse_response
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"Code": -1, "Error": "非空内容"}
+
+        result = _parse_response(mock_response)
+        assert result["success"] is False
+        assert "业务错误" in result["error"]
+        assert "Code=-1" in result["error"]
+        assert "非空内容" in result["error"]
+        # data 保留原始响应体，供 LLM 对照修正参数后重试
+        assert result["data"] == {"Code": -1, "Error": "非空内容"}
+        # 业务错误等同失败语义：不落盘
+        assert "file_path" not in result
+
+    def test_parse_code_zero_keeps_success(self):
+        """HTTP 200 + Code=0 -> 业务成功，保持 success=True。"""
+        from src.tools.network.http_api import _parse_response
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"Code": 0, "Data": {"id": 1}}
+
+        result = _parse_response(mock_response)
+        assert result["success"] is True
+        assert "error" not in result
+        assert result["data"] == {"Code": 0, "Data": {"id": 1}}
+
+    def test_parse_code_allowed_values_keep_success(self):
+        """Code 允许值 200 / \"0\" / \"200\" 均视为成功，避免误伤。"""
+        from src.tools.network.http_api import _parse_response
+
+        for code in (200, "0", "200"):
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = {"Code": code, "Data": "ok"}
+            result = _parse_response(mock_response)
+            assert result["success"] is True, f"Code={code!r} 应为成功"
+            assert "error" not in result
+
+    def test_parse_no_code_field_keeps_success(self):
+        """响应体无 Code 字段 -> 不判定业务错误（保守门控，避免误伤其他系统）。"""
+        from src.tools.network.http_api import _parse_response
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"status": "success", "data": [1, 2, 3]}
+
+        result = _parse_response(mock_response)
+        assert result["success"] is True
+        assert "error" not in result
+        assert result["data"] == {"status": "success", "data": [1, 2, 3]}
+
+    def test_parse_business_error_non_dict_keeps_success(self):
+        """响应体非 dict（列表/字符串）不判定业务错误。"""
+        from src.tools.network.http_api import _parse_response
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = ["a", "b"]
+
+        result = _parse_response(mock_response)
+        assert result["success"] is True
+        assert result["data"] == ["a", "b"]
+        assert "error" not in result
+
+    def test_parse_business_error_large_body_truncated_not_spilled(
+        self, isolated_spill_dir
+    ):
+        """大业务错误响应（Code!=0 且 >5000）data 截断、不落盘（等同错误响应语义）。"""
+        from src.tools.network.http_api import _parse_response
+
+        big_data = {"Code": -1, "Error": "E" * 8000}
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = big_data
+
+        result = _parse_response(mock_response)
+        assert result["success"] is False
+        assert "file_path" not in result
+        assert result["truncated"] is True
+        assert isinstance(result["data"], str)
+        assert len(result["data"]) <= 5000 + 3
+
+    def test_parse_non_2xx_logging_does_not_crash_mock_without_request(self):
+        """非 2xx 路径补 error 日志时，MagicMock（无 .request/.url）不抛异常。"""
+        from src.tools.network.http_api import _parse_response
+
+        mock_response = MagicMock()
+        mock_response.status_code = 500
+        mock_response.json.return_value = {"message": "boom"}
+
+        result = _parse_response(mock_response)
+        assert result["success"] is False
+        assert result["status_code"] == 500
+        assert "500" in result["error"]
+
+
+class TestSafeUrlHelpers:
+    def test_safe_url_str_strips_query_userinfo_and_fragment(self):
+        from src.tools.network.http_api import _safe_url_str
+
+        result = _safe_url_str(
+            "https://user:pass@api.example.com/orders?api_key=sk-secret&q=x#frag"
+        )
+        assert result == "https://api.example.com/orders"
+        assert "sk-secret" not in result
+        assert "user:pass" not in result
+        assert "frag" not in result
+
+    def test_safe_url_str_empty(self):
+        from src.tools.network.http_api import _safe_url_str
+
+        assert _safe_url_str("") == ""
+
+    def test_safe_url_str_no_scheme_strips_query(self):
+        from src.tools.network.http_api import _safe_url_str
+
+        result = _safe_url_str("api.example.com/orders?key=sk-secret")
+        assert result == "api.example.com/orders"
+
+    def test_safe_method_returns_empty_for_mock_without_request(self):
+        from src.tools.network.http_api import _safe_method
+
+        mock_response = MagicMock()  # 无 .request 属性
+        assert _safe_method(mock_response) == ""
+
+
+class TestBusinessErrorHelpers:
+    def test_extract_detects_nonzero_code(self):
+        from src.tools.network.http_api import _extract_business_error
+
+        assert _extract_business_error({"Code": -1, "Error": "非空内容"}) == (
+            "Code=-1: 非空内容"
+        )
+
+    def test_extract_none_when_code_success(self):
+        from src.tools.network.http_api import _extract_business_error
+
+        for code in (0, 200, "0", "200"):
+            assert _extract_business_error({"Code": code, "Error": "x"}) is None
+
+    def test_extract_none_when_no_code_field(self):
+        from src.tools.network.http_api import _extract_business_error
+
+        assert _extract_business_error({"status": "ok"}) is None
+        assert _extract_business_error(["a", "b"]) is None
+        assert _extract_business_error("plain text") is None
+        assert _extract_business_error(None) is None
+
+    def test_extract_without_error_field(self):
+        from src.tools.network.http_api import _extract_business_error
+
+        assert _extract_business_error({"Code": -99}) == "Code=-99: "
+
+    def test_correlation_suffix_empty_without_tool_context(self):
+        """无工具执行上下文（测试环境/独立调用）时返回空串，不干扰日志。"""
+        from src.tools.network.http_api import _correlation_suffix
+
+        assert _correlation_suffix() == ""
+
+    def test_correlation_suffix_includes_context(self):
+        """工具执行上下文可用时，后缀携带 tenant/session/subagent 便于定位。"""
+        from src.tools.network.http_api import _correlation_suffix
+        from src.tools.context import ToolExecutionContext, tool_execution_scope
+
+        ctx = ToolExecutionContext(
+            tenant_id="tenant_001",
+            session_id="sess_1",
+            subagent_id="pre-sales",
+        )
+        with tool_execution_scope(ctx):
+            suffix = _correlation_suffix()
+        assert "tenant=tenant_001" in suffix
+        assert "session=sess_1" in suffix
+        assert "subagent=pre-sales" in suffix
+
 
 class TestHttpApiToolExecute:
     @pytest.mark.asyncio

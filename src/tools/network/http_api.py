@@ -3,6 +3,7 @@ import os
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
+from urllib.parse import urlsplit
 
 import httpx
 from loguru import logger
@@ -164,11 +165,25 @@ class HttpApiTool(BaseTool):
                 return _parse_response(response)
 
         except httpx.TimeoutException:
+            logger.error(
+                f"HTTP API 请求超时: method={method} url={_safe_url_str(url)} "
+                f"timeout={timeout}s{_correlation_suffix()}"
+            )
             return {"success": False, "error": f"请求超时（{timeout}秒）"}
         except httpx.ConnectError as e:
-            return {"success": False, "error": f"连接失败: {sanitize_error_info(str(e))}"}
+            msg = sanitize_error_info(str(e))
+            logger.error(
+                f"HTTP API 连接失败: method={method} url={_safe_url_str(url)} "
+                f"err={msg}{_correlation_suffix()}"
+            )
+            return {"success": False, "error": f"连接失败: {msg}"}
         except Exception as e:
-            return {"success": False, "error": f"请求异常: {sanitize_error_info(str(e))}"}
+            msg = sanitize_error_info(str(e))
+            logger.error(
+                f"HTTP API 请求异常: method={method} url={_safe_url_str(url)} "
+                f"err={msg}{_correlation_suffix()}"
+            )
+            return {"success": False, "error": f"请求异常: {msg}"}
         finally:
             for f in opened_files:
                 try:
@@ -325,6 +340,90 @@ def _safe_url_for_meta(response: httpx.Response) -> str:
         return ""
 
 
+def _safe_url_str(url: str) -> str:
+    """从 URL 字符串剥离 query/fragment/userinfo，用于异常分支的日志。
+
+    异常分支没有 response 对象，只有已替换过 ${VAR} 的 URL 字符串，query 里
+    可能含真实凭证，写日志前必须剥离。无 scheme / 非 http(s) / 解析异常时
+    退化为剥离 query 与 fragment 后的原始串，宁可不完整也不泄漏。
+    """
+    if not url:
+        return ""
+    try:
+        parts = urlsplit(url)
+        if parts.scheme not in ("http", "https"):
+            return url.split("?", 1)[0].split("#", 1)[0]
+        host = parts.hostname or ""
+        path = parts.path or "/"
+        return f"{parts.scheme}://{host}{path}"
+    except Exception:
+        return url.split("?", 1)[0].split("#", 1)[0]
+
+
+def _safe_method(response) -> str:
+    """提取请求方法用于日志；响应无 request 信息（如测试 mock）时返回空串。"""
+    try:
+        req = getattr(response, "request", None)
+        if req is None:
+            return ""
+        method = getattr(req, "method", "")
+        return method if isinstance(method, str) else ""
+    except Exception:
+        return ""
+
+
+def _extract_business_error(data: Any) -> Optional[str]:
+    """识别外部系统业务错误。
+
+    第三方 ERP 等系统用 HTTP 200 承载业务失败，响应体形如
+    {"Code": -1, "Error": "非空内容"}。仅当响应体为 dict 且含 Code 字段、
+    且值不在 (0, 200, "0", "200") 时才判定为业务错误，避免误伤不使用
+    Code 约定的第三方系统。识别到返回描述串，否则返回 None。
+    """
+    if not isinstance(data, dict):
+        return None
+    code = data.get("Code")
+    if code is None:
+        return None
+    if code in (0, 200, "0", "200"):
+        return None
+    error_text = (
+        data.get("Error")
+        or data.get("error")
+        or data.get("Message")
+        or data.get("message")
+        or ""
+    )
+    return f"Code={code}: {error_text}"
+
+
+def _correlation_suffix() -> str:
+    """追加请求关联上下文（租户/会话/子智能体），供错误日志定位。
+
+    http_api 在主智能体循环内作为工具调用时，ToolExecutor 会安装
+    current_tool_execution_context()。此处仅用于日志，读取失败或为空时
+    返回空串，绝不干扰工具结果或测试（测试环境无工具上下文）。
+    """
+    try:
+        from src.tools.context import current_tool_execution_context
+
+        ctx = current_tool_execution_context()
+    except Exception:
+        return ""
+    if not ctx:
+        return ""
+    parts = []
+    if ctx.tenant_id:
+        parts.append(f"tenant={ctx.tenant_id}")
+    if ctx.session_id:
+        parts.append(f"session={ctx.session_id}")
+    if ctx.subagent_id:
+        parts.append(f"subagent={ctx.subagent_id}")
+    if not parts:
+        return ""
+    return " " + " ".join(parts)
+
+
 def _parse_response(response: httpx.Response) -> Dict[str, Any]:
     """解析 HTTP 响应
 
@@ -333,6 +432,8 @@ def _parse_response(response: httpx.Response) -> Dict[str, Any]:
     小响应（≤5000）保持原样返回，不落盘，零回归。
     错误响应（非 2xx）不落盘，沿用 error 截断到 500 的既有逻辑；错误响应的 data
     也会截断（避免大错误体灌入上下文）。
+    HTTP 2xx 但响应体含 Code 字段且值非 0/200（业务错误，如
+    {"Code": -1, "Error": "非空内容"}）同样重分类为 success=False 并记 error 日志。
     """
     status_code = response.status_code
     success = 200 <= status_code < 300
@@ -347,6 +448,32 @@ def _parse_response(response: httpx.Response) -> Dict[str, Any]:
     if success:
         try:
             data = response.json()
+            # 业务错误识别：HTTP 2xx 但响应体含 Code 字段且值不为 0/200。
+            # 第三方 ERP 等系统用 HTTP 200 承载业务失败（如
+            # {"Code": -1, "Error": "非空内容"}）。识别到即标记 success=False
+            # 并记 error 日志（进入 log_error 表，管理员在 /portal/error-logs
+            # 直接可见，无需翻 LLM 上下文）。仅含 Code 字段才判定，避免误伤
+            # 不使用该约定的第三方系统。
+            business_error = _extract_business_error(data)
+            if business_error:
+                result["success"] = False
+                serialized = json.dumps(data, ensure_ascii=False)
+                if len(serialized) > 5000:
+                    error_data, truncated = truncate_text(serialized, limit=5000)
+                    result["data"] = error_data
+                    if truncated:
+                        result["truncated"] = True
+                else:
+                    result["data"] = data
+                err_text, _ = truncate_text(business_error, limit=500, suffix="")
+                result["error"] = f"业务错误 {err_text}"
+                logger.error(
+                    f"HTTP API 业务失败: method={_safe_method(response)} "
+                    f"url={_safe_url_for_meta(response)} status={status_code} "
+                    f"error={sanitize_error_info(business_error)}"
+                    f"{_correlation_suffix()}"
+                )
+                return result
             # 序列化后判断是否超长。小响应（≤5000）保留原始 JSON 对象语义，
             # 不转字符串——这是 Phase 2 已确立的契约。
             serialized = json.dumps(data, ensure_ascii=False)
@@ -405,5 +532,11 @@ def _parse_response(response: httpx.Response) -> Dict[str, Any]:
     if not success:
         error_data, _ = truncate_text(str(result["data"]), limit=500, suffix="")
         result["error"] = f"HTTP {status_code}: {error_data}"
+        logger.error(
+            f"HTTP API 调用失败: method={_safe_method(response)} "
+            f"url={_safe_url_for_meta(response)} status={status_code} "
+            f"error={sanitize_error_info(error_data)}"
+            f"{_correlation_suffix()}"
+        )
 
     return result

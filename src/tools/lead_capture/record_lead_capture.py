@@ -58,7 +58,9 @@ class RecordLeadCaptureTool(BaseTool):
         "- 客户未明确要求留资时，不要重复引导客户留资\n"
         "- 工具返回失败（如未配置顾问二维码）时，降级仅引导客户留下手机号\n"
         "- 调用成功后提示客户：客服会尽快联系。contact_method=qr 时顾问二维码图片"
-        "已随回复自动发送给客户，无需再引导客户添加微信或复制/下载该图片"
+        "已随回复自动发送给客户，无需再引导客户添加微信或复制/下载该图片\n"
+        "- 成功结果会返回 assignee_phone（归属员工手机号），供外部系统委托登录使用；"
+        "未返回说明归属员工未配置手机号"
     )
     usage_guide = ""
     display_name = "客户留资"
@@ -166,6 +168,7 @@ class RecordLeadCaptureTool(BaseTool):
         lead_id = f"lead_lc_{uuid.uuid4().hex[:12]}"
         assigned_to = kf_config.get("tenant_user_id")
         assignee_name = self._resolve_employee_name(assigned_to)
+        assignee_phone = self._resolve_employee_phone(assigned_to)
         kf_account_name = kf_config.get("name", "")
 
         from src.saas.db.lead_capture_db import LeadCaptureDB
@@ -222,6 +225,7 @@ class RecordLeadCaptureTool(BaseTool):
                 "message": "已为客户登记留资，顾问二维码图片已随本次回复发送给客户，"
                 "请勿再次复制或下载该二维码文件",
                 "images": [qr_ref.model_dump()],
+                "assignee_phone": assignee_phone,
             }
         logger.info(
             f"客户留资成功: lead_id={lead_id}, tenant={tenant_id}, "
@@ -230,6 +234,7 @@ class RecordLeadCaptureTool(BaseTool):
         return {
             "success": True,
             "message": "已登记客户留资，请告知客户客服会尽快联系",
+            "assignee_phone": assignee_phone,
         }
 
     @staticmethod
@@ -306,4 +311,19 @@ class RecordLeadCaptureTool(BaseTool):
             return (user or {}).get("nickname") or (user or {}).get("username")
         except Exception as e:
             logger.warning(f"解析归属员工姓名失败 assigned_to={assigned_to}: {e}")
+            return None
+
+    @staticmethod
+    def _resolve_employee_phone(assigned_to: Optional[str]) -> Optional[str]:
+        """解析归属员工手机号（users.phone），供外部系统委托登录使用。"""
+        if not assigned_to:
+            return None
+        try:
+            from src.db.models import UserDB
+
+            user = UserDB.get_by_id(assigned_to)
+            # 空串归一为 None，与「未配置手机号」降级语义一致
+            return (user or {}).get("phone") or None
+        except Exception as e:
+            logger.warning(f"解析归属员工手机号失败 assigned_to={assigned_to}: {e}")
             return None
