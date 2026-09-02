@@ -59,9 +59,6 @@ vi.mock('@/api/session', () => ({
   getSessionMessages: vi.fn().mockResolvedValue({ messages: [] }),
 }))
 
-vi.mock('@/composables/useDemoAuth', () => ({
-  useDemoAuth: () => ({ getAuthHeader: () => ({ Authorization: 'Bearer demo' }) }),
-}))
 vi.mock('@/composables/useTenantAuth', () => ({
   useTenantAuth: () => ({ getAuthHeader: () => ({ Authorization: 'Bearer tenant' }) }),
 }))

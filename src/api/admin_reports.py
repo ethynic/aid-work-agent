@@ -12,7 +12,6 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 from src.api.auth import get_current_user
-from src.config.settings import settings
 from src.saas.permissions.checker import is_platform_admin
 from src.saas.services.renewal import enrich_tenants_with_renewal
 from src.db.models import ChatRecordDB
@@ -97,12 +96,8 @@ async def get_platform_token_usage(
         tenant_id = tenant_item["tenant_id"]
         # 查询租户名称
         tenant_info = TenantDB.get_by_id(tenant_id)
-        if tenant_id == "demo":
-            company_name = "演示用户"
-            tenant_code = "demo"
-        else:
-            company_name = tenant_info.get("company_name", "未知公司") if tenant_info else "未知公司"
-            tenant_code = tenant_info.get("tenant_code", tenant_id) if tenant_info else tenant_id
+        company_name = tenant_info.get("company_name", "未知公司") if tenant_info else "未知公司"
+        tenant_code = tenant_info.get("tenant_code", tenant_id) if tenant_info else tenant_id
 
         tenant_data.append({
             "tenant_id": tenant_id,

@@ -14,7 +14,6 @@ from loguru import logger
 
 from src.saas.api.tenant_auth import require_admin
 from src.saas.db.reply_style_db import ReplyStyleDB, SYSTEM_TENANT
-from src.config.settings import settings
 
 router = APIRouter(prefix="/api/saas/reply-styles", tags=["SaaS 回复风格管理"])
 
@@ -79,9 +78,6 @@ def _trigger_reload():
 @router.get("/system/list")
 async def list_system_styles(request: Request):
     """列出所有系统内置风格"""
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
     _require_platform_admin(request)
     styles = ReplyStyleDB.list_system_styles()
 
@@ -103,9 +99,6 @@ async def list_system_styles(request: Request):
 @router.post("/system/create")
 async def create_system_style(request: Request, body: StyleCreateRequest):
     """新增系统内置风格"""
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
     _require_platform_admin(request)
 
     if ReplyStyleDB.exists(body.style_id, SYSTEM_TENANT):
@@ -128,9 +121,6 @@ async def create_system_style(request: Request, body: StyleCreateRequest):
 @router.get("/system/{style_id}")
 async def get_system_style(style_id: str, request: Request):
     """获取系统内置风格详情"""
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
     _require_platform_admin(request)
     style = ReplyStyleDB.get_active(style_id, SYSTEM_TENANT)
     if not style:
@@ -141,9 +131,6 @@ async def get_system_style(style_id: str, request: Request):
 @router.put("/system/{style_id}")
 async def update_system_style(style_id: str, request: Request, body: StyleUpdateRequest):
     """更新系统内置风格（创建新版本）"""
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
     _require_platform_admin(request)
 
     existing = ReplyStyleDB.get_active(style_id, SYSTEM_TENANT)
@@ -176,9 +163,6 @@ async def update_system_style(style_id: str, request: Request, body: StyleUpdate
 @router.delete("/system/{style_id}")
 async def delete_system_style(style_id: str, request: Request):
     """删除系统内置风格"""
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
     _require_platform_admin(request)
 
     if not ReplyStyleDB.exists(style_id, SYSTEM_TENANT):
@@ -193,9 +177,6 @@ async def delete_system_style(style_id: str, request: Request):
 @router.get("/system/{style_id}/versions")
 async def list_system_versions(style_id: str, request: Request):
     """列出系统内置风格的版本历史"""
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
     _require_platform_admin(request)
 
     versions = ReplyStyleDB.list_versions(style_id, SYSTEM_TENANT)
@@ -215,9 +196,6 @@ async def list_system_versions(style_id: str, request: Request):
 @router.post("/system/{style_id}/versions/{version}/activate")
 async def activate_system_version(style_id: str, version: int, request: Request):
     """激活系统内置风格的指定版本"""
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
     _require_platform_admin(request)
 
     success = ReplyStyleDB.activate_version(style_id, SYSTEM_TENANT, version)
@@ -233,9 +211,6 @@ async def activate_system_version(style_id: str, version: int, request: Request)
 @router.get("")
 async def list_styles(request: Request):
     """列出当前租户的风格 + 系统内置风格"""
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
     admin = require_admin(request)
     tenant_id = admin["tenant_id"]
     styles = ReplyStyleDB.list_active_by_tenant(tenant_id)
@@ -258,9 +233,6 @@ async def list_styles(request: Request):
 @router.post("")
 async def create_style(request: Request, body: StyleCreateRequest):
     """新增风格"""
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
     admin = require_admin(request)
     tenant_id = admin["tenant_id"]
 
@@ -284,9 +256,6 @@ async def create_style(request: Request, body: StyleCreateRequest):
 @router.get("/{style_id}")
 async def get_style(style_id: str, request: Request):
     """获取风格详情（当前激活版本）"""
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
     admin = require_admin(request)
     tenant_id = admin["tenant_id"]
 
@@ -300,9 +269,6 @@ async def get_style(style_id: str, request: Request):
 @router.put("/{style_id}")
 async def update_style(style_id: str, request: Request, body: StyleUpdateRequest):
     """更新风格（创建新版本）"""
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
     admin = require_admin(request)
     tenant_id = admin["tenant_id"]
 
@@ -341,9 +307,6 @@ async def update_style(style_id: str, request: Request, body: StyleUpdateRequest
 @router.delete("/{style_id}")
 async def delete_style(style_id: str, request: Request):
     """删除风格（所有版本）"""
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
     admin = require_admin(request)
     tenant_id = admin["tenant_id"]
 
@@ -362,9 +325,6 @@ async def delete_style(style_id: str, request: Request):
 @router.get("/{style_id}/versions")
 async def list_versions(style_id: str, request: Request):
     """列出版本历史"""
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
     admin = require_admin(request)
     tenant_id = admin["tenant_id"]
 
@@ -389,9 +349,6 @@ async def list_versions(style_id: str, request: Request):
 @router.post("/{style_id}/versions/{version}/activate")
 async def activate_version(style_id: str, version: int, request: Request):
     """激活指定版本（回滚）"""
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
     admin = require_admin(request)
     tenant_id = admin["tenant_id"]
 
@@ -413,9 +370,6 @@ async def activate_version(style_id: str, version: int, request: Request):
 @router.post("/reload")
 async def reload_styles(request: Request):
     """手动触发 StyleManager 热更新"""
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
     require_admin(request)
     _trigger_reload()
     return {"success": True}

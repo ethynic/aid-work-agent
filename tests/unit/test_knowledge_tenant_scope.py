@@ -1,13 +1,13 @@
 """知识库租户作用域 SQL 单元测试（无 PG 环境可跑）。
 
 安全加固设计 §2.4：list/count/delete/chunks 的租户作用域必须在 SQL 本体携带；
-无租户上下文（None）收窄到 demo/无主文档（与检索侧 vector_db/hybrid_retriever
+无租户上下文（None）收窄到无主文档（与检索侧 vector_db/hybrid_retriever
 及下载侧 _can_download_document 口径一致）。本测试用假连接捕获 execute 的 SQL
 文本与参数，离线断言收窄条件与占位符/参数一致性。
 
 平台管理员全局视图（global_view）：认证 platform_admin 且无租户上下文时，
 list/count/delete/chunks/search 不携带租户过滤（恢复 master 全局口径），
-与「未认证 None → demo/NULL 收窄」显式区分，None 一种取值不再承载两种身份。
+与「未认证 None → 无主文档收窄」显式区分，None 一种取值不再承载两种身份。
 search 的 global_view 同时透传到检索层（FTS + 向量两路 SQL 均放开租户收窄），
 检索层 SQL 构造由假连接捕获离线断言，而非 mock 掉检索层只验证标题回查。
 """
@@ -83,17 +83,17 @@ def _load_real_vector_db():
 
 
 class TestListCountTenantScope:
-    def test_list_none_tenant_narrowed_to_demo_or_null(self):
+    def test_list_none_tenant_narrowed_to_null(self):
         _, executed = _run("list_documents", tenant_id=None)
         sql = _flat(executed[0][0])
-        assert "tenant_id = 'demo' OR tenant_id IS NULL" in sql
+        assert "tenant_id IS NULL" in sql
         assert "tenant_id = %s" not in sql
         assert executed[0][1] == []  # 无租户参数
 
-    def test_count_none_tenant_narrowed_to_demo_or_null(self):
+    def test_count_none_tenant_narrowed_to_null(self):
         _, executed = _run("count_documents", rows=[{"count": 0}], tenant_id=None)
         sql = _flat(executed[0][0])
-        assert "tenant_id = 'demo' OR tenant_id IS NULL" in sql
+        assert "tenant_id IS NULL" in sql
         assert "tenant_id = %s" not in sql
 
     def test_list_with_tenant_uses_equality_param(self):
@@ -110,12 +110,12 @@ class TestListCountTenantScope:
 
 
 class TestChunksTenantScope:
-    def test_get_chunks_none_tenant_joins_demo_or_null(self):
+    def test_get_chunks_none_tenant_joins_null_scope(self):
         _, executed = _run("get_document_chunks", 7, tenant_id=None)
         sql, params = executed[0]
         flat = _flat(sql)
         assert "JOIN documents d ON d.id = c.doc_id" in flat
-        assert "(d.tenant_id = 'demo' OR d.tenant_id IS NULL)" in flat
+        assert "d.tenant_id IS NULL" in flat
         assert params == [7]  # 仅 doc_id，无租户参数
 
     def test_get_chunks_with_tenant_param_order(self):
@@ -139,7 +139,7 @@ class TestDeleteTenantScope:
         # SELECT 存在性检查 / DELETE chunks / DELETE documents 三处均带收窄条件
         assert len(sqls) == 3
         for sql in sqls:
-            assert "tenant_id = 'demo' OR tenant_id IS NULL" in sql
+            assert "tenant_id IS NULL" in sql
         # chunks 的 DELETE 经 documents 子查询关联租户
         assert "doc_id IN (SELECT id FROM documents" in sqls[1]
         # 无租户参数（仅 doc_id）
@@ -233,7 +233,7 @@ class TestGlobalAdminViewScope:
 
     @pytest.mark.asyncio
     async def test_search_none_tenant_narrowed_by_default(self):
-        """默认（非全局视图）搜索标题回查仍收窄 demo/NULL（既有防泄漏行为保持）"""
+        """默认（非全局视图）搜索标题回查仍收窄到无主文档（既有防泄漏行为保持）"""
         retriever = MagicMock()
         retriever.retrieve = AsyncMock(return_value=[{"doc_id": 11, "chunk_id": 111, "text": "片段", "score": 0.9}])
         cur = _FakeCursor(rows=[{"id": 11, "title": "x", "file_type": "txt", "file_path": "/tmp/x.txt"}])
@@ -246,7 +246,7 @@ class TestGlobalAdminViewScope:
 
         assert result["success"] is True
         sql = _flat(cur.executed[0][0])
-        assert "tenant_id = 'demo' OR tenant_id IS NULL" in sql
+        assert "tenant_id IS NULL" in sql
 
 
 class TestFtsGlobalViewSQL:
@@ -271,7 +271,7 @@ class TestFtsGlobalViewSQL:
         assert "text_vec @@ plainto_tsquery" in flat
         assert params == ["差旅", "差旅", 5]  # 仅查询词与 LIMIT，无租户参数
 
-    def test_default_global_view_false_keeps_demo_narrowing(self):
+    def test_default_global_view_false_keeps_null_narrowing(self):
         """不传 global_view（既有调用方形态）→ 收窄条件与现在一致（防回归）"""
         cur = _FakeCursor([])
         retriever = self._make_retriever(cur)
@@ -279,7 +279,7 @@ class TestFtsGlobalViewSQL:
 
         sql, params = cur.executed[0]
         flat = _flat(sql)
-        assert "(d.tenant_id = 'demo' OR d.tenant_id IS NULL)" in flat
+        assert "d.tenant_id IS NULL" in flat
         assert params == ["差旅", "差旅", 5]
 
     def test_explicit_global_view_false_identical_to_default(self):
@@ -342,14 +342,14 @@ class TestVectorSearchGlobalViewSQL:
         assert params == ["[0.1,0.2,0.3,0.4]", 5]  # 仅查询向量与 LIMIT，无租户参数
 
     @pytest.mark.asyncio
-    async def test_default_keeps_demo_narrowing(self):
+    async def test_default_keeps_null_narrowing(self):
         """不传 global_view（既有调用方形态）→ 收窄条件与现在一致（防回归）"""
         cur = _FakeCursor([])
         await self._search(cur, tenant_id=None)
 
         sql, params = self._select_sql(cur)
         flat = _flat(sql)
-        assert "d.tenant_id = 'demo' OR d.tenant_id IS NULL" in flat
+        assert "d.tenant_id IS NULL" in flat
         assert params == ["[0.1,0.2,0.3,0.4]", 5]
 
     @pytest.mark.asyncio
@@ -459,7 +459,7 @@ def _make_api_request(user_role="unset", path="/api/knowledge/documents", header
 
 
 class TestIsGlobalAdminViewHelper:
-    """四种身份语义的 API 层判定：未认证 None / demo / platform_admin 全局 / 指定租户"""
+    """三种身份语义的 API 层判定：未认证 None / 普通租户 / platform_admin 全局"""
 
     def setup_method(self):
         set_tenant_context(None, None)
@@ -484,15 +484,15 @@ class TestIsGlobalAdminViewHelper:
         assert _is_global_admin_view(_make_api_request(user_role="employee")) is False
 
     def test_unauthenticated_not_global(self):
-        """未认证（state 无 user_role，非 SaaS 模式同理）→ 收窄"""
+        """未认证（state 无 user_role）→ 收窄"""
         from src.knowledge.api import _is_global_admin_view
         set_tenant_context(None, None)
         assert _is_global_admin_view(_make_api_request()) is False
 
-    def test_demo_tenant_not_global(self):
-        """demo 公共身份（tenant='demo'）→ demo 作用域，非全局"""
+    def test_regular_tenant_not_global(self):
+        """普通租户上下文（如 tenant_test1）→ 该租户作用域，非全局"""
         from src.knowledge.api import _is_global_admin_view
-        set_tenant_context("demo", "u1")
+        set_tenant_context("tenant_test1", "u1")
         assert _is_global_admin_view(_make_api_request(user_role="employee")) is False
 
     def test_missing_request_not_global(self):
@@ -628,7 +628,7 @@ class TestKnowledgeApiScopeCombination:
 
     @pytest.mark.asyncio
     async def test_unauthenticated_list_stays_narrowed(self):
-        """未认证（无 user_role）→ global_view=False，保持 demo/NULL 收窄"""
+        """未认证（无 user_role）→ global_view=False，保持无主文档收窄"""
         from src.knowledge import api as kb_api
 
         request = _make_api_request(path="/api/knowledge/documents")

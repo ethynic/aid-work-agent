@@ -26,21 +26,16 @@ def _sanitize_error(error_msg: str) -> str:
 def _get_request_identity(request: Request) -> tuple[str, str]:
     """返回请求级 user/tenant 身份；租户来源缺失或无法验证时 fail-closed。
 
-    租户优先取请求上下文（TenantMiddleware 注入），SaaS 部署下缺失时回退认证
-    用户行上的 tenant_id（''=平台管理员/公共用户），两处来源都缺失视为上下文
-    不可信，403 拒绝，绝不把未知身份隐式当成公共租户。
-    非 SaaS 部署无租户语义，统一解析为 ''（与工具层 _resolve_runtime_tenant_id
-    一致），否则 demo 等用户行自带租户时，工具创建的 '' 任务在 API 视图不可见。
+    租户优先取请求上下文（TenantMiddleware 注入），缺失时回退认证用户行上的
+    tenant_id（''=平台管理员/公共用户），两处来源都缺失视为上下文不可信，
+    403 拒绝，绝不把未知身份隐式当成公共租户。
     """
     user = get_current_user(request)
     if not user or not user.get("user_id"):
         raise HTTPException(status_code=401, detail="未登录")
     tenant_id = get_current_tenant_id()
     if tenant_id is None:
-        from src.config.settings import settings
-        if not settings.saas.enabled:
-            tenant_id = ""
-        elif "tenant_id" in user:
+        if "tenant_id" in user:
             tenant_id = user.get("tenant_id") or ""
         else:
             raise HTTPException(status_code=403, detail="租户上下文缺失")

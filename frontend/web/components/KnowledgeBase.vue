@@ -471,29 +471,22 @@ import {
   getDocumentChunks, type ChunkResponse
 } from '@/api/knowledge'
 import { formatFileSize } from '@/utils/file'
-import { useDemoAuth } from '@/composables/useDemoAuth'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 
 const router = useRouter()
 const route = useRoute()
-const { user: demoUser, isLoggedIn: demoIsLoggedIn, logout: demoLogout } = useDemoAuth()
 const { admin: tenantAdmin, isLoggedIn: tenantIsLoggedIn, logout: tenantLogout } = useTenantAuth()
 
 const isTenantMode = computed(() => route.path.startsWith('/t/'))
 
-const effectiveIsLoggedIn = computed(() => {
-  return isTenantMode.value ? tenantIsLoggedIn.value : demoIsLoggedIn.value
-})
+const effectiveIsLoggedIn = computed(() => tenantIsLoggedIn.value)
 
 const effectiveUser = computed(() => {
-  if (isTenantMode.value) {
-    return tenantAdmin.value ? {
-      user_id: tenantAdmin.value.user_id,
-      username: tenantAdmin.value.username,
-      phone: tenantAdmin.value.phone
-    } : null
-  }
-  return demoUser.value
+  return tenantAdmin.value ? {
+    user_id: tenantAdmin.value.user_id,
+    username: tenantAdmin.value.username,
+    phone: tenantAdmin.value.phone
+  } : null
 })
 const toast = useToast()
 
@@ -1265,11 +1258,7 @@ function truncateVector(vecText: string | null): string {
 }
 
 async function handleLogout() {
-  if (isTenantMode.value) {
-    await tenantLogout()
-  } else {
-    await demoLogout()
-  }
+  await tenantLogout()
   router.push(isTenantMode.value ? route.path.replace(/\/knowledge.*/, '') : '/')
 }
 

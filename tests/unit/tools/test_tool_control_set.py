@@ -134,9 +134,8 @@ async def test_delegate_db_fallback_runs_off_event_loop():
     assert lookup_threads and lookup_threads[0] != event_loop_thread
 
 
-def test_delegation_authorizer_isolates_tenants(monkeypatch):
-    from src.config.settings import settings
-    monkeypatch.setattr(settings.saas, "enabled", True)
+def test_delegation_authorizer_isolates_tenants():
+    """租户间委派授权隔离（SaaS 开关已移除，恒为 SaaS 模式）"""
     authorizer = DelegationAuthorizer(
         lambda tenant_id: {"travel"} if tenant_id == "tenant-a" else set()
     )

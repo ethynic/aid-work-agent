@@ -77,7 +77,7 @@ POST https://your-domain.com/wecom/callback?msg_signature=xxx&timestamp=16094592
 
 ## 2. 部署模式
 
-系统支持两种部署模式，选择取决于你的使用场景:
+系统恒为 SaaS 多租户模式。下表中「单租户模式」指历史遗留的全局回调方式（`/wecom/callback`），仅作参考，新部署一律使用多租户模式:
 
 ### 模式对比
 

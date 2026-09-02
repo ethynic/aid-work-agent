@@ -17,10 +17,6 @@ class DelegationAuthorizer:
         subagent_name: str,
         subagent_config,
     ) -> bool:
-        from src.config.settings import settings
-
-        if not settings.saas.enabled:
-            return True
         tenant_id = context.tenant_id if context else None
         if not tenant_id:
             return False

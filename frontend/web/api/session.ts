@@ -28,7 +28,7 @@ function getAuthHeader(): Record<string, string> {
     const portalToken = credentialGet('portal_token')
     if (portalToken) headers['Authorization'] = `Bearer ${portalToken}`
   } else {
-    // 普通路由使用 demo_token
+    // 普通路由/桌面端走统一 getAuthHeader（读 saas_token）
     headers = getNormalAuthHeader()
   }
 

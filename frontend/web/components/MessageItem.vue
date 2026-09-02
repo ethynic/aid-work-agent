@@ -175,7 +175,6 @@ import { useAttachmentPreview } from '@/composables/useAttachmentPreview'
 import { renderMarkdown } from '@/utils/markdown'
 import { useDebugMode } from '@/composables/useDebugMode'
 import HumanAssistanceCard from './browser/HumanAssistanceCard.vue'
-import { useDemoAuth } from '@/composables/useDemoAuth'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 import { useAgent } from '@/composables/useAgent'
 
@@ -212,9 +211,7 @@ function handleOptionClick(index: number) {
 
 const { openPreview } = useAttachmentPreview()
 const { isDebugEnabled } = useDebugMode()
-const authHeaders = computed(() => window.location.pathname.startsWith('/t/')
-  ? useTenantAuth().getAuthHeader()
-  : useDemoAuth().getAuthHeader())
+const authHeaders = computed(() => useTenantAuth().getAuthHeader())
 
 function updateAssistance(assistance: any) {
   props.message.browserAssistance = assistance

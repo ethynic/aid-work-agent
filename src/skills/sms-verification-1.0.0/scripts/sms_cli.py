@@ -8,7 +8,7 @@
 - verify: 校验用户输入的验证码
 
 复用 src.db.models.send_sms_code / verify_sms_code 底层能力，复用 sms_codes 表
-（TTL 15 分钟，演示模式固定 888888，qb_sms_code bypass）。
+（TTL 15 分钟，qb_sms_code bypass）。
 
 频控（脚本层）：
 - 60s 内同一手机号只能发送 1 次（防秒刷）
@@ -215,9 +215,9 @@ def send_sms(
 
     流程：
     1. 校验手机号
-    2. 检查短信通道可用性（非演示模式）
+    2. 检查短信通道可用性
     3. 频控检查（60s + 24h 上限）
-    4. 调用底层 send_sms_code（含演示模式 888888、qb_sms_code bypass、15 分钟 TTL）
+    4. 调用底层 send_sms_code（含 qb_sms_code bypass、15 分钟 TTL）
     5. 成功后记录频控计数
     6. 返回 JSON（不含 code）
 
@@ -240,24 +240,23 @@ def send_sms(
             "debug": "invalid mobile format",
         }
 
-    # 2. 检查短信通道可用性（演示模式跳过，底层 send_sms_code 会处理 888888）
-    if not settings.demo.enabled:
-        try:
-            sender = sms_manager.get_sender()
-            if sender is None or not sender.is_available():
-                logger.error(f"短信通道未配置，无法发送验证码 mobile={mobile}")
-                return {
-                    "success": False,
-                    "error": "短信通道未配置，请联系管理员",
-                    "debug": "sms sender not available",
-                }
-        except Exception as e:
-            logger.opt(exception=True).error(f"短信通道检查异常: {e}")
+    # 2. 检查短信通道可用性
+    try:
+        sender = sms_manager.get_sender()
+        if sender is None or not sender.is_available():
+            logger.error(f"短信通道未配置，无法发送验证码 mobile={mobile}")
             return {
                 "success": False,
-                "error": "短信通道检查失败",
-                "debug": sanitize_error_info(str(e)),
+                "error": "短信通道未配置，请联系管理员",
+                "debug": "sms sender not available",
             }
+    except Exception as e:
+        logger.opt(exception=True).error(f"短信通道检查异常: {e}")
+        return {
+            "success": False,
+            "error": "短信通道检查失败",
+            "debug": sanitize_error_info(str(e)),
+        }
 
     # 3. 频控检查
     blocked = _check_rate_limit(mobile)

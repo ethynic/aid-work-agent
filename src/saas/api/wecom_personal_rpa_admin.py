@@ -28,7 +28,6 @@ from pydantic import BaseModel, Field
 from src.channels.wecom_personal_rpa import db as rpa_db
 from src.channels.wecom_personal_rpa import observability
 from src.channels.wecom_personal_rpa.secret_crypto import encrypt_secret
-from src.config.settings import settings
 from src.core.cache_utils import CacheKeys
 from src.core.redis_client import redis_client
 from src.saas.api.tenant_auth import require_admin, sanitize_error_info
@@ -93,13 +92,6 @@ class UpdateAccountIdentityRequest(BaseModel):
 # ===========================================================================
 # 工具函数
 # ===========================================================================
-
-
-def _ensure_saas_enabled() -> Optional[Dict[str, Any]]:
-    """SaaS 未启用时返回错误响应 dict，启用时返回 None。"""
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式，无法访问"}
-    return None
 
 
 def _ok(data: Any = None, **extra: Any) -> Dict[str, Any]:
@@ -264,9 +256,6 @@ async def register_client(request: Request, body: ClientRegisterRequest):
     同时在 tenant_channel_configs 写入一条 channel_type=wecom_personal_rpa 的配置，
     config 中保存 client_id 供渠道回调路由使用。
     """
-    if err := _ensure_saas_enabled():
-        return err
-
     admin = require_admin(request)
     tenant_id = admin["tenant_id"]
     user_id = admin.get("user_id")
@@ -337,9 +326,6 @@ async def register_client(request: Request, body: ClientRegisterRequest):
 @router.get("/clients")
 async def list_clients(request: Request):
     """列出租户下所有客户端，附 accounts 概要与 last_seen，不含 encrypted_secret。"""
-    if err := _ensure_saas_enabled():
-        return err
-
     admin = require_admin(request)
     clients = rpa_db.list_clients(admin["tenant_id"])
     return _ok([_client_summary(c) for c in clients])
@@ -348,9 +334,6 @@ async def list_clients(request: Request):
 @router.get("/clients/{client_id}/accounts")
 async def list_client_accounts(client_id: str, request: Request):
     """列出某客户端下的所有账号。"""
-    if err := _ensure_saas_enabled():
-        return err
-
     admin = require_admin(request)
     tenant_id = admin["tenant_id"]
 
@@ -369,8 +352,6 @@ async def update_account_identity(
     account_id: str, body: UpdateAccountIdentityRequest, request: Request
 ):
     """配置账号权威企微成员身份；响应不返回 userid 明文。"""
-    if err := _ensure_saas_enabled():
-        return err
     admin = require_admin(request)
     tenant_id = admin["tenant_id"]
     user_id = body.wecom_user_id.strip()
@@ -419,9 +400,6 @@ async def rotate_client_secret(client_id: str, request: Request):
     生成新 secret，加密入库（db.rotate_secret），返回新明文一次。
     旧密钥立即失效。客户端需用新 secret 重新计算 HMAC 签名。
     """
-    if err := _ensure_saas_enabled():
-        return err
-
     admin = require_admin(request)
     tenant_id = admin["tenant_id"]
     user_id = admin.get("user_id")
@@ -470,9 +448,6 @@ async def pause_client(client_id: str, request: Request):
     暂停后该 client 的所有 account / binding 不再被自动处理（具体由 inbound 路由判定）。
     平台管理员代管理时必须用 X-Tenant-Id 指定目标租户（对齐 rotate_secret 的隔离模型）。
     """
-    if err := _ensure_saas_enabled():
-        return err
-
     admin = require_admin(request)
     tenant_id = admin["tenant_id"]
     user_id = admin.get("user_id")
@@ -511,9 +486,6 @@ async def resume_client(client_id: str, request: Request):
 
     平台管理员代管理时必须用 X-Tenant-Id 指定目标租户（对齐 rotate_secret 的隔离模型）。
     """
-    if err := _ensure_saas_enabled():
-        return err
-
     admin = require_admin(request)
     tenant_id = admin["tenant_id"]
     user_id = admin.get("user_id")
@@ -595,9 +567,6 @@ async def _backfill_external_contact_names(tenant_id: str, bindings: List[Dict[s
 @router.get("/accounts/{account_id}/bindings")
 async def list_account_bindings(account_id: str, request: Request):
     """列出某账号下的所有会话绑定。"""
-    if err := _ensure_saas_enabled():
-        return err
-
     admin = require_admin(request)
     tenant_id = admin["tenant_id"]
 
@@ -622,9 +591,6 @@ async def list_bindings(
 
     status=needs_review 用于列待复核绑定。
     """
-    if err := _ensure_saas_enabled():
-        return err
-
     admin = require_admin(request)
     tenant_id = admin["tenant_id"]
 
@@ -655,9 +621,6 @@ async def list_all_bindings(
     agent_base_url / last_heartbeat_at / min_version / created_at / updated_at /
     account_count / binding_count / last_account_name。
     """
-    if err := _ensure_saas_enabled():
-        return err
-
     admin = require_admin(request)
     _require_platform_admin(admin)
 
@@ -678,9 +641,6 @@ async def update_client_agent_base_url(
 
     平台管理员可更新任意租户的客户端；租户管理员仅能更新自己租户的客户端（tenant 隔离由 require_admin 保证）。
     """
-    if err := _ensure_saas_enabled():
-        return err
-
     admin = require_admin(request)
     user_id = admin.get("user_id")
 
@@ -732,9 +692,6 @@ async def confirm_binding(binding_id: str, request: Request):
 
     只有 needs_review / pending 状态的绑定可被确认。已 active 视为幂等成功。
     """
-    if err := _ensure_saas_enabled():
-        return err
-
     admin = require_admin(request)
     tenant_id = admin["tenant_id"]
     user_id = admin.get("user_id")
@@ -784,9 +741,6 @@ async def update_binding(binding_id: str, request: Request, body: UpdateBindingR
     None 表示"不修改"；显式传空 list 表示"清除该字段"。
     平台管理员代管理时通过 X-Tenant-Id 指定目标租户。
     """
-    if err := _ensure_saas_enabled():
-        return err
-
     admin = require_admin(request)
     tenant_id = admin["tenant_id"]
     user_id = admin.get("user_id")
@@ -846,9 +800,6 @@ async def update_binding(binding_id: str, request: Request, body: UpdateBindingR
 @router.delete("/bindings/{binding_id}")
 async def delete_binding(binding_id: str, request: Request):
     """删除尚未投入使用的绑定；正常或暂停绑定禁止直接删除。"""
-    if err := _ensure_saas_enabled():
-        return err
-
     admin = require_admin(request)
     tenant_id = admin["tenant_id"]
     user_id = admin.get("user_id")
@@ -931,9 +882,6 @@ async def pause(request: Request, body: PauseResumeRequest):
     - conversation：set_binding_status(paused)
     - tenant：遍历 list_accounts，全部置 paused
     """
-    if err := _ensure_saas_enabled():
-        return err
-
     admin = require_admin(request)
     tenant_id = admin["tenant_id"]
     user_id = admin.get("user_id")
@@ -1003,9 +951,6 @@ async def pause(request: Request, body: PauseResumeRequest):
 @router.post("/resume")
 async def resume(request: Request, body: PauseResumeRequest):
     """恢复（tenant / account / conversation 三选一，幂等）。"""
-    if err := _ensure_saas_enabled():
-        return err
-
     admin = require_admin(request)
     tenant_id = admin["tenant_id"]
     user_id = admin.get("user_id")
@@ -1085,9 +1030,6 @@ async def list_audit(
     limit: int = Query(100, ge=1, le=500, description="返回条数上限"),
 ):
     """查询审计日志（支持 category / client_id / account_id / action_id 过滤）。"""
-    if err := _ensure_saas_enabled():
-        return err
-
     admin = require_admin(request)
     tenant_id = admin["tenant_id"]
 
@@ -1119,8 +1061,6 @@ async def get_metrics(
 
     只读端点，不写审计。时间窗内的审计/outbox 聚合 + 当前态的客户端/账号/绑定。
     """
-    if err := _ensure_saas_enabled():
-        return err
     admin = require_admin(request)
     tenant_id = admin["tenant_id"]
 
@@ -1147,8 +1087,6 @@ async def get_alerts(request: Request):
     只读端点，不写审计。基于当前态 + 最近 50 条 outbox 评估，无后台调度。
     版本过低 / 延迟类告警暂未实现（前者需协议增加 client_version，后者无数据源）。
     """
-    if err := _ensure_saas_enabled():
-        return err
     admin = require_admin(request)
     tenant_id = admin["tenant_id"]
 

@@ -62,13 +62,13 @@ bs_[subagent]_[tablename]
 
 #### 租户隔离要求
 
-所有业务数据表（`bs_` 开头）**必须**包含 `tenant_id` 字段，实现租户数据隔离。当 SaaS 模式禁用时，该字段允许为 `NULL`。
+所有业务数据表（`bs_` 开头）**必须**包含 `tenant_id` 字段，实现租户数据隔离。系统恒为 SaaS 多租户模式，`tenant_id` 由业务代码保证写入；仅 platform_admin 全局视图、无 HTTP 上下文的后台调用（渠道回调 / 定时任务 / CLI 脚本）等场景允许为 `NULL`。
 
 ```sql
 CREATE TABLE IF NOT EXISTS bs_trade_specialist_matched_customers (
     id SERIAL PRIMARY KEY,
     customer_id TEXT UNIQUE NOT NULL,
-    tenant_id TEXT,  -- 租户ID，SAAS模式下必填，非SAAS模式可为NULL
+    tenant_id TEXT,  -- 租户ID，业务写入时必填；platform_admin 全局视图/后台任务可为 NULL
     user_id TEXT NOT NULL,
     ...
 );
@@ -150,7 +150,7 @@ def init_tables():
 |------|------|------|------|
 | `user_id` | TEXT | 必填（无法确定创建用户时可为 NULL） | 创建用户 ID，后端创建数据时应尽量附带此字段 |
 | `created_at` | TIMESTAMP | 必填，带数据库默认值 `DEFAULT CURRENT_TIMESTAMP` | 创建时间，后端代码无需手动指定 |
-| `tenant_id` | TEXT | 必填（非 SAAS 模式可为 NULL） | 租户隔离，见上文租户隔离要求 |
+| `tenant_id` | TEXT | 必填（platform_admin 全局视图/后台任务可为 NULL） | 租户隔离，见上文租户隔离要求 |
 
 ```sql
 CREATE TABLE IF NOT EXISTS bs_example (

@@ -69,7 +69,7 @@ class MediaRegistry:
 
         Args:
             source_path: 源文件路径
-            tenant_id: 租户 id（demo 模式可为空串，但 storage 需要目录，故传 "demo" 占位）
+            tenant_id: 租户 id（后台无租户上下文时可为空串，但 storage 需要目录，故传 "_anonymous" 占位）
             mime_type: 显式指定（如 video/mp4 / image/jpeg）
             scene_subdir: storage 子目录，默认 videos；图片可传 images
             ttl_seconds: Redis TTL，None 表示永久；成片默认 7 天
@@ -78,7 +78,7 @@ class MediaRegistry:
             file_id（格式 file_<12hex>），下载走 GET /api/files/{file_id}/download
         """
         # tenant_id 为空时用占位目录（storage.ensure_tenant_storage_dir 不接受空串）
-        tid = tenant_id or "demo"
+        tid = tenant_id or "_anonymous"
         file_id = f"file_{uuid.uuid4().hex[:12]}"
         ext = Path(source_path).suffix or ".mp4"
         scene = f"{scene_subdir}/{datetime.now().strftime('%Y-%m')}"

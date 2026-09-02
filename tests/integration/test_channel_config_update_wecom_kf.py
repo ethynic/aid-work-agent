@@ -151,8 +151,6 @@ class TestUpdateChannelKeepKfAccount:
         ) as mock_update, patch(
             "src.saas.api.channel_config.ChannelFactory.invalidate_adapter",
             new=AsyncMock(return_value=None),
-        ), patch(
-            "src.saas.api.channel_config.settings.saas.enabled", True
         ):
             resp = client.put(
                 "/api/saas/channels/chan_cc10f9591586",
@@ -200,8 +198,6 @@ class TestUpdateChannelKeepKfAccount:
         ) as mock_update, patch(
             "src.saas.api.channel_config.ChannelFactory.invalidate_adapter",
             new=AsyncMock(return_value=None),
-        ), patch(
-            "src.saas.api.channel_config.settings.saas.enabled", True
         ):
             resp = client.put(
                 "/api/saas/channels/chan_wecom_1",

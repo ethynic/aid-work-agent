@@ -177,7 +177,8 @@ http.post('/api/saas/auth/sms/send', () => {
 
 http.post('/api/saas/auth/login', async ({ request }) => {
   const body = await request.json() as any
-  if (body.phone && body.code === '888888') {
+  // 短信验证码固定码 888888 已随 demo 模式移除删除，mock 直接放行任意 code
+  if (body.phone && body.code) {
     return HttpResponse.json({
       success: true,
       token: 'saas_test_token',

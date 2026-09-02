@@ -1,4 +1,4 @@
-const TOKEN_KEY = /^(demo_token|user_info|saas_(token|admin|tenant)(_[a-zA-Z0-9_-]{1,128})?)$/
+const TOKEN_KEY = /^(user_info|saas_(token|admin|tenant)(_[a-zA-Z0-9_-]{1,128})?)$/
 const desktopMemory = new Map<string, string>()
 const credentialVersions = new Map<string, number>()
 let desktopHydrated = false

@@ -13,7 +13,7 @@ const isLoading = ref(false)
  *
  * 使用场景：
  * - 租户模式（/t/*）：调用 getMyAllowedAgents，返回 AgentItem[]（含实例信息）
- * - 演示模式（其他路由）：调用 listSubagents，返回 SubagentListItem[]
+ * - 非租户路由（/portal 等）：调用 listSubagents，返回 SubagentListItem[]
  */
 export function useSubagentList() {
   /**
@@ -39,7 +39,7 @@ export function useSubagentList() {
         // 租户模式下使用 allowed-agents 接口
         res = await getMyAllowedAgents()
       } else {
-        // 演示模式下使用 listSubagents 接口
+        // 非租户路由使用 listSubagents 接口
         const { listSubagents } = await import('@/api/subagent')
         res = await listSubagents()
       }

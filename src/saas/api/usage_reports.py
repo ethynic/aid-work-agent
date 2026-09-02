@@ -16,7 +16,6 @@ from src.saas.api.tenant_auth import require_admin, get_current_admin
 from src.saas.db.usage_log_db import UsageLogDB
 from src.db.models import ChatRecordDB
 from src.api.auth import get_current_user
-from src.config.settings import settings
 
 router = APIRouter(prefix="/api/saas/reports", tags=["SaaS 使用报告"])
 
@@ -27,9 +26,6 @@ async def get_usage_summary(
     period: str = Query("month", description="统计维度：day/week/month"),
 ):
     """获取企业用量汇总"""
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
     admin = require_admin(request)
     tenant_id = admin["tenant_id"]
 
@@ -58,9 +54,6 @@ async def get_user_usage(
     days: int = Query(30, description="天数", ge=1, le=365),
 ):
     """获取每用户使用明细"""
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
     admin = require_admin(request)
     tenant_id = admin["tenant_id"]
 
@@ -82,9 +75,6 @@ async def get_session_stats(
     days: int = Query(30, description="天数", ge=1, le=365),
 ):
     """获取会话统计"""
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
     admin = require_admin(request)
 
     # 复用 summary 数据
@@ -107,9 +97,6 @@ async def export_usage_report(
     days: int = Query(30, description="天数", ge=1, le=365),
 ):
     """导出使用报告（JSON 格式）"""
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
     admin = require_admin(request)
     tenant_id = admin["tenant_id"]
 
@@ -139,9 +126,6 @@ async def get_token_detail(
     days: int = Query(30, description="天数", ge=1, le=365),
 ):
     """获取 Token 用量明细趋势（含 input/output/cached 分项）"""
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
     admin = require_admin(request)
     tenant_id = admin["tenant_id"]
 
@@ -163,9 +147,6 @@ async def get_model_usage(
     days: int = Query(30, description="天数", ge=1, le=365),
 ):
     """获取按模型分组的 Token 用量统计"""
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
     admin = require_admin(request)
     tenant_id = admin["tenant_id"]
 
@@ -193,9 +174,6 @@ async def get_tenant_token_details(
 
     仅租户管理员可访问，显示本租户在指定月份的Token消耗明细，支持分页。
     """
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
     admin = require_admin(request)
     tenant_id = admin["tenant_id"]
 

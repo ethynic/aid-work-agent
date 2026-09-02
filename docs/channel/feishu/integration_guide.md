@@ -178,9 +178,9 @@
 
 回调 URL 中的 `{tenant_id}` 路径段由系统从 URL 解析，无需在配置中显式指定。
 
-### 3.2 单租户模式（config.yaml）
+### 3.2 全局渠道配置（config.yaml）
 
-非 SaaS 部署且不方便用管理后台时，可直接在 `configs/config.yaml` 中配置（注意:项目已不再读取 `FEISHU_*` 环境变量,需将凭证明文填入配置）：
+不方便使用管理后台时，可直接在 `configs/config.yaml` 中配置全局兜底渠道（不推荐，优先使用管理后台的租户渠道配置；注意:项目已不再读取 `FEISHU_*` 环境变量,需将凭证明文填入配置）：
 
 ```yaml
 channels:

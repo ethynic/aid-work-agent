@@ -105,9 +105,8 @@ export async function phoneCodeLogin(phone: string, code: string): Promise<Login
  * 获取当前用户信息
  */
 export async function getCurrentUser(): Promise<any> {
-  // 按当前路由选择正确的 token key（租户前台按 tenant_id 隔离，演示模式用 demo_token）
-  const isTenantMode = window.location.pathname.startsWith('/t/')
-  const tokenKey = isTenantMode ? getTenantScopedKey('saas_token') : 'demo_token'
+  // 按当前路由选择正确的 token key（租户前台按 tenant_id 隔离）
+  const tokenKey = getTenantScopedKey('saas_token')
   const token = credentialGet(tokenKey)
   if (!token) return null
 
@@ -123,8 +122,7 @@ export async function getCurrentUser(): Promise<any> {
  * 登出
  */
 export async function logout(): Promise<void> {
-  const isTenantMode = window.location.pathname.startsWith('/t/')
-  const tokenKey = isTenantMode ? getTenantScopedKey('saas_token') : 'demo_token'
+  const tokenKey = getTenantScopedKey('saas_token')
   const token = credentialGet(tokenKey)
   if (token) {
     try {
@@ -158,7 +156,8 @@ export function getAuthHeader(): Record<string, string> {
   } else if (import.meta.env.VITE_DESKTOP_TARGET !== 'true' && path.startsWith('/portal')) {
     tokenKey = 'portal_token'
   } else {
-    tokenKey = 'demo_token' // 默认
+    // 桌面端及非租户路径：读无后缀的 saas_token
+    tokenKey = 'saas_token'
   }
   const token = credentialGet(tokenKey)
   const headers: Record<string, string> = {}

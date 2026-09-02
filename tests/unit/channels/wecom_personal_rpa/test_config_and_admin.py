@@ -222,7 +222,7 @@ class TestAccountIdentityAdmin:
         admin_payload = {"tenant_id": _TENANT_ID, "user_id": "u1", "role": "tenant_admin"}
         with patch.object(admin_mod, "rpa_db", fake_db), patch.object(
             admin_mod, "require_admin", lambda req: admin_payload
-        ), patch.object(admin_mod, "_ensure_saas_enabled", lambda: None):
+        ):
             resp = admin_client.patch(
                 "/api/saas/wecom-personal-rpa/accounts/acc1/identity",
                 headers=_admin_request_headers(),
@@ -249,7 +249,7 @@ class TestAccountIdentityAdmin:
         with patch.object(admin_mod, "rpa_db", fake_db), patch.object(
             admin_mod, "require_admin",
             lambda req: {"tenant_id": _TENANT_ID, "user_id": "u1", "role": "tenant_admin"},
-        ), patch.object(admin_mod, "_ensure_saas_enabled", lambda: None):
+        ):
             resp = admin_client.patch(
                 "/api/saas/wecom-personal-rpa/accounts/acc1/identity",
                 headers=_admin_request_headers(),
@@ -264,7 +264,7 @@ class TestAccountIdentityAdmin:
 
         with patch.object(admin_mod, "require_admin", lambda req: {
             "tenant_id": _TENANT_ID, "user_id": "u1", "role": "tenant_admin"
-        }), patch.object(admin_mod, "_ensure_saas_enabled", lambda: None):
+        }):
             resp = admin_client.patch(
                 "/api/saas/wecom-personal-rpa/accounts/acc1/identity",
                 headers=_admin_request_headers(),
@@ -324,7 +324,7 @@ class TestUpdateBindingAdmin:
         }
         with patch.object(admin_mod, "rpa_db", fake_db), patch.object(
             admin_mod, "require_admin", lambda req: admin_payload
-        ), patch.object(admin_mod, "_ensure_saas_enabled", lambda: None):
+        ):
             resp = admin_client.patch(
                 f"/api/saas/wecom-personal-rpa/bindings/rpa_bind_x",
                 headers=_admin_request_headers(),
@@ -364,7 +364,7 @@ class TestUpdateBindingAdmin:
         admin_payload = {"tenant_id": _TENANT_ID, "user_id": "u1", "role": "tenant_admin"}
         with patch.object(admin_mod, "rpa_db", fake_db), patch.object(
             admin_mod, "require_admin", lambda req: admin_payload
-        ), patch.object(admin_mod, "_ensure_saas_enabled", lambda: None):
+        ):
             resp = admin_client.patch(
                 f"/api/saas/wecom-personal-rpa/bindings/rpa_bind_y",
                 headers=_admin_request_headers(),
@@ -394,7 +394,7 @@ class TestUpdateBindingAdmin:
         admin_payload = {"tenant_id": _TENANT_ID, "user_id": "u1", "role": "tenant_admin"}
         with patch.object(admin_mod, "rpa_db", fake_db), patch.object(
             admin_mod, "require_admin", lambda req: admin_payload
-        ), patch.object(admin_mod, "_ensure_saas_enabled", lambda: None):
+        ):
             resp = admin_client.patch(
                 f"/api/saas/wecom-personal-rpa/bindings/rpa_bind_z",
                 headers=_admin_request_headers(),
@@ -417,7 +417,7 @@ class TestDeleteBindingAdmin:
         with patch.object(admin_mod, "rpa_db", fake_db), patch.object(
             admin_mod, "require_admin",
             lambda req: {"tenant_id": _TENANT_ID, "user_id": "u1", "role": "tenant_admin"},
-        ), patch.object(admin_mod, "_ensure_saas_enabled", lambda: None):
+        ):
             resp = admin_client.delete(
                 "/api/saas/wecom-personal-rpa/bindings/rpa_bind_unknown",
                 headers=_admin_request_headers(),
@@ -440,7 +440,7 @@ class TestDeleteBindingAdmin:
         with patch.object(admin_mod, "rpa_db", fake_db), patch.object(
             admin_mod, "require_admin",
             lambda req: {"tenant_id": _TENANT_ID, "user_id": "u1", "role": "tenant_admin"},
-        ), patch.object(admin_mod, "_ensure_saas_enabled", lambda: None):
+        ):
             resp = admin_client.delete(
                 "/api/saas/wecom-personal-rpa/bindings/rpa_bind_live",
                 headers=_admin_request_headers(),
@@ -459,7 +459,7 @@ class TestDeleteBindingAdmin:
         with patch.object(admin_mod, "rpa_db", fake_db), patch.object(
             admin_mod, "require_admin",
             lambda req: {"tenant_id": _TENANT_ID, "user_id": "u1", "role": "tenant_admin"},
-        ), patch.object(admin_mod, "_ensure_saas_enabled", lambda: None):
+        ):
             resp = admin_client.delete(
                 "/api/saas/wecom-personal-rpa/bindings/rpa_bind_other",
                 headers=_admin_request_headers(),

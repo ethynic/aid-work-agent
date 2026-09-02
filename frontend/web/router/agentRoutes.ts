@@ -2,93 +2,13 @@ import type { RouteRecordRaw } from 'vue-router'
 
 import CustomerInfo from '@/components/CustomerInfo.vue'
 import EmailRecords from '@/components/EmailRecords.vue'
-import KnowledgeBase from '@/components/KnowledgeBase.vue'
 import MatchStats from '@/components/MatchStats.vue'
-import ScheduledTasks from '@/components/ScheduledTasks.vue'
 
 export const agentRoutes: RouteRecordRaw[] = [
   {
     path: '/',
     name: 'root',
-    component: () => {
-      if (import.meta.env.VITE_DEMO_ENABLED === 'true') {
-        return import('@/components/ChatContainer.vue')
-      }
-      return import('@/components/UniversalLogin.vue')
-    }
-  },
-  { path: '/chat/:subagent', name: 'chat-subagent', component: () => import('@/components/ChatContainer.vue') },
-  { path: '/customer-info', name: 'customer-info', component: CustomerInfo },
-  { path: '/scheduled-tasks', name: 'scheduled-tasks', component: ScheduledTasks },
-  { path: '/knowledge-base', name: 'knowledge-base', component: KnowledgeBase },
-  { path: '/my-agents', name: 'my-agents', component: () => import('@/components/MyDigitalEmployees.vue') },
-  { path: '/all-sessions', name: 'all-sessions', component: () => import('@/components/AllSessions.vue') },
-  { path: '/data-sources', name: 'data-sources', component: () => import('@/pages/DataSourceManager.vue') },
-  { path: '/social-media', name: 'social-media', component: () => import('@/components/social-media/VideoCreationWorkbench.vue') },
-  { path: '/assets', name: 'video-agent-assets', component: () => import('@/components/video-agent/AssetLibrary.vue') },
-  { path: '/videos', name: 'video-agent-videos', component: () => import('@/components/video-agent/VideoLibrary.vue') },
-  { path: '/prompts', name: 'video-agent-prompts', component: () => import('@/components/video-agent/PromptLibrary.vue') },
-  {
-    path: '/trade-specialist',
-    name: 'trade-specialist',
-    component: () => import('@/components/BaseBusinessLayout.vue'),
-    children: [
-      { path: 'customers', name: 'trade-specialist-customers', component: CustomerInfo },
-      { path: 'email-records', name: 'trade-specialist-email-records', component: EmailRecords },
-      { path: 'match-stats', name: 'trade-specialist-match-stats', component: MatchStats },
-    ]
-  },
-  {
-    path: '/travel-consultant',
-    name: 'travel-consultant',
-    component: () => import('@/components/BaseBusinessLayout.vue'),
-    children: [
-      { path: 'vehicles', name: 'travel-consultant-vehicles', component: () => import('@/components/travel/VehicleManager.vue') },
-      { path: 'attractions', name: 'travel-consultant-attractions', component: () => import('@/components/travel/AttractionManager.vue') },
-      { path: 'hotels', name: 'travel-consultant-hotels', component: () => import('@/components/travel/HotelManager.vue') },
-      { path: 'meals', name: 'travel-consultant-meals', component: () => import('@/components/travel/MealManager.vue') },
-      { path: 'guides', name: 'travel-consultant-guides', component: () => import('@/components/travel/GuideManager.vue') },
-      { path: 'fees', name: 'travel-consultant-fees', component: () => import('@/components/travel/FeeManager.vue') },
-    ]
-  },
-  {
-    path: '/recruiting-operator',
-    name: 'recruiting-operator',
-    component: () => import('@/components/BaseBusinessLayout.vue'),
-    children: [
-      { path: 'resumes', name: 'recruiting-operator-resumes', component: () => import('@/components/recruiting/ResumeLibrary.vue') },
-      { path: 'resumes/:resumeId', name: 'recruiting-operator-resume-detail', component: () => import('@/components/recruiting/ResumeDetail.vue') },
-      { path: 'jobs', name: 'recruiting-operator-jobs', component: () => import('@/components/recruiting/JobLibrary.vue') },
-      { path: 'jobs/:jobId', name: 'recruiting-operator-job-detail', component: () => import('@/components/recruiting/JobDetail.vue') },
-    ]
-  },
-  {
-    path: '/customer-followup',
-    name: 'customer-followup',
-    component: () => import('@/components/BaseBusinessLayout.vue'),
-    children: [
-      { path: 'leads', name: 'customer-followup-leads', component: () => import('@/components/followup/LeadManager.vue') },
-      { path: 'followup-records', name: 'customer-followup-followup-records', component: () => import('@/components/followup/FollowupRecords.vue') },
-      { path: 'sales-reps', name: 'customer-followup-sales-reps', component: () => import('@/components/followup/SalesRepManager.vue') },
-    ]
-  },
-  {
-    path: '/complaint',
-    name: 'complaint',
-    component: () => import('@/components/BaseBusinessLayout.vue'),
-    children: [
-      { path: 'list', name: 'complaint-list', component: () => import('@/components/complaint/ComplaintList.vue') },
-      { path: 'stats', name: 'complaint-stats', component: () => import('@/components/complaint/ComplaintStats.vue') },
-    ]
-  },
-  {
-    path: '/after-sales',
-    name: 'after-sales',
-    component: () => import('@/components/BaseBusinessLayout.vue'),
-    children: [
-      { path: 'tickets', name: 'after-sales-tickets', component: () => import('@/components/after-sales/TicketList.vue') },
-      { path: 'returns', name: 'after-sales-returns', component: () => import('@/components/after-sales/ReturnList.vue') },
-    ]
+    component: () => import('@/components/UniversalLogin.vue')
   },
   {
     path: '/t/:tenant_id',
@@ -112,6 +32,7 @@ export const agentRoutes: RouteRecordRaw[] = [
       { path: 'chat', name: 'tenant-chat-explicit', component: () => import('@/components/ChatContainer.vue') },
       { path: 'chat/:subagent', name: 'tenant-chat-subagent', component: () => import('@/components/ChatContainer.vue') },
       { path: 'all-sessions', name: 'tenant-all-sessions', component: () => import('@/components/AllSessions.vue') },
+      { path: 'scheduled-tasks', name: 'tenant-scheduled-tasks', component: () => import('@/components/ScheduledTasks.vue') },
       { path: 'token-usage', name: 'tenant-token-usage', component: () => import('@/components/saas/TenantTokenUsage.vue') },
       { path: 'recharge-records', name: 'tenant-recharge-records', component: () => import('@/components/saas/TenantRechargeRecords.vue') },
       { path: 'reply-styles', name: 'tenant-reply-styles', component: () => import('@/components/saas/ReplyStyleManager.vue') },

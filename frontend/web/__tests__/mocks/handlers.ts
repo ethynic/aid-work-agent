@@ -262,15 +262,24 @@ export const handlers = [
     })
   }),
 
-  // 可用数字员工列表（按租户订阅）
+  // 可用数字员工列表（按租户订阅；后端返回 {agent_id, name} 对象数组）
   http.get('/api/saas/channels/available-subagents', ({ request }) => {
     const tid = request.headers.get('X-Tenant-Id')
     // 不同租户返回不同订阅，用于测试
     if (tid === 'tenant_A') {
-      return HttpResponse.json({ success: true, subagents: ['trade-specialist', 'travel-consultant'] })
+      return HttpResponse.json({
+        success: true,
+        subagents: [
+          { agent_id: 'trade-specialist', name: '外贸获客智能体' },
+          { agent_id: 'travel-consultant', name: '旅游咨询顾问' },
+        ],
+      })
     }
     if (tid === 'tenant_B') {
-      return HttpResponse.json({ success: true, subagents: ['travel-consultant'] })
+      return HttpResponse.json({
+        success: true,
+        subagents: [{ agent_id: 'travel-consultant', name: '旅游咨询顾问' }],
+      })
     }
     return HttpResponse.json({ success: true, subagents: [] })
   }),

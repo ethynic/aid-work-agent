@@ -250,90 +250,54 @@ def get_my_allowed_agents(request: Request):
 
     allowed_ids = get_allowed_agent_ids_for_user(user)
 
-    # 判断是否为租户模式
-    tenant_id = user.get("tenant_id")
-    if tenant_id:
-        # TODO: 临时修改 - 屏蔽实例并发控制
-        # 租户模式下本应返回实例列表，暂时改为返回智能体列表（不包含instance_id等实例字段）
-        # 未来需要恢复为返回实例列表，以支持实例并发控制
+    # 返回智能体列表（原租户模式分支，现无模式区分）
+    # TODO: 临时修改 - 屏蔽实例并发控制
+    # 租户模式下本应返回实例列表，暂时改为返回智能体列表（不包含instance_id等实例字段）
+    # 未来需要恢复为返回实例列表，以支持实例并发控制
 
-        # 租户模式：改为返回智能体列表（模仿演示模式逻辑）
-        registry = master_agent.subagent_registry
-        if not registry:
-            return {
-                "success": True,
-                "data": []
-            }
-
-        # 多 worker 部署时从 DB 刷新定制 subagent
-        registry.load_from_db()
-
-        all_items = registry.get_all_subagents_with_type()
-        result = []
-        for item in all_items:
-            if item["agent_id"] in allowed_ids:
-                # 返回智能体基本信息，不包含实例相关字段
-                agent_info = {
-                    "agent_id": item["agent_id"],
-                    "name": item["name"],
-                    "description": item.get("description", ""),
-                    "type": item.get("type", "custom"),
-                    "business_pages": item.get("business_pages", []),
-                    # 不包含 instance_id, instance_name, display_name 等实例字段
-                }
-                # 透传 Phase 1.5 声明式 UI 字段
-                if item.get("chat_toolbar"):
-                    agent_info["chat_toolbar"] = item["chat_toolbar"]
-                if item.get("upload_accept"):
-                    agent_info["upload_accept"] = item["upload_accept"]
-                result.append(agent_info)
-
-        # 如果主智能体在允许列表中，添加到结果中
-        if "main" in allowed_ids:
-            result.append({
-                "agent_id": "main",
-                "name": "CEO智能体",
-                "description": "系统主智能体，具备通用能力和工具",
-                "type": "builtin",
-                "business_pages": []
-            })
-
+    # 租户模式：改为返回智能体列表（模仿演示模式逻辑）
+    registry = master_agent.subagent_registry
+    if not registry:
         return {
             "success": True,
-            "data": sorted(result, key=lambda x: x["name"]),
-            "count": len(result)
+            "data": []
         }
-    else:
-        # 演示模式：保持原有逻辑，返回子智能体类型列表
-        registry = master_agent.subagent_registry
-        if not registry:
-            return {
-                "success": True,
-                "data": []
+
+    # 多 worker 部署时从 DB 刷新定制 subagent
+    registry.load_from_db()
+
+    all_items = registry.get_all_subagents_with_type()
+    result = []
+    for item in all_items:
+        if item["agent_id"] in allowed_ids:
+            # 返回智能体基本信息，不包含实例相关字段
+            agent_info = {
+                "agent_id": item["agent_id"],
+                "name": item["name"],
+                "description": item.get("description", ""),
+                "type": item.get("type", "custom"),
+                "business_pages": item.get("business_pages", []),
+                # 不包含 instance_id, instance_name, display_name 等实例字段
             }
+            # 透传 Phase 1.5 声明式 UI 字段
+            if item.get("chat_toolbar"):
+                agent_info["chat_toolbar"] = item["chat_toolbar"]
+            if item.get("upload_accept"):
+                agent_info["upload_accept"] = item["upload_accept"]
+            result.append(agent_info)
 
-        # 多 worker 部署时从 DB 刷新定制 subagent
-        registry.load_from_db()
+    # 如果主智能体在允许列表中，添加到结果中
+    if "main" in allowed_ids:
+        result.append({
+            "agent_id": "main",
+            "name": "CEO智能体",
+            "description": "系统主智能体，具备通用能力和工具",
+            "type": "builtin",
+            "business_pages": []
+        })
 
-        all_items = registry.get_all_subagents_with_type()
-        result = []
-        for item in all_items:
-            if item["agent_id"] in allowed_ids:
-                # 直接返回完整项目，确保包含所有字段
-                result.append(item)
-
-        # 如果主智能体在允许列表中，添加到结果中
-        if "main" in allowed_ids:
-            result.append({
-                "agent_id": "main",
-                "name": "CEO智能体",
-                "description": "系统主智能体，具备通用能力和工具",
-                "type": "builtin",
-                "business_pages": []
-            })
-
-        return {
-            "success": True,
-            "data": sorted(result, key=lambda x: x["name"]),
-            "count": len(result)
-        }
+    return {
+        "success": True,
+        "data": sorted(result, key=lambda x: x["name"]),
+        "count": len(result)
+    }

@@ -4,7 +4,7 @@
  * - /portal 路由使用 portal_token / portal_admin / portal_tenant
  * - /t/:tenant_id 路由使用 saas_token_{tenant_id} / saas_admin_{tenant_id} / saas_tenant_{tenant_id}
  *   （避免平台管理员同时打开多个租户 tab 时的 token 串号）
- * - 演示模式 / 保持原 saas_token / saas_admin / saas_tenant
+ * - 其他路径（桌面端等）保持原 saas_token / saas_admin / saas_tenant
  */
 
 import { ref, computed } from 'vue'
@@ -35,7 +35,7 @@ const saasToken = ref<string | null>(null)
 const isLoading = ref(false)
 const isInitialized = ref(false)
 
-// 三个 key 统一按当前路由解析：租户前台按 tenant_id 隔离，portal 共用，演示模式保持
+// 三个 key 统一按当前路由解析：租户前台按 tenant_id 隔离，portal 共用，其他路径保持原 key
 function getTokenKey(): string {
   return getTenantScopedKey('saas_token')
 }

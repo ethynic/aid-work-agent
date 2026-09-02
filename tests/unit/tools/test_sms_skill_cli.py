@@ -29,6 +29,9 @@ pytestmark = pytest.mark.tools
 
 # ============== Fixtures ==============
 
+# 说明：settings.demo（演示模式开关）与固定码 888888 已随 demo 模式移除而删除，
+# 原 demo_on / demo_off fixtures 一并删除；send/verify 行为不再分模式。
+
 
 @pytest.fixture
 def mock_redis():
@@ -57,20 +60,6 @@ def patch_redis(mock_redis):
 
 
 @pytest.fixture
-def demo_off():
-    """关闭演示模式"""
-    with patch.object(sms_cli.settings.demo, "enabled", False):
-        yield
-
-
-@pytest.fixture
-def demo_on():
-    """开启演示模式"""
-    with patch.object(sms_cli.settings.demo, "enabled", True):
-        yield
-
-
-@pytest.fixture
 def qb_code_empty():
     """qb_sms_code 留空"""
     with patch.object(sms_cli.settings.sms, "qb_sms_code", ""):
@@ -87,16 +76,24 @@ def qb_code_set():
 # ============== send 子命令 ==============
 
 
+
+def _sender_available_patch():
+    """构造 sms_manager patch：get_sender 返回可用 sender"""
+    manager = MagicMock()
+    manager.get_sender.return_value = MagicMock(is_available=MagicMock(return_value=True))
+    return patch.object(sms_cli, "sms_manager", manager)
+
+
 class TestSendSms:
     """send_sms 函数测试"""
 
     @patch.object(sms_cli, "send_sms_code", return_value=True)
-    def test_send_success_demo_mode(
-        self, _mock_send, mock_redis, demo_on, qb_code_empty
+    def test_send_success_with_sender_available(
+        self, _mock_send, mock_redis, qb_code_empty
     ):
-        """场景1：演示模式发送成功"""
-        # 演示模式下不检查 sender，直接发送
-        result = sms_cli.send_sms(mobile="13800138000")
+        """场景1：sender 可用，发送成功"""
+        with _sender_available_patch():
+            result = sms_cli.send_sms(mobile="13800138000")
 
         assert result["success"] is True
         assert result["expires_in_seconds"] == 900
@@ -106,47 +103,29 @@ class TestSendSms:
         assert mock_redis.set.called
         assert mock_redis.zadd.called
 
-    @patch.object(sms_cli, "send_sms_code", return_value=True)
-    def test_send_success_with_sender_check(
-        self, _mock_send, mock_redis, demo_off, qb_code_empty
-    ):
-        """场景1：非演示模式，sender 可用，发送成功"""
-        mock_sender = MagicMock()
-        mock_sender.is_available.return_value = True
-        with patch.object(sms_cli, "sms_manager") as mock_mgr:
-            mock_mgr.get_sender.return_value = mock_sender
-            result = sms_cli.send_sms(mobile="13800138000")
-
-        assert result["success"] is True
-        assert result["expires_in_seconds"] == 900
-        assert "code" not in result
-
-    def test_send_invalid_mobile(self, demo_on, qb_code_empty):
+    def test_send_invalid_mobile(self, qb_code_empty):
         """场景5：手机号格式非法"""
-        # 演示模式跳过 sender 检查，但手机号校验在前
         result = sms_cli.send_sms(mobile="12345")
         assert result["success"] is False
         assert "手机号格式错误" in result["error"]
         assert result["debug"] == "invalid mobile format"
 
-    def test_send_invalid_mobile_not_starting_with_1(self, demo_on, qb_code_empty):
+    def test_send_invalid_mobile_not_starting_with_1(self, qb_code_empty):
         """场景5：手机号不以 1 开头"""
         result = sms_cli.send_sms(mobile="23800138000")
         assert result["success"] is False
 
-    def test_send_invalid_mobile_with_letters(self, demo_on, qb_code_empty):
+    def test_send_invalid_mobile_with_letters(self, qb_code_empty):
         """场景5：手机号含字母"""
         result = sms_cli.send_sms(mobile="1380013800a")
         assert result["success"] is False
 
-    def test_send_channel_not_configured(
-        self, mock_redis, demo_off, qb_code_empty
-    ):
-        """场景4：非演示模式，sender 不可用"""
-        mock_sender = MagicMock()
-        mock_sender.is_available.return_value = False
-        with patch.object(sms_cli, "sms_manager") as mock_mgr:
-            mock_mgr.get_sender.return_value = mock_sender
+    def test_send_channel_not_configured(self, mock_redis, qb_code_empty):
+        """场景4：sender 不可用"""
+        manager = MagicMock()
+        manager.get_sender.return_value = MagicMock(
+            is_available=MagicMock(return_value=False))
+        with patch.object(sms_cli, "sms_manager", manager):
             result = sms_cli.send_sms(mobile="13800138000")
 
         assert result["success"] is False
@@ -155,10 +134,11 @@ class TestSendSms:
         # 频控计数不应被记录
         assert not mock_redis.zadd.called
 
-    def test_send_channel_no_sender(self, mock_redis, demo_off, qb_code_empty):
-        """场景4：非演示模式，sender 为 None"""
-        with patch.object(sms_cli, "sms_manager") as mock_mgr:
-            mock_mgr.get_sender.return_value = None
+    def test_send_channel_no_sender(self, mock_redis, qb_code_empty):
+        """场景4：sender 为 None"""
+        manager = MagicMock()
+        manager.get_sender.return_value = None
+        with patch.object(sms_cli, "sms_manager", manager):
             result = sms_cli.send_sms(mobile="13800138000")
 
         assert result["success"] is False
@@ -166,14 +146,15 @@ class TestSendSms:
 
     @patch.object(sms_cli, "send_sms_code", return_value=True)
     def test_send_60s_rate_limit_blocked(
-        self, _mock_send, mock_redis, demo_on, qb_code_empty
+        self, _mock_send, mock_redis, qb_code_empty
     ):
         """场景2：60s 频控拦截"""
         # 模拟 60s 内已发送过
         mock_redis.exists.return_value = True
         mock_redis.ttl.return_value = 45
 
-        result = sms_cli.send_sms(mobile="13800138000")
+        with _sender_available_patch():
+            result = sms_cli.send_sms(mobile="13800138000")
 
         assert result["success"] is False
         assert result["reason"] == "interval_too_short"
@@ -186,13 +167,14 @@ class TestSendSms:
 
     @patch.object(sms_cli, "send_sms_code", return_value=True)
     def test_send_60s_rate_limit_ttl_negative(
-        self, _mock_send, mock_redis, demo_on, qb_code_empty
+        self, _mock_send, mock_redis, qb_code_empty
     ):
         """场景2：60s 频控拦截，TTL 异常时回退默认值"""
         mock_redis.exists.return_value = True
         mock_redis.ttl.return_value = -1  # 永不过期或异常
 
-        result = sms_cli.send_sms(mobile="13800138000")
+        with _sender_available_patch():
+            result = sms_cli.send_sms(mobile="13800138000")
 
         assert result["success"] is False
         assert result["reason"] == "interval_too_short"
@@ -200,13 +182,14 @@ class TestSendSms:
 
     @patch.object(sms_cli, "send_sms_code", return_value=True)
     def test_send_24h_daily_limit_blocked(
-        self, _mock_send, mock_redis, demo_on, qb_code_empty
+        self, _mock_send, mock_redis, qb_code_empty
     ):
         """场景3：24h 上限拦截"""
         # 24h 内已发送 10 次
         mock_redis.zcard.return_value = 10
 
-        result = sms_cli.send_sms(mobile="13800138000")
+        with _sender_available_patch():
+            result = sms_cli.send_sms(mobile="13800138000")
 
         assert result["success"] is False
         assert result["reason"] == "daily_limit_exceeded"
@@ -218,22 +201,24 @@ class TestSendSms:
 
     @patch.object(sms_cli, "send_sms_code", return_value=True)
     def test_send_24h_boundary_not_blocked(
-        self, _mock_send, mock_redis, demo_on, qb_code_empty
+        self, _mock_send, mock_redis, qb_code_empty
     ):
         """场景3：24h 计数为 9（边界值，未达上限 10）应放行"""
         mock_redis.zcard.return_value = 9
 
-        result = sms_cli.send_sms(mobile="13800138000")
+        with _sender_available_patch():
+            result = sms_cli.send_sms(mobile="13800138000")
 
         assert result["success"] is True
         assert _mock_send.called
 
     @patch.object(sms_cli, "send_sms_code", return_value=False)
     def test_send_backend_failure(
-        self, _mock_send, mock_redis, demo_on, qb_code_empty
+        self, _mock_send, mock_redis, qb_code_empty
     ):
         """底层 send_sms_code 返回 False"""
-        result = sms_cli.send_sms(mobile="13800138000")
+        with _sender_available_patch():
+            result = sms_cli.send_sms(mobile="13800138000")
 
         assert result["success"] is False
         assert "验证码发送失败" in result["error"]
@@ -243,10 +228,11 @@ class TestSendSms:
 
     @patch.object(sms_cli, "send_sms_code", side_effect=Exception("DB connection lost"))
     def test_send_backend_exception(
-        self, _mock_send, mock_redis, demo_on, qb_code_empty
+        self, _mock_send, mock_redis, qb_code_empty
     ):
         """底层 send_sms_code 抛异常"""
-        result = sms_cli.send_sms(mobile="13800138000")
+        with _sender_available_patch():
+            result = sms_cli.send_sms(mobile="13800138000")
 
         assert result["success"] is False
         assert "验证码发送失败" in result["error"]
@@ -262,7 +248,7 @@ class TestVerifySms:
 
     @patch.object(sms_cli, "verify_sms_code", return_value=True)
     def test_verify_success(
-        self, _mock_verify, mock_redis, demo_off, qb_code_empty
+        self, _mock_verify, mock_redis, qb_code_empty
     ):
         """场景6：验证码正确"""
         result = sms_cli.verify_sms(mobile="13800138000", code="123456")
@@ -273,7 +259,7 @@ class TestVerifySms:
 
     @patch.object(sms_cli, "verify_sms_code", return_value=False)
     def test_verify_invalid_code(
-        self, _mock_verify, mock_redis, demo_off, qb_code_empty
+        self, _mock_verify, mock_redis, qb_code_empty
     ):
         """场景7：验证码错误/过期/已使用"""
         result = sms_cli.verify_sms(mobile="13800138000", code="999999")
@@ -284,7 +270,7 @@ class TestVerifySms:
 
     @patch.object(sms_cli, "verify_sms_code", return_value=False)
     def test_verify_invalid_mobile(
-        self, _mock_verify, mock_redis, demo_off, qb_code_empty
+        self, _mock_verify, mock_redis, qb_code_empty
     ):
         """场景7：手机号格式错误"""
         result = sms_cli.verify_sms(mobile="123", code="123456")
@@ -296,7 +282,7 @@ class TestVerifySms:
 
     @patch.object(sms_cli, "verify_sms_code", return_value=True)
     def test_verify_bypass(
-        self, _mock_verify, mock_redis, demo_off, qb_code_set
+        self, _mock_verify, mock_redis, qb_code_set
     ):
         """场景8：bypass 码（qb_sms_code）"""
         result = sms_cli.verify_sms(mobile="13800138000", code="QBTEST")
@@ -308,7 +294,7 @@ class TestVerifySms:
 
     @patch.object(sms_cli, "verify_sms_code", return_value=True)
     def test_verify_bypass_code_not_6_digits(
-        self, _mock_verify, mock_redis, demo_off, qb_code_set
+        self, _mock_verify, mock_redis, qb_code_set
     ):
         """场景8：bypass 码非 6 位数字，仍应走 bypass 分支"""
         # qb_sms_code='QBTEST'（5 位且非纯数字），应直接走 bypass
@@ -319,7 +305,7 @@ class TestVerifySms:
         assert not _mock_verify.called
 
     def test_verify_code_wrong_format(
-        self, mock_redis, demo_off, qb_code_empty
+        self, mock_redis, qb_code_empty
     ):
         """验证码格式错误（非 6 位数字）"""
         result = sms_cli.verify_sms(mobile="13800138000", code="abc123")
@@ -329,7 +315,7 @@ class TestVerifySms:
         assert "验证码格式错误" in result["error"]
 
     def test_verify_code_too_short(
-        self, mock_redis, demo_off, qb_code_empty
+        self, mock_redis, qb_code_empty
     ):
         """验证码位数不足"""
         result = sms_cli.verify_sms(mobile="13800138000", code="12345")
@@ -339,7 +325,7 @@ class TestVerifySms:
 
     @patch.object(sms_cli, "verify_sms_code", side_effect=Exception("DB error"))
     def test_verify_backend_exception(
-        self, _mock_verify, mock_redis, demo_off, qb_code_empty
+        self, _mock_verify, mock_redis, qb_code_empty
     ):
         """底层 verify_sms_code 抛异常"""
         result = sms_cli.verify_sms(mobile="13800138000", code="123456")

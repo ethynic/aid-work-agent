@@ -67,14 +67,14 @@ describe('tenantStorage.getTenantScopedKey', () => {
     expect(getTenantScopedKey('saas_tenant')).toBe('portal_tenant')
   })
 
-  it('演示模式 / 保持原 saas_token / saas_admin / saas_tenant', () => {
+  it('非租户路径 / 保持原 saas_token / saas_admin / saas_tenant', () => {
     setPath('/')
     expect(getTenantScopedKey('saas_token')).toBe('saas_token')
     expect(getTenantScopedKey('saas_admin')).toBe('saas_admin')
     expect(getTenantScopedKey('saas_tenant')).toBe('saas_tenant')
   })
 
-  it('演示模式 /chat 保持原 saas_*', () => {
+  it('非租户路径 /chat 保持原 saas_*', () => {
     setPath('/chat/some-agent')
     expect(getTenantScopedKey('saas_token')).toBe('saas_token')
   })

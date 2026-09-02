@@ -156,8 +156,6 @@ class TestGenerateKeypair:
         ) as mock_update, patch(
             "src.saas.api.channel_config.ChannelFactory.invalidate_adapter",
             new=AsyncMock(return_value=None),
-        ), patch(
-            "src.saas.api.channel_config.settings.saas.enabled", True
         ):
             resp = client.post(
                 "/api/saas/channels/chan_616337ad19f6/generate-keypair",
@@ -196,8 +194,6 @@ class TestGenerateKeypair:
         ), patch(
             "src.saas.api.channel_config.ChannelConfigDB.get_by_id",
             return_value=non_rpa_row,
-        ), patch(
-            "src.saas.api.channel_config.settings.saas.enabled", True
         ):
             resp = client.post(
                 "/api/saas/channels/chan_xxx/generate-keypair",
@@ -212,8 +208,6 @@ class TestGenerateKeypair:
             "src.saas.api.channel_config.require_admin", return_value=tenant_admin
         ), patch(
             "src.saas.api.channel_config.ChannelConfigDB.get_by_id", return_value=None
-        ), patch(
-            "src.saas.api.channel_config.settings.saas.enabled", True
         ):
             resp = client.post(
                 "/api/saas/channels/chan_nonexistent/generate-keypair",
@@ -232,8 +226,6 @@ class TestGenerateKeypair:
         ), patch(
             "src.saas.api.channel_config.ChannelConfigDB.get_by_id",
             return_value=other_tenant_row,
-        ), patch(
-            "src.saas.api.channel_config.settings.saas.enabled", True
         ):
             resp = client.post(
                 "/api/saas/channels/chan_616337ad19f6/generate-keypair",
@@ -241,18 +233,3 @@ class TestGenerateKeypair:
             )
         assert resp.status_code == 403
 
-    def test_saas_disabled_returns_failure(self, client, app, tenant_admin):
-        """SaaS 未启用 → 返回 success=false。"""
-        with patch(
-            "src.saas.api.channel_config.require_admin", return_value=tenant_admin
-        ), patch(
-            "src.saas.api.channel_config.settings.saas.enabled", False
-        ):
-            resp = client.post(
-                "/api/saas/channels/chan_xxx/generate-keypair",
-                headers={"Authorization": "Bearer fake-token"},
-            )
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["success"] is False
-        assert "未启用 SaaS" in body["message"]

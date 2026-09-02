@@ -20,7 +20,6 @@ describe('Web structure baseline', () => {
     for (const suffix of baseline.authGuards.publicSuffixes) expect(bootstrap).toContain(`endsWith('${suffix}')`)
     for (const prefix of baseline.authGuards.tenantPrefixes) expect(bootstrap).toContain(`startsWith('${prefix}')`)
     expect(bootstrap).toContain(baseline.authGuards.tenantComposable)
-    expect(bootstrap).toContain(baseline.authGuards.defaultComposable)
   })
 
   it('rejects Desktop-only source modules from the Web artifact manifest', () => {

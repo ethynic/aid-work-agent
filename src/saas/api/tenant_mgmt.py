@@ -22,7 +22,6 @@ from src.saas.db.tenant_db import TenantDB
 from src.saas.db.subscription_db import SubscriptionDB
 from src.saas.services.renewal import enrich_tenants_with_renewal
 from src.saas.models.tenant import TenantCreate, TenantUpdate
-from src.config.settings import settings
 from src.db.models import UserDB, TokenDB
 from src.db.database import get_db_connection
 
@@ -131,9 +130,6 @@ def create_initial_admin(tenant_id: str, admin_name: str, admin_phone: str) -> O
 @router.get("/me")
 async def get_tenant_info(request: Request):
     """获取当前企业信息"""
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
     admin = require_admin(request)
     tenant = TenantDB.get_by_id(admin["tenant_id"])
     if not tenant:
@@ -144,9 +140,6 @@ async def get_tenant_info(request: Request):
 @router.patch("/me")
 async def update_tenant_info(request: Request, body: TenantUpdateRequest):
     """更新当前企业信息"""
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
     admin = require_admin(request)
     updates = body.model_dump(exclude_unset=True)
 
@@ -164,9 +157,6 @@ async def update_tenant_info(request: Request, body: TenantUpdateRequest):
 @router.get("/list_tenants")
 async def list_tenants(request: Request, page: int = 1, page_size: int = 20):
     """获取租户列表（仅平台管理员，分页）"""
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
     admin = require_admin(request)
 
     # 只有平台管理员可以查看所有租户
@@ -184,9 +174,6 @@ async def list_tenants(request: Request, page: int = 1, page_size: int = 20):
 @router.post("/")
 async def create_tenant(request: Request, body: TenantCreate):
     """创建租户（仅平台管理员）"""
-    if not settings.saas.enabled:
-        return {"success": False, "error": "未启用 SaaS 模式无法访问", "debug": "SaaS mode disabled"}
-
     admin = require_admin(request)
     if admin.get("role") != "platform_admin":
         return {"success": False, "error": "权限不足", "debug": "Not platform_admin"}
@@ -237,9 +224,6 @@ async def create_tenant(request: Request, body: TenantCreate):
 @router.put("/{tenant_id}")
 async def update_tenant(request: Request, tenant_id: str, body: TenantUpdate):
     """更新租户信息（仅平台管理员）"""
-    if not settings.saas.enabled:
-        return {"success": False, "error": "未启用 SaaS 模式无法访问", "debug": "SaaS mode disabled"}
-
     admin = require_admin(request)
     if admin.get("role") != "platform_admin":
         return {"success": False, "error": "权限不足", "debug": "Not platform_admin"}
@@ -345,9 +329,6 @@ async def update_tenant(request: Request, tenant_id: str, body: TenantUpdate):
 @router.delete("/{tenant_id}")
 async def delete_tenant(request: Request, tenant_id: str):
     """删除租户（仅平台管理员）"""
-    if not settings.saas.enabled:
-        return {"success": False, "error": "未启用 SaaS 模式无法访问", "debug": "SaaS mode disabled"}
-
     admin = require_admin(request)
     if admin.get("role") != "platform_admin":
         return {"success": False, "error": "权限不足", "debug": "Not platform_admin"}
@@ -392,9 +373,6 @@ async def upload_tenant_logo(
 
     注意：上传只注册资产返回 file_id，不立即改租户表；点保存才把 logo_file_id 写入 tenants 表。
     """
-    if not settings.saas.enabled:
-        return {"success": False, "error": "未启用 SaaS 模式无法访问", "debug": "SaaS mode disabled"}
-
     admin = require_admin(request)
     # 优先 admin 上下文（租户管理员自身 / 平台管理员 + X-Tenant-Id），其次 form 显式传入
     tenant_id = admin.get("tenant_id") or tenant_id

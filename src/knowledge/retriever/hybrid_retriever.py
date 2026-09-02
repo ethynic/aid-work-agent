@@ -336,7 +336,7 @@ class HybridRetriever:
                     LIMIT %s
                 """, params)
             else:
-                # 未指定租户：只查 demo 或无租户的数据，绝不泄露其他租户数据
+                # 未指定租户：只查无主数据，绝不泄露其他租户数据
                 source_type_condition = " AND d.source_type = %s" if source_type else ""
                 params = [processed_query, processed_query]
                 if source_type:
@@ -347,7 +347,7 @@ class HybridRetriever:
                     FROM chunks c
                     JOIN documents d ON c.doc_id = d.id
                     WHERE c.text_vec @@ plainto_tsquery(%s)
-                      AND (d.tenant_id = 'demo' OR d.tenant_id IS NULL){source_type_condition}
+                      AND d.tenant_id IS NULL{source_type_condition}
                     ORDER BY score DESC
                     LIMIT %s
                 """, params)

@@ -933,12 +933,12 @@ class ChannelSessionManager:
         verbose_events: List[Dict[str, Any]] = []
         dispatcher: Optional[ChannelVerboseDispatcher] = None
 
-        # 积分余额硬阻断：SaaS 模式下余额 ≤ 0 拒绝渠道消息处理（#37 Phase 4）
+        # 积分余额硬阻断：余额 ≤ 0 拒绝渠道消息处理（#37 Phase 4）
         # 命中时通过 send_response 发送提示并返回 status='no_credit'，避免调用 LLM 扣费
         # 同时标记 record_service 跳过 save，避免后续 end_record 写入空 chat_record 噪声
         try:
             from src.config.settings import settings as _settings
-            if _settings.saas.enabled and tenant_id:
+            if tenant_id:
                 from src.saas.db.tenant_db import TenantDB
                 _tenant_info = TenantDB.get_by_id(tenant_id)
                 if _tenant_info is not None:

@@ -27,6 +27,8 @@ TENANT = "tenant_t1"
 USER = "user_t1"
 REPO = "src.local_tools.proxy_tool.repository"
 USAGE_DB = "src.local_tools.proxy_tool.ClientUsageLogDB"
+# 余额预检经函数内 from ... import TenantDB 后调用类方法，patch 类方法即可
+TENANT_DB = "src.saas.db.tenant_db.TenantDB.get_by_id"
 
 CANDIDATES = [
     {"text": "新人礼包", "x": 500, "y": 200, "w": 200, "h": 40, "cls": "wb-dialog-title"},
@@ -180,7 +182,6 @@ class TestPickWithLlm:
 class TestHealOrchestration:
     async def test_heal_success_flow(self, monkeypatch):
         """UI_CHANGED 失败 → inspect → 启发式命中 → dismiss → 重试成功 → data.heal + 自愈专项费"""
-        monkeypatch.setattr(settings.saas, "enabled", False)  # 跳过余额预检
         rows = {
             "g1": _inv(state="failed", error_code="UI_CHANGED", error_message="头部未切换"),
             "i1": _inv(data={"candidates": CANDIDATES, "viewport": {"width": 1249, "height": 1277}}),
@@ -190,6 +191,7 @@ class TestHealOrchestration:
         record = MagicMock(return_value={"credit_cost": 1.0, "balance_after": 9.0})
         repo_patch, repo = _stateful_repo(rows, ["g1", "i1", "d1", "g2"])
         with repo_patch, patch(USAGE_DB, record_tool_usage=record), \
+             patch(TENANT_DB, MagicMock(return_value=None)), \
              patch("src.services.overlay_heal_service.pick_heuristic", return_value="关闭"):
             result = await BossGreetTool().execute(**_kwargs())
 
@@ -210,11 +212,11 @@ class TestHealOrchestration:
 
     async def test_execution_unknown_never_heals(self, monkeypatch):
         """EXECUTION_UNKNOWN（写后结果不明）绝不自愈重试"""
-        monkeypatch.setattr(settings.saas, "enabled", False)
         rows = {"g1": _inv(state="unknown", error_code="UNKNOWN", error_message="结果无法确认")}
         record = MagicMock()
         repo_patch, repo = _stateful_repo(rows, ["g1"])
-        with repo_patch, patch(USAGE_DB, record_tool_usage=record):
+        with repo_patch, patch(USAGE_DB, record_tool_usage=record), \
+             patch(TENANT_DB, MagicMock(return_value=None)):  # 租户不存在 -> 不阻断（等价跳过预检）
             result = await BossGreetTool().execute(**_kwargs())
         assert result["success"] is False
         assert result["code"] == "EXECUTION_UNKNOWN"
@@ -222,19 +224,18 @@ class TestHealOrchestration:
         record.assert_not_called()
 
     async def test_heal_disabled_skips(self, monkeypatch):
-        monkeypatch.setattr(settings.saas, "enabled", False)
         monkeypatch.setattr(settings.boss_tool_billing, "overlay_heal_enabled", False)
         rows = {"g1": _inv(state="failed", error_code="UI_CHANGED", error_message="x")}
         record = MagicMock()
         repo_patch, repo = _stateful_repo(rows, ["g1"])
-        with repo_patch, patch(USAGE_DB, record_tool_usage=record):
+        with repo_patch, patch(USAGE_DB, record_tool_usage=record), \
+             patch(TENANT_DB, MagicMock(return_value=None)):  # 租户不存在 -> 不阻断（等价跳过预检）
             result = await BossGreetTool().execute(**_kwargs())
         assert result["success"] is False
         assert repo["create_invocation"].call_count == 1
         assert (result.get("data") or {}) == {}
 
     async def test_heal_gives_up_on_empty_candidates_keeps_original_error(self, monkeypatch):
-        monkeypatch.setattr(settings.saas, "enabled", False)
         rows = {
             "g1": _inv(state="failed", error_code="UI_CHANGED", error_message="页面结构异常"),
             "i1": _inv(data={"candidates": [], "viewport": {"width": 1249, "height": 1277}}),
@@ -242,6 +243,7 @@ class TestHealOrchestration:
         record = MagicMock()
         repo_patch, _repo = _stateful_repo(rows, ["g1", "i1"])
         with repo_patch, patch(USAGE_DB, record_tool_usage=record), \
+             patch(TENANT_DB, MagicMock(return_value=None)), \
              patch("src.services.overlay_heal_service.pick_heuristic", return_value=None):
             result = await BossGreetTool().execute(**_kwargs())
         assert result["success"] is False

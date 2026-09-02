@@ -63,10 +63,6 @@ def _resolve_default_subagent(subagent_name, tenant_id, user):
     if not tenant_id or not user:
         return None
 
-    # demo 租户有多个内置智能体，不应自动路由
-    if tenant_id == "demo":
-        return None
-
     try:
         from src.saas.permissions.checker import get_allowed_agent_ids_for_user
         # 透传外层 tenant_id：platform_admin 通过 X-Tenant-Id 代管理时，
@@ -563,15 +559,12 @@ def _check_tenant_credit_blocked(tenant_id: Optional[str]) -> Optional[JSONRespo
     """租户积分余额硬阻断检查（#37 Phase 4）
 
     在 /api/chat 与 /api/chat/stream 入口处调用：
-    - SaaS 模式未启用：放行（返回 None）
-    - tenant_id 为空（演示/匿名）：放行
+    - tenant_id 为空（platform_admin 全局视图/后台调用）：放行
     - 租户余额 > 0：放行
     - 租户余额 ≤ 0：返回 403 JSONResponse，阻断对话
 
     返回 None 表示放行，返回 JSONResponse 表示阻断（直接 return 给前端）。
     """
-    if not settings.saas.enabled:
-        return None
     if not tenant_id:
         return None
     try:
@@ -636,11 +629,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Add SaaS tenant context middleware (conditionally enabled)
-if settings.saas.enabled:
-    from src.saas.middleware import TenantContextMiddleware
-    app.add_middleware(TenantContextMiddleware)
-    logger.info("SaaS tenant context middleware enabled")
+# Add SaaS tenant context middleware
+from src.saas.middleware import TenantContextMiddleware
+app.add_middleware(TenantContextMiddleware)
+logger.info("SaaS tenant context middleware enabled")
 
 
 # ==================== Health Check ====================
@@ -707,7 +699,7 @@ async def clear_all_cache(request: Request):
 
 @app.get("/")
 async def root():
-    """Root endpoint - 演示模式开启时返回JSON，关闭时返回租户入口页面"""
+    """Root endpoint - 返回服务基本信息"""
     return {
         "name": settings.app.name,
         "version": settings.app.version,
@@ -825,8 +817,8 @@ async def chat(request: Request):
         # 从请求头解析用户身份
         current_user = auth.get_current_user(request)
 
-        # 权限检查：数字员工访问授权（演示用户tenant_id='demo'豁免）
-        if subagent_name and current_user and current_user.get("tenant_id") != "demo":
+        # 权限检查：数字员工访问授权
+        if subagent_name and current_user:
             from src.saas.permissions.checker import check_agent_access
             if not check_agent_access(subagent_name, current_user):
                 return JSONResponse({
@@ -1240,8 +1232,8 @@ async def chat_stream(http_request: Request, request: ChatRequest):
     # 记录用户消息接收时间，作为 user 消息的 created_at（避免与助手回复落入同一事务导致时间戳相同）
     user_message_time = datetime.now()
 
-    # 权限检查：数字员工访问授权（演示用户tenant_id='demo'豁免）
-    if request.subagent and current_user and current_user.get("tenant_id") != "demo":
+    # 权限检查：数字员工访问授权
+    if request.subagent and current_user:
         from src.saas.permissions.checker import check_agent_access
         if not check_agent_access(request.subagent, current_user):
             from fastapi.responses import JSONResponse

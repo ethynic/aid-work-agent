@@ -16,7 +16,6 @@ from typing import Optional
 from fastapi import APIRouter, Request, Query
 from loguru import logger
 
-from src.config.settings import settings
 from src.saas.api.tenant_auth import require_admin, sanitize_error_info
 from src.saas.db.channel_config_db import ChannelConfigDB
 from src.saas.db.tenant_db import TenantDB
@@ -33,9 +32,6 @@ router = APIRouter(prefix="/api/saas/billing", tags=["SaaS 余额与用量"])
 @router.get("/balance")
 async def get_balance(request: Request):
     """获取当前租户积分余额 + 预估可用天数"""
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
     admin = require_admin(request)
     tenant_id = admin.get("tenant_id")
     if not tenant_id:
@@ -81,9 +77,6 @@ async def get_usage(
     credit_cost>0）UNION 后按 DATE(created_at) 分组，返回每日消耗积分、会话数、消息数、
     客户端调用数（及 chat/client 分项消耗）。
     """
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
     admin = require_admin(request)
     tenant_id = admin.get("tenant_id")
     if not tenant_id:
@@ -222,9 +215,6 @@ async def list_my_recharges(
     page_size: int = Query(20, ge=1, le=200),
 ):
     """本租户充值记录列表（只读，无操作列）"""
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
     admin = require_admin(request)
     tenant_id = admin.get("tenant_id")
     if not tenant_id:
@@ -266,9 +256,6 @@ async def get_daily_usage_detail(
     - 租户管理员只能查自己租户的数据，且 prompt_tokens / cached_input_tokens / completion_tokens
       三个字段不返回（前端也隐藏这 3 列），仅 platform_admin 可见。
     """
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
     admin = require_admin(request)
 
     # 二次权限校验：仅平台管理员 + 租户管理员

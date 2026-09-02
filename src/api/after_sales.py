@@ -71,7 +71,7 @@ async def list_tickets(
     """查询工单列表（分页）"""
     try:
         tid = tenant_id or _get_tenant(request)
-        effective_tid = tid if tid and tid != "demo" else None
+        effective_tid = tid or None
 
         conditions = []
         params: list = []
@@ -196,7 +196,7 @@ async def list_returns(
     """查询退换货记录列表（分页）"""
     try:
         tid = tenant_id or _get_tenant(request)
-        effective_tid = tid if tid and tid != "demo" else None
+        effective_tid = tid or None
 
         conditions = []
         params: list = []

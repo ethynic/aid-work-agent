@@ -19,9 +19,6 @@ vi.mock('@/composables/useAgent', () => ({
   useAgent: () => ({ liveVerbose: liveVerboseRef }),
 }))
 
-vi.mock('@/composables/useDemoAuth', () => ({
-  useDemoAuth: () => ({ getAuthHeader: () => ({}) }),
-}))
 vi.mock('@/composables/useTenantAuth', () => ({
   useTenantAuth: () => ({ getAuthHeader: () => ({}) }),
 }))

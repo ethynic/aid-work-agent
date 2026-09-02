@@ -141,10 +141,7 @@ def get_allowed_agent_ids_for_user(
         # 无任何租户上下文（既无代管理目标，账号本身也无 tenant） → 返回全部
         if not tenant_id:
             return _all_subagent_dir_names()
-        # 代管 demo 租户 → 返回全部
-        if tenant_id == "demo":
-            return _all_subagent_dir_names()
-        # 代管其他租户 → 查该租户订阅
+        # 代管租户 → 查该租户订阅
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
@@ -161,8 +158,6 @@ def get_allowed_agent_ids_for_user(
     tenant_id = target_tenant_id or (get_tenant_id_from_user(user) if user else None)
     if not tenant_id:
         return []
-    if tenant_id == "demo":
-        return _all_subagent_dir_names()
     if not user_id:
         return []
 
@@ -205,13 +200,6 @@ def get_allowed_agent_ids_for_user(
 
 def count_tenant_subscribed_agents(tenant_id: str) -> int:
     """统计租户有有效订阅的数字员工数量"""
-    # Demo 租户：返回所有内置 subagent 的数量
-    if tenant_id == "demo":
-        registry = master_agent.subagent_registry
-        if registry:
-            return len(registry.list_subagents())
-        return 0
-
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""

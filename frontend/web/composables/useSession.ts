@@ -18,7 +18,6 @@ import {
   type ChatRecord,
   type TokenUsage
 } from '@/api/session'
-import { useDemoAuth } from './useDemoAuth'
 import { useTenantAuth } from './useTenantAuth'
 import { useCreditCheck } from './useCreditCheck'
 
@@ -32,17 +31,10 @@ const currentPage = ref(1)
 const totalSessions = ref(0)
 const pageSize = ref(20)
 
-// 检查是否已登录（考虑租户模式）
+// 检查是否已登录（租户认证）
 function checkIsLoggedIn(): boolean {
-  const { isLoggedIn: normalLoggedIn } = useDemoAuth()
-  const { isLoggedIn: tenantLoggedIn, saasToken: _saasToken } = useTenantAuth()
-
-  // 租户模式：检查 saas_token
-  if (window.location.pathname.startsWith('/t/')) {
-    return tenantLoggedIn.value
-  }
-  // 演示模式：检查 demo_token
-  return normalLoggedIn.value
+  const { isLoggedIn: tenantLoggedIn } = useTenantAuth()
+  return tenantLoggedIn.value
 }
 
 export function useSession() {
@@ -488,23 +480,12 @@ export function useSession() {
     // 重置认证错误标志，以便下次登录后可重新尝试
     hasAuthError.value = false
 
-    // 根据当前模式触发相应的登出逻辑
-    if (window.location.pathname.startsWith('/t/')) {
-      // 租户模式：尝试清除租户认证
-      try {
-        const { logout: tenantLogout } = useTenantAuth()
-        tenantLogout()
-      } catch (e) {
-        console.error('Failed to trigger tenant logout:', e)
-      }
-    } else {
-      // 演示模式：尝试清除演示认证
-      try {
-        const { logout: demoLogout } = useDemoAuth()
-        demoLogout()
-      } catch (e) {
-        console.error('Failed to trigger demo logout:', e)
-      }
+    // 触发租户认证登出
+    try {
+      const { logout: tenantLogout } = useTenantAuth()
+      tenantLogout()
+    } catch (e) {
+      console.error('Failed to trigger tenant logout:', e)
     }
   }
 

@@ -18,7 +18,6 @@ from loguru import logger
 
 from src.saas.api.tenant_auth import require_admin
 from src.db.models import UserDB
-from src.config.settings import settings
 
 router = APIRouter(prefix="/api/saas/external-customers", tags=["外部接待客户"])
 
@@ -84,9 +83,6 @@ async def list_external_users(
         page: 页码
         page_size: 每页数量
     """
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
     admin = require_admin(request)
     tenant_id = admin.get("tenant_id")
 
@@ -137,9 +133,6 @@ async def list_kf_accounts(request: Request):
 
     管理员返回租户全部客服账号；普通用户（引流员工）只返回自己负责的客服账号。
     """
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
     admin = require_admin(request)
     tenant_id = admin.get("tenant_id")
 
@@ -178,9 +171,6 @@ async def get_referral_stats(
         start_date: 起始日期（含当日），格式 YYYY-MM-DD
         end_date: 结束日期（含当日，后端按 < 次日 语义处理，SQL 内 +1 天），格式 YYYY-MM-DD
     """
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
     admin = require_admin(request)
     tenant_id = admin.get("tenant_id")
 
@@ -231,9 +221,6 @@ async def get_lead_stats(
 
     过滤基准 = bs_lead_capture_leads.created_at；end_date 含当日（SQL 内 < 次日）。
     """
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
     admin = require_admin(request)
     tenant_id = admin.get("tenant_id")
     if not tenant_id:
@@ -261,9 +248,6 @@ async def list_leads(
     page_size: int = 20,
 ):
     """留资线索列表（分页，created_at DESC，日期段/客服账号/阶段筛选）。"""
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
     admin = require_admin(request)
     tenant_id = admin.get("tenant_id")
     if not tenant_id:
@@ -287,9 +271,6 @@ async def list_leads(
 @router.get("/leads/{lead_id}")
 async def get_lead_detail(request: Request, lead_id: str):
     """线索详情（含解密手机号；普通用户仅能看自己的线索）。"""
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
     admin = require_admin(request)
     tenant_id = admin.get("tenant_id")
     if not tenant_id:
@@ -311,9 +292,6 @@ class LeadStageUpdate(BaseModel):
 @router.patch("/leads/{lead_id}")
 async def update_lead_stage(request: Request, lead_id: str, body: LeadStageUpdate):
     """更新线索阶段（new -> contacting -> converted / abandoned）。"""
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
     admin = require_admin(request)
     tenant_id = admin.get("tenant_id")
     if not tenant_id:
@@ -354,9 +332,6 @@ async def get_user_sessions(
         page: 页码
         page_size: 每页数量
     """
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
     admin = require_admin(request)
     tenant_id = admin.get("tenant_id")
 
@@ -410,9 +385,6 @@ async def get_session_messages(
         page: 页码
         page_size: 每页数量
     """
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
     admin = require_admin(request)
     tenant_id = admin.get("tenant_id")
 
@@ -471,9 +443,6 @@ async def download_attachment(
     """
     import os as _os
     from fastapi.responses import FileResponse
-
-    if not settings.saas.enabled:
-        raise HTTPException(status_code=400, detail="未启用 SaaS 模式无法访问")
 
     # 防止路径穿越：filename 只能取 basename
     filename = _os.path.basename(filename)

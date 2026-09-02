@@ -116,15 +116,12 @@ const props = withDefaults(defineProps<{
   user?: { username: string; user_id?: string | number } | null
   /** 是否显示左上角返回按钮 */
   showBack?: boolean
-  /** 可用的数字员工列表（演示模式为子智能体类型，租户模式为实例列表） */
+  /** 可用的数字员工列表（实例列表） */
   availableSubagents?: AgentItem[]
-  /** 当前选中的数字员工ID，null 表示主智能体。租户模式下为 instance_id，演示模式下为 agent_id */
+  /** 当前选中的数字员工ID，null 表示主智能体（instance_id） */
   currentSubagentId?: string | null
-  /** 是否显示右上角演示模式退出按钮，默认 true */
-  showDemoLogout?: boolean
 }>(), {
   showBack: false,
-  showDemoLogout: true,
 })
 
 const emit = defineEmits<{

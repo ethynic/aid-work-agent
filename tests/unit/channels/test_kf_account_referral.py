@@ -435,7 +435,6 @@ class TestKfAvatarPersistence:
         mock_update = MagicMock(return_value=True)
         mock_register = AsyncMock(return_value="file_ava")
         patches = [
-            patch("src.saas.api.wecom_kf_account.settings.saas.enabled", True),
             patch(
                 "src.saas.api.wecom_kf_account.require_admin",
                 return_value={"tenant_id": "t1", "user_id": "u1"},
@@ -473,7 +472,7 @@ class TestKfAvatarPersistence:
         )
         with (
             patches[0], patches[1], patches[2], patches[3], patches[4],
-            patches[5], patches[6], patches[7], patches[8], patches[9],
+            patches[5], patches[6], patches[7], patches[8],
         ):
             await create_kf_account(MagicMock(), body)
 
@@ -495,7 +494,6 @@ class TestKfAvatarPersistence:
         mock_register = AsyncMock(return_value="file_new")
         mock_clean = AsyncMock()
         patches = [
-            patch("src.saas.api.wecom_kf_account.settings.saas.enabled", True),
             patch(
                 "src.saas.api.wecom_kf_account.require_admin",
                 return_value={"tenant_id": "t1", "user_id": "u1"},
@@ -531,7 +529,7 @@ class TestKfAvatarPersistence:
         body = KfAccountUpdate(name="高老师", avatar_base64="cG5n")
         with (
             patches[0], patches[1], patches[2], patches[3], patches[4],
-            patches[5], patches[6], patches[7], patches[8], patches[9], patches[10],
+            patches[5], patches[6], patches[7], patches[8], patches[9],
         ):
             await update_kf_account(MagicMock(), "wk_1", body)
 
@@ -560,7 +558,6 @@ class TestCreateKfAccountConfigId:
         mock_create = AsyncMock(return_value=(adapter, config_id, None))
         mock_update = MagicMock(return_value=True)
         patches = [
-            patch("src.saas.api.wecom_kf_account.settings.saas.enabled", True),
             patch(
                 "src.saas.api.wecom_kf_account.require_admin",
                 return_value={"tenant_id": "t1", "user_id": "u1"},
@@ -602,7 +599,7 @@ class TestCreateKfAccountConfigId:
             config_id="cfg_b", name="高老师", tenant_user_id="u1",
             subagent_type="pre-sales", allow_agent_transfer=True,
         )
-        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7]:
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6]:
             result = await create_kf_account(MagicMock(), body)
 
         # adapter 用指定 config_id 构建（企微调用走该渠道凭证）
@@ -628,7 +625,7 @@ class TestCreateKfAccountConfigId:
             config_id="cfg_b", name="高老师", tenant_user_id="u1",
             allow_agent_transfer=True,
         )
-        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7]:
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6]:
             with pytest.raises(HTTPException) as exc:
                 await create_kf_account(MagicMock(), body)
         assert exc.value.status_code == 404
@@ -647,7 +644,7 @@ class TestCreateKfAccountConfigId:
         body = KfAccountCreate(
             name="高老师", tenant_user_id="u1", allow_agent_transfer=True,
         )
-        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7]:
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6]:
             result = await create_kf_account(MagicMock(), body)
 
         update_args = mock_update.call_args.args

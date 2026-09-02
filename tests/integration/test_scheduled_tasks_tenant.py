@@ -238,18 +238,16 @@ class TestScheduledTasksTenant:
             clear_tenant_context()
 
     async def test_api_identity_missing_tenant_in_saas_fail_closed(self, env):
-        """SaaS 部署下租户来源缺失（ContextVar 与用户行均无）→ 403 fail-closed"""
+        """租户来源缺失（ContextVar 与用户行均无）→ 403 fail-closed（SaaS 开关已移除，恒为 SaaS 模式）"""
         from fastapi import HTTPException
         from unittest.mock import patch, MagicMock
         from src.api.scheduled_task import list_tasks
-        from src.config.settings import settings as app_settings
 
         request = MagicMock()
         # 认证用户行不含 tenant_id 字段，且请求上下文未注入租户
         try:
             with patch("src.api.scheduled_task.get_current_user",
-                       return_value={"user_id": env["user_a"]}), \
-                 patch.object(app_settings.saas, "enabled", True):
+                       return_value={"user_id": env["user_a"]}):
                 set_tenant_context(None, env["user_a"])
                 with pytest.raises(HTTPException) as exc_info:
                     await list_tasks(request)

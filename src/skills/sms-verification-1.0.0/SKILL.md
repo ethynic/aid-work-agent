@@ -128,7 +128,7 @@ python scripts/sms_cli.py verify --mobile 13800138000 --code 123456
 ## 与底层 sms_codes 表的关系
 
 本技能**不新建数据库表**，复用 `src/db/models.py` 中的：
-- `send_sms_code(phone)` - 生成验证码、调用短信通道、写入 `sms_codes` 表（15 分钟 TTL，演示模式固定 `888888`）
+- `send_sms_code(phone)` - 生成验证码、调用短信通道、写入 `sms_codes` 表（15 分钟 TTL）
 - `verify_sms_code(phone, code)` - 校验 `sms_codes` 表，命中后标记 `used=1`
 
 因此本技能无需 `init_script`，不创建 `init_tables.py`。
@@ -147,7 +147,6 @@ python scripts/sms_cli.py verify --mobile 13800138000 --code 123456
 | `sms.signature` | `SMS_SIGNATURE` | 短信签名（不带【】） |
 | `sms.template_yzm` | `SMS_TEMPLATE_YZM` | 验证码模板 ID |
 | `sms.qb_sms_code` | `QBSMSCODE` | bypass 码（测试/演示用，生产留空） |
-| `demo.enabled` | `DEMO_ENABLED` | 演示模式开关，开启后固定 `888888` 不实际发送 |
 
 通道未配置时，`send` 子命令会直接返回失败；`verify` 子命令不依赖通道配置。
 
@@ -158,7 +157,7 @@ python scripts/sms_cli.py verify --mobile 13800138000 --code 123456
 验证脚本可执行性（不会实际发送）：
 ```bash
 python scripts/sms_cli.py send --mobile 13800138000
-python scripts/sms_cli.py verify --mobile 13800138000 --code 888888
+python scripts/sms_cli.py verify --mobile 13800138000 --code 123456
 ```
 
 单元测试见 `tests/unit/tools/test_sms_skill_cli.py`。

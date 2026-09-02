@@ -18,6 +18,11 @@ if db_url:
 
 import pytest
 
+# 跳过手工运行脚本式文件的收集：该文件模块级 sys.exit + 硬编码本机文件路径
+# （Usage: python tests/integration/test_data_analysis_integration.py），
+# 不是 pytest 用例，收集时会让整个 integration 会话 INTERNALERROR。
+collect_ignore = ["test_data_analysis_integration.py"]
+
 
 @pytest.fixture(scope="session", autouse=True)
 def init_db_pool():

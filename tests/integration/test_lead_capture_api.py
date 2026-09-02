@@ -124,8 +124,7 @@ def _admin(tenant_id: str, role: str = "tenant_admin", user_id: str = "admin_x")
 
 
 def _patch_admin(admin):
-    return patch("src.saas.api.external_customers.require_admin", lambda request: admin), \
-           patch("src.saas.api.external_customers.settings")
+    return patch("src.saas.api.external_customers.require_admin", lambda request: admin)
 
 
 class TestLeadStats:
@@ -139,8 +138,7 @@ class TestLeadStats:
         _insert_lead(tenant_id, contact_method="qr", assigned_to=emp, assignee_name="李老师", channel_chat_id="kfBBB", kf_account_name="售后客服")
 
         admin = _admin(tenant_id)
-        with _patch_admin(admin)[0], _patch_admin(admin)[1] as mock_settings:
-            mock_settings.saas.enabled = True
+        with _patch_admin(admin):
             resp = _call(external_customers.get_lead_stats, FakeRequest())
 
         assert resp["success"] is True
@@ -164,8 +162,7 @@ class TestLeadStats:
         _insert_lead(tenant_id, assigned_to=other)
 
         admin = _admin(tenant_id, role="user", user_id=me)
-        with _patch_admin(admin)[0], _patch_admin(admin)[1] as mock_settings:
-            mock_settings.saas.enabled = True
+        with _patch_admin(admin):
             resp = _call(external_customers.get_lead_stats, FakeRequest())
 
         assert resp["total_leads"] == 1
@@ -183,8 +180,7 @@ class TestLeadList:
         _insert_lead(tenant_id, channel_chat_id="kfAAA", assigned_to=emp, contact_name="王五")
 
         admin = _admin(tenant_id)
-        with _patch_admin(admin)[0], _patch_admin(admin)[1] as mock_settings:
-            mock_settings.saas.enabled = True
+        with _patch_admin(admin):
             resp = _call(external_customers.list_leads, FakeRequest(), channel_chat_id="kfAAA", page=1, page_size=20)
 
         assert resp["success"] is True
@@ -205,8 +201,7 @@ class TestLeadList:
         _insert_lead(tenant_id, assigned_to=other, contact_name="别人的客户")
 
         admin = _admin(tenant_id, role="user", user_id=me)
-        with _patch_admin(admin)[0], _patch_admin(admin)[1] as mock_settings:
-            mock_settings.saas.enabled = True
+        with _patch_admin(admin):
             resp = _call(external_customers.list_leads, FakeRequest(), page=1, page_size=20)
 
         assert resp["total"] == 1
@@ -222,8 +217,7 @@ class TestLeadDetailAndStage:
         lead_id = _insert_lead(tenant_id, phone="13912345678")
 
         admin = _admin(tenant_id)
-        with _patch_admin(admin)[0], _patch_admin(admin)[1] as mock_settings:
-            mock_settings.saas.enabled = True
+        with _patch_admin(admin):
             resp = _call(external_customers.get_lead_detail, FakeRequest(), lead_id)
 
         assert resp["success"] is True
@@ -235,8 +229,7 @@ class TestLeadDetailAndStage:
 
         tenant_id = temp_tenant_for_leads
         admin = _admin(tenant_id)
-        with _patch_admin(admin)[0], _patch_admin(admin)[1] as mock_settings:
-            mock_settings.saas.enabled = True
+        with _patch_admin(admin):
             with pytest.raises(HTTPException) as ei:
                 _call(external_customers.get_lead_detail, FakeRequest(), "lead_lc_nonexistent")
         assert ei.value.status_code == 404
@@ -249,8 +242,7 @@ class TestLeadDetailAndStage:
         lead_id = _insert_lead(tenant_id, stage="new")
 
         admin = _admin(tenant_id)
-        with _patch_admin(admin)[0], _patch_admin(admin)[1] as mock_settings:
-            mock_settings.saas.enabled = True
+        with _patch_admin(admin):
             resp = _call(
                 external_customers.update_lead_stage, FakeRequest(), lead_id,
                 external_customers.LeadStageUpdate(stage="converted"),
@@ -277,8 +269,7 @@ class TestLeadDetailAndStage:
         lead_id = _insert_lead(tenant_id, assigned_to=other)
 
         admin = _admin(tenant_id, role="user", user_id=me)
-        with _patch_admin(admin)[0], _patch_admin(admin)[1] as mock_settings:
-            mock_settings.saas.enabled = True
+        with _patch_admin(admin):
             with pytest.raises(HTTPException) as ei:
                 _call(external_customers.get_lead_detail, FakeRequest(), lead_id)
             assert ei.value.status_code == 404

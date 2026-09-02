@@ -10,7 +10,6 @@ import random
 from datetime import datetime, timedelta
 from loguru import logger
 
-from src.config.settings import settings
 from src.db.database import get_db_connection
 from src.db.models import send_sms_code, verify_sms_code
 from src.sms.manager import sms_manager
@@ -25,20 +24,14 @@ def send_admin_sms_code(phone: str) -> bool:
     """
     发送管理员验证码
 
-    - 演示模式：固定验证码 888888，不实际发送
-    - 非演示模式：调用配置的短信通道真实发送
+    调用配置的短信通道真实发送
     """
     # 检查手机号格式
     if len(phone) != 11 or not phone.isdigit():
         logger.warning(f"Invalid phone format: {phone}")
         return False
 
-    # 演示模式：不实际发送，验证码固定为 888888
-    if settings.demo.enabled:
-        logger.info(f"演示模式，手机号 {phone} 使用固定验证码 888888")
-        return send_sms_code(phone)
-
-    # 非演示模式：检查短信配置
+    # 检查短信配置
     sender = sms_manager.get_sender()
     if sender is None or not sender.is_available():
         logger.error("短信通道未配置，无法发送验证码")
@@ -83,10 +76,5 @@ def verify_admin_sms_code(phone: str, code: str) -> bool:
     验证管理员验证码
 
     复用现有 verify_sms_code。
-    支持固定 Mock 验证码 "888888" 用于开发环境/演示模式。
     """
-    # 演示模式允许固定验证码
-    if settings.demo.enabled and code == "888888":
-        return True
-
     return verify_sms_code(phone, code)

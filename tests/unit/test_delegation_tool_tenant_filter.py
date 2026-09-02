@@ -110,12 +110,10 @@ class TestDelegationToolTenantFilter(unittest.TestCase):
         self.addCleanup(self._db_patcher.stop)
 
     def test_get_tools_without_filter_includes_all_subagents(self):
-        """【基线】非 SaaS 模式（demo 模式）：委派工具列出全部子智能体（与系统提示词一致）"""
+        """【基线】无租户上下文（platform_admin 全局视图/后台调用）：委派工具列出全部子智能体"""
         agent = _build_minimal_master_agent(self.registry)
 
-        self.mock_settings.saas.enabled = False
-        self.mock_settings.demo.enabled = True
-        # 非 SaaS：available_subagents 不传，落到 demo 分支使用全部
+        # 无租户：available_subagents 为 None → 委派工具使用全部注册子智能体
         with patch("src.saas.context.get_current_tenant_id", return_value=None):
             tools = agent._get_tools()
 
@@ -125,12 +123,10 @@ class TestDelegationToolTenantFilter(unittest.TestCase):
         self.assertEqual(set(enum), {"旅游咨询顾问", "外贸获客智能体", "全筑合同归档自动化审核"})
 
     def test_get_tools_filters_by_tenant_subscription_in_saas_mode(self):
-        """【核心修复】SaaS 模式 + 租户上下文：委派工具的 enum 必须只包含租户订阅的子智能体"""
+        """【核心修复】租户上下文：委派工具的 enum 必须只包含租户订阅的子智能体"""
         agent = _build_minimal_master_agent(self.registry)
 
         # 模拟租户 tenant_001 只订阅了 travel-advisor
-        self.mock_settings.saas.enabled = True
-        self.mock_settings.demo.enabled = False
         with patch("src.saas.context.get_current_tenant_id", return_value="tenant_001"):
             with patch(
                 "src.saas.db.subscription_db.SubscriptionDB.get_allowed_subagent_types",
@@ -154,8 +150,6 @@ class TestDelegationToolTenantFilter(unittest.TestCase):
         """description 文本（可用的子智能体说明）也必须只列出租户订阅的子智能体"""
         agent = _build_minimal_master_agent(self.registry)
 
-        self.mock_settings.saas.enabled = True
-        self.mock_settings.demo.enabled = False
         with patch("src.saas.context.get_current_tenant_id", return_value="tenant_001"):
             with patch(
                 "src.saas.db.subscription_db.SubscriptionDB.get_allowed_subagent_types",
@@ -186,8 +180,6 @@ class TestDelegationToolTenantFilter(unittest.TestCase):
         """_get_tools 在 Agent 主循环中每轮都被调用，必须缓存订阅查询，避免每轮查 DB"""
         agent = _build_minimal_master_agent(self.registry)
 
-        self.mock_settings.saas.enabled = True
-        self.mock_settings.demo.enabled = False
         with patch("src.saas.context.get_current_tenant_id", return_value="tenant_001"):
             with patch(
                 "src.saas.db.subscription_db.SubscriptionDB.get_allowed_subagent_types",
@@ -207,9 +199,6 @@ class TestDelegationToolTenantFilter(unittest.TestCase):
     def test_tenant_subscription_query_is_invalidated_when_tenant_changes(self):
         """切换租户上下文后，必须重新查询订阅列表"""
         agent = _build_minimal_master_agent(self.registry)
-
-        self.mock_settings.saas.enabled = True
-        self.mock_settings.demo.enabled = False
 
         with patch("src.saas.context.get_current_tenant_id", return_value="tenant_001"):
             with patch(
@@ -247,8 +236,6 @@ async def test_subscription_visibility_query_is_primed_off_event_loop():
         return ["travel-advisor"]
 
     with (
-        patch("src.config.settings.settings.saas.enabled", True),
-        patch("src.config.settings.settings.demo.enabled", False),
         patch("src.saas.context.get_current_tenant_id", return_value="tenant_001"),
         patch("src.db.database.get_db_connection") as get_connection,
         patch(

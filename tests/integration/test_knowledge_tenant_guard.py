@@ -2,9 +2,9 @@
 
 安全加固设计 §2.4（对象级租户保护）：
 - delete_document：跨租户 → 视为不存在（不执行删除）；本租户 → 正常删除（doc+chunks+文件）；
-  无租户上下文 → 真实租户文档不可见（不删除），仅可删 demo/无主文档（与检索/下载侧口径一致）
+  无租户上下文 → 真实租户文档不可见（不删除），仅可删无主文档（与检索/下载侧口径一致）
 - get_document_chunks：跨租户 → 空（JOIN documents 租户条件）；无租户上下文 → 真实租户文档为空
-- list/count：无租户上下文（匿名/租户解析失败）→ 收窄到 demo/无主文档，真实租户文档不可见
+- list/count：无租户上下文（匿名/租户解析失败）→ 收窄到无主文档，真实租户文档不可见
 - download 路由：跨租户无共享授权 → 403；本租户 → 正常返回文件；无租户上下文 → 403
 - DELETE/chunks 路由：跨租户与不存在统一 404，不泄漏存在性
 
@@ -141,7 +141,7 @@ class TestKnowledgeTenantGuard:
         assert _doc_exists(env["doc_a"]) is True
 
     async def test_delete_none_tenant_unowned_doc_allowed(self, env):
-        """无租户上下文（demo/无租户模式）删除无主文档 → 允许（口径同检索/下载侧）"""
+        """无租户上下文删除无主文档 → 允许（口径同检索/下载侧）"""
         from unittest.mock import AsyncMock, patch
         from src.db.database import get_db_connection
         from src.knowledge.service import KnowledgeBaseService
@@ -198,40 +198,18 @@ class TestKnowledgeTenantGuard:
     # ===== service 层：list/count 租户收窄 =====
 
     def test_list_count_none_tenant_narrowed(self, env):
-        """无租户上下文（匿名/租户解析失败）list/count → 收窄到 demo/无主文档，
+        """无租户上下文（匿名/租户解析失败）list/count → 收窄到无主文档，
         真实租户文档不可见（§2.4：数据访问点不依赖上游是否传租户）"""
-        from src.db.database import get_db_connection
         from src.knowledge.service import KnowledgeBaseService
         svc = KnowledgeBaseService()
 
-        # demo 租户文档（验证 None 口径 = demo OR 无主，而非仅无主）
-        with get_db_connection() as conn:
-            cur = conn.cursor()
-            cur.execute("""
-                INSERT INTO documents
-                    (tenant_id, title, source_type, file_type, file_path,
-                     file_size, total_chunks, embedding_model)
-                VALUES ('demo', 'demo 租户测试文档', 'file', 'txt', '/tmp/kb_demo_guard.txt',
-                        24, 1, 'text-embedding-v3')
-                RETURNING id
-            """)
-            doc_demo = cur.fetchone()["id"]
-            conn.commit()
+        docs = svc.list_documents(tenant_id=None, limit=1000)
+        ids = [d["id"] for d in docs]
+        assert env["doc_a"] not in ids          # 真实租户文档不可见
+        assert env["doc_unowned"] in ids        # 无主文档可见（None 口径 = tenant_id IS NULL）
 
-        try:
-            docs = svc.list_documents(tenant_id=None, limit=1000)
-            ids = [d["id"] for d in docs]
-            assert env["doc_a"] not in ids          # 真实租户文档不可见
-            assert env["doc_unowned"] in ids        # 无主文档可见
-            assert doc_demo in ids                  # demo 文档可见
-
-            assert svc.count_documents(tenant_id=None) >= 2
-            assert svc.count_documents(tenant_id=env["tenant_a"]) >= 1
-        finally:
-            with get_db_connection() as conn:
-                cur = conn.cursor()
-                cur.execute("DELETE FROM documents WHERE id = %s", (doc_demo,))
-                conn.commit()
+        assert svc.count_documents(tenant_id=None) >= 1
+        assert svc.count_documents(tenant_id=env["tenant_a"]) >= 1
 
     # ===== API 路由层 =====
 
@@ -300,7 +278,7 @@ class TestKnowledgeTenantGuard:
             clear_tenant_context()
 
     async def test_list_route_none_tenant_excludes_real_tenant(self, env):
-        """list 路由无租户上下文（匿名请求）→ 不返回真实租户文档，仅 demo/无主"""
+        """list 路由无租户上下文（匿名请求）→ 不返回真实租户文档，仅无主"""
         from src.knowledge import api as kb_api
 
         try:

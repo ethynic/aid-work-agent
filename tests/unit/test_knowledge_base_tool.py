@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, AsyncMock, patch
 from src.tools.knowledge.knowledge_base_tool import KnowledgeBaseTool
 
 
-def _make_tool(tenant_id="demo"):
+def _make_tool(tenant_id="tenant_test1"):
     """构造一个 mock 好 retriever 的工具实例"""
     tool = KnowledgeBaseTool()
     tool._tenant_id = tenant_id
@@ -37,7 +37,7 @@ async def test_kb_search_returns_doc_id_and_file_path():
     tool._retriever = mock_retriever
 
     mock_cm, mock_cursor = _mock_db([
-        {"id": 1, "title": "报价模板.xlsx", "file_path": "storage/uploads/demo/knowledge/kb_xxx.xlsx"},
+        {"id": 1, "title": "报价模板.xlsx", "file_path": "storage/tenants/tenant_test1/knowledge/kb_xxx.xlsx"},
     ])
 
     with patch("src.tools.knowledge.knowledge_base_tool.get_db_connection", return_value=mock_cm):
@@ -49,7 +49,7 @@ async def test_kb_search_returns_doc_id_and_file_path():
     item = result["results"][0]
     assert item["doc_id"] == 1
     assert item["doc_title"] == "报价模板.xlsx"
-    assert item["file_path"] == "storage/uploads/demo/knowledge/kb_xxx.xlsx"
+    assert item["file_path"] == "storage/tenants/tenant_test1/knowledge/kb_xxx.xlsx"
     assert item["text"] == "报价模板内容"
 
     # 关键：SQL 必须查询了 file_path 列

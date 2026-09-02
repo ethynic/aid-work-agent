@@ -103,10 +103,7 @@ class TestBillingBalanceAPI:
         class FakeRequest:
             pass
 
-        with patch("src.saas.api.billing_balance.require_admin", fake_require_admin), \
-             patch("src.saas.api.billing_balance.settings") as mock_settings:
-            mock_settings.saas.enabled = True
-
+        with patch("src.saas.api.billing_balance.require_admin", fake_require_admin):
             import asyncio
             response = asyncio.get_event_loop().run_until_complete(
                 billing_balance.get_balance(FakeRequest())
@@ -138,10 +135,7 @@ class TestBillingBalanceAPI:
         class FakeRequest:
             pass
 
-        with patch("src.saas.api.billing_balance.require_admin", fake_require_admin), \
-             patch("src.saas.api.billing_balance.settings") as mock_settings:
-            mock_settings.saas.enabled = True
-
+        with patch("src.saas.api.billing_balance.require_admin", fake_require_admin):
             import asyncio
             response = asyncio.get_event_loop().run_until_complete(
                 billing_balance.get_usage(
@@ -200,10 +194,7 @@ class TestBillingBalanceAPI:
         class FakeRequest:
             pass
 
-        with patch("src.saas.api.billing_balance.require_admin", fake_require_admin), \
-             patch("src.saas.api.billing_balance.settings") as mock_settings:
-            mock_settings.saas.enabled = True
-
+        with patch("src.saas.api.billing_balance.require_admin", fake_require_admin):
             import asyncio
             # page_size=1 强制分页
             response = asyncio.get_event_loop().run_until_complete(
@@ -243,10 +234,7 @@ class TestBillingBalanceAPI:
         class FakeRequest:
             pass
 
-        with patch("src.saas.api.billing_balance.require_admin", fake_require_admin), \
-             patch("src.saas.api.billing_balance.settings") as mock_settings:
-            mock_settings.saas.enabled = True
-
+        with patch("src.saas.api.billing_balance.require_admin", fake_require_admin):
             import asyncio
             response = asyncio.get_event_loop().run_until_complete(
                 billing_balance.list_my_recharges(FakeRequest(), page=1, page_size=20)
@@ -301,10 +289,7 @@ class TestUsageUnionClientLogs:
             class FakeRequest:
                 pass
 
-            with patch("src.saas.api.billing_balance.require_admin", fake_require_admin), \
-                 patch("src.saas.api.billing_balance.settings") as mock_settings:
-                mock_settings.saas.enabled = True
-
+            with patch("src.saas.api.billing_balance.require_admin", fake_require_admin):
                 import asyncio
                 response = asyncio.get_event_loop().run_until_complete(
                     billing_balance.get_usage(

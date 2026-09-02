@@ -1,12 +1,24 @@
 {
   "version": 1,
   "entry": "/web/main.ts",
-  "routeSources": ["web/router/agentRoutes.ts", "web/router/portalRoutes.ts"],
+  "routeSources": [
+    "web/router/agentRoutes.ts",
+    "web/router/portalRoutes.ts"
+  ],
   "authGuards": {
-    "publicSuffixes": ["/login", "/reset-password"],
-    "tenantPrefixes": ["/t/", "/portal"],
-    "tenantComposable": "useTenantAuth",
-    "defaultComposable": "useDemoAuth"
+    "publicSuffixes": [
+      "/login",
+      "/reset-password"
+    ],
+    "tenantPrefixes": [
+      "/t/",
+      "/portal"
+    ],
+    "tenantComposable": "useTenantAuth"
   },
-  "bundleForbiddenModules": ["desktop/", "web/main.desktop.ts", "web/router/desktopRoutes.ts"]
+  "bundleForbiddenModules": [
+    "desktop/",
+    "web/main.desktop.ts",
+    "web/router/desktopRoutes.ts"
+  ]
 }

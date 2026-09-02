@@ -304,14 +304,11 @@ async def test_create_passes_tenant_to_dry_run_and_create():
 
 @pytest.mark.asyncio
 async def test_create_rejects_when_tenant_context_missing_in_saas():
-    """SaaS 部署下租户上下文缺失（None）时 fail-closed：拒绝创建且不触达 DB"""
-    from src.config.settings import settings as app_settings
-
+    """租户上下文缺失（None）时 fail-closed：拒绝创建且不触达 DB（SaaS 开关已移除，恒为 SaaS 模式）"""
     tool = _make_tool()
     create_mock = MagicMock()
     count_mock = MagicMock()
     with (
-        patch.object(app_settings.saas, "enabled", True),
         patch("src.scheduler.db.ScheduledTaskDB.count_by_user", count_mock),
         patch("src.scheduler.db.ScheduledTaskDB.create", create_mock),
         tool_execution_scope(ToolExecutionContext(user_id="u1", session_id="session_1")),
@@ -329,13 +326,10 @@ async def test_create_rejects_when_tenant_context_missing_in_saas():
 
 @pytest.mark.asyncio
 async def test_manage_task_rejects_when_tenant_context_missing_in_saas():
-    """SaaS 部署下租户上下文缺失（None）时 fail-closed：拒绝管理操作"""
-    from src.config.settings import settings as app_settings
-
+    """租户上下文缺失（None）时 fail-closed：拒绝管理操作（SaaS 开关已移除，恒为 SaaS 模式）"""
     tool = ManageScheduledTaskTool()
     list_mock = MagicMock()
     with (
-        patch.object(app_settings.saas, "enabled", True),
         patch("src.scheduler.db.ScheduledTaskDB.list_by_user", list_mock),
         tool_execution_scope(ToolExecutionContext(user_id="user-a")),
     ):

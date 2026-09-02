@@ -20,18 +20,6 @@ vi.mock('@/api/subagent', () => ({
   listSubagents: (...args: any[]) => listSubagentsMock(...args),
 }))
 
-// mock useDemoAuth（默认未登录状态）
-const demoIsLoggedIn = ref(false)
-const demoUser = ref(null)
-const demoLogout = vi.fn()
-vi.mock('@/composables/useDemoAuth', () => ({
-  useDemoAuth: () => ({
-    user: demoUser,
-    isLoggedIn: demoIsLoggedIn,
-    logout: demoLogout,
-  }),
-}))
-
 // mock useTenantAuth（默认未登录状态）
 const tenantIsLoggedIn = ref(false)
 const tenantAdmin = ref(null)
@@ -73,8 +61,6 @@ describe('MyDigitalEmployees', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     listSubagentsMock.mockReset()
-    demoIsLoggedIn.value = false
-    demoUser.value = null
     tenantIsLoggedIn.value = false
     tenantAdmin.value = null
     routePath.value = '/'
@@ -136,7 +122,7 @@ describe('MyDigitalEmployees', () => {
     expect(text).not.toContain(longDesc)
   })
 
-  it('点击卡片触发路由跳转（demo 模式：/chat/{agent_id}）', async () => {
+  it('点击卡片触发路由跳转（非租户模式：/chat/{agent_id}）', async () => {
     listSubagentsMock.mockResolvedValue({
       success: true,
       data: [

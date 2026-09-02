@@ -73,9 +73,7 @@ async def list_complaints(
     """查询投诉列表（分页）"""
     try:
         tid = tenant_id or _get_tenant(request)
-        # demo 模式下 tenant_id 为 "demo" 但数据中可能是 NULL，不过滤
-        # 只在真实租户模式下做租户隔离
-        effective_tid = tid if tid and tid != "demo" else None
+        effective_tid = tid or None
         logger.info(f"[complaint-list] tid={tid}, effective_tid={effective_tid}")
         conditions = []
         params: list = []
@@ -216,7 +214,7 @@ async def get_complaint_stats(
     """投诉统计数据"""
     try:
         tid = tenant_id or _get_tenant(request)
-        effective_tid = tid if tid and tid != "demo" else None
+        effective_tid = tid or None
 
         days = 30
         if period.endswith('d'):

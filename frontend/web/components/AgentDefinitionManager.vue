@@ -20,7 +20,7 @@
           title="自定义数字员工"
           :is-online="true"
           :is-logged-in="effectiveIsLoggedIn"
-          :user="demoUser"
+          :user="displayUser"
         >
         </AppHeader>
 
@@ -502,10 +502,15 @@ import {
   type AgentDefinition, type PromptVersion, type DiffResult,
   type ToolMeta, type SkillMeta, type ReplyStyleMeta,
 } from '@/api/agentDefinitions'
+import { useTenantAuth } from '@/composables/useTenantAuth'
 
 // ============== Auth (portal mode) ==============
-const effectiveIsLoggedIn = ref(true)
-const demoUser = ref({ username: '管理员' })
+const { admin: portalAdmin, isLoggedIn: tenantIsLoggedIn } = useTenantAuth()
+const effectiveIsLoggedIn = computed(() => tenantIsLoggedIn.value)
+// AppHeader 展示用户（登录态缺失时回退到"管理员"占位）
+const displayUser = computed(() =>
+  portalAdmin.value ? { username: portalAdmin.value.username } : { username: '管理员' }
+)
 
 // ============== State ==============
 const agents = ref<AgentDefinition[]>([])

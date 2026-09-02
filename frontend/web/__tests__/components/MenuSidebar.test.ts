@@ -34,17 +34,6 @@ vi.mock('@/composables/useSession', () => ({
   }),
 }))
 
-// mock useDemoAuth
-const demoIsLoggedIn = ref(false)
-const demoUser = ref<any>(null)
-vi.mock('@/composables/useDemoAuth', () => ({
-  useDemoAuth: () => ({
-    user: demoUser,
-    isLoggedIn: demoIsLoggedIn,
-    logout: vi.fn(),
-  }),
-}))
-
 // mock useTenantAuth
 const tenantIsLoggedIn = ref(false)
 const tenantAdmin = ref<any>(null)
@@ -163,8 +152,6 @@ describe('MenuSidebar - flyout 二级菜单', () => {
     vi.clearAllMocks()
     loadSessionsMock.mockResolvedValue(undefined)
     sessionsRef.value = []
-    demoIsLoggedIn.value = false
-    demoUser.value = null
     tenantIsLoggedIn.value = false
     tenantAdmin.value = null
     tenant.value = null

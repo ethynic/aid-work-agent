@@ -13,7 +13,7 @@
  * - 密钥展示对话框关闭按钮默认禁用，勾选后才能关
  * - 轮换密钥流程
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 
 // mock vue-toastification
@@ -35,13 +35,16 @@ vi.mock('@/composables/useTenantAuth', () => ({
 // 拉取真实组件
 import RpaBindingPanel from '@/components/saas/RpaBindingPanel.vue'
 
+// 记录当前挂载的 wrapper，afterEach 主动卸载，避免 Teleport 残留导致下一个用例 patch 报错
+let activeWrapper: ReturnType<typeof mount> | null = null
+
 function mountPanel() {
   // attachTo: document.body 让 BaseModal 的 Teleport 内容可被 document.querySelector 检索到
   // （vue-test-utils 默认 mount 不挂到真实 DOM，Teleport 内容 wrapper.html() 看不到）
   const div = document.createElement('div')
   div.id = 'test-mount'
   document.body.appendChild(div)
-  return mount(RpaBindingPanel, {
+  activeWrapper = mount(RpaBindingPanel, {
     attachTo: div,
     global: {
       provide: {
@@ -49,6 +52,7 @@ function mountPanel() {
       },
     },
   })
+  return activeWrapper
 }
 
 // 取整个 body 的 HTML（用于跨 teleport 检查 BaseModal 渲染的弹框内容）
@@ -60,7 +64,15 @@ describe('RpaBindingPanel', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     confirmMock.mockReturnValue(true)
-    // 清理上一次挂载残留的 DOM（Teleport 内容、mount 容器）
+  })
+
+  afterEach(async () => {
+    // 主动卸载组件，避免 Teleport 残留导致下一个用例 patch 出错（insertBefore null）
+    if (activeWrapper) {
+      activeWrapper.unmount()
+      activeWrapper = null
+    }
+    // 清理挂载残留的 DOM（Teleport 内容、mount 容器）
     document.body.innerHTML = ''
   })
 

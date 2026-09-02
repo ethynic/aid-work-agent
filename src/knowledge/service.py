@@ -599,18 +599,18 @@ class KnowledgeBaseService:
         或上游查询结果。对当前上下文不可见（跨租户/无主）的文档一律按「文档不存在」
         处理，不泄漏存在性：
         - 有租户上下文：仅能删除本租户文档
-        - 无租户上下文（demo/无租户模式）：仅能删除 demo/无主文档，与检索侧
+        - 无租户上下文：仅能删除无主文档，与检索侧
           （hybrid_retriever/vector_db）及下载侧口径一致，绝不触碰真实租户数据
         - global_view=True（认证 platform_admin 全局视图）且无租户上下文：
           不携带租户过滤，恢复平台管理员跨租户管理文档的原行为
         """
-        # 租户作用域条件（常量拼接，无用户输入插值；无租户上下文时收窄到 demo/无主文档）
+        # 租户作用域条件（常量拼接，无用户输入插值；无租户上下文时收窄到无主文档）
         if tenant_id:
             scope_sql, scope_params = "tenant_id = %s", [tenant_id]
         elif global_view:
             scope_sql, scope_params = "1=1", []
         else:
-            scope_sql, scope_params = "(tenant_id = 'demo' OR tenant_id IS NULL)", []
+            scope_sql, scope_params = "tenant_id IS NULL", []
         try:
             with self._get_db_connection() as conn:
                 cursor = conn.cursor()
@@ -707,7 +707,7 @@ class KnowledgeBaseService:
         """获取文档总数
 
         租户作用域（安全加固设计 §2.4）：有租户上下文只统计本租户；无租户上下文
-        （demo/无租户模式）收窄到 demo/无主文档，与 list_documents/检索侧口径一致，
+        （无租户上下文）收窄到无主文档，与 list_documents/检索侧口径一致，
         绝不统计真实租户文档。global_view=True（认证 platform_admin 全局视图）且
         无租户上下文时不携带租户过滤（恢复平台管理员全局统计的原行为）。
         """
@@ -725,8 +725,8 @@ class KnowledgeBaseService:
                     # 平台管理员全局视图：不携带租户过滤
                     pass
                 else:
-                    # 常量拼接，无用户输入插值；无租户上下文时收窄到 demo/无主文档
-                    conditions.append("(tenant_id = 'demo' OR tenant_id IS NULL)")
+                    # 常量拼接，无用户输入插值；无租户上下文时收窄到无主文档
+                    conditions.append("tenant_id IS NULL")
                 if user_id:
                     conditions.append("user_id = %s")
                     params.append(user_id)
@@ -769,7 +769,7 @@ class KnowledgeBaseService:
         """获取文档列表
 
         租户作用域（安全加固设计 §2.4）：有租户上下文只返回本租户文档；无租户上下文
-        （demo/无租户模式）收窄到 demo/无主文档，与 count_documents/检索侧口径一致，
+        （无租户上下文）收窄到无主文档，与 count_documents/检索侧口径一致，
         绝不返回真实租户文档。global_view=True（认证 platform_admin 全局视图）且
         无租户上下文时不携带租户过滤（恢复平台管理员全局列表的原行为）。
         """
@@ -788,8 +788,8 @@ class KnowledgeBaseService:
                     # 平台管理员全局视图：不携带租户过滤
                     pass
                 else:
-                    # 常量拼接，无用户输入插值；无租户上下文时收窄到 demo/无主文档
-                    conditions.append("(tenant_id = 'demo' OR tenant_id IS NULL)")
+                    # 常量拼接，无用户输入插值；无租户上下文时收窄到无主文档
+                    conditions.append("tenant_id IS NULL")
                 if user_id:
                     conditions.append(f"user_id = {placeholder}")
                     params.append(user_id)
@@ -839,17 +839,17 @@ class KnowledgeBaseService:
 
         对象级租户校验（安全加固设计 §2.4）：chunks 表无 tenant_id 列，经 JOIN
         documents 携带租户条件。跨租户文档返回空，对外表现为「文档不存在或没有
-        分块」，不泄漏存在性；无租户上下文（demo/无租户模式）仅可见 demo/无主
+        分块」，不泄漏存在性；无租户上下文仅可见无主
         文档，与检索侧口径一致。global_view=True（认证 platform_admin 全局视图）
         且无租户上下文时不携带租户过滤（恢复平台管理员跨租户查看的原行为）。
         """
-        # 租户作用域条件（常量拼接，无用户输入插值；无租户上下文时收窄到 demo/无主文档）
+        # 租户作用域条件（常量拼接，无用户输入插值；无租户上下文时收窄到无主文档）
         if tenant_id:
             scope_sql, scope_params = "d.tenant_id = %s", [tenant_id]
         elif global_view:
             scope_sql, scope_params = "1=1", []
         else:
-            scope_sql, scope_params = "(d.tenant_id = 'demo' OR d.tenant_id IS NULL)", []
+            scope_sql, scope_params = "d.tenant_id IS NULL", []
         try:
             with self._get_db_connection() as conn:
                 cursor = conn.cursor()
@@ -973,12 +973,12 @@ class KnowledgeBaseService:
                             WHERE id IN ({placeholders})
                         """, list(doc_ids))
                     else:
-                        # 无租户上下文同样收窄到 demo/无主文档（检索侧 hybrid_retriever/
+                        # 无租户上下文收窄到无主文档（检索侧 hybrid_retriever/
                         # vector_db 已收窄，此处兜底防上游口径漂移，§2.4）
                         cursor.execute(f"""
                             SELECT id, title, file_type, file_path FROM documents
                             WHERE id IN ({placeholders})
-                              AND (tenant_id = 'demo' OR tenant_id IS NULL)
+                              AND tenant_id IS NULL
                         """, list(doc_ids))
 
                     # 转换为 dict 以便访问列名

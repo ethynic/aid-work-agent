@@ -16,7 +16,6 @@ from fastapi import APIRouter, Request, HTTPException
 from pydantic import BaseModel, Field
 from loguru import logger
 
-from src.config.settings import settings
 from src.saas.api.tenant_auth import require_admin, sanitize_error_info
 from src.saas.db.tenant_db import TenantDB
 from src.db.models import TenantRechargesDB
@@ -56,9 +55,6 @@ async def list_recharges(
     page_size: int = 20,
 ):
     """充值记录列表（按 created_at DESC）"""
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
     admin = require_admin(request)
     _require_platform_admin(admin)
 
@@ -91,9 +87,6 @@ async def list_recharges(
 @router.post("/")
 async def create_recharge(request: Request, body: RechargeCreateRequest):
     """创建充值记录，同步增加租户余额（同事务原子）"""
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
     admin = require_admin(request)
     _require_platform_admin(admin)
 
@@ -154,9 +147,6 @@ async def create_recharge(request: Request, body: RechargeCreateRequest):
 @router.delete("/{recharge_id}")
 async def delete_recharge(request: Request, recharge_id: int):
     """删除充值记录，同步回扣租户余额（同事务原子）"""
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
     admin = require_admin(request)
     _require_platform_admin(admin)
 
@@ -184,9 +174,6 @@ async def delete_recharge(request: Request, recharge_id: int):
 @router.get("/stats")
 async def recharge_stats(request: Request, tenant_id: Optional[str] = None):
     """汇总统计：总充值金额、总积分、最近 7 天趋势"""
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
     admin = require_admin(request)
     _require_platform_admin(admin)
 

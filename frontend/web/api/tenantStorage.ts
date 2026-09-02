@@ -9,7 +9,7 @@
  * 路由 → key 映射：
  *   /portal/*                → portal_token / portal_admin / portal_tenant（平台管理后台共用）
  *   /t/:tenant_id/...        → saas_token_{tid} / saas_admin_{tid} / saas_tenant_{tid}
- *   其他（演示模式 /）        → saas_token / saas_admin / saas_tenant（保持原 key）
+ *   其他（桌面端等）          → saas_token / saas_admin / saas_tenant（保持原 key）
  */
 
 export type SaasBaseKey = 'saas_token' | 'saas_admin' | 'saas_tenant'
@@ -26,7 +26,7 @@ export function getTenantScopedKey(base: SaasBaseKey): string {
   }
   const m = path.match(/^\/t\/([^/]+)/)
   if (!m) {
-    // 演示模式 /，保持原 saas_* key
+    // 非租户路径（桌面端等），保持原 saas_* key
     return base
   }
   // URL 解码 + 安全字符白名单，防止路径注入污染 localStorage key

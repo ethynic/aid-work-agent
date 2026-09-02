@@ -262,11 +262,9 @@ class LocalToolProxyTool(BaseTool):
     async def _tenant_credit_blocked(self, tenant_id: str) -> Optional[str]:
         """扣费前余额预检（语义同 main._check_tenant_credit_blocked）：返回阻断文案或 None。
 
-        SaaS 模式未启用 / 租户不存在：不阻断；余额 ≤0：阻断（invocation 不创建，
-        设备不出工）；检查异常：不阻断避免误伤（与对话入口同一容错取向）。
+        租户不存在：不阻断；余额 ≤0：阻断（invocation 不创建，设备不出工）；
+        检查异常：不阻断避免误伤（与对话入口同一容错取向）。
         """
-        if not settings.saas.enabled:
-            return None
         try:
             from src.saas.db.tenant_db import TenantDB
             tenant = await asyncio.to_thread(TenantDB.get_by_id, tenant_id)

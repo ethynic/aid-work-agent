@@ -272,7 +272,7 @@ class TestRegisterSystemJobs:
         return m
 
     def test_registers_reconcile_memory_cleanup_dedup_cleanup(self):
-        """非 SaaS：注册 reconcile(30s) / memory_cleanup / dedup_cleanup / memory_summarizer；不注册 wecom_kf"""
+        """注册 reconcile(30s) / memory_cleanup / dedup_cleanup / memory_summarizer / wecom_kf_timeout"""
         m = self._make_manager()
         with patch("src.config.settings.settings") as mock_settings:
             mock_settings.memory.long_term.enabled = True
@@ -280,27 +280,25 @@ class TestRegisterSystemJobs:
             mock_settings.memory.mid_term.enabled = False
             mock_settings.memory.mid_term.background_scan_enabled = False
             mock_settings.memory.cleanup_interval = 300
-            mock_settings.saas.enabled = False
 
             m._register_system_jobs()
 
-        # add_job 被调用：memory_summarizer + reconcile + memory_cleanup + dedup_cleanup（≥4）
+        # add_job 被调用：memory_summarizer + reconcile + memory_cleanup + dedup_cleanup + wecom_kf_timeout
         job_ids = [c.kwargs.get("id") for c in m._scheduler.add_job.call_args_list]
         assert "job_system_memory_summarizer" in job_ids
         assert "job_system_reconcile" in job_ids
         assert "job_system_memory_cleanup" in job_ids
         assert "job_system_dedup_cleanup" in job_ids
-        # 非 SaaS → 不注册 wecom_kf
-        assert "job_system_wecom_kf_timeout" not in job_ids
+        # wecom_kf_timeout 无条件注册（SaaS 开关已移除）
+        assert "job_system_wecom_kf_timeout" in job_ids
 
-    def test_registers_wecom_kf_only_when_saas_enabled(self):
-        """SaaS 启用 → 额外注册 wecom_kf_timeout"""
+    def test_registers_wecom_kf_timeout_unconditionally(self):
+        """wecom_kf_timeout 无条件注册（原 SaaS 门控已移除）"""
         m = self._make_manager()
         with patch("src.config.settings.settings") as mock_settings:
             mock_settings.memory.long_term.enabled = False
             mock_settings.memory.mid_term.enabled = False
             mock_settings.memory.cleanup_interval = 300
-            mock_settings.saas.enabled = True
 
             m._register_system_jobs()
 
@@ -314,7 +312,6 @@ class TestRegisterSystemJobs:
             mock_settings.memory.long_term.enabled = False
             mock_settings.memory.mid_term.enabled = False
             mock_settings.memory.cleanup_interval = 300
-            mock_settings.saas.enabled = False
             # src.social_media.publishing.dispatcher 不存在 → ImportError 被吞
             m._register_system_jobs()
 
@@ -329,7 +326,6 @@ class TestRegisterSystemJobs:
             mock_settings.memory.long_term.enabled = False
             mock_settings.memory.mid_term.enabled = False
             mock_settings.memory.cleanup_interval = 300
-            mock_settings.saas.enabled = False
             m._register_system_jobs()
 
         reconcile_call = next(

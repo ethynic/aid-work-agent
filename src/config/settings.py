@@ -374,7 +374,6 @@ class AppConfig(BaseModel):
 
 class SaasConfig(BaseModel):
     """SaaS 多租户配置"""
-    enabled: bool = False
     tenant_skills_dir: str = "storage/tenants"
     default_max_instances: int = 5
     default_max_users: int = 50
@@ -388,12 +387,6 @@ class CorsConfig(BaseModel):
         "http://localhost:7860",
         "https://*.aidingyi.cn",
     ])
-
-
-class DemoConfig(BaseModel):
-    """演示模式配置"""
-    enabled: bool = True
-    mock_password: str = "888888"
 
 
 class SmsConfig(BaseModel):
@@ -511,7 +504,6 @@ class Settings(BaseModel):
     skills: SkillsConfig = Field(default_factory=SkillsConfig)
     agent: AgentConfig = Field(default_factory=AgentConfig)
     saas: SaasConfig = Field(default_factory=SaasConfig)
-    demo: DemoConfig = Field(default_factory=DemoConfig)
     cors: CorsConfig = Field(default_factory=CorsConfig)
     sms: SmsConfig = Field(default_factory=SmsConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)

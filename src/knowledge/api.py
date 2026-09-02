@@ -117,7 +117,7 @@ def _is_global_admin_view(http_request: Optional[Request]) -> bool:
 
     True 时知识库 list/count/search/delete/chunks 恢复无租户过滤的全局口径；
     未认证、普通用户、admin 代管指定租户、非 SaaS 模式（中间件未挂载，
-    state 恒无 user_role）一律 False，保持 demo/NULL 收窄防泄漏行为。
+    state 恒无 user_role）一律 False，保持 NULL 收窄防泄漏行为。
     """
     if http_request is None:
         return False
@@ -576,7 +576,7 @@ def _has_shared_access(to_tenant_id: str, from_tenant_id: str, source_type: str)
 def _can_download_document(doc_row: dict, current_tenant_id: Optional[str]) -> bool:
     """下载权限判定：
     - 当前租户匹配文档 tenant_id -> 允许
-    - 无租户上下文（demo/命令行）-> 仅允许 demo 或无租户文档
+    - 无租户上下文 -> 仅允许无租户文档
     - 否则校验共享访问（租户级授权 ∩ 数字员工级启用）
     """
     doc_tenant_id = doc_row.get("tenant_id")
@@ -587,7 +587,7 @@ def _can_download_document(doc_row: dict, current_tenant_id: Optional[str]) -> b
         if doc_tenant_id and source_type:
             return _has_shared_access(current_tenant_id, doc_tenant_id, source_type)
         return False
-    return doc_tenant_id in (None, "demo")
+    return doc_tenant_id is None
 
 
 @router.get("/documents/{doc_id}/download")

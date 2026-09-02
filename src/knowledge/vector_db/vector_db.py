@@ -209,7 +209,7 @@ class VectorDBPostgreSQL(VectorDatabase):
                     LIMIT %s
                 """, params)
             else:
-                # 未指定租户：只查 demo 或无租户的数据，绝不泄露其他租户数据
+                # 未指定租户：只查无主数据，绝不泄露其他租户数据
                 source_type_condition = " AND d.source_type = %s" if source_type else ""
                 params = [vector_str]
                 if source_type:
@@ -220,7 +220,7 @@ class VectorDBPostgreSQL(VectorDatabase):
                     FROM chunks_vec cv
                     JOIN chunks c ON cv.chunk_id = c.id
                     JOIN documents d ON c.doc_id = d.id
-                    WHERE d.tenant_id = 'demo' OR d.tenant_id IS NULL{source_type_condition}
+                    WHERE d.tenant_id IS NULL{source_type_condition}
                     ORDER BY distance
                     LIMIT %s
                 """, params)

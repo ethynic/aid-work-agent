@@ -207,25 +207,8 @@
         </button>
       </template>
 
-      <!-- 演示模式菜单 -->
+      <!-- 非租户模式菜单（平台管理后台 /portal） -->
       <template v-else>
-        <!-- Knowledge Base Menu Item -->
-        <button
-          @click="goToKnowledgeBase"
-          :class="[
-            'w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors text-sm',
-            isKnowledgeBaseActive
-              ? 'bg-primary-50 text-primary-700 font-medium'
-              : 'text-gray-600 hover:bg-gray-50'
-          ]"
-        >
-          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
-          </svg>
-          <span>知识中心</span>
-        </button>
-
-
         <!-- Digital Employee Management - only shown in portal management -->
         <button
           v-if="route.path.startsWith('/portal')"
@@ -774,7 +757,6 @@ import { ref, computed, watch, reactive } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { onClickOutside } from '@vueuse/core'
 import { useSession } from '@/composables/useSession'
-import { useDemoAuth } from '@/composables/useDemoAuth'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 import { useAgent } from '@/composables/useAgent'
 import { useTheme, type ThemeName } from '@/composables/useTheme'
@@ -810,7 +792,6 @@ const emit = defineEmits<{
 
 const router = useRouter()
 const route = useRoute()
-const { user: demoUser, isLoggedIn: demoIsLoggedIn, logout: demoLogout } = useDemoAuth()
 const { admin: tenantAdmin, tenant, logout: tenantLogout, isLoggedIn: tenantIsLoggedIn } = useTenantAuth()
 const { currentTheme, setTheme, getAvailableThemes } = useTheme()
 
@@ -823,9 +804,6 @@ const { state: desktopUpdateState, isVisible: desktopUpdateVisible, label: deskt
 const currentUsername = computed(() => {
   if (isTenantMode.value && tenantAdmin.value) {
     return tenantAdmin.value.username
-  }
-  if (demoUser.value) {
-    return demoUser.value.username
   }
   return '用户'
 })
@@ -850,16 +828,7 @@ function getThemePreviewColor(themeName: ThemeName): string {
 
 function handleLogout() {
   showUserMenu.value = false
-  if (isTenantMode.value) {
-    handleTenantLogout()
-  } else {
-    handleDemoLogout()
-  }
-}
-
-async function handleDemoLogout() {
-  await demoLogout()
-  router.push('/')
+  handleTenantLogout()
 }
 const {
   sessions,
@@ -963,7 +932,7 @@ const sidebarTitle = computed(() => {
     // 租户模式：只显示租户名称
     return tenant.value.company_name
   }
-  // 演示模式：显示默认名称
+  // 非租户模式：显示默认名称
   return '爱定义工作助理'
 })
 
@@ -1114,14 +1083,9 @@ function handleContextDelete() {
   }
 }
 
-// 判断当前是否在知识库页面
-const isKnowledgeBaseActive = computed(() => {
-  return route.path === '/knowledge-base'
-})
-
-// 判断历史会话是否应该高亮（仅在非知识库页面时）
+// 判断历史会话是否应该高亮（独立 /knowledge-base 路由已移除，历史会话恒高亮）
 const isHistorySessionActive = computed(() => {
-  return !isKnowledgeBaseActive.value
+  return true
 })
 
 // 按数字员工分组的业务页面
@@ -1163,12 +1127,6 @@ function navigateToBusinessPage(page: BusinessPage, agentId: string) {
   }
 }
 
-// 跳转到知识库（演示模式）
-function goToKnowledgeBase() {
-  router.push('/knowledge-base')
-}
-
-
 // 跳转到数字员工管理
 function goToDigitalEmployeeManager() {
   router.push('/portal/subagents')
@@ -1179,25 +1137,20 @@ const isMyAgentsActive = computed(() => {
   return route.path.endsWith('/my-agents')
 })
 
-// 跳转到「我的数字员工」页面
-// demo 模式与租户模式均支持，路由路径按模式选择
+// 跳转到「我的数字员工」页面（租户路由）
 function goToMyAgents() {
-  const targetPath = isTenantMode.value && tenantId.value
-    ? `/t/${tenantId.value}/my-agents`
-    : '/my-agents'
-  router.push(targetPath)
+  if (!tenantId.value) return
+  router.push(`/t/${tenantId.value}/my-agents`)
   // 手机端点击后自动收缩左侧菜单
   if (props.isMobile) {
     emit('collapse')
   }
 }
 
-// 跳转到全部历史会话
+// 跳转到全部历史会话（租户路由）
 function goToAllSessions() {
-  const targetPath = isTenantMode.value && tenantId.value
-    ? `/t/${tenantId.value}/all-sessions`
-    : '/all-sessions'
-  router.push(targetPath)
+  if (!tenantId.value) return
+  router.push(`/t/${tenantId.value}/all-sessions`)
   // 手机端点击后自动收缩左侧菜单
   if (props.isMobile) {
     emit('collapse')
@@ -1205,12 +1158,9 @@ function goToAllSessions() {
 }
 
 // 监听登录状态，登录后加载会话
-// 租户模式监听 tenantIsLoggedIn，演示模式监听 demoIsLoggedIn
 import { watchEffect } from 'vue'
 watchEffect(async () => {
-  const isTenantMode = route.path.startsWith('/t/')
-  const effectiveLoggedIn = isTenantMode ? tenantIsLoggedIn.value : demoIsLoggedIn.value
-  if (effectiveLoggedIn) {
+  if (tenantIsLoggedIn.value) {
     await loadSessions()
   } else {
     sessions.value = []
@@ -1219,10 +1169,8 @@ watchEffect(async () => {
 
 // 新建会话
 async function handleNewSession() {
-  // 根据模式选择正确的登录状态检查
-  // 租户模式使用 tenantIsLoggedIn，演示模式使用 demoIsLoggedIn
-  const effectiveIsLoggedIn = isTenantMode.value ? tenantIsLoggedIn.value : demoIsLoggedIn.value
-  if (!effectiveIsLoggedIn) {
+  // 未登录时直接返回
+  if (!tenantIsLoggedIn.value) {
     return
   }
 
@@ -1376,7 +1324,7 @@ async function confirmRename() {
 
 // 我的定时任务
 function openScheduledTasks() {
-  window.open('/scheduled-tasks', '_blank')
+  window.open(`/t/${tenantId.value}/scheduled-tasks`, '_blank')
 }
 
 // 租户模式修改密码

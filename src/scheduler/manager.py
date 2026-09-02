@@ -175,18 +175,17 @@ class ScheduledTaskManager:
         except Exception as e:
             logger.error(f"后端日志：注册渠道去重清理任务失败: {e}")
 
-        # ===== D14：wecom_kf_timeout（async，interval 60s）— 仅 SaaS 启用 =====
+        # ===== D14：wecom_kf_timeout（async，interval 60s）=====
         try:
-            if settings.saas.enabled:
-                self._scheduler.add_job(
-                    self._run_wecom_kf_timeout,
-                    IntervalTrigger(seconds=60),
-                    id="job_system_wecom_kf_timeout",
-                    name="WeCom KF Timeout Check",
-                    max_instances=1,
-                    coalesce=True,
-                )
-                logger.info("后端日志：已注册微信客服人工会话超时检查任务 (interval=60s)")
+            self._scheduler.add_job(
+                self._run_wecom_kf_timeout,
+                IntervalTrigger(seconds=60),
+                id="job_system_wecom_kf_timeout",
+                name="WeCom KF Timeout Check",
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info("后端日志：已注册微信客服人工会话超时检查任务 (interval=60s)")
         except Exception as e:
             logger.error(f"后端日志：注册微信客服超时检查任务失败: {e}")
 

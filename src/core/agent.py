@@ -302,9 +302,6 @@ class Agent:
         从 storage/tenants/{tenant_id}/skills/ 加载租户 skills 并合并到 SkillRegistry。
         后续请求使用缓存，避免重复磁盘扫描。
         """
-        if not settings.saas.enabled:
-            return
-
         # 优先使用初始化时传入的 tenant_id
         tenant_id = self._init_tenant_id
         if not tenant_id:
@@ -505,12 +502,13 @@ class Agent:
         获取当前请求可用的子智能体 name 列表（按租户订阅过滤）。
 
         过滤规则：
-        - SaaS 模式 + 有 tenant_id：从 subscriptions 表读取租户订阅的 subagent_type（dir_name），
+        - 有 tenant_id：从 subscriptions 表读取租户订阅的 subagent_type（dir_name），
           再映射回注册表中对应的 name
-        - 演示模式 / 非 SaaS / 无 tenant_id：返回全部子智能体（排除 dir_name == "main" 的主智能体）
+        - 无 tenant_id（platform_admin 全局视图/后台调用）：返回全部子智能体
+          （排除 dir_name == "main" 的主智能体）
 
-        性能：_get_tools 在 Agent 主循环中每轮都被调用，因此本方法按 (agent, tenant_id,
-        saas.enabled, demo.enabled) 做请求上下文缓存，避免每轮查 DB，同时隔离并发租户。
+        性能：_get_tools 在 Agent 主循环中每轮都被调用，因此本方法按 (agent, tenant_id)
+        做请求上下文缓存，避免每轮查 DB，同时隔离并发租户。
 
         Returns:
             可用的子智能体 name 列表（注册表 _configs 的 key）
@@ -520,10 +518,7 @@ class Agent:
 
         from src.saas.context import get_current_tenant_id
         tenant_id = get_current_tenant_id()
-        cache_key = (
-            id(self), tenant_id,
-            bool(settings.saas.enabled), bool(settings.demo.enabled),
-        )
+        cache_key = (id(self), tenant_id)
 
         # MASTER Agent 是进程级单例，缓存必须按异步请求上下文隔离，不能写实例属性。
         cached = _available_subagents_cache.get()
@@ -539,8 +534,8 @@ class Agent:
         if not self.subagent_registry:
             return []
 
-        # SaaS 模式 + 有租户 ID：从订阅表查询
-        if settings.saas.enabled and tenant_id:
+        # 有租户 ID：从订阅表查询
+        if tenant_id:
             from src.db.database import get_db_connection
             from src.saas.db.subscription_db import SubscriptionDB
 
@@ -554,7 +549,7 @@ class Agent:
                 if agent_id in allowed_subagent_types and agent_id != "main":
                     filtered.append(name)
         else:
-            # 演示模式 / 非 SaaS：返回全部（排除主智能体）
+            # 无租户上下文（platform_admin 全局视图/后台调用）：返回全部（排除主智能体）
             filtered = [
                 name
                 for name, config in self.subagent_registry._configs.items()
@@ -571,10 +566,7 @@ class Agent:
             return
         from src.saas.context import get_current_tenant_id
         tenant_id = get_current_tenant_id()
-        cache_key = (
-            id(self), tenant_id,
-            bool(settings.saas.enabled), bool(settings.demo.enabled),
-        )
+        cache_key = (id(self), tenant_id)
         cached = _available_subagents_cache.get()
         if cached is not None and cached[0] == cache_key:
             return

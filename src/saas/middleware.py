@@ -52,6 +52,20 @@ class TenantHeaderDenied(Exception):
         self.user_id = user_id
 
 
+class TenantHeaderRequired(Exception):
+    """已认证的非 platform_admin 用户无法确定租户上下文
+
+    正常租户用户（tenant_admin/普通用户）自身必有 tenant_id；走到此异常说明
+    数据异常或伪造 token，由 dispatch 外层捕获并返回 400，不静默放行。
+    platform_admin 不抛此异常（自身 tenant_id 为空，无 X-Tenant-Id 时保持
+    全局视图语义）。
+    """
+
+    def __init__(self, user_id: Optional[str] = None):
+        super().__init__("无法确定租户上下文")
+        self.user_id = user_id
+
+
 class TenantContextMiddleware(BaseHTTPMiddleware):
     """
     租户上下文中间件
@@ -110,6 +124,15 @@ class TenantContextMiddleware(BaseHTTPMiddleware):
                 f"path={request.url.path}, user_id={e.user_id}"
             )
             return JSONResponse(status_code=403, content={"detail": "无权访问指定租户"})
+        except TenantHeaderRequired as e:
+            logger.warning(
+                f"[TenantMiddleware] Tenant context required: "
+                f"path={request.url.path}, user_id={e.user_id}"
+            )
+            return JSONResponse(
+                status_code=400,
+                content={"detail": "无法确定租户上下文，请通过 X-Tenant-Id 指定目标租户"},
+            )
         except Exception as e:
             logger.warning(f"[TenantMiddleware] Error resolving tenant context: {e}")
 
@@ -257,13 +280,12 @@ class TenantContextMiddleware(BaseHTTPMiddleware):
         if user_tenant_id:
             return user_tenant_id, user_id
 
-        # 演示模式用户没有 tenant_id 时，使用演示租户
-        from src.config.settings import settings
-        demo_enabled = getattr(settings, "demo", None) and getattr(settings.demo, "enabled", False)
-        if demo_enabled:
-            return "demo", user_id
+        # platform_admin 自身 tenant_id 为空：无 X-Tenant-Id 时保持全局视图语义
+        if role == "platform_admin":
+            return None, user_id
 
-        return None, user_id
+        # 其他角色无租户：数据异常或伪造 token，明确拒绝
+        raise TenantHeaderRequired(user_id=user_id)
 
     async def _resolve_session_tenant(self, request: Request) -> tuple:
         """
@@ -292,4 +314,10 @@ class TenantContextMiddleware(BaseHTTPMiddleware):
             return None, None
         if user_tenant_id:
             return user_tenant_id, user_id
-        return None, user_id
+
+        # platform_admin 自身 tenant_id 为空：无 X-Tenant-Id 时保持全局视图语义
+        if role == "platform_admin":
+            return None, user_id
+
+        # 其他角色无租户：数据异常或伪造 token，明确拒绝
+        raise TenantHeaderRequired(user_id=user_id)

@@ -70,12 +70,12 @@ class TestGetTenantUploadDir:
         assert result.name == "conversation"
         assert result.parent.name == "_anonymous"
 
-    def test_demo_tenant(self, isolated_tenants_root, clear_tenant_context):
-        """演示用户 tenant_id='demo': storage/tenants/demo/conversation/"""
-        _set_tenant("demo", "demo_user")
+    def test_plain_tenant_id(self, isolated_tenants_root, clear_tenant_context):
+        """普通租户 ID（无 tenant_ 前缀）: storage/tenants/{tid}/conversation/"""
+        _set_tenant("plain_t", "user_1")
         from src.main import _get_tenant_upload_dir
         result = _get_tenant_upload_dir()
-        assert result.parent.name == "demo"
+        assert result.parent.name == "plain_t"
         assert result.name == "conversation"
 
     def test_user_id_not_in_path(self, isolated_tenants_root, clear_tenant_context):
@@ -308,10 +308,6 @@ class TestNormalizeTenantId:
         """_anonymous 特殊值不被误剥离"""
         from src.core.storage import normalize_tenant_id
         assert normalize_tenant_id("_anonymous") == "_anonymous"
-
-    def test_demo_untouched(self):
-        from src.core.storage import normalize_tenant_id
-        assert normalize_tenant_id("demo") == "demo"
 
     def test_tenant_default(self):
         """tenant_default 统一剥离为 default（保持读写一致）"""

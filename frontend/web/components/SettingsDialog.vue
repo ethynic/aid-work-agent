@@ -215,8 +215,7 @@
 
 <script setup lang="ts">
 import { ref, reactive, watch, h } from 'vue'
-import { useDemoAuth } from '@/composables/useDemoAuth'
-import { credentialGet } from '@/platform/credentialStore'
+import { useTenantAuth } from '@/composables/useTenantAuth'
 import { useToast } from 'vue-toastification'
 import {
   getEmailSettings as apiGetEmailSettings,
@@ -250,7 +249,8 @@ defineEmits<{
   (e: 'close'): void
 }>()
 
-const { user, setLogin } = useDemoAuth()
+// 租户登录态的管理员信息（username/user_id/phone 供基础设置展示）
+const { admin: user } = useTenantAuth()
 const toast = useToast()
 
 const tabs = [
@@ -269,7 +269,7 @@ const profileSaving = ref(false)
 watch(() => props.visible, (val) => {
   if (val && user.value) {
     profileForm.username = user.value.username || ''
-    profileForm.avatar_url = user.value.avatar_url || ''
+    profileForm.avatar_url = (user.value as Record<string, any>).avatar_url || ''
     loadEmailSettings()
   }
 })
@@ -282,7 +282,10 @@ async function saveProfile() {
       avatar_url: profileForm.avatar_url || undefined,
     })
     if (result.success && result.user) {
-      await setLogin(credentialGet('demo_token')!, result.user)
+      // token 不变，就地更新登录态中的管理员信息
+      if (user.value) {
+        user.value = { ...user.value, username: result.user.username }
+      }
       toast.success('资料更新成功')
     } else {
       toast.error(result.error || '更新失败')

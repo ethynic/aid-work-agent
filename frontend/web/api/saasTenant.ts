@@ -1,7 +1,7 @@
 /**
  * SaaS 租户管理 API Client
  * 所有 /api/saas/* 调用的统一封装
- * 使用独立的 saas_token（与演示模式 demo_token 分离）
+ * 使用独立的 saas_token（与普通用户 token 分离）
  * 租户前台路由下，saas_token 按 tenant_id 隔离，避免平台管理员多 tab 串号
  */
 
@@ -627,7 +627,7 @@ export async function getTenantTokenDetails(month: string, page: number = 1, pag
 
 // ==================== 工具函数 ====================
 
-// 根据当前路由获取对应的 token key（租户前台按 tenant_id 隔离，portal 共用，演示模式保持）
+// 根据当前路由获取对应的 token key（租户前台按 tenant_id 隔离，portal 共用）
 function getTokenKey(): string {
   return getTenantScopedKey('saas_token')
 }

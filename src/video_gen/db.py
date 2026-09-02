@@ -13,7 +13,7 @@ def init_video_gen_tables(conn) -> None:
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS gen_sessions (
             session_id        TEXT PRIMARY KEY,          -- sess_<12hex>
-            tenant_id         TEXT,                       -- 租户（可空，demo 模式）
+            tenant_id         TEXT,                       -- 租户（后台任务无租户上下文时可空）
             user_id           TEXT,                       -- 发起用户
             scene_id          TEXT NOT NULL,             -- 场景预设 id（硬编码，如 product_showcase）
             product_image_fid TEXT NOT NULL,             -- 产品图 file_id（r2v 作 reference_image，锁定产品外观防变形）

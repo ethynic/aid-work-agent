@@ -191,7 +191,7 @@ class KnowledgeBaseTool(BaseTool):
                         cursor.execute(f"""
                             SELECT id, title, file_path, tenant_id FROM documents
                             WHERE id IN ({placeholders})
-                              AND (tenant_id = 'demo' OR tenant_id IS NULL){source_type_condition}
+                              AND tenant_id IS NULL{source_type_condition}
                         """, params)
 
                     rows = cursor.fetchall()

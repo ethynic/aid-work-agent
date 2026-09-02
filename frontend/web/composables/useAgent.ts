@@ -4,7 +4,6 @@ import { SSEManager, uploadFile, type UploadedFile } from '@/api/agent'
 import { getSessionMessages } from '@/api/session'
 import { extractQuickOptions } from '@/utils/quickOptions'
 import { useToast } from 'vue-toastification'
-import { useDemoAuth } from './useDemoAuth'
 import { useTenantAuth } from './useTenantAuth'
 import { useCreditCheck } from './useCreditCheck'
 import { useVideoGenParams } from './useVideoGenParams'
@@ -100,13 +99,9 @@ export function useAgent() {
     const state = message.browserAssistance?.state
     return state === 'pending' || state === 'controlling' || state === 'resume_queued'
   }))
-  // 根据路由判断使用 demo 还是 tenant 认证头
+  // 根据路由获取认证头（租户前台自动带 X-Tenant-Id）
   function getEffectiveAuthHeader(): Record<string, string> {
-    if (window.location.pathname.startsWith('/t/')) {
-      const { getAuthHeader } = useTenantAuth()
-      return getAuthHeader()
-    }
-    const { getAuthHeader } = useDemoAuth()
+    const { getAuthHeader } = useTenantAuth()
     return getAuthHeader()
   }
 
@@ -186,7 +181,7 @@ export function useAgent() {
   async function sendMessage(content: string, subagent?: string | null, overrideSessionId?: string, instanceId?: string | null) {
     if (!content.trim()) return
 
-    // 余额检查：余额 ≤ 0 阻断发送（仅在租户前台模式下生效，演示模式跳过）
+    // 余额检查：余额 ≤ 0 阻断发送（仅在租户前台模式下生效）
     if (window.location.pathname.startsWith('/t/')) {
       const { checkCreditBeforeAction } = useCreditCheck()
       const creditCheck = await checkCreditBeforeAction('sendMessage')

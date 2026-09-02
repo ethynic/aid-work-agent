@@ -9,7 +9,6 @@ X-Tenant-Id 头必须先走完整认证链（Bearer token → verify_token → �
 """
 
 from unittest.mock import MagicMock, patch
-from types import SimpleNamespace
 
 import pytest
 from starlette.requests import Request
@@ -236,8 +235,7 @@ class TestUserTenantHeaderAdoption:
         mw = TenantContextMiddleware(None)
         verify_patch, db_patch = _setup_auth({"role": "platform_admin", "tenant_id": None})
 
-        with verify_patch, db_patch, \
-                patch("src.config.settings.settings", SimpleNamespace(demo=None)):
+        with verify_patch, db_patch:
             response = await mw.dispatch(request, call_next)
 
         assert response.status_code == 200
@@ -273,8 +271,7 @@ class TestUserTenantHeaderAdoption:
         mw = TenantContextMiddleware(None)
         verify_patch, db_patch = _setup_auth({"role": "platform_admin", "tenant_id": None})
 
-        with verify_patch, db_patch, _tenant_missing() as tenant_mock, \
-                patch("src.config.settings.settings", SimpleNamespace(demo=None)):
+        with verify_patch, db_patch, _tenant_missing() as tenant_mock:
             response = await mw.dispatch(request, call_next)
 
         assert response.status_code == 200
@@ -358,6 +355,61 @@ class TestUserTenantHeaderAdoption:
         assert calls["tenant_id"] == "t1"
 
 
+class TestTenantHeaderRequired:
+    """已认证但用户行缺失租户（数据异常/伪造 token）→ 400 TenantHeaderRequired
+
+    platform_admin 自身 tenant_id 为空属合法全局视图入口，不在此列（见
+    test_platform_admin_no_header_still_global）；仅覆盖其他角色。
+    """
+
+    @pytest.mark.asyncio
+    async def test_employee_row_missing_tenant_400_user_path(self):
+        """/api/ 路径（_resolve_user_tenant）：employee 无租户 → 400 + 固定文案"""
+        request = _make_request("/api/knowledge/documents", {
+            "Authorization": "Bearer good-token"})
+        call_next, calls = _make_call_next()
+        mw = TenantContextMiddleware(None)
+        verify_patch, db_patch = _setup_auth({"role": "employee", "tenant_id": None})
+
+        with verify_patch, db_patch:
+            response = await mw.dispatch(request, call_next)
+
+        assert response.status_code == 400
+        assert "无法确定租户上下文，请通过 X-Tenant-Id 指定目标租户".encode("utf-8") in response.body
+        assert calls["invoked"] is False  # 业务处理未执行
+
+    @pytest.mark.asyncio
+    async def test_employee_row_missing_tenant_400_sessions_path(self):
+        """/api/sessions 路径（_resolve_session_tenant）行为一致：400"""
+        request = _make_request("/api/sessions/list", {
+            "Authorization": "Bearer good-token"})
+        call_next, calls = _make_call_next()
+        mw = TenantContextMiddleware(None)
+        verify_patch, db_patch = _setup_auth({"role": "tenant_admin", "tenant_id": None})
+
+        with verify_patch, db_patch:
+            response = await mw.dispatch(request, call_next)
+
+        assert response.status_code == 400
+        assert "无法确定租户上下文".encode("utf-8") in response.body
+        assert calls["invoked"] is False
+
+    @pytest.mark.asyncio
+    async def test_platform_admin_missing_tenant_still_global_no_400(self):
+        """platform_admin 无自身租户且无 header → 全局语义，不抛 TenantHeaderRequired"""
+        request = _make_request("/api/chat/x", {"Authorization": "Bearer good-token"})
+        call_next, calls = _make_call_next()
+        mw = TenantContextMiddleware(None)
+        verify_patch, db_patch = _setup_auth({"role": "platform_admin", "tenant_id": None})
+
+        with verify_patch, db_patch:
+            response = await mw.dispatch(request, call_next)
+
+        assert response.status_code == 200
+        assert calls["tenant_id"] is None
+        assert calls["invoked"] is True
+
+
 class TestSessionTenantHeaderAdoption:
     """/api/sessions 路径（_resolve_session_tenant）同套规则"""
 
@@ -395,26 +447,7 @@ class TestUserRoleExposure:
 
     @pytest.mark.asyncio
     async def test_platform_admin_role_exposed(self):
-        """非 demo 部署：platform_admin 无 header → 租户为 None（全局视图条件成立）"""
-        from types import SimpleNamespace
-
-        request = _make_request("/api/knowledge/documents", {
-            "Authorization": "Bearer good-token"})
-        call_next, calls = _make_call_next()
-        mw = TenantContextMiddleware(None)
-        verify_patch, db_patch = _setup_auth({"role": "platform_admin", "tenant_id": None})
-
-        with verify_patch, db_patch, \
-                patch("src.config.settings.settings", SimpleNamespace(demo=None)):
-            response = await mw.dispatch(request, call_next)
-
-        assert response.status_code == 200
-        assert calls["user_role"] == "platform_admin"
-        assert calls["tenant_id"] is None  # platform_admin 自身租户为空 → 全局视图条件成立
-
-    @pytest.mark.asyncio
-    async def test_platform_admin_demo_fallback_unchanged(self):
-        """demo 部署：platform_admin 无 header → 照旧回落 demo 租户（既有回退不动）"""
+        """platform_admin 无 header → 租户为 None（全局视图条件成立，demo 回退已删）"""
         request = _make_request("/api/knowledge/documents", {
             "Authorization": "Bearer good-token"})
         call_next, calls = _make_call_next()
@@ -426,7 +459,7 @@ class TestUserRoleExposure:
 
         assert response.status_code == 200
         assert calls["user_role"] == "platform_admin"
-        assert calls["tenant_id"] == "demo"
+        assert calls["tenant_id"] is None  # platform_admin 自身租户为空 → 全局视图条件成立
 
     @pytest.mark.asyncio
     async def test_employee_role_exposed(self):

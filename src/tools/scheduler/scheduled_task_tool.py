@@ -26,21 +26,10 @@ from src.scheduler.error_sanitizer import (
 def _resolve_runtime_tenant_id(context: Optional[ToolExecutionContext]) -> Optional[str]:
     """解析工具调用的可信租户；未知身份绝不降级成公共租户。
 
-    优先取请求级工具执行上下文的 tenant_id（''=明确公共用户，由可信边界构造时
-    从请求租户解析注入）；非 SaaS 部署无租户语义，视为公共租户；
-    SaaS 部署下上下文缺失（None）时 fail-closed 返回 None，由调用方拒绝操作。
+    优先取请求级工具执行上下文的 tenant_id（''=明确公共用户，由可信边界构造时注入）。
+    上下文缺失（None）时 fail-closed 返回 None，由调用方拒绝操作。
     """
-    tenant_id = context.tenant_id if context else None
-    if tenant_id is not None:
-        return tenant_id
-    try:
-        from src.config.settings import settings
-
-        if not settings.saas.enabled:
-            return ""
-    except Exception:
-        pass
-    return None
+    return context.tenant_id if context else None
 
 
 class CreateScheduledTaskInput(BaseModel):

@@ -83,11 +83,10 @@ async def _identity(request: Request) -> tuple[str, str]:
     if not tenant_id or not user_id: raise HTTPException(status_code=403, detail="Tenant identity required")
     if user.get("status") not in (None, "active"):
         raise HTTPException(status_code=403, detail="User account is not active")
-    if str(tenant_id) != "demo" or not settings.demo.enabled:
-        from src.saas.db.tenant_db import TenantDB
-        tenant = await asyncio.to_thread(TenantDB.get_by_id, str(tenant_id))
-        if not tenant or tenant.get("status") != "active":
-            raise HTTPException(status_code=403, detail="Tenant is not active")
+    from src.saas.db.tenant_db import TenantDB
+    tenant = await asyncio.to_thread(TenantDB.get_by_id, str(tenant_id))
+    if not tenant or tenant.get("status") != "active":
+        raise HTTPException(status_code=403, detail="Tenant is not active")
     return str(tenant_id), str(user_id)
 
 

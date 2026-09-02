@@ -364,9 +364,7 @@ async def send_code(request: SendCodeRequest):
 async def login(request: Request, body: LoginRequest):
     """新的登录接口：手机号/用户名 + 密码 + 图形验证码
 
-    支持两种模式：
-    - 演示模式（DEMO_ENABLED=true）：任意手机号 + 888888 密码登录，自动注册用户
-    - SaaS 模式：需要 users 表中有注册用户，且密码正确
+    需要 users 表中有注册用户，且密码正确
 
     平台管理员判断条件：
     - 手机号在 config.yaml 的 admin.phones 数组中
@@ -388,10 +386,6 @@ async def login(request: Request, body: LoginRequest):
     if not verify_captcha(body.captcha_id, body.captcha_code):
         return LoginResponse(success=False, message="图形验证码错误或已过期，过期时间5分钟")
 
-    # 检查演示模式配置
-    demo_enabled = getattr(settings, "demo", None) and getattr(settings.demo, "enabled", False)
-    mock_password = getattr(settings, "demo", None) and getattr(settings.demo, "mock_password", "888888")
-
     # 根据 identifier 判断是手机号还是用户名
     identifier = body.identifier.strip()
 
@@ -411,20 +405,6 @@ async def login(request: Request, body: LoginRequest):
         row = cursor.fetchone()
         if row:
             user = dict(row)
-
-    # 演示模式：任意手机号 + mock_password 即可登录（自动注册）
-    if demo_enabled and is_phone and body.password == mock_password:
-        if not user:
-            # 自动创建用户（演示模式用户 tenant_id 为 'demo'）
-            user = UserDB.create(phone=identifier, tenant_id='demo')
-            logger.info(f"演示模式自动创建用户: {identifier}")
-        if user:
-            token = generate_token(user["user_id"])
-            return LoginResponse(
-                success=True,
-                token=token,
-                user=get_user_info_with_admin(user)
-            )
 
     # 平台管理员检查：手机号在admin.phones中 且 密码等于QBTOKEN
     admin_phones = getattr(settings, "admin", None)
@@ -703,15 +683,7 @@ async def unified_login(request: Request, body: UnifiedLoginRequest):
 
 @router.post("/phone/login")
 async def phone_login(request: Request, body: PhoneLoginRequest):
-    """手机号密码登录
-
-    演示模式（DEMO_ENABLED=true）：888888 作为 Mock 固定密码
-    - 如果手机号存在账号，密码为空，输入 888888 可以登录
-    - 如果手机号不存在账号，创建账号并允许登录
-    - 如果手机号存在账号，但密码不为空且不是 888888，验证真实密码
-
-    非演示模式：仅验证真实密码
-    """
+    """手机号密码登录：仅验证真实密码"""
     from src.config.settings import settings
 
     # 登录速率限制（手机号 + IP 双维度）
@@ -723,84 +695,31 @@ async def phone_login(request: Request, body: PhoneLoginRequest):
     if not allowed:
         return LoginResponse(success=False, message=msg)
 
-    demo_enabled = getattr(settings, "demo", None) and getattr(settings.demo, "enabled", False)
-    mock_password = getattr(settings, "demo", None) and getattr(settings.demo, "mock_password", "888888")
-
     user = UserDB.get_by_phone(body.phone, bypass_cache=True)
 
-    if user:
-        # 用户已存在
-        password_hash = user.get("password_hash")
-
-        if not password_hash:
-            # 密码未设置，仅演示模式下允许 mock_password 登录
-            if demo_enabled and body.password == mock_password:
-                token = generate_token(user["user_id"])
-                return LoginResponse(
-                    success=True,
-                    token=token,
-                    user=get_user_info_with_admin(user)
-                )
-            else:
-                return LoginResponse(success=False, message="密码未设置，请使用忘记密码功能重置")
-        else:
-            # 密码已设置：演示模式下 mock_password 或真实密码均可登录
-            if (demo_enabled and body.password == mock_password) or verify_password(body.password, password_hash):
-                token = generate_token(user["user_id"])
-                return LoginResponse(
-                    success=True,
-                    token=token,
-                    user=get_user_info_with_admin(user)
-                )
-            else:
-                return LoginResponse(success=False, message="手机号或密码有误")
-    else:
-        # 用户不存在，仅演示模式下自动创建账号（演示模式用户 tenant_id 为 'demo'）
-        if demo_enabled and body.password == mock_password:
-            user = UserDB.create(phone=body.phone, tenant_id='demo')
-            if user:
-                token = generate_token(user["user_id"])
-                return LoginResponse(
-                    success=True,
-                    token=token,
-                    user=get_user_info_with_admin(user),
-                    message="账号已自动创建"
-                )
-            return LoginResponse(success=False, message="登录失败")
+    if not user:
         return LoginResponse(success=False, message="用户不存在")
+
+    # 用户已存在
+    password_hash = user.get("password_hash")
+
+    if not password_hash:
+        return LoginResponse(success=False, message="密码未设置，请使用忘记密码功能重置")
+
+    if verify_password(body.password, password_hash):
+        token = generate_token(user["user_id"])
+        return LoginResponse(
+            success=True,
+            token=token,
+            user=get_user_info_with_admin(user)
+        )
+    return LoginResponse(success=False, message="手机号或密码有误")
 
 
 @router.post("/phone/code-login")
 async def phone_code_login(request: PhoneCodeLoginRequest):
-    """手机号验证码登录
-
-    支持两种模式：
-    - 演示模式（DEMO_ENABLED=true）：任意手机号 + 888888 验证码登录
-    - SaaS 模式：正常的短信验证码登录
-    """
+    """手机号验证码登录：正常的短信验证码登录"""
     from src.config.settings import settings
-
-    # 检查演示模式
-    demo_enabled = getattr(settings, "demo", None) and getattr(settings.demo, "enabled", False)
-    mock_password = getattr(settings, "demo", None) and getattr(settings.demo, "mock_password", "888888")
-
-    # 如果验证码是888888，根据 DEMO_ENABLED 决定是否允许登录
-    if request.code == mock_password:
-        if not demo_enabled:
-            return LoginResponse(success=False, message="演示模式已关闭")
-
-        user = UserDB.get_by_phone(request.phone)
-        if not user:
-            # 手机号不存在，自动注册（演示模式用户 tenant_id 为 'demo'）
-            user = UserDB.create(phone=request.phone, tenant_id='demo')
-        if user:
-            token = generate_token(user["user_id"])
-            return LoginResponse(
-                success=True,
-                token=token,
-                user=get_user_info_with_admin(user)
-            )
-        return LoginResponse(success=False, message="登录失败")
 
     # 正常验证码校验流程
     if verify_sms_code(request.phone, request.code):

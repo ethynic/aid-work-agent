@@ -76,8 +76,10 @@ async def test_list_subagents_filters_by_target_tenant_for_platform_admin():
 
 
 @pytest.mark.asyncio
-async def test_list_subagents_no_tenant_context_returns_all_with_main():
-    """无租户上下文（tenant_id 为 None）时，返回全部 + main（演示模式行为）"""
+async def test_list_subagents_no_tenant_context_returns_all_unfiltered():
+    """无租户上下文（tenant_id 为 None，如 platform_admin 全局/后台调用）时，
+    返回注册表全部条目，不做权限过滤、也不再追加 main（demo 分支已删，
+    main 是否出现取决于注册表数据本身）"""
     all_items = [
         _make_item("travel-consultant", "旅游咨询顾问"),
         _make_item("trade-specialist", "外贸获客智能体"),
@@ -98,9 +100,9 @@ async def test_list_subagents_no_tenant_context_returns_all_with_main():
     # 无租户上下文时不应调用权限过滤
     mock_allowed.assert_not_called()
 
-    # 应返回全部 + main
+    # 原样返回注册表条目，不追加 main
     assert result["success"] is True
     returned_ids = [item["agent_id"] for item in result["data"]]
-    assert "main" in returned_ids, "应包含 main CEO 智能体"
+    assert "main" not in returned_ids, "demo 分支已删，无租户上下文不再强制追加 main"
     assert "travel-consultant" in returned_ids
     assert "trade-specialist" in returned_ids

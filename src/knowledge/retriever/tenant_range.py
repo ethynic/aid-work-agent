@@ -69,7 +69,7 @@ def build_tenant_range_conditions(
     """构建检索租户范围 SQL 条件子句与参数。
 
     Args:
-        tenant_id: 本租户 ID；为空（demo/无租户模式）时返回空 SQL，调用方用 demo 分支
+        tenant_id: 本租户 ID；为空（无租户上下文，如 platform_admin 全局视图）时返回空 SQL，调用方走无主文档分支
         source_type: LLM 传入的来源类型（本租户侧按此过滤）
         shared_ranges: 已启用共享分类的精确 (from_tenant_id, source_type) 对
         alias: documents 表别名

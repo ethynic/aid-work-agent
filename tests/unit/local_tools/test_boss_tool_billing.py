@@ -5,7 +5,7 @@
 - 成功终态：从 invocation.credit_cost 附带实扣金额进 data（计费本体在
   repository.write_result 落库侧，见 test_write_result_billing.py）；proxy 不再发起计费
 - 失败 / 超时终态不附带金额
-- 余额 ≤0 阻断（NO_CREDIT，不建 invocation）；SaaS 关闭 / 租户不存在不阻断
+- 余额 ≤0 阻断（NO_CREDIT，不建 invocation）；租户不存在不阻断
 - 免费工具不查余额
 """
 
@@ -100,7 +100,6 @@ class TestSuccessAttachesCost:
     async def test_success_attaches_credit_cost_from_invocation(self, monkeypatch):
         """计费本体在 write_result 落库侧：proxy 只把 invocation.credit_cost 附进 data；
         session 随 create_invocation 落 invocation 行（供落库计费写台账归属）"""
-        monkeypatch.setattr(settings.saas, "enabled", True)
         record = MagicMock()
         repo_patch, repo = _patch_repo(
             [_online_device()], invocation=_invocation(data={"foo": 1}, credit_cost=1.0)
@@ -118,7 +117,6 @@ class TestSuccessAttachesCost:
 
     async def test_success_without_credit_cost_keeps_data_intact(self, monkeypatch):
         """credit_cost 为 NULL（落库侧计费降级/历史行）：成功结果不附带金额，data 原形"""
-        monkeypatch.setattr(settings.saas, "enabled", True)
         record = MagicMock()
         repo_patch, _repo = _patch_repo(
             [_online_device()], invocation=_invocation(data={"foo": 1}, credit_cost=None)
@@ -132,7 +130,6 @@ class TestSuccessAttachesCost:
 
     async def test_free_tool_zero_cost_no_attach(self, monkeypatch):
         """免费工具 credit_cost=0 占位：不附带金额（不给上下文添噪音）"""
-        monkeypatch.setattr(settings.saas, "enabled", True)
         record = MagicMock()
         repo_patch, _repo = _patch_repo(
             [_online_device()], invocation=_invocation(data={"via": "already"}, credit_cost=0.0)
@@ -144,7 +141,6 @@ class TestSuccessAttachesCost:
         assert result["data"] == {"via": "already"}
 
     async def test_failed_terminal_never_attaches(self, monkeypatch):
-        monkeypatch.setattr(settings.saas, "enabled", True)
         record = MagicMock()
         repo_patch, repo = _patch_repo(
             [_online_device()], invocation=_invocation(state="failed", credit_cost=None)
@@ -157,7 +153,6 @@ class TestSuccessAttachesCost:
         repo["set_invocation_credit_cost"].assert_not_called()
 
     async def test_timeout_never_bills(self, monkeypatch):
-        monkeypatch.setattr(settings.saas, "enabled", True)
         record = MagicMock()
         tool = BossGreetTool()
         tool.timeout_seconds = 0  # 立即超时（get_invocation 恒 None）
@@ -173,7 +168,6 @@ class TestSuccessAttachesCost:
 
 class TestCreditPrecheck:
     async def test_zero_balance_blocks_before_invocation(self, monkeypatch):
-        monkeypatch.setattr(settings.saas, "enabled", True)
         get_tenant = MagicMock(return_value={"credit_balance": 0.0})
         record = MagicMock()
         repo_patch, repo = _patch_repo([_online_device()])
@@ -187,7 +181,6 @@ class TestCreditPrecheck:
         record.assert_not_called()
 
     async def test_positive_balance_passes(self, monkeypatch):
-        monkeypatch.setattr(settings.saas, "enabled", True)
         get_tenant = MagicMock(return_value={"credit_balance": 5.0})
         record = MagicMock()
         repo_patch, _repo = _patch_repo(
@@ -200,21 +193,7 @@ class TestCreditPrecheck:
         get_tenant.assert_called_once_with(TENANT)
         record.assert_not_called()
 
-    async def test_saas_disabled_skips_precheck(self, monkeypatch):
-        monkeypatch.setattr(settings.saas, "enabled", False)
-        get_tenant = MagicMock(return_value={"credit_balance": 0.0})
-        record = MagicMock()
-        repo_patch, _repo = _patch_repo(
-            [_online_device()], invocation=_invocation(credit_cost=1.0)
-        )
-        with repo_patch, patch(TENANT_DB, get_tenant), patch(USAGE_DB, record_tool_usage=record):
-            result = await BossGreetTool().execute(**_kwargs())
-
-        assert result["success"] is True
-        get_tenant.assert_not_called()  # 非 SaaS 模式不查余额
-
     async def test_unknown_tenant_passes(self, monkeypatch):
-        monkeypatch.setattr(settings.saas, "enabled", True)
         get_tenant = MagicMock(return_value=None)
         record = MagicMock()
         repo_patch, _repo = _patch_repo(
@@ -225,7 +204,6 @@ class TestCreditPrecheck:
         assert result["success"] is True
 
     async def test_free_tool_skips_precheck(self, monkeypatch):
-        monkeypatch.setattr(settings.saas, "enabled", True)
         get_tenant = MagicMock(return_value={"credit_balance": 0.0})
         record = MagicMock()
         repo_patch, repo = _patch_repo(

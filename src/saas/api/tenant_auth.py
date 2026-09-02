@@ -351,9 +351,6 @@ async def password_login(http_request: Request, request: AdminPasswordLoginReque
     from datetime import datetime, timedelta
 
     # 检查 SaaS 是否启用
-    if not settings.saas.enabled:
-        return AdminLoginResponse(success=False, message="未启用 SaaS 模式，无法访问")
-
     # 登录速率限制（IP 维度）
     client_ip = http_request.client.host if http_request.client else "unknown"
     allowed, msg = check_login_rate_limit(client_ip)
@@ -606,9 +603,6 @@ async def admin_sso_login(provider: str, request: SSOLoginRequest):
     import secrets
     from datetime import datetime, timedelta
 
-    if not settings.saas.enabled:
-        return AdminLoginResponse(success=False, message="未启用 SaaS 模式，无法访问")
-
     from src.saas.services.sso import get_sso_provider
 
     sso = get_sso_provider(provider)
@@ -705,9 +699,6 @@ async def admin_sso_login(provider: str, request: SSOLoginRequest):
 @router.post("/admin_logout")
 async def admin_logout(request: Request):
     """管理员登出"""
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
     from src.db.database import get_db_connection
 
     auth_header = request.headers.get("Authorization", "")
@@ -723,9 +714,6 @@ async def admin_logout(request: Request):
 @router.get("/tenant/{tenant_id}")
 async def get_tenant_public_info(tenant_id: str):
     """获取租户公开信息（无需认证，供登录页使用）"""
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式"}
-
     tenant = TenantDB.get_by_id(tenant_id)
     if not tenant:
         return {"success": False, "message": "租户不存在"}
@@ -772,9 +760,6 @@ async def get_admin_info(request: Request, tenant_id: Optional[str] = None):
         request: 请求对象
         tenant_id: 租户ID（平台管理员访问租户前台时从路由传递）
     """
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
     admin = require_admin(request)
     tenant = None
     # 平台管理员代管理：优先使用 URL 查询参数中的 tenant_id

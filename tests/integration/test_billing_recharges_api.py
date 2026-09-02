@@ -164,9 +164,7 @@ class TestBillingRechargesAPI:
         def fake_require_admin(request):
             return {"user_id": "u1", "role": "tenant_admin", "tenant_id": "t1"}
 
-        with patch("src.saas.api.billing_recharges.require_admin", fake_require_admin), \
-             patch("src.saas.api.billing_recharges.settings") as mock_settings:
-            mock_settings.saas.enabled = True
+        with patch("src.saas.api.billing_recharges.require_admin", fake_require_admin):
 
             class FakeRequest:
                 pass

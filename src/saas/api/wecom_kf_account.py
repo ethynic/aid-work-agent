@@ -25,7 +25,6 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 from loguru import logger
 
-from src.config.settings import settings
 from src.db.models import CustomerReferralDB
 from src.saas.api.tenant_auth import require_admin
 from src.saas.db.channel_config_db import ChannelConfigDB
@@ -494,8 +493,6 @@ async def _get_wecom_kf_config(tenant_id: str) -> Dict[str, Any]:
 @router.post("/accounts")
 async def create_kf_account(request: Request, body: KfAccountCreate):
     """创建客服账号：企微 account/add → 生成 scene → add_contact_way → 写配置 → 返回二维码。"""
-    if not settings.saas.enabled:
-        raise HTTPException(status_code=400, detail="未启用 SaaS 模式无法访问")
     admin = require_admin(request)
     tenant_id = admin.get("tenant_id")
     if not tenant_id:
@@ -616,8 +613,6 @@ async def create_kf_account(request: Request, body: KfAccountCreate):
 @router.get("/accounts")
 async def list_kf_accounts(request: Request):
     """列出当前租户全部客服账号（含绑定员工 / 引流人数 / 累计积分）。"""
-    if not settings.saas.enabled:
-        raise HTTPException(status_code=400, detail="未启用 SaaS 模式无法访问")
     admin = require_admin(request)
     tenant_id = admin.get("tenant_id")
     if not tenant_id:
@@ -638,8 +633,6 @@ async def update_kf_account(request: Request, open_kfid: str, body: KfAccountUpd
 
     scene / contact_url / open_kfid 不可变（已发放二维码持续有效）。
     """
-    if not settings.saas.enabled:
-        raise HTTPException(status_code=400, detail="未启用 SaaS 模式无法访问")
     admin = require_admin(request)
     tenant_id = admin.get("tenant_id")
     if not tenant_id:
@@ -730,8 +723,6 @@ async def ensure_kf_contact_way(request: Request, open_kfid: str):
     历史账号（引流归因功能之前创建）可能缺失 contact_url / scene，
     已存在则直接返回现有（幂等），缺失时重新调用 add_contact_way 生成新链接。
     """
-    if not settings.saas.enabled:
-        raise HTTPException(status_code=400, detail="未启用 SaaS 模式无法访问")
     admin = require_admin(request)
     tenant_id = admin.get("tenant_id")
     if not tenant_id:
@@ -784,8 +775,6 @@ async def ensure_kf_contact_way(request: Request, open_kfid: str):
 @router.delete("/accounts/{open_kfid}")
 async def delete_kf_account(request: Request, open_kfid: str):
     """删除客服账号：先企微 account/del，成功（或账号不存在）才删本地；失败回显 errmsg。"""
-    if not settings.saas.enabled:
-        raise HTTPException(status_code=400, detail="未启用 SaaS 模式无法访问")
     admin = require_admin(request)
     tenant_id = admin.get("tenant_id")
     if not tenant_id:

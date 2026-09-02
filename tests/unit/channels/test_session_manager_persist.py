@@ -549,10 +549,7 @@ class TestProcessAndPersist:
 
         send_response = AsyncMock(return_value=True)
 
-        with patch("src.config.settings.settings") as mock_settings, \
-                patch("src.saas.db.tenant_db.TenantDB.get_by_id", return_value=fake_tenant):
-            mock_settings.saas.enabled = True
-
+        with patch("src.saas.db.tenant_db.TenantDB.get_by_id", return_value=fake_tenant):
             result = await manager.process_and_persist(
                 session_id="sid_no_credit",
                 tenant_id="t1",

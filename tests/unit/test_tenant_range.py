@@ -58,8 +58,8 @@ def test_range_same_source_type_merged():
     assert params == ["B", "industry", "A1", "industry"]
 
 
-def test_range_demo_mode_returns_empty():
-    """无 tenant_id（demo/命令行）时返回空 SQL 与空参数，由调用方走 demo 分支"""
+def test_range_no_tenant_returns_empty():
+    """无 tenant_id（platform_admin 全局视图等）时返回空 SQL 与空参数，由调用方走无主文档分支"""
     sql, params = build_tenant_range_conditions(None, None, None)
     assert sql == ""
     assert params == []

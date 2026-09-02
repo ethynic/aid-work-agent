@@ -142,7 +142,6 @@ import BaseModal from '@/components/ui/BaseModal.vue'
 import BaseTable from '@/components/ui/BaseTable.vue'
 import BaseBadge from '@/components/ui/BaseBadge.vue'
 import BasePagination from '@/components/ui/BasePagination.vue'
-import { useDemoAuth } from '@/composables/useDemoAuth'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 import { usePageContext } from '@/composables/usePageContext'
 import {
@@ -158,17 +157,15 @@ const route = useRoute()
 const router = useRouter()
 const toast = useToast()
 const { admin: tenantAdmin, isLoggedIn: tenantIsLoggedIn, logout: tenantLogout } = useTenantAuth()
-const { user: demoUser, isLoggedIn: demoIsLoggedIn, logout: demoLogout } = useDemoAuth()
 const toggleSidebarFn = inject<() => void>('toggleSidebar')
 
 const tenantId = computed(() => route.params.tenant_id as string | undefined)
-const isTenantPath = computed(() => Boolean(tenantId.value))
-const effectiveIsLoggedIn = computed(() => isTenantPath.value ? tenantIsLoggedIn.value : demoIsLoggedIn.value)
+const effectiveIsLoggedIn = computed(() => tenantIsLoggedIn.value)
 const effectiveUser = computed(() => tenantAdmin.value ? {
   user_id: tenantAdmin.value.user_id,
   username: tenantAdmin.value.username,
   phone: tenantAdmin.value.phone,
-} : demoUser.value)
+} : null)
 
 // 租户管理员才能升级模版（platform_admin 也允许）
 const isTenantAdmin = computed(() => {
@@ -181,11 +178,7 @@ function handleToggleSidebar() {
 }
 
 async function handleLogout() {
-  if (isTenantPath.value) {
-    await tenantLogout()
-  } else {
-    await demoLogout()
-  }
+  await tenantLogout()
   router.push(tenantId.value ? `/t/${tenantId.value}/login` : '/')
 }
 

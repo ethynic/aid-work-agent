@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import pytest
+
+# psutil 为可选依赖（容器环境未必安装），缺失时跳过整个模块而非让收集报错
+pytest.importorskip("psutil")
+
 import asyncio
 import io
 import struct

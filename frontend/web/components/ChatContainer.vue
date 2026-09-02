@@ -25,7 +25,6 @@
             :user="effectiveUser"
             :available-subagents="availableSubagents"
             :current-subagent-id="currentSubagentId"
-            :show-demo-logout="!isTenantMode"
             @toggle-sidebar="handleToggleSidebar"
             @logout="handleLogout"
             @change-subagent="handleSubagentChange"
@@ -78,13 +77,6 @@
       </div>
     </main>
 
-    <!-- Login Modal -->
-    <LoginModal v-if="isDemoMode"
-      :visible="showLoginModal"
-      @close="showLoginModal = false"
-      @success="handleLoginSuccess"
-    />
-
   </div>
 </template>
 
@@ -93,7 +85,6 @@ import { ref, onMounted, onUnmounted, watch, computed, inject } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import MessageList from './MessageList.vue'
 import ChatInput from './ChatInput.vue'
-import LoginModal from './LoginModal.vue'
 import AppHeader from './AppHeader.vue'
 import MenuSidebar from './MenuSidebar.vue'
 import AttachmentPreviewPanel from './AttachmentPreviewPanel.vue'
@@ -102,7 +93,6 @@ import { useAgent } from '@/composables/useAgent'
 import { quickPromptsForSubagent } from '@/utils/quickPrompts'
 import { greetingForSubagent, DEFAULT_GREETING, type SubagentGreeting } from '@/utils/sessionGreetings'
 import { getSubagentGreeting } from '@/api/subagent'
-import { useDemoAuth } from '@/composables/useDemoAuth'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 import { useSession } from '@/composables/useSession'
 import { useAttachmentPreview } from '@/composables/useAttachmentPreview'
@@ -110,7 +100,6 @@ import { useSubagentList } from '@/composables/useSubagentList'
 import { useMobile } from '@/composables/useMobile'
 import { useToast } from 'vue-toastification'
 import type { AgentItem } from '@/api/saasPermissions'
-const isDemoMode = import.meta.env.VITE_DEMO_ENABLED === 'true'
 const router = useRouter()
 const toast = useToast()
 const { isMobile } = useMobile()
@@ -137,17 +126,13 @@ const {
   isWaitingHuman
 } = useAgent()
 
-const { user, isLoggedIn, init: initAuth, logout: doLogout } = useDemoAuth()
-const { admin: tenantAdmin, isLoggedIn: tenantIsLoggedIn, init: initTenantAuth } = useTenantAuth()
+const { admin: tenantAdmin, isLoggedIn: tenantIsLoggedIn, init: initAuth, logout: doLogout } = useTenantAuth()
 const { currentSessionId, sessions, createNewSession, loadSessions, loadLatestSession, selectSession, renameSession, clearSessionCache: clearSessionListCache } = useSession()
 const { previewAttachment, isPreviewOpen, closePreview } = useAttachmentPreview()
 
 const route = useRoute()
 const subagentName = computed<string | null>(() => {
-  // 支持两种路由匹配：演示模式 /chat/subagent 和租户模式 /t/tenantId/chat/subagent
-  if (route.name === 'chat-subagent') {
-    return route.params.subagent as string
-  }
+  // 租户模式 /t/tenantId/chat/subagent
   if (route.name === 'tenant-chat-subagent') {
     return route.params.subagent as string
   }
@@ -206,13 +191,13 @@ const tenantId = computed(() => {
 
 // 获取上次选择的数字员工ID
 function getLastSelectedAgentId(): string | null {
-  const storageKey = tenantId.value ? `last_selected_agent_${tenantId.value}` : 'last_selected_agent_demo'
+  const storageKey = `last_selected_agent_${tenantId.value}`
   return localStorage.getItem(storageKey)
 }
 
 // 保存上次选择的数字员工ID
 function saveLastSelectedAgentId(agentId: string) {
-  const storageKey = tenantId.value ? `last_selected_agent_${tenantId.value}` : 'last_selected_agent_demo'
+  const storageKey = `last_selected_agent_${tenantId.value}`
   localStorage.setItem(storageKey, agentId)
 }
 
@@ -240,8 +225,7 @@ function getDefaultAgentId(): string | null {
   return null
 }
 
-// 当前选中的数字员工ID（null 表示主智能体）
-// 租户模式下为实例ID，演示模式下为子智能体类型
+// 当前选中的数字员工ID（null 表示主智能体；实例ID 或子智能体类型）
 const currentSubagentId = computed(() => {
   // 优先使用 instance_id 查询参数（租户模式下实例选择）
   if (isTenantMode.value && instanceId.value) {
@@ -281,11 +265,11 @@ const currentUploadAccept = computed(() => currentSubagent.value?.upload_accept 
 // 当前会话 subagent 的工具栏额外按钮 id 列表（Phase 5.1.3）
 const currentToolbarButtons = computed(() => currentSubagent.value?.chat_toolbar || [])
 
-// 当前会话 subagent 的类型（演示模式路由参数即类型；租户模式从实例解析）——快捷按钮映射键
+// 当前会话 subagent 的类型（优先从实例解析，路由参数兜底）——快捷按钮映射键
 const currentSubagentType = computed<string | null>(() => {
   if (currentSubagent.value?.subagent_type) return currentSubagent.value.subagent_type
-  // 实例列表未加载/未命中时按路由参数兜底（两种聊天路由：demo /chat/:sub 与租户 /t/:tid/chat/:sub）
-  if (route.name === 'chat-subagent' || route.name === 'tenant-chat-subagent') {
+  // 实例列表未加载/未命中时按路由参数兜底（租户路由 /t/:tid/chat/:sub）
+  if (route.name === 'tenant-chat-subagent') {
     return subagentName.value
   }
   return null
@@ -337,21 +321,16 @@ const isTenantMode = computed(() => route.path.startsWith('/t/'))
 // 判断是否在 PortalLayout 内（此时 MenuSidebar 由 PortalLayout 渲染）
 const isInPortalLayout = computed(() => route.path.startsWith('/t/') || route.path.startsWith('/portal/'))
 
-// 统一的登录状态检查
-const effectiveIsLoggedIn = computed(() => {
-  return isTenantMode.value ? tenantIsLoggedIn.value : isLoggedIn.value
-})
+// 登录状态检查（租户模式）
+const effectiveIsLoggedIn = computed(() => tenantIsLoggedIn.value)
 
-// 租户模式下使用租户用户信息，否则使用普通用户信息
+// 用户信息（租户模式）
 const effectiveUser = computed(() => {
-  if (isTenantMode.value) {
-    return tenantAdmin.value ? {
-      user_id: tenantAdmin.value.user_id,
-      username: tenantAdmin.value.username,
-      phone: tenantAdmin.value.phone
-    } : null
-  }
-  return user.value
+  return tenantAdmin.value ? {
+    user_id: tenantAdmin.value.user_id,
+    username: tenantAdmin.value.username,
+    phone: tenantAdmin.value.phone
+  } : null
 })
 
 // 侧边栏折叠状态（优先使用注入的状态，否则使用本地状态）
@@ -366,9 +345,6 @@ const isSidebarCollapsed = computed({
     }
   }
 })
-const showLoginModal = ref(false)
-
-
 // 标志位：避免 selectSession + 手动 switchSession 与 watcher 重复执行
 const skipNextSwitch = ref(false)
 
@@ -449,8 +425,8 @@ async function handleSubagentChange(agentId: string) {
       }
     }
   } else {
-    // 普通演示模式
-    targetPath = agentId === 'main' ? '/' : `/chat/${agentId}`
+    // 非租户路由不导航（组件仅在 /t/* 下挂载）
+    return
   }
 
   console.log(`[${now()}] [ConfirmDialog] router.push to`, targetPath, 'query:', query)
@@ -465,8 +441,8 @@ async function handleSubagentChange(agentId: string) {
 
 // 模拟在线状态检测
 onMounted(async () => {
-  // 初始化认证状态（租户模式和演示模式都需要初始化）
-  await Promise.all([initAuth(), initTenantAuth()])
+  // 初始化租户认证状态
+  await initAuth()
 
   // 加载可用数字员工列表（带缓存，避免重复请求）
   await loadAvailableSubagents(isTenantMode.value)
@@ -474,12 +450,8 @@ onMounted(async () => {
   // 检查并处理主智能体不可用的情况
   await checkAndRedirectIfMainAgentUnavailable()
 
-  // 检查登录状态
-  if (isDemoMode && !effectiveIsLoggedIn.value) {
-    showLoginModal.value = true
-  } else {
-    // 已登录，加载会话列表
-    await loadSessions()
+  // 加载会话列表
+  await loadSessions()
 
     // 子智能体模式下不加载主智能体最近会话
     // 如果 currentSessionId 已经是 null 且 sessions 已经加载（说明用户已经在导航前点击了"新会话"），不要再覆盖它
@@ -497,8 +469,8 @@ onMounted(async () => {
       agentSessionId.value = currentSessionId.value
       await switchSession(currentSessionId.value)
     }
-  }
 })
+
 
 onUnmounted(() => {
   // 卸载时关闭附件预览框，避免模块级单例状态残留到重新挂载的对话界面
@@ -513,10 +485,6 @@ function handleQuickPrompt(message: string) {
 
 async function handleSend(content: string) {
   //console.log(`[${now()}] [handleSend] start, content length=${content.length}, currentSessionId=`, currentSessionId.value)
-  if (isDemoMode && !effectiveIsLoggedIn.value) {
-    showLoginModal.value = true
-    return
-  }
 
   // 如果有预生成的会话ID，直接使用它
   let sid: string | null | undefined
@@ -594,9 +562,6 @@ function now(): string {
 
 async function handleLogout() {
   await doLogout()
-  if (isDemoMode) {
-    showLoginModal.value = true
-  }
   // 登出时收起侧边栏，避免重新登录后菜单仍展开
   isSidebarCollapsed.value = true
   // 登出时清空所有缓存：会话列表、消息、附件等
@@ -607,29 +572,9 @@ async function handleLogout() {
   messages.value = []
 }
 
-function handleLoginSuccess() {
-  showLoginModal.value = false
-  // 登录成功后先清空所有缓存（避免同账号多设备时显示旧数据）
-  clearSessionCache()
-  clearSession()
-  clearAttachments()
-  clearSessionListCache()
-  messages.value = []
-  // 重新加载会话列表并自动打开最近会话
-  loadSessions().then(async () => {
-    const hasSession = await loadLatestSession()
-    if (hasSession && currentSessionId.value) {
-      // 同步会话ID到useAgent
-      agentSessionId.value = currentSessionId.value
-    }
-  })
-}
-
 // 监听登录状态变化
 watch(effectiveIsLoggedIn, async (loggedIn) => {
-  if (isDemoMode && !loggedIn) {
-    showLoginModal.value = true
-  } else {
+  if (loggedIn) {
     await loadSessions()
   }
 })

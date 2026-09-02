@@ -194,9 +194,7 @@ class TestListExternalUsersCombination:
         def fake_require_admin(request):
             return {"user_id": "admin_x", "role": "platform_admin", "tenant_id": tenant_id}
 
-        with patch("src.saas.api.external_customers.require_admin", fake_require_admin), \
-             patch("src.saas.api.external_customers.settings") as mock_settings:
-            mock_settings.saas.enabled = True
+        with patch("src.saas.api.external_customers.require_admin", fake_require_admin):
             resp = _call(external_customers.list_external_users, FakeRequest(), page=1, page_size=20)
 
         assert resp["success"] is True
@@ -226,9 +224,7 @@ class TestListExternalUsersCombination:
         def fake_require_admin(request):
             return {"user_id": "admin_x", "role": "platform_admin", "tenant_id": tenant_id}
 
-        with patch("src.saas.api.external_customers.require_admin", fake_require_admin), \
-             patch("src.saas.api.external_customers.settings") as mock_settings:
-            mock_settings.saas.enabled = True
+        with patch("src.saas.api.external_customers.require_admin", fake_require_admin):
             resp = _call(external_customers.list_external_users, FakeRequest(), page=1, page_size=20)
 
         assert resp["success"] is True
@@ -267,9 +263,7 @@ class TestListExternalUsersCombination:
         def fake_require_admin(request):
             return {"user_id": "admin_x", "role": "platform_admin", "tenant_id": tenant_id}
 
-        with patch("src.saas.api.external_customers.require_admin", fake_require_admin), \
-             patch("src.saas.api.external_customers.settings") as mock_settings:
-            mock_settings.saas.enabled = True
+        with patch("src.saas.api.external_customers.require_admin", fake_require_admin):
             resp = _call(external_customers.list_external_users, FakeRequest(),
                          referrer_user_id=emp_id, page=1, page_size=20)
 
@@ -298,9 +292,7 @@ class TestGetUserSessionsFilter:
         def fake_require_admin(request):
             return {"user_id": "admin_x", "role": "platform_admin", "tenant_id": tenant_id}
 
-        with patch("src.saas.api.external_customers.require_admin", fake_require_admin), \
-             patch("src.saas.api.external_customers.settings") as mock_settings:
-            mock_settings.saas.enabled = True
+        with patch("src.saas.api.external_customers.require_admin", fake_require_admin):
             resp = _call(external_customers.get_user_sessions, FakeRequest(), user_id=user_id,
                          channel_type="wecom_kf", channel_chat_id=kf_a, page=1, page_size=20)
 
@@ -324,9 +316,7 @@ class TestGetUserSessionsFilter:
         def fake_require_admin(request):
             return {"user_id": "admin_x", "role": "platform_admin", "tenant_id": tenant_id}
 
-        with patch("src.saas.api.external_customers.require_admin", fake_require_admin), \
-             patch("src.saas.api.external_customers.settings") as mock_settings:
-            mock_settings.saas.enabled = True
+        with patch("src.saas.api.external_customers.require_admin", fake_require_admin):
             # wecom_kf + 空串：只应命中 legacy NULL 的 wecom_kf 会话
             resp = _call(external_customers.get_user_sessions, FakeRequest(), user_id=user_id,
                          channel_type="wecom_kf", channel_chat_id="", page=1, page_size=20)
@@ -385,17 +375,15 @@ class TestNormalUserDataIsolation:
         def fake_require_admin(request):
             return {"user_id": user_id, "role": role, "tenant_id": tenant_id}
 
-        return _patch("src.saas.api.external_customers.require_admin", fake_require_admin), \
-            _patch("src.saas.api.external_customers.settings")
+        return _patch("src.saas.api.external_customers.require_admin", fake_require_admin)
 
     def test_users_sees_own_account_sessions_only(self, temp_tenant_for_external):
         """普通用户 /users：只看到自己负责客服账号下的对话客户，自己引流客户在他人账号下的会话不可见"""
         from src.saas.api import external_customers
 
         d = self._setup(temp_tenant_for_external)
-        admin_patch, settings_patch = self._admin_ctx(d["tenant_id"], d["emp_a"], "user")
-        with admin_patch, settings_patch as mock_settings:
-            mock_settings.saas.enabled = True
+        admin_patch = self._admin_ctx(d["tenant_id"], d["emp_a"], "user")
+        with admin_patch:
             resp = _call(external_customers.list_external_users, FakeRequest(), page=1, page_size=20)
 
         assert resp["success"] is True
@@ -414,9 +402,8 @@ class TestNormalUserDataIsolation:
         from src.saas.api import external_customers
 
         d = self._setup(temp_tenant_for_external)
-        admin_patch, settings_patch = self._admin_ctx(d["tenant_id"], "admin_x", "tenant_admin")
-        with admin_patch, settings_patch as mock_settings:
-            mock_settings.saas.enabled = True
+        admin_patch = self._admin_ctx(d["tenant_id"], "admin_x", "tenant_admin")
+        with admin_patch:
             resp = _call(external_customers.list_external_users, FakeRequest(), page=1, page_size=20)
 
         assert resp["success"] is True
@@ -430,16 +417,14 @@ class TestNormalUserDataIsolation:
 
         d = self._setup(temp_tenant_for_external)
 
-        admin_patch, settings_patch = self._admin_ctx(d["tenant_id"], d["emp_a"], "user")
-        with admin_patch, settings_patch as mock_settings:
-            mock_settings.saas.enabled = True
+        admin_patch = self._admin_ctx(d["tenant_id"], d["emp_a"], "user")
+        with admin_patch:
             resp_user = _call(external_customers.list_kf_accounts, FakeRequest())
         assert resp_user["success"] is True
         assert [k["open_kfid"] for k in resp_user["kf_accounts"]] == [d["kf_a"]]
 
-        admin_patch2, settings_patch2 = self._admin_ctx(d["tenant_id"], "admin_x", "tenant_admin")
-        with admin_patch2, settings_patch2 as mock_settings:
-            mock_settings.saas.enabled = True
+        admin_patch2 = self._admin_ctx(d["tenant_id"], "admin_x", "tenant_admin")
+        with admin_patch2:
             resp_admin = _call(external_customers.list_kf_accounts, FakeRequest())
         assert resp_admin["success"] is True
         assert {k["open_kfid"] for k in resp_admin["kf_accounts"]} == {d["kf_a"], d["kf_b"]}
@@ -449,9 +434,8 @@ class TestNormalUserDataIsolation:
         from src.saas.api import external_customers
 
         d = self._setup(temp_tenant_for_external)
-        admin_patch, settings_patch = self._admin_ctx(d["tenant_id"], d["emp_a"], "user")
-        with admin_patch, settings_patch as mock_settings:
-            mock_settings.saas.enabled = True
+        admin_patch = self._admin_ctx(d["tenant_id"], d["emp_a"], "user")
+        with admin_patch:
             # cust1 在自己负责的 kf_a 下 → 可见
             resp_own = _call(external_customers.get_user_sessions, FakeRequest(),
                              user_id=d["cust1"], channel_type="wecom_kf",
@@ -473,9 +457,8 @@ class TestNormalUserDataIsolation:
         from src.saas.api import external_customers
 
         d = self._setup(temp_tenant_for_external)
-        admin_patch, settings_patch = self._admin_ctx(d["tenant_id"], d["emp_a"], "user")
-        with admin_patch, settings_patch as mock_settings:
-            mock_settings.saas.enabled = True
+        admin_patch = self._admin_ctx(d["tenant_id"], d["emp_a"], "user")
+        with admin_patch:
             try:
                 _call(external_customers.get_session_messages, FakeRequest(),
                       session_id=d["sess_cust3_b"], page=1, page_size=50)
@@ -489,17 +472,15 @@ class TestNormalUserDataIsolation:
 
         d = self._setup(temp_tenant_for_external)
 
-        admin_patch, settings_patch = self._admin_ctx(d["tenant_id"], d["emp_a"], "user")
-        with admin_patch, settings_patch as mock_settings:
-            mock_settings.saas.enabled = True
+        admin_patch = self._admin_ctx(d["tenant_id"], d["emp_a"], "user")
+        with admin_patch:
             resp_user = _call(external_customers.get_referral_stats, FakeRequest())
         assert resp_user["success"] is True
         assert resp_user["total_referrals"] == 1, "普通用户只能看到自己引流的 1 个"
         assert resp_user["referrers"][0]["referrer_user_id"] == d["emp_a"]
 
-        admin_patch2, settings_patch2 = self._admin_ctx(d["tenant_id"], "admin_x", "tenant_admin")
-        with admin_patch2, settings_patch2 as mock_settings:
-            mock_settings.saas.enabled = True
+        admin_patch2 = self._admin_ctx(d["tenant_id"], "admin_x", "tenant_admin")
+        with admin_patch2:
             resp_admin = _call(external_customers.get_referral_stats, FakeRequest())
         assert resp_admin["success"] is True
         assert resp_admin["total_referrals"] == 2, "管理员应统计全部 2 个引流"

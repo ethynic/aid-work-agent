@@ -81,40 +81,33 @@ import { useRouter, useRoute } from 'vue-router'
 import AppHeader from '@/components/AppHeader.vue'
 import AgentIcon from '@/components/ui/AgentIcon.vue'
 import { listSubagents, type SubagentListItem } from '@/api/subagent'
-import { useDemoAuth } from '@/composables/useDemoAuth'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 
 const router = useRouter()
 const route = useRoute()
 
-const { user: demoUser, isLoggedIn: demoIsLoggedIn, logout: demoLogout } = useDemoAuth()
 const { admin: tenantAdmin, isLoggedIn: tenantIsLoggedIn, logout: tenantLogout } = useTenantAuth()
 
 // 是否为租户模式（路径以 /t/ 开头）
 const isTenantMode = computed(() => route.path.startsWith('/t/'))
 
-// 统一的登录状态检查
-const effectiveIsLoggedIn = computed(() => {
-  return isTenantMode.value ? tenantIsLoggedIn.value : demoIsLoggedIn.value
-})
+// 统一的登录状态检查（租户认证）
+const effectiveIsLoggedIn = computed(() => tenantIsLoggedIn.value)
 
 // 统一的用户信息
 const effectiveUser = computed(() => {
-  if (isTenantMode.value) {
-    return tenantAdmin.value ? {
-      user_id: tenantAdmin.value.user_id,
-      username: tenantAdmin.value.username,
-      phone: tenantAdmin.value.phone
-    } : null
-  }
-  return demoUser.value
+  return tenantAdmin.value ? {
+    user_id: tenantAdmin.value.user_id,
+    username: tenantAdmin.value.username,
+    phone: tenantAdmin.value.phone
+  } : null
 })
 
 const agents = ref<SubagentListItem[]>([])
 const loading = ref(true)
 
 // 从 PortalLayout 注入侧边栏控制函数（与 TenantSettings.vue / AllSessions.vue 一致）
-// 注：默认值 () => {} 用于演示模式等未提供时避免 undefined 调用
+// 注：默认值 () => {} 用于未提供注入时避免 undefined 调用
 const toggleSidebarFn = inject<() => void>('toggleSidebar', () => {})
 
 function handleToggleSidebar() {
@@ -122,14 +115,9 @@ function handleToggleSidebar() {
 }
 
 async function handleLogout() {
-  if (isTenantMode.value) {
-    await tenantLogout()
-    const tid = route.params.tenant_id
-    router.push(`/t/${tid}/login`)
-  } else {
-    await demoLogout()
-    router.push('/')
-  }
+  await tenantLogout()
+  const tid = route.params.tenant_id
+  router.push(`/t/${tid}/login`)
 }
 
 // 截断描述为 30 字 + "..."

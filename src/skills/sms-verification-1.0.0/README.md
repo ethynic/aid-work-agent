@@ -34,7 +34,6 @@ sms-verification-1.0.0/
 | `sms.signature` | `SMS_SIGNATURE` | 是 | 短信签名（不带【】） |
 | `sms.template_yzm` | `SMS_TEMPLATE_YZM` | 是 | 验证码模板 ID |
 | `sms.qb_sms_code` | `QBSMSCODE` | 否 | bypass 码（测试/演示用，生产留空） |
-| `demo.enabled` | `DEMO_ENABLED` | 否 | 演示模式开关，开启后固定 `888888` 不实际发送 |
 
 通道未配置时，`send` 子命令直接返回失败；`verify` 子命令不依赖通道配置。
 
@@ -101,7 +100,7 @@ python scripts/sms_cli.py verify --mobile 13800138000 --code 123456
 
 本技能复用 `src/db/models.py` 中的：
 
-- `send_sms_code(phone)`：生成验证码 → 调用短信通道 → 写入 `sms_codes` 表（15 分钟 TTL，演示模式固定 `888888`）
+- `send_sms_code(phone)`：生成验证码 → 调用短信通道 → 写入 `sms_codes` 表（15 分钟 TTL）
 - `verify_sms_code(phone, code)`：校验 `sms_codes` 表，命中后标记 `used=1`
 
 因此本技能：

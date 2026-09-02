@@ -5,7 +5,6 @@ import Toast from 'vue-toastification'
 import 'vue-toastification/dist/index.css'
 
 import App from '@/App.vue'
-import { useDemoAuth } from '@/composables/useDemoAuth'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 import { useTheme } from '@/composables/useTheme'
 import '@/style.css'
@@ -32,11 +31,6 @@ export function createApplicationRouter(options: BootstrapOptions) {
     }
     if (path.startsWith('/t/') || path.startsWith('/portal')) {
       const { init, isInitialized } = useTenantAuth()
-      if (!isInitialized.value) {
-        await init()
-      }
-    } else {
-      const { init, isInitialized } = useDemoAuth()
       if (!isInitialized.value) {
         await init()
       }

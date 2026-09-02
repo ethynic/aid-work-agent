@@ -1,5 +1,5 @@
 <template>
-  <!-- 演示模式：完整布局包含侧边栏和头部 -->
+  <!-- 非租户路由：完整布局包含侧边栏和头部 -->
   <div v-if="!isTenantMode" class="h-screen flex flex-col bg-gray-50">
     <main class="flex-1 flex overflow-hidden">
       <MenuSidebar
@@ -317,7 +317,6 @@ import MenuSidebar from './MenuSidebar.vue'
 import BasePagination from './ui/BasePagination.vue'
 import { type SubagentListItem } from '@/api/subagent'
 import { getMyAllowedAgents } from '@/api/saasPermissions'
-import { useDemoAuth } from '@/composables/useDemoAuth'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 import { useSession } from '@/composables/useSession'
 import { useAgent } from '@/composables/useAgent'
@@ -326,26 +325,20 @@ import { useMobile } from '@/composables/useMobile'
 const router = useRouter()
 const route = useRoute()
 const { isMobile } = useMobile()
-const { user: demoUser, isLoggedIn: demoIsLoggedIn, logout: demoLogout } = useDemoAuth()
 const { admin: tenantAdmin, isLoggedIn: tenantIsLoggedIn, logout: tenantLogout, init: initTenantAuth } = useTenantAuth()
 
 const isTenantMode = computed(() => route.path.startsWith('/t/'))
 
-// 统一的登录状态检查
-const effectiveIsLoggedIn = computed(() => {
-  return isTenantMode.value ? tenantIsLoggedIn.value : demoIsLoggedIn.value
-})
+// 统一的登录状态检查（租户认证）
+const effectiveIsLoggedIn = computed(() => tenantIsLoggedIn.value)
 
 // 统一的用户信息
 const effectiveUser = computed(() => {
-  if (isTenantMode.value) {
-    return tenantAdmin.value ? {
-      user_id: tenantAdmin.value.user_id,
-      username: tenantAdmin.value.username,
-      phone: tenantAdmin.value.phone
-    } : null
-  }
-  return demoUser.value
+  return tenantAdmin.value ? {
+    user_id: tenantAdmin.value.user_id,
+    username: tenantAdmin.value.username,
+    phone: tenantAdmin.value.phone
+  } : null
 })
 const {
   sessions,
@@ -497,12 +490,6 @@ function handleSelectSession(sessionId: string) {
         ? `/t/${tenantId}/chat/${subagent}`
         : `/t/${tenantId}/chat`
       router.push({ path, query: Object.keys(queryParams).length > 0 ? queryParams : undefined })
-    } else {
-      // 普通演示模式
-      const path = subagent
-        ? `/chat/${subagent}`
-        : '/'
-      router.push(path)
     }
   })
 }
@@ -556,11 +543,7 @@ function onPageChange(page: number, size: number) {
 
 // 登出
 async function handleLogout() {
-  if (isTenantMode.value) {
-    await tenantLogout()
-  } else {
-    await demoLogout()
-  }
+  await tenantLogout()
   router.push(isTenantMode.value ? route.path.replace(/\/chat.*/, '') : '/')
 }
 

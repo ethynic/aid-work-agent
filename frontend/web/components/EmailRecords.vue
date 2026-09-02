@@ -128,11 +128,9 @@ import BaseModal from '@/components/ui/BaseModal.vue'
 import BasePagination from '@/components/ui/BasePagination.vue'
 import { usePageContext } from '@/composables/usePageContext'
 import { formatDateTime } from '@/utils/date'
-import { useDemoAuth } from '@/composables/useDemoAuth'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 
 const route = useRoute()
-const { user: demoUser } = useDemoAuth()
 const { admin: tenantAdmin } = useTenantAuth()
 
 const loading = ref(false)
@@ -146,10 +144,7 @@ const currentEmail = ref<CustomerEmail | null>(null)
 const userId = computed(() => {
   const queryUserId = route.query.user_id as string
   if (queryUserId) return queryUserId
-  if (route.path.startsWith('/t/')) {
-    return tenantAdmin.value?.user_id || ''
-  }
-  return demoUser.value?.user_id || ''
+  return tenantAdmin.value?.user_id || ''
 })
 
 const columns = [

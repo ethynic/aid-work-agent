@@ -21,7 +21,6 @@ from src.saas.db.tenant_db import TenantDB
 from src.saas.db.permission_db import UserAgentPermissionDB
 from src.saas.db.subscription_db import SubscriptionDB
 from src.db.models import UserDB
-from src.config.settings import settings
 from src.db.database import get_db_connection
 
 router = APIRouter(prefix="/api/saas/users", tags=["SaaS 企业用户"])
@@ -51,9 +50,6 @@ class UserListRequest(BaseModel):
 @router.get("")
 async def list_users(request: Request, page: int = 1, page_size: int = 20):
     """列出企业用户（分页）"""
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
     admin = require_admin(request)
     # 平台管理员带 X-Tenant-Id header 访问租户前台时，进行租户隔离
     if admin.get("tenant_id"):
@@ -67,9 +63,6 @@ async def list_users(request: Request, page: int = 1, page_size: int = 20):
 @router.post("")
 async def create_user(request: Request, body: UserCreateRequest):
     """手动创建单个用户"""
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
     admin = require_admin(request)
 
     # 平台管理员可以代替租户管理员创建用户，但需要指定 tenant_id
@@ -137,9 +130,6 @@ async def batch_import_users(request: Request, file: UploadFile = File(...), ten
 
     CSV 格式：phone,username
     """
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
     admin = require_admin(request)
 
     # 平台管理员可以代替租户管理员导入用户，但需要指定 tenant_id
@@ -258,9 +248,6 @@ async def batch_import_users(request: Request, file: UploadFile = File(...), ten
 @router.patch("/{user_id}")
 async def update_user(user_id: str, request: Request, body: UserUpdateRequest):
     """更新企业用户信息"""
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
     admin = require_admin(request)
 
     # 检查用户是否属于该租户
@@ -287,9 +274,6 @@ async def update_user(user_id: str, request: Request, body: UserUpdateRequest):
 @router.delete("/{user_id}")
 async def remove_user(user_id: str, request: Request):
     """移除企业用户（仅从租户中移除，不删除用户）"""
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
     admin = require_admin(request)
 
     # 检查用户是否属于该租户

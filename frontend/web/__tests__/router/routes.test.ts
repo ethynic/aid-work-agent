@@ -14,26 +14,11 @@ describe('entry route responsibilities', () => {
   it('keeps the Web top-level route contract while removing the ineffective duplicate matcher', () => {
     const webRoutes = [...agentRoutes, ...portalRoutes]
 
+    // demo 顶层路由已随 demo 模式移除删除，agentRoutes 只剩 / 与 /t/:tenant_id，
+    // /subagents（数字员工管理）收进 portalRoutes
     expect(webRoutes.map((route) => route.path)).toMatchInlineSnapshot(`
       [
         "/",
-        "/chat/:subagent",
-        "/customer-info",
-        "/scheduled-tasks",
-        "/knowledge-base",
-        "/my-agents",
-        "/all-sessions",
-        "/data-sources",
-        "/social-media",
-        "/assets",
-        "/videos",
-        "/prompts",
-        "/trade-specialist",
-        "/travel-consultant",
-        "/recruiting-operator",
-        "/customer-followup",
-        "/complaint",
-        "/after-sales",
         "/t/:tenant_id",
         "/subagents",
         "/portal/login",
@@ -90,6 +75,7 @@ describe('entry route responsibilities', () => {
         "chat",
         "chat/:subagent",
         "all-sessions",
+        "scheduled-tasks",
         "token-usage",
         "recharge-records",
         "reply-styles",
@@ -109,16 +95,9 @@ describe('entry route responsibilities', () => {
     `)
   })
 
-  it('keeps recruiting operator list pages and routed detail pages for demo and tenant', () => {
+  it('keeps recruiting operator list pages and routed detail pages for tenant', () => {
     // 职位/简历均为「纯列表页 + 路由化详情页」结构：详情子路由跟在列表子路由后
-    const demoChildren = childPaths(agentRoutes, '/recruiting-operator')
-    expect(demoChildren).toEqual([
-      'resumes',
-      'resumes/:resumeId',
-      'jobs',
-      'jobs/:jobId',
-    ])
-
+    // （demo 顶层路由已随 demo 模式移除删除，仅保留租户前台路由）
     const tenantChildren = agentRoutes.find((route) => route.path === '/t/:tenant_id')?.children ?? []
     const recruiting = tenantChildren.find((route) => route.path === 'recruiting-operator')
     expect(recruiting?.children?.map((route) => route.path)).toEqual([
@@ -134,19 +113,18 @@ describe('entry route responsibilities', () => {
       'tenant-recruiting-operator-job-detail',
     ])
 
-    // 详情路径可被路由正确解析（页面跳转用 path 拼接，兼容 demo 与租户前台）
+    // 详情路径可被路由正确解析（页面跳转用 path 拼接）
     const router = createRouter({ history: createMemoryHistory(), routes: agentRoutes })
-    expect(router.resolve('/recruiting-operator/jobs/job-1').name).toBe('recruiting-operator-job-detail')
-    expect(router.resolve('/recruiting-operator/resumes/12').name).toBe('recruiting-operator-resume-detail')
     expect(router.resolve('/t/acme/recruiting-operator/jobs/job-1').name).toBe('tenant-recruiting-operator-job-detail')
     expect(router.resolve('/t/acme/recruiting-operator/resumes/12').name).toBe('tenant-recruiting-operator-resume-detail')
   })
 
-  it('keeps Agent and tenant routes in Desktop without importing a Portal route', async () => {
+  // 该用例含动态 import TenantLayout 与完整 router 构建，全量并发下会超过默认 5s，显式放宽
+  it('keeps Agent and tenant routes in Desktop without importing a Portal route', { timeout: 20_000 }, async () => {
+    // demo 顶层路由（/chat/:subagent、/knowledge-base 等）已随 demo 模式移除删除，
+    // desktopRoutes = agentRoutes（/ 与 /t/:tenant_id）+ not-found 兜底
     const desktopTopLevelPaths = desktopRoutes.map((route) => route.path)
     expect(desktopTopLevelPaths).toContain('/')
-    expect(desktopTopLevelPaths).toContain('/chat/:subagent')
-    expect(desktopTopLevelPaths).toContain('/knowledge-base')
     expect(desktopTopLevelPaths).toContain('/t/:tenant_id')
     expect(desktopTopLevelPaths).toContain('/:pathMatch(.*)*')
     expect(desktopTopLevelPaths.some((path) => path === '/portal' || path.startsWith('/portal/'))).toBe(false)
@@ -160,8 +138,6 @@ describe('entry route responsibilities', () => {
     expect(router.resolve('/portal').matched.map((record) => record.name)).toEqual(['desktop-not-found'])
     expect(router.resolve('/portal/tenants').matched.map((record) => record.name)).toEqual(['desktop-not-found'])
     expect(router.resolve('/subagents').matched.map((record) => record.name)).toEqual(['desktop-not-found'])
-    expect(router.resolve('/chat/customer-service').name).toBe('chat-subagent')
-    expect(router.resolve('/trade-specialist/customers').name).toBe('trade-specialist-customers')
     expect(router.resolve('/t/acme/chat').name).toBe('tenant-chat-explicit')
 
     const tenantLayoutLoader = agentRoutes.find((route) => route.path === '/t/:tenant_id')?.component

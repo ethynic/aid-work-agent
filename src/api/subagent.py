@@ -63,15 +63,6 @@ async def list_subagents(request: Request):
                         "business_pages": []
                     })
             # user 为 None 时（token 无效），不添加 main，保持只有内置 subagent
-        else:
-            # 非租户模式（演示模式）：添加主智能体
-            items.append({
-                "agent_id": "main",
-                "name": "CEO智能体",
-                "description": "系统主智能体，具备通用能力和工具",
-                "type": "builtin",
-                "business_pages": []
-            })
 
         return {"success": True, "data": items}
 

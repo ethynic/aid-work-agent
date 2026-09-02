@@ -46,7 +46,7 @@ def normalize_tenant_id(tenant_id: str) -> str:
     而存储规范要求 `storage/tenants/{tid}/{scene}/` 中 {tid} 不带前缀。
     统一在此剥离，避免带前缀与不带前缀目录并存导致读写路径错位。
 
-    特殊值（`_anonymous` / `demo` 等）不以 `tenant_` 开头，原样返回。
+    特殊值（`_anonymous` 等匿名占位）不以 `tenant_` 开头，原样返回。
     """
     if tenant_id.startswith("tenant_") and len(tenant_id) > len("tenant_"):
         return tenant_id[len("tenant_"):]

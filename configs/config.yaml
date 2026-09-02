@@ -237,7 +237,6 @@ skills:
 
 # SaaS 多租户配置
 saas:
-  enabled: ${SAAS_ENABLED:-false}
   tenant_skills_dir: "storage/tenants"
   default_max_instances: 5
   default_max_users: 50
@@ -246,11 +245,6 @@ saas:
     pattern: "^[A-Z0-9]{4,8}$"  # 正则表达式模式
     min_length: 4
     max_length: 8
-
-# 演示模式配置
-demo:
-  enabled: ${DEMO_ENABLED:-true}
-  mock_password: "888888"
 
 # 存储配置（所有业务数据集中于此，便于备份和迁移）
 storage:

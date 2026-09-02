@@ -22,7 +22,6 @@ from src.saas.api.tenant_auth import require_admin
 from src.saas.db.channel_config_db import ChannelConfigDB
 from src.saas.db.subscription_db import SubscriptionDB
 from src.saas.services.channel_factory import ChannelFactory
-from src.config.settings import settings
 from src.db.database import get_db_connection
 
 router = APIRouter(prefix="/api/saas/channels", tags=["SaaS 渠道配置"])
@@ -87,9 +86,6 @@ def _validate_rpa_required_fields(config: dict) -> None:
 @router.get("")
 async def list_channels(request: Request):
     """列出当前租户的渠道配置"""
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
     admin = require_admin(request)
     configs = ChannelConfigDB.list_by_tenant(admin["tenant_id"])
     return {"success": True, "channels": configs}
@@ -98,9 +94,6 @@ async def list_channels(request: Request):
 @router.post("")
 async def create_channel(request: Request, body: ChannelConfigCreateRequest):
     """新增渠道配置"""
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
     admin = require_admin(request)
 
     if body.channel_type not in ("wecom", "wecom_kf", "wecom_personal_rpa", "dingtalk", "feishu"):
@@ -150,9 +143,6 @@ async def create_channel(request: Request, body: ChannelConfigCreateRequest):
 @router.put("/{config_id}")
 async def update_channel(config_id: str, request: Request, body: ChannelConfigUpdateRequest):
     """更新渠道配置"""
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
     admin = require_admin(request)
     existing = ChannelConfigDB.get_by_id(config_id)
 
@@ -193,9 +183,6 @@ async def update_channel(config_id: str, request: Request, body: ChannelConfigUp
 @router.delete("/{config_id}")
 async def delete_channel(config_id: str, request: Request):
     """删除渠道配置"""
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
     admin = require_admin(request)
     existing = ChannelConfigDB.get_by_id(config_id)
 
@@ -231,9 +218,6 @@ async def generate_keypair(config_id: str, request: Request):
     校验：config 必须存在 + 必须是 wecom_personal_rpa 渠道类型。
     覆盖语义：若 config.private_key 已有值，覆盖（用户主动点生成就是想换）。
     """
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
     admin = require_admin(request)
 
     existing = ChannelConfigDB.get_by_id(config_id)
@@ -313,9 +297,6 @@ async def verify_channel(config_id: str, request: Request):
 
     其他渠道走原有 ChannelFactory.create_adapter 路径。
     """
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
     admin = require_admin(request)
 
     # wecom_personal_rpa 需要明文凭证做实测，用 get_by_id_decrypted
@@ -374,9 +355,6 @@ def _is_wecom_personal_rpa(config_id: str) -> bool:
 @router.get("/available-subagents")
 async def get_available_subagents(request: Request):
     """获取当前租户可用的数字员工列表（用于渠道配置关联）"""
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
     admin = require_admin(request)
     tenant_id = admin["tenant_id"]
 

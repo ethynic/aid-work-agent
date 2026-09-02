@@ -15,7 +15,8 @@ function getAuthHeaders(): Record<string, string> {
   } else if (import.meta.env.VITE_DESKTOP_TARGET !== 'true' && path.startsWith('/portal')) {
     tokenKey = 'portal_token'
   } else {
-    tokenKey = 'demo_token'
+    // 桌面端及非租户路径：读无后缀的 saas_token
+    tokenKey = getTenantScopedKey('saas_token')
   }
   const token = credentialGet(tokenKey)
   const headers: Record<string, string> = {}

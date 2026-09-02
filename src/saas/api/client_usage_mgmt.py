@@ -21,7 +21,6 @@ from typing import Any, Optional
 from fastapi import APIRouter, HTTPException, Query, Request
 from loguru import logger
 
-from src.config.settings import settings
 from src.db.client_binding_db import ClientUsageLogDB
 from src.saas.api.tenant_auth import require_admin, sanitize_error_info
 from src.saas.db.tenant_db import TenantDB
@@ -89,9 +88,6 @@ async def list_client_usage_logs(
     page_size: int = Query(20, ge=1, le=200),
 ):
     """客户端运行日志/消耗列表（按 created_at DESC）。"""
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
     admin = require_admin(request)
     _require_platform_admin(admin)
 
@@ -129,9 +125,6 @@ async def recent_client_errors(
     tenant_id: Optional[str] = Query(None),
 ):
     """近 N 小时的客户端错误/告警（跨租户，「及时发现」仪表用）。"""
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
     admin = require_admin(request)
     _require_platform_admin(admin)
 

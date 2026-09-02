@@ -12,11 +12,11 @@ afterEach(() => {
 
 describe('CredentialStore contract', () => {
   it('Web 保持原 localStorage key 和同步读写语义，避免现有登录回归', () => {
-    credentialSet('demo_token', 'web-value')
-    expect(credentialGet('demo_token')).toBe('web-value')
-    expect(localStorage.getItem('demo_token')).toBe('web-value')
-    credentialRemove('demo_token')
-    expect(localStorage.getItem('demo_token')).toBeNull()
+    credentialSet('saas_token', 'web-value')
+    expect(credentialGet('saas_token')).toBe('web-value')
+    expect(localStorage.getItem('saas_token')).toBe('web-value')
+    credentialRemove('saas_token')
+    expect(localStorage.getItem('saas_token')).toBeNull()
   })
 
   it('Desktop 启动 hydrate 后只使用内存并通过白名单桥持久化，不写明文 localStorage', async () => {
@@ -27,12 +27,12 @@ describe('CredentialStore contract', () => {
       value: {
         version: 1,
         runtime: { target: 'desktop', apiBaseUrl: 'https://api.example.test/api' },
-        credentials: { hydrate: vi.fn().mockResolvedValue({ demo_token: 'hydrated-value', portal_token: 'blocked' }), set, delete: remove },
+        credentials: { hydrate: vi.fn().mockResolvedValue({ saas_token: 'hydrated-value', portal_token: 'blocked' }), set, delete: remove },
         system: {}
       }
     })
     await hydrateCredentialStore()
-    expect(credentialGet('demo_token')).toBe('hydrated-value')
+    expect(credentialGet('saas_token')).toBe('hydrated-value')
     expect(credentialGet('portal_token')).toBeNull()
     await credentialSet('saas_token_acme', 'tenant-value')
     expect(localStorage.getItem('saas_token_acme')).toBeNull()
@@ -44,13 +44,13 @@ describe('CredentialStore contract', () => {
 
 describe('Desktop credential failure and logout ordering', () => {
   it('fails before hydrate and does not fall back to plaintext localStorage when hydrate fails', async () => {
-    localStorage.setItem('demo_token', 'plaintext-must-not-be-used')
+    localStorage.setItem('saas_token', 'plaintext-must-not-be-used')
     Object.defineProperty(window, 'agentDesktop', {
       configurable: true,
       value: { credentials: { hydrate: vi.fn().mockRejectedValue(new Error('decrypt failed')) } }
     })
     await expect(hydrateCredentialStore()).rejects.toThrow('decrypt failed')
-    expect(() => credentialGet('demo_token')).toThrow(/not hydrated/)
+    expect(() => credentialGet('saas_token')).toThrow(/not hydrated/)
   })
 
   it('rolls back a failed current write without letting an older failure erase a newer login', async () => {
@@ -62,11 +62,11 @@ describe('Desktop credential failure and logout ordering', () => {
       value: { credentials: { hydrate: vi.fn().mockResolvedValue({}), set, delete: vi.fn().mockResolvedValue(undefined) } }
     })
     await hydrateCredentialStore()
-    const oldWrite = credentialSet('demo_token', 'old-login')
-    await credentialSet('demo_token', 'new-login')
+    const oldWrite = credentialSet('saas_token', 'old-login')
+    await credentialSet('saas_token', 'new-login')
     rejectFirst(new Error('old write failed'))
     await expect(oldWrite).rejects.toThrow('old write failed')
-    await vi.waitFor(() => expect(credentialGet('demo_token')).toBe('new-login'))
+    await vi.waitFor(() => expect(credentialGet('saas_token')).toBe('new-login'))
   })
 
   it('keeps logout memory cleared when persistent delete fails loudly', async () => {
@@ -74,15 +74,15 @@ describe('Desktop credential failure and logout ordering', () => {
       configurable: true,
       value: {
         credentials: {
-          hydrate: vi.fn().mockResolvedValue({ demo_token: 'remembered' }),
+          hydrate: vi.fn().mockResolvedValue({ saas_token: 'remembered' }),
           set: vi.fn().mockResolvedValue(undefined),
           delete: vi.fn().mockRejectedValue(new Error('disk failure'))
         }
       }
     })
     await hydrateCredentialStore()
-    await expect(credentialRemove('demo_token')).rejects.toThrow('disk failure')
-    expect(credentialGet('demo_token')).toBe('remembered')
+    await expect(credentialRemove('saas_token')).rejects.toThrow('disk failure')
+    expect(credentialGet('saas_token')).toBe('remembered')
   })
 })
 

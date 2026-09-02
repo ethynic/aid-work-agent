@@ -10,7 +10,7 @@ const API_BASE = import.meta.env.VITE_API_BASE || ''
 function getAuthHeaders(): Record<string, string> {
   const tenantMatch = window.location.pathname.match(/^\/t\/([^/]+)/)
   const token = import.meta.env.VITE_DESKTOP_TARGET === 'true'
-    ? credentialGet(tenantMatch ? getTenantScopedKey('saas_token') : 'demo_token')
+    ? credentialGet(getTenantScopedKey('saas_token'))
     : localStorage.getItem('token')
   const tenantId = import.meta.env.VITE_DESKTOP_TARGET === 'true'
     ? (tenantMatch?.[1] || '')
