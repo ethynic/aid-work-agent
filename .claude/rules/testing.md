@@ -103,6 +103,7 @@ async def test_my_route():
 - `tools` / `skills` / `agent` / `channels` / `api` — 按组件
 - `email` / `browser` / `search` / `llm` / `db` — 按外部依赖
 - `slow` — 耗时 > 5 秒
+- `real_browser` — 依赖真实浏览器/Node renderer 的测试（如 PPT HTML 导出、x_to_image 渲染器）。极慢且容器内可能 hang，**默认被 pytest.ini addopts 排除**；单独运行用 `pytest -m "not e2e and real_browser"`。新写此类测试必须在文件级 `pytestmark` 中加 `pytest.mark.real_browser`
 
 ## 共享 Fixtures（tests/conftest.py）
 
@@ -127,11 +128,12 @@ async def test_my_route():
 ## 运行测试
 
 ```bash
-pytest                                    # 运行全部（默认跳过 e2e）
+pytest                                    # 运行全部（默认跳过 e2e 与 real_browser）
 pytest tests/unit/                        # 只跑单元测试
 pytest tests/integration/                 # 只跑集成测试
 pytest -m tools                           # 按组件：tools / skills / agent / email / browser / search
 pytest -m e2e                             # 端到端测试（需要真实凭证）
+pytest -m "not e2e and real_browser"      # 单独跑真实浏览器测试（慢，勿在日常回归中混跑）
 pytest --cov=src --cov-report=term-missing  # 带覆盖率
 pytest -m "integration and tools"         # 组合筛选
 ```

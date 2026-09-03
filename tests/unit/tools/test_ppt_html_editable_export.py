@@ -10,7 +10,7 @@ from src.tools.ppt.html_exporter import HtmlExporter
 from src.tools.ppt.ppt_capabilities import get_capabilities
 from src.tools.ppt.spec import RasterLayerNode, SlideDeckSpec, SlideSpec
 
-pytestmark = pytest.mark.tools
+pytestmark = [pytest.mark.tools, pytest.mark.real_browser]
 
 
 def _require_playwright():

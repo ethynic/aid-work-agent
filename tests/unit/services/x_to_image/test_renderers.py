@@ -24,7 +24,7 @@ from src.services.x_to_image.renderers.text_renderer import TextRenderer, _build
 from src.services.x_to_image.renderers.markdown_renderer import MarkdownRenderer
 from src.services.x_to_image.renderers.html_renderer import HtmlRenderer
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.real_browser]
 
 
 # ---------- 辅助 ----------

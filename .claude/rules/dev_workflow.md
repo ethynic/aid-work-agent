@@ -69,6 +69,7 @@ fetch + commit + push
 ### 要求
 1. 跑新功能的测试：`./scripts/dev_test.sh <新测试文件> -p no:cacheprovider -q -v`
 2. **回归测试**：跑改动模块的全量测试 + 相邻模块，确认没破坏既有功能。
+   **范围约束**：回归只跑「改动模块 + 相邻模块」的测试目录/文件，**禁止默认跑全量 `tests/unit/`**——全量约 5000 用例，且含依赖真实浏览器的 `real_browser` 慢测试（默认已被 pytest.ini 排除），曾致单次流程超过 2 小时。全量回归仅在定期审计（每季度）或大版本前执行。
 3. **启动安全检查**（关键，避免服务器挂）：
    - `./scripts/dev_test.sh` 自动走容器/宿主机环境，下面命令同样需要走对应环境（见 §8）：
      - 语法检查：`docker exec aid-agent-api python -c "import ast; ast.parse(open('<改动文件>',encoding='utf-8').read())"`（宿主机环境去掉 `docker exec aid-agent-api` 前缀）

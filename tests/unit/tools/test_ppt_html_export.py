@@ -8,7 +8,7 @@ from PIL import Image, ImageChops
 from src.tools.ppt.html_exporter import HtmlExporter, HtmlExportError
 from src.tools.ppt.ppt_capabilities import get_capabilities
 
-pytestmark = pytest.mark.tools
+pytestmark = [pytest.mark.tools, pytest.mark.real_browser]
 
 
 def _require_playwright():
