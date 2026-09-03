@@ -44,9 +44,6 @@ tavily-python>=0.3.0  # Tavily AI Search API
 playwright>=1.59.0  # Browser automation framework (1.59+ for Screencast API)
 markdownify>=0.11.6  # HTML to Markdown conversion
 
-# Gradio UI
-gradio>=4.0.0  # Modern web UI framework
-
 # Word Document Processing
 python-docx>=1.0.0  # Word document reading and processing
 markitdown[docx]>=0.1.0  # Word to Markdown conversion

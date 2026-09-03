@@ -45,25 +45,6 @@ def test_agent_prompts_require_workspace_copy_and_truthful_delivery(
     assert "`display_name`" in prompt
 
 
-def test_guizang_skill_has_direct_html_to_pptx_path():
-    skill_path = (
-        Path(__file__).resolve().parents[3]
-        / "src"
-        / "skills"
-        / "guizang-ppt-skill"
-        / "SKILL.md"
-    )
-    skill = skill_path.read_text(encoding="utf-8")
-
-    assert "### Step 7 · 按需导出 PPTX" in skill
-    assert "ppt_process(" in skill
-    assert 'content_type="html"' in skill
-    assert 'export_mode="both"' in skill
-    assert "alternate_file_path" in skill
-    assert "display_name" in skill
-    assert "不得声称 PPTX 已生成" in skill
-
-
 def test_documented_calls_match_public_tool_schemas():
     ppt = PptProcessInput.model_validate(
         {
@@ -94,11 +75,9 @@ def test_master_and_subagent_have_direct_ppt_tool_contracts():
     assembly_source = (project_root / "src" / "tools" / "assembly.py").read_text(
         encoding="utf-8"
     )
-    config = (project_root / "configs" / "config.yaml").read_text(encoding="utf-8")
 
     # 工具自动发现改造（docs/tools/tool-auto-discovery-design.md）后，
     # ppt_process 不再写死注册，由 discover_tool_classes() 经 assemble_agent_tools
     # 统一装配进各 Agent（黄金清单测试见 tests/unit/tools/test_tool_discovery.py）
     assert "discover_tool_classes()" in assembly_source
     assert "ppt_process" in discover_tool_classes()
-    assert "guizang-ppt-skill" in config

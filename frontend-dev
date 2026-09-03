@@ -1,3 +1,0 @@
-#!/bin/sh
-# npm wrapper for frontend - use npm@10 for Node.js v24 compatibility
-cd "$(dirname "$0")/frontend" && node package/bin/npm-cli.js run dev "$@"
