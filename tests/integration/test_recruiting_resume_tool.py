@@ -9,6 +9,10 @@
   成功落库+紧凑摘要（不含 base64/ocr 全文）/ CLI 失败原样透传不落库 / payload 非法 RESUME_PAYLOAD_INVALID
 - import 安全：proxy_tool ↔ services 无循环依赖
 
+P0 防错名（2026-09-02）新增覆盖：
+- name_source 最后防线：缺失 / 'ocr' / 其他值 → ResumePayloadError（不落库不落盘）；
+  'param' / 'dom' 合法入库（姓名唯一来源=非 OCR，旧版 CLI OCR 猜名结果被有意拒绝）
+
 简历-职位匹配 Phase 1（2026-08-17）新增覆盖：
 - 落库关联解析（设计 §4.1）：job_name 精确命中关联 job_id / 0 命中 job_id NULL + 摘要 warning /
   payload 带 job_id 直用（非本租户拒绝）/ 绝不自动创建职位
@@ -291,6 +295,7 @@ class TestToolResultContract:
         ctx = temp_tenant_with_user
         payload = {
             "name": "王五",                       # 别名 → candidate_name
+            "name_source": "param",                # 姓名=显式入参（非 OCR 来源守门）
             "position": "资深后端",                 # 别名 → job_name
             "basic_info": {"学历": "本科", "工作年限": "5 年"},
             "text": "OCR_FULLTEXT_UNIQUE_XYZ",     # 别名 → ocr_text
@@ -324,6 +329,43 @@ class TestToolResultContract:
         assert _count_resumes(ctx["tenant_id"]) == 0
         assert not list(temp_storage_dir.iterdir())
 
+    @pytest.mark.parametrize("name_source", [
+        None,        # 缺失（旧版 CLI 不带该字段）
+        "ocr",       # 旧版 CLI 的 OCR 首行启发式猜名（P0 修复前）
+        "whatever",  # 任意其他值
+    ])
+    def test_name_source_untrusted_rejected_and_stores_nothing(
+        self, temp_tenant_with_user, temp_storage_dir, name_source
+    ):
+        """P0 防错名最后防线：name_source 缺失/'ocr'/其他值 → ResumePayloadError，且不落任何库/盘数据。
+
+        姓名唯一来源=非 OCR（param=显式入参/dom=卡片 DOM 配对）；旧版 CLI 会 OCR 猜名静默入库
+        （错名简历导致打招呼打错人），此处有意破坏向后兼容并提示升级。
+        """
+        ctx = temp_tenant_with_user
+        payload = {
+            "candidate_name": "王五",
+            "images": [{"base64": _TINY_PNG_BASE64, "mime_type": "image/png"}],
+        }
+        if name_source is not None:
+            payload["name_source"] = name_source
+        with pytest.raises(resume_service.ResumePayloadError, match="姓名来源不受信"):
+            resume_service.create_resume_record_from_tool_result(
+                ctx["tenant_id"], ctx["user_id"], payload
+            )
+        assert _count_resumes(ctx["tenant_id"]) == 0
+        assert not list(temp_storage_dir.iterdir())
+
+    def test_name_source_dom_accepted(self, temp_tenant_with_user, temp_storage_dir):
+        """name_source='dom'（卡片 DOM 配对，批量链路）合法入库；'param' 已由别名用例覆盖"""
+        ctx = temp_tenant_with_user
+        record = resume_service.create_resume_record_from_tool_result(
+            ctx["tenant_id"], ctx["user_id"],
+            {"candidate_name": "刘草威", "name_source": "dom",
+             "images": [{"base64": _TINY_PNG_BASE64, "mime_type": "image/png"}]},
+        )
+        assert record["candidate_name"] == "刘草威"
+
     @pytest.mark.parametrize("images", [
         "not-a-list",                                  # 非列表
         [{"name": "缺 base64"}],                        # 缺 base64 字段
@@ -335,7 +377,7 @@ class TestToolResultContract:
         with pytest.raises(resume_service.ResumePayloadError):
             resume_service.create_resume_record_from_tool_result(
                 ctx["tenant_id"], ctx["user_id"],
-                {"candidate_name": "赵六", "images": images},
+                {"candidate_name": "赵六", "name_source": "param", "images": images},
             )
         assert _count_resumes(ctx["tenant_id"]) == 0
         assert not list(temp_storage_dir.iterdir())
@@ -346,7 +388,7 @@ class TestToolResultContract:
         with pytest.raises(resume_service.ResumePayloadError, match="basic_info"):
             resume_service.create_resume_record_from_tool_result(
                 ctx["tenant_id"], ctx["user_id"],
-                {"candidate_name": "赵六", "basic_info": "不是对象"},
+                {"candidate_name": "赵六", "name_source": "param", "basic_info": "不是对象"},
             )
         assert _count_resumes(ctx["tenant_id"]) == 0
 
@@ -364,6 +406,7 @@ class TestToolResultContract:
                 ctx["tenant_id"], ctx["user_id"],
                 {
                     "candidate_name": "孙九",
+                    "name_source": "param",
                     "images": [
                         # 第 1 张合法，先真实落盘；第 2 张非法 mime 触发中途失败
                         {"base64": _TINY_PNG_BASE64, "mime_type": "image/png"},
@@ -390,7 +433,7 @@ class TestJobLinkResolution:
         job = recruiting_job_service.create_job(ctx["tenant_id"], job_name="PHP后端工程师")
         record = resume_service.create_resume_record_from_tool_result(
             ctx["tenant_id"], ctx["user_id"],
-            {"candidate_name": "张三", "job_name": "PHP后端工程师",
+            {"candidate_name": "张三", "name_source": "param", "job_name": "PHP后端工程师",
              "images": [{"base64": _TINY_PNG_BASE64, "mime_type": "image/png"}]},
         )
         assert record["job_id"] == job["id"]
@@ -402,7 +445,7 @@ class TestJobLinkResolution:
         ctx = temp_tenant_with_user
         record = resume_service.create_resume_record_from_tool_result(
             ctx["tenant_id"], ctx["user_id"],
-            {"candidate_name": "李四", "job_name": "不存在的职位",
+            {"candidate_name": "李四", "name_source": "param", "job_name": "不存在的职位",
              "images": [{"base64": _TINY_PNG_BASE64, "mime_type": "image/png"}]},
         )
         assert record["job_id"] is None
@@ -420,7 +463,7 @@ class TestJobLinkResolution:
         job = recruiting_job_service.create_job(ctx["tenant_id"], job_name="资深 Laravel 工程师")
         record = resume_service.create_resume_record_from_tool_result(
             ctx["tenant_id"], ctx["user_id"],
-            {"candidate_name": "王五", "job_id": job["id"],
+            {"candidate_name": "王五", "name_source": "param", "job_id": job["id"],
              "images": [{"base64": _TINY_PNG_BASE64, "mime_type": "image/png"}]},
         )
         assert record["job_id"] == job["id"]
@@ -448,7 +491,7 @@ class TestJobLinkResolution:
             with pytest.raises(resume_service.ResumePayloadError, match="不属于本租户"):
                 resume_service.create_resume_record_from_tool_result(
                     tenant_id_b, "u_b",
-                    {"candidate_name": "赵六", "job_id": job_a["id"],
+                    {"candidate_name": "赵六", "name_source": "param", "job_id": job_a["id"],
                      "images": [{"base64": _TINY_PNG_BASE64, "mime_type": "image/png"}]},
                 )
             assert _count_resumes(tenant_id_b) == 0
@@ -469,7 +512,7 @@ class TestJobLinkResolution:
         with pytest.raises(resume_service.ResumePayloadError, match="格式非法"):
             resume_service.create_resume_record_from_tool_result(
                 ctx["tenant_id"], ctx["user_id"],
-                {"candidate_name": "孙七", "job_id": "not-a-uuid",
+                {"candidate_name": "孙七", "name_source": "param", "job_id": "not-a-uuid",
                  "images": [{"base64": _TINY_PNG_BASE64, "mime_type": "image/png"}]},
             )
         assert _count_resumes(ctx["tenant_id"]) == 0
@@ -523,6 +566,7 @@ class TestBossResumeDetailToolOrchestration:
         ctx = temp_tenant_with_user
         payload = {
             "candidate_name": "张三",
+            "name_source": "param",
             "job_name": "后端开发",
             "basic_info": {"学历": "本科"},
             "ocr_text": "OCR_FULLTEXT_UNIQUE_XYZ" * 10,
@@ -575,7 +619,7 @@ class TestBossResumeDetailToolOrchestration:
         from src.local_tools.proxy_tool import UNKNOWN_EFFECT_NOTICE
 
         ctx = temp_tenant_with_user
-        payload = {"candidate_name": "李四", "images": [
+        payload = {"candidate_name": "李四", "name_source": "param", "images": [
             {"base64": _TINY_PNG_BASE64, "mime_type": "image/png"},
         ]}
         fake = _cli_success_result(payload)
@@ -663,6 +707,7 @@ class TestBossResumeDetailToolOrchestration:
         ctx = temp_tenant_with_user
         payload = {
             "candidate_name": "李雷",
+            "name_source": "param",
             "ocr_text": "OCR_FULLTEXT_UNIQUE_XYZ",
             "images": [{"base64": _TINY_PNG_BASE64, "mime_type": "image/png"}],
         }
@@ -709,12 +754,14 @@ class TestBossResumeBatchToolOrchestration:
         payloads = [
             {
                 "candidate_name": "刘草威",
+                "name_source": "dom",
                 "job_name": "PHP开发工程师",
                 "ocr_text": "BATCH_OCR_FULLTEXT_UNIQUE_XYZ_1" * 10,
                 "images": [{"base64": _TINY_PNG_BASE64, "name": "s1.png", "mime_type": "image/png"}],
             },
             {
                 "candidate_name": "张三丰",
+                "name_source": "dom",
                 "ocr_text": "BATCH_OCR_FULLTEXT_UNIQUE_XYZ_2",
                 "images": [{"base64": _TINY_PNG_BASE64, "name": "s2.png", "mime_type": "image/png"}],
             },
@@ -778,6 +825,7 @@ class TestBossResumeBatchToolOrchestration:
             {"images": [{"base64": _TINY_PNG_BASE64}]},  # 第 1 份缺 candidate_name
             {
                 "candidate_name": "康嘉润",
+                "name_source": "dom",
                 "job_name": "后端开发",
                 "ocr_text": "BATCH_OCR_FULLTEXT_UNIQUE_XYZ_3",
                 "images": [{"base64": _TINY_PNG_BASE64, "mime_type": "image/png"}],
@@ -807,7 +855,7 @@ class TestBossResumeBatchToolOrchestration:
         """CLI 成功但 resumes 为空（一份都没读到）：RESUME_PAYLOAD_INVALID，不落库不落盘"""
         ctx = temp_tenant_with_user
         fake = _cli_success_result({"resumes": [], "failures": [
-            {"name": None, "error": "未能确定候选人姓名（DOM 配对与 OCR 启发式均失败）"},
+            {"name": None, "error": "未能确定候选人姓名（卡片 DOM 配对失败）：已跳过不入库"},
         ], "attempted": 1})
         with patch.object(LocalToolProxyTool, "execute", new=AsyncMock(return_value=fake)):
             result = _call(BossResumeBatchTool().execute(
@@ -826,9 +874,9 @@ class TestBossResumeBatchToolOrchestration:
         """全部入库失败（DB 故障）：RESUME_STORE_FAILED，不泄漏 base64/OCR 全文"""
         ctx = temp_tenant_with_user
         payloads = [
-            {"candidate_name": "李雷", "ocr_text": "BATCH_OCR_X",
+            {"candidate_name": "李雷", "name_source": "dom", "ocr_text": "BATCH_OCR_X",
              "images": [{"base64": _TINY_PNG_BASE64, "mime_type": "image/png"}]},
-            {"candidate_name": "韩梅梅", "ocr_text": "BATCH_OCR_Y",
+            {"candidate_name": "韩梅梅", "name_source": "dom", "ocr_text": "BATCH_OCR_Y",
              "images": [{"base64": _TINY_PNG_BASE64, "mime_type": "image/png"}]},
         ]
         fake = self._batch_success_result(payloads)
@@ -868,6 +916,7 @@ class TestMatchEvaluationIntegration:
 
         payload = {
             "candidate_name": "评分失败者",
+            "name_source": "param",
             "job_name": "后端开发",
             "images": [{"base64": _TINY_PNG_BASE64, "mime_type": "image/png"}],
         }
@@ -906,9 +955,9 @@ class TestMatchEvaluationIntegration:
         monkeypatch.setattr(recruiting_match_service, "evaluate_and_update", fake_evaluate)
 
         payloads = [
-            {"candidate_name": "评分失败者", "job_name": "后端开发",
+            {"candidate_name": "评分失败者", "name_source": "param", "job_name": "后端开发",
              "images": [{"base64": _TINY_PNG_BASE64, "mime_type": "image/png"}]},
-            {"candidate_name": "评分成功者", "job_name": "后端开发",
+            {"candidate_name": "评分成功者", "name_source": "param", "job_name": "后端开发",
              "images": [{"base64": _TINY_PNG_BASE64, "mime_type": "image/png"}]},
         ]
         fake = TestBossResumeBatchToolOrchestration._batch_success_result(payloads)

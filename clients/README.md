@@ -128,6 +128,30 @@ powershell -ExecutionPolicy Bypass -File clients\scripts\register_runtime_task.p
 - **不要**做成 Windows 系统服务（SYSTEM/Session 0 无法操作用户桌面的 Chrome 与鼠标，
   任务计划的登录任务是唯一正确形态）
 
+### 可选：安装 RapidOCR 提升简历识别精度（推荐）
+
+简历读取（resume-detail / resume-batch）P2 起以 **RapidOCR 为主引擎**，机器上不可用时自动回退
+系统 WinRT OCR（零依赖可用性，不装也能用，但 WinRT 中文错字率高且字符间全是空格）。安装后
+识别质量显著提升（真机实测近乎完美 vs WinRT 满篇错字），代价是每份简历约多 20-30 秒
+（仍在 MCP timeout 600s 内）。
+
+```bash
+# 前提：机器上有 Python 3（python.org 安装时勾选 Add python.exe to PATH）
+pip install rapidocr-onnxruntime==1.4.4 Pillow   # 版本与开发 venv 对齐；模型随 wheel 内置、离线可用、无需下载
+pip install onnxruntime-directml==1.20.1         # 可选：DirectML GPU 加速（任意 DX12 显卡/核显，无需 NVIDIA），OCR 约 3 倍提速
+```
+
+- 验证：`aid-runtime doctor`（boss 子进程 doctor）应显示「OCR 引擎（简历读取）：✅ RapidOCR（python: ...，DirectML GPU 加速，单次推理实测 X.Xs）」；
+  未装 onnxruntime-directml 时显示 CPU 与纯 CPU 耗时，功能不受影响
+- 排障：DirectML 推理异常时适配器自动整批回退 CPU 重跑，无需人工干预；`AID_BOSS_OCR_DML=0` 可强制关闭 GPU 加速
+- 引擎选择（环境变量，均不需要管理员权限）：
+  - `AID_BOSS_RAPIDOCR_PY=<python.exe 路径>`：显式指定解释器（Python 装在非 PATH 位置时用；
+    缺省探测顺序 = 该 env > 仓库根 `venv/Scripts/python.exe`（仅开发布局）> PATH 上的 `python`）
+  - `AID_BOSS_OCR_ENGINE`：`auto`（缺省，自动探测；不可用或运行期失败回退 WinRT 并在 stderr
+    留一行原因）/ `rapid`（强制 RapidOCR：探测不到**或运行期批量失败**都直接报错并提示部署要求，
+    绝不静默降级——要允许回退请用 auto）/ `winrt`（强制回退系统 WinRT OCR）
+- 装好 RapidOCR 后如需强制退回 WinRT 排障，设 `AID_BOSS_OCR_ENGINE=winrt` 即可
+
 ## 七、升级 / 卸载
 
 ```bash
@@ -149,6 +173,7 @@ rmdir /s /q "%APPDATA%\aidwork-tool-runtime"   # 可选：清配置与凭证
 | 设备页不在线 | runtime 窗口是否还在运行；`--server` 地址是否正确；服务器网络是否可达 |
 | pair 报配对码无效 | 码超 5 分钟过期，重新生成 |
 | 打招呼/筛选执行失败 EXECUTION_UNKNOWN | 按工具返回的中文提示人工查看页面（多为确认弹层/风控拦截），勿连续重试 |
+| 简历 OCR 错字多 / doctor 显示 OCR 引擎为 WinRT 兜底 | 属可用兜底态；可选安装 RapidOCR 提升精度（见 §六），装后 doctor 复验 |
 | 提示付费墙（该职位无开聊权益） | BOSS 账号权益问题，切换职位或开通权益 |
 
 ---

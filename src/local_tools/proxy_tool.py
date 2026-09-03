@@ -860,8 +860,8 @@ class BossResumeDetailTool(LocalToolProxyTool):
             None,
             max_length=30,
             description=(
-                "候选人姓名（会话上下文已知时建议传入，更可靠）；"
-                "缺省 CLI 从 OCR 首行自动识别，识别失败会报错要求传参"
+                "必传：当前会话候选人的姓名（姓名唯一来源=非 OCR，"
+                "CLI 会与简历 OCR 文本交叉校验，不符会报错）"
             ),
         )
 

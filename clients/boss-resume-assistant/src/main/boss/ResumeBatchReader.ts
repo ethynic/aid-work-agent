@@ -17,6 +17,10 @@
  * 为什么逐张 re-snapshot：打开/关闭详情会触发列表重排，卡片坐标不复用；且已处理的卡按姓名去重
  * （key = name ?? `row@${按钮y}`），同名牛人会被跳过（推荐流很少出现，出现时不重复读同一人）。
  *
+ * 姓名策略（P0 防错名）：卡片 DOM 配对是唯一来源 + OCR 文本头部交叉校验（ocrNameMatches，容忍
+ * 1 字 OCR 误差）。配对失败或交叉校验不过（疑似点开详情与卡片不符）→ 该份记 failures 跳过，
+ * 绝不 OCR 猜名入库（错名简历会导致打招呼打错人，宁跳过不错存）。
+ *
  * fail-loud：首屏无卡片抛 ResumeBatchError；打开超时/读取失败记 failures 后继续下一张（尽量多收简历）；
  * 但 Escape 关不掉详情时必须 break——弹层挡住列表没法点下一张，绝不盲点。
  */
@@ -33,9 +37,10 @@ import { viewportOf } from './FilterSetter.js'
 import { CancelledError } from '../operations/types.js'
 import {
   ResumeReader,
-  extractCandidateNameFromOcr,
+  ocrNameMatches,
   locateResumeCanvas,
   type DeviceRect,
+  type OcrEngine,
   type ResumeReadResult,
 } from './ResumeReader.js'
 
@@ -47,7 +52,7 @@ export class ResumeBatchError extends Error {
 }
 
 export interface BatchCard {
-  /** DOM 配对出的候选人姓名；配对失败为 null（后续用 OCR 首行启发式兜底） */
+  /** DOM 配对出的候选人姓名（唯一来源）；配对失败为 null → 该份记 failure 跳过，绝不入库 */
   name: string | null
   /** 该行「打招呼」按钮的 y（device px，卡片去重 key 与排序用） */
   greetButtonY: number
@@ -56,7 +61,7 @@ export interface BatchCard {
 }
 
 export interface BatchResumeResult {
-  /** 最终确定的候选人姓名（DOM 配对优先，OCR 启发式兜底） */
+  /** 候选人姓名（卡片 DOM 配对唯一来源 + 已通过 OCR 文本头部交叉校验，见 ocrNameMatches） */
   name: string
   readResult: ResumeReadResult
 }
@@ -77,14 +82,18 @@ export interface ResumeBatchDeps {
     deltaY: number,
     notches: number,
   ): Promise<void>
-  /** 裁剪 + 重叠对齐 + 垂直拼接（真实实现调 scripts/cv-stitch.ps1） */
+  /** 像素级同画面确认（真实实现调 scripts/cv-segdiff.ps1）：P1 到底判定加固，透传给内部 ResumeReader */
+  sameView(a: string, b: string, rect: DeviceRect): Promise<boolean>
+  /** 裁剪 + 重叠对齐 + 垂直拼接（真实实现调 scripts/cv-stitch.ps1）；cropDir 逐段落盘供逐段 OCR */
   stitch(
     parts: string[],
     rect: DeviceRect,
     outFile: string,
-  ): Promise<{ width: number; height: number; overlaps: number[] }>
-  /** OCR 识别（真实实现调 scripts/cv-ocr.ps1） */
-  ocr(imgFile: string): Promise<string>
+    cropDir?: string,
+  ): Promise<{ width: number; height: number; overlaps: number[]; seamMis: number[] }>
+  /** 批量 OCR（真实实现 = operations/bossResumeDetail.ts 的 ocrBatch：RapidOCR 主 + WinRT 兜底）；
+   *  透传给内部 ResumeReader（P2 起一次调用处理一份简历的全部段） */
+  ocrBatch(files: string[]): Promise<{ texts: string[]; engine: OcrEngine }>
   /** 协作式取消信号：每张卡循环顶部检查，触发即抛 CancelledError */
   signal?: AbortSignal
   /** 每成功读完 1 份简历回调一次（done 为累计成功数） */
@@ -159,7 +168,7 @@ export class ResumeBatchReader {
   /**
    * 批量读取：逐个点开当前视口牛人卡片 → 复用 ResumeReader 读取 → Escape 关闭 → 下一张。
    * 入口先关闭残留的简历详情弹层（boss_resume_detail 读完不关，详见方法体注释），关不掉 fail-loud。
-   * 单张失败（打开超时/读取失败/姓名无法确定）记 failures 后继续；Escape 关不掉详情时 break
+   * 单张失败（打开超时/读取失败/姓名无法确定/姓名交叉校验不过）记 failures 后继续；Escape 关不掉详情时 break
    * （弹层挡住列表没法点下一张）。signal 取消抛 CancelledError（已读的份数不返回，由调用方按 CANCELLED 处理）。
    */
   async readBatch(opts: { limit: number; saveDir?: string }): Promise<{
@@ -234,8 +243,9 @@ export class ResumeBatchReader {
         snapshot: this.deps.snapshot,
         captureFullpage: this.deps.captureFullpage,
         wheel: (deltaY, notches) => this.deps.wheel(rect!, viewport, deltaY, notches),
+        sameView: (a, b) => this.deps.sameView(a, b, rect!),
         stitch: this.deps.stitch,
-        ocr: this.deps.ocr,
+        ocrBatch: this.deps.ocrBatch,
         signal: this.deps.signal,
         sleep: this.sleep,
       })
@@ -259,10 +269,14 @@ export class ResumeBatchReader {
         continue
       }
 
-      // 3. 姓名：DOM 配对优先，OCR 首行启发式兜底；都无 → 不入 resumes（绝不瞎猜入库）
-      const name = card.name || extractCandidateNameFromOcr(result.text) || null
-      if (!name) {
-        failures.push({ name: null, error: '未能确定候选人姓名（DOM 配对与 OCR 启发式均失败）' })
+      // 3. 姓名：卡片 DOM 配对唯一来源（绝无 OCR 兜底——OCR 猜名错字率不可控，错名入库后打招呼
+      //    会打错人）。配对失败 → 记 failure 跳过该份不入库，提示改用 boss_resume_detail 显式传名读取
+      if (!card.name) {
+        failures.push({
+          name: null,
+          error:
+            '未能确定候选人姓名（卡片 DOM 配对失败）：已跳过不入库；可人工确认姓名后用 boss_resume_detail 显式传名读取',
+        })
         const closed = await this.tryCloseDetail()
         if (!closed) {
           failures.push({ name: null, error: 'Escape 后简历详情未关闭，无法继续处理后续卡片' })
@@ -270,6 +284,22 @@ export class ResumeBatchReader {
         }
         continue
       }
+
+      // 3b. 张冠李戴防护交叉校验：卡片姓名必须在 OCR 文本头部模糊命中（容忍 1 字 OCR 误差）。
+      //     未命中 = 疑似点开的详情与卡片不符（弹层残留/点击错位）→ 该份记 failure 跳过，宁跳过不错存
+      if (!ocrNameMatches(card.name, result.text)) {
+        failures.push({
+          name: card.name,
+          error: `姓名交叉校验未通过（卡片配对「${card.name}」未在简历 OCR 文本头部命中，疑似点开详情与卡片不符）：已跳过不入库`,
+        })
+        const closed = await this.tryCloseDetail()
+        if (!closed) {
+          failures.push({ name: card.name, error: 'Escape 后简历详情未关闭，无法继续处理后续卡片' })
+          break
+        }
+        continue
+      }
+      const name = card.name
 
       // 4. 关闭详情；关不掉时当前份仍收进 resumes（内容有效）但必须停止
       const closed = await this.tryCloseDetail()

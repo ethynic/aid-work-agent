@@ -6,15 +6,15 @@
  * 读取管线（Win32 滚轮回顶 → 分段截图 → 拼接 → OCR，见 ResumeBatchReader 头注释）→ Escape 关闭。
  *
  * 只读（effect=none），但每份简历的滚动借用真实鼠标约 30 秒，执行期间用户手不能碰鼠标。
- * 输出契约：data = { resumes: [单份契约 payload（buildResumePayload，与 boss_resume_detail 同契约）],
- * failures: [{name, error}], attempted }。云端 BossResumeBatchTool 逐份入简历库。
- * 单份失败（打开超时/读取失败/姓名无法确定）记 failures 后继续下一份；全部失败仍 success（信息在 data）。
+ * 输出契约：data = { resumes: [单份契约 payload（buildResumePayload，与 boss_resume_detail 同契约，
+ * name_source='dom'）], failures: [{name, error}], attempted }。云端 BossResumeBatchTool 逐份入简历库。
+ * 单份失败（打开超时/读取失败/姓名无法确定/姓名交叉校验不过）记 failures 后继续下一份；全部失败仍 success（信息在 data）。
  */
 import fsp from 'node:fs/promises'
 import { ResumeBatchReader } from '../boss/ResumeBatchReader.js'
 import { JobSwitcher, FILTER_BUTTON_PATTERN } from '../boss/JobSwitcher.js'
 import { viewportOf } from '../boss/FilterSetter.js'
-import { buildResumePayload, wheelAt, stitchParts, ocrImage } from './bossResumeDetail.js'
+import { buildResumePayload, wheelAt, sameViewAt, stitchParts, ocrBatch } from './bossResumeDetail.js'
 import {
   defaultSessionFactory,
   runBossOperation,
@@ -86,8 +86,9 @@ export function createBossResumeBatchOperation(
             pressEscape: session.pressEscape,
             captureFullpage: session.captureFullpage,
             wheel: (rect, viewport, deltaY, notches) => wheelAt(rect, viewport, deltaY, notches),
+            sameView: (a, b, rect) => sameViewAt(a, b, rect),
             stitch: stitchParts,
-            ocr: ocrImage,
+            ocrBatch,
             signal: ctx.signal,
             onProgress: (done) => {
               ctx.progress({
@@ -111,10 +112,21 @@ export function createBossResumeBatchOperation(
               message += `，失败 ${result.failures.length} 个（第一个：${first.name ?? '未知姓名'}—${first.error}）`
             }
           }
+          // P1 接缝质量警告：任一份存在可疑接缝（错位/文本未对上）→ 提示人工核对（元信息随各份 payload 带）
+          const seamSuspectCount = result.resumes.filter(
+            (r) => r.readResult.suspectSeams.length > 0 || r.readResult.textSeamUnmatched.length > 0,
+          ).length
+          if (seamSuspectCount > 0) {
+            const namesSuspect = result.resumes
+              .filter((r) => r.readResult.suspectSeams.length > 0 || r.readResult.textSeamUnmatched.length > 0)
+              .map((r) => r.name)
+              .join('、')
+            message += `；⚠️ ${seamSuspectCount} 份存在可疑拼接接缝（${namesSuspect}）：OCR 文本可能有重复/缺失，请人工核对拼接图`
+          }
           return {
             message,
             data: {
-              resumes: result.resumes.map((r) => buildResumePayload(r.name, jobName, r.readResult)),
+              resumes: result.resumes.map((r) => buildResumePayload(r.name, jobName, r.readResult, 'dom')),
               failures: result.failures,
               attempted: result.attempted,
             },

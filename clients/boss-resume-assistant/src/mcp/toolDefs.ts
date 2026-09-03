@@ -248,15 +248,16 @@ export const TOOL_DEFS: BossToolDef[] = [
     title: '读取候选人简历详情入库',
     description:
       '读取 BOSS 直聘当前打开的候选人在线简历详情（推荐牛人页或沟通页均可，前提已点开候选人详情，否则 WRONG_PAGE）。' +
-      '简历是 canvas 像素渲染（DOM 抓不到文字），通过「滚动分段截图 → 重叠拼接 → Windows OCR」提取。' +
-      '结果按简历库契约返回：candidate_name（入参优先，缺省从 OCR 首行自动识别，识别失败报错）、' +
-      'job_name（推荐页当前招聘职位）、ocr_text 全文（Windows OCR 水平，可能含 ~20% 错字）、' +
+      '简历是 canvas 像素渲染（DOM 抓不到文字），通过「滚动分段截图 → 重叠拼接 → OCR（RapidOCR 主引擎，机器未装时回退 Windows OCR）」提取。' +
+      '结果按简历库契约返回：candidate_name（必传，缺省直接报错）、' +
+      'job_name（推荐页当前招聘职位）、ocr_text 全文（RapidOCR 时近乎原文；WinRT 兜底时可能含 ~20% 错字）、' +
       'images 拼接长图 base64（供云端入库，图片绝不进对话上下文）。' +
+      '姓名来源=非 OCR（显式入参+OCR 交叉校验）：所传姓名未在简历 OCR 文本头部命中会报错（疑似打开的不是该候选人的简历）。' +
       '只读：无外部写副作用；但滚动借用真实鼠标约 1-2 秒，操作期间勿动鼠标、勿遮挡 Chrome 窗口。' +
       '可选 save_image_to 保存拼接长图（PNG）。',
     zodShape: {
       candidate_name: z.string().min(1).max(30).optional().describe(
-        '候选人姓名（会话上下文已知时建议传入，更可靠）；缺省从 OCR 首行自动识别，识别失败报错要求传参',
+        '必传：智能体会话上下文已知的候选人姓名；未传直接报错。姓名来源=非 OCR（显式入参+OCR 交叉校验）',
       ),
       save_image_to: z.string().min(1).optional().describe('可选：拼接长图保存路径（PNG）；缺省不保留图片'),
     },
@@ -267,9 +268,10 @@ export const TOOL_DEFS: BossToolDef[] = [
     title: '批量读取牛人简历入库',
     description:
       '在 BOSS 直聘「推荐牛人」页逐个点开当前视口的牛人卡片 → 读取在线简历（滚动分段截图拼接 OCR）→ 自动关闭 → 下一份。' +
-      '结果 resumes 数组按简历库契约返回（candidate_name 从卡片行 DOM 配对，失败用 OCR 首行启发式兜底；job_name 取当前招聘职位；' +
+      '结果 resumes 数组按简历库契约返回（姓名=卡片 DOM 配对（唯一来源）+ OCR 文本交叉校验，' +
+      '配对失败或校验不过的记 failures 跳过，绝不错名入库；job_name 取当前招聘职位；' +
       '含 ocr_text 全文与拼接长图 base64），云端自动逐份存入简历库，只返回紧凑摘要。' +
-      '单份失败（打开超时/读取失败/姓名无法确定）记入 failures 后继续下一份。' +
+      '单份失败（打开超时/读取失败/姓名无法确定/姓名交叉校验不过）记入 failures 后继续下一份。' +
       '前置要求：当前在推荐牛人列表页，否则返回 WRONG_PAGE。' +
       '只读：无外部写副作用；但每份简历滚动借用真实鼠标约 30 秒，操作期间勿动鼠标、勿遮挡 Chrome 窗口。',
     zodShape: {

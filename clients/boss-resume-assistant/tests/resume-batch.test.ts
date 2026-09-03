@@ -1,11 +1,13 @@
 /**
  * ResumeBatchReader 单测：推荐牛人页批量「点卡片 → 读简历 → Escape 关闭 → 下一张」链路。
- * fake 注入 snapshot/clickBrowse/pressEscape/captureFullpage/wheel/stitch/ocr（参照 resume-reader.test.ts）。
+ * fake 注入 snapshot/clickBrowse/pressEscape/captureFullpage/wheel/sameView/stitch/ocr（参照 resume-reader.test.ts）。
  *
  * 快照构造按真机实证（2026-08-17，视口 1249x1277）：卡片行 = 「姓名(342,y-8) + 活跃状态(400,y-8)」
  * 同行 +「打招呼」按钮(1162,y)，行距 184px；点击点 = 卡片主体列 (600, y+70)；详情 canvas 760x1264@(168,40)。
  * 状态机 fake：clickBrowse 把快照切到 canvas 态（openTimeout 卡保持列表态）、pressEscape 切回列表态
  * （closeFail 卡保持 canvas 态），按 scripts 脚本化每张卡的行为。
+ * 默认 OCR 文本头部按卡片姓名生成（defaultOcr，真机形如空格打散）——姓名交叉校验（ocrNameMatches）
+ * 默认通过；要测「校验不过」用 script.ocrText 给出不含卡片名的头部。
  */
 import assert from 'node:assert/strict'
 import test from 'node:test'
@@ -24,7 +26,8 @@ import {
   OPEN_CLICK_ATTEMPTS,
 } from '../src/main/boss/ResumeBatchReader.js'
 import { buildResumePayload } from '../src/main/operations/bossResumeDetail.js'
-import type { DeviceRect } from '../src/main/boss/ResumeReader.js'
+import { cleanOcrText } from '../src/main/boss/ResumeReader.js'
+import type { DeviceRect, ResumeReadResult } from '../src/main/boss/ResumeReader.js'
 import type { DomSnapshot, ClickPoint } from '../src/main/boss/domSnapshot.js'
 
 /** 卡片行定义：姓名（null = DOM 配对失败）+ 打招呼按钮中心 y */
@@ -40,7 +43,12 @@ const GREET_STRING = '\n                  打招呼'
 const CANVAS_BOUNDS: [number, number, number, number] = [168, 40, 760, 1264] // 真机：详情 iframe canvas
 const CANVAS_RECT: DeviceRect = { x: 168, y: 40, w: 760, h: 1264 }
 const STITCHED_PNG = Buffer.from('fake-stitched-png-bytes')
-const DEFAULT_OCR = '张三 男 26岁 本科\nPHP 开发 5 年\n某科技公司 后端工程师'
+
+/** 默认 OCR 文本：头部按卡片姓名生成（真机形如姓名被空格打散），保证姓名交叉校验通过 */
+function defaultOcr(name: string | null): string {
+  const scattered = (name ?? '某').split('').join(' ')
+  return `最 近 关 注 ${scattered} 活 跃 24 本 科\nPHP 开发 5 年\n某科技公司 后端工程师`
+}
 
 /** 构造快照：根视口 1249x1277 + 「筛选」+ 卡片行（姓名/活跃状态/噪音/打招呼按钮）+ 可选大 canvas */
 function buildSnap(rows: Row[], opts: { canvas?: boolean } = {}): DomSnapshot {
@@ -116,7 +124,7 @@ interface CardScript {
   readError?: boolean
   /** Escape 后 canvas 不消失（关闭失败） */
   closeFail?: boolean
-  /** 本卡 OCR 文本（缺省 DEFAULT_OCR） */
+  /** 本卡 OCR 文本（缺省 defaultOcr(卡片姓名)：头部含姓名，交叉校验通过） */
   ocrText?: string
 }
 
@@ -132,10 +140,12 @@ function makeBatch(
     escapes: 0,
     wheels: [] as Array<{ deltaY: number; notches: number; rect: DeviceRect }>,
     captures: 0,
-    stitchCalls: [] as Array<{ parts: string[]; rect: DeviceRect; outFile: string }>,
-    ocrTexts: [] as string[],
+    sameViewCalls: [] as Array<{ a: string; b: string; rect: DeviceRect }>,
+    stitchCalls: [] as Array<{ parts: string[]; rect: DeviceRect; outFile: string; cropDir?: string }>,
+    ocrBatchCalls: [] as string[][],
     progress: [] as Array<[number, number]>,
     snapshotCount: 0,
+    seamMis: [] as number[],
   }
   let state: 'list' | 'canvas' = opts.initialState ?? 'list'
   let cardIdx = 0 // 当前正在处理的卡片序号（readBatch 逐卡推进；重点同一张卡不推进）
@@ -164,20 +174,38 @@ function makeBatch(
     },
     captureFullpage: async () => {
       f.captures++
-      return Buffer.alloc(1000) // 相邻两次字节相同 → 单段到底
+      return Buffer.alloc(1000) // 相邻两次字节相同 → sameView 确认 → 再滚再截仍相同 → 单段到底
     },
     wheel: async (rect, _viewport, deltaY, notches) => {
       f.wheels.push({ deltaY, notches, rect })
     },
-    stitch: async (parts, rect, outFile) => {
-      f.stitchCalls.push({ parts, rect, outFile })
-      await fs.writeFile(outFile, STITCHED_PNG)
-      return { width: 760, height: 2400, overlaps: [746] }
+    sameView: async (a, b, rect) => {
+      f.sameViewCalls.push({ a, b, rect })
+      return true // 恒同画面（配合恒定字节数 → 连续两次相同即到底）
     },
-    ocr: async (imgFile) => {
-      f.ocrTexts.push(imgFile)
+    stitch: async (parts, rect, outFile, cropDir) => {
+      f.stitchCalls.push({ parts, rect, outFile, cropDir })
+      await fs.writeFile(outFile, STITCHED_PNG)
+      if (cropDir) {
+        await fs.mkdir(cropDir, { recursive: true })
+        for (let i = 0; i < parts.length; i++) {
+          await fs.writeFile(path.join(cropDir, `crop-${String(i).padStart(2, '0')}.png`), Buffer.alloc(64))
+        }
+      }
+      const seams = Math.max(0, parts.length - 1)
+      return {
+        width: 760,
+        height: 2400,
+        overlaps: Array.from({ length: seams }, () => 746),
+        seamMis: Array.from({ length: seams }, (_, i) => f.seamMis[i] ?? 0.08),
+      }
+    },
+    ocrBatch: async (files) => {
+      f.ocrBatchCalls.push(files)
       const s = scriptAt(cardIdx)
-      return s.readError ? '   \n\t' : (s.ocrText ?? DEFAULT_OCR)
+      // 单段到底（恒定字节数 fake）→ files 只有 1 个 crop；文本按卡片脚本对位
+      const text = s.readError ? '   \n\t' : (s.ocrText ?? defaultOcr(rows[cardIdx]?.name ?? null))
+      return { texts: files.map(() => text), engine: 'winrt' }
     },
     onProgress: (done, total) => {
       f.progress.push([done, total])
@@ -219,7 +247,7 @@ test('locateCards：无打招呼按钮 → 空数组（readBatch 首轮会转 Re
 
 // ---------- readBatch 主链路 ----------
 
-test('① 正常 2 份（limit 2）：逐卡点击/关闭顺序、resumes 姓名与契约 payload base64', async () => {
+test('① 正常 2 份（limit 2）：逐卡点击/关闭顺序、resumes 姓名与契约 payload base64 + name_source=dom', async () => {
   const { reader, f } = makeBatch([ROW1, ROW2])
   const result = await reader().readBatch({ limit: 2 })
   assert.deepEqual(result.failures, [])
@@ -234,9 +262,19 @@ test('① 正常 2 份（limit 2）：逐卡点击/关闭顺序、resumes 姓名
     result.resumes.map((r) => r.name),
     ['刘草威', '张三丰'],
   )
-  assert.equal(result.resumes[0]!.readResult.text, DEFAULT_OCR)
-  assert.equal(result.resumes[0]!.readResult.segments, 1) // 相邻截图字节相同 → 单段到底
+  // P2：OCR 文本经 cleanOcrText 清理字符间空格后入 readResult（fake 文本带 WinRT 式空格打散）
+  assert.equal(result.resumes[0]!.readResult.text, cleanOcrText(defaultOcr('刘草威')))
+  assert.equal(result.resumes[0]!.readResult.ocrEngine, 'winrt') // 引擎标识随 ocrBatch 透传
+  assert.equal(result.resumes[0]!.readResult.segments, 1) // 相邻截图字节相同 → sameView 确认到底 → 单段
   assert.deepEqual(result.resumes[0]!.readResult.imageBuffer, STITCHED_PNG)
+  // P1 元信息随 readResult 返回（单段无接缝）：供 buildResumePayload 透传
+  assert.deepEqual(result.resumes[0]!.readResult.seamMis, [])
+  assert.deepEqual(result.resumes[0]!.readResult.suspectSeams, [])
+  assert.deepEqual(result.resumes[0]!.readResult.textSeamUnmatched, [])
+  assert.equal(result.resumes[0]!.readResult.ocrEmptySegments, 0)
+  // sameView 透传给内部 ResumeReader（rect = 详情画布 device 区域，同 wheel 模式）
+  assert.equal(f.sameViewCalls.length, 4) // 每份 2 次（候选 + 确认），2 份
+  f.sameViewCalls.forEach((c) => assert.deepEqual(c.rect, CANVAS_RECT))
   // 滚动点 = canvas 中心（wheel 回调收到的 rect 即详情画布 device 区域）
   assert.ok(f.wheels.length >= 2)
   assert.deepEqual(f.wheels[0]!.rect, CANVAS_RECT)
@@ -245,25 +283,59 @@ test('① 正常 2 份（limit 2）：逐卡点击/关闭顺序、resumes 姓名
     [1, 2],
     [2, 2],
   ])
-  // 单份契约 payload：images[0].base64 = fake stitch 落盘的假 PNG
-  const payload = buildResumePayload('刘草威', 'PHP开发工程师', result.resumes[0]!.readResult)
+  // 单份契约 payload：name_source='dom'（云端最后防线：非 OCR 来源才许入库），images[0].base64 = fake stitch 落盘的假 PNG
+  const payload = buildResumePayload('刘草威', 'PHP开发工程师', result.resumes[0]!.readResult, 'dom')
   assert.equal(payload.candidate_name, '刘草威')
+  assert.equal(payload.name_source, 'dom')
   assert.equal(payload.job_name, 'PHP开发工程师')
-  assert.equal(payload.ocr_text, DEFAULT_OCR)
+  assert.equal(payload.ocr_text, cleanOcrText(defaultOcr('刘草威')))
+  assert.equal(payload.ocr_engine, 'winrt') // P2：实际引擎随 payload 元信息透传
   const images = payload.images as Array<{ base64: string }>
   assert.equal(images[0]!.base64, STITCHED_PNG.toString('base64'))
+  // P1 接缝质量元信息透传（云端契约不读取，已有先例）：单段无接缝 → 空数组/0
+  assert.deepEqual(payload.seam_mis, [])
+  assert.deepEqual(payload.suspect_seams, [])
+  assert.deepEqual(payload.text_seam_unmatched, [])
+  assert.equal(payload.ocr_empty_segments, 0)
 })
 
-test('② DOM 姓名配对失败 + OCR 首行启发式成功 → 用启发式姓名（康嘉润）', async () => {
+test('② DOM 姓名配对失败（无名卡）→ 记 failure 跳过不入库（绝无 OCR 猜名兜底）', async () => {
   const noName: Row = { name: null, buttonY: 146 }
   const { reader, f } = makeBatch([noName], [{ ocrText: '康嘉润 活跃\n本科 5 年 后端' }])
+  const result = await reader().readBatch({ limit: 1 })
+  assert.deepEqual(result.resumes, []) // 不入 resumes
+  assert.equal(result.failures.length, 1)
+  assert.equal(result.failures[0]!.name, null)
+  assert.match(result.failures[0]!.error, /未能确定候选人姓名（卡片 DOM 配对失败）/)
+  assert.match(result.failures[0]!.error, /已跳过不入库/)
+  assert.match(result.failures[0]!.error, /boss_resume_detail/)
+  assert.equal(f.clicks.length, 1) // 卡片仍被点开读取（姓名判定在读完后）
+  assert.equal(f.escapes, 1) // 失败路径也先关详情再 continue
+})
+
+test('②b 姓名 OCR 交叉校验不通过（OCR 头部是别人的名字，疑似点开详情与卡片不符）→ failure 不入库', async () => {
+  const { reader, f } = makeBatch([ROW1], [{ ocrText: '最 近 关 注 欧 阳 锦 绣 活 跃 24 本 科\n后端 5 年' }])
+  const result = await reader().readBatch({ limit: 1 })
+  assert.deepEqual(result.resumes, [])
+  assert.equal(result.failures.length, 1)
+  assert.equal(result.failures[0]!.name, '刘草威')
+  assert.match(result.failures[0]!.error, /姓名交叉校验未通过/)
+  assert.match(result.failures[0]!.error, /刘草威/)
+  assert.match(result.failures[0]!.error, /疑似点开详情与卡片不符/)
+  assert.match(result.failures[0]!.error, /已跳过不入库/)
+  assert.equal(f.clicks.length, 1)
+  assert.equal(f.escapes, 1)
+})
+
+test('②c 姓名 OCR 交叉校验容忍 1 字误差（OCR 错字 "刘苇威" vs 卡片名 "刘草威"）→ 正常入库', async () => {
+  const row: Row = { name: '刘草威', buttonY: 146 }
+  const { reader } = makeBatch([row], [{ ocrText: '最 近 关 注 刘 苇 威 活 跃 24 本 科\nPHP 5 年' }])
   const result = await reader().readBatch({ limit: 1 })
   assert.deepEqual(result.failures, [])
   assert.deepEqual(
     result.resumes.map((r) => r.name),
-    ['康嘉润'],
+    ['刘草威'],
   )
-  assert.equal(f.clicks.length, 1)
 })
 
 test('③ 打开超时（点后始终无 canvas）→ failures 记录后继续下一张（下一张成功）', async () => {
@@ -354,11 +426,13 @@ test('⑨ save_dir：每份拼接图按姓名落盘（readResume 收到 saveImag
     assert.equal(result.resumes.length, 2)
     assert.equal(existsSync(path.join(saveDir, '刘草威.png')), true)
     assert.equal(existsSync(path.join(saveDir, '张三丰.png')), true)
-    // DOM 配对失败的无名卡用「无名」占位文件名
+    // DOM 配对失败的无名卡：图仍按「无名」占位落盘（姓名判定在读完后），但绝不入 resumes
     const noName: Row = { name: null, buttonY: 146 }
     const r2 = makeBatch([noName], [{ ocrText: '王五 活跃\n本科' }])
-    await r2.reader().readBatch({ limit: 1, saveDir })
+    const result2 = await r2.reader().readBatch({ limit: 1, saveDir })
     assert.equal(existsSync(path.join(saveDir, '无名.png')), true)
+    assert.deepEqual(result2.resumes, [])
+    assert.equal(result2.failures.length, 1)
   } finally {
     await fs.rm(saveDir, { recursive: true, force: true }).catch(() => {})
   }
@@ -391,4 +465,33 @@ test('⑪ 残留详情弹层 Escape 关不掉 → ResumeBatchError（fail-loud�
   assert.equal(f.clicks.length, 0) // 绝不带弹层盲点卡片
   assert.equal(f.captures, 0)
   assert.equal(f.escapes, 1) // 只尝试过关残留弹层
+})
+
+// ---------- P1 接缝质量元信息 → 云端契约 payload 透传 ----------
+
+test('⑫ buildResumePayload 冒烟：suspect_seams/text_seam_unmatched/ocr_empty_segments/seam_mis/ocr_engine 全量透传', () => {
+  const fakeResult: ResumeReadResult = {
+    text: '张三的简历全文',
+    chars: 7,
+    segments: 3,
+    bottomReached: false,
+    width: 727,
+    height: 3200,
+    imageBuffer: Buffer.from('png'),
+    seamMis: [0.5, 0.08],
+    suspectSeams: [1],
+    textSeamUnmatched: [2],
+    ocrEmptySegments: 1,
+    ocrEngine: 'rapid',
+    ocrAccel: 'cpu',
+  }
+  const payload = buildResumePayload('张三', null, fakeResult, 'param')
+  assert.deepEqual(payload.seam_mis, [0.5, 0.08])
+  assert.deepEqual(payload.suspect_seams, [1])
+  assert.deepEqual(payload.text_seam_unmatched, [2])
+  assert.equal(payload.ocr_empty_segments, 1)
+  assert.equal(payload.bottom_reached, false)
+  assert.equal(payload.ocr_chars, 7)
+  assert.equal(payload.ocr_engine, 'rapid')
+  assert.equal(payload.ocr_accel, 'cpu')
 })

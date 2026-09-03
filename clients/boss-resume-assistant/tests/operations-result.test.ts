@@ -200,18 +200,35 @@ test('boss_interview_demo：remark 为空/超 140 字 → INVALID_ARGUMENT', asy
   assert.equal(f.calls.length, 0)
 })
 
+test('boss_resume_detail：未传 candidate_name → INVALID_ARGUMENT（validate 阶段 fail-fast），不连 Chrome', async () => {
+  const f = fakeFactory([])
+  const op = createBossResumeDetailOperation(f.factory)
+  const r = await op.execute({}, silentCtx())
+  assert.equal(r.success, false)
+  assert.equal(r.code, 'INVALID_ARGUMENT')
+  assert.equal(r.effect, 'none')
+  assert.equal(r.retryable, false)
+  assert.match(r.message, /未传 candidate_name/)
+  assert.equal(f.calls.length, 0) // 读取前即报错，绝不借用鼠标滚 30 秒才发现缺参
+  // 空白姓名同样视为未传（trim 后为空）
+  const r2 = await op.execute({ candidate_name: '   ' }, silentCtx())
+  assert.equal(r2.code, 'INVALID_ARGUMENT')
+  assert.equal(f.calls.length, 0)
+})
+
 test('boss_resume_detail：save_image_to 空白 → INVALID_ARGUMENT，不连 Chrome', async () => {
   const f = fakeFactory([])
   const op = createBossResumeDetailOperation(f.factory)
-  const r = await op.execute({ save_image_to: '   ' }, silentCtx())
+  const r = await op.execute({ candidate_name: '张三', save_image_to: '   ' }, silentCtx())
   assert.equal(r.code, 'INVALID_ARGUMENT')
+  assert.match(r.message, /save_image_to/)
   assert.equal(f.calls.length, 0)
 })
 
 test('boss_resume_detail：未打开简历详情（无大 canvas）→ WRONG_PAGE，不滚不截', async () => {
   const f = fakeFactory([snapWithTexts(['沟通', '消息'])])
   const op = createBossResumeDetailOperation(f.factory)
-  const r = await op.execute({}, silentCtx())
+  const r = await op.execute({ candidate_name: '张三' }, silentCtx())
   assert.equal(r.success, false)
   assert.equal(r.code, 'WRONG_PAGE')
   assert.equal(r.retryable, true)

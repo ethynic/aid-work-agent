@@ -1,5 +1,5 @@
 # Crop + overlap-align + vertical stitch of full-page screenshot segments (design doc 10.8).
-# Usage: powershell -File scripts/cv-stitch.ps1 -Parts "a.png,b.png,c.png" -X 0 -Y 0 -W 727 -H 1237 -Out stitched.png
+# Usage: powershell -File scripts/cv-stitch.ps1 -Parts "a.png,b.png,c.png" -X 0 -Y 0 -W 727 -H 1237 -Out stitched.png [-CropDir dir]
 #
 # Pipeline (all GDI+/.NET, zero third-party deps, no Python in this npm package):
 #   1. Each input is a full-page PNG; crop the canvas region [X,Y,W,H] via Bitmap.Clone.
@@ -15,8 +15,13 @@
 #      downscaled copies (width 180, x step 4, y step 3, o step 1) then o is restored
 #      with o = round(o_small * origWidth / 180). ~4px accuracy is enough.
 #   4. Vertical stitch: total height = h0 + sum(hi - overlap_i), Graphics.DrawImage per part.
+#   5. Optional -CropDir: save each part's cropped canvas region as crop-00.png..crop-NN.png
+#      (zero-padded 2 digits, index matches the Parts order; dir is created if missing).
+#      The Node caller OCRs each crop separately (P1): one stitched long image can exceed
+#      the local WinRT OCR MaxImageDimension (10000px) and fails as a single point.
 #
-# stdout: one "overlapNN=<rows> mis=<rate>" line per seam + final "stitched=<w>x<h>".
+# stdout: one "overlapNN=<rows> mis=<rate>" line per seam + "crops=<n>" (with -CropDir)
+#   + final "stitched=<w>x<h>".
 #   Top-of-resume live elements ("active"/"just now") can push seam 1 mismatch up to
 #   ~0.15; that is acceptable and NOT a failure.
 # Exit codes: 0=ok; 1=file/IO or image error; 2=bad params
@@ -26,7 +31,8 @@ param(
   [Parameter(Mandatory=$true)][int]$Y,
   [Parameter(Mandatory=$true)][int]$W,
   [Parameter(Mandatory=$true)][int]$H,
-  [Parameter(Mandatory=$true)][string]$Out
+  [Parameter(Mandatory=$true)][string]$Out,
+  [string]$CropDir = ''
 )
 
 if ($W -le 0 -or $H -le 0) { Write-Error "W/H must be positive (got ${W}x${H})"; exit 2 }
@@ -147,6 +153,27 @@ try {
     $mis = 0.0
     $overlaps[$i - 1] = [CvStitcher]::FindOverlap($crops[$i - 1], $crops[$i], [ref]$mis)
     Write-Output ("overlap{0:d2}={1} mis={2}" -f $i, $overlaps[$i - 1], $mis.ToString('F2', [System.Globalization.CultureInfo]::InvariantCulture))
+  }
+
+  # Optional per-segment crop dump (P1 segment-wise OCR); done before the stitch block
+  # below because for n=1 the crop bitmap ownership moves to $result and gets disposed.
+  if ($CropDir -ne '') {
+    try {
+      if (-not (Test-Path -LiteralPath $CropDir)) {
+        New-Item -ItemType Directory -Path $CropDir -Force | Out-Null
+      }
+      if (-not (Test-Path -LiteralPath $CropDir -PathType Container)) {
+        Write-Error "CropDir exists but is not a directory: $CropDir"; exit 1
+      }
+      for ($i = 0; $i -lt $n; $i++) {
+        $cropPath = Join-Path $CropDir ("crop-{0:d2}.png" -f $i)
+        $crops[$i].Save($cropPath, [System.Drawing.Imaging.ImageFormat]::Png)
+      }
+      Write-Output ("crops={0}" -f $n)
+    } catch {
+      Write-Error ("saving crops to ${CropDir} failed: " + $_.Exception.Message)
+      exit 1
+    }
   }
 
   if ($n -eq 1) {

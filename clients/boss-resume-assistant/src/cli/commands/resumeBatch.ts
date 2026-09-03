@@ -25,7 +25,10 @@ interface ResumePayloadView {
   candidate_name?: unknown
   ocr_text?: unknown
   ocr_chars?: unknown
+  ocr_engine?: unknown
   job_name?: unknown
+  suspect_seams?: unknown
+  text_seam_unmatched?: unknown
 }
 
 export async function resumeBatchCommand(opts: ResumeBatchCommandOptions): Promise<number> {
@@ -40,7 +43,15 @@ export async function resumeBatchCommand(opts: ResumeBatchCommandOptions): Promi
       const name = typeof r.candidate_name === 'string' ? r.candidate_name : '?'
       const chars = typeof r.ocr_chars === 'number' ? r.ocr_chars : String(r.ocr_text ?? '').length
       const job = typeof r.job_name === 'string' ? ` · ${r.job_name}` : ''
-      console.log(`\n===== ${name}${job}（OCR ${chars} 字）=====`)
+      // P1 接缝质量标记（详细序号在 payload 元信息里）：存在可疑接缝时提示人工核对该份
+      const seamSuspect =
+        (Array.isArray(r.suspect_seams) && (r.suspect_seams as number[]).length > 0) ||
+        (Array.isArray(r.text_seam_unmatched) && (r.text_seam_unmatched as number[]).length > 0)
+      const seamMark = seamSuspect ? ' ⚠️ 可疑拼接接缝，请人工核对' : ''
+      // P2：OCR 引擎（rapid 主 / winrt 兜底）；未知值不显示（宽容渲染）
+      const engineMark =
+        r.ocr_engine === 'rapid' ? ' · RapidOCR' : r.ocr_engine === 'winrt' ? ' · 系统WinRT' : ''
+      console.log(`\n===== ${name}${job}（OCR ${chars} 字${engineMark}）${seamMark}=====`)
       const text = typeof r.ocr_text === 'string' ? r.ocr_text : ''
       // 批量不打印全文（太长）：每份只打前 200 字预览
       console.log(text.slice(0, 200) + (text.length > 200 ? '…（后文省略，完整内容见 --save-dir 或简历库）' : ''))
