@@ -1,6 +1,6 @@
 {
   "name": "agent-tool-runtime",
-  "version": "0.2.10",
+  "version": "0.2.11",
   "engines": {
     "node": ">=20"
   },
@@ -13,7 +13,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.main.json",
     "test": "npm run build:main && node scripts/run-tests.mjs",
     "cli": "npm run build:main && node dist/src/cli.js",
-    "prepack": "npm --prefix ../boss-resume-assistant run build:main && npm run build:main && npm install --install-links",
+    "prepack": "npm --prefix ../boss-resume-assistant run build:ocr-python --if-present && npm --prefix ../boss-resume-assistant run build:main && npm run build:main && npm install --install-links",
     "postpack": "npm install"
   },
   "dependencies": {

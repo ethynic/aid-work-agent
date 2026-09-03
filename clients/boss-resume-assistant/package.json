@@ -1,6 +1,6 @@
 {
   "name": "boss-resume-assistant",
-  "version": "0.2.10",
+  "version": "0.2.11",
   "engines": {
     "node": ">=20"
   },
@@ -9,6 +9,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.main.json",
     "build:main": "tsc -p tsconfig.main.json",
+    "build:ocr-python": "node scripts/build-ocr-python.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.main.json",
     "test": "npm run build:main && node scripts/run-tests.mjs",
     "cli": "npm run build:main && node dist/src/cli/index.js",
@@ -29,7 +30,8 @@
   },
   "files": [
     "dist",
-    "scripts"
+    "scripts",
+    "ocr-python"
   ],
   "private": "true"
 }

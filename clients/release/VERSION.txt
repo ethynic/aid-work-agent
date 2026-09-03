@@ -1,3 +1,15 @@
+agent-tool-runtime 0.2.11（内含 boss-cli 0.2.11）
+构建日期：2026-09-03
+
+0.2.11 相对 0.2.10 的变化（识别引擎内置化——客户机零 Python 依赖，装机一条命令）
+- **识别引擎（RapidOCR + GPU 加速）已内置在安装包中**：无需安装 Python、无需 pip 装
+  任何包，装完 Runtime 即获得高质量 OCR（此前需手动装 Python + pip 包才能启用）
+- 内置环境自带 DirectML GPU 加速（普通办公机核显即可），OCR 约 3 倍于 CPU 模式；
+  驱动异常自动回退 CPU 重跑，`AID_BOSS_OCR_DML=0` 可强制关闭
+- 安装包体积从 3MB 增至约 148MB（内置识别引擎与模型的一次性代价，离线可用）
+- doctor 的 OCR 检查项会标注「包内置环境」+ 加速后端 + 单次推理实测耗时
+- 升级方式不变：先停止本机 Runtime，再 npm install -g 新 tgz 覆盖安装，最后重启
+
 agent-tool-runtime 0.2.10（内含 boss-cli 0.2.10）
 构建日期：2026-09-03
 
