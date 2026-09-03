@@ -36,6 +36,8 @@ def fake_redis():
 
     fr = MagicMock()
     fr._store = store
+    # 1950d123 后 _key() 统一走 redis_client.make_key(prefix, sid)，返回 "{prefix}:{sid}"
+    fr.make_key = MagicMock(side_effect=lambda prefix, sid: f"{prefix}:{sid}")
 
     def acquire_lock(key, value, ex=None):
         if key in store:

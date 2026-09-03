@@ -222,6 +222,8 @@ async def test_real_tool_renders_before_cleaning_screenshot_directory(tmp_path, 
 async def test_tool_supports_editable_export(monkeypatch):
     from src.tools.ppt.ppt_process_tool import PptProcessTool
 
+    if not get_capabilities()["node_renderer"]["available"]:
+        pytest.skip("Node renderer 未安装（renderer-node 未 npm install），editable 导出跳过")
     monkeypatch.setenv("PPT_ENABLE_HTML_EXPORT", "true")
     result = await PptProcessTool().execute(
         content="<html><body><h1>不可伪造</h1></body></html>",

@@ -186,7 +186,8 @@ class TestSpeechToTextInputProcessing:
                 # 验证 _call_aliyun_asr 被调用
                 assert mock_call.called
                 call_kwargs = mock_call.call_args.kwargs
-                assert call_kwargs["audio_format"] == "mp3"
+                # 格式自动检测按文件魔数判定：SILK_V3 头 → silk_v3（不盲信 .mp3 扩展名）
+                assert call_kwargs["audio_format"] == "silk_v3"
                 assert call_kwargs["audio_bytes"].startswith(b"\x02\x23!SILK_V3")
 
 

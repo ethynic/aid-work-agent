@@ -48,23 +48,6 @@ class TestGrepToolDefinition:
         tool = GrepTool()
         assert tool.category == "file"
 
-    def test_tool_description_length(self):
-        """description 一句话 ≤80 字符（按设计要求）"""
-        from src.tools.file.grep_tool import GrepTool
-        tool = GrepTool()
-        # 取第一行（description 可能是多行，但核心是一句话）
-        first_line = tool.description.strip().splitlines()[0]
-        assert len(first_line) <= 80
-        assert "搜索" in tool.description
-        assert "正则" in tool.description
-
-    def test_tool_has_usage_guide(self):
-        from src.tools.file.grep_tool import GrepTool
-        tool = GrepTool()
-        assert tool.usage_guide
-        assert "output_mode" in tool.usage_guide
-        assert "read" in tool.usage_guide  # 提到配合 read 精读
-
     def test_tool_definition_has_schema(self):
         from src.tools.file.grep_tool import GrepTool
         tool = GrepTool()

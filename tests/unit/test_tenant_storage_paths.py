@@ -322,7 +322,7 @@ class TestNormalizeTenantId:
         """get_tenant_storage_dir 自动剥离 tenant_ 前缀"""
         from src.core.storage import get_tenant_storage_dir
         assert get_tenant_storage_dir("tenant_abc", "conversation") == (
-            f"{isolated_tenants_root}/tenants/abc/conversation"
+            os.path.join(isolated_tenants_root, "tenants", "abc", "conversation")
         )
 
     def test_skill_resolver_dir_normalizes(self, tmp_path, monkeypatch):

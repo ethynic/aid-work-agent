@@ -7,6 +7,7 @@ tenant_id=%s 过滤，租户 B 接入租户 A 共享知识库后查不到 A 的�
 修复方案（方案 A）：聚合该 subagent 全部共享来源租户（load_shared_ranges
 不传 source_type），SQL 用 tenant_id = ANY(%s)。
 """
+import os
 import sys
 from datetime import date
 from decimal import Decimal
@@ -331,4 +332,5 @@ class TestGenerateQuoteSubagentId:
         assert m_meal.call_args.kwargs.get('subagent_id') == 'travel-sub'
         assert m_guide.call_args.kwargs.get('subagent_id') == 'travel-sub'
         assert m_other.call_args.kwargs.get('subagent_id') == 'travel-sub'
-        assert result['file_path'] == '/tmp/quote.xlsx'
+        # 实现 9dcc9bc8 起 file_path 经 os.path.abspath（Windows 下会补盘符，Linux 原样返回）
+        assert result['file_path'] == os.path.abspath('/tmp/quote.xlsx')

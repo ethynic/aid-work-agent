@@ -165,13 +165,17 @@ def test_db_failure_is_raised_so_callback_can_be_retried():
 
 
 def test_postgres_init_and_incremental_migrations_keep_outbox_fields_in_sync():
-    for path in ("deploy/init-postgres.sql", "deploy/db_update.sql"):
-        sql = open(path, encoding="utf-8").read()
-        assert "send_started_at TIMESTAMP" in sql
-        assert "reply_digests JSONB" in sql
-        assert "ADD COLUMN IF NOT EXISTS target_peer_id" in sql
-        assert "ADD COLUMN IF NOT EXISTS reply_digest" in sql
-        assert "ADD COLUMN IF NOT EXISTS wecom_user_id" in sql
+    """outbox 回执字段必须内联在 init-postgres.sql 建表语句中。
+
+    13222efa 清理 db_update.sql 历史 ALTER 后（存量库已由运维手动执行完毕，
+    新增量登记改为 deploy/db_update.yaml），新库的这些字段只来自 init-postgres.sql。
+    """
+    sql = open("deploy/init-postgres.sql", encoding="utf-8").read()
+    assert "wecom_user_id TEXT" in sql
+    assert "target_peer_id TEXT" in sql
+    assert "reply_digest TEXT" in sql
+    assert "reply_digests JSONB" in sql
+    assert "send_started_at TIMESTAMP" in sql
 
 
 def test_recent_reply_digest_query_is_parameterized_and_fully_scoped():

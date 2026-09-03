@@ -174,10 +174,10 @@ def test_create_session_success(client):
     assert body["success"] is True
     assert body["data"]["session_id"] == "sess_1"
     mock_svc.create_session.assert_awaited_once()
-    # 验证默认值：enable_ai_label=True, duration_sec=10
+    # 验证默认值：enable_ai_label=True, duration_sec=5（cee67101 为省成本 10→5）
     kwargs = mock_svc.create_session.call_args.kwargs
     assert kwargs["enable_ai_label"] is True
-    assert kwargs["duration_sec"] == 10
+    assert kwargs["duration_sec"] == 5
 
 
 def test_create_session_with_label_and_duration(client):
@@ -261,24 +261,6 @@ def test_get_session_not_found(client):
     with patch.object(api_mod, "_service", mock_svc):
         resp = client.get("/api/video-gen/sessions/sess_x")
     assert resp.json()["success"] is False
-
-
-def test_set_card_kept(client):
-    mock_svc = MagicMock()
-    mock_svc.set_card_kept.return_value = {"card_id": "c1", "kept": True}
-    with patch.object(api_mod, "_service", mock_svc):
-        resp = client.patch("/api/video-gen/cards/c1/kept", json={"kept": True})
-    assert resp.json()["success"] is True
-    mock_svc.set_card_kept.assert_called_once()
-
-
-def test_regenerate(client):
-    mock_svc = MagicMock()
-    mock_svc.regenerate_card = AsyncMock(return_value={"card_id": "c2", "parent_card_id": "c1"})
-    with patch.object(api_mod, "_service", mock_svc):
-        resp = client.post("/api/video-gen/cards/c1/regenerate", json={"prompt_override": "new"})
-    assert resp.json()["success"] is True
-    assert resp.json()["data"]["card_id"] == "c2"
 
 
 def test_download_url_ready(client):

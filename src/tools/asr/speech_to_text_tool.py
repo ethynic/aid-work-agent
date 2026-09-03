@@ -104,10 +104,11 @@ class SpeechToTextTool(BaseTool):
             }
 
         # 判断是 base64 内容还是文件路径
+        import os
         audio_bytes = None
-        if audio_content.startswith("/") or audio_content.startswith("./") or audio_content.startswith("../"):
+        # os.path.isabs 覆盖 POSIX "/..." 与 Windows 盘符 "C:\..."（9be40054 的 startswith 启发式认不出盘符路径）
+        if os.path.isabs(audio_content) or audio_content.startswith("./") or audio_content.startswith("../"):
             # 本地文件路径
-            import os
             if not os.path.exists(audio_content):
                 return {
                     "success": False,

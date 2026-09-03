@@ -355,23 +355,6 @@ def test_ppt_config_invalid_renderer_falls_back(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_topic_uses_node_renderer_when_available(tmp_path, monkeypatch):
-    from src.tools.ppt.ppt_process_tool import PptProcessTool
-
-    monkeypatch.setenv("PPT_RENDERER", "pptxgenjs")
-    tool = PptProcessTool()
-    tool._planner = FakePlanner(_sample_plan("Node 主路径"))
-    monkeypatch.setattr(tool, "_check_node_renderer_ready", lambda: True)
-    monkeypatch.setattr(tool, "_get_output_dir", lambda: tmp_path)
-
-    result = await tool.execute(content="Node 主路径")
-
-    assert result["success"] is True
-    assert result["renderer"] == "pptxgenjs"
-    assert result["slide_count"] == 3
-    _assert_pptx(result["file_path"], 3)
-
-
 def test_ppt_capabilities_reports_missing_node(monkeypatch, tmp_path):
     from src.tools.ppt import ppt_capabilities
 

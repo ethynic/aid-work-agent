@@ -130,10 +130,11 @@ async def test_register_copy_creates_image_ref(registry, tmp_path):
     assert ref.usage == "inline"
 
     # 磁盘文件落到 storage/tenants/{tenant}/images/{yyyy-mm}/ 目录
+    # （95130d0f 起 normalize_tenant_id 剥离 tenant_ 前缀，目录为 tenants/a/）
     key = registry._redis.make_key("uploaded_file", ref.file_id)
     stored_path = registry._redis.hget(key, "path")
     assert stored_path is not None
-    assert "tenants/tenant_a/images/" in str(stored_path).replace("\\", "/")
+    assert "tenants/a/images/" in str(stored_path).replace("\\", "/")
     assert Path(stored_path).exists()
 
     # Redis 元信息字段齐全

@@ -38,6 +38,10 @@ def _patch_db_conn(monkeypatch, mock_cursor):
 
     import src.db.models as models_mod
     monkeypatch.setattr(models_mod, "get_db_connection", _ctx)
+    # models.py:20 静态绑定了 get_cached/set_cached，必须在绑定处 patch；
+    # 否则全量回归下共享内存缓存被前置用例写入时提前返回（execute 不会被调用）
+    monkeypatch.setattr(models_mod, "get_cached", lambda *a, **k: None)
+    monkeypatch.setattr(models_mod, "set_cached", lambda *a, **k: None)
     # 屏蔽缓存
     import src.core.cache_utils as cache_mod
     monkeypatch.setattr(cache_mod, "get_cached", lambda *a, **k: None)

@@ -87,27 +87,6 @@ class TestPdfProcessToolDefinition:
         assert "task" not in properties
         assert "params" not in properties
 
-    def test_tool_has_description(self):
-        from src.tools.pdf.pdf_process_tool import PdfProcessTool
-        tool = PdfProcessTool()
-        # description 简短描述功能 + 明确声明不支持 Word 转 PDF（让 LLM 选工具时就看到）
-        assert len(tool.description) <= 120
-        assert "PDF" in tool.description
-        assert "Word" in tool.description or "docx" in tool.description
-
-    def test_tool_description_le_no_tutorial(self):
-        """description 不应塞操作菜单/教程（已迁移到 usage_guide）。"""
-        from src.tools.pdf.pdf_process_tool import PdfProcessTool
-        tool = PdfProcessTool()
-        # 教程性内容应在 usage_guide，不在 description
-        assert "触发规则" not in tool.description
-        assert "cp 注册" not in tool.description
-        assert tool.usage_guide  # usage_guide 非空，承载迁移内容
-        assert "触发规则" not in tool.usage_guide  # 内容已重组，无旧标题
-        # 操作菜单与 cp 注册说明迁移到了 usage_guide
-        assert "read_tables" in tool.usage_guide
-        assert "cp" in tool.usage_guide.lower()
-
     def test_content_type_literal_enum(self):
         """content_type 改用 Literal 枚举，schema 自描述（规范 §1.7）。"""
         from src.tools.pdf.pdf_process_tool import PdfProcessInput

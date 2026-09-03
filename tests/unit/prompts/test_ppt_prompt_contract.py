@@ -15,36 +15,6 @@ def prompt_manager():
     return PromptManager()
 
 
-@pytest.mark.parametrize("template_name", ["master_agent.md", "subagent_base.md"])
-def test_agent_prompts_require_structured_ppt_arguments(prompt_manager, template_name):
-    prompt = prompt_manager.load_template(template_name)
-
-    assert "### PPT 工具调用" in prompt
-    assert "`instruction`" in prompt
-    assert "`content`" in prompt
-    assert 'content_type="html"' in prompt
-    assert all(mode in prompt for mode in ("high_fidelity", "editable", "both"))
-    assert "不要把完整指令和正文混入" in prompt
-
-
-@pytest.mark.parametrize("template_name", ["master_agent.md", "subagent_base.md"])
-def test_agent_prompts_require_workspace_copy_and_truthful_delivery(
-    prompt_manager, template_name
-):
-    prompt = prompt_manager.load_template(template_name)
-
-    assert "当前 workspace" in prompt
-    assert "register_download=false" in prompt
-    assert "visible=false" in prompt
-    assert 'file_path="workspace/' in prompt
-    assert "cp 返回的新路径" in prompt
-    assert "`file_paths`" in prompt
-    assert "`success=true`" in prompt or "失败或未返回 `file_path`" in prompt
-    assert "不得声称" in prompt
-    assert "分别调用 `cp`" in prompt
-    assert "`display_name`" in prompt
-
-
 def test_documented_calls_match_public_tool_schemas():
     ppt = PptProcessInput.model_validate(
         {

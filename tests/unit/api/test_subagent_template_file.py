@@ -176,10 +176,12 @@ class TestTemplatesDir:
 
     def test_uses_tenant_storage(self):
         """模板文件落盘目录改为 storage/tenants/{tenant_id}/templates/（新规范）"""
+        from pathlib import Path
         with patch(
             "src.core.storage.ensure_tenant_storage_dir",
             return_value="/abs/storage/tenants/t1/templates",
         ) as mock_ensure:
             d = api_module._templates_dir("t1")
         mock_ensure.assert_called_once_with("t1", "templates")
-        assert str(d) == "/abs/storage/tenants/t1/templates"
+        # 实现会经 abspath/Path 规范化（Windows 下带盘符、反斜杠），比对规范化后的尾部即可
+        assert str(d).replace("\\", "/").endswith("/abs/storage/tenants/t1/templates")

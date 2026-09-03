@@ -15,6 +15,7 @@ cp 工具单元测试
 """
 
 import hashlib
+import os
 import shutil
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -26,6 +27,12 @@ pytestmark = [pytest.mark.tools]
 
 # 项目根目录，用于构造合法源路径
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+
+# 这批用例编码 POSIX 文件系统假设（/etc/passwd 存在、C:\Windows 路径不存在），仅 Linux/容器环境执行
+skipif_windows = pytest.mark.skipif(
+    os.name == "nt",
+    reason="依赖 POSIX 文件系统语义（/etc/passwd 等），Windows 宿主机跳过",
+)
 
 
 @pytest.fixture(autouse=True)
@@ -201,6 +208,7 @@ class TestCpToolSourceErrors:
         assert "源文件不存在" in result["error"]
 
     @pytest.mark.asyncio
+    @skipif_windows
     async def test_source_relative_path_traversal_exists(self):
         """源相对路径含 ..（解析后指向存在的系统文件）→ 允许复制（源不做穿越限制）"""
         from src.tools.file.cp_tool import CpTool
@@ -228,6 +236,7 @@ class TestCpToolSourceErrors:
         assert result["file_id"] == "file_trav001"
 
     @pytest.mark.asyncio
+    @skipif_windows
     async def test_source_absolute_path_outside_project_root(self):
         """源是项目根外存在的绝对路径（/etc/passwd）→ 允许复制（源不再限制在项目根内）"""
         from src.tools.file.cp_tool import CpTool
@@ -253,8 +262,9 @@ class TestCpToolSourceErrors:
         assert result["file_id"] == "file_abs001"
 
     @pytest.mark.asyncio
+    @skipif_windows
     async def test_source_absolute_path_outside_project_root_windows(self):
-        """源是 Windows 绝对路径（本环境不存在）→ 返回结构化失败 dict"""
+        """源是 Windows 绝对路径（POSIX 环境不存在）→ 返回结构化失败 dict"""
         from src.tools.file.cp_tool import CpTool
 
         tool = CpTool()

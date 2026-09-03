@@ -774,7 +774,7 @@ def test_duplicate_event_id_enqueue_uses_database_unique_constraint():
     """重复 msgid 的写入必须依赖租户+event 唯一键幂等。"""
     sql = (fetcher_module.rpa_db.enqueue_inbound_archive_message.__doc__ or "")
     assert "重复 event_id" in sql
-    migration = open("deploy/db_update.sql", encoding="utf-8").read()
+    migration = open("deploy/init-postgres.sql", encoding="utf-8").read()
     assert "UNIQUE (tenant_id, event_id)" in migration
     assert "ON CONFLICT (tenant_id, event_id) DO NOTHING" in __import__(
         "inspect"
