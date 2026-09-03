@@ -557,8 +557,8 @@ def create_resume_record_from_tool_result(
     ──【契约对齐点 2026-08-16】明日 CLI `resume-detail` 命令落地时在此对齐字段名 ──
     预期 payload 形状（宽容解析，支持别名；CLI 侧最终字段名以真机联调为准）：
     - candidate_name（必填，别名 name）
-    - name_source（必填："param"=显式入参 / "dom"=卡片 DOM 配对。姓名唯一来源=非 OCR 的
-      最后防线：缺失 / "ocr" / 其他任意值都拒绝入库，错误消息提示升级 boss CLI）
+    - name_source（可选观测字段："param"=显式入参 / "dom"=卡片 DOM 配对；缺失/"ocr"/其他值
+      不拒绝入库，只记 warning 日志——姓名正确性由客户端流程保证，服务端观测不拦截）
     - job_id（可选，本租户职位 id，硬关联；Phase 1 一键链路带出）
     - job_name（别名 job / position）
     - basic_info 或 candidate_info（dict）
@@ -598,17 +598,18 @@ def create_resume_record_from_tool_result(
             "CLI 结果缺少候选人姓名（candidate_name/name）；CLI 结果格式需对齐"
         )
 
-    # ──【P0 防错名 2026-09-02】姓名来源最后防线：仅接受非 OCR 来源 ──
-    # 用户铁律「候选人姓名绝不能错」（错名入库后打招呼会打错人）。CLI 新版（P0 修复后）
-    # 姓名 = 显式入参（param）或卡片 DOM 配对（dom）+ OCR 文本头部交叉校验；旧版 CLI 会用
-    # OCR 首行启发式猜名（name_source='ocr'）静默入库。此处有意破坏对旧版 CLI 的向后兼容
-    # （旧 runtime 0.2.7 的读取结果本来就要重发），缺失/非白名单值一律拒绝并在消息里提示升级。
+    # ──【P0 姓名来源观测（2026-09-03 修订：观测不拦截）】──
+    # 初版曾在这里做 name_source 白名单强控（非 param/dom 拒绝入库），评审后撤掉：①它校验的
+    # 只是客户端自报标签，不验证姓名真实质量，防御价值低；②它把旧 CLI 的「质量降级」（兜底
+    # 猜名）变成「功能不可用」（读取整体报错），违背宁降级不宕机；③制造后端↔客户机部署耦合，
+    # 违背「服务端更新不强制客户端更新」原则。姓名正确性由客户端流程保证（P0：batch=卡片
+    # DOM 配对、detail=显式入参 + 交叉校验），服务端只做观测：非可信来源记 warning 日志
+    # （运营可见旧客户端还在跑），数据照常入库。
     name_source = _first_str(payload, ("name_source",))
     if name_source not in ("param", "dom"):
-        shown = f"'{name_source}'" if name_source else "缺失"
-        raise ResumePayloadError(
-            f"候选人姓名来源不受信（name_source={shown}）：仅接受非 OCR 来源"
-            "（param=显式入参/dom=卡片 DOM 配对），请升级 boss CLI 后重试"
+        logger.warning(
+            f"简历入库姓名来源非可信（name_source={name_source or '缺失'}，tenant={tenant_id}，"
+            f"candidate={candidate_name}）：旧版 boss CLI 兜底猜名，建议升级客户机 runtime"
         )
 
     # images 结构校验：必须是列表，且每项为含 base64 的对象（name/mime_type 可选）

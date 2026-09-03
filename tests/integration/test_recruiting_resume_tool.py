@@ -9,9 +9,9 @@
   成功落库+紧凑摘要（不含 base64/ocr 全文）/ CLI 失败原样透传不落库 / payload 非法 RESUME_PAYLOAD_INVALID
 - import 安全：proxy_tool ↔ services 无循环依赖
 
-P0 防错名（2026-09-02）新增覆盖：
-- name_source 最后防线：缺失 / 'ocr' / 其他值 → ResumePayloadError（不落库不落盘）；
-  'param' / 'dom' 合法入库（姓名唯一来源=非 OCR，旧版 CLI OCR 猜名结果被有意拒绝）
+P0 防错名（2026-09-02，2026-09-03 修订为观测不拦截）覆盖：
+- name_source 非可信来源（缺失 / 'ocr' / 其他值）→ 照常入库 + 服务端 warning 日志（观测不拦截：
+  服务端更新不得强制客户端更新，姓名正确性由客户端流程保证）；'param' / 'dom' 合法入库
 
 简历-职位匹配 Phase 1（2026-08-17）新增覆盖：
 - 落库关联解析（设计 §4.1）：job_name 精确命中关联 job_id / 0 命中 job_id NULL + 摘要 warning /
@@ -334,13 +334,14 @@ class TestToolResultContract:
         "ocr",       # 旧版 CLI 的 OCR 首行启发式猜名（P0 修复前）
         "whatever",  # 任意其他值
     ])
-    def test_name_source_untrusted_rejected_and_stores_nothing(
+    def test_name_source_untrusted_accepted_with_warning(
         self, temp_tenant_with_user, temp_storage_dir, name_source
     ):
-        """P0 防错名最后防线：name_source 缺失/'ocr'/其他值 → ResumePayloadError，且不落任何库/盘数据。
+        """name_source 非可信来源（缺失/'ocr'/其他值）不拒绝入库，只记 warning（观测不拦截）。
 
-        姓名唯一来源=非 OCR（param=显式入参/dom=卡片 DOM 配对）；旧版 CLI 会 OCR 猜名静默入库
-        （错名简历导致打招呼打错人），此处有意破坏向后兼容并提示升级。
+        2026-09-03 修订：初版的白名单强控（ResumePayloadError）撤销——服务端更新不得强制
+        客户端更新；姓名正确性由客户端流程保证（batch=DOM 配对 / detail=显式入参+交叉校验），
+        服务端只记 warning 供运营观测旧客户端，功能永不因该字段而中断。
         """
         ctx = temp_tenant_with_user
         payload = {
@@ -349,12 +350,11 @@ class TestToolResultContract:
         }
         if name_source is not None:
             payload["name_source"] = name_source
-        with pytest.raises(resume_service.ResumePayloadError, match="姓名来源不受信"):
-            resume_service.create_resume_record_from_tool_result(
-                ctx["tenant_id"], ctx["user_id"], payload
-            )
-        assert _count_resumes(ctx["tenant_id"]) == 0
-        assert not list(temp_storage_dir.iterdir())
+        record = resume_service.create_resume_record_from_tool_result(
+            ctx["tenant_id"], ctx["user_id"], payload
+        )
+        assert record["candidate_name"] == "王五"
+        assert _count_resumes(ctx["tenant_id"]) == 1
 
     def test_name_source_dom_accepted(self, temp_tenant_with_user, temp_storage_dir):
         """name_source='dom'（卡片 DOM 配对，批量链路）合法入库；'param' 已由别名用例覆盖"""

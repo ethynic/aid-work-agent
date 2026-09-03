@@ -10,7 +10,7 @@
  *
  * 输出契约（docs/plans/recruiting/resume-detail-cli-integration-handoff.md §2，与云端
  * recruiting_resume_service.create_resume_record_from_tool_result 对齐）：
- * data = { candidate_name（必填）, name_source:'param'（云端最后防线：非 OCR 来源才许入库）,
+ * data = { candidate_name（必填）, name_source:'param'（云端观测字段：标注姓名来源非 OCR，
  * job_name?, ocr_text, images:[{name,mime_type,base64}], …元信息 }。
  * 云端 BossResumeDetailTool 拿本 payload 直接入库，返回 LLM 的只有紧凑摘要（图片字节绝不进上下文）。
  *
@@ -436,8 +436,8 @@ export async function ocrBatch(
 
 /**
  * 组装云端简历库契约 payload（handoff §2，与 recruiting_resume_service.create_resume_record_from_tool_result
- * 对齐）：candidate_name 必填，name_source 标注姓名来源（云端最后防线：仅接受非 OCR 的
- * 'param'=显式入参 / 'dom'=卡片 DOM 配对，其他值拒绝入库），job_name 可选，
+ * 对齐）：candidate_name 必填，name_source 标注姓名来源（'param'=显式入参 / 'dom'=卡片
+ * DOM 配对；云端观测不拦截，向后兼容旧客户端），job_name 可选，
  * ocr_text + images base64 + 元信息。boss_resume_detail / boss_resume_batch 两个 operation 共用（单份与批量同契约）。
  */
 export function buildResumePayload(
