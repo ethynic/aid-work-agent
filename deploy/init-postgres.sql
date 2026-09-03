@@ -330,6 +330,13 @@ VALUES ('qwen3.7-flash', '[
 ]'::jsonb)
 ON CONFLICT (model_name) DO NOTHING;
 
+-- qwen3.8-flash（千问 Flash 新款，2026-09 用于本系统测试；无阶梯计价 0<T≤1M 单档）
+-- 百炼官方华北2（北京）定价：输入 0.8 元/M、输出 2.7 元/M
+-- 缓存走隐式缓存（自动前缀匹配，context_cache=false 不加 cache_control），命中按输入价 20% = 0.16 元/M
+INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m)
+VALUES ('qwen3.8-flash', 0.8, 2.7, 0.16)
+ON CONFLICT (model_name) DO NOTHING;
+
 
 -- 验证码表
 CREATE TABLE IF NOT EXISTS sms_codes (

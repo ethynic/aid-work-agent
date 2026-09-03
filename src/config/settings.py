@@ -132,8 +132,10 @@ class LLMConfig(BaseModel):
     model_max_tokens: Dict[str, int] = Field(default_factory=dict)
     # qwen 推理模型是否关闭思考模式；None=不写参数（默认关闭思考，1-2s 响应），见 config.yaml llm.enable_thinking
     enable_thinking: Optional[bool] = None
-    # 是否启用显式缓存（cache_control: ephemeral），命中按输入单价 10% 计费，见 config.yaml llm.context_cache
-    context_cache: bool = True
+    # 是否启用显式缓存（cache_control: ephemeral），命中按输入单价 10% 计费，见 config.yaml llm.context_cache。
+    # 默认 false：主模型 qwen3.8-flash 支持隐式缓存（自动前缀匹配，命中 20%），显式与隐式互斥，
+    # 加 cache_control 会屏蔽隐式缓存；qwen3.7-flash 等仅显式缓存模型需在 config.yaml 显式开启
+    context_cache: bool = False
     # 注：wanx 已迁移到 settings.video_gen.wanx，请改用 settings.video_gen.wanx.*
 
     def get_lite_target(self) -> Tuple[str, str]:

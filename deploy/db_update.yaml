@@ -18,3 +18,12 @@
     ALTER TABLE client_usage_logs ADD COLUMN IF NOT EXISTS client_ref_id TEXT;
     CREATE UNIQUE INDEX IF NOT EXISTS uq_client_usage_logs_tenant_ref
         ON client_usage_logs (tenant_id, client_ref_id) WHERE client_ref_id IS NOT NULL;
+- datetime: "2026-09-03 11:20:00"
+  remark: "token_cost_prices 新增 qwen3.8-flash 单价：输入 0.8 元/M、输出 2.7 元/M、缓存命中 0.16 元/M（隐式缓存命中按输入价 20%，无阶梯计价 0<T≤1M 单档）；DO UPDATE 更正早前 0.08（显式缓存口径）存量行"
+  statements: |
+    INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m)
+    VALUES ('qwen3.8-flash', 0.8, 2.7, 0.16)
+    ON CONFLICT (model_name) DO UPDATE SET
+      input_price_per_m = EXCLUDED.input_price_per_m,
+      output_price_per_m = EXCLUDED.output_price_per_m,
+      cached_input_price_per_m = EXCLUDED.cached_input_price_per_m;

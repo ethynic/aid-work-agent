@@ -45,8 +45,11 @@ llm:
   # 仅 qwen provider 的 qwen 系模型生效；置 None 时不写该参数（不影响非 qwen 推理模型）
   enable_thinking: false
   # 是否启用显式缓存（cache_control: ephemeral）。仅 qwen provider 的 qwen 系模型生效，
-  # 命中按输入单价 10% 计费（百炼官方），有效 5 分钟
-  context_cache: true
+  # 命中按输入单价 10% 计费（百炼官方），有效 5 分钟。
+  # 2026-09-03 置 false：主模型切 qwen3.8-flash 后走隐式缓存（自动前缀匹配，命中 20%，
+  # 实测 94.9% 命中率且免 125% 创建费）；显式与隐式互斥，加 cache_control 会屏蔽隐式缓存。
+  # 若需对 qwen3.7-flash 等仅支持显式缓存的模型重新开启，改回 true 即可
+  context_cache: false
   # 各模型 max_tokens 上限（调用方未显式指定 max_tokens 时，按当前生效模型查此表作为默认值）
   # 数据来源：阿里云百炼平台官方文档（2026-08）
   model_max_tokens:
