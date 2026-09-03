@@ -237,19 +237,30 @@ const RAPID_BATCH_TIMEOUT_MS = 300000
 export const RAPID_BENCH_TIMEOUT_MS = 60000
 
 /**
- * python 解释器定位（优先级）：env AID_BOSS_RAPIDOCR_PY（python.exe 路径）> 仓库布局 venv
- * （包根 ../../venv/Scripts/python.exe，与 cvScriptPath 同款向上探测；npm 安装布局下不存在则跳过）
- * > PATH 上的 python。返回按序探测的候选列表。
+ * python 解释器定位（优先级）：env AID_BOSS_RAPIDOCR_PY（python.exe 路径）> 捆绑便携 OCR 环境
+ * （包根 ocr-python/python.exe：scripts/build-ocr-python.mjs 产出的可嵌入 Python + 预装全家桶，
+ * 与 scripts/ 同款上溯探测，源码/编译/npm 安装布局均命中）> 仓库布局 venv（开发机兜底，
+ * npm 安装布局下不存在则跳过）> PATH 上的 python。
+ * 注意：开发机只要构建过 ocr-python（npm run build:ocr-python）也会优先走捆绑环境（DirectML）——
+ * 这是有意的：开发机上跑的就是客户机要用的发货物，开发/客户两侧行为一致才验证得了。
+ * exists 参数仅测试注入（离线断言候选顺序，不起子进程）；生产缺省用真实 fs.existsSync。
  */
-function rapidPythonCandidates(): string[] {
+export function rapidPythonCandidates(exists: (p: string) => boolean = fs.existsSync): string[] {
   const candidates: string[] = []
   const envPy = (process.env.AID_BOSS_RAPIDOCR_PY ?? '').trim()
   if (envPy) candidates.push(envPy)
   try {
     const here = path.dirname(fileURLToPath(import.meta.url))
     for (const up of ['..\\..\\..\\..', '..\\..\\..']) {
+      const bundledPy = path.resolve(here, up, 'ocr-python', 'python.exe')
+      if (exists(bundledPy)) {
+        candidates.push(bundledPy)
+        break
+      }
+    }
+    for (const up of ['..\\..\\..\\..', '..\\..\\..']) {
       const venvPy = path.resolve(here, up, '..', '..', 'venv', 'Scripts', 'python.exe')
-      if (fs.existsSync(venvPy)) {
+      if (exists(venvPy)) {
         candidates.push(venvPy)
         break
       }
@@ -348,7 +359,8 @@ export async function resolveOcrEngine(runner: ExecRunner = defaultExecRunner): 
     if (!probe.available) {
       throw new ResumeReadError(
         `AID_BOSS_OCR_ENGINE=rapid 强制 RapidOCR 但机器上不可用：${probe.reason ?? ''}。` +
-          '部署：pip install rapidocr-onnxruntime==1.4.4 Pillow（模型随包内置、离线可用），' +
+          '正常发行包已内置 OCR 环境（包根 ocr-python/，含 Python 与全部依赖，无需安装）；' +
+          '若缺失：开发机执行 npm run build:ocr-python 构建，或 pip install rapidocr-onnxruntime==1.4.4 Pillow，' +
           '或设 AID_BOSS_RAPIDOCR_PY=<python.exe 路径> 指定已装解释器，或改 AID_BOSS_OCR_ENGINE=auto 回退 WinRT',
       )
     }

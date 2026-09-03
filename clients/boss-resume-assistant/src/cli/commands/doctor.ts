@@ -112,7 +112,10 @@ export async function doctorCommand(opts: DoctorCommandOptions): Promise<number>
       } catch (e) {
         benchDetail = `（推理实测未出数：${e instanceof Error ? e.message : String(e)}）`
       }
-      check(true, 'OCR 引擎（简历读取）', `RapidOCR（python: ${plan.python}${benchDetail}）`)
+      // 捆绑便携环境标注（方案 A）：python 路径含 ocr-python = 用的是包内置环境（非用户自装
+      // Python）。装机支持人员据此外观一眼区分「内置环境正常工作」vs「碰巧用了机器上的解释器」
+      const bundledMark = /ocr-python[\\/]/.test(plan.python ?? '') ? '包内置环境；' : ''
+      check(true, 'OCR 引擎（简历读取）', `RapidOCR（${bundledMark}python: ${plan.python}${benchDetail}）`)
     } else {
       console.log(`ℹ️ OCR 引擎（简历读取）：${plan.reason}`)
     }

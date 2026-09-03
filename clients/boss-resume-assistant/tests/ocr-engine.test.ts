@@ -18,6 +18,7 @@ import {
   ocrBatch,
   resolveOcrEngine,
   resetOcrEngineCacheForTest,
+  rapidPythonCandidates,
   RAPID_BENCH_TIMEOUT_MS,
   type ExecRunner,
 } from '../src/main/operations/bossResumeDetail.js'
@@ -143,6 +144,76 @@ test('AID_BOSS_OCR_ENGINE=rapid 强制且可用 → rapid（reason 标注强制�
   assert.equal(plan.engine, 'rapid')
   assert.equal(plan.forced, true)
   assert.match(plan.reason, /强制 RapidOCR/)
+})
+
+// ---------- rapidPythonCandidates：候选顺序 env > 捆绑 ocr-python > 仓库 venv > PATH ----------
+//（exists 注入 fake，免起子进程、免依赖开发机是否构建过 ocr-python 的机器状态）
+
+/** fake exists：按路径形状分类（捆绑 ocr-python / 仓库 venv），其余一律不存在 */
+function fakeExists(opts: { bundled?: boolean; venv?: boolean }) {
+  return (p: string): boolean => {
+    if (/ocr-python[\\/]python\.exe$/.test(p)) return opts.bundled ?? false
+    if (/venv[\\/]Scripts[\\/]python\.exe$/.test(p)) return opts.venv ?? false
+    return false
+  }
+}
+
+test('候选顺序：env > 捆绑 ocr-python > 仓库 venv > PATH python（全部存在时逐一断言）', () => {
+  const candidates = rapidPythonCandidates(fakeExists({ bundled: true, venv: true }))
+  assert.equal(candidates.length, 4)
+  assert.equal(candidates[0], FAKE_PY) // env AID_BOSS_RAPIDOCR_PY 恒第一
+  assert.match(candidates[1]!, /ocr-python[\\/]python\.exe$/) // 捆绑便携环境次之
+  assert.match(candidates[2]!, /[\\/]venv[\\/]Scripts[\\/]python\.exe$/) // 仓库 venv 开发兜底
+  assert.equal(candidates[3], 'python') // PATH 收尾
+})
+
+test('捆绑环境缺席（npm 安装布局未构建/客户机旧包）→ 跳过不报错，候选退化为 env > venv > PATH', () => {
+  const candidates = rapidPythonCandidates(fakeExists({ bundled: false, venv: true }))
+  assert.equal(candidates.length, 3)
+  assert.equal(candidates[0], FAKE_PY)
+  assert.match(candidates[1]!, /[\\/]venv[\\/]Scripts[\\/]python\.exe$/)
+  assert.equal(candidates[2], 'python')
+})
+
+test('捆绑与 venv 都缺席 → [env, PATH python]（客户机最小布局）', () => {
+  const candidates = rapidPythonCandidates(fakeExists({}))
+  assert.deepEqual(candidates, [FAKE_PY, 'python'])
+})
+
+test('env 未设时捆绑环境即为首候选（客户机缺省路径：直接用包内自带解释器）', () => {
+  delete process.env.AID_BOSS_RAPIDOCR_PY
+  const candidates = rapidPythonCandidates(fakeExists({ bundled: true, venv: true }))
+  assert.equal(candidates.length, 3)
+  assert.match(candidates[0]!, /ocr-python[\\/]python\.exe$/)
+  assert.equal(candidates[1]!.endsWith('python.exe'), true) // 随后 venv
+  assert.equal(candidates[2], 'python')
+})
+
+test('布局探测：dist（上溯4级）与 src（上溯3级）两种布局的捆绑路径都会被探测（先 dist 后 src）', () => {
+  const seen: string[] = []
+  rapidPythonCandidates((p) => {
+    seen.push(p)
+    return false
+  })
+  const bundled = seen.filter((p) => /ocr-python[\\/]python\.exe$/.test(p))
+  assert.equal(bundled.length, 2) // 两种编译布局各探测一次，命中即 break
+  assert.notEqual(bundled[0], bundled[1])
+})
+
+test('探测行为联动：env 失败 → 下一候选为捆绑环境（fake runner 收到的第二个探测目标）', async () => {
+  // 真实 fs：开发机构建过 ocr-python 后，探测序列第二位必是捆绑解释器（本用例同时验证
+  // 「开发机也走捆绑环境（DML）」这一有意行为——跑的就是发货物）；未构建的机器上该断言退化为
+  // 第二位是 venv/python，仍不失败（只断言 ≠ env、按序推进）
+  const { runner, calls } = makeRunner(async (file) => {
+    if (file === FAKE_PY) throw new Error('ModuleNotFoundError')
+    return { stdout: '', stderr: '' }
+  })
+  const plan = await resolveOcrEngine(runner)
+  assert.equal(plan.engine, 'rapid')
+  assert.equal(calls.length, 2)
+  assert.notEqual(calls[1]!.file, FAKE_PY)
+  const expectedOrder = rapidPythonCandidates()
+  assert.equal(calls[1]!.file, expectedOrder[1]) // 实际探测序与候选序一致
 })
 
 // ---------- ocrBatch：rapid 成功 / 失败整批回退 WinRT ----------
@@ -316,33 +387,54 @@ test('benchRapidOcr：进程失败原样上抛', async () => {
 
 // ---------- ocrBatch 的 accel 透传：适配器 engine= 行 → 返回值 accel ----------
 
+// 注意：img 文件必须落 tmpdir 绝不能用裸相对路径——fake 适配器会写 <img>.rapid.txt，
+// 裸路径会在包根残留 a.png.rapid.txt 垃圾文件（CR 修复：此前三个 accel 用例即如此）
+
 test('ocrBatch：适配器 stdout 含 engine=dml → accel=dml（DirectML 加速）', async () => {
-  const { runner } = makeRapidAdapterRunner(['dml 文本'], { stdoutPrefix: 'engine=dml\n' })
-  const { winrt } = makeFakeWinrt('不应走到 WinRT')
-  const res = await ocrBatch(['a.png'], { runner, winrt })
-  assert.equal(res.engine, 'rapid')
-  assert.equal(res.accel, 'dml')
-  assert.deepEqual(res.texts, ['dml 文本'])
+  const tmpDir = path.join(os.tmpdir(), `ocr-engine-accel-${randomUUID()}`)
+  await fs.mkdir(tmpDir, { recursive: true })
+  try {
+    const { runner } = makeRapidAdapterRunner(['dml 文本'], { stdoutPrefix: 'engine=dml\n' })
+    const { winrt } = makeFakeWinrt('不应走到 WinRT')
+    const res = await ocrBatch([path.join(tmpDir, 'a.png')], { runner, winrt })
+    assert.equal(res.engine, 'rapid')
+    assert.equal(res.accel, 'dml')
+    assert.deepEqual(res.texts, ['dml 文本'])
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {})
+  }
 })
 
 test('ocrBatch：适配器 stdout 无 engine= 行 → accel=cpu（宽容解析，不因缺行回退）', async () => {
-  const { runner } = makeRapidAdapterRunner(['cpu 文本'])
-  const { winrt } = makeFakeWinrt('不应走到 WinRT')
-  const res = await ocrBatch(['a.png'], { runner, winrt })
-  assert.equal(res.engine, 'rapid')
-  assert.equal(res.accel, 'cpu')
-  assert.deepEqual(res.texts, ['cpu 文本'])
+  const tmpDir = path.join(os.tmpdir(), `ocr-engine-accel-${randomUUID()}`)
+  await fs.mkdir(tmpDir, { recursive: true })
+  try {
+    const { runner } = makeRapidAdapterRunner(['cpu 文本'])
+    const { winrt } = makeFakeWinrt('不应走到 WinRT')
+    const res = await ocrBatch([path.join(tmpDir, 'a.png')], { runner, winrt })
+    assert.equal(res.engine, 'rapid')
+    assert.equal(res.accel, 'cpu')
+    assert.deepEqual(res.texts, ['cpu 文本'])
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {})
+  }
 })
 
 test('ocrBatch：DML 失败整批回退 CPU 重跑成功（stdout 先后 engine=dml/engine=cpu 两行）→ accel=cpu（取最后一行=最终引擎）', async () => {
   // 复刻适配器真实回退 stdout 形状：首行 engine=dml + DML 轮已写的 file= 行，
   // 回退后 engine=cpu + CPU 轮重写全部 file= 行（exit 0、结果文件全部为 CPU 产出）
-  const { runner } = makeRapidAdapterRunner(['回退后文本'], {
-    stdoutPrefix: 'engine=dml\nfile=0 chars=5\nengine=cpu\n',
-  })
-  const { winrt } = makeFakeWinrt('不应走到 WinRT')
-  const res = await ocrBatch(['a.png'], { runner, winrt })
-  assert.equal(res.engine, 'rapid')
-  assert.equal(res.accel, 'cpu') // 实际产出文本的是 CPU：按任意行/首行 grep 会误报 dml
-  assert.deepEqual(res.texts, ['回退后文本'])
+  const tmpDir = path.join(os.tmpdir(), `ocr-engine-accel-${randomUUID()}`)
+  await fs.mkdir(tmpDir, { recursive: true })
+  try {
+    const { runner } = makeRapidAdapterRunner(['回退后文本'], {
+      stdoutPrefix: 'engine=dml\nfile=0 chars=5\nengine=cpu\n',
+    })
+    const { winrt } = makeFakeWinrt('不应走到 WinRT')
+    const res = await ocrBatch([path.join(tmpDir, 'a.png')], { runner, winrt })
+    assert.equal(res.engine, 'rapid')
+    assert.equal(res.accel, 'cpu') // 实际产出文本的是 CPU：按任意行/首行 grep 会误报 dml
+    assert.deepEqual(res.texts, ['回退后文本'])
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {})
+  }
 })
