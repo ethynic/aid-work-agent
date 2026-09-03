@@ -95,3 +95,24 @@ class TestSkillExecutorAidEnv:
         env = captured_env["env"]
         assert env["SKILL_LLM_PROVIDER"] == "deepseek"
         assert env["AID_TENANT_ID"] == "t"
+
+
+class TestSkillExecutorTenantEnvVars:
+    def test_tenant_env_vars_merged_into_subprocess_env(self, captured_env, tmp_path):
+        ctx = ToolExecutionContext(
+            tenant_id="tenant-1", env_vars={"AGENT_TOKEN": "tk-123"},
+        )
+        with tool_execution_scope(ctx):
+            _run(_executor(tmp_path), tmp_path)
+        assert captured_env["env"]["AGENT_TOKEN"] == "tk-123"
+
+    def test_tenant_env_vars_override_process_env(self, captured_env, tmp_path, monkeypatch):
+        monkeypatch.setenv("AGENT_TOKEN", "stale-process-value")
+        ctx = ToolExecutionContext(tenant_id="tenant-1", env_vars={"AGENT_TOKEN": "fresh"})
+        with tool_execution_scope(ctx):
+            _run(_executor(tmp_path), tmp_path)
+        assert captured_env["env"]["AGENT_TOKEN"] == "fresh"
+
+    def test_no_tenant_env_vars_no_pollution(self, captured_env, tmp_path):
+        _run(_executor(tmp_path), tmp_path)
+        assert "AGENT_TOKEN" not in captured_env["env"]

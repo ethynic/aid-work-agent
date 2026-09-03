@@ -23,9 +23,13 @@ class ToolExecutionContext:
     agent_execution_id: Optional[str] = None
     tool_call_id: Optional[str] = None
     request_data: Mapping[str, Any] = field(default_factory=dict)
+    # 租户级子智能体环境变量（subagent_env_vars 表），替代旧的进程级 os.environ 注入，
+    # 供 http_api ${VAR} 替换、skill 子进程继承等消费；随请求隔离，避免并发消息互相污染
+    env_vars: Mapping[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "request_data", freeze_request_mapping(self.request_data))
+        object.__setattr__(self, "env_vars", freeze_request_mapping(self.env_vars))
 
     def derive(self, **changes) -> "ToolExecutionContext":
         """显式派生嵌套调用上下文，未指定字段保持不变。"""
@@ -58,7 +62,7 @@ class ExecutionContextFactory:
     def for_agent_call(
         *, tenant_id=None, user_id=None, session_id=None, channel=None,
         subagent_id=None, chat_record_id=None, agent_execution_id=None,
-        tool_call_id=None, request_data=None,
+        tool_call_id=None, request_data=None, env_vars=None,
     ) -> ToolExecutionContext:
         if tenant_id is None or user_id is None:
             try:
@@ -67,15 +71,18 @@ class ExecutionContextFactory:
                 user_id = user_id or get_current_user_id()
             except Exception:
                 pass
+        parent = current_tool_execution_context()
         if request_data is None:
-            parent = current_tool_execution_context()
             request_data = parent.request_data if parent else {}
+        if env_vars is None:
+            env_vars = parent.env_vars if parent else {}
         return ToolExecutionContext(
             tenant_id=tenant_id, user_id=user_id, session_id=session_id,
             channel=channel, subagent_id=subagent_id,
             chat_record_id=chat_record_id, agent_execution_id=agent_execution_id,
             tool_call_id=tool_call_id,
             request_data=request_data,
+            env_vars=env_vars,
         )
 
     @staticmethod

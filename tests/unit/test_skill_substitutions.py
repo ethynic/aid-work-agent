@@ -129,3 +129,37 @@ class TestSubstitutionOrder:
         assert "hello" in result
         assert "hello world" in result
         assert "zh" in result
+
+
+class TestTenantEnvVarFallback:
+    """skill 命令体 ${VAR} 从请求级租户环境变量兜底（os.environ 注入已废弃）"""
+
+    def test_tenant_env_var_used(self):
+        from src.tools.context import ToolExecutionContext, tool_execution_scope
+
+        with tool_execution_scope(
+            ToolExecutionContext(tenant_id="t1", env_vars={"API_KEY_XYZ": "tenant-key"})
+        ):
+            result = SkillSubstitutor.substitute(
+                "curl -H 'X-Key: ${API_KEY_XYZ}'", {"arguments": ""},
+            )
+        assert result == "curl -H 'X-Key: tenant-key'"
+
+    def test_tenant_env_var_preferred_over_process_env(self, monkeypatch):
+        from src.tools.context import ToolExecutionContext, tool_execution_scope
+
+        monkeypatch.setenv("API_KEY_XYZ", "process-key")
+        with tool_execution_scope(
+            ToolExecutionContext(tenant_id="t1", env_vars={"API_KEY_XYZ": "tenant-key"})
+        ):
+            result = SkillSubstitutor.substitute("K=${API_KEY_XYZ}", {"arguments": ""})
+        assert result == "K=tenant-key"
+
+    def test_missing_var_kept_as_is(self):
+        from src.tools.context import ToolExecutionContext, tool_execution_scope
+
+        with tool_execution_scope(
+            ToolExecutionContext(tenant_id="t1", env_vars={})
+        ):
+            result = SkillSubstitutor.substitute("K=${MISSING_VAR_QQ}", {"arguments": ""})
+        assert "${MISSING_VAR_QQ}" in result

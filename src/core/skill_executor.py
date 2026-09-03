@@ -358,6 +358,10 @@ Follow the instructions in the skill above to complete the user's task."""
             except Exception:
                 _tool_ctx = None
             if _tool_ctx is not None:
+                # 租户级子智能体环境变量（subagent_env_vars）随上下文传给子进程，
+                # 替代旧的进程级 os.environ 注入（并发消息竞态已废弃）
+                if _tool_ctx.env_vars:
+                    env.update(dict(_tool_ctx.env_vars))
                 if _tool_ctx.tenant_id:
                     env['AID_TENANT_ID'] = _tool_ctx.tenant_id
                 if _tool_ctx.session_id:

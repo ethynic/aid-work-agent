@@ -185,3 +185,18 @@ def test_nested_factory_and_derive_propagate_frozen_request_data():
     assert derived.request_data["feature"]["values"] == (1, 2)
     with pytest.raises(TypeError):
         derived.request_data["feature"] = {"values": ()}
+
+
+def test_factory_inherits_tenant_env_vars_from_parent():
+    with tool_execution_scope(ToolExecutionContext(env_vars={"AGENT_TOKEN": "tk"})):
+        nested = ExecutionContextFactory.for_agent_call(session_id="nested")
+    assert nested.env_vars["AGENT_TOKEN"] == "tk"
+
+
+def test_env_vars_frozen_against_mutation():
+    source = {"AGENT_TOKEN": "tk"}
+    ctx = ToolExecutionContext(env_vars=source)
+    source["AGENT_TOKEN"] = "changed"
+    assert ctx.env_vars["AGENT_TOKEN"] == "tk"
+    with pytest.raises(TypeError):
+        ctx.env_vars["OTHER"] = "x"

@@ -13,7 +13,6 @@ from src.tools._helpers import truncate_text
 from src.tools._spill import spill_large_content
 from src.tools.base import BaseTool
 from src.utils import sanitize_error_info
-from src.core.temp_logger import tlog
 
 # 单个文件最大 20MB
 MAX_FILE_SIZE = 20 * 1024 * 1024
@@ -124,12 +123,28 @@ class HttpApiTool(BaseTool):
         if files and body is not None:
             return {"success": False, "error": "files 和 body 不能同时使用"}
 
-        # ${ENV_VAR} 替换
+        # ${ENV_VAR} 替换（优先租户级环境变量，兜底进程环境）
         url = _substitute_env_vars(url)
         if headers:
             headers = {k: _substitute_env_vars(v) for k, v in headers.items()}
         if query_params:
             query_params = {k: _substitute_env_vars(v) for k, v in query_params.items()}
+
+        # fail-fast：凭证占位符（如 ${AGENT_TOKEN}）未被解析时直接拒绝请求，
+        # 避免把字面量当凭证发给第三方（2026-09-03 Code=-99 事故）
+        unresolved: List[str] = _find_unresolved_vars(url)
+        for _map in (headers, query_params):
+            if _map:
+                for _v in _map.values():
+                    unresolved.extend(_find_unresolved_vars(_v))
+        if unresolved:
+            return {
+                "success": False,
+                "error": (
+                    f"环境变量未配置，无法解析占位符: {', '.join(sorted(set(unresolved)))}。"
+                    "请在管理后台「租户管理 > 数字员工授权 > 环境变量」中配置后重试"
+                ),
+            }
 
         # 准备文件上传
         opened_files: List = []
@@ -287,22 +302,44 @@ def _coerce_json_object(value: Any) -> Any:
     return value
 
 
+def _get_tenant_env_vars() -> Dict[str, str]:
+    """读取请求级租户环境变量（subagent_env_vars，经 ToolExecutionContext 传递）。
+
+    旧实现把租户变量写入进程级 os.environ，并发消息结束时互相 pop 导致
+    ${VAR} 解析失败（2026-09-03 Code=-99 事故），现已改为随请求隔离。
+    """
+    try:
+        from src.tools.context import current_tool_execution_context
+        ctx = current_tool_execution_context()
+    except Exception:
+        return {}
+    if ctx is not None and ctx.env_vars:
+        return dict(ctx.env_vars)
+    return {}
+
+
 def _substitute_env_vars(text: str) -> str:
-    """替换字符串中的 ${ENV_VAR} 为环境变量值"""
+    """替换字符串中的 ${ENV_VAR}，优先取租户级环境变量，兜底进程环境变量"""
+    tenant_env = _get_tenant_env_vars()
+
     def replace(match: re.Match) -> str:
         var_name = match.group(1)
-        value = os.environ.get(var_name)
+        value = tenant_env.get(var_name)
         if value is None:
-            logger.warning(f"环境变量 {var_name} 未设置。")
-            tlog(
-                "环境变量",
-                "环境变量 {var_name} 未设置",
-                environ=os.environ,
-            )
+            value = os.environ.get(var_name)
+        if value is None:
+            logger.warning(f"环境变量 {var_name} 未设置（租户级环境变量与进程环境均未找到）。")
             return match.group(0)
         return value
 
     return re.sub(r"\$\{([^}]+)\}", replace, text)
+
+
+def _find_unresolved_vars(text: str) -> List[str]:
+    """找出文本中未被替换的 ${VAR} 占位符（环境变量未配置时残留）"""
+    if not text or "${" not in text:
+        return []
+    return re.findall(r"\$\{([^}]+)\}", text)
 
 
 def _safe_url_for_meta(response: httpx.Response) -> str:

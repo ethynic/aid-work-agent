@@ -81,12 +81,19 @@ class SkillSubstitutor:
                 "USER_ID": "user_id",
             }
             context_key = var_map.get(var_name, var_name)
-            # 先从 context 查找，再从环境变量查找
+            # 先从 context 查找，再从租户级环境变量、进程环境变量查找
             value = context.get(context_key)
-            if value is not None:
-                return str(value)
-            env_value = os.environ.get(var_name)
-            return env_value if env_value is not None else match.group(0)
+            if value is None:
+                try:
+                    from src.tools.context import current_tool_execution_context
+                    _tool_ctx = current_tool_execution_context()
+                except Exception:
+                    _tool_ctx = None
+                if _tool_ctx is not None:
+                    value = _tool_ctx.env_vars.get(var_name)
+            if value is None:
+                value = os.environ.get(var_name)
+            return str(value) if value is not None else match.group(0)
 
         body = SkillSubstitutor._VAR_PATTERN.sub(replace_var, body)
 

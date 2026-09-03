@@ -1089,3 +1089,87 @@ class TestHttpApiJsonStringTolerance:
         joined = "; ".join(errors)
         assert "url" in joined
         assert "未提供" in joined
+
+
+class TestTenantEnvVarSubstitution:
+    """租户级环境变量经 ToolExecutionContext 传递（替代旧的 os.environ 注入）"""
+
+    def test_tenant_env_var_preferred_over_process_env(self):
+        from src.tools.context import ToolExecutionContext, tool_execution_scope
+        from src.tools.network.http_api import _substitute_env_vars
+
+        ctx = ToolExecutionContext(tenant_id="t1", env_vars={"AGENT_TOKEN": "tenant_token"})
+        with tool_execution_scope(ctx):
+            with patch.dict(os.environ, {"AGENT_TOKEN": "process_token"}):
+                assert _substitute_env_vars("Bearer ${AGENT_TOKEN}") == "Bearer tenant_token"
+
+    def test_fallback_to_process_env_without_context(self):
+        from src.tools.network.http_api import _substitute_env_vars
+
+        with patch.dict(os.environ, {"MY_KEY_ZZ": "v123"}):
+            assert _substitute_env_vars("Bearer ${MY_KEY_ZZ}") == "Bearer v123"
+
+    def test_missing_var_keeps_placeholder(self):
+        from src.tools.context import ToolExecutionContext, tool_execution_scope
+        from src.tools.network.http_api import _substitute_env_vars
+
+        with tool_execution_scope(ToolExecutionContext(tenant_id="t1", env_vars={})):
+            result = _substitute_env_vars("Bearer ${MISSING_VAR_AB}")
+        assert result == "Bearer ${MISSING_VAR_AB}"
+
+
+class TestUnresolvedPlaceholderFailFast:
+    """凭证占位符未解析时应拒绝请求，而不是把 ${VAR} 字面量发给第三方"""
+
+    @pytest.mark.asyncio
+    async def test_unresolved_header_token_rejected(self):
+        from src.tools.network.http_api import HttpApiTool
+
+        tool = HttpApiTool()
+        result = await tool.execute(
+            method="POST",
+            url="https://erp.example.com/api/login",
+            headers={"Authorization": "Bearer ${AGENT_TOKEN}"},
+        )
+        assert result["success"] is False
+        assert "AGENT_TOKEN" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_unresolved_url_var_rejected(self):
+        from src.tools.network.http_api import HttpApiTool
+
+        tool = HttpApiTool()
+        result = await tool.execute(
+            method="GET",
+            url="https://api.example.com/data?key=${API_KEY_ZZ}",
+        )
+        assert result["success"] is False
+        assert "API_KEY_ZZ" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_resolved_tenant_var_proceeds(self):
+        from src.tools.context import ToolExecutionContext, tool_execution_scope
+        from src.tools.network.http_api import HttpApiTool
+
+        tool = HttpApiTool()
+        ctx = ToolExecutionContext(tenant_id="t1", env_vars={"AGENT_TOKEN": "real_token"})
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"Code": 0}
+        with tool_execution_scope(ctx):
+            with patch("src.tools.network.http_api.httpx.AsyncClient") as mock_client_cls:
+                mock_client = AsyncMock()
+                mock_client.request = AsyncMock(return_value=mock_response)
+                mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+                mock_client.__aexit__ = AsyncMock(return_value=False)
+                mock_client_cls.return_value = mock_client
+
+                result = await tool.execute(
+                    method="POST",
+                    url="https://erp.example.com/api/login",
+                    headers={"Authorization": "Bearer ${AGENT_TOKEN}"},
+                )
+
+        assert result["success"] is True
+        sent_headers = mock_client.request.call_args.kwargs["headers"]
+        assert sent_headers["Authorization"] == "Bearer real_token"

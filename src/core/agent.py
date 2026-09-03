@@ -2227,6 +2227,25 @@ class Agent:
                 _resolve_tenant_id = get_current_tenant_id()
             except Exception:
                 pass
+
+        # 子智能体环境变量：从 subagent_env_vars 表读取，挂到请求级 ToolExecutionContext.env_vars
+        # （旧实现写入进程级 os.environ，并发消息结束时互相 pop，曾致 http_api 拿不到
+        #  AGENT_TOKEN；ContextVar 随请求隔离，不再有跨消息竞态）
+        _tenant_env_vars = {}
+        if _resolve_tenant_id and self.mode != AgentMode.MASTER and self.subagent_config:
+            try:
+                from src.db.subagent_env_var import SubagentEnvVarDB
+                subagent_name = self.subagent_config.dir_name
+                for var in SubagentEnvVarDB.get_vars(_resolve_tenant_id, subagent_name):
+                    var_name = var["var_name"]
+                    var_value = var.get("var_value", "")
+                    if var_name and var_value:
+                        _tenant_env_vars[var_name] = var_value
+                if _tenant_env_vars:
+                    logger.debug(f"[ENV] Loaded {len(_tenant_env_vars)} env vars for subagent {subagent_name}")
+            except Exception as e:
+                logger.warning(f"环境变量读取失败: {e}")
+
         _tool_context = ExecutionContextFactory.for_agent_call(
             tenant_id=_resolve_tenant_id,
             user_id=user.user_id if user else getattr(self, "_init_user_id", None),
@@ -2238,25 +2257,8 @@ class Agent:
             ),
             agent_execution_id=getattr(self, "execution_id", None),
             request_data=request_context.request_data if request_context else {},
+            env_vars=_tenant_env_vars or None,
         )
-
-        # 子智能体环境变量注入：从 subagent_env_vars 表读取，设置为 os.environ，供 http_api 工具的 ${VAR} 替换
-        _injected_env_vars = {}
-        if _resolve_tenant_id and self.mode != AgentMode.MASTER and self.subagent_config:
-            try:
-                from src.db.subagent_env_var import SubagentEnvVarDB
-                subagent_name = self.subagent_config.dir_name
-                env_vars = SubagentEnvVarDB.get_vars(_resolve_tenant_id, subagent_name)
-                for var in env_vars:
-                    var_name = var["var_name"]
-                    var_value = var.get("var_value", "")
-                    if var_name and var_value:
-                        os.environ[var_name] = var_value
-                        _injected_env_vars[var_name] = True
-                if _injected_env_vars:
-                    logger.debug(f"[ENV] Injected {len(_injected_env_vars)} env vars for subagent {subagent_name}")
-            except Exception as e:
-                logger.warning(f"环境变量注入失败: {e}")
         
         # Add timestamp context to help LLM understand current time
         current_time = datetime.now()
@@ -3073,8 +3075,6 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                         yield make_event(
                             "progress", data="等待你的操作；完成后系统会自动继续"
                         )
-                        for var_name in _injected_env_vars:
-                            os.environ.pop(var_name, None)
                         return
 
                     # 发送工具执行完成事件
@@ -3223,10 +3223,6 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
 
         if tool_messages_for_persist:
             yield make_event("tool_messages", messages=tool_messages_for_persist)
-
-        # 清除子智能体临时注入的环境变量
-        for var_name in _injected_env_vars:
-            os.environ.pop(var_name, None)
 
         # 清理本次消息创建的技能工作目录（skill_ws_* 临时文件，避免逐月堆积）
         if session_workspace is not None and session_workspace.exists():
@@ -3412,6 +3408,22 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
         # 按需加载租户自定义 skills
         self._ensure_tenant_skills_loaded()
 
+        # 子智能体环境变量：挂到请求级 ToolExecutionContext.env_vars（不再写进程级 os.environ）
+        _tenant_env_vars = {}
+        if self._init_tenant_id and self.subagent_config:
+            try:
+                from src.db.subagent_env_var import SubagentEnvVarDB
+                subagent_name = self.subagent_config.dir_name
+                for var in SubagentEnvVarDB.get_vars(self._init_tenant_id, subagent_name):
+                    var_name = var["var_name"]
+                    var_value = var.get("var_value", "")
+                    if var_name and var_value:
+                        _tenant_env_vars[var_name] = var_value
+                if _tenant_env_vars:
+                    logger.info(f"[SUBAGENT] Loaded {len(_tenant_env_vars)} env vars for {subagent_name}")
+            except Exception as e:
+                logger.warning(f"[SUBAGENT] 环境变量读取失败: {e}")
+
         _subagent_tool_context = ExecutionContextFactory.for_agent_call(
             tenant_id=self._init_tenant_id,
             user_id=self._init_user_id,
@@ -3422,25 +3434,8 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                 else None
             ),
             agent_execution_id=self.execution_id,
+            env_vars=_tenant_env_vars or None,
         )
-
-        # 注入子智能体环境变量（从 subagent_env_vars 表读取，设置为 os.environ）
-        _injected_env_vars = {}
-        if self._init_tenant_id and self.subagent_config:
-            try:
-                from src.db.subagent_env_var import SubagentEnvVarDB
-                subagent_name = self.subagent_config.dir_name
-                env_vars = SubagentEnvVarDB.get_vars(self._init_tenant_id, subagent_name)
-                for var in env_vars:
-                    var_name = var["var_name"]
-                    var_value = var.get("var_value", "")
-                    if var_name and var_value:
-                        os.environ[var_name] = var_value
-                        _injected_env_vars[var_name] = True
-                if _injected_env_vars:
-                    logger.info(f"[SUBAGENT] Injected {len(_injected_env_vars)} env vars for {subagent_name}")
-            except Exception as e:
-                logger.warning(f"[SUBAGENT] 环境变量注入失败: {e}")
 
         # 事件辅助函数 — 内部收集并转发给 progress_callback
         from src.core.agent_events import make_event, mask_tool_args
@@ -3937,10 +3932,6 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                 "summary": f"Failed: {e}",
                 "error": str(e)
             }
-        finally:
-            # 清理注入的环境变量
-            for var_name in _injected_env_vars:
-                os.environ.pop(var_name, None)
 
 
 # master_agent 单例：延迟构造
