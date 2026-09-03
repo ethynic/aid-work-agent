@@ -44,8 +44,12 @@ class PlanManager:
             plans_dir = Path(__file__).parent.parent.parent / "plans"
         
         self.plans_dir = plans_dir
-        self.plans_dir.mkdir(parents=True, exist_ok=True)
-        
+        try:
+            self.plans_dir.mkdir(parents=True, exist_ok=True)
+        except (PermissionError, OSError) as e:
+            # 目录不可写时降级：计划主存储在 Redis，MD 文件持久化不可用，但不能炸掉启动链路
+            logger.error(f"PlanManager 计划目录不可写: {self.plans_dir} ({e})，MD 持久化将不可用")
+
         logger.info(f"PlanManager initialized with plans_dir: {self.plans_dir}")
 
     # ==================== Redis Plan Storage ====================
@@ -371,9 +375,11 @@ class PlanManager:
 |------|------|
 | {now} | 计划创建 |
 """
-        
-        file_path.write_text(md_content, encoding="utf-8")
-        logger.info(f"Saved plan to {file_path}")
+        try:
+            file_path.write_text(md_content, encoding="utf-8")
+            logger.info(f"Saved plan to {file_path}")
+        except (PermissionError, OSError) as e:
+            logger.error(f"计划 MD 文件写入失败: {file_path} ({e})")
     
     def _update_plan_markdown(
         self,
@@ -458,8 +464,11 @@ class PlanManager:
             f"| {now} | 计划创建 |\n{new_log_entry}"
         )
         
-        file_path.write_text(content, encoding="utf-8")
-        logger.info(f"Updated plan file: {file_path}")
+        try:
+            file_path.write_text(content, encoding="utf-8")
+            logger.info(f"Updated plan file: {file_path}")
+        except (PermissionError, OSError) as e:
+            logger.error(f"计划 MD 文件写入失败: {file_path} ({e})")
     
     def _format_list(self, items: List[str]) -> str:
         """格式化列表"""
@@ -614,7 +623,3 @@ class PlanManager:
         ])
         
         return "\n".join(lines)
-
-
-# 全局计划管理器实例
-plan_manager = PlanManager()

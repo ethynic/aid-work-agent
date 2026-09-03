@@ -133,3 +133,7 @@ frontend/test-results/
 
 # 客户端分发包（tgz 二进制不入库，脚本与手册入库）
 clients/release/*.tgz
+
+# plans 运行时产物（PlanManager 会话计划文件，仅设计/开发文档入库）
+plans/cron_user_*.md
+plans/interactive_session_*.md
