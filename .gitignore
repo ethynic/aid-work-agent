@@ -137,3 +137,6 @@ clients/release/*.tgz
 # plans 运行时产物（PlanManager 会话计划文件，仅设计/开发文档入库）
 plans/cron_user_*.md
 plans/interactive_session_*.md
+
+# Claude Code 启动脚本（内含 API key 引用，不入库）
+cc.sh
