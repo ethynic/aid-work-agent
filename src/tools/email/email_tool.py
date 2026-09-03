@@ -115,7 +115,7 @@ def _clamp_int(value, default: int, low: int, high: int) -> int:
     """
     数值入参防御：宽容转换 + 夹紧到 [low, high]
 
-    主执行链（core/executor.py execute_task）对工具参数不做 Pydantic 校验，
+    主执行链（core/agent.py）对工具参数不做 Pydantic 校验，
     LLM 可能传字符串/None/浮点/超大值，直接透传会在库层比较或切片时抛
     TypeError（落入兜底文案）或造成资源放大（逐封拉全信），故在此归一。
     """
