@@ -1,6 +1,6 @@
 # 企业微信个人账号 RPA 接入调研报告
 
-> 关联设计：[wecom-personal-rpa-design.md](../system/wecom-personal-rpa-design.md) / 开发计划：[plan-wecom-personal-rpa.md](../../plans/plan-wecom-personal-rpa.md)
+> 关联设计：[wecom-personal-rpa-design.md](../system/wecom-personal-rpa-design.md) / 开发计划：[plan-wecom-personal-rpa.md](../plans/plan-wecom-personal-rpa.md)
 > 调研日期：2026-06-16
 > 调研范围：让 AI agent 通过接管"真实的个人企业微信账号"（真人员工账号）收发消息的实现方案
 > 调研方法：联网搜索 GitHub、技术博客、官方文档、行业报告（2024-2026 一手资料）

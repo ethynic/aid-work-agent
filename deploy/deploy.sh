@@ -94,21 +94,11 @@ main() {
     # 设置日志目录权限
     chown -R ${CURRENT_USER}:${CURRENT_GROUP} log
     chmod -R 775 log
-    
-    # 设置数据库文件权限（如果已存在）
-    if [ -f "aid_work_agent.db" ]; then
-        chmod 777 aid_work_agent.db
-        log_info "数据库文件权限已设置为 777"
-    else
-        log_warning "数据库文件不存在，将在首次启动时自动创建"
-        log_warning "首次启动后请执行: chmod 777 aid_work_agent.db"
-    fi
-    
+
     # 设置上传目录权限
     sudo chown -R www-data:www-data /var/www/qb3_upload
-    
+
     log_success "目录创建完成"
-    log_info "数据库文件位置: $PROJECT_DIR/aid_work_agent.db"
     log_info "日志文件位置: $PROJECT_DIR/log/"
 
     # 把 gaofang 用户加入 docker 组

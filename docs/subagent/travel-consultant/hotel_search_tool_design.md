@@ -116,7 +116,7 @@ class HotelSearchInput(BaseModel):
 
 ### Step 4: 文档与测试
 
-- 本设计文档 + 开发计划 `plans/plan-hotel-search-tool.md`
+- 本设计文档 + 开发计划 `docs/plans/plan-hotel-search-tool.md`
 - 登记 `docs/ideas.md`
 - 单元测试 `tests/integration/test_hotel_search_tool.py`（真实 DB 集成测试：连 `.env` 的 DATABASE_URL，动态发现有 hotel_resource 数据的租户，验证名称命中 + price_table + 向量兜底；仅 stub 外边界 `_embed`）
 

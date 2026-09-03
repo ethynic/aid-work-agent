@@ -3,7 +3,7 @@
 > **历史调研（交付结论已废弃）**：其中 WiX/MSIX 安装包建议已于 2026-07-13 废弃。当前唯一交付方式为 Release build 或 `clients/wecom-personal-rpa/scripts/publish.ps1` 生成 EXE 目录；不得按本文恢复安装包流程。
 
 > 关联设计：[wecom-personal-rpa-design.md](../system/wecom-personal-rpa-design.md)
-> 关联计划：[plan-wecom-personal-rpa.md](../../plans/plan-wecom-personal-rpa.md)
+> 关联计划：[plan-wecom-personal-rpa.md](../plans/plan-wecom-personal-rpa.md)
 > 调研日期：2026-06-22
 > 状态：📋 待开发
 

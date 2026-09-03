@@ -5,7 +5,7 @@
 > - 协议：[wecom-personal-rpa-protocol.md](./wecom-personal-rpa-protocol.md)
 > - 绑定管理 Tab：[wecom-personal-rpa-portal-binding-design.md](./wecom-personal-rpa-portal-binding-design.md)
 > - 调试脚本（已验证可用）：[clients/wecom-personal-rpa/scripts/debug-navigate.ps1](../../clients/wecom-personal-rpa/scripts/debug-navigate.ps1)
-> - 开发计划：[plans/plan-wecom-personal-rpa-client.md](../../plans/plan-wecom-personal-rpa-client.md)
+> - 开发计划：[docs/plans/plan-wecom-personal-rpa-client.md](../plans/plan-wecom-personal-rpa-client.md)
 >
 > 登记位置：[docs/ideas.md](../ideas.md) #29（企业微信个人账号 RPA 接入）
 >

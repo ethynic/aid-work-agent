@@ -228,7 +228,7 @@ POST /api/saas/wecom-personal-rpa/resume
 | 5 | 平台后台前端单测（MSW mock pause/resume） | 任务 3a | 0.5 天 |
 | 6 | 联调验证 + 文档登记 | 全部 | 0.5 天 |
 
-**总预估**：约 4.5 天。详细可执行计划见 [plans/plan-wecom-personal-rpa-portal-binding.md](../../plans/plan-wecom-personal-rpa-portal-binding.md)。
+**总预估**：约 4.5 天。详细可执行计划见 [docs/plans/plan-wecom-personal-rpa-portal-binding.md](../plans/plan-wecom-personal-rpa-portal-binding.md)。
 
 ---
 
@@ -242,7 +242,7 @@ POST /api/saas/wecom-personal-rpa/resume
 | 视觉突破总结 | [wecom-personal-rpa-vision-breakthrough.md](wecom-personal-rpa-vision-breakthrough.md) |
 | 客户端操作手册 | [clients/wecom-personal-rpa/docs/操作手册.md](../../clients/wecom-personal-rpa/docs/操作手册.md) |
 | 客户端 EXE 构建与部署 | [clients/wecom-personal-rpa/docs/操作手册.md](../../clients/wecom-personal-rpa/docs/操作手册.md) |
-| 开发计划 | [plans/plan-wecom-personal-rpa-portal-binding.md](../../plans/plan-wecom-personal-rpa-portal-binding.md) |
+| 开发计划 | [docs/plans/plan-wecom-personal-rpa-portal-binding.md](../plans/plan-wecom-personal-rpa-portal-binding.md) |
 
 ### 7.1 与服务端拉取会话存档模式的关系（2026-07-03）
 

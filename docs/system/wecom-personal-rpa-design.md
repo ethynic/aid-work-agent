@@ -9,7 +9,7 @@
 > - **客户端实现（最新）**：[wecom-personal-rpa-client-design.md](./wecom-personal-rpa-client-design.md)
 > - 协议：[wecom-personal-rpa-protocol.md](./wecom-personal-rpa-protocol.md)
 > - 绑定管理 Tab：[wecom-personal-rpa-portal-binding-design.md](./wecom-personal-rpa-portal-binding-design.md)
-> - 开发计划：[plan-wecom-personal-rpa.md](../../plans/plan-wecom-personal-rpa.md) + [plan-wecom-personal-rpa-client.md](../../plans/plan-wecom-personal-rpa-client.md)
+> - 开发计划：[plan-wecom-personal-rpa.md](../plans/plan-wecom-personal-rpa.md) + [plan-wecom-personal-rpa-client.md](../plans/plan-wecom-personal-rpa-client.md)
 > - 关联调研：[wecom-personal-account-rpa-research.md](../research/wecom-personal-account-rpa-research.md)、[wecom-personal-rpa-client-implementation-research.md](../research/wecom-personal-rpa-client-implementation-research.md)
 >
 > 创建日期：2026-06-16
@@ -653,5 +653,5 @@ CREATE TABLE wecom_rpa_conversation_bindings (
 | 平台后台绑定管理 Tab | ✅ 已完成 | 详见 [portal-binding-design.md](./wecom-personal-rpa-portal-binding-design.md) |
 
 **详细开发任务**见：
-- 服务端 + 部署：[plans/plan-wecom-personal-rpa.md](../../plans/plan-wecom-personal-rpa.md)
-- 客户端：[plans/plan-wecom-personal-rpa-client.md](../../plans/plan-wecom-personal-rpa-client.md)
+- 服务端 + 部署：[docs/plans/plan-wecom-personal-rpa.md](../plans/plan-wecom-personal-rpa.md)
+- 客户端：[docs/plans/plan-wecom-personal-rpa-client.md](../plans/plan-wecom-personal-rpa-client.md)

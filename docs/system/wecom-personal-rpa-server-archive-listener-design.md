@@ -2,7 +2,7 @@
 
 > **关联文档**：[docs/ideas.md §渠道集成 #29](../ideas.md) · [客户端设计](wecom-personal-rpa-client-design.md) · [绑定管理 Tab 设计](wecom-personal-rpa-portal-binding-design.md) · [协议](wecom-personal-rpa-protocol.md)
 >
-> **关联开发计划**：[plans/plan-wecom-personal-rpa-server-archive-listener.md](../../plans/plan-wecom-personal-rpa-server-archive-listener.md)
+> **关联开发计划**：[docs/plans/plan-wecom-personal-rpa-server-archive-listener.md](../plans/plan-wecom-personal-rpa-server-archive-listener.md)
 >
 > **核心定位**：本方案是 **现有 `wecom_personal_rpa` 渠道的功能扩展**，新增"服务端拉取模式"作为默认推荐，保留"客户端拉取模式"为可选 fallback。**不新增渠道类型**，因为两种模式本质都是「企业微信个人号绑定 agent 服务用户」，区别只是「在服务端拉存档 vs 在客户端拉存档」这一功能开关。
 >

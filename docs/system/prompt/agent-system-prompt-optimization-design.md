@@ -2,7 +2,7 @@
 
 > 关联文档：
 > - 反向关联：[基础设施/Prompt 全生命周期管理](../../infrastructure/prompt-lifecycle-design.md)（解决"版本管理机制"，本文档解决"提示词内容本身"）
-> - 开发计划：[agent-system-prompt-optimization-dev-plan.md](../../../plans/agent-system-prompt-optimization-dev-plan.md)
+> - 开发计划：[agent-system-prompt-optimization-dev-plan.md](../../plans/agent-system-prompt-optimization-dev-plan.md)
 > - 涉及模板：`src/prompts/templates/master_agent.md`、`src/prompts/templates/subagent_base.md`
 > - 涉及子智能体：`subagents/travel-consultant/SUBAGENT.md`
 

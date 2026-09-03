@@ -1,6 +1,6 @@
 # 研学报价技能稳定性优化设计（方案 A：Prompt 规则固化）
 
-> **关联开发计划**：[plan-travel-quote-prompt-stability.md](../../plans/plan-travel-quote-prompt-stability.md)
+> **关联开发计划**：[plan-travel-quote-prompt-stability.md](../plans/plan-travel-quote-prompt-stability.md)
 > **关联技能**：`src/skills/travel-quote/`
 > **登记**：[docs/ideas.md](../ideas.md)
 

@@ -2,7 +2,7 @@
 
 > **关联文档**：
 > - 服务端拉取存档设计：[wecom-personal-rpa-server-archive-listener-design.md](./wecom-personal-rpa-server-archive-listener-design.md)
-> - 开发计划：[plans/plan-wecom-personal-rpa-server-archive-listener.md](../../plans/plan-wecom-personal-rpa-server-archive-listener.md)
+> - 开发计划：[docs/plans/plan-wecom-personal-rpa-server-archive-listener.md](../plans/plan-wecom-personal-rpa-server-archive-listener.md)
 > - 协议：[wecom-personal-rpa-protocol.md](./wecom-personal-rpa-protocol.md)
 > - 客户端设计：[wecom-personal-rpa-client-design.md](./wecom-personal-rpa-client-design.md)
 >
