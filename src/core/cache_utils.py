@@ -71,6 +71,9 @@ class CacheKeys:
     SUBAGENT_GREETING = "subagent_greeting"  # subagent_greeting:{agent_id}（数字员工空态摘要+快捷按钮，LLM 生成后缓存）
     WECOM_KF = "wecom_kf"                  # wecom_kf:{corp_id}:{key}（企微客服，key 必须带企业维度）
     STANDALONE_AGENT = "standalone_agent"  # standalone_agent:{session_id}:{agent_id}
+    # pre-sales-api 委托登录 client_token：pre_sales_client_token:{tenant_id}:{assignee_phone}
+    # （外部系统委托人 token，有效期 1 天，缓存 TTL 23h 留 buffer；Code=-99 时 force_refresh 强刷）
+    PRE_SALES_CLIENT_TOKEN = "pre_sales_client_token"
 
 
 # ============== 通用缓存函数 ==============

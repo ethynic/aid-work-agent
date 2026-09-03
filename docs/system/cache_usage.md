@@ -340,6 +340,15 @@ ImageRegistry 管理的图片资产元信息（复用 cp 的 `uploaded_file:{fil
 **关键约束**：LLM（lite_model 小模型）按需生成、缓存复用，避免重复计费；全局缓存（不含租户维度），智能体能力变更频率极低。前端静态配置（`frontend/web/utils/sessionGreetings.ts`）优先于本缓存，仅未配置的智能体走此接口
 **源文件**：`src/api/subagent.py`
 
+### 7.4.4 pre-sales-api 委托登录 client_token
+
+**存储**：Redis + 内存降级
+**键模式**：`pre_sales_client_token:{tenant_id}:{assignee_phone}`
+**TTL**：82800s（23h，外部系统 token 有效期 1 天，留 1h buffer）
+**失效时机**：业务接口返回 `Code=-99`（鉴权失败）时由 Agent 调 `delegate_login.py` 带 `force_refresh=1` 强制重新登录覆盖；TTL 自动过期兜底
+**关键约束**：委托人 token 按租户 + 归属员工手机号隔离，避免跨租户/跨员工串 token；缓存值不含 `success` 字段，命中返回时由脚本补加
+**源文件**：`src/skills/pre-sales-api-1.0.0/scripts/delegate_login.py`（前缀注册：`src/core/cache_utils.py`）
+
 ### 7.5 定时任务调度器启动锁
 
 多 worker 环境下，确保只有单个 worker 启动 APScheduler 调度器，避免重复注册定时任务。
@@ -430,6 +439,7 @@ PostgreSQL（持久化，权威数据源）
 ├── uploaded_file:file_{uuid12}      # 图片/文件资产元信息（Hash，与 cp 共用）
 ├── image_fetch_url:{sha256(url)}    # Web 图片抓取去重
 ├── subagent_greeting:{agent_id}     # 数字员工空态摘要（LLM 生成缓存）
+├── pre_sales_client_token:{tenant_id}:{assignee_phone}  # pre-sales-api 委托登录 token（23h）
 └── sched_task_lock:manager          # 定时任务调度器启动锁
 
 内存缓存（无 Redis 键前缀）：

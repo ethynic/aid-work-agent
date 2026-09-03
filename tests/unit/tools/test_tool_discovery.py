@@ -25,6 +25,10 @@
 2026-08-21 追加 record_lead_capture（客户留资，Phase 2 随 pre-sales 智能体
 放开 catalog=True；渠道隔离靠 execute 内 get_kf_context 兜底，与
 transfer_to_human 同一模式）。
+
+2026-09-03 追加 get_channel_user_info（渠道客户信息查询，售前咨询外部
+推送 client_token 委托登录用；信息来源为 kf context 注入的
+channel_user_info 与 users_db，无外部网络调用）。
 """
 
 import pytest
@@ -45,6 +49,7 @@ GOLDEN_TOOLS = [
     "edit",
     "email_process",
     "excel_process",
+    "get_channel_user_info",
     "grep",
     "hotel_search",
     "http_api",

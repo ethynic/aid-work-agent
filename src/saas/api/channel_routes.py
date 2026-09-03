@@ -2364,6 +2364,14 @@ async def _process_tenant_wecom_kf_messages(
                     "tenant_id": tenant_id,
                     "user_id": user_id,
                     "lead_capture": session_metadata.get("lead_capture"),
+                    # 微信侧客户信息（昵称/头像/性别/unionid），user_info 本条消息已取好，
+                    # 供 get_channel_user_info 等工具读取，零额外微信 API 调用
+                    "channel_user_info": {
+                        "nickname": user_info.get("name", ""),
+                        "avatar": user_info.get("avatar", ""),
+                        "gender": user_info.get("gender", 0),
+                        "wx_unionid": user_info.get("wx_unionid", ""),
+                    },
                 })
 
                 # 发送前校验微信远程会话状态，防止本地状态与远程不一致导致 95018
