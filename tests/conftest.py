@@ -15,14 +15,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-# ============================================================
-# 跳过旧根级测试（tests/test_*.py）的收集
-# 这些是早期手动运行的脚本式测试，依赖已废弃的旧工具 API，
-# 不再维护。新测试统一放在 tests/unit/、tests/integration/、tests/e2e/。
-# 参考 .claude/rules/testing.md
-# ============================================================
-collect_ignore_glob = ["test_*.py"]
-
 
 # ============================================================
 # 在导入 src 模块之前 mock 外部依赖，防止 master_agent 初始化失败
@@ -43,9 +35,6 @@ vector_db_mod.get_vector_db = MagicMock()
 vector_db_pkg.vector_db = vector_db_mod
 sys.modules["src.knowledge.vector_db"] = vector_db_pkg
 sys.modules["src.knowledge.vector_db.vector_db"] = vector_db_mod
-
-# 忽略旧的根目录测试文件（已迁移到 unit/integration/e2e 子目录）
-collect_ignore = sorted(str(p) for p in Path(__file__).parent.glob("test_*.py"))
 
 # 在导入 src 模块之前设置测试环境变量
 os.environ.setdefault("LLM_PROVIDER", "qwen")

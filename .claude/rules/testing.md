@@ -123,7 +123,7 @@ async def test_my_route():
 
 - **导入 `src.core.*` 会触发 `master_agent` 单例创建**。`tests/conftest.py` 已 mock `VectorDBSQLite` 解决此问题。如果遇到新的导入链问题，在 `conftest.py` 中添加 mock。
 - **异步测试**使用 `@pytest.mark.asyncio`，`pytest.ini` 中 `asyncio_mode = auto` 已全局启用。
-- **旧测试文件**（`tests/test_*.py`）已迁移到子目录，通过 `collect_ignore` 跳过收集，可后续清理删除。
+- 旧根级测试文件（`tests/test_*.py`，24 个脚本式遗留）已于 2026-09-03 清理删除，conftest 的 `collect_ignore` 排除逻辑一并移除；新测试统一放 `tests/unit/`、`tests/integration/`、`tests/e2e/`。
 
 ## 运行测试
 
