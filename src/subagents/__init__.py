@@ -4,7 +4,6 @@ Subagent模块
 提供子智能体的注册、加载、执行和管理功能。
 
 核心组件:
-- SubagentConfig: 子智能体配置
 - SubagentLoader: 配置加载器
 - SubagentRegistry: 注册表
 - SubagentExecutor: 执行管理器
@@ -13,7 +12,6 @@ Subagent模块
 注意: 所有智能体（主/子）现在统一使用 Agent 类，不再需要单独的 SubagentInstance
 """
 
-from .config import SubagentConfig
 from .loader import SubagentLoader
 from .registry import SubagentRegistry
 from .protocol import SubagentTaskRecord
@@ -21,8 +19,6 @@ from .executor import SubagentExecutor
 from .factory import AgentFactory
 
 __all__ = [
-    # 配置
-    "SubagentConfig",
     "SubagentLoader",
     # 注册
     "SubagentRegistry",
