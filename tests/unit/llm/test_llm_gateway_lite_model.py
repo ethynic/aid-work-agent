@@ -83,7 +83,8 @@ class TestChatLite:
         assert call_kwargs["messages"] == [{"role": "user", "content": "hi"}]
         assert call_kwargs["temperature"] == 0.1
         assert call_kwargs["max_tokens"] == 1024
-        # qwen target 不加 thinking（仅 deepseek target 自动关思考）
+        # qwen target 自动关思考（enable_thinking=False，三通道统一语义）
+        assert call_kwargs["enable_thinking"] is False
         assert "thinking" not in call_kwargs
 
     @pytest.mark.asyncio
@@ -104,6 +105,30 @@ class TestChatLite:
         assert call_kwargs["max_tokens"] == 1024
         # deepseek target 自动关思考（统一收口到 chat_lite）
         assert call_kwargs["thinking"] == {"type": "disabled"}
+
+    @pytest.mark.asyncio
+    async def test_zhipu_target_disables_thinking_via_effort(self, _patch_llm_env):
+        """zhipu target 跨 provider 直连：reasoning_effort=low（GLM Flash 始终思考，low 档归零）"""
+        fake_provider = _FakeProvider()
+        with patch("src.llm.gateway._build_provider", return_value=fake_provider), \
+             patch.object(LLMConfig, "get_lite_target", return_value=("zhipu", "GLM-5.3-Flash")):
+            gw = LLMGateway(provider_name="deepseek")
+            await gw.chat_lite(messages=[{"role": "user", "content": "hi"}], max_tokens=1024)
+
+        call_kwargs = fake_provider.chat.call_args.kwargs
+        assert call_kwargs["reasoning_effort"] == "low"
+
+    @pytest.mark.asyncio
+    async def test_same_provider_qwen_disables_thinking(self):
+        """qwen 同 provider 路径：enable_thinking=False 经主链路传入"""
+        gw = LLMGateway(provider_name="qwen")
+        with patch.object(LLMConfig, "get_lite_target", return_value=("qwen", "qwen3.8-flash")), \
+             patch.object(gw, "chat", new=AsyncMock(return_value={"content": "ok"})) as mock_chat:
+            await gw.chat_lite(messages=[{"role": "user", "content": "hi"}], max_tokens=1024)
+
+        call_kwargs = mock_chat.call_args.kwargs
+        assert call_kwargs["enable_thinking"] is False
+        assert call_kwargs["model"] == "qwen3.8-flash"
 
     @pytest.mark.asyncio
     async def test_unconfigured_falls_back_to_main_model(self):

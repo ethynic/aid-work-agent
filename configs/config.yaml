@@ -41,9 +41,10 @@ llm:
   #   - 纯模型名（如 "deepseek-v4-flash"）：用当前主 provider
   # 未配置时 fallback 到主模型 model；详见 docs/research/ai-agent-experience-daily-report-research.md §4.7.6
   lite_model: ${LITE_MODEL_CODE:-}
-  # qwen 推理模型（qwen3.x-flash/plus 系）是否关闭思考模式；默认 false（关闭思考，1-2s 响应）。
-  # 仅 qwen provider 的 qwen 系模型生效；置 None 时不写该参数（不影响非 qwen 推理模型）
-  enable_thinking: false
+  # qwen 推理模型（qwen3.x-flash/plus 系）思考开关。true = 思考开启，
+  # 与 deepseek/zhipu 通道统一（主链路默认思考开启，chat_lite 显式关闭，见 gateway._LITE_THINKING_OFF_PARAMS）。
+  # 仅 qwen provider 的 qwen 系模型生效；置 None 时不写该参数（用平台默认）
+  enable_thinking: true
   # 是否启用显式缓存（cache_control: ephemeral）。仅 qwen provider 的 qwen 系模型生效，
   # 命中按输入单价 10% 计费（百炼官方），有效 5 分钟。
   # 2026-09-03 置 false：主模型切 qwen3.8-flash 后走隐式缓存（自动前缀匹配，命中 20%，

@@ -32,6 +32,12 @@ class LLMAllProvidersFailedError(Exception):
         super().__init__(f"所有 LLM Provider 均失败: {details}")
 
 
+# 仅主 provider 槽位保留的 kwargs（各 provider 专属的思考控制参数）。
+# 透传给备用槽会产生跨 provider 错配：qwen 静默忽略 thinking、zhipu GLM
+# 对 thinking 字段 400、enable_thinking/reasoning_effort 语义互不兼容。
+PRIMARY_ONLY_KWARGS = ("thinking", "enable_thinking", "reasoning_effort")
+
+
 # ---------------------------------------------------------------------------
 # 错误分类
 # ---------------------------------------------------------------------------
@@ -419,21 +425,27 @@ class FailoverGateway:
         且从 kwargs 中移除——否则各 provider 的 request_body.update(kwargs) 会把该模型串
         原样发给备用 provider，产生 qwen/deepseek-v4-flash 这类跨 provider 模型错配。
         备用槽位一律使用各自的 _model_codes 覆盖或 settings.llm.{provider}.model。
+        思考控制参数（PRIMARY_ONLY_KWARGS）同样仅主槽保留。
         """
         if request_id is None:
             request_id = generate_request_id()
 
         explicit_model = kwargs.pop("model", None)
+        # 思考控制参数仅主 provider 槽位保留（PRIMARY_ONLY_KWARGS），备用槽剥离走各自默认
+        primary_thinking = {k: kwargs.pop(k) for k in PRIMARY_ONLY_KWARGS if k in kwargs}
         chain = self._get_provider_chain()
         errors: List[Dict[str, str]] = []
 
         for i, slot in enumerate(chain):
             start = time.monotonic()
             try:
+                slot_kwargs = dict(kwargs)
+                if slot.provider_name == self._primary_name:
+                    slot_kwargs.update(primary_thinking)
                 result = await self._call_slot(
                     slot, fn_name,
                     model_override=explicit_model if slot.provider_name == self._primary_name else None,
-                    **kwargs,
+                    **slot_kwargs,
                 )
                 slot.circuit_breaker.record_success()
                 return result
@@ -477,17 +489,22 @@ class FailoverGateway:
             request_id = generate_request_id()
 
         explicit_model = kwargs.pop("model", None)
+        # 思考控制参数处理同 call_with_failover：仅主 provider 槽位保留
+        primary_thinking = {k: kwargs.pop(k) for k in PRIMARY_ONLY_KWARGS if k in kwargs}
         chain = self._get_provider_chain()
         errors: List[Dict[str, str]] = []
 
         for i, slot in enumerate(chain):
             start = time.monotonic()
             try:
+                slot_kwargs = dict(kwargs)
+                if slot.provider_name == self._primary_name:
+                    slot_kwargs.update(primary_thinking)
                 # 尝试建立流连接并获取第一个 chunk
                 stream = self._stream_slot(
                     slot, fn_name,
                     model_override=explicit_model if slot.provider_name == self._primary_name else None,
-                    **kwargs,
+                    **slot_kwargs,
                 )
                 stream_iter = stream.__aiter__()
                 first_chunk = await stream_iter.__anext__()

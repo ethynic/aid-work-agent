@@ -24,6 +24,18 @@ from .providers.zhipu import ZhipuProvider
 # 未在 llm.model_max_tokens 配置表中的模型，其默认 max_tokens 兜底值
 DEFAULT_MAX_TOKENS = 16384
 
+# chat_lite 关闭思考的参数（按目标 provider 区分，三通道统一语义：主链路默认思考开启，lite 关闭）
+_LITE_THINKING_OFF_PARAMS = {
+    "deepseek": {"thinking": {"type": "disabled"}},
+    "qwen": {"enable_thinking": False},
+    "zhipu": {"reasoning_effort": "low"},
+}
+
+
+def _lite_thinking_off_params(provider_name: str) -> Dict[str, Any]:
+    """返回指定 provider 的 lite 关思考参数（无对应参数的 provider 返回空 dict）"""
+    return dict(_LITE_THINKING_OFF_PARAMS.get(provider_name, {}))
+
 
 def _build_key_pool(provider_name: str) -> KeyPool:
     """根据 provider 配置构建 KeyPool"""
@@ -350,8 +362,9 @@ class LLMGateway:
           key/base_url 构建独立 Provider 直连，不参与主链路 failover（指定即专用）
         - 纯模型名 / 未配置：走当前 provider 的完整链路（含 failover），显式传 model 覆盖
 
-        对 deepseek target 自动加 thinking={"type": "disabled"}（DeepSeek V4 思考模型，
-        轻量结构化任务无需思考，统一收口到此方法，调用方无需关心 provider）。
+        对目标 provider 自动加关思考参数（三通道统一：主链路默认思考开启，lite 关闭）：
+        deepseek -> thinking={"type": "disabled"}；qwen -> enable_thinking=False；
+        zhipu -> reasoning_effort="low"（GLM Flash 始终思考，low 档 reasoning 归零）。
 
         Returns:
             与 chat() 一致的响应字典
@@ -372,8 +385,8 @@ class LLMGateway:
 
         if lite_provider == self.provider_name:
             # 当前 provider：走完整链路（含 failover）
-            if lite_provider == "deepseek":
-                kwargs.setdefault("thinking", {"type": "disabled"})
+            for k, v in _lite_thinking_off_params(lite_provider).items():
+                kwargs.setdefault(k, v)
             return await self.chat(
                 messages=messages,
                 tools=tools,
@@ -386,8 +399,8 @@ class LLMGateway:
 
         # 跨 provider：指定即专用，不参与 failover
         max_tokens = self._resolve_max_tokens(max_tokens, model=lite_model)
-        if lite_provider == "deepseek":
-            kwargs.setdefault("thinking", {"type": "disabled"})
+        for k, v in _lite_thinking_off_params(lite_provider).items():
+            kwargs.setdefault(k, v)
         chat_start = time.time()
         key_pool = _build_key_pool(lite_provider)
         try:

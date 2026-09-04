@@ -524,6 +524,96 @@ class TestExplicitModelHandling:
         assert captured == [("primary", "deepseek-v4-flash"), ("secondary", None)]
 
     @pytest.mark.asyncio
+    async def test_thinking_kwarg_only_kept_for_primary_slot(self):
+        """thinking 是 deepseek 专属参数：备用槽剥离（zhipu 对该字段 400），主槽保留"""
+        fg = self._make_fg([_make_slot("primary"), _make_slot("secondary")])
+        captured = []
+
+        async def mock_call_slot(slot, fn_name, **kwargs):
+            captured.append((slot.provider_name, kwargs.get("thinking")))
+            if slot.provider_name == "primary":
+                raise asyncio.TimeoutError("timeout")
+            return {"content": "ok"}
+
+        fg._call_slot = mock_call_slot
+
+        await fg.call_with_failover(
+            "chat", messages=[], thinking={"type": "disabled"}
+        )
+
+        assert captured == [("primary", {"type": "disabled"}), ("secondary", None)]
+
+    @pytest.mark.asyncio
+    async def test_thinking_kwarg_absent_no_leak(self):
+        """未传 thinking 时备用槽 kwargs 中不出现该键"""
+        fg = self._make_fg([_make_slot("primary"), _make_slot("secondary")])
+        captured_keys = []
+
+        async def mock_call_slot(slot, fn_name, **kwargs):
+            captured_keys.append(sorted(kwargs.keys()))
+            if slot.provider_name == "primary":
+                raise asyncio.TimeoutError("timeout")
+            return {"content": "ok"}
+
+        fg._call_slot = mock_call_slot
+
+        await fg.call_with_failover("chat", messages=[])
+
+        assert all("thinking" not in keys for keys in captured_keys)
+
+    @pytest.mark.asyncio
+    async def test_primary_only_thinking_params_stripped_for_fallback(self):
+        """PRIMARY_ONLY_KWARGS 三参数（thinking/enable_thinking/reasoning_effort）仅主槽保留"""
+        fg = self._make_fg([_make_slot("primary"), _make_slot("secondary")])
+        captured = []
+
+        async def mock_call_slot(slot, fn_name, **kwargs):
+            captured.append({
+                k: kwargs.get(k)
+                for k in ("thinking", "enable_thinking", "reasoning_effort")
+            })
+            if slot.provider_name == "primary":
+                raise asyncio.TimeoutError("timeout")
+            return {"content": "ok"}
+
+        fg._call_slot = mock_call_slot
+
+        await fg.call_with_failover(
+            "chat", messages=[],
+            thinking={"type": "disabled"},
+            enable_thinking=False,
+            reasoning_effort="low",
+        )
+
+        assert captured == [
+            {"thinking": {"type": "disabled"}, "enable_thinking": False, "reasoning_effort": "low"},
+            {"thinking": None, "enable_thinking": None, "reasoning_effort": None},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_stream_thinking_kwarg_only_kept_for_primary_slot(self):
+        fg = self._make_fg([_make_slot("primary"), _make_slot("secondary")])
+        captured = []
+
+        async def mock_stream(slot, fn_name, **kwargs):
+            captured.append((slot.provider_name, kwargs.get("thinking")))
+            if slot.provider_name == "primary":
+                raise asyncio.TimeoutError("connection failed")
+            for chunk in ["fallback"]:
+                yield chunk
+
+        fg._stream_slot = mock_stream
+
+        chunks = []
+        async for chunk in fg.stream_with_failover(
+            "stream_chat", messages=[], thinking={"type": "disabled"}
+        ):
+            chunks.append(chunk)
+
+        assert chunks == ["fallback"]
+        assert captured == [("primary", {"type": "disabled"}), ("secondary", None)]
+
+    @pytest.mark.asyncio
     async def test_call_slot_explicit_override_wins_over_model_codes(self):
         fg = self._make_fg([_make_slot("primary")])
         fg._model_codes = {"primary": "from-model-codes"}
