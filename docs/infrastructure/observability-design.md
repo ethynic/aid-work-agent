@@ -3,7 +3,7 @@
 > 关联文档：[企业级 2B 智能体平台基础设施建设差距分析](../research/enterprise-agent-infrastructure-gap-analysis.md) §2.1
 > 关联调研：[AI Agent 平台可观测性设计调研](../research/observability-design-research.md)
 > 开发计划：[可观测性与质量保障开发计划](./observability-dev-plan.md)
-> 前置重构：[AsyncGenerator 迁移](./async-generator-migration-design.md)（已完成，事件流已结构化）
+> 前置重构：AsyncGenerator 迁移（已完成，事件流已结构化；设计文档已随旧架构清理删除）
 > 设计日期：2026-05-29
 > 更新日期：2026-07-07（§三 架构更新为方案 C：TraceCollector 下沉到 Agent.process_message）
 > 状态：🔧 Phase 1 已完成（含方案 C）；Phase 2-4 待开发

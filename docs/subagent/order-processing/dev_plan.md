@@ -2,7 +2,7 @@
 
 ## Context
 
-本文档是订单处理智能体的开发计划，基于 [设计文档](./design.md) 实施。MCP Server 基础设施的开发计划单独见 [MCP Server 开发计划](../../infrastructure/mcp_server_dev_plan.md)。
+本文档是订单处理智能体的开发计划，基于 [设计文档](./design.md) 实施。
 
 ## 前置依赖
 

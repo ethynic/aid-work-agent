@@ -1,6 +1,6 @@
 # skill_complete 工具彻底删除 — 设计文档
 
-> 关联开发计划：[plan-skill-complete-removal.md](../../docs/plans/plan-skill-complete-removal.md)
+> 关联开发计划：plan-skill-complete-removal.md（已完成归档，2026-09-04 清理删除）
 > 登记条目：[docs/ideas.md](../../docs/ideas.md) 工具分区
 > 创建日期：2026-07-14
 

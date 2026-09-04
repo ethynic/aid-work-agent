@@ -3,7 +3,7 @@
 > 对应设计文档：[observability-design.md](./observability-design.md)
 > 对应调研报告：[observability-design-research.md](../research/observability-design-research.md)
 > 对应差距分析：[enterprise-agent-infrastructure-gap-analysis.md](../research/enterprise-agent-infrastructure-gap-analysis.md) §2.1
-> 前置重构：[async-generator-migration-dev-plan.md](./async-generator-migration-dev-plan.md)（已完成 — 事件流已结构化）
+> 前置重构：AsyncGenerator 迁移（已完成 — 事件流已结构化；设计文档已随旧架构清理删除）
 > 创建日期：2026-05-29
 > 更新日期：2026-07-07（Phase 1 全部完成含方案 C，1.6 单测和 1.7 JSONL 双写迁移已取消；Phase 2-4 未开始，按推荐优先级排序：Phase 4 → Phase 2 → Phase 3）
 > 状态：🔧 部分完成（Phase 1 已完成；Phase 4/2/3 待开发）
@@ -86,7 +86,7 @@
 - [x] **1.3.2 在非 SSE 路径中集成追踪（process_message_sync 路径）** ✅ 由方案 C 接管（已落地）
   - ⚠️ **本项已由方案 C 接管并完成**：改为「在 `Agent.process_message()` 内部接入 TraceCollector，从 record_service 自动读取上下文，所有渠道零改造覆盖」
   - 实现位置：`src/core/agent.py:1769-1834`（process_message wrapper）+ `:1076-1080`（_detect_source_type 从 _explicit_record_service 读 source_type）
-  - 详见：[observability-channel-sessions-dev-plan.md](./observability-channel-sessions-dev-plan.md) 阶段 A
+  - 详见：observability-channel-sessions-dev-plan.md 阶段 A（已由方案 C 接管完成后随文档清理删除）
 
 - [x] **1.3.3 在 agent.py 中 yield `llm_call` 事件**
   - 在 `process_message()` 主循环和 `execute_as_subagent()` 两个 LLM 调用点后，各 yield 一个 `llm_call` 事件
