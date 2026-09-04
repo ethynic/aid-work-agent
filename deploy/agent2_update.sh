@@ -11,6 +11,8 @@
 #   3. 用 up --force-recreate --remove-orphans 替代 down + up，省去全停窗口
 #   4. up 后用 docker update 施加 cgroup 资源限制（compose 非 swarm 会忽略
 #      deploy.resources，资源值在脚本内维护，为唯一来源）
+#   5. package-lock.json 未变化时跳过 npm install；npm install 挂命名卷缓存
+#      并加 --no-audit --prefer-offline，消除全新容器重拉包元数据导致的数分钟卡顿
 # ==============================================================================
 
 set -e
@@ -43,8 +45,19 @@ find . -type f -name "*.pyc" -delete
 find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 
 # 2. 前端依赖安装（node_modules 已持久化在宿主机，增量安装，通常很快）
-echo "[2] 安装前端依赖..."
-docker run --rm -v "$FRONTEND_DIR":/app -w /app node:22-alpine npm install
+#    lockfile 未变化时直接跳过；npm 缓存用命名卷持久化（容器内 /root/.npm 每次销毁，
+#    否则全新容器需向 registry 重新拉取全部包元数据，up to date 也会耗时数分钟）；
+#    --no-audit 跳过 audit 网络请求（国内直连 registry.npmjs.org 的 audit 端点极慢）
+if git diff --quiet "$OLD_HEAD" "$NEW_HEAD" -- frontend/package-lock.json; then
+    echo "[2] package-lock.json 未变化，跳过依赖安装"
+else
+    echo "[2] 安装前端依赖..."
+    docker run --rm \
+        -v "$FRONTEND_DIR":/app \
+        -v agent2_npm_cache:/root/.npm \
+        -w /app node:22-alpine \
+        npm install --no-audit --no-fund --prefer-offline
+fi
 
 # 3. 前端类型检查 + 边界检查（不产出 dist，nginx 服务不受影响；
 #    先于后端重启执行，类型/边界错误能在此中止，避免白白停一次服务）

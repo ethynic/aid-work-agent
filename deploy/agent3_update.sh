@@ -12,6 +12,8 @@
 #   4. 用 up --force-recreate --remove-orphans 替代 down + up，省去全停窗口
 #   5. up 后用 docker update 施加 cgroup 资源限制（compose 非 swarm 会忽略
 #      deploy.resources，资源值在脚本内维护，为唯一来源）
+#   6. package-lock.json 未变化时跳过 npm install；npm install 挂命名卷缓存
+#      并加 --no-audit --prefer-offline，消除全新容器重拉包元数据导致的数分钟卡顿
 # ==============================================================================
 
 set -e
@@ -54,7 +56,18 @@ fi
 if [ "$FRONTEND_CHANGED" -gt 0 ] || [ ! -d "$DIST_DIR" ]; then
     echo "[2] 前端有变更，编译到 dist.new（后台）..."
     # 依赖安装 + 类型/边界检查在前台（不产出 dist，服务不受影响；失败即中止避免白停）
-    docker run --rm -v "$FRONTEND_DIR":/app -w /app node:22-alpine npm install
+    # npm 缓存用命名卷持久化（容器内 /root/.npm 每次销毁，否则全新容器需向 registry
+    # 重新拉取全部包元数据，up to date 也会耗时数分钟）；--no-audit 跳过 audit 网络请求
+    if git diff --quiet "$OLD_HEAD" "$NEW_HEAD" -- frontend/package-lock.json; then
+        echo "[2.1] package-lock.json 未变化，跳过依赖安装"
+    else
+        echo "[2.1] 安装前端依赖..."
+        docker run --rm \
+            -v "$FRONTEND_DIR":/app \
+            -v agent3_npm_cache:/root/.npm \
+            -w /app node:22-alpine \
+            npm install --no-audit --no-fund --prefer-offline
+    fi
     docker run --rm -v "$FRONTEND_DIR":/app -w /app node:22-alpine npm run typecheck
     docker run --rm -v "$FRONTEND_DIR":/app -w /app node:22-alpine \
         node scripts/check-dependency-boundaries.mjs --scope=web
