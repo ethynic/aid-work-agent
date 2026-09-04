@@ -44,19 +44,16 @@ find . -type f -name "*.pyc" -delete
 find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 
 # 2. 前端依赖安装（node_modules 已持久化在宿主机，增量安装，通常很快）
-#    lockfile 未变化时直接跳过；npm 缓存用命名卷持久化（容器内 /root/.npm 每次销毁，
+#    npm 缓存用命名卷持久化（容器内 /root/.npm 每次销毁，
 #    否则全新容器需向 registry 重新拉取全部包元数据，up to date 也会耗时数分钟）；
 #    --no-audit 跳过 audit 网络请求（国内直连 registry.npmjs.org 的 audit 端点极慢）
-if git diff --quiet "$OLD_HEAD" "$NEW_HEAD" -- frontend/package-lock.json; then
-    echo "[2] package-lock.json 未变化，跳过依赖安装"
-else
-    echo "[2] 安装前端依赖..."
-    docker run --rm \
-        -v "$FRONTEND_DIR":/app \
-        -v agent_npm_cache:/root/.npm \
-        -w /app node:22-alpine \
-        npm install --no-audit --no-fund --prefer-offline
-fi
+echo "[2] 安装前端依赖..."
+docker run --rm \
+    -v "$FRONTEND_DIR":/app \
+    -v agent2_npm_cache:/root/.npm \
+    -w /app node:22-alpine \
+    npm install --no-audit --no-fund --prefer-offline
+
 
 # 3. 前端类型检查 + 依赖边界检查（不产出 dist，nginx 服务不受影响；
 #    先于后端重启执行，类型/边界错误能在此中止，避免白白停一次服务）
