@@ -419,13 +419,15 @@ class BillingConfig(BaseModel):
 
 
 class PreSalesPushConfig(BaseModel):
-    """售前推送（recap 任务 external_push）配置
+    """售前外部推送（recap 任务 external_push）配置
 
     - enabled: 总开关，置 false 即恢复纯对话（回滚手段）
     - summary_max_tokens: 摘要 LLM 单次生成上限
+    - max_tool_rounds: 推送工具循环轮次上限（1 轮 = 1 次主模型调用）
     """
     enabled: bool = True
     summary_max_tokens: int = 300
+    max_tool_rounds: int = 8
 
 
 class ExternalPushConfig(BaseModel):

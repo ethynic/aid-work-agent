@@ -1,5 +1,7 @@
 # 售前推送代码级兜底方案（事后异步推送钩子）
 
+> **2026-09-04 状态更新**：本方案的代码实现 `external_push_10605.py`（10605 硬编码）已被 `src/services/recap/tasks/external_push.py`（租户文档驱动 + LLM http_api 工具循环）取代——recap 触发机制保留，推送调用序列改由 LLM 按租户 pre-sales-api.md 文档执行。本文档保留作为 recap 触发机制的设计依据，10605 专属的代码化推送逻辑描述已过时。
+
 > 日期：2026-09-04
 > 触发：9732230b 提示词驱动的「每轮问答推送」实测不生效。trace tr_3e7123a2f23a41de（qwen3.8-flash）与 tr_d07191f6a8674932（DeepSeek-v4-flash）交叉验证：两个模型的 system prompt 均含推送指令（位于前 3.5% 位置）、工具齐备、无异常，但都未发起推送调用。换模型无效，属提示词驱动方案的固有缺陷。
 > 前置文档：[external-push-redesign-plan.md](./external-push-redesign-plan.md)（2026-09-03 提示词版方案，本方案继承其全部业务规则）

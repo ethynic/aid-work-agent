@@ -11,9 +11,9 @@ Recap 任务适配器注册表
 
 from typing import Any, Dict, Type
 
-from src.services.recap.tasks.external_push_10605 import ExternalPush10605Adapter
+from src.services.recap.tasks.external_push import ExternalPushAdapter
 
 # recap 任务名 -> 适配器类。列表顺序无关，执行顺序由 SUBAGENT.md recap.tasks 声明顺序决定
 RECAP_TASK_ADAPTERS: Dict[str, Type[Any]] = {
-    "external_push": ExternalPush10605Adapter,
+    "external_push": ExternalPushAdapter,
 }

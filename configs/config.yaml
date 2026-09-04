@@ -299,8 +299,9 @@ billing:
 # recap 任务推送配置（docs/subagent/recap-mechanism-design.md）
 external_push:
   pre_sales:
-    enabled: true          # 售前 10605 推送总开关，置 false 即恢复纯对话（回滚手段）
-    summary_max_tokens: 300  # 摘要 LLM 单次生成上限
+    enabled: true          # 售前外部推送总开关（多租户；租户未放 pre-sales-api.md 自动跳过），置 false 即恢复纯对话（回滚手段）
+    summary_max_tokens: 300  # 摘要 LLM 单次生成上限（仍走 lite 模型）
+    max_tool_rounds: 8       # 推送工具循环轮次上限（每轮 1 次主模型调用）
 
 boss_tool_billing:
   # BOSS 本地工具按次计费（2026-08-31）：成功调用才扣，失败/超时不扣；与 LLM token 计费独立
