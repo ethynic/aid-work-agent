@@ -83,10 +83,8 @@ llm:
     base_url: ${MOONSHOT_BASE_URL:-https://api.moonshot.cn/v1}
     max_concurrent_per_key: 2
     queue_timeout: 30
-  failover:
-    enabled: ${LLM_FAILOVER_ENABLED:-true}   # 是否启用 failover（通过 .env 的 LLM_FAILOVER_ENABLED 控制，生产环境建议 true）
-    providers:                    # failover 优先级链（不含主 provider）
-      - qwen
+  failover:                       # 是否启用由 LLM_PROVIDER 写法自推导：单一 provider = 不启用；"a/b/c" 链式 = 启用
+    retry:
     retry:
       max_retries: 2              # 同一 provider 内重试次数
       retry_delay: 1.0            # 重试间隔（秒）

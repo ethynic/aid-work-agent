@@ -91,6 +91,8 @@ CLI_MODE=true python -m src.main
 | 通义千问 | 阿里云 | `LLM_PROVIDER=qwen` + `API_KEYS` |
 | 智谱GLM | 智谱AI | `LLM_PROVIDER=zhipu` + `API_KEYS` |
 
+`LLM_PROVIDER` 支持链式写法指定完整 failover 优先级链：`LLM_PROVIDER=deepseek/qwen/zhipu` 表示主通道 deepseek，故障后依次切换 qwen、zhipu（覆盖 yaml 中 `llm.failover.providers`）。各通道模型名由 `DEEPSEEK_MODEL_CODE` / `QWEN_MODEL_CODE` / `ZHIPU_MODEL_CODE` 独立指定，failover 时模型随通道自动切换。
+
 ### 企业微信 / 钉钉 / 飞书渠道配置
 
 渠道凭证（CorpID、AgentID、Secret、AppKey、AppSecret 等）**不再通过环境变量配置**。

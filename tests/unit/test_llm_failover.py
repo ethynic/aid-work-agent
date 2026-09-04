@@ -226,6 +226,7 @@ class TestFailoverGatewayNonStreaming:
 
         with patch.object(FailoverGateway, '__init__', lambda self, *a, **kw: None):
             fg = FailoverGateway.__new__(FailoverGateway)
+            fg._primary_name = "primary"
             fg._slots = [_make_slot("primary")]
             fg._last_failover = None
             fg._failover_cfg = MagicMock()
@@ -245,6 +246,7 @@ class TestFailoverGatewayNonStreaming:
     async def test_primary_failure_fallback_to_secondary(self):
         with patch.object(FailoverGateway, '__init__', lambda self, *a, **kw: None):
             fg = FailoverGateway.__new__(FailoverGateway)
+            fg._primary_name = "primary"
             primary = _make_slot("primary")
             secondary = _make_slot("secondary")
             fg._slots = [primary, secondary]
@@ -273,6 +275,7 @@ class TestFailoverGatewayNonStreaming:
     async def test_non_retryable_error_does_not_fallback(self):
         with patch.object(FailoverGateway, '__init__', lambda self, *a, **kw: None):
             fg = FailoverGateway.__new__(FailoverGateway)
+            fg._primary_name = "primary"
             primary = _make_slot("primary")
             secondary = _make_slot("secondary")
             fg._slots = [primary, secondary]
@@ -295,6 +298,7 @@ class TestFailoverGatewayNonStreaming:
     async def test_all_providers_failed_raises_error(self):
         with patch.object(FailoverGateway, '__init__', lambda self, *a, **kw: None):
             fg = FailoverGateway.__new__(FailoverGateway)
+            fg._primary_name = "a"
             fg._slots = [_make_slot("a"), _make_slot("b")]
             fg._last_failover = None
             fg._failover_cfg = MagicMock()
@@ -316,6 +320,7 @@ class TestFailoverGatewayNonStreaming:
     async def test_open_circuit_breaker_skips_provider(self):
         with patch.object(FailoverGateway, '__init__', lambda self, *a, **kw: None):
             fg = FailoverGateway.__new__(FailoverGateway)
+            fg._primary_name = "primary"
             primary = _make_slot("primary")
             # 手动将 primary 的熔断器设为 open
             primary.circuit_breaker._state = "open"
@@ -347,6 +352,7 @@ class TestFailoverGatewayStreaming:
     async def test_stream_primary_success(self):
         with patch.object(FailoverGateway, '__init__', lambda self, *a, **kw: None):
             fg = FailoverGateway.__new__(FailoverGateway)
+            fg._primary_name = "primary"
             primary = _make_slot("primary")
             fg._slots = [primary]
             fg._last_failover = None
@@ -370,6 +376,7 @@ class TestFailoverGatewayStreaming:
     async def test_stream_connection_failure_fallback(self):
         with patch.object(FailoverGateway, '__init__', lambda self, *a, **kw: None):
             fg = FailoverGateway.__new__(FailoverGateway)
+            fg._primary_name = "primary"
             primary = _make_slot("primary")
             secondary = _make_slot("secondary")
             fg._slots = [primary, secondary]
@@ -401,6 +408,7 @@ class TestFailoverGatewayStreaming:
     async def test_stream_all_providers_failed(self):
         with patch.object(FailoverGateway, '__init__', lambda self, *a, **kw: None):
             fg = FailoverGateway.__new__(FailoverGateway)
+            fg._primary_name = "a"
             fg._slots = [_make_slot("a")]
             fg._last_failover = None
             fg._failover_cfg = MagicMock()
@@ -417,6 +425,181 @@ class TestFailoverGatewayStreaming:
             with pytest.raises(LLMAllProvidersFailedError):
                 async for _ in fg.stream_with_failover("stream_chat", messages=[]):
                     pass
+
+
+# ---------------------------------------------------------------------------
+# 5.4b 显式 model kwarg 处理测试（仅作用于主 provider 槽位）
+# ---------------------------------------------------------------------------
+
+class TestExplicitModelHandling:
+    """显式 model kwarg 仅作用于主 provider 槽位，防止跨 provider 模型错配
+
+    背景：各 provider 的 request_body.update(kwargs) 会用 kwargs 里的 model
+    覆盖请求体模型，若 failover 原样透传，链上所有 provider 都会收到同一个
+    模型串（如 qwen/deepseek-v4-flash）。
+    """
+
+    def _make_fg(self, slots):
+        with patch.object(FailoverGateway, '__init__', lambda self, *a, **kw: None):
+            fg = FailoverGateway.__new__(FailoverGateway)
+        fg._slots = slots
+        fg._primary_name = slots[0].provider_name
+        fg._model_codes = {}
+        fg._last_failover = None
+        fg._failover_cfg = MagicMock()
+        fg._failover_cfg.alert.enabled = False
+        fg._get_provider_chain = lambda: fg._slots
+        fg._log_failover_event = MagicMock()
+        return fg
+
+    @pytest.mark.asyncio
+    async def test_explicit_model_only_applies_to_primary_slot(self):
+        fg = self._make_fg([_make_slot("primary"), _make_slot("secondary")])
+        captured = []
+
+        async def mock_call_slot(slot, fn_name, **kwargs):
+            captured.append((slot.provider_name, kwargs.get("model_override")))
+            if slot.provider_name == "primary":
+                raise asyncio.TimeoutError("timeout")
+            return {"content": "ok"}
+
+        fg._call_slot = mock_call_slot
+
+        await fg.call_with_failover("chat", messages=[], model="deepseek-v4-flash")
+
+        assert captured == [("primary", "deepseek-v4-flash"), ("secondary", None)]
+
+    @pytest.mark.asyncio
+    async def test_model_kwarg_removed_from_provider_kwargs(self):
+        fg = self._make_fg([_make_slot("primary")])
+        captured_kwargs = {}
+
+        async def mock_call_slot(slot, fn_name, **kwargs):
+            captured_kwargs.update(kwargs)
+            return {"content": "ok"}
+
+        fg._call_slot = mock_call_slot
+
+        await fg.call_with_failover("chat", messages=[], model="deepseek-v4-flash")
+
+        assert "model" not in captured_kwargs
+        assert captured_kwargs["model_override"] == "deepseek-v4-flash"
+
+    @pytest.mark.asyncio
+    async def test_no_explicit_model_all_slots_use_own_config(self):
+        fg = self._make_fg([_make_slot("primary"), _make_slot("secondary")])
+        captured = []
+
+        async def mock_call_slot(slot, fn_name, **kwargs):
+            captured.append((slot.provider_name, kwargs.get("model_override")))
+            if slot.provider_name == "primary":
+                raise asyncio.TimeoutError("timeout")
+            return {"content": "ok"}
+
+        fg._call_slot = mock_call_slot
+
+        await fg.call_with_failover("chat", messages=[])
+
+        assert captured == [("primary", None), ("secondary", None)]
+
+    @pytest.mark.asyncio
+    async def test_stream_explicit_model_only_applies_to_primary_slot(self):
+        fg = self._make_fg([_make_slot("primary"), _make_slot("secondary")])
+        captured = []
+
+        async def mock_stream(slot, fn_name, **kwargs):
+            captured.append((slot.provider_name, kwargs.get("model_override")))
+            if slot.provider_name == "primary":
+                raise asyncio.TimeoutError("connection failed")
+            for chunk in ["fallback"]:
+                yield chunk
+
+        fg._stream_slot = mock_stream
+
+        chunks = []
+        async for chunk in fg.stream_with_failover("stream_chat", messages=[], model="deepseek-v4-flash"):
+            chunks.append(chunk)
+
+        assert chunks == ["fallback"]
+        assert captured == [("primary", "deepseek-v4-flash"), ("secondary", None)]
+
+    @pytest.mark.asyncio
+    async def test_call_slot_explicit_override_wins_over_model_codes(self):
+        fg = self._make_fg([_make_slot("primary")])
+        fg._model_codes = {"primary": "from-model-codes"}
+        built = {}
+
+        def fake_build(provider_name, api_key, model=None):
+            built["model"] = model
+            provider = MagicMock()
+            provider.chat = AsyncMock(return_value={"content": "ok"})
+            return provider
+
+        with patch("src.llm.failover._build_provider", side_effect=fake_build):
+            result = await fg._call_slot(fg._slots[0], "chat", model_override="explicit-model")
+
+        assert result == {"content": "ok"}
+        assert built["model"] == "explicit-model"
+
+    @pytest.mark.asyncio
+    async def test_call_slot_falls_back_to_model_codes(self):
+        fg = self._make_fg([_make_slot("secondary")])
+        fg._model_codes = {"secondary": "from-model-codes"}
+        built = {}
+
+        def fake_build(provider_name, api_key, model=None):
+            built["model"] = model
+            provider = MagicMock()
+            provider.chat = AsyncMock(return_value={"content": "ok"})
+            return provider
+
+        with patch("src.llm.failover._build_provider", side_effect=fake_build):
+            await fg._call_slot(fg._slots[0], "chat")
+
+        assert built["model"] == "from-model-codes"
+
+
+# ---------------------------------------------------------------------------
+# 5.4c 链去重测试（主 provider 与备用链同名时跳过重复槽位）
+# ---------------------------------------------------------------------------
+
+class TestProviderChainDedup:
+
+    def test_duplicate_provider_in_chain_deduped(self):
+        """LLM_PROVIDER=qwen + 备用链 [qwen, zhipu] 时，qwen 只注册一个槽位"""
+        cfg = MagicMock()
+        cfg.get_effective_keys.return_value = ["test-key"]
+        failover_cfg = MagicMock()
+        failover_cfg.circuit_breaker.failure_threshold = 3
+        failover_cfg.circuit_breaker.recovery_timeout = 60
+
+        with patch.object(FailoverGateway, "_get_provider_cfg", return_value=cfg):
+            fg = FailoverGateway(
+                primary_name="qwen",
+                fallback_names=["qwen", "zhipu", "qwen"],
+                failover_cfg=failover_cfg,
+            )
+
+        names = [s.provider_name for s in fg._slots]
+        assert names == ["qwen", "zhipu"]
+
+    def test_dedup_keeps_first_occurrence(self):
+        """备用链内部重复时保留首个"""
+        cfg = MagicMock()
+        cfg.get_effective_keys.return_value = ["test-key"]
+        failover_cfg = MagicMock()
+        failover_cfg.circuit_breaker.failure_threshold = 3
+        failover_cfg.circuit_breaker.recovery_timeout = 60
+
+        with patch.object(FailoverGateway, "_get_provider_cfg", return_value=cfg):
+            fg = FailoverGateway(
+                primary_name="deepseek",
+                fallback_names=["qwen", "qwen"],
+                failover_cfg=failover_cfg,
+            )
+
+        names = [s.provider_name for s in fg._slots]
+        assert names == ["deepseek", "qwen"]
 
 
 # ---------------------------------------------------------------------------
@@ -492,6 +675,7 @@ class TestAlertLogic:
     def test_alert_cooldown_blocks_duplicate(self):
         with patch.object(FailoverGateway, '__init__', lambda self, *a, **kw: None):
             fg = FailoverGateway.__new__(FailoverGateway)
+            fg._primary_name = "primary"
             fg._alert_times = {}
             fg._failover_cfg = MagicMock()
             fg._failover_cfg.alert.cooldown = 300
@@ -502,6 +686,7 @@ class TestAlertLogic:
     def test_alert_cooldown_allows_after_timeout(self):
         with patch.object(FailoverGateway, '__init__', lambda self, *a, **kw: None):
             fg = FailoverGateway.__new__(FailoverGateway)
+            fg._primary_name = "primary"
             fg._alert_times = {}
             fg._failover_cfg = MagicMock()
             fg._failover_cfg.alert.cooldown = 1  # 1s cooldown
@@ -515,6 +700,7 @@ class TestAlertLogic:
     async def test_alert_disabled_does_not_send(self):
         with patch.object(FailoverGateway, '__init__', lambda self, *a, **kw: None):
             fg = FailoverGateway.__new__(FailoverGateway)
+            fg._primary_name = "primary"
             fg._failover_cfg = MagicMock()
             fg._failover_cfg.alert.enabled = False
 
@@ -525,6 +711,7 @@ class TestAlertLogic:
     async def test_alert_sends_via_notification_service(self):
         with patch.object(FailoverGateway, '__init__', lambda self, *a, **kw: None):
             fg = FailoverGateway.__new__(FailoverGateway)
+            fg._primary_name = "primary"
             fg._failover_cfg = MagicMock()
             fg._failover_cfg.alert.enabled = True
             fg._failover_cfg.alert.channel = "webhook"

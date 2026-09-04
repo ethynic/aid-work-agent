@@ -617,6 +617,28 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
     if os.getenv("LLM_PROVIDER"):
         yaml_config.setdefault("llm", {})["provider"] = os.getenv("LLM_PROVIDER")
 
+    # LLM_PROVIDER 支持 "a/b/c" 链式写法：首段为主 provider，其余依次为 failover 备用链。
+    # 是否启用 failover 由写法自推导：单一 provider = 不启用；链式 = 启用（无独立开关）。
+    # 拆链后 llm.provider 恒为单一 provider 名，下游消费方（mid_term / excel_template_ai /
+    # travel-quote llm_client 等）无需感知链式格式
+    _llm_cfg_for_chain = yaml_config.setdefault("llm", {})
+    _raw_provider = str(_llm_cfg_for_chain.get("provider") or "")
+    if "/" in _raw_provider:
+        _segments = [seg.strip() for seg in _raw_provider.split("/") if seg.strip()]
+        _invalid = [seg for seg in _segments if seg not in _LLM_PROVIDERS]
+        if _invalid:
+            raise ValueError(
+                f"LLM_PROVIDER 链式配置含非法 provider: {_invalid}（须为 {_LLM_PROVIDERS}）"
+            )
+        if len(_segments) != len(set(_segments)):
+            raise ValueError(f"LLM_PROVIDER 链式配置存在重复 provider: {_segments}")
+        if len(_segments) < 2:
+            raise ValueError(f"LLM_PROVIDER 链式配置至少需要 2 个 provider: {_raw_provider!r}")
+        _llm_cfg_for_chain["provider"] = _segments[0]
+        _failover_cfg_for_chain = _llm_cfg_for_chain.setdefault("failover", {})
+        _failover_cfg_for_chain["providers"] = _segments[1:]
+        _failover_cfg_for_chain["enabled"] = True
+
     # 轻量小模型（lite_model），支持 "provider/model" 跨 provider 写法，见 LLMConfig.get_lite_target
     if os.getenv("LITE_MODEL_CODE"):
         yaml_config.setdefault("llm", {})["lite_model"] = os.getenv("LITE_MODEL_CODE")

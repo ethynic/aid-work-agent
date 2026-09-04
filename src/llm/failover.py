@@ -199,7 +199,15 @@ class FailoverGateway:
         cb_cfg = self._failover_cfg.circuit_breaker
         self._slots: List[ProviderSlot] = []
 
+        seen_providers = set()
         for name in [primary_name] + self._fallback_names:
+            # 去重兜底：主 provider 与备用链同名（或备用链内部重复）时只保留首个，
+            # 避免同一 provider 注册两个独立 KeyPool/熔断器（熔断状态不共享，白耗一次切换）
+            if name in seen_providers:
+                logger.warning(f"[Failover] Provider [{name}] 在链中重复，跳过重复槽位")
+                continue
+            seen_providers.add(name)
+
             cfg = self._get_provider_cfg(name)
             if cfg is None:
                 logger.warning(f"[Failover] Provider [{name}] 未配置，跳过")
@@ -268,22 +276,26 @@ class FailoverGateway:
         return [s for s in self._slots if s.is_available()]
 
     async def _call_slot(
-        self, slot: ProviderSlot, fn_name: str, **kwargs
+        self, slot: ProviderSlot, fn_name: str, model_override: Optional[str] = None, **kwargs
     ) -> Any:
-        """从 slot 的 key_pool 获取 key，构建 provider 后执行调用"""
+        """从 slot 的 key_pool 获取 key，构建 provider 后执行调用
+
+        Args:
+            model_override: 显式模型覆盖（仅对主 provider 槽位传入），优先于 _model_codes
+        """
         async with slot.key_pool.acquire() as api_key:
-            model_override = self._model_codes.get(slot.provider_name)
-            provider = _build_provider(slot.provider_name, api_key, model=model_override)
+            model = model_override or self._model_codes.get(slot.provider_name)
+            provider = _build_provider(slot.provider_name, api_key, model=model)
             method = getattr(provider, fn_name)
             return await method(**kwargs)
 
     async def _stream_slot(
-        self, slot: ProviderSlot, fn_name: str, **kwargs
+        self, slot: ProviderSlot, fn_name: str, model_override: Optional[str] = None, **kwargs
     ) -> AsyncGenerator[str, None]:
         """流式调用"""
         async with slot.key_pool.acquire() as api_key:
-            model_override = self._model_codes.get(slot.provider_name)
-            provider = _build_provider(slot.provider_name, api_key, model=model_override)
+            model = model_override or self._model_codes.get(slot.provider_name)
+            provider = _build_provider(slot.provider_name, api_key, model=model)
             method = getattr(provider, fn_name)
             async for chunk in method(**kwargs):
                 yield chunk
@@ -401,17 +413,28 @@ class FailoverGateway:
     async def call_with_failover(
         self, fn_name: str, request_id: Optional[str] = None, **kwargs
     ) -> Any:
-        """按优先级尝试各 provider（非流式）"""
+        """按优先级尝试各 provider（非流式）
+
+        显式 model kwarg 仅作用于主 provider 槽位（调用方指定的模型是针对主 provider 的），
+        且从 kwargs 中移除——否则各 provider 的 request_body.update(kwargs) 会把该模型串
+        原样发给备用 provider，产生 qwen/deepseek-v4-flash 这类跨 provider 模型错配。
+        备用槽位一律使用各自的 _model_codes 覆盖或 settings.llm.{provider}.model。
+        """
         if request_id is None:
             request_id = generate_request_id()
 
+        explicit_model = kwargs.pop("model", None)
         chain = self._get_provider_chain()
         errors: List[Dict[str, str]] = []
 
         for i, slot in enumerate(chain):
             start = time.monotonic()
             try:
-                result = await self._call_slot(slot, fn_name, **kwargs)
+                result = await self._call_slot(
+                    slot, fn_name,
+                    model_override=explicit_model if slot.provider_name == self._primary_name else None,
+                    **kwargs,
+                )
                 slot.circuit_breaker.record_success()
                 return result
             except Exception as e:
@@ -446,10 +469,14 @@ class FailoverGateway:
     async def stream_with_failover(
         self, fn_name: str, request_id: Optional[str] = None, **kwargs
     ) -> AsyncGenerator[str, None]:
-        """流式调用 failover（仅连接阶段做 failover）"""
+        """流式调用 failover（仅连接阶段做 failover）
+
+        显式 model kwarg 处理同 call_with_failover：仅作用于主 provider 槽位。
+        """
         if request_id is None:
             request_id = generate_request_id()
 
+        explicit_model = kwargs.pop("model", None)
         chain = self._get_provider_chain()
         errors: List[Dict[str, str]] = []
 
@@ -457,7 +484,11 @@ class FailoverGateway:
             start = time.monotonic()
             try:
                 # 尝试建立流连接并获取第一个 chunk
-                stream = self._stream_slot(slot, fn_name, **kwargs)
+                stream = self._stream_slot(
+                    slot, fn_name,
+                    model_override=explicit_model if slot.provider_name == self._primary_name else None,
+                    **kwargs,
+                )
                 stream_iter = stream.__aiter__()
                 first_chunk = await stream_iter.__anext__()
 
