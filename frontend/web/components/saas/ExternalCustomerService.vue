@@ -240,6 +240,18 @@
                 <template v-if="msg.role === 'assistant' && msg.content">
                   <div class="whitespace-pre-wrap">{{ msg.content }}</div>
                 </template>
+                <!-- AI 消息：图片（ImageRef，如顾问二维码），点击放大 -->
+                <div v-if="msg.role === 'assistant' && getAssistantImages(msg).length > 0" class="mt-2 flex flex-wrap gap-2">
+                  <img
+                    v-for="img in getAssistantImages(msg)"
+                    :key="img.file_id"
+                    :src="img.download_url"
+                    :alt="img.display_name || '图片'"
+                    loading="lazy"
+                    class="max-w-[240px] max-h-[240px] rounded-lg cursor-pointer border border-default"
+                    @click="previewImage(img.download_url)"
+                  />
+                </div>
                 <!-- AI 消息：可下载文件 -->
                 <div v-if="msg.role === 'assistant' && getDownloadableFiles(msg).length > 0" class="mt-3 flex flex-wrap gap-2">
                   <DownloadFileCard
@@ -1091,6 +1103,13 @@ function formatTime(timeStr: string | null): string {
 
 function getDownloadableFiles(msg: any): DownloadableFile[] {
   return msg?.metadata?.downloadableFiles || []
+}
+
+/**
+ * 获取 AI 消息中的图片列表（ImageRef，如顾问二维码）
+ */
+function getAssistantImages(msg: any): any[] {
+  return msg?.metadata?.images || []
 }
 
 /**

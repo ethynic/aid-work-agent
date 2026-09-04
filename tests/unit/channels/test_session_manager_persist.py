@@ -408,6 +408,54 @@ class TestProcessAndPersist:
         )
 
     @pytest.mark.asyncio
+    async def test_agent_images_persisted_to_assistant_metadata(
+        self, manager, mock_db_ctx, patched_session_queue, stub_agent
+    ):
+        """agent 产出的图片（ImageRef）应落库到 assistant metadata.images。
+
+        为什么重要：外部接待页等历史消息渲染依赖 channel_messages 中的 metadata.images；
+        若只透传 send_response 而不落库，回复仅有图片时 assistant 消息 content 为空，
+        接待页无图可显示（2026-09-04 顾问二维码不显示问题根因）。
+        """
+        memory_store, _conn, _spy = mock_db_ctx
+        img_ref = {
+            "file_id": "file_qr_test_01",
+            "download_url": "/api/files/file_qr_test_01/download",
+            "display_name": "顾问二维码",
+            "mime_type": "image/png",
+            "source": "user_upload",
+            "usage": "attachment",
+        }
+        stub_agent._last_response_images = [img_ref]
+        patched_session_queue.enqueue_and_process.return_value = EnqueueResult(
+            status="success",
+            response_text="",
+            merged_input="你好",
+            was_merged=False,
+            lease_token="lease-1",
+        )
+
+        result = await manager.process_and_persist(
+            session_id="sid_test",
+            tenant_id="t1",
+            user_content="你好",
+            agent=stub_agent,
+            send_response=AsyncMock(return_value=True),
+        )
+
+        assert result["status"] == "success"
+        roles = [m["role"] for m in memory_store["messages"]]
+        assert roles == ["user", "assistant"]
+        assistant_msg = memory_store["messages"][1]
+        # mock_db_ctx 落库时将 metadata 序列化为 JSON 字符串（与真实 DB 行为一致）
+        metadata = assistant_msg["metadata"]
+        if isinstance(metadata, str):
+            metadata = json.loads(metadata)
+        assert metadata["images"] == [img_ref]
+        # 图片同时透传 send_response（发送链路不受影响）
+        stub_agent._last_response_images = []
+
+    @pytest.mark.asyncio
     async def test_merged_path_does_not_write_any_message(
         self, manager, mock_db_ctx, patched_session_queue, stub_agent
     ):

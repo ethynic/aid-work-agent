@@ -1177,6 +1177,15 @@ class ChannelSessionManager:
         verbose_state.close()
         verbose_entries = build_channel_verbose_metadata_entries(verbose_events, dispatcher)
 
+        # 本轮 agent 产出的图片（ImageRef，如顾问二维码）：读取须在构造 batch 之前，
+        # 落库到 assistant metadata.images 供外部接待页等历史消息渲染；
+        # 发送链路不变，仍由 send_response 透传渠道 adapter
+        agent_images: List[Dict[str, Any]] = []
+        try:
+            agent_images = list(getattr(agent, "_last_response_images", []) or [])
+        except Exception:
+            agent_images = []
+
         # 构造批量写入的消息序列
         batch: List[Dict[str, Any]] = []
         if user_to_write:
@@ -1232,6 +1241,12 @@ class ChannelSessionManager:
         if verbose_entries:
             merged_metadata = dict(final_assistant_metadata) if final_assistant_metadata else {}
             merged_metadata["verboseMessages"] = verbose_entries
+            final_assistant_metadata = merged_metadata
+        # images 合并：图片落库与 verboseMessages 同策略，只在有值时写入该键，
+        # 历史消息 metadata 结构不变
+        if agent_images:
+            merged_metadata = dict(final_assistant_metadata) if final_assistant_metadata else {}
+            merged_metadata["images"] = agent_images
             final_assistant_metadata = merged_metadata
 
         batch.append({
