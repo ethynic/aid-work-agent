@@ -53,6 +53,7 @@ class TestParseWecomKfSession:
         assert parsed == {
             "open_kfid": "wkS6oOTAAAqAvd",
             "external_userid": "wmS6oOTAAAhVHj3_umWg",
+            "subagent": "pre-sales",
         }
 
     def test_non_wecom_kf_returns_none(self):
@@ -126,6 +127,7 @@ class TestCollectContext:
         assert ctx == {
             "open_kfid": "wkS6oOTAAAqAvd",
             "external_userid": "wmS6oOTAAAhVHj3_umWg",
+            "subagent": "pre-sales",
             "nickname": "小团长",
             "lead_phone": "13916323347",
             "assignee_phone": "13701602974",
@@ -171,6 +173,45 @@ class TestResolveAssigneePhone:
         with patch("src.saas.db.channel_config_db.ChannelConfigDB.list_by_tenant",
                    side_effect=RuntimeError("db down")):
             assert _resolve_assignee_phone("t", "wk1") is None
+
+
+# ============== 租户 AGENT_TOKEN 解析 ==============
+
+
+class TestGetAgentToken:
+    def test_exact_subagent_hit(self):
+        from src.services.recap.tasks.external_push_10605 import _get_agent_token
+
+        with patch("src.db.subagent_env_var.SubagentEnvVarDB.get_vars",
+                   return_value=[{"var_name": "AGENT_TOKEN", "var_value": "tok_exact"}]), \
+             patch("src.db.subagent_env_var.SubagentEnvVarDB.get_all_vars_for_tenant") as mock_all:
+            assert _get_agent_token("tenant_x", "pre-sales") == "tok_exact"
+            mock_all.assert_not_called()  # 精确命中不再遍历
+
+    def test_fallback_to_tenant_wide(self):
+        from src.services.recap.tasks.external_push_10605 import _get_agent_token
+
+        with patch("src.db.subagent_env_var.SubagentEnvVarDB.get_vars",
+                   return_value=[{"var_name": "OTHER", "var_value": "x"}]), \
+             patch("src.db.subagent_env_var.SubagentEnvVarDB.get_all_vars_for_tenant",
+                   return_value=[{"var_name": "AGENT_TOKEN", "var_value": "tok_wide"}]):
+            assert _get_agent_token("tenant_x", "pre-sales") == "tok_wide"
+
+    def test_empty_value_skipped(self):
+        from src.services.recap.tasks.external_push_10605 import _get_agent_token
+
+        with patch("src.db.subagent_env_var.SubagentEnvVarDB.get_vars",
+                   return_value=[{"var_name": "AGENT_TOKEN", "var_value": ""}]), \
+             patch("src.db.subagent_env_var.SubagentEnvVarDB.get_all_vars_for_tenant",
+                   return_value=[]):
+            assert _get_agent_token("tenant_x", "pre-sales") is None
+
+    def test_db_error_returns_none(self):
+        from src.services.recap.tasks.external_push_10605 import _get_agent_token
+
+        with patch("src.db.subagent_env_var.SubagentEnvVarDB.get_vars",
+                   side_effect=RuntimeError("db down")):
+            assert _get_agent_token("tenant_x", "pre-sales") is None
 
 
 # ============== LLM 摘要（含计费） ==============
@@ -239,7 +280,7 @@ class TestPushOnce:
         payload = _make_payload()
         calls = []
 
-        async def fake_post(url, token, body):
+        async def fake_post(url, token, body, agent_token=None):
             calls.append((url, body))
             return post_results.pop(0)
 
@@ -260,7 +301,7 @@ class TestPushOnce:
         return {"customer_need": "询问价格", "reply_summary": "介绍了报价", "customer_name_hint": ""}
 
     def _login(self):
-        return {"client_token": "tok", "display_name": "客服小王", "record_id": 4}
+        return {"client_token": "tok", "display_name": "客服小王", "record_id": 4, "agent_token": "agent_tok"}
 
     def test_dedup_miss_creates_customer_then_follow_up(self):
         results = [
@@ -356,6 +397,7 @@ class TestExecuteWithRetry:
         return {
             "open_kfid": "wk1",
             "external_userid": "wmS6oOTAAAhVHj3_umWg",
+            "subagent": "pre-sales",
             "nickname": "小团长",
             "lead_phone": None,
             "assignee_phone": "13701602974",
@@ -368,6 +410,14 @@ class TestExecuteWithRetry:
             asyncio.run(_execute_with_retry(payload, ctx, {}))
             mock_login.assert_not_called()  # 未发起登录即放弃
 
+    def test_missing_agent_token_aborts(self):
+        payload = _make_payload()
+        with patch("src.services.recap.tasks.external_push_10605._get_agent_token",
+                   return_value=None), \
+             patch("src.services.recap.tasks.external_push_10605._delegate_login") as mock_login:
+            asyncio.run(_execute_with_retry(payload, self._ctx(), {}))
+            mock_login.assert_not_called()  # 未发起登录即放弃
+
     def test_code_99_triggers_force_refresh_and_retry(self):
         payload = _make_payload()
         summary = {"customer_need": "n", "reply_summary": "r", "customer_name_hint": ""}
@@ -375,8 +425,8 @@ class TestExecuteWithRetry:
         refreshed_login = {"client_token": "tok2", "display_name": "d"}
         login_calls = []
 
-        def fake_login(tenant_id, mobile, force_refresh=False):
-            login_calls.append(force_refresh)
+        def fake_login(tenant_id, mobile, agent_token, force_refresh=False):
+            login_calls.append((agent_token, force_refresh))
             return refreshed_login if force_refresh else first_login
 
         push_codes = [-99, 0]
@@ -384,23 +434,28 @@ class TestExecuteWithRetry:
         async def fake_push(payload, ctx, login, summary):
             return push_codes.pop(0), None
 
-        with patch("src.services.recap.tasks.external_push_10605._delegate_login", fake_login), \
+        with patch("src.services.recap.tasks.external_push_10605._get_agent_token",
+                   return_value="agent_tok"), \
+             patch("src.services.recap.tasks.external_push_10605._delegate_login", fake_login), \
              patch("src.services.recap.tasks.external_push_10605._push_once", fake_push):
             asyncio.run(_execute_with_retry(payload, self._ctx(), summary))
 
-        assert login_calls == [False, True]  # 第二次带 force_refresh
+        # 第二次带 force_refresh，agent_token 均透传
+        assert login_calls == [("agent_tok", False), ("agent_tok", True)]
 
     def test_retry_still_fails_raises(self):
         payload = _make_payload()
         summary = {"customer_need": "n", "reply_summary": "r", "customer_name_hint": ""}
 
-        def fake_login(tenant_id, mobile, force_refresh=False):
+        def fake_login(tenant_id, mobile, agent_token, force_refresh=False):
             return {"client_token": "tok", "display_name": "d"}
 
         async def fake_push(payload, ctx, login, summary):
             return -1, None  # 两次都业务失败
 
-        with patch("src.services.recap.tasks.external_push_10605._delegate_login", fake_login), \
+        with patch("src.services.recap.tasks.external_push_10605._get_agent_token",
+                   return_value="agent_tok"), \
+             patch("src.services.recap.tasks.external_push_10605._delegate_login", fake_login), \
              patch("src.services.recap.tasks.external_push_10605._push_once", fake_push):
             with pytest.raises(RuntimeError):
                 asyncio.run(_execute_with_retry(payload, self._ctx(), summary))
@@ -410,14 +465,17 @@ class TestExecuteWithRetry:
         summary = {"customer_need": "n", "reply_summary": "r", "customer_name_hint": ""}
         login_calls = []
 
-        def fake_login(tenant_id, mobile, force_refresh=False):
+        def fake_login(tenant_id, mobile, agent_token, force_refresh=False):
             login_calls.append(force_refresh)
             return {"client_token": "tok", "display_name": "d"}
 
         async def fake_push(payload, ctx, login, summary):
+            assert login["agent_token"] == "agent_tok"  # token 注入 login 供业务接口用
             return 0, None
 
-        with patch("src.services.recap.tasks.external_push_10605._delegate_login", fake_login), \
+        with patch("src.services.recap.tasks.external_push_10605._get_agent_token",
+                   return_value="agent_tok"), \
+             patch("src.services.recap.tasks.external_push_10605._delegate_login", fake_login), \
              patch("src.services.recap.tasks.external_push_10605._push_once", fake_push):
             asyncio.run(_execute_with_retry(payload, self._ctx(), summary))
         assert login_calls == [False]
@@ -477,3 +535,27 @@ class TestPost10605:
         assert headers_lower["api-authorize-token"] == "agent_tok"
         assert headers_lower["client-authorize-token"] == "client_tok"
         assert captured["timeout"] == 15
+
+    def test_explicit_agent_token_overrides_environ(self):
+        captured = {}
+
+        class FakeResp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self):
+                return json.dumps({"Code": 0, "Response": {}}).encode("utf-8")
+
+        def fake_urlopen(req, timeout):
+            captured["headers"] = dict(req.headers)
+            return FakeResp()
+
+        with patch("src.services.recap.tasks.external_push_10605.urllib.request.urlopen", fake_urlopen), \
+             patch.dict("os.environ", {"AGENT_TOKEN": "env_tok"}):
+            _post_10605("https://x/api", "client_tok", {"a": 1}, agent_token="explicit_tok")
+
+        headers_lower = {k.lower(): v for k, v in captured["headers"].items()}
+        assert headers_lower["api-authorize-token"] == "explicit_tok"

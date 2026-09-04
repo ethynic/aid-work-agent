@@ -72,12 +72,39 @@ def parse_wecom_kf_session(session_id: str) -> Optional[Dict[str, str]]:
     open_kfid, _, external_userid = head.partition("_")
     if not open_kfid or not external_userid:
         return None
-    return {"open_kfid": open_kfid, "external_userid": external_userid}
+    return {"open_kfid": open_kfid, "external_userid": external_userid, "subagent": _subagent}
 
 
-def _post_10605(url: str, client_token: Optional[str], body: Dict[str, Any]) -> Dict[str, Any]:
+def _get_agent_token(tenant_id: str, subagent_name: Optional[str]) -> Optional[str]:
+    """AGENT_TOKEN 存于租户级子智能体环境变量（subagent_env_vars 表）
+
+    recap 是后台任务，无请求上下文（env_vars 不注入 os.environ），必须按
+    tenant_id 显式查库。先按当前子智能体精确查，未配置则兜底遍历租户全部。
+    """
+    try:
+        from src.db.subagent_env_var import SubagentEnvVarDB
+
+        if subagent_name:
+            for var in SubagentEnvVarDB.get_vars(tenant_id, subagent_name):
+                if var.get("var_name") == "AGENT_TOKEN" and var.get("var_value"):
+                    return var["var_value"]
+        for var in SubagentEnvVarDB.get_all_vars_for_tenant(tenant_id):
+            if var.get("var_name") == "AGENT_TOKEN" and var.get("var_value"):
+                return var["var_value"]
+    except Exception as e:
+        logger.warning(f"[external_push] 读取租户 AGENT_TOKEN 失败 tenant={tenant_id}: {e}")
+    return None
+
+
+def _post_10605(
+    url: str,
+    client_token: Optional[str],
+    body: Dict[str, Any],
+    agent_token: Optional[str] = None,
+) -> Dict[str, Any]:
     """同步 POST 10605 业务接口（双 Token 鉴权），返回顶层响应 dict（含 Code/Error/Response）"""
-    agent_token = os.environ.get("AGENT_TOKEN", "")
+    # agent_token 显式传入优先；os.environ 兜底兼容 agent 请求上下文（env_vars 已注入）
+    agent_token = agent_token or os.environ.get("AGENT_TOKEN", "")
     headers = {
         "Content-Type": "application/json",
         "Api-Authorize-Token": agent_token,
@@ -94,9 +121,14 @@ def _post_10605(url: str, client_token: Optional[str], body: Dict[str, Any]) -> 
         return json.loads(resp.read().decode("utf-8"))
 
 
-async def _post_10605_async(url: str, client_token: Optional[str], body: Dict[str, Any]) -> Dict[str, Any]:
+async def _post_10605_async(
+    url: str,
+    client_token: Optional[str],
+    body: Dict[str, Any],
+    agent_token: Optional[str] = None,
+) -> Dict[str, Any]:
     """_post_10605 的异步包装（urllib 同步 IO 必须 to_thread，避免阻塞事件循环）"""
-    return await asyncio.to_thread(_post_10605, url, client_token, body)
+    return await asyncio.to_thread(_post_10605, url, client_token, body, agent_token)
 
 
 def _load_delegate_login_module():
@@ -111,20 +143,33 @@ def _load_delegate_login_module():
     return module
 
 
-def _delegate_login(tenant_id: str, mobile: str, force_refresh: bool = False) -> Optional[Dict[str, Any]]:
-    """委托登录（复用技能脚本的缓存与请求函数），成功返回含 client_token 的 dict
+def _delegate_login(
+    tenant_id: str,
+    mobile: str,
+    agent_token: str,
+    force_refresh: bool = False,
+) -> Optional[Dict[str, Any]]:
+    """委托登录（复用技能脚本的缓存函数），成功返回含 client_token 的 dict
 
     缓存命中 0 次 HTTP；Code=-99 场景由调用方带 force_refresh=True 强刷。
+    登录请求不走技能脚本的 _call_login_api——它读 os.environ，后台任务拿不到
+    租户级 AGENT_TOKEN，改为自带 agent_token 直接发请求。
     """
     module = _load_delegate_login_module()
     if not force_refresh:
         cached = module._read_cache(tenant_id, mobile)
         if isinstance(cached, dict) and cached.get("client_token"):
             return {**cached, "cached": True}
-    ok, result = module._call_login_api(LOGIN_URL, mobile)
-    if not ok:
-        logger.warning(f"[external_push] 委托登录失败 tenant={tenant_id}: {result}")
+    try:
+        body = _post_10605(LOGIN_URL, None, {"mobile": mobile}, agent_token=agent_token)
+    except Exception as e:
+        logger.warning(f"[external_push] 委托登录请求异常 tenant={tenant_id}: {e}")
         return None
+    if not isinstance(body, dict) or body.get("Code") != 0:
+        err = (body or {}).get("Error") or "未知业务错误"
+        logger.warning(f"[external_push] 委托登录失败 tenant={tenant_id}: {err}")
+        return None
+    result = body.get("Response") or {}
     token_payload = {
         "client_token": result.get("client_token", ""),
         "record_id": result.get("record_id"),
@@ -197,6 +242,7 @@ def _collect_context(payload: RecapPayload) -> Optional[Dict[str, Any]]:
     return {
         "open_kfid": open_kfid,
         "external_userid": external_userid,
+        "subagent": parsed["subagent"],
         "nickname": nickname,
         "lead_phone": lead_phone,
         "assignee_phone": assignee_phone,
@@ -307,9 +353,18 @@ async def _execute_with_retry(payload: RecapPayload, ctx: Dict[str, Any], summar
         tlog("售前推送", f"放弃：归属员工手机号缺失, tenant={payload.tenant_id}, open_kfid={ctx['open_kfid']}")
         return
 
-    login = await asyncio.to_thread(_delegate_login, payload.tenant_id, mobile)
+    agent_token = _get_agent_token(payload.tenant_id, ctx.get("subagent"))
+    if not agent_token:
+        logger.warning(
+            f"[external_push] 租户未配置 AGENT_TOKEN，放弃推送 session={payload.session_id}"
+        )
+        tlog("售前推送", f"放弃：租户未配置 AGENT_TOKEN, tenant={payload.tenant_id}")
+        return
+
+    login = await asyncio.to_thread(_delegate_login, payload.tenant_id, mobile, agent_token)
     if not login or not login.get("client_token"):
         raise RuntimeError("委托登录失败（无 client_token）")
+    login["agent_token"] = agent_token
 
     code, _ = await _push_once(payload, ctx, login, summary)
     if code == 0:
@@ -318,10 +373,11 @@ async def _execute_with_retry(payload: RecapPayload, ctx: Dict[str, Any], summar
     tlog("售前推送", f"首次推送 Code={code}，重试一次")
     force_refresh = code == -99
     login = await asyncio.to_thread(
-        _delegate_login, payload.tenant_id, mobile, force_refresh=force_refresh
+        _delegate_login, payload.tenant_id, mobile, agent_token, force_refresh=force_refresh
     )
     if not login or not login.get("client_token"):
         raise RuntimeError(f"重试前委托登录失败（Code={code}）")
+    login["agent_token"] = agent_token
     code, _ = await _push_once(payload, ctx, login, summary)
     if code != 0:
         raise RuntimeError(f"重试后仍失败（Code={code}）")
@@ -335,6 +391,7 @@ async def _push_once(
 ) -> Tuple[int, Any]:
     """单轮推送主体：查重 -> 建改客户 -> 创建跟进记录。返回 (最终Code, Response)"""
     client_token = login["client_token"]
+    agent_token = login.get("agent_token")
 
     # 1. 客户查重（unionid = external_userid，必须 exact=true，§12.1）
     list_resp = await _post_10605_async(LISTING_URL, client_token, {
@@ -344,7 +401,7 @@ async def _push_once(
         ],
         "page": 1,
         "limit": 1,
-    })
+    }, agent_token=agent_token)
     code = list_resp.get("Code", -1)
     if code != 0:
         return code, list_resp.get("Response")
@@ -373,7 +430,7 @@ async def _push_once(
                 }],
             }],
             "temp": False,
-        })
+        }, agent_token=agent_token)
         code = create_resp.get("Code", -1)
         if code != 0:
             return code, create_resp.get("Response")
@@ -407,7 +464,7 @@ async def _push_once(
                     }],
                 }],
                 "temp": False,
-            })
+            }, agent_token=agent_token)
             code = update_resp.get("Code", -1)
             if code != 0:
                 return code, update_resp.get("Response")
@@ -439,7 +496,7 @@ async def _push_once(
             }],
         }],
         "temp": False,
-    })
+    }, agent_token=agent_token)
     code = follow_resp.get("Code", -1)
     if code != 0:
         return code, follow_resp.get("Response")
