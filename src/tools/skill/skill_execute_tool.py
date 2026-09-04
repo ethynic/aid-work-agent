@@ -7,6 +7,7 @@ SkillExecuteTool - 在技能上下文中执行命令
 """
 
 import base64
+import json
 import re
 from typing import Dict, Any, Optional
 from pathlib import Path
@@ -70,6 +71,17 @@ class SkillExecuteTool(BaseTool):
         skill_name = kwargs.get("skill", "")
         command = kwargs.get("command", "") or None  # 空字符串转为 None
         files = kwargs.get("files", {})
+        # 边界容错：部分 LLM 会把 files 序列化成 JSON 字符串传入（如 '{}'），
+        # 而非对象。尝试反序列化，失败或非 dict 时按空处理，避免 .items() 崩溃
+        if isinstance(files, str):
+            try:
+                parsed = json.loads(files) if files.strip() else {}
+                files = parsed if isinstance(parsed, dict) else {}
+            except Exception:
+                logger.warning(f"[skill_execute] files 参数为非法 JSON 字符串，按空处理: {files[:100]}")
+                files = {}
+        elif not isinstance(files, dict):
+            files = {}
         session_id = kwargs.get("session_id")
         user_id = kwargs.get("user_id")
         workdir = kwargs.get("workdir")
