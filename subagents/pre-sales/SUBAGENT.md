@@ -18,7 +18,7 @@ triggers:
     - 买
     - 购买
 # 指定使用模型，覆盖 .env 配置
-llm_provider: qwen
+llm_provider: deepseek
 deepseek_model_code: deepseek-v4-flash
 qwen_model_code: qwen3.8-flash
 tools:
