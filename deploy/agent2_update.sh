@@ -11,7 +11,7 @@
 #   3. 用 up --force-recreate --remove-orphans 替代 down + up，省去全停窗口
 #   4. up 后用 docker update 施加 cgroup 资源限制（compose 非 swarm 会忽略
 #      deploy.resources，资源值在脚本内维护，为唯一来源）
-#   5. package-lock.json 未变化时跳过 npm install；npm install 挂命名卷缓存
+#   5. npm install 挂命名卷缓存
 #      并加 --no-audit --prefer-offline，消除全新容器重拉包元数据导致的数分钟卡顿
 # ==============================================================================
 

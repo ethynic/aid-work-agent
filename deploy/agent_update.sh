@@ -10,7 +10,7 @@
 #   2. 前端编译（后台）与后端重启（down/up）并行，总停机时间 ≈ 后端重启耗时
 #   3. up 后用 docker update 施加 cgroup 资源限制 —— docker compose 非 swarm 模式
 #      会静默忽略 deploy.resources 段，需显式施加（资源值在脚本内维护，为唯一来源）
-#   4. package-lock.json 未变化时跳过 npm install；npm install 挂命名卷缓存
+#   4. npm install 挂命名卷缓存
 #      并加 --no-audit --prefer-offline，消除全新容器重拉包元数据导致的数分钟卡顿
 # ==============================================================================
 
