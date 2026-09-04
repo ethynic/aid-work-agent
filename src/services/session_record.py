@@ -685,9 +685,9 @@ def _persist_background_llm_record(
         if not llm_model:
             try:
                 from src.config.settings import settings as _settings
-                llm_model = getattr(_settings.memory.mid_term.summary_llm, "model", None) or "deepseek-chat"
+                llm_model = getattr(_settings.memory.mid_term.summary_llm, "model", None) or "deepseek-v4-flash"
             except Exception:
-                llm_model = "deepseek-chat"
+                llm_model = "deepseek-v4-flash"
 
         credit_cost = 0.0
         chat_bd: Dict[str, Any] = {}
@@ -778,7 +778,7 @@ def record_skill_llm_usage(
         stage: 计量阶段（excel_etl 的 extract/repair/schema），拼进 user_message
         model: 实际调用模型名（必须传准，否则单价算错）；未传时回退
             usage["model"]（excel_template_ai._default_llm return_usage 已附带），
-            仍缺省兜底 deepseek-chat
+            仍缺省兜底 deepseek-v4-flash
         source: 计费来源标识（默认 "skill_llm"），用于 session_id 拼接与追溯
 
     异常只记 warning 不抛（对齐 _persist_background_llm_record 容错风格，
@@ -829,8 +829,8 @@ def _persist_skill_llm_record(
     cache_creation_input_tokens = int(usage.get("cache_creation_tokens", 0) or 0)
 
     # 模型优先级：调用方显式传入 model > usage 附带的 model（_default_llm return_usage
-    # 产出，provider 可能是 qwen/zhipu，缺失时才兜底 deepseek-chat——单价按模型取，传错即错价）
-    llm_model = model or str(usage.get("model") or "") or "deepseek-chat"
+    # 产出，provider 可能是 qwen/zhipu，缺失时才兜底 deepseek-v4-flash——单价按模型取，传错即错价）
+    llm_model = model or str(usage.get("model") or "") or "deepseek-v4-flash"
 
     credit_cost = 0.0
     chat_bd: Dict[str, Any] = {}

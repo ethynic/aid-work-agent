@@ -164,7 +164,7 @@ memory:
     summary_llm_retry: 2             # 摘要 LLM 调用重试次数
     summary_llm:
       provider: deepseek             # 走便宜模型
-      model: deepseek-chat
+      model: deepseek-v4-flash
       timeout_sec: 30
     # 工具结果预处理
     large_tool_result_truncate_chars: 2000

@@ -358,7 +358,7 @@ class LLMGateway:
         """用轻量小模型（lite_model）调用，支持跨 provider。
 
         lite_model 配置格式见 LLMConfig.get_lite_target：
-        - "provider/model"（如 "qwen/qwen3.7-flash"）：跨 provider 调用，用该 provider 的
+        - "provider/model"（如 "qwen/qwen3.8-flash"）：跨 provider 调用，用该 provider 的
           key/base_url 构建独立 Provider 直连，不参与主链路 failover（指定即专用）
         - 纯模型名 / 未配置：走当前 provider 的完整链路（含 failover），显式传 model 覆盖
 

@@ -1432,7 +1432,7 @@ class ChatRecordDB:
                     COALESCE(SUM(cr.credit_cost), 0) as credit_cost,
                     EXISTS(
                         SELECT 1 FROM chat_records cr2
-                        LEFT JOIN token_cost_prices tcp2 ON cr2.model = tcp2.model_name
+                        LEFT JOIN token_cost_prices tcp2 ON LOWER(cr2.model) = LOWER(tcp2.model_name)
                         WHERE cr2.tenant_id = cr.tenant_id
                           AND cr2.created_at >= %s AND cr2.created_at <= %s
                           AND NOT (cr2.prompt_tokens = 0 AND cr2.completion_tokens = 0)
@@ -1440,7 +1440,7 @@ class ChatRecordDB:
                           AND cr2.model IS NOT NULL
                     ) as has_unpriced_tokens
                 FROM chat_records cr
-                LEFT JOIN token_cost_prices tcp ON cr.model = tcp.model_name
+                LEFT JOIN token_cost_prices tcp ON LOWER(cr.model) = LOWER(tcp.model_name)
                 WHERE cr.created_at >= %s AND cr.created_at <= %s
                   AND NOT (cr.prompt_tokens = 0 AND cr.completion_tokens = 0)
                 GROUP BY cr.tenant_id
@@ -2270,7 +2270,7 @@ class TokenCostPriceDB:
 
     @staticmethod
     def get_by_model_name(model_name: str) -> Optional[Dict[str, Any]]:
-        """按模型名查询单价
+        """按模型名查询单价（不区分大小写——模型名在不同渠道存在 GLM-5.3-Flash / glm-5.3-flash 等多种写法）
 
         Returns:
             {"model_name", "input_price_per_m", "cached_input_price_per_m",
@@ -2298,7 +2298,7 @@ class TokenCostPriceDB:
                        embedding_price_per_m, asr_price_per_call, tiered_pricing,
                        is_multimodal
                 FROM token_cost_prices
-                WHERE model_name = {placeholder}
+                WHERE LOWER(model_name) = LOWER({placeholder})
                 """,
                 (model_name,),
             )

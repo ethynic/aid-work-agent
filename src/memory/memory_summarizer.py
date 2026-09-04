@@ -328,9 +328,9 @@ def _record_background_llm_billing(
 
         # 后台任务使用主 gateway 默认模型
         try:
-            llm_model = getattr(settings.llm, "model_code", None) or "qwen3.7-flash"
+            llm_model = getattr(settings.llm, "model_code", None) or "qwen3.8-flash"
         except Exception:
-            llm_model = "qwen3.7-flash"
+            llm_model = "qwen3.8-flash"
 
         try:
             credit_cost = calculate_credit_cost(

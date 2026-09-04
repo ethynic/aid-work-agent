@@ -60,6 +60,19 @@ class TestGetByModelName:
 
         assert row["is_multimodal"] is False
 
+    def test_case_insensitive_lookup(self):
+        """模型名查询不区分大小写（SQL 用 LOWER 比对）"""
+        from src.db.models import TokenCostPriceDB
+
+        mock_cursor, mock_conn = _mock_db(fetchone=dict(PRICE_ROW))
+        with patch("src.db.models.get_db_connection") as mock_get_db:
+            mock_get_db.return_value.__enter__.return_value = mock_conn
+            row = TokenCostPriceDB.get_by_model_name("glm-5.3-flash")
+
+        assert row is not None
+        sql = mock_cursor.execute.call_args[0][0]
+        assert "LOWER(model_name) = LOWER" in sql
+
     def test_empty_model_name_returns_none(self):
         from src.db.models import TokenCostPriceDB
 

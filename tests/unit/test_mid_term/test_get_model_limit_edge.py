@@ -48,10 +48,10 @@ def test_known_model_returns_exact_value(service, monkeypatch):
 
 
 def test_qwen_model_returns_exact_value(service, monkeypatch):
-    """qwen3.7-flash → 512000（qwen provider 不触发 unknown warning，命中映射表）"""
+    """qwen3.8-flash → 512000（qwen provider 不触发 unknown warning，命中映射表）"""
     from src.config.settings import LLMConfig, LLMProviderConfig
     fake_llm = LLMConfig(provider="qwen")
-    fake_llm.qwen = LLMProviderConfig(api_keys=["x"], model="qwen3.7-flash")
+    fake_llm.qwen = LLMProviderConfig(api_keys=["x"], model="qwen3.8-flash")
     monkeypatch.setattr("src.memory.mid_term.settings.llm", fake_llm)
     service._model_limit_cache = None
 

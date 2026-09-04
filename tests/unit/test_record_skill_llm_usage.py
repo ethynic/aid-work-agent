@@ -59,7 +59,7 @@ class TestRecordSkillLlmUsage:
             session_id="sess-1",
             user_id="user-1",
             stage="extract",
-            model="deepseek-chat",
+            model="deepseek-v4-flash",
         )
         assert len(captured_create) == 1
         kwargs = captured_create[0]
@@ -68,7 +68,7 @@ class TestRecordSkillLlmUsage:
         assert kwargs["tenant_id"] == "tenant-1"
         assert kwargs["user_id"] == "user-1"
         assert kwargs["user_message"] == "[stage=extract] Excel ETL LLM 调用"
-        assert kwargs["model"] == "deepseek-chat"
+        assert kwargs["model"] == "deepseek-v4-flash"
         assert kwargs["prompt_tokens"] == 100
         assert kwargs["completion_tokens"] == 50
         assert kwargs["total_token_count"] == 150
@@ -115,17 +115,17 @@ class TestRecordSkillLlmUsage:
         record_skill_llm_usage(USAGE, tenant_id="t", session_id="s", user_id="u")
 
     def test_model_fallback_from_usage_then_default(self, captured_create):
-        """model 回退链：显式参数 > usage["model"]（_default_llm return_usage 附带）> deepseek-chat。
+        """model 回退链：显式参数 > usage["model"]（_default_llm return_usage 附带）> deepseek-v4-flash。
 
         主 LLM provider 默认 zhipu/qwen——不回退 usage 附带模型会把 glm/qwen 调用
-        按 deepseek-chat 单价错算积分。
+        按 deepseek-v4-flash 单价错算积分。
         """
         # usage 附带 model，未显式传 → 用 usage 的
         record_skill_llm_usage({**USAGE, "model": "qwen-plus"})
         assert captured_create[0]["model"] == "qwen-plus"
         # 显式参数优先于 usage 附带
-        record_skill_llm_usage({**USAGE, "model": "qwen-plus"}, model="glm-4-flash")
-        assert captured_create[1]["model"] == "glm-4-flash"
-        # 都没有 → deepseek-chat 兜底
+        record_skill_llm_usage({**USAGE, "model": "qwen-plus"}, model="GLM-5.3-Flash")
+        assert captured_create[1]["model"] == "GLM-5.3-Flash"
+        # 都没有 → deepseek-v4-flash 兜底
         record_skill_llm_usage(USAGE)
-        assert captured_create[2]["model"] == "deepseek-chat"
+        assert captured_create[2]["model"] == "deepseek-v4-flash"

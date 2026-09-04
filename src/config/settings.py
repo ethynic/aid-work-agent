@@ -123,7 +123,7 @@ class LLMConfig(BaseModel):
     failover: FailoverConfig = Field(default_factory=FailoverConfig)
     # 轻量小模型（低成本简单任务：报告/复盘/评分/空态摘要），独立于主链路 model。
     # 支持两种写法：
-    #   - "provider/model"（如 "qwen/qwen3.7-flash"）：跨 provider 调用，用该 provider 的 key/base_url
+    #   - "provider/model"（如 "qwen/qwen3.8-flash"）：跨 provider 调用，用该 provider 的 key/base_url
     #   - 纯模型名（如 "deepseek-v4-flash"）：用当前主 provider
     # 未配置（None / 空字符串）时 fallback 到当前主 provider 的 model。
     # 详见 docs/research/ai-agent-experience-daily-report-research.md §4.7.6
@@ -143,7 +143,7 @@ class LLMConfig(BaseModel):
         """解析 lite_model 配置，返回 (provider_name, model_name)
 
         优先级：
-        1. "provider/model"（如 "qwen/qwen3.7-flash"）-> 跨 provider，校验 provider 合法
+        1. "provider/model"（如 "qwen/qwen3.8-flash"）-> 跨 provider，校验 provider 合法
         2. 纯模型名 -> (当前 provider, 模型名)
         3. 未配置 / 非法 -> (当前 provider, 当前 provider 的 model)
         """
@@ -253,7 +253,7 @@ class ShortTermMemoryConfig(BaseModel):
 class SummaryLLMConfig(BaseModel):
     """摘要 LLM 配置（独立于主 LLM，可走便宜模型）"""
     provider: str = "deepseek"
-    model: str = "deepseek-chat"
+    model: str = "deepseek-v4-flash"
     timeout_sec: int = 30
 
 

@@ -86,7 +86,7 @@ def call_llm(prompt: str, *, timeout: float = 300.0,
             keys = settings.llm.qwen.get_effective_keys()
             if not keys:
                 raise ValueError("QWEN API key 未配置")
-            model = model_override or getattr(settings.llm.qwen, 'model', None) or 'qwen3.7-flash'
+            model = model_override or getattr(settings.llm.qwen, 'model', None) or 'qwen3.8-flash'
             base_url = getattr(settings.llm.qwen, 'base_url', None) or 'https://dashscope.aliyuncs.com/compatible-mode/v1'
             api_url = f"{base_url.rstrip('/')}/chat/completions"
             payload = {
@@ -116,7 +116,7 @@ def call_llm(prompt: str, *, timeout: float = 300.0,
             keys = settings.llm.zhipu.get_effective_keys()
             if not keys:
                 raise ValueError("ZhipuAI API key 未配置")
-            model = model_override or getattr(settings.llm.zhipu, 'model', None) or 'glm-4-flash'
+            model = model_override or getattr(settings.llm.zhipu, 'model', None) or 'GLM-5.3-Flash'
             base_url = getattr(settings.llm.zhipu, 'base_url', None) or 'https://open.bigmodel.cn/api/paas/v4'
             api_url = f"{base_url.rstrip('/')}/chat/completions"
             payload = {"model": model, "messages": [{"role": "user", "content": prompt}], "temperature": 0.0}
@@ -140,7 +140,7 @@ def call_llm(prompt: str, *, timeout: float = 300.0,
             keys = settings.llm.deepseek.get_effective_keys()
             if not keys:
                 raise ValueError("DeepSeek API key 未配置")
-            model = model_override or getattr(settings.llm.deepseek, 'model', None) or 'deepseek-chat'
+            model = model_override or getattr(settings.llm.deepseek, 'model', None) or 'deepseek-v4-flash'
             base_url = getattr(settings.llm.deepseek, 'base_url', None) or 'https://api.deepseek.com'
             api_url = f"{base_url.rstrip('/')}/chat/completions"
             payload = {"model": model, "messages": [{"role": "user", "content": prompt}], "temperature": 0.0}

@@ -21,7 +21,7 @@ settings_module = importlib.import_module('src.config.settings')
 
 def _make_settings():
     class _QwenCfg:
-        model = 'qwen3.7-flash'
+        model = 'qwen3.8-flash'
         base_url = 'https://dashscope.aliyuncs.com/compatible-mode/v1'
 
         def get_effective_keys(self):
@@ -67,7 +67,7 @@ class TestDefaultLlmQwen:
         assert result == '结构JSON'
         assert captured['url'] == 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions'
         assert captured['headers']['Authorization'] == 'Bearer test-qwen-key'
-        assert captured['payload']['model'] == 'qwen3.7-flash'
+        assert captured['payload']['model'] == 'qwen3.8-flash'
         assert captured['payload']['enable_thinking'] is False
         assert captured['payload']['max_tokens'] == 16384
         assert captured['payload']['temperature'] == 0.0
@@ -125,7 +125,7 @@ class TestDefaultLlmQwen:
         assert usage['completion_tokens'] == 200
         assert usage['total_tokens'] == 1200
         assert usage['cached_tokens'] == 800        # 嵌套缓存命中归一
-        assert usage['model'] == 'qwen3.7-flash'    # 实际调用模型随 usage 透出
+        assert usage['model'] == 'qwen3.8-flash'    # 实际调用模型随 usage 透出
 
     def test_return_usage_deepseek_cache_hit_form(self, monkeypatch):
         """deepseek 的 prompt_cache_hit_tokens 形态同样归一到 cached_tokens"""
@@ -133,7 +133,7 @@ class TestDefaultLlmQwen:
         from src.tools.excel.excel_template_ai import _default_llm
 
         class _DsCfg:
-            model = 'deepseek-chat'
+            model = 'deepseek-v4-flash'
 
             def get_effective_keys(self):
                 return ['ds-key']
@@ -154,4 +154,4 @@ class TestDefaultLlmQwen:
 
         _, usage = _default_llm('p', return_usage=True)
         assert usage['cached_tokens'] == 400
-        assert usage['model'] == 'deepseek-chat'
+        assert usage['model'] == 'deepseek-v4-flash'
