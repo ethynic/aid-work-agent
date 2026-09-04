@@ -166,6 +166,7 @@ class SubagentLoader:
             tools=frontmatter.get("tools", {}),
             skills=frontmatter.get("skills", {}),
             context=frontmatter.get("context", {}),
+            recap=frontmatter.get("recap") or {},
             system_prompt=frontmatter.get("system_prompt", body.strip()),
             delegatable_to=frontmatter.get("delegatable_to", []),
             allow_delegation=frontmatter.get("allow_delegation", True),

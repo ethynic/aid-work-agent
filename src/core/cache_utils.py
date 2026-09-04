@@ -74,6 +74,9 @@ class CacheKeys:
     # pre-sales-api 委托登录 client_token：pre_sales_client_token:{tenant_id}:{assignee_phone}
     # （外部系统委托人 token，有效期 1 天，缓存 TTL 23h 留 buffer；Code=-99 时 force_refresh 强刷）
     PRE_SALES_CLIENT_TOKEN = "pre_sales_client_token"
+    # recap 任务幂等：recap_task:{tenant_id}:{task_name}:{round_message_id}
+    # （每轮问答结束后的沉淀任务防重入/防回调重放，TTL 24h；docs/subagent/recap-mechanism-design.md）
+    RECAP_TASK_DEDUP = "recap_task"
 
 
 # ============== 通用缓存函数 ==============

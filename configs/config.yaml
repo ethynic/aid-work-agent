@@ -296,6 +296,12 @@ billing:
   embedding_usage_factor: 100  # 向量模型用量系数，embedding token × 单价 × 系数 = 积分用量（知识库向量化/检索 query 向量化）
   asr_usage_factor: 100  # 语音识别用量系数，ASR 调用次数 × 单价 × 系数 = 积分用量（阿里云 NLS 按次计费）
 
+# recap 任务推送配置（docs/subagent/recap-mechanism-design.md）
+external_push:
+  pre_sales:
+    enabled: true          # 售前 10605 推送总开关，置 false 即恢复纯对话（回滚手段）
+    summary_max_tokens: 300  # 摘要 LLM 单次生成上限
+
 boss_tool_billing:
   # BOSS 本地工具按次计费（2026-08-31）：成功调用才扣，失败/超时不扣；与 LLM token 计费独立
   # 改价直接改下表（积分数值可带小数），价格设 0 = 免费；enabled: false 全部免费

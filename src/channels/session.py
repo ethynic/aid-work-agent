@@ -1317,6 +1317,7 @@ class ChannelSessionManager:
         # 精确匹配撤回状态。双轨覆盖：set_user_message_id 覆盖 trace_persist worker
         # 未处理的场景（内存 trace 携带该值写入），update_user_message_id UPDATE
         # 覆盖 worker 已处理的场景。整个回填失败只记 debug log，不影响业务。
+        user_msg_id = None
         try:
             user_msg_id = (
                 write_ok[0]
@@ -1381,6 +1382,24 @@ class ChannelSessionManager:
         # （新流程下 user+assistant 同事务，理论上末尾不会是孤立 user；保留是防御性）
         if not send_ok:
             self._ensure_last_not_orphan_user(session_id, tenant_id)
+
+        # recap 轮后异步沉淀任务（全部渠道单一收口，仅回复送达的轮次触发；
+        # 失败不影响对话，trigger_recap 内部吞异常。docs/subagent/recap-mechanism-design.md §4.3）
+        if send_ok:
+            try:
+                from src.services.recap import trigger_recap
+
+                trigger_recap(
+                    agent=agent,
+                    session_id=session_id,
+                    tenant_id=tenant_id,
+                    user_content=result.merged_input or user_content,
+                    assistant_reply=response_text,
+                    round_message_id=user_msg_id,
+                    record_service=record_service,
+                )
+            except Exception as e:
+                logger.warning(f"后端日志：recap 触发失败（不影响对话）session={session_id}: {e}")
 
         return {
             "status": "success",

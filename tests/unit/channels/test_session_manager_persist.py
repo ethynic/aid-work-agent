@@ -793,5 +793,132 @@ class TestProcessAndPersist:
         assert len(memory_store["messages"]) == 0
 
 
+# ============================================================
+# recap 轮后任务触发（docs/subagent/recap-mechanism-design.md §4.3）
+# 触发点：send_ok == True 时、return 前，round_message_id 取本轮落库 user 消息 id
+# ============================================================
+
+
+def _recap_agent(stub_agent):
+    """带 recap 任务声明的最小 Agent stub"""
+    from types import SimpleNamespace
+
+    stub_agent.subagent_config = SimpleNamespace(
+        recap={"tasks": [{"name": "external_push", "when": "every_round"}]},
+        name="售前咨询专员",
+        dir_name="pre-sales",
+    )
+    return stub_agent
+
+
+class TestRecapTrigger:
+    @pytest.mark.asyncio
+    async def test_send_ok_triggers_recap_with_round_message_id(
+        self, manager, mock_db_ctx, patched_session_queue, stub_agent
+    ):
+        patched_session_queue.enqueue_and_process.return_value = EnqueueResult(
+            status="success",
+            response_text="hello back",
+            merged_input="你好",
+            was_merged=False,
+            lease_token="lease-1",
+        )
+
+        with patch("src.services.recap.trigger_recap") as mock_trigger:
+            result = await manager.process_and_persist(
+                session_id="sid_recap_ok",
+                tenant_id="t1",
+                user_content="你好",
+                agent=_recap_agent(stub_agent),
+                send_response=AsyncMock(return_value=True),
+            )
+
+        assert result["status"] == "success"
+        mock_trigger.assert_called_once()
+        kwargs = mock_trigger.call_args.kwargs
+        assert kwargs["tenant_id"] == "t1"
+        assert kwargs["user_content"] == "你好"
+        assert kwargs["assistant_reply"] == "hello back"
+        # 幂等键：本轮落库的 user 消息 message_id（非空，且为 channel_messages 中该 user 消息）
+        assert kwargs["round_message_id"], "round_message_id 不能为空"
+        user_msgs = [m for m in mock_db_ctx[0]["messages"] if m["role"] == "user"]
+        assert user_msgs[0]["message_id"] == kwargs["round_message_id"]
+        assert kwargs["agent"] is stub_agent
+
+    @pytest.mark.asyncio
+    async def test_send_failed_does_not_trigger_recap(
+        self, manager, mock_db_ctx, patched_session_queue, stub_agent
+    ):
+        """回复未送达（send_ok=False）的轮次视为失败轮，不做沉淀"""
+        patched_session_queue.enqueue_and_process.return_value = EnqueueResult(
+            status="success",
+            response_text="hello back",
+            merged_input="你好",
+            was_merged=False,
+            lease_token="lease-1",
+        )
+
+        with patch("src.services.recap.trigger_recap") as mock_trigger:
+            await manager.process_and_persist(
+                session_id="sid_recap_fail",
+                tenant_id="t1",
+                user_content="你好",
+                agent=_recap_agent(stub_agent),
+                send_response=AsyncMock(return_value=False),
+            )
+
+        mock_trigger.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_recap_trigger_exception_does_not_break_result(
+        self, manager, mock_db_ctx, patched_session_queue, stub_agent
+    ):
+        """recap 触发入口异常不能影响对话结果返回"""
+        patched_session_queue.enqueue_and_process.return_value = EnqueueResult(
+            status="success",
+            response_text="hello back",
+            merged_input="你好",
+            was_merged=False,
+            lease_token="lease-1",
+        )
+
+        with patch("src.services.recap.trigger_recap", side_effect=RuntimeError("boom")):
+            result = await manager.process_and_persist(
+                session_id="sid_recap_boom",
+                tenant_id="t1",
+                user_content="你好",
+                agent=_recap_agent(stub_agent),
+                send_response=AsyncMock(return_value=True),
+            )
+
+        assert result["status"] == "success"
+        assert result["response_text"] == "hello back"
+
+    @pytest.mark.asyncio
+    async def test_no_recap_config_no_dispatch(
+        self, manager, mock_db_ctx, patched_session_queue, stub_agent
+    ):
+        """agent 无 recap 配置（如主智能体）时调用点照常触发、runner 内部直接返回（不派发任务）"""
+        stub_agent.subagent_config = None
+        patched_session_queue.enqueue_and_process.return_value = EnqueueResult(
+            status="success",
+            response_text="hello back",
+            merged_input="你好",
+            was_merged=False,
+            lease_token="lease-1",
+        )
+
+        with patch("src.services.recap.runner.asyncio.create_task") as mock_create:
+            await manager.process_and_persist(
+                session_id="sid_recap_none",
+                tenant_id="t1",
+                user_content="你好",
+                agent=stub_agent,
+                send_response=AsyncMock(return_value=True),
+            )
+
+        mock_create.assert_not_called()
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "--tb=short"])

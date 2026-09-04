@@ -349,6 +349,15 @@ ImageRegistry 管理的图片资产元信息（复用 cp 的 `uploaded_file:{fil
 **关键约束**：委托人 token 按租户 + 归属员工手机号隔离，避免跨租户/跨员工串 token；缓存值不含 `success` 字段，命中返回时由脚本补加
 **源文件**：`src/skills/pre-sales-api-1.0.0/scripts/delegate_login.py`（前缀注册：`src/core/cache_utils.py`）
 
+### 7.4.5 recap 任务幂等键
+
+**存储**：Redis + 内存降级
+**键模式**：`recap_task:{tenant_id}:{task_name}:{round_message_id}`
+**TTL**：86400s（24h，覆盖回调重放窗口）
+**失效时机**：无主动失效；TTL 自动过期兜底。同一轮问答重复触发（同轮重入 / 渠道回调重放）时 SET NX 命中即静默跳过
+**关键约束**：`round_message_id` 为本轮落库的 `channel_messages.message_id`（渠道无关、单调递增，天然防重放）；Redis 不可用时降级内存，重启可能极小概率重做一次任务，业务可接受（推送类为追加型写入、查重类天然幂等）
+**源文件**：`src/services/recap/runner.py`（前缀注册：`src/core/cache_utils.py`；机制设计：`docs/subagent/recap-mechanism-design.md` §4.5）
+
 ### 7.5 定时任务调度器启动锁
 
 多 worker 环境下，确保只有单个 worker 启动 APScheduler 调度器，避免重复注册定时任务。
@@ -440,6 +449,7 @@ PostgreSQL（持久化，权威数据源）
 ├── image_fetch_url:{sha256(url)}    # Web 图片抓取去重
 ├── subagent_greeting:{agent_id}     # 数字员工空态摘要（LLM 生成缓存）
 ├── pre_sales_client_token:{tenant_id}:{assignee_phone}  # pre-sales-api 委托登录 token（23h）
+├── recap_task:{tenant_id}:{task_name}:{round_message_id}  # recap 任务幂等（24h）
 └── sched_task_lock:manager          # 定时任务调度器启动锁
 
 内存缓存（无 Redis 键前缀）：

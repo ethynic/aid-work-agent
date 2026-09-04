@@ -101,6 +101,11 @@ class SubagentConfig(BaseModel):
     # 知识库关联配置
     knowledge_sources: List[Dict[str, str]] = Field(default_factory=list, description="关联的知识库列表，每项含 source_type 和 display_name")
 
+    # recap 轮后异步沉淀任务（每轮问答回复送达后由代码触发，非 LLM 决策）
+    # 结构: {"tasks": [{"name": "external_push", "when": "every_round", "enabled": true}]}
+    # 详见 docs/subagent/recap-mechanism-design.md §3；DB 覆盖智能体暂不支持（subagent_definitions 无此字段）
+    recap: Dict[str, Any] = Field(default_factory=dict, description="recap 轮后沉淀任务配置")
+
     # 来源标记
     from_db: bool = Field(default=False, description="是否来自数据库加载")
 

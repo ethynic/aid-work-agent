@@ -418,6 +418,21 @@ class BillingConfig(BaseModel):
     asr_usage_factor: int = 100
 
 
+class PreSalesPushConfig(BaseModel):
+    """售前推送（recap 任务 external_push）配置
+
+    - enabled: 总开关，置 false 即恢复纯对话（回滚手段）
+    - summary_max_tokens: 摘要 LLM 单次生成上限
+    """
+    enabled: bool = True
+    summary_max_tokens: int = 300
+
+
+class ExternalPushConfig(BaseModel):
+    """外部系统推送配置（docs/subagent/recap-mechanism-design.md §6）"""
+    pre_sales: PreSalesPushConfig = Field(default_factory=PreSalesPushConfig)
+
+
 class ClientConfig(BaseModel):
     """协会客户端配置（docs/tools/association-client-design.md）
 
@@ -514,6 +529,7 @@ class Settings(BaseModel):
     video_gen: VideoGenConfig = Field(default_factory=VideoGenConfig)
     client: ClientConfig = Field(default_factory=ClientConfig)
     boss_tool_billing: BossToolBillingConfig = Field(default_factory=BossToolBillingConfig)
+    external_push: ExternalPushConfig = Field(default_factory=ExternalPushConfig)
     client_usage_report: ClientUsageReportConfig = Field(default_factory=ClientUsageReportConfig)
     desktop_agent: DesktopAgentConfig = Field(default_factory=DesktopAgentConfig)
 
