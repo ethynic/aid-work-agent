@@ -186,7 +186,7 @@ async def _run_tasks(tasks, payload):
 
 recap 适配器允许使用 LLM（摘要、评分、分类等），统一约束：
 
-1. **调用形态**：`llm_gateway.chat()` 单轮、无工具、temperature ≤ 0.3、max_tokens 由适配器定（摘要类 300）
+1. **调用形态**：`llm_gateway.chat_lite()` 单轮、无工具、temperature ≤ 0.3、max_tokens 由适配器定（摘要类 300）——recap 任务（摘要/评分/分类）通常简单，统一走 `llm.lite_model` 轻量小模型，不占用主模型
 2. **计费**：紧邻调用处 `record_background_llm_usage(response.get("usage"), source="recap_<task_name>")`，满足 billing_audit.md §3.5 条件 A；函数内置双路径（有 record_service 上下文累加、无则独立落 `chat_records`，source_type=background_llm）
 3. **降级**：LLM 失败/超时/输出解析失败 -> 适配器走各自的降级逻辑（如推送摘要降级为截断原文），**不得因 LLM 失败整体放弃任务**（除非该任务的价值本身就是 LLM 输出）
 

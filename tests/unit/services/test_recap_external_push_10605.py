@@ -184,9 +184,9 @@ class TestSummarize:
              patch("src.llm.gateway.llm_gateway") as mock_gw, \
              patch("src.services.session_record.record_background_llm_usage") as mock_bill:
             mock_settings.external_push.pre_sales.summary_max_tokens = 300
-            mock_gw.chat = AsyncMock(return_value=chat_return)
+            mock_gw.chat_lite = AsyncMock(return_value=chat_return)
             summary = asyncio.run(_summarize(payload, ctx))
-            return summary, mock_gw.chat, mock_bill
+            return summary, mock_gw.chat_lite, mock_bill
 
     def test_success_and_billing(self):
         chat_return = {
@@ -225,7 +225,7 @@ class TestSummarize:
              patch("src.llm.gateway.llm_gateway") as mock_gw, \
              patch("src.services.session_record.record_background_llm_usage"):
             mock_settings.external_push.pre_sales.summary_max_tokens = 300
-            mock_gw.chat = MagicMock(side_effect=RuntimeError("llm down"))
+            mock_gw.chat_lite = MagicMock(side_effect=RuntimeError("llm down"))
             summary = asyncio.run(_summarize(payload, ctx))
         assert summary["customer_need"] == "这个产品多少钱？"
 

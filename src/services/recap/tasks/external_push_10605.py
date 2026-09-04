@@ -235,7 +235,10 @@ def _extract_json_object(content: str) -> Optional[Dict[str, Any]]:
 
 
 async def _summarize(payload: RecapPayload, ctx: Dict[str, Any]) -> Dict[str, str]:
-    """LLM 摘要本轮问答；失败降级为截断原文（推送流程继续，§3.4）"""
+    """LLM 摘要本轮问答；失败降级为截断原文（推送流程继续，§3.4）
+
+    用 chat_lite 走 llm.lite_model 轻量小模型——摘要任务简单，无需主模型。
+    """
     fallback = {
         "customer_need": _truncate(payload.user_content),
         "reply_summary": _truncate(payload.assistant_reply),
@@ -246,7 +249,7 @@ async def _summarize(payload: RecapPayload, ctx: Dict[str, Any]) -> Dict[str, st
         from src.llm.gateway import llm_gateway
         from src.services.session_record import record_background_llm_usage
 
-        response = await llm_gateway.chat(
+        response = await llm_gateway.chat_lite(
             messages=[
                 {"role": "system", "content": _SUMMARY_SYSTEM_PROMPT},
                 {
@@ -262,7 +265,7 @@ async def _summarize(payload: RecapPayload, ctx: Dict[str, Any]) -> Dict[str, st
             max_tokens=settings.external_push.pre_sales.summary_max_tokens,
         )
         # 计费：billing_audit.md §3.5 条件 A（独立任务无 record 上下文，走独立落库路径）
-        # model 必须显式传入：recap 摘要走主 gateway 默认模型，独立落库兜底分支
+        # model 必须显式传入：chat_lite 返回的 model 即 lite_model，独立落库兜底分支
         # 缺 model 会误用 mid_term 摘要模型单价（session_record.py P2-1 修复先例）
         record_background_llm_usage(
             response.get("usage") if isinstance(response, dict) else None,
