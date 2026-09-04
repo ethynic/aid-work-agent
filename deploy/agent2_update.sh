@@ -17,6 +17,8 @@
 
 set -e
 
+START_TS=$(date +%s)
+
 echo "=========================================="
 echo "  AI 数字员工系统（测试） - 快速更新"
 echo "=========================================="
@@ -126,3 +128,5 @@ docker exec -u root aid-agent-api2 \
 echo ""
 echo "更新完成！"
 echo "=========================================="
+ELAPSED=$(( $(date +%s) - START_TS ))
+echo "总耗时: $(( ELAPSED / 60 )) 分 $(( ELAPSED % 60 )) 秒"
