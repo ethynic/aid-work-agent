@@ -273,6 +273,8 @@ class SubagentLoader:
             frontmatter["business_pages"] = config.business_pages
         if config.chat_toolbar:
             frontmatter["chat_toolbar"] = config.chat_toolbar
+        if config.recap:
+            frontmatter["recap"] = config.recap
         if config.upload_accept:
             frontmatter["upload_accept"] = config.upload_accept
         if config.llm_provider:

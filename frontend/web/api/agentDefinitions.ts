@@ -36,6 +36,7 @@ export interface AgentDefinition {
   reply_style: string | null
   business_pages: any[] | null
   knowledge_sources: { source_type: string; display_name: string }[]
+  recap: { tasks: { name: string; when: string; enabled: boolean }[] } | null
   status: string
   created_by: string | null
   updated_by: string | null
@@ -239,6 +240,21 @@ export async function listSkillsMeta(): Promise<{ success: boolean; data: SkillM
 
 export async function listReplyStylesMeta(): Promise<{ success: boolean; data: ReplyStyleMeta[] }> {
   const response = await fetch(`${API_BASE}/meta/reply-styles`, { headers: getAuthHeaders() })
+  return handleResponse(response)
+}
+
+export interface RecapTaskMeta {
+  name: string
+  description: string
+}
+
+export interface RecapTaskMetaResult {
+  tasks: RecapTaskMeta[]
+  when_options: string[]
+}
+
+export async function listRecapTasksMeta(): Promise<{ success: boolean; data: RecapTaskMetaResult }> {
+  const response = await fetch(`${API_BASE}/meta/recap-tasks`, { headers: getAuthHeaders() })
   return handleResponse(response)
 }
 

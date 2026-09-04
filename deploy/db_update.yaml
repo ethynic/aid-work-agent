@@ -27,3 +27,7 @@
       input_price_per_m = EXCLUDED.input_price_per_m,
       output_price_per_m = EXCLUDED.output_price_per_m,
       cached_input_price_per_m = EXCLUDED.cached_input_price_per_m;
+- datetime: "2026-09-04 17:01:53"
+  remark: "subagent_definitions 增加 recap JSONB：自定义数字员工承载 recap 轮后沉淀任务配置（结构同 SUBAGENT.md frontmatter recap 块）"
+  statements: |
+    ALTER TABLE subagent_definitions ADD COLUMN IF NOT EXISTS recap JSONB DEFAULT '{}';

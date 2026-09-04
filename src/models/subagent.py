@@ -103,7 +103,8 @@ class SubagentConfig(BaseModel):
 
     # recap 轮后异步沉淀任务（每轮问答回复送达后由代码触发，非 LLM 决策）
     # 结构: {"tasks": [{"name": "external_push", "when": "every_round", "enabled": true}]}
-    # 详见 docs/subagent/recap-mechanism-design.md §3；DB 覆盖智能体暂不支持（subagent_definitions 无此字段）
+    # 详见 docs/subagent/recap-mechanism-design.md §3；内置智能体来自 SUBAGENT.md，
+    # 自定义智能体来自 subagent_definitions.recap JSONB 列（registry/factory 加载时透传）
     recap: Dict[str, Any] = Field(default_factory=dict, description="recap 轮后沉淀任务配置")
 
     # 来源标记

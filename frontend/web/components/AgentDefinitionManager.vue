@@ -230,6 +230,36 @@
                     <p class="text-[11px] text-gray-400 mt-1">主 provider 失败 failover 到备用 provider 时，备用 provider 也会用这里配置的 model。</p>
                   </div>
 
+                  <!-- Recap 轮后任务编辑器 -->
+                  <div>
+                    <label class="text-xs text-gray-500 mb-1 block">Recap 轮后任务</label>
+                    <div class="bg-gray-50 rounded-lg p-2 space-y-1.5">
+                      <div v-for="(task, i) in recapTasks" :key="i"
+                        class="flex items-center gap-1.5 bg-white rounded-lg p-1.5 border border-gray-100">
+                        <select v-model="task.name"
+                          class="px-1.5 py-1 text-xs border border-gray-200 rounded focus:outline-none focus:border-primary-400 flex-1 min-w-0">
+                          <option v-for="opt in recapTaskOptions" :key="opt.name" :value="opt.name" :title="opt.description">
+                            {{ opt.name }}
+                          </option>
+                        </select>
+                        <select v-model="task.when"
+                          class="px-1.5 py-1 text-xs border border-gray-200 rounded focus:outline-none focus:border-primary-400">
+                          <option v-for="w in recapWhenOptions" :key="w" :value="w">{{ w }}</option>
+                        </select>
+                        <label class="flex items-center gap-1 text-xs text-gray-600 whitespace-nowrap cursor-pointer">
+                          <input type="checkbox" v-model="task.enabled" />启用
+                        </label>
+                        <button @click="recapTasks.splice(i, 1)"
+                          class="text-danger-400 hover:text-danger-600 text-sm px-1">&times;</button>
+                      </div>
+                      <button @click="addRecapTask"
+                        class="w-full px-2 py-1 text-xs text-primary-600 bg-primary-50 hover:bg-primary-100 rounded-lg">
+                        + 添加任务
+                      </button>
+                    </div>
+                    <p class="text-[11px] text-gray-400 mt-1">每轮问答回复送达后异步执行，失败不影响对话主流程。</p>
+                  </div>
+
                   <!-- Business Pages Editor -->
                   <div>
                     <label class="text-xs text-gray-500 mb-1 block">业务页面</label>
@@ -497,10 +527,10 @@ import {
   updateDefinition, deleteDefinition, updateSystemPrompt,
   listVersions, getVersion, diffVersions,
   saveDraft, listLabels, setLabel,
-  listToolsMeta, listSkillsMeta, listReplyStylesMeta,
+  listToolsMeta, listSkillsMeta, listReplyStylesMeta, listRecapTasksMeta,
   getSections, saveSection, optimizeSection as apiOptimizeSection,
   type AgentDefinition, type PromptVersion, type DiffResult,
-  type ToolMeta, type SkillMeta, type ReplyStyleMeta,
+  type ToolMeta, type SkillMeta, type ReplyStyleMeta, type RecapTaskMeta,
 } from '@/api/agentDefinitions'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 
@@ -535,6 +565,11 @@ const replyStyles = ref<ReplyStyleMeta[]>([])
 const businessPages = ref<{ id: string; title: string; icon: string; route: string }[]>([])
 const showPageSelector = ref(false)
 const selectedPageIds = computed(() => businessPages.value.map(p => p.id))
+
+// Recap 轮后任务（通用任务编辑器，任务名/触发时机选项来自 /meta/recap-tasks）
+const recapTasks = ref<{ name: string; when: string; enabled: boolean }[]>([])
+const recapTaskOptions = ref<RecapTaskMeta[]>([])
+const recapWhenOptions = ref<string[]>([])
 
 // Sections state — dynamic from template parsing
 const sectionKeys = ref<string[]>([])
@@ -594,14 +629,19 @@ function showToast(message: string, type = 'success') {
 // ============== Metadata Loading ==============
 async function loadMetadata() {
   try {
-    const [tRes, sRes, rRes] = await Promise.all([
+    const [tRes, sRes, rRes, recapRes] = await Promise.all([
       listToolsMeta(),
       listSkillsMeta(),
       listReplyStylesMeta(),
+      listRecapTasksMeta(),
     ])
     if (tRes.success) availableTools.value = tRes.data
     if (sRes.success) availableSkills.value = sRes.data
     if (rRes.success) replyStyles.value = rRes.data
+    if (recapRes.success) {
+      recapTaskOptions.value = recapRes.data.tasks
+      recapWhenOptions.value = recapRes.data.when_options
+    }
   } catch (e) { console.error('加载元数据失败', e) }
 }
 
@@ -670,6 +710,17 @@ function populateForm(data: AgentDefinition) {
   toolsInherit.value = data.tools?.inherit !== false
   additionalTools.value = data.tools?.additional || []
   businessPages.value = (data.business_pages || []).map((p: any) => ({ ...p }))
+  recapTasks.value = (data.recap?.tasks || []).map(t => ({
+    name: t.name || '',
+    when: t.when || 'every_round',
+    enabled: t.enabled !== false,
+  }))
+}
+
+function addRecapTask() {
+  const defaultName = recapTaskOptions.value[0]?.name || ''
+  const defaultWhen = recapWhenOptions.value[0] || 'every_round'
+  recapTasks.value.push({ name: defaultName, when: defaultWhen, enabled: true })
 }
 
 async function loadSections() {
@@ -836,6 +887,8 @@ async function saveDefinition() {
       skills: form.value.skills,
       reply_style: form.value.reply_style || null,
       business_pages: businessPages.value.length > 0 ? businessPages.value : null,
+      // 全部删除时传 {tasks: []} 而非 null：后端 update 过滤 None 值，传 null 无法清空配置
+      recap: recapTasks.value.length > 0 ? { tasks: recapTasks.value } : { tasks: [] },
       llm_provider: form.value.llm_provider || null,
       llm_model_codes: Object.keys(model_codes).length > 0 ? model_codes : null,
       status: form.value.status,

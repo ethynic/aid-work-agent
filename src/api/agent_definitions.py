@@ -41,6 +41,7 @@ class CreateDefinitionRequest(BaseModel):
     reply_style: Optional[str] = None
     business_pages: Optional[List[Dict[str, Any]]] = None
     knowledge_sources: Optional[List[Dict[str, str]]] = None
+    recap: Optional[Dict[str, Any]] = None
     commit_message: str = "初始版本"
 
 
@@ -60,6 +61,7 @@ class UpdateDefinitionRequest(BaseModel):
     reply_style: Optional[str] = None
     business_pages: Optional[List[Dict[str, Any]]] = None
     knowledge_sources: Optional[List[Dict[str, str]]] = None
+    recap: Optional[Dict[str, Any]] = None
     status: Optional[str] = None
 
 
@@ -171,6 +173,7 @@ async def create_definition(request: Request, body: CreateDefinitionRequest):
             reply_style=body.reply_style,
             business_pages=body.business_pages,
             knowledge_sources=body.knowledge_sources,
+            recap=body.recap,
             created_by=admin.get("user_id"),
             commit_message=body.commit_message,
         )
@@ -261,6 +264,25 @@ async def list_reply_styles_meta(request: Request):
                 })
 
     return _success(styles)
+
+
+@router.get("/meta/recap-tasks")
+async def list_recap_tasks_meta(request: Request):
+    """获取 recap 任务元数据（供前端 recap 任务编辑器下拉使用）
+
+    任务名来自适配器注册表 RECAP_TASK_ADAPTERS，触发时机来自 runner.VALID_WHEN 白名单。
+    """
+    _require_admin(request)
+    from src.services.recap.tasks import RECAP_TASK_ADAPTERS
+    from src.services.recap.runner import VALID_WHEN
+
+    tasks = []
+    for name, adapter_cls in RECAP_TASK_ADAPTERS.items():
+        tasks.append({
+            "name": name,
+            "description": (getattr(adapter_cls, "__doc__", "") or "").strip().splitlines()[0] if getattr(adapter_cls, "__doc__", "") else "",
+        })
+    return _success({"tasks": tasks, "when_options": list(VALID_WHEN)})
 
 
 # ============== Page Metadata ==============

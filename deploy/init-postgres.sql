@@ -1003,6 +1003,7 @@ CREATE TABLE IF NOT EXISTS subagent_definitions (
     knowledge_sources JSONB DEFAULT '[]',
     chat_toolbar JSONB DEFAULT '[]',
     upload_accept TEXT,
+    recap JSONB DEFAULT '{}',
     PRIMARY KEY (id)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_subagent_def_agent_id ON subagent_definitions USING btree (agent_id);
