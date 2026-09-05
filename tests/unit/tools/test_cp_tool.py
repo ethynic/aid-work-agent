@@ -36,6 +36,14 @@ skipif_windows = pytest.mark.skipif(
 
 
 @pytest.fixture(autouse=True)
+def _isolated_tenants_root(tmp_path, monkeypatch):
+    """把 storage._TENANTS_ROOT 重定向到 tmp_path，复制产物不污染仓库 storage/"""
+    from src.core import storage as storage_mod
+    monkeypatch.setattr(storage_mod, "_TENANTS_ROOT", str(tmp_path / "tenants"))
+    return tmp_path
+
+
+@pytest.fixture(autouse=True)
 def _isolated_tool_context():
     token = _CURRENT_TOOL_CONTEXT.set(ToolExecutionContext())
     yield
@@ -44,6 +52,68 @@ def _isolated_tool_context():
 
 def _set_test_context(user_id=None, tenant_id=None):
     _CURRENT_TOOL_CONTEXT.set(ToolExecutionContext(user_id=user_id, tenant_id=tenant_id))
+
+
+def _anon_conv_dir(tmp_path) -> Path:
+    """无租户上下文时的目标目录（_anonymous/conversation）"""
+    return tmp_path / "tenants" / "_anonymous" / "conversation"
+
+
+def _tenant_conv_dir(tmp_path, tenant_id: str) -> Path:
+    """指定租户上下文时的目标目录（tenant_ 前缀已剥离）"""
+    from src.core.storage import normalize_tenant_id
+    return tmp_path / "tenants" / normalize_tenant_id(tenant_id) / "conversation"
+
+
+class TestCpToolPathResolution:
+    """真实 _resolve_and_validate_path：租户目录落点 + 旧前缀剥离 + legacy rebase"""
+
+    @staticmethod
+    def _tool() -> "CpTool":
+        from src.tools.file.cp_tool import CpTool
+        return CpTool()
+
+    def test_relative_path_strips_storage_prefix(self, tmp_path):
+        _set_test_context(user_id="u1", tenant_id="tenant_res1")
+        tool = self._tool()
+        p = tool._resolve_and_validate_path("storage/output/report.md")
+        assert p == _tenant_conv_dir(tmp_path, "tenant_res1").resolve() / "report.md"
+
+    def test_relative_path_traversal_blocked(self):
+        _set_test_context(user_id="u1", tenant_id="tenant_res1")
+        tool = self._tool()
+        with pytest.raises(ValueError, match="超出允许范围"):
+            tool._resolve_and_validate_path("../outside.md")
+
+    def test_absolute_path_inside_tenant_dir_allowed(self, tmp_path):
+        _set_test_context(user_id="u1", tenant_id="tenant_res1")
+        tool = self._tool()
+        target = _tenant_conv_dir(tmp_path, "tenant_res1") / "append.md"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        p = tool._resolve_and_validate_path(str(target))
+        assert p == target.resolve()
+
+    def test_absolute_legacy_storage_path_rebased(self, tmp_path):
+        """历史 storage/tenants/{tid}/conversation/... 绝对路径 rebase 到租户目录"""
+        _set_test_context(user_id="u1", tenant_id="tenant_res1")
+        tool = self._tool()
+        legacy = PROJECT_ROOT / "storage" / "tenants" / "res1" / "conversation" / "old.md"
+        p = tool._resolve_and_validate_path(str(legacy))
+        assert p == _tenant_conv_dir(tmp_path, "tenant_res1").resolve() / "old.md"
+
+    def test_absolute_legacy_prefixed_tenant_path_rebased(self, tmp_path):
+        """历史带 tenant_ 前缀段（Phase 8 前格式）的绝对路径同样被剥离，防嵌套"""
+        _set_test_context(user_id="u1", tenant_id="tenant_res1")
+        tool = self._tool()
+        legacy = PROJECT_ROOT / "storage" / "tenants" / "tenant_res1" / "conversation" / "old.md"
+        p = tool._resolve_and_validate_path(str(legacy))
+        assert p == _tenant_conv_dir(tmp_path, "tenant_res1").resolve() / "old.md"
+
+    def test_absolute_path_outside_raises(self):
+        _set_test_context(user_id="u1", tenant_id="tenant_res1")
+        tool = self._tool()
+        with pytest.raises(ValueError, match="超出允许范围"):
+            tool._resolve_and_validate_path("/tmp/evil.md")
 
 
 class TestCpToolBasic:
@@ -102,12 +172,12 @@ class TestCpToolBasic:
         assert "resolved_source" in result
         assert result["download_url"] == "/api/files/file_abc123/download"
         assert result["file_id"] == "file_abc123"
+        # 相对路径 output/ 前缀被剥离，落到当前租户 conversation 目录
+        dst_file = _anon_conv_dir(tmp_path) / "test_cp_config.yaml"
+        assert dst_file.exists()
 
-        # 清理：删除 storage/output 下创建的文件
-        storage_dir = PROJECT_ROOT / "storage" / "output"
-        if storage_dir.exists():
-            cleanup = storage_dir / "test_cp_config.yaml"
-            cleanup.unlink(missing_ok=True)
+        # 清理：删除创建的文件
+        dst_file.unlink(missing_ok=True)
 
     @pytest.mark.asyncio
     async def test_copy_success_without_file_path(self, tmp_path):
@@ -165,9 +235,10 @@ class TestCpToolBasic:
         # 不注册下载时不应有 download_url 和 file_id
         assert "download_url" not in result
         assert "file_id" not in result
+        assert (_anon_conv_dir(tmp_path) / "test_cp_no_download.yaml").exists()
 
         # 清理
-        cleanup = PROJECT_ROOT / "storage" / "output" / "test_cp_no_download.yaml"
+        cleanup = _anon_conv_dir(tmp_path) / "test_cp_no_download.yaml"
         cleanup.unlink(missing_ok=True)
 
     @pytest.mark.asyncio
@@ -290,8 +361,8 @@ class TestCpToolOverwrite:
         if not src_file.exists():
             pytest.skip("configs/config.yaml not found")
 
-        # 在 storage/output 下创建已存在的目标文件
-        dst_dir = PROJECT_ROOT / "storage" / "output"
+        # 在目标目录下创建已存在的目标文件
+        dst_dir = _anon_conv_dir(tmp_path)
         dst_dir.mkdir(parents=True, exist_ok=True)
         dst_file = dst_dir / "test_cp_overwrite.yaml"
         dst_file.write_text("existing content", encoding="utf-8")
@@ -320,7 +391,7 @@ class TestCpToolOverwrite:
         if not src_file.exists():
             pytest.skip("configs/config.yaml not found")
 
-        dst_dir = PROJECT_ROOT / "storage" / "output"
+        dst_dir = _anon_conv_dir(tmp_path)
         dst_dir.mkdir(parents=True, exist_ok=True)
         dst_file = dst_dir / "test_cp_overwrite_ok.yaml"
         dst_file.write_text("old content", encoding="utf-8")
@@ -420,13 +491,13 @@ class TestCpToolContentIntegrity:
             assert isinstance(result, dict)
             assert "file_path" in result
 
-            dst_path = PROJECT_ROOT / "storage" / dst_rel
+            dst_path = _anon_conv_dir(tmp_path) / "test_cp_sha256_dst.txt"
             src_hash = hashlib.sha256(src_file.read_bytes()).hexdigest()
             dst_hash = hashlib.sha256(dst_path.read_bytes()).hexdigest()
             assert src_hash == dst_hash, "复制前后 sha256 不一致"
         finally:
             src_file.unlink(missing_ok=True)
-            dst_path = PROJECT_ROOT / "storage" / "output" / "test_cp_sha256_dst.txt"
+            dst_path = _anon_conv_dir(tmp_path) / "test_cp_sha256_dst.txt"
             dst_path.unlink(missing_ok=True)
 
 
@@ -467,8 +538,8 @@ class TestCpToolRegisterDownload:
         call_args = mock_reg.call_args
         assert call_args[0][1] == "custom_name"  # display_name 参数
 
-        # 清理
-        cleanup = PROJECT_ROOT / "storage" / "output" / "test_reg_download.yaml"
+        # 清理（tenant_456 上下文 -> tenants/456/conversation）
+        cleanup = _tenant_conv_dir(tmp_path, "tenant_456") / "test_reg_download.yaml"
         cleanup.unlink(missing_ok=True)
 
     @pytest.mark.asyncio
@@ -527,7 +598,7 @@ class TestCpToolRegisterDownload:
         _set_test_context(user_id="user_vis_default", tenant_id="tenant_vis_default")
 
         # 前置清理：防止上次运行残留文件导致"目标已存在"分支静默返回失败
-        (PROJECT_ROOT / "storage" / "output" / "test_vis_default.yaml").unlink(
+        (_tenant_conv_dir(tmp_path, "tenant_vis_default") / "test_vis_default.yaml").unlink(
             missing_ok=True
         )
 
@@ -555,7 +626,7 @@ class TestCpToolRegisterDownload:
         assert result["visible"] is True
 
         # 清理
-        cleanup = PROJECT_ROOT / "storage" / "output" / "test_vis_default.yaml"
+        cleanup = _tenant_conv_dir(tmp_path, "tenant_vis_default") / "test_vis_default.yaml"
         cleanup.unlink(missing_ok=True)
 
     @pytest.mark.asyncio
@@ -595,7 +666,7 @@ class TestCpToolRegisterDownload:
         assert result["visible"] is True
 
         # 清理
-        cleanup = PROJECT_ROOT / "storage" / "output" / "test_vis_true.yaml"
+        cleanup = _tenant_conv_dir(tmp_path, "tenant_vis_true") / "test_vis_true.yaml"
         cleanup.unlink(missing_ok=True)
 
     @pytest.mark.asyncio

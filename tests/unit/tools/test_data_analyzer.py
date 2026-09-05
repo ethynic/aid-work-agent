@@ -22,6 +22,14 @@ pytestmark = pytest.mark.tools
 # ==================== Fixtures ====================
 
 
+@pytest.fixture(autouse=True)
+def _isolated_tenants_root(tmp_path, monkeypatch):
+    """把 storage._TENANTS_ROOT 重定向到 tmp_path，chart/data 产物不污染仓库 storage/"""
+    from src.core import storage as storage_mod
+    monkeypatch.setattr(storage_mod, "_TENANTS_ROOT", str(tmp_path / "tenants"))
+    return tmp_path
+
+
 @pytest.fixture
 def analyzer():
     """干净的 DataAnalyzer 实例"""
@@ -767,7 +775,7 @@ class TestToTable:
 class TestToChart:
 
     def test_bar_chart(self, loaded_analyzer, tmp_path):
-        loaded_analyzer.CHART_OUTPUT_DIR = str(tmp_path / "charts")
+        loaded_analyzer.chart_output_dir = str(tmp_path / "charts")
         agg = loaded_analyzer.aggregate("t1", group_by=["region"], aggregations=[
             {"column": "sales", "function": "sum", "alias": "total"},
         ])
@@ -777,7 +785,7 @@ class TestToChart:
         assert result["chart_type"] == "bar"
 
     def test_line_chart(self, analyzer, tmp_path):
-        analyzer.CHART_OUTPUT_DIR = str(tmp_path / "charts")
+        analyzer.chart_output_dir = str(tmp_path / "charts")
         analyzer._variables["line_data"] = pd.DataFrame({
             "month": ["Jan", "Feb", "Mar"],
             "val": [10, 20, 30],
@@ -786,7 +794,7 @@ class TestToChart:
         assert os.path.exists(result["file_path"])
 
     def test_pie_chart(self, analyzer, tmp_path):
-        analyzer.CHART_OUTPUT_DIR = str(tmp_path / "charts")
+        analyzer.chart_output_dir = str(tmp_path / "charts")
         analyzer._variables["pie_data"] = pd.DataFrame({
             "label": ["A", "B", "C"],
             "value": [30, 50, 20],
@@ -795,7 +803,7 @@ class TestToChart:
         assert os.path.exists(result["file_path"])
 
     def test_scatter_chart(self, analyzer, tmp_path):
-        analyzer.CHART_OUTPUT_DIR = str(tmp_path / "charts")
+        analyzer.chart_output_dir = str(tmp_path / "charts")
         analyzer._variables["scatter_data"] = pd.DataFrame({
             "x": [1, 2, 3, 4, 5],
             "y": [2, 4, 5, 4, 5],
@@ -804,7 +812,7 @@ class TestToChart:
         assert os.path.exists(result["file_path"])
 
     def test_stacked_bar_chart(self, analyzer, tmp_path):
-        analyzer.CHART_OUTPUT_DIR = str(tmp_path / "charts")
+        analyzer.chart_output_dir = str(tmp_path / "charts")
         analyzer._variables["stacked"] = pd.DataFrame({
             "cat": ["A", "B"],
             "v1": [10, 20],
@@ -814,7 +822,7 @@ class TestToChart:
         assert os.path.exists(result["file_path"])
 
     def test_grouped_bar_chart(self, analyzer, tmp_path):
-        analyzer.CHART_OUTPUT_DIR = str(tmp_path / "charts")
+        analyzer.chart_output_dir = str(tmp_path / "charts")
         analyzer._variables["grouped"] = pd.DataFrame({
             "cat": ["A", "B"],
             "v1": [10, 20],
@@ -824,7 +832,7 @@ class TestToChart:
         assert os.path.exists(result["file_path"])
 
     def test_chart_auto_detect_y_columns(self, analyzer, tmp_path):
-        analyzer.CHART_OUTPUT_DIR = str(tmp_path / "charts")
+        analyzer.chart_output_dir = str(tmp_path / "charts")
         analyzer._variables["auto_y"] = pd.DataFrame({
             "name": ["A", "B"],
             "val1": [10, 20],
@@ -842,7 +850,7 @@ class TestToChart:
             loaded_analyzer.to_chart("t1", chart_type="bar", x_column="region", y_columns=["no_col"])
 
     def test_chart_no_numeric_columns(self, analyzer, tmp_path):
-        analyzer.CHART_OUTPUT_DIR = str(tmp_path / "charts")
+        analyzer.chart_output_dir = str(tmp_path / "charts")
         analyzer._variables["no_num"] = pd.DataFrame({
             "name": ["A", "B"],
             "label": ["x", "y"],
@@ -851,7 +859,7 @@ class TestToChart:
             analyzer.to_chart("no_num", chart_type="bar", x_column="name")
 
     def test_chart_unsupported_type(self, analyzer, tmp_path):
-        analyzer.CHART_OUTPUT_DIR = str(tmp_path / "charts")
+        analyzer.chart_output_dir = str(tmp_path / "charts")
         analyzer._variables["chart_test"] = pd.DataFrame({
             "x": [1, 2], "y": [3, 4],
         })
@@ -958,7 +966,7 @@ class TestToChart:
 
     def test_chart_default_theme_is_ft(self, analyzer, tmp_path):
         """不传 theme 时默认财经风(ft)"""
-        analyzer.CHART_OUTPUT_DIR = str(tmp_path / "charts")
+        analyzer.chart_output_dir = str(tmp_path / "charts")
         analyzer._variables["td"] = pd.DataFrame({"cat": ["A", "B"], "v": [10, 20]})
         result = analyzer.to_chart("td", chart_type="bar", x_column="cat", y_columns=["v"])
         assert result["theme"] == "ft"
@@ -967,7 +975,7 @@ class TestToChart:
 
     def test_chart_theme_corporate(self, analyzer, tmp_path):
         """theme=corporate 商务深蓝"""
-        analyzer.CHART_OUTPUT_DIR = str(tmp_path / "charts")
+        analyzer.chart_output_dir = str(tmp_path / "charts")
         analyzer._variables["td"] = pd.DataFrame({"cat": ["A", "B"], "v": [10, 20]})
         result = analyzer.to_chart("td", chart_type="bar", x_column="cat", y_columns=["v"], theme="corporate")
         assert result["theme"] == "corporate"
@@ -976,7 +984,7 @@ class TestToChart:
 
     def test_chart_theme_morandi(self, analyzer, tmp_path):
         """theme=morandi 莫兰迪（圆角柱）"""
-        analyzer.CHART_OUTPUT_DIR = str(tmp_path / "charts")
+        analyzer.chart_output_dir = str(tmp_path / "charts")
         analyzer._variables["td"] = pd.DataFrame({"cat": ["A", "B"], "v": [10, 20]})
         result = analyzer.to_chart("td", chart_type="bar", x_column="cat", y_columns=["v"], theme="morandi")
         assert result["theme_name"] == "莫兰迪"
@@ -984,7 +992,7 @@ class TestToChart:
 
     def test_chart_theme_dark(self, analyzer, tmp_path):
         """theme=dark 深色科技（圆角柱，深色底）"""
-        analyzer.CHART_OUTPUT_DIR = str(tmp_path / "charts")
+        analyzer.chart_output_dir = str(tmp_path / "charts")
         analyzer._variables["td"] = pd.DataFrame({"cat": ["A", "B"], "v": [10, 20]})
         result = analyzer.to_chart("td", chart_type="bar", x_column="cat", y_columns=["v"], theme="dark")
         assert result["theme_name"] == "深色科技"
@@ -992,7 +1000,7 @@ class TestToChart:
 
     def test_chart_theme_dark_pie(self, analyzer, tmp_path):
         """深色主题下饼图正常（验证 wedge 边缝与百分比配色）"""
-        analyzer.CHART_OUTPUT_DIR = str(tmp_path / "charts")
+        analyzer.chart_output_dir = str(tmp_path / "charts")
         analyzer._variables["td"] = pd.DataFrame({"cat": ["A", "B", "C"], "v": [30, 50, 20]})
         result = analyzer.to_chart("td", chart_type="pie", x_column="cat", y_columns=["v"], theme="dark")
         assert result["theme_name"] == "深色科技"
@@ -1000,7 +1008,7 @@ class TestToChart:
 
     def test_chart_unknown_theme_falls_back(self, analyzer, tmp_path):
         """未知 theme 键回退默认 ft，不报错"""
-        analyzer.CHART_OUTPUT_DIR = str(tmp_path / "charts")
+        analyzer.chart_output_dir = str(tmp_path / "charts")
         analyzer._variables["td"] = pd.DataFrame({"cat": ["A", "B"], "v": [10, 20]})
         result = analyzer.to_chart("td", chart_type="bar", x_column="cat", y_columns=["v"], theme="nonexistent")
         assert result["theme_name"] == "财经风"
@@ -1008,7 +1016,7 @@ class TestToChart:
 
     def test_chart_negative_values_morandi(self, analyzer, tmp_path):
         """含负值数据在圆角主题(morandi)下回退直角柱，负值完整可见，不报错"""
-        analyzer.CHART_OUTPUT_DIR = str(tmp_path / "charts")
+        analyzer.chart_output_dir = str(tmp_path / "charts")
         analyzer._variables["td"] = pd.DataFrame({"cat": ["A", "B", "C"], "v": [10, -5, 20]})
         result = analyzer.to_chart("td", chart_type="bar", x_column="cat", y_columns=["v"], theme="morandi")
         assert result["theme_name"] == "莫兰迪"
@@ -1016,7 +1024,7 @@ class TestToChart:
 
     def test_chart_line_theme_returns_theme_name(self, analyzer, tmp_path):
         """非 bar 图（line）切换主题后返回值带 theme/theme_name"""
-        analyzer.CHART_OUTPUT_DIR = str(tmp_path / "charts")
+        analyzer.chart_output_dir = str(tmp_path / "charts")
         analyzer._variables["td"] = pd.DataFrame({"m": ["1月", "2月", "3月"], "v": [10, 20, 30]})
         result = analyzer.to_chart("td", chart_type="line", x_column="m", y_columns=["v"], theme="corporate")
         assert result["theme"] == "corporate"
@@ -1025,7 +1033,7 @@ class TestToChart:
 
     def test_chart_pie_more_categories_than_palette(self, analyzer, tmp_path):
         """饼图类目数 > 色板长度(3)时派生渐变色，生成成功"""
-        analyzer.CHART_OUTPUT_DIR = str(tmp_path / "charts")
+        analyzer.chart_output_dir = str(tmp_path / "charts")
         analyzer._variables["td"] = pd.DataFrame({
             "cat": ["A", "B", "C", "D", "E"], "v": [10, 20, 15, 25, 30],
         })

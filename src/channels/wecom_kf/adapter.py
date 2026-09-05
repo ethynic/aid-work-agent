@@ -111,11 +111,10 @@ class WeComKfAdapter(ChannelAdapter):
             self._renderer.set_tenant_id(self._tenant_id)
 
     def _resolve_media_dir(self) -> str:
-        """解析媒体文件存储目录：有租户走 tenants 规范，无租户回退旧路径。"""
+        """解析媒体文件存储目录：有租户走 tenants 规范，无租户落 _anonymous。"""
         if self._tenant_id:
             return ensure_tenant_storage_dir(self._tenant_id, "conversation")
-        os.makedirs(self._media_upload_dir, exist_ok=True)
-        return self._media_upload_dir
+        return ensure_tenant_storage_dir("_anonymous", "conversation")
 
     # ==================== 默认缩略图 ====================
 

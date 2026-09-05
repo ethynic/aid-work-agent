@@ -36,7 +36,7 @@ class WriteInput(BaseModel):
     )
     file_path: Optional[str] = Field(
         None,
-        description="目标文件路径（含文件名和后缀），如 'output/report.md'。"
+        description="目标文件路径（含文件名和后缀），如 'report.md'。"
         "支持绝对路径和相对路径，Windows 和 Linux 路径均可。"
         "不提供时自动写入系统临时目录",
     )
@@ -252,35 +252,91 @@ display_name 必须使用用户能理解的业务文件名，不要使用工具�
     # 路径解析
     # ------------------------------------------------------------------
 
-    def _resolve_and_validate_path(self, file_path: str) -> Path:
-        """解析并验证文件路径，兼容 Windows 和 Linux。
+    def _resolve_tenant_base(self) -> Path:
+        """当前租户的生成文件根目录（storage/tenants/{tid}/conversation/）。
 
-        先将相对路径挂在允许的输出目录下，再解析规范化，
-        最后检查最终路径是否在允许范围内，防止目录穿越攻击。
+        无租户上下文时落 _anonymous，保证不写出租户目录之外。
         """
-        p = Path(file_path)
-        project_root = Path(__file__).resolve().parent.parent.parent.parent
-        allowed_base = (project_root / "storage" / "output").resolve()
-
-        if not p.is_absolute():
-            p = allowed_base / p
-
-        p = p.resolve()
-
+        from src.core.storage import ensure_tenant_storage_dir
+        tid = None
         try:
-            p.relative_to(allowed_base)
+            from src.tools.context import current_tool_execution_context
+            ctx = current_tool_execution_context()
+            if ctx:
+                tid = ctx.tenant_id
+        except Exception:
+            pass
+        return Path(ensure_tenant_storage_dir(tid or "_anonymous", "conversation"))
+
+    def _legacy_output_base(self) -> Path:
+        """旧版输出目录（storage/output），仅用于把历史绝对路径 rebase 到租户目录"""
+        project_root = Path(__file__).resolve().parent.parent.parent.parent
+        return (project_root / "storage" / "output").resolve()
+
+    def _validate(self, p: Path, allowed_base: Path) -> Path:
+        p = p.resolve()
+        try:
+            p.relative_to(allowed_base.resolve())
         except ValueError:
             raise ValueError(
                 f"文件路径超出允许范围，文件只能生成在 {allowed_base} 目录下。"
                 f"请使用不含 '..' 的相对路径，如 'report.md' 或 'output/report.md'"
             )
-
         filename = p.name
         forbidden_chars = set('<>:"|?*\0')
         if any(c in forbidden_chars for c in filename):
             raise ValueError(f"文件名包含非法字符: {filename}")
-
         return p
+
+    def _resolve_and_validate_path(self, file_path: str) -> Path:
+        """解析并验证文件路径，兼容 Windows 和 Linux。
+
+        相对路径挂到当前租户的 conversation 目录下（历史 storage/output 等
+        旧前缀会被剥离，防止产生嵌套目录）；绝对路径仅接受租户目录内或旧
+        storage/output 下的路径（后者自动 rebase 到租户目录）。
+        """
+        from src.core.storage import strip_legacy_storage_prefix, normalize_tenant_id
+
+        base = self._resolve_tenant_base()
+        p = Path(file_path)
+
+        if p.is_absolute():
+            pa = p.resolve()
+            # 已在当前租户目录内（如 append 回传历史返回路径）：直接使用
+            try:
+                pa.relative_to(base.resolve())
+                return self._validate(pa, base)
+            except ValueError:
+                pass
+            # 兼容旧 storage/output 绝对路径：余部映射到租户目录
+            try:
+                rel = pa.relative_to(self._legacy_output_base())
+            except ValueError:
+                raise ValueError(
+                    f"文件路径超出允许范围，文件只能生成在 {base} 目录下。"
+                    f"请使用不含 '..' 的相对路径，如 'report.md'"
+                )
+            return self._validate(base / rel, base)
+
+        rel = strip_legacy_storage_prefix(file_path)
+        # 兼容历史回传的 storage/tenants/{tid}/conversation/... 相对路径：
+        # 剥离旧前缀后若仍以当前租户 + conversation 开头，再去掉这两段防嵌套
+        parts = list(Path(rel).parts)
+        try:
+            from src.tools.context import current_tool_execution_context
+            ctx = current_tool_execution_context()
+            cur_tid = ctx.tenant_id if ctx else None
+        except Exception:
+            cur_tid = None
+        norm_tid = normalize_tenant_id(cur_tid or "_anonymous")
+        # parts[0] 也过 normalize：兼容 Phase 8 前缀治理前历史路径中的 tenant_{tid} 带前缀段
+        if (
+            len(parts) >= 2
+            and normalize_tenant_id(parts[0]) == norm_tid
+            and parts[1] == "conversation"
+        ):
+            parts = parts[2:]
+        return self._validate(base / Path(*parts) if parts else base, base)
 
     # ------------------------------------------------------------------
     # 内部 LLM 生成

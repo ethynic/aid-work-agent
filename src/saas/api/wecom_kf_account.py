@@ -245,8 +245,8 @@ async def _register_employee_qr(tenant_id: str, qr_bytes: bytes, user_id: str) -
     ttl_seconds=PERMANENT_TTL -- 不设 TTL、不被 cleanup 清理，语义准确。
     """
     suffix = ".png" if qr_bytes[:8] == b"\x89PNG\r\n\x1a\n" else ".jpg"
-    tmp_dir = os.path.join(os.path.dirname(__file__), "..", "..", "..", "storage", "uploads", "wecom_kf")
-    os.makedirs(tmp_dir, exist_ok=True)
+    from src.core.storage import ensure_tenant_storage_dir
+    tmp_dir = ensure_tenant_storage_dir(tenant_id, "temp")
     tmp_path = os.path.abspath(os.path.join(tmp_dir, f"_kf_qr_{uuid.uuid4().hex[:8]}{suffix}"))
     try:
         with open(tmp_path, "wb") as f:
@@ -344,11 +344,11 @@ async def _cleanup_avatar(file_id: Optional[str]) -> None:
         logger.warning(f"[wecom-kf] 客服头像清理失败 file_id={file_id}: {e}")
 
 
-async def _upload_avatar_bytes(api_client, avatar_bytes: bytes) -> str:
+async def _upload_avatar_bytes(api_client, avatar_bytes: bytes, tenant_id: str) -> str:
     """将头像 bytes 写入临时文件并上传企微，返回 media_id。"""
     suffix = ".png" if avatar_bytes[:8] == b"\x89PNG\r\n\x1a\n" else ".jpg"
-    tmp_dir = os.path.join(os.path.dirname(__file__), "..", "..", "..", "storage", "uploads", "wecom_kf")
-    os.makedirs(tmp_dir, exist_ok=True)
+    from src.core.storage import ensure_tenant_storage_dir
+    tmp_dir = ensure_tenant_storage_dir(tenant_id, "temp")
     tmp_path = os.path.abspath(os.path.join(tmp_dir, f"_kf_avatar_{uuid.uuid4().hex[:8]}{suffix}"))
     try:
         with open(tmp_path, "wb") as f:
@@ -405,13 +405,13 @@ async def _resolve_avatar_media_id(adapter, tenant_id: str, avatar_bytes: Option
     """头像 media_id 兜底链：管理员上传 > 租户 logo > 默认占位 PNG。"""
     api_client = adapter.api_client
     if avatar_bytes:
-        media_id = await _upload_avatar_bytes(api_client, avatar_bytes)
+        media_id = await _upload_avatar_bytes(api_client, avatar_bytes, tenant_id)
         if media_id:
             return media_id
         logger.warning("[wecom-kf] 管理员上传头像失败，尝试租户 logo 兜底")
     logo_bytes = await _resolve_tenant_logo_bytes(tenant_id)
     if logo_bytes:
-        media_id = await _upload_avatar_bytes(api_client, logo_bytes)
+        media_id = await _upload_avatar_bytes(api_client, logo_bytes, tenant_id)
         if media_id:
             return media_id
         logger.warning("[wecom-kf] 租户 logo 兜底上传失败，使用默认占位")

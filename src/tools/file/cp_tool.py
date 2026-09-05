@@ -120,14 +120,15 @@ class CpTool(BaseTool):
 cp(source_file_path="/tmp/quote_xxx.xlsx", display_name="研学旅游报价单.xlsx")
 → 将源文件复制到下载目录，自动注册下载，默认对用户可见可下载
 
-cp(source_file_path="src/skills/xxx/assets/template.html", file_path="output/ppt/index.html")
+cp(source_file_path="src/skills/xxx/assets/template.html", file_path="ppt/index.html")
 → 将源文件复制到指定输出目录，自动注册下载
 
 参数：
 - source_file_path：源文件绝对路径或项目根目录相对路径。源可来自任意位置
   （系统 /tmp、skill 生成的临时文件、工具会话目录、项目内文件等）。
 - file_path：目标路径。不传时自动分配下载目录路径（推荐）。
-  · 必须在 storage/ 输出目录内。
+  · 相对路径自动落到当前租户附件目录（storage/tenants/{tenant_id}/conversation/）内，
+    历史的 storage/、output/ 等前缀会被自动剥离。
 - register_download：默认 True，复制后自动注册下载。
 - visible：默认 True，注册的文件在前端对话中展示下载卡片。
   仅当作为中间过程文件不需要展示时设为 False。
@@ -175,29 +176,74 @@ cp(source_file_path="src/skills/xxx/assets/template.html", file_path="output/ppt
             raise ValueError(f"源路径不是文件: {src}")
         return src
 
+    def _current_tenant_id(self) -> Optional[str]:
+        from src.tools.context import current_tool_execution_context
+        context = current_tool_execution_context()
+        return context.tenant_id if context else None
+
+    def _resolve_tenant_base(self) -> Path:
+        """目标文件根目录：当前租户的 conversation 目录（租户附件存储规范）"""
+        return _resolve_upload_dir(self._current_tenant_id(), None)
+
+    def _rebase_legacy_rel(self, rel: Path) -> Path:
+        """把旧存储根下的相对余部映射到租户目录（剥离 storage/output/tenants 旧前缀）"""
+        from src.core.storage import strip_legacy_storage_prefix, normalize_tenant_id
+        parts = list(Path(strip_legacy_storage_prefix(rel.as_posix())).parts)
+        # 兼容旧租户绝对路径 storage/tenants/{tid}/conversation/...：去掉租户段
+        norm_tid = normalize_tenant_id(self._current_tenant_id() or "_anonymous")
+        # parts[0] 也过 normalize：兼容 Phase 8 前缀治理前历史路径中的 tenant_{tid} 带前缀段
+        if (
+            len(parts) >= 2
+            and normalize_tenant_id(parts[0]) == norm_tid
+            and parts[1] == "conversation"
+        ):
+            parts = parts[2:]
+        return Path(*parts) if parts else Path()
+
     def _resolve_and_validate_path(self, file_path: str) -> Path:
         """解析并验证目标文件路径，兼容 Windows 和 Linux
 
-        先将相对路径挂在允许的输出目录下，再解析规范化，
-        最后检查最终路径是否在允许范围内，防止目录穿越攻击。
+        相对路径挂到当前租户的 conversation 目录下（历史 storage/ 等旧前缀
+        会被剥离，防止产生 storage/storage/... 嵌套目录）；绝对路径仅接受
+        租户目录内或旧 storage 根下的路径（后者自动 rebase 到租户目录）。
         """
+        base = self._resolve_tenant_base()
         p = Path(file_path)
-        project_root = Path(__file__).resolve().parent.parent.parent.parent
-        allowed_base = (project_root / "storage").resolve()
 
-        if not p.is_absolute():
-            p = allowed_base / p
+        if p.is_absolute():
+            pa = p.resolve()
+            # 已在当前租户目录内：直接使用
+            try:
+                pa.relative_to(base.resolve())
+                return self._validate(pa, base)
+            except ValueError:
+                pass
+            # 兼容旧 storage 根下的绝对路径：余部映射到租户目录
+            project_root = Path(__file__).resolve().parent.parent.parent.parent
+            legacy_root = (project_root / "storage").resolve()
+            try:
+                rel = pa.relative_to(legacy_root)
+            except ValueError:
+                raise ValueError(
+                    f"文件路径超出允许范围，文件只能在 {base} 目录下操作。"
+                    f"请使用不含 '..' 的相对路径，如 'report.md'"
+                )
+            return self._validate(base / self._rebase_legacy_rel(rel), base)
 
+        from src.core.storage import strip_legacy_storage_prefix
+        return self._validate(base / strip_legacy_storage_prefix(file_path), base)
+
+    def _validate(self, p: Path, allowed_base: Path) -> Path:
         # resolve() 会规范化 .. 和符号链接，得到最终的真实路径
         p = p.resolve()
 
         # 安全检查：确保解析后的路径在允许的输出目录内
         try:
-            p.relative_to(allowed_base)
+            p.relative_to(allowed_base.resolve())
         except ValueError:
             raise ValueError(
                 f"文件路径超出允许范围，文件只能在 {allowed_base} 目录下操作。"
-                f"请使用不含 '..' 的相对路径，如 'report.md' 或 'output/report.md'"
+                f"请使用不含 '..' 的相对路径，如 'report.md'"
             )
 
         filename = p.name

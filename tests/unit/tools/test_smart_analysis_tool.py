@@ -219,7 +219,7 @@ class TestExecuteWithMock:
                     "type": "chart",
                     "chart_type": "line",
                     "title": "月度趋势",
-                    "file_path": "storage/analysis_charts/trend.png",
+                    "file_path": "storage/tenants/_anonymous/report/trend.png",
                 }
             ],
             "analysis_meta": {
