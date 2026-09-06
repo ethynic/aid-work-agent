@@ -315,6 +315,11 @@ class AuthConfig(BaseModel):
     default_role: str = "employee"
 
 
+class BehaviorLogConfig(BaseModel):
+    """用户行为审计日志配置（src/services/behavior_log.py）"""
+    retention_days: int = 180  # 日志保留天数，超期由 scheduler 每日清理任务分批删除
+
+
 class MasterAgentSkillsConfig(BaseModel):
     """主智能体 Skill 配置"""
     allowed: List[str] = Field(default_factory=list)  # 允许的 skills 列表，空列表表示允许所有
@@ -521,6 +526,7 @@ class Settings(BaseModel):
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     auth: AuthConfig = Field(default_factory=AuthConfig)
+    behavior_log: BehaviorLogConfig = Field(default_factory=BehaviorLogConfig)
     skills: SkillsConfig = Field(default_factory=SkillsConfig)
     agent: AgentConfig = Field(default_factory=AgentConfig)
     saas: SaasConfig = Field(default_factory=SaasConfig)

@@ -143,6 +143,100 @@ export function getChatRecordSourceTypeInfo(source: string | null | undefined): 
   return ChatRecordSourceTypeMap[source] ?? { label: source, color: 'gray' };
 }
 
+// ============================================================================
+// 用户行为审计日志枚举（与后端 src/saas/models/enums.py 同步）
+//
+// Phase 1 仅定义（登录/登出/改密/渠道绑定等事件已在后端入库），
+// 行为日志查询页面为 Phase 4，届时在页面中消费这些枚举。
+// 详见 docs/system/user-behavior-audit-log-design.md §4
+// ============================================================================
+
+/** 行为类型（user_behavior_logs.action） */
+export enum BehaviorAction {
+  LOGIN = 'login',
+  LOGIN_FAILED = 'login_failed',
+  LOGOUT = 'logout',
+  PASSWORD_CHANGE = 'password_change',
+  VERIFY_CODE_SENT = 'verify_code_sent',
+  PROFILE_UPDATE = 'profile_update',
+  CHANNEL_BIND = 'channel_bind',
+  CHANNEL_UNBIND = 'channel_unbind',
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  BATCH_DELETE = 'batch_delete',
+  EXPORT = 'export',
+}
+
+export const BehaviorActionMap: Record<string, { label: string; color: string }> = {
+  [BehaviorAction.LOGIN]: { label: '登录成功', color: 'green' },
+  [BehaviorAction.LOGIN_FAILED]: { label: '登录失败', color: 'red' },
+  [BehaviorAction.LOGOUT]: { label: '登出', color: 'gray' },
+  [BehaviorAction.PASSWORD_CHANGE]: { label: '修改密码', color: 'orange' },
+  [BehaviorAction.VERIFY_CODE_SENT]: { label: '发送验证码', color: 'blue' },
+  [BehaviorAction.PROFILE_UPDATE]: { label: '修改资料', color: 'blue' },
+  [BehaviorAction.CHANNEL_BIND]: { label: '渠道账号绑定', color: 'green' },
+  [BehaviorAction.CHANNEL_UNBIND]: { label: '渠道账号解绑', color: 'red' },
+  [BehaviorAction.CREATE]: { label: '创建', color: 'green' },
+  [BehaviorAction.UPDATE]: { label: '更新', color: 'orange' },
+  [BehaviorAction.DELETE]: { label: '删除', color: 'red' },
+  [BehaviorAction.BATCH_DELETE]: { label: '批量删除', color: 'red' },
+  [BehaviorAction.EXPORT]: { label: '导出', color: 'blue' },
+};
+
+/** 请求入口（user_behavior_logs.entry） */
+export enum BehaviorEntry {
+  WEB = 'web',           // web 前端发起
+  API = 'api',           // 脚本/第三方直接调 API
+  CHANNEL = 'channel',   // 渠道回调（无用户侧 IP/UA）
+}
+
+export const BehaviorEntryMap: Record<string, { label: string; color: string }> = {
+  [BehaviorEntry.WEB]: { label: 'Web 前端', color: 'blue' },
+  [BehaviorEntry.API]: { label: 'API 直调', color: 'gray' },
+  [BehaviorEntry.CHANNEL]: { label: '渠道回调', color: 'orange' },
+};
+
+/** 资源类型（user_behavior_logs.resource_type） */
+export enum BehaviorResourceType {
+  TENANT = 'tenant',
+  TENANT_USER = 'tenant_user',
+  SUBAGENT = 'subagent',
+  PROMPT = 'prompt',
+  SESSION = 'session',
+  KNOWLEDGE_DOC = 'knowledge_doc',
+  CONFIG = 'config',
+  BILLING = 'billing',
+  ACCOUNT = 'account',
+}
+
+export const BehaviorResourceTypeMap: Record<string, { label: string }> = {
+  [BehaviorResourceType.TENANT]: { label: '租户' },
+  [BehaviorResourceType.TENANT_USER]: { label: '租户用户' },
+  [BehaviorResourceType.SUBAGENT]: { label: '数字员工' },
+  [BehaviorResourceType.PROMPT]: { label: '提示词' },
+  [BehaviorResourceType.SESSION]: { label: '会话' },
+  [BehaviorResourceType.KNOWLEDGE_DOC]: { label: '知识库文档' },
+  [BehaviorResourceType.CONFIG]: { label: '配置' },
+  [BehaviorResourceType.BILLING]: { label: '计费' },
+  [BehaviorResourceType.ACCOUNT]: { label: '账号' },
+};
+
+/** 粗分设备类型（user_behavior_logs.device_type） */
+export enum BehaviorDeviceType {
+  PC = 'pc',
+  MOBILE = 'mobile',
+  TABLET = 'tablet',
+  UNKNOWN = 'unknown',
+}
+
+export const BehaviorDeviceTypeMap: Record<string, { label: string }> = {
+  [BehaviorDeviceType.PC]: { label: 'PC' },
+  [BehaviorDeviceType.MOBILE]: { label: '移动端' },
+  [BehaviorDeviceType.TABLET]: { label: '平板' },
+  [BehaviorDeviceType.UNKNOWN]: { label: '未知' },
+};
+
 /**
  * BaseBadge intent 与 statusMap color 的映射。
  * BaseBadge intent: primary | success | warning | danger | info | neutral

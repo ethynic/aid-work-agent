@@ -63,7 +63,7 @@
 CREATE TABLE IF NOT EXISTS user_behavior_logs (
     id SERIAL PRIMARY KEY,
     tenant_id TEXT,                      -- 租户ID；platform_admin 全局操作为 NULL
-    user_id TEXT NOT NULL,               -- 操作人；登录失败且无用户身份时记用户名/手机号到 detail
+    user_id TEXT,                        -- 操作人；登录失败无用户身份/渠道事件未注册用户时为 NULL，标识记 detail
     user_role TEXT,                      -- 操作时角色快照（platform_admin/tenant_admin/user）
     action TEXT NOT NULL,                -- 行为类型，见枚举 BehaviorAction
     resource_type TEXT,                  -- 资源类型，见枚举 BehaviorResourceType
@@ -154,7 +154,7 @@ async def record_behavior(
     resource_id: str | None = None,
     resource_name: str | None = None,
     detail: dict | None = None,
-    user_id: str | None = None,     # 登录失败时用户身份未知，由调用方显式传
+    user_id: str | None = None,     # 登录失败时用户身份未知则不传（user_id 落 NULL，标识记 detail）
     success: bool = True,
     error_msg: str | None = None,
 ) -> None:

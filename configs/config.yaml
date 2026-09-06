@@ -195,6 +195,10 @@ auth:
   default_role: employee
   max_concurrent_tokens: 10
 
+# 用户行为审计日志（登录/登出/改密/渠道绑定等安全敏感事件）
+behavior_log:
+  retention_days: 180                    # 日志保留天数，超期由每日清理任务分批删除
+
 # 平台管理员配置
 admin:
   phones:

@@ -22,7 +22,9 @@ from loguru import logger
 from src.saas.db.tenant_db import TenantDB
 from src.config.settings import settings
 from src.api.rate_limit import check_login_rate_limit
-from src.api.auth import _verify_qb_token
+from src.api.auth import _verify_qb_token, verify_token
+from src.services.behavior_log import record_behavior
+from src.saas.models.enums import BehaviorAction
 
 
 def sanitize_error_info(error_msg: str) -> str:
@@ -355,17 +357,29 @@ async def password_login(http_request: Request, request: AdminPasswordLoginReque
     client_ip = http_request.client.host if http_request.client else "unknown"
     allowed, msg = check_login_rate_limit(client_ip)
     if not allowed:
+        await record_behavior(http_request, BehaviorAction.LOGIN_FAILED, success=False,
+                              error_msg=msg, login_method="password",
+                              detail={"identifier": request.identifier})
         return AdminLoginResponse(success=False, message=msg)
 
     # 1. 验证图形验证码
     from src.db.models import verify_captcha
     if not verify_captcha(request.captcha_id, request.captcha_code):
+        await record_behavior(http_request, BehaviorAction.LOGIN_FAILED, success=False,
+                              error_msg="图形验证码错误或已过期", login_method="password",
+                              detail={"identifier": request.identifier})
         return AdminLoginResponse(success=False, message="图形验证码错误或已过期，过期时间5分钟")
 
     # 2. 根据 identifier 判断是手机号还是用户名
     identifier = request.identifier.strip()
     user = None
     is_phone = False
+
+    # 登录失败审计记录（局部 helper：identifier 已定义后生效，行为日志写入失败不影响业务）
+    async def _log_login_failed(reason: str):
+        await record_behavior(http_request, BehaviorAction.LOGIN_FAILED, success=False,
+                              error_msg=reason, login_method="password",
+                              detail={"identifier": identifier, "tenant_id": request.tenant_id})
 
     if identifier.isdigit() and len(identifier) == 11:
         is_phone = True
@@ -418,6 +432,7 @@ async def password_login(http_request: Request, request: AdminPasswordLoginReque
     if not user:
         debug_info = f"user not found for identifier={identifier}, is_phone={is_phone}"
         logger.warning(f"登录失败: {debug_info}")
+        await _log_login_failed("用户不存在")
         return AdminLoginResponse(
             success=False,
             message="用户不存在",
@@ -452,12 +467,14 @@ async def password_login(http_request: Request, request: AdminPasswordLoginReque
             # 没有密码，如果是平台管理员，也可以登录
             role = user.get("role", "user")
             if role != "platform_admin":    # 不是平台管理员
+                await _log_login_failed("密码未设置，请使用 忘记密码 重置")
                 return AdminLoginResponse(
                     success=False,
                     message="密码未设置，请使用“忘记密码”重置",
                     debug=f"user role={role}, not platform_admin, password_hash is empty"
                 )
             # 平台管理员密码未设置，仍提示重置
+            await _log_login_failed("密码未设置，请使用 忘记密码 重置")
             return AdminLoginResponse(
                 success=False,
                 message="密码未设置，请使用 忘记密码 重置",
@@ -475,6 +492,7 @@ async def password_login(http_request: Request, request: AdminPasswordLoginReque
                 f"verify_result={password_verified}"
             )
             logger.warning(f"用户密码验证失败: {debug_info}")
+            await _log_login_failed("手机号或密码有误")
             return AdminLoginResponse(
                 success=False,
                 message="手机号或密码有误",
@@ -488,6 +506,7 @@ async def password_login(http_request: Request, request: AdminPasswordLoginReque
     if request.required_role == "platform_admin":
         # 平台管理后台专用：只允许平台管理员登录
         if role != "platform_admin":
+            await _log_login_failed("请使用平台管理员账号登录")
             return AdminLoginResponse(success=False, message="请使用平台管理员账号登录")
     else:
         # 普通登录场景（租户前台等）
@@ -499,9 +518,11 @@ async def password_login(http_request: Request, request: AdminPasswordLoginReque
         else:
             # 平台后台：必须是 platform_admin 或 tenant_admin
             if role not in ("platform_admin", "tenant_admin"):
+                await _log_login_failed("该账号不是管理员")
                 return AdminLoginResponse(success=False, message="该账号不是管理员")
 
     if user.get("status", "active") != "active":
+        await _log_login_failed("账号已停用")
         return AdminLoginResponse(success=False, message="账号已停用")
 
     # 6. tenant_id 验证（非必填，但传入时需要验证）
@@ -510,12 +531,14 @@ async def password_login(http_request: Request, request: AdminPasswordLoginReque
             # 平台管理员：验证目标租户存在
             target_tenant = TenantDB.get_by_id(request.tenant_id)
             if not target_tenant:
+                await _log_login_failed("目标租户不存在")
                 return AdminLoginResponse(success=False, message="目标租户不存在")
             # 平台管理员可以访问任意租户
             target_tenant_id = request.tenant_id
         elif role in ("tenant_admin", "user"):
             # 租户管理员/普通用户：只能访问自己的租户
             if request.tenant_id != user.get("tenant_id"):
+                await _log_login_failed("无权访问其他租户")
                 return AdminLoginResponse(success=False, message="无权访问其他租户")
             target_tenant_id = user.get("tenant_id")
         else:
@@ -534,12 +557,15 @@ async def password_login(http_request: Request, request: AdminPasswordLoginReque
             # 检查租户到期状态
             expire_check = _check_tenant_expiration(tenant)
             if not expire_check["can_login"] and role != "platform_admin":
+                await _log_login_failed(
+                    f"该租户已过期（到期日期：{expire_check['expire_date']}），请联系平台管理员续费")
                 return AdminLoginResponse(
                     success=False,
                     message=f"该租户已过期（到期日期：{expire_check['expire_date']}），请联系平台管理员续费"
                 )
             # 检查租户状态（非平台管理员）
             if tenant.get("status") != "active" and role != "platform_admin":
+                await _log_login_failed("该租户已停用")
                 return AdminLoginResponse(
                     success=False,
                     message="该租户已停用"
@@ -575,6 +601,10 @@ async def password_login(http_request: Request, request: AdminPasswordLoginReque
 
     logger.info(f"Admin password login: {user['user_id']} ({identifier}) -> role {role}, target_tenant {target_tenant_id}")
 
+    await record_behavior(http_request, BehaviorAction.LOGIN, user_id=user["user_id"],
+                          user_role=role, tenant_id=target_tenant_id, login_method="password",
+                          detail={"identifier": identifier})
+
     return AdminLoginResponse(
         success=True,
         token=token,
@@ -596,7 +626,7 @@ async def password_login(http_request: Request, request: AdminPasswordLoginReque
 
 
 @router.post("/admin_sso_login/{provider}")
-async def admin_sso_login(provider: str, request: SSOLoginRequest):
+async def admin_sso_login(provider: str, http_request: Request, request: SSOLoginRequest):
     """IM 平台 SSO 登录"""
     from src.db.models import UserDB
     from src.db.database import get_db_connection
@@ -609,11 +639,18 @@ async def admin_sso_login(provider: str, request: SSOLoginRequest):
     if not sso:
         raise HTTPException(status_code=400, detail=f"不支持的 SSO 平台: {provider}")
 
+    # 登录失败审计记录（局部 helper：行为日志写入失败不影响业务）
+    async def _log_sso_failed(reason: str):
+        await record_behavior(http_request, BehaviorAction.LOGIN_FAILED, success=False,
+                              error_msg=reason, login_method="sso",
+                              detail={"provider": provider})
+
     # 1. 通过 OAuth code 获取手机号
     config = {}
     phone = await sso.get_user_phone(request.code, config)
 
     if not phone:
+        await _log_sso_failed("SSO 登录失败：无法获取手机号")
         return AdminLoginResponse(success=False, message=f"SSO 登录失败：无法获取手机号")
 
     # 2. 匹配用户
@@ -622,6 +659,7 @@ async def admin_sso_login(provider: str, request: SSOLoginRequest):
         # 3. 检查是否是配置中的管理员手机号
         user = _ensure_config_admin(phone, "platform_admin")
         if not user:
+            await _log_sso_failed("该 IM 用户未注册为管理员")
             return AdminLoginResponse(success=False, message="该 IM 用户未注册为管理员")
 
     # 4. 检查是否是管理员
@@ -631,10 +669,12 @@ async def admin_sso_login(provider: str, request: SSOLoginRequest):
     if request.required_role == "platform_admin":
         # 平台管理后台专用：只允许平台管理员登录
         if role != "platform_admin":
+            await _log_sso_failed("请使用平台管理员账号登录")
             return AdminLoginResponse(success=False, message="请使用平台管理员账号登录")
     else:
         # 普通管理员登录场景
         if role not in ("platform_admin", "tenant_admin"):
+            await _log_sso_failed("该 IM 用户不是管理员")
             return AdminLoginResponse(success=False, message="该 IM 用户不是管理员")
 
     tenant = None
@@ -645,6 +685,7 @@ async def admin_sso_login(provider: str, request: SSOLoginRequest):
             access_check = _check_tenant_access(tenant, role)
             if not access_check["can_access"] and not access_check["admin_only"]:
                 # 非平台管理员访问非active/过期租户
+                await _log_sso_failed(access_check["reason"] or "无权访问该租户")
                 return AdminLoginResponse(
                     success=False,
                     message=access_check["reason"] or "无权访问该租户"
@@ -678,6 +719,10 @@ async def admin_sso_login(provider: str, request: SSOLoginRequest):
 
     logger.info(f"Admin SSO login ({provider}): {user['user_id']} ({phone})")
 
+    await record_behavior(http_request, BehaviorAction.LOGIN, user_id=user["user_id"],
+                          user_role=role, tenant_id=user.get("tenant_id"), login_method="sso",
+                          detail={"provider": provider, "phone": phone})
+
     return AdminLoginResponse(
         success=True,
         token=token,
@@ -704,10 +749,16 @@ async def admin_logout(request: Request):
     auth_header = request.headers.get("Authorization", "")
     if auth_header.startswith("Bearer "):
         token = auth_header[7:]
+        # token 删除前验证一次拿 user_id（登出审计需要操作人身份）
+        user_id = verify_token(token, auto_refresh=False)
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM tokens WHERE token = %s", (token,))
             conn.commit()
+        await record_behavior(request, BehaviorAction.LOGOUT, user_id=user_id)
+    else:
+        await record_behavior(request, BehaviorAction.LOGOUT, success=False,
+                              error_msg="缺少 Authorization token")
     return {"success": True}
 
 

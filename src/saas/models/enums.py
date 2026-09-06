@@ -237,6 +237,141 @@ class ContextSummaryStatus(str, Enum):
         return mapping.get(self, "未知")
 
 
+# ============== 用户行为审计日志 ==============
+
+class BehaviorAction(str, Enum):
+    """
+    用户行为审计日志 - 行为类型枚举
+
+    数据库存储：TEXT (user_behavior_logs.action)
+    详见 docs/system/user-behavior-audit-log-design.md §4
+    """
+    LOGIN = "login"                      # 登录成功
+    LOGIN_FAILED = "login_failed"        # 登录失败
+    LOGOUT = "logout"                    # 登出
+    PASSWORD_CHANGE = "password_change"  # 修改密码
+    VERIFY_CODE_SENT = "verify_code_sent"  # 发送验证码（防爆破观测）
+    PROFILE_UPDATE = "profile_update"    # 修改资料
+    CHANNEL_BIND = "channel_bind"        # 渠道账号绑定（entry=channel）
+    CHANNEL_UNBIND = "channel_unbind"    # 渠道账号解绑（entry=channel）
+    CREATE = "create"                    # 创建资源（Phase 2/3）
+    UPDATE = "update"                    # 更新资源（Phase 2/3）
+    DELETE = "delete"                    # 删除资源（Phase 2/3）
+    BATCH_DELETE = "batch_delete"        # 批量删除（Phase 3）
+    EXPORT = "export"                    # 导出（Phase 2/3）
+
+    @classmethod
+    def all_values(cls) -> list[str]:
+        return [m.value for m in cls]
+
+    @property
+    def display_name(self) -> str:
+        mapping = {
+            self.LOGIN: "登录成功",
+            self.LOGIN_FAILED: "登录失败",
+            self.LOGOUT: "登出",
+            self.PASSWORD_CHANGE: "修改密码",
+            self.VERIFY_CODE_SENT: "发送验证码",
+            self.PROFILE_UPDATE: "修改资料",
+            self.CHANNEL_BIND: "渠道账号绑定",
+            self.CHANNEL_UNBIND: "渠道账号解绑",
+            self.CREATE: "创建",
+            self.UPDATE: "更新",
+            self.DELETE: "删除",
+            self.BATCH_DELETE: "批量删除",
+            self.EXPORT: "导出",
+        }
+        return mapping.get(self, "未知")
+
+
+class BehaviorEntry(str, Enum):
+    """
+    用户行为审计日志 - 请求入口枚举
+
+    数据库存储：TEXT (user_behavior_logs.entry)
+    """
+    WEB = "web"          # web 前端发起
+    API = "api"          # 脚本/第三方直接调 API
+    CHANNEL = "channel"  # 渠道回调（无用户侧 IP/UA）
+
+    @classmethod
+    def all_values(cls) -> list[str]:
+        return [m.value for m in cls]
+
+    @property
+    def display_name(self) -> str:
+        mapping = {
+            self.WEB: "Web 前端",
+            self.API: "API 直调",
+            self.CHANNEL: "渠道回调",
+        }
+        return mapping.get(self, "未知")
+
+
+class BehaviorResourceType(str, Enum):
+    """
+    用户行为审计日志 - 资源类型枚举
+
+    数据库存储：TEXT (user_behavior_logs.resource_type)
+    """
+    TENANT = "tenant"              # 租户
+    TENANT_USER = "tenant_user"    # 租户用户
+    SUBAGENT = "subagent"          # 数字员工定义
+    PROMPT = "prompt"              # 提示词
+    SESSION = "session"            # 会话
+    KNOWLEDGE_DOC = "knowledge_doc"  # 知识库文档
+    CONFIG = "config"              # 配置
+    BILLING = "billing"            # 计费
+    ACCOUNT = "account"            # 自己的账号（改密码/改资料）
+
+    @classmethod
+    def all_values(cls) -> list[str]:
+        return [m.value for m in cls]
+
+    @property
+    def display_name(self) -> str:
+        mapping = {
+            self.TENANT: "租户",
+            self.TENANT_USER: "租户用户",
+            self.SUBAGENT: "数字员工",
+            self.PROMPT: "提示词",
+            self.SESSION: "会话",
+            self.KNOWLEDGE_DOC: "知识库文档",
+            self.CONFIG: "配置",
+            self.BILLING: "计费",
+            self.ACCOUNT: "账号",
+        }
+        return mapping.get(self, "未知")
+
+
+class BehaviorDeviceType(str, Enum):
+    """
+    用户行为审计日志 - 粗分设备类型枚举
+
+    数据库存储：TEXT (user_behavior_logs.device_type)
+    细分设备快照（device_info）使用受控词表，见
+    docs/system/user-behavior-audit-log-design.md §5.4，不进正式枚举
+    """
+    PC = "pc"
+    MOBILE = "mobile"
+    TABLET = "tablet"
+    UNKNOWN = "unknown"
+
+    @classmethod
+    def all_values(cls) -> list[str]:
+        return [m.value for m in cls]
+
+    @property
+    def display_name(self) -> str:
+        mapping = {
+            self.PC: "PC",
+            self.MOBILE: "移动端",
+            self.TABLET: "平板",
+            self.UNKNOWN: "未知",
+        }
+        return mapping.get(self, "未知")
+
+
 # ============== chat_records.source_type ==============
 
 class ChatRecordSourceType(str, Enum):

@@ -254,6 +254,22 @@ class ScheduledTaskManager:
         except Exception as e:
             logger.error(f"后端日志：注册技能工作目录清理任务失败: {e}")
 
+        # ===== 用户行为审计日志清理（每日 04:00）=====
+        # 设计文档 docs/system/user-behavior-audit-log-design.md §6.2：
+        # 按 behavior_log.retention_days（默认 180 天）分批删除过期日志，每批 1 万行避免长锁
+        try:
+            self._scheduler.add_job(
+                self._run_behavior_log_cleanup,
+                CronTrigger(hour=4, minute=0, timezone="Asia/Shanghai"),
+                id="job_system_behavior_log_cleanup",
+                name="User Behavior Log Cleanup",
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info("后端日志：已注册用户行为日志清理任务 (cron=04:00)")
+        except Exception as e:
+            logger.error(f"后端日志：注册用户行为日志清理任务失败: {e}")
+
     def _run_memory_summarizer(self):
         """执行每日记忆总结（APScheduler 回调）"""
         try:
@@ -440,6 +456,50 @@ class ScheduledTaskManager:
         except Exception as e:
             logger.opt(exception=True).error(f"后端日志：skill_ws 残留清理任务异常: {e}")
             return 0
+
+    # ===== 用户行为日志清理回调（同步，分批删除避免长锁）=====
+    def _run_behavior_log_cleanup(self):
+        """清理过期的用户行为审计日志（APScheduler 回调）
+
+        按 behavior_log.retention_days（默认 180 天）删除 user_behavior_logs 过期行，
+        每批 1 万行循环删除，避免长事务长锁。结果（删除行数、耗时）记 logger.info。
+        """
+        from src.db.database import get_db_connection
+        from src.config.settings import settings
+
+        started_at = datetime.now()
+        total_deleted = 0
+        batch_size = 10000
+        try:
+            retention_days = settings.behavior_log.retention_days
+            while True:
+                with get_db_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        """
+                        DELETE FROM user_behavior_logs
+                        WHERE id IN (
+                            SELECT id FROM user_behavior_logs
+                            WHERE created_at < NOW() - (%s * INTERVAL '1 day')
+                            LIMIT %s
+                        )
+                        """,
+                        (retention_days, batch_size),
+                    )
+                    deleted = cursor.rowcount
+                    conn.commit()
+                total_deleted += deleted
+                if deleted < batch_size:
+                    break
+            elapsed = (datetime.now() - started_at).total_seconds()
+            logger.info(
+                f"后端日志：用户行为日志清理完成，删除 {total_deleted} 行"
+                f"（保留 {retention_days} 天），耗时 {elapsed:.1f}s"
+            )
+        except Exception as e:
+            logger.opt(exception=True).error(
+                f"后端日志：用户行为日志清理失败（已删除 {total_deleted} 行）: {e}"
+            )
 
     # ===== D14：wecom_kf_timeout 回调（async tick + 新 event loop）=====
     def _run_wecom_kf_timeout(self):
