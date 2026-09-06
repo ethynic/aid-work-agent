@@ -286,3 +286,19 @@ def user_email_config():
         imap_port=993,
         imap_encryption=EncryptionType.SSL,
     )
+
+
+# ============================================================
+# 用户行为审计日志写入隔离（Phase 3 起普通用户端点挂 @audit_action 装饰器）
+#
+# 部分测试直接调用端点函数（如 kb_api.delete_document、session 端点），
+# 装饰器会真实 INSERT user_behavior_logs（测试库可写、表已建）产生脏数据。
+# 全局 mock 写入函数兜底；审计行为本身的单测在 tests/unit/test_behavior_log.py，
+# 其测试内层 with patch(...) 优先级高于本 fixture，既有断言不受影响。
+# ============================================================
+
+
+@pytest.fixture(autouse=True)
+def _no_behavior_log_insert(monkeypatch):
+    """阻断行为审计装饰器在测试中真实写 user_behavior_logs"""
+    monkeypatch.setattr("src.services.behavior_log._insert_sync", lambda row: None)

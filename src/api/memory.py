@@ -5,14 +5,16 @@
 """
 
 import re
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 from typing import Optional
 from loguru import logger
 
 from src.api.auth import get_current_user
 from src.memory.long_term import LongTermMemory
+from src.saas.models.enums import BehaviorAction, BehaviorResourceType
 from src.config.settings import settings
+from src.services.behavior_log import audit_action
 
 
 router = APIRouter(prefix="/api/v1/memory", tags=["memory"])
@@ -123,8 +125,10 @@ async def get_long_term_memory(
 
 
 @router.put("/long-term")
+@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.ACCOUNT)
 async def update_long_term_memory(
     request: UpdateMemoryRequest,
+    http_request: Request = None,
     current_user: dict = Depends(get_current_user),
 ):
     """更新当前用户的长期记忆文件内容"""

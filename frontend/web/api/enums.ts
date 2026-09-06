@@ -217,6 +217,7 @@ export enum BehaviorResourceType {
   SKILL = 'skill',
   ERROR_LOG = 'error_log',
   KNOWLEDGE_SHARE = 'knowledge_share',
+  KNOWLEDGE_CATEGORY = 'knowledge_category',
 }
 
 export const BehaviorResourceTypeMap: Record<string, { label: string }> = {
@@ -238,6 +239,7 @@ export const BehaviorResourceTypeMap: Record<string, { label: string }> = {
   [BehaviorResourceType.SKILL]: { label: '租户技能' },
   [BehaviorResourceType.ERROR_LOG]: { label: '错误日志' },
   [BehaviorResourceType.KNOWLEDGE_SHARE]: { label: '知识库授权' },
+  [BehaviorResourceType.KNOWLEDGE_CATEGORY]: { label: '知识库分类' },
 };
 
 /** 粗分设备类型（user_behavior_logs.device_type） */

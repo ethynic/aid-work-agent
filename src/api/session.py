@@ -23,6 +23,8 @@ from loguru import logger
 from src.api.auth import get_current_user
 from src.db.models import SessionDB, MessageDB, ChatRecordDB
 from src.saas.context import get_current_tenant_id
+from src.saas.models.enums import BehaviorAction, BehaviorResourceType
+from src.services.behavior_log import audit_action
 
 router = APIRouter(prefix="/api/sessions", tags=["会话管理"])
 
@@ -82,6 +84,7 @@ async def list_sessions(request: Request, page: int = 1, page_size: int = 20):
 
 
 @router.post("")
+@audit_action(BehaviorAction.CREATE, BehaviorResourceType.SESSION)
 async def create_session(request: Request, body: CreateSessionRequest = None):
     """创建新会话（支持租户隔离）"""
     user = get_current_user(request)
@@ -125,6 +128,7 @@ async def get_latest_session(request: Request):
 
 
 @router.patch("/{session_id}")
+@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.SESSION, id_arg="session_id", name_arg="title")
 async def update_session(request: Request, session_id: str, body: UpdateSessionRequest):
     """更新会话"""
     user = get_current_user(request)
@@ -152,6 +156,7 @@ async def update_session(request: Request, session_id: str, body: UpdateSessionR
 
 
 @router.delete("/{session_id}")
+@audit_action(BehaviorAction.DELETE, BehaviorResourceType.SESSION, id_arg="session_id")
 async def delete_session(request: Request, session_id: str):
     """删除会话"""
     user = get_current_user(request)

@@ -453,6 +453,7 @@ async def tenant_list_prompts(
 
 
 @tenant_router.post("/")
+@audit_action(BehaviorAction.CREATE, BehaviorResourceType.PROMPT, name_arg="display_name")
 async def tenant_create_prompt(request: Request, body: RegisterPromptRequest):
     try:
         tenant_id = _get_tenant_id(request)
@@ -493,6 +494,7 @@ async def tenant_get_prompt(request: Request, scope_id: str):
 
 
 @tenant_router.post("/{scope_id}/versions")
+@audit_action(BehaviorAction.CREATE, BehaviorResourceType.PROMPT, id_arg="scope_id")
 async def tenant_commit_version(request: Request, scope_id: str, body: CommitVersionRequest):
     try:
         tenant_id = _get_tenant_id(request)
@@ -555,6 +557,7 @@ async def tenant_get_draft(request: Request, scope_id: str):
 
 
 @tenant_router.put("/{scope_id}/draft")
+@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.PROMPT, id_arg="scope_id")
 async def tenant_save_draft(request: Request, scope_id: str, body: SaveDraftRequest):
     try:
         tenant_id = _get_tenant_id(request)
@@ -580,6 +583,7 @@ async def tenant_save_draft(request: Request, scope_id: str, body: SaveDraftRequ
 
 
 @tenant_router.post("/{scope_id}/draft/commit")
+@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.PROMPT, id_arg="scope_id")
 async def tenant_commit_draft(request: Request, scope_id: str, body: CommitDraftRequest):
     try:
         tenant_id = _get_tenant_id(request)
@@ -624,6 +628,7 @@ async def tenant_list_labels(request: Request, scope_id: str):
 
 
 @tenant_router.put("/{scope_id}/labels/{label}")
+@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.PROMPT, id_arg="scope_id")
 async def tenant_set_label(
     request: Request, scope_id: str, label: str, body: SetLabelRequest
 ):

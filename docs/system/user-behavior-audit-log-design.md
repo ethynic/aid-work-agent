@@ -1,6 +1,6 @@
 # 用户行为审计日志设计（登录/登出/增删改留痕）
 
-> 状态：Phase 1（认证与账号安全事件）+ Phase 2（管理后台 CRUD 挂点）已完成开发；Phase 3（租户管理员/普通用户动作）、Phase 4（查询页面）待开发
+> 状态：Phase 1（认证与账号安全事件）+ Phase 2（管理后台 CRUD 挂点）+ Phase 3（租户级提示词 + 普通用户动作挂点）已完成开发；Phase 4（查询页面）待开发
 > 日期：2026-09-06
 > 关联：[计费审计规范](../../.claude/rules/billing_audit.md)（本设计不动计费链路）、[数据库表开发规范](../../.claude/rules/database_dev.md)、[SaaS 租户隔离规范](../../.claude/rules/backend_dev.md)
 
@@ -252,7 +252,7 @@ API 设计：`GET /api/admin/behavior-logs`（租户管理员）、`GET /api/saa
 |------|------|------|
 | Phase 1 | 表 + 写入模块 + 登录/登出/改密/渠道绑定事件全量挂点 | ✅ 已完成（80b1c0d3）。渠道绑定挂点留 Phase 3（现有绑定走回调链路自动创建，挂点会双写） |
 | Phase 2 | `audit_action` 装饰器挂平台管理员 `/api/saas/*` CRUD | ✅ 已完成（2026-09-06，三智能体流程通过）。实际范围按 §2 表格含 `/api/admin/*` 平台管理员端点；共 75 端点挂点（saas/api 15 文件 + api 4 文件）。装饰器实施时增强 4 处：Request 识别加 isinstance 防误拿同名 Pydantic body、name_arg 扫描任意参数名的 Pydantic body、同步 def 路由经 `asyncio.to_thread` 执行、业务级 `{"success": False}` 返回记失败；UPDATE 动作自动记 body 字段名列表（`exclude_unset`）入 detail。BehaviorResourceType 新增 9 细分值（activation_code / client_binding / rpa_client / channel_account / external_customer / reply_style / skill / error_log / knowledge_share），前后端同步 |
-| Phase 3 | 租户管理员 `/api/admin/*` CRUD + 普通用户动作 | 删除会话、知识库文档增删 |
+| Phase 3 | 租户管理员 `/api/admin/*` CRUD + 普通用户动作 | ✅ 已完成（2026-09-06，三智能体流程通过）。实际挂点 15 端点：prompt_management 租户级 router（/api/prompts）5 端点、session.py 会话创建/重命名/删除 3 端点（消息级高频操作不记）、knowledge/api.py 上传/批量上传/删除/移动 + 分类增删改 7 端点、memory.py 长期记忆编辑、email_settings.py 邮箱凭证删除。BehaviorResourceType 新增 `knowledge_category`。实施决策：①「批量删除会话」端点实际不存在，未实现（batch_delete 暂无使用点）；②wecom_personal_rpa_admin 11 端点装饰器与内部 write_audit（wecom_rpa_audit_logs，服务独立 RPA 审计页）双写保留——两表受众不同（平台统一审计 vs RPA 业务审计页），存储成本可忽略；③渠道回调路径（channel_routes/wecom_personal_rpa_routes 的 write_audit）不挂装饰器；④测试根级 conftest.py 增加 autouse fixture mock `_insert_sync` 防测试脏数据 |
 | Phase 4 | 管理后台查询页面 | 前端列表页，按页面规范走 page_metadata 登记 |
 
 **回滚安全**：写入失败不影响业务；下线只需移除装饰器与显式调用，表保留。

@@ -3,13 +3,15 @@
 提供邮箱配置的查询、保存（含测试发送）、删除接口
 """
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 from typing import Optional
 from loguru import logger
 
 from src.db.email_credential import EmailCredentialDB
 from src.api.auth import get_current_user
+from src.saas.models.enums import BehaviorAction, BehaviorResourceType
+from src.services.behavior_log import audit_action
 
 
 router = APIRouter(prefix="/api/email-settings", tags=["邮箱设置"])
@@ -131,7 +133,8 @@ async def save_email_settings(
 
 
 @router.delete("")
-async def delete_email_settings(current_user: dict = Depends(get_current_user)):
+@audit_action(BehaviorAction.DELETE, BehaviorResourceType.ACCOUNT)
+async def delete_email_settings(http_request: Request = None, current_user: dict = Depends(get_current_user)):
     """删除当前用户的邮箱配置"""
     try:
         if not current_user:

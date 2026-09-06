@@ -332,6 +332,7 @@ class BehaviorResourceType(str, Enum):
     SKILL = "skill"                          # 租户技能（自定义 Skill）
     ERROR_LOG = "error_log"                  # 错误日志（管理后台处理动作）
     KNOWLEDGE_SHARE = "knowledge_share"      # 知识库授权（租户间共享）
+    KNOWLEDGE_CATEGORY = "knowledge_category"  # 知识库分类（Phase 3，分类 ≠ 文档）
 
     @classmethod
     def all_values(cls) -> list[str]:
@@ -358,6 +359,7 @@ class BehaviorResourceType(str, Enum):
             self.SKILL: "租户技能",
             self.ERROR_LOG: "错误日志",
             self.KNOWLEDGE_SHARE: "知识库授权",
+            self.KNOWLEDGE_CATEGORY: "知识库分类",
         }
         return mapping.get(self, "未知")
 
