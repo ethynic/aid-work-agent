@@ -11,7 +11,9 @@ from pydantic import BaseModel, Field
 from loguru import logger
 
 from src.saas.api.tenant_auth import require_admin
+from src.saas.models.enums import BehaviorAction, BehaviorResourceType
 from src.saas.services.skill_resolver import SkillResolver
+from src.services.behavior_log import audit_action
 
 router = APIRouter(prefix="/api/saas/skills", tags=["SaaS Skill 管理"])
 
@@ -34,6 +36,7 @@ async def list_skills(request: Request):
 
 
 @router.post("")
+@audit_action(BehaviorAction.CREATE, BehaviorResourceType.SKILL, name_arg="name")
 async def upload_skill(request: Request, body: SkillUploadRequest):
     """上传自定义 Skill"""
     admin = require_admin(request)
@@ -52,6 +55,7 @@ async def upload_skill(request: Request, body: SkillUploadRequest):
 
 
 @router.put("/{skill_name}")
+@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.SKILL, id_arg="skill_name")
 async def update_skill(skill_name: str, request: Request, body: SkillUpdateRequest):
     """更新自定义 Skill"""
     admin = require_admin(request)
@@ -70,6 +74,7 @@ async def update_skill(skill_name: str, request: Request, body: SkillUpdateReque
 
 
 @router.delete("/{skill_name}")
+@audit_action(BehaviorAction.DELETE, BehaviorResourceType.SKILL, id_arg="skill_name")
 async def delete_skill(skill_name: str, request: Request):
     """删除自定义 Skill"""
     admin = require_admin(request)

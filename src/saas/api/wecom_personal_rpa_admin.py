@@ -32,6 +32,8 @@ from src.core.cache_utils import CacheKeys
 from src.core.redis_client import redis_client
 from src.saas.api.tenant_auth import require_admin, sanitize_error_info
 from src.saas.db.channel_config_db import ChannelConfigDB
+from src.saas.models.enums import BehaviorAction, BehaviorResourceType
+from src.services.behavior_log import audit_action
 from src.channels.wecom_personal_rpa.archive.external_contact_resolver import external_contact_resolver
 
 router = APIRouter(prefix="/api/saas/wecom-personal-rpa", tags=["企业微信个人账号RPA管理"])
@@ -249,6 +251,7 @@ def _audit_public(row: Dict[str, Any]) -> Dict[str, Any]:
 
 
 @router.post("/clients")
+@audit_action(BehaviorAction.CREATE, BehaviorResourceType.RPA_CLIENT, name_arg="name")
 async def register_client(request: Request, body: ClientRegisterRequest):
     """注册新 RPA 客户端。
 
@@ -348,6 +351,7 @@ async def list_client_accounts(client_id: str, request: Request):
 
 
 @router.patch("/accounts/{account_id}/identity")
+@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.CHANNEL_ACCOUNT, id_arg="account_id")
 async def update_account_identity(
     account_id: str, body: UpdateAccountIdentityRequest, request: Request
 ):
@@ -394,6 +398,7 @@ async def update_account_identity(
 
 
 @router.post("/clients/{client_id}/rotate-secret")
+@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.RPA_CLIENT, id_arg="client_id")
 async def rotate_client_secret(client_id: str, request: Request):
     """轮换客户端密钥。
 
@@ -442,6 +447,7 @@ async def rotate_client_secret(client_id: str, request: Request):
 
 
 @router.post("/clients/{client_id}/pause")
+@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.RPA_CLIENT, id_arg="client_id")
 async def pause_client(client_id: str, request: Request):
     """暂停客户端（status: active → disabled）。
 
@@ -481,6 +487,7 @@ async def pause_client(client_id: str, request: Request):
 
 
 @router.post("/clients/{client_id}/resume")
+@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.RPA_CLIENT, id_arg="client_id")
 async def resume_client(client_id: str, request: Request):
     """恢复客户端（status: disabled → active）。
 
@@ -632,6 +639,7 @@ async def list_all_bindings(
 
 
 @router.patch("/clients/{client_id}/agent_base_url")
+@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.RPA_CLIENT, id_arg="client_id")
 async def update_client_agent_base_url(
     client_id: str,
     request: Request,
@@ -687,6 +695,7 @@ async def update_client_agent_base_url(
 
 
 @router.post("/bindings/{binding_id}/confirm")
+@audit_action(BehaviorAction.CREATE, BehaviorResourceType.CLIENT_BINDING, id_arg="binding_id")
 async def confirm_binding(binding_id: str, request: Request):
     """复核通过：needs_review → active。
 
@@ -735,6 +744,7 @@ async def confirm_binding(binding_id: str, request: Request):
 
 
 @router.patch("/bindings/{binding_id}")
+@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.CLIENT_BINDING, id_arg="binding_id")
 async def update_binding(binding_id: str, request: Request, body: UpdateBindingRequest):
     """更新绑定可编辑字段（首版仅监控白名单）。
 
@@ -798,6 +808,7 @@ async def update_binding(binding_id: str, request: Request, body: UpdateBindingR
 
 
 @router.delete("/bindings/{binding_id}")
+@audit_action(BehaviorAction.DELETE, BehaviorResourceType.CLIENT_BINDING, id_arg="binding_id")
 async def delete_binding(binding_id: str, request: Request):
     """删除尚未投入使用的绑定；正常或暂停绑定禁止直接删除。"""
     admin = require_admin(request)
@@ -875,6 +886,7 @@ def _do_resume_conversation(tenant_id: str, binding_id: str) -> bool:
 
 
 @router.post("/pause")
+@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.CONFIG)
 async def pause(request: Request, body: PauseResumeRequest):
     """暂停（tenant / account / conversation 三选一，幂等）。
 
@@ -949,6 +961,7 @@ async def pause(request: Request, body: PauseResumeRequest):
 
 
 @router.post("/resume")
+@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.CONFIG)
 async def resume(request: Request, body: PauseResumeRequest):
     """恢复（tenant / account / conversation 三选一，幂等）。"""
     admin = require_admin(request)

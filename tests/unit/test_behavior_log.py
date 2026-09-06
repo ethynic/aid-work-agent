@@ -8,6 +8,9 @@
 - token_id 计算（SHA256 前 8 位，不存原文）
 - X-Forwarded-For 首段取 IP
 - audit_action 装饰器成功 / 异常 re-raise
+- audit_action 装饰器增强（Phase 2）：_find_request 不误拿名为 request 的 Pydantic body、
+  name_arg 从任意名字的 body 参数提取、同步 def 路由经 to_thread 执行、
+  业务级 {"success": False} 返回记失败、UPDATE 自动记变更字段名列表
 - error_msg 截断 500 字符
 - 渠道事件字段语义（entry=channel、无 UA）
 - db_update.yaml 新条目格式合法（datetime 唯一且严格递增、SQL 幂等）
@@ -16,6 +19,8 @@
 """
 
 import hashlib
+import json
+import threading
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -23,6 +28,7 @@ from unittest.mock import patch
 
 import pytest
 import yaml
+from pydantic import BaseModel
 
 from src.services.behavior_log import (
     ERROR_MSG_MAX_LEN,
@@ -363,6 +369,148 @@ async def test_anonymous_login_failed_row_has_null_user_id():
     row = mock_insert.call_args[0][0]
     assert row["user_id"] is None
     assert row["detail"] is not None and "13800000000" in row["detail"]
+
+
+# ============== audit_action 装饰器增强（Phase 2）==============
+
+class _FakeBody(BaseModel):
+    """模拟 FastAPI Pydantic body 模型"""
+    username: str | None = None
+    remark: str | None = None
+
+
+class _MigrationBody(BaseModel):
+    """模拟 tenant_migration.py 的 body（参数名恰好叫 request）"""
+    source_tenant: str = "src_tenant"
+
+
+def _audit_request(method: str = "POST", path: str = "/api/admin/x") -> SimpleNamespace:
+    """构造带 method/url 形状的 request 替身（装饰器按形状兜底识别）"""
+    return SimpleNamespace(
+        headers={},
+        state=SimpleNamespace(tenant_id="t1", user_id="u1", user_role=None),
+        client=None, method=method, url=SimpleNamespace(path=path),
+    )
+
+
+@pytest.mark.asyncio
+async def test_audit_action_pydantic_body_named_request_not_mistaken_for_request():
+    """body 参数名恰为 request 时不得误当 Request（tenant_migration 场景），Request 形参名叫 req 也能定位"""
+    @audit_action(BehaviorAction.UPDATE, BehaviorResourceType.TENANT,
+                  id_arg="tenant_id", name_arg="source_tenant")
+    async def ep(tenant_id=None, request: _MigrationBody = None, req=None):
+        return {"success": True}
+
+    req_obj = _audit_request(method="POST", path="/api/saas/tenants/t9/migration/preview")
+    with patch("src.services.behavior_log._insert_sync") as mock_insert:
+        await ep(tenant_id="t9", request=_MigrationBody(), req=req_obj)
+
+    row = mock_insert.call_args[0][0]
+    assert row["http_method"] == "POST"          # 从 req（真 Request）定位，而非名为 request 的 body
+    assert row["path"] == "/api/saas/tenants/t9/migration/preview"
+    assert row["resource_id"] == "t9"
+    assert row["resource_name"] == "src_tenant"  # name_arg 从名为 request 的 Pydantic body 提取
+
+
+@pytest.mark.asyncio
+async def test_audit_action_name_arg_extracts_from_arbitrary_body_param_name():
+    """name_arg 从非 body 名的 Pydantic 参数提取（body 参数名可能是 req/data 等任意名字）"""
+    @audit_action(BehaviorAction.CREATE, BehaviorResourceType.TENANT_USER, name_arg="username")
+    async def ep(request=None, data: _FakeBody = None):
+        return {"success": True}
+
+    with patch("src.services.behavior_log._insert_sync") as mock_insert:
+        await ep(request=_audit_request(path="/api/saas/users"), data=_FakeBody(username="张三"))
+
+    row = mock_insert.call_args[0][0]
+    assert row["resource_name"] == "张三"
+
+
+@pytest.mark.asyncio
+async def test_audit_action_sync_def_route_runs_in_worker_thread():
+    """同步 def 路由：装饰后可 await，原函数经 to_thread 在工作线程执行（不阻塞事件循环）"""
+    caller_thread = threading.get_ident()
+    seen_threads = []
+
+    @audit_action(BehaviorAction.UPDATE, BehaviorResourceType.TENANT, id_arg="tenant_id")
+    def sync_endpoint(request, tenant_id=None):
+        seen_threads.append(threading.get_ident())
+        return {"success": True}
+
+    with patch("src.services.behavior_log._insert_sync") as mock_insert:
+        result = await sync_endpoint(
+            _audit_request(method="POST", path="/api/saas/permissions/tenant/t1/agents"),
+            tenant_id="t1",
+        )
+
+    assert result == {"success": True}
+    assert seen_threads[0] != caller_thread      # 在 to_thread 工作线程执行，未阻塞事件循环线程
+    row = mock_insert.call_args[0][0]
+    assert row["success"] is True
+    assert row["resource_id"] == "t1"
+
+
+@pytest.mark.asyncio
+async def test_audit_action_business_failure_dict_recorded_as_failure():
+    """业务级失败：返回 {"success": False} 记 success=False + error_msg（error 优先，message 兜底）"""
+    @audit_action(BehaviorAction.UPDATE, BehaviorResourceType.TENANT)
+    async def ep_with_error(request):
+        return {"success": False, "error": "权限不足"}
+
+    @audit_action(BehaviorAction.UPDATE, BehaviorResourceType.TENANT)
+    async def ep_with_message(request):
+        return {"success": False, "message": "没有需要更新的字段"}
+
+    with patch("src.services.behavior_log._insert_sync") as mock_insert:
+        await ep_with_error(_audit_request())
+    row = mock_insert.call_args[0][0]
+    assert row["success"] is False
+    assert "权限不足" in row["error_msg"]
+
+    with patch("src.services.behavior_log._insert_sync") as mock_insert:
+        await ep_with_message(_audit_request())
+    row = mock_insert.call_args[0][0]
+    assert row["success"] is False
+    assert "没有需要更新的字段" in row["error_msg"]
+
+
+@pytest.mark.asyncio
+async def test_audit_action_dict_without_success_key_not_treated_as_failure():
+    """防误伤：返回 dict 但无 success 键（如导出结果）仍记 success=True"""
+    @audit_action(BehaviorAction.EXPORT, BehaviorResourceType.BILLING)
+    async def ep(request):
+        return {"rows": [1, 2, 3]}
+
+    with patch("src.services.behavior_log._insert_sync") as mock_insert:
+        await ep(_audit_request(method="GET", path="/api/saas/reports/export_usage_report"))
+
+    row = mock_insert.call_args[0][0]
+    assert row["success"] is True
+    assert row["error_msg"] is None
+
+
+@pytest.mark.asyncio
+async def test_audit_action_update_records_body_field_names_only():
+    """UPDATE 操作自动记 detail={"fields": [...]}：仅字段名不含值，敏感值不落库"""
+    @audit_action(BehaviorAction.UPDATE, BehaviorResourceType.TENANT)
+    async def update_ep(request, body: _FakeBody = None):
+        return {"success": True}
+
+    @audit_action(BehaviorAction.CREATE, BehaviorResourceType.TENANT)
+    async def create_ep(request, body: _FakeBody = None):
+        return {"success": True}
+
+    with patch("src.services.behavior_log._insert_sync") as mock_insert:
+        await update_ep(request=_audit_request(method="PATCH"), body=_FakeBody(username="张三"))
+    row = mock_insert.call_args[0][0]
+    detail = json.loads(row["detail"])
+    assert detail == {"fields": ["username"]}     # 只记请求实际携带的字段名
+    assert "张三" not in (row["detail"] or "")     # 不含字段值
+
+    with patch("src.services.behavior_log._insert_sync") as mock_insert:
+        await create_ep(request=_audit_request(method="POST"), body=_FakeBody(username="张三"))
+    row = mock_insert.call_args[0][0]
+    assert row["detail"] is None                  # 非 UPDATE 动作不记 fields
 
 
 # ============== db_update.yaml 增量格式 ==============

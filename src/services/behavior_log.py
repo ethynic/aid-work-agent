@@ -15,8 +15,8 @@
 用法（管理后台 CRUD 端点用装饰器，Phase 2 批量挂）：
 
     from src.services.behavior_log import audit_action
-    @audit_action(BehaviorAction.CREATE, BehaviorResourceType.TENANT)
     @router.post("/tenants")
+    @audit_action(BehaviorAction.CREATE, BehaviorResourceType.TENANT)   # 必须挂在 @router 之下
     async def create_tenant(request: Request, ...): ...
 """
 
@@ -24,10 +24,11 @@ import asyncio
 import functools
 import hashlib
 import json
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import Request
 from loguru import logger
+from pydantic import BaseModel
 
 from src.db.database import get_db_connection
 from src.saas.models.enums import BehaviorAction, BehaviorDeviceType, BehaviorEntry
@@ -388,6 +389,82 @@ def record_behavior_sync(
 
 # ============== 路由装饰器（Phase 2 管理后台 CRUD 批量挂点用）==============
 
+def _find_request(*fn_args, **fn_kwargs) -> Optional[Request]:
+    """从位置/关键字参数中定位 Request
+
+    - fastapi.Request 实例优先（isinstance 精确匹配）；
+    - 关键字参数也必须 isinstance 校验：FastAPI 全 kwargs 传参，且部分端点的
+      Pydantic body 参数名恰好叫 request（如 tenant_migration.py），直接
+      kwargs.get("request") 会误拿 body；
+    - 形状兜底（method/url 鸭子类型）：扫描位置与关键字参数值，排除 Pydantic
+      BaseModel（body 模型可能恰好定义 method/url 字段，防止误伤）。
+    """
+    request = next((a for a in fn_args if isinstance(a, Request)), None)
+    if request is None:
+        request = next((a for a in fn_kwargs.values() if isinstance(a, Request)), None)
+    if request is None:
+        candidates = list(fn_args) + list(fn_kwargs.values())
+        request = next(
+            (
+                a for a in candidates
+                if not isinstance(a, BaseModel)
+                and hasattr(a, "method") and hasattr(a, "url")
+            ),
+            None,
+        )
+    return request
+
+
+def _find_body_candidates(fn_args: tuple, fn_kwargs: dict) -> List[Any]:
+    """收集可能的请求体候选（dict 或 Pydantic BaseModel 实例），按参数顺序"""
+    return [
+        a for a in (list(fn_args) + list(fn_kwargs.values()))
+        if isinstance(a, BaseModel) or isinstance(a, dict)
+    ]
+
+
+def _extract_resource_name(name_arg: str, fn_args: tuple, fn_kwargs: dict) -> Optional[Any]:
+    """从请求体候选中提取名称字段（body 参数名可能是 body/req/data 等任意名字）
+
+    - dict：键存在即取（值可为 None）；
+    - Pydantic 模型：字段存在即取（值可为 None），字段不存在才继续找下一个候选；
+    - 全部候选都没有该字段时返回 None。
+    """
+    for body in _find_body_candidates(fn_args, fn_kwargs):
+        if isinstance(body, dict):
+            if name_arg in body:
+                return body[name_arg]
+        else:
+            model_fields = getattr(type(body), "model_fields", None) or {}
+            if name_arg in model_fields:
+                return getattr(body, name_arg, None)
+    return None
+
+
+def _extract_update_fields(
+    action: Any, fn_args: tuple, fn_kwargs: dict
+) -> Optional[Dict[str, Any]]:
+    """UPDATE 类操作时，从 Pydantic body 模型提取请求携带的字段名列表（不含值）
+
+    设计文档 §5.3「至少记变更字段名列表」：detail={"fields": [...]}。
+    用 model_dump(exclude_unset=True) 只记请求实际携带的字段（PATCH 语义）；
+    仅字段名，不含字段值，无敏感信息泄露风险。非 UPDATE 或无 Pydantic body 时不记。
+    """
+    if getattr(action, "value", action) != BehaviorAction.UPDATE.value:
+        return None
+    for body in _find_body_candidates(fn_args, fn_kwargs):
+        if not isinstance(body, BaseModel):
+            continue
+        try:
+            fields = list(body.model_dump(exclude_unset=True).keys())
+        except Exception:
+            # 兜底：拿不到 exclude_unset 集合时退化为模型全部字段名
+            fields = list(getattr(type(body), "model_fields", {}).keys())
+        if fields:
+            return {"fields": fields}
+    return None
+
+
 def audit_action(
     action: str,
     resource_type: str,
@@ -397,40 +474,35 @@ def audit_action(
     """装饰 FastAPI 路由函数，自动记录行为审计日志
 
     - 业务函数成功返回后记 success=True；抛异常时记 success=False + error_msg 后原样 re-raise
+    - 业务级失败也记失败：返回 dict 且 result["success"] is False 时记 success=False +
+      error_msg（取 error 或 message 字段）；无 success 键的 dict 不受影响
     - resource_id：id_arg 指定路径/查询参数名（如 "tenant_id"），未指定时不取
-    - resource_name：name_arg 指定请求体中的名称字段（如 "company_name"），避免为记日志额外查库
+    - resource_name：name_arg 指定请求体中的名称字段（如 "company_name"），从任意名字的
+      Pydantic body / dict body 中提取，避免为记日志额外查库
+    - UPDATE 操作自动记 detail={"fields": [...]}（请求体实际携带的字段名列表，不含值）
+    - 同步 def 路由自动经 asyncio.to_thread 执行，不阻塞事件循环（backend_dev.md 假异步规范）
     - http_method / path 从 request 自动取，零成本精确定位端点
     - 登录/登出/改密码等不适用本装饰器（需在成功与失败分支分别记录、user 身份特殊），用显式调用
     """
     def decorator(func):
-        def _find_request(*fn_args, **fn_kwargs):
-            """从位置/关键字参数中定位 Request（fastapi.Request 实例或带 method/url 形状的鸭子类型）"""
-            request = fn_kwargs.get("request")
-            if request is None:
-                request = next((a for a in fn_args if isinstance(a, Request)), None)
-            if request is None:
-                # 兜底：按形状识别（Pydantic body 不会有 method/url 属性，无误伤风险）
-                request = next(
-                    (a for a in fn_args if hasattr(a, "method") and hasattr(a, "url")), None
-                )
-            return request
-
         @functools.wraps(func)
         async def wrapper(*args, **kwargs):
             request = _find_request(*args, **kwargs)
 
             # 提取 resource_id（路径/查询参数）与 resource_name（请求体名称字段）
             resource_id = kwargs.get(id_arg) if id_arg else None
-            resource_name = None
-            if name_arg:
-                body = kwargs.get("body")
-                if isinstance(body, dict):
-                    resource_name = body.get(name_arg)
-                else:
-                    resource_name = getattr(body, name_arg, None)
+            resource_name = _extract_resource_name(name_arg, args, kwargs) if name_arg else None
+            update_fields = _extract_update_fields(action, args, kwargs)
+
+            http_method = request.method if request is not None else None
+            path = request.url.path if request is not None else None
 
             try:
-                result = await func(*args, **kwargs)
+                if asyncio.iscoroutinefunction(func):
+                    result = await func(*args, **kwargs)
+                else:
+                    # 同步 def 路由：to_thread 包裹执行，避免阻塞事件循环
+                    result = await asyncio.to_thread(func, *args, **kwargs)
             except Exception as e:
                 await record_behavior(
                     request, action,
@@ -439,18 +511,29 @@ def audit_action(
                     resource_name=resource_name,
                     success=False,
                     error_msg=str(e),
-                    http_method=request.method if request is not None else None,
-                    path=request.url.path if request is not None else None,
+                    detail=update_fields,
+                    http_method=http_method,
+                    path=path,
                 )
                 raise
+
+            # 业务级失败判定：显式返回 {"success": False} 视为失败（误伤防护：无 success 键不触发）
+            success = True
+            error_msg = None
+            if isinstance(result, dict) and result.get("success") is False:
+                success = False
+                error_msg = result.get("error") or result.get("message")
+
             await record_behavior(
                 request, action,
                 resource_type=resource_type,
                 resource_id=resource_id,
                 resource_name=resource_name,
-                success=True,
-                http_method=request.method if request is not None else None,
-                path=request.url.path if request is not None else None,
+                success=success,
+                error_msg=error_msg,
+                detail=update_fields,
+                http_method=http_method,
+                path=path,
             )
             return result
         return wrapper

@@ -28,6 +28,8 @@ from pydantic import BaseModel
 
 from src.db.client_binding_db import ClientActivationCodeDB, ClientBindingDB
 from src.saas.api.tenant_auth import require_admin
+from src.saas.models.enums import BehaviorAction, BehaviorResourceType
+from src.services.behavior_log import audit_action
 
 activation_router = APIRouter(prefix="/api/saas/client-activations", tags=["SaaS 客户端激活码管理"])
 binding_router = APIRouter(prefix="/api/saas/client-bindings", tags=["SaaS 客户端绑定管理"])
@@ -45,6 +47,7 @@ class ActivationCodeCreateRequest(BaseModel):
 # ============== 激活码管理 ==============
 
 @activation_router.post("")
+@audit_action(BehaviorAction.CREATE, BehaviorResourceType.ACTIVATION_CODE, name_arg="client_name")
 async def create_activation_code(req: ActivationCodeCreateRequest, request: Request):
     """生成激活码（明文 code 仅此一次返回）。"""
     require_admin(request)
@@ -138,6 +141,7 @@ async def get_activation_code(code_id: int, request: Request):
 
 
 @activation_router.delete("/{code_id}")
+@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.ACTIVATION_CODE, id_arg="code_id")
 async def disable_activation_code(code_id: int, request: Request):
     """禁用激活码（未激活的不可再激活）。"""
     require_admin(request)
@@ -150,6 +154,7 @@ async def disable_activation_code(code_id: int, request: Request):
 
 
 @activation_router.post("/{code_id}/revoke")
+@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.CLIENT_BINDING, id_arg="code_id")
 async def revoke_binding_by_code(code_id: int, request: Request):
     """吊销该激活码关联的客户端绑定（下线客户端）。"""
     require_admin(request)
@@ -213,6 +218,7 @@ async def list_bindings(
 
 
 @binding_router.post("/{binding_id}/disable")
+@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.CLIENT_BINDING, id_arg="binding_id")
 async def disable_binding(binding_id: str, request: Request):
     """禁用绑定（踢下线）。"""
     require_admin(request)
@@ -225,6 +231,7 @@ async def disable_binding(binding_id: str, request: Request):
 
 
 @binding_router.post("/{binding_id}/rotate-token")
+@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.CLIENT_BINDING, id_arg="binding_id")
 async def rotate_token(binding_id: str, request: Request):
     """轮换 access_token（返回新明文）。"""
     require_admin(request)

@@ -28,7 +28,9 @@ from loguru import logger
 from src.db.models import CustomerReferralDB
 from src.saas.api.tenant_auth import require_admin
 from src.saas.db.channel_config_db import ChannelConfigDB
+from src.saas.models.enums import BehaviorAction, BehaviorResourceType
 from src.saas.services.channel_factory import ChannelFactory
+from src.services.behavior_log import audit_action
 
 router = APIRouter(prefix="/api/saas/wecom-kf", tags=["微信客服账号管理"])
 
@@ -491,6 +493,7 @@ async def _get_wecom_kf_config(tenant_id: str) -> Dict[str, Any]:
 
 
 @router.post("/accounts")
+@audit_action(BehaviorAction.CREATE, BehaviorResourceType.CHANNEL_ACCOUNT, name_arg="name")
 async def create_kf_account(request: Request, body: KfAccountCreate):
     """创建客服账号：企微 account/add → 生成 scene → add_contact_way → 写配置 → 返回二维码。"""
     admin = require_admin(request)
@@ -628,6 +631,7 @@ async def list_kf_accounts(request: Request):
 
 
 @router.put("/accounts/{open_kfid}")
+@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.CHANNEL_ACCOUNT, id_arg="open_kfid", name_arg="name")
 async def update_kf_account(request: Request, open_kfid: str, body: KfAccountUpdate):
     """编辑客服账号：名称/头像 → 企微 account/update；本地字段直接改配置（支持换绑）。
 
@@ -717,6 +721,7 @@ async def update_kf_account(request: Request, open_kfid: str, body: KfAccountUpd
 
 
 @router.post("/accounts/{open_kfid}/contact-way")
+@audit_action(BehaviorAction.CREATE, BehaviorResourceType.CHANNEL_ACCOUNT, id_arg="open_kfid")
 async def ensure_kf_contact_way(request: Request, open_kfid: str):
     """生成/补齐客服账号的联系方式（scene + 链接 + 二维码）。
 
@@ -773,6 +778,7 @@ async def ensure_kf_contact_way(request: Request, open_kfid: str):
 
 
 @router.delete("/accounts/{open_kfid}")
+@audit_action(BehaviorAction.DELETE, BehaviorResourceType.CHANNEL_ACCOUNT, id_arg="open_kfid")
 async def delete_kf_account(request: Request, open_kfid: str):
     """删除客服账号：先企微 account/del，成功（或账号不存在）才删本地；失败回显 errmsg。"""
     admin = require_admin(request)

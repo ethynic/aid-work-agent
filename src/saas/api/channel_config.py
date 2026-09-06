@@ -21,7 +21,9 @@ from src.core import master_agent
 from src.saas.api.tenant_auth import require_admin
 from src.saas.db.channel_config_db import ChannelConfigDB
 from src.saas.db.subscription_db import SubscriptionDB
+from src.saas.models.enums import BehaviorAction, BehaviorResourceType
 from src.saas.services.channel_factory import ChannelFactory
+from src.services.behavior_log import audit_action
 from src.db.database import get_db_connection
 
 router = APIRouter(prefix="/api/saas/channels", tags=["SaaS 渠道配置"])
@@ -92,6 +94,7 @@ async def list_channels(request: Request):
 
 
 @router.post("")
+@audit_action(BehaviorAction.CREATE, BehaviorResourceType.CONFIG, name_arg="name")
 async def create_channel(request: Request, body: ChannelConfigCreateRequest):
     """新增渠道配置"""
     admin = require_admin(request)
@@ -141,6 +144,7 @@ async def create_channel(request: Request, body: ChannelConfigCreateRequest):
 
 
 @router.put("/{config_id}")
+@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.CONFIG, id_arg="config_id", name_arg="name")
 async def update_channel(config_id: str, request: Request, body: ChannelConfigUpdateRequest):
     """更新渠道配置"""
     admin = require_admin(request)
@@ -181,6 +185,7 @@ async def update_channel(config_id: str, request: Request, body: ChannelConfigUp
 
 
 @router.delete("/{config_id}")
+@audit_action(BehaviorAction.DELETE, BehaviorResourceType.CONFIG, id_arg="config_id")
 async def delete_channel(config_id: str, request: Request):
     """删除渠道配置"""
     admin = require_admin(request)
@@ -208,6 +213,7 @@ async def delete_channel(config_id: str, request: Request):
 
 
 @router.post("/{config_id}/generate-keypair")
+@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.CONFIG, id_arg="config_id")
 async def generate_keypair(config_id: str, request: Request):
     """为 wecom_personal_rpa 渠道生成 RSA 2048bit 密钥对。
 
@@ -288,6 +294,7 @@ async def generate_keypair(config_id: str, request: Request):
 
 
 @router.post("/{config_id}/verify")
+@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.CONFIG, id_arg="config_id")
 async def verify_channel(config_id: str, request: Request):
     """验证渠道凭证有效性
 

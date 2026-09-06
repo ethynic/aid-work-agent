@@ -21,6 +21,8 @@ from src.db.database import get_db_connection
 from src.db.models import ContextSummaryDB
 from src.saas.api.tenant_auth import require_admin
 from src.saas.models.enums import ContextSummaryStatus
+from src.saas.models.enums import BehaviorAction, BehaviorResourceType
+from src.services.behavior_log import audit_action
 
 
 router = APIRouter(
@@ -246,6 +248,7 @@ async def _fetch_compressed_messages(source_type: str, msg_ids: List[int]) -> Li
 # ============== 回滚 ==============
 
 @router.post("/{summary_id}/rollback")
+@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.SESSION, id_arg="summary_id")
 async def rollback_summary(summary_id: str, request: Request):
     """回滚：把 compacted 标记清除，summary 置 'rolled_back'。
 
@@ -328,6 +331,7 @@ async def rollback_summary(summary_id: str, request: Request):
 # ============== 手动压缩 ==============
 
 @router.post("/sessions/{session_id}/compact")
+@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.SESSION, id_arg="session_id")
 async def manual_compress(
     session_id: str,
     request: Request,

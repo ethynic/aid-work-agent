@@ -15,7 +15,9 @@ from loguru import logger
 from src.saas.api.tenant_auth import get_current_admin, require_admin
 from src.saas.db.permission_db import UserAgentPermissionDB
 from src.saas.db.subscription_db import SubscriptionDB
+from src.saas.models.enums import BehaviorAction, BehaviorResourceType
 from src.saas.permissions.checker import get_allowed_agent_ids_for_user
+from src.services.behavior_log import audit_action
 from src.db.database import get_db_connection
 from src.core.agent import master_agent
 
@@ -81,6 +83,7 @@ def get_tenant_agent_permissions(request: Request, tenant_id: str):
 
 
 @router.post("/tenant/{tenant_id}/agents")
+@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.TENANT, id_arg="tenant_id")
 def set_tenant_agent_permissions(request: Request, tenant_id: str, body: SetTenantAgentPermissionsRequest):
     """设置租户授权的数字员工列表（仅平台管理员）"""
     admin = require_admin(request)
@@ -161,6 +164,7 @@ def get_user_agent_permissions(request: Request, user_id: str):
 
 
 @router.post("/user/{user_id}/agents")
+@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.TENANT_USER, id_arg="user_id")
 def set_user_agent_permissions(request: Request, user_id: str, body: SetUserAgentPermissionsRequest):
     """设置用户授权的数字员工列表（仅租户管理员）"""
     admin = require_admin(request)

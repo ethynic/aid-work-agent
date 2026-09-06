@@ -9,7 +9,7 @@ subagent-knowledge 关联弹框决定。
 
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 from loguru import logger
 
@@ -17,6 +17,8 @@ from src.db.tenant_knowledge_share_db import TenantKnowledgeShareDB
 from src.saas.api.tenant_auth import require_admin
 from src.saas.context import get_current_tenant_id
 from src.saas.db.tenant_db import TenantDB
+from src.saas.models.enums import BehaviorAction, BehaviorResourceType
+from src.services.behavior_log import audit_action
 
 
 router = APIRouter(prefix="/api/saas/tenant/knowledge-shares", tags=["knowledge-shares"])
@@ -69,7 +71,9 @@ async def get_knowledge_shares(
 
 
 @router.put("")
+@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.KNOWLEDGE_SHARE)
 async def set_knowledge_shares(
+    request: Request,
     req: SetKnowledgeSharesRequest,
     request_admin: dict = Depends(require_admin),
 ):

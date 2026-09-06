@@ -208,6 +208,15 @@ export enum BehaviorResourceType {
   CONFIG = 'config',
   BILLING = 'billing',
   ACCOUNT = 'account',
+  ACTIVATION_CODE = 'activation_code',
+  CLIENT_BINDING = 'client_binding',
+  RPA_CLIENT = 'rpa_client',
+  CHANNEL_ACCOUNT = 'channel_account',
+  EXTERNAL_CUSTOMER = 'external_customer',
+  REPLY_STYLE = 'reply_style',
+  SKILL = 'skill',
+  ERROR_LOG = 'error_log',
+  KNOWLEDGE_SHARE = 'knowledge_share',
 }
 
 export const BehaviorResourceTypeMap: Record<string, { label: string }> = {
@@ -220,6 +229,15 @@ export const BehaviorResourceTypeMap: Record<string, { label: string }> = {
   [BehaviorResourceType.CONFIG]: { label: '配置' },
   [BehaviorResourceType.BILLING]: { label: '计费' },
   [BehaviorResourceType.ACCOUNT]: { label: '账号' },
+  [BehaviorResourceType.ACTIVATION_CODE]: { label: '激活码' },
+  [BehaviorResourceType.CLIENT_BINDING]: { label: '客户端绑定' },
+  [BehaviorResourceType.RPA_CLIENT]: { label: 'RPA客户端' },
+  [BehaviorResourceType.CHANNEL_ACCOUNT]: { label: '客服账号' },
+  [BehaviorResourceType.EXTERNAL_CUSTOMER]: { label: '外部客户' },
+  [BehaviorResourceType.REPLY_STYLE]: { label: '回复风格' },
+  [BehaviorResourceType.SKILL]: { label: '租户技能' },
+  [BehaviorResourceType.ERROR_LOG]: { label: '错误日志' },
+  [BehaviorResourceType.KNOWLEDGE_SHARE]: { label: '知识库授权' },
 };
 
 /** 粗分设备类型（user_behavior_logs.device_type） */

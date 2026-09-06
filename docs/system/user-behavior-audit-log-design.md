@@ -1,6 +1,6 @@
 # 用户行为审计日志设计（登录/登出/增删改留痕）
 
-> 状态：设计完成，待开发
+> 状态：Phase 1（认证与账号安全事件）+ Phase 2（管理后台 CRUD 挂点）已完成开发；Phase 3（租户管理员/普通用户动作）、Phase 4（查询页面）待开发
 > 日期：2026-09-06
 > 关联：[计费审计规范](../../.claude/rules/billing_audit.md)（本设计不动计费链路）、[数据库表开发规范](../../.claude/rules/database_dev.md)、[SaaS 租户隔离规范](../../.claude/rules/backend_dev.md)
 
@@ -250,8 +250,8 @@ API 设计：`GET /api/admin/behavior-logs`（租户管理员）、`GET /api/saa
 
 | 阶段 | 内容 | 说明 |
 |------|------|------|
-| Phase 1 | 表 + 写入模块 + 登录/登出/改密/渠道绑定事件全量挂点 | 核心价值最先落地，IP/UA + 设备快照随登录事件入库；渠道事件按 §5.6 语义落库 |
-| Phase 2 | `audit_action` 装饰器挂平台管理员 `/api/saas/*` CRUD | 按文件逐个挂，改动小、可分批提交 |
+| Phase 1 | 表 + 写入模块 + 登录/登出/改密/渠道绑定事件全量挂点 | ✅ 已完成（80b1c0d3）。渠道绑定挂点留 Phase 3（现有绑定走回调链路自动创建，挂点会双写） |
+| Phase 2 | `audit_action` 装饰器挂平台管理员 `/api/saas/*` CRUD | ✅ 已完成（2026-09-06，三智能体流程通过）。实际范围按 §2 表格含 `/api/admin/*` 平台管理员端点；共 75 端点挂点（saas/api 15 文件 + api 4 文件）。装饰器实施时增强 4 处：Request 识别加 isinstance 防误拿同名 Pydantic body、name_arg 扫描任意参数名的 Pydantic body、同步 def 路由经 `asyncio.to_thread` 执行、业务级 `{"success": False}` 返回记失败；UPDATE 动作自动记 body 字段名列表（`exclude_unset`）入 detail。BehaviorResourceType 新增 9 细分值（activation_code / client_binding / rpa_client / channel_account / external_customer / reply_style / skill / error_log / knowledge_share），前后端同步 |
 | Phase 3 | 租户管理员 `/api/admin/*` CRUD + 普通用户动作 | 删除会话、知识库文档增删 |
 | Phase 4 | 管理后台查询页面 | 前端列表页，按页面规范走 page_metadata 登记 |
 

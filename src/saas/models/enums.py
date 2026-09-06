@@ -323,6 +323,15 @@ class BehaviorResourceType(str, Enum):
     CONFIG = "config"              # 配置
     BILLING = "billing"            # 计费
     ACCOUNT = "account"            # 自己的账号（改密码/改资料）
+    ACTIVATION_CODE = "activation_code"      # 激活码（协会客户端）
+    CLIENT_BINDING = "client_binding"        # 客户端绑定（协会客户端激活/管理）
+    RPA_CLIENT = "rpa_client"                # RPA客户端（个人微信 RPA）
+    CHANNEL_ACCOUNT = "channel_account"      # 客服账号（企微客服等渠道账号）
+    EXTERNAL_CUSTOMER = "external_customer"  # 外部客户（线索/外部联系人）
+    REPLY_STYLE = "reply_style"              # 回复风格
+    SKILL = "skill"                          # 租户技能（自定义 Skill）
+    ERROR_LOG = "error_log"                  # 错误日志（管理后台处理动作）
+    KNOWLEDGE_SHARE = "knowledge_share"      # 知识库授权（租户间共享）
 
     @classmethod
     def all_values(cls) -> list[str]:
@@ -340,6 +349,15 @@ class BehaviorResourceType(str, Enum):
             self.CONFIG: "配置",
             self.BILLING: "计费",
             self.ACCOUNT: "账号",
+            self.ACTIVATION_CODE: "激活码",
+            self.CLIENT_BINDING: "客户端绑定",
+            self.RPA_CLIENT: "RPA客户端",
+            self.CHANNEL_ACCOUNT: "客服账号",
+            self.EXTERNAL_CUSTOMER: "外部客户",
+            self.REPLY_STYLE: "回复风格",
+            self.SKILL: "租户技能",
+            self.ERROR_LOG: "错误日志",
+            self.KNOWLEDGE_SHARE: "知识库授权",
         }
         return mapping.get(self, "未知")
 

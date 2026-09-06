@@ -15,6 +15,8 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 from src.saas.api.tenant_auth import require_admin
+from src.saas.models.enums import BehaviorAction, BehaviorResourceType
+from src.services.behavior_log import audit_action
 
 router = APIRouter(prefix="/api/saas/tenants", tags=["租户数据迁移"])
 
@@ -45,6 +47,7 @@ def _sanitize_error(error_msg: str) -> str:
 
 
 @router.post("/{tenant_id}/migration/preview")
+@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.TENANT, id_arg="tenant_id")
 async def preview_migration(tenant_id: str, request: MigrationRequest, req: Request):
     """预览迁移数据量（dry-run 模式）"""
     require_admin(req)
@@ -75,6 +78,7 @@ async def preview_migration(tenant_id: str, request: MigrationRequest, req: Requ
 
 
 @router.post("/{tenant_id}/migration/execute")
+@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.TENANT, id_arg="tenant_id")
 async def execute_migration(tenant_id: str, request: MigrationRequest, req: Request):
     """执行数据迁移"""
     require_admin(req)

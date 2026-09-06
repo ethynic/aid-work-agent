@@ -3,12 +3,21 @@
 
 验证 _validate_shared_source：租户级授权存在 + source_type 属于来源租户，否则拒绝。
 """
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from src.api.subagent_knowledge_source import KnowledgeSourceItem, _validate_shared_source
 from src.saas.api.knowledge_share import SetKnowledgeSharesRequest, set_knowledge_shares
+
+
+def _fake_request():
+    """构造 audit_action 装饰器可识别的 request 替身（端点签名新增 request: Request）"""
+    return SimpleNamespace(
+        headers={}, state=SimpleNamespace(tenant_id="B", user_id="u1", user_role=None),
+        client=None, method="PUT", url=SimpleNamespace(path="/api/saas/tenant/knowledge-shares"),
+    )
 
 
 def _mock_db_row(row):
@@ -83,11 +92,16 @@ async def test_set_knowledge_shares_rejects_tenant_admin():
 
     req = SetKnowledgeSharesRequest(from_tenants=[])
     with patch.object(ks, "TenantKnowledgeShareDB") as db_mock, \
-         patch.object(ks, "get_current_tenant_id", return_value="B"):
-        res = await set_knowledge_shares(req, request_admin={"role": "tenant_admin", "user_id": "u1"})
+         patch.object(ks, "get_current_tenant_id", return_value="B"), \
+         patch("src.services.behavior_log._insert_sync") as insert_mock:
+        res = await set_knowledge_shares(
+            _fake_request(), req, request_admin={"role": "tenant_admin", "user_id": "u1"}
+        )
     assert res["success"] is False
     assert "仅平台管理员" in res["error"]
     db_mock.set.assert_not_called()
+    # 业务级失败返回 {"success": False} 应被装饰器记为审计失败日志
+    assert insert_mock.call_count == 1
 
 
 @pytest.mark.asyncio
@@ -97,8 +111,12 @@ async def test_set_knowledge_shares_allows_platform_admin():
 
     req = SetKnowledgeSharesRequest(from_tenants=[])
     with patch.object(ks, "TenantKnowledgeShareDB") as db_mock, \
-         patch.object(ks, "get_current_tenant_id", return_value="B"):
+         patch.object(ks, "get_current_tenant_id", return_value="B"), \
+         patch("src.services.behavior_log._insert_sync") as insert_mock:
         db_mock.set.return_value = True
-        res = await set_knowledge_shares(req, request_admin={"role": "platform_admin", "user_id": "u1"})
+        res = await set_knowledge_shares(
+            _fake_request(), req, request_admin={"role": "platform_admin", "user_id": "u1"}
+        )
     assert res["success"] is True
     db_mock.set.assert_called_once_with("B", [], created_by="u1")
+    insert_mock.assert_called_once()
