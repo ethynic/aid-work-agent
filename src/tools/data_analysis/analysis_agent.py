@@ -343,11 +343,11 @@ class AnalysisAgent:
             source_name = params.get("source", output_var)
             source_df = self.analyzer._resolve_source(source_name)
             if source_df is not None:
-                os.makedirs(DataAnalyzer.CHART_OUTPUT_DIR, exist_ok=True)
+                os.makedirs(self.analyzer.chart_output_dir, exist_ok=True)
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 safe_title = re.sub(r'[\\/:*?"<>|]', "_", params.get("title") or output_var)
                 download_path = os.path.join(
-                    DataAnalyzer.CHART_OUTPUT_DIR, f"{safe_title}_{timestamp}.xlsx"
+                    self.analyzer.chart_output_dir, f"{safe_title}_{timestamp}.xlsx"
                 )
                 # 如果 to_table 做了列筛选，导出时也只导出对应列
                 if columns:

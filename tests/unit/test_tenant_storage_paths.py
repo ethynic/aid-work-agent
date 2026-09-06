@@ -334,3 +334,50 @@ class TestNormalizeTenantId:
         d = SkillResolver.get_tenant_skills_dir("tenant_abc")
         assert d == Path(fake_tenants) / "abc" / "skills"
         assert d.parent.name == "abc"
+
+
+# ============================================================
+# Phase 2 整改: strip_legacy_storage_prefix 防嵌套
+# ============================================================
+
+
+class TestStripLegacyStoragePrefix:
+    """剥离相对路径头部的旧存储基名段，防止 storage/storage/... 嵌套目录"""
+
+    def test_strip_storage_prefix(self):
+        from src.core.storage import strip_legacy_storage_prefix
+        assert strip_legacy_storage_prefix("storage/output/report.md") == "report.md"
+
+    def test_strip_output_prefix(self):
+        from src.core.storage import strip_legacy_storage_prefix
+        assert strip_legacy_storage_prefix("output/report.md") == "report.md"
+
+    def test_strip_tenants_prefix(self):
+        from src.core.storage import strip_legacy_storage_prefix
+        assert strip_legacy_storage_prefix("tenants/abc/conversation/a.md") == (
+            "abc/conversation/a.md"
+        )
+
+    def test_strip_multiple_leading_segments(self):
+        from src.core.storage import strip_legacy_storage_prefix
+        assert strip_legacy_storage_prefix("storage/storage/tenants/x/y.md") == "x/y.md"
+
+    def test_no_prefix_untouched(self):
+        from src.core.storage import strip_legacy_storage_prefix
+        assert strip_legacy_storage_prefix("report.md") == "report.md"
+        assert strip_legacy_storage_prefix("sub/report.md") == "sub/report.md"
+
+    def test_inner_segment_not_stripped(self):
+        """只剥头部段，深层同名段不受影响"""
+        from src.core.storage import strip_legacy_storage_prefix
+        assert strip_legacy_storage_prefix("report/storage_chart.png") == (
+            "report/storage_chart.png"
+        )
+        assert strip_legacy_storage_prefix("a/b/storage/c.md") == "a/b/storage/c.md"
+
+    def test_empty_and_fully_stripped(self):
+        from src.core.storage import strip_legacy_storage_prefix
+        assert strip_legacy_storage_prefix("") == ""
+        # 只有旧基名段时全剥离为空串（拼到 base 即租户目录本身）
+        assert strip_legacy_storage_prefix("storage") == ""
+        assert strip_legacy_storage_prefix("output") == ""

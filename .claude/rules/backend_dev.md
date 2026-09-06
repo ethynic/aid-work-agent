@@ -444,6 +444,7 @@ storage/
     │   ├── knowledge/            # 知识库附件
     │   ├── export/               # 业务导出文件
     │   ├── report/               # 报表/统计文件
+    │   ├── memory/               # 用户长期记忆（LongTermMemory）
     │   └── ...                   # 其他业务场景
     └── {tenant_id_b}/
         └── ...
@@ -456,7 +457,8 @@ storage/
 | `conversation/` | 对话过程中用户上传/Agent 生成的附件 |
 | `knowledge/` | 知识库文档、向量化文件 |
 | `export/` | 业务数据导出（Excel、CSV 等） |
-| `report/` | 统计报表、运营报告 |
+| `report/` | 统计报表、运营报告（含数据分析工具的图表/导出表） |
+| `memory/` | 用户长期记忆文件（LongTermMemory） |
 | `avatar/` | 用户/企业头像、Logo |
 | `temp/` | 临时文件（必须有清理机制） |
 

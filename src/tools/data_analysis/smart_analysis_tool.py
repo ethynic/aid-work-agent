@@ -44,11 +44,7 @@ class SmartDataAnalysisTool(BaseTool):
         tables_metadata = kwargs.get("tables_metadata")
         session_id = kwargs.get("session_id")
 
-        # 1. 初始化 DataAnalyzer
-        from src.tools.data_analysis.data_analyzer import DataAnalyzer
-        analyzer = DataAnalyzer(session_id=session_id)
-
-        # 2. 解析 tenant_id / subagent_id（subagent_id 用于共享知识库检索范围）
+        # 1. 解析 tenant_id / subagent_id（subagent_id 用于共享知识库检索范围）
         tenant_id = None
         subagent_id = None
         try:
@@ -65,6 +61,10 @@ class SmartDataAnalysisTool(BaseTool):
                     tenant_id = context.tenant_id
         except Exception:
             pass
+
+        # 2. 初始化 DataAnalyzer（产物按租户落 storage/tenants/{tid}/report|temp）
+        from src.tools.data_analysis.data_analyzer import DataAnalyzer
+        analyzer = DataAnalyzer(session_id=session_id, tenant_id=tenant_id or "")
 
         # 3. 预加载表（仅加载带 table_id/doc_id 的完整 metadata；简化结构交给 AnalysisAgent 自行检索加载）
         if tables_metadata:

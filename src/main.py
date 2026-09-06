@@ -1725,6 +1725,11 @@ app.include_router(admin_reports.router)
 # 平台错误日志管理 API
 from src.api import admin_error_logs
 app.include_router(admin_error_logs.router)
+
+# 用户行为审计日志查询 API（Phase 4：租户视角 / 平台全局视角）
+from src.api import behavior_logs
+app.include_router(behavior_logs.router_admin)
+app.include_router(behavior_logs.router_platform)
 app.include_router(monitor_api.router)
 app.include_router(social_media_api.router)
 

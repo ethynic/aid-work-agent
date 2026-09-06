@@ -16,6 +16,8 @@ from pydantic import BaseModel, Field
 from src.api.auth import get_current_user
 from src.config.settings import settings
 from src.prompts.prompt_registry_service import PromptRegistryService
+from src.saas.models.enums import BehaviorAction, BehaviorResourceType
+from src.services.behavior_log import audit_action
 
 
 # ============== 请求模型 ==============
@@ -136,6 +138,7 @@ async def list_prompts(
 
 
 @admin_router.post("/")
+@audit_action(BehaviorAction.CREATE, BehaviorResourceType.PROMPT)
 async def create_prompt(request: Request, body: RegisterPromptRequest):
     try:
         admin = _require_admin(request)
@@ -174,6 +177,7 @@ async def get_prompt(request: Request, prompt_id: str):
 
 
 @admin_router.put("/{prompt_id}")
+@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.PROMPT, id_arg="prompt_id")
 async def update_prompt(request: Request, prompt_id: str, body: UpdatePromptRequest):
     try:
         admin = _require_admin(request)
@@ -191,6 +195,7 @@ async def update_prompt(request: Request, prompt_id: str, body: UpdatePromptRequ
 
 
 @admin_router.delete("/{prompt_id}")
+@audit_action(BehaviorAction.DELETE, BehaviorResourceType.PROMPT, id_arg="prompt_id")
 async def delete_prompt(request: Request, prompt_id: str):
     try:
         _require_admin(request)
@@ -208,6 +213,7 @@ async def delete_prompt(request: Request, prompt_id: str):
 # --- 版本管理 ---
 
 @admin_router.post("/{prompt_id}/versions")
+@audit_action(BehaviorAction.CREATE, BehaviorResourceType.PROMPT, id_arg="prompt_id")
 async def commit_version(request: Request, prompt_id: str, body: CommitVersionRequest):
     try:
         admin = _require_admin(request)
@@ -294,6 +300,7 @@ async def get_draft(request: Request, prompt_id: str):
 
 
 @admin_router.put("/{prompt_id}/draft")
+@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.PROMPT, id_arg="prompt_id")
 async def save_draft(request: Request, prompt_id: str, body: SaveDraftRequest):
     try:
         admin = _require_admin(request)
@@ -315,6 +322,7 @@ async def save_draft(request: Request, prompt_id: str, body: SaveDraftRequest):
 
 
 @admin_router.delete("/{prompt_id}/draft")
+@audit_action(BehaviorAction.DELETE, BehaviorResourceType.PROMPT, id_arg="prompt_id")
 async def delete_draft(request: Request, prompt_id: str):
     try:
         _require_admin(request)
@@ -328,6 +336,7 @@ async def delete_draft(request: Request, prompt_id: str):
 
 
 @admin_router.post("/{prompt_id}/draft/commit")
+@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.PROMPT, id_arg="prompt_id")
 async def commit_draft(request: Request, prompt_id: str, body: CommitDraftRequest):
     try:
         admin = _require_admin(request)
@@ -367,6 +376,7 @@ async def list_labels(request: Request, prompt_id: str):
 
 
 @admin_router.put("/{prompt_id}/labels/{label}")
+@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.PROMPT, id_arg="prompt_id")
 async def set_label(request: Request, prompt_id: str, label: str, body: SetLabelRequest):
     try:
         admin = _require_admin(request)
@@ -387,6 +397,7 @@ async def set_label(request: Request, prompt_id: str, label: str, body: SetLabel
 
 
 @admin_router.delete("/{prompt_id}/labels/{label}")
+@audit_action(BehaviorAction.DELETE, BehaviorResourceType.PROMPT, id_arg="prompt_id")
 async def delete_label(request: Request, prompt_id: str, label: str):
     try:
         _require_admin(request)
@@ -442,6 +453,7 @@ async def tenant_list_prompts(
 
 
 @tenant_router.post("/")
+@audit_action(BehaviorAction.CREATE, BehaviorResourceType.PROMPT, name_arg="display_name")
 async def tenant_create_prompt(request: Request, body: RegisterPromptRequest):
     try:
         tenant_id = _get_tenant_id(request)
@@ -482,6 +494,7 @@ async def tenant_get_prompt(request: Request, scope_id: str):
 
 
 @tenant_router.post("/{scope_id}/versions")
+@audit_action(BehaviorAction.CREATE, BehaviorResourceType.PROMPT, id_arg="scope_id")
 async def tenant_commit_version(request: Request, scope_id: str, body: CommitVersionRequest):
     try:
         tenant_id = _get_tenant_id(request)
@@ -544,6 +557,7 @@ async def tenant_get_draft(request: Request, scope_id: str):
 
 
 @tenant_router.put("/{scope_id}/draft")
+@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.PROMPT, id_arg="scope_id")
 async def tenant_save_draft(request: Request, scope_id: str, body: SaveDraftRequest):
     try:
         tenant_id = _get_tenant_id(request)
@@ -569,6 +583,7 @@ async def tenant_save_draft(request: Request, scope_id: str, body: SaveDraftRequ
 
 
 @tenant_router.post("/{scope_id}/draft/commit")
+@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.PROMPT, id_arg="scope_id")
 async def tenant_commit_draft(request: Request, scope_id: str, body: CommitDraftRequest):
     try:
         tenant_id = _get_tenant_id(request)
@@ -613,6 +628,7 @@ async def tenant_list_labels(request: Request, scope_id: str):
 
 
 @tenant_router.put("/{scope_id}/labels/{label}")
+@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.PROMPT, id_arg="scope_id")
 async def tenant_set_label(
     request: Request, scope_id: str, label: str, body: SetLabelRequest
 ):

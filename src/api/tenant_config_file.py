@@ -11,11 +11,13 @@
 
 import os
 from pathlib import Path
-from fastapi import APIRouter, HTTPException, Depends, UploadFile, File
+from fastapi import APIRouter, HTTPException, Depends, Request, UploadFile, File
 from loguru import logger
 
 from src.core.storage import ensure_tenant_storage_dir, get_tenant_storage_abs_path
 from src.saas.api.tenant_auth import require_admin
+from src.saas.models.enums import BehaviorAction, BehaviorResourceType
+from src.services.behavior_log import audit_action
 
 router = APIRouter(prefix="/api/saas/tenant/config-file", tags=["tenant-config-file"])
 
@@ -42,7 +44,9 @@ def _get_config_path(tenant_id: str, subagent_name: str) -> Path:
 
 
 @router.post("/{subagent_name}")
+@audit_action(BehaviorAction.CREATE, BehaviorResourceType.CONFIG, id_arg="subagent_name")
 async def upload_config_file(
+    request: Request,
     subagent_name: str,
     file: UploadFile = File(...),
     request_admin: dict = Depends(require_admin),
@@ -122,7 +126,9 @@ async def get_config_file_status(
 
 
 @router.delete("/{subagent_name}")
+@audit_action(BehaviorAction.DELETE, BehaviorResourceType.CONFIG, id_arg="subagent_name")
 async def delete_config_file(
+    request: Request,
     subagent_name: str,
     request_admin: dict = Depends(require_admin),
 ):

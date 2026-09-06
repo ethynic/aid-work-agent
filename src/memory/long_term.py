@@ -2,11 +2,12 @@
 长期记忆系统
 
 基于 Markdown 文件的用户记忆存储，支持租户隔离。
-文件路径: storage/memory/{tenant_id}/memory_{user_id}.md
+文件路径: storage/tenants/{tenant_id}/memory/memory_{user_id}.md
+（2026-09 前为 storage/memory/{tenant_id}/，旧文件在首次访问时自动迁移）
 """
 
-import os
 import re
+import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -32,6 +33,8 @@ class LongTermMemory:
     """
 
     def __init__(self, storage_dir: str = "storage/memory"):
+        # storage_dir 仅用于定位历史遗留的旧记忆文件（首次访问自动迁移到
+        # storage/tenants/{tenant_id}/memory/），新写入不再使用该目录
         self._storage_dir = Path(storage_dir)
 
     def get_memory(self, tenant_id: Optional[str], user_id: str) -> str:
@@ -43,6 +46,7 @@ class LongTermMemory:
             user_id: 用户 ID
         """
         file_path = self._get_file_path(tenant_id, user_id)
+        self._migrate_legacy_file(tenant_id, user_id, file_path)
         if file_path.exists():
             try:
                 return file_path.read_text(encoding="utf-8")
@@ -72,6 +76,7 @@ class LongTermMemory:
             raise ValueError("记忆文件必须以 '# 用户记忆' 开头")
 
         file_path = self._get_file_path(tenant_id, user_id)
+        self._migrate_legacy_file(tenant_id, user_id, file_path)
         file_path.parent.mkdir(parents=True, exist_ok=True)
 
         # 更新元信息
@@ -139,6 +144,7 @@ class LongTermMemory:
     def memory_exists(self, tenant_id: Optional[str], user_id: str) -> bool:
         """检查用户是否有记忆文件"""
         file_path = self._get_file_path(tenant_id, user_id)
+        self._migrate_legacy_file(tenant_id, user_id, file_path)
         return file_path.exists()
 
     def get_reply_style(self, tenant_id: Optional[str], user_id: str) -> Optional[str]:
@@ -263,12 +269,43 @@ class LongTermMemory:
 
     def _get_file_path(self, tenant_id: Optional[str], user_id: str) -> Path:
         """
-        获取记忆文件的完整路径。
+        获取记忆文件的完整路径（租户附件存储规范）。
         tenant_id 为 None 时使用 'default'。
-        返回: storage/memory/{tenant_id}/memory_{user_id}.md
+        返回: storage/tenants/{tenant_id}/memory/memory_{user_id}.md
         """
+        from src.core.storage import get_tenant_storage_dir, normalize_tenant_id
+        tenant_dir = normalize_tenant_id(tenant_id) if tenant_id else "default"
+        return Path(get_tenant_storage_dir(tenant_dir, "memory")) / f"memory_{user_id}.md"
+
+    def _migrate_legacy_file(
+        self, tenant_id: Optional[str], user_id: str, new_path: Path
+    ) -> None:
+        """历史记忆文件一次性迁移到新路径。
+
+        旧路径候选（2026-09 前）：{storage_dir}/tenant_{tid}/（带前缀）、
+        {storage_dir}/{tid}/。新文件已存在或迁移完成后跳过；并发下源文件
+        消失视为另一线程已迁移，静默返回。
+        """
+        if new_path.exists():
+            return
         tenant_dir = tenant_id if tenant_id else "default"
-        return self._storage_dir / tenant_dir / f"memory_{user_id}.md"
+        filename = f"memory_{user_id}.md"
+        candidates = [
+            self._storage_dir / f"tenant_{tenant_dir}" / filename,
+            self._storage_dir / tenant_dir / filename,
+        ]
+        for old_path in candidates:
+            try:
+                if old_path.exists():
+                    new_path.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.move(str(old_path), str(new_path))
+                    logger.info(f"[LongTermMemory] 旧记忆文件已迁移: {old_path} -> {new_path}")
+                    return
+            except FileNotFoundError:
+                return
+            except Exception as e:
+                logger.warning(f"[LongTermMemory] 旧记忆文件迁移失败 {old_path}: {e}")
+                return
 
     def _render_empty_template(self) -> str:
         return EMPTY_TEMPLATE.format(date=datetime.now().strftime("%Y-%m-%d"))

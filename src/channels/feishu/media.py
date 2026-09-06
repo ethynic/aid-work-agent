@@ -17,7 +17,7 @@
 
 存储路径：遵循 `backend_dev.md` 租户附件存储规范，
 统一存到 `storage/tenants/{tenant_id}/conversation/` 下。
-未设置 tenant_id 时（如单租户 config.yaml 模式）回退到 upload_dir 参数。
+未设置 tenant_id 时落 `storage/tenants/_anonymous/conversation/`。
 """
 
 import os
@@ -96,9 +96,8 @@ class FeishuMedia:
             return save_dir
         if self.tenant_id:
             return ensure_tenant_storage_dir(self.tenant_id, "conversation")
-        # 单租户模式兜底
-        os.makedirs(self.upload_dir, exist_ok=True)
-        return self.upload_dir
+        # 无租户兜底落 _anonymous，禁止写 storage/uploads 旧路径
+        return ensure_tenant_storage_dir("_anonymous", "conversation")
 
     async def download_image(
         self, image_key: str, save_dir: Optional[str] = None, image_type: str = "message"
@@ -111,7 +110,7 @@ class FeishuMedia:
 
         Args:
             image_key: 飞书 image_key（来自图片消息 content）
-            save_dir: 保存目录（默认 self.upload_dir）
+            save_dir: 保存目录（不传走租户 conversation 目录）
             image_type: 图片类型：message（消息图片）/ avatar（头像）
 
         Returns:
@@ -172,7 +171,7 @@ class FeishuMedia:
         Args:
             file_key: 飞书 file_key（来自文件消息 content）
             file_name: 文件名（默认使用 file_key）
-            save_dir: 保存目录（默认 self.upload_dir）
+            save_dir: 保存目录（不传走租户 conversation 目录）
 
         Returns:
             (local_path, file_bytes) 或 None（失败时）

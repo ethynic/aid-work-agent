@@ -28,7 +28,9 @@ from loguru import logger
 from src.db.models import CustomerReferralDB
 from src.saas.api.tenant_auth import require_admin
 from src.saas.db.channel_config_db import ChannelConfigDB
+from src.saas.models.enums import BehaviorAction, BehaviorResourceType
 from src.saas.services.channel_factory import ChannelFactory
+from src.services.behavior_log import audit_action
 
 router = APIRouter(prefix="/api/saas/wecom-kf", tags=["微信客服账号管理"])
 
@@ -245,8 +247,8 @@ async def _register_employee_qr(tenant_id: str, qr_bytes: bytes, user_id: str) -
     ttl_seconds=PERMANENT_TTL -- 不设 TTL、不被 cleanup 清理，语义准确。
     """
     suffix = ".png" if qr_bytes[:8] == b"\x89PNG\r\n\x1a\n" else ".jpg"
-    tmp_dir = os.path.join(os.path.dirname(__file__), "..", "..", "..", "storage", "uploads", "wecom_kf")
-    os.makedirs(tmp_dir, exist_ok=True)
+    from src.core.storage import ensure_tenant_storage_dir
+    tmp_dir = ensure_tenant_storage_dir(tenant_id, "temp")
     tmp_path = os.path.abspath(os.path.join(tmp_dir, f"_kf_qr_{uuid.uuid4().hex[:8]}{suffix}"))
     try:
         with open(tmp_path, "wb") as f:
@@ -344,11 +346,11 @@ async def _cleanup_avatar(file_id: Optional[str]) -> None:
         logger.warning(f"[wecom-kf] 客服头像清理失败 file_id={file_id}: {e}")
 
 
-async def _upload_avatar_bytes(api_client, avatar_bytes: bytes) -> str:
+async def _upload_avatar_bytes(api_client, avatar_bytes: bytes, tenant_id: str) -> str:
     """将头像 bytes 写入临时文件并上传企微，返回 media_id。"""
     suffix = ".png" if avatar_bytes[:8] == b"\x89PNG\r\n\x1a\n" else ".jpg"
-    tmp_dir = os.path.join(os.path.dirname(__file__), "..", "..", "..", "storage", "uploads", "wecom_kf")
-    os.makedirs(tmp_dir, exist_ok=True)
+    from src.core.storage import ensure_tenant_storage_dir
+    tmp_dir = ensure_tenant_storage_dir(tenant_id, "temp")
     tmp_path = os.path.abspath(os.path.join(tmp_dir, f"_kf_avatar_{uuid.uuid4().hex[:8]}{suffix}"))
     try:
         with open(tmp_path, "wb") as f:
@@ -405,13 +407,13 @@ async def _resolve_avatar_media_id(adapter, tenant_id: str, avatar_bytes: Option
     """头像 media_id 兜底链：管理员上传 > 租户 logo > 默认占位 PNG。"""
     api_client = adapter.api_client
     if avatar_bytes:
-        media_id = await _upload_avatar_bytes(api_client, avatar_bytes)
+        media_id = await _upload_avatar_bytes(api_client, avatar_bytes, tenant_id)
         if media_id:
             return media_id
         logger.warning("[wecom-kf] 管理员上传头像失败，尝试租户 logo 兜底")
     logo_bytes = await _resolve_tenant_logo_bytes(tenant_id)
     if logo_bytes:
-        media_id = await _upload_avatar_bytes(api_client, logo_bytes)
+        media_id = await _upload_avatar_bytes(api_client, logo_bytes, tenant_id)
         if media_id:
             return media_id
         logger.warning("[wecom-kf] 租户 logo 兜底上传失败，使用默认占位")
@@ -491,6 +493,7 @@ async def _get_wecom_kf_config(tenant_id: str) -> Dict[str, Any]:
 
 
 @router.post("/accounts")
+@audit_action(BehaviorAction.CREATE, BehaviorResourceType.CHANNEL_ACCOUNT, name_arg="name")
 async def create_kf_account(request: Request, body: KfAccountCreate):
     """创建客服账号：企微 account/add → 生成 scene → add_contact_way → 写配置 → 返回二维码。"""
     admin = require_admin(request)
@@ -628,6 +631,7 @@ async def list_kf_accounts(request: Request):
 
 
 @router.put("/accounts/{open_kfid}")
+@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.CHANNEL_ACCOUNT, id_arg="open_kfid", name_arg="name")
 async def update_kf_account(request: Request, open_kfid: str, body: KfAccountUpdate):
     """编辑客服账号：名称/头像 → 企微 account/update；本地字段直接改配置（支持换绑）。
 
@@ -717,6 +721,7 @@ async def update_kf_account(request: Request, open_kfid: str, body: KfAccountUpd
 
 
 @router.post("/accounts/{open_kfid}/contact-way")
+@audit_action(BehaviorAction.CREATE, BehaviorResourceType.CHANNEL_ACCOUNT, id_arg="open_kfid")
 async def ensure_kf_contact_way(request: Request, open_kfid: str):
     """生成/补齐客服账号的联系方式（scene + 链接 + 二维码）。
 
@@ -773,6 +778,7 @@ async def ensure_kf_contact_way(request: Request, open_kfid: str):
 
 
 @router.delete("/accounts/{open_kfid}")
+@audit_action(BehaviorAction.DELETE, BehaviorResourceType.CHANNEL_ACCOUNT, id_arg="open_kfid")
 async def delete_kf_account(request: Request, open_kfid: str):
     """删除客服账号：先企微 account/del，成功（或账号不存在）才删本地；失败回显 errmsg。"""
     admin = require_admin(request)

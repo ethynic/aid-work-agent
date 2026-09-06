@@ -238,6 +238,39 @@ CREATE TABLE IF NOT EXISTS log_error (
 CREATE INDEX IF NOT EXISTS idx_log_error_timestamp ON log_error(timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_log_error_status ON log_error(status);
 
+-- 用户行为审计日志表（登录/登出/改密/渠道绑定等安全敏感事件，仅记写操作不记查询）
+-- 设计文档：docs/system/user-behavior-audit-log-design.md §3
+CREATE TABLE IF NOT EXISTS user_behavior_logs (
+    id SERIAL PRIMARY KEY,
+    tenant_id TEXT,                      -- 租户ID；platform_admin 全局操作为 NULL
+    user_id TEXT,                        -- 操作人；登录失败无用户身份/渠道事件未注册用户时为 NULL，标识记 detail
+    user_role TEXT,                      -- 操作时角色快照（platform_admin/tenant_admin/user）
+    action TEXT NOT NULL,                -- 行为类型，见枚举 BehaviorAction
+    resource_type TEXT,                  -- 资源类型，见枚举 BehaviorResourceType
+    resource_id TEXT,                    -- 资源ID（如租户ID、文档doc_id）
+    resource_name TEXT,                  -- 资源名称快照（便于人读，如租户名、文档标题）
+    detail JSONB DEFAULT '{}',           -- 变更摘要（字段名列表/关键新值），过滤敏感字段
+    client_ip VARCHAR(45),               -- IPv4/IPv6，取 X-Forwarded-For 首段
+    user_agent VARCHAR(512),             -- 原始 UA 截断
+    success BOOLEAN NOT NULL DEFAULT TRUE,
+    error_msg TEXT,                      -- 失败原因（截断 500 字符）
+    entry VARCHAR(16),                   -- 入口：web / api / channel（渠道回调），见枚举 BehaviorEntry
+    login_method VARCHAR(32),            -- 登录方式：password / sms / sso；仅登录事件有值
+    channel VARCHAR(16),                 -- 渠道：wecom / wecom_kf / wecom_personal_rpa / dingtalk / feishu；仅渠道事件有值
+    channel_user_id TEXT,                -- 渠道侧用户标识（external_userid 等）；仅渠道事件有值
+    token_id TEXT,                       -- 当前 token 的 SHA256 前 8 位（关联登录态，不存原文）
+    request_id TEXT,                     -- obs 系统 trace_id，无则 NULL
+    http_method VARCHAR(10),             -- CRUD 事件：请求方法（GET/POST/PUT/PATCH/DELETE）
+    path VARCHAR(255),                   -- CRUD 事件：请求路径（如 /api/saas/tenants）
+    device_type VARCHAR(16),             -- 粗分设备类型：pc / mobile / tablet / unknown，见枚举 BehaviorDeviceType
+    device_info VARCHAR(32),             -- 细分设备快照：写入时解析冻结（如 android_wechat），受控词表见设计 §5.4
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_ubl_tenant_time ON user_behavior_logs(tenant_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ubl_user_time ON user_behavior_logs(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ubl_action_time ON user_behavior_logs(action, created_at DESC);
+
 -- Token成本价表
 CREATE TABLE IF NOT EXISTS token_cost_prices (
     id SERIAL PRIMARY KEY,

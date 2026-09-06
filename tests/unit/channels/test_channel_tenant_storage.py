@@ -7,7 +7,7 @@ Phase 5 渠道媒体文件租户隔离单测
 
 约定：
 - 有 tenant_id 时走 `storage/tenants/{tenant_id}/conversation/`（ensure_tenant_storage_dir）
-- 无 tenant_id 时回退到各自的旧 upload_dir（单租户模式兜底）
+- 无 tenant_id 时兜底落 storage/tenants/_anonymous/conversation/（2026-09 整改后不再写 uploads/ 旧路径）
 """
 
 from pathlib import Path
@@ -54,10 +54,11 @@ class TestWeComMediaTenantStorage:
         assert p.is_dir()
 
     def test_resolve_save_dir_without_tenant(self, isolated_tenants_root, tmp_path):
-        upload_dir = str(tmp_path / "uploads_wecom")
-        media = self._make_media(upload_dir)
+        media = self._make_media(str(tmp_path / "uploads_wecom"))
         media.set_tenant_id("")
-        assert media._resolve_save_dir() == upload_dir
+        result = Path(media._resolve_save_dir())
+        assert result.parent.name == "_anonymous"
+        assert result.name == "conversation"
 
     def test_set_tenant_id_empty_string(self, isolated_tenants_root, tmp_path):
         media = self._make_media(str(tmp_path / "uploads_wecom"))
@@ -86,10 +87,11 @@ class TestDingTalkMediaTenantStorage:
         assert p.is_dir()
 
     def test_resolve_save_dir_without_tenant(self, isolated_tenants_root, tmp_path):
-        upload_dir = str(tmp_path / "uploads_dingtalk")
-        media = self._make_media(upload_dir)
+        media = self._make_media(str(tmp_path / "uploads_dingtalk"))
         media.set_tenant_id("")
-        assert media._resolve_save_dir() == upload_dir
+        result = Path(media._resolve_save_dir())
+        assert result.parent.name == "_anonymous"
+        assert result.name == "conversation"
 
 
 # ============================================================
@@ -175,10 +177,11 @@ class TestWeComKfAdapterTenantStorage:
 
     @pytest.mark.asyncio
     async def test_resolve_media_dir_without_tenant(self, isolated_tenants_root, tmp_path):
-        media_upload_dir = str(tmp_path / "uploads_wecom_kf")
-        adapter = self._make_adapter(media_upload_dir)
+        adapter = self._make_adapter(str(tmp_path / "uploads_wecom_kf"))
         await adapter.set_tenant_id("")
-        assert adapter._resolve_media_dir() == media_upload_dir
+        result = Path(adapter._resolve_media_dir())
+        assert result.parent.name == "_anonymous"
+        assert result.name == "conversation"
 
 
 # ============================================================
@@ -202,10 +205,11 @@ class TestWeComKfRendererTenantStorage:
         assert p.is_dir()
 
     def test_resolve_save_dir_without_tenant(self, isolated_tenants_root, tmp_path):
-        upload_dir = str(tmp_path / "uploads_wecom_kf")
-        renderer = self._make_renderer(upload_dir)
+        renderer = self._make_renderer(str(tmp_path / "uploads_wecom_kf"))
         renderer.set_tenant_id("")
-        assert renderer._resolve_save_dir() == upload_dir
+        result = Path(renderer._resolve_save_dir())
+        assert result.parent.name == "_anonymous"
+        assert result.name == "conversation"
 
     def test_init_with_tenant_id(self, isolated_tenants_root, tmp_path):
         """构造时直接传 tenant_id 也应生效（adapter 懒加载 renderer 时传入）"""

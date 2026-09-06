@@ -43,9 +43,9 @@ class DingTalkMedia:
                        `storage/tenants/{tenant_id}/conversation/`
         """
         self._get_access_token = access_token_getter
+        # upload_dir 仅作兼容保留，实际落盘统一走 _resolve_save_dir（租户附件存储规范）
         self.upload_dir = upload_dir or "./storage/uploads/dingtalk"
         self.tenant_id = tenant_id or ""
-        os.makedirs(self.upload_dir, exist_ok=True)
 
     def set_tenant_id(self, tenant_id: str) -> None:
         """设置租户 ID（由 ChannelFactory 在创建 adapter 后注入）"""
@@ -55,9 +55,8 @@ class DingTalkMedia:
         """解析最终保存目录，按租户隔离规范优先"""
         if self.tenant_id:
             return ensure_tenant_storage_dir(self.tenant_id, "conversation")
-        # 单租户模式兜底
-        os.makedirs(self.upload_dir, exist_ok=True)
-        return self.upload_dir
+        # 无租户兜底落 _anonymous，禁止写 storage/uploads 旧路径
+        return ensure_tenant_storage_dir("_anonymous", "conversation")
 
     async def download_image(
         self, download_code: str, robot_code: str, save_dir: Optional[str] = None
@@ -231,7 +230,7 @@ class DingTalkMedia:
         从公网 URL 下载文件并上传到钉钉
 
         DownloadableFileInfo 只携带 download_url（不含本地路径），
-        上传前需先落到本地。下载到 self.upload_dir 后委托给 upload_media。
+        上传前需先落到本地。下载到 _resolve_save_dir() 后委托给 upload_media。
 
         Args:
             download_url: 文件的公网下载 URL

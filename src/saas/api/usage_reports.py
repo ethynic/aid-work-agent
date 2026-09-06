@@ -14,6 +14,8 @@ from loguru import logger
 
 from src.saas.api.tenant_auth import require_admin, get_current_admin
 from src.saas.db.usage_log_db import UsageLogDB
+from src.saas.models.enums import BehaviorAction, BehaviorResourceType
+from src.services.behavior_log import audit_action
 from src.db.models import ChatRecordDB
 from src.api.auth import get_current_user
 
@@ -92,6 +94,7 @@ async def get_session_stats(
 
 
 @router.get("/export_usage_report")
+@audit_action(BehaviorAction.EXPORT, BehaviorResourceType.BILLING)
 async def export_usage_report(
     request: Request,
     days: int = Query(30, description="天数", ge=1, le=365),

@@ -18,6 +18,8 @@ from loguru import logger
 
 from src.saas.api.tenant_auth import require_admin, sanitize_error_info
 from src.saas.db.tenant_db import TenantDB
+from src.saas.models.enums import BehaviorAction, BehaviorResourceType
+from src.services.behavior_log import audit_action
 from src.db.models import TenantRechargesDB
 
 
@@ -85,6 +87,7 @@ async def list_recharges(
 
 
 @router.post("/")
+@audit_action(BehaviorAction.CREATE, BehaviorResourceType.BILLING)
 async def create_recharge(request: Request, body: RechargeCreateRequest):
     """创建充值记录，同步增加租户余额（同事务原子）"""
     admin = require_admin(request)
@@ -145,6 +148,7 @@ async def create_recharge(request: Request, body: RechargeCreateRequest):
 
 
 @router.delete("/{recharge_id}")
+@audit_action(BehaviorAction.DELETE, BehaviorResourceType.BILLING, id_arg="recharge_id")
 async def delete_recharge(request: Request, recharge_id: int):
     """删除充值记录，同步回扣租户余额（同事务原子）"""
     admin = require_admin(request)

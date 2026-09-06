@@ -92,8 +92,8 @@ def get_db():
 
 
 def get_tenant_id() -> Optional[str]:
-    """从环境变量获取当前租户ID"""
-    return os.environ.get("CURRENT_TENANT_ID")
+    """从环境变量获取当前租户ID（skill_executor 注入 AID_TENANT_ID）"""
+    return os.environ.get("AID_TENANT_ID") or os.environ.get("CURRENT_TENANT_ID")
 
 
 def generate_id(prefix: str) -> str:
@@ -1017,11 +1017,10 @@ def cmd_export_leads(args):
             for col_idx, val in enumerate(row):
                 ws.cell(row=row_idx, column=col_idx + 1, value=str(val) if val else "")
 
-        # 保存
-        # TODO(警告): 导出文件写到全局 storage/exports，违反租户附件存储规范
-        # （应落 storage/tenants/{tenant_id}/export/，实现租户隔离）。历史遗留，
-        # 暂不影响功能（返回的 file_path 可被直接命中），后续迁移时一并整改。
-        export_dir = Path(project_root) / "storage" / "exports"
+        # 保存（遵循租户附件存储规范：storage/tenants/{tenant_id}/export/）
+        from src.core.storage import get_tenant_storage_dir
+        tid = get_tenant_id() or "_anonymous"
+        export_dir = Path(project_root) / get_tenant_storage_dir(tid, "export")
         export_dir.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         file_name = f"leads_export_{timestamp}.xlsx"

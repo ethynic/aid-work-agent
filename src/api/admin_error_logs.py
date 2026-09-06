@@ -17,7 +17,9 @@ from pydantic import BaseModel, Field
 
 from src.api.auth import get_current_user
 from src.db import get_db_connection
+from src.saas.models.enums import BehaviorAction, BehaviorResourceType
 from src.saas.permissions.checker import is_platform_admin
+from src.services.behavior_log import audit_action
 
 
 router = APIRouter(prefix="/api/admin/error-logs", tags=["平台错误日志"])
@@ -209,6 +211,7 @@ async def get_error_logs(
 
 
 @router.put("/{log_id}/status")
+@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.ERROR_LOG, id_arg="log_id")
 async def update_error_log_status(
     request: Request,
     log_id: int,
@@ -256,6 +259,7 @@ async def update_error_log_status(
 
 
 @router.delete("/cleanup_old_error_logs", response_model=CleanupResponse)
+@audit_action(BehaviorAction.BATCH_DELETE, BehaviorResourceType.ERROR_LOG)
 async def cleanup_old_error_logs(request: Request):
     """
     清理旧错误日志（30天前）

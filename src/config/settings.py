@@ -284,7 +284,7 @@ class MidTermMemoryConfig(BaseModel):
 class LongTermMemoryConfig(BaseModel):
     """长期记忆配置"""
     enabled: bool = False
-    storage_dir: str = "storage/memory"    # 记忆文件根目录，实际文件在 storage/memory/{tenant_id}/ 下
+    storage_dir: str = "storage/memory"    # 已废弃的旧记忆根目录，仅用于定位旧文件迁移到 storage/tenants/{tenant_id}/memory/
     summary_cron: str = "0 2 * * *"        # 每日自动总结执行时间
     max_users_per_run: int = 50            # 单次总结最多处理用户数
     max_inject_tokens: int = 2000          # 注入上下文的最大 token 数
@@ -313,6 +313,11 @@ class AuthConfig(BaseModel):
     """认证配置"""
     enabled: bool = True
     default_role: str = "employee"
+
+
+class BehaviorLogConfig(BaseModel):
+    """用户行为审计日志配置（src/services/behavior_log.py）"""
+    retention_days: int = 180  # 日志保留天数，超期由 scheduler 每日清理任务分批删除
 
 
 class MasterAgentSkillsConfig(BaseModel):
@@ -521,6 +526,7 @@ class Settings(BaseModel):
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     auth: AuthConfig = Field(default_factory=AuthConfig)
+    behavior_log: BehaviorLogConfig = Field(default_factory=BehaviorLogConfig)
     skills: SkillsConfig = Field(default_factory=SkillsConfig)
     agent: AgentConfig = Field(default_factory=AgentConfig)
     saas: SaasConfig = Field(default_factory=SaasConfig)

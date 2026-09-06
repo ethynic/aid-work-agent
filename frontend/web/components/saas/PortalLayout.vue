@@ -233,6 +233,8 @@ const portalMenuItems = [
   { path: '/portal/client-logs', label: '客户端运行日志', icon: 'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01' },
   // 错误日志：三角警告
   { path: '/portal/error-logs', label: '错误日志', icon: 'M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0zM12 9v4M12 17h.01' },
+  // 行为日志：清单/审计剪贴板
+  { path: '/portal/behavior-logs', label: '行为日志', icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4' },
   // Redis 缓存：数据库/缓存层
   { path: '/portal/redis-cache', label: 'Redis缓存', icon: 'M4 6h16v4H4zM4 14h16v4H4zM8 6v4M8 14v4M16 6v4M16 14v4' },
   // 回复风格：对话气泡

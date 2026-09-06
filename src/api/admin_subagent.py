@@ -17,6 +17,8 @@ from src.api.auth import get_current_user
 from src.config.settings import settings
 from src.core.agent import master_agent
 from src.core.cache_utils import CacheKeys, delete_cached
+from src.saas.models.enums import BehaviorAction, BehaviorResourceType
+from src.services.behavior_log import audit_action
 from src.services.subagent_definition_service import SubagentDefinitionService
 from src.saas.permissions.checker import get_allowed_agent_ids_for_user, is_platform_admin
 
@@ -259,6 +261,7 @@ async def get_subagent_content(request: Request, agent_id: str):
 
 
 @router.post("/subagents")
+@audit_action(BehaviorAction.CREATE, BehaviorResourceType.SUBAGENT, name_arg="name")
 async def create_subagent(request: Request, body: CreateSubagentRequest):
     """创建定制数字员工（存入数据库）"""
     try:
@@ -313,6 +316,7 @@ async def create_subagent(request: Request, body: CreateSubagentRequest):
 
 
 @router.put("/subagents/{agent_id}")
+@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.SUBAGENT, id_arg="agent_id", name_arg="name")
 async def update_subagent(request: Request, agent_id: str, body: CreateSubagentRequest):
     """更新定制数字员工"""
     try:
@@ -376,6 +380,7 @@ async def update_subagent(request: Request, agent_id: str, body: CreateSubagentR
 
 
 @router.delete("/subagents/{agent_id}")
+@audit_action(BehaviorAction.DELETE, BehaviorResourceType.SUBAGENT, id_arg="agent_id")
 async def delete_subagent(request: Request, agent_id: str):
     """删除定制数字员工"""
     try:
@@ -409,6 +414,7 @@ async def delete_subagent(request: Request, agent_id: str):
 
 
 @router.post("/subagents/{agent_id}/duplicate")
+@audit_action(BehaviorAction.CREATE, BehaviorResourceType.SUBAGENT, id_arg="agent_id", name_arg="new_name")
 async def duplicate_subagent(request: Request, agent_id: str, body: DuplicateSubagentRequest):
     """另存为（内置/定制 → 新的定制，存入数据库）"""
     try:
@@ -463,6 +469,7 @@ async def duplicate_subagent(request: Request, agent_id: str, body: DuplicateSub
 
 
 @router.post("/subagents/{agent_id}/ai-enhance")
+@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.SUBAGENT, id_arg="agent_id")
 async def ai_enhance_subagent(request: Request, agent_id: str, body: AiEnhanceRequest):
     """
     AI 完善：调用 LLM 优化 SUBAGENT.md 全部内容。

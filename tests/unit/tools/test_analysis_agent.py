@@ -17,6 +17,19 @@ from src.tools.data_analysis.data_analyzer import DataAnalyzer
 
 
 # ============================================================
+# Fixtures
+# ============================================================
+
+
+@pytest.fixture(autouse=True)
+def _isolated_tenants_root(tmp_path, monkeypatch):
+    """把 storage._TENANTS_ROOT 重定向到 tmp_path，图表/CSV 产物不污染仓库 storage/"""
+    from src.core import storage as storage_mod
+    monkeypatch.setattr(storage_mod, "_TENANTS_ROOT", str(tmp_path / "tenants"))
+    return tmp_path
+
+
+# ============================================================
 # Helpers
 # ============================================================
 

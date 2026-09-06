@@ -39,9 +39,9 @@ class WeComMedia:
                        `storage/tenants/{tenant_id}/conversation/`
         """
         self._get_access_token = access_token_getter
+        # upload_dir 仅作兼容保留，实际落盘统一走 _resolve_save_dir（租户附件存储规范）
         self.upload_dir = upload_dir or "./storage/uploads/wecom"
         self.tenant_id = tenant_id or ""
-        os.makedirs(self.upload_dir, exist_ok=True)
 
     def set_tenant_id(self, tenant_id: str) -> None:
         """设置租户 ID（由 ChannelFactory 在创建 adapter 后注入）"""
@@ -51,9 +51,8 @@ class WeComMedia:
         """解析最终保存目录，按租户隔离规范优先"""
         if self.tenant_id:
             return ensure_tenant_storage_dir(self.tenant_id, "conversation")
-        # 单租户模式兜底
-        os.makedirs(self.upload_dir, exist_ok=True)
-        return self.upload_dir
+        # 无租户兜底落 _anonymous，禁止写 storage/uploads 旧路径
+        return ensure_tenant_storage_dir("_anonymous", "conversation")
 
     async def download_media(
         self, media_id: str

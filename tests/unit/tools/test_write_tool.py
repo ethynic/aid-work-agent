@@ -462,3 +462,83 @@ class TestReturnFields:
             result = await tool.execute(content="hello", file_path="report.md")
         assert isinstance(result, dict)
         assert result["is_temp"] is False
+
+
+# ---------------------------------------------------------------------------
+# TestPathResolution（真实路径解析，不 mock）
+# ---------------------------------------------------------------------------
+
+
+class TestPathResolution:
+    """真实 _resolve_and_validate_path：租户目录落点 + 旧前缀剥离 + legacy rebase"""
+
+    @pytest.fixture(autouse=True)
+    def _isolated(self, tmp_path, monkeypatch):
+        from src.core import storage as storage_mod
+        monkeypatch.setattr(storage_mod, "_TENANTS_ROOT", str(tmp_path / "tenants"))
+        self.tmp_path = tmp_path
+        from src.tools.context import ToolExecutionContext, _CURRENT_TOOL_CONTEXT
+        token = _CURRENT_TOOL_CONTEXT.set(
+            ToolExecutionContext(user_id="u1", tenant_id="tenant_res1")
+        )
+        yield
+        _CURRENT_TOOL_CONTEXT.reset(token)
+
+    def _base(self) -> Path:
+        return self.tmp_path / "tenants" / "res1" / "conversation"
+
+    def test_relative_path_lands_in_tenant_dir(self, tool):
+        p = tool._resolve_and_validate_path("report.md")
+        assert p == self._base().resolve() / "report.md"
+        assert self._base().is_dir()
+
+    def test_legacy_storage_prefix_stripped(self, tool):
+        """LLM 回传 storage/output/... 旧前缀相对路径被剥离，不产生嵌套目录"""
+        p = tool._resolve_and_validate_path("storage/output/report.md")
+        assert p == self._base().resolve() / "report.md"
+
+        p2 = tool._resolve_and_validate_path("output/sub/report.md")
+        assert p2 == self._base().resolve() / "sub" / "report.md"
+
+    def test_legacy_tenant_rel_path_tenant_segment_stripped(self, tool):
+        """storage/tenants/{tid}/conversation/... 相对路径连租户段一起剥离（与 cp 对齐）"""
+        p = tool._resolve_and_validate_path("storage/tenants/res1/conversation/a.md")
+        assert p == self._base().resolve() / "a.md"
+
+    def test_legacy_tenant_rel_path_prefixed_tenant_segment_stripped(self, tool):
+        """历史带 tenant_ 前缀段（Phase 8 前格式）同样被剥离，防嵌套"""
+        p = tool._resolve_and_validate_path("storage/tenants/tenant_res1/conversation/b.md")
+        assert p == self._base().resolve() / "b.md"
+
+    def test_other_tenant_rel_path_not_stripped(self, tool):
+        """租户段不是当前租户时不剥离（按普通子目录处理，validate 会拦截穿越）"""
+        p = tool._resolve_and_validate_path("tenants/other_tenant/conversation/a.md")
+        assert p == self._base().resolve() / "other_tenant" / "conversation" / "a.md"
+
+    def test_absolute_path_inside_tenant_dir_allowed(self, tool):
+        target = self._base() / "append.md"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        p = tool._resolve_and_validate_path(str(target))
+        assert p == target.resolve()
+
+    def test_legacy_absolute_output_path_rebased(self, tool):
+        """历史 storage/output 绝对路径 rebase 到租户目录（append 场景）"""
+        legacy = Path(__file__).resolve().parents[3] / "storage" / "output" / "old.md"
+        p = tool._resolve_and_validate_path(str(legacy))
+        assert p == self._base().resolve() / "old.md"
+
+    def test_absolute_path_outside_raises(self, tool):
+        with pytest.raises(ValueError, match="超出允许范围"):
+            tool._resolve_and_validate_path("/tmp/evil.md")
+
+    def test_traversal_blocked(self, tool):
+        with pytest.raises(ValueError, match="超出允许范围"):
+            tool._resolve_and_validate_path("../outside.md")
+
+    @pytest.mark.asyncio
+    async def test_write_via_legacy_prefixed_rel_path(self, tool, mock_register_download):
+        """端到端：file_path 带 storage/ 旧前缀也能正确写入租户目录"""
+        result = await tool.execute(content="hi", file_path="storage/output/legacy.md")
+        assert isinstance(result, dict)
+        target = self._base() / "legacy.md"
+        assert target.read_text() == "hi"

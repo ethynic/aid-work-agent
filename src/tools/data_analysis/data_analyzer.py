@@ -81,11 +81,13 @@ DEFAULT_CHART_THEME = "ft"
 class DataAnalyzer:
     """pandas/numpy 数据分析执行引擎"""
 
-    CHART_OUTPUT_DIR = "storage/analysis_charts"
-    DATA_OUTPUT_DIR = "storage/analysis_data"
-
-    def __init__(self, session_id: str = None):
+    def __init__(self, session_id: str = None, tenant_id: str = ""):
         self.session_id = session_id or ""
+        # 产物按租户附件存储规范落盘：图表/导出表 -> report，中间聚合 CSV -> temp
+        from src.core.storage import get_tenant_storage_dir
+        _tid = tenant_id or "_anonymous"
+        self.chart_output_dir = get_tenant_storage_dir(_tid, "report")
+        self.data_output_dir = get_tenant_storage_dir(_tid, "temp")
         self._variables: Dict[str, pd.DataFrame] = {}
         self._tables: Dict[str, pd.DataFrame] = {}
         self._table_meta: Dict[str, Dict] = {}
@@ -256,8 +258,8 @@ class DataAnalyzer:
         """持久化 DataFrame 到内存 + CSV 文件"""
         self._variables[var_name] = df.copy()
 
-        os.makedirs(self.DATA_OUTPUT_DIR, exist_ok=True)
-        file_path = os.path.join(self.DATA_OUTPUT_DIR, f"{var_name}.csv")
+        os.makedirs(self.data_output_dir, exist_ok=True)
+        file_path = os.path.join(self.data_output_dir, f"{var_name}.csv")
         df.to_csv(file_path, index=False, encoding="utf-8-sig")
         logger.info(f"[DataAnalyzer] 存储变量 {var_name}: {len(df)} 行 -> {file_path}")
         return file_path
@@ -1087,10 +1089,10 @@ class DataAnalyzer:
         self._avoid_title_legend_overlap(fig, ax, leg, title_artist)
 
         # 保存
-        os.makedirs(self.CHART_OUTPUT_DIR, exist_ok=True)
+        os.makedirs(self.chart_output_dir, exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         safe_title = re.sub(r'[\\/:*?"<>|]', "_", title)
-        file_path = os.path.join(self.CHART_OUTPUT_DIR, f"{safe_title}_{timestamp}.png")
+        file_path = os.path.join(self.chart_output_dir, f"{safe_title}_{timestamp}.png")
         fig.savefig(file_path, dpi=150, bbox_inches="tight", facecolor=t["bg"])
         plt.close(fig)
 

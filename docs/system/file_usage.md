@@ -60,8 +60,9 @@ storage/
 | 渠道媒体文件 | `uploads/wecom/`、`uploads/wecom_kf/` | 磁盘 | 否 | 企业微信下载的媒体文件和渲染图片 |
 | 用户个人文件 | `uploads/tenant_{id}/user_{uid}/` | 磁盘 | 是 | 用户个人上传的混合类型文件 |
 | 数据源文件 | `tenants/{tenant_id}/data_sources/` | 磁盘 | 是 | 数据分析智能体的数据源 |
+| 数据分析产物 | `tenants/{tenant_id}/report/`、`tenants/{tenant_id}/temp/` | 磁盘 | 是 | 分析图表/导出表（report），中间聚合 CSV（temp） |
 | 技能环境文件 | `tenants/{tenant_id}/skills/{skill_name}/.env` | 磁盘 | 是 | 技能的环境变量配置 |
-| 长期记忆文件 | `memory/{tenant_id}/` | 磁盘 | 是 | 长期记忆存储文件 |
+| 长期记忆文件 | `tenants/{tenant_id}/memory/` | 磁盘 | 是 | 长期记忆存储文件 |
 | 子智能体配置 | `subagents/{dir}/extra_{tenant_id}.md` | 磁盘 | 是 | 子智能体租户级额外配置 |
 | 图片资产（通用） | `tenants/{id}/images/{yyyy-mm}/` | 磁盘+Redis | 是 | ImageRegistry 管理的非知识库图片（工具生成/上传/Web 抓取），TTL 24h |
 | 知识库图片资产 | `tenants/{id}/knowledge/images/` | 磁盘+Redis | 是 | 知识库关联图片（景点封面、文档内嵌图等），永久存储 |
@@ -148,8 +149,9 @@ storage/
 
 租户级别的长期记忆存储。
 
-**路径**：`storage/memory/{tenant_id}/`
+**路径**：`storage/tenants/{tenant_id}/memory/memory_{user_id}.md`
 **用途**：长期记忆文件，跨会话持久化
+**迁移**：2026-09 前为 `storage/memory/{tenant_id}/`（含 `tenant_` 前缀变体），首次访问时由 LongTermMemory 自动迁移到新路径
 
 ### 3.8 子智能体租户级配置
 
@@ -158,12 +160,14 @@ storage/
 **路径**：`storage/subagents/{dir_name}/extra_{tenant_id}.md`
 **用途**：子智能体定义的额外配置，按租户隔离
 
-### 3.9 输出文件
+### 3.9 数据分析产物
 
-系统生成的输出文件（报表、演示文稿等）。
+数据分析工具（SmartDataAnalysisTool）生成的图表、导出表格与中间聚合数据。
 
-**路径**：`storage/output/`
-**状态**：目录已创建但尚未使用
+**路径**：图表/导出表 `storage/tenants/{tenant_id}/report/`；中间聚合 CSV `storage/tenants/{tenant_id}/temp/`
+**文件命名**：`{安全标题}_{yyyymmdd_hhmmss}.png|.xlsx`；中间 CSV `{变量名}.csv`
+**调用方**：`src/tools/data_analysis/data_analyzer.py`、`analysis_agent.py`
+**迁移**：2026-09 前写 `storage/analysis_charts/`、`storage/analysis_data/`（无法归属租户，历史文件另行处理）
 
 ### 3.10 图片资产（通用）
 
@@ -327,7 +331,7 @@ class StorageConfig(BaseModel):
 
 ```
 storage/
-├── output/                                    # 输出文件（未使用）
+├── output/                                    # 旧输出目录（2026-09 起废弃，遗留文件另行处理）
 ├── tenants/                                   # 新标准目录
 │   └── {tenant_id}/
 │       ├── conversation/                      # 对话附件（新）
@@ -336,7 +340,8 @@ storage/
 │       ├── images/                            # 图片资产（通用）
 │       │   └── {yyyy-mm}/                     # 按月份分桶，file_{uuid12}.{ext}
 │       ├── export/                            # 业务导出文件
-│       ├── report/                            # 统计报表
+│       ├── report/                            # 统计报表 / 数据分析产物
+│       ├── memory/                            # 长期记忆文件
 │       ├── avatar/                            # 头像/Logo
 │       ├── temp/                              # 临时文件
 │       └── skills/{skill_name}/.env           # 技能环境变量
@@ -348,8 +353,9 @@ storage/
 │       ├── conversation/                      # 旧租户对话附件
 │       ├── knowledge/                         # 旧知识图文档
 │       └── user_{uid}/                        # 旧用户个人文件
-├── memory/
-│   └── {tenant_id}/                           # 长期记忆文件
+├── memory/                                    # 旧长期记忆目录（首次访问自动迁移到 tenants/{tid}/memory/）
+├── analysis_charts/                           # 旧分析图表目录（2026-09 起废弃）
+├── analysis_data/                             # 旧分析数据目录（2026-09 起废弃）
 └── subagents/
     └── {dir}/
         └── extra_{tenant_id}.md               # 子智能体租户配置

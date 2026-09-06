@@ -174,7 +174,7 @@ memory:
     background_scan_batch_size: 50     # 单次扫描最多处理 session 数
   long_term:
     enabled: true           # 是否启用长期记忆
-    storage_dir: "storage/memory"    # 记忆文件根目录，实际文件在 storage/memory/{tenant_id}/ 下
+    storage_dir: "storage/memory"    # 已废弃的旧记忆根目录，仅用于定位旧文件迁移到 storage/tenants/{tenant_id}/memory/
     summary_cron: "0 2 * * *"        # 每日自动总结执行时间
     max_users_per_run: 50            # 单次总结最多处理用户数
     max_inject_tokens: 2000          # 注入上下文的最大 token 数
@@ -194,6 +194,10 @@ auth:
   enabled: true
   default_role: employee
   max_concurrent_tokens: 10
+
+# 用户行为审计日志（登录/登出/改密/渠道绑定等安全敏感事件）
+behavior_log:
+  retention_days: 180                    # 日志保留天数，超期由每日清理任务分批删除
 
 # 平台管理员配置
 admin:

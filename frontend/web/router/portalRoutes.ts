@@ -16,6 +16,7 @@ export const portalRoutes: RouteRecordRaw[] = [
       { path: 'token-usage', name: 'portal-token-usage', component: () => import('@/components/saas/PlatformTokenUsage.vue') },
       { path: 'client-logs', name: 'portal-client-logs', component: () => import('@/components/saas/ClientUsageLogs.vue') },
       { path: 'error-logs', name: 'portal-error-logs', component: () => import('@/components/saas/ErrorLogs.vue') },
+      { path: 'behavior-logs', name: 'portal-behavior-logs', component: () => import('@/components/saas/BehaviorLogs.vue'), props: { scope: 'platform' } },
       { path: 'reply-styles', name: 'portal-reply-styles', component: () => import('@/components/saas/SystemReplyStyleManager.vue') },
       { path: 'monitoring', name: 'portal-monitoring', component: () => import('@/components/saas/TraceBrowser.vue') },
       { path: 'monitoring/:session_id', name: 'portal-session-traces', component: () => import('@/components/saas/SessionTraces.vue') },

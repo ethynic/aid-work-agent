@@ -20,6 +20,8 @@ from src.saas.api.tenant_auth import require_admin
 from src.saas.db.tenant_db import TenantDB
 from src.saas.db.permission_db import UserAgentPermissionDB
 from src.saas.db.subscription_db import SubscriptionDB
+from src.saas.models.enums import BehaviorAction, BehaviorResourceType
+from src.services.behavior_log import audit_action
 from src.db.models import UserDB
 from src.db.database import get_db_connection
 
@@ -61,6 +63,7 @@ async def list_users(request: Request, page: int = 1, page_size: int = 20):
 
 
 @router.post("")
+@audit_action(BehaviorAction.CREATE, BehaviorResourceType.TENANT_USER, name_arg="username")
 async def create_user(request: Request, body: UserCreateRequest):
     """手动创建单个用户"""
     admin = require_admin(request)
@@ -124,6 +127,7 @@ async def create_user(request: Request, body: UserCreateRequest):
 
 
 @router.post("/batch_import_users")
+@audit_action(BehaviorAction.CREATE, BehaviorResourceType.TENANT_USER, id_arg="tenant_id")
 async def batch_import_users(request: Request, file: UploadFile = File(...), tenant_id: Optional[str] = None):
     """
     批量导入用户（CSV 上传）
@@ -246,6 +250,7 @@ async def batch_import_users(request: Request, file: UploadFile = File(...), ten
 
 
 @router.patch("/{user_id}")
+@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.TENANT_USER, id_arg="user_id", name_arg="username")
 async def update_user(user_id: str, request: Request, body: UserUpdateRequest):
     """更新企业用户信息"""
     admin = require_admin(request)
@@ -272,6 +277,7 @@ async def update_user(user_id: str, request: Request, body: UserUpdateRequest):
 
 
 @router.delete("/{user_id}")
+@audit_action(BehaviorAction.DELETE, BehaviorResourceType.TENANT_USER, id_arg="user_id")
 async def remove_user(user_id: str, request: Request):
     """移除企业用户（仅从租户中移除，不删除用户）"""
     admin = require_admin(request)

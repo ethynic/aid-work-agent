@@ -17,6 +17,8 @@ from src.db.models import UserDB, SessionDB, send_sms_code, verify_sms_code, has
 from src.config.settings import settings
 from src.api.rate_limit import check_login_rate_limit
 from src.core.cache_utils import CacheKeys, get_cached, set_cached, delete_cached, invalidate_user_cache
+from src.services.behavior_log import record_behavior
+from src.saas.models.enums import BehaviorAction, BehaviorResourceType
 
 router = APIRouter(prefix="/api/auth", tags=["认证"])
 
@@ -380,10 +382,15 @@ async def login(request: Request, body: LoginRequest):
     client_ip = request.client.host if request.client else "unknown"
     allowed, msg = check_login_rate_limit(client_ip)
     if not allowed:
+        await record_behavior(request, BehaviorAction.LOGIN_FAILED, success=False, error_msg=msg,
+                              login_method="password", detail={"identifier": body.identifier})
         return LoginResponse(success=False, message=msg)
 
     # 校验图形验证码
     if not verify_captcha(body.captcha_id, body.captcha_code):
+        await record_behavior(request, BehaviorAction.LOGIN_FAILED, success=False,
+                              error_msg="图形验证码错误或已过期",
+                              login_method="password", detail={"identifier": body.identifier})
         return LoginResponse(success=False, message="图形验证码错误或已过期，过期时间5分钟")
 
     # 根据 identifier 判断是手机号还是用户名
@@ -434,6 +441,9 @@ async def login(request: Request, body: LoginRequest):
             user = dict(cursor.fetchone())
 
     if not user:
+        await record_behavior(request, BehaviorAction.LOGIN_FAILED, success=False,
+                              error_msg="用户不存在",
+                              login_method="password", detail={"identifier": identifier})
         return LoginResponse(success=False, message="用户不存在")
 
     # 校验密码
@@ -464,6 +474,9 @@ async def login(request: Request, body: LoginRequest):
             UserDB.update(user["user_id"], role="platform_admin", tenant_id=None)
             user = UserDB.get_by_id(user["user_id"])
         token = generate_token(user["user_id"])
+        await record_behavior(request, BehaviorAction.LOGIN, user_id=user["user_id"],
+                              user_role="platform_admin", login_method="password",
+                              detail={"identifier": identifier})
         return LoginResponse(
             success=True,
             token=token,
@@ -479,13 +492,22 @@ async def login(request: Request, body: LoginRequest):
     # 普通用户密码校验
     if not password_hash:
         # 密码未设置，不允许登录（除非是平台管理员）
+        await record_behavior(request, BehaviorAction.LOGIN_FAILED, success=False,
+                              error_msg="密码未设置，请使用忘记密码功能重置",
+                              login_method="password", detail={"identifier": identifier})
         return LoginResponse(success=False, message="密码未设置，请使用忘记密码功能重置")
 
     if not verify_password(body.password, password_hash):
+        await record_behavior(request, BehaviorAction.LOGIN_FAILED, success=False,
+                              error_msg="手机号或密码有误",
+                              login_method="password", detail={"identifier": identifier})
         return LoginResponse(success=False, message="手机号或密码有误")
 
     # 登录成功
     token = generate_token(user["user_id"])
+    await record_behavior(request, BehaviorAction.LOGIN, user_id=user["user_id"],
+                          user_role=user.get("role"), login_method="password",
+                          detail={"identifier": identifier})
     return LoginResponse(
         success=True,
         token=token,
@@ -530,6 +552,10 @@ async def unified_login(request: Request, body: UnifiedLoginRequest):
 
     # 如果格式错误，直接返回，不继续验证
     if errors:
+        await record_behavior(request, BehaviorAction.LOGIN_FAILED, success=False,
+                              error_msg="; ".join(e["message"] for e in errors),
+                              login_method="password",
+                              detail={"identifier": body.identifier, "tenant_code": tenant_code})
         return UnifiedLoginResponse(success=False, errors=errors)
 
     # 3. 平台管理员识别（手机号在 admin.phones 且密码等于 QBTOKEN）
@@ -588,6 +614,11 @@ async def unified_login(request: Request, body: UnifiedLoginRequest):
             redirect_url = "/portal"
             tenant_id = None
 
+        await record_behavior(request, BehaviorAction.LOGIN, user_id=user["user_id"],
+                              user_role="platform_admin", tenant_id=tenant_id,
+                              login_method="password",
+                              detail={"identifier": identifier, "tenant_code": tenant_code})
+
         return UnifiedLoginResponse(
             success=True,
             token=token,
@@ -612,6 +643,9 @@ async def unified_login(request: Request, body: UnifiedLoginRequest):
 
     if not tenant:
         errors.append({"field": "tenant_code", "message": "租户代码不存在"})
+        await record_behavior(request, BehaviorAction.LOGIN_FAILED, success=False,
+                              error_msg="租户代码不存在", login_method="password",
+                              detail={"identifier": identifier, "tenant_code": tenant_code})
         return UnifiedLoginResponse(success=False, errors=errors)
 
     # 5. 检查租户状态
@@ -668,10 +702,18 @@ async def unified_login(request: Request, body: UnifiedLoginRequest):
 
     # 如果有错误，返回所有错误
     if errors:
+        await record_behavior(request, BehaviorAction.LOGIN_FAILED, success=False,
+                              error_msg="; ".join(e["message"] for e in errors),
+                              login_method="password",
+                              detail={"identifier": identifier, "tenant_code": tenant_code})
         return UnifiedLoginResponse(success=False, errors=errors)
 
     # 8. 登录成功
     token = generate_token(user["user_id"])
+    await record_behavior(request, BehaviorAction.LOGIN, user_id=user["user_id"],
+                          user_role=user.get("role"), tenant_id=tenant["tenant_id"],
+                          login_method="password",
+                          detail={"identifier": identifier, "tenant_code": tenant_code})
     return UnifiedLoginResponse(
         success=True,
         token=token,
@@ -690,34 +732,50 @@ async def phone_login(request: Request, body: PhoneLoginRequest):
     client_ip = request.client.host if request.client else "unknown"
     allowed, msg = check_login_rate_limit(body.phone)
     if not allowed:
+        await record_behavior(request, BehaviorAction.LOGIN_FAILED, success=False, error_msg=msg,
+                              login_method="password", detail={"identifier": body.phone})
         return LoginResponse(success=False, message=msg)
     allowed, msg = check_login_rate_limit(client_ip)
     if not allowed:
+        await record_behavior(request, BehaviorAction.LOGIN_FAILED, success=False, error_msg=msg,
+                              login_method="password", detail={"identifier": body.phone})
         return LoginResponse(success=False, message=msg)
 
     user = UserDB.get_by_phone(body.phone, bypass_cache=True)
 
     if not user:
+        await record_behavior(request, BehaviorAction.LOGIN_FAILED, success=False,
+                              error_msg="用户不存在",
+                              login_method="password", detail={"identifier": body.phone})
         return LoginResponse(success=False, message="用户不存在")
 
     # 用户已存在
     password_hash = user.get("password_hash")
 
     if not password_hash:
+        await record_behavior(request, BehaviorAction.LOGIN_FAILED, success=False,
+                              error_msg="密码未设置，请使用忘记密码功能重置",
+                              login_method="password", detail={"identifier": body.phone})
         return LoginResponse(success=False, message="密码未设置，请使用忘记密码功能重置")
 
     if verify_password(body.password, password_hash):
         token = generate_token(user["user_id"])
+        await record_behavior(request, BehaviorAction.LOGIN, user_id=user["user_id"],
+                              user_role=user.get("role"), login_method="password",
+                              detail={"identifier": body.phone})
         return LoginResponse(
             success=True,
             token=token,
             user=get_user_info_with_admin(user)
         )
+    await record_behavior(request, BehaviorAction.LOGIN_FAILED, success=False,
+                          error_msg="手机号或密码有误",
+                          login_method="password", detail={"identifier": body.phone})
     return LoginResponse(success=False, message="手机号或密码有误")
 
 
 @router.post("/phone/code-login")
-async def phone_code_login(request: PhoneCodeLoginRequest):
+async def phone_code_login(http_request: Request, request: PhoneCodeLoginRequest):
     """手机号验证码登录：正常的短信验证码登录"""
     from src.config.settings import settings
 
@@ -726,6 +784,9 @@ async def phone_code_login(request: PhoneCodeLoginRequest):
         user = UserDB.get_by_phone(request.phone)
         if user:
             token = generate_token(user["user_id"])
+            await record_behavior(http_request, BehaviorAction.LOGIN,
+                                  user_id=user["user_id"], user_role=user.get("role"),
+                                  login_method="sms", detail={"identifier": request.phone})
             return LoginResponse(
                 success=True,
                 token=token,
@@ -736,11 +797,17 @@ async def phone_code_login(request: PhoneCodeLoginRequest):
             user = UserDB.create(phone=request.phone)
             if user:
                 token = generate_token(user["user_id"])
+                await record_behavior(http_request, BehaviorAction.LOGIN,
+                                      user_id=user["user_id"], user_role=user.get("role"),
+                                      login_method="sms", detail={"identifier": request.phone})
                 return LoginResponse(
                     success=True,
                     token=token,
                     user=get_user_info_with_admin(user)
             )
+    await record_behavior(http_request, BehaviorAction.LOGIN_FAILED, success=False,
+                          error_msg="验证码错误或已过期",
+                          login_method="sms", detail={"identifier": request.phone})
     return LoginResponse(success=False, message="验证码错误或已过期，过期时间5分钟")
 
 
@@ -793,11 +860,18 @@ async def update_profile(
         # 清除缓存后重新获取用户信息
         invalidate_user_cache(user_id)
         updated_user = UserDB.get_by_id(user_id)
+        await record_behavior(request, BehaviorAction.PROFILE_UPDATE, user_id=user_id,
+                              resource_type=BehaviorResourceType.ACCOUNT, resource_id=user_id,
+                              detail={"changed_fields": list(updates.keys())})
         return {
             "success": True,
             "message": "资料更新成功",
             "user": get_user_info_with_admin(updated_user),
         }
+    await record_behavior(request, BehaviorAction.PROFILE_UPDATE, user_id=user_id,
+                          resource_type=BehaviorResourceType.ACCOUNT, resource_id=user_id,
+                          success=False, error_msg="更新失败",
+                          detail={"changed_fields": list(updates.keys())})
     return {"success": False, "error": "更新失败"}
 
 
@@ -807,7 +881,7 @@ import re
 
 
 @router.post("/reset-password/send-code")
-async def send_reset_password_code(request: SendResetCodeRequest):
+async def send_reset_password_code(http_request: Request, request: SendResetCodeRequest):
     """发送重置密码短信验证码（需先通过图形验证码）"""
     # 校验图形验证码
     if not verify_captcha(request.captcha_id, request.captcha_code):
@@ -829,12 +903,15 @@ async def send_reset_password_code(request: SendResetCodeRequest):
 
     # 发送短信验证码
     if send_sms_code(request.phone):
+        # 防爆破观测：记录验证码发送事件（IP/UA 随事件入库）
+        await record_behavior(http_request, BehaviorAction.VERIFY_CODE_SENT,
+                              detail={"phone": request.phone})
         return {"success": True, "message": "验证码已发送", "expires_in": 300}
     return {"success": False, "message": "发送失败，请稍后重试"}
 
 
 @router.post("/reset-password")
-async def reset_password(request: ResetPasswordRequest):
+async def reset_password(http_request: Request, request: ResetPasswordRequest):
     """重置密码"""
 
     # 校验手机号格式
@@ -843,6 +920,10 @@ async def reset_password(request: ResetPasswordRequest):
 
     # 校验短信验证码
     if not verify_sms_code(request.phone, request.sms_code):
+        await record_behavior(http_request, BehaviorAction.PASSWORD_CHANGE, success=False,
+                              error_msg="短信验证码错误或已过期",
+                              resource_type=BehaviorResourceType.ACCOUNT,
+                              detail={"phone": request.phone})
         return {"success": False, "message": "短信验证码错误或已过期，过期时间5分钟"}
 
     # 校验新密码是否符合规则
@@ -850,6 +931,10 @@ async def reset_password(request: ResetPasswordRequest):
     password_msg = getattr(settings, "password_msg", "长度8-50位，必须有字母+数字")
 
     if not re.match(password_rule, request.new_password):
+        await record_behavior(http_request, BehaviorAction.PASSWORD_CHANGE, success=False,
+                              error_msg=f"密码不符合规则：{password_msg}",
+                              resource_type=BehaviorResourceType.ACCOUNT,
+                              detail={"phone": request.phone})
         return {"success": False, "message": f"密码不符合规则：{password_msg}"}
 
     # 更新用户密码（租户前台登录时优先按手机号+租户查找）
@@ -860,6 +945,10 @@ async def reset_password(request: ResetPasswordRequest):
     if not user:
         user = UserDB.get_by_phone(request.phone)
     if not user:
+        await record_behavior(http_request, BehaviorAction.PASSWORD_CHANGE, success=False,
+                              error_msg="用户不存在",
+                              resource_type=BehaviorResourceType.ACCOUNT,
+                              detail={"phone": request.phone})
         return {"success": False, "message": "用户不存在"}
 
     # 更新密码
@@ -872,6 +961,10 @@ async def reset_password(request: ResetPasswordRequest):
 
     # 清除用户缓存（密码变更）
     invalidate_user_cache(user["user_id"])
+    await record_behavior(http_request, BehaviorAction.PASSWORD_CHANGE, user_id=user["user_id"],
+                          user_role=user.get("role"), tenant_id=request.tenant_id or user.get("tenant_id"),
+                          resource_type=BehaviorResourceType.ACCOUNT, resource_id=user["user_id"],
+                          detail={"phone": request.phone})
     return {"success": True, "message": "密码重置成功"}
 
 
@@ -881,5 +974,11 @@ async def logout(request: Request):
     auth_header = request.headers.get("Authorization", "")
     if auth_header.startswith("Bearer "):
         token = auth_header[7:]
+        # token 删除前验证一次拿 user_id（登出审计需要操作人身份）
+        user_id = verify_token(token, auto_refresh=False)
         delete_token(token)
+        await record_behavior(request, BehaviorAction.LOGOUT, user_id=user_id)
+    else:
+        await record_behavior(request, BehaviorAction.LOGOUT, success=False,
+                              error_msg="缺少 Authorization token")
     return {"success": True}

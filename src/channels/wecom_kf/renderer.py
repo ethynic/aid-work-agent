@@ -120,20 +120,19 @@ class WeComKfRenderer:
         upload_dir: str = "./storage/uploads/wecom_kf",
         tenant_id: str = "",
     ):
+        # upload_dir 仅作兼容保留，实际落盘统一走 _resolve_save_dir（租户附件存储规范）
         self._upload_dir = upload_dir
         self._tenant_id = tenant_id or ""
-        os.makedirs(self._upload_dir, exist_ok=True)
 
     def set_tenant_id(self, tenant_id: str) -> None:
         """设置租户 ID（由 adapter 注入），设置后落盘走 tenants 规范。"""
         self._tenant_id = tenant_id or ""
 
     def _resolve_save_dir(self) -> str:
-        """解析最终保存目录：有租户走 tenants 规范，无租户回退旧路径。"""
+        """解析最终保存目录：有租户走 tenants 规范，无租户落 _anonymous。"""
         if self._tenant_id:
             return ensure_tenant_storage_dir(self._tenant_id, "conversation")
-        os.makedirs(self._upload_dir, exist_ok=True)
-        return self._upload_dir
+        return ensure_tenant_storage_dir("_anonymous", "conversation")
 
     async def is_available(self) -> bool:
         """检查 Playwright + Chromium 是否可用（委托给 browser_pool）。"""
@@ -196,7 +195,7 @@ class WeComKfRenderer:
         2. markdown 库转 HTML（启用 tables / fenced_code / nl2br / sane_lists 扩展）
         3. browser_pool.shoot() 生成临时页图（整页截图）
         4. finalize_long_image 做空白检测 + 高度截断 + 2MB 体积控制
-        5. 把最终长图 move 到持久化目录（storage/uploads/wecom_kf/）
+        5. 把最终长图 move 到持久化目录（storage/tenants/{tenant_id}/conversation/）
 
         Args:
             markdown_text: 原始 markdown 文本

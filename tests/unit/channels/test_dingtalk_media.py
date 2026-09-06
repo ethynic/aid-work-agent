@@ -32,12 +32,15 @@ class TestDingTalkMediaInit:
             custom_dir = os.path.join(tmp, "custom_uploads")
             m = DingTalkMedia(access_token_getter=token_getter, upload_dir=custom_dir)
             assert m.upload_dir == custom_dir
-            assert os.path.exists(custom_dir)
+            # 2026-09 整改：构造不再创建 upload_dir（禁止写 storage/uploads 旧路径），
+            # 实际落盘统一走 _resolve_save_dir（tenants 规范）
+            assert not os.path.exists(custom_dir)
 
-    def test_upload_dir_created(self, token_getter, tmp_path):
+    def test_upload_dir_not_created_on_init(self, token_getter, tmp_path):
         new_dir = str(tmp_path / "new" / "nested" / "dir")
         m = DingTalkMedia(access_token_getter=token_getter, upload_dir=new_dir)
-        assert os.path.exists(new_dir)
+        # 构造不触发目录创建，落盘时才按租户规范建目录
+        assert not os.path.exists(new_dir)
         assert m.upload_dir == new_dir
 
 

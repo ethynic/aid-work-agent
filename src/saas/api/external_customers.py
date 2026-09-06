@@ -17,6 +17,8 @@ from pydantic import BaseModel, Field
 from loguru import logger
 
 from src.saas.api.tenant_auth import require_admin
+from src.saas.models.enums import BehaviorAction, BehaviorResourceType
+from src.services.behavior_log import audit_action
 from src.db.models import UserDB
 
 router = APIRouter(prefix="/api/saas/external-customers", tags=["外部接待客户"])
@@ -290,6 +292,7 @@ class LeadStageUpdate(BaseModel):
 
 
 @router.patch("/leads/{lead_id}")
+@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.EXTERNAL_CUSTOMER, id_arg="lead_id")
 async def update_lead_stage(request: Request, lead_id: str, body: LeadStageUpdate):
     """更新线索阶段（new -> contacting -> converted / abandoned）。"""
     admin = require_admin(request)

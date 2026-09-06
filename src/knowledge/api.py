@@ -17,8 +17,10 @@ from loguru import logger
 from src.api import auth
 from src.knowledge.service import knowledge_service
 from src.saas.context import get_current_tenant_id
+from src.saas.models.enums import BehaviorAction, BehaviorResourceType
 from src.config.settings import settings
 from src.db.database import get_db_connection
+from src.services.behavior_log import audit_action
 
 router = APIRouter(prefix="/api/knowledge", tags=["knowledge"])
 
@@ -136,6 +138,7 @@ async def list_categories(http_request: Request = None):
 
 
 @router.post("/categories")
+@audit_action(BehaviorAction.CREATE, BehaviorResourceType.KNOWLEDGE_CATEGORY, name_arg="display_name")
 async def create_category(request: CreateCategoryRequest, http_request: Request = None):
     """创建知识库分类"""
     tenant_id = get_current_tenant_id()
@@ -152,6 +155,7 @@ async def create_category(request: CreateCategoryRequest, http_request: Request 
 
 
 @router.put("/categories/{category_id}")
+@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.KNOWLEDGE_CATEGORY, id_arg="category_id", name_arg="display_name")
 async def update_category(category_id: int, request: UpdateCategoryRequest, http_request: Request = None):
     """更新分类名称"""
     tenant_id = get_current_tenant_id()
@@ -162,6 +166,7 @@ async def update_category(category_id: int, request: UpdateCategoryRequest, http
 
 
 @router.delete("/categories/{category_id}")
+@audit_action(BehaviorAction.DELETE, BehaviorResourceType.KNOWLEDGE_CATEGORY, id_arg="category_id")
 async def delete_category(category_id: int, http_request: Request = None):
     """删除分类（不删除文档）"""
     tenant_id = get_current_tenant_id()
@@ -172,6 +177,7 @@ async def delete_category(category_id: int, http_request: Request = None):
 
 
 @router.post("/upload", response_model=UploadResponse)
+@audit_action(BehaviorAction.CREATE, BehaviorResourceType.KNOWLEDGE_DOC)
 async def upload_document(
     file: UploadFile = File(...),
     source_type: Optional[str] = Form(None),
@@ -270,6 +276,7 @@ async def upload_document(
 
 
 @router.post("/upload/batch", response_model=BatchUploadResponse)
+@audit_action(BehaviorAction.CREATE, BehaviorResourceType.KNOWLEDGE_DOC)
 async def upload_documents_batch(
     files: list[UploadFile] = File(...),
     source_type: Optional[str] = Form(None),
@@ -458,6 +465,7 @@ async def search_documents(
 
 
 @router.post("/documents/move")
+@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.KNOWLEDGE_DOC)
 async def move_documents(request: MoveDocumentsRequest, http_request: Request = None):
     """批量移动文档到目标分类（更新 source_type + sub_category，chunks/向量无需改动）"""
     tenant_id = get_current_tenant_id()
@@ -480,6 +488,7 @@ async def move_documents(request: MoveDocumentsRequest, http_request: Request = 
 
 
 @router.delete("/documents/{doc_id}")
+@audit_action(BehaviorAction.DELETE, BehaviorResourceType.KNOWLEDGE_DOC, id_arg="doc_id")
 async def delete_document(doc_id: int, http_request: Request = None):
     """
     删除知识库文档

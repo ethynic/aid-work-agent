@@ -14,6 +14,8 @@ from loguru import logger
 
 from src.saas.api.tenant_auth import require_admin
 from src.saas.db.reply_style_db import ReplyStyleDB, SYSTEM_TENANT
+from src.saas.models.enums import BehaviorAction, BehaviorResourceType
+from src.services.behavior_log import audit_action
 
 router = APIRouter(prefix="/api/saas/reply-styles", tags=["SaaS 回复风格管理"])
 
@@ -97,6 +99,7 @@ async def list_system_styles(request: Request):
 
 
 @router.post("/system/create")
+@audit_action(BehaviorAction.CREATE, BehaviorResourceType.REPLY_STYLE, name_arg="name")
 async def create_system_style(request: Request, body: StyleCreateRequest):
     """新增系统内置风格"""
     _require_platform_admin(request)
@@ -129,6 +132,7 @@ async def get_system_style(style_id: str, request: Request):
 
 
 @router.put("/system/{style_id}")
+@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.REPLY_STYLE, id_arg="style_id", name_arg="name")
 async def update_system_style(style_id: str, request: Request, body: StyleUpdateRequest):
     """更新系统内置风格（创建新版本）"""
     _require_platform_admin(request)
@@ -161,6 +165,7 @@ async def update_system_style(style_id: str, request: Request, body: StyleUpdate
 
 
 @router.delete("/system/{style_id}")
+@audit_action(BehaviorAction.DELETE, BehaviorResourceType.REPLY_STYLE, id_arg="style_id")
 async def delete_system_style(style_id: str, request: Request):
     """删除系统内置风格"""
     _require_platform_admin(request)
@@ -194,6 +199,7 @@ async def list_system_versions(style_id: str, request: Request):
 
 
 @router.post("/system/{style_id}/versions/{version}/activate")
+@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.REPLY_STYLE, id_arg="style_id")
 async def activate_system_version(style_id: str, version: int, request: Request):
     """激活系统内置风格的指定版本"""
     _require_platform_admin(request)
@@ -231,6 +237,7 @@ async def list_styles(request: Request):
 
 
 @router.post("")
+@audit_action(BehaviorAction.CREATE, BehaviorResourceType.REPLY_STYLE, name_arg="name")
 async def create_style(request: Request, body: StyleCreateRequest):
     """新增风格"""
     admin = require_admin(request)
@@ -267,6 +274,7 @@ async def get_style(style_id: str, request: Request):
 
 
 @router.put("/{style_id}")
+@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.REPLY_STYLE, id_arg="style_id", name_arg="name")
 async def update_style(style_id: str, request: Request, body: StyleUpdateRequest):
     """更新风格（创建新版本）"""
     admin = require_admin(request)
@@ -305,6 +313,7 @@ async def update_style(style_id: str, request: Request, body: StyleUpdateRequest
 
 
 @router.delete("/{style_id}")
+@audit_action(BehaviorAction.DELETE, BehaviorResourceType.REPLY_STYLE, id_arg="style_id")
 async def delete_style(style_id: str, request: Request):
     """删除风格（所有版本）"""
     admin = require_admin(request)
@@ -347,6 +356,7 @@ async def list_versions(style_id: str, request: Request):
 
 
 @router.post("/{style_id}/versions/{version}/activate")
+@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.REPLY_STYLE, id_arg="style_id")
 async def activate_version(style_id: str, version: int, request: Request):
     """激活指定版本（回滚）"""
     admin = require_admin(request)
@@ -368,6 +378,7 @@ async def activate_version(style_id: str, version: int, request: Request):
 
 
 @router.post("/reload")
+@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.CONFIG)
 async def reload_styles(request: Request):
     """手动触发 StyleManager 热更新"""
     require_admin(request)

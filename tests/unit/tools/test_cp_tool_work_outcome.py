@@ -131,6 +131,10 @@ class TestExecuteIsolatesRecordFailure:
             pytest.skip("configs/config.yaml not found")
 
         tool = CpTool()
+        # 目标文件新路径（output/ 前缀被剥离，落租户 conversation 目录），
+        # 先清理历史残留（含旧版遗留），避免"目标文件已存在"干扰断言
+        cleanup = PROJECT_ROOT / "storage" / "tenants" / "t1" / "conversation" / "test_isolate_record.yaml"
+        cleanup.unlink(missing_ok=True)
         with (
             tool_execution_scope(ToolExecutionContext(user_id="u1", tenant_id="t1")),
             patch.object(tool, "_register_download") as mock_reg,
@@ -160,6 +164,7 @@ class TestExecuteIsolatesRecordFailure:
             # _record_work_outcome 确实被调用了
             mock_record.assert_called_once()
 
-        # 清理
-        cleanup = PROJECT_ROOT / "storage" / "output" / "test_isolate_record.yaml"
+        # 清理（新路径；旧 storage/output 残留一并清理防跨版本污染）
         cleanup.unlink(missing_ok=True)
+        legacy = PROJECT_ROOT / "storage" / "output" / "test_isolate_record.yaml"
+        legacy.unlink(missing_ok=True)

@@ -20,7 +20,9 @@ import tempfile
 from src.saas.api.tenant_auth import require_admin
 from src.saas.db.tenant_db import TenantDB
 from src.saas.db.subscription_db import SubscriptionDB
+from src.saas.models.enums import BehaviorAction, BehaviorResourceType
 from src.saas.services.renewal import enrich_tenants_with_renewal
+from src.services.behavior_log import audit_action
 from src.saas.models.tenant import TenantCreate, TenantUpdate
 from src.db.models import UserDB, TokenDB
 from src.db.database import get_db_connection
@@ -138,6 +140,7 @@ async def get_tenant_info(request: Request):
 
 
 @router.patch("/me")
+@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.TENANT, name_arg="company_name")
 async def update_tenant_info(request: Request, body: TenantUpdateRequest):
     """更新当前企业信息"""
     admin = require_admin(request)
@@ -172,6 +175,7 @@ async def list_tenants(request: Request, page: int = 1, page_size: int = 20):
 # ============== 平台管理员 - 租户 CRUD ==============
 
 @router.post("/")
+@audit_action(BehaviorAction.CREATE, BehaviorResourceType.TENANT, name_arg="company_name")
 async def create_tenant(request: Request, body: TenantCreate):
     """创建租户（仅平台管理员）"""
     admin = require_admin(request)
@@ -222,6 +226,7 @@ async def create_tenant(request: Request, body: TenantCreate):
 
 
 @router.put("/{tenant_id}")
+@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.TENANT, id_arg="tenant_id", name_arg="company_name")
 async def update_tenant(request: Request, tenant_id: str, body: TenantUpdate):
     """更新租户信息（仅平台管理员）"""
     admin = require_admin(request)
@@ -327,6 +332,7 @@ async def update_tenant(request: Request, tenant_id: str, body: TenantUpdate):
 
 
 @router.delete("/{tenant_id}")
+@audit_action(BehaviorAction.DELETE, BehaviorResourceType.TENANT, id_arg="tenant_id")
 async def delete_tenant(request: Request, tenant_id: str):
     """删除租户（仅平台管理员）"""
     admin = require_admin(request)
@@ -352,6 +358,7 @@ async def delete_tenant(request: Request, tenant_id: str):
 
 
 @router.post("/logo")
+@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.TENANT)
 async def upload_tenant_logo(
     request: Request,
     file: UploadFile = File(...),

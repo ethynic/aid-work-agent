@@ -31,3 +31,35 @@
   remark: "subagent_definitions 增加 recap JSONB：自定义数字员工承载 recap 轮后沉淀任务配置（结构同 SUBAGENT.md frontmatter recap 块）"
   statements: |
     ALTER TABLE subagent_definitions ADD COLUMN IF NOT EXISTS recap JSONB DEFAULT '{}';
+- datetime: "2026-09-06 11:18:00"
+  remark: "新增用户行为审计日志表 user_behavior_logs（登录/登出/改密/渠道绑定等安全敏感事件，Phase 1），含租户/用户/行为三个时间维度索引"
+  statements: |
+    CREATE TABLE IF NOT EXISTS user_behavior_logs (
+        id SERIAL PRIMARY KEY,
+        tenant_id TEXT,
+        user_id TEXT,
+        user_role TEXT,
+        action TEXT NOT NULL,
+        resource_type TEXT,
+        resource_id TEXT,
+        resource_name TEXT,
+        detail JSONB DEFAULT '{}',
+        client_ip VARCHAR(45),
+        user_agent VARCHAR(512),
+        success BOOLEAN NOT NULL DEFAULT TRUE,
+        error_msg TEXT,
+        entry VARCHAR(16),
+        login_method VARCHAR(32),
+        channel VARCHAR(16),
+        channel_user_id TEXT,
+        token_id TEXT,
+        request_id TEXT,
+        http_method VARCHAR(10),
+        path VARCHAR(255),
+        device_type VARCHAR(16),
+        device_info VARCHAR(32),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_ubl_tenant_time ON user_behavior_logs(tenant_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_ubl_user_time ON user_behavior_logs(user_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_ubl_action_time ON user_behavior_logs(action, created_at DESC);

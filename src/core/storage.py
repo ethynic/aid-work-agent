@@ -53,6 +53,26 @@ def normalize_tenant_id(tenant_id: str) -> str:
     return tenant_id
 
 
+def strip_legacy_storage_prefix(path: str) -> str:
+    """剥离相对路径头部的旧存储基名段，防止产生嵌套目录。
+
+    历史（2026-09 整改前）LLM 常回传 `storage/...`、`output/...`、
+    `storage/output/...` 等带旧基名前缀的相对路径，直接拼到新基目录下会
+    产生 `output/storage/...`、`storage/storage/tenants/...` 等嵌套目录
+    （生产/测试服务器均已出现）。统一在拼接前剥离。
+
+    只剥离**头部**的 `{storage, output, tenants}` 段，防误伤深层同名段
+    （如用户真实想要的 `report/storage_chart.png` 不受影响）。
+    """
+    parts = Path(path).parts
+    idx = 0
+    while idx < len(parts) and parts[idx] in ("storage", "output", "tenants"):
+        idx += 1
+    if idx == 0:
+        return path
+    return str(Path(*parts[idx:])) if parts[idx:] else ""
+
+
 def get_tenant_storage_dir(tenant_id: str, scene: str) -> str:
     """获取租户某场景的目录路径（相对路径，不保证存在）。
 
