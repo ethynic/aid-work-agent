@@ -77,7 +77,10 @@ function Open-WeComChatBySearch {
     # 与 message-send step1-2 相同的搜索定位链路；返回主窗口 hwnd（点击后 overlay 自动关闭，
     # finally 兜底关 overlay 恢复原状）
     Write-DriverLog ('open-by-search target=' + $TargetName + ' subtitle=' + $Subtitle + ' section=' + $Section)
-    $s = Open-WeComSearchOverlay -Query $TargetName
+    # 搜索词剥掉 @微信 后缀（2026-09-04 实测：新版客户端搜「陆伟@微信」零结果，
+    # 搜「陆伟」则结果行名称本就显示为「陆伟@微信」，不影响后续精确匹配与标题校验）
+    $searchQuery = $TargetName -replace '@微信$', ''
+    $s = Open-WeComSearchOverlay -Query $searchQuery
     $mainHwnd = [int64]$s.MainHwnd
     $overlayHwnd = [int64]$s.OverlayHwnd
     try {

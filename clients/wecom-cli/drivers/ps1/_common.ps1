@@ -328,17 +328,21 @@ function Send-WeComEscape {
 
 # ---------- M2：搜索 overlay / OCR 共享助手（chat-search 与 message-send 共用） ----------
 
-# 主窗口搜索框比例坐标（2026-08-31 真机实测）
-$script:SearchBoxRx = 0.243
-$script:SearchBoxRy = 0.046
-# 搜索框内右侧 × 清空按钮比例坐标（框内有内容时出现，PostMessage 点击即清空，
-# 清空后占位符「搜索」恢复，2026-08-31 真机实测；空框时该坐标仍落搜索框内，
-# 点击无害仅聚焦——但本实现走「先 OCR 判残留、有残留才点 ×」，避免对空框多点）
-$script:SearchClearRx = 0.308
-$script:SearchClearRy = 0.046
-# 聊天输入框比例坐标（底部工具栏之下、窗口底边之上）
+# 主窗口搜索框像素坐标（窗口左上角偏移；2026-09-04 真机实测：搜索框固定在左栏内
+# x∈[154,505]、y∈[44,100]，不随窗口宽度按比例伸缩——外部联系人会话会把主窗口撑宽到
+# 2916，比例坐标（旧 0.243w=709）会点出框外，必须像素锚定）。取框内中心 (330,72)。
+$script:SearchBoxPx = 330
+$script:SearchBoxPy = 72
+# 搜索框内右侧 × 清空按钮像素坐标（框内有内容时出现，PostMessage 点击即清空，
+# 清空后占位符「搜索」恢复；2026-09-04 真机实测 × 中心 ≈(473,77)，同框体固定像素）。
+# 空框时该坐标仍落搜索框内，点击无害仅聚焦——但本实现走「先 OCR 判残留、有残留才
+# 点 ×」，避免对空框多点
+$script:SearchClearPx = 473
+$script:SearchClearPy = 77
+# 聊天输入框比例坐标（底部工具栏之下、窗口底边之上；2026-09-04 实测工具栏图标行
+# 在 ≈0.83h，文本输入区在其下，0.90h 落文本区内）
 $script:ChatInputRx = 0.500
-$script:ChatInputRy = 0.850
+$script:ChatInputRy = 0.900
 
 function Get-WeComSearchBoxTexts {
     # 截图主窗口 → OCR searchbox 模式读顶部搜索框内容 tokens（平铺，不过滤）
@@ -371,8 +375,8 @@ function Clear-WeComSearchBox {
         if ($residual.Count -eq 0) { return $true }
         $main = Get-WeComWindowInfo ([IntPtr]$MainHwnd)
         [void](Send-WeComClick -Hwnd $MainHwnd `
-            -ScreenX ([int]($main.X + $main.W * $script:SearchClearRx)) `
-            -ScreenY ([int]($main.Y + $main.H * $script:SearchClearRy)))
+            -ScreenX ([int]($main.X + $script:SearchClearPx)) `
+            -ScreenY ([int]($main.Y + $script:SearchClearPy)))
         Start-Sleep -Milliseconds 400
         $residual2 = Get-WeComSearchBoxResidual (Get-WeComSearchBoxTexts $MainHwnd)
         if ($residual2.Count -eq 0) { return $true }
@@ -400,8 +404,8 @@ function Open-WeComSearchOverlay {
     $mainHwnd = Resolve-WeComMainWindow
     $main = Get-WeComWindowInfo ([IntPtr]$mainHwnd)
     [void](Send-WeComClick -Hwnd $mainHwnd `
-        -ScreenX ([int]($main.X + $main.W * $script:SearchBoxRx)) `
-        -ScreenY ([int]($main.Y + $main.H * $script:SearchBoxRy)))
+        -ScreenX ([int]($main.X + $script:SearchBoxPx)) `
+        -ScreenY ([int]($main.Y + $script:SearchBoxPy)))
     Start-Sleep -Milliseconds 400
 
     # 清空上次查询残留（无残留时为空操作；清不掉 → UI_CHANGED）
@@ -495,8 +499,25 @@ function Invoke-WeComChatOcr {
     $ocrScript = Join-Path $script:DriverPs1Dir '..\py\chat_ocr.py'
     if (-not (Test-Path $ocrScript)) { Throw-DriverError 'INTERNAL_ERROR' ('未找到 OCR 脚本：' + $ocrScript) }
     if (-not (Test-Path $pythonExe)) { Throw-DriverError 'CONFIG_MISSING' ('未找到仓库 venv python（RapidOCR 所在解释器）：' + $pythonExe) }
-    $out = & $pythonExe $ocrScript $ImagePath $Mode 2>$null
-    if ($LASTEXITCODE -ne 0) { Throw-DriverError 'INTERNAL_ERROR' ('OCR 脚本执行失败（exit=' + $LASTEXITCODE + '）') }
+    # 用 System.Diagnostics.Process 直接启动（不走 PS 原生命令管道）：MCP stdio 场景下
+    # Host 可能只继承白名单环境变量（@modelcontextprotocol/sdk getDefaultEnvironment），
+    # PS 5.1 对管道化原生命令的「文档激活」在该环境下抛 CantActivateDocumentInPipeline，
+    # python 根本未执行且 $LASTEXITCODE 为空（2026-09-04 真机实测）。直启进程绕开该机制，
+    # 且 stderr 可留存诊断。
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $pythonExe
+    $psi.Arguments = ('"' + $ocrScript + '" "' + $ImagePath + '" ' + $Mode)
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.CreateNoWindow = $true
+    $proc = [System.Diagnostics.Process]::Start($psi)
+    $out = $proc.StandardOutput.ReadToEnd()
+    $errText = $proc.StandardError.ReadToEnd()
+    $proc.WaitForExit()
+    if ($proc.ExitCode -ne 0) {
+        Throw-DriverError 'INTERNAL_ERROR' ('OCR 脚本执行失败（exit=' + $proc.ExitCode + '；stderr: ' + ($errText.Substring(0, [Math]::Min(300, $errText.Length))) + '）')
+    }
     $jsonLine = @($out | Where-Object { $_ -match '^CHATOCR_JSON:' }) | Select-Object -Last 1
     if (-not $jsonLine) { Throw-DriverError 'INTERNAL_ERROR' 'OCR 脚本未输出 CHATOCR_JSON' }
     $parsed = ($jsonLine -replace '^CHATOCR_JSON:\s*', '') | ConvertFrom-Json

@@ -91,7 +91,10 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WecomCli.MessageSend' -Body {
     $shots = New-Object System.Collections.ArrayList
     # 1) 搜索定位
     Write-DriverLog ('step1 搜索定位 target=' + $TargetName + ' subtitle=' + $Subtitle + ' section=' + $Section)
-    $s = Open-WeComSearchOverlay -Query $TargetName
+    # 搜索词剥掉 @微信 后缀（2026-09-04 实测：新版客户端搜「陆伟@微信」零结果，
+    # 搜「陆伟」则结果行名称本就显示为「陆伟@微信」，不影响后续精确匹配与标题校验）
+    $searchQuery = $TargetName -replace '@微信$', ''
+    $s = Open-WeComSearchOverlay -Query $searchQuery
     $mainHwnd = [int64]$s.MainHwnd
     $overlayHwnd = [int64]$s.OverlayHwnd
     try {
@@ -191,7 +194,7 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WecomCli.MessageSend' -Body {
     Write-DriverLog ('终态校验② 气泡含 text 前缀「' + $prefix + '」：' + $(if ($bubbleHit) { 'PASS' } else { 'FAIL' }))
     if ($bubbleHit) { $checks++ }
     # ③ 会话列表：任一行含目标名 且 任一行含 text 前缀（消费 py 侧已归一化的
-    # texts_norm 平铺行；preview 区域已收窄到会话列表列 x∈[0.16w,0.38w]，排除导航栏）
+    # texts_norm 平铺行；preview 区域已收窄到会话列表列中心 x∈[0.08w,0.30w]，排除导航栏）
     $preview = Invoke-SendChatOcr ([string]$s4.path) 'preview'
     $nameHit = $false
     $prefixHit = $false

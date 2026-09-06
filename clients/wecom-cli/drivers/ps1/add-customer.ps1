@@ -34,8 +34,9 @@ function Write-DriverLog([string]$Msg) {
 }
 
 # 比例坐标（真机参考系：主窗口 1089x828 / 内容子窗口 929x828 / 弹窗 400x292，2026-08-29 实测）
-$script:NavContactsRx = 0.0542    # 导航栏「通讯录」：主窗口宽 5.4%
-$script:NavContactsRy = 0.4444    #                    主窗口高 44.4%
+$script:NavContactsPx = 61         # 导航栏「通讯录」：导航栏为固定像素列（2026-09-04 实测
+$script:NavContactsPy = 1175       #   图标+文本块中心 x≈61、y≈1175；新版导航栏新增智能文档/
+                                   #   智能总结/工作台等项，旧比例 0.4444h 会点进聊天列表，必须像素锚定）
 $script:ChildAddRx = 0.9343       # 内容子窗口右上角「⊕添加」：宽 93.4%
 $script:ChildAddRy = 0.0459       #                              高 4.6%
 $script:DlgInputRx = 0.5000       # SearchExternalsWnd 输入框中心：宽 50%
@@ -101,8 +102,8 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WecomCli.AddCustomer' -Body {
     # 1) 主窗口 → 点「通讯录」导航
     $mainHwnd = Resolve-WeComMainWindow
     $main = Get-WeComWindowInfo ([IntPtr]$mainHwnd)
-    $navX = [int]($main.X + $main.W * $script:NavContactsRx)
-    $navY = [int]($main.Y + $main.H * $script:NavContactsRy)
+    $navX = [int]($main.X + $script:NavContactsPx)
+    $navY = [int]($main.Y + $script:NavContactsPy)
     Write-DriverLog ('step1 click 通讯录导航 screen=(' + $navX + ',' + $navY + ') mainHwnd=' + $mainHwnd + ' rect=(' + $main.X + ',' + $main.Y + ',' + $main.W + 'x' + $main.H + ')')
     [void](Send-WeComClick -Hwnd $mainHwnd -ScreenX $navX -ScreenY $navY)
 

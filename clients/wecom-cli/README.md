@@ -97,11 +97,28 @@ TARGET_AMBIGUOUS 拒绝发送。
   ≤3s 才变「已发送申请」——终态校验必须轮询（每 1s，上限 10s），单次快照会误报 EXECUTION_UNKNOWN。
 - 每次 add-customer 运行的点击坐标与 OCR 原始输出写 artifact 目录 `driver-log.txt`（真机排障用）。
 - 写动作零自动重试：`effect=unknown` 一律人工核对；`CUSTOMER_NOT_FOUND` 不重试。
-- M2（2026-08-31 实测）：搜索 = 点主窗口搜索框（比例 0.243/0.046）→ 输入关键词 →
-  `SearchResultWindow2` overlay，OCR 读分区结果列表；点结果行进会话 overlay 自动关闭。
-  中文输入必须 WM_CHAR 逐字（VkKeyScanW 对中文返回 -1，Send-WeComText 自动降级），英文/数字纯 WM_KEYDOWN。
-  发送 = PostMessage Enter；发送前必须 OCR 校验会话标题一致 + 输入框无残留草稿（fail-closed 防串消息）；
-  打开外部联系人会话主窗口可能变宽（1089→1449），坐标使用前必须重新取 rect。
+- M2（2026-08-31 实测；**2026-09-04 随客户端更新重新标定**）：搜索 = 点主窗口搜索框
+  （**像素锚定 (330,72)**，新版客户端左栏为固定像素列、比例坐标在窗口变宽后全部偏移；
+  × 清空按钮同理 (473,77)）→ 输入关键词 → `SearchResultWindow2` overlay，OCR 读分区结果
+  列表；点结果行进会话 overlay 自动关闭。中文输入必须 WM_CHAR 逐字（VkKeyScanW 对中文
+  返回 -1，Send-WeComText 自动降级），英文/数字纯 WM_KEYDOWN。发送 = PostMessage Enter；
+  发送前必须 OCR 校验会话标题一致 + 输入框无残留草稿（fail-closed 防串消息）；
+  打开外部联系人会话主窗口可能变宽（2196→2916 物理 px）。
+- **2026-09-04 客户端更新后的布局事实（真机实测，勿随意改）**：
+  - 搜索框固定在左栏 x∈[154,505]、y∈[44,100]（物理 px @2x DPI）；框内文本 x0≈221；
+    右侧聊天区会话标题与框同高（普通会话 x0≈0.296w、外部联系人 x0≈0.22w），
+    searchbox 残留检查必须用像素带 x∈[140,510]。
+  - 新版搜索 overlay 分区新增「应用提醒」（官方应用账号如文件传输助手归此分区）；
+    搜「陆伟@微信」零结果——驱动搜索词必须剥掉 @微信 后缀（结果行名称本就带后缀）。
+  - 外部联系人（@微信）会话右侧出现「智能总结」侧栏（客户需求/客户意向/成交卡点…，
+    x0≥0.76w），且主窗口撑宽到 2916：history/bubble/input 的 OCR band 必须检测并排除
+    侧栏（「立即总结」按钮会被误判成输入草稿、侧栏标签会被误读成 self 消息）；
+    聊天区左边界从比例改为像素锚定 max(0.10w, 620)。
+  - 未读角标在头像右上角 x≈[0.09w,0.11w]（旧标定 [0.15w,0.26w] 完全错过）；会话列表列
+    文本中心 x∈[0.08w,0.30w]；时间列中心 ≈0.257w；输入工具栏图标行移到 ≈0.83h。
+  - MCP stdio 场景下 Host 可能只传白名单环境变量（SDK getDefaultEnvironment）：PS 5.1
+    对管道化原生命令在该环境下抛 CantActivateDocumentInPipeline（python 未执行、
+    $LASTEXITCODE 为空）——驱动内 OCR 必须用 System.Diagnostics.Process 直启。
 - M3（2026-08-31 截图校 OCR）：未读角标是**会话行头像右上角**的红色圆形白字数字
   （不是行右侧——任务书描述与实测不符，以像素为准）；RapidOCR 对角标白字小数字漏检率高，
   必须红色像素 blob 检测定位 + 裁切 5x 放大（原图/二值化各试一次）OCR 读数，读不出兜底 1。

@@ -28,7 +28,9 @@ import re
 import sys
 
 SCALE = 2
-SECTION_NAMES = ('联系人', '群聊', '聊天记录')
+# 搜索 overlay 分区标题（2026-09-04 实测：新版客户端官方应用账号归「应用提醒」分区；
+# 旧三分区仍保留——分区标题是结果行的准入门，缺了会把整段结果丢弃）
+SECTION_NAMES = ('联系人', '群聊', '聊天记录', '应用提醒')
 # 输入区占位符（空输入框时 OCR 可能读到的灰字；命中视为空）
 PLACEHOLDER_MARKERS = ('发送消息', '输入消息', '聊点什么')
 # 输入区非内容 UI 文本（发送按钮标签；全/半角括号与 S/5 误识均归一后比对）
@@ -70,9 +72,24 @@ TIMELINE_RES = tuple(re.compile(p) for p in (
 
 
 def chat_area_x_min(w):
-    # 聊天区左边界：左侧会话列表栏宽固定（实测 1089/1449 宽窗下栏内日期/角标 x1≈396），
-    # 用窗口宽比例会在窄窗下把左栏内容漏进聊天区 band。取 max(0.28w, 400) 两者兜底。
-    return max(w * 0.28, 400)
+    # 聊天区左边界：左侧会话列表栏宽为客户端固定像素（2026-09-04 实测 2196/2916 两种
+    # 窗宽下列内日期/预览 x1≈594，聊天区自 x≈620 起）。列表栏不随窗口宽度按比例伸缩，
+    # 比例阈值（旧 0.28w，在 2916 宽的外部联系人布局下=831）会把真实 peer 气泡
+    # （x0≈667）整段排除（真机实测漏消息）。取 max(0.10w, 620) 像素锚定。
+    return max(w * 0.10, 620)
+
+
+def has_right_sidebar(boxes, w, h):
+    # 外部联系人（@微信）会话右侧出现「智能总结」侧栏（客户需求/客户意向/成交卡点…），
+    # 全部文本 x0≥0.76w、x1≤0.83w，跨多行分布；self 气泡右缘贴聊天区右边（x1≈0.92w）。
+    # 以「≥3 个 x0∈(0.74w,0.95w) 且 x1<0.90w 的 box、纵向跨度>0.3h」判侧栏存在。
+    col = [b for b in boxes
+           if w * 0.74 < b['x0'] < w * 0.95 and b['x1'] < w * 0.90
+           and h * 0.07 < b['y0'] < h * 0.85]
+    if len(col) < 3:
+        return False
+    ys = sorted(b['y0'] for b in col)
+    return (ys[-1] - ys[0]) > h * 0.3
 
 
 def emit(payload):
@@ -258,8 +275,11 @@ def analyze_title(boxes, img_path):
         w, h = Image.open(img_path).size
     except Exception:
         return {'title': ''}
-    x_min = chat_area_x_min(w)
-    band = [b for b in boxes if b['y0'] < h * 0.12 and b['x0'] > x_min]
+    # 标题栏行带 [0.15w, y<0.06h]（2026-09-04 实测修订）：标题 y0≈0.026-0.035h、
+    # x0 0.20w（外部联系人，右侧「智能总结」侧栏挤压聊天区）/0.296w（普通会话）。
+    # 旧带宽 y<0.12h + x>x_min 在外部联系人布局下会把消息区时间线（y≈0.074h）与
+    # 侧栏文本混进 band 拼成「昨天22:28服务点」这类伪标题（真机实测）。
+    band = [b for b in boxes if b['y0'] < h * 0.06 and b['x0'] > w * 0.15]
     lines = cluster_lines(band)
     for line in lines:
         text = line_text(line).strip()
@@ -281,7 +301,13 @@ def analyze_input(boxes, img_path):
     except Exception:
         return {'input_empty': False, 'texts': []}
     x_min = chat_area_x_min(w)
-    band = [b for b in boxes if h * 0.78 <= b['y0'] <= h * 0.97 and b['x0'] > x_min]
+    # 输入区 band [0.855h, 0.97h]：2026-09-04 实测工具栏图标行在 ≈0.83h（碎字「X·四·
+    # 回口·」会被当草稿文本误判非空 → send 恒拒发），文本区在其下、发送按钮行之上；
+    # 外部联系人布局下右侧「智能总结」侧栏的「立即总结」按钮（≈0.89h）也在该 y 带内，
+    # 必须随侧栏一起排除（真机实测被误判为残留草稿 → send 拒发）
+    if has_right_sidebar(boxes, w, h):
+        boxes = [b for b in boxes if b['x0'] <= w * 0.74]
+    band = [b for b in boxes if h * 0.855 <= b['y0'] <= h * 0.97 and b['x0'] > x_min]
     texts = [b['text'] for b in sorted(band, key=lambda b: (b['y0'], b['x0']))]
     # 发送按钮标签（「发送(S)」，实测固定出现在输入区右下角）不是草稿内容
     real = [t for t in texts
@@ -299,6 +325,9 @@ def analyze_bubble(boxes, img_path):
     except Exception:
         return {'last_message': '', 'last_messages': []}
     x_min = chat_area_x_min(w)
+    # 消息区上界 0.80h（输入工具栏 ≈0.83h）；外部联系人布局排除右侧「智能总结」侧栏
+    if has_right_sidebar(boxes, w, h):
+        boxes = [b for b in boxes if b['x0'] <= w * 0.74]
     area = [b for b in boxes if h * 0.15 <= b['y0'] <= h * 0.80 and b['x0'] > x_min]
     lines = cluster_lines(area)
     texts = [line_text(line).strip() for line in lines]
@@ -322,10 +351,10 @@ def analyze_preview(boxes, img_path):
         w, h = Image.open(img_path).size
     except Exception:
         return {'rows': [], 'texts': [], 'texts_norm': []}
-    # 会话列表列：x∈[0.16w, 0.38w]（按 box 中心 x 判定）；x<0.16w 是左侧导航栏
-    # （邮件/文档/待办/会议…，真机实测曾整列误入），y 从搜索框之下（0.07h）开始
+    # 会话列表列：中心 x∈[0.08w, 0.30w]（2026-09-04 实测，同 unread；x<0.08w 是
+    # 左侧导航栏（邮件/文档/待办/会议…，真机实测曾整列误入），y 从搜索框之下（0.07h）开始
     col = [b for b in boxes
-           if w * 0.16 <= (b['x0'] + b['x1']) / 2 <= w * 0.38 and b['y0'] >= h * 0.07]
+           if w * 0.08 <= (b['x0'] + b['x1']) / 2 <= w * 0.30 and b['y0'] >= h * 0.07]
     lines = cluster_lines(col)
     # texts：会话列表列全部行的平铺文本（OCR 行配对不稳定，调用方做「任一行含
     # 目标名/前缀」判定时用归一化后的 texts_norm 比 rows 稳）
@@ -356,10 +385,11 @@ def analyze_searchbox(boxes, img_path):
         w, h = Image.open(img_path).size
     except Exception:
         return {'texts': []}
-    # 搜索框区域：实测框体 y∈[22,54]、x∈[176,352] @1089x828（即 y∈[0.02h,0.065h]、
-    # x∈[0.15w,0.33w]）。下缘必须卡在 0.065h：搜索 overlay（SearchResultWindow2）从
-    # 主窗口相对 y≈54 处弹出，overlay 里的搜索历史落入区域会被误判为框内残留（真机实测）。
-    band = [b for b in boxes if h * 0.02 <= b['y0'] < h * 0.065 and w * 0.15 <= b['x0'] <= w * 0.33]
+    # 搜索框区域（像素锚定）：2026-09-04 实测框体固定在左栏内 x∈[154,505]、y∈[44,100]
+    # （不随窗宽伸缩；外部联系人布局主窗口撑宽到 2916 后，右侧聊天区标题「陆伟@微信」
+    # x0≈0.222w 会探进比例带，像素带 [140,510] 把它排除在外）。框内文本 x0≈221，
+    # 导航栏角标误识 x0≈53。
+    band = [b for b in boxes if h * 0.02 <= b['y0'] < h * 0.065 and 140 <= b['x0'] <= 510]
     texts = [b['text'] for b in sorted(band, key=lambda b: (b['y0'], b['x0']))]
     return {'texts': texts}
 
@@ -368,7 +398,8 @@ def analyze_searchbox(boxes, img_path):
 
 def is_time_box(b, w):
     """会话行右侧时间列 box（中心 x 在列右半部且文本像时间）。"""
-    if (b['x0'] + b['x1']) / 2 < w * 0.28:
+    # 2026-09-04 实测时间列中心 ≈0.257w、会话名中心 ≈0.128-0.153w，阈值取 0.17w
+    if (b['x0'] + b['x1']) / 2 < w * 0.17:
         return False
     return any(r.match(b['text']) for r in TIME_TEXT_RES)
 
@@ -381,12 +412,15 @@ def is_badge_red(p):
 
 
 def detect_badge_blobs(img, w, h):
-    """未读角标（红色圆形，在会话行头像的右上角，x≈0.18-0.22w）像素级检测。
+    """未读角标（红色圆形，在会话行头像的右上角，x≈0.09-0.11w）像素级检测。
     RapidOCR 对角标内白字小数字漏检率高（真机实测整角标无 OCR box），
     必须先按红色像素找到圆的位置，再裁切放大单独 OCR 读数。
     返回 [{x0,x1,y0,y1,cy}]（y 中心与会话名称行对齐）。"""
     px = img.convert('RGB').load()
-    x_lo, x_hi = int(w * 0.15), int(w * 0.26)
+    # 2026-09-04 实测：角标在头像（x≈[0.070w,0.105w]）右上角，x≈[0.09w,0.106w]；
+    # 旧标定 [0.15w,0.26w] 完全错过角标。取 [0.05w,0.14w]：含头像带、排除导航栏
+    # 红点（x<0.04w）
+    x_lo, x_hi = int(w * 0.05), int(w * 0.14)
     y_lo = int(h * 0.06)
     red_rows = []
     for y in range(y_lo, h):
@@ -461,11 +495,12 @@ def analyze_unread(boxes, img_path):
     blobs = detect_badge_blobs(img, w, h)
     if not blobs:
         return {'unread': []}
-    # 会话列表列文本行：x∈[0.16w, 0.38w]（按 box 中心 x 判定，同 preview 模式）；
-    # x<0.16w 是左侧导航栏（含「消息 8」「我的企业 6」等导航角标，必须排除）；
-    # 剔除会话行右侧时间列（09:08 / 08/24 / 昨天 / 刚刚 等）
+    # 会话列表列文本行：中心 x∈[0.08w,0.30w]（2026-09-04 实测会话名中心 ≈0.128-0.153w、
+    # preview ≈0.128-0.193w；旧标定 [0.16w,0.38w] 会把整列漏光）；
+    # x<0.08w 是左侧导航栏（含「消息 8」「我的企业 6」等导航角标，必须排除）；
+    # 剔除会话行右侧时间列（09:08 / 08/24 / 昨天 / 刚刚 等，中心 ≈0.257w，见 is_time_box）
     text_boxes = [b for b in boxes
-                  if w * 0.16 <= (b['x0'] + b['x1']) / 2 <= w * 0.38 and b['y0'] >= h * 0.07
+                  if w * 0.08 <= (b['x0'] + b['x1']) / 2 <= w * 0.30 and b['y0'] >= h * 0.07
                   and not is_time_box(b, w)]
     lines = cluster_lines(text_boxes)
     line_h = median_line_h(text_boxes)
@@ -527,9 +562,12 @@ def analyze_history(boxes, img_path):
     except Exception:
         return {'messages': []}
     x_min = chat_area_x_min(w)
-    # 消息区：标题带之下（0.12h）、输入工具栏之上（0.70h；真机实测工具栏图标行在
-    # 0.71-0.73h，OCR 会读成「X·三」「三8」碎字混入），排除会话列表列
-    area = [b for b in boxes if h * 0.12 <= b['y0'] <= h * 0.70 and b['x0'] > x_min]
+    # 消息区：标题带之下（0.12h）、输入工具栏之上（≈0.83h，上界卡 0.80h），排除会话
+    # 列表列；外部联系人布局下排除右侧「智能总结」侧栏（真机实测侧栏标签会被当成
+    # self 消息整段混入）
+    if has_right_sidebar(boxes, w, h):
+        boxes = [b for b in boxes if b['x0'] <= w * 0.74]
+    area = [b for b in boxes if h * 0.12 <= b['y0'] <= h * 0.80 and b['x0'] > x_min]
     lines = cluster_lines(area)
     messages = []
     for line in lines:
