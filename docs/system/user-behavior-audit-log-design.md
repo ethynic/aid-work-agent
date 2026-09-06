@@ -1,6 +1,6 @@
 # 用户行为审计日志设计（登录/登出/增删改留痕）
 
-> 状态：Phase 1（认证与账号安全事件）+ Phase 2（管理后台 CRUD 挂点）+ Phase 3（租户级提示词 + 普通用户动作挂点）已完成开发；Phase 4（查询页面）待开发
+> 状态：✅ 已完成（Phase 1-4 全部开发完成，2026-09-06）
 > 日期：2026-09-06
 > 关联：[计费审计规范](../../.claude/rules/billing_audit.md)（本设计不动计费链路）、[数据库表开发规范](../../.claude/rules/database_dev.md)、[SaaS 租户隔离规范](../../.claude/rules/backend_dev.md)
 
@@ -238,13 +238,15 @@ UA 来源只有两种（web 前端、微信/钉钉/飞书内置浏览器），�
 
 初版不引入分区表，量级不需要；若未来单表超 5000 万行再评估按月分区。
 
-## 7. 查询与展示（Phase 4，可选）
+## 7. 查询与展示（Phase 4，✅ 已完成）
 
-- 平台管理员：全局操作日志页（支持按租户/用户/行为/时间筛选）；
-- 租户管理员：本租户操作日志页（`X-Tenant-Id` 隔离）；
-- 复用列表页规范（BaseTable + BasePagination + `usePageContext`），页面元数据在 `configs/page_metadata.yaml` 登记。
+- 平台管理员：全局操作日志页（`/portal/behavior-logs`，支持按租户/用户/行为/时间筛选）；
+- 租户管理员：本租户操作日志页（`/t/:tenant_id/behavior-logs`，`X-Tenant-Id` 隔离）；
+- 复用列表页规范（BaseTable + BasePagination + `usePageContext`），前后端枚举消费 `frontend/web/api/enums.ts` 的 Behavior 系列 Map。
 
-API 设计：`GET /api/admin/behavior-logs`（租户管理员）、`GET /api/saas/behavior-logs`（平台管理员），列表按 `created_at DESC`。
+API 设计（已实现）：`GET /api/admin/behavior-logs`（租户管理员/平台管理员代租户）、`GET /api/saas/behavior-logs`（仅平台管理员，全局 + 可选 tenant_id 筛选），列表按 `created_at DESC`。
+
+**实施偏差说明**：页面未登记 `configs/page_metadata.yaml`——该 YAML 仅用于子智能体业务页面选择器，本页为管理后台页面，与既有管理页（错误日志页等）惯例一致不登记。筛选控件 5 个（action/resource_type/success/关键字/时间范围，平台视角追加租户 ID），略超列表页规范「搜索区不超 3 个」的指引，审计筛选为刚需予以保留。
 
 ## 8. 分阶段实施
 
@@ -253,7 +255,7 @@ API 设计：`GET /api/admin/behavior-logs`（租户管理员）、`GET /api/saa
 | Phase 1 | 表 + 写入模块 + 登录/登出/改密/渠道绑定事件全量挂点 | ✅ 已完成（80b1c0d3）。渠道绑定挂点留 Phase 3（现有绑定走回调链路自动创建，挂点会双写） |
 | Phase 2 | `audit_action` 装饰器挂平台管理员 `/api/saas/*` CRUD | ✅ 已完成（2026-09-06，三智能体流程通过）。实际范围按 §2 表格含 `/api/admin/*` 平台管理员端点；共 75 端点挂点（saas/api 15 文件 + api 4 文件）。装饰器实施时增强 4 处：Request 识别加 isinstance 防误拿同名 Pydantic body、name_arg 扫描任意参数名的 Pydantic body、同步 def 路由经 `asyncio.to_thread` 执行、业务级 `{"success": False}` 返回记失败；UPDATE 动作自动记 body 字段名列表（`exclude_unset`）入 detail。BehaviorResourceType 新增 9 细分值（activation_code / client_binding / rpa_client / channel_account / external_customer / reply_style / skill / error_log / knowledge_share），前后端同步 |
 | Phase 3 | 租户管理员 `/api/admin/*` CRUD + 普通用户动作 | ✅ 已完成（2026-09-06，三智能体流程通过）。实际挂点 15 端点：prompt_management 租户级 router（/api/prompts）5 端点、session.py 会话创建/重命名/删除 3 端点（消息级高频操作不记）、knowledge/api.py 上传/批量上传/删除/移动 + 分类增删改 7 端点、memory.py 长期记忆编辑、email_settings.py 邮箱凭证删除。BehaviorResourceType 新增 `knowledge_category`。实施决策：①「批量删除会话」端点实际不存在，未实现（batch_delete 暂无使用点）；②wecom_personal_rpa_admin 11 端点装饰器与内部 write_audit（wecom_rpa_audit_logs，服务独立 RPA 审计页）双写保留——两表受众不同（平台统一审计 vs RPA 业务审计页），存储成本可忽略；③渠道回调路径（channel_routes/wecom_personal_rpa_routes 的 write_audit）不挂装饰器；④测试根级 conftest.py 增加 autouse fixture mock `_insert_sync` 防测试脏数据 |
-| Phase 4 | 管理后台查询页面 | 前端列表页，按页面规范走 page_metadata 登记 |
+| Phase 4 | 管理后台查询页面 | ✅ 已完成（2026-09-06，三智能体流程通过）。后端 `src/api/behavior_logs.py` 2 个查询 API（admin 端租户隔离取 request.state、platform 端仅 platform_admin 全局视图）；前端 `BehaviorLogs.vue` 单组件双视角（scope prop）+ portalRoutes/agentRoutes 路由 + PortalLayout/MenuSidebar 菜单；不登记 page_metadata.yaml（管理页惯例，见 §7 偏差说明）；20 个集成测试（双租户隔离实测）+ 前端 288 测试全绿 |
 
 **回滚安全**：写入失败不影响业务；下线只需移除装饰器与显式调用，表保留。
 
