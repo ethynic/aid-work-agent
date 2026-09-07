@@ -176,6 +176,34 @@ class TestSingleStepQuery:
         assert result["analysis_meta"]["iterations"] == 3
 
 
+class TestModelBilling:
+    """模型与计费：内层 LLM 调用不硬编码模型（跟随外层智能体网关），
+    record_background_llm_usage 显式传实际模型名修正兜底落库单价。"""
+
+    @pytest.mark.asyncio
+    async def test_chat_with_tools_has_no_hardcoded_model(self, agent, mock_llm):
+        mock_llm.chat_with_tools.side_effect = [
+            _make_llm_response(content="done", tool_calls=None),
+        ]
+        agent._chart_nudge_done = True
+        await agent.run("按区域统计销售额")
+
+        _, kwargs = mock_llm.chat_with_tools.call_args
+        assert "model" not in kwargs
+
+    @pytest.mark.asyncio
+    async def test_record_usage_passes_actual_model(self, agent, mock_llm):
+        with patch("src.services.session_record.record_background_llm_usage") as mock_record:
+            mock_llm.chat_with_tools.side_effect = [
+                _make_llm_response(content="done", tool_calls=None),
+            ]
+            agent._chart_nudge_done = True
+            await agent.run("按区域统计销售额")
+
+        mock_record.assert_called_once()
+        assert mock_record.call_args.kwargs.get("model") == "test-model"
+
+
 # ============================================================
 # Tests: 多步聚合 → to_chart
 # ============================================================

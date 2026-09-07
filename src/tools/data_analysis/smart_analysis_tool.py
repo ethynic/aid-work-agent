@@ -47,6 +47,7 @@ class SmartDataAnalysisTool(BaseTool):
         # 1. 解析 tenant_id / subagent_id（subagent_id 用于共享知识库检索范围）
         tenant_id = None
         subagent_id = None
+        context = None
         try:
             from src.saas.context import get_current_tenant_id
             tenant_id = get_current_tenant_id()
@@ -83,9 +84,12 @@ class SmartDataAnalysisTool(BaseTool):
             from src.core import master_agent
             from src.tools.data_analysis.analysis_agent import AnalysisAgent
 
+            # 优先用调用方智能体的网关（跟随数字员工模型配置），无上下文时兜底 master 网关
+            llm = context.llm_gateway if context and context.llm_gateway else master_agent.llm
+
             analysis_id = f"analysis_{uuid.uuid4().hex[:8]}"
             agent = AnalysisAgent(
-                llm_gateway=master_agent.llm,
+                llm_gateway=llm,
                 analyzer=analyzer,
                 analysis_id=analysis_id,
                 tables_metadata=tables_metadata,

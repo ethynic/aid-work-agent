@@ -193,6 +193,24 @@ def test_factory_inherits_tenant_env_vars_from_parent():
     assert nested.env_vars["AGENT_TOKEN"] == "tk"
 
 
+def test_factory_passes_llm_gateway():
+    gateway = object()
+    ctx = ExecutionContextFactory.for_agent_call(llm_gateway=gateway)
+    assert ctx.llm_gateway is gateway
+
+
+def test_factory_inherits_llm_gateway_from_parent():
+    gateway = object()
+    with tool_execution_scope(ToolExecutionContext(llm_gateway=gateway)):
+        nested = ExecutionContextFactory.for_agent_call(session_id="nested")
+    assert nested.llm_gateway is gateway
+
+
+def test_factory_llm_gateway_defaults_to_none():
+    ctx = ExecutionContextFactory.for_agent_call(session_id="s")
+    assert ctx.llm_gateway is None
+
+
 def test_env_vars_frozen_against_mutation():
     source = {"AGENT_TOKEN": "tk"}
     ctx = ToolExecutionContext(env_vars=source)

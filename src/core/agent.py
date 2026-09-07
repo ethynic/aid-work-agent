@@ -381,6 +381,7 @@ class Agent:
             tenant_id=tenant_id, user_id=user_id, session_id=self.session_id,
             subagent_id=(self.subagent_config.dir_name if self.subagent_config else None),
             agent_execution_id=self.execution_id,
+            llm_gateway=self.llm,
         )
         task = asyncio.create_task(self.tool_executor.execute(
             tool_name, execution_args, context=context
@@ -2051,6 +2052,7 @@ class Agent:
                 tenant_id=self._init_tenant_id,
                 user_id=user.user_id if user else self._init_user_id,
                 session_id=session_id,
+                llm_gateway=self.llm,
             )):
                 redelegate_result = await self._tool_controls.get("delegate_to_subagent").execute(
                     subagent_name=subagent_name,
@@ -2258,6 +2260,7 @@ class Agent:
             agent_execution_id=getattr(self, "execution_id", None),
             request_data=request_context.request_data if request_context else {},
             env_vars=_tenant_env_vars or None,
+            llm_gateway=self.llm,
         )
         
         # Add timestamp context to help LLM understand current time
@@ -3435,6 +3438,7 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
             ),
             agent_execution_id=self.execution_id,
             env_vars=_tenant_env_vars or None,
+            llm_gateway=self.llm,
         )
 
         # 事件辅助函数 — 内部收集并转发给 progress_callback

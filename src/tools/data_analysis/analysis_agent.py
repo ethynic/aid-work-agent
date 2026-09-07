@@ -106,7 +106,6 @@ class AnalysisAgent:
                     # 4000 曾导致推理模型烧穿预算返回空结论（2026-08 生产事故），
                     # 提升到与网关默认一致，复杂分析（多品类同比等）才够用
                     max_tokens=16384,
-                    model="deepseek-v4-pro",
                 )
             except Exception as e:
                 logger.error(f"AnalysisAgent LLM call failed: {e}")
@@ -132,8 +131,9 @@ class AnalysisAgent:
             # 累加 token 用量
             self._accumulate_usage(usage)
             # 累加 LLM 用量到当前 SessionRecordService（对话内后台 LLM 调用计费）
+            # 显式传实际模型名：无会话记录兜底落库分支按正确单价折算积分
             from src.services.session_record import record_background_llm_usage
-            record_background_llm_usage(usage)
+            record_background_llm_usage(usage, model=self.llm.get_model_name())
 
             content = response.get("content", "")
             tool_calls = response.get("tool_calls") or []

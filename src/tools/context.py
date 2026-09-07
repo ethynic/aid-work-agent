@@ -26,6 +26,9 @@ class ToolExecutionContext:
     # 租户级子智能体环境变量（subagent_env_vars 表），替代旧的进程级 os.environ 注入，
     # 供 http_api ${VAR} 替换、skill 子进程继承等消费；随请求隔离，避免并发消息互相污染
     env_vars: Mapping[str, str] = field(default_factory=dict)
+    # 调用方智能体的 LLM 网关实例，供工具内部 LLM 调用跟随外层智能体模型配置
+    #（如数据分析 AnalysisAgent）；无上下文的调用方（后台调度/渠道侧）为 None，由工具自行兜底
+    llm_gateway: Optional[Any] = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "request_data", freeze_request_mapping(self.request_data))
@@ -62,7 +65,7 @@ class ExecutionContextFactory:
     def for_agent_call(
         *, tenant_id=None, user_id=None, session_id=None, channel=None,
         subagent_id=None, chat_record_id=None, agent_execution_id=None,
-        tool_call_id=None, request_data=None, env_vars=None,
+        tool_call_id=None, request_data=None, env_vars=None, llm_gateway=None,
     ) -> ToolExecutionContext:
         if tenant_id is None or user_id is None:
             try:
@@ -76,6 +79,8 @@ class ExecutionContextFactory:
             request_data = parent.request_data if parent else {}
         if env_vars is None:
             env_vars = parent.env_vars if parent else {}
+        if llm_gateway is None:
+            llm_gateway = parent.llm_gateway if parent else None
         return ToolExecutionContext(
             tenant_id=tenant_id, user_id=user_id, session_id=session_id,
             channel=channel, subagent_id=subagent_id,
@@ -83,6 +88,7 @@ class ExecutionContextFactory:
             tool_call_id=tool_call_id,
             request_data=request_data,
             env_vars=env_vars,
+            llm_gateway=llm_gateway,
         )
 
     @staticmethod

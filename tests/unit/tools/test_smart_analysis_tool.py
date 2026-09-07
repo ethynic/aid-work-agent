@@ -281,3 +281,53 @@ class TestExecuteWithMock:
             assert "未产出有效结论" in result["error"]
             assert result["conclusion"] == result["error"]
 
+
+class TestGatewaySelection:
+    """LLM 网关选择测试：上下文有 llm_gateway 时优先用（跟随数字员工模型配置），
+    无上下文时回退 master_agent.llm（后台调度/渠道侧行为不变）。"""
+
+    @pytest.mark.asyncio
+    async def test_execute_uses_context_llm_gateway(self):
+        from src.tools.context import ToolExecutionContext, tool_execution_scope
+
+        ctx_gateway = MagicMock()
+        mock_result = {"success": True, "conclusion": "ok", "artifacts": [],
+                       "analysis_meta": {"iterations": 1, "duration_ms": 10, "tokens_used": 10, "tables_used": [], "trace_id": "t"}}
+
+        with patch("src.tools.data_analysis.data_analyzer.DataAnalyzer") as MockAnalyzer, \
+             patch("src.tools.data_analysis.analysis_agent.AnalysisAgent") as MockAgent, \
+             patch("src.core.master_agent") as mock_master:
+            mock_master.llm = MagicMock()
+            mock_analyzer_instance = MockAnalyzer.return_value
+            mock_analyzer_instance.load_table = AsyncMock()
+            mock_agent_instance = MockAgent.return_value
+            mock_agent_instance.run = AsyncMock(return_value=mock_result)
+
+            tool = SmartDataAnalysisTool()
+            with tool_execution_scope(ToolExecutionContext(tenant_id="t1", llm_gateway=ctx_gateway)):
+                result = await tool.execute(requirement="按区域统计销售额")
+
+            assert result["success"] is True
+            assert MockAgent.call_args.kwargs["llm_gateway"] is ctx_gateway
+
+    @pytest.mark.asyncio
+    async def test_execute_falls_back_to_master_llm_without_context(self):
+        mock_result = {"success": True, "conclusion": "ok", "artifacts": [],
+                       "analysis_meta": {"iterations": 1, "duration_ms": 10, "tokens_used": 10, "tables_used": [], "trace_id": "t"}}
+
+        with patch("src.tools.data_analysis.data_analyzer.DataAnalyzer") as MockAnalyzer, \
+             patch("src.tools.data_analysis.analysis_agent.AnalysisAgent") as MockAgent, \
+             patch("src.core.master_agent") as mock_master:
+            master_llm = MagicMock()
+            mock_master.llm = master_llm
+            mock_analyzer_instance = MockAnalyzer.return_value
+            mock_analyzer_instance.load_table = AsyncMock()
+            mock_agent_instance = MockAgent.return_value
+            mock_agent_instance.run = AsyncMock(return_value=mock_result)
+
+            tool = SmartDataAnalysisTool()
+            result = await tool.execute(requirement="按区域统计销售额")
+
+            assert result["success"] is True
+            assert MockAgent.call_args.kwargs["llm_gateway"] is master_llm
+
