@@ -1,35 +1,46 @@
 ## 项目概览
 
-本项目是企业员工智能代理系统，通过对话式 AI 处理企业员工的日常任务。系统使用国内大模型提供商（Qwen 和 ZhipuAI），支持多渠道接入（企业微信、钉钉、飞书）。系统支持多租户，可承载数百并发用户。
+本项目是企业员工智能代理系统，通过对话式 AI 处理企业员工的日常任务。系统使用国内大模型提供商（Qwen 和 ZhipuAI），支持多渠道接入（企业微信、钉钉、飞书）。系统支持多租户；并发承载能力以实际部署配置和压测结果为准。
 
-**设计原则**：稳定性和可预测性优先于创造力。专业、简洁的回复。不确定时诚实承认。不幽默、不娱乐、不学术猜测。
+**设计原则**：产品默认交互以稳定性、可预测性和专业简洁为先；不确定时诚实说明。开发助手应区分事实、推断和建议，不将产品回复风格误用于限制必要的技术探索。
 
-**安全原则**：敏感信息必须加密，不以明文形式返回给用户。
+**安全原则**：密钥、令牌、密码等凭据不得出现在回复、日志或提交中；排查时仅输出脱敏信息。敏感数据的存储、传输和展示遵循项目既有加密、访问控制及脱敏规范，不自行设计加密方案。
 
 ## 开发规范
 
-详细规范见 [.Codex/rules/](.Codex/rules/) 目录：
+详细规范统一维护在 [.claude/rules/](.claude/rules/) 目录，Codex 同样使用。按任务读取相关文档，不默认加载整个目录：
 
 | 文档 | 内容 |
 |------|------|
-| [.Codex/rules/backend_dev.md](.Codex/rules/backend_dev.md) | 后端开发规范，日志、错误处理、异步/Gunicorn、API 命名规范 |
-| [.Codex/rules/frontend_dev.md](.Codex/rules/frontend_dev.md) | 前端开发规范 |
-| [.Codex/rules/testing.md](.Codex/rules/testing.md) | 测试目录结构、分层规则、Fixtures、运行命令 |
-| [.Codex/rules/architecture.md](.Codex/rules/architecture.md) | 系统架构、核心组件、扩展点 |
-| [.Codex/rules/database_dev.md](.Codex/rules/database_dev.md) | 数据库表开发规范，包括表分类、租户隔离要求、变更记录 |
-| [.claude/rules/dev_workflow.md](.claude/rules/dev_workflow.md) | **开发流程规范**：三智能体开发流程（开发→测试→CodeReview），非平凡任务必读 |
+| [.claude/rules/backend_dev.md](.claude/rules/backend_dev.md) | 后端开发规范，日志、错误处理、异步/Gunicorn、API 命名规范 |
+| [.claude/rules/frontend_dev.md](.claude/rules/frontend_dev.md) | 前端开发规范 |
+| [.claude/rules/testing.md](.claude/rules/testing.md) | 测试目录结构、分层规则、Fixtures、运行命令 |
+| [.claude/rules/architecture.md](.claude/rules/architecture.md) | 系统架构、核心组件、扩展点 |
+| [.claude/rules/database_dev.md](.claude/rules/database_dev.md) | 数据库表开发规范，包括表分类、租户隔离要求、变更记录 |
+| [.claude/rules/dev_workflow.md](.claude/rules/dev_workflow.md) | **开发流程规范**：按风险分级的开发、独立测试与 CodeReview，非平凡任务必读 |
 
 **回答简洁**：每个响应不超过 5000 个 token
 **代码输出**：只输出修改的部分，不要输出完整文件
 **拒绝废话**：不要输出"让我们一步步分析"等开场白，直接给出解决方案
 **不要复述问题**：直接回答，不要重复用户的问题
-**避免长输出**：一次性输出 32000 个 token，会触发"output token maximum"错误
+**避免长输出**：优先给出结论、必要证据和验证结果，不将固定 token 数作为所有运行环境的技术限制。
+
+## 规则与 skill 的适用边界
+
+- 本文件约束开发助手；`src/skills/`、业务子智能体及其提示词属于产品运行时资源，不因开发助手 skill 清理而删除。
+- 项目约束优先于通用 skill 的风格建议，且不得覆盖当前会话的系统、开发者指令和用户明确要求。发现文档与实现不一致时，核对相关代码并说明差异。
+- `.agents/skills/` 是本项目 Codex skill 入口；`.claude/skills/` 是另一客户端的入口，不能仅因内容相同认定为可删除的重复文件。
+- 非平凡代码开发仍按开发流程规范执行；只读检查、纯文档及 typo 修改不触发完整三智能体流程。不要仅因修改了多个 Markdown 文件升级为完整开发流程。
+- 流程中的 `Agent`、`AskUserQuestion`、`WebFetch` 是其他客户端的工具名称，应映射到当前实际可用工具；不存在时不得假装调用成功。子智能体用于边界明确的独立任务，主控者负责整合与交接。
+- 现有企业后台优先复用 Base* 组件、语义 token 和布局规范。`frontend-design` 的视觉创新建议仅在需求允许时采用，不强制更换字体、主题、布局或添加动画。
+- 仅运行与变更及风险相关的验证；同一代码状态已有可核验结果时，不机械重复测试。保留开发流程要求的独立测试和发布前关键启动检查；修复、合并或环境变化后重跑受影响检查。
 
 ## Git 提交规范
 **不要自动提交代码，仅当用户明确说“提交代码”才提交**
-1. 提交前执行 `git fetch` 拉取远程最新代码
-2. 检查是否有冲突，如有冲突先解决冲突再提交
-3. 提交后立即 `git push` 推送到远程
+1. 此限制同样适用于 hotfix 和 skill 中的提交步骤；完成开发不等于获得提交授权。
+2. 提交前确认当前分支、工作区改动和 upstream，执行 `git fetch` 更新远程引用；fetch 不会自动合并代码。
+3. 如需同步远程变更，保留用户已有改动，按仓库实际分支关系整合并解决冲突；不得默认 stash 全部改动或强制覆盖。整合后重跑受影响验证。
+4. 只暂存本任务相关改动。提交后立即推送到当前分支已确认的远程目标，不写死 `origin master`，不强制推送。无明确远程目标时先说明缺失信息。
 
 ## 文档登记规范
 
@@ -38,7 +49,7 @@
 - 新增设计文档 → 在对应分区添加条目，关联设计文档链接
 - 新增开发计划 → 在对应条目补充开发计划链接
 
-**不得遗漏登记**，确保 `docs/ideas.md` 始终是项目所有文档的完整索引。
+**不得遗漏登记**，`docs/ideas.md` 与 `docs/ideas_finished.md` 共同维护进行中和已完成事项的索引；单纯修订 AGENTS.md、规则或 skill 不要求虚构功能条目。
 
 ### 开发状态更新规范
 

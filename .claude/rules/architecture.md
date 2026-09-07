@@ -13,7 +13,7 @@
 
 **智能体** (`src/core/agent.py`)：核心大脑。单个 `Agent` 类同时作为主智能体和子智能体（通过 `is_master` 标志区分）。`master_agent` 单例从 `src/core/__init__.py` 导出。智能体循环调用大模型、执行工具、累积结果，并通过回调推送进度事件。
 
-**工具系统** (`src/tools/`)：工具继承 `BaseTool` 并实现 `async execute(args)`。**关键**：用于大模型函数调用的工具 schema 定义在 `agent.py` 顶部的 `AGENT_TOOLS` 列表中，与 `ToolRegistry` 实现是**分开的**。添加工具需要同时更新两处：`AGENT_TOOLS` 中的 schema 和 `Agent._register_builtin_tools()` 中的注册。
+**工具系统** (`src/tools/`)：工具继承 `BaseTool` 并实现 `async execute(self, **kwargs)`。普通工具由 Catalog 自动发现，`src/tools/assembly.py` 的 `assemble_agent_tools()` 负责实例化、注册并按 Agent 角色和配置筛选；schema 从工具类定义生成。**新增普通工具无需在 `agent.py` 中添加注册或 schema 代码**。控制工具由 `src/tools/control_set.py` 单独装配，具体要求见下方「添加工具」。
 
 **技能系统** (`src/core/skill_*.py` + `src/skills/`)：领域知识扩展包，存储在带 `SKILL.md` 文件（YAML 头部 + Markdown）的目录中。`SkillRegistry` 发现并索引技能。当大模型调用 `use_skill` 时，技能被加载到上下文中，并通过 `skill_execute` 执行。技能支持按文件扩展名自动匹配。
 
@@ -52,8 +52,9 @@
 3. 在类上设置 `name`、`description`、`display_name`、`InputModel`
 4. 实现 `async execute(self, **kwargs) -> Dict[str, Any]`
 5. 可选择重写 `get_display_name()` 用于动态显示名称
-6. 保持 `catalog=True` 且支持无参构造；Catalog 会自动发现，Assembly 会按 Agent
-   角色和配置生成最终 Registry，无需修改 `agent.py`
+6. 保持 `catalog=True` 且支持无参构造，工具 `name` 必须唯一；`src/tools/registry.py`
+   的 `discover_tool_classes()` 自动发现工具，Assembly 按 Agent 角色和配置生成
+   最终 Registry，无需修改 `agent.py` 或逐个手动注册普通工具
 
 有构造依赖或会改变 Agent 状态机的控制工具必须设置 `catalog=False`，并在
 `src/tools/control_set.py` 中显式装配和评审。请求级 tenant/user/session 从

@@ -1,42 +1,35 @@
 ---
 name: frontend-design
-description: Create distinctive, production-grade frontend interfaces with high design quality. Use this skill when the user asks to build web components, pages, artifacts, posters, or applications (examples include websites, landing pages, dashboards, React components, HTML/CSS layouts, or when styling/beautifying any web UI). Generates creative, polished code and UI design that avoids generic AI aesthetics.
+description: 为本项目企业后台创建或调整页面、组件、布局和交互，优先复用既有设计系统。用于新页面、表单、列表、详情和实质 UI 优化；纯接口逻辑、文案纠错不需启动设计流程。
 license: Complete terms in LICENSE.txt
 ---
 
-This skill guides creation of distinctive, production-grade frontend interfaces that avoid generic "AI slop" aesthetics. Implement real working code with exceptional attention to aesthetic details and creative choices.
+# 企业后台界面设计
 
-The user provides frontend requirements: a component, page, application, or interface to build. They may include context about the purpose, audience, or technical constraints.
+目标是让员工高效、准确地完成任务：信息层级清楚、操作可预测、状态完整，与已有页面一致。
 
-## Design Thinking
+## 开始前
 
-Before coding, understand the context and commit to a BOLD aesthetic direction:
-- **Purpose**: What problem does this interface solve? Who uses it?
-- **Tone**: Pick an extreme: brutally minimal, maximalist chaos, retro-futuristic, organic/natural, luxury/refined, playful/toy-like, editorial/magazine, brutalist/raw, art deco/geometric, soft/pastel, industrial/utilitarian, etc. There are so many flavors to choose from. Use these for inspiration but design one that is true to the aesthetic direction.
-- **Constraints**: Technical requirements (framework, performance, accessibility).
-- **Differentiation**: What makes this UNFORGETTABLE? What's the one thing someone will remember?
+读取 [前端规范](../../../.claude/rules/frontend_dev.md) 的相关部分，以及最接近当前任务的现有页面。列表、详情/编辑页分别按该规范链接的页面约定实施，不默认阅读全部前端文件。
 
-**CRITICAL**: Choose a clear conceptual direction and execute it with precision. Bold maximalism and refined minimalism both work - the key is intentionality, not intensity.
+先确定使用者、主要操作、数据规模和关键状态。已有需求与代码足够时直接实施；仅对会改变业务行为或交付范围的缺失信息澄清。
 
-Then implement working code (HTML/CSS/JS, React, Vue, etc.) that is:
-- Production-grade and functional
-- Visually striking and memorable
-- Cohesive with a clear aesthetic point-of-view
-- Meticulously refined in every detail
+## 实现约束
 
-## Frontend Aesthetics Guidelines
+- 复用项目 Base* 组件、variants、语义 token、字体与间距体系，遵循 AppHeader 和现有页面容器约定；不在页面中另造按钮、表格或颜色体系。
+- 优先优化主次信息、对齐、密度、表单分组、筛选和操作位置。表格长文本、金额、时间、批量操作等按既有约定处理。
+- 按实际交互覆盖加载、空数据、错误、禁用和提交反馈；危险操作遵循现有确认方式，防止重复提交。不要为了展示设计而加入未要求的业务功能。
+- 保持键盘可达、可见焦点、表单标签和清晰错误提示；颜色不作为唯一状态信号。检查窄屏溢出，密集表格采用项目已有的滚动或响应式模式。
+- 不强制更换字体或深浅主题，不为了独特而加入不对称布局、装饰渐变、动画库、自定义光标或新依赖。确需共享组件扩展时，先检查现有调用者的兼容性。
 
-Focus on:
-- **Typography**: Choose fonts that are beautiful, unique, and interesting. Avoid generic fonts like Arial and Inter; opt instead for distinctive choices that elevate the frontend's aesthetics; unexpected, characterful font choices. Pair a distinctive display font with a refined body font.
-- **Color & Theme**: Commit to a cohesive aesthetic. Use CSS variables for consistency. Dominant colors with sharp accents outperform timid, evenly-distributed palettes.
-- **Motion**: Use animations for effects and micro-interactions. Prioritize CSS-only solutions for HTML. Use Motion library for React when available. Focus on high-impact moments: one well-orchestrated page load with staggered reveals (animation-delay) creates more delight than scattered micro-interactions. Use scroll-triggering and hover states that surprise.
-- **Spatial Composition**: Unexpected layouts. Asymmetry. Overlap. Diagonal flow. Grid-breaking elements. Generous negative space OR controlled density.
-- **Backgrounds & Visual Details**: Create atmosphere and depth rather than defaulting to solid colors. Add contextual effects and textures that match the overall aesthetic. Apply creative forms like gradient meshes, noise textures, geometric patterns, layered transparencies, dramatic shadows, decorative borders, custom cursors, and grain overlays.
+## 视觉创新边界
 
-NEVER use generic AI-generated aesthetics like overused font families (Inter, Roboto, Arial, system fonts), cliched color schemes (particularly purple gradients on white backgrounds), predictable layouts and component patterns, and cookie-cutter design that lacks context-specific character.
+仅当用户明确要求品牌重设计、营销页面或全新视觉方向时探索新的视觉方案；范围限于该任务，并继续满足可访问性和交付约束。普通后台新页面沿用设计系统，不因“从零创建”而重新设计品牌。
 
-Interpret creatively and make unexpected choices that feel genuinely designed for the context. No design should be the same. Vary between light and dark themes, different fonts, different aesthetics. NEVER converge on common choices (Space Grotesk, for example) across generations.
+## 验证与交付
 
-**IMPORTANT**: Match implementation complexity to the aesthetic vision. Maximalist designs need elaborate code with extensive animations and effects. Minimalist or refined designs need restraint, precision, and careful attention to spacing, typography, and subtle details. Elegance comes from executing the vision well.
+依照前端规范完成受影响页面的交互和视觉检查；代码测试/build 的范围与结果复用遵循 [开发流程规范](../../../.claude/rules/dev_workflow.md)。修复本次改动引入的问题，不扩展为全站改版。
 
-Remember: Claude is capable of extraordinary creative work. Don't hold back, show what can truly be created when thinking outside the box and committing fully to a distinctive vision.
+用户要求 UI/UX 审计，或大范围布局/交互重构需要独立设计审查时，使用可用的 `web-design-guidelines` skill。普通局部改动按项目规范做针对性检查，不自动触发整套远程准则审计。
+
+交付时说明改动、实际检查结果和未验证项，不把仅通过 build 当成视觉验收完成。
