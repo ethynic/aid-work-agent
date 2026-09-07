@@ -110,7 +110,10 @@ async def get_platform_token_usage(
             "output_cost": tenant_item["output_cost"],
             "total_cost": tenant_item["total_cost"],
             "credit_cost": float(tenant_item["credit_cost"] or 0),
-            "has_unpriced_tokens": tenant_item["has_unpriced_tokens"]
+            # 兼容发布后 1h 内的旧缓存条目：缺 reference_amount 时传 None，前端显示 "-"
+            "reference_amount": round(float(tenant_item["reference_amount"]), 2) if tenant_item.get("reference_amount") is not None else None,
+            "has_unpriced_tokens": tenant_item["has_unpriced_tokens"],
+            "has_unrecharged_credits": bool(tenant_item.get("has_unrecharged_credits", False))
         })
 
     # 4. 构建响应（使用 ChatRecordDB 返回的汇总信息）

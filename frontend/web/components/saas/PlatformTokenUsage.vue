@@ -65,6 +65,7 @@
                 <th class="px-4 py-2 text-left text-xs font-medium text-muted">输出Token数 (百万)</th>
                 <th class="px-4 py-2 text-left text-xs font-medium text-muted">Token成本 (元)</th>
                 <th class="px-4 py-2 text-left text-xs font-medium text-muted">消耗积分</th>
+                <th class="px-4 py-2 text-left text-xs font-medium text-muted">参考金额 (元)</th>
                 <th class="px-4 py-2 text-left text-xs font-medium text-muted">对话次数</th>
               </tr>
             </thead>
@@ -83,6 +84,10 @@
                      :title="`查看 ${item.company_name} ${selectedMonth} 每日积分用量`"
                      @click="openDailyUsageModal(item)">{{ formatCredit(item.credit_cost) }}</a>
                 </td>
+                <td class="px-4 py-2 text-sm text-default">
+                  {{ formatReferenceAmount(item) }}
+                  <span v-if="item.has_unrecharged_credits" class="text-amber-500 text-[10px] ml-1">含充值前消耗</span>
+                </td>
                 <td class="px-4 py-2 text-sm text-default">{{ item.conversation_count }}</td>
               </tr>
               <!-- 汇总行 -->
@@ -94,6 +99,7 @@
                   {{ formatCost(summary.total_cost, summary.has_unpriced_tokens) }}
                 </td>
                 <td class="px-4 py-2 text-sm text-danger-600 font-medium">{{ formatCredit(summary.total_credit_cost) }}</td>
+                <td class="px-4 py-2 text-sm text-default">{{ formatSummaryReferenceAmount() }}</td>
                 <td class="px-4 py-2 text-sm text-default">{{ summary.total_conversations }}</td>
               </tr>
             </tbody>
@@ -170,6 +176,20 @@ function formatCost(cost: number, hasUnpricedTokens?: boolean): string {
   if (cost > 0) return cost.toFixed(2)
   if (hasUnpricedTokens) return '—'
   return '0.00'
+}
+
+function formatReferenceAmount(item: any): string {
+  // null 兼容发布后 1h 内旧缓存条目（后端缺字段时传 null）
+  if (item.reference_amount == null) return '—'
+  if (item.reference_amount > 0) return item.reference_amount.toFixed(2)
+  if (item.has_unrecharged_credits) return '—'
+  return '0.00'
+}
+
+function formatSummaryReferenceAmount(): string {
+  const total = summary.value?.total_reference_amount
+  if (total == null) return '—'
+  return total.toFixed(2)
 }
 
 onMounted(() => loadData())

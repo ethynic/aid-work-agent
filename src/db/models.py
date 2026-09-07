@@ -1430,6 +1430,9 @@ class ChatRecordDB:
                     ), 0) as input_cost,
                     COALESCE(SUM(cr.completion_tokens * tcp.output_price_per_m / 1000000), 0) as output_cost,
                     COALESCE(SUM(cr.credit_cost), 0) as credit_cost,
+                    COALESCE(SUM(
+                        CASE WHEN r.unit_price IS NOT NULL THEN cr.credit_cost * r.unit_price ELSE 0 END
+                    ), 0) as reference_amount,
                     EXISTS(
                         SELECT 1 FROM chat_records cr2
                         LEFT JOIN token_cost_prices tcp2 ON LOWER(cr2.model) = LOWER(tcp2.model_name)
@@ -1438,9 +1441,19 @@ class ChatRecordDB:
                           AND NOT (cr2.prompt_tokens = 0 AND cr2.completion_tokens = 0)
                           AND tcp2.model_name IS NULL
                           AND cr2.model IS NOT NULL
-                    ) as has_unpriced_tokens
+                    ) as has_unpriced_tokens,
+                    COUNT(*) FILTER (WHERE r.unit_price IS NULL AND cr.credit_cost > 0) > 0 as has_unrecharged_credits
                 FROM chat_records cr
                 LEFT JOIN token_cost_prices tcp ON LOWER(cr.model) = LOWER(tcp.model_name)
+                -- 参考金额：按消耗时刻之前最近一笔充值的金额/积分比值折算（无充值记录时 unit_price 为 NULL）
+                LEFT JOIN LATERAL (
+                    SELECT tr.amount_yuan::float8 / NULLIF(tr.credits, 0) AS unit_price
+                    FROM tenant_recharges tr
+                    WHERE tr.tenant_id = cr.tenant_id
+                      AND tr.created_at <= cr.created_at
+                    ORDER BY tr.created_at DESC, tr.id DESC
+                    LIMIT 1
+                ) r ON true
                 WHERE cr.created_at >= %s AND cr.created_at <= %s
                   AND NOT (cr.prompt_tokens = 0 AND cr.completion_tokens = 0)
                 GROUP BY cr.tenant_id
@@ -1455,6 +1468,7 @@ class ChatRecordDB:
             total_input_cost = 0.0
             total_output_cost = 0.0
             total_credit_cost = 0
+            total_reference_amount = 0.0
             has_unpriced = False
 
             for row in rows:
@@ -1463,6 +1477,7 @@ class ChatRecordDB:
                     output_cost = float(row["output_cost"]) if row["output_cost"] else 0.0
                     tenant_unpriced = bool(row["has_unpriced_tokens"])
                     tenant_credit_cost = float(row["credit_cost"] or 0)
+                    tenant_reference_amount = float(row["reference_amount"] or 0)
                     tenant_data.append({
                         "tenant_id": row["tenant_id"],
                         "input_tokens": row["input_tokens"],
@@ -1472,7 +1487,9 @@ class ChatRecordDB:
                         "output_cost": output_cost,
                         "total_cost": round(input_cost + output_cost, 2),
                         "credit_cost": tenant_credit_cost,
-                        "has_unpriced_tokens": tenant_unpriced
+                        "reference_amount": round(tenant_reference_amount, 2),
+                        "has_unpriced_tokens": tenant_unpriced,
+                        "has_unrecharged_credits": bool(row["has_unrecharged_credits"])
                     })
                     total_input_tokens += row["input_tokens"]
                     total_output_tokens += row["output_tokens"]
@@ -1480,6 +1497,7 @@ class ChatRecordDB:
                     total_input_cost += input_cost
                     total_output_cost += output_cost
                     total_credit_cost += tenant_credit_cost
+                    total_reference_amount += tenant_reference_amount
                     if tenant_unpriced:
                         has_unpriced = True
 
@@ -1494,6 +1512,7 @@ class ChatRecordDB:
                     "total_output_cost": round(total_output_cost, 2),
                     "total_cost": round(total_input_cost + total_output_cost, 2),
                     "total_credit_cost": total_credit_cost,
+                    "total_reference_amount": round(total_reference_amount, 2),
                     "has_unpriced_tokens": has_unpriced
                 },
                 "data": tenant_data
