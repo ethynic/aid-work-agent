@@ -94,14 +94,16 @@ SELECT count(*) FROM documents WHERE file_path LIKE 'storage/uploads/tenant_%/%'
 - [ ] 复查 `agent2_storage/` 顶层只剩 `tenants/ tmp/ uploads/(仅未迁完残渣)`
 - [ ] 冒烟：渠道收发图片、知识库检索出图、长期记忆读写
 
-### 生产环境（下周择日）
+### 生产环境（2026-09-07 已执行）
 
-- [ ] 提前发变更通告，选低峰时段
-- [ ] 归档目录预创建 + 权限确认
-- [ ] `--dry-run` 审查迁移计划（重点确认 #5 归档体量 96M 可接受）
-- [ ] 执行迁移 + §4 SQL
-- [ ] 复查顶层目录 + 冒烟（同上）
-- [ ] 30 天后删除两个 `*_legacy_*` 归档目录（测试环境归档同样处理）
+- [x] 发布 + 确认 5 个容器（api/background/background2/api2/api3）均含新代码，启动无错
+- [x] `--dry-run` 审查迁移计划（#5+analysis_charts 归档合计 106M；uploads/ 仅有 wecom_kf 174 文件，无 tenant_* 文件，cp 合并 0）
+- [x] 执行迁移（mv 归档 6 项；§4 SQL SELECT 核对命中 0 行，无需 UPDATE）
+- [x] 复查顶层仅剩 memory/ tenants/ tmp/；memory 兜底 1 文件（tenant_c148f4efb4dc）已 cp 归位并修正属主 prompter:docker
+- [x] 探针验证：LongTermMemory 按新路径读取已迁移记忆成功；迁移后无错误日志、旧目录未复活
+- [ ] 冒烟：渠道收发图片、知识库检索出图、对话上传（需真实用户/渠道操作，待人工验证）
+- [ ] 30 天后（约 2026-10-07）删除两个 `*_legacy_*` 归档目录（测试环境归档同样处理）
+- [ ] 30 天后清理测试环境 `agent2_storage/storage/tenants/` 下的 cp 源文件与生产 `agent_storage/memory/` 兜底源文件
 
 ## 6. 回滚预案
 
