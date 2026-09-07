@@ -299,6 +299,17 @@ class TestSessionRecords:
         yield user_id, session["session_id"]
 
         # 清理
+        # SessionDB.delete 有意保留 chat_records（计费审计表），测试产生的
+        # chat_records 必须由 fixture 自行清理，否则会以 tenant_id NULL 残留
+        try:
+            from src.db.database import get_db_connection
+
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM chat_records WHERE user_id = %s", (user_id,))
+                conn.commit()
+        except Exception:
+            pass
         try:
             SessionDB.delete(session["session_id"])
         except Exception:

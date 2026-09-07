@@ -1455,6 +1455,7 @@ class ChatRecordDB:
                     LIMIT 1
                 ) r ON true
                 WHERE cr.created_at >= %s AND cr.created_at <= %s
+                  AND cr.tenant_id IS NOT NULL
                   AND NOT (cr.prompt_tokens = 0 AND cr.completion_tokens = 0)
                 GROUP BY cr.tenant_id
                 ORDER BY conversation_count DESC
