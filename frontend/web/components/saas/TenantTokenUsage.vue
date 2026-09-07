@@ -92,7 +92,7 @@
     <!-- 每日用量明细弹窗（平台管理员 + 租户管理员可见入口） -->
     <BaseModal
       v-model="showDetailModal"
-      :title="`对话用量明细 - ${detailDate}`"
+      :title="`积分用量明细 - ${detailDate}`"
       size="xl"
       mode="view"
       :scrollable="false"
@@ -133,13 +133,6 @@
               <template #model="{ row }">
                 <span :title="row.model">{{ row.model || '-' }}</span>
               </template>
-              <template #bd_non_cached_input="{ row }">{{ formatBreakdown(row, 'non_cached_input') }}</template>
-              <template #bd_cached_input="{ row }">{{ formatBreakdown(row, 'cached_input') }}</template>
-              <template #bd_cache_creation_input="{ row }">{{ formatBreakdown(row, 'cache_creation_input') }}</template>
-              <template #bd_output="{ row }">{{ formatBreakdown(row, 'output') }}</template>
-              <template #bd_video="{ row }">{{ formatBreakdown(row, 'video') }}</template>
-              <template #bd_asr="{ row }">{{ formatBreakdown(row, 'asr') }}</template>
-              <template #bd_embedding="{ row }">{{ formatBreakdown(row, 'embedding') }}</template>
               <template #credit_cost="{ row }">
                 <span class="text-danger-600 font-medium">{{ formatCredit(row.credit_cost) }}</span>
               </template>
@@ -179,8 +172,7 @@ import {
   type BalanceInfo,
   type UsageItem,
   type UsageSummary,
-  type DailyUsageDetailItem,
-  type BreakdownItem
+  type DailyUsageDetailItem
 } from '@/api/billing'
 
 const route = useRoute()
@@ -315,21 +307,11 @@ const detailCurrentPage = ref(1)
 const detailPageSize = ref(20)
 const detailDate = ref('')
 
-// usage_breakdown 7 分项列（仅平台管理员）：dataKey 对应 breakdown_items 的分项 key
-const bdDetailCols = [
-  { key: 'bd_non_cached_input', dataKey: 'non_cached_input', label: '未命中缓存输入', width: '220px' },
-  { key: 'bd_cached_input', dataKey: 'cached_input', label: '命中缓存输入', width: '220px' },
-  { key: 'bd_cache_creation_input', dataKey: 'cache_creation_input', label: '缓存创建输入', width: '220px' },
-  { key: 'bd_output', dataKey: 'output', label: '输出', width: '190px' },
-  { key: 'bd_video', dataKey: 'video', label: '视频模型', width: '180px' },
-  { key: 'bd_asr', dataKey: 'asr', label: 'ASR', width: '170px' },
-  { key: 'bd_embedding', dataKey: 'embedding', label: '向量模型', width: '220px' },
-]
-
-// 弹窗列定义：类型列区分智能体对话与客户端调用（P3 双表口径）；usage_breakdown 7 分项
-// （未命中缓存输入/命中缓存输入/缓存创建输入/输出/视频模型/ASR/向量模型）仅平台管理员可见
+// 弹窗列定义：类型列区分智能体对话与客户端调用（P3 双表口径）。
+// usage_breakdown 7 分项敏感对账列（未命中缓存输入/命中缓存输入/缓存创建输入/输出/视频模型/ASR/向量模型）
+// 已从租户前台移除，仅在管理后台「平台积分消耗」页面的明细弹框中展示
 const detailColumns = computed(() => {
-  const cols: Array<{ key: string; label: string; width: string; tooltip?: (row: Record<string, any>) => string | undefined }> = [
+  const cols: Array<{ key: string; label: string; width: string }> = [
     { key: 'index', label: '序号', width: '60px' },
     { key: 'usage_type', label: '类型', width: '80px' },
     { key: 'created_at', label: '创建时间', width: '160px' },
@@ -342,13 +324,6 @@ const detailColumns = computed(() => {
   ]
   if (isPlatformAdmin.value) {
     cols.push({ key: 'model', label: '文本模型', width: '150px' })
-    bdDetailCols.forEach((c) => cols.push({
-      key: c.key,
-      label: c.label,
-      width: c.width,
-      // 公式较长可能在列宽内截断，悬停显示完整对账公式
-      tooltip: (row: Record<string, any>) => formatBreakdown(row, c.dataKey),
-    }))
   }
   cols.push({ key: 'credit_cost', label: '消耗积分', width: '100px' })
   return cols
@@ -358,34 +333,6 @@ function truncateText(text: string | null | undefined, maxLen: number = 30): str
   if (!text) return '-'
   if (text.length <= maxLen) return text
   return text.slice(0, maxLen) + '...'
-}
-
-// 数值格式化：整数/小数均加千分位，小数保留 6 位去尾零
-function fmtNum(v: number | string | null | undefined): string {
-  if (v === null || v === undefined || v === '') return '-'
-  const num = typeof v === 'string' ? parseFloat(v) : Number(v)
-  if (isNaN(num)) return '-'
-  const trimmed = num.toFixed(6).replace(/\.?0+$/, '')
-  const [intPart, decPart] = trimmed.split('.')
-  const intFormatted = Number(intPart).toLocaleString('en-US')
-  return decPart !== undefined ? `${intFormatted}.${decPart}` : intFormatted
-}
-
-// 渲染 usage_breakdown 分项：
-// - 新数据（含单价/系数/分项积分）：{数量} * {单价} * {系数} / 1M = {积分}（每百万类）/ {数量} * {单价} * {系数} = {积分}
-// - 老数据（8-14 前无单价/系数/分项积分）：降级只显示数量（token数/秒数/次数）
-function formatBreakdown(row: Record<string, any>, key: string): string {
-  const items: BreakdownItem[] = row.breakdown_items || []
-  const item = items.find(i => i.key === key)
-  if (!item) return '-'
-  const { qty, unit_price, usage_factor, credit } = item
-  if (qty === null || qty === undefined) return '-'
-  // 老数据：仅数量可追溯，单价/系数/分项积分缺失时只显示数量
-  if (unit_price === null || unit_price === undefined || usage_factor === null || usage_factor === undefined || credit === null || credit === undefined) {
-    return fmtNum(qty)
-  }
-  const base = `${fmtNum(qty)} * ${fmtNum(unit_price)} * ${fmtNum(usage_factor)}`
-  return item.is_per_million ? `${base} / 1M = ${fmtNum(credit)}` : `${base} = ${fmtNum(credit)}`
 }
 
 function openDetailModal(row: UsageItem | Record<string, any>) {
@@ -410,13 +357,13 @@ async function loadDetailData() {
       detailData.value = res.items || []
       detailTotal.value = res.total || 0
     } else {
-      toast.error(res.message || '加载对话用量明细失败')
+      toast.error(res.message || '加载积分用量明细失败')
       detailData.value = []
       detailTotal.value = 0
     }
   } catch (error: any) {
-    console.error('加载对话用量明细失败:', error)
-    toast.error(error.message || '加载对话用量明细失败')
+    console.error('加载积分用量明细失败:', error)
+    toast.error(error.message || '加载积分用量明细失败')
     detailData.value = []
     detailTotal.value = 0
   } finally {

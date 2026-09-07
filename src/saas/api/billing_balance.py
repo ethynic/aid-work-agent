@@ -261,7 +261,7 @@ async def get_daily_usage_detail(
     # 二次权限校验：仅平台管理员 + 租户管理员
     role = admin.get("role")
     if role not in ("platform_admin", "tenant_admin"):
-        return {"success": False, "message": "无权限查看对话用量明细"}
+        return {"success": False, "message": "无权限查看积分用量明细"}
 
     tenant_id = admin.get("tenant_id")
     if not tenant_id:

@@ -184,9 +184,9 @@ export async function getRechargeStats(tenantId?: string): Promise<RechargeStats
 
 // ==================== 租户侧：余额/用量/充值记录 ====================
 
-export async function getTenantBalance(): Promise<BalanceResponse> {
+export async function getTenantBalance(tenantId?: string): Promise<BalanceResponse> {
   const res = await fetch(`${API_BASE}/balance`, {
-    headers: { ...getAuthHeader() }
+    headers: getPlatformAuthHeader(tenantId)
   })
   if (!res.ok) throw new Error('获取积分余额失败')
   return res.json()
@@ -199,7 +199,7 @@ export async function getTenantUsage(params: {
   model?: string
   page?: number
   page_size?: number
-}): Promise<UsageResponse> {
+}, tenantId?: string): Promise<UsageResponse> {
   const sp = new URLSearchParams()
   if (params.date_from) sp.append('date_from', params.date_from)
   if (params.date_to) sp.append('date_to', params.date_to)
@@ -209,7 +209,7 @@ export async function getTenantUsage(params: {
   if (params.page_size) sp.append('page_size', String(params.page_size))
   const qs = sp.toString()
   const res = await fetch(`${API_BASE}/usage${qs ? '?' + qs : ''}`, {
-    headers: { ...getAuthHeader() }
+    headers: getPlatformAuthHeader(tenantId)
   })
   if (!res.ok) throw new Error('获取用量明细失败')
   return res.json()
@@ -284,21 +284,22 @@ export interface DailyUsageDetailResponse {
 }
 
 /**
- * 获取某日 chat_records 明细（仅平台管理员可访问）
- * 平台管理员需通过 X-Tenant-Id 代管理目标租户（getAuthHeader 会自动注入）
+ * 获取某日 chat_records 明细（平台管理员 + 租户管理员可访问）
+ * - 租户前台调用：getAuthHeader 自动注入 X-Tenant-Id
+ * - 管理后台调用：传入 tenantId 注入 X-Tenant-Id（平台管理员代管理目标租户）
  */
 export async function getDailyUsageDetail(params: {
   date: string
   page?: number
   page_size?: number
-}): Promise<DailyUsageDetailResponse> {
+}, tenantId?: string): Promise<DailyUsageDetailResponse> {
   const sp = new URLSearchParams()
   sp.append('date', params.date)
   if (params.page) sp.append('page', String(params.page))
   if (params.page_size) sp.append('page_size', String(params.page_size))
   const res = await fetch(`${API_BASE}/usage/daily-detail?${sp.toString()}`, {
-    headers: { ...getAuthHeader() }
+    headers: getPlatformAuthHeader(tenantId)
   })
-  if (!res.ok) throw new Error('获取对话用量明细失败')
+  if (!res.ok) throw new Error('获取积分用量明细失败')
   return res.json()
 }

@@ -221,8 +221,8 @@ const portalMenuItems = [
   { path: '/portal/subagents', label: '内置数字员工', icon: 'M12 4v3M5 8h14a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2v-8a2 2 0 012-2zM9 13h.01M15 13h.01M9 17h6' },
   // 自定义数字员工：工具/扳手
   { path: '/portal/agent-definitions', label: '自定义数字员工', icon: 'M14.7 6.3a4 4 0 00-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 005.4-5.4l-2.4 2.4-2.6-2.6 2.4-2.4z' },
-  // 平台Token消耗：柱状图
-  { path: '/portal/token-usage', label: '平台Token消耗', icon: 'M3 21h18M6 17V9M11 17V5M16 17v-4M21 17v-7' },
+  // 平台积分消耗：柱状图
+  { path: '/portal/token-usage', label: '平台积分消耗', icon: 'M3 21h18M6 17V9M11 17V5M16 17v-4M21 17v-7' },
   // RPA 绑定管理：链接/链条
   { path: '/portal/rpa-bindings', label: 'RPA 绑定管理', icon: 'M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71' },
   // 追踪查看：搜索/放大镜

@@ -469,7 +469,7 @@ class TestDailyUsageDetailAPI:
     def test_tenant_admin_success_without_token_fields(self, temp_tenant_for_detail):
         """场景 2：tenant_admin 调用 -> success: True，但不返回 token 三列
 
-        租户管理员可查看自己租户的对话用量明细，但 prompt_tokens /
+        租户管理员可查看自己租户的积分用量明细，但 prompt_tokens /
         cached_input_tokens / completion_tokens 三列仅平台管理员可见。
         """
         from src.saas.api import billing_balance

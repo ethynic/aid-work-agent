@@ -29,6 +29,6 @@ test.describe('租户前台冒烟', () => {
     await page.goto(`/t/${TENANT_ID}/token-usage`)
     // 点击表格中任意一条「消耗积分」链接打开弹窗
     await page.locator('tbody a').first().click()
-    await expect(page.getByText(/对话用量明细/).first()).toBeVisible()
+    await expect(page.getByText(/积分用量明细/).first()).toBeVisible()
   })
 })

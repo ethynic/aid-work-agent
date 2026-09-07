@@ -1,7 +1,7 @@
 <template>
   <div class="p-6">
     <div class="flex items-center justify-between mb-6">
-      <h1 class="text-2xl font-bold text-default">平台Token消耗报表</h1>
+      <h1 class="text-2xl font-bold text-default">平台积分消耗报表</h1>
       <div class="flex items-center gap-3">
         <div class="flex items-center gap-2">
           <label class="text-sm text-default">选择月份:</label>
@@ -52,7 +52,7 @@
       <!-- 租户表格 -->
       <div class="bg-white rounded-xl shadow-sm border border-default overflow-hidden">
         <div class="px-5 py-3 border-b border-default">
-          <h3 class="text-sm font-medium text-default">租户Token消耗明细 ({{ selectedMonth }})</h3>
+          <h3 class="text-sm font-medium text-default">租户积分消耗明细 ({{ selectedMonth }})</h3>
         </div>
         <div v-if="data.length > 0">
           <table class="w-full">
@@ -78,7 +78,11 @@
                 <td class="px-4 py-2 text-sm text-amber-600">
                   {{ formatCost(item.total_cost, item.has_unpriced_tokens) }}
                 </td>
-                <td class="px-4 py-2 text-sm text-danger-600 font-medium">{{ formatCredit(item.credit_cost) }}</td>
+                <td class="px-4 py-2 text-sm text-danger-600 font-medium">
+                  <a class="underline-offset-2 hover:underline cursor-pointer"
+                     :title="`查看 ${item.company_name} ${selectedMonth} 每日积分用量`"
+                     @click="openDailyUsageModal(item)">{{ formatCredit(item.credit_cost) }}</a>
+                </td>
                 <td class="px-4 py-2 text-sm text-default">{{ item.conversation_count }}</td>
               </tr>
               <!-- 汇总行 -->
@@ -98,6 +102,22 @@
         <div v-else class="text-center py-8 text-muted">暂无数据</div>
       </div>
     </template>
+
+    <!-- 每日积分用量弹框（当前租户 + 所选月份），消耗积分列可继续下钻明细 -->
+    <DailyCreditUsageModal
+      v-model="showDailyUsageModal"
+      :tenant-id="dailyUsageTenantId"
+      :tenant-name="dailyUsageTenantName"
+      :month="selectedMonth"
+      @view-detail="openDetailModal"
+    />
+
+    <!-- 积分用量明细弹框（含 usage_breakdown 7 分项敏感数据，仅管理后台展示） -->
+    <DailyCreditUsageDetailModal
+      v-model="showDetailModal"
+      :tenant-id="dailyUsageTenantId"
+      :date="detailDate"
+    />
   </div>
 </template>
 
@@ -107,6 +127,8 @@ import { useToast } from 'vue-toastification'
 import { getPlatformTokenUsage } from '@/api/adminReports'
 import { formatTokensToMillionsThreeDecimals } from '@/utils/formatTokens'
 import { formatCredit } from '@/utils/formatCredit'
+import DailyCreditUsageModal from '@/components/saas/DailyCreditUsageModal.vue'
+import DailyCreditUsageDetailModal from '@/components/saas/DailyCreditUsageDetailModal.vue'
 
 const toast = useToast()
 
@@ -151,4 +173,23 @@ function formatCost(cost: number, hasUnpricedTokens?: boolean): string {
 }
 
 onMounted(() => loadData())
+
+// ============== 每日积分用量弹框 + 积分用量明细弹框（下钻） ==============
+
+const showDailyUsageModal = ref(false)
+const showDetailModal = ref(false)
+const dailyUsageTenantId = ref('')
+const dailyUsageTenantName = ref('')
+const detailDate = ref('')
+
+function openDailyUsageModal(item: any) {
+  dailyUsageTenantId.value = item.tenant_id
+  dailyUsageTenantName.value = item.company_name || item.tenant_code || item.tenant_id
+  showDailyUsageModal.value = true
+}
+
+function openDetailModal(date: string) {
+  detailDate.value = date
+  showDetailModal.value = true
+}
 </script>
