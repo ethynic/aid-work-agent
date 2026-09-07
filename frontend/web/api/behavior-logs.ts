@@ -16,6 +16,11 @@ export interface BehaviorLogItem {
   tenant_id: string | null
   user_id: string | null
   user_role: string | null
+  /** 关联 users 表补充的用户信息（后端 _enrich_user_info 填充） */
+  user_username?: string | null
+  user_nickname?: string | null
+  /** 脱敏手机号（前 3 后 4） */
+  user_phone?: string | null
   action: string
   resource_type: string | null
   resource_id: string | null

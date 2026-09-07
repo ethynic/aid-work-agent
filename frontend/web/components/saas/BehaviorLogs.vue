@@ -65,10 +65,14 @@
         <template #created_at="{ row }">{{ formatDateTime(row.created_at) }}</template>
         <template #user_id="{ row }">
           <div class="flex items-center gap-1.5">
-            <span>{{ row.user_id || '-' }}</span>
+            <div class="min-w-0 leading-tight" :title="row.user_id || ''">
+              <div class="text-sm text-default truncate">{{ userDisplayName(row) }}</div>
+              <div v-if="userSubInfo(row)" class="text-xs text-muted truncate">{{ userSubInfo(row) }}</div>
+            </div>
             <BaseBadge
               v-if="row.user_role"
               size="sm"
+              class="whitespace-nowrap"
               :intent="roleToIntent(row.user_role)"
             >{{ roleLabel(row.user_role) }}</BaseBadge>
           </div>
@@ -147,7 +151,16 @@
           </div>
           <div>
             <span class="text-muted">用户：</span>
-            <span class="text-default">{{ selectedLog.user_id || '-' }}</span>
+            <span class="text-default">
+              {{ selectedLog ? userDisplayName(selectedLog) : '-' }}
+              <span v-if="selectedLog && userSubInfo(selectedLog)" class="text-muted text-xs">
+                （{{ userSubInfo(selectedLog) }}）
+              </span>
+            </span>
+          </div>
+          <div v-if="selectedLog?.user_id">
+            <span class="text-muted">用户 ID：</span>
+            <span class="text-default font-mono text-xs">{{ selectedLog.user_id }}</span>
           </div>
           <div>
             <span class="text-muted">角色：</span>
@@ -286,7 +299,7 @@ const toast = useToast()
 const columns = [
   { key: 'index', label: '序号', width: '60px' },
   { key: 'created_at', label: '时间', width: '170px' },
-  { key: 'user_id', label: '用户', width: '180px' },
+  { key: 'user_id', label: '用户', width: '260px' },
   { key: 'action', label: '行为', width: '100px', thAlign: 'center' as const },
   {
     key: 'resource',
@@ -400,6 +413,19 @@ function roleToIntent(role: string | null): 'danger' | 'primary' | 'neutral' {
     case 'tenant_admin': return 'primary'
     default: return 'neutral'
   }
+}
+
+/** 用户列主文本：用户名 / 昵称，均无时回退 user_id */
+function userDisplayName(row: Record<string, any>): string {
+  return row.user_username || row.user_nickname || row.user_id || '-'
+}
+
+/** 用户列副文本：昵称 + 脱敏手机号（主文本已含的字段不重复显示） */
+function userSubInfo(row: Record<string, any>): string {
+  const parts: string[] = []
+  if (row.user_nickname && row.user_username) parts.push(row.user_nickname)
+  if (row.user_phone) parts.push(row.user_phone)
+  return parts.join(' · ')
 }
 
 function deviceTypeLabel(type: string | null): string {

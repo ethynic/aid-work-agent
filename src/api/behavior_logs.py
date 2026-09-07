@@ -55,6 +55,45 @@ _ROW_COLUMNS = (
 )
 
 
+def _mask_phone(phone: Optional[str]) -> Optional[str]:
+    """手机号脱敏：保留前 3 后 4，中间用 ****（非 11 位手机号原样返回）"""
+    if not phone:
+        return None
+    if len(phone) == 11 and phone.isdigit():
+        return f"{phone[:3]}****{phone[7:]}"
+    return phone
+
+
+def _enrich_user_info(data: List[Dict[str, Any]]) -> None:
+    """批量关联 users 表，补充 user_username / user_nickname / user_phone（脱敏）"""
+    user_ids = list({row["user_id"] for row in data if row.get("user_id")})
+    if not user_ids:
+        return
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                f"SELECT user_id, username, nickname, phone FROM users WHERE user_id = ANY(%s)",
+                (user_ids,),
+            )
+            rows = cursor.fetchall()
+        info_map = {
+            r["user_id"]: {
+                "username": r.get("username"),
+                "nickname": r.get("nickname"),
+                "phone": _mask_phone(r.get("phone")),
+            }
+            for r in rows
+        }
+        for row in data:
+            info = info_map.get(row.get("user_id")) or {}
+            row["user_username"] = info.get("username")
+            row["user_nickname"] = info.get("nickname")
+            row["user_phone"] = info.get("phone")
+    except Exception as e:
+        logger.opt(exception=True).error(f"后端日志：行为日志关联用户信息失败: {e}")
+
+
 def _query_behavior_logs(
     tenant_id: Optional[str] = None,
     action: Optional[str] = None,
@@ -148,6 +187,8 @@ def _query_behavior_logs(
         if row_dict.get("created_at"):
             row_dict["created_at"] = str(row_dict["created_at"])
         data.append(row_dict)
+
+    _enrich_user_info(data)
 
     return {"data": data, "total": total}
 
