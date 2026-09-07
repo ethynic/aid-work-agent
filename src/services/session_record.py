@@ -637,7 +637,7 @@ def record_background_llm_usage(
             model=model,
         )
     except Exception:
-        logger.opt(exception=True).debug("Failed to record background LLM usage")
+        logger.opt(exception=True).warning("Failed to record background LLM usage")
 
 
 def _persist_background_llm_record(

@@ -26,6 +26,7 @@ from src.services.recap.tasks.external_push import (
     _load_tenant_doc,
     _resolve_assignee_phone,
     _run_push_loop,
+    _strip_excluded_sections,
     _summarize,
     parse_api_meta,
     parse_wecom_kf_session,
@@ -196,6 +197,48 @@ class TestParseApiMeta:
 
 
 # ============== 租户文档加载 ==============
+
+
+class TestStripExcludedSections:
+    def _doc(self):
+        return (
+            "# 租户接口文档\n\n前言内容。\n\n"
+            "## 1. 通用规范\n\n通用内容。\n"
+            "## 2. 委托登录接口\n\n登录内容。\n"
+            "## 3. 客户列表接口\n\n列表内容。\n"
+            "## 4. 客户信息详情接口\n\n详情内容。\n"
+        )
+
+    def test_no_key_returns_original(self):
+        doc = self._doc()
+        assert _strip_excluded_sections(doc, {"login_url": "https://e/x"}) == doc
+
+    def test_empty_key_returns_original(self):
+        doc = self._doc()
+        assert _strip_excluded_sections(doc, {"push_exclude_sections": ""}) == doc
+
+    def test_excludes_by_substring_with_number_prefix(self):
+        meta = {"push_exclude_sections": "委托登录接口,客户信息详情接口"}
+        result = _strip_excluded_sections(self._doc(), meta)
+        assert "登录内容" not in result
+        assert "详情内容" not in result
+        assert "通用内容" in result
+        assert "列表内容" in result
+        assert "前言内容" in result
+
+    def test_chinese_comma_separator_supported(self):
+        """租户写中文逗号"，"也能正确切分"""
+        meta = {"push_exclude_sections": "委托登录接口，客户信息详情接口"}
+        result = _strip_excluded_sections(self._doc(), meta)
+        assert "登录内容" not in result
+        assert "详情内容" not in result
+        assert "列表内容" in result
+
+    def test_all_sections_excluded_keeps_preamble(self):
+        meta = {"push_exclude_sections": "通用规范,委托登录接口,客户列表接口,客户信息详情接口"}
+        result = _strip_excluded_sections(self._doc(), meta)
+        assert "## " not in result
+        assert "前言内容" in result
 
 
 class TestLoadTenantDoc:
@@ -410,6 +453,7 @@ class TestSummarize:
              patch("src.llm.gateway.llm_gateway") as mock_gw, \
              patch("src.services.session_record.record_background_llm_usage") as mock_bill:
             mock_settings.external_push.pre_sales.summary_max_tokens = 300
+            mock_settings.llm.get_lite_target.return_value = ("qwen", "qwen3.8-flash")
             mock_gw.chat_lite = AsyncMock(return_value=chat_return)
             summary = asyncio.run(_summarize(payload, ctx))
             return summary, mock_gw.chat_lite, mock_bill
@@ -476,7 +520,7 @@ def _llm_resp(tool_calls=None, content="", model="main-model"):
 
 
 class PushLoopHarness:
-    """推送循环测试脚手架：脚本化 chat_with_tools 响应 + 假执行器（report 写入 holder）"""
+    """推送循环测试脚手架：脚本化 chat_lite 响应 + 假执行器（report 写入 holder）"""
 
     def __init__(self, responses=None, executor_results=None):
         self.responses = list(responses or [])
@@ -522,7 +566,10 @@ class PushLoopHarness:
         ]
         mock_settings, mock_gw, mock_bill, _ = [m.__enter__() for m in self._mocks]
         mock_settings.external_push.pre_sales.max_tool_rounds = 8
-        mock_gw.chat_with_tools = AsyncMock(side_effect=list(self.responses))
+        mock_settings.llm.get_lite_target.return_value = ("qwen", "qwen3.8-flash")
+        mock_settings.llm.model = "main-model"
+        mock_gw.chat_lite = AsyncMock(side_effect=list(self.responses))
+        mock_gw.chat_with_tools = AsyncMock()
         self.mock_gw = mock_gw
         self.mock_bill = mock_bill
         return self
@@ -560,19 +607,50 @@ class TestPushLoop:
             "http_api", "http_api", "http_api", "report_push_result",
         ]
         assert harness.holder[-1]["success"] is True
-        # 每轮主模型调用均计费（4 轮），source/model 断言
+        # 每轮 lite 模型调用均计费（4 轮），source/model 断言（model 显式解析 lite 模型名）
         assert harness.mock_bill.call_count == 4
         assert harness.mock_bill.call_args.kwargs["source"] == "pre_sales_push"
-        assert harness.mock_bill.call_args.kwargs["model"] == "main-model"
+        assert harness.mock_bill.call_args.kwargs["model"] == "qwen3.8-flash"
 
     def test_billing_with_missing_model_does_not_crash(self):
+        """provider 响应不含 model 键也不影响计费——model 由 settings 显式解析"""
         resp = _llm_resp([_tool_call("report_push_result", {"success": True, "detail": "ok"}, "c1")])
         resp.pop("model")
         harness = PushLoopHarness(responses=[resp])
         with harness:
             harness.run()
         assert harness.mock_bill.call_count == 1
-        assert harness.mock_bill.call_args.kwargs["model"] is None
+        assert harness.mock_bill.call_args.kwargs["model"] == "qwen3.8-flash"
+
+    def test_system_message_first_in_messages(self):
+        """推送循环用 chat_lite（system 并入 messages 首位，而非 system_prompt 形参）"""
+        resp = _llm_resp([_tool_call("report_push_result", {"success": True, "detail": "ok"}, "c1")])
+        harness = PushLoopHarness(responses=[resp])
+        with harness:
+            harness.run()
+        harness.mock_gw.chat_lite.assert_called_once()
+        messages = harness.mock_gw.chat_lite.call_args.args[0]
+        assert messages[0]["role"] == "system"
+        assert "租户接口文档" in messages[0]["content"]
+        assert messages[1]["role"] == "user"
+        kwargs = harness.mock_gw.chat_lite.call_args.kwargs
+        assert kwargs["tools"] == [{"name": "http_api"}]
+        assert kwargs["tool_choice"] == "auto"
+
+    def test_chat_lite_value_error_falls_back_to_main_model(self):
+        """lite_model 未配置（chat_lite raise ValueError）时回退 chat_with_tools"""
+        resp = _llm_resp([_tool_call("report_push_result", {"success": True, "detail": "ok"}, "c1")])
+        harness = PushLoopHarness(responses=[resp])
+        with harness:
+            harness.mock_gw.chat_lite = AsyncMock(side_effect=ValueError("lite_model 解析失败"))
+            harness.mock_gw.chat_with_tools = AsyncMock(return_value=resp)
+            harness.run()
+        harness.mock_gw.chat_with_tools.assert_called_once()
+        messages = harness.mock_gw.chat_with_tools.call_args.args[0]
+        assert messages[0]["role"] == "system"
+        assert harness.mock_bill.call_count == 1
+        # 回退主模型链路时，计费 model 归属主模型名
+        assert harness.mock_bill.call_args.kwargs["model"] == "main-model"
 
     def test_round_limit_without_report_raises(self):
         harness = PushLoopHarness(
@@ -583,13 +661,13 @@ class TestPushLoop:
         )
         with harness, pytest.raises(RuntimeError, match="未收到完成报告"):
             harness.run()
-        assert harness.mock_gw.chat_with_tools.call_count == 8
+        assert harness.mock_gw.chat_lite.call_count == 8
 
     def test_stop_without_report_raises(self):
         harness = PushLoopHarness(responses=[_llm_resp(tool_calls=None, content="我认为推送已完成")])
         with harness, pytest.raises(RuntimeError, match="未收到完成报告"):
             harness.run()
-        assert harness.mock_gw.chat_with_tools.call_count == 1
+        assert harness.mock_gw.chat_lite.call_count == 1
 
     def test_invalid_arguments_returns_error_message_and_continues(self):
         harness = PushLoopHarness(
@@ -625,8 +703,8 @@ class TestPushLoop:
         # 仅强刷一次（首轮 -99 触发），且带 force_refresh=True
         mock_login.assert_called_once()
         assert mock_login.call_args.args[4] is True
-        # 第 2 轮 chat_with_tools 的 messages 中注入了含新 token 的 user 消息
-        second_call_messages = harness.mock_gw.chat_with_tools.call_args_list[1].args[0]
+        # 第 2 轮的 messages 中注入了含新 token 的 user 消息
+        second_call_messages = harness.mock_gw.chat_lite.call_args_list[1].args[0]
         injected = [m for m in second_call_messages
                     if m["role"] == "user" and "tok_new" in m.get("content", "")]
         assert injected, "强刷后的新 token 未注入 messages"
@@ -651,7 +729,7 @@ class TestPushLoop:
             harness.run()
         # 连续两次 -99 只强刷一次；连续 3 次失败熔断
         mock_login.assert_called_once()
-        assert harness.mock_gw.chat_with_tools.call_count == 3
+        assert harness.mock_gw.chat_lite.call_count == 3
 
     def test_consecutive_failures_circuit_breaks(self):
         harness = PushLoopHarness(
@@ -668,7 +746,7 @@ class TestPushLoop:
         with harness, pytest.raises(RuntimeError, match="未收到完成报告"):
             harness.run()
         # 连续 3 次失败熔断：第 3 轮后即终止（< 8 轮上限）
-        assert harness.mock_gw.chat_with_tools.call_count == 3
+        assert harness.mock_gw.chat_lite.call_count == 3
         assert len(harness.executor_calls) == 3
 
     def test_report_tool_terminates_immediately(self):
@@ -682,7 +760,7 @@ class TestPushLoop:
         )
         with harness:
             harness.run()
-        assert harness.mock_gw.chat_with_tools.call_count == 2
+        assert harness.mock_gw.chat_lite.call_count == 2
 
     def test_report_failure_raises_with_detail(self):
         harness = PushLoopHarness(
@@ -705,7 +783,7 @@ class TestPushLoop:
                  patch("src.llm.gateway.llm_gateway") as mock_gw, \
                  patch("src.services.session_record.record_background_llm_usage"):
                 mock_settings.external_push.pre_sales.max_tool_rounds = 8
-                mock_gw.chat_with_tools = AsyncMock(return_value=resp)
+                mock_gw.chat_lite = AsyncMock(return_value=resp)
                 await _run_push_loop(payload, _ctx(), _summary(), _doc(), _meta(), "agent_tok", _login())
 
         asyncio.run(_run())  # 不抛即通过：工具定义可生成、report 走完真实校验+执行

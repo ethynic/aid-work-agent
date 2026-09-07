@@ -163,6 +163,38 @@ class TestRunTasks:
             assert args[0] == "recap_task"
             assert "tenant_x" in args[1] and "external_push" in args[1] and "101" in args[1]
 
+    def test_contextvar_record_cleared_inside_task(self):
+        """任务内清空 SessionRecord ContextVar：后台 LLM 计费走独立落库而非累加已落库的主对话 record；
+        调用方请求协程的 ContextVar 不受影响"""
+        from src.services.session_record import SessionRecordManager
+
+        payload = self._payload()
+        from src.services.recap.runner import RecapTaskConfig
+
+        seen = {}
+
+        async def _probe(_payload):
+            seen["inside"] = SessionRecordManager.get_current_record()
+
+        adapter = MagicMock()
+        adapter.execute = _probe
+
+        fake_record = object()
+        token = SessionRecordManager.set_current_record(fake_record)
+        try:
+            with patch("src.services.recap.tasks.RECAP_TASK_ADAPTERS", {"external_push": adapter}), \
+                 patch("src.services.recap.runner._system_switch_enabled", return_value=True), \
+                 patch("src.services.recap.runner.redis_client") as mock_redis:
+                mock_redis.make_key.return_value = "k"
+                mock_redis.acquire_lock.return_value = True
+                asyncio.run(_run_tasks([RecapTaskConfig(name="external_push")], payload))
+            outer_after = SessionRecordManager.get_current_record()
+        finally:
+            SessionRecordManager.reset_current_record(token)
+
+        assert seen["inside"] is None
+        assert outer_after is fake_record
+
     def test_adapter_exception_isolated(self):
         payload = self._payload()
         from src.services.recap.runner import RecapTaskConfig

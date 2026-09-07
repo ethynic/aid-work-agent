@@ -160,6 +160,18 @@ async def _run_tasks(tasks: List[RecapTaskConfig], payload: RecapPayload) -> Non
     """串行分发执行，任务间故障隔离"""
     from src.services.recap.tasks import RECAP_TASK_ADAPTERS
 
+    # 清空任务内拷贝的 SessionRecord ContextVar：trigger_recap 由请求协程
+    # create_task 派生，ContextVar 指向的主对话 record 此时已 save 落库，
+    # 后续 record_background_llm_usage 走 add_llm_usage 累加只会丢失（计费缺口）。
+    # 清空后走独立落库分支（source_type=background_llm）。仅影响本任务拷贝的
+    # 上下文，不影响调用方请求协程。
+    try:
+        from src.services.session_record import SessionRecordManager
+
+        SessionRecordManager.set_current_record(None)
+    except Exception:
+        logger.debug("recap 清空 SessionRecord ContextVar 失败（不影响任务执行）")
+
     results: List[str] = []
     for task in tasks:
         # 1) 系统级开关

@@ -129,6 +129,8 @@ def parse_api_meta(doc_text: str) -> Optional[Dict[str, str]]:
         ```
 
     返回 meta dict；user_token_name / external_userid_field 缺省回退 10605 惯例值。
+    push_exclude_sections（可选）：逗号分隔章节标题，注入 LLM 前裁剪对应章节，
+    见 _strip_excluded_sections。
     无块 / login_url 缺失 / login_url 非 https 均返回 None（放弃原因写入 tlog）。
     宁可解析失败放弃本轮，绝不猜测 URL。
     """
@@ -158,6 +160,35 @@ def parse_api_meta(doc_text: str) -> Optional[Dict[str, str]]:
     meta.setdefault("user_token_name", _DEFAULT_USER_TOKEN_NAME)
     meta.setdefault("external_userid_field", _DEFAULT_EXTERNAL_USERID_FIELD)
     return meta
+
+
+def _strip_excluded_sections(doc_text: str, meta: Dict[str, str]) -> str:
+    """按 api-meta 的 push_exclude_sections 裁剪注入 LLM 的文档章节
+
+    值为逗号分隔的章节标题，与 `## ` 标题行做子串匹配（兼容「2. 委托登录接口」
+    这类编号前缀）。推送流程不使用登录/详情等章节（登录由代码完成、查重走列表
+    接口），裁剪可显著降低每轮 LLM 输入 token 与延迟。键未配置时原样返回
+    （向后兼容，不影响未声明该键的租户文档）。
+    """
+    raw = (meta.get("push_exclude_sections") or "").strip()
+    if not raw:
+        return doc_text
+    excludes = [item.strip() for item in re.split(r"[,，]", raw) if item.strip()]
+    if not excludes:
+        return doc_text
+
+    parts = re.split(r"\n(?=## )", doc_text)
+    kept = [parts[0]]
+    removed = []
+    for part in parts[1:]:
+        title_line = part.strip().splitlines()[0] if part.strip() else ""
+        if any(item in title_line for item in excludes):
+            removed.append(title_line.lstrip("#").strip())
+            continue
+        kept.append(part)
+    if removed:
+        tlog("售前推送", f"文档裁剪章节: {', '.join(removed)}")
+    return "\n".join(kept)
 
 
 # ============== 上下文采集（渠道侧，平移自原 10605 适配器） ==============
@@ -286,6 +317,21 @@ def _extract_json_object(content: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+def _resolve_lite_model_name() -> Optional[str]:
+    """解析 lite 模型名用于计费单价归属
+
+    provider 的 _parse_response 不返回 model 键，response.get("model") 恒为 None；
+    lite 路径计费需显式解析 settings.llm.get_lite_target() 的模型名，否则独立落库
+    兜底分支会误用主模型（deepseek-v4-flash）单价。
+    """
+    try:
+        from src.config.settings import settings
+
+        return settings.llm.get_lite_target()[1] or None
+    except Exception:
+        return None
+
+
 async def _summarize(payload: RecapPayload, ctx: Dict[str, Any]) -> Dict[str, str]:
     """LLM 摘要本轮问答；失败降级为截断原文（推送流程继续）
 
@@ -317,14 +363,15 @@ async def _summarize(payload: RecapPayload, ctx: Dict[str, Any]) -> Dict[str, st
             max_tokens=settings.external_push.pre_sales.summary_max_tokens,
         )
         # 计费：billing_audit.md §3.5 条件 A（独立任务无 record 上下文，走独立落库路径）
-        # model 必须显式传入：chat_lite 返回的 model 即 lite_model，独立落库兜底分支
-        # 缺 model 会误用 mid_term 摘要模型单价（session_record.py P2-1 修复先例）
+        # model 必须显式解析 lite 模型名：provider 响应不含 model 键，缺 model 会
+        # 误用 mid_term 摘要模型单价（session_record.py P2-1 修复先例）
         record_background_llm_usage(
             response.get("usage") if isinstance(response, dict) else None,
             tenant_id=payload.tenant_id,
+            user_id=getattr(payload.record_service, "user_id", None),
             source="pre_sales_push",
             user_message="[recap external_push] 摘要生成",
-            model=response.get("model") if isinstance(response, dict) else None,
+            model=_resolve_lite_model_name(),
         )
         data = _extract_json_object(response.get("content", ""))
         if not data:
@@ -528,7 +575,9 @@ def _build_system_prompt(doc: str, meta: Dict[str, str]) -> str:
         "若工具结果含 truncated=true（响应超长被落盘），基于预览内容判断或缩小查询条件，"
         "不要尝试读取文件。\n"
         "6. 隐私：推送是后台动作，任何信息不得向客户暴露；detail 中不要写客户手机号明文。\n"
-        "7. 终止：完成全部外部调用、或按规则放弃时，必须调用 report_push_result 工具"
+        "7. 执行效率：查重确认后，互不依赖的写操作（如创建跟进记录与修改客户）"
+        "应尽量在同一轮并行发起多个工具调用，减少轮次。\n"
+        "8. 终止：完成全部外部调用、或按规则放弃时，必须调用 report_push_result 工具"
         "（success=true/false + detail 简述执行结果），且它是你最后调用的工具。"
     )
 
@@ -603,9 +652,9 @@ async def _run_push_loop(
     tools = registry.get_tool_definitions()
 
     messages: List[Dict[str, Any]] = [
-        {"role": "user", "content": _build_user_message(payload, ctx, summary, login, meta)}
+        {"role": "system", "content": _build_system_prompt(doc, meta)},
+        {"role": "user", "content": _build_user_message(payload, ctx, summary, login, meta)},
     ]
-    system_prompt = _build_system_prompt(doc, meta)
 
     auth_retried = False
     consecutive_failures = 0
@@ -613,20 +662,39 @@ async def _run_push_loop(
     aborted_reason = ""
 
     for round_no in range(1, max_rounds + 1):
-        response = await llm_gateway.chat_with_tools(
-            messages,
-            tools=tools,
-            tool_choice="auto",
-            system_prompt=system_prompt,
-            temperature=0.1,
+        used_lite = True
+        try:
+            # 推送循环用 lite 轻量模型降延迟（主模型每轮携带完整租户文档，实测 3~11s/轮）。
+            # chat_lite 无 system_prompt 形参（kwargs 会被 provider **kwargs 静默吞掉），
+            # system 消息由调用方并入 messages 首位
+            response = await llm_gateway.chat_lite(
+                messages,
+                tools=tools,
+                tool_choice="auto",
+                temperature=0.1,
+            )
+        except ValueError:
+            # lite 链路不可用（lite_model 未配置或缺少 lite provider key）时回退主模型
+            used_lite = False
+            logger.warning("[external_push] lite 链路不可用，推送循环回退主模型链路")
+            response = await llm_gateway.chat_with_tools(
+                messages,
+                tools=tools,
+                tool_choice="auto",
+                temperature=0.1,
+            )
+        # 计费：每轮 LLM 调用独立落库（billing_audit.md §3.5 条件 A）。
+        # provider 响应不含 model 键，按实际链路显式解析模型名，保证单价归属正确
+        billed_model = _resolve_lite_model_name() if used_lite else (
+            getattr(settings.llm, "model", None) or None
         )
-        # 计费：每轮主模型调用独立落库（billing_audit.md §3.5 条件 A），model 显式透传
         record_background_llm_usage(
             response.get("usage") if isinstance(response, dict) else None,
             tenant_id=payload.tenant_id,
+            user_id=getattr(payload.record_service, "user_id", None),
             source="pre_sales_push",
             user_message=f"[recap external_push] 推送循环 第{round_no}轮",
-            model=response.get("model") if isinstance(response, dict) else None,
+            model=billed_model,
         )
 
         tool_calls = response.get("tool_calls") or []
@@ -732,6 +800,8 @@ class ExternalPushAdapter:
                 f"[external_push] 租户文档 api-meta 解析失败，放弃推送 tenant={payload.tenant_id}"
             )
             return
+
+        doc = _strip_excluded_sections(doc, meta)
 
         if not ctx.get("assignee_phone"):
             logger.warning(
