@@ -20,6 +20,7 @@ export const agentRoutes: RouteRecordRaw[] = [
       { path: 'users', name: 'tenant-users', component: () => import('@/components/saas/TenantUserManager.vue') },
       { path: 'knowledge', name: 'tenant-knowledge', component: () => import('@/components/KnowledgeBase.vue') },
       { path: 'connections', name: 'tenant-connections', component: () => import('@/components/connections/ConnectionCenter.vue') },
+      { path: 'connections/external-systems', name: 'tenant-external-systems', component: () => import('@/components/connections/ExternalSystems.vue') },
       { path: 'channels', name: 'tenant-channels', component: () => import('@/components/saas/ChannelConfig.vue') },
       { path: 'wecom-personal-rpa', name: 'tenant-wecom-personal-rpa', component: () => import('@/components/saas/WecomPersonalRpaManager.vue') },
       { path: 'settings', name: 'tenant-settings', component: () => import('@/components/saas/TenantSettings.vue') },

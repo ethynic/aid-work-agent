@@ -1803,6 +1803,10 @@ app.include_router(recruiting_operator_api.router)
 from src.local_tools import api as local_tools_api  # noqa: E402
 app.include_router(local_tools_api.router)
 
+# 外部系统入口（SSO 打开第三方系统，见 docs/system/external-system-entry-design.md）
+from src.api import external_systems  # noqa: E402
+app.include_router(external_systems.router)
+
 # Desktop Agent D1 is opt-in. Default production startup neither imports its
 # module nor registers routes; changing the setting requires a process restart.
 if settings.desktop_agent.enabled:

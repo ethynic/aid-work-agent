@@ -10,20 +10,34 @@
 
     <!-- 顶部 Tab 切换 -->
     <div class="border-b border-default bg-surface px-6">
-      <div class="flex gap-6">
-        <button
-          v-for="tab in tabs"
-          :key="tab.key"
-          :class="[
-            'py-3 text-sm font-medium border-b-2 transition-colors',
-            activeTab === tab.key
-              ? 'text-primary-600 border-primary-600'
-              : 'text-muted border-transparent hover:text-default hover:border-hover'
-          ]"
-          @click="switchTab(tab.key)"
-        >
-          {{ tab.label }}
-        </button>
+      <div class="flex items-center justify-between">
+        <div class="flex gap-6">
+          <button
+            v-for="tab in tabs"
+            :key="tab.key"
+            :class="[
+              'py-3 text-sm font-medium border-b-2 transition-colors',
+              activeTab === tab.key
+                ? 'text-primary-600 border-primary-600'
+                : 'text-muted border-transparent hover:text-default hover:border-hover'
+            ]"
+            @click="switchTab(tab.key)"
+          >
+            {{ tab.label }}
+          </button>
+        </div>
+        <div v-if="externalSystems.length > 0" class="flex items-center gap-2">
+          <BaseButton
+            v-for="sys in externalSystems"
+            :key="sys.system_id"
+            intent="secondary"
+            size="sm"
+            :disabled="openingSystemId === sys.system_id"
+            @click="handleOpenExternalSystem(sys)"
+          >
+            {{ openingSystemId === sys.system_id ? '打开中...' : `打开 ${sys.name}` }}
+          </BaseButton>
+        </div>
       </div>
     </div>
 
@@ -548,6 +562,8 @@ import BaseModal from '@/components/ui/BaseModal.vue'
 import DownloadFileCard from '@/components/DownloadFileCard.vue'
 import AttachmentPreviewPanel from '@/components/AttachmentPreviewPanel.vue'
 import { listExternalUsers, getUserSessions, getSessionMessages, getReferralStats, listKfAccounts, getLeadStats, listLeads, getLeadDetail, updateLeadStage } from '@/api/externalCustomers'
+import { listExternalSystems, openExternalSystem } from '@/api/externalSystems'
+import type { ExternalSystem } from '@/api/externalSystems'
 import AttachmentCard from './AttachmentCard.vue'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 import { useAmrPlayer } from '@/composables/useAmrPlayer'
@@ -563,6 +579,32 @@ const amrPlayer = useAmrPlayer()
 const { previewAttachment, isPreviewOpen, closePreview } = useAttachmentPreview()
 const toggleSidebarFn = inject<() => void>('toggleSidebar')
 const messageContainerRef = ref<HTMLElement | null>(null)
+
+// 外部系统入口（右上角打开按钮，租户文档 sso 配置驱动，无声明的租户不显示）
+const externalSystems = ref<ExternalSystem[]>([])
+const openingSystemId = ref('')
+
+async function handleOpenExternalSystem(sys: ExternalSystem) {
+  openingSystemId.value = sys.system_id
+  try {
+    const result = await openExternalSystem(sys)
+    if (!result.ok && result.message) {
+      toast.warning(result.message)
+    }
+  } catch (e) {
+    toast.error((e as Error).message || '打开外部系统失败')
+  } finally {
+    openingSystemId.value = ''
+  }
+}
+
+onMounted(async () => {
+  try {
+    externalSystems.value = await listExternalSystems()
+  } catch {
+    // 列表获取失败不影响页面主功能，静默降级（不显示按钮）
+  }
+})
 
 // 响应式状态
 const effectiveIsLoggedIn = computed(() => tenantIsLoggedIn.value)

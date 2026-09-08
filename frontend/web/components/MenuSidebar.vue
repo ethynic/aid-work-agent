@@ -976,6 +976,8 @@ const connectionSubMenuItems = computed(() => {
     { path: `${base}/wecom-personal-rpa`, label: '企微个人RPA', icon: 'M12 4v3M5 8h14a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2v-8a2 2 0 012-2zM9 13h.01M15 13h.01M9 17h6', adminOnly: true },
     // 本地工具：电脑
     { path: `${base}/local-tools`, label: '本地工具', icon: 'M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z', adminOnly: false },
+    // 外部系统：链接（管理员与普通员工均可见）
+    { path: `${base}/connections/external-systems`, label: '外部系统', icon: 'M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71', adminOnly: false },
   ]
   return all.filter(item => !item.adminOnly || isTenantAdmin.value)
 })
@@ -992,6 +994,7 @@ const isConnectionActive = computed(() => {
   const base = `/t/${tenantId.value}`
   return [
     `${base}/connections`,
+    `${base}/connections/external-systems`,
     `${base}/channels`,
     `${base}/wecom-personal-rpa`,
     `${base}/local-tools`,
