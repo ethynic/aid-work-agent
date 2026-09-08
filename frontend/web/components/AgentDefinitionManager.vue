@@ -223,20 +223,27 @@
                       <div class="grid grid-cols-[80px_1fr] items-center gap-2">
                         <span class="text-xs text-gray-600">deepseek</span>
                         <input v-model="form.llm_model_codes.deepseek" type="text" placeholder="留空用全局默认"
+                          :class="modelCodeErrors.deepseek ? 'border-danger-500 focus:border-danger-500' : ''"
+                          @input="sanitizeModelCode('deepseek', $event)"
                           class="w-full px-2 py-1 text-xs bg-white border border-gray-200 rounded focus:outline-none focus:border-primary-400" />
                       </div>
                       <div class="grid grid-cols-[80px_1fr] items-center gap-2">
                         <span class="text-xs text-gray-600">qwen</span>
                         <input v-model="form.llm_model_codes.qwen" type="text" placeholder="留空用全局默认"
+                          :class="modelCodeErrors.qwen ? 'border-danger-500 focus:border-danger-500' : ''"
+                          @input="sanitizeModelCode('qwen', $event)"
                           class="w-full px-2 py-1 text-xs bg-white border border-gray-200 rounded focus:outline-none focus:border-primary-400" />
                       </div>
                       <div class="grid grid-cols-[80px_1fr] items-center gap-2">
                         <span class="text-xs text-gray-600">zhipu</span>
                         <input v-model="form.llm_model_codes.zhipu" type="text" placeholder="留空用全局默认"
+                          :class="modelCodeErrors.zhipu ? 'border-danger-500 focus:border-danger-500' : ''"
+                          @input="sanitizeModelCode('zhipu', $event)"
                           class="w-full px-2 py-1 text-xs bg-white border border-gray-200 rounded focus:outline-none focus:border-primary-400" />
                       </div>
+                      <p v-if="modelCodeErrorText" class="text-[11px] text-danger-500">{{ modelCodeErrorText }}</p>
                     </div>
-                    <p class="text-[11px] text-gray-400 mt-1">主 provider 失败 failover 到备用 provider 时，备用 provider 也会用这里配置的 model。</p>
+                    <p class="text-[11px] text-gray-400 mt-1">仅允许 ASCII 可见字符（字母、数字、常用符号），禁止中文全角、Unicode 特殊符号等。</p>
                   </div>
 
                   <!-- Recap 轮后任务编辑器 -->
@@ -611,6 +618,48 @@ const toolbarButtonOptions = listToolbarButtonMeta()
 const chatToolbar = ref<string[]>([])
 const uploadAccept = ref('')
 
+// Model 覆盖输入校验：只允许 ASCII 可见字符（\x21-\x7E），过滤全角/Unicode 特殊符号
+// 背景：曾发生把 U+2011（非断行连字符）当成普通连字符填入模型名导致调用失败
+const ASCII_VISIBLE_RE = /[^\x21-\x7E]/g
+const ASCII_VISIBLE_TEST_RE = /[^\x21-\x7E]/
+const modelCodeErrors = ref<Record<string, string>>({})
+
+const modelCodeErrorText = computed(() => {
+  const parts = Object.entries(modelCodeErrors.value)
+    .filter(([, msg]) => msg)
+    .map(([k, msg]) => `${k}: ${msg}`)
+  return parts.length > 0 ? parts.join('；') : ''
+})
+
+function sanitizeModelCode(provider: string, e: Event) {
+  const input = e.target as HTMLInputElement
+  const raw = input.value
+  const cleaned = raw.replace(ASCII_VISIBLE_RE, '')
+  if (cleaned !== raw) {
+    const removed = [...new Set(raw.replace(/[\x21-\x7E]/g, ''))]
+    modelCodeErrors.value[provider] = `已移除非法字符 ${removed.join(' ')}`
+  } else {
+    delete modelCodeErrors.value[provider]
+  }
+  // 触发 modelCodeErrors 响应式更新（delete 不触发）
+  modelCodeErrors.value = { ...modelCodeErrors.value }
+  if (cleaned !== raw) {
+    input.value = cleaned
+    form.value.llm_model_codes[provider] = cleaned
+  }
+}
+
+function validateModelCodes(): boolean {
+  const rawCodes = form.value.llm_model_codes || {}
+  for (const [k, v] of Object.entries(rawCodes)) {
+    if (typeof v === 'string' && v && ASCII_VISIBLE_TEST_RE.test(v)) {
+      showToast(`${k} 的 Model 含非 ASCII 字符，请检查`, 'error')
+      return false
+    }
+  }
+  return true
+}
+
 // 从内置数字员工复制创建模式（入口：内置数字员工页「自定义」按钮）
 const pendingCreate = ref<{ source_agent_id: string; source_name: string } | null>(null)
 
@@ -948,6 +997,7 @@ async function doCreate() {
 }
 
 async function saveDefinition() {
+  if (!validateModelCodes()) return
   saving.value = true
   try {
     // 组装 llm_model_codes：过滤空值，若全空则传 null
