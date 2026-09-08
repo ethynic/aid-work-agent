@@ -19,7 +19,7 @@ src/desktop_automation/ 管事件/调度骨架、运行账本与额度；src/loc
 | content_blocks | 保留 bs_weixin_marketing_content_blocks | 有序 text/link/image、UNIQUE(tenant_id,revision_id,position) |
 | group_bindings | 保留 bs_weixin_marketing_group_bindings | 微信身份规则，不上移群字段 |
 | account_bindings | 保留 bs_weixin_marketing_account_bindings | 微信 account anchor；底座仅引用 account/session 摘要 |
-| schedules | 上移 desktop_automation_schedules | 通用 kind/timezone/anchor/next_fire/ends/count；场景持有触发配置，适配器编译 schedule |
+| schedules | 上移 desktop_automation_schedules | scenario_key/task_ref/revision_ref、kind/timezone/anchor/next_fire/ends/count；kind=event 时保存 source_ref/event_type/condition_ref/delay，不进入时间扫描；场景适配器编译 |
 | event_sources | 上移 desktop_automation_event_sources | source_type/key_ref/key_version/schema/allowed_event_types；场景定义 payload schema |
 | events | 上移 desktop_automation_events | source_id/external_event_id/payload_ref/state/match_cursor/eligible_revision_refs；唯一源事件键 |
 | occurrences | 上移 desktop_automation_occurrences | scenario_key/task_ref/revision_ref/trigger_key/due_at/expires_at；UNIQUE(tenant_id,scenario_key,task_ref,trigger_key) |
@@ -31,9 +31,9 @@ src/desktop_automation/ 管事件/调度骨架、运行账本与额度；src/loc
 | outbox | 上移 desktop_automation_outbox | kind/aggregate_ref/dedupe_key/state/available_at/lease/attempt_count；UNIQUE(tenant_id,kind,dedupe_key) |
 | quota_buckets | 上移 desktop_automation_quota_buckets | scope_type/opaque scope_id/bucket_start/reserved/limit；scope 枚举 tenant/task/target/account/resource，无群专属列 |
 
-上移表保留 UUID、TIMESTAMPTZ 与到期/待处理部分索引。schedule 唯一键为 (tenant_id,scenario_key,revision_ref)；delivery/attempt/result 引用走同租户复合外键。多态 task_ref/revision_ref/target_ref 通过中立 subject registry（desktop_automation_subjects：tenant_id,scenario_key,kind,id,version,owner_id,status）建立复合引用；注册与场景版本发布同事务，场景扩展行用同一 subject_id，禁止任意字符串绕过归属验证。底座只持授权快照和撤销 epoch；具体授权由适配器校验，许可事务同时锁定 subject/epoch，避免检查后授权漂移。
+上移表保留 UUID、TIMESTAMPTZ 与到期/待处理部分索引。schedule 唯一键为 (tenant_id,scenario_key,revision_ref)；delivery/attempt/result 引用走同租户复合外键。多态 task_ref/revision_ref/target_ref 通过中立 subject registry（desktop_automation_subjects：tenant_id,scenario_key,kind,id,version,owner_id,status；task subject 另存 active_revision_ref/authorization_epoch，revision subject 存 task_ref）建立复合引用；注册与场景版本发布同事务，场景扩展行用同一 subject_id，禁止任意字符串绕过归属验证。底座只持授权快照和撤销 epoch；具体授权由适配器校验，许可事务同时锁定 subject/epoch，避免检查后授权漂移。
 
-事件 payload 为受控租户存储引用（payload_ref/hash），条件匹配在 ACL 内加载；不可原样写通用日志。原算法中的 automation/revision 是中立 subject，读取业务状态必须经适配器；原 events.payload_json 调整为 payload_ref，原 block_id 由场景维护与 delivery 的映射。业务 init_tables 接现有 init_database；系统表与既有表扩展走 deploy/db_update.yaml 并验证空库初始化。background 启动不依赖先打开聊天。
+事件 payload 为受控租户存储引用（payload_ref/hash），条件匹配在 ACL 内加载；不可原样写通用日志。算法以 subject registry 的 task_ref/revision_ref 关联中立表；场景特有校验经注册适配器完成，底座不直接查询场景业务表。events 只存 payload_ref，block 与 delivery 的映射由场景维护。业务 init_tables 接现有 init_database；系统表与既有表扩展走 deploy/db_update.yaml 并验证空库初始化。background 启动不依赖先打开聊天。
 
 ### 2.1 本地通道扩展与标识
 
@@ -47,23 +47,37 @@ target_ref 是云端持久 subject 引用，target_handle 是 Provider 在当前
 
 ### 3.1 时间扫描
 
-每次 tick 处理有界批次（初始100项），短事务 `SELECT ... FOR UPDATE SKIP LOCKED` 领取到期 schedule；锁内读取 automation status/active revision，计算应接纳时间槽、迟到策略与次数限制，插入 occurrence、run 及 outbox，并前移 next_fire_at 后一起提交。人工操作与扫描器采用一致锁顺序（automation→schedule→occurrence/run），避免发布/暂停与tick死锁。
+每次 tick 处理有界批次（初始100项），先从 `desktop_automation_schedules` 非锁定读取 kind 为时间触发且已到期的候选 ID，以及其 `(tenant_id, scenario_key, task_ref, revision_ref)`。候选只是扫描线索，不代表已经接纳或取得执行权。
 
-触发键：时间 `time:{revision_id}:{scheduled_for_utc}`；事件 `event:{source_id}:{external_event_id}`（同一 automation 默认跨 revision 只接纳一次同一事件）；手动 `manual:{request_id}`。采用 INSERT ON CONFLICT DO NOTHING，不依赖内存“已执行”集合。
+逐候选开启短事务，按 §2.1 顺序先对 `desktop_automation_subjects` 中同租户、同 scenario_key、kind=task、id=task_ref 的行执行 `FOR UPDATE SKIP LOCKED`；无法取得锁就跳过本轮。再锁定对应 `desktop_automation_schedules` 行，复验到期时间及引用未变。校验 task subject 为启用状态、active_revision_ref 等于 schedule.revision_ref，且对应 kind=revision 的 subject 属于该 task、已发布且有效；通过注册适配器校验场景特有条件，不直接读取任何场景的任务或版本表。发布/暂停必须先锁同一 task subject，并在同一事务同步 active_revision_ref、status、authorization_epoch 与 schedule 状态。
 
-interval 的第 n 次为 anchor+n×interval_seconds；停机后直接算最近可用槽，避免循环展开数百万次积压。cron 使用项目 APScheduler 3.x trigger 的计算能力；星期用 mon..sun 字符串，避免复制现有 cron helper 的星期数字映射差异。每月31日、闰年、DST、跨日窗口必须定例测试。
+锁内计算时间槽、迟到策略与次数限制，向 `desktop_automation_occurrences` 写入 tenant_id/scenario_key/task_ref/revision_ref/trigger_key 及计划、到期时间；仅新接纳时创建关联的 `desktop_automation_runs` 与 `desktop_automation_outbox` 记录。前移 schedule.next_fire_at、更新计数并一起提交。冲突复用已有 occurrence，不再生成 run/outbox 或重复计数。锁顺序始终为 task subject→schedule→occurrence/run，不先锁 schedule 后回头锁 task。
 
-missed 落审计计数/区间摘要，宽限内最多接纳最近一次；一次性存 consumed 状态但保留 schedule 行便于对账。运行未结束又到新触发：默认 skip_overlap，该槽落 skipped，不积压无界队列。
+触发键与去重作用域：
+
+- 时间：`time:{revision_ref}:{scheduled_for_utc}`，revision_ref 是中立 revision subject 的引用。
+- 事件：`event:{source_ref}:{external_event_id}`，source_ref 指向 `desktop_automation_event_sources`；同一 task_ref 默认跨 revision_ref 只接纳一次同一源事件。
+- 手动：`manual:{request_id}`，不改变时间 schedule.next_fire_at。
+
+以上均受 `desktop_automation_occurrences` 的 `UNIQUE(tenant_id,scenario_key,task_ref,trigger_key)` 约束，使用 `INSERT ... ON CONFLICT DO NOTHING`，不依赖内存集合。各键分量采用无歧义的规范编码，避免外部事件 ID 含分隔符造成碰撞。run 按同租户 occurrence_id 唯一，outbox 使用确定性 dedupe_key。
+
+interval 的第 n 次为 anchor+n×interval_seconds；停机后直接算最近可用槽，不循环展开积压。cron 使用项目 APScheduler 3.x trigger 的计算能力；星期用 mon..sun 字符串。每月31日、闰年、DST、跨日窗口必须定例测试。
+
+missed 写入 `desktop_automation_audit_events` 的计数/区间摘要，宽限内最多接纳最近一次；一次性 schedule 保存 consumed 状态并保留行便于对账。按 tenant_id/scenario_key/task_ref 查询未结束的 `desktop_automation_runs`（通过 occurrences 关联），默认 skip_overlap：新槽记录 skipped 及原因，不生成可执行 run，不积压无界队列。次数、宽限等策略来自已发布 revision_ref 对应的冻结配置，由适配器编译，底座不重新解析自然语言。
 
 ### 3.2 事件接纳
 
-内部业务：业务状态变更与事件 outbox 同一业务数据库事务提交。投递器写入营销 events，按唯一键去重；跨数据库场景需源侧可靠 outbox，不宣称跨库原子提交。
+内部源的业务状态变更与源侧事件 outbox 同一业务数据库事务提交。投递器根据受信 source_ref 查询 `desktop_automation_event_sources`，校验租户、源状态及事件 schema，将受控 payload 持久化后，以 payload_ref/hash 写入 `desktop_automation_events`；`UNIQUE(tenant_id,source_id,external_event_id)` 去重，其中 source_id 为 source_ref 对应行 ID。跨数据库使用源侧可靠 outbox，不宣称跨库原子提交。场景 observer 也经此入口，不另建营销事件表。
 
-外部：HTTPS webhook 验证签名（成熟 HMAC-SHA256 库，覆盖时间戳、nonce、原始请求体）、±5分钟窗口与 nonce 防重放；密钥用现有 secret_crypto 管理并支持 key_id 轮换。tenant 由 source 身份解析，拒绝 payload 自报租户/用户覆盖。设置 body 大小、速率、事件类型/schema 限制；有效事件落库后202返回。重复有效事件返回已有接纳结果，不重复执行。
+外部 HTTPS webhook 使用成熟 HMAC-SHA256 库验证时间戳、nonce 和原始请求体，校验 ±5分钟窗口与 nonce 防重放；密钥复用 secret_crypto 并支持 key_id 轮换。tenant_id 来自受信 event source 身份，拒绝 payload 自报租户/用户覆盖；限制 body、速率及事件类型/schema。事件及匹配版本快照持久接纳后返回202，重复有效事件返回原接纳结果，不重新选择版本或执行。
 
-事件匹配 worker 按 event_type 找 active revisions，使用白名单条件 DSL，命中后事务插入 occurrence/run/outbox。events 不可在匹配完成前标 processed；大批匹配用稳定分页与 match_cursor，可重跑，依赖 occurrence 唯一键去重。先期只匹配事件接收时有效的版本集合并固定快照；配置发布不回放历史事件。延迟 due_at 默认 received_at+delay，occurred_at 仅业务条件/审计使用，避免不可信外部时钟改变队列。
+匹配候选来自 `desktop_automation_schedules` 中 kind=event、source_ref/event_type 匹配的已编译订阅配置，通过 `(tenant_id,scenario_key,task_ref,revision_ref)` 关联 `desktop_automation_subjects`。只选择当时 task subject 启用、active_revision_ref 匹配且 revision subject 有效的订阅；condition_ref/delay 引用对应发布版本的冻结配置。事件接纳事务在一致性快照下确定此集合，将 `(scenario_key,task_ref,revision_ref,schedule_id)` 固定写入 `desktop_automation_events.eligible_revision_refs`。此处“接收时有效”定义为该事务读取快照，不以 HTTP 到达时间推断；事务提交失败则未接纳。
 
-事件洪峰按源速率、任务冷却和配额限流，事件和 skipped 原因持久保存；不静默把多个独立业务事件合为一个。实际事件适配器必须在对应业务完成后才出现在 UI 可选源中。
+匹配 worker 只遍历这个持久集合，不再按 event_type 动态查询新的已发布版本。按稳定的 `(scenario_key,task_ref,revision_ref,schedule_id)` 顺序分页，使用 events.match_cursor 恢复；在 ACL 内加载 payload_ref 与冻结 condition_ref，以白名单 DSL 判定。每个候选按 task subject→schedule→occurrence/run 顺序加锁，复验当前仍启用且 active_revision_ref 未变化，并调用适配器完成场景校验。已暂停、版本切换或授权失效则记录该候选 skipped 及原因，不转投新版本。
+
+命中时在同一事务插入 `desktop_automation_occurrences`、`desktop_automation_runs`、`desktop_automation_outbox`，并推进该候选的匹配水位；未命中/阻断也持久记录处理结论后推进。event 行的游标更新锁置于上述锁之后，多个匹配 worker 对同一游标执行 CAS，失败则整个候选事务回滚重试；不能先锁 event 再锁 task。唯一键保证重跑不重复接纳，只有快照集合全部处理完成后才将 events.state 标为 processed。配置发布不回放历史事件。due_at 默认 received_at+冻结 delay，occurred_at 只作业务条件与审计依据，不让外部时钟改变队列。
+
+事件洪峰按源速率、task 冷却与底座 quota 限制；未接纳的请求明确返回限流，已接纳事件及 skipped 原因持久保存，不静默合并独立事件。实际场景事件适配器完成后才出现在 UI 可选源中。上述表访问与键语义同时适用于各 scenario_key，不包含任何场景专属表名或目标字段。
 
 ## 4. 场景执行器与并发
 
