@@ -239,6 +239,9 @@ def parse_api_meta(doc_text: str) -> Optional[Dict[str, str]]:
         ```
 
     返回 meta dict；user_token_name / external_userid_field 缺省回退 10605 惯例值。
+    http_method（可选）：业务接口统一请求方式声明。声明后推送循环强制把 http_api
+    调用的 method 纠正为该值（防御 lite 模型把查询类请求自作主张改成 GET 导致
+    鉴权 Header 缺失，2026-09-08 Code=-99 事故）；未声明时不干预。
     push_exclude_sections（可选）：逗号分隔章节标题，注入 LLM 前裁剪对应章节，
     见 _strip_excluded_sections。
     无块 / login_url 缺失 / login_url 非 https 均返回 None（放弃原因写入 tlog）。
@@ -269,6 +272,11 @@ def parse_api_meta(doc_text: str) -> Optional[Dict[str, str]]:
 
     meta.setdefault("user_token_name", _DEFAULT_USER_TOKEN_NAME)
     meta.setdefault("external_userid_field", _DEFAULT_EXTERNAL_USERID_FIELD)
+    declared_method = (meta.get("http_method") or "").strip().upper()
+    if declared_method:
+        meta["http_method"] = declared_method
+    else:
+        meta.pop("http_method", None)
     return meta
 
 
@@ -659,6 +667,30 @@ def _extract_business_code(result: Dict[str, Any]) -> Optional[int]:
     return int(match.group(1)) if match else None
 
 
+def _normalize_http_method(args: Dict[str, Any], meta: Dict[str, str]) -> Dict[str, Any]:
+    """按 api-meta 的 http_method 声明强制纠正 http_api 调用的 method
+
+    lite 模型偶发把文档声明为 POST 的查询类接口自作主张写成 GET（鉴权 Header
+    随之缺失，ERP 返回 -99）。声明存在时确定性纠正，杜绝该类偏差；未声明不干预。
+    """
+    declared = (meta.get("http_method") or "").strip().upper()
+    if not declared:
+        return args
+    original = str(args.get("method") or "GET").strip().upper()
+    if original == declared:
+        return args
+    corrected = dict(args)
+    corrected["method"] = declared
+    tlog(
+        "售前推送",
+        "纠正请求方式: model={orig} -> declared={declared}, url={url}",
+        orig=original,
+        declared=declared,
+        url=str(corrected.get("url") or "")[:120],
+    )
+    return corrected
+
+
 def _safe_json_loads(raw: Any) -> Optional[Dict[str, Any]]:
     """解析工具调用 arguments（JSON 字符串）；失败返回 None 不抛"""
     if isinstance(raw, dict):
@@ -692,7 +724,9 @@ def _build_system_prompt(doc: str, meta: Dict[str, str]) -> str:
         "请保持原样书写，不要改写成其他形式。"
         f"用户身份 token（变量名：{user_token}）已由系统完成委托登录获取，见用户消息；"
         "不要调用文档中的登录接口。"
-        "若收到「用户身份 token 已强制刷新」的系统消息，用新 token 重试刚才失败的调用。\n"
+        "若收到「用户身份 token 已强制刷新」的系统消息，用新 token 重试刚才失败的调用。"
+        "每个业务请求必须按文档声明的请求方式调用（不要因为「查询」就自行改用 GET），"
+        "且每次调用都必须完整携带文档要求的全部鉴权 Header，缺一个都会被拒绝。\n"
         "2. 成功判定：HTTP 200 不代表业务成功，以文档定义的业务成功码为准；"
         "只有业务成功才算该步完成。\n"
         "3. 执行纪律：严格按文档「同步业务规则」（或同等章节）的顺序与分流执行；"
@@ -862,6 +896,8 @@ async def _run_push_loop(
                     "error": "工具调用参数非法（工具名为空或 arguments 不是合法 JSON 对象），请修正后重新调用",
                 }
             else:
+                if name == "http_api":
+                    args = _normalize_http_method(args, meta)
                 try:
                     result = await executor.execute(name, args, context=context)
                 except Exception as e:
