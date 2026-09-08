@@ -279,6 +279,30 @@
                     </div>
                   </div>
 
+                  <!-- Chat Toolbar Buttons -->
+                  <div>
+                    <label class="text-xs text-gray-500 mb-1 block">聊天工具栏额外按钮</label>
+                    <div class="bg-gray-50 rounded-lg p-2 space-y-1.5">
+                      <label v-for="btn in toolbarButtonOptions" :key="btn.id"
+                        class="flex items-center gap-2 text-xs text-gray-600 cursor-pointer">
+                        <input type="checkbox"
+                          class="w-4 h-4 rounded border-primary-200 text-primary-600 focus:ring-primary-500"
+                          :checked="chatToolbar.includes(btn.id)" @change="toggleToolbarButton(btn.id)" />
+                        <span class="text-gray-700">{{ btn.label }}</span>
+                        <span class="text-gray-400 font-mono">{{ btn.id }}</span>
+                      </label>
+                      <div v-if="toolbarButtonOptions.length === 0" class="text-xs text-gray-400 py-1">暂无可选按钮</div>
+                    </div>
+                  </div>
+
+                  <!-- Upload Accept -->
+                  <div>
+                    <label class="text-xs text-gray-500 mb-1 block">上传文件类型限定</label>
+                    <input v-model="uploadAccept" type="text" placeholder="如 image/* 或 .pdf,.docx"
+                      class="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-primary-400" />
+                    <p class="text-[11px] text-gray-400 mt-1">对齐 HTML input accept 语法，留空用全局默认（.pdf,.doc,.docx,.xls,.xlsx,.txt,.png,.jpg,.jpeg,.gif,.ppt,.pptx）。</p>
+                  </div>
+
                   <div>
                     <label class="text-xs text-gray-500 mb-1 block">状态</label>
                     <select v-model="form.status"
@@ -532,6 +556,7 @@ import {
   type AgentDefinition, type PromptVersion, type DiffResult,
   type ToolMeta, type SkillMeta, type ReplyStyleMeta, type RecapTaskMeta,
 } from '@/api/agentDefinitions'
+import { listToolbarButtonMeta } from '@/components/chat/toolbar-buttons/registry'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 
 // ============== Auth (portal mode) ==============
@@ -570,6 +595,11 @@ const selectedPageIds = computed(() => businessPages.value.map(p => p.id))
 const recapTasks = ref<{ name: string; when: string; enabled: boolean }[]>([])
 const recapTaskOptions = ref<RecapTaskMeta[]>([])
 const recapWhenOptions = ref<string[]>([])
+
+// 聊天工具栏额外按钮 + 上传类型限定（选项来自前端 toolbar-buttons 注册表）
+const toolbarButtonOptions = listToolbarButtonMeta()
+const chatToolbar = ref<string[]>([])
+const uploadAccept = ref('')
 
 // Sections state — dynamic from template parsing
 const sectionKeys = ref<string[]>([])
@@ -715,12 +745,21 @@ function populateForm(data: AgentDefinition) {
     when: t.when || 'every_round',
     enabled: t.enabled !== false,
   }))
+  chatToolbar.value = [...(data.chat_toolbar || [])]
+  uploadAccept.value = data.upload_accept || ''
 }
 
 function addRecapTask() {
   const defaultName = recapTaskOptions.value[0]?.name || ''
   const defaultWhen = recapWhenOptions.value[0] || 'every_round'
   recapTasks.value.push({ name: defaultName, when: defaultWhen, enabled: true })
+}
+
+function toggleToolbarButton(id: string) {
+  const arr = chatToolbar.value
+  const i = arr.indexOf(id)
+  if (i >= 0) arr.splice(i, 1)
+  else arr.push(id)
 }
 
 async function loadSections() {
@@ -889,6 +928,8 @@ async function saveDefinition() {
       business_pages: businessPages.value.length > 0 ? businessPages.value : null,
       // 全部删除时传 {tasks: []} 而非 null：后端 update 过滤 None 值，传 null 无法清空配置
       recap: recapTasks.value.length > 0 ? { tasks: recapTasks.value } : { tasks: [] },
+      chat_toolbar: [...chatToolbar.value],
+      upload_accept: uploadAccept.value.trim(),
       llm_provider: form.value.llm_provider || null,
       llm_model_codes: Object.keys(model_codes).length > 0 ? model_codes : null,
       status: form.value.status,

@@ -31,7 +31,7 @@ class AgentRouter:
     # 自定义智能体（subagent_definitions DB 定义，from_db=True）的运行时字段，用于检测配置是否被修改
     _CONFIG_CHANGE_FIELDS = (
         "llm_provider", "llm_model_codes", "tools", "skills",
-        "context", "reply_style", "chat_toolbar",
+        "context", "reply_style", "chat_toolbar", "upload_accept",
     )
 
     def __init__(self):

@@ -61,3 +61,10 @@ export function resolveToolbarButtons(buttonIds: string[] | undefined | null): T
   }
   return metas.sort((a, b) => a.order - b.order)
 }
+
+/** 返回全部已注册按钮的 id/label（按 order 升序），供管理页配置 chat_toolbar 时作为选项来源 */
+export function listToolbarButtonMeta(): Array<{ id: string; label: string }> {
+  return [...REGISTRY]
+    .sort((a, b) => a.order - b.order)
+    .map(({ id, label }) => ({ id, label }))
+}

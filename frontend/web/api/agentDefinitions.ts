@@ -37,6 +37,8 @@ export interface AgentDefinition {
   business_pages: any[] | null
   knowledge_sources: { source_type: string; display_name: string }[]
   recap: { tasks: { name: string; when: string; enabled: boolean }[] } | null
+  chat_toolbar?: string[] | null
+  upload_accept?: string | null
   status: string
   created_by: string | null
   updated_by: string | null
@@ -113,6 +115,8 @@ export async function createDefinition(data: {
   llm_provider?: string
   llm_model_codes?: Record<string, string>
   reply_style?: string
+  chat_toolbar?: string[]
+  upload_accept?: string
 }): Promise<{ success: boolean; data: any }> {
   const response = await fetch(`${API_BASE}`, {
     method: 'POST',

@@ -42,6 +42,8 @@ class CreateDefinitionRequest(BaseModel):
     business_pages: Optional[List[Dict[str, Any]]] = None
     knowledge_sources: Optional[List[Dict[str, str]]] = None
     recap: Optional[Dict[str, Any]] = None
+    chat_toolbar: Optional[List[str]] = None
+    upload_accept: Optional[str] = None
     commit_message: str = "初始版本"
 
 
@@ -62,6 +64,8 @@ class UpdateDefinitionRequest(BaseModel):
     business_pages: Optional[List[Dict[str, Any]]] = None
     knowledge_sources: Optional[List[Dict[str, str]]] = None
     recap: Optional[Dict[str, Any]] = None
+    chat_toolbar: Optional[List[str]] = None
+    upload_accept: Optional[str] = None
     status: Optional[str] = None
 
 
@@ -174,6 +178,8 @@ async def create_definition(request: Request, body: CreateDefinitionRequest):
             business_pages=body.business_pages,
             knowledge_sources=body.knowledge_sources,
             recap=body.recap,
+            chat_toolbar=body.chat_toolbar,
+            upload_accept=body.upload_accept,
             created_by=admin.get("user_id"),
             commit_message=body.commit_message,
         )
