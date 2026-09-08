@@ -76,8 +76,9 @@ def _build_match_pattern(prefix: Optional[str], search: Optional[str]) -> str:
       拼出 {kp}:*{search}* 形式（kp 为空时退化为 *{search}*）
     """
     if prefix:
-        # make_key 返回 "{kp}:{prefix}:" 或 "{prefix}:"，结尾带冒号
-        full_prefix = redis_client.make_key(prefix, "")
+        # make_key 过滤空段（无尾冒号），SCAN 前缀需按段锚定，显式补尾冒号，
+        # 避免 "token" 误匹配 "token_usage" 等同前缀兄弟段
+        full_prefix = f"{redis_client.make_key(prefix, '')}:"
         if search:
             return f"{full_prefix}*{search}*"
         return f"{full_prefix}*"

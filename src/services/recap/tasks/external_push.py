@@ -23,6 +23,7 @@ b) 客户表必须有一个字段承载我方 external_userid（字段名由 api
 import asyncio
 import json
 import re
+import time
 import urllib.error
 import urllib.request
 from datetime import datetime
@@ -48,6 +49,115 @@ _DEFAULT_EXTERNAL_USERID_FIELD = "unionid"
 _HTTP_TIMEOUT_SECONDS = 15
 _TEXT_TRUNCATE_CHARS = 200
 _DIALOGUE_TRUNCATE_CHARS = 1000
+_TRACE_TRUNCATE_CHARS = 2000
+
+
+# ============== trace 埋点（观测旁路，best-effort，无 trace_id 时静默跳过） ==============
+
+
+def _trace_llm_span(
+    payload: RecapPayload,
+    name: str,
+    response: Any,
+    model: Optional[str],
+    start_ts: float,
+    success: bool = True,
+    error: str = "",
+) -> None:
+    """向当轮对话 trace 追加 recap LLM 调用 span（generation）"""
+    if not payload.trace_id:
+        return
+    try:
+        from src.core.trace_persist import append_recap_span
+
+        usage = response.get("usage") or {} if isinstance(response, dict) else {}
+        output = (response.get("content") or "") if isinstance(response, dict) else ""
+        if not success:
+            usage = {}
+            output = error
+        else:
+            _accumulate_obs_cost(payload, usage, model)
+        append_recap_span(
+            trace_id=payload.trace_id,
+            name=name,
+            span_type="generation",
+            input="",
+            output=_truncate(output, _TRACE_TRUNCATE_CHARS),
+            model=model or "",
+            usage=usage if isinstance(usage, dict) else {},
+            start_time=start_ts,
+            end_time=time.time(),
+            success=success,
+        )
+    except Exception as e:
+        logger.debug(f"[external_push] trace span 写入失败: {e}")
+
+
+def _trace_tool_span(
+    payload: RecapPayload,
+    tool_name: str,
+    args: Dict[str, Any],
+    result: Any,
+    start_ts: float,
+) -> None:
+    """向当轮对话 trace 追加 recap 工具调用 span（http_api / report_push_result）"""
+    if not payload.trace_id:
+        return
+    try:
+        from src.core.trace_persist import append_recap_span
+
+        append_recap_span(
+            trace_id=payload.trace_id,
+            name=f"recap:external_push:tool_{tool_name}",
+            span_type="span",
+            input=_truncate(json.dumps(args, ensure_ascii=False, default=str), _TRACE_TRUNCATE_CHARS),
+            output=_truncate(json.dumps(result, ensure_ascii=False, default=str), _TRACE_TRUNCATE_CHARS),
+            start_time=start_ts,
+            end_time=time.time(),
+            success=bool(result.get("success")) if isinstance(result, dict) else False,
+        )
+    except Exception as e:
+        logger.debug(f"[external_push] trace span 写入失败: {e}")
+
+
+def _accumulate_obs_cost(payload: RecapPayload, usage: Any, model: Optional[str]) -> None:
+    """累计本次 LLM 调用的观测成本（仅 obs_traces 展示口径，非计费权威）。
+
+    计费权威仍是 record_background_llm_usage 落 chat_records；此处折算仅用于
+    任务结束时回填 obs_traces.total_cost（GREATEST 语义，不回退已有值）。
+    """
+    if not isinstance(usage, dict):
+        return
+    try:
+        from src.services.billing import calculate_credit_cost
+
+        cost = calculate_credit_cost(
+            prompt_tokens=int(usage.get("prompt_tokens") or 0),
+            completion_tokens=int(usage.get("completion_tokens") or 0),
+            model=model,
+        )
+        payload._obs_cost = getattr(payload, "_obs_cost", 0.0) + cost
+    except Exception as e:
+        logger.debug(f"[external_push] 观测成本折算失败: {e}")
+
+
+def _trace_summary(payload: RecapPayload, status: str, detail: str) -> None:
+    """向当轮对话 trace 的 obs_traces.metadata.recap 合并任务结果摘要"""
+    if not payload.trace_id:
+        return
+    try:
+        from src.core.trace_persist import append_recap_summary
+
+        append_recap_summary(payload.trace_id, {
+            "recap": {
+                "task": "external_push",
+                "status": status,
+                "detail": _truncate(str(detail), _TRACE_TRUNCATE_CHARS),
+                "round": str(payload.round_message_id),
+            },
+        }, total_cost=round(getattr(payload, "_obs_cost", 0.0), 2))
+    except Exception as e:
+        logger.debug(f"[external_push] trace summary 写入失败: {e}")
 
 # wecom_kf 会话 ID 格式：tenant_{tid}_wecom_kf_{open_kfid}_{external_userid}_{subagent}
 _WECOM_KF_MARKER = "_wecom_kf_"
@@ -347,6 +457,7 @@ async def _summarize(payload: RecapPayload, ctx: Dict[str, Any]) -> Dict[str, st
         from src.llm.gateway import llm_gateway
         from src.services.session_record import record_background_llm_usage
 
+        summarize_start = time.time()
         response = await llm_gateway.chat_lite(
             messages=[
                 {"role": "system", "content": _SUMMARY_SYSTEM_PROMPT},
@@ -368,10 +479,14 @@ async def _summarize(payload: RecapPayload, ctx: Dict[str, Any]) -> Dict[str, st
         record_background_llm_usage(
             response.get("usage") if isinstance(response, dict) else None,
             tenant_id=payload.tenant_id,
-            user_id=getattr(payload.record_service, "user_id", None),
+            user_id=payload.user_id or getattr(payload.record_service, "user_id", None),
             source="pre_sales_push",
             user_message="[recap external_push] 摘要生成",
             model=_resolve_lite_model_name(),
+        )
+        _trace_llm_span(
+            payload, "recap:external_push:summarize", response,
+            _resolve_lite_model_name(), summarize_start,
         )
         data = _extract_json_object(response.get("content", ""))
         if not data:
@@ -384,6 +499,7 @@ async def _summarize(payload: RecapPayload, ctx: Dict[str, Any]) -> Dict[str, st
         }
     except Exception as e:
         logger.warning(f"[external_push] 摘要 LLM 失败，降级截断原文: {e}")
+        _trace_llm_span(payload, "recap:external_push:summarize", None, None, time.time(), success=False, error=str(e))
         return fallback
 
 
@@ -627,11 +743,12 @@ async def _run_push_loop(
     meta: Dict[str, str],
     agent_token: str,
     login: Dict[str, Any],
-) -> None:
+) -> str:
     """推送主体：主模型 + http_api 工具多轮循环，按租户文档自主完成推送
 
     终止：report_push_result（确定性）/ 无 tool_calls / 轮次上限 / 连续失败熔断。
     未收到成功报告即 raise，由 runner 吞掉记 failed（下一轮 recap 自然重试）。
+    成功返回模型报告的 detail。
     """
     from src.config.settings import settings
     from src.llm.gateway import llm_gateway
@@ -662,6 +779,7 @@ async def _run_push_loop(
     aborted_reason = ""
 
     for round_no in range(1, max_rounds + 1):
+        round_start = time.time()
         used_lite = True
         try:
             # 推送循环用 lite 轻量模型降延迟（主模型每轮携带完整租户文档，实测 3~11s/轮）。
@@ -691,10 +809,14 @@ async def _run_push_loop(
         record_background_llm_usage(
             response.get("usage") if isinstance(response, dict) else None,
             tenant_id=payload.tenant_id,
-            user_id=getattr(payload.record_service, "user_id", None),
+            user_id=payload.user_id or getattr(payload.record_service, "user_id", None),
             source="pre_sales_push",
             user_message=f"[recap external_push] 推送循环 第{round_no}轮",
             model=billed_model,
+        )
+        _trace_llm_span(
+            payload, f"recap:external_push:llm_round_{round_no}", response,
+            billed_model, round_start,
         )
 
         tool_calls = response.get("tool_calls") or []
@@ -713,6 +835,7 @@ async def _run_push_loop(
             fn = tc.get("function") or {}
             name = fn.get("name") or ""
             args = _safe_json_loads(fn.get("arguments"))
+            tool_start = time.time()
             if not name or args is None:
                 result: Dict[str, Any] = {
                     "success": False,
@@ -723,6 +846,7 @@ async def _run_push_loop(
                     result = await executor.execute(name, args, context=context)
                 except Exception as e:
                     result = {"success": False, "error": f"工具执行异常: {e}"}
+            _trace_tool_span(payload, name or "unknown", args if isinstance(args, dict) else {}, result, tool_start)
 
             messages.append({
                 "role": "tool",
@@ -773,6 +897,7 @@ async def _run_push_loop(
     if not report.get("success"):
         raise RuntimeError(f"推送失败（模型报告放弃）: {report.get('detail') or '未说明原因'}")
     tlog("售前推送", f"推送完成 round={payload.round_message_id}, detail={report.get('detail')}")
+    return report.get("detail") or ""
 
 
 # ============== 适配器入口 ==============
@@ -787,11 +912,13 @@ class ExternalPushAdapter:
     async def execute(payload: RecapPayload) -> None:
         ctx = _collect_context(payload)
         if ctx is None:
+            _trace_summary(payload, "skipped", "上下文采集失败")
             return
 
         doc = _load_tenant_doc(payload.tenant_id)
         if doc is None:
             tlog("售前推送", f"放弃：租户未配置 {_DOC_FILENAME}, tenant={payload.tenant_id}")
+            _trace_summary(payload, "skipped", f"租户未配置 {_DOC_FILENAME}")
             return
 
         meta = parse_api_meta(doc)
@@ -799,6 +926,7 @@ class ExternalPushAdapter:
             logger.warning(
                 f"[external_push] 租户文档 api-meta 解析失败，放弃推送 tenant={payload.tenant_id}"
             )
+            _trace_summary(payload, "skipped", "租户文档 api-meta 解析失败")
             return
 
         doc = _strip_excluded_sections(doc, meta)
@@ -808,6 +936,7 @@ class ExternalPushAdapter:
                 f"[external_push] 归属员工手机号缺失，放弃推送 session={payload.session_id}"
             )
             tlog("售前推送", f"放弃：归属员工手机号缺失, tenant={payload.tenant_id}, open_kfid={ctx['open_kfid']}")
+            _trace_summary(payload, "skipped", "归属员工手机号缺失")
             return
 
         agent_token = _get_agent_token(payload.tenant_id, ctx.get("subagent"))
@@ -816,14 +945,20 @@ class ExternalPushAdapter:
                 f"[external_push] 租户未配置 AGENT_TOKEN，放弃推送 session={payload.session_id}"
             )
             tlog("售前推送", f"放弃：租户未配置 AGENT_TOKEN, tenant={payload.tenant_id}")
+            _trace_summary(payload, "skipped", "租户未配置 AGENT_TOKEN")
             return
 
-        summary = await _summarize(payload, ctx)
+        try:
+            summary = await _summarize(payload, ctx)
 
-        login = await asyncio.to_thread(
-            _delegate_login, payload.tenant_id, ctx["assignee_phone"], agent_token, meta["login_url"]
-        )
-        if not login or not login.get("client_token"):
-            raise RuntimeError("委托登录失败（无 client_token）")
+            login = await asyncio.to_thread(
+                _delegate_login, payload.tenant_id, ctx["assignee_phone"], agent_token, meta["login_url"]
+            )
+            if not login or not login.get("client_token"):
+                raise RuntimeError("委托登录失败（无 client_token）")
 
-        await _run_push_loop(payload, ctx, summary, doc, meta, agent_token, login)
+            detail = await _run_push_loop(payload, ctx, summary, doc, meta, agent_token, login)
+            _trace_summary(payload, "ok", detail)
+        except Exception as e:
+            _trace_summary(payload, "failed", str(e))
+            raise

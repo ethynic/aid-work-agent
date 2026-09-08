@@ -3,6 +3,7 @@
 承载：
 - APScheduler（系统任务 + 用户定时任务 + reconcile 对账），在其后台线程跑
 - wecom_personal_rpa 服务端会话存档兜底轮询（asyncio 兄弟任务，内部自带 Redis 锁）
+- recap 轮后任务消费者（API worker 入队 Redis，本进程执行，与 HTTP worker 重启解耦）
 - 心跳文件（供 healthcheck 判活）
 
 不启 FastAPI，不 import master_agent（由各回调懒加载）。
@@ -70,6 +71,87 @@ async def _heartbeat():
             pass  # 正常超时，继续下一轮
 
 
+async def _recap_consumer():
+    """recap 任务消费者：轮询 Redis 队列 -> 重建 payload -> 复用 runner._run_tasks 执行。
+
+    - 2s 轮询（recap 量级为每轮对话一条，无吞吐压力）
+    - 单条消息消费失败不影响后续轮询；任务级失败由 _run_tasks 内部吞掉
+    - 消费后立即 create_task，不串行等待执行完成（与 API worker 现有行为一致）
+    """
+    from src.core.cache_utils import CacheKeys
+    from src.core.redis_client import redis_client
+
+    queue_key = redis_client.make_key(CacheKeys.RECAP_QUEUE)
+    logger.info(f"background runner: recap 消费者启动, queue={queue_key}")
+
+    while not _stop.is_set():
+        try:
+            msg = await asyncio.to_thread(redis_client.lpop, queue_key)
+        except Exception as e:
+            logger.warning(f"background runner: recap 队列读取异常: {e}")
+            msg = None
+
+        if msg is None:
+            try:
+                await asyncio.wait_for(_stop.wait(), timeout=2)
+            except asyncio.TimeoutError:
+                pass
+            continue
+
+        try:
+            # 解析与 create_task 必须在事件循环内执行（to_thread 线程中无 loop）；
+            # 仅 lpop 的 Redis IO 放线程，解析本身是纯内存操作
+            _handle_recap_message(msg)
+        except Exception as e:
+            logger.opt(exception=True).error(f"background runner: recap 消息处理异常: {e}")
+
+
+def _handle_recap_message(msg) -> None:
+    """解析单条 recap 队列消息并派发执行（同步入口，异常向上抛给消费者循环）"""
+    import json
+    import time
+
+    from src.services.recap.runner import (
+        RECAP_MAX_QUEUE_AGE_SECONDS,
+        RecapPayload,
+        _run_tasks,
+        rebuild_tasks,
+    )
+
+    if not isinstance(msg, dict):
+        try:
+            msg = json.loads(msg) if isinstance(msg, str) else {}
+        except (json.JSONDecodeError, TypeError):
+            logger.warning(f"background runner: recap 消息格式非法，已丢弃: {str(msg)[:200]}")
+            return
+
+    payload = RecapPayload.from_dict(msg)
+    tasks = rebuild_tasks(payload.task_config)
+    if not tasks:
+        logger.warning(f"background runner: recap 消息无可执行任务，已丢弃 session={payload.session_id}")
+        return
+
+    # 滞留过久的陈旧消息直接丢弃：滞留超过幂等键 TTL 后 SET NX 防重已失效，
+    # 且用过期对话内容推送跟进对客户无意义。旧消息无 enqueued_at 时不检查（兼容发布窗口期）
+    if (
+        payload.enqueued_at
+        and time.time() - payload.enqueued_at > RECAP_MAX_QUEUE_AGE_SECONDS
+    ):
+        logger.warning(
+            f"background runner: recap 消息滞留超 {RECAP_MAX_QUEUE_AGE_SECONDS}s，"
+            f"已丢弃 session={payload.session_id} round={payload.round_message_id}"
+        )
+        return
+
+    bg_task = asyncio.create_task(_run_tasks(tasks, payload))
+    _recap_bg_tasks.add(bg_task)
+    bg_task.add_done_callback(_recap_bg_tasks.discard)
+
+
+# recap 消费后派发的执行任务自持引用集（仅防 GC，无其他语义）
+_recap_bg_tasks: set = set()
+
+
 async def _run():
     """主协程：初始化 → 启调度器 → 启 poller → 启心跳 → 等停机信号 → 优雅关闭。"""
     logger.info("background runner 启动")
@@ -92,6 +174,10 @@ async def _run():
 
     # 3. 心跳
     asyncio.create_task(_heartbeat())
+
+    # 4. recap 任务消费者（API worker 入队 Redis、本进程执行，与 HTTP worker
+    # 重启解耦；多副本下 LPOP 天然单消费者，配 RECAP_TASK_DEDUP 双保险）
+    asyncio.create_task(_recap_consumer())
     logger.info("background runner 就绪")
 
     await _stop.wait()

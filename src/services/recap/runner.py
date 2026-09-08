@@ -9,6 +9,8 @@ Recap 运行时 runner
 """
 
 import asyncio
+import json
+import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
@@ -20,6 +22,10 @@ from src.core.temp_logger import tlog
 
 # 幂等键 TTL：recap_task:{tenant_id}:{task_name}:{round_message_id}
 RECAP_IDEMPOTENT_TTL = 86400  # 24h
+
+# 队列消息最大滞留时长：超过后消费侧丢弃。滞留超过幂等键 TTL（24h）的陈旧任务
+# 会绕过 SET NX 防重，且用过期对话内容推送跟进对客户无意义
+RECAP_MAX_QUEUE_AGE_SECONDS = 3600  # 1h
 
 # 触发时机白名单：当前仅支持 every_round
 VALID_WHEN = ("every_round",)
@@ -35,15 +41,54 @@ class RecapTaskConfig:
 
 @dataclass
 class RecapPayload:
-    """传给适配器的本轮上下文（runner 构造，不查 DB——DB 采集是适配器自己的事）"""
+    """传给适配器的本轮上下文（runner 构造，不查 DB——DB 采集是适配器自己的事）
+
+    user_id/trace_id 由 trigger_recap 从 record_service 提取，供 background 进程
+    执行时使用（background 进程拿不到 record_service 对象）。
+    """
     tenant_id: str
     session_id: str
     subagent_name: str
     round_message_id: Any
     user_content: str
     assistant_reply: str
-    task_config: Optional[Dict[str, Any]] = None
+    task_config: Optional[List[Dict[str, Any]]] = None
     record_service: Any = None
+    user_id: Optional[str] = None
+    trace_id: Optional[str] = None
+    enqueued_at: Optional[float] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        """序列化为可 JSON 化的 dict（不含 record_service 对象）"""
+        return {
+            "tenant_id": self.tenant_id,
+            "session_id": self.session_id,
+            "subagent_name": self.subagent_name,
+            "round_message_id": self.round_message_id,
+            "user_content": self.user_content,
+            "assistant_reply": self.assistant_reply,
+            "task_config": self.task_config,
+            "user_id": self.user_id,
+            "trace_id": self.trace_id,
+            "enqueued_at": self.enqueued_at,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "RecapPayload":
+        """从 JSON dict 重建（background 进程消费队列时使用）"""
+        return cls(
+            tenant_id=data.get("tenant_id") or "",
+            session_id=data.get("session_id") or "",
+            subagent_name=data.get("subagent_name") or "",
+            round_message_id=data.get("round_message_id"),
+            user_content=data.get("user_content") or "",
+            assistant_reply=data.get("assistant_reply") or "",
+            task_config=data.get("task_config"),
+            record_service=None,
+            user_id=data.get("user_id"),
+            trace_id=data.get("trace_id"),
+            enqueued_at=data.get("enqueued_at"),
+        )
 
 
 def parse_recap_tasks(recap_config: Optional[Dict[str, Any]]) -> List[RecapTaskConfig]:
@@ -134,6 +179,12 @@ def trigger_recap(
         if not subagent_name:
             subagent_name = _subagent_name_from_session(session_id)
 
+        # 从 record_service 提取归属用户与当轮 trace_id（background 进程执行时
+        # 拿不到 record_service，必须在触发时捕获；trace_id 供 recap 追加 span）
+        record_user_id = getattr(record_service, "user_id", None) if record_service else None
+        trace_collector = getattr(record_service, "trace_collector", None) if record_service else None
+        trace_id = getattr(trace_collector, "trace_id", None) if trace_collector else None
+
         payload = RecapPayload(
             tenant_id=tenant_id,
             session_id=session_id,
@@ -142,7 +193,31 @@ def trigger_recap(
             user_content=user_content or "",
             assistant_reply=assistant_reply or "",
             record_service=record_service,
+            user_id=record_user_id,
+            trace_id=trace_id,
         )
+
+        # 任务列表序列化进 payload，background 进程消费时无需再解析 agent 配置
+        payload.task_config = [
+            {"name": t.name, "when": t.when, "enabled": t.enabled} for t in tasks
+        ]
+        payload.enqueued_at = time.time()
+
+        # 优先入队到 background runner 进程执行（与 HTTP worker 重启解耦，
+        # 2026-09-08 事故：worker max_requests 自重启杀掉进行中的推送）；
+        # Redis 不可用时降级为进程内 asyncio 任务（保持功能可用）。
+        # 直接传 dict（rpush 内部统一 json.dumps，避免双重编码）
+        enqueued = False
+        try:
+            enqueued = redis_client.rpush(
+                redis_client.make_key(CacheKeys.RECAP_QUEUE),
+                payload.to_dict(),
+            )
+        except Exception as e:
+            logger.warning(f"[recap] 入队异常（将降级进程内执行）: {e}")
+
+        if enqueued:
+            return
 
         # 自持引用 + done_callback 丢弃，防止任务被 GC（仿 channel_routes._dingtalk_background_tasks）
         bg_task = asyncio.create_task(_run_tasks(tasks, payload))
@@ -154,6 +229,29 @@ def trigger_recap(
 
 # 后台任务自持引用集（仅防 GC，无其他语义）
 _background_tasks: set = set()
+
+
+def rebuild_tasks(task_config: Optional[List[Dict[str, Any]]]) -> List[RecapTaskConfig]:
+    """从序列化的 task_config 重建任务配置列表（background 进程消费队列时使用）"""
+    if not task_config or not isinstance(task_config, list):
+        return []
+    tasks: List[RecapTaskConfig] = []
+    for raw in task_config:
+        if not isinstance(raw, dict):
+            continue
+        name = str(raw.get("name") or "").strip()
+        if not name:
+            continue
+        when = str(raw.get("when") or "every_round").strip()
+        if when not in VALID_WHEN:
+            logger.warning(f"[recap] 重建任务 {name} 的 when={when} 不支持（仅 {VALID_WHEN}），已跳过")
+            continue
+        tasks.append(RecapTaskConfig(
+            name=name,
+            when=when,
+            enabled=bool(raw.get("enabled", True)),
+        ))
+    return tasks
 
 
 async def _run_tasks(tasks: List[RecapTaskConfig], payload: RecapPayload) -> None:

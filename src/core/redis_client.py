@@ -719,6 +719,44 @@ class RedisClient:
             logger.warning(f"[Redis] lrange 失败 [{key}]: {e}")
             return []
 
+    def rpush(self, key: str, value: Any) -> bool:
+        """队列右侧入队（JSON 序列化）。
+
+        跨进程队列语义，禁止降级到进程内内存 list（其他进程永远看不到，
+        等于静默丢任务）：Redis 不可用时直接返回 False，由调用方降级处理。
+        """
+        if not self._ensure_connection() or self._client is None:
+            logger.warning(f"[Redis] rpush 失败 [{key}]: Redis 不可用")
+            return False
+        try:
+            raw = json.dumps(value, ensure_ascii=False, default=str)
+            self._client.rpush(key, raw)
+            return True
+        except Exception as e:
+            logger.warning(f"[Redis] rpush 失败 [{key}]: {e}")
+            return False
+
+    def lpop(self, key: str) -> Optional[Any]:
+        """队列左侧出队（JSON 反序列化）。
+
+        与 rpush 配对的跨进程队列语义，同样不做内存降级：Redis 不可用返回 None。
+        """
+        if not self._ensure_connection() or self._client is None:
+            return None
+        try:
+            raw = self._client.lpop(key)
+            if raw is None:
+                return None
+            if isinstance(raw, bytes):
+                raw = raw.decode('utf-8')
+            try:
+                return json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                return raw
+        except Exception as e:
+            logger.warning(f"[Redis] lpop 失败 [{key}]: {e}")
+            return None
+
     def smembers(self, key: str) -> List[Any]:
         """获取 Set 所有成员（JSON 反序列化）"""
         backend = self._get_backend()
@@ -988,14 +1026,15 @@ class RedisClient:
 
     # ============== 工厂方法 ==============
 
-    def make_key(self, prefix: str, identifier: str) -> str:
+    def make_key(self, prefix: str, identifier: str = "") -> str:
         """按规范生成 Redis Key，自动拼接全局 key_prefix 实现多实例隔离
 
-        格式：{key_prefix}:{prefix}:{identifier}   （key_prefix 为空时省略）
+        格式：{key_prefix}:{prefix}:{identifier}   （key_prefix 为空时省略；
+        identifier 传空或不传时省略，用于无 identifier 的队列/单键场景）
         例如：key_prefix="prod", prefix="cancelled_session", identifier="abc123"
              → "prod:cancelled_session:abc123"
         """
-        parts = [self._key_prefix, prefix, identifier] if self._key_prefix else [prefix, identifier]
+        parts = [p for p in (self._key_prefix, prefix, identifier) if p]
         return ":".join(parts)
 
     def clear_all(self) -> Dict[str, int]:

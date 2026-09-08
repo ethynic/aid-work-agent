@@ -146,14 +146,26 @@ if send_ok:
 
 ### 4.4 Runner 执行流程
 
+**执行进程隔离（2026-09-08 改造）**：recap 任务在 **background runner 独立进程**（`python -m src.background_runner`，docker-compose `aid-agent-background` 服务）执行，与 HTTP worker 生命周期解耦。背景：gunicorn `max_requests` 触发的 worker 周期性优雅自重启会杀死进程内后台任务，2026-09-08 10:52 真实事故中 external_push 推送被静默丢掉（start 无 done）。API worker 触发侧只做入队；Redis 不可用时降级为进程内 asyncio 执行（保持功能可用）。
+
 ```
-def trigger_recap(agent, ...) -> None:
+def trigger_recap(agent, ..., record_service) -> None:      # API worker 内执行
     tasks = 解析 agent.subagent_config.recap（无 recap 块 -> 直接返回）
     if not tasks: return
-    payload 骨架构造（轻量，不查 DB——DB 采集是适配器自己的事）
-    asyncio.create_task(_run_tasks(tasks, payload))
+    if not round_message_id: return                          # 幂等键依赖，缺失放弃
+    payload 构造 + 从 record_service 提取 user_id / trace_id（background 进程拿不到对象）
+    payload.task_config = 序列化任务列表
+    if redis rpush(recap_task_queue, json(payload)) 成功: return   # 优先入队
+    asyncio.create_task(_run_tasks(tasks, payload))          # Redis 不可用降级进程内执行
 
-async def _run_tasks(tasks, payload):
+async def _recap_consumer():                                 # background runner 内执行
+    while not stop:
+        msg = LPOP recap_task_queue（2s 轮询；多副本 LPOP 天然单消费者）
+        if msg: create_task(_run_tasks(rebuild_tasks(msg.task_config), RecapPayload.from_dict(msg)))
+
+消息年龄检查（_handle_recap_message）：payload.enqueued_at 距今超过 1h（RECAP_MAX_QUEUE_AGE_SECONDS）的消息直接丢弃——滞留超过幂等键 TTL（24h）后 SET NX 防重已失效，且用过期对话内容推送跟进对客户无意义。旧消息无 enqueued_at 字段时不检查（兼容发布窗口期）。
+
+async def _run_tasks(tasks, payload):                        # 两入口共用
     for task in tasks:                          # 串行分发，任务间故障隔离
         if 系统级开关(task.name) 为关: 跳过
         if not Redis SET NX recap_task:{tenant_id}:{task.name}:{round_message_id} TTL 24h:
@@ -176,9 +188,22 @@ async def _run_tasks(tasks, payload):
 | 层 | 键 | TTL | 说明 |
 |----|----|-----|------|
 | 任务级 | `recap_task:{tenant_id}:{task_name}:{round_message_id}`（Redis SET NX） | 24h | round_message_id 为本轮 channel_messages.message_id，渠道无关、单调递增、天然防重放 |
+| 任务队列 | `recap_task_queue`（FIFO list，无 TTL，消费即出队） | — | 仅 Redis 不降级内存（跨进程队列降级内存等于静默丢任务）；Redis 不可用时触发侧降级进程内执行。**已知限制**：① LPOP 无 ACK——background runner 停机时已出队在途任务不重投（与旧行为等价，下一轮问答自然产生新 recap，见 §9 Q1）；② 消息含对话原文且无 TTL——正常态消费即出队不驻留，若 Redis 开启持久化且积压（background 服务停机），明文对话会驻留 Redis；消费侧 1h 年龄检查兜底陈旧任务 |
 | 任务内部缓存 | 适配器自管（如 `pre_sales_client_token:{tenant_id}:{mobile}` TTL 23h） | — | 属适配器实现，机制不感知 |
 
-键前缀在 `src/core/cache_utils.py` `CacheKeys` 注册为 `RECAP_TASK_DEDUP`，同步 `docs/system/cache_usage.md`。Redis 不可用时降级内存（`redis_client` 内置降级），重启可能极小概率重做一次任务，业务可接受（推送类为追加型写入、查重类天然幂等）。
+键前缀在 `src/core/cache_utils.py` `CacheKeys` 注册为 `RECAP_TASK_DEDUP` / `RECAP_QUEUE`，同步 `docs/system/cache_usage.md`。幂等键 Redis 不可用时降级内存（`redis_client` 内置降级），重启可能极小概率重做一次任务，业务可接受（推送类为追加型写入、查重类天然幂等）。
+
+### 4.6 追踪库观测（recap span 追加）
+
+recap 在独立 background 进程执行，拿不到主对话的 `TraceCollector` 对象，无法走 `schedule_persist` 常规通路。改为**触发时捕获 trace_id、执行完直接补写追踪库**：
+
+- 触发侧（API worker）：`trigger_recap` 从 `record_service.trace_collector.trace_id` 提取当轮 trace_id 存入 payload——主对话的 `on_complete` 在触发点之前已执行，trace_id 必然已生成
+- 执行侧（background 进程）：`src/core/trace_persist.py` 新增两个 best-effort helper，字段与 `_do_persist` 的常规写入完全对齐：
+  - `append_recap_span(...)`：INSERT `obs_spans`（span_type=generation/span），记录 recap 的 LLM 调用与工具调用
+  - `append_recap_summary(trace_id, metadata, total_cost)`：UPDATE `obs_traces` 合并 `metadata.recap`（JSONB merge，含 task/status/detail/round）+ total_cost 按 GREATEST 回填
+- 适配器埋点约定（external_push 为参考实现）：摘要 LLM、每轮推送循环 LLM（generation span）、http_api 工具调用（span）、任务终态（summary），均以 `recap:` 前缀命名，payload.trace_id 为空时静默跳过
+- **计费不变**：`record_background_llm_usage` 照常落主库 `chat_records`（billing_audit.md §3.5 条件 A），追踪库写入只是观测旁路，无双计。external_push 的 total_cost 由各 LLM span 的 usage 按 `calculate_credit_cost` 累计折算（仅 obs_traces 展示口径，非计费权威）
+- 管理后台 TraceDetail 无需前端改动，recap span 与主对话 span 同 trace 自然呈现
 
 ---
 

@@ -77,6 +77,9 @@ class CacheKeys:
     # recap 任务幂等：recap_task:{tenant_id}:{task_name}:{round_message_id}
     # （每轮问答结束后的沉淀任务防重入/防回调重放，TTL 24h；docs/subagent/recap-mechanism-design.md）
     RECAP_TASK_DEDUP = "recap_task"
+    # recap 任务队列：recap_task_queue（FIFO list，API worker 入队、background runner
+    # 消费，把 recap 执行移出 HTTP worker 生命周期；无 TTL，消费即出队）
+    RECAP_QUEUE = "recap_task_queue"
 
 
 # ============== 通用缓存函数 ==============

@@ -66,8 +66,11 @@ def post_worker_init(worker):
 
 # ── 内存泄漏防护 ────────────────────────────────────────
 # 每个 worker 处理 N 个请求后自动重启，防止长期运行内存膨胀
-max_requests        = 1000
-max_requests_jitter = 100   # 随机抖动，避免所有 worker 同时重启
+# 2026-09-08：1000 -> 20000。当前流量约 1 万请求/天（local-tools heartbeat/claim
+# 占大头），1000 会让 worker 每 40-60 分钟自重启一次，杀死进行中的 recap 等
+# 进程内后台任务（真实事故：2026-09-08 10:52 external_push 推送被重启静默丢掉）
+max_requests        = 20000
+max_requests_jitter = 2000  # 随机抖动，避免所有 worker 同时重启
 
 # ── 预加载 ─────────────────────────────────────────────
 # 禁用：应用使用 asyncio lifespan 初始化，preload 会在无事件循环的

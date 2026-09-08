@@ -390,10 +390,11 @@ class TestRedisClientAdminExtensions:
         assert client.connected is False
 
     def test_make_key_with_prefix(self, client):
-        """验证 make_key 拼接逻辑"""
+        """验证 make_key 拼接逻辑（空段被过滤，无尾冒号）"""
         # 默认无 key_prefix
         assert client.make_key("token", "abc123") == "token:abc123"
-        assert client.make_key("", "") == ":"
+        assert client.make_key("", "") == ""
+        assert client.make_key("bare", "") == "bare"
 
 
 @pytest.mark.skipif(

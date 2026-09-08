@@ -358,6 +358,16 @@ ImageRegistry 管理的图片资产元信息（复用 cp 的 `uploaded_file:{fil
 **关键约束**：`round_message_id` 为本轮落库的 `channel_messages.message_id`（渠道无关、单调递增，天然防重放）；Redis 不可用时降级内存，重启可能极小概率重做一次任务，业务可接受（推送类为追加型写入、查重类天然幂等）
 **源文件**：`src/services/recap/runner.py`（前缀注册：`src/core/cache_utils.py`；机制设计：`docs/subagent/recap-mechanism-design.md` §4.5）
 
+### 7.4.6 recap 任务队列
+
+**存储**：仅 Redis（**无内存降级**——跨进程队列降级到进程内 list 等于静默丢任务，Redis 不可用时 API worker 直接降级为进程内执行）
+**键模式**：`recap_task_queue`（FIFO list，无 identifier）
+**TTL**：无（消费即 LPOP 出队；滞留消息随 background runner 恢复被消费）
+**写入方**：API worker `trigger_recap`（回复送达后把 RecapPayload 序列化 JSON 入队）
+**消费方**：`src/background_runner.py` `_recap_consumer`（2s 轮询 LPOP -> 重建 payload -> `runner._run_tasks` 执行；多副本下 LPOP 天然单消费者）
+**失效时机**：无主动失效。Redis 不可用时 rpush 返回 False，触发侧降级为 API worker 进程内 asyncio 执行（旧行为）
+**源文件**：`src/services/recap/runner.py`、`src/background_runner.py`（前缀注册：`src/core/cache_utils.py`；机制设计：`docs/subagent/recap-mechanism-design.md` §4.4）
+
 ### 7.5 定时任务调度器启动锁
 
 多 worker 环境下，确保只有单个 worker 启动 APScheduler 调度器，避免重复注册定时任务。
@@ -450,6 +460,7 @@ PostgreSQL（持久化，权威数据源）
 ├── subagent_greeting:{agent_id}     # 数字员工空态摘要（LLM 生成缓存）
 ├── pre_sales_client_token:{tenant_id}:{assignee_phone}  # pre-sales-api 委托登录 token（23h）
 ├── recap_task:{tenant_id}:{task_name}:{round_message_id}  # recap 任务幂等（24h）
+├── recap_task_queue                                       # recap 任务队列（FIFO，无 TTL，消费即出队）
 └── sched_task_lock:manager          # 定时任务调度器启动锁
 
 内存缓存（无 Redis 键前缀）：

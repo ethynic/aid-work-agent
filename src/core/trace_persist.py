@@ -284,3 +284,102 @@ def update_trace_metadata(trace_id: str, metadata: dict) -> None:
         # 若成功，仍可在提交前把 metadata 合并进去。
         _remember_pending_metadata(trace_id, metadata)
         logger.debug(f"update_trace_metadata failed (trace_id={trace_id}): {e}")
+
+
+def append_recap_span(
+    trace_id: str,
+    name: str,
+    span_type: str = 'generation',
+    input: str = '',
+    output: str = '',
+    model: str = '',
+    provider: str = '',
+    usage: dict = None,
+    start_time: float = None,
+    end_time: float = None,
+    success: bool = True,
+    metadata: dict = None,
+) -> None:
+    """recap 等进程外后台任务向既有 trace 追加 span（观测旁路，best-effort）。
+
+    recap 在独立 background 进程执行，拿不到 TraceCollector 对象，无法走
+    schedule_persist 常规通路；改为直接 INSERT obs_spans，trace_id 复用
+    主对话当轮 trace。字段与 _do_persist 的 span INSERT 保持对齐。
+    失败只记日志，不影响 recap 业务。
+    """
+    if not trace_id or not name:
+        return
+    import uuid
+    import time as _time
+
+    try:
+        start_ts = start_time if start_time is not None else _time.time()
+        end_ts = end_time if end_time is not None else _time.time()
+        duration_ms = max(0, int((end_ts - start_ts) * 1000))
+        usage = usage or {}
+        span_meta = {"success": success}
+        if provider:
+            span_meta["provider"] = provider
+        span_meta["recap"] = True
+        if metadata:
+            span_meta.update(metadata)
+
+        from src.db.database import get_logs_connection
+        with get_logs_connection() as cur:
+            cur.execute("""
+                INSERT INTO obs_spans
+                    (span_id, trace_id, parent_span_id, span_type, name,
+                     input, output, metadata, model,
+                     prompt_tokens, completion_tokens,
+                     start_time, end_time, duration_ms, status,
+                     error_message, created_at)
+                VALUES (%s, %s, NULL, %s, %s,
+                        %s, %s, %s, %s,
+                        %s, %s,
+                        to_timestamp(%s), to_timestamp(%s), %s, %s,
+                        NULL, NOW())
+                ON CONFLICT (span_id) DO NOTHING
+            """, (
+                f"sp_{uuid.uuid4().hex[:16]}", trace_id, span_type, name,
+                input, output,
+                json.dumps(span_meta, ensure_ascii=False),
+                model,
+                usage.get("prompt_tokens", 0),
+                usage.get("completion_tokens", 0),
+                start_ts, end_ts,
+                duration_ms,
+                'completed' if success else 'failed',
+            ))
+            cur.commit()
+    except Exception as e:
+        logger.warning(f"append_recap_span failed (trace_id={trace_id}, name={name}): {e}")
+
+
+def append_recap_summary(trace_id: str, metadata: dict, total_cost: float = 0.0) -> None:
+    """recap 任务结束时向 obs_traces 合并任务摘要 metadata 并累加观测成本。
+
+    metadata 按 JSONB merge 写入（如 metadata.recap = {...}）；total_cost 与
+    update_total_cost 同语义取 GREATEST，不回退已有值。obs_traces 主行尚未
+    落库的窄窗口（rowcount=0）只记 warning，不做补丁重放——recap 执行通常
+    在 trace 落库后数十秒，窗口极窄。失败不影响 recap 业务。
+    """
+    if not trace_id:
+        return
+    try:
+        from src.db.database import get_logs_connection
+        with get_logs_connection() as cur:
+            cur.execute(
+                "UPDATE obs_traces SET "
+                "metadata = COALESCE(metadata, '{}'::jsonb) || %s::jsonb, "
+                "total_cost = GREATEST(COALESCE(total_cost, 0), %s), "
+                "updated_at = NOW() WHERE trace_id = %s",
+                (json.dumps(metadata, ensure_ascii=False), total_cost or 0.0, trace_id),
+            )
+            if cur.rowcount == 0:
+                logger.warning(
+                    f"append_recap_summary: obs_traces 行不存在 "
+                    f"(trace_id={trace_id})，摘要未写入"
+                )
+            cur.commit()
+    except Exception as e:
+        logger.warning(f"append_recap_summary failed (trace_id={trace_id}): {e}")
