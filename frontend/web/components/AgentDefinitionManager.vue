@@ -63,7 +63,7 @@
 
           <!-- Right: Detail/Edit -->
           <div class="flex-1 flex flex-col min-w-0 overflow-hidden">
-            <div v-if="!selectedAgent" class="flex-1 flex items-center justify-center text-gray-400">
+            <div v-if="!selectedAgent && !pendingCreate" class="flex-1 flex items-center justify-center text-gray-400">
               <div class="text-center">
                 <svg class="w-12 h-12 mx-auto mb-3 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
@@ -81,20 +81,29 @@
                     <button @click="saveDefinition"
                       class="px-3 py-1.5 text-xs bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50"
                       :disabled="saving">
-                      {{ saving ? '保存中...' : '保存定义' }}
+                      {{ saving ? '保存中...' : (pendingCreate ? '保存为自定义数字员工' : '保存定义') }}
                     </button>
-                    <button @click="confirmDelete"
+                    <button v-if="!pendingCreate" @click="confirmDelete"
                       class="px-3 py-1.5 text-xs text-danger-600 border border-danger-200 rounded-lg hover:bg-danger-50">
                       删除
                     </button>
                   </div>
                 </div>
 
+                <!-- 从内置数字员工复制创建的提示条 -->
+                <div v-if="pendingCreate" class="mb-3 flex items-center justify-between bg-primary-50 border border-primary-200 rounded-lg px-3 py-2">
+                  <span class="text-xs text-primary-700">正在从内置数字员工「{{ pendingCreate.source_name }}」创建自定义副本，确认参数后保存</span>
+                  <button @click="cancelPendingCreate"
+                    class="text-xs text-gray-500 hover:text-gray-700 whitespace-nowrap ml-2">取消</button>
+                </div>
+
                 <div class="space-y-3">
                   <div>
                     <label class="text-xs text-gray-500 mb-1 block">Agent ID <span class="text-danger-500">*</span></label>
-                    <input v-model="form.agent_id" type="text" disabled
-                      class="w-full px-3 py-1.5 text-sm bg-gray-100 border border-gray-200 rounded-lg" />
+                    <input v-model="form.agent_id" type="text" :disabled="!pendingCreate"
+                      :class="pendingCreate
+                        ? 'w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-primary-400'
+                        : 'w-full px-3 py-1.5 text-sm bg-gray-100 border border-gray-200 rounded-lg'" />
                   </div>
                   <div>
                     <label class="text-xs text-gray-500 mb-1 block">名称 <span class="text-danger-500">*</span></label>
@@ -336,7 +345,7 @@
                       </button>
                     </div>
                   </div>
-                  <div v-if="selectedAgent.production_version" class="text-xs text-gray-400">
+                  <div v-if="selectedAgent?.production_version" class="text-xs text-gray-400">
                     当前 production: V{{ selectedAgent.production_version }}
                     <span class="text-info-600 ml-1">（模板含 {{ sectionKeys.length }} 个变量）</span>
                   </div>
@@ -541,6 +550,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch, nextTick } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import AppHeader from './AppHeader.vue'
 import PageMetaSelector from './PageMetaSelector.vue'
 import MyTextarea from './ui/MyTextarea.vue'
@@ -600,6 +610,34 @@ const recapWhenOptions = ref<string[]>([])
 const toolbarButtonOptions = listToolbarButtonMeta()
 const chatToolbar = ref<string[]>([])
 const uploadAccept = ref('')
+
+// 从内置数字员工复制创建模式（入口：内置数字员工页「自定义」按钮）
+const pendingCreate = ref<{ source_agent_id: string; source_name: string } | null>(null)
+
+function applyBuiltinPrefill(payload: Record<string, any>) {
+  pendingCreate.value = {
+    source_agent_id: payload.agent_id,
+    source_name: payload.name || payload.agent_id,
+  }
+  populateForm({
+    ...payload,
+    agent_id: payload.suggested_agent_id || `${payload.agent_id}_custom`,
+    status: 'active',
+  } as AgentDefinition)
+  promptContent.value = payload.system_prompt || ''
+  // reply_style 容错：内置风格的 style_id 可能不在 DB 风格列表中，兜底补一个选项避免下拉框显示空白
+  const styleId = payload.reply_style
+  if (styleId && !replyStyles.value.some(s => s.id === styleId)) {
+    replyStyles.value.push({ id: styleId, name: styleId, description: '内置风格' })
+  }
+}
+
+function cancelPendingCreate() {
+  pendingCreate.value = null
+  form.value = {}
+  selectedAgentId.value = null
+  selectedAgent.value = null
+}
 
 // Sections state — dynamic from template parsing
 const sectionKeys = ref<string[]>([])
@@ -910,7 +948,6 @@ async function doCreate() {
 }
 
 async function saveDefinition() {
-  if (!selectedAgentId.value) return
   saving.value = true
   try {
     // 组装 llm_model_codes：过滤空值，若全空则传 null
@@ -934,6 +971,35 @@ async function saveDefinition() {
       llm_model_codes: Object.keys(model_codes).length > 0 ? model_codes : null,
       status: form.value.status,
     }
+
+    // 从内置数字员工复制创建：走 createDefinition 全量落库（status 为 DB 默认 active，create 接口无此字段）
+    if (pendingCreate.value) {
+      const agentId = (form.value.agent_id || '').trim()
+      if (!agentId || !form.value.name || !promptContent.value.trim()) {
+        showToast('请填写 Agent ID、名称和 System Prompt', 'error')
+        return
+      }
+      const { status: _ignoredStatus, ...createData } = data
+      const res = await createDefinition({
+        agent_id: agentId,
+        name: form.value.name,
+        description: form.value.description || undefined,
+        system_prompt: promptContent.value,
+        ...createData,
+      })
+      if (res.success) {
+        showToast('自定义数字员工已创建')
+        pendingCreate.value = null
+        await loadList()
+        const created = agents.value.find(a => a.agent_id === agentId)
+        if (created) await selectAgent(created)
+      } else {
+        showToast(res.error || '创建失败', 'error')
+      }
+      return
+    }
+
+    if (!selectedAgentId.value) return
     const res = await updateDefinition(selectedAgentId.value, data)
     if (res.success) {
       showToast('定义已保存')
@@ -942,7 +1008,7 @@ async function saveDefinition() {
       showToast('保存失败', 'error')
     }
   } catch (e: any) {
-    showToast(e.message || '保存失败', 'error')
+    showToast(e.message || (pendingCreate.value ? '创建失败' : '保存失败'), 'error')
   } finally { saving.value = false }
 }
 
@@ -1111,8 +1177,27 @@ async function loadDiff() {
 }
 
 // ============== Init ==============
-onMounted(() => {
+const route = useRoute()
+const router = useRouter()
+
+onMounted(async () => {
   loadList()
-  loadMetadata()
+  await loadMetadata()
+  // 内置数字员工页「自定义」跳转过来：消费 sessionStorage 预填数据
+  const fromBuiltin = route.query.from_builtin as string | undefined
+  if (fromBuiltin) {
+    const key = `builtin_prefill_${fromBuiltin}`
+    const raw = sessionStorage.getItem(key)
+    sessionStorage.removeItem(key)
+    router.replace({ path: '/portal/agent-definitions' })
+    if (raw) {
+      try {
+        applyBuiltinPrefill(JSON.parse(raw))
+      } catch (e) {
+        console.error('解析内置数字员工预填数据失败', e)
+        showToast('预填数据解析失败，请手动创建', 'error')
+      }
+    }
+  }
 })
 </script>
