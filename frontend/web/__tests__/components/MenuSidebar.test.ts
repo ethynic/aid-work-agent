@@ -394,7 +394,7 @@ describe('MenuSidebar - flyout 二级菜单', () => {
     windowOpenSpy.mockRestore()
   })
 
-  it('连接中心：普通租户用户可见 trigger，子菜单仅含 API配置/本地工具（管理项隐藏）', async () => {
+  it('连接中心：普通租户用户可见 trigger，子菜单仅含本地工具（管理项隐藏）', async () => {
     // 普通用户（非管理员）
     routeState.path = '/t/test-tenant/chat'
     tenantIsLoggedIn.value = true
@@ -414,9 +414,9 @@ describe('MenuSidebar - flyout 二级菜单', () => {
     const flyout = findFlyout()
     expect(flyout).not.toBeNull()
     const flyoutText = flyout!.textContent || ''
-    expect(flyoutText).toContain('API配置')
     expect(flyoutText).toContain('本地工具')
     // 管理项对普通用户隐藏
+    expect(flyoutText).not.toContain('API配置')
     expect(flyoutText).not.toContain('渠道配置')
     expect(flyoutText).not.toContain('企微个人RPA')
   })
