@@ -1417,11 +1417,23 @@ class Agent:
                         entry["reasoning_content"] = meta["reasoning_content"]
                     history.append(entry)
                 else:  # user / system
-                    history.append({
-                        "role": role,
-                        "content": content,
-                        "timestamp": msg.get("created_at", ""),
-                    })
+                    # 人工客服消息（source=servicer）转为 assistant：客服侧发言（AI + 人工）
+                    # 统一对齐到 assistant 侧，避免与真实 user 消息形成连续 user 被
+                    # _reorder_messages_for_llm 的 P0-3 清洗整条丢弃（2026-08-31 实证：
+                    # servicer 确认消息被丢弃后 AI 答称"看不到实际进度"）。
+                    # 保留 "[人工客服] " 前缀，让 LLM 区分人工同事与自身发言。
+                    if role == "user" and isinstance(meta, dict) and meta.get("source") == "servicer":
+                        history.append({
+                            "role": "assistant",
+                            "content": content,
+                            "timestamp": msg.get("created_at", ""),
+                        })
+                    else:
+                        history.append({
+                            "role": role,
+                            "content": content,
+                            "timestamp": msg.get("created_at", ""),
+                        })
             # 诊断：记录加载到的历史消息概览，用于对比上下文是否缺消息
             try:
                 # from src.core.temp_logger import tlog as _tlog

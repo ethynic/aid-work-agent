@@ -161,8 +161,13 @@
               v-for="msg in visibleMessages"
               :key="msg.message_id"
               class="flex flex-col"
-              :class="msg.role === 'user' ? 'items-end' : 'items-start'"
+              :class="msg.role === 'system' ? 'items-center' : (isUserSide(msg) ? 'items-end' : 'items-start')"
             >
+              <!-- 系统提示条：居中灰色小字（如转人工标记） -->
+              <div v-if="msg.role === 'system'" class="text-xs text-muted bg-gray-100 rounded-full px-3 py-1">
+                {{ systemHintText(msg) }}
+              </div>
+              <template v-else>
               <!-- 撤回徽章：整条撤回 / 部分撤回 -->
               <div v-if="isRecalled(msg) || isPartiallyRecalled(msg)" class="mb-1 px-1">
                 <BaseBadge :intent="isRecalled(msg) ? 'danger' : 'warning'">
@@ -171,7 +176,7 @@
               </div>
               <div class="max-w-[70%] rounded-2xl px-4 py-2 text-sm"
                 :class="[
-                  msg.role === 'user'
+                  isUserSide(msg)
                     ? 'bg-primary-500 text-white rounded-br-sm'
                     : 'bg-white border border-default text-default rounded-bl-sm shadow-sm',
                   isRecalled(msg) ? 'opacity-60 line-through' : '',
@@ -264,6 +269,7 @@
               <div class="text-xs text-muted mt-1 px-1">
                 {{ formatTime(msg.created_at) }}
               </div>
+              </template>
             </div>
           </div>
         </div>
@@ -618,6 +624,19 @@ const visibleMessages = computed(() =>
     return true
   }),
 )
+
+// 系统提示条文案：转人工标记显示简洁提示，其余去掉内容开头的 [xxx] 标记前缀
+function systemHintText(msg: any): string {
+  if (msg.metadata?.kind === 'transfer_to_human_marker') {
+    return '已转人工'
+  }
+  return String(msg.content || '').replace(/^\[[^\]]*\]\s*/, '')
+}
+
+// 人工客服发的消息落库时 role 为 user（metadata.source === 'servicer'），但人工客服与 AI 客服同属客服侧，应显示在左侧
+function isUserSide(msg: any): boolean {
+  return msg.role === 'user' && msg.metadata?.source !== 'servicer'
+}
 
 // 撤回状态判断
 // - 整条撤回：is_recalled === true

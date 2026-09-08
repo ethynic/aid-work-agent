@@ -2034,8 +2034,15 @@ class ChannelSessionManager:
 
         context = []
         for msg in messages:
+            role = msg["role"]
+            meta = msg.get("metadata") or {}
+            # 人工客服消息（source=servicer）转为 assistant，与 agent._load_channel_history
+            # 口径一致：客服侧发言（AI + 人工）统一对齐到 assistant，避免与真实 user 消息
+            # 形成连续 user；保留 "[人工客服] " 前缀供 LLM 区分人工同事与自身发言
+            if role == "user" and isinstance(meta, dict) and meta.get("source") == "servicer":
+                role = "assistant"
             context.append({
-                "role": msg["role"],
+                "role": role,
                 "content": msg["content"],
             })
 
