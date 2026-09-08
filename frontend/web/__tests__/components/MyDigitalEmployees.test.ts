@@ -11,6 +11,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { defineComponent, h, ref } from 'vue'
+import type { TenantAdmin } from '@/composables/useTenantAuth'
 
 // ============== Mock 依赖 ==============
 
@@ -22,7 +23,7 @@ vi.mock('@/api/subagent', () => ({
 
 // mock useTenantAuth（默认未登录状态）
 const tenantIsLoggedIn = ref(false)
-const tenantAdmin = ref(null)
+const tenantAdmin = ref<TenantAdmin | null>(null)
 const tenantLogout = vi.fn()
 vi.mock('@/composables/useTenantAuth', () => ({
   useTenantAuth: () => ({
@@ -35,9 +36,10 @@ vi.mock('@/composables/useTenantAuth', () => ({
 // mock vue-router
 const routerPush = vi.fn()
 const routePath = ref('/')
+const routeParams = ref<Record<string, string>>({})
 vi.mock('vue-router', () => ({
   useRouter: () => ({ push: routerPush }),
-  useRoute: () => ({ path: routePath.value, params: {} }),
+  useRoute: () => ({ path: routePath.value, params: routeParams.value }),
 }))
 
 // 用一个极简的 AppHeader stub 代替真实组件，避免渲染复杂度
@@ -64,6 +66,7 @@ describe('MyDigitalEmployees', () => {
     tenantIsLoggedIn.value = false
     tenantAdmin.value = null
     routePath.value = '/'
+    routeParams.value = {}
   })
 
   it('过滤 main CEO 智能体，只渲染 2 张卡片（返回 3 个含 1 个 main）', async () => {
@@ -222,6 +225,92 @@ describe('MyDigitalEmployees', () => {
     // 失败后应进入空状态（agents 为 []，loading=false）
     expect(wrapper.text()).toContain('暂无可用的数字员工')
     expect(wrapper.findAll('.group').length).toBe(0)
+  })
+
+  it('普通用户：不渲染「定制提示词」和「API配置」按钮', async () => {
+    listSubagentsMock.mockResolvedValue({
+      success: true,
+      data: [
+        { agent_id: 'trade-specialist', name: '外贸获客', description: '外贸助手' },
+      ],
+    })
+
+    const wrapper = mount(MyDigitalEmployees, {
+      global: { provide: { toggleSidebar: () => {} } },
+    })
+
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain('定制提示词')
+    expect(wrapper.text()).not.toContain('API配置')
+  })
+
+  it('租户管理员：渲染双按钮和 API配置 入口，点击跳转正确路径', async () => {
+    tenantAdmin.value = { user_id: 'u1', phone: '', username: 'admin', role: 'tenant_admin' }
+    routePath.value = '/t/t1/my-agents'
+    routeParams.value = { tenant_id: 't1' }
+    listSubagentsMock.mockResolvedValue({
+      success: true,
+      data: [
+        { agent_id: 'trade-specialist', name: '外贸获客', description: '外贸助手' },
+      ],
+    })
+
+    const wrapper = mount(MyDigitalEmployees, {
+      global: { provide: { toggleSidebar: () => {} } },
+    })
+
+    await flushPromises()
+
+    // 双按钮 + 页面级 API配置 入口
+    const buttons = wrapper.findAll('.group button')
+    expect(buttons.length).toBe(2)
+    expect(wrapper.text()).toContain('API配置')
+
+    // 点击「定制提示词」跳转编辑器
+    const customizeBtn = buttons.find(b => b.text() === '定制提示词')
+    expect(customizeBtn).toBeTruthy()
+    await customizeBtn!.trigger('click')
+    expect(routerPush).toHaveBeenCalledWith('/t/t1/agent/trade-specialist/prompt')
+  })
+
+  it('平台管理员：点击「API配置」跳转连接中心', async () => {
+    tenantAdmin.value = { user_id: 'p1', phone: '', username: 'platform', role: 'platform_admin' }
+    routePath.value = '/t/t1/my-agents'
+    routeParams.value = { tenant_id: 't1' }
+    listSubagentsMock.mockResolvedValue({
+      success: true,
+      data: [
+        { agent_id: 'trade-specialist', name: '外贸获客', description: '外贸助手' },
+      ],
+    })
+
+    const wrapper = mount(MyDigitalEmployees, {
+      global: { provide: { toggleSidebar: () => {} } },
+    })
+
+    await flushPromises()
+
+    const connBtn = wrapper.findAll('button').find(b => b.text() === 'API配置')
+    expect(connBtn).toBeTruthy()
+    await connBtn!.trigger('click')
+    expect(routerPush).toHaveBeenCalledWith('/t/t1/connections')
+  })
+
+  it('管理员在空状态下仍可见「API配置」入口', async () => {
+    tenantAdmin.value = { user_id: 'u1', phone: '', username: 'admin', role: 'tenant_admin' }
+    routeParams.value = { tenant_id: 't1' }
+    listSubagentsMock.mockResolvedValue({ success: true, data: [] })
+
+    const wrapper = mount(MyDigitalEmployees, {
+      global: { provide: { toggleSidebar: () => {} } },
+    })
+
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('暂无可用的数字员工')
+    const connBtn = wrapper.findAll('button').find(b => b.text() === 'API配置')
+    expect(connBtn).toBeTruthy()
   })
 
   it('显示名优先使用 display_name，回退到 instance_name，再回退到 name', async () => {

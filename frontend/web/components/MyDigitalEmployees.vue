@@ -11,6 +11,16 @@
 
     <!-- 内容区 -->
     <div class="flex-1 overflow-y-auto p-6">
+      <!-- 管理员工具栏：API配置 入口（仅管理员可见，加载/空状态下也可用） -->
+      <div v-if="isTenantAdmin" class="flex justify-end mb-4">
+        <button
+          class="h-9 px-4 rounded-lg text-sm font-medium border border-default text-muted hover:border-primary-300 hover:text-primary-600 transition-colors"
+          @click="handleGoConnections"
+        >
+          API配置
+        </button>
+      </div>
+
       <!-- 加载态 -->
       <div v-if="loading" class="flex justify-center py-20">
         <div class="animate-spin rounded-full h-8 w-8 border-2 border-primary-600 border-t-transparent"></div>
@@ -37,10 +47,8 @@
       </div>
 
       <!-- 卡片网格 -->
-      <div
-        v-else
-        class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4"
-      >
+      <div v-else>
+        <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
         <div
           v-for="agent in agents"
           :key="agent.agent_id"
@@ -62,13 +70,24 @@
             {{ truncateDescription(agent.description) }}
           </p>
 
-          <!-- 立即使用按钮：@click.stop 阻止冒泡，避免触发卡片 click 两次 -->
-          <button
-            class="w-full h-9 rounded-lg bg-primary-600 text-white text-sm font-medium hover:bg-primary-700 transition-colors"
-            @click.stop="handleUseAgent(agent)"
-          >
-            立即使用
-          </button>
+          <!-- 操作按钮：管理员显示「立即使用 + 定制提示词」双按钮，普通用户仅「立即使用」 -->
+          <div class="flex gap-2">
+            <button
+              class="flex-1 h-9 rounded-lg bg-primary-600 text-white text-sm font-medium hover:bg-primary-700 transition-colors"
+              @click.stop="handleUseAgent(agent)"
+            >
+              立即使用
+            </button>
+            <button
+              v-if="isTenantAdmin"
+              class="flex-1 h-9 rounded-lg border border-default text-sm font-medium text-muted hover:border-primary-300 hover:text-primary-600 transition-colors"
+              title="为该数字员工追加本租户专属提示词"
+              @click.stop="handleCustomize(agent)"
+            >
+              定制提示词
+            </button>
+          </div>
+        </div>
         </div>
       </div>
     </div>
@@ -87,6 +106,11 @@ const router = useRouter()
 const route = useRoute()
 
 const { admin: tenantAdmin, isLoggedIn: tenantIsLoggedIn, logout: tenantLogout } = useTenantAuth()
+
+// 管理员（租户管理员 / 平台管理员）可见定制提示词与 API配置 入口
+const isTenantAdmin = computed(() =>
+  tenantAdmin.value?.role === 'tenant_admin' || tenantAdmin.value?.role === 'platform_admin'
+)
 
 // 是否为租户模式（路径以 /t/ 开头）
 const isTenantMode = computed(() => route.path.startsWith('/t/'))
@@ -154,6 +178,22 @@ function handleUseAgent(agent: SubagentListItem) {
     router.push(`/t/${tid}/chat/${agent.agent_id}`)
   } else {
     router.push(`/chat/${agent.agent_id}`)
+  }
+}
+
+// 跳转到该数字员工的定制提示词编辑器
+function handleCustomize(agent: SubagentListItem) {
+  const tid = route.params.tenant_id
+  if (tid) {
+    router.push(`/t/${tid}/agent/${agent.agent_id}/prompt`)
+  }
+}
+
+// 跳转到 API配置（连接中心）
+function handleGoConnections() {
+  const tid = route.params.tenant_id
+  if (tid) {
+    router.push(`/t/${tid}/connections`)
   }
 }
 

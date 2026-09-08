@@ -63,6 +63,13 @@
             </div>
             <div class="flex gap-2">
               <button
+                class="h-9 px-4 rounded-lg text-sm font-medium border border-default text-muted hover:border-primary-300 hover:text-primary-600 transition-colors"
+                title="前往 API配置 设置本租户的模型连接"
+                @click="handleGoConnections"
+              >
+                下一步：API配置 →
+              </button>
+              <button
                 class="h-9 px-4 rounded-lg text-sm font-medium border border-default text-muted hover:border-danger-300 hover:text-danger-600 transition-colors disabled:opacity-50"
                 :disabled="saving || !content"
                 @click="handleClear"
@@ -246,9 +253,14 @@ async function handleLogout() {
   router.push(`/t/${tenantId.value}/login`)
 }
 
-// 返回定制提示词选择页
+// 返回我的数字员工列表页
 function goBack() {
-  router.push(`/t/${tenantId.value}/extras`)
+  router.push(`/t/${tenantId.value}/my-agents`)
+}
+
+// 下一步：前往 API配置（连接中心）
+function handleGoConnections() {
+  router.push(`/t/${tenantId.value}/connections`)
 }
 
 const dirty = computed(() => content.value !== initialContent.value)
@@ -426,7 +438,7 @@ async function handleDownloadTemplate(t: TemplateFile) {
 
 onMounted(() => {
   if (!subagentName.value) {
-    router.push(`/t/${tenantId.value}/extras`)
+    router.push(`/t/${tenantId.value}/my-agents`)
     return
   }
   // extra_md 与模板列表并行加载，互不阻塞
