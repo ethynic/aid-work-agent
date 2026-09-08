@@ -17,6 +17,7 @@ from src.services.recap.tasks import RECAP_TASK_ADAPTERS
 from src.services.recap.tasks.external_push import (
     ExternalPushAdapter,
     PushReportTool,
+    _build_user_message,
     _collect_context,
     _create_tool_runtime,
     _delegate_login,
@@ -51,6 +52,8 @@ def _ctx():
         "external_userid": "wmS6oOTAAAhVHj3_umWg",
         "subagent": "pre-sales",
         "nickname": "小团长",
+        "avatar": None,
+        "gender": 0,
         "lead_phone": "13916323347",
         "assignee_phone": "13701602974",
     }
@@ -385,8 +388,53 @@ class TestCollectContext:
             ctx = _collect_context(payload)
         assert ctx["lead_phone"] is None
 
+    def test_avatar_gender_read_from_users(self):
+        """会话带 user_id 时从 users 表读取头像/性别；读取失败降级为空值"""
+        payload = _make_payload()
+        session_row = {
+            "username": "小团长",
+            "user_id": "user_e265cf6cf4cb",
+            "metadata": {},
+        }
+        with patch("src.channels.session.channel_session_manager") as mock_mgr, \
+             patch("src.db.models.UserDB.get_by_id",
+                   return_value={"avatar_url": "http://wx.qlogo.cn/mmhead/x.png", "gender": 2}), \
+             patch("src.services.recap.tasks.external_push._resolve_assignee_phone",
+                   return_value="13701602974"):
+            mock_mgr.get_session_by_id.return_value = session_row
+            ctx = _collect_context(payload)
+        assert ctx["avatar"] == "http://wx.qlogo.cn/mmhead/x.png"
+        assert ctx["gender"] == 2
+
+    def test_avatar_read_failure_degrades(self):
+        payload = _make_payload()
+        session_row = {"username": "小团长", "user_id": "user_x", "metadata": {}}
+        with patch("src.channels.session.channel_session_manager") as mock_mgr, \
+             patch("src.db.models.UserDB.get_by_id", side_effect=RuntimeError("db down")), \
+             patch("src.services.recap.tasks.external_push._resolve_assignee_phone",
+                   return_value="13701602974"):
+            mock_mgr.get_session_by_id.return_value = session_row
+            ctx = _collect_context(payload)
+        assert ctx["avatar"] is None
+        assert ctx["gender"] == 0
+
 
 # ============== 归属员工手机号解析 ==============
+
+
+class TestBuildUserMessage:
+    def test_contains_avatar_and_gender(self):
+        ctx = {**_ctx(), "avatar": "http://wx.qlogo.cn/mmhead/x.png", "gender": 2}
+        msg = _build_user_message(_make_payload(), ctx, _summary(),
+                                  {"client_token": "tok"}, _meta())
+        assert "微信头像：http://wx.qlogo.cn/mmhead/x.png" in msg
+        assert "性别：女" in msg
+
+    def test_missing_avatar_placeholder(self):
+        msg = _build_user_message(_make_payload(), _ctx(), _summary(),
+                                  {"client_token": "tok"}, _meta())
+        assert "微信头像：（无，留空）" in msg
+        assert "性别：未知" in msg
 
 
 class TestResolveAssigneePhone:

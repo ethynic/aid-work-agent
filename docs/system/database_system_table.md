@@ -58,6 +58,7 @@
 - `role` — 角色（`user` / `tenant_admin` / `platform_admin`）
 - `tenant_id` — 所属租户（平台管理员为空）
 - `source` — 注册来源
+- `gender` — 性别（SMALLINT，0未知/1男/2女，企微 `kf/customer/batchget` 返回值，渠道用户注册/更新时落库）
 
 **约束**：同一租户内手机号唯一（`idx_users_tenant_phone`）。
 

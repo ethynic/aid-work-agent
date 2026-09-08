@@ -93,6 +93,8 @@ async def ensure_user_registered(
         extra_updates = {}
         if user_info.get("avatar"):
             extra_updates["avatar_url"] = user_info["avatar"]
+        if user_info.get("gender"):
+            extra_updates["gender"] = user_info["gender"]
         if user_info.get("wx_unionid") and not wx_unionid:
             extra_updates["wx_unionid"] = user_info["wx_unionid"]
         if extra_updates:
@@ -205,6 +207,9 @@ def _update_user_info_from_channel(existing_user_id: str,
         updates["nickname"] = new_name
     if new_avatar and new_avatar != user.get("avatar_url"):
         updates["avatar_url"] = new_avatar
+    new_gender = user_info.get("gender")
+    if new_gender and new_gender != user.get("gender"):
+        updates["gender"] = new_gender
     if user_info.get("wx_openid") and not user.get("wx_openid"):
         updates["wx_openid"] = user_info["wx_openid"]
     if user_info.get("wx_unionid") and not user.get("wx_unionid"):

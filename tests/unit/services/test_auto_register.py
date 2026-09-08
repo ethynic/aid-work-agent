@@ -69,3 +69,22 @@ class TestUpdateUserInfoFromChannel:
         kwargs = m_update.call_args.kwargs
         assert kwargs["avatar_url"] == "http://new/1"
         assert "nickname" not in kwargs
+
+    def test_gender_written_when_changed(self):
+        """渠道返回性别且与现值不同时写入（企微 0未知/1男/2女）"""
+        existing = {"nickname": "夜未央", "avatar_url": "http://same/1", "gender": 0, "wx_openid": "", "wx_unionid": ""}
+        m_update = _run_update(existing, {"name": "夜未央", "avatar": "http://same/1", "gender": 2})
+        m_update.assert_called_once()
+        assert m_update.call_args.kwargs["gender"] == 2
+
+    def test_gender_zero_ignored(self):
+        """渠道返回性别 0（未知）时不覆盖已有值"""
+        existing = {"nickname": "夜未央", "avatar_url": "http://same/1", "gender": 1, "wx_openid": "", "wx_unionid": ""}
+        m_update = _run_update(existing, {"name": "夜未央", "avatar": "http://same/1", "gender": 0})
+        m_update.assert_not_called()
+
+    def test_gender_unchanged_not_written(self):
+        """性别与现值相同则不写库"""
+        existing = {"nickname": "夜未央", "avatar_url": "http://same/1", "gender": 2, "wx_openid": "", "wx_unionid": ""}
+        m_update = _run_update(existing, {"name": "夜未央", "avatar": "http://same/1", "gender": 2})
+        m_update.assert_not_called()

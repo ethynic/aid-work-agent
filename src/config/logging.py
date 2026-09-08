@@ -9,6 +9,7 @@
 按日期分片：主日志和错误日志每天半夜自动切换到新文件，文件名格式
 `aid-work-agent_YYYYMMDD.log` / `error_YYYYMMDD.log`，与 agent_session_logs /
 skill_execute / llm_invoke_logs 等按日期命名的 jsonl 日志一致。
+`http_api_audit_YYYYMMDD.log` 为 http_api 工具外发请求/响应审计日志（单行 JSON）。
 
 保留期：15 天，由 src/core/log_retention.py 统一清理。
 启动时清理一次，运行中每天日期切换时触发一次惰性清理。
@@ -75,6 +76,11 @@ class _DatedFileSink:
         f.flush()
 
 
+def _is_http_audit(record) -> bool:
+    """http_api 审计记录标记（写独立审计文件，不进主日志/控制台）"""
+    return record["extra"].get("http_audit") is True
+
+
 def setup_logging(
     log_level: str = "INFO",
     log_dir: str = "log/agent",
@@ -109,6 +115,7 @@ def setup_logging(
         format=console_format,
         level=log_level,
         colorize=True,
+        filter=lambda record: not _is_http_audit(record),
     )
 
     # 创建日志目录
@@ -129,6 +136,7 @@ def setup_logging(
         format=file_format,
         level=log_level,
         enqueue=True,
+        filter=lambda record: not _is_http_audit(record),
     )
 
     # 错误日志 - 按日期分片，多 worker 安全
@@ -137,6 +145,18 @@ def setup_logging(
         format=file_format,
         level="ERROR",
         enqueue=True,
+        filter=lambda record: not _is_http_audit(record),
+    )
+
+    # http_api 审计日志 - 记录外发 HTTP 请求/响应原文，供推送问题追溯，
+    # 与主日志同保留周期（文件名命中 log_retention 清理模式，15 天）
+    logger.add(
+        _DatedFileSink(log_path, "http_api_audit"),
+        format="{message}",
+        level="INFO",
+        enqueue=True,
+        catch=True,
+        filter=_is_http_audit,
     )
 
     if json_format:
@@ -147,6 +167,7 @@ def setup_logging(
             level=log_level,
             serialize=True,
             enqueue=True,
+            filter=lambda record: not _is_http_audit(record),
         )
 
     # 启动时清理一次过期日志

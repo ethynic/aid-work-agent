@@ -214,6 +214,21 @@ class LeadCaptureDB:
             return cursor.rowcount > 0
 
     @staticmethod
+    def delete(lead_id: str, tenant_id: str) -> bool:
+        """物理删除线索记录（隐藏命令「新会话/清空会话」清留资时调用）。
+
+        返回是否删除了行；lead_id 不存在或不属于该租户时返回 False。
+        """
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "DELETE FROM bs_lead_capture_leads WHERE lead_id = %s AND tenant_id = %s",
+                (lead_id, tenant_id),
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+
+    @staticmethod
     def stats(
         tenant_id: str,
         start_date: Optional[str] = None,

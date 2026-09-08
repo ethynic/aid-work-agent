@@ -369,6 +369,18 @@ def _collect_context(payload: RecapPayload) -> Optional[Dict[str, Any]]:
     metadata = session.get("metadata") or {}
     nickname = (session.get("username") or "").strip()
 
+    # 头像/性别：渠道客户的 users 记录（wecom_kf 注册时从企微 batchget 落库）
+    avatar, gender = None, 0
+    if session.get("user_id"):
+        try:
+            from src.db.models import UserDB
+
+            user = UserDB.get_by_id(session["user_id"]) or {}
+            avatar = (user.get("avatar_url") or "").strip() or None
+            gender = user.get("gender") or 0
+        except Exception as e:
+            logger.warning(f"[external_push] 读取客户头像/性别失败 user_id={session.get('user_id')}: {e}")
+
     # 留资手机号：metadata.lead_capture.lead_id -> 线索记录（phone 已解密返回）
     lead_phone = None
     lead_id = (metadata.get("lead_capture") or {}).get("lead_id")
@@ -388,6 +400,8 @@ def _collect_context(payload: RecapPayload) -> Optional[Dict[str, Any]]:
         "external_userid": external_userid,
         "subagent": parsed["subagent"],
         "nickname": nickname,
+        "avatar": avatar,
+        "gender": gender,
         "lead_phone": lead_phone,
         "assignee_phone": assignee_phone,
     }
@@ -707,6 +721,10 @@ def _build_user_message(
 ) -> str:
     user_token = meta.get("user_token_name", _DEFAULT_USER_TOKEN_NAME)
     lead_phone = ctx.get("lead_phone") or "（客户未留资，留空，不得用其他号码冒充）"
+    from src.tools.channel.channel_user_info import GENDER_LABELS
+
+    gender = int(ctx.get("gender") or 0)
+    gender_label = GENDER_LABELS.get(gender, "未知")
     return (
         "本轮对话数据如下，请按系统提示词与租户接口文档完成推送。\n"
         "\n"
@@ -722,6 +740,8 @@ def _build_user_message(
         "【客户上下文】\n"
         f"external_userid（客户唯一标识，同一客户跨轮稳定）：{ctx['external_userid']}\n"
         f"微信昵称：{ctx.get('nickname') or '未知'}\n"
+        f"微信头像：{ctx.get('avatar') or '（无，留空）'}\n"
+        f"性别：{gender_label}（0未知/1男/2女，仅当租户文档声明性别字段时推送）\n"
         f"留资手机号：{lead_phone}\n"
         f"归属员工手机号：{ctx.get('assignee_phone') or ''}（已用于委托登录，无需再登录）\n"
         f"当前日期：{datetime.now().strftime('%Y-%m-%d')}\n"

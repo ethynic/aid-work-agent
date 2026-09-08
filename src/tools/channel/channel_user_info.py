@@ -17,7 +17,8 @@ from loguru import logger
 from src.tools.base import BaseTool
 
 # 微信性别字段取值映射（官方枚举）
-_GENDER_LABELS = {0: "未知", 1: "男", 2: "女"}
+GENDER_LABELS = {0: "未知", 1: "男", 2: "女"}
+_GENDER_LABELS = GENDER_LABELS  # 兼容旧引用
 
 
 class _EmptyInput(BaseModel):

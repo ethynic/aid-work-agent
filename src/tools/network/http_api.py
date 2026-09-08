@@ -1,6 +1,8 @@
 import json
 import os
 import re
+import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 from urllib.parse import urlsplit
@@ -171,18 +173,39 @@ class HttpApiTool(BaseTool):
             request_kwargs["json"] = body
 
         # 执行请求
+        request_started = time.monotonic()
         try:
             async with httpx.AsyncClient(
                 timeout=timeout,
                 follow_redirects=follow_redirects,
             ) as client:
                 response = await client.request(method, url, **request_kwargs)
-                return _parse_response(response)
+                result = _parse_response(response)
+                _write_http_audit(
+                    method,
+                    url,
+                    query_params=query_params,
+                    body=body,
+                    form_data=form_data,
+                    file_paths=[getattr(f, "name", "") for f in opened_files],
+                    status_code=response.status_code,
+                    response_text=response.text,
+                    error=result.get("error"),
+                    duration_ms=int((time.monotonic() - request_started) * 1000),
+                )
+                return result
 
         except httpx.TimeoutException:
             logger.error(
                 f"HTTP API 请求超时: method={method} url={_safe_url_str(url)} "
                 f"timeout={timeout}s{_correlation_suffix()}"
+            )
+            _write_http_audit(
+                method, url,
+                query_params=query_params, body=body, form_data=form_data,
+                file_paths=[getattr(f, "name", "") for f in opened_files],
+                error=f"请求超时（{timeout}秒）",
+                duration_ms=int((time.monotonic() - request_started) * 1000),
             )
             return {"success": False, "error": f"请求超时（{timeout}秒）"}
         except httpx.ConnectError as e:
@@ -191,12 +214,26 @@ class HttpApiTool(BaseTool):
                 f"HTTP API 连接失败: method={method} url={_safe_url_str(url)} "
                 f"err={msg}{_correlation_suffix()}"
             )
+            _write_http_audit(
+                method, url,
+                query_params=query_params, body=body, form_data=form_data,
+                file_paths=[getattr(f, "name", "") for f in opened_files],
+                error=f"连接失败: {msg}",
+                duration_ms=int((time.monotonic() - request_started) * 1000),
+            )
             return {"success": False, "error": f"连接失败: {msg}"}
         except Exception as e:
             msg = sanitize_error_info(str(e))
             logger.error(
                 f"HTTP API 请求异常: method={method} url={_safe_url_str(url)} "
                 f"err={msg}{_correlation_suffix()}"
+            )
+            _write_http_audit(
+                method, url,
+                query_params=query_params, body=body, form_data=form_data,
+                file_paths=[getattr(f, "name", "") for f in opened_files],
+                error=f"请求异常: {msg}",
+                duration_ms=int((time.monotonic() - request_started) * 1000),
             )
             return {"success": False, "error": f"请求异常: {msg}"}
         finally:
@@ -459,6 +496,112 @@ def _correlation_suffix() -> str:
     if not parts:
         return ""
     return " " + " ".join(parts)
+
+
+# ============== 审计日志（独立文件，与主日志同保留周期） ==============
+
+# 审计记录中请求/响应体最大保留字符数
+_AUDIT_BODY_LIMIT = 20_000
+# 键名含凭证语义的参数值在审计中脱敏
+_SENSITIVE_KEY_RE = re.compile(
+    r"password|passwd|token|secret|signature|api[_-]?key|access[_-]?key"
+    r"|session[_-]?key|private[_-]?key|authorization",
+    re.IGNORECASE,
+)
+
+
+def _redact_mapping(data: Any) -> Any:
+    """审计脱敏：dict 中键名含凭证语义（password/token/key/secret/authorization）的值替换为 [REDACTED]，递归生效"""
+    if isinstance(data, dict):
+        return {
+            k: ("[REDACTED]" if isinstance(k, str) and _SENSITIVE_KEY_RE.search(k) else _redact_mapping(v))
+            for k, v in data.items()
+        }
+    if isinstance(data, list):
+        return [_redact_mapping(item) for item in data]
+    return data
+
+
+def _truncate_audit_text(text: str) -> Dict[str, Any]:
+    """审计体截断：超上限截断并标记，保证单条审计日志体积可控"""
+    if text is None or len(text) <= _AUDIT_BODY_LIMIT:
+        return {"body": text, "truncated": False}
+    return {"body": text[:_AUDIT_BODY_LIMIT], "truncated": True}
+
+
+def _audit_correlation() -> Dict[str, Any]:
+    """审计关联上下文（租户/会话/子智能体），无工具上下文时为空"""
+    try:
+        from src.tools.context import current_tool_execution_context
+
+        ctx = current_tool_execution_context()
+    except Exception:
+        ctx = None
+    if not ctx:
+        return {}
+    fields: Dict[str, Any] = {}
+    if ctx.tenant_id:
+        fields["tenant"] = ctx.tenant_id
+    if ctx.session_id:
+        fields["session"] = ctx.session_id
+    if ctx.subagent_id:
+        fields["subagent"] = ctx.subagent_id
+    return fields
+
+
+def _write_http_audit(
+    method: str,
+    url: str,
+    *,
+    query_params: Optional[Dict[str, Any]] = None,
+    body: Any = None,
+    form_data: Any = None,
+    file_paths: Optional[List[str]] = None,
+    status_code: Optional[int] = None,
+    response_text: Optional[str] = None,
+    error: Optional[str] = None,
+    duration_ms: Optional[int] = None,
+) -> None:
+    """写 http_api 审计日志（log/agent/http_api_audit_YYYYMMDD.log，单行 JSON）
+
+    目的：推送第三方系统出问题时，可追溯实际发出的请求原文与返回结果。
+    与主日志同保留周期（文件名命中 log_retention 清理模式，15 天自动清理）。
+    headers 不落（键名值均不记录，避免真实凭证入日志）；URL 剥 query
+    （query_params 单独记录并脱敏）。
+    审计失败绝不阻断业务。
+    """
+    try:
+        request_body = (
+            _truncate_audit_text(json.dumps(_redact_mapping(body), ensure_ascii=False, default=str))
+            if body is not None else None
+        )
+        request_form = (
+            _truncate_audit_text(json.dumps(_redact_mapping(form_data), ensure_ascii=False, default=str))
+            if form_data is not None else None
+        )
+        response = (
+            _truncate_audit_text(response_text)
+            if response_text is not None else None
+        )
+        record = {
+            "ts": datetime.now().isoformat(timespec="milliseconds"),
+            "method": method,
+            "url": _safe_url_str(url),
+            "query_params": _redact_mapping(query_params) if query_params else None,
+            "request_body": request_body,
+            "form_data": request_form,
+            "files": file_paths or None,
+            "status_code": status_code,
+            "response": response,
+            "error": error,
+            "duration_ms": duration_ms,
+            **_audit_correlation(),
+        }
+        logger.bind(http_audit=True).info(
+            json.dumps(record, ensure_ascii=False, default=str)
+        )
+    except Exception as e:
+        logger.warning(f"http_api 审计日志写入失败: {e}")
 
 
 def _parse_response(response: httpx.Response) -> Dict[str, Any]:
