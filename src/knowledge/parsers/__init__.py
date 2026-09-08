@@ -8,12 +8,22 @@ from dataclasses import dataclass, field
 
 
 @dataclass
+class ParsedChunk:
+    """解析器预分块结果（结构化文档旁路，跳过 TextChunker）"""
+    text: str                    # 最终 chunk 文本
+    metadata: Dict[str, Any] = field(default_factory=dict)  # 落库到 chunks.metadata
+
+
+@dataclass
 class ParseResult:
     """文档解析结果"""
     text: str                              # 提取的文本内容
     metadata: Dict[str, Any] = field(default_factory=dict)  # 元数据
     thumbnail_path: Optional[str] = None   # 缩略图路径（图片/视频）
     raw_text: Optional[str] = None        # 原始文本（OCR 结果等）
+    # 结构化分块旁路：非 None 时 service 直接使用，不再走 TextChunker；
+    # None（默认）= 行为与老路径完全一致
+    precomputed_chunks: Optional[List[ParsedChunk]] = None
 
 
 class BaseParser(ABC):

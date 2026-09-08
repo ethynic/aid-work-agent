@@ -468,9 +468,23 @@ class KnowledgeBaseService:
 
             parse_result = await parser.parse(file_path)
 
-            # 2. 分块（将文件名加入文本内容，便于搜索时匹配文件名）
-            text_with_filename = f"文档标题：{file_filename}\n\n{parse_result.text}"
-            chunks = self.chunker.chunk(text_with_filename)
+            # 2. 分块
+            if parse_result.precomputed_chunks:
+                # 结构化分块旁路（如 Excel 行级分块）：解析器已完成语义分块，
+                # 跳过 TextChunker；文件名前缀注入每个 chunk，保证任意块可按文件名命中
+                chunks = []
+                for i, pc in enumerate(parse_result.precomputed_chunks):
+                    text = f"文档标题：{file_filename}\n{pc.text}"
+                    chunks.append({
+                        "text": text,
+                        "tokens": self.chunker._estimate_tokens(text),
+                        "index": i,
+                        "metadata": dict(pc.metadata),
+                    })
+            else:
+                # 普通文本分块（将文件名加入文本内容，便于搜索时匹配文件名）
+                text_with_filename = f"文档标题：{file_filename}\n\n{parse_result.text}"
+                chunks = self.chunker.chunk(text_with_filename)
             if not chunks:
                 raise ValueError("文档内容为空或无法提取文本")
 
@@ -541,7 +555,8 @@ class KnowledgeBaseService:
                         chunk["index"],
                         chunk["text"],
                         chunk["tokens"],
-                        json.dumps({"char_count": len(chunk["text"])}),
+                        json.dumps({**chunk.get("metadata", {}),
+                                    "char_count": len(chunk["text"])}),
                         chunk_uuid
                     ))
                     # row 是 dict: {"id": ...}，对应 RETURNING id
