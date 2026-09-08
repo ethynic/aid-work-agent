@@ -1,12 +1,12 @@
-# weixin-cli 场景编排与无人值守就绪度调研
+# 桌面 CLI 无人值守就绪度：微信首场景与 BOSS 衔接调研
 
 日期：2026-09-08。范围：当前仓库 `clients/weixin-cli`（用户所称 wexin CLI）、后台调度、Local Tool Runtime、微信营销第一场景。本文为源码核查，不代表当前真机验收通过。
 
-关联：[产品与架构设计](../../design/weixin/weixin-marketing-automation-design.md) · [技术实现与开发计划](../../plans/weixin/plan-weixin-marketing-automation.md)。
+关联：[中立底座设计](../../design/desktop-automation/desktop-cli-automation-design.md) · [底座计划](../../plans/desktop-automation/plan-desktop-cli-automation.md) · [产品与架构设计](../../design/weixin/weixin-marketing-automation-design.md) · [技术实现与开发计划](../../plans/weixin/plan-weixin-marketing-automation.md)。
 
 ## 1. 结论
 
-现有 CLI 是可复用的 Windows 微信执行基础，但尚不能直接承诺无人值守定时群发送。应新增微信营销业务编排层，复用现有后台进程、数据库和本地工具通道；先加固目标身份、写动作状态与恢复语义，再接时间触发和图片发送。
+现有 CLI 是可复用的 Windows 微信执行基础，但尚不能直接承诺无人值守定时群发送。应新增中立 desktop_automation 底座，扩展 local_tools 与 Runtime，微信业务层仅负责场景配置与适配，复用现有后台进程、数据库和本地工具通道；先加固目标身份、写动作状态与恢复语义，再接时间触发和图片发送。
 
 固定内容在发布时冻结，执行时直接调用确定性流程。模型仅参与自然语言配置解析及当前 CLI 必需的视觉定位/校验；“不重新调用聊天 Agent”不等于“完全不消耗模型”。
 
@@ -92,3 +92,25 @@
 3. 明确一次试发正文，刷新 ref，只发一次，人工核对与机器证据对照；unknown 不自动重发。
 4. 单独开发图片 probe 后再做图片试发；时间调度、故障注入与稳定性矩阵优先使用 fake driver，真实多次发送另用专用测试群和明确范围。
 5. 达成技术方案验收矩阵后，才开启无人值守；本次文档完成不代表上述步骤完成。
+
+## 8. BOSS 第二场景定向核验（2026-09-08 修订）
+
+本次只读核对当前源码，未运行离线测试或真机。BOSS 场景待独立立项；建议中的“全量未读”“输入框清空”须按下表精确理解。
+
+| 事实与证据路径（仓库根目录相对路径） | 设计影响 / 未验证部分 |
+|---|---|
+| clients/boss-resume-assistant/src/main/boss/ChatReadExecutor.ts：一次 snapshot 解析当前会话 contact/messages(sender,text,ts?,read?)、unread(name,count,time?,lastPreview?) 与总徽章；实现注释记录旧实测列表未虚拟化 | 无稳定消息 ID/水位/完整性标志；旧样本不能证明所有长会话/大列表完整。observer 必须补连续窗口对齐、持久 cursor 和 coverage_gap |
+| clients/boss-resume-assistant/src/main/boss/ChatOpenExecutor.ts：already/search 核验姓名标题；list 对多个姓名命中报错 | 已有局部消歧，不是已完成候选人长期绑定。职位、账号、简历指纹辅助与同名禁发均须独立 P0′ |
+| clients/boss-resume-assistant/src/main/boss/ChatSendExecutor.ts：点击后用 after.strings.some(s=>s.includes(message)) 判“输入框未清空” | 实际检查整个字符串表，历史气泡同文也可能误报；不是可靠输入框校验，更不是本次发送证据。新 v2 必须气泡增量验证，旧契约本轮不动 |
+| src/local_tools/proxy_tool.py：话术模式 SCRIPT_NEEDS_FILL 返回话术/候选人证据；subagents/recruiting-operator/SUBAGENT.md 要求最终正文逐次确认 | 已发布无人值守策略需独立服务端授权与精确话术版本，新场景例外待未来修订；不能解释成现有工具已允许自动连续发送 |
+| proxy_tool._writeback_send_to_comm_log 已对 success + sent + 非 dry_run 尽力回写 bs_recruiting_operator_resume_comm_logs，按姓名找 resume_id | 时间线 service/API 文件头仍称下一期，与实现不一致，以当前调用代码为准；新场景按验证 binding 和 source ID 幂等投影，不能复制按姓名关联，也不能双回写 |
+| src/services/recruiting_notify_service.py：租户级加密 webhook/at_mobiles、面试 pre/done 通知及日志/补推 | 可复用模式，尚无 handoff 类型、按 thread 负责人路由与接管回执；群 webhook 通知不是企业微信桌面 CLI 自动化能力 |
+| src/local_tools/proxy_tool.py 既有 invocation 等待与 BUSY/UI_CHANGED 自愈；Runtime 当前 Provider/manifest 有 BOSS 定制 | 底座抽取需显式版本兼容、共享桌面仲裁和旧长轮询/BUSY 回归；不改变既有恢复语义与 MCP 契约 |
+
+BOSS 自有 P0′：写后气泡增量及相同话术、全部打开路径候选人唯一性、长历史裁剪与窗口连续性、未读徽章可靠性。没有真机证据前不宣称全量监听或安全无人值守。observer 的采样/退避、去重与循环上限详见[场景设计 §11](../../design/weixin/weixin-marketing-automation-design.md#11-第二场景boss-直聘聊天自动化待独立立项)。
+
+## 9. 修订结论与范围
+
+底座代码规划归 src/desktop_automation、src/local_tools 与 Runtime，通用表归 desktop_automation_* / local_tool_operation_permits；原微信表族逐表归属见[底座计划 §2](../../plans/desktop-automation/plan-desktop-cli-automation.md#2-原微信表族逐表归属裁决)。中立协议以 weixin_message_send_v2、boss_send_to_v2 两消费方校验，后者不实现。微信范围/P0/图片完整 MVP 门禁保持；BOSS 待独立立项，企业微信等只保留扩展方向。
+
+本轮只修订文档与索引，不改业务代码、CLI 或运行时 SUBAGENT.md，不启用或发送任何真实任务。原 24–38 人日为微信基线；P1 通用化重估后的 26–41 人日及依赖详见[场景计划](../../plans/weixin/plan-weixin-marketing-automation.md)，不含 BOSS，估算口径仍为待验证工程工作量。

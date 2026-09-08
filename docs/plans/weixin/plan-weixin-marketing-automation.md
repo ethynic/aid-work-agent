@@ -1,19 +1,16 @@
-# 微信营销后台自动任务：技术实现方案与开发计划
+# 桌面 CLI 自动任务：微信首场景实施与 BOSS 衔接计划
 
 日期：2026-09-08 · 状态：📋 待开发。配套：[产品/架构/UI](../../design/weixin/weixin-marketing-automation-design.md) · [当前代码调研](../../research/weixin-cli/automation-readiness-2026-09-08.md)。本文件定义目标实现，代码路径标“新增/修改”均为计划，不代表本次已实现。
 
 ## 1. 关键技术决策
 
-1. 新建 `src/weixin_marketing/` 业务模块；复用现有 background runner、PostgreSQL、本地工具设备及 invocation 协议。旧 scheduled_tasks 的自然语言执行器不承接本场景。
-2. APScheduler 只每5秒唤醒扫描器；时间事实与去重由 DB 负责，不为每个营销任务维护内存 job。固定间隔存 anchor，不受重启影响。
-3. `executor_type=weixin.fixed_content.v1`，结构化有序流程：预检→解析群→准备素材→逐条发送→核验→记账。固定内容执行不调用 `master_agent.process_message_sync`。
-4. Runtime 补齐多 Provider 注册与微信能力；设备执行位置为已登录 Windows 交互桌面。云端仅下发受信 operation 及 schema 参数，不下发 executable/cwd/env/raw argv。
-5. 每条消息独立 delivery/attempt。非幂等写动作疑似发生后不自动重放。重试网络回执与重试微信发送是两件不同的事。
-6. 所有新增业务表为 `bs_weixin_marketing_*`，必须含 tenant_id、user_id、created_at；本场景即使后台执行也要求非空可信租户与属主，不采用规则允许的 NULL 例外。
+遵循[中立底座设计](../../design/desktop-automation/desktop-cli-automation-design.md)与[底座实施计划](../desktop-automation/plan-desktop-cli-automation.md)。src/weixin_marketing/ 仅承载微信任务/版本、内容包、账号/群绑定、触发配置及场景授权；LocalInvocationService、许可、journal/outbox、effect/phase、桌面锁、quota 与事件接纳骨架分别归 desktop_automation、local_tools 和 Runtime。
+
+微信 executor 保持 weixin.fixed_content.v1，不调用通用自然语言 scheduled-task executor。首期 Windows、文字/网址/图片/有序内容包、时间与内部事件/签名 webhook 范围不变；BOSS 仅作为第二消费方设计，现有 MCP/恢复语义不改变。
 
 ## 2. 数据模型
 
-以下为字段级设计。id 使用 UUID，时间使用 TIMESTAMPTZ DEFAULT NOW()；JSONB 只存通过服务端 schema 验证的数据。每表均带 `(tenant_id,id)` 唯一约束，关联尽可能采用复合外键防止跨租户引用。
+微信业务表字段如下；原 17 张表已在[底座计划 §2](../desktop-automation/plan-desktop-cli-automation.md#2-原微信表族逐表归属裁决)逐表裁决，上移项不再创建微信前缀副本。业务表均保留非空 tenant_id/user_id/created_at、UUID、TIMESTAMPTZ 和租户复合约束。
 
 | 表（统一前缀 bs_weixin_marketing_） | 关键字段 | 约束/索引 |
 |---|---|---|
@@ -22,109 +19,26 @@
 | content_blocks | id,revision_id,position,kind,text_content,url,asset_id,payload_hash | UNIQUE(tenant,revision,position)；type 与字段互斥 CHECK |
 | group_bindings | id,device_id,account_binding_id,label,identity_evidence_ref,identity_version,state,verified_at | tenant/user/device；label 非唯一身份 |
 | account_bindings | id,device_id,account_anchor_ref,session_epoch,status,verified_at | 绑定经 probe 验证的账号依据；云端仅存受控摘要/引用 |
-| schedules | id,revision_id,kind,timezone,anchor_at,next_fire_at,ends_at,accepted_count,max_occurrences | active 到期部分索引；UNIQUE(tenant,revision) |
-| event_sources | id,name,source_type,key_ref,key_version,enabled,allowed_event_types | 凭据走现有 secret_crypto，不回显密钥 |
-| events | id,source_id,external_event_id,event_type,occurred_at,received_at,payload_json,state,eligible_revisions_json,match_cursor | UNIQUE(tenant,source,external_event_id)；state/received_at |
-| occurrences | id,automation_id,revision_id,trigger_kind,trigger_key,scheduled_for,due_at,expires_at,event_id,state | UNIQUE(tenant,automation,trigger_key)；state/due_at |
-| runs | id,occurrence_id,revision_id,state,device_id,started_at,finished_at,lease_owner,lease_until,fence,error_code | UNIQUE(tenant,occurrence)；state/lease_until |
-| deliveries | id,run_id,block_id,position,payload_hash,state,effect,verified_at | UNIQUE(tenant,run,position) |
-| attempts | id,delivery_id,attempt_no,invocation_id,permit_id,write_phase,state,result_ref | UNIQUE(tenant,delivery,attempt_no)；invocation 唯一 |
 | audit_events | id,automation_id,run_id,action,actor_type,actor_id,from_version,to_version,details_redacted | tenant/automation/created_at；追加写 |
 | assets | id,storage_ref,sha256,mime,size,width,height,status,retention_until | tenant/hash 索引；引用中不可硬删 |
-| outbox | id,kind,aggregate_id,dedupe_key,payload,state,available_at,lease_until,attempt_count | UNIQUE(tenant,kind,dedupe_key)；pending/available_at |
-| quota_buckets | id,scope_type,scope_id,bucket_start,reserved_count,limit_value | UNIQUE(tenant,scope_type,scope_id,bucket_start) |
 
-说明：表名中 tenant 的缩写仅用于说明，实际列统一 tenant_id。授权依据不存长段聊天记录，存来源 ID、动作范围、发布版本和最小必要快照；正文在有 ACL 的内容表，不进审计普通文本。
+audit_events 此处仅保留微信配置/目标/内容变更；operation 审计在底座。revision 与中立 subject 同事务发布。content_blocks 与底座 delivery 通过场景映射关联，底座不含 block_id/group_binding_id。微信发送配额由场景映射 task/target/account scope，底座 quota_buckets 负责原子预留。
 
-关键系统表扩展（通过独立增量迁移）：local_tool_invocations 增 provider_key、business_kind、business_ref、dedupe_key、deadline_at、authorization_epoch、write_phase；UNIQUE(tenant_id,business_kind,dedupe_key)。Local devices capabilities 增受信 providers 数组及各版本/digest，旧单 provider 保持可读。新增系统级本地操作许可表记录 invocation、device、claim token hash、task epoch、delivery、permit 状态/截止时间；不混入消息正文。
+## 3. 触发接纳衔接
 
-业务建表使用幂等 init_tables()，在现有 init_database 初始化体系和相关业务 skill 加载点接入，确保 background 不依赖用户先开聊天。已有表变更依照仓库当前 `deploy/db_update.yaml` 增量机制登记；更新数据库规则的表登记。不要仅建在开发库或机械沿用已过时的 db_update.sql 流程。
+时间扫描、事件去重/分页、DB outbox 与锁顺序见[底座计划 §3](../desktop-automation/plan-desktop-cli-automation.md#3-触发接纳算法)。微信保留 once/interval/calendar/event 触发配置，发布后编译 schedule 与事件匹配订阅；原有宽限、skip_overlap、月底/DST、次数和事件不覆盖正文/目标规则不变。
 
-## 3. 触发接纳算法
+## 4. 场景执行衔接
 
-### 3.1 时间扫描
+底座执行器持有 run/delivery/attempt；微信适配器固定执行账号与群复验→准备全部内容/图片→顺序提交→本次写后校验。任一 unknown 停后续，部分完成保留逐条状态。完整执行与资源锁见[底座计划 §4](../desktop-automation/plan-desktop-cli-automation.md#4-场景执行器与并发)。
 
-每次 tick 处理有界批次（初始100项），短事务 `SELECT ... FOR UPDATE SKIP LOCKED` 领取到期 schedule；锁内读取 automation status/active revision，计算应接纳时间槽、迟到策略与次数限制，插入 occurrence、run 及 outbox，并前移 next_fire_at 后一起提交。人工操作与扫描器采用一致锁顺序（automation→schedule→occurrence/run），避免发布/暂停与tick死锁。
+## 5. 写动作许可与恢复衔接
 
-触发键：时间 `time:{revision_id}:{scheduled_for_utc}`；事件 `event:{source_id}:{external_event_id}`（同一 automation 默认跨 revision 只接纳一次同一事件）；手动 `manual:{request_id}`。采用 INSERT ON CONFLICT DO NOTHING，不依赖内存“已执行”集合。
+许可、journal、结果 outbox、effect/phase、人工重试和迟到回执统一见[底座计划 §5](../desktop-automation/plan-desktop-cli-automation.md#5-写动作许可幂等与恢复)。weixin_message_send_v2 将核验后的 target ref 转成中立 target handle，冻结 payload；boss_send_to_v2 用同一契约作设计校验。本轮不新增任一 operation。
 
-interval 的第 n 次为 anchor+n×interval_seconds；停机后直接算最近可用槽，避免循环展开数百万次积压。cron 使用项目 APScheduler 3.x trigger 的计算能力；星期用 mon..sun 字符串，避免复制现有 cron helper 的星期数字映射差异。每月31日、闰年、DST、跨日窗口必须定例测试。
+### 5.4 全部底座决策的兼容约束
 
-missed 落审计计数/区间摘要，宽限内最多接纳最近一次；一次性存 consumed 状态但保留 schedule 行便于对账。运行未结束又到新触发：默认 skip_overlap，该槽落 skipped，不积压无界队列。
-
-### 3.2 事件接纳
-
-内部业务：业务状态变更与事件 outbox 同一业务数据库事务提交。投递器写入营销 events，按唯一键去重；跨数据库场景需源侧可靠 outbox，不宣称跨库原子提交。
-
-外部：HTTPS webhook 验证签名（成熟 HMAC-SHA256 库，覆盖时间戳、nonce、原始请求体）、±5分钟窗口与 nonce 防重放；密钥用现有 secret_crypto 管理并支持 key_id 轮换。tenant 由 source 身份解析，拒绝 payload 自报租户/用户覆盖。设置 body 大小、速率、事件类型/schema 限制；有效事件落库后202返回。重复有效事件返回已有接纳结果，不重复执行。
-
-事件匹配 worker 按 event_type 找 active revisions，使用白名单条件 DSL，命中后事务插入 occurrence/run/outbox。events 不可在匹配完成前标 processed；大批匹配用稳定分页与 match_cursor，可重跑，依赖 occurrence 唯一键去重。先期只匹配事件接收时有效的版本集合并固定快照；配置发布不回放历史事件。延迟 due_at 默认 received_at+delay，occurred_at 仅业务条件/审计使用，避免不可信外部时钟改变队列。
-
-事件洪峰按源速率、任务冷却和配额限流，事件和 skipped 原因持久保存；不静默把多个独立业务事件合为一个。实际事件适配器必须在对应业务完成后才出现在 UI 可选源中。
-
-## 4. 场景执行器与并发
-
-worker 领取 run 只占短事务，记录 lease/fence；锁外调用设备。每个状态步骤保存进度后即可退出，由下一次 tick 继续；不能在 API request 或长 DB 事务里等待整个 RPA 过程。
-
-顺序：
-
-1. 重验 tenant/user 活跃、功能授权、任务状态/版本、截止时间及配额；可信上下文来自持久任务，不来自模型参数。
-2. 使用任务固定 device_id，不跟随用户临时“选中设备”漂移；设备离线进入 waiting_device，超过 expires_at 结束未提交条目。
-3. 查设备 manifest 与账号 session_epoch；probe/群 resolve 经 local_tool queue 执行；群引用只在同一设备/账号短期内使用。
-4. 按 blocks 初始化 deliveries；图片预下载并验 hash，所有内容准备成功后才开始第一条，降低半包风险。
-5. 下一条只在上一条 applied 且 verified 后开始；再次读取任务 epoch、截止时间，取得发送许可，提交当前条。
-6. 收到权威结果后推进状态。任何 unknown 停止后续；partial 保留每条结果。
-
-本地操作通道抽取 `LocalInvocationService.enqueue/get/cancel`，聊天代理和场景执行器都调用它；后台不直接调用 `_dispatch_and_wait()` 私有轮询方法，不制造聊天 session 伪装执行。需要关联时保存 source_session_id 为可选审计字段。
-
-资源锁：同一 Windows 用户的交互桌面作为串行资源（包含 BOSS/微信/其他会抢焦点的 Provider），Runtime 调度所有相关操作共用 OS 锁；云端设备锁只是第一层，本地锁是最终执行约束。防止多个 Runtime 实例并行控制同一个桌面。只读截图若占用桌面亦纳入资源仲裁。
-
-## 5. 写动作许可、幂等与恢复
-
-### 5.1 三层标识
-
-- occurrence/run：业务这一次执行；重复 tick 不重复创建。
-- delivery：这一次的第几条内容；hash 用于一致性，不作为跨天去重键。
-- attempt/invocation：一次操作尝试；只有证明未提交或人工决定再次发送时才能新建 attempt。
-
-### 5.2 不可消除的不确定窗口
-
-微信 UI 与数据库不能原子提交。设计目标是“已知操作不重复、未知效果不自动重放”，允许产生待核查状态；不使用 exactly-once 描述微信发送。数据库锁/fence 不能使已离线的旧桌面进程自动失去点击能力，因此须加本地协议。
-
-新增内部 Runtime write-authorize API（不暴露给 LLM）：在最后一次目标复验后、输入/回车前申请短期一次许可。服务器在同一事务中验证 claim/device、active revision epoch、当前 delivery 未获许可、取消状态、deadline 和配额，保守预留配额并返回 permit_id/短 deadline。多个层级quota按固定scope顺序加行锁，以条件UPDATE确保reserved_count小于limit；多项中任一不足则整个许可事务回滚。许可发出后将该 delivery 标为 may_have_started，旧租约过期也不重新分配该条。
-
-Runtime 先将 permit 和 payload hash 持久写入本地 journal，再执行；journal fsync 失败则不发送。许可过期或网络无法取得许可时禁止开始输入；用单调时钟限制本地许可有效时间，进程重启后不复用旧许可。permit 发放和点击之间收到暂停仍可能完成这一条，产品文案必须反映边界。
-
-发送前再次检测桌面/账号/目标/取消。输入开始后的异常可能留下草稿，即使尚未回车也不可盲重试；只有驱动明确证明未发送且草稿已安全恢复为原始状态才返回 safe_to_retry。不能清空用户原有草稿。回车或粘贴图片若可能立即提交，应在该动作前进入 may_have_started。
-
-### 5.3 Provider/Runtime 协议补强
-
-旧 `weixin_message_send(target_ref,text)` 保留兼容。新增受控 operation（拟名 `weixin_message_send_v2`）接收 target_ref、request_id、payload 与本地已校验 permit handle；配套 human CLI 仍为 `aid-weixin send`，对象只用参数表达。新 schema 通过 probe 后才注册 manifest。
-
-Provider 本地以 request_id 防重，保存 prepared/may_have_started/verified/unknown 和结果。重复 request_id：已完成返回既有回执；may_have_started/unknown 不重新点击；prepared 且确认无副作用才允许恢复。新 API 不允许调用方凭 request_id 获得任意目标的权限。
-
-driver 通过受限 stdin JSON 接收正文，不使用进程命令行明文参数；DRIVER_JSON 增加 phase、effect、safe_to_retry、evidence_ref。所有提交可能发生后的崩溃、缺输出、截屏/模型失败均映射 unknown，不能漏为 retryable INTERNAL_ERROR。取消/shutdown 分支未拿到可信结果时写工具一律 unknown。
-
-Runtime 把终态先写本地 result outbox，再经原 invocation/claim 身份重复回传；收到持久化 ACK 才删除。云端迟到证据端点只追加审计并进入对账，验证原 device/claim/request_id/hash，不能重新授权发送。重复回执不产生重复账单。租约过期先停新发送许可，原 started 操作按 unknown 处理，不重新派发。
-
-### 5.4 状态优先级
-
-run 聚合规则：全部 delivery verified/applied 为 succeeded；任一 unknown 时若已有成功则 partial，否则 unknown；全部未提交且取消为 cancelled；部分已发送后截止则 partial，剩余条目标 expired；纯等待超时为 expired。attempt 原始结果与人工业务判定分别存储。
-
-服务端、Runtime 和 UI 统一按 effect/phase 解释，不仅按 success/code：unknown 优先于 success；partial 表示本轮部分副作用；applied 还必须有本次验证证据才成功。协议矛盾落 unknown/protocol_error。旧 BOSS 行为的兼容分支单独测试，不在本功能中误改其恢复策略。
-
-| 结果/故障 | 本条动作 | 后续 |
-|---|---|---|
-| 提交前设备离线/忙 | bounded backoff，到期停止 | 不产生新已发送记录 |
-| ref过期且尚无输入 | 同设备重新resolve，最多2次 | 重新核验账号和群 |
-| 身份不明/账号变化 | blocked | 暂停任务，重新绑定 |
-| 明确effect=none且safe_to_retry | 最多2次，截止时间内 | 同delivery新attempt |
-| applied并验证通过 | succeeded | 按顺序下一条 |
-| unknown/提交后断网/崩溃 | 待核对，不重发 | 停止本包后续 |
-| 用户取消 | 停止尚未开始的条目 | 已提交结果照实回传 |
-| 回执网络失败 | 只重传outbox | 不再调用发送工具 |
-
-人工核对追加 decision，原始 effect 不覆盖。若用户确认未发送并授权重试，建立带 predecessor_attempt_id 的新 attempt；先核验旧本地进程已停止、没有待执行许可，再允许操作。仅确认已发送可将 delivery 业务判定为 resolved_applied，但保留机器 unknown 标记。
+现有 BOSS MCP 契约、长轮询、BUSY/UI_CHANGED、自愈/恢复、取消/关闭和计费语义保持不变。v2 需显式协商，旧 Provider 不下发 v2、不把新任务降级为旧发送；此要求适用于表、服务抽取、资源锁、许可和全部底座设计，不能仅在结果聚合处设兼容分支。
 
 ## 6. 群身份与图片实现
 
@@ -208,13 +122,13 @@ Runtime 使用设备身份和 invocation scope 调用素材下载接口（拟 `/
 | 阶段 | 交付 | 依赖/门禁 | 估算人日 |
 |---|---|---|---|
 | P0 真机验证 | 账号/群身份、相同文字新增证据、图片probe、平台基线 | Windows与授权测试群；身份不可靠则不启无人值守 | 3–5 |
-| P1 执行基础 | Provider注册/微信manifest、许可、journal/outbox、effect规范、素材传输 | 不破坏BOSS回归，真实断网/崩溃语义 | 5–8 |
+| P1 底座+微信执行基础 | 中立服务/表、Provider/共享锁、许可/journal/outbox/effect、素材 resolver 与双消费方契约校验 | 不破坏明确列出的 BOSS 回归，真实断网/崩溃语义 | 7–11 |
 | P2 时间闭环 | DB/API/调度/文字网址/逐条账本/取消配额 | 假时钟与崩溃恢复，旧dry_run不可触发 | 4–6 |
 | P3 工作台与Agent | 列表编辑、群设备、预览、记录、聊天工具 | UI与API共用服务，权限/版本并发 | 4–6 |
 | P4 完整MVP | 图片产品化、内部事件适配示例与签名webhook、有序内容包 | 图片真机通过、事件重复/洪峰/循环测试 | 5–8 |
 | P5 发布 | 独立测试/CR修复、安装升级、灰度/回滚 | 全部关键门禁通过 | 3–5 |
 
-合计约24–38人日，存在P0不确定性；可并行部分前端与后端，但不通过并行省掉P0/P1门禁。原生Mac driver另估：P0先做2–3人日可行性验证，再按证据排期，未验证前不承诺日期。
+原微信方案基线为24–38人日；P1 分层及兼容工作重估后，底座+完整微信 MVP 合计约26–41人日（其余阶段不变），不含 BOSS 场景开发。人日仍为工程工作量、非日历工期或交付承诺，存在P0不确定性；可并行部分前端与后端，但不通过并行省掉P0/P1门禁。原生Mac driver另估：P0先做2–3人日可行性验证，再按证据排期，未验证前不承诺日期。
 
 ### 验收矩阵
 
@@ -232,7 +146,12 @@ Runtime 使用设备身份和 invocation scope 调用素材下载接口（拟 `/
 | 暂停 | 未许可不开始；已提交结果回收；UI明确当前条不可撤回 |
 | 真机 | 支持微信版本、DPI/主题/单双屏、前台抢占、锁屏、休眠恢复、输入残留草稿 |
 | UI | 加载/空/错/禁用/409/上传中、键盘排序/脏检测、移动端、轮询不覆盖草稿 |
-| 回归 | BOSS运行时与manifest兼容、通用定时任务不变、工具装配和租户存储边界 |
+| BOSS 长轮询回归 | 既有 invocation queued/claimed/running/result、超时/取消/迟到回执 envelope 与时间预算不变 |
+| BOSS BUSY/恢复回归 | BUSY/UI_CHANGED 弹层自愈、旧写结果/关闭/重试语义不变，新排队不触发旧自愈 |
+| BOSS CLI/协议回归 | boss-send-to、chat-send/open/read-executor、boss-read-chat、mcp-conformance、manifest/providerCrash；旧契约和 capability 保持 |
+| BOSS 通道回归 | pairing/security、write_result_billing/boss_tool_billing、租户隔离与原成功沟通记录回写不变 |
+| 桌面互斥 | 同一 Windows 微信与 BOSS CLI 排队、多 Runtime 共享 OS 锁、observer 不饿死发送；手动抢焦点/输入停止且不盲重试 |
+| 其他回归 | 通用定时任务不变、工具装配、租户存储；详细套件见底座计划 §7 |
 
 P0 可在已授权「哈尼」群只发一条例如“自动任务发送测试：这是一条测试消息。”，前提是唯一确认目标且Windows执行入口可用；本次未实际执行。压力/矩阵发送使用专用测试群和另行明确范围，离线故障测试优先fake driver。
 
@@ -242,4 +161,24 @@ P0 可在已授权「哈尼」群只发一条例如“自动任务发送测试�
 
 ## 11. 本轮交付边界
 
-已完成源码研究、完整产品/架构/UI设计和本实施计划，并在 ideas.md 登记待开发。未修改业务代码、未提交Git、未创建后台自动任务、未实测发送。实际开发开始时更新索引为部分完成；P0–P5验收完成才移入ideas_finished.md。
+已完成源码研究、完整产品/架构/UI设计和本实施计划，并在 ideas.md 登记待开发。本次修订未修改业务代码或 CLI、未提交 Git、未创建后台自动任务、未实测发送；V1.0 设计已在交接提交 4f5acd61 中提交，此处不否认历史提交。实际开发开始时更新索引为部分完成；P0–P5验收完成才移入ideas_finished.md。
+
+## 12. BOSS 聊天自动化实施衔接（📋 待独立立项）
+
+产品、observer、水位/去重、绑定、单点决策、授权、数据/UI 和通知完整定义见[场景设计 §11](../../design/weixin/weixin-marketing-automation-design.md#11-第二场景boss-直聘聊天自动化待独立立项)，源码事实与缺口见[调研 §8](../../research/weixin-cli/automation-readiness-2026-09-08.md#8-boss-第二场景定向核验2026-09-08-修订)。本节不是开发授权。
+
+| 里程碑 | 交付与验收 | 依赖 | 工程估算 |
+|---|---|---|---|
+| P0′ Observer/发送真机验证 | 未读覆盖、长会话虚拟化/去重、账号/候选人唯一性、增量气泡写证据、相同话术重复测试 | 可与微信 P0 并行；独立 BOSS 设备会话与试发授权 | 待立项估算，不计微信 |
+| P2′ BOSS 观察与数据 | src/boss_chat observer、threads/messages/cursors、事件适配、身份绑定，快照/水位/outbox 原子接纳 | P1 + P0′ 门禁 | 待独立估算 |
+| P3′ 决策与执行 | 关键词/受限 LLM 决策、话术版本、预授权服务、boss_send_to_v2、delivery 映射/时间线投影 | P2′；新协议 capability 与写证据通过 | 待独立估算 |
+| P4′ 工作台与转人工 | 策略编辑/发布、会话时间线/接管、负责人路由、群 webhook 新通知类型 | P3′；明确通知授权与员工映射 | 待独立估算 |
+| P5′ 灰度与回归 | 同桌面混用、故障恢复、观察缺口/循环抑制、旧 BOSS 全套回归 | 独立测试/CR、全部 BOSS P0′ 门禁 | 待独立估算 |
+
+实施契约：新增 /api/boss-chat/policies 与 /draft/validate/publish/pause、/threads、/threads/{id}/takeover/resolve/resume、/observations 和 /handoffs；统一 tenant/owner ACL、If-Match、POST Idempotency-Key、403/404/409 与副作用明确的操作。复用底座 /deliveries 与许可，不新增 BOSS 私有 permit API。拟表 bs_boss_chat_* 的精确集合见设计 §11.5；底座通过 subject 注册对应 policy revision、target 和事件源。
+
+通知扩展 recruiting_notify_service 的 handoff 类型、负责人路由与通知 outbox；不改变旧面试 pre/done 接口。沟通日志投影以已验证 resume_id 和 source_delivery_id/source_message_id 幂等关联，禁止新旧双回写。招聘话术按 ID/版本冻结；未来 SUBAGENT.md 与工具说明仅为专用已发布任务增加预授权例外，原 boss_send_to/send_current 逐次确认不动。
+
+BOSS 必测：首次水位不回旧消息；重启/徽章清空/当前会话新消息不误漏；快照虚拟化或重复正文无法对齐时阻断；仅 them 触发；突发回复聚合且批次唯一、冷却/上限重启不清；LLM 枚举越界/无证据/超时转人工；人工已回复使旧决策失效；话术版本及 scope 变化撤销许可；unknown 不重发；通知失败仅补通知；沟通投影失败仅补留痕。假驱动通过不能代替 BOSS P0′。
+
+微信 P0 与 P2–P5 范围、验收门禁不变；BOSS P0′ 可独立并行，P2′ 起依赖 P1，微信交付不等待 BOSS 场景完工。两条线路共享资源的实际真机验证不能在同一桌面同时操作。
