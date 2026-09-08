@@ -17,7 +17,7 @@ experiments/marketing_call_agent/.venv/bin/pip install -r experiments/marketing_
 python3 -m experiments.marketing_call_agent.cli doctor --adb /absolute/path/to/adb --serial emulator-5554
 ```
 
-`doctor` PASS 仅表示选定设备在线；单独报告 API 配置是否存在，不验证模型权限，不输出设备清单或密钥。当前宿主机未提供 ADB、设备与视觉凭证，因此真实 E0 仍 BLOCKED。
+`doctor` PASS 仅表示选定设备在线；单独报告 API 配置是否存在，不验证模型权限，不输出设备清单或密钥。2026-09-07 已获得 Windows 真机和 GLM 图文调用证据，但严格 E0 解析仍失败，见下方现场验证记录。
 
 ## 一次截图定位
 
@@ -84,4 +84,8 @@ Windows 无 Bash 时离线测试采用统一脚本宿主机分支的等价命令
 & $python -m pytest -c experiments/marketing_call_agent/pytest.ini experiments/marketing_call_agent/tests --confcutdir=experiments/marketing_call_agent -p no:cacheprovider -q
 ```
 
-本轮只在 macOS/Python 3.12 完成离线检查，Windows 命令、手机截图及真实 API 仍需现场验证。小米设置来源：[官方开启开发者选项说明](https://www.mi.com/global/support/faq/details/KA-168765/)、[Android 真机连接与 Windows 驱动](https://developer.android.google.cn/studio/run/device?hl=en)。
+初始开发仅在 macOS/Python 3.12 完成离线检查；2026-09-07 已补充 Windows 真机截图与 API 现场验证，正式 CLI 验收仍未完成。小米设置来源：[官方开启开发者选项说明](https://www.mi.com/global/support/faq/details/KA-168765/)、[Android 真机连接与 Windows 驱动](https://developer.android.google.cn/studio/run/device?hl=en)。
+
+## 2026-09-07 现场进展
+
+见[Windows＋小米真机记录](../../docs/research/marketing-call-agent-experiments/device-validation-20260907.md)：截图、GLM 图文返回、单步导航及系统拨出均已现场验证。模型返回 Markdown 包裹 JSON，既有解析仍拒绝；现场临时处理不代表代码已修复。点击与拨号使用独立临时脚本，本 CLI 仍仅提供 doctor/observe。音频和完整业务链尚未验证。

@@ -1,6 +1,6 @@
 # GLM 执行手册：无云图依赖的第一阶段实验
 
-日期：2026-09-05。状态：实验设计完成，尚未实现或实测。本文是前置实验 P0-A 的执行依据；与旧计划冲突时，以本文的实验范围为准。
+日期：2026-09-05；进展更新：2026-09-07。状态：E0 起步工具已实现，真机截图、模型返回、现场单步导航和系统拨出已验证；E0 严格解析及 E1 正式实现未完成，见[真机记录](../research/marketing-call-agent-experiments/device-validation-20260907.md)。本文是前置实验 P0-A 的执行依据；与旧计划冲突时，以本文的实验范围为准。
 
 关联：[主计划](marketing-call-agent-plan.md) · [详细设计](../design/marketing-call-agent-design.md)。
 
