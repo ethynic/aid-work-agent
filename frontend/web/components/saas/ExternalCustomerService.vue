@@ -182,9 +182,17 @@
                   isRecalled(msg) ? 'opacity-60 line-through' : '',
                 ]"
               >
-                <!-- 用户消息：文本 -->
+                <!-- 用户消息：文本（人工客服消息显示发送者姓名并去掉 [人工客服] 前缀） -->
                 <template v-if="msg.role === 'user' && msg.content && !hasUserAttachment(msg)">
-                  <div class="whitespace-pre-wrap">{{ msg.content }}</div>
+                  <div
+                    v-if="msg.metadata?.source === 'servicer' && servicerSenderName(msg)"
+                    class="text-xs opacity-70 mb-1"
+                  >
+                    员工：{{ servicerSenderName(msg) }}
+                  </div>
+                  <div class="whitespace-pre-wrap">
+                    {{ msg.metadata?.source === 'servicer' ? servicerMessageText(msg) : msg.content }}
+                  </div>
                 </template>
                 <!-- 用户消息：附件 -->
                 <template v-if="msg.role === 'user' && hasUserAttachment(msg)">
@@ -630,6 +638,16 @@ function systemHintText(msg: any): string {
   if (msg.metadata?.kind === 'transfer_to_human_marker') {
     return '已转人工'
   }
+  return String(msg.content || '').replace(/^\[[^\]]*\]\s*/, '')
+}
+
+// 人工客服发送者姓名：优先企微通讯录姓名，历史消息无姓名时降级显示 userid
+function servicerSenderName(msg: any): string {
+  return msg.metadata?.servicer_name || msg.metadata?.servicer_userid || ''
+}
+
+// 人工客服消息内容：去掉落库时的 [人工客服] 前缀（发送者由独立标签展示）
+function servicerMessageText(msg: any): string {
   return String(msg.content || '').replace(/^\[[^\]]*\]\s*/, '')
 }
 

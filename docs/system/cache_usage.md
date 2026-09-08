@@ -322,6 +322,15 @@ ImageRegistry 管理的图片资产元信息（复用 cp 的 `uploaded_file:{fil
 **关键约束**：键**必须带企业维度**（`corp_id`）。media_id 是企业级临时素材，若不区分企业，多企业微信客服会互相读到对方企业的 media_id，发送时抛 40007 invalid media_id。
 **源文件**：`src/channels/wecom_kf/adapter.py`
 
+### 7.4.1.1 企微员工姓名反查缓存
+
+**存储**：Redis + 内存降级
+**键模式**：`wecom_kf_servicer_name:{tenant_id}:{userid}`
+**TTL**：86400s（1 天）
+**失效时机**：TTL 自动过期后重新调企微通讯录 `/cgi-bin/user/get` 反查（姓名极少变更，无主动失效入口）
+**关键约束**：键带租户维度（不同租户对应不同企业微信通讯录）。仅缓存查询成功（errcode=0 且 name 非空）的结果，失败不缓存、下次消息重查
+**源文件**：`src/saas/api/channel_routes.py`（`_resolve_kf_servicer_name`）
+
 ### 7.4.2 独立会话状态
 
 **存储**：Redis + 内存降级

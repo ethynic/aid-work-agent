@@ -35,6 +35,8 @@ from src.channels.idempotency import MessageDeduplicator
 from src.services.session_record import SessionRecordManager
 from src.core.storage import ensure_tenant_storage_dir, get_tenant_storage_path
 from src.core.temp_logger import tlog as _tlog
+from src.core.redis_client import redis_client
+from src.core.cache_utils import CacheKeys
 from src.db.models import CustomerReferralDB
 from src.channels.wecom_kf.prompts import (
     MSG_EXPIRED,
@@ -2061,7 +2063,8 @@ async def _process_tenant_wecom_kf_messages(
                 ):
                     _smsg = servicer_msgs_to_persist.pop(0)
                     await _persist_kf_servicer_message(
-                        _smsg, open_kfid, tenant_id, subagent_type
+                        _smsg, open_kfid, tenant_id, subagent_type,
+                        api_client=adapter.api_client,
                     )
 
                 # 设置当前客服上下文（供发送消息使用）
@@ -2720,7 +2723,8 @@ async def _process_tenant_wecom_kf_messages(
             while servicer_msgs_to_persist:
                 _smsg = servicer_msgs_to_persist.pop(0)
                 await _persist_kf_servicer_message(
-                    _smsg, open_kfid, tenant_id, subagent_type
+                    _smsg, open_kfid, tenant_id, subagent_type,
+                    api_client=adapter.api_client,
                 )
 
             # 更新 cursor
@@ -2749,14 +2753,52 @@ async def _process_tenant_wecom_kf_messages(
         )
 
 
+# 企微通讯录成员姓名缓存 TTL：姓名极少变更，1 天足够
+_KF_SERVICER_NAME_TTL = 86400
+
+
+async def _resolve_kf_servicer_name(api_client, tenant_id: str, servicer_userid: str) -> str:
+    """查询企微侧员工姓名（Redis 缓存 userid→name，TTL 1 天）。
+
+    查询失败返回空串，由调用方降级只存 servicer_userid，不阻塞落库主流程。
+    """
+    if not servicer_userid:
+        return ""
+    cache_key = f"{CacheKeys.WECOM_KF_SERVICER_NAME}:{tenant_id}:{servicer_userid}"
+    try:
+        cached = redis_client.get(cache_key)
+        if cached is not None:
+            return str(cached)
+    except Exception as e:
+        logger.debug(f"[wecom_kf] 员工姓名缓存读取失败: {e}")
+
+    try:
+        result = await api_client.get_user(servicer_userid)
+    except Exception as e:
+        logger.debug(f"[wecom_kf] 员工姓名查询失败: userid={servicer_userid}, error={e}")
+        return ""
+
+    if result.get("errcode", 0) != 0:
+        return ""
+    name = str(result.get("name", "") or "")
+    if name:
+        try:
+            redis_client.set(cache_key, name, ex=_KF_SERVICER_NAME_TTL)
+        except Exception as e:
+            logger.debug(f"[wecom_kf] 员工姓名缓存写入失败: {e}")
+    return name
+
+
 async def _persist_kf_servicer_message(
-    msg: dict, open_kfid: str, tenant_id: str, subagent_type: str
+    msg: dict, open_kfid: str, tenant_id: str, subagent_type: str,
+    api_client=None,
 ) -> None:
     """员工消息（origin=5）落库到 channel_messages：只持久化，不触发 AI。
 
     content 前缀 `[人工客服] ` 让 LLM 明确区分「客户发言」与「人工客服发言」，
-    避免把员工消息误当客户提问。员工姓名 MVP 用固定前缀，servicer_userid 存
-    metadata 供后续按企微 API 反查。员工消息仅文本入库（语音/图片/文件跳过）。
+    避免把员工消息误当客户提问。servicer_userid + servicer_name（企微通讯录反查，
+    Redis 缓存 1 天）存 metadata，供外部接待客户页面显示是哪位员工在接待。
+    员工消息仅文本入库（语音/图片/文件跳过）。
     异常吞掉不影响主流程（去重 key 已在收集时标记，TTL 内不重试、过期后重拉可补）。
     """
     try:
@@ -2770,6 +2812,11 @@ async def _persist_kf_servicer_message(
         if not text:
             return
 
+        servicer_userid = msg.get("servicer_userid", "")
+        servicer_name = ""
+        if api_client is not None:
+            servicer_name = await _resolve_kf_servicer_name(api_client, tenant_id, servicer_userid)
+
         session = channel_session_manager.get_or_create_session(
             channel_type="wecom_kf",
             channel_user_id=external_userid,
@@ -2781,7 +2828,8 @@ async def _persist_kf_servicer_message(
 
         metadata = {
             "source": "servicer",
-            "servicer_userid": msg.get("servicer_userid", ""),
+            "servicer_userid": servicer_userid,
+            "servicer_name": servicer_name,
             "msgid": msg.get("msgid", ""),
             "open_kfid": open_kfid,
         }
