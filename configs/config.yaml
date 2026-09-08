@@ -255,6 +255,11 @@ saas:
 storage:
   base_dir: "storage"
 
+# 知识库配置
+knowledge:
+  # Excel 格式判定灰色地带（启发式得分 0.4~0.6）是否调用 LLM 兜底重判，默认关闭（零成本）
+  excel_llm_layout_fallback: false
+
 # 定时任务配置
 scheduler:
   enabled: true

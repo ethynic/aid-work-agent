@@ -220,10 +220,15 @@ async def get_subagent_detail(request: Request, agent_id: str):
             "skills": config.skills,
             "context": config.context,
             "system_prompt": config.system_prompt,
+            "reply_style": config.reply_style,
+            "llm_provider": config.llm_provider,
+            "llm_model_codes": config.llm_model_codes,
+            "recap": config.recap,
+            "chat_toolbar": config.chat_toolbar,
+            "upload_accept": config.upload_accept,
+            "business_pages": config.business_pages,
             "type": "builtin" if registry.is_builtin(agent_id) else "custom",
         }
-        if config.business_pages:
-            data["business_pages"] = config.business_pages
         return {
             "success": True,
             "data": data

@@ -36,7 +36,10 @@
         <template v-if="selectedAgent && detail">
           <div class="p-6">
             <div class="mb-6">
-              <h1 class="text-lg font-semibold text-default">{{ detail.name }}</h1>
+              <div class="flex items-center gap-3">
+                <h1 class="text-lg font-semibold text-default">{{ detail.name }}</h1>
+                <BaseButton size="sm" @click="customizeAgent(detail)">自定义</BaseButton>
+              </div>
               <p class="text-sm text-muted mt-1">{{ detail.description || '无描述' }}</p>
               <span class="inline-block mt-2 px-2 py-0.5 text-xs rounded-full bg-info-100 text-info-700">内置</span>
             </div>
@@ -75,6 +78,67 @@
               <span v-else class="text-sm text-muted">（空）</span>
             </div>
 
+            <!-- 回复风格 -->
+            <div class="mb-6">
+              <h3 class="text-sm font-medium text-default mb-3">回复风格</h3>
+              <span class="text-sm text-default">{{ detail.reply_style || '默认' }}</span>
+            </div>
+
+            <!-- LLM 配置 -->
+            <div v-if="detail.llm_provider || detail.llm_model_codes" class="mb-6">
+              <h3 class="text-sm font-medium text-default mb-3">LLM 配置</h3>
+              <div class="grid grid-cols-2 gap-4">
+                <div>
+                  <div class="text-sm text-muted mb-1">Provider</div>
+                  <div class="text-sm text-default">{{ detail.llm_provider || '全局默认' }}</div>
+                </div>
+                <div v-for="(code, provider) in detail.llm_model_codes || {}" :key="provider">
+                  <div class="text-sm text-muted mb-1">{{ provider }} model</div>
+                  <div class="text-sm text-default font-mono">{{ code }}</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Recap 轮后任务 -->
+            <div class="mb-6">
+              <h3 class="text-sm font-medium text-default mb-3">Recap 轮后任务</h3>
+              <div v-if="detail.recap?.tasks?.length" class="space-y-1">
+                <div v-for="(task, i) in detail.recap.tasks" :key="i" class="text-sm text-default">
+                  {{ task.name }}（{{ task.when }}）
+                  <span v-if="task.enabled === false" class="text-muted">（已停用）</span>
+                </div>
+              </div>
+              <span v-else class="text-sm text-muted">（无）</span>
+            </div>
+
+            <!-- 业务页面 -->
+            <div class="mb-6">
+              <h3 class="text-sm font-medium text-default mb-3">业务页面</h3>
+              <div v-if="detail.business_pages?.length" class="space-y-1">
+                <div v-for="page in detail.business_pages" :key="page.id" class="text-sm text-default">
+                  {{ page.title }}
+                  <span class="text-muted font-mono text-xs">{{ page.route }}</span>
+                </div>
+              </div>
+              <span v-else class="text-sm text-muted">（无）</span>
+            </div>
+
+            <!-- 聊天工具栏按钮 -->
+            <div class="mb-6">
+              <h3 class="text-sm font-medium text-default mb-3">聊天工具栏额外按钮</h3>
+              <div v-if="detail.chat_toolbar?.length" class="flex flex-wrap gap-2">
+                <BaseBadge v-for="btn in detail.chat_toolbar" :key="btn" intent="warning">{{ btn }}</BaseBadge>
+              </div>
+              <span v-else class="text-sm text-muted">（无）</span>
+            </div>
+
+            <!-- 上传文件类型限定 -->
+            <div class="mb-6">
+              <h3 class="text-sm font-medium text-default mb-3">上传文件类型限定</h3>
+              <span v-if="detail.upload_accept" class="text-sm text-default font-mono">{{ detail.upload_accept }}</span>
+              <span v-else class="text-sm text-muted">全局默认</span>
+            </div>
+
             <!-- 系统提示词 -->
             <div v-if="detail.system_prompt" class="mb-6">
               <h3 class="text-sm font-medium text-default mb-3">系统提示词</h3>
@@ -96,9 +160,11 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { marked } from 'marked'
 import AppHeader from './AppHeader.vue'
 import BaseBadge from '@/components/ui/BaseBadge.vue'
+import BaseButton from '@/components/ui/BaseButton.vue'
 import {
   listSubagents,
   getSubagentDetail,
@@ -121,6 +187,18 @@ const allList = ref<SubagentListItem[]>([])
 const selectedAgent = ref<SubagentListItem | null>(null)
 const detail = ref<SubagentDetail | null>(null)
 const loading = ref(false)
+
+const router = useRouter()
+
+// 复制为自定义数字员工：详情存 sessionStorage，跳转到自定义数字员工页消费
+function customizeAgent(item: SubagentDetail) {
+  const suggestedId = `${item.agent_id}_custom`
+  sessionStorage.setItem(
+    `builtin_prefill_${suggestedId}`,
+    JSON.stringify({ ...item, suggested_agent_id: suggestedId })
+  )
+  router.push({ path: '/portal/agent-definitions', query: { from_builtin: suggestedId } })
+}
 
 const handleToggleSidebar = () => {
   // PortalLayout 提供，可选

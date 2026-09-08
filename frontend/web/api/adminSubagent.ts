@@ -45,8 +45,14 @@ export interface SubagentDetail {
   skills: Record<string, any>
   context: Record<string, any>
   system_prompt: string
+  reply_style?: string | null
+  llm_provider?: string | null
+  llm_model_codes?: Record<string, string> | null
+  recap?: { tasks: { name: string; when: string; enabled: boolean }[] } | null
+  chat_toolbar?: string[] | null
+  upload_accept?: string | null
   type: 'builtin' | 'custom'
-  business_pages?: BusinessPage[]
+  business_pages?: BusinessPage[] | null
 }
 
 // ============== API 方法 ==============

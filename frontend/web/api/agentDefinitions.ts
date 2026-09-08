@@ -117,7 +117,9 @@ export async function createDefinition(data: {
   reply_style?: string
   chat_toolbar?: string[]
   upload_accept?: string
-}): Promise<{ success: boolean; data: any }> {
+  business_pages?: any[] | null
+  recap?: { tasks: { name: string; when: string; enabled: boolean }[] } | null
+}): Promise<{ success: boolean; data: any; error?: string }> {
   const response = await fetch(`${API_BASE}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
