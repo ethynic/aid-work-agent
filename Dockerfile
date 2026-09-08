@@ -12,11 +12,16 @@ FROM python:3.11-slim AS builder
 # 设置工作目录
 WORKDIR /app
 
+# apt 源镜像，可按构建环境覆盖：默认腾讯云（服务器在腾讯云内网，TTFB < 50ms）。
+# 本地/非腾讯云环境构建时，腾讯云源的 Debian 元数据可能同步滞后，
+# apt 报 "Release file ... is expired"；此时通过 build arg 换源（如阿里云）即可，
+# 服务器构建不传 arg、行为不变。注意：ARG 是 stage 级作用域，两个阶段需各自声明。
+ARG APT_MIRROR=https://mirrors.cloud.tencent.com
+
 # 安装构建依赖
-# 使用腾讯云镜像加速 Debian 包下载（服务器在腾讯云内网，TTFB < 50ms）
-RUN echo 'deb https://mirrors.cloud.tencent.com/debian/ trixie main non-free-firmware' > /etc/apt/sources.list && \
-    echo 'deb https://mirrors.cloud.tencent.com/debian/ trixie-updates main non-free-firmware' >> /etc/apt/sources.list && \
-    echo 'deb https://mirrors.cloud.tencent.com/debian-security/ trixie-security main non-free-firmware' >> /etc/apt/sources.list && \
+RUN echo "deb ${APT_MIRROR}/debian/ trixie main non-free-firmware" > /etc/apt/sources.list && \
+    echo "deb ${APT_MIRROR}/debian/ trixie-updates main non-free-firmware" >> /etc/apt/sources.list && \
+    echo "deb ${APT_MIRROR}/debian-security/ trixie-security main non-free-firmware" >> /etc/apt/sources.list && \
     apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     curl \
@@ -83,14 +88,16 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     # Playwright 浏览器安装路径（与 Dockerfile 中 PLAYWRIGHT_BROWSERS_PATH 一致）
     PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
 
+# 与阶段1相同的 apt 源参数（ARG 是 stage 级作用域，在此阶段重新声明）
+ARG APT_MIRROR=https://mirrors.cloud.tencent.com
+
 # 安装运行时依赖（字体、浏览器等）
-# 使用腾讯云镜像加速 Debian 包下载（服务器在腾讯云内网，TTFB < 50ms）
 # 注意：apt-get install 阶段只跑一次，构建缓存依赖 BuildKit 层缓存
 # （Docker 镜像层复用），不依赖 --mount=type=cache（在你的 BuildKit 版本下
 # 会有 /var/lib/apt/lists 锁冲突问题）
-RUN echo 'deb https://mirrors.cloud.tencent.com/debian/ trixie main non-free-firmware' > /etc/apt/sources.list && \
-    echo 'deb https://mirrors.cloud.tencent.com/debian/ trixie-updates main non-free-firmware' >> /etc/apt/sources.list && \
-    echo 'deb https://mirrors.cloud.tencent.com/debian-security/ trixie-security main non-free-firmware' >> /etc/apt/sources.list && \
+RUN echo "deb ${APT_MIRROR}/debian/ trixie main non-free-firmware" > /etc/apt/sources.list && \
+    echo "deb ${APT_MIRROR}/debian/ trixie-updates main non-free-firmware" >> /etc/apt/sources.list && \
+    echo "deb ${APT_MIRROR}/debian-security/ trixie-security main non-free-firmware" >> /etc/apt/sources.list && \
     apt-get update && apt-get install -y --no-install-recommends \
     # 常用工具
     curl \

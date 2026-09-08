@@ -1,0 +1,18 @@
+# 本地开发 host 网络模式覆盖文件
+# 与 docker-compose.local.yml 叠加使用，让容器直接使用宿主机网络栈（不走 Docker bridge/NAT、无端口映射）：
+#   docker compose -f docker-compose.local.yml -f docker-compose.local.hostnet.yml up -d --build
+#
+# 适用环境：
+#   - WSL2（docker-ce inside WSL，配合 .wslconfig networkingMode=mirrored）——见 docs/infrastructure/local-dev-environments.md 方式二
+#   - macOS Docker Desktop 4.34+（Settings -> Resources -> Network -> Enable host networking）——方式三可选
+#
+# host 网络模式的效果：容器内 localhost 即宿主机 loopback，
+# .env 配置（数据库统一连 DATABASE_URL 指向的线上测试库）与 venv 方式完全同语义，无需按环境改动。
+# 注意：host 模式下 compose 的 ports 端口映射会被忽略（启动时的 warning 属预期），服务固定监听宿主 8000 端口。
+
+services:
+  aid-agent-api:
+    network_mode: host
+    # 清空基础文件继承的端口映射与 bridge 网络，否则与 network_mode: host 互斥报错
+    ports: !reset []
+    networks: !reset []

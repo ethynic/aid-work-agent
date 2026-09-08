@@ -7,6 +7,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      # 本地构建 apt 换阿里云源：腾讯云 Debian 源公网侧可能元数据同步滞后
+      # （apt 报 Release file expired，见 Dockerfile APT_MIRROR 注释），服务器构建不传此 arg
+      args:
+        APT_MIRROR: https://mirrors.aliyun.com
     image: aid-agent-api:latest
     container_name: aid-agent-api
     restart: unless-stopped
@@ -35,8 +39,10 @@ services:
     tty: true
     # 清空 Dockerfile 的 ENTRYPOINT，否则 command 不会生效
     # Dockerfile 默认使用 gunicorn，这里改为 uvicorn 用于本地开发
+    # --reload-dir src：热重载只监听 src/，避免轮询扫描整个仓库
+    # （frontend/node_modules 等数万文件在 /mnt/c 跨文件系统下会使变更检测延迟到分钟级）
     entrypoint: []
-    command: uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload --no-access-log
+    command: uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir src --no-access-log
 
 networks:
   aid-network:

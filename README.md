@@ -73,6 +73,8 @@ python -m src.main
 CLI_MODE=true python -m src.main
 ```
 
+> 本地开发调试支持三种方式：①本地 venv；②WSL2 内容器（mirrored/host 网络，不走 NAT）；③macOS Docker Desktop 容器。三种方式后端统一落在 `localhost:8000`，详见 [本地开发调试环境说明](docs/infrastructure/local-dev-environments.md)。
+
 ### 4. 访问API
 
 - 健康检查: `GET /health`
