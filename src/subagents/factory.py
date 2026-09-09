@@ -265,7 +265,7 @@ class AgentFactory:
             from_db=True,
         )
 
-        registry._configs[config.name] = config
+        registry.upsert_db_config(config)
         registry._build_indices()
         logger.info(f"按需从 DB 加载子智能体: {config.name} (agent_id={agent_id})")
         return config

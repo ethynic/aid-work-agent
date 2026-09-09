@@ -53,6 +53,10 @@ class SubagentRegistry:
         # 内置名称集合
         self._builtin_names: Set[str] = set()
 
+        # 被 DB 定义覆盖的文件系统（内置）配置，key 为其在 _configs 中的原键（显示名），
+        # 用于 DB 定义删除后恢复内置版本
+        self._overridden_builtins: Dict[str, SubagentConfig] = {}
+
         if subagents_dir:
             self.load_from_directory(subagents_dir)
 
@@ -127,6 +131,39 @@ class SubagentRegistry:
             for pattern in patterns:
                 self._file_pattern_index[pattern.lower()] = name
     
+    def restore_overridden_builtins(self) -> int:
+        """还原被 DB 定义覆盖的文件系统（内置）配置，保证本轮从文件系统基线出发"""
+        restored = 0
+        for key, cfg in self._overridden_builtins.items():
+            current = self._configs.get(key)
+            if current is None or (
+                getattr(current, "from_db", False) and current.dir_name == cfg.dir_name
+            ):
+                self._configs[key] = cfg
+                restored += 1
+        self._overridden_builtins.clear()
+        return restored
+
+    def upsert_db_config(self, config: SubagentConfig) -> None:
+        """以 DB 定义覆盖同 agent_id 的既有条目（内置或旧 DB 版本）。
+
+        registry._configs 以显示名为键，同 agent_id 的内置版显示名不同，
+        直接按 config.name 插入会并存两条，必须先移除旧条目。
+        """
+        agent_id = config.dir_name or config.name
+        # 仅按 dir_name 匹配（显示名与 dir_name 语义不同，避免误删无关条目）
+        for key in [k for k, c in self._configs.items()
+                    if c.dir_name == agent_id or (not c.dir_name and k == agent_id)]:
+            existing_cfg = self._configs[key]
+            if not getattr(existing_cfg, "from_db", False):
+                self._overridden_builtins[key] = existing_cfg
+            if key != config.name:
+                del self._configs[key]
+            logger.info(
+                f"DB 定义覆盖既有条目: {key} -> {config.name} (agent_id={agent_id})"
+            )
+        self._configs[config.name] = config
+
     def register(self, config: SubagentConfig) -> bool:
         """
         注册一个Subagent配置
@@ -368,6 +405,7 @@ class SubagentRegistry:
         if self._loader:
             self._loader.reload()
             self._configs = self._loader.configs
+            self._overridden_builtins.clear()
             self._build_indices()
             logger.info(f"SubagentRegistry reloaded {len(self._configs)} subagents")
         return len(self._configs)
@@ -388,6 +426,11 @@ class SubagentRegistry:
 
         definitions = SubagentDefinitionDB.list_active()
         loaded = 0
+
+        # 先还原上一轮被覆盖的内置配置（DB 定义被删除后内置版本可恢复）
+        restored = self.restore_overridden_builtins()
+
+        effective_agent_ids = set()
         for row in definitions:
             agent_id = row["agent_id"]
 
@@ -427,15 +470,21 @@ class SubagentRegistry:
                 from_db=True,
             )
 
-            existing = self.get(agent_id)
-            if existing:
-                logger.info(f"DB 定义覆盖文件系统版本: {config.name} (agent_id={agent_id})")
-
-            self._configs[config.name] = config
+            self.upsert_db_config(config)
+            effective_agent_ids.add(agent_id)
             loaded += 1
             logger.info(f"从 DB 加载子智能体: {config.name} (agent_id={agent_id})")
 
-        if loaded > 0:
+        removed = 0
+        # 对账：移除本轮未生效的自定义定义（DB 中已删除、改名或缺失 system_prompt 的旧条目）
+        for key in list(self._configs.keys()):
+            cfg = self._configs[key]
+            if getattr(cfg, "from_db", False) and cfg.dir_name not in effective_agent_ids:
+                logger.info(f"移除未生效的自定义子智能体: {key} (agent_id={cfg.dir_name})")
+                del self._configs[key]
+                removed += 1
+
+        if loaded > 0 or removed > 0 or restored > 0:
             self._build_indices()
 
         logger.info(f"SubagentRegistry.load_from_db() 加载了 {loaded} 个子智能体")
