@@ -294,7 +294,7 @@ INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m
 VALUES ('qwen-plus', 0.8, 2.0, 0.16)
 ON CONFLICT (model_name) DO NOTHING;
 INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m)
-VALUES ('deepseek-v4-flash', 3.0, 9.0, 0.1)
+VALUES ('deepseek-v4-flash', 2.0, 8.0, 0.04)
 ON CONFLICT (model_name) DO NOTHING;
 INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m)
 VALUES ('deepseek-v4-pro', 9.0, 27.0, 0.3)
