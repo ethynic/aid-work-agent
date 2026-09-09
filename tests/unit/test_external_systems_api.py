@@ -156,7 +156,8 @@ class TestGetSsoUrl:
         monkeypatch.setattr("src.services.recap.tasks.external_push._post_json", _grant)
         result = await external_systems.get_sso_url("pre_sales", _request(TENANT))
         assert result["success"] is True
-        assert result["data"]["url"] == "https://erp.example.com/?client_token=ticket"
+        # 第三方返回的 url 优先透传，票据参数名为 sso_ticket（区别于委托登录的 client_token）
+        assert result["data"]["url"] == "https://erp.example.com/?sso_ticket=ticket"
 
     async def test_success_url_constructed_from_ticket(self, authed, monkeypatch):
         monkeypatch.setattr("src.services.tenant_api_doc.load_tenant_doc", lambda tid: SSO_META_DOC)
@@ -338,6 +339,35 @@ class TestGetSsoUrlTokenParam:
         assert result["data"]["url"] == "https://erp.example.com/?client_token=stok"
         assert calls["url"] == "https://erp.example.com/api/v1/erp.delegate/sso_login"
         assert calls["body"] == {"mobile": "13800000000"}
+
+    async def test_sso_login_fallback_passes_user_name(self, authed, monkeypatch):
+        """sso_login 兜底签发时随请求传用户姓名（自动建号用）；用户无姓名时不传"""
+        doc = self.TOKEN_PARAM_DOC.replace(
+            "sso_fallback_url: https://erp.example.com/login\n",
+            "sso_fallback_url: https://erp.example.com/login\n"
+            "sso_login_url: https://erp.example.com/api/v1/erp.delegate/sso_login\n",
+        )
+        monkeypatch.setattr("src.services.tenant_api_doc.load_tenant_doc", lambda tid: doc)
+        monkeypatch.setattr(
+            "src.services.recap.tasks.external_push._get_agent_token", lambda tid, name: "agt"
+        )
+        monkeypatch.setattr(
+            "src.services.recap.tasks.external_push._delegate_login", lambda *a, **kw: None
+        )
+        monkeypatch.setattr(
+            external_systems, "get_current_user",
+            lambda req: {"user_id": "u1", "phone": "13800000000", "nickname": "王顾问"},
+        )
+        calls = {}
+
+        def _login(url, body, agent_token, extra_headers=None):
+            calls["body"] = body
+            return {"Code": 0, "Response": {"sso_ticket": "stok"}}
+
+        monkeypatch.setattr("src.services.recap.tasks.external_push._post_json", _login)
+        result = await external_systems.get_sso_url("pre_sales", _request(TENANT))
+        assert result["success"] is True
+        assert calls["body"] == {"mobile": "13800000000", "name": "王顾问"}
 
 
 class TestGetSsoUrlGrantRetry:

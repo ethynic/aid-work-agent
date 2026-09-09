@@ -176,7 +176,12 @@ async def get_sso_url(system_id: str, request: Request):
         """委托会话不可用时的兜底签发：sso_login（agent_token + 手机号）直接换票据"""
         if not cfg["login_sso_url"]:
             return None
-        resp = await asyncio.to_thread(_post_json, cfg["login_sso_url"], {"mobile": phone}, agent_token)
+        # name 供手机号不存在时自动建号使用，与委托登录同契约；空值不传
+        user_name = (user or {}).get("nickname") or (user or {}).get("username") or None
+        sso_payload = {"mobile": phone}
+        if user_name:
+            sso_payload["name"] = user_name
+        resp = await asyncio.to_thread(_post_json, cfg["login_sso_url"], sso_payload, agent_token)
         if isinstance(resp, dict) and resp.get("Code") == 0:
             return _resolve_grant_url(cfg, resp)
         return None

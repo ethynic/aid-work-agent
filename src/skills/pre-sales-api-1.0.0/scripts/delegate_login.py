@@ -13,11 +13,12 @@ token 由缓存 TTL 自然过期，无需主动登出。
   {
     "login_url": "https://xxx/api/v1/erp.delegate/login",  # 必填，来自接口文档
     "mobile": "归属员工手机号",                              # 必填，委托人手机号
+    "name": "归属员工姓名",                                  # 可选，手机号不存在触发自动建号时使用
     "force_refresh": false                                   # 可选，Code=-99 时强制重新登录
   }
 输出: stdout JSON
   成功: {"success": true, "client_token": str, "cached": bool, "record_id": int,
-         "display_name": str, "agent_name": str}
+         "display_name": str, "agent_name": str, "created": bool}
   失败: {"success": false, "error": str, "hint": str}
 """
 
@@ -95,7 +96,7 @@ def _write_cache(tenant_id, mobile, token_payload):
               file=sys.stderr)
 
 
-def _call_login_api(login_url, mobile):
+def _call_login_api(login_url, mobile, name=None):
     """调用委托登录接口，返回 (ok, data_or_error)"""
     agent_token = os.environ.get("AGENT_TOKEN", "")
     if not agent_token:
@@ -104,7 +105,11 @@ def _call_login_api(login_url, mobile):
             "hint": "请在租户环境变量中配置 AGENT_TOKEN 后重试",
         }
 
-    payload = json.dumps({"mobile": mobile}).encode("utf-8")
+    login_payload = {"mobile": mobile}
+    # name 仅在手机号不存在触发自动建号时被外部系统使用，空值不传以免覆盖兜底命名
+    if name:
+        login_payload["name"] = name
+    payload = json.dumps(login_payload).encode("utf-8")
     req = urllib.request.Request(
         login_url,
         data=payload,
@@ -140,6 +145,7 @@ def delegate_login():
     data = _read_input()
     login_url = (data.get("login_url") or "").strip()
     mobile = (data.get("mobile") or "").strip()
+    name = (data.get("name") or "").strip()
     force_refresh = bool(data.get("force_refresh"))
 
     if not login_url:
@@ -170,7 +176,7 @@ def delegate_login():
             return
 
     # 2. 调登录接口
-    ok, result = _call_login_api(login_url, mobile)
+    ok, result = _call_login_api(login_url, mobile, name)
     if not ok:
         _emit({"success": False, **result})
         return
@@ -181,6 +187,7 @@ def delegate_login():
         "record_id": result.get("record_id"),
         "display_name": result.get("display_name", ""),
         "agent_name": result.get("agent_name", ""),
+        "created": bool(result.get("created")),
     }
     if token_payload["client_token"]:
         _write_cache(tenant_id, mobile, token_payload)

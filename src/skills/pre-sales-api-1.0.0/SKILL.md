@@ -40,9 +40,10 @@ python scripts/load_api_config.py
 python scripts/delegate_login.py
 ```
 
-stdin 入参（JSON）：`{"login_url": "登录接口地址（以文档为准）", "mobile": "归属员工手机号", "force_refresh": false}`
+stdin 入参（JSON）：`{"login_url": "登录接口地址（以文档为准）", "mobile": "归属员工手机号", "name": "归属员工姓名", "force_refresh": false}`
 
 - **mobile 必须取归属员工手机号**（`record_lead_capture` 成功结果中的 `assignee_phone`，或 `get_channel_user_info` 返回的 `assignee_phone`），切勿使用客户手机号或留空
+- **name 为归属员工姓名**（取同源的 `assignee_name`），可选；仅当手机号在外部系统中不存在触发自动建号时使用，缺失时外部系统按"用户+手机号后4位"兜底命名
 - 脚本返回 `cached=true` 表示命中缓存；业务接口返回 `Code=-99`（鉴权失效）时，带 `"force_refresh": true` 重新执行脚本
 - 登录成功后无需调用登出接口，token 由缓存过期自然失效
 

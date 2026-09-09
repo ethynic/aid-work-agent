@@ -333,11 +333,12 @@ def _get_agent_token(tenant_id: str, subagent_name: Optional[str]) -> Optional[s
     return None
 
 
-def _resolve_assignee_phone(tenant_id: str, open_kfid: str) -> Optional[str]:
-    """归属员工手机号：open_kfid -> kf_account.tenant_user_id -> users.phone
+def _resolve_assignee(tenant_id: str, open_kfid: str) -> tuple:
+    """归属员工 (手机号, 姓名)：open_kfid -> kf_account.tenant_user_id -> users 表
 
-    与 record_lead_capture._resolve_employee_phone 同款查询，但 kf_config 不经
-    ContextVar（后台任务无上下文），改为从租户渠道配置反查。
+    与 record_lead_capture._resolve_employee_phone/_resolve_employee_name 同款查询
+    （姓名取 users.nickname or username），但 kf_config 不经 ContextVar（后台任务
+    无上下文），改为从租户渠道配置反查。姓名用于委托登录自动建号。
     """
     try:
         from src.saas.db.channel_config_db import ChannelConfigDB
@@ -347,14 +348,17 @@ def _resolve_assignee_phone(tenant_id: str, open_kfid: str) -> Optional[str]:
                 if kf.get("open_kfid") == open_kfid:
                     tenant_user_id = kf.get("tenant_user_id")
                     if not tenant_user_id:
-                        return None
+                        return None, None
                     from src.db.models import UserDB
 
-                    user = UserDB.get_by_id(tenant_user_id)
-                    return (user or {}).get("phone") or None
+                    user = UserDB.get_by_id(tenant_user_id) or {}
+                    return (
+                        (user or {}).get("phone") or None,
+                        (user or {}).get("nickname") or (user or {}).get("username") or None,
+                    )
     except Exception as e:
-        logger.warning(f"[external_push] 解析归属员工手机号失败 tenant={tenant_id}, open_kfid={open_kfid}: {e}")
-    return None
+        logger.warning(f"[external_push] 解析归属员工信息失败 tenant={tenant_id}, open_kfid={open_kfid}: {e}")
+    return None, None
 
 
 def _collect_context(payload: RecapPayload) -> Optional[Dict[str, Any]]:
@@ -401,7 +405,7 @@ def _collect_context(payload: RecapPayload) -> Optional[Dict[str, Any]]:
         except Exception as e:
             logger.warning(f"[external_push] 读取留资手机号失败 lead_id={lead_id}: {e}")
 
-    assignee_phone = _resolve_assignee_phone(payload.tenant_id, open_kfid)
+    assignee_phone, assignee_name = _resolve_assignee(payload.tenant_id, open_kfid)
 
     return {
         "open_kfid": open_kfid,
@@ -412,6 +416,7 @@ def _collect_context(payload: RecapPayload) -> Optional[Dict[str, Any]]:
         "gender": gender,
         "lead_phone": lead_phone,
         "assignee_phone": assignee_phone,
+        "assignee_name": assignee_name,
     }
 
 
@@ -554,12 +559,14 @@ def _delegate_login(
     agent_token: str,
     login_url: str,
     force_refresh: bool = False,
+    name: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """委托登录获取用户身份 token（默认变量名 client_token，可由文档声明）
 
     缓存与对话内技能脚本 delegate_login.py 共享同一 Redis 键
     （CacheKeys.PRE_SALES_CLIENT_TOKEN:{tenant_id}:{mobile}，TTL 23h），
     命中 0 次 HTTP；Code=-99 场景由调用方带 force_refresh=True 强刷。
+    name 为归属员工姓名，仅手机号不存在触发自动建号时使用，空值不传。
     """
     from src.core.cache_utils import CacheKeys, get_cached, set_cached
 
@@ -567,8 +574,11 @@ def _delegate_login(
         cached = get_cached(CacheKeys.PRE_SALES_CLIENT_TOKEN, tenant_id, mobile)
         if isinstance(cached, dict) and cached.get("client_token"):
             return {**cached, "cached": True}
+    login_payload = {"mobile": mobile}
+    if name:
+        login_payload["name"] = name
     try:
-        body = _post_json(login_url, {"mobile": mobile}, agent_token)
+        body = _post_json(login_url, login_payload, agent_token)
     except Exception as e:
         logger.warning(f"[external_push] 委托登录请求异常 tenant={tenant_id}: {e}")
         return None
@@ -582,6 +592,7 @@ def _delegate_login(
         "record_id": result.get("record_id"),
         "display_name": result.get("display_name", ""),
         "agent_name": result.get("agent_name", ""),
+        "created": bool(result.get("created")),
     }
     if token_payload["client_token"]:
         try:
@@ -927,6 +938,7 @@ async def _run_push_loop(
                         agent_token,
                         meta["login_url"],
                         True,
+                        ctx.get("assignee_name"),
                     )
                     if refreshed and refreshed.get("client_token"):
                         messages.append({
@@ -1008,7 +1020,8 @@ class ExternalPushAdapter:
             summary = await _summarize(payload, ctx)
 
             login = await asyncio.to_thread(
-                _delegate_login, payload.tenant_id, ctx["assignee_phone"], agent_token, meta["login_url"]
+                _delegate_login, payload.tenant_id, ctx["assignee_phone"], agent_token, meta["login_url"],
+                False, ctx.get("assignee_name"),
             )
             if not login or not login.get("client_token"):
                 raise RuntimeError("委托登录失败（无 client_token）")

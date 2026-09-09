@@ -25,7 +25,7 @@ from src.services.recap.tasks.external_push import (
     _extract_json_object,
     _get_agent_token,
     _load_tenant_doc,
-    _resolve_assignee_phone,
+    _resolve_assignee,
     _run_push_loop,
     _strip_excluded_sections,
     _summarize,
@@ -56,6 +56,7 @@ def _ctx():
         "gender": 0,
         "lead_phone": "13916323347",
         "assignee_phone": "13701602974",
+        "assignee_name": "王顾问",
     }
 
 
@@ -289,6 +290,32 @@ class TestDelegateLogin:
         assert mock_post.call_args.args[1] == {"mobile": "13701602974"}
         mock_set.assert_called_once()
 
+    def test_name_passed_when_provided(self):
+        """name 非空时随 mobile 一起传给登录接口（自动建号用）"""
+        with patch("src.core.cache_utils.get_cached", return_value=None), \
+             patch("src.core.cache_utils.set_cached"), \
+             patch("src.services.recap.tasks.external_push._post_json",
+                   return_value={"Code": 0, "Response": {"client_token": "tok_new", "created": True}}) as mock_post:
+            login = _delegate_login(
+                "tenant_x", "13701602974", "agent_tok", "https://erp.example.com/login",
+                name="王顾问",
+            )
+        assert mock_post.call_args.args[1] == {"mobile": "13701602974", "name": "王顾问"}
+        assert login["created"] is True
+
+    def test_name_omitted_when_empty(self):
+        """name 为空时不传，避免覆盖外部系统兜底命名"""
+        with patch("src.core.cache_utils.get_cached", return_value=None), \
+             patch("src.core.cache_utils.set_cached"), \
+             patch("src.services.recap.tasks.external_push._post_json",
+                   return_value={"Code": 0, "Response": {"client_token": "tok_new"}}) as mock_post:
+            login = _delegate_login(
+                "tenant_x", "13701602974", "agent_tok", "https://erp.example.com/login",
+                name="",
+            )
+        assert mock_post.call_args.args[1] == {"mobile": "13701602974"}
+        assert login["created"] is False
+
     def test_business_error_returns_none(self):
         with patch("src.core.cache_utils.get_cached", return_value=None), \
              patch("src.services.recap.tasks.external_push._post_json",
@@ -367,8 +394,8 @@ class TestCollectContext:
         }
         with patch("src.channels.session.channel_session_manager") as mock_mgr, \
              patch("src.saas.db.lead_capture_db.LeadCaptureDB.get_by_id", return_value={"phone": "13916323347"}), \
-             patch("src.services.recap.tasks.external_push._resolve_assignee_phone",
-                   return_value="13701602974"):
+             patch("src.services.recap.tasks.external_push._resolve_assignee",
+                   return_value=("13701602974", "王顾问")):
             mock_mgr.get_session_by_id.return_value = session_row
             ctx = _collect_context(payload)
 
@@ -382,8 +409,8 @@ class TestCollectContext:
         }
         with patch("src.channels.session.channel_session_manager") as mock_mgr, \
              patch("src.saas.db.lead_capture_db.LeadCaptureDB.get_by_id", side_effect=RuntimeError("db down")), \
-             patch("src.services.recap.tasks.external_push._resolve_assignee_phone",
-                   return_value="13701602974"):
+             patch("src.services.recap.tasks.external_push._resolve_assignee",
+                   return_value=("13701602974", "王顾问")):
             mock_mgr.get_session_by_id.return_value = session_row
             ctx = _collect_context(payload)
         assert ctx["lead_phone"] is None
@@ -399,8 +426,8 @@ class TestCollectContext:
         with patch("src.channels.session.channel_session_manager") as mock_mgr, \
              patch("src.db.models.UserDB.get_by_id",
                    return_value={"avatar_url": "http://wx.qlogo.cn/mmhead/x.png", "gender": 2}), \
-             patch("src.services.recap.tasks.external_push._resolve_assignee_phone",
-                   return_value="13701602974"):
+             patch("src.services.recap.tasks.external_push._resolve_assignee",
+                   return_value=("13701602974", "王顾问")):
             mock_mgr.get_session_by_id.return_value = session_row
             ctx = _collect_context(payload)
         assert ctx["avatar"] == "http://wx.qlogo.cn/mmhead/x.png"
@@ -411,8 +438,8 @@ class TestCollectContext:
         session_row = {"username": "小团长", "user_id": "user_x", "metadata": {}}
         with patch("src.channels.session.channel_session_manager") as mock_mgr, \
              patch("src.db.models.UserDB.get_by_id", side_effect=RuntimeError("db down")), \
-             patch("src.services.recap.tasks.external_push._resolve_assignee_phone",
-                   return_value="13701602974"):
+             patch("src.services.recap.tasks.external_push._resolve_assignee",
+                   return_value=("13701602974", "王顾问")):
             mock_mgr.get_session_by_id.return_value = session_row
             ctx = _collect_context(payload)
         assert ctx["avatar"] is None
@@ -443,20 +470,21 @@ class TestResolveAssigneePhone:
         cfg = {"config_id": "c1", "config": {"kf_account": [kf]}}
         with patch("src.saas.db.channel_config_db.ChannelConfigDB.list_by_tenant",
                    return_value=[cfg]), \
-             patch("src.db.models.UserDB.get_by_id", return_value={"phone": "13916323347"}):
-            assert _resolve_assignee_phone("t", "wk1") == "13916323347"
+             patch("src.db.models.UserDB.get_by_id",
+                   return_value={"phone": "13916323347", "nickname": "王顾问"}):
+            assert _resolve_assignee("t", "wk1") == ("13916323347", "王顾问")
 
     def test_no_binding_returns_none(self):
         kf = {"open_kfid": "wk1"}  # 未绑定员工
         cfg = {"config_id": "c1", "config": {"kf_account": [kf]}}
         with patch("src.saas.db.channel_config_db.ChannelConfigDB.list_by_tenant",
                    return_value=[cfg]):
-            assert _resolve_assignee_phone("t", "wk1") is None
+            assert _resolve_assignee("t", "wk1") == (None, None)
 
     def test_db_error_returns_none(self):
         with patch("src.saas.db.channel_config_db.ChannelConfigDB.list_by_tenant",
                    side_effect=RuntimeError("db down")):
-            assert _resolve_assignee_phone("t", "wk1") is None
+            assert _resolve_assignee("t", "wk1") == (None, None)
 
 
 # ============== 租户 AGENT_TOKEN 解析 ==============

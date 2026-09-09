@@ -30,6 +30,7 @@ _TOKEN_PAYLOAD = {
     "record_id": 4,
     "display_name": "覃姗测试",
     "agent_name": "客户管理智能体",
+    "created": False,
 }
 
 
@@ -184,6 +185,24 @@ class TestCallLoginApi:
         req = urlopen_mock.call_args.args[0]
         assert req.get_header("Api-authorize-token") == "agt_123"
         assert json.loads(req.data.decode()) == {"mobile": "13800138000"}
+
+    def test_http_call_success_with_name(self, mod):
+        """name 非空时随登录请求传出（自动建号用），空值不传"""
+        resp_body = json.dumps({"Code": 0, "Response": _TOKEN_PAYLOAD}).encode()
+        resp_mock = MagicMock()
+        resp_mock.__enter__ = MagicMock(return_value=resp_mock)
+        resp_mock.__exit__ = MagicMock(return_value=False)
+        resp_mock.read.return_value = resp_body
+        with patch.object(mod.os.environ, "get",
+                          side_effect=lambda k, d=None: "agt_123" if k == "AGENT_TOKEN" else d), \
+             patch.object(mod.urllib.request, "urlopen", return_value=resp_mock) as urlopen_mock:
+            mod._call_login_api(_LOGIN_URL, "13800138000", "王顾问")
+            mod._call_login_api(_LOGIN_URL, "13800138000", "")
+
+        req = urlopen_mock.call_args_list[0].args[0]
+        assert json.loads(req.data.decode()) == {"mobile": "13800138000", "name": "王顾问"}
+        req2 = urlopen_mock.call_args_list[1].args[0]
+        assert json.loads(req2.data.decode()) == {"mobile": "13800138000"}
 
     def test_http_call_business_error(self, mod):
         resp_body = json.dumps({"Code": -1, "Error": "委托登录失败"}).encode()
