@@ -1055,6 +1055,19 @@ def _init_postgresql():
             except Exception as rollback_err:
                 logger.warning(f"Failed to rollback recruiting_notify transaction: {rollback_err}")
 
+        # 桌面 CLI 无人值守自动任务底座表（desktop_automation_* 11 张系统表 +
+        # local_tool_operation_permits + local_tool_invocations v2 扩列，幂等 DDL；
+        # 与 deploy/init-postgres.sql / deploy/db_update.yaml 三处同步）
+        try:
+            from src.desktop_automation.init_tables import init_desktop_automation_tables
+            init_desktop_automation_tables(conn)
+        except Exception as e:
+            logger.warning(f"Failed to initialize desktop_automation tables: {e}")
+            try:
+                conn.rollback()
+            except Exception as rollback_err:
+                logger.warning(f"Failed to rollback desktop_automation transaction: {rollback_err}")
+
         # Skill 表初始化由 SkillLoader._init_skill_tables() 统一处理，
         # 通过 SKILL.md 中的 init_script 字段声明，不再硬编码。
 

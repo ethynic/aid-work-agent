@@ -25,6 +25,14 @@ export class ProviderBusyError extends Error {
   }
 }
 
+/** Provider 未安装/未配置入口（调用方映射 PROVIDER_NOT_AVAILABLE，可重试） */
+export class ProviderNotAvailableError extends Error {
+  constructor(readonly providerKey: string) {
+    super(`Provider ${providerKey} 未配置入口（未安装），无法执行该 invocation`)
+    this.name = 'ProviderNotAvailableError'
+  }
+}
+
 export interface ProviderProgress {
   progress?: number
   total?: number
@@ -203,5 +211,55 @@ export class ProviderManager {
         logError(`Provider 子进程 pid=${pid} SIGKILL 后仍存活（异常，需人工排查）`)
       }
     }
+  }
+}
+
+/**
+ * 多 Provider 聚合：按 key 惰性创建 ProviderManager（未用到的 Provider 不 spawn）。
+ *
+ * - 未配置入口的 key 调 get() 抛 ProviderNotAvailableError（清晰失败，不静默降级）
+ * - shutdownAll() 回收全部已创建的 Provider 子进程
+ */
+export class ProviderSet {
+  private readonly entries: Record<string, string>
+  private readonly managerOpts: { shutdownTimeoutMs?: number }
+  private readonly managers = new Map<string, ProviderManager>()
+
+  constructor(entries: Record<string, string>, opts: { shutdownTimeoutMs?: number } = {}) {
+    this.entries = { ...entries }
+    this.managerOpts = opts
+  }
+
+  /** 是否已配置入口（capabilities 上报与 claim 路由前置判断） */
+  has(key: string): boolean {
+    return Boolean(this.entries[key])
+  }
+
+  /** 已配置入口的全部 provider key */
+  keys(): string[] {
+    return Object.keys(this.entries)
+  }
+
+  /** 取（必要时创建）指定 Provider 的 Manager；未配置入口抛 ProviderNotAvailableError */
+  get(key: string): ProviderManager {
+    const existing = this.managers.get(key)
+    if (existing) return existing
+    const entry = this.entries[key]
+    if (!entry) throw new ProviderNotAvailableError(key)
+    const manager = new ProviderManager(entry, this.managerOpts)
+    this.managers.set(key, manager)
+    return manager
+  }
+
+  async shutdownAll(): Promise<void> {
+    const managers = [...this.managers.values()]
+    this.managers.clear()
+    await Promise.all(managers.map(async (m) => {
+      try {
+        await m.shutdown()
+      } catch (err) {
+        logError(`Provider 回收失败: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }))
   }
 }

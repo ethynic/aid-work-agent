@@ -59,6 +59,35 @@ class ResultRequest(BaseModel):
     retryable: Optional[bool] = None
 
 
+class WriteAuthorizeRequest(BaseModel):
+    """v2 写动作许可申请（Runtime 内部 API，不暴露给 LLM）。
+
+    claim 身份、request_id、target_version、payload_hash——许可绑定
+    invocation/device/claim/request_id/target_version/payload_hash/epoch/resource，任一变化拒绝。
+    """
+
+    claim_token: str
+    request_id: str
+    target_version: Optional[str] = Field(None, description="本次解析的目标版本（须与 invocation 一致）")
+    payload_hash: Optional[str] = Field(None, description="本次载荷哈希（须与 invocation 一致）")
+
+
+class OperationResultRequest(BaseModel):
+    """v2 操作结果回传（持久 ACK；迟到只对账）。effect ∈ none/applied/unknown，
+    phase ∈ prepared/may_have_started/verified/unknown（R10）。"""
+
+    claim_token: str
+    request_id: str
+    effect: str
+    phase: Optional[str] = None
+    evidence_ref: Optional[str] = Field(None, description="验证证据引用（截图/消息 id 等受控引用）")
+    safe_to_retry: Optional[bool] = None
+    permit_id: Optional[str] = None
+    permit_token: Optional[str] = None
+    code: Optional[str] = None
+    message: Optional[str] = None
+
+
 class InvocationView(BaseModel):
     invocation_id: str
     tool_name: str

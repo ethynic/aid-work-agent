@@ -554,11 +554,54 @@ prompt_drafts（草稿，每 Prompt 最多一条，未发布的修改）
 巡检商机模块（社媒营销智能体 §7）使用以下租户业务表，遵循 database_dev.md bs_ 规范。
 **原文 PII 加密存储**（`encryption_manager`）、**同 tenant 去重指纹 UNIQUE**、**状态机**（new → contacted → qualified|invalid → converted）由应用层 `src/social_media/outbound/` 强制。
 
+> `bs_outbound_account_sessions`（托管登录态加密存储）由登录态子系统负责，本段不覆盖。
+
+### 11.7 桌面 CLI 无人值守自动任务底座（desktop_automation_*，P1-A 2026-09-08；P1 复审 2026-09-09 增补）
+
+桌面 CLI 自动任务底座（docs/design/desktop-automation/desktop-cli-automation-design.md）使用的
+12 张系统表 + 1 张本地通道许可表，统一规范：TIMESTAMPTZ / UUID 主键 / 无外键无触发器
+（引用完整性在 Python 校验）/ `tenant_id` 一律 NOT NULL；任务族表 `user_id` NOT NULL，
+events/outbox/audit/quota 等系统生成行 `user_id` 可 NULL。DDL 三处同步：
+`deploy/init-postgres.sql`、`deploy/db_update.yaml`、`src/desktop_automation/init_tables.py`。
+
+- `desktop_automation_subjects`：中立 subject registry（task/revision 复合引用；
+  task 行持 `active_revision_ref` 与 `authorization_epoch` 授权快照，UNIQUE(tenant_id, scenario_key, kind, ref)）。
+- `desktop_automation_schedules`：时间/事件订阅（interval 锚点、cron(mon..sun)、迟到宽限、
+  一次性 `consumed` 留行对账；UNIQUE(tenant_id, scenario_key, revision_ref, trigger_key)）。
+- `desktop_automation_event_sources` / `desktop_automation_events`：事件源 schema 与事件接纳
+  （payload 只存 ref/hash；UNIQUE(tenant_id, source_id, external_event_id) 去重；
+  eligible_revision_refs 快照固化匹配集合）。
+- `desktop_automation_occurrences`：触发接纳账本（R11 规范触发键
+  time/event/manual，外部 ID 先哈希；UNIQUE(tenant_id, scenario_key, task_ref, trigger_key)，
+  INSERT ON CONFLICT DO NOTHING 幂等）。
+- `desktop_automation_runs`：执行账本（短事务 lease/fence；§5.4 聚合终态
+  succeeded/failed/cancelled/partial/unknown/expired；UNIQUE(tenant_id, occurrence_id)）。
+- `desktop_automation_deliveries`：本轮第几条内容（effect=none/applied/unknown +
+  phase=prepared/may_have_started/verified/unknown；UNIQUE(tenant_id, run_id, position)；
+  不存场景正文/群名，只有 payload_ref/hash）。
+- `desktop_automation_attempts`：一次操作尝试（invocation 唯一绑定、request_id 防重、
+  predecessor_attempt_id 人工重试链；UNIQUE(invocation_id)）。
+- `desktop_automation_evidence`：写后验证证据登记（P1 复审 R27/R28，2026-09-09）——
+  applied+verified 落账前经适配器 `validate_evidence`（存在性与归属）+ 绑定交叉核对
+  （invocation.device_id/attempt.request_id/delivery.target_ref/delivery.payload_hash）+
+  `INSERT ... ON CONFLICT` 仲裁登记；UNIQUE(tenant_id, evidence_ref) 事务级防复用，
+  冲突败者比对绑定（同操作幂等放行/他操作拒绝收敛 unknown）；迟到回执（R28）携带
+  applied/verified 证据同样持久追加（原始判定不变）。
+- `desktop_automation_audit_events`：底座审计（发布/暂停/许可/效果/接纳；只存受控引用/摘要）。
+- `desktop_automation_outbox`：可靠投递（确定性 dedupe_key；UNIQUE(tenant_id, kind, dedupe_key)）。
+- `desktop_automation_quota_buckets`：额度（scope_type tenant/task/target/account/resource
+  固定顺序逐层 FOR UPDATE + 条件 UPDATE 预留；bucket_start 窗口对齐）。
+- `local_tool_operation_permits`：写动作短期一次性许可（绑定 invocation/device/claim/
+  request_id/target_version/payload_hash/epoch/resource；token 只存 hash；
+  quota_reservation 持 R9 预留凭据）。
+- `local_tool_invocations` v2 扩列：`provider_key`（NULL=旧聊天链路任何设备可领；非 NULL
+  需设备能力含该 provider）、`business_kind`（'desktop_automation'）、`business_ref`、
+  `dedupe_key`（部分唯一索引 (tenant_id, business_kind, dedupe_key) 幂等）、`deadline_at`
+  TIMESTAMPTZ、`authorization_epoch`、`write_phase`（许可发放后置 may_have_started）。
+
 - `bs_outbound_leads`：商机主表。来源平台/类型、外部内容 ID/URL、原文加密（`raw_text_encrypted`）、意向分、状态、分配销售、去重指纹（同 tenant 部分唯一索引）、接触要点、风险标记。
 - `bs_outbound_lead_interactions`：商机互动/跟进记录。互动类型（note/call/email/dm/comment/visit/wechat/other）、内容、跟进人 `actor_user_id`。
 - `bs_outbound_outreach_actions`：我方接触动作审计。动作类型（comment/dm/post）、渠道、内容快照、执行状态（默认 `draft`，需人审后推进）、审核人。
-
-> `bs_outbound_account_sessions`（托管登录态加密存储）由登录态子系统负责，本段不覆盖。
 
 ---
 

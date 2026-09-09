@@ -230,23 +230,79 @@ def create_invocation(
     tool_name: str,
     arguments: Dict[str, Any],
     session_id: Optional[str] = None,
+    *,
+    provider_key: Optional[str] = None,
+    business_kind: Optional[str] = None,
+    business_ref: Optional[Dict[str, Any]] = None,
+    dedupe_key: Optional[str] = None,
+    deadline_at: Optional[datetime] = None,
+    authorization_epoch: Optional[int] = None,
 ) -> str:
-    """创建 invocation（state=queued），返回 id。M0.5 路由层使用
+    """创建 invocation（state=queued），返回 id。
 
-    session_id：触发调用的会话（proxy 透传 _trusted 身份同源的 _session_id），
-    write_result 计费时写入 client_usage_logs.session_id，让 boss_tool 台账行可归属到
-    会话/用户（P2 客户端计费统一接入，设计 §4.2）；无会话来源（联调/API 直建）为 NULL。
+    - 聊天链路（proxy_tool）：session_id 计费台账归属（P2 客户端计费统一接入，设计 §4.2）；
+      无会话来源（联调/API 直建）为 NULL。
+    - v2 场景链路（desktop_automation）：business_kind/business_ref/dedupe_key/deadline_at/
+      authorization_epoch/provider_key 扩展列；UNIQUE(tenant_id,business_kind,dedupe_key)
+      幂等——同键冲突返回已有 invocation id（不产生新行）。
     """
     with get_db_connection() as conn:
         cursor = conn.cursor()
+        if business_kind is not None and dedupe_key is not None:
+            cursor.execute(
+                """
+                INSERT INTO local_tool_invocations
+                    (tenant_id, user_id, device_id, tool_name, arguments_json, session_id,
+                     provider_key, business_kind, business_ref, dedupe_key, deadline_at,
+                     authorization_epoch)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (tenant_id, business_kind, dedupe_key)
+                    WHERE business_kind IS NOT NULL AND dedupe_key IS NOT NULL
+                    DO NOTHING
+                RETURNING id
+                """,
+                (
+                    tenant_id, user_id, device_id, tool_name, Json(arguments), session_id,
+                    provider_key, business_kind, Json(business_ref) if business_ref else None,
+                    dedupe_key, deadline_at, authorization_epoch,
+                ),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                # ON CONFLICT DO NOTHING 在冲突事务提交后才返回无行，同键行此处必可见
+                cursor.execute(
+                    """
+                    SELECT id FROM local_tool_invocations
+                    WHERE tenant_id = %s AND business_kind = %s AND dedupe_key = %s
+                    """,
+                    (tenant_id, business_kind, dedupe_key),
+                )
+                existing = cursor.fetchone()
+                conn.commit()
+                if existing is None:
+                    raise RuntimeError(
+                        f"dedupe invocation 冲突但同键行不可见 tenant={tenant_id} "
+                        f"business_kind={business_kind} dedupe_key={dedupe_key}"
+                    )
+                return str(existing["id"])
+            conn.commit()
+            return str(row["id"])
+
         cursor.execute(
             """
             INSERT INTO local_tool_invocations
-                (tenant_id, user_id, device_id, tool_name, arguments_json, session_id)
-            VALUES (%s, %s, %s, %s, %s, %s)
+                (tenant_id, user_id, device_id, tool_name, arguments_json, session_id,
+                 provider_key, business_kind, business_ref, dedupe_key, deadline_at,
+                 authorization_epoch)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
-            (tenant_id, user_id, device_id, tool_name, Json(arguments), session_id),
+            (
+                tenant_id, user_id, device_id, tool_name, Json(arguments), session_id,
+                provider_key, business_kind,
+                Json(business_ref) if business_ref else None,
+                dedupe_key, deadline_at, authorization_epoch,
+            ),
         )
         invocation_id = str(cursor.fetchone()["id"])
         conn.commit()
@@ -269,14 +325,16 @@ def set_invocation_credit_cost(invocation_id: str, credit_cost: float) -> None:
 
 
 def get_invocation(invocation_id: str, tenant_id: str) -> Optional[Dict[str, Any]]:
-    """按 id+tenant 查询 invocation。M0.5 proxy 轮询终态使用"""
+    """按 id+tenant 查询 invocation（含 v2 扩展列）。M0.5 proxy 轮询终态 / v2 链路使用"""
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
             """
             SELECT id, tenant_id, user_id, device_id, tool_name, arguments_json,
                    state, effect, result_json, error_code, error_message, credit_cost,
-                   created_at, claimed_at, started_at, finished_at
+                   created_at, claimed_at, started_at, finished_at,
+                   provider_key, business_kind, business_ref, dedupe_key, deadline_at,
+                   authorization_epoch, write_phase
             FROM local_tool_invocations
             WHERE id = %s AND tenant_id = %s
             """,
@@ -327,20 +385,39 @@ def claim_next(
     tenant_id: str,
     claim_token_hash: str,
     lease_seconds: int,
+    provider_keys: Optional[List[str]] = None,
 ) -> Optional[Dict[str, Any]]:
-    """领取下一条 queued invocation（事务 + FOR UPDATE SKIP LOCKED 防重复领取）"""
+    """领取下一条 queued invocation（事务 + FOR UPDATE SKIP LOCKED 防重复领取）。
+
+    provider 过滤（总工程师契约补充）：行 provider_key 为 NULL → 任何设备可领（旧行为，
+    旧数据兼容）；非 NULL → 仅设备 capabilities 含该 provider 的设备可领（provider_keys
+    传入设备能力集合，None 表示不过滤——直连 repository 的测试/内部调用）。
+    """
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute(
-            """
-            SELECT id FROM local_tool_invocations
-            WHERE state = 'queued' AND device_id = %s AND tenant_id = %s
-            ORDER BY created_at
-            LIMIT 1
-            FOR UPDATE SKIP LOCKED
-            """,
-            (device_id, tenant_id),
-        )
+        if provider_keys is None:
+            cursor.execute(
+                """
+                SELECT id FROM local_tool_invocations
+                WHERE state = 'queued' AND device_id = %s AND tenant_id = %s
+                ORDER BY created_at
+                LIMIT 1
+                FOR UPDATE SKIP LOCKED
+                """,
+                (device_id, tenant_id),
+            )
+        else:
+            cursor.execute(
+                """
+                SELECT id FROM local_tool_invocations
+                WHERE state = 'queued' AND device_id = %s AND tenant_id = %s
+                  AND (provider_key IS NULL OR provider_key = ANY(%s))
+                ORDER BY created_at
+                LIMIT 1
+                FOR UPDATE SKIP LOCKED
+                """,
+                (device_id, tenant_id, list(provider_keys)),
+            )
         row = cursor.fetchone()
         if not row:
             conn.commit()
@@ -354,7 +431,8 @@ def claim_next(
                 claimed_at = NOW()
             WHERE id = %s
             RETURNING id, tenant_id, user_id, device_id, tool_name, arguments_json,
-                      state, lease_expires_at, claimed_at, created_at
+                      state, lease_expires_at, claimed_at, created_at, provider_key,
+                      business_kind, business_ref, deadline_at, authorization_epoch
             """,
             (claim_token_hash, lease_seconds, row["id"]),
         )

@@ -21,15 +21,17 @@ import {
   loadConfig,
   machineFingerprint,
   PLATFORM,
-  resolveBossCliEntry,
+  resolveProviderEntries,
   RUNTIME_VERSION,
   runtimeHomeDir,
   saveConfig,
 } from './config.js'
 import { clearCredentials, hasDeviceToken, loadDeviceToken, saveDeviceToken } from './credentials.js'
 import { checkDesktopInteractive } from './desktopCheck.js'
+import { deriveResourceKey } from './desktopLock.js'
 import { PollLoop } from './pollLoop.js'
-import { ProviderManager } from './providerManager.js'
+import { ProviderSet } from './providerManager.js'
+import { ResultOutbox, resultOutboxDir } from './resultOutbox.js'
 import { manifestDigest } from './manifestVerifier.js'
 import { dpapiProtect, dpapiUnprotect } from './dpapi.js'
 import { rmSync } from 'node:fs'
@@ -46,6 +48,8 @@ const USAGE = `agent-tool-runtime — 本地工具 Runtime（云端 invocation �
 全局说明：
   配置目录 %APPDATA%/aidwork-tool-runtime/（可用 AIDWORK_RUNTIME_HOME 覆盖）
   config.json 不含 token；日志绝不输出 token/配对码明文
+  多 Provider：config.json providers.<key>.entry 配置各 Provider 入口（boss 可用 bossCliEntry 简写），
+  未配置 entry 的 Provider 视为未安装（不上报能力、不领取其 invocation）
 `
 
 interface ParsedArgs {
@@ -131,19 +135,32 @@ async function cmdStart(args: ParsedArgs): Promise<number> {
     return 1
   }
 
-  const entry = resolveBossCliEntry(config)
-  if (!existsSync(entry)) {
-    console.error(`boss CLI 入口不存在: ${entry}（可在 config.json 配置 bossCliEntry 绝对路径）`)
+  const entries = resolveProviderEntries(config)
+  const missing = Object.entries(entries).filter(([, entry]) => !existsSync(entry))
+  if (missing.length > 0) {
+    for (const [key, entry] of missing) {
+      if (key === 'boss-recruiting') {
+        console.error(`boss CLI 入口不存在: ${entry}（可在 config.json 配置 bossCliEntry 绝对路径）`)
+      } else {
+        console.error(`Provider ${key} 入口不存在: ${entry}（可在 config.json providers.${key}.entry 配置绝对路径）`)
+      }
+    }
     return 1
   }
 
   const api = new ApiClient(server, token)
-  const provider = new ProviderManager(entry)
+  const providers = new ProviderSet(entries)
+  console.log(`[runtime] providers: ${Object.keys(entries).join(', ')}`)
+  // v2 写路径数据目录（journal/ + result-outbox/，跟随 runtime home；启动重投共用同一 outbox 实例）
+  const dataDir = runtimeHomeDir()
   const loop = new PollLoop({
     api,
     runnerDeps: {
-      provider,
+      providers,
       desktopCheck: async () => (await checkDesktopInteractive()).interactive,
+      desktopResourceKey: deriveResourceKey(),
+      runtimeDataDir: dataDir,
+      resultOutbox: new ResultOutbox(resultOutboxDir(dataDir)),
     },
     onEvent: (msg) => console.log(`[runtime] ${msg}`),
   })
@@ -164,7 +181,7 @@ async function cmdStart(args: ParsedArgs): Promise<number> {
   try {
     await loop.run()
   } finally {
-    await provider.shutdown()
+    await providers.shutdownAll()
   }
   console.log('[runtime] 已退出')
   return 0
@@ -182,7 +199,11 @@ async function cmdStatus(): Promise<number> {
   console.log(`  server:    ${config.server}`)
   console.log(`  device_id: ${config.device_id}`)
   console.log(`  name:      ${config.name ?? '-'}`)
-  console.log(`  boss CLI:  ${resolveBossCliEntry(config)}`)
+  const entries = resolveProviderEntries(config)
+  console.log(`  providers: ${Object.keys(entries).join(', ')}`)
+  for (const [key, entry] of Object.entries(entries)) {
+    console.log(`  ${key} 入口: ${entry}${existsSync(entry) ? '' : '（不存在！）'}`)
+  }
   console.log(`凭证文件: ${hasDeviceToken() ? '存在' : '不存在！请重新 pair'}`)
   return 0
 }
@@ -238,22 +259,29 @@ async function cmdDoctor(): Promise<number> {
     }
   }
 
-  // 4. boss CLI 入口
-  const entry = resolveBossCliEntry(config)
-  if (existsSync(entry)) ok(`boss CLI 入口存在: ${entry}`)
-  else fail(`boss CLI 入口不存在: ${entry}（先构建 boss-resume-assistant，或在 config.json 配 bossCliEntry）`)
-
-  // 5. boss doctor 可跑（入口存在才跑）
-  if (existsSync(entry)) {
-    const bossResult = await new Promise<{ code: number | null; tail: string }>((resolve) => {
+  // 4/5. 各 Provider 入口存在性 + 逐 Provider doctor（boss 输出保持原格式）
+  const entries = resolveProviderEntries(config)
+  for (const [key, entry] of Object.entries(entries)) {
+    const isBoss = key === 'boss-recruiting'
+    if (existsSync(entry)) {
+      ok(isBoss ? `boss CLI 入口存在: ${entry}` : `Provider ${key} 入口存在: ${entry}`)
+    } else {
+      fail(isBoss
+        ? `boss CLI 入口不存在: ${entry}（先构建 boss-resume-assistant，或在 config.json 配 bossCliEntry）`
+        : `Provider ${key} 入口不存在: ${entry}（在 config.json providers.${key}.entry 配置绝对路径）`)
+      continue
+    }
+    const result = await new Promise<{ code: number | null; tail: string }>((resolve) => {
       execFile(process.execPath, [entry, 'doctor'], { timeout: 60_000 }, (err, stdout, stderr) => {
         const out = `${stdout}\n${stderr}`.trim()
         const tail = out.split('\n').slice(-3).join(' | ')
         resolve({ code: err ? (typeof err.code === 'number' ? err.code : 1) : 0, tail })
       })
     })
-    if (bossResult.code === 0) ok('boss doctor 通过')
-    else fail(`boss doctor 未通过（exit=${bossResult.code}）: ${bossResult.tail}`)
+    if (result.code === 0) ok(isBoss ? 'boss doctor 通过' : `Provider ${key} doctor 通过`)
+    else fail(isBoss
+      ? `boss doctor 未通过（exit=${result.code}）: ${result.tail}`
+      : `Provider ${key} doctor 未通过（exit=${result.code}）: ${result.tail}`)
   }
 
   // 6. 桌面可交互

@@ -1802,6 +1802,9 @@ app.include_router(recruiting_operator_api.router)
 # 本地工具基础设施 M0.3（见 docs/plans/recruiting/m03-implementation-spec.md）
 from src.local_tools import api as local_tools_api  # noqa: E402
 app.include_router(local_tools_api.router)
+# 桌面 CLI 无人值守自动任务底座 P1-A（desktop_automation deliveries 视图）
+from src.desktop_automation import api as desktop_automation_api  # noqa: E402
+app.include_router(desktop_automation_api.router)
 
 # 外部系统入口（SSO 打开第三方系统，见 docs/system/external-system-entry-design.md）
 from src.api import external_systems  # noqa: E402

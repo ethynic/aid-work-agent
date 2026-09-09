@@ -11,6 +11,7 @@ import { AbortLoopError, ApiError, DeviceRevokedError, NetworkError } from './ap
 import { deviceCapabilities, RUNTIME_VERSION } from './config.js'
 import { runInvocation, type RunnerDeps } from './invocationRunner.js'
 import { manifestDigest } from './manifestVerifier.js'
+import { replayPendingOutbox } from './resultOutbox.js'
 import { logError, logInfo } from './log.js'
 
 export interface PollLoopOptions {
@@ -68,6 +69,23 @@ export class PollLoop {
   }
 
   async run(): Promise<void> {
+    // v2 结果 outbox 启动重投（§5.3/R14：pending 条目用原 claim 身份重投；仅 2xx 持久
+    // ACK 才删除条目，确定性 4xx 标记 gave_up 保留待对账、跳过重投）。有界尝试，仍失败
+    // 的条目保留磁盘，不阻塞主循环启动。
+    const outbox = this.opts.runnerDeps.resultOutbox
+    if (outbox) {
+      try {
+        await replayPendingOutbox(this.opts.api, outbox, {
+          retryBaseMs: this.opts.backoffBaseMs,
+          retryMaxMs: this.opts.backoffMaxMs,
+          maxAttempts: 5,
+          shutdownSignal: this.controller.signal,
+          emit: (msg) => this.emit(msg),
+        })
+      } catch (err) {
+        logError(`result outbox 启动重投异常（不阻塞主循环）: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
     await Promise.all([this.heartbeatLoop(), this.claimLoop()])
   }
 

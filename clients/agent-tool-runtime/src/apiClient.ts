@@ -73,6 +73,44 @@ export interface InvocationResultPayload {
   retryable?: boolean
 }
 
+export interface WriteAuthorizePayload {
+  claim_token: string
+  request_id: string
+  target_version?: string
+  payload_hash?: string
+}
+
+export interface WriteAuthorizeResponse {
+  permit_id: string
+  permit_token: string
+  deadline_at: string
+}
+
+/** v2 operation-result 回传 payload（服务端 effect/phase 优先于 success/code 解释，R10） */
+export interface OperationResultPayload {
+  claim_token: string
+  request_id: string
+  effect: string
+  phase?: string
+  safe_to_retry?: boolean
+  evidence_ref?: string
+  permit_id?: string
+  permit_token?: string
+  success?: boolean
+  code?: string
+  message?: string
+  data?: Record<string, unknown>
+  /** 与 safe_to_retry 同值的兼容字段（服务端 OperationResultRequest 未定义，extra 默认忽略） */
+  retryable?: boolean
+}
+
+export interface OperationResultAck {
+  state: string
+  effect: string
+  run_state?: string | null
+  late?: boolean
+}
+
 const JSON_HEADERS = { 'Content-Type': 'application/json' }
 
 export class ApiClient {
@@ -183,5 +221,32 @@ export class ApiClient {
 
   async result(invocationId: string, payload: InvocationResultPayload): Promise<void> {
     await this.post(`/api/local-tools/runtime/invocations/${invocationId}/result`, payload)
+  }
+
+  /** v2 写动作许可申请（Runtime 内部 API，不暴露给 LLM；§5.2） */
+  async writeAuthorize(invocationId: string, payload: WriteAuthorizePayload): Promise<WriteAuthorizeResponse> {
+    const res = (await this.post(`/api/local-tools/runtime/invocations/${invocationId}/write-authorize`, payload)) as Record<string, unknown>
+    const permitId = res['permit_id']
+    const permitToken = res['permit_token']
+    const deadlineAt = res['deadline_at']
+    if (typeof permitId !== 'string' || !permitId || typeof permitToken !== 'string' || !permitToken) {
+      throw new ApiError(500, '许可响应缺少 permit_id/permit_token')
+    }
+    return {
+      permit_id: permitId,
+      permit_token: permitToken,
+      deadline_at: typeof deadlineAt === 'string' ? deadlineAt : '',
+    }
+  }
+
+  /** v2 操作结果回传（持久 ACK 幂等；迟到只对账不改判） */
+  async operationResult(invocationId: string, payload: OperationResultPayload): Promise<OperationResultAck> {
+    const res = (await this.post(`/api/local-tools/runtime/invocations/${invocationId}/operation-result`, payload)) as Record<string, unknown>
+    return {
+      state: String(res['state'] ?? ''),
+      effect: String(res['effect'] ?? ''),
+      run_state: (res['run_state'] as string | null | undefined) ?? null,
+      late: Boolean(res['late']),
+    }
   }
 }

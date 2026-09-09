@@ -1185,10 +1185,21 @@ CREATE TABLE IF NOT EXISTS local_tool_invocations (
     started_at TIMESTAMP,
     finished_at TIMESTAMP,
     credit_cost NUMERIC(12,2),                  -- BOSS 本地工具按次计费实扣积分（成功时回写）
+    provider_key TEXT,                          -- v2（desktop_automation）：受信 Provider 路由（NULL=旧聊天链路，任何设备可领）
+    business_kind TEXT,                         -- v2 业务类型（'desktop_automation'；NULL=旧链路）
+    business_ref JSONB,                         -- v2 业务引用（delivery_id/run_id/occurrence_id/scenario_key 等，不含场景正文）
+    dedupe_key TEXT,                            -- v2 幂等键（tenant+business_kind 内唯一）
+    deadline_at TIMESTAMPTZ,                    -- v2 操作截止
+    authorization_epoch INTEGER,                -- v2 授权快照 epoch（许可事务复验）
+    write_phase TEXT,                           -- 写动作阶段（许可发放后置 may_have_started）
     PRIMARY KEY (id)
 );
 CREATE INDEX IF NOT EXISTS idx_lt_inv_device_state ON local_tool_invocations USING btree (device_id, state);
 CREATE INDEX IF NOT EXISTS idx_lt_inv_tenant_user ON local_tool_invocations USING btree (tenant_id, user_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_lt_invocations_dedupe
+    ON local_tool_invocations (tenant_id, business_kind, dedupe_key)
+    WHERE business_kind IS NOT NULL AND dedupe_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_lt_inv_provider ON local_tool_invocations USING btree (tenant_id, provider_key, state);
 
 CREATE TABLE IF NOT EXISTS local_tool_events (
     id SERIAL,
@@ -1203,6 +1214,320 @@ CREATE TABLE IF NOT EXISTS local_tool_events (
     UNIQUE (invocation_id, seq),
     PRIMARY KEY (id)
 );
+
+
+-- =================== 桌面 CLI 无人值守自动任务底座（desktop_automation，P1-A 2026-09-08）===================
+-- 规范：TIMESTAMPTZ/UUID；无外键无触发器（引用完整性 Python 校验）；tenant_id 一律 NOT NULL；
+-- 任务族表 user_id NOT NULL；events/outbox/audit/quota 系统生成行 user_id 可 NULL。
+-- 与 deploy/db_update.yaml（存量增量）和 src/desktop_automation/init_tables.py（代码侧幂等 DDL）三处同步。
+
+CREATE TABLE IF NOT EXISTS desktop_automation_subjects (
+    id UUID DEFAULT gen_random_uuid() NOT NULL,
+    tenant_id TEXT NOT NULL,
+    scenario_key TEXT NOT NULL,
+    kind TEXT NOT NULL,                        -- task / revision
+    ref TEXT NOT NULL,                         -- 业务引用值（task_ref/revision_ref 指向的值）
+    version TEXT,
+    owner_id TEXT NOT NULL,
+    status TEXT NOT NULL,                      -- task: active/paused；revision: published/superseded
+    active_revision_ref TEXT,                  -- task subject 专用
+    authorization_epoch INTEGER DEFAULT 0 NOT NULL,
+    task_ref TEXT,                             -- revision subject 专用（归属 task）
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    PRIMARY KEY (id),
+    UNIQUE (tenant_id, scenario_key, kind, ref)
+);
+CREATE INDEX IF NOT EXISTS idx_da_subjects_revision_task
+    ON desktop_automation_subjects (tenant_id, scenario_key, task_ref)
+    WHERE kind = 'revision';
+
+CREATE TABLE IF NOT EXISTS desktop_automation_schedules (
+    id UUID DEFAULT gen_random_uuid() NOT NULL,
+    tenant_id TEXT NOT NULL,
+    scenario_key TEXT NOT NULL,
+    task_ref TEXT NOT NULL,
+    revision_ref TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    kind TEXT NOT NULL,                        -- time / event
+    trigger_key TEXT NOT NULL,                 -- revision 内局部触发标识（time / event:{source}:{event_type}）
+    timezone TEXT,
+    anchor_at TIMESTAMPTZ,
+    interval_seconds INTEGER,
+    cron_expr TEXT,
+    day_of_week TEXT,                          -- mon..sun
+    next_fire_at TIMESTAMPTZ,
+    ends_at TIMESTAMPTZ,
+    max_count INTEGER,
+    run_count INTEGER DEFAULT 0 NOT NULL,
+    grace_seconds INTEGER DEFAULT 0 NOT NULL,  -- 迟到宽限
+    miss_policy TEXT DEFAULT 'skip_overlap' NOT NULL,
+    one_shot BOOLEAN DEFAULT FALSE NOT NULL,
+    consumed BOOLEAN DEFAULT FALSE NOT NULL,   -- 一次性 schedule 保存状态并保留行对账
+    source_ref TEXT,                           -- kind=event 专用
+    event_type TEXT,
+    condition_ref TEXT,
+    delay_seconds INTEGER,
+    status TEXT DEFAULT 'active' NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    PRIMARY KEY (id),
+    UNIQUE (tenant_id, scenario_key, revision_ref, trigger_key)
+);
+CREATE INDEX IF NOT EXISTS idx_da_schedules_due
+    ON desktop_automation_schedules (tenant_id, next_fire_at)
+    WHERE kind = 'time' AND status = 'active' AND consumed = FALSE;
+CREATE INDEX IF NOT EXISTS idx_da_schedules_event
+    ON desktop_automation_schedules (tenant_id, source_ref, event_type)
+    WHERE kind = 'event';
+
+CREATE TABLE IF NOT EXISTS desktop_automation_event_sources (
+    id UUID DEFAULT gen_random_uuid() NOT NULL,
+    tenant_id TEXT NOT NULL,
+    scenario_key TEXT NOT NULL,
+    source_ref TEXT NOT NULL,
+    source_type TEXT NOT NULL,
+    key_ref TEXT,
+    key_version TEXT,
+    payload_schema JSONB,
+    allowed_event_types JSONB,
+    status TEXT DEFAULT 'active' NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    PRIMARY KEY (id),
+    UNIQUE (tenant_id, source_ref)
+);
+
+CREATE TABLE IF NOT EXISTS desktop_automation_events (
+    id UUID DEFAULT gen_random_uuid() NOT NULL,
+    tenant_id TEXT NOT NULL,
+    source_id UUID NOT NULL,
+    external_event_id TEXT NOT NULL,
+    event_type TEXT,
+    payload_ref TEXT,                          -- 受控租户存储引用（正文不进通用表）
+    payload_hash TEXT,
+    state TEXT DEFAULT 'received' NOT NULL,    -- received/processing/processed
+    match_cursor INTEGER DEFAULT 0 NOT NULL,
+    eligible_revision_refs JSONB,              -- 接纳事务快照固化的匹配候选集合
+    occurred_at TIMESTAMPTZ,
+    received_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    PRIMARY KEY (id),
+    UNIQUE (tenant_id, source_id, external_event_id)
+);
+CREATE INDEX IF NOT EXISTS idx_da_events_state
+    ON desktop_automation_events (tenant_id, state, created_at);
+
+CREATE TABLE IF NOT EXISTS desktop_automation_occurrences (
+    id UUID DEFAULT gen_random_uuid() NOT NULL,
+    tenant_id TEXT NOT NULL,
+    scenario_key TEXT NOT NULL,
+    task_ref TEXT NOT NULL,
+    revision_ref TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    trigger_kind TEXT NOT NULL,                -- time / event / manual
+    trigger_key TEXT NOT NULL,                 -- R11 规范编码（time/event/manual，外部 ID 先哈希）
+    scheduled_for TIMESTAMPTZ,
+    due_at TIMESTAMPTZ NOT NULL,
+    expires_at TIMESTAMPTZ,
+    status TEXT DEFAULT 'open' NOT NULL,       -- open / skipped
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    PRIMARY KEY (id),
+    UNIQUE (tenant_id, scenario_key, task_ref, trigger_key)
+);
+CREATE INDEX IF NOT EXISTS idx_da_occurrences_task
+    ON desktop_automation_occurrences (tenant_id, scenario_key, task_ref, created_at);
+
+CREATE TABLE IF NOT EXISTS desktop_automation_runs (
+    id UUID DEFAULT gen_random_uuid() NOT NULL,
+    tenant_id TEXT NOT NULL,
+    occurrence_id UUID NOT NULL,
+    scenario_key TEXT NOT NULL,
+    task_ref TEXT NOT NULL,
+    revision_ref TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    state TEXT DEFAULT 'pending' NOT NULL,     -- pending/running/waiting_device + §5.4 终态
+    device_id UUID,
+    lease_expires_at TIMESTAMPTZ,
+    fence_token INTEGER DEFAULT 0 NOT NULL,
+    authorization_epoch INTEGER,
+    due_at TIMESTAMPTZ NOT NULL,
+    expires_at TIMESTAMPTZ,
+    result_json JSONB,
+    claimed_at TIMESTAMPTZ,
+    started_at TIMESTAMPTZ,
+    finished_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    PRIMARY KEY (id),
+    UNIQUE (tenant_id, occurrence_id)
+);
+CREATE INDEX IF NOT EXISTS idx_da_runs_open
+    ON desktop_automation_runs (tenant_id, scenario_key, task_ref)
+    WHERE state NOT IN ('succeeded', 'failed', 'cancelled', 'partial', 'unknown', 'expired');
+CREATE INDEX IF NOT EXISTS idx_da_runs_due
+    ON desktop_automation_runs (due_at)
+    WHERE state = 'pending';
+
+CREATE TABLE IF NOT EXISTS desktop_automation_deliveries (
+    id UUID DEFAULT gen_random_uuid() NOT NULL,
+    tenant_id TEXT NOT NULL,
+    run_id UUID NOT NULL,
+    scenario_key TEXT,
+    task_ref TEXT,
+    revision_ref TEXT,
+    user_id TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    operation TEXT NOT NULL,
+    provider_key TEXT,
+    target_ref TEXT,                           -- 持久 subject 引用（与短期 target_handle 不可互换）
+    target_handle TEXT,
+    target_version TEXT,
+    payload_ref TEXT,
+    payload_hash TEXT,
+    state TEXT DEFAULT 'pending' NOT NULL,     -- pending/dispatched/succeeded/failed/unknown/expired/skipped
+    effect TEXT,                               -- none/applied/unknown（R10 delivery 聚合层）
+    phase TEXT,                                -- prepared/may_have_started/verified/unknown（R10）
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    finished_at TIMESTAMPTZ,
+    PRIMARY KEY (id),
+    UNIQUE (tenant_id, run_id, position)
+);
+CREATE INDEX IF NOT EXISTS idx_da_deliveries_run
+    ON desktop_automation_deliveries (tenant_id, run_id, position);
+
+CREATE TABLE IF NOT EXISTS desktop_automation_attempts (
+    id UUID DEFAULT gen_random_uuid() NOT NULL,
+    tenant_id TEXT NOT NULL,
+    delivery_id UUID NOT NULL,
+    run_id UUID,
+    user_id TEXT NOT NULL,
+    attempt_no INTEGER NOT NULL,
+    invocation_id UUID,                        -- invocation 唯一绑定
+    permit_id UUID,
+    request_id TEXT NOT NULL,
+    effect TEXT,
+    phase TEXT,
+    safe_to_retry BOOLEAN,
+    evidence_ref TEXT,
+    result_ref TEXT,
+    detail_json JSONB,
+    predecessor_attempt_id UUID,               -- 人工重试链（证明未提交才允许新建 attempt）
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    finished_at TIMESTAMPTZ,
+    PRIMARY KEY (id),
+    UNIQUE (invocation_id),
+    UNIQUE (tenant_id, delivery_id, attempt_no)
+);
+
+-- R27：写后验证证据登记——UNIQUE(tenant_id, evidence_ref) 事务级防复用；
+-- INSERT ON CONFLICT 仲裁并发（败者绑定比对：同操作幂等放行/他操作拒绝）；
+-- 迟到回执（R28）携带 applied/verified 证据时同样持久追加登记
+CREATE TABLE IF NOT EXISTS desktop_automation_evidence (
+    id UUID DEFAULT gen_random_uuid() NOT NULL,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT,
+    evidence_ref TEXT NOT NULL,                -- 场景证据命名空间内的受控引用
+    invocation_id UUID NOT NULL,
+    attempt_id UUID NOT NULL,
+    device_id UUID NOT NULL,
+    request_id TEXT NOT NULL,
+    target_ref TEXT,
+    payload_hash TEXT,
+    effect TEXT,
+    phase TEXT,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    PRIMARY KEY (id),
+    UNIQUE (tenant_id, evidence_ref)
+);
+CREATE INDEX IF NOT EXISTS idx_da_evidence_attempt
+    ON desktop_automation_evidence (tenant_id, attempt_id);
+
+CREATE TABLE IF NOT EXISTS desktop_automation_audit_events (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT,
+    scenario_key TEXT,
+    kind TEXT NOT NULL,
+    aggregate_type TEXT NOT NULL,
+    aggregate_ref TEXT NOT NULL,
+    detail JSONB DEFAULT '{}' NOT NULL,        -- 只存受控引用/摘要，不存场景正文
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_da_audit_agg
+    ON desktop_automation_audit_events (tenant_id, aggregate_type, aggregate_ref, id);
+
+CREATE TABLE IF NOT EXISTS desktop_automation_outbox (
+    id UUID DEFAULT gen_random_uuid() NOT NULL,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT,
+    kind TEXT NOT NULL,
+    aggregate_ref TEXT NOT NULL,
+    dedupe_key TEXT NOT NULL,                  -- 确定性 dedupe（如 run:{occurrence_id}）
+    state TEXT DEFAULT 'pending' NOT NULL,     -- pending/processing/done
+    available_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    lease_expires_at TIMESTAMPTZ,
+    attempt_count INTEGER DEFAULT 0 NOT NULL,
+    payload_ref TEXT,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    PRIMARY KEY (id),
+    UNIQUE (tenant_id, kind, dedupe_key)
+);
+CREATE INDEX IF NOT EXISTS idx_da_outbox_pending
+    ON desktop_automation_outbox (state, available_at);
+
+CREATE TABLE IF NOT EXISTS desktop_automation_quota_buckets (
+    id UUID DEFAULT gen_random_uuid() NOT NULL,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT,
+    scope_type TEXT NOT NULL,                  -- tenant/task/target/account/resource（R9 固定顺序）
+    scope_id TEXT NOT NULL,                    -- opaque
+    bucket_start TIMESTAMPTZ NOT NULL,         -- floor(now/window)*window 对齐
+    window_seconds INTEGER NOT NULL,
+    limit_count INTEGER NOT NULL,
+    reserved_count INTEGER DEFAULT 0 NOT NULL,
+    used_count INTEGER DEFAULT 0 NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    PRIMARY KEY (id),
+    UNIQUE (tenant_id, scope_type, scope_id, bucket_start)
+);
+
+-- 写动作许可（短期一次性；token 只存 hash，明文仅签发响应返回一次）
+CREATE TABLE IF NOT EXISTS local_tool_operation_permits (
+    id UUID DEFAULT gen_random_uuid() NOT NULL,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    invocation_id UUID NOT NULL,
+    device_id UUID NOT NULL,
+    claim_token_hash TEXT NOT NULL,
+    request_id TEXT NOT NULL,
+    delivery_id UUID,
+    operation TEXT,
+    target_ref TEXT,
+    target_version TEXT,
+    payload_hash TEXT,
+    authorization_revision TEXT,
+    authorization_epoch INTEGER,
+    resource_key TEXT,                         -- R13 桌面资源标识（sha256(device|win_user|session)）
+    quota_reservation JSONB,                   -- R9 预留凭据（落账/释放定位）
+    state TEXT DEFAULT 'issued' NOT NULL,      -- issued/consumed/expired
+    permit_token_hash TEXT NOT NULL,
+    deadline TIMESTAMPTZ NOT NULL,
+    issued_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    consumed_at TIMESTAMPTZ,
+    expired_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    PRIMARY KEY (id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_lt_permits_invocation_request
+    ON local_tool_operation_permits (tenant_id, invocation_id, request_id);
+CREATE INDEX IF NOT EXISTS idx_lt_permits_delivery
+    ON local_tool_operation_permits (tenant_id, delivery_id);
+CREATE INDEX IF NOT EXISTS idx_lt_permits_expire
+    ON local_tool_operation_permits (state, deadline);
 
 
 -- =================== 视频生成补充表 ===================

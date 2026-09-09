@@ -68,6 +68,48 @@ def get_provider_key_for_device(capabilities: Optional[Dict[str, Any]]) -> Optio
     return None
 
 
+def get_provider_keys_for_device(capabilities: Optional[Dict[str, Any]]) -> List[str]:
+    """设备 capabilities 覆盖的全部受信 provider key（多 Provider claim 过滤用）。
+
+    解析优先序（总工程师契约补充 #2，与 P1-B Runtime capabilities 上报对齐）：
+    1. capabilities.providers 数组条目直接命中 TRUSTED_PROVIDERS 的 key（Runtime 上报
+       provider_key 字符串，如 'boss-recruiting'/'weixin'）；
+    2. capabilities.provider_manifests 各 value 的 provider_id 映射回 key；
+    3. 旧 capabilities.provider_id 字段映射（旧 Runtime 兼容，boss-only 现状）。
+    去重后返回。行 provider_key 非 NULL 的 invocation 只派给覆盖该 key 的设备。
+    """
+    keys: List[str] = []
+    if not capabilities:
+        return keys
+
+    def _add(key: Optional[str]) -> None:
+        if key and key in TRUSTED_PROVIDERS and key not in keys:
+            keys.append(key)
+
+    # (1) providers 数组：provider_key 直接命中
+    for entry in capabilities.get("providers") or []:
+        if isinstance(entry, str):
+            _add(entry)
+        elif isinstance(entry, dict):
+            _add(entry.get("provider_key") or entry.get("provider_id"))
+    # (2) provider_manifests：provider_id 映射回 key
+    manifests = capabilities.get("provider_manifests")
+    if isinstance(manifests, dict):
+        pid_to_key = {
+            provider["provider_id"]: key for key, provider in TRUSTED_PROVIDERS.items()
+        }
+        for manifest in manifests.values():
+            if isinstance(manifest, dict):
+                _add(pid_to_key.get(manifest.get("provider_id")))
+    # (3) 旧 provider_id 兜底
+    pid = capabilities.get("provider_id")
+    if pid:
+        for key, provider in TRUSTED_PROVIDERS.items():
+            if provider["provider_id"] == pid:
+                _add(key)
+    return keys
+
+
 def allowed_tools(provider_key: str) -> List[str]:
     provider = TRUSTED_PROVIDERS.get(provider_key)
     return list(provider["tools"]) if provider else []

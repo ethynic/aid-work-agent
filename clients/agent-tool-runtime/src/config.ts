@@ -11,6 +11,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { manifestDigestFor, TRUSTED_MANIFESTS } from './providers.js'
 
 /** 运行时版本（读 package.json，src/dist 两种布局兜底；不手写字符串防漂移误导排障） */
 export const RUNTIME_VERSION: string = (() => {
@@ -30,8 +31,10 @@ export interface RuntimeConfig {
   server: string
   device_id: string
   name?: string
-  /** boss CLI 入口绝对路径（本地管理员配置，禁止云端下发） */
+  /** boss CLI 入口绝对路径（本地管理员配置，禁止云端下发；折算为 providers['boss-recruiting'].entry 的高优先级来源） */
   bossCliEntry?: string
+  /** 各 Provider 入口（key → entry 绝对路径，本地管理员配置，禁止云端下发；无 entry 的 Provider 视为未安装） */
+  providers?: Record<string, { entry: string }>
 }
 
 export function runtimeHomeDir(): string {
@@ -85,6 +88,25 @@ export function resolveBossCliEntry(config: RuntimeConfig | null): string {
   return config?.bossCliEntry ?? defaultBossCliEntry()
 }
 
+/**
+ * 解析全部 Provider 入口（key → entry 绝对路径）。
+ *
+ * - boss-recruiting 始终可用（现状兼容）：bossCliEntry > providers['boss-recruiting'].entry > 默认入口。
+ * - 其余 Provider 仅在 config.providers 显式配置 entry 时可用（未配置=未安装，不上报不启用）。
+ */
+export function resolveProviderEntries(config: RuntimeConfig | null): Record<string, string> {
+  const entries: Record<string, string> = {}
+  const providerConfig = config?.providers
+  if (providerConfig && typeof providerConfig === 'object') {
+    for (const [key, value] of Object.entries(providerConfig)) {
+      if (typeof value?.entry === 'string' && value.entry) entries[key] = value.entry
+    }
+  }
+  // boss 恒可用（现状兼容）：bossCliEntry > providers['boss-recruiting'].entry > 默认入口
+  entries['boss-recruiting'] = config?.bossCliEntry ?? entries['boss-recruiting'] ?? defaultBossCliEntry()
+  return entries
+}
+
 function readMachineGuid(): string | null {
   try {
     const out = execFileSync(
@@ -105,10 +127,43 @@ export function machineFingerprint(): string {
   return createHash('sha256').update(`${guid}|${os.hostname()}`).digest('hex')
 }
 
-/** 设备能力：providers 清单（规格 §2）+ provider_id（云端 catalog 解析用，M0.3 契约） */
-export function deviceCapabilities(): Record<string, unknown> {
+/**
+ * 设备能力上报。显式传 config（cli/测试）；缺省读当前 config.json。
+ *
+ * - providers：已配置入口的可用 provider key 数组（无 entry 的 manifest 不进数组，如默认未安装的 weixin）
+ * - protocol_version：Runtime 侧统一操作协议版本（v2 支持按 invocation 级 provider 路由）
+ * - provider_manifests：各可用 provider 的 manifest 摘要（provider_id/manifest_digest/protocol_version）
+ * - provider_id：第一个可用 provider 的 id（云端 catalog 兼容字段；boss-only 环境与历史一致）
+ *
+ * 键序契约：providers 数组与 provider_manifests 键序固定为 boss-recruiting 恒首位、其余
+ * 按字典序——首个可用 provider 即旧 provider_id 兼容字段的取值来源，顺序漂移会改变
+ * 上报字节与云端 catalog 归属，不可依赖对象插入顺序的隐式行为。
+ */
+export function deviceCapabilities(config?: RuntimeConfig | null): Record<string, unknown> {
+  const cfg = config === undefined ? loadConfig() : config
+  const entries = resolveProviderEntries(cfg)
+  const available = Object.keys(TRUSTED_MANIFESTS)
+    .filter((key) => Boolean(entries[key]))
+    // 键序契约：boss 恒首位（provider_id 兼容字段来源），其余字典序稳定
+    .sort((a, b) => {
+      if (a === 'boss-recruiting') return b === 'boss-recruiting' ? 0 : -1
+      if (b === 'boss-recruiting') return 1
+      return a < b ? -1 : a > b ? 1 : 0
+    })
+  const manifests: Record<string, { provider_id: string; manifest_digest: string; protocol_version: number }> = {}
+  for (const key of available) {
+    const manifest = TRUSTED_MANIFESTS[key]!
+    manifests[key] = {
+      provider_id: manifest.provider_id,
+      manifest_digest: manifestDigestFor(key),
+      protocol_version: manifest.protocol_version,
+    }
+  }
+  const first = available[0]
   return {
-    providers: ['boss-recruiting'],
-    provider_id: 'ai.aidwork.boss-recruiting',
+    providers: available,
+    protocol_version: 2,
+    provider_manifests: manifests,
+    ...(first ? { provider_id: TRUSTED_MANIFESTS[first]!.provider_id } : {}),
   }
 }

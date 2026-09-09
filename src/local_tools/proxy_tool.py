@@ -126,11 +126,23 @@ class LocalToolProxyTool(BaseTool):
         args: Dict[str, Any],
         progress_queue: Optional[asyncio.Queue],
     ) -> Dict[str, Any]:
-        """创建 invocation + 轮询 events/state 至终态/超时：终态映射（计费在 write_result 落库侧）"""
-        invocation_id = await asyncio.to_thread(
-            repository.create_invocation,
-            tenant_id, user_id, str(device["id"]), self.name, args, session_id,
+        """创建 invocation + 轮询 events/state 至终态/超时：终态映射（计费在 write_result 落库侧）
+
+        创建经 LocalInvocationService.enqueue（本地操作通道统一入口，聊天代理与场景执行器
+        共用；对外行为/envelope 不变——此处不传 business_kind/dedupe_key，走普通插入路径）。
+        """
+        from src.local_tools.service import LocalInvocationService
+
+        invocation = await asyncio.to_thread(
+            LocalInvocationService().enqueue,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            device_id=str(device["id"]),
+            tool_name=self.name,
+            arguments=args,
+            session_id=session_id,
         )
+        invocation_id = str(invocation["id"])
         logger.info(
             f"后端日志：本地工具 invocation 已创建 id={invocation_id} "
             f"tool={self.name} device={device['id']} tenant={tenant_id} session={session_id}"
