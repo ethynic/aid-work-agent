@@ -805,6 +805,11 @@ async function handleKfSubmit() {
         contact_url: res.contact_url,
         qr_data_url: res.qr_data_url,
       }
+      // 切换为编辑模式：弹框保持打开时再次点"保存"应更新该账号，而不是又创建一个
+      kfEditingOpenKfid.value = res.open_kfid
+      kfForm.value.open_kfid = res.open_kfid
+      kfForm.value.scene = res.scene || ''
+      kfForm.value.contact_url = res.contact_url || ''
       toast.success('客服账号创建成功')
     }
     await loadKfAccounts()
