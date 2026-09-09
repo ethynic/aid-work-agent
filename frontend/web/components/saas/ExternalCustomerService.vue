@@ -30,12 +30,12 @@
           <BaseButton
             v-for="sys in externalSystems"
             :key="sys.system_id"
-            intent="secondary"
+            intent="primary"
             size="sm"
             :disabled="openingSystemId === sys.system_id"
             @click="handleOpenExternalSystem(sys)"
           >
-            {{ openingSystemId === sys.system_id ? '打开中...' : `打开 ${sys.name}` }}
+            {{ openingSystemId === sys.system_id ? '打开中...' : `${sys.name}` }}
           </BaseButton>
         </div>
       </div>
