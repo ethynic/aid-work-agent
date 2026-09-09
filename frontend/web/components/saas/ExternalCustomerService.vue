@@ -627,10 +627,12 @@ const activeTab = ref<'chat' | 'stats' | 'leads'>('chat')
 // 引流统计（Tab2）
 const stats = ref<{ total_referrals: number; total_messages: number; referrers: any[] }>({ total_referrals: 0, total_messages: 0, referrers: [] })
 const statsLoading = ref(false)
-const activeRange = ref<'7d' | '30d' | 'custom'>('30d')
+const activeRange = ref<'today' | 'yesterday' | '7d' | '30d' | 'custom'>('30d')
 const customStartDate = ref('')
 const customEndDate = ref('')
 const rangePresets = [
+  { key: 'today', label: '今天' },
+  { key: 'yesterday', label: '昨天' },
   { key: '7d', label: '近7天' },
   { key: '30d', label: '近30天' },
   { key: 'custom', label: '自定义' },
@@ -874,16 +876,21 @@ function dateStr(d: Date): string {
   return `${y}-${m}-${day}`
 }
 
-function computeRangeDates(key: '7d' | '30d') {
+function computeRangeDates(key: 'today' | 'yesterday' | '7d' | '30d') {
   const today = new Date()
   const start = new Date(today)
+  if (key === 'today') return { start_date: dateStr(today), end_date: dateStr(today) }
+  if (key === 'yesterday') {
+    start.setDate(today.getDate() - 1)
+    return { start_date: dateStr(start), end_date: dateStr(start) }
+  }
   if (key === '7d') start.setDate(today.getDate() - 6)
   else start.setDate(today.getDate() - 29)
   return { start_date: dateStr(start), end_date: dateStr(today) }
 }
 
 function selectRange(key: string) {
-  activeRange.value = key as '7d' | '30d' | 'custom'
+  activeRange.value = key as 'today' | 'yesterday' | '7d' | '30d' | 'custom'
   if (key === 'custom') return
   loadReferralStats()
 }
@@ -980,7 +987,7 @@ const leadStats = ref<{ total_leads: number; by_contact_method: any[]; by_kf_acc
   by_contact_method: [],
   by_kf_account: [],
 })
-const leadActiveRange = ref<'7d' | '30d' | 'custom'>('30d')
+const leadActiveRange = ref<'today' | 'yesterday' | '7d' | '30d' | 'custom'>('30d')
 const leadCustomStartDate = ref('')
 const leadCustomEndDate = ref('')
 const leadKfFilter = ref('')
@@ -1003,7 +1010,7 @@ function leadRangeParams(): { start_date?: string; end_date?: string } {
 }
 
 function selectLeadRange(key: string) {
-  leadActiveRange.value = key as '7d' | '30d' | 'custom'
+  leadActiveRange.value = key as 'today' | 'yesterday' | '7d' | '30d' | 'custom'
   if (key === 'custom') return
   leadPage.value = 1
   loadLeadStats()
