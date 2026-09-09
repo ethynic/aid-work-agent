@@ -179,21 +179,45 @@ def list_schedules(
         return [dict(r) for r in cursor.fetchall()]
 
 
-def find_due_candidates(now: datetime, limit: int = 100) -> List[Dict[str, Any]]:
+def find_due_candidates(
+    now: datetime,
+    limit: int = 100,
+    *,
+    scenario_key: Optional[str] = None,
+    tenant_allowlist: Optional[List[str]] = None,
+) -> List[Dict[str, Any]]:
     """时间扫描候选（非锁定读取，只作扫描线索；接纳在 accept_time_slot 短事务内，
-    锁顺序 subject(task)→schedule→occurrence/run，R12）"""
+    锁顺序 subject(task)→schedule→occurrence/run，R12）。
+
+    scenario_key / tenant_allowlist（R53 过滤下推）：SQL WHERE 内过滤（LIMIT 之前），
+    白名单外的 due schedule 不占用 LIMIT 配额——允许任务当轮必被扫到（无饿死）。
+    tenant_allowlist=None 不过滤；空列表语义（不限制）由调用方归一为 None 后传入。
+    """
+    filters = [
+        "kind = 'time'",
+        "status = 'active'",
+        "consumed = FALSE",
+        "next_fire_at IS NOT NULL",
+        "next_fire_at <= %s",
+    ]
+    params: List[Any] = [ensure_utc(now)]
+    if scenario_key is not None:
+        filters.append("scenario_key = %s")
+        params.append(scenario_key)
+    if tenant_allowlist is not None:
+        filters.append("tenant_id = ANY(%s)")
+        params.append(list(tenant_allowlist))
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
             f"""
             SELECT id, tenant_id, scenario_key, task_ref, revision_ref, next_fire_at
             FROM desktop_automation_schedules
-            WHERE kind = 'time' AND status = 'active' AND consumed = FALSE
-              AND next_fire_at IS NOT NULL AND next_fire_at <= %s
+            WHERE {" AND ".join(filters)}
             ORDER BY next_fire_at
             LIMIT %s
             """,
-            (ensure_utc(now), limit),
+            (*params, limit),
         )
         return [dict(r) for r in cursor.fetchall()]
 

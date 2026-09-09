@@ -168,32 +168,27 @@ def precheck_quota(run: Dict[str, Any], delivery: Dict[str, Any]) -> Tuple[bool,
 # ==================== claim + 初始化 deliveries ====================
 
 
-def claim_and_prepare_run(
+def claim_pending_run(
     *,
-    revision_config: Dict[str, Any],
-    device_id: str,
     tenant_id: Optional[str] = None,
+    expected_run_id: Optional[str] = None,
     lease_seconds: int = 120,
-    now: Optional[datetime] = None,
 ) -> Optional[Dict[str, Any]]:
-    """领取 pending run → 固定任务 device_id（不跟随用户临时“选中设备”漂移，§4 顺序 2）
-    → 重验 → 编译 deliveries（payload hash 预载校验）→ 短事务落行。
-
-    revision_config 由场景侧加载的冻结配置（场景表归属，底座不解析）；
-    tenant_id 可选限定领取范围（不传为全局）；只领取本进程已注册适配器的场景，
-    领取后发现适配器缺失的 run 落终态（不卡死在 running）。
-    不通过重验的 run 直接按原因落终态（cancelled/unknown/expired）。
-    """
+    """领取一条到期 pending run（R50）：expected_run_id 提供时定向领取（SKIP LOCKED，
+    非目标/已被领返回 None）；缺省领取范围内最早到期者。只领取本进程已注册适配器的
+    场景（避免领取后因适配器缺失而卡死）。"""
     claimed = runs_module.claim_run(
         lease_seconds=lease_seconds,
         limit=1,
         tenant_id=tenant_id,
         scenario_keys=TrustedAdapterRegistry.registered_keys() or None,
+        expected_run_id=expected_run_id,
     )
-    if not claimed:
-        return None
-    run = claimed[0]
+    return claimed[0] if claimed else None
 
+
+def fix_run_device(run: Dict[str, Any], device_id: str) -> Dict[str, Any]:
+    """固定任务 device_id（不跟随用户临时“选中设备”漂移，§4 顺序 2）"""
     if device_id:
         with get_db_connection() as conn:
             cursor = conn.cursor()
@@ -206,7 +201,33 @@ def claim_and_prepare_run(
                 (device_id, str(run["id"]), run["tenant_id"]),
             )
             conn.commit()
-        run = {**run, "device_id": device_id}
+        return {**run, "device_id": device_id}
+    return run
+
+
+def prepare_claimed_run(
+    run: Dict[str, Any],
+    *,
+    revision_config: Dict[str, Any],
+    device_id: str,
+    now: Optional[datetime] = None,
+) -> Dict[str, Any]:
+    """已领取 run 的准备段：固定设备 → 重验 → 编译 deliveries（payload hash 预载校验）
+    → 短事务落行。revision_config 必须是**该 run 自身** revision 的冻结配置（R50：
+    场景侧先定向领到 run、再加载其配置，杜绝错配编译）。
+
+    P2-3 双保险：revision_config 自带 revision_ref（场景侧 load 时写入）且与
+    run.revision_ref 不符即抛——定向领取下不可达的错配在此 fail-fast。
+
+    不通过重验的 run 直接按原因落终态（cancelled/unknown/expired）。
+    """
+    config_revision = str(revision_config.get("revision_ref") or "")
+    if config_revision and config_revision != str(run.get("revision_ref") or ""):
+        raise ValueError(
+            f"revision 配置与 run 不一致（config={config_revision} "
+            f"run={run.get('revision_ref')}）——R50 定向领取路径不得出现，拒绝错配编译"
+        )
+    run = fix_run_device(run, device_id)
     now = now or _utcnow()
     try:
         TrustedAdapterRegistry.require(run["scenario_key"])
@@ -234,7 +255,6 @@ def claim_and_prepare_run(
             _abandon_run(run, "payload_hash_mismatch", now)
             return {"run": run, "prepared": False, "reason": "payload_hash_mismatch"}
 
-
     with get_db_connection() as conn:
         cursor = conn.cursor()
         delivery_ids = deliveries_module.insert_deliveries(
@@ -246,6 +266,34 @@ def claim_and_prepare_run(
         f"run={run['id']} deliveries={len(delivery_ids)}"
     )
     return {"run": run, "prepared": True, "reason": "", "delivery_ids": delivery_ids}
+
+
+def claim_and_prepare_run(
+    *,
+    revision_config: Dict[str, Any],
+    device_id: str,
+    tenant_id: Optional[str] = None,
+    lease_seconds: int = 120,
+    now: Optional[datetime] = None,
+) -> Optional[Dict[str, Any]]:
+    """领取 pending run → 固定任务 device_id → 重验 → 编译 deliveries（payload hash
+    预载校验）→ 短事务落行（claim_pending_run + prepare_claimed_run 的组合封装）。
+
+    **仅测试兼容用**（P2-3 标注）：非定向领取（范围内最早 pending），生产路径应走
+    claim_pending_run(expected_run_id=...) + prepare_claimed_run 的定向领取（R50）。
+
+    revision_config 由场景侧加载的冻结配置（场景表归属，底座不解析），须与被领取
+    run 的 revision 一致（定向领取路径由 claim_pending_run(expected_run_id=...) 保证）；
+    tenant_id 可选限定领取范围（不传为全局）；只领取本进程已注册适配器的场景，
+    领取后发现适配器缺失的 run 落终态（不卡死在 running）。
+    不通过重验的 run 直接按原因落终态（cancelled/unknown/expired）。
+    """
+    run = claim_pending_run(tenant_id=tenant_id, lease_seconds=lease_seconds)
+    if run is None:
+        return None
+    return prepare_claimed_run(
+        run, revision_config=revision_config, device_id=device_id, now=now
+    )
 
 
 def _abandon_run(run: Dict[str, Any], reason: str, now: datetime) -> None:
@@ -339,6 +387,19 @@ def execute_next_delivery(
 
     from src.local_tools.service import LocalInvocationService
 
+    # R45：首派 dedupe_key 用 per-attempt 形态（delivery:{id}:a:{n}），与场景侧
+    # 人工重试键同一空间；n 取该 delivery 现有 attempt 最大号 +1（与 create_attempt
+    # 的 MAX+1 计算一致——首派路径无既有 attempt，恒为 1；并发双派发由
+    # UNIQUE(tenant,business_kind,dedupe_key) 幂等收敛为同一 invocation）
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT COALESCE(MAX(attempt_no), 0) + 1 AS next_no "
+            "FROM desktop_automation_attempts WHERE delivery_id = %s AND tenant_id = %s",
+            (str(delivery["id"]), run["tenant_id"]),
+        )
+        next_attempt_no = int(cursor.fetchone()["next_no"])
+
     service = LocalInvocationService()
     invocation = service.enqueue(
         tenant_id=run["tenant_id"],
@@ -356,7 +417,7 @@ def execute_next_delivery(
             "task_ref": run["task_ref"],
             "revision_ref": run["revision_ref"],
         },
-        dedupe_key=f"delivery:{delivery['id']}",
+        dedupe_key=f"delivery:{delivery['id']}:a:{next_attempt_no}",
         deadline_at=deadline_at,
         authorization_epoch=run.get("authorization_epoch"),
     )

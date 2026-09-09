@@ -1991,6 +1991,166 @@ CREATE INDEX IF NOT EXISTS idx_lc_leads_created ON bs_lead_capture_leads(created
 CREATE INDEX IF NOT EXISTS idx_lc_leads_assigned ON bs_lead_capture_leads(assigned_to);
 CREATE INDEX IF NOT EXISTS idx_lc_leads_customer ON bs_lead_capture_leads(customer_user_id);
 
+-- =================== 微信营销自动化（weixin-marketing，P2）===================
+-- 7 张业务表（R40）：automations/revisions/content_blocks/group_bindings/
+-- account_bindings/audit_events/assets。与 src/weixin_marketing/init_tables.py 幂等 DDL
+-- 双轨同步（init_database 挂接）；发布后 revisions/content_blocks 不可变；
+-- 无外键无触发器（引用完整性在 Python 校验）；新业务表不进 db_update.yaml。
+CREATE TABLE IF NOT EXISTS bs_weixin_marketing_automations (
+    id UUID DEFAULT gen_random_uuid() NOT NULL,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    status TEXT DEFAULT 'draft' NOT NULL,
+    active_revision_id UUID,
+    draft_revision_id UUID,
+    owner_scope TEXT DEFAULT 'owner' NOT NULL,
+    version INTEGER DEFAULT 1 NOT NULL,
+    pause_reason TEXT,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    PRIMARY KEY (id),
+    UNIQUE (tenant_id, id)
+);
+CREATE INDEX IF NOT EXISTS idx_bs_wxm_automations_tenant_status ON bs_weixin_marketing_automations (tenant_id, status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_bs_wxm_automations_tenant_user ON bs_weixin_marketing_automations (tenant_id, user_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS bs_weixin_marketing_revisions (
+    id UUID DEFAULT gen_random_uuid() NOT NULL,
+    tenant_id TEXT NOT NULL,
+    automation_id UUID NOT NULL,
+    user_id TEXT NOT NULL,
+    revision_no INTEGER NOT NULL,
+    executor_type TEXT DEFAULT 'weixin.fixed_content.v1' NOT NULL,
+    status TEXT DEFAULT 'draft' NOT NULL,
+    trigger_json JSONB,
+    policy_json JSONB,
+    group_binding_id UUID,
+    content_hash TEXT,
+    authorized_by TEXT,
+    authorization_source TEXT,
+    source_message_id TEXT,
+    published_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    PRIMARY KEY (id),
+    UNIQUE (tenant_id, automation_id, revision_no)
+);
+CREATE INDEX IF NOT EXISTS idx_bs_wxm_revisions_automation ON bs_weixin_marketing_revisions (tenant_id, automation_id, revision_no DESC);
+
+CREATE TABLE IF NOT EXISTS bs_weixin_marketing_content_blocks (
+    id UUID DEFAULT gen_random_uuid() NOT NULL,
+    tenant_id TEXT NOT NULL,
+    revision_id UUID NOT NULL,
+    user_id TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    text_content TEXT,
+    url TEXT,
+    asset_id UUID,
+    payload_hash TEXT,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    PRIMARY KEY (id),
+    UNIQUE (tenant_id, revision_id, position),
+    CONSTRAINT ck_bs_wxm_blocks_kind CHECK (kind IN ('text', 'link', 'image')),
+    CONSTRAINT ck_bs_wxm_blocks_fields_mutual_exclusive CHECK (
+        (kind = 'text' AND text_content IS NOT NULL AND url IS NULL AND asset_id IS NULL)
+        OR (kind = 'link' AND url IS NOT NULL AND text_content IS NULL AND asset_id IS NULL)
+        OR (kind = 'image' AND asset_id IS NOT NULL AND text_content IS NULL AND url IS NULL)
+    )
+);
+
+CREATE TABLE IF NOT EXISTS bs_weixin_marketing_group_bindings (
+    id UUID DEFAULT gen_random_uuid() NOT NULL,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    device_id UUID,
+    account_binding_id UUID,
+    label TEXT,
+    identity_evidence_ref TEXT,
+    identity_version TEXT,
+    state TEXT DEFAULT 'pending' NOT NULL,
+    verified_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    PRIMARY KEY (id),
+    UNIQUE (tenant_id, id)
+);
+CREATE INDEX IF NOT EXISTS idx_bs_wxm_group_bindings_tenant_user ON bs_weixin_marketing_group_bindings (tenant_id, user_id, state);
+CREATE INDEX IF NOT EXISTS idx_bs_wxm_group_bindings_account ON bs_weixin_marketing_group_bindings (tenant_id, account_binding_id);
+
+CREATE TABLE IF NOT EXISTS bs_weixin_marketing_account_bindings (
+    id UUID DEFAULT gen_random_uuid() NOT NULL,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    device_id UUID,
+    account_anchor_ref TEXT,
+    session_epoch INTEGER DEFAULT 0 NOT NULL,
+    status TEXT DEFAULT 'active' NOT NULL,
+    verified_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    PRIMARY KEY (id),
+    UNIQUE (tenant_id, id)
+);
+CREATE INDEX IF NOT EXISTS idx_bs_wxm_account_bindings_tenant_user ON bs_weixin_marketing_account_bindings (tenant_id, user_id, status);
+
+CREATE TABLE IF NOT EXISTS bs_weixin_marketing_audit_events (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT,
+    automation_id UUID,
+    run_id UUID,
+    action TEXT NOT NULL,
+    actor_type TEXT DEFAULT 'user' NOT NULL,
+    actor_id TEXT,
+    from_version INTEGER,
+    to_version INTEGER,
+    details_redacted JSONB DEFAULT '{}'::jsonb NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_bs_wxm_audit_tenant_automation ON bs_weixin_marketing_audit_events (tenant_id, automation_id, id);
+CREATE INDEX IF NOT EXISTS idx_bs_wxm_audit_run ON bs_weixin_marketing_audit_events (tenant_id, run_id, id);
+
+CREATE TABLE IF NOT EXISTS bs_weixin_marketing_assets (
+    id UUID DEFAULT gen_random_uuid() NOT NULL,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    storage_ref TEXT,
+    sha256 TEXT,
+    mime TEXT,
+    size BIGINT,
+    width INTEGER,
+    height INTEGER,
+    status TEXT DEFAULT 'active' NOT NULL,
+    retention_until TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    PRIMARY KEY (id),
+    UNIQUE (tenant_id, id)
+);
+CREATE INDEX IF NOT EXISTS idx_bs_wxm_assets_tenant_hash ON bs_weixin_marketing_assets (tenant_id, sha256);
+
+-- =================== 微信营销自动化 API 幂等键（weixin-marketing，P2-A2）===================
+-- R46 Idempotency-Key 存储：基础设施表（非 bs_ 业务表，同 desktop_agent_turn_requests
+-- 先例），scope=(tenant_id, user_id, route, idempotency_key) 唯一；request_digest
+-- 为「路径+请求体规范化 JSON」摘要（同 key 异 payload 检测）；仅存响应 JSON 与
+-- 状态码，不存业务正文。与 src/weixin_marketing/api.py _IDEMPOTENCY_DDL 逐语句
+-- 一致（api 模块幂等自建，此处为部署基线）；不进 db_update.yaml。
+CREATE TABLE IF NOT EXISTS weixin_marketing_idempotency_keys (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    route TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL,
+    request_digest TEXT NOT NULL,
+    response_json JSONB,
+    status_code INTEGER,
+    status TEXT DEFAULT 'pending' NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    UNIQUE (tenant_id, user_id, route, idempotency_key)
+);
+
 -- 输出初始化完成信息
 DO $$
 BEGIN

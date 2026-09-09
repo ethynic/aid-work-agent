@@ -2,11 +2,13 @@
 宽限-最近一次 / 一次性 consumed / interval 重启不积压 / 手动不改 schedule）"""
 
 import threading
+import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from src.desktop_automation import occurrences, schedules, subjects
+from src.desktop_automation.adapters import TrustedAdapterRegistry
 from src.desktop_automation.constants import (
     event_trigger_key,
     manual_trigger_key,
@@ -64,6 +66,48 @@ class TestTriggerKeyEncoding:
 
         assert parse_time_trigger_key(parsed) == slot
         assert parse_time_trigger_key("event:s:x") is None
+
+
+class TestFindDueCandidatesFilters:
+    """R53：scenario_key / tenant 白名单在候选 SQL 的 WHERE 内过滤（LIMIT 之前）"""
+
+    def test_scenario_and_tenant_filters_before_limit(self, tenant_id):
+        _register(tenant_id)
+        anchor = NOW - timedelta(minutes=5)
+        _publish(tenant_id, specs=[{"kind": "time", "anchor_at": anchor, "interval_seconds": 3600}])
+        # 另一 scenario 的 due schedule（同租户）：scenario 过滤判据
+        TrustedAdapterRegistry.register(FakeScenarioAdapter(scenario_key="other-scenario"))
+        other_tenant = f"da_test_{uuid.uuid4().hex[:12]}"
+        try:
+            subjects.publish_revision(
+                tenant_id, "other-scenario", "task-x", "rev-x", "owner-1",
+                revision_config={}, schedule_specs=[
+                    {"kind": "time", "anchor_at": anchor, "interval_seconds": 3600}
+                ],
+            )
+            _publish(other_tenant, specs=[
+                {"kind": "time", "anchor_at": anchor, "interval_seconds": 3600}
+            ])
+            # 不过滤：三行候选（两 scenario × 两租户）
+            assert len(schedules.find_due_candidates(NOW)) == 3
+            # scenario 过滤
+            assert len(schedules.find_due_candidates(NOW, scenario_key="fake-scenario")) == 2
+            assert len(schedules.find_due_candidates(NOW, scenario_key="other-scenario")) == 1
+            # tenant 白名单（SQL 内，LIMIT 之前）：limit=1 指向他租户时命中他租户那条
+            rows = schedules.find_due_candidates(NOW, limit=1, tenant_allowlist=[other_tenant])
+            assert len(rows) == 1 and rows[0]["tenant_id"] == other_tenant
+            # 组合过滤
+            rows = schedules.find_due_candidates(
+                NOW, scenario_key="fake-scenario", tenant_allowlist=[tenant_id]
+            )
+            assert len(rows) == 1 and rows[0]["tenant_id"] == tenant_id
+            # 空列表 = 排除全部（调用方负责把「不限制」归一为 None）
+            assert schedules.find_due_candidates(NOW, tenant_allowlist=[]) == []
+        finally:
+            TrustedAdapterRegistry.unregister("other-scenario")
+            from tests.unit.desktop_automation.conftest import cleanup_tenant
+
+            cleanup_tenant(other_tenant)
 
 
 class TestAdmitIdempotent:

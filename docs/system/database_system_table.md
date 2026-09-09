@@ -26,6 +26,15 @@
 > 表 DDL 已同步 `deploy/init-postgres.sql` 与 `deploy/db_update.sql`。商机池 3 表
 > (`bs_outbound_leads` / `_lead_interactions` / `_outreach_actions`) 由并行智能体开发。
 
+> 2026-09-09 微信营销自动化 P2 例外登记：新增基础设施表
+> `weixin_marketing_idempotency_keys`（非 bs_ 前缀，API 请求幂等去重，同
+> `desktop_agent_turn_requests` 先例）。scope=(tenant_id, user_id, route,
+> idempotency_key) 唯一，`request_digest` 为「请求路径+请求体规范化 JSON」摘要
+> （同 key 异 payload → 409）；仅存响应 JSON 与状态码，不存业务正文；pending
+> 占位超 10 分钟 TTL 可被接管（崩溃兜底）。DDL 双轨：`deploy/init-postgres.sql`
+> 与 `src/weixin_marketing/api.py` `_IDEMPOTENCY_DDL`（模块幂等自建）；不进
+> db_update.yaml；按 tenant_id 物理清理。
+
 ---
 
 ## 1. 表分类总览

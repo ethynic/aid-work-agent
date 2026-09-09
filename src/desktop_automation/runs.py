@@ -147,14 +147,20 @@ def claim_run(
     *,
     tenant_id: Optional[str] = None,
     scenario_keys: Optional[List[str]] = None,
+    expected_run_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """worker 领取到期 pending run（短事务 lease/fence，SKIP LOCKED 防重复领取）。
 
     tenant_id / scenario_keys 可选过滤：调用方限定处理范围（如仅领取本进程已注册适配器
     的场景），避免领取后因适配器缺失而卡死；不传为全局领取。
+    expected_run_id（R50 定向领取）：仅尝试领取该 run——非目标/已被领/未到期/非 pending
+    一律返回空（FOR UPDATE SKIP LOCKED，确定性领取，outbox 驱动按条目目标定向）。
     """
     filters = ""
     params: List[Any] = []
+    if expected_run_id is not None:
+        filters += " AND id = %s"
+        params.append(expected_run_id)
     if tenant_id is not None:
         filters += " AND tenant_id = %s"
         params.append(tenant_id)
@@ -244,7 +250,13 @@ def finish_run(
 
 def expire_overdue_runs(now: Optional[datetime] = None) -> int:
     """截止清扫：超过 expires_at 的未终态 run 按 §5.4 落终态
-    （部分已发送→partial+剩余 delivery 置 expired；纯等待→expired；未开始条目置 expired）"""
+    （部分已发送→partial+剩余 delivery 置 expired；纯等待→expired；未开始条目置 expired）
+
+    P2-1（登记不改，2026-09-09 评审）：本函数 deliveries 更新先于 run 终态写
+    （理论锁序倒置，与 R49 各取消路径 run→deliveries 序相反）；当前无生产调用方
+    （微信域截止收敛走 weixin dispatch.runs_reclaim_tick 的同序实现）。
+    未来接线生产调度前须先改为 run 行 FOR UPDATE 先行。
+    """
     from src.desktop_automation import deliveries as deliveries_module
 
     now = now or datetime.now(timezone.utc)

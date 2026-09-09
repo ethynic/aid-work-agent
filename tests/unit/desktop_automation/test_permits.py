@@ -225,6 +225,122 @@ class TestDenyPaths:
             _authorize(tenant_id, ctx)
         assert e.value.code == "PERMIT_ALREADY_ISSUED"
 
+    def test_concurrent_authorize_exactly_one_active_permit(self, tenant_id):
+        """并发双签发：同 delivery 同时至多一个活跃许可——恰一成功，一 409"""
+        import threading
+
+        ctx = harness.build_running_v2_invocation(tenant_id)
+        barrier = threading.Barrier(2)
+        outcomes = {"ok": 0, "rejected": 0, "errors": []}
+
+        def worker():
+            try:
+                barrier.wait(timeout=10)
+                _authorize(tenant_id, ctx)
+                outcomes["ok"] += 1
+            except permits.PermitError as e:
+                if e.code == "PERMIT_ALREADY_ISSUED":
+                    outcomes["rejected"] += 1
+                else:
+                    outcomes["errors"].append(e.code)
+            except Exception as e:  # noqa: BLE001
+                outcomes["errors"].append(repr(e))
+
+        threads = [threading.Thread(target=worker) for _ in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=30)
+        assert not outcomes["errors"], outcomes["errors"]
+        assert outcomes["ok"] == 1 and outcomes["rejected"] == 1
+
+    def test_consumed_permit_allows_new_invocation_reissue(self, tenant_id):
+        """P2-A CR 修复锚：consumed 为终态——同 delivery 新 invocation（人工重试链）
+        照【计划 §5.4】放行新签发；同窗口额度按 R19/R22 正常二次预留。
+
+        R49 语义更新：重试链模拟补齐——首派结果置 failed（none+prepared）后按
+        retry_delivery 语义回置 dispatched 并建 attempt 2 绑定新 invocation
+        （write_authorize 复验 dispatched + run 态，终态 run 走重开判据）。
+        """
+        from src.desktop_automation import attempts as da_attempts
+        from src.desktop_automation.constants import BUSINESS_KIND_DESKTOP_AUTOMATION
+        from src.local_tools import operation_result
+        from src.local_tools.security import generate_claim_token
+        from src.local_tools.service import LocalInvocationService
+
+        ctx = harness.build_running_v2_invocation(tenant_id)
+        permit = _authorize(tenant_id, ctx)
+        # 结果落账：permit → consumed（none+prepared → release 路径）
+        operation_result.apply_operation_result(
+            tenant_id=tenant_id, device_id=ctx["device_id"],
+            invocation_id=ctx["invocation_id"],
+            claim_token_hash=sha256_hex(ctx["claim_token"]),
+            request_id=ctx["request_id"],
+            effect="none", phase="prepared",
+            permit_id=permit["permit_id"], permit_token=permit["permit_token"],
+        )
+        with get_db_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT state FROM local_tool_operation_permits WHERE id=%s",
+                (permit["permit_id"],),
+            )
+            assert cur.fetchone()["state"] == "consumed"
+
+        # 同 delivery 新 invocation（per-attempt dedupe 键，模拟人工重试新 attempt）：
+        # delivery 回置 dispatched + attempt 2 绑定新 invocation（retry_delivery 语义）
+        delivery = ctx["delivery"]
+        new_request_id = str(uuid.uuid4())
+        arguments = dict(ctx["arguments"])
+        arguments["request_id"] = new_request_id
+        arguments["authorization_epoch"] = arguments.get("authorization_epoch")
+        invocation = LocalInvocationService().enqueue(
+            tenant_id=tenant_id, user_id=ctx["run"]["user_id"],
+            device_id=ctx["device_id"], tool_name=ctx["arguments"]["operation"],
+            arguments=arguments, provider_key=arguments.get("provider_key"),
+            business_kind=BUSINESS_KIND_DESKTOP_AUTOMATION,
+            business_ref={
+                "delivery_id": str(delivery["id"]),
+                "run_id": str(ctx["run"]["id"]),
+                "occurrence_id": str(ctx["run"].get("occurrence_id") or ""),
+                "scenario_key": ctx["adapter"].scenario_key,
+                "task_ref": ctx["run"]["task_ref"],
+                "revision_ref": ctx["run"]["revision_ref"],
+            },
+            dedupe_key=f"delivery:{delivery['id']}:a:2",
+            authorization_epoch=arguments.get("authorization_epoch"),
+        )
+        new_invocation_id = str(invocation["id"])
+        with get_db_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                UPDATE desktop_automation_deliveries
+                SET state = 'dispatched', updated_at = NOW()
+                WHERE id = %s AND tenant_id = %s AND state IN ('failed', 'unknown', 'expired')
+                """,
+                (str(delivery["id"]), tenant_id),
+            )
+            assert cur.rowcount == 1
+            da_attempts.create_attempt(
+                cur, tenant_id, delivery, new_invocation_id, new_request_id
+            )
+            conn.commit()
+        claim_token = generate_claim_token()
+        claimed = repository.claim_next(ctx["device_id"], tenant_id, sha256_hex(claim_token), 300)
+        assert claimed is not None and str(claimed["id"]) == new_invocation_id
+        started = repository.mark_started(new_invocation_id, tenant_id, sha256_hex(claim_token))
+        assert started is not None and started["state"] == "running"
+
+        # consumed 不阻断：新签发成功（同 delivery 第二个许可）
+        reissued = permits.write_authorize(
+            tenant_id=tenant_id, device_id=ctx["device_id"],
+            invocation_id=new_invocation_id,
+            claim_token_hash=sha256_hex(claim_token), request_id=new_request_id,
+            target_version="tv-1", payload_hash=delivery.get("payload_hash"),
+        )
+        assert reissued["permit_id"] and reissued["permit_id"] != permit["permit_id"]
+
 
 class TestQuotaRollback:
     def test_quota_exhausted_rolls_back_whole_tx(self, tenant_id):

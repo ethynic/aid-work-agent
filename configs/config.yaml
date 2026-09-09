@@ -353,3 +353,28 @@ desktop_agent:
   authorization_ticket_ttl_seconds: 120
   policy_revision: "desktop-d1-v1"
   allowed_remote_tools: []
+
+# 微信营销自动化（P2，docs/plans/weixin/plan-weixin-marketing-automation.md §9）：
+# enabled 默认 false——未启用时零注册零执行（无适配器注册、无调度 tick、无清扫），
+# 线上默认无行为变化；真机门禁（P0）通过前不开放无人值守真实发送。
+weixin_marketing:
+  enabled: false
+  time_triggers_enabled: true      # 时间触发（once/interval/calendar）
+  event_triggers_enabled: false    # 事件触发订阅（worker 接线在 P4）
+  images_enabled: false            # 图片内容块（图片 operation 在 P4 交付）
+  evidence_real_mode: false        # true 时真实证据校验器缺失即 fail-closed（R43）
+  max_blocks: 20                   # 每个 revision 内容块上限
+  max_interval_frequency: 300      # interval 触发最小间隔秒数（频率上限）
+  dispatch_batch_size: 20          # 执行驱动 tick 单批 run 数
+  time_scan_interval_seconds: 5    # 时间扫描 tick 间隔（R44）
+  dispatch_interval_seconds: 5     # 执行驱动 tick 间隔（R44）
+  permits_sweep_interval_seconds: 30   # 许可过期清扫 tick 间隔（R22/R44）
+  runs_reclaim_interval_seconds: 60    # run 租约回收 tick 间隔（§5.4/R44）
+  retention_days: 90               # 业务记录建议留存天数（租户可调）
+  tenant_allowlist: []             # 空 = 不限租户（仍受 enabled 总门控）
+  quotas:                          # 微信发送配额 → 底座 quota scopes（许可事务内原子预留）
+    window_seconds: 3600
+    tenant_limit: 100
+    task_limit: 30
+    target_limit: 10
+    account_limit: 60

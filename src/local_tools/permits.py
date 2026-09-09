@@ -1,11 +1,14 @@
-"""本地工具写动作许可（write-authorize，§5.2 / R8 / R9）
+"""本地工具写动作许可（write-authorize，§5.2 / R8 / R9 / R49）
 
 不可消除的不确定窗口 → 短期一次性许可：在最后一次目标复验后、输入/回车前申请。
 服务器在**同一事务**中验证 claim/device、active revision epoch、当前 delivery 未获
 许可、取消状态、deadline 和配额，保守预留配额并返回 permit_id/短 deadline。
 
-锁顺序：task subject（FOR UPDATE，与发布/暂停互斥——许可事务同时锁定 subject/epoch，
-避免检查后授权漂移）→ invocation → delivery → quota buckets（R9 固定 scope 顺序）。
+锁顺序（R49，符合 R12 subject→run 次序并与 cancel_run 的 run→deliveries→invocations
+序无交叉死锁）：task subject（FOR UPDATE，与发布/暂停互斥——许可事务同时锁定
+subject/epoch，避免检查后授权漂移）→ run（经 delivery.run_id 租户域 FOR UPDATE，
+复验 run 未取消/未终态——终态 run 仅放行人工重试链重开的 delivery，R45/R52——
+与 cancel_run 单事务互斥）→ invocation → delivery → quota buckets（R9 固定 scope 顺序）。
 
 许可发出后将该 delivery 标为 may_have_started（旧租约过期也不重新分配该条）。
 permit token 明文只在签发响应中返回一次，库里只存 hash。
@@ -23,6 +26,7 @@ from src.desktop_automation import audit, deliveries as da_deliveries, quota, su
 from src.desktop_automation.adapters import AdapterContext, TrustedAdapterRegistry
 from src.desktop_automation.constants import (
     BUSINESS_KIND_DESKTOP_AUTOMATION,
+    DELIVERY_STATE_DISPATCHED,
     EFFECT_NONE,
     OPERATION_PROTOCOL_V2,
     PHASE_PREPARED,
@@ -66,17 +70,83 @@ def write_authorize(
 ) -> Dict[str, Any]:
     """签发写动作许可（单事务校验链）。成功返回 {permit_id, permit_token, deadline_at}。
 
-    校验链（任一失败整体回滚，不产生半预留）：
-    设备/claim → 租约/state=running/未取消 → business_kind → deadline → v2 协议与
-    request_id/目标绑定 → subject 状态/epoch（适配器授权前后皆锁定）→ 适配器
-    authorize_operation → R9 quota 预留 → 幂等（同 delivery 已有 issued/consumed → 409）
-    → INSERT permit → delivery 置 may_have_started → audit。
+    校验链（任一失败整体回滚，不产生半预留；R49 取消互斥段前置于 invocation 锁）：
+    非锁定预读（claim/租户 fast-404 + business_ref 定位）→ task subject 状态/epoch →
+    run 未取消/未终态（锁序 run→delivery→quota 的第一环）→ 设备/claim/租约/
+    state=running/未取消 → business_kind → deadline → v2 协议与 request_id/目标绑定 →
+    适配器 authorize_operation → R9 quota 预留 → 幂等（同 delivery 已有 issued/consumed
+    活跃许可 → 409）→ INSERT permit → delivery 置 may_have_started → audit。
     """
     now = _aware(now or datetime.now(timezone.utc))
     with get_db_connection() as conn:
         cursor = conn.cursor()
 
-        # 1) invocation 行锁 + 设备/claim/状态链
+        # 0) 非锁定预读：claim/租户 fast-404 + business_kind 协议门 + business_ref 提取
+        #    （定位 subject/run 锁目标；权威校验在各自行锁内重验——
+        #    arguments_json/business_ref 创建后不可变）
+        cursor.execute(
+            """
+            SELECT claim_token_hash, business_kind, business_ref
+            FROM local_tool_invocations
+            WHERE id = %s AND tenant_id = %s
+            """,
+            (invocation_id, tenant_id),
+        )
+        pre = cursor.fetchone()
+        if pre is None or pre["claim_token_hash"] != claim_token_hash:
+            conn.rollback()
+            raise PermitError("CLAIM_MISMATCH", 404, "invocation 不存在或 claim token 不匹配")
+        if pre["business_kind"] != BUSINESS_KIND_DESKTOP_AUTOMATION:
+            # R8：只对 business_kind='desktop_automation' 的 v2 invocation 生效；旧 invocation 409
+            conn.rollback()
+            raise PermitError(
+                "NOT_DESKTOP_AUTOMATION", 409, "仅桌面自动任务 v2 invocation 支持写动作许可"
+            )
+        business_ref = pre["business_ref"] or {}
+        scenario_key = business_ref.get("scenario_key") or ""
+        task_ref = business_ref.get("task_ref") or ""
+        delivery_id = business_ref.get("delivery_id") or ""
+        if not delivery_id:
+            conn.rollback()
+            raise PermitError("DELIVERY_BINDING_MISSING", 409, "invocation 未绑定 delivery")
+        if not scenario_key or not task_ref:
+            conn.rollback()
+            raise PermitError(
+                "SCENARIO_BINDING_MISSING", 409, "invocation 未绑定 scenario/task，拒绝签发许可"
+            )
+        cursor.execute(
+            "SELECT run_id FROM desktop_automation_deliveries WHERE id = %s AND tenant_id = %s",
+            (delivery_id, tenant_id),
+        )
+        delivery_loc = cursor.fetchone()
+        if delivery_loc is None:
+            conn.rollback()
+            raise PermitError("DELIVERY_NOT_FOUND", 404, "delivery 不存在")
+        run_id = str(delivery_loc["run_id"])
+
+        # 1) task subject 锁定（许可事务同时锁定 subject/epoch，避免检查后授权漂移）。
+        #    business_ref 缺 scenario_key/task_ref 一律 409（P1-5：fail-closed，不无授权放行）
+        task = subjects.lock_task_subject(cursor, tenant_id, scenario_key, task_ref, skip_locked=False)
+        if task is None or task["status"] != TASK_STATUS_ACTIVE:
+            conn.rollback()
+            raise PermitError("TASK_NOT_ACTIVE", 409, "任务已暂停或不存在，拒绝授权")
+
+        # 2) run 锁定 + 取消/终态复验（R49）：cancel_run 以 run→deliveries→invocations
+        #    序单事务持锁——此处 run 先于 invocation/delivery 加锁并复验，取消与许可
+        #    互斥（取消后/并发取消窗口内不再签发新许可）。终态 run 的放行判定推迟到
+        #    delivery 锁后（人工重试链重开判据需 delivery/attempt 行数据，见步骤 4）
+        cursor.execute(
+            "SELECT id, state FROM desktop_automation_runs "
+            "WHERE tenant_id = %s AND id = %s FOR UPDATE",
+            (tenant_id, run_id),
+        )
+        run_row = cursor.fetchone()
+        if run_row is None:
+            conn.rollback()
+            raise PermitError("RUN_NOT_FOUND", 404, "delivery 所属 run 不存在")
+        run_active = run_row["state"] == "running"
+
+        # 3) invocation 行锁 + 设备/claim/状态链
         #    租约/截止/许可 deadline 上限全部在 SQL 侧计算：lease_expires_at 是无时区
         #    TIMESTAMP（既有列，R7 不动），客户端按 UTC 解释会因会话时区错判——SQL 内
         #    与 NOW() 同一会话时区比较才正确；LEAST 对 naive/timestamptz 混合按会话时区提升。
@@ -143,24 +213,7 @@ def write_authorize(
             conn.rollback()
             raise PermitError("DEADLINE_EXCEEDED", 409, "操作截止时间已过")
 
-        # 2) task subject 锁定（许可事务同时锁定 subject/epoch，避免检查后授权漂移）。
-        #    business_ref 缺 scenario_key/task_ref 一律 409（P1-5：fail-closed，不无授权放行）
-        business_ref = inv["business_ref"] or {}
-        scenario_key = business_ref.get("scenario_key") or ""
-        task_ref = business_ref.get("task_ref") or ""
-        delivery_id = business_ref.get("delivery_id") or ""
-        if not delivery_id:
-            conn.rollback()
-            raise PermitError("DELIVERY_BINDING_MISSING", 409, "invocation 未绑定 delivery")
-        if not scenario_key or not task_ref:
-            conn.rollback()
-            raise PermitError(
-                "SCENARIO_BINDING_MISSING", 409, "invocation 未绑定 scenario/task，拒绝签发许可"
-            )
-        task = subjects.lock_task_subject(cursor, tenant_id, scenario_key, task_ref, skip_locked=False)
-        if task is None or task["status"] != TASK_STATUS_ACTIVE:
-            conn.rollback()
-            raise PermitError("TASK_NOT_ACTIVE", 409, "任务已暂停或不存在，拒绝授权")
+        # subject epoch/revision 复验（task 行已持有锁；args 为锁定行数据）
         if task["active_revision_ref"] != args.get("authorization_revision"):
             conn.rollback()
             raise PermitError("REVISION_STALE", 409, "任务版本已切换，拒绝授权")
@@ -169,15 +222,53 @@ def write_authorize(
             conn.rollback()
             raise PermitError("AUTHORIZATION_EPOCH_STALE", 409, "授权 epoch 已失效（任务已暂停/重发布），拒绝授权")
 
-        # 3) delivery 行锁 + 幂等拒绝重复许可
+        # 4) delivery 行锁 + 可执行资格复验（R49：dispatched 且非 skipped/expired/终态，
+        #    且与已锁 run 绑定一致）+ 活跃许可判重（P2-A CR 修复：仅 state='issued' 且
+        #    deadline 未过的**活跃**许可阻断同 delivery 新签发——consumed/expired 为终态
+        #    不阻断，人工重试新 attempt 照【计划 §5.4】放行；同 delivery 同时至多一个活跃许可）
         delivery = da_deliveries.lock_delivery(cursor, delivery_id, tenant_id)
         if delivery is None:
             conn.rollback()
             raise PermitError("DELIVERY_NOT_FOUND", 404, "delivery 不存在")
+        if str(delivery["run_id"]) != run_id:
+            conn.rollback()
+            raise PermitError("DELIVERY_BINDING_MISSING", 409, "delivery 与 run 绑定不一致")
+        if delivery["state"] != DELIVERY_STATE_DISPATCHED:
+            conn.rollback()
+            raise PermitError(
+                "DELIVERY_NOT_DISPATCHED", 409,
+                f"delivery 不可执行（state={delivery['state']}，须为 dispatched）",
+            )
+        if not run_active:
+            # 终态 run 上的许可仅放行「人工重试链」形态（R45/R52 与 R49 的交集语义）：
+            # delivery 曾终态（finished_at 置位）经 retry_delivery 条件回置 dispatched，
+            # 且本 invocation 恰为该 delivery 最新 attempt 的在途执行。取消/租约回收/
+            # 截止收敛终止的 run（delivery 从未终态或非本 attempt）一律拒绝。
+            cursor.execute(
+                """
+                SELECT invocation_id FROM desktop_automation_attempts
+                WHERE tenant_id = %s AND delivery_id = %s
+                ORDER BY attempt_no DESC LIMIT 1
+                """,
+                (tenant_id, delivery_id),
+            )
+            latest_attempt = cursor.fetchone()
+            retry_reopened = (
+                delivery.get("finished_at") is not None
+                and latest_attempt is not None
+                and str(latest_attempt["invocation_id"]) == str(inv["id"])
+            )
+            if not retry_reopened:
+                conn.rollback()
+                raise PermitError(
+                    "RUN_NOT_ACTIVE", 409,
+                    f"run 已取消/终态（state={run_row['state']}），拒绝签发许可",
+                )
         cursor.execute(
             """
-            SELECT id, state FROM local_tool_operation_permits
-            WHERE tenant_id = %s AND delivery_id = %s AND state IN ('issued', 'consumed')
+            SELECT id FROM local_tool_operation_permits
+            WHERE tenant_id = %s AND delivery_id = %s
+              AND state = 'issued' AND deadline >= NOW()
             LIMIT 1
             """,
             (tenant_id, delivery_id),
@@ -186,10 +277,11 @@ def write_authorize(
         if dup is not None:
             conn.rollback()
             raise PermitError(
-                "PERMIT_ALREADY_ISSUED", 409, "该 delivery 已持有许可（一次性），拒绝重复签发"
+                "PERMIT_ALREADY_ISSUED", 409,
+                "该 delivery 已有活跃许可（同时至多一个），拒绝重复签发",
             )
 
-        # 4) 适配器场景授权（epoch/target_version/payload_hash）+ R9 quota 预留
+        # 5) 适配器场景授权（epoch/target_version/payload_hash）+ R9 quota 预留
         #    （scenario_key 上方已强制非空，fail-closed）
         adapter = TrustedAdapterRegistry.get(scenario_key)
         if adapter is None:
@@ -197,19 +289,19 @@ def write_authorize(
             raise PermitError("SCENARIO_NOT_REGISTERED", 409, f"场景 {scenario_key} 未注册受信适配器")
         decision = adapter.authorize_operation(
             AdapterContext(
-                    tenant_id=tenant_id,
-                    user_id=str(inv["user_id"]),
-                    scenario_key=scenario_key,
-                    task_ref=task_ref,
-                    revision_ref=str(args.get("authorization_revision") or ""),
-                ),
-                operation=str(args.get("operation") or ""),
-                target_ref=args.get("target_ref"),
-                target_version=args.get("target_version"),
-                payload_hash=args.get("payload_hash"),
-                authorization_revision=args.get("authorization_revision"),
-                authorization_epoch=args.get("authorization_epoch"),
-            )
+                tenant_id=tenant_id,
+                user_id=str(inv["user_id"]),
+                scenario_key=scenario_key,
+                task_ref=task_ref,
+                revision_ref=str(args.get("authorization_revision") or ""),
+            ),
+            operation=str(args.get("operation") or ""),
+            target_ref=args.get("target_ref"),
+            target_version=args.get("target_version"),
+            payload_hash=args.get("payload_hash"),
+            authorization_revision=args.get("authorization_revision"),
+            authorization_epoch=args.get("authorization_epoch"),
+        )
         if not decision.allowed:
             conn.rollback()
             raise PermitError("ADAPTER_DENIED", 403, f"场景授权拒绝: {decision.reason}")
@@ -229,7 +321,7 @@ def write_authorize(
                 f"额度不足（{e.scope.scope_type}/{e.scope.scope_id}），许可事务已回滚",
             )
 
-        # 5) 签发许可（token 明文仅此一次返回）
+        # 6) 签发许可（token 明文仅此一次返回）
         permit_token = generate_permit_token()
         cursor.execute(
             """
@@ -254,7 +346,7 @@ def write_authorize(
         )
         permit_id = str(cursor.fetchone()["id"])
 
-        # 6) delivery 置 may_have_started（旧租约过期也不重新分配该条）+ invocation 回写
+        # 7) delivery 置 may_have_started（旧租约过期也不重新分配该条）+ invocation 回写
         da_deliveries.mark_may_have_started(cursor, delivery_id, tenant_id)
         cursor.execute(
             "UPDATE local_tool_invocations SET write_phase = 'may_have_started' "

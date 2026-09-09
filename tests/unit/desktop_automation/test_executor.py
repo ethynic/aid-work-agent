@@ -158,6 +158,75 @@ class TestClaimTenantIsolation:
             cleanup_tenant(other_tenant)
 
 
+class TestDirectedClaim:
+    """R50：claim_run 定向领取（expected_run_id，FOR UPDATE SKIP LOCKED）"""
+
+    def _two_pending_runs(self, tenant_id):
+        harness.setup_scenario(tenant_id)
+        from src.desktop_automation import occurrences
+
+        r1 = occurrences.accept_manual_trigger(
+            tenant_id=tenant_id, scenario_key="fake-scenario", task_ref="task-1",
+            request_id="direct-1", user_id="owner-1", now=harness.utcnow(),
+        )
+        r2 = occurrences.accept_manual_trigger(
+            tenant_id=tenant_id, scenario_key="fake-scenario", task_ref="task-1",
+            request_id="direct-2", user_id="owner-1", now=harness.utcnow(),
+        )
+        run_ids = [str(get_occurrence_run(tenant_id, r["occurrence_id"])) for r in (r1, r2)]
+        return run_ids
+
+    def test_expected_run_id_claims_only_target(self, tenant_id):
+        """定向领取只领目标 run：另一 pending run 不被触碰；已领/非目标返回空。"""
+        run_a, run_b = self._two_pending_runs(tenant_id)
+        claimed = runs.claim_run(
+            lease_seconds=60, limit=5, tenant_id=tenant_id, expected_run_id=run_b,
+        )
+        assert len(claimed) == 1 and str(claimed[0]["id"]) == run_b
+        assert claimed[0]["state"] == "running" and claimed[0]["fence_token"] == 1
+        # 目标已被领：再次定向领取返回空（SKIP LOCKED 语义，不阻塞不误领）
+        assert runs.claim_run(
+            lease_seconds=60, limit=5, tenant_id=tenant_id, expected_run_id=run_b,
+        ) == []
+        # 未被领的 A 仍 pending，可照常定向领取
+        again = runs.claim_run(
+            lease_seconds=60, limit=5, tenant_id=tenant_id, expected_run_id=run_a,
+        )
+        assert len(again) == 1 and str(again[0]["id"]) == run_a
+
+    def test_expected_run_id_respects_tenant_scope(self, tenant_id):
+        """定向领取与租户过滤叠加：他租户的 run id 在本租户域内领不到。"""
+        other_tenant = f"da_test_{uuid.uuid4().hex[:12]}"
+        try:
+            run_a, _ = self._two_pending_runs(tenant_id)
+            harness.setup_scenario(other_tenant)
+            assert runs.claim_run(
+                lease_seconds=60, limit=5, tenant_id=other_tenant, expected_run_id=run_a,
+            ) == []
+            # 原租户内目标仍可领（未被他人触碰）
+            claimed = runs.claim_run(
+                lease_seconds=60, limit=5, tenant_id=tenant_id, expected_run_id=run_a,
+            )
+            assert len(claimed) == 1 and str(claimed[0]["id"]) == run_a
+        finally:
+            from tests.unit.desktop_automation.conftest import cleanup_tenant
+
+            cleanup_tenant(other_tenant)
+
+
+def get_occurrence_run(tenant_id: str, occurrence_id) -> str:
+    from src.db.database import get_db_connection
+
+    with get_db_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id FROM desktop_automation_runs "
+            "WHERE tenant_id = %s AND occurrence_id = %s",
+            (tenant_id, str(occurrence_id)),
+        )
+        return cur.fetchone()["id"]
+
+
 class TestRevalidation:
     def test_payload_hash_mismatch_aborts_run(self, tenant_id):
         """payload hash 预载校验失败：run 落终态，不派发任何 delivery"""

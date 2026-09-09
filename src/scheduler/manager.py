@@ -270,6 +270,60 @@ class ScheduledTaskManager:
         except Exception as e:
             logger.error(f"后端日志：注册用户行为日志清理任务失败: {e}")
 
+        # ===== weixin_marketing 调度闭环（R42 门控：enabled=false 零注册；R44 四类 tick）=====
+        # tick 函数与 APScheduler 解耦（src/weixin_marketing/dispatch.py，可直接注入
+        # now/batch/config 调用）；interval 从 weixin_marketing 配置节读取（热改 yaml
+        # 需重启生效——APScheduler job 注册仅在调度器启动时执行一次）
+        try:
+            from src.weixin_marketing import dispatch as wxm_dispatch
+            from src.weixin_marketing.config import get_weixin_marketing_config
+
+            wxm_cfg = get_weixin_marketing_config()
+            if wxm_cfg.enabled:
+                self._scheduler.add_job(
+                    wxm_dispatch.time_scan_tick,
+                    IntervalTrigger(seconds=wxm_cfg.time_scan_interval_seconds),
+                    id="job_system_weixin_marketing_time_scan",
+                    name="Weixin Marketing Time Scan",
+                    max_instances=1,
+                    coalesce=True,
+                )
+                self._scheduler.add_job(
+                    wxm_dispatch.run_dispatch_tick,
+                    IntervalTrigger(seconds=wxm_cfg.dispatch_interval_seconds),
+                    id="job_system_weixin_marketing_dispatch",
+                    name="Weixin Marketing Run Dispatch",
+                    max_instances=1,
+                    coalesce=True,
+                )
+                self._scheduler.add_job(
+                    wxm_dispatch.permits_sweep_tick,
+                    IntervalTrigger(seconds=wxm_cfg.permits_sweep_interval_seconds),
+                    id="job_system_weixin_marketing_sweep",
+                    name="Weixin Marketing Permits Sweep",
+                    max_instances=1,
+                    coalesce=True,
+                )
+                self._scheduler.add_job(
+                    wxm_dispatch.runs_reclaim_tick,
+                    IntervalTrigger(seconds=wxm_cfg.runs_reclaim_interval_seconds),
+                    id="job_system_weixin_marketing_reclaim",
+                    name="Weixin Marketing Runs Reclaim",
+                    max_instances=1,
+                    coalesce=True,
+                )
+                logger.info(
+                    f"后端日志：已注册 weixin_marketing 调度闭环任务 "
+                    f"(time_scan={wxm_cfg.time_scan_interval_seconds}s, "
+                    f"dispatch={wxm_cfg.dispatch_interval_seconds}s, "
+                    f"sweep={wxm_cfg.permits_sweep_interval_seconds}s, "
+                    f"reclaim={wxm_cfg.runs_reclaim_interval_seconds}s)"
+                )
+            else:
+                logger.debug("后端日志：weixin_marketing 未启用，跳过调度 tick 注册（R42 零注册）")
+        except Exception as e:
+            logger.error(f"后端日志：注册 weixin_marketing 调度任务失败: {e}")
+
     def _run_memory_summarizer(self):
         """执行每日记忆总结（APScheduler 回调）"""
         try:

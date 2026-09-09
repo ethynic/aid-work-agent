@@ -436,6 +436,14 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to load subagent definitions from DB (non-critical): {e}")
 
+    # 微信营销自动化适配器受信注册（weixin_marketing.enabled 门控内；
+    # 默认 false 时零注册零执行，线上无行为变化；失败仅告警不阻断启动）
+    try:
+        from src.weixin_marketing.registration import ensure_registered
+        ensure_registered()
+    except Exception as e:
+        logger.warning(f"weixin_marketing adapter registration failed (non-critical): {e}")
+
     # Initialize logs database pool (observability, optional)
     try:
         logger.info(f"[pid={_pid}] step3: init_logs_pool ...")
@@ -1805,6 +1813,9 @@ app.include_router(local_tools_api.router)
 # 桌面 CLI 无人值守自动任务底座 P1-A（desktop_automation deliveries 视图）
 from src.desktop_automation import api as desktop_automation_api  # noqa: E402
 app.include_router(desktop_automation_api.router)
+# 微信营销自动化 P2（weixin_marketing API 面；调度执行受 weixin_marketing.enabled 门控）
+from src.weixin_marketing import api as weixin_marketing_api  # noqa: E402
+app.include_router(weixin_marketing_api.router)
 
 # 外部系统入口（SSO 打开第三方系统，见 docs/system/external-system-entry-design.md）
 from src.api import external_systems  # noqa: E402

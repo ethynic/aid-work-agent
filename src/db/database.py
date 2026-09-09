@@ -1068,6 +1068,19 @@ def _init_postgresql():
             except Exception as rollback_err:
                 logger.warning(f"Failed to rollback desktop_automation transaction: {rollback_err}")
 
+        # 微信营销自动化业务表（bs_weixin_marketing_* 7 张，P2 幂等 DDL；
+        # 与 deploy/init-postgres.sql 双轨同步，不进 db_update.yaml；仅建表，
+        # 适配器注册与调度接线由 weixin_marketing.registration 的 enabled 门控控制）
+        try:
+            from src.weixin_marketing.init_tables import init_weixin_marketing_tables
+            init_weixin_marketing_tables(conn)
+        except Exception as e:
+            logger.warning(f"Failed to initialize weixin_marketing tables: {e}")
+            try:
+                conn.rollback()
+            except Exception as rollback_err:
+                logger.warning(f"Failed to rollback weixin_marketing transaction: {rollback_err}")
+
         # Skill 表初始化由 SkillLoader._init_skill_tables() 统一处理，
         # 通过 SKILL.md 中的 init_script 字段声明，不再硬编码。
 

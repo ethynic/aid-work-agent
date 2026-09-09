@@ -55,6 +55,13 @@ def _init_resources():
     except Exception as e:
         logger.warning(f"background runner: channel tables ensure failed: {e}")
 
+    # 微信营销自动化适配器受信注册（weixin_marketing.enabled 门控内；默认 false 零注册）
+    try:
+        from src.weixin_marketing.registration import ensure_registered
+        ensure_registered()
+    except Exception as e:
+        logger.warning(f"background runner: weixin_marketing registration failed: {e}")
+
 
 async def _heartbeat():
     """每 30s 写一次心跳文件，供 healthcheck 判活。"""
