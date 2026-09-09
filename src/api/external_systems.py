@@ -66,7 +66,7 @@ def _resolve_grant_url(cfg: dict, resp: dict) -> str:
     url = response.get("url") or ""
     if url:
         return url
-    ticket = response.get("client_token") or ""
+    ticket = response.get("sso_ticket") or ""
     if cfg["ticket_param"] and ticket:
         return _build_ticket_url(cfg["sso_url"], cfg["ticket_param"], ticket)
     raise ValueError("sso 响应缺少 url 与票据，无法生成跳转地址")

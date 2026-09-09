@@ -16,7 +16,7 @@ sso_enabled: true
 sso_system_name: 10605 ERP
 sso_mode: ticket_redirect
 sso_url: https://erp.example.com/
-sso_ticket_param: client_token
+sso_ticket_param: sso_ticket
 sso_grant_url: https://erp.example.com/api/v1/erp.delegate/sso_grant
 sso_fallback_url: https://erp.example.com/login
 ```
@@ -150,7 +150,7 @@ class TestGetSsoUrl:
             return {"client_token": "ct", "cached": True}
 
         def _grant(*a, **kw):
-            return {"Code": 0, "Response": {"client_token": "ticket", "url": "https://erp.example.com/?client_token=ticket"}}
+            return {"Code": 0, "Response": {"sso_ticket": "ticket", "url": "https://erp.example.com/?sso_ticket=ticket"}}
 
         monkeypatch.setattr("src.services.recap.tasks.external_push._delegate_login", _login)
         monkeypatch.setattr("src.services.recap.tasks.external_push._post_json", _grant)
@@ -168,13 +168,13 @@ class TestGetSsoUrl:
             return {"client_token": "ct"}
 
         def _grant(*a, **kw):
-            return {"Code": 0, "Response": {"client_token": "ticket"}}
+            return {"Code": 0, "Response": {"sso_ticket": "ticket"}}
 
         monkeypatch.setattr("src.services.recap.tasks.external_push._delegate_login", _login)
         monkeypatch.setattr("src.services.recap.tasks.external_push._post_json", _grant)
         result = await external_systems.get_sso_url("pre_sales", _request(TENANT))
         assert result["success"] is True
-        assert result["data"]["url"] == "https://erp.example.com/?client_token=ticket"
+        assert result["data"]["url"] == "https://erp.example.com/?sso_ticket=ticket"
 
     async def test_sso_url_unauthenticated_401(self, monkeypatch):
         monkeypatch.setattr(external_systems, "get_current_user", lambda req: None)
@@ -244,7 +244,7 @@ class TestGetSsoUrl:
         )
         monkeypatch.setattr(
             "src.services.recap.tasks.external_push._post_json",
-            lambda *a, **kw: {"Code": 0, "Response": {"client_token": ""}},
+            lambda *a, **kw: {"Code": 0, "Response": {"sso_ticket": ""}},
         )
         result = await external_systems.get_sso_url("pre_sales", _request(TENANT))
         assert result["success"] is False
@@ -267,11 +267,11 @@ class TestGetSsoUrl:
         )
         monkeypatch.setattr(
             "src.services.recap.tasks.external_push._post_json",
-            lambda *a, **kw: {"Code": 0, "Response": {"client_token": "tk"}},
+            lambda *a, **kw: {"Code": 0, "Response": {"sso_ticket": "tk"}},
         )
         result = await external_systems.get_sso_url("pre_sales", _request(TENANT))
         assert result["success"] is True
-        assert result["data"]["url"] == "https://erp.example.com/entry?src=portal&client_token=tk"
+        assert result["data"]["url"] == "https://erp.example.com/entry?src=portal&sso_ticket=tk"
 
     async def test_list_direct_url_mode_exposes_entry_url(self, authed, monkeypatch):
         """direct_url 模式列表直接透出 entry_url，前端免换票打开"""
@@ -330,7 +330,7 @@ class TestGetSsoUrlTokenParam:
         def _login(url, body, agent_token, extra_headers=None):
             calls["url"] = url
             calls["body"] = body
-            return {"Code": 0, "Response": {"client_token": "stok"}}
+            return {"Code": 0, "Response": {"sso_ticket": "stok"}}
 
         monkeypatch.setattr("src.services.recap.tasks.external_push._post_json", _login)
         result = await external_systems.get_sso_url("pre_sales", _request(TENANT))
@@ -389,9 +389,9 @@ class TestGetSsoUrlGrantRetry:
         def _post(url, body, agent_token, extra_headers=None):
             if "sso_grant" in url:
                 return {"Code": -1, "Error": "单点登录失败"}
-            return {"Code": 0, "Response": {"client_token": "ltok"}}
+            return {"Code": 0, "Response": {"sso_ticket": "ltok"}}
 
         monkeypatch.setattr("src.services.recap.tasks.external_push._post_json", _post)
         result = await external_systems.get_sso_url("pre_sales", _request(TENANT))
         assert result["success"] is True
-        assert result["data"]["url"] == "https://erp.example.com/?client_token=ltok"
+        assert result["data"]["url"] == "https://erp.example.com/?sso_ticket=ltok"
