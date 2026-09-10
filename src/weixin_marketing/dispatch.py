@@ -14,6 +14,10 @@
   条目置 unknown 不重派；未提交条目 expired；空 deliveries 按未完成失败收敛）。
 - assets_cleanup_tick：过期无引用素材硬删（P4-A R57：retention_until 已过且无
   draft/published 引用；行+文件，引用复核与删除同事务）。
+- retention_cleanup_tick：payloads/occurrences 保留期清理（P5 R59③；payloads 删
+  无未 processed 事件引用的过期行，occurrences 删本场景无 runs 引用的过期行）。
+- assets_orphan_scan_tick：磁盘孤儿素材扫描（P5 R59③；对照 assets 行只读告警，
+  assets_orphan_scan_enabled 默认关）。
 
 入口统一门控（R42）：enabled=false 直接 return（零 DB 动作）；time_scan 额外受
 time_triggers_enabled 细分开关。registration.ensure_registered 每 tick 幂等调用
@@ -539,6 +543,40 @@ def assets_cleanup_tick(
     return wxm_assets.cleanup_expired_assets(now=now, batch=batch, config=cfg)
 
 
+# ==================== ⑦ 保留期清理 tick（P5 R59③）====================
+
+
+def retention_cleanup_tick(
+    now: Optional[datetime] = None,
+    batch: Optional[int] = None,
+    config: Optional[WeixinMarketingConfig] = None,
+) -> Dict[str, Any]:
+    """payloads/occurrences 保留期清理（enabled 门控；data_retention_days 可配
+    默认 30 天）：payloads 删「无未 processed 事件引用」的过期行，occurrences 删
+    本场景「无 runs 引用」的过期行——语义与安全边界见 retention.cleanup_expired。"""
+    from src.weixin_marketing import retention as wxm_retention
+
+    cfg = _resolve_config(config)
+    if not cfg.enabled:
+        return {"enabled": False, "payloads_deleted": 0, "occurrences_deleted": 0}
+    return wxm_retention.cleanup_expired(now=now, batch=batch, config=cfg)
+
+
+# ==================== ⑧ 磁盘孤儿素材扫描 tick（P5 R59③，只读告警）====================
+
+
+def assets_orphan_scan_tick(
+    config: Optional[WeixinMarketingConfig] = None,
+    tenants_root: Optional[str] = None,
+) -> Dict[str, Any]:
+    """磁盘孤儿素材扫描（enabled 门控 + assets_orphan_scan_enabled 默认关）：
+    对照 assets 行，孤立文件仅告警不动删（人工核对后处理）。
+    tenants_root 缺省取 get_tenants_storage_root（测试隔离可注入）。"""
+    from src.weixin_marketing import assets as wxm_assets
+
+    return wxm_assets.scan_asset_orphans(config=config, tenants_root=tenants_root)
+
+
 # ==================== ⑥ 事件匹配 worker tick（P4-B R57）====================
 
 # 单事件单 tick 内最大候选处理步数（eligible 快照集合上限防御）
@@ -585,6 +623,13 @@ def event_match_tick(
         wxm_sources.cleanup_expired_nonces(now)
     except Exception as e:  # noqa: BLE001
         logger.opt(exception=True).warning(f"后端日志：weixin_marketing nonce 清理异常: {e}")
+    try:
+        # P5 R59③：retiring→retired 收敛（验签侧本就按 retire_at 排除，此处状态归档）
+        wxm_sources.retire_expired_keys(now)
+    except Exception as e:  # noqa: BLE001
+        logger.opt(exception=True).warning(
+            f"后端日志：weixin_marketing retiring 密钥收敛异常: {e}"
+        )
 
     pending_events = da_events.list_unprocessed_events(
         SCENARIO_KEY,

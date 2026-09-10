@@ -549,17 +549,42 @@ def canonical_payload_bytes(envelope: Dict[str, Any]) -> bytes:
 def store_event_payload_on(
     cursor, tenant_id: str, source_id: str, payload_hash: str, envelope: Dict[str, Any]
 ) -> str:
-    """受控 payload 持久化（同事务；同 hash 复用既有行），返回 payload_ref"""
-    cursor.execute(
-        """
-        INSERT INTO weixin_marketing_event_payloads
-            (tenant_id, source_id, payload_hash, payload_json)
-        VALUES (%s, %s, %s, %s)
-        ON CONFLICT (tenant_id, payload_hash) DO NOTHING
-        """,
-        (tenant_id, source_id, payload_hash, Json(envelope)),
-    )
-    return payload_ref_of(payload_hash)
+    """受控 payload 持久化（同事务；同 hash 复用既有行），返回 payload_ref。
+
+    复用×清理统一锁协议（P5 复审 P1-1）：INSERT ON CONFLICT 复用既有行时，必须
+    SELECT ... FOR SHARE 持共享锁至**接纳事务提交**——清理侧候选 FOR UPDATE
+    SKIP LOCKED 见共享锁即跳过本轮（不等待）；接纳提交后清理下一轮 NOT EXISTS
+    看到新事件引用、永不清除被引用行。行已被已提交的清理删除（SELECT 无行）时
+    重试 INSERT 一次（成功则本事务持有新行；再冲突则行必然存在，FOR SHARE 兜底）。
+    """
+    for _attempt in range(2):
+        cursor.execute(
+            """
+            INSERT INTO weixin_marketing_event_payloads
+                (tenant_id, source_id, payload_hash, payload_json)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (tenant_id, payload_hash) DO NOTHING
+            RETURNING id
+            """,
+            (tenant_id, source_id, payload_hash, Json(envelope)),
+        )
+        if cursor.fetchone() is not None:
+            return payload_ref_of(payload_hash)  # 新插入：行由本事务持有
+        # 同 hash 复用既有行：FOR SHARE 持锁至接纳事务提交（防清理并发删行）
+        cursor.execute(
+            """
+            SELECT id FROM weixin_marketing_event_payloads
+            WHERE tenant_id = %s AND payload_hash = %s
+            FOR SHARE
+            """,
+            (tenant_id, payload_hash),
+        )
+        if cursor.fetchone() is not None:
+            return payload_ref_of(payload_hash)
+        # 行不存在：被（已提交的）清理删除 → 重试 INSERT 一次
+    # 两轮后仍无行不可达（第二轮 INSERT 要么成功要么冲突后行已提交存在）；
+    # 防御性 fail-closed：让接纳事务回滚（事件不接纳，外部重试幂等）
+    raise RuntimeError("payload 持久化失败：复用行在锁定窗口内消失")
 
 
 def load_event_payload(tenant_id: str, payload_ref: str) -> Optional[Dict[str, Any]]:
@@ -740,6 +765,34 @@ def cleanup_expired_nonces(now: Optional[datetime] = None) -> int:
         deleted = cur.rowcount
         conn.commit()
     return deleted
+
+
+def retire_expired_keys(now: Optional[datetime] = None) -> int:
+    """retiring → retired 收敛（retire_at 过窗置 retired；P5 R59③ 收口）。
+
+    验签安全不依赖本函数：load_verifying_keys 已按 retire_at > now 排除过期
+    retiring key，此处仅状态归档（源视图/审计不再长期显示已失效的 retiring）。
+    挂 event_match_tick 清理段（与 nonce 清理同节奏）。"""
+    ensure_event_source_tables()
+    now = now or datetime.now(timezone.utc)
+    with get_db_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE weixin_marketing_event_source_keys
+            SET status = 'retired', updated_at = NOW()
+            WHERE status = 'retiring'
+              AND retire_at IS NOT NULL AND retire_at < %s
+            """,
+            (now,),
+        )
+        retired = cur.rowcount
+        conn.commit()
+    if retired:
+        logger.info(
+            f"后端日志：weixin_marketing webhook 密钥 retiring→retired 收敛 {retired} 条"
+        )
+    return retired
 
 
 # ==================== condition 白名单 DSL（简单判定）====================

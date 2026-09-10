@@ -492,6 +492,76 @@ def cleanup_expired_assets(
     }
 
 
+# ==================== 磁盘孤儿素材扫描（P5 R59③，只读告警）====================
+
+
+def scan_asset_orphans(
+    config: Optional[WeixinMarketingConfig] = None,
+    tenants_root: Optional[str] = None,
+) -> Dict[str, Any]:
+    """磁盘孤儿素材扫描：对照 bs_weixin_marketing_assets 行，孤立文件**仅告警不动删**。
+
+    - 范围：``<tenants_root>/*/weixin-marketing/`` 下的文件（tenants_root 缺省取
+      get_tenants_storage_root）；与行登记 storage_ref 逐一对照（abspath 归一）；
+    - 门控：enabled 总门控 + assets_orphan_scan_enabled（默认关）；
+    - 输出：{enabled, scan_enabled, scanned_files, tracked_files, orphan_count,
+      orphans: [绝对路径...]}——扫描只读，删除永远留给人工核对（防误删在用素材；
+      表行缺文件的「反向孤儿」由读取/下载链路的 hash/文件校验兜底告警，不在本扫描）。
+    """
+    cfg = _resolve_config(config)
+    if not cfg.enabled or not cfg.assets_orphan_scan_enabled:
+        return {
+            "enabled": cfg.enabled,
+            "scan_enabled": cfg.assets_orphan_scan_enabled,
+            "scanned_files": 0,
+            "tracked_files": 0,
+            "orphan_count": 0,
+            "orphans": [],
+        }
+    import pathlib
+
+    from src.core.storage import get_tenants_storage_root
+
+    root = pathlib.Path(tenants_root or get_tenants_storage_root())
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT storage_ref FROM bs_weixin_marketing_assets")
+        # normcase 归一（Windows 大小写/斜杠差异不产生假孤儿；Linux 恒等）
+        tracked_refs = {
+            os.path.normcase(os.path.abspath(str(r["storage_ref"])))
+            for r in cursor.fetchall()
+        }
+    scanned = tracked = 0
+    orphans: List[str] = []
+    if root.exists():
+        for tenant_dir in root.iterdir():
+            scene_dir = tenant_dir / ASSET_STORAGE_SCENE
+            if not scene_dir.is_dir():
+                continue
+            for entry in scene_dir.iterdir():
+                if not entry.is_file():
+                    continue
+                scanned += 1
+                abs_path = os.path.abspath(str(entry))
+                if os.path.normcase(abs_path) in tracked_refs:
+                    tracked += 1
+                else:
+                    orphans.append(abs_path)
+    if orphans:
+        logger.warning(
+            f"后端日志：weixin_marketing 检出磁盘孤儿素材 {len(orphans)} 个"
+            f"（仅告警不删除，人工核对后处理）：{orphans}"
+        )
+    return {
+        "enabled": True,
+        "scan_enabled": True,
+        "scanned_files": scanned,
+        "tracked_files": tracked,
+        "orphan_count": len(orphans),
+        "orphans": orphans,
+    }
+
+
 # ==================== 草稿/发布素材引用校验 ====================
 
 

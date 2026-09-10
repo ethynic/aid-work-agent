@@ -34,8 +34,9 @@ def ensure_registered() -> bool:
             return True
         from src.weixin_marketing.adapters import WeixinFixedContentAdapter
 
-        # P2-3：不注入冻结 config——适配器每次调用活读 get_weixin_marketing_config()，
-        # 与 config.py 语义一致（改 yaml 热生效，无需重启重新注册）
+        # 注册时读进程内 settings 快照（import 时构造）；适配器的授权门控
+        # （enabled/tenant_allowlist）不走此处——生产路径经 get_hot_gate_config()
+        # 每调用 mtime 热读 yaml（翻 enabled 后授权立即跟随，无需重新注册）
         TrustedAdapterRegistry.register(WeixinFixedContentAdapter())
         _REGISTERED = True
     logger.info("weixin_marketing 适配器已注册（weixin.fixed_content.v1，enabled=true）")

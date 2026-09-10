@@ -330,6 +330,24 @@ class ScheduledTaskManager:
                     max_instances=1,
                     coalesce=True,
                 )
+                # P5 R59③：payloads/occurrences 保留期清理（enabled 门控；retention 可配）
+                self._scheduler.add_job(
+                    wxm_dispatch.retention_cleanup_tick,
+                    IntervalTrigger(seconds=wxm_cfg.retention_cleanup_interval_seconds),
+                    id="job_system_weixin_marketing_retention_cleanup",
+                    name="Weixin Marketing Retention Cleanup",
+                    max_instances=1,
+                    coalesce=True,
+                )
+                # P5 R59③：磁盘孤儿素材扫描（只读告警；assets_orphan_scan_enabled 默认关）
+                self._scheduler.add_job(
+                    wxm_dispatch.assets_orphan_scan_tick,
+                    IntervalTrigger(seconds=wxm_cfg.assets_orphan_scan_interval_seconds),
+                    id="job_system_weixin_marketing_assets_orphan_scan",
+                    name="Weixin Marketing Assets Orphan Scan",
+                    max_instances=1,
+                    coalesce=True,
+                )
                 logger.info(
                     f"后端日志：已注册 weixin_marketing 调度闭环任务 "
                     f"(time_scan={wxm_cfg.time_scan_interval_seconds}s, "
@@ -337,7 +355,9 @@ class ScheduledTaskManager:
                     f"sweep={wxm_cfg.permits_sweep_interval_seconds}s, "
                     f"reclaim={wxm_cfg.runs_reclaim_interval_seconds}s, "
                     f"assets_cleanup={wxm_cfg.assets_cleanup_interval_seconds}s, "
-                    f"event_match={wxm_cfg.event_match_interval_seconds}s)"
+                    f"event_match={wxm_cfg.event_match_interval_seconds}s, "
+                    f"retention_cleanup={wxm_cfg.retention_cleanup_interval_seconds}s, "
+                    f"assets_orphan_scan={wxm_cfg.assets_orphan_scan_interval_seconds}s)"
                 )
             else:
                 logger.debug("后端日志：weixin_marketing 未启用，跳过调度 tick 注册（R42 零注册）")

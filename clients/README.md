@@ -103,8 +103,35 @@ spawn → 轮询端口就绪 ≤15s；找不到 Chrome/拉起失败/超时一律
    在线（绿色）。
 
 **配置与凭证位置**（支持排障时用）：
-- 配置：`%APPDATA%\aidwork-tool-runtime\config.json`（server 地址 / device_id）
+- 配置：`%APPDATA%\aidwork-tool-runtime\config.json`（server 地址 / device_id / providers 入口）
 - 凭证：`%APPDATA%\aidwork-tool-runtime\credentials.bin`（DPAPI 加密，勿手工编辑/拷贝到别的机器——绑定了本机）
+
+### Runtime 多 Provider 配置（微信等新能力的启用入口）
+
+Runtime 从多 Provider 版本起支持在**一台设备上承载多个受信 Provider**（BOSS 直聘之外如微信操作能力）。配置入口是 `config.json` 的 `providers` 字段（key → 各 Provider CLI 入口绝对路径，本地管理员手工配置，**禁止云端下发**）：
+
+```json
+{
+  "server": "https://agent2.aidingyi.cn",
+  "device_id": "...",
+  "bossCliEntry": "C:\\...\\boss-resume-assistant\\dist\\src\\cli\\index.js",
+  "providers": {
+    "weixin": { "entry": "C:\\...\\weixin-cli\\dist\\src\\cli\\index.js" }
+  }
+}
+```
+
+规则与现状（与 `clients/agent-tool-runtime/src/providers.ts` 受信注册表一致）：
+- `boss-recruiting` 恒可用：`bossCliEntry` > `providers['boss-recruiting'].entry` > 包内默认入口（只装 BOSS 的存量设备零配置不变）；
+- 其余 Provider（当前为 `weixin`）**仅在 `providers` 显式配置 entry 时启用**——未配置=未安装，不上报 capability、不领取对应任务；
+- capability 上报为 `providers` 数组 + `provider_manifests`（provider_id/manifest_digest/protocol_version），服务端按此路由任务。
+
+**微信 Provider（`ai.aidwork.weixin`）启用前提**（三者缺一不可）：
+1. **安装**：目标机器具备微信操作 CLI（weixin-cli 构建产物），并在 `config.json` 的 `providers.weixin.entry` 配置其入口路径；`aid-runtime doctor` 逐 Provider 自检通过、`status` 列出 weixin；
+2. **受信**：CLI 的工具集必须落在服务端与 Runtime 双侧受信清单内——设备侧 `weixin_probe` / `weixin_chat_search` / `weixin_history_read` / `weixin_unread_list`（只读）与写操作 `weixin_message_send`（服务端另批准 v2 统一操作名 `weixin_message_send_v2`，走许可/证据链，不经 v1 发送）；清单外工具一律 TOOL_NOT_ALLOWED；
+3. **capability**：配对后设备上报的 capabilities 含 weixin 条目（manifest digest 匹配），服务端才会把微信任务派给该设备。
+
+> 版本边界：weixin Provider 当前 `protocol_version=1`（v2 受控写协议随真机验收 P0 交付前，v2 任务在 Runtime 侧 PROTOCOL_NOT_SUPPORTED 拒绝、不降级旧发送）。因此**仅安装+配置 entry 不会产生任何自动发送行为**；发送链路的服务端总开关见 `docs/ops/weixin-marketing-rollout.md`。
 
 ## 六、自检与开机自启
 

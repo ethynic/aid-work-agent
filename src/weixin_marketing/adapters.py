@@ -68,8 +68,10 @@ class WeixinFixedContentAdapter:
         config: Optional[WeixinMarketingConfig] = None,
         evidence_verifier: Optional[RealEvidenceVerifier] = None,
     ):
-        # P2-3：config 参数仅测试注入；生产路径（registration）不注入——config property
-        # 每次调用活读 get_weixin_marketing_config()，改 yaml 热生效
+        # config 参数仅测试注入；生产路径（registration）不注入。注入态下各读数
+        # （quota/门控等）来自注入值；生产态：授权门控经 get_hot_gate_config()
+        # 每次 mtime 热读 yaml（免重启），其余配置读数来自进程内 settings 快照
+        # （改 yaml 需重启生效）
         self._config = config
         self._evidence_verifier = evidence_verifier
 
@@ -249,7 +251,26 @@ class WeixinFixedContentAdapter:
         P3-A1：task_ref 带 TEST_TASK_REF_SUFFIX 的试发 run 复用同一校验链（任务须
         active、revision 须为当前发布版），但配额切换为 wxm:test:* 独立桶——试发
         不挤占生产发送额度。生产 task_ref 为纯 UUID，不会命中该分支。
+
+        P5 增量复核必修①：入口实时总门控**真热读**——生产注册路径（无配置注入）
+        经 get_hot_gate_config() 每调用检查 yaml 文件 mtime（变则重解析，未变走
+        缓存），yaml 翻 enabled=false / 移出 tenant_allowlist 后 API 进程内下一次
+        授权调用即被拒（ADAPTER_DENIED 403，许可零签发），无需重启；文件不可达/
+        损坏 fail-closed 拒绝。测试注入配置时门控跟随注入值（文件级传播由
+        TestHotGatePropagation 实证）。已签发许可与在途回执接纳不受影响（手册 §4）。
         """
+        if self._config is not None:
+            gate_enabled = self._config.enabled
+            gate_allowlist = self._config.tenant_allowlist
+        else:
+            from src.weixin_marketing.config import get_hot_gate_config
+
+            hot = get_hot_gate_config()
+            gate_enabled, gate_allowlist = hot.enabled, hot.tenant_allowlist
+        if not gate_enabled:
+            return AuthorizeDecision(allowed=False, reason="weixin_marketing_disabled")
+        if gate_allowlist and ctx.tenant_id not in gate_allowlist:
+            return AuthorizeDecision(allowed=False, reason="tenant_not_allowed")
         if operation != OPERATION_MESSAGE_SEND:
             return AuthorizeDecision(allowed=False, reason=f"unsupported_operation:{operation}")
         raw_task_ref = str(ctx.task_ref or "")
