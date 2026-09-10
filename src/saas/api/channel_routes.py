@@ -1907,9 +1907,16 @@ async def _process_tenant_wecom_kf_messages(
                     # 1. 确保 C 端客户注册（幂等，扫码即建用户 → 计入引流数）
                     customer_user_id = None
                     if ext_userid:
+                        # 扫码即拉取客户昵称/头像，注册时直接带上（拉取失败不阻塞注册）
+                        enter_user_info: dict = {}
+                        try:
+                            adapter.current_open_kfid = open_kfid
+                            enter_user_info = await adapter.get_user_info(ext_userid)
+                        except Exception as e:
+                            logger.warning(f"[wecom_kf] enter_session 拉取客户信息失败: {e}")
                         try:
                             customer_user_id = await ensure_user_registered(
-                                "wecom_kf", ext_userid, tenant_id, source="wecom_kf"
+                                "wecom_kf", ext_userid, tenant_id, enter_user_info, source="wecom_kf"
                             )
                         except Exception as e:
                             logger.warning(f"[wecom_kf] enter_session 注册客户失败: {e}")
