@@ -132,7 +132,7 @@
 
 | 文件 | 内容 |
 |------|------|
-| `orig_full.png` / `rev_full_map.png` | 两套图纸模型空间全貌（多图幅分布） |
+| `orig_full.png` | 一套图纸模型空间全貌（多图幅分布示意） |
 | `orig_J7_check.png` | 建施 J7 四层~十八层平面图（测试 1 用图） |
 | `probe_D_470k_y160k.png` / `probe_A_115k_y201k.png` | 结施梁配筋图 / 墙柱定位配筋图（测试 1 用图） |
 | `J5_full_hd.png` / `J6_full_hd.png` | 建施 J5/J6 整图高清渲染（测试 2 用图） |
