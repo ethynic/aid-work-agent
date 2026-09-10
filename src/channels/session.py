@@ -19,6 +19,7 @@ from src.core.cache_utils import CacheKeys, get_cached, set_cached, delete_cache
 from src.core.temp_logger import tlog
 from src.core.agent_events import extract_downloadable_file
 from src.core.verbose_feedback import VerboseFeedbackConfig, VerboseFeedbackState
+from src.core.llm_output_sanitizer import sanitize_llm_markdown
 from src.channels.verbose_dispatcher import (
     ChannelVerboseDispatcher,
     build_channel_verbose_metadata_entries,
@@ -1132,7 +1133,10 @@ class ChannelSessionManager:
             }
 
         # ===== status == "success" =====
-        response_text = result.response_text or ""
+        # 净化 LLM 输出（意外引用包裹等不合规 markdown）：后续持久化与渠道发送
+        # 共用此文本，提前净化可避免渠道表格检测失败（如 wecom_kf 收到原始 `>`/`|`
+        # 文本而非长图，线上案例 tr_45b66335492c4540）
+        response_text = sanitize_llm_markdown(result.response_text or "")
         lease_token = result.lease_token
         if result.was_merged and record_service is not None:
             record_service.set_trace_merge_semantics(merge_role="merged_owner")
