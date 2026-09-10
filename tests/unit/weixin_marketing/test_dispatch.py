@@ -469,8 +469,9 @@ class TestGating:
             assert cur.fetchone()["next_fire_at"] == schedule_row["next_fire_at"]  # 未前移
 
     def test_scheduler_registration_gated_by_enabled(self, monkeypatch):
-        """R42：enabled=false 零注册；enabled=true 注册 5 个 tick job（interval 从配置读；
-        P4-A 增 assets_cleanup 素材清理 tick）"""
+        """R42：enabled=false 零注册；enabled=true 注册全部 tick job（interval 从配置读；
+        P4-A 增 assets_cleanup；P4-B 增 event_match；P5 R59③ 增 retention_cleanup 与
+        assets_orphan_scan——后者 tick 内受 assets_orphan_scan_enabled 默认关的门控）"""
         from apscheduler.triggers.interval import IntervalTrigger
 
         from src.scheduler.manager import ScheduledTaskManager
@@ -501,6 +502,8 @@ class TestGating:
             runs_reclaim_interval_seconds=61,
             assets_cleanup_interval_seconds=3601,
             event_match_interval_seconds=13,
+            retention_cleanup_interval_seconds=86401,
+            assets_orphan_scan_interval_seconds=86403,
         )
         manager._scheduler.jobs.clear()
         monkeypatch.setattr(wxm_config_module, "get_weixin_marketing_config", lambda: enabled_cfg)
@@ -513,6 +516,8 @@ class TestGating:
             "job_system_weixin_marketing_reclaim",
             "job_system_weixin_marketing_assets_cleanup",
             "job_system_weixin_marketing_event_match",
+            "job_system_weixin_marketing_retention_cleanup",
+            "job_system_weixin_marketing_assets_orphan_scan",
         }
         assert isinstance(wxm_jobs["job_system_weixin_marketing_time_scan"]["trigger"], IntervalTrigger)
         assert wxm_jobs["job_system_weixin_marketing_time_scan"]["trigger"].interval.total_seconds() == 7
@@ -529,6 +534,17 @@ class TestGating:
             wxm_jobs["job_system_weixin_marketing_event_match"]["trigger"]
             .interval.total_seconds()
             == 13
+        )
+        # P5 R59③：保留期清理与孤儿素材扫描
+        assert (
+            wxm_jobs["job_system_weixin_marketing_retention_cleanup"]["trigger"]
+            .interval.total_seconds()
+            == 86401
+        )
+        assert (
+            wxm_jobs["job_system_weixin_marketing_assets_orphan_scan"]["trigger"]
+            .interval.total_seconds()
+            == 86403
         )
 
 
