@@ -1,6 +1,6 @@
 # 网页操作实时视图设计（Boss CDP 首期）
 
-> 版本：v3.0（2026-09-01）
+> 版本：v3.2（2026-09-01，开发前代码核查与独立复审修订）
 >
 > 状态：📋 已冻结，可直接开发
 >
@@ -14,7 +14,7 @@
 
 功能名称统一为 **Page Stream（网页操作实时视图）**。Boss CDP 是首个 producer；以后 Playwright producer 复用协议，不复用 Boss 业务逻辑。
 
-1. v1 只有受信 channel `chat` 创建 offer；Web 与复用同一 ChatContainer/chat SSE 的第一方 Desktop 都属于 `chat`。`desktop_remote_gateway` 尚无 page-view 事件协议，本期不开放。企微、钉钉、飞书及第三方 MCP Host 不创建 offer、ticket 或链接。
+1. v1 只有受信 channel `chat` 创建 offer。产品交付面为 Web；开发态 `desktop.legacy.html` 因复用 Web 入口自然继承。当前独立 `frontend/desktop` 新壳不 import Web ChatContainer，本期不接入；`desktop_remote_gateway` 也不开放。企微、钉钉、飞书及第三方 MCP Host 不创建 offer、ticket 或链接。
 2. Agent 只能发出 `page_view_available`，不能替用户同意。只有第一方 UI 的 consent API 能创建 stream 和 start command。
 3. v1 只读，只传 viewport/受限 clip JPEG；不传输入、音频、桌面、Cookie、DOM、历史录像。
 4. JPEG 仅经过 producer WSS → 单进程 Gateway 内存 → viewer WSS；不进入 PostgreSQL、Redis、磁盘、对象存储、日志或异常上报。
@@ -54,13 +54,14 @@ flowchart LR
 - `src/page_stream/gateway_app.py:app` 由独立容器运行：`uvicorn src.page_stream.gateway_app:app --host 0.0.0.0 --port 8010 --workers 1`。
 - `docker-compose.prod.yml`、`docker-compose.prod-eas.yml`、`docker-compose.test.yml`、`docker-compose.dev.yml` 均新增 service `aid-page-stream-gateway`；容器名依次为 `aid-page-stream-gateway/aid-page-stream-gateway-eas/aid-page-stream-gateway2/aid-page-stream-gateway3`，宿主机仅绑定 127.0.0.1 的 8010/环境配置端口，与 API 共用 `.env`、Docker 网络和镜像，不挂载 uploads/storage。容器内通过稳定 service hostname `aid-agent-api:8000` 回调本环境 API。
 - 四份 Nginx 配置将 `/api/page-stream/v1/` 代理到同环境 Gateway：生产/EAS/内网 8010、测试 8011、在线开发 8014；关闭 buffering，开启 WebSocket upgrade，`proxy_read_timeout 75s`。
+- Nginx 使用 `location ^~ /api/page-stream/v1/`，并增加 `location ^~ /internal/ { access_log off; return 404; }`。现有 compose 的 API host port 不是 loopback-only，因此 internal API 的应用层安全边界是独立 bearer token（缺失/错误恒 401/403）；Nginx 不路由是纵深防御，生产/EAS 还必须由宿主防火墙拒绝公网直连 `API_PORT`。
 - 对外 WSS 路径固定为 `/api/page-stream/v1/producer/{stream_id}` 和 `/api/page-stream/v1/viewer/{stream_id}`；path 中只有非秘密 UUID，便于未来按 stream 路由。
-- API → Gateway 内网接口固定为 `PUT /internal/v1/streams/{stream_id}` 注册/覆盖活动 session、`DELETE /internal/v1/streams/{stream_id}` 撤销并关闭 sockets。register body 固定为 `{stream_id,tenant_id,user_id,device_id?,producer_kind,expires_at,max_fps,max_frame_bytes,max_edge}`，不含 URL/source_ref。Gateway 从 `PAGE_STREAM_CONTROL_INTERNAL_URL` 读取本环境 API base（默认 `http://aid-agent-api:8000`）并回调 `/internal/v1/page-stream-events`，禁止代码硬编码容器名。双方使用 `Authorization: Bearer $PAGE_STREAM_INTERNAL_TOKEN`；Nginx 不暴露 `/internal/`。
+- API → Gateway 内网接口固定为 `PUT /internal/v1/streams/{stream_id}` 注册/覆盖活动 session、`DELETE /internal/v1/streams/{stream_id}` 终结并关闭 sockets。PUT body 固定为 `{stream_id,tenant_id,user_id,device_id?,producer_kind,source_adapter_key,capture_policy,state,reason_code,expires_at,max_fps,max_frame_bytes,max_edge}`，其中 `state` 只允许 `waiting_for_producer|live`、`reason_code` 必须为 null；`capture_policy` 与 start command 为同一对象且其中 fps/max_frame_bytes/max_edge 必须分别小于等于顶层服务端上限，不含 URL/source_ref。Gateway 要求 hello `adapter_key` 等于 registration，frame `content_scope` 等于 registration policy，帧率/字节/边长不超过 policy；任一错配以 1008 关闭，尤其 `login_qr` registration 不接受 viewport frame。DELETE body 固定为 `{state:"ended|failed|expired",reason_code,changed_at}`；Gateway 必须先向 viewer 发送终态 `viewer_state`，再以 1000 关闭 producer/viewer 并删除内存记录，重复 DELETE 返回 204。只有协议错误或 Gateway 不可恢复内部错误可由 Gateway 直接发 `gateway_error` + `failed` 终态并回调；producer socket close/idle 只回调 `producer_gone` 并向 viewer 发 `waiting_for_producer`，Gateway shutdown 只发 `GATEWAY_SHUTDOWN`、1001 close 和 callback，均等待重连，不能自行判终态。重连耗尽后由 API 以 DELETE `failed` 终结。Gateway 从 `PAGE_STREAM_CONTROL_INTERNAL_URL` 读取本环境 API base（默认 `http://aid-agent-api:8000`）并回调 `/internal/v1/page-stream-events`，禁止代码硬编码容器名。双方使用 `Authorization: Bearer $PAGE_STREAM_INTERNAL_TOKEN`；Nginx 不暴露 `/internal/`。
 - Gateway v1 单实例，不实现多 Gateway；超过单机容量先拆环境，不用普通 round-robin。后续扩容必须按 `stream_id` 一致性路由。
 
 ## 4. 数据库模型（DDL 约束）
 
-DDL 同步写入 `deploy/init-postgres.sql` 和幂等 `deploy/db_update.sql`。所有表使用 `TIMESTAMPTZ`、UUID 默认 `gen_random_uuid()`；repository 的每个对象查询都包含 `tenant_id`。页面标题、完整 URL、query、fragment、DOM、JPEG 和票据明文不得入库。
+DDL 同步写入 `deploy/init-postgres.sql`（新库基线）和 `deploy/db_update.yaml`（存量库启动时自动增量）。`deploy/db_update.sql` 已封存为运维历史留档，本功能不得修改。YAML 新增一个 datetime 严格递增、SQL 幂等的逻辑块，由 `_db_update_applied` 记录进度。所有表使用 `TIMESTAMPTZ`、UUID 默认 `gen_random_uuid()`；repository 的每个对象查询都包含 `tenant_id`。页面标题、完整 URL、query、fragment、DOM、JPEG 和票据明文不得入库。
 
 ### 4.1 `page_view_offers`
 
@@ -95,7 +96,7 @@ tenant_id VARCHAR NOT NULL; user_id VARCHAR NOT NULL; device_id UUID NULL
 producer_kind VARCHAR NOT NULL CHECK (producer_kind IN ('local_runtime','browser_worker'))
 client_request_id UUID NOT NULL
 state VARCHAR NOT NULL DEFAULT 'requested' CHECK (state IN ('requested','starting','live','stopping','ended','failed','expired'))
-version INTEGER NOT NULL DEFAULT 0; reason/error_code/error_message NULL
+version INTEGER NOT NULL DEFAULT 0; reason_code/error_code/error_message NULL
 gateway_registration_state VARCHAR NOT NULL DEFAULT 'pending' CHECK (gateway_registration_state IN ('pending','registered','failed'))
 gateway_registration_attempts INTEGER NOT NULL DEFAULT 0
 gateway_registered_at TIMESTAMPTZ NULL
@@ -128,7 +129,7 @@ error_code/error_message NULL; created_at/expires_at TIMESTAMPTZ NOT NULL
 
 `event_id UUID PK`、`stream_id UUID NOT NULL`、`tenant_id VARCHAR NOT NULL`、`event_type VARCHAR NOT NULL CHECK (event_type IN ('producer_connected','viewer_connected','first_frame','viewer_gone','producer_gone','protocol_error','gateway_shutdown'))`、`occurred_at TIMESTAMPTZ NOT NULL`、`received_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`。callback 先 `INSERT ... ON CONFLICT DO NOTHING`，仅插入成功时迁移 session/写绝对指标。
 
-FK 固定为：offer.device→`local_tool_devices.id`、offer.first_invocation→`local_tool_invocations.id`、link.offer/invocation→对应主表；offers 增加 UNIQUE `(id,device_id)`，local session 用复合 `(offer_id,device_id)`→offer；sessions 增加 UNIQUE `(id,device_id)`，command 用复合 `(stream_id,device_id)`→session；gateway_event.stream→session。全部 `ON DELETE RESTRICT`。所有 created/updated/received 时间默认 `NOW()`，`version/attempt_count/registration_attempts >= 0`。browser_worker 的 nullable device 不走复合 FK，由 repository 校验且 v1 不创建生产 session。
+遵循项目 `database_dev.md`，本功能不创建数据库 FK。repository 必须在同一事务内以 `tenant_id` 校验 device、invocation、offer、session 的存在与归属，再写 link/command/event；删除被引用对象时由应用层 RESTRICT 并留审计测试。保留业务唯一性约束：offers UNIQUE `(id,device_id)`、sessions UNIQUE `(id,device_id)`，以及上述 partial/command/invocation UNIQUE；所有关联列建立 tenant-first 索引。所有 created/updated/received 时间默认 `NOW()`，`version/attempt_count/registration_attempts >= 0`。browser_worker 的 nullable device 同样由 repository 校验，且 v1 不创建生产 session。
 
 ## 5. 原子性与状态机
 
@@ -196,9 +197,13 @@ _trusted_channel, _trusted_stream_scope_id=_turn_execution_id, _progress_queue
 {"type":"page_view_available","event":{"offer_id":"uuid","purpose":"observe_operation","origin_label":"BOSS直聘","device_label":"招聘电脑","expires_at":"...","read_only":true}}
 ```
 
+`src/page_stream/policy.py` 使用固定 catalog：所有实际设备执行的 `boss_*`（`ExecutionTarget.LOCAL_REQUIRED`）默认 `observe_operation + continue_without_view`；`boss_login_qr` 覆盖为 `login_qr + wait_for_consent`；`boss_login_status` 为 None。云端/混合工具 `boss_jobs_list`、`boss_interview_notify` 为 None。policy 不接受 LLM/tool args 覆盖。登录 offer 按 `first_invocation_id` 独立创建，一条 invocation 一个 offer，不复用普通 scope offer。
+
 Agent 增加结构化事件透传分支，`src/main.py` 按现有 SSE 序列化发送，不得转换为模型可编辑文本；最终 assistant metadata 同时写 `pageViewOffers`。execution 的 finally 调用 `page_stream_service.close_scope(...)`；单次 invocation 终态只移除关联，execution 结束才关普通 scope。
 
-历史恢复以 DB active-offer API 为事实源，assistant metadata 只作快速渲染。第三方 channel 没有 offer；即使 Agent 文本提议观看，也没有可 consent 对象。
+历史恢复以 DB active-offer API 为事实源，assistant metadata 只作快速渲染。v1 的 Agent SSE 只新增 `page_view_available`；不定义 `page_stream_state_changed` SSE，因为仓库没有跨请求的会话级 SSE 总线，Gateway callback/reaper 不能可靠写入当前 turn。
+
+流状态权威送达固定为：观看中使用 viewer WSS `state/gateway_error/close`；WSS close、重连失败后立即 GET stream status；session 切换、页面刷新、页面重新 visible 时 GET active offers；tray 存在期间每 15 秒重查 active offers。前端按 `offer_id/stream_id` 合并，DB API 结果覆盖 assistant metadata。第三方 channel 即使出现 Agent 文本，也没有可 consent 对象。
 
 ## 7. HTTP API（固定请求/响应）
 
@@ -239,7 +244,7 @@ body {"command_token":"...","success":true,"error_code":null}
 -> 204
 
 POST /api/local-tools/runtime/page-streams/{stream_id}/state
-body {"producer_lease_token":"...","state":"starting|live|failed","reason":null,"error_code":null,"frame_count":0,"bytes_relayed":0}
+body {"producer_lease_token":"...","state":"starting|live|failed","reason_code":null,"error_code":null,"frame_count":0,"bytes_relayed":0}
 -> 204
 
 POST /api/local-tools/runtime/page-streams/{stream_id}/producer-ticket
@@ -261,15 +266,82 @@ body {producer_lease_token}
 new WebSocket(wsUrl, ['page-stream-v1', `ticket.${opaqueTicket}`])
 ```
 
-Gateway 从 `Sec-WebSocket-Protocol` 提取票据并只回显 `page-stream-v1`。票据格式固定为 `base64url(canonical-json).base64url(HMAC-SHA256(key,第一段))`（无 padding，JSON 按 key 排序且无空白），claims 固定 `v,role,stream_id,device_id?,user_id,jti,iat,exp`，API/Gateway 共用独立 `PAGE_STREAM_TICKET_SIGNING_KEY`。Gateway 在单进程内记录已消费 jti 至 exp，防重放；active stream 来自 API internal register，不查业务 DB/Redis。Gateway 重启后，API 每次签 viewer/producer 新票前重新 register。
+Gateway 从 `Sec-WebSocket-Protocol` 提取票据并只回显 `page-stream-v1`。票据格式固定为 `base64url(canonical-json).base64url(HMAC-SHA256(key,第一段))`（无 padding，JSON 按 key 排序且无空白），API/Gateway 共用独立 `PAGE_STREAM_TICKET_SIGNING_KEY`。claims 字段和类型固定为：`v` 是整数常量 `1`；`role` 为 `producer|viewer`；`stream_id/jti` 为 canonical UUID string；`user_id` 为非空 string；`iat/exp` 为整数 Unix 秒，签发时 `exp-iat<=PAGE_STREAM_TICKET_TTL_SECONDS`，验证时要求 `iat<=now+5` 且 `now<exp`。`device_id`：`local_runtime` producer 必须携带 canonical UUID，viewer 必须省略（不能为 null），未来 `browser_worker` producer 也省略；其余未知字段拒绝。Gateway 在单进程内记录已消费 jti 至 exp，防重放；active stream 来自 API internal register，不查业务 DB/Redis。Gateway 重启后，API 每次签 viewer/producer 新票前重新 register。
 
-producer 首条消息为 `{"type":"hello","protocol":"page-stream/1.0","stream_id":"uuid","adapter":"boss-cdp"}`。每帧严格发送一条 metadata 后紧跟一条 binary JPEG，两条消息使用同一发送锁：
+producer 首条消息固定为：
+
+```json
+{"type":"hello","protocol":"page-stream/1.0","stream_id":"uuid","adapter_key":"boss.cdp.v1"}
+```
+
+每帧严格发送一条 metadata 后紧跟一条 binary JPEG，两条消息使用同一发送锁：
 
 ```json
 {"type":"frame","protocol":"page-stream/1.0","stream_id":"uuid","seq":17,"mime":"image/jpeg","width":1278,"height":720,"captured_at":"...","content_scope":"viewport","byte_length":48321}
 ```
 
-producer 连接后 5 秒内发 hello，Gateway 回 `{"type":"ready","protocol":"page-stream/1.0","stream_id":"uuid"}`；viewer 收到 `{"type":"state","state":"waiting_for_producer|live|ended|failed","reason_code":null}`。metadata 后 2 秒未收到 binary 即关闭。producer 每 10 秒 heartbeat，25 秒无消息关闭。viewer 只接收，不得发送任何消息；一个 session 只允许一个 viewer，新 viewer 关闭旧 viewer。限制：q70、默认 1fps/上限 2fps、单帧 512KiB、边长 1920、JPEG magic/MIME/declared length 一致。
+### 8.1 控制消息字段
+
+所有 JSON Schema 均使用 draft 2020-12、`additionalProperties=false`，时间为带时区 RFC3339，UUID 为 canonical string。
+
+`heartbeat`：producer→Gateway 每 10 秒发送；Gateway→viewer 也独立每 10 秒发送，保证静止页面不会被 Nginx 75 秒 idle 关闭。Gateway 不回复 producer heartbeat，viewer 不得发送 heartbeat。
+
+```json
+{"type":"heartbeat","protocol":"page-stream/1.0","stream_id":"uuid","sent_at":"2026-09-01T10:00:00.000Z"}
+```
+
+`ready`：Gateway 接受 producer hello 后发送一次。
+
+```json
+{"type":"ready","protocol":"page-stream/1.0","stream_id":"uuid"}
+```
+
+`viewer_state`：viewer 连接后立即收到一次，之后仅在状态变化时发送；终态 state 发出后再 close。
+
+```json
+{"type":"state","protocol":"page-stream/1.0","stream_id":"uuid","state":"live","reason_code":null,"changed_at":"2026-09-01T10:00:02.000Z"}
+```
+
+`state` 枚举固定为 `waiting_for_producer|live|ended|failed|expired`；非终态 `reason_code=null`，终态必须是设计 §5.3 的 reason_code。
+
+`gateway_error`：仅 WebSocket 已 accept 后、异常关闭前至多发送一次。缺少/未知 subprotocol、ticket 无效或重放、role/stream 不匹配、stream 未注册/已终态、第二个 producer 等均须在 `accept()` 前完成校验并以 HTTP 403 拒绝，不发送 `gateway_error`。
+
+```json
+{"type":"gateway_error","protocol":"page-stream/1.0","stream_id":"uuid","error_code":"PROTOCOL_VIOLATION","close_code":1002}
+```
+
+| gateway_error.error_code | close code |
+|---|---:|
+| `PROTOCOL_VIOLATION` | 1002 |
+| `FRAME_RATE_EXCEEDED`、`VIEWER_SENT_MESSAGE` | 1008 |
+| `FRAME_TOO_LARGE` | 1009 |
+| `GATEWAY_SHUTDOWN` | 1001 |
+| `GATEWAY_INTERNAL_ERROR` | 1011 |
+
+### 8.2 HTTP stream command 契约
+
+`stream_command.schema.json` 是 Runtime claim HTTP 响应中的 command 对象，不是 WSS 消息，使用 `oneOf` 且以 `action` 判别：
+
+```json
+{
+  "command_id":"uuid","action":"start","command_token":"opaque",
+  "stream_id":"uuid","producer_lease_token":"opaque",
+  "source_adapter_key":"boss.cdp.v1","source_ref":"invocation:uuid",
+  "capture_policy":{"capture_backend":"cdp","content_scope":"viewport","clip_strategy":null,"fps":1,"quality":70,"max_frame_bytes":524288,"max_edge":1920},
+  "gateway_url":"wss://example.com/api/page-stream/v1/producer/uuid",
+  "lease_expires_at":"2026-09-01T10:00:30.000Z"
+}
+```
+
+```json
+{"command_id":"uuid","action":"stop","command_token":"opaque","stream_id":"uuid","lease_expires_at":"2026-09-01T10:00:30.000Z"}
+```
+
+start 必须包含 producer/source/capture/gateway 字段，stop 必须禁止这些字段。`capture_policy.content_scope` 枚举 `viewport|clip`；viewport 要求 `clip_strategy=null`，登录 clip 要求 `clip_strategy='boss_login_panel_v1'`。fps 取 1–2，quality v1 恒 70，上限字段必须等于服务端注册值。
+
+### 8.3 时序与限制
+
+producer 连接后 5 秒内发 hello。metadata 后 2 秒未收到 binary 即关闭；producer 25 秒无消息关闭。viewer 只接收，不得发送任何消息；一个 session 只允许一个 viewer，新 viewer 关闭旧 viewer。限制：q70、默认 1fps/上限 2fps、单帧 512KiB、边长 1920、JPEG magic/MIME/declared length 一致。
 
 | WebSocket close code | 固定含义 |
 |---|---|
@@ -322,7 +394,7 @@ toolDefs/manifest、Runtime trusted manifest、云端 catalog/proxy、recruiting
 - 新增 `PageViewConsentCard.vue` 和 `LivePageView.vue`。后者抽取 `BrowserView.vue` 的 meta+binary/object URL 逻辑，但保留原 BrowserView 路径兼容。
 - mounted、SSE 重连、历史加载都不 consent。点击时生成并复用一个 `client_request_id`；成功后取 viewer ticket。
 - 页面 hidden 30 秒调用 stop；刷新可在 15 秒 grace 内用新 ticket 重连。停止按钮立即 DELETE。
-- viewer 不发送消息，不注册输入转发，不显示可复制 URL。Web 与当前共用 Vue bootstrap 的 Agent Desktop 同步交付，API/auth 必须走现有 runtime/credential abstraction。
+- viewer 不发送消息，不注册输入转发，不显示可复制 URL。Web 为 v1 唯一正式交付端；`desktop.legacy.html` 可继承 Web 能力但不作为验收门禁。独立新 Desktop 壳与 `desktop_remote_gateway` 另立后续设计。
 
 ## 12. 安全、容量与降级
 
@@ -345,6 +417,7 @@ toolDefs/manifest、Runtime trusted manifest、云端 catalog/proxy、recruiting
 7. 登录二维码可显示、过期自动刷新、扫码成功自动结束；二维码/Cookie 不进入结果或日志。
 8. Web 刷新恢复 offer 但不自动 consent；第三方渠道不产生 offer/ticket/link。
 9. fake CDP 与 fake Playwright producer 通过同一 `page-stream/1.0` golden contract。
+10. Web 完成产品验收；独立新 Desktop 壳不显示入口且不创建 offer，desktop build 仅作为回归检查。
 
 ## 14. 实现前置检查（不得改变方案）
 

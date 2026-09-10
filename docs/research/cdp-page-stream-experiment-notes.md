@@ -1,7 +1,7 @@
 # CDP 页面实时帧（page stream）实验纪要
 
 > 用途：独立会话开发「登录辅助与页面实时帧」前的快速对齐材料（简要版）。
-> 完整设计：[网页操作实时视图设计](../design/recruiting/login-assist-page-stream-design.md)（v3 已冻结通用 `page-stream/1.0`，Boss CDP 为首期）。
+> 完整设计：[网页操作实时视图设计](../design/recruiting/login-assist-page-stream-design.md)（v3.2 已冻结通用 `page-stream/1.0`，Boss CDP 为首期）。
 > 开发计划：[web-operation-live-view-dev-plan.md](../plans/recruiting/web-operation-live-view-dev-plan.md)。
 > 状态：实验完成、方案定型，**待开发**。本文只记「已经实验过什么、结论是什么」。
 
@@ -49,7 +49,7 @@
 - 观看 ticket 等同临时凭证：必须短期、一次性、租户/用户隔离，并经 WebSocket subprotocol 传递；产品不生成可分享链接
 - ⚠️ 实验探针脚本 `.tmp/probe-frame-stream.mjs` 未入库已被清理——需重建（约 30 分钟，参数本文已固化）；今后探针请放 `scripts/` 入库
 
-## 5. 待开发清单（2026-09-01 v3 设计同步）
+## 5. 待开发清单（2026-09-01 v3.2 设计同步）
 
 > 下表替代 2026-08-31 的“HTTPS 推帧 + 企微登录链接”产品化设想。实验结论不变；正式方案要求
 > 用户在 Web Agent/第一方客户端显式同意后才建立 producer WSS，第三方渠道暂不开放。

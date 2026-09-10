@@ -402,6 +402,8 @@ Win32 通道实现要点：
 
 ### 10.6 沟通页发消息与搜索找人（ChatSearchExecutor / ChatSendExecutor）
 
+> 2026-09-10 审核：当前发送后全页 strings 校验存在误判风险，后续替换方案见 [BOSS 写后验证设计](boss-send-verification-design.md) 与 [开发计划](../../plans/recruiting/boss-send-verification-dev-plan.md)。本节实现描述保留为现状；新方案未实施，不能以现有成功状态视为 P0′ 真机门禁已通过。
+
 沟通页「搜索找人 + 输入 + 发送」链路，封装为两个 CLI 子命令（`send-to` / `send-current`）与同名 MCP tool（`boss_send_to` / `boss_send_current`）。默认**真发送**；`--dry-run`（`dry_run=true`）只输入不点发送，用于测试链路。
 
 真机校准（2026-08-13，窗口 1249x1277）：
