@@ -423,6 +423,48 @@ class TestAutomationsCrud:
             assert resp.status_code == 422, params
             assert resp.json()["code"] == "VALIDATION_FAILED"
 
+    def test_detail_returns_draft_blocks_for_editor_echo(self, client, users, wxm_adapter):
+        """P3-A2 编辑器回显契约：detail 返回草稿块明细（有序、含 text/url 原文）；
+        发布后（无新草稿）draft_blocks 为空列表"""
+        user = users[0]
+        group_id = _create_binding(user["tenant_id"], user["user_id"])
+        detail = _api_create(client, user, group_id, name="回显契约")
+        automation_id = str(detail["automation"]["id"])
+
+        # 创建响应即含 draft_blocks（幂等重放数据与详情同构）
+        assert len(detail["draft_blocks"]) == 2
+        first, second = detail["draft_blocks"]
+        assert first["position"] == 1 and first["kind"] == "text"
+        assert first["text_content"] == "集成第一条内容"
+        assert second["position"] == 2 and second["kind"] == "link"
+        assert second["url"] == "https://example.com/it"
+        assert first["payload_hash"] and second["payload_hash"]
+
+        # GET 详情跨刷新回显一致
+        resp = client.get(f"{PREFIX}/automations/{automation_id}", headers=_auth(user))
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["data"]["draft_blocks"] == detail["draft_blocks"]
+
+        # 发布后（无下一号草稿）draft_blocks 收敛为空列表
+        _api_publish(client, user, automation_id, version=1)
+        resp = client.get(f"{PREFIX}/automations/{automation_id}", headers=_auth(user))
+        assert resp.status_code == 200
+        assert resp.json()["data"]["draft_blocks"] == []
+        assert resp.json()["data"]["automation"]["draft_revision_id"] is None
+
+        # 发布后迭代新建草稿 → draft_blocks 重新出现（块重写路径）
+        resp = client.put(
+            f"{PREFIX}/automations/{automation_id}/draft", headers=_auth(user),
+            json={
+                "expected_version": 2,
+                "trigger": {"type": "once", "run_at": "2030-01-01T00:00:00Z"},
+                "blocks": [{"type": "text", "text_content": "迭代后新内容"}],
+                "group_binding_id": group_id,
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        assert [b["text_content"] for b in resp.json()["data"]["draft_blocks"]] == ["迭代后新内容"]
+
     def test_update_draft_if_match_and_cas_409(self, client, users):
         user = users[0]
         group_id = _create_binding(user["tenant_id"], user["user_id"])

@@ -73,3 +73,36 @@ def build_quota_scopes(
     if account_binding_id:
         scopes.append(account_scope(account_binding_id, config))
     return scopes
+
+
+def build_test_quota_scopes(
+    *,
+    tenant_id: str,
+    scenario_key: str,
+    task_ref: str,
+    group_binding_id: str,
+    account_binding_id: Optional[str],
+    config: Optional[WeixinMarketingConfig] = None,
+) -> List[QuotaScopeSpec]:
+    """试发（test-send）的独立额度层级（R54①：独立配额 scope）。
+
+    与生产 build_quota_scopes 同构、scope_id 加 ``wxm:test:`` 前缀——试发预留/落账
+    写入独立桶，既不挤占也不放大生产发送额度；限额沿用 quotas 配置（后续如需独立
+    test 限额，扩 config 键即可，不影响存储形态）。
+    """
+    return [
+        QuotaScopeSpec(
+            scope_type=spec.scope_type,
+            scope_id=f"wxm:test:{spec.scope_id.removeprefix('wxm:')}",
+            limit_count=spec.limit_count,
+            window_seconds=spec.window_seconds,
+        )
+        for spec in build_quota_scopes(
+            tenant_id=tenant_id,
+            scenario_key=scenario_key,
+            task_ref=task_ref,
+            group_binding_id=group_binding_id,
+            account_binding_id=account_binding_id,
+            config=config,
+        )
+    ]

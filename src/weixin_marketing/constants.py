@@ -13,6 +13,22 @@ SCENARIO_KEY = "weixin.fixed_content.v1"
 PROVIDER_KEY = "weixin"
 OPERATION_MESSAGE_SEND = "weixin_message_send_v2"
 
+# 只读探测工具（P3-A1：搜索/核验/预检经 local_tool 队列下发的设备侧工具名）
+TOOL_WEIXIN_CHAT_SEARCH = "weixin_chat_search"
+TOOL_WEIXIN_PROBE = "weixin_probe"
+
+# test-send 的独立 task_ref 后缀（R54①）：试发 run 不占用生产 task subject，
+# 适配器据此切换为 wxm:test:* 独立配额 scope；生产 task_ref 为纯 UUID 不会撞后缀
+TEST_TASK_REF_SUFFIX = ":test"
+
+# P3-A1 只读操作在 local_tool_invocations 的 business_kind（读链路：旧 /result 回传）
+BUSINESS_KIND_GROUP_SEARCH = "weixin_group_search"
+BUSINESS_KIND_BINDING_VERIFY = "weixin_binding_verify"
+BUSINESS_KIND_DEVICE_PREFLIGHT = "weixin_device_preflight"
+
+# 绑定核验证据命名空间：identity_evidence_ref = <namespace>:<verify 搜索 invocation id>
+BINDING_EVIDENCE_NAMESPACE = "weixin-bind-evidence"
+
 # v2 payload_ref 规范（R41）：da:<scenario_key>:<revision_ref>:<block_position>
 PAYLOAD_REF_PREFIX = "da:"
 EVIDENCE_NAMESPACE = "weixin-evidence"
@@ -50,12 +66,21 @@ BLOCK_TEXT_FORBIDDEN_CHARS = ("\n", "\r", "\x00")
 
 # ==================== group_bindings 状态机 ====================
 
-# pending：已录入未核验（P2 允许存在）；complete：绑定核验通过（可执行发送）；
-# disabled：人工停用。verify/probe 集成在 P3 交付（R39 范围裁决）
+# pending：已录入未核验（= P3 契约的 pending_verification，verify 端点的唯一来源态）；
+# complete：绑定核验通过（可执行发送，= verified 终态）；rejected：核验否决
+# （P3：同名多命中候选冲突等身份依据被驳斥，终态）；disabled：人工停用。
 GROUP_BINDING_STATE_PENDING = "pending"
 GROUP_BINDING_STATE_COMPLETE = "complete"
+GROUP_BINDING_STATE_REJECTED = "rejected"
 GROUP_BINDING_STATE_DISABLED = "disabled"
-GROUP_BINDING_STATES = (GROUP_BINDING_STATE_PENDING, GROUP_BINDING_STATE_COMPLETE, GROUP_BINDING_STATE_DISABLED)
+GROUP_BINDING_STATES = (
+    GROUP_BINDING_STATE_PENDING,
+    GROUP_BINDING_STATE_COMPLETE,
+    GROUP_BINDING_STATE_REJECTED,
+    GROUP_BINDING_STATE_DISABLED,
+)
+# verify 允许的来源态（P3-A1：pending_verification → complete(verified)/rejected）
+GROUP_BINDING_VERIFIABLE_STATES = (GROUP_BINDING_STATE_PENDING,)
 
 # ==================== account_bindings 状态 ====================
 
@@ -81,6 +106,13 @@ AUDIT_MANUAL_RUN_REQUESTED = "manual_run_requested"
 AUDIT_RUN_CANCEL_REQUESTED = "run_cancel_requested"
 AUDIT_DELIVERY_RESOLVED = "delivery_resolved"
 AUDIT_DELIVERY_RETRIED = "delivery_retried"
+# P3-A1 工作台动作（details 只存引用/摘要，不写群名/正文原文）
+AUDIT_TEST_SEND_REQUESTED = "test_send_requested"
+AUDIT_GROUP_SEARCH_REQUESTED = "group_search_requested"
+AUDIT_GROUP_BINDING_CREATED = "group_binding_created"
+AUDIT_GROUP_BINDING_VERIFIED = "group_binding_verified"
+AUDIT_GROUP_BINDING_REJECTED = "group_binding_rejected"
+AUDIT_DEVICE_PREFLIGHT_REQUESTED = "device_preflight_requested"
 
 ACTOR_TYPE_USER = "user"
 ACTOR_TYPE_SYSTEM = "system"

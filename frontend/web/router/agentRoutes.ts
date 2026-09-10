@@ -102,7 +102,17 @@ export const agentRoutes: RouteRecordRaw[] = [
         component: () => import('@/components/BaseBusinessLayout.vue'),
         children: [
           { path: 'tickets', name: '售后工单', component: () => import('@/components/after-sales/TicketList.vue') },
-          { path: 'returns', name: '退换货记录', component: () => import('@/components/after-sales/ReturnList.vue') },
+          { path: 'returns', name: '退换货记录', component: () => import('@/components/after-sales/ReturnList.vue') }
+        ]
+      },
+      {
+        // 微信营销自动化工作台（P3-A2；page_metadata 状态 developing，验收后 published）
+        path: 'weixin-marketing',
+        name: 'tenant-weixin-marketing',
+        component: () => import('@/components/BaseBusinessLayout.vue'),
+        children: [
+          { path: 'automations', name: 'tenant-weixin-marketing-automations', component: () => import('@/components/weixinMarketing/AutomationList.vue') },
+          { path: 'runs/:runId', name: 'tenant-weixin-marketing-run-detail', component: () => import('@/components/weixinMarketing/RunDetail.vue') },
         ]
       },
     ]

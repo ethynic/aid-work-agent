@@ -32,6 +32,59 @@ def _resolve_runtime_tenant_id(context: Optional[ToolExecutionContext]) -> Optio
     return context.tenant_id if context else None
 
 
+# ==================== R56 路由约束：微信营销后台任务引导专用工具 ====================
+# 设计原则是保守拦截：只有「微信营销域 + 调度词 + 发送动作」三类关键词同时命中，
+# 且没有明确指向其他渠道（邮件/短信/钉钉/飞书/企业微信）的词时才拒绝创建；
+# 任何不确定情况（如仅提"微信"、或发送目标是邮箱）一律放行走通用定时任务，
+# 避免误伤。拦截发生在 dry_run 之前（R56：确定微信任务不执行旧 dry_run）。
+
+_WEIXIN_MARKETING_DOMAIN_MARKERS = (
+    "微信群发", "微信营销", "微信推送", "微信自动发送", "weixin_automation",
+)
+_WEIXIN_SCHEDULE_MARKERS = (
+    "定时", "每天", "每日", "每周", "每月", "定期", "自动", "每隔",
+)
+_WEIXIN_SEND_MARKERS = (
+    "群发", "发送", "推送", "发消息", "发到群", "发群", "发到微信群",
+)
+_NON_WEIXIN_CHANNEL_MARKERS = (
+    # 明确指向其他渠道的发送意图 → 不拦截（保守放行）
+    # "企微" 单列：防 "企微信群发" 因含子串 "微信群发" 被误拦（简写不含 "企业微信" 全称）
+    "邮件", "邮箱", "email", "短信", "sms", "钉钉", "飞书", "企业微信", "企微",
+)
+
+
+def _is_definite_weixin_marketing_task(*texts: str) -> bool:
+    """判定任务描述是否确定为微信营销定时发送任务（保守：不确定返回 False）"""
+    text = " ".join(t for t in texts if t)
+    if not text:
+        return False
+    has_domain = any(m in text for m in _WEIXIN_MARKETING_DOMAIN_MARKERS)
+    has_schedule = any(m in text for m in _WEIXIN_SCHEDULE_MARKERS)
+    has_send = any(m in text for m in _WEIXIN_SEND_MARKERS)
+    has_other_channel = any(m in text for m in _NON_WEIXIN_CHANNEL_MARKERS)
+    return has_domain and has_schedule and has_send and not has_other_channel
+
+
+def _weixin_routing_rejection() -> Dict[str, Any]:
+    """确定的微信营销定时任务 → 结构化引导到专用工具（不创建、不 dry_run）"""
+    return {
+        "success": False,
+        "error": (
+            "微信营销定时群发任务不适用通用定时任务，请改用专用工具创建"
+            "（weixin_automation_prepare 准备草稿 → 用户确认 → weixin_automation_publish 发布）"
+        ),
+        "code": "USE_DEDICATED_WEIXIN_TOOL",
+        "routed_tool": "weixin_automation_prepare",
+        "guidance": (
+            "微信营销任务请使用 weixin_automation_prepare 创建草稿"
+            "（无发送副作用，返回静态校验与未来触发预览），经用户明确确认后用 "
+            "weixin_automation_publish 发布；运行/试发/重试/暂停等用 "
+            "weixin_automation_manage。也可委派给「微信营销智能体」处理。"
+        ),
+    }
+
+
 class CreateScheduledTaskInput(BaseModel):
     """创建定时任务参数"""
     name: str = Field(..., description="任务名称，简短描述（如：每日邮件检查）")
@@ -110,6 +163,8 @@ class CreateScheduledTaskTool(BaseTool):
         "如果用户询问已创建的定时任务，使用 manage_scheduled_task 工具查看。"
         "【重要】必须从用户话语中解析出具体的调度时间（北京时间）。"
         "如果用户没有给出具体时间，必须先向用户确认后再调用，禁止自行猜测默认时间。"
+        "【限制】微信营销/微信群发类定时发送任务不适用本工具（会被拒绝），"
+        "请使用 weixin_automation_prepare / weixin_automation_publish 专用工具。"
     )
     usage_guide = """"""
     display_name = "创建定时任务"
@@ -158,6 +213,11 @@ class CreateScheduledTaskTool(BaseTool):
 
         if len(task_prompt) > 2000:
             return {"success": False, "error": "task_prompt 长度超过限制（最大2000字符）", "debug": f"task_prompt 长度: {len(task_prompt)}"}
+
+        # R56 路由约束：确定为微信营销定时发送任务时拒绝创建并引导专用工具。
+        # 放在 dry_run 与任何 DB 写入之前；检测保守（不确定不拦截），见函数注释。
+        if _is_definite_weixin_marketing_task(name, description, task_prompt):
+            return _weixin_routing_rejection()
 
         # 检查用户最大任务数限制
         max_tasks = 20

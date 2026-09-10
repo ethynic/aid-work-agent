@@ -106,6 +106,77 @@ class TestPublish:
         assert detail["automation"]["status"] == "active"
         assert detail["automation"]["active_revision_id"] == revision_id
 
+    def test_detail_after_publish_returns_active_projection(
+        self, service, tenant_id, bindings, adapter
+    ):
+        """P3 复审 P1-1：发布后（无草稿）detail 返回 active_* 回显三件套，
+        draft_blocks 为空、draft_trigger 为 None。"""
+        _, group_id = bindings
+        blocks = [
+            {"type": "text", "text_content": "已发布正文"},
+            {"type": "link", "url": "https://example.com/published"},
+        ]
+        trigger = {
+            "type": "interval",
+            "start_at": (utcnow() + timedelta(hours=1)).isoformat(),
+            "interval_seconds": 900,
+            "timezone": "UTC",
+            "grace_seconds": 120,
+            "miss_policy": "skip_overlap",
+        }
+        automation_id, revision_id, _ = create_and_publish(
+            service, tenant_id, group_id, trigger=trigger, blocks=blocks
+        )
+        detail = service.get_automation_detail(tenant_id, automation_id, "owner-1")
+        assert detail["draft_blocks"] == []
+        assert detail["draft_trigger"] is None
+        # active_blocks：与 draft_blocks 同构（position 有序 + kind 互斥字段）
+        assert [(b["position"], b["kind"]) for b in detail["active_blocks"]] == [
+            (1, "text"), (2, "link"),
+        ]
+        assert detail["active_blocks"][0]["text_content"] == "已发布正文"
+        assert detail["active_blocks"][1]["url"] == "https://example.com/published"
+        # active_trigger 为 revision 存储的结构化 trigger_json（模型 dump 含 None 默认
+        # 键，只断言业务字段，不做整 dict 相等）
+        assert detail["active_trigger"]["type"] == trigger["type"]
+        assert detail["active_trigger"]["interval_seconds"] == 900
+        assert detail["active_trigger"]["grace_seconds"] == 120
+        assert str(detail["active_group_binding_id"]) == group_id
+
+    def test_detail_active_and_draft_coexist_after_iteration(
+        self, service, tenant_id, bindings, adapter
+    ):
+        """P3 复审 P1-1：发布后迭代新草稿 → draft_* 与 active_* 并存且互不串扰。"""
+        _, group_id = bindings
+        published_blocks = [{"type": "text", "text_content": "已发布正文"}]
+        automation_id, active_revision_id, _ = create_and_publish(
+            service, tenant_id, group_id, blocks=published_blocks
+        )
+        from src.weixin_marketing.models import DraftUpdateInput
+
+        detail = service.update_draft(
+            tenant_id, automation_id, "owner-1",
+            DraftUpdateInput(
+                expected_version=2,
+                name="迭代草稿",
+                trigger={
+                    "type": "once",
+                    "run_at": (utcnow() + timedelta(hours=2)).isoformat(),
+                    "timezone": "UTC",
+                },
+                blocks=[{"type": "text", "text_content": "新草稿正文"}],
+                group_binding_id=group_id,
+            ),
+        )
+        draft_id = detail["automation"]["draft_revision_id"]
+        assert draft_id and str(draft_id) != active_revision_id
+        assert [b["text_content"] for b in detail["draft_blocks"]] == ["新草稿正文"]
+        assert detail["draft_trigger"]["type"] == "once"
+        # active_* 仍指向已发布版本（不被新草稿覆盖；发布用默认 once 触发）
+        assert [b["text_content"] for b in detail["active_blocks"]] == ["已发布正文"]
+        assert detail["active_trigger"]["type"] == "once"
+        assert str(detail["active_group_binding_id"]) == group_id
+
     def test_publish_cas_conflict(self, service, tenant_id, bindings, adapter):
         _, group_id = bindings
         detail = service.create_automation(tenant_id, "owner-1", make_create_payload(group_id))

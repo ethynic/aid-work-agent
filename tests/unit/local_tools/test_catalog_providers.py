@@ -24,6 +24,55 @@ def with_weixin_provider(monkeypatch):
     catalog.TRUSTED_PROVIDERS.update(registered)
 
 
+class TestWeixinProviderRegistration:
+    """P3-A1：weixin provider 服务端受信注册（与 Runtime src/providers.ts manifest 对齐）。
+
+    不依赖 with_weixin_provider 临时注册——weixin 为 TRUSTED_PROVIDERS 常驻条目。
+    """
+
+    def test_weixin_entry_registered_with_contract_fields(self):
+        entry = catalog.TRUSTED_PROVIDERS["weixin"]
+        assert entry["provider_id"] == WEIXIN_PROVIDER_ID
+        assert entry["min_provider_version"] == "1.0.0"
+        assert entry["execution_target"] == "local_required"
+
+    def test_weixin_tools_read_set_plus_v2_write_name(self):
+        tools = set(catalog.allowed_tools("weixin"))
+        # 只读集合（与 Runtime manifest 5 工具中的 4 只读对齐）
+        assert {"weixin_probe", "weixin_chat_search",
+                "weixin_history_read", "weixin_unread_list"} <= tools
+        # v2 统一操作名（底座写链路）
+        assert "weixin_message_send_v2" in tools
+        # v1 写不经底座——不得进入受信清单
+        assert "weixin_message_send" not in tools
+
+    def test_weixin_tool_allowlist_gates(self):
+        assert catalog.is_tool_allowed("weixin", "weixin_chat_search")
+        assert catalog.is_tool_allowed("weixin", "weixin_message_send_v2")
+        assert not catalog.is_tool_allowed("weixin", "weixin_message_send")
+        assert not catalog.is_tool_allowed("weixin", "boss_send_to")  # 跨 provider 不串扰
+
+    def test_boss_registry_unchanged(self):
+        """weixin 注册不改变 boss 既有受信清单"""
+        assert catalog.get_provider("boss-recruiting")["provider_id"] == BOSS_PROVIDER_ID
+        assert "boss_send_to" in catalog.allowed_tools("boss-recruiting")
+        assert "weixin_message_send_v2" not in catalog.allowed_tools("boss-recruiting")
+
+    def test_weixin_capability_resolves_without_fixture(self):
+        """真实 capabilities（P1-B 上报格式）无需临时注册即可解析出 weixin key"""
+        caps = {
+            "providers": ["boss-recruiting", "weixin"],
+            "protocol_version": 2,
+            "provider_manifests": {
+                "weixin": {"provider_id": WEIXIN_PROVIDER_ID, "protocol_version": 1}
+            },
+        }
+        assert "weixin" in catalog.get_provider_keys_for_device(caps)
+        assert catalog.get_provider_key_for_device(
+            {"provider_id": WEIXIN_PROVIDER_ID}
+        ) == "weixin"
+
+
 class TestProviderKeysForDevice:
     def test_providers_array_direct_key_hit(self, with_weixin_provider):
         """(1) providers 数组条目直接命中 TRUSTED_PROVIDERS 的 key（Runtime 上报 provider_key）"""

@@ -229,6 +229,57 @@ class DeliveryRetryInput(_StrictModel):
     confirm: bool = False
 
 
+# ==================== P3-A1 工作台输入（test-send / 搜索 / 绑定 / 预检）====================
+
+
+class TestSendInput(_StrictModel):
+    """试发（R54①）：显式 block position + group_binding_id，只试发该条。
+
+    绑定必须是属主可见且 complete 的群绑定；块取自动化当前 active（已发布）revision。
+    """
+
+    group_binding_id: str
+    block_position: int = Field(ge=0)
+
+    @field_validator("group_binding_id")
+    @classmethod
+    def _binding_rules(cls, v: str) -> str:
+        return _validate_uuid_str(v)
+
+
+class GroupSearchCreateInput(_StrictModel):
+    """群搜索任务（异步，202）：经 local_tool 队列向绑定设备下发 weixin_chat_search"""
+
+    device_id: str
+    keyword: str = Field(min_length=1, max_length=100)
+
+    @field_validator("device_id")
+    @classmethod
+    def _device_rules(cls, v: str) -> str:
+        return _validate_uuid_str(v)
+
+
+class GroupBindingCreateInput(_StrictModel):
+    """从搜索候选创建绑定（pending_verification）：候选 target_ref 必须来自指定搜索结果"""
+
+    device_id: str
+    label: str = Field(min_length=1, max_length=128)
+    target_ref: str = Field(min_length=1, max_length=256)
+    search_id: str
+    account_binding_id: Optional[str] = None
+
+    @field_validator("device_id", "search_id")
+    @classmethod
+    def _uuid_rules(cls, v: str) -> str:
+        return _validate_uuid_str(v)
+
+    @field_validator("account_binding_id")
+    @classmethod
+    def _account_rules(cls, v: Optional[str]) -> Optional[str]:
+        return _validate_uuid_str(v) if v is not None else v
+
+
+
 def parse_trigger(data: dict) -> TriggerConfig:
     """dict → TriggerConfig（判别字段 type；非法配置抛 ValidationError）"""
     from pydantic import TypeAdapter

@@ -42,7 +42,25 @@ TRUSTED_PROVIDERS: Dict[str, Dict[str, Any]] = {
             "boss_resume_detail",
             "boss_resume_batch",
         ],
-    }
+    },
+    # 微信 Provider（P3-A1）：与 Runtime src/providers.ts 的 weixin manifest（5 工具）
+    # 对齐，但**不含 weixin_message_send（v1 写）**——v1 写不经底座许可链路；
+    # weixin_message_send_v2 为底座 v2 统一操作名（真 v2 capability 随 P0 交付前，
+    # Runtime 侧 PROTOCOL_NOT_SUPPORTED 门控拒绝，写路径安全不依赖本清单）。
+    # 4 个只读工具（probe/chat_search/history_read/unread_list）供搜索/核验/预检
+    # 经 local_tool 队列下发，读链路走旧 /result 回传。
+    "weixin": {
+        "provider_id": "ai.aidwork.weixin",
+        "min_provider_version": "1.0.0",
+        "execution_target": "local_required",
+        "tools": [
+            "weixin_probe",
+            "weixin_chat_search",
+            "weixin_history_read",
+            "weixin_unread_list",
+            "weixin_message_send_v2",
+        ],
+    },
 }
 
 

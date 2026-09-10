@@ -64,6 +64,7 @@ describe('entry route responsibilities', () => {
         "users",
         "knowledge",
         "connections",
+        "connections/external-systems",
         "channels",
         "wecom-personal-rpa",
         "settings",
@@ -92,8 +93,26 @@ describe('entry route responsibilities', () => {
         "customer-followup",
         "complaint",
         "after-sales",
+        "weixin-marketing",
       ]
     `)
+  })
+
+  it('keeps weixin marketing workbench list and routed run detail pages for tenant', () => {
+    // 微信营销工作台（P3-A2）：列表页 + 路由化运行详情页（2 秒轮询页）
+    const tenantChildren = agentRoutes.find((route) => route.path === '/t/:tenant_id')?.children ?? []
+    const weixin = tenantChildren.find((route) => route.path === 'weixin-marketing')
+    expect(weixin?.children?.map((route) => route.path)).toEqual(['automations', 'runs/:runId'])
+    expect(weixin?.children?.map((route) => route.name)).toEqual([
+      'tenant-weixin-marketing-automations',
+      'tenant-weixin-marketing-run-detail',
+    ])
+
+    const router = createRouter({ history: createMemoryHistory(), routes: agentRoutes })
+    expect(router.resolve('/t/acme/weixin-marketing/automations').name).toBe('tenant-weixin-marketing-automations')
+    expect(router.resolve('/t/acme/weixin-marketing/runs/11111111-2222-3333-4444-555555555555').name).toBe(
+      'tenant-weixin-marketing-run-detail',
+    )
   })
 
   it('keeps recruiting operator list pages and routed detail pages for tenant', () => {

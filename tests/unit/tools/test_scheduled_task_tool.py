@@ -495,3 +495,107 @@ async def test_manage_view_logs_idempotent_on_already_sanitized_text():
         "tenant_id": "tenant_a", "user_id": "user-a"
     }
     assert "错误: 登录失败 password=*** x" in result["message"]
+
+
+# ==================== R56 路由约束：微信营销任务引导专用工具 ====================
+
+
+@pytest.mark.asyncio
+async def test_create_rejects_definite_weixin_marketing_task():
+    """确定的微信营销定时群发任务：拒绝创建并结构化引导专用工具，不执行 dry_run、不触达 DB"""
+    from src.scheduler.executor import ScheduledTaskExecutor
+
+    tool = _make_tool()
+    with (
+        patch("src.scheduler.db.ScheduledTaskDB.count_by_user") as count_mock,
+        patch("src.scheduler.db.ScheduledTaskDB.create") as create_mock,
+        patch.object(ScheduledTaskExecutor, "dry_run") as dry_run_mock,
+        tool_execution_scope(
+            ToolExecutionContext(user_id="user-a", tenant_id="tenant_a")
+        ),
+    ):
+        result = await tool.execute(
+            name="每日微信群发促销",
+            task_prompt="每天早上9点向客户群微信群发促销消息",
+            schedule_type="daily", time_config={"hour": 9},
+        )
+
+    assert result["success"] is False
+    assert result["code"] == "USE_DEDICATED_WEIXIN_TOOL"
+    assert result["routed_tool"] == "weixin_automation_prepare"
+    assert "weixin_automation_prepare" in result["guidance"]
+    assert "weixin_automation_publish" in result["guidance"]
+    # 拦截发生在 dry_run 与任何 DB 访问之前
+    dry_run_mock.assert_not_called()
+    create_mock.assert_not_called()
+    count_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_create_generic_daily_task_unaffected():
+    """通用定时任务不受路由约束影响：照常 dry_run + 创建"""
+    tool = _make_tool()
+    task_dict = {"task_id": "t-generic", "next_run_at": None}
+    patches, create_mock, dry_run_mock = _patch_deps(task_dict)
+    try:
+        with tool_execution_scope(
+            ToolExecutionContext(user_id="u1", session_id="session_1", tenant_id="tenant_a")
+        ):
+            result = await tool.execute(
+                name="每日邮件报告",
+                task_prompt="每天9点汇总数据并发送邮件到 boss@company.com",
+                schedule_type="daily", time_config={"hour": 9},
+            )
+    finally:
+        for p in patches:
+            p.stop()
+
+    assert result["success"] is True
+    assert create_mock.call_args.kwargs["tenant_id"] == "tenant_a"
+    dry_run_mock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_create_weixin_report_to_email_not_blocked():
+    """保守性：提到微信营销但发送目标是邮箱的任务不拦截（不确定时放行）"""
+    tool = _make_tool()
+    task_dict = {"task_id": "t-email", "next_run_at": None}
+    patches, create_mock, _ = _patch_deps(task_dict)
+    try:
+        with tool_execution_scope(
+            ToolExecutionContext(user_id="u1", session_id="session_1", tenant_id="tenant_a")
+        ):
+            result = await tool.execute(
+                name="微信营销日报",
+                task_prompt="每天定时汇总微信营销数据并自动发送日报到我的邮箱",
+                schedule_type="daily", time_config={"hour": 9},
+            )
+    finally:
+        for p in patches:
+            p.stop()
+
+    assert result["success"] is True
+    assert create_mock.called
+
+
+@pytest.mark.asyncio
+async def test_create_weixin_wording_without_send_not_blocked():
+    """保守性：仅提及微信（无域关键词+发送动作组合）不拦截"""
+    tool = _make_tool()
+    task_dict = {"task_id": "t-plain", "next_run_at": None}
+    patches, create_mock, _ = _patch_deps(task_dict)
+    try:
+        with tool_execution_scope(
+            ToolExecutionContext(user_id="u1", session_id="session_1", tenant_id="tenant_a")
+        ):
+            result = await tool.execute(
+                name="查看微信消息",
+                task_prompt="每天早上检查微信未读消息并汇总",
+                schedule_type="daily", time_config={"hour": 8},
+            )
+    finally:
+        for p in patches:
+            p.stop()
+
+    assert result["success"] is True
+    assert create_mock.called

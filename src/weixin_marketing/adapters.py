@@ -39,6 +39,7 @@ from src.weixin_marketing.constants import (
     PROVIDER_KEY,
     REVISION_STATUS_PUBLISHED,
     SCENARIO_KEY,
+    TEST_TASK_REF_SUFFIX,
 )
 from src.weixin_marketing.models import parse_trigger
 from src.weixin_marketing.triggers import compile_trigger_specs, validate_blocks
@@ -243,10 +244,18 @@ class WeixinFixedContentAdapter:
         authorization_revision: Optional[str],
         authorization_epoch: Optional[int],
     ) -> AuthorizeDecision:
-        """许可事务内场景授权：操作名/任务状态/active revision/属主/绑定链 + 配额 scopes"""
+        """许可事务内场景授权：操作名/任务状态/active revision/属主/绑定链 + 配额 scopes
+
+        P3-A1：task_ref 带 TEST_TASK_REF_SUFFIX 的试发 run 复用同一校验链（任务须
+        active、revision 须为当前发布版），但配额切换为 wxm:test:* 独立桶——试发
+        不挤占生产发送额度。生产 task_ref 为纯 UUID，不会命中该分支。
+        """
         if operation != OPERATION_MESSAGE_SEND:
             return AuthorizeDecision(allowed=False, reason=f"unsupported_operation:{operation}")
-        automation = self._load_automation_row(ctx.tenant_id, ctx.task_ref)
+        raw_task_ref = str(ctx.task_ref or "")
+        is_test_task = raw_task_ref.endswith(TEST_TASK_REF_SUFFIX)
+        automation_ref = raw_task_ref[: -len(TEST_TASK_REF_SUFFIX)] if is_test_task else raw_task_ref
+        automation = self._load_automation_row(ctx.tenant_id, automation_ref)
         if automation is None:
             return AuthorizeDecision(allowed=False, reason="automation_missing")
         if automation.get("status") != AUTOMATION_STATUS_ACTIVE:
@@ -273,14 +282,24 @@ class WeixinFixedContentAdapter:
             blocks = self._load_revision_blocks(ctx.tenant_id, str(revision["id"]))
             if not any(b.get("payload_hash") == payload_hash for b in blocks):
                 return AuthorizeDecision(allowed=False, reason="payload_hash_not_in_revision")
-        scopes = quota_map.build_quota_scopes(
-            tenant_id=ctx.tenant_id,
-            scenario_key=self.scenario_key,
-            task_ref=ctx.task_ref,
-            group_binding_id=str(target_ref),
-            account_binding_id=str(binding.get("account_binding_id")) if binding.get("account_binding_id") else None,
-            config=self.config,
-        )
+        if is_test_task:
+            scopes = quota_map.build_test_quota_scopes(
+                tenant_id=ctx.tenant_id,
+                scenario_key=self.scenario_key,
+                task_ref=automation_ref,
+                group_binding_id=str(target_ref),
+                account_binding_id=str(binding.get("account_binding_id")) if binding.get("account_binding_id") else None,
+                config=self.config,
+            )
+        else:
+            scopes = quota_map.build_quota_scopes(
+                tenant_id=ctx.tenant_id,
+                scenario_key=self.scenario_key,
+                task_ref=ctx.task_ref,
+                group_binding_id=str(target_ref),
+                account_binding_id=str(binding.get("account_binding_id")) if binding.get("account_binding_id") else None,
+                config=self.config,
+            )
         return AuthorizeDecision(allowed=True, quota_scopes=scopes)
 
     def compile_operations(

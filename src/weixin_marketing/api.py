@@ -13,7 +13,10 @@
   本 API 当前无服务层触发点）、503 ADAPTER_UNREGISTERED（enabled=false 门控）；
 - Idempotency-Key（R46：scope=(tenant,user,route,key)，模块级 DB 表实现）：
   同 key 同 payload 幂等重放原响应（含状态码），同 key 异 payload 409，无 key 正常执行；
-  仅「建资源 / 发布 / 手动 run」类 POST 接入（create/publish/run）。
+  仅「建资源 / 发布 / 手动 run」类 POST 接入（create/publish/run，P3-A1 增
+  test-send/group-searches/group-bindings/verify/preflight——verify/preflight 的
+  失败结论经 abandon 释放占位，同 key 可重试；只读 dedupe 键遇终态残留时服务层
+  换 :r2 键重建新 invocation，不复用旧失败）。
   payload 判定 = 请求路径 + 请求体规范化 JSON 的 digest（CR-P1-1：路径并入
   digest，同 key 同 body 打不同资源一律 409，绝不跨资源重放）；等价 JSON
   键序差异经 sort_keys 归一；R51 同事务：业务写入与幂等完成记录（_Idempotency-
@@ -46,11 +49,15 @@ from src.weixin_marketing.service import (
     ConfigurationError,
     ConflictError,
     NotFoundError,
+    PreflightFailedError,
+    QuotaExceededError,
     RetryEvidenceRequiredError,
     TenantNotAllowedError,
+    VerifyFailedError,
     WeixinMarketingService,
     WeixinValidationError,
 )
+from src.weixin_marketing.workbench import WeixinWorkbenchService
 
 router = APIRouter(prefix="/api/weixin-marketing", tags=["weixin-marketing"])
 
@@ -67,11 +74,17 @@ CODE_INTERNAL_ERROR = "INTERNAL_ERROR"
 CODE_IDEMPOTENCY_PAYLOAD_CONFLICT = "IDEMPOTENCY_PAYLOAD_CONFLICT"
 CODE_IDEMPOTENCY_IN_PROGRESS = "IDEMPOTENCY_IN_PROGRESS"
 CODE_IDEMPOTENCY_KEY_INVALID = "IDEMPOTENCY_KEY_INVALID"
+# P3-A1：local_tool 队列只读操作未得出结论（可重试；绑定/设备保持原状态）
+CODE_VERIFY_FAILED = "VERIFY_FAILED"
+CODE_PREFLIGHT_FAILED = "PREFLIGHT_FAILED"
 
 TRIGGER_TYPES = ("once", "interval", "calendar", "event")
 
 # run 状态全集（desktop_automation.constants：非终态 + §5.4 聚合终态）
 RUN_STATES = ("pending", "running", "waiting_device", *RUN_TERMINAL_STATES)
+
+# group_bindings 状态全集（P3-A1 增 rejected：核验否决终态）
+GROUP_BINDING_STATES_ALL = ("pending", "complete", "rejected", "disabled")
 
 # 幂等 scope 中的 route 标识（路径模板，不含具体资源 ID——scope 按 R46 为
 # (tenant,user,route,key)；「同 payload」的判定 = request.url.path + body 规范化
@@ -79,6 +92,11 @@ RUN_STATES = ("pending", "running", "waiting_device", *RUN_TERMINAL_STATES)
 _ROUTE_CREATE = "POST /automations"
 _ROUTE_PUBLISH = "POST /automations/{automation_id}/publish"
 _ROUTE_RUN = "POST /automations/{automation_id}/run"
+_ROUTE_TEST_SEND = "POST /automations/{automation_id}/test-send"
+_ROUTE_GROUP_SEARCH = "POST /group-searches"
+_ROUTE_GROUP_BINDING = "POST /group-bindings"
+_ROUTE_BINDING_VERIFY = "POST /group-bindings/{binding_id}/verify"
+_ROUTE_DEVICE_PREFLIGHT = "POST /devices/{device_id}/preflight"
 
 _IDEMPOTENCY_KEY_MIN = 8
 _IDEMPOTENCY_KEY_MAX = 200
@@ -355,6 +373,20 @@ def _failure_from_service(exc: Exception) -> _HandlerFailure:
         return _HandlerFailure(
             409, _error_body(CODE_RETRY_EVIDENCE_REQUIRED, message, debug=message)
         )
+    if isinstance(exc, QuotaExceededError):
+        # P3-A1：试发只读预检触发（配额实际在底座许可事务原子执行）
+        return _HandlerFailure(
+            429, _error_body(CODE_QUOTA_EXCEEDED, message, debug=message)
+        )
+    if isinstance(exc, VerifyFailedError):
+        # P3-A1：绑定核验未得出结论（可重试，绑定保持 pending_verification）
+        return _HandlerFailure(
+            409, _error_body(CODE_VERIFY_FAILED, message, debug=message)
+        )
+    if isinstance(exc, PreflightFailedError):
+        return _HandlerFailure(
+            409, _error_body(CODE_PREFLIGHT_FAILED, message, debug=message)
+        )
     if isinstance(exc, ConflictError):
         return _HandlerFailure(
             409, _error_body(CODE_CONFLICT, message, debug=message)
@@ -487,6 +519,7 @@ def _enrich_latest_attempts(tenant_id: str, detail: Dict[str, Any]) -> Dict[str,
 
 
 _service = WeixinMarketingService()
+_workbench_service = WeixinWorkbenchService()
 
 
 # ==================== automations CRUD ====================
@@ -653,7 +686,9 @@ async def _guarded_service(action: str, exc: Exception) -> JSONResponse:
     """服务异常统一兜底：服务层错误类型→稳定码；未知异常→500+脱敏 debug+堆栈日志"""
     if isinstance(exc, _HandlerFailure):
         return JSONResponse(status_code=exc.status_code, content=exc.body)
-    if isinstance(exc, (NotFoundError, ConflictError, WeixinValidationError, ConfigurationError)):
+    if isinstance(exc, (NotFoundError, ConflictError, WeixinValidationError, ConfigurationError,
+                        QuotaExceededError, VerifyFailedError, PreflightFailedError,
+                        TenantNotAllowedError, RetryEvidenceRequiredError)):
         failure = _failure_from_service(exc)
         return JSONResponse(status_code=failure.status_code, content=failure.body)
     return _internal_error(f"{action}失败", exc)
@@ -663,7 +698,9 @@ async def _call_service(func: Callable, /, *args, **kwargs):
     """幂等 handler 内的服务调用：服务层错误类型 → _HandlerFailure（触发 abandon）"""
     try:
         return await asyncio.to_thread(func, *args, **kwargs)
-    except (NotFoundError, ConflictError, WeixinValidationError, ConfigurationError) as e:
+    except (NotFoundError, ConflictError, WeixinValidationError, ConfigurationError,
+            QuotaExceededError, VerifyFailedError, PreflightFailedError,
+            TenantNotAllowedError, RetryEvidenceRequiredError) as e:
         raise _failure_from_service(e) from e
 
 
@@ -992,3 +1029,241 @@ async def retry_delivery(delivery_id: str, request: Request):
         return await _guarded_service("人工重试", e)
     except Exception as e:
         return _internal_error("人工重试失败", e)
+
+
+# ==================== P3-A1 工作台：test-send ====================
+
+
+@router.post("/automations/{automation_id}/test-send", status_code=202)
+async def test_send(
+    automation_id: str,
+    request: Request,
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
+):
+    """试发（R54①）：显式 block_position + group_binding_id，只试发该条。
+
+    独立 run/attempt 审计（task_ref=<automation>:test）+ 独立 wxm:test:* 配额 scope；
+    绑定缺失/不可用 → 422；返回 202 与生产 run 同构的执行链路标识。
+    """
+    from src.weixin_marketing.models import TestSendInput
+
+    tenant_id, user_id = await _current_user_and_tenant(request)
+    if not _valid_uuid(automation_id):
+        return _error_json(404, CODE_NOT_FOUND, "自动化任务不存在或无权访问")
+    key_error = _check_idempotency_key(idempotency_key)
+    if key_error:
+        return key_error
+
+    async def handler(
+        payload: TestSendInput, finalizer: Optional[_IdempotencyFinalizer]
+    ) -> Tuple[int, Dict[str, Any]]:
+        # R51 口径：提供 Idempotency-Key 时 request_id 恒取该 key（触发键同源去重，
+        # 崩溃接管重放收敛到同一 occurrence/run）
+        request_id = idempotency_key or f"test-send-{_uuid.uuid4().hex}"
+        result = await _call_service(
+            _workbench_service.test_send, tenant_id, automation_id, user_id, payload,
+            request_id=request_id, idempotency=finalizer,
+        )
+        return _ok(result, status_code=202)
+
+    return await _execute_idempotent_payload(
+        idempotency_key, tenant_id, user_id, _ROUTE_TEST_SEND, request,
+        TestSendInput, handler, action_label="试发",
+    )
+
+
+# ==================== P3-A1 工作台：group-searches ====================
+
+
+@router.post("/group-searches", status_code=202)
+async def create_group_search(
+    request: Request,
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
+):
+    """创建异步群搜索任务（202）：weixin_chat_search 只读操作入队到绑定设备，
+    GET /group-searches/{id} 轮询候选（不占长 HTTP 连接）。"""
+    from src.weixin_marketing.models import GroupSearchCreateInput
+
+    tenant_id, user_id = await _current_user_and_tenant(request)
+    key_error = _check_idempotency_key(idempotency_key)
+    if key_error:
+        return key_error
+
+    async def handler(
+        payload: GroupSearchCreateInput, finalizer: Optional[_IdempotencyFinalizer]
+    ) -> Tuple[int, Dict[str, Any]]:
+        result = await _call_service(
+            _workbench_service.create_group_search, tenant_id, user_id, payload,
+            dedupe_seed=idempotency_key or f"gs-{_uuid.uuid4().hex}",
+            idempotency=finalizer,
+        )
+        return _ok(result, status_code=202)
+
+    return await _execute_idempotent_payload(
+        idempotency_key, tenant_id, user_id, _ROUTE_GROUP_SEARCH, request,
+        GroupSearchCreateInput, handler, action_label="创建群搜索",
+    )
+
+
+@router.get("/group-searches/{search_id}")
+async def get_group_search(search_id: str, request: Request):
+    """搜索任务详情：pending/running/succeeded/failed + 候选 items（带 target_ref）"""
+    tenant_id, user_id = await _current_user_and_tenant(request)
+    if not _valid_uuid(search_id):
+        return _error_json(404, CODE_NOT_FOUND, "搜索记录不存在或无权访问")
+    try:
+        result = await asyncio.to_thread(
+            _workbench_service.get_group_search, tenant_id, user_id, search_id
+        )
+        return JSONResponse(content={"success": True, "data": _jsonable(result)})
+    except (NotFoundError, ConflictError, WeixinValidationError, ConfigurationError) as e:
+        return await _guarded_service("查询群搜索", e)
+    except Exception as e:
+        return _internal_error("查询群搜索失败", e)
+
+
+# ==================== P3-A1 工作台：group-bindings ====================
+
+
+@router.post("/group-bindings")
+async def create_group_binding(
+    request: Request,
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
+):
+    """从搜索候选创建绑定（pending_verification；人工选择，不自动建绑定）"""
+    from src.weixin_marketing.models import GroupBindingCreateInput
+
+    tenant_id, user_id = await _current_user_and_tenant(request)
+    key_error = _check_idempotency_key(idempotency_key)
+    if key_error:
+        return key_error
+
+    async def handler(
+        payload: GroupBindingCreateInput, finalizer: Optional[_IdempotencyFinalizer]
+    ) -> Tuple[int, Dict[str, Any]]:
+        result = await _call_service(
+            _workbench_service.create_group_binding, tenant_id, user_id, payload,
+            idempotency=finalizer,
+        )
+        return _ok(result)
+
+    return await _execute_idempotent_payload(
+        idempotency_key, tenant_id, user_id, _ROUTE_GROUP_BINDING, request,
+        GroupBindingCreateInput, handler, action_label="创建群绑定",
+    )
+
+
+@router.get("/group-bindings")
+async def list_group_bindings(
+    request: Request,
+    state: Optional[str] = None,
+    device_id: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 20,
+):
+    """群绑定列表（属主过滤；state/device_id/分页）"""
+    tenant_id, user_id = await _current_user_and_tenant(request)
+    field_errors: List[Dict[str, str]] = []
+    if state is not None and state not in GROUP_BINDING_STATES_ALL:
+        field_errors.append({"field": "state", "message": f"非法绑定状态: {state}"})
+    if device_id is not None and not _valid_uuid(device_id):
+        field_errors.append({"field": "device_id", "message": "非法 UUID"})
+    if page < 1:
+        field_errors.append({"field": "page", "message": "page 须 >= 1"})
+    if not (1 <= page_size <= 100):
+        field_errors.append({"field": "page_size", "message": "page_size 须在 1-100 之间"})
+    if field_errors:
+        return _error_json(
+            422, CODE_VALIDATION_FAILED, "查询参数校验失败", field_errors=field_errors
+        )
+    try:
+        result = await asyncio.to_thread(
+            _workbench_service.list_group_bindings, tenant_id, user_id,
+            state=state, device_id=device_id, page=page, page_size=page_size,
+        )
+        return JSONResponse(content={"success": True, "data": _jsonable(result)})
+    except Exception as e:
+        return _internal_error("查询群绑定失败", e)
+
+
+class _EmptyInput(BaseModel):
+    """空请求体模型（verify/preflight 仅幂等键，无业务字段）"""
+
+    model_config = {"extra": "forbid"}
+
+
+@router.post("/group-bindings/{binding_id}/verify")
+async def verify_group_binding(
+    binding_id: str,
+    request: Request,
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
+):
+    """绑定核验（只读，经 local_tool 队列）：唯一精确命中→complete；同名多命中→
+    rejected；设备离线/工具失败/超时→409 VERIFY_FAILED（绑定保持待核验，可重试）。"""
+    tenant_id, user_id = await _current_user_and_tenant(request)
+    if not _valid_uuid(binding_id):
+        return _error_json(404, CODE_NOT_FOUND, "群绑定不存在或无权访问")
+    key_error = _check_idempotency_key(idempotency_key)
+    if key_error:
+        return key_error
+
+    async def handler(
+        payload: None, finalizer: Optional[_IdempotencyFinalizer]
+    ) -> Tuple[int, Dict[str, Any]]:
+        result = await _call_service(
+            _workbench_service.verify_group_binding, tenant_id, binding_id, user_id,
+            dedupe_seed=idempotency_key or f"verify-{_uuid.uuid4().hex}",
+            idempotency=finalizer,
+        )
+        return _ok(result)
+
+    return await _execute_idempotent_payload(
+        idempotency_key, tenant_id, user_id, _ROUTE_BINDING_VERIFY, request,
+        _EmptyInput, handler, action_label="核验群绑定",
+    )
+
+
+# ==================== P3-A1 工作台：devices ====================
+
+
+@router.get("/devices")
+async def list_devices(request: Request):
+    """属主设备列表：在线状态 + capabilities 的 weixin provider 可用性
+    （复用 local_tools 设备只读查询；不暴露原始 capability payload）"""
+    tenant_id, user_id = await _current_user_and_tenant(request)
+    try:
+        result = await asyncio.to_thread(_workbench_service.list_devices, tenant_id, user_id)
+        return JSONResponse(content={"success": True, "data": _jsonable(result)})
+    except Exception as e:
+        return _internal_error("查询设备列表失败", e)
+
+
+@router.post("/devices/{device_id}/preflight")
+async def preflight_device(
+    device_id: str,
+    request: Request,
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
+):
+    """设备预检（weixin_probe 只读，经 local_tool 队列）：返回环境矩阵；
+    设备离线/超时 → 409 PREFLIGHT_FAILED（可重试）。"""
+    tenant_id, user_id = await _current_user_and_tenant(request)
+    if not _valid_uuid(device_id):
+        return _error_json(404, CODE_NOT_FOUND, "设备不存在或无权访问")
+    key_error = _check_idempotency_key(idempotency_key)
+    if key_error:
+        return key_error
+
+    async def handler(
+        payload: _EmptyInput, finalizer: Optional[_IdempotencyFinalizer]
+    ) -> Tuple[int, Dict[str, Any]]:
+        result = await _call_service(
+            _workbench_service.preflight_device, tenant_id, device_id, user_id,
+            dedupe_seed=idempotency_key or f"pf-{_uuid.uuid4().hex}",
+            idempotency=finalizer,
+        )
+        return _ok(result)
+
+    return await _execute_idempotent_payload(
+        idempotency_key, tenant_id, user_id, _ROUTE_DEVICE_PREFLIGHT, request,
+        _EmptyInput, handler, action_label="设备预检",
+    )

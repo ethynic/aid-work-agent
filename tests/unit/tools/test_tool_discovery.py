@@ -29,6 +29,10 @@ transfer_to_human 同一模式）。
 2026-09-03 追加 get_channel_user_info（渠道客户信息查询，售前咨询外部
 推送 client_token 委托登录用；信息来源为 kf context 注入的
 channel_user_info 与 users_db，无外部网络调用）。
+
+2026-09-08 追加微信营销聊天三工具（P3-B，R54③/R56）：
+weixin_automation_prepare / weixin_automation_publish / weixin_automation_manage，
+共用 src.weixin_marketing 服务层，经 Catalog 自动发现装配。
 """
 
 import pytest
@@ -64,6 +68,9 @@ GOLDEN_TOOLS = [
     "transfer_to_human",
     "upload_data_file",
     "web_search",
+    "weixin_automation_manage",
+    "weixin_automation_prepare",
+    "weixin_automation_publish",
     "word_process",
     "write",
     "x_to_image",

@@ -124,6 +124,24 @@ class ConfigurationError(WeixinMarketingError):
     """模块配置缺失（适配器未注册：enabled=false 或受信注册点未执行）——API 层 503/409 语义"""
 
 
+class QuotaExceededError(WeixinMarketingError):
+    """发送配额不足（429 QUOTA_EXCEEDED；P3-A1 test-send 只读预检触发点）"""
+
+
+class ToolOperationFailedError(WeixinMarketingError):
+    """经 local_tool 队列的只读操作未完成（设备离线/工具失败/等待超时）——
+    API 层 409 + 专用稳定码（VERIFY_FAILED / PREFLIGHT_FAILED）；可重试"""
+
+
+class VerifyFailedError(ToolOperationFailedError):
+    """绑定核验未得出结论（设备离线/工具失败/超时/零精确命中）——绑定保持
+    pending_verification，可重试；服务端不伪造通过"""
+
+
+class PreflightFailedError(ToolOperationFailedError):
+    """设备预检未完成（设备离线/工具失败/超时）——可重试"""
+
+
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -459,7 +477,18 @@ class WeixinMarketingService:
     def _automation_detail_on(
         cursor, tenant_id: str, automation_id: str, user_id: str
     ) -> Dict[str, Any]:
-        """详情组装（游标级，R51：幂等事务内于 commit 前构建响应，见 create_automation）"""
+        """详情组装（游标级，R51：幂等事务内于 commit 前构建响应，见 create_automation）。
+
+        draft_blocks（P3-A2 编辑器回显契约）：当前草稿 revision 的有序块明细
+        （text_content/url 为属主自己的内容原文，与 revisions/content_blocks 属主
+        模型一致——非对外引用脱敏场景）；无草稿（已发布未迭代）为空列表。
+
+        active_*（P3 复审 P1-1 发布后回显契约）：active revision 的同构投影——
+        active_blocks（有序块明细，结构与 draft_blocks 一致）、active_trigger
+        （trigger_json 结构化）、active_group_binding_id；无已发布版本时分别为
+        []/None/None。与 draft_* 同事务同游标读取，发布后未迭代（无草稿）时编辑器
+        以 active_* 回显并支持试发。
+        """
         automation = _get_automation_on(cursor, tenant_id, automation_id)
         if automation is None or automation.get("user_id") != user_id:
             raise NotFoundError("自动化任务不存在")
@@ -469,6 +498,23 @@ class WeixinMarketingService:
             (tenant_id, automation_id),
         )
         revisions = [dict(r) for r in cursor.fetchall()]
+        draft_blocks: List[Dict[str, Any]] = []
+        draft_id = automation.get("draft_revision_id")
+        if draft_id:
+            draft_blocks = _list_revision_blocks_on(cursor, tenant_id, str(draft_id))
+        active_blocks: List[Dict[str, Any]] = []
+        active_trigger: Optional[Dict[str, Any]] = None
+        active_group_binding_id: Optional[str] = None
+        active_id = automation.get("active_revision_id")
+        if active_id:
+            active_revision = next(
+                (r for r in revisions if str(r["id"]) == str(active_id)), None
+            )
+            if active_revision is not None:
+                active_blocks = _list_revision_blocks_on(cursor, tenant_id, str(active_id))
+                active_trigger = active_revision.get("trigger_json") or None
+                if active_revision.get("group_binding_id"):
+                    active_group_binding_id = str(active_revision["group_binding_id"])
         cursor.execute(
             """
             SELECT id, state, created_at, finished_at FROM desktop_automation_runs
@@ -487,6 +533,10 @@ class WeixinMarketingService:
             "draft_trigger": next(
                 (r["trigger_json"] for r in revisions if r["status"] == REVISION_STATUS_DRAFT), None
             ),
+            "draft_blocks": draft_blocks,
+            "active_blocks": active_blocks,
+            "active_trigger": active_trigger,
+            "active_group_binding_id": active_group_binding_id,
             "recent_runs": recent_runs,
         }
 
