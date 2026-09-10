@@ -907,10 +907,13 @@ class DataAnalyzer:
         else:
             ax.bar(xs, heights, width=width, color=color, linewidth=0, zorder=3)
         # 数值标签：正值标在柱顶上方，负值标在柱底下方
+        # 偏移按本组数据幅度的 2% 计。不要加绝对值下限：比率类（0~1）数据下
+        # 0.1 的偏移约占轴高 17%，会把标签推出坐标轴顶部（text 默认不裁剪，
+        # 视觉上悬浮在图表顶端）
         pos_vals = [h for h in heights if h == h and h > 0]
         neg_vals = [h for h in heights if h == h and h < 0]
-        pos_step = max((max(pos_vals) if pos_vals else 1) * 0.02, 0.1)
-        neg_step = max((abs(min(neg_vals)) if neg_vals else 1) * 0.02, 0.1)
+        pos_step = (max(pos_vals) if pos_vals else 1) * 0.02
+        neg_step = (abs(min(neg_vals)) if neg_vals else 1) * 0.02
         # 分组柱中矮柱的标签可能被相邻高柱遮挡：加背景色描边光晕，保证任意底色上可读
         stroke = [pe.withStroke(linewidth=2.5, foreground=t["bg"])]
         for xi, h in zip(xs, heights):
@@ -1037,6 +1040,11 @@ class DataAnalyzer:
                                       self._theme_color(t, i), t)
             ax.set_xticks(list(x_range))
             ax.set_xticklabels(x_labels, rotation=30, ha="right")
+            # 柱上数值标签需要头部空间：默认 5% 边距装不下"2% 偏移 + 文字高度"，
+            # 最高柱的标签会顶出坐标区；扩大 y 边距，全正数据锚住底边为 0
+            ax.margins(y=0.14)
+            if not any((df[c] < 0).any() for c in y_columns):
+                ax.set_ylim(bottom=0)
             self._apply_axes_style(ax, t)
             leg = self._style_legend(ax, t, handles=legend_handles)
             title_artist = self._add_titles(ax, t, title)
