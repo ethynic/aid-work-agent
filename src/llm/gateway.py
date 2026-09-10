@@ -12,6 +12,7 @@ from typing import Any, AsyncGenerator, Dict, List, Optional
 from loguru import logger
 
 from src.config.settings import settings
+from src.core.text_sanitizer import sanitize_messages
 from .error_detail import describe_exception
 from .key_pool import KeyPool
 from .providers.base import BaseLLMProvider
@@ -184,6 +185,8 @@ class LLMGateway:
         Key 在 async with 块结束时自动归还。
         """
         import time
+        if "messages" in kwargs:
+            kwargs["messages"] = sanitize_messages(kwargs["messages"])
         if self._key_pool is None:
             raise RuntimeError(
                 f"LLM网关未配置 provider={self.provider_name} 的 Key，无法调用 {fn_name}；"
@@ -227,6 +230,8 @@ class LLMGateway:
         """
         stream_start = time.time()
         chunk_count = 0
+        if "messages" in kwargs:
+            kwargs["messages"] = sanitize_messages(kwargs["messages"])
         logger.info(f"[LLM] _stream_with_pool started, provider={self.provider_name}, fn={fn_name}")
         
         try:

@@ -39,6 +39,10 @@ def _is_transient_error(error: Exception) -> bool:
     return any(kw in msg for kw in _TRANSIENT_KEYWORDS)
 
 
+# 会导致 Embedding API 报错或污染检索的异常字符清洗，统一在 src/core/text_sanitizer.py
+from src.core.text_sanitizer import sanitize_texts as _sanitize_texts
+
+
 def _extract_usage_tokens(resp) -> int:
     """从 DashScope TextEmbedding 响应中提取 usage token 数
 
@@ -129,6 +133,7 @@ class TextEmbeddingV3Client:
         仅 wrap HTTP 传输层调用；resp.status_code 业务错误由外层处理（业务错误不可重试）。
         """
         last_exc = None
+        texts = _sanitize_texts(texts)
         for attempt in range(1, 4):  # 1 + 2 = 3 次尝试
             try:
                 return TextEmbedding.call(

@@ -12,6 +12,7 @@ from src.knowledge.embedding.embedding_client import (
     TextEmbeddingV3Client,
     _is_transient_error,
     _extract_usage_tokens,
+    _sanitize_texts,
 )
 
 
@@ -175,6 +176,57 @@ def test_embed_sync_empty_input_short_circuits():
 
     assert emb == []
     assert mock_call.call_count == 0
+
+
+# ---------------------------------------------------------------------------
+# _strip_lone_surrogates 清洗测试（生产事故：surrogates not allowed）
+# ---------------------------------------------------------------------------
+
+
+def test_sanitize_removes_high_surrogate():
+    """孤立高代理 \\ud83c 应被剔除，其余字符保留"""
+    text = "前缀" + "\ud83c" + "后缀"
+    out = _sanitize_texts([text])
+    assert out == ["前缀后缀"]
+    out[0].encode("utf-8")  # 不再抛 UnicodeEncodeError
+
+
+def test_sanitize_keeps_valid_emoji():
+    """完整 emoji（合法代理对）不受影响"""
+    text = "你好 😀 完成"
+    assert _sanitize_texts([text]) == [text]
+
+
+def test_sanitize_removes_nul_and_control_chars():
+    """NUL 与 C0/C1 控制符应被剔除，保留 \\t \\n \\r"""
+    text = "a\x00b\x01c\x7fd\x85e\tf\ng\rh"
+    assert _sanitize_texts([text]) == ["abcde\tf\ng\rh"]
+
+
+def test_sanitize_removes_noncharacter_and_bom():
+    """U+FFFE/U+FFFF noncharacter 与 U+FEFF BOM 残留应被剔除"""
+    text = "a￾b￿c﻿d"
+    assert _sanitize_texts([text]) == ["abcd"]
+
+
+def test_sanitize_normal_text_no_copy_change():
+    """正常文本原样返回（不清洗）"""
+    assert _sanitize_texts(["普通文本", ""]) == ["普通文本", ""]
+
+
+def test_call_dashscope_sanitizes_input_before_sdk():
+    """_call_dashscope_with_retry 应在调用 SDK 前剔除孤立代理字符"""
+    client = _make_client()
+    fake_resp = _make_fake_resp()
+    dirty = "含有\ud83c孤立代理的文档内容"
+    with patch(
+        "src.knowledge.embedding.embedding_client.TextEmbedding.call",
+        return_value=fake_resp,
+    ) as mock_call:
+        client._call_dashscope_with_retry([dirty])
+
+    sent_texts = mock_call.call_args.kwargs["input"]
+    assert sent_texts == ["含有孤立代理的文档内容"]
 
 
 # ---------------------------------------------------------------------------
