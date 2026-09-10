@@ -601,3 +601,58 @@ async def runtime_payload(invocation_id: str, device: Dict = Depends(_require_de
             "X-Content-Type-Options": "nosniff",
         },
     )
+
+
+@router.get("/runtime/invocations/{invocation_id}/assets/{asset_id}")
+async def runtime_invocation_asset(
+    invocation_id: str, asset_id: str, device: Dict = Depends(_require_device)
+):
+    """微信场景 invocation 素材下载（R57 P4-A）：设备 token + invocation 归属设备 +
+    已领取未终态 + 场景绑定 fail-closed + revision 绑定资产集校验（素材必须被本
+    invocation 绑定 revision 的 image 块引用，不接受任意 asset_id）；受控字节流 +
+    X-Asset-Hash，无重定向/无任意 URL；文件 hash 与登记不符 500 + 审计。
+    校验链核心在 src/weixin_marketing/assets.serve_invocation_asset（场景域逻辑
+    留场景模块，此处只做 transport；懒 import 避免 local_tools → weixin 顶层依赖）。"""
+    tenant_id = device["tenant_id"]
+    if not _valid_uuid(invocation_id) or not _valid_uuid(asset_id):
+        raise _http_error(404, "invocation 或素材不存在")
+    try:
+        from src.weixin_marketing.assets import AssetEndpointError, serve_invocation_asset
+
+        resolution = await asyncio.to_thread(
+            serve_invocation_asset, tenant_id, str(device["id"]), invocation_id, asset_id
+        )
+    except AssetEndpointError as e:
+        if e.code in ("ASSET_HASH_MISMATCH", "ASSET_FILE_MISSING"):
+            # 审计：素材字节漂移/失联必须留痕（只记哈希与引用，不写图片内容）
+            await asyncio.to_thread(
+                audit.log_audit,
+                tenant_id, e.code.lower(), "invocation", invocation_id,
+                detail={
+                    "asset_id": e.context.get("asset_id"),
+                    "invocation_id": e.context.get("invocation_id"),
+                },
+            )
+        logger.warning(
+            f"后端日志：素材下载拒绝 tenant={tenant_id} invocation={invocation_id} "
+            f"asset={asset_id} code={e.code}: {e.message}"
+        )
+        raise HTTPException(
+            status_code=e.http_status, detail={"error": e.code, "message": e.message}
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.opt(exception=True).error(
+            f"后端日志：素材下载失败 tenant={tenant_id} invocation={invocation_id} "
+            f"asset={asset_id}: {e}"
+        )
+        raise _http_error(500, "素材下载失败，请稍后重试", e)
+    return Response(
+        content=resolution.data,
+        media_type=resolution.mime,
+        headers={
+            "X-Asset-Hash": resolution.sha256,
+            "X-Content-Type-Options": "nosniff",
+        },
+    )

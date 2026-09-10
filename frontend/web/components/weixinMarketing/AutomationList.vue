@@ -31,6 +31,7 @@
         <div class="page-toolbar-right">
           <BaseButton size="sm" intent="secondary" @click="showBindingsModal = true">群绑定</BaseButton>
           <BaseButton size="sm" intent="secondary" @click="openRunsModal">运行记录</BaseButton>
+          <BaseButton size="sm" intent="secondary" @click="goEventSources">事件源</BaseButton>
           <BaseButton size="sm" @click="openCreate">新增自动化</BaseButton>
         </div>
       </div>
@@ -457,6 +458,10 @@ const runsPage = ref(1)
 const runsStateFilter = ref<RunState | ''>('')
 const loadingRuns = ref(false)
 const runsError = ref('')
+
+function goEventSources() {
+  router.push({ name: 'tenant-weixin-marketing-event-sources' })
+}
 
 function openRunsModal() {
   showRunsModal.value = true

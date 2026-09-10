@@ -453,19 +453,76 @@ def accept_event_trigger(
     事件订阅行锁：kind=event schedule（source_ref/event_type 匹配）阻塞 FOR UPDATE 后
     复验 active_revision_ref 未变化。"""
     now = schedules.ensure_utc(now)
-    trigger_key = event_trigger_key(source_ref, external_event_id)
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        task_row = subjects.lock_task_subject(
-            cursor, tenant_id, scenario_key, task_ref, skip_locked=True
+        result = accept_event_trigger_on(
+            cursor,
+            tenant_id=tenant_id, scenario_key=scenario_key, task_ref=task_ref,
+            revision_ref=revision_ref, source_ref=source_ref,
+            external_event_id=external_event_id, user_id=user_id,
+            due_at=due_at, now=now, expires_at=expires_at,
         )
-        if task_row is None:
-            conn.commit()
-            return {"accepted": False, "created": False, "occurrence_id": None,
-                    "reason": "task_locked"}
+        conn.commit()
+        return result
+
+
+def accept_event_trigger_on(
+    cursor,
+    *,
+    tenant_id: str,
+    scenario_key: str,
+    task_ref: str,
+    revision_ref: str,
+    source_ref: str,
+    external_event_id: str,
+    user_id: str,
+    due_at: datetime,
+    now: datetime,
+    expires_at: Optional[datetime] = None,
+    schedule_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """accept_event_trigger 的同事务版本（P4-B 匹配 worker：候选锁与游标推进同事务，
+    锁顺序 task subject→schedule→occurrence/run；调用方负责 commit/rollback）。
+
+    schedule_id 提供时定向锁定该订阅行（eligible 快照内的 schedule_id），复验
+    kind=event 且 active；缺省沿用既有语义（该 task+revision 任一 active 订阅行）。
+    """
+    now = schedules.ensure_utc(now)
+    trigger_key = event_trigger_key(source_ref, external_event_id)
+    task_row = subjects.lock_task_subject(
+        cursor, tenant_id, scenario_key, task_ref, skip_locked=True
+    )
+    if task_row is None:
+        # P4-B 复审 P0-1：区分「行不存在」（业务性 skip，匹配 worker 记持久原因）
+        # 与「SKIP LOCKED 竞争」（瞬时，可重试）——二者此前共用 task_locked 会让
+        # 已删除 subject 的事件永远重试（活锁）或让竞争被误记永久 skip（丢事件）
         cursor.execute(
             """
-            SELECT id FROM desktop_automation_schedules
+            SELECT 1 FROM desktop_automation_subjects
+            WHERE tenant_id = %s AND scenario_key = %s AND kind = 'task' AND ref = %s
+            """,
+            (tenant_id, scenario_key, task_ref),
+        )
+        if cursor.fetchone() is None:
+            return {"accepted": False, "created": False, "occurrence_id": None,
+                    "reason": "task_subject_missing"}
+        return {"accepted": False, "created": False, "occurrence_id": None,
+                "reason": "task_locked"}
+    if schedule_id is not None:
+        cursor.execute(
+            """
+            SELECT id, user_id FROM desktop_automation_schedules
+            WHERE id = %s AND tenant_id = %s AND scenario_key = %s AND task_ref = %s
+              AND revision_ref = %s AND kind = 'event' AND status = 'active'
+            FOR UPDATE
+            """,
+            (schedule_id, tenant_id, scenario_key, task_ref, revision_ref),
+        )
+        schedule_row = cursor.fetchone()
+    else:
+        cursor.execute(
+            """
+            SELECT id, user_id FROM desktop_automation_schedules
             WHERE tenant_id = %s AND scenario_key = %s AND task_ref = %s
               AND revision_ref = %s AND kind = 'event' AND status = 'active'
             ORDER BY created_at
@@ -474,24 +531,25 @@ def accept_event_trigger(
             """,
             (tenant_id, scenario_key, task_ref, revision_ref),
         )
-        if cursor.fetchone() is None:
-            conn.commit()
-            return {"accepted": False, "created": False, "occurrence_id": None,
-                    "reason": "subscription_inactive"}
-        occurrence_id, created = admit_occurrence(
-            cursor,
-            tenant_id=tenant_id, scenario_key=scenario_key, task_ref=task_ref,
-            revision_ref=revision_ref, user_id=user_id,
-            trigger_kind=TRIGGER_KIND_EVENT, trigger_key=trigger_key,
-            due_at=due_at, expires_at=expires_at, scheduled_for=now,
-            authorization_epoch=task_row["authorization_epoch"],
+        schedule_row = cursor.fetchone()
+    if schedule_row is None:
+        return {"accepted": False, "created": False, "occurrence_id": None,
+                "reason": "subscription_inactive"}
+    if not user_id:
+        user_id = schedule_row["user_id"]
+    occurrence_id, created = admit_occurrence(
+        cursor,
+        tenant_id=tenant_id, scenario_key=scenario_key, task_ref=task_ref,
+        revision_ref=revision_ref, user_id=user_id,
+        trigger_kind=TRIGGER_KIND_EVENT, trigger_key=trigger_key,
+        due_at=due_at, expires_at=expires_at, scheduled_for=now,
+        authorization_epoch=task_row["authorization_epoch"],
+    )
+    if not created:
+        existing = get_occurrence_by_trigger_key_on(
+            cursor, tenant_id, scenario_key, task_ref, trigger_key
         )
-        if not created:
-            existing = get_occurrence_by_trigger_key_on(
-                cursor, tenant_id, scenario_key, task_ref, trigger_key
-            )
-            occurrence_id = str(existing["id"]) if existing else None
-        conn.commit()
+        occurrence_id = str(existing["id"]) if existing else None
     return {"accepted": True, "created": created, "occurrence_id": occurrence_id,
             "reason": "" if created else "duplicate"}
 

@@ -384,8 +384,13 @@ class WeixinWorkbenchService:
             )
             if block is None:
                 raise WeixinValidationError(f"块不存在: position={payload.block_position}")
-            if block.get("kind") == BLOCK_KIND_IMAGE:
-                raise WeixinValidationError("图片块试发暂未开放（图片 operation 随 P4 交付）")
+            if block.get("kind") == BLOCK_KIND_IMAGE and not get_weixin_marketing_config().images_enabled:
+                # P4-A：图片块试发与生产编译/serve/素材下载同链（fake 可执行）；
+                # 真实剪贴板/图片气泡驱动属 P0 真机门禁——images_enabled=false 时
+                # 与创建/发布同口径拒绝（防开关关闭后旧图片 revision 仍可试发）
+                raise WeixinValidationError(
+                    "图片内容未启用（images_enabled=false），图片块试发拒绝"
+                )
             binding = self._load_binding_on(cursor, tenant_id, payload.group_binding_id)
             if binding is None or str(binding.get("user_id")) != user_id:
                 raise WeixinValidationError("群绑定不存在或不可用")

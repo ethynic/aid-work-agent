@@ -2151,6 +2151,65 @@ CREATE TABLE IF NOT EXISTS weixin_marketing_idempotency_keys (
     UNIQUE (tenant_id, user_id, route, idempotency_key)
 );
 
+-- =================== 微信营销自动化事件闭环（weixin-marketing，P4-B）===================
+-- 事件源签名密钥/nonce/payload 与内部事件示例业务表（基础设施+示例表，非 bs_ 业务
+-- 表，同幂等键表先例：模块幂等自建，此处为部署基线；不进 db_update.yaml）。
+-- 与 src/weixin_marketing/event_sources.py _TABLES_DDL 及 internal_event_example.py
+-- _EXAMPLE_DDL 逐语句一致：
+-- - event_source_keys：webhook 源 HMAC 密钥版本行（Fernet 密文；rotate 时旧 active
+--   → retiring + retire_at 并行窗，窗口内旧新均可验签）；UNIQUE(source_id,key_id)
+--   与 UNIQUE(source_id,key_version) 仲裁并发轮换。
+-- - webhook_nonces：nonce 防重放（UNIQUE(source_id,nonce)；消耗与事件接纳同事务，
+--   TTL 900s 由 event_match_tick 清理）。
+-- - event_payloads：受控事件 payload 持久化（tenant+hash 去重复用；events 行只存
+--   payload_ref/hash，正文不进底座通用表）。
+-- - example_orders：内部事件示例业务对象（P5 后真实业务事件源参照；源侧 outbox
+--   复用 desktop_automation_outbox，不另建 outbox 表）。
+CREATE TABLE IF NOT EXISTS weixin_marketing_event_source_keys (
+    id UUID DEFAULT gen_random_uuid() NOT NULL,
+    tenant_id TEXT NOT NULL,
+    source_id UUID NOT NULL,
+    key_id TEXT NOT NULL,
+    key_version INTEGER NOT NULL,
+    encrypted_secret TEXT NOT NULL,
+    status TEXT DEFAULT 'active' NOT NULL,
+    retire_at TIMESTAMPTZ,
+    created_by TEXT,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    PRIMARY KEY (id),
+    UNIQUE (source_id, key_id),
+    UNIQUE (source_id, key_version)
+);
+CREATE TABLE IF NOT EXISTS weixin_marketing_webhook_nonces (
+    id BIGSERIAL PRIMARY KEY,
+    source_id UUID NOT NULL,
+    nonce TEXT NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    UNIQUE (source_id, nonce)
+);
+CREATE TABLE IF NOT EXISTS weixin_marketing_event_payloads (
+    id UUID DEFAULT gen_random_uuid() NOT NULL,
+    tenant_id TEXT NOT NULL,
+    source_id UUID,
+    payload_hash TEXT NOT NULL,
+    payload_json JSONB NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    PRIMARY KEY (id),
+    UNIQUE (tenant_id, payload_hash)
+);
+CREATE TABLE IF NOT EXISTS weixin_marketing_example_orders (
+    id UUID DEFAULT gen_random_uuid() NOT NULL,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    label TEXT,
+    status TEXT DEFAULT 'pending' NOT NULL,
+    completed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    PRIMARY KEY (id)
+);
+
 -- 输出初始化完成信息
 DO $$
 BEGIN

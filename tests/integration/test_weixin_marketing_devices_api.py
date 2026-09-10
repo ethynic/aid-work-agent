@@ -1402,25 +1402,91 @@ class TestTestSend:
         assert resp.status_code == 422
         assert resp.json()["code"] == "VALIDATION_FAILED"
 
-        # 图片块 → 422（临时放开 images_enabled 以落进已发布 revision，再验证试发拒绝）
+        # 图片块（P4-A 语义核对）：真实上传素材 + images_enabled=true → 图片块可入
+        # revision、可编译、试发走与生产同链的 fake 执行（真实剪贴板/图片气泡驱动
+        # 属 P0 真机门禁，P4 不实现）→ 202 并由假设备驱动至终态 succeeded；
+        # 翻回 images_enabled=false 后旧图片 revision 的试发被拒（422 与创建/发布
+        # 同口径门禁——防开关关闭后图片内容仍可试发）
+        import hashlib as _hashlib
+        import io as _io
+        import os as _os
+
+        from PIL import Image as _Image
+
+        import src.weixin_marketing.config as wxm_config_module
+        from src.weixin_marketing import assets as wxm_assets
+        from src.weixin_marketing import service as wxm_service
         from src.weixin_marketing import triggers as wxm_triggers
+        from src.weixin_marketing import workbench as wxm_workbench
         from src.weixin_marketing.config import get_weixin_marketing_config
 
         images_on = replace(get_weixin_marketing_config(), images_enabled=True)
-        monkeypatch.setattr(
-            wxm_triggers, "get_weixin_marketing_config", lambda: images_on
-        )
+        for mod in (wxm_triggers, wxm_service, wxm_assets, wxm_workbench, wxm_config_module):
+            monkeypatch.setattr(mod, "get_weixin_marketing_config", lambda: images_on)
         monkeypatch.setattr(wxm_adapter, "_config", images_on)
-        img_automation, _, img_binding, _ = self._published(
-            client, user, blocks=[{"type": "image", "asset_id": str(uuid.uuid4())}]
+
+        buf = _io.BytesIO()
+        _Image.new("RGB", (60, 40), (10, 120, 220)).save(buf, format="PNG")
+        up = client.post(
+            f"{PREFIX}/assets", headers=headers,
+            files={"file": ("t.png", buf.getvalue(), "image/png")},
         )
-        monkeypatch.undo()
-        resp = client.post(
-            f"{PREFIX}/automations/{img_automation}/test-send",
-            headers=headers, json={"group_binding_id": img_binding, "block_position": 1},
-        )
-        assert resp.status_code == 422
-        assert "图片" in resp.json()["error"]
+        assert up.status_code == 200, up.text
+        asset_id = up.json()["data"]["id"]
+        try:
+            img_automation, img_revision, img_binding, img_device = self._published(
+                client, user, blocks=[{"type": "image", "asset_id": asset_id}]
+            )
+            img_worker = FakeDeviceWorker(user["tenant_id"], img_device).start()
+            try:
+                resp = client.post(
+                    f"{PREFIX}/automations/{img_automation}/test-send",
+                    headers=headers,
+                    json={"group_binding_id": img_binding, "block_position": 1},
+                )
+                assert resp.status_code == 202, resp.text
+                img_run_id = resp.json()["data"]["run_id"]
+                deadline = time.monotonic() + 20
+                state = None
+                while time.monotonic() < deadline:
+                    got = client.get(f"{PREFIX}/runs/{img_run_id}", headers=headers)
+                    assert got.status_code == 200, got.text
+                    state = got.json()["data"]["run"]["state"]
+                    if state in ("succeeded", "failed", "unknown", "partial", "cancelled", "expired"):
+                        break
+                    time.sleep(0.2)
+                assert state == "succeeded", state
+                # 实发内容绑定断言：payload 字节为受控资产引用 asset:<id>（P4-A）
+                img_detail = client.get(
+                    f"{PREFIX}/runs/{img_run_id}", headers=headers
+                ).json()["data"]
+                img_delivery = img_detail["deliveries"][0]
+                assert img_delivery["payload_ref"].endswith(f":{img_revision}:1")
+                assert img_delivery["payload_hash"] == _hashlib.sha256(
+                    f"asset:{asset_id}".encode("utf-8")
+                ).hexdigest()
+            finally:
+                img_worker.stop()
+
+            # 翻回全局默认（images_enabled=false）→ 旧图片 revision 试发被拒
+            monkeypatch.undo()
+            resp = client.post(
+                f"{PREFIX}/automations/{img_automation}/test-send",
+                headers=headers, json={"group_binding_id": img_binding, "block_position": 1},
+            )
+            assert resp.status_code == 422
+            assert "images_enabled" in resp.json()["error"]
+        finally:
+            # 素材行随租户清理；文件需显式回收（storage_ref 为绝对路径）
+            try:
+                asset_detail = client.get(
+                    f"{PREFIX}/assets/{asset_id}", headers=headers
+                ).json()["data"]
+                ref = asset_detail.get("storage_ref")
+                if ref and _os.path.exists(ref):
+                    _os.remove(ref)
+            except Exception:  # noqa: BLE001 清理失败不阻断断言报告
+                pass
 
         # 不可用绑定（pending）→ 422；无绑定（空）→ 422
         pending_device = _create_device(user["tenant_id"], user["user_id"])

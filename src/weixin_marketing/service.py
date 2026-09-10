@@ -116,6 +116,11 @@ class RetryEvidenceRequiredError(ConflictError):
     记录 decision='confirmed_not_sent' 方可重试）"""
 
 
+class AssetInUseError(ConflictError):
+    """素材被非过期 revision 内容块引用（409 ASSET_IN_USE，R57 引用保护：
+    draft/published 引用期禁删；superseded 视为已过期不构成保护）"""
+
+
 class WeixinValidationError(WeixinMarketingError):
     """配置/语义校验失败（422），携带 field_errors"""
 
@@ -335,11 +340,22 @@ class WeixinMarketingService:
         R51：业务写入、审计与幂等完成记录（idempotency.write_on）同一事务提交——
         「业务已提交而响应未保存」不可达；无幂等上下文时行为不变。
         """
-        triggers.validate_blocks(_blocks_to_storable(parse_blocks(
+        storable_blocks = _blocks_to_storable(parse_blocks(
             [b.model_dump() for b in payload.blocks]
-        )))
+        ))
+        try:
+            triggers.validate_blocks(storable_blocks)
+        except triggers.TriggerConfigError as e:
+            # P4-A：门禁错误统一 422 语义（裸 ValueError 会落 API 500）
+            raise WeixinValidationError(str(e)) from e
+        from src.weixin_marketing import assets as wxm_assets
+
         with get_db_connection() as conn:
             cursor = conn.cursor()
+            # P4-A/P1-2：图片素材引用校验（存在/active/属主）**与块写入同事务**
+            # （FOR SHARE 持锁至提交，与 delete_asset 的 FOR UPDATE 互斥——闭
+            # 「删除查零引用→并发建草稿引用→删除→悬空」竞态；草稿可引用，发布时复核）
+            wxm_assets.assert_blocks_assets_on(cursor, tenant_id, user_id, storable_blocks)
             cursor.execute(
                 """
                 INSERT INTO bs_weixin_marketing_automations
@@ -577,6 +593,18 @@ class WeixinMarketingService:
         - 无草稿且任务 active/paused → 以本次提交内容新建下一号草稿（发布后迭代）；
         - 归档任务不可编辑。
         """
+        # P4-A：提交新 blocks 时校验门禁（数量/image 开关，422 语义）；素材引用
+        # 校验在事务内做（P1-2：FOR SHARE 与块写入同事务，闭删除竞态）。仅沿用
+        # 存量 blocks 的局部更新无需复核（保存时已校验）。
+        storable_blocks: Optional[List[Dict[str, Any]]] = None
+        if payload.blocks is not None:
+            storable_blocks = _blocks_to_storable(list(payload.blocks))
+            try:
+                triggers.validate_blocks(storable_blocks)
+            except triggers.TriggerConfigError as e:
+                raise WeixinValidationError(str(e)) from e
+        from src.weixin_marketing import assets as wxm_assets
+
         with get_db_connection() as conn:
             cursor = conn.cursor()
             automation = _lock_automation_on(cursor, tenant_id, automation_id)
@@ -585,6 +613,11 @@ class WeixinMarketingService:
             if automation["version"] != payload.expected_version:
                 raise ConflictError(
                     f"版本冲突：期望 {payload.expected_version}，实际 {automation['version']}"
+                )
+            if storable_blocks is not None:
+                # P1-2：素材引用校验与块写入同事务（FOR SHARE 持锁至提交）
+                wxm_assets.assert_blocks_assets_on(
+                    cursor, tenant_id, user_id, storable_blocks
                 )
             draft_id = automation.get("draft_revision_id")
             new_draft_id: Optional[str] = None
@@ -787,6 +820,12 @@ class WeixinMarketingService:
             if revision["status"] != REVISION_STATUS_DRAFT:
                 raise ConflictError("仅草稿 revision 可发布（发布后不可变）")
             blocks = _list_revision_blocks_on(cursor, tenant_id, revision_id)
+
+            # P4-A 发布复核：图片块引用的素材在发布时点仍存在/active/属主一致
+            # （同事务游标读取，与发布原子；素材被删/停用即拒绝发布）
+            from src.weixin_marketing import assets as wxm_assets
+
+            wxm_assets.assert_blocks_assets_on(cursor, tenant_id, user_id, blocks)
 
             adapter = _adapter()
             ctx = _adapter_ctx(tenant_id, user_id, automation_id, revision_id)

@@ -125,12 +125,24 @@ def compile_trigger_specs(
     if isinstance(trigger, EventTriggerConfig):
         if not config.event_triggers_enabled:
             raise TriggerConfigError("事件触发未启用（event_triggers_enabled=false）")
+        condition_ref = None
+        if trigger.condition is not None:
+            from src.weixin_marketing.event_sources import evaluate_condition, freeze_condition
+
+            condition_ref = freeze_condition(
+                [c.model_dump() for c in trigger.condition]
+            )
+            # 冻结文本必须可被匹配 worker 判定（结构非法即拒绝发布）
+            hit, reason = evaluate_condition(condition_ref, {})
+            if reason == "condition_invalid":
+                raise TriggerConfigError(f"事件条件非法: {condition_ref}")
         return [
             {
                 "kind": "event",
                 "source_ref": trigger.source_ref,
                 "event_type": trigger.event_type or "*",
                 "delay_seconds": trigger.delay_seconds,
+                "condition_ref": condition_ref,
             }
         ]
     raise TriggerConfigError(f"未知触发类型: {trigger!r}")

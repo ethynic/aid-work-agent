@@ -12,19 +12,22 @@
 - permits_sweep_tick：expire_permits（R22：issued→expired 只置状态不释放预留）。
 - runs_reclaim_tick：租约过期 running run 按 §5.4 收敛（may_have_started/unknown
   条目置 unknown 不重派；未提交条目 expired；空 deliveries 按未完成失败收敛）。
+- assets_cleanup_tick：过期无引用素材硬删（P4-A R57：retention_until 已过且无
+  draft/published 引用；行+文件，引用复核与删除同事务）。
 
 入口统一门控（R42）：enabled=false 直接 return（零 DB 动作）；time_scan 额外受
 time_triggers_enabled 细分开关。registration.ensure_registered 每 tick 幂等调用
 （进程内单次注册 + registry 存活性复核，配置翻热后自愈）。
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
 from src.db.database import get_db_connection
 from src.desktop_automation import audit as da_audit
+from src.desktop_automation import events as da_events
 from src.desktop_automation import deliveries as da_deliveries
 from src.desktop_automation import executor as da_executor
 from src.desktop_automation import occurrences as da_occurrences
@@ -516,3 +519,265 @@ def runs_reclaim_tick(
             f"后端日志：weixin_marketing 租约回收 reclaimed={reclaimed}（§5.4 收敛，不重派）"
         )
     return {"enabled": True, "reclaimed": reclaimed}
+
+
+# ==================== ⑤ 过期素材清理 tick（P4-A R57）====================
+
+
+def assets_cleanup_tick(
+    now: Optional[datetime] = None,
+    batch: Optional[int] = None,
+    config: Optional[WeixinMarketingConfig] = None,
+) -> Dict[str, Any]:
+    """过期无引用素材批量硬删（enabled 门控）：retention_until 已过且无 draft/
+    published 引用 → 删行+回收文件（引用复核与删除同事务，绝不误删在用素材）。"""
+    from src.weixin_marketing import assets as wxm_assets
+
+    cfg = _resolve_config(config)
+    if not cfg.enabled:
+        return {"enabled": False, "deleted": 0, "skipped_referenced": 0}
+    return wxm_assets.cleanup_expired_assets(now=now, batch=batch, config=cfg)
+
+
+# ==================== ⑥ 事件匹配 worker tick（P4-B R57）====================
+
+# 单事件单 tick 内最大候选处理步数（eligible 快照集合上限防御）
+MAX_EVENT_CANDIDATES_PER_TICK = 200
+# 事件匹配单页扫描事件数
+DEFAULT_EVENT_MATCH_BATCH = 100
+
+
+def event_match_tick(
+    now: Optional[datetime] = None,
+    batch: Optional[int] = None,
+    config: Optional[WeixinMarketingConfig] = None,
+) -> Dict[str, Any]:
+    """事件匹配 worker（底座计划 §3.2）：源侧 outbox 投递（示例源）→ 按
+    events.eligible_revision_refs 持久集合逐事件处理。
+
+    - 只遍历接纳时冻结的 eligible 快照，不按 event_type 动态查询新版本（配置发布
+      不回放历史事件）；
+    - 每候选短事务锁序 task subject→schedule→occurrence/run→event 游标（R12：游标
+      CAS 更新置于上述锁之后），CAS 失败即并发方在处理，本轮放弃该事件；
+    - 已暂停/版本切换/订阅失效/condition 不命中 → 候选 skipped 原因持久（audit），
+      不转投新版本；
+    - due_at = received_at + 冻结 delay；occurred_at 只作业务条件与审计依据；
+    - 快照集合全部处理完才置 events.state=processed（重启经 match_cursor 断点续跑）。
+    """
+    cfg = _resolve_config(config)
+    if not cfg.enabled or not cfg.event_triggers_enabled:
+        return {"enabled": False, "matched": 0, "skipped": 0, "processed_events": 0}
+    now = _aware(now or _utcnow())
+    batch = int(batch or DEFAULT_EVENT_MATCH_BATCH)
+
+    # 示例内部源投递（生产真实源接入前的事件来源；失败不阻断匹配段）
+    from src.weixin_marketing import internal_event_example as wxm_example
+    from src.weixin_marketing import event_sources as wxm_sources
+
+    delivery_stats: Dict[str, Any] = {"delivered": 0}
+    try:
+        delivery_stats = wxm_example.deliver_example_event_outbox(now=now)
+    except Exception as e:  # noqa: BLE001
+        logger.opt(exception=True).warning(
+            f"后端日志：weixin_marketing 示例事件源投递异常: {e}"
+        )
+    try:
+        wxm_sources.cleanup_expired_nonces(now)
+    except Exception as e:  # noqa: BLE001
+        logger.opt(exception=True).warning(f"后端日志：weixin_marketing nonce 清理异常: {e}")
+
+    pending_events = da_events.list_unprocessed_events(
+        SCENARIO_KEY,
+        limit=batch,
+        tenant_allowlist=cfg.tenant_allowlist or None,
+    )
+    matched = skipped = deferred = 0
+    processed_events = 0
+    for event in pending_events:
+        try:
+            stats = _match_single_event(event, now)
+            matched += stats["matched"]
+            skipped += stats["skipped"]
+            deferred += stats.get("deferred", 0)
+            processed_events += stats["completed"]
+        except Exception as e:  # noqa: BLE001 单事件隔离
+            logger.opt(exception=True).error(
+                f"后端日志：weixin_marketing 事件匹配异常 tenant={event['tenant_id']} "
+                f"event={event['id']}: {e}"
+            )
+    if pending_events:
+        logger.info(
+            f"后端日志：weixin_marketing 事件匹配 now={now.isoformat()} "
+            f"events={len(pending_events)} matched={matched} skipped={skipped} "
+            f"deferred={deferred} processed_events={processed_events} "
+            f"example_delivered={delivery_stats.get('delivered', 0)}"
+        )
+    return {
+        "enabled": True, "scanned": len(pending_events), "matched": matched,
+        "skipped": skipped, "deferred": deferred, "processed_events": processed_events,
+        "example_delivered": delivery_stats.get("delivered", 0),
+    }
+
+
+def _match_single_event(event: Dict[str, Any], now: datetime) -> Dict[str, int]:
+    """单事件匹配：按冻结 eligible 快照稳定顺序处理，游标断点续跑。
+
+    返回 {matched, skipped, deferred, completed}；completed=1 表示本 tick 将事件置
+    processed。计数在候选事务成功提交后才累加（P2-4：回滚/CAS 失败路径不计）。
+
+    瞬时放弃（不推进游标、不 processed，下轮重试，P0-1）：
+    - task_locked：task subject 被 SKIP LOCKED 竞争（瞬时）——与 CAS 失败同路；
+    - 游标 CAS 失败：另一 worker 已推进（本候选事务整体回滚）。
+    放弃路径经 log_audit 记 kind=event_match_deferred（独立短事务，失败仅告警），
+    与业务性 event_match_skipped（持久 skip 原因）明确区分。
+    """
+    from src.weixin_marketing import event_sources as wxm_sources
+
+    tenant_id = event["tenant_id"]
+    event_id = str(event["id"])
+    source_ref = event["source_ref"]
+    external_event_id = event["external_event_id"]
+    eligible = list(event.get("eligible_revision_refs") or [])
+    # 稳定排序（快照行已按 scenario/task/revision/schedule_id 排序，防御性重排）
+    eligible.sort(key=lambda c: (c.get("scenario_key") or "", c.get("task_ref") or "",
+                                 c.get("revision_ref") or "", str(c.get("id"))))
+    cursor = int(event["match_cursor"] or 0)
+    matched = skipped = deferred = 0
+
+    if cursor >= len(eligible):
+        # 空快照/已全部处理：直接收敛 processed（幂等）
+        da_events.mark_event_processed(event_id, tenant_id)
+        return {"matched": matched, "skipped": skipped, "deferred": deferred,
+                "completed": 1}
+
+    payload = wxm_sources.load_event_payload(tenant_id, event.get("payload_ref"))
+    received_at = _aware(event["received_at"])
+
+    # P2-1：切片窗口相对 cursor（eligible[cursor:MAX] 在 cursor>0 时卡死游标）
+    for candidate in eligible[cursor:cursor + MAX_EVENT_CANDIDATES_PER_TICK]:
+        with get_db_connection() as conn:
+            cur = conn.cursor()
+            try:
+                hit, cond_reason = wxm_sources.evaluate_condition(
+                    candidate.get("condition_ref"), payload
+                )
+                if not hit:
+                    da_audit.insert_audit(
+                        cur, tenant_id, "event_match_skipped", "schedule",
+                        str(candidate.get("id")), user_id=None,
+                        scenario_key=candidate.get("scenario_key"),
+                        detail={
+                            "event_id": event_id, "reason": cond_reason,
+                            "external_event_id": external_event_id,
+                        },
+                    )
+                    ok = _advance_event_cursor(
+                        cur, tenant_id, event_id, cursor, final=False
+                    )
+                    if not ok:
+                        conn.rollback()
+                        return _match_give_up(matched, skipped)
+                    conn.commit()
+                    skipped += 1
+                    cursor += 1
+                    continue
+                delay_seconds = int(candidate.get("delay_seconds") or 0)
+                due_at = received_at + timedelta(seconds=delay_seconds)
+                result = da_occurrences.accept_event_trigger_on(
+                    cur,
+                    tenant_id=tenant_id,
+                    scenario_key=candidate.get("scenario_key"),
+                    task_ref=candidate.get("task_ref"),
+                    revision_ref=candidate.get("revision_ref"),
+                    source_ref=source_ref,
+                    external_event_id=external_event_id,
+                    user_id="",
+                    due_at=due_at,
+                    now=now,
+                    schedule_id=str(candidate.get("id")),
+                )
+                reason = result.get("reason") or ""
+                if not result.get("accepted") and reason == "task_locked":
+                    # P0-1：瞬时 SKIP LOCKED 竞争——回滚候选事务、本轮放弃该事件
+                    # （不推进游标、不 processed），下轮重试；绝不与业务 skip 同路
+                    conn.rollback()
+                    _log_deferred(tenant_id, event_id, external_event_id, candidate,
+                                  "task_locked")
+                    return _match_give_up(matched, skipped, deferred=1)
+                if not (result.get("accepted") and result.get("created")):
+                    # 业务性 skipped 原因持久（task_not_active/revision_switched/
+                    # subscription_inactive/duplicate 等；duplicate 不重复建 run）
+                    da_audit.insert_audit(
+                        cur, tenant_id, "event_match_skipped", "schedule",
+                        str(candidate.get("id")), user_id=None,
+                        scenario_key=candidate.get("scenario_key"),
+                        detail={
+                            "event_id": event_id, "reason": reason or "duplicate",
+                            "external_event_id": external_event_id,
+                            "occurrence_id": result.get("occurrence_id"),
+                        },
+                    )
+                ok = _advance_event_cursor(
+                    cur, tenant_id, event_id, cursor, final=False
+                )
+                if not ok:
+                    # 并发 worker 已推进：整个候选事务回滚，本轮放弃该事件
+                    conn.rollback()
+                    return _match_give_up(matched, skipped)
+                conn.commit()
+                # 计数在成功提交后累加（P2-4）
+                if result.get("accepted") and result.get("created"):
+                    matched += 1
+                else:
+                    skipped += 1
+                cursor += 1
+            except Exception:
+                conn.rollback()
+                raise
+
+    if cursor >= len(eligible):
+        da_events.mark_event_processed(event_id, tenant_id)
+        return {"matched": matched, "skipped": skipped, "deferred": deferred,
+                "completed": 1}
+    return {"matched": matched, "skipped": skipped, "deferred": deferred,
+            "completed": 0}
+
+
+def _match_give_up(matched: int, skipped: int, *, deferred: int = 0) -> Dict[str, int]:
+    """瞬时放弃该事件（本轮不 processed，计数只含已提交成功的候选）"""
+    return {"matched": matched, "skipped": skipped, "deferred": deferred,
+            "completed": 0}
+
+
+def _log_deferred(
+    tenant_id: str, event_id: str, external_event_id: str,
+    candidate: Dict[str, Any], reason: str,
+) -> None:
+    """瞬时放弃的观测留痕（独立短事务，与候选事务解耦；失败仅告警）。
+
+    kind=event_match_deferred 与业务性 event_match_skipped 区分：deferred=下轮重试，
+    skipped=持久结论。"""
+    try:
+        da_audit.log_audit(
+            tenant_id, "event_match_deferred", "schedule",
+            str(candidate.get("id")), scenario_key=candidate.get("scenario_key"),
+            detail={
+                "event_id": event_id, "reason": reason,
+                "external_event_id": external_event_id,
+                "task_ref": candidate.get("task_ref"),
+            },
+        )
+    except Exception as e:  # noqa: BLE001 观测留痕失败不影响主流程（日志兜底）
+        logger.warning(
+            f"后端日志：weixin_marketing event_match_deferred 审计写入失败 "
+            f"event={event_id} reason={reason}: {type(e).__name__}"
+        )
+
+
+def _advance_event_cursor(
+    cursor, tenant_id: str, event_id: str, expected_cursor: int, *, final: bool
+) -> bool:
+    """CAS 推进事件匹配游标（expected_cursor 未变才 +1；失败=并发方在处理）"""
+    return da_events.advance_match_cursor(
+        cursor, event_id, tenant_id, processed=final, expected_cursor=expected_cursor
+    )

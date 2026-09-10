@@ -325,7 +325,7 @@ class TestValidateEvidence:
 
 
 class TestCompileOperations:
-    def test_compile_skips_images_and_orders(self, service, tenant_id, bindings, adapter):
+    def test_compile_orders_text_link_blocks(self, service, tenant_id, bindings, adapter):
         from dataclasses import asdict
 
         _, group_id = bindings

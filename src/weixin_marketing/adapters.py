@@ -1,8 +1,9 @@
 """WeixinFixedContentAdapter：weixin.fixed_content.v1 场景适配器（R41/R43）
 
 执行链契约（对接 P1-A 底座，适配器方法全部经 TrustedAdapterRegistry 受信调用）：
-- compile_operations：已发布 revision 的 text/link blocks → weixin_message_send_v2
-  v2 操作描述分量（R15 字段集由底座 executor 组装）；payload_ref 指向冻结内容块。
+- compile_operations：已发布 revision 的 text/link/image blocks → weixin_message_send_v2
+  v2 操作描述分量（R15 字段集由底座 executor 组装）；payload_ref 指向冻结内容块
+  （image 块 payload 字节为受控资产引用 asset:<id>，P4-A）。
 - authorize_operation：属主/绑定/epoch 校验 + 微信发送配额 scopes（quota_map）。
 - validate_evidence（R43）：结构绑定校验（weixin-evidence:<request_id>:<seq>）+
   可插拔真实证据校验器接口；真实校验器随 P0 真机交付前为空实现，evidence_real_mode
@@ -33,7 +34,6 @@ from src.weixin_marketing.config import WeixinMarketingConfig, get_weixin_market
 from src.weixin_marketing.constants import (
     ACCOUNT_BINDING_STATUS_ACTIVE,
     AUTOMATION_STATUS_ACTIVE,
-    BLOCK_KIND_IMAGE,
     GROUP_BINDING_STATE_COMPLETE,
     OPERATION_MESSAGE_SEND,
     PROVIDER_KEY,
@@ -305,13 +305,16 @@ class WeixinFixedContentAdapter:
     def compile_operations(
         self, ctx: AdapterContext, revision_config: Dict[str, Any]
     ) -> List[CompiledOperation]:
-        """冻结 revision → 有序 v2 操作描述分量（image 块不编译，P4 交付 operation）"""
+        """冻结 revision → 有序 v2 操作描述分量（P4-A：text/link/image 混排顺序编译）。
+
+        image 块同样编译为 weixin_message_send_v2 操作：payload 字节为受控资产引用
+        ``asset:<asset_id>``（R57），真实图片字节由 Runtime 经素材下载端点按 invocation
+        scope 获取——真实发送驱动属 P0 真机门禁，P4 不实现、不宣称真机图片通过。
+        """
         blocks = list(revision_config.get("blocks") or [])
         target_ref = str(revision_config.get("group_binding_id") or "")
         operations: List[CompiledOperation] = []
         for block in sorted(blocks, key=lambda b: b.get("position", 0)):
-            if block.get("kind") == BLOCK_KIND_IMAGE:
-                continue
             position = int(block["position"])
             payload_ref = content.build_payload_ref(ctx.revision_ref, position)
             payload_hash = block.get("payload_hash") or content.payload_hash_of(block)

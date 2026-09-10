@@ -104,55 +104,76 @@ def accept_event(
     重复有效事件返回原接纳结果，不重新选择版本或执行）。"""
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        source = get_event_source_by_ref_on(cursor, tenant_id, source_ref)
-        if source is None or source["status"] != EVENT_SOURCE_STATUS_ACTIVE:
-            conn.commit()
-            return {"accepted": False, "reason": "source_not_found"}
-        allowed = source.get("allowed_event_types")
-        if allowed and event_type not in allowed:
-            conn.commit()
-            return {"accepted": False, "reason": "event_type_not_allowed"}
+        result = accept_event_on(
+            cursor,
+            tenant_id=tenant_id, source_ref=source_ref,
+            external_event_id=external_event_id, event_type=event_type,
+            payload_ref=payload_ref, payload_hash=payload_hash,
+            occurred_at=occurred_at,
+        )
+        conn.commit()
+        return result
 
-        # 一致性快照确定 eligible 集合并持久化（“接收时有效”= 本事务读取快照）
-        eligible = find_eligible_subscriptions(cursor, tenant_id, source, event_type)
 
+def accept_event_on(
+    cursor,
+    *,
+    tenant_id: str,
+    source_ref: str,
+    external_event_id: str,
+    event_type: Optional[str],
+    payload_ref: str,
+    payload_hash: str,
+    occurred_at: Optional[datetime] = None,
+) -> Dict[str, Any]:
+    """accept_event 的同事务版本（P4-B：供 webhook/源侧投递器把 nonce 消耗、
+    payload 持久化与事件接纳并入同一业务事务；调用方负责 commit/rollback）。"""
+    source = get_event_source_by_ref_on(cursor, tenant_id, source_ref)
+    if source is None or source["status"] != EVENT_SOURCE_STATUS_ACTIVE:
+        return {"accepted": False, "reason": "source_not_found"}
+    allowed = source.get("allowed_event_types")
+    if allowed and event_type not in allowed:
+        return {"accepted": False, "reason": "event_type_not_allowed"}
+
+    # 一致性快照确定 eligible 集合并持久化（“接收时有效”= 本事务读取快照）
+    eligible = find_eligible_subscriptions(cursor, tenant_id, source, event_type)
+
+    cursor.execute(
+        """
+        INSERT INTO desktop_automation_events
+            (tenant_id, source_id, external_event_id, event_type, payload_ref,
+             payload_hash, state, eligible_revision_refs, occurred_at)
+        VALUES (%s, %s, %s, %s, %s, %s, 'received', %s, %s)
+        ON CONFLICT (tenant_id, source_id, external_event_id) DO NOTHING
+        RETURNING id
+        """,
+        (
+            tenant_id, str(source["id"]), external_event_id, event_type, payload_ref,
+            payload_hash, Json(eligible), occurred_at,
+        ),
+    )
+    row = cursor.fetchone()
+    if row is None:
+        # 幂等：重复有效事件返回原接纳结果（不重新选择版本或执行）
         cursor.execute(
             """
-            INSERT INTO desktop_automation_events
-                (tenant_id, source_id, external_event_id, event_type, payload_ref,
-                 payload_hash, state, eligible_revision_refs, occurred_at)
-            VALUES (%s, %s, %s, %s, %s, %s, 'received', %s, %s)
-            ON CONFLICT (tenant_id, source_id, external_event_id) DO NOTHING
-            RETURNING id
+            SELECT id, state FROM desktop_automation_events
+            WHERE tenant_id = %s AND source_id = %s AND external_event_id = %s
             """,
-            (
-                tenant_id, str(source["id"]), external_event_id, event_type, payload_ref,
-                payload_hash, Json(eligible), occurred_at,
-            ),
+            (tenant_id, str(source["id"]), external_event_id),
         )
-        row = cursor.fetchone()
-        if row is None:
-            # 幂等：重复有效事件返回原接纳结果（不重新选择版本或执行）
-            cursor.execute(
-                """
-                SELECT id FROM desktop_automation_events
-                WHERE tenant_id = %s AND source_id = %s AND external_event_id = %s
-                """,
-                (tenant_id, str(source["id"]), external_event_id),
-            )
-            existing = cursor.fetchone()
-            conn.commit()
-            return {
-                "accepted": True,
-                "event_id": str(existing["id"]) if existing else None,
-                "duplicate": True,
-                "eligible": [],
-            }
-        conn.commit()
+        existing = cursor.fetchone()
         return {
-            "accepted": True, "event_id": str(row["id"]), "duplicate": False,
-            "eligible": eligible,
+            "accepted": True,
+            "event_id": str(existing["id"]) if existing else None,
+            "duplicate": True,
+            "eligible": [],
+            "state": existing["state"] if existing else None,
         }
+    return {
+        "accepted": True, "event_id": str(row["id"]), "duplicate": False,
+        "eligible": eligible,
+    }
 
 
 def find_eligible_subscriptions(
@@ -194,18 +215,69 @@ def get_event(event_id: str, tenant_id: str) -> Optional[Dict[str, Any]]:
 
 
 def advance_match_cursor(
-    cursor, event_id: str, tenant_id: str, *, processed: bool = False
-) -> None:
-    """推进匹配水位（锁顺序置于 task 锁之后；全部处理完成才置 processed）"""
+    cursor, event_id: str, tenant_id: str, *, processed: bool = False,
+    expected_cursor: Optional[int] = None,
+) -> bool:
+    """推进匹配水位（锁顺序置于 task 锁之后；全部处理完成才置 processed）。
+
+    P4-B：expected_cursor 提供时为 CAS 推进（match_cursor 未变才 +1）——多个匹配
+    worker 对同一游标竞争，失败方（返回 False）应回滚整个候选事务。缺省保持
+    无条件推进（既有调用行为不变）。
+    """
     state = EVENT_STATE_PROCESSED if processed else "processing"
-    cursor.execute(
-        """
-        UPDATE desktop_automation_events
-        SET match_cursor = match_cursor + 1, state = %s
-        WHERE id = %s AND tenant_id = %s
-        """,
-        (state, event_id, tenant_id),
-    )
+    if expected_cursor is not None:
+        cursor.execute(
+            """
+            UPDATE desktop_automation_events
+            SET match_cursor = match_cursor + 1, state = %s, updated_at = NOW()
+            WHERE id = %s AND tenant_id = %s AND match_cursor = %s
+            """,
+            (state, event_id, tenant_id, expected_cursor),
+        )
+    else:
+        cursor.execute(
+            """
+            UPDATE desktop_automation_events
+            SET match_cursor = match_cursor + 1, state = %s
+            WHERE id = %s AND tenant_id = %s
+            """,
+            (state, event_id, tenant_id),
+        )
+    return cursor.rowcount > 0
+
+
+def list_unprocessed_events(
+    scenario_key: str,
+    *,
+    limit: int = 100,
+    tenant_allowlist: Optional[List[str]] = None,
+) -> List[Dict[str, Any]]:
+    """匹配 worker 扫描查询：received/processing 事件按 (created_at, id) 稳定排序分页。
+
+    processing 仍在列表内——worker 崩溃后 state 停在 processing，重启恢复依赖
+    match_cursor 断点续跑（不漏已接纳事件）。eligible_revision_refs 为空且非
+    processed 的事件由调用方直接收敛 processed。
+    """
+    sql = f"""
+        SELECT e.id, e.tenant_id, e.source_id, e.external_event_id, e.event_type,
+               e.payload_ref, e.payload_hash, e.state, e.match_cursor,
+               e.eligible_revision_refs, e.occurred_at, e.received_at, e.created_at,
+               s.scenario_key AS source_scenario_key, s.source_ref
+        FROM desktop_automation_events e
+        JOIN desktop_automation_event_sources s
+          ON s.id = e.source_id AND s.tenant_id = e.tenant_id
+        WHERE e.state <> %s AND s.scenario_key = %s
+    """
+    params: List[Any] = [EVENT_STATE_PROCESSED, scenario_key]
+    if tenant_allowlist is not None:
+        sql += " AND e.tenant_id = ANY(%s)"
+        params.append(list(tenant_allowlist))
+    sql += " ORDER BY e.created_at, e.id LIMIT %s"
+    params.append(limit)
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(sql, tuple(params))
+        return [dict(r) for r in cursor.fetchall()]
 
 
 def mark_event_processed(event_id: str, tenant_id: str) -> bool:
@@ -216,7 +288,7 @@ def mark_event_processed(event_id: str, tenant_id: str) -> bool:
             """
             UPDATE desktop_automation_events
             SET state = 'processed', updated_at = NOW()
-            WHERE id = %s AND tenant_id = %s AND state = 'processing'
+            WHERE id = %s AND tenant_id = %s AND state <> 'processed'
             """,
             (event_id, tenant_id),
         )

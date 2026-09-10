@@ -6,7 +6,7 @@
 
 import uuid
 from datetime import datetime, timezone
-from typing import Literal, Optional, Union
+from typing import Any, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -98,13 +98,29 @@ class CalendarTriggerConfig(_StrictModel):
         return _ensure_utc(v) if v is not None else v
 
 
+class EventTriggerCondition(_StrictModel):
+    """事件条件（白名单 DSL，简单判定）：field/op/value 列表 AND 组合。
+
+    op ∈ eq|ne|exists|gt|lt（gt/lt 仅数值）；复杂 DSL（嵌套/or/正则）不在本期范围。
+    """
+
+    field: str = Field(min_length=1, max_length=64)
+    op: Literal["eq", "ne", "exists", "gt", "lt"]
+    value: Optional[Any] = None
+
+
 class EventTriggerConfig(_StrictModel):
-    """事件触发：source_ref/event_type 订阅（worker 接线在 P4，P2 只落订阅行）"""
+    """事件触发：source_ref/event_type 订阅（P4-B：worker 匹配接线）。
+
+    condition 为发布时冻结的白名单判定（匹配 worker 按 payload 判定，不命中记
+    skipped 不触发）；delay_seconds 冻结为 due_at = received_at + delay。
+    """
 
     type: Literal["event"]
     source_ref: str = Field(min_length=1)
     event_type: str = "*"
     delay_seconds: int = Field(default=0, ge=0)
+    condition: Optional[list[EventTriggerCondition]] = None
     timezone: str = "Asia/Shanghai"
 
 

@@ -190,6 +190,20 @@ ImageRegistry 统一管理的非知识库图片资产，所有「工具生成 / 
 **调用方**：`src/core/image_asset.py` 的 `ImageRegistry.register(source="knowledge_base", usage="thumbnail"|"inline")`
 **关联模块**：[image-asset-pipeline-design.md](image-asset-pipeline-design.md) §5
 
+### 3.12 微信营销图片素材（2026-09-10 登记，P4-A）
+
+微信营销自动化内容包的 image 块引用的图片素材（用户经工作台上传，MIME 以 PIL 头字节实测为准）。
+
+**路径**：`storage/tenants/{tenant_id}/weixin-marketing/`（写入经 `get_tenant_storage_abs_path(tenant_id, "weixin-marketing", ...)`，storage_ref 登记该绝对路径——V-P2-1）
+**文件命名**：`{asset_uuid}.{png|jpg|gif|webp|bmp}`（上传时生成 uuid4，独占创建 `xb`）
+**DB 行**：`bs_weixin_marketing_assets`（storage_ref/sha256/mime/size/width/height/status/retention_until；ACL=租户+属主，行删文件删）
+**TTL/留存**：`retention_until = 上传时 + weixin_marketing.retention_days`（默认 90 天）
+**清理时机**：`retention_until` 已过且无 draft/published revision 引用的素材，由
+`dispatch.assets_cleanup_tick` 后台任务批量硬删（行+文件，`weixin_marketing.assets_cleanup_interval_seconds`
+间隔，默认 3600s，`enabled` 门控）；被引用素材受删除保护（409 ASSET_IN_USE）直到解引用。
+**调用方**：`src/weixin_marketing/assets.py`（上传/列表/详情/删除/清理/Runtime 下载校验链）
+**规范依据**：`docs/plans/weixin/plan-weixin-marketing-automation.md` §6.2
+
 ---
 
 ## 4. 文件命名规范

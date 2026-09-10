@@ -35,6 +35,22 @@
 > 与 `src/weixin_marketing/api.py` `_IDEMPOTENCY_DDL`（模块幂等自建）；不进
 > db_update.yaml；按 tenant_id 物理清理。
 
+> 2026-09-10 微信营销自动化 P4-B 例外登记：新增事件闭环 4 表（合并一条；非 bs_
+> 前缀基础设施/示例表，同幂等键表先例：模块幂等自建，DDL 双轨
+> `deploy/init-postgres.sql` 与 `src/weixin_marketing/event_sources.py`
+> `_TABLES_DDL` / `internal_event_example.py` `_EXAMPLE_DDL`，不进 db_update.yaml）：
+> `weixin_marketing_event_source_keys`（webhook 源 HMAC 签名密钥版本行，Fernet
+> 密文存储；rotate 时旧 active→retiring+retire_at 并行窗，UNIQUE(source_id,key_id)
+> /UNIQUE(source_id,key_version) 仲裁并发；按 tenant_id 物理清理，孤儿行
+> source 不存在即无引用可清）、`weixin_marketing_webhook_nonces`（nonce 防重放，
+> 消耗与事件接纳同事务，TTL 900s 由 event_match_tick 清理；无 tenant 列，按
+> source_id 子查询清理且须先于 event_sources 删除）、
+> `weixin_marketing_event_payloads`（受控事件 payload 持久化，tenant+hash 去重
+> 复用；底座 events 行只存 payload_ref/hash；保留期清理属 P5/运维，登记未做）、
+> `weixin_marketing_example_orders`（内部事件示例业务对象，P5 后真实业务事件源
+> 参照；源侧 outbox 复用 desktop_automation_outbox 不另建表；按 tenant_id
+> 物理清理）。
+
 ---
 
 ## 1. 表分类总览

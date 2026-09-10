@@ -312,12 +312,32 @@ class ScheduledTaskManager:
                     max_instances=1,
                     coalesce=True,
                 )
+                # P4-A：过期无引用素材清理（R57；retention_days/间隔可配）
+                self._scheduler.add_job(
+                    wxm_dispatch.assets_cleanup_tick,
+                    IntervalTrigger(seconds=wxm_cfg.assets_cleanup_interval_seconds),
+                    id="job_system_weixin_marketing_assets_cleanup",
+                    name="Weixin Marketing Assets Cleanup",
+                    max_instances=1,
+                    coalesce=True,
+                )
+                # P4-B：事件匹配 worker（R57；受 event_triggers_enabled 细分门控）
+                self._scheduler.add_job(
+                    wxm_dispatch.event_match_tick,
+                    IntervalTrigger(seconds=wxm_cfg.event_match_interval_seconds),
+                    id="job_system_weixin_marketing_event_match",
+                    name="Weixin Marketing Event Match",
+                    max_instances=1,
+                    coalesce=True,
+                )
                 logger.info(
                     f"后端日志：已注册 weixin_marketing 调度闭环任务 "
                     f"(time_scan={wxm_cfg.time_scan_interval_seconds}s, "
                     f"dispatch={wxm_cfg.dispatch_interval_seconds}s, "
                     f"sweep={wxm_cfg.permits_sweep_interval_seconds}s, "
-                    f"reclaim={wxm_cfg.runs_reclaim_interval_seconds}s)"
+                    f"reclaim={wxm_cfg.runs_reclaim_interval_seconds}s, "
+                    f"assets_cleanup={wxm_cfg.assets_cleanup_interval_seconds}s, "
+                    f"event_match={wxm_cfg.event_match_interval_seconds}s)"
                 )
             else:
                 logger.debug("后端日志：weixin_marketing 未启用，跳过调度 tick 注册（R42 零注册）")

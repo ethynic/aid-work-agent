@@ -159,7 +159,7 @@ export function localInputToIso(value: string): string {
 
 // ==================== 内容块前端校验（与后端 Text/Link 规则同口径） ====================
 
-/** 单块校验：返回错误文案；空串 = 通过 */
+/** 单块校验：返回错误文案；空串 = 通过（与后端 Text/Link/Image 规则同口径） */
 export function validateBlock(block: ContentBlockSpec): string {
   if (block.type === 'text') {
     if (!block.text_content.trim()) return '正文不能为空'
@@ -167,6 +167,8 @@ export function validateBlock(block: ContentBlockSpec): string {
   } else if (block.type === 'link') {
     if (!block.url.trim()) return '网址不能为空'
     if (!/^https?:\/\//.test(block.url.trim())) return '网址必须以 http:// 或 https:// 开头'
+  } else if (block.type === 'image') {
+    if (!block.asset_id) return '未选择图片素材'
   }
   return ''
 }

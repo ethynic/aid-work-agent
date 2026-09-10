@@ -100,18 +100,27 @@ describe('entry route responsibilities', () => {
 
   it('keeps weixin marketing workbench list and routed run detail pages for tenant', () => {
     // 微信营销工作台（P3-A2）：列表页 + 路由化运行详情页（2 秒轮询页）
+    // P4-B 增 event-sources 子路由（事件源设置页）
     const tenantChildren = agentRoutes.find((route) => route.path === '/t/:tenant_id')?.children ?? []
     const weixin = tenantChildren.find((route) => route.path === 'weixin-marketing')
-    expect(weixin?.children?.map((route) => route.path)).toEqual(['automations', 'runs/:runId'])
+    expect(weixin?.children?.map((route) => route.path)).toEqual([
+      'automations',
+      'runs/:runId',
+      'event-sources',
+    ])
     expect(weixin?.children?.map((route) => route.name)).toEqual([
       'tenant-weixin-marketing-automations',
       'tenant-weixin-marketing-run-detail',
+      'tenant-weixin-marketing-event-sources',
     ])
 
     const router = createRouter({ history: createMemoryHistory(), routes: agentRoutes })
     expect(router.resolve('/t/acme/weixin-marketing/automations').name).toBe('tenant-weixin-marketing-automations')
     expect(router.resolve('/t/acme/weixin-marketing/runs/11111111-2222-3333-4444-555555555555').name).toBe(
       'tenant-weixin-marketing-run-detail',
+    )
+    expect(router.resolve('/t/acme/weixin-marketing/event-sources').name).toBe(
+      'tenant-weixin-marketing-event-sources',
     )
   })
 

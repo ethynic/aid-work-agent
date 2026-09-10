@@ -113,6 +113,7 @@ export const agentRoutes: RouteRecordRaw[] = [
         children: [
           { path: 'automations', name: 'tenant-weixin-marketing-automations', component: () => import('@/components/weixinMarketing/AutomationList.vue') },
           { path: 'runs/:runId', name: 'tenant-weixin-marketing-run-detail', component: () => import('@/components/weixinMarketing/RunDetail.vue') },
+          { path: 'event-sources', name: 'tenant-weixin-marketing-event-sources', component: () => import('@/components/weixinMarketing/EventSourceSettings.vue') },
         ]
       },
     ]

@@ -42,7 +42,8 @@ def parse_payload_ref(payload_ref: str) -> Tuple[str, int]:
 
 
 def block_payload_bytes(block: Dict[str, Any]) -> bytes:
-    """单块 payload 字节（text→正文；link→url；image 不参与 P2 编译，占位摘要）"""
+    """单块 payload 字节（text→正文；link→url；image→受控资产引用 asset:<id>，
+    P4-A：真实图片字节由 Runtime 素材下载端点按 invocation scope 获取）"""
     kind = block.get("kind")
     if kind == BLOCK_KIND_TEXT:
         text = block.get("text_content") or ""

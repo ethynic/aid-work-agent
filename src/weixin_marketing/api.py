@@ -35,8 +35,8 @@ import uuid as _uuid
 from datetime import datetime
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple, Type, TypeVar
 
-from fastapi import APIRouter, Header, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, File, Header, HTTPException, Request, UploadFile
+from fastapi.responses import JSONResponse, Response
 from loguru import logger
 from pydantic import BaseModel, ValidationError
 
@@ -46,6 +46,7 @@ from src.desktop_automation.constants import RUN_TERMINAL_STATES
 from src.utils import sanitize_error_info
 from src.weixin_marketing.constants import AUTOMATION_STATUSES
 from src.weixin_marketing.service import (
+    AssetInUseError,
     ConfigurationError,
     ConflictError,
     NotFoundError,
@@ -77,6 +78,8 @@ CODE_IDEMPOTENCY_KEY_INVALID = "IDEMPOTENCY_KEY_INVALID"
 # P3-A1：local_tool 队列只读操作未得出结论（可重试；绑定/设备保持原状态）
 CODE_VERIFY_FAILED = "VERIFY_FAILED"
 CODE_PREFLIGHT_FAILED = "PREFLIGHT_FAILED"
+# P4-A：素材被非过期 revision 引用（引用保护，删除 409 专用码）
+CODE_ASSET_IN_USE = "ASSET_IN_USE"
 
 TRIGGER_TYPES = ("once", "interval", "calendar", "event")
 
@@ -372,6 +375,11 @@ def _failure_from_service(exc: Exception) -> _HandlerFailure:
         # R52：未知效果重试缺人工证据（409 RETRY_EVIDENCE_REQUIRED）
         return _HandlerFailure(
             409, _error_body(CODE_RETRY_EVIDENCE_REQUIRED, message, debug=message)
+        )
+    if isinstance(exc, AssetInUseError):
+        # P4-A：素材被非过期 revision 引用（409 ASSET_IN_USE，前端文案化引导解引用）
+        return _HandlerFailure(
+            409, _error_body(CODE_ASSET_IN_USE, message, debug=message)
         )
     if isinstance(exc, QuotaExceededError):
         # P3-A1：试发只读预检触发（配额实际在底座许可事务原子执行）
@@ -688,7 +696,7 @@ async def _guarded_service(action: str, exc: Exception) -> JSONResponse:
         return JSONResponse(status_code=exc.status_code, content=exc.body)
     if isinstance(exc, (NotFoundError, ConflictError, WeixinValidationError, ConfigurationError,
                         QuotaExceededError, VerifyFailedError, PreflightFailedError,
-                        TenantNotAllowedError, RetryEvidenceRequiredError)):
+                        TenantNotAllowedError, RetryEvidenceRequiredError, AssetInUseError)):
         failure = _failure_from_service(exc)
         return JSONResponse(status_code=failure.status_code, content=failure.body)
     return _internal_error(f"{action}失败", exc)
@@ -700,7 +708,7 @@ async def _call_service(func: Callable, /, *args, **kwargs):
         return await asyncio.to_thread(func, *args, **kwargs)
     except (NotFoundError, ConflictError, WeixinValidationError, ConfigurationError,
             QuotaExceededError, VerifyFailedError, PreflightFailedError,
-            TenantNotAllowedError, RetryEvidenceRequiredError) as e:
+            TenantNotAllowedError, RetryEvidenceRequiredError, AssetInUseError) as e:
         raise _failure_from_service(e) from e
 
 
@@ -1267,3 +1275,424 @@ async def preflight_device(
         idempotency_key, tenant_id, user_id, _ROUTE_DEVICE_PREFLIGHT, request,
         _EmptyInput, handler, action_label="设备预检",
     )
+
+
+# ==================== P4-B：事件源管理 + 签名 webhook + 内部事件示例（R57）====================
+
+CODE_RATE_LIMITED = "RATE_LIMITED"
+CODE_INVALID_SIGNATURE = "INVALID_SIGNATURE"
+CODE_NONCE_REPLAYED = "NONCE_REPLAYED"
+CODE_TIMESTAMP_OUT_OF_WINDOW = "TIMESTAMP_OUT_OF_WINDOW"
+CODE_PAYLOAD_TOO_LARGE = "PAYLOAD_TOO_LARGE"
+CODE_EVENT_TYPE_NOT_ALLOWED = "EVENT_TYPE_NOT_ALLOWED"
+CODE_IDENTITY_FIELD_FORBIDDEN = "IDENTITY_FIELD_FORBIDDEN"
+CODE_SOURCE_REF_CONFLICT = "SOURCE_REF_CONFLICT"
+
+_WEBHOOK_SIGNATURE_HEADER = "X-WX-Signature"
+_WEBHOOK_TIMESTAMP_HEADER = "X-WX-Timestamp"
+_WEBHOOK_NONCE_HEADER = "X-WX-Nonce"
+_WEBHOOK_KEY_ID_HEADER = "X-WX-Key-Id"
+
+
+def _event_source_module():
+    from src.weixin_marketing import event_sources as wxm_sources
+
+    return wxm_sources
+
+
+@router.get("/event-sources")
+async def list_event_sources(
+    request: Request,
+    source_type: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 20,
+):
+    """事件源列表（凭据掩码：只回 key_id/版本/状态，不回明文或密文/旧密钥）"""
+    tenant_id, user_id = await _current_user_and_tenant(request)
+    if source_type is not None and source_type not in ("internal", "webhook"):
+        return _error_json(
+            422, CODE_VALIDATION_FAILED, "查询参数校验失败",
+            field_errors=[{"field": "source_type", "message": f"非法类型: {source_type}"}],
+        )
+    if page < 1 or not (1 <= page_size <= 100):
+        return _error_json(
+            422, CODE_VALIDATION_FAILED, "查询参数校验失败",
+            field_errors=[{"field": "page", "message": "page 须 >= 1 且 page_size 在 1-100"}],
+        )
+    try:
+        items, total = await asyncio.to_thread(
+            _event_source_module().list_event_sources,
+            tenant_id, source_type=source_type,
+            limit=page_size, offset=(page - 1) * page_size,
+        )
+        return JSONResponse(content={"success": True, "data": _jsonable({
+            "items": items, "total": total, "page": page, "page_size": page_size,
+        })})
+    except Exception as e:
+        return _internal_error("查询事件源失败", e)
+
+
+@router.post("/event-sources")
+async def create_event_source(request: Request):
+    """创建事件源（internal 不产密钥；webhook 生成签名密钥——明文 secret 仅本响应
+    一次性返回，之后任何 API 不回明文/旧密钥）。"""
+    tenant_id, user_id = await _current_user_and_tenant(request)
+    try:
+        body = await _parse_body(request)
+    except _HandlerFailure as failure:
+        return JSONResponse(status_code=failure.status_code, content=failure.body)
+    source_ref = body.get("source_ref")
+    source_type = body.get("source_type")
+    allowed = body.get("allowed_event_types")
+    field_errors: List[Dict[str, str]] = []
+    if not isinstance(source_ref, str) or not (1 <= len(source_ref) <= 128):
+        field_errors.append({"field": "source_ref", "message": "source_ref 须为 1-128 字符"})
+    if source_type not in ("internal", "webhook"):
+        field_errors.append({"field": "source_type", "message": "source_type 须为 internal/webhook"})
+    if allowed is not None:
+        if (
+            not isinstance(allowed, list)
+            or not allowed
+            or any(not isinstance(t, str) or not (1 <= len(t) <= 128) for t in allowed)
+        ):
+            field_errors.append({"field": "allowed_event_types", "message": "须为非空字符串数组"})
+    if field_errors:
+        return _error_json(
+            422, CODE_VALIDATION_FAILED, "请求参数校验失败", field_errors=field_errors
+        )
+    try:
+        result = await asyncio.to_thread(
+            _event_source_module().create_event_source,
+            tenant_id=tenant_id, user_id=user_id, source_ref=source_ref,
+            source_type=source_type,
+            allowed_event_types=allowed if allowed else None,
+            description=body.get("description") if isinstance(body.get("description"), str) else None,
+        )
+        return JSONResponse(content={"success": True, "data": _jsonable(result)})
+    except _event_source_module().EventSourceRefConflictError:
+        # 创建不承担修改语义：source_ref 已存在即拒绝（类型/属主变更无路径，
+        # 凭据变更唯一入口 rotate-key 的管理鉴权）
+        return _error_json(
+            409, CODE_SOURCE_REF_CONFLICT,
+            "source_ref 已存在，变更需经管理端轮换/停用",
+            debug=f"source_ref={source_ref}",
+        )
+    except Exception as e:
+        return _internal_error("创建事件源失败", e)
+
+
+@router.post("/event-sources/{source_id}/rotate-key")
+async def rotate_event_source_key(source_id: str, request: Request):
+    """轮换 webhook 签名密钥（管理权限=源创建者或 platform_admin；旧新并行短窗，
+    新明文 secret 仅本响应一次性返回）。"""
+    tenant_id, user_id = await _current_user_and_tenant(request)
+    if not _valid_uuid(source_id):
+        return _error_json(404, CODE_NOT_FOUND, "事件源不存在或无权访问")
+    wxm_sources = _event_source_module()
+    try:
+        created_by = await asyncio.to_thread(
+            wxm_sources.source_created_by, tenant_id, source_id
+        )
+        user = await asyncio.to_thread(get_current_user, request)
+        is_platform_admin = bool(user and user.get("role") == "platform_admin")
+        if not is_platform_admin and created_by is not None and created_by != user_id:
+            return _error_json(
+                403, "FORBIDDEN", "仅事件源创建者或平台管理员可轮换密钥"
+            )
+        from src.weixin_marketing.config import get_weixin_marketing_config
+
+        cfg = get_weixin_marketing_config()
+        result = await asyncio.to_thread(
+            wxm_sources.rotate_key,
+            tenant_id=tenant_id, source_id=source_id, user_id=user_id,
+            rotate_window_seconds=cfg.webhook_key_rotate_window_seconds,
+        )
+        return JSONResponse(content={"success": True, "data": _jsonable(result)})
+    except KeyError:
+        return _error_json(404, CODE_NOT_FOUND, "事件源不存在或无权访问")
+    except ValueError as e:
+        return _error_json(
+            409, CODE_CONFLICT, str(e), debug=sanitize_error_info(str(e))
+        )
+    except Exception as e:
+        return _internal_error("轮换密钥失败", e)
+
+
+@router.post("/webhooks/{source_id}")
+async def receive_webhook(source_id: str, request: Request):
+    """签名 webhook 接收（独立公开面，无用户认证——签名即身份）：
+
+    - tenant 只取自受信 event source 行（拒绝 payload 自报 tenant_id/user_id）；
+    - HMAC-SHA256(secret, "{timestamp}.{nonce}.{body}") 恒定时间比较，时间戳 ±5min，
+      nonce 防重放（与事件接纳同事务）；限流按源 429；body 上限 413；
+    - 持久接纳后 202；重复有效事件返回原接纳结果（duplicate=true），不重执行。
+    """
+    if not _valid_uuid(source_id):
+        return _error_json(404, CODE_NOT_FOUND, "事件源不存在")
+    wxm_sources = _event_source_module()
+    signature = request.headers.get(_WEBHOOK_SIGNATURE_HEADER, "")
+    timestamp = request.headers.get(_WEBHOOK_TIMESTAMP_HEADER, "")
+    nonce = request.headers.get(_WEBHOOK_NONCE_HEADER, "")
+    key_id = request.headers.get(_WEBHOOK_KEY_ID_HEADER) or None
+
+    # source 行租户即受信租户（不读 payload、不读查询参数）
+    source_row = await asyncio.to_thread(
+        wxm_sources.get_source_row_by_id, source_id
+    )
+    if source_row is None or source_row.get("source_type") != "webhook":
+        return _error_json(404, CODE_NOT_FOUND, "事件源不存在")
+    tenant_id = str(source_row["tenant_id"])
+
+    from src.weixin_marketing.config import get_weixin_marketing_config
+
+    cfg = get_weixin_marketing_config()
+    content_length = request.headers.get("Content-Length")
+    if content_length is not None:
+        try:
+            if int(content_length) > cfg.webhook_max_body_bytes:
+                return _error_json(413, CODE_PAYLOAD_TOO_LARGE, "请求体超过大小上限")
+        except ValueError:
+            return _error_json(413, CODE_PAYLOAD_TOO_LARGE, "请求体超过大小上限")
+    raw = await request.body()
+
+    limiter = wxm_sources.rate_limiter_for(cfg)
+    try:
+        result = await asyncio.to_thread(
+            wxm_sources.accept_webhook_event,
+            tenant_id=tenant_id, source_id=source_id,
+            timestamp=timestamp, nonce=nonce, signature=signature, key_id=key_id,
+            body=raw,
+            max_body_bytes=cfg.webhook_max_body_bytes,
+            rate_limiter=limiter,
+        )
+        return JSONResponse(
+            status_code=202,
+            content={"success": True, "data": _jsonable({
+                "event_id": result.get("event_id"),
+                "duplicate": bool(result.get("duplicate")),
+                "state": result.get("state") or "received",
+            })},
+        )
+    except wxm_sources.WebhookRejectError as e:
+        code_map = {
+            "rate_limited": (429, CODE_RATE_LIMITED),
+            "signature_invalid": (401, CODE_INVALID_SIGNATURE),
+            "timestamp_out_of_window": (403, CODE_TIMESTAMP_OUT_OF_WINDOW),
+            "nonce_replayed": (403, CODE_NONCE_REPLAYED),
+            "payload_too_large": (413, CODE_PAYLOAD_TOO_LARGE),
+            "event_type_not_allowed": (422, CODE_EVENT_TYPE_NOT_ALLOWED),
+            "identity_field_forbidden": (422, CODE_IDENTITY_FIELD_FORBIDDEN),
+            "not_found": (404, CODE_NOT_FOUND),
+        }
+        status, code = code_map.get(e.reason, (e.status_code, "WEBHOOK_REJECTED"))
+        return _error_json(status, code, e.message, debug=e.reason)
+    except Exception as e:
+        return _internal_error("接收 webhook 失败", e)
+
+
+# ---------- 内部事件示例（P4-B：供 P5 后真实业务事件源参照）----------
+
+
+@router.post("/example-orders")
+async def create_example_order(request: Request):
+    """创建示例业务对象（pending，无事件副作用）"""
+    tenant_id, user_id = await _current_user_and_tenant(request)
+    try:
+        body = await _parse_body(request)
+    except _HandlerFailure as failure:
+        return JSONResponse(status_code=failure.status_code, content=failure.body)
+    label = body.get("label")
+    if label is not None and not isinstance(label, str):
+        return _error_json(
+            422, CODE_VALIDATION_FAILED, "请求参数校验失败",
+            field_errors=[{"field": "label", "message": "label 须为字符串"}],
+        )
+    from src.weixin_marketing import internal_event_example as wxm_example
+
+    try:
+        result = await asyncio.to_thread(
+            wxm_example.create_example_order,
+            tenant_id=tenant_id, user_id=user_id,
+            label=label if isinstance(label, str) else "示例订单",
+        )
+        return JSONResponse(content={"success": True, "data": _jsonable(result)})
+    except Exception as e:
+        return _internal_error("创建示例订单失败", e)
+
+
+@router.post("/example-orders/{order_id}/complete")
+async def complete_example_order(order_id: str, request: Request):
+    """示例业务状态变更（pending→completed）：业务行与源侧 outbox 同事务；
+    事件经投递器进入底座 events 表（eligible 快照），由匹配 worker 触发订阅任务。"""
+    tenant_id, user_id = await _current_user_and_tenant(request)
+    if not _valid_uuid(order_id):
+        return _error_json(404, CODE_NOT_FOUND, "示例订单不存在")
+    from src.weixin_marketing import internal_event_example as wxm_example
+
+    try:
+        result = await asyncio.to_thread(
+            wxm_example.complete_example_order,
+            tenant_id=tenant_id, user_id=user_id, order_id=order_id,
+        )
+        return JSONResponse(content={"success": True, "data": _jsonable(result)})
+    except KeyError:
+        return _error_json(404, CODE_NOT_FOUND, "示例订单不存在")
+    except Exception as e:
+        return _internal_error("完成示例订单失败", e)
+
+
+@router.get("/example-orders/{order_id}")
+async def get_example_order(order_id: str, request: Request):
+    """查示例订单（演示/联调用）"""
+    tenant_id, user_id = await _current_user_and_tenant(request)
+    if not _valid_uuid(order_id):
+        return _error_json(404, CODE_NOT_FOUND, "示例订单不存在")
+    from src.weixin_marketing import internal_event_example as wxm_example
+
+    try:
+        order = await asyncio.to_thread(
+            wxm_example.get_example_order, tenant_id, order_id
+        )
+        if order is None:
+            return _error_json(404, CODE_NOT_FOUND, "示例订单不存在")
+        return JSONResponse(content={"success": True, "data": _jsonable(order)})
+    except Exception as e:
+        return _internal_error("查询示例订单失败", e)
+
+
+# ==================== P4-A：图片素材（assets）====================
+
+
+def _asset_service():
+    from src.weixin_marketing import assets as wxm_assets
+
+    return wxm_assets
+
+
+@router.post("/assets")
+async def upload_asset(request: Request, file: UploadFile = File(...)):
+    """上传素材（R57）：multipart 单文件；MIME 以 PIL 实测为准（客户端声明不采信）、
+    大小/像素上限可配、sha256 登记、落租户存储目录、行 ACL=租户+属主。
+
+    无 Idempotency-Key（不创建 run/attempt/publish 类资源；失败可原样重传）。
+    Content-Length 超限提前拒绝，避免整读超限字节进内存。"""
+    tenant_id, user_id = await _current_user_and_tenant(request)
+    wxm_assets = _asset_service()
+    declared_mime = file.content_type or ""
+    filename = file.filename or ""
+    # 提前量：multipart 封装开销 ~1KB 量级，放宽 64KB 后仍显著小于上限即直接拒绝
+    content_length = request.headers.get("content-length")
+    try:
+        from src.weixin_marketing.config import get_weixin_marketing_config
+
+        max_bytes = get_weixin_marketing_config().asset_max_bytes
+    except Exception:  # noqa: BLE001 配置读取失败不阻断（服务层仍会复核上限）
+        max_bytes = None
+    if content_length and max_bytes and int(content_length) > max_bytes + 65536:
+        return _error_json(
+            422, CODE_VALIDATION_FAILED,
+            f"图片大小超过上限 {max_bytes} 字节",
+            field_errors=[{"field": "file", "message": f"图片大小超过上限 {max_bytes} 字节"}],
+        )
+    try:
+        content = await file.read()
+    finally:
+        await file.close()
+    try:
+        result = await asyncio.to_thread(
+            wxm_assets.upload_asset, tenant_id, user_id, filename, content,
+            declared_mime=declared_mime,
+        )
+        return JSONResponse(content={"success": True, "data": _jsonable(result)})
+    except (NotFoundError, ConflictError, WeixinValidationError, AssetInUseError,
+            ConfigurationError) as e:
+        return await _guarded_service("上传素材", e)
+    except Exception as e:
+        return _internal_error("上传素材失败", e)
+
+
+@router.get("/assets")
+async def list_assets(
+    request: Request,
+    page: int = 1,
+    page_size: int = 24,
+):
+    """素材列表（属主分页；含引用计数与 images_enabled 开关）"""
+    tenant_id, user_id = await _current_user_and_tenant(request)
+    field_errors: List[Dict[str, str]] = []
+    if page < 1:
+        field_errors.append({"field": "page", "message": "page 须 >= 1"})
+    if not (1 <= page_size <= 100):
+        field_errors.append({"field": "page_size", "message": "page_size 须在 1-100 之间"})
+    if field_errors:
+        return _error_json(422, CODE_VALIDATION_FAILED, "查询参数校验失败", field_errors=field_errors)
+    try:
+        result = await asyncio.to_thread(
+            _asset_service().list_assets, tenant_id, user_id,
+            page=page, page_size=page_size,
+        )
+        return JSONResponse(content={"success": True, "data": _jsonable(result)})
+    except Exception as e:
+        return _internal_error("查询素材列表失败", e)
+
+
+@router.get("/assets/{asset_id}")
+async def get_asset(asset_id: str, request: Request):
+    """素材详情元数据（属主；sha256/尺寸/引用计数）"""
+    tenant_id, user_id = await _current_user_and_tenant(request)
+    if not _valid_uuid(asset_id):
+        return _error_json(404, CODE_NOT_FOUND, "素材不存在或无权访问")
+    try:
+        result = await asyncio.to_thread(
+            _asset_service().get_asset, tenant_id, user_id, asset_id
+        )
+        return JSONResponse(content={"success": True, "data": _jsonable(result)})
+    except (NotFoundError, ConflictError, WeixinValidationError, ConfigurationError) as e:
+        return await _guarded_service("查询素材", e)
+    except Exception as e:
+        return _internal_error("查询素材失败", e)
+
+
+@router.get("/assets/{asset_id}/content")
+async def get_asset_content(asset_id: str, request: Request):
+    """素材受控字节（属主预览）：响应带 X-Asset-Hash 与 nosniff；hash 与登记值
+    复核，不符 500（完整性事件，不下发字节）。"""
+    tenant_id, user_id = await _current_user_and_tenant(request)
+    if not _valid_uuid(asset_id):
+        return _error_json(404, CODE_NOT_FOUND, "素材不存在或无权访问")
+    try:
+        resolution = await asyncio.to_thread(
+            _asset_service().read_asset_content, tenant_id, user_id, asset_id
+        )
+    except NotFoundError as e:
+        return await _guarded_service("读取素材", e)
+    except Exception as e:
+        return _internal_error("读取素材失败", e)
+    return Response(
+        content=resolution.data,
+        media_type=resolution.mime,
+        headers={
+            "X-Asset-Hash": resolution.sha256,
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@router.delete("/assets/{asset_id}")
+async def delete_asset(asset_id: str, request: Request):
+    """删除素材（硬删文件+行）：被非过期 revision（draft/published）引用即
+    409 ASSET_IN_USE；不存在/非属主/跨租户统一 404（幂等：重复删除与并发双删
+    败者均 404）。"""
+    tenant_id, user_id = await _current_user_and_tenant(request)
+    if not _valid_uuid(asset_id):
+        return _error_json(404, CODE_NOT_FOUND, "素材不存在或无权访问")
+    try:
+        result = await asyncio.to_thread(
+            _asset_service().delete_asset, tenant_id, user_id, asset_id
+        )
+        return JSONResponse(content={"success": True, "data": _jsonable(result)})
+    except (NotFoundError, ConflictError, WeixinValidationError, AssetInUseError,
+            ConfigurationError) as e:
+        return await _guarded_service("删除素材", e)
+    except Exception as e:
+        return _internal_error("删除素材失败", e)

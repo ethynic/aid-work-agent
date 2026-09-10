@@ -1,5 +1,5 @@
 <template>
-  <!-- 有序内容块编辑：text/link 逐条编辑 + 上下移动（按钮与 Alt+方向键）+ 上限校验 -->
+  <!-- 有序内容块编辑：text/link/image 逐条编辑 + 上下移动（按钮与 Alt+方向键）+ 上限校验 -->
   <div class="space-y-3">
     <div class="flex items-center justify-between">
       <div class="text-sm text-muted">
@@ -8,7 +8,9 @@
       <div class="flex gap-2">
         <BaseButton size="sm" :disabled="disabled || blocks.length >= maxBlocks" @click="addBlock('text')">加文字</BaseButton>
         <BaseButton size="sm" intent="secondary" :disabled="disabled || blocks.length >= maxBlocks" @click="addBlock('link')">加网址</BaseButton>
-        <BaseButton size="sm" intent="secondary" :disabled="true" title="图片块随素材库（P4）开放">加图片</BaseButton>
+        <BaseButton size="sm" intent="secondary" :disabled="disabled || blocks.length >= maxBlocks" @click="openAssetLibrary()">
+          加图片<span class="text-xs text-muted ml-1">（素材库）</span>
+        </BaseButton>
       </div>
     </div>
 
@@ -63,34 +65,65 @@
         <div v-if="fieldError(index)" class="text-xs text-danger-600">{{ fieldError(index) }}</div>
       </template>
 
-      <!-- 图片块（P4 前只读展示，无法新建） -->
+      <!-- 图片块（P4-A：素材库选择 + 缩略预览） -->
       <template v-else>
-        <div class="text-sm text-default break-all">asset_id：{{ block.asset_id }}</div>
-        <p class="text-xs text-muted">图片素材库在 P4 交付，现有图片块保持原样提交。</p>
+        <div class="flex items-start gap-3">
+          <div class="w-24 h-16 rounded border border-default bg-canvas overflow-hidden flex-shrink-0">
+            <img
+              v-if="objectUrls[block.asset_id]"
+              :src="objectUrls[block.asset_id]"
+              class="w-full h-full object-contain"
+              alt="图片素材预览"
+            />
+            <span v-else class="w-full h-full flex items-center justify-center text-xs text-muted">加载中...</span>
+          </div>
+          <div class="flex-1 min-w-0 space-y-1">
+            <div class="text-xs text-muted break-all" data-testid="image-asset-id">{{ block.asset_id }}</div>
+            <div v-if="assetMeta[block.asset_id]" class="text-xs text-muted">
+              {{ assetMeta[block.asset_id].mime.replace('image/', '').toUpperCase() }}
+              {{ assetMeta[block.asset_id].width }}×{{ assetMeta[block.asset_id].height }}
+            </div>
+            <div v-if="fieldError(index)" class="text-xs text-danger-600">{{ fieldError(index) }}</div>
+            <div class="flex gap-2">
+              <BaseButton size="sm" intent="ghost" :disabled="disabled" @click="openAssetLibrary(index)">更换图片</BaseButton>
+            </div>
+          </div>
+        </div>
+        <p class="text-xs text-muted">图片块以素材引用发送；被引用素材受删除保护（先在任务中移除引用）。</p>
       </template>
     </div>
 
     <div v-if="!blocks.length" class="empty-state">
       <div class="empty-state-icon">▦</div>
-      <p class="text-sm text-muted">暂无内容块，至少添加 1 条（文字或网址）</p>
+      <p class="text-sm text-muted">暂无内容块，至少添加 1 条（文字/网址/图片）</p>
     </div>
     <p v-if="lengthError" class="text-xs text-danger-600">{{ lengthError }}</p>
+
+    <!-- 素材库（选择插入/更换） -->
+    <AssetLibrary v-model="showAssetLibrary" select-mode @selected="applyAssetSelection" />
   </div>
 </template>
 
 <script setup lang="ts">
 /**
- * ContentBlockEditor：ContentBlockSpec 有序块编辑。
+ * ContentBlockEditor：ContentBlockSpec 有序块编辑（text/link/image 判别联合）。
  * - 文字/网址单行输入（后端 BLOCK_TEXT_FORBIDDEN_CHARS 禁换行/NUL，长度上限 500）；
+ * - 图片块：从素材库选择资产（kind 判别联合 {type:'image', asset_id}），缩略预览
+ *   （鉴权 blob URL 会话缓存）+ 更换；images_enabled=false 时素材库明示不可用，
+ *   保存/发布由服务端 422 把关；
  * - 排序：上移/下移按钮 + 块卡片聚焦后 Alt+↑/↓；
  * - 上限：maxBlocks（后端 DEFAULT_MAX_BLOCKS=20，超出拒绝新增并在超限时提示）。
  */
-import { computed } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseBadge from '@/components/ui/BaseBadge.vue'
+import AssetLibrary from './AssetLibrary.vue'
 import {
   BLOCK_TEXT_MAX_LENGTH,
   MAX_BLOCKS,
+  fetchAssetObjectUrl,
+  getAsset,
+  type AssetItem,
   type ContentBlockSpec,
   type LinkBlockSpec,
   type TextBlockSpec,
@@ -109,6 +142,43 @@ const emit = defineEmits<{
 }>()
 
 const maxBlocks = MAX_BLOCKS
+const showAssetLibrary = ref(false)
+/** 当前「加图片/更换」的目标位置：null = 追加；数字 = 替换该索引的 asset_id */
+let pendingImageIndex: number | null = null
+
+// 图片块预览：asset_id → blob URL / 元数据（会话缓存，失败保留占位）
+const objectUrls = reactive<Record<string, string>>({})
+const assetMeta = reactive<Record<string, AssetItem>>({})
+
+const imageAssetIds = computed(() =>
+  props.blocks.filter(b => b.type === 'image').map(b => (b.type === 'image' ? b.asset_id : '')),
+)
+
+watch(
+  imageAssetIds,
+  ids => {
+    for (const assetId of ids) {
+      if (!assetId || objectUrls[assetId]) continue
+      fetchAssetObjectUrl(assetId).then(
+        url => {
+          objectUrls[assetId] = url
+        },
+        () => {
+          // 预览失败不阻断编辑（占位保留；保存/发布由服务端权威校验）
+        },
+      )
+      if (!assetMeta[assetId]) {
+        getAsset(assetId).then(
+          meta => {
+            assetMeta[assetId] = meta
+          },
+          () => {},
+        )
+      }
+    }
+  },
+  { immediate: true, deep: true },
+)
 
 const lengthError = computed(() => {
   if (props.forceOverflow && props.blocks.length > maxBlocks) {
@@ -147,5 +217,27 @@ function moveBlock(index: number, delta: -1 | 1) {
   const [moved] = next.splice(index, 1)
   next.splice(target, 0, moved)
   emit('update:blocks', next)
+}
+
+function applyAssetSelection(asset: AssetItem) {
+  if (props.disabled) return
+  if (pendingImageIndex !== null && props.blocks[pendingImageIndex]?.type === 'image') {
+    // 更换既有图片块的素材
+    const next = props.blocks.map((b, i) =>
+      i === pendingImageIndex ? { type: 'image' as const, asset_id: asset.id } : b,
+    )
+    emit('update:blocks', next)
+  } else if (props.blocks.length < maxBlocks) {
+    emit('update:blocks', [...props.blocks, { type: 'image', asset_id: asset.id }])
+  }
+  pendingImageIndex = null
+}
+
+/** 打开素材库：index=null 追加新图片块；index=数字 更换该位置的素材 */
+function openAssetLibrary(index: number | null = null) {
+  if (props.disabled) return
+  if (index === null && props.blocks.length >= maxBlocks) return
+  pendingImageIndex = index
+  showAssetLibrary.value = true
 }
 </script>

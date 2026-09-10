@@ -469,7 +469,8 @@ class TestGating:
             assert cur.fetchone()["next_fire_at"] == schedule_row["next_fire_at"]  # 未前移
 
     def test_scheduler_registration_gated_by_enabled(self, monkeypatch):
-        """R42：enabled=false 零注册；enabled=true 注册 4 个 tick job（interval 从配置读）"""
+        """R42：enabled=false 零注册；enabled=true 注册 5 个 tick job（interval 从配置读；
+        P4-A 增 assets_cleanup 素材清理 tick）"""
         from apscheduler.triggers.interval import IntervalTrigger
 
         from src.scheduler.manager import ScheduledTaskManager
@@ -498,6 +499,8 @@ class TestGating:
             dispatch_interval_seconds=11,
             permits_sweep_interval_seconds=31,
             runs_reclaim_interval_seconds=61,
+            assets_cleanup_interval_seconds=3601,
+            event_match_interval_seconds=13,
         )
         manager._scheduler.jobs.clear()
         monkeypatch.setattr(wxm_config_module, "get_weixin_marketing_config", lambda: enabled_cfg)
@@ -508,12 +511,25 @@ class TestGating:
             "job_system_weixin_marketing_dispatch",
             "job_system_weixin_marketing_sweep",
             "job_system_weixin_marketing_reclaim",
+            "job_system_weixin_marketing_assets_cleanup",
+            "job_system_weixin_marketing_event_match",
         }
         assert isinstance(wxm_jobs["job_system_weixin_marketing_time_scan"]["trigger"], IntervalTrigger)
         assert wxm_jobs["job_system_weixin_marketing_time_scan"]["trigger"].interval.total_seconds() == 7
         assert wxm_jobs["job_system_weixin_marketing_dispatch"]["trigger"].interval.total_seconds() == 11
         assert wxm_jobs["job_system_weixin_marketing_sweep"]["trigger"].interval.total_seconds() == 31
         assert wxm_jobs["job_system_weixin_marketing_reclaim"]["trigger"].interval.total_seconds() == 61
+        assert (
+            wxm_jobs["job_system_weixin_marketing_assets_cleanup"]["trigger"]
+            .interval.total_seconds()
+            == 3601
+        )
+        # P4-B：事件匹配 worker（R57；受 event_triggers_enabled 细分门控）
+        assert (
+            wxm_jobs["job_system_weixin_marketing_event_match"]["trigger"]
+            .interval.total_seconds()
+            == 13
+        )
 
 
 # ==================== tenant_allowlist 预检（CR-P1-2）====================
@@ -656,7 +672,10 @@ class TestPoisonConvergence:
             )
             conn.commit()
         stats = dispatch.run_dispatch_tick(now=utcnow(), config=wx_config)
-        assert stats["claimed"] == 1 and stats["dispatched"] == 0
+        # 共享 DB 加固：claim_pending_outbox 为全局批量（并行测试包的条目也会进入
+        # 本轮 claimed/dispatched 计数），只对本租户条目下界断言；毒丸语义由下方
+        # 本租户 run/audit/outbox 断言承载
+        assert stats["claimed"] >= 1
         run = da_runs.get_run(run_id, tenant_id)
         assert run["state"] == "failed"
         assert run["result_json"]["reason"] == "dispatch_attempts_exceeded"

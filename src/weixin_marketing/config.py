@@ -13,6 +13,9 @@ from typing import List, Optional
 
 from src.config.settings import settings
 from src.weixin_marketing.constants import (
+    DEFAULT_ASSET_MAX_BYTES,
+    DEFAULT_ASSET_MAX_PIXELS,
+    DEFAULT_ASSETS_CLEANUP_INTERVAL_SECONDS,
     DEFAULT_DISPATCH_BATCH_SIZE,
     DEFAULT_MAX_BLOCKS,
     DEFAULT_MIN_INTERVAL_SECONDS,
@@ -49,6 +52,10 @@ class WeixinMarketingConfig:
     min_interval_seconds: int = DEFAULT_MIN_INTERVAL_SECONDS
     dispatch_batch_size: int = DEFAULT_DISPATCH_BATCH_SIZE
     retention_days: int = DEFAULT_RETENTION_DAYS
+    # P4-A 素材通道（R57）：上传约束与过期清理节奏
+    asset_max_bytes: int = DEFAULT_ASSET_MAX_BYTES
+    asset_max_pixels: int = DEFAULT_ASSET_MAX_PIXELS
+    assets_cleanup_interval_seconds: int = DEFAULT_ASSETS_CLEANUP_INTERVAL_SECONDS
     tenant_allowlist: List[str] = field(default_factory=list)
     quotas: WeixinQuotaConfig = field(default_factory=WeixinQuotaConfig)
     # 调度闭环 tick 间隔（R44；scheduler/manager.py 注册 APScheduler interval job 用）
@@ -56,6 +63,12 @@ class WeixinMarketingConfig:
     dispatch_interval_seconds: int = 5
     permits_sweep_interval_seconds: int = 30
     runs_reclaim_interval_seconds: int = 60
+    # P4-B 事件闭环（R57）：匹配 worker tick 与 webhook 接纳约束
+    event_match_interval_seconds: int = 5
+    event_match_batch_size: int = 100
+    webhook_rate_limit_per_minute: int = 120
+    webhook_max_body_bytes: int = 256 * 1024
+    webhook_key_rotate_window_seconds: int = 900
 
 
 def _as_bool(value, default: bool) -> bool:
@@ -109,6 +122,12 @@ def get_weixin_marketing_config() -> WeixinMarketingConfig:
         min_interval_seconds=_as_int(getter("max_interval_frequency", None), DEFAULT_MIN_INTERVAL_SECONDS),
         dispatch_batch_size=_as_int(getter("dispatch_batch_size", None), DEFAULT_DISPATCH_BATCH_SIZE),
         retention_days=_as_int(getter("retention_days", None), DEFAULT_RETENTION_DAYS),
+        asset_max_bytes=_as_int(getter("asset_max_bytes", None), DEFAULT_ASSET_MAX_BYTES),
+        asset_max_pixels=_as_int(getter("asset_max_pixels", None), DEFAULT_ASSET_MAX_PIXELS),
+        assets_cleanup_interval_seconds=_as_int(
+            getter("assets_cleanup_interval_seconds", None),
+            DEFAULT_ASSETS_CLEANUP_INTERVAL_SECONDS,
+        ),
         tenant_allowlist=_as_list(getter("tenant_allowlist", None)),
         quotas=quotas,
         time_scan_interval_seconds=_as_int(
@@ -122,6 +141,17 @@ def get_weixin_marketing_config() -> WeixinMarketingConfig:
         ),
         runs_reclaim_interval_seconds=_as_int(
             getter("runs_reclaim_interval_seconds", None), 60
+        ),
+        event_match_interval_seconds=_as_int(
+            getter("event_match_interval_seconds", None), 5
+        ),
+        event_match_batch_size=_as_int(getter("event_match_batch_size", None), 100),
+        webhook_rate_limit_per_minute=_as_int(
+            getter("webhook_rate_limit_per_minute", None), 120
+        ),
+        webhook_max_body_bytes=_as_int(getter("webhook_max_body_bytes", None), 256 * 1024),
+        webhook_key_rotate_window_seconds=_as_int(
+            getter("webhook_key_rotate_window_seconds", None), 900
         ),
     )
 

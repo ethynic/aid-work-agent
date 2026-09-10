@@ -21,6 +21,8 @@ if db_url:
     os.environ["DATABASE_URL"] = db_url
     os.environ.setdefault("DB_POOL_MIN", "2")
     os.environ.setdefault("DB_POOL_MAX", "10")
+# P4-B webhook 密钥加密（secret_crypto 主密钥；沿 wecom_personal_rpa 测试惯例）
+os.environ.setdefault("RPA_SECRET_KEY", "test-wxm-event-source-key-32bytes")
 
 # weixin 业务表（audit 追加行也随租户清理）+ 底座表（复用 desktop_automation conftest 顺序）
 WEIXIN_TABLES = (
@@ -31,7 +33,29 @@ WEIXIN_TABLES = (
     "bs_weixin_marketing_group_bindings",
     "bs_weixin_marketing_account_bindings",
     "bs_weixin_marketing_assets",
+    # P4-B 事件闭环表（example_orders/payloads/keys 按 tenant_id 直清；
+    # nonces 无 tenant 列，按本租户 source 子查询清，且须先于 event_sources 删除）
+    "weixin_marketing_example_orders",
+    "weixin_marketing_event_payloads",
+    "weixin_marketing_event_source_keys",
 )
+
+
+def _cleanup_webhook_nonces(tenant_id: str) -> None:
+    from src.db.database import get_db_connection
+
+    with get_db_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            DELETE FROM weixin_marketing_webhook_nonces
+            WHERE source_id IN (
+                SELECT id FROM desktop_automation_event_sources WHERE tenant_id = %s
+            )
+            """,
+            (tenant_id,),
+        )
+        conn.commit()
 
 from tests.unit.desktop_automation.conftest import (  # noqa: E402
     cleanup_tenant as cleanup_da_tables,
@@ -48,13 +72,20 @@ def cleanup_weixin_tenant(tenant_id: str) -> None:
             for table in WEIXIN_TABLES:
                 try:
                     cur.execute(f"DELETE FROM {table} WHERE tenant_id = %s", (tenant_id,))
-                except Exception as e:  # noqa: BLE001
+                except Exception as e:  # noqa: BLE001 单表失败（如未建）回滚后继续下一张
+                    conn.rollback()
                     failed.append((table, str(e)))
             conn.commit()
             for table in WEIXIN_TABLES:
-                cur.execute(f"SELECT COUNT(*) AS c FROM {table} WHERE tenant_id = %s", (tenant_id,))
-                if cur.fetchone()["c"]:
-                    residual.append(table)
+                try:
+                    cur.execute(
+                        f"SELECT COUNT(*) AS c FROM {table} WHERE tenant_id = %s", (tenant_id,)
+                    )
+                    if cur.fetchone()["c"]:
+                        residual.append(table)
+                except Exception as e:  # noqa: BLE001
+                    conn.rollback()
+                    failed.append((table, str(e)))
     except Exception as e:  # noqa: BLE001
         failed.append(("<connection>", str(e)))
     if failed or residual:
@@ -101,6 +132,13 @@ def _init_db_pool():
     if not weixin_tables_ready():
         close_postgres_pool()
         pytest.skip("bs_weixin_marketing 表未初始化（先运行 init_database）")
+    # P4-B 模块级配套表（keys/nonces/payloads/example_orders）——幂等建齐，
+    # 租户清理 DELETE 不因表缺失报错
+    from src.weixin_marketing import event_sources as wxm_sources
+    from src.weixin_marketing import internal_event_example as wxm_example
+
+    wxm_sources.ensure_event_source_tables()
+    wxm_example.ensure_example_tables()
     yield
     close_postgres_pool()
 
@@ -110,6 +148,10 @@ def tenant_id():
     """每用例独立租户：先清底座表（依赖序），再清 weixin 业务表"""
     tid = f"wxm_test_{uuid.uuid4().hex[:12]}"
     yield tid
+    try:
+        _cleanup_webhook_nonces(tid)
+    except Exception:  # noqa: BLE001 表未建等场景由后续清理告警兜底
+        pass
     cleanup_da_tables(tid)
     cleanup_weixin_tenant(tid)
 

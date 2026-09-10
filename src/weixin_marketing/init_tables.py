@@ -189,12 +189,20 @@ DDL_STATEMENTS = (
 
 
 def init_weixin_marketing_tables(conn) -> None:
-    """幂等建 7 张表（由 src/db/database.py _init_postgresql 与集成测试调用）"""
+    """幂等建 7 张业务表（由 src/db/database.py _init_postgresql 与集成测试调用）；
+    P4-B 事件闭环 4 表（密钥/nonce/payload/example_orders）复用各模块的 DDL 常量
+    幂等补建（单一事实源在 event_sources/internal_event_example，部署基线
+    deploy/init-postgres.sql 逐语句一致）"""
     cursor = conn.cursor()
     for ddl in DDL_STATEMENTS:
         cursor.execute(ddl)
+    from src.weixin_marketing.event_sources import _TABLES_DDL as _EVENT_SOURCE_DDL
+    from src.weixin_marketing.internal_event_example import _EXAMPLE_DDL
+
+    for ddl in (*_EVENT_SOURCE_DDL, _EXAMPLE_DDL):
+        cursor.execute(ddl)
     conn.commit()
-    logger.info("weixin_marketing 表初始化完成（bs_weixin_marketing_* 7 张业务表）")
+    logger.info("weixin_marketing 表初始化完成（7 张业务表 + P4-B 事件闭环 4 表）")
 
 
 def ensure_tables() -> None:

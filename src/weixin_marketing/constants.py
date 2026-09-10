@@ -90,9 +90,28 @@ ACCOUNT_BINDING_STATUSES = (ACCOUNT_BINDING_STATUS_ACTIVE, ACCOUNT_BINDING_STATU
 
 # ==================== assets 状态 ====================
 
+# 素材删除为硬删（行+文件，R57），无软删中间态
 ASSET_STATUS_ACTIVE = "active"
-ASSET_STATUS_PENDING_DELETE = "pending_delete"
-ASSET_STATUSES = (ASSET_STATUS_ACTIVE, ASSET_STATUS_PENDING_DELETE)
+
+# P4-A：素材存储场景子目录（storage/tenants/{tid}/weixin-marketing/）
+ASSET_STORAGE_SCENE = "weixin-marketing"
+
+# MIME 实测白名单：PIL 解码头字节得到的 format → 规范 MIME 与扩展名。
+# 客户端声明的 Content-Type 不作为存储依据（伪 mime 以实测为准）。
+ASSET_MIME_BY_PIL_FORMAT = {
+    "PNG": "image/png",
+    "JPEG": "image/jpeg",
+    "GIF": "image/gif",
+    "WEBP": "image/webp",
+    "BMP": "image/bmp",
+}
+ASSET_EXTENSION_BY_MIME = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/gif": ".gif",
+    "image/webp": ".webp",
+    "image/bmp": ".bmp",
+}
 
 # ==================== 审计 action（bs_weixin_marketing_audit_events）====================
 
@@ -113,6 +132,10 @@ AUDIT_GROUP_BINDING_CREATED = "group_binding_created"
 AUDIT_GROUP_BINDING_VERIFIED = "group_binding_verified"
 AUDIT_GROUP_BINDING_REJECTED = "group_binding_rejected"
 AUDIT_DEVICE_PREFLIGHT_REQUESTED = "device_preflight_requested"
+# P4-A 素材动作（details 只存引用/摘要，不写图片内容）
+AUDIT_ASSET_UPLOADED = "asset_uploaded"
+AUDIT_ASSET_DELETED = "asset_deleted"
+AUDIT_ASSET_CLEANED = "asset_cleaned"
 
 ACTOR_TYPE_USER = "user"
 ACTOR_TYPE_SYSTEM = "system"
@@ -124,6 +147,11 @@ DEFAULT_MAX_BLOCKS = 20
 DEFAULT_MIN_INTERVAL_SECONDS = 300
 DEFAULT_DISPATCH_BATCH_SIZE = 20
 DEFAULT_RETENTION_DAYS = 90
+# P4-A 素材上传约束（可经 yaml weixin_marketing 节覆盖）
+DEFAULT_ASSET_MAX_BYTES = 10 * 1024 * 1024  # 单图 10 MiB
+DEFAULT_ASSET_MAX_PIXELS = 25_000_000  # 宽×高上限（25 MP）
+DEFAULT_ASSETS_CLEANUP_INTERVAL_SECONDS = 3600  # 过期素材清理 tick 间隔
+DEFAULT_ASSETS_CLEANUP_BATCH = 100
 DEFAULT_QUOTA_WINDOW_SECONDS = 3600
 DEFAULT_QUOTA_TENANT_LIMIT = 100
 DEFAULT_QUOTA_TASK_LIMIT = 30

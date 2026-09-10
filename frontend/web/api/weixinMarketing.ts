@@ -516,6 +516,7 @@ export const WX_ERROR_CODES = {
   IDEMPOTENCY_KEY_INVALID: 'IDEMPOTENCY_KEY_INVALID',
   VERIFY_FAILED: 'VERIFY_FAILED',
   PREFLIGHT_FAILED: 'PREFLIGHT_FAILED',
+  ASSET_IN_USE: 'ASSET_IN_USE',
   NETWORK_ERROR: 'NETWORK_ERROR',
 } as const
 
@@ -803,5 +804,207 @@ export function preflightDevice(deviceId: string): Promise<PreflightResult> {
     method: 'POST',
     body: jsonBody({}),
     idempotencyKey: newIdempotencyKey('wxm-pf'),
+  })
+}
+
+// ==================== 图片素材（P4-A，R57）====================
+
+/** assets.status（constants.ASSET_STATUS_ACTIVE——硬删无软删中间态） */
+export type AssetStatus = 'active'
+
+/** GET /assets items / POST /assets data（assets.py 返回 dict） */
+export interface AssetItem {
+  id: string
+  mime: string
+  size: number
+  width: number | null
+  height: number | null
+  sha256?: string
+  status: AssetStatus
+  created_at?: string
+  retention_until?: string | null
+  /** 非过期 revision（draft/published）引用计数——删除保护的依据 */
+  reference_count?: number
+}
+
+/** GET /assets data（含 images_enabled 供前端上传门禁展示） */
+export interface AssetListResult {
+  items: AssetItem[]
+  total: number
+  page: number
+  page_size: number
+  images_enabled: boolean
+}
+
+export function listAssets(
+  params: { page?: number; page_size?: number } = {},
+  signal?: AbortSignal,
+): Promise<AssetListResult> {
+  return request(`/assets${query(params)}`, { signal })
+}
+
+export function getAsset(assetId: string): Promise<AssetItem> {
+  return request(`/assets/${encodeURIComponent(assetId)}`)
+}
+
+export function deleteAsset(assetId: string): Promise<{ asset_id: string; deleted: boolean }> {
+  return request(`/assets/${encodeURIComponent(assetId)}`, { method: 'DELETE' })
+}
+
+/** XHR 上传句柄：promise 解析为素材元数据；abort() 取消（服务端无部分状态可回收） */
+export interface AssetUploadHandle {
+  promise: Promise<AssetItem>
+  abort: () => void
+}
+
+/**
+ * 上传素材（multipart 单文件；XHR 支持进度与取消）。
+ * 服务端 MIME 以实测为准（伪 mime 会被按实际格式收录或拒绝）；失败抛 WeixinApiError。
+ */
+export function uploadAsset(
+  file: File,
+  opts: { signal?: AbortSignal; onProgress?: (percent: number) => void } = {},
+): AssetUploadHandle {
+  const xhr = new XMLHttpRequest()
+  const promise = new Promise<AssetItem>((resolve, reject) => {
+    xhr.open('POST', `${API_BASE}/assets`)
+    for (const [key, value] of Object.entries(getAuthHeader())) xhr.setRequestHeader(key, value)
+    xhr.responseType = 'json'
+    xhr.upload.onprogress = e => {
+      if (e.lengthComputable && opts.onProgress) {
+        opts.onProgress(Math.round((e.loaded / e.total) * 100))
+      }
+    }
+    xhr.onload = () => {
+      const body = xhr.response as Envelope<AssetItem> | null
+      if (xhr.status >= 200 && xhr.status < 300 && body && body.success) {
+        resolve(body.data as AssetItem)
+      } else {
+        reject(
+          new WeixinApiError(
+            body?.error || `上传失败（HTTP ${xhr.status}）`,
+            xhr.status,
+            body?.code || WX_ERROR_CODES.INTERNAL_ERROR,
+            body?.field_errors || [],
+          ),
+        )
+      }
+    }
+    xhr.onerror = () =>
+      reject(new WeixinApiError('网络异常，上传未送达（可重试）', 0, WX_ERROR_CODES.NETWORK_ERROR))
+    xhr.onabort = () => reject(new DOMException('上传已取消', 'AbortError'))
+    const form = new FormData()
+    form.append('file', file, file.name)
+    if (opts.signal) {
+      if (opts.signal.aborted) {
+        reject(new DOMException('上传已取消', 'AbortError'))
+        return
+      }
+      opts.signal.addEventListener('abort', () => xhr.abort(), { once: true })
+    }
+    xhr.send(form)
+  })
+  return { promise, abort: () => xhr.abort() }
+}
+
+/**
+ * 取素材受控字节 → blob URL（<img> 预览用；带鉴权，无法直接 <img src>）。
+ * 会话级缓存：同一素材只拉取一次；页面刷新自然释放，不写持久存储。
+ */
+const assetObjectUrlCache = new Map<string, Promise<string>>()
+
+export function fetchAssetObjectUrl(assetId: string): Promise<string> {
+  const cached = assetObjectUrlCache.get(assetId)
+  if (cached) return cached
+  const promise = (async () => {
+    const res = await fetch(`${API_BASE}/assets/${encodeURIComponent(assetId)}/content`, {
+      headers: { ...getAuthHeader() },
+    })
+    if (!res.ok) throw new WeixinApiError('素材预览加载失败', res.status, WX_ERROR_CODES.INTERNAL_ERROR)
+    const blob = await res.blob()
+    return URL.createObjectURL(blob)
+  })().catch(err => {
+    assetObjectUrlCache.delete(assetId)
+    throw err
+  })
+  assetObjectUrlCache.set(assetId, promise)
+  return promise
+}
+
+/** 素材引用保护冲突（409 ASSET_IN_USE）——文案化引导解引用 */
+export function isAssetInUse(err: unknown): err is WeixinApiError {
+  return err instanceof WeixinApiError && err.code === WX_ERROR_CODES.ASSET_IN_USE
+}
+
+// ==================== 事件源（P4-B，R57）====================
+
+/** event source.source_type（event_sources.SOURCE_TYPES） */
+export type EventSourceType = 'internal' | 'webhook'
+
+/** 密钥版本元数据（视图只回元数据——明文/密文绝不返回） */
+export interface EventSourceKeyInfo {
+  key_id: string
+  key_version: number
+  status: 'active' | 'retiring' | 'retired'
+  retire_at?: string | null
+}
+
+/** GET /event-sources items（event_sources._get_source_view：凭据掩码视图） */
+export interface EventSourceItem {
+  id: string
+  tenant_id?: string
+  source_ref: string
+  source_type: EventSourceType
+  status: string
+  allowed_event_types?: string[] | null
+  key_ref?: string | null
+  key_version?: string | null
+  keys: EventSourceKeyInfo[]
+  /** webhook 源的接收路径（相对站点根；POST + 签名头） */
+  webhook_url?: string
+  created_at?: string
+  updated_at?: string
+}
+
+/** POST /event-sources data：明文 secret 仅本次响应一次性返回 */
+export interface EventSourceCreateResult {
+  source: EventSourceItem
+  secret: string | null
+  key_id: string | null
+}
+
+/** POST /event-sources/{id}/rotate-key data：新明文 secret 仅本次响应一次性返回 */
+export interface RotateKeyResult {
+  source_id: string
+  key_id: string
+  key_version: number
+  secret: string
+  rotate_window_seconds: number
+}
+
+export function listEventSources(
+  params: { source_type?: EventSourceType | ''; page?: number; page_size?: number } = {},
+  signal?: AbortSignal,
+): Promise<ListResult<EventSourceItem>> {
+  return request(`/event-sources${query(params)}`, { signal })
+}
+
+export function createEventSource(input: {
+  source_ref: string
+  source_type: EventSourceType
+  allowed_event_types?: string[]
+  description?: string
+}): Promise<EventSourceCreateResult> {
+  return request('/event-sources', {
+    method: 'POST',
+    body: jsonBody(input),
+    idempotencyKey: newIdempotencyKey('wxm-es'),
+  })
+}
+
+export function rotateEventSourceKey(sourceId: string): Promise<RotateKeyResult> {
+  return request(`/event-sources/${encodeURIComponent(sourceId)}/rotate-key`, {
+    method: 'POST',
+    body: jsonBody({}),
   })
 }
