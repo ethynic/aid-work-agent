@@ -41,6 +41,8 @@ export async function listExternalUsers(params: {
   source?: string
   referrer_user_id?: string
   channel_chat_id?: string
+  referral_start_date?: string
+  referral_end_date?: string
   page?: number
   page_size?: number
 }): Promise<{
@@ -56,6 +58,8 @@ export async function listExternalUsers(params: {
   if (params.source) searchParams.set('source', params.source)
   if (params.referrer_user_id) searchParams.set('referrer_user_id', params.referrer_user_id)
   if (params.channel_chat_id) searchParams.set('channel_chat_id', params.channel_chat_id)
+  if (params.referral_start_date) searchParams.set('referral_start_date', params.referral_start_date)
+  if (params.referral_end_date) searchParams.set('referral_end_date', params.referral_end_date)
   if (params.page) searchParams.set('page', params.page.toString())
   if (params.page_size) searchParams.set('page_size', params.page_size.toString())
 

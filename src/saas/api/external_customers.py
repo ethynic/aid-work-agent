@@ -72,6 +72,8 @@ async def list_external_users(
     source: Optional[str] = None,
     referrer_user_id: Optional[str] = None,
     channel_chat_id: Optional[str] = None,
+    referral_start_date: Optional[str] = None,
+    referral_end_date: Optional[str] = None,
     page: int = 1,
     page_size: int = 20,
 ):
@@ -82,6 +84,8 @@ async def list_external_users(
         source: 用户来源筛选（可选）
         referrer_user_id: 引流员工筛选（可选，引流统计下钻时传入）
         channel_chat_id: 客服账号（open_kfid）筛选（可选，客服账号下拉框筛选时传入）
+        referral_start_date: 引流起始日期（可选，含当日，格式 YYYY-MM-DD，引流统计下钻时传入）
+        referral_end_date: 引流结束日期（可选，含当日）
         page: 页码
         page_size: 每页数量
     """
@@ -101,6 +105,8 @@ async def list_external_users(
         referrer_user_id=referrer_user_id,
         visible_kf_ids=visible_kf_ids,
         channel_chat_id=channel_chat_id,
+        referral_start_date=referral_start_date,
+        referral_end_date=referral_end_date,
         page=page,
         page_size=page_size,
     )

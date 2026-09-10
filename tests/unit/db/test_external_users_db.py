@@ -63,6 +63,35 @@ class TestListExternalUsersCombinationGranularity:
         assert "cr.referrer_user_id = %s" in count_sql
         assert "emp_001" in count_params
 
+    def test_referral_date_filter_adds_conditions(self):
+        """referral_start_date/referral_end_date 应加入 cr.created_at 条件，end_date 按次日零点语义"""
+        _, calls = self._run(
+            tenant_id="tenant_001",
+            referral_start_date="2026-09-10",
+            referral_end_date="2026-09-10",
+            page=1,
+            page_size=20,
+        )
+        count_sql = calls[0][0][0]
+        count_params = calls[0][0][1]
+        assert "cr.created_at >= %s" in count_sql
+        assert "cr.created_at < (%s::date + INTERVAL '1 day')" in count_sql
+        assert "2026-09-10" in count_params
+        # 列表查询同口径
+        list_sql = calls[1][0][0]
+        assert "cr.created_at >= %s" in list_sql
+        assert "cr.created_at < (%s::date + INTERVAL '1 day')" in list_sql
+
+    def test_no_referral_date_filter_no_condition(self):
+        """不传引流日期时不应出现 cr.created_at 条件"""
+        _, calls = self._run(
+            tenant_id="tenant_001",
+            page=1,
+            page_size=20,
+        )
+        count_sql = calls[0][0][0]
+        assert "cr.created_at" not in count_sql
+
     def test_username_search_adds_conditions(self):
         """username 搜索应追加 username/nickname ILIKE 条件"""
         _, calls = self._run(

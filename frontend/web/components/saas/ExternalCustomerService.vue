@@ -47,7 +47,7 @@
       <div class="w-96 border-r border-default bg-surface flex flex-col">
         <!-- 引流员工筛选条件 -->
         <div v-if="referrerFilterName" class="flex items-center gap-2 px-4 py-2 bg-primary-50 border-b border-primary-200 text-sm text-primary-700">
-          <span class="flex-1">{{ referrerFilterName }} 的引流客户</span>
+          <span class="flex-1">{{ referrerFilterName }} 的引流客户（{{ referrerFilterRangeText }}）</span>
           <BaseButton intent="ghost" size="sm" @click="clearReferrerFilter">清除</BaseButton>
         </div>
         <!-- 搜索栏 -->
@@ -646,6 +646,14 @@ const referrerColumns = [
 // 引流员工筛选（Tab1 客户列表按员工过滤，来自引流统计下钻）
 const referrerFilterUserId = ref('')
 const referrerFilterName = ref('')
+// 下钻时快照引流统计 Tab 当前选中的日期段（引流日期过滤，与统计口径一致）
+const referrerFilterStartDate = ref('')
+const referrerFilterEndDate = ref('')
+const referrerFilterRangeText = computed(() => {
+  if (!referrerFilterStartDate.value) return '全部时间'
+  if (referrerFilterStartDate.value === referrerFilterEndDate.value) return referrerFilterStartDate.value
+  return `${referrerFilterStartDate.value} ~ ${referrerFilterEndDate.value}`
+})
 
 // 搜索条件
 const searchUsername = ref('')
@@ -744,6 +752,8 @@ async function loadUsers() {
     const res = await listExternalUsers({
       username: searchUsername.value || undefined,
       referrer_user_id: referrerFilterUserId.value || undefined,
+      referral_start_date: referrerFilterStartDate.value || undefined,
+      referral_end_date: referrerFilterEndDate.value || undefined,
       channel_chat_id: selectedKfId.value || undefined,
       page: userPage.value,
       page_size: userPageSize.value,
@@ -938,10 +948,19 @@ function formatRatio(ratio: number | null | undefined): string {
   return `${ratio}%`
 }
 
-// 下钻：点击员工行 → 切回客户对话记录 Tab，客户列表按该员工过滤
+// 下钻：点击员工行 → 切回客户对话记录 Tab，客户列表按该员工 + 当前日期段过滤
 function drillIntoReferrer(row: any) {
   referrerFilterUserId.value = row.referrer_user_id || ''
   referrerFilterName.value = row.referrer_name || '该员工'
+  // 快照引流统计 Tab 当前选中的日期段，保证下钻数字与列表条数一致
+  if (activeRange.value === 'custom') {
+    referrerFilterStartDate.value = customStartDate.value || ''
+    referrerFilterEndDate.value = customEndDate.value || ''
+  } else {
+    const range = computeRangeDates(activeRange.value)
+    referrerFilterStartDate.value = range.start_date
+    referrerFilterEndDate.value = range.end_date
+  }
   userPage.value = 1
   selectedUserId.value = ''
   selectedChannelChatId.value = ''
@@ -959,6 +978,8 @@ function drillIntoReferrer(row: any) {
 function clearReferrerFilter() {
   referrerFilterUserId.value = ''
   referrerFilterName.value = ''
+  referrerFilterStartDate.value = ''
+  referrerFilterEndDate.value = ''
   userPage.value = 1
   loadUsers()
 }

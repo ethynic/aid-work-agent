@@ -371,6 +371,8 @@ class UserDB:
         referrer_user_id: str = None,
         visible_kf_ids: Optional[list] = None,
         channel_chat_id: str = None,
+        referral_start_date: str = None,
+        referral_end_date: str = None,
         page: int = 1,
         page_size: int = 20,
     ) -> dict:
@@ -386,6 +388,9 @@ class UserDB:
             username: 用户名搜索（可选）
             source: 用户来源筛选（可选）
             referrer_user_id: 引流员工筛选（可选，命中则只返回该员工引流的客户）
+            referral_start_date: 引流起始日期（可选，含当日，格式 YYYY-MM-DD），过滤基准 = customer_referrals.created_at，
+                与引流统计 Tab 同口径（引流统计下钻时传入）
+            referral_end_date: 引流结束日期（可选，含当日，后端按 < 次日零点语义处理）
             visible_kf_ids: 普通用户可见的客服账号 open_kfid 列表（None 表示管理员全量可见）。
                 非 None 时，只返回「在该账号下有会话的客户」，不返回客户在其他客服账号下的会话
             page: 页码，从1开始
@@ -430,6 +435,14 @@ class UserDB:
             if referrer_user_id:
                 conditions.append("cr.referrer_user_id = %s")
                 params.append(referrer_user_id)
+
+            if referral_start_date:
+                conditions.append("cr.created_at >= %s")
+                params.append(referral_start_date)
+            if referral_end_date:
+                # end_date 含当日：< 次日零点语义，与 referral_stats 同口径
+                conditions.append("cr.created_at < (%s::date + INTERVAL '1 day')")
+                params.append(referral_end_date)
 
             if visible_kf_ids is not None:
                 # 普通用户（引流员工）只能看到自己负责的客服账号下的对话记录
