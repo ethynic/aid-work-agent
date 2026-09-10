@@ -223,8 +223,11 @@ iter 6  LLM 输出 Markdown 表格 + 文字总结          ← 工具返回主�
    - 如果 artifacts 里已有 type=chart 的产物且标题匹配用户要的图 → 直接复用，不要重新调用 analyze_data
    - 如果 artifacts 里已有 type=table 的产物且 preview 已含答案 → 直接基于 preview 回答
 3. 仅当 artifacts 不足以回答时，才重新调用 analyze_data
-4. 用户要「下载图表」时：从 artifacts 找 type=chart 的 download_path，调用 download/cp 工具注册下载，不要重新分析
+4. 强制交付（最高优先级）：给出最终回复前，必须把 artifacts 中所有 ready_for_download=true 的产物逐个调用 cp 工具注册给用户下载——图表 PNG 和表格文件都要交，一个都不能漏；用户没有主动要图，也必须先交图。只回复文字描述而不交付图表文件，视为本次任务未完成。
+5. 用户主动要「下载图表」时：从 artifacts 找 type=chart 的 download_path 调用 cp 注册下载即可（通常第 4 步已交付，补交遗漏的即可），不要重新分析
 ```
+
+> 2026-09-10 更新：原第 4 条把 cp 图表定义为"用户索要才做"，导致生产环境（tenant_128a10da9e2c，2026-09-08）出现"分析生成了 2 张图但主智能体只交付 xlsx 表格、用户追问'有图吗'才补交"的事故。现将交付改为强制动作（新增第 4 条），并同步在 workflow 分区明确"文件类含图表 PNG"。若提示词约束仍偶发漏交，下一步方案是在 `smart_analysis_tool.py` 中代码级自动注册 artifacts 交付。
 
 ### 3.4 可选增强：会话级 Artifact 缓存（P2，后做）
 
