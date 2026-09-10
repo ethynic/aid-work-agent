@@ -21,6 +21,7 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 from src.db.database import get_db_connection
+from src.core.text_sanitizer import sanitize_text, sanitize_value
 from src.knowledge.embedding.embedding_client import TextEmbeddingV3Client
 from src.knowledge.vector_db.vector_db import get_vector_db
 from src.saas.context import get_current_tenant_id
@@ -733,6 +734,11 @@ async def update_schema(doc_id: int, req: SchemaSave, request: Request):
     """更新 schema（重新生成嵌入）"""
     tenant_id = get_current_tenant_id()
 
+    # 请求体可能携带孤立代理字符，写库/向量化前统一清洗
+    req.table_name = sanitize_text(req.table_name)
+    req.description = sanitize_text(req.description)
+    req.source_info = sanitize_text(req.source_info)
+    req.columns = sanitize_value(req.columns)
     schema_text = generate_schema_text(req.table_name, req.description, req.columns)
 
     try:
@@ -884,7 +890,7 @@ async def batch_save_relations(req: RelationBatch, request: Request):
     tenant_id = get_current_tenant_id()
 
     try:
-        relations_data = [r.dict() for r in req.relations]
+        relations_data = sanitize_value([r.dict() for r in req.relations])
 
         def _save():
             with get_db_connection() as conn:
@@ -998,7 +1004,7 @@ async def add_relation(req: RelationItem, request: Request):
     tenant_id = get_current_tenant_id()
 
     try:
-        relation_data = req.dict()
+        relation_data = sanitize_value(req.dict())
 
         def _add():
             with get_db_connection() as conn:

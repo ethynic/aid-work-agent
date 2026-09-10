@@ -8,8 +8,9 @@ import uuid
 from contextlib import closing
 from pathlib import Path
 from typing import Optional, List, Dict, Any
-import logging
+from loguru import logger
 
+from src.core.text_sanitizer import sanitize_text
 from src.knowledge.parsers.parser_factory import parser_factory
 from src.knowledge.chunker import TextChunker
 from src.knowledge.embedding.embedding_client import TextEmbeddingV3Client, sanitize_error_info
@@ -22,8 +23,6 @@ from src.services.billing import (
     calculate_credit_cost_with_breakdown,
     calculate_embedding_credit_cost_with_breakdown,
 )
-
-logger = logging.getLogger(__name__)
 
 
 class KnowledgeBaseService:
@@ -348,7 +347,7 @@ class KnowledgeBaseService:
                 result.append(d)
             return result
         except Exception as e:
-            logger.error(f"获取分类列表失败: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"获取分类列表失败: {e}")
             return []
 
     def create_category(self, tenant_id: str, source_type: Optional[str] = None, display_name: Optional[str] = None, parent_id: Optional[int] = None) -> Dict[str, Any]:
@@ -392,7 +391,7 @@ class KnowledgeBaseService:
             err = str(e)
             if "unique" in err.lower() or "duplicate" in err.lower():
                 return {"success": False, "error": "该代号已存在", "status": 409}
-            logger.error(f"创建分类失败: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"创建分类失败: {e}")
             return {"success": False, "error": "创建分类失败"}
 
     def update_category(self, category_id: int, tenant_id: str, display_name: str) -> Dict[str, Any]:
@@ -409,7 +408,7 @@ class KnowledgeBaseService:
                 conn.commit()
                 return {"success": True}
         except Exception as e:
-            logger.error(f"更新分类失败: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"更新分类失败: {e}")
             return {"success": False, "error": "更新分类失败"}
 
     def delete_category(self, category_id: int, tenant_id: str) -> Dict[str, Any]:
@@ -431,7 +430,7 @@ class KnowledgeBaseService:
                 conn.commit()
                 return {"success": True}
         except Exception as e:
-            logger.error(f"删除分类失败: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"删除分类失败: {e}")
             return {"success": False, "error": "删除分类失败"}
 
     async def upload_document(
@@ -468,13 +467,17 @@ class KnowledgeBaseService:
 
             parse_result = await parser.parse(file_path)
 
+            # 源头清洗：PDF ToUnicode 缺陷可能产生孤立代理字符（如 \ud83c），
+            # 不清洗会导致写库时 UTF-8 编码失败（UnicodeEncodeError）
+            parse_result.text = sanitize_text(parse_result.text or "")
+
             # 2. 分块
             if parse_result.precomputed_chunks:
                 # 结构化分块旁路（如 Excel 行级分块）：解析器已完成语义分块，
                 # 跳过 TextChunker；文件名前缀注入每个 chunk，保证任意块可按文件名命中
                 chunks = []
                 for i, pc in enumerate(parse_result.precomputed_chunks):
-                    text = f"文档标题：{file_filename}\n{pc.text}"
+                    text = f"文档标题：{file_filename}\n{sanitize_text(pc.text)}"
                     chunks.append({
                         "text": text,
                         "tokens": self.chunker._estimate_tokens(text),
@@ -584,7 +587,7 @@ class KnowledgeBaseService:
                     summary_usage=summary_usage,
                 )
             except Exception as billing_err:
-                logger.error(f"知识库文档计费失败: {billing_err}", exc_info=True)
+                logger.opt(exception=True).error(f"知识库文档计费失败: {billing_err}")
 
             return {
                 "success": True,
@@ -599,7 +602,7 @@ class KnowledgeBaseService:
             # 避免重复过滤
             if "=***" not in error_str:
                 error_str = sanitize_error_info(error_str)
-            logger.error(f"后端日志：文档上传失败: {error_str}", exc_info=True)
+            logger.opt(exception=True).error(f"后端日志：文档上传失败: {error_str}")
             return {
                 "success": False,
                 "error": "文档上传失败，请稍后重试",
@@ -678,7 +681,7 @@ class KnowledgeBaseService:
             return {"success": True, "message": "文档已删除"}
 
         except Exception as e:
-            logger.error(f"后端日志：文档删除失败: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"后端日志：文档删除失败: {e}")
             return {"success": False, "error": str(e)}
 
     def move_documents(self, tenant_id: str, doc_ids: List[int],
@@ -715,7 +718,7 @@ class KnowledgeBaseService:
         except ValueError as e:
             return {"success": False, "error": str(e), "status": 400}
         except Exception as e:
-            logger.error(f"后端日志：文档移动失败: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"后端日志：文档移动失败: {e}")
             return {"success": False, "error": "移动文档失败", "debug": sanitize_error_info(str(e))}
 
     def count_documents(self, user_id: Optional[int] = None, tenant_id: Optional[str] = None, source_type: Optional[str] = None, sub_category: Optional[str] = None, global_view: bool = False) -> int:
@@ -768,7 +771,7 @@ class KnowledgeBaseService:
                 count = cursor.fetchone()["count"]
                 return count
         except Exception as e:
-            logger.error(f"后端日志：获取文档总数失败: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"后端日志：获取文档总数失败: {e}")
             return 0
 
     def list_documents(
@@ -846,7 +849,7 @@ class KnowledgeBaseService:
                 return result
 
         except Exception as e:
-            logger.error(f"后端日志：获取文档列表失败: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"后端日志：获取文档列表失败: {e}")
             return []
 
     def get_document_chunks(self, doc_id: int, tenant_id: Optional[str] = None, global_view: bool = False) -> List[Dict[str, Any]]:
@@ -897,7 +900,7 @@ class KnowledgeBaseService:
                 ]
 
         except Exception as e:
-            logger.error(f"后端日志：获取文档分块失败: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"后端日志：获取文档分块失败: {e}")
             return []
 
     async def search_documents(
@@ -1027,7 +1030,7 @@ class KnowledgeBaseService:
             error_str = str(e)
             if "=***" not in error_str:
                 error_str = sanitize_error_info(error_str)
-            logger.error(f"后端日志：文档搜索失败: {error_str}", exc_info=True)
+            logger.opt(exception=True).error(f"后端日志：文档搜索失败: {error_str}")
             return {
                 "success": False,
                 "error": "搜索失败，请稍后重试",

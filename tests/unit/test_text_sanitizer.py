@@ -163,3 +163,39 @@ async def test_stream_with_pool_sanitizes_messages():
 
     assert chunks == ["chunk"]
     assert captured["messages"][0]["content"] == "含代理"
+
+
+# ---------------------------------------------------------------------------
+# sanitize_value（递归结构清洗，工具结果/复合数据出口用）
+# ---------------------------------------------------------------------------
+
+
+def test_sanitize_value_str():
+    from src.core.text_sanitizer import sanitize_value
+
+    assert sanitize_value("含\ud83c代理") == "含代理"
+
+
+def test_sanitize_value_nested_dict_list():
+    from src.core.text_sanitizer import sanitize_value
+
+    dirty = {"success": True, "items": [{"text": "a\ud83cb", "n": 1}], "raw": b"bytes"}
+    cleaned = sanitize_value(dirty)
+    assert cleaned["items"][0]["text"] == "ab"
+    assert cleaned["items"][0]["n"] == 1
+    assert cleaned["raw"] == b"bytes"
+
+
+def test_sanitize_value_clean_returns_same_object():
+    from src.core.text_sanitizer import sanitize_value
+
+    value = {"a": [1, "x", {"b": "y"}]}
+    assert sanitize_value(value) is value
+
+
+def test_sanitize_value_tuple():
+    from src.core.text_sanitizer import sanitize_value
+
+    cleaned = sanitize_value(("x\ud83cy", 2))
+    assert cleaned == ("xy", 2)
+    assert isinstance(cleaned, tuple)

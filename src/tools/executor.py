@@ -11,6 +11,7 @@ from loguru import logger
 from .base import BaseTool
 from .registry import ToolRegistry
 from .context import ToolExecutionContext, tool_execution_scope
+from src.core.text_sanitizer import sanitize_value
 
 
 class ToolExecutor:
@@ -113,6 +114,9 @@ class ToolExecutor:
             logger.info(f"执行工具: {tool_name}")
             with tool_execution_scope(context):
                 result = await tool.execute(**parameters)
+            # 工具提取文本可能含孤立代理字符（如 PDF \ud83c），在出口统一清洗，
+            # 防止 SSE 编码中断流、会话历史落库报 UnicodeEncodeError
+            result = sanitize_value(result)
             logger.info(f"工具执行成功: {tool_name}")
             return result
         except Exception as e:

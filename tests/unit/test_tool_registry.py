@@ -174,3 +174,19 @@ class TestToolExecutorTypeCoercion:
 
         assert tool.last_kwargs["top_k"] == 3
         assert isinstance(tool.last_kwargs["top_k"], int)
+
+
+class TestToolExecutorResultSanitize:
+    """工具结果出口统一清洗孤立代理字符（SSE/落库前最后一道防线）"""
+
+    @pytest.mark.asyncio
+    async def test_execute_sanitizes_surrogates_in_result(self, mock_tool):
+        registry = ToolRegistry()
+        registry.register(mock_tool(
+            name="pdf_read",
+            execute_return={"success": True, "text": "标题\ud83c正文", "meta": {"page": 1}},
+        ))
+        executor = ToolExecutor(registry=registry)
+        result = await executor.execute("pdf_read", {})
+        assert result["text"] == "标题正文"
+        result["text"].encode("utf-8")

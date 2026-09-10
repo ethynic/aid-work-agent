@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 from loguru import logger
 
 from src.db.database import get_db_connection
+from src.core.text_sanitizer import sanitize_text, sanitize_value
 from src.knowledge.embedding.embedding_client import TextEmbeddingV3Client
 from src.knowledge.vector_db.vector_db import get_vector_db
 
@@ -69,6 +70,12 @@ async def save_schema_to_knowledge(
         {"success": True, "doc_id": int, "message": str} 或
         {"success": False, "error": str}
     """
+    # 上传文件/HTTP 请求体可能携带孤立代理字符（如 PDF 复制的 \ud83c），
+    # 写库前统一清洗（schema_text 与 metadata 均由这些字段派生）
+    table_name = sanitize_text(table_name)
+    description = sanitize_text(description)
+    source_info = sanitize_text(source_info)
+    columns = sanitize_value(columns)
     schema_text = generate_schema_text(table_name, description, columns)
 
     try:

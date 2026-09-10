@@ -24,10 +24,35 @@ def sanitize_text(text: str) -> str:
     """清洗单个文本；无异常字符时返回原对象（零拷贝）"""
     if _UNSAFE_CHARS_RE.search(text):
         logger.warning(
-            f"后端日志：LLM/Embedding 输入含异常字符，已剔除（原文长度={len(text)}）"
+            f"后端日志：文本含异常字符，已剔除（原文长度={len(text)}）"
         )
         return _UNSAFE_CHARS_RE.sub("", text)
     return text
+
+
+def sanitize_value(value: Any) -> Any:
+    """递归清洗任意结构（dict/list/tuple/str），供工具结果等复合数据出口使用。
+
+    只清洗字符串值，键名与其他类型原样保留；无异常字符时返回原对象（零拷贝）。
+    """
+    if isinstance(value, str):
+        return sanitize_text(value)
+    if isinstance(value, dict):
+        changed = False
+        cleaned: Dict[Any, Any] = {}
+        for k, v in value.items():
+            nv = sanitize_value(v)
+            if nv is not v:
+                changed = True
+            cleaned[k] = nv
+        return cleaned if changed else value
+    if isinstance(value, list):
+        items = [sanitize_value(v) for v in value]
+        return value if all(n is o for n, o in zip(items, value)) else items
+    if isinstance(value, tuple):
+        items = tuple(sanitize_value(v) for v in value)
+        return value if all(n is o for n, o in zip(items, value)) else items
+    return value
 
 
 def sanitize_texts(texts: List[str]) -> List[str]:
