@@ -7,6 +7,22 @@
 
     <!-- 统计卡片 -->
     <div v-else class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      <!-- 续费提醒 -->
+      <button
+        type="button"
+        class="bg-surface rounded-xl shadow-sm p-6 border border-default hover:border-danger-400 hover:shadow-md transition-all text-left cursor-pointer flex flex-col"
+        @click="goTo('/portal/tenants?renewal=1')"
+      >
+        <div class="flex items-center justify-between mb-3">
+          <span class="text-sm text-muted">续费提醒</span>
+          <svg class="w-5 h-5 text-danger-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 9v4m0 4h.01M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z" />
+          </svg>
+        </div>
+        <div :class="stats.renewal_pending_count > 0 ? 'text-danger-600' : 'text-default'" class="text-3xl font-bold">{{ stats.renewal_pending_count }}</div>
+        <div class="text-xs text-muted mt-2">待续费租户 · 点击查看详情</div>
+      </button>
+
       <!-- 租户数量 -->
       <button
         type="button"
@@ -53,22 +69,6 @@
         </div>
         <div class="text-3xl font-bold text-default">{{ stats.today_conversation_count }}</div>
         <div class="text-xs text-muted mt-2">全平台今日对话总数 · 点击查看详情</div>
-      </button>
-
-      <!-- 续费提醒 -->
-      <button
-        type="button"
-        class="bg-surface rounded-xl shadow-sm p-6 border border-default hover:border-danger-400 hover:shadow-md transition-all text-left cursor-pointer flex flex-col"
-        @click="goTo('/portal/tenants?renewal=1')"
-      >
-        <div class="flex items-center justify-between mb-3">
-          <span class="text-sm text-muted">续费提醒</span>
-          <svg class="w-5 h-5 text-danger-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M12 9v4m0 4h.01M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z" />
-          </svg>
-        </div>
-        <div :class="stats.renewal_pending_count > 0 ? 'text-danger-600' : 'text-default'" class="text-3xl font-bold">{{ stats.renewal_pending_count }}</div>
-        <div class="text-xs text-muted mt-2">待续费租户 · 点击查看详情</div>
       </button>
     </div>
 
