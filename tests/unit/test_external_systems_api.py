@@ -177,6 +177,61 @@ class TestGetSsoUrl:
         assert result["success"] is True
         assert result["data"]["url"] == "https://erp.example.com/?sso_ticket=ticket"
 
+    async def test_delegate_login_passes_user_name(self, authed, monkeypatch):
+        """委托登录随请求传用户姓名（自动建号用）；用户无姓名时传 None（不拼 name）"""
+        monkeypatch.setattr("src.services.tenant_api_doc.load_tenant_doc", lambda tid: SSO_META_DOC)
+        monkeypatch.setattr(
+            "src.services.recap.tasks.external_push._get_agent_token", lambda tid, name: "agt"
+        )
+        monkeypatch.setattr(
+            external_systems, "get_current_user",
+            lambda req: {"user_id": "u1", "phone": "13800000000", "nickname": "王顾问"},
+        )
+        calls = []
+
+        def _login(tenant_id, mobile, agent_token, login_url, force_refresh=False, name=None):
+            calls.append({"force_refresh": force_refresh, "name": name})
+            return {"client_token": "ct"}
+
+        monkeypatch.setattr("src.services.recap.tasks.external_push._delegate_login", _login)
+        monkeypatch.setattr(
+            "src.services.recap.tasks.external_push._post_json",
+            lambda *a, **kw: {"Code": 0, "Response": {"sso_ticket": "t"}},
+        )
+        result = await external_systems.get_sso_url("pre_sales", _request(TENANT))
+        assert result["success"] is True
+        assert calls == [{"force_refresh": False, "name": "王顾问"}]
+
+    async def test_delegate_login_force_refresh_passes_user_name(self, authed, monkeypatch):
+        """Code=-99 强刷重试路径的委托登录同样传用户姓名"""
+        monkeypatch.setattr("src.services.tenant_api_doc.load_tenant_doc", lambda tid: SSO_META_DOC)
+        monkeypatch.setattr(
+            "src.services.recap.tasks.external_push._get_agent_token", lambda tid, name: "agt"
+        )
+        monkeypatch.setattr(
+            external_systems, "get_current_user",
+            lambda req: {"user_id": "u1", "phone": "13800000000", "username": "孙晨"},
+        )
+        calls = []
+
+        def _login(tenant_id, mobile, agent_token, login_url, force_refresh=False, name=None):
+            calls.append({"force_refresh": force_refresh, "name": name})
+            return {"client_token": "ct"}
+
+        grant_codes = [-99, 0]
+
+        def _grant(*a, **kw):
+            return {"Code": grant_codes.pop(0), "Response": {"sso_ticket": "t"}}
+
+        monkeypatch.setattr("src.services.recap.tasks.external_push._delegate_login", _login)
+        monkeypatch.setattr("src.services.recap.tasks.external_push._post_json", _grant)
+        result = await external_systems.get_sso_url("pre_sales", _request(TENANT))
+        assert result["success"] is True
+        assert calls == [
+            {"force_refresh": False, "name": "孙晨"},
+            {"force_refresh": True, "name": "孙晨"},
+        ]
+
     async def test_sso_url_unauthenticated_401(self, monkeypatch):
         monkeypatch.setattr(external_systems, "get_current_user", lambda req: None)
         resp = await external_systems.get_sso_url("pre_sales", _request(TENANT))
@@ -381,7 +436,7 @@ class TestGetSsoUrlGrantRetry:
         login_calls = []
         grant_calls = []
 
-        def _login(tenant, phone, token, url, force_refresh=False):
+        def _login(tenant, phone, token, url, force_refresh=False, name=None):
             login_calls.append(force_refresh)
             # 首次走缓存（旧 token），强刷后换新 token
             return {"client_token": "new_ct" if force_refresh else "stale_ct"}

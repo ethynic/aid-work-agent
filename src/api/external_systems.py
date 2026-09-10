@@ -163,6 +163,9 @@ async def get_sso_url(system_id: str, request: Request):
             "api-meta 缺少 login_url，无法建立委托会话",
         )
 
+    # name 供手机号不存在时自动建号使用，与委托登录/sso_login 同契约；空值不传
+    user_name = (user or {}).get("nickname") or (user or {}).get("username") or None
+
     def _fail_fallback(debug: str) -> dict:
         logger.info(
             f"[external_systems] sso 换票失败 tenant={tenant_id} user={user.get('user_id')} "
@@ -176,8 +179,6 @@ async def get_sso_url(system_id: str, request: Request):
         """委托会话不可用时的兜底签发：sso_login（agent_token + 手机号）直接换票据"""
         if not cfg["login_sso_url"]:
             return None
-        # name 供手机号不存在时自动建号使用，与委托登录同契约；空值不传
-        user_name = (user or {}).get("nickname") or (user or {}).get("username") or None
         sso_payload = {"mobile": phone}
         if user_name:
             sso_payload["name"] = user_name
@@ -190,7 +191,7 @@ async def get_sso_url(system_id: str, request: Request):
         if cfg["mode"] == "token_param":
             # 票据即委托会话 client_token 本身，由前端拼在 URL 打开（契约兜底模式）
             login = await asyncio.to_thread(
-                _delegate_login, tenant_id, phone, agent_token, login_url
+                _delegate_login, tenant_id, phone, agent_token, login_url, False, user_name
             )
             if login and login.get("client_token"):
                 url = _build_ticket_url(cfg["sso_url"], cfg["ticket_param"], login["client_token"])
@@ -206,7 +207,7 @@ async def get_sso_url(system_id: str, request: Request):
 
         # ticket_redirect：委托会话 client_token 调 sso_grant 换一次性票据
         login = await asyncio.to_thread(
-            _delegate_login, tenant_id, phone, agent_token, login_url
+            _delegate_login, tenant_id, phone, agent_token, login_url, False, user_name
         )
         if login and login.get("client_token"):
             grant = await asyncio.to_thread(
@@ -223,7 +224,7 @@ async def get_sso_url(system_id: str, request: Request):
 
         # 缓存 token 可能已被第三方判失效（如 Code=-99）：强刷委托会话后重试一次
         login = await asyncio.to_thread(
-            _delegate_login, tenant_id, phone, agent_token, login_url, True
+            _delegate_login, tenant_id, phone, agent_token, login_url, True, user_name
         )
         if login and login.get("client_token"):
             grant = await asyncio.to_thread(
