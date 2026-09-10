@@ -205,6 +205,7 @@ import { getExtraMd, saveExtraMd, deleteExtraMd } from '@/api/subagent'
 import { listTemplates, uploadTemplate, deleteTemplate, getTemplateDownloadUrl, type TemplateFile } from '@/api/subagentTemplates'
 import { resolveApiUrl, saveDownloadUrl } from '@/platform/urlResolver'
 import { getAuthHeader } from '@/api/auth'
+import { triggerNativeDownload } from '@/utils/download'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 
 const router = useRouter()
@@ -406,7 +407,7 @@ async function handleDeleteTemplate(fileId: string) {
   }
 }
 
-// 点击模板名称下载：桌面端走受控保存，Web 端 fetch blob 触发浏览器下载
+// 点击模板名称下载：桌面端走受控保存，Web 端直链原生下载（download_url 免认证，自带进度条）
 async function handleDownloadTemplate(t: TemplateFile) {
   if (downloadingId.value) return
   downloadingId.value = t.file_id
@@ -417,17 +418,7 @@ async function handleDownloadTemplate(t: TemplateFile) {
       await saveDownloadUrl(url, fileName, getAuthHeader())
       return
     }
-    const response = await fetch(url)
-    if (!response.ok) throw new Error(`下载失败: ${response.status}`)
-    const blob = await response.blob()
-    const blobUrl = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = blobUrl
-    a.download = fileName
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-    setTimeout(() => URL.revokeObjectURL(blobUrl), 1000)
+    triggerNativeDownload(url, fileName)
   } catch (e: any) {
     console.error('模板下载失败:', e)
     errorMsg.value = e.message || '模板下载失败'

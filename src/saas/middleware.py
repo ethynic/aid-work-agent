@@ -37,6 +37,18 @@ from src.db.database import get_db_connection
 # 匹配租户级回调路由：/t/{tenant_id}/...
 _TENANT_CALLBACK_PATTERN = re.compile(r"^/t/([^/]+)/")
 
+# 支持下载票据的路径（浏览器原生下载直链，无法携带认证 header）。
+# 必须与 nginx 下载限速 location 覆盖的下载点保持同源维护，
+# 规范见 .claude/rules/backend_dev.md「下载接口规范」。
+_TICKET_DOWNLOAD_PATHS = re.compile(
+    r"^/api/("
+    r"knowledge/documents/[0-9]+/download"
+    r"|saas/tenant/config-file/[^/]+"
+    r"|v1/travel-quote/(vehicles|meals|guides|fees|seasons|kb/attractions|kb/hotels)/export"
+    r"|v1/travel-quote/import/template"
+    r")$"
+)
+
 
 class TenantHeaderDenied(Exception):
     """X-Tenant-Id 头与请求者身份不匹配（已认证用户试图指定他人/不存在的租户）
@@ -135,6 +147,18 @@ class TenantContextMiddleware(BaseHTTPMiddleware):
             )
         except Exception as e:
             logger.warning(f"[TenantMiddleware] Error resolving tenant context: {e}")
+
+        # 下载票据兜底：浏览器原生下载（window.open / <a> 直链）无法携带认证 header，
+        # 凭短期 HMAC 票据还原租户上下文；票据缺失/无效时保持 None，
+        # 由下载接口按"无权访问"拒绝。新增下载点须同步加入 _TICKET_DOWNLOAD_PATHS。
+        if tenant_id is None and request.query_params.get("ticket"):
+            if _TICKET_DOWNLOAD_PATHS.match(path):
+                from src.core.download_ticket import validate_download_ticket
+                payload = validate_download_ticket(request.query_params["ticket"], path)
+                if payload:
+                    tenant_id, user_id = payload["tenant_id"], payload["user_id"]
+                    request.state.user_role = payload["role"]
+                    request.state.ticket_payload = payload
 
         # 设置上下文
         request.state.tenant_id = tenant_id

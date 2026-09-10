@@ -81,6 +81,7 @@ import type { DownloadableFile, AttachmentInfo } from '@/types'
 import { useAttachmentPreview } from '@/composables/useAttachmentPreview'
 import { resolveApiUrl, saveDownloadUrl } from '@/platform/urlResolver'
 import { getAuthHeader } from '@/api/auth'
+import { triggerNativeDownload } from '@/utils/download'
 
 const props = defineProps<{ file: DownloadableFile }>()
 
@@ -97,17 +98,8 @@ async function handleDownload() {
       await saveDownloadUrl(url, props.file.file_name, getAuthHeader())
       return
     }
-    const response = await fetch(url)
-    if (!response.ok) throw new Error(`下载失败: ${response.status}`)
-    const blob = await response.blob()
-    const blobUrl = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = blobUrl
-    a.download = props.file.file_name
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-    setTimeout(() => URL.revokeObjectURL(blobUrl), 1000)
+    // 直链原生下载（download_url 免认证），浏览器下载管理器自带进度条
+    triggerNativeDownload(url, props.file.file_name)
   } catch (e) {
     console.error('文件下载失败:', e)
     // Web fallback 保持现有浏览器下载行为；Desktop 不允许绕过受控保存能力。

@@ -3,6 +3,7 @@
  */
 
 import { getAuthHeader } from './auth'
+import { triggerNativeDownload } from '@/utils/download'
 
 const API_BASE = `${import.meta.env.VITE_API_BASE_URL || '/api'}/v1/travel-quote`
 
@@ -309,32 +310,28 @@ export async function importAttractionExcelKB(file: File): Promise<{ success: bo
   return res.json()
 }
 
-export async function downloadTemplate(): Promise<void> {
-  const res = await fetch(`${API_BASE}/import/template`, {
-    headers: { ...getAuthHeader() }
+/**
+ * 下载票据流程（travel-quote 用中央签发端点 /export_ticket，body 指定目标路径）：
+ * POST 认证换票据 -> 原生下载直链（带进度条），规范见 backend_dev.md
+ */
+async function downloadWithTicket(path: string, filename: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/export_ticket`, {
+    method: 'POST',
+    headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: `/v1/travel-quote${path}` })
   })
-  if (!res.ok) throw new Error('下载模板失败')
-  const blob = await res.blob()
-  const url = window.URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = 'travel_quote_template.xlsx'
-  a.click()
-  window.URL.revokeObjectURL(url)
+  if (!res.ok) throw new Error('导出失败')
+  const { ticket } = await res.json()
+  if (!ticket) throw new Error('获取下载票据失败')
+  triggerNativeDownload(`${API_BASE}${path}?ticket=${encodeURIComponent(ticket)}`, filename)
+}
+
+export async function downloadTemplate(): Promise<void> {
+  await downloadWithTicket('/import/template', 'travel_quote_template.xlsx')
 }
 
 async function downloadExport(path: string, filename: string): Promise<void> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    headers: { ...getAuthHeader() }
-  })
-  if (!res.ok) throw new Error('导出失败')
-  const blob = await res.blob()
-  const url = window.URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = filename
-  a.click()
-  window.URL.revokeObjectURL(url)
+  await downloadWithTicket(path, filename)
 }
 
 export async function exportVehicles(): Promise<void> {

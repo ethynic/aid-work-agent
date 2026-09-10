@@ -1058,6 +1058,37 @@ async def export_hotels(request: Request):
     return _export_table("hotels", request)
 
 
+class DownloadTicketRequest(BaseModel):
+    """下载票据签发请求"""
+    path: str = Field(..., description="目标下载路径，如 /v1/travel-quote/vehicles/export")
+
+
+_EXPORT_TICKET_PATH_TEMPLATE = re.compile(
+    r"^/api/v1/travel-quote/((?:vehicles|meals|guides|fees|seasons|kb/attractions|kb/hotels)/export|import/template)$"
+)
+
+
+@router.post("/export_ticket")
+async def create_export_ticket(body: DownloadTicketRequest, request: Request):
+    """签发导出/模板下载票据（5 分钟有效），供前端直链原生下载
+
+    浏览器导航下载无法携带 Authorization header，前端先经认证换取票据，
+    再访问 download_path?ticket=xxx。path 必须在导出路径白名单内。
+    """
+    from src.core.download_ticket import TICKET_TTL_SECONDS, issue_download_ticket
+
+    resource_path = body.path if body.path.startswith("/api") else "/api" + body.path.lstrip("/")
+    if not _EXPORT_TICKET_PATH_TEMPLATE.match(resource_path):
+        raise HTTPException(status_code=400, detail="不支持的下载路径")
+
+    tenant_id = _get_tenant_id(request)
+    user_id = getattr(request.state, "user_id", None)
+    role = getattr(request.state, "user_role", None)
+
+    ticket = issue_download_ticket(resource_path, tenant_id, user_id, role)
+    return {"ticket": ticket, "expires_in": TICKET_TTL_SECONDS}
+
+
 # ============================================================
 # 业务表 UUID 导入端点（Phase 6）
 # ============================================================

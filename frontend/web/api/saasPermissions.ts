@@ -5,6 +5,7 @@
 
 import { getTenantScopedKey } from './tenantStorage'
 import { credentialGet } from '@/platform/credentialStore'
+import { triggerNativeDownload } from '@/utils/download'
 
 // 复用 saasTenant 的 getSaasAuthHeader
 function getTokenKey(): string {
@@ -244,20 +245,23 @@ export async function uploadConfigFile(tenantId: string, subagentName: string, f
 }
 
 export async function downloadConfigFile(tenantId: string, subagentName: string): Promise<void> {
+  // 下载票据流程：POST 认证换票据 -> 原生下载直链（带进度条），规范见 backend_dev.md
   const headers: Record<string, string> = {}
   const tokenKey = getTokenKey()
   const token = credentialGet(tokenKey)
   if (token) headers['Authorization'] = `Bearer ${token}`
   headers['X-Tenant-Id'] = tenantId
-  const res = await fetch(`${CONFIG_FILE_BASE}/${encodeURIComponent(subagentName)}`, { headers })
+  const res = await fetch(`${CONFIG_FILE_BASE}/${encodeURIComponent(subagentName)}/download_ticket`, {
+    method: 'POST',
+    headers
+  })
   if (!res.ok) throw new Error('下载配置文件失败')
-  const blob = await res.blob()
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `${subagentName}-api.md`
-  a.click()
-  URL.revokeObjectURL(url)
+  const { ticket } = await res.json()
+  if (!ticket) throw new Error('获取下载票据失败')
+  triggerNativeDownload(
+    `${CONFIG_FILE_BASE}/${encodeURIComponent(subagentName)}?ticket=${encodeURIComponent(ticket)}`,
+    `${subagentName}-api.md`
+  )
 }
 
 export async function deleteConfigFile(tenantId: string, subagentName: string): Promise<{ success: boolean; message?: string }> {

@@ -79,12 +79,56 @@ async def upload_config_file(
         raise HTTPException(status_code=500, detail="保存文件失败")
 
 
-@router.get("/{subagent_name}")
-async def download_config_file(
+def _require_admin_or_ticket(request: Request) -> dict:
+    """require_admin 的下载票据兜底：header 认证失败时，
+    若中间件已验签过携带管理员角色的下载票据，则构造等价 admin 字典。
+
+    仅用于下载直链端点（票据由 require_admin 保护的签发端点发出，角色可信）。
+    """
+    try:
+        return require_admin(request)
+    except HTTPException:
+        payload = getattr(request.state, "ticket_payload", None)
+        from src.core.download_ticket import payload_is_admin
+
+        if payload_is_admin(payload) and payload.get("tenant_id"):
+            return {
+                "user_id": payload.get("user_id"),
+                "tenant_id": payload.get("tenant_id"),
+                "role": payload.get("role"),
+            }
+        raise
+
+
+@router.post("/{subagent_name}/download_ticket")
+async def create_config_file_download_ticket(
     subagent_name: str,
+    request: Request,
     request_admin: dict = Depends(require_admin),
 ):
-    """下载子智能体配置文件"""
+    """签发配置文件下载票据（5 分钟有效），供前端直链原生下载"""
+    from src.core.download_ticket import TICKET_TTL_SECONDS, issue_download_ticket
+
+    tenant_id = request_admin.get("tenant_id")
+    if not tenant_id:
+        raise HTTPException(status_code=400, detail="无法获取租户 ID")
+
+    ticket = issue_download_ticket(
+        f"/api/saas/tenant/config-file/{subagent_name}",
+        tenant_id,
+        request_admin.get("user_id"),
+        request_admin.get("role"),
+    )
+    return {"ticket": ticket, "expires_in": TICKET_TTL_SECONDS}
+
+
+@router.get("/{subagent_name}")
+async def download_config_file(
+    request: Request,
+    subagent_name: str,
+    request_admin: dict = Depends(_require_admin_or_ticket),
+):
+    """下载子智能体配置文件（header 认证或下载票据）"""
     from fastapi.responses import FileResponse
 
     tenant_id = request_admin.get("tenant_id")

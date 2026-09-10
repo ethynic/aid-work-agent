@@ -599,6 +599,38 @@ def _can_download_document(doc_row: dict, current_tenant_id: Optional[str]) -> b
     return doc_tenant_id is None
 
 
+@router.post("/documents/{doc_id}/download_ticket")
+async def create_download_ticket(doc_id: int):
+    """签发短期下载票据（5 分钟有效），供前端 <a>/window.open 直链原生下载
+
+    浏览器导航下载无法携带 Authorization / X-Tenant-Id header，前端先经
+    认证换取票据，再访问 /documents/{doc_id}/download?ticket=xxx。
+    """
+    with knowledge_service._get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT tenant_id, source_type FROM documents WHERE id = %s",
+            (doc_id,),
+        )
+        row = cursor.fetchone()
+
+    if not row:
+        raise HTTPException(status_code=404, detail="文档不存在")
+
+    if not _can_download_document(row, get_current_tenant_id()):
+        raise HTTPException(status_code=403, detail="无权访问该文档")
+
+    from src.core.download_ticket import TICKET_TTL_SECONDS, issue_download_ticket
+    from src.saas.context import get_current_user_id
+
+    ticket = issue_download_ticket(
+        f"/api/knowledge/documents/{doc_id}/download",
+        row.get("tenant_id"),
+        get_current_user_id(),
+    )
+    return {"ticket": ticket, "expires_in": TICKET_TTL_SECONDS}
+
+
 @router.get("/documents/{doc_id}/download")
 async def download_document(doc_id: int):
     """

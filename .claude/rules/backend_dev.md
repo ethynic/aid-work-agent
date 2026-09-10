@@ -287,6 +287,43 @@ print('是否拉起 agent:', any('src.core.agent' in m for m in new))
 
 **降级策略**：使用 `src.core.redis_client.RedisClient`，在 Redis 不可用时自动降级到内存，并记录 `logger.warning`。
 
+## 下载接口规范（限速 + 原生下载）
+
+服务器公网出带宽仅 5Mbps（约 625KB/s），大文件下载会长时间占满带宽并拖垮其他用户。所有文件下载接口必须遵守本节规范。
+
+### 1. nginx 下载限速（新增下载点必做）
+
+`deploy/agent.aidingyi.cn.conf`、`agent2.aidingyi.cn.conf`、`agent3.aidingyi.cn.conf` 三份配置中有一个「文件下载接口（单独限速）」的正则 location（单连接 `limit_rate 128k`（1Mbps）、前 1MB 全速 `limit_rate_after 1m`、单 IP 并发 `limit_conn 2`），**新增下载点必须把路由加入三份 conf 的正则**，否则不受限速保护。
+
+当前已纳入限速的下载点：
+
+| 路由 | 用途 |
+|------|------|
+| `/api/files/{file_id}/download` | 对话附件/图片下载 |
+| `/api/knowledge/documents/{doc_id}/download` | 知识库文档下载 |
+| `/api/saas/external-customers/attachments/download` | 外部客户附件下载 |
+| `/api/saas/tenant/config-file/{subagent_name}` | 子智能体配置文件下载 |
+| `/api/v1/travel-quote/{vehicles,meals,guides,fees,seasons,kb/attractions,kb/hotels}/export` | 旅游报价 Excel 导出 |
+| `/api/v1/travel-quote/import/template` | 导入模板下载 |
+| `/api/v1/channels/wecom-personal-rpa/files/{file_id}` | RPA 签名文件下载 |
+
+**例外**：`/api/files/{file_id}`（inline 预览）不纳入限速 location，因为聊天图片会并发批量加载，`limit_conn` 并发限制会导致第 3 个请求直接 503、图片挂掉。小文件也基本不受 `limit_rate_after 1m` 影响。
+
+### 2. 前端触发下载必须走「原生下载」，需要认证的下载点走「下载票据」，禁止 fetch + blob
+
+`fetch + blob` 会把整个文件下载到内存后才弹保存框，期间用户零反馈（50MB 文件浏览器转圈超过 1 分钟）。前端统一使用 `frontend/web/utils/download.ts`：
+
+- `triggerNativeDownload(url, filename)`：直链原生下载（免认证下载点，如 `/api/files/{file_id}/download`）
+- `downloadViaTicket(downloadPath, filename)`：先 `POST {downloadPath}_ticket`（带认证 header，毫秒级）换取短期 HMAC 票据，再原生下载 `{downloadPath}?ticket=xxx`
+
+票据机制（`src/core/download_ticket.py`）：5 分钟有效、绑定下载路径 + tenant_id + user_id + role、无状态不落库（密钥取 `DOWNLOAD_TICKET_SECRET` 环境变量，缺省由 `DATABASE_URL` 派生）。`TenantContextMiddleware` 对带 `ticket` 的下载请求在认证 header 缺失时验签还原租户上下文（`_TICKET_DOWNLOAD_PATHS` 白名单，新增下载点需同步）；`require_admin` 类端点用 `_require_admin_or_ticket` 做票据兜底（参考 `src/api/tenant_config_file.py`）。
+
+各下载点的前端实现参考：知识库 `api/knowledge.ts` 的 `downloadDocument`、配置文件 `api/saasPermissions.ts` 的 `downloadConfigFile`、travel-quote 导出 `api/travelQuote.ts` 的 `downloadExport`。
+
+### 3. 后端返回文件统一用 FileResponse / StreamingResponse
+
+流式返回，不要 `open(...).read()` 一次性读入内存再返回。
+
 ## API 接口命名规范
 接口名称应与 Python 方法名保持一致，使用具体、有明确指向性的命名：
 
