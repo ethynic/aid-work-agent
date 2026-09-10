@@ -96,6 +96,25 @@ class TestToolExecutor:
         assert result.get("success") is False
 
     @pytest.mark.asyncio
+    async def test_execute_unknown_tool_suggests_close_match(self):
+        registry = ToolRegistry()
+        registry.register(_SearchToolForCoerce())
+        executor = ToolExecutor(registry=registry)
+        result = await executor.execute("search_corce", {})
+        assert result.get("success") is False
+        assert "search_coerce" in result["error"]
+        assert "search_coerce" in result["available_tools"]
+
+    @pytest.mark.asyncio
+    async def test_execute_unknown_tool_lists_available_when_no_match(self):
+        registry = ToolRegistry()
+        registry.register(_SearchToolForCoerce())
+        executor = ToolExecutor(registry=registry)
+        result = await executor.execute("zzz_no_match_zzz", {})
+        assert result.get("success") is False
+        assert "search_coerce" in result["error"]
+
+    @pytest.mark.asyncio
     async def test_execute_batch(self, mock_tool):
         registry = ToolRegistry()
         registry.register(mock_tool(name="tool_a", execute_return={"success": True}))

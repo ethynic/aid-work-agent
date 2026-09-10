@@ -4,6 +4,7 @@
 执行工具调用并处理结果
 """
 
+import difflib
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
@@ -56,11 +57,22 @@ class ToolExecutor:
         # 获取工具
         tool = self.registry.get_tool(tool_name)
         if not tool:
+            # LLM 偶尔幻觉出不存在的工具名，附上可用工具提示帮助其自我纠正，避免空转烧轮数
+            available_tools = self.registry.list_tools()
+            suggestions = difflib.get_close_matches(tool_name, available_tools, n=3)
+            available_preview = ", ".join(available_tools[:20])
+            if len(available_tools) > 20:
+                available_preview += f" ...（共 {len(available_tools)} 个）"
             error_msg = f"工具不存在: {tool_name}"
-            logger.error(error_msg)
+            if suggestions:
+                error_msg += f"，你可能想用的是: {', '.join(suggestions)}"
+            else:
+                error_msg += f"，请从可用工具中选择: {available_preview}"
+            logger.warning(f"{error_msg} | 可用工具: {available_preview}")
             return {
                 "success": False,
                 "error": error_msg,
+                "available_tools": available_tools,
             }
         
         # 权限检查
