@@ -331,9 +331,28 @@ export interface OcrEnginePlan {
 
 let ocrEnginePlanCache: OcrEnginePlan | null = null
 
+/** 引擎决策日志是否已落（每进程一条；ocrBatch 每份简历都会走 resolveOcrEngine，不能逐次刷屏） */
+let ocrEnginePlanLogged = false
+
+/**
+ * 引擎决策落一次日志（stderr，经 providerManager 转发落 runtime.log）：auto 模式下 RapidOCR
+ * 缺失时此前静默回退 WinRT，客户机日志零痕迹（2026-09-10 排障事故整改——低质量 winrt 文本
+ * 拖垮姓名交叉校验时，日志里必须能看到引擎实际是什么）。
+ */
+function logOcrEnginePlanOnce(plan: OcrEnginePlan): OcrEnginePlan {
+  if (!ocrEnginePlanLogged) {
+    ocrEnginePlanLogged = true
+    // reason 截断 200：winrt 回退时含逐候选探测失败明细，可达数百字符（与 logOpFailure 同策略）
+    const reason = plan.reason.length > 200 ? `${plan.reason.slice(0, 200)}…` : plan.reason
+    process.stderr.write(`[boss-ocr] OCR 引擎=${plan.engine}${plan.python ? `（python: ${plan.python}）` : ''}：${reason}\n`)
+  }
+  return plan
+}
+
 /** 重置引擎解析缓存（仅测试用：注入 fake runner 前重置，避免跨用例/跨文件污染模块级缓存） */
 export function resetOcrEngineCacheForTest(): void {
   ocrEnginePlanCache = null
+  ocrEnginePlanLogged = false
 }
 
 /**
@@ -352,7 +371,7 @@ export async function resolveOcrEngine(runner: ExecRunner = defaultExecRunner): 
       forced: true,
       reason: 'AID_BOSS_OCR_ENGINE=winrt 强制使用系统 WinRT OCR',
     }
-    return ocrEnginePlanCache
+    return logOcrEnginePlanOnce(ocrEnginePlanCache)
   }
   const probe = await probeRapidOcr(runner)
   if (forced === 'rapid') {
@@ -370,7 +389,7 @@ export async function resolveOcrEngine(runner: ExecRunner = defaultExecRunner): 
       forced: true,
       reason: `AID_BOSS_OCR_ENGINE=rapid 强制 RapidOCR（python: ${probe.python}）`,
     }
-    return ocrEnginePlanCache
+    return logOcrEnginePlanOnce(ocrEnginePlanCache)
   }
   ocrEnginePlanCache = probe.available
     ? { engine: 'rapid', python: probe.python, reason: `RapidOCR 可用（python: ${probe.python}）` }
@@ -379,7 +398,7 @@ export async function resolveOcrEngine(runner: ExecRunner = defaultExecRunner): 
         reason: `RapidOCR 不可用，回退系统 WinRT OCR（${probe.reason ?? '未知原因'}；` +
           '可选安装提升识别精度：pip install rapidocr-onnxruntime==1.4.4 Pillow）',
       }
-  return ocrEnginePlanCache
+  return logOcrEnginePlanOnce(ocrEnginePlanCache)
 }
 
 /** ocrBatch 可注入依赖（测试用；生产缺省走真实子进程 + ocrImage） */

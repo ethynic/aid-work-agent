@@ -852,7 +852,8 @@ class TestBossResumeBatchToolOrchestration:
     def test_empty_resumes_returns_payload_invalid_no_store(
         self, temp_tenant_with_user, temp_storage_dir
     ):
-        """CLI 成功但 resumes 为空（一份都没读到）：RESUME_PAYLOAD_INVALID，不落库不落盘"""
+        """CLI 成功但 resumes 为空（一份都没读到）：RESUME_PAYLOAD_INVALID，
+        failures 现场随 message/data 透出（2026-09-10 整改：不再置 None 吞证据），不落库不落盘"""
         ctx = temp_tenant_with_user
         fake = _cli_success_result({"resumes": [], "failures": [
             {"name": None, "error": "未能确定候选人姓名（卡片 DOM 配对失败）：已跳过不入库"},
@@ -864,7 +865,32 @@ class TestBossResumeBatchToolOrchestration:
 
         assert result["success"] is False
         assert result["code"] == "RESUME_PAYLOAD_INVALID"
-        assert result["data"] is None
+        # 紧凑失败现场：attempted + failures 摘要（纯文本，绝无 base64/OCR 全文）
+        assert result["data"]["attempted"] == 1
+        assert result["data"]["failures"][0]["error"].startswith("未能确定候选人姓名")
+        assert "未能确定候选人姓名" in result["message"]
+        assert "尝试 1 张卡片" in result["message"]
+        data_dump = json.dumps(result["data"], ensure_ascii=False)
+        assert "base64" not in data_dump
+        assert "OCR_FULLTEXT" not in data_dump
+        assert _count_resumes(ctx["tenant_id"]) == 0
+        assert not list(temp_storage_dir.iterdir())
+
+    def test_empty_resumes_data_missing_still_invalid(
+        self, temp_tenant_with_user, temp_storage_dir
+    ):
+        """CLI 结果缺 data（旧客户端/异常路径）：仍 RESUME_PAYLOAD_INVALID，data 为空摘要不炸"""
+        ctx = temp_tenant_with_user
+        fake = _cli_success_result({})
+        with patch.object(LocalToolProxyTool, "execute", new=AsyncMock(return_value=fake)):
+            result = _call(BossResumeBatchTool().execute(
+                _trusted_tenant_id=ctx["tenant_id"], _trusted_user_id=ctx["user_id"],
+            ))
+
+        assert result["success"] is False
+        assert result["code"] == "RESUME_PAYLOAD_INVALID"
+        assert result["data"] == {"attempted": None, "failures": []}
+        assert "客户端未返回尝试数" in result["message"]
         assert _count_resumes(ctx["tenant_id"]) == 0
         assert not list(temp_storage_dir.iterdir())
 

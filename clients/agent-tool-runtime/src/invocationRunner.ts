@@ -190,7 +190,12 @@ export async function runInvocation(inv: ClaimedInvocation, deps: RunnerDeps): P
     for (;;) {
       try {
         await deps.api.result(inv.invocation_id, payload)
-        emit(`invocation ${inv.invocation_id} 终态已回传 success=${final.success} code=${final.code ?? '-'} effect=${final.effect ?? '-'}`)
+        // data_bytes：证明 data 随终态发出（排障「结果回传丢 data」时与云端落库侧比对）
+        const dataBytes = payload.data === undefined ? 0 : JSON.stringify(payload.data).length
+        emit(
+          `invocation ${inv.invocation_id} 终态已回传 success=${final.success} code=${final.code ?? '-'} ` +
+            `effect=${final.effect ?? '-'} data_bytes=${dataBytes}`,
+        )
         return
       } catch (err) {
         if (err instanceof ApiError) {

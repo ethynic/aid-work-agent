@@ -28,6 +28,7 @@ LLM/前端直接渲染编号选择列表）。
 """
 
 import asyncio
+import json
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
@@ -918,6 +919,12 @@ class BossResumeDetailTool(LocalToolProxyTool):
                 "data": None,
                 "invocation_id": result.get("invocation_id"),
             }
+        # 入库成功留痕（2026-09-10 排障整改：「存没存进库」服务端日志可直接回答）
+        logger.info(
+            f"后端日志：boss_resume_detail 入库成功 resume_id={record['id']} "
+            f"candidate={record.get('candidate_name')} images={len(record.get('images') or [])} "
+            f"ocr_chars={len(record.get('ocr_text') or '')}"
+        )
 
         # 返回给 LLM 的 data 只含紧凑摘要（recruiting-operator 上下文预算仅 8000 token，
         # 图片字节/OCR 全文绝不进上下文，完整内容到简历库页面看）。
@@ -985,12 +992,34 @@ class BossResumeBatchTool(LocalToolProxyTool):
         data = result.get("data") or {}
         resumes = data.get("resumes")
         if not isinstance(resumes, list) or not resumes:
+            # 无简历可入库：data.failures 是客户端逐卡失败现场（含画布/OCR 元信息的定位线索），
+            # 必须随 message/data 透出给 LLM 与 trace——2026-09-10 客户现场排障时该分支把 data
+            # 置 None 吞掉证据，只能翻 invocation 原始表才拿到失败原因。纯文本无图片，
+            # 不违反「图片字节绝不进 LLM 上下文」约束。
+            attempted = data.get("attempted")
+            raw_failures = [f for f in (data.get("failures") or []) if isinstance(f, dict)]
+            failure_summary = [
+                {"name": f.get("name"), "error": str(f.get("error") or "")[:120]}
+                for f in raw_failures[:5]
+            ]
+            # bool 是 int 子类：客户端异常回传 True/False 时不当作份数
+            tried = (
+                f"尝试 {attempted} 张卡片"
+                if isinstance(attempted, int) and not isinstance(attempted, bool)
+                else "客户端未返回尝试数"
+            )
+            first = failure_summary[0] if failure_summary else None
+            first_note = f"，第一个失败：{first.get('name') or '未知姓名'}—{first['error']}" if first else ""
+            logger.error(
+                f"后端日志：boss_resume_batch 结果无简历可入库 attempted={attempted} "
+                f"failures={json.dumps(failure_summary, ensure_ascii=False)}"
+            )
             return {
                 "success": False,
                 "code": "RESUME_PAYLOAD_INVALID",
-                "message": "CLI 批量结果缺少 resumes 数组或为空（未读取到任何简历）",
+                "message": f"CLI 批量结果缺少 resumes 数组或为空（未读取到任何简历，{tried}{first_note}）",
                 "effect": result.get("effect"),
-                "data": None,
+                "data": {"attempted": attempted, "failures": failure_summary},
                 "invocation_id": result.get("invocation_id"),
             }
         # CLI 侧单份失败（打开超时/读取失败等）与云端入库失败合并到同一 failures 列表
@@ -1025,6 +1054,12 @@ class BossResumeBatchTool(LocalToolProxyTool):
             })
             if record.get("job_warning"):
                 summaries[-1]["warning"] = record["job_warning"]
+
+        # 入库留痕（2026-09-10 排障整改：成功几份、哪几份，服务端日志直接可查）
+        logger.info(
+            f"后端日志：boss_resume_batch 入库完成 成功 {len(summaries)}/{len(resumes)} 份 "
+            f"resume_ids={[s['resume_id'] for s in summaries]} failures={len(failures)}"
+        )
 
         # 全部失败 → fail-loud；部分/全部成功 → success=True（失败信息在 failures）
         if not summaries:

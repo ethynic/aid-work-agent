@@ -65,12 +65,26 @@ export function pairCardName(
   btn: GreetButtonRef,
   viewport: { width: number; height: number },
 ): string | null {
+  return pairCardNameWithPoint(snap, btn, viewport).name
+}
+
+/**
+ * 姓名配对 + 姓名节点中心点（视口 CSS px，与 CDP 点击同坐标系）。
+ * point 用于批量读简历重点击的自适应回退：绝对像素校准的主体列点（x=600/y+70）在
+ * 非参考布局（窗口宽高/缩放不同 → 行高变化）会落进行间空隙或错误行，而姓名节点中心
+ * 恒在卡片行内。name=null 时 point 恒为 null。
+ */
+export function pairCardNameWithPoint(
+  snap: DomSnapshot,
+  btn: GreetButtonRef,
+  viewport: { width: number; height: number },
+): { name: string | null; point: ClickPoint | null } {
   const doc = snap.documents[btn.documentIndex]!
   let offset: { x: number; y: number }
   try {
     offset = accumulateOwnerOffset(snap, btn.documentIndex)
   } catch {
-    return null
+    return { name: null, point: null }
   }
   // 该 document 内有 bounds 且视口可见的文本节点（屏幕坐标，取中心）
   const texts: Array<{ t: string; x: number; y: number }> = []
@@ -89,15 +103,16 @@ export function pairCardName(
   }
   // 按钮同排窄带的姓名区内取姓名模式节点（x 最小优先——姓名是该行最左元素）。
   // 不依赖任何状态文本；找不到返回 null（fail-safe，绝不拿学历/状态充当姓名）
-  let best: { t: string; x: number } | null = null
+  let best: { t: string; x: number; y: number } | null = null
   for (const n of texts) {
     if (!NAME_PATTERN.test(n.t)) continue
     if (STATUS_WORD_SUFFIX.test(n.t)) continue
     if (Math.abs(n.y - btn.point.y) >= NAME_ROW_MAX_DY) continue
     if (n.x >= btn.point.x * NAME_COL_RELATIVE_MAX || n.x >= btn.point.x) continue
-    if (!best || n.x < best.x) best = { t: n.t, x: n.x }
+    if (!best || n.x < best.x) best = n
   }
-  return best?.t ?? null
+  if (!best) return { name: null, point: null }
+  return { name: best.t, point: { x: best.x, y: best.y } }
 }
 
 /**

@@ -213,6 +213,27 @@ export function locateResumeCanvas(snap: DomSnapshot): DeviceRect | null {
   return best
 }
 
+/**
+ * 诊断用：页面全部可见 CANVAS 尺寸（面积降序，最多 5 个，只取 w/h 不含坐标——坐标不进日志）。
+ * 「详情未打开」排障关键：若列表里出现接近阈值的大画布（如 380x560），说明弹层实际已打开、
+ * 只是没过 CANVAS_MIN_W/H 判定；全是几十像素的图标 canvas 则是详情真的没开。
+ */
+export function canvasCandidates(snap: DomSnapshot): Array<{ w: number; h: number }> {
+  const out: Array<{ w: number; h: number }> = []
+  snap.documents.forEach((document) => {
+    if (!document.nodes.nodeName) return
+    for (const [nodeIndex, nameValueIndex] of indexedValues(document.nodes.nodeName, 'nodeName')) {
+      if (snap.strings[nameValueIndex] !== 'CANVAS') continue
+      const layoutIndex = document.layout.nodeIndex.indexOf(nodeIndex)
+      if (layoutIndex < 0) continue
+      const b = document.layout.bounds[layoutIndex]
+      if (!b || b[2]! <= 0 || b[3]! <= 0) continue
+      out.push({ w: Math.round(b[2]!), h: Math.round(b[3]!) })
+    }
+  })
+  return out.sort((a, b) => b.w * b.h - a.w * a.h).slice(0, 5)
+}
+
 export class ResumeReader {
   private readonly sleep: (ms: number) => Promise<void>
 

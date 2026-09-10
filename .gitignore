@@ -147,3 +147,6 @@ cc.sh
 # 捆绑便携 OCR Python 环境（build-ocr-python.mjs 构建产物，~360MB 二进制不入库；
 # 幂等脚本可随时重建，见 clients/README.md「编译新版本」）
 clients/boss-resume-assistant/ocr-python/
+
+# 真机排障临时产物（简历拼接图含候选人个人信息，绝不入库）
+tmp-boss-diag/

@@ -34,6 +34,7 @@ import { ProviderSet } from './providerManager.js'
 import { ResultOutbox, resultOutboxDir } from './resultOutbox.js'
 import { manifestDigest } from './manifestVerifier.js'
 import { dpapiProtect, dpapiUnprotect } from './dpapi.js'
+import { logError, logInfo } from './log.js'
 import { rmSync } from 'node:fs'
 
 const USAGE = `agent-tool-runtime — 本地工具 Runtime（云端 invocation → 本地 MCP Provider 执行）
@@ -162,15 +163,18 @@ async function cmdStart(args: ParsedArgs): Promise<number> {
       runtimeDataDir: dataDir,
       resultOutbox: new ResultOutbox(resultOutboxDir(dataDir)),
     },
-    onEvent: (msg) => console.log(`[runtime] ${msg}`),
+    // 2026-09-10 排障整改：invocation 生命周期行（领取/开始/终态回传/重试）此前只 console.log 到
+    // stdout，服务化启动无重定向时文件日志全无回传链路痕迹（2026-09-10 客户现场诊断包实证）。
+    // logInfo = stderr + %APPDATA% 文件双写，前缀格式不变。
+    onEvent: (msg) => logInfo(msg),
   })
 
   const shutdown = (signal: string) => {
-    console.log(`[runtime] 收到 ${signal}，停止领取新任务并回收 Provider…`)
+    logInfo(`收到 ${signal}，停止领取新任务并回收 Provider…`)
     loop.shutdown()
     // 兜底：runner 协作式中止 + provider 回收最长给 20s，超时强退
     setTimeout(() => {
-      console.error('[runtime] 关闭超时，强制退出')
+      logError('关闭超时，强制退出')
       process.exit(2)
     }, 20_000).unref()
   }

@@ -8,11 +8,16 @@
  * - 卡片行结构：每行右侧「打招呼」按钮（x≈1162）视口内 7 个、y 间隔 184px；行左上「姓名 + 活跃状态」
  *   同行（刘草威@342,138 / 刚刚活跃@400,138 / 按钮 y=146）——姓名配对规则抽到共享模块 cardName.ts
  *   （与 GreetExecutor 定向打招呼共用同一套锚定，保证读到的人和打招呼的人是同一个人）。
- * - 卡片点击走 CDP 浏览类点击（clickBrowse，点卡片主体列 x=600、按钮 y+70）即有效打开详情；
- *   不需要 Win32（卡片是浏览动作，BOSS 风控不拦 CDP 合成点击；写动作/筛选类仍必须 Win32）。
- *   两次真机验证：按钮 y=146 → 点击 (600,216)、y=330 → (600,400) 均成功打开。
+ * - 卡片点击走 CDP 浏览类点击（clickBrowse）即有效打开详情；不需要 Win32（卡片是浏览动作，
+ *   BOSS 风控不拦 CDP 合成点击；写动作/筛选类仍必须 Win32）。
  * - 详情 ~600ms 后大 CANVAS 出现（locateResumeCanvas 命中）；Escape（CDP dispatchKey）关闭后
  *   canvas 消失、可点下一张。
+ *
+ * 点击点策略（2026-09-10 客户机错位事故整改）：点击**配对姓名节点的中心点**——坐标跟 DOM 走，
+ * 任何分辨率/缩放/窗口尺寸下恒在卡片行内。废除 2026-08-17 按开发机校准的绝对像素主体列点
+ * （x=600/按钮 y+70）：客户笔记本布局不同，该点会落进行间空隙（点击无反应）或命中错误行
+ * （开错人详情，0.2.9 实证把王亦菲的简历存到了任玮鹤名下）。姓名配对失败的卡片不点击直接
+ * 记 failure 跳过——P0 反正不入库，盲点白读还占 ~30 秒真实鼠标滚动。
  *
  * 为什么逐张 re-snapshot：打开/关闭详情会触发列表重排，卡片坐标不复用；且已处理的卡按姓名去重
  * （key = name ?? `row@${按钮y}`），同名牛人会被跳过（推荐流很少出现，出现时不重复读同一人）。
@@ -32,17 +37,30 @@ import {
   accumulateOwnerOffset,
   boundsCenter,
 } from './domSnapshot.js'
-import { GREET_TEXT, pairCardName } from './cardName.js'
+import { GREET_TEXT, pairCardNameWithPoint } from './cardName.js'
 import { viewportOf } from './FilterSetter.js'
 import { CancelledError } from '../operations/types.js'
 import {
   ResumeReader,
   ocrNameMatches,
   locateResumeCanvas,
+  canvasCandidates,
+  CANVAS_MIN_W,
+  CANVAS_MIN_H,
   type DeviceRect,
   type OcrEngine,
   type ResumeReadResult,
 } from './ResumeReader.js'
+
+/**
+ * 批量诊断日志（stderr）：经 providerManager 的 stderr 转发落 runtime.log。
+ * [boss-mcp] 行只有 tool/code/effect/时长（脱敏约束），逐卡失败原因与画布/点击现场只有这里
+ * 有——2026-09-10 客户现场「5 张卡片全部失败但日志无线索」事故的整改：不查云端 DB 原始
+ * result_json 也能定位。简历正文绝不记；姓名/失败文案/画布尺寸/点击序列坐标为排障证据记录。
+ */
+function batchLog(msg: string): void {
+  process.stderr.write(`[boss-batch] ${msg}\n`)
+}
 
 export class ResumeBatchError extends Error {
   constructor(message: string) {
@@ -52,12 +70,15 @@ export class ResumeBatchError extends Error {
 }
 
 export interface BatchCard {
-  /** DOM 配对出的候选人姓名（唯一来源）；配对失败为 null → 该份记 failure 跳过，绝不入库 */
+  /** DOM 配对出的候选人姓名（唯一来源）；配对失败为 null → 不点击直接记 failure（P0 不入库，读了白读） */
   name: string | null
+  /** 配对姓名节点的中心点（视口 CSS px，与 CDP 点击同坐标系）。坐标跟 DOM 走，任何分辨率/
+   *  缩放/窗口尺寸下恒在卡片行内——2026-09-10 客户机错位事故的修复：废除 2026-08-17 按开发机
+   *  校准的绝对像素主体列点（x=600/y+70），该点在非参考布局落进行间空隙（点击无反应）或
+   *  命中错误行（开错人详情）。name=null 时为 null（该卡不点击）。 */
+  namePoint: ClickPoint | null
   /** 该行「打招呼」按钮的 y（device px，卡片去重 key 与排序用） */
   greetButtonY: number
-  /** 卡片主体点击点（device px） */
-  clickPoint: ClickPoint
 }
 
 export interface BatchResumeResult {
@@ -102,10 +123,6 @@ export interface ResumeBatchDeps {
   sleep?(ms: number): Promise<void>
 }
 
-/** 卡片主体安全点击列（device px）。真机验证 x=600 命中卡片主体；「打招呼」按钮在 x≈1162，避开 */
-export const CARD_CLICK_X = 600
-/** 点击点 = 按钮 y + 70（真机两次验证：146→216、330→400 行均成功打开详情） */
-export const CARD_CLICK_DY = 70
 /** 点卡片后轮询等详情 canvas 出现的总超时（ms）。真机 ~600ms 出现，轮询容错 */
 export const OPEN_POLL_TIMEOUT = 8000
 /** 点卡片后轮询间隔（ms） */
@@ -130,8 +147,8 @@ export class ResumeBatchReader {
 
   /**
    * 定位视口内的牛人卡片行：GreetExecutor.findGreetButtons 同款范式找「打招呼」按钮（按 y 排序），
-   * 每个按钮配对候选人姓名（含「活跃」短文本左侧最近的 2-4 字中文节点），clickPoint = 卡片主体
-   * 安全点击列（超视口的丢弃——视口外的卡片 CDP 点不到）。
+   * 每个按钮配对候选人姓名与其节点中心点（姓名点=点击点，坐标跟 DOM 走布局自适应）。
+   * 配对失败的按钮也在列（name/namePoint 为 null）：readBatch 会记 failure 跳过，绝不盲点。
    */
   locateCards(snap: DomSnapshot): BatchCard[] {
     const viewport = viewportOf(snap)
@@ -156,13 +173,14 @@ export class ResumeBatchReader {
       }
     })
     buttons.sort((a, b) => a.point.y - b.point.y)
-    return buttons
-      .map((btn) => ({
-        name: pairCardName(snap, btn, viewport),
+    return buttons.map((btn) => {
+      const paired = pairCardNameWithPoint(snap, btn, viewport)
+      return {
+        name: paired.name,
+        namePoint: paired.point,
         greetButtonY: btn.point.y,
-        clickPoint: { x: CARD_CLICK_X, y: btn.point.y + CARD_CLICK_DY },
-      }))
-      .filter((card) => card.clickPoint.y >= 0 && card.clickPoint.y <= viewport.height)
+      }
+    })
   }
 
   /**
@@ -182,11 +200,17 @@ export class ResumeBatchReader {
     const processedNames = new Set<string>()
     let attempted = 0
     let firstRound = true
+    /** failures.push + 同步落一条诊断日志（logDetail 只进日志不进 error，云端契约文本不变） */
+    const pushFailure = (name: string | null, error: string, logDetail?: string): void => {
+      failures.push({ name, error })
+      batchLog(`卡片[${name ?? '无名卡'}] 失败：${error}${logDetail ? `（${logDetail}）` : ''}`)
+    }
 
     // 起点防残留：boss_resume_detail 等操作读完不关详情，若带着已打开的简历详情弹层直接点卡片，
     // 弹层挡住列表且打开轮询会立刻命中「残留 canvas」——把上一个人的简历误记到首张卡片的姓名下（错配入库）。
     // 先 Escape 关闭残留弹层；关不掉 fail-loud，绝不带弹层盲点。
     if (this.deps.signal?.aborted) throw new CancelledError('已取消：批量读取尚未开始')
+    batchLog(`批量开始 limit=${limit}`)
     if (locateResumeCanvas(await this.deps.snapshot())) {
       const closed = await this.tryCloseDetail()
       if (!closed) {
@@ -203,6 +227,15 @@ export class ResumeBatchReader {
       const snap = await this.deps.snapshot()
       const viewport = viewportOf(snap)
       const cards = this.locateCards(snap)
+      if (firstRound) {
+        // 布局现场（2026-09-10 客户机错位排查）：视口尺寸 + 按钮行距与参考机（184px）的漂移
+        // 一眼可见——行距变了，绝对像素兜底点（y+70）就可能出行。
+        const ys = cards.map((c) => c.greetButtonY)
+        batchLog(
+          `视口 ${viewport.width}x${viewport.height}，卡片 ${cards.length} 行，按钮 y=[${ys.join(',')}]` +
+            (ys.length > 1 ? `，行距≈${ys[1]! - ys[0]!}px（参考机 184px）` : ''),
+        )
+      }
       if (firstRound && cards.length === 0) {
         throw new ResumeBatchError(
           '当前视口未找到任何牛人卡片（无「打招呼」按钮）：请确认已打开推荐牛人列表页且列表已加载，必要时先滚动让卡片进入视口',
@@ -214,24 +247,52 @@ export class ResumeBatchReader {
       const card = cards.find((c) => !processedNames.has(c.name ?? `row@${c.greetButtonY}`))
       if (!card) break
       processedNames.add(card.name ?? `row@${card.greetButtonY}`)
+
+      // 0. 姓名配对前置闸（2026-09-10）：点击点=姓名节点中心，配不出姓名=没有可点点位——
+      //    直接记 failure 跳过，绝不盲点（P0 反正不入库，盲点白读还占 ~30 秒真实鼠标滚动）。
+      if (!card.name || !card.namePoint) {
+        pushFailure(
+          card.name,
+          '未能确定候选人姓名（卡片 DOM 配对失败）：已跳过不入库；可人工确认姓名后用 boss_resume_detail 显式传名读取',
+        )
+        continue
+      }
       attempted++
 
-      // 1. 点卡片主体打开详情，轮询等大 canvas 出现（真机 ~600ms）。
-      //    首击可能被吞（真机 2026-08-17 实证：偶发单次点击无效果，重击即开）——
-      //    整个 OPEN_POLL_TIMEOUT 窗口内每 OPEN_RECLICK_AFTER 次轮询重点一次，最多 CLICK_ATTEMPTS 次
+      // 1. 点击姓名节点打开详情，轮询等大 canvas 出现（真机 ~600ms）。
+      //    首击偶发被吞（真机 2026-08-17 实证重击即开）→ 整个 OPEN_POLL_TIMEOUT 窗口内
+      //    最多 OPEN_CLICK_ATTEMPTS 次（防风控：不无限重点）。
       let rect: DeviceRect | null = null
+      let lastSnap: DomSnapshot | null = null
+      const clickSequence: string[] = []
       const openAttempts = Math.max(1, Math.ceil(OPEN_POLL_TIMEOUT / OPEN_POLL_INTERVAL))
       for (let i = 0; i < openAttempts && !rect; i++) {
         if (i % OPEN_RECLICK_AFTER === 0 && i / OPEN_RECLICK_AFTER < OPEN_CLICK_ATTEMPTS) {
-          await this.deps.clickBrowse(card.clickPoint, viewport)
+          const pt = card.namePoint
+          clickSequence.push(`(${pt.x},${pt.y})姓名点`)
+          await this.deps.clickBrowse(pt, viewport)
         }
         await this.sleep(OPEN_POLL_INTERVAL)
         if (this.deps.signal?.aborted) throw new CancelledError(`已取消：已读取 ${resumes.length} 份简历后中止`)
         const s = await this.deps.snapshot()
+        lastSnap = s
         rect = locateResumeCanvas(s)
       }
       if (!rect) {
-        failures.push({ name: card.name, error: '点击卡片后简历详情未打开（未出现简历画布）' })
+        // 画布诊断（只记尺寸不记坐标性内容）：接近阈值的大画布=弹层实际已开只是判定没过；
+        // 只有几十像素的图标 canvas=详情真没开（附件简历型候选人常见）。点击序列落日志：
+        // 点错位/落空从「点了哪里+页面有什么」直接可判。
+        const canvases = lastSnap ? canvasCandidates(lastSnap) : []
+        const canvasNote = canvases.length > 0
+          ? `页面 CANVAS 尺寸：${canvases.map((c) => `${c.w}x${c.h}`).join('、')}`
+          : '页面无 CANVAS 节点'
+        const nearMiss = canvases.some((c) => c.w > 300 && c.h > 300)
+        pushFailure(
+          card.name,
+          '点击卡片后简历详情未打开（未出现简历画布）',
+          `点击序列 ${clickSequence.join('→')}；${OPEN_POLL_TIMEOUT}ms 内未检出 >${CANVAS_MIN_W}x${CANVAS_MIN_H} 画布；` +
+            `${canvasNote}${nearMiss ? '；存在接近阈值的大画布，疑似详情实际已打开' : ''}`,
+        )
         // 详情可能实际已打开但画布判定未命中（真机 2026-08-18：572 高画布被阈值卡掉）——
         // 失败路径也必须尝试关闭，否则弹层挡住列表导致后续卡片连环点空
         await this.tryCloseDetail().catch(() => false)
@@ -258,43 +319,30 @@ export class ResumeBatchReader {
         if (err instanceof CancelledError) throw err
         // 读取失败也必须先尝试关闭详情，否则弹层挡住列表没法点下一张
         const closed = await this.tryCloseDetail()
+        const readErrMsg = err instanceof Error ? err.message : String(err)
         if (!closed) {
-          failures.push({
-            name: card.name,
-            error: `读取简历失败：${err instanceof Error ? err.message : String(err)}；且 Escape 后简历详情未关闭，无法继续处理后续卡片`,
-          })
+          pushFailure(
+            card.name,
+            `读取简历失败：${readErrMsg}；且 Escape 后简历详情未关闭，无法继续处理后续卡片`,
+          )
           break
         }
-        failures.push({ name: card.name, error: `读取简历失败：${err instanceof Error ? err.message : String(err)}` })
+        pushFailure(card.name, `读取简历失败：${readErrMsg}`, `引擎判定前的读取管线异常，Escape 关闭成功`)
         continue
       }
 
-      // 3. 姓名：卡片 DOM 配对唯一来源（绝无 OCR 兜底——OCR 猜名错字率不可控，错名入库后打招呼
-      //    会打错人）。配对失败 → 记 failure 跳过该份不入库，提示改用 boss_resume_detail 显式传名读取
-      if (!card.name) {
-        failures.push({
-          name: null,
-          error:
-            '未能确定候选人姓名（卡片 DOM 配对失败）：已跳过不入库；可人工确认姓名后用 boss_resume_detail 显式传名读取',
-        })
-        const closed = await this.tryCloseDetail()
-        if (!closed) {
-          failures.push({ name: null, error: 'Escape 后简历详情未关闭，无法继续处理后续卡片' })
-          break
-        }
-        continue
-      }
-
-      // 3b. 张冠李戴防护交叉校验：卡片姓名必须在 OCR 文本头部模糊命中（容忍 1 字 OCR 误差）。
-      //     未命中 = 疑似点开的详情与卡片不符（弹层残留/点击错位）→ 该份记 failure 跳过，宁跳过不错存
+      // 3. 张冠李戴防护交叉校验：卡片姓名必须在 OCR 文本头部模糊命中（容忍 1 字 OCR 误差）。
+      //    未命中 = 疑似点开的详情与卡片不符（弹层残留/点击错位）→ 该份记 failure 跳过，宁跳过不错存
       if (!ocrNameMatches(card.name, result.text)) {
-        failures.push({
-          name: card.name,
-          error: `姓名交叉校验未通过（卡片配对「${card.name}」未在简历 OCR 文本头部命中，疑似点开详情与卡片不符）：已跳过不入库`,
-        })
+        pushFailure(
+          card.name,
+          `姓名交叉校验未通过（卡片配对「${card.name}」未在简历 OCR 文本头部命中，疑似点开详情与卡片不符）：已跳过不入库`,
+          `OCR 头部未见姓名（ocr_chars=${result.chars}，引擎=${result.ocrEngine}` +
+            `${result.ocrEngine === 'winrt' ? '；winrt 识别质量低于 RapidOCR，需怀疑识别差或点开的是他人详情' : ''}）`,
+        )
         const closed = await this.tryCloseDetail()
         if (!closed) {
-          failures.push({ name: card.name, error: 'Escape 后简历详情未关闭，无法继续处理后续卡片' })
+          pushFailure(card.name, 'Escape 后简历详情未关闭，无法继续处理后续卡片')
           break
         }
         continue
@@ -302,16 +350,21 @@ export class ResumeBatchReader {
       const name = card.name
 
       // 4. 关闭详情；关不掉时当前份仍收进 resumes（内容有效）但必须停止
+      batchLog(
+        `卡片[${name}] 已读取（ocr_chars=${result.chars}，引擎=${result.ocrEngine}，${result.segments} 段` +
+          `${result.bottomReached ? '，已到底' : '，未到底'}）`,
+      )
       const closed = await this.tryCloseDetail()
       resumes.push({ name, readResult: result })
       processedNames.add(name)
       if (!closed) {
-        failures.push({ name, error: 'Escape 后简历详情未关闭，无法继续处理后续卡片' })
+        pushFailure(name, 'Escape 后简历详情未关闭，无法继续处理后续卡片')
         break
       }
       this.deps.onProgress?.(resumes.length, limit)
       if (resumes.length >= limit) break
     }
+    batchLog(`批量结束：尝试 ${attempted} 张，成功 ${resumes.length} 份，失败 ${failures.length} 个`)
     return { resumes, failures, attempted }
   }
 

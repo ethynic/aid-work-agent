@@ -24,6 +24,17 @@ import {
 import { mapExecutorError } from './errorMapping.js'
 
 /**
+ * operation 级失败日志（stderr，经 providerManager 转发落 runtime.log）：
+ * [boss-mcp] 行只有 tool/success/code/effect/时长，失败 message（含页面现场指引与候选人姓名）
+ * 只随 MCP 结果回云端——客户机日志侧此前完全看不到失败原因（2026-09-10 排障事故整改）。
+ * 只记元数据与失败文案，不记页面内容/坐标/简历正文。
+ */
+function logOpFailure(runId: string, code: string, message: string): void {
+  const trimmed = message.length > 200 ? `${message.slice(0, 200)}…` : message
+  process.stderr.write(`[boss-op] 失败 run_id=${runId} code=${code} message=${trimmed}\n`)
+}
+
+/**
  * operation 需要的页面原语（executor 依赖的组装原料）。
  * 真实实现 = CdpGateway + WinMouseClicker；测试实现 = 脚本化 fake。
  */
@@ -168,7 +179,10 @@ export async function runBossOperation(
 ): Promise<OperationResult> {
   const runId = randomUUID()
   const invalid = validate()
-  if (invalid) return failResult(runId, 'INVALID_ARGUMENT', invalid, 'none')
+  if (invalid) {
+    logOpFailure(runId, 'INVALID_ARGUMENT', invalid)
+    return failResult(runId, 'INVALID_ARGUMENT', invalid, 'none')
+  }
 
   const tracker: CompletedTracker = { completed: 0 }
   let session: BossSession | undefined
@@ -181,6 +195,7 @@ export async function runBossOperation(
     return okResult(runId, outcome.message, effect, outcome.data ?? {})
   } catch (err) {
     const mapped = mapExecutorError(err)
+    logOpFailure(runId, mapped.code, mapped.message)
     const effect = kind === 'readonly' ? 'none' : writeEffect(false, mapped.code, tracker.completed)
     const data: Record<string, unknown> = {}
     if (kind === 'write' && tracker.completed > 0) data.completed = tracker.completed

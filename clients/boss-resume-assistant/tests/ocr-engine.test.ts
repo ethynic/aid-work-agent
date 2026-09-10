@@ -107,6 +107,30 @@ test('auto + 探测失败（未装）→ 静默回退 winrt，reason 带原因�
   assert.match(plan.reason, /pip install rapidocr-onnxruntime/)
 })
 
+test('引擎决策日志每进程恰好一条（stderr）：winrt 回退/rapid 可用都能从 runtime.log 看到引擎', async () => {
+  const cap = captureStderr()
+  try {
+    await resolveOcrEngine(failRunner())
+    await resolveOcrEngine(failRunner()) // 缓存命中，不重复落日志
+    const all = cap.lines.join('')
+    assert.match(all, /\[boss-ocr\] OCR 引擎=winrt：RapidOCR 不可用/)
+    assert.equal(all.split('[boss-ocr] OCR 引擎=').length - 1, 1)
+  } finally {
+    cap.restore()
+  }
+  // 换引擎场景（rapid 可用）：重置缓存后日志出现 rapid 行
+  resetOcrEngineCacheForTest()
+  const okRunner = makeRunner(async () => ({ stdout: '', stderr: '' })).runner
+  const cap2 = captureStderr()
+  try {
+    await resolveOcrEngine(okRunner)
+    const all2 = cap2.lines.join('')
+    assert.match(all2, /\[boss-ocr\] OCR 引擎=rapid（python: C:\/fake-venv\/Scripts\/python\.exe）/)
+  } finally {
+    cap2.restore()
+  }
+})
+
 test('探测按候选顺序推进：首个候选失败自动试下一个（不因单候选失败误判不可用）', async () => {
   const { runner, calls } = makeRunner(async (file) => {
     if (file === FAKE_PY) throw new Error('ModuleNotFoundError')
@@ -283,11 +307,11 @@ test('rapid 进程失败（依赖/推理异常退出）→ 整批回退 WinRT（
     assert.equal(winrtCalls.length, 2) // 逐文件回退
     assert.deepEqual(winrtCalls, files)
     assert.equal(calls.length, 2) // 探测 + 适配器各一次（适配器失败后不再重试 rapid）
-    // P2 回退不再静默：stderr 恰好一行，含引擎与失败原因摘要（供排障，不改变回退语义）
-    assert.equal(stderr.lines.length, 1)
-    assert.match(stderr.lines[0]!, /RapidOCR 批量执行失败/)
-    assert.match(stderr.lines[0]!, /回退 WinRT/)
-    assert.match(stderr.lines[0]!, /exit=5/)
+    // P2 回退不再静默：stderr 恰好一行回退原因（引擎决策日志 [boss-ocr] OCR 引擎= 另计，过滤后断言）
+    const fallbackLines = stderr.lines.filter((l) => l.includes('RapidOCR 批量执行失败'))
+    assert.equal(fallbackLines.length, 1)
+    assert.match(fallbackLines[0]!, /回退 WinRT/)
+    assert.match(fallbackLines[0]!, /exit=5/)
   } finally {
     stderr.restore()
   }
@@ -305,8 +329,7 @@ test('rapid 进程成功但某段 .rapid.txt 缺失 → 整批回退 WinRT（不
     assert.equal(res.engine, 'winrt')
     assert.deepEqual(res.texts, ['兜底', '兜底'])
     assert.equal(winrtCalls.length, 2)
-    assert.equal(stderr.lines.length, 1) // 文件缺失路径同样留原因（ENOENT）
-    assert.match(stderr.lines[0]!, /RapidOCR 批量执行失败/)
+    assert.equal(stderr.lines.filter((l) => l.includes('RapidOCR 批量执行失败')).length, 1) // 文件缺失路径同样留原因（ENOENT）
   } finally {
     stderr.restore()
     await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {})
@@ -329,7 +352,8 @@ test('AID_BOSS_OCR_ENGINE=rapid 强制 + 批量执行失败 → fail-loud（Resu
       return true
     })
     assert.equal(winrtCalls.length, 0) // 「强制」不被软化：绝不静默降级 WinRT
-    assert.equal(stderr.lines.length, 0) // fail-loud 路径不打回退日志（报错本身即原因）
+    // fail-loud 路径不打回退日志（报错本身即原因；引擎决策日志与回退无关，过滤后应为 0）
+    assert.equal(stderr.lines.filter((l) => l.includes('RapidOCR 批量执行失败')).length, 0)
   } finally {
     stderr.restore()
   }

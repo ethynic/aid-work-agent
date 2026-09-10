@@ -8,6 +8,7 @@
 """
 
 import asyncio
+import json
 import uuid as _uuid
 from datetime import datetime
 from typing import Any, Dict, Optional
@@ -364,8 +365,11 @@ async def runtime_result(
         )
         if not row:
             raise _http_error(404, "invocation 不存在或 claim token 不匹配")
+        # data_bytes：与客户端「终态已回传 data_bytes=」行比对，定位回传链路丢/裁 data（2026-09-10 排障整改）
+        data_bytes = len(json.dumps(body.data).encode("utf-8")) if body.data else 0
         logger.info(
-            f"后端日志：invocation {invocation_id} 写入终态 state={row['state']} effect={row['effect']}"
+            f"后端日志：invocation {invocation_id} 写入终态 state={row['state']} effect={row['effect']} "
+            f"tool={row['tool_name']} data_bytes={data_bytes}"
         )
         return {"success": True, "state": row["state"], "effect": row["effect"]}
     except HTTPException:

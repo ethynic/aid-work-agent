@@ -19,6 +19,7 @@ import {
   ResumeReader,
   ResumeReadError,
   locateResumeCanvas,
+  canvasCandidates,
   mergeSegmentTexts,
   cleanOcrText,
   ocrNameMatches,
@@ -215,6 +216,22 @@ test('locateResumeCanvas：无 canvas / 只有小 canvas / 高度不过门槛 �
   assert.equal(locateResumeCanvas(canvasSnap({ canvases: [[0, 0, 727, 399]] })), null) // h<400 未过门槛
   // 真机 2026-08-18：572 高的合法弹层画布（旧门槛 600 曾误杀）必须识别
   assert.notEqual(locateResumeCanvas(canvasSnap({ canvases: [[0, 0, 760, 572]] })), null)
+})
+
+test('canvasCandidates：全部 CANVAS 尺寸面积降序（含未过阈值的，供打开失败诊断；不含坐标）', () => {
+  assert.deepEqual(
+    canvasCandidates(
+      canvasSnap({
+        canvases: [
+          [900, 1200, 80, 80], // 小图标 canvas
+          [0, 0, 380, 560], // 差一点过阈值的弹层画布（诊断关键现场）
+          CANVAS_BOUNDS,
+        ],
+      }),
+    ),
+    [{ w: 727, h: 1237 }, { w: 380, h: 560 }, { w: 80, h: 80 }],
+  )
+  assert.deepEqual(canvasCandidates(canvasSnap({})), [])
 })
 
 // ---------- readResume 主链路（P1 到底判定 = 字节快路径 + sameView 像素确认 + 连续两次相同） ----------
