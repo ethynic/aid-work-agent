@@ -333,7 +333,7 @@ class TestCustomerReferralDB:
         assert "cr.created_at < (%s::date + INTERVAL '1 day')" in sql
 
     def test_count_referred_messages_sql(self):
-        """count_referred_messages：三表 join + is_recalled=FALSE + 日期过滤"""
+        """count_referred_messages：三表 join + is_recalled=FALSE + 日期过滤 + 角色与非空口径"""
         from src.db.models import CustomerReferralDB
 
         conn, cursor = _mock_db_connection([{"cnt": 158}])
@@ -347,6 +347,8 @@ class TestCustomerReferralDB:
         assert "JOIN channel_sessions cs ON cs.session_id = cm.session_id" in sql
         assert "JOIN customer_referrals cr ON cr.customer_user_id = cs.user_id" in sql
         assert "cm.is_recalled = FALSE" in sql
+        assert "cm.role IN ('user', 'assistant')" in sql
+        assert "btrim(cm.content) <> ''" in sql
         assert "cm.created_at >= %s" in sql
         assert "cm.created_at < (%s::date + INTERVAL '1 day')" in sql
         assert count == 158

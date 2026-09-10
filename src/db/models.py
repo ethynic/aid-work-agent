@@ -1750,8 +1750,15 @@ class CustomerReferralDB:
         referrer_user_id: Optional[str] = None,
     ) -> int:
         """总对话消息数：customer_referrals.customer_user_id → channel_sessions.user_id
-        → channel_messages.session_id，过滤 created_at 在日期段内（is_recalled=FALSE）。"""
-        cond = "cr.tenant_id = %s AND cm.is_recalled = FALSE"
+        → channel_messages.session_id，过滤 created_at 在日期段内（is_recalled=FALSE）。
+
+        口径：只统计 role IN ('user','assistant') 且 content 非空的消息，排除 tool 结果
+        行和批量写入的空 assistant 占位行，避免总数虚高。
+        """
+        cond = (
+            "cr.tenant_id = %s AND cm.is_recalled = FALSE"
+            " AND cm.role IN ('user', 'assistant') AND btrim(cm.content) <> ''"
+        )
         params: list = [tenant_id]
         if start_date:
             cond += " AND cm.created_at >= %s"

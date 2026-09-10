@@ -167,7 +167,7 @@ async def get_referral_stats(
 
     日期段过滤基准：
     - 引流数 / 员工分组 → customer_referrals.created_at
-    - 总对话消息数 → channel_messages.created_at（is_recalled=FALSE）
+    - 总对话消息数 → channel_messages.created_at（is_recalled=FALSE，仅 user/assistant 且 content 非空）
 
     Args:
         start_date: 起始日期（含当日），格式 YYYY-MM-DD
