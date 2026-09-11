@@ -139,7 +139,7 @@ class SchemaExtractor:
 
         try:
             gateway = self._get_gateway()
-            response = await gateway.chat(
+            response = await gateway.chat_lite(
                 messages=[
                     {"role": "system", "content": _SCHEMA_SYSTEM_PROMPT},
                     {"role": "user", "content": user_prompt},
@@ -193,7 +193,7 @@ class SchemaExtractor:
 
         try:
             gateway = self._get_gateway()
-            response = await gateway.chat(
+            response = await gateway.chat_lite(
                 messages=[
                     {"role": "system", "content": _RELATION_SYSTEM_PROMPT},
                     {"role": "user", "content": user_prompt},

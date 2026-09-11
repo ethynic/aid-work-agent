@@ -151,7 +151,7 @@ class CaseMatchingService:
                 {"role": "user", "content": prompt},
             ]
 
-            response = await llm_gateway.chat(
+            response = await llm_gateway.chat_lite(
                 messages=messages,
                 temperature=0.1,
                 max_tokens=1000,

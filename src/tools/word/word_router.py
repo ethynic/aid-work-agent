@@ -152,7 +152,7 @@ class WordRouter:
         gateway = self._get_gateway()
 
         try:
-            response = await gateway.chat(
+            response = await gateway.chat_lite(
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0,
                 max_tokens=512,

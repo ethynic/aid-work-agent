@@ -195,6 +195,15 @@ _PROVIDER_DEFAULTS = {
 }
 
 
+# 摘要 LLM 关思考参数（按 provider 区分，与 gateway._LITE_THINKING_OFF_PARAMS 同语义：
+# 摘要是概括任务，思考 token 与正文共享 max_tokens 预算，思考开启会烧穿预算致 content 为空）
+_THINKING_OFF_PARAMS = {
+    "deepseek": {"thinking": {"type": "disabled"}},
+    "qwen": {"enable_thinking": False},
+    "zhipu": {"reasoning_effort": "low"},
+}
+
+
 def _get_provider_api_key(provider: str) -> Optional[str]:
     """从环境变量读取指定 provider 的第一个有效 API key。"""
     cfg = _PROVIDER_DEFAULTS.get(provider)
@@ -252,6 +261,8 @@ async def _call_summary_llm_direct(
         "temperature": temperature,
         "max_tokens": max_tokens,
     }
+    # 摘要是概括任务，关思考：思考+正文共享 max_tokens 预算，思考开启会烧穿预算致 content 为空
+    body.update(_THINKING_OFF_PARAMS.get(provider, {}))
     async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.post(api_url, headers=headers, json=body)
         resp.raise_for_status()
@@ -932,7 +943,7 @@ class ContextCompressionService:
                         )
                     gateway = self._get_llm_gateway()
                     result = await asyncio.wait_for(
-                        gateway.chat(
+                        gateway.chat_lite(
                             messages=messages_for_llm,
                             temperature=0.3,
                             max_tokens=self._settings.summary_max_tokens,

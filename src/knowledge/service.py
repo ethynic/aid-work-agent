@@ -82,14 +82,22 @@ class KnowledgeBaseService:
 4. 直接输出摘要内容，不需要其他说明
 """
 
+        # 走 lite 通道：lite 通道自动对三通道加关思考参数（主链路思考开启时，
+        # 思考 token 会吃掉 max_tokens=500 预算导致 content 为空、摘要静默丢失）
         try:
-            response = await self.llm_gateway.chat(
+            response = await self.llm_gateway.chat_lite(
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.3,
                 max_tokens=500
             )
             self._last_summary_usage = response.get("usage") if isinstance(response, dict) else None
             summary = response.get("content", "") or ""
+            if not summary.strip():
+                logger.warning(
+                    "生成文档摘要返回空内容（title={t}, finish_reason={fr}）",
+                    t=title,
+                    fr=(response.get("finish_reason") if isinstance(response, dict) else None),
+                )
             return summary.strip()
         except Exception as e:
             logger.warning(f"生成文档摘要失败: {e}")
@@ -138,9 +146,9 @@ class KnowledgeBaseService:
             total_tokens = int(summary_usage.get("total_tokens", 0) or 0)
             cached_input_tokens = int(summary_usage.get("cached_tokens", 0) or 0)
             cache_creation_input_tokens = int(summary_usage.get("cache_creation_tokens", 0) or 0)
-            # 知识库摘要使用主 gateway 默认模型
+            # 知识库摘要走 lite 通道，计费按 lite 模型
             try:
-                llm_model = getattr(settings.llm, "model_code", None) or "qwen3.8-flash"
+                llm_model = settings.llm.get_lite_target()[1] or "qwen3.8-flash"
             except Exception:
                 llm_model = "qwen3.8-flash"
             chat_bd: Dict[str, Any] = {}

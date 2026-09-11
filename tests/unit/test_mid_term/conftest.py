@@ -119,10 +119,11 @@ def build_messages_with_tool_chain():
 def mock_llm_for_summary():
     """mock LLM gateway，用于摘要调用。
 
-    默认返回成功；可通过设置 `gateway.chat.return_value` 或 `side_effect` 在测试中改写。
+    摘要走 chat_lite（关思考）；默认返回成功，可通过设置
+    `gateway.chat_lite.return_value` 或 `side_effect` 在测试中改写。
     """
     gateway = MagicMock()
-    gateway.chat = AsyncMock(return_value={
+    gateway.chat_lite = AsyncMock(return_value={
         "content": "## 用户与背景\n- test user\n\n## 关键事实与决策\n- decided X",
         "tool_calls": None,
         "finish_reason": "stop",

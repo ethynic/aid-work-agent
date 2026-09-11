@@ -439,7 +439,8 @@ def _call_zhipu(config: Dict[str, str], user_message: str) -> Dict[str, Any]:
             {"role": "user", "content": user_message},
         ],
         "temperature": 0.1,
-        "max_tokens": 2048,
+        # 合同分析需理解长文本，模型思考链有价值；思考+正文共享预算，max_tokens 给足防截断
+        "max_tokens": 10000,
     }
 
     async def _request():
@@ -472,7 +473,8 @@ def _call_qwen(config: Dict[str, str], user_message: str) -> Dict[str, Any]:
         },
         "parameters": {
             "temperature": 0.1,
-            "max_tokens": 2048,
+            # 合同分析需思考，思考+正文共享预算，max_tokens 给足防截断
+            "max_tokens": 10000,
             "result_format": "message",
         },
     }

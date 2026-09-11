@@ -120,7 +120,7 @@ async def test_compress_session_below_threshold_returns_none(service, mock_llm_f
     )
     assert result is None
     # 不应调用 LLM
-    assert mock_llm_for_summary.chat.await_count == 0
+    assert mock_llm_for_summary.chat_lite.await_count == 0
 
 
 @pytest.mark.asyncio
@@ -153,7 +153,7 @@ async def test_compress_session_fallback_when_llm_fails(
     service, mock_llm_for_summary, fake_db_connection
 ):
     """LLM 重试耗尽 → 走 _fallback_truncate，fallback_used=True"""
-    mock_llm_for_summary.chat = AsyncMock(side_effect=RuntimeError("llm down"))
+    mock_llm_for_summary.chat_lite = AsyncMock(side_effect=RuntimeError("llm down"))
     msgs = _build_large_messages(100)
     _patch_meta_and_messages(service, msgs)
 
@@ -293,7 +293,7 @@ async def test_compress_session_two_rounds_incremental(
         "status": "active",
     }
     # reset mock 以观察第二次的 LLM 调用 prompt
-    mock_llm_for_summary.chat = AsyncMock(return_value={"content": "merged", "tool_calls": None})
+    mock_llm_for_summary.chat_lite = AsyncMock(return_value={"content": "merged", "tool_calls": None})
 
     msgs2 = _build_large_messages(120)
     _patch_meta_and_messages(service, msgs2)
@@ -304,7 +304,7 @@ async def test_compress_session_two_rounds_incremental(
     assert r2 is not None
 
     # 验证第二次 LLM 调用的 prompt 包含 prior context（existing_summary 注入）
-    call_kwargs = mock_llm_for_summary.chat.call_args.kwargs
+    call_kwargs = mock_llm_for_summary.chat_lite.call_args.kwargs
     prompt_text = call_kwargs["messages"][0]["content"]
     assert "prior context" in prompt_text, "第二次压缩应把 existing_summary 注入 prompt"
 

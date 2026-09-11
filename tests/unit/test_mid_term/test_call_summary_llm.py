@@ -26,7 +26,7 @@ async def test_summary_llm_success(service, mock_llm_for_summary, monkeypatch):
     assert result is not None
     assert "test user" in result
     # 应该只调用 1 次（首次成功）
-    assert mock_llm_for_summary.chat.await_count == 1
+    assert mock_llm_for_summary.chat_lite.await_count == 1
 
 
 @pytest.mark.asyncio
@@ -41,7 +41,7 @@ async def test_summary_llm_retry_then_success(service, mock_llm_for_summary, mon
             raise RuntimeError("transient error")
         return {"content": "recovered summary", "tool_calls": None}
 
-    mock_llm_for_summary.chat = AsyncMock(side_effect=fake_chat)
+    mock_llm_for_summary.chat_lite = AsyncMock(side_effect=fake_chat)
     result = await service._call_summary_llm(None, [{"role": "user", "content": "x"}])
     assert result == "recovered summary"
     assert call_count[0] == 2  # 失败 1 次 + 成功 1 次
@@ -51,11 +51,11 @@ async def test_summary_llm_retry_then_success(service, mock_llm_for_summary, mon
 async def test_summary_llm_exhausted_returns_none(service, mock_llm_for_summary, monkeypatch):
     """所有重试都失败 → 返回 None"""
     monkeypatch.setattr(asyncio, "sleep", AsyncMock(return_value=None))
-    mock_llm_for_summary.chat = AsyncMock(side_effect=RuntimeError("always fails"))
+    mock_llm_for_summary.chat_lite = AsyncMock(side_effect=RuntimeError("always fails"))
     result = await service._call_summary_llm(None, [{"role": "user", "content": "x"}])
     assert result is None
     # 首次 + 重试 2 次 = 共 3 次
-    assert mock_llm_for_summary.chat.await_count == 3
+    assert mock_llm_for_summary.chat_lite.await_count == 3
 
 
 @pytest.mark.asyncio
@@ -68,17 +68,17 @@ async def test_summary_llm_timeout_returns_none(service, mock_llm_for_summary, m
 
     # service._summary_timeout 默认 30s，测试中改小到 0.1s
     service._summary_timeout = 0.1
-    mock_llm_for_summary.chat = AsyncMock(side_effect=slow_chat)
+    mock_llm_for_summary.chat_lite = AsyncMock(side_effect=slow_chat)
     result = await service._call_summary_llm(None, [{"role": "user", "content": "x"}])
     assert result is None
-    assert mock_llm_for_summary.chat.await_count == 3
+    assert mock_llm_for_summary.chat_lite.await_count == 3
 
 
 @pytest.mark.asyncio
 async def test_summary_llm_empty_content_treated_as_failure(service, mock_llm_for_summary, monkeypatch):
     """空 content 也应视为失败，进入重试"""
     monkeypatch.setattr(asyncio, "sleep", AsyncMock(return_value=None))
-    mock_llm_for_summary.chat = AsyncMock(return_value={"content": "", "tool_calls": None})
+    mock_llm_for_summary.chat_lite = AsyncMock(return_value={"content": "", "tool_calls": None})
     result = await service._call_summary_llm(None, [{"role": "user", "content": "x"}])
     assert result is None
-    assert mock_llm_for_summary.chat.await_count == 3
+    assert mock_llm_for_summary.chat_lite.await_count == 3

@@ -362,9 +362,9 @@ def _evaluate_with_llm(record: dict) -> tuple:
 - 1-4分：跟进内容过于简略或缺乏实质信息"""
 
         import asyncio
-        result = asyncio.run(llm_gateway.chat(
+        result = asyncio.run(llm_gateway.chat_lite(
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=200,
+            max_tokens=500,
         ))
 
         # 补计费：followup_manager 是独立进程，无 SessionRecordService，

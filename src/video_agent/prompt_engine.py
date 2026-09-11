@@ -233,7 +233,7 @@ class PromptEngine:
             {"role": "user", "content": user_prompt},
         ]
         logger.info(f"[PromptEngine] 精修模式调用文本模型, user_input={user_input[:50]}")
-        resp = await self._llm.chat(messages=messages, temperature=0.7, max_tokens=2000)
+        resp = await self._llm.chat(messages=messages, temperature=0.7, max_tokens=10000)
         self.last_usage = resp.get("usage") if isinstance(resp, dict) else None
         content = resp.get("content") or ""
         obj = _extract_json_object(content)
@@ -279,7 +279,7 @@ class PromptEngine:
             {"role": "user", "content": user_prompt},
         ]
         logger.info(f"[PromptEngine] 敏捷模式调用文本模型, count={count}, user_input={user_input[:50]}")
-        resp = await self._llm.chat(messages=messages, temperature=0.9, max_tokens=4000)
+        resp = await self._llm.chat(messages=messages, temperature=0.9, max_tokens=10000)
         self.last_usage = resp.get("usage") if isinstance(resp, dict) else None
         content = resp.get("content") or ""
         arr = _extract_json_array(content)

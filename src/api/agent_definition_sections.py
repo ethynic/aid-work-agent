@@ -112,7 +112,7 @@ async def optimize_section(request: Request, agent_id: str, section_key: str, bo
 - 描述: {body.agent_description or '未知'}"""
 
         from src.llm.gateway import llm_gateway
-        result = await llm_gateway.chat(
+        result = await llm_gateway.chat_lite(
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": f"请优化以下分段内容：\n\n{body.content}"},

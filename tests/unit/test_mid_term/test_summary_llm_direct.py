@@ -114,7 +114,7 @@ async def test_summary_llm_uses_direct_path_when_key_present(monkeypatch):
         lambda provider: "sk-test-key" if provider == "deepseek" else None,
     )
     gateway = MagicMock()
-    gateway.chat = AsyncMock(return_value={"content": "from gateway"})
+    gateway.chat_lite = AsyncMock(return_value={"content": "from gateway"})
     svc = ContextCompressionService(
         settings_cfg=MidTermMemoryConfig(),
         llm_gateway=gateway,
@@ -134,7 +134,7 @@ async def test_summary_llm_uses_direct_path_when_key_present(monkeypatch):
     assert result == "## 用户与背景\n- direct path"
     assert called_direct["flag"] is True
     # gateway 不应被调用
-    assert gateway.chat.await_count == 0
+    assert gateway.chat_lite.await_count == 0
     # 实际 provider 应记录为 deepseek
     assert svc._actual_provider == "deepseek"
 
@@ -154,7 +154,7 @@ async def test_summary_llm_fallback_to_gateway_when_no_key(monkeypatch, mock_llm
     )
     result = await svc._call_summary_llm(None, [{"role": "user", "content": "x"}])
     assert result is not None
-    assert mock_llm_for_summary.chat.await_count == 1
+    assert mock_llm_for_summary.chat_lite.await_count == 1
     # actual_provider 应记录为主 gateway（fallback 后）
     assert svc._actual_provider is not None
 
@@ -389,7 +389,7 @@ async def test_summary_llm_retry_uses_jitter(monkeypatch, mock_llm_for_summary):
     # mock random.random 返回固定值
     monkeypatch.setattr(random_mod, "random", lambda: 0.5)
 
-    mock_llm_for_summary.chat = AsyncMock(side_effect=RuntimeError("fail"))
+    mock_llm_for_summary.chat_lite = AsyncMock(side_effect=RuntimeError("fail"))
     svc = ContextCompressionService(
         settings_cfg=MidTermMemoryConfig(),
         llm_gateway=mock_llm_for_summary,
@@ -421,7 +421,7 @@ async def test_summary_llm_outer_timeout_is_double_inner(monkeypatch, mock_llm_f
     class FakeGateway:
         provider_name = "main"
 
-        async def chat(self, **kwargs):
+        async def chat_lite(self, **kwargs):
             return {"content": "ok"}
 
     real_wait_for = asyncio.wait_for

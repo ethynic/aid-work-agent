@@ -141,7 +141,7 @@ async def recommend_pages(request: Request, body: dict) -> JSONResponse:
 {page_list_str}"""
 
     try:
-        result = await llm_gateway.chat(
+        result = await llm_gateway.chat_lite(
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_message},
