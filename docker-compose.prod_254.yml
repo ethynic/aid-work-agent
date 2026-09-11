@@ -1,0 +1,134 @@
+# AID Work Agent 生产环境，强调稳定运行。发版周期为1-2周。
+# 旧生产服务器 124.222.3.254 使用的版本（2026-09-11 增加 aid-redis 服务前的快照）
+
+services:
+  # FastAPI 后端服务
+  aid-agent-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      # 不锁定基础镜像 digest（理由见 Dockerfile 注释）
+      # 兜底：/tmp tmpfs mount (mode=1777) + fix_tmp.sh (entrypoint)
+    image: aid-agent-api:latest
+    container_name: aid-agent-api
+    restart: unless-stopped
+    
+    # 端口映射
+    ports:
+      - "${API_PORT:-8000}:8000"
+    
+    # 环境变量
+    env_file:
+      - .env
+    environment:
+      # 服务模式（固定值）
+      - SERVER_MODE=fastapi
+      - SERVER_PORT=8000
+      # Gunicorn 配置
+      - WORKERS=${WORKERS:-4}
+      - WORKER_TIMEOUT=${WORKER_TIMEOUT:-120}
+      # 调试模式（生产环境必须为 false）
+      - DEBUG=${DEBUG:-false}
+      # 其他配置
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+
+    # Volume 挂载 - 实现代码热更新
+    volumes:
+      # 挂载整个项目目录到容器（关键：实现代码热更新）
+      - .:/app
+
+      # 日志目录（独立挂载，便于查看）
+      - ./log:/app/log
+
+      # 配置文件（独立挂载，便于修改）
+      - ./configs:/app/configs
+
+      # Skills 目录（独立挂载，便于添加新技能）
+      - ./skills:/app/skills
+
+      # /tmp 权限兜底：debian trixie-slim 上游某次更新导致 /tmp 默认 mode 变成 755，
+      # Playwright 启动 Chromium 时写 /tmp 失败。挂一个 mode=1777 的 tmpfs 强制覆盖。
+      # （和 postgres 容器同一根因：底层 Debian 镜像 tmpfs 配置变化）
+      - type: tmpfs
+        target: /tmp
+        tmpfs:
+          mode: 1777
+          size: 200m
+
+      # 上传附件目录
+      - /var/www/qb3_upload/agent_uploads:/app/uploads
+      - /var/www/qb3_upload/agent_storage:/app/storage
+      # 用于数据迁移
+      - /var/www/qb3_upload/agent2_storage:/app/source_storage
+
+    # 网络配置
+    networks:
+      - aid-network
+    
+    # 健康检查
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    
+    # 日志配置
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # 独立后台运行时（调度器 + 全部后台任务；不启 HTTP）
+  # 与 aid-agent-api 共享 storage/uploads，确保 master_agent 状态、
+  # poller Redis 锁、心跳文件路径一致。
+  aid-agent-background:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: aid-agent-api:latest
+    container_name: aid-agent-background
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # 服务模式（标识当前进程为后台运行时）
+      - SERVER_MODE=background
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    # 覆盖 Dockerfile ENTRYPOINT：跳过 gunicorn，改跑 background_runner
+    entrypoint: ["sh", "-c"]
+    command: ["/usr/local/bin/fix_tmp.sh && exec gosu appuser python -m src.background_runner"]
+    volumes:
+      # 与 API 服务共享代码、日志、配置、skills
+      - .:/app
+      - ./log:/app/log
+      - ./configs:/app/configs
+      - ./skills:/app/skills
+      # 共享业务存储（心跳文件 + master_agent 文件状态 + poller 锁状态）
+      - /var/www/qb3_upload/agent_uploads:/app/uploads
+      - /var/www/qb3_upload/agent_storage:/app/storage
+    networks:
+      - aid-network
+    # 心跳文件法判活：runner 每 30s 写 storage/.bg_runner_alive，2 分钟内有更新即健康
+    healthcheck:
+      test: ["CMD-SHELL", "test -n \"$$(find /app/storage/.bg_runner_alive -mmin -2 2>/dev/null)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 90s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# 网络配置
+networks:
+  aid-network:
+    driver: bridge
+
+# Volume 配置（可选，用于持久化数据）
+volumes:
+  app-logs:
+    driver: local

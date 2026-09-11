@@ -153,3 +153,4 @@ tmp-boss-diag*/
 
 # SSH 私钥（每台开发机自放，含服务器凭据，绝不入库）
 deploy/ssh_key
+.claude/scheduled_tasks.lock

@@ -90,7 +90,8 @@
       "WebFetch(domain:dify.ai)",
       "WebFetch(domain:platform.minimaxi.com)",
       "WebFetch(domain:api-docs.deepseek.com)",
-      "WebFetch(domain:www.bing.com)"
+      "WebFetch(domain:www.bing.com)",
+      "WebFetch(domain:cloud.tencent.com)"
     ]
   }
 }
