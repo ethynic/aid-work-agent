@@ -11,7 +11,10 @@ services:
     image: aid-agent-api:latest
     container_name: aid-agent-api
     restart: unless-stopped
-    
+    # 内存上限：新服务器 4核16G。API 6 workers，每 worker 实测 200-400MB
+    # （加载全部工具/skills 后），8G 上限留足余量且不会挤占 postgres/背景 runner
+    mem_limit: 8g
+
     # 端口映射
     ports:
       - "${API_PORT:-8000}:8000"
@@ -24,7 +27,10 @@ services:
       - SERVER_MODE=fastapi
       - SERVER_PORT=8000
       # Gunicorn 配置
-      - WORKERS=${WORKERS:-4}
+      # 新服务器 4核16G：旧机 8G 保守 3-4 workers，16G 且仅此一个生产实例，
+      # 提到 6（异步 UvicornWorker，worker 数主要影响进程隔离与 IO 并发，
+      # 4 核 CPU 不必按 2n+1 拉满）
+      - WORKERS=${WORKERS:-6}
       - WORKER_TIMEOUT=${WORKER_TIMEOUT:-120}
       # 调试模式（生产环境必须为 false）
       - DEBUG=${DEBUG:-false}
@@ -89,6 +95,9 @@ services:
     image: aid-agent-api:latest
     container_name: aid-agent-background
     restart: unless-stopped
+    # 内存上限：背景 runner 加载整套 Agent + 调度器 + recap 消费，
+    # 4G 上限防止异常膨胀拖垮宿主机（超过后容器被 OOM kill 并由 restart 拉起）
+    mem_limit: 4g
     env_file:
       - .env
     environment:
@@ -127,6 +136,9 @@ services:
     image: redis:7.4-alpine
     container_name: aid-redis
     restart: unless-stopped
+    # 仅作缓存/队列/锁存储，设上限防异常增长；不配 maxmemory 淘汰策略
+    # （recap 队列、poller 锁等被误淘汰会破坏业务语义，靠 mem_limit 硬兜底）
+    mem_limit: 1g
     # 密码取 .env 的 REDIS_PASSWORD（与旧云 Redis 一致，减少 .env 改动）
     command: ["sh", "-c", "exec redis-server --requirepass \"$$REDIS_PASSWORD\" --appendonly yes"]
     environment:
