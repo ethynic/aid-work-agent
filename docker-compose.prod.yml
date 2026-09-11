@@ -122,6 +122,30 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  # Redis（新生产服务器本地实例，替代旧账号云 Redis；仅容器网络可达，不发布端口）
+  aid-redis:
+    image: redis:7.4-alpine
+    container_name: aid-redis
+    restart: unless-stopped
+    # 密码取 .env 的 REDIS_PASSWORD（与旧云 Redis 一致，减少 .env 改动）
+    command: ["sh", "-c", "exec redis-server --requirepass \"$$REDIS_PASSWORD\" --appendonly yes"]
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD:?REDIS_PASSWORD required}
+    volumes:
+      - aid-redis-data:/data
+    networks:
+      - aid-network
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
 # 网络配置
 networks:
   aid-network:
@@ -130,4 +154,6 @@ networks:
 # Volume 配置（可选，用于持久化数据）
 volumes:
   app-logs:
+    driver: local
+  aid-redis-data:
     driver: local
