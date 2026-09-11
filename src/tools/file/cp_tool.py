@@ -124,8 +124,9 @@ cp(source_file_path="src/skills/xxx/assets/template.html", file_path="ppt/index.
 → 将源文件复制到指定输出目录，自动注册下载
 
 参数：
-- source_file_path：源文件绝对路径或项目根目录相对路径。源可来自任意位置
-  （系统 /tmp、skill 生成的临时文件、工具会话目录、项目内文件等）。
+- source_file_path：源文件绝对路径或项目根目录相对路径。源可来自系统 /tmp、
+  skill 生成的临时文件、工具会话目录、项目内文件等位置；
+  但不得访问其他租户的存储目录（storage/tenants/ 下仅限当前租户）。
 - file_path：目标路径。不传时自动分配下载目录路径（推荐）。
   · 相对路径自动落到当前租户附件目录（storage/tenants/{tenant_id}/conversation/）内，
     历史的 storage/、output/ 等前缀会被自动剥离。
@@ -143,6 +144,12 @@ cp(source_file_path="src/skills/xxx/assets/template.html", file_path="ppt/index.
 - 源路径必须是本地真实存在的文件（如 /tmp/xxx.xlsx、storage/.../xxx.pdf）。
   download_url（形如 /api/files/xxx/download）是 HTTP 下载链接，不是本地文件路径，
   不能作为源路径复制，也不存在对应的本地源文件。
+- 源路径只能来自本会话中真实出现过的路径：工具结果返回的 file_path、
+  可用模板文件清单、skill 脚本生成或确认过的文件。
+  禁止凭记忆、常识或想象编造文件名和路径（如自行猜测"templates/xx报价单.pdf"）。
+- 不确定源文件是否存在时，不要反复猜测路径，也不要全盘搜索其他目录；
+  先在当前租户目录或会话已确认的位置查找，确实没有该文件就如实告知用户，
+  并改用真实存在的文件（如可用模板文件清单中的文件）。
 - 工具返回结果中 images 字段已交付的图片（如客户留资下发的顾问二维码），系统已自动
   把图片随回复发送给用户，无需再用本工具复制或下载该图片。"""
     display_name = "复制文件"
@@ -163,17 +170,42 @@ cp(source_file_path="src/skills/xxx/assets/template.html", file_path="ppt/index.
         相对路径仍按项目根目录解析。源文件只需存在且是文件即可，
         不再限制必须在项目根目录内——cp 作为文件交付入口，
         源文件可能来自 skill 脚本生成的系统临时文件、工具的会话目录等任意位置。
-        防穿越的关键在目标路径（_resolve_and_validate_path），源路径无安全风险。
+        防穿越的关键在目标路径（_resolve_and_validate_path）。
+
+        租户边界（2026-09-11 跨租户泄露修复）：解析后的路径若落在任何
+        `tenants/{owner}/` 目录下，owner 必须是当前租户（含 tenant_ 前缀
+        等价），否则拒绝——否则本租户会话可复制其他租户文件并作为附件
+        交付给用户。
         """
         project_root = Path(__file__).resolve().parent.parent.parent.parent
         src = Path(source_file_path)
         if not src.is_absolute():
             src = project_root / src
         src = src.resolve()
+
+        from src.core.tenant_path_guard import find_foreign_tenant_owner
+
+        foreign_owner = find_foreign_tenant_owner(src, self._current_tenant_id())
+        if foreign_owner:
+            logger.warning(
+                f"[安全防护] cp 源路径位于其他租户存储目录，已拒绝: "
+                f"src={src}, foreign_tenant={foreign_owner}"
+            )
+            raise PermissionError(
+                "源文件位于其他租户的存储目录，禁止访问。"
+                "请改用当前租户目录或本会话中已确认存在的文件。"
+            )
+
         if not src.exists():
-            raise FileNotFoundError(f"源文件不存在: {src}")
+            raise FileNotFoundError(
+                f"源文件不存在: {src}。不要猜测或编造路径，也不要全盘搜索其他目录；"
+                f"请改用本会话中已确认存在的文件（工具结果返回的 file_path、"
+                f"可用模板文件清单中的文件），确实没有就如实告知用户暂无该文件。"
+            )
         if not src.is_file():
-            raise ValueError(f"源路径不是文件: {src}")
+            raise ValueError(
+                f"源路径不是文件: {src}。请确认路径指向具体文件而不是目录。"
+            )
         return src
 
     def _current_tenant_id(self) -> Optional[str]:

@@ -122,6 +122,43 @@ class MCPExecutor:
         )
 
         try:
+            # 跨租户路径防护：命令预检（与 skill_execute_tool 同规则）
+            from src.core.tenant_path_guard import (
+                check_text_for_foreign_tenant_paths,
+                is_source_storage_reference,
+            )
+
+            if is_source_storage_reference(command):
+                logger.warning(
+                    f"[安全防护] MCP 命令引用 source_storage，已拦截: tool={tool_name}"
+                )
+                return {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "命令包含对受限存储路径的访问，已被安全防护拦截。",
+                        }
+                    ],
+                    "isError": True,
+                }
+            _blocked, violation_owner = check_text_for_foreign_tenant_paths(
+                command, tenant_id
+            )
+            if violation_owner:
+                logger.warning(
+                    f"[安全防护] MCP 命令引用跨租户存储路径，已拦截: "
+                    f"tool={tool_name}, tenant={tenant_id or '无'}, violation={violation_owner}"
+                )
+                return {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "命令包含对其他租户存储目录的访问，已被安全防护拦截。",
+                        }
+                    ],
+                    "isError": True,
+                }
+
             result: ExecutionResult = await self.skill_executor.execute_skill_command(
                 skill_name=tool_def.skill_name,
                 command=command,
@@ -129,6 +166,12 @@ class MCPExecutor:
                 user_id=tenant_id,
                 stdin_content=stdin_content,
             )
+
+            # 跨租户路径防护：输出后置脱敏
+            from src.core.tenant_path_guard import redact_foreign_tenant_paths
+
+            result.stdout, _ = redact_foreign_tenant_paths(result.stdout, tenant_id)
+            result.stderr, _ = redact_foreign_tenant_paths(result.stderr, tenant_id)
 
             # 转换为 MCP 协议结果
             mcp_result = self._to_mcp_result(tool_name, result)
