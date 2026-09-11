@@ -1,10 +1,10 @@
 /**
  * ResumeBatchReader 单测：推荐牛人页批量「点卡片 → 读简历 → Escape 关闭 → 下一张」链路。
- * fake 注入 snapshot/clickBrowse/pressEscape/captureFullpage/wheel/sameView/stitch/ocr（参照 resume-reader.test.ts）。
+ * fake 注入 snapshot/click/pressEscape/captureFullpage/wheel/sameView/stitch/ocr（参照 resume-reader.test.ts）。
  *
  * 快照构造按真机实证（2026-08-17，视口 1249x1277）：卡片行 = 「姓名(342,y-8) + 活跃状态(400,y-8)」
  * 同行 +「打招呼」按钮(1162,y)，行距 184px；点击点 = 卡片主体列 (600, y+70)；详情 canvas 760x1264@(168,40)。
- * 状态机 fake：clickBrowse 把快照切到 canvas 态（openTimeout 卡保持列表态）、pressEscape 切回列表态
+ * 状态机 fake：click(Win32) 把快照切到 canvas 态（openTimeout 卡保持列表态）、pressEscape 切回列表态
  * （closeFail 卡保持 canvas 态），按 scripts 脚本化每张卡的行为。
  * 默认 OCR 文本头部按卡片姓名生成（defaultOcr，真机形如空格打散）——姓名交叉校验（ocrNameMatches）
  * 默认通过；要测「校验不过」用 script.ocrText 给出不含卡片名的头部。
@@ -39,7 +39,8 @@ const ROW2: Row = { name: '张三丰', buttonY: 330 }
 /** 真机：打招呼按钮文本是字符串形态 "\n                  打招呼"（trim 后 === '打招呼'） */
 const GREET_STRING = '\n                  打招呼'
 const CANVAS_BOUNDS: [number, number, number, number] = [168, 40, 760, 1264] // 真机：详情 iframe canvas
-const CANVAS_RECT: DeviceRect = { x: 168, y: 40, w: 760, h: 1264 }
+// locateResumeCanvas 与视口求交（2026-09-11 小屏修复）：40+1264=1304 出屏（视口 1277）→ 截到 1237
+const CANVAS_RECT: DeviceRect = { x: 168, y: 40, w: 760, h: 1237 }
 const STITCHED_PNG = Buffer.from('fake-stitched-png-bytes')
 
 /** 默认 OCR 文本：头部按卡片姓名生成（真机形如姓名被空格打散），保证姓名交叉校验通过 */
@@ -173,10 +174,10 @@ function makeBatch(
       f.snapshotCount++
       return buildSnap(rows, { canvas: state === 'canvas', extraCanvases: opts.extraCanvases })
     },
-    clickBrowse: async (point) => {
+    click: async (point) => {
       f.clicks.push(point)
       // 脚本按卡片行对位（不是点击次序——重点机制下同一张卡会点多次）；
-      // 2026-09-10 起首选姓名点（姓名节点中心 = buttonY-8）也归位到对应行
+      // 2026-09-10 起点击姓名点（姓名节点中心 = buttonY-8）也归位到对应行
       const s = scriptAt(rowOfPoint(point.y))
       state = s.openTimeout ? 'list' : 'canvas'
       cardIdx = rowOfPoint(point.y)
@@ -398,8 +399,8 @@ test('③ 打开超时（点后始终无 canvas）→ failures 记录后继续�
 test('③b 打开失败诊断日志带画布尺寸：接近阈值的大画布提示疑似详情已开（附件简历型/阈值问题定位依据）', async () => {
   const row: Row = { name: '刘草威', buttonY: 146 }
   const { reader } = makeBatch([row], [{ openTimeout: true }], {
-    // 列表态下页面有一个 380x560 的「差一点过阈值」画布（真机 2026-08-18 曾有 572 高画布被卡掉）
-    extraCanvases: [[0, 0, 380, 560]],
+    // 列表态下页面有一个 380x290 的画布：宽过阈值但高差 10px 被卡（阈值 300，小屏短画布场景）
+    extraCanvases: [[0, 0, 380, 290]],
   })
   const cap = captureStderr()
   let result
@@ -410,7 +411,7 @@ test('③b 打开失败诊断日志带画布尺寸：接近阈值的大画布提
   }
   assert.deepEqual(result.resumes, [])
   const all = cap.lines.join('')
-  assert.match(all, /页面 CANVAS 尺寸：380x560/)
+  assert.match(all, /页面 CANVAS 尺寸：380x290/)
   assert.match(all, /存在接近阈值的大画布，疑似详情实际已打开/)
 })
 

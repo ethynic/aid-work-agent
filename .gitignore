@@ -149,7 +149,7 @@ cc.sh
 clients/boss-resume-assistant/ocr-python/
 
 # 真机排障临时产物（简历拼接图含候选人个人信息，绝不入库）
-tmp-boss-diag/
+tmp-boss-diag*/
 
 # SSH 私钥（每台开发机自放，含服务器凭据，绝不入库）
 deploy/ssh_key

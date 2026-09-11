@@ -50,6 +50,7 @@ import {
   accumulateOwnerOffset,
   indexedValues,
 } from './domSnapshot.js'
+import { viewportOf } from './FilterSetter.js'
 import { CancelledError } from '../operations/types.js'
 
 export class ResumeReadError extends Error {
@@ -158,12 +159,21 @@ export const MERGE_WINDOW = 1024
 export const K_MIN = 8
 /** 接缝错配率可疑阈值：mis > 0.35 的接缝进 suspectSeams（cv-stitch 真机正常接缝 mis ≤ ~0.15） */
 export const SEAM_MIS_SUSPECT = 0.35
-/** 简历 canvas 最小尺寸（device px），排除小图标 canvas。
- *  MIN_H 真机 2026-08-18 从 600 放宽到 400：详情弹层画布高度随窗口/内容自适应，
- *  实测 760×572 的合法简历画布被 600 卡掉（判「详情未打开」连环失败）；
- *  图标类 canvas 仅几十像素，400 仍能安全区分 */
-export const CANVAS_MIN_W = 400
-export const CANVAS_MIN_H = 400
+/** 简历 canvas 最小尺寸（**随视口自适应**，不再写死固定像素）。
+ *  职责：把几十像素的图标 canvas 与简历详情画布区分开。画布尺寸随窗口自适应
+ *  （参考机 760×572~1264，占视口宽 ~61%/高 ~45%+；小屏笔记本同比例缩小），固定值
+ *  无法覆盖不同分辨率——历史两次踩坑：固定 600 误杀 572 高真实画布（2026-08-18），
+ *  固定 400 对小屏笔记本偏高（2026-09-11 客户机）。规则：宽/高各 ≥ 视口对应边 ×25%，
+ *  另设 200px 绝对下限防极端小视口放进图标 canvas。 */
+export function canvasMinSize(viewport: { width: number; height: number }): {
+  minW: number
+  minH: number
+} {
+  return {
+    minW: Math.max(200, Math.round(viewport.width * 0.25)),
+    minH: Math.max(200, Math.round(viewport.height * 0.25)),
+  }
+}
 
 /** 屏幕上的 device px 矩形 */
 export interface DeviceRect {
@@ -175,30 +185,39 @@ export interface DeviceRect {
 
 /**
  * 定位简历详情 canvas：遍历所有 document（隐藏 iframe 的 owner 无可见 bounds，
- * accumulateOwnerOffset 抛错则跳过），找 nodeName=CANVAS 且 bounds w>400 h>600 的可见节点中
+ * accumulateOwnerOffset 抛错则跳过），找 nodeName=CANVAS 且超过自适应最小尺寸（canvasMinSize）的可见节点中
  * **面积最大**者（详情 iframe 里通常只有一个大 canvas；页面其他小 canvas 是图标）。
  *
  * 屏幕区域（device px）= accumulateOwnerOffset(documentIndex) + bounds[0,1] − scrollOffset。
  * 真机：canvas 在 iframe 顶部，scrollOffset 恒为 0，但公式上仍按 − scrollOffset 处理保持与
- * 项目其他定位一致。返回 null 表示当前页面没有打开简历详情。
+ * 项目其他定位一致。
+ *
+ * 2026-09-11 小屏修复：返回矩形与视口求交（截断出屏部分）。开发机大屏画布恰好完整可见；
+ * 客户小屏笔记本弹层画布底部出屏 → 原样返回会导致 cv-segdiff/cv-stitch 裁剪越界（报
+ * 「像素级同画面比对失败」）或 Win32 滚轮落到视口外。滚轮点取交集中心恒在可见区内；
+ * 裁剪恒在截图内。交集为空返回 null。
  */
 export function locateResumeCanvas(snap: DomSnapshot): DeviceRect | null {
   let best: DeviceRect | null = null
   let bestArea = 0
-  snap.documents.forEach((document, documentIndex) => {
-    if (!document.nodes.nodeName) return
+  const vp = viewportOf(snap)
+  const { minW, minH } = canvasMinSize(vp)
+  const documents = snap.documents
+  for (let documentIndex = 0; documentIndex < documents.length; documentIndex++) {
+    const document = documents[documentIndex]!
+    if (!document.nodes.nodeName) continue
     let offset: { x: number; y: number }
     try {
       offset = accumulateOwnerOffset(snap, documentIndex)
     } catch {
-      return // 隐藏 iframe owner 无可见 bounds（后台标签页），跳过
+      continue // 隐藏 iframe owner 无可见 bounds（后台标签页），跳过
     }
     for (const [nodeIndex, nameValueIndex] of indexedValues(document.nodes.nodeName, 'nodeName')) {
       if (snap.strings[nameValueIndex] !== 'CANVAS') continue
       const layoutIndex = document.layout.nodeIndex.indexOf(nodeIndex)
       if (layoutIndex < 0) continue
       const b = document.layout.bounds[layoutIndex]
-      if (!b || b[2]! <= CANVAS_MIN_W || b[3]! <= CANVAS_MIN_H) continue // 小图标 canvas / 无 bounds
+      if (!b || b[2]! <= minW || b[3]! <= minH) continue // 小图标 canvas / 无 bounds
       const area = b[2]! * b[3]!
       if (area <= bestArea) continue
       bestArea = area
@@ -209,14 +228,21 @@ export function locateResumeCanvas(snap: DomSnapshot): DeviceRect | null {
         h: Math.round(b[3]!),
       }
     }
-  })
-  return best
+  }
+  if (!best) return null
+  // 与视口求交（2026-09-11 小屏修复）：出屏部分截断，滚轮/裁剪恒在可见区内
+  const x1 = Math.max(0, best.x)
+  const y1 = Math.max(0, best.y)
+  const x2 = Math.min(vp.width, best.x + best.w)
+  const y2 = Math.min(vp.height, best.y + best.h)
+  if (x2 - x1 <= 0 || y2 - y1 <= 0) return null
+  return { x: x1, y: y1, w: x2 - x1, h: y2 - y1 }
 }
 
 /**
  * 诊断用：页面全部可见 CANVAS 尺寸（面积降序，最多 5 个，只取 w/h 不含坐标——坐标不进日志）。
  * 「详情未打开」排障关键：若列表里出现接近阈值的大画布（如 380x560），说明弹层实际已打开、
- * 只是没过 CANVAS_MIN_W/H 判定；全是几十像素的图标 canvas 则是详情真的没开。
+ * 只是没过 canvasMinSize 自适应门槛；全是几十像素的图标 canvas 则是详情真的没开。
  */
 export function canvasCandidates(snap: DomSnapshot): Array<{ w: number; h: number }> {
   const out: Array<{ w: number; h: number }> = []

@@ -8,8 +8,9 @@
  * - 卡片行结构：每行右侧「打招呼」按钮（x≈1162）视口内 7 个、y 间隔 184px；行左上「姓名 + 活跃状态」
  *   同行（刘草威@342,138 / 刚刚活跃@400,138 / 按钮 y=146）——姓名配对规则抽到共享模块 cardName.ts
  *   （与 GreetExecutor 定向打招呼共用同一套锚定，保证读到的人和打招呼的人是同一个人）。
- * - 卡片点击走 CDP 浏览类点击（clickBrowse）即有效打开详情；不需要 Win32（卡片是浏览动作，
- *   BOSS 风控不拦 CDP 合成点击；写动作/筛选类仍必须 Win32）。
+ * - 卡片点击走 Win32 真实鼠标点击（session.click）：2026-09-11 客户机实证 BOSS 反作弊 SDK
+ *   会选择性拦截 CDP 合成点击（同账号 greet 的 Win32 点击一直正常），被拦时点击静默失效；
+ *   Win32 为操作系统级真人输入，SDK 无法区分（与写动作同一通道，见 bossContext.ts 说明）。
  * - 详情 ~600ms 后大 CANVAS 出现（locateResumeCanvas 命中）；Escape（CDP dispatchKey）关闭后
  *   canvas 消失、可点下一张。
  *
@@ -45,8 +46,7 @@ import {
   ocrNameMatches,
   locateResumeCanvas,
   canvasCandidates,
-  CANVAS_MIN_W,
-  CANVAS_MIN_H,
+  canvasMinSize,
   type DeviceRect,
   type OcrEngine,
   type ResumeReadResult,
@@ -91,7 +91,10 @@ export interface ResumeBatchDeps {
   /** 采集 fresh DOMSnapshot（每次点击前重新采集，禁止复用旧坐标） */
   snapshot(): Promise<DomSnapshot>
   /** CDP 浏览类点击（点卡片打开详情；真机实证有效，不占真实鼠标） */
-  clickBrowse(point: ClickPoint, viewport: { width: number; height: number }): Promise<void>
+  /** Win32 真实鼠标点击（打开卡片详情）。2026-09-11 从 CDP 合成点击（clickBrowse）切换：
+   *  客户机实证 BOSS 反作弊 SDK 会选择性拦截 CDP 合成点击（同账号 greet 的 Win32 点击一直
+   *  正常），被拦时点击静默失效「页面无反应」；Win32 为操作系统级真人输入，SDK 无法区分。 */
+  click(point: ClickPoint, viewport: { width: number; height: number }): Promise<void>
   /** CDP dispatchKey Escape（关闭简历详情弹层） */
   pressEscape(): Promise<void>
   /** 无 clip 整页截图（device px，与 DOMSnapshot bounds 同坐标系） */
@@ -222,7 +225,7 @@ export class ResumeBatchReader {
 
     for (;;) {
       if (this.deps.signal?.aborted) throw new CancelledError(`已取消：已读取 ${resumes.length} 份简历后中止`)
-      // 拟人节奏：相邻卡片间留间隔（含失败重试路径），降低风控对高频合成事件的节流风险
+      // 拟人节奏：相邻卡片间留间隔（含失败重试路径），降低风控事件节流风险
       if (attempted > 0) await this.sleep(CARD_PACE_DELAY)
       const snap = await this.deps.snapshot()
       const viewport = viewportOf(snap)
@@ -270,7 +273,7 @@ export class ResumeBatchReader {
         if (i % OPEN_RECLICK_AFTER === 0 && i / OPEN_RECLICK_AFTER < OPEN_CLICK_ATTEMPTS) {
           const pt = card.namePoint
           clickSequence.push(`(${pt.x},${pt.y})姓名点`)
-          await this.deps.clickBrowse(pt, viewport)
+          await this.deps.click(pt, viewport)
         }
         await this.sleep(OPEN_POLL_INTERVAL)
         if (this.deps.signal?.aborted) throw new CancelledError(`已取消：已读取 ${resumes.length} 份简历后中止`)
@@ -286,11 +289,12 @@ export class ResumeBatchReader {
         const canvasNote = canvases.length > 0
           ? `页面 CANVAS 尺寸：${canvases.map((c) => `${c.w}x${c.h}`).join('、')}`
           : '页面无 CANVAS 节点'
-        const nearMiss = canvases.some((c) => c.w > 300 && c.h > 300)
+        const nearMiss = canvases.some((c) => c.w >= 250 && c.h >= 250)
+        const { minW, minH } = canvasMinSize(viewport)
         pushFailure(
           card.name,
           '点击卡片后简历详情未打开（未出现简历画布）',
-          `点击序列 ${clickSequence.join('→')}；${OPEN_POLL_TIMEOUT}ms 内未检出 >${CANVAS_MIN_W}x${CANVAS_MIN_H} 画布；` +
+          `点击序列 ${clickSequence.join('→')}；${OPEN_POLL_TIMEOUT}ms 内未检出 >${minW}x${minH} 画布；` +
             `${canvasNote}${nearMiss ? '；存在接近阈值的大画布，疑似详情实际已打开' : ''}`,
         )
         // 详情可能实际已打开但画布判定未命中（真机 2026-08-18：572 高画布被阈值卡掉）——
