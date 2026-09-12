@@ -1,5 +1,7 @@
 # 桌面 CLI 自动任务场景：微信营销首场景与 BOSS 聊天衔接
 
+> 2026-09-11 后续架构：P5 之后的长期会话能力单独定义于[端侧会话任务设计](../desktop-automation/edge-session-task-design.md)及[C0–C5 计划](../../plans/desktop-automation/plan-edge-session-task.md)。新会话的观察、等待、就绪调度以该设计的 Runtime 循环为准；本文 §11 的 BOSS 业务约束、话术范围及 P0′ 门禁继续有效，后续接入需单独更新适配计划。固定内容营销的现有路径和 P0–P5 不受此扩展影响。
+
 版本：V1.1 · 日期：2026-09-08 · 状态：设计完成，待开发。
 
 关联：[源码调研](../../research/weixin-cli/automation-readiness-2026-09-08.md) · [技术实现与开发计划](../../plans/weixin/plan-weixin-marketing-automation.md)。本文的新增行为均为设计，当前能力以调研矩阵为准。

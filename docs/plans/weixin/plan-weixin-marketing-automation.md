@@ -1,5 +1,7 @@
 # 桌面 CLI 自动任务：微信首场景实施与 BOSS 衔接计划
 
+> 2026-09-11 后续计划：P5 后新增能力见[端侧会话任务设计](../../design/desktop-automation/edge-session-task-design.md)及[独立 C0–C5 开发计划](../desktop-automation/plan-edge-session-task.md)，不续写或重编号本文 P0–P5。未来 BOSS 会话循环复用端侧执行器；本文的招聘业务约束和独立 P0′ 门禁保留，既有 P0′ 代码进展不因架构扩展而重置。新会话协议与循环位置冲突时以新设计为准。
+
 日期：2026-09-08 · 状态：📋 待开发。配套：[产品/架构/UI](../../design/weixin/weixin-marketing-automation-design.md) · [当前代码调研](../../research/weixin-cli/automation-readiness-2026-09-08.md)。本文件定义目标实现，代码路径标“新增/修改”均为计划，不代表本次已实现。
 
 ## 1. 关键技术决策
