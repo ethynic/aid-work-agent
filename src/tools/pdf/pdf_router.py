@@ -140,11 +140,12 @@ class PdfRouter:
                 max_tokens=512,
             )
 
+            from src.config.settings import settings
             from src.services.session_record import record_background_llm_usage
             record_background_llm_usage(
                 response.get("usage") if isinstance(response, dict) else None,
                 source="pdf_router",
-                model=gateway.get_model_name(),
+                model=settings.llm.get_lite_model(),  # chat_lite 实际消耗 lite 模型，按 lite 单价计费
             )
 
             content = response.get("content", "")

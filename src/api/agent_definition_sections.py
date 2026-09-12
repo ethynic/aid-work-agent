@@ -121,12 +121,14 @@ async def optimize_section(request: Request, agent_id: str, section_key: str, bo
             max_tokens=4096,
         )
 
+        from src.config.settings import settings
         from src.services.session_record import record_admin_llm_usage
         record_admin_llm_usage(
             result,
             tenant_id=getattr(request.state, "tenant_id", None),
             user_id=getattr(request.state, "user_id", None),
             source_label=f"optimize_section_{section_key}",
+            model=settings.llm.get_lite_model(),  # chat_lite 实际消耗 lite 模型，按 lite 单价计费
         )
 
         optimized = result.get("content", "").strip()

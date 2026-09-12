@@ -212,7 +212,7 @@ class BrowserOrchestrator:
         record_background_llm_usage(
             response.get("usage") if isinstance(response, dict) else None,
             source="browser_orchestrator",
-            model=llm_gateway.get_model_name(),
+            model=settings.llm.get_lite_model(),  # chat_lite 实际消耗 lite 模型，按 lite 单价计费
         )
 
         content = response.get("content", "")

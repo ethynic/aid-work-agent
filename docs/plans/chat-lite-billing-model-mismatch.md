@@ -1,6 +1,6 @@
 # chat_lite 切换后的计费模型错配（已知问题）
 
-> **状态**：已知问题，短期接受现状，待后续统一整改
+> **状态**：部分修复（2026-09-12 兜底路径 ②③ 已显式传 lite 模型名；对话内累加路径 ① 仍按主模型计价，短期接受，待后续统一整改）
 > **发现时间**：2026-09-11
 > **性质**：计费不精确（方向为多收租户，非漏收），非功能性故障
 
@@ -51,10 +51,10 @@ lite token 被按主模型单价计费 -> **多收租户**（输出端价差约 
 
 单次量级：这些调用点都是小任务（completion 通常几百~2000 token），单次误差约 `(8.0-2.7) × tokens/1e6 ≈ 0.003~0.01 元`。但分类/情绪/路由类调用在每轮对话中可能触发多次，长期累积不可忽略。对账核查时 `usage_breakdown.chat.model` 与实际调用模型不一致可作为识别特征。
 
-## 4. 修复方向（未实施）
+## 4. 修复方向
 
-- **兜底路径（小改）**：路径 ②③ 的调用点显式传 lite 模型名（`settings.llm.get_lite_target()[1]`），`_persist_background_llm_record` / `record_admin_llm_usage` 即可按正确单价计价。
-- **对话内累加路径（中等改动）**：`add_llm_usage` 增加 model 维度（per-call 快照带 model），`usage_breakdown` 按模型分桶累计，`save()` 分模型查档计价。涉及 `SessionRecordService` 结构与分段计价逻辑，需回归全部计费测试。
+- **兜底路径（小改）** ✅ 已实施（2026-09-12）：路径 ②③ 的 11 处调用点显式传 lite 模型名（用现成 helper `settings.llm.get_lite_model()`，等价于 `get_lite_target()[1]`），`_persist_background_llm_record` / `record_admin_llm_usage` 即可按正确单价计价。涉及文件：`knowledge/parsers/excel_parser.py`、`services/classification_service.py`、`services/case_matching_service.py`、`services/sentiment_service.py`、`services/data_analysis/schema_extractor.py` ×2、`tools/browser/orchestrator.py`、`tools/pdf/pdf_router.py`、`tools/word/word_router.py`、`skills/followup_manager.py`、`api/agent_definition_sections.py`、`api/page_metadata.py`。注意：该修复只对路径 ②（兜底独立落库）与路径 ③（管理后台独立落库）生效；对话内走路径 ① 累加时 model 参数被忽略，仍按主模型计价，需等下方中等改动落地。
+- **对话内累加路径（中等改动）**（未实施）：`add_llm_usage` 增加 model 维度（per-call 快照带 model），`usage_breakdown` 按模型分桶累计，`save()` 分模型查档计价。涉及 `SessionRecordService` 结构与分段计价逻辑，需回归全部计费测试。
 - 统一整改时建议同步处理 `billing_audit.md` §3.6 的「工具入口 vs 渠道入口」核对，避免引入双计。
 
 ## 5. 关联

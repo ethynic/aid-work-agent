@@ -10,6 +10,7 @@ from typing import Any, Dict, List
 
 from loguru import logger
 
+from src.config.settings import settings
 from src.llm.gateway import LLMGateway
 
 
@@ -152,7 +153,7 @@ class SchemaExtractor:
             record_background_llm_usage(
                 response.get("usage") if isinstance(response, dict) else None,
                 source="schema_extract",
-                model=gateway.get_model_name(),
+                model=settings.llm.get_lite_model(),  # chat_lite 实际消耗 lite 模型，按 lite 单价计费
             )
 
             content = response.get("content", "")
@@ -206,7 +207,7 @@ class SchemaExtractor:
             record_background_llm_usage(
                 response.get("usage") if isinstance(response, dict) else None,
                 source="schema_infer_relations",
-                model=gateway.get_model_name(),
+                model=settings.llm.get_lite_model(),  # chat_lite 实际消耗 lite 模型，按 lite 单价计费
             )
 
             content = response.get("content", "")

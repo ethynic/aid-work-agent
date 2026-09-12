@@ -277,6 +277,7 @@ class ExcelParser(BaseParser):
             record_background_llm_usage(
                 response.get("usage") if isinstance(response, dict) else None,
                 source="excel_layout_detect",
+                model=settings.llm.get_lite_model(),  # chat_lite 实际消耗 lite 模型，按 lite 单价计费
             )
             answer = (response.get("content", "") or "").strip().lower()
             if "table" in answer:

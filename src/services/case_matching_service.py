@@ -158,8 +158,12 @@ class CaseMatchingService:
             )
 
             # 累加 LLM 用量到当前 SessionRecordService（对话内后台 LLM 调用计费）
+            from src.config.settings import settings
             from src.services.session_record import record_background_llm_usage
-            record_background_llm_usage(response.get("usage") if isinstance(response, dict) else None)
+            record_background_llm_usage(
+                response.get("usage") if isinstance(response, dict) else None,
+                model=settings.llm.get_lite_model(),  # chat_lite 实际消耗 lite 模型，按 lite 单价计费
+            )
 
             content = response.get("content", "")
             matches = self._parse_json_array(content)

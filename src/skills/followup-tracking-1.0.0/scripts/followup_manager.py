@@ -338,6 +338,7 @@ def cmd_evaluate_quality(args):
 def _evaluate_with_llm(record: dict) -> tuple:
     """调用 LLM 评估跟进质量，返回 (score, feedback)"""
     try:
+        from src.config.settings import settings
         from src.llm.gateway import llm_gateway
 
         prompt = f"""请评估以下销售跟进记录的质量，给出 1-10 分的评分和简短反馈。
@@ -375,7 +376,7 @@ def _evaluate_with_llm(record: dict) -> tuple:
             tenant_id=record.get("tenant_id"),
             user_id=record.get("user_id"),
             source="followup_evaluate",
-            model=llm_gateway.get_model_name(),
+            model=settings.llm.get_lite_model(),  # chat_lite 实际消耗 lite 模型，按 lite 单价计费
         )
 
         content = result.get("content", "")

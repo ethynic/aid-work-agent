@@ -149,12 +149,14 @@ async def recommend_pages(request: Request, body: dict) -> JSONResponse:
             temperature=0.1,
             max_tokens=2048,
         )
+        from src.config.settings import settings
         from src.services.session_record import record_admin_llm_usage
         record_admin_llm_usage(
             result,
             tenant_id=getattr(request.state, "tenant_id", None),
             user_id=getattr(request.state, "user_id", None),
             source_label="recommend_pages",
+            model=settings.llm.get_lite_model(),  # chat_lite 实际消耗 lite 模型，按 lite 单价计费
         )
         content = result.get("content", "")
 
