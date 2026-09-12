@@ -277,7 +277,25 @@ class AttractionRetriever:
             - 单张图片注册失败仅记 warning 不阻断（设计文档 §5.1.1 metadata.images 契约）
             - chunks / chunks_vec 部分逻辑与改造前完全一致
         """
+        # reset 后向量化，配合下方独立落库计费（避免批量导入时计数器累积重复记账）
+        client = self._get_embedding_client()
+        client.reset_usage()
         embedding = self._embed(info_text)
+
+        # 补计费：导入入库向量化消耗（API 入口无会话 record，独立落库归属租户）
+        if client.last_usage_tokens > 0:
+            try:
+                from src.services.session_record import record_admin_embedding_usage
+                record_admin_embedding_usage(
+                    client,
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    source_label="travel_quote_import_attraction",
+                    source_type="background_embedding",
+                )
+            except Exception:
+                logger.opt(exception=True).debug("Failed to record attraction import embedding usage")
+
         embedding_str = "[" + ",".join(str(v) for v in embedding) + "]"
 
         # 先用原始 metadata 创建 document 拿 doc_id（图片注册需要 linked_doc_id）

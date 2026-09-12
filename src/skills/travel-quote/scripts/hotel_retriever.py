@@ -265,7 +265,25 @@ class HotelRetriever:
         Returns:
             doc_id
         """
+        # reset 后向量化，配合下方独立落库计费（避免批量导入时计数器累积重复记账）
+        client = self._get_embedding_client()
+        client.reset_usage()
         embedding = self._embed(info_text)
+
+        # 补计费：导入入库向量化消耗（API 入口无会话 record，独立落库归属租户）
+        if client.last_usage_tokens > 0:
+            try:
+                from src.services.session_record import record_admin_embedding_usage
+                record_admin_embedding_usage(
+                    client,
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    source_label="travel_quote_import_hotel",
+                    source_type="background_embedding",
+                )
+            except Exception:
+                logger.opt(exception=True).debug("Failed to record hotel import embedding usage")
+
         embedding_str = "[" + ",".join(str(v) for v in embedding) + "]"
 
         meta_json = json.dumps(metadata or {}, ensure_ascii=False)

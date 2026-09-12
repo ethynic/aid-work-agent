@@ -980,6 +980,27 @@ class KnowledgeBaseService:
                     global_view=global_view,
                 )
 
+                # 补计费兜底：独立搜索 API 无会话 record，retriever 内的条件式
+                # 计费会静默跳过，此处对无 record 场景独立落库（有 record 时
+                # retriever 已累加，不重复计）
+                emb_tokens = int(getattr(embedding_client, "last_usage_tokens", 0) or 0)
+                if emb_tokens > 0:
+                    try:
+                        from src.services.session_record import (
+                            SessionRecordManager, record_admin_embedding_usage,
+                        )
+                        record = SessionRecordManager.get_current_record()
+                        if not record:
+                            record_admin_embedding_usage(
+                                embedding_client,
+                                tenant_id=tenant_id,
+                                user_id=str(user_id) if user_id else None,
+                                source_label="knowledge_search_documents",
+                                source_type="background_embedding",
+                            )
+                    except Exception:
+                        logger.opt(exception=True).debug("Failed to record search_documents embedding usage")
+
                 # 提取文档标题
                 if results:
                     doc_ids = {r["doc_id"] for r in results}

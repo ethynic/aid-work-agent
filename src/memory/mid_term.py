@@ -953,7 +953,7 @@ class ContextCompressionService:
                     content = (result or {}).get("content")
                     # fallback 到主 gateway，provider/model 以 gateway 实际为准
                     self._actual_provider = getattr(gateway, "provider_name", None) or "main"
-                    self._actual_model = model_cfg
+                    self._actual_model = settings.llm.get_lite_model()
                     # 累加 LLM 用量到当前 SessionRecordService（对话内后台 LLM 调用计费）
                     # v3.2.2 P1 修复：background_runner 调度场景透传 tenant_id/user_id
                     from src.services.session_record import record_background_llm_usage
@@ -963,7 +963,7 @@ class ContextCompressionService:
                         user_id=user_id,
                         source="mid_term_summary",
                         user_message="上下文压缩扫描摘要",
-                        model=model_cfg,
+                        model=settings.llm.get_lite_model(),  # chat_lite 实际消耗 lite 模型，按 lite 单价计费
                     )
 
                 content = (content or "").strip()
