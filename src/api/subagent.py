@@ -212,10 +212,8 @@ async def get_subagent_greeting(request: Request, agent_id: str):
             data = _parse_greeting_llm_output(result.get("content", "") or "")
         except Exception as e:
             logger.opt(exception=True).error(f"数字员工空态摘要生成失败: agent={agent_id}: {e}")
-
-        # 生成成功：写缓存 + 计费归属当前访问者
-        if data:
-            set_cached(CacheKeys.SUBAGENT_GREETING, agent_id, value=data, ttl=_GREETING_TTL)
+        else:
+            # LLM 实际已执行，无论解析成败都计费归属当前访问者（真实 token 已消耗）
             try:
                 from src.services.session_record import record_background_llm_usage
                 record_background_llm_usage(
@@ -228,6 +226,10 @@ async def get_subagent_greeting(request: Request, agent_id: str):
                 )
             except Exception as e:
                 logger.opt(exception=True).error(f"数字员工空态摘要计费失败: {e}")
+
+        # 生成成功：写缓存
+        if data:
+            set_cached(CacheKeys.SUBAGENT_GREETING, agent_id, value=data, ttl=_GREETING_TTL)
             return {"success": True, "data": data, "source": "llm"}
 
         # 兜底：description + 通用按钮，不阻塞 UI

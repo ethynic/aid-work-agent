@@ -82,7 +82,7 @@ export function createBossResumeBatchOperation(
           })
           const reader = new ResumeBatchReader({
             snapshot: session.snapshot,
-            clickBrowse: (point) => session.clickBrowse(point),
+            click: (point, viewport) => session.click(point, viewport),
             pressEscape: session.pressEscape,
             captureFullpage: session.captureFullpage,
             wheel: (rect, viewport, deltaY, notches) => wheelAt(rect, viewport, deltaY, notches),

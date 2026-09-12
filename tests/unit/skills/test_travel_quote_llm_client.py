@@ -130,7 +130,8 @@ class TestCallLlmQwen:
         with pytest.raises(ValueError, match='QWEN API key 未配置'):
             llm_client.call_llm('p')
 
-    def test_enable_thinking_none_omits_param(self, monkeypatch):
+    def test_enable_thinking_always_false(self, monkeypatch):
+        """本 client 调用点全是抽取/选择小任务，无论全局配置如何都强制关思考"""
         import llm_client
         import httpx
 
@@ -144,7 +145,7 @@ class TestCallLlmQwen:
         monkeypatch.setattr(httpx, 'post', _fake_post)
 
         llm_client.call_llm('p')
-        assert 'enable_thinking' not in captured['payload']
+        assert captured['payload']['enable_thinking'] is False
 
 
 class TestCallLlmProviderOverride:

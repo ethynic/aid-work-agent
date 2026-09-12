@@ -68,7 +68,7 @@ async def test_fallback_summary_text_starts_with_skeleton(service, monkeypatch):
     monkeypatch.setattr(models_mod.MessageDB, "list_by_session", _fake_load_msgs)
 
     # 让 LLM 必失败
-    service._llm_gateway.chat = AsyncMock(side_effect=RuntimeError("llm 503"))
+    service._llm_gateway.chat_lite = AsyncMock(side_effect=RuntimeError("llm 503"))
     service._model_limit_cache = 1_000
 
     captured_summary = {"text": None}

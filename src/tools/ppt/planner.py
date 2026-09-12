@@ -96,7 +96,8 @@ class PPTPlanner:
                     {"role": "user", "content": prompt},
                 ],
                 temperature=0.3,
-                max_tokens=4096,
+                # 大纲规划走主链路思考提升质量；思考+正文共享预算，max_tokens 须给足防截断
+                max_tokens=10000,
             )
 
             from src.services.session_record import record_background_llm_usage

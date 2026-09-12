@@ -12,9 +12,12 @@ bind = f"0.0.0.0:{os.environ.get('SERVER_PORT', '8000')}"
 worker_class = "uvicorn.workers.UvicornWorker"
 
 # ── Worker 数量 ────────────────────────────────────────
-# 推荐公式：2×CPU核数 + 1
-# 当前服务器：4 核 → 原本 workers = 9
-# 5 用户场景降低到 3，减少内存和磁盘 IO 压力
+# 推荐公式：2×CPU核数 + 1（同步 worker 参考值；本项目为异步 UvicornWorker，
+# worker 数主要影响进程隔离与 IO 并发，不必按 2n+1 拉满）
+# 实际生产值由 compose 的 WORKERS 环境变量决定：
+#   - 新生产服务器（129.211.65.243，4核16G）：6（docker-compose.prod.yml）
+#   - 旧生产 124.222.3.254（4核8G，多实例共存）：3-4
+# 此处默认值仅兜底无 compose 的裸启动场景
 # 可通过环境变量 WORKERS 覆盖
 workers = int(os.environ.get("WORKERS", 3))
 

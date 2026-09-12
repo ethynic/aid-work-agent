@@ -68,7 +68,7 @@ async def test_llm_failure_fallback_summary_is_truncated(service, mock_llm_for_s
     _patch_load(service, _build_msgs(50))
     service._model_limit_cache = 1_000
 
-    mock_llm_for_summary.chat = AsyncMock(side_effect=RuntimeError("llm boom"))
+    mock_llm_for_summary.chat_lite = AsyncMock(side_effect=RuntimeError("llm boom"))
 
     fallback_calls = {"n": 0, "last": None}
     orig = service._fallback_truncate

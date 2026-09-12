@@ -94,10 +94,9 @@ def call_llm(prompt: str, *, timeout: float = 300.0,
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0.0,
             }
-            # qwen 推理模型关闭思考（enable_thinking），与主链路 QwenProvider 行为一致。
-            # 不透传 extra_body：调用方传的是 deepseek 格式 thinking 参数，对 qwen 兼容接口无效，可能触发 400
-            if settings.llm.enable_thinking is not None:
-                payload["enable_thinking"] = settings.llm.enable_thinking
+            # 本 client 的调用点全部是抽取/选择小任务，统一关思考（enable_thinking）：
+            # 跟随全局 enable_thinking=true 时，思考 token 会烧穿小 max_tokens（如价格选择 32/64）
+            payload["enable_thinking"] = False
             if max_tokens is not None:
                 payload["max_tokens"] = max_tokens
             resp = httpx.post(
@@ -119,7 +118,8 @@ def call_llm(prompt: str, *, timeout: float = 300.0,
             model = model_override or getattr(settings.llm.zhipu, 'model', None) or 'GLM-5.3-Flash'
             base_url = getattr(settings.llm.zhipu, 'base_url', None) or 'https://open.bigmodel.cn/api/paas/v4'
             api_url = f"{base_url.rstrip('/')}/chat/completions"
-            payload = {"model": model, "messages": [{"role": "user", "content": prompt}], "temperature": 0.0}
+            # GLM Flash 始终思考，low 档 reasoning 归零（与主链路 ZhipuProvider 行为一致）
+            payload = {"model": model, "messages": [{"role": "user", "content": prompt}], "temperature": 0.0, "reasoning_effort": "low"}
             if max_tokens is not None:
                 payload["max_tokens"] = max_tokens
             if extra_body:
@@ -143,7 +143,9 @@ def call_llm(prompt: str, *, timeout: float = 300.0,
             model = model_override or getattr(settings.llm.deepseek, 'model', None) or 'deepseek-v4-flash'
             base_url = getattr(settings.llm.deepseek, 'base_url', None) or 'https://api.deepseek.com'
             api_url = f"{base_url.rstrip('/')}/chat/completions"
-            payload = {"model": model, "messages": [{"role": "user", "content": prompt}], "temperature": 0.0}
+            # 兜底关思考：调用方 _llm_kwargs 已按生效 provider 处理，此处兜底防漏（evaluate 等
+            # 未传 extra_body 的调用点在 deepseek 思考开启时会烧穿小 max_tokens）
+            payload = {"model": model, "messages": [{"role": "user", "content": prompt}], "temperature": 0.0, "thinking": {"type": "disabled"}}
             if max_tokens is not None:
                 payload["max_tokens"] = max_tokens
             if extra_body:

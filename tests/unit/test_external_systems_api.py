@@ -249,7 +249,7 @@ class TestGetSsoUrl:
             calls["url"] = url
             calls["agent_token"] = agent_token
             calls["headers"] = extra_headers
-            return {"Code": 0, "Response": {"url": "https://erp.example.com/?client_token=t"}}
+            return {"Code": 0, "Response": {"url": "https://erp.example.com/?sso_ticket=t"}}
 
         monkeypatch.setattr(
             "src.services.recap.tasks.external_push._delegate_login",
@@ -365,7 +365,7 @@ class TestGetSsoUrlTokenParam:
         )
         result = await external_systems.get_sso_url("pre_sales", _request(TENANT))
         assert result["success"] is True
-        assert result["data"]["url"] == "https://erp.example.com/?client_token=ctok"
+        assert result["data"]["url"] == "https://erp.example.com/?sso_ticket=ctok"
 
     async def test_delegate_failure_with_sso_login_fallback(self, authed, monkeypatch):
         """委托会话不可用但文档声明 sso_login_url：走 agent_token + 手机号兜底签发"""
@@ -391,7 +391,7 @@ class TestGetSsoUrlTokenParam:
         monkeypatch.setattr("src.services.recap.tasks.external_push._post_json", _login)
         result = await external_systems.get_sso_url("pre_sales", _request(TENANT))
         assert result["success"] is True
-        assert result["data"]["url"] == "https://erp.example.com/?client_token=stok"
+        assert result["data"]["url"] == "https://erp.example.com/?sso_ticket=stok"
         assert calls["url"] == "https://erp.example.com/api/v1/erp.delegate/sso_login"
         assert calls["body"] == {"mobile": "13800000000"}
 
@@ -445,7 +445,7 @@ class TestGetSsoUrlGrantRetry:
             grant_calls.append(extra_headers)
             # 旧 token 被第三方判失效，新 token 换票成功
             code = -99 if extra_headers["Client-Authorize-Token"] == "stale_ct" else 0
-            return {"Code": code, "Response": {"url": "https://erp.example.com/?client_token=t"}}
+            return {"Code": code, "Response": {"url": "https://erp.example.com/?sso_ticket=t"}}
 
         monkeypatch.setattr("src.services.recap.tasks.external_push._delegate_login", _login)
         monkeypatch.setattr("src.services.recap.tasks.external_push._post_json", _grant)

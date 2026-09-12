@@ -244,6 +244,33 @@ class SkillExecuteTool(BaseTool):
                 stdin_content = _json.dumps(payload).encode("utf-8")
 
         try:
+            # 跨租户路径防护：命令预检（2026-09-11 跨租户泄露修复）。
+            # 拦截引用其他租户 tenants 目录或 source_storage（生产存储挂载点）的命令。
+            from src.core.tenant_path_guard import (
+                check_text_for_foreign_tenant_paths,
+                is_source_storage_reference,
+            )
+
+            violation_owner = None
+            if is_source_storage_reference(processed_command):
+                violation_owner = "source_storage"
+            else:
+                _blocked, violation_owner = check_text_for_foreign_tenant_paths(
+                    processed_command, resolved_tenant_id
+                )
+            if violation_owner:
+                logger.warning(
+                    f"[安全防护] skill_execute 命令引用跨租户存储路径，已拦截: "
+                    f"skill={skill_name}, tenant={resolved_tenant_id or '无'}, "
+                    f"violation={violation_owner}, command={processed_command[:300]}"
+                )
+                return {
+                    "success": False,
+                    "error": "命令包含对其他租户存储目录的访问，已被安全防护拦截。"
+                    "只能访问当前租户目录下的文件。",
+                    "skill_name": skill_name,
+                }
+
             # 后端日志：诊断实际提交给执行器的命令
             logger.info(f"后端日志：[skill_execute] 提交给 skill_executor 执行, skill={skill_name}, real_session_id={real_session_id}, real_user_id={real_user_id}")
             cmd_preview = processed_command[:500] if len(processed_command) > 500 else processed_command
@@ -258,6 +285,20 @@ class SkillExecuteTool(BaseTool):
                 stdin_content=stdin_content,
                 env_extra=self.llm_env,
             )
+
+            # 跨租户路径防护：输出后置脱敏。覆盖命令预检无法命中的场景
+            # （如 `find /app` 全盘枚举的输出中出现其他租户文件路径）。
+            from src.core.tenant_path_guard import redact_foreign_tenant_paths
+
+            result.stdout, stdout_violations = redact_foreign_tenant_paths(
+                result.stdout, resolved_tenant_id
+            )
+            result.stderr, stderr_violations = redact_foreign_tenant_paths(
+                result.stderr, resolved_tenant_id
+            )
+            if result.error:
+                result.error, _ = redact_foreign_tenant_paths(result.error, resolved_tenant_id)
+            redacted_violations = stdout_violations + [v for v in stderr_violations if v not in stdout_violations]
 
             # 后端日志：诊断执行结果
             logger.info(f"后端日志：[skill_execute] 执行结果: skill={skill_name}, success={result.success}, exit_code={result.exit_code}, duration={result.duration:.2f}s, timed_out={result.timed_out}")
@@ -312,6 +353,11 @@ class SkillExecuteTool(BaseTool):
             # 脚本可通过 stdout JSON 中的 _no_truncate 声明输出不宜截断
             # （如 load_api_config 返回外部 API 说明文档，LLM 需完整内容才能调用接口）。
             # 提升到返回结果顶层，供 agent 工具结果截断逻辑识别豁免。
+            if redacted_violations:
+                resp["security_note"] = (
+                    "输出中包含其他租户存储路径，已自动脱敏。"
+                    "禁止访问其他租户目录，请仅使用当前租户目录下的文件。"
+                )
             if result.stdout:
                 try:
                     stdout_obj = _json.loads(result.stdout)

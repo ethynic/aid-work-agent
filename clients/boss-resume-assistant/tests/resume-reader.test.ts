@@ -37,17 +37,21 @@ import {
 import type { DomSnapshot } from '../src/main/boss/domSnapshot.js'
 
 /**
- * 构造 snapshot：根视口 1249x1277（doc0，owner 偏移 0）。
+ * 构造 snapshot：根视口默认 1249x1277（doc0，owner 偏移 0），可用 viewport 覆盖（自适应门槛测试用）。
  * canvases：CANVAS 元素节点 bounds 列表（nodeName 稀疏表指向 strings 里的 'CANVAS' 字符串）。
  */
-function canvasSnap(opts: { canvases?: Array<[number, number, number, number]> } = {}): DomSnapshot {
+function canvasSnap(
+  opts: { canvases?: Array<[number, number, number, number]>; viewport?: [number, number] } = {},
+): DomSnapshot {
   const strings: string[] = ['']
   const nvIndex: number[] = [0]
   const nvValue: number[] = [0]
   const nameIndex: number[] = [0]
   const nameValue: number[] = [0]
   const layoutNodeIndex: number[] = [0]
-  const layoutBounds: Array<[number, number, number, number]> = [[0, 0, 1249, 1277]]
+  const layoutBounds: Array<[number, number, number, number]> = [
+    [0, 0, opts.viewport?.[0] ?? 1249, opts.viewport?.[1] ?? 1277],
+  ]
 
   const intern = (s: string): number => {
     let i = strings.indexOf(s)
@@ -210,12 +214,40 @@ test('locateResumeCanvas：多个 canvas 取面积最大者（排除小图标 ca
   assert.deepEqual(rect, CANVAS_RECT)
 })
 
-test('locateResumeCanvas：无 canvas / 只有小 canvas / 高度不过门槛 → null', () => {
+test('locateResumeCanvas：无 canvas / 只有小 canvas / 低于自适应门槛 → null', () => {
   assert.equal(locateResumeCanvas(canvasSnap({})), null)
   assert.equal(locateResumeCanvas(canvasSnap({ canvases: [[0, 0, 100, 100]] })), null)
-  assert.equal(locateResumeCanvas(canvasSnap({ canvases: [[0, 0, 727, 399]] })), null) // h<400 未过门槛
-  // 真机 2026-08-18：572 高的合法弹层画布（旧门槛 600 曾误杀）必须识别
+  // 视口 1249x1277 → 门槛 312x319：h=250 未过
+  assert.equal(locateResumeCanvas(canvasSnap({ canvases: [[0, 0, 727, 250]] })), null)
+  // 真机 2026-08-18：572 高的合法弹层画布（旧固定门槛 600 曾误杀）必须识别
   assert.notEqual(locateResumeCanvas(canvasSnap({ canvases: [[0, 0, 760, 572]] })), null)
+})
+
+test('locateResumeCanvas：门槛随视口自适应，不写死像素（2026-09-11 客户小屏教训）', () => {
+  // 参考视口：门槛 312x319，572 高画布过、320 以下不过
+  assert.notEqual(locateResumeCanvas(canvasSnap({ canvases: [[0, 0, 727, 572]] })), null)
+  assert.equal(locateResumeCanvas(canvasSnap({ canvases: [[0, 0, 727, 318]] })), null)
+  // 小屏视口 800x600 → 门槛 200x150：450x300 的合法弹层画布必须识别
+  // （写死 400 的时代它在客户小屏上会被误判「详情未打开」）
+  assert.notEqual(
+    locateResumeCanvas(canvasSnap({ viewport: [800, 600], canvases: [[100, 80, 450, 300]] })),
+    null,
+  )
+  // 同一小屏视口下几十像素图标 canvas 仍被排除
+  assert.equal(
+    locateResumeCanvas(canvasSnap({ viewport: [800, 600], canvases: [[0, 0, 120, 90]] })),
+    null,
+  )
+})
+
+test('locateResumeCanvas：画布底部出屏 → 与视口求交（小屏修复：裁剪/滚轮恒在可见区内）', () => {
+  // 弹层画布 727x1000 @ y=600，底部 1600 出屏（视口 1277）→ 截断为可见部分
+  assert.deepEqual(
+    locateResumeCanvas(canvasSnap({ canvases: [[100, 600, 727, 1000]] })),
+    { x: 100, y: 600, w: 727, h: 677 },
+  )
+  // 画布整体在视口下方（完全不可见）→ null
+  assert.equal(locateResumeCanvas(canvasSnap({ canvases: [[100, 1300, 727, 500]] })), null)
 })
 
 test('canvasCandidates：全部 CANVAS 尺寸面积降序（含未过阈值的，供打开失败诊断；不含坐标）', () => {

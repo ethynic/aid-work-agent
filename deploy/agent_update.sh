@@ -12,6 +12,8 @@
 #      会静默忽略 deploy.resources 段，需显式施加（资源值在脚本内维护，为唯一来源）
 #   4. npm install 挂命名卷缓存
 #      并加 --no-audit --prefer-offline，消除全新容器重拉包元数据导致的数分钟卡顿
+#   5. 内存上限移入 docker-compose.prod.yml 的 mem_limit（api 8G/background 4G/redis 1G），
+#      第 6 步只保留 docker update --cpus，不再用 docker update 覆盖内存
 # ==============================================================================
 
 set -e
@@ -86,11 +88,12 @@ FRONTEND_PID=$!
 echo "[5] 重启后端服务..."
 docker compose -f docker-compose.prod.yml up -d --force-recreate --remove-orphans --wait
 
-# 6. 施加资源限制（docker compose 非 swarm 会忽略 deploy.resources，改用 docker update
-#    显式施加 cgroup 限制；资源值在本脚本内维护，为唯一来源）
-echo "[6] 施加容器资源限制..."
-docker update --cpus 2 --memory 2G --memory-reservation 1G aid-agent-api
-docker update --cpus 1 --memory 1G --memory-reservation 512M aid-agent-background
+# 6. 施加 CPU 限制（docker compose 非 swarm 会忽略 deploy.resources；
+#    内存上限已在 docker-compose.prod.yml 用 mem_limit 声明（api 8G/background 4G/redis 1G），
+#    此处不再用 docker update 覆盖内存，避免与 compose 打架）
+echo "[6] 施加容器 CPU 限制..."
+docker update --cpus 2 aid-agent-api
+docker update --cpus 1 aid-agent-background
 
 # 7. 修复容器内 /tmp 权限（python:3.11-slim 的 /tmp 是 tmpfs 且默认 755，
 #    Dockerfile 的 chmod 不生效，entrypoint 已处理；此处作为运行时兜底）
@@ -116,7 +119,8 @@ rm -rf "$DIST_DIR.old"
 [ -d "$DIST_DIR" ] && mv "$DIST_DIR" "$DIST_DIR.old"
 mv "$DIST_DIR.new" "$DIST_DIR"
 rm -rf "$DIST_DIR.old"
-chmod 777 "$DIST_DIR" # dist 目录需要 777 权限，否则无法ftp上传微信验证文件
+# dist 由 docker root 创建，脚本以 ubuntu 运行无法直接 chmod，须 sudo
+sudo chmod 777 "$DIST_DIR" # dist 目录需要 777 权限，否则无法ftp上传微信验证文件
 
 # 10. 增量安装 requirements.txt 中新增的依赖（快速更新脚本不重建镜像，
 #     新依赖不会自动安装；下次重建镜像后可移除此步骤）

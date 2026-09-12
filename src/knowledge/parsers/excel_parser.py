@@ -266,16 +266,18 @@ class ExcelParser(BaseParser):
             from src.services.session_record import record_background_llm_usage
 
             preview = "\n".join(_row_text(r) for r in cell_rows[:20])
-            response = await LLMGateway().chat(
+            # 走 lite 通道（关思考）：主链路思考 token 会烧穿 max_tokens 导致 content 为空
+            response = await LLMGateway().chat_lite(
                 messages=[{"role": "user", "content":
                     "判断以下 Excel 工作表内容是否为「第一行表头 + 后续数据行」的二维数据表。"
                     "如果是回答 table，否则回答 freeform，只回答这一个单词。\n\n" + preview}],
                 temperature=0,
-                max_tokens=8,
+                max_tokens=16,
             )
             record_background_llm_usage(
                 response.get("usage") if isinstance(response, dict) else None,
                 source="excel_layout_detect",
+                model=settings.llm.get_lite_model(),  # chat_lite 实际消耗 lite 模型，按 lite 单价计费
             )
             answer = (response.get("content", "") or "").strip().lower()
             if "table" in answer:

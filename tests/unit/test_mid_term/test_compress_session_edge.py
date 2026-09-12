@@ -117,7 +117,7 @@ async def test_compress_session_fallback_records_actual_provider(
 
     v3.2: 通过 cached_token_count 触发。
     """
-    mock_llm_for_summary.chat = AsyncMock(side_effect=RuntimeError("llm down"))
+    mock_llm_for_summary.chat_lite = AsyncMock(side_effect=RuntimeError("llm down"))
     _patch_meta(service, context_token_count=999999, tenant_id="t1", user_id="u1")
     msgs = []
     for i in range(100):
