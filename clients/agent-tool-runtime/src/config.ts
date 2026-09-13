@@ -35,6 +35,8 @@ export interface RuntimeConfig {
   bossCliEntry?: string
   /** 各 Provider 入口（key → entry 绝对路径，本地管理员配置，禁止云端下发；无 entry 的 Provider 视为未安装） */
   providers?: Record<string, { entry: string }>
+  /** 端侧会话任务引擎开关（C2；默认关闭，显式开启后与 pollLoop 并存运行） */
+  sessionTasks?: boolean
 }
 
 export function runtimeHomeDir(): string {

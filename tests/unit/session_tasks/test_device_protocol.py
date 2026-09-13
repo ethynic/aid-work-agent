@@ -1,5 +1,6 @@
 """设备协议：claim/fence/租约、events 前缀 ACK、决策幂等、预算预留（C1 测试矩阵）。"""
 
+import json
 import uuid
 
 import pytest
@@ -10,6 +11,7 @@ from src.session_tasks.constants import (
     ERR_EVENT_GAP,
     ERR_EVENT_PAYLOAD_CONFLICT,
     ERR_STALE_ASSIGNMENT,
+    ERR_VALIDATION_FAILED,
     SessionTaskError,
 )
 
@@ -182,6 +184,23 @@ class TestEventsIngestion:
         with pytest.raises(SessionTaskError) as exc_info:
             service.ingest_events(tenant_id, device_row["id"], uuid.UUID(claimed["assignment_id"]), claimed["fence"] + 5, [_event(1)])
         assert exc_info.value.code == ERR_STALE_ASSIGNMENT
+
+    def test_events_size_limit_counts_utf8_bytes_not_chars(self, tenant_id, device_row, verified_binding):
+        """字符数 < 256KiB 但 UTF-8 字节数 > 256KiB 的事件批必须被拒。
+
+        服务端与客户端 Buffer.byteLength 口径对齐：中文 1 字符 = 3 字节，
+        按 len(str)（字符数）计算会放行实际超限的请求体。
+        """
+        _, claimed = _publish_and_claim(tenant_id, device_row, verified_binding)
+        assignment = uuid.UUID(claimed["assignment_id"])
+        # 10 万个中文字符：字符数 ~10 万（< 256KiB），UTF-8 编码 ~30 万字节（> 256KiB）
+        record = _event(1, payload={"phase": "waiting_peer", "text": "汉" * 100_000})
+        serialized = json.dumps(record, ensure_ascii=False, default=str, separators=(",", ":"))
+        assert len(serialized) < 256 * 1024, "前置条件：字符数口径未超限"
+        assert len(serialized.encode("utf-8")) > 256 * 1024, "前置条件：字节口径超限"
+        with pytest.raises(SessionTaskError) as exc_info:
+            service.ingest_events(tenant_id, device_row["id"], assignment, claimed["fence"], [record])
+        assert exc_info.value.code == ERR_VALIDATION_FAILED
 
 
 class TestDecisions:

@@ -113,6 +113,42 @@ export interface OperationResultAck {
 
 const JSON_HEADERS = { 'Content-Type': 'application/json' }
 
+/** 端侧会话任务设备协议类型（C2，设计 §9） */
+export interface SessionTaskControl {
+  status: string
+  control_epoch: number
+  server_control_seq: number
+  completion_reason: string | null
+  blocked_reason: string | null
+}
+
+export interface SessionTaskClaim {
+  assignment_id: string
+  task_id: string
+  spec: Record<string, unknown>
+  spec_revision: number
+  fence: number
+  control_epoch: number
+  server_control_seq: number
+  lease_seconds: number
+  conversation_binding_id: string
+  binding_version: number
+  account_identity_version: number
+}
+
+export interface SessionTaskControlAck {
+  lease_seconds: number
+  control: SessionTaskControl
+}
+
+export interface SessionTaskDecision {
+  decision_id: string
+  status: string
+  decision_kind: string
+  batch_id: string
+  input_version: number
+}
+
 export class ApiClient {
   private readonly baseUrl: string
   private readonly token: string | null
@@ -160,6 +196,32 @@ export class ApiClient {
           : ''
       throw new ApiError(response.status, `云端返回 HTTP ${response.status}${detail ? `: ${detail}` : ''}`, detail || undefined)
     }
+    return parsed
+  }
+
+  /** GET 请求（决策状态查询等；错误分类与 post 一致） */
+  private async get(path: string, opts: { signal?: AbortSignal } = {}): Promise<unknown> {
+    const headers: Record<string, string> = { ...JSON_HEADERS }
+    if (!this.token) throw new Error('缺少设备 token')
+    headers['Authorization'] = `Bearer ${this.token}`
+    const timeoutSignal = AbortSignal.timeout(15_000)
+    const signal = opts.signal ? AbortSignal.any([timeoutSignal, opts.signal]) : timeoutSignal
+    let response: Response
+    try {
+      response = await fetch(`${this.baseUrl}${path}`, { method: 'GET', headers, signal })
+    } catch (err) {
+      if (opts.signal?.aborted) throw new AbortLoopError('请求被中止（Runtime 关闭）')
+      const detail = err instanceof Error ? err.message : String(err)
+      throw new NetworkError(`网络请求失败: ${detail}`)
+    }
+    let parsed: Record<string, unknown> = {}
+    try {
+      parsed = (await response.json()) as Record<string, unknown>
+    } catch {
+      // 非 JSON 响应按无 body 处理
+    }
+    if (response.status === 401) throw new DeviceRevokedError('设备 token 无效或已撤销，请重新 pair')
+    if (!response.ok) throw new ApiError(response.status, `云端返回 HTTP ${response.status}`)
     return parsed
   }
 
@@ -247,6 +309,103 @@ export class ApiClient {
       effect: String(res['effect'] ?? ''),
       run_state: (res['run_state'] as string | null | undefined) ?? null,
       late: Boolean(res['late']),
+    }
+  }
+
+  // ----- 端侧会话任务设备端点（C2，设计 §9；envelope {success,data} 剥壳） -----
+
+  private sessionData(res: unknown): Record<string, unknown> {
+    const env = res as Record<string, unknown>
+    const data = env && typeof env['success'] === 'boolean' ? env['data'] : env
+    return (data && typeof data === 'object' ? data : {}) as Record<string, unknown>
+  }
+
+  /** 领取会话任务（无任务返回 null；短轮询，engine 自控节奏） */
+  async sessionTaskClaim(runtimeInstanceId: string, signal?: AbortSignal): Promise<SessionTaskClaim | null> {
+    const res = (await this.post('/api/local-tools/runtime/session-tasks/claim', {
+      runtime_instance_id: runtimeInstanceId,
+    }, { signal, timeoutMs: 20_000 })) as Record<string, unknown>
+    if (Object.keys(res).length === 0) return null // 204 无任务
+    const data = this.sessionData(res)
+    const assignmentId = data['assignment_id']
+    if (typeof assignmentId !== 'string' || !assignmentId) return null
+    return {
+      assignment_id: assignmentId,
+      task_id: String(data['task_id'] ?? ''),
+      spec: (data['spec'] as Record<string, unknown>) ?? {},
+      spec_revision: Number(data['spec_revision'] ?? 0),
+      fence: Number(data['fence'] ?? 0),
+      control_epoch: Number(data['control_epoch'] ?? 0),
+      server_control_seq: Number(data['server_control_seq'] ?? 0),
+      lease_seconds: Number(data['lease_seconds'] ?? 60),
+      conversation_binding_id: String(data['conversation_binding_id'] ?? ''),
+      binding_version: Number(data['binding_version'] ?? 0),
+      account_identity_version: Number(data['account_identity_version'] ?? 0),
+    }
+  }
+
+  /** 续租并取回最新控制（暂停/终态如实返回，Runtime 停止新副作用） */
+  async sessionTaskRenew(assignmentId: string, payload: { fence: number; control_epoch: number }, signal?: AbortSignal): Promise<SessionTaskControlAck> {
+    const res = (await this.post(`/api/local-tools/runtime/session-tasks/${assignmentId}/renew`, payload, { signal })) as Record<string, unknown>
+    const data = this.sessionData(res)
+    const control = (data['control'] as Record<string, unknown>) ?? {}
+    return {
+      lease_seconds: Number(data['lease_seconds'] ?? 0),
+      control: {
+        status: String(control['status'] ?? ''),
+        control_epoch: Number(control['control_epoch'] ?? 0),
+        server_control_seq: Number(control['server_control_seq'] ?? 0),
+        completion_reason: (control['completion_reason'] as string | null | undefined) ?? null,
+        blocked_reason: (control['blocked_reason'] as string | null | undefined) ?? null,
+      },
+    }
+  }
+
+  /** events 连续前缀上报（≤100 条/批；返回 ack_seq 与控制） */
+  async sessionTaskEvents(assignmentId: string, payload: {
+    fence: number
+    records: Array<{ local_seq: number; event_id: string; type: string; payload: unknown }>
+  }, signal?: AbortSignal): Promise<{ ack_seq: number; historical?: boolean; control: SessionTaskControl }> {
+    const res = (await this.post(`/api/local-tools/runtime/session-tasks/${assignmentId}/events`, payload, { signal, timeoutMs: 30_000 })) as Record<string, unknown>
+    const data = this.sessionData(res)
+    const control = (data['control'] as Record<string, unknown>) ?? {}
+    return {
+      ack_seq: Number(data['ack_seq'] ?? 0),
+      historical: Boolean(data['historical']),
+      control: {
+        status: String(control['status'] ?? ''),
+        control_epoch: Number(control['control_epoch'] ?? 0),
+        server_control_seq: Number(control['server_control_seq'] ?? 0),
+        completion_reason: (control['completion_reason'] as string | null | undefined) ?? null,
+        blocked_reason: (control['blocked_reason'] as string | null | undefined) ?? null,
+      },
+    }
+  }
+
+  /** 创建决策（202；携带冻结版本/控制代，旧请求被拒 STALE） */
+  async sessionTaskCreateDecision(assignmentId: string, payload: {
+    fence: number
+    batch_id: string
+    decision_kind: string
+    input_version: number
+    control_epoch: number
+    spec_revision: number
+  }, signal?: AbortSignal): Promise<{ decision_id: string; status: string }> {
+    const res = (await this.post(`/api/local-tools/runtime/session-tasks/${assignmentId}/decisions`, payload, { signal })) as Record<string, unknown>
+    const data = this.sessionData(res)
+    return { decision_id: String(data['decision_id'] ?? ''), status: String(data['status'] ?? '') }
+  }
+
+  /** 决策状态查询（普通网络轮询，不是 LLM 调用） */
+  async sessionTaskGetDecision(assignmentId: string, decisionId: string, signal?: AbortSignal): Promise<SessionTaskDecision> {
+    const res = (await this.get(`/api/local-tools/runtime/session-tasks/${assignmentId}/decisions/${decisionId}`, { signal })) as Record<string, unknown>
+    const data = this.sessionData(res)
+    return {
+      decision_id: String(data['decision_id'] ?? decisionId),
+      status: String(data['status'] ?? ''),
+      decision_kind: String(data['decision_kind'] ?? ''),
+      batch_id: String(data['batch_id'] ?? ''),
+      input_version: Number(data['input_version'] ?? 0),
     }
   }
 }

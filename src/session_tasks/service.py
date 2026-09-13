@@ -488,16 +488,16 @@ def claim_task(device: Dict[str, Any], runtime_instance_id: str) -> Optional[Dic
         cursor = conn.cursor()
         cursor.execute(
             """
-            SELECT t.id FROM session_tasks t
+            SELECT t.id, t.conversation_binding_id FROM session_tasks t
             WHERE t.tenant_id=%s AND t.device_id=%s AND t.status='active'
             ORDER BY t.created_at LIMIT 50
             """,
             (tenant_id, device["id"]),
         )
-        candidate_ids = [row["id"] for row in cursor.fetchall()]
+        candidates = cursor.fetchall()
         claimed = None
-        for candidate_id in candidate_ids:
-            claimed = _claim_one(conn, tenant_id, device, runtime_instance_id, candidate_id, cfg)
+        for candidate in candidates:
+            claimed = _claim_one(conn, tenant_id, device, runtime_instance_id, candidate, cfg)
             if claimed is not None:
                 break
         if claimed is None:
@@ -505,6 +505,16 @@ def claim_task(device: Dict[str, Any], runtime_instance_id: str) -> Optional[Dic
             return None
         task, assignment_id, fence = claimed
         spec_plain = _load_spec_by_spec_id(conn, tenant_id, task["current_spec_id"], task["id"])
+        # 观察契约身份字段（session_observer_v1：绑定/账号身份版本供端侧校验）
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT identity_version FROM bs_weixin_conversation_bindings
+            WHERE tenant_id=%s AND id=%s
+            """,
+            (tenant_id, task["conversation_binding_id"]),
+        )
+        binding_row = cursor.fetchone()
         conn.commit()
     return {
         "assignment_id": str(assignment_id),
@@ -515,11 +525,14 @@ def claim_task(device: Dict[str, Any], runtime_instance_id: str) -> Optional[Dic
         "control_epoch": task["control_epoch"],
         "server_control_seq": task["server_control_seq"],
         "lease_seconds": cfg.lease_seconds,
+        "conversation_binding_id": str(task["conversation_binding_id"]),
+        "binding_version": 0,  # 绑定版本当前恒 0（§13.3 骨架：identity_version 才是身份代）
+        "account_identity_version": int(binding_row["identity_version"]) if binding_row else 0,
     }
 
 
 def _claim_one(conn, tenant_id: str, device: Dict[str, Any], runtime_instance_id: str,
-               task_id, cfg) -> Optional[tuple]:  # noqa: ANN001
+               candidate, cfg) -> Optional[tuple]:  # noqa: ANN001
     """领取单个候选：可领取返回 (task, assignment_id, fence)；跳过返回 None。
 
     跳过 = 本实例已持有有效租约 / 他实例持有有效租约；不可领取时回滚本候选的
@@ -533,7 +546,7 @@ def _claim_one(conn, tenant_id: str, device: Dict[str, Any], runtime_instance_id
         SELECT t.id, t.scenario_key, t.conversation_binding_id FROM session_tasks t
         WHERE t.tenant_id=%s AND t.id=%s AND t.status='active'
         """,
-        (tenant_id, task_id),
+        (tenant_id, candidate["id"]),
     )
     located = cursor.fetchone()
     if located is None:
@@ -549,7 +562,7 @@ def _claim_one(conn, tenant_id: str, device: Dict[str, Any], runtime_instance_id
         WHERE t.tenant_id=%s AND t.id=%s AND t.status='active'
         FOR UPDATE OF t SKIP LOCKED LIMIT 1
         """,
-        (tenant_id, task_id),
+        (tenant_id, candidate["id"]),
     )
     task = cursor.fetchone()
     if task is None:
@@ -654,7 +667,9 @@ def ingest_events(tenant_id: str, device_id: UUID, assignment_id: UUID, fence: i
         raise SessionTaskError("records 不能为空", ERR_VALIDATION_FAILED)
     if len(records) > cfg.events_max_records:
         raise SessionTaskError(f"每批最多 {cfg.events_max_records} 条", ERR_VALIDATION_FAILED)
-    batch_bytes = sum(len(json.dumps(r, ensure_ascii=False, default=str)) for r in records)
+    # 与客户端 Buffer.byteLength 口径对齐（无分隔空格，UTF-8 字节数——
+    # 非 Unicode 字符数：中文 1 字符 = 3 字节，两端按同一 256KiB 判定）
+    batch_bytes = sum(len(json.dumps(r, ensure_ascii=False, default=str, separators=(",", ":")).encode("utf-8")) for r in records)
     if batch_bytes > cfg.events_max_bytes:
         raise SessionTaskError("事件批超过 256KiB 上限", ERR_VALIDATION_FAILED)
     with _conn() as conn:

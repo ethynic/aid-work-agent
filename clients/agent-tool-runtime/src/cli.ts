@@ -12,6 +12,7 @@
  * 约束：不打印 token/claim_token；pair 后 config.json 不含 token（DPAPI 密文存 credentials.bin）。
  */
 import { existsSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import { ApiClient } from './apiClient.js'
 import {
@@ -32,8 +33,12 @@ import { deriveResourceKey } from './desktopLock.js'
 import { PollLoop } from './pollLoop.js'
 import { ProviderSet } from './providerManager.js'
 import { ResultOutbox, resultOutboxDir } from './resultOutbox.js'
-import { manifestDigest } from './manifestVerifier.js'
+import { SessionTaskEngine, type ObserverResult, type ObserverWatermark } from './sessionTasks/engine.js'
+import { acquireSessionTasksSingleInstance, type SingleInstanceGuard } from './sessionTasks/singleInstance.js'
+import { enforceRetention } from './sessionTasks/retention.js'
 import { dpapiProtect, dpapiUnprotect } from './dpapi.js'
+import { withDesktopLock, desktopLockName } from './desktopLock.js'
+import { manifestDigest } from './manifestVerifier.js'
 import { logError, logInfo } from './log.js'
 import { rmSync } from 'node:fs'
 
@@ -121,6 +126,43 @@ async function cmdPair(args: ParsedArgs): Promise<number> {
   return 0
 }
 
+/**
+ * 会话观察器（C2）：经 ProviderSet 的 weixin Provider 调用 session_observer_v1
+ * 工具。评审 P1-3：callTool 返回 {success, code, data, ...} envelope——须检查
+ * success、解包 data 并校验观察契约最小字段，身份版本用领取的实际值（不写死）。
+ */
+function makeProviderSessionObserver(providers: ProviderSet): (task: { taskId: string; conversationBindingId: string; expectedBindingVersion: number; expectedAccountIdentityVersion: number }, request: { watermark: ObserverWatermark | null }) => Promise<ObserverResult> {
+  return async (task, request) => {
+    const provider = providers.get('weixin')
+    const envelope = (await provider.callTool('weixin_session_observe', {
+      conversation_binding_id: task.conversationBindingId,
+      binding_version: task.expectedBindingVersion,
+      account_identity_version: task.expectedAccountIdentityVersion,
+      watermark: request.watermark,
+    }, { timeoutMs: 15_000 })) as Record<string, unknown>
+    if (envelope['success'] !== true) {
+      throw new Error(`观察工具返回失败: code=${String(envelope['code'] ?? '')} message=${String((envelope as { message?: string }).message ?? '')}`)
+    }
+    const data = (envelope['data'] ?? {}) as Record<string, unknown>
+    // 契约最小校验（session_observer_v1）
+    if (typeof data['observation_id'] !== 'string' || !data['observation_id']) throw new Error('观察结果缺少 observation_id')
+    if (data['coverage'] !== 'complete_window' && data['coverage'] !== 'gap' && data['coverage'] !== 'unavailable') {
+      throw new Error(`观察结果 coverage 非法: ${String(data['coverage'])}`)
+    }
+    return {
+      observation_id: String(data['observation_id']),
+      account_identity_version: Number(data['account_identity_version'] ?? 0),
+      conversation_binding_id: String(data['conversation_binding_id'] ?? ''),
+      binding_version: Number(data['binding_version'] ?? 0),
+      observed_at: String(data['observed_at'] ?? new Date().toISOString()),
+      coverage: data['coverage'] as ObserverResult['coverage'],
+      ordered_messages: (data['ordered_messages'] as ObserverResult['ordered_messages']) ?? [],
+      window_fingerprint: (data['window_fingerprint'] as string | null) ?? null,
+      gap_reason: (data['gap_reason'] as string | null) ?? null,
+    }
+  }
+}
+
 async function cmdStart(args: ParsedArgs): Promise<number> {
   const config = loadConfig()
   const server = flagString(args, 'server') ?? config?.server
@@ -169,9 +211,35 @@ async function cmdStart(args: ParsedArgs): Promise<number> {
     onEvent: (msg) => logInfo(msg),
   })
 
+  // ----- 端侧会话任务引擎（C2）：与 pollLoop 共存，共享 Provider 与桌面锁 -----
+  let sessionEngine: SessionTaskEngine | null = null
+  let sessionGuard: SingleInstanceGuard | null = null
+  if (config.sessionTasks === true) {
+    sessionGuard = await acquireSessionTasksSingleInstance(dataDir)
+    if (sessionGuard === null) {
+      logInfo('[session-tasks] 已有实例持有单实例锁，本进程不启动会话引擎（standard lane 正常运行）')
+    } else {
+      const retention = enforceRetention(dataDir, [], {}) // 启动时评估磁盘水位（终态清理由引擎周期执行）
+      if (retention.stopNew) logInfo('[session-tasks] 本地会话日志已达上限（256MiB），停止新观察持久化')
+      else if (retention.warn80) logInfo('[session-tasks] 本地会话日志超 80% 水位')
+      sessionEngine = new SessionTaskEngine({
+        api,
+        runtimeHome: dataDir,
+        crypto: { protect: dpapiProtect, unprotect: dpapiUnprotect },
+        runtimeInstanceId: `rt-${RUNTIME_VERSION}-${randomUUID().slice(0, 8)}`,
+        withLock: <T,>(fn: () => Promise<T>) => withDesktopLock(desktopLockName(deriveResourceKey()), fn),
+        observer: makeProviderSessionObserver(providers),
+        emit: (msg) => logInfo(`[session-tasks] ${msg}`),
+      })
+      logInfo('[session-tasks] 会话任务引擎已启动（共享桌面锁；observer 经 weixin Provider）')
+    }
+  }
+
   const shutdown = (signal: string) => {
     logInfo(`收到 ${signal}，停止领取新任务并回收 Provider…`)
     loop.shutdown()
+    sessionEngine?.shutdown()
+    void sessionGuard?.release()
     // 兜底：runner 协作式中止 + provider 回收最长给 20s，超时强退
     setTimeout(() => {
       logError('关闭超时，强制退出')
@@ -183,9 +251,15 @@ async function cmdStart(args: ParsedArgs): Promise<number> {
 
   console.log(`[runtime] 已启动 device_id=${config.device_id} server=${server} version=${RUNTIME_VERSION}`)
   try {
-    await loop.run()
+    // 等待全部运行循环退出（评审 P1-1）：未开启 sessionTasks 或未取得单实例锁时
+    // 只有 pollLoop 在跑；race 会让已完成的 Promise.resolve() 立即结束、误关 Provider
+    const loops: Array<Promise<void>> = [loop.run()]
+    if (sessionEngine) loops.push(sessionEngine.run())
+    await Promise.all(loops)
   } finally {
+    sessionEngine?.shutdown()
     await providers.shutdownAll()
+    await sessionGuard?.release()
   }
   console.log('[runtime] 已退出')
   return 0

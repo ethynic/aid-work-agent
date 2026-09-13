@@ -74,7 +74,7 @@ test('initialize：serverInfo + instructions（前 512 字符内含仅 Windows/�
   }
 })
 
-test('list_tools：5 个 M2 tool，readOnly 注解 + 中文标题 + object inputSchema', async () => {
+test('list_tools：6 个 tool（M2 + C2 session_observe），readOnly 注解 + 中文标题 + object inputSchema', async () => {
   const client = await startClient()
   try {
     const { tools } = await client.listTools()
@@ -83,6 +83,7 @@ test('list_tools：5 个 M2 tool，readOnly 注解 + 中文标题 + object input
       'weixin_chat_search',
       'weixin_message_send',
       'weixin_history_read',
+      'weixin_session_observe',
       'weixin_unread_list',
     ])
     const probe = tools[0]!

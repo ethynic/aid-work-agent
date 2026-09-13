@@ -2,8 +2,245 @@
   "provider_id": "ai.aidwork.weixin",
   "protocol": "mcp",
   "transport": "stdio",
-  "platforms": ["win32-x64"],
-  "entrypoint": ["aid-weixin.exe", "mcp", "--stdio"],
+  "platforms": [
+    "win32-x64"
+  ],
+  "entrypoint": [
+    "aid-weixin.exe",
+    "mcp",
+    "--stdio"
+  ],
   "execution_target": "local_required",
-  "min_mcp_protocol_version": "2024-11-05"
+  "min_mcp_protocol_version": "2024-11-05",
+  "provider_version": "0.1.0",
+  "tools": [
+    {
+      "name": "weixin_probe",
+      "title": "微信环境探测",
+      "description": "只读探测微信操作环境：Windows 平台、交互桌面会话（已登录未锁屏）、PowerShell 可用性、Weixin.exe 进程存在性。不激活窗口、不发送输入、不改剪贴板，无外部写副作用。",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "verbose": {
+            "description": "返回更多诊断字段（系统版本/Node 版本），默认 false",
+            "type": "boolean"
+          }
+        }
+      },
+      "annotations": {
+        "title": "微信环境探测",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "weixin_chat_search",
+      "title": "微信聊天搜索",
+      "description": "在微信主窗口全局搜索好友/群（只读，不打开会话、不读历史消息）。返回结果列表（label/section），每个结果附带 5 分钟有效的 target_ref，供 weixin_message_send / weixin_history_read 定位目标。",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "description": "搜索词（好友昵称/群名关键字）"
+          },
+          "type": {
+            "description": "结果类型过滤：friend 联系人 / group 群聊 / any 全部，默认 any",
+            "type": "string",
+            "enum": [
+              "friend",
+              "group",
+              "any"
+            ]
+          },
+          "limit": {
+            "description": "返回结果上限，默认 10，最大 20",
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 20
+          }
+        },
+        "required": [
+          "query"
+        ]
+      },
+      "annotations": {
+        "title": "微信聊天搜索",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "weixin_message_send",
+      "title": "微信发送消息",
+      "description": "向 target_ref 指定的会话发送 1 条文本消息（写动作，单次单目标，1..500 字）。target_ref 必须先经 weixin_chat_search 获取且未过期。发送前校验会话标题与输入框无残留草稿，发送后校验最后一条消息；effect=unknown 表示消息可能已发出但校验失败，系统不会自动重试，请人工确认。",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "target_ref": {
+            "type": "string",
+            "minLength": 1,
+            "description": "weixin_chat_search 返回的 target_ref（5 分钟有效）"
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500,
+            "description": "要发送的文本（1..500 字，不支持换行）"
+          }
+        },
+        "required": [
+          "target_ref",
+          "text"
+        ]
+      },
+      "annotations": {
+        "title": "微信发送消息",
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "weixin_history_read",
+      "title": "微信聊天记录读取",
+      "description": "读取与 target_ref 目标的聊天记录（只读，但会打开会话窗口并清除该会话未读角标）。返回 messages[{sender: me|peer|time, text}]；内联最多 200 条，超出返回最新 200 条并给出完整文本 file 路径。",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "target_ref": {
+            "type": "string",
+            "minLength": 1,
+            "description": "weixin_chat_search 返回的 target_ref（5 分钟有效）"
+          },
+          "since_days": {
+            "description": "只抓最近 N 天的记录（可选，缺省按 max_pages 上限抓取）",
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "max_pages": {
+            "description": "最多向上翻页数，默认 3，最大 10",
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10
+          }
+        },
+        "required": [
+          "target_ref"
+        ]
+      },
+      "annotations": {
+        "title": "微信聊天记录读取",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "weixin_session_observe",
+      "title": "微信会话观察（session_observer_v1）",
+      "description": "对已绑定会话执行常驻观察（截图→OCR→对齐→水位），返回 session_observer_v1 冻结契约结果。真机截图接线未开放时返回 coverage=unavailable（不冒充无人回复）。",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "conversation_binding_id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "会话绑定 ID"
+          },
+          "binding_version": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "绑定版本（期望值，观察结果回显核对）"
+          },
+          "account_identity_version": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "账号身份版本（期望值）"
+          },
+          "watermark": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "last_local_message_id": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "window_fingerprint": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "last_local_message_id",
+                  "window_fingerprint"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "上次水位（null=建基线）"
+          }
+        },
+        "required": [
+          "conversation_binding_id",
+          "binding_version",
+          "account_identity_version",
+          "watermark"
+        ]
+      },
+      "annotations": {
+        "title": "微信会话观察",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "weixin_unread_list",
+      "title": "微信未读消息列表",
+      "description": "读取主窗口会话列表中的未读会话（只读，不打开会话、不清除未读角标）。返回 unread[{name, preview, unread_count}]；没有未读的会话不出现。",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "name": {
+            "description": "按会话名过滤（子串匹配，可选）",
+            "type": "string"
+          }
+        }
+      },
+      "annotations": {
+        "title": "微信未读消息列表",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true
+      }
+    }
+  ],
+  "schema_digest": "sha256:47e048a44a7ee69f1ec1ca44c0d9286a3e1f1aeb6ae251ff4691628deeeb59af"
 }

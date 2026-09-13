@@ -80,6 +80,23 @@ export const TOOL_DEFS: WeixinToolDef[] = [
     annotations: { title: '微信聊天记录读取', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   },
   {
+    name: 'weixin_session_observe',
+    title: '微信会话观察（session_observer_v1）',
+    description:
+      '对已绑定会话执行常驻观察（截图→OCR→对齐→水位），返回 session_observer_v1 冻结契约结果。' +
+      '真机截图接线未开放时返回 coverage=unavailable（不冒充无人回复）。',
+    zodShape: {
+      conversation_binding_id: z.string().min(1).describe('会话绑定 ID'),
+      binding_version: z.number().int().min(0).describe('绑定版本（期望值，观察结果回显核对）'),
+      account_identity_version: z.number().int().min(0).describe('账号身份版本（期望值）'),
+      watermark: z
+        .object({ last_local_message_id: z.string().nullable(), window_fingerprint: z.string() })
+        .nullable()
+        .describe('上次水位（null=建基线）'),
+    },
+    annotations: { title: '微信会话观察', readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  },
+  {
     name: 'weixin_unread_list',
     title: '微信未读消息列表',
     description:

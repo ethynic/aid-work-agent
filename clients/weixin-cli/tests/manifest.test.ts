@@ -53,15 +53,16 @@ test('manifest 字段完整且与静态 provider-manifest.json 同源（上位�
   assert.equal(m.provider_version, pkg.version)
   assert.equal(m.schema_digest, computeSchemaDigest())
 
-  // M2：weixin_probe + chat_search/message_send/history_read/unread_list
+  // M2 + C2：weixin_probe + chat_search/message_send/history_read/unread_list + session_observe
   assert.deepEqual(TOOL_NAMES, [
     'weixin_probe',
     'weixin_chat_search',
     'weixin_message_send',
     'weixin_history_read',
+    'weixin_session_observe',
     'weixin_unread_list',
   ])
-  assert.equal(m.tools.length, 5)
+  assert.equal(m.tools.length, 6)
   const probe = m.tools[0]!
   assert.equal(probe.name, 'weixin_probe')
   assert.ok(probe.title.length > 0 && probe.description.length > 0)
@@ -73,7 +74,7 @@ test('manifest 字段完整且与静态 provider-manifest.json 同源（上位�
   const send = byName.get('weixin_message_send')!
   assert.equal(send.annotations.readOnlyHint, false)
   assert.equal(send.annotations.idempotentHint, false)
-  for (const n of ['weixin_chat_search', 'weixin_history_read', 'weixin_unread_list']) {
+  for (const n of ['weixin_chat_search', 'weixin_history_read', 'weixin_session_observe', 'weixin_unread_list']) {
     assert.equal(byName.get(n)!.annotations.readOnlyHint, true, `${n} 应为只读`)
   }
 })
@@ -104,6 +105,7 @@ test('version --json 输出与 buildManifest/computeSchemaDigest 同源', () => 
     'weixin_chat_search',
     'weixin_message_send',
     'weixin_history_read',
+    'weixin_session_observe',
     'weixin_unread_list',
   ])
 })
