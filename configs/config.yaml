@@ -385,3 +385,17 @@ weixin_marketing:
     task_limit: 30
     target_limit: 10
     account_limit: 60
+
+# 端侧会话任务 C1（默认关闭；发布/claim/许可路径每调用热读 enabled/tenant_allowlist，
+# 调度节奏/租约参数为进程快照，修改需重启）
+session_tasks:
+  enabled: false
+  tenant_allowlist: []            # 空 = 不限租户（仍受 enabled 总门控）
+  lease_seconds: 60               # 设计 §4：lease=60s
+  renew_seconds: 20               # 设计 §4：renew=20s
+  max_decisions_per_tenant: 2     # §13.5：同租户跨进程在飞模型调用上限（DB 槽位，C3 接线）
+
+# 微信会话场景（weixin.conversation.v1；场景能力开关，业务绑定骨架 C1 已建）
+weixin_conversation:
+  enabled: false
+  tenant_allowlist: []

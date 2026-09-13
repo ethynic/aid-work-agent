@@ -1817,6 +1817,13 @@ app.include_router(desktop_automation_api.router)
 from src.weixin_marketing import api as weixin_marketing_api  # noqa: E402
 app.include_router(weixin_marketing_api.router)
 
+# 端侧会话任务 C1（session_tasks API 面：用户根/设备根/绑定骨架；发布与分配受
+# session_tasks.enabled 热读门控，路由常驻但服务层拒绝未启用租户）
+from src.session_tasks import api as session_tasks_api  # noqa: E402
+app.include_router(session_tasks_api.router)
+app.include_router(session_tasks_api.device_router)
+app.include_router(session_tasks_api.bindings_router)
+
 # 外部系统入口（SSO 打开第三方系统，见 docs/system/external-system-entry-design.md）
 from src.api import external_systems  # noqa: E402
 app.include_router(external_systems.router)

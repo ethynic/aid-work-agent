@@ -1081,6 +1081,26 @@ def _init_postgresql():
             except Exception as rollback_err:
                 logger.warning(f"Failed to rollback weixin_marketing transaction: {rollback_err}")
 
+        try:
+            from src.session_tasks.init_tables import init_session_task_tables
+            init_session_task_tables(conn)
+        except Exception as e:
+            logger.warning(f"Failed to initialize session_tasks tables: {e}")
+            try:
+                conn.rollback()
+            except Exception as rollback_err:
+                logger.warning(f"Failed to rollback session_tasks transaction: {rollback_err}")
+
+        try:
+            from src.weixin_conversation.init_tables import init_weixin_conversation_tables
+            init_weixin_conversation_tables(conn)
+        except Exception as e:
+            logger.warning(f"Failed to initialize weixin_conversation tables: {e}")
+            try:
+                conn.rollback()
+            except Exception as rollback_err:
+                logger.warning(f"Failed to rollback weixin_conversation transaction: {rollback_err}")
+
         # Skill 表初始化由 SkillLoader._init_skill_tables() 统一处理，
         # 通过 SKILL.md 中的 init_script 字段声明，不再硬编码。
 

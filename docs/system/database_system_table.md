@@ -26,6 +26,24 @@
 > 表 DDL 已同步 `deploy/init-postgres.sql` 与 `deploy/db_update.sql`。商机池 3 表
 > (`bs_outbound_leads` / `_lead_interactions` / `_outreach_actions`) 由并行智能体开发。
 
+> 2026-09-12 端侧会话任务 C1 系统表族登记：新增 `session_task_*` 11 张系统表
+> （`session_tasks`/`session_task_specs`/`session_task_assignments`/
+> `session_task_events`/`session_task_messages`/`session_task_batches`/
+> `session_task_decisions`/`session_task_execution_links`/`session_task_texts`/
+> `session_task_confirmations`/`session_task_cost_reservations`，通用编排协议，
+> 不存业务话术）。DDL 三处同步：`deploy/init-postgres.sql`、
+> `deploy/db_update.yaml`（2026-09-12 22:30:00 块）、
+> `src/session_tasks/init_tables.py`。关键约束：占用唯一部分索引
+> `idx_session_tasks_occupancy`（未终结已发布状态一会话一任务）；assignments
+> 当前行部分唯一；events 双唯一（assignment+local_seq / event_id）；decisions
+> 五元唯一 + opening 跨 spec_revision 部分唯一；texts 为 secret_crypto Fernet
+> 受控文本（goal/policy/正文等，无明文副本）；confirmations 一次性发布确认
+> （10 分钟有效）；cost_reservations 为预算预留幂等账（C3 接 client_usage_logs
+> 结算）。业务配套：`session_tasks_idempotency_keys`（API 幂等，模块自建不进
+> db_update.yaml，同 weixin_marketing_idempotency_keys 先例）；业务表
+> `bs_weixin_conversation_bindings`（src/weixin_conversation 自建，pending 骨架，
+> verified 仅接受受信 Provider 真机证据）。
+
 > 2026-09-09 微信营销自动化 P2 例外登记：新增基础设施表
 > `weixin_marketing_idempotency_keys`（非 bs_ 前缀，API 请求幂等去重，同
 > `desktop_agent_turn_requests` 先例）。scope=(tenant_id, user_id, route,
