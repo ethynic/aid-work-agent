@@ -22,7 +22,8 @@
 | D8 | 软删除可见性 | 软删除文章**租户前台默认隐藏**（列表 API 默认过滤，管理端可审计查看），不参与检索但数据保留 |
 | D9 | 历史范围（2026-09-14） | 接口能返回多少历史文章就获取多少，完整遍历可用分页，不额外限制历史日期或总篇数；接口未返回的历史不要求补采，不作为交付缺陷。内容解析仍按 P1/P2 分期。 |
 | D10 | 获取入口（2026-09-14） | P1 同时支持租户后台定时任务、智能体主动获取最新内容、租户用户后台立即获取，统一同步管道。为完成"获取后能回答"的闭环，P1 包含基础知识来源挂接及租户可用的手动入口。 |
-| D11 | 获取路径优先级（2026-09-14 修订 D1） | **URL 抓取为主路径，freepublish 接口降为辅助**。架构分两层：①公共底座=「URL → 抓正文（mp 文章页公开可直抓，反爬狠的是列表接口而非文章页）→ 图片转存 → 入库」管道，所有来源共用；②清单来源可插拔，按优先级：手动/批量粘贴链接（MVP 即有）→ 第三方清单服务（新榜/极致了等，需商务+合规评估——极致了有腾讯不正当竞争诉讼记录）→ Playwright 扫码登录租户自有公众号后台读"发表记录"（自有账号场景覆盖最全、无第三方成本与灰色地带，代价是登录态维护）→ 群发完成事件回调 MASSSENDJOBFINISH（含 ArticleUrl，但需租户改服务器配置且可能接管自动回复，摩擦大，兜底）→ freepublish 凭据路径（已实测，仅覆盖"发布"渠道，保留辅助）。 |
+| D11 | 获取路径（2026-09-14 实测后定稿） | **双通道平级 + 托底清单源**：①**接口通道**（freepublish，自有号"发布"渠道文章，含定期对账）；②**回调+URL 通道**（服务器配置收 MASSSENDJOBFINISH 拿 ArticleUrl → URL 直采取正文，覆盖群发，已实测端到端成立）；③**手动粘贴 URL**（MVP 兜底，任意场景可用）；④**托底清单源**（见 D12）。内容获取只有"接口正文"和"URL 正文"两条抓取管道，统一进同一入库 service；清单来源（freepublish 列表/回调事件/手动粘贴/托底服务）全部可插拔。 |
+| D12 | 托底清单源（2026-09-14） | 面向"非自有公众号"或"自有号不能配回调"的场景：采用社区方案自部署实例作为平台级"清单服务"——首选 **wechat-download-api**（GitHub 开源、FastAPI 同构技术栈；任意公众号管理员扫码登录公众平台后可拉**任意公众号**历史文章列表+正文；内置 TLS 指纹+代理池反风控；AGPL 3.0，独立部署调 API 使用，法务过目），备选 wewe-rss（微信读书接口）、Wechat2RSS（付费私有部署）、商业数据 API（新榜/极致了，合规评估后）。托底源产出的清单同样只回 URL，正文仍走统一的 URL 直采管道；平台侧扫码账号的风控成本由平台承担，需代理池。**可行性实验提前至 P1 并行 spike**（固定版本、3+ 公众号实测分页/去重/增量/登录过期恢复/限流；适配器契约：账号标识+URL+标题+发布时间+分页游标+完成状态；平台共享扫码账号需全局限速与公平排队），接入排期按实验结果定。 |
 
 ## 2. 技术前提与约束
 
@@ -50,24 +51,24 @@
 
 ## 3. 总体架构
 
+> **2026-09-14 注**：本节时序图是早期接口通道视角。定稿架构以 D11/D12 与 §12 为准：**两条抓取管道**（`fetch_by_url` 直采 = P1 主；`fetch_by_api` freepublish = P3 补）+ **可插拔清单来源**（回调事件 / 手动粘贴 / freepublish 列表 / 托底清单服务），统一进 `WeChatMPSyncService`。§5 的 diff/删除细节适用于接口通道（P3）；URL 通道的删除感知走"URL 存活复核"（§13.2 删除实测）。
+
 ```
-租户后台配置 appid/secret ──► tenant_channel_configs (wechat_mp, Fernet 加密)
-                                        │
-              定时 tick / 智能体主动获取 / 租户后台立即获取
+清单来源（可插拔）                     抓取管道（两条）
+┌ 回调事件（群发 ArticleUrl）┐        ┌ fetch_by_url：mp 文章页直采（P1 主）┐
+│ 手动粘贴 URL              │ ──URL──▶│ fetch_by_api：freepublish（P3 补）  │┐
+│ freepublish 列表（P3）     │        └────────────────────────────────────┘│
+│ 托底清单服务（P4）         │                                              ▼
+└───────────────────────────┘              WeChatMPSyncService.process_article()
+                        正文提取 → 图片转存/VL(P2) → 分类/时效(P3) → 拼正文
+                        → TextChunker → embedding → 单事务落三表 → 计费
                                         ▼
-                          统一触发入口 → WeChatMPSyncService（tenant_id + config_id）
-                 ① stable_token → access_token（Redis 按 expires_in 缓存）
-                 ② freepublish/batchget 拉发布集合（no_content=1 轻量列表）
-                 ③ 与 bs_wechat_mp_articles diff：新增 / 变更(hash) / 删除
-                                        ▼
-                      逐文章处理管道 process_article()
-   拉正文HTML → 正文提取 → 图片下载转存 → VL图片描述(按张计费)
-      → LLM分类+标签+时效抽取(独立轻调用) → 拼正文(文字+图片描述+标签)
-      → TextChunker 分块 → embedding → 单事务落 documents/chunks/chunks_vec
-                                        ▼
-        售前智能体 knowledge_base_search（source_type=「公众号内容」分类代号，
-        检索 SQL 过滤 status='active' 且未过期）
+              售前智能体 knowledge_base_search（过滤 active + 未过期）
 ```
+
+**回调可靠接收（P1 必须）**：验签 → **同事务持久化事件与待处理 URL（pending）** → 返回 success → 后台按租户串行领取处理；事件幂等键去重；启动/崩溃恢复扫描 pending。数据库不可用时返回失败让微信重试，不确认未持久化的接收。
+
+**并发规则（P1 统一）**：**租户级串行**——Redis 锁与数据库 running 唯一约束同粒度（租户），同租户多个触发（回调/手动/定时/工具）一律持久化排队，排队不丢；不允许"复用进行中的 run_id"冒充新 URL 已受理。
 
 **模块**：新建 `src/wechat_mp/`（对齐 crawler 的 `src/crawler/` 独立模块模式）：
 
@@ -87,16 +88,30 @@ src/wechat_mp/
 
 **分层规则（2026-09-14 负责人确认）**：公众号读取、diff、入库、软删除、计费的全部能力只在 `WeChatMPSyncService`（service 层）实现；调度 tick、HTTP API、智能体工具/skill 均为**薄入口**——只做鉴权、参数解析、状态回传后直接调 service，禁止在工具/skill 侧复制任何抓取或入库逻辑。
 
-## 4. 凭据管理（D1）
+## 4. 配置管理（回调为主，凭据为辅）
 
-- `tenant_channel_configs` 新增 `channel_type=wechat_mp`，凭据 `{appid, secret}`；另允许受校验的 `sync_interval_hours`（默认 6，正整数）与 `enabled`（默认 true）。已有渠道支持多个配置，不能用 tenant_id 作为账号身份。
-- 数据与锁按 `(tenant_id, config_id)` 隔离；记录 appid 作为来源身份，`documents.external_id` 使用 `appid:article_id:item_key`。同租户同 appid 禁止重复配置（并发创建需数据库唯一约束，可用 JSON 表达式部分索引）。appid 创建后不可原地改绑，换账号须新建配置。删除配置只停止同步，保留文档与账本；删除后重建同 appid 必须接续原文档幂等键。
-- 当前 `ChannelConfigDB` 按 RPA 类型分支加密，并无通用“加密类型集合”。抽取现有 Fernet 原语，独立实现 wechat_mp secret 的加密/解密/掩码，不复用强制 `listen_mode=server` 的 RPA codec。覆盖 create/update、单查/列表、后台解密读取及 `update_config_field` 绕过保护；secret 未提供/掩码回传保留旧值，必填 secret 不允许清空。
-- verify 专门分流，不创建消息渠道 adapter：先 stable_token，再 `batchget(count=1,no_content=1)`；token 与列表成功才设置 verified；存在消息时还需验证一条详情调用，失败不置 verified。空列表可验证接口可调用，但不能证明历史覆盖。分别返回认证、权限、白名单、限流/网络、未知错误，禁止仅凭一个错误码猜测认证状态。
-- secret 变更撤销 verified、递增凭据版本并失效 token；并发 verify 仅能写回其验证版本，旧任务提交前检查配置仍启用且版本未变。接口授权检查在解密前完成。
-- `ChannelConfig.vue` 增加凭据表单、验证结果和 IP 白名单指引；检查渠道枚举、前端类型、启动扫描和 adapter 工厂调用点，保证内容源不会进入收发消息链路。
+> P1 的核心配置是**服务器配置回调**；appid/secret 凭据属接口通道（P3）。两通道共用 `tenant_channel_configs` 的 `channel_type=wechat_mp` 配置记录。
+
+- **回调配置字段（P1）**：config JSON 存 `callback_token`（建配置时服务端生成）、`encoding_aes_key`（用户从公众平台后台复制，按敏感字段 Fernet 加密入库、响应掩码）、`appid` 与 `original_id` **分开保存**（公众号原始 ID gh_xxx：用于事件 ToUserName 绑定校验；appid：用于 AES 解密接收方 AppID 校验与 P3 接口通道；两者不可互比）、`enabled`（默认 true）。回调 URL 为 `/api/wechat-mp/callback/{config_id}`，每配置独立 token。前端提供原始 ID 输入框与获取指引（公众平台后台"设置与开发→公众号设置"页可见）。
+- **凭据字段（P3 接口通道）**：`secret`（同样 Fernet 加密）、`sync_interval_hours`（默认 6，正整数）。
+- 同租户同 appid 禁止重复配置（数据库唯一约束）；appid 创建后不可原地改绑；删除配置只停止同步，保留文档与账本；重建同 appid 接续原 external_id 幂等键。
+- **密钥轮换**：重置 callback_token / encoding_aes_key 递增凭据版本，旧版本事件拒收并记录；secret 变更撤销接口通道 verified。
+- **验证状态三态分离**：`config_verified_at`（回调 URL 验证通过时间，仅凭据/配置变更撤销）、`last_event_at`（最近收到事件时间；低频发文账号不得以无事件判失效）、`last_error`（最近处理错误）。接口通道 verify（P3）：stable_token + batchget(count=1) + 存在消息时一条 getarticle 三步实测。
+- 加密实现：当前 `ChannelConfigDB` 仅 RPA 类型分支加密；最小抽取 Fernet 原语为公共模块（保持旧导入兼容），wechat_mp 独立 codec（不带 RPA listen_mode 副作用），覆盖 create/update、单查/列表掩码、后台解密读取及 `update_config_field` 绕过保护；掩码回传保留旧值，敏感字段不允许清空。
+- **共存说明（运营必覆盖）**：启用服务器配置后公众平台后台自动回复等被接管；一个公众号仅一个回调 URL，已有第三方占用时需中继转发方案。
+- `ChannelConfig.vue` 增加表单（callback URL/token 展示与复制、AESKey 输入、appid、IP 白名单与服务器配置图文指引）；检查渠道枚举、启动扫描与 adapter 工厂调用点，内容源不进入收发消息链路。
 
 ## 5. 抓取与增量同步（D4 前半）
+
+> **2026-09-14 注**：本节（5.1~5.3）为**接口通道（freepublish，P3）**的设计细节；P1 主链路是回调+URL 直采（§3 定稿架构）。其中并发锁、退避、错误分类等机制两通道共用，但锁粒度统一为**租户级串行**（见 §3），本节早期的"每配置"表述以 §3 为准。
+
+### 5.4 URL 身份与规范化（URL 通道，P1）
+
+- 分别保存三个字段：`original_url`（收到的原始链接）、`fetch_url`（实际抓取用）、`external_id`（规范身份）。
+- **规范身份算法**：短链 `mp.weixin.qq.com/s/{token}` 以 path token 为身份；长链 `/s?__biz=..&mid=..&idx=..&sn=..` 仅保留 `__biz/mid/idx/sn` 四个定位参数组合为身份，**白名单外参数一律剔除**（scene/sessionid/subscene/clicktime/enterid/exportkey/uin/key/pass_ticket/devicetype/version/lang/ascene 等跟踪参数）；其他 mp 路径（如 `__biz` 缺失）拒收并提示。
+- **短长链别名与收敛**：抓取后从页面 `var msg_link` / canonical 提取对方形态。**若受理阶段已分别为短链/长链建了两条文章行**，识别为同文后必须收敛：保留先成功入库（或先创建）的行为**主记录**；别名行标记 `status='alias'`、`master_article_row_id` 指向主记录，复核任务只跟主记录；别名行不再参与复核与检索。**同批次冲突处理**：`sync_items` 唯一键为 `(tenant_id, run_id, article_row_id)`，同批次同时含短链 A、长链 B 时**不做 item 迁移**——重复项的 item 标记 `skipped` 并在其 error_code/metadata 关联主 item，两条受理记录都保留；跨批次的 item 天然指向各自受理时的行，不受此限。**别名行已有 doc_id 的**：其 documents 行置 `status='deleted'` 且 metadata 记 `merged_into_doc_id`（检索自动隐藏，管理端可审计原因），不得只改 articles.status 留重复文档可被检索。判定证据不足（页面未给出可靠 canonical/msg_link）时保留 `unconfirmed` 状态各自独立，**不得仅凭任意 canonical 值合并**。别名查询限定 tenant_id。
+- 跨来源重叠（P3 接口 combined 文档 vs URL 单篇）：接口文档 metadata 记录其 url 的规范身份，入库前查重；命中已存在 URL 文档时在 documents.metadata 互标 `related_doc_id`，不物理合并（保留各自来源语义），P3 定去重细则。
+- 测试：同文不同 URL 撞键、不同子篇不撞键、长链跟踪参数剔除、非法 URL 拒收。
 
 ### 5.1 调度与并发
 
@@ -124,12 +139,13 @@ src/wechat_mp/
 
 ## 6. 内容处理管道
 
-### 6.1 HTML 正文提取与多图文合并（content.py）
+### 6.1 HTML 正文提取（content.py）
 
-- P1/P2 将一条消息的未删除子篇按返回顺序拼接为一篇文档，段落格式为“子篇标题 → 正文”，子篇间有明确分隔；文档标题取首个有效子篇标题，多篇时附篇数。分块保持子篇边界，避免两个产品/活动的描述混入同一 chunk；仍是一条 documents 记录。
-- metadata 保存各子篇当前顺序、标题、url、content_source_url、删除标记和处理结果。顺序仅为本次内容定位，不是稳定 ID。chunk metadata 关联对应标题及来源字段；不把首篇 URL 用作全部子篇引用，也不承诺 url 永久有效。content_source_url 是“阅读原文”目标，不等同于公众号文章地址。
-- 混合消息中 P1 可解析的文字子篇照常入库，纯图子篇保留标题/图片占位并记 deferred；整条消息无可用文字才整体 deferred。P2 以版本升级补解析图片，不因部分纯图而丢弃其他文字。统计以消息/合并文档为主，metadata 另存子篇数量及待处理数量。
-- P3 若继续合并，分类/标签先作用于整篇文档；不得用某一子篇活动结束时间排除整篇仍含有效内容的文档。混合时效时整篇 expires_at 保持 NULL，子篇时效过滤或拆分需求须在 P3 设计时另行明确。
+- **P1 粒度（URL 通道）**：一个文章 URL = 一篇文档。回调多子篇时 ArticleUrlResult 逐子篇给独立 URL，**各成独立文档**（external_id=各自规范 URL），不做合并。
+- 解析 js_content 容器为保序序列 `[{type:'text'|'image'}]`；去脚本/样式与已明确识别的非正文节点，不按主观"广告"规则删促销正文；图片描述（P2）插回原文位置。
+- **P3 粒度（接口通道）**：freepublish 一条多图文消息合并为一篇文档（item_key=combined），未删除子篇按返回顺序拼接"子篇标题 → 正文"，子篇间明确分隔；分块保持子篇边界；metadata 保存各子篇顺序/标题/url/删除标记（顺序仅当次定位，不是稳定 ID）。
+- 混合消息中文字子篇照常入库，纯图子篇保留占位记 deferred；P2 版本升级补解析。分类/时效（P3）作用于整篇文档时不得用某一子篇的时效排除整篇。
+- 纯图片文章（正文文字 < 阈值如 20 字）是重点场景，完全依赖 §6.2 图片描述成为可检索内容。
 
 
 - 解析 content HTML：去脚本、样式与已明确识别的非正文节点，不按主观“广告”规则删促销正文，提取正文结构化序列 `[{type:'text'|'image', ...}]`（保序，图片描述能插回原文位置上下文）。
@@ -204,55 +220,70 @@ CREATE INDEX IF NOT EXISTS ix_documents_status ON documents(status, expires_at);
 - P2 成功图片描述及计费结果按图片内容 hash+解析版本保存，以便文章后续失败后复用；不得只依赖整篇 hash 防止重试时重复按张收费。
 - 手动上传的修改/删除行为保持；外部源文档在 P1 禁止通用编辑、移动和物理删除入口（返回明确业务错误，前端隐藏对应操作），统一从源同步管理，避免 doc_id 悬空和人工修改被覆盖。批量入口也检查。
 
-## 8. 数据表设计（bs_ 前缀，对齐 crawler 规约）
+## 8. 数据表设计（bs_ 前缀，对齐 crawler 规约；2026-09-14 二审定稿）
 
 ```sql
--- 文章当前状态（每条子文章独立），以下为目标 DDL，迁移须按项目规则补齐幂等保护
+-- 文章当前状态（唯一当前态记录；批次任务归属见 sync_items）
 CREATE TABLE bs_wechat_mp_articles (
   id BIGSERIAL PRIMARY KEY,
   tenant_id TEXT NOT NULL,
-  config_id TEXT NOT NULL,
-  appid TEXT NOT NULL,
-  article_id TEXT NOT NULL,              -- 微信发布消息 ID
-  item_key TEXT NOT NULL DEFAULT 'combined', -- P1/P2 固定：一条消息合并为一篇文档
-  user_id TEXT,
-  pipeline_version TEXT,
-  processing_status TEXT DEFAULT 'pending',
-  missing_count INT DEFAULT 0,
-  last_run_id BIGINT,
-  title TEXT, url TEXT,
+  config_id TEXT,                          -- 可空：手动粘贴无配置
+  external_id TEXT NOT NULL,               -- 规范身份（设计 §5.4）
+  original_url TEXT, fetch_url TEXT,
+  source_channel VARCHAR(16) NOT NULL,     -- callback/manual/freepublish
+  title TEXT,
   publish_time TIMESTAMP, wx_update_time TIMESTAMP,
   content_hash VARCHAR(64),
   doc_id INTEGER,                          -- 关联 documents.id
   sub_category VARCHAR(64), tags JSONB,
-  status VARCHAR(16) NOT NULL DEFAULT 'active',  -- active/missing/deleted
-  error_message TEXT,                     -- 最近一次失败原因（脱敏后）
+  status VARCHAR(16) NOT NULL DEFAULT 'active',   -- active/missing/deleted/alias/unconfirmed
+  master_article_row_id BIGINT,            -- alias 行指向主记录
+  processing_status VARCHAR(16) DEFAULT 'pending',-- pending/success/sync_failed/deferred
+  pipeline_version TEXT,
+  next_retry_at TIMESTAMP,                 -- 失败退避
+  error_message TEXT,                      -- 最近一次失败原因（脱敏后）
   image_count INT DEFAULT 0, image_parsed_count INT DEFAULT 0,
   last_synced_at TIMESTAMP, last_checked_at TIMESTAMP,
   created_at TIMESTAMP DEFAULT now(),
-  UNIQUE(tenant_id, appid, article_id, item_key)
+  UNIQUE(tenant_id, external_id)
 );
 
--- 同步运行账本（运营排障主入口，对齐 bs_crawler_runs）
-CREATE TABLE bs_wechat_mp_sync_runs (
+-- 回调事件收件箱（可靠接收：先落库再返回 success）
+CREATE TABLE bs_wechat_mp_events (
   id BIGSERIAL PRIMARY KEY,
   tenant_id TEXT NOT NULL,
   config_id TEXT NOT NULL,
-  user_id TEXT,
+  event_key TEXT NOT NULL,                 -- MsgID+Event 等幂等键
+  run_id BIGINT,                           -- 关联受理批次
+  payload JSONB,
+  status VARCHAR(16) NOT NULL DEFAULT 'pending',  -- pending/done/failed
+  received_at TIMESTAMP DEFAULT now(),
+  processed_at TIMESTAMP,
+  error_message TEXT,
+  UNIQUE(tenant_id, config_id, event_key)  -- 组合键，跨配置不碰撞
+);
+
+-- 同步运行账本 + 执行队列（queued→running→终态；受理即建 queued run 与 pending items）
+CREATE TABLE bs_wechat_mp_sync_runs (
+  id BIGSERIAL PRIMARY KEY,
+  tenant_id TEXT NOT NULL,
+  config_id TEXT,
+  user_id TEXT,                            -- 操作者；后台触发可空
   created_at TIMESTAMP DEFAULT now(),
-  agent_id TEXT,                         -- agent 触发时记录可信运行时身份
-  session_id TEXT,                       -- 可空，关联会话；不保存对话正文
+  agent_id TEXT, session_id TEXT,          -- agent 触发时记录可信运行时身份；不保存对话正文
   owner_token TEXT,
   heartbeat_at TIMESTAMP,
-  scan_complete BOOLEAN DEFAULT false,
-  trigger_type VARCHAR(16) NOT NULL,      -- scheduled/agent/manual/retry
-  status VARCHAR(32) NOT NULL,            -- running/success/partial_failed/skipped_no_credit/failed/interrupted
+  trigger_type VARCHAR(16) NOT NULL,       -- callback/scheduled/manual/agent/retry/recheck
+  status VARCHAR(32) NOT NULL,             -- queued/running/success/partial_failed/skipped_no_credit/failed/interrupted
   total_count INT, new_count INT, updated_count INT,
   deleted_count INT, skipped_count INT, failed_count INT,
   credits_charged NUMERIC(12,2) DEFAULT 0,
-  error_message TEXT,                     -- run 级失败原因（如 token 获取失败，脱敏）
+  error_message TEXT,
   started_at TIMESTAMP, completed_at TIMESTAMP
 );
+-- 租户级串行：每租户至多一条 running（与 Redis 锁同粒度）；queued 不限条数，受理即排队
+CREATE UNIQUE INDEX uq_wechat_mp_runs_active
+  ON bs_wechat_mp_sync_runs(tenant_id) WHERE status = 'running';
 
 CREATE TABLE bs_wechat_mp_sync_items (
   id BIGSERIAL PRIMARY KEY,
@@ -260,21 +291,23 @@ CREATE TABLE bs_wechat_mp_sync_items (
   user_id TEXT,
   created_at TIMESTAMP DEFAULT now(),
   run_id BIGINT NOT NULL,
-  article_row_id BIGINT NOT NULL,
-  action TEXT,                           -- new/update/delete/restore/check
-  status TEXT,                           -- running/success/failed/skipped/deferred/interrupted
-  error_code TEXT, error_message TEXT,
+  article_row_id BIGINT NOT NULL,          -- 归属文章当前态记录
+  action TEXT,                             -- new/update/delete/restore/check
+  status TEXT,                             -- pending/running/success/failed/skipped/deferred/interrupted
+  error_code TEXT,                         -- 固定原因码，不混存记录 ID
+  duplicate_of_item_id BIGINT,             -- 同批次别名重复项关联主 item（status='skipped' 时）
+  error_message TEXT,
   started_at TIMESTAMP, completed_at TIMESTAMP,
-  billing_status TEXT DEFAULT 'pending', -- pending/charged/failed/unknown/not_required
+  billing_status TEXT DEFAULT 'pending',   -- pending/charged/failed/unknown/not_required
   billing_reference TEXT,
   credits_charged NUMERIC(12,2) DEFAULT 0,
   UNIQUE(tenant_id, run_id, article_row_id)
 );
 ```
 
-`bs_wechat_mp_sync_items` 逐篇记录成功/失败/跳过/删除，不能用当前文章表冒充历史。无余额全轮跳过无需伪造逐篇处理记录。
+**队列语义（二审修订）**：`sync_runs` + `sync_items` 即执行队列，不另建队列表——受理时同事务建 queued run + pending items；回调事件写 events（pending）并关联 run_id；articles 只维护文章当前状态。worker 按租户串行领取 queued run；崩溃恢复扫描 queued/running（stale）run 与 pending events/items。两个批次含同一 URL：各有独立 run 与 item，后处理的 item 命中 hash 不变记 check；两个 run 分别独立收尾。事件在其关联 run 全部 item 终态后置 done。
 
-索引：runs `(tenant_id, config_id, started_at DESC)`、每配置 running 部分唯一索引；articles `(tenant_id, config_id, processing_status)`；items `(tenant_id, run_id)`。所有按 ID 读写附带 tenant_id，doc_id 使用 INTEGER 对齐现有 documents.id；后台 user_id 可空，手动触发记录操作者。时间统一按既有 TIMESTAMP 约定存储 UTC，微信 Unix 时间显式转换，API 输出带时区。
+索引：runs `(tenant_id, created_at DESC)` + 上述活跃部分唯一索引；articles `(tenant_id, processing_status, next_retry_at)`；events `(status, received_at)`；items `(tenant_id, run_id)`。所有按 ID 读写附带 tenant_id，doc_id INTEGER 对齐 documents.id；时间统一 UTC，微信 Unix 时间显式转换，API 输出带时区。
 
 DDL 同步：`src/wechat_mp/db.py` 幂等初始化（接入实际启动注册点）+ `deploy/db_update.yaml` 递增批次 + `deploy/init-postgres.sql`；不再编辑旧 db_update.sql。系统表变更还要同步 `docs/system/database_system_table.md`。升级在新检索 SQL 上线前完成，验证空库与存量库重复执行。
 
@@ -323,15 +356,15 @@ crawler 分支合并时的差异点（登记，不现在处理）：crawler 用�
 
 ## 12. 分期开发计划（概要，详细计划另立）
 
-> 2026-09-14 按 D11 重排：URL 抓取底座提前为 P1 核心；freepublish 凭据路径降为辅助；清单来源按 D11 优先级逐步接入。详细计划文档待按新分期重写。
+> 2026-09-14 按 D11/D12 定稿重排：回调+URL 直采为 P1 核心，接口通道（freepublish）P3 补齐，托底清单源 P4 接入。详细计划文档按此重写。
 
 | Phase | 内容 | 预估 |
 |-------|------|------|
-| P0 | WP0 已实测部分见 §13.2；补充实测：mp 文章页直抓稳定性（正文提取/图片 data-src/防盗链）、"已发布文章能否再群发"后台验证 | 0.5-1 天 |
-| P1 | **URL 抓取底座**：单篇/批量链接粘贴导入（手动清单来源）+ mp 文章页正文提取（复用 §6.1 保序序列与图片占位）+ documents 加列与检索过滤 + 统一同步管道 service 层 + run/item 账本 + 三入口（定时对 URL 源意义为"重采更新检测"）+ 基础售前挂接 + portal/租户后台基础页 | 重估 |
+| P0 | ✅ 实测完成（§13.2）：回调事件+ArticleUrl、URL 直采、freepublish 权限/边界、删除无事件、datacube 下线 | 已完成 |
+| P1 | **回调+URL 主链路**：诊断端点产品化（验签/明文+AES 安全模式/多公众号路由）+ 事件→ArticleUrl→URL 直采→正文提取→入库统一 service + documents 加列与检索过滤 + run/item 账本 + 手动粘贴 URL 入口 + 删除 URL 存活复核 + 售前挂接 + portal/租户基础页 + 服务器配置引导（含 token 生成/验证交互） | 重估 |
 | P2 | 图片下载转存 + VL 解析 + price_per_call 按张计费 + 纯图文章可用 | 2 天 |
-| P3 | LLM 分类/标签/时效 + LLM 子分类自动建 + 租户独立中心页；**清单来源扩展**：Playwright 扫码登录自有公众号后台读"发表记录"（自有账号主路径）与第三方清单服务（合规评估通过后）并行接入为可插拔 provider | 重估 |
-| P4（后置） | freepublish 凭据路径补齐（已实测部分并入）、事件回调兜底、crawler 分支按 §10 规约对齐合并 | 另议 |
+| P3 | LLM 分类/标签/时效 + 子分类自动建 + 租户中心页 + **接口通道补齐**（wechat_mp 凭据类型、freepublish 定期对账、发布渠道文章同步） | 重估 |
+| P4（后置） | **托底清单源接入**：wechat-download-api 自部署评估（AGPL 法务、代理池、扫码账号运营）→ 对接清单 API；crawler 分支按 §10 规约对齐合并 | 另议 |
 
 全程三智能体流程（开发 → 独立测试 → 独立 CodeReview），单测覆盖 diff 算法、hash 幂等、软删除、过期过滤、计费金额、脱敏；集成测试覆盖同步全链路（mock 抓取与接口）。
 
@@ -376,11 +409,27 @@ WP0 剩余验证：多图文样本、is_deleted 实际触发、整条删除后�
 
 待实测（有样本后补）：多图文消息、子篇 is_deleted=true 表现、整条删除后列表/详情行为与延迟、分页 >20 条、文章 url 长期可用性。
 
+### 13.3 社区清单方案调研记录（2026-09-14，支撑 D12）
+
+| 方案 | 机制 | 覆盖 | 评估 |
+|------|------|------|------|
+| **wechat-download-api**（github.com/tmwgsicp） | 任意公众号管理员扫码登录公众平台（凭证约 4 天，带过期预警 webhook），调公众平台内部接口 | 任意公众号历史文章列表（分页+链接+标题+时间）与正文，含反风控（curl_cffi TLS 指纹+SOCKS5 代理池+限频） | **首选托底**。FastAPI 同构、Docker 部署、HTTP API 完整；AGPL 3.0（独立部署调 API，对外 SaaS 需法务过目）；平台承担扫码账号风控，建议配代理池 |
+| wewe-rss（github.com/cooderl） | 微信读书接口，v2 宣称更稳定 | 公众号历史发布文章列表 | 备选；不需公众平台扫码，机制不同可对冲单一失效风险 |
+| Wechat2RSS（xlab.app） | 私有部署付费服务，2021 年运营至今 | RSS 源（24h 内收录） | 备选；付费省心但数据经第三方 |
+| 商业数据 API（新榜/极致了/次幂） | 第三方数据服务 | 历史清单+正文+互动数据 | 最后选；极致了有腾讯诉讼记录，需合规评估；按调用付费 |
+| RSS 免费平台（Feeddd/WeRss 等） | — | — | 已实测社区反馈基本不可用/延迟数月，排除 |
+
+统一约束：托底源只负责产出**文章 URL 清单**，正文一律走系统内统一的 URL 直采管道（不依赖托底源的正文接口，避免锁定与口径分叉）。
+
 **群发历史链接获取路径实测结论（2026-09-14）**：旧图文群发统计接口 `getarticlesummary` 实测返回 errcode 47009（api offline），官方标注停止维护，替代接口仅提供阅读统计数据（标题/msgid/阅读量），**不含正文与链接**。官方服务端接口层面无任何途径自动获取群发文章链接/正文。第三方抓取/RPA 有风控与合规成本，不作为产品承诺。
 
 **群发文章覆盖性决定性实测（2026-09-14，触发 D11 架构修订）**：测试号 16:45 正常群发一篇（推送粉丝），2 分钟后复查 freepublish/batchget 仍 total_count=1（仅 16:26 发布渠道文章）；`material/batchget_material(type=news)` 同步复查 total_count=0。**结论钉死：群发文章既不进发布集合也不沉淀永久素材**，凭据路径无法覆盖租户"必推送"的主流发文习惯，故 D11 将 URL 抓取升为主路径。群发完成事件 MASSSENDJOBFINISH 含 ArticleUrl（第三方文档佐证），但后台手动群发是否触发该事件未经实测，且接入需租户改服务器配置，列为兜底。
 
 **mp 文章页直抓实测（2026-09-14，P1 底座假设验证）**：用 getarticle 返回的 url 以普通浏览器 UA 直接 HTTP GET（无 cookie/无登录态）：返回完整页面（样本 3.5MB），含 `js_content` 正文容器、可提取标题、23 张 `data-src` 图片（mmecoa.qpic.cn），无验证码/无拦截。**结论：单篇文章 URL 直抓可行，P1 底座成立**；图片 CDN 下载与防盗链细节在 P2 实测。
+
+**★ 回调事件决定性实测（2026-09-14，agent2 诊断端点 /api/wechat-mp/callback）**：公众号后台配置服务器配置（URL+Token、明文模式）后，**后台手动群发一篇（推送粉丝，SentCount=92 全部成功）数秒内收到 MASSSENDJOBFINISH 事件**，事件 XML 含 `ArticleUrlResult/ResultList/item/ArticleUrl`（mp.weixin.qq.com/s/ 短链）；用该 URL 直抓正文成功（完整页面、标题、23 图）。**结论：后台手动群发触发事件且携带文章 URL，「回调拿 URL + 直采取正文」主链路端到端成立，租户保持正常群发推送习惯零改变。** 注意：事件字段为 `ArticleUrlResult`（非旧文档示例的 CopyrightCheckResult 内嵌），多图文时 Count>1 逐子篇给 URL；群发文章删除后是否有回调/事件未实测。接入前提：租户需配置服务器配置（一个公众号仅一个 URL，启用后接管后台自动回复），运营话术需覆盖。
+
+**删除事件观察（2026-09-14，单次样本）**：服务器配置生效期间在后台删除一篇群发文章，回调未收到任何事件（当日日志仅有 MASSSENDJOBFINISH 一条）。**观察结论（单次样本，非全平台保证）：删除无回调**；设计按"无删除事件"保守处理——软删除感知靠定期 URL 存活复核：对已入库文章定期重抓 URL，删除判定须多信号（专用错误页结构 + 正文容器缺失 + 明确错误提示文案共同命中，防止正文引用该句误删）；网络失败/验证页/限流/解析失败一律不得判删除。该复核与定时入口（D10）共用。后续有更多删除样本时回填本结论。
 
 ## 14. 三种获取入口与回答闭环（P1）
 
@@ -397,4 +446,6 @@ WP0 剩余验证：多图文样本、is_deleted 实际触发、整条删除后�
 - 工具执行权限按现有智能体工具授权机制管理，不直接套用 HTTP require_admin，也不向所有对话用户默认开放。知识检索仍按知识来源授权；只读共享公众号知识不授予刷新源租户的权限。
 - 同步成功后智能体调用现有 knowledge_base_search 回答并保留原文引用；运行中只说明正在获取，不能声称已拿到最新内容。若会话等待预算不足，返回可查询运行状态，不无限轮询或承诺未实现的主动通知。失败/部分失败时可使用旧知识，但需明确未更新完成及最近成功检查时间；无结果不能编造文章。
 - P1 首篇有效文档入库时创建分类并幂等挂接本租户售前智能体；没有售前实例时保留成功入库，返回挂接未完成原因，后续实例创建/配置流程可补挂接。其他智能体使用既有知识来源配置；智能体触发工具本身不修改授权范围。
-- 验收覆盖三个入口分别成功、三入口同时触发只执行一次、智能体不能跨租户刷新/查 run、长任务状态返回、失败不声称最新、获取完成后检索到新增文章，以及历史分页完成/中断恢复不漏采。
+- **P1 能力边界（2026-09-14 评审确认措辞）**：P1 的"新增发现"依赖回调事件（租户已配服务器配置）与手动粘贴；智能体/手动的"主动获取"语义为**刷新已知内容 + 粘贴新 URL**，不是"主动发现公众号最新文章"。后者依赖清单源能力（D12 托底服务，P1 并行实验验证、按结果接入）；接口通道（P3）仅发现"发布"渠道新增。对用户的表述必须如实区分"检查已导入文章"与"发现新文章"。
+- 并发语义以 §3 为准：租户级串行 + 持久化排队，"已有运行时返回 run_id"仅表示排队受理，不得丢弃新提交的 URL 批次。
+- 验收覆盖三个入口分别成功、三入口同时触发排队执行不丢批、智能体不能跨租户刷新/查 run、长任务状态返回、失败不声称最新、获取完成后检索到新增文章，以及历史分页完成/中断恢复不漏采。
