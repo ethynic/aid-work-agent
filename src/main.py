@@ -1828,6 +1828,10 @@ app.include_router(session_tasks_api.bindings_router)
 from src.api import external_systems  # noqa: E402
 app.include_router(external_systems.router)
 
+# 微信公众号回调诊断端点（WP0-E，见 docs/system/wechat-mp/wechat-mp-knowledge-ingestion-design.md §13）
+from src.wechat_mp import callback as wechat_mp_callback  # noqa: E402
+app.include_router(wechat_mp_callback.router)
+
 # Desktop Agent D1 is opt-in. Default production startup neither imports its
 # module nor registers routes; changing the setting requires a process restart.
 if settings.desktop_agent.enabled:
