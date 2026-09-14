@@ -78,6 +78,7 @@ class SubagentLoader:
             subagents_dir: Subagent目录路径
         """
         self.subagents_dir = subagents_dir
+        # key = dir_name（目录名/agent_id），显示名仅用于展示、允许重名
         self.configs: Dict[str, SubagentConfig] = {}
         
         if subagents_dir and subagents_dir.exists():
@@ -86,29 +87,30 @@ class SubagentLoader:
     def load_all(self) -> Dict[str, SubagentConfig]:
         """
         加载所有Subagent配置
-        
+
         Returns:
-            配置字典 {name: SubagentConfig}
+            配置字典 {dir_name: SubagentConfig}，以目录名（agent_id）为 key
         """
         if not self.subagents_dir or not self.subagents_dir.exists():
             logger.warning(f"Subagents directory not found: {self.subagents_dir}")
             return {}
-        
+
         self.configs.clear()
-        
+
         # 遍历子目录
         for subdir in self.subagents_dir.iterdir():
             if not subdir.is_dir():
                 continue
-            
+
             config_file = subdir / self.CONFIG_FILE
             if not config_file.exists():
                 continue
-            
+
             config = self.parse_subagent_md(config_file)
             if config:
                 config.dir_name = subdir.name
-                self.configs[config.name] = config
+                # key 用 dir_name（agent_id），显示名仅用于展示、允许重名
+                self.configs[config.dir_name] = config
         
         logger.info(f"SubagentLoader loaded {len(self.configs)} subagents")
         return self.configs
@@ -189,21 +191,21 @@ class SubagentLoader:
     def get(self, name: str) -> Optional[SubagentConfig]:
         """
         获取指定Subagent配置
-        
+
         Args:
-            name: Subagent名称
-            
+            name: dir_name（目录名/agent_id）
+
         Returns:
             配置对象，不存在返回None
         """
         return self.configs.get(name)
-    
+
     def list_subagents(self) -> List[str]:
         """
-        列出所有Subagent名称
-        
+        列出所有Subagent的 dir_name
+
         Returns:
-            名称列表
+            dir_name 列表
         """
         return list(self.configs.keys())
     

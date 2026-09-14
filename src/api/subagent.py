@@ -291,7 +291,7 @@ async def get_subagent_detail(request: Request, agent_id: str):
             "skills": config.skills,
             "context": config.context,
             "system_prompt": config.system_prompt,
-            "type": "builtin" if registry.is_builtin(agent_id) else "custom",
+            "type": "custom" if getattr(config, "from_db", False) else "builtin",
         }
         if config.business_pages:
             data["business_pages"] = config.business_pages

@@ -543,18 +543,17 @@ class Agent:
             with get_db_connection() as conn:
                 allowed_subagent_types = SubscriptionDB.get_allowed_subagent_types(conn, tenant_id)
             # 过滤注册的子智能体，只保留租户订阅的
-            # subagent_type 存的是 dir_name，_configs 的 key 是 name
+            # _configs 的 key 与 subagent_type 均为 dir_name（agent_id）
             filtered = []
-            for name, config in self.subagent_registry._configs.items():
-                agent_id = config.dir_name or name
+            for agent_id in self.subagent_registry._configs.keys():
                 if agent_id in allowed_subagent_types and agent_id != "main":
-                    filtered.append(name)
+                    filtered.append(agent_id)
         else:
             # 无租户上下文（platform_admin 全局视图/后台调用）：返回全部（排除主智能体）
             filtered = [
-                name
-                for name, config in self.subagent_registry._configs.items()
-                if (config.dir_name or name) != "main"
+                agent_id
+                for agent_id in self.subagent_registry._configs.keys()
+                if agent_id != "main"
             ]
 
         return filtered
@@ -606,10 +605,10 @@ class Agent:
             # 复用 _get_available_subagents()，与 _get_tools() 保持同一份过滤逻辑
             available_subagents = self._get_available_subagents()
             lines = []
-            for name in available_subagents:
-                config = self.subagent_registry._configs.get(name)
+            for agent_id in available_subagents:
+                config = self.subagent_registry._configs.get(agent_id)
                 if config:
-                    lines.append(f"- {name}: {config.description}")
+                    lines.append(f"- {config.name}（ID: {agent_id}）: {config.description}")
             subagent_descriptions = "\n".join(lines) if lines else "(no subagents available)"
         
         # 委派工具说明（仅主智能体使用）

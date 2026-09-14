@@ -67,7 +67,7 @@ def _make_agent(is_master: bool, config=None):
 def _load_recruiting_config():
     from src.subagents.loader import SubagentLoader
     loader = SubagentLoader(SUBAGENTS_DIR)
-    config = loader.get("招聘操作智能体")
+    config = loader.get("recruiting-operator")
     assert config is not None, "recruiting-operator SUBAGENT.md 未被加载（检查 frontmatter 闭合）"
     return config
 

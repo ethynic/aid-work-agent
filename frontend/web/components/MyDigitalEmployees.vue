@@ -60,9 +60,12 @@
             <div class="w-10 h-10 rounded-lg bg-gray-50 flex items-center justify-center text-gray-600 group-hover:bg-primary-50 group-hover:text-primary-600 transition-colors">
               <AgentIcon :agent-id="agent.agent_id" class="w-6 h-6" />
             </div>
-            <h3 class="text-base font-semibold text-default truncate flex-1">
-              {{ getDisplayName(agent) }}
-            </h3>
+            <div class="flex-1 min-w-0">
+              <h3 class="text-base font-semibold text-default truncate">
+                {{ getDisplayName(agent) }}
+              </h3>
+              <div class="text-xs text-muted truncate">{{ agent.agent_id }}</div>
+            </div>
           </div>
 
           <!-- 描述（JS 截断 30 字 + CSS line-clamp-2 双保险） -->

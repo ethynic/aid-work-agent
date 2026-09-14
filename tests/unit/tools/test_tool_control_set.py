@@ -82,7 +82,7 @@ def test_delegate_definition_keeps_multimodal_contract():
     # registry contract is covered in the integration-style assertion below.
     from src.subagents.registry import SubagentRegistry
     registry = SubagentRegistry()
-    registry._configs["video"] = SimpleNamespace(description="video", dir_name="video")
+    registry._configs["video"] = SimpleNamespace(description="video", dir_name="video", name="video")
     production = registry.get_delegation_tool_definition(["video"])
     assert "image_paths" in production["input_schema"]["properties"]
 

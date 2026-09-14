@@ -112,11 +112,8 @@ def _all_subagent_dir_names() -> List[str]:
     registry = master_agent.subagent_registry
     if not registry:
         return []
-    return [
-        cfg.dir_name or name
-        for name, cfg in registry._configs.items()
-        if (cfg.dir_name or name) != "main"
-    ]
+    # _configs 的 key 即 dir_name（agent_id）
+    return [agent_id for agent_id in registry._configs.keys() if agent_id != "main"]
 
 
 def get_allowed_agent_ids_for_user(

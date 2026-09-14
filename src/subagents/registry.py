@@ -44,35 +44,40 @@ class SubagentRegistry:
         Args:
             subagents_dir: 内置Subagent目录路径
         """
+        # key = dir_name（agent_id），显示名仅用于展示、允许重名
         self._configs: Dict[str, SubagentConfig] = {}
         self._loader: Optional[SubagentLoader] = None
 
-        # 文件模式索引
+        # 文件模式索引，value 为 dir_name
         self._file_pattern_index: Dict[str, str] = {}
 
-        # 内置名称集合
+        # 内置 agent_id 集合（dir_name）
         self._builtin_names: Set[str] = set()
 
-        # 被 DB 定义覆盖的文件系统（内置）配置，key 为其在 _configs 中的原键（显示名），
+        # 被 DB 定义覆盖的文件系统（内置）配置，key 为 dir_name，
         # 用于 DB 定义删除后恢复内置版本
         self._overridden_builtins: Dict[str, SubagentConfig] = {}
 
         if subagents_dir:
             self.load_from_directory(subagents_dir)
 
-    def is_builtin(self, name: str) -> bool:
-        """判断是否为内置子智能体"""
-        return name in self._builtin_names
+    def is_builtin(self, agent_id: str) -> bool:
+        """判断是否为内置子智能体（按 dir_name/agent_id）"""
+        return agent_id in self._builtin_names
 
     def get_all_subagents_with_type(self) -> List[Dict]:
-        """返回所有子智能体列表，带 type 字段"""
+        """返回所有子智能体列表，带 type 字段。
+
+        type 按配置来源判定：DB 定义（含覆盖内置的 DB 定义）为 custom，
+        文件系统内置为 builtin。内置保护判定用 is_builtin(agent_id)。
+        """
         result = []
-        for name, config in self._configs.items():
+        for agent_id, config in self._configs.items():
             item = {
-                "agent_id": config.dir_name or name,
+                "agent_id": agent_id,
                 "name": config.name,
                 "description": config.description,
-                "type": "builtin" if name in self._builtin_names else "custom",
+                "type": "custom" if getattr(config, "from_db", False) else "builtin",
             }
             if config.business_pages:
                 item["business_pages"] = config.business_pages
@@ -85,18 +90,9 @@ class SubagentRegistry:
         return result
 
     def validate_id_uniqueness(self, agent_id: str, exclude_id: str = None) -> bool:
-        """检查 agent_id 是否在所有子智能体中唯一"""
-        for config in self._configs.values():
-            dir_name = config.dir_name
-            if dir_name == agent_id and dir_name != exclude_id:
-                return False
-        return True
-
-    def validate_name_uniqueness(self, name: str, exclude_name: str = None) -> bool:
-        """检查 name 是否在所有子智能体中唯一"""
-        for cfg_name in self._configs.keys():
-            if cfg_name == name and cfg_name != exclude_name:
-                return False
+        """检查 agent_id 是否在所有子智能体中唯一（_configs 的 key 即 agent_id）"""
+        if agent_id in self._configs and agent_id != exclude_id:
+            return False
         return True
 
     def load_from_directory(self, subagents_dir: Path) -> int:
@@ -111,8 +107,8 @@ class SubagentRegistry:
         """
         self._loader = SubagentLoader(subagents_dir)
         self._configs = self._loader.configs
-        
-        # 记录内置名称
+
+        # 记录内置 agent_id（key 即 dir_name）
         self._builtin_names = set(self._configs.keys())
         
         # 构建索引
@@ -147,108 +143,119 @@ class SubagentRegistry:
     def upsert_db_config(self, config: SubagentConfig) -> None:
         """以 DB 定义覆盖同 agent_id 的既有条目（内置或旧 DB 版本）。
 
-        registry._configs 以显示名为键，同 agent_id 的内置版显示名不同，
-        直接按 config.name 插入会并存两条，必须先移除旧条目。
+        registry._configs 以 dir_name（agent_id）为键，同 agent_id 直接覆盖；
+        不同 agent_id 的定义显示名相同也互不影响（显示名允许重名）。
         """
         agent_id = config.dir_name or config.name
-        # 仅按 dir_name 匹配（显示名与 dir_name 语义不同，避免误删无关条目）
-        for key in [k for k, c in self._configs.items()
-                    if c.dir_name == agent_id or (not c.dir_name and k == agent_id)]:
-            existing_cfg = self._configs[key]
-            if not getattr(existing_cfg, "from_db", False):
-                self._overridden_builtins[key] = existing_cfg
-            if key != config.name:
-                del self._configs[key]
+        existing_cfg = self._configs.get(agent_id)
+        if existing_cfg is not None and not getattr(existing_cfg, "from_db", False):
+            self._overridden_builtins[agent_id] = existing_cfg
             logger.info(
-                f"DB 定义覆盖既有条目: {key} -> {config.name} (agent_id={agent_id})"
+                f"DB 定义覆盖内置条目: {agent_id} ({existing_cfg.name} -> {config.name})"
             )
-        self._configs[config.name] = config
+        # 显示名重复仅告警，不拒绝（显示名仅用于展示）
+        for key, cfg in self._configs.items():
+            if key != agent_id and cfg.name == config.name:
+                logger.warning(
+                    f"显示名重复: agent_id={agent_id} 与 agent_id={key} 均为 "
+                    f"「{config.name}」，两条并存，展示层需以 agent_id 区分"
+                )
+                break
+        self._configs[agent_id] = config
 
     def register(self, config: SubagentConfig) -> bool:
         """
         注册一个Subagent配置
-        
+
         Args:
             config: 配置对象
-            
+
         Returns:
             是否注册成功
         """
-        if config.name in self._configs:
-            logger.warning(f"Subagent already registered: {config.name}")
+        key = config.dir_name or config.name
+        if key in self._configs:
+            logger.warning(f"Subagent already registered: {key}")
             return False
-        
-        self._configs[config.name] = config
+
+        self._configs[key] = config
 
         # 更新索引
         patterns = config.triggers.get("file_patterns", [])
         for pattern in patterns:
-            self._file_pattern_index[pattern.lower()] = config.name
-        
-        logger.info(f"Registered subagent: {config.name}")
+            self._file_pattern_index[pattern.lower()] = key
+
+        logger.info(f"Registered subagent: {config.name} (agent_id={key})")
         return True
-    
-    def unregister(self, name: str) -> bool:
+
+    def unregister(self, agent_id: str) -> bool:
         """
         注销一个Subagent配置
-        
+
         Args:
-            name: Subagent名称
-            
+            agent_id: dir_name（agent_id）
+
         Returns:
             是否注销成功
         """
-        if name not in self._configs:
-            logger.warning(f"Subagent not found: {name}")
+        if agent_id not in self._configs:
+            logger.warning(f"Subagent not found: {agent_id}")
             return False
-        
-        config = self._configs.pop(name)
+
+        config = self._configs.pop(agent_id)
 
         # 更新索引
         patterns = config.triggers.get("file_patterns", [])
         for pattern in patterns:
             self._file_pattern_index.pop(pattern.lower(), None)
-        
-        logger.info(f"Unregistered subagent: {name}")
+
+        logger.info(f"Unregistered subagent: {agent_id}")
         return True
     
-    def get(self, name: str) -> Optional[SubagentConfig]:
+    def get(self, agent_id: str) -> Optional[SubagentConfig]:
         """
         获取Subagent配置
 
-        支持按 name（YAML 中的 name 字段）或 dir_name（目录名）查找。
+        优先按 dir_name（agent_id，_configs 的 key）直达查找；
+        未命中时按显示名（config.name）兜底扫描——兼容 LLM 历史会话
+        传入显示名委派、Redis task_record 历史数据等场景。
+        dir_name 与显示名撞名时 dir_name 优先。
 
         Args:
-            name: Subagent名称或目录名
+            agent_id: dir_name（agent_id）或显示名
 
         Returns:
             配置对象，不存在返回None
         """
-        config = self._configs.get(name)
+        config = self._configs.get(agent_id)
         if config:
             return config
-        # 按目录名查找
-        for cfg in self._configs.values():
-            if cfg.dir_name == name:
-                return cfg
+        # 按显示名兜底查找
+        matches = [cfg for cfg in self._configs.values() if cfg.name == agent_id]
+        if len(matches) > 1:
+            logger.warning(
+                f"显示名「{agent_id}」命中 {len(matches)} 个子智能体，"
+                "返回插入序第一条；建议调用方改用 agent_id（dir_name）定位"
+            )
+        if matches:
+            return matches[0]
         return None
     
     def get_content(self, name: str) -> Optional[str]:
         """
         获取Subagent完整内容
-        
+
         Args:
-            name: Subagent名称或目录名
-            
+            name: dir_name（agent_id）或显示名
+
         Returns:
             内容字符串
         """
         if self._loader:
-            # 先尝试按 name 查找，再按 dir_name 查找
+            # loader 按 dir_name（key）查找，registry.get 提供显示名兜底
             content = self._loader.get_subagent_content(name)
             if content:
                 return content
-            # loader 不支持 dir_name 查找，通过 registry.get 补偿
             config = self.get(name)
             if config and config.path:
                 from pathlib import Path as P
@@ -265,22 +272,22 @@ class SubagentRegistry:
     
     def list_subagents(self) -> List[str]:
         """
-        列出所有Subagent名称
-        
+        列出所有Subagent的 dir_name（agent_id）
+
         Returns:
-            名称列表
+            dir_name 列表
         """
         return list(self._configs.keys())
-    
+
     def match_by_file(self, filename: str) -> Optional[str]:
         """
         根据文件名匹配Subagent
-        
+
         Args:
             filename: 文件名
-            
+
         Returns:
-            匹配的Subagent名称，如果没有匹配返回None
+            匹配的Subagent dir_name（agent_id），如果没有匹配返回None
         """
         import fnmatch
         
@@ -303,21 +310,21 @@ class SubagentRegistry:
         用于LLM系统提示中展示可用Subagent。
 
         Args:
-            names: 可选的子智能体名称列表，用于过滤。如果为 None，返回所有。
+            names: 可选的 dir_name（agent_id）列表，用于过滤。如果为 None，返回所有。
 
         Returns:
-            描述字符串
+            描述字符串（展示显示名 + agent_id）
         """
         if not self._configs:
             return "(no subagents available)"
 
         filtered_configs = self._configs.items()
         if names is not None:
-            filtered_configs = [(name, config) for name, config in filtered_configs if name in names]
+            filtered_configs = [(agent_id, config) for agent_id, config in filtered_configs if agent_id in names]
 
         lines = []
-        for name, config in filtered_configs:
-            lines.append(f"- {name}: {config.description}")
+        for agent_id, config in filtered_configs:
+            lines.append(f"- {config.name}（ID: {agent_id}）: {config.description}")
 
         return "\n".join(lines) if lines else "(no subagents available)"
     
@@ -326,31 +333,31 @@ class SubagentRegistry:
     ) -> Optional[Dict]:
         """
         获取委派工具定义
-        
+
         用于LLM function calling。
-        
+
         Args:
-            available_subagents: 可用的subagent列表（用于限制可委派范围）
-            
+            available_subagents: 可用的subagent dir_name（agent_id）列表（用于限制可委派范围）
+
         Returns:
             工具定义字典
         """
-        # 过滤可用的subagent
+        # 过滤可用的subagent（按 dir_name/agent_id）
         if available_subagents is not None:
             subagent_list = [
-                (name, self._configs[name])
-                for name in available_subagents
-                if name in self._configs
+                (agent_id, self._configs[agent_id])
+                for agent_id in available_subagents
+                if agent_id in self._configs
             ]
         else:
             subagent_list = list(self._configs.items())
 
         if not subagent_list:
             return None
-        
+
         descriptions = "\n".join(
-            f"  - {name}: {config.description}"
-            for name, config in subagent_list
+            f"  - {config.name}（ID: {agent_id}）: {config.description}"
+            for agent_id, config in subagent_list
         )
         
         return {
@@ -371,8 +378,8 @@ class SubagentRegistry:
                 "properties": {
                     "subagent_name": {
                         "type": "string",
-                        "description": "要委派给的子智能体名称",
-                        "enum": [name for name, _ in subagent_list]
+                        "description": "要委派给的子智能体 agent_id（见可用列表中的 ID）",
+                        "enum": [agent_id for agent_id, _ in subagent_list]
                     },
                     "task_description": {
                         "type": "string",

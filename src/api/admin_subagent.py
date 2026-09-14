@@ -227,7 +227,7 @@ async def get_subagent_detail(request: Request, agent_id: str):
             "chat_toolbar": config.chat_toolbar,
             "upload_accept": config.upload_accept,
             "business_pages": config.business_pages,
-            "type": "builtin" if registry.is_builtin(agent_id) else "custom",
+            "type": "custom" if getattr(config, "from_db", False) else "builtin",
         }
         return {
             "success": True,
@@ -282,11 +282,9 @@ async def create_subagent(request: Request, body: CreateSubagentRequest):
         if not re.match(r'^[a-zA-Z0-9_-]+$', body.agent_id):
             return _error_response("ID 只能包含字母、数字、下划线和连字符", f"invalid agent_id format: {body.agent_id}", 400)
 
-        # 唯一性校验
+        # 唯一性校验（显示名允许重复，仅校验 agent_id）
         if not registry.validate_id_uniqueness(body.agent_id):
             return _error_response(f"ID 已存在: {body.agent_id}", f"agent_id '{body.agent_id}' already exists", 400)
-        if not registry.validate_name_uniqueness(body.name):
-            return _error_response(f"名称已存在: {body.name}", f"name '{body.name}' already exists", 400)
 
         result = SubagentDefinitionService.create_definition(
             agent_id=body.agent_id,
@@ -333,15 +331,12 @@ async def update_subagent(request: Request, agent_id: str, body: CreateSubagentR
         if not registry:
             return _error_response("子智能体注册表未初始化", "subagent_registry is None")
 
-        # 内置不可修改
-        if registry.is_builtin(agent_id):
-            return _error_response("内置数字员工不可修改", f"agent_id={agent_id} is builtin", 400)
+        # 纯内置（未被 DB 定义覆盖）不可修改；DB 定义覆盖内置时管理员操作的是 DB 定义，应放行
+        config = registry.get(agent_id)
+        if config is not None and not getattr(config, "from_db", False):
+            return _error_response("内置数字员工不可修改", f"agent_id={agent_id} is pure builtin", 400)
 
-        # 唯一性校验（排除自身）
-        existing = registry.get(agent_id)
-        existing_name = existing.name if existing else None
-        if not registry.validate_name_uniqueness(body.name, exclude_name=existing_name):
-            return _error_response(f"名称已存在: {body.name}", f"name '{body.name}' already exists", 400)
+        # 显示名允许重复，更新前无需名称唯一性校验
 
         # 更新定义
         SubagentDefinitionService.update_definition(
@@ -397,8 +392,10 @@ async def delete_subagent(request: Request, agent_id: str):
         if not registry:
             return _error_response("子智能体注册表未初始化", "subagent_registry is None")
 
-        if registry.is_builtin(agent_id):
-            return _error_response("内置数字员工不可删除", f"agent_id={agent_id} is builtin", 400)
+        # 纯内置不可删除；DB 定义覆盖内置时删除 DB 定义即可恢复内置版（registry 自动回退）
+        config = registry.get(agent_id)
+        if config is not None and not getattr(config, "from_db", False):
+            return _error_response("内置数字员工不可删除", f"agent_id={agent_id} is pure builtin", 400)
 
         success = SubagentDefinitionService.delete_definition(agent_id)
         if not success:

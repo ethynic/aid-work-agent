@@ -289,7 +289,9 @@
               class="w-4 h-4 text-primary-600 border-hover rounded focus:ring-primary-500"
             />
             <div class="ml-3 flex-1">
-              <div class="text-sm font-medium text-default">{{ agent.name }}</div>
+              <div class="text-sm font-medium text-default">
+                {{ agent.name }} <span class="text-xs text-muted font-normal ml-1">{{ agent.agent_id }}</span>
+              </div>
               <div v-if="agent.description" class="text-xs text-muted">{{ agent.description }}</div>
             </div>
             <span class="ml-2 text-xs px-1.5 py-0.5 rounded"

@@ -24,7 +24,9 @@
             ]"
             @click="selectAgent(agent)"
           >
-            <div class="text-sm text-default font-medium truncate">{{ agent.name }}</div>
+            <div class="text-sm text-default font-medium truncate">
+              {{ agent.name }} <span class="text-xs text-muted font-normal ml-1">{{ agent.agent_id }}</span>
+            </div>
             <div class="text-xs text-muted mt-1 line-clamp-2">{{ agent.description || '无描述' }}</div>
           </div>
           <div v-if="builtinList.length === 0" class="text-xs text-muted text-center py-4">暂无内置数字员工</div>

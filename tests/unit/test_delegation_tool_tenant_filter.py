@@ -68,9 +68,9 @@ def _build_minimal_master_agent(subagent_registry: SubagentRegistry) -> Agent:
 
 
 def _register_subagents(registry: SubagentRegistry, items):
-    """直接给注册表注入 SubagentConfig，模拟 loader 行为"""
+    """直接给注册表注入 SubagentConfig，模拟 loader 行为（key=dir_name）"""
     for cfg in items:
-        registry._configs[cfg.name] = cfg
+        registry._configs[cfg.dir_name or cfg.name] = cfg
     registry._builtin_names.update(registry._configs.keys())
     registry._build_indices()
 
@@ -120,7 +120,8 @@ class TestDelegationToolTenantFilter(unittest.TestCase):
         delegate = _extract_delegate_tool(tools)
         self.assertIsNotNone(delegate, "MASTER 模式必须有 delegate_to_subagent 工具")
         enum = delegate["input_schema"]["properties"]["subagent_name"]["enum"]
-        self.assertEqual(set(enum), {"旅游咨询顾问", "外贸获客智能体", "全筑合同归档自动化审核"})
+        # enum 取值为 dir_name（agent_id）
+        self.assertEqual(set(enum), {"travel-advisor", "trade-specialist", "contract-audit"})
 
     def test_get_tools_filters_by_tenant_subscription_in_saas_mode(self):
         """【核心修复】租户上下文：委派工具的 enum 必须只包含租户订阅的子智能体"""
@@ -141,10 +142,10 @@ class TestDelegationToolTenantFilter(unittest.TestCase):
         enum = delegate["input_schema"]["properties"]["subagent_name"]["enum"]
 
         # 关键断言：未订阅的子智能体（外贸、合同）不应出现在 enum 中
-        self.assertIn("旅游咨询顾问", enum)
-        self.assertNotIn("外贸获客智能体", enum)
-        self.assertNotIn("全筑合同归档自动化审核", enum)
-        self.assertEqual(enum, ["旅游咨询顾问"])
+        self.assertIn("travel-advisor", enum)
+        self.assertNotIn("trade-specialist", enum)
+        self.assertNotIn("contract-audit", enum)
+        self.assertEqual(enum, ["travel-advisor"])
 
     def test_get_tools_filters_description_text_too(self):
         """description 文本（可用的子智能体说明）也必须只列出租户订阅的子智能体"""
@@ -161,19 +162,22 @@ class TestDelegationToolTenantFilter(unittest.TestCase):
         self.assertIsNotNone(delegate)
         desc = delegate["description"]
 
+        # 描述文本展示显示名（+ agent_id），未订阅的不出现
         self.assertIn("旅游咨询顾问", desc)
+        self.assertIn("travel-advisor", desc)
         self.assertNotIn("外贸获客智能体", desc)
         self.assertNotIn("全筑合同归档自动化审核", desc)
 
     def test_subagent_registry_direct_call_filters_correctly(self):
         """【回归保护】SubagentRegistry.get_delegation_tool_definition 直接传 available_subagents 的行为
-        （注意：available_subagents 是注册表 _configs 的 key，即 SubagentConfig.name）"""
-        tool = self.registry.get_delegation_tool_definition(["旅游咨询顾问"])
+        （available_subagents 是注册表 _configs 的 key，即 dir_name/agent_id）"""
+        tool = self.registry.get_delegation_tool_definition(["travel-advisor"])
 
         self.assertIsNotNone(tool)
         enum = tool["input_schema"]["properties"]["subagent_name"]["enum"]
-        self.assertEqual(enum, ["旅游咨询顾问"])
+        self.assertEqual(enum, ["travel-advisor"])
         self.assertIn("旅游咨询顾问", tool["description"])
+        self.assertIn("travel-advisor", tool["description"])
         self.assertNotIn("外贸获客智能体", tool["description"])
 
     def test_tenant_subscription_query_is_cached_across_calls(self):
@@ -218,7 +222,7 @@ class TestDelegationToolTenantFilter(unittest.TestCase):
                 tools = agent._get_tools()
                 mock_get_allowed_2.assert_called_once()
                 enum = _extract_delegate_tool(tools)["input_schema"]["properties"]["subagent_name"]["enum"]
-                self.assertEqual(enum, ["外贸获客智能体"])
+                self.assertEqual(enum, ["trade-specialist"])
 
 
 @pytest.mark.asyncio
