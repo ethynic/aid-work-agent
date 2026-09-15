@@ -1072,57 +1072,10 @@ def _get_file_info(file_id: str) -> dict | None:
                 pass
         return cached
 
-    # 尝试从磁盘目录扫描恢复（包括租户/用户子目录，最多3层）
-    # 扫描新目录 storage/tenants/{tenant}/conversation/ 等
-    search_dirs: list[Path] = []
-    if TENANTS_STORAGE_DIR.exists():
-        for d1 in TENANTS_STORAGE_DIR.iterdir():
-            if d1.is_dir():
-                for d2 in d1.iterdir():
-                    if d2.is_dir():
-                        search_dirs.append(d2)
-                        for d3 in d2.iterdir():
-                            if d3.is_dir():
-                                search_dirs.append(d3)
-
-    for search_dir in search_dirs:
-        if not search_dir.exists():
-            continue
-        for f in search_dir.iterdir():
-            if f.is_file() and f.stem == file_id:
-                suffix = f.suffix.lower()
-                mime_type_map = {
-                    '.pdf': 'application/pdf',
-                    '.doc': 'application/msword',
-                    '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-                    '.xls': 'application/vnd.ms-excel',
-                    '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-                    '.txt': 'text/plain',
-                    '.png': 'image/png',
-                    '.jpg': 'image/jpeg',
-                    '.jpeg': 'image/jpeg',
-                    '.gif': 'image/gif',
-                    '.html': 'text/html',
-                    '.htm': 'text/html',
-                    '.mp3': 'audio/mpeg',
-                    '.mp4': 'video/mp4',
-                }
-                mime_type = mime_type_map.get(suffix, 'application/octet-stream')
-                file_info = {
-                    "file_id": file_id,
-                    "name": f.name,
-                    "path": str(f.absolute()),
-                    "size": f.stat().st_size,
-                    "mime_type": mime_type,
-                    "type": "image" if mime_type.startswith("image/") else "file"
-                }
-                # 缓存回 Redis，避免重复磁盘扫描
-                for field, value in file_info.items():
-                    redis_client.hset(key, field, value)
-                redis_client.expire(key, 86400)
-                return file_info
-
-    return None
+    # 尝试从磁盘目录扫描恢复（全场景：storage/tenants/{tenant}/{scene}/ 等，
+    # 命中后回写 Redis 自愈，与文件工具的 resolve_uploaded_file_path 共用实现）
+    from src.core.storage import find_uploaded_file_on_disk
+    return find_uploaded_file_on_disk(file_id)
 
 
 @app.get("/api/files/{file_id}")

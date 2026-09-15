@@ -78,11 +78,12 @@ class PdfFileHandler:
 
     @staticmethod
     def resolve_path(file_path: str) -> str:
-        """解析文件路径（支持相对路径）
+        """解析文件路径（支持相对路径或 file_id）
 
         查找顺序：
-        1. 原路径直接命中
-        2. 新路径 storage/tenants/{tenant}/conversation/{file}
+        1. 原路径直接命中（含绝对路径）
+        2. Redis 元数据命中（file_id -> uploaded_file:{file_id}.path，最可靠）
+        3. 磁盘全场景扫描兜底（storage/tenants/{tenant}/{scene}/，命中后回写 Redis 自愈）
         """
         p = Path(file_path)
         # 防路径穿越：含 .. 的相对路径不得进行 exists 检查或路径拼接
@@ -91,19 +92,14 @@ class PdfFileHandler:
             return str(p.absolute())
         if p.exists():
             return str(p.absolute())
+
+        # Redis 元数据 + 磁盘全场景扫描兜底：file_id 上传时写了 uploaded_file:{file_id}
+        # 元数据；元数据丢失（迁移/过期）时按文件名主干全场景扫描磁盘并自愈回写
         try:
-            from src.core.storage import _TENANTS_ROOT
-            project_root = Path(__file__).resolve().parents[3]
-            tenants_root = project_root / _TENANTS_ROOT
-            if tenants_root.exists():
-                # 防路径穿越：file_path 含 .. 或绝对路径时跳过新路径扫描
-                fp_obj = Path(file_path)
-                if not fp_obj.is_absolute() and ".." not in fp_obj.parts:
-                    for d1 in tenants_root.iterdir():
-                        if d1.is_dir():
-                            candidate = d1 / "conversation" / file_path
-                            if candidate.exists():
-                                return str(candidate.absolute())
+            from src.core.storage import resolve_uploaded_file_path
+            resolved = resolve_uploaded_file_path(file_path)
+            if resolved:
+                return resolved
         except (ImportError, AttributeError):
             pass
         return str(p.absolute())

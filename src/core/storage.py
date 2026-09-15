@@ -129,6 +129,126 @@ def get_tenant_storage_abs_path(tenant_id: str, scene: str, filename: str) -> st
     return os.path.abspath(rel)
 
 
+# 常见附件后缀 -> MIME（磁盘扫描兜底时按扩展名推导）
+_MIME_BY_SUFFIX = {
+    ".pdf": "application/pdf",
+    ".doc": "application/msword",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".xls": "application/vnd.ms-excel",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".txt": "text/plain",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".html": "text/html",
+    ".htm": "text/html",
+    ".mp3": "audio/mpeg",
+    ".mp4": "video/mp4",
+}
+
+
+def find_uploaded_file_on_disk(file_id: str, register_to_redis: bool = True) -> Optional[dict]:
+    """按文件名在 storage/tenants 下全场景扫描查找文件
+
+    覆盖 `storage/tenants/{tenant}/{scene}/`（conversation/knowledge/templates/
+    images 等）及 scene 下 1 层子目录（如 images/2026-08/）。Redis 元数据丢失
+    （迁移、过期、重启）时的兜底，文件本体在磁盘上不受影响。
+
+    匹配规则（与旧 conversation-only 兜底兼容）：
+    - 输入带扩展名（如 `report.docx`）-> 精确匹配文件名
+    - 输入为无扩展名的 file_id（如 `file_abc123`）-> 按文件名主干匹配任意后缀
+
+    命中后默认回写 Redis `uploaded_file:{file_id}`（TTL 24h）自愈，后续解析
+    直接走 Redis 命中，不再触发扫描。注意自愈重建的 `name` 是磁盘文件名，
+    用户上传时的原始文件名无法从磁盘恢复。
+
+    Args:
+        file_id: 文件 ID（`file_xxx`）或裸文件名（`report.docx`）
+        register_to_redis: 命中后是否回写 Redis 自愈
+
+    Returns:
+        元数据 dict（file_id/name/path/size/mime_type/type）或 None
+    """
+    if not file_id or ".." in Path(file_id).parts:
+        return None
+    try:
+        tenants_root = Path(_TENANTS_ROOT)
+        if not tenants_root.exists():
+            return None
+
+        search_dirs = []
+        for d1 in tenants_root.iterdir():
+            if not d1.is_dir():
+                continue
+            for d2 in d1.iterdir():
+                if d2.is_dir():
+                    search_dirs.append(d2)
+                    for d3 in d2.iterdir():
+                        if d3.is_dir():
+                            search_dirs.append(d3)
+
+        target = Path(file_id)
+        if target.suffix:
+            match = lambda f: f.name == target.name  # noqa: E731
+        elif file_id.startswith("file_"):
+            match = lambda f: f.stem == target.stem  # noqa: E731
+        else:
+            return None
+
+        for search_dir in search_dirs:
+            if not search_dir.exists():
+                continue
+            for f in search_dir.iterdir():
+                if f.is_file() and match(f):
+                    mime_type = _MIME_BY_SUFFIX.get(f.suffix.lower(), "application/octet-stream")
+                    info = {
+                        "file_id": file_id,
+                        "name": f.name,
+                        "path": str(f.absolute()),
+                        "size": f.stat().st_size,
+                        "mime_type": mime_type,
+                        "type": "image" if mime_type.startswith("image/") else "file",
+                    }
+                    if register_to_redis and file_id.startswith("file_"):
+                        try:
+                            from src.core.redis_client import redis_client
+                            key = redis_client.make_key("uploaded_file", file_id)
+                            for field, value in info.items():
+                                redis_client.hset(key, field, value)
+                            redis_client.expire(key, 86400)
+                        except Exception as e:
+                            logger.warning(f"[storage] file_id 磁盘自愈回写 Redis 失败: {e}")
+                    return info
+        return None
+    except Exception as e:
+        logger.warning(f"[storage] file_id 磁盘扫描兜底失败: {file_id} {e}")
+        return None
+
+
+def resolve_uploaded_file_path(file_path: str) -> Optional[str]:
+    """file_id -> 磁盘绝对路径（Redis 元数据 + 全场景磁盘扫描兜底）
+
+    供 excel/pdf/word 等文件工具的 resolve_path 复用：
+    1. Redis `uploaded_file:{file_id}` 元数据命中（最可靠，仅 file_ 前缀查询）
+    2. 磁盘全场景扫描兜底（命中后回写 Redis 自愈，见 find_uploaded_file_on_disk；
+       file_ 前缀按 stem 匹配，带扩展名的裸文件名按精确文件名匹配）
+
+    真实存在的相对路径应由调用方先用 `Path.exists()` 命中，走到这里的输入
+    在 cwd 下必不存在。
+
+    Returns:
+        绝对路径字符串或 None
+    """
+    redis_path = resolve_path_via_redis(file_path)
+    if redis_path:
+        return redis_path
+    info = find_uploaded_file_on_disk(file_path)
+    if info:
+        return info["path"]
+    return None
+
+
 def resolve_path_via_redis(file_id: str) -> Optional[str]:
     """通过 Redis uploaded_file:{file_id} 元数据查磁盘路径
 

@@ -67,6 +67,10 @@ class TestResolvePathViaRedis:
         with patch(
             "src.core.redis_client.redis_client.hgetall", return_value={}
         ), patch(
+            "src.core.redis_client.redis_client.hset", return_value=1
+        ), patch(
+            "src.core.redis_client.redis_client.expire", return_value=True
+        ), patch(
             "src.core.redis_client.redis_client.make_key",
             side_effect=lambda prefix, fid: f"{prefix}:{fid}",
         ):

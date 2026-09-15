@@ -369,7 +369,7 @@ class WordFileHandler:
         查找顺序：
         1. 原路径直接命中（含绝对路径）
         2. Redis 元数据命中（file_id -> uploaded_file:{file_id}.path，最可靠）
-        3. 新路径 storage/tenants/{tenant}/conversation/{file}（含 _anonymous 兜底）
+        3. 磁盘全场景扫描兜底（storage/tenants/{tenant}/{scene}/，命中后回写 Redis 自愈）
         """
         p = Path(file_path)
         # 防路径穿越：含 .. 的相对路径不得进行 exists 检查或路径拼接
@@ -379,30 +379,13 @@ class WordFileHandler:
         if p.exists():
             return str(p.absolute())
 
-        # Redis 元数据命中：file_id 上传时写了 uploaded_file:{file_id} 永久元数据
-        # 适用于所有走 cp/upload/subagent_template_file 上传的文件，不依赖目录扫描
+        # Redis 元数据 + 磁盘全场景扫描兜底：file_id 上传时写了 uploaded_file:{file_id}
+        # 元数据；元数据丢失（迁移/过期）时按文件名主干全场景扫描磁盘并自愈回写
         try:
-            from src.core.storage import resolve_path_via_redis
-            redis_path = resolve_path_via_redis(file_path)
-            if redis_path:
-                return redis_path
-        except ImportError:
-            pass
-
-        # 优先在新路径下查找
-        try:
-            from src.core.storage import _TENANTS_ROOT
-            project_root = Path(__file__).resolve().parents[3]
-            tenants_root = project_root / _TENANTS_ROOT
-            if tenants_root.exists():
-                # 防路径穿越：file_path 含 .. 或绝对路径时跳过新路径扫描
-                fp_obj = Path(file_path)
-                if not fp_obj.is_absolute() and ".." not in fp_obj.parts:
-                    for d1 in tenants_root.iterdir():
-                        if d1.is_dir():
-                            candidate = d1 / "conversation" / file_path
-                            if candidate.exists():
-                                return str(candidate.absolute())
+            from src.core.storage import resolve_uploaded_file_path
+            resolved = resolve_uploaded_file_path(file_path)
+            if resolved:
+                return resolved
         except (ImportError, AttributeError):
             pass
         return str(p.absolute())
