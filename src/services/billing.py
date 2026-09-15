@@ -12,7 +12,9 @@
 
 - 单价单位：元/百万 token（_per_m 后缀）
 - credit_cost 精度：2 位小数，向上取整到 0.01
-- token_cost_prices 无匹配记录时 credit_cost = 0（不阻断对话，记 warning 日志）
+- token_cost_prices 无匹配记录时按兜底模型 deepseek-v4-flash 的价格计费
+  （2026-09-15 负责人定版，breakdown 记 price_model 供对账；兜底也无价目行
+  或 model 为空时 credit_cost = 0，不阻断对话，记 warning 日志）
 """
 
 import math
@@ -22,6 +24,10 @@ from loguru import logger
 
 from src.config.settings import create_settings
 from src.db.models import TokenCostPriceDB
+
+# 模型未配置单价时的兜底计价模型（负责人定版 2026-09-15：匹配不到按
+# deepseek v4 flash 的价格计算，不再落 0——部署主模型名可能不在价目表）
+BILLING_FALLBACK_MODEL = "deepseek-v4-flash"
 
 
 def calculate_credit_cost(
@@ -212,16 +218,29 @@ def calculate_credit_cost_with_breakdown(
         "credits": {"non_cached_input": float, "cached_input": float, "output": float},
     }
     cache_creation_input_tokens 按输入单价 125% 计费（显式缓存创建，百炼官方口径）。
-    单价缺失或 model 为空时返回 (0.0, {})。
+    模型未配置单价时按兜底模型 deepseek-v4-flash 的价格计费（2026-09-15 负责人定版，
+    breakdown 记 price_model 供对账）；兜底模型也无价目行或 model 为空时返回 (0.0, {})。
     """
     if not model:
         logger.warning("计费：model 为空，credit_cost=0")
         return 0.0, {}
 
     tcp = TokenCostPriceDB.get_by_model_name(model)
+    price_model = model
     if not tcp:
-        logger.warning(f"计费：模型 {model} 未配置单价，credit_cost=0")
-        return 0.0, {}
+        # 负责人定版（2026-09-15）：模型未配置单价时按兜底模型价格计费，不再落 0——
+        # 部署主模型名可能不在价目表（实测 agent2 deepseek-flash 致总结计费 0）
+        tcp = TokenCostPriceDB.get_by_model_name(BILLING_FALLBACK_MODEL)
+        price_model = BILLING_FALLBACK_MODEL
+        if not tcp:
+            logger.warning(
+                f"计费：模型 {model} 未配置单价且兜底模型 {BILLING_FALLBACK_MODEL} "
+                f"也无价目行，credit_cost=0"
+            )
+            return 0.0, {}
+        logger.warning(
+            f"计费：模型 {model} 未配置单价，按兜底模型 {BILLING_FALLBACK_MODEL} 价格计费"
+        )
 
     input_price, output_price, has_cached_price, cached_input_price = _resolve_unit_prices(tcp, prompt_tokens)
 
@@ -270,6 +289,8 @@ def calculate_credit_cost_with_breakdown(
             "output_per_m": output_price,
         },
         "usage_factor": usage_factor,
+        # 实际计价所用模型（模型无价目行时为兜底模型，供对账识别）
+        "price_model": price_model,
         "credits": {
             "non_cached_input": round(non_cached_input_cost * usage_factor, 6),
             "cached_input": round(cached_input_cost * usage_factor, 6),
@@ -277,6 +298,8 @@ def calculate_credit_cost_with_breakdown(
             "output": round(output_cost * usage_factor, 6),
         },
     }
+    if price_model != model:
+        breakdown["price_fallback"] = True
     if tcp.get("tiered_pricing"):
         breakdown["tiered"] = True
     return credit_cost, breakdown

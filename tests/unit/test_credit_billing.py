@@ -68,7 +68,7 @@ class TestCalculateCreditCost:
             mock_tcp_db.get_by_model_name.assert_not_called()
 
     def test_missing_price_record_returns_zero(self, fixed_settings):
-        """token_cost_prices 无匹配记录返回 0.0"""
+        """model 与兜底模型均无价目行返回 0.0"""
         from src.services.billing import calculate_credit_cost
 
         with patch("src.services.billing.TokenCostPriceDB") as mock_tcp_db, \
@@ -76,6 +76,44 @@ class TestCalculateCreditCost:
             mock_tcp_db.get_by_model_name.return_value = None
             result = calculate_credit_cost(prompt_tokens=1000, completion_tokens=500, model="unknown-model")
             assert result == 0.0
+            # 兜底逻辑：先查模型自身价，再查兜底模型价
+            assert mock_tcp_db.get_by_model_name.call_count == 2
+
+    def test_unpriced_model_billed_at_fallback_model_prices(self, fixed_settings):
+        """模型无价目行 → 按兜底模型 deepseek-v4-flash 价格计费（2026-09-15 定版，
+        修复部署主模型名不在价目表时总结/后台 LLM 计费落 0 的缺口）"""
+        from src.services.billing import (
+            BILLING_FALLBACK_MODEL,
+            calculate_credit_cost_with_breakdown,
+        )
+
+        with patch("src.services.billing.TokenCostPriceDB") as mock_tcp_db, \
+             patch("src.services.billing.create_settings", return_value=fixed_settings):
+            mock_tcp_db.get_by_model_name.side_effect = [None, _make_tcp(2.0, 8.0)]
+            credit_cost, breakdown = calculate_credit_cost_with_breakdown(
+                prompt_tokens=1000, completion_tokens=500, model="deepseek-flash")
+
+        # token_cost = (1000*2.0 + 500*8.0)/1e6 = 0.006 → ceil(0.006*100*100)/100 = 0.60
+        assert credit_cost == 0.60
+        assert breakdown["price_model"] == BILLING_FALLBACK_MODEL
+        assert breakdown["price_fallback"] is True
+        calls = mock_tcp_db.get_by_model_name.call_args_list
+        assert calls[0][0] == ("deepseek-flash",)
+        assert calls[1][0] == (BILLING_FALLBACK_MODEL,)
+
+    def test_priced_model_has_no_fallback_marker(self, fixed_settings):
+        """模型自身有价目行：正常计价，breakdown 不带兜底标记"""
+        from src.services.billing import calculate_credit_cost_with_breakdown
+
+        with patch("src.services.billing.TokenCostPriceDB") as mock_tcp_db, \
+             patch("src.services.billing.create_settings", return_value=fixed_settings):
+            mock_tcp_db.get_by_model_name.return_value = _make_tcp(0.8, 2.0)
+            credit_cost, breakdown = calculate_credit_cost_with_breakdown(
+                prompt_tokens=1000, completion_tokens=500, model="test-model")
+
+        assert credit_cost == 0.18
+        assert breakdown["price_model"] == "test-model"
+        assert "price_fallback" not in breakdown
 
     def test_zero_price_returns_zero(self, fixed_settings):
         """单价全部为 0 返回 0.0"""
