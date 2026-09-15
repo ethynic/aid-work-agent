@@ -112,14 +112,22 @@ class KnowledgeBaseService:
         file_filename: str,
         embedding_tokens: int,
         summary_usage: Optional[Dict[str, Any]],
-    ) -> None:
-        """知识库文档处理独立计费（source_type=knowledge_embedding）
+        *,
+        source_type: str = "knowledge_embedding",
+        user_message_prefix: str = "知识库文档向量化+摘要",
+    ) -> Optional[Dict[str, Any]]:
+        """知识库文档处理独立计费（默认 source_type=knowledge_embedding）
 
         包含两部分：
         - embedding_tokens: 文档向量化消耗（按 token 计费，calculate_embedding_credit_cost）
         - summary_usage: 摘要 LLM 调用消耗（按 token 计费，calculate_credit_cost）
 
         合并为一条 chat_records，usage_breakdown 记录分项明细。
+
+        source_type/user_message_prefix 供外部内容源（如公众号同步
+        wechat_mp_embedding）复用本链路；默认值与原行为完全一致。
+        Returns: ChatRecordDB.create 的记录（含 record_id/credit_cost）；
+            无用量或落库失败返回 None（调用方无法区分失败阶段时按 unknown 处理）。
         """
         # Embedding 积分
         emb_bd: Dict[str, Any] = {}
@@ -167,7 +175,7 @@ class KnowledgeBaseService:
 
         total_credit = round(embedding_credit + llm_credit, 2)
         if total_credit <= 0 and embedding_tokens == 0 and total_tokens == 0:
-            return  # 无任何用量，不写空记录
+            return None  # 无任何用量，不写空记录
 
         usage_breakdown: Dict[str, Any] = {
             "embedding": {
@@ -198,11 +206,11 @@ class KnowledgeBaseService:
                     "credits": chat_bd.get("credits", {}),
                 })
 
-        ChatRecordDB.create(
-            session_id=f"knowledge_embedding_{doc_id}",
+        record = ChatRecordDB.create(
+            session_id=f"{source_type}_{doc_id}",
             tenant_id=tenant_id,
             user_id=user_id,
-            user_message=f"知识库文档向量化+摘要: {file_filename}",
+            user_message=f"{user_message_prefix}: {file_filename}",
             assistant_message=None,
             total_token_count=total_tokens,
             prompt_tokens=prompt_tokens,
@@ -210,7 +218,7 @@ class KnowledgeBaseService:
             cached_input_tokens=cached_input_tokens,
             model=llm_model,
             provider="qwen",
-            source_type="knowledge_embedding",
+            source_type=source_type,
             credit_cost=total_credit,
             embedding_tokens=embedding_tokens,
             usage_breakdown=usage_breakdown,
@@ -221,6 +229,7 @@ class KnowledgeBaseService:
             f"embedding_tokens={embedding_tokens}, llm_tokens={total_tokens}, "
             f"credit={total_credit} (embedding={embedding_credit}, llm={llm_credit})"
         )
+        return record
 
     def _get_upload_path(self, tenant_id: Optional[str] = None) -> Path:
         """获取知识库文档上传路径
@@ -324,10 +333,11 @@ class KnowledgeBaseService:
                 """, (tenant_id,))
                 rows = cursor.fetchall()
                 # 文档按 (source_type, sub_category) 分组计数，供内存统计，替代逐分类子查询
+                # 软删除文档不计入（与 list_documents/count_documents 默认口径一致）
                 cursor.execute("""
                     SELECT source_type, sub_category, COUNT(*) AS cnt
                     FROM documents
-                    WHERE tenant_id = %s
+                    WHERE tenant_id = %s AND status = 'active'
                     GROUP BY source_type, sub_category
                 """, (tenant_id,))
                 doc_rows = cursor.fetchall()
@@ -641,15 +651,24 @@ class KnowledgeBaseService:
             with self._get_db_connection() as conn:
                 cursor = conn.cursor()
 
-                # 获取文件路径（带租户条件，跨租户文档视为不存在）
+                # 获取文件路径与来源（带租户条件，跨租户文档视为不存在）
                 cursor.execute(
-                    f"SELECT file_path FROM documents WHERE id = %s AND {scope_sql}",
+                    f"SELECT file_path, origin FROM documents WHERE id = %s AND {scope_sql}",
                     [doc_id] + scope_params)
                 row = cursor.fetchone()
                 if not row:
                     return {"success": False, "error": "文档不存在"}
 
-                # row 是 dict: {"file_path": ...}，对应 SELECT file_path
+                # 外部来源文档（公众号同步等）禁止走通用物理删除入口，
+                # 由同步任务统一管理（软删除/更新），platform_admin 全局视图同样不可删
+                if (row.get("origin") or "manual_upload") != "manual_upload":
+                    return {
+                        "success": False,
+                        "error": "外部来源文档由同步任务管理，不支持删除",
+                        "status": 400,
+                    }
+
+                # row 是 dict: {"file_path": ..., "origin": ...}，对应 SELECT file_path, origin
                 file_path = row["file_path"]
 
                 # 删除向量（复用同一个数据库连接，避免锁冲突；文档归属已在上方按租户校验）
@@ -712,6 +731,15 @@ class KnowledgeBaseService:
                     )
                     if not cursor.fetchone():
                         return {"success": False, "error": "目标顶级分类不存在", "status": 400}
+                # 外部来源文档（公众号同步等）禁止走通用移动入口，由同步任务统一管理；
+                # 批量入口任一命中即整批拒绝，避免部分移动造成来源语义混乱
+                cursor.execute(
+                    "SELECT COUNT(*) AS c FROM documents "
+                    "WHERE id = ANY(%s) AND tenant_id = %s AND origin <> 'manual_upload'",
+                    (doc_ids, tenant_id)
+                )
+                if cursor.fetchone()["c"] > 0:
+                    return {"success": False, "error": "外部来源文档由同步任务管理，不支持移动", "status": 400}
                 cursor.execute(
                     "UPDATE documents SET source_type = %s, sub_category = %s, updated_at = CURRENT_TIMESTAMP "
                     "WHERE id = ANY(%s) AND tenant_id = %s "
@@ -729,13 +757,18 @@ class KnowledgeBaseService:
             logger.opt(exception=True).error(f"后端日志：文档移动失败: {e}")
             return {"success": False, "error": "移动文档失败", "debug": sanitize_error_info(str(e))}
 
-    def count_documents(self, user_id: Optional[int] = None, tenant_id: Optional[str] = None, source_type: Optional[str] = None, sub_category: Optional[str] = None, global_view: bool = False) -> int:
+    def count_documents(self, user_id: Optional[int] = None, tenant_id: Optional[str] = None, source_type: Optional[str] = None, sub_category: Optional[str] = None, global_view: bool = False, include_deleted: bool = False, origin: Optional[str] = None) -> int:
         """获取文档总数
 
         租户作用域（安全加固设计 §2.4）：有租户上下文只统计本租户；无租户上下文
         （无租户上下文）收窄到无主文档，与 list_documents/检索侧口径一致，
         绝不统计真实租户文档。global_view=True（认证 platform_admin 全局视图）且
         无租户上下文时不携带租户过滤（恢复平台管理员全局统计的原行为）。
+
+        软删除可见性（公众号 WP2，设计 §7.3）：默认只统计 status='active'；
+        include_deleted=True（仅 platform_admin 审计入口传入）包含已删除。
+        expires_at 只限制检索，不过滤管理端计数。
+        origin 非空时按来源类型过滤。
         """
         try:
             with self._get_db_connection() as conn:
@@ -753,6 +786,11 @@ class KnowledgeBaseService:
                 else:
                     # 常量拼接，无用户输入插值；无租户上下文时收窄到无主文档
                     conditions.append("tenant_id IS NULL")
+                if not include_deleted:
+                    conditions.append("status = 'active'")
+                if origin is not None:
+                    conditions.append("origin = %s")
+                    params.append(origin)
                 if user_id:
                     conditions.append("user_id = %s")
                     params.append(user_id)
@@ -790,7 +828,9 @@ class KnowledgeBaseService:
         offset: int = 0,
         source_type: Optional[str] = None,
         sub_category: Optional[str] = None,
-        global_view: bool = False
+        global_view: bool = False,
+        include_deleted: bool = False,
+        origin: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """获取文档列表
 
@@ -798,6 +838,10 @@ class KnowledgeBaseService:
         （无租户上下文）收窄到无主文档，与 count_documents/检索侧口径一致，
         绝不返回真实租户文档。global_view=True（认证 platform_admin 全局视图）且
         无租户上下文时不携带租户过滤（恢复平台管理员全局列表的原行为）。
+
+        软删除可见性（公众号 WP2，设计 §7.3）：默认只返回 status='active'；
+        include_deleted=True（仅 platform_admin 审计入口传入）包含已删除。
+        expires_at 只限制检索，过期文档仍可管理查看。origin 非空时按来源类型过滤。
         """
         try:
             with self._get_db_connection() as conn:
@@ -816,6 +860,11 @@ class KnowledgeBaseService:
                 else:
                     # 常量拼接，无用户输入插值；无租户上下文时收窄到无主文档
                     conditions.append("tenant_id IS NULL")
+                if not include_deleted:
+                    conditions.append("status = 'active'")
+                if origin is not None:
+                    conditions.append(f"origin = {placeholder}")
+                    params.append(origin)
                 if user_id:
                     conditions.append(f"user_id = {placeholder}")
                     params.append(user_id)
@@ -838,7 +887,7 @@ class KnowledgeBaseService:
 
                 cursor.execute(f"""
                     SELECT id, title, source_type, sub_category, file_type, file_path, file_size,
-                           total_chunks, created_at, summary
+                           total_chunks, created_at, summary, origin, status, expires_at
                     FROM documents
                     {where_clause}
                     ORDER BY created_at DESC
@@ -853,6 +902,8 @@ class KnowledgeBaseService:
                     doc = dict(row)
                     if doc.get("created_at"):
                         doc["created_at"] = doc["created_at"].isoformat()
+                    if doc.get("expires_at"):
+                        doc["expires_at"] = doc["expires_at"].isoformat()
                     result.append(doc)
                 return result
 
@@ -860,7 +911,7 @@ class KnowledgeBaseService:
             logger.opt(exception=True).error(f"后端日志：获取文档列表失败: {e}")
             return []
 
-    def get_document_chunks(self, doc_id: int, tenant_id: Optional[str] = None, global_view: bool = False) -> List[Dict[str, Any]]:
+    def get_document_chunks(self, doc_id: int, tenant_id: Optional[str] = None, global_view: bool = False, include_deleted: bool = False) -> List[Dict[str, Any]]:
         """获取文档的所有分块（含向量数据）
 
         对象级租户校验（安全加固设计 §2.4）：chunks 表无 tenant_id 列，经 JOIN
@@ -868,6 +919,10 @@ class KnowledgeBaseService:
         分块」，不泄漏存在性；无租户上下文仅可见无主
         文档，与检索侧口径一致。global_view=True（认证 platform_admin 全局视图）
         且无租户上下文时不携带租户过滤（恢复平台管理员跨租户查看的原行为）。
+
+        软删除可见性（公众号 WP2，设计 §7.3）：status='deleted' 的文档分块默认
+        不可见（对外同样表现为「文档不存在或没有分块」）；include_deleted=True
+        （仅 platform_admin 审计入口传入）可查看已删除文档的分块。
         """
         # 租户作用域条件（常量拼接，无用户输入插值；无租户上下文时收窄到无主文档）
         if tenant_id:
@@ -876,6 +931,8 @@ class KnowledgeBaseService:
             scope_sql, scope_params = "1=1", []
         else:
             scope_sql, scope_params = "d.tenant_id IS NULL", []
+        # 软删除可见性条件（常量拼接，无参数）
+        status_sql = "" if include_deleted else " AND d.status = 'active'"
         try:
             with self._get_db_connection() as conn:
                 cursor = conn.cursor()
@@ -886,7 +943,7 @@ class KnowledgeBaseService:
                            CASE WHEN cv.embedding IS NOT NULL
                                 THEN cv.embedding::text ELSE NULL END AS vector_text
                     FROM chunks c
-                    JOIN documents d ON d.id = c.doc_id AND {scope_sql}
+                    JOIN documents d ON d.id = c.doc_id AND {scope_sql}{status_sql}
                     LEFT JOIN chunks_vec cv ON c.id = cv.chunk_id
                     WHERE c.doc_id = %s
                     ORDER BY c.chunk_index

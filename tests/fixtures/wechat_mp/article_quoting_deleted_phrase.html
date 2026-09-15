@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>正常文章：正文引用了删除文案</title>
+</head>
+<body>
+<!--
+  手工合成夹具（WP3）：正文引用「该内容已被发布者删除」一句的正常文章页。
+  因 js_content 存在且无错误页 DOM，必须判 ok —— 防误删负样本。
+-->
+<div class="rich_media_area_primary">
+  <h1 id="activity-name">如何辨别文章是否被删除</h1>
+  <div class="rich_media_content" id="js_content" style="visibility: hidden;">
+    <section><span>很多读者问，打开链接提示</span><span>该内容已被发布者删除</span><span>是什么意思？这说明原文已经被作者删除，我们的备份不受影响。</span></section>
+    <section><span>本文继续介绍备份方法。</span></section>
+    <p><img data-src="https://mmecoa.qpic.cn/mmecoa_png/abc123/640?wx_fmt=png&amp;from=appmsg" class="rich_pages wxw-img" data-ratio="0.5" /></p>
+  </div>
+</div>
+</body>
+</html>

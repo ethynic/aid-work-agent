@@ -23,6 +23,7 @@ export const portalRoutes: RouteRecordRaw[] = [
       { path: 'monitoring/trace/:trace_id', name: 'portal-trace-detail', component: () => import('@/components/saas/TraceDetail.vue') },
       { path: 'context-compression', name: 'portal-context-compression', component: () => import('@/components/saas/ContextCompressionManager.vue') },
       { path: 'rpa-bindings', name: 'portal-rpa-bindings', component: () => import('@/components/saas/RpaBindingPanel.vue') },
+      { path: 'wechat-mp', name: 'portal-wechat-mp', component: () => import('@/components/saas/WechatMpPortal.vue') },
       { path: 'redis-cache', name: 'portal-redis-cache', component: () => import('@/components/saas/RedisCacheManager.vue') },
     ]
   }

@@ -1781,9 +1781,15 @@ app.include_router(session_tasks_api.bindings_router)
 from src.api import external_systems  # noqa: E402
 app.include_router(external_systems.router)
 
-# 微信公众号回调诊断端点（WP0-E，见 docs/system/wechat-mp/wechat-mp-knowledge-ingestion-design.md §13）
+# 微信公众号回调端点（产品版 WP4：/api/wechat-mp/callback/{config_id}，每配置独立 token，
+# 见 docs/system/wechat-mp/wechat-mp-knowledge-ingestion-design.md §4）
 from src.wechat_mp import callback as wechat_mp_callback  # noqa: E402
 app.include_router(wechat_mp_callback.router)
+
+# 微信公众号内容管理 API（WP6：手动粘贴导入 + 运行/文章管理 + portal 跨租户查询；
+# 受理/查询逻辑在 src/wechat_mp/service.py，本 router 仅薄入口，见设计 §3 分层规则）
+from src.wechat_mp import api as wechat_mp_api  # noqa: E402
+app.include_router(wechat_mp_api.router)
 
 # Desktop Agent D1 is opt-in. Default production startup neither imports its
 # module nor registers routes; changing the setting requires a process restart.

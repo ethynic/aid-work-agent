@@ -33,6 +33,10 @@ channel_user_info 与 users_db，无外部网络调用）。
 2026-09-08 追加微信营销聊天三工具（P3-B，R54③/R56）：
 weixin_automation_prepare / weixin_automation_publish / weixin_automation_manage，
 共用 src.weixin_marketing 服务层，经 Catalog 自动发现装配。
+
+2026-09-15 追加公众号同步两工具（WP8，设计 §3/§14）：
+wechat_mp_sync / wechat_mp_sync_status，薄入口直调 src/wechat_mp/service.py，
+身份取可信工具执行上下文，经 Catalog 自动发现装配。
 """
 
 import pytest
@@ -64,10 +68,15 @@ GOLDEN_TOOLS = [
     "ppt_process",
     "read",
     "record_lead_capture",
+    "session_task_manage",
+    "session_task_prepare",
+    "session_task_publish",
     "submit_video_task",
     "transfer_to_human",
     "upload_data_file",
     "web_search",
+    "wechat_mp_sync",
+    "wechat_mp_sync_status",
     "weixin_automation_manage",
     "weixin_automation_prepare",
     "weixin_automation_publish",

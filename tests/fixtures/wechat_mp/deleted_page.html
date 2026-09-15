@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="zh_CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=0">
+<title>该内容已被发布者删除</title>
+<link rel="stylesheet" href="//res.wx.qq.com/mmbizwap/zh_CN/htmledition/style/page/appmsg/page_err.css">
+</head>
+<body class="zh_CN">
+<!--
+  手工合成夹具（WP3）：模拟公众号文章被发布者删除后的错误页。
+  依据微信公开错误页的通行结构（weui-msg + icon warn + 明确文案），
+  非真实抓取；真实删除页结构待有样本后回填核对（设计 §13.2 待实测项）。
+  判定要点：weui-msg__icon-area（错误页 DOM）+ 无 js_content + 删除文案 三信号共同命中。
+-->
+<div class="weui-msg">
+  <div class="weui-msg__icon-area"><i class="weui-icon-warn weui-icon_msg"></i></div>
+  <div class="weui-msg__text-area">
+    <h2 class="weui-msg__title">该内容已被发布者删除</h2>
+    <p class="weui-msg__desc">此内容已被发布者删除，无法查看</p>
+  </div>
+  <div class="weui-msg__opr-area">
+    <p class="weui-btn-area"><a href="javascript:history.back();" class="weui-btn weui-btn_default">返回</a></p>
+  </div>
+</div>
+</body>
+</html>

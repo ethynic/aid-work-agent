@@ -359,3 +359,207 @@ def test_rpa_update_blank_preserves_but_explicit_null_clears_sensitive_secret():
 
     assert run_update("")["external_contact_secret"] == "encrypted-old"
     assert "external_contact_secret" not in run_update(None)
+
+
+class TestChannelConfigDBWechatMp:
+    """wechat_mp 渠道分支（mock 风格；真实 DB 用例见 tests/unit/wechat_mp/test_callback.py）。"""
+
+    @pytest.fixture()
+    def master_key(self, monkeypatch):
+        """固定测试主密钥并重置 Fernet 单例，避免跨文件密钥污染。"""
+        import src.core.secret_crypto as sc
+
+        monkeypatch.setenv("RPA_SECRET_KEY", "ccdb-unit-test-master-key-0123456789")
+        monkeypatch.setattr(sc, "_fernet", None)
+        yield
+        monkeypatch.setattr(sc, "_fernet", None)
+
+    def test_create_generates_token_server_side(self, master_key):
+        """create：callback_token 服务端生成（入参忽略）、敏感字段加密、默认值落库。"""
+        from src.saas.db.channel_config_db import ChannelConfigDB
+
+        mock_cursor = MagicMock()
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+
+        with (
+            patch("src.saas.db.channel_config_db.get_db_connection") as mock_get_db,
+            patch.object(ChannelConfigDB, "_wechat_mp_appid_exists", return_value=False),
+            patch.object(ChannelConfigDB, "get_by_id", return_value={"config_id": "chan_x"}),
+        ):
+            mock_get_db.return_value.__enter__.return_value = mock_conn
+            result = ChannelConfigDB.create(
+                tenant_id="tenant_001",
+                channel_type="wechat_mp",
+                name="公众号",
+                config={
+                    "appid": "wx0000000000000000",
+                    "original_id": "gh_test00000000",
+                    "secret": "fake-secret",
+                    "callback_token": "user-supplied-must-be-ignored",
+                },
+            )
+
+        assert result == {"config_id": "chan_x"}
+        insert_params = mock_cursor.execute.call_args_list[0][0][1]
+        written = json.loads(insert_params[4])
+        assert written["callback_token"] != "user-supplied-must-be-ignored"
+        assert written["callback_token"].startswith("gAAAAA")
+        assert written["secret"].startswith("gAAAAA")
+        assert written["enabled"] is True
+        assert written["sync_interval_hours"] == 6
+        assert written["credential_version"] == 1
+
+    def test_update_sensitive_not_clearable_and_runtime_preserved(self):
+        """update：敏感字段 null/掩码/缺失均保留旧值；appid/original_id 缺失回填；三态字段保留。"""
+        from src.saas.db.channel_config_db import ChannelConfigDB
+
+        existing = {
+            "appid": "wx0000000000000000",
+            "original_id": "gh_test00000000",
+            "secret": "gAAAAAoldsecret",
+            "encoding_aes_key": "gAAAAAoldkey",
+            "callback_token": "gAAAAAoldtoken",
+            "config_verified_at": "2026-09-15T00:00:00+00:00",
+            "credential_version": 1,
+        }
+        mock_cursor = MagicMock()
+        mock_cursor.rowcount = 1
+        mock_cursor.fetchone.return_value = {
+            "channel_type": "wechat_mp",
+            "config": json.dumps(existing),
+        }
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+
+        with patch("src.saas.db.channel_config_db.get_db_connection") as mock_get_db:
+            mock_get_db.return_value.__enter__.return_value = mock_conn
+            ok = ChannelConfigDB.update(
+                config_id="chan_x",
+                config={"appid": "", "original_id": None, "secret": None, "encoding_aes_key": "***", "enabled": False},
+            )
+
+        assert ok is True
+        written = json.loads(mock_cursor.execute.call_args[0][1][0])
+        assert written["appid"] == "wx0000000000000000"
+        assert written["original_id"] == "gh_test00000000"
+        assert written["secret"] == "gAAAAAoldsecret"
+        assert written["encoding_aes_key"] == "gAAAAAoldkey"
+        assert written["callback_token"] == "gAAAAAoldtoken"
+        assert written["config_verified_at"] == "2026-09-15T00:00:00+00:00"
+        assert written["credential_version"] == 1  # 身份未变，版本不递增
+        assert written["enabled"] is False
+
+    def test_update_credential_change_bumps_version_and_revokes_verified(self, master_key):
+        """update：AESKey 换新明文 → 加密入库、版本递增、撤销 config_verified_at。"""
+        from src.saas.db.channel_config_db import ChannelConfigDB
+
+        existing = {
+            "appid": "wx0000000000000000",
+            "original_id": "gh_test00000000",
+            "encoding_aes_key": "gAAAAAoldkey",
+            "callback_token": "gAAAAAoldtoken",
+            "config_verified_at": "2026-09-15T00:00:00+00:00",
+            "credential_version": 1,
+        }
+        mock_cursor = MagicMock()
+        mock_cursor.rowcount = 1
+        mock_cursor.fetchone.return_value = {
+            "channel_type": "wechat_mp",
+            "config": json.dumps(existing),
+        }
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+
+        with patch("src.saas.db.channel_config_db.get_db_connection") as mock_get_db:
+            mock_get_db.return_value.__enter__.return_value = mock_conn
+            ok = ChannelConfigDB.update(
+                config_id="chan_x",
+                config={
+                    "appid": "wx0000000000000000",
+                    "original_id": "gh_test00000000",
+                    "encoding_aes_key": "new-plaintext-aes-key-43chars-abcdefghijklmnop",
+                },
+            )
+
+        assert ok is True
+        written = json.loads(mock_cursor.execute.call_args[0][1][0])
+        assert written["encoding_aes_key"].startswith("gAAAAA")
+        assert written["encoding_aes_key"] != "gAAAAAoldkey"
+        assert written["credential_version"] == 2
+        assert "config_verified_at" not in written
+
+    def test_rotate_wechat_mp_token(self, master_key):
+        """rotate：新 token 明文返回一次、密文入库、版本递增、验证态撤销、其他字段保留。"""
+        from src.core.secret_crypto import decrypt_secret, encrypt_secret
+        from src.saas.db.channel_config_db import ChannelConfigDB
+
+        existing = {
+            "callback_token": encrypt_secret("old-token-plain"),
+            "secret": encrypt_secret("keep-me"),
+            "credential_version": 1,
+            "config_verified_at": "2026-09-15T00:00:00+00:00",
+        }
+        mock_cursor = MagicMock()
+        mock_cursor.rowcount = 1
+        mock_cursor.fetchone.return_value = {
+            "channel_type": "wechat_mp",
+            "config": json.dumps(existing),
+        }
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+
+        with patch("src.saas.db.channel_config_db.get_db_connection") as mock_get_db:
+            mock_get_db.return_value.__enter__.return_value = mock_conn
+            new_token = ChannelConfigDB.rotate_wechat_mp_token("chan_x")
+
+        assert new_token and new_token != "old-token-plain"
+        sql, params = mock_cursor.execute.call_args[0]
+        assert "verified = 0" in sql
+        written = json.loads(params[0])
+        assert written["callback_token"].startswith("gAAAAA")
+        assert decrypt_secret(written["callback_token"]).decode() == new_token
+        assert written["credential_version"] == 2
+        assert "config_verified_at" not in written
+        assert decrypt_secret(written["secret"]).decode() == "keep-me"
+
+    def test_rotate_rejects_other_channel_type(self):
+        from src.saas.db.channel_config_db import ChannelConfigDB
+
+        mock_cursor = MagicMock()
+        mock_cursor.fetchone.return_value = {
+            "channel_type": "wecom",
+            "config": json.dumps({}),
+        }
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+
+        with patch("src.saas.db.channel_config_db.get_db_connection") as mock_get_db:
+            mock_get_db.return_value.__enter__.return_value = mock_conn
+            assert ChannelConfigDB.rotate_wechat_mp_token("chan_x") is None
+
+    @pytest.mark.parametrize("field", ["callback_token", "secret", "encoding_aes_key"])
+    def test_update_config_field_rejects_wechat_mp_sensitive(self, field):
+        """update_config_field 绕行保护：wechat_mp 敏感键一律拒绝且不触 DB。"""
+        from src.saas.db.channel_config_db import ChannelConfigDB
+
+        with patch("src.saas.db.channel_config_db.get_db_connection") as mock_get_db:
+            assert ChannelConfigDB.update_config_field("chan_x", field, "v") is False
+        mock_get_db.assert_not_called()
+
+    def test_update_config_field_allows_runtime_field(self):
+        """三态运行时字段允许走 update_config_field。"""
+        from src.saas.db.channel_config_db import ChannelConfigDB
+
+        mock_cursor = MagicMock()
+        mock_cursor.rowcount = 1
+        mock_cursor.fetchone.return_value = {"config": json.dumps({})}
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+
+        with patch("src.saas.db.channel_config_db.get_db_connection") as mock_get_db:
+            mock_get_db.return_value.__enter__.return_value = mock_conn
+            assert ChannelConfigDB.update_config_field("chan_x", "last_event_at", "2026-09-15T00:00:00+00:00") is True
+
+        written = json.loads(mock_cursor.execute.call_args[0][1][0])
+        assert written["last_event_at"] == "2026-09-15T00:00:00+00:00"

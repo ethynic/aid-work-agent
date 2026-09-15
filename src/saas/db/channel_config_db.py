@@ -7,6 +7,15 @@ wecom_personal_rpa 类型配置的特殊处理（第一期 MVP）：
 - 同 tenant 单例：不允许同租户创建两份 wecom_personal_rpa 配置
 - API 响应给前端时返回掩码（不会泄漏明文凭证）
 
+wechat_mp 类型配置的特殊处理（公众号内容入知识库 WP4，设计 §4）：
+- 敏感字段（secret / encoding_aes_key / callback_token）Fernet 加密
+  （复用 src.wechat_mp.config_codec，无 listen_mode 副作用）
+- callback_token 创建时服务端生成（secrets.token_urlsafe），不接受入参
+- 同租户同 appid 唯一（应用层检查 + DB 部分唯一索引兜底）
+- 敏感字段不允许清空：缺失/空串/掩码/null 一律保留旧值
+- 运行时三态字段（config_verified_at / last_event_at / last_error）更新时保留
+- API 响应给前端时返回掩码
+
 调用方约定：
 - 服务端内部需要明文凭证时（fetcher / poller / callback_handler / verify 等），调
   decrypt_config_field 或直接用 credential_codec.decrypt_sensitive_fields
@@ -14,6 +23,7 @@ wecom_personal_rpa 类型配置的特殊处理（第一期 MVP）：
 """
 
 import json
+import secrets
 import uuid
 from typing import Any, Dict, List, Optional
 
@@ -26,9 +36,23 @@ except ImportError:  # psycopg2 未安装（开发/测试场景）
 
 from src.channels.wecom_personal_rpa.archive import credential_codec
 from src.db.database import get_db_connection
+from src.wechat_mp import config_codec as wechat_mp_codec
 
 # 需要特殊处理的渠道类型
 _RPA_CHANNEL_TYPE = "wecom_personal_rpa"
+_WECHAT_MP_CHANNEL_TYPE = "wechat_mp"
+
+# wechat_mp 运行时/三态字段：更新配置时若调用方未提供则保留旧值
+_WECHAT_MP_RUNTIME_FIELDS = (
+    "config_verified_at",
+    "last_event_at",
+    "last_error",
+    "credential_version",
+)
+
+
+def _is_wechat_mp(channel_type: Optional[str]) -> bool:
+    return channel_type == _WECHAT_MP_CHANNEL_TYPE
 
 
 class ChannelConfigDB:
@@ -72,6 +96,22 @@ class ChannelConfigDB:
                     )
                     return None
                 config_to_write = credential_codec.encrypt_sensitive_fields(config_to_write)
+
+        if _is_wechat_mp(channel_type):
+            # callback_token 只能由服务端生成，不接受入参（防弱 token / 防串配置）
+            config_to_write.pop("callback_token", None)
+            config_to_write["callback_token"] = secrets.token_urlsafe(24)
+            config_to_write.setdefault("enabled", True)
+            config_to_write.setdefault("sync_interval_hours", 6)
+            config_to_write["credential_version"] = 1
+            # 同租户同 appid 唯一（DB 部分唯一索引兜底并发竞争）
+            appid = str(config_to_write.get("appid") or "").strip()
+            if appid and ChannelConfigDB._wechat_mp_appid_exists(tenant_id, appid):
+                logger.warning(
+                    f"wechat_mp 渠道配置创建被拒绝（同租户同 appid 已存在）：tenant_id={tenant_id}"
+                )
+                return None
+            config_to_write = wechat_mp_codec.encrypt_sensitive_fields(config_to_write)
 
         with get_db_connection() as conn:
             cursor = conn.cursor()
@@ -143,6 +183,8 @@ class ChannelConfigDB:
                 d["config"] = json.loads(d["config"]) if d.get("config") else {}
                 if d.get("channel_type") == _RPA_CHANNEL_TYPE:
                     d["config"] = credential_codec.mask_sensitive_fields(d["config"])
+                elif _is_wechat_mp(d.get("channel_type")):
+                    d["config"] = wechat_mp_codec.mask_sensitive_fields(d["config"])
                 return d
             return None
 
@@ -164,6 +206,8 @@ class ChannelConfigDB:
                 d["config"] = json.loads(d["config"]) if d.get("config") else {}
                 if d.get("channel_type") == _RPA_CHANNEL_TYPE:
                     d["config"] = credential_codec.decrypt_sensitive_fields(d["config"])
+                elif _is_wechat_mp(d.get("channel_type")):
+                    d["config"] = wechat_mp_codec.decrypt_sensitive_fields(d["config"])
                 return d
             return None
 
@@ -184,6 +228,8 @@ class ChannelConfigDB:
                 d["config"] = json.loads(d["config"]) if d.get("config") else {}
                 if d.get("channel_type") == _RPA_CHANNEL_TYPE:
                     d["config"] = credential_codec.decrypt_sensitive_fields(d["config"])
+                elif _is_wechat_mp(d.get("channel_type")):
+                    d["config"] = wechat_mp_codec.decrypt_sensitive_fields(d["config"])
                 return d
             return None
 
@@ -218,6 +264,8 @@ class ChannelConfigDB:
                 d["config"] = json.loads(d["config"]) if d.get("config") else {}
                 if d.get("channel_type") == _RPA_CHANNEL_TYPE:
                     d["config"] = credential_codec.decrypt_sensitive_fields(d["config"])
+                elif _is_wechat_mp(d.get("channel_type")):
+                    d["config"] = wechat_mp_codec.decrypt_sensitive_fields(d["config"])
                 return d
             return None
 
@@ -293,6 +341,8 @@ class ChannelConfigDB:
                 d["config"] = json.loads(d["config"]) if d.get("config") else {}
                 if d.get("channel_type") == _RPA_CHANNEL_TYPE:
                     d["config"] = credential_codec.mask_sensitive_fields(d["config"])
+                elif _is_wechat_mp(d.get("channel_type")):
+                    d["config"] = wechat_mp_codec.mask_sensitive_fields(d["config"])
                 results.append(d)
             return results
 
@@ -320,6 +370,8 @@ class ChannelConfigDB:
                 # wecom_personal_rpa 类型：返回明文凭证（poller / fetcher 兜底用）
                 if d.get("channel_type") == _RPA_CHANNEL_TYPE:
                     d["config"] = credential_codec.decrypt_sensitive_fields(d["config"])
+                elif _is_wechat_mp(d.get("channel_type")):
+                    d["config"] = wechat_mp_codec.decrypt_sensitive_fields(d["config"])
                 results.append(d)
             return results
 
@@ -395,6 +447,53 @@ class ChannelConfigDB:
                 # 加密 + 强制 server
                 new_config = credential_codec.encrypt_sensitive_fields(new_config)
 
+            elif _is_wechat_mp(existing_channel_type):
+                # 保留运行时三态字段（前端不传时用旧值，避免被重置）
+                for k in _WECHAT_MP_RUNTIME_FIELDS:
+                    if k not in new_config and k in existing_config:
+                        new_config[k] = existing_config[k]
+
+                # callback_token 只能由服务端生成/轮换（rotate_wechat_mp_token），
+                # update 入参一律忽略，保留 DB 原值
+                new_config.pop("callback_token", None)
+                if existing_config.get("callback_token"):
+                    new_config["callback_token"] = existing_config["callback_token"]
+
+                # 敏感字段不允许清空：字段缺失、空串、掩码（***开头）或 null 一律保留 DB 原值
+                # （与 RPA 的 null=清除语义不同，公众号配置没有"清除凭据"场景，防误操作丢回调能力）
+                for k in wechat_mp_codec.SENSITIVE_KEYS:
+                    incoming = new_config.get(k)
+                    is_mask = isinstance(incoming, str) and incoming.startswith("***")
+                    is_blank = not isinstance(incoming, str) or incoming == ""
+                    if (incoming is None or is_mask or is_blank) and existing_config.get(k):
+                        # 旧值是密文，直接搬运；加密函数对密文会跳过
+                        new_config[k] = existing_config[k]
+
+                # 身份字段缺失回填（与敏感字段同策略，防前端快照缺字段静默抹掉 appid/original_id）；
+                # appid 变更放行，撞同租户唯一索引时由 DB IntegrityError 上抛（API 层转 409，与 create 对称）
+                for k in ("appid", "original_id"):
+                    incoming = new_config.get(k)
+                    if (not isinstance(incoming, str) or not incoming.strip()) and existing_config.get(k):
+                        new_config[k] = existing_config[k]
+
+                # 凭据/身份变更检测：appid/original_id/encoding_aes_key 变更递增凭据版本并撤销
+                # 回调验证态（设计 §4 密钥轮换与三态语义）
+                credential_changed = (
+                    new_config.get("appid") != existing_config.get("appid")
+                    or new_config.get("original_id") != existing_config.get("original_id")
+                    or (
+                        isinstance(new_config.get("encoding_aes_key"), str)
+                        and new_config["encoding_aes_key"]
+                        and new_config["encoding_aes_key"] != existing_config.get("encoding_aes_key")
+                    )
+                )
+                if credential_changed:
+                    new_config["credential_version"] = int(existing_config.get("credential_version") or 1) + 1
+                    new_config.pop("config_verified_at", None)
+
+                # 加密敏感字段（密文跳过二次加密）
+                new_config = wechat_mp_codec.encrypt_sensitive_fields(new_config)
+
             # name 处理：None 表示不改；其他值（含空串）按传入值更新
             if name is None:
                 cursor.execute(
@@ -458,7 +557,11 @@ class ChannelConfigDB:
         create/update 主路径，经过加密和 server 模式强制（防止 API 绕过）。
         """
         # 安全护栏：防止绕过主路径写入敏感字段或 listen_mode
-        _PROTECTED_FIELDS = set(credential_codec.SENSITIVE_KEYS) | {"listen_mode"}
+        _PROTECTED_FIELDS = (
+            set(credential_codec.SENSITIVE_KEYS)
+            | set(wechat_mp_codec.SENSITIVE_KEYS)
+            | {"listen_mode"}
+        )
         if field_name in _PROTECTED_FIELDS:
             logger.warning(
                 f"update_config_field 拒绝写入受保护字段 '{field_name}' "
@@ -495,3 +598,59 @@ class ChannelConfigDB:
                 (tenant_id, _RPA_CHANNEL_TYPE),
             )
             return cursor.fetchone() is not None
+
+    @staticmethod
+    def _wechat_mp_appid_exists(tenant_id: str, appid: str) -> bool:
+        """检查租户是否已有同 appid 的 wechat_mp 配置（同租户同 appid 唯一）。"""
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT 1 FROM tenant_channel_configs "
+                "WHERE tenant_id = %s AND channel_type = %s "
+                "AND (config::jsonb)->>'appid' = %s LIMIT 1",
+                (tenant_id, _WECHAT_MP_CHANNEL_TYPE, appid),
+            )
+            return cursor.fetchone() is not None
+
+    @staticmethod
+    def rotate_wechat_mp_token(config_id: str) -> Optional[str]:
+        """重置 wechat_mp 回调 Token（密钥轮换，设计 §4）。
+
+        生成新 token 加密入库，递增 credential_version 并撤销 config_verified_at/verified
+        （旧 token 的事件随之验签失败被拒收）。其他敏感字段为密文，读-改-写原样保留。
+
+        Returns:
+            新 token 明文（仅此一次返回，供前端展示复制）；配置不存在或类型不符返回 None。
+        """
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT channel_type, config FROM tenant_channel_configs WHERE config_id = %s",
+                (config_id,),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+            d = dict(row)
+            if d.get("channel_type") != _WECHAT_MP_CHANNEL_TYPE:
+                return None
+            cfg = json.loads(d["config"]) if d.get("config") else {}
+            new_token = secrets.token_urlsafe(24)
+            cfg["callback_token"] = wechat_mp_codec.encrypt_sensitive_fields(
+                {"callback_token": new_token}
+            )["callback_token"]
+            cfg["credential_version"] = int(cfg.get("credential_version") or 1) + 1
+            cfg.pop("config_verified_at", None)
+            cursor.execute(
+                """
+                UPDATE tenant_channel_configs
+                SET config = %s, verified = 0, updated_at = CURRENT_TIMESTAMP
+                WHERE config_id = %s
+                """,
+                (json.dumps(cfg, ensure_ascii=False), config_id),
+            )
+            conn.commit()
+            if cursor.rowcount > 0:
+                logger.info(f"wechat_mp 回调 Token 已轮换: config_id={config_id}")
+                return new_token
+            return None

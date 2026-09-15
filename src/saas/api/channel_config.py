@@ -70,7 +70,37 @@ _REQUIRED_FIELDS = {
         "verification_token": "验证Token",
         # encrypt_key 可选（不填则非加密模式，仅用于开发/调试）
     },
+    # 公众号内容入知识库（WP4）：回调 token 由服务端生成，不收 token 字段；
+    # encoding_aes_key / secret 为敏感字段（可选，安全模式与 P3 接口通道用）
+    "wechat_mp": {
+        "appid": "公众号 AppID（公众平台后台「设置与开发→公众号设置」页可见，wx 开头）",
+        "original_id": "公众号原始 ID（同页可见，gh_ 开头，用于事件 ToUserName 绑定校验）",
+    },
 }
+
+_WECHAT_MP_CHANNEL_TYPE = "wechat_mp"
+
+
+def _build_wechat_mp_callback_url(request: Request, config_id: str) -> str:
+    """拼接 wechat_mp 回调完整 URL。
+
+    公网 base 优先取 settings.app.public_base_url（部署约定，文件下载链接同源配置），
+    未配置时回退请求自身的 base（与前端 window.location.origin 约定一致）。
+    """
+    from src.config.settings import settings
+
+    base = (getattr(settings.app, "public_base_url", "") or "").rstrip("/")
+    if not base:
+        base = str(request.base_url).rstrip("/")
+    return f"{base}/api/wechat-mp/callback/{config_id}"
+
+
+def _attach_wechat_mp_callback_url(request: Request, channel: Optional[dict]) -> Optional[dict]:
+    """对 wechat_mp 渠道的响应补充完整 callback_url 字段。"""
+    if channel and channel.get("channel_type") == _WECHAT_MP_CHANNEL_TYPE:
+        channel = dict(channel)
+        channel["callback_url"] = _build_wechat_mp_callback_url(request, channel["config_id"])
+    return channel
 
 
 def _validate_rpa_required_fields(config: dict) -> None:
@@ -90,6 +120,7 @@ async def list_channels(request: Request):
     """列出当前租户的渠道配置"""
     admin = require_admin(request)
     configs = ChannelConfigDB.list_by_tenant(admin["tenant_id"])
+    configs = [_attach_wechat_mp_callback_url(request, c) for c in configs]
     return {"success": True, "channels": configs}
 
 
@@ -99,7 +130,7 @@ async def create_channel(request: Request, body: ChannelConfigCreateRequest):
     """新增渠道配置"""
     admin = require_admin(request)
 
-    if body.channel_type not in ("wecom", "wecom_kf", "wecom_personal_rpa", "dingtalk", "feishu"):
+    if body.channel_type not in ("wecom", "wecom_kf", "wecom_personal_rpa", "dingtalk", "feishu", _WECHAT_MP_CHANNEL_TYPE):
         raise HTTPException(status_code=400, detail=f"不支持的渠道类型: {body.channel_type}")
 
     # wecom_personal_rpa 走动态校验（按 listen_mode），其他渠道走静态必填字段表
@@ -114,6 +145,14 @@ async def create_channel(request: Request, body: ChannelConfigCreateRequest):
                 detail=f"缺少必填字段: {', '.join(missing)}",
             )
 
+    # wechat_mp：原始 ID 格式校验 + callback_token 由服务端生成（入参一律忽略）
+    if body.channel_type == _WECHAT_MP_CHANNEL_TYPE:
+        original_id = str(body.config.get("original_id") or "").strip()
+        if not original_id.startswith("gh_"):
+            raise HTTPException(status_code=400, detail="original_id 格式应为 gh_ 开头的公众号原始 ID")
+        body.config = dict(body.config)
+        body.config.pop("callback_token", None)
+
     try:
         config = ChannelConfigDB.create(
             tenant_id=admin["tenant_id"],
@@ -125,22 +164,39 @@ async def create_channel(request: Request, body: ChannelConfigCreateRequest):
     except Exception as e:
         # IntegrityError 为 DB 部分唯一索引拦截（如 wecom_personal_rpa 并发创建同租户第二条）
         if IntegrityError is not None and isinstance(e, IntegrityError):
+            if body.channel_type == "wecom_personal_rpa":
+                raise HTTPException(
+                    status_code=400,
+                    detail="该租户已有 wecom_personal_rpa 渠道配置，请编辑现有配置切换模式（同租户仅允许一份该类型配置）",
+                )
+            if body.channel_type == _WECHAT_MP_CHANNEL_TYPE:
+                raise HTTPException(
+                    status_code=409,
+                    detail="该公众号（appid）已在本租户配置过，请编辑现有配置",
+                )
             raise HTTPException(
-                status_code=400 if body.channel_type == "wecom_personal_rpa" else 409,
-                detail=(
-                    "该租户已有 wecom_personal_rpa 渠道配置，请编辑现有配置切换模式（同租户仅允许一份该类型配置）"
-                    if body.channel_type == "wecom_personal_rpa"
-                    else f"渠道配置唯一约束冲突（{body.channel_type}）"
-                ),
+                status_code=409,
+                detail=f"渠道配置唯一约束冲突（{body.channel_type}）",
             )
         logger.error(f"create channel exception: {type(e).__name__}: {e}")
         raise HTTPException(status_code=500, detail="创建渠道配置失败")
 
     if not config:
+        # wechat_mp 同租户同 appid 应用层拦截（DB 唯一索引并发兜底走上面 409）
+        if body.channel_type == _WECHAT_MP_CHANNEL_TYPE:
+            raise HTTPException(status_code=409, detail="该公众号（appid）已在本租户配置过，请编辑现有配置")
         raise HTTPException(status_code=500, detail="创建渠道配置失败")
 
     logger.info(f"Channel config created: {config['config_id']} ({body.channel_type}, subagent={body.subagent_type})")
-    return {"success": True, "channel": config}
+    config = _attach_wechat_mp_callback_url(request, config)
+    response = {"success": True, "channel": config}
+    if body.channel_type == _WECHAT_MP_CHANNEL_TYPE:
+        # callback_token 仅创建时返回一次明文（此后一律掩码），供用户粘贴到公众平台后台
+        decrypted = ChannelConfigDB.get_by_id_decrypted(config["config_id"])
+        token_plain = ((decrypted or {}).get("config") or {}).get("callback_token") or ""
+        if token_plain:
+            response["callback_token_plaintext"] = token_plain
+    return response
 
 
 @router.put("/{config_id}")
@@ -166,7 +222,26 @@ async def update_channel(config_id: str, request: Request, body: ChannelConfigUp
         body.config = dict(body.config)
         body.config["kf_account"] = (existing.get("config") or {}).get("kf_account") or []
 
-    success = ChannelConfigDB.update(config_id, body.config, subagent_type=body.subagent_type, name=body.name)
+    # wechat_mp：callback_token 由服务端生成/轮换，不接受更新入参；original_id 格式校验
+    if existing["channel_type"] == _WECHAT_MP_CHANNEL_TYPE:
+        body.config = dict(body.config)
+        body.config.pop("callback_token", None)
+        original_id = str(body.config.get("original_id") or "").strip()
+        if original_id and not original_id.startswith("gh_"):
+            raise HTTPException(status_code=400, detail="original_id 格式应为 gh_ 开头的公众号原始 ID")
+
+    try:
+        success = ChannelConfigDB.update(config_id, body.config, subagent_type=body.subagent_type, name=body.name)
+    except Exception as e:
+        # wechat_mp appid 变更撞同租户唯一索引 → 友好 409（与 create 对称）
+        if (
+            IntegrityError is not None
+            and isinstance(e, IntegrityError)
+            and existing["channel_type"] == _WECHAT_MP_CHANNEL_TYPE
+        ):
+            raise HTTPException(status_code=409, detail="该公众号（appid）已在本租户配置过，请编辑现有配置")
+        logger.error(f"update channel exception: {type(e).__name__}: {e}")
+        raise HTTPException(status_code=500, detail="更新渠道配置失败")
     if success:
         # 配置变更后失效缓存的 adapter，下次回调重建
         # 按 config_id 精确失效（避免清掉同租户同渠道其他 config 的缓存）
@@ -180,6 +255,7 @@ async def update_channel(config_id: str, request: Request, body: ChannelConfigUp
         except Exception as e:
             logger.warning(f"失效 adapter 缓存失败: {e}")
         updated = ChannelConfigDB.get_by_id(config_id)
+        updated = _attach_wechat_mp_callback_url(request, updated)
         return {"success": True, "channel": updated}
     return {"success": False, "message": "更新失败"}
 
@@ -334,8 +410,30 @@ async def verify_channel(config_id: str, request: Request):
         ChannelConfigDB.set_verified(config_id, bool(result.get("verified")))
         return result
 
+    # wechat_mp：回调通道无服务端可发起的凭据实测（接口通道验证属 P3），
+    # 「验证连接」返回回调三态（config_verified_at / last_event_at / last_error）供前端展示
+    cfg_masked = ChannelConfigDB.get_by_id(config_id)
+    if cfg_masked and cfg_masked.get("channel_type") == _WECHAT_MP_CHANNEL_TYPE:
+        if cfg_masked["tenant_id"] != admin["tenant_id"]:
+            raise HTTPException(status_code=403, detail="无权操作此配置")
+        cfg_data = cfg_masked.get("config") or {}
+        config_verified_at = cfg_data.get("config_verified_at")
+        return {
+            "success": True,
+            "verified": bool(config_verified_at),
+            "config_verified_at": config_verified_at,
+            "last_event_at": cfg_data.get("last_event_at"),
+            "last_error": cfg_data.get("last_error"),
+            "callback_url": _build_wechat_mp_callback_url(request, config_id),
+            "message": (
+                "回调 URL 已验证通过"
+                if config_verified_at
+                else "尚未完成回调 URL 验证：请在公众平台后台「设置与开发→服务器配置」填入回调地址与 Token 并保存"
+            ),
+        }
+
     # 其他渠道走原有 ChannelFactory 路径
-    config = ChannelConfigDB.get_by_id(config_id)
+    config = cfg_masked
     if not config:
         raise HTTPException(status_code=404, detail="渠道配置不存在")
     if config["tenant_id"] != admin["tenant_id"]:
@@ -357,6 +455,39 @@ def _is_wecom_personal_rpa(config_id: str) -> bool:
     """
     cfg = ChannelConfigDB.get_by_id(config_id)
     return bool(cfg and cfg.get("channel_type") == "wecom_personal_rpa")
+
+
+@router.post("/{config_id}/rotate-wechat-mp-token")
+@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.CONFIG, id_arg="config_id")
+async def rotate_wechat_mp_token(config_id: str, request: Request):
+    """重置 wechat_mp 回调 Token（密钥轮换，设计 §4）。
+
+    生成新 token 加密入库、递增凭据版本并撤销回调验证态（旧 token 事件随之拒收）。
+    新 token 明文仅此一次返回，供用户更新公众平台后台配置。
+    """
+    admin = require_admin(request)
+    existing = ChannelConfigDB.get_by_id(config_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="渠道配置不存在")
+    if existing["tenant_id"] != admin["tenant_id"]:
+        raise HTTPException(status_code=403, detail="无权操作此配置")
+    if existing["channel_type"] != _WECHAT_MP_CHANNEL_TYPE:
+        raise HTTPException(
+            status_code=400,
+            detail=f"仅 wechat_mp 渠道支持轮换回调 Token，当前渠道类型: {existing['channel_type']}",
+        )
+
+    new_token = await asyncio.to_thread(ChannelConfigDB.rotate_wechat_mp_token, config_id)
+    if not new_token:
+        raise HTTPException(status_code=500, detail="Token 轮换失败")
+
+    logger.info(f"wechat_mp 回调 Token 轮换成功: config_id={config_id} tenant={admin['tenant_id']}")
+    return {
+        "success": True,
+        "callback_token_plaintext": new_token,
+        "callback_url": _build_wechat_mp_callback_url(request, config_id),
+        "message": "回调 Token 已重置，请同步更新公众平台后台服务器配置中的 Token 并重新保存",
+    }
 
 
 @router.get("/available-subagents")

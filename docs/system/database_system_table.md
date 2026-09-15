@@ -283,6 +283,10 @@ chunks_vec（向量）      chunks_fts（全文搜索）
 - `raw_text` — 提取的原始文本
 - `summary` — AI 生成的文档摘要
 - `uuid` — 带前缀的业务唯一 ID（如 `doc_abc123def456`）
+- `origin` — 内容来源（默认 `manual_upload`；外部源如 `wechat_mp`，2026-09-14 公众号入知识库 WP1 新增）
+- `external_id` — 外部源规范身份（如公众号 `appid:article_id:item_key`）；`UNIQUE(tenant_id, origin, external_id) WHERE external_id IS NOT NULL` 部分唯一索引防重
+- `status` — 生命周期（默认 `active`；外部源软删除置 `deleted`）
+- `expires_at` — 时效截止时间（NULL=永不过期；仅限制检索，过期仍可管理查看）
 
 ### 5.3 `chunks` — 文本块表
 
@@ -394,7 +398,15 @@ chunks_vec（向量）      chunks_fts（全文搜索）
 
 ### 7.4 `tenant_channel_configs` — 租户渠道配置表
 
-租户在各渠道（企业微信、钉钉、飞书）上的配置信息。
+租户在各渠道（企业微信、钉钉、飞书、微信公众号内容等）上的配置信息。
+
+**关键约束**：
+- `uq_tenant_channel_configs_wecom_personal_rpa`：wecom_personal_rpa 同租户单例部分唯一索引
+- `uq_tenant_channel_configs_wechat_mp_appid`：wechat_mp 同租户同 appid 部分唯一索引
+  （`(tenant_id, config->>'appid') WHERE channel_type='wechat_mp'`，公众号内容入知识库 WP4，设计 §4）
+
+**敏感字段**：wecom_personal_rpa / wechat_mp 类型的 config JSON 中敏感字段 Fernet 加密存储
+（公共原语 `src/core/secret_crypto.py`，主密钥 settings.app.secret_key → APP_SECRET_KEY → RPA_SECRET_KEY）。
 
 **关系**：`tenant_channel_configs.tenant_id` → `tenants.tenant_id`
 
@@ -645,6 +657,29 @@ events/outbox/audit/quota 等系统生成行 `user_id` 可 NULL。DDL 三处同�
 - `bs_outbound_leads`：商机主表。来源平台/类型、外部内容 ID/URL、原文加密（`raw_text_encrypted`）、意向分、状态、分配销售、去重指纹（同 tenant 部分唯一索引）、接触要点、风险标记。
 - `bs_outbound_lead_interactions`：商机互动/跟进记录。互动类型（note/call/email/dm/comment/visit/wechat/other）、内容、跟进人 `actor_user_id`。
 - `bs_outbound_outreach_actions`：我方接触动作审计。动作类型（comment/dm/post）、渠道、内容快照、执行状态（默认 `draft`，需人审后推进）、审核人。
+
+### 11.8 微信公众号内容入知识库表（bs_wechat_mp_*，WP1 2026-09-14）
+
+公众号内容入知识库（docs/system/wechat-mp/wechat-mp-knowledge-ingestion-design.md §8 二审定稿）
+使用的 4 张租户业务表，遵循 database_dev.md bs_ 规范（无外键无触发器，引用完整性在
+Python 校验）。**队列语义**：`sync_runs` + `sync_items` 即执行队列——受理同事务建 queued
+run + pending items，worker 按租户串行领取（事务内 queued→running）；`articles` 只维护文章
+当前状态；`events` 是回调收件箱（先落库再返回 success）。DDL 三处同步：
+`deploy/init-postgres.sql`、`deploy/db_update.yaml`、`src/wechat_mp/db.py`。
+
+- `bs_wechat_mp_articles`：文章唯一当前态（`UNIQUE(tenant_id, external_id)`；
+  original_url/fetch_url/external_id 分离；status 含 active/missing/deleted/alias/unconfirmed，
+  alias 行经 `master_article_row_id` 指向主记录；`processing_status` + `next_retry_at` 失败退避；
+  `doc_id` 关联 documents.id）。
+- `bs_wechat_mp_events`：回调事件收件箱（`UNIQUE(tenant_id, config_id, event_key)` 幂等去重；
+  pending/done/failed；`run_id` 关联受理批次）。
+- `bs_wechat_mp_sync_runs`：同步运行账本兼执行队列（queued/running/success/partial_failed/
+  skipped_no_credit/failed/interrupted；trigger_type=callback/scheduled/manual/agent/retry/recheck；
+  **租户级 running 部分唯一索引** `uq_wechat_mp_runs_active WHERE status='running'`，与 Redis 锁
+  同粒度；queued 不限条数可排队；owner_token/heartbeat_at 支撑 stale 回收）。
+- `bs_wechat_mp_sync_items`：批次内逐篇任务（`UNIQUE(tenant_id, run_id, article_row_id)`；
+  action=new/update/delete/restore/check；同批次别名重复项 status='skipped' 且
+  `duplicate_of_item_id` 关联主 item；billing_status=pending/charged/failed/unknown/not_required）。
 
 ---
 

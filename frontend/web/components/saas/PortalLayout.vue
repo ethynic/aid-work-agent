@@ -225,6 +225,8 @@ const portalMenuItems = [
   { path: '/portal/token-usage', label: '平台积分消耗', icon: 'M3 21h18M6 17V9M11 17V5M16 17v-4M21 17v-7' },
   // RPA 绑定管理：链接/链条
   { path: '/portal/rpa-bindings', label: 'RPA 绑定管理', icon: 'M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71' },
+  // 公众号内容（跨租户审计）：文档/文章页
+  { path: '/portal/wechat-mp', label: '公众号内容', icon: 'M5 4h14a1 1 0 011 1v14a1 1 0 01-1 1H5a1 1 0 01-1-1V5a1 1 0 011-1zM8 9h8M8 13h8M8 17h5' },
   // 追踪查看：搜索/放大镜
   { path: '/portal/monitoring', label: '追踪查看', icon: 'M21 21l-4.35-4.35M10.5 18a7.5 7.5 0 100-15 7.5 7.5 0 000 15z' },
   // 上下文压缩：压缩/方块缩小

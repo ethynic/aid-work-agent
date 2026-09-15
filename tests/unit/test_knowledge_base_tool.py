@@ -231,3 +231,30 @@ async def test_execute_master_agent_passes_empty_shared_ranges():
     # 主智能体上下文无 tenant_id/subagent_id，不查共享范围表
     assert not db_mock.called
     assert mock_retriever.retrieve.call_args.kwargs.get("shared_ranges") == []
+
+
+async def test_title_lookup_wraps_range_sql_in_parens():
+    """标题回查 SQL：tenant_range 的 OR 组合必须整体加括号（WP2 P2 修复）。
+    AND 优先级高于 OR，不加括号时 `id IN (...) AND a OR b` 中 id IN 只约束
+    本租户分支，共享分支会回查到不在结果集内的文档标题（口径漂移）。"""
+    from src.tools.context import ToolExecutionContext, tool_execution_scope
+
+    tool = _make_tool()
+    mock_retriever = MagicMock()
+    mock_retriever.retrieve = AsyncMock(return_value=[
+        {"doc_id": 1, "text": "片段", "score": 0.9, "metadata": {}},
+    ])
+    tool._retriever = mock_retriever
+
+    mock_cm, mock_cursor = _mock_db([
+        {"id": 1, "title": "文档", "file_path": "/x.txt", "tenant_id": "tenant_test1"},
+    ])
+
+    ctx = ToolExecutionContext(tenant_id="tenant_test1", subagent_id=None)
+    with tool_execution_scope(ctx), \
+            patch("src.tools.knowledge.knowledge_base_tool.get_db_connection", return_value=mock_cm):
+        result = await tool.execute(query="报价模板", top_k=5)
+
+    assert result["success"] is True
+    sql = " ".join(mock_cursor.execute.call_args[0][0].split())
+    assert "AND ((documents.tenant_id = %s))" in sql

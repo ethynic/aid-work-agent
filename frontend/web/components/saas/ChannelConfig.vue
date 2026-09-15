@@ -45,10 +45,27 @@
         <!-- 回调地址展示 -->
         <div v-if="tenant" class="bg-canvas rounded-lg p-3 text-sm">
           <span class="text-muted">回调地址：</span>
-          <code class="text-primary-600 select-all font-mono">{{ getCallbackUrl(ch.channel_type, ch.config_id) }}</code>
-          <BaseButton intent="ghost" size="sm" @click="copyUrl(getCallbackUrl(ch.channel_type, ch.config_id), ch.config_id)">
+          <code class="text-primary-600 select-all font-mono">{{ ch.callback_url || getCallbackUrl(ch.channel_type, ch.config_id) }}</code>
+          <BaseButton intent="ghost" size="sm" @click="copyUrl(ch.callback_url || getCallbackUrl(ch.channel_type, ch.config_id), ch.config_id)">
             {{ copied[ch.config_id] ? '已复制' : '复制' }}
           </BaseButton>
+        </div>
+        <!-- 公众号内容：回调三态展示 -->
+        <div v-if="ch.channel_type === 'wechat_mp'" class="mt-2 grid grid-cols-3 gap-2 text-xs">
+          <div class="bg-canvas rounded-md px-3 py-2">
+            <div class="text-muted mb-0.5">URL 验证</div>
+            <div :class="ch.config?.config_verified_at ? 'text-success-700' : 'text-warning-700'">
+              {{ ch.config?.config_verified_at ? `已验证 ${ch.config.config_verified_at}` : '未验证（请在公众平台后台保存服务器配置）' }}
+            </div>
+          </div>
+          <div class="bg-canvas rounded-md px-3 py-2">
+            <div class="text-muted mb-0.5">最近收到事件</div>
+            <div class="text-default">{{ ch.config?.last_event_at || '暂无（低频发文不影响可用性）' }}</div>
+          </div>
+          <div class="bg-canvas rounded-md px-3 py-2">
+            <div class="text-muted mb-0.5">最近错误</div>
+            <div :class="ch.config?.last_error ? 'text-danger-600' : 'text-default'">{{ ch.config?.last_error || '无' }}</div>
+          </div>
         </div>
       </div>
     </div>
@@ -83,7 +100,7 @@
         <div v-if="!editingId" class="grid grid-cols-8 gap-2 mb-3">
           <button
             v-for="ct in channelTypes" :key="ct.value"
-            @click="form.channel_type = ct.value"
+            @click="selectChannelType(ct.value)"
             class="flex flex-col items-center gap-1.5 py-3 px-2 rounded-lg border-2 transition-all cursor-pointer"
             :class="form.channel_type === ct.value ? 'border-primary-400 bg-primary-50' : 'border-default hover:border-hover'"
           >
@@ -181,8 +198,8 @@
             </div>
           </div>
 
-          <!-- 关联数字员工（wecom_kf 渠道由客服账号级"绑定数字员工"决定，隐藏主表字段避免误导） -->
-          <div v-if="form.channel_type !== 'wecom_kf'">
+          <!-- 关联数字员工（wecom_kf 渠道由客服账号级"绑定数字员工"决定，wechat_mp 内容源不进收发消息链路，均隐藏主表字段避免误导） -->
+          <div v-if="form.channel_type !== 'wecom_kf' && form.channel_type !== 'wechat_mp'">
             <label class="text-sm text-muted mb-1 block">关联数字员工</label>
             <BaseSelect v-model="form.subagent_type">
               <option value="">不绑定</option>
@@ -229,6 +246,38 @@
           <p v-else class="text-sm text-muted">
             微信客服账号请在保存渠道后，点击渠道的「编辑」按钮，在编辑弹窗中管理：系统自动调用企业微信 API 创建账号、生成推广二维码，并支持绑定归属用户、设置到期日期与积分上限。
           </p>
+        </div>
+
+        <!-- 公众号内容特有：启用开关 + 回调 Token 展示/轮换 + 共存说明 -->
+        <div v-if="form.channel_type === 'wechat_mp'" class="mt-3 pt-3 border-t border-default">
+          <div class="bg-canvas rounded-lg p-3 space-y-3">
+            <label class="flex items-center gap-2 text-sm text-default cursor-pointer">
+              <input type="checkbox" v-model="form.config.enabled" class="w-4 h-4 rounded border-primary-200 text-primary-600 focus:ring-primary-500" />
+              <span class="font-medium">启用回调接收</span>
+              <span class="text-xs text-muted">停用后微信推送的事件将被拒绝（403），知识库不再收录新文章</span>
+            </label>
+            <div>
+              <label class="text-sm text-muted mb-1 block">回调 Token（粘贴到公众平台「服务器配置」的 Token 栏）</label>
+              <div v-if="mpTokenPlaintext" class="bg-warning-50 border border-warning-200 rounded-lg p-3">
+                <div class="flex items-center gap-2">
+                  <code class="flex-1 bg-surface px-3 py-2 rounded text-sm text-warning-800 font-mono select-all break-all">{{ mpTokenPlaintext }}</code>
+                  <BaseButton intent="ghost" size="sm" @click="copyMpToken">复制</BaseButton>
+                </div>
+                <p class="mt-1.5 text-xs text-warning-700">⚠️ Token 仅本次明文显示，关闭弹窗后只能看到掩码。请立即复制保存。</p>
+              </div>
+              <div v-else class="flex items-center gap-2">
+                <code class="flex-1 bg-surface px-3 py-2 rounded text-sm text-muted font-mono">{{ editingId ? (form.config.callback_token || '***') : '保存后自动生成' }}</code>
+                <BaseButton v-if="editingId" intent="secondary" size="sm" :disabled="rotatingToken" @click="handleRotateMpToken">
+                  {{ rotatingToken ? '重置中...' : '重置 Token' }}
+                </BaseButton>
+              </div>
+              <p class="mt-1 text-xs text-muted">Token 由服务端生成，不可自定义；重置后旧 Token 立即失效</p>
+            </div>
+            <div class="bg-danger-50 border border-danger-200 rounded-lg p-3 text-xs text-danger-700 space-y-1">
+              <p class="font-medium">共存说明（重要）</p>
+              <p>启用「服务器配置」后，公众平台后台的自动回复等功能将被接管；一个公众号只能配置一个回调 URL，若已有第三方系统占用，需改用中继转发方案（请联系运营）。</p>
+            </div>
+          </div>
         </div>
 
         <!-- 微信客服特有：处理等待提示（渠道级，所有客服账号统一生效）。
@@ -467,7 +516,7 @@ import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseBadge from '@/components/ui/BaseBadge.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
-import { listChannels, createChannel, updateChannel, deleteChannel, verifyChannel, getAvailableSubagents, type SubagentOption, generateChannelKeypair, listTenantUsers, listKfAccounts, createKfAccount, updateKfAccount, deleteKfAccount } from '@/api/saasTenant'
+import { listChannels, createChannel, updateChannel, deleteChannel, verifyChannel, getAvailableSubagents, type SubagentOption, generateChannelKeypair, rotateWechatMpToken, listTenantUsers, listKfAccounts, createKfAccount, updateKfAccount, deleteKfAccount } from '@/api/saasTenant'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 
 const route = useRoute()
@@ -870,6 +919,7 @@ const channelTypes = [
   { value: 'wecom', label: '企业微信', icon: '' },
   { value: 'wecom_kf', label: '企业微信客服', icon: '' },
   { value: 'wecom_personal_rpa', label: '企微个人号RPA', icon: '' },
+  { value: 'wechat_mp', label: '公众号内容', icon: '' },
   { value: 'dingtalk', label: '钉钉', icon: '' },
   { value: 'feishu', label: '飞书', icon: '' },
 ]
@@ -879,6 +929,7 @@ function channelTypeLabel(type: string) {
     wecom: '企业微信',
     wecom_kf: '企业微信客服',
     wecom_personal_rpa: '企微个人号RPA（会话存档）',
+    wechat_mp: '微信公众号内容（入知识库）',
     dingtalk: '钉钉',
     feishu: '飞书',
   }
@@ -918,6 +969,15 @@ const channelFieldMap: Record<string, { key: string; label: string; placeholder:
     // 钉钉回调签名只用 AppSecret 做 HmacSHA256(timestamp, AppSecret)，无消息体加密，
     // 不需要 Token / EncodingAESKey（与企微/飞书不同）。后端 adapter 也忽略这两个字段。
   ],
+  // 微信公众号内容入知识库（WP4）：回调 token 服务端生成不收表单项；
+  // encoding_aes_key / secret 为敏感字段（加密入库 + 掩码回显）
+  wechat_mp: [
+    { key: 'appid', label: '公众号 AppID', placeholder: 'wx...', hint: '创建后不可改绑；安全模式 AES 解密接收方校验用', location: '「设置与开发」→「公众号设置」→「账号信息」' },
+    { key: 'original_id', label: '公众号原始 ID', placeholder: 'gh_...', hint: 'gh_ 开头；回调事件 ToUserName 绑定校验用，必须与公众号一致', location: '「设置与开发」→「公众号设置」→「账号信息」' },
+    { key: 'encoding_aes_key', label: 'EncodingAESKey（安全模式）', placeholder: '43 字符', hint: '仅「安全模式」需要；公众平台后台随机生成后复制到此处', location: '「设置与开发」→「服务器配置」' },
+    { key: 'secret', label: 'AppSecret（预留）', placeholder: '', hint: '接口通道（后续版本）用，可先留空', location: '「设置与开发」→「公众号设置」' },
+    { key: 'sync_interval_hours', label: '同步周期（小时）', placeholder: '6', hint: '定时复核/同步周期，默认 6 小时', location: '' },
+  ],
   feishu: [
     { key: 'app_id', label: 'App ID', placeholder: 'cli_...', location: '「凭证与基础信息」页面' },
     { key: 'app_secret', label: 'App Secret', placeholder: '', location: '「凭证与基础信息」页面' },
@@ -927,6 +987,14 @@ const channelFieldMap: Record<string, { key: string; label: string; placeholder:
 }
 
 const channelFields = computed(() => channelFieldMap[form.value.channel_type] || [])
+
+// 切换渠道类型：wechat_mp 的 enabled 默认 true（checkbox 绑定需要显式初值）
+function selectChannelType(type: string) {
+  form.value.channel_type = type
+  if (type === 'wechat_mp' && form.value.config.enabled === undefined) {
+    form.value.config.enabled = true
+  }
+}
 
 // ==================== 配置指引（简短版，弹窗内） ====================
 
@@ -978,6 +1046,18 @@ const quickGuideMap: Record<string, { title: string; steps: string[]; docUrl: st
     ],
     docUrl: 'https://open.dingtalk.com/',
   },
+  wechat_mp: {
+    title: '微信公众号内容接入步骤（服务器配置回调）',
+    steps: [
+      '保存本配置，获得回调地址与 Token（Token 仅创建时显示一次，请立即复制保存）',
+      '前往公众平台后台 →「设置与开发」→「服务器配置」→ 修改配置',
+      'URL 填下方回调地址，Token 填上一步复制的值；选择「明文模式」可直接启用，选择「安全模式」需同时把生成的 EncodingAESKey 填回本页',
+      '点击「启用」，微信自动发起 URL 验证，通过后本页显示「已验证」',
+      '此后每次群发完成，系统自动把文章收进知识库，无需改变正常推送习惯',
+      'IP 白名单：回调接收不需要；接口同步（后续版本）才需在公众平台后台加入服务器出口 IP',
+    ],
+    docUrl: 'https://mp.weixin.qq.com/',
+  },
   feishu: {
     title: '飞书接入步骤',
     steps: [
@@ -997,6 +1077,12 @@ const currentGuide = computed(() => quickGuideMap[form.value.channel_type] || { 
 
 function getCallbackUrl(channelType: string, configId?: string): string {
   const base = window.location.origin
+  // 公众号内容回调走独立产品端点 /api/wechat-mp/callback/{config_id}（不在租户回调命名空间下）
+  if (channelType === 'wechat_mp') {
+    return configId
+      ? `${base}/api/wechat-mp/callback/${configId}`
+      : `${base}/api/wechat-mp/callback/{config_id}`
+  }
   if (tenant.value) {
     if (configId) {
       return `${base}/t/${tenant.value.tenant_id}/${channelType}/callback/${configId}`
@@ -1028,6 +1114,36 @@ function copyUrl(url: string, id?: string) {
   })
 }
 
+// ==================== 公众号内容（wechat_mp）回调 Token ====================
+// 创建/轮换后的一次性明文 token（仅本次展示，刷新后只能看到掩码）
+const mpTokenPlaintext = ref('')
+const rotatingToken = ref(false)
+
+async function handleRotateMpToken() {
+  if (!editingId.value) return
+  if (!confirm('重置后旧 Token 立即失效，需到公众平台后台同步更新并重新保存服务器配置。确定重置吗？')) return
+  rotatingToken.value = true
+  try {
+    const res = await rotateWechatMpToken(editingId.value)
+    if (res.success && res.callback_token_plaintext) {
+      mpTokenPlaintext.value = res.callback_token_plaintext
+      toast.success('回调 Token 已重置，请复制新 Token 并更新公众平台后台')
+      await loadChannels()
+    } else {
+      toast.error(res.message || 'Token 重置失败')
+    }
+  } catch (e: any) {
+    toast.error(e.message || 'Token 重置失败')
+  } finally {
+    rotatingToken.value = false
+  }
+}
+
+function copyMpToken() {
+  if (!mpTokenPlaintext.value) return
+  navigator.clipboard.writeText(mpTokenPlaintext.value).then(() => toast.success('Token 已复制'))
+}
+
 // ==================== 操作 ====================
 
 function openAddChannel() {
@@ -1036,6 +1152,7 @@ function openAddChannel() {
   formError.value = ''
   formInitialSnapshot.value = JSON.parse(JSON.stringify(form.value))
   resetWaitingIndicator()
+  mpTokenPlaintext.value = ''
   showForm.value = true
 }
 
@@ -1045,6 +1162,7 @@ function editChannel(ch: any) {
   formError.value = ''
   formInitialSnapshot.value = JSON.parse(JSON.stringify(form.value))
   loadWaitingIndicator(ch.config?.waiting_indicator)
+  mpTokenPlaintext.value = ''
   showForm.value = true
 }
 
@@ -1112,6 +1230,13 @@ async function saveChannel(): Promise<boolean> {
         ? { enabled: true, message: wi.message || DEFAULT_WAITING_MESSAGE }
         : { enabled: false }
     }
+    // wechat_mp：enabled 开关与同步周期规整（callback_token 由服务端生成，前端不传）
+    if (form.value.channel_type === 'wechat_mp') {
+      payload.config.enabled = form.value.config.enabled !== false
+      const hours = parseInt(String(form.value.config.sync_interval_hours ?? ''), 10)
+      payload.config.sync_interval_hours = Number.isFinite(hours) && hours > 0 ? hours : 6
+      delete payload.config.callback_token
+    }
     if (editingId.value) {
       await updateChannel(editingId.value, payload as any)
     } else {
@@ -1119,6 +1244,10 @@ async function saveChannel(): Promise<boolean> {
       // 新增保存后切换为编辑态，再次点「保存」变为更新而非重复创建
       const createdId = res?.channel?.config_id
       if (createdId) editingId.value = createdId
+      // wechat_mp：callback_token 仅创建响应返回一次明文，立即展示供复制
+      if (form.value.channel_type === 'wechat_mp' && res?.callback_token_plaintext) {
+        mpTokenPlaintext.value = res.callback_token_plaintext
+      }
     }
     // 保存后重拍快照，标记无未保存修改
     formInitialSnapshot.value = JSON.parse(JSON.stringify(form.value))
@@ -1148,7 +1277,16 @@ async function handleSaveAndClose() {
 async function handleVerify(configId: string) {
   try {
     const res = await verifyChannel(configId)
-    if (res.verified) {
+    const ch = channels.value.find((c: any) => c.config_id === configId)
+    if (ch?.channel_type === 'wechat_mp') {
+      // 公众号内容：验证按钮展示回调三态，不做服务端凭据实测（接口通道验证属后续版本）
+      if (res.verified) {
+        toast.success(`回调 URL 已验证（${res.config_verified_at || ''}）`)
+      } else {
+        toast.warning(res.message || '尚未完成回调 URL 验证')
+      }
+      if (res.last_error) toast.warning(`最近错误：${res.last_error}`)
+    } else if (res.verified) {
       toast.success('验证通过！渠道凭证有效。')
     } else {
       toast.error('验证失败: ' + (res.message || '请检查凭证配置是否正确'))

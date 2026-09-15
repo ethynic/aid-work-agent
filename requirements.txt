@@ -45,6 +45,7 @@ tavily-python>=0.3.0  # Tavily AI Search API
 # Browser Automation
 playwright>=1.59.0  # Browser automation framework (1.59+ for Screencast API)
 markdownify>=0.11.6  # HTML to Markdown conversion
+beautifulsoup4>=4.12.0  # HTML 解析（src/wechat_mp/content.py 公众号正文提取；原为 markdownify/markitdown 传递依赖，直接引用故显式锁定）
 
 # Word Document Processing
 python-docx>=1.0.0  # Word document reading and processing

@@ -181,7 +181,7 @@ class KnowledgeBaseTool(BaseTool):
                         params = list(doc_ids) + range_params
                         cursor.execute(f"""
                             SELECT id, title, file_path, tenant_id FROM documents
-                            WHERE id IN ({placeholders}) AND {range_sql}
+                            WHERE id IN ({placeholders}) AND ({range_sql})
                         """, params)
                     else:
                         source_type_condition = " AND source_type = %s" if source_type else ""

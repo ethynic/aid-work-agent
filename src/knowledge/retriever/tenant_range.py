@@ -60,6 +60,19 @@ def load_shared_ranges(
     return ranges
 
 
+def build_active_document_condition(alias: str = "d") -> str:
+    """检索侧文档可见性条件（公众号内容入知识库 WP2，设计 §7.3）：
+    仅 active 且未过期的文档参与检索，排序/LIMIT 前过滤。
+    软删除（status='deleted'）与已过期（expires_at <= now()）文档对检索不可见；
+    expires_at 只限制检索，不限制管理端列表查看（列表侧仅用 status 过滤）。
+    返回常量 SQL 片段（自带外层括号），无参数。
+    """
+    return (
+        f"({alias}.status = 'active' "
+        f"AND ({alias}.expires_at IS NULL OR {alias}.expires_at > now()))"
+    )
+
+
 def build_tenant_range_conditions(
     tenant_id: Optional[str],
     source_type: Optional[str],
@@ -77,7 +90,9 @@ def build_tenant_range_conditions(
     Returns:
         (where_sql, params)。where_sql 形如
         "({alias}.tenant_id = %s AND {alias}.source_type = %s) OR (...)"，
-        不含 WHERE 关键字。
+        不含 WHERE 关键字。**是 OR 组合，调用方拼接进更大 WHERE 时必须自行
+        加外层括号**（`AND ({range_sql})`），否则后续 AND 条件只约束最后一个
+        OR 分支（AND 优先级高于 OR）。
     """
     if not tenant_id:
         return "", []

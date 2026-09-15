@@ -10,7 +10,10 @@ import logging
 from loguru import logger
 
 from src.db.database import DB_CONFIG, get_db_connection, get_pooled_connection, return_pooled_connection
-from src.knowledge.retriever.tenant_range import build_tenant_range_conditions
+from src.knowledge.retriever.tenant_range import (
+    build_active_document_condition,
+    build_tenant_range_conditions,
+)
 import psycopg2.extras
 
 logger = logging.getLogger(__name__)
@@ -108,7 +111,11 @@ class VectorDBPostgreSQL(VectorDatabase):
             if "duplicate key" not in str(e).lower() and "already exists" not in str(e).lower():
                 raise
 
-        conn.commit()
+        # 外部传入连接时不提交：调用方可能正处于业务事务中（如知识库入库单事务
+        # 落三表），此处 commit 会把事务提前截断成"伪事务"（设计 §7.4 禁止）。
+        # 池连接路径保持原行为（建表立即持久化）。
+        if not self._external_conn:
+            conn.commit()
         logger.info(f"PostgreSQL pgvector 表初始化完成，维度: {self.dimension}")
 
     def _get_connection(self):
@@ -182,18 +189,21 @@ class VectorDBPostgreSQL(VectorDatabase):
                     sub_cat_sql = " AND d.sub_category = ANY(%s)"
                     params.append(sub_categories)
                 params.append(top_k)
+                # range_sql 为 OR 组合，必须整体加括号后再 AND 可见性条件，
+                # 否则可见性只约束最后一个 OR 分支（本租户 deleted 文档会泄漏）
                 cursor.execute(f"""
                     SELECT cv.chunk_id, cv.embedding <=> %s::vector as distance
                     FROM chunks_vec cv
                     JOIN chunks c ON cv.chunk_id = c.id
                     JOIN documents d ON c.doc_id = d.id
-                    WHERE {range_sql}{sub_cat_sql}
+                    WHERE ({range_sql}){sub_cat_sql}
+                      AND {build_active_document_condition("d")}
                     ORDER BY distance
                     LIMIT %s
                 """, params)
             elif global_view:
                 # 平台管理员全局视图（tenant_id 为 None）：跨租户检索，
-                # 不携带任何租户收窄条件（无租户参数）
+                # 不携带任何租户收窄条件（无租户参数）；软删除/过期文档仍不可见
                 source_type_condition = " AND d.source_type = %s" if source_type else ""
                 params = [vector_str]
                 if source_type:
@@ -205,6 +215,7 @@ class VectorDBPostgreSQL(VectorDatabase):
                     JOIN chunks c ON cv.chunk_id = c.id
                     JOIN documents d ON c.doc_id = d.id
                     WHERE 1=1{source_type_condition}
+                      AND {build_active_document_condition("d")}
                     ORDER BY distance
                     LIMIT %s
                 """, params)
@@ -221,6 +232,7 @@ class VectorDBPostgreSQL(VectorDatabase):
                     JOIN chunks c ON cv.chunk_id = c.id
                     JOIN documents d ON c.doc_id = d.id
                     WHERE d.tenant_id IS NULL{source_type_condition}
+                      AND {build_active_document_condition("d")}
                     ORDER BY distance
                     LIMIT %s
                 """, params)

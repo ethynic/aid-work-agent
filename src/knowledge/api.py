@@ -61,6 +61,9 @@ class DocumentResponse(BaseModel):
     total_chunks: int = 0
     created_at: Optional[str] = None
     summary: Optional[str] = None
+    origin: Optional[str] = None
+    status: Optional[str] = None
+    expires_at: Optional[str] = None
 
 
 class SearchRequest(BaseModel):
@@ -127,6 +130,23 @@ def _is_global_admin_view(http_request: Optional[Request]) -> bool:
         getattr(http_request.state, "user_role", None) == "platform_admin"
         and get_current_tenant_id() is None
     )
+
+
+def _is_platform_admin(http_request: Optional[Request]) -> bool:
+    """platform_admin 角色判定（不限定全局视图）：代管指定租户时同样成立，
+    用于 include_deleted 审计能力（软删除文档可见但不可改）。"""
+    if http_request is None:
+        return False
+    return getattr(http_request.state, "user_role", None) == "platform_admin"
+
+
+def _doc_original_url(doc_row: dict) -> Optional[str]:
+    """从 documents.metadata（TEXT JSON）提取原文 URL（外部来源文档下载错误响应用）"""
+    try:
+        meta = json.loads(doc_row.get("metadata") or "{}")
+    except (TypeError, ValueError):
+        return None
+    return meta.get("original_url") if isinstance(meta, dict) else None
 
 
 @router.get("/categories")
@@ -387,6 +407,8 @@ async def list_documents(
     offset: int = 0,
     source_type: Optional[str] = None,
     sub_category: Optional[str] = None,
+    origin: Optional[str] = None,
+    include_deleted: bool = False,
     http_request: Request = None
 ):
     """
@@ -395,10 +417,14 @@ async def list_documents(
     - 支持分页查询
     - 支持按 source_type 过滤（顶级分类）
     - 支持按 sub_category 过滤（子分类）
+    - 支持按 origin 过滤来源（manual_upload / wechat_mp 等）
+    - 默认只返回 active 文档；include_deleted=true 仅 platform_admin 生效
+      （审计用途），其他角色传入时静默忽略（与 global_view 收窄风格一致）
     - 返回 {items, total} 格式
     - 仅做租户隔离，同一租户内所有用户共享可见
     """
     tenant_id = get_current_tenant_id()
+    include_deleted = include_deleted and _is_platform_admin(http_request)
 
     documents = knowledge_service.list_documents(
         tenant_id=tenant_id,
@@ -406,11 +432,15 @@ async def list_documents(
         offset=offset,
         source_type=source_type,
         sub_category=sub_category,
-        global_view=_is_global_admin_view(http_request)
+        global_view=_is_global_admin_view(http_request),
+        include_deleted=include_deleted,
+        origin=origin,
     )
     total = knowledge_service.count_documents(
         tenant_id=tenant_id, source_type=source_type, sub_category=sub_category,
-        global_view=_is_global_admin_view(http_request)
+        global_view=_is_global_admin_view(http_request),
+        include_deleted=include_deleted,
+        origin=origin,
     )
 
     return {
@@ -506,7 +536,7 @@ async def delete_document(doc_id: int, http_request: Request = None):
 
     if not result.get("success"):
         return JSONResponse(
-            status_code=404,
+            status_code=result.get("status", 404),
             content={
                 "success": False,
                 "error": result.get("error", "删除失败"),
@@ -525,9 +555,11 @@ async def get_document_chunks(doc_id: int, http_request: Request = None):
     - 对象级租户校验：跨租户文档统一按 404「文档不存在或没有分块」响应，不泄漏存在性
     """
     # 租户上下文由 TenantMiddleware 注入；service 层经 JOIN documents 校验归属（防 TOCTOU）
+    # 软删除文档的分块仅 platform_admin 可审计查看，租户前台一律 404
     chunks = knowledge_service.get_document_chunks(
         doc_id, tenant_id=get_current_tenant_id(),
         global_view=_is_global_admin_view(http_request),
+        include_deleted=_is_platform_admin(http_request),
     )
 
     if not chunks:
@@ -600,16 +632,19 @@ def _can_download_document(doc_row: dict, current_tenant_id: Optional[str]) -> b
 
 
 @router.post("/documents/{doc_id}/download_ticket")
-async def create_download_ticket(doc_id: int):
+async def create_download_ticket(doc_id: int, http_request: Request = None):
     """签发短期下载票据（5 分钟有效），供前端 <a>/window.open 直链原生下载
 
     浏览器导航下载无法携带 Authorization / X-Tenant-Id header，前端先经
     认证换取票据，再访问 /documents/{doc_id}/download?ticket=xxx。
+
+    软删除文档仅 platform_admin 可审计下载，租户前台按「文档不存在」处理；
+    外部来源文档（无本地文件）返回明确错误并携带原文 URL。
     """
     with knowledge_service._get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT tenant_id, source_type FROM documents WHERE id = %s",
+            "SELECT tenant_id, source_type, file_path, origin, status, metadata FROM documents WHERE id = %s",
             (doc_id,),
         )
         row = cursor.fetchone()
@@ -617,8 +652,24 @@ async def create_download_ticket(doc_id: int):
     if not row:
         raise HTTPException(status_code=404, detail="文档不存在")
 
-    if not _can_download_document(row, get_current_tenant_id()):
+    # 软删除可见性：deleted 文档仅 platform_admin 可审计（与 chunks/详情口径一致）
+    if row.get("status") != "active" and not _is_platform_admin(http_request):
+        raise HTTPException(status_code=404, detail="文档不存在")
+
+    if not _can_download_document(row, get_current_tenant_id()) \
+            and not _is_global_admin_view(http_request):
         raise HTTPException(status_code=403, detail="无权访问该文档")
+
+    # 外部来源文档无本地文件：不签发下载票据，返回原文 URL 供前端跳转
+    if (row.get("origin") or "manual_upload") != "manual_upload" and not row.get("file_path"):
+        return JSONResponse(
+            status_code=400,
+            content={
+                "success": False,
+                "error": "外部来源文档不提供原始文件下载，请访问原文链接",
+                "original_url": _doc_original_url(row),
+            },
+        )
 
     from src.core.download_ticket import TICKET_TTL_SECONDS, issue_download_ticket
     from src.saas.context import get_current_user_id
@@ -627,33 +678,57 @@ async def create_download_ticket(doc_id: int):
         f"/api/knowledge/documents/{doc_id}/download",
         row.get("tenant_id"),
         get_current_user_id(),
+        # 携带角色：middleware 经票据还原 request.state.user_role，
+        # platform_admin 走票据链路审计下载 deleted 文档时不丢身份
+        role=getattr(http_request.state, "user_role", None) if http_request else None,
     )
     return {"ticket": ticket, "expires_in": TICKET_TTL_SECONDS}
 
 
 @router.get("/documents/{doc_id}/download")
-async def download_document(doc_id: int):
+async def download_document(doc_id: int, http_request: Request = None):
     """
     下载/预览原始文档文件
 
     - 新窗口打开或下载原文
     - 做租户隔离与共享范围校验：仅本租户文档或已启用共享分类可下载
+    - 软删除文档仅 platform_admin 可审计下载，租户前台按「文档不存在」处理
+    - 外部来源文档（无本地文件）返回明确错误并携带原文 URL
     """
-    # 查询文档的 file_path + 租户归属（用于权限校验）
+    # 查询文档的 file_path + 租户归属（用于权限校验）+ 来源/状态（外部文档与软删除边界）
     with knowledge_service._get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT file_path, title, tenant_id, source_type FROM documents WHERE id = %s",
+            "SELECT file_path, title, tenant_id, source_type, origin, status, metadata FROM documents WHERE id = %s",
             (doc_id,)
         )
         row = cursor.fetchone()
 
-    # row 是 dict: {"file_path": ..., "title": ..., "tenant_id": ..., "source_type": ...}
-    if not row or not row.get("file_path"):
+    # row 是 dict: {"file_path", "title", "tenant_id", "source_type", "origin", "status", "metadata"}
+    if not row:
         raise HTTPException(status_code=404, detail="文档不存在或文件已丢失")
 
-    if not _can_download_document(row, get_current_tenant_id()):
+    # 软删除可见性：deleted 文档仅 platform_admin 可审计（与 chunks/详情口径一致）
+    if row.get("status") != "active" and not _is_platform_admin(http_request):
+        raise HTTPException(status_code=404, detail="文档不存在或文件已丢失")
+
+    # 权限检查必须先于来源/文件分支（与 create_download_ticket 顺序一致）：
+    # 否则跨租户遍历 doc_id 探测他人外部文档会拿到 400 + original_url，泄漏存在性
+    if not _can_download_document(row, get_current_tenant_id()) \
+            and not _is_global_admin_view(http_request):
         raise HTTPException(status_code=403, detail="无权访问该文档")
+
+    if not row.get("file_path"):
+        # 外部来源文档无本地文件：返回明确错误 + 原文 URL（P1 不承诺原始文件下载）
+        if (row.get("origin") or "manual_upload") != "manual_upload":
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "外部来源文档不提供原始文件下载，请访问原文链接",
+                    "original_url": _doc_original_url(row),
+                },
+            )
+        raise HTTPException(status_code=404, detail="文档不存在或文件已丢失")
 
     file_path = row["file_path"]
     title = row.get("title") or f"document_{doc_id}"

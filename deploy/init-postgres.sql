@@ -518,12 +518,27 @@ CREATE TABLE IF NOT EXISTS documents (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     summary TEXT,
-    uuid TEXT UNIQUE
+    uuid TEXT UNIQUE,
+    -- 外部内容源（微信公众号等）扩展列（设计 §7.1；默认值即等价现状，存量数据无需回填）
+    origin VARCHAR(32) NOT NULL DEFAULT 'manual_upload',
+    external_id TEXT,
+    status VARCHAR(16) NOT NULL DEFAULT 'active',
+    expires_at TIMESTAMP
 );
+
+-- 旧表迁移兜底（CREATE TABLE IF NOT EXISTS 不会更新已存在的表）
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS origin VARCHAR(32) NOT NULL DEFAULT 'manual_upload';
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS external_id TEXT;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS status VARCHAR(16) NOT NULL DEFAULT 'active';
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS expires_at TIMESTAMP;
 
 CREATE INDEX IF NOT EXISTS idx_documents_user ON documents(user_id);
 CREATE INDEX IF NOT EXISTS idx_documents_tenant ON documents(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_documents_sub_category ON documents(tenant_id, sub_category);
+-- 外部内容源：来源身份去重（部分唯一）与检索过滤（active/未过期）
+CREATE UNIQUE INDEX IF NOT EXISTS uq_documents_origin_external
+    ON documents(tenant_id, origin, external_id) WHERE external_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS ix_documents_status ON documents(status, expires_at);
 
 -- 文本块表
 CREATE TABLE IF NOT EXISTS chunks (
@@ -706,6 +721,12 @@ CREATE INDEX IF NOT EXISTS idx_tenant_channel_configs_tenant ON tenant_channel_c
 CREATE UNIQUE INDEX IF NOT EXISTS uq_tenant_channel_configs_wecom_personal_rpa
     ON tenant_channel_configs(tenant_id, channel_type)
     WHERE channel_type = 'wecom_personal_rpa';
+
+-- wechat_mp 渠道（公众号内容入知识库 WP4）：同租户同 appid 唯一（设计 §4）
+-- config 为 TEXT 列，jsonb 取值需显式 ::jsonb 转换
+CREATE UNIQUE INDEX IF NOT EXISTS uq_tenant_channel_configs_wechat_mp_appid
+    ON tenant_channel_configs(tenant_id, ((config::jsonb)->>'appid'))
+    WHERE channel_type = 'wechat_mp';
 
 -- 支付订单表
 CREATE TABLE IF NOT EXISTS payment_orders (
@@ -2486,3 +2507,110 @@ CREATE TABLE IF NOT EXISTS session_task_notifications (
     UNIQUE (tenant_id, task_id, control_epoch),
     FOREIGN KEY (tenant_id, task_id) REFERENCES session_tasks (tenant_id, id) ON DELETE CASCADE
 );
+
+-- ============================================================================
+-- 微信公众号内容入知识库（bs_ 业务表；src/wechat_mp/db.py 同源，设计 §8 二审定稿）
+-- 队列语义：sync_runs + sync_items 即执行队列；受理即建 queued run + pending items；
+-- articles 只维护文章当前状态；events 是回调收件箱（先落库再返回 success）。
+-- ============================================================================
+
+-- 文章当前状态（唯一当前态记录）
+CREATE TABLE IF NOT EXISTS bs_wechat_mp_articles (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    config_id TEXT,                          -- 可空：手动粘贴无配置
+    external_id TEXT NOT NULL,               -- 规范身份（设计 §5.4）
+    original_url TEXT,
+    fetch_url TEXT,
+    source_channel VARCHAR(16) NOT NULL,     -- callback/manual/freepublish
+    title TEXT,
+    publish_time TIMESTAMP,
+    wx_update_time TIMESTAMP,
+    content_hash VARCHAR(64),
+    doc_id INTEGER,                          -- 关联 documents.id
+    sub_category VARCHAR(64),
+    tags JSONB,
+    status VARCHAR(16) NOT NULL DEFAULT 'active',   -- active/missing/deleted/alias/unconfirmed
+    master_article_row_id BIGINT,            -- alias 行指向主记录
+    processing_status VARCHAR(16) DEFAULT 'pending',-- pending/success/sync_failed/deferred
+    pipeline_version TEXT,
+    next_retry_at TIMESTAMP,                 -- 失败退避
+    error_message TEXT,                      -- 最近一次失败原因（脱敏后）
+    image_count INT DEFAULT 0,
+    image_parsed_count INT DEFAULT 0,
+    last_synced_at TIMESTAMP,
+    last_checked_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT now(),
+    UNIQUE(tenant_id, external_id)
+);
+CREATE INDEX IF NOT EXISTS idx_bs_wechat_mp_articles_retry
+    ON bs_wechat_mp_articles(tenant_id, processing_status, next_retry_at);
+
+-- 回调事件收件箱（可靠接收：先落库再返回 success）
+CREATE TABLE IF NOT EXISTS bs_wechat_mp_events (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    config_id TEXT NOT NULL,
+    event_key TEXT NOT NULL,                 -- MsgID+Event 等幂等键
+    run_id BIGINT,                           -- 关联受理批次
+    payload JSONB,
+    status VARCHAR(16) NOT NULL DEFAULT 'pending',  -- pending/done/failed
+    received_at TIMESTAMP DEFAULT now(),
+    processed_at TIMESTAMP,
+    error_message TEXT,
+    UNIQUE(tenant_id, config_id, event_key)  -- 组合键，跨配置不碰撞
+);
+CREATE INDEX IF NOT EXISTS idx_bs_wechat_mp_events_status
+    ON bs_wechat_mp_events(status, received_at);
+
+-- 同步运行账本 + 执行队列（queued→running→终态；受理即建 queued run 与 pending items）
+CREATE TABLE IF NOT EXISTS bs_wechat_mp_sync_runs (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    config_id TEXT,
+    user_id TEXT,                            -- 操作者；后台触发可空
+    created_at TIMESTAMP DEFAULT now(),
+    agent_id TEXT,
+    session_id TEXT,                         -- agent 触发时记录可信运行时身份；不保存对话正文
+    owner_token TEXT,
+    heartbeat_at TIMESTAMP,
+    trigger_type VARCHAR(16) NOT NULL,       -- callback/scheduled/manual/agent/retry/recheck
+    status VARCHAR(32) NOT NULL,             -- queued/running/success/partial_failed/skipped_no_credit/failed/interrupted
+    total_count INT,
+    new_count INT,
+    updated_count INT,
+    deleted_count INT,
+    skipped_count INT,
+    failed_count INT,
+    credits_charged NUMERIC(12,2) DEFAULT 0,
+    error_message TEXT,
+    started_at TIMESTAMP,
+    completed_at TIMESTAMP
+);
+-- 租户级串行：每租户至多一条 running（与 Redis 锁同粒度）；queued 不限条数，受理即排队
+CREATE UNIQUE INDEX IF NOT EXISTS uq_wechat_mp_runs_active
+    ON bs_wechat_mp_sync_runs(tenant_id) WHERE status = 'running';
+CREATE INDEX IF NOT EXISTS idx_bs_wechat_mp_sync_runs_tenant_created
+    ON bs_wechat_mp_sync_runs(tenant_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS bs_wechat_mp_sync_items (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT,
+    created_at TIMESTAMP DEFAULT now(),
+    run_id BIGINT NOT NULL,
+    article_row_id BIGINT NOT NULL,          -- 归属文章当前态记录
+    action TEXT,                             -- new/update/delete/restore/check
+    status TEXT,                             -- pending/running/success/failed/skipped/deferred/interrupted
+    error_code TEXT,                         -- 固定原因码，不混存记录 ID
+    duplicate_of_item_id BIGINT,             -- 同批次别名重复项关联主 item（status='skipped' 时）
+    error_message TEXT,
+    started_at TIMESTAMP,
+    completed_at TIMESTAMP,
+    billing_status TEXT DEFAULT 'pending',   -- pending/charged/failed/unknown/not_required
+    billing_reference TEXT,
+    credits_charged NUMERIC(12,2) DEFAULT 0,
+    UNIQUE(tenant_id, run_id, article_row_id)
+);
+CREATE INDEX IF NOT EXISTS idx_bs_wechat_mp_sync_items_run
+    ON bs_wechat_mp_sync_items(tenant_id, run_id);

@@ -41,6 +41,7 @@
 ## 4. 检查清单（新增/修改检索入口必查）
 
 - [ ] 检索 SQL / retriever 是否只按本租户过滤？（必须支持共享）
+- [ ] 候选 SQL 是否带文档可见性过滤 `build_active_document_condition()`（`tenant_range.py`，status='active' 且未过期，排序/LIMIT 前）？核心检索（vector_db/hybrid_retriever）已内置；新增直接 SQL 检索入口必须复用
 - [ ] `subagent_id` 是否从 `current_tool_execution_context()` 读取？
 - [ ] 共享范围是否经 `load_shared_ranges` 从 DB 读取（不信任 LLM/前端）？
 - [ ] 主智能体（`subagent_id` 为空）是否退化为本租户？

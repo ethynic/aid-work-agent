@@ -9,7 +9,10 @@ from typing import List, Dict, Tuple, Optional, Any
 from loguru import logger
 
 from src.db.database import get_pooled_connection, return_pooled_connection
-from src.knowledge.retriever.tenant_range import build_tenant_range_conditions
+from src.knowledge.retriever.tenant_range import (
+    build_active_document_condition,
+    build_tenant_range_conditions,
+)
 import psycopg2.extras
 
 
@@ -310,18 +313,21 @@ class HybridRetriever:
                     sub_cat_sql = " AND d.sub_category = ANY(%s)"
                     params.append(sub_categories)
                 params.append(top_k)
+                # range_sql 为 OR 组合，必须整体加括号后再 AND 可见性条件，
+                # 否则可见性只约束最后一个 OR 分支（本租户 deleted 文档会泄漏）
                 cursor.execute(f"""
                     SELECT c.id, ts_rank(c.text_vec, plainto_tsquery(%s)) as score
                     FROM chunks c
                     JOIN documents d ON c.doc_id = d.id
                     WHERE c.text_vec @@ plainto_tsquery(%s)
-                      AND {range_sql}{sub_cat_sql}
+                      AND ({range_sql}){sub_cat_sql}
+                      AND {build_active_document_condition("d")}
                     ORDER BY score DESC
                     LIMIT %s
                 """, params)
             elif global_view:
                 # 平台管理员全局视图（tenant_id 为 None）：跨租户检索，
-                # 不携带任何租户收窄条件（无租户参数）
+                # 不携带任何租户收窄条件（无租户参数）；软删除/过期文档仍不可见
                 source_type_condition = " AND d.source_type = %s" if source_type else ""
                 params = [processed_query, processed_query]
                 if source_type:
@@ -332,6 +338,7 @@ class HybridRetriever:
                     FROM chunks c
                     JOIN documents d ON c.doc_id = d.id
                     WHERE c.text_vec @@ plainto_tsquery(%s){source_type_condition}
+                      AND {build_active_document_condition("d")}
                     ORDER BY score DESC
                     LIMIT %s
                 """, params)
@@ -348,6 +355,7 @@ class HybridRetriever:
                     JOIN documents d ON c.doc_id = d.id
                     WHERE c.text_vec @@ plainto_tsquery(%s)
                       AND d.tenant_id IS NULL{source_type_condition}
+                      AND {build_active_document_condition("d")}
                     ORDER BY score DESC
                     LIMIT %s
                 """, params)

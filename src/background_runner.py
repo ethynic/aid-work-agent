@@ -4,6 +4,7 @@
 - APScheduler（系统任务 + 用户定时任务 + reconcile 对账），在其后台线程跑
 - wecom_personal_rpa 服务端会话存档兜底轮询（asyncio 兄弟任务，内部自带 Redis 锁）
 - recap 轮后任务消费者（API worker 入队 Redis，本进程执行，与 HTTP worker 重启解耦）
+- wechat_mp 队列驱动 + 定时复核调度（WP7，asyncio 兄弟任务，内部自带单副本 Redis 锁）
 - 心跳文件（供 healthcheck 判活）
 
 不启 FastAPI，不 import master_agent（由各回调懒加载）。
@@ -185,17 +186,36 @@ async def _run():
     # 4. recap 任务消费者（API worker 入队 Redis、本进程执行，与 HTTP worker
     # 重启解耦；多副本下 LPOP 天然单消费者，配 RECAP_TASK_DEDUP 双保险）
     asyncio.create_task(_recap_consumer())
+
+    # 5. wechat_mp 队列驱动 + 定时复核（WP7；单副本 Redis 锁，抢不到/Redis 不可用
+    # 时不启动；对齐 poller 模式 try/except，启动失败不影响 runner）
+    _wmp_scheduler = None
+    try:
+        from src.wechat_mp.scheduler import WeChatMPScheduler
+
+        _wmp_scheduler = WeChatMPScheduler()
+        await _wmp_scheduler.start()
+    except Exception as e:
+        logger.opt(exception=True).error(
+            f"background runner: wechat_mp scheduler 启动失败（不影响 runner）: {e}",
+        )
     logger.info("background runner 就绪")
 
     await _stop.wait()
     logger.info("background runner 收到停止信号，开始优雅停机")
 
-    # 停机：poller → scheduler → DB 池
+    # 停机：poller → wechat_mp scheduler → scheduler → DB 池
     try:
         if _poller is not None:
             await _poller.stop()
     except Exception as e:
         logger.warning(f"background runner: poller stop 异常: {e}")
+
+    try:
+        if _wmp_scheduler is not None:
+            await _wmp_scheduler.stop()
+    except Exception as e:
+        logger.opt(exception=True).error(f"background runner: wechat_mp scheduler stop error: {e}")
 
     try:
         scheduled_task_manager.shutdown()

@@ -1101,6 +1101,20 @@ def _init_postgresql():
             except Exception as rollback_err:
                 logger.warning(f"Failed to rollback weixin_conversation transaction: {rollback_err}")
 
+        # 微信公众号内容入知识库表（documents 加 origin/external_id/status/expires_at
+        # + bs_wechat_mp_articles/events/sync_runs/sync_items 四张业务表，幂等 DDL；
+        # 与 deploy/init-postgres.sql / deploy/db_update.yaml 三处同步）
+        try:
+            from src.wechat_mp.db import init_wechat_mp_tables
+            init_wechat_mp_tables(conn)
+        except Exception as e:
+            # error 级：进 error_log_sink 落 log_error 表，运营可查（后续 _apply_db_updates 会重放同批次兜底）
+            logger.error(f"Failed to initialize wechat_mp tables: {e}")
+            try:
+                conn.rollback()
+            except Exception as rollback_err:
+                logger.warning(f"Failed to rollback wechat_mp transaction: {rollback_err}")
+
         # Skill 表初始化由 SkillLoader._init_skill_tables() 统一处理，
         # 通过 SKILL.md 中的 init_script 字段声明，不再硬编码。
 

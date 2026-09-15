@@ -17,6 +17,7 @@
 
 import base64
 import hashlib
+import hmac
 import os
 import struct
 from typing import Tuple
@@ -69,7 +70,8 @@ class WeComCrypto:
         items.sort()
         combined = "".join(items)
         calculated = hashlib.sha1(combined.encode("utf-8")).hexdigest()
-        return calculated == signature
+        # hmac.compare_digest 防时序攻击（与 wechat_mp 回调验签对齐）
+        return hmac.compare_digest(calculated, signature)
 
     def decrypt(self, encrypted_text: str) -> str:
         """

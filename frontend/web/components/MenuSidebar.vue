@@ -972,6 +972,8 @@ const connectionSubMenuItems = computed(() => {
     { path: `${base}/connections`, label: 'API配置', icon: 'M9 7V3M15 7V3M9 21v-4M15 21v-4M5 12H3M21 12h-2M7 9h10a2 2 0 012 2v2a2 2 0 01-2 2H7a2 2 0 01-2-2v-2a2 2 0 012-2z', adminOnly: true },
     // 渠道配置：信号波
     { path: `${base}/channels`, label: '渠道配置', icon: 'M5 12.55a11 11 0 0114 0M1.42 9a16 16 0 0121.16 0M8.53 16.11a6 6 0 016.95 0M12 20h.01', adminOnly: true },
+    // 公众号内容：文档/文章页
+    { path: `${base}/wechat-mp`, label: '公众号内容', icon: 'M5 4h14a1 1 0 011 1v14a1 1 0 01-1 1H5a1 1 0 01-1-1V5a1 1 0 011-1zM8 9h8M8 13h8M8 17h5', adminOnly: true },
     // 企微个人RPA：机器人
     { path: `${base}/wecom-personal-rpa`, label: '企微个人RPA', icon: 'M12 4v3M5 8h14a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2v-8a2 2 0 012-2zM9 13h.01M15 13h.01M9 17h6', adminOnly: true },
     // 本地工具：电脑
@@ -996,6 +998,7 @@ const isConnectionActive = computed(() => {
     `${base}/connections`,
     `${base}/connections/external-systems`,
     `${base}/channels`,
+    `${base}/wechat-mp`,
     `${base}/wecom-personal-rpa`,
     `${base}/local-tools`,
   ].includes(route.path)

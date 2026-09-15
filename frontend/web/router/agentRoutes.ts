@@ -22,6 +22,7 @@ export const agentRoutes: RouteRecordRaw[] = [
       { path: 'connections', name: 'tenant-connections', component: () => import('@/components/connections/ConnectionCenter.vue') },
       { path: 'connections/external-systems', name: 'tenant-external-systems', component: () => import('@/components/connections/ExternalSystems.vue') },
       { path: 'channels', name: 'tenant-channels', component: () => import('@/components/saas/ChannelConfig.vue') },
+      { path: 'wechat-mp', name: 'tenant-wechat-mp', component: () => import('@/components/saas/WechatMpContent.vue') },
       { path: 'wecom-personal-rpa', name: 'tenant-wecom-personal-rpa', component: () => import('@/components/saas/WecomPersonalRpaManager.vue') },
       { path: 'settings', name: 'tenant-settings', component: () => import('@/components/saas/TenantSettings.vue') },
       { path: 'local-tools', name: 'tenant-local-tools', component: () => import('@/components/saas/LocalToolDevices.vue') },

@@ -593,6 +593,118 @@
     CREATE INDEX IF NOT EXISTS idx_lt_inv_lane_claim
         ON local_tool_invocations (tenant_id, device_id, state, execution_lane);
 
+
+- datetime: "2026-09-14 20:42:05"
+  remark: "微信公众号内容入知识库 WP1：documents 增加 origin/external_id/status/expires_at 四列 + 唯一部分索引 uq_documents_origin_external + ix_documents_status 索引；新增 bs_wechat_mp_articles/events/sync_runs/sync_items 四张业务表（含租户级 running 部分唯一索引）。DDL 以设计 §7.1/§8 二审定稿为准，与 deploy/init-postgres.sql、src/wechat_mp/db.py 三处同步"
+  statements: |
+    ALTER TABLE documents
+        ADD COLUMN IF NOT EXISTS origin VARCHAR(32) NOT NULL DEFAULT 'manual_upload',
+        ADD COLUMN IF NOT EXISTS external_id TEXT,
+        ADD COLUMN IF NOT EXISTS status VARCHAR(16) NOT NULL DEFAULT 'active',
+        ADD COLUMN IF NOT EXISTS expires_at TIMESTAMP;
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_documents_origin_external
+        ON documents(tenant_id, origin, external_id) WHERE external_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS ix_documents_status
+        ON documents(status, expires_at);
+    CREATE TABLE IF NOT EXISTS bs_wechat_mp_articles (
+        id BIGSERIAL PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        config_id TEXT,
+        external_id TEXT NOT NULL,
+        original_url TEXT,
+        fetch_url TEXT,
+        source_channel VARCHAR(16) NOT NULL,
+        title TEXT,
+        publish_time TIMESTAMP,
+        wx_update_time TIMESTAMP,
+        content_hash VARCHAR(64),
+        doc_id INTEGER,
+        sub_category VARCHAR(64),
+        tags JSONB,
+        status VARCHAR(16) NOT NULL DEFAULT 'active',
+        master_article_row_id BIGINT,
+        processing_status VARCHAR(16) DEFAULT 'pending',
+        pipeline_version TEXT,
+        next_retry_at TIMESTAMP,
+        error_message TEXT,
+        image_count INT DEFAULT 0,
+        image_parsed_count INT DEFAULT 0,
+        last_synced_at TIMESTAMP,
+        last_checked_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT now(),
+        UNIQUE(tenant_id, external_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_bs_wechat_mp_articles_retry
+        ON bs_wechat_mp_articles(tenant_id, processing_status, next_retry_at);
+    CREATE TABLE IF NOT EXISTS bs_wechat_mp_events (
+        id BIGSERIAL PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        config_id TEXT NOT NULL,
+        event_key TEXT NOT NULL,
+        run_id BIGINT,
+        payload JSONB,
+        status VARCHAR(16) NOT NULL DEFAULT 'pending',
+        received_at TIMESTAMP DEFAULT now(),
+        processed_at TIMESTAMP,
+        error_message TEXT,
+        UNIQUE(tenant_id, config_id, event_key)
+    );
+    CREATE INDEX IF NOT EXISTS idx_bs_wechat_mp_events_status
+        ON bs_wechat_mp_events(status, received_at);
+    CREATE TABLE IF NOT EXISTS bs_wechat_mp_sync_runs (
+        id BIGSERIAL PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        config_id TEXT,
+        user_id TEXT,
+        created_at TIMESTAMP DEFAULT now(),
+        agent_id TEXT,
+        session_id TEXT,
+        owner_token TEXT,
+        heartbeat_at TIMESTAMP,
+        trigger_type VARCHAR(16) NOT NULL,
+        status VARCHAR(32) NOT NULL,
+        total_count INT,
+        new_count INT,
+        updated_count INT,
+        deleted_count INT,
+        skipped_count INT,
+        failed_count INT,
+        credits_charged NUMERIC(12,2) DEFAULT 0,
+        error_message TEXT,
+        started_at TIMESTAMP,
+        completed_at TIMESTAMP
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_wechat_mp_runs_active
+        ON bs_wechat_mp_sync_runs(tenant_id) WHERE status = 'running';
+    CREATE INDEX IF NOT EXISTS idx_bs_wechat_mp_sync_runs_tenant_created
+        ON bs_wechat_mp_sync_runs(tenant_id, created_at DESC);
+    CREATE TABLE IF NOT EXISTS bs_wechat_mp_sync_items (
+        id BIGSERIAL PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        user_id TEXT,
+        created_at TIMESTAMP DEFAULT now(),
+        run_id BIGINT NOT NULL,
+        article_row_id BIGINT NOT NULL,
+        action TEXT,
+        status TEXT,
+        error_code TEXT,
+        duplicate_of_item_id BIGINT,
+        error_message TEXT,
+        started_at TIMESTAMP,
+        completed_at TIMESTAMP,
+        billing_status TEXT DEFAULT 'pending',
+        billing_reference TEXT,
+        credits_charged NUMERIC(12,2) DEFAULT 0,
+        UNIQUE(tenant_id, run_id, article_row_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_bs_wechat_mp_sync_items_run
+        ON bs_wechat_mp_sync_items(tenant_id, run_id);
+- datetime: "2026-09-14 23:45:00"
+  remark: "tenant_channel_configs 增加 wechat_mp 同租户同 appid 部分唯一索引（公众号内容入知识库 WP4，设计 §4；config 为 TEXT 列需显式 ::jsonb 转换）"
+  statements: |
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_tenant_channel_configs_wechat_mp_appid
+        ON tenant_channel_configs(tenant_id, ((config::jsonb)->>'appid'))
+        WHERE channel_type = 'wechat_mp';
 - datetime: "2026-09-15 12:00:00"
   remark: "C3 持久化模型结果与独立计费恢复"
   statements: |

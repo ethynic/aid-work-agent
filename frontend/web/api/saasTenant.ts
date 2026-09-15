@@ -366,7 +366,15 @@ export async function getAvailableSubagents(opts?: {
   return res.json()
 }
 
-export async function verifyChannel(configId: string): Promise<{ success: boolean; message?: string; verified?: boolean }> {
+export async function verifyChannel(configId: string): Promise<{
+  success: boolean
+  message?: string
+  verified?: boolean
+  config_verified_at?: string | null
+  last_event_at?: string | null
+  last_error?: string | null
+  callback_url?: string
+}> {
   const res = await fetch(`${API_BASE}/channels/${configId}/verify`, {
     method: 'POST',
     headers: getSaasAuthHeader()
@@ -394,6 +402,24 @@ export async function generateChannelKeypair(configId: string): Promise<{
     headers: { 'Content-Type': 'application/json', ...getSaasAuthHeader() },
   })
   if (!res.ok) throw new Error('生成密钥对失败')
+  return res.json()
+}
+
+/**
+ * 重置 wechat_mp 渠道回调 Token（密钥轮换）。
+ * 新 token 明文仅此一次返回；轮换后需在公众平台后台同步更新 Token 并重新保存。
+ */
+export async function rotateWechatMpToken(configId: string): Promise<{
+  success: boolean
+  callback_token_plaintext?: string
+  callback_url?: string
+  message?: string
+}> {
+  const res = await fetch(`${API_BASE}/channels/${configId}/rotate-wechat-mp-token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getSaasAuthHeader() },
+  })
+  if (!res.ok) throw new Error('Token 轮换失败')
   return res.json()
 }
 

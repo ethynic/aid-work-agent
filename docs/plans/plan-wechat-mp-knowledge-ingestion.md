@@ -29,7 +29,7 @@
 - 产出：清单适配器契约（账号标识 + URL + 标题 + 发布时间 + 分页游标 + 完成状态）+ 接入/不接入结论 + AGPL 与风控评估记录。实验报告落 `docs/research/wechat-mp/`。
 - 门禁：实验未完成前，对外不承诺"历史文章自动导入"能力。
 
-### WP1 [ ] 数据库 schema（依赖：无）
+### WP1 [x] 数据库 schema（依赖：无）——2026-09-14 完成（开发+独立测试+独立 CR 三智能体通过；并发专项含"running 时连续受理 queued""并发领取唯一成功"真实 PG 实证；CR 无 P0/P1，P2×2 已修：init 失败升 error 级、external_id TEXT 选型注释闭环；遗留 P2×2：unit 目录真实 DB 测试静默 skip、启动期 no-op DDL 取锁——登记后续）
 
 - `documents` 加列：origin / external_id TEXT / status / expires_at + 唯一部分索引 `(tenant_id, origin, external_id)` + `(status, expires_at)` 索引。
 - 四张 bs_ 表（结构与队列语义以设计 §8 二审定稿为准；DDL 三处同步：db_update.yaml 新批次 + init-postgres.sql + `src/wechat_mp/db.py` 幂等；登记 database_system_table.md）：
@@ -39,11 +39,11 @@
   - `bs_wechat_mp_sync_items`：批次内逐篇任务（pending/running/终态 + billing_status）
 - 空库/存量/重复执行验证；先迁移后部署依赖新列代码。
 
-### WP2 [ ] 知识库过滤与外部文档边界（依赖 WP1）
+### WP2 [x] 知识库过滤与外部文档边界（依赖 WP1）——2026-09-14 完成（三智能体：独立测试抓 P1 下载接口跨租户探测泄漏已修；CR 3 个 P2 已修：票据流补 role、分类计数过滤 deleted、knowledge_base_tool OR 括号残留；终跑 75 passed；前置失败 5+3 经 stash 双向对照证实与本改动无关）
 
 同前版：检索三分支 LIMIT 前过滤 active+未过期；列表/计数同条件；include_deleted 仅 platform_admin；外部文档禁编辑/移动/物理删（含批量）；无 file_path 禁下载给原文 URL；知识库现有套件回归全绿。
 
-### WP3 [ ] URL 直采管道（fetcher.py + content.py + identity.py，依赖 WP1）
+### WP3 [x] URL 直采管道（fetcher.py + content.py + identity.py，依赖 WP1）——2026-09-14 开发完成；独立测试（40 探针）+ 独立 CR 完成，CR 结论"需修复后交付"的 2 P1 + 5 P2 已全部修复，137 单测全绿
 
 - **首任务：沉淀测试夹具**——用 WP0 实测 URL 重新抓取真实页面存 `tests/fixtures/wechat_mp/`（当前工作区尚无该目录，不得以"已有夹具"声明）。
 - URL 规范化与身份（identity.py）：实现设计 §5.4 算法 + 别名解析；非法/非 mp 域拒收。
@@ -52,7 +52,7 @@
 - **删除/异常多信号判定**：专用错误页 DOM 结构 + js_content 缺失 + 删除文案共同命中才判 deleted；验证页/限流/网络/解析失败 → fetch_failed / risk_blocked，进入退避重试队列（articles.next_retry_at），绝不误判删除。
 - 单测：夹具提取、同文不同链撞键、跟踪参数剔除、三类异常页、SSRF 拦截。
 
-### WP4 [ ] 回调产品化（callback.py 重写 + 配置引导，依赖 WP1/WP3）
+### WP4 [x] 回调产品化——2026-09-14 完成（三智能体：独立测试 P0「config TEXT 列 jsonb 操作符致创建必 500」与 CR P0「RPA 兼容壳漏 re-export 致存档 poller 失效」均已修；P1×2（db.py 索引同步、update 回填）+P2 同批修复；终跑 540 passed；AES 真实算法端到端自测、密钥轮换、三态、排队受理三件套真实 PG 实证）
 
 - `/api/wechat-mp/callback/{config_id}`：每配置独立 token + EncodingAESKey（渠道配置 JSON 存储，AESKey 按敏感字段加密）；支持明文+安全模式（WXBizMsgCrypt 解密 + msg_signature 校验）；绑定校验：事件 ToUserName（gh_xxx）与配置记录的公众号身份一致才受理。
 - **可靠接收**：验签 → **同事务写 events（pending）+ queued run + pending items 三件套** → 返回 success → 后台领取；DB 不可用返回 500 让微信重试；event_key 幂等去重；恢复扫描 pending 事件。其他事件类型记录日志不处理，恒 success。
@@ -61,7 +61,7 @@
 - 密钥轮换：重置 token/AESKey 使旧配置失效并记录版本。
 - 单测：验签/AES、事件解析（多子篇）、幂等键、DB 故障返回 500、身份不符拒收、恢复扫描。
 
-### WP5 [ ] 统一入库 service（service.py，依赖 WP1~WP3）
+### WP5 [x] 统一入库 service（service.py，依赖 WP1~WP3）——2026-09-15 完成（接手前开发已完成；本日补齐三智能体：独立测试全绿+启动安全、补 restore/失锁 2 探针；CR 1 P1 已修——纯图门禁占位符残留击穿 MIN_TEXT_CHARS 致纯图文章误入库计费，改正则整段剔除占位符+回归测试；顺手修 events 置 done 补 tenant_id；6 项遗留逐项定性：restore/check 计入 skipped_count 设计内、sub_category 重置 P3 分类上线时必改、master 行不存在防御与 balance_reason 登记）
 
 - `process_url()`：规范化定身份 → 抓取提取（必须先抓页面，删除多信号判定）→ content_hash → 与已成功版本比对，相同记 check 跳过 embedding → 不同则拼正文 → chunk → embed → 单事务落三表（更新走 doc_id 快路径）→ 文章/run-item 同事务。
 - **队列与归属（二审修订）**：受理即同事务建 queued run + pending items；events 关联 run_id；articles 只承载文章当前状态，不冒充队列。worker 按租户串行领取 queued run（事务内 queued→running）；恢复扫描 queued/stale running run 与 pending events/items。两个批次含同一 URL：各有独立 run/item 分别收尾，后处理者 hash 未变记 check；事件在其 run 全部 item 终态后由 worker 置 done。
@@ -70,19 +70,19 @@
 - 分类惰性创建 + 售前挂接（master 实现等价 append_own_source；无售前实例记录待挂接原因）。
 - 计费：embedding source_type='wechat_mp_embedding'；业务先提交计费后提交；unknown 不重扣；余额预检+单元复查；删除复核不受余额阻断。
 
-### WP6 [ ] 手动粘贴入口 + API + 页面（依赖 WP5）
+### WP6 [x] 手动粘贴入口 + API + 页面（依赖 WP5）——2026-09-15 完成（三智能体：独立测试 227→228 passed + 44 项真实 PG 鉴权/隔离/限流探针 + 前端 build；CR 2 P1 已修——①pending 去重未限定活跃 run，孤儿 item 永久压制明确刷新请求，去重 join queued/running + 回归测试；②前端 URL 校验只放行短链，长链在 UI 永远无法导入，对齐后端口径；P2 登记：platform_admin 无 X-Tenant-Id 契约（WP7 已修为 400）、retry/recheck 限流统一与限流原子性（WP7 已修）、require_admin 放行 role='user' 属全局约定另立任务）
 
 - `POST /api/saas/wechat-mp/import-urls`（≤50 条，域名校验）→ 排队（run trigger_type=manual）→ 返回 run_id + 排队语义说明。
 - 管理端点：runs / runs/{id}（含 items）/ articles / retry / recheck；require_admin + 租户隔离；error 脱敏白名单。
 - 前端：租户「公众号内容」页（配置引导三态、粘贴导入、运行状态、文章列表/失败原因）；portal 跨租户页。复用 Base* 组件。
 
-### WP7 [ ] 定时复核与队列驱动（scheduler.py，依赖 WP5）
+### WP7 [x] 定时复核与队列驱动（scheduler.py，依赖 WP5）——2026-09-15 完成（三智能体：独立测试 248 passed + 时区口径/幂等/限流原子性/驱动循环真实 PG 探针，并修 1 处驱动锁同步 Redis 调用阻塞事件循环；CR 1 P1 已修——recheck item 遭 retry 受理翻转 processing_status 后落付费重建多扣一次 embedding，hash 快路径对 action='check' 豁免 status 条件（hash 与成功版本同事务原子写入，安全）+ 判别验证回归测试；驱动锁 TTL 300s 迭代间续期定性 P2 可接受——租户 Redis 锁+running 唯一约束双闸兜底；时区口径自洽（next_retry_at UTC naive/last_checked_at 会话 now()，读写同约定）登记长期统一 UTC）
 
 - **队列即时驱动（二审修订）**：受理持久化成功后**立即通知 worker 领取**（进程内唤醒/Redis 通知，尽力而为）；另有短周期（1min）扫描兜底。通知丢失不丢任务——DB 队列是唯一事实来源。
 - 30min tick 只负责生成**到期任务**：①失败退避到期（next_retry_at）重试入队；②存量 active 文章存活复核（默认 24h/篇，限速，复核任务同样走队列）；③复核中 hash 变化 → 更新入库。
 - 租户级 Redis 锁 + owner/heartbeat/续租 + DB running 唯一第二道闸；Redis 故障拒绝启动；stale run 回收 interrupted；有限并发执行器。
 
-### WP8 [ ] 智能体工具 + 售前闭环（依赖 WP5/WP6）
+### WP8 [x] 智能体工具 + 售前闭环（依赖 WP5/WP6）——2026-09-15 完成（三智能体：独立测试 263 passed + 薄工具纪律/身份可信/租户隔离/口径独立探针；CR 1 P1 已修——async execute 直调同步 service 违反假异步规范阻塞事件循环，3 处调用点 asyncio.to_thread 包裹；部署待办：售前子智能体 allowed_tools 增补 wechat_mp_sync/wechat_mp_sync_status，真机验收（测试矩阵末行）留待部署后实收）
 
 - 薄工具 `wechat_mp_sync` / `wechat_mp_sync_status`：粘贴 URL 或触发复核；返回 run_id + 排队状态；身份取可信执行上下文；工具授权机制管理。
 - 口径：只承诺"已提交获取/刷新"，不宣称发现最新；运行中/失败如实说明；完成后走 knowledge_base_search。
