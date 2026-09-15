@@ -106,7 +106,11 @@
           <template #actions="{ row }">
             <div class="flex justify-center gap-1">
               <BaseButton intent="ghost" size="sm" @click="openEditDialog(row)">编辑</BaseButton>
-              <BaseButton intent="danger-ghost" size="sm" @click="handleDelete(row)">删除</BaseButton>
+              <BaseButton
+                :intent="row.status === TenantStatus.DEACTIVATED ? 'danger' : 'danger-ghost'"
+                size="sm"
+                @click="handleDelete(row)"
+              >{{ row.status === TenantStatus.DEACTIVATED ? '彻底删除' : '删除' }}</BaseButton>
             </div>
           </template>
           <template #empty>暂无租户数据</template>
@@ -1241,7 +1245,11 @@ async function handleSubmit() {
 }
 
 async function handleDelete(tenant: any) {
-  if (!confirm(`确定要删除租户 "${tenant.company_name}" 吗？删除后将无法恢复。`)) return
+  const isPurge = tenant.status === TenantStatus.DEACTIVATED
+  const tip = isPurge
+    ? `该租户已处于"已删除"状态。\n\n确定要彻底删除 "${tenant.company_name}" 吗？将物理删除其账号、订阅、授权等核心数据及附件目录，此操作不可恢复；其余历史数据将由夜间清理任务删除。`
+    : `确定要删除租户 "${tenant.company_name}" 吗？删除后将无法恢复。`
+  if (!confirm(tip)) return
   try {
     await deleteTenant(tenant.tenant_id)
     await clientRefresh()

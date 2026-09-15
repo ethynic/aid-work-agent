@@ -8,19 +8,21 @@ SaaS 企业信息管理 API
 - 租户增删改查（仅平台管理员）
 """
 
-from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Form
-from pydantic import BaseModel, Field
-from typing import Optional
-from datetime import datetime
-from loguru import logger
+import asyncio
 import os
 import re
 import tempfile
+from datetime import datetime
+from typing import Optional
+
+from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Form
+from loguru import logger
+from pydantic import BaseModel, Field
 
 from src.saas.api.tenant_auth import require_admin
 from src.saas.db.tenant_db import TenantDB
 from src.saas.db.subscription_db import SubscriptionDB
-from src.saas.models.enums import BehaviorAction, BehaviorResourceType
+from src.saas.models.enums import BehaviorAction, BehaviorResourceType, TenantStatus
 from src.saas.services.renewal import enrich_tenants_with_renewal
 from src.services.behavior_log import audit_action
 from src.saas.models.tenant import TenantCreate, TenantUpdate
@@ -334,7 +336,11 @@ async def update_tenant(request: Request, tenant_id: str, body: TenantUpdate):
 @router.delete("/{tenant_id}")
 @audit_action(BehaviorAction.DELETE, BehaviorResourceType.TENANT, id_arg="tenant_id")
 async def delete_tenant(request: Request, tenant_id: str):
-    """删除租户（仅平台管理员）"""
+    """删除租户（仅平台管理员）
+
+    - 正常租户：软删除（status -> deactivated）
+    - 已删除（deactivated）租户：物理删除核心数据（彻底删除）
+    """
     admin = require_admin(request)
     if admin.get("role") != "platform_admin":
         return {"success": False, "error": "权限不足", "debug": "Not platform_admin"}
@@ -342,6 +348,19 @@ async def delete_tenant(request: Request, tenant_id: str):
     existing = TenantDB.get_by_id(tenant_id)
     if not existing:
         return {"success": False, "error": "租户不存在", "debug": f"Tenant {tenant_id} not found"}
+
+    # 已删除租户的二次删除 -> 彻底删除（物理删除核心数据，剩余历史数据由夜间孤儿清理兜底）
+    if existing.get("status") == TenantStatus.DEACTIVATED.value:
+        try:
+            from src.saas.services.tenant_purge import purge_tenant_core
+            result = await asyncio.to_thread(purge_tenant_core, tenant_id)
+            if not result["success"]:
+                return {"success": False, "error": "彻底删除失败", "debug": sanitize_error_info(result.get("error", ""))}
+            logger.info(f"租户彻底删除成功: {tenant_id} by admin {admin['user_id']}, deleted={result['deleted']}")
+            return {"success": True, "message": "彻底删除成功：核心数据已物理删除，历史数据将由夜间清理任务删除"}
+        except Exception as e:
+            logger.opt(exception=True).error(f"租户彻底删除异常: {tenant_id}: {e}")
+            return {"success": False, "error": "彻底删除失败", "debug": sanitize_error_info(str(e))}
 
     try:
         success = TenantDB.delete(tenant_id)

@@ -270,6 +270,23 @@ class ScheduledTaskManager:
         except Exception as e:
             logger.error(f"后端日志：注册用户行为日志清理任务失败: {e}")
 
+        # ===== 已删除租户夜间清理（每日 04:30）=====
+        # 1) status=deactivated 且 updated_at 超 tenant_purge retention 天数的租户 -> 物理删除核心数据
+        # 2) 动态扫描所有含 tenant_id / to_tenant_id 列的表，分批删除孤儿数据（租户行已不存在）
+        # 3) 清理 storage/tenants/ 下租户行已不存在的附件目录
+        try:
+            self._scheduler.add_job(
+                self._run_tenant_purge,
+                CronTrigger(hour=4, minute=30, timezone="Asia/Shanghai"),
+                id="job_system_tenant_purge",
+                name="Tenant Purge",
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info("后端日志：已注册已删除租户夜间清理任务 (cron=04:30)")
+        except Exception as e:
+            logger.error(f"后端日志：注册已删除租户夜间清理任务失败: {e}")
+
         # ===== weixin_marketing 调度闭环（R42 门控：enabled=false 零注册；R44 四类 tick）=====
         # tick 函数与 APScheduler 解耦（src/weixin_marketing/dispatch.py，可直接注入
         # now/batch/config 调用）；interval 从 weixin_marketing 配置节读取（热改 yaml
@@ -539,6 +556,29 @@ class ScheduledTaskManager:
             )
         except Exception as e:
             logger.opt(exception=True).error(f"后端日志：Channel dedup cleanup error: {e}")
+
+    # ===== 已删除租户夜间清理回调（同步）=====
+    def _run_tenant_purge(self):
+        """物理删除超期已删除租户 + 清理孤儿数据/附件目录（APScheduler 回调）。
+
+        实现见 src/saas/services/tenant_purge.py；保留天数固定 7 天。
+        """
+        try:
+            from src.saas.services.tenant_purge import (
+                cleanup_orphan_storage_dirs,
+                purge_expired_deleted_tenants,
+                purge_orphan_data,
+            )
+
+            purged = purge_expired_deleted_tenants(days=7)
+            orphans = purge_orphan_data()
+            dirs = cleanup_orphan_storage_dirs()
+            logger.info(
+                f"后端日志：已删除租户夜间清理完成: purged_tenants={len(purged)}, "
+                f"orphan_tables={len(orphans)}, removed_dirs={len(dirs)}"
+            )
+        except Exception as e:
+            logger.opt(exception=True).error(f"后端日志：已删除租户夜间清理异常: {e}")
 
     # ===== skill_ws 残留清理回调（同步）=====
     def _run_skill_ws_cleanup(self):
