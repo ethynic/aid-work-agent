@@ -26,6 +26,14 @@
   （next_retry_at/last_checked_at 由 worker 处理时更新；run 若中断，到期条件
   依旧成立，下一 tick 自动重新生成——中断可恢复）。
   单 tick 每租户上限：重试 50 / 复核 20（限速），超出留到下轮。
+- **30min tick 第③生成器（WP9 接口通道定时对账）**：扫描 tenant_channel_configs
+  中 channel_type='wechat_mp' 且 verified=1、config（TEXT 列，jsonb 取值显式
+  ::jsonb 转换）内 enabled 且 appid/secret 均非空的配置，当该 (tenant_id,
+  config_id) 最近一条 trigger_type='scheduled' 的 run 的 created_at 早于
+  now()-sync_interval_hours（config 字段，默认 6，解析容错）或不存在、且该配置
+  无 queued/running 的 scheduled run 时 → 同事务建 queued run（无 items，
+  config_id 落值；worker 对账 batchget 后按 diff 建 items）。到期判定用
+  「最近尝试时间」=run created_at——失败 run 终态后随周期自然重试（退避语义）。
 - **stale 回收**：每 5min 调 service.recover_stale_runs()（周期短于 tick）。
 - **stop()**：置停机事件 → 驱动协程退出 → 释放锁；不强行中断进行中的
   claim_and_run（宽限期后取消，由 service 内部锁与 heartbeat 保证可恢复）。
@@ -36,6 +44,7 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
+from datetime import timedelta
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
@@ -57,6 +66,9 @@ TENANT_CONCURRENCY = 4  # 跨租户领取有限并发（Semaphore）
 RETRY_TICK_LIMIT = 50  # 每 tick 每租户重试入队上限（超出留到下轮）
 RECHECK_TICK_LIMIT = 20  # 每 tick 每租户复核入队上限（限速）
 RECHECK_INTERVAL_HOURS = 24  # 存活复核间隔（每篇）
+SCHEDULED_TICK_LIMIT = 100  # 每 tick 定时对账 run 生成上限（配置量异常时的护栏）
+SCHEDULED_DEFAULT_INTERVAL_HOURS = 6  # sync_interval_hours 缺失/非法时的默认对账周期
+SCHEDULED_MAX_INTERVAL_HOURS = 24 * 365  # sync_interval_hours 上限护栏（防溢出 timedelta）
 
 # 重试到期条件（含 no_credit 退避保持的 pending 与失败退避的 sync_failed）。
 # next_retry_at 由 service 以 Python UTC naive 写入，读取统一按 UTC 渲染比较，
@@ -234,7 +246,11 @@ class WeChatMPScheduler:
 
                 if now >= next_tick_at:
                     tick = await asyncio.to_thread(self._run_tick)
-                    if tick.get("retry_enqueued") or tick.get("recheck_enqueued"):
+                    if (
+                        tick.get("retry_enqueued")
+                        or tick.get("recheck_enqueued")
+                        or tick.get("scheduled_enqueued")
+                    ):
                         self._claim_requested = True  # 有新任务立即领取
                     next_tick_at = time.monotonic() + TICK_INTERVAL_SECONDS
             except asyncio.CancelledError:
@@ -336,14 +352,20 @@ class WeChatMPScheduler:
     # ==================== 30min tick：任务生成器 ====================
 
     def _run_tick(self) -> Dict[str, int]:
-        """复核/重试任务生成器（同步方法，调用方经 asyncio.to_thread 执行）。
+        """复核/重试/定时对账任务生成器（同步方法，调用方经 asyncio.to_thread 执行）。
 
         ① 重试到期入队（trigger_type='retry'，item action=NULL）
         ② 存活复核到期入队（trigger_type='recheck'，item action='check'）
+        ③ 接口通道定时对账到期入队（trigger_type='scheduled'，无 items，WP9）
         只生成任务不改文章状态；单租户异常捕获不中断其他租户。
         """
         tenants = self._list_tick_tenants()
-        result = {"tenants": len(tenants), "retry_enqueued": 0, "recheck_enqueued": 0}
+        result = {
+            "tenants": len(tenants),
+            "retry_enqueued": 0,
+            "recheck_enqueued": 0,
+            "scheduled_enqueued": 0,
+        }
         for tenant_id in tenants:
             try:
                 counts = self._tick_tenant(tenant_id)
@@ -355,10 +377,22 @@ class WeChatMPScheduler:
                 continue
             result["retry_enqueued"] += counts["retry"]
             result["recheck_enqueued"] += counts["recheck"]
-        if result["retry_enqueued"] or result["recheck_enqueued"]:
+        try:
+            result["scheduled_enqueued"] = self._tick_scheduled()
+        except Exception as e:  # noqa: BLE001 生成器异常不中断其他生成器
+            logger.opt(exception=True).error(
+                "后端日志：wechat_mp tick 定时对账生成失败: {}",
+                sanitize_error_info(str(e)),
+            )
+        if (
+            result["retry_enqueued"]
+            or result["recheck_enqueued"]
+            or result["scheduled_enqueued"]
+        ):
             logger.bind(module="wechat_mp").info(
-                "wechat_mp tick 任务生成 retry={} recheck={} tenants={}",
-                result["retry_enqueued"], result["recheck_enqueued"], result["tenants"],
+                "wechat_mp tick 任务生成 retry={} recheck={} scheduled={} tenants={}",
+                result["retry_enqueued"], result["recheck_enqueued"],
+                result["scheduled_enqueued"], result["tenants"],
             )
         return result
 
@@ -447,3 +481,143 @@ class WeChatMPScheduler:
             tenant_id, run_id, trigger_type, len(article_row_ids), action or "new",
         )
         return len(article_row_ids)
+
+    # ==================== 30min tick ③：接口通道定时对账（WP9） ====================
+
+    @staticmethod
+    def _parse_sync_interval_hours(raw: Any) -> float:
+        """sync_interval_hours 解析容错：int/float/数字字符串均可。
+
+        非法/<=0/NaN/inf/超大值 → 回落默认 6（NaN 比较恒 False、inf/超大值会让
+        timedelta(hours=...) 抛 OverflowError/ValueError——单个配置的坏字段不能
+        中断整个第③生成器，殃及其他配置的定时对账）。
+        """
+        try:
+            value = float(raw)
+        except (TypeError, ValueError, OverflowError):
+            return SCHEDULED_DEFAULT_INTERVAL_HOURS
+        if not (value > 0):  # NaN/0/负数统一回落（NaN 的 >0 比较恒 False）
+            return SCHEDULED_DEFAULT_INTERVAL_HOURS
+        return min(value, SCHEDULED_MAX_INTERVAL_HOURS)
+
+    def _list_wechat_mp_configs(self) -> List[Dict[str, Any]]:
+        """扫描接口通道可用的 wechat_mp 配置（verified 列=1 + config 内凭据齐备）。
+
+        config 是 TEXT 列：应用层 json.loads 后过滤（避免 SQL 内 ::jsonb 转换失败
+        与 enabled JSON 布尔->> 文本比较的歧义）；secret 存的是 Fernet 密文，
+        「非空」判断对密文同样成立，明文只在 worker 侧经解密读取。
+        """
+        import json as _json
+
+        configs: List[Dict[str, Any]] = []
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT config_id, tenant_id, config FROM tenant_channel_configs
+                WHERE channel_type = 'wechat_mp' AND verified = 1
+                ORDER BY id ASC
+                """
+            )
+            rows = cursor.fetchall()
+            for row in rows:
+                try:
+                    cfg = _json.loads(row["config"]) if row["config"] else {}
+                except (TypeError, ValueError):
+                    logger.bind(module="wechat_mp").warning(
+                        "wechat_mp scheduled 扫描跳过：config 非法 JSON config_id={}",
+                        row["config_id"],
+                    )
+                    continue
+                if not isinstance(cfg, dict) or cfg.get("enabled") is not True:
+                    continue
+                appid = str(cfg.get("appid") or "").strip()
+                secret = str(cfg.get("secret") or "").strip()
+                if not appid or not secret:
+                    continue  # 仅回调+手动粘贴通道：不参与接口通道对账
+                configs.append(
+                    {
+                        "config_id": row["config_id"],
+                        "tenant_id": row["tenant_id"],
+                        "interval_hours": self._parse_sync_interval_hours(
+                            cfg.get("sync_interval_hours")
+                        ),
+                    }
+                )
+        return configs
+
+    def _tick_scheduled(self) -> int:
+        """第③生成器：接口通道定时对账到期配置 → 同事务建 queued run（无 items）。
+
+        到期判定：「最近尝试时间」= 最近一条 trigger_type='scheduled' run 的
+        created_at（失败 run 终态后随周期自然重试）；已有 queued/running 的
+        scheduled run 时跳过（防队列堆积）。worker 对账完成后按 diff 建 items。
+        """
+        configs = self._list_wechat_mp_configs()
+        if not configs:
+            return 0
+        config_ids = [c["config_id"] for c in configs]
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                # now()::timestamp 与 created_at（TIMESTAMP 列，会话时区 naive）同口径
+                cursor.execute("SELECT now()::timestamp AS db_now")
+                db_now = cursor.fetchone()["db_now"]
+                cursor.execute(
+                    """
+                    SELECT config_id, max(created_at) AS last_created
+                    FROM bs_wechat_mp_sync_runs
+                    WHERE trigger_type = 'scheduled' AND config_id = ANY(%s)
+                    GROUP BY config_id
+                    """,
+                    (config_ids,),
+                )
+                last_created = {r["config_id"]: r["last_created"] for r in cursor.fetchall()}
+                cursor.execute(
+                    """
+                    SELECT DISTINCT config_id FROM bs_wechat_mp_sync_runs
+                    WHERE trigger_type = 'scheduled'
+                      AND status IN ('queued', 'running')
+                      AND config_id = ANY(%s)
+                    """,
+                    (config_ids,),
+                )
+                active_configs = {r["config_id"] for r in cursor.fetchall()}
+
+                enqueued = 0
+                for cfg in configs:
+                    if enqueued >= SCHEDULED_TICK_LIMIT:
+                        logger.bind(module="wechat_mp").warning(
+                            "wechat_mp scheduled 单 tick 生成达上限 {}，余量留到下轮",
+                            SCHEDULED_TICK_LIMIT,
+                        )
+                        break
+                    if cfg["config_id"] in active_configs:
+                        continue  # 已有待执行/执行中对账 run，不堆积
+                    last = last_created.get(cfg["config_id"])
+                    if last is not None:
+                        elapsed = db_now - last
+                        threshold = timedelta(hours=cfg["interval_hours"])
+                        if elapsed < threshold:
+                            continue
+                    cursor.execute(
+                        """
+                        INSERT INTO bs_wechat_mp_sync_runs
+                            (tenant_id, config_id, user_id, trigger_type, status, total_count)
+                        VALUES (%s, %s, NULL, 'scheduled', 'queued', 0)
+                        RETURNING id
+                        """,
+                        (cfg["tenant_id"], cfg["config_id"]),
+                    )
+                    run_id = cursor.fetchone()["id"]
+                    enqueued += 1
+                    logger.bind(module="wechat_mp").info(
+                        "wechat_mp scheduled 对账入队 tenant_id={} config_id={} run_id={} "
+                        "interval={}h",
+                        cfg["tenant_id"], cfg["config_id"], run_id, cfg["interval_hours"],
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+        return enqueued

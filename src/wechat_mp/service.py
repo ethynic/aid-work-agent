@@ -41,6 +41,17 @@
 - **恢复**：``recover_stale_runs()`` —— heartbeat 超时且锁已失效的 running run 标
   interrupted；queued 保持等待。
 
+- **WP9 接口通道（freepublish 定时对账）**：scheduled run 先跑
+  ``_reconcile_config``——client.batchget_all(no_content=1) 全分页 → 消息级 diff：
+  新消息建 articles 行 + pending item；wx_update_time/sync_failed/pipeline 变化建
+  item（无活跃 item 门禁）；未变且 success 且 pipeline 相同仅推进 last_synced_at
+  （不重拉正文）；missing 重现恢复 active。整条缺失防护：仅完整可靠扫描迁移——
+  首次缺失置 missing，连续两轮缺失 + getarticle 53600 复核才软删（不完整扫描不迁移）。
+  单 item 走 ``_fetch_freepublish_article``：多图文按 §6.1 P3 粒度合并（排除
+  is_deleted 子篇、未删子篇「标题→正文」保序拼接），空数组/结构异常失败保留旧版
+  绝不判删除，全删走 _handle_deleted；之后与 URL 通道在 hash 比对处汇合；
+  入库后跨来源互标 related_doc_ids（§5.4，fail-open）。
+
 - **WP6 受理/查询（模块级函数，API 薄入口调用）**：``import_urls``（手动粘贴导入，
   批内/pending 去重 + 限流 + 同事务三件套）、``normalize_batch_urls`` /
   ``upsert_article_rows``（callback 与手动导入共用去重口径）、``list_runs`` /
@@ -65,9 +76,17 @@ import psycopg2
 from loguru import logger
 
 from src.db.database import get_db_connection
+from src.core.text_sanitizer import sanitize_text
 from src.knowledge.chunker import TextChunker
 from src.knowledge.embedding.embedding_client import sanitize_error_info
 from src.knowledge.vector_db.vector_db import get_vector_db
+from src.wechat_mp.client import (
+    ArticleNotFoundError,
+    WeChatMPAPIClient,
+    WeChatMPAPIError,
+    friendly_api_error,
+    is_truthy_flag,
+)
 from src.wechat_mp.content import (
     ContentExtractionError,
     ContentNode,
@@ -127,6 +146,41 @@ MIN_TEXT_CHARS = 20  # 有图且文字不足 → VL 解析（P2），仍失败�
 # WP12 总结正文形态（documents.metadata.content_mode）
 CONTENT_MODE_SUMMARY = "summary"
 CONTENT_MODE_RAW_FALLBACK = "raw_fallback"
+
+# WP9 接口通道（freepublish）：身份定稿（设计 §5.2.1/§6.1 P3 粒度）
+# 一条消息（article_id）= 一篇合并文档；external_id = {appid}:{article_id}:combined，
+# 不以数组下标做持久身份。appid/article_id 均不含冒号，解析安全。
+FREEPUBLISH_CHANNEL = "freepublish"
+FREEPUBLISH_COMBINED_SUFFIX = ":combined"
+
+
+def freepublish_external_id(appid: str, article_id: str) -> str:
+    """接口通道消息身份：{appid}:{article_id}:combined（一条消息一篇合并文档）。"""
+    return f"{appid}:{article_id}{FREEPUBLISH_COMBINED_SUFFIX}"
+
+
+def parse_freepublish_article_id(external_id: str) -> Optional[str]:
+    """从 freepublish 身份解出 article_id；格式不符返回 None（调用方记失败）。"""
+    parts = (external_id or "").split(":")
+    if len(parts) != 3 or parts[2] != "combined" or not parts[0] or not parts[1]:
+        return None
+    return parts[1]
+
+
+def _wrap_freepublish_content(content_html: str) -> str:
+    """getarticle 的 content 是正文片段（无页面骨架、无 #js_content 容器——主控者
+    2026-09-15 实测），包装容器后复用 content.extract_article 的清洗与保序解析。"""
+    return f'<div id="js_content">{content_html}</div>'
+
+
+def _parse_unix_seconds(value: Optional[int]) -> Optional[datetime]:
+    """unix 秒 → tz-aware UTC datetime（getarticle 顶层 create_time/update_time）。"""
+    if not isinstance(value, int):
+        return None
+    try:
+        return datetime.fromtimestamp(value, tz=timezone.utc)
+    except (ValueError, OSError, OverflowError):
+        return None
 
 # P2 图片 VL 解析 deferred 原因文案（error_code 仍为 deferred_image_pending）
 _DEFERRED_NO_MODEL = "图片待解析：无可用多模态模型，将自动重试"
@@ -866,6 +920,16 @@ class WeChatMPSyncService:
             tenant_id, run_id, run.get("trigger_type"),
         )
 
+        # ---- WP9：scheduled run 先跑 freepublish 对账（batchget diff → 同事务建 items）----
+        count_overrides: Optional[Dict[str, Any]] = None
+        if run.get("trigger_type") == "scheduled":
+            stats = await asyncio.to_thread(self._reconcile_scheduled_run, tenant_id, run, owner)
+            if stats is None:
+                # 对账失败已在 _reconcile_scheduled_run 内记 failed（脱敏 error_message），
+                # 不得把拉取失败/结构异常误报 success（设计 §5.2.6）
+                return True
+            count_overrides = stats
+
         # ---- 启动余额预检：不足则付费类 item 记 skipped_no_credit；复核类不阻断 ----
         balance_ok, balance_reason = self._check_credit(tenant_id)
 
@@ -899,7 +963,7 @@ class WeChatMPSyncService:
                 )
                 self._mark_item_failed(tenant_id, item, ERR_INTERNAL, str(e))
 
-        self._finalize_run(tenant_id, run_id, owner)
+        self._finalize_run(tenant_id, run_id, owner, count_overrides=count_overrides)
         return True
 
     def _load_pending_items(self, tenant_id: str, run_id: int) -> List[Dict[str, Any]]:
@@ -914,6 +978,374 @@ class WeChatMPSyncService:
                 (tenant_id, run_id),
             )
             return [dict(r) for r in cursor.fetchall()]
+
+    # ==================== WP9 接口通道：scheduled run 对账 ====================
+
+    def _load_mp_config(self, tenant_id: str, config_id: Optional[str]) -> Optional[Dict[str, Any]]:
+        """加载本租户 wechat_mp 配置的明文 appid/secret（接口通道专用）。
+
+        任何一项不满足（config_id 缺失 / 配置不存在 / 租户不符 / 渠道类型不符 /
+        appid 或 secret 为空）返回 None——调用方将 run 记 failed，不误报 success。
+        """
+        if not config_id:
+            return None
+        from src.saas.db.channel_config_db import ChannelConfigDB
+
+        try:
+            config = ChannelConfigDB.get_by_id_decrypted(config_id)
+        except Exception:  # noqa: BLE001 配置读取失败按不可用处理（上层记 failed）
+            return None
+        if not config or config.get("tenant_id") != tenant_id:
+            return None
+        if config.get("channel_type") != "wechat_mp":
+            return None
+        data = config.get("config") or {}
+        appid = str(data.get("appid") or "").strip()
+        secret = str(data.get("secret") or "").strip()
+        if not appid or not secret:
+            return None
+        return {"appid": appid, "secret": secret}
+
+    def _build_api_client(
+        self, tenant_id: str, config_id: Optional[str], config: Dict[str, Any]
+    ) -> WeChatMPAPIClient:
+        """构造接口客户端（测试经 monkeypatch svc_mod.WeChatMPAPIClient 注入替身）。"""
+        return WeChatMPAPIClient(
+            tenant_id=tenant_id, config_id=config_id or "", appid=config["appid"], secret=config["secret"]
+        )
+
+    def _reconcile_scheduled_run(
+        self, tenant_id: str, run: Dict[str, Any], owner: str
+    ) -> Optional[Dict[str, int]]:
+        """scheduled run 的对账入口（同步，asyncio.to_thread 调用）。
+
+        返回 {"total_count": 本轮源消息数, "extra_skipped": 未变跳过数} 供 run 收尾
+        补写计数；对账失败（配置不可用 / API 失败 / 结构异常）置 run=failed 并返回
+        None——不得把拉取失败或空结果误报 success（设计 §5.2.6）。
+        """
+        config = self._load_mp_config(tenant_id, run.get("config_id"))
+        if config is None:
+            self._fail_run(tenant_id, run["id"], owner, "接口通道配置不可用（缺 AppID/AppSecret 或配置不属于本租户）")
+            return None
+        try:
+            total_count, unchanged = self._reconcile_config(tenant_id, run, config)
+        except Exception as e:  # noqa: BLE001 对账异常 → run failed（错误消息脱敏）
+            logger.opt(exception=True).error(
+                "后端日志：wechat_mp scheduled 对账失败 tenant_id={} run_id={}: {}",
+                tenant_id, run["id"], sanitize_error_info(str(e)),
+            )
+            self._fail_run(tenant_id, run["id"], owner, friendly_api_error(e))
+            return None
+        logger.bind(module="wechat_mp").info(
+            "wechat_mp scheduled 对账完成 tenant_id={} run_id={} config_id={} "
+            "total={} unchanged={}",
+            tenant_id, run["id"], run.get("config_id"), total_count, unchanged,
+        )
+        return {"total_count": total_count, "extra_skipped": unchanged}
+
+    def _reconcile_config(
+        self, tenant_id: str, run: Dict[str, Any], config: Dict[str, Any]
+    ) -> Tuple[int, int]:
+        """batchget 全分页对账（消息级 diff + 整条缺失防护，设计 §5.2.4）。
+
+        - 库中无该 (tenant, external_id) 行 → 建 articles 行 + pending item（新增）
+        - wx_update_time != 源 update_time / sync_failed / pipeline 变更 → 建 item
+          （前提：无挂在 queued/running run 上的 pending/running item，同 retry/recheck
+          的 NOT EXISTS 口径；本 run 自身刚建的 item 由 UNIQUE 约束防重）
+        - 未变且 success 且 pipeline 相同 → 跳过，仅 last_synced_at（不重拉正文）
+        - missing 行重新出现 → 置回 active 并建 item（重现恢复语义）
+        - deleted 行重新出现且源时间变化 → 置回 active 并建 item（重新发布）；
+          源时间未变 → 保持 deleted 跳过
+        - 整条缺失防护：仅本轮完整可靠（分页无失败/结构无异常/无重复页/总数一致）
+          才迁移——active 首次缺失置 missing；已 missing 且仍缺失 → getarticle 详情
+          复核，errcode 53600（不存在）才同事务软删；其他 errcode/异常保留 missing。
+          本轮不完整可靠 → 不做任何 missing 迁移（宁可不删不可误删）。
+
+        返回 (本轮消息总数, 未变跳过数)。
+        """
+        client = self._build_api_client(tenant_id, run.get("config_id"), config)
+        scan = client.batchget_all(no_content=1)
+        appid = config["appid"]
+        unchanged_skipped = 0
+        missing_recheck: List[Dict[str, Any]] = []
+
+        # ---- 阶段 1：消息级 diff（单事务）----
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute(
+                    """
+                    SELECT id, external_id, wx_update_time, status, processing_status,
+                           pipeline_version, doc_id
+                    FROM bs_wechat_mp_articles
+                    WHERE tenant_id = %s AND source_channel = %s AND config_id = %s
+                    """,
+                    (tenant_id, FREEPUBLISH_CHANNEL, run.get("config_id")),
+                )
+                existing = {r["external_id"]: dict(r) for r in cursor.fetchall()}
+
+                present_ids: set = set()
+                for msg in scan.messages:
+                    external_id = freepublish_external_id(appid, msg["article_id"])
+                    present_ids.add(external_id)
+                    source_time = datetime.fromtimestamp(
+                        msg["update_time"], tz=timezone.utc
+                    ).replace(tzinfo=None)
+                    row = existing.get(external_id)
+                    if row is None:
+                        # 新消息：建 articles 行（batchget 元数据先行，正文由 item 拉取）
+                        article_row_id = self._insert_freepublish_article(
+                            cursor, tenant_id, run.get("config_id"), external_id,
+                            appid, msg,
+                        )
+                        self._insert_pending_item(cursor, tenant_id, run, article_row_id)
+                        continue
+
+                    if row["status"] in ("missing", "deleted"):
+                        if row["status"] == "missing":
+                            # 重现恢复：置回 active 并按变更建 item（不依赖时间比较）
+                            cursor.execute(
+                                """
+                                UPDATE bs_wechat_mp_articles SET status = 'active'
+                                WHERE id = %s AND tenant_id = %s AND status = 'missing'
+                                """,
+                                (row["id"], tenant_id),
+                            )
+                            self._insert_item_if_idle(cursor, tenant_id, run, row["id"])
+                            continue
+                        # deleted 行重现：仅源时间变化（可能重新发布）才恢复
+                        if row["wx_update_time"] is not None and row["wx_update_time"] != source_time:
+                            cursor.execute(
+                                """
+                                UPDATE bs_wechat_mp_articles SET status = 'active'
+                                WHERE id = %s AND tenant_id = %s AND status = 'deleted'
+                                """,
+                                (row["id"], tenant_id),
+                            )
+                            self._insert_item_if_idle(cursor, tenant_id, run, row["id"])
+                        else:
+                            unchanged_skipped += 1  # 已确认删除且源未变：保持删除，静默跳过
+                        continue
+
+                    need_refresh = (
+                        row["wx_update_time"] is None
+                        or row["wx_update_time"] != source_time
+                        or row["processing_status"] == "sync_failed"
+                        or (row["pipeline_version"] or "") != PIPELINE_VERSION
+                    )
+                    if need_refresh:
+                        self._insert_item_if_idle(cursor, tenant_id, run, row["id"])
+                    else:
+                        # 未变且 success 且 pipeline 相同：不重拉正文，仅推进 last_synced_at
+                        unchanged_skipped += 1
+                        cursor.execute(
+                            """
+                            UPDATE bs_wechat_mp_articles SET last_synced_at = now()
+                            WHERE id = %s AND tenant_id = %s
+                            """,
+                            (row["id"], tenant_id),
+                        )
+
+                # ---- 整条缺失防护（设计 §5.2.4）：仅完整可靠扫描执行 ----
+                if scan.reliable:
+                    for external_id, row in existing.items():
+                        if external_id in present_ids:
+                            continue
+                        if row["status"] == "active":
+                            cursor.execute(
+                                """
+                                UPDATE bs_wechat_mp_articles SET status = 'missing'
+                                WHERE id = %s AND tenant_id = %s AND status = 'active'
+                                """,
+                                (row["id"], tenant_id),
+                            )
+                        elif row["status"] == "missing":
+                            # 连续两轮完整扫描仍缺失：进入详情复核（阶段 2）
+                            missing_recheck.append(row)
+                else:
+                    logger.bind(module="wechat_mp").warning(
+                        "wechat_mp 对账本轮不完整可靠，缺失迁移整体跳过 tenant_id={} "
+                        "run_id={} total={} fetched={}",
+                        tenant_id, run["id"], scan.total_count, scan.fetched,
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
+        # ---- 阶段 2：missing 详情复核（事务外网络调用，逐条独立）----
+        to_delete: List[Dict[str, Any]] = []
+        for row in missing_recheck:
+            article_id = parse_freepublish_article_id(row["external_id"])
+            if not article_id:
+                continue  # 身份异常：保留 missing 待审计
+            try:
+                client.getarticle(article_id)
+            except ArticleNotFoundError:
+                to_delete.append(row)  # 唯一可靠的删除判据（errcode 53600）
+            except Exception as e:  # noqa: BLE001 其他 errcode/异常保留 missing 不删
+                logger.bind(module="wechat_mp").warning(
+                    "wechat_mp missing 复核未确认删除（保留 missing）tenant_id={} "
+                    "article_id={} err={}",
+                    tenant_id, article_id, type(e).__name__,
+                )
+        close = getattr(client, "close", None)
+        if callable(close):
+            close()  # 阶段 2 后不再使用：释放 httpx 连接池（getattr 兼容测试替身）
+
+        # ---- 阶段 3：确认不存在 → 同事务软删（复用 _handle_deleted 落库语义）----
+        for row in to_delete:
+            self._soft_delete_article_and_doc(tenant_id, row["id"], row.get("doc_id"))
+
+        return len(scan.messages), unchanged_skipped
+
+    @staticmethod
+    def _insert_freepublish_article(
+        cursor,
+        tenant_id: str,
+        config_id: Optional[str],
+        external_id: str,
+        appid: str,
+        msg: Dict[str, Any],
+    ) -> int:
+        """按 batchget 消息元数据建 articles 行（正文 pending，item 拉取时回填）。
+
+        original_url/title 取首个 news_item 的 url/title（no_content=1 保留元数据，
+        主控者 2026-09-15 实测，client 已做类型规整）；publish_time 取
+        content.create_time 兜底 update_time；时间统一 UTC naive（列类型 TIMESTAMP，
+        对齐既有写入口径）。
+        """
+        publish_ts = msg.get("create_time") or msg["update_time"]
+        publish_time = datetime.fromtimestamp(publish_ts, tz=timezone.utc).replace(tzinfo=None)
+        update_time = datetime.fromtimestamp(msg["update_time"], tz=timezone.utc).replace(tzinfo=None)
+        first_title = msg.get("first_title")
+        first_title = sanitize_text(first_title)[:255] if first_title else None
+        cursor.execute(
+            """
+            INSERT INTO bs_wechat_mp_articles
+                (tenant_id, config_id, external_id, original_url, fetch_url,
+                 source_channel, title, publish_time, wx_update_time,
+                 status, processing_status)
+            VALUES (%s, %s, %s, %s, NULL, %s, %s, %s, %s, 'active', 'pending')
+            ON CONFLICT (tenant_id, external_id) DO NOTHING
+            RETURNING id
+            """,
+            (
+                tenant_id, config_id, external_id, msg.get("first_url"),
+                FREEPUBLISH_CHANNEL, first_title, publish_time, update_time,
+            ),
+        )
+        row = cursor.fetchone()
+        if row:
+            return row["id"]
+        cursor.execute(
+            "SELECT id FROM bs_wechat_mp_articles WHERE tenant_id = %s AND external_id = %s",
+            (tenant_id, external_id),
+        )
+        return cursor.fetchone()["id"]
+
+    @staticmethod
+    def _insert_pending_item(cursor, tenant_id: str, run: Dict[str, Any], article_row_id: int) -> None:
+        """对账新建/变更文章的 pending item（action=NULL，worker 视为 'new'/'update'）。"""
+        cursor.execute(
+            """
+            INSERT INTO bs_wechat_mp_sync_items
+                (tenant_id, user_id, run_id, article_row_id, action, status)
+            VALUES (%s, NULL, %s, %s, NULL, 'pending')
+            """,
+            (tenant_id, run["id"], article_row_id),
+        )
+
+    @staticmethod
+    def _insert_item_if_idle(cursor, tenant_id: str, run: Dict[str, Any], article_row_id: int) -> None:
+        """无活跃 item（queued/running run 上的 pending/running）时建 pending item。
+
+        与 scheduler retry/recheck 生成器同口径的 NOT EXISTS 门禁：文章已被其他
+        待执行任务覆盖时不重复排队。本 run 刚建的 item 亦被门禁识别（同 run 内
+        消息级去重 + UNIQUE(tenant, run_id, article_row_id) 双保险）。
+        """
+        cursor.execute(
+            """
+            INSERT INTO bs_wechat_mp_sync_items
+                (tenant_id, user_id, run_id, article_row_id, action, status)
+            SELECT %s, NULL, %s, %s, NULL, 'pending'
+            WHERE NOT EXISTS (
+                SELECT 1 FROM bs_wechat_mp_sync_items it
+                JOIN bs_wechat_mp_sync_runs r
+                  ON r.id = it.run_id AND r.tenant_id = it.tenant_id
+                WHERE it.tenant_id = %s
+                  AND it.article_row_id = %s
+                  AND it.status IN ('pending', 'running')
+                  AND r.status IN ('queued', 'running')
+            )
+            """,
+            (tenant_id, run["id"], article_row_id, tenant_id, article_row_id),
+        )
+
+    def _soft_delete_article_and_doc(
+        self, tenant_id: str, article_row_id: int, doc_id: Optional[int]
+    ) -> None:
+        """missing 复核确认源不存在：软删 articles + documents（单事务，同 _handle_deleted）。"""
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            if doc_id:
+                cursor.execute(
+                    """
+                    UPDATE documents SET status = 'deleted', updated_at = now()
+                    WHERE id = %s AND tenant_id = %s
+                    """,
+                    (doc_id, tenant_id),
+                )
+            cursor.execute(
+                """
+                UPDATE bs_wechat_mp_articles
+                SET status = 'deleted', processing_status = 'success',
+                    last_checked_at = now(), next_retry_at = NULL, error_message = NULL
+                WHERE id = %s AND tenant_id = %s AND status = 'missing'
+                """,
+                (article_row_id, tenant_id),
+            )
+            conn.commit()
+        logger.bind(module="wechat_mp").info(
+            "wechat_mp missing 复核软删除 tenant_id={} article_id={} doc_id={}",
+            tenant_id, article_row_id, doc_id,
+        )
+
+    def _fail_run(self, tenant_id: str, run_id: int, owner: str, message: str) -> None:
+        """run 级失败（对账异常等，items 尚未/无需执行）：终态 failed + 脱敏原因。
+
+        owner/状态守卫对齐 _finalize_run；防御性把该 run 遗留 pending item 置
+        interrupted（正常路径对账失败时 items 尚未创建）。
+        """
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                UPDATE bs_wechat_mp_sync_runs
+                SET status = 'failed', error_message = %s,
+                    completed_at = now(), heartbeat_at = now()
+                WHERE id = %s AND tenant_id = %s AND owner_token = %s AND status = 'running'
+                """,
+                (sanitize_error_info(message)[:500], run_id, tenant_id, owner),
+            )
+            finalized = cursor.rowcount == 1
+            if finalized:
+                cursor.execute(
+                    """
+                    UPDATE bs_wechat_mp_sync_items SET status = 'interrupted', completed_at = now()
+                    WHERE tenant_id = %s AND run_id = %s AND status IN ('pending', 'running')
+                    """,
+                    (tenant_id, run_id),
+                )
+            conn.commit()
+        if finalized:
+            logger.bind(module="wechat_mp").error(
+                "wechat_mp scheduled run 失败 tenant_id={} run_id={}", tenant_id, run_id
+            )
+        else:
+            logger.bind(module="wechat_mp").error(
+                "wechat_mp run 失败收尾未命中（owner/状态已变）run_id={}", run_id
+            )
 
     # ==================== 单 item 管道 ====================
 
@@ -934,42 +1366,16 @@ class WeChatMPSyncService:
 
         self._mark_item_running(tenant_id, item_id)
 
-        # ---- 1. 先抓页面（受理只有 URL，不存在抓取前按 hash 跳过）----
-        fetch: FetchResult = await asyncio.to_thread(
-            self._fetcher.fetch, article["fetch_url"] or article["original_url"]
-        )
-
-        # ---- 2. 删除多信号判定（免费，不受余额阻断）----
-        if fetch.status == STATUS_DELETED:
-            self._handle_deleted(tenant_id, item, article)
-            return
-        if fetch.status != STATUS_OK:
-            code = ERR_RISK_BLOCKED if fetch.status == "risk_blocked" else ERR_FETCH_FAILED
-            self._mark_item_failed(
-                tenant_id, item, code, f"抓取未成功: {fetch.error or fetch.status}"
-            )
-            self._mark_article_retry(
-                tenant_id, article["id"], f"fetch:{fetch.error or fetch.status}"
-            )
-            return
-
-        # ---- 3. 正文提取 ----
-        try:
-            extracted = extract_article(fetch.html or "")
-        except ContentExtractionError as e:
-            msg = str(e)
-            if "内容为空" in msg:
-                # 空内容跳过并记原因（非技术失败，不进退避）
-                self._mark_item_skipped(tenant_id, item_id, ERR_CONTENT_EMPTY, msg)
-                self._touch_article_checked(tenant_id, article["id"], processing_status=None)
-            else:
-                self._mark_item_failed(tenant_id, item, ERR_EXTRACT_FAILED, msg)
-                self._mark_article_retry(tenant_id, article["id"], f"extract:{type(e).__name__}")
-            return
-
-        # ---- 4. 别名收敛（保守：仅页面给出对方形态且本租户已有该行时）----
-        if self._converge_alias(tenant_id, run["id"], item, article, extracted.alias):
-            return  # 当前 item 已被收敛为 skipped
+        # ---- 1. 取正文：URL 通道先抓页面（受理只有 URL，不存在抓取前按 hash 跳过）；
+        # freepublish 通道（WP9）走 getarticle 详情 + 多图文合并，不走 URL fetcher ----
+        fp_ctx: Optional[Dict[str, Any]] = None
+        if article["source_channel"] == FREEPUBLISH_CHANNEL:
+            prepared = await self._fetch_freepublish_article(tenant_id, run, item, article)
+        else:
+            prepared = await self._fetch_url_article(tenant_id, run, item, article)
+        if prepared is None:
+            return  # item 已置终态（删除软删 / 失败保留旧版 / skipped）
+        extracted, fp_ctx = prepared
 
         # ---- 5. 内容指纹与已成功版本比对 ----
         title = extracted.title or article["title"] or "未命名文章"
@@ -992,6 +1398,12 @@ class WeChatMPSyncService:
             if doc_state == "active":
                 # hash 未变且文档在：记 check，零 embedding 零计费
                 self._handle_check_unchanged(tenant_id, item, article)
+                if fp_ctx:
+                    # freepublish：check 快路径同样算处理成功，刷新源更新时间——
+                    # 否则 wx_update_time 恒落后于源，每轮对账都会重复建 item 拉 getarticle
+                    self._refresh_wx_update_time(
+                        tenant_id, article["id"], fp_ctx.get("wx_update_time")
+                    )
                 return
             if doc_state == "deleted":
                 # 重现且 hash 未变：复用旧 chunks 恢复 active（设计 §5.2）
@@ -1078,6 +1490,11 @@ class WeChatMPSyncService:
             embeddings=embeddings,
             action=action,
             image_meta=image_meta or None,
+            location_url=(fp_ctx or {}).get("location_url"),
+            wx_update_time=(fp_ctx or {}).get("wx_update_time"),
+            extra_metadata=(
+                {"sub_articles": fp_ctx["sub_articles"]} if fp_ctx else None
+            ),
         )
 
         # ---- 11. 售前挂接 + 计费（业务已提交，fail-open）----
@@ -1099,6 +1516,301 @@ class WeChatMPSyncService:
                 item_id=item_id,
                 successes=image_billing_successes,
             )
+        if fp_ctx:
+            # ---- 12. 跨来源重叠互标（设计 §5.4，fail-open，不物理合并）----
+            try:
+                await asyncio.to_thread(
+                    self._link_related_docs,
+                    tenant_id,
+                    doc_id,
+                    article["id"],
+                    fp_ctx.get("sub_urls") or [],
+                )
+            except Exception as e:  # noqa: BLE001 互标失败不影响已入库文档
+                logger.opt(exception=True).warning(
+                    "后端日志：wechat_mp 跨来源互标失败 tenant_id={} doc_id={}: {}",
+                    tenant_id, doc_id, sanitize_error_info(str(e)),
+                )
+
+    # ==================== 正文获取分支（URL 直采 / freepublish 接口） ====================
+
+    async def _fetch_url_article(
+        self, tenant_id: str, run: Dict[str, Any], item: Dict[str, Any], article: Dict[str, Any]
+    ) -> Optional[Tuple[ExtractedArticle, None]]:
+        """URL 通道：抓页面 → 删除多信号 → 提取 → 别名收敛（既有管道原样搬运）。
+
+        item 已置终态时返回 None；正常返回 (extracted, None)（无 fp_ctx）。
+        """
+        fetch: FetchResult = await asyncio.to_thread(
+            self._fetcher.fetch, article["fetch_url"] or article["original_url"]
+        )
+
+        # 删除多信号判定（免费，不受余额阻断）
+        if fetch.status == STATUS_DELETED:
+            self._handle_deleted(tenant_id, item, article)
+            return None
+        if fetch.status != STATUS_OK:
+            code = ERR_RISK_BLOCKED if fetch.status == "risk_blocked" else ERR_FETCH_FAILED
+            self._mark_item_failed(
+                tenant_id, item, code, f"抓取未成功: {fetch.error or fetch.status}"
+            )
+            self._mark_article_retry(
+                tenant_id, article["id"], f"fetch:{fetch.error or fetch.status}"
+            )
+            return None
+
+        # 正文提取
+        try:
+            extracted = extract_article(fetch.html or "")
+        except ContentExtractionError as e:
+            msg = str(e)
+            if "内容为空" in msg:
+                # 空内容跳过并记原因（非技术失败，不进退避）
+                self._mark_item_skipped(tenant_id, item["id"], ERR_CONTENT_EMPTY, msg)
+                self._touch_article_checked(tenant_id, article["id"], processing_status=None)
+            else:
+                self._mark_item_failed(tenant_id, item, ERR_EXTRACT_FAILED, msg)
+                self._mark_article_retry(tenant_id, article["id"], f"extract:{type(e).__name__}")
+            return None
+
+        # 别名收敛（保守：仅页面给出对方形态且本租户已有该行时）
+        if self._converge_alias(tenant_id, run["id"], item, article, extracted.alias):
+            return None  # 当前 item 已被收敛为 skipped
+        return extracted, None
+
+    async def _fetch_freepublish_article(
+        self, tenant_id: str, run: Dict[str, Any], item: Dict[str, Any], article: Dict[str, Any]
+    ) -> Optional[Tuple[ExtractedArticle, Dict[str, Any]]]:
+        """freepublish 通道（WP9）：getarticle 详情 → 多图文合并（设计 §6.1 P3 粒度）。
+
+        - 排除 is_deleted=true 的子篇；未删子篇按返回顺序拼「子篇标题 → 正文」
+        - 一条消息合并一篇文档（external_id 已定身份），alias=None 跳过别名收敛
+        - 删除语义：news_item 空数组/字段缺失/类型异常 → item 失败保留旧版（绝不判
+          删除）；全部子篇明确 is_deleted=true → 复用 _handle_deleted 软删整篇
+        - 返回 (merged ExtractedArticle, fp_ctx)；item 已置终态返回 None。
+          fp_ctx: article_id / wx_update_time(UTC naive) / location_url（首个未删
+          子篇 url）/ sub_articles（全子篇 顺序/标题/url/规范身份/删除标记）/
+          sub_urls（未删子篇 url 列表，跨来源互标用）
+        """
+        article_id = parse_freepublish_article_id(article["external_id"])
+        if article_id is None:
+            self._mark_item_failed(tenant_id, item, ERR_INTERNAL, "freepublish 身份解析失败")
+            return None
+        config = self._load_mp_config(tenant_id, article.get("config_id"))
+        if config is None:
+            self._mark_item_failed(
+                tenant_id, item, ERR_FETCH_FAILED, "接口通道配置不可用（缺 AppID/AppSecret）"
+            )
+            self._mark_article_retry(tenant_id, article["id"], "freepublish:config_missing")
+            return None
+        client = self._build_api_client(tenant_id, article.get("config_id"), config)
+        try:
+            detail = await asyncio.to_thread(client.getarticle, article_id)
+        except WeChatMPAPIError as e:
+            # 53600 亦按失败保留旧版：整条删除唯一入口是对账缺失复核（双重确认）
+            self._mark_item_failed(tenant_id, item, ERR_FETCH_FAILED, friendly_api_error(e))
+            self._mark_article_retry(tenant_id, article["id"], f"freepublish:{e.errcode}")
+            return None
+        except Exception as e:  # noqa: BLE001
+            self._mark_item_failed(tenant_id, item, ERR_INTERNAL, str(e))
+            self._mark_article_retry(tenant_id, article["id"], "freepublish:internal")
+            return None
+        finally:
+            # 客户端自持 httpx 连接池：单 item 即用即弃，及时释放（成功/失败路径均覆盖；
+            # getattr 兼容测试注入的无 close 替身）
+            close = getattr(client, "close", None)
+            if callable(close):
+                close()
+
+        news_item = detail.get("news_item")
+        if not isinstance(news_item, list) or not news_item:
+            # 空数组/字段缺失/类型异常 ≠ 删除：失败保留旧版（设计 §5.2.4）
+            self._mark_item_failed(
+                tenant_id, item, ERR_FETCH_FAILED,
+                "getarticle 返回 news_item 为空或结构异常，保留旧版本",
+            )
+            self._mark_article_retry(tenant_id, article["id"], "freepublish:news_item_empty")
+            return None
+
+        merged_nodes: List[ContentNode] = []
+        sub_meta: List[Dict[str, Any]] = []
+        sub_urls: List[str] = []
+        first_title: Optional[str] = None
+        first_author: Optional[str] = None
+        for idx, sub in enumerate(news_item):
+            if not isinstance(sub, dict):
+                self._mark_item_failed(
+                    tenant_id, item, ERR_FETCH_FAILED,
+                    f"news_item[{idx}] 结构异常（非对象），保留旧版本",
+                )
+                self._mark_article_retry(tenant_id, article["id"], "freepublish:sub_structure")
+                return None
+            deleted_flag = is_truthy_flag(sub.get("is_deleted"))
+            title = sanitize_text(str(sub.get("title"))) if sub.get("title") else None
+            url = sub.get("url") if isinstance(sub.get("url"), str) and sub.get("url") else None
+            alias_identity: Optional[URLIdentity] = None
+            if url:
+                try:
+                    alias_identity = normalize_url(url)
+                except URLIdentityError:
+                    alias_identity = None  # url 不可规范：保留原值，互标阶段自然跳过
+            sub_meta.append(
+                {
+                    "order": idx,
+                    "title": title,
+                    "url": url,
+                    "external_id": alias_identity.external_id if alias_identity else None,
+                    "is_deleted": deleted_flag,
+                }
+            )
+            if deleted_flag:
+                continue  # 已删子篇不参与合并（设计 §5.2.4）
+            content_html = sub.get("content")
+            if not isinstance(content_html, str) or not content_html.strip():
+                # 未删子篇正文缺失属结构异常：整条失败保留旧版，绝不按删除处理
+                self._mark_item_failed(
+                    tenant_id, item, ERR_EXTRACT_FAILED,
+                    f"news_item[{idx}] 未删除子篇正文缺失（结构异常），保留旧版本",
+                )
+                self._mark_article_retry(tenant_id, article["id"], "freepublish:sub_content_missing")
+                return None
+            try:
+                sub_extracted = extract_article(_wrap_freepublish_content(content_html))
+            except ContentExtractionError as e:
+                self._mark_item_failed(
+                    tenant_id, item, ERR_EXTRACT_FAILED,
+                    f"news_item[{idx}] 子篇正文提取失败：{e}",
+                )
+                self._mark_article_retry(tenant_id, article["id"], "freepublish:extract")
+                return None
+            if first_title is None:
+                first_title = title
+                first_author = (
+                    sanitize_text(str(sub.get("author"))) if sub.get("author") else None
+                )
+            # 前置子篇标题 text 节点（保序合并，跨子篇可检索边界）
+            if title:
+                merged_nodes.append(ContentNode(type="text", text=title))
+            merged_nodes.extend(sub_extracted.nodes)
+            if url:
+                sub_urls.append(url)
+
+        if not merged_nodes:
+            # 全部子篇明确 is_deleted=true → 软删除整篇（复用既有删除落库语义）
+            self._handle_deleted(tenant_id, item, article)
+            return None
+
+        create_time = detail.get("create_time")
+        update_time = detail.get("update_time")
+        wx_dt = _parse_unix_seconds(update_time if isinstance(update_time, int) else None)
+        extracted = ExtractedArticle(
+            title=first_title,
+            account_name=first_author,
+            publish_time=_parse_unix_seconds(create_time if isinstance(create_time, int) else None),
+            nodes=merged_nodes,
+            alias=None,  # 接口通道身份按 article_id 定稿，不做 URL 形态别名收敛
+        )
+        fp_ctx = {
+            "article_id": article_id,
+            "wx_update_time": wx_dt.astimezone(timezone.utc).replace(tzinfo=None) if wx_dt else None,
+            "location_url": sub_urls[0] if sub_urls else article["original_url"],
+            "sub_articles": sub_meta,
+            "sub_urls": sub_urls,
+        }
+        return extracted, fp_ctx
+
+    def _refresh_wx_update_time(
+        self, tenant_id: str, article_row_id: int, wx_update_time: Optional[datetime]
+    ) -> None:
+        """freepublish 处理成功（含 check 快路径）后推进源更新时间与 last_synced_at。"""
+        if wx_update_time is None:
+            return
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                UPDATE bs_wechat_mp_articles
+                SET wx_update_time = %s, last_synced_at = now(), last_checked_at = now()
+                WHERE id = %s AND tenant_id = %s
+                """,
+                (wx_update_time, article_row_id, tenant_id),
+            )
+            conn.commit()
+
+    def _link_related_docs(
+        self,
+        tenant_id: str,
+        doc_id: int,
+        article_row_id: int,
+        sub_urls: List[str],
+    ) -> None:
+        """跨来源重叠互标（设计 §5.4）：子篇 url 规范身份命中本租户已有文档时，
+        双方 documents.metadata.related_doc_ids 互标（fail-open，不物理合并）。"""
+        matched_doc_ids: set = set()
+        for url in sub_urls or []:
+            try:
+                identity = normalize_url(url)
+            except URLIdentityError:
+                continue
+            try:
+                with get_db_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        """
+                        SELECT a.doc_id FROM bs_wechat_mp_articles a
+                        WHERE a.tenant_id = %s AND a.external_id = %s
+                          AND a.doc_id IS NOT NULL AND a.id <> %s
+                        """,
+                        (tenant_id, identity.external_id, article_row_id),
+                    )
+                    row = cursor.fetchone()
+                    if row and row["doc_id"] and row["doc_id"] != doc_id:
+                        matched_doc_ids.add(int(row["doc_id"]))
+            except Exception as e:  # noqa: BLE001 单条查询失败不中断互标
+                logger.opt(exception=True).warning(
+                    "后端日志：wechat_mp 跨来源查询失败 tenant_id={}: {}",
+                    tenant_id, sanitize_error_info(str(e)),
+                )
+        if not matched_doc_ids:
+            return
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            for other_doc_id in sorted(matched_doc_ids):
+                # 当前文档 ← 对方
+                self._append_related_doc_id(cursor, tenant_id, doc_id, other_doc_id)
+                # 对方 ← 当前文档（互标）
+                self._append_related_doc_id(cursor, tenant_id, other_doc_id, doc_id)
+            conn.commit()
+        logger.bind(module="wechat_mp").info(
+            "wechat_mp 跨来源互标 tenant_id={} doc_id={} related={}",
+            tenant_id, doc_id, sorted(matched_doc_ids),
+        )
+
+    @staticmethod
+    def _append_related_doc_id(cursor, tenant_id: str, doc_id: int, related_doc_id: int) -> None:
+        """documents.metadata.related_doc_ids 追加（读-改-写，幂等去重；异常上抛由调用方兜底）。"""
+        cursor.execute(
+            "SELECT metadata FROM documents WHERE id = %s AND tenant_id = %s",
+            (doc_id, tenant_id),
+        )
+        row = cursor.fetchone()
+        if not row:
+            return
+        try:
+            metadata = json.loads(row["metadata"]) if row["metadata"] else {}
+        except (json.JSONDecodeError, TypeError):
+            metadata = {}
+        related = metadata.get("related_doc_ids")
+        if not isinstance(related, list):
+            related = []
+        if related_doc_id in related:
+            return
+        related.append(related_doc_id)
+        metadata["related_doc_ids"] = related
+        cursor.execute(
+            "UPDATE documents SET metadata = %s, updated_at = now() WHERE id = %s AND tenant_id = %s",
+            (json.dumps(metadata, ensure_ascii=False), doc_id, tenant_id),
+        )
 
     # ==================== 图片 VL 解析（WP10，P2） ====================
 
@@ -1523,6 +2235,9 @@ class WeChatMPSyncService:
         embeddings: List[List[float]],
         action: str,
         image_meta: Optional[Dict[str, Any]] = None,
+        location_url: Optional[str] = None,
+        wx_update_time: Optional[datetime] = None,
+        extra_metadata: Optional[Dict[str, Any]] = None,
     ) -> int:
         """单事务落 documents/chunks/chunks_vec + articles + item（+惰性分类）。
 
@@ -1532,6 +2247,11 @@ class WeChatMPSyncService:
         回退时另记 metadata.summary_fallback=true。
         chunk 文本由调用方以总结（或回退正文）预先生成（无「文档标题：」前缀）；
         file_path = 原文链接（文档位置字段）。
+
+        WP9 freepublish 可选参数（URL 通道不传即维持既有行为）：
+        - location_url：文档位置字段与 articles.original_url 回填值（首个未删子篇 url）
+        - wx_update_time：处理成功时推进源更新时间（增量去重基准）
+        - extra_metadata：合并进 documents.metadata（sub_articles 子篇清单）
 
         更新场景走 doc_id 快路径：先删 chunks_vec 再删 chunks 后重建。
         新文档撞 uq_documents_origin_external（并发/历史遗留）时转更新路径。
@@ -1554,6 +2274,13 @@ class WeChatMPSyncService:
         if image_meta:
             # WP10：图片转存路径 / VL 解析失败数 / 超上限跳过数（供前端详情与对账）
             metadata.update(image_meta)
+        if extra_metadata:
+            # WP9：freepublish 子篇清单（顺序/标题/url/规范身份/删除标记）
+            metadata.update(extra_metadata)
+        # 文档位置（WP12：URL 即外部文档位置字段）；freepublish 回填首个未删子篇 url
+        doc_location_url = location_url or article["original_url"]
+        # wx_update_time（WP9 freepublish 增量基准）：None 时 COALESCE 保留现值
+        original_url_write = location_url
         summary = summary_text
         raw_text = body_text
         # 时间统一 UTC：列类型 TIMESTAMP（无时区），写前去 tz 防会话时区偏移
@@ -1599,8 +2326,8 @@ class WeChatMPSyncService:
                             "html",
                             # 文档位置 = 原文链接（WP12 定版：URL 即外部文档的"位置"，
                             # 与手动上传文档的本地路径同字段；下载边界按 origin 拦截，
-                            # 不会把 URL 当本地文件打开）
-                            article["original_url"],
+                            # 不会把 URL 当本地文件打开）。freepublish 为首个未删子篇 url
+                            doc_location_url,
                             len(raw_text.encode("utf-8")),
                             len(chunks),
                             EMBEDDING_MODEL,
@@ -1647,7 +2374,7 @@ class WeChatMPSyncService:
                             len(chunks), EMBEDDING_MODEL,
                             CATEGORY_SOURCE_TYPE, SUB_CATEGORY_SOURCE_TYPE,
                             # 重建场景同步位置字段（存量行可能为 NULL）
-                            article["original_url"],
+                            doc_location_url,
                             doc_id, tenant_id,
                         ),
                     )
@@ -1688,6 +2415,8 @@ class WeChatMPSyncService:
                         content_hash = %s, doc_id = %s,
                         status = 'active', processing_status = 'success',
                         pipeline_version = %s, image_count = %s,
+                        original_url = COALESCE(%s, original_url),
+                        wx_update_time = COALESCE(%s, wx_update_time),
                         last_synced_at = now(), last_checked_at = now(),
                         next_retry_at = NULL, error_message = NULL
                     WHERE id = %s AND tenant_id = %s
@@ -1696,7 +2425,10 @@ class WeChatMPSyncService:
                         extracted.title or article["title"],
                         publish_time_naive,
                         content_hash, doc_id, PIPELINE_VERSION,
-                        extracted.image_count, article["id"], tenant_id,
+                        extracted.image_count,
+                        # WP9：freepublish 回填首个未删子篇 url 与源更新时间；URL 通道传 None 保持现值
+                        original_url_write, wx_update_time,
+                        article["id"], tenant_id,
                     ),
                 )
                 cursor.execute(
@@ -2303,8 +3035,19 @@ class WeChatMPSyncService:
 
     # ==================== run 收尾 ====================
 
-    def _finalize_run(self, tenant_id: str, run_id: int, owner: str) -> None:
-        """按 item 终态汇总 run；事件在该 run 全部 item 终态后置 done。"""
+    def _finalize_run(
+        self,
+        tenant_id: str,
+        run_id: int,
+        owner: str,
+        count_overrides: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """按 item 终态汇总 run；事件在该 run 全部 item 终态后置 done。
+
+        count_overrides（WP9 scheduled run 专用）：对账 run 的 total_count=本轮源
+        消息数（item 只覆盖有变化的文章），未变跳过数并入 skipped_count——聚合
+        item 字段照旧，缺的计数显式补写。
+        """
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -2338,6 +3081,10 @@ class WeChatMPSyncService:
                     deleted_count += 1
                 else:  # check / restore 无内容变更，计入 skipped
                     skipped_count += 1
+
+        if count_overrides:
+            total = int(count_overrides.get("total_count", total))
+            skipped_count += int(count_overrides.get("extra_skipped", 0) or 0)
 
         if failed_count == 0 and no_credit_count == 0:
             run_status = "success"

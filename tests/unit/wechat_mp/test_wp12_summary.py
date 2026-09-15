@@ -463,8 +463,10 @@ class TestSummaryBilling:
         assert SUMMARY_SOURCE_TYPE in rec["session_id"]  # source 拼进 session_id 供追溯
         assert rec["prompt_tokens"] == 100 and rec["completion_tokens"] == 50
         assert rec["model"] == "summary-test-model"
-        # 测试模型无单价配置 → credit_cost 降级 0（fail-open，不影响余额语义）
-        assert float(rec["credit_cost"]) == 0.0
+        # 测试模型无单价配置 → 按 billing.py 兜底模型（deepseek-v4-flash）计价
+        # （commit 94f69cf7：修复总结/后台 LLM 计费落 0），不再落 0；此处只锁
+        # 「不为 0」防回归，具体金额随价目表变动不断言
+        assert float(rec["credit_cost"]) > 0
 
 
 # =============================== 不变量 ===============================

@@ -20,7 +20,8 @@
 ### WP0 [x] 实测验证（2026-09-14 完成，主链路可行性）
 
 已完成：回调事件携 ArticleUrl（ArticleUrlResult）、URL 直采无需登录态、freepublish 权限与边界、删除事件单次观察无、datacube 下线、agent2 诊断端点真实事件。
-**未完成（单独跟踪）**：多图文群发回调、安全模式 AES 实收、freepublish 分页 >20、异常恢复实收、更多删除样本。
+**未完成（单独跟踪）**：安全模式 AES 实收、异常恢复实收、更多删除样本、多图文逐子篇与 freepublish 分页 >20 真机样本。
+**2026-09-15 群发回调实收确认（负责人实验）**：MASSSENDJOBFINISH 事件实收且携群发文章链接，链接到手走既有 URL 直采管道；callback.py 的 ArticleUrlResult/ArticleUrl 逐子篇解析路径经 WP9 主控核对已覆盖，无解析缺口，不额外开发。
 
 ### WPS [ ] 托底清单源可行性实验（与 P1 并行 spike，0.5~1 天）
 
@@ -88,7 +89,15 @@
 - 口径：只承诺"已提交获取/刷新"，不宣称发现最新；运行中/失败如实说明；完成后走 knowledge_base_search。
 - 验收：粘贴/群发回调 → 入库 → 售前检索命中闭环。
 
-### WP9 [ ] 接口通道提前开发（⏸ 2026-09-15 负责人确认场景必须、当日暂停待排期；原 P3「接口通道补齐」前移；依赖 WP5/WP7。开发未开始，仅本登记）
+### WP9 [x] 接口通道（freepublish 定期对账同步）——2026-09-16 完成（负责人确认场景必须后重启；三智能体闭环：独立测试 489 passed（wechat_mp 393+渠道配置/知识库回归 91+真实 PG 并发/schema 6）+ 真实凭据探针两轮全绿（stable_token→batchget total=1 拉到真实文章→入库→二次对账 skipped=1 零重拉，临时租户自清理）+ 启动 import 安全+前端 build；测试期修 3 处 httpx.Client 连接池泄漏；CR 1 P1 已修——sync_interval_hours 极端值（inf/NaN/超大 int）穿透可致全租户定时对账瘫痪，加 >0 守卫+8760h 夹逼+回归用例；P2 登记×7：missing 复核无批量上限且对账期不续租、runs 表 (trigger_type,config_id) 无支撑索引、对账异常路径 client 靠 GC、40014/42001 重试耗尽文案、40164 仅解析 IPv4、互标读改写竞态、_handle_restore 不刷 wx_update_time；计划外：test_wp12_summary 一条断言存量失真（94f69cf7 兜底计价未同步用例），经干净 worktree 复核后改 >0）
+
+- **client.py**：stable_token Redis 缓存（TTL=expires_in-300s、secret sha256 前 8 位换键、账号级单飞、40001/42001/40014 删缓存刷一次重试一次）+ batchget_all 分页（重复页/无进展/总数漂移/600s 预算→reliable=False）+ getarticle（53600→ArticleNotFoundError、40164→IPWhitelistError 解析出口 IP）；瞬时错误指数退避+抖动，token/secret/响应正文/异常原文不进日志。
+- **身份与增量（以接口实测返回定稿，用户核心要求）**：消息身份=`{appid}:{article_id}:combined`（batchget item.article_id 64 字符 appid 内唯一，no_content=1 仍带子篇元数据无正文）；增量=源 update_time vs articles.wx_update_time，未变且 success 且 pipeline 同 → 不建 item 不拉正文仅推进 last_synced_at（真实探针二次对账零重拉实证）。
+- **调度**：30min tick 第③生成器扫 verified=1+enabled+appid/secret 非空配置，最近 scheduled run 超 sync_interval_hours（默认 6h，尝试时间口径自然退避）→ 同事务建 queued run（无 items，上限 100/tick）+ 唤醒领取。
+- **对账（scheduled run 内三阶段）**：单事务 diff（新增建 articles 行+item、源变/sync_failed/pipeline 变经活跃 item 门禁建 item、missing 重现恢复、deleted 行源变恢复）→ 事务外逐条 getarticle 缺失复核（仅 53600 软删；不完整扫描整体不迁移）→ 软删落库带 missing 守卫；对账失败 run=failed 不误报 success。
+- **管道分支**：source_channel='freepublish' item 走 getarticle——is_deleted 子篇排除、未删子篇「标题→正文」保序合并（复用 extract_article）、全删走 _handle_deleted、空数组/结构异常失败保留旧版绝不判删除；之后与 URL 通道在 hash 快路径处汇合（VL/总结/计费/售前挂接全复用）；子篇 url 仅身份计算+落库+互标（服务端不抓取，SSRF 面不变）；documents.file_path 回填首个未删子篇 url（WP12 语义）、documents.metadata.sub_articles 落子篇清单、跨来源互标 related_doc_id fail-open。
+- **verify 与前端**：wechat_mp 配置含 appid+secret 时「验证连接」三步实测（stable_token→batchget count=1→有消息 getarticle）返回 api_check 节点；成功 set_verified(True)（回调 config_verified_at 三态不动），失败仅在无回调验证态时才撤销 verified；40164 回显出口 IP 加白提示；ChannelConfig.vue secret/sync_interval_hours 字段语义修正（去掉「预留可先留空」误导）。
+- **遗留待真机**：多图文消息、分页>20、整条删除延迟的真实样本（路径均有单测覆盖）；P2×7 见上。
 
 ### WP10 [x] P2 图片 VL 解析提前（2026-09-15 负责人实测反馈：图文/纯图文章 URL 导入被 deferred，多模态解析优先做；依赖 WP5）——2026-09-15 完成（三智能体：独立测试 359 passed + 119 项真实探针——hash 稳定性（VL 措辞不进指纹）双重证实、SSRF 面逐项 fail-closed、按张计费三账一致，修 1 P1：混排（短文字+图）文章图片编号错位致 VL 描述张冠李戴，改图片序数枚举+变异验证回归锁定；CR 修 1 P1：deferred 文章不在重试/复核扫描范围致「将自动重试」承诺落空，复核条件扩 processing_status IN ('success','deferred') 复用 24h 节流与每 tick 20 篇限速；P2 登记：解码先于像素检查的内存尖峰（建议先查 size 再 load）、UNRECOGNIZED_TEXT 精确匹配改包含匹配、p2 升级存量文章首次复核各产生一次重建费用需部署公告；终态 361 passed + 前端 build 通过 + 启动安全）
 

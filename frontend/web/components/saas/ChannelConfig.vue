@@ -1023,8 +1023,8 @@ const channelFieldMap: Record<string, { key: string; label: string; placeholder:
     { key: 'appid', label: '公众号 AppID（安全模式需要）', placeholder: 'wx...', hint: '明文模式可留空；仅安全模式 AES 解密接收方校验用；创建后不可改绑', location: '「设置与开发」→「公众号设置」→「账号信息」' },
     { key: 'original_id', label: '公众号原始 ID', placeholder: 'gh_...', hint: '可留空；填写后用于回调事件防串号校验（gh_ 开头，建议填写）', location: '「设置与开发」→「公众号设置」→「账号信息」' },
     { key: 'encoding_aes_key', label: 'EncodingAESKey（安全模式）', placeholder: '43 字符', hint: '仅「安全模式」需要；公众平台后台随机生成后复制到此处', location: '「设置与开发」→「服务器配置」' },
-    { key: 'secret', label: 'AppSecret（预留）', placeholder: '', hint: '接口通道（后续版本）用，可先留空', location: '「设置与开发」→「公众号设置」' },
-    { key: 'sync_interval_hours', label: '同步周期（小时）', placeholder: '6', hint: '定时复核/同步周期，默认 6 小时', location: '' },
+    { key: 'secret', label: 'AppSecret（接口通道）', placeholder: '', hint: '用于定时同步公众号「发布」渠道文章；在「设置与开发→基本配置」获取，并将服务器出口 IP 加入 IP 白名单；留空则仅使用回调+手动粘贴通道', location: '「设置与开发」→「基本配置」' },
+    { key: 'sync_interval_hours', label: '同步周期（小时）', placeholder: '6', hint: '发布渠道文章定时对账周期（仅配置 AppSecret 后生效），默认 6 小时', location: '' },
   ],
   feishu: [
     { key: 'app_id', label: 'App ID', placeholder: 'cli_...', location: '「凭证与基础信息」页面' },

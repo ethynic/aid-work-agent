@@ -465,6 +465,62 @@ async def generate_keypair(config_id: str, request: Request):
     }
 
 
+def _run_wechat_mp_api_check(tenant_id: str, config_id: str, appid: str, secret: str) -> dict:
+    """接口通道三步实测（WP9，同步实现，调用方放 asyncio.to_thread）。
+
+    stable_token → batchget(offset 0, count 1, no_content=1) → 有消息时对首条
+    getarticle。返回 {ok, steps, errcode, message}；任何失败不带凭据/响应正文/
+    异常原文出栈（客户端已保证 message 脱敏可直接展示）。batchget 空集合视为
+    通过（新公众号可能还没有「发布」文章，getarticle 无从实测）。
+    """
+    from src.wechat_mp.client import WeChatMPAPIClient, friendly_api_error
+
+    steps: list = []
+    client = WeChatMPAPIClient(
+        tenant_id=tenant_id, config_id=config_id, appid=appid, secret=secret
+    )
+    try:
+        return _wechat_mp_api_check_steps(client, steps)
+    finally:
+        # 客户端自持 httpx 连接池：一次性探针即用即弃（所有返回路径均释放）
+        close = getattr(client, "close", None)
+        if callable(close):
+            close()
+
+
+def _wechat_mp_api_check_steps(client, steps: list) -> dict:
+    """三步实测主体（client 生命周期由调用方管理）。"""
+    try:
+        client.get_access_token()
+        steps.append({"step": "stable_token", "ok": True})
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "steps": steps, "errcode": getattr(e, "errcode", None),
+                "message": friendly_api_error(e)}
+
+    try:
+        page = client.batchget_page(0, 1, no_content=1)
+        total_count = page.get("total_count")
+        items = page.get("item") if isinstance(page.get("item"), list) else []
+        steps.append({"step": "batchget", "ok": True, "total_count": total_count})
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "steps": steps, "errcode": getattr(e, "errcode", None),
+                "message": friendly_api_error(e)}
+
+    first_id = items[0].get("article_id") if items and isinstance(items[0], dict) else None
+    if not first_id:
+        return {
+            "ok": True, "steps": steps, "errcode": None,
+            "message": "接口通道验证通过（当前公众号暂无已发布文章，正文拉取待有文章后实测）",
+        }
+    try:
+        client.getarticle(first_id)
+        steps.append({"step": "getarticle", "ok": True})
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "steps": steps, "errcode": getattr(e, "errcode", None),
+                "message": friendly_api_error(e)}
+    return {"ok": True, "steps": steps, "errcode": None, "message": "接口通道验证通过"}
+
+
 @router.post("/{config_id}/verify")
 @audit_action(BehaviorAction.UPDATE, BehaviorResourceType.CONFIG, id_arg="config_id")
 async def verify_channel(config_id: str, request: Request):
@@ -506,15 +562,15 @@ async def verify_channel(config_id: str, request: Request):
         ChannelConfigDB.set_verified(config_id, bool(result.get("verified")))
         return result
 
-    # wechat_mp：回调通道无服务端可发起的凭据实测（接口通道验证属 P3），
-    # 「验证连接」返回回调三态（config_verified_at / last_event_at / last_error）供前端展示
+    # wechat_mp：回调三态（config_verified_at / last_event_at / last_error）+（WP9）
+    # config 含 appid+secret 时的接口通道三步实测（stable_token → batchget → getarticle）
     cfg_masked = ChannelConfigDB.get_by_id(config_id)
     if cfg_masked and cfg_masked.get("channel_type") == _WECHAT_MP_CHANNEL_TYPE:
         if cfg_masked["tenant_id"] != admin["tenant_id"]:
             raise HTTPException(status_code=403, detail="无权操作此配置")
         cfg_data = cfg_masked.get("config") or {}
         config_verified_at = cfg_data.get("config_verified_at")
-        return {
+        result = {
             "success": True,
             "verified": bool(config_verified_at),
             "config_verified_at": config_verified_at,
@@ -527,6 +583,35 @@ async def verify_channel(config_id: str, request: Request):
                 else "尚未完成回调 URL 验证：请在公众平台后台「设置与开发→服务器配置」填入回调地址与 Token 并保存"
             ),
         }
+
+        # WP9 接口通道实测：AppID+AppSecret 均已配置才发起（留空=仅回调+手动粘贴通道）
+        decrypted = ChannelConfigDB.get_by_id_decrypted(config_id)
+        mp_cfg = (decrypted or {}).get("config") or {}
+        appid = str(mp_cfg.get("appid") or "").strip()
+        secret = str(mp_cfg.get("secret") or "").strip()
+        if not (appid and secret):
+            return result
+
+        api_check = await asyncio.to_thread(
+            _run_wechat_mp_api_check, admin["tenant_id"], config_id, appid, secret
+        )
+        result["api_check"] = api_check
+        if api_check.get("ok"):
+            # verified 列语义=凭据实测可用（与其他渠道一致）；回调三态 config_verified_at 不动
+            ChannelConfigDB.set_verified(config_id, True)
+            result["verified"] = True
+            result["message"] = f"回调三态如上；接口通道：{api_check.get('message')}"
+            return result
+
+        # 实测失败：仅当回调验证态不存在时才回落 verified=0（与其他渠道失败语义一致）。
+        # config_verified_at 已存在（回调曾实测通过）时不撤销 verified——一次 IP 白名单
+        # 未加/接口权限等接口通道问题，不应覆盖回调链路的实测结论（误报会让前端把可用
+        # 配置当无效配置）。两通道结论在 message/api_check 节点分别呈现。
+        if not config_verified_at:
+            ChannelConfigDB.set_verified(config_id, False)
+            result["verified"] = False
+        result["message"] = f"回调三态如上；接口通道验证失败：{api_check.get('message')}"
+        return result
 
     # 其他渠道走原有 ChannelFactory 路径
     config = cfg_masked
