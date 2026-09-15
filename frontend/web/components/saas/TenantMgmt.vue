@@ -753,9 +753,9 @@ function applyFilterAndPagination() {
       (t.initial_admin_phone && t.initial_admin_phone.includes(kw))
     )
   }
-  // 待续费过滤：仅显示 renewal_pending=true 的租户
+  // 待续费过滤：仅显示 renewal_pending=true 的租户，已删除租户不显示
   if (renewalFilter.value) {
-    filtered = filtered.filter(t => t.renewal_pending)
+    filtered = filtered.filter(t => t.renewal_pending && t.status !== TenantStatus.DEACTIVATED)
   }
   total.value = filtered.length
   const start = (currentPage.value - 1) * pageSize.value
