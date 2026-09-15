@@ -266,6 +266,14 @@ class TestLoadTenantDoc:
         assert path.name == "my-custom-agent-api.md"
         assert path.parent.name == "templates"
 
+    def test_load_passes_subagent_name_to_path_builder(self):
+        """回归（2026-09-15 生产事故）：_load_tenant_doc 必须把 subagent_name 透传给
+        _tenant_doc_path——c43c65e5 曾漏传该参数导致 TypeError，所有租户推送全挂"""
+        with patch("src.services.recap.tasks.external_push._tenant_doc_path") as mock_path:
+            mock_path.return_value.exists.return_value = False
+            assert _load_tenant_doc("tenant_x", "pre-sales") is None
+        mock_path.assert_called_once_with("tenant_x", "pre-sales")
+
 
 # ============== 委托登录（缓存 + api-meta login_url） ==============
 
@@ -415,11 +423,17 @@ class TestCollectContext:
             subagent_name="n", round_message_id=1,
             user_content="u", assistant_reply="a",
         )
-        assert _collect_context(payload) is None
+        with patch("src.channels.session.channel_session_manager") as mock_mgr:
+            mock_mgr.get_session_by_id.return_value = {"channel_type": "dingtalk"}
+            assert _collect_context(payload) is None
 
     def test_full_context(self):
         payload = _make_payload()
         session_row = {
+            "channel_type": "wecom_kf",
+            "channel_user_id": "wmS6oOTAAAhVHj3_umWg",
+            "channel_chat_id": "wkS6oOTAAAqAvd",
+            "subagent_id": "pre-sales",
             "username": "小团长",
             "metadata": {"lead_capture": {"lead_id": "lead_lc_abc", "stage": "captured"}},
         }
@@ -431,6 +445,59 @@ class TestCollectContext:
             ctx = _collect_context(payload)
 
         assert ctx == _ctx()
+
+    def test_legacy_session_id_resolved_from_session_row(self):
+        """回归（2026-09-15 生产事故）：存量老格式 session_id（无 open_kfid 段）
+        不再从字符串反解析，改从会话行取 external_userid / channel_chat_id"""
+        payload = RecapPayload(
+            tenant_id="t", session_id="tenant_t_wecom_kf_wmExtU1_sales-assistant",
+            subagent_name="n", round_message_id=1,
+            user_content="u", assistant_reply="a",
+        )
+        session_row = {
+            "channel_type": "wecom_kf",
+            "channel_user_id": "wmExtU1",
+            "channel_chat_id": "wkKfAccount1",
+            "subagent_id": "sales-assistant",
+            "username": "客户A",
+            "metadata": {},
+        }
+        with patch("src.channels.session.channel_session_manager") as mock_mgr, \
+             patch("src.services.recap.tasks.external_push._resolve_assignee",
+                   return_value=("13701602974", "王顾问")):
+            mock_mgr.get_session_by_id.return_value = session_row
+            ctx = _collect_context(payload)
+
+        assert ctx["external_userid"] == "wmExtU1"
+        assert ctx["open_kfid"] == "wkKfAccount1"
+        assert ctx["subagent"] == "sales-assistant"
+
+    def test_missing_session_row_falls_back_to_session_id_parse(self):
+        """会话行缺失（防御场景）回退 session_id 解析，仅支持新格式"""
+        payload = _make_payload()
+        with patch("src.channels.session.channel_session_manager") as mock_mgr, \
+             patch("src.services.recap.tasks.external_push._resolve_assignee",
+                   return_value=("13701602974", "王顾问")):
+            mock_mgr.get_session_by_id.return_value = None
+            ctx = _collect_context(payload)
+        assert ctx["open_kfid"] == "wkS6oOTAAAqAvd"
+        assert ctx["external_userid"] == "wmS6oOTAAAhVHj3_umWg"
+        assert ctx["subagent"] == "pre-sales"
+
+    def test_wecom_kf_row_without_external_userid_aborts(self):
+        payload = RecapPayload(
+            tenant_id="t", session_id="tenant_t_wecom_kf_wk1_sa",
+            subagent_name="n", round_message_id=1,
+            user_content="u", assistant_reply="a",
+        )
+        with patch("src.channels.session.channel_session_manager") as mock_mgr:
+            mock_mgr.get_session_by_id.return_value = {
+                "channel_type": "wecom_kf",
+                "channel_user_id": "",
+                "channel_chat_id": "wk1",
+                "subagent_id": "sa",
+            }
+            assert _collect_context(payload) is None
 
     def test_lead_read_failure_degrades(self):
         payload = _make_payload()

@@ -220,7 +220,9 @@ def _load_tenant_doc(tenant_id: str, subagent_name: str) -> Optional[str]:
     文档是 LLM 调用外部系统接口的唯一依据，不做任何截断（对齐
     load_api_config.py 的 _no_truncate 契约）。
     """
-    path = _tenant_doc_path(tenant_id)
+    # subagent_name 是 _tenant_doc_path 的必选参数（c43c65e5 曾漏传导致 TypeError，
+    # 所有租户推送全挂；此处透传，缺参在函数签名处即报错而非静默错路径）
+    path = _tenant_doc_path(tenant_id, subagent_name)
     if not path.exists():
         return None
     try:
@@ -365,22 +367,44 @@ def _resolve_assignee(tenant_id: str, open_kfid: str) -> tuple:
 
 
 def _collect_context(payload: RecapPayload) -> Optional[Dict[str, Any]]:
-    """采集推送上下文（全部同步 DB 读，无 LLM）。缺失关键字段返回 None（放弃本轮）"""
-    parsed = parse_wecom_kf_session(payload.session_id)
-    if not parsed:
+    """采集推送上下文（全部同步 DB 读，无 LLM）。缺失关键字段返回 None（放弃本轮）
+
+    open_kfid / external_userid / subagent 以 channel_sessions 会话行为准：
+    2026-08-14（channel_chat_id 纳入 session_id 改造）之前创建的存量会话，
+    session_id 是老格式 `tenant_{tid}_wecom_kf_{external_userid}_{subagent}`
+    （无 open_kfid 段），但 DB 行上 channel_chat_id 有值——从 session_id 字符串
+    反解析会把 external_userid 误判为 open_kfid（生产事故 2026-09-15）。
+    会话行缺失时回退到 session_id 解析（仅新格式）。
+    """
+    from src.channels.session import channel_session_manager
+
+    session = channel_session_manager.get_session_by_id(payload.session_id) or {}
+    channel_type = (session.get("channel_type") or "").strip()
+    external_userid = (session.get("channel_user_id") or "").strip()
+    open_kfid = (session.get("channel_chat_id") or "").strip()
+    subagent_name = (session.get("subagent_id") or "").strip()
+
+    if not channel_type:
+        parsed = parse_wecom_kf_session(payload.session_id)
+        if not parsed:
+            logger.warning(
+                f"[external_push] 非 wecom_kf 会话，放弃推送 session={payload.session_id}"
+            )
+            return None
+        open_kfid = parsed["open_kfid"]
+        external_userid = parsed["external_userid"]
+        subagent_name = parsed["subagent"]
+    elif channel_type != "wecom_kf":
         logger.warning(
-            f"[external_push] 非 wecom_kf 会话，放弃推送 session={payload.session_id}"
+            f"[external_push] 非 wecom_kf 会话（channel_type={channel_type}），"
+            f"放弃推送 session={payload.session_id}"
         )
         return None
-    external_userid = parsed["external_userid"]
-    open_kfid = parsed["open_kfid"]
+
     if not external_userid:
         logger.warning(f"[external_push] external_userid 为空，放弃推送 session={payload.session_id}")
         return None
 
-    from src.channels.session import channel_session_manager
-
-    session = channel_session_manager.get_session_by_id(payload.session_id) or {}
     metadata = session.get("metadata") or {}
     nickname = (session.get("username") or "").strip()
 
@@ -413,7 +437,7 @@ def _collect_context(payload: RecapPayload) -> Optional[Dict[str, Any]]:
     return {
         "open_kfid": open_kfid,
         "external_userid": external_userid,
-        "subagent": parsed["subagent"],
+        "subagent": subagent_name,
         "nickname": nickname,
         "avatar": avatar,
         "gender": gender,
