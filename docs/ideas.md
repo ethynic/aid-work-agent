@@ -25,7 +25,6 @@
 | 65 | 母体 Agent 收敛（agent.py Kernel 化） | 📋 待开发 | **不设专项重构、不阻塞其他工作**，继续采用“冻结增长 + 有真实需求时伴生拆分”。 | [原则](system/agent-kernel-convergence-principles.md) | — |
 | 70 | 数据库增量升级脚本 YAML 化 | 🔧 部分完成 | 将 deploy/db_update.sql 全量哈希重跑机制改为 deploy/db_update.yaml + datetime 增量执行（last_datetime），免手动清理、… | [设计](system/database-db-update-incremental-design.md) | — |
 | 71 | 租户附件存储规范整改（第二阶段） | 🔧 部分完成 | 主上传链路整改后仍有 7 处违规写入；存量迁移已完成（测试 09-05 / 生产 09-07），遗留归档保留 30 天。 | — | [迁移方案](plans/plan-storage-legacy-migration.md) |
-| 73 | 本地开发调试环境说明（venv / WSL 容器 / Mac 容器） | ✅ 已完成 | 明确三种本地开发调试方式与网络要求：①本地 venv；②WSL2 内容器（要求 WSL mirrored 镜像网络 + 容器 host 网络覆盖文件，不走 NAT，… | [说明](infrastructure/local-dev-environments.md) | — |
 
 ## 系统功能
 
@@ -39,7 +38,6 @@
 | 64 | Agent 用户可见中间消息（verbose） | 🔧 部分完成 | Agent 面向用户的中间进度提示（verbose 事件，确定性文案 + owner 级限流 + 渠道适配）；代码完成，待灰度真机验收。 | [设计](system/agent-intermediate-feedback-design.md) | [开发计划](plans/plan-agent-intermediate-feedback.md) / [灰度回滚手册](plans/verbose-feedback-rollout-runbook.md) |
 | 68 | zhipu 默认模型切 GLM-5.3-Flash + 价目表多模态标识 | 🔧 部分完成 | ①zhipu 缺省模型 glm-4 → GLM-5.3-Flash（GLM-5 系列首个原生多模态，输入 0.8 / 输出 2.8 元/M tokens，… | [设计](design/weixin/weixin-cli-billing.md) | — |
 | 77 | 外部系统入口（SSO 打开第三方系统） | 🔧 部分完成（Phase 1 开发完成，待真机联调） | 连接中心「外部系统」入口 + SSO 通用契约（direct_url/ticket_redirect/token_param）打开第三方系统；Phase 1 完成待真机联调。 | [方案](system/external-system-entry-design.md) | — |
-| 78 | chat_lite 计费模型错配 | ✅ 已完成开发 | 11 处小任务调用点 chat_lite 与计费模型错配（多收租户）：交互型改走 chat_no_thinking 对齐实际消耗模型；已完成待部署。 | [已知问题记录](plans/chat-lite-billing-model-mismatch.md) | — |
 | 82 | 微信公众号内容入知识库 | 🔧 部分完成 | 公众号文章多通道采集入知识库（回调+URL 直采+手动粘贴+接口对账，图片 VL 解析、500 字总结、按张计费）；P1/P2+接口通道（WP9）完成，待部署验收。 | [设计](system/wechat-mp/wechat-mp-knowledge-ingestion-design.md) | [计划](plans/plan-wechat-mp-knowledge-ingestion.md) |
 
 ## 数字员工 / 子智能体
@@ -108,7 +106,6 @@
 
 | # | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
-| 71 | 彻底移除 demo 模式与 SAAS_ENABLED 开关 | ✅ 已完成开发 | demo 模式（免登录演示，`DEMO_ENABLED`/`VITE_DEMO_ENABLED` 控制）已无人使用且与租户模式并存造成大量死分支；系统定位即 SaaS 平台，… | — | — |
 | 40 | 后台管理界面引入 Element Plus | 💡 灵感 | 后台管理 16 个页面（表格/表单密集型）从手写 TailwindCSS 迁到 Element Plus 组件库（`el-table`、`el-form`、`el-dialog` 等），… | [设计](tech-stack-optimization/admin-element-plus-migration.md) | — |
 | 41 | toast 迁至 Element Plus ElMessage | 💡 灵感 | 替换停更的 `vue-toastification@rc`，使用 Element Plus 的 `ElMessage.success/error/info/warning`，零额外依赖增量。 | [设计](tech-stack-optimization/toast-migration.md) | — |
 | 67 | report_model 重构为 lite_model（轻量小模型全局单配置 + 跨 provider） | 🔧 部分完成 | `report_model` 字段名不副实——并非只用于报告，还承担日报/周报/复盘/简历评分/数字员工空态摘要等快速便宜小模型任务；… | — | — |

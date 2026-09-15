@@ -24,6 +24,7 @@
 | 69a | ✅ Agent 运行时安全债收尾 | 2026-08-31 复核确认 `X-Tenant-Id` 验权（`d517e859`/`ec177152`）… | [核对与修复设计](system/agent-runtime-security-debt-closure-design.md) | [开发计划](plans/plan-agent-runtime-security-debt-closure.md) |
 | 61 | skill_ws 临时工作目录清理机制 | ✅ 已完成开发。修复技能执行工作目录 `skill_ws_*` 创建后永不清理的临时文件泄漏（每月堆积，2026-08-13 迁移核对时发现）。 | — | — |
 | 38 | 后台定时/轮询任务外置 | ✅ 已完成开发（待线上验证）。 | [独立后台运行时设计](infrastructure/background-runner-design.md) | [计划](plans/plan-background-runner.md) |
+| 73 | 本地开发调试环境说明（venv / WSL 容器 / Mac 容器） | ✅ 已完成开发。明确三种本地开发调试方式与网络要求：①本地 venv；②WSL2 内容器（mirrored 镜像网络 + host 网络覆盖）；③macOS Docker Desktop 容器（端口发布到 localhost 或 host networking）。 | [说明](infrastructure/local-dev-environments.md) | — |
 
 ## 系统功能
 
@@ -40,6 +41,8 @@
 | 35 | 短信验证码 skill | ✅ 已完成开发。新增 `src/skills/sms-verification-1.0.0/` 供智能体调用，复用 `src/sms/` 通道和 `send_sms_code`/`verify_sms_code` 底层逻辑。 | — | — |
 | 36 | 技能白名单简化（三层->两层） | ✅ 已完成开发。 | — | — |
 | 47 | 工作成果记录 | ✅ 已完成开发。沉淀子智能体产生的重要工作成果（生成文件、完成业务操作、给出决策建议）到 `work_outcomes` 表，租户前台新增"工作成果"菜单。 | [设计](system/work-outcome-record-design.md) | — |
+| 78 | chat_lite 计费模型错配 | ✅ 已完成开发。11 处小任务调用点 chat_lite 与计费模型错配（多收租户）：交互型改走 chat_no_thinking 对齐实际消耗模型；已完成待部署。 | [已知问题记录](plans/chat-lite-billing-model-mismatch.md) | — |
+| 71 | 彻底移除 demo 模式与 SAAS_ENABLED 开关 | ✅ 已完成开发。demo 模式（`DEMO_ENABLED`/`VITE_DEMO_ENABLED` 控制）已无人使用且与租户模式并存造成大量死分支；系统定位即 SaaS 平台。 | — | — |
 
 ## 数字员工 / 子智能体
 
