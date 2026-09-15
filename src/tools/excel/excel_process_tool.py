@@ -63,7 +63,8 @@ class ExcelProcessInput(BaseModel):
     data: Optional[Dict[str, Any]] = Field(
         None,
         description="按样例版式填充的结构化数据（AI 模板填充模式）。"
-                    "形如 {meta:{...}, rows:[{...}], group_subtotals:{...}, totals:{...}}。"
+                    "形如 {title:\"大标题\", meta:{...}, rows:[{...}], group_subtotals:{...}, totals:{...}}。"
+                    "title（可选）为整表大标题，会替换样例的标题格（如 A1）；不传则保留样例原标题。"
                     "**所有值必须是标量（str/int/float/bool），一格一值，不得嵌套 dict/list**："
                     "totals 形如 {\"grand_total\": 9520, \"per_capita\": {\"成人人均\": 238}}；"
                     "按列/人数档位分列的合计须拆成独立标量键（如 合计总价_40人: 9520），"
@@ -380,6 +381,14 @@ class ExcelProcessTool(BaseTool):
         )
         if deterministic:
             return deterministic
+
+        # data 无样例附件且无任何指令说明：意图无法确定，不能把空上下文交给
+        # LLM 路由随机猜测（曾随机返回 list_templates 导致静默"成功"）
+        if data and not context:
+            return {
+                "task": "",
+                "error": "data 填充需要样例附件（file_paths）；如需从数据直接生成 Excel，请通过 instruction/content 描述需求",
+            }
 
         try:
             router = self._get_router()

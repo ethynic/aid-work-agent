@@ -290,3 +290,33 @@ def test_create_excel_writes_currency_text_as_number(tmp_path, monkeypatch):
     ws = wb.active
     assert ws["B2"].value == 1446.07
     wb.close()
+
+
+# ============================================================
+# 规则路由：修改类指令不得被 to_md 劫持（2026-09-15 研学行程事故回归）
+# ============================================================
+
+
+def test_rule_route_modify_intent_falls_through_to_llm():
+    """修改类指令（含"内容"/"文本"字样）不命中 to_md 规则，交给 LLM 路由生成 modify"""
+    from src.tools.excel.excel_router import ExcelRouter
+
+    router = ExcelRouter()
+    modify_contexts = [
+        "修改该表格：1）把第一行标题单元格A1的内容从A改为B；2）删除重复行",
+        "对表格做文本查找替换：把全文中的X替换为Y",
+        "只做一件事：把 A1 单元格的文字改为 X",
+        "把表格里的价格更新一下",
+    ]
+    for ctx in modify_contexts:
+        res = router._rule_based_route(ctx, ["a.xlsx"])
+        assert res.get("task") == "", f"修改指令被规则路由劫持: {ctx} -> {res}"
+
+
+def test_rule_route_to_md_still_works_for_read_intent():
+    """非修改指令的 to_md 短路保持不变"""
+    from src.tools.excel.excel_router import ExcelRouter
+
+    router = ExcelRouter()
+    res = router._rule_based_route("读取这个附件的内容", ["a.xlsx"])
+    assert res["task"] == "to_md"

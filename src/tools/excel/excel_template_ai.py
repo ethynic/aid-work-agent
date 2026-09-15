@@ -112,6 +112,7 @@ class FillData(BaseModel):
 
     rows: List[Dict[str, Any]] = Field(default_factory=list)
     meta: Dict[str, Any] = Field(default_factory=dict)
+    title: Optional[Any] = None  # 大标题（写入样例标题格，如 A1）；未传时保留样例原标题
     columns: Optional[List[Dict[str, Any]]] = None  # 显式列绑定（可选，优先于 LLM 推断）
     group_subtotals: Dict[str, Any] = Field(default_factory=dict)
     totals: Dict[str, Any] = Field(default_factory=dict)
@@ -138,6 +139,9 @@ def _validate_cell_scalars(fill_data: "FillData") -> Optional[str]:
             "多值明细转为多行放入 rows"
         )
 
+    err = check("title", fill_data.title)
+    if err:
+        return err
     for k, v in (fill_data.meta or {}).items():
         err = check(f"meta.{k}", v)
         if err:
@@ -845,6 +849,13 @@ def _render(ws, structure: SheetStructure, data: FillData) -> int:
                 continue
             _set_value(ws, r, g.subtotal_col, _resolve_subtotal(g, data, rows, bound_by_col), final_merges)
 
+    # 5.5 写大标题：structure.title 定位标题格，值取 data.title（兼容 meta["标题"]）。
+    #     之前渲染器从不写标题格，样例残留标题（如旧产品名）会原样带入成品；
+    #     调用方未传 title 时保留样例原标题。标题区合并未解除，_set_value 落锚点。
+    title_value = data.title if data.title is not None else (data.meta or {}).get("标题")
+    if structure.title and title_value is not None:
+        _set_value(ws, structure.title["row"], structure.title["col"], title_value, final_merges)
+
     # 6. 填顶部 meta（左右结构：标题在 mf.col，值写到标题视觉范围右侧；标题合并时取合并区右侧+1）
     for mf in structure.meta_fields:
         if not mf.bind:
@@ -963,7 +974,9 @@ def _analyze_coverage(structure: SheetStructure, data: FillData) -> Tuple[List[s
     unused: List[str] = []
     row_keys = {k for row in data.rows for k in row.keys()}
     unused.extend(sorted(row_keys - used_row))
-    unused.extend(f"meta:{k}" for k in sorted(set(data.meta or {}) - used_meta))
+    # title 已被写入标题格（data.title 优先，fallback meta["标题"]），不算 unused
+    title_consumed = {"标题"} if structure.title and data.title is None else set()
+    unused.extend(f"meta:{k}" for k in sorted(set(data.meta or {}) - used_meta - title_consumed))
     total_provided = set(data.totals or {})
     per_capita = (data.totals or {}).get("per_capita")
     if isinstance(per_capita, dict):

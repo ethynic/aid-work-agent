@@ -1219,3 +1219,74 @@ def test_missing_fields_cleared_and_reported(sample_path, tmp_path):
     assert ws["E7"].value in (None, ""), f"未提供的 grand_total 应清空: E7={ws['E7'].value!r}"
     # message 里应提示缺失
     assert "未提供" in res["message"] or "清空" in res["message"], res["message"]
+
+
+# ============================================================
+# 标题写入（2026-09-15 修复：渲染器从不写标题格，样例残留标题带入成品）
+# ============================================================
+
+
+def _three_rows():
+    return [
+        {"category": "住宿", "name": "酒店X", "unit_price": 200, "quantity": 2, "amount": 400},
+        {"category": "门票", "name": "景点Y", "unit_price": 80, "quantity": 3, "amount": 240},
+        {"category": "餐饮", "name": "午餐Z", "unit_price": 40, "quantity": 3, "amount": 120},
+    ]
+
+
+def test_title_from_data_title_written(sample_path, tmp_path):
+    """data.title 优先，写入样例标题格（A1 合并区锚点），合并保留"""
+    data = _data(_three_rows())
+    data.title = "法安少年 · 正义之光"
+    res = fill_with_sample(
+        str(sample_path), data,
+        output_dir=str(tmp_path), llm_callable=_mock_llm(),
+    )
+    assert res["success"], res
+
+    wb = openpyxl.load_workbook(res["file_path"])
+    ws = wb.active
+    assert ws["A1"].value == "法安少年 · 正义之光"
+    # A1:E1 合并保留，标题不落非锚点
+    assert any(mr.min_row == 1 and mr.max_row == 1 and mr.min_col == 1 and mr.max_col == 5
+               for mr in ws.merged_cells.ranges)
+    wb.close()
+
+
+def test_title_from_meta_biao_ti_fallback(sample_path, tmp_path):
+    """未传 data.title 时 fallback meta["标题"]，且不再报 meta:标题 unused"""
+    meta = {"标题": "法安少年 · 正义之光", "customer_name": "张三", "date": "2026-08-01"}
+    res = fill_with_sample(
+        str(sample_path), _data(_three_rows(), meta=meta),
+        output_dir=str(tmp_path), llm_callable=_mock_llm(),
+    )
+    assert res["success"], res
+
+    wb = openpyxl.load_workbook(res["file_path"])
+    ws = wb.active
+    assert ws["A1"].value == "法安少年 · 正义之光"
+    wb.close()
+    assert "meta:标题" not in (res.get("unused_data_keys") or []), res.get("unused_data_keys")
+
+
+def test_title_absent_keeps_sample_title(sample_path, tmp_path):
+    """未提供标题时保留样例原标题（向后兼容）"""
+    res = fill_with_sample(
+        str(sample_path), _data(_three_rows()),
+        output_dir=str(tmp_path), llm_callable=_mock_llm(),
+    )
+    assert res["success"], res
+
+    wb = openpyxl.load_workbook(res["file_path"])
+    ws = wb.active
+    assert ws["A1"].value == "报价单标题"
+    wb.close()
+
+
+def test_nested_title_rejected_before_llm(sample_path):
+    """标题非标量（嵌套 dict）在结构分析前拦截"""
+    data = _data(_three_rows())
+    data.title = {"text": "非法"}
+    res = fill_with_sample(str(sample_path), data, llm_callable=_mock_llm())
+    assert not res["success"]
+    assert "标量" in res["error"], res["error"]

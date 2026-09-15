@@ -31,8 +31,16 @@ ROUTING_PROMPT_PREFIX = """你是 Excel 电子表格处理工具的内部路由�
    - 参数：{data_type: "markdown|csv|json|table", file_name: "输出文件名", sheet_name: "可选", auto_format: true}
 
 4. **modify** — 修改已有 Excel 文件内容
-   - 触发：用户要求修改单元格、插入行列、删除行列、合并单元格
+   - 触发：用户要求修改单元格、插入行列、删除行列、合并单元格、文本查找替换
    - 参数：{operations: [{type, ...具体参数}], output_name: "可选"}
+   - **type 只能取以下值，禁止编造其它类型**（如 set_cell、replace_text 都不存在）：
+     `write_cell`（写单格: cell="A1", value="新值"）、`write_range`（写区域: start="A1", data=[[...]]）、
+     `insert_rows`（at, amount）、`delete_rows`（at, amount）、`insert_columns`（at, amount）、
+     `delete_columns`（at, amount）、`rename_sheet`（old_name, new_name）、`add_sheet`（name, data?）、
+     `delete_sheet`（name）、`merge_cells`（range="A1:D1"）、`unmerge_cells`（range）、`sort_data`
+   - 示例：把A1标题改为XX → {"operations": [{"type": "write_cell", "cell": "A1", "value": "XX"}]}
+   - 注意：你不知道单元格坐标时（如"把全文的X替换为Y"），先返回 read 让调用方拿到内容后再发起 modify；
+     不要凭空猜测单元格位置
 
 5. **format** — 设置 Excel 格式样式
    - 触发：用户要求设置字体、边框、颜色、列宽、数字格式
@@ -109,6 +117,17 @@ ROUTING_PROMPT_SUFFIX = """
 
 ## 附件文件
 """
+
+# 修改类意图触发词：命中即跳过规则路由的 to_md 短路，交给 LLM 路由判定
+# （修改/查找替换/删行等指令常含"内容""文本"等词，曾被误劫持为 to_md 只读操作）
+_MODIFY_INTENT_TOKENS = (
+    "修改", "替换", "改为", "改成", "改一下", "改下", "删除", "去掉", "清除",
+    "插入", "新增一行", "加一行", "写入", "更新", "重命名", "查找替换",
+)
+
+
+def _is_modify_intent(lower_ctx: str) -> bool:
+    return any(token in lower_ctx for token in _MODIFY_INTENT_TOKENS)
 
 
 class ExcelRouter:
@@ -275,7 +294,12 @@ class ExcelRouter:
                 "reason": f"规则识别：context包含{data_type}表格数据并要求导出Excel",
             }
 
-        if paths and any(token in lower_ctx for token in ("markdown", "文本", "查看", "读取", "内容")):
+        # 修改类指令禁止命中 to_md：此前"把A1的内容改为…"/"文本查找替换"因含"内容"/"文本"
+        # 被劫持成 to_md（只读转文本却返回 success），导致修改静默失效（2026-09-15 研学行程事故）。
+        # 修改类指令落到末尾的规则未命中 → 交给 LLM 路由，由其生成 modify/format 的具体 operations。
+        if paths and not _is_modify_intent(lower_ctx) and any(
+            token in lower_ctx for token in ("markdown", "文本", "查看", "读取", "内容")
+        ):
             return {
                 "task": "to_md",
                 "params": {},
