@@ -1,10 +1,10 @@
 """
 skill_executor._execute_command 子进程环境变量注入测试（Excel ETL Phase 2 计量接线）
 
-验证：tool_execution_scope 安装的请求级上下文（tenant/session/user）透传为
-子进程 env 的 AID_TENANT_ID / AID_SESSION_ID / AID_USER_ID；上下文缺失或字段
-为 None 时不设置对应变量。mock asyncio.create_subprocess_shell 捕获 env，
-不真正起子进程。
+验证：tool_execution_scope 安装的请求级上下文（tenant/session/user/subagent）透传为
+子进程 env 的 AID_TENANT_ID / AID_SESSION_ID / AID_USER_ID / AID_SUBAGENT_ID；
+上下文缺失或字段为 None 时不设置对应变量。mock asyncio.create_subprocess_shell
+捕获 env，不真正起子进程。
 """
 
 import asyncio
@@ -21,7 +21,7 @@ pytestmark = [pytest.mark.skills]
 
 @pytest.fixture(autouse=True)
 def _clean_aid_env(monkeypatch):
-    for name in ("AID_TENANT_ID", "AID_SESSION_ID", "AID_USER_ID"):
+    for name in ("AID_TENANT_ID", "AID_SESSION_ID", "AID_USER_ID", "AID_SUBAGENT_ID"):
         monkeypatch.delenv(name, raising=False)
 
 
@@ -66,6 +66,17 @@ class TestSkillExecutorAidEnv:
         assert env["AID_TENANT_ID"] == "tenant-1"
         assert env["AID_SESSION_ID"] == "sess-1"
         assert env["AID_USER_ID"] == "user-1"
+        assert "AID_SUBAGENT_ID" not in env  # subagent_id 缺省不注入
+
+    def test_subagent_id_injected(self, captured_env, tmp_path):
+        ctx = ToolExecutionContext(
+            tenant_id="tenant-1", subagent_id="pre-sales",
+        )
+        with tool_execution_scope(ctx):
+            _run(_executor(tmp_path), tmp_path)
+        env = captured_env["env"]
+        assert env["AID_SUBAGENT_ID"] == "pre-sales"
+        assert "AID_SESSION_ID" not in env  # 未设置的字段不注入
 
     def test_no_context_no_aid_vars(self, captured_env, tmp_path):
         # 无 tool_execution_scope（后台调度等场景）：不设置 AID_*，其余环境仍继承

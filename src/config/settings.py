@@ -425,7 +425,11 @@ class BillingConfig(BaseModel):
 
 
 class PreSalesPushConfig(BaseModel):
-    """售前外部推送（recap 任务 external_push）配置
+    """外部推送（recap 任务 external_push）配置
+
+    键名沿用历史（pre_sales），enabled 是 external_push 任务的**全局**总开关，
+    对所有配置了该 recap 任务的智能体生效（文档按子智能体隔离：各读各的
+    {subagent}-api.md）。
 
     - enabled: 总开关，置 false 即恢复纯对话（回滚手段）
     - summary_max_tokens: 摘要 LLM 单次生成上限

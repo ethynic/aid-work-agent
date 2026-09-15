@@ -1,9 +1,9 @@
 """外部系统入口 API（SSO 打开第三方系统）
 
-机制与实例分离：系统层只提供通用入口机制，外部系统细节由租户文档
-pre-sales-api.md 的 api-meta sso_* 键声明（解析见 src/services/tenant_api_doc.py），
-本模块代码不硬编码任何第三方系统。设计方案见
-docs/system/external-system-entry-design.md。
+机制与实例分离：系统层只提供通用入口机制，外部系统细节由各子智能体租户文档
+{subagent_name}-api.md 的 api-meta sso_* 键声明（解析见
+src/services/tenant_api_doc.py），本模块代码不硬编码任何第三方系统。
+system_id 即子智能体名。设计方案见 docs/system/external-system-entry-design.md。
 """
 
 import asyncio
@@ -18,10 +18,6 @@ from src.api.auth import get_current_user
 from src.services import tenant_api_doc
 
 router = APIRouter(prefix="/api/external-systems", tags=["外部系统入口"])
-
-# AGENT_TOKEN 存于该子智能体的租户级环境变量（subagent_env_vars），与推送侧一致，
-# 未配置时 _get_agent_token 会兜底遍历租户全部子智能体
-_PRE_SALES_SUBAGENT_NAME = "pre-sales"
 
 _SENSITIVE_PATTERNS = [
     r'password["\s:=]+\S+',
@@ -86,12 +82,8 @@ async def list_external_systems(request: Request):
             status_code=401,
         )
 
-    doc = tenant_api_doc.load_tenant_doc(tenant_id)
-    if not doc:
-        return {"success": True, "data": {"items": []}}
-    meta = tenant_api_doc.extract_api_meta(doc)
-    cfg = tenant_api_doc.parse_sso_config(meta)
-    if cfg is None:
+    configs = tenant_api_doc.load_sso_configs(tenant_id)
+    if not configs:
         return {"success": True, "data": {"items": []}}
 
     items = [
@@ -103,6 +95,7 @@ async def list_external_systems(request: Request):
             # direct_url 模式前端直接打开；其余模式需调 sso-url 接口换取跳转地址
             "entry_url": cfg["sso_url"] if cfg["mode"] == "direct_url" else None,
         }
+        for cfg in configs
     ]
     return {"success": True, "data": {"items": items}}
 
@@ -122,9 +115,8 @@ async def get_sso_url(system_id: str, request: Request):
             status_code=401,
         )
 
-    doc = tenant_api_doc.load_tenant_doc(tenant_id)
-    meta = tenant_api_doc.extract_api_meta(doc or "")
-    cfg = tenant_api_doc.parse_sso_config(meta)
+    # system_id 即子智能体名，按名定位该智能体的租户文档
+    cfg = tenant_api_doc.load_sso_config(tenant_id, system_id)
     if cfg is None or cfg["system_id"] != system_id:
         return JSONResponse(
             {"success": False, "error": "外部系统不存在或未开启入口", "debug": f"system_id={system_id}"},
@@ -149,14 +141,14 @@ async def get_sso_url(system_id: str, request: Request):
             cfg["fallback_url"], "当前账号无手机号，无法单点登录，请手动登录", "user.phone is empty"
         )
 
-    agent_token = _get_agent_token(tenant_id, _PRE_SALES_SUBAGENT_NAME)
+    agent_token = _get_agent_token(tenant_id, system_id)
     if not agent_token:
         return _fallback_response(
             cfg["fallback_url"], "外部系统未完成对接配置，请联系管理员",
             "AGENT_TOKEN not configured for tenant",
         )
 
-    login_url = meta.get("login_url") or ""
+    login_url = cfg.get("login_url") or ""
     if not login_url:
         return _fallback_response(
             cfg["fallback_url"], "单点登录失败，已打开登录页，请手动登录",
@@ -191,7 +183,7 @@ async def get_sso_url(system_id: str, request: Request):
         if cfg["mode"] == "token_param":
             # 票据即委托会话 client_token 本身，由前端拼在 URL 打开（契约兜底模式）
             login = await asyncio.to_thread(
-                _delegate_login, tenant_id, phone, agent_token, login_url, False, user_name
+                _delegate_login, tenant_id, phone, agent_token, login_url, False, user_name, system_id
             )
             if login and login.get("client_token"):
                 url = _build_ticket_url(cfg["sso_url"], cfg["ticket_param"], login["client_token"])
@@ -207,7 +199,7 @@ async def get_sso_url(system_id: str, request: Request):
 
         # ticket_redirect：委托会话 client_token 调 sso_grant 换一次性票据
         login = await asyncio.to_thread(
-            _delegate_login, tenant_id, phone, agent_token, login_url, False, user_name
+            _delegate_login, tenant_id, phone, agent_token, login_url, False, user_name, system_id
         )
         if login and login.get("client_token"):
             grant = await asyncio.to_thread(
@@ -224,7 +216,7 @@ async def get_sso_url(system_id: str, request: Request):
 
         # 缓存 token 可能已被第三方判失效（如 Code=-99）：强刷委托会话后重试一次
         login = await asyncio.to_thread(
-            _delegate_login, tenant_id, phone, agent_token, login_url, True, user_name
+            _delegate_login, tenant_id, phone, agent_token, login_url, True, user_name, system_id
         )
         if login and login.get("client_token"):
             grant = await asyncio.to_thread(

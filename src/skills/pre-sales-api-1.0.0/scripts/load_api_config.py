@@ -1,7 +1,7 @@
 """
 售前咨询外部系统 API 配置加载脚本。
 
-读取当前租户的 pre-sales-api.md 配置文件并返回内容。
+读取当前租户、当前子智能体的接口配置文件（templates/{subagent}-api.md）并返回内容。
 供 LLM 了解如何调用外部售前咨询/客户管理系统的接口。
 
 用法: python scripts/load_api_config.py
@@ -60,7 +60,10 @@ def load_api_config():
     # tenant_id 数据库带 `tenant_` 前缀，存储规范要求目录不带前缀，统一剥离（与 src.core.storage.normalize_tenant_id 一致）
     if tenant_id.startswith("tenant_"):
         tenant_id = tenant_id[len("tenant_"):]
-    config_path = os.path.join(project_root, "storage", "tenants", tenant_id, "templates", "pre-sales-api.md")
+    # 文档按子智能体隔离：{subagent}-api.md（skill_executor 注入 AID_SUBAGENT_ID；
+    # 无上下文的调试场景回退 pre-sales 保持旧行为）
+    subagent_id = os.environ.get("AID_SUBAGENT_ID") or "pre-sales"
+    config_path = os.path.join(project_root, "storage", "tenants", tenant_id, "templates", f"{subagent_id}-api.md")
 
     if not os.path.exists(config_path):
         print(json.dumps({

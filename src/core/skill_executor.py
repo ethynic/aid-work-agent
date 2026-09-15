@@ -368,6 +368,8 @@ Follow the instructions in the skill above to complete the user's task."""
                     env['AID_SESSION_ID'] = _tool_ctx.session_id
                 if _tool_ctx.user_id:
                     env['AID_USER_ID'] = _tool_ctx.user_id
+                if _tool_ctx.subagent_id:
+                    env['AID_SUBAGENT_ID'] = _tool_ctx.subagent_id
             # 强制子进程使用 UTF-8 编码，避免 Windows 上 GBK/cp936 导致中文乱码
             env['PYTHONIOENCODING'] = 'utf-8'
             env['PYTHONUTF8'] = '1'

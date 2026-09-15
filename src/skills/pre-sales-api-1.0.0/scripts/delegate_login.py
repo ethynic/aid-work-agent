@@ -69,26 +69,34 @@ def _read_input():
         return {}
 
 
-def _read_cache(tenant_id, mobile):
-    """读缓存的 client_token，未命中返回 None"""
+def get_subagent_id():
+    """获取当前子智能体 ID（参与缓存键，隔离不同智能体对接的外部系统）"""
+    return os.environ.get("AID_SUBAGENT_ID") or "pre-sales"
+
+
+def _read_cache(tenant_id, subagent_id, mobile, login_url):
+    """读缓存的 client_token；未命中 / login_url 不一致（跨系统串号防御）返回 None"""
     try:
         from src.core.cache_utils import CacheKeys, get_cached
 
-        return get_cached(CacheKeys.PRE_SALES_CLIENT_TOKEN, tenant_id, mobile)
+        cached = get_cached(CacheKeys.EXTERNAL_LOGIN_TOKEN, tenant_id, subagent_id, mobile)
+        if isinstance(cached, dict) and cached.get("client_token") \
+                and cached.get("login_url") == login_url:
+            return cached
     except Exception as e:
         # Redis 不可用等异常不阻断流程，降级为直接登录
         print(json.dumps({"_cache_read_error": str(e)}, ensure_ascii=False),
               file=sys.stderr)
-        return None
+    return None
 
 
-def _write_cache(tenant_id, mobile, token_payload):
+def _write_cache(tenant_id, subagent_id, mobile, token_payload):
     """写缓存的 client_token，失败不阻断流程"""
     try:
         from src.core.cache_utils import CacheKeys, set_cached
 
         set_cached(
-            CacheKeys.PRE_SALES_CLIENT_TOKEN, tenant_id, mobile,
+            CacheKeys.EXTERNAL_LOGIN_TOKEN, tenant_id, subagent_id, mobile,
             value=token_payload, ttl=_CACHE_TTL_SECONDS,
         )
     except Exception as e:
@@ -168,10 +176,11 @@ def delegate_login():
         _emit({"success": False, "error": "无法获取当前租户 ID"})
         return
 
-    # 1. 缓存命中直接返回（force_refresh 时跳过）
+    # 1. 缓存命中直接返回（force_refresh 时跳过；login_url 不一致视为未命中）
+    subagent_id = get_subagent_id()
     if not force_refresh:
-        cached = _read_cache(tenant_id, mobile)
-        if isinstance(cached, dict) and cached.get("client_token"):
+        cached = _read_cache(tenant_id, subagent_id, mobile, login_url)
+        if cached:
             _emit({**cached, "success": True, "cached": True})
             return
 
@@ -181,16 +190,17 @@ def delegate_login():
         _emit({"success": False, **result})
         return
 
-    # 3. 写缓存并返回
+    # 3. 写缓存并返回（value 带 login_url，读取时校验防跨系统串号）
     token_payload = {
         "client_token": result.get("client_token", ""),
         "record_id": result.get("record_id"),
         "display_name": result.get("display_name", ""),
         "agent_name": result.get("agent_name", ""),
         "created": bool(result.get("created")),
+        "login_url": login_url,
     }
     if token_payload["client_token"]:
-        _write_cache(tenant_id, mobile, token_payload)
+        _write_cache(tenant_id, subagent_id, mobile, token_payload)
     _emit({**token_payload, "success": True, "cached": False})
 
 

@@ -249,14 +249,22 @@ class TestLoadTenantDoc:
     def test_missing_file_returns_none(self, tmp_path):
         with patch("src.services.recap.tasks.external_push._tenant_doc_path",
                    return_value=tmp_path / "templates" / "pre-sales-api.md"):
-            assert _load_tenant_doc("tenant_x") is None
+            assert _load_tenant_doc("tenant_x", "pre-sales") is None
 
     def test_existing_file_returns_full_text_no_truncation(self, tmp_path):
         doc_file = tmp_path / "pre-sales-api.md"
         doc_file.write_text(_doc(), encoding="utf-8")
         with patch("src.services.recap.tasks.external_push._tenant_doc_path",
                    return_value=doc_file):
-            assert _load_tenant_doc("tenant_x") == _doc()
+            assert _load_tenant_doc("tenant_x", "pre-sales") == _doc()
+
+    def test_doc_path_derived_from_subagent_name(self):
+        """文档路径按子智能体推导：templates/{subagent}-api.md（不回退他智能体文档）"""
+        from src.services.recap.tasks.external_push import _tenant_doc_path
+
+        path = _tenant_doc_path("tenant_x", "my-custom-agent")
+        assert path.name == "my-custom-agent-api.md"
+        assert path.parent.name == "templates"
 
 
 # ============== 委托登录（缓存 + api-meta login_url） ==============
@@ -264,7 +272,8 @@ class TestLoadTenantDoc:
 
 class TestDelegateLogin:
     def test_cache_hit_zero_http(self):
-        cached = {"client_token": "tok_cached", "record_id": 1, "display_name": "d", "agent_name": "a"}
+        cached = {"client_token": "tok_cached", "record_id": 1, "display_name": "d",
+                  "agent_name": "a", "login_url": "https://erp.example.com/login"}
         with patch("src.core.cache_utils.get_cached", return_value=cached) as mock_get, \
              patch("src.services.recap.tasks.external_push._post_json") as mock_post:
             login = _delegate_login("tenant_x", "13701602974", "agent_tok", "https://erp.example.com/login")
@@ -272,6 +281,28 @@ class TestDelegateLogin:
         assert login["cached"] is True
         mock_get.assert_called_once()
         mock_post.assert_not_called()
+
+    def test_cache_key_includes_subagent_scope(self):
+        """缓存键带子智能体维度（空值归一为 '-'），隔离同租户多智能体对接的不同系统"""
+        cached = {"client_token": "tok_cached", "login_url": "https://erp.example.com/login"}
+        with patch("src.core.cache_utils.get_cached", return_value=cached) as mock_get, \
+             patch("src.services.recap.tasks.external_push._post_json"):
+            _delegate_login("tenant_x", "m", "tok", "https://erp.example.com/login", subagent_name="foo")
+        assert mock_get.call_args.args == ("external_login_token", "tenant_x", "foo", "m")
+
+    def test_cache_login_url_mismatch_treated_as_miss(self):
+        """缓存值 login_url 与本次不一致（跨系统串号场景）按未命中处理，重新登录"""
+        cached = {"client_token": "tok_other_system", "login_url": "https://other.example.com/login"}
+        with patch("src.core.cache_utils.get_cached", return_value=cached), \
+             patch("src.core.cache_utils.set_cached") as mock_set, \
+             patch("src.services.recap.tasks.external_push._post_json",
+                   return_value={"Code": 0, "Response": {"client_token": "tok_new"}}) as mock_post:
+            login = _delegate_login("tenant_x", "m", "tok", "https://erp.example.com/login")
+        assert login["client_token"] == "tok_new"
+        assert login["cached"] is False
+        mock_post.assert_called_once()
+        # 回写的新缓存值带本次 login_url
+        assert mock_set.call_args.kwargs["value"]["login_url"] == "https://erp.example.com/login"
 
     def test_cache_miss_uses_login_url_from_meta(self):
         with patch("src.core.cache_utils.get_cached", return_value=None), \
@@ -552,9 +583,9 @@ class TestSummarize:
         assert kwargs["temperature"] == 0.2
         assert kwargs["max_tokens"] == 300
         assert kwargs.get("tools") is None
-        # 计费：条件 A，source=pre_sales_push，model 透传（独立落库分支算准单价）
+        # 计费：条件 A，source=external_push_{subagent}（summarize 无 ctx 时 unknown），model 透传
         assert mock_bill.called
-        assert mock_bill.call_args.kwargs["source"] == "pre_sales_push"
+        assert mock_bill.call_args.kwargs["source"] == "external_push_unknown"
         assert mock_bill.call_args.kwargs["tenant_id"] == "tenant_x"
         assert mock_bill.call_args.kwargs["model"] == "qwen3.8-flash"
 
@@ -685,7 +716,7 @@ class TestPushLoop:
         assert harness.holder[-1]["success"] is True
         # 每轮 lite 模型调用均计费（4 轮），source/model 断言（model 显式解析 lite 模型名）
         assert harness.mock_bill.call_count == 4
-        assert harness.mock_bill.call_args.kwargs["source"] == "pre_sales_push"
+        assert harness.mock_bill.call_args.kwargs["source"] == "external_push_pre-sales"
         assert harness.mock_bill.call_args.kwargs["model"] == "qwen3.8-flash"
 
     def test_billing_with_missing_model_does_not_crash(self):
@@ -894,6 +925,31 @@ class TestAdapter:
                    return_value=None):
             # 不上抛即通过
             asyncio.run(ExternalPushAdapter.execute(payload))
+
+    def test_doc_loaded_by_ctx_subagent_not_payload_name(self):
+        """文档按 ctx（会话解析）的子智能体名读取，而非 payload 显示名"""
+        payload = _make_payload()  # subagent_name="售前咨询专员"（显示名）
+        with patch("src.services.recap.tasks.external_push._collect_context", return_value=_ctx()), \
+             patch("src.services.recap.tasks.external_push._load_tenant_doc",
+                   return_value=None) as mock_load, \
+             patch("src.llm.gateway.llm_gateway"):
+            asyncio.run(ExternalPushAdapter.execute(payload))
+        mock_load.assert_called_once_with("tenant_x", "pre-sales")
+
+    def test_missing_subagent_name_aborts(self):
+        """ctx 与 payload 均无子智能体名时放弃，不猜测文档路径"""
+        payload = RecapPayload(
+            tenant_id="tenant_x", session_id="tenant_x_wecom_kf_kf1_ext1_",
+            subagent_name="", round_message_id=1,
+            user_content="u", assistant_reply="a",
+        )
+        ctx = {**_ctx(), "subagent": ""}
+        with patch("src.services.recap.tasks.external_push._collect_context", return_value=ctx), \
+             patch("src.services.recap.tasks.external_push._load_tenant_doc") as mock_load, \
+             patch("src.llm.gateway.llm_gateway") as mock_gw:
+            asyncio.run(ExternalPushAdapter.execute(payload))
+        mock_load.assert_not_called()
+        mock_gw.chat_lite.assert_not_called()
 
     def test_missing_doc_aborts_before_llm(self):
         payload = _make_payload()

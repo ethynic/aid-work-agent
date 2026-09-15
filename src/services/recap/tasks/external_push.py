@@ -5,7 +5,8 @@ external_push recap 适配器：每轮问答后把对话数据推送到租户外
 
 由 recap runner 调度（任务级幂等已由 runner 完成）。适配器本身不硬编码任何
 第三方系统的 BASE_URL / 接口路径 / 模块字段元数据——这些全部由租户接口文档
-storage/tenants/{tenant_id}/templates/pre-sales-api.md 指定，执行流程：
+storage/tenants/{tenant_id}/templates/{subagent_name}-api.md 指定（按子智能体
+严格隔离，不回退其他智能体的文档），执行流程：
 
 上下文采集 -> 租户文档加载（缺失放弃）-> api-meta 解析 -> 前置校验 ->
 LLM 摘要（计费）-> 委托登录（Redis 缓存，login_url 来自文档 api-meta 块）->
@@ -38,8 +39,6 @@ from src.services.recap.runner import RecapPayload
 from src.tools.base import BaseTool
 
 # ============== 租户接口文档与 api-meta 约定 ==============
-
-_DOC_FILENAME = "pre-sales-api.md"
 
 # 用户身份 token 默认变量名 / external_userid 承载字段默认名（10605 惯例，
 # 租户可在 api-meta 块中覆盖）
@@ -201,17 +200,21 @@ def parse_wecom_kf_session(session_id: str) -> Optional[Dict[str, str]]:
 # ============== 租户文档加载与 api-meta 解析 ==============
 
 
-def _tenant_doc_path(tenant_id: str) -> Path:
-    """租户接口文档路径：storage/tenants/{去前缀租户ID}/templates/pre-sales-api.md"""
+def _tenant_doc_path(tenant_id: str, subagent_name: str) -> Path:
+    """租户接口文档路径：storage/tenants/{去前缀租户ID}/templates/{subagent_name}-api.md
+
+    按子智能体严格隔离（与上传 API tenant_config_file.py 的命名一致），
+    不回退其他智能体的文档，避免误用别的智能体对接的外部系统。
+    """
     from src.core.storage import normalize_tenant_id
 
     return (
         Path(__file__).resolve().parents[4]
-        / "storage" / "tenants" / normalize_tenant_id(tenant_id) / "templates" / _DOC_FILENAME
+        / "storage" / "tenants" / normalize_tenant_id(tenant_id) / "templates" / f"{subagent_name}-api.md"
     )
 
 
-def _load_tenant_doc(tenant_id: str) -> Optional[str]:
+def _load_tenant_doc(tenant_id: str, subagent_name: str) -> Optional[str]:
     """读取租户接口文档全文；缺失返回 None（放弃本轮）
 
     文档是 LLM 调用外部系统接口的唯一依据，不做任何截断（对齐
@@ -227,7 +230,7 @@ def _load_tenant_doc(tenant_id: str) -> Optional[str]:
         return None
 
 
-def parse_api_meta(doc_text: str) -> Optional[Dict[str, str]]:
+def parse_api_meta(doc_text: str, topic: str = "外部推送") -> Optional[Dict[str, str]]:
     """从租户文档中解析机器可读 api-meta 约定块
 
     格式（文档顶部，```api-meta 围栏，YAML 风格 key: value 逐行）：
@@ -249,7 +252,7 @@ def parse_api_meta(doc_text: str) -> Optional[Dict[str, str]]:
     """
     match = re.search(r"```\s*api-meta[^\n]*\n(.*?)```", doc_text or "", re.DOTALL)
     if not match:
-        tlog("售前推送", "api-meta 解析失败：文档缺少 api-meta 约定块")
+        tlog(topic, "api-meta 解析失败：文档缺少 api-meta 约定块")
         return None
 
     meta: Dict[str, str] = {}
@@ -264,10 +267,10 @@ def parse_api_meta(doc_text: str) -> Optional[Dict[str, str]]:
 
     login_url = meta.get("login_url", "")
     if not login_url:
-        tlog("售前推送", "api-meta 解析失败：缺少 login_url")
+        tlog(topic, "api-meta 解析失败：缺少 login_url")
         return None
     if not login_url.startswith("https://"):
-        tlog("售前推送", f"api-meta 解析失败：login_url 非 https（{login_url.split('?')[0]}）")
+        tlog(topic, f"api-meta 解析失败：login_url 非 https（{login_url.split('?')[0]}）")
         return None
 
     meta.setdefault("user_token_name", _DEFAULT_USER_TOKEN_NAME)
@@ -280,7 +283,7 @@ def parse_api_meta(doc_text: str) -> Optional[Dict[str, str]]:
     return meta
 
 
-def _strip_excluded_sections(doc_text: str, meta: Dict[str, str]) -> str:
+def _strip_excluded_sections(doc_text: str, meta: Dict[str, str], topic: str = "外部推送") -> str:
     """按 api-meta 的 push_exclude_sections 裁剪注入 LLM 的文档章节
 
     值为逗号分隔的章节标题，与 `## ` 标题行做子串匹配（兼容「2. 委托登录接口」
@@ -305,7 +308,7 @@ def _strip_excluded_sections(doc_text: str, meta: Dict[str, str]) -> str:
             continue
         kept.append(part)
     if removed:
-        tlog("售前推送", f"文档裁剪章节: {', '.join(removed)}")
+        tlog(topic, f"文档裁剪章节: {', '.join(removed)}")
     return "\n".join(kept)
 
 
@@ -469,7 +472,7 @@ def _resolve_lite_model_name() -> Optional[str]:
         return None
 
 
-async def _summarize(payload: RecapPayload, ctx: Dict[str, Any]) -> Dict[str, str]:
+async def _summarize(payload: RecapPayload, ctx: Dict[str, Any], topic: str = "外部推送") -> Dict[str, str]:
     """LLM 摘要本轮问答；失败降级为截断原文（推送流程继续）
 
     用 chat_lite 走 llm.lite_model 轻量小模型——摘要任务简单，无需主模型。
@@ -507,7 +510,7 @@ async def _summarize(payload: RecapPayload, ctx: Dict[str, Any]) -> Dict[str, st
             response.get("usage") if isinstance(response, dict) else None,
             tenant_id=payload.tenant_id,
             user_id=payload.user_id or getattr(payload.record_service, "user_id", None),
-            source="pre_sales_push",
+            source=f"external_push_{ctx.get('subagent') or 'unknown'}",
             user_message="[recap external_push] 摘要生成",
             model=_resolve_lite_model_name(),
         )
@@ -517,7 +520,7 @@ async def _summarize(payload: RecapPayload, ctx: Dict[str, Any]) -> Dict[str, st
         )
         data = _extract_json_object(response.get("content", ""))
         if not data:
-            tlog("售前推送", "摘要输出解析失败，降级截断原文")
+            tlog(topic, "摘要输出解析失败，降级截断原文")
             return fallback
         return {
             "customer_need": _truncate(str(data.get("customer_need") or "")) or fallback["customer_need"],
@@ -560,19 +563,27 @@ def _delegate_login(
     login_url: str,
     force_refresh: bool = False,
     name: Optional[str] = None,
+    subagent_name: str = "",
 ) -> Optional[Dict[str, Any]]:
     """委托登录获取用户身份 token（默认变量名 client_token，可由文档声明）
 
     缓存与对话内技能脚本 delegate_login.py 共享同一 Redis 键
-    （CacheKeys.PRE_SALES_CLIENT_TOKEN:{tenant_id}:{mobile}，TTL 23h），
-    命中 0 次 HTTP；Code=-99 场景由调用方带 force_refresh=True 强刷。
+    （CacheKeys.EXTERNAL_LOGIN_TOKEN:{tenant_id}:{subagent}:{mobile}，TTL 23h），
+    命中 0 次 HTTP；缓存值带 login_url，读取时校验不一致按未命中处理
+    （防同租户多智能体对接不同外部系统时串号）。Code=-99 场景由调用方带
+    force_refresh=True 强刷。subagent_name 参与缓存键隔离不同智能体对接的系统。
     name 为归属员工姓名，仅手机号不存在触发自动建号时使用，空值不传。
     """
     from src.core.cache_utils import CacheKeys, get_cached, set_cached
 
+    cache_key_args = (tenant_id, subagent_name or "-", mobile)
     if not force_refresh:
-        cached = get_cached(CacheKeys.PRE_SALES_CLIENT_TOKEN, tenant_id, mobile)
-        if isinstance(cached, dict) and cached.get("client_token"):
+        cached = get_cached(CacheKeys.EXTERNAL_LOGIN_TOKEN, *cache_key_args)
+        if (
+            isinstance(cached, dict)
+            and cached.get("client_token")
+            and cached.get("login_url") == login_url
+        ):
             return {**cached, "cached": True}
     login_payload = {"mobile": mobile}
     if name:
@@ -593,11 +604,12 @@ def _delegate_login(
         "display_name": result.get("display_name", ""),
         "agent_name": result.get("agent_name", ""),
         "created": bool(result.get("created")),
+        "login_url": login_url,
     }
     if token_payload["client_token"]:
         try:
             set_cached(
-                CacheKeys.PRE_SALES_CLIENT_TOKEN, tenant_id, mobile,
+                CacheKeys.EXTERNAL_LOGIN_TOKEN, *cache_key_args,
                 value=token_payload, ttl=23 * 3600,
             )
         except Exception as e:
@@ -678,7 +690,7 @@ def _extract_business_code(result: Dict[str, Any]) -> Optional[int]:
     return int(match.group(1)) if match else None
 
 
-def _normalize_http_method(args: Dict[str, Any], meta: Dict[str, str]) -> Dict[str, Any]:
+def _normalize_http_method(args: Dict[str, Any], meta: Dict[str, str], topic: str = "外部推送") -> Dict[str, Any]:
     """按 api-meta 的 http_method 声明强制纠正 http_api 调用的 method
 
     lite 模型偶发把文档声明为 POST 的查询类接口自作主张写成 GET（鉴权 Header
@@ -693,7 +705,7 @@ def _normalize_http_method(args: Dict[str, Any], meta: Dict[str, str]) -> Dict[s
     corrected = dict(args)
     corrected["method"] = declared
     tlog(
-        "售前推送",
+        topic,
         "纠正请求方式: model={orig} -> declared={declared}, url={url}",
         orig=original,
         declared=declared,
@@ -808,6 +820,7 @@ async def _run_push_loop(
     meta: Dict[str, str],
     agent_token: str,
     login: Dict[str, Any],
+    topic: str = "外部推送",
 ) -> str:
     """推送主体：主模型 + http_api 工具多轮循环，按租户文档自主完成推送
 
@@ -875,7 +888,7 @@ async def _run_push_loop(
             response.get("usage") if isinstance(response, dict) else None,
             tenant_id=payload.tenant_id,
             user_id=payload.user_id or getattr(payload.record_service, "user_id", None),
-            source="pre_sales_push",
+            source=f"external_push_{ctx.get('subagent') or 'unknown'}",
             user_message=f"[recap external_push] 推送循环 第{round_no}轮",
             model=billed_model,
         )
@@ -908,7 +921,7 @@ async def _run_push_loop(
                 }
             else:
                 if name == "http_api":
-                    args = _normalize_http_method(args, meta)
+                    args = _normalize_http_method(args, meta, topic)
                 try:
                     result = await executor.execute(name, args, context=context)
                 except Exception as e:
@@ -930,7 +943,7 @@ async def _run_push_loop(
                 code = _extract_business_code(result)
                 if code == -99 and not auth_retried:
                     auth_retried = True
-                    tlog("售前推送", f"业务接口 Code=-99，强刷委托登录 round={round_no}")
+                    tlog(topic, f"业务接口 Code=-99，强刷委托登录 round={round_no}")
                     refreshed = await asyncio.to_thread(
                         _delegate_login,
                         payload.tenant_id,
@@ -939,6 +952,7 @@ async def _run_push_loop(
                         meta["login_url"],
                         True,
                         ctx.get("assignee_name"),
+                        ctx.get("subagent") or payload.subagent_name or "",
                     )
                     if refreshed and refreshed.get("client_token"):
                         messages.append({
@@ -964,7 +978,7 @@ async def _run_push_loop(
     report = report_holder[-1]
     if not report.get("success"):
         raise RuntimeError(f"推送失败（模型报告放弃）: {report.get('detail') or '未说明原因'}")
-    tlog("售前推送", f"推送完成 round={payload.round_message_id}, detail={report.get('detail')}")
+    tlog(topic, f"推送完成 round={payload.round_message_id}, detail={report.get('detail')}")
     return report.get("detail") or ""
 
 
@@ -983,13 +997,23 @@ class ExternalPushAdapter:
             _trace_summary(payload, "skipped", "上下文采集失败")
             return
 
-        doc = _load_tenant_doc(payload.tenant_id)
+        subagent_name = (ctx.get("subagent") or payload.subagent_name or "").strip()
+        if not subagent_name:
+            logger.warning(
+                f"[external_push] 子智能体名缺失，放弃推送 session={payload.session_id}"
+            )
+            _trace_summary(payload, "skipped", "子智能体名缺失")
+            return
+        topic = f"外部推送-{subagent_name}"
+        doc_filename = f"{subagent_name}-api.md"
+
+        doc = _load_tenant_doc(payload.tenant_id, subagent_name)
         if doc is None:
-            tlog("售前推送", f"放弃：租户未配置 {_DOC_FILENAME}, tenant={payload.tenant_id}")
-            _trace_summary(payload, "skipped", f"租户未配置 {_DOC_FILENAME}")
+            tlog(topic, f"放弃：租户未配置 {doc_filename}, tenant={payload.tenant_id}")
+            _trace_summary(payload, "skipped", f"租户未配置 {doc_filename}")
             return
 
-        meta = parse_api_meta(doc)
+        meta = parse_api_meta(doc, topic)
         if meta is None:
             logger.warning(
                 f"[external_push] 租户文档 api-meta 解析失败，放弃推送 tenant={payload.tenant_id}"
@@ -997,36 +1021,36 @@ class ExternalPushAdapter:
             _trace_summary(payload, "skipped", "租户文档 api-meta 解析失败")
             return
 
-        doc = _strip_excluded_sections(doc, meta)
+        doc = _strip_excluded_sections(doc, meta, topic)
 
         if not ctx.get("assignee_phone"):
             logger.warning(
                 f"[external_push] 归属员工手机号缺失，放弃推送 session={payload.session_id}"
             )
-            tlog("售前推送", f"放弃：归属员工手机号缺失, tenant={payload.tenant_id}, open_kfid={ctx['open_kfid']}")
+            tlog(topic, f"放弃：归属员工手机号缺失, tenant={payload.tenant_id}, open_kfid={ctx['open_kfid']}")
             _trace_summary(payload, "skipped", "归属员工手机号缺失")
             return
 
-        agent_token = _get_agent_token(payload.tenant_id, ctx.get("subagent"))
+        agent_token = _get_agent_token(payload.tenant_id, subagent_name)
         if not agent_token:
             logger.warning(
                 f"[external_push] 租户未配置 AGENT_TOKEN，放弃推送 session={payload.session_id}"
             )
-            tlog("售前推送", f"放弃：租户未配置 AGENT_TOKEN, tenant={payload.tenant_id}")
+            tlog(topic, f"放弃：租户未配置 AGENT_TOKEN, tenant={payload.tenant_id}")
             _trace_summary(payload, "skipped", "租户未配置 AGENT_TOKEN")
             return
 
         try:
-            summary = await _summarize(payload, ctx)
+            summary = await _summarize(payload, ctx, topic)
 
             login = await asyncio.to_thread(
                 _delegate_login, payload.tenant_id, ctx["assignee_phone"], agent_token, meta["login_url"],
-                False, ctx.get("assignee_name"),
+                False, ctx.get("assignee_name"), subagent_name,
             )
             if not login or not login.get("client_token"):
                 raise RuntimeError("委托登录失败（无 client_token）")
 
-            detail = await _run_push_loop(payload, ctx, summary, doc, meta, agent_token, login)
+            detail = await _run_push_loop(payload, ctx, summary, doc, meta, agent_token, login, topic)
             _trace_summary(payload, "ok", detail)
         except Exception as e:
             _trace_summary(payload, "failed", str(e))

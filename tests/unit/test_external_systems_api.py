@@ -1,4 +1,7 @@
-"""外部系统入口 API（list_external_systems / get_sso_url）单元测试"""
+"""外部系统入口 API（list_external_systems / get_sso_url）单元测试
+
+system_id 即子智能体名（{subagent_name}-api.md），测试按 pre-sales 示例。
+"""
 
 import pytest
 
@@ -8,6 +11,7 @@ from starlette.requests import Request
 pytestmark = [pytest.mark.unit, pytest.mark.api]
 
 TENANT = "t1"
+SUBAGENT = "pre-sales"
 SSO_META_DOC = """# 文档
 
 ```api-meta
@@ -35,6 +39,18 @@ def authed(monkeypatch):
     monkeypatch.setattr(external_systems, "get_current_user", lambda req: {"user_id": "u1", "phone": "13800000000"})
 
 
+@pytest.fixture
+def single_doc(monkeypatch):
+    """模拟租户仅一份 pre-sales-api.md，保留真实解析逻辑"""
+    monkeypatch.setattr(
+        "src.services.tenant_api_doc.list_doc_subagent_names", lambda tid: [SUBAGENT]
+    )
+    monkeypatch.setattr(
+        "src.services.tenant_api_doc.load_tenant_doc",
+        lambda tid, name: SSO_META_DOC if name == SUBAGENT else None,
+    )
+
+
 class TestListExternalSystems:
     async def test_missing_tenant_400(self):
         resp = await external_systems.list_external_systems(_request())
@@ -48,16 +64,16 @@ class TestListExternalSystems:
         assert resp.status_code == 401
 
     async def test_no_doc_returns_empty(self, authed, monkeypatch):
-        monkeypatch.setattr("src.services.tenant_api_doc.load_tenant_doc", lambda tid: None)
+        monkeypatch.setattr("src.services.tenant_api_doc.list_doc_subagent_names", lambda tid: [])
         result = await external_systems.list_external_systems(_request(TENANT))
         assert result == {"success": True, "data": {"items": []}}
 
-    async def test_sso_declared_returns_item(self, authed, monkeypatch):
-        monkeypatch.setattr("src.services.tenant_api_doc.load_tenant_doc", lambda tid: SSO_META_DOC)
+    async def test_sso_declared_returns_item(self, authed, single_doc):
         result = await external_systems.list_external_systems(_request(TENANT))
         items = result["data"]["items"]
         assert len(items) == 1
-        assert items[0]["system_id"] == "pre_sales"
+        # system_id 即子智能体名
+        assert items[0]["system_id"] == SUBAGENT
         assert items[0]["name"] == "10605 ERP"
         assert items[0]["sso_ready"] is True
         # 非 direct_url 模式不透出 entry_url，前端须走 sso-url 接口
@@ -65,50 +81,68 @@ class TestListExternalSystems:
 
     async def test_no_sso_declaration_returns_empty(self, authed, monkeypatch):
         monkeypatch.setattr(
+            "src.services.tenant_api_doc.list_doc_subagent_names", lambda tid: [SUBAGENT]
+        )
+        monkeypatch.setattr(
             "src.services.tenant_api_doc.load_tenant_doc",
-            lambda tid: "```api-meta\nlogin_url: https://a.example.com/login\n```",
+            lambda tid, name: "```api-meta\nlogin_url: https://a.example.com/login\n```",
         )
         result = await external_systems.list_external_systems(_request(TENANT))
         assert result["data"]["items"] == []
 
+    async def test_multiple_docs_only_sso_declared_listed(self, authed, monkeypatch):
+        """同租户多份 {subagent}-api.md：仅一份声明 sso_* 时列表只出 1 个系统"""
+        monkeypatch.setattr(
+            "src.services.tenant_api_doc.list_doc_subagent_names",
+            lambda tid: ["pre-sales", "another-agent"],
+        )
+
+        def _doc(tid, name):
+            if name == "pre-sales":
+                return SSO_META_DOC
+            # 另一智能体文档仅声明推送 login_url，未声明 sso_*
+            return "```api-meta\nlogin_url: https://b.example.com/login\n```\n"
+
+        monkeypatch.setattr("src.services.tenant_api_doc.load_tenant_doc", _doc)
+        result = await external_systems.list_external_systems(_request(TENANT))
+        items = result["data"]["items"]
+        assert len(items) == 1
+        assert items[0]["system_id"] == "pre-sales"
+
 
 class TestGetSsoUrl:
     async def test_missing_tenant_400(self):
-        resp = await external_systems.get_sso_url("pre_sales", _request())
+        resp = await external_systems.get_sso_url(SUBAGENT, _request())
         assert resp.status_code == 400
 
-    async def test_unknown_system_404(self, authed, monkeypatch):
-        monkeypatch.setattr("src.services.tenant_api_doc.load_tenant_doc", lambda tid: SSO_META_DOC)
+    async def test_unknown_system_404(self, authed, single_doc):
         resp = await external_systems.get_sso_url("other", _request(TENANT))
         assert resp.status_code == 404
 
     async def test_direct_url_mode_400(self, authed, monkeypatch):
         monkeypatch.setattr(
             "src.services.tenant_api_doc.load_tenant_doc",
-            lambda tid: "```api-meta\nlogin_url: https://a/login\nsso_enabled: true\nsso_url: https://a/\n```",
+            lambda tid, name: "```api-meta\nlogin_url: https://a/login\nsso_enabled: true\nsso_url: https://a/\n```",
         )
-        resp = await external_systems.get_sso_url("pre_sales", _request(TENANT))
+        resp = await external_systems.get_sso_url(SUBAGENT, _request(TENANT))
         assert resp.status_code == 400
 
-    async def test_no_phone_returns_fallback(self, authed, monkeypatch):
-        monkeypatch.setattr("src.services.tenant_api_doc.load_tenant_doc", lambda tid: SSO_META_DOC)
+    async def test_no_phone_returns_fallback(self, authed, single_doc, monkeypatch):
         monkeypatch.setattr(external_systems, "get_current_user", lambda req: {"user_id": "u1", "phone": ""})
-        result = await external_systems.get_sso_url("pre_sales", _request(TENANT))
+        result = await external_systems.get_sso_url(SUBAGENT, _request(TENANT))
         assert result["success"] is False
         assert result["fallback_url"] == "https://erp.example.com/login"
 
-    async def test_no_agent_token_returns_fallback(self, authed, monkeypatch):
-        monkeypatch.setattr("src.services.tenant_api_doc.load_tenant_doc", lambda tid: SSO_META_DOC)
+    async def test_no_agent_token_returns_fallback(self, authed, single_doc, monkeypatch):
         monkeypatch.setattr(
             "src.services.recap.tasks.external_push._get_agent_token", lambda tid, name: None
         )
-        result = await external_systems.get_sso_url("pre_sales", _request(TENANT))
+        result = await external_systems.get_sso_url(SUBAGENT, _request(TENANT))
         assert result["success"] is False
         assert result["fallback_url"] == "https://erp.example.com/login"
         assert "debug" in result
 
-    async def test_delegate_login_failure_returns_fallback(self, authed, monkeypatch):
-        monkeypatch.setattr("src.services.tenant_api_doc.load_tenant_doc", lambda tid: SSO_META_DOC)
+    async def test_delegate_login_failure_returns_fallback(self, authed, single_doc, monkeypatch):
         monkeypatch.setattr(
             "src.services.recap.tasks.external_push._get_agent_token", lambda tid, name: "agt"
         )
@@ -117,13 +151,12 @@ class TestGetSsoUrl:
             return None
 
         monkeypatch.setattr("src.services.recap.tasks.external_push._delegate_login", _fail)
-        result = await external_systems.get_sso_url("pre_sales", _request(TENANT))
+        result = await external_systems.get_sso_url(SUBAGENT, _request(TENANT))
         assert result["success"] is False
         assert result["fallback_url"] == "https://erp.example.com/login"
 
-    async def test_grant_rejected_returns_fallback(self, authed, monkeypatch):
+    async def test_grant_rejected_returns_fallback(self, authed, single_doc, monkeypatch):
         """用户账号在第三方不存在（Code=-1）时不阻断，返回 fallback_url 手动登录"""
-        monkeypatch.setattr("src.services.tenant_api_doc.load_tenant_doc", lambda tid: SSO_META_DOC)
         monkeypatch.setattr(
             "src.services.recap.tasks.external_push._get_agent_token", lambda tid, name: "agt"
         )
@@ -136,12 +169,11 @@ class TestGetSsoUrl:
 
         monkeypatch.setattr("src.services.recap.tasks.external_push._delegate_login", _login)
         monkeypatch.setattr("src.services.recap.tasks.external_push._post_json", _grant)
-        result = await external_systems.get_sso_url("pre_sales", _request(TENANT))
+        result = await external_systems.get_sso_url(SUBAGENT, _request(TENANT))
         assert result["success"] is False
         assert result["fallback_url"] == "https://erp.example.com/login"
 
-    async def test_success_with_third_party_url(self, authed, monkeypatch):
-        monkeypatch.setattr("src.services.tenant_api_doc.load_tenant_doc", lambda tid: SSO_META_DOC)
+    async def test_success_with_third_party_url(self, authed, single_doc, monkeypatch):
         monkeypatch.setattr(
             "src.services.recap.tasks.external_push._get_agent_token", lambda tid, name: "agt"
         )
@@ -154,13 +186,12 @@ class TestGetSsoUrl:
 
         monkeypatch.setattr("src.services.recap.tasks.external_push._delegate_login", _login)
         monkeypatch.setattr("src.services.recap.tasks.external_push._post_json", _grant)
-        result = await external_systems.get_sso_url("pre_sales", _request(TENANT))
+        result = await external_systems.get_sso_url(SUBAGENT, _request(TENANT))
         assert result["success"] is True
         # 第三方返回的 url 优先透传，票据参数名为 sso_ticket（区别于委托登录的 client_token）
         assert result["data"]["url"] == "https://erp.example.com/?sso_ticket=ticket"
 
-    async def test_success_url_constructed_from_ticket(self, authed, monkeypatch):
-        monkeypatch.setattr("src.services.tenant_api_doc.load_tenant_doc", lambda tid: SSO_META_DOC)
+    async def test_success_url_constructed_from_ticket(self, authed, single_doc, monkeypatch):
         monkeypatch.setattr(
             "src.services.recap.tasks.external_push._get_agent_token", lambda tid, name: "agt"
         )
@@ -173,13 +204,12 @@ class TestGetSsoUrl:
 
         monkeypatch.setattr("src.services.recap.tasks.external_push._delegate_login", _login)
         monkeypatch.setattr("src.services.recap.tasks.external_push._post_json", _grant)
-        result = await external_systems.get_sso_url("pre_sales", _request(TENANT))
+        result = await external_systems.get_sso_url(SUBAGENT, _request(TENANT))
         assert result["success"] is True
         assert result["data"]["url"] == "https://erp.example.com/?sso_ticket=ticket"
 
-    async def test_delegate_login_passes_user_name(self, authed, monkeypatch):
+    async def test_delegate_login_passes_user_name(self, authed, single_doc, monkeypatch):
         """委托登录随请求传用户姓名（自动建号用）；用户无姓名时传 None（不拼 name）"""
-        monkeypatch.setattr("src.services.tenant_api_doc.load_tenant_doc", lambda tid: SSO_META_DOC)
         monkeypatch.setattr(
             "src.services.recap.tasks.external_push._get_agent_token", lambda tid, name: "agt"
         )
@@ -189,8 +219,8 @@ class TestGetSsoUrl:
         )
         calls = []
 
-        def _login(tenant_id, mobile, agent_token, login_url, force_refresh=False, name=None):
-            calls.append({"force_refresh": force_refresh, "name": name})
+        def _login(tenant_id, mobile, agent_token, login_url, force_refresh=False, name=None, subagent_name=""):
+            calls.append({"force_refresh": force_refresh, "name": name, "subagent_name": subagent_name})
             return {"client_token": "ct"}
 
         monkeypatch.setattr("src.services.recap.tasks.external_push._delegate_login", _login)
@@ -198,13 +228,12 @@ class TestGetSsoUrl:
             "src.services.recap.tasks.external_push._post_json",
             lambda *a, **kw: {"Code": 0, "Response": {"sso_ticket": "t"}},
         )
-        result = await external_systems.get_sso_url("pre_sales", _request(TENANT))
+        result = await external_systems.get_sso_url(SUBAGENT, _request(TENANT))
         assert result["success"] is True
-        assert calls == [{"force_refresh": False, "name": "王顾问"}]
+        assert calls == [{"force_refresh": False, "name": "王顾问", "subagent_name": SUBAGENT}]
 
-    async def test_delegate_login_force_refresh_passes_user_name(self, authed, monkeypatch):
+    async def test_delegate_login_force_refresh_passes_user_name(self, authed, single_doc, monkeypatch):
         """Code=-99 强刷重试路径的委托登录同样传用户姓名"""
-        monkeypatch.setattr("src.services.tenant_api_doc.load_tenant_doc", lambda tid: SSO_META_DOC)
         monkeypatch.setattr(
             "src.services.recap.tasks.external_push._get_agent_token", lambda tid, name: "agt"
         )
@@ -214,7 +243,7 @@ class TestGetSsoUrl:
         )
         calls = []
 
-        def _login(tenant_id, mobile, agent_token, login_url, force_refresh=False, name=None):
+        def _login(tenant_id, mobile, agent_token, login_url, force_refresh=False, name=None, subagent_name=""):
             calls.append({"force_refresh": force_refresh, "name": name})
             return {"client_token": "ct"}
 
@@ -225,7 +254,7 @@ class TestGetSsoUrl:
 
         monkeypatch.setattr("src.services.recap.tasks.external_push._delegate_login", _login)
         monkeypatch.setattr("src.services.recap.tasks.external_push._post_json", _grant)
-        result = await external_systems.get_sso_url("pre_sales", _request(TENANT))
+        result = await external_systems.get_sso_url(SUBAGENT, _request(TENANT))
         assert result["success"] is True
         assert calls == [
             {"force_refresh": False, "name": "孙晨"},
@@ -234,12 +263,11 @@ class TestGetSsoUrl:
 
     async def test_sso_url_unauthenticated_401(self, monkeypatch):
         monkeypatch.setattr(external_systems, "get_current_user", lambda req: None)
-        resp = await external_systems.get_sso_url("pre_sales", _request(TENANT))
+        resp = await external_systems.get_sso_url(SUBAGENT, _request(TENANT))
         assert resp.status_code == 401
 
-    async def test_grant_passes_grant_url_and_client_token(self, authed, monkeypatch):
+    async def test_grant_passes_grant_url_and_client_token(self, authed, single_doc, monkeypatch):
         """验证换票调用确实以声明的 grant_url + 委托会话 client_token header 发起"""
-        monkeypatch.setattr("src.services.tenant_api_doc.load_tenant_doc", lambda tid: SSO_META_DOC)
         monkeypatch.setattr(
             "src.services.recap.tasks.external_push._get_agent_token", lambda tid, name: "agt"
         )
@@ -256,7 +284,7 @@ class TestGetSsoUrl:
             lambda *a, **kw: {"client_token": "ctok"},
         )
         monkeypatch.setattr("src.services.recap.tasks.external_push._post_json", _grant)
-        result = await external_systems.get_sso_url("pre_sales", _request(TENANT))
+        result = await external_systems.get_sso_url(SUBAGENT, _request(TENANT))
         assert result["success"] is True
         assert calls["url"] == "https://erp.example.com/api/v1/erp.delegate/sso_grant"
         assert calls["agent_token"] == "agt"
@@ -271,7 +299,9 @@ class TestGetSsoUrl:
             "sso_grant_url: https://erp.example.com/api/v1/erp.delegate/sso_grant\n"
             "sso_fallback_url: https://erp.example.com/login\n```\n"
         )
-        monkeypatch.setattr("src.services.tenant_api_doc.load_tenant_doc", lambda tid: doc)
+        monkeypatch.setattr(
+            "src.services.tenant_api_doc.load_tenant_doc", lambda tid, name: doc
+        )
         monkeypatch.setattr(
             "src.services.recap.tasks.external_push._get_agent_token", lambda tid, name: "agt"
         )
@@ -283,14 +313,14 @@ class TestGetSsoUrl:
             "src.services.recap.tasks.external_push._post_json",
             lambda *a, **kw: {"Code": 0, "Response": {}},
         )
-        result = await external_systems.get_sso_url("pre_sales", _request(TENANT))
+        result = await external_systems.get_sso_url(SUBAGENT, _request(TENANT))
         assert result["success"] is False
         assert result["fallback_url"] == "https://erp.example.com/login"
 
     async def test_grant_no_url_and_missing_ticket_fallback(self, authed, monkeypatch):
         """声明了 ticket_param 但第三方响应缺票据 -> 不能拼出空票据 URL，走兜底"""
         doc = SSO_META_DOC.replace("sso_fallback_url: https://erp.example.com/login\n", "")
-        monkeypatch.setattr("src.services.tenant_api_doc.load_tenant_doc", lambda tid: doc)
+        monkeypatch.setattr("src.services.tenant_api_doc.load_tenant_doc", lambda tid, name: doc)
         monkeypatch.setattr(
             "src.services.recap.tasks.external_push._get_agent_token", lambda tid, name: "agt"
         )
@@ -302,7 +332,7 @@ class TestGetSsoUrl:
             "src.services.recap.tasks.external_push._post_json",
             lambda *a, **kw: {"Code": 0, "Response": {"sso_ticket": ""}},
         )
-        result = await external_systems.get_sso_url("pre_sales", _request(TENANT))
+        result = await external_systems.get_sso_url(SUBAGENT, _request(TENANT))
         assert result["success"] is False
         # fallback_url 未声明时回退 sso_url 本身
         assert result["fallback_url"] == "https://erp.example.com/"
@@ -313,7 +343,7 @@ class TestGetSsoUrl:
             "sso_url: https://erp.example.com/",
             "sso_url: https://erp.example.com/entry?src=portal",
         )
-        monkeypatch.setattr("src.services.tenant_api_doc.load_tenant_doc", lambda tid: doc)
+        monkeypatch.setattr("src.services.tenant_api_doc.load_tenant_doc", lambda tid, name: doc)
         monkeypatch.setattr(
             "src.services.recap.tasks.external_push._get_agent_token", lambda tid, name: "agt"
         )
@@ -325,15 +355,18 @@ class TestGetSsoUrl:
             "src.services.recap.tasks.external_push._post_json",
             lambda *a, **kw: {"Code": 0, "Response": {"sso_ticket": "tk"}},
         )
-        result = await external_systems.get_sso_url("pre_sales", _request(TENANT))
+        result = await external_systems.get_sso_url(SUBAGENT, _request(TENANT))
         assert result["success"] is True
         assert result["data"]["url"] == "https://erp.example.com/entry?src=portal&sso_ticket=tk"
 
     async def test_list_direct_url_mode_exposes_entry_url(self, authed, monkeypatch):
         """direct_url 模式列表直接透出 entry_url，前端免换票打开"""
         monkeypatch.setattr(
+            "src.services.tenant_api_doc.list_doc_subagent_names", lambda tid: [SUBAGENT]
+        )
+        monkeypatch.setattr(
             "src.services.tenant_api_doc.load_tenant_doc",
-            lambda tid: "```api-meta\nsso_enabled: true\nsso_url: https://a.example.com/\n```",
+            lambda tid, name: "```api-meta\nsso_enabled: true\nsso_url: https://a.example.com/\n```",
         )
         result = await external_systems.list_external_systems(_request(TENANT))
         items = result["data"]["items"]
@@ -354,7 +387,7 @@ class TestGetSsoUrlTokenParam:
 
     async def test_success(self, authed, monkeypatch):
         monkeypatch.setattr(
-            "src.services.tenant_api_doc.load_tenant_doc", lambda tid: self.TOKEN_PARAM_DOC
+            "src.services.tenant_api_doc.load_tenant_doc", lambda tid, name: self.TOKEN_PARAM_DOC
         )
         monkeypatch.setattr(
             "src.services.recap.tasks.external_push._get_agent_token", lambda tid, name: "agt"
@@ -363,9 +396,10 @@ class TestGetSsoUrlTokenParam:
             "src.services.recap.tasks.external_push._delegate_login",
             lambda *a, **kw: {"client_token": "ctok"},
         )
-        result = await external_systems.get_sso_url("pre_sales", _request(TENANT))
+        result = await external_systems.get_sso_url(SUBAGENT, _request(TENANT))
         assert result["success"] is True
-        assert result["data"]["url"] == "https://erp.example.com/?sso_ticket=ctok"
+        # ticket_param 声明为 client_token，拼 URL 的参数名即 client_token
+        assert result["data"]["url"] == "https://erp.example.com/?client_token=ctok"
 
     async def test_delegate_failure_with_sso_login_fallback(self, authed, monkeypatch):
         """委托会话不可用但文档声明 sso_login_url：走 agent_token + 手机号兜底签发"""
@@ -374,7 +408,7 @@ class TestGetSsoUrlTokenParam:
             "sso_fallback_url: https://erp.example.com/login\n"
             "sso_login_url: https://erp.example.com/api/v1/erp.delegate/sso_login\n",
         )
-        monkeypatch.setattr("src.services.tenant_api_doc.load_tenant_doc", lambda tid: doc)
+        monkeypatch.setattr("src.services.tenant_api_doc.load_tenant_doc", lambda tid, name: doc)
         monkeypatch.setattr(
             "src.services.recap.tasks.external_push._get_agent_token", lambda tid, name: "agt"
         )
@@ -389,9 +423,9 @@ class TestGetSsoUrlTokenParam:
             return {"Code": 0, "Response": {"sso_ticket": "stok"}}
 
         monkeypatch.setattr("src.services.recap.tasks.external_push._post_json", _login)
-        result = await external_systems.get_sso_url("pre_sales", _request(TENANT))
+        result = await external_systems.get_sso_url(SUBAGENT, _request(TENANT))
         assert result["success"] is True
-        assert result["data"]["url"] == "https://erp.example.com/?sso_ticket=stok"
+        assert result["data"]["url"] == "https://erp.example.com/?client_token=stok"
         assert calls["url"] == "https://erp.example.com/api/v1/erp.delegate/sso_login"
         assert calls["body"] == {"mobile": "13800000000"}
 
@@ -402,7 +436,7 @@ class TestGetSsoUrlTokenParam:
             "sso_fallback_url: https://erp.example.com/login\n"
             "sso_login_url: https://erp.example.com/api/v1/erp.delegate/sso_login\n",
         )
-        monkeypatch.setattr("src.services.tenant_api_doc.load_tenant_doc", lambda tid: doc)
+        monkeypatch.setattr("src.services.tenant_api_doc.load_tenant_doc", lambda tid, name: doc)
         monkeypatch.setattr(
             "src.services.recap.tasks.external_push._get_agent_token", lambda tid, name: "agt"
         )
@@ -420,7 +454,7 @@ class TestGetSsoUrlTokenParam:
             return {"Code": 0, "Response": {"sso_ticket": "stok"}}
 
         monkeypatch.setattr("src.services.recap.tasks.external_push._post_json", _login)
-        result = await external_systems.get_sso_url("pre_sales", _request(TENANT))
+        result = await external_systems.get_sso_url(SUBAGENT, _request(TENANT))
         assert result["success"] is True
         assert calls["body"] == {"mobile": "13800000000", "name": "王顾问"}
 
@@ -428,15 +462,14 @@ class TestGetSsoUrlTokenParam:
 class TestGetSsoUrlGrantRetry:
     """缓存委托 token 被第三方判失效时强刷重试一次"""
 
-    async def test_force_refresh_retry_success(self, authed, monkeypatch):
-        monkeypatch.setattr("src.services.tenant_api_doc.load_tenant_doc", lambda tid: SSO_META_DOC)
+    async def test_force_refresh_retry_success(self, authed, single_doc, monkeypatch):
         monkeypatch.setattr(
             "src.services.recap.tasks.external_push._get_agent_token", lambda tid, name: "agt"
         )
         login_calls = []
         grant_calls = []
 
-        def _login(tenant, phone, token, url, force_refresh=False, name=None):
+        def _login(tenant, phone, token, url, force_refresh=False, name=None, subagent_name=""):
             login_calls.append(force_refresh)
             # 首次走缓存（旧 token），强刷后换新 token
             return {"client_token": "new_ct" if force_refresh else "stale_ct"}
@@ -449,7 +482,7 @@ class TestGetSsoUrlGrantRetry:
 
         monkeypatch.setattr("src.services.recap.tasks.external_push._delegate_login", _login)
         monkeypatch.setattr("src.services.recap.tasks.external_push._post_json", _grant)
-        result = await external_systems.get_sso_url("pre_sales", _request(TENANT))
+        result = await external_systems.get_sso_url(SUBAGENT, _request(TENANT))
         assert result["success"] is True
         assert login_calls == [False, True]
         assert grant_calls[0]["Client-Authorize-Token"] == "stale_ct"
@@ -462,7 +495,7 @@ class TestGetSsoUrlGrantRetry:
             "sso_fallback_url: https://erp.example.com/login\n"
             "sso_login_url: https://erp.example.com/api/v1/erp.delegate/sso_login\n",
         )
-        monkeypatch.setattr("src.services.tenant_api_doc.load_tenant_doc", lambda tid: doc)
+        monkeypatch.setattr("src.services.tenant_api_doc.load_tenant_doc", lambda tid, name: doc)
         monkeypatch.setattr(
             "src.services.recap.tasks.external_push._get_agent_token", lambda tid, name: "agt"
         )
@@ -477,6 +510,6 @@ class TestGetSsoUrlGrantRetry:
             return {"Code": 0, "Response": {"sso_ticket": "ltok"}}
 
         monkeypatch.setattr("src.services.recap.tasks.external_push._post_json", _post)
-        result = await external_systems.get_sso_url("pre_sales", _request(TENANT))
+        result = await external_systems.get_sso_url(SUBAGENT, _request(TENANT))
         assert result["success"] is True
         assert result["data"]["url"] == "https://erp.example.com/?sso_ticket=ltok"

@@ -72,9 +72,10 @@ class CacheKeys:
     WECOM_KF = "wecom_kf"                  # wecom_kf:{corp_id}:{key}（企微客服，key 必须带企业维度）
     WECOM_KF_SERVICER_NAME = "wecom_kf_servicer_name"  # wecom_kf_servicer_name:{tenant_id}:{userid}（企微员工姓名反查，TTL 1 天）
     STANDALONE_AGENT = "standalone_agent"  # standalone_agent:{session_id}:{agent_id}
-    # pre-sales-api 委托登录 client_token：pre_sales_client_token:{tenant_id}:{assignee_phone}
-    # （外部系统委托人 token，有效期 1 天，缓存 TTL 23h 留 buffer；Code=-99 时 force_refresh 强刷）
-    PRE_SALES_CLIENT_TOKEN = "pre_sales_client_token"
+    # 外部系统委托登录 client_token：external_login_token:{tenant_id}:{subagent}:{mobile}
+    # （外部系统委托人 token，按子智能体隔离不同智能体对接的系统，value 带 login_url
+    # 防串号；有效期 1 天，缓存 TTL 23h 留 buffer；Code=-99 时 force_refresh 强刷）
+    EXTERNAL_LOGIN_TOKEN = "external_login_token"
     # recap 任务幂等：recap_task:{tenant_id}:{task_name}:{round_message_id}
     # （每轮问答结束后的沉淀任务防重入/防回调重放，TTL 24h；docs/subagent/recap-mechanism-design.md）
     RECAP_TASK_DEDUP = "recap_task"
