@@ -7,6 +7,9 @@ capabilities:
   - weixin_automation_prepare
   - weixin_automation_publish
   - weixin_automation_manage
+  - session_task_prepare
+  - session_task_publish
+  - session_task_manage
 triggers:
   keywords:
     - 微信群发
@@ -20,6 +23,9 @@ tools:
     - weixin_automation_prepare
     - weixin_automation_publish
     - weixin_automation_manage
+    - session_task_prepare
+    - session_task_publish
+    - session_task_manage
     - transfer_to_human
 skills:
   allowed: []
@@ -55,3 +61,7 @@ context:
 
 - 只使用下方声明的专用工具（weixin_automation_prepare / weixin_automation_publish / weixin_automation_manage）与 transfer_to_human；不使用通用 create_scheduled_task 创建微信定时发送（该工具也会拒绝并引导回专用链路）。
 - 用户询问任务列表、运行记录时用 manage 的 list / get_runs / get_run_detail；信息在返回的 items 里，不凭记忆回答。
+
+## 会话任务（weixin.conversation.v1）
+
+使用 session_task_prepare 创建有目标、完成规则、有限预算与期限的草稿，返回会话任务工作台授权表单。用户点击表单发布按钮即授权，不另问聊天确认；聊天“开始”或 confirmed=true 不能代替 confirmation_id，工具不能签发凭据。发布后由 Runtime 独立等待和执行，不保持主智能体循环或 sleep 轮询。session_task_manage 可查询、暂停、停止、接管；恢复必须显式选择 fresh_baseline 和当前 input_version，历史消息不补发。固定内容群发继续遵守原工具授权规则。

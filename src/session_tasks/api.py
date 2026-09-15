@@ -67,7 +67,7 @@ def _jsonable(value: Any) -> Any:
 
 
 def _ok(data: Any, status_code: int = 200) -> JSONResponse:
-    return JSONResponse(status_code=status_code, content={"success": True, "data": _jsonable(data)})
+    return JSONResponse(status_code=status_code, content={"success": True, "data": _jsonable(data)}, headers={"Cache-Control": "no-store"})
 
 
 def _err(status_code: int, message: str, code: str, field_errors=None) -> JSONResponse:
@@ -259,6 +259,36 @@ async def list_tasks(request: Request, status: Optional[str] = None, limit: int 
         return _from_service_error(exc)
 
 
+@router.get("/notifications")
+async def task_notifications(request: Request, limit: int = 20, offset: int = 0):
+    from .notifications import list_notices
+    try:
+        tenant_id, user_id = await _current_user_and_tenant(request)
+        return _ok(await asyncio.to_thread(list_notices, tenant_id, user_id, limit, offset))
+    except SessionTaskError as exc:
+        return _from_service_error(exc)
+
+
+@router.get("/capabilities")
+async def task_capabilities(request: Request):
+    from .workbench import capabilities
+    try:
+        tenant_id, _ = await _current_user_and_tenant(request)
+        return _ok(await asyncio.to_thread(capabilities, tenant_id))
+    except SessionTaskError as exc:
+        return _from_service_error(exc)
+
+
+@router.get("/{task_id}/timeline")
+async def task_timeline(request: Request, task_id: str, limit: int = 100, offset: int = 0):
+    from .workbench import timeline
+    try:
+        tenant_id, user_id = await _current_user_and_tenant(request)
+        return _ok(await asyncio.to_thread(timeline, tenant_id, user_id, _parse_path_uuid(task_id, "task_id"), limit, offset))
+    except SessionTaskError as exc:
+        return _from_service_error(exc)
+
+
 @router.get("/{task_id}")
 async def get_task(request: Request, task_id: str):
     try:
@@ -337,6 +367,7 @@ async def _control_endpoint(request: Request, task_id: str, action: str) -> JSON
         result = await asyncio.to_thread(
             service.control_task, tenant_id, user_id, _parse_path_uuid(task_id, "task_id"), action,
             expected_version, body.get("reason_code"),
+            **({"resume_from": body.get("resume_from")} if action == "resume" else {}),
         )
         return _ok(result)
     except SessionTaskError as exc:

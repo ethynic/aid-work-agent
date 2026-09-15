@@ -127,7 +127,7 @@ class TestRecoveryBlockedChain:
         # blocked 不允许 handoff（防洗白）
         with pytest.raises(SessionTaskError, match="不允许 handoff"):
             service.control_task(tenant_id, "user-1", task_id, "handoff", published["version"])
-        with pytest.raises(SessionTaskError, match="C1 未接入"):
+        with pytest.raises(SessionTaskError, match="显式选择新基线"):
             service.control_task(tenant_id, "user-1", task_id, "resume", published["version"])
         detail = service.get_task(tenant_id, "user-1", task_id)
         assert detail["blocked_reason"] == "observe_gap"

@@ -114,6 +114,8 @@ C2 只读/假设备验证通过才接 C3 真实执行协议。没有真机授权
 
 ## 7. C4：主智能体与工作台接入
 
+**2026-09-15：C4 代码及隔离 fake 验证完成**，独立测试与 CodeReview 问题已修复，浏览器桌面/窄屏/键盘检查通过。详见 [C4 验证记录](../../research/weixin-cli/edge-session-c4-validation.md)。C5 与真机门禁仍待完成，页面保持 developing、执行开关未开启。
+
 挂载点固定为现有微信营销模块内的“会话任务”，路由 `weixin-marketing/session-tasks` 及 `session-tasks/:taskId`，完整租户前缀和路由名见设计 §13.5。prepare 返回草稿确认卡片/表单；用户点击一次签发 confirmation_id 并发布，不另问聊天确认。聊天文本及 confirmed=true 不构成发布凭据。测试确认过期、版本变更、工具伪造、用户双击及同版本恢复；真实门禁关闭时只能草稿/查看，fake 发布仅在隔离测试环境。
 
 按 frontend-design 项目规范复用 Base*、语义 token、表单/详情布局；新增页面需要相应 skill，纯API逻辑不启动视觉重设计。

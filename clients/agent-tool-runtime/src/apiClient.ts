@@ -16,11 +16,13 @@ export class NetworkError extends Error {
 export class ApiError extends Error {
   readonly status: number
   readonly serverMessage?: string
-  constructor(status: number, message: string, serverMessage?: string) {
+  readonly code?: string
+  constructor(status: number, message: string, serverMessage?: string, code?: string) {
     super(message)
     this.name = 'ApiError'
     this.status = status
     this.serverMessage = serverMessage
+    this.code = code
   }
 }
 
@@ -123,6 +125,8 @@ export interface SessionTaskControl {
 }
 
 export interface SessionTaskClaim {
+  input_version_base?: number
+  fresh_baseline?: boolean
   assignment_id: string
   task_id: string
   spec: Record<string, unknown>
@@ -204,12 +208,14 @@ export class ApiClient {
       throw new DeviceRevokedError('设备 token 无效或已撤销，请重新 pair')
     }
     if (!response.ok) {
-      const detail = parsed && typeof parsed['detail'] === 'object' && parsed['detail'] !== null
-        ? String((parsed['detail'] as Record<string, unknown>)['error'] ?? '')
-        : typeof parsed['detail'] === 'string'
-          ? parsed['detail']
-          : ''
-      throw new ApiError(response.status, `云端返回 HTTP ${response.status}${detail ? `: ${detail}` : ''}`, detail || undefined)
+      const errorBody = parsed && typeof parsed['detail'] === 'object' && parsed['detail'] !== null
+        ? parsed['detail'] as Record<string, unknown>
+        : parsed
+      const detail = typeof parsed['detail'] === 'string'
+        ? parsed['detail']
+        : typeof errorBody['error'] === 'string' ? errorBody['error'] : ''
+      const code = typeof errorBody['code'] === 'string' ? errorBody['code'] : undefined
+      throw new ApiError(response.status, `云端返回 HTTP ${response.status}${detail ? `: ${detail}` : ''}`, detail || undefined, code)
     }
     return parsed
   }
@@ -345,6 +351,8 @@ export class ApiClient {
     const assignmentId = data['assignment_id']
     if (typeof assignmentId !== 'string' || !assignmentId) return null
     return {
+      input_version_base: Number(data['input_version_base'] ?? 0),
+      fresh_baseline: data['fresh_baseline'] === true,
       assignment_id: assignmentId,
       task_id: String(data['task_id'] ?? ''),
       spec: (data['spec'] as Record<string, unknown>) ?? {},

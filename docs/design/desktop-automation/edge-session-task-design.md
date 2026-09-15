@@ -335,3 +335,12 @@ worker 调 LLM 前复用 `src/local_tools/proxy_tool.py` 的租户余额预检�
 V1 **发布确认表单/按钮的一次显式点击就是任务授权**，不再加第二次聊天确认。聊天 prepare 生成草稿并返回该授权卡片/表单入口；仅聊天自然语言“开始”或模型传 confirmed=true 不足以调用 publish。确认界面完整展示 §11 授权范围，认证用户点击后服务端生成不可伪造、一次性 `confirmation_id`，绑定 tenant/user/task/spec_revision、规范化发布内容摘要和10分钟有效期；按钮直接调用 publish 或工具携带该 ID 均可，重复请求幂等返回原发布结果。修改任一授权字段、过期或用户不匹配即失效，需重新展示确认。publish 在同事务校验并消费确认记录，工具不能自行创建确认凭据。
 
 C1 新增 `session_task_confirmations`（confirmation_id、tenant/user/task/spec_revision、spec_digest、expires_at、consumed_at、published_revision），仅认证用户交互端点 `POST /api/session-tasks/{task_id}/confirm` 可签发；设备和模型工具身份不得调用。confirm 接收 expected_version，服务端重算摘要；publish 增加 confirmation_id 必填。需沿现有用户会话认证/CSRF规范保护，不能把端点公开给模型执行网络请求。发布后的范围内逐条发送无需用户点击，但仍需机器许可。目标/预算/开场白等范围变更必须重新确认；单纯暂停后同版本恢复沿显式控制流程，不重复发布授权。
+
+
+### 13.6 C4 工作台与恢复落地契约（2026-09-15）
+
+- 工作台只通过用户认证接口签发确认；工具 prepare 返回当前租户的详情授权表单链接，publish 仅消费 confirmation_id。执行开关关闭时仍可创建/编辑草稿与查看，发布/恢复/claim/许可继续双门控，真机 capability 不因此开放。
+- `GET /api/session-tasks/capabilities` 返回 publish_enabled/draft_enabled/reason；列表/详情补充 phase、设备在线、最后观察、消息版本、回复/轮数/决策计数和预算。`GET /{task_id}/timeline` 按属主读取受控消息、批次、决策证据和底座执行映射，limit≤100/offset 分页；响应 no-store。
+- 恢复使用 `resume_from={mode:"fresh_baseline",expected_input_version:N}` 与 expected_version。V1 明确选择“从恢复后新基线开始，历史不补发”；不提供历史批次自动补发选项。服务端在 subject/task 锁内核对授权版本、绑定能力、期限/预算、当前水位、模型已结束和无未决/未知发送；信用不足 blocked 仅在余额复核通过后可恢复，其他 blocked 原因需专门证据处置，不能靠按钮洗白。
+- 恢复同事务：历史 accepted 批次转 history_only，旧 pending/running/ready 决策作废，旧租约到期，控制代递增；新增 synthetic 批次 `resume:<control_epoch>`（status=resume_baseline）记录恢复起点。首次新 claim 消费为 resume_claimed，并返回 `fresh_baseline=true,input_version_base=N`；之后同代自动重新分配不得再获得恢复豁免。Runtime 持久化以上字段、重新建立基线、输入版本继续递增且不重复开场白；旧日志/回执保留。恢复基线也是 peer_wait_timeout 的新起点，任务绝对截止时间不变。
+- 新系统表 `session_task_notifications` 存属主、任务、状态/原因、控制代和时间，`(tenant_id,task_id,control_epoch)` 唯一。状态迁移同事务写入 completed/stopped/human_required/blocked 通知；`GET /notifications` 仅返回当前属主的站内通知，纯等待不通知，不外发。

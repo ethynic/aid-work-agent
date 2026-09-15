@@ -1,7 +1,8 @@
 <template>
   <div class="h-full bg-gray-50 flex flex-col">
     <!-- Header -->
-    <header class="bg-white border-b border-gray-200 shadow-sm flex-shrink-0">
+    <AppHeader v-if="isSessionTaskPage" :title="route.name === 'tenant-weixin-session-tasks' ? '会话任务' : '会话任务详情'" @toggle-sidebar="toggleSidebar"><template #menu-items="{ closeMenu }"><button @click="goBack(); closeMenu()">返回对话</button></template></AppHeader>
+    <header v-else class="bg-white border-b border-gray-200 shadow-sm flex-shrink-0">
       <div class="w-full px-4 sm:px-6 lg:px-8">
         <div class="flex justify-between items-center py-4">
           <div class="flex items-center gap-3 min-w-0">
@@ -49,9 +50,11 @@ import { computed, inject, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { type SubagentListItem } from '@/api/subagent'
 import { useSubagentList } from '@/composables/useSubagentList'
+import AppHeader from '@/components/AppHeader.vue'
 
 const route = useRoute()
 const router = useRouter()
+const isSessionTaskPage = computed(() => String(route.name || '').startsWith('tenant-weixin-session-task'))
 
 // 从 PortalLayout 注入侧边栏切换方法（仅租户模式下可用）
 const toggleSidebar = inject<() => void>('toggleSidebar', () => {})

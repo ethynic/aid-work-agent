@@ -600,3 +600,19 @@
     ALTER TABLE session_task_decision_attempts ADD COLUMN IF NOT EXISTS result_text_id UUID;
     ALTER TABLE session_task_decision_attempts ADD COLUMN IF NOT EXISTS billing_retry_at TIMESTAMPTZ;
     ALTER TABLE session_task_decision_attempts ADD COLUMN IF NOT EXISTS billing_retry_count INTEGER DEFAULT 0;
+
+- datetime: "2026-09-15 20:00:00"
+  remark: "C4 会话任务站内通知，按任务控制代去重"
+  statements: |
+    CREATE TABLE IF NOT EXISTS session_task_notifications (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        tenant_id TEXT NOT NULL,
+        task_id UUID NOT NULL,
+        user_id TEXT NOT NULL,
+        control_epoch INTEGER NOT NULL,
+        status TEXT NOT NULL,
+        reason TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (tenant_id, task_id, control_epoch),
+        FOREIGN KEY (tenant_id, task_id) REFERENCES session_tasks (tenant_id, id) ON DELETE CASCADE
+    );

@@ -105,11 +105,15 @@ describe('entry route responsibilities', () => {
     const weixin = tenantChildren.find((route) => route.path === 'weixin-marketing')
     expect(weixin?.children?.map((route) => route.path)).toEqual([
       'automations',
+      'session-tasks',
+      'session-tasks/:taskId',
       'runs/:runId',
       'event-sources',
     ])
     expect(weixin?.children?.map((route) => route.name)).toEqual([
       'tenant-weixin-marketing-automations',
+      'tenant-weixin-session-tasks',
+      'tenant-weixin-session-task-detail',
       'tenant-weixin-marketing-run-detail',
       'tenant-weixin-marketing-event-sources',
     ])

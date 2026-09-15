@@ -181,15 +181,15 @@ class TestOccupancyAndAcl:
 
 
 class TestControlActions:
-    def test_pause_stop_flow_and_resume_blocked_in_c1(self, tenant_id, verified_binding):
-        """C1 阶段 resume 明确阻断（服务端复核能力待 C2/C3；不接受客户端声明）。"""
+    def test_pause_stop_flow_and_resume_requires_baseline(self, tenant_id, verified_binding):
+        """恢复必须显式选择基线；无水位选择不能恢复。"""
         published = publish_task_helper(tenant_id, verified_binding)
         task_id, version = uuid.UUID(published["task_id"]), published["version"]
 
         paused = service.control_task(tenant_id, "user-1", task_id, "pause", version)
         assert paused["status"] == "paused" and paused["control_epoch"] == published["control_epoch"] + 1
 
-        with pytest.raises(SessionTaskError, match="C1 未接入"):
+        with pytest.raises(SessionTaskError, match="显式选择新基线"):
             service.control_task(tenant_id, "user-1", task_id, "resume", paused["version"])
 
         with pytest.raises(SessionTaskError, match="reason_code"):

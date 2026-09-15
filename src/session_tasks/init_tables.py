@@ -315,6 +315,8 @@ def init_session_task_tables(conn) -> None:  # noqa: ANN001 - psycopg/RealDictCo
     for ddl in DDL_STATEMENTS:
         cursor = conn.cursor()
         cursor.execute(ddl)
+    from .notifications import DDL as notices_ddl
+    conn.cursor().execute(notices_ddl)
     conn.commit()
 
 

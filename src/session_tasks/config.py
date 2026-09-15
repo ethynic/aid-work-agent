@@ -3,7 +3,7 @@
 两层读取（沿用 weixin_marketing 范式）：
 - 进程快照 get_session_tasks_config()：调度节奏/租约等参数，改 yaml 重启生效；
 - 授权门控热读 session_tasks_hot_gate()：enabled/tenant_allowlist 每调用 mtime+size
-  缓存热读，文件缺失/损坏 fail-closed。覆盖路径：create/update/publish/claim
+  缓存热读，文件缺失/损坏 fail-closed。覆盖路径：publish/resume/claim
   （新授权点）；renew/events/决策为迟到事实接纳路径不拦（设计 §8 在途回执
   不因旧 fence 被丢弃），control_task 放行以允许关闭后停止任务。
 """

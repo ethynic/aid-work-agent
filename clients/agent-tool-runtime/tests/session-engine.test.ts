@@ -36,13 +36,15 @@ import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { ApiClient } from '../src/apiClient.js'
+import { ApiClient, ApiError } from '../src/apiClient.js'
 import { SessionTaskEngine, type ObserverMessage, type ObserverResult, type ObserverWatermark } from '../src/sessionTasks/engine.js'
 import type { SessionCrypto } from '../src/sessionTasks/sessionStore.js'
 
 // ---------------- fake 会话云端 ----------------
 
 interface FakeTask {
+  fresh_baseline?: boolean
+  input_version_base?: number
   task_id: string
   assignment_id: string
   spec: Record<string, unknown>
@@ -62,6 +64,7 @@ class FakeSessionCloud {
   /** renew 调用记录（对齐 C1：不校验 runtime_instance_id，只校验 fence/control_epoch） */
   readonly renewCalls: Array<{ assignmentId: string; fence: number; control_epoch: number }> = []
   readyAfterPolls = 1
+  decisionResponseDelayMs = 0
   offline = false
   baseUrl = ''
   /** 控制状态注入（模拟服务端 pause/resume 换代）：renew/events ACK 返回注入值 */
@@ -173,6 +176,8 @@ class FakeSessionCloud {
       }
       this.claimed.set(task.assignment_id, task)
       ok({
+        fresh_baseline: task.fresh_baseline,
+        input_version_base: task.input_version_base,
         assignment_id: task.assignment_id,
         task_id: task.task_id,
         spec: task.spec,
@@ -281,6 +286,7 @@ class FakeSessionCloud {
       }
       d.polls += 1
       if (d.polls >= this.readyAfterPolls) d.status = 'ready'
+      if (this.decisionResponseDelayMs) await sleep(this.decisionResponseDelayMs)
       ok({ decision_id: mGet[2], status: d.status, decision_kind: 'reply', batch_id: d.batchId, input_version: 1 })
       return
     }
@@ -1371,7 +1377,7 @@ test('换代后旧 assignment 的迟到 renew 不影响新任务', async (t) => 
   stack.cloud.holdRenew(taskA1.assignment_id)
   await waitFor(() => stack.cloud.heldRenewCount(taskA1.assignment_id) >= 1, 3_000, 'A1 renew 已挂起（响应冻结）')
   stack.cloud.expireAssignmentLease(taskA1.assignment_id)
-  const taskA2 = makeTask('task-OO5', 'bind-OO5')
+  const taskA2 = { ...makeTask('task-OO5', 'bind-OO5'), fresh_baseline: true }
   stack.cloud.enqueue(taskA2)
   await waitFor(() => engine.controlStateOf('task-OO5')?.assignmentId === taskA2.assignment_id, 4_000, '新 assignment B 领取')
 
@@ -1487,7 +1493,7 @@ test('持久化重试悬挂期间 assignment 换代：旧回调完成不写入�
 
   // 悬挂期间换代：新 assignment B 被领取（同实例运行中无恢复扫描旧工作，正常激活）
   stack.cloud.expireAssignmentLease(taskA1.assignment_id)
-  const taskA2 = makeTask('task-MR2', 'bind-MR2')
+  const taskA2 = { ...makeTask('task-MR2', 'bind-MR2'), fresh_baseline: true }
   stack.cloud.enqueue(taskA2)
   await waitFor(() => engine.controlStateOf('task-MR2')?.assignmentId === taskA2.assignment_id, 5_000, '新 assignment 领取')
   const obsAt = conv.observationCount
@@ -1607,4 +1613,128 @@ test('重启使用最新持久化控制代：meta epoch=3 续租接续且不重�
 
   c2.abort()
   await run2
+})
+
+
+test('C4 人工恢复重建基线，重启保留输入版本下界且不重复开场白', async (t) => {
+  const stack = await newStack()
+  const conv = new FakeConversation('bind-c4')
+  conv.push('恢复前历史')
+  const observers = new Map([['task-c4', conv]])
+  const task = { ...makeTask('task-c4', 'bind-c4'), fresh_baseline: true, input_version_base: 9 }
+  task.spec.opening_text = '禁止重复的开场白'
+  stack.cloud.enqueue(task)
+  const first = newEngine(stack, observers, [])
+  const run1 = first.run()
+  t.after(async () => { first.shutdown(); await run1; await stack.cleanup() })
+  await waitFor(() => conv.observationCount > 0, 3000, '恢复基线')
+  await sleep(150)
+  first.shutdown()
+  await run1
+  assert.equal(stack.cloud.createDecisionCalls.length, 0)
+  const meta = JSON.parse(readFileSync(join(stack.home, 'session-tasks', task.assignment_id, 'meta.json'), 'utf8'))
+  assert.equal(meta.input_version_base, 9)
+  assert.equal(meta.fresh_baseline, true)
+  const second = newEngine(stack, observers, [])
+  const run2 = second.run()
+  t.after(async () => { second.shutdown(); await run2 })
+  conv.push('恢复后新消息')
+  await waitFor(() => stack.cloud.createDecisionCalls.length > 0, 6000, '新批次决策')
+  assert.ok(stack.cloud.createDecisionCalls.every((call) => call.batchId !== 'opening'))
+  const { SessionStore } = await import('../src/sessionTasks/sessionStore.js')
+  const store = new SessionStore({ runtimeHome: stack.home, assignmentId: task.assignment_id, crypto: fakeCrypto() })
+  const replay = await store.replay()
+  const batch = replay.events.find((event) => event.record.type === 'batch')
+  assert.equal((batch?.payload as { input_version: number }).input_version, 10)
+  second.shutdown()
+  await run2
+})
+
+test('C4 显式恢复允许旧工作换代，旧日志保留且历史不重新合批', async (t) => {
+  const stack = await newStack()
+  const conv = new FakeConversation('bind-c4-change')
+  conv.push('旧历史')
+  const observers = new Map([['task-c4-change', conv]])
+  const original = makeTask('task-c4-change', 'bind-c4-change')
+  stack.cloud.enqueue(original)
+  const first = newEngine(stack, observers, [])
+  const run1 = first.run()
+  t.after(async () => { first.shutdown(); await run1; await stack.cleanup() })
+  await waitFor(() => conv.observationCount > 0, 3000, '旧基线')
+  await sleep(150)
+  first.shutdown()
+  await run1
+  stack.cloud.expireAssignmentLease(original.assignment_id)
+  const resumed = { ...makeTask('task-c4-change', 'bind-c4-change'), fresh_baseline: true, input_version_base: 4, control_epoch: 3, fence: 2 }
+  stack.cloud.enqueue(resumed)
+  const count = conv.observationCount
+  const second = newEngine(stack, observers, [])
+  const run2 = second.run()
+  t.after(async () => { second.shutdown(); await run2 })
+  await waitFor(() => conv.observationCount > count, 3000, '新代基线')
+  assert.notEqual(second.phaseOf('task-c4-change'), 'blocked')
+  assert.equal(second.controlStateOf('task-c4-change')?.assignmentId, resumed.assignment_id)
+  assert.ok(existsSync(join(stack.home, 'session-tasks', original.assignment_id, 'events.jsonl')))
+  assert.equal(stack.cloud.createDecisionCalls.length, 0)
+  second.shutdown()
+  await run2
+})
+
+
+test('C4 ApiError 保留结构化 WORK_WINDOW_CLOSED 错误码', async (t) => {
+  for (const nested of [false, true]) {
+    const server = createServer((_req, res) => {
+      res.writeHead(409, { 'content-type': 'application/json' })
+      const error = { code: 'WORK_WINDOW_CLOSED', error: '当前不在工作时段' }
+      res.end(JSON.stringify(nested ? { detail: error } : error))
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    t.after(() => new Promise<void>((resolve) => server.close(() => resolve())))
+    const address = server.address()
+    assert.ok(address && typeof address === 'object')
+    const api = new ApiClient(`http://127.0.0.1:${address.port}`, 'fake')
+    await assert.rejects(api.sessionTaskPrepareSend('assignment', 'decision', 1), (error: unknown) => {
+      assert.ok(error instanceof ApiError)
+      assert.equal(error.code, 'WORK_WINDOW_CLOSED')
+      assert.equal(error.status, 409)
+      return true
+    })
+  }
+})
+
+
+test('C4 暂停后迟到的 ready 决策响应不复活待发送状态', async (t) => {
+  const stack = await newStack()
+  stack.cloud.decisionResponseDelayMs = 1200
+  const conv = new FakeConversation('bind-c4-pause')
+  const task = makeTask('task-c4-pause', 'bind-c4-pause')
+  task.spec.opening_text = '测试开场白'
+  stack.cloud.enqueue(task)
+  const engine = newEngine(stack, new Map([['task-c4-pause', conv]]), [])
+  const running = engine.run()
+  t.after(async () => { engine.shutdown(); await running; await stack.cleanup() })
+  await waitFor(() => [...stack.cloud.decisions.values()].some((d) => d.polls > 0), 3000, '决策查询已在途')
+  stack.cloud.setControl(task.assignment_id, { status: 'paused', control_epoch: 2 })
+  await waitFor(() => engine.controlStateOf(task.task_id)?.gate === 'paused_control', 2000, '暂停控制已接受')
+  await sleep(1400)
+  assert.notEqual(engine.phaseOf(task.task_id), 'send_ready')
+  assert.equal(engine.controlStateOf(task.task_id)?.gate, 'paused_control')
+})
+
+
+test('C4 运行中普通租约换代没有恢复授权时仍阻断', async (t) => {
+  const stack = await newStack()
+  const conv = new FakeConversation('bind-c4-auto')
+  conv.push('旧消息')
+  const original = makeTask('task-c4-auto', 'bind-c4-auto')
+  stack.cloud.enqueue(original)
+  const engine = newEngine(stack, new Map([['task-c4-auto', conv]]), [])
+  const running = engine.run()
+  t.after(async () => { engine.shutdown(); await running; await stack.cleanup() })
+  await waitFor(() => (stack.cloud.eventsAcked.get(original.assignment_id) ?? 0) > 0, 3000, '旧基线已同步')
+  const replacement = makeTask('task-c4-auto', 'bind-c4-auto')
+  stack.cloud.enqueue(replacement)
+  await waitFor(() => engine.controlStateOf(original.task_id)?.assignmentId === replacement.assignment_id, 3000, '普通换代')
+  assert.equal(engine.phaseOf(original.task_id), 'blocked')
+  assert.equal(engine.controlStateOf(original.task_id)?.gate, 'paused_control')
 })

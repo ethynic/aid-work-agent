@@ -2471,3 +2471,18 @@ CREATE TABLE IF NOT EXISTS bs_weixin_conversation_bindings (
 );
 CREATE INDEX IF NOT EXISTS idx_bs_wx_conv_bindings_owner
     ON bs_weixin_conversation_bindings (tenant_id, user_id, device_id, conversation_type);
+
+
+-- C4 owner-only in-app notices
+CREATE TABLE IF NOT EXISTS session_task_notifications (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id TEXT NOT NULL,
+    task_id UUID NOT NULL,
+    user_id TEXT NOT NULL,
+    control_epoch INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    reason TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (tenant_id, task_id, control_epoch),
+    FOREIGN KEY (tenant_id, task_id) REFERENCES session_tasks (tenant_id, id) ON DELETE CASCADE
+);

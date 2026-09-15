@@ -218,7 +218,7 @@ class TestSubjectSync:
         """C1 阶段恢复明确阻断（服务端复核待 C2/C3；不接受客户端声明）。"""
         published = _publish(tenant_id, verified_binding)
         paused = service.control_task(tenant_id, "user-1", uuid.UUID(published["task_id"]), "pause", published["version"])
-        with pytest.raises(SessionTaskError, match="C1 未接入"):
+        with pytest.raises(SessionTaskError, match="显式选择新基线"):
             service.control_task(tenant_id, "user-1", uuid.UUID(published["task_id"]), "resume", paused["version"])
 
 

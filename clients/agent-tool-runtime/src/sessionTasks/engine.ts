@@ -116,6 +116,8 @@ interface OldTaskWork {
 }
 
 interface TaskRuntime {
+  inputVersionBase: number
+  freshBaseline: boolean
   taskId: string
   assignmentId: string
   conversationBindingId: string
@@ -510,10 +512,22 @@ export class SessionTaskEngine {
     if (claimed === null) return
     const existing = this.tasks.get(claimed.task_id)
     if (existing && existing.assignmentId === claimed.assignment_id) return
+    if (existing) {
+      existing.gate = 'lease_stale'
+      // 保留换代前的未 ACK 事实，独立历史补交通道继续处理。
+      const replayed = await existing.store.replay()
+      this.recordOldTaskWork(existing.taskId, extractOldTaskWork(existing.assignmentId, replayed.events))
+      const events = replayed.events.filter((e) => e.record.local_seq > existing.store.ackedLocalSeq)
+      if (events.length) this.recoveryPending.set(existing.assignmentId, {
+        store: existing.store, events, retryAt: 0, backoff: this.opts.syncRetryBaseMs,
+      })
+    }
     await this.adoptTask(claimed)
   }
 
   private async adoptTask(claimed: {
+    input_version_base?: number
+    fresh_baseline?: boolean
     assignment_id: string
     task_id: string
     spec: Record<string, unknown>
@@ -542,7 +556,9 @@ export class SessionTaskEngine {
       store,
       phase: 'ready',
       watermark: null,
-      inputVersion: 0,
+      inputVersion: claimed.input_version_base ?? 0,
+      inputVersionBase: claimed.input_version_base ?? 0,
+      freshBaseline: claimed.fresh_baseline === true,
       pendingBatch: null,
       decidedBatchIds: new Set(),
       inFlight: null,
@@ -574,6 +590,8 @@ export class SessionTaskEngine {
     // 本轮领取放弃，等下一轮 claim 重试；spec 经 crypto 加密落盘
     try {
       await store.writeMeta({
+        input_version_base: task.inputVersionBase,
+        fresh_baseline: task.freshBaseline,
         task_id: task.taskId,
         conversation_binding_id: task.conversationBindingId,
         binding_version: task.expectedBindingVersion,
@@ -605,13 +623,14 @@ export class SessionTaskEngine {
     } else {
       // 首次领取：建基线观察由首个动作单元执行
     }
-    // 换代恢复保守阻断：恢复扫描记录了旧 assignment 的未完成工作 → 新
+    // fresh_baseline 仅由服务端人工恢复安全检查授权；允许重建基线，旧证据仍保留。
+    // 普通换代恢复保守阻断：恢复扫描记录了旧 assignment 的未完成工作 → 新
     // assignment 持久化 blocked（C2 无自动换代接续协议，不迁移水位、不重建
     // 基线——那会丢旧消息决策语义）；旧日志损坏同样阻断。阻断经 recovery_blocked
     // 事件持久化（重启回放仍 blocked）。persistRecoveryBlocked 写盘失败时异常
     // 向上传播（任务不激活，条目保留待下轮 claim 重试）。
     const oldWork = this.oldTaskWork.get(task.taskId)
-    if (oldWork) {
+    if (oldWork && !task.freshBaseline) {
       if (oldWork.unrecoverable) {
         await this.persistRecoveryBlocked(task, 'old_log_corrupt', oldWork.oldAssignmentId)
       } else if (
@@ -626,6 +645,7 @@ export class SessionTaskEngine {
       // oldWork 为 undefined 或全空（无任何旧工作）→ 首次领取语义，正常建基线
       this.oldTaskWork.delete(task.taskId)
     }
+    if (task.freshBaseline) this.oldTaskWork.delete(task.taskId)
     // 不可归属旧 assignment（审计 P1）：旧日志存在但 meta 缺失/损坏/缺 task_id，
     // 无法确定旧 assignment 属于哪个 task → 保守阻断本设备的所有新会话任务激
     // 活（不建基线、不观察、不决策）。阻断经 recovery_blocked 事件持久化（重
@@ -702,7 +722,7 @@ export class SessionTaskEngine {
           batchSeqById.set(p.batch_id, ev.record.local_seq)
           task.batchVersionById.set(p.batch_id, typeof p.input_version === 'number' ? p.input_version : task.inputVersion)
         }
-        if (p && typeof p.input_version === 'number') task.inputVersion = p.input_version
+        if (p && typeof p.input_version === 'number') task.inputVersion = Math.max(task.inputVersion, p.input_version)
       }
       if (ev.record.type === 'phase' && p && p.to) task.phase = p.to
       // decision_phase：决策状态+相位单条事务记录（新日志）；旧日志的
@@ -837,7 +857,9 @@ export class SessionTaskEngine {
       store,
       phase: 'ready',
       watermark: null,
-      inputVersion: 0,
+      inputVersion: meta.input_version_base ?? 0,
+      inputVersionBase: meta.input_version_base ?? 0,
+      freshBaseline: meta.fresh_baseline === true,
       pendingBatch: null,
       decidedBatchIds: new Set(),
       inFlight: null,
@@ -882,6 +904,8 @@ export class SessionTaskEngine {
    * 推进）；spec 字段经 crypto 加密落盘——业务正文不绕过 DPAPI 保护 */
   private async persistMeta(task: TaskRuntime): Promise<void> {
     await task.store.writeMeta({
+      input_version_base: task.inputVersionBase,
+      fresh_baseline: task.freshBaseline,
       task_id: task.taskId,
       conversation_binding_id: task.conversationBindingId,
       binding_version: task.expectedBindingVersion,
@@ -983,6 +1007,7 @@ export class SessionTaskEngine {
       if (incoming.status !== 'active') {
         task.gate = 'paused_control'
         task.inFlight = null
+        task.sendReady = null
         task.decisionQueue = []
       } else {
         task.gate = 'open'
@@ -1008,6 +1033,7 @@ export class SessionTaskEngine {
     if (epochIncreased || incoming.status !== 'active') {
       // 控制代变化或暂停/终态：旧决策作废、待提交批次清空（对齐原 renew/ACK 语义）
       task.inFlight = null
+      task.sendReady = null
       task.decisionQueue = []
     }
     // 有待持久化的元数据（上次失败）或控制状态变化 → 需要写入（审计十轮：元数据
@@ -1268,6 +1294,7 @@ export class SessionTaskEngine {
     ) {
       await this.logEvent(task, 'observation', { observation_id: result.observation_id, outcome: 'identity_mismatch' }, now)
       task.inFlight = null
+      task.sendReady = null
       task.decisionQueue = []
       await this.setPhase(task, 'blocked', now)
       this.emit(`task ${task.taskId} 观察身份不符，blocked（决策已作废）`)
@@ -1279,6 +1306,7 @@ export class SessionTaskEngine {
       await this.logEvent(task, 'observation', { observation_id: result.observation_id, outcome: 'gap', reason: result.gap_reason, streak: task.gapStreak }, now)
       if (task.gapStreak >= 3) {
         task.inFlight = null
+        task.sendReady = null
         task.decisionQueue = []
         await this.setPhase(task, 'blocked', now)
         this.emit(`task ${task.taskId} 连续 ${task.gapStreak} 次 coverage gap，blocked`)
@@ -1363,6 +1391,7 @@ export class SessionTaskEngine {
   /** 基线建立后提交开场白决策（§13.2：不调模型、仅一次；合成批次免 ACK 门禁）。
    * 已有新入站在聚合时不提交——服务端也按"已有接纳批次"拒绝/取消。 */
   private maybeEnqueueOpening(task: TaskRuntime, now: number): void {
+    if (task.freshBaseline) return // 人工恢复重建基线不再发起开场白
     const opening = task.spec['opening_text']
     if (typeof opening !== 'string' || !opening) return
     if (task.decidedByDecisionIds.has('opening')) return
@@ -1536,6 +1565,7 @@ export class SessionTaskEngine {
       return
     }
     const decision = await this.opts.api.sessionTaskGetDecision(task.assignmentId, inflight.decisionId)
+    if (task.inFlight !== inflight || task.gate !== 'open' || this.tasks.get(task.taskId) !== task) return
     inflight.pollAt = now + 1_000 // 默认 1s 查询（契约 §9）
     if (decision.status === 'ready') {
       // 冻结动作分流（§9）：reply → send_ready 接执行链；wait/handoff/done →
@@ -1625,7 +1655,7 @@ export class SessionTaskEngine {
         this.queue.set(task.taskId, 'send', now + 1_000)
         return false
       }
-      if (err instanceof ApiError && err.status === 409 && (err.serverMessage ?? err.message).includes('WORK_WINDOW_CLOSED')) {
+      if (err instanceof ApiError && err.status === 409 && (err.code === 'WORK_WINDOW_CLOSED' || (err.serverMessage ?? err.message).includes('WORK_WINDOW_CLOSED'))) {
         this.queue.set(task.taskId, 'send', now + 30_000)
         return false
       }
@@ -1922,6 +1952,7 @@ export class SessionTaskEngine {
   }
 
   private dropTask(task: TaskRuntime): void {
+    if (this.tasks.get(task.taskId) !== task) return
     this.tasks.delete(task.taskId)
     this.queue.remove(task.taskId)
     this.emit(`task ${task.taskId} 移出调度（assignment 过时，等待重新 claim）`)

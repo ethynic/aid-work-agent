@@ -189,3 +189,17 @@ pages:
     icon: "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2M12 11v6M9 14h6"
     domain: weixin-marketing
     status: developing
+
+  - page_id: weixin-session-tasks
+    title: 会话任务
+    description: 配置会话目标与预算、明确授权、查看等待与接管状态
+    route: /weixin-marketing/session-tasks
+    domain: weixin-marketing
+    status: developing
+
+  - page_id: weixin-session-task-detail
+    title: 会话任务详情
+    description: 查看完成证据、逐条发送账本和显式基线恢复
+    route: /weixin-marketing/session-tasks/:taskId
+    domain: weixin-marketing
+    status: developing

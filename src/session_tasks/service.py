@@ -49,7 +49,7 @@ logger = logging.getLogger("session_tasks.service")
 _CONTROL_TRANSITIONS = {
     # blocked 不允许 pause/resume（须经修复确认，设计 §4），防止 blocked→paused/handoff→active 绕过
     "pause": {"active": "paused"},
-    "resume": {"paused": "active", "human_required": "active"},
+    "resume": {"paused": "active", "human_required": "active", "blocked": "active"},
     "stop": {"active": "stopped", "paused": "stopped", "human_required": "stopped", "blocked": "stopped"},
     # blocked 不允许 handoff（须经修复确认；防 blocked→handoff→resume 洗白，评审 P1-2）
     "handoff": {"active": "human_required", "paused": "human_required"},
@@ -85,8 +85,6 @@ def create_draft(tenant_id: str, user_id: str, payload: TaskDraftCreatePayload,
 
     finalizer(conn, result)：业务提交前在同一连接写入幂等回执（R51 同事务范式）。
     """
-    if not tenant_allowed(tenant_id):
-        raise SessionTaskError("会话任务功能未启用", ERR_FEATURE_DISABLED, 403)
     _verify_bindings(tenant_id, user_id, payload.device_id, payload.account_binding_id,
                      payload.conversation_binding_id, require_verified=False)
     validated = validate_task_spec(payload.spec.model_dump(mode="json"))
@@ -116,8 +114,6 @@ def create_draft(tenant_id: str, user_id: str, payload: TaskDraftCreatePayload,
 
 def update_draft(tenant_id: str, user_id: str, task_id: UUID, expected_version: int, spec: Dict[str, Any]) -> Dict[str, Any]:
     """PATCH draft：expected_version CAS；仅 draft 可改（active 不可原地改策略）。"""
-    if not tenant_allowed(tenant_id):
-        raise SessionTaskError("会话任务功能未启用", ERR_FEATURE_DISABLED, 403)
     validated = validate_task_spec(spec)
     plain = _spec_to_plain(validated)
     with _conn() as conn:
@@ -337,17 +333,34 @@ def _ensure_task_subject(conn, tenant_id: str, scenario_key: str, ref: str, owne
     )
 
 
+def publish_task_once(tenant_id: str, user_id: str, task_id: UUID, expected_version: int,
+                      confirmation_id: UUID) -> Dict[str, Any]:
+    """Tool transport uses the same transactional receipt as HTTP publishing.
+
+    The user-issued confirmation is a stable business key, not an LLM call ID.
+    No confirmation is created here. Replays return the original publication.
+    """
+    from .api import _execute_idempotent
+    body = {"expected_version": expected_version, "confirmation_id": str(confirmation_id)}
+    response = _execute_idempotent(
+        tenant_id, user_id, f"POST /api/session-tasks/{task_id}/publish",
+        f"confirmation:{confirmation_id}", body,
+        lambda finalizer: publish_task(tenant_id, user_id, task_id, expected_version,
+                                      confirmation_id, finalizer=finalizer),
+    )
+    return json.loads(response.body)["data"]
+
+
 def control_task(tenant_id: str, user_id: str, task_id: UUID, action: str, expected_version: int,
-                 reason_code: Optional[str] = None) -> Dict[str, Any]:
+                 reason_code: Optional[str] = None, *, resume_from=None) -> Dict[str, Any]:
     """pause/stop/handoff：确定性控制动作，CAS + control_epoch 递增。
 
     - 锁序（设计 §10/评审 P1-1）：先锁 subject 行（kind=task）→ 再锁 session_tasks
       行 → 再写 assignment；与 claim/决策/授权路径共用同一顺序，无反向锁。
     - 离开 active 的动作（pause/stop/handoff）同事务递增 subject
       authorization_epoch：旧授权代立即作废，恢复/重发布产生新授权代。
-    - resume 在 C1 阶段明确阻断（评审 P1-2）：服务端尚无水位/未决发送复核
-      能力（C2/C3 接入），不接受客户端布尔声明；blocked_reason 不因 handoff
-      清除。暂停任务的改版重发布走 publish（新确认链）而非 resume。
+    - resume 由 C4 workbench 复核显式新基线、绑定、预算及未决效果；
+      blocked 原因不因 handoff 清除。改版须先重新确认发布再选择恢复。
     - stop 必须带 reason_code（设计 §4）。
     """
     transitions = _CONTROL_TRANSITIONS.get(action)
@@ -356,11 +369,8 @@ def control_task(tenant_id: str, user_id: str, task_id: UUID, action: str, expec
     if action == "stop" and not reason_code:
         raise SessionTaskError("stop 必须携带 reason_code", ERR_VALIDATION_FAILED)
     if action == "resume":
-        raise SessionTaskError(
-            "恢复需服务端复核绑定/水位/未决发送（C1 未接入，待 C2/C3 开放）；"
-            "暂停任务可通过改版重发布（pause→update→confirm→publish）获得新授权",
-            "RESUME_BLOCKED_UNTIL_VERIFIED", 409,
-        )
+        from .workbench import resume_task
+        return resume_task(tenant_id, user_id, task_id, expected_version, resume_from)
     with _conn() as conn:
         # 锁序 1/2：subject 行（授权权威）→ task 行
         subject = _lock_task_subject(conn, tenant_id, task_id)
@@ -416,6 +426,8 @@ def control_task(tenant_id: str, user_id: str, task_id: UUID, action: str, expec
             )
             if subject is not None and revoke and cursor.rowcount != 1:
                 raise SessionTaskError("任务授权主体缺失（subject 未注册）", "CONFLICT", 409)
+            from .notifications import record_notice
+            record_notice(conn, tenant_id, task_id, target, reason_code, task["control_epoch"] + 1)
             conn.commit()
         except Exception:
             conn.rollback()
@@ -515,6 +527,10 @@ def claim_task(device: Dict[str, Any], runtime_instance_id: str) -> Optional[Dic
             (tenant_id, task["conversation_binding_id"]),
         )
         binding_row = cursor.fetchone()
+        from .workbench import input_version
+        version_base = input_version(conn, tenant_id, task["id"])
+        cursor.execute("UPDATE session_task_batches SET status='resume_claimed' WHERE tenant_id=%s AND task_id=%s AND batch_id=%s AND status='resume_baseline' RETURNING batch_id", (tenant_id, task["id"], f"resume:{task['control_epoch']}"))
+        fresh_baseline = cursor.fetchone() is not None
         conn.commit()
     return {
         "assignment_id": str(assignment_id),
@@ -525,6 +541,8 @@ def claim_task(device: Dict[str, Any], runtime_instance_id: str) -> Optional[Dic
         "control_epoch": task["control_epoch"],
         "server_control_seq": task["server_control_seq"],
         "lease_seconds": cfg.lease_seconds,
+        "input_version_base": version_base,
+        "fresh_baseline": fresh_baseline,
         "conversation_binding_id": str(task["conversation_binding_id"]),
         "binding_version": 0,  # 绑定版本当前恒 0（§13.3 骨架：identity_version 才是身份代）
         "account_identity_version": int(binding_row["identity_version"]) if binding_row else 0,
@@ -681,7 +699,7 @@ def ingest_events(tenant_id: str, device_id: UUID, assignment_id: UUID, fence: i
         cursor = conn.cursor()
         cursor.execute(
             """
-            SELECT a.task_id, a.fence, a.acked_local_seq, t.status, t.control_epoch, t.server_control_seq,
+            SELECT a.task_id, a.fence, a.acked_local_seq, a.control_epoch_at_claim, t.status, t.control_epoch, t.server_control_seq,
                    t.conversation_binding_id
             FROM session_task_assignments a JOIN session_tasks t ON t.tenant_id=a.tenant_id AND t.id=a.task_id
             WHERE a.tenant_id=%s AND a.id=%s AND a.device_id=%s AND a.is_current=TRUE FOR UPDATE OF a
@@ -689,7 +707,7 @@ def ingest_events(tenant_id: str, device_id: UUID, assignment_id: UUID, fence: i
             (tenant_id, assignment_id, device_id),
         )
         a = cursor.fetchone()
-        if a is None or a["fence"] != fence:
+        if a is None or a["fence"] != fence or a["control_epoch_at_claim"] != a["control_epoch"]:
             # 旧 assignment 的未同步事实补交（设计评审 P2-8）：换代后旧日志残留
             # 事实允许对账补录——仅接纳事实存储，不推进当前代水位、不授予任何
             # 新执行/决策权（决策创建走 create_decision 的门禁）。
@@ -699,7 +717,8 @@ def ingest_events(tenant_id: str, device_id: UUID, assignment_id: UUID, fence: i
                 SELECT a.task_id, a.fence, a.acked_local_seq, t.status, t.control_epoch, t.server_control_seq,
                        t.conversation_binding_id
                 FROM session_task_assignments a JOIN session_tasks t ON t.tenant_id=a.tenant_id AND t.id=a.task_id
-                WHERE a.tenant_id=%s AND a.id=%s AND a.device_id=%s AND a.is_current=FALSE
+                WHERE a.tenant_id=%s AND a.id=%s AND a.device_id=%s
+                  AND (a.is_current=FALSE OR a.control_epoch_at_claim<>t.control_epoch)
                 FOR UPDATE OF a
                 """,
                 (tenant_id, assignment_id, device_id),
@@ -747,6 +766,9 @@ def ingest_events(tenant_id: str, device_id: UUID, assignment_id: UUID, fence: i
                 )
                 if event_type == "batch":
                     _materialize_batch(conn, tenant_id, a["task_id"], a["conversation_binding_id"], payload)
+                if event_type == "recovery_blocked" or (event_type in ("phase", "execution_phase", "decision_phase") and payload.get("phase_to", payload.get("to")) == "blocked"):
+                    from .notifications import record_notice
+                    record_notice(conn, tenant_id, a["task_id"], "blocked", "runtime_blocked", a["control_epoch"])
                 expected_seq = local_seq
             cursor = conn.cursor()
             cursor.execute(
@@ -1209,6 +1231,14 @@ def list_tasks(tenant_id: str, user_id: str, *, limit: int = 20, offset: int = 0
             params + [limit, offset],
         )
         items = [dict(r) for r in cursor.fetchall()]
+    # Reuse the ACL-protected projection and never expose encrypted references.
+    for item in items:
+        detail = get_task(tenant_id, user_id, item["id"])
+        spec = detail.get("draft_spec") or detail.get("spec") or {}
+        for key in ("phase", "input_version", "binding_label", "device_online", "last_observed_at", "replies_count", "rounds_count", "decisions_count", "cost", "blocked_reason"):
+            item[key] = detail.get(key)
+        item["goal_summary"] = spec.get("goal", "")[:120]
+        item.update({k: spec.get("limits", {}).get(k) for k in ("max_replies", "max_cost_units", "expires_at")})
     return {"total": total, "items": items}
 
 
@@ -1239,7 +1269,10 @@ def get_task(tenant_id: str, user_id: str, task_id: UUID) -> Dict[str, Any]:
             if task["draft_spec_text_id"] and task["status"] in (STATUS_DRAFT, STATUS_PAUSED) else None
         )
         settled, reserved = task_spend(conn, tenant_id, task_id)
+        from .workbench import projection
+        projected = projection(conn, tenant_id, task)
     result = dict(task)
+    result.update(projected)
     result.pop("draft_spec_text_id", None)
     result["spec"] = published_spec
     result["draft_spec"] = draft_spec

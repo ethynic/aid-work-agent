@@ -47,6 +47,8 @@ export interface ReplayedEvent {
  * 接续，避免过期换代重建基线（旧水位/已决策批次丢失）。
  */
 export interface AssignmentMeta {
+  input_version_base?: number
+  fresh_baseline?: boolean
   task_id: string
   conversation_binding_id: string
   binding_version: number
@@ -362,6 +364,8 @@ fsyncSync(fd)
     return {
       status: 'ok',
       meta: {
+        input_version_base: typeof parsed['input_version_base'] === 'number' ? parsed['input_version_base'] : 0,
+        fresh_baseline: parsed['fresh_baseline'] === true,
         task_id: parsed['task_id'],
         conversation_binding_id: parsed['conversation_binding_id'],
         binding_version: parsed['binding_version'],

@@ -32,6 +32,7 @@
           <BaseButton size="sm" intent="secondary" @click="showBindingsModal = true">群绑定</BaseButton>
           <BaseButton size="sm" intent="secondary" @click="openRunsModal">运行记录</BaseButton>
           <BaseButton size="sm" intent="secondary" @click="goEventSources">事件源</BaseButton>
+          <BaseButton size="sm" intent="secondary" @click="router.push({ name: 'tenant-weixin-session-tasks' })">会话任务</BaseButton>
           <BaseButton size="sm" @click="openCreate">新增自动化</BaseButton>
         </div>
       </div>

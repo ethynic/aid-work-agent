@@ -1,9 +1,9 @@
 <template>
   <Teleport to="body">
     <div v-if="modelValue" :class="[slots.overlay(), modalClass]" @mousedown="onOverlayMouseDown" @click.self="handleOverlayClick">
-      <div :class="[slots.content(), contentClass]">
+      <div ref="dialogElement" :class="[slots.content(), contentClass]" :role="accessible ? 'dialog' : undefined" :aria-modal="accessible ? 'true' : undefined" :aria-labelledby="accessible ? titleId : undefined" :tabindex="accessible ? -1 : undefined">
         <div :class="slots.header()">
-          <h3 :class="slots.title()">
+          <h3 :id="accessible ? titleId : undefined" :class="slots.title()">
             <slot name="title">{{ title }}</slot>
           </h3>
           <div class="flex items-center gap-1">
@@ -20,7 +20,7 @@
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 14h6v6m10-10h-6V4M14 10l7-7M3 21l7-7"/>
               </svg>
             </button>
-            <button :class="slots.close()" @click="handleCloseClick">
+            <button :class="slots.close()" :aria-label="accessible ? '关闭对话框' : undefined" @click="handleCloseClick">
               <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
               </svg>
@@ -61,7 +61,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, ref, watch, nextTick, getCurrentInstance, onBeforeUnmount } from 'vue'
 import { modal } from '@/variants/modal'
 
 const props = withDefaults(defineProps<{
@@ -69,6 +69,8 @@ const props = withDefaults(defineProps<{
   title?: string
   size?: 'sm' | 'md' | 'lg' | 'lgx' | 'xl'
   scrollable?: boolean
+  /** 显式启用对话框语义、键盘焦点管理；既有调用者默认行为不变。 */
+  accessible?: boolean
   /**
    * 弹框模式，决定点击遮罩层和关闭按钮的行为：
    * - 'create'（默认）：新增页，点击遮罩不关闭，避免用户填写大量数据时误关闭
@@ -95,6 +97,7 @@ const props = withDefaults(defineProps<{
 }>(), {
   size: 'md',
   scrollable: true,
+  accessible: false,
   mode: 'create',
   closeOnOverlay: undefined,
 })
@@ -128,6 +131,41 @@ function toggleFullscreen() {
 }
 
 const showDirtyConfirm = ref(false)
+const dialogElement = ref<HTMLElement>()
+const titleId = `base-modal-title-${getCurrentInstance()?.uid}`
+let previousFocus: HTMLElement | null = null
+let focusGeneration = 0
+
+function restoreFocus() {
+  document.removeEventListener('keydown', handleAccessibleKeydown)
+  if (previousFocus?.isConnected) previousFocus.focus()
+  previousFocus = null
+}
+function handleAccessibleKeydown(event: KeyboardEvent) {
+  if (!props.accessible || !props.modelValue || !dialogElement.value || showDirtyConfirm.value) return
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    handleCloseClick()
+    return
+  }
+  if (event.key !== 'Tab') return
+  const dialog = dialogElement.value
+  const controls = Array.from(dialog.querySelectorAll<HTMLElement>('button, a[href], input, select, textarea, [tabindex]')).filter(element => element.tabIndex >= 0 && !element.matches(':disabled') && !element.closest('[hidden], [inert]') && getComputedStyle(element).display !== 'none' && getComputedStyle(element).visibility !== 'hidden')
+  const first = controls[0], last = controls[controls.length - 1]
+  if (!first) { event.preventDefault(); dialog.focus(); return }
+  if (event.shiftKey && (document.activeElement === first || document.activeElement === dialog || !dialog.contains(document.activeElement))) { event.preventDefault(); last.focus() }
+  else if (!event.shiftKey && (document.activeElement === last || !dialog.contains(document.activeElement))) { event.preventDefault(); first.focus() }
+}
+watch(() => props.accessible && props.modelValue, async visible => {
+  const generation = ++focusGeneration
+  if (!visible) { restoreFocus(); return }
+  previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
+  await nextTick()
+  if (generation !== focusGeneration || !props.accessible || !props.modelValue) return
+  dialogElement.value?.focus()
+  document.addEventListener('keydown', handleAccessibleKeydown)
+}, { immediate: true })
+onBeforeUnmount(() => { focusGeneration++; restoreFocus() })
 
 function checkDirty(): boolean {
   if (typeof props.isDirty === 'function') return props.isDirty()

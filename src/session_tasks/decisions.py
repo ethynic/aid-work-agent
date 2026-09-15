@@ -155,6 +155,8 @@ def _apply_task_transition(conn, tenant_id: str, task_id: UUID, target: str, rea
     if subject is not None and cursor.rowcount != 1:
         conn.rollback()
         raise SessionTaskError("任务授权主体缺失", "CONFLICT", 409)
+    from .notifications import record_notice
+    record_notice(conn, tenant_id, task_id, target, reason, task["control_epoch"] + 1)
     return True
 
 
@@ -429,7 +431,8 @@ def _peer_messages_current(conn, tenant_id: str, task_id, input_version: int, *,
     cursor.execute(
         f"""
         SELECT m.message_id, m.text_id FROM session_task_messages m
-        WHERE m.tenant_id=%s AND m.task_id=%s AND m.input_version {op} %s AND m.sender='peer'
+        JOIN session_task_batches b ON b.tenant_id=m.tenant_id AND b.task_id=m.task_id AND b.batch_id=m.batch_id
+        WHERE m.tenant_id=%s AND m.task_id=%s AND m.input_version {op} %s AND m.sender='peer' AND b.status='accepted'
         """,
         (tenant_id, task_id, input_version),
     )
@@ -2127,10 +2130,12 @@ def evaluate_task(tenant_id: str, task_id, *, now: datetime) -> bool:  # noqa: A
             SELECT COALESCE(
                 (SELECT MAX(created_at) FROM session_task_batches
                  WHERE tenant_id=%s AND task_id=%s AND synthetic=FALSE AND status='accepted'),
+                (SELECT MAX(created_at) FROM session_task_batches
+                 WHERE tenant_id=%s AND task_id=%s AND status IN ('resume_baseline','resume_claimed')),
                 (SELECT published_at FROM session_task_specs WHERE tenant_id=%s AND task_id=%s AND id=%s)
             ) AS last_at
             """,
-            (tenant_id, task_id, tenant_id, task_id, spec_id),
+            (tenant_id, task_id, tenant_id, task_id, tenant_id, task_id, spec_id),
         )
         last_peer_activity = cursor.fetchone()["last_at"]
         cursor.execute(
