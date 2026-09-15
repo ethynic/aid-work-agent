@@ -229,6 +229,42 @@ def test_call_dashscope_sanitizes_input_before_sdk():
     assert sent_texts == ["含有孤立代理的文档内容"]
 
 
+def test_call_dashscope_str_input_not_split_into_chars():
+    """回归：embed_sync 传 str 时不得被拆成单字符列表（否则 batch size 超限 400）
+
+    a249e681 引入 sanitize 后，_sanitize_texts 对 str 按字符迭代，
+    导致 TextEmbedding.call(input=[...几百个单字符...]) 报
+    batch size is invalid, it should not be larger than 10。
+    """
+    client = _make_client()
+    fake_resp = _make_fake_resp()
+    text = "这是一段超过十个字符的普通查询文本"
+    assert len(text) > 10
+    with patch(
+        "src.knowledge.embedding.embedding_client.TextEmbedding.call",
+        return_value=fake_resp,
+    ) as mock_call:
+        client._call_dashscope_with_retry(text)
+
+    sent_texts = mock_call.call_args.kwargs["input"]
+    assert sent_texts == [text]
+
+
+def test_embed_sync_str_input_returns_single_embedding():
+    """embed_sync(str) 端到端：返回单个向量且 SDK 收到长度 1 的列表"""
+    client = _make_client()
+    fake_resp = _make_fake_resp(embeddings=[[0.1, 0.2, 0.3]])
+    with patch(
+        "src.knowledge.embedding.embedding_client.TextEmbedding.call",
+        return_value=fake_resp,
+    ) as mock_call:
+        embedding = client.embed_sync("hotel near the beach with sea view")
+
+    assert embedding == [0.1, 0.2, 0.3]
+    sent_texts = mock_call.call_args.kwargs["input"]
+    assert sent_texts == ["hotel near the beach with sea view"]
+
+
 # ---------------------------------------------------------------------------
 # _extract_usage_tokens 提取测试（计费根因：dict 形态 total_tokens）
 # ---------------------------------------------------------------------------

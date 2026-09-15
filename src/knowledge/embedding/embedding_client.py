@@ -133,6 +133,10 @@ class TextEmbeddingV3Client:
         仅 wrap HTTP 传输层调用；resp.status_code 业务错误由外层处理（业务错误不可重试）。
         """
         last_exc = None
+        # embed_sync 传入 str；必须先归一化为列表再做 sanitize，
+        # 否则 _sanitize_texts 会把字符串拆成单字符列表导致 batch 超限 400
+        if isinstance(texts, str):
+            texts = [texts]
         texts = _sanitize_texts(texts)
         for attempt in range(1, 4):  # 1 + 2 = 3 次尝试
             try:
