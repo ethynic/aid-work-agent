@@ -45,7 +45,7 @@ test('mcp-conformance 套件全项通过', { timeout: 120000 }, async () => {
   const report = await runConformance({
     requireBase: import.meta.url,
     spawn: { command: process.execPath, args: [CLI, 'mcp', '--stdio'] },
-    expectTools: ['weixin_probe', 'weixin_chat_search', 'weixin_message_send', 'weixin_history_read', 'weixin_session_observe', 'weixin_unread_list'],
+    expectTools: ['weixin_probe', 'weixin_chat_search', 'weixin_message_send', 'weixin_history_read', 'weixin_session_observe', 'weixin_unread_list', 'weixin_name_resolve', 'weixin_message_send_v2'],
     // 无微信环境：probe 快速返回结构化结果（OK 或环境违规，均满足契约）
     callProbe: { name: 'weixin_probe', arguments: {} },
     invalidProbe: { name: 'weixin_probe', arguments: { verbose: 'yes' } },
@@ -78,7 +78,7 @@ test('mcp-conformance 套件 CLI 模式可独立运行', { timeout: 60000 }, asy
       '--require-base',
       path.join(DIST_ROOT, '..', 'package.json'),
       '--expect-tools',
-      'weixin_probe,weixin_chat_search,weixin_message_send,weixin_history_read,weixin_session_observe,weixin_unread_list',
+      'weixin_probe,weixin_chat_search,weixin_message_send,weixin_history_read,weixin_session_observe,weixin_unread_list,weixin_name_resolve,weixin_message_send_v2',
       '--call',
       'weixin_probe:{}',
       '--invalid',

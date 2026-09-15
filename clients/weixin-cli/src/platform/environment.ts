@@ -28,7 +28,7 @@ const defaultExecFile: ExecFileFn = (file, args) =>
 
 export interface ProbeEnvironmentOptions {
   platform?: NodeJS.Platform
-  /** SESSIONNAME 环境变量（win32 交互会话判定）；显式传 undefined 模拟服务会话 */
+  /** 显式传 undefined 模拟未知会话；未传时可用当前PID的系统会话查询兜底 */
   sessionName?: string
   localAppData?: string
   execFileFn?: ExecFileFn
@@ -88,7 +88,18 @@ export async function probeEnvironment(opts: ProbeEnvironmentOptions = {}): Prom
 
   // 交互会话（非 win32 无法判定，置 null）
   step('检查平台与交互桌面会话')
-  const sessionName = platformOk ? (opts.sessionName !== undefined ? opts.sessionName : process.env.SESSIONNAME) : undefined
+  let sessionName = platformOk ? (Object.hasOwn(opts, 'sessionName') ? opts.sessionName : process.env.SESSIONNAME) : undefined
+  if (platformOk && !sessionName && !Object.hasOwn(opts, 'sessionName')) {
+    // Some desktop hosts omit SESSIONNAME. Query this process, never infer its
+    // desktop from the mere presence of a Weixin process in another session.
+    try {
+      const { stdout } = await execFileFn('tasklist', ['/FI', `PID eq ${process.pid}`, '/FO', 'CSV', '/NH'])
+      for (const line of stdout.split(/\r?\n/)) {
+        const fields = /^"[^"]+","(\d+)","([^"]+)",/.exec(line.trim())
+        if (fields?.[1] === String(process.pid)) { sessionName = fields[2]; break }
+      }
+    } catch { /* Unknown remains fail-closed. */ }
+  }
   const interactive = platformOk ? isInteractiveSession(sessionName) : null
 
   // PowerShell 可用性（where.exe 只读查找）

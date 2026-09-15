@@ -25,6 +25,7 @@ from src.desktop_automation.constants import (
     PHASE_MAY_HAVE_STARTED,
     PHASE_UNKNOWN,
     PHASE_VERIFIED,
+    PHASE_SUBMITTED,
     RUN_TERMINAL_STATES,
 )
 
@@ -39,8 +40,11 @@ _RUN_COLUMNS = """
 
 
 def delivery_is_success(delivery: Dict[str, Any]) -> bool:
-    """applied 还必须有本次验证证据（phase=verified）才成功（R10/设计 §4）"""
-    return delivery.get("effect") == EFFECT_APPLIED and delivery.get("phase") == PHASE_VERIFIED
+    """Verified effects or server-accepted submitted commands complete the run."""
+    return delivery.get("effect") == EFFECT_APPLIED and (
+        delivery.get("phase") == PHASE_VERIFIED
+        or (delivery.get("phase") == PHASE_SUBMITTED and delivery.get("state") == DELIVERY_STATE_SUCCEEDED)
+    )
 
 
 def delivery_is_unknown(delivery: Dict[str, Any]) -> bool:
@@ -54,7 +58,7 @@ def delivery_is_unknown(delivery: Dict[str, Any]) -> bool:
 def delivery_is_started(delivery: Dict[str, Any]) -> bool:
     """「已发送」= 已越过 prepared（may_have_started/verified/unknown，或已派发）"""
     phase = delivery.get("phase")
-    if phase in (PHASE_MAY_HAVE_STARTED, PHASE_UNKNOWN, PHASE_VERIFIED):
+    if phase in (PHASE_MAY_HAVE_STARTED, PHASE_UNKNOWN, PHASE_VERIFIED, PHASE_SUBMITTED):
         return True
     return delivery.get("state") in (
         DELIVERY_STATE_DISPATCHED, DELIVERY_STATE_SUCCEEDED,

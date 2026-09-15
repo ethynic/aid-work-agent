@@ -199,7 +199,9 @@ def find_eligible_subscriptions(
         """,
         (tenant_id, source["source_ref"], event_type),
     )
-    return [dict(r) for r in cursor.fetchall()]
+    # DB drivers may return the UUID primary key as uuid.UUID. The frozen
+    # snapshot is JSON, so normalize this identifier at its schema boundary.
+    return [{**dict(r), "id": str(r["id"])} for r in cursor.fetchall()]
 
 
 def get_event(event_id: str, tenant_id: str) -> Optional[Dict[str, Any]]:

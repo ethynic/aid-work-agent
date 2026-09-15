@@ -51,6 +51,23 @@ WXM_TABLES = (
     "bs_weixin_marketing_assets",
 )
 REQUIRED_TABLES = (
+    # C5: session task accounting, confirmations and C4 notifications must ship
+    # in the full installer as well as the incremental initializers.
+    "session_tasks",
+    "session_task_specs",
+    "session_task_assignments",
+    "session_task_events",
+    "session_task_messages",
+    "session_task_batches",
+    "session_task_decisions",
+    "session_task_decision_attempts",
+    "session_task_execution_links",
+    "session_task_texts",
+    "session_task_confirmations",
+    "session_task_cost_reservations",
+    "session_tasks_idempotency_keys",
+    "session_task_notifications",
+    "bs_weixin_conversation_bindings",
     *DA_TABLES,
     "local_tool_operation_permits",
     "local_tool_invocations",

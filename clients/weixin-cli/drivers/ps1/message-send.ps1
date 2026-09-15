@@ -33,14 +33,14 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WeixinCli.MessageSend' -Body {
     $verifySys = @'
 You are a message verifier for WeChat desktop chat window.
 Input image: a screenshot of WeChat main window with a chat conversation open, taken right after sending a message.
-Task: look at the LAST (bottom-most) chat message in the conversation and compare its text with the expected text.
+Task: identify the newly submitted outgoing (self) message at the bottom of this conversation and compare its visible text with the expected text. Do not substitute a peer message or an older historical matching message.
 Return ONLY a single JSON object, no markdown, no explanation:
 {"sent_ok": <true|false>, "last_message": "<text of the last message>"}
-sent_ok = true only if the last message text exactly matches the expected text.
+sent_ok = true only for that unique outgoing message with approximately matching OCR text: ignore case, width, whitespace and punctuation differences; text of at least 10 characters may have up to 10% OCR edits, while shorter text allows only formatting differences. Numbers including signs/decimals, emoji/symbols and negation must not change. This is approximate visual evidence, not exact byte equality. Ambiguous provenance or more than one plausible message means false.
 '@
-    $v = Invoke-KimiVision -ImagePath $afterShot -SystemPrompt $verifySys -UserText ("Expected message text: $Text. Does the last chat message match it exactly? Return JSON.") -ArtifactPrefix 'weixin-driver-message-send-verify'
-    if ($v.sent_ok -ne $true) {
-        Throw-DriverError 'EXECUTION_UNKNOWN' ("发送后校验失败：最后一条消息（「" + [string]$v.last_message + "」）与待发送文本不一致；消息可能已发出，不会自动重试，请人工核对")
+    $v = Invoke-KimiVision -ImagePath $afterShot -SystemPrompt $verifySys -UserText ("Expected message text: $Text. Does the newly submitted outgoing message match approximately under the stated OCR rules? Return JSON.") -ArtifactPrefix 'weixin-driver-message-send-verify'
+    if ($v.sent_ok -ne $true -or -not (Test-WeixinOcrMatch -First $Text -Second ([string]$v.last_message) -Mode text -FailureCode 'EXECUTION_UNKNOWN')) {
+        Throw-DriverError 'EXECUTION_UNKNOWN' '发送后校验失败；消息可能已发出，不会自动重试，请人工核对'
     }
     return @{ target = $TargetName; title = [string]$chat.Title; verified = $true }
 }

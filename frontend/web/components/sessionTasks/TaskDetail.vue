@@ -41,6 +41,7 @@
         <div v-for="section in timelineSections" :key="section.key" class="mb-5 overflow-x-auto">
           <h3 class="font-medium text-sm mb-2">{{ section.label }}</h3>
           <BaseTable :columns="section.columns" :data="timeline[section.key] || []" row-key="id">
+            <template #delivery_state="{ row }">{{ row.delivery_phase === 'submitted' ? '已执行发送（未核验送达）' : row.delivery_state }}</template>
             <template #created_at="{ row }">{{ dateLabel(row.created_at) }}</template>
             <template #evidence="{ row }"><pre class="whitespace-pre-wrap break-all text-xs max-w-lg">{{ evidenceText(row) }}</pre></template>
             <template #run_id="{ row }"><RouterLink v-if="row.run_id" class="text-primary-600 underline" :to="{ name: 'tenant-weixin-marketing-run-detail', params: { runId: row.run_id } }">{{ row.run_id }}</RouterLink><span v-else>—</span></template>
@@ -84,7 +85,7 @@ const timelineSections: { key: keyof Timeline; label: string; columns: { key: st
   { key: 'batches', label: '消息批次', columns: [{ key: 'batch_id', label: '批次' }, { key: 'input_version', label: '消息水位' }, { key: 'status', label: '状态' }, { key: 'created_at', label: '时间' }] },
   { key: 'messages', label: '观察消息', columns: [{ key: 'message_id', label: '消息' }, { key: 'sender', label: '发送方' }, { key: 'text', label: '正文' }, { key: 'evidence', label: '证据' }] },
   { key: 'decisions', label: '决策与完成证据', columns: [{ key: 'decision_kind', label: '类型' }, { key: 'status', label: '状态' }, { key: 'text', label: '决策正文' }, { key: 'evidence', label: '证据' }, { key: 'created_at', label: '时间' }] },
-  { key: 'executions', label: '逐条发送账本', columns: [{ key: 'decision_id', label: '决策' }, { key: 'delivery_state', label: '投递状态' }, { key: 'invocation_state', label: '执行状态' }, { key: 'run_id', label: '运行详情' }] },
+  { key: 'executions', label: '逐条发送账本', columns: [{ key: 'decision_id', label: '决策' }, { key: 'delivery_state', label: '发送操作状态' }, { key: 'invocation_state', label: '执行状态' }, { key: 'run_id', label: '运行详情' }] },
 ]
 function evidenceText(row: Record<string, any>) { return JSON.stringify(row.completion_evidence || row.evidence_ref || row.evidence || null, null, 2) || '—' }
 function schedule() { clearTimeout(timer); if (alive && task.value && !['draft', 'completed', 'stopped'].includes(task.value.status) && !editing.value && !busy.value && !reviewing.value && !controlAction.value) timer = setTimeout(() => { void load() }, 10000) }

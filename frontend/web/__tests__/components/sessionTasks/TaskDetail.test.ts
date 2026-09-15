@@ -69,4 +69,18 @@ describe('会话任务发布与控制行为', () => {
     expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/confirm'))).toHaveLength(1)
     wrapper.unmount()
   })
+  it('发送操作提交显示未核验送达，其他发送阶段仍显示原状态', async () => {
+    const { wrapper } = setup('active', true, url => url.includes('/timeline?') ? Promise.resolve(response({ batches: [], decisions: [], messages: [], executions: [
+      { id: 'submitted', decision_id: 'decision-submitted', delivery_state: 'succeeded', delivery_phase: 'submitted', invocation_state: 'succeeded' },
+      { id: 'unknown', decision_id: 'decision-unknown', delivery_state: 'unknown', delivery_phase: 'unknown', invocation_state: 'unknown' },
+    ] })) : undefined)
+    await flushPromises()
+    const submitted = wrapper.findAll('tr').find(row => row.text().includes('decision-submitted'))!
+    const unknown = wrapper.findAll('tr').find(row => row.text().includes('decision-unknown'))!
+    expect(submitted.text()).toContain('已执行发送（未核验送达）')
+    expect(unknown.text()).not.toContain('已执行发送（未核验送达）')
+    expect(unknown.text()).toContain('unknown')
+    wrapper.unmount()
+  })
+
 })

@@ -17,8 +17,16 @@ set -e
 
 CONTAINER_NAME="aid-agent-api"
 
+# Global scheduler tests must not scan a developer's shared database. This mode
+# creates and initializes a disposable database before starting a fresh pytest.
+TEST_ENTRY=(-m pytest)
+if [[ "${1:-}" == "--isolated-db" ]]; then
+  shift
+  TEST_ENTRY=(scripts/dev_test_isolated_db.py)
+fi
+
 if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${CONTAINER_NAME}$"; then
-  exec docker exec -i "${CONTAINER_NAME}" python -m pytest "$@"
+  exec docker exec -i "${CONTAINER_NAME}" python "${TEST_ENTRY[@]}" "$@"
 else
-  exec python -m pytest "$@"
+  exec python "${TEST_ENTRY[@]}" "$@"
 fi

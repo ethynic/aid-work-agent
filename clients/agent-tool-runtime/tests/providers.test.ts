@@ -68,10 +68,11 @@ test('boss digest：与改造前基线逐字节一致（manifestVerifier 与注�
   assert.equal(manifestDigestFor('boss-recruiting'), BOSS_DIGEST_BASELINE)
 })
 
-test('weixin manifest：默认真实 v1（5 工具、仅 message_send 为写、v2 能力未开——能力真实性 #6）', () => {
+test('weixin manifest：名称定位只读，默认仅 message_send 为写，v2需显式启用', () => {
   const weixin = getProviderManifest('weixin')!
   assert.deepEqual([...weixin.tools], [
     'weixin_probe',
+    'weixin_name_resolve',
     'weixin_chat_search',
     'weixin_message_send',
     'weixin_history_read',

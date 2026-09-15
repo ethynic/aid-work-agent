@@ -35,6 +35,23 @@ def draft():
 
 
 @pytest.mark.asyncio
+async def test_name_prepare_requires_no_account(identity, service):
+    values = draft()
+    values.pop("account_binding_id")
+    values.pop("conversation_binding_id")
+    values["resolution_invocation_id"] = str(uuid4())
+    service.create_draft.return_value = {"task_id": str(uuid4()), "version": 1}
+    result = await tools.SessionTaskPrepareTool().execute(**values)
+    assert result["success"]
+    payload = service.create_draft.call_args.args[2]
+    assert payload.account_binding_id is None and payload.conversation_binding_id is None
+    assert payload.resolution_invocation_id == values["resolution_invocation_id"]
+    for extra in ({"account_binding_id": str(uuid4())}, {"task_id": str(uuid4()), "expected_version": 1}):
+        result = await tools.SessionTaskPrepareTool().execute(**{**values, **extra})
+        assert result["code"] == "VALIDATION_FAILED"
+
+
+@pytest.mark.asyncio
 async def test_missing_context_never_reaches_service(service):
     with tool_execution_scope(None):
         result = await tools.SessionTaskManageTool().execute(action="list")

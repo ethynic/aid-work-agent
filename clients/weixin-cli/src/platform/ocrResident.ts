@@ -1,7 +1,7 @@
 /**
  * 常驻 OCR 客户端（C2，设计 §6）。
  *
- * spawn 仓库 venv python 跑 drivers/py/ocr_server.py（一次启动多次请求）；
+ * 优先随包 embedded Python，开发环境回退仓库 venv；运行 drivers/py/ocr_server.py；
  * 崩溃显式抛 OcrServerUnavailable（调用方不得以空结果冒充），可重启，
  * 重启后调用方必须重新对齐观察水位（设计 §6）。
  * 不升级最低 Node 版本、不引入 native 依赖。
@@ -9,6 +9,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
+import { existsSync } from 'node:fs'
 
 export interface OcrBox {
   text: string
@@ -27,14 +28,19 @@ export class OcrServerUnavailable extends Error {
 }
 
 export interface ResidentOcrOptions {
+  /** 有界请求等待，测试可缩短；不延长发送许可。 */
+  requestTimeoutMs?: number
   /** venv python 绝对路径（测试注入；默认按仓库布局推导） */
   pythonPath?: string
   /** ocr_server.py 绝对路径 */
   scriptPath?: string
 }
 
-function defaultPythonPath(): string {
-  const scriptDir = fileURLToPath(new URL('.', import.meta.url)) // dist/src/platform/
+export function defaultPythonPath(scriptDir = fileURLToPath(new URL('.', import.meta.url))): string {
+  // Portable distributions put the embedded runtime at the Provider package root.
+  // Prefer it to the developer fallback, so relocation needs no repository venv.
+  const bundled = join(scriptDir, '..', '..', '..', 'ocr-python', 'python.exe')
+  if (existsSync(bundled)) return bundled
   const repoRoot = join(scriptDir, '..', '..', '..', '..', '..')
   return join(repoRoot, 'venv', 'Scripts', 'python.exe')
 }
@@ -44,139 +50,106 @@ function defaultScriptPath(): string {
   return join(scriptDir, '..', '..', '..', 'drivers', 'py', 'ocr_server.py')
 }
 
-export class ResidentOcr {
-  private proc: ChildProcessWithoutNullStreams | null = null
-  private nextId = 1
-  private readonly pending = new Map<number, { resolve: (b: OcrBox[]) => void; reject: (e: Error) => void }>()
-  private buffer = ''
-  private starting: Promise<void> | null = null
+type OcrPending = { resolve: (boxes: OcrBox[]) => void; reject: (error: Error) => void }
+type OcrContext = {
+  proc: ChildProcessWithoutNullStreams
+  pending: Map<number, OcrPending>
+  ready: Promise<void>
+  stop: (error: Error) => void
+}
 
+export class ResidentOcr {
+  private context: OcrContext | null = null
+  private nextId = 1
   constructor(private readonly opts: ResidentOcrOptions = {}) {}
 
-  /** 启动常驻进程（幂等）；失败抛 OcrServerUnavailable */
-  async ensureStarted(): Promise<void> {
-    if (this.proc && this.proc.exitCode === null) return
-    if (this.starting) return this.starting
-    this.starting = new Promise<void>((resolve, reject) => {
-      const python = this.opts.pythonPath ?? defaultPythonPath()
-      const script = this.opts.scriptPath ?? defaultScriptPath()
-      const proc = spawn(python, [script], { stdio: ['pipe', 'pipe', 'pipe'] }) as ChildProcessWithoutNullStreams
-      const fail = (why: string) => {
-        this.starting = null
-        for (const p of this.pending.values()) p.reject(new OcrServerUnavailable(why))
-        this.pending.clear()
-        reject(new OcrServerUnavailable(why))
+  private start(): OcrContext {
+    if (this.context) return this.context
+    const proc = spawn(this.opts.pythonPath ?? defaultPythonPath(), [this.opts.scriptPath ?? defaultScriptPath()],
+      { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true }) as ChildProcessWithoutNullStreams
+    const pending = new Map<number, OcrPending>()
+    let buffer = '', stopped = false, warmed = false
+    let readyResolve!: () => void, readyReject!: (error: Error) => void
+    const ready = new Promise<void>((resolve, reject) => { readyResolve = resolve; readyReject = reject })
+    const context: OcrContext = { proc, pending, ready, stop: error => {
+      if (stopped) return
+      stopped = true
+      clearTimeout(startupTimer)
+      if (this.context === context) this.context = null
+      if (!warmed) readyReject(error)
+      for (const request of pending.values()) request.reject(error)
+      pending.clear()
+      proc.kill()
+    } }
+    const startupTimer = setTimeout(() => context.stop(new OcrServerUnavailable('OCR 服务启动超时（30s）')), 30_000)
+    this.context = context
+    proc.on('error', () => context.stop(new OcrServerUnavailable('OCR 服务启动失败')))
+    proc.on('exit', () => context.stop(new OcrServerUnavailable('OCR 服务进程退出')))
+    proc.stdin.on('error', () => context.stop(new OcrServerUnavailable('OCR 请求写入失败')))
+    proc.stderr.on('data', () => { /* Never log OCR text or paths. */ })
+    proc.stdout.setEncoding('utf8')
+    proc.stdout.on('data', (chunk: string) => {
+      if (stopped) return
+      buffer += chunk
+      if (buffer.length > 4_000_000) { context.stop(new OcrServerUnavailable('OCR 响应过大')); return }
+      let index: number
+      while ((index = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, index); buffer = buffer.slice(index + 1)
+        if (!line.trim()) continue
+        try {
+          const message = JSON.parse(line) as { id: number; ok: boolean; boxes?: Array<[string, number, number, number, number, number]> }
+          const request = pending.get(message.id)
+          if (!request) continue
+          pending.delete(message.id)
+          if (!message.ok) request.reject(new OcrServerUnavailable('OCR 识别失败'))
+          else if (!Array.isArray(message.boxes) || message.boxes.length > 2048 || message.boxes.some(b =>
+            !Array.isArray(b) || b.length !== 6 || typeof b[0] !== 'string' || b[0].length > 20_000 ||
+            b.slice(1).some(n => typeof n !== 'number' || !Number.isFinite(n)) || b[1] < 0 || b[1] > 1 ||
+            b[2] < 0 || b[3] < 0 || b[4] <= b[2] || b[5] <= b[3])) request.reject(new OcrServerUnavailable('OCR 响应无效'))
+          else request.resolve(message.boxes.map(b => ({ text:b[0], score:b[1], x0:b[2], y0:b[3], x1:b[4], y1:b[5] })))
+        } catch { context.stop(new OcrServerUnavailable('OCR 响应格式无效')); return }
       }
-      proc.on('error', (err) => fail(`OCR 服务启动失败: ${err.message}`))
-      let warmed = false
-      proc.stdout.setEncoding('utf-8')
-      proc.stdout.on('data', (chunk: string) => {
-        this.buffer += chunk
-        let idx: number
-        while ((idx = this.buffer.indexOf('\n')) >= 0) {
-          const line = this.buffer.slice(0, idx)
-          this.buffer = this.buffer.slice(idx + 1)
-          if (!line.trim()) continue
-          try {
-            const msg = JSON.parse(line) as { id: number | null; ok: boolean; boxes?: unknown; error?: string }
-            if (msg.id === null) {
-              // 启动横幅/无 id 输出：首个响应即视为就绪
-              if (!warmed) {
-                warmed = true
-                this.starting = null
-                resolve()
-              }
-              continue
-            }
-            const p = this.pending.get(msg.id)
-            if (!p) continue
-            this.pending.delete(msg.id)
-            if (msg.ok) {
-              const boxes = (msg.boxes as Array<[string, number, number, number, number, number]> | undefined) ?? []
-              p.resolve(
-                boxes.map((b) => ({ text: b[0], score: b[1], x0: b[2], y0: b[3], x1: b[4], y1: b[5] })),
-              )
-            } else {
-              p.reject(new OcrServerUnavailable(`OCR 请求失败: ${msg.error ?? 'unknown'}`))
-            }
-          } catch {
-            /* 非 JSON 行忽略 */
-          }
-        }
-      })
-      proc.stderr.setEncoding('utf-8')
-      proc.stderr.on('data', () => {
-        /* 噪声忽略；崩溃经 exit 检测 */
-      })
-      proc.on('exit', () => {
-        const pending = [...this.pending.values()]
-        this.pending.clear()
-        this.proc = null
-        this.starting = null
-        for (const p of pending) p.reject(new OcrServerUnavailable('OCR 服务进程退出'))
-        if (!warmed) fail('OCR 服务进程启动后立即退出')
-      })
-      // 就绪探针：对空图片路径发一个请求，收到任意响应（ok:false 走 reject，
-      // 也证明服务已就绪——评审 P1-3）；30s 启动超时兜底
-      const probeId = this.nextId++
-      this.proc = proc
-      const finishWarm = () => {
-        if (warmed) return
-        warmed = true
-        clearTimeout(startupTimer)
-        this.starting = null
-        resolve()
-      }
-      const startupTimer = setTimeout(() => {
-        if (!warmed) {
-          proc.kill()
-          fail('OCR 服务启动超时（30s）')
-        }
-      }, 30_000)
-      startupTimer.unref?.()
-      this.pending.set(probeId, {
-        resolve: finishWarm,
-        reject: finishWarm,
-      })
-      proc.stdin.write(JSON.stringify({ id: probeId, image: '' }) + '\n')
     })
-    return this.starting
+    const probeId = this.nextId++
+    const warm = () => { if (stopped) return; warmed = true; clearTimeout(startupTimer); readyResolve() }
+    pending.set(probeId, { resolve: warm, reject: warm })
+    proc.stdin.write(JSON.stringify({ id: probeId, image: '' }) + '\n')
+    return context
   }
 
-  /** OCR 一张图（可选裁剪区域，坐标为原图像素）；进程不可用自动重启一次 */
-  async recognize(imagePath: string, crop?: [number, number, number, number]): Promise<OcrBox[]> {
-    await this.ensureStarted()
-    const attempt = async (): Promise<OcrBox[]> => {
-      const proc = this.proc
-      if (!proc) throw new OcrServerUnavailable('OCR 服务不可用')
-      const id = this.nextId++
-      return new Promise<OcrBox[]>((resolve, reject) => {
-        this.pending.set(id, { resolve, reject })
-        proc.stdin.write(JSON.stringify({ id, image: imagePath, crop }) + '\n')
-      })
-    }
+  async ensureStarted(): Promise<void> { await this.start().ready }
+
+  /** crop用原图坐标；返回框相对于裁剪图。取消/超时停止该代进程，不重试本次观察。 */
+  async recognize(imagePath: string, crop?: [number, number, number, number], signal?: AbortSignal): Promise<OcrBox[]> {
+    if (signal?.aborted) throw new OcrServerUnavailable('OCR 请求已取消')
+    const context = this.start()
+    const abort = () => context.stop(new OcrServerUnavailable('OCR 请求已取消'))
+    signal?.addEventListener('abort', abort, { once: true })
+    if (signal?.aborted) abort()
     try {
-      return await attempt()
-    } catch (err) {
-      if (!(err instanceof OcrServerUnavailable)) throw err
-      // 一次自动重启重试（重启后调用方须重新对齐水位）
-      this.proc = null
-      await this.ensureStarted()
-      return attempt()
-    }
+      await context.ready
+      if (signal?.aborted) throw new OcrServerUnavailable('OCR 请求已取消')
+      if (this.context !== context) throw new OcrServerUnavailable('OCR 服务已停止')
+      const id = this.nextId++
+      return await new Promise<OcrBox[]>((resolve, reject) => {
+        const timer = setTimeout(() => context.stop(new OcrServerUnavailable('OCR 请求超时')), this.opts.requestTimeoutMs ?? 30_000)
+        context.pending.set(id, {
+          resolve: boxes => { clearTimeout(timer); resolve(boxes) },
+          reject: error => { clearTimeout(timer); reject(error) },
+        })
+        context.proc.stdin.write(JSON.stringify({ id, image: imagePath, crop }) + '\n')
+      })
+    } finally { signal?.removeEventListener('abort', abort) }
   }
 
   async shutdown(): Promise<void> {
-    const proc = this.proc
-    this.proc = null
-    if (!proc) return
-    await new Promise<void>((resolve) => {
-      proc.on('exit', () => resolve())
-      proc.stdin.end()
-      setTimeout(() => {
-        proc.kill()
-        resolve()
-      }, 2_000).unref?.()
+    const context = this.context
+    if (!context) return
+    context.stop(new OcrServerUnavailable('OCR 服务已停止'))
+    if (context.proc.exitCode !== null) return
+    await new Promise<void>(resolve => {
+      const timer = setTimeout(resolve, 2000)
+      context.proc.once('exit', () => { clearTimeout(timer); resolve() })
     })
   }
 }

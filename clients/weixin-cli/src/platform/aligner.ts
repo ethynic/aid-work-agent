@@ -1,15 +1,9 @@
-/**
- * 会话窗口对齐器（C2，设计 §6；语义与 C0 冻结契约一致）。
- *
- * - 拆行重建：相邻同侧文本框（y 间距 < 行高×1.2）按 y/x 序合并为同一气泡。
- * - 稳定本地 ID：对齐器记住最近已对齐窗口的（签名→ID）序列；重复观察同一
- *   窗口复用既有 ID；水位锚点之后的新气泡分配新 ID（m-<uuid>）。
- * - 重复项序号：连续相同签名按出现位置逐一对位（10 条相同文本 = 10 个 ID）。
- * - 水位锚点不在已记忆窗口 → 无法对齐 → gap（alignment_broken，阻断不猜测；
- *   对应重启断档场景，需显式重建基线）。
- * - sender 无法判定 → unknown → 调用方必须整体降级 gap（契约不变量）。
+/** Stable OCR identities anchored to the acknowledged watermark. Damaged older
+ * history is ignored; all already-seen unacknowledged messages must remain.
+ * Repeated anchors require distinct, unique context rather than longest overlap.
  */
 import { randomUUID } from 'node:crypto'
+import { ocrTextMatches } from './ocrTextMatch.js'
 
 export interface AlignBox {
   text: string
@@ -20,6 +14,7 @@ export interface AlignBox {
 }
 
 export interface Bubble {
+  unsupported?: boolean
   sender: 'peer' | 'self' | 'system' | 'unknown'
   text: string
 }
@@ -32,11 +27,23 @@ export interface AlignedMessage {
 
 export type AlignOutcome =
   | { kind: 'ok'; messages: AlignedMessage[]; anchorMatched: boolean }
-  | { kind: 'gap'; reason: 'alignment_broken' | 'sender_ambiguous' }
+  | { kind: 'gap'; reason: 'alignment_broken' | 'sender_ambiguous' | 'duplicate_unalignable' }
 
 interface KnownEntry {
   sig: string
   id: string
+  unsupported?: boolean
+}
+
+/** All placements of a retained watermark/tail, stopping after ambiguity is proven. */
+export function uniqueTailPositions<A, B>(tail: readonly A[], current: readonly B[], matches: (a: A, b: B) => boolean): number[] {
+  if (!tail.length) return []
+  const positions: number[] = []
+  for (let start = 0; start + tail.length <= current.length; start++) {
+    if (tail.every((entry, i) => matches(entry, current[start + i]!))) positions.push(start)
+    if (positions.length > 1) break
+  }
+  return positions
 }
 
 const LINE_RATIO = 1.2
@@ -44,21 +51,41 @@ const LINE_RATIO = 1.2
 export class ConversationAligner {
   private window: KnownEntry[] = []
 
+  constructor(private readonly matchText:(first:string,current:string)=>boolean=ocrTextMatches){}
+
+  private matches(first:string,current:string):boolean{
+    if(first.startsWith('opaque:')||current.startsWith('opaque:'))return first===current
+    const boundary=first.indexOf('\u0000'),other=current.indexOf('\u0000')
+    return first.slice(0,boundary)===current.slice(0,other)
+      &&this.matchText(first.slice(boundary+1),current.slice(other+1))
+  }
+
   /**
    * bubbles：本轮观察按 y 序重建后的气泡（调用方完成区域映射/裁剪）。
    * anchorLocalId：水位锚（null = 建基线：整窗分配 ID 并记忆，不作为新消息）。
    */
-  align(bubbles: Bubble[], anchorLocalId: string | null): AlignOutcome {
-    if (bubbles.some((b) => b.sender === 'unknown')) {
+  align(bubbles: Bubble[], anchorLocalId: string | null, emptyBaselineContinuation = false): AlignOutcome {
+    if (bubbles.some((b) => b.sender === 'unknown' && !b.unsupported)) {
       return { kind: 'gap', reason: 'sender_ambiguous' }
     }
-    const sigs = bubbles.map((b) => `${b.sender}\u0000${b.text}`)
+    // Opaque baseline slots remember order/count only, never pixel identity.
+    // Same-position media replacement is outside this text observer's capability.
+    const sigs = bubbles.map((b) => b.unsupported ? `opaque:${b.sender}\u0000` : `${b.sender}\u0000${b.text}`)
+    if (anchorLocalId === null && emptyBaselineContinuation) {
+      // 空基线后的聚合期尚未ACK首条消息：保留已见前缀ID，不再建立新基线。
+      // 没有已ACK锚点时不能证明滚动连续性，任何前缀丢失均拒绝。
+      if (sigs.length < this.window.length || !this.window.every((e, i) => this.matches(e.sig,sigs[i]!)) || bubbles.slice(this.window.length).some(b=>b.unsupported)) {
+        return { kind: 'gap', reason: 'alignment_broken' }
+      }
+      this.window = sigs.map((sig, i) => this.window[i] ?? ({ sig, id: `m-${randomUUID()}`, unsupported:bubbles[i]?.unsupported }))
+      return { kind: 'ok', messages: this.materialize(bubbles), anchorMatched: true }
+    }
     if (anchorLocalId === null) {
       // 基线：同签名序列的重复基线观察复用 ID；否则整窗新 ID
-      if (this.window.length === sigs.length && this.window.every((e, i) => e.sig === sigs[i])) {
+      if (this.window.length === sigs.length && this.window.every((e, i) => this.matches(e.sig,sigs[i]!))) {
         return { kind: 'ok', messages: this.materialize(bubbles), anchorMatched: true }
       }
-      this.window = sigs.map((sig) => ({ sig, id: `m-${randomUUID()}` }))
+      this.window = sigs.map((sig,i) => ({ sig, id: `m-${randomUUID()}`, unsupported:bubbles[i]?.unsupported }))
       return { kind: 'ok', messages: this.materialize(bubbles), anchorMatched: true }
     }
     const anchorIdx = this.window.findIndex((e) => e.id === anchorLocalId)
@@ -66,32 +93,39 @@ export class ConversationAligner {
       // 锚点不在记忆窗口（滚动断层/重启丢态）：无法对齐 → gap
       return { kind: 'gap', reason: 'alignment_broken' }
     }
-    // 前缀校验：新窗口必须以已记忆前缀（至锚点）开始（按签名逐一对位）
-    const prefixLen = anchorIdx + 1
-    if (sigs.length < prefixLen || !sigs.slice(0, prefixLen).every((s, i) => s === this.window[i]!.sig)) {
-      return { kind: 'gap', reason: 'alignment_broken' }
+    // Only acknowledged history before the watermark may be damaged. Every
+    // already-seen, unacknowledged message after it must remain in order.
+    const tail = this.window.slice(anchorIdx)
+    let starts: number[] = []
+    for (let at = 0; at + tail.length <= sigs.length; at++) {
+      if (tail.every((entry, i) => this.matches(entry.sig, sigs[at + i]!))) starts.push(at)
     }
-    // 后缀 = 新消息：优先复用已记忆后缀的 ID（评审 P1-8：聚合期间引擎不推水位，
-    // 同一后缀会被重复观察——签名对位一致的条目必须复用既有 ID，仅真正新增的
-    // 条目分配新 ID），再推进记忆窗口
-    const suffix: KnownEntry[] = []
-    for (let i = prefixLen; i < sigs.length; i++) {
-      const remembered = this.window[i]
-      const sig = sigs[i] as string
-      if (remembered && remembered.sig === sig) {
-        suffix.push({ sig, id: remembered.id })
-      } else {
-        suffix.push({ sig, id: `m-${randomUUID()}` })
-      }
+    if (!starts.length) return { kind: 'gap', reason: 'alignment_broken' }
+    const anchorRepeated = this.window.some((entry, i) => i !== anchorIdx && this.matches(entry.sig, tail[0]!.sig))
+    if (starts.length > 1 || anchorRepeated) {
+      // A distinct earlier context message may establish the boundary of a run
+      // of repeated replies. Never choose the longest run of identical text.
+      const contexts = this.window.slice(0, anchorIdx).map((entry, oldAt) => ({entry,oldAt})).filter(({entry}) =>
+        !entry.unsupported && this.window.filter(other => this.matches(entry.sig, other.sig)).length === 1 && sigs.filter(sig => this.matches(entry.sig, sig)).length === 1)
+      starts = starts.filter(at => contexts.some(({oldAt}) => {
+        const newAt = at - (anchorIdx - oldAt)
+        if (newAt < 0) return false
+        return this.window.slice(oldAt, anchorIdx).every((prior, i) => !bubbles[newAt + i]!.unsupported && this.matches(prior.sig, sigs[newAt + i]!))
+      }))
     }
-    const ids = [...this.window.slice(0, prefixLen).map((e) => e.id), ...suffix.map((e) => e.id)]
-    this.window = sigs.map((sig, i) => ({ sig, id: ids[i] as string }))
-    const messages: AlignedMessage[] = bubbles.map((b, i) => ({
-      sender: b.sender as AlignedMessage['sender'],
-      text: b.text,
-      local_message_id: ids[i] as string,
-    }))
-    return { kind: 'ok', messages, anchorMatched: true }
+    if (starts.length !== 1) return { kind: 'gap', reason: 'duplicate_unalignable' }
+    const at = starts[0]!
+    if (bubbles.slice(at+tail.length).some(b => b.unsupported)) return { kind: 'gap', reason: 'alignment_broken' }
+    // Retain any immediately preceding recognizable context and its original ID.
+    let oldStart = anchorIdx, currentStart = at
+    while (oldStart > 0 && currentStart > 0 && !bubbles[currentStart - 1]!.unsupported && this.matches(this.window[oldStart - 1]!.sig, sigs[currentStart - 1]!)) {
+      oldStart--; currentStart--
+    }
+    const retained = this.window.slice(oldStart)
+    const current = bubbles.slice(currentStart)
+    const currentSigs = sigs.slice(currentStart)
+    this.window = currentSigs.map((sig, i) => retained[i] ?? ({ sig, id: `m-${randomUUID()}` }))
+    return { kind: 'ok', messages: this.materialize(current), anchorMatched: true }
   }
 
   private materialize(bubbles: Bubble[]): AlignedMessage[] {
@@ -99,16 +133,16 @@ export class ConversationAligner {
       // 理论不可达（基线分支已同步 window）；防御：视为断层
       return []
     }
-    return bubbles.map((b, i) => ({
+    return bubbles.flatMap((b, i) => this.window[i]!.unsupported ? [] : [{
       sender: b.sender as AlignedMessage['sender'],
-      text: b.text,
+      text: this.window[i]!.sig.slice(this.window[i]!.sig.indexOf('\u0000')+1),
       local_message_id: (this.window[i] as KnownEntry).id,
-    }))
+    }])
   }
 
   /** 最近对齐窗口的末位 ID（供调用方推进水位） */
   get lastKnownId(): string | null {
-    return this.window.length > 0 ? (this.window[this.window.length - 1] as KnownEntry).id : null
+    return [...this.window].reverse().find(entry=>!entry.unsupported)?.id ?? null
   }
 }
 

@@ -69,6 +69,7 @@ const BOSS_WRITE_TOOLS: ReadonlySet<string> = new Set([
 // 升级为 V2 变体。能力上报与 v2 门禁同源，缺能力不得通过发布/分配门禁（#6）
 const WEIXIN_TOOLS = [
   'weixin_probe',
+  'weixin_name_resolve',
   'weixin_chat_search',
   'weixin_message_send',
   'weixin_history_read',

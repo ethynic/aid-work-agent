@@ -11,10 +11,13 @@ import { spawn } from 'node:child_process'
 export type DpapiRunnerFn = (command: string, stdinText: string) => Promise<string>
 
 /** 默认执行器：powershell.exe -NoProfile -Command，payload 走 stdin 避免进程列表泄漏 */
-export async function runDpapiCommand(command: string, stdinText: string): Promise<string> {
+export async function runDpapiCommand(command: string, stdinText: string, signal?: AbortSignal): Promise<string> {
+  signal?.throwIfAborted()
   return new Promise<string>((resolve, reject) => {
-    const child = spawn('powershell.exe', ['-NoProfile', '-Command', command], {
+    const utf8Command = '[Console]::InputEncoding = [Text.UTF8Encoding]::new($false); [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); ' + command
+    const child = spawn('powershell.exe', ['-NoProfile', '-Command', utf8Command], {
       windowsHide: true,
+      signal,
       stdio: ['pipe', 'pipe', 'pipe'],
     })
     let stdout = ''
@@ -28,6 +31,7 @@ export async function runDpapiCommand(command: string, stdinText: string): Promi
       if (code === 0) resolve(stdout.trim())
       else reject(new Error(`DPAPI 调用失败（exit=${code}）：${stderr.trim().slice(0, 200)}`))
     })
+    child.stdin.on('error', reject)
     child.stdin.write(stdinText)
     child.stdin.end()
   })

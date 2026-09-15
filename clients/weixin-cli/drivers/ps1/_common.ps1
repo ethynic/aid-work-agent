@@ -31,9 +31,56 @@ $script:ZhipuApiKey = [string]$env:AID_WEIXIN_ZHIPU_API_KEY
 $script:ZhipuApiBase = 'https://open.bigmodel.cn/api/paas/v4/chat/completions'
 $script:ZhipuModel = 'GLM-5.3-Flash'   # 原生多模态；答案直接在 content
 
+function Test-WeixinOcrMatch {
+    param([string]$First, [string]$Second, [ValidateSet('name', 'text')][string]$Mode,
+          [string]$FailureCode = 'UI_CHANGED')
+    # Only the trusted script path enters argv. Private OCR text travels through UTF-8 stdin.
+    $process = $null
+    try {
+        $cli = [IO.Path]::GetFullPath((Join-Path $script:DriverPs1Dir '../../dist/src/platform/ocrMatchCli.js'))
+        $node = $env:AID_WEIXIN_NODE_EXECUTABLE
+        if (-not $node) { $node = (Get-Command node -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source }
+        $info = New-Object System.Diagnostics.ProcessStartInfo
+        $info.FileName = $node
+        $info.Arguments = '"' + $cli + '"'
+        $info.UseShellExecute = $false
+        $info.CreateNoWindow = $true
+        $info.RedirectStandardInput = $true
+        $info.RedirectStandardOutput = $true
+        $info.RedirectStandardError = $true
+        $info.StandardInputEncoding = New-Object System.Text.UTF8Encoding($false)
+        $process = New-Object System.Diagnostics.Process
+        $process.StartInfo = $info
+        if (-not $process.Start()) { throw 'start_failed' }
+        $stdout = $process.StandardOutput.ReadToEndAsync()
+        $stderr = $process.StandardError.ReadToEndAsync()
+        $payload = @{ mode = $Mode; first = $First; second = $Second } | ConvertTo-Json -Compress
+        $process.StandardInput.Write($payload)
+        $process.StandardInput.Close()
+        if (-not $process.WaitForExit(5000)) { $process.Kill(); throw 'timeout' }
+        if ($process.ExitCode -ne 0) { throw 'matcher_failed' }
+        $result = $stdout.GetAwaiter().GetResult() | ConvertFrom-Json -ErrorAction Stop
+        if ($result.matched -isnot [bool]) { throw 'invalid_result' }
+        return [bool]$result.matched
+    } catch {
+        Throw-DriverError $FailureCode 'Local OCR comparison unavailable; operation stopped'
+    } finally {
+        if ($null -ne $process) {
+            try { if (-not $process.HasExited) { $process.Kill() } } catch {}
+            $process.Dispose()
+        }
+    }
+}
+
 function Write-DriverJson([object]$Payload) {
     # -InputObject 传参：避免管道对单元素数组的解包怪癖
     $json = ConvertTo-Json -InputObject $Payload -Compress -Depth 10
+    # Keep the protocol ASCII-only: Windows hosts can reset the child console
+    # codepage during WinForms initialization. JSON escapes preserve exact text.
+    $json = [regex]::Replace($json, '[^\x00-\x7F]', {
+        param($match)
+        '\u{0:x4}' -f [int][char]$match.Value
+    })
     Write-Output ("DRIVER_JSON: " + $json)
 }
 
@@ -243,17 +290,21 @@ function Open-WeixinChat {
     $locSys = @'
 You are a coordinate locator for WeChat desktop search.
 Input image: a capture of the WeChat SEARCH RESULT PANEL window (the dropdown list that appears after typing in the search box). The panel content sits in a rounded-corner area; margins may be black (transparent areas).
-Your task: find the item that best matches the given query word — prefer items under sections like 功能/联系人/群聊, NOT the "搜索网络结果" web-search suggestions. Return the center click coordinate of that item.
+Find one uniquely matching full contact label under 功能/联系人/群聊, never web-search suggestions. Allow OCR case, width, whitespace and punctuation differences; labels of at least 5 characters may differ by at most one character and must remain at least 80% similar. Preserve numbers and symbols. If two labels match approximately, return found=false even when one is exact. Never choose a best candidate among ambiguous matches.
 Coordinate origin = top-left corner of the image. Unit = pixel.
 Return ONLY a single JSON object, no markdown, no explanation:
 {"x": <int>, "y": <int>, "label": "<matched item text>", "found": <true|false>}
 If there is no matching item, return:
 {"x": 0, "y": 0, "label": "", "found": false}
 '@
-    $loc = Invoke-KimiVision -ImagePath $ovlShot -SystemPrompt $locSys -UserText ("Query word: $TargetName. Find the best matching item in the WeChat search result area and return its center coordinate as JSON.") -ArtifactPrefix 'weixin-driver-open-locate'
+    $loc = Invoke-KimiVision -ImagePath $ovlShot -SystemPrompt $locSys -UserText ("Query word: $TargetName. Find a unique approximately matching full label; reject multiple plausible labels. Return JSON.") -ArtifactPrefix 'weixin-driver-open-locate'
     if (-not $loc.found -or ([int]$loc.x -eq 0 -and [int]$loc.y -eq 0)) {
         Close-WeixinSearchOverlay $overlayHwnd
         Throw-DriverError 'TARGET_NOT_FOUND' ("搜索结果中未找到与「" + $TargetName + "」匹配的条目")
+    }
+    if (-not (Test-WeixinOcrMatch -First $TargetName -Second ([string]$loc.label) -Mode name)) {
+        Close-WeixinSearchOverlay $overlayHwnd
+        Throw-DriverError 'TARGET_NOT_FOUND' '搜索结果标签与目标不匹配，已中止'
     }
     # 结果项点击必须投给 overlay（投主窗口会被当作"点击面板外"关面板）
     Send-WeixinPostMessageClick -Hwnd $overlayHwnd -ScreenX ($ovlLeft + [int]$loc.x) -ScreenY ($ovlTop + [int]$loc.y)
@@ -266,16 +317,19 @@ If there is no matching item, return:
 You are a UI inspector for WeChat desktop 4.x main window.
 Input image: a screenshot of WeChat main window with a chat conversation open.
 Return ONLY a single JSON object, no markdown, no explanation:
-{"title": "<conversation title shown at the top of the chat area>", "input_box": {"x": <int>, "y": <int>}, "input_empty": <true|false>, "found": <true|false>}
+{"title": "<conversation title shown at the top of the chat area>", "input_box": {"x": <int>, "y": <int>}, "input_empty": <true|false>, "found": <true|false>, "title_matches": <true|false>}
 input_box = CENTER of the text input area at the bottom where you type a message.
 input_empty = whether the input box currently contains NO draft text (empty = true).
 found = false if no chat conversation is open or the input box cannot be located.
+title_matches compares the complete title with BOTH the requested name and selected search label, allowing OCR formatting differences and at most one character error for names of 5 or more characters (at least 80% similar). Short names allow formatting differences only. Preserve numbers and symbols; reject ambiguous titles. Never use substring matching.
 Coordinates are INSIDE the image (origin top-left, unit pixel).
 '@
-    $check = Invoke-KimiVision -ImagePath $mainShot -SystemPrompt $checkSys -UserText 'Return the conversation title and input box location as JSON.' -ArtifactPrefix 'weixin-driver-open-check'
+    $check = Invoke-KimiVision -ImagePath $mainShot -SystemPrompt $checkSys -UserText ("Requested name: $TargetName. Selected label: " + [string]$loc.label + ". Return the title comparison and input box location as JSON.") -ArtifactPrefix 'weixin-driver-open-check'
     if (-not $check.found) { Throw-DriverError 'UI_CHANGED' '打开会话后无法识别聊天窗口结构（未打开会话或找不到输入框）' }
     $title = [string]$check.title
-    if ($title -notlike ('*' + $TargetName + '*')) {
+    if ($check.title_matches -ne $true -or
+        -not (Test-WeixinOcrMatch -First $TargetName -Second $title -Mode name) -or
+        -not (Test-WeixinOcrMatch -First ([string]$loc.label) -Second $title -Mode name)) {
         Throw-DriverError 'UI_CHANGED' ("打开的会话标题「" + $title + "」与目标「" + $TargetName + "」不一致，已中止")
     }
     if ($RequireEmptyInput -and $check.input_empty -eq $false) {

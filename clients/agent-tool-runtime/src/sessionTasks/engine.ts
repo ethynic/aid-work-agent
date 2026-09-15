@@ -19,10 +19,6 @@
  *   链外写盘（审计十轮：链外旧重试会把磁盘覆盖回旧控制代）。
  */
 import { randomUUID } from 'node:crypto'
-import { readdirSync as importFsReaddir, existsSync as importFsExists, statSync as importFsStat } from 'node:fs'
-import { join as importPathJoin } from 'node:path'
-const importFs = { readdirSync: importFsReaddir, existsSync: importFsExists, statSync: importFsStat }
-const importPath = { join: importPathJoin }
 import type { ApiClient, ClaimedInvocation, SessionTaskControlAck, SessionTaskPrepareSendResult, SessionTaskTargetedClaim } from '../apiClient.js'
 import { ApiError, NetworkError } from '../apiClient.js'
 import { ReadyQueue, type QueueKind } from './readyQueue.js'
@@ -64,7 +60,7 @@ export interface ObserverResult {
   gap_reason: string | null
 }
 
-export type ObserverFn = (task: { taskId: string; conversationBindingId: string; expectedBindingVersion: number; expectedAccountIdentityVersion: number }, request: { watermark: ObserverWatermark | null }) => Promise<ObserverResult>
+export type ObserverFn = (task: { taskId: string; conversationBindingId: string; expectedBindingVersion: number; expectedAccountIdentityVersion: number; targetName?: string }, request: { watermark: ObserverWatermark | null }) => Promise<ObserverResult>
 
 export interface EngineOptions {
   api: ApiClient
@@ -1219,6 +1215,24 @@ export class SessionTaskEngine {
       this.queue.set(task.taskId, 'observe', now + 5_000)
       return
     }
+    // A coverage gap is a retryable read problem. Keep the acknowledged watermark
+    // and pending work; require a continuous read before starting more decisions
+    // or sends. Already-created execution retains its existing result lifecycle.
+    if (task.gapStreak > 0 && task.phase !== 'executing') {
+      await this.observeOnce(task, now)
+      return
+    }
+    // Recovery may find new input while an earlier decision is still in flight.
+    // Freeze that input first, then keep polling the existing decision even if
+    // observeOnce changed the phase to observing. Never orphan its concurrency slot.
+    if (task.phase !== 'executing' && task.pendingBatch) {
+      await this.observeOnce(task, now)
+      return
+    }
+    if (task.phase !== 'executing' && task.inFlight) {
+      await this.pollDecision(task, now)
+      return
+    }
     // 每个动作单元先尝试冲填决策队列（P1-6：定时重试入口，不依赖特定相位）
     if (task.decisionQueue.length > 0 && !task.inFlight) {
       await this.drainDecisionQueue(task, now)
@@ -1272,6 +1286,7 @@ export class SessionTaskEngine {
             conversationBindingId: task.conversationBindingId,
             expectedBindingVersion: task.expectedBindingVersion,
             expectedAccountIdentityVersion: task.expectedAccountIdentityVersion,
+            targetName: taskTargetName(task.spec),
           },
           { watermark: task.watermark },
         ),
@@ -1301,17 +1316,11 @@ export class SessionTaskEngine {
       return
     }
     if (result.coverage === 'gap') {
-      // 连续 gap 达阈值 → blocked 阻断自动回复（评审 P1-9；单次 gap 退避重试）
+      // Bounded reads with capped backoff, not a permanent stop after three OCR
+      // failures. Never reset the baseline or discard unsent messages to recover.
       task.gapStreak += 1
       await this.logEvent(task, 'observation', { observation_id: result.observation_id, outcome: 'gap', reason: result.gap_reason, streak: task.gapStreak }, now)
-      if (task.gapStreak >= 3) {
-        task.inFlight = null
-        task.sendReady = null
-        task.decisionQueue = []
-        await this.setPhase(task, 'blocked', now)
-        this.emit(`task ${task.taskId} 连续 ${task.gapStreak} 次 coverage gap，blocked`)
-        return
-      }
+      if (task.gapStreak === 3) this.emit(`task ${task.taskId} 连续 3 次 coverage gap，保留水位并退避重读`)
       task.observeBackoffIndex = Math.min(task.observeBackoffIndex + 1, OBSERVE_BACKOFF.length - 1)
       task.observeDueAt = now + OBSERVE_BACKOFF[task.observeBackoffIndex]!
       this.queue.set(task.taskId, 'observe', task.observeDueAt)
@@ -1323,6 +1332,11 @@ export class SessionTaskEngine {
       task.observeDueAt = now + OBSERVE_BACKOFF[task.observeBackoffIndex]!
       this.queue.set(task.taskId, 'observe', task.observeDueAt)
       return
+    }
+    if (task.gapStreak > 0) {
+      await this.logEvent(task, 'observation', { observation_id: result.observation_id, outcome: 'recovered', streak: task.gapStreak }, now)
+      this.emit(`task ${task.taskId} 消息连续性恢复，接续原水位`)
+      task.observeBackoffIndex = 0
     }
     task.gapStreak = 0
     // 基线语义（设计 §6：新启用只建基线，不回复旧消息）：首次观察到的窗口是
@@ -1453,6 +1467,7 @@ export class SessionTaskEngine {
 
   /** 决策队列冲刷（评审 P1-6/P1-7）：批次事件 ACK 后才可提交；并发满/断网保留队列 */
   private async drainDecisionQueue(task: TaskRuntime, now: number): Promise<void> {
+    if (task.gapStreak > 0) return // Event ACK may arrive while a read is recovering.
     if (task.submitting) return // 任务级提交锁：同一任务提交在途，先占任务再占全局
     while (task.decisionQueue.length > 0 && !task.inFlight) {
       const head = task.decisionQueue[0]!
@@ -1732,6 +1747,7 @@ export class SessionTaskEngine {
           conversationBindingId: task.conversationBindingId,
           expectedBindingVersion: task.expectedBindingVersion,
           expectedAccountIdentityVersion: task.expectedAccountIdentityVersion,
+            targetName: taskTargetName(task.spec),
         },
         { watermark: task.watermark },
       )
@@ -1865,7 +1881,9 @@ export class SessionTaskEngine {
     if (now - this.lastRetentionAt < 60_000) return
     this.lastRetentionAt = now
     try {
-      const result = enforceRetention(this.opts.runtimeHome, await this.retentionStates(), { now })
+      // No assignment has trusted deletion eligibility yet. Disk limits still apply;
+      // replaying retained history here would block renewals for no cleanup benefit.
+      const result = enforceRetention(this.opts.runtimeHome, [], { now })
       const wasStop = this.diskStopNew
       this.diskStopNew = result.stopNew
       if (result.stopNew && !wasStop) this.emit('本地会话日志达 256MiB 上限：停止新观察持久化与新发送')
@@ -1874,46 +1892,6 @@ export class SessionTaskEngine {
     } catch (err) {
       this.emit(`retention 评估异常: ${err instanceof Error ? err.message : String(err)}`)
     }
-  }
-
-  /**
-   * retention 保守判定（评审三轮 P1-1）：只报告可验证安全的目录——
-   * 回放成功且 .acked marker 覆盖末条序号、不在运行集/恢复待办中。
-   * C2 无法从本地验证云端终态与未决 journal（.acked 只证明日志已同步），
-   * 故一律 terminal:false / noPendingJournal:false 保守保留；回放失败
-   * （损坏）、未全 ACK、恢复补交中、运行中的目录同样保留（未知状态不删除）。
-   */
-  private async retentionStates(): Promise<Array<{ assignmentId: string; terminal: boolean; fullyAcked: boolean; noPendingJournal: boolean; lastActivityAt: number }>> {
-    const states: Array<{ assignmentId: string; terminal: boolean; fullyAcked: boolean; noPendingJournal: boolean; lastActivityAt: number }> = []
-    const { readdirSync, existsSync, statSync } = importFs
-    const { join } = importPath
-    const root = join(this.opts.runtimeHome, 'session-tasks')
-    if (!existsSync(root)) return states
-    for (const name of readdirSync(root, { withFileTypes: true })) {
-      if (!name.isDirectory()) continue
-      const assignmentId = name.name
-      if ([...this.tasks.values()].some((t) => t.assignmentId === assignmentId)) continue // 运行中
-      if (this.recoveryPending.has(assignmentId)) continue // 恢复补交中
-      const file = join(root, assignmentId, 'events.jsonl')
-      if (!existsSync(file)) continue // 无日志留给后续
-      const store = new SessionStore({ runtimeHome: this.opts.runtimeHome, assignmentId, crypto: this.opts.crypto })
-      try {
-        const replayed = await store.replay()
-        if (replayed.localSeq === 0) continue // 空日志保留
-        // 持久 ACK 标记：只有 marker 覆盖末条序号才视为全同步
-        const ackedMarker = readAckedMarker(this.opts.runtimeHome, assignmentId)
-        if (ackedMarker === null || ackedMarker < replayed.localSeq) continue // 未确认全同步 → 保留
-        const stat = statSync(file)
-        // C2 保守保留：.acked 只证明日志已同步，不能证明云端终态或无未决
-        // journal（需查云端才能确认）——terminal/noPendingJournal 均为 false，
-        // enforceRetention 不会删除
-        states.push({ assignmentId, terminal: false, fullyAcked: true, noPendingJournal: false, lastActivityAt: stat.mtimeMs })
-      } catch {
-        // 回放失败（损坏）→ 保留，不删
-        continue
-      }
-    }
-    return states
   }
 
   // ---------------- 日志与相位 ----------------
@@ -1965,7 +1943,7 @@ export class SessionTaskEngine {
   }
 }
 
-import { writeFileSync, mkdirSync, readFileSync } from 'node:fs'
+import { writeFileSync, mkdirSync } from 'node:fs'
 import { join as pathJoin } from 'node:path'
 
 function writeAckedMarker(runtimeHome: string, assignmentId: string, ackedSeq: number): void {
@@ -1975,17 +1953,6 @@ function writeAckedMarker(runtimeHome: string, assignmentId: string, ackedSeq: n
     writeFileSync(pathJoin(dir, '.acked'), String(ackedSeq), 'utf-8')
   } catch { /* best effort */ }
 }
-
-function readAckedMarker(runtimeHome: string, assignmentId: string): number | null {
-  try {
-    const content = readFileSync(pathJoin(runtimeHome, 'session-tasks', assignmentId, '.acked'), 'utf-8').trim()
-    const n = parseInt(content, 10)
-    return Number.isFinite(n) ? n : null
-  } catch {
-    return null
-  }
-}
-
 
 /** 单条线上记录字节数（含 local_seq，对齐 C1 json.dumps 整条 record 的紧凑口径）。
  * batchEventsForSync 与 flushRecovery 的超限判断共用同一口径。 */
@@ -2116,4 +2083,9 @@ function extractOldTaskWork(assignmentId: string, events: ReplayedEvent[]): OldT
     work.pendingBatches.set(batchId, { inputVersion: work.decidedBatches.get(batchId) ?? 0, batchSeq: seq })
   }
   return work
+}
+
+function taskTargetName(spec: Record<string, unknown>): string | undefined {
+  const target = spec._runtime_target as { policy?: string; target_name?: string } | undefined
+  return target?.policy === "current_login_name" && typeof target.target_name === "string" ? target.target_name : undefined
 }

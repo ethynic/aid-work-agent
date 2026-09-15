@@ -88,6 +88,9 @@ def load_conversation_binding(tenant_id: str, binding_id: str) -> Optional[Dict[
 
 def binding_verified(binding: Optional[Dict[str, Any]]) -> bool:
     """真机验证有效性（与 C1 _binding_valid_for_allocation 同口径）。"""
+    from .name_contexts import is_name_context, name_context_valid
+    if is_name_context(binding):
+        return name_context_valid(binding)
     if not binding or binding.get("verification_status") != BINDING_VERIFIED:
         return False
     if int(binding.get("identity_version") or 0) < 1:
@@ -359,6 +362,17 @@ class WeixinConversationAdapter:
             )
         ]
 
+    def invocation_receipt_arguments(self, ctx: AdapterContext, target_ref: str) -> Dict[str, str]:
+        """Server-only frozen receipt policy; never derived from provider input."""
+        from .name_contexts import is_name_context, name_context_valid
+        binding = load_conversation_binding(ctx.tenant_id, target_ref)
+        if is_name_context(binding) and name_context_valid(binding):
+            return {"receipt_mode": "submission", "receipt_context": "weixin_name"}
+        return {}
+
+    def validate_submission_evidence(self, ctx: EvidenceContext) -> bool:
+        return ctx.scenario_key == self.scenario_key and ctx.evidence_ref == f"weixin-submission:{ctx.request_id}:1"
+
     def aggregate_result(self, ctx: AdapterContext, delivery_results: List[Dict[str, Any]]) -> RunBusinessResult:
         """单条发送的业务判定（unknown → 需人工核对；completed 语义由任务层判定）。"""
         succeeded = sum(
@@ -369,15 +383,19 @@ class WeixinConversationAdapter:
             for d in delivery_results
             if d.get("effect") == "unknown" or d.get("phase") == "unknown" or d.get("state") == "unknown"
         )
+        submitted = sum(1 for d in delivery_results if d.get("effect") == "applied"
+                        and d.get("phase") == "submitted" and d.get("state") == "succeeded")
         if unknown:
             verdict = "needs_manual_review"
         elif succeeded == len(delivery_results) and succeeded > 0:
             verdict = "reply_delivered"
+        elif succeeded + submitted == len(delivery_results) and submitted:
+            verdict = "reply_submitted"
         else:
             verdict = "reply_not_delivered"
         return RunBusinessResult(
             verdict=verdict,
-            summary=f"total={len(delivery_results)} succeeded={succeeded} unknown={unknown}",
+            summary=f"total={len(delivery_results)} succeeded={succeeded} submitted={submitted} unknown={unknown}",
         )
 
     def validate_evidence(self, ctx: EvidenceContext) -> bool:

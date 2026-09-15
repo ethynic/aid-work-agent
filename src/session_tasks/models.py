@@ -172,9 +172,19 @@ class TaskDraftCreatePayload(BaseModel):
 
     scenario_key: str = Field(default="weixin.conversation.v1", pattern=r"^[a-z0-9_.-]{4,64}$")
     device_id: str = Field(pattern=r"^[0-9a-fA-F-]{36}$")
-    account_binding_id: str = Field(pattern=r"^[0-9a-fA-F-]{36}$")
-    conversation_binding_id: str = Field(pattern=r"^[0-9a-fA-F-]{36}$")
+    account_binding_id: Optional[str] = Field(default=None, pattern=r"^[0-9a-fA-F-]{36}$")
+    conversation_binding_id: Optional[str] = Field(default=None, pattern=r"^[0-9a-fA-F-]{36}$")
+    resolution_invocation_id: Optional[str] = Field(default=None, pattern=r"^[0-9a-fA-F-]{36}$")
     spec: TaskSpecPayload
+
+    @model_validator(mode="after")
+    def _target_source(self):
+        if self.resolution_invocation_id:
+            if self.account_binding_id or self.conversation_binding_id or self.scenario_key != "weixin.conversation.v1":
+                raise ValueError("名称定位结果不能与既有绑定同时提交")
+        elif not self.account_binding_id or not self.conversation_binding_id:
+            raise ValueError("需要名称定位结果或完整的既有绑定")
+        return self
 
 
 def validate_task_spec(payload: dict) -> TaskSpecPayload:

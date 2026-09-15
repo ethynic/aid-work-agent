@@ -1,8 +1,8 @@
 """desktop_automation 枚举、常量与规范编码（P1-A，阶段宪章 R9-R12）
 
 - effect/phase 模型：R10 —— delivery 聚合层 effect ∈ none|applied|unknown；
-  Provider/Runtime 状态 phase ∈ prepared|may_have_started|verified|unknown。
-  applied 必须叠加本次验证证据（phase=verified）才判成功。
+  Provider/Runtime phase includes submitted for server-authorized name chat only.
+  verified means delivery evidence; submitted means command completion, not delivery.
 - 触发键规范编码：R11 —— 外部 ID / request_id 先 sha256 再 base64url，杜绝分隔符碰撞。
 - quota scope 固定顺序：R9 —— tenant < task < target < account < resource
   （按裁决显式列表实现，许可事务内按此顺序逐层加行锁）。
@@ -95,11 +95,13 @@ DELIVERY_EFFECTS = (EFFECT_NONE, EFFECT_APPLIED, EFFECT_UNKNOWN)
 PHASE_PREPARED = "prepared"
 PHASE_MAY_HAVE_STARTED = "may_have_started"
 PHASE_VERIFIED = "verified"
+PHASE_SUBMITTED = "submitted"  # Authorized name-chat command completed; delivery unverified.
 PHASE_UNKNOWN = "unknown"
 OPERATION_PHASES = (
     PHASE_PREPARED,
     PHASE_MAY_HAVE_STARTED,
     PHASE_VERIFIED,
+    PHASE_SUBMITTED,
     PHASE_UNKNOWN,
 )
 

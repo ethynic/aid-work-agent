@@ -26,16 +26,22 @@ class SessionTaskPrepareInput(BaseModel):
     device_id: Optional[UUID] = None
     account_binding_id: Optional[UUID] = None
     conversation_binding_id: Optional[UUID] = None
+    resolution_invocation_id: Optional[UUID] = None
     spec: TaskSpecPayload
 
     @model_validator(mode="after")
     def _operation_fields(self):
-        bindings = (self.device_id, self.account_binding_id, self.conversation_binding_id)
+        bindings = (self.device_id, self.account_binding_id, self.conversation_binding_id, self.resolution_invocation_id)
         if self.task_id:
             if self.expected_version is None or any(bindings):
                 raise ValueError("更新需要 expected_version，且不可修改设备和会话绑定")
-        elif not all(bindings) or self.expected_version is not None:
-            raise ValueError("新建需要设备、账号和会话绑定，且不接受 expected_version")
+        elif self.expected_version is not None or not self.device_id:
+            raise ValueError("新建需要设备，且不接受 expected_version")
+        elif self.resolution_invocation_id:
+            if self.account_binding_id or self.conversation_binding_id:
+                raise ValueError("名称定位与既有绑定不能混用")
+        elif not self.account_binding_id or not self.conversation_binding_id:
+            raise ValueError("新建需要名称定位结果或完整既有绑定")
         return self
 
 
@@ -98,7 +104,7 @@ class SessionTaskPrepareTool(BaseTool):
     name = "session_task_prepare"
     display_name = "准备会话任务"
     category = "weixin"
-    description = "创建或修改会话任务草稿，不执行。返回工作台授权表单入口；用户须在表单点击授权后才可发布。更新需 task_id 与 expected_version。"
+    description = "创建或修改会话任务草稿，不执行。名称任务先调用 weixin_name_resolve，使用返回的 device_id 和 resolution_invocation_id，无需微信号或账号绑定。返回工作台授权表单入口；更新需 task_id 与 expected_version。"
     InputModel = SessionTaskPrepareInput
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
@@ -108,8 +114,11 @@ class SessionTaskPrepareTool(BaseTool):
                                               args.expected_version, args.spec.model_dump(mode="json"))
             else:
                 payload = TaskDraftCreatePayload(
-                    device_id=str(args.device_id), account_binding_id=str(args.account_binding_id),
-                    conversation_binding_id=str(args.conversation_binding_id), spec=args.spec)
+                    device_id=str(args.device_id),
+                    account_binding_id=str(args.account_binding_id) if args.account_binding_id else None,
+                    conversation_binding_id=str(args.conversation_binding_id) if args.conversation_binding_id else None,
+                    resolution_invocation_id=str(args.resolution_invocation_id) if args.resolution_invocation_id else None,
+                    spec=args.spec)
                 result = service.create_draft(context.tenant_id, context.user_id, payload)
             task_id = result.get("task_id") or args.task_id
             return {**result, "published": False,

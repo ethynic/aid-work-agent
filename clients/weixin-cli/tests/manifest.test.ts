@@ -61,19 +61,23 @@ test('manifest 字段完整且与静态 provider-manifest.json 同源（上位�
     'weixin_history_read',
     'weixin_session_observe',
     'weixin_unread_list',
+    'weixin_name_resolve',
+    'weixin_message_send_v2',
   ])
-  assert.equal(m.tools.length, 6)
+  assert.equal(m.tools.length, 8)
   const probe = m.tools[0]!
   assert.equal(probe.name, 'weixin_probe')
   assert.ok(probe.title.length > 0 && probe.description.length > 0)
   assert.equal(probe.inputSchema.type, 'object')
   assert.equal(probe.annotations.readOnlyHint, true)
 
-  // M2 注解语义：message_send 是唯一写动作（readOnly=false 且非幂等），其余只读
+  // 两种发送入口均为写动作，名称定位与观察仍为只读。
   const byName = new Map(m.tools.map((t) => [t.name, t]))
   const send = byName.get('weixin_message_send')!
   assert.equal(send.annotations.readOnlyHint, false)
   assert.equal(send.annotations.idempotentHint, false)
+  assert.equal(byName.get('weixin_message_send_v2')!.annotations.readOnlyHint, false)
+  assert.equal(byName.get('weixin_name_resolve')!.annotations.readOnlyHint, true)
   for (const n of ['weixin_chat_search', 'weixin_history_read', 'weixin_session_observe', 'weixin_unread_list']) {
     assert.equal(byName.get(n)!.annotations.readOnlyHint, true, `${n} 应为只读`)
   }
@@ -107,5 +111,7 @@ test('version --json 输出与 buildManifest/computeSchemaDigest 同源', () => 
     'weixin_history_read',
     'weixin_session_observe',
     'weixin_unread_list',
+    'weixin_name_resolve',
+    'weixin_message_send_v2',
   ])
 })

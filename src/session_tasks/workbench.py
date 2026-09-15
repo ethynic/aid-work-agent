@@ -172,7 +172,7 @@ def timeline(tenant_id, user_id, task_id, limit=100, offset=0):
         for m in messages:
             ref = m.pop("text_id")
             m["text"] = load_text(conn, tenant_id, task_id, ref, expected_purpose="message").get("text") if ref else None
-        cursor.execute("""SELECT l.decision_id,l.occurrence_id,l.run_id,l.delivery_id,l.invocation_id,d.state AS delivery_state,i.state AS invocation_state,d.created_at
+        cursor.execute("""SELECT l.decision_id,l.occurrence_id,l.run_id,l.delivery_id,l.invocation_id,d.state AS delivery_state,d.phase AS delivery_phase,i.state AS invocation_state,d.created_at
             FROM session_task_execution_links l
             LEFT JOIN desktop_automation_deliveries d ON d.tenant_id=l.tenant_id AND d.id=l.delivery_id
             LEFT JOIN local_tool_invocations i ON i.tenant_id=l.tenant_id AND i.id=l.invocation_id

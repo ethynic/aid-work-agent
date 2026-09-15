@@ -104,7 +104,7 @@ class TestPublish:
             )
         detail = service.get_automation_detail(tenant_id, automation_id, "owner-1")
         assert detail["automation"]["status"] == "active"
-        assert detail["automation"]["active_revision_id"] == revision_id
+        assert str(detail["automation"]["active_revision_id"]) == revision_id
 
     def test_detail_after_publish_returns_active_projection(
         self, service, tenant_id, bindings, adapter

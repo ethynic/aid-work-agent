@@ -1273,7 +1273,27 @@ def _process_reply(tenant_id: str, task: Dict[str, Any], spec: Dict[str, Any], d
     task_id = task["id"]
     input_version = int(decision["input_version"] or 0)
     with _conn() as conn:
-        transcript = _load_transcript(conn, tenant_id, task_id, input_version)
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT 1 FROM session_task_messages m
+            JOIN session_task_batches b ON b.tenant_id=m.tenant_id AND b.task_id=m.task_id AND b.batch_id=m.batch_id
+            WHERE m.tenant_id=%s AND m.task_id=%s AND m.input_version=%s
+              AND m.sender='peer' AND b.status='accepted'
+            LIMIT 1
+            """,
+            (tenant_id, task_id, input_version),
+        )
+        current_peers = cursor.fetchone() is not None
+        transcript = _load_transcript(conn, tenant_id, task_id, input_version) if current_peers else []
+    if not current_peers:
+        # Self echoes still pass ingestion/manual-intervention checks, but do not
+        # prompt another reply to a historical peer message.
+        _finalize_decision(
+            tenant_id, task_id, decision_id, lease_owner, status="ready", action="wait",
+            evidence={"kind": DECISION_KIND_REPLY, "input_version": input_version, "reason_code": "no_new_peer"},
+        )
+        return
     peer_ids = [m["message_id"] for m in transcript if m.get("sender") == "peer"]
     feedback: Optional[str] = None
     validated: Optional[Dict[str, Any]] = None
@@ -1504,6 +1524,43 @@ def supersede_decisions_on_batch(conn, tenant_id: str, task_id, new_input_versio
     return {"superseded": len(decision_ids), "cancelled_invocations": cancelled}
 
 
+def _submitted_echo_messages(conn, tenant_id, task_id):
+    """One self in the first timely post-command batch; no OCR text comparison.
+
+    Persistent message IDs consume the one-command capacity across re-batching.
+    Multiple self messages or commands competing for one echo remain ambiguous.
+    """
+    cursor = conn.cursor()
+    cursor.execute("""
+        WITH candidates AS (
+            SELECT d.id AS decision_id, m.message_id, m.text_id
+            FROM session_task_decisions d
+            JOIN session_task_execution_links l ON l.tenant_id=d.tenant_id AND l.decision_id=d.id
+            JOIN desktop_automation_deliveries dl ON dl.tenant_id=l.tenant_id AND dl.id=l.delivery_id
+            JOIN local_tool_invocations i ON i.tenant_id=l.tenant_id AND i.id=l.invocation_id
+            CROSS JOIN LATERAL (
+                SELECT b.batch_id, b.created_at FROM session_task_batches b
+                WHERE b.tenant_id=d.tenant_id AND b.task_id=d.task_id
+                  AND b.input_version>d.input_version AND NOT b.synthetic
+                  AND b.created_at>=i.created_at
+                ORDER BY b.input_version, b.created_at, b.batch_id LIMIT 1
+            ) first_batch
+            JOIN session_task_messages m ON m.tenant_id=d.tenant_id AND m.task_id=d.task_id
+                AND m.batch_id=first_batch.batch_id AND m.sender='self'
+            WHERE d.tenant_id=%s AND d.task_id=%s
+              AND dl.state='succeeded' AND dl.phase='submitted'
+              AND i.arguments_json->>'receipt_mode'='submission'
+              AND i.arguments_json->>'receipt_context'='weixin_name'
+              AND i.business_ref->>'scenario_key'='weixin.conversation.v1'
+              AND first_batch.created_at<=dl.finished_at + INTERVAL '60 seconds'
+              AND (SELECT COUNT(*) FROM session_task_messages s WHERE s.tenant_id=d.tenant_id
+                   AND s.task_id=d.task_id AND s.batch_id=first_batch.batch_id AND s.sender='self')=1
+        ) SELECT message_id, text_id FROM candidates
+          GROUP BY message_id, text_id HAVING COUNT(DISTINCT decision_id)=1
+        """, (tenant_id, task_id))
+    return {str(row["message_id"]): str(row["text_id"]) for row in cursor.fetchall()}
+
+
 def check_manual_intervention(conn, tenant_id: str, task_id, self_messages: List[Dict[str, Any]]) -> bool:  # noqa: ANN001
     """批次内 self 消息归属核对：无法归属到**实际发送成功**的决策 → 人工介入（§5）。
 
@@ -1515,6 +1572,10 @@ def check_manual_intervention(conn, tenant_id: str, task_id, self_messages: List
     """
     if not self_messages:
         return False
+    submitted = _submitted_echo_messages(conn, tenant_id, task_id)
+    self_messages = [m for m in self_messages if str(m.get("local_message_id", "")) not in submitted]
+    if not self_messages:
+        return False
     cursor = conn.cursor()
     # 该正文的成功发送次数（decision → link → delivery succeeded）
     cursor.execute(
@@ -1523,7 +1584,8 @@ def check_manual_intervention(conn, tenant_id: str, task_id, self_messages: List
         FROM session_task_decisions d
         JOIN session_task_execution_links l ON l.tenant_id=d.tenant_id AND l.decision_id=d.id
         JOIN desktop_automation_deliveries dl ON dl.tenant_id=l.tenant_id AND dl.id=l.delivery_id
-        WHERE d.tenant_id=%s AND d.task_id=%s AND d.reply_text_id IS NOT NULL AND dl.state='succeeded'
+        WHERE d.tenant_id=%s AND d.task_id=%s AND d.reply_text_id IS NOT NULL
+          AND dl.state='succeeded' AND dl.phase='verified'
         GROUP BY d.reply_text_id
         """,
         (tenant_id, task_id),
@@ -1535,12 +1597,19 @@ def check_manual_intervention(conn, tenant_id: str, task_id, self_messages: List
         except SessionTaskError:
             continue
         if isinstance(payload, dict) and isinstance(payload.get("text"), str):
-            text = payload["text"].strip()
+            text = payload["text"]
             # 不同决策的 reply_text_id 各自独立：相同正文必须**累加**成功发送容量，
             # 否则第二次自动回显会被误判人工接管（验收 A2）
             sent_capacity[text] = sent_capacity.get(text, 0) + int(r["sent_count"])
     if not sent_capacity:
         return True  # 无任何可靠发送证据：全部 self 消息按人工介入处理
+    def echo_key(text: str) -> str:
+        from .ocr_matching import ocr_text_matches
+
+        candidates = [sent for sent in sent_capacity if ocr_text_matches(sent, text)]
+        # Ambiguous similar commands cannot claim each other's send capacity.
+        return candidates[0] if len(candidates) == 1 else ""
+
     # 历史 self 消息（含本批）按正文计数，不得超过成功发送次数
     cursor.execute(
         """
@@ -1551,16 +1620,19 @@ def check_manual_intervention(conn, tenant_id: str, task_id, self_messages: List
     )
     used: Dict[str, int] = {}
     for r in cursor.fetchall():
+        if str(r["text_id"]) in submitted.values():
+            continue
         try:
             payload = load_text(conn, tenant_id, task_id, r["text_id"], expected_purpose="message")
         except SessionTaskError:
             continue
-        text = str(payload.get("text", "")).strip() if isinstance(payload, dict) else ""
+        text = str(payload.get("text", "")) if isinstance(payload, dict) else ""
         if text:
-            used[text] = used.get(text, 0) + 1
+            key = echo_key(text)
+            used[key] = used.get(key, 0) + 1
     for m in self_messages:
-        text = str(m.get("text", "")).strip()
-        if used.get(text, 0) > sent_capacity.get(text, 0):
+        text = echo_key(str(m.get("text", "")))
+        if not text or used.get(text, 0) > sent_capacity.get(text, 0):
             return True
     return False
 

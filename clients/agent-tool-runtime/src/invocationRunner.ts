@@ -68,6 +68,8 @@ export interface RunnerDeps {
    * SessionPrecheckError，本 invocation 按 effect=none 收敛（不发送、不另建链）。
    * 仅会话任务引擎注入；缺失时行为不变。 */
   sessionPrecheck?: () => Promise<void>
+  /** Runtime-only bridge; called after lock/precheck/permit/journal, never by a model. */
+  prepareProviderCall?: (inv: ClaimedInvocation, permit: WritePermit, signal: AbortSignal) => Promise<Record<string, unknown>>
   onEvent?: (message: string) => void
 }
 
@@ -527,11 +529,15 @@ export async function runInvocation(inv: ClaimedInvocation, deps: RunnerDeps): P
           }
         }
         // v2 写动作把 permit handle 注入 Provider 调用参数（v2 契约：受控操作接收本地已校验许可）
-        const callArgs: Record<string, unknown> = permit
+        let callArgs: Record<string, unknown> = permit
           ? { ...inv.arguments, permit_id: permit.permitId, permit_token: permit.permitToken }
           : inv.arguments
+        if (permit && deps.prepareProviderCall) {
+          callArgs = await deps.prepareProviderCall(inv, permit, abortController.signal)
+          if (!permit.isValid() || abortController.signal.aborted) throw new Error('发送许可或执行已失效')
+        }
         return await provider.callTool(inv.tool_name, callArgs, {
-          signal: abortController.signal,
+          signal: permit ? AbortSignal.any([abortController.signal, AbortSignal.timeout(Math.max(0, Math.floor(permit.msRemaining())))]) : abortController.signal,
           onProgress: (p) => {
             const stage = extractStage(p.message)
             forwarder.push({
@@ -680,7 +686,7 @@ export async function runInvocation(inv: ClaimedInvocation, deps: RunnerDeps): P
 /** 服务端 effect 枚举（R10）；v2 回执非法/缺失 effect 一律收敛 unknown（防 422 永久拒绝） */
 const DELIVERY_EFFECTS = new Set(['none', 'applied', 'unknown'])
 /** 服务端 phase 枚举（R10）；v2 回执非法/缺失 phase 按写动作保守收敛 */
-const OPERATION_PHASES = new Set(['prepared', 'may_have_started', 'verified', 'unknown'])
+const OPERATION_PHASES = new Set(['prepared', 'may_have_started', 'submitted', 'verified', 'unknown'])
 
 function sanitizeEffect(effect: string | undefined, writeTool: boolean): string {
   if (effect !== undefined && DELIVERY_EFFECTS.has(effect)) return effect

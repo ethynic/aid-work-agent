@@ -73,10 +73,11 @@ export async function runPowerShellScript(opts: PowerShellScriptOptions): Promis
         return {} // 代理凭据解析失败不阻断驱动启动；驱动侧按 CONFIG_MISSING fail closed
       }
     })().then((proxyEnv) => {
+    if (opts.signal?.aborted) { reject(new CancelledError()); return }
     const child = spawn('powershell.exe', args, {
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, ...proxyEnv },
+      env: { ...process.env, ...proxyEnv, AID_WEIXIN_NODE_EXECUTABLE: process.execPath },
     })
     let stdout = ''
     let stderr = ''
@@ -95,6 +96,7 @@ export async function runPowerShellScript(opts: PowerShellScriptOptions): Promis
       child.kill()
     }
     opts.signal?.addEventListener('abort', onAbort, { once: true })
+    if (opts.signal?.aborted) child.kill()
 
     const cleanup = () => {
       clearTimeout(timer)

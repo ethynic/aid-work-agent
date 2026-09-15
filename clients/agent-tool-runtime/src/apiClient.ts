@@ -291,6 +291,38 @@ export class ApiClient {
     await this.post(`/api/local-tools/runtime/invocations/${invocationId}/started`, { claim_token: claimToken })
   }
 
+  /** Frozen text payload, device-authenticated; never follows caller supplied URLs. */
+  async invocationPayload(invocationId: string, signal?: AbortSignal): Promise<Uint8Array> {
+    if (!/^[a-f0-9-]{36}$/i.test(invocationId) || !this.token) throw new Error('无效的载荷请求')
+    let response: Response
+    try {
+      response = await fetch(`${this.baseUrl}/api/local-tools/runtime/invocations/${invocationId}/payload`, {
+        headers: { Authorization: `Bearer ${this.token}` },
+        signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(15_000)]) : AbortSignal.timeout(15_000),
+        redirect: 'error',
+      })
+    } catch { throw new NetworkError('冻结载荷请求失败') }
+    if (response.status === 401) throw new DeviceRevokedError('设备已失效')
+    if (!response.ok) throw new ApiError(response.status, '冻结载荷不可用')
+    const reader = response.body?.getReader()
+    if (!reader) throw new Error('冻结载荷为空')
+    const chunks: Uint8Array[] = []
+    let size = 0
+    try {
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        size += value.length
+        if (size > 2000) throw new Error('冻结文本载荷超过上限')
+        chunks.push(value)
+      }
+    } finally { await reader.cancel().catch(() => {}); reader.releaseLock() }
+    const bytes = new Uint8Array(size)
+    let offset = 0
+    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length }
+    return bytes
+  }
+
   async progress(invocationId: string, payload: {
     claim_token: string
     stage?: string

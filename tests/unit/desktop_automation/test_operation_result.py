@@ -21,6 +21,48 @@ from tests.unit.desktop_automation.fakes import (
 pytestmark = pytest.mark.unit
 
 
+class TestSubmittedReceipt:
+    def test_executor_freezes_trusted_adapter_receipt_fields(self, tenant_id):
+        adapter = _evidence_adapter()
+        adapter.invocation_receipt_arguments = lambda ctx, target: {"receipt_mode": "submission", "receipt_context": "weixin_name"}
+        ctx = harness.build_running_v2_invocation(tenant_id, adapter=adapter)
+        assert ctx["arguments"]["receipt_mode"] == "submission"
+        assert ctx["arguments"]["receipt_context"] == "weixin_name"
+
+    @pytest.mark.parametrize("authorized", [False, True])
+    def test_submitted_requires_frozen_scope_and_keeps_phase(self, tenant_id, authorized):
+        from psycopg2.extras import Json
+        from src.db.database import get_db_connection
+        from src.desktop_automation.adapters import TrustedAdapterRegistry
+        from src.weixin_conversation.adapters import WeixinConversationAdapter
+        ctx = harness.build_running_v2_invocation(tenant_id)
+        permit = _authorize(tenant_id, ctx)
+        if authorized:
+            TrustedAdapterRegistry.register(WeixinConversationAdapter())
+            with get_db_connection() as conn:
+                cur = conn.cursor()
+                cur.execute("""UPDATE local_tool_invocations SET tool_name='weixin_message_send_v2',
+                    execution_lane='session_task', arguments_json=arguments_json || %s,
+                    business_ref=business_ref || %s WHERE tenant_id=%s AND id=%s""",
+                    (Json({"receipt_mode": "submission", "receipt_context": "weixin_name"}),
+                     Json({"scenario_key": "weixin.conversation.v1"}), tenant_id, ctx["invocation_id"]))
+                conn.commit()
+        ref = f"weixin-submission:{ctx['request_id']}:1"
+        result = _apply(tenant_id, ctx, effect="applied", phase="submitted", permit=permit, evidence_ref=ref)
+        delivery = da_deliveries.get_delivery(str(ctx["delivery"]["id"]), tenant_id)
+        assert result["state"] == ("succeeded" if authorized else "unknown")
+        assert delivery["phase"] == ("submitted" if authorized else "unknown")
+        # Late evidence cannot reclassify either the successful command or unknown.
+        duplicate = _apply(tenant_id, ctx, effect="applied", phase="submitted", permit=permit, evidence_ref=ref)
+        assert duplicate["late"] and duplicate["state"] == result["state"]
+
+    def test_submitted_without_permit_is_rejected(self, tenant_id):
+        ctx = harness.build_running_v2_invocation(tenant_id)
+        with pytest.raises(operation_result.OperationResultError) as error:
+            _apply(tenant_id, ctx, effect="applied", phase="submitted", evidence_ref=f"weixin-submission:{ctx['request_id']}:1")
+        assert error.value.code == "PERMIT_REQUIRED"
+
+
 def _apply(tenant_id, ctx, *, effect, phase, permit=None, request_id=None, **kw):
     return operation_result.apply_operation_result(
         tenant_id=tenant_id,

@@ -67,10 +67,12 @@ export class ProviderManager {
   private crashed = false
   private busy = false
   private shuttingDown = false
+  private readonly providerEnv: Record<string, string>
 
-  constructor(entry: string, opts: { shutdownTimeoutMs?: number } = {}) {
+  constructor(entry: string, opts: { shutdownTimeoutMs?: number; env?: Record<string, string> } = {}) {
     this.entry = entry
     this.shutdownTimeoutMs = opts.shutdownTimeoutMs ?? 5_000
+    this.providerEnv = opts.env ?? {}
   }
 
   get childPid(): number | null {
@@ -95,7 +97,7 @@ export class ProviderManager {
       stderr: 'pipe',
       // SDK 默认仅透传白名单环境变量（PATH/HOME 等）——Provider 配置类变量
       // （如联测桩 STUB_HOME、后续 Provider 侧配置）会被剥掉；显式继承完整环境
-      env: { ...process.env } as Record<string, string>,
+      env: { ...process.env, ...this.providerEnv } as Record<string, string>,
     })
     const client = new Client(
       { name: 'agent-tool-runtime', version: '0.1.0' },
@@ -225,10 +227,10 @@ export class ProviderManager {
  */
 export class ProviderSet {
   private readonly entries: Record<string, string>
-  private readonly managerOpts: { shutdownTimeoutMs?: number }
+  private readonly managerOpts: { shutdownTimeoutMs?: number; providerEnv?: Record<string, Record<string, string>> }
   private readonly managers = new Map<string, ProviderManager>()
 
-  constructor(entries: Record<string, string>, opts: { shutdownTimeoutMs?: number } = {}) {
+  constructor(entries: Record<string, string>, opts: { shutdownTimeoutMs?: number; providerEnv?: Record<string, Record<string, string>> } = {}) {
     this.entries = { ...entries }
     this.managerOpts = opts
   }
@@ -249,7 +251,7 @@ export class ProviderSet {
     if (existing) return existing
     const entry = this.entries[key]
     if (!entry) throw new ProviderNotAvailableError(key)
-    const manager = new ProviderManager(entry, this.managerOpts)
+    const manager = new ProviderManager(entry, { shutdownTimeoutMs: this.managerOpts.shutdownTimeoutMs, env: this.managerOpts.providerEnv?.[key] })
     this.managers.set(key, manager)
     return manager
   }

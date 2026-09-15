@@ -397,6 +397,11 @@ def execute_next_delivery(
         deadline_at=deadline_at,
     )
 
+    # Only a trusted server adapter can freeze a weaker command-only receipt policy.
+    receipt_arguments = getattr(adapter, "invocation_receipt_arguments", None)
+    if receipt_arguments is not None:
+        arguments.update(receipt_arguments(ctx, delivery["target_ref"]))
+
     from src.local_tools.service import LocalInvocationService
 
     # R45：首派 dedupe_key 用 per-attempt 形态（delivery:{id}:a:{n}），与场景侧

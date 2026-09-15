@@ -55,6 +55,7 @@ TRUSTED_PROVIDERS: Dict[str, Dict[str, Any]] = {
         "execution_target": "local_required",
         "tools": [
             "weixin_probe",
+            "weixin_name_resolve",
             "weixin_chat_search",
             "weixin_history_read",
             "weixin_unread_list",

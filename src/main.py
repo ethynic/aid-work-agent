@@ -444,6 +444,14 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"weixin_marketing adapter registration failed (non-critical): {e}")
 
+    # HTTP prepare-send also requires the process-local conversation adapter and
+    # decision hooks; registration in the separate scheduler cannot supply them.
+    try:
+        from src.weixin_conversation.registration import ensure_registered as register_conversation
+        register_conversation()
+    except Exception as e:
+        logger.warning(f"weixin_conversation registration failed: {type(e).__name__}")
+
     # Initialize logs database pool (observability, optional)
     try:
         logger.info(f"[pid={_pid}] step3: init_logs_pool ...")

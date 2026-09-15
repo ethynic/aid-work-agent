@@ -85,6 +85,8 @@ test('list_tools：6 个 tool（M2 + C2 session_observe），readOnly 注解 + �
       'weixin_history_read',
       'weixin_session_observe',
       'weixin_unread_list',
+    'weixin_name_resolve',
+    'weixin_message_send_v2',
     ])
     const probe = tools[0]!
     assert.equal(probe.annotations?.readOnlyHint, true)

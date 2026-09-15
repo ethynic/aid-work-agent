@@ -1,5 +1,11 @@
 # 端侧会话任务执行设计
 
+## 2026-09-15 消息连续性修订（优先于旧整窗对齐/三次 gap 停止规则）
+
+普通观察以已ACK水位及其后已见未ACK尾链确认连续性，不要求可见窗口顶部历史完整。近期文字按既有OCR模糊策略匹配，保留首次正文和ID；重复水位用可辨认上下文消歧，无法确定时继续读取。水位前的残缺或误分类对象不应否决新消息；水位后的未知内容不能直接丢弃。禁止自动重建基线吞掉待回复内容。
+
+运行时coverage gap保留原水位、聚合批次和决策引用，单次读取后按5/10/30秒上限退避；不再连续三次永久blocked。读取恢复前不提交新的决策或发送，连续性恢复后接续原进度；身份不符、暂停、租约和终态约束仍有效。进程重启丢失Provider内存等恢复场景另循原持久化恢复规则，本次不声称自动解决全部断档。
+
 版本：V1.1 · 2026-09-12 · 状态：设计交付，待开发智能体按计划实现和独立验证。启动决策和冻结契约补充见 §13，与前文冲突处以 §13 为准。
 
 关联：[开发计划 C0–C5](../../plans/desktop-automation/plan-edge-session-task.md)、[中立执行底座](desktop-cli-automation-design.md)、[微信固定内容及 BOSS 场景](../weixin/weixin-marketing-automation-design.md)、[微信 P0–P5](../../plans/weixin/plan-weixin-marketing-automation.md)。登记入口：[ideas.md](../../ideas.md)。
@@ -344,3 +350,68 @@ C1 新增 `session_task_confirmations`（confirmation_id、tenant/user/task/spec
 - 恢复使用 `resume_from={mode:"fresh_baseline",expected_input_version:N}` 与 expected_version。V1 明确选择“从恢复后新基线开始，历史不补发”；不提供历史批次自动补发选项。服务端在 subject/task 锁内核对授权版本、绑定能力、期限/预算、当前水位、模型已结束和无未决/未知发送；信用不足 blocked 仅在余额复核通过后可恢复，其他 blocked 原因需专门证据处置，不能靠按钮洗白。
 - 恢复同事务：历史 accepted 批次转 history_only，旧 pending/running/ready 决策作废，旧租约到期，控制代递增；新增 synthetic 批次 `resume:<control_epoch>`（status=resume_baseline）记录恢复起点。首次新 claim 消费为 resume_claimed，并返回 `fresh_baseline=true,input_version_base=N`；之后同代自动重新分配不得再获得恢复豁免。Runtime 持久化以上字段、重新建立基线、输入版本继续递增且不重复开场白；旧日志/回执保留。恢复基线也是 peer_wait_timeout 的新起点，任务绝对截止时间不变。
 - 新系统表 `session_task_notifications` 存属主、任务、状态/原因、控制代和时间，`(tenant_id,task_id,control_epoch)` 唯一。状态迁移同事务写入 completed/stopped/human_required/blocked 通知；`GET /notifications` 仅返回当前属主的站内通知，纯等待不通知，不外发。
+
+### 13.6 当前登录微信按名称运行（用户2026-09-15范围修订）
+
+名称路由修订不改变§6的读取技术：聊天正文继续通过本机截图和常驻RapidOCR识别，文本模型仅用于生成回复。不得以视觉模型转录聊天替换原OCR实现；定位界面与读取聊天正文是不同职责。2026-09-15纠偏后，名称模式已接入 PrintWindow + 常驻 RapidOCR；原 historyRead/p4 路径保留。真实队列已成功定位并建立观察基线，完整自动聊天验收仍进行中。
+
+用户明确当前登录任意微信均可，不要求核验账号微信号或人工绑定联系人。本模式使用真实 `weixin_name_resolve` 只读invocation：输入 `target_name`，设备结果包含同名 `target_name,title_exact:true,unique_match:true,evidence_ref:dpapi:...`。同名歧义/无法确定个人聊天时定位失败，不发送。
+
+正常 `POST /api/session-tasks` 额外接受 `resolution_invocation_id`（与旧account_binding_id/conversation_binding_id二选一）；服务端仅消费同租户、属主、设备的5分钟内成功、effect=none、provider=weixin结果，事务内建立名称路由上下文并创建draft。随后仍走confirm/publish、claim、逐条许可与预算、暂停/停止、unknown不重试。用户无需额外绑定步骤。
+
+复用bs_weixin_conversation_bindings物理表：verification_status=resolved、verifier_version=current-login-name-v1，verified_at保持NULL；identity_version在该模式表示名称上下文版本，encrypted_identity_evidence只存名称解析结果引用，不含账号身份证据。旧account_binding_id在该模式仅承载同tenant/user/device的current_login路由scope UUID，不创建营销账号行；旧verified模式门禁独立保留。有效期24小时，同设备同名复用上下文以维持会话占用唯一。过期且任务仍活动时拒绝刷新。
+
+claim返回实际binding_version，account_identity_version=0（明确未识别账号），spec追加服务端生成的 `_runtime_target={policy:current_login_name,target_name}`；旧身份模式账号版本读取账号session_epoch，不再错取会话版本。Runtime不得把0解释为已核验账号；只对名称会话定位、解析上下文与消息连续性负责。每次发送仍校验目标名称/唯一定位/当前消息窗口及正文许可，不因无需账号身份而跳过发送门禁。
+
+发送前校验范围补充（2026-09-15）：按用户要求只确认当前联系人标题和输入框正文，不以整窗像素完全一致为发送条件，避免光标闪烁和侧栏更新误拦截。输入为空时写入；已有正文逐字等于本次授权内容时复用；不同正文拒绝覆盖。保留许可期限、单次发送和发送后新增本人消息 OCR 核对。
+
+### 2026-09-15 用户确认的发送回执边界
+
+名称模式发送后验证与完整观察分离：read_receipt只产出当前会话的OCR文字证据，不声明complete_window、不推进observer水位或像素缓存。发送成功依据为标题核对、与发送前文字序列唯一对齐后的新增self正文匹配；消息区像素差分、浮层及截图帧相等不作为发送成功门禁。普通观察的非文字检测与覆盖契约独立保留，后续观察失败不能推翻已经核验的发送事实。没有可证明新增的文字锚点时保持unknown，不重发。
+
+
+## 2026-09-15 用户修订：名称会话发送动作回执
+
+名称实验发送前仅核验联系人，替换输入后执行Enter；不再用草稿OCR或发送后正文、截图、pixel_gap判定发送。受信Runtime须携带服务端冻结的receipt_mode=submission与receipt_context=weixin_name。动作事件均被系统接受后，Provider持久记录submitted与weixin-submission请求引用；服务端核对许可、设备、请求、目标和载荷后记录state=succeeded / phase=submitted，页面显示“已执行发送（未核验送达）”。执行异常、超时或取消仍unknown且不重发。旧verified合同、历史unknown不改写。
+
+后续self回显不对submitted比较正文：仅归属命令之后首个及时批次（回执完成60秒内）的唯一self，以持久消息ID消耗一次命令容量；多条、竞争、过期保持歧义处理。该归属不证明送达或人工身份，普通消息观察coverage仍独立；不能用观察失败改判既有submitted。
+
+
+### 2026-09-15 周期保留检查性能修订
+
+本地无法证明云端终态及无未决写journal时，删除资格集合为空；周期检查只统计磁盘容量，不为恒不可删目录逐条解密回放。原每60秒await全历史DPAPI回放会阻塞决策轮询与续租；16条实测14.792秒，移除后同一实际目录容量检查22.34毫秒且删除0。启动恢复仍保留解密回放；容量告警与stopNew语义保持。真实回复延迟改善与连续租约稳定性需接续实验验证。
+
+
+### 2026-09-15 顶部历史截断识别
+
+顶部历史气泡截断边缘可能穿过字迹，平顶证据使用现有气泡分割的背景/近黑墨迹抗锯齿模型，并要求至少一个真实fill像素；继续要求首个气泡接近顶边、85%边缘覆盖、OCR跨过顶边。残缺气泡只作为clipped历史，通用消息边界检查及发送动作回执规则不变。
+
+
+### 2026-09-15 像素变化改为有界重读提示（用户批准）
+
+普通名称会话观察的跨帧像素变化不能证明漏读消息，不再作为pixel_gap硬失败依据；每次请求至多因像素变化额外完整读取一次，第二次仍有像素变化时继续返回通过现有识别检查的对象。只有成功读取后更新缓存，保留消息去重、取消、标题核对和其他独立识别错误。取消这一非错误分支的DPAPI故障截图写入。发送动作语义不变。
+
+范围限制：名称实验当前主要提取文字气泡；像素差分不能保证无文字图片/表情完整性，取消硬门禁后也不声称具备该保证。现有complete_window字段不是所有媒体均被识别的证明；媒体能力与其他OCR/对齐门禁后续由用户逐项复盘。本次不裁滚动条、不顺带修改其他门禁。
+
+
+### 2026-09-15 用户批准：名称场景OCR消息模糊对齐（代码验证完成）
+
+历史消息身份匹配统一采用格式归一化和字符编辑距离。NFKC统一全半角，忽略空白/标点和拉丁大小写；保留emoji等符号。短消息仅容忍格式变化，长消息初始相似度90%；数字和显式否定变化不直接合并。发送方、顺序及唯一重叠约束保持，多个候选不按最长猜测。首次消息ID绑定的原始正文保留，不随后续OCR波动滚动替换，防止同ID正文冲突和逐次漂移。
+
+算法用于名称场景的对象重叠检查、消息ID对齐及像素重读提示中的文字锚点。通用ConversationAligner通过可注入比较器支持，其他场景默认行为不扩大。相似度是近似身份判断，不证明语义等价；阈值是初始工程参数，仍需真机样本。当前任务已到期停止，不自动新建或恢复。
+
+验证：build通过，独立有效51项通过、CR通过。原三张失败截图离线回放均通过两层对齐，唯一新增1条peer并保留初见原文。尚未部署或进行新的真机连续实验。
+
+
+### 2026-09-15 OCR精确文本门槛全链路清理（用户批准，代码审查完成）
+
+范围为微信客户端及会话任务后端：联系人/标题与固定UI标签改近似识别；通用OCR消息对齐默认启用模糊比较；入批同ID的近似OCR正文复用首次密文，不重写正文；旧verified回显按唯一近似文本匹配已执行容量；旧视觉驱动提示词取消字符完全一致要求（仅静态修改，不运行云视觉）。名称v2发送仍无草稿/发送后OCR检查。
+
+联系人比较完整标签并枚举全部近似候选，不能用精确优先隐藏相似候选；选中后同时对原请求和首次选中标签核验，避免非传递匹配漂移。短姓名只容忍格式变化，长姓名允许有限字符误差。旧wire exact_name/title_exact为兼容目标确认标记，非OCR逐字相等证明，实际方式标记为ocr_fuzzy_unique。ID、sender、租户、绑定版本、授权摘要/签名及模型对冻结原文的引用验证不属于OCR重识别，不放宽。
+
+旧PowerShell视觉路径也通过UTF-8 JSON stdin调用共享TS确定性匹配（ocrMatchCli），标题在输入前对目标/选中标签双锚比较，旧正文回执采用同消息算法；模型布尔值不能替代本地比较。使用当前Provider的process.execPath，不依赖PATH；隐藏进程、5秒超时、固定错误不回显正文。独立客户端60项/后端隔离42项通过，原三故障帧两层回放通过，CR通过；桥接CLI/Unicode4项及PS实际调用、空PATH/双Node、超时异常/语法补验通过。未部署或新建实验。
+
+
+### 2026-09-15 用户批准删除像素门禁及OCR框重叠硬失败
+
+普通读取删除跨帧像素比较与pixel基线缓存依赖，不再因像素提示额外读，不用读后frame一致门禁。frame仅用于变化触发/观察标识。文字框轻微重叠、越界不整轮拒绝，按中心唯一归属并行内排序。搜索选择与输入/回车移除截图hash相等门禁，身份核验改为动作前本地OCR标题近似确认，期限取消防重复保留。没有草稿/发送后OCR。开发验证及本地部署中；5条验收未完成。

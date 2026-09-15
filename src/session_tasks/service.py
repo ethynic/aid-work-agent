@@ -85,12 +85,17 @@ def create_draft(tenant_id: str, user_id: str, payload: TaskDraftCreatePayload,
 
     finalizer(conn, result)：业务提交前在同一连接写入幂等回执（R51 同事务范式）。
     """
-    _verify_bindings(tenant_id, user_id, payload.device_id, payload.account_binding_id,
-                     payload.conversation_binding_id, require_verified=False)
     validated = validate_task_spec(payload.spec.model_dump(mode="json"))
     plain = _spec_to_plain(validated)
     task_id = uuid4()
     with _conn() as conn:
+        account_id, binding_id = payload.account_binding_id, payload.conversation_binding_id
+        if payload.resolution_invocation_id:
+            from src.weixin_conversation.name_contexts import from_resolution
+            account_id, binding_id = from_resolution(conn, tenant_id, user_id, payload.device_id,
+                                                     payload.resolution_invocation_id)
+        _verify_bindings(tenant_id, user_id, payload.device_id, account_id,
+                         binding_id, require_verified=False, conn=conn)
         text_id = store_text(conn, tenant_id, task_id, "spec", plain)
         cursor = conn.cursor()
         cursor.execute(
@@ -102,7 +107,7 @@ def create_draft(tenant_id: str, user_id: str, payload: TaskDraftCreatePayload,
             RETURNING version, created_at
             """,
             (task_id, tenant_id, user_id, payload.scenario_key, payload.device_id,
-             payload.account_binding_id, payload.conversation_binding_id, text_id, spec_digest(plain)),
+             account_id, binding_id, text_id, spec_digest(plain)),
         )
         row = cursor.fetchone()
         result = {"task_id": str(task_id), "version": row["version"], "status": STATUS_DRAFT}
@@ -521,12 +526,18 @@ def claim_task(device: Dict[str, Any], runtime_instance_id: str) -> Optional[Dic
         cursor = conn.cursor()
         cursor.execute(
             """
-            SELECT identity_version FROM bs_weixin_conversation_bindings
-            WHERE tenant_id=%s AND id=%s
+            SELECT b.identity_version,b.verifier_version,b.conversation_label,
+                   a.session_epoch AS account_version
+            FROM bs_weixin_conversation_bindings b
+            LEFT JOIN bs_weixin_marketing_account_bindings a ON a.tenant_id=b.tenant_id AND a.id=b.account_binding_id
+            WHERE b.tenant_id=%s AND b.id=%s
             """,
             (tenant_id, task["conversation_binding_id"]),
         )
         binding_row = cursor.fetchone()
+        from src.weixin_conversation.name_contexts import is_name_context
+        if is_name_context(binding_row):
+            spec_plain["_runtime_target"] = {"policy": "current_login_name", "target_name": binding_row["conversation_label"]}
         from .workbench import input_version
         version_base = input_version(conn, tenant_id, task["id"])
         cursor.execute("UPDATE session_task_batches SET status='resume_claimed' WHERE tenant_id=%s AND task_id=%s AND batch_id=%s AND status='resume_baseline' RETURNING batch_id", (tenant_id, task["id"], f"resume:{task['control_epoch']}"))
@@ -544,8 +555,8 @@ def claim_task(device: Dict[str, Any], runtime_instance_id: str) -> Optional[Dic
         "input_version_base": version_base,
         "fresh_baseline": fresh_baseline,
         "conversation_binding_id": str(task["conversation_binding_id"]),
-        "binding_version": 0,  # 绑定版本当前恒 0（§13.3 骨架：identity_version 才是身份代）
-        "account_identity_version": int(binding_row["identity_version"]) if binding_row else 0,
+        "binding_version": int(binding_row["identity_version"]) if binding_row else 0,
+        "account_identity_version": int(binding_row["account_version"] or 0) if binding_row and not is_name_context(binding_row) else 0,
     }
 
 
@@ -881,7 +892,7 @@ def _materialize_batch(conn, tenant_id: str, task_id: UUID, task_conversation_bi
         if not message_id or sender not in ("peer", "self", "system") or not isinstance(text, str) or not text.strip():
             raise SessionTaskError("消息字段非法（sender 必须可判定、text 非空）", ERR_VALIDATION_FAILED)
         # 消息事实独立于批次（设计评审 P1-7）：重新合批时新批次 [m1,m2] 可引用
-        # 已有消息 m1——校验 sender/正文一致后复用；不一致（同 ID 异内容）才拒绝
+        # 已有消息 m1——sender 相同且正文近似匹配则复用首次密文；真实异文仍拒绝
         cursor = conn.cursor()
         cursor.execute(
             """
@@ -902,7 +913,9 @@ def _materialize_batch(conn, tenant_id: str, task_id: UUID, task_conversation_bi
                 prior = json.loads(decrypt_secret(existing["encrypted_payload"]).decode("utf-8"))["text"]
             except Exception as exc:  # noqa: BLE001
                 raise SessionTaskError(f"消息 {message_id} 已有密文无法核对", "CRYPTO_UNAVAILABLE", 503) from exc
-            if prior != text:
+            from .ocr_matching import ocr_text_matches
+
+            if not ocr_text_matches(prior, text):
                 raise SessionTaskError(f"消息 {message_id} 已存在且正文不一致", "CONFLICT", 409)
             message_ids.append(message_id)
             continue
@@ -1316,6 +1329,9 @@ def _binding_valid_for_allocation(conn, tenant_id: str, conversation_binding_id)
         (tenant_id, conversation_binding_id),
     )
     row = cursor.fetchone()
+    from src.weixin_conversation.name_contexts import is_name_context, name_context_valid
+    if is_name_context(row):
+        return name_context_valid(row)
     if row is None or row["verification_status"] != "verified":
         return False
     if int(row["identity_version"] or 0) < 1:
@@ -1371,6 +1387,11 @@ def _verify_bindings(tenant_id: str, user_id: str, device_id: str, account_bindi
     if str(binding["device_id"]) != str(device_id) or str(binding["account_binding_id"]) != str(account_binding_id):
         raise SessionTaskError("会话绑定与设备/账号绑定不匹配", ERR_VALIDATION_FAILED)
     if require_verified:
+        from src.weixin_conversation.name_contexts import is_name_context, name_context_valid
+        if is_name_context(binding):
+            if not name_context_valid(binding):
+                raise SessionTaskError("名称定位上下文已失效", ERR_VALIDATION_FAILED, 409)
+            return
         if binding["verification_status"] != "verified":
             raise SessionTaskError("会话绑定尚未通过真机验证（pending 绑定不可发布生产任务）", ERR_VALIDATION_FAILED, 409)
         if int(binding["identity_version"] or 0) < 1:

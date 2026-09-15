@@ -374,3 +374,7 @@ storage/
     └── {dir}/
         └── extra_{tenant_id}.md               # 子智能体租户配置
 ```
+
+### 当前登录微信名称上下文
+
+`src/weixin_conversation/name_contexts.py` 消费设备成功只读名称解析结果，同draft事务建立名称路由上下文。只加密保存名称和不透明证据引用，不新增截图文件或微信账号身份证据。

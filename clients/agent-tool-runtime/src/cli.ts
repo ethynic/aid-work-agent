@@ -12,7 +12,7 @@
  * 约束：不打印 token/claim_token；pair 后 config.json 不含 token（DPAPI 密文存 credentials.bin）。
  */
 import { existsSync } from 'node:fs'
-import { randomUUID } from 'node:crypto'
+import { randomUUID, randomBytes } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import { ApiClient } from './apiClient.js'
 import {
@@ -34,7 +34,8 @@ import { PollLoop } from './pollLoop.js'
 import { ProviderSet } from './providerManager.js'
 import { runInvocation } from './invocationRunner.js'
 import { ResultOutbox, resultOutboxDir } from './resultOutbox.js'
-import { SessionTaskEngine, type ObserverResult, type ObserverWatermark } from './sessionTasks/engine.js'
+import { SessionTaskEngine } from './sessionTasks/engine.js'
+import { NameSessionBridge } from './sessionTasks/nameBridge.js'
 import { acquireSessionTasksSingleInstance, type SingleInstanceGuard } from './sessionTasks/singleInstance.js'
 import { enforceRetention } from './sessionTasks/retention.js'
 import { dpapiProtect, dpapiUnprotect } from './dpapi.js'
@@ -127,43 +128,6 @@ async function cmdPair(args: ParsedArgs): Promise<number> {
   return 0
 }
 
-/**
- * 会话观察器（C2）：经 ProviderSet 的 weixin Provider 调用 session_observer_v1
- * 工具。评审 P1-3：callTool 返回 {success, code, data, ...} envelope——须检查
- * success、解包 data 并校验观察契约最小字段，身份版本用领取的实际值（不写死）。
- */
-function makeProviderSessionObserver(providers: ProviderSet): (task: { taskId: string; conversationBindingId: string; expectedBindingVersion: number; expectedAccountIdentityVersion: number }, request: { watermark: ObserverWatermark | null }) => Promise<ObserverResult> {
-  return async (task, request) => {
-    const provider = providers.get('weixin')
-    const envelope = (await provider.callTool('weixin_session_observe', {
-      conversation_binding_id: task.conversationBindingId,
-      binding_version: task.expectedBindingVersion,
-      account_identity_version: task.expectedAccountIdentityVersion,
-      watermark: request.watermark,
-    }, { timeoutMs: 15_000 })) as Record<string, unknown>
-    if (envelope['success'] !== true) {
-      throw new Error(`观察工具返回失败: code=${String(envelope['code'] ?? '')} message=${String((envelope as { message?: string }).message ?? '')}`)
-    }
-    const data = (envelope['data'] ?? {}) as Record<string, unknown>
-    // 契约最小校验（session_observer_v1）
-    if (typeof data['observation_id'] !== 'string' || !data['observation_id']) throw new Error('观察结果缺少 observation_id')
-    if (data['coverage'] !== 'complete_window' && data['coverage'] !== 'gap' && data['coverage'] !== 'unavailable') {
-      throw new Error(`观察结果 coverage 非法: ${String(data['coverage'])}`)
-    }
-    return {
-      observation_id: String(data['observation_id']),
-      account_identity_version: Number(data['account_identity_version'] ?? 0),
-      conversation_binding_id: String(data['conversation_binding_id'] ?? ''),
-      binding_version: Number(data['binding_version'] ?? 0),
-      observed_at: String(data['observed_at'] ?? new Date().toISOString()),
-      coverage: data['coverage'] as ObserverResult['coverage'],
-      ordered_messages: (data['ordered_messages'] as ObserverResult['ordered_messages']) ?? [],
-      window_fingerprint: (data['window_fingerprint'] as string | null) ?? null,
-      gap_reason: (data['gap_reason'] as string | null) ?? null,
-    }
-  }
-}
-
 async function cmdStart(args: ParsedArgs): Promise<number> {
   const config = loadConfig()
   const server = flagString(args, 'server') ?? config?.server
@@ -193,7 +157,9 @@ async function cmdStart(args: ParsedArgs): Promise<number> {
   }
 
   const api = new ApiClient(server, token)
-  const providers = new ProviderSet(entries)
+  const bridgeKey = randomBytes(32).toString('hex')
+  const providers = new ProviderSet(entries, { providerEnv: { weixin: { AIDWORK_WEIXIN_BRIDGE_KEY: bridgeKey } } })
+  const nameBridge = new NameSessionBridge(providers, api, bridgeKey)
   // #6 能力真实性：v2 会话 manifest 变体仅经 config.providers.weixin.v2Send 显式
   // 协商（隔离测试 / 真实 v2 Provider 交付后）；未协商保持真实 v1 受信形态
   if (config?.providers?.['weixin']?.v2Send === true) {
@@ -236,7 +202,7 @@ async function cmdStart(args: ParsedArgs): Promise<number> {
         crypto: { protect: dpapiProtect, unprotect: dpapiUnprotect },
         runtimeInstanceId: `rt-${RUNTIME_VERSION}-${randomUUID().slice(0, 8)}`,
         withLock: <T,>(fn: () => Promise<T>) => withDesktopLock(desktopLockName(deriveResourceKey()), fn),
-        observer: makeProviderSessionObserver(providers),
+        observer: nameBridge.observe,
         emit: (msg) => logInfo(`[session-tasks] ${msg}`),
         // C3：会话任务发送复用既有 v2 单动作执行器（许可/journal/outbox 全在原链内）；
         // sessionPrecheck 为引擎构造的锁内会话复核（§7 顺序 4），由 runner 在桌面锁内、
@@ -250,6 +216,7 @@ async function cmdStart(args: ParsedArgs): Promise<number> {
             runtimeDataDir: dataDir,
             resultOutbox: new ResultOutbox(resultOutboxDir(dataDir)),
             sessionPrecheck,
+            prepareProviderCall: nameBridge.prepare,
           }),
       })
       logInfo('[session-tasks] 会话任务引擎已启动（共享桌面锁；observer 经 weixin Provider）')

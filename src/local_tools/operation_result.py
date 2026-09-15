@@ -12,6 +12,8 @@ effect/phase 落账映射（R10：applied 还必须有本次验证证据才成�
                                          validate_evidence + 绑定交叉核对 + evidence 表
                                          ON CONFLICT 仲裁登记，任一环节失败收敛 unknown）
 - (applied, prepared/may_have_started)→ delivery unknown（无写后证据，不可判成功）
+- (applied, submitted) → succeeded only for a frozen name-chat submission policy
+  and bound authenticated command journal; phase remains submitted, not delivered.
 - (none, *)                           → delivery failed（safe_to_retry 时可另建 attempt）
 - (unknown, *) / phase=unknown        → delivery unknown（待核对，不重发）
 
@@ -52,6 +54,7 @@ from src.desktop_automation.constants import (
     EFFECT_UNKNOWN,
     OPERATION_PHASES,
     PHASE_VERIFIED,
+    PHASE_SUBMITTED,
 )
 from src.local_tools import permits
 from src.local_tools.security import sha256_hex
@@ -72,8 +75,8 @@ def _map_delivery_outcome(effect: str, phase: Optional[str]) -> Dict[str, str]:
     if effect == EFFECT_UNKNOWN or phase == "unknown":
         return {"state": "unknown", "effect": EFFECT_UNKNOWN, "phase": "unknown"}
     if effect == EFFECT_APPLIED:
-        if phase == PHASE_VERIFIED:
-            return {"state": "succeeded", "effect": EFFECT_APPLIED, "phase": PHASE_VERIFIED}
+        if phase in (PHASE_VERIFIED, PHASE_SUBMITTED):
+            return {"state": "succeeded", "effect": EFFECT_APPLIED, "phase": phase}
         return {"state": "unknown", "effect": EFFECT_UNKNOWN, "phase": "unknown"}
     # effect == none
     return {"state": "failed", "effect": EFFECT_NONE, "phase": phase or "prepared"}
@@ -119,7 +122,17 @@ def _check_evidence_and_register(
         return reason
     # ② 适配器校验（scenario_key 缺失/未注册 → fail-closed 拒绝）
     adapter = TrustedAdapterRegistry.get(scenario_key) if scenario_key else None
-    if adapter is None or not adapter.validate_evidence(
+    if phase == PHASE_SUBMITTED:
+        if (scenario_key != "weixin.conversation.v1"
+                or args.get("receipt_mode") != "submission"
+                or args.get("receipt_context") != "weixin_name"
+                or invocation.get("tool_name") != "weixin_message_send_v2"
+                or invocation.get("execution_lane") != "session_task"):
+            return "submission_not_authorized"
+        validator = getattr(adapter, "validate_submission_evidence", None)
+    else:
+        validator = getattr(adapter, "validate_evidence", None)
+    if validator is None or not validator(
         EvidenceContext(
             tenant_id=tenant_id,
             scenario_key=scenario_key,
@@ -261,6 +274,9 @@ def apply_operation_result(
         if args.get("request_id") != request_id:
             conn.rollback()
             raise OperationResultError("REQUEST_ID_MISMATCH", 409, "request_id 与 invocation 不匹配")
+        if effect == EFFECT_APPLIED and phase == PHASE_SUBMITTED and (not permit_id or not permit_token):
+            conn.rollback()
+            raise OperationResultError("PERMIT_REQUIRED", 409, "submitted 结果必须携带许可及令牌")
 
         # 同一事务内读 attempt（P1-6：持 invocation 行锁时不再嵌套取池连接）
         attempt = da_attempts.get_attempt_by_invocation_on(cursor, str(inv["id"]), tenant_id)
@@ -284,7 +300,7 @@ def apply_operation_result(
                         "PERMIT_BINDING_INVALID", 403, "许可绑定校验失败"
                     )
             evidence_reason = None
-            has_evidence_receipt = effect == EFFECT_APPLIED and phase == PHASE_VERIFIED
+            has_evidence_receipt = effect == EFFECT_APPLIED and phase in (PHASE_VERIFIED, PHASE_SUBMITTED)
             if has_evidence_receipt:
                 business_ref = inv["business_ref"] or {}
                 evidence_reason = _check_evidence_and_register(
@@ -355,7 +371,7 @@ def apply_operation_result(
                         "reported_effect": effect, "reported_phase": phase,
                     },
                 )
-        elif effect == EFFECT_APPLIED and phase == PHASE_VERIFIED:
+        elif effect == EFFECT_APPLIED and phase in (PHASE_VERIFIED, PHASE_SUBMITTED):
             # 受控写动作必须以本地已校验 permit 执行（设计 §3）
             conn.rollback()
             raise OperationResultError(
@@ -366,7 +382,7 @@ def apply_operation_result(
         # ON CONFLICT 仲裁登记；失败 → delivery 收敛 unknown（机器证据）、停止后续条目
         # （unknown 传播），audit evidence_invalid；attempt 保留原始上报值。
         evidence_reason: Optional[str] = None
-        if effect == EFFECT_APPLIED and phase == PHASE_VERIFIED:
+        if effect == EFFECT_APPLIED and phase in (PHASE_VERIFIED, PHASE_SUBMITTED):
             business_ref = inv["business_ref"] or {}
             evidence_reason = _check_evidence_and_register(
                 cursor,
