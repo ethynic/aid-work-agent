@@ -324,12 +324,32 @@ def _query_all(sql, params):
         return cursor.fetchall()
 
 
-def _make_service(fetcher: StubFetcher, redis=None, embedding=None) -> WeChatMPSyncService:
+def _make_service(fetcher: StubFetcher, redis=None, embedding=None,
+                  vision=None, downloader=None) -> WeChatMPSyncService:
+    """构造 service（WP10 起 image/vision 组件默认注入「无多模态模型」替身，
+    避免单测触网/触真实 LLM；WP10 用例按场景显式传入 FakeDownloader/FakeVision）。"""
     return WeChatMPSyncService(
         fetcher=fetcher,
         redis=redis or FakeRedis(),
         embedding_client=embedding or FakeEmbeddingClient(),
+        image_downloader=downloader or _UnusedDownloader(),
+        vision_parser=vision or _NoModelVision(),
     )
+
+
+class _NoModelVision:
+    """无可用多模态模型的 VisionParser 替身（available()=False → 走 deferred）。"""
+
+    def available(self) -> bool:
+        return False
+
+    async def describe_images(self, images, tenant_id):  # pragma: no cover - 不可达
+        raise AssertionError("无模型时不应调用 describe_images")
+
+
+class _UnusedDownloader:  # pragma: no cover - 无模型时不应触达下载器
+    def download(self, *a, **kw):
+        raise AssertionError("无多模态模型时不应调用图片下载")
 
 
 async def _retrieve_doc_ids(tenant_id: str, query: str):
@@ -598,7 +618,9 @@ class TestSoftDelete:
 class TestDeferredGate:
     async def test_image_only_article_deferred_not_embedded(self, tenant_id):
         """纯图文章（12 图 0 文字）必须 deferred：占位符残留字符不得越过
-        MIN_TEXT_CHARS 门槛（CR 回归：replace 前缀残留 'N]' 曾致漏判并计费）。"""
+        MIN_TEXT_CHARS 门槛（CR 回归：replace 前缀残留 'N]' 曾致漏判并计费）。
+        P2 起 VL 组件不可用（无多模态模型，_make_service 默认替身）维持 deferred，
+        不触发下载/解析/计费。"""
         _create_tenant(tenant_id)
         fetcher = StubFetcher()
         # 12 图：旧算法残留 "1]..12]" 计 38 字符 > 20，可复现漏判路径

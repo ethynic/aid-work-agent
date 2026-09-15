@@ -399,6 +399,29 @@ class TestRecheckDueEnqueue:
         assert result["recheck_enqueued"] == 0
         assert _queued_run_count(tenant_id) == 0
 
+    def test_recheck_includes_deferred_articles(self, require_db, tenant_id):
+        """WP10 P2：deferred（图片 VL 待解析，承诺「将自动重试」）随 24h 复核自动重试。
+
+        到期的 deferred 行入 recheck run（action='check'）；未到期（last_checked_at
+        新鲜）的 deferred 不入队——deferred 复用 last_checked_at 节流，不进失败退避。
+        p1 存量 deferred 文章亦凭 pipeline_version 变化在复核重建分支处理。
+        """
+        due = _insert_article(
+            tenant_id, "wp7cckdfr1", processing_status="deferred",
+            last_checked_at=_local_naive(25),
+        )
+        fresh = _insert_article(
+            tenant_id, "wp7cckdfr2", processing_status="deferred",
+            last_checked_at=_local_naive(2),
+        )
+        result = _tick()
+        assert result["recheck_enqueued"] == 1
+        items = _all_run_items(tenant_id)
+        assert len(items) == 1
+        assert items[0]["action"] == "check"
+        assert items[0]["article_row_id"] == due
+        assert items[0]["article_row_id"] != fresh
+
 
 # ------------------------------- 驱动协程 -------------------------------
 

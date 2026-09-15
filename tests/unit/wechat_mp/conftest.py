@@ -91,6 +91,27 @@ def _init_db_pool():
     except Exception:  # noqa: BLE001
         yield
         return
+
+    # WP10 计费列幂等自愈：token_cost_prices.price_per_call + 按张计费种子行。
+    # db_update.yaml 迁移只在应用启动时执行，测试进程不跑启动链路；而
+    # TokenCostPriceDB.get_by_model_name 的 SELECT 已包含该列，不补列则计费
+    # 相关用例全部失败。与 deploy/db_update.yaml "2026-09-15 21:30:00" 批次一致。
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "ALTER TABLE token_cost_prices ADD COLUMN IF NOT EXISTS "
+                "price_per_call NUMERIC(10,4)"
+            )
+            cursor.execute(
+                "INSERT INTO token_cost_prices (model_name, price_per_call) "
+                "VALUES ('wechat_mp_image_parse', 0.01) "
+                "ON CONFLICT (model_name) DO NOTHING"
+            )
+            conn.commit()
+    except Exception:  # noqa: BLE001 单语句失败不阻断其余测试（require_db 侧兜底）
+        pass
+
     _DB_AVAILABLE = True
     yield
 

@@ -728,3 +728,10 @@
         UNIQUE (tenant_id, task_id, control_epoch),
         FOREIGN KEY (tenant_id, task_id) REFERENCES session_tasks (tenant_id, id) ON DELETE CASCADE
     );
+- datetime: "2026-09-15 21:30:00"
+  remark: "token_cost_prices 增加通用按次单价列 price_per_call（与 asr_price_per_call 区分），并种子按张计费伪模型 wechat_mp_image_parse=0.01 元/张（×usage_factor 100 = 1 积分/张；运营改 DB 调价；公众号图片 VL 解析 WP10，设计 §6.2）"
+  statements: |
+    ALTER TABLE token_cost_prices ADD COLUMN IF NOT EXISTS price_per_call NUMERIC(10,4);
+    INSERT INTO token_cost_prices (model_name, price_per_call)
+    VALUES ('wechat_mp_image_parse', 0.01)
+    ON CONFLICT (model_name) DO NOTHING;

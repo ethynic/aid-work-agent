@@ -88,6 +88,31 @@
 - 口径：只承诺"已提交获取/刷新"，不宣称发现最新；运行中/失败如实说明；完成后走 knowledge_base_search。
 - 验收：粘贴/群发回调 → 入库 → 售前检索命中闭环。
 
+### WP9 [ ] 接口通道提前开发（⏸ 2026-09-15 负责人确认场景必须、当日暂停待排期；原 P3「接口通道补齐」前移；依赖 WP5/WP7。开发未开始，仅本登记）
+
+### WP10 [x] P2 图片 VL 解析提前（2026-09-15 负责人实测反馈：图文/纯图文章 URL 导入被 deferred，多模态解析优先做；依赖 WP5）——2026-09-15 完成（三智能体：独立测试 359 passed + 119 项真实探针——hash 稳定性（VL 措辞不进指纹）双重证实、SSRF 面逐项 fail-closed、按张计费三账一致，修 1 P1：混排（短文字+图）文章图片编号错位致 VL 描述张冠李戴，改图片序数枚举+变异验证回归锁定；CR 修 1 P1：deferred 文章不在重试/复核扫描范围致「将自动重试」承诺落空，复核条件扩 processing_status IN ('success','deferred') 复用 24h 节流与每 tick 20 篇限速；P2 登记：解码先于像素检查的内存尖峰（建议先查 size 再 load）、UNRECOGNIZED_TEXT 精确匹配改包含匹配、p2 升级存量文章首次复核各产生一次重建费用需部署公告；终态 361 passed + 前端 build 通过 + 启动安全）
+
+- **图片下载转存**（§6.1/§13）：仅接受校验通过的微信 CDN HTTPS 地址（mmbiz/mmecoa.qpic.cn 等），逐跳重定向重新校验主机/IP，禁内网/回环/本地文件；Referer 头、单张 ≤10MB、超时 15s、解码像素上限、每文章图片上限（默认 30 张）；转存 `storage/tenants/{tid}/knowledge/wechat_mp/{article_row_id}/img_{n}.{ext}`，本地路径登记 articles/metadata。
+- **VL 解析**（§6.2）：新建 vision.py——每张图独立 LLMGateway.chat()，不指定专用视觉模型：从 `list_multimodal_models()`（is_multimodal=TRUE）选已配置模型，failover 同过滤，无可用图片模型记 deferred 不发纯文本模型；OpenAI image_url base64 data URL（复用 src/core/agent.py:697 构造惯例，压缩到模型限制内）；单轮 user message=固定指令+1 图，不带任何会话上下文；指令聚焦「转述图片中的文字信息与活动内容（时间/地点/优惠/产品名），不评价不发挥」；Semaphore(3) 限流，单张失败重试 1 次后记 failed 继续。
+- **按张计费**（D2）：`token_cost_prices` 加通用列 `price_per_call NUMERIC`（与 asr_price_per_call 区分），种子行 model_code='wechat_mp_image_parse' price_per_call=0.01（×usage_factor 100=1 积分/张，运营改 DB 调价）；每成功 1 张一条 chat_records（source_type='wechat_mp_image_parse'）复用 ChatRecordDB.create 原子扣减；VL token 用量记 usage_breakdown 供对账但收费按张。
+- **管道接入**：`[图片N: 描述]` 插回正文序列对应位置；deferred 门禁改造——有图且文字不足不再直接 deferred，先 VL 解析，解析产出内容则继续入库，无可用模型/全部失败仍 deferred；PIPELINE_VERSION 升 'p2'（存量 active/deferred 文章凭 pipeline_version 变化自动重建，复用既有快路径机制）；文章级余额预检复用既有 no_credit 语义，逐张失败不中断。
+- 单测：下载校验（域名白名单/重定向逐跳/内网拒绝/字节像素上限）、VL 模型选择与无模型 deferred、指令与上下文隔离、并发限流、单张失败重试、按张计费金额与 usage_breakdown、[图片N: ...] 插回、deferred 存量文章 p2 重建、压缩路径。
+
+### WP11 [x] 回调配置体验补齐（2026-09-15 负责人反馈优先；依赖 WP4）——2026-09-15 开发完成（①自定义回调 Token：config_codec.is_valid_callback_token 3~32 位字母数字校验；create 留空/缺省=服务端生成不变，传合法明文=去空白加密入库；update 传合法明文=改密（credential_version 递增+撤销 config_verified_at+verified 置 0，与 rotate 语义一致），留空/掩码/null 保留旧值不变；API 层前置校验非法 400，设置 Token 时响应 callback_token_plaintext 一次性；rotate 端点保留未动。②ChannelConfig.vue 保存成功后「公众平台服务器配置」一站式面板：URL/Token/EncodingAESKey 三件套各带复制+逐步指引，success/warning token 风格零新依赖；表单新增可选「自定义 Token」输入（前端先行校验，与掩码展示/重置共存，未保存态提示"将使用自定义 Token"）。③基线用例改写断言增强。三智能体闭环：独立测试 46 项探针（自定义 Token DB Fernet roundtrip、真实验签路径旧 Token 403/新 Token 200、留空/掩码/null 保留旧值、非法 400）；CR 修 1 P1：update API 对掩码 Token 误 400 与 DB 层「掩码保留」矛盾（GET→PUT 整体回传场景破约），掩码前缀按未提供处理；终态 361 passed + 前端 build 通过）
+
+- 支持**自定义回调 Token**（可选）：表单新增 Token 输入（留空=服务端生成），3~32 位字母数字校验，与公众平台侧填写值一致即可；服务端生成逻辑保留。
+- 创建保存成功后**一站式配置面板**：弹窗内显著展示「配置三件套」——完整回调 URL、Token 明文（一次性）、EncodingAESKey，各带复制按钮 + 逐步指引（先复制 URL/Token/AESKey → 到公众平台服务器配置粘贴 → 保存启用 → 回列表看三态验证），消除"保存后自动生成"占位期的困惑。
+- 列表页已有回调地址/三态/重置 Token 保持不动。
+
+- 背景（WP0 实测支撑）：仅"发布"渠道文章在 batchget 集合（历史群发不可得）；企业认证服务号权限可用；getarticle 顶层 news_item 含 content/is_deleted/url；IP 白名单 40164 流程已验证。
+- `client.py`：stable_token（Redis 缓存键含 tenant/config/凭据版本、expires_in 扣余量、账号级单飞刷新、无效 token 仅刷一次重试）+ batchget 分页遍历（count≤20、重复页/无进展检测）+ getarticle；timeout 15s、间隔 ≥200ms、指数退避+抖动+单轮总超时；权限/参数错误不盲重试；access_token/响应正文/异常原文不进日志。
+- 对账与增量：每 tick 扫描 enabled+secret+verified 配置，sync_interval_hours 到期（默认 6h）→ 建 scheduled run；batchget(no_content=1) 全分页对账，article_id 对齐 articles.source_channel='api' 行（external_id=appid:article_id:combined）；首次/源 update_time≠wx_update_time/上轮失败/pipeline 升级 → 建 pending item 拉正文；源时间比较用 wx_update_time。
+- 正文管道：getarticle → is_deleted 子篇排除 → 未删子篇按序拼「子篇标题→正文」（item_key=combined，一消息一篇文档，分块保持子篇边界，metadata 存子篇顺序/标题/url/删除标记）→ content.py 提取 → 后续与 URL 通道汇合（hash 比对/deferred 门禁/单事务落库/计费/售前挂接全复用）。
+- 删除语义：全部子篇明确 is_deleted → 软删除整篇；空数组/字段缺失/类型异常≠删除，记异常保留旧版；**整条缺失防护**——分页失败/结构异常/重复页/总数漂移不执行缺失删除仅标记 missing，连续两次可靠完整扫描缺失+getarticle 详情复核（53600）才软删除。
+- 跨来源重叠（§5.4）：接口文档入库前按子篇 url 规范身份查重，命中已入库 URL 文档 → documents.metadata 互标 related_doc_id，不物理合并。
+- 配置与验证：verify 扩展三步实测（stable_token+batchget count=1+有消息时 getarticle）；40164 报错回显出口 IP 提示配 IP 白名单；ChannelConfig.vue 修正 secret/sync_interval_hours 字段语义（去掉"填了无效"的误导提示）。
+- 单测：token 缓存/单飞/失效重试一次、分页遍历+重复页检测、增量对账（新增/变更/未变跳过）、is_deleted 子篇排除与全删软删、缺失防护两次扫描+详情复核、跨来源互标、来源 url 长期可用性依赖真机验收（WP0 待实测项：多图文样本、分页>20、整条删除延迟）。
+
 ## 2. 测试与验收矩阵
 
 | 风险/意图 | 必测场景 |

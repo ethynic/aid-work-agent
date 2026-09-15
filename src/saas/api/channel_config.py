@@ -25,20 +25,33 @@ from src.saas.models.enums import BehaviorAction, BehaviorResourceType
 from src.saas.services.channel_factory import ChannelFactory
 from src.services.behavior_log import audit_action
 from src.db.database import get_db_connection
+from src.wechat_mp import config_codec as wechat_mp_codec
 
 router = APIRouter(prefix="/api/saas/channels", tags=["SaaS 渠道配置"])
 
 
 class ChannelConfigCreateRequest(BaseModel):
-    channel_type: str = Field(..., description="渠道类型：wecom/wecom_kf/dingtalk/feishu")
+    channel_type: str = Field(..., description="渠道类型：wecom/wecom_kf/dingtalk/feishu/wechat_mp 等")
     name: Optional[str] = Field(None, description="渠道名称（用户自定义，用于区分同一租户的多个同类渠道）")
-    config: dict = Field(..., description="渠道凭证配置")
+    config: dict = Field(
+        ...,
+        description=(
+            "渠道凭证配置。wechat_mp 类型支持可选 config.callback_token 自定义回调 Token"
+            "（3~32 位字母数字，公众平台 Token 规则）；留空/缺省由服务端生成"
+        ),
+    )
     subagent_type: Optional[str] = Field(None, description="关联的数字员工类型（如 travel-consultant），不填则不绑定")
 
 
 class ChannelConfigUpdateRequest(BaseModel):
     name: Optional[str] = Field(None, description="渠道名称（用户自定义，用于区分同一租户的多个同类渠道）")
-    config: dict = Field(..., description="渠道凭证配置")
+    config: dict = Field(
+        ...,
+        description=(
+            "渠道凭证配置。wechat_mp 类型传入 config.callback_token 视为改密"
+            "（3~32 位字母数字，旧 Token 失效）；留空/缺省保留旧值"
+        ),
+    )
     subagent_type: Optional[str] = Field(None, description="关联的数字员工类型（如 travel-consultant）")
 
 
@@ -70,8 +83,9 @@ _REQUIRED_FIELDS = {
         "verification_token": "验证Token",
         # encrypt_key 可选（不填则非加密模式，仅用于开发/调试）
     },
-    # 公众号内容入知识库（WP4）：回调 token 由服务端生成，不收 token 字段；
-    # encoding_aes_key / secret 为敏感字段（可选，安全模式与 P3 接口通道用）
+    # 公众号内容入知识库（WP4）：encoding_aes_key / secret 为敏感字段（可选，
+    # 安全模式与 P3 接口通道用）；callback_token 不走此必填表——默认服务端生成，
+    # WP11 起支持可选自定义（config.callback_token，3~32 位字母数字，见 create/update 校验）
     "wechat_mp": {
         "appid": "公众号 AppID（公众平台后台「设置与开发→公众号设置」页可见，wx 开头）",
         "original_id": "公众号原始 ID（同页可见，gh_ 开头，用于事件 ToUserName 绑定校验）",
@@ -115,6 +129,26 @@ def _validate_rpa_required_fields(config: dict) -> None:
         raise HTTPException(status_code=400, detail=detail)
 
 
+def _validate_wechat_mp_custom_token(config: dict) -> str:
+    """规整并校验 wechat_mp 的可选自定义回调 Token（WP11）。
+
+    返回去空白后的自定义 Token（空串/掩码 *** 开头表示未提供——create 走服务端
+    生成、update 保留旧值，与 DB 层掩码保留语义一致）；其余格式不合法
+    （非 3~32 位字母数字）抛 HTTPException(400)。
+    """
+    custom_token = str((config or {}).get("callback_token") or "").strip()
+    if (
+        custom_token
+        and not custom_token.startswith("***")
+        and not wechat_mp_codec.is_valid_callback_token(custom_token)
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="回调 Token 需为 3~32 位字母或数字（公众平台服务器配置 Token 规则）",
+        )
+    return "" if custom_token.startswith("***") else custom_token
+
+
 @router.get("")
 async def list_channels(request: Request):
     """列出当前租户的渠道配置"""
@@ -145,13 +179,18 @@ async def create_channel(request: Request, body: ChannelConfigCreateRequest):
                 detail=f"缺少必填字段: {', '.join(missing)}",
             )
 
-    # wechat_mp：原始 ID 格式校验 + callback_token 由服务端生成（入参一律忽略）
+    # wechat_mp：原始 ID 格式校验；callback_token 可选自定义（3~32 位字母数字），
+    # 留空/缺省由服务端生成（现状行为不变）
     if body.channel_type == _WECHAT_MP_CHANNEL_TYPE:
         original_id = str(body.config.get("original_id") or "").strip()
         if not original_id.startswith("gh_"):
             raise HTTPException(status_code=400, detail="original_id 格式应为 gh_ 开头的公众号原始 ID")
         body.config = dict(body.config)
-        body.config.pop("callback_token", None)
+        custom_token = _validate_wechat_mp_custom_token(body.config)
+        if custom_token:
+            body.config["callback_token"] = custom_token
+        else:
+            body.config.pop("callback_token", None)
 
     try:
         config = ChannelConfigDB.create(
@@ -222,10 +261,16 @@ async def update_channel(config_id: str, request: Request, body: ChannelConfigUp
         body.config = dict(body.config)
         body.config["kf_account"] = (existing.get("config") or {}).get("kf_account") or []
 
-    # wechat_mp：callback_token 由服务端生成/轮换，不接受更新入参；original_id 格式校验
+    # wechat_mp：original_id 格式校验；callback_token 传入合法明文视为改密
+    # （旧 Token 失效语义与轮换一致），留空/缺省/掩码保留旧值
+    mp_custom_token = ""
     if existing["channel_type"] == _WECHAT_MP_CHANNEL_TYPE:
         body.config = dict(body.config)
-        body.config.pop("callback_token", None)
+        mp_custom_token = _validate_wechat_mp_custom_token(body.config)
+        if mp_custom_token:
+            body.config["callback_token"] = mp_custom_token
+        else:
+            body.config.pop("callback_token", None)
         original_id = str(body.config.get("original_id") or "").strip()
         if original_id and not original_id.startswith("gh_"):
             raise HTTPException(status_code=400, detail="original_id 格式应为 gh_ 开头的公众号原始 ID")
@@ -256,7 +301,14 @@ async def update_channel(config_id: str, request: Request, body: ChannelConfigUp
             logger.warning(f"失效 adapter 缓存失败: {e}")
         updated = ChannelConfigDB.get_by_id(config_id)
         updated = _attach_wechat_mp_callback_url(request, updated)
-        return {"success": True, "channel": updated}
+        response = {"success": True, "channel": updated}
+        if mp_custom_token:
+            # 传入自定义回调 Token 视为改密：新 Token 明文仅此一次返回（与创建/轮换语义一致）
+            decrypted = ChannelConfigDB.get_by_id_decrypted(config_id)
+            token_plain = ((decrypted or {}).get("config") or {}).get("callback_token") or ""
+            if token_plain:
+                response["callback_token_plaintext"] = token_plain
+        return response
     return {"success": False, "message": "更新失败"}
 
 

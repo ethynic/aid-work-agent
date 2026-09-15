@@ -3,7 +3,7 @@
 tenant_channel_configs.config JSON 列中，wechat_mp 类型配置含以下敏感字段：
   - ``secret``（公众号 AppSecret，P3 接口通道用，字段先留好）
   - ``encoding_aes_key``（回调安全模式 AES 解密，43 字符 Base64）
-  - ``callback_token``（回调验签 Token，创建时由服务端生成）
+  - ``callback_token``（回调验签 Token，默认服务端生成；WP11 起支持 3~32 位字母数字自定义）
 
 这些字段必须 Fernet 加密后才能写入 DB（复用公共模块 src.core.secret_crypto）。
 非敏感字段（appid / original_id / enabled / sync_interval_hours / 三态字段等）保持明文。
@@ -17,6 +17,7 @@ tenant_channel_configs.config JSON 列中，wechat_mp 类型配置含以下敏�
 - API 响应给前端时调 mask_sensitive_fields（仅展示掩码）
 """
 
+import re
 from typing import Any, Dict
 
 from src.core import secret_crypto
@@ -27,6 +28,18 @@ SENSITIVE_KEYS = (
     "encoding_aes_key",
     "callback_token",
 )
+
+# 公众平台「服务器配置」Token 规则：3~32 位字母或数字（与公众平台后台校验口径一致）
+_CALLBACK_TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9]{3,32}$")
+
+
+def is_valid_callback_token(token: Any) -> bool:
+    """校验自定义回调 Token 是否符合公众平台规则（3~32 位字母数字）。
+
+    WP11：callback_token 由「只能服务端生成」放宽为「可选自定义 + 留空服务端生成」，
+    自定义值必须满足本规则；API 层转 400，DB 层兜底抛 ValueError。
+    """
+    return isinstance(token, str) and bool(_CALLBACK_TOKEN_PATTERN.match(token))
 
 
 def encrypt_sensitive_fields(plain_config: Dict[str, Any]) -> Dict[str, Any]:

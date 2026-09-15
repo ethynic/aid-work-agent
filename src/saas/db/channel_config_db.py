@@ -10,7 +10,8 @@ wecom_personal_rpa 类型配置的特殊处理（第一期 MVP）：
 wechat_mp 类型配置的特殊处理（公众号内容入知识库 WP4，设计 §4）：
 - 敏感字段（secret / encoding_aes_key / callback_token）Fernet 加密
   （复用 src.wechat_mp.config_codec，无 listen_mode 副作用）
-- callback_token 创建时服务端生成（secrets.token_urlsafe），不接受入参
+- callback_token 默认服务端生成（secrets.token_urlsafe）；WP11 起支持可选自定义
+  （3~32 位字母数字，is_valid_callback_token 校验，留空/缺省仍服务端生成）
 - 同租户同 appid 唯一（应用层检查 + DB 部分唯一索引兜底）
 - 敏感字段不允许清空：缺失/空串/掩码/null 一律保留旧值
 - 运行时三态字段（config_verified_at / last_event_at / last_error）更新时保留
@@ -98,9 +99,17 @@ class ChannelConfigDB:
                 config_to_write = credential_codec.encrypt_sensitive_fields(config_to_write)
 
         if _is_wechat_mp(channel_type):
-            # callback_token 只能由服务端生成，不接受入参（防弱 token / 防串配置）
-            config_to_write.pop("callback_token", None)
-            config_to_write["callback_token"] = secrets.token_urlsafe(24)
+            # WP11：callback_token 支持可选自定义（3~32 位字母数字，公众平台 Token 规则），
+            # 留空/缺省仍由服务端生成（现状行为不变）；非法格式拒绝，防弱 token / 防串配置
+            incoming_token = config_to_write.get("callback_token")
+            if isinstance(incoming_token, str) and incoming_token.strip():
+                custom_token = incoming_token.strip()
+                if not wechat_mp_codec.is_valid_callback_token(custom_token):
+                    raise ValueError("回调 Token 需为 3~32 位字母或数字")
+                config_to_write["callback_token"] = custom_token
+            else:
+                config_to_write.pop("callback_token", None)
+                config_to_write["callback_token"] = secrets.token_urlsafe(24)
             config_to_write.setdefault("enabled", True)
             config_to_write.setdefault("sync_interval_hours", 6)
             config_to_write["credential_version"] = 1
@@ -408,6 +417,8 @@ class ChannelConfigDB:
             )
 
             new_config = dict(config or {})
+            # WP11：wechat_mp 自定义回调 Token 标记（仅 wechat_mp 分支会赋值）
+            custom_token = ""
 
             if existing_channel_type == _RPA_CHANNEL_TYPE:
                 # 保留运行时字段（前端不传时用旧值，避免被重置）
@@ -453,10 +464,20 @@ class ChannelConfigDB:
                     if k not in new_config and k in existing_config:
                         new_config[k] = existing_config[k]
 
-                # callback_token 只能由服务端生成/轮换（rotate_wechat_mp_token），
-                # update 入参一律忽略，保留 DB 原值
-                new_config.pop("callback_token", None)
-                if existing_config.get("callback_token"):
+                # WP11：callback_token 传入合法明文视为改密（旧 Token 失效，语义与
+                # rotate_wechat_mp_token 一致：版本递增 + 撤销验证态 + verified 置 0）；
+                # 缺失/空串/掩码（***开头）/null 保留 DB 原值（敏感字段不可清空的既有保护不变）
+                incoming_token = new_config.get("callback_token")
+                token_is_mask = isinstance(incoming_token, str) and incoming_token.startswith("***")
+                token_blank = not isinstance(incoming_token, str) or not incoming_token.strip()
+                if not token_blank and not token_is_mask:
+                    custom_token = incoming_token.strip()
+                    if not wechat_mp_codec.is_valid_callback_token(custom_token):
+                        raise ValueError("回调 Token 需为 3~32 位字母或数字")
+                    new_config["callback_token"] = custom_token
+                else:
+                    new_config.pop("callback_token", None)
+                if not custom_token and existing_config.get("callback_token"):
                     new_config["callback_token"] = existing_config["callback_token"]
 
                 # 敏感字段不允许清空：字段缺失、空串、掩码（***开头）或 null 一律保留 DB 原值
@@ -476,10 +497,11 @@ class ChannelConfigDB:
                     if (not isinstance(incoming, str) or not incoming.strip()) and existing_config.get(k):
                         new_config[k] = existing_config[k]
 
-                # 凭据/身份变更检测：appid/original_id/encoding_aes_key 变更递增凭据版本并撤销
-                # 回调验证态（设计 §4 密钥轮换与三态语义）
+                # 凭据/身份变更检测：callback_token 自定义改密 / appid / original_id /
+                # encoding_aes_key 变更递增凭据版本并撤销回调验证态（设计 §4 密钥轮换与三态语义）
                 credential_changed = (
-                    new_config.get("appid") != existing_config.get("appid")
+                    bool(custom_token)
+                    or new_config.get("appid") != existing_config.get("appid")
                     or new_config.get("original_id") != existing_config.get("original_id")
                     or (
                         isinstance(new_config.get("encoding_aes_key"), str)
@@ -512,6 +534,17 @@ class ChannelConfigDB:
                     WHERE config_id = %s
                 """,
                     (json.dumps(new_config, ensure_ascii=False), subagent_type, name, config_id),
+                )
+            if _is_wechat_mp(existing_channel_type) and custom_token:
+                # 传入自定义回调 Token 视为改密：与 rotate_wechat_mp_token 一致撤销
+                # 列表页 verified 标志（config_verified_at 已在上方凭据变更分支撤销）
+                cursor.execute(
+                    """
+                    UPDATE tenant_channel_configs
+                    SET verified = 0, updated_at = CURRENT_TIMESTAMP
+                    WHERE config_id = %s
+                    """,
+                    (config_id,),
                 )
             conn.commit()
             return cursor.rowcount > 0

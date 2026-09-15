@@ -6,7 +6,7 @@ ChannelConfigDB 单元测试
 
 import json
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 
 class TestChannelConfigDBCreateWithSubagentType:
@@ -374,8 +374,48 @@ class TestChannelConfigDBWechatMp:
         yield
         monkeypatch.setattr(sc, "_fernet", None)
 
-    def test_create_generates_token_server_side(self, master_key):
-        """create：callback_token 服务端生成（入参忽略）、敏感字段加密、默认值落库。"""
+    @pytest.mark.parametrize("blank_token", [None, "", "   "])
+    def test_create_blank_token_generated_server_side(self, master_key, blank_token):
+        """create：callback_token 留空/缺省仍由服务端生成（WP11 现状行为不变）。"""
+        from src.saas.db.channel_config_db import ChannelConfigDB
+
+        payload = {
+            "appid": "wx0000000000000000",
+            "original_id": "gh_test00000000",
+            "secret": "fake-secret",
+        }
+        if blank_token is not None:
+            payload["callback_token"] = blank_token
+
+        mock_cursor = MagicMock()
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+
+        with (
+            patch("src.saas.db.channel_config_db.get_db_connection") as mock_get_db,
+            patch.object(ChannelConfigDB, "_wechat_mp_appid_exists", return_value=False),
+            patch.object(ChannelConfigDB, "get_by_id", return_value={"config_id": "chan_x"}),
+        ):
+            mock_get_db.return_value.__enter__.return_value = mock_conn
+            result = ChannelConfigDB.create(
+                tenant_id="tenant_001",
+                channel_type="wechat_mp",
+                name="公众号",
+                config=payload,
+            )
+
+        assert result == {"config_id": "chan_x"}
+        insert_params = mock_cursor.execute.call_args_list[0][0][1]
+        written = json.loads(insert_params[4])
+        assert written["callback_token"].startswith("gAAAAA")
+        assert written["secret"].startswith("gAAAAA")
+        assert written["enabled"] is True
+        assert written["sync_interval_hours"] == 6
+        assert written["credential_version"] == 1
+
+    def test_create_custom_token_encrypted_roundtrip(self, master_key):
+        """WP11 create：合法自定义 Token 去空白后原值加密入库（非随机生成）。"""
+        from src.core.secret_crypto import decrypt_secret
         from src.saas.db.channel_config_db import ChannelConfigDB
 
         mock_cursor = MagicMock()
@@ -395,20 +435,32 @@ class TestChannelConfigDBWechatMp:
                 config={
                     "appid": "wx0000000000000000",
                     "original_id": "gh_test00000000",
-                    "secret": "fake-secret",
-                    "callback_token": "user-supplied-must-be-ignored",
+                    "callback_token": " MyCustomToken123 ",
                 },
             )
 
         assert result == {"config_id": "chan_x"}
-        insert_params = mock_cursor.execute.call_args_list[0][0][1]
-        written = json.loads(insert_params[4])
-        assert written["callback_token"] != "user-supplied-must-be-ignored"
+        written = json.loads(mock_cursor.execute.call_args_list[0][0][1][4])
         assert written["callback_token"].startswith("gAAAAA")
-        assert written["secret"].startswith("gAAAAA")
-        assert written["enabled"] is True
-        assert written["sync_interval_hours"] == 6
-        assert written["credential_version"] == 1
+        assert decrypt_secret(written["callback_token"]).decode() == "MyCustomToken123"
+
+    @pytest.mark.parametrize("bad_token", ["ab", "a" * 33, "bad token", "tok-en", "tok@en"])
+    def test_create_rejects_invalid_custom_token(self, bad_token):
+        """create：自定义 Token 过短/过长/含特殊字符 → ValueError 且不触 DB。"""
+        from src.saas.db.channel_config_db import ChannelConfigDB
+
+        with patch("src.saas.db.channel_config_db.get_db_connection") as mock_get_db:
+            with pytest.raises(ValueError, match="3~32"):
+                ChannelConfigDB.create(
+                    tenant_id="tenant_001",
+                    channel_type="wechat_mp",
+                    config={
+                        "appid": "wx0000000000000000",
+                        "original_id": "gh_test00000000",
+                        "callback_token": bad_token,
+                    },
+                )
+        mock_get_db.assert_not_called()
 
     def test_update_sensitive_not_clearable_and_runtime_preserved(self):
         """update：敏感字段 null/掩码/缺失均保留旧值；appid/original_id 缺失回填；三态字段保留。"""
@@ -489,6 +541,82 @@ class TestChannelConfigDBWechatMp:
         assert written["credential_version"] == 2
         assert "config_verified_at" not in written
 
+    def test_update_custom_token_rotates_and_revokes(self, master_key):
+        """WP11 update：传合法新 Token → 改密入库、版本递增、撤销 config_verified_at 与 verified（与轮换一致）。"""
+        from src.core.secret_crypto import decrypt_secret
+        from src.saas.db.channel_config_db import ChannelConfigDB
+
+        existing = {
+            "appid": "wx0000000000000000",
+            "original_id": "gh_test00000000",
+            "encoding_aes_key": "gAAAAAoldkey",
+            "callback_token": "gAAAAAoldtoken",
+            "config_verified_at": "2026-09-15T00:00:00+00:00",
+            "credential_version": 1,
+        }
+        mock_cursor = MagicMock()
+        mock_cursor.rowcount = 1
+        mock_cursor.fetchone.return_value = {
+            "channel_type": "wechat_mp",
+            "config": json.dumps(existing),
+        }
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+
+        with patch("src.saas.db.channel_config_db.get_db_connection") as mock_get_db:
+            mock_get_db.return_value.__enter__.return_value = mock_conn
+            ok = ChannelConfigDB.update(
+                config_id="chan_x",
+                config={
+                    "appid": "wx0000000000000000",
+                    "original_id": "gh_test00000000",
+                    "callback_token": "NewToken99",
+                },
+            )
+
+        assert ok is True
+        # 第 1 条为 SELECT、第 2 条为主 UPDATE、第 3 条为 verified 撤销 UPDATE
+        written = json.loads(mock_cursor.execute.call_args_list[1][0][1][0])
+        assert written["callback_token"].startswith("gAAAAA")
+        assert decrypt_secret(written["callback_token"]).decode() == "NewToken99"
+        assert written["credential_version"] == 2
+        assert "config_verified_at" not in written
+        revoke_sql = mock_cursor.execute.call_args_list[2][0][0]
+        assert "verified = 0" in revoke_sql
+
+    @pytest.mark.parametrize("incoming", ["", "   ", "***", None, "__MISSING__"])
+    def test_update_blank_or_mask_token_preserves_old(self, incoming):
+        """WP11 update：callback_token 留空/空白/掩码/null/缺失一律保留旧密文（不可清空保护不回归）。"""
+        from src.saas.db.channel_config_db import ChannelConfigDB
+
+        existing = {
+            "appid": "wx0000000000000000",
+            "original_id": "gh_test00000000",
+            "callback_token": "gAAAAAoldtoken",
+            "credential_version": 1,
+        }
+        mock_cursor = MagicMock()
+        mock_cursor.rowcount = 1
+        mock_cursor.fetchone.return_value = {
+            "channel_type": "wechat_mp",
+            "config": json.dumps(existing),
+        }
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+
+        payload = {"appid": "wx0000000000000000", "original_id": "gh_test00000000"}
+        if incoming != "__MISSING__":
+            payload["callback_token"] = incoming
+
+        with patch("src.saas.db.channel_config_db.get_db_connection") as mock_get_db:
+            mock_get_db.return_value.__enter__.return_value = mock_conn
+            assert ChannelConfigDB.update(config_id="chan_x", config=payload)
+
+        # 无自定义 Token → 不触发 verified 撤销（最后一条 execute 即主 UPDATE）
+        written = json.loads(mock_cursor.execute.call_args[0][1][0])
+        assert written["callback_token"] == "gAAAAAoldtoken"
+        assert written["credential_version"] == 1
+
     def test_rotate_wechat_mp_token(self, master_key):
         """rotate：新 token 明文返回一次、密文入库、版本递增、验证态撤销、其他字段保留。"""
         from src.core.secret_crypto import decrypt_secret, encrypt_secret
@@ -563,3 +691,195 @@ class TestChannelConfigDBWechatMp:
 
         written = json.loads(mock_cursor.execute.call_args[0][1][0])
         assert written["last_event_at"] == "2026-09-15T00:00:00+00:00"
+
+
+class TestChannelConfigApiWechatMpToken:
+    """WP11 API 层：wechat_mp 自定义回调 Token 的入参校验与明文一次性响应（mock DB）。
+
+    锁住语义：创建/更新设置了 Token 时响应 callback_token_plaintext（仅一次）；
+    非法格式 400 且不触 DB；留空/缺省不下发 callback_token（服务端生成不变）。
+    """
+
+    BASE_CONFIG = {"appid": "wx0000000000000000", "original_id": "gh_test00000000"}
+
+    @pytest.fixture()
+    def client(self, monkeypatch):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        import src.saas.api.channel_config as cc_api
+
+        def _fake_require_admin(request):
+            return {"user_id": "u1", "tenant_id": "tenant_001", "role": "tenant_admin"}
+
+        async def _noop_record(*args, **kwargs):
+            return None
+
+        monkeypatch.setattr(cc_api, "require_admin", _fake_require_admin)
+        # audit_action 的 wrapper 在 behavior_log 模块内解析 record_behavior，置 no-op 免连库
+        monkeypatch.setattr("src.services.behavior_log.record_behavior", _noop_record)
+
+        app = FastAPI()
+        app.include_router(cc_api.router)
+        return TestClient(app)
+
+    def _post(self, client, config):
+        return client.post(
+            "/api/saas/channels",
+            json={"channel_type": "wechat_mp", "name": "公众号", "config": config},
+        )
+
+    def _put(self, client, config):
+        return client.put("/api/saas/channels/chan_x", json={"config": config})
+
+    @staticmethod
+    def _existing():
+        return {
+            "config_id": "chan_x",
+            "tenant_id": "tenant_001",
+            "channel_type": "wechat_mp",
+            "config": {"callback_token": "***"},
+        }
+
+    def test_create_custom_token_forwarded_and_plaintext_returned_once(self, client):
+        import src.saas.api.channel_config as cc_api
+
+        captured = {}
+
+        def fake_create(**kwargs):
+            captured.update(kwargs)
+            return {
+                "config_id": "chan_x",
+                "tenant_id": kwargs["tenant_id"],
+                "channel_type": "wechat_mp",
+                "config": {},
+            }
+
+        with (
+            patch.object(cc_api.ChannelConfigDB, "create", side_effect=fake_create),
+            patch.object(
+                cc_api.ChannelConfigDB,
+                "get_by_id_decrypted",
+                return_value={"config": {"callback_token": "MyToken123"}},
+            ),
+        ):
+            resp = self._post(client, {**self.BASE_CONFIG, "callback_token": " MyToken123 "})
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["success"] is True
+        assert body["callback_token_plaintext"] == "MyToken123"  # 明文仅本次响应返回
+        assert captured["config"]["callback_token"] == "MyToken123"  # 去空白后下发 DB 层
+
+    @pytest.mark.parametrize("bad_token", ["ab", "a" * 33, "bad token", "tok-en"])
+    def test_create_invalid_token_rejected_400(self, client, bad_token):
+        import src.saas.api.channel_config as cc_api
+
+        with patch.object(cc_api.ChannelConfigDB, "create") as mock_create:
+            resp = self._post(client, {**self.BASE_CONFIG, "callback_token": bad_token})
+        assert resp.status_code == 400
+        assert "3~32" in resp.json()["detail"]
+        mock_create.assert_not_called()
+
+    @pytest.mark.parametrize("blank", [None, "", "***"])
+    def test_create_blank_token_not_forwarded_still_returns_plaintext(self, client, blank):
+        """留空/缺省/掩码 = 服务端生成（现状行为）：不下发 callback_token，响应仍回生成明文一次。"""
+        import src.saas.api.channel_config as cc_api
+
+        config = dict(self.BASE_CONFIG)
+        if blank is not None:
+            config["callback_token"] = blank
+
+        captured = {}
+
+        def fake_create(**kwargs):
+            captured.update(kwargs)
+            return {
+                "config_id": "chan_x",
+                "tenant_id": kwargs["tenant_id"],
+                "channel_type": "wechat_mp",
+                "config": {},
+            }
+
+        with (
+            patch.object(cc_api.ChannelConfigDB, "create", side_effect=fake_create),
+            patch.object(
+                cc_api.ChannelConfigDB,
+                "get_by_id_decrypted",
+                return_value={"config": {"callback_token": "generated-plain"}},
+            ),
+        ):
+            resp = self._post(client, config)
+
+        assert resp.status_code == 200
+        assert resp.json()["callback_token_plaintext"] == "generated-plain"
+        assert "callback_token" not in captured["config"]
+
+    def test_update_custom_token_returns_plaintext_once(self, client):
+        import src.saas.api.channel_config as cc_api
+
+        captured = {}
+
+        def fake_update(config_id, config, subagent_type=None, name=None):
+            captured["config"] = config
+            return True
+
+        with (
+            patch.object(cc_api.ChannelConfigDB, "get_by_id", return_value=self._existing()),
+            patch.object(cc_api.ChannelConfigDB, "update", side_effect=fake_update),
+            patch.object(
+                cc_api.ChannelConfigDB,
+                "get_by_id_decrypted",
+                return_value={"config": {"callback_token": "NewToken99"}},
+            ),
+            patch.object(cc_api.ChannelFactory, "invalidate_adapter", new_callable=AsyncMock),
+        ):
+            resp = self._put(client, {**self.BASE_CONFIG, "callback_token": "NewToken99"})
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["success"] is True
+        assert body["callback_token_plaintext"] == "NewToken99"  # 改密后明文仅此一次
+        assert captured["config"]["callback_token"] == "NewToken99"
+
+    def test_update_without_token_strips_key_and_no_plaintext(self, client):
+        """更新未传/留空/掩码 Token：不下发 callback_token（DB 层保留旧值），也不回明文。
+
+        掩码（*** 开头）= GET 响应原样回传的未改动值，API 层不得 400
+        （与 DB 层「掩码保留旧值」语义一致），否则 GET→PUT 整体回传的调用方必挂。
+        """
+        import src.saas.api.channel_config as cc_api
+
+        captured = {}
+
+        def fake_update(config_id, config, subagent_type=None, name=None):
+            captured["config"] = config
+            return True
+
+        for token in (None, "", "***"):
+            payload = dict(self.BASE_CONFIG)
+            if token is not None:
+                payload["callback_token"] = token
+            with (
+                patch.object(cc_api.ChannelConfigDB, "get_by_id", return_value=self._existing()),
+                patch.object(cc_api.ChannelConfigDB, "update", side_effect=fake_update),
+                patch.object(cc_api.ChannelFactory, "invalidate_adapter", new_callable=AsyncMock),
+            ):
+                resp = self._put(client, payload)
+
+            assert resp.status_code == 200
+            assert "callback_token_plaintext" not in resp.json()
+            assert "callback_token" not in captured["config"]
+
+    @pytest.mark.parametrize("bad_token", ["ab", "bad token"])
+    def test_update_invalid_token_rejected_400(self, client, bad_token):
+        import src.saas.api.channel_config as cc_api
+
+        with (
+            patch.object(cc_api.ChannelConfigDB, "get_by_id", return_value=self._existing()),
+            patch.object(cc_api.ChannelConfigDB, "update") as mock_update,
+        ):
+            resp = self._put(client, {**self.BASE_CONFIG, "callback_token": bad_token})
+        assert resp.status_code == 400
+        assert "3~32" in resp.json()["detail"]
+        mock_update.assert_not_called()

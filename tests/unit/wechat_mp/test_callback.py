@@ -548,21 +548,21 @@ class TestChannelConfigRealDB:
     }
 
     def test_create_success_token_server_generated(self, require_db, mp_cfg_cleanup):
+        """create：callback_token 留空/缺省仍由服务端生成（WP11 现状行为不变）。"""
         from src.saas.db.channel_config_db import ChannelConfigDB
 
         created = ChannelConfigDB.create(
             tenant_id=mp_cfg_cleanup,
             channel_type="wechat_mp",
             name="公众号",
-            config={**self.BASE_CONFIG, "callback_token": "user-supplied-must-be-ignored"},
+            config=dict(self.BASE_CONFIG),
         )
         assert created and created["config_id"]
         # API 视角：敏感字段掩码
         assert created["config"]["callback_token"] == "***"
         assert created["config"]["secret"] == "***"
-        # DB 原始值：token 服务端生成（忽略入参）且加密入库
+        # DB 原始值：token 服务端生成且加密入库
         raw = _raw_config(created["config_id"])
-        assert raw["callback_token"] != "user-supplied-must-be-ignored"
         assert raw["callback_token"].startswith("gAAAAA")
         assert raw["secret"].startswith("gAAAAA")
         assert raw["encoding_aes_key"].startswith("gAAAAA")
@@ -573,6 +573,43 @@ class TestChannelConfigRealDB:
         dec = ChannelConfigDB.get_by_id_decrypted(created["config_id"])
         assert dec["config"]["callback_token"] and not dec["config"]["callback_token"].startswith("gAAAAA")
         assert dec["config"]["secret"] == "fake-secret"
+
+    def test_create_custom_token_encrypted_roundtrip(self, require_db, mp_cfg_cleanup):
+        """WP11：create 传合法自定义 Token（3~32 位字母数字）→ 去空白后原值加密入库；非法格式拒绝且不落库。"""
+        from src.db.database import get_db_connection
+        from src.saas.db.channel_config_db import ChannelConfigDB
+
+        created = ChannelConfigDB.create(
+            tenant_id=mp_cfg_cleanup,
+            channel_type="wechat_mp",
+            name="公众号-自定义Token",
+            config={
+                **self.BASE_CONFIG,
+                "appid": "wxCustTok00000001",
+                "callback_token": "  MyCustomToken123  ",
+            },
+        )
+        assert created and created["config_id"]
+        dec = ChannelConfigDB.get_by_id_decrypted(created["config_id"])
+        assert dec["config"]["callback_token"] == "MyCustomToken123"  # 原值（非随机生成）
+
+        # 非法格式（过短/过长/特殊字符）→ ValueError
+        for bad in ("ab", "a" * 33, "bad token", "tok-en"):
+            with pytest.raises(ValueError, match="3~32"):
+                ChannelConfigDB.create(
+                    tenant_id=mp_cfg_cleanup,
+                    channel_type="wechat_mp",
+                    config={**self.BASE_CONFIG, "appid": "wxBadTok00000001", "callback_token": bad},
+                )
+        # 仅自定义成功那条落库
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT count(*) AS c FROM tenant_channel_configs "
+                "WHERE tenant_id = %s AND channel_type = 'wechat_mp'",
+                (mp_cfg_cleanup,),
+            )
+            assert cursor.fetchone()["c"] == 1
 
     def test_create_duplicate_appid_rejected(self, require_db, mp_cfg_cleanup):
         from src.saas.db.channel_config_db import ChannelConfigDB

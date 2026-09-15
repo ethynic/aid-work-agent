@@ -16,9 +16,11 @@
   ① 失败退避到期（processing_status IN ('sync_failed','pending') 且 next_retry_at
   <= now()，含 no_credit 退避保持的 pending）→ 建重试 run（trigger_type='retry'）
   + pending item（action=NULL，worker 视为 'new'）；
-  ② 存量 active 文章存活复核（processing_status='success' 且 last_checked_at 超
-  24h，NULLS FIRST 优先从未复核的）→ 建 recheck run（trigger_type='recheck'）
-  + pending item（action='check'）。
+  ② 存量 active 文章存活复核（processing_status ∈ ('success','deferred') 且
+  last_checked_at 超 24h，NULLS FIRST 优先从未复核的）→ 建 recheck run
+  （trigger_type='recheck'）+ pending item（action='check'）；deferred（P2 图片
+  VL 待解析）借同一通道实现「将自动重试」承诺（deferred 置 next_retry_at=NULL
+  不进 ① 失败退避）。
   两个生成器都幂等：同文章已有挂在 queued/running run 上的 pending/running item
   就跳过；查询、建 run 与入 items 同事务。tick 只生成任务，不改文章状态
   （next_retry_at/last_checked_at 由 worker 处理时更新；run 若中断，到期条件
@@ -79,13 +81,16 @@ _RETRY_DUE_SQL = """
     LIMIT %s
 """
 
-# 复核到期条件：仅 active+success 主记录（alias/deleted/unconfirmed 不复核，设计 §5.4）。
+# 复核到期条件：active 主记录且 processing_status ∈ ('success','deferred')
+# （alias/deleted/unconfirmed 不复核，设计 §5.4）。deferred（WP10 P2：图片 VL 解析
+# 不可用/失败，error_code=deferred_image_pending）随 24h 复核自动重试——错误信息
+# 承诺「将自动重试」，且 p1 存量 deferred 文章凭 pipeline_version 变化在复核时重建。
 # last_checked_at 由 service 以 SQL now() 写入（会话时区），故用 now() 同口径比较
 _RECHECK_DUE_SQL = """
     SELECT a.id FROM bs_wechat_mp_articles a
     WHERE a.tenant_id = %s
       AND a.status = 'active'
-      AND a.processing_status = 'success'
+      AND a.processing_status IN ('success', 'deferred')
       AND (a.last_checked_at IS NULL
            OR a.last_checked_at < now() - make_interval(hours => %s))
       AND NOT EXISTS (
@@ -370,7 +375,7 @@ class WeChatMPScheduler:
                      AND next_retry_at IS NOT NULL
                      AND next_retry_at <= (now() AT TIME ZONE 'UTC'))
                     OR
-                    (processing_status = 'success'
+                    (processing_status IN ('success', 'deferred')
                      AND (last_checked_at IS NULL
                           OR last_checked_at < now() - make_interval(hours => %s)))
                   )

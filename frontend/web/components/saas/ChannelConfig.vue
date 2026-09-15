@@ -257,26 +257,73 @@
               <span class="text-xs text-muted">停用后微信推送的事件将被拒绝（403），知识库不再收录新文章</span>
             </label>
             <div>
+              <label class="text-sm text-muted mb-1 block">自定义 Token（可选，留空由服务端自动生成）</label>
+              <BaseInput
+                v-model="mpCustomToken"
+                placeholder="3~32 位字母或数字，需与公众平台「服务器配置」中填写值一致"
+                maxlength="32"
+              />
+              <p v-if="mpCustomTokenError" class="mt-1 text-xs text-danger-600">{{ mpCustomTokenError }}</p>
+              <p v-else class="mt-1 text-xs text-muted">若已在公众平台侧生成了 Token，可直接填到这里；修改已保存渠道的 Token 会使旧 Token 立即失效</p>
+            </div>
+            <div>
               <label class="text-sm text-muted mb-1 block">回调 Token（粘贴到公众平台「服务器配置」的 Token 栏）</label>
               <div v-if="mpTokenPlaintext" class="bg-warning-50 border border-warning-200 rounded-lg p-3">
                 <div class="flex items-center gap-2">
                   <code class="flex-1 bg-surface px-3 py-2 rounded text-sm text-warning-800 font-mono select-all break-all">{{ mpTokenPlaintext }}</code>
                   <BaseButton intent="ghost" size="sm" @click="copyMpToken">复制</BaseButton>
                 </div>
-                <p class="mt-1.5 text-xs text-warning-700">⚠️ Token 仅本次明文显示，关闭弹窗后只能看到掩码。请立即复制保存。</p>
+                <p class="mt-1.5 text-xs text-warning-700">{{ mpTokenPlaintextHint }}</p>
               </div>
               <div v-else class="flex items-center gap-2">
-                <code class="flex-1 bg-surface px-3 py-2 rounded text-sm text-muted font-mono">{{ editingId ? (form.config.callback_token || '***') : '保存后自动生成' }}</code>
+                <code class="flex-1 bg-surface px-3 py-2 rounded text-sm text-muted font-mono">{{ mpTokenPlaceholder }}</code>
                 <BaseButton v-if="editingId" intent="secondary" size="sm" :disabled="rotatingToken" @click="handleRotateMpToken">
                   {{ rotatingToken ? '重置中...' : '重置 Token' }}
                 </BaseButton>
               </div>
-              <p class="mt-1 text-xs text-muted">Token 由服务端生成，不可自定义；重置后旧 Token 立即失效</p>
+              <p class="mt-1 text-xs text-muted">Token 可自定义或由服务端自动生成；重置后旧 Token 立即失效</p>
             </div>
             <div class="bg-danger-50 border border-danger-200 rounded-lg p-3 text-xs text-danger-700 space-y-1">
               <p class="font-medium">共存说明（重要）</p>
               <p>启用「服务器配置」后，公众平台后台的自动回复等功能将被接管；一个公众号只能配置一个回调 URL，若已有第三方系统占用，需改用中继转发方案（请联系运营）。</p>
             </div>
+          </div>
+        </div>
+
+        <!-- 公众号保存成功后：公众平台服务器配置一站式面板（WP11）。
+             三件套各带复制按钮 + 逐步指引，替代保存前占位期的零散提示。 -->
+        <div v-if="form.channel_type === 'wechat_mp' && mpSetupVisible" class="mt-3 bg-success-50 border border-success-200 rounded-lg p-4 space-y-3">
+          <p class="text-sm font-medium text-success-800">✅ 已保存，接下来完成公众平台「服务器配置」</p>
+          <ol class="list-decimal list-inside text-xs text-success-700 space-y-0.5">
+            <li>复制下方三件套：服务器 URL / Token / EncodingAESKey</li>
+            <li>登录公众平台「设置与开发」→「基本配置」→ 服务器配置「修改配置」，粘贴对应栏目并点「启用」</li>
+            <li>回到本页（列表卡片或「验证连接」）查看「URL 验证」状态变为已验证</li>
+          </ol>
+          <div class="space-y-2">
+            <div class="flex items-center gap-2">
+              <span class="text-xs text-muted w-28 flex-shrink-0">服务器 URL</span>
+              <code class="flex-1 bg-surface px-3 py-2 rounded text-sm text-default font-mono select-all break-all">{{ getCallbackUrl('wechat_mp', editingId || undefined) }}</code>
+              <BaseButton intent="ghost" size="sm" @click="copyUrl(getCallbackUrl('wechat_mp', editingId || undefined), 'mp-setup-url')">{{ copied['mp-setup-url'] ? '已复制' : '复制' }}</BaseButton>
+            </div>
+            <div class="flex items-center gap-2">
+              <span class="text-xs text-muted w-28 flex-shrink-0">Token</span>
+              <template v-if="mpTokenPlaintext">
+                <code class="flex-1 bg-surface px-3 py-2 rounded text-sm text-warning-800 font-mono select-all break-all">{{ mpTokenPlaintext }}</code>
+                <BaseButton intent="ghost" size="sm" @click="copyUrl(mpTokenPlaintext, 'mp-setup-token')">{{ copied['mp-setup-token'] ? '已复制' : '复制' }}</BaseButton>
+              </template>
+              <code v-else class="flex-1 bg-surface px-3 py-2 rounded text-sm text-muted font-mono">{{ form.config.callback_token || '***' }}</code>
+            </div>
+            <p v-if="mpTokenPlaintext" class="text-xs text-warning-700">{{ mpTokenPlaintextHint }}</p>
+            <p v-else class="text-xs text-muted">Token 已隐藏（仅设置/重置时明文显示一次）；忘记可点上方「重置 Token」</p>
+            <div class="flex items-center gap-2">
+              <span class="text-xs text-muted w-28 flex-shrink-0">EncodingAESKey</span>
+              <template v-if="mpAesKeyPlaintext">
+                <code class="flex-1 bg-surface px-3 py-2 rounded text-sm text-default font-mono select-all break-all">{{ mpAesKeyPlaintext }}</code>
+                <BaseButton intent="ghost" size="sm" @click="copyUrl(mpAesKeyPlaintext, 'mp-setup-aes')">{{ copied['mp-setup-aes'] ? '已复制' : '复制' }}</BaseButton>
+              </template>
+              <span v-else class="text-xs text-muted">未填写（明文模式可省略；安全模式需在公众平台生成后填回本页再保存）</span>
+            </div>
+            <p v-if="mpAesKeyPlaintext" class="text-xs text-muted">请到公众平台「服务器配置」粘贴此 EncodingAESKey（与本页填写值保持一致）</p>
           </div>
         </div>
 
@@ -1049,9 +1096,9 @@ const quickGuideMap: Record<string, { title: string; steps: string[]; docUrl: st
   wechat_mp: {
     title: '微信公众号内容接入步骤（服务器配置回调）',
     steps: [
-      '保存本配置，获得回调地址与 Token（Token 仅创建时显示一次，请立即复制保存）',
-      '前往公众平台后台 →「设置与开发」→「服务器配置」→ 修改配置',
-      'URL 填下方回调地址，Token 填上一步复制的值；选择「明文模式」可直接启用，选择「安全模式」需同时把生成的 EncodingAESKey 填回本页',
+      '保存本配置获得回调地址与 Token；Token 可在「自定义 Token」填入公众平台侧已生成的值（3~32 位字母数字），留空则自动生成（仅设置时明文显示一次，请立即复制）',
+      '前往公众平台后台 →「设置与开发」→「基本配置」→ 服务器配置「修改配置」',
+      'URL 填回调地址，Token 填自定义或保存后复制的值；选择「明文模式」可直接启用，选择「安全模式」需同时把生成的 EncodingAESKey 填回本页',
       '点击「启用」，微信自动发起 URL 验证，通过后本页显示「已验证」',
       '此后每次群发完成，系统自动把文章收进知识库，无需改变正常推送习惯',
       'IP 白名单：回调接收不需要；接口同步（后续版本）才需在公众平台后台加入服务器出口 IP',
@@ -1119,6 +1166,43 @@ function copyUrl(url: string, id?: string) {
 const mpTokenPlaintext = ref('')
 const rotatingToken = ref(false)
 
+// WP11：自定义回调 Token（可选，留空=服务端自动生成）；前端先行校验口径与后端一致
+const mpCustomToken = ref('')
+const mpCustomTokenError = ref('')
+const MP_TOKEN_PATTERN = /^[A-Za-z0-9]{3,32}$/
+
+// 保存成功后展示「公众平台服务器配置」一站式面板（三件套 + 逐步指引）
+const mpSetupVisible = ref(false)
+// 最近一次保存/轮换的 Token 是否来自用户自定义（面板提示文案区分）
+const mpTokenFromCustom = ref(false)
+
+// 未保存/掩码态的 Token 占位文案：已输入自定义 Token 时提示「将使用自定义 Token」
+const mpTokenPlaceholder = computed(() => {
+  if (mpCustomToken.value.trim()) return '将使用自定义 Token'
+  return editingId.value ? (form.value.config.callback_token || '***') : '保存后自动生成'
+})
+
+// 明文一次性提示：自定义时强调与输入值一致，可直接从自己填的值复制
+const mpTokenPlaintextHint = computed(() => {
+  return mpTokenFromCustom.value
+    ? '已保存为你自定义的 Token（与输入框填写值一致）。Token 仅本次明文显示，请立即复制并粘贴到公众平台。'
+    : '⚠️ Token 仅本次明文显示，关闭弹窗后只能看到掩码。请立即复制保存。'
+})
+
+// 面板用：用户刚输入且非掩码的 EncodingAESKey 明文（编辑态回显为 *** 时视为不可见）
+const mpAesKeyPlaintext = computed(() => {
+  const v = form.value.config.encoding_aes_key
+  return typeof v === 'string' && v && !v.startsWith('***') ? v : ''
+})
+
+function resetMpTokenState() {
+  mpTokenPlaintext.value = ''
+  mpCustomToken.value = ''
+  mpCustomTokenError.value = ''
+  mpSetupVisible.value = false
+  mpTokenFromCustom.value = false
+}
+
 async function handleRotateMpToken() {
   if (!editingId.value) return
   if (!confirm('重置后旧 Token 立即失效，需到公众平台后台同步更新并重新保存服务器配置。确定重置吗？')) return
@@ -1127,6 +1211,8 @@ async function handleRotateMpToken() {
     const res = await rotateWechatMpToken(editingId.value)
     if (res.success && res.callback_token_plaintext) {
       mpTokenPlaintext.value = res.callback_token_plaintext
+      mpTokenFromCustom.value = false
+      mpSetupVisible.value = true
       toast.success('回调 Token 已重置，请复制新 Token 并更新公众平台后台')
       await loadChannels()
     } else {
@@ -1152,7 +1238,7 @@ function openAddChannel() {
   formError.value = ''
   formInitialSnapshot.value = JSON.parse(JSON.stringify(form.value))
   resetWaitingIndicator()
-  mpTokenPlaintext.value = ''
+  resetMpTokenState()
   showForm.value = true
 }
 
@@ -1162,7 +1248,7 @@ function editChannel(ch: any) {
   formError.value = ''
   formInitialSnapshot.value = JSON.parse(JSON.stringify(form.value))
   loadWaitingIndicator(ch.config?.waiting_indicator)
-  mpTokenPlaintext.value = ''
+  resetMpTokenState()
   showForm.value = true
 }
 
@@ -1230,24 +1316,47 @@ async function saveChannel(): Promise<boolean> {
         ? { enabled: true, message: wi.message || DEFAULT_WAITING_MESSAGE }
         : { enabled: false }
     }
-    // wechat_mp：enabled 开关与同步周期规整（callback_token 由服务端生成，前端不传）
+    // wechat_mp：enabled 开关与同步周期规整；callback_token 可选自定义（留空=服务端生成）
     if (form.value.channel_type === 'wechat_mp') {
       payload.config.enabled = form.value.config.enabled !== false
       const hours = parseInt(String(form.value.config.sync_interval_hours ?? ''), 10)
       payload.config.sync_interval_hours = Number.isFinite(hours) && hours > 0 ? hours : 6
-      delete payload.config.callback_token
-    }
-    if (editingId.value) {
-      await updateChannel(editingId.value, payload as any)
-    } else {
-      const res = await createChannel({ channel_type: form.value.channel_type, name: trimmedName, config: payload.config, subagent_type: payload.subagent_type } as any)
-      // 新增保存后切换为编辑态，再次点「保存」变为更新而非重复创建
-      const createdId = res?.channel?.config_id
-      if (createdId) editingId.value = createdId
-      // wechat_mp：callback_token 仅创建响应返回一次明文，立即展示供复制
-      if (form.value.channel_type === 'wechat_mp' && res?.callback_token_plaintext) {
-        mpTokenPlaintext.value = res.callback_token_plaintext
+      const customToken = mpCustomToken.value.trim()
+      if (customToken) {
+        // 前端先行校验（口径与后端一致：3~32 位字母数字）
+        if (!MP_TOKEN_PATTERN.test(customToken)) {
+          const msg = '自定义回调 Token 需为 3~32 位字母或数字'
+          formError.value = msg
+          mpCustomTokenError.value = msg
+          return false
+        }
+        // 传入自定义 Token：创建=直接使用；编辑=视为改密（旧 Token 失效）
+        payload.config.callback_token = customToken
+      } else {
+        // 留空：创建=服务端生成；编辑=保留旧值
+        delete payload.config.callback_token
       }
+    }
+    let saved: any = null
+    if (editingId.value) {
+      saved = await updateChannel(editingId.value, payload as any)
+    } else {
+      saved = await createChannel({ channel_type: form.value.channel_type, name: trimmedName, config: payload.config, subagent_type: payload.subagent_type } as any)
+      // 新增保存后切换为编辑态，再次点「保存」变为更新而非重复创建
+      const createdId = saved?.channel?.config_id
+      if (createdId) editingId.value = createdId
+    }
+    // wechat_mp：callback_token 仅在设置/变更时随响应返回一次明文，立即展示供复制；
+    // 同时展示「公众平台服务器配置」一站式面板（三件套 + 指引）
+    if (form.value.channel_type === 'wechat_mp') {
+      if (saved?.callback_token_plaintext) {
+        mpTokenPlaintext.value = saved.callback_token_plaintext
+      }
+      // 先记录是否来自自定义再清空输入框（清空后占位文案不再显示"将使用自定义 Token"）
+      mpTokenFromCustom.value = Boolean(mpCustomToken.value.trim())
+      mpCustomToken.value = ''
+      mpCustomTokenError.value = ''
+      mpSetupVisible.value = true
     }
     // 保存后重拍快照，标记无未保存修改
     formInitialSnapshot.value = JSON.parse(JSON.stringify(form.value))

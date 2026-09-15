@@ -233,13 +233,31 @@ class TestEncryptionAndRotation:
                            params={"signature": _sign(new_token, ts, nonce), "timestamp": ts, "nonce": nonce, "echostr": "echo-ok"})
         assert r_new.status_code == 200 and r_new.text == "echo-ok"
 
-    def test_update_ignores_callback_token(self, tenant_id, mp_config):
-        """callback_token 只能由服务端生成/轮换，update 入参一律忽略。"""
-        config_id, cfg = mp_config
-        ChannelConfigDB.update(config_id, {"appid": APPID, "callback_token": "attacker-token",
-                                           "original_id": ORIGINAL_ID})
-        after = ChannelConfigDB.get_by_id_decrypted(config_id)["config"]
-        assert after["callback_token"] == cfg["callback_token"], "update 不得改 token"
+    def test_update_callback_token_custom_change_and_preserve(self, tenant_id, mp_config):
+        """WP11：update 传合法明文 Token=改密（版本递增+撤销验证态，语义与轮换一致）；
+        留空/掩码保留现值（不可清空保护不回归）；非法格式拒绝且不改值。"""
+        config_id, _cfg = mp_config
+        old_row = ChannelConfigDB.get_by_id(config_id)
+
+        # 合法明文 → 改密生效
+        assert ChannelConfigDB.update(config_id, {"appid": APPID, "callback_token": "RotatedToken99",
+                                                  "original_id": ORIGINAL_ID})
+        after = ChannelConfigDB.get_by_id(config_id)
+        assert ChannelConfigDB.get_by_id_decrypted(config_id)["config"]["callback_token"] == "RotatedToken99"
+        assert after["config"]["credential_version"] == old_row["config"]["credential_version"] + 1
+        assert "config_verified_at" not in after["config"]  # 回调验证态撤销
+        assert after["verified"] == 0  # 列表页验证标志与 rotate_wechat_mp_token 语义一致
+
+        # 留空/掩码 → 保留现值
+        assert ChannelConfigDB.update(config_id, {"appid": APPID, "callback_token": "", "original_id": ORIGINAL_ID})
+        assert ChannelConfigDB.update(config_id, {"appid": APPID, "callback_token": "***", "original_id": ORIGINAL_ID})
+        assert ChannelConfigDB.get_by_id_decrypted(config_id)["config"]["callback_token"] == "RotatedToken99"
+
+        # 非法格式 → ValueError 拒绝，值不变
+        with pytest.raises(ValueError, match="3~32"):
+            ChannelConfigDB.update(config_id, {"appid": APPID, "callback_token": "bad token",
+                                               "original_id": ORIGINAL_ID})
+        assert ChannelConfigDB.get_by_id_decrypted(config_id)["config"]["callback_token"] == "RotatedToken99"
 
     def test_update_appid_rebind_conflict_raises_integrity_error(self, tenant_id, mp_config):
         """appid 允许变更（CR P1-2 定稿），撞同租户唯一索引时 IntegrityError 上抛（API 层转 409）。

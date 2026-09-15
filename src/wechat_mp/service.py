@@ -23,6 +23,12 @@
   响应不可确认记 unknown，P1 禁止自动重扣；计费失败不回滚内容、不重嵌。
 - **余额**：run 启动预检（不足记 skipped_no_credit 终态）+ 每付费单元（embedding）
   前复查；action='check' 的复核类 item 不受启动预检阻断（删除复核免费）。
+- **图片 VL 解析（WP10，P2）**：有图且文字 < MIN_TEXT_CHARS 时先下载转存微信 CDN
+  图片（image_downloader.py）→ VL 解析（vision.py，无可用多模态模型不发纯文本
+  模型）→ [图片N: 描述] 插回正文入库；无模型/全部失败维持 deferred；文字充足
+  的文章不触发 VL（P3 再评估全量解析）。VL 按张计费 source_type=
+  'wechat_mp_image_parse'，业务提交后独立落账 fail-open，与 embedding 计费合并
+  回写 item 计费字段。
 - **恢复**：``recover_stale_runs()`` —— heartbeat 超时且锁已失效的 running run 标
   interrupted；queued 保持等待。
 
@@ -55,6 +61,7 @@ from src.knowledge.embedding.embedding_client import sanitize_error_info
 from src.knowledge.vector_db.vector_db import get_vector_db
 from src.wechat_mp.content import (
     ContentExtractionError,
+    ContentNode,
     ExtractedArticle,
     extract_article,
     nodes_to_text,
@@ -66,11 +73,18 @@ from src.wechat_mp.fetcher import (
     MPArticleFetcher,
 )
 from src.wechat_mp.identity import URLIdentity, URLIdentityError, normalize_url
+from src.wechat_mp.image_downloader import MPImageDownloader
 from src.wechat_mp.notify import notify_queued_work
+from src.wechat_mp.vision import (
+    VISION_PARSE_SOURCE_TYPE,
+    VisionParseOutcome,
+    VisionParser,
+    calculate_image_parse_credit_cost,
+)
 
 # ------------------------------- 常量 -------------------------------
 
-PIPELINE_VERSION = "p1"
+PIPELINE_VERSION = "p2"
 DOC_ORIGIN = "wechat_mp"
 EMBEDDING_SOURCE_TYPE = "wechat_mp_embedding"
 EMBEDDING_MODEL = "text-embedding-v3"
@@ -91,7 +105,11 @@ RETRY_MAX_SECONDS = 86400  # 退避上限 24h
 RETRY_MAX_SHIFT = 8
 
 SUMMARY_MAX_CHARS = 300  # P1 确定性截断摘要（不调 LLM）
-MIN_TEXT_CHARS = 20  # 有图且文字不足 → deferred（设计 §13 审阅记录）
+MIN_TEXT_CHARS = 20  # 有图且文字不足 → VL 解析（P2），仍失败才 deferred（设计 §13 审阅记录）
+
+# P2 图片 VL 解析 deferred 原因文案（error_code 仍为 deferred_image_pending）
+_DEFERRED_NO_MODEL = "图片待解析：无可用多模态模型，将自动重试"
+_DEFERRED_PARSE_FAILED = "图片待解析：图片下载或解析全部失败，将自动重试"
 
 # item error_code 固定原因码（不混存记录 ID；记录 ID 走 duplicate_of_item_id/billing_reference）
 ERR_NO_CREDIT = "no_credit"
@@ -641,6 +659,8 @@ class WeChatMPSyncService:
         redis: Any = None,
         embedding_client: Any = None,
         chunker: Optional[TextChunker] = None,
+        image_downloader: Optional[MPImageDownloader] = None,
+        vision_parser: Optional[VisionParser] = None,
     ):
         self._fetcher = fetcher or MPArticleFetcher()
         if redis is None:
@@ -649,6 +669,8 @@ class WeChatMPSyncService:
             redis = redis_client
         self._redis = redis
         self._embedding_client = embedding_client  # 测试注入；None 时懒加载真实 client
+        self._image_downloader = image_downloader  # WP10 图片下载转存（测试可注入）
+        self._vision_parser = vision_parser  # WP10 VL 解析（测试可注入）
         if chunker is None:
             from src.config.settings import settings
 
@@ -954,17 +976,22 @@ class WeChatMPSyncService:
                 return
             # doc 行不存在 → 继续重建
 
-        # ---- 6. 纯图/空短文本门禁（P1 deferred，不每轮重试）----
+        # ---- 6. 纯图/短文本门禁（P2：图片 VL 解析提前，设计 §6.1/§6.2）----
         # 占位符必须整段剔除：只删 "[图片" 前缀会残留 "N]"，图片多时残留字符
         # 累积越过阈值，纯图文章漏判 deferred 并对空内容计费（CR P1 修复）
         plain_text = _IMAGE_PLACEHOLDER_RE.sub("", body_text).strip()
+        image_billing_successes: List[Any] = []
+        image_meta: Dict[str, Any] = {}
         if extracted.image_count > 0 and len(plain_text) < MIN_TEXT_CHARS:
-            self._mark_item_deferred(
-                tenant_id, item_id,
-                "正文文字不足且有图片，待 P2 图片解析版本处理",
+            # P2 范围决策（计划 WP10 节）：仅「文字不足且有图」触发 VL 解析（负责人
+            # 痛点：纯图/图文文章被 deferred 无法入库）；文字充足的文章维持 [图片N]
+            # 占位不解析，图片描述全量插回留待 P3 分类阶段再评估
+            parse_result = await self._parse_images_or_defer(
+                tenant_id, item, article, extracted
             )
-            self._mark_article_deferred(tenant_id, article["id"], extracted)
-            return
+            if parse_result is None:
+                return  # 已置 deferred（无可用模型/全部失败）或 no_credit
+            body_text, image_meta, image_billing_successes = parse_result
 
         # ---- 7. 付费单元前余额复查 ----
         balance_ok, _ = self._check_credit(tenant_id)
@@ -999,6 +1026,7 @@ class WeChatMPSyncService:
             chunks=chunks,
             embeddings=embeddings,
             action=action,
+            image_meta=image_meta or None,
         )
 
         # ---- 10. 售前挂接 + 计费（业务已提交，fail-open）----
@@ -1011,6 +1039,111 @@ class WeChatMPSyncService:
             embedding_tokens=embedding_tokens,
             item_id=item_id,
         )
+        if image_billing_successes:
+            # VL 按张计费（独立提交 + 合并回写 item 计费字段，fail-open）
+            self._bill_image_parses(
+                tenant_id=tenant_id,
+                user_id=item.get("user_id") or run.get("user_id"),
+                article_row_id=article["id"],
+                item_id=item_id,
+                successes=image_billing_successes,
+            )
+
+    # ==================== 图片 VL 解析（WP10，P2） ====================
+
+    async def _parse_images_or_defer(
+        self,
+        tenant_id: str,
+        item: Dict[str, Any],
+        article: Dict[str, Any],
+        extracted: ExtractedArticle,
+    ) -> Optional[Tuple[str, Dict[str, Any], List[Any]]]:
+        """图片下载 + VL 解析 + 正文插回。返回 (增强正文, image metadata, 计费清单)。
+
+        返回 None 表示 item 已置终态（deferred / no_credit），调用方直接返回：
+        - 无可用多模态模型 → deferred（不发纯文本模型，设计 §6.2）
+        - 余额不足 → 复用 no_credit 语义（付费单元=按张 VL）
+        - 全部图片下载/解析失败 → deferred（退避重试机制自然接管）
+        """
+        vision = self._get_vision_parser()
+        if not vision.available():
+            self._mark_item_deferred(tenant_id, item["id"], _DEFERRED_NO_MODEL)
+            self._mark_article_deferred(
+                tenant_id, article["id"], extracted, _DEFERRED_NO_MODEL
+            )
+            return None
+
+        # 文章级余额预检：不足整篇跳过解析（免费动作不预扣，只拦截付费单元）
+        ok, _ = self._check_credit(tenant_id)
+        if not ok:
+            self._mark_item_no_credit(tenant_id, item)
+            self._mark_article_no_credit_retry(tenant_id, article["id"])
+            return None
+
+        # 下载转存（同步 httpx + Pillow，线程内执行；逐张独立不中断）
+        # 编号必须与 _merge_image_descriptions/nodes_to_text 的图片序数一致
+        # （第 N 个 image 节点即图片 N）——用全节点索引会在混排（短文字+图）文章
+        # 中错位：描述张冠李戴、跨图丢描述（WP10 测试期修复）
+        srcs: List[Tuple[int, str]] = []
+        img_seq = 0
+        for node in extracted.nodes:
+            if node.type == "image" and node.src:
+                img_seq += 1
+                srcs.append((img_seq, node.src))
+        outcome = VisionParseOutcome()
+        dl = await asyncio.to_thread(
+            self._get_image_downloader().download, tenant_id, article["id"], srcs
+        )
+        if dl.images:
+            outcome = await vision.describe_images(
+                [(img.n, img.local_path) for img in dl.images], tenant_id
+            )
+
+        if not outcome.descriptions:
+            message = _DEFERRED_NO_MODEL if outcome.no_model else _DEFERRED_PARSE_FAILED
+            self._mark_item_deferred(tenant_id, item["id"], message)
+            self._mark_article_deferred(tenant_id, article["id"], extracted, message)
+            return None
+
+        # [图片N: 描述] 插回原文位置；失败图片保留 [图片N] 占位照常入库
+        enhanced_nodes = self._merge_image_descriptions(
+            extracted.nodes, outcome.descriptions
+        )
+        enhanced_text = nodes_to_text(enhanced_nodes)
+        image_meta = {
+            "image_local_paths": [img.local_path for img in dl.images],
+            "image_parse_failed_count": len(outcome.failures),
+            "image_skipped_count": dl.skipped_over_limit,
+        }
+        return enhanced_text, image_meta, list(outcome.successes)
+
+    @staticmethod
+    def _merge_image_descriptions(
+        nodes: List[ContentNode], descriptions: Dict[int, str]
+    ) -> List[ContentNode]:
+        """把 VL 描述以 [图片N: 描述] 文本节点替换对应 image 节点（保序）。
+
+        失败图片同样替换为 [图片N] 文本节点并保留**原始编号**——若保留 image 节点，
+        nodes_to_text 会按剩余图片重新编号，导致占位序号与转存文件/描述错位。
+        注意：不动 extracted.nodes 原列表——content_hash 在替换前已按原始节点
+        计算完毕，VL 输出的不确定性不得影响内容指纹（否则 LLM 措辞变化会造成
+        hash 漂移触发无谓重建）。
+        """
+        merged: List[ContentNode] = []
+        img_idx = 0
+        for node in nodes:
+            if node.type == "image":
+                img_idx += 1
+                desc = descriptions.get(img_idx)
+                if desc:
+                    merged.append(
+                        ContentNode(type="text", text=f"[图片{img_idx}: {desc}]")
+                    )
+                else:
+                    merged.append(ContentNode(type="text", text=f"[图片{img_idx}]"))
+            else:
+                merged.append(node)
+        return merged
 
     # ==================== 终态分支 ====================
 
@@ -1288,6 +1421,7 @@ class WeChatMPSyncService:
         chunks: List[Dict[str, Any]],
         embeddings: List[List[float]],
         action: str,
+        image_meta: Optional[Dict[str, Any]] = None,
     ) -> int:
         """单事务落 documents/chunks/chunks_vec + articles + item（+惰性分类）。
 
@@ -1305,6 +1439,9 @@ class WeChatMPSyncService:
             "sync_run_id": run["id"],
             "image_count": extracted.image_count,
         }
+        if image_meta:
+            # WP10：图片转存路径 / VL 解析失败数 / 超上限跳过数（供前端详情与对账）
+            metadata.update(image_meta)
         summary = body_text[:SUMMARY_MAX_CHARS] if body_text else None
         raw_text = body_text
         # 时间统一 UTC：列类型 TIMESTAMP（无时区），写前去 tz 防会话时区偏移
@@ -1635,6 +1772,178 @@ class WeChatMPSyncService:
                 "后端日志：wechat_mp 计费状态回写失败 item_id={}: {}", item_id, e
             )
 
+    # ==================== 图片 VL 按张计费（WP10，设计 §6.2/D2） ====================
+
+    @staticmethod
+    def _get_image_parse_price() -> Tuple[float, int]:
+        """读取按张单价（token_cost_prices.price_per_call，model_code=wechat_mp_image_parse）
+        与 usage_factor；缺配置返回 (0, factor)（不扣费不阻断，对齐 ASR 单价缺失口径）。"""
+        from src.config.settings import create_settings
+
+        factor = int(getattr(create_settings().billing, "usage_factor", 100) or 100)
+        try:
+            from src.db.models import TokenCostPriceDB
+
+            tcp = TokenCostPriceDB.get_by_model_name(VISION_PARSE_SOURCE_TYPE)
+            if not tcp:
+                logger.bind(module="wechat_mp").warning(
+                    "wechat_mp 图片按张单价未配置（token_cost_prices 无 "
+                    "model_code=wechat_mp_image_parse 行），credit_cost=0"
+                )
+                return 0.0, factor
+            return float(tcp.get("price_per_call") or 0), factor
+        except Exception as e:  # noqa: BLE001 单价读取失败按 0 计，不阻断入库
+            logger.opt(exception=True).error(
+                "后端日志：wechat_mp 图片按张单价读取异常（按 0 计）: {}", e
+            )
+            return 0.0, factor
+
+    def _bill_image_parses(
+        self,
+        *,
+        tenant_id: str,
+        user_id: Optional[str],
+        article_row_id: int,
+        item_id: int,
+        successes: List[Any],
+    ) -> None:
+        """VL 按张计费（业务提交后独立提交，fail-open，对齐 _bill_embedding 口径）。
+
+        - 每成功 1 张写一条 chat_records(source_type='wechat_mp_image_parse')，
+          credit_cost=ceil(price_per_call × usage_factor × 100)/100（与 ASR 按次公式
+          同源）；VL 实际 token 用量记 usage_breakdown 供对账，收费按张不按 token
+        - gateway.chat() 只做观测性 usage 记录不落账，本方法为唯一计费写入点（无双重扣费）
+        - ChatRecordDB.create 内部异常返回 None 且无法区分失败阶段（可能已扣也可能
+          未扣）→ 该张记 unknown，禁止自动重扣（设计 §7.4）
+        - item.billing_status/billing_reference/credits_charged 与 embedding 计费合并
+          回写（两笔独立提交，任一 unknown 即整条标 unknown 防自动补扣误判）
+        """
+        if not successes:
+            return
+        price_per_call, usage_factor = self._get_image_parse_price()
+        per_image_credit = calculate_image_parse_credit_cost(price_per_call, usage_factor)
+
+        image_credits = 0.0
+        image_unknown = False
+        record_ids: List[str] = []
+        import time as _time
+
+        for s in successes:
+            try:
+                from src.db.models import ChatRecordDB
+
+                record = ChatRecordDB.create(
+                    session_id=(
+                        f"{VISION_PARSE_SOURCE_TYPE}_{article_row_id}_"
+                        f"{int(_time.time())}"
+                    ),
+                    tenant_id=tenant_id,
+                    user_id=str(user_id) if user_id is not None else None,
+                    user_message=f"公众号文章图片解析（第{s.n}张）",
+                    assistant_message=(s.description or "")[:500],
+                    total_token_count=int(s.usage.get("total_tokens") or 0),
+                    prompt_tokens=int(s.usage.get("prompt_tokens") or 0),
+                    completion_tokens=int(s.usage.get("completion_tokens") or 0),
+                    model=s.model,
+                    provider=s.provider,
+                    status="completed",
+                    source_type=VISION_PARSE_SOURCE_TYPE,
+                    credit_cost=per_image_credit,
+                    usage_breakdown={
+                        "billing_mode": "per_call",
+                        "price_per_call": price_per_call,
+                        "usage_factor": usage_factor,
+                        "image_n": s.n,
+                        "article_row_id": article_row_id,
+                        "vl_usage": s.usage,
+                    },
+                )
+            except Exception as e:  # noqa: BLE001 单张计费失败不回滚内容
+                record = None
+                logger.opt(exception=True).error(
+                    "后端日志：wechat_mp 图片计费异常（记 unknown）tenant_id={} "
+                    "article_id={} image_n={}: {}",
+                    tenant_id, article_row_id, s.n, sanitize_error_info(str(e)),
+                )
+            if record and record.get("record_id"):
+                image_credits += per_image_credit
+                record_ids.append(record["record_id"])
+            else:
+                image_unknown = True
+                logger.bind(module="wechat_mp").error(
+                    "wechat_mp 图片计费结果不可确认（记 unknown，不重扣）"
+                    "tenant_id={} article_id={} image_n={}",
+                    tenant_id, article_row_id, s.n,
+                )
+
+        logger.bind(module="wechat_mp").info(
+            "wechat_mp 图片按张计费 tenant_id={} article_id={} images={} "
+            "credits={} unknown={}",
+            tenant_id, article_row_id, len(successes), image_credits, image_unknown,
+        )
+        self._merge_item_billing(
+            tenant_id, item_id,
+            extra_credits=image_credits,
+            extra_reference=",".join(record_ids) or None,
+            extra_unknown=image_unknown,
+        )
+
+    def _merge_item_billing(
+        self,
+        tenant_id: str,
+        item_id: int,
+        *,
+        extra_credits: float,
+        extra_reference: Optional[str],
+        extra_unknown: bool,
+    ) -> None:
+        """把图片计费结果合并进 item 既有计费字段（embedding 计费可能已写入）。
+
+        合并语义：credits 累加；reference 以逗号拼接；任一来源 unknown → 整条
+        记 unknown（存在未确认扣款时禁止自动补扣，宁保守勿漏记）。
+        """
+        try:
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    SELECT billing_status, billing_reference, credits_charged
+                    FROM bs_wechat_mp_sync_items
+                    WHERE id = %s AND tenant_id = %s
+                    """,
+                    (item_id, tenant_id),
+                )
+                row = cursor.fetchone()
+                if not row:
+                    return
+                credits = float(row["credits_charged"] or 0) + extra_credits
+                refs = [
+                    r for r in (row["billing_reference"], extra_reference) if r
+                ]
+                reference = ",".join(refs) or None
+                statuses = {row["billing_status"] or "not_required"}
+                if extra_unknown:
+                    statuses.add("unknown")
+                if "unknown" in statuses:
+                    status = "unknown"
+                elif "charged" in statuses:
+                    status = "charged"
+                else:
+                    status = "not_required"
+                cursor.execute(
+                    """
+                    UPDATE bs_wechat_mp_sync_items
+                    SET billing_status = %s, billing_reference = %s, credits_charged = %s
+                    WHERE id = %s AND tenant_id = %s
+                    """,
+                    (status, reference, credits, item_id, tenant_id),
+                )
+                conn.commit()
+        except Exception as e:  # noqa: BLE001 合并失败不影响已落账记录
+            logger.opt(exception=True).error(
+                "后端日志：wechat_mp 图片计费合并回写失败 item_id={}: {}", item_id, e
+            )
+
     # ==================== 余额 ====================
 
     def _check_credit(self, tenant_id: str) -> Tuple[bool, str]:
@@ -1847,19 +2156,28 @@ class WeChatMPSyncService:
             conn.commit()
 
     def _mark_article_deferred(
-        self, tenant_id: str, article_id: int, extracted: ExtractedArticle
+        self,
+        tenant_id: str,
+        article_id: int,
+        extracted: ExtractedArticle,
+        message: str = "有图片且文字不足，待图片解析版本处理",
     ) -> None:
+        """文章行置 deferred（P2：图片 VL 解析不可用/失败）。
+
+        deferred 不进失败退避（next_retry_at=NULL，非技术失败）；自动重试由
+        scheduler 24h 存活复核通道承接（processing_status='deferred' 在复核到期
+        条件内，error_message 向用户承诺「将自动重试」）。
+        """
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 """
                 UPDATE bs_wechat_mp_articles
                 SET processing_status = 'deferred', image_count = %s,
-                    last_checked_at = now(),
-                    error_message = '有图片且文字不足，待 P2 图片解析版本处理'
+                    last_checked_at = now(), error_message = %s
                 WHERE id = %s AND tenant_id = %s
                 """,
-                (extracted.image_count, article_id, tenant_id),
+                (extracted.image_count, message, article_id, tenant_id),
             )
             conn.commit()
 
@@ -1958,6 +2276,18 @@ class WeChatMPSyncService:
 
             self._embedding_client = TextEmbeddingV3Client(api_key=get_embedding_api_key())
         return self._embedding_client
+
+    def _get_image_downloader(self) -> MPImageDownloader:
+        """图片下载转存器（测试可注入；默认真实实现）。"""
+        if self._image_downloader is None:
+            self._image_downloader = MPImageDownloader()
+        return self._image_downloader
+
+    def _get_vision_parser(self) -> VisionParser:
+        """VL 解析器（测试可注入；默认真实实现，模型清单实时查库）。"""
+        if self._vision_parser is None:
+            self._vision_parser = VisionParser()
+        return self._vision_parser
 
     @staticmethod
     def _content_hash(title: str, nodes: List[Any]) -> str:
