@@ -906,6 +906,16 @@ def _materialize_batch(conn, tenant_id: str, task_id: UUID, task_conversation_bi
         """,
         (tenant_id, task_id, batch_id, input_version, json.dumps(message_ids), payload.get("observation_id"), batch_status),
     )
+    if batch_status == "accepted":
+        # C3：新批次接纳 → 旧决策 superseded + 未开始发送取消（设计 §6/§9）。
+        # 调用方（ingest_events）已持 subject→assignment/task 锁，锁序不变。
+        from . import decisions as decisions_mod
+
+        decisions_mod.supersede_decisions_on_batch(conn, tenant_id, task_id, input_version)
+        # 人工介入判定（设计 §5）：self 消息无法归属到冻结决策正文 → human_required
+        self_messages = [m for m in messages if m.get("sender") == "self"]
+        if self_messages and decisions_mod.check_manual_intervention(conn, tenant_id, task_id, self_messages):
+            decisions_mod.handle_manual_intervention(conn, tenant_id, task_id)
 
 
 def create_decision(tenant_id: str, device_id: UUID, assignment_id: UUID, fence: int, batch_id: str,
@@ -921,6 +931,7 @@ def create_decision(tenant_id: str, device_id: UUID, assignment_id: UUID, fence:
         raise SessionTaskError(f"非法 decision_kind: {decision_kind}", ERR_VALIDATION_FAILED)
     if not tenant_allowed(tenant_id):
         raise SessionTaskError("会话任务功能未启用", ERR_FEATURE_DISABLED, 403)
+    cfg = get_session_tasks_config()
     from src.weixin_conversation.config import scenario_enabled
 
     if not scenario_enabled(tenant_id):  # 场景开关热读（评审 P2-5）：关闭即阻止新决策
@@ -964,8 +975,18 @@ def create_decision(tenant_id: str, device_id: UUID, assignment_id: UUID, fence:
                 f"批次状态 {batch['status']} 不可作为决策输入（历史对账批次不得触发新决策）", "CONFLICT", 409
             )
         if decision_kind == DECISION_KIND_OPENING:
+            if not cfg.opening_enabled:
+                raise SessionTaskError("开场白决策未启用", ERR_FEATURE_DISABLED, 403)
             if not batch["synthetic"]:
                 raise SessionTaskError("opening 决策只能引用 opening 合成批次", ERR_VALIDATION_FAILED)
+            # §13.2：已有发布后新入站 → 取消 opening（不再产生；需主动开场须新任务）
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT COUNT(*) AS n FROM session_task_batches WHERE tenant_id=%s AND task_id=%s AND synthetic=FALSE AND status='accepted'",
+                (tenant_id, a["task_id"]),
+            )
+            if int(cursor.fetchone()["n"]) > 0:
+                raise SessionTaskError("已有新入站消息，开场白取消（不自动重新生成）", "CONFLICT", 409)
         elif batch["synthetic"]:
             raise SessionTaskError("reply 决策不得引用 opening 合成批次", ERR_VALIDATION_FAILED)
         elif int(input_version) != batch["input_version"]:
@@ -1005,12 +1026,13 @@ def create_decision(tenant_id: str, device_id: UUID, assignment_id: UUID, fence:
 
 
 def get_decision(tenant_id: str, device_id: UUID, assignment_id: UUID, decision_id: UUID) -> Dict[str, Any]:
-    """决策状态查询（设备只读自己 assignment 的决策）。"""
+    """决策状态查询（设备只读自己 assignment 的决策；含冻结 action 供端侧分流）。"""
     with _conn() as conn:
         cursor = conn.cursor()
         cursor.execute(
             """
-            SELECT d.id, d.status, d.decision_kind, d.batch_id, d.input_version, d.reply_text_hash, d.updated_at
+            SELECT d.id, d.status, d.decision_kind, d.batch_id, d.input_version, d.reply_text_hash,
+                   d.action, d.failure_code, d.updated_at
             FROM session_task_decisions d
             JOIN session_task_assignments a ON a.tenant_id=d.tenant_id AND a.task_id=d.task_id
             WHERE d.tenant_id=%s AND d.id=%s AND a.id=%s AND a.device_id=%s AND a.is_current=TRUE

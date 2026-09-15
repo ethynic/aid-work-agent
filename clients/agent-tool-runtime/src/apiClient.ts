@@ -147,6 +147,21 @@ export interface SessionTaskDecision {
   decision_kind: string
   batch_id: string
   input_version: number
+  /** C3：冻结的模型动作（reply/wait/handoff/done；null=未冻结） */
+  action: string | null
+}
+
+/** prepare-send 响应（C3 §9）：invocation_id 为 null 表示决策已不可发送 */
+export interface SessionTaskPrepareSendResult {
+  invocation_id: string | null
+  decision_status: string | null
+  run_id: string | null
+}
+
+/** 定向 claim 响应（C3 §9）：invocation 为 null 时 state 携带当前状态 */
+export interface SessionTaskTargetedClaim {
+  invocation: ClaimedInvocation | null
+  state: string
 }
 
 export class ApiClient {
@@ -406,6 +421,50 @@ export class ApiClient {
       decision_kind: String(data['decision_kind'] ?? ''),
       batch_id: String(data['batch_id'] ?? ''),
       input_version: Number(data['input_version'] ?? 0),
+      action: (data['action'] as string | null | undefined) ?? null,
+    }
+  }
+
+  /** prepare-send（C3 §9）：ready reply/opening → 幂等物化单条底座执行单元。
+   * 决策已 superseded/失配时返回 {invocation_id: null, decision_status}（200）。 */
+  async sessionTaskPrepareSend(assignmentId: string, decisionId: string, fence: number, signal?: AbortSignal): Promise<SessionTaskPrepareSendResult> {
+    const res = (await this.post(
+      `/api/local-tools/runtime/session-tasks/${assignmentId}/decisions/${decisionId}/prepare-send`,
+      { fence },
+      { signal, timeoutMs: 30_000 },
+    )) as Record<string, unknown>
+    const data = this.sessionData(res)
+    const invocationId = data['invocation_id']
+    return {
+      invocation_id: typeof invocationId === 'string' && invocationId ? invocationId : null,
+      decision_status: (data['decision_status'] as string | null | undefined) ?? null,
+      run_id: (data['run_id'] as string | null | undefined) ?? null,
+    }
+  }
+
+  /** 定向领取 session 道 invocation（§9：不领取任意 invocation；复用 v2 claim token）。
+   * 不可领取（非 queued/任务非 active）返回 {invocation: null, state}，不抛错。 */
+  async sessionTaskClaimInvocation(assignmentId: string, invocationId: string, fence: number, signal?: AbortSignal): Promise<SessionTaskTargetedClaim> {
+    const res = (await this.post(
+      `/api/local-tools/runtime/session-tasks/${assignmentId}/invocations/${invocationId}/claim`,
+      { fence },
+      { signal },
+    )) as Record<string, unknown>
+    const data = this.sessionData(res)
+    if (!data['invocation_id']) {
+      return { invocation: null, state: String(data['state'] ?? '') }
+    }
+    const leaseExpires = data['lease_expires_at']
+    return {
+      invocation: {
+        invocation_id: String(data['invocation_id']),
+        tool_name: String(data['tool_name'] ?? ''),
+        arguments: (data['arguments'] as Record<string, unknown>) ?? {},
+        claim_token: String(data['claim_token'] ?? ''),
+        lease_expires_at: typeof leaseExpires === 'string' ? leaseExpires : undefined,
+        provider: (data['provider'] as string | undefined) ?? undefined,
+      },
+      state: 'claimed',
     }
   }
 }

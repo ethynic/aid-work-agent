@@ -32,6 +32,7 @@ import { checkDesktopInteractive } from './desktopCheck.js'
 import { deriveResourceKey } from './desktopLock.js'
 import { PollLoop } from './pollLoop.js'
 import { ProviderSet } from './providerManager.js'
+import { runInvocation } from './invocationRunner.js'
 import { ResultOutbox, resultOutboxDir } from './resultOutbox.js'
 import { SessionTaskEngine, type ObserverResult, type ObserverWatermark } from './sessionTasks/engine.js'
 import { acquireSessionTasksSingleInstance, type SingleInstanceGuard } from './sessionTasks/singleInstance.js'
@@ -193,6 +194,13 @@ async function cmdStart(args: ParsedArgs): Promise<number> {
 
   const api = new ApiClient(server, token)
   const providers = new ProviderSet(entries)
+  // #6 能力真实性：v2 会话 manifest 变体仅经 config.providers.weixin.v2Send 显式
+  // 协商（隔离测试 / 真实 v2 Provider 交付后）；未协商保持真实 v1 受信形态
+  if (config?.providers?.['weixin']?.v2Send === true) {
+    const { setManifestOverride, weixinV2Manifest } = await import('./providers.js')
+    setManifestOverride('weixin', weixinV2Manifest())
+    logInfo('[runtime] weixin v2 会话能力已显式协商（v2Send=true）：manifest 升级 v2 变体')
+  }
   console.log(`[runtime] providers: ${Object.keys(entries).join(', ')}`)
   // v2 写路径数据目录（journal/ + result-outbox/，跟随 runtime home；启动重投共用同一 outbox 实例）
   const dataDir = runtimeHomeDir()
@@ -230,6 +238,19 @@ async function cmdStart(args: ParsedArgs): Promise<number> {
         withLock: <T,>(fn: () => Promise<T>) => withDesktopLock(desktopLockName(deriveResourceKey()), fn),
         observer: makeProviderSessionObserver(providers),
         emit: (msg) => logInfo(`[session-tasks] ${msg}`),
+        // C3：会话任务发送复用既有 v2 单动作执行器（许可/journal/outbox 全在原链内）；
+        // sessionPrecheck 为引擎构造的锁内会话复核（§7 顺序 4），由 runner 在桌面锁内、
+        // write-authorize 之前执行
+        runInvocation: (inv, sessionPrecheck) =>
+          runInvocation(inv, {
+            api,
+            providers,
+            desktopCheck: async () => (await checkDesktopInteractive()).interactive,
+            desktopResourceKey: deriveResourceKey(),
+            runtimeDataDir: dataDir,
+            resultOutbox: new ResultOutbox(resultOutboxDir(dataDir)),
+            sessionPrecheck,
+          }),
       })
       logInfo('[session-tasks] 会话任务引擎已启动（共享桌面锁；observer 经 weixin Provider）')
     }

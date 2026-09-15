@@ -298,6 +298,7 @@ def write_authorize(
             operation=str(args.get("operation") or ""),
             target_ref=args.get("target_ref"),
             target_version=args.get("target_version"),
+            invocation=dict(inv) if inv else None,
             payload_hash=args.get("payload_hash"),
             authorization_revision=args.get("authorization_revision"),
             authorization_epoch=args.get("authorization_epoch"),

@@ -93,6 +93,9 @@ export class ProviderManager {
       // pipe 而非 inherit：[boss-mcp] 工具调用行经 logProviderChunk 转发（控制台 + 文件落盘），
       // 脱离 start_runtime.bat 重定向启动时排障证据不再丢失（2026-09-01）
       stderr: 'pipe',
+      // SDK 默认仅透传白名单环境变量（PATH/HOME 等）——Provider 配置类变量
+      // （如联测桩 STUB_HOME、后续 Provider 侧配置）会被剥掉；显式继承完整环境
+      env: { ...process.env } as Record<string, string>,
     })
     const client = new Client(
       { name: 'agent-tool-runtime', version: '0.1.0' },

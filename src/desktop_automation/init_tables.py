@@ -367,6 +367,14 @@ DDL_STATEMENTS = (
     "ALTER TABLE local_tool_invocations ADD COLUMN IF NOT EXISTS deadline_at TIMESTAMPTZ",
     "ALTER TABLE local_tool_invocations ADD COLUMN IF NOT EXISTS authorization_epoch INTEGER",
     "ALTER TABLE local_tool_invocations ADD COLUMN IF NOT EXISTS write_phase TEXT",
+    # 会话任务执行道（设计 §10）：仅服务端设置 'session_task'，默认 'standard'。
+    # 通用 claim 在 SQL 层排除 session_task；定向 claim 只接 session_task 且绑定
+    # assignment。NOT NULL DEFAULT 使旧行迁移后即 standard，老客户端不可领新道。
+    "ALTER TABLE local_tool_invocations ADD COLUMN IF NOT EXISTS execution_lane TEXT NOT NULL DEFAULT 'standard'",
+    """
+    CREATE INDEX IF NOT EXISTS idx_lt_inv_lane_claim
+        ON local_tool_invocations (tenant_id, device_id, state, execution_lane)
+    """,
     """
     CREATE UNIQUE INDEX IF NOT EXISTS uq_lt_invocations_dedupe
         ON local_tool_invocations (tenant_id, business_kind, dedupe_key)

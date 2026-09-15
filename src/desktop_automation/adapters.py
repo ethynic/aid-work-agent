@@ -120,9 +120,12 @@ class ScenarioAdapter(Protocol):
         payload_hash: Optional[str],
         authorization_revision: Optional[str],
         authorization_epoch: Optional[int],
+        invocation: Optional[Dict[str, Any]] = None,
     ) -> AuthorizeDecision:
         """写动作许可的场景授权校验（许可事务内调用，同时锁定 subject/epoch）；
-        返回额度层级（quota_scopes），任一不足由底座在许可事务内整体回滚"""
+        返回额度层级（quota_scopes），任一不足由底座在许可事务内整体回滚。
+        invocation：许可目标 invocation 行（含 business_ref）——会话任务等需要
+        精确执行归属的场景据此复核 assignment/fence 等执行上下文"""
         ...
 
     def compile_operations(

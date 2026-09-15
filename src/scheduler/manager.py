@@ -364,6 +364,35 @@ class ScheduledTaskManager:
         except Exception as e:
             logger.error(f"后端日志：注册 weixin_marketing 调度任务失败: {e}")
 
+        # ===== 端侧会话任务决策 worker（C3；session_tasks+weixin_conversation 双门控零注册）=====
+        # tick 为同步入口（内部自带事件循环跑模型调用），与 APScheduler 解耦可直接注入调用；
+        # 适配器/决策钩子注册仅在调度器启动时执行（ensure_registered，本函数上方调用），
+        # tick 不重复注册——进程内 registry 不会自发丢失（reset 仅测试场景使用）。
+        try:
+            from src.session_tasks.config import get_session_tasks_config
+            from src.weixin_conversation import registration as wxconv_registration
+
+            st_cfg = get_session_tasks_config()
+            if st_cfg.enabled and wxconv_registration.ensure_registered():
+                from src.session_tasks.decisions import run_decision_tick
+
+                self._scheduler.add_job(
+                    run_decision_tick,
+                    IntervalTrigger(seconds=st_cfg.decision_tick_seconds),
+                    id="job_system_session_task_decisions",
+                    name="Session Task Decision Worker",
+                    max_instances=1,
+                    coalesce=True,
+                )
+                logger.info(
+                    f"后端日志：已注册 session_tasks 决策 worker (tick={st_cfg.decision_tick_seconds}s, "
+                    f"max_decisions_per_tenant={st_cfg.max_decisions_per_tenant})"
+                )
+            else:
+                logger.debug("后端日志：session_tasks 或 weixin_conversation 未启用，跳过决策 worker 注册")
+        except Exception as e:
+            logger.error(f"后端日志：注册 session_tasks 决策 worker 失败: {e}")
+
     def _run_memory_summarizer(self):
         """执行每日记忆总结（APScheduler 回调）"""
         try:

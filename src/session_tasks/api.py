@@ -22,6 +22,7 @@ from uuid import UUID
 from fastapi import APIRouter, Header, Request
 from fastapi.responses import JSONResponse, Response
 
+from . import decisions as decisions_mod
 from . import service
 from .constants import (
     ERR_IDEMPOTENCY_CONFLICT,
@@ -451,6 +452,71 @@ async def get_decision(request: Request, assignment_id: str, decision_id: str):
         return _ok(result)
     except SessionTaskError as exc:
         return _from_service_error(exc)
+
+
+@device_router.post("/{assignment_id}/decisions/{decision_id}/prepare-send")
+async def prepare_send(request: Request, assignment_id: str, decision_id: str):
+    """ready reply/opening → 幂等物化单条底座执行单元，返回 invocation_id（§9）。
+
+    决策已 superseded/版本失配时 200 返回 {invocation_id: null, decision_status}，
+    端侧据此放弃发送相位；工作时段外 409 WORK_WINDOW_CLOSED（端侧稍后重试）。
+    幂等豁免 Idempotency-Key：协议自身以 decision_id 唯一映射（execution_links
+    UNIQUE(tenant, decision)）+ 底座 dedupe_key 收敛，重复请求返回同一 invocation。
+    """
+    try:
+        device = await asyncio.to_thread(_require_device, request)
+        body = await request.json()
+        result = await asyncio.to_thread(
+            decisions_mod.prepare_send, device["tenant_id"], device["id"],
+            _parse_path_uuid(assignment_id, "assignment_id"),
+            int(body.get("fence", -1)),
+            _parse_path_uuid(decision_id, "decision_id"),
+        )
+        return _ok(result)
+    except SessionTaskError as exc:
+        return _from_service_error(exc)
+    except (TypeError, ValueError) as exc:
+        return _err(400, f"参数非法: {exc}", ERR_VALIDATION_FAILED)
+
+
+@device_router.post("/{assignment_id}/invocations/{invocation_id}/claim")
+async def claim_session_invocation(request: Request, assignment_id: str, invocation_id: str):
+    """定向领取 session 道 invocation（§9：不领取任意 invocation；复用 claim token/
+    租约与 v2 校验；通用 claim 在 SQL 层排除 session_task）。"""
+    try:
+        device = await asyncio.to_thread(_require_device, request)
+        body = await request.json()
+        from src.local_tools import catalog
+        from src.local_tools.security import generate_claim_token, sha256_hex
+
+        claim_token = generate_claim_token()
+        result = await asyncio.to_thread(
+            decisions_mod.claim_session_invocation,
+            device["tenant_id"], device["id"],
+            _parse_path_uuid(assignment_id, "assignment_id"),
+            int(body.get("fence", -1)),
+            _parse_path_uuid(invocation_id, "invocation_id"),
+            sha256_hex(claim_token),
+            60,
+            catalog.get_provider_keys_for_device(device.get("capabilities_json")),
+        )
+        invocation = result.get("invocation")
+        if invocation is None:
+            return _ok({"invocation": None, "state": result.get("state")})
+        default_provider = catalog.get_provider_key_for_device(device.get("capabilities_json"))
+        lease_expires = invocation.get("lease_expires_at")
+        return _ok({
+            "invocation_id": str(invocation["id"]),
+            "tool_name": invocation["tool_name"],
+            "arguments": invocation["arguments_json"],
+            "claim_token": claim_token,
+            "lease_expires_at": lease_expires.isoformat() if hasattr(lease_expires, "isoformat") else lease_expires,
+            "provider": invocation.get("provider_key") or default_provider,
+        })
+    except SessionTaskError as exc:
+        return _from_service_error(exc)
+    except (TypeError, ValueError) as exc:
+        return _err(400, f"参数非法: {exc}", ERR_VALIDATION_FAILED)
 
 
 # ---------------------------------------------------------------------------

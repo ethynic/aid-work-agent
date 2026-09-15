@@ -703,3 +703,7 @@ tenants（租户）
 ├── token_cost_prices（Token单价）
 ├── log_error（错误日志）
 ```
+
+### C3 决策调用恢复（2026-09-15）
+
+`session_task_decision_attempts` 以 `(tenant_id, attempt_ref)` 唯一关联调用。`result_text_id` 引用既有 `session_task_texts` 中 purpose=decision 的加密模型结果，与 usage/model/user 和槽位释放同事务写入；崩溃重领不重新调用模型。`credit_cost` 通过 CAS 冻结，账务唯一键及预留结算复用同一金额。`billing_retry_at`、`billing_retry_count` 提供逐 attempt 退避和公平扫描。`reservation_missing` 表示账务已确认但缺少预留，保留重试与人工核对；仅账务及预留均确认才进入 `settled`。

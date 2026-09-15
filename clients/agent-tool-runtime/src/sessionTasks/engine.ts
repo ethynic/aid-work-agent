@@ -23,8 +23,8 @@ import { readdirSync as importFsReaddir, existsSync as importFsExists, statSync 
 import { join as importPathJoin } from 'node:path'
 const importFs = { readdirSync: importFsReaddir, existsSync: importFsExists, statSync: importFsStat }
 const importPath = { join: importPathJoin }
-import type { ApiClient, SessionTaskControlAck } from '../apiClient.js'
-import { NetworkError } from '../apiClient.js'
+import type { ApiClient, ClaimedInvocation, SessionTaskControlAck, SessionTaskPrepareSendResult, SessionTaskTargetedClaim } from '../apiClient.js'
+import { ApiError, NetworkError } from '../apiClient.js'
 import { ReadyQueue, type QueueKind } from './readyQueue.js'
 import { SessionStore, SessionStoreCorruptError, sessionTaskDir, type AssignmentMeta, type SessionCrypto, type ReplayedEvent } from './sessionStore.js'
 import { enforceRetention } from './retention.js'
@@ -33,7 +33,8 @@ export type TaskPhase =
   | 'ready' // 已领取，待观察
   | 'observing' // 有活跃批次在聚合（静默窗口计时）
   | 'decision_pending' // 决策已提交，等待云端（纯网络轮询，不占锁/模型）
-  | 'send_ready' // 决策 ready（C3 接执行链；C2 停在此相位）
+  | 'send_ready' // 决策 ready 且 action=reply：待 prepare-send 物化底座执行单元
+  | 'executing' // C3：底座 invocation 已物化，定向 claim 后经既有 v2 执行链发送
   | 'waiting_peer' // 已回复，等对方新消息（让出资源的持久状态）
   | 'sync_pending' // 有未 ACK 事件待同步（可与任意相位叠加，由独立通道冲刷）
   | 'blocked'
@@ -78,6 +79,10 @@ export interface EngineOptions {
   claimIntervalMs?: number
   renewIntervalMs?: number
   maxInFlightDecisions?: number
+  /** C3：既有 v2 单动作执行器（invocationRunner）注入；缺失时执行相位保守 blocked。
+   * sessionPrecheck 由引擎按任务构造（§7 顺序 4 锁内会话复核），cli 接线时传给
+   * runner 的 deps.sessionPrecheck——在桌面锁内、write-authorize 之前执行 */
+  runInvocation?: (inv: ClaimedInvocation, sessionPrecheck: () => Promise<void>) => Promise<void>
   batchSilenceMs?: number
   batchMaxWaitMs?: number
   syncRetryBaseMs?: number
@@ -101,6 +106,10 @@ interface OldTaskWork {
   pendingBatches: Map<string, { inputVersion: number; batchSeq: number }>
   /** 在飞决策（最后一条 decision 非终态） */
   inFlightDecision: { decisionId: string; batchId: string; status: string } | null
+  /** send_ready 待执行决策（C3） */
+  sendReadyDecision: { decisionId: string; batchId: string; inputVersion: number } | null
+  /** executing 中的 invocation（C3，含冻结 input_version） */
+  executionInvocation: { invocationId: string; decisionId: string; inputVersion: number } | null
   lastPhase: TaskPhase
   /** 日志/meta 损坏等：有旧工作但无法安全提取（新领取 blocked） */
   unrecoverable: boolean
@@ -140,12 +149,17 @@ interface TaskRuntime {
   gate: 'open' | 'paused_control' | 'lease_stale'
   /** 本地租约截止（ms epoch）：断网时保守判定失效，停止新副作用 */
   leaseDeadline: number
-  /** 待提交决策批次（评审 P1-7：并发满/断网时不丢；batchSeq=批次事件 local_seq，须 ACK 后才可提交） */
-  decisionQueue: Array<{ batchId: string; inputVersion: number; batchSeq: number }>
+  /** 待提交决策批次（评审 P1-7：并发满/断网时不丢；batchSeq=批次事件 local_seq，须 ACK 后才可提交；
+   * kind=opening 为开场白（合成批次，batchSeq=0 免 ACK 门禁） */
+  decisionQueue: Array<{ batchId: string; inputVersion: number; batchSeq: number; kind?: 'opening' | 'reply' }>
   /** 冻结批次 → 冻结时的 inputVersion（入队/提交取绑定值，不用最新 task.inputVersion） */
   batchVersionById: Map<string, number>
   /** 已有 decision 事件的批次（含 ready/superseded/failed/pending）——不再重新入队决策 */
   decidedByDecisionIds: Set<string>
+  /** C3：send_ready 待执行决策（prepare-send → invocation） */
+  sendReady: { decisionId: string; batchId: string; inputVersion: number } | null
+  /** C3：executing 中的底座 invocation（含决策冻结 input_version——锁内复核比对） */
+  execution: { invocationId: string; decisionId: string; inputVersion: number } | null
   /** 期望身份（评审 P1-9：观察结果三字段校验） */
   expectedBindingVersion: number
   expectedAccountIdentityVersion: number
@@ -294,6 +308,8 @@ export class SessionTaskEngine {
               decidedBatches: new Map(),
               pendingBatches: new Map(),
               inFlightDecision: null,
+              sendReadyDecision: null,
+              executionInvocation: null,
               lastPhase: 'ready',
               unrecoverable: true,
             })
@@ -337,6 +353,8 @@ export class SessionTaskEngine {
               decidedBatches: new Map(),
               pendingBatches: new Map(),
               inFlightDecision: null,
+              sendReadyDecision: null,
+              executionInvocation: null,
               lastPhase: 'ready',
               unrecoverable: true,
             })
@@ -380,6 +398,7 @@ export class SessionTaskEngine {
     }
     const prevHasWork =
       prev.unrecoverable || prev.watermark !== null || prev.decidedBatches.size > 0 || prev.inFlightDecision !== null
+      || prev.sendReadyDecision !== null || prev.executionInvocation !== null
     if (!prevHasWork) this.oldTaskWork.set(taskId, work)
   }
 
@@ -527,6 +546,8 @@ export class SessionTaskEngine {
       pendingBatch: null,
       decidedBatchIds: new Set(),
       inFlight: null,
+      sendReady: null,
+      execution: null,
       lastObservationAt: 0,
       observeDueAt: this.now(),
       observeBackoffIndex: 0,
@@ -570,6 +591,9 @@ export class SessionTaskEngine {
       // 重启恢复：回放既有日志重建水位/未同步事件（损坏 → blocked 照常上报）
       try {
         await this.restoreTaskFromLog(task, await store.replay())
+        // P2 自愈：baseline 已建立但 opening 未入队的崩溃窗口（服务端幂等/唯一
+        // 索引兜底，重复提交无害）
+        if (task.watermark && task.phase !== 'blocked') this.maybeEnqueueOpening(task, this.now())
       } catch (err) {
         if (err instanceof SessionStoreCorruptError) {
           task.phase = 'blocked'
@@ -593,7 +617,9 @@ export class SessionTaskEngine {
       } else if (
         oldWork.watermark !== null ||
         oldWork.decidedBatches.size > 0 ||
-        oldWork.inFlightDecision !== null
+        oldWork.inFlightDecision !== null ||
+        oldWork.sendReadyDecision !== null ||
+        oldWork.executionInvocation !== null
       ) {
         await this.persistRecoveryBlocked(task, 'generation_change_requires_manual_review', oldWork.oldAssignmentId)
       }
@@ -650,6 +676,9 @@ export class SessionTaskEngine {
     // batchVersionById / decidedByDecisionIds 为 task 属性：syncPending ACK
     // 入队时沿用同一口径（版本取冻结时绑定值；已决策批次不再重新激活）
     let lastDecision: { decisionId: string; batchId: string; status: string } | null = null
+    // C3 执行链恢复：send_ready 的待执行决策与 executing 的 invocation
+    let restoredSendReady: { decisionId: string; batchId: string; inputVersion: number } | null = null
+    let restoredExecution: { invocationId: string; decisionId: string; inputVersion: number } | null = null
     for (const ev of replayed.events) {
       task.pendingEvents.set(ev.record.local_seq, { event_id: ev.record.event_id, type: ev.record.type, payload: ev.payload })
       const p = ev.payload as {
@@ -660,6 +689,7 @@ export class SessionTaskEngine {
         to?: TaskPhase
         phase_to?: TaskPhase
         decision_id?: string
+        invocation_id?: string
         status?: string
       }
       if (ev.record.type === 'baseline' || ev.record.type === 'observation') {
@@ -677,7 +707,49 @@ export class SessionTaskEngine {
       if (ev.record.type === 'phase' && p && p.to) task.phase = p.to
       // decision_phase：决策状态+相位单条事务记录（新日志）；旧日志的
       // decision + phase 两类事件仍按序兼容回放
-      if (ev.record.type === 'decision_phase' && p && p.phase_to) task.phase = p.phase_to
+      if (ev.record.type === 'decision_phase' && p && p.phase_to) {
+        task.phase = p.phase_to
+        if (p.phase_to === 'send_ready' && typeof p.decision_id === 'string' && p.decision_id) {
+          restoredSendReady = {
+            decisionId: p.decision_id,
+            batchId: String(p.batch_id ?? ''),
+            inputVersion: typeof p.input_version === 'number' ? p.input_version : task.inputVersion,
+          }
+        }
+        if (p.phase_to === 'waiting_peer') {
+          restoredSendReady = null
+          restoredExecution = null
+        }
+      }
+      // execution_phase（C3）：send_ready→executing→waiting_peer 单条事务记录——
+      // 相位与配对数据在同一事件内完整恢复（executing 恢复后按原 invocation 接续）
+      if (ev.record.type === 'execution_phase' && p) {
+        if (p.phase_to === 'executing' && typeof p.invocation_id === 'string' && typeof p.decision_id === 'string') {
+          restoredExecution = {
+            invocationId: p.invocation_id,
+            decisionId: p.decision_id,
+            inputVersion: typeof p.input_version === 'number' ? p.input_version : Number.MAX_SAFE_INTEGER,
+          }
+          // MAX_SAFE_INTEGER 语义：旧日志无冻结版本 → 恒小于当前，触发版本门禁
+          //（保守阻断而非放行；Runtime 重试 prepare-send 走服务端权威校验）
+          restoredSendReady = null
+          task.phase = 'executing'
+        }
+        if (p.phase_to === 'waiting_peer') {
+          task.phase = 'waiting_peer'
+          restoredSendReady = null
+          restoredExecution = null
+        }
+        if (p.phase_to === 'waiting_peer') {
+          restoredSendReady = null
+          restoredExecution = null
+        }
+        if (p.phase_to === 'blocked') {
+          task.phase = 'blocked'
+          restoredSendReady = null
+          restoredExecution = null
+        }
+      }
       if (ev.record.type === 'decision' || ev.record.type === 'decision_phase') {
         // 恢复在飞决策与队列（评审三轮 P1-2）：最后一条未终态 decision 恢复为
         // inFlight（decision_pending 轮询）；已 superseded/failed 的只记批次
@@ -717,6 +789,12 @@ export class SessionTaskEngine {
         }
       }
     }
+    // C3 执行链回放落位：相位与决策/invocation 记录原子恢复；防御崩溃窗口
+    // （相位已迁移但配对记录缺失 → 回 waiting_peer，prepare-send 幂等可重入）
+    task.sendReady = restoredSendReady
+    task.execution = restoredExecution
+    if (task.phase === 'send_ready' && task.sendReady === null) task.phase = 'waiting_peer'
+    if (task.phase === 'executing' && task.execution === null) task.phase = 'waiting_peer'
     // 崩溃窗口对齐（仅旧格式日志）：decision 已落盘、phase 未落盘——恢复
     // 设置了 inFlight 但 phase 仍是旧值（如 ready），调度会走观察而非轮
     // 询；强制对齐 decision_pending。新 decision_phase 单条事务记录不存
@@ -763,6 +841,8 @@ export class SessionTaskEngine {
       pendingBatch: null,
       decidedBatchIds: new Set(),
       inFlight: null,
+      sendReady: null,
+      execution: null,
       lastObservationAt: 0,
       observeDueAt: this.now(),
       observeBackoffIndex: 0,
@@ -1122,9 +1202,16 @@ export class SessionTaskEngine {
       case 'decision_pending':
         await this.pollDecision(task, now)
         return
-      // send_ready（C3 接执行链）在 C2 与 waiting_peer 同样保持观察节奏：
-      // 等待执行期间对方新消息必须能 supersede 待执行决策（设计 §9）
-      case 'send_ready':
+      case 'send_ready': {
+        // 尝试物化发送；未推进（重试等待期）继续观察——等待执行期间对方新消息
+        // 必须能 supersede 待执行决策（设计 §9/§7，C2 语义保留）
+        const progressed = await this.executeSend(task, now)
+        if (!progressed) await this.observeOnce(task, now)
+        return
+      }
+      case 'executing':
+        await this.driveExecution(task, now)
+        return
       case 'waiting_peer':
       case 'ready':
       case 'observing':
@@ -1229,6 +1316,7 @@ export class SessionTaskEngine {
       task.observeBackoffIndex = 0
       task.observeDueAt = now + OBSERVE_BACKOFF[0]!
       this.queue.set(task.taskId, 'observe', task.observeDueAt)
+      this.maybeEnqueueOpening(task, now)
       return
     }
     // complete_window：新消息合批（静默窗口 + 最长聚合；工作时段判断属 spec，C2 先全时）
@@ -1272,6 +1360,19 @@ export class SessionTaskEngine {
     this.queue.set(task.taskId, 'observe', task.observeDueAt)
   }
 
+  /** 基线建立后提交开场白决策（§13.2：不调模型、仅一次；合成批次免 ACK 门禁）。
+   * 已有新入站在聚合时不提交——服务端也按"已有接纳批次"拒绝/取消。 */
+  private maybeEnqueueOpening(task: TaskRuntime, now: number): void {
+    const opening = task.spec['opening_text']
+    if (typeof opening !== 'string' || !opening) return
+    if (task.decidedByDecisionIds.has('opening')) return
+    if (task.decisionQueue.some((q) => q.batchId === 'opening')) return
+    if (task.pendingBatch) return
+    task.decisionQueue.push({ batchId: 'opening', inputVersion: 0, batchSeq: 0, kind: 'opening' })
+    this.queue.set(task.taskId, 'send', now + 50)
+    this.emit(`task ${task.taskId} 基线已建立，入队开场白决策`)
+  }
+
   /** 批次冻结：先落日志（成功后才清 pendingBatch/推水位——评审 P1-7 防丢批次），
    * payload 顶层 batch_id/input_version 与 C1 事件协议一致（评审 P1-2）；
    * 决策提交延后到该事件获云端 ACK（drainDecisionQueue）。 */
@@ -1280,6 +1381,12 @@ export class SessionTaskEngine {
     if (!batch || batch.messages.length === 0) {
       task.pendingBatch = null
       return
+    }
+    // 新批次冻结：未提交的开场白让位（§13.2 已有新入站 → 取消 opening）；
+    // 已提交的 opening 由云端在批次接纳时 superseded，prepare-send 会放弃
+    if (task.decisionQueue.some((q) => q.batchId === 'opening')) {
+      task.decisionQueue = task.decisionQueue.filter((q) => q.batchId !== 'opening')
+      this.emit(`task ${task.taskId} 新入站消息到达，取消未提交的开场白`)
     }
     const lastMsg = batch.messages[batch.messages.length - 1]
     const watermarkAfter = {
@@ -1334,7 +1441,7 @@ export class SessionTaskEngine {
       // 评审 P1-3：网络请求前原子占位（submitting=true 计入并发名额）
       task.submitting = true
       try {
-        await this.submitDecision(task, head.batchId, head.inputVersion, now)
+        await this.submitDecision(task, head.batchId, head.inputVersion, now, head.kind ?? 'reply')
         task.decisionQueue.shift()
       } catch (err) {
         if (err instanceof NetworkError) {
@@ -1348,18 +1455,50 @@ export class SessionTaskEngine {
     }
   }
 
-  private async submitDecision(task: TaskRuntime, batchId: string, inputVersion: number, now: number): Promise<void> {
-    const resp = await this.opts.api.sessionTaskCreateDecision(
-      task.assignmentId,
-      {
-        fence: task.fence,
-        batch_id: batchId,
-        decision_kind: 'reply',
-        input_version: inputVersion,
-        control_epoch: task.controlEpoch,
-        spec_revision: task.specRevision,
-      },
-    )
+  private async submitDecision(
+    task: TaskRuntime,
+    batchId: string,
+    inputVersion: number,
+    now: number,
+    kind: 'reply' | 'opening' = 'reply',
+  ): Promise<void> {
+    let resp: { decision_id: string; status: string }
+    try {
+      resp = await this.opts.api.sessionTaskCreateDecision(
+        task.assignmentId,
+        {
+          fence: task.fence,
+          batch_id: batchId,
+          decision_kind: kind,
+          input_version: inputVersion,
+          control_epoch: task.controlEpoch,
+          spec_revision: task.specRevision,
+        },
+      )
+    } catch (err) {
+      // opening 409：已存在（跨版本唯一）或已有新入站被取消（§13.2）——终态
+      // 处理不重试；重新主动开场须关闭旧任务并新建授权任务
+      if (kind === 'opening' && err instanceof ApiError && err.status === 409) {
+        await this.logEvent(
+          task,
+          'decision_phase',
+          {
+            batch_id: batchId,
+            decision_kind: kind,
+            status: 'superseded',
+            phase_from: task.phase,
+            phase_to: 'waiting_peer',
+            input_version: inputVersion,
+          },
+          now,
+        )
+        task.decidedByDecisionIds.add(batchId)
+        task.phase = 'waiting_peer'
+        this.queue.set(task.taskId, 'observe', now + OBSERVE_BACKOFF[0]!)
+        return
+      }
+      throw err
+    }
     // 单条事务记录：decision 状态与相位迁移合并为一条 decision_phase 落盘。
     // 写盘失败则内存全不推进（inFlight/decidedByDecisionIds/phase 都不设，
     // 批次保留在队列头部——shift 仅在成功后执行），下轮重提交——消除
@@ -1370,6 +1509,7 @@ export class SessionTaskEngine {
       {
         decision_id: resp.decision_id,
         batch_id: batchId,
+        decision_kind: kind,
         status: resp.status,
         phase_from: task.phase,
         phase_to: 'decision_pending',
@@ -1398,6 +1538,10 @@ export class SessionTaskEngine {
     const decision = await this.opts.api.sessionTaskGetDecision(task.assignmentId, inflight.decisionId)
     inflight.pollAt = now + 1_000 // 默认 1s 查询（契约 §9）
     if (decision.status === 'ready') {
+      // 冻结动作分流（§9）：reply → send_ready 接执行链；wait/handoff/done →
+      // 不发送，直接回 waiting_peer（handoff/done 的任务侧状态由云端推进）
+      const action = decision.action ?? 'reply'
+      const phaseTo = action === 'reply' ? 'send_ready' : 'waiting_peer'
       // 单条事务记录：决策终态与相位迁移合并落盘——写盘失败保留 inFlight
       // （下轮重新轮询本决策），成功才一次性清内存并迁移相位
       await this.logEvent(
@@ -1407,17 +1551,28 @@ export class SessionTaskEngine {
           decision_id: decision.decision_id,
           batch_id: inflight.batchId,
           status: 'ready',
+          action,
           phase_from: task.phase,
-          phase_to: 'send_ready',
+          phase_to: phaseTo,
           input_version: inflight.inputVersion,
         },
         now,
       )
       task.decidedByDecisionIds.add(inflight.batchId)
       task.inFlight = null
-      task.phase = 'send_ready' // C3 接 prepare-send/执行链；C2 停留
-      task.observeDueAt = now + OBSERVE_BACKOFF[0]!
-      this.queue.set(task.taskId, 'observe', task.observeDueAt)
+      if (phaseTo === 'send_ready') {
+        task.sendReady = {
+          decisionId: decision.decision_id,
+          batchId: inflight.batchId,
+          inputVersion: inflight.inputVersion,
+        }
+        task.phase = 'send_ready'
+        this.queue.set(task.taskId, 'send', now + 50)
+      } else {
+        task.phase = 'waiting_peer'
+        task.observeDueAt = now + OBSERVE_BACKOFF[0]!
+        this.queue.set(task.taskId, 'observe', task.observeDueAt)
+      }
       await this.drainDecisionQueue(task, now) // 并发释放：冲刷待提交批次
       return
     }
@@ -1445,6 +1600,234 @@ export class SessionTaskEngine {
     }
     await this.setPhase(task, 'decision_pending', now, { skipLog: true })
     this.queue.set(task.taskId, 'send', inflight.pollAt)
+  }
+
+  /** send_ready → prepare-send：服务端幂等物化单条底座执行单元（§9）。
+   * 返回是否推进了相位（true=已进入 executing/已放弃回 waiting_peer；
+   * false=重试等待期，保持 send_ready——调用方继续观察以便新消息 supersede）。
+   * 决策 superseded/版本失配返回 invocation_id=null → 放弃发送相位回
+   * waiting_peer；工作时段外/网络失败按间隔重试（不放弃决策）。 */
+  private async executeSend(task: TaskRuntime, now: number): Promise<boolean> {
+    const sr = task.sendReady
+    if (!sr) {
+      await this.setPhase(task, 'waiting_peer', now)
+      return true
+    }
+    if (this.diskStopNew) {
+      this.queue.set(task.taskId, 'send', now + 30_000)
+      return false
+    }
+    let resp: SessionTaskPrepareSendResult
+    try {
+      resp = await this.opts.api.sessionTaskPrepareSend(task.assignmentId, sr.decisionId, task.fence)
+    } catch (err) {
+      if (err instanceof NetworkError) {
+        this.queue.set(task.taskId, 'send', now + 1_000)
+        return false
+      }
+      if (err instanceof ApiError && err.status === 409 && (err.serverMessage ?? err.message).includes('WORK_WINDOW_CLOSED')) {
+        this.queue.set(task.taskId, 'send', now + 30_000)
+        return false
+      }
+      // 其他 4xx/5xx（预算停止等由 renew 控制传播）：稍后重试
+      this.emit(`task ${task.taskId} prepare-send 失败（稍后重试）: ${err instanceof Error ? err.message : String(err)}`)
+      this.queue.set(task.taskId, 'send', now + 5_000)
+      return false
+    }
+    if (!resp.invocation_id) {
+      await this.logEvent(
+        task,
+        'decision_phase',
+        {
+          decision_id: sr.decisionId,
+          batch_id: sr.batchId,
+          status: resp.decision_status ?? 'superseded',
+          phase_from: 'send_ready',
+          phase_to: 'waiting_peer',
+          input_version: sr.inputVersion,
+        },
+        now,
+      )
+      task.sendReady = null
+      task.phase = 'waiting_peer'
+      this.queue.set(task.taskId, 'observe', now + OBSERVE_BACKOFF[0]!)
+      await this.drainDecisionQueue(task, now)
+      return true
+    }
+    await this.logEvent(
+      task,
+      'execution_phase',
+      {
+        decision_id: sr.decisionId,
+        invocation_id: resp.invocation_id,
+        phase_from: 'send_ready',
+        phase_to: 'executing',
+        input_version: sr.inputVersion,
+      },
+      now,
+    )
+    task.execution = { invocationId: resp.invocation_id, decisionId: sr.decisionId, inputVersion: sr.inputVersion }
+    task.sendReady = null
+    task.phase = 'executing'
+    this.queue.set(task.taskId, 'send', now + 50)
+    return true
+  }
+
+  /**
+   * 锁内会话复核（§7 顺序 4，C3 门禁 #1）：在 runner 桌面锁内、许可申请之前
+   * 重新观察目标会话并比对决策水位。任何新消息（peer/self/system——生成回复后
+   * 客户追加、排队期间人工回复、opening 前新入站）、身份漂移、覆盖缺口、观察
+   * 失败、assignment 门禁失效 → 抛 SessionPrecheckError，不申请许可不发送；
+   * 新消息由后续常规观察周期合批上报（水位未推进，不丢事实），旧决策由云端
+   * supersede 作废。
+   */
+  private async lockedSessionRecheck(task: TaskRuntime, frozenInputVersion?: number): Promise<void> {
+    const { SessionPrecheckError } = await import('../invocationRunner.js')
+    if (task.gate !== 'open' || this.now() >= task.leaseDeadline) {
+      throw new SessionPrecheckError('ASSIGNMENT_STALE', '任务门禁关闭或本地租约失效')
+    }
+    // #2 输入版本硬门禁：决策生成后本地已形成更新输入版本（含已落盘未 ACK 的
+    // 批次/聚合中批次）——旧发送绑定旧版本，一律不得执行（观察"水位后无新消息"
+    // 不足以判定：批次可能尚未推进水位）
+    if (frozenInputVersion !== undefined && (task.inputVersion > frozenInputVersion || task.pendingBatch !== null)) {
+      this.emit(`task ${task.taskId} 发送前输入版本已前进（冻结 ${frozenInputVersion}，当前 ${task.inputVersion}${task.pendingBatch ? '+聚合中' : ''}），取消本次发送`)
+      throw new SessionPrecheckError('INPUT_VERSION_STALE', '决策生成后输入版本已前进（新消息/人工回复待同步）')
+    }
+    let result: ObserverResult
+    try {
+      // 已在 runner 桌面锁内执行，不再重复取锁（观察与发送共用同一临界区）
+      result = await this.opts.observer(
+        {
+          taskId: task.taskId,
+          conversationBindingId: task.conversationBindingId,
+          expectedBindingVersion: task.expectedBindingVersion,
+          expectedAccountIdentityVersion: task.expectedAccountIdentityVersion,
+        },
+        { watermark: task.watermark },
+      )
+    } catch (err) {
+      throw new SessionPrecheckError('OBSERVE_FAILED', `发送前观察失败: ${err instanceof Error ? err.message : String(err)}`)
+    }
+    if (
+      result.conversation_binding_id !== task.conversationBindingId ||
+      result.binding_version !== task.expectedBindingVersion ||
+      result.account_identity_version !== task.expectedAccountIdentityVersion
+    ) {
+      throw new SessionPrecheckError('IDENTITY_MISMATCH', '发送前观察身份不符')
+    }
+    if (result.coverage !== 'complete_window') {
+      throw new SessionPrecheckError('COVERAGE_GAP', `发送前观察覆盖缺口: ${result.coverage}`)
+    }
+    const watermarkId = task.watermark?.last_local_message_id ?? null
+    const fresh = result.ordered_messages.filter((m) => m.local_message_id !== watermarkId)
+    if (fresh.length > 0) {
+      this.emit(`task ${task.taskId} 发送前复核发现 ${fresh.length} 条新消息，取消本次发送（旧决策待 supersede）`)
+      throw new SessionPrecheckError('NEW_MESSAGES', '决策生成后有新消息/人工回复')
+    }
+  }
+
+  /** executing → 定向 claim → 既有 v2 执行器（write-authorize/journal/outbox
+   * 全在既有链内，不复制发送实现）→ 回 waiting_peer。不可领取（在途/终态）
+   * 时按状态收敛：在途等待，终态直接结束（结果已由 outbox/operation-result 上报）。 */
+  private async driveExecution(task: TaskRuntime, now: number): Promise<void> {
+    const ex = task.execution
+    if (!ex) {
+      await this.setPhase(task, 'waiting_peer', now)
+      return
+    }
+    const runner = this.opts.runInvocation
+    if (runner === undefined) {
+      this.emit(`task ${task.taskId} 未接入 v2 执行器（runInvocation 缺失），执行相位保守 blocked`)
+      await this.logEvent(
+        task,
+        'execution_phase',
+        {
+          decision_id: ex.decisionId,
+          invocation_id: ex.invocationId,
+          outcome: 'runner_unavailable',
+          phase_from: 'executing',
+          phase_to: 'blocked',
+        },
+        now,
+      )
+      task.phase = 'blocked'
+      return
+    }
+    if (this.diskStopNew) {
+      // §8 磁盘 100%：停新发送（已上报结果的迟到回执不受影响）
+      this.queue.set(task.taskId, 'send', now + 30_000)
+      return
+    }
+    let claim: SessionTaskTargetedClaim
+    try {
+      claim = await this.opts.api.sessionTaskClaimInvocation(task.assignmentId, ex.invocationId, task.fence)
+    } catch (err) {
+      if (err instanceof NetworkError) {
+        this.queue.set(task.taskId, 'send', now + 1_000)
+        return
+      }
+      if (err instanceof ApiError && err.status === 404) {
+        // invocation 不存在（数据异常/被清理）：终态收敛 blocked，不死循环重试
+        this.emit(`task ${task.taskId} 定向 claim 404（invocation 缺失），保守 blocked`)
+        await this.logEvent(
+          task,
+          'execution_phase',
+          { decision_id: ex.decisionId, invocation_id: ex.invocationId, outcome: 'invocation_missing', phase_from: 'executing', phase_to: 'blocked' },
+          now,
+        )
+        task.phase = 'blocked'
+        return
+      }
+      this.emit(`task ${task.taskId} 定向 claim 失败（稍后重试）: ${err instanceof Error ? err.message : String(err)}`)
+      this.queue.set(task.taskId, 'send', now + 5_000)
+      return
+    }
+    const inv = claim.invocation
+    if (inv === null) {
+      if (claim.state === 'queued' || claim.state === 'claimed' || claim.state === 'running') {
+        // 在途（本实例前次崩溃/旧进程）：等待终态——unknown 不重发（设计 §8）
+        this.queue.set(task.taskId, 'send', now + 2_000)
+        return
+      }
+      await this.finishExecution(task, ex, now, claim.state || 'terminal')
+      return
+    }
+    const sessionPrecheck = async (): Promise<void> => {
+      await this.lockedSessionRecheck(task, ex.inputVersion)
+    }
+    try {
+      await runner(inv, sessionPrecheck)
+    } catch (err) {
+      // runner 内部终态走 result outbox 必达链；此处异常不改判、不重发
+      this.emit(`task ${task.taskId} v2 执行异常（结果以上报链为准）: ${err instanceof Error ? err.message : String(err)}`)
+    }
+    await this.finishExecution(task, ex, now, 'reported')
+  }
+
+  /** 执行收尾：单条事务记录 + 相位迁移 + 冲刷后续决策队列 */
+  private async finishExecution(
+    task: TaskRuntime,
+    ex: { invocationId: string; decisionId: string; inputVersion: number },
+    now: number,
+    outcome: string,
+  ): Promise<void> {
+    await this.logEvent(
+      task,
+      'execution_phase',
+      {
+        decision_id: ex.decisionId,
+        invocation_id: ex.invocationId,
+        outcome,
+        phase_from: 'executing',
+        phase_to: 'waiting_peer',
+      },
+      now,
+    )
+    task.execution = null
+    task.phase = 'waiting_peer'
+    task.observeDueAt = now + OBSERVE_BACKOFF[0]!
+    this.queue.set(task.taskId, 'observe', task.observeDueAt)
+    await this.drainDecisionQueue(task, now)
   }
 
   /** 周期 retention（P2-8：每 60s 评估；stopNew 拦截新观察写入） */
@@ -1605,7 +1988,7 @@ function batchEventsForSync<T extends { local_seq: number; event_id: string; typ
 }
 
 function queueKindFor(phase: TaskPhase): QueueKind {
-  if (phase === 'send_ready' || phase === 'decision_pending') return 'send'
+  if (phase === 'send_ready' || phase === 'executing' || phase === 'decision_pending') return 'send'
   if (phase === 'sync_pending') return 'control'
   return 'observe'
 }
@@ -1621,12 +2004,16 @@ function extractOldTaskWork(assignmentId: string, events: ReplayedEvent[]): OldT
     decidedBatches: new Map(),
     pendingBatches: new Map(),
     inFlightDecision: null,
+    sendReadyDecision: null,
+    executionInvocation: null,
     lastPhase: 'ready',
     unrecoverable: false,
   }
   const batchSeqById = new Map<string, number>()
   const decidedByDecisionIds = new Set<string>()
   let lastDecision: { decisionId: string; batchId: string; status: string } | null = null
+  let sendReady: { decisionId: string; batchId: string; inputVersion: number } | null = null
+  let execution: { invocationId: string; decisionId: string; inputVersion: number } | null = null
   for (const ev of events) {
     const p = ev.payload as {
       watermark?: ObserverWatermark
@@ -1636,6 +2023,7 @@ function extractOldTaskWork(assignmentId: string, events: ReplayedEvent[]): OldT
       to?: TaskPhase
       phase_to?: TaskPhase
       decision_id?: string
+      invocation_id?: string
       status?: string
     }
     if (ev.record.type === 'baseline' || ev.record.type === 'observation') {
@@ -1649,7 +2037,35 @@ function extractOldTaskWork(assignmentId: string, events: ReplayedEvent[]): OldT
       }
     }
     if (ev.record.type === 'phase' && p && p.to) work.lastPhase = p.to
-    if (ev.record.type === 'decision_phase' && p && p.phase_to) work.lastPhase = p.phase_to
+    if (ev.record.type === 'decision_phase' && p && p.phase_to) {
+      work.lastPhase = p.phase_to
+      if (p.phase_to === 'send_ready' && typeof p.decision_id === 'string' && p.decision_id) {
+        sendReady = {
+          decisionId: p.decision_id,
+          batchId: String(p.batch_id ?? ''),
+          inputVersion: typeof p.input_version === 'number' ? p.input_version : 0,
+        }
+      }
+      if (p.phase_to === 'waiting_peer') {
+        sendReady = null
+        execution = null
+      }
+    }
+    if (ev.record.type === 'execution_phase' && p) {
+      if (p.phase_to === 'executing' && typeof p.invocation_id === 'string' && typeof p.decision_id === 'string') {
+        execution = {
+          invocationId: p.invocation_id,
+          decisionId: p.decision_id,
+          inputVersion: typeof p.input_version === 'number' ? p.input_version : Number.MAX_SAFE_INTEGER,
+        }
+        sendReady = null
+      }
+      if (p.phase_to === 'waiting_peer') {
+        sendReady = null
+        execution = null
+      }
+      if (p.phase_to === 'blocked') work.lastPhase = 'blocked'
+    }
     if (ev.record.type === 'decision' || ev.record.type === 'decision_phase') {
       if (p && typeof p.batch_id === 'string') decidedByDecisionIds.add(p.batch_id)
       lastDecision = {
@@ -1662,6 +2078,8 @@ function extractOldTaskWork(assignmentId: string, events: ReplayedEvent[]): OldT
   if (lastDecision && lastDecision.decisionId && !['ready', 'superseded', 'failed'].includes(lastDecision.status)) {
     work.inFlightDecision = lastDecision
   }
+  work.sendReadyDecision = sendReady
+  work.executionInvocation = execution
   for (const [batchId, seq] of batchSeqById) {
     if (decidedByDecisionIds.has(batchId)) continue
     work.pendingBatches.set(batchId, { inputVersion: work.decidedBatches.get(batchId) ?? 0, batchSeq: seq })

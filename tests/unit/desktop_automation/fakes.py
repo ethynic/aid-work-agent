@@ -92,6 +92,7 @@ class FakeScenarioAdapter:
         payload_hash: Optional[str],
         authorization_revision: Optional[str],
         authorization_epoch: Optional[int],
+        invocation: Optional[Dict[str, Any]] = None,
     ) -> AuthorizeDecision:
         self.authorize_calls.append(
             {

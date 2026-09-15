@@ -34,12 +34,13 @@ test('v2 门禁：boss invocation 带 protocol_version=2 → PROTOCOL_NOT_SUPPOR
   }
 })
 
-test('v2 门禁：tool 名以 _v2 结尾（即使 provider 已安装）→ PROTOCOL_NOT_SUPPORTED 优先于白名单拒绝', async () => {
-  const stack = await startTestStack({ providerEntries: { weixin: fakeProviderEntry() } })
+test('v2 门禁：tool 名以 _v2 结尾且 Provider manifest 未协商 v2 → PROTOCOL_NOT_SUPPORTED 优先于白名单拒绝', async () => {
+  // weixin 已升级 v2 会话能力（C3）；用未协商 v2 的 boss-recruiting 验证门禁优先级
+  const stack = await startTestStack({})
   try {
-    const id = stack.cloud.enqueueInvocation('weixin_message_send_v2', { target_handle: 't', payload_ref: 'p' }, { provider: 'weixin' })
-    const result = await waitForResult(stack, id, 'weixin v2 tool rejected')
-    // _v2 工具不在 v1 白名单：若门禁缺失会误报 TOOL_NOT_ALLOWED；正确行为是协议能力拒绝
+    const id = stack.cloud.enqueueInvocation('boss_send_to_v2', { target_handle: 't', payload_ref: 'p' }, { provider: 'boss-recruiting' })
+    const result = await waitForResult(stack, id, 'boss v2 tool rejected')
+    // _v2 工具不在 boss v1 白名单：若门禁缺失会误报 TOOL_NOT_ALLOWED；正确行为是协议能力拒绝
     assert.equal(result.payload['code'], 'PROTOCOL_NOT_SUPPORTED')
     assert.ok(!stack.cloud.callsFor(id).some((c) => c.type === 'started'))
   } finally {

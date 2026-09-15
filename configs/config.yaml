@@ -393,7 +393,16 @@ session_tasks:
   tenant_allowlist: []            # 空 = 不限租户（仍受 enabled 总门控）
   lease_seconds: 60               # 设计 §4：lease=60s
   renew_seconds: 20               # 设计 §4：renew=20s
-  max_decisions_per_tenant: 2     # §13.5：同租户跨进程在飞模型调用上限（DB 槽位，C3 接线）
+  max_decisions_per_tenant: 2     # §13.5：同租户跨进程在飞模型调用上限（DB 槽位，C3 已接线）
+  # ----- C3 决策 worker（进程快照，改值需重启后台进程）-----
+  decision_tick_seconds: 5        # worker 轮询间隔
+  decision_lease_seconds: 120     # 单决策处理租约（覆盖模型调用与一次修复/重试窗口）
+  decision_stale_seconds: 900     # 租约过期仍未确认结束的回收线：决策 failed + 任务转人工（§13.5 禁重叠重试）
+  decision_batch_limit: 5         # 每 tick 最多领取决策数
+  decision_model_max_tokens: 1000 # 决策/完成审核调用输出上限（有界预留依据）
+  decision_reserve_units: 1.0     # 单次模型调用保守预留积分（实际按 token 用量结算）
+  execution_reserve_units: 0.0    # 单次发送执行预留积分（weixin v2 发送现无按次积分价；>0 才预留，不虚构按轮收费）
+  opening_enabled: true           # 开场白决策开关（false 拒绝 opening 创建）
 
 # 微信会话场景（weixin.conversation.v1；场景能力开关，业务绑定骨架 C1 已建）
 weixin_conversation:

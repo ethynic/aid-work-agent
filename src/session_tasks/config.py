@@ -23,10 +23,18 @@ class SessionTasksConfig:
     tenant_allowlist: List[str] = field(default_factory=list)
     lease_seconds: int = DEFAULT_LEASE_SECONDS
     renew_seconds: int = DEFAULT_RENEW_SECONDS  # 客户端续租节奏参考值，服务端不消费
-    max_decisions_per_tenant: int = 2  # C3 接线（§13.5 DB 槽位）
+    max_decisions_per_tenant: int = 2  # §13.5 DB 槽位（C3 已接线）
     events_max_records: int = 100
     events_max_bytes: int = 256 * 1024
     opening_enabled: bool = True
+    # ----- C3 决策 worker（进程快照）-----
+    decision_tick_seconds: int = 5
+    decision_lease_seconds: int = 120
+    decision_stale_seconds: int = 900
+    decision_batch_limit: int = 5
+    decision_model_max_tokens: int = 1000
+    decision_reserve_units: float = 1.0
+    execution_reserve_units: float = 0.0
 
 
 def _as_bool(value, default: bool = False) -> bool:  # noqa: ANN001
@@ -77,6 +85,14 @@ def get_session_tasks_config() -> SessionTasksConfig:
         max_decisions_per_tenant=int(node.get("max_decisions_per_tenant") or 2),
         events_max_records=int(node.get("events_max_records") or 100),
         events_max_bytes=int(node.get("events_max_bytes") or 256 * 1024),
+        opening_enabled=_as_bool(node.get("opening_enabled"), True),
+        decision_tick_seconds=int(node.get("decision_tick_seconds") or 5),
+        decision_lease_seconds=int(node.get("decision_lease_seconds") or 120),
+        decision_stale_seconds=int(node.get("decision_stale_seconds") or 900),
+        decision_batch_limit=int(node.get("decision_batch_limit") or 5),
+        decision_model_max_tokens=int(node.get("decision_model_max_tokens") or 1000),
+        decision_reserve_units=float(node.get("decision_reserve_units") or 1.0),
+        execution_reserve_units=float(node.get("execution_reserve_units") or 0.0),
     )
 
 

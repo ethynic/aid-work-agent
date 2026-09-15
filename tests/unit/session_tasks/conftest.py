@@ -26,6 +26,8 @@ os.environ.setdefault("RPA_SECRET_KEY", "test-session-tasks-master-key-32bytes")
 
 # 清理顺序：子表先于父表；devices 最后（绑定/任务引用它）
 SESSION_TASK_TABLES = (
+    "chat_records",
+    "session_task_decision_attempts",
     "session_tasks_idempotency_keys",
     "session_task_cost_reservations",
     "session_task_execution_links",

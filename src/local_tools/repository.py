@@ -237,6 +237,7 @@ def create_invocation(
     dedupe_key: Optional[str] = None,
     deadline_at: Optional[datetime] = None,
     authorization_epoch: Optional[int] = None,
+    execution_lane: str = "standard",
 ) -> str:
     """创建 invocation（state=queued），返回 id。
 
@@ -245,6 +246,8 @@ def create_invocation(
     - v2 场景链路（desktop_automation）：business_kind/business_ref/dedupe_key/deadline_at/
       authorization_epoch/provider_key 扩展列；UNIQUE(tenant_id,business_kind,dedupe_key)
       幂等——同键冲突返回已有 invocation id（不产生新行）。
+    - execution_lane（设计 §10）：仅服务端设置；'session_task' 道只被会话任务定向
+      claim 领取，通用 claim 在 SQL 层排除。旧行为 default 'standard'。
     """
     with get_db_connection() as conn:
         cursor = conn.cursor()
@@ -254,8 +257,8 @@ def create_invocation(
                 INSERT INTO local_tool_invocations
                     (tenant_id, user_id, device_id, tool_name, arguments_json, session_id,
                      provider_key, business_kind, business_ref, dedupe_key, deadline_at,
-                     authorization_epoch)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                     authorization_epoch, execution_lane)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (tenant_id, business_kind, dedupe_key)
                     WHERE business_kind IS NOT NULL AND dedupe_key IS NOT NULL
                     DO NOTHING
@@ -264,7 +267,7 @@ def create_invocation(
                 (
                     tenant_id, user_id, device_id, tool_name, Json(arguments), session_id,
                     provider_key, business_kind, Json(business_ref) if business_ref else None,
-                    dedupe_key, deadline_at, authorization_epoch,
+                    dedupe_key, deadline_at, authorization_epoch, execution_lane,
                 ),
             )
             row = cursor.fetchone()
@@ -293,15 +296,15 @@ def create_invocation(
             INSERT INTO local_tool_invocations
                 (tenant_id, user_id, device_id, tool_name, arguments_json, session_id,
                  provider_key, business_kind, business_ref, dedupe_key, deadline_at,
-                 authorization_epoch)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 authorization_epoch, execution_lane)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
             (
                 tenant_id, user_id, device_id, tool_name, Json(arguments), session_id,
                 provider_key, business_kind,
                 Json(business_ref) if business_ref else None,
-                dedupe_key, deadline_at, authorization_epoch,
+                dedupe_key, deadline_at, authorization_epoch, execution_lane,
             ),
         )
         invocation_id = str(cursor.fetchone()["id"])
@@ -334,7 +337,7 @@ def get_invocation(invocation_id: str, tenant_id: str) -> Optional[Dict[str, Any
                    state, effect, result_json, error_code, error_message, credit_cost,
                    created_at, claimed_at, started_at, finished_at,
                    provider_key, business_kind, business_ref, dedupe_key, deadline_at,
-                   authorization_epoch, write_phase
+                   authorization_epoch, write_phase, COALESCE(execution_lane, 'standard') AS execution_lane
             FROM local_tool_invocations
             WHERE id = %s AND tenant_id = %s
             """,
@@ -386,38 +389,45 @@ def claim_next(
     claim_token_hash: str,
     lease_seconds: int,
     provider_keys: Optional[List[str]] = None,
+    execution_lane: Optional[str] = "standard",
+    expected_invocation_id: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """领取下一条 queued invocation（事务 + FOR UPDATE SKIP LOCKED 防重复领取）。
 
     provider 过滤（总工程师契约补充）：行 provider_key 为 NULL → 任何设备可领（旧行为，
     旧数据兼容）；非 NULL → 仅设备 capabilities 含该 provider 的设备可领（provider_keys
     传入设备能力集合，None 表示不过滤——直连 repository 的测试/内部调用）。
+
+    execution_lane（设计 §10）：None = 不过滤（测试/内部）；'standard' = 通用 claim，
+    SQL 层排除 session_task 道会话任务 invocation（老客户端不抢新道）；'session_task'
+    需配合 expected_invocation_id 定向领取该行（不领取任意 invocation）。COALESCE 兼容
+    迁移前 NULL 旧行（视作 standard）。
     """
+    lane_filter = ""
+    params: List[Any] = [device_id, tenant_id]
+    if execution_lane is not None:
+        lane_filter = " AND COALESCE(execution_lane, 'standard') = %s"
+        params.append(execution_lane)
+    if expected_invocation_id is not None:
+        lane_filter += " AND id = %s"
+        params.append(expected_invocation_id)
+    provider_filter = ""
+    if provider_keys is not None:
+        provider_filter = " AND (provider_key IS NULL OR provider_key = ANY(%s))"
+        params.append(list(provider_keys))
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        if provider_keys is None:
-            cursor.execute(
-                """
-                SELECT id FROM local_tool_invocations
-                WHERE state = 'queued' AND device_id = %s AND tenant_id = %s
-                ORDER BY created_at
-                LIMIT 1
-                FOR UPDATE SKIP LOCKED
-                """,
-                (device_id, tenant_id),
-            )
-        else:
-            cursor.execute(
-                """
-                SELECT id FROM local_tool_invocations
-                WHERE state = 'queued' AND device_id = %s AND tenant_id = %s
-                  AND (provider_key IS NULL OR provider_key = ANY(%s))
-                ORDER BY created_at
-                LIMIT 1
-                FOR UPDATE SKIP LOCKED
-                """,
-                (device_id, tenant_id, list(provider_keys)),
-            )
+        cursor.execute(
+            f"""
+            SELECT id FROM local_tool_invocations
+            WHERE state = 'queued' AND device_id = %s AND tenant_id = %s
+              {lane_filter}{provider_filter}
+            ORDER BY created_at
+            LIMIT 1
+            FOR UPDATE SKIP LOCKED
+            """,
+            tuple(params),
+        )
         row = cursor.fetchone()
         if not row:
             conn.commit()
@@ -432,7 +442,8 @@ def claim_next(
             WHERE id = %s
             RETURNING id, tenant_id, user_id, device_id, tool_name, arguments_json,
                       state, lease_expires_at, claimed_at, created_at, provider_key,
-                      business_kind, business_ref, deadline_at, authorization_epoch
+                      business_kind, business_ref, deadline_at, authorization_epoch,
+                      COALESCE(execution_lane, 'standard') AS execution_lane
             """,
             (claim_token_hash, lease_seconds, row["id"]),
         )

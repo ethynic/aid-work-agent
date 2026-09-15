@@ -29,6 +29,16 @@ import { runtimeHomeDir } from './config.js'
 import { logError, logInfo } from './log.js'
 import { acquireWritePermit, PermitAcquireError, type WritePermit } from './writeAuthorize.js'
 
+/** 会话任务锁内复核未通过：不申请许可、不执行（effect none，决策作废走 supersede） */
+export class SessionPrecheckError extends Error {
+  readonly code: string
+  constructor(code: string, message: string) {
+    super(message)
+    this.name = 'SessionPrecheckError'
+    this.code = code
+  }
+}
+
 export interface RunnerDeps {
   api: ApiClient
   providers: ProviderSet
@@ -53,6 +63,11 @@ export interface RunnerDeps {
   permitLocalCapMs?: number
   /** 测试注入的 Provider manifest 覆盖（v2 契约样例专用；生产不传，走 TRUSTED_MANIFESTS） */
   manifests?: Record<string, ProviderManifest>
+  /** 会话任务专用锁内复核（设计 §7 顺序 4）：写许可申请**之前**在桌面锁内重新
+   * 观察目标会话并比对决策水位——有新消息/人工回复/身份漂移/观察失败时抛出
+   * SessionPrecheckError，本 invocation 按 effect=none 收敛（不发送、不另建链）。
+   * 仅会话任务引擎注入；缺失时行为不变。 */
+  sessionPrecheck?: () => Promise<void>
   onEvent?: (message: string) => void
 }
 
@@ -412,6 +427,24 @@ export async function runInvocation(inv: ClaimedInvocation, deps: RunnerDeps): P
               safe_to_retry: true,
             })
             return null
+          }
+          // 会话任务锁内复核（§7 顺序 4）：重新观察会话/比对决策水位在许可申请
+          // 之前完成——复核不通过或观察失败均不得发送（旧决策由 supersede 作废）
+          if (deps.sessionPrecheck) {
+            try {
+              await deps.sessionPrecheck()
+            } catch (err) {
+              const code = err instanceof SessionPrecheckError ? err.code : 'SESSION_PRERECHECK_FAILED'
+              emit(`invocation ${inv.invocation_id} 会话任务锁内复核未通过（${code}），不执行`)
+              lockPreabort = preabortFinal({
+                success: false,
+                code: 'SESSION_PRERECHECK_BLOCKED',
+                message: `发送前会话复核未通过: ${err instanceof Error ? err.message : String(err)}`,
+                retryable: false,
+                safe_to_retry: false,
+              })
+              return null
+            }
           }
           try {
             permit = await acquireWritePermit(

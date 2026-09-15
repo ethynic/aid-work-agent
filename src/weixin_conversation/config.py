@@ -78,3 +78,21 @@ def scenario_enabled(tenant_id: str, config_path: Optional[str] = None) -> bool:
     if not gate.tenant_allowlist:
         return True
     return tenant_id in gate.tenant_allowlist
+
+
+def scenario_enabled_gate(config_path: Optional[str] = None) -> bool:
+    """租户无关的场景总门控（注册/调度接线用：仅看 enabled，不看 allowlist）。"""
+    global _gate_cache
+    path = Path(config_path) if config_path else _gate_yaml_path()
+    try:
+        st = path.stat()
+        key = (str(path), st.st_mtime_ns, st.st_size)
+    except OSError:
+        return False
+    with _gate_lock:
+        if _gate_cache is not None and _gate_cache[0] == key:
+            gate = _gate_cache[1]
+        else:
+            gate = _parse_gate(path)
+            _gate_cache = (key, gate)
+    return gate.enabled

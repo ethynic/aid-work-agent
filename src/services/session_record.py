@@ -580,6 +580,36 @@ class SessionRecordManager:
         return None
 
 
+def record_background_llm_usage_strict(
+    usage: Optional[Dict[str, int]],
+    *,
+    tenant_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+    source: str = "background_llm",
+    user_message: Optional[str] = None,
+    model: Optional[str] = None,
+) -> None:
+    """record_background_llm_usage 的 strict 变体：账务写入失败**上抛**而非吞掉。
+
+    会话任务决策（C3 #1）使用——调用方据此保留预留待处理状态、不标记已结算；
+    其余后台调用继续使用吞异常的原版本（不影响既有行为）。
+    """
+    if not usage:
+        return
+    record = SessionRecordManager.get_current_record()
+    if record is not None:
+        # 会话上下文：累加到当前记录（save 时统一结算），与原版一致
+        record.add_llm_usage(usage)
+        return
+    # 无会话上下文（worker 恒为此路径）：直接走独立账务落库，异常上抛。
+    # D1 账务幂等：补偿重试与首次写入共用稳定 session_id（source+user 维度），
+    # 重放不产生第二笔扣费记录由 ChatRecordDB 层唯一性/调用方 attempt 状态机保证
+    _persist_background_llm_record(
+        usage, tenant_id=tenant_id, user_id=user_id, source=source, model=model,
+        raise_on_error=True,
+    )
+
+
 def record_background_llm_usage(
     usage: Optional[Dict[str, int]],
     *,
@@ -648,6 +678,7 @@ def _persist_background_llm_record(
     source: str = "background_llm",
     user_message: Optional[str] = None,
     model: Optional[str] = None,
+    raise_on_error: bool = False,
 ) -> None:
     """background_runner 调度线程的后台 LLM 调用独立写入 chat_records
 
@@ -748,6 +779,8 @@ def _persist_background_llm_record(
             f"user={user_id}, tokens={total_tokens}, credit={credit_cost}"
         )
     except Exception as e:
+        if raise_on_error:
+            raise
         logger.opt(exception=True).error(f"background_llm 计费落库失败: {e}")
 
 

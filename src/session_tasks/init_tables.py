@@ -173,6 +173,63 @@ DDL_STATEMENTS: Tuple[str, ...] = (
         ON session_task_decisions (tenant_id, task_id)
         WHERE decision_kind = 'opening'
     """,
+    # C3 决策 worker 扩列：action=冻结的模型动作（reply/wait/handoff/done）；
+    # model_attempts=实际模型调用次数（超时重试/修复各计一次，受 max_decisions 与
+    # 费用预算约束）；failure_code=failed 决策的稳定失败原因。
+    "ALTER TABLE session_task_decisions ADD COLUMN IF NOT EXISTS action TEXT",
+    "ALTER TABLE session_task_decisions ADD COLUMN IF NOT EXISTS failure_code TEXT",
+    "ALTER TABLE session_task_decisions ADD COLUMN IF NOT EXISTS model_attempts INTEGER NOT NULL DEFAULT 0",
+    # §13.5 槽位语义：模型调用"已发起未确认结束"独立于决策状态——supersede/租约
+    # 过期不清除；仅在调用返回（成功/异常）或滞留回收确认停止时清零，未确认结束
+    # 前持续占用租户/任务在飞槽位，阻止替代调用重叠
+    "ALTER TABLE session_task_decisions ADD COLUMN IF NOT EXISTS model_call_pending BOOLEAN NOT NULL DEFAULT FALSE",
+    # attempt 级费用生命周期（C3 门禁 #1）：每次模型调用尝试的预留/启动/返回/
+    # 计费状态持久化——补偿只释放"确实未启动"（state='reserved'）的 attempt，
+    # 未知（started/returned/billing_pending）一律保留；与 cost_reservations 按
+    # ref_key 一一对应（预留同事务写入）
+    """
+    CREATE TABLE IF NOT EXISTS session_task_decision_attempts (
+        id UUID DEFAULT gen_random_uuid() NOT NULL,
+        tenant_id TEXT NOT NULL,
+        task_id UUID NOT NULL,
+        decision_id UUID NOT NULL,
+        attempt_ref TEXT NOT NULL,
+        state TEXT NOT NULL DEFAULT 'reserved',
+        usage_json TEXT,
+        credit_cost NUMERIC(14,4),
+        billing_key TEXT,
+        model TEXT,
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+        updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+        PRIMARY KEY (id),
+        UNIQUE (tenant_id, attempt_ref)
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_session_task_attempts_decision
+        ON session_task_decision_attempts (tenant_id, task_id, decision_id)
+    """,
+    # D1：返回时持久化用量/金额/账务键（既有表 ALTER 增列）
+    "ALTER TABLE session_task_decision_attempts ADD COLUMN IF NOT EXISTS usage_json TEXT",
+    "ALTER TABLE session_task_decision_attempts ADD COLUMN IF NOT EXISTS credit_cost NUMERIC(14,4)",
+    "ALTER TABLE session_task_decision_attempts ADD COLUMN IF NOT EXISTS billing_key TEXT",
+    "ALTER TABLE session_task_decision_attempts ADD COLUMN IF NOT EXISTS model TEXT",
+    "ALTER TABLE session_task_decision_attempts ADD COLUMN IF NOT EXISTS user_id TEXT",
+    "ALTER TABLE session_task_decision_attempts ADD COLUMN IF NOT EXISTS result_text_id UUID",
+    "ALTER TABLE session_task_decision_attempts ADD COLUMN IF NOT EXISTS billing_retry_at TIMESTAMPTZ",
+    "ALTER TABLE session_task_decision_attempts ADD COLUMN IF NOT EXISTS billing_retry_count INTEGER DEFAULT 0",
+    # 账务幂等锚（五轮 #1）：稳定 attempt 计费键贯穿首次计费与补偿——部分唯一索引
+    # 使 ChatRecordDB 写入判重与扣费在同一事务内恰好一次（并发补偿收敛单行）
+    "ALTER TABLE chat_records ADD COLUMN IF NOT EXISTS billing_ref TEXT",
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_chat_records_billing_ref
+        ON chat_records (tenant_id, billing_ref)
+        WHERE billing_ref IS NOT NULL
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_session_task_decisions_worker
+        ON session_task_decisions (status, created_at)
+    """,
     """
     CREATE TABLE IF NOT EXISTS session_task_execution_links (
         id UUID DEFAULT gen_random_uuid() NOT NULL,

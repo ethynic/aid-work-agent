@@ -36,11 +36,13 @@ class LocalInvocationService:
         dedupe_key: Optional[str] = None,
         deadline_at: Optional[datetime] = None,
         authorization_epoch: Optional[int] = None,
+        execution_lane: str = "standard",
     ) -> Dict[str, Any]:
         """创建/复用 invocation（state=queued），返回 invocation 行（含 id）。
 
         dedupe_key 提供（business_kind 非空）时按 UNIQUE(tenant_id,business_kind,dedupe_key)
         幂等：冲突返回已有 invocation（同键重投不产生新行）。
+        execution_lane 仅服务端设置（设计 §10）；'session_task' 道仅定向 claim 可领。
         """
         if (dedupe_key is None) != (business_kind is None):
             raise ValueError("dedupe_key 与 business_kind 必须成对提供")
@@ -53,6 +55,7 @@ class LocalInvocationService:
             dedupe_key=dedupe_key,
             deadline_at=deadline_at,
             authorization_epoch=authorization_epoch,
+            execution_lane=execution_lane,
         )
         row = repository.get_invocation(invocation_id, tenant_id)
         if row is None:

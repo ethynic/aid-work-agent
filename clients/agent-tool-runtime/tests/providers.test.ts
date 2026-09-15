@@ -68,7 +68,7 @@ test('boss digest：与改造前基线逐字节一致（manifestVerifier 与注�
   assert.equal(manifestDigestFor('boss-recruiting'), BOSS_DIGEST_BASELINE)
 })
 
-test('weixin manifest：5 个工具、provider_id、仅 weixin_message_send 为写、v2 能力未开', () => {
+test('weixin manifest：默认真实 v1（5 工具、仅 message_send 为写、v2 能力未开——能力真实性 #6）', () => {
   const weixin = getProviderManifest('weixin')!
   assert.deepEqual([...weixin.tools], [
     'weixin_probe',
@@ -85,9 +85,28 @@ test('weixin manifest：5 个工具、provider_id、仅 weixin_message_send 为�
     assert.equal(isWriteToolFor(weixin, tool), tool === 'weixin_message_send', `${tool} 写属性不符合现 CLI 写集合`)
   }
   assert.ok(isToolAllowedFor(weixin, 'weixin_message_send'))
-  assert.ok(!isToolAllowedFor(weixin, 'weixin_message_send_v2'), 'v2 工具不得在 v1 白名单')
+  assert.ok(!isToolAllowedFor(weixin, 'weixin_message_send_v2'), 'v2 工具不得在未协商的 v1 白名单')
   assert.match(manifestDigestFor('weixin'), /^[0-9a-f]{64}$/)
   assert.notEqual(manifestDigestFor('weixin'), manifestDigestFor('boss-recruiting'), '各 Provider digest 应独立')
+})
+
+test('weixin v2 会话变体：仅显式协商后生效（setManifestOverride），运行期判断同源（#6）', async () => {
+  const { setManifestOverride, weixinV2Manifest } = await import('../src/providers.js')
+  try {
+    setManifestOverride('weixin', weixinV2Manifest())
+    const v2 = getProviderManifest('weixin')!
+    assert.equal(v2.protocol_version, 2)
+    assert.equal(v2.shared_lock_capable, true)
+    assert.ok(isToolAllowedFor(v2, 'weixin_session_observe'), '观察工具在 v2 变体')
+    assert.ok(isToolAllowedFor(v2, 'weixin_message_send_v2'), 'v2 发送在 v2 变体')
+    assert.ok(isWriteToolFor(v2, 'weixin_message_send_v2'), 'v2 发送为写')
+    assert.ok(!isWriteToolFor(v2, 'weixin_session_observe'), '观察只读')
+  } finally {
+    setManifestOverride('weixin', null)
+  }
+  const reverted = getProviderManifest('weixin')!
+  assert.equal(reverted.protocol_version, 1, '撤销协商后回归真实 v1')
+  assert.ok(!isToolAllowedFor(reverted, 'weixin_message_send_v2'))
 })
 
 test('白名单：跨 Provider 工具不串道，未知 provider 无 manifest', () => {

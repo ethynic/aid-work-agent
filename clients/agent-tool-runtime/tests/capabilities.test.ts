@@ -59,3 +59,34 @@ test('entry 解析：providers 中非法条目（entry 非字符串/空）被忽
   assert.equal(entries['weixin'], undefined)
   assert.ok(entries['boss-recruiting'])
 })
+
+
+test('D5 能力上报与实际生效 manifest 同源：默认 v1；v2Send 显式协商后协议/工具/摘要一致', async () => {
+  const { setManifestOverride, weixinV2Manifest, manifestDigestOf } = await import('../src/providers.js')
+  const { deviceCapabilities } = await import('../src/config.js')
+  const baseConfig: Record<string, unknown> = {
+    server: 'http://x', device_id: 'd',
+    providers: { weixin: { entry: 'C:/fake/weixin.js' } },
+  }
+  // 默认（未协商）：协议 1、工具集合无 v2、能力不含 v2 发送
+  const def = deviceCapabilities(baseConfig as never) as { providers: string[]; capabilities: string[]; provider_manifests: Record<string, { protocol_version: number; manifest_digest: string }> }
+  assert.equal(def.provider_manifests['weixin']!.protocol_version, 1)
+  assert.ok(!def.capabilities.includes('weixin_message_send_v2'))
+  // 显式协商 v2Send：manifest 升级 v2 变体（cli 启动注入，此处直接模拟）后，
+  // 上报协议 2、摘要 = v2 变体摘要、能力含 v2 发送
+  setManifestOverride('weixin', weixinV2Manifest())
+  try {
+    const v2cfg: Record<string, unknown> = { ...baseConfig, providers: { weixin: { entry: 'C:/fake/weixin.js', v2Send: true } } }
+    const negotiated = deviceCapabilities(v2cfg as never) as typeof def
+    const v2 = weixinV2Manifest()
+    assert.equal(negotiated.provider_manifests['weixin']!.protocol_version, 2)
+    assert.equal(negotiated.provider_manifests['weixin']!.manifest_digest, manifestDigestOf(v2))
+    assert.ok(negotiated.capabilities.includes('weixin_message_send_v2'))
+  } finally {
+    setManifestOverride('weixin', null)
+  }
+  // 撤销后回归
+  const reverted = deviceCapabilities(baseConfig as never) as typeof def
+  assert.equal(reverted.provider_manifests['weixin']!.protocol_version, 1)
+  assert.ok(!reverted.capabilities.includes('weixin_message_send_v2'))
+})

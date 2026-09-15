@@ -245,6 +245,7 @@ class WeixinFixedContentAdapter:
         payload_hash: Optional[str],
         authorization_revision: Optional[str],
         authorization_epoch: Optional[int],
+        invocation: Optional[Dict[str, Any]] = None,
     ) -> AuthorizeDecision:
         """许可事务内场景授权：操作名/任务状态/active revision/属主/绑定链 + 配额 scopes
 

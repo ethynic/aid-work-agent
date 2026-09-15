@@ -208,7 +208,7 @@ V1 不引入新 SQLite/native 包依赖；使用 Runtime 现有 fsync 文件能�
 
 服务端 worker 用 DB claim/租约处理 decision 队列，后台调度注册受本功能 enabled 门控；使用现有 LLM 网关、调用计费和并发约束。决策唯一键 `(tenant_id, task_id, spec_revision, batch_id, decision_kind)`；decision_kind 为 opening、reply 或 completion_review，opening 的附加约束见 §13.2。模型调用超时不重建新 decision；恢复时同 ID 重试最多一次（仍计实际模型费用），无可验证结果转 human_required。超时重试允许供应商重复算费，不允许生成多个发送单元。
 
-模型结构化输出：`action=reply|wait|handoff|done, reply_text?, evidence_message_ids[], criterion_results[], reason_code`。reply_text 非空且符合当前微信文字上限；V1 不输出任意工具、URL 下载、目标/账号/预算字段。校验失败一次修复调用也计决策和费用上限；之后 human_required。wait 必须有 `wait_for=peer|work_window`，不得由模型要求任意长 sleep 阻塞线程。done 经 §5 二次裁决，handoff 不向客户自动发技术提示。
+模型结构化输出：`action=reply|wait|handoff|done, reply_text?, evidence_message_ids[], criterion_results[], reason_code`。reply_text 非空且符合当前微信文字上限；V1 不输出任意工具、URL 下载、目标/账号/预算字段。校验失败一次修复调用也计决策和费用上限；之后 human_required。max_decisions 按"消耗了模型调用的决策记录数"计：同一决策的修复重试不重复占用决策数，但每次实际调用照实计费并计入 max_cost_units 费用预算。wait 必须有 `wait_for=peer|work_window`，不得由模型要求任意长 sleep 阻塞线程。done 经 §5 二次裁决，handoff 不向客户自动发技术提示。
 
 网络重试不重新产生 batch/decision。新增消息/人工介入/策略变化使旧 input_version 不可发送；同一事务校验当前 input_version 后物化 delivery。准备后变化则 revoke 未开始发送，端侧锁内再复核仍为最后一道防线。
 

@@ -62,7 +62,11 @@ const BOSS_WRITE_TOOLS: ReadonlySet<string> = new Set([
   'boss_resume_batch',
 ])
 
-// 与 weixin CLI 的 TOOL_DEFS（src/mcp/toolDefs.ts）保持同步；写集合按现 CLI：仅 message_send 为写
+// 与 weixin CLI 的 TOOL_DEFS（src/mcp/toolDefs.ts）保持同步；写集合按现 CLI：
+// 仅 message_send 为写。真实 Provider 尚无 weixin_message_send_v2——受信 manifest
+// 保持真实 v1 形态；v2 会话发送能力经 config.providers.weixin.v2Send=true 显式
+// 协商（隔离测试/未来真实 v2 Provider），由 cli 在启动时调用 setManifestOverride
+// 升级为 V2 变体。能力上报与 v2 门禁同源，缺能力不得通过发布/分配门禁（#6）
 const WEIXIN_TOOLS = [
   'weixin_probe',
   'weixin_chat_search',
@@ -72,6 +76,10 @@ const WEIXIN_TOOLS = [
 ] as const
 
 const WEIXIN_WRITE_TOOLS: ReadonlySet<string> = new Set(['weixin_message_send'])
+
+/** v2 会话变体（显式协商时启用）：追加 observe + v2 发送，协议 2 + 共享锁 */
+const WEIXIN_V2_TOOLS = [...WEIXIN_TOOLS, 'weixin_session_observe', 'weixin_message_send_v2'] as const
+const WEIXIN_V2_WRITE_TOOLS: ReadonlySet<string> = new Set(['weixin_message_send', 'weixin_message_send_v2'])
 
 export const TRUSTED_MANIFESTS: Readonly<Record<string, ProviderManifest>> = {
   'boss-recruiting': {
@@ -94,8 +102,46 @@ export const TRUSTED_MANIFESTS: Readonly<Record<string, ProviderManifest>> = {
   },
 }
 
+const _manifestOverrides: Partial<Record<string, ProviderManifest>> = {}
+
+/** 显式协商的 manifest 变体（#6）：cli 启动时按 config.providers.<key>.v2Send
+ * 注入——运行期全部能力判断（v2 门禁/写集合/白名单）与上报同源生效 */
+export function setManifestOverride(key: string, manifest: ProviderManifest | null): void {
+  if (manifest === null) delete _manifestOverrides[key]
+  else _manifestOverrides[key] = manifest
+}
+
 export function getProviderManifest(key: string): ProviderManifest | undefined {
-  return TRUSTED_MANIFESTS[key]
+  return _manifestOverrides[key] ?? TRUSTED_MANIFESTS[key]
+}
+
+/** 实际生效 manifest（含显式协商变体）；无则 undefined（调用方回退 TRUSTED） */
+export function effectiveManifestFor(key: string): ProviderManifest | undefined {
+  return getProviderManifest(key)
+}
+
+/** 任意 manifest 实例的摘要（与 manifestDigestFor 同算法——历史算法：
+ * provider_id + 排序 tools + execution_target） */
+export function manifestDigestOf(manifest: ProviderManifest): string {
+  const stable = JSON.stringify({
+    provider_id: manifest.provider_id,
+    tools: [...manifest.tools].sort(),
+    execution_target: manifest.execution_target,
+  })
+  return createHash('sha256').update(stable).digest('hex')
+}
+
+/** weixin v2 会话变体工厂（测试/未来真实 v2 Provider 显式协商用） */
+export function weixinV2Manifest(): ProviderManifest {
+  return {
+    provider_key: 'weixin',
+    provider_id: 'ai.aidwork.weixin',
+    tools: WEIXIN_V2_TOOLS,
+    execution_target: 'local_required',
+    protocol_version: 2,
+    shared_lock_capable: true,
+    write_tools: WEIXIN_V2_WRITE_TOOLS,
+  }
 }
 
 export function isToolAllowedFor(manifest: ProviderManifest, toolName: string): boolean {

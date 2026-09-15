@@ -11,7 +11,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { manifestDigestFor, TRUSTED_MANIFESTS } from './providers.js'
+import { effectiveManifestFor, manifestDigestOf, TRUSTED_MANIFESTS } from './providers.js'
 
 /** 运行时版本（读 package.json，src/dist 两种布局兜底；不手写字符串防漂移误导排障） */
 export const RUNTIME_VERSION: string = (() => {
@@ -33,8 +33,10 @@ export interface RuntimeConfig {
   name?: string
   /** boss CLI 入口绝对路径（本地管理员配置，禁止云端下发；折算为 providers['boss-recruiting'].entry 的高优先级来源） */
   bossCliEntry?: string
-  /** 各 Provider 入口（key → entry 绝对路径，本地管理员配置，禁止云端下发；无 entry 的 Provider 视为未安装） */
-  providers?: Record<string, { entry: string }>
+  /** 各 Provider 入口（key → entry 绝对路径，本地管理员配置，禁止云端下发；无 entry 的 Provider 视为未安装）。
+   * v2Send（可选，显式协商）：仅隔离测试/真实 v2 Provider 具备 weixin_message_send_v2
+   * 时开启——开启后受信 manifest 升级 v2 变体并上报 v2 发送能力（#6 能力真实性） */
+  providers?: Record<string, { entry: string; v2Send?: boolean }>
   /** 端侧会话任务引擎开关（C2；默认关闭，显式开启后与 pollLoop 并存运行） */
   sessionTasks?: boolean
 }
@@ -154,18 +156,34 @@ export function deviceCapabilities(config?: RuntimeConfig | null): Record<string
     })
   const manifests: Record<string, { provider_id: string; manifest_digest: string; protocol_version: number }> = {}
   for (const key of available) {
-    const manifest = TRUSTED_MANIFESTS[key]!
+    // D5：上报/摘要统一读**实际生效** manifest（含 v2Send 显式协商变体）——
+    // 运行时校验、能力上报与摘要计算三者同源，显式开启 v2 后不再上报旧 v1 摘要
+    const manifest = effectiveManifestFor(key) ?? TRUSTED_MANIFESTS[key]!
     manifests[key] = {
       provider_id: manifest.provider_id,
-      manifest_digest: manifestDigestFor(key),
+      manifest_digest: manifestDigestOf(manifest),
       protocol_version: manifest.protocol_version,
     }
   }
   const first = available[0]
+  // 会话任务能力名（C1 REQUIRED_DEVICE_CAPABILITIES：session_task_v1 +
+  // session_observer_v1 + v2 写链）。weixin Provider 安装才上报——未安装的设备
+  // 不会通过会话任务的发布/分配能力检查（设计 §10 fail-closed）
+  const capabilities: string[] = ['local_v2']
+  if (entries['weixin']) {
+    capabilities.push('session_task_v1', 'session_observer_v1')
+    // #6/D5 能力真实性：v2 发送能力与实际生效 manifest 的工具集合同源判定——
+    // 显式协商（v2Send）使 manifest 升级 v2 变体后才上报；旧 Provider 不得宣称
+    const effectiveWeixin = effectiveManifestFor('weixin')
+    if (effectiveWeixin && effectiveWeixin.tools.includes('weixin_message_send_v2')) {
+      capabilities.push('weixin_message_send_v2')
+    }
+  }
   return {
     providers: available,
     protocol_version: 2,
     provider_manifests: manifests,
+    capabilities,
     ...(first ? { provider_id: TRUSTED_MANIFESTS[first]!.provider_id } : {}),
   }
 }

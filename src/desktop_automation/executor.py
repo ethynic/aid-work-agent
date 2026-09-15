@@ -339,11 +339,18 @@ def _abandon_run(run: Dict[str, Any], reason: str, now: datetime) -> None:
 
 
 def execute_next_delivery(
-    run: Dict[str, Any], *, now: Optional[datetime] = None
+    run: Dict[str, Any], *, now: Optional[datetime] = None,
+    execution_lane: str = "standard",
+    extra_business_ref: Optional[Dict[str, Any]] = None,
+    deadline_cap: Optional[datetime] = None,
+    dedupe_key_override: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """顺序规则（§4 顺序 5）：下一条只在上一条 applied 且 verified 后开始。
 
     返回 {delivery, invocation_id, request_id, attempt_id}；无可执行条目返回 None。
+    execution_lane/extra_business_ref（设计 §10 会话任务扩展）：lane 仅服务端设置
+    （'session_task' 道仅定向 claim 领取）；extra_business_ref 由场景侧传入并入
+    invocation business_ref（decision_id/batch_id/input_version 等，均服务端生成）。
     """
     now = now or _utcnow()
     delivery = deliveries_module.next_executable_delivery(str(run["id"]), run["tenant_id"])
@@ -368,6 +375,11 @@ def execute_next_delivery(
 
     request_id = str(uuid.uuid4())
     deadline_at = now + timedelta(seconds=DEFAULT_OPERATION_DEADLINE_SECONDS)
+    if deadline_cap is not None:
+        # 会话任务（A3）：invocation 截止不晚于任务 expires_at——许可 deadline 取
+        # LEAST(ttl, invocation.deadline_at, lease)，传导后 permit 亦不晚于任务截止
+        cap = deadline_cap if deadline_cap.tzinfo else deadline_cap.replace(tzinfo=timezone.utc)
+        deadline_at = min(deadline_at, cap)
     resource_key = derive_resource_key(str(run.get("device_id") or ""))
     arguments = build_v2_operation_arguments(
         operation=delivery["operation"],
@@ -401,6 +413,20 @@ def execute_next_delivery(
         next_attempt_no = int(cursor.fetchone()["next_no"])
 
     service = LocalInvocationService()
+    # #5 稳定执行身份：会话任务按决策（业务键）去重——并发 prepare / 崩溃重试
+    # 在 attempt 编号计算的交错窗口内收敛到同一 invocation，不解释为新发送尝试；
+    # 缺省沿用 per-attempt 键（营销/重试链语义不变）
+    effective_dedupe_key = dedupe_key_override or f"delivery:{delivery['id']}:a:{next_attempt_no}"
+    business_ref = {
+        "delivery_id": str(delivery["id"]),
+        "run_id": str(run["id"]),
+        "occurrence_id": str(run.get("occurrence_id") or ""),
+        "scenario_key": run["scenario_key"],
+        "task_ref": run["task_ref"],
+        "revision_ref": run["revision_ref"],
+    }
+    if extra_business_ref:
+        business_ref.update(extra_business_ref)
     invocation = service.enqueue(
         tenant_id=run["tenant_id"],
         user_id=run["user_id"],
@@ -409,17 +435,11 @@ def execute_next_delivery(
         arguments=arguments,
         provider_key=delivery["provider_key"],
         business_kind=BUSINESS_KIND_DESKTOP_AUTOMATION,
-        business_ref={
-            "delivery_id": str(delivery["id"]),
-            "run_id": str(run["id"]),
-            "occurrence_id": str(run.get("occurrence_id") or ""),
-            "scenario_key": run["scenario_key"],
-            "task_ref": run["task_ref"],
-            "revision_ref": run["revision_ref"],
-        },
-        dedupe_key=f"delivery:{delivery['id']}:a:{next_attempt_no}",
+        business_ref=business_ref,
+        dedupe_key=effective_dedupe_key,
         deadline_at=deadline_at,
         authorization_epoch=run.get("authorization_epoch"),
+        execution_lane=execution_lane,
     )
     # dedupe 幂等复用旧 invocation 时（崩溃后重派等），request_id 以旧 arguments_json 为准
     # （permit/attempt 与 invocation 三方绑定一致；P2-4）

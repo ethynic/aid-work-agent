@@ -1192,6 +1192,7 @@ CREATE TABLE IF NOT EXISTS local_tool_invocations (
     deadline_at TIMESTAMPTZ,                    -- v2 操作截止
     authorization_epoch INTEGER,                -- v2 授权快照 epoch（许可事务复验）
     write_phase TEXT,                           -- 写动作阶段（许可发放后置 may_have_started）
+    execution_lane TEXT DEFAULT 'standard' NOT NULL, -- 执行道（会话任务 'session_task' 仅定向 claim 可领；其余 'standard'，NULL 不存在）
     PRIMARY KEY (id)
 );
 CREATE INDEX IF NOT EXISTS idx_lt_inv_device_state ON local_tool_invocations USING btree (device_id, state);
@@ -1200,6 +1201,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_lt_invocations_dedupe
     ON local_tool_invocations (tenant_id, business_kind, dedupe_key)
     WHERE business_kind IS NOT NULL AND dedupe_key IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_lt_inv_provider ON local_tool_invocations USING btree (tenant_id, provider_key, state);
+CREATE INDEX IF NOT EXISTS idx_lt_inv_lane_claim ON local_tool_invocations USING btree (tenant_id, device_id, state, execution_lane);
 
 CREATE TABLE IF NOT EXISTS local_tool_events (
     id SERIAL,
@@ -2343,6 +2345,10 @@ CREATE TABLE IF NOT EXISTS session_task_decisions (
     model_call_ref TEXT,
     lease_owner TEXT,
     lease_expires_at TIMESTAMPTZ,
+    action TEXT,                                -- C3：冻结的模型动作（reply/wait/handoff/done）
+    failure_code TEXT,                          -- C3：failed 决策稳定失败原因
+    model_attempts INTEGER DEFAULT 0 NOT NULL,  -- C3：实际模型调用次数（超时重试/修复各计一次）
+    model_call_pending BOOLEAN DEFAULT FALSE NOT NULL, -- C3：模型调用已发起未确认结束（占用槽位，supersede/过期不释放）
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
     updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
     PRIMARY KEY (id),
@@ -2352,6 +2358,30 @@ CREATE TABLE IF NOT EXISTS session_task_decisions (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_session_task_decisions_opening
     ON session_task_decisions (tenant_id, task_id)
     WHERE decision_kind = 'opening';
+CREATE INDEX IF NOT EXISTS idx_session_task_decisions_worker ON session_task_decisions USING btree (status, created_at);
+CREATE TABLE IF NOT EXISTS session_task_decision_attempts (
+    id UUID DEFAULT gen_random_uuid() NOT NULL,
+    tenant_id TEXT NOT NULL,
+    task_id UUID NOT NULL,
+    decision_id UUID NOT NULL,
+    attempt_ref TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'reserved',          -- C3：reserved|started|returned|billing_pending|billed|released
+    usage_json TEXT,                                  -- D1：返回时持久化的实际 token 用量（计费补偿输入）
+    credit_cost NUMERIC(14,4),                        -- D1：计算的积分金额
+    result_text_id UUID,
+    billing_retry_at TIMESTAMPTZ,
+    billing_retry_count INTEGER DEFAULT 0,
+    billing_key TEXT,                                 -- D1：稳定账务幂等键（st-decision:<attempt_ref>）
+    model TEXT,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    PRIMARY KEY (id),
+    UNIQUE (tenant_id, attempt_ref)
+);
+CREATE INDEX IF NOT EXISTS idx_session_task_attempts_decision ON session_task_decision_attempts USING btree (tenant_id, task_id, decision_id);
+ALTER TABLE chat_records ADD COLUMN IF NOT EXISTS billing_ref TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_chat_records_billing_ref ON chat_records (tenant_id, billing_ref) WHERE billing_ref IS NOT NULL;
+ALTER TABLE session_task_decision_attempts ADD COLUMN IF NOT EXISTS user_id TEXT;
 CREATE TABLE IF NOT EXISTS session_task_execution_links (
     id UUID DEFAULT gen_random_uuid() NOT NULL,
     tenant_id TEXT NOT NULL,
