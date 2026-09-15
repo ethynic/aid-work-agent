@@ -3,6 +3,9 @@
 # ==============================================================================
 # AI 数字员工系统 - 快速更新脚本（不重建 Docker 镜像）
 # 用途: 仅更新代码，快速重启服务
+# 用法: ./agent_update.sh [git版本号]
+#       不带参数 -> 更新到 origin/master 最新
+#       带参数   -> 停留在指定提交（如 ./agent_update.sh c43c65e）
 # ==============================================================================
 # 变更记录：
 #   1. 前端编译输出到 dist.new，编译期间 nginx 继续服务旧 dist，build 完成后
@@ -31,13 +34,24 @@ BUILD_LOG="/var/www/agent/log/frontend-build.log"
 # 配置 Git 安全目录（避免所有权检查错误）
 git config --global --add safe.directory /var/www/agent 2>/dev/null || true
 
-# 1. 拉取代码
-echo "[1] 拉取最新代码..."
+# 1. 拉取代码（可选参数：目标 git 提交版本号，短哈希/长哈希/tag 均可；
+#    不传则更新到 origin/master 最新。指定旧版本用于回滚或停留在未全部
+#    合入测试通过的提交）
+echo "[1] 拉取代码..."
 cd "/var/www/agent"
 OLD_HEAD=$(git rev-parse HEAD)
 echo "更新前版本: $(git log -1 --format='%cd %s' --date=format:'%Y-%m-%d %H:%M:%S')"
 git fetch --all
-git reset --hard origin/master
+if [ -n "$1" ]; then
+    if ! git cat-file -e "$1^{commit}" 2>/dev/null; then
+        echo "错误：仓库中不存在提交 $1（先确认已 fetch，且版本号正确）"
+        exit 1
+    fi
+    TARGET_REF="$1"
+else
+    TARGET_REF="origin/master"
+fi
+git reset --hard "$TARGET_REF"
 echo "更新后版本: $(git log -1 --format='%cd %s' --date=format:'%Y-%m-%d %H:%M:%S')"
 NEW_HEAD=$(git rev-parse HEAD)
 find . -type d -name "__pycache__" -exec chmod -R 777 {} + 2>/dev/null || true
