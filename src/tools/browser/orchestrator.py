@@ -202,7 +202,7 @@ class BrowserOrchestrator:
             len(prompt),
         )
 
-        response = await llm_gateway.chat_lite(
+        response = await llm_gateway.chat_no_thinking(
             messages=messages,
             temperature=0.1,
             max_tokens=1000,
@@ -212,7 +212,7 @@ class BrowserOrchestrator:
         record_background_llm_usage(
             response.get("usage") if isinstance(response, dict) else None,
             source="browser_orchestrator",
-            model=settings.llm.get_lite_model(),  # chat_lite 实际消耗 lite 模型，按 lite 单价计费
+            model=llm_gateway.get_model_name(),  # chat_no_thinking 沿用主链路模型，按主模型单价计费
         )
 
         content = response.get("content", "")

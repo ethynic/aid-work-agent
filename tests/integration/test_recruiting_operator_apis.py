@@ -918,9 +918,9 @@ class TestReEvaluateResumeAPI:
             }, ensure_ascii=False), "usage": None}
 
         class _StubGateway:
-            # 评分走 chat_lite（lite_model 改造后统一收口），stub 两个方法名都对齐
+            # 评分走 chat_no_thinking（关思考收口），stub 两个方法名都对齐
             chat = _stub_chat
-            chat_lite = _stub_chat
+            chat_no_thinking = _stub_chat
 
         monkeypatch.setattr(recruiting_match_service, "llm_gateway", _StubGateway())
 

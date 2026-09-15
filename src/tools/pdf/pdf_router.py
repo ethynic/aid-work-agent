@@ -134,18 +134,17 @@ class PdfRouter:
         gateway = self._get_gateway()
 
         try:
-            response = await gateway.chat_lite(
+            response = await gateway.chat_no_thinking(
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0,
                 max_tokens=512,
             )
 
-            from src.config.settings import settings
             from src.services.session_record import record_background_llm_usage
             record_background_llm_usage(
                 response.get("usage") if isinstance(response, dict) else None,
                 source="pdf_router",
-                model=settings.llm.get_lite_model(),  # chat_lite 实际消耗 lite 模型，按 lite 单价计费
+                model=gateway.get_model_name(),  # chat_no_thinking 沿用主链路模型，按主模型单价计费
             )
 
             content = response.get("content", "")

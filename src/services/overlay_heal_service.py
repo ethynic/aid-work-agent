@@ -2,7 +2,7 @@
 
 本地工具失败（UI_CHANGED/BUSY）后，云端自愈编排从设备导出的覆盖层候选清单中挑选
 「关闭控件」：先启发式（白名单文本 + 弹层类名特征，零 LLM 费用），未命中再升级
-chat_lite 轻量模型结构化选择。
+chat_no_thinking 关思考结构化选择。
 
 安全铁律（与 CLI 端 DISMISS_TEXT_WHITELIST 双重校验）：
 - LLM 只能在白名单集合里挑，输出非白名单文本一律拒绝（防幻觉误点「立即领取」类按钮）
@@ -15,7 +15,6 @@ import re
 from typing import Any, Dict, List, Optional
 
 from src.llm.gateway import llm_gateway
-from src.reports.summarizer import get_lite_model
 from src.services.session_record import record_background_llm_usage
 
 logger = logging.getLogger(__name__)
@@ -103,7 +102,7 @@ async def pick_dismiss_text_with_llm(
     icon_candidates: Optional[List[Dict[str, Any]]] = None,
     viewport: Optional[Dict[str, int]] = None,
 ) -> Optional[str]:
-    """LLM 从候选（文本节点 + icon 关闭控件）挑关闭控件（chat_lite 轻量模型，token 记账）。
+    """LLM 从候选（文本节点 + icon 关闭控件）挑关闭控件（chat_no_thinking 关思考，token 记账）。
 
     返回白名单文本或 `icon:<cls>`（class 命中关闭语义且在候选清单内）；
     两轮尝试仍失败/不合法返回 None（自愈放弃）。
@@ -120,11 +119,11 @@ async def pick_dismiss_text_with_llm(
         {"role": "system", "content": _SYSTEM_PROMPT},
         {"role": "user", "content": user_payload},
     ]
-    model_name = get_lite_model()
+    model_name = llm_gateway.get_model_name()
     last_error = "未知"
     for attempt in (1, 2):
         try:
-            response = await llm_gateway.chat_lite(messages=messages, temperature=0, max_tokens=300)
+            response = await llm_gateway.chat_no_thinking(messages=messages, temperature=0, max_tokens=300)
         except Exception as e:  # noqa: BLE001  LLM 异常不外抛，自愈放弃返回 None
             last_error = f"{type(e).__name__}: {e}"
             logger.warning(f"弹层自愈 LLM 调用失败（第 {attempt} 次）: {last_error}")

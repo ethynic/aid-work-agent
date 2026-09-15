@@ -894,7 +894,8 @@ class TestWordRouter:
         router = WordRouter()
 
         mock_gateway = AsyncMock()
-        mock_gateway.chat.return_value = {
+        mock_gateway.get_model_name = lambda: "test-model"
+        mock_gateway.chat_no_thinking.return_value = {
             "content": '{"task": "md_to_word", "params": {"template": "default"}, "reason": "用户要求生成Word"}'
         }
         router._gateway = mock_gateway
@@ -909,7 +910,8 @@ class TestWordRouter:
         router = WordRouter()
 
         mock_gateway = AsyncMock()
-        mock_gateway.chat.side_effect = Exception("LLM unavailable")
+        mock_gateway.get_model_name = lambda: "test-model"
+        mock_gateway.chat_no_thinking.side_effect = Exception("LLM unavailable")
         router._gateway = mock_gateway
 
         result = await router.route("用户要求生成Word", None)
@@ -922,7 +924,8 @@ class TestWordRouter:
         router = WordRouter()
 
         mock_gateway = AsyncMock()
-        mock_gateway.chat.return_value = {"content": ""}
+        mock_gateway.get_model_name = lambda: "test-model"
+        mock_gateway.chat_no_thinking.return_value = {"content": ""}
         router._gateway = mock_gateway
 
         result = await router.route("some context", None)

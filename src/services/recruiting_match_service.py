@@ -8,7 +8,7 @@ evaluate_and_update；前端「重新评分」按钮经 POST /api/recruiting-ope
 1. 读简历（ocr_text 截断 3000 字）
 2. 组装职位上下文：job_requirements 优先（JSONB 原样拼入 prompt）；无 requirements
    或无 job_id 时退回 job_name + 该职位初次开场话术上下文拼一段隐含要求（设计 §3）
-3. LLM 一次（便宜轻量小模型 get_lite_model、temperature=0.1、max_tokens=1024）
+3. LLM 一次（主链路模型关思考 chat_no_thinking、temperature=0.1、max_tokens=1024）
 4. 解析 JSON 并清洗（score 0-100 截断；key_info 按 §2 固定 schema 键白名单，宁缺勿编）
 5. 按职位 match_threshold 判 match_status（≥阈值 matched / <50 rejected / 其余 unmatched）
 6. UPDATE 该行 match_score / match_summary / match_status / key_info
@@ -38,7 +38,6 @@ from loguru import logger
 from src.config.settings import settings
 from src.db.database import get_db_connection
 from src.llm.gateway import llm_gateway
-from src.reports.summarizer import get_lite_model
 from src.services import recruiting_job_service, recruiting_resume_service
 from src.services.session_record import record_background_llm_usage
 
@@ -91,7 +90,7 @@ async def evaluate_and_update(tenant_id: str, resume_id: int) -> Dict[str, Any]:
         threshold = recruiting_job_service.DEFAULT_MATCH_THRESHOLD
 
     messages = _build_messages(job_name, job_ctx, ocr_text)
-    model_name = get_lite_model()
+    model_name = _safe_model_name(llm_gateway)
 
     # LLM 最多两次（首次 + 重试 1 次）；失败不外抛，返回 note 由调用方提示
     evaluation: Optional[Dict[str, Any]] = None
@@ -99,10 +98,10 @@ async def evaluate_and_update(tenant_id: str, resume_id: int) -> Dict[str, Any]:
     for attempt in (1, 2):
         try:
             chat_kwargs: Dict[str, Any] = {"temperature": _TEMPERATURE, "max_tokens": _MAX_OUTPUT_TOKENS}
-            # chat_lite 内部按 lite_model 目标 provider 路由：DeepSeek V4 思考模型
-            # reasoning 与正文共享 max_tokens 配额（思考耗尽输出空间致 content 为空），
-            # 评分是结构化抽取任务，chat_lite 对 deepseek 自动关思考，调用方无需关心 provider
-            response = await llm_gateway.chat_lite(messages=messages, **chat_kwargs)
+            # DeepSeek V4 思考模型的 reasoning 与正文共享 max_tokens 配额
+            # （思考耗尽输出空间致 content 为空），评分是结构化抽取任务，
+            # chat_no_thinking 沿用主链路模型并自动关思考，调用方无需关心 provider
+            response = await llm_gateway.chat_no_thinking(messages=messages, **chat_kwargs)
         except Exception as e:  # noqa: BLE001 LLM 异常统一走重试/降级，绝不外抛
             last_error = f"LLM 调用失败: {type(e).__name__}: {e}"
             logger.warning(f"简历评分 LLM 调用失败（第 {attempt} 次）: resume_id={resume_id}, {last_error}")
@@ -418,7 +417,7 @@ def _update_match_fields(
 
 
 def _safe_model_name(gateway: Any) -> Optional[str]:
-    """get_lite_model 为空时兜底取网关当前模型名（网关异常返回 None，不影响主流程）"""
+    """网关异常时返回 None 兜底，正常返回主链路当前模型名，不影响主流程"""
     try:
         return gateway.get_model_name()
     except Exception:  # noqa: BLE001 计费辅助信息，取不到不强求

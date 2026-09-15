@@ -1220,7 +1220,8 @@ class TestPdfRouter:
         router = PdfRouter()
 
         mock_gateway = AsyncMock()
-        mock_gateway.chat.return_value = {
+        mock_gateway.get_model_name = lambda: "test-model"
+        mock_gateway.chat_no_thinking.return_value = {
             "content": '{"task": "read", "params": {}, "reason": "用户要求读取PDF内容"}'
         }
         router._gateway = mock_gateway
@@ -1234,7 +1235,8 @@ class TestPdfRouter:
         router = PdfRouter()
 
         mock_gateway = AsyncMock()
-        mock_gateway.chat.side_effect = Exception("LLM unavailable")
+        mock_gateway.get_model_name = lambda: "test-model"
+        mock_gateway.chat_no_thinking.side_effect = Exception("LLM unavailable")
         router._gateway = mock_gateway
 
         result = await router.route("用户要求读取PDF", None)
@@ -1247,7 +1249,8 @@ class TestPdfRouter:
         router = PdfRouter()
 
         mock_gateway = AsyncMock()
-        mock_gateway.chat.return_value = {"content": ""}
+        mock_gateway.get_model_name = lambda: "test-model"
+        mock_gateway.chat_no_thinking.return_value = {"content": ""}
         router._gateway = mock_gateway
 
         result = await router.route("some context", None)
@@ -1261,7 +1264,8 @@ class TestPdfRouter:
         router = PdfRouter()
 
         mock_gateway = AsyncMock()
-        mock_gateway.chat.return_value = {"content": "I don't understand"}
+        mock_gateway.get_model_name = lambda: "test-model"
+        mock_gateway.chat_no_thinking.return_value = {"content": "I don't understand"}
         router._gateway = mock_gateway
 
         result = await router.route("模糊请求", None)

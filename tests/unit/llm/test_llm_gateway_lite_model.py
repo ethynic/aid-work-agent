@@ -143,6 +143,42 @@ class TestChatLite:
         assert mock_chat.call_args.kwargs["model"] == "deepseek-v4-pro"
 
 
+class TestChatNoThinking:
+    """chat_no_thinking：沿用主链路模型（不切 lite_model），仅关思考"""
+
+    @pytest.mark.asyncio
+    async def test_keeps_main_model_and_disables_thinking(self):
+        """走 self.chat 完整链路，不传 model（沿用主模型），deepseek 关思考"""
+        gw = LLMGateway(provider_name="deepseek")
+        with patch.object(gw, "chat", new=AsyncMock(return_value={"content": "ok"})) as mock_chat:
+            result = await gw.chat_no_thinking(
+                messages=[{"role": "user", "content": "hi"}],
+                max_tokens=1024,
+            )
+
+        assert result["content"] == "ok"
+        mock_chat.assert_awaited_once()
+        call_kwargs = mock_chat.call_args.kwargs
+        # 关键：不切模型（与 chat_lite 的区别），计费按主模型单价与实际消耗一致
+        assert "model" not in call_kwargs
+        assert call_kwargs["thinking"] == {"type": "disabled"}
+        assert call_kwargs["max_tokens"] == 1024
+
+    @pytest.mark.asyncio
+    async def test_qwen_disables_thinking_and_drops_caller_model(self):
+        """qwen 主链路：enable_thinking=False；调用方误传的 model 被丢弃"""
+        gw = LLMGateway(provider_name="qwen")
+        with patch.object(gw, "chat", new=AsyncMock(return_value={"content": "ok"})) as mock_chat:
+            await gw.chat_no_thinking(
+                messages=[{"role": "user", "content": "hi"}],
+                model="qwen3.8-flash",  # 误传应被丢弃
+            )
+
+        call_kwargs = mock_chat.call_args.kwargs
+        assert "model" not in call_kwargs
+        assert call_kwargs["enable_thinking"] is False
+
+
 class TestGetLiteTarget:
     """LLMConfig.get_lite_target 解析边界"""
 

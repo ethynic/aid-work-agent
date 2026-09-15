@@ -112,7 +112,7 @@ async def optimize_section(request: Request, agent_id: str, section_key: str, bo
 - 描述: {body.agent_description or '未知'}"""
 
         from src.llm.gateway import llm_gateway
-        result = await llm_gateway.chat_lite(
+        result = await llm_gateway.chat_no_thinking(
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": f"请优化以下分段内容：\n\n{body.content}"},
@@ -121,14 +121,13 @@ async def optimize_section(request: Request, agent_id: str, section_key: str, bo
             max_tokens=4096,
         )
 
-        from src.config.settings import settings
         from src.services.session_record import record_admin_llm_usage
         record_admin_llm_usage(
             result,
             tenant_id=getattr(request.state, "tenant_id", None),
             user_id=getattr(request.state, "user_id", None),
             source_label=f"optimize_section_{section_key}",
-            model=settings.llm.get_lite_model(),  # chat_lite 实际消耗 lite 模型，按 lite 单价计费
+            model=llm_gateway.get_model_name(),  # chat_no_thinking 沿用主链路模型，按主模型单价计费
         )
 
         optimized = result.get("content", "").strip()

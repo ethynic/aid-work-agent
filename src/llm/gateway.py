@@ -439,6 +439,40 @@ class LLMGateway:
         )
         return result
 
+    async def chat_no_thinking(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None,
+        temperature: float = 0.7,
+        max_tokens: Optional[int] = None,
+        **kwargs
+    ) -> Dict[str, Any]:
+        """沿用主链路模型调用，仅关闭思考（不切换 lite_model）。
+
+        与 chat_lite 的区别：模型仍为当前 provider 主模型（走完整链路含 failover），
+        计费链路按主模型单价计价时与实际消耗模型一致，避免对话内累加路径的
+        「lite token 按主模型单价计费」错配（见 docs/plans/chat-lite-billing-model-mismatch.md）。
+
+        关思考参数与 chat_lite 同源（_lite_thinking_off_params）：
+        deepseek -> thinking={"type": "disabled"}；qwen -> enable_thinking=False；
+        zhipu -> reasoning_effort="low"。
+
+        Returns:
+            与 chat() 一致的响应字典
+        """
+        kwargs.pop("model", None)  # 沿用主链路模型，丢弃调用方误传的 model
+        for k, v in _lite_thinking_off_params(self.provider_name).items():
+            kwargs.setdefault(k, v)
+        return await self.chat(
+            messages=messages,
+            tools=tools,
+            tool_choice=tool_choice,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            **kwargs,
+        )
+
     async def stream_chat(
         self,
         messages: List[Dict[str, Any]],

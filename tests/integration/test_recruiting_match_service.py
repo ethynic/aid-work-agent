@@ -130,9 +130,12 @@ class _StubGateway:
             return {"content": self.content, "usage": self.usage}
         return {"content": json.dumps(self.payload, ensure_ascii=False), "usage": self.usage}
 
-    async def chat_lite(self, **kwargs):
-        # 评分服务已改走 chat_lite；真实网关内部解析 model/thinking，stub 复刻 chat 行为即可
+    async def chat_no_thinking(self, **kwargs):
+        # 评分服务已改走 chat_no_thinking；真实网关内部解析 thinking，stub 复刻 chat 行为即可
         return await self.chat(**kwargs)
+
+    def get_model_name(self) -> str:
+        return "stub-main-model"
 
 
 def _call(coro):
@@ -555,9 +558,8 @@ class TestBilling:
         assert kwargs["tenant_id"] == ctx["tenant_id"]
         assert kwargs["user_id"] == "u_billing"  # user_id 从 resume 行取
         assert f"resume_id={rid}" in kwargs["user_message"]
-        # model 显式传 lite 模型名（不传会误用 mid_term 摘要单价）
-        from src.reports.summarizer import get_lite_model
-        assert kwargs["model"] == get_lite_model()
+        # model 显式传主链路模型名（chat_no_thinking 沿用主模型，不传会误用 mid_term 摘要单价）
+        assert kwargs["model"] == "stub-main-model"
 
     def test_no_billing_when_skipped(self, temp_tenant, monkeypatch):
         """skipped（未调 LLM）绝不计费"""

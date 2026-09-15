@@ -140,7 +140,7 @@ class SchemaExtractor:
 
         try:
             gateway = self._get_gateway()
-            response = await gateway.chat_lite(
+            response = await gateway.chat_no_thinking(
                 messages=[
                     {"role": "system", "content": _SCHEMA_SYSTEM_PROMPT},
                     {"role": "user", "content": user_prompt},
@@ -153,7 +153,7 @@ class SchemaExtractor:
             record_background_llm_usage(
                 response.get("usage") if isinstance(response, dict) else None,
                 source="schema_extract",
-                model=settings.llm.get_lite_model(),  # chat_lite 实际消耗 lite 模型，按 lite 单价计费
+                model=gateway.get_model_name(),  # chat_no_thinking 沿用主链路模型，按主模型单价计费
             )
 
             content = response.get("content", "")
@@ -194,7 +194,7 @@ class SchemaExtractor:
 
         try:
             gateway = self._get_gateway()
-            response = await gateway.chat_lite(
+            response = await gateway.chat_no_thinking(
                 messages=[
                     {"role": "system", "content": _RELATION_SYSTEM_PROMPT},
                     {"role": "user", "content": user_prompt},
@@ -207,7 +207,7 @@ class SchemaExtractor:
             record_background_llm_usage(
                 response.get("usage") if isinstance(response, dict) else None,
                 source="schema_infer_relations",
-                model=settings.llm.get_lite_model(),  # chat_lite 实际消耗 lite 模型，按 lite 单价计费
+                model=gateway.get_model_name(),  # chat_no_thinking 沿用主链路模型，按主模型单价计费
             )
 
             content = response.get("content", "")

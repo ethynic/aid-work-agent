@@ -108,7 +108,7 @@ class TestPickHeuristic:
 class TestPickWithLlm:
     async def test_valid_pick(self, monkeypatch):
         gw = MagicMock()
-        gw.chat_lite = AsyncMock(return_value={
+        gw.chat_no_thinking = AsyncMock(return_value={
             "content": '```json\n{"found": true, "text": "关闭", "why": "dialog 右上角"}\n```',
             "usage": {"prompt_tokens": 100, "completion_tokens": 10},
         })
@@ -122,7 +122,7 @@ class TestPickWithLlm:
 
     async def test_non_whitelist_pick_rejected(self, monkeypatch):
         gw = MagicMock()
-        gw.chat_lite = AsyncMock(return_value={
+        gw.chat_no_thinking = AsyncMock(return_value={
             "content": '{"found": true, "text": "立即领取", "why": "x"}',
             "usage": None,
         })
@@ -133,7 +133,7 @@ class TestPickWithLlm:
 
     async def test_found_false_gives_up(self, monkeypatch):
         gw = MagicMock()
-        gw.chat_lite = AsyncMock(return_value={
+        gw.chat_no_thinking = AsyncMock(return_value={
             "content": '{"found": false, "why": "无弹层"}',
             "usage": None,
         })
@@ -144,7 +144,7 @@ class TestPickWithLlm:
     async def test_valid_icon_pick(self, monkeypatch):
         icons = [{"icon_cls": "boss-popup__close", "x": 986, "y": 372, "w": 24, "h": 26}]
         gw = MagicMock()
-        gw.chat_lite = AsyncMock(return_value={
+        gw.chat_no_thinking = AsyncMock(return_value={
             "content": '{"found": true, "text": "icon:boss-popup__close", "why": "弹窗右上角"}',
             "usage": None,
         })
@@ -156,7 +156,7 @@ class TestPickWithLlm:
     async def test_llm_fabricated_icon_ref_rejected(self, monkeypatch):
         icons = [{"icon_cls": "boss-popup__close", "x": 986, "y": 372, "w": 24, "h": 26}]
         gw = MagicMock()
-        gw.chat_lite = AsyncMock(return_value={
+        gw.chat_no_thinking = AsyncMock(return_value={
             "content": '{"found": true, "text": "icon:made-up-close", "why": "x"}',
             "usage": None,
         })
@@ -167,7 +167,7 @@ class TestPickWithLlm:
     async def test_fabricated_text_rejected(self, monkeypatch):
         """LLM 编造候选清单里不存在的文本 → 拒绝"""
         gw = MagicMock()
-        gw.chat_lite = AsyncMock(return_value={
+        gw.chat_no_thinking = AsyncMock(return_value={
             "content": '{"found": true, "text": "我知道了", "why": "x"}',  # 清单里没有
             "usage": None,
         })
