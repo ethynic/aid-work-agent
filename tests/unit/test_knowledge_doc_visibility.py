@@ -440,6 +440,36 @@ class TestDownloadExternalBoundary:
         assert "原文" in body["error"]
 
     @pytest.mark.asyncio
+    async def test_download_external_with_url_as_file_path_still_400(self):
+        """WP12 定版：外部文档 file_path 存原文链接（文档位置字段）——下载仍按
+        origin 拦截返回 400+原文链接，不得把 URL 当本地文件路径打开（防泄漏进报错）。"""
+        from fastapi import HTTPException
+        from src.knowledge import api as kb_api
+
+        set_tenant_context("t1", "u1")
+        with _patch_doc_row(self._external_row(file_path=self.EXT_URL)):
+            with pytest.raises(HTTPException) as exc_info:
+                await kb_api.download_document(7, http_request=_make_api_request(user_role="employee"))
+
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail["original_url"] == self.EXT_URL
+        assert "原文" in exc_info.value.detail["error"]
+
+    @pytest.mark.asyncio
+    async def test_download_ticket_external_with_url_as_file_path_still_400(self):
+        """同上：票据端点对 file_path=原文链接 的外部文档仍按 origin 拦截。"""
+        from src.knowledge import api as kb_api
+
+        set_tenant_context("t1", "u1")
+        with _patch_doc_row(self._external_row(file_path=self.EXT_URL)):
+            resp = await kb_api.create_download_ticket(7, http_request=_make_api_request(user_role="employee"))
+
+        assert resp.status_code == 400
+        body = json.loads(bytes(resp.body))
+        assert body["original_url"] == self.EXT_URL
+        assert "原文" in body["error"]
+
+    @pytest.mark.asyncio
     async def test_download_deleted_doc_hidden_from_tenant(self):
         """deleted 文档租户侧下载按不存在处理（不泄漏存在性）"""
         from fastapi import HTTPException

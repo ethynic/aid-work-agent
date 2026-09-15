@@ -29,6 +29,15 @@
   的文章不触发 VL（P3 再评估全量解析）。VL 按张计费 source_type=
   'wechat_mp_image_parse'，业务提交后独立落账 fail-open，与 embedding 计费合并
   回写 item 计费字段。
+- **总结入库（WP12，p3）**：VL 之后把 merged 全文（原文文本 + 图片干净描述）
+  交给 LLM 生成 ≤500 字核心要点总结（summarize.py，主 provider 默认文本模型）；
+  chunk 文本 = 总结本身（无「文档标题：」标签前缀，不拼原文链接——WP12 定版：
+  原文链接存 documents.file_path 文档位置字段，与手动上传文档的本地路径同字段，
+  下载边界按 origin 拦截）；raw_text 仍存 merged 全文供审计；总结失败回退
+  merged 原文入库（metadata.summary_fallback/content_mode 标记形态）。
+  总结调用经 record_background_llm_usage(source='wechat_mp_summary') 独立落账
+  fail-open；content_hash 仍按原始节点计算，VL 描述与总结均不进指纹——同文章
+  二次处理仍走 check 零成本。
 - **恢复**：``recover_stale_runs()`` —— heartbeat 超时且锁已失效的 running run 标
   interrupted；queued 保持等待。
 
@@ -75,6 +84,11 @@ from src.wechat_mp.fetcher import (
 from src.wechat_mp.identity import URLIdentity, URLIdentityError, normalize_url
 from src.wechat_mp.image_downloader import MPImageDownloader
 from src.wechat_mp.notify import notify_queued_work
+from src.wechat_mp.summarize import (
+    SUMMARY_MAX_CHARS,
+    SUMMARY_SOURCE_TYPE,
+    ArticleSummarizer,
+)
 from src.wechat_mp.vision import (
     VISION_PARSE_SOURCE_TYPE,
     VisionParseOutcome,
@@ -84,7 +98,9 @@ from src.wechat_mp.vision import (
 
 # ------------------------------- 常量 -------------------------------
 
-PIPELINE_VERSION = "p2"
+# WP12：p2→p3（一篇 URL = 一篇 ≤500 字总结入库，chunk 打在总结上；去掉
+# 「文档标题：」chunk 前缀）。存量 p2 文章在复核/pipeline 不匹配时自动重建为总结版。
+PIPELINE_VERSION = "p3"
 DOC_ORIGIN = "wechat_mp"
 EMBEDDING_SOURCE_TYPE = "wechat_mp_embedding"
 EMBEDDING_MODEL = "text-embedding-v3"
@@ -104,8 +120,13 @@ RETRY_BASE_SECONDS = 300  # 指数退避基数 5min
 RETRY_MAX_SECONDS = 86400  # 退避上限 24h
 RETRY_MAX_SHIFT = 8
 
-SUMMARY_MAX_CHARS = 300  # P1 确定性截断摘要（不调 LLM）
+# SUMMARY_MAX_CHARS（500 字总结上限）迁至 summarize.py（WP12：总结由 LLM 生成，
+# 不再是 P1 的确定性 300 字截断）；此处 import 以维持既有引用口径。
 MIN_TEXT_CHARS = 20  # 有图且文字不足 → VL 解析（P2），仍失败才 deferred（设计 §13 审阅记录）
+
+# WP12 总结正文形态（documents.metadata.content_mode）
+CONTENT_MODE_SUMMARY = "summary"
+CONTENT_MODE_RAW_FALLBACK = "raw_fallback"
 
 # P2 图片 VL 解析 deferred 原因文案（error_code 仍为 deferred_image_pending）
 _DEFERRED_NO_MODEL = "图片待解析：无可用多模态模型，将自动重试"
@@ -661,6 +682,7 @@ class WeChatMPSyncService:
         chunker: Optional[TextChunker] = None,
         image_downloader: Optional[MPImageDownloader] = None,
         vision_parser: Optional[VisionParser] = None,
+        summarizer: Optional[Any] = None,
     ):
         self._fetcher = fetcher or MPArticleFetcher()
         if redis is None:
@@ -671,6 +693,7 @@ class WeChatMPSyncService:
         self._embedding_client = embedding_client  # 测试注入；None 时懒加载真实 client
         self._image_downloader = image_downloader  # WP10 图片下载转存（测试可注入）
         self._vision_parser = vision_parser  # WP10 VL 解析（测试可注入）
+        self._summarizer = summarizer  # WP12 文章总结（测试可注入）
         if chunker is None:
             from src.config.settings import settings
 
@@ -1000,10 +1023,36 @@ class WeChatMPSyncService:
             self._mark_article_no_credit_retry(tenant_id, article["id"])
             return
 
-        # ---- 8. 拼正文 → 分块 → embedding（事务外）----
+        # ---- 8. 核心要点总结（WP12：一篇 URL = 一篇 ≤500 字总结，向量打在总结上）----
+        # merged 全文（原文文本节点原样 + [图片N: 干净描述]）交给 LLM 提炼；
+        # 两次尝试均失败回退 merged 原文入库（不丢数据），形态记 metadata.content_mode
         doc_title = f"[公众号] {title}"[:255]
-        text_with_title = f"文档标题：{doc_title}\n\n{body_text}"
-        chunks = self._chunker.chunk(text_with_title)
+        original_url = article["original_url"]
+        summary_result = await self._summarize_article(body_text, title)
+        content_mode = CONTENT_MODE_RAW_FALLBACK
+        summary_column: Optional[str] = None
+        if summary_result is not None:
+            summary_text, summary_model, summary_usage = summary_result
+            doc_content = summary_text
+            summary_column = summary_text
+            content_mode = CONTENT_MODE_SUMMARY
+            # 总结调用计费（record_background_llm_usage 独立落账，fail-open）
+            self._bill_summary(
+                tenant_id=tenant_id,
+                user_id=item.get("user_id") or run.get("user_id"),
+                usage=summary_usage,
+                model=summary_model,
+            )
+        else:
+            # 回退：merged 原文即文档正文；总结列沿用截断口径
+            doc_content = body_text
+            summary_column = body_text[:SUMMARY_MAX_CHARS] if body_text else None
+
+        # ---- 9. 分块 → embedding（事务外）----
+        # chunk 文本 = 总结（或回退正文）本身；不加「文档标题：」标签前缀，
+        # 也不拼原文链接（WP12 定版：链接存 documents.file_path 即文档位置字段，
+        # 避免链接挤占/独占 chunk、向量化噪声；检索与详情可见性见 knowledge api）
+        chunks = self._chunker.chunk(doc_content)
         if not chunks:
             self._mark_item_skipped(tenant_id, item_id, ERR_CONTENT_EMPTY, "分块结果为空")
             return
@@ -1012,7 +1061,7 @@ class WeChatMPSyncService:
         embeddings = await embedding_client.embed_batch([c["text"] for c in chunks])
         embedding_tokens = int(getattr(embedding_client, "last_usage_tokens", 0) or 0)
 
-        # ---- 9. 单事务落库（documents/chunks/chunks_vec/articles/item）----
+        # ---- 10. 单事务落库（documents/chunks/chunks_vec/articles/item）----
         action = "new" if not article["doc_id"] else "update"
         doc_id = await self._persist_document_tx(
             tenant_id=tenant_id,
@@ -1022,6 +1071,8 @@ class WeChatMPSyncService:
             extracted=extracted,
             doc_title=doc_title,
             body_text=body_text,
+            summary_text=summary_column,
+            content_mode=content_mode,
             content_hash=content_hash,
             chunks=chunks,
             embeddings=embeddings,
@@ -1029,7 +1080,7 @@ class WeChatMPSyncService:
             image_meta=image_meta or None,
         )
 
-        # ---- 10. 售前挂接 + 计费（业务已提交，fail-open）----
+        # ---- 11. 售前挂接 + 计费（业务已提交，fail-open）----
         self._attach_presales_and_record(tenant_id, doc_id)
         self._bill_embedding(
             tenant_id=tenant_id,
@@ -1144,6 +1195,54 @@ class WeChatMPSyncService:
             else:
                 merged.append(node)
         return merged
+
+    # ==================== 核心要点总结（WP12，p3） ====================
+
+    async def _summarize_article(
+        self, merged_text: str, title: str
+    ) -> Optional[Tuple[str, str, Dict[str, int]]]:
+        """生成 ≤500 字核心要点总结（WP12）。
+
+        返回 (summary, model_name, usage)；merged 为空或两次尝试均失败返回 None，
+        调用方回退 merged 原文入库（不丢数据）。总结器测试可注入，默认
+        ArticleSummarizer（LLMGateway() 主 provider 默认文本模型，不 pin VL 模型）。
+        """
+        if not (merged_text or "").strip():
+            return None  # 空内容无从总结（也无谓计费），直接走回退口径
+        return await self._get_summarizer().summarize(merged_text, title)
+
+    @staticmethod
+    def _bill_summary(
+        *,
+        tenant_id: str,
+        user_id: Optional[str],
+        usage: Dict[str, int],
+        model: str,
+    ) -> None:
+        """总结 LLM 调用计费（record_background_llm_usage，fail-open，WP12）。
+
+        worker 线程无 SessionRecord，函数内自动降级独立 ChatRecordDB.create 落账
+        （source='wechat_mp_summary' 拼进 session_id 供追溯）；空 usage 直接返回、
+        落账异常只告警，均不阻断入库（对齐既有 fail-open 口径）。
+        """
+        if not usage:
+            return
+        try:
+            from src.services.session_record import record_background_llm_usage
+
+            record_background_llm_usage(
+                usage,
+                tenant_id=tenant_id,
+                user_id=str(user_id) if user_id is not None else None,
+                source=SUMMARY_SOURCE_TYPE,
+                user_message="公众号文章总结",
+                model=model,
+            )
+        except Exception as e:  # noqa: BLE001 计费失败不回滚内容
+            logger.opt(exception=True).warning(
+                "后端日志：wechat_mp 总结计费异常（忽略）tenant_id={}: {}",
+                tenant_id, sanitize_error_info(str(e)),
+            )
 
     # ==================== 终态分支 ====================
 
@@ -1417,6 +1516,8 @@ class WeChatMPSyncService:
         extracted: ExtractedArticle,
         doc_title: str,
         body_text: str,
+        summary_text: Optional[str],
+        content_mode: str,
         content_hash: str,
         chunks: List[Dict[str, Any]],
         embeddings: List[List[float]],
@@ -1424,6 +1525,13 @@ class WeChatMPSyncService:
         image_meta: Optional[Dict[str, Any]] = None,
     ) -> int:
         """单事务落 documents/chunks/chunks_vec + articles + item（+惰性分类）。
+
+        WP12 口径：body_text = merged 全文 → documents.raw_text（审计）；
+        summary_text = LLM 总结（或回退截断）→ documents.summary；
+        content_mode（'summary'|'raw_fallback'）记 metadata.content_mode，
+        回退时另记 metadata.summary_fallback=true。
+        chunk 文本由调用方以总结（或回退正文）预先生成（无「文档标题：」前缀）；
+        file_path = 原文链接（文档位置字段）。
 
         更新场景走 doc_id 快路径：先删 chunks_vec 再删 chunks 后重建。
         新文档撞 uq_documents_origin_external（并发/历史遗留）时转更新路径。
@@ -1438,11 +1546,15 @@ class WeChatMPSyncService:
             "pipeline_version": PIPELINE_VERSION,
             "sync_run_id": run["id"],
             "image_count": extracted.image_count,
+            # WP12：正文形态（总结版 / 总结失败回退原文版）
+            "content_mode": content_mode,
         }
+        if content_mode == CONTENT_MODE_RAW_FALLBACK:
+            metadata["summary_fallback"] = True
         if image_meta:
             # WP10：图片转存路径 / VL 解析失败数 / 超上限跳过数（供前端详情与对账）
             metadata.update(image_meta)
-        summary = body_text[:SUMMARY_MAX_CHARS] if body_text else None
+        summary = summary_text
         raw_text = body_text
         # 时间统一 UTC：列类型 TIMESTAMP（无时区），写前去 tz 防会话时区偏移
         publish_time_naive = (
@@ -1485,7 +1597,10 @@ class WeChatMPSyncService:
                             CATEGORY_SOURCE_TYPE,
                             SUB_CATEGORY_SOURCE_TYPE,
                             "html",
-                            None,
+                            # 文档位置 = 原文链接（WP12 定版：URL 即外部文档的"位置"，
+                            # 与手动上传文档的本地路径同字段；下载边界按 origin 拦截，
+                            # 不会把 URL 当本地文件打开）
+                            article["original_url"],
                             len(raw_text.encode("utf-8")),
                             len(chunks),
                             EMBEDDING_MODEL,
@@ -1522,6 +1637,7 @@ class WeChatMPSyncService:
                         SET title = %s, raw_text = %s, summary = %s, metadata = %s,
                             total_chunks = %s, embedding_model = %s,
                             source_type = %s, sub_category = %s,
+                            file_path = %s,
                             status = 'active', expires_at = NULL, updated_at = now()
                         WHERE id = %s AND tenant_id = %s
                         """,
@@ -1530,6 +1646,8 @@ class WeChatMPSyncService:
                             json.dumps(metadata, ensure_ascii=False),
                             len(chunks), EMBEDDING_MODEL,
                             CATEGORY_SOURCE_TYPE, SUB_CATEGORY_SOURCE_TYPE,
+                            # 重建场景同步位置字段（存量行可能为 NULL）
+                            article["original_url"],
                             doc_id, tenant_id,
                         ),
                     )
@@ -2166,7 +2284,9 @@ class WeChatMPSyncService:
 
         deferred 不进失败退避（next_retry_at=NULL，非技术失败）；自动重试由
         scheduler 24h 存活复核通道承接（processing_status='deferred' 在复核到期
-        条件内，error_message 向用户承诺「将自动重试」）。
+        条件内，error_message 向用户承诺「将自动重试」）。复核后 pipeline_version
+        与当前 PIPELINE_VERSION（p3）不匹配，deferred 存量自动走重建分支
+        （VL → 总结 → 入库），无需单独迁移。
         """
         with get_db_connection() as conn:
             cursor = conn.cursor()
@@ -2288,6 +2408,12 @@ class WeChatMPSyncService:
         if self._vision_parser is None:
             self._vision_parser = VisionParser()
         return self._vision_parser
+
+    def _get_summarizer(self):
+        """文章总结器（测试可注入；默认真实实现，主 provider 默认文本模型）。"""
+        if self._summarizer is None:
+            self._summarizer = ArticleSummarizer()
+        return self._summarizer
 
     @staticmethod
     def _content_hash(title: str, nodes: List[Any]) -> str:

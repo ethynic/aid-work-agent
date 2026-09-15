@@ -660,8 +660,10 @@ async def create_download_ticket(doc_id: int, http_request: Request = None):
             and not _is_global_admin_view(http_request):
         raise HTTPException(status_code=403, detail="无权访问该文档")
 
-    # 外部来源文档无本地文件：不签发下载票据，返回原文 URL 供前端跳转
-    if (row.get("origin") or "manual_upload") != "manual_upload" and not row.get("file_path"):
+    # 外部来源文档不提供原始文件下载：不签发下载票据，返回原文 URL 供前端跳转。
+    # file_path 现存放原文链接（WP12 定版：URL 即外部文档的"位置"字段），不能据此
+    # 判定"有本地文件"——一律按 origin 拦截，防止把 URL 当本地文件路径打开
+    if (row.get("origin") or "manual_upload") != "manual_upload":
         return JSONResponse(
             status_code=400,
             content={
@@ -718,16 +720,16 @@ async def download_document(doc_id: int, http_request: Request = None):
             and not _is_global_admin_view(http_request):
         raise HTTPException(status_code=403, detail="无权访问该文档")
 
+    if (row.get("origin") or "manual_upload") != "manual_upload":
+        # 外部来源文档不提供原始文件下载（file_path 存原文链接，非本地文件路径）
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "外部来源文档不提供原始文件下载，请访问原文链接",
+                "original_url": _doc_original_url(row),
+            },
+        )
     if not row.get("file_path"):
-        # 外部来源文档无本地文件：返回明确错误 + 原文 URL（P1 不承诺原始文件下载）
-        if (row.get("origin") or "manual_upload") != "manual_upload":
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": "外部来源文档不提供原始文件下载，请访问原文链接",
-                    "original_url": _doc_original_url(row),
-                },
-            )
         raise HTTPException(status_code=404, detail="文档不存在或文件已丢失")
 
     file_path = row["file_path"]

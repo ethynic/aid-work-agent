@@ -317,6 +317,10 @@ def _migrate_kb(
     # 文件复制
     files_copied = 0
     for d in source_docs:
+        # 外部来源文档（wechat_mp 等）file_path 存原文链接而非本地路径（WP12 定版），
+        # 跳过复制与重写，链接随 INSERT 原样迁移
+        if (d.get("origin") or "manual_upload") != "manual_upload":
+            continue
         src_path = d.get("file_path")
         if not src_path:
             continue

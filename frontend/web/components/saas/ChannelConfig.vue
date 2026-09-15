@@ -1017,10 +1017,11 @@ const channelFieldMap: Record<string, { key: string; label: string; placeholder:
     // 不需要 Token / EncodingAESKey（与企微/飞书不同）。后端 adapter 也忽略这两个字段。
   ],
   // 微信公众号内容入知识库（WP4）：回调 token 服务端生成不收表单项；
-  // encoding_aes_key / secret 为敏感字段（加密入库 + 掩码回显）
+  // encoding_aes_key / secret 为敏感字段（加密入库 + 掩码回显）；
+  // appid / original_id 可选（明文模式回调链路不需要，安全模式才需 appid）
   wechat_mp: [
-    { key: 'appid', label: '公众号 AppID', placeholder: 'wx...', hint: '创建后不可改绑；安全模式 AES 解密接收方校验用', location: '「设置与开发」→「公众号设置」→「账号信息」' },
-    { key: 'original_id', label: '公众号原始 ID', placeholder: 'gh_...', hint: 'gh_ 开头；回调事件 ToUserName 绑定校验用，必须与公众号一致', location: '「设置与开发」→「公众号设置」→「账号信息」' },
+    { key: 'appid', label: '公众号 AppID（安全模式需要）', placeholder: 'wx...', hint: '明文模式可留空；仅安全模式 AES 解密接收方校验用；创建后不可改绑', location: '「设置与开发」→「公众号设置」→「账号信息」' },
+    { key: 'original_id', label: '公众号原始 ID', placeholder: 'gh_...', hint: '可留空；填写后用于回调事件防串号校验（gh_ 开头，建议填写）', location: '「设置与开发」→「公众号设置」→「账号信息」' },
     { key: 'encoding_aes_key', label: 'EncodingAESKey（安全模式）', placeholder: '43 字符', hint: '仅「安全模式」需要；公众平台后台随机生成后复制到此处', location: '「设置与开发」→「服务器配置」' },
     { key: 'secret', label: 'AppSecret（预留）', placeholder: '', hint: '接口通道（后续版本）用，可先留空', location: '「设置与开发」→「公众号设置」' },
     { key: 'sync_interval_hours', label: '同步周期（小时）', placeholder: '6', hint: '定时复核/同步周期，默认 6 小时', location: '' },
@@ -1098,7 +1099,7 @@ const quickGuideMap: Record<string, { title: string; steps: string[]; docUrl: st
     steps: [
       '保存本配置获得回调地址与 Token；Token 可在「自定义 Token」填入公众平台侧已生成的值（3~32 位字母数字），留空则自动生成（仅设置时明文显示一次，请立即复制）',
       '前往公众平台后台 →「设置与开发」→「基本配置」→ 服务器配置「修改配置」',
-      'URL 填回调地址，Token 填自定义或保存后复制的值；选择「明文模式」可直接启用，选择「安全模式」需同时把生成的 EncodingAESKey 填回本页',
+      'URL 填回调地址，Token 填自定义或保存后复制的值；选择「明文模式」可直接启用，选择「安全模式」需在本页填写公众号 AppID 并把生成的 EncodingAESKey 填回',
       '点击「启用」，微信自动发起 URL 验证，通过后本页显示「已验证」',
       '此后每次群发完成，系统自动把文章收进知识库，无需改变正常推送习惯',
       'IP 白名单：回调接收不需要；接口同步（后续版本）才需在公众平台后台加入服务器出口 IP',

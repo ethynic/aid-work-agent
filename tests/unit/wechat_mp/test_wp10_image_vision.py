@@ -68,6 +68,7 @@ from src.wechat_mp.vision import (
 )
 
 from .conftest import cleanup_tenant
+from .test_service import FakeSummarizer
 
 # ------------------------------- 测试替身 -------------------------------
 
@@ -346,13 +347,16 @@ def _tenant_balance(tenant_id: str) -> float:
     )["credit_balance"])
 
 
-def _make_service(fetcher, vision=None, downloader=None, embedding=None):
+def _make_service(fetcher, vision=None, downloader=None, embedding=None,
+                  summarizer=None):
     return WeChatMPSyncService(
         fetcher=fetcher,
         redis=FakeRedis(),
         embedding_client=embedding or FakeEmbeddingClient(),
         image_downloader=downloader or FakeDownloader(),
         vision_parser=vision or FakeVision(),
+        # WP12：总结器默认替身（避免触真实 LLM 网关），VL 管道断言不受影响
+        summarizer=summarizer or FakeSummarizer(),
     )
 
 
@@ -1001,17 +1005,18 @@ class TestPipelineVL:
             "SELECT processing_status, pipeline_version, doc_id, image_count "
             "FROM bs_wechat_mp_articles WHERE id = %s", (row_ids[0],))
         assert article["processing_status"] == "success"
-        assert article["pipeline_version"] == PIPELINE_VERSION == "p2"
+        assert article["pipeline_version"] == PIPELINE_VERSION == "p3"
         assert article["image_count"] == 2
         doc_id = article["doc_id"]
         assert doc_id
 
         doc = _query_one("SELECT raw_text, metadata, summary FROM documents WHERE id = %s",
                          (doc_id,))
-        # [图片N: 描述] 插回原位置（描述计入正文）
+        # [图片N: 描述] 插回原位置（描述计入 raw_text 审计正文）
         assert "[图片1: 春季促销活动长图]" in doc["raw_text"]
         assert "[图片2: 门店地址与营业时间]" in doc["raw_text"]
-        assert doc["summary"].startswith("春季促销活动长图") or "[图片1:" in doc["summary"]
+        # WP12：summary = 总结（替身 = merged 截断口径），含图片描述
+        assert "[图片1:" in doc["summary"]
         metadata = json.loads(doc["metadata"])
         assert len(metadata["image_local_paths"]) == 2
         assert metadata["image_parse_failed_count"] == 0
@@ -1220,10 +1225,10 @@ class TestPipelineVL:
             "SELECT COUNT(*) AS c FROM chat_records WHERE tenant_id = %s "
             "AND source_type = %s", (tenant_id, VISION_PARSE_SOURCE_TYPE))["c"] == 0
 
-    async def test_deferred_article_rebuilds_under_p2(self, tenant_id):
-        """p1 deferred 存量文章在 p2 下重建可达：hash 相同但 pipeline_version 不同 →
-        走重建分支执行 VL 并成功入库（deferred 行 processing_status != 'success'，
-        无快路径短路）。"""
+    async def test_deferred_article_rebuilds_under_p3(self, tenant_id):
+        """p1 deferred 存量文章在当前 pipeline 下重建可达：hash 相同但
+        pipeline_version 不同 → 走重建分支执行 VL 并成功入库（deferred 行
+        processing_status != 'success'，无快路径短路）。"""
         _create_tenant(tenant_id)
         html = image_only_html("存量deferred", 2)
         fetcher = StubFetcher()
@@ -1276,7 +1281,7 @@ class TestPipelineVL:
             "SELECT processing_status, pipeline_version, doc_id FROM bs_wechat_mp_articles "
             "WHERE id = %s", (row_id,))
         assert article["processing_status"] == "success"
-        assert article["pipeline_version"] == "p2"
+        assert article["pipeline_version"] == PIPELINE_VERSION
         doc = _query_one(
             "SELECT raw_text FROM documents WHERE id = %s", (article["doc_id"],))
         assert "[图片1: 存量图一]" in doc["raw_text"]

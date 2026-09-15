@@ -320,8 +320,12 @@ export async function createChannel(data: { channel_type: string; name?: string;
     headers: { 'Content-Type': 'application/json', ...getSaasAuthHeader() },
     body: JSON.stringify(data)
   })
-  if (!res.ok) throw new Error('创建渠道失败')
-  return res.json()
+  // 错误范式同 createKfAccount：透出后端 detail（如缺少必填字段的具体提示），.catch 兜底空响应体
+  const result = await res.json().catch(() => ({}))
+  if (!res.ok || !result.success) {
+    throw new Error(result.detail || result.error || '创建渠道失败')
+  }
+  return result
 }
 
 export async function updateChannel(configId: string, data: { name?: string; config: Record<string, string>; subagent_type?: string }): Promise<any> {
@@ -330,8 +334,11 @@ export async function updateChannel(configId: string, data: { name?: string; con
     headers: { 'Content-Type': 'application/json', ...getSaasAuthHeader() },
     body: JSON.stringify(data)
   })
-  if (!res.ok) throw new Error('更新渠道失败')
-  return res.json()
+  const result = await res.json().catch(() => ({}))
+  if (!res.ok || !result.success) {
+    throw new Error(result.detail || result.error || '更新渠道失败')
+  }
+  return result
 }
 
 export async function deleteChannel(configId: string): Promise<{ success: boolean }> {

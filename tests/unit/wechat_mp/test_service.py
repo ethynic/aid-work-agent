@@ -324,19 +324,6 @@ def _query_all(sql, params):
         return cursor.fetchall()
 
 
-def _make_service(fetcher: StubFetcher, redis=None, embedding=None,
-                  vision=None, downloader=None) -> WeChatMPSyncService:
-    """构造 service（WP10 起 image/vision 组件默认注入「无多模态模型」替身，
-    避免单测触网/触真实 LLM；WP10 用例按场景显式传入 FakeDownloader/FakeVision）。"""
-    return WeChatMPSyncService(
-        fetcher=fetcher,
-        redis=redis or FakeRedis(),
-        embedding_client=embedding or FakeEmbeddingClient(),
-        image_downloader=downloader or _UnusedDownloader(),
-        vision_parser=vision or _NoModelVision(),
-    )
-
-
 class _NoModelVision:
     """无可用多模态模型的 VisionParser 替身（available()=False → 走 deferred）。"""
 
@@ -350,6 +337,43 @@ class _NoModelVision:
 class _UnusedDownloader:  # pragma: no cover - 无模型时不应触达下载器
     def download(self, *a, **kw):
         raise AssertionError("无多模态模型时不应调用图片下载")
+
+
+class FakeSummarizer:
+    """WP12 总结替身：默认返回 merged 截断（保留核心内容语义），记录调用。
+
+    - usage 默认空 dict → record_background_llm_usage 首行 no-op，
+      既有「embedding 计费精确到分」断言不被总结计费记录污染
+    - fail=True 模拟两次尝试均失败 → service 回退 merged 原文入库
+    """
+
+    def __init__(self, summary=None, fail=False, usage=None):
+        self.summary = summary
+        self.fail = fail
+        self.usage = usage if usage is not None else {}
+        self.calls = []
+
+    async def summarize(self, merged_text, title):
+        self.calls.append({"merged_text": merged_text, "title": title})
+        if self.fail:
+            return None
+        text = self.summary if self.summary is not None else (merged_text or "")[:100]
+        return (text, "summary-test-model", dict(self.usage))
+
+
+def _make_service(fetcher: StubFetcher, redis=None, embedding=None,
+                  vision=None, downloader=None, summarizer=None) -> WeChatMPSyncService:
+    """构造 service（WP10 起 image/vision 组件默认注入「无多模态模型」替身，
+    避免单测触网/触真实 LLM；WP10 用例按场景显式传入 FakeDownloader/FakeVision；
+    WP12 起总结器默认注入 FakeSummarizer，避免触真实 LLM 网关）。"""
+    return WeChatMPSyncService(
+        fetcher=fetcher,
+        redis=redis or FakeRedis(),
+        embedding_client=embedding or FakeEmbeddingClient(),
+        image_downloader=downloader or _UnusedDownloader(),
+        vision_parser=vision or _NoModelVision(),
+        summarizer=summarizer or FakeSummarizer(),
+    )
 
 
 async def _retrieve_doc_ids(tenant_id: str, query: str):
@@ -440,8 +464,17 @@ class TestFullIngest:
         assert metadata["original_url"] == SHORT_URL
         assert metadata["source_channel"] == "callback"
         assert metadata["presales_attach"]["status"] == "attached"
-        # P1 确定性截断摘要（不调 LLM）
-        assert doc["summary"] == BODY_V1[:300]
+        # WP12：summary 列存总结文本（替身 = merged 截断口径），正文形态记
+        # metadata.content_mode；chunk 文本 = 总结本身（无「文档标题：」前缀、
+        # 不拼原文链接——链接存 documents.file_path 即文档位置字段）
+        assert doc["summary"] == BODY_V1
+        assert doc["file_path"] == SHORT_URL
+        assert metadata["content_mode"] == "summary"
+        assert "summary_fallback" not in metadata
+        chunk_texts = [c["text"] for c in _query_all(
+            "SELECT text FROM chunks WHERE doc_id = %s ORDER BY chunk_index", (doc_id,))]
+        assert not any("原文链接：" in t for t in chunk_texts)
+        assert not any("文档标题：" in t for t in chunk_texts)
 
         # 分类惰性创建
         cats = _query_all(
@@ -564,6 +597,11 @@ class TestIdempotentRecheck:
         all_text = "\n".join(c["text"] for c in chunks)
         assert "新版内容标记V2" in all_text
         assert "八折优惠" not in all_text
+
+        # UPDATE 重建路径同步补写文档位置字段（存量 NULL 行）
+        doc = _query_one(
+            "SELECT file_path FROM documents WHERE id = %s", (doc_id,))
+        assert doc["file_path"] == SHORT_URL
 
         doc_ids, results = await _retrieve_doc_ids(tenant_id, "春季活动")
         assert doc_id in doc_ids

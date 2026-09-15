@@ -29,6 +29,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import math
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -40,14 +41,50 @@ from loguru import logger
 VISION_PARSE_SOURCE_TYPE = "wechat_mp_image_parse"  # chat_records.source_type（按张计费）
 UNRECOGNIZED_TEXT = "图片无法识别"  # 模型按指令约定输出的不可识别标记
 
-# 解析指令（设计 §6.2：转述不发挥；措辞可微调语义不变）
+# 解析指令（设计 §6.2：转述不发挥；WP12 强化：直接输出信息本身，禁止任何
+# 前缀/标签/标题行/说明性开场；措辞可微调语义不变）
 PARSE_INSTRUCTION = (
-    "转述图片中的文字信息与活动内容(时间/地点/优惠/产品名)，不评价不发挥；"
-    f"无法识别时输出\"{UNRECOGNIZED_TEXT}\""
+    "直接输出图片中的文字信息与活动内容(时间/地点/优惠/产品名)，转述不评价不发挥；"
+    "不要任何前缀、标签、标题行或说明性开场"
+    "(如\"图片识别结果如下：\"\"标题：\"\"这张图片展示了…\")；"
+    f"无法识别时才输出\"{UNRECOGNIZED_TEXT}\""
 )
 
 # 并发限流（对齐 crawler OCR 并发，设计 §6.2）
 PARSE_CONCURRENCY = 3
+
+# WP12 描述前缀剥离：产出开头的常见标签（行首匹配，仅剥文本开头，正文中的
+# 出现不动）。冒号中/全角均收；「标题/描述/内容」类短标签必须带冒号（保守，
+# 防误剥以该词开头的真实图片文字）；「这张图(片)展示了」类以动词收尾识别。
+_DESCRIPTION_PREFIX_RE = re.compile(
+    r"^\s*(?:"
+    r"图片(?:识别|解析)结果(?:如下|为)?[:：]?"
+    r"|识别结果(?:如下|为)?[:：]?"
+    r"|标题[:：]"
+    r"|描述[:：]"
+    r"|内容[:：]"
+    r"|这张图(?:片)?(?:展示|呈现|显示|拍摄)了?[:：]?"
+    r"|图中(?:展示|呈现|显示)了?[:：]?"
+    r")\s*"
+)
+
+
+def clean_description(text: str) -> str:
+    """保守剥离 VL 产出开头的常见标签前缀（WP12，仅成功路径调用）。
+
+    - 仅匹配文本开头的标签：多行文本只剥首行前缀，后续行原样保留
+    - 可多轮剥：如「图片识别结果如下：标题：xxx」连剥两轮
+    - 无前缀原样返回；剥完为空返回空串（调用方按 [图片N] 占位处理）
+    """
+    if not text:
+        return text
+    cleaned = text.strip()
+    for _ in range(3):  # 保守上限：标签不会连续嵌套超过两三层
+        stripped = _DESCRIPTION_PREFIX_RE.sub("", cleaned, count=1)
+        if stripped == cleaned:
+            break
+        cleaned = stripped.strip()
+    return cleaned
 
 # 固定首选 VL 模型（负责人定版 2026-09-15）：图片解析默认 GLM-5.3-Flash（zhipu），
 # 不随主 provider 变化；zhipu 未配置 key 时跳过该目标，落入后续多模态交集候选
@@ -374,8 +411,9 @@ class VisionParser:
             if content == UNRECOGNIZED_TEXT:
                 # 按指令约定的不可识别输出：计 failed 且不计费（设计 §6.2 口径）
                 return ImageParseFailure(n=n, reason="unrecognized")
+            # WP12：产出清洗（剥「图片识别结果如下：」等标签前缀），仅成功路径
             return ImageParseSuccess(
-                n=n, description=content, model=target.model,
+                n=n, description=clean_description(content), model=target.model,
                 provider=target.provider, usage=usage,
             )
         return ImageParseFailure(n=n, reason=last_reason)

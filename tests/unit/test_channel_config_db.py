@@ -883,3 +883,303 @@ class TestChannelConfigApiWechatMpToken:
         assert resp.status_code == 400
         assert "3~32" in resp.json()["detail"]
         mock_update.assert_not_called()
+
+
+class TestChannelConfigApiWechatMpOptionalIdentity:
+    """API 层：wechat_mp appid/original_id 可选化（明文模式回调链路不强制）。
+
+    锁住语义：appid/original_id 不填可创建（空值规整为删键，防 JSONB appid
+    唯一索引撞空串 409）；original_id 有值仍校验 gh_ 前缀；安全模式
+    （encoding_aes_key 有值）时 appid 缺失 400；其他渠道必填校验不回归。
+    """
+
+    @pytest.fixture()
+    def client(self, monkeypatch):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        import src.saas.api.channel_config as cc_api
+
+        def _fake_require_admin(request):
+            return {"user_id": "u1", "tenant_id": "tenant_001", "role": "tenant_admin"}
+
+        async def _noop_record(*args, **kwargs):
+            return None
+
+        monkeypatch.setattr(cc_api, "require_admin", _fake_require_admin)
+        monkeypatch.setattr("src.services.behavior_log.record_behavior", _noop_record)
+
+        app = FastAPI()
+        app.include_router(cc_api.router)
+        return TestClient(app)
+
+    def _post(self, client, config, channel_type="wechat_mp"):
+        return client.post(
+            "/api/saas/channels",
+            json={"channel_type": channel_type, "name": "公众号", "config": config},
+        )
+
+    def _put(self, client, config):
+        return client.put("/api/saas/channels/chan_x", json={"config": config})
+
+    @staticmethod
+    def _fake_create(captured):
+        def _create(**kwargs):
+            captured.update(kwargs)
+            return {
+                "config_id": "chan_x",
+                "tenant_id": kwargs["tenant_id"],
+                "channel_type": "wechat_mp",
+                "config": {},
+            }
+        return _create
+
+    @staticmethod
+    def _existing(appid=None):
+        config = {"callback_token": "***"}
+        if appid is not None:
+            config["appid"] = appid
+        return {
+            "config_id": "chan_x",
+            "tenant_id": "tenant_001",
+            "channel_type": "wechat_mp",
+            "config": config,
+        }
+
+    def test_create_without_appid_original_id_succeeds_and_blank_keys_stripped(self, client):
+        """不填 appid/original_id 可创建；空串/纯空白可选键从下发 config 中删除。"""
+        import src.saas.api.channel_config as cc_api
+
+        captured = {}
+        with (
+            patch.object(cc_api.ChannelConfigDB, "create", side_effect=self._fake_create(captured)),
+            patch.object(
+                cc_api.ChannelConfigDB,
+                "get_by_id_decrypted",
+                return_value={"config": {"callback_token": "generated-plain"}},
+            ),
+        ):
+            resp = self._post(client, {"appid": "", "original_id": "   ", "encoding_aes_key": "", "secret": ""})
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["success"] is True
+        assert body["channel"]["config_id"] == "chan_x"
+        # 空串必须删除（而非写空串）：键缺失 → JSONB ->> 返回 NULL → 同租户 appid 唯一索引不冲突
+        assert "appid" not in captured["config"]
+        assert "original_id" not in captured["config"]
+        assert "encoding_aes_key" not in captured["config"]
+        assert "secret" not in captured["config"]
+
+    @pytest.mark.parametrize("bad_original_id", ["wx123", "gh", "my_gh_x"])
+    def test_create_original_id_not_gh_prefixed_rejected_400(self, client, bad_original_id):
+        """original_id 有值才校验 gh_ 前缀，格式非法 400 且不触 DB。"""
+        import src.saas.api.channel_config as cc_api
+
+        with patch.object(cc_api.ChannelConfigDB, "create") as mock_create:
+            resp = self._post(client, {"original_id": bad_original_id})
+        assert resp.status_code == 400
+        assert "gh_" in resp.json()["detail"]
+        mock_create.assert_not_called()
+
+    def test_create_safe_mode_aes_key_without_appid_rejected_400(self, client):
+        """提供 EncodingAESKey（安全模式）但 appid 缺失 → 400 且不触 DB。"""
+        import src.saas.api.channel_config as cc_api
+
+        with patch.object(cc_api.ChannelConfigDB, "create") as mock_create:
+            resp = self._post(client, {"encoding_aes_key": "k" * 43})
+        assert resp.status_code == 400
+        assert "安全模式" in resp.json()["detail"]
+        assert "AppID" in resp.json()["detail"]
+        mock_create.assert_not_called()
+
+    def test_create_safe_mode_aes_key_with_appid_passes(self, client):
+        """安全模式同时提供 appid → 通过（channel 落库参数保留两键）。"""
+        import src.saas.api.channel_config as cc_api
+
+        captured = {}
+        with (
+            patch.object(cc_api.ChannelConfigDB, "create", side_effect=self._fake_create(captured)),
+            patch.object(
+                cc_api.ChannelConfigDB,
+                "get_by_id_decrypted",
+                return_value={"config": {"callback_token": "generated-plain"}},
+            ),
+        ):
+            resp = self._post(client, {"appid": "wx0000000000000000", "encoding_aes_key": "k" * 43})
+
+        assert resp.status_code == 200
+        assert captured["config"]["appid"] == "wx0000000000000000"
+        assert captured["config"]["encoding_aes_key"] == "k" * 43
+
+    def test_update_blank_values_popped_mask_preserved(self, client):
+        """update 空串可选键 pop（不写空串）；掩码敏感键原样下发由 DB 层保留旧值。"""
+        import src.saas.api.channel_config as cc_api
+
+        captured = {}
+
+        def fake_update(config_id, config, subagent_type=None, name=None):
+            captured["config"] = config
+            return True
+
+        existing = self._existing(appid="wx_old")
+        existing["config"].update(
+            {
+                "original_id": "gh_old",
+                "secret": "gAAAAAoldsecret",
+                "encoding_aes_key": "gAAAAAoldkey",
+                "callback_token": "gAAAAAoldtoken",
+            }
+        )
+        with (
+            patch.object(cc_api.ChannelConfigDB, "get_by_id", return_value=existing),
+            patch.object(cc_api.ChannelConfigDB, "update", side_effect=fake_update),
+            patch.object(cc_api.ChannelFactory, "invalidate_adapter", new_callable=AsyncMock),
+        ):
+            resp = self._put(
+                client,
+                {"appid": "", "original_id": "  ", "secret": "", "encoding_aes_key": "***", "callback_token": "***"},
+            )
+
+        assert resp.status_code == 200
+        cfg = captured["config"]
+        # 空串/纯空白 → pop（DB 层按缺失回填旧身份值，语义不变）
+        assert "appid" not in cfg
+        assert "original_id" not in cfg
+        assert "secret" not in cfg
+        assert "callback_token" not in cfg  # 掩码 Token 由既有 _validate_wechat_mp_custom_token 规整
+        # 掩码 AESKey = GET 原样回传的未改动值，不下 400、原样转发（DB 层掩码保留旧值）
+        assert cfg["encoding_aes_key"] == "***"
+
+    def test_update_safe_mode_aes_key_without_merged_appid_rejected_400(self, client):
+        """update：本次提交与 DB 现有 appid 合并后仍为空，但传了新 AESKey → 400。"""
+        import src.saas.api.channel_config as cc_api
+
+        with (
+            patch.object(cc_api.ChannelConfigDB, "get_by_id", return_value=self._existing()),
+            patch.object(cc_api.ChannelConfigDB, "update") as mock_update,
+        ):
+            resp = self._put(client, {"encoding_aes_key": "new-aes-key-plaintext-43chars-long-enough"})
+
+        assert resp.status_code == 400
+        assert "安全模式" in resp.json()["detail"]
+        mock_update.assert_not_called()
+
+    def test_update_safe_mode_mask_aes_key_skips_appid_check(self, client):
+        """update：掩码 AESKey（未改动回传）跳过安全模式校验，不因 DB 无 appid 而 400。"""
+        import src.saas.api.channel_config as cc_api
+
+        with (
+            patch.object(cc_api.ChannelConfigDB, "get_by_id", return_value=self._existing()),
+            patch.object(cc_api.ChannelConfigDB, "update", return_value=True),
+            patch.object(cc_api.ChannelFactory, "invalidate_adapter", new_callable=AsyncMock),
+        ):
+            resp = self._put(client, {"encoding_aes_key": "***"})
+        assert resp.status_code == 200
+
+    def test_update_existing_appid_satisfies_safe_mode(self, client):
+        """update：本次未传 appid 但 DB 已有（get_by_id 返回明文）→ 新 AESKey 可保存。"""
+        import src.saas.api.channel_config as cc_api
+
+        captured = {}
+
+        def fake_update(config_id, config, subagent_type=None, name=None):
+            captured["config"] = config
+            return True
+
+        with (
+            patch.object(cc_api.ChannelConfigDB, "get_by_id", return_value=self._existing(appid="wx_old")),
+            patch.object(cc_api.ChannelConfigDB, "update", side_effect=fake_update),
+            patch.object(cc_api.ChannelFactory, "invalidate_adapter", new_callable=AsyncMock),
+        ):
+            resp = self._put(client, {"encoding_aes_key": "new-aes-key-plaintext-43chars-long-enough"})
+
+        assert resp.status_code == 200
+        assert captured["config"]["encoding_aes_key"] == "new-aes-key-plaintext-43chars-long-enough"
+
+    def test_create_wecom_missing_required_fields_still_400(self, client):
+        """回归：wechat_mp 退出必填表后，其他渠道（wecom）缺必填仍 400 且不触 DB。"""
+        import src.saas.api.channel_config as cc_api
+
+        with patch.object(cc_api.ChannelConfigDB, "create") as mock_create:
+            resp = self._post(client, {"token": "tk"}, channel_type="wecom")
+        assert resp.status_code == 400
+        assert "缺少必填字段" in resp.json()["detail"]
+        assert "corp_id" in resp.json()["detail"]
+        mock_create.assert_not_called()
+
+
+class TestChannelConfigDBWechatMpOptionalIdentity:
+    """DB 层：wechat_mp create 不写空串 appid/original_id（唯一索引兼容）。"""
+
+    @pytest.fixture()
+    def master_key(self, monkeypatch):
+        import src.core.secret_crypto as sc
+
+        monkeypatch.setenv("RPA_SECRET_KEY", "ccdb-unit-test-master-key-0123456789")
+        monkeypatch.setattr(sc, "_fernet", None)
+        yield
+        monkeypatch.setattr(sc, "_fernet", None)
+
+    def test_create_without_appid_original_id_writes_no_identity_keys(self, master_key):
+        """落库 config 无 appid/original_id 键（键缺失 → JSONB ->> NULL → 部分唯一索引不冲突）。"""
+        from src.saas.db.channel_config_db import ChannelConfigDB
+
+        mock_cursor = MagicMock()
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+
+        with (
+            patch("src.saas.db.channel_config_db.get_db_connection") as mock_get_db,
+            patch.object(ChannelConfigDB, "_wechat_mp_appid_exists", return_value=False) as mock_appid_exists,
+            patch.object(ChannelConfigDB, "get_by_id", return_value={"config_id": "chan_x"}),
+        ):
+            mock_get_db.return_value.__enter__.return_value = mock_conn
+            # API 层空值规整后 DB 收到的形态：不含 appid/original_id 键
+            result = ChannelConfigDB.create(
+                tenant_id="tenant_001",
+                channel_type="wechat_mp",
+                config={},
+            )
+
+        assert result == {"config_id": "chan_x"}
+        written = json.loads(mock_cursor.execute.call_args_list[0][0][1][4])
+        assert "appid" not in written
+        assert "original_id" not in written
+        assert written["callback_token"]  # 服务端生成的回调 Token 仍写入
+        # 空 appid 不触发同租户唯一性查询（空值场景无撞索引可能）
+        mock_appid_exists.assert_not_called()
+
+    def test_update_blank_identity_and_sensitive_preserve_old(self, master_key):
+        """update：空串身份/敏感键经 DB 层回填旧值（API 层 pop 后的缺失路径等价）。"""
+        from src.saas.db.channel_config_db import ChannelConfigDB
+
+        existing = {
+            "appid": "wx_old",
+            "original_id": "gh_old",
+            "secret": "gAAAAAoldsecret",
+            "encoding_aes_key": "gAAAAAoldkey",
+            "callback_token": "gAAAAAoldtoken",
+            "credential_version": 1,
+        }
+        mock_cursor = MagicMock()
+        mock_cursor.rowcount = 1
+        mock_cursor.fetchone.return_value = {
+            "channel_type": "wechat_mp",
+            "config": json.dumps(existing),
+        }
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+
+        with patch("src.saas.db.channel_config_db.get_db_connection") as mock_get_db:
+            mock_get_db.return_value.__enter__.return_value = mock_conn
+            # 模拟 API 层空值规整后的下发形态：可选键整体缺失
+            assert ChannelConfigDB.update(config_id="chan_x", config={"enabled": True})
+
+        written = json.loads(mock_cursor.execute.call_args[0][1][0])
+        assert written["appid"] == "wx_old"
+        assert written["original_id"] == "gh_old"
+        assert written["secret"] == "gAAAAAoldsecret"
+        assert written["encoding_aes_key"] == "gAAAAAoldkey"
+        assert written["callback_token"] == "gAAAAAoldtoken"
+        assert written["credential_version"] == 1

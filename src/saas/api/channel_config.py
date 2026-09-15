@@ -83,13 +83,12 @@ _REQUIRED_FIELDS = {
         "verification_token": "验证Token",
         # encrypt_key 可选（不填则非加密模式，仅用于开发/调试）
     },
-    # 公众号内容入知识库（WP4）：encoding_aes_key / secret 为敏感字段（可选，
-    # 安全模式与 P3 接口通道用）；callback_token 不走此必填表——默认服务端生成，
-    # WP11 起支持可选自定义（config.callback_token，3~32 位字母数字，见 create/update 校验）
-    "wechat_mp": {
-        "appid": "公众号 AppID（公众平台后台「设置与开发→公众号设置」页可见，wx 开头）",
-        "original_id": "公众号原始 ID（同页可见，gh_ 开头，用于事件 ToUserName 绑定校验）",
-    },
+    # wechat_mp 不走静态必填表：公众号「服务器配置」回调链路只需 callback_token
+    # （明文模式）或 callback_token + encoding_aes_key + appid（安全模式）；
+    # appid / original_id 均可选（空值在 create/update 的 wechat_mp 分支规整删除，
+    # 安全模式下 appid 缺失由 _validate_wechat_mp_safe_mode 条件校验拦截）。
+    # callback_token 也不在此表——默认服务端生成，WP11 起支持可选自定义
+    # （config.callback_token，3~32 位字母数字，见 _validate_wechat_mp_custom_token）
 }
 
 _WECHAT_MP_CHANNEL_TYPE = "wechat_mp"
@@ -149,6 +148,42 @@ def _validate_wechat_mp_custom_token(config: dict) -> str:
     return "" if custom_token.startswith("***") else custom_token
 
 
+# wechat_mp 可选键：值为空串/纯空白时从 config 中删除（appid / original_id / 敏感字段）
+_WECHAT_MP_TRIM_KEYS = ("appid", "original_id", "encoding_aes_key", "secret")
+
+
+def _normalize_wechat_mp_config(config: dict) -> None:
+    """原地删除 wechat_mp config 中值为空串/纯空白 的可选键。
+
+    空串 appid 若照写入库，同租户第二条空 appid 会撞部分唯一索引
+    uq_tenant_channel_configs_wechat_mp_appid（config->>'appid'）返回误导性的
+    409「该公众号已配置过」，故统一 pop（键缺失 → JSONB ->> 返回 NULL → 不冲突）。
+    敏感字段 pop 后由 DB 层「缺失/空值保留旧值」语义兜底（update 场景），行为不变。
+    """
+    for key in _WECHAT_MP_TRIM_KEYS:
+        val = config.get(key)
+        if isinstance(val, str) and not val.strip():
+            config.pop(key, None)
+
+
+def _validate_wechat_mp_safe_mode(config: dict, existing_appid: str = "") -> None:
+    """安全模式条件校验：提供了 EncodingAESKey（非空且非 *** 掩码）但 appid 仍为空 → 400。
+
+    安全模式回调密文携带接收方 appid，AES 解密依赖它做接收方校验，缺 appid 无法解密。
+    update 场景传 existing_appid（get_by_id 返回的 appid 非敏感字段、为明文），
+    本次提交值与 DB 现有值合并后仍为空才拦截；掩码（*** 开头）= 未改动旧值，跳过校验。
+    """
+    aes_key = str(config.get("encoding_aes_key") or "")
+    if not aes_key or aes_key.startswith("***"):
+        return
+    appid = str(config.get("appid") or "").strip() or str(existing_appid or "").strip()
+    if not appid:
+        raise HTTPException(
+            status_code=400,
+            detail="安全模式需同时提供公众号 AppID（AES 解密接收方校验用）",
+        )
+
+
 @router.get("")
 async def list_channels(request: Request):
     """列出当前租户的渠道配置"""
@@ -179,18 +214,21 @@ async def create_channel(request: Request, body: ChannelConfigCreateRequest):
                 detail=f"缺少必填字段: {', '.join(missing)}",
             )
 
-    # wechat_mp：原始 ID 格式校验；callback_token 可选自定义（3~32 位字母数字），
-    # 留空/缺省由服务端生成（现状行为不变）
+    # wechat_mp：appid/original_id 可选（空值规整删除）；original_id 有值才校验 gh_
+    # 前缀（运行时 callback.py 同为可选旁路校验，留空即跳过）；callback_token 可选
+    # 自定义（3~32 位字母数字），留空/缺省由服务端生成（现状行为不变）
     if body.channel_type == _WECHAT_MP_CHANNEL_TYPE:
-        original_id = str(body.config.get("original_id") or "").strip()
-        if not original_id.startswith("gh_"):
-            raise HTTPException(status_code=400, detail="original_id 格式应为 gh_ 开头的公众号原始 ID")
         body.config = dict(body.config)
+        _normalize_wechat_mp_config(body.config)
+        original_id = str(body.config.get("original_id") or "").strip()
+        if original_id and not original_id.startswith("gh_"):
+            raise HTTPException(status_code=400, detail="original_id 格式应为 gh_ 开头的公众号原始 ID")
         custom_token = _validate_wechat_mp_custom_token(body.config)
         if custom_token:
             body.config["callback_token"] = custom_token
         else:
             body.config.pop("callback_token", None)
+        _validate_wechat_mp_safe_mode(body.config)
 
     try:
         config = ChannelConfigDB.create(
@@ -261,11 +299,13 @@ async def update_channel(config_id: str, request: Request, body: ChannelConfigUp
         body.config = dict(body.config)
         body.config["kf_account"] = (existing.get("config") or {}).get("kf_account") or []
 
-    # wechat_mp：original_id 格式校验；callback_token 传入合法明文视为改密
+    # wechat_mp：appid/original_id 可选（空值规整删除，DB 层缺失回填旧值语义不变）；
+    # original_id 有值才校验 gh_ 前缀；callback_token 传入合法明文视为改密
     # （旧 Token 失效语义与轮换一致），留空/缺省/掩码保留旧值
     mp_custom_token = ""
     if existing["channel_type"] == _WECHAT_MP_CHANNEL_TYPE:
         body.config = dict(body.config)
+        _normalize_wechat_mp_config(body.config)
         mp_custom_token = _validate_wechat_mp_custom_token(body.config)
         if mp_custom_token:
             body.config["callback_token"] = mp_custom_token
@@ -274,6 +314,10 @@ async def update_channel(config_id: str, request: Request, body: ChannelConfigUp
         original_id = str(body.config.get("original_id") or "").strip()
         if original_id and not original_id.startswith("gh_"):
             raise HTTPException(status_code=400, detail="original_id 格式应为 gh_ 开头的公众号原始 ID")
+        _validate_wechat_mp_safe_mode(
+            body.config,
+            existing_appid=str((existing.get("config") or {}).get("appid") or ""),
+        )
 
     try:
         success = ChannelConfigDB.update(config_id, body.config, subagent_type=body.subagent_type, name=body.name)
