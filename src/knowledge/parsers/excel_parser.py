@@ -264,10 +264,11 @@ class ExcelParser(BaseParser):
 
             from src.llm.gateway import LLMGateway
             from src.services.session_record import record_background_llm_usage
+            from src.tools.context import resolve_llm_gateway
 
             preview = "\n".join(_row_text(r) for r in cell_rows[:20])
             # 关思考调用（不切模型）：主链路思考 token 会烧穿 max_tokens 导致 content 为空
-            gateway = LLMGateway()
+            gateway = resolve_llm_gateway() or LLMGateway()
             response = await gateway.chat_no_thinking(
                 messages=[{"role": "user", "content":
                     "判断以下 Excel 工作表内容是否为「第一行表头 + 后续数据行」的二维数据表。"

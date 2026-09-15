@@ -48,6 +48,20 @@ def current_tool_execution_context() -> Optional[ToolExecutionContext]:
     return _CURRENT_TOOL_CONTEXT.get()
 
 
+def resolve_llm_gateway(fallback: Optional[Any] = None) -> Optional[Any]:
+    """返回工具内 LLM 调用应使用的 gateway。
+
+    优先取工具执行上下文中的调用方智能体 gateway（含子智能体 model_code
+    覆盖，且与 SessionRecordService 的 record.model 同源，保证计费单价与
+    实际消耗模型一致）；无上下文（后台调度/渠道侧/测试）时返回 fallback，
+    由调用方自行兜底到全局配置实例。
+    """
+    ctx = current_tool_execution_context()
+    if ctx is not None and ctx.llm_gateway is not None:
+        return ctx.llm_gateway
+    return fallback
+
+
 @contextmanager
 def tool_execution_scope(context: Optional[ToolExecutionContext]) -> Iterator[None]:
     """安装上下文并用 token 精确恢复外层 scope。"""

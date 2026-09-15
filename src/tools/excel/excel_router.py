@@ -11,6 +11,8 @@ from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
+from src.tools.context import resolve_llm_gateway
+
 
 ROUTING_PROMPT_PREFIX = """你是 Excel 电子表格处理工具的内部路由器。根据用户的请求和上下文，决定应该执行哪些操作并提取参数。
 
@@ -124,7 +126,8 @@ class ExcelRouter:
         if self._gateway is None:
             from src.llm.gateway import LLMGateway
             self._gateway = LLMGateway()
-        return self._gateway
+        # 优先用执行上下文中的 agent gateway（含子智能体 model_code 覆盖，与计费模型同源）
+        return resolve_llm_gateway(self._gateway)
 
     async def route(self, context: Optional[str], file_paths: Optional[List[str]] = None) -> Dict[str, Any]:
         """

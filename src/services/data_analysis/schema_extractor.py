@@ -12,6 +12,7 @@ from loguru import logger
 
 from src.config.settings import settings
 from src.llm.gateway import LLMGateway
+from src.tools.context import resolve_llm_gateway
 
 
 # Schema 提取的系统提示词
@@ -91,10 +92,10 @@ class SchemaExtractor:
         self._gateway = None
 
     def _get_gateway(self) -> LLMGateway:
-        """延迟初始化 LLM Gateway"""
+        """延迟初始化 LLM Gateway；优先用执行上下文中的 agent gateway（含子智能体 model_code 覆盖）"""
         if self._gateway is None:
             self._gateway = LLMGateway()
-        return self._gateway
+        return resolve_llm_gateway(self._gateway)
 
     async def extract_schema(
         self,

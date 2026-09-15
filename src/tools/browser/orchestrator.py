@@ -12,6 +12,7 @@ from loguru import logger
 from src.llm.gateway import llm_gateway
 from src.config.settings import settings
 from src.tools._helpers import sanitize_error
+from src.tools.context import resolve_llm_gateway
 from src.tools.browser.human_requirement_detector import (
     detect_access_block,
     detect_human_requirement,
@@ -202,7 +203,10 @@ class BrowserOrchestrator:
             len(prompt),
         )
 
-        response = await llm_gateway.chat_no_thinking(
+        # 优先用执行上下文中的 agent gateway（含子智能体 model_code 覆盖，与计费模型同源），
+        # 无上下文（后台/测试调用）时回退全局配置单例
+        gateway = resolve_llm_gateway(llm_gateway)
+        response = await gateway.chat_no_thinking(
             messages=messages,
             temperature=0.1,
             max_tokens=1000,
@@ -212,7 +216,7 @@ class BrowserOrchestrator:
         record_background_llm_usage(
             response.get("usage") if isinstance(response, dict) else None,
             source="browser_orchestrator",
-            model=llm_gateway.get_model_name(),  # chat_no_thinking 沿用主链路模型，按主模型单价计费
+            model=gateway.get_model_name(),  # chat_no_thinking 沿用主链路模型，按主模型单价计费
         )
 
         content = response.get("content", "")

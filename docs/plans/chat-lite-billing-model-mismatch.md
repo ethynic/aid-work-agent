@@ -82,5 +82,5 @@ lite token 被按主模型单价计费 -> **多收租户**（输出端价差约 
 
 ## 6. 遗留边界（已知，不在本次范围）
 
-1. **子智能体自定义模型 + 工具内 gateway 来源不统一**：部分工具（如 `smart_analysis_tool.py`）用 `context.llm_gateway`（agent 实例 gateway，含子智能体 model_code 覆盖），另一部分工具（如 `pdf_router.py` / `browser/orchestrator.py`）自建全局 `LLMGateway()` 单例。子智能体配置了自定义 `llm_model_codes` 时，后者与 `record.model`（子智能体模型）可能不一致。待另建任务统一工具内 gateway 获取方式。
+1. ~~**子智能体自定义模型 + 工具内 gateway 来源不统一**~~（✅ 已解决，2026-09-15）：新增 `src/tools/context.py::resolve_llm_gateway()` 统一工具内 gateway 获取——优先取工具执行上下文中的调用方智能体 gateway（含子智能体 model_code 覆盖，且与 `record.model` 同源），无上下文时兜底到调用方自建实例。已接入：pdf_router / word_router / excel_router / ppt planner / browser orchestrator（决策调用 + 计费模型名）/ data_analysis schema_extractor / knowledge excel_parser。travel-quote skill 脚本为独立进程（上下文不传播），维持现状。
 2. **failover 切换**：主链路 failover（deepseek → qwen → zhipu）触发时，实际响应来自 fallback 模型而计费仍按 `record.model` 单价——主循环自身既有行为，非本次引入。

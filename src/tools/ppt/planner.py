@@ -9,6 +9,8 @@ import re
 from typing import Any, Dict, Optional
 
 from loguru import logger
+
+from src.tools.context import resolve_llm_gateway
 from src.tools.ppt.layout_registry import LAYOUT_IDS
 
 _LAYOUT_LIST = "/".join(LAYOUT_IDS)
@@ -63,7 +65,8 @@ class PPTPlanner:
         if self._gateway is None:
             from src.llm.gateway import LLMGateway
             self._gateway = LLMGateway()
-        return self._gateway
+        # 优先用执行上下文中的 agent gateway（含子智能体 model_code 覆盖，与计费模型同源）
+        return resolve_llm_gateway(self._gateway)
 
     async def plan_from_topic(self, topic: str, slide_count: Optional[int] = None,
                               theme_id: Optional[int] = None) -> Dict[str, Any]:
