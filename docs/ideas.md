@@ -20,7 +20,7 @@
 
 | # | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
-| 78 | 端侧会话任务执行器（P5 后续） | 🔧 部分完成 | 云端下发会话任务（发布/预算/决策/计费/逐条发送许可），Windows 端常驻 Runtime 持久执行与观察回传；C0~C5 分期，真机 10 轮联测未完成。 | [设计](design/desktop-automation/edge-session-task-design.md) | [C0–C5 计划](plans/desktop-automation/plan-edge-session-task.md) / [2026-09-15联测交接](plans/desktop-automation/edge-session-handoff-2026-09-15.md) |
+| 78 | 端侧会话任务执行器（P5 后续） | 🔧 部分完成 | 云端决策与端侧执行已接通，生成上限调整为10000，连续回复真机验收待完成。 | [设计](design/desktop-automation/edge-session-task-design.md) | [C0–C5 计划](plans/desktop-automation/plan-edge-session-task.md) / [2026-09-15联测交接](plans/desktop-automation/edge-session-handoff-2026-09-15.md) |
 | 65 | 母体 Agent 收敛（agent.py Kernel 化） | 📋 待开发 | **不设专项重构、不阻塞其他工作**，继续采用“冻结增长 + 有真实需求时伴生拆分”。 | [原则](system/agent-kernel-convergence-principles.md) | — |
 
 ## 系统功能
