@@ -92,15 +92,18 @@ class PPTPlanner:
         """调用 LLM 并解析 JSON 结果。"""
         gateway = self._get_gateway()
 
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ]
+
         try:
             response = await gateway.chat(
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": prompt},
-                ],
+                messages=messages,
                 temperature=0.3,
-                # 大纲规划走主链路思考提升质量；思考+正文共享预算，max_tokens 须给足防截断
-                max_tokens=10000,
+                # 大纲规划走主链路思考提升质量；不显式传 max_tokens——硬上限会被
+                # 思考烧穿致 content 空（2026-09 生产事故模式），由网关按模型配置
+                # 取官方上限（qwen3.8-flash=131072）
             )
 
             from src.services.session_record import record_background_llm_usage
@@ -113,9 +116,30 @@ class PPTPlanner:
             content = response.get("content", "")
             return self._parse_json(content)
 
-        except Exception as e:
-            logger.opt(exception=True).error(f"[PPTPlanner] LLM 调用失败: {e}")
-            return {"error": f"LLM 规划失败: {e}"}
+        except Exception as first_err:
+            # 失败重试：关思考 + 仍不设 max_tokens 硬上限（推理已完成，
+            # 重试只为直接产出结论；原样重试会复现思考烧穿）
+            logger.warning(f"[PPTPlanner] LLM 首次调用失败，关思考重试: {first_err}")
+            try:
+                from src.llm.gateway import _lite_thinking_off_params
+                response = await gateway.chat(
+                    messages=messages,
+                    temperature=0.3,
+                    **_lite_thinking_off_params(gateway.get_provider_name()),
+                )
+
+                from src.services.session_record import record_background_llm_usage
+                record_background_llm_usage(
+                    response.get("usage") if isinstance(response, dict) else None,
+                    source="ppt_planner_retry",
+                    model=gateway.get_model_name(),
+                )
+
+                content = response.get("content", "")
+                return self._parse_json(content)
+            except Exception as e:
+                logger.opt(exception=True).error(f"[PPTPlanner] LLM 调用失败（含关思考重试）: {e}")
+                return {"error": f"LLM 规划失败: {e}"}
 
     def _parse_json(self, text: str) -> Dict[str, Any]:
         """从 LLM 输出中提取 JSON。"""

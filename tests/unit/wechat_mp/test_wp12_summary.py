@@ -255,7 +255,7 @@ class TestArticleSummarizer:
         """gateway 无 timeout 参数：asyncio.wait_for 包裹生效（超时计失败进重试）。"""
 
         class SlowGateway:
-            async def chat(self, messages=None, **kwargs):
+            async def chat_no_thinking(self, messages=None, **kwargs):
                 await asyncio.sleep(0.5)
                 return {"content": "迟到的总结", "usage": {}}
 
@@ -336,7 +336,7 @@ class TestPipelineSummary:
             def __init__(self):
                 self.calls = 0
 
-            async def chat(self, messages=None, **kwargs):
+            async def chat_no_thinking(self, messages=None, **kwargs):
                 self.calls += 1
                 raise RuntimeError("summary down")
 

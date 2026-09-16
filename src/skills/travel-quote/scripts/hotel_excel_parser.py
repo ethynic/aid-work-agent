@@ -244,9 +244,9 @@ class HotelExcelParser:
 
         gateway = self._get_gateway()
         try:
-            # DeepSeek V4 thinking 模型：reasoning_tokens 和 output_tokens 共享 max_tokens 配额
-            # 思考过程可能消耗大量 token，需要给实际输出留足空间
-            response = await gateway.chat(
+            # Excel 全表解析输出 JSON 较大，关思考后预算全给正文输出（chat_no_thinking
+            # 三通道统一关思考，防思考烧穿 max_tokens 致 content 空）
+            response = await gateway.chat_no_thinking(
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.3,
                 max_tokens=65536,

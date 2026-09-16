@@ -787,6 +787,9 @@ class RecordingGateway:
             with self._lock:
                 self.concurrent -= 1
 
+    async def chat_no_thinking(self, messages=None, **kwargs):
+        return await self.chat(messages=messages, **kwargs)
+
 
 def _ok_response(content="图中文字：春季促销"):
     return {"content": content, "finish_reason": "stop",

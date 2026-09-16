@@ -148,7 +148,7 @@ class VehicleExcelParser:
 
         gateway = self._get_gateway()
         try:
-            response = await gateway.chat(
+            response = await gateway.chat_no_thinking(
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.3,
                 max_tokens=8192,

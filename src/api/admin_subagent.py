@@ -517,7 +517,8 @@ async def ai_enhance_subagent(request: Request, agent_id: str, body: AiEnhanceRe
 
         logger.info(f"后端日志：AI 完善 {agent_id}，开始调用 LLM")
 
-        result = await llm_gateway.chat(
+        # 文案优化简单场景：关思考（防思考烧穿 max_tokens 致 content 空）+ 合适预算
+        result = await llm_gateway.chat_no_thinking(
             messages=messages,
             temperature=0.3,
             max_tokens=8192,

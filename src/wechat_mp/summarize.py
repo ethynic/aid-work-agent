@@ -127,9 +127,12 @@ class ArticleSummarizer:
         """单次调用（wait_for 超时包裹）；成功返回 (原始输出, 模型名, usage)，失败上抛。"""
         gateway = self._get_gateway()
         result = await asyncio.wait_for(
-            gateway.chat(
+            # 文章总结简单场景：关思考 + 合适预算（思考开启时无上限虽不烧穿，但
+            # 总结任务思考性价比低，且关思考显著降延迟）
+            gateway.chat_no_thinking(
                 messages=build_summary_messages(merged_text, title),
                 temperature=self._temperature,
+                max_tokens=8192,
             ),
             timeout=self._timeout_seconds,
         )

@@ -671,13 +671,19 @@ def _release_decision_lease(tenant_id: str, decision_id, lease_owner: str) -> No
 
 
 def _default_model_call(messages: List[Dict[str, str]], max_tokens: int) -> Dict[str, Any]:
-    """生产模型调用：现有 LLM 网关（temperature=0、输出有界；非流式——流式无计费）。"""
+    """生产模型调用：现有 LLM 网关（temperature=0、输出有界；非流式——流式无计费）。
+
+    决策/审核是结构化判定任务（输出 JSON），关思考提速且防思考烧穿 max_tokens
+    致 content 空；max_tokens 预算全部留给正文输出。
+    """
     from src.llm.gateway import llm_gateway
 
     loop = asyncio.new_event_loop()
     try:
         response = loop.run_until_complete(
-            llm_gateway.chat(messages=messages, temperature=0.0, max_tokens=max_tokens)
+            llm_gateway.chat_no_thinking(
+                messages=messages, temperature=0.0, max_tokens=max_tokens
+            )
         )
     finally:
         loop.close()

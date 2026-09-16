@@ -302,7 +302,8 @@ async def _call_llm(prompt: str) -> tuple[Optional[str], Optional[dict]]:
         from src.llm.gateway import llm_gateway
 
         messages = [{"role": "user", "content": prompt}]
-        response = await llm_gateway.chat(messages=messages)
+        # 摘要简单场景：关思考（防思考烧穿 max_tokens 致 content 空静默丢失）+ 合适预算
+        response = await llm_gateway.chat_no_thinking(messages=messages, max_tokens=8192)
         if not isinstance(response, dict):
             return None, None
         content = response.get("content") or ""
