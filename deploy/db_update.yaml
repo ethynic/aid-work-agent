@@ -744,3 +744,12 @@
     ALTER TABLE bs_lead_capture_leads ADD COLUMN IF NOT EXISTS servicer_name TEXT;
     ALTER TABLE bs_lead_capture_leads ADD COLUMN IF NOT EXISTS last_human_transfer_at TIMESTAMP;
     ALTER TABLE bs_lead_capture_leads ADD COLUMN IF NOT EXISTS last_analyzed_message_id TEXT;
+- datetime: "2026-09-16 14:07:40"
+  remark: "token_cost_prices 新增 deepseek-flash 单价（官方将 deepseek-v4-flash 改名为 deepseek-flash，代码默认模型名同步更新；价格沿用 2026-08-20 定版 3.0/9.0/0.1）"
+  statements: |
+    INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m)
+    VALUES ('deepseek-flash', 3.0, 9.0, 0.1)
+    ON CONFLICT (model_name) DO UPDATE SET
+      input_price_per_m = EXCLUDED.input_price_per_m,
+      output_price_per_m = EXCLUDED.output_price_per_m,
+      cached_input_price_per_m = EXCLUDED.cached_input_price_per_m;

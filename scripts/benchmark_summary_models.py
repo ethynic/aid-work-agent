@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """摘要生成模型性价比实验
 
-对 3 个模型（deepseek-v4-flash / qwen3.8-flash / GLM-5.3-Flash）× 思考开/关，
+对 3 个模型（deepseek-flash / qwen3.8-flash / GLM-5.3-Flash）× 思考开/关，
 用与 KnowledgeBaseService.generate_summary 完全相同的提示词生成 5 篇知识库文档摘要，
 记录真实 usage（含 cached_tokens）并按 token_cost_prices 单价计算成本。
 
@@ -38,13 +38,13 @@ THINKING_ON_PARAMS = {
 
 # 与 token_cost_prices 表一致（元 / 百万 token）
 PRICES = {
-    "deepseek-v4-flash": {"input": 2.0, "output": 8.0, "cached_input": 0.04},
+    "deepseek-flash": {"input": 2.0, "output": 8.0, "cached_input": 0.04},
     "qwen3.8-flash": {"input": 0.8, "output": 2.7, "cached_input": 0.16},
     "GLM-5.3-Flash": {"input": 0.8, "output": 2.8, "cached_input": 0.8},
 }
 
 MODELS = [
-    ("deepseek", "deepseek-v4-flash"),
+    ("deepseek", "deepseek-flash"),
     ("qwen", "qwen3.8-flash"),
     ("zhipu", "GLM-5.3-Flash"),
 ]

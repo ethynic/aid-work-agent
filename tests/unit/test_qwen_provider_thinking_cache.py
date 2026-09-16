@@ -142,7 +142,7 @@ class TestFormatMessagesCache:
 
     def test_non_qwen_model_not_cached(self):
         # 百炼第三方模型（deepseek 前缀）即便 use_cache=True 也不加 cache_control
-        p = _StubProvider(api_key="k", model="deepseek-v4-flash")
+        p = _StubProvider(api_key="k", model="deepseek-flash")
         messages = [{"role": "system", "content": "你是助手"}]
         formatted = p._format_messages(messages, use_cache=True)
         assert formatted == [{"role": "system", "content": "你是助手"}]
@@ -203,7 +203,7 @@ class TestChatEnableThinking:
     async def test_non_qwen_model_no_thinking_no_cache(self):
         # 百炼第三方模型（deepseek 前缀）：context_cache=True 但 model 非 qwen 系，
         # 不写 enable_thinking、不加 cache_control
-        body = await self._run_chat("deepseek-v4-flash", False, context_cache=True)
+        body = await self._run_chat("deepseek-flash", False, context_cache=True)
         assert "enable_thinking" not in body
         assert body["messages"][0] == {"role": "system", "content": "sys"}
 

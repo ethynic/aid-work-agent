@@ -91,7 +91,7 @@ class TestChatLite:
     async def test_same_provider_goes_through_self_chat(self):
         """纯模型名（同 provider）：走 self.chat 完整链路，显式传 model 覆盖"""
         gw = LLMGateway(provider_name="deepseek")
-        with patch.object(LLMConfig, "get_lite_target", return_value=("deepseek", "deepseek-v4-flash")), \
+        with patch.object(LLMConfig, "get_lite_target", return_value=("deepseek", "deepseek-flash")), \
              patch.object(gw, "chat", new=AsyncMock(return_value={"content": "ok"})) as mock_chat:
             result = await gw.chat_lite(
                 messages=[{"role": "user", "content": "hi"}],
@@ -101,7 +101,7 @@ class TestChatLite:
         assert result["content"] == "ok"
         mock_chat.assert_awaited_once()
         call_kwargs = mock_chat.call_args.kwargs
-        assert call_kwargs["model"] == "deepseek-v4-flash"
+        assert call_kwargs["model"] == "deepseek-flash"
         assert call_kwargs["max_tokens"] == 1024
         # deepseek target 自动关思考（统一收口到 chat_lite）
         assert call_kwargs["thinking"] == {"type": "disabled"}
@@ -185,7 +185,7 @@ class TestGetLiteTarget:
     def _cfg(self, lite_model=None, provider="deepseek"):
         cfg = LLMConfig(provider=provider)
         cfg.lite_model = lite_model
-        cfg.deepseek.model = "deepseek-v4-flash"
+        cfg.deepseek.model = "deepseek-flash"
         cfg.qwen.model = "qwen3.7-plus"
         return cfg
 
@@ -199,11 +199,11 @@ class TestGetLiteTarget:
 
     def test_invalid_provider_falls_back_to_current_provider(self):
         cfg = self._cfg("unknown/qwen3.7-flash")
-        assert cfg.get_lite_target() == ("deepseek", "deepseek-v4-flash")
+        assert cfg.get_lite_target() == ("deepseek", "deepseek-flash")
 
     def test_empty_model_falls_back_to_current_provider(self):
         cfg = self._cfg("qwen/  ")
-        assert cfg.get_lite_target() == ("deepseek", "deepseek-v4-flash")
+        assert cfg.get_lite_target() == ("deepseek", "deepseek-flash")
 
     def test_pure_model_name_uses_current_provider(self):
         cfg = self._cfg("deepseek-v4-pro")
@@ -211,8 +211,8 @@ class TestGetLiteTarget:
 
     def test_unconfigured_falls_back_to_main_model(self):
         cfg = self._cfg(None)
-        assert cfg.get_lite_target() == ("deepseek", "deepseek-v4-flash")
+        assert cfg.get_lite_target() == ("deepseek", "deepseek-flash")
 
     def test_empty_string_falls_back_to_main_model(self):
         cfg = self._cfg("   ")
-        assert cfg.get_lite_target() == ("deepseek", "deepseek-v4-flash")
+        assert cfg.get_lite_target() == ("deepseek", "deepseek-flash")

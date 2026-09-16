@@ -80,7 +80,7 @@ class TestCalculateCreditCost:
             assert mock_tcp_db.get_by_model_name.call_count == 2
 
     def test_unpriced_model_billed_at_fallback_model_prices(self, fixed_settings):
-        """模型无价目行 → 按兜底模型 deepseek-v4-flash 价格计费（2026-09-15 定版，
+        """模型无价目行 → 按兜底模型 deepseek-flash 价格计费（2026-09-15 定版，
         修复部署主模型名不在价目表时总结/后台 LLM 计费落 0 的缺口）"""
         from src.services.billing import (
             BILLING_FALLBACK_MODEL,
@@ -91,14 +91,14 @@ class TestCalculateCreditCost:
              patch("src.services.billing.create_settings", return_value=fixed_settings):
             mock_tcp_db.get_by_model_name.side_effect = [None, _make_tcp(2.0, 8.0)]
             credit_cost, breakdown = calculate_credit_cost_with_breakdown(
-                prompt_tokens=1000, completion_tokens=500, model="deepseek-flash")
+                prompt_tokens=1000, completion_tokens=500, model="unpriced-model")
 
         # token_cost = (1000*2.0 + 500*8.0)/1e6 = 0.006 → ceil(0.006*100*100)/100 = 0.60
         assert credit_cost == 0.60
         assert breakdown["price_model"] == BILLING_FALLBACK_MODEL
         assert breakdown["price_fallback"] is True
         calls = mock_tcp_db.get_by_model_name.call_args_list
-        assert calls[0][0] == ("deepseek-flash",)
+        assert calls[0][0] == ("unpriced-model",)
         assert calls[1][0] == (BILLING_FALLBACK_MODEL,)
 
     def test_priced_model_has_no_fallback_marker(self, fixed_settings):

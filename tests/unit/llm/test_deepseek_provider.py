@@ -15,7 +15,7 @@ from src.llm.providers.deepseek import DeepSeekProvider
 
 
 def _make_provider(**kwargs) -> DeepSeekProvider:
-    return DeepSeekProvider(api_key="sk-test", model="deepseek-v4-flash", **kwargs)
+    return DeepSeekProvider(api_key="sk-test", model="deepseek-flash", **kwargs)
 
 
 def test_thinking_enabled_by_default():

@@ -423,7 +423,7 @@ class FailoverGateway:
 
         显式 model kwarg 仅作用于主 provider 槽位（调用方指定的模型是针对主 provider 的），
         且从 kwargs 中移除——否则各 provider 的 request_body.update(kwargs) 会把该模型串
-        原样发给备用 provider，产生 qwen/deepseek-v4-flash 这类跨 provider 模型错配。
+        原样发给备用 provider，产生 qwen/deepseek-flash 这类跨 provider 模型错配。
         备用槽位一律使用各自的 _model_codes 覆盖或 settings.llm.{provider}.model。
         思考控制参数（PRIMARY_ONLY_KWARGS）同样仅主槽保留。
         """

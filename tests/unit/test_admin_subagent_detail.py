@@ -22,7 +22,7 @@ def _make_config(from_db: bool) -> SubagentConfig:
         system_prompt="prompt body",
         reply_style="human-like",
         llm_provider="deepseek",
-        llm_model_codes={"deepseek": "deepseek-v4-flash", "qwen": "qwen3.8-flash"},
+        llm_model_codes={"deepseek": "deepseek-flash", "qwen": "qwen3.8-flash"},
         recap={"tasks": [{"name": "external_push", "when": "every_round", "enabled": True}]},
         chat_toolbar=["video_gen"],
         upload_accept="image/*",
@@ -58,7 +58,7 @@ class TestSubagentDetailUiConfig:
         assert d["type"] == "builtin"
         assert d["reply_style"] == "human-like"
         assert d["llm_provider"] == "deepseek"
-        assert d["llm_model_codes"]["deepseek"] == "deepseek-v4-flash"
+        assert d["llm_model_codes"]["deepseek"] == "deepseek-flash"
         assert d["recap"]["tasks"][0]["name"] == "external_push"
         assert d["chat_toolbar"] == ["video_gen"]
         assert d["upload_accept"] == "image/*"

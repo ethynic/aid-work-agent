@@ -1160,7 +1160,7 @@ def _default_llm(
         keys = cfg.get_effective_keys()
         if not keys:
             raise ValueError(f"{provider} API key 未配置")
-        model = getattr(cfg, "model", None) or ("GLM-5.3-Flash" if provider == "zhipu" else "deepseek-v4-flash")
+        model = getattr(cfg, "model", None) or ("GLM-5.3-Flash" if provider == "zhipu" else "deepseek-flash")
         base_url = getattr(cfg, "base_url", None)
         if provider == "zhipu":
             base_url = base_url or "https://open.bigmodel.cn/api/paas/v4"
