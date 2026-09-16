@@ -216,9 +216,19 @@ def _get_user_conversations(tenant_id: Optional[str], user_id: str) -> str:
             )
             rows = cursor.fetchall()
 
-            # 同时查询渠道消息（channel 表日期为 TEXT 类型，使用字符串比较）
+            # 同时查询渠道消息（channel 表日期为 TEXT 类型，使用字符串比较）。
+            # 排除 status='invalid' 的软删除消息（隐藏命令"新会话"作废的旧对话
+            # 不应计入当日记忆总结），与 get_messages 的上下文口径对齐
+            status_clause = ""
+            try:
+                from src.channels.session import channel_session_manager
+                if channel_session_manager._has_status_column():
+                    status_clause = "AND m.status = 'active'"
+            except Exception:
+                # 探测失败时保守不加过滤（列必然存在的新库不受影响，老库降级为旧行为）
+                status_clause = ""
             cursor.execute(
-                """
+                f"""
                 SELECT m.role, m.content
                 FROM channel_messages m
                 JOIN channel_sessions s ON m.session_id = s.session_id
@@ -226,6 +236,7 @@ def _get_user_conversations(tenant_id: Optional[str], user_id: str) -> str:
                   AND m.created_at >= %s
                   AND m.created_at < %s
                   AND m.role IN ('user', 'assistant')
+                  {status_clause}
                 ORDER BY m.created_at ASC
                 LIMIT 200
                 """,
