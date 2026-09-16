@@ -402,7 +402,7 @@ session_tasks:
   decision_lease_seconds: 120     # 单决策处理租约（覆盖模型调用与一次修复/重试窗口）
   decision_stale_seconds: 900     # 租约过期仍未确认结束的回收线：决策 failed + 任务转人工（§13.5 禁重叠重试）
   decision_batch_limit: 5         # 每 tick 最多领取决策数
-  decision_model_max_tokens: 1000 # 决策/完成审核调用输出上限（有界预留依据）
+  decision_model_max_tokens: 10000 # 决策/完成审核生成上限，含思考 token
   decision_reserve_units: 1.0     # 单次模型调用保守预留积分（实际按 token 用量结算）
   execution_reserve_units: 0.0    # 单次发送执行预留积分（weixin v2 发送现无按次积分价；>0 才预留，不虚构按轮收费）
   opening_enabled: true           # 开场白决策开关（false 拒绝 opening 创建）

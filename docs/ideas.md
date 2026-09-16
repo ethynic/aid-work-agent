@@ -20,7 +20,7 @@
 
 | # | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
-| 78 | 端侧会话任务执行器（P5 后续） | 🔧 部分完成 | 云端下发会话任务（发布/预算/决策/计费/逐条发送许可），Windows 端常驻 Runtime 持久执行与观察回传；C0~C5 分期，真机 10 轮联测未完成。 | [设计](design/desktop-automation/edge-session-task-design.md) | [C0–C5 计划](plans/desktop-automation/plan-edge-session-task.md) / [2026-09-15联测交接](plans/desktop-automation/edge-session-handoff-2026-09-15.md) |
+| 78 | 端侧会话任务执行器（P5 后续） | 🔧 部分完成 | 云端决策与端侧执行已接通，生成上限调整为10000，连续回复真机验收待完成。 | [设计](design/desktop-automation/edge-session-task-design.md) | [C0–C5 计划](plans/desktop-automation/plan-edge-session-task.md) / [2026-09-15联测交接](plans/desktop-automation/edge-session-handoff-2026-09-15.md) |
 | 1 | 可观测性与质量保障 | 🔧 部分完成 | 分布式追踪 + LLM 质量评估 + 实时监控 + 结构化告警。 | [设计](infrastructure/observability-design.md) / [延伸设计](infrastructure/observability-channel-sessions-design.md) | [计划](infrastructure/observability-dev-plan.md) |
 | 65 | 母体 Agent 收敛（agent.py Kernel 化） | 📋 待开发 | **不设专项重构、不阻塞其他工作**，继续采用“冻结增长 + 有真实需求时伴生拆分”。 | [原则](system/agent-kernel-convergence-principles.md) | — |
 | 70 | 数据库增量升级脚本 YAML 化 | 🔧 部分完成 | 将 deploy/db_update.sql 全量哈希重跑机制改为 deploy/db_update.yaml + datetime 增量执行（last_datetime），免手动清理、… | [设计](system/database-db-update-incremental-design.md) | — |
