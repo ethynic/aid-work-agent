@@ -13,10 +13,11 @@
   超限图片压缩（data URL 重编码 JPEG）
 - 管道（service.py）：纯图文章 + FakeVL → 入库成功且正文含 [图片N: 描述]、检索
   可见；FakeVL 全失败 → deferred；部分成功 → 失败保留 [图片N] 占位；文字充足有图
-  不触发 VL；deferred 存量文章在 p2 重建可达；转存路径落 metadata；VL 无余额
-  走 no_credit
-- 按张计费：1 积分/张金额精确、usage_breakdown 对账字段、unknown 不重扣
-  （含「embedding 成功 + 图片 unknown」合并保守语义）
+  触发 VL（WP13 门禁放开）；deferred 存量文章在 p4 重建可达；转存路径落 metadata；
+  VL 无余额走 no_credit
+- 按张计费：WP13 起按每张实际 token 走标准算价（无价目模型走兜底）、
+  usage_breakdown 对账字段、unknown 不重扣（含「embedding 成功 + 图片 unknown」
+  合并保守语义）
 
 抓取走 StubFetcher（照 test_service 范式）；下载走 FakeDownloader；VL 走
 FakeVision/FakeGateway。每用例独立随机租户，测后清理 DB 行与 storage 目录。
@@ -63,7 +64,6 @@ from src.wechat_mp.vision import (
     VisionParser,
     VisionTarget,
     build_image_data_url,
-    calculate_image_parse_credit_cost,
     resolve_vision_targets,
 )
 
@@ -971,12 +971,8 @@ class TestImageDataUrl:
         assert build_image_data_url("Z:/no/such/file.png") is None
 
 
-class TestCreditCalculation:
-    def test_per_call_formula_aligned_with_asr(self):
-        # 0.01 元/张 × usage_factor 100 = 1 积分/张
-        assert calculate_image_parse_credit_cost(0.01, 100) == 1.0
-        assert calculate_image_parse_credit_cost(0.005, 100) == 0.5  # ceil 到分
-        assert calculate_image_parse_credit_cost(0.0, 100) == 0.0
+# WP13：calculate_image_parse_credit_cost 已随按张固定价一并移除；计费金额口径
+# 移至 TestImageBilling（按每张实际 token 走标准算价，含价目兜底）。
 
 
 # =============================== 管道集成 ===============================
@@ -1005,7 +1001,7 @@ class TestPipelineVL:
             "SELECT processing_status, pipeline_version, doc_id, image_count "
             "FROM bs_wechat_mp_articles WHERE id = %s", (row_ids[0],))
         assert article["processing_status"] == "success"
-        assert article["pipeline_version"] == PIPELINE_VERSION == "p3"
+        assert article["pipeline_version"] == PIPELINE_VERSION == "p4"
         assert article["image_count"] == 2
         doc_id = article["doc_id"]
         assert doc_id
@@ -1015,12 +1011,19 @@ class TestPipelineVL:
         # [图片N: 描述] 插回原位置（描述计入 raw_text 审计正文）
         assert "[图片1: 春季促销活动长图]" in doc["raw_text"]
         assert "[图片2: 门店地址与营业时间]" in doc["raw_text"]
-        # WP12：summary = 总结（替身 = merged 截断口径），含图片描述
-        assert "[图片1:" in doc["summary"]
+        # WP13：summary 输入/替身回显均为 content_md，含 Markdown 图片行
+        assert "![" in doc["summary"] and "# 活动长图" in doc["summary"]
         metadata = json.loads(doc["metadata"])
         assert len(metadata["image_local_paths"]) == 2
-        assert metadata["image_parse_failed_count"] == 0
+        # WP13 计数口径：parsed=成功张数 / failed=解析+下载失败张 / skipped=超上限
+        assert metadata["image_parsed_count"] == 2
+        assert metadata["image_failed_count"] == 0
         assert metadata["image_skipped_count"] == 0
+        # WP13：content_md 忠实组装（alt=VL 描述、src=页面 CDN 地址）
+        assert "![春季促销活动长图](https://mmecoa.qpic.cn/wp10/img_1.jpg?wx_fmt=jpeg)" \
+            in metadata["content_md"]
+        assert "![门店地址与营业时间](https://mmecoa.qpic.cn/wp10/img_2.jpg?wx_fmt=jpeg)" \
+            in metadata["content_md"]
 
         # 下载与解析收到彼此对齐的序号/路径
         assert downloader.calls and len(downloader.calls[0]["srcs"]) == 2
@@ -1117,7 +1120,9 @@ class TestPipelineVL:
             (tenant_id,))["c"] == 0
 
     async def test_no_multimodal_model_deferred_before_download(self, tenant_id):
-        """无可用多模态模型 → deferred，且不触发图片下载（不发纯文本模型）。"""
+        """纯图文章 + 无可用多模态模型 → 维持 deferred（无可总结内容），
+        且不触发图片下载（不发纯文本模型）。有文本场景的「不再 deferred」
+        见 test_wp13_markdown.py。"""
         _create_tenant(tenant_id)
         fetcher = StubFetcher()
         fetcher.set_page(SHORT_URL, ok_result(image_only_html("无模型场景", 1)))
@@ -1179,34 +1184,33 @@ class TestPipelineVL:
         assert "[图片2]" in doc["raw_text"] and "[图片3]" in doc["raw_text"]
         assert len(plain) > 0  # 描述文本计入正文
         metadata = json.loads(doc["metadata"])
-        assert metadata["image_parse_failed_count"] == 2
+        # WP13 计数：1 张成功、2 张解析失败；content_md 中失败张 alt 用「图片N」
+        assert metadata["image_parsed_count"] == 1
+        assert metadata["image_failed_count"] == 2
+        assert "![首图活动主题]" in metadata["content_md"]
+        assert "![图片2]" in metadata["content_md"]
+        assert "![图片3]" in metadata["content_md"]
 
-        # 仅成功张计费：3 张中成功 1 张 → 1 条图片记录
+        # 仅成功张计费：3 张中成功 1 张 → 1 条图片记录（按实际 token 计价 > 0）
         rows = _query_all(
             "SELECT source_type, credit_cost FROM chat_records WHERE tenant_id = %s "
             "AND source_type = %s", (tenant_id, VISION_PARSE_SOURCE_TYPE))
         assert len(rows) == 1
-        assert float(rows[0]["credit_cost"]) == 1.0
+        assert float(rows[0]["credit_cost"]) > 0
 
-    async def test_text_rich_article_skips_vl(self, tenant_id):
-        """文字充足且有图：不触发 VL（P2 决策：仅文字不足场景解析），维持占位。"""
+    async def test_text_rich_article_parses_images_gate_open(self, tenant_id):
+        """WP13 门禁放开：文字充足且有图同样触发 VL（负责人定稿：图片与文本同等
+        重要），描述进 content_md/总结；不再维持无描述占位。"""
         _create_tenant(tenant_id)
         fetcher = StubFetcher()
         fetcher.set_page(
             SHORT_URL,
             ok_result(image_and_text_html("图文并茂", "春季促销全场瓷砖八折，欢迎到店咨询选购。", 2)),
         )
-
-        class _MustNotCall(FakeVision):
-            def available(self):
-                return True
-
-            async def describe_images(self, images, tenant_id):
-                raise AssertionError("文字充足的文章不应触发 VL 解析")
-
-        vision = _MustNotCall()
+        vision = FakeVision(descriptions={1: "门店招牌", 2: "优惠海报"})
         downloader = FakeDownloader()
-        svc = _make_service(fetcher, vision=vision, downloader=downloader)
+        svc = _make_service(fetcher, vision=vision, downloader=downloader,
+                            summarizer=FakeSummarizer(summary="图文要点总结"))
 
         _, row_ids, item_ids = _enqueue(tenant_id, [SHORT_URL])
         await svc.claim_and_run(tenant_id)
@@ -1214,16 +1218,20 @@ class TestPipelineVL:
         item = _query_one(
             "SELECT status FROM bs_wechat_mp_sync_items WHERE id = %s", (item_ids[0],))
         assert item["status"] == "success"
+        assert downloader.calls and len(vision.calls[0]["images"]) == 2
         doc_id = _query_one(
             "SELECT doc_id FROM bs_wechat_mp_articles WHERE id = %s", (row_ids[0],)
         )["doc_id"]
-        doc = _query_one("SELECT raw_text, metadata FROM documents WHERE id = %s", (doc_id,))
-        assert "[图片1]" in doc["raw_text"] and "[图片2]" in doc["raw_text"]
-        assert "image_local_paths" not in json.loads(doc["metadata"])
-        assert downloader.calls == [] and vision.calls == []
-        assert _query_one(
-            "SELECT COUNT(*) AS c FROM chat_records WHERE tenant_id = %s "
-            "AND source_type = %s", (tenant_id, VISION_PARSE_SOURCE_TYPE))["c"] == 0
+        doc = _query_one("SELECT raw_text, summary, metadata FROM documents WHERE id = %s",
+                         (doc_id,))
+        assert "[图片1: 门店招牌]" in doc["raw_text"]
+        assert "[图片2: 优惠海报]" in doc["raw_text"]
+        # 总结替身收到 content_md（含 Markdown 图片行与描述）
+        merged = svc._summarizer.calls[0]["merged_text"]
+        assert "![门店招牌]" in merged and "# 图文并茂" in merged
+        assert doc["summary"] == "图文要点总结"
+        metadata = json.loads(doc["metadata"])
+        assert metadata["image_parsed_count"] == 2
 
     async def test_deferred_article_rebuilds_under_p3(self, tenant_id):
         """p1 deferred 存量文章在当前 pipeline 下重建可达：hash 相同但
@@ -1331,13 +1339,34 @@ class TestPipelineVL:
 
 
 class TestImageBilling:
-    async def test_per_image_billing_amount_and_breakdown(self, tenant_id):
-        """按张计费：每成功 1 张一条 chat_records，credit_cost=1 积分/张，
-        usage_breakdown 记录 billing_mode/单价/系数/VL token（对账用）。"""
+    async def test_token_billing_amount_and_breakdown(self, tenant_id):
+        """WP13 按 token 计费：每成功 1 张一条 chat_records，credit_cost=该张实际
+        usage × 所用模型单价（标准算价路径，无价目模型走兜底）；usage_breakdown 记
+        billing_mode='token' 与实际模型（对账用）。"""
         _create_tenant(tenant_id, balance=50.0)
         fetcher = StubFetcher()
         fetcher.set_page(SHORT_URL, ok_result(image_only_html("计费场景", 2)))
-        svc = _make_service(fetcher, vision=FakeVision(descriptions={1: "图一", 2: "图二"}))
+
+        class UsageVision(FakeVision):
+            """按张返回不同 token 用量的 VL 替身（重图 vs 轻图）。"""
+
+            async def describe_images(self, images, tenant_id):
+                outcome = VisionParseOutcome()
+                usage_by_n = {1: {"prompt_tokens": 2000, "completion_tokens": 500,
+                                  "total_tokens": 2500},
+                              2: {"prompt_tokens": 200, "completion_tokens": 50,
+                                  "total_tokens": 250}}
+                for n, path in images:
+                    outcome.successes.append(ImageParseSuccess(
+                        n=n, description=f"第{n}张图的内容转述",
+                        model="vl-test-model", provider="fake",
+                        usage=usage_by_n[n],
+                    ))
+                return outcome
+
+        svc = _make_service(fetcher, vision=UsageVision())
+
+        from src.services.billing import calculate_credit_cost
 
         _, row_ids, item_ids = _enqueue(tenant_id, [SHORT_URL])
         await svc.claim_and_run(tenant_id)
@@ -1346,14 +1375,25 @@ class TestImageBilling:
             "SELECT * FROM chat_records WHERE tenant_id = %s AND source_type = %s "
             "ORDER BY id", (tenant_id, VISION_PARSE_SOURCE_TYPE))
         assert len(records) == 2
+        expected = {}
         for rec in records:
-            assert float(rec["credit_cost"]) == 1.0  # 0.01 × 100 向上取整到分
-            assert rec["model"] == "vl-test-model"
+            model = "vl-test-model"
+            assert rec["model"] == model  # 记实际使用的模型
+            usage = {"prompt_tokens": rec["prompt_tokens"],
+                     "completion_tokens": rec["completion_tokens"]}
+            expected_credit = calculate_credit_cost(
+                usage["prompt_tokens"], usage["completion_tokens"], model=model)
+            assert float(rec["credit_cost"]) == expected_credit > 0
+            expected[rec["prompt_tokens"]] = float(rec["credit_cost"])
             breakdown = rec["usage_breakdown"]
-            assert breakdown["billing_mode"] == "per_call"
-            assert breakdown["price_per_call"] == 0.01
-            assert breakdown["usage_factor"] == 100
-            assert breakdown["vl_usage"]["total_tokens"] == 15  # 实际 token 记账对账
+            assert breakdown["billing_mode"] == "token"
+            assert breakdown["model"] == model
+            assert breakdown["prompt_tokens"] == usage["prompt_tokens"]
+            assert breakdown["completion_tokens"] == usage["completion_tokens"]
+            assert breakdown["vl_usage"]["total_tokens"] == \
+                usage["prompt_tokens"] + usage["completion_tokens"]
+        # 重图（tokens 多）计费高于轻图
+        assert expected[2000] > expected[200]
 
         # item 计费字段合并了 embedding + 图片两笔（reference 含全部记录 ID）
         item = _query_one(
@@ -1362,14 +1402,12 @@ class TestImageBilling:
         emb_record = _query_one(
             "SELECT record_id, credit_cost FROM chat_records WHERE tenant_id = %s "
             "AND source_type = 'wechat_mp_embedding'", (tenant_id,))
-        image_record = _query_one(
-            "SELECT record_id FROM chat_records WHERE tenant_id = %s "
-            "AND source_type = %s ORDER BY id LIMIT 1",
-            (tenant_id, VISION_PARSE_SOURCE_TYPE))
-        expected_total = 2.0 + float(emb_record["credit_cost"])
+        image_total = sum(expected.values())
+        expected_total = image_total + float(emb_record["credit_cost"])
         assert item["billing_status"] == "charged"
         assert emb_record["record_id"] in (item["billing_reference"] or "")
-        assert image_record["record_id"] in (item["billing_reference"] or "")
+        for rec in records:
+            assert rec["record_id"] in (item["billing_reference"] or "")
         assert float(item["credits_charged"]) == pytest.approx(expected_total)
         assert _tenant_balance(tenant_id) == pytest.approx(round(50.0 - expected_total, 2))
 

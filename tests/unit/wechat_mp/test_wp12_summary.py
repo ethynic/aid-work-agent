@@ -15,7 +15,7 @@
 - 计费：record_background_llm_usage 以 source='wechat_mp_summary'+model 被调用
   （monkeypatch 断言）；无 SessionRecord 线程的真实独立落账分支（chat_records 行）
 - 不变量：content_hash 按原始节点（VL 描述/总结均不进指纹）；同文章二次 claim
-  VL/总结 0 次调用、零计费；p2 存量行复核后重建为 p3 总结版
+  VL/总结 0 次调用、零计费；p2 存量行复核后重建为当前 pipeline（p4）总结版
 
 抓取走 StubFetcher、总结走 FakeSummarizer/ArticleSummarizer+替身网关、VL 走
 FakeVision（照 test_service/test_wp10 范式）。每用例独立随机租户，测后清理。
@@ -293,15 +293,16 @@ class TestPipelineSummary:
             "SELECT status FROM bs_wechat_mp_sync_items WHERE id = %s",
             (item_ids[0],))["status"] == "success"
 
-        # 总结指令收到 merged 全文与标题
+        # 总结指令收到 content_md 全文与标题（WP13：含 # 标题行）
         assert len(summarizer.calls) == 1
         assert BODY_V1 in summarizer.calls[0]["merged_text"]
+        assert summarizer.calls[0]["merged_text"].startswith("# 春季活动")
         assert summarizer.calls[0]["title"] == "春季活动"
 
         article = _query_one(
             "SELECT doc_id, pipeline_version FROM bs_wechat_mp_articles WHERE id = %s",
             (row_ids[0],))
-        assert article["pipeline_version"] == "p3"
+        assert article["pipeline_version"] == "p4"
         doc, doc_id = _doc_row(row_ids[0])
 
         assert doc["raw_text"] == BODY_V1  # raw_text 存 merged 全文（审计）
@@ -311,6 +312,11 @@ class TestPipelineSummary:
         assert metadata["content_mode"] == "summary"
         assert "summary_fallback" not in metadata
         assert metadata["original_url"] == SHORT_URL  # 原文链接保留
+        # WP13：metadata.content_md = 标题 + 文本段落；ingested_at 可解析 ISO
+        assert metadata["content_md"] == f"# 春季活动\n\n{BODY_V1}"
+        from datetime import datetime
+
+        datetime.fromisoformat(metadata["ingested_at"])
 
         all_text = _chunk_join(doc_id)
         assert "核心要点：全场八折" in all_text
@@ -350,9 +356,10 @@ class TestPipelineSummary:
         assert metadata["summary_fallback"] is True
 
         all_text = _chunk_join(doc_id)
-        assert BODY_V1 in all_text  # 正文 = merged 全文（不丢数据）
+        assert BODY_V1 in all_text  # 正文 = content_md（含原文文本，不丢数据）
         assert doc["file_path"] == SHORT_URL  # 文档位置 = 原文链接（回退路径同样写入）
-        assert doc["summary"] == BODY_V1[:SUMMARY_MAX_CHARS]  # 截断口径
+        # WP13：回退正文 = content_md 本身（# 标题 + 文本段落），截断口径同前
+        assert doc["summary"] == f"# 春季活动\n\n{BODY_V1}"[:SUMMARY_MAX_CHARS]
         # 总结失败无 usage → 零总结计费
         assert _query_one(
             "SELECT COUNT(*) AS c FROM chat_records WHERE tenant_id = %s "
@@ -401,10 +408,11 @@ class TestPipelineSummary:
         assert "[图片1: 春季促销全场八折]" in doc["raw_text"]
         assert "[图片2: 春季促销全场八折]" in doc["raw_text"]
         assert "图片识别结果如下" not in doc["raw_text"]
-        # 总结输入（merged）同样干净
+        # 总结输入（WP13 起 = content_md）同样干净，且含 Markdown 图片行
         merged = svc._summarizer.calls[0]["merged_text"]
         assert "图片识别结果如下" not in merged
         assert "春季促销全场八折" in merged
+        assert "![" in merged and merged.startswith("# 前缀清洗")
 
 
 # =============================== 计费 ===============================
@@ -517,8 +525,9 @@ class TestInvariants:
             (tenant_id,))) == len(records_before)
         assert _tenant_balance(tenant_id) == balance_before
 
-    async def test_p2_row_rebuilt_as_summary_p3(self, tenant_id):
-        """p2 存量行（hash 相同、pipeline 不匹配）复核后自动重建为 p3 总结版。"""
+    async def test_p2_row_rebuilt_as_summary_p4(self, tenant_id):
+        """p2 存量行（hash 相同、pipeline 不匹配）复核后自动重建为当前 pipeline
+        （p4）总结版。"""
         _create_tenant(tenant_id)
         html = make_article_html("存量p2", BODY_V1)
         fetcher = StubFetcher()
@@ -565,7 +574,7 @@ class TestInvariants:
             "SELECT processing_status, pipeline_version, doc_id FROM "
             "bs_wechat_mp_articles WHERE id = %s", (row_id,))
         assert article["processing_status"] == "success"
-        assert article["pipeline_version"] == "p3"
+        assert article["pipeline_version"] == "p4"
         all_text = _chunk_join(article["doc_id"])
         assert "p2 存量重建总结" in all_text
         assert "原文链接：" not in all_text

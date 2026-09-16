@@ -34,6 +34,12 @@
   无 queued/running 的 scheduled run 时 → 同事务建 queued run（无 items，
   config_id 落值；worker 对账 batchget 后按 diff 建 items）。到期判定用
   「最近尝试时间」=run created_at——失败 run 终态后随周期自然重试（退避语义）。
+- **30min tick 第④生成器（WP13 清单源定时对账）**：扫描 tenant_channel_configs
+  中 channel_type='wechat_mp' 且 config 内 list_session_token 非空（已扫码绑定）、
+  list_sync_status ∈ ('active','expiring') 的配置，到期（sync_interval_hours，清单
+  源默认 1h）且无 queued/running 的 list_sync run 时 → 建 queued run（无 items，
+  config_id 落值；worker 拉自有号清单后按 diff 建 items）。expired/account_error
+  停止自动拉取，重新扫码绑定后自然恢复。
 - **stale 回收**：每 5min 调 service.recover_stale_runs()（周期短于 tick）。
 - **stop()**：置停机事件 → 驱动协程退出 → 释放锁；不强行中断进行中的
   claim_and_run（宽限期后取消，由 service 内部锁与 heartbeat 保证可恢复）。
@@ -69,6 +75,10 @@ RECHECK_INTERVAL_HOURS = 24  # 存活复核间隔（每篇）
 SCHEDULED_TICK_LIMIT = 100  # 每 tick 定时对账 run 生成上限（配置量异常时的护栏）
 SCHEDULED_DEFAULT_INTERVAL_HOURS = 6  # sync_interval_hours 缺失/非法时的默认对账周期
 SCHEDULED_MAX_INTERVAL_HOURS = 24 * 365  # sync_interval_hours 上限护栏（防溢出 timedelta）
+# WP13 清单源（第④生成器）：默认同步频率 1h（清单拉取 1~2 请求/次，高频同步最大化
+# 会话存活概率，设计 §3.3）；不改 ③ 的默认 6h 回调/接口语义
+LIST_SYNC_DEFAULT_INTERVAL_HOURS = 1
+LIST_SYNC_TICK_LIMIT = 100  # 每 tick 清单对账 run 生成上限
 
 # 重试到期条件（含 no_credit 退避保持的 pending 与失败退避的 sync_failed）。
 # next_retry_at 由 service 以 Python UTC naive 写入，读取统一按 UTC 渲染比较，
@@ -250,6 +260,7 @@ class WeChatMPScheduler:
                         tick.get("retry_enqueued")
                         or tick.get("recheck_enqueued")
                         or tick.get("scheduled_enqueued")
+                        or tick.get("list_sync_enqueued")
                     ):
                         self._claim_requested = True  # 有新任务立即领取
                     next_tick_at = time.monotonic() + TICK_INTERVAL_SECONDS
@@ -365,6 +376,7 @@ class WeChatMPScheduler:
             "retry_enqueued": 0,
             "recheck_enqueued": 0,
             "scheduled_enqueued": 0,
+            "list_sync_enqueued": 0,
         }
         for tenant_id in tenants:
             try:
@@ -384,15 +396,24 @@ class WeChatMPScheduler:
                 "后端日志：wechat_mp tick 定时对账生成失败: {}",
                 sanitize_error_info(str(e)),
             )
+        try:
+            result["list_sync_enqueued"] = self._tick_list_sync()
+        except Exception as e:  # noqa: BLE001 生成器异常不中断其他生成器
+            logger.opt(exception=True).error(
+                "后端日志：wechat_mp tick 清单对账生成失败: {}",
+                sanitize_error_info(str(e)),
+            )
         if (
             result["retry_enqueued"]
             or result["recheck_enqueued"]
             or result["scheduled_enqueued"]
+            or result["list_sync_enqueued"]
         ):
             logger.bind(module="wechat_mp").info(
-                "wechat_mp tick 任务生成 retry={} recheck={} scheduled={} tenants={}",
+                "wechat_mp tick 任务生成 retry={} recheck={} scheduled={} list_sync={} tenants={}",
                 result["retry_enqueued"], result["recheck_enqueued"],
-                result["scheduled_enqueued"], result["tenants"],
+                result["scheduled_enqueued"], result["list_sync_enqueued"],
+                result["tenants"],
             )
         return result
 
@@ -613,6 +634,135 @@ class WeChatMPScheduler:
                     enqueued += 1
                     logger.bind(module="wechat_mp").info(
                         "wechat_mp scheduled 对账入队 tenant_id={} config_id={} run_id={} "
+                        "interval={}h",
+                        cfg["tenant_id"], cfg["config_id"], run_id, cfg["interval_hours"],
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+        return enqueued
+
+    # ==================== 30min tick ④：清单源定时对账（WP13） ====================
+
+    def _list_list_sync_configs(self) -> List[Dict[str, Any]]:
+        """扫描清单源可用的 wechat_mp 配置（扫码绑定未解绑且状态 active/expiring）。
+
+        - list_session_token 非空 = 已扫码绑定（config TEXT 列，应用层 json.loads 过滤）
+        - list_sync_status 仅认 active/expiring：expired/account_error 停止自动拉取
+          （重新扫码绑定置回 active 后自然恢复）；缺省视为 active（兼容旧数据）
+        - enabled 不做门槛：该开关语义是「回调接收」，与清单拉取相互独立
+        """
+        import json as _json
+
+        configs: List[Dict[str, Any]] = []
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT config_id, tenant_id, config FROM tenant_channel_configs
+                WHERE channel_type = 'wechat_mp'
+                ORDER BY id ASC
+                """
+            )
+            rows = cursor.fetchall()
+        for row in rows:
+            try:
+                cfg = _json.loads(row["config"]) if row["config"] else {}
+            except (TypeError, ValueError):
+                logger.bind(module="wechat_mp").warning(
+                    "wechat_mp list_sync 扫描跳过：config 非法 JSON config_id={}",
+                    row["config_id"],
+                )
+                continue
+            if not isinstance(cfg, dict):
+                continue
+            if not str(cfg.get("list_session_token") or "").strip():
+                continue  # 未扫码绑定
+            status = str(cfg.get("list_sync_status") or "active")
+            if status not in ("active", "expiring"):
+                continue
+            configs.append(
+                {
+                    "config_id": row["config_id"],
+                    "tenant_id": row["tenant_id"],
+                    # 清单源默认 1h（设计 §3.3）；解析容错复用 ③ 的口径，仅默认值不同
+                    "interval_hours": min(
+                        self._parse_sync_interval_hours(cfg.get("sync_interval_hours"))
+                        if cfg.get("sync_interval_hours") is not None
+                        else LIST_SYNC_DEFAULT_INTERVAL_HOURS,
+                        SCHEDULED_MAX_INTERVAL_HOURS,
+                    ),
+                }
+            )
+        return configs
+
+    def _tick_list_sync(self) -> int:
+        """第④生成器：清单源同步到期配置 → 同事务建 queued run（无 items，config_id 落值）。
+
+        到期判定与防堆积同第③生成器（最近一条 list_sync run 的 created_at；
+        已有 queued/running 的 list_sync run 跳过）。worker 对账清单后按 diff 建
+        items（auto_all 直接入队 / manual 落 pending_manual，见 service）。
+        """
+        configs = self._list_list_sync_configs()
+        if not configs:
+            return 0
+        config_ids = [c["config_id"] for c in configs]
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute("SELECT now()::timestamp AS db_now")
+                db_now = cursor.fetchone()["db_now"]
+                cursor.execute(
+                    """
+                    SELECT config_id, max(created_at) AS last_created
+                    FROM bs_wechat_mp_sync_runs
+                    WHERE trigger_type = 'list_sync' AND config_id = ANY(%s)
+                    GROUP BY config_id
+                    """,
+                    (config_ids,),
+                )
+                last_created = {r["config_id"]: r["last_created"] for r in cursor.fetchall()}
+                cursor.execute(
+                    """
+                    SELECT DISTINCT config_id FROM bs_wechat_mp_sync_runs
+                    WHERE trigger_type = 'list_sync'
+                      AND status IN ('queued', 'running')
+                      AND config_id = ANY(%s)
+                    """,
+                    (config_ids,),
+                )
+                active_configs = {r["config_id"] for r in cursor.fetchall()}
+
+                enqueued = 0
+                for cfg in configs:
+                    if enqueued >= LIST_SYNC_TICK_LIMIT:
+                        logger.bind(module="wechat_mp").warning(
+                            "wechat_mp list_sync 单 tick 生成达上限 {}，余量留到下轮",
+                            LIST_SYNC_TICK_LIMIT,
+                        )
+                        break
+                    if cfg["config_id"] in active_configs:
+                        continue  # 已有待执行/执行中清单对账 run，不堆积
+                    last = last_created.get(cfg["config_id"])
+                    if last is not None:
+                        elapsed = db_now - last
+                        threshold = timedelta(hours=cfg["interval_hours"])
+                        if elapsed < threshold:
+                            continue
+                    cursor.execute(
+                        """
+                        INSERT INTO bs_wechat_mp_sync_runs
+                            (tenant_id, config_id, user_id, trigger_type, status, total_count)
+                        VALUES (%s, %s, NULL, 'list_sync', 'queued', 0)
+                        RETURNING id
+                        """,
+                        (cfg["tenant_id"], cfg["config_id"]),
+                    )
+                    run_id = cursor.fetchone()["id"]
+                    enqueued += 1
+                    logger.bind(module="wechat_mp").info(
+                        "wechat_mp list_sync 对账入队 tenant_id={} config_id={} run_id={} "
                         "interval={}h",
                         cfg["tenant_id"], cfg["config_id"], run_id, cfg["interval_hours"],
                     )

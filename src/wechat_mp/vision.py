@@ -11,8 +11,9 @@
   命中多模态清单时，该 (provider, model) 是降级备选——不向 provider 发送未配置
   的模型名；failover 链上每个 provider 独立求交集，**全链目标均为多模态模型**
   （§6.2 failover 同过滤），无交集的 provider 不进入目标列表
-- 无任何可用目标 → ``VisionParseOutcome.no_model=True``，调用方走 deferred，
-  绝不降级发送到纯文本模型
+- 无任何可用目标 → ``VisionParseOutcome.no_model=True``，调用方（WP13 起）不再
+  deferred：有文本照常组装入库（图片行无描述，metadata 记缺失原因），仅纯图且
+  无任何可总结内容才维持 deferred；绝不降级发送到纯文本模型
 
 调用形态（D2）：每张图独立一次 ``gateway.chat()``；单轮 user message = 固定解析
 指令 + 1 张 image_url base64 data URL（复用 src/core/agent.py 构造惯例，超限先
@@ -28,7 +29,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import math
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -411,7 +411,8 @@ class VisionParser:
             if content == UNRECOGNIZED_TEXT:
                 # 按指令约定的不可识别输出：计 failed 且不计费（设计 §6.2 口径）
                 return ImageParseFailure(n=n, reason="unrecognized")
-            # WP12：产出清洗（剥「图片识别结果如下：」等标签前缀），仅成功路径
+            # WP12：产出清洗（剥「图片识别结果如下：」等标签前缀），仅成功路径；
+            # model/provider/usage 记当次实际调用目标与用量（WP13 按张按 token 计费）
             return ImageParseSuccess(
                 n=n, description=clean_description(content), model=target.model,
                 provider=target.provider, usage=usage,
@@ -433,26 +434,10 @@ class VisionParser:
 
     @staticmethod
     def _extract_usage(result: Optional[Dict[str, Any]]) -> Dict[str, int]:
-        """提取 provider 上报的 token 用量（对账用，不参与收费金额）。"""
+        """提取 provider 上报的 token 用量（WP13 起参与按 token 计费 + 对账）。"""
         usage = (result or {}).get("usage") or {}
         return {
             "prompt_tokens": int(usage.get("prompt_tokens") or 0),
             "completion_tokens": int(usage.get("completion_tokens") or 0),
             "total_tokens": int(usage.get("total_tokens") or 0),
         }
-
-
-# ------------------------------- 计费计算 -------------------------------
-
-
-def calculate_image_parse_credit_cost(
-    price_per_call: float, usage_factor: int
-) -> float:
-    """按张积分：credit_cost = ceil(price_per_call × usage_factor × 100) / 100。
-
-    对齐 ASR 按次计费公式（src/services/billing.py.calculate_asr_credit_cost_with_breakdown）；
-    默认 0.01 元/张 × 100 = 1 积分/张。
-    """
-    if price_per_call <= 0:
-        return 0.0
-    return max(math.ceil(price_per_call * usage_factor * 100) / 100, 0.0)

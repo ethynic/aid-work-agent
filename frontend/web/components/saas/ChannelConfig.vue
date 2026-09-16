@@ -50,8 +50,16 @@
             {{ copied[ch.config_id] ? '已复制' : '复制' }}
           </BaseButton>
         </div>
-        <!-- 公众号内容：回调三态展示 -->
-        <div v-if="ch.channel_type === 'wechat_mp'" class="mt-2 grid grid-cols-3 gap-2 text-xs">
+        <!-- 公众号内容：清单源绑定 + 回调三态展示（WP13 主通道） -->
+        <div v-if="ch.channel_type === 'wechat_mp'" class="mt-2 grid grid-cols-2 lg:grid-cols-4 gap-2 text-xs">
+          <div class="bg-canvas rounded-md px-3 py-2">
+            <div class="text-muted mb-0.5">清单源（扫码绑定）</div>
+            <div v-if="ch.config?.list_session_token" :class="listStatusClass(ch.config?.list_sync_status)">
+              {{ ch.config?.list_account_nickname || '已绑定' }}
+              · {{ listStatusLabel(ch.config?.list_sync_status) }}
+            </div>
+            <div v-else class="text-warning-700">未绑定（点「编辑」扫码授权）</div>
+          </div>
           <div class="bg-canvas rounded-md px-3 py-2">
             <div class="text-muted mb-0.5">URL 验证</div>
             <div :class="ch.config?.config_verified_at ? 'text-success-700' : 'text-warning-700'">
@@ -248,8 +256,113 @@
           </p>
         </div>
 
-        <!-- 公众号内容特有：启用开关 + 回调 Token 展示/轮换 + 共存说明 -->
+        <!-- 公众号内容特有（WP13 主通道）：扫码绑定清单源（置顶主入口） -->
         <div v-if="form.channel_type === 'wechat_mp'" class="mt-3 pt-3 border-t border-default">
+          <div class="bg-primary-50 border border-primary-200 rounded-lg p-4 space-y-3">
+            <div class="flex items-center justify-between gap-2">
+              <div>
+                <p class="text-sm font-medium text-default">扫码绑定公众号（推荐）</p>
+                <p class="mt-0.5 text-xs text-muted">
+                  用公众号管理员微信扫码授权，系统自动同步该号全部已发表内容（含群发历史），
+                  无需配置回调地址。仅支持本租户自己的公众号；会话约 4 天，到期前会提醒。
+                </p>
+              </div>
+            </div>
+
+            <!-- 已绑定：昵称 + 四态徽标 + 同步信息 -->
+            <template v-if="mpList.bound && !mpScan.active">
+              <div class="bg-surface rounded-lg p-3 space-y-2">
+                <div class="flex items-center gap-2 flex-wrap">
+                  <span class="text-sm font-medium text-default">{{ mpList.nickname || '公众号' }}</span>
+                  <BaseBadge :intent="mpListStatusIntent">{{ mpListStatusLabel }}</BaseBadge>
+                </div>
+                <div class="grid grid-cols-2 gap-2 text-xs text-muted">
+                  <div>上次同步：{{ formatDateTime(mpList.last_sync_at) || '尚未同步' }}</div>
+                  <div>同步频率：每 {{ mpList.sync_interval_hours || 1 }} 小时（可在高级配置调整）</div>
+                </div>
+                <div class="flex items-center gap-2 flex-wrap text-xs text-muted">
+                  <label>首次同步篇数</label>
+                  <BaseInput
+                    v-model="mpMaxArticles"
+                    type="number"
+                    size="sm"
+                    class="w-20"
+                    :min="1"
+                    :max="500"
+                    :disabled="mpBusy"
+                  />
+                  <span>{{ mpList.backfill_done === false
+                    ? '首次回填只自动同步最近 N 篇（1~500），改后保存生效'
+                    : '首次回填已完成，此后新文章全部自动同步' }}</span>
+                </div>
+                <div class="flex items-center gap-2 flex-wrap pt-1">
+                  <label class="text-xs text-muted">同步模式</label>
+                  <BaseSelect
+                    :key="mpModeSelectKey"
+                    :value="mpList.sync_mode || 'auto_all'"
+                    size="sm"
+                    class="w-36"
+                    :disabled="mpModeSwitching"
+                    @change="handleSwitchSyncMode(($event.target as HTMLSelectElement).value as ListSyncMode)"
+                  >
+                    <option value="auto_all">全部自动入库</option>
+                    <option value="manual">手动挑选入库</option>
+                  </BaseSelect>
+                  <span v-if="mpModeSwitching" class="text-xs text-muted">切换中...</span>
+                  <span class="flex-1"></span>
+                  <BaseButton intent="secondary" size="sm" :disabled="mpBusy" @click="openHistoryDialog">查看历史文章清单</BaseButton>
+                  <BaseButton intent="secondary" size="sm" :disabled="mpBusy" @click="handleStartScan">重新扫码</BaseButton>
+                  <BaseButton intent="danger-ghost" size="sm" :disabled="mpBusy" @click="handleUnbind">解绑</BaseButton>
+                </div>
+                <p class="text-xs text-muted">
+                  手动模式下新文章先记录不入库，可在「公众号内容」页勾选后同步。
+                </p>
+              </div>
+            </template>
+
+            <!-- 未绑定：扫码授权按钮 -->
+            <div v-else-if="!mpScan.active">
+              <BaseButton intent="primary" :disabled="mpBusy" @click="handleStartScan">
+                {{ mpBusy ? '发起中...' : '扫码授权' }}
+              </BaseButton>
+              <p v-if="mpList.status === 'expired' || mpList.status === 'account_error'" class="mt-1 text-xs text-danger-600">
+                {{ mpList.status === 'account_error'
+                  ? '公众号账号状态异常（已注销或冻结），无法同步；如已恢复请重新扫码。'
+                  : '授权已过期，请重新扫码以恢复自动同步。' }}
+              </p>
+            </div>
+
+            <!-- 扫码中：二维码 + 轮询状态 -->
+            <div v-if="mpScan.active" class="flex flex-col items-center gap-2 py-2">
+              <img v-if="mpScan.qrDataUrl" :src="mpScan.qrDataUrl" alt="公众号授权二维码"
+                class="w-44 h-44 rounded-lg border border-default bg-white" />
+              <p class="text-xs text-muted">
+                {{ mpScan.hint || '请用公众号管理员微信扫描二维码并确认授权' }}
+              </p>
+              <p v-if="mpScan.error" class="text-xs text-danger-600">{{ mpScan.error }}</p>
+              <div class="flex gap-2">
+                <BaseButton intent="secondary" size="sm" @click="handleRefreshQr">刷新二维码</BaseButton>
+                <BaseButton intent="ghost" size="sm" @click="handleCancelScan">取消</BaseButton>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 公众号内容特有（WP11，保留）：回调高级配置（可选，折叠） -->
+        <div v-if="form.channel_type === 'wechat_mp'" class="mt-3">
+          <button
+            type="button"
+            class="flex items-center gap-1 text-sm text-muted hover:text-default"
+            @click="mpAdvancedOpen = !mpAdvancedOpen"
+          >
+            <span>{{ mpAdvancedOpen ? '▾' : '▸' }}</span>
+            高级配置（可选）：回调接收（服务器配置）
+          </button>
+          <p class="mt-1 text-xs text-muted">
+            仅当需要在公众平台后台启用「服务器配置」（自动回复被接管、IP 白名单等场景）时才需要；扫码绑定后不配置也不影响内容同步。
+          </p>
+        </div>
+        <div v-if="form.channel_type === 'wechat_mp' && mpAdvancedOpen" class="mt-3 pt-3 border-t border-default">
           <div class="bg-canvas rounded-lg p-3 space-y-3">
             <label class="flex items-center gap-2 text-sm text-default cursor-pointer">
               <input type="checkbox" v-model="form.config.enabled" class="w-4 h-4 rounded border-primary-200 text-primary-600 focus:ring-primary-500" />
@@ -548,6 +661,60 @@
       </div>
       <template #footer>
         <BaseButton intent="primary" @click="showPublicKeyModal = false">我已上传，关闭</BaseButton>
+      </template>
+    </BaseModal>
+
+    <!-- ==================== 历史文章清单弹窗（WP13-r1，实时只读不落库） ==================== -->
+    <BaseModal v-model="mpHistory.open" title="历史文章清单" size="lg">
+      <div class="space-y-3">
+        <p class="text-xs text-muted">
+          实时读取公众号全部发表记录（不自动入库）。已入库文章来自本渠道自动同步；
+          未入库文章可复制链接，在知识库「手动导入」粘贴同步。
+        </p>
+        <div v-if="mpHistory.loading && mpHistory.items.length === 0" class="py-8 text-center text-sm text-muted">
+          加载中...
+        </div>
+        <div v-else-if="mpHistory.items.length === 0" class="py-8 text-center text-sm text-muted">
+          {{ mpHistory.error ? '加载失败' : '暂无历史文章' }}
+        </div>
+        <div v-else class="border border-default rounded-lg overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="bg-canvas text-left text-xs text-muted">
+                <th class="px-3 py-2 font-medium">标题</th>
+                <th class="px-3 py-2 font-medium whitespace-nowrap">发布时间</th>
+                <th class="px-3 py-2 font-medium whitespace-nowrap">状态</th>
+                <th class="px-3 py-2 font-medium whitespace-nowrap">链接</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="it in mpHistory.items" :key="it.external_id" class="border-t border-default">
+                <td class="px-3 py-2 text-default max-w-xs truncate" :title="it.title || ''">{{ it.title || '（无标题）' }}</td>
+                <td class="px-3 py-2 text-muted whitespace-nowrap">{{ formatUnixTime(it.create_time || it.update_time) }}</td>
+                <td class="px-3 py-2 whitespace-nowrap">
+                  <BaseBadge :intent="it.synced ? 'success' : 'neutral'">{{ it.synced ? '已入库' : '未入库' }}</BaseBadge>
+                </td>
+                <td class="px-3 py-2 whitespace-nowrap">
+                  <BaseButton v-if="!it.synced" intent="secondary" size="sm" @click="copyHistoryLink(it)">复制链接</BaseButton>
+                  <a v-else :href="it.link" target="_blank" rel="noopener" class="text-xs text-primary-600 hover:underline">查看</a>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="text-xs text-muted">已加载 {{ mpHistory.items.length }} 篇（源消息总数 {{ mpHistory.totalCount }}，一条消息可含多篇）</p>
+        <p v-if="mpHistory.error && mpHistory.items.length > 0" class="text-xs text-danger-600">{{ mpHistory.error }}</p>
+      </div>
+      <template #footer>
+        <div class="flex w-full items-center justify-between">
+          <BaseButton
+            intent="secondary"
+            size="sm"
+            :disabled="mpHistory.loading || !mpHistoryHasMore"
+            @click="loadMoreHistory"
+          >{{ mpHistory.loading ? '加载中...' : '加载更多' }}</BaseButton>
+          <BaseButton intent="ghost" size="sm" @click="mpHistory.open = false">关闭</BaseButton>
+        </div>
       </template>
     </BaseModal>
   </div>
@@ -956,6 +1123,7 @@ function loadWaitingIndicator(cfg: Record<string, any> | undefined) {
 const formInitialSnapshot = ref<Record<string, any>>({})
 
 function closeModal() {
+  stopMpPolling()
   showForm.value = false
   formInitialSnapshot.value = {}
 }
@@ -1041,6 +1209,11 @@ function selectChannelType(type: string) {
   form.value.channel_type = type
   if (type === 'wechat_mp' && form.value.config.enabled === undefined) {
     form.value.config.enabled = true
+  }
+  // WP13：切到公众号类型时加载清单源绑定状态（v1 每租户仅一个扫码绑定，
+  // 新建弹窗同样展示既有绑定）
+  if (type === 'wechat_mp') {
+    loadMpListSession()
   }
 }
 
@@ -1231,6 +1404,271 @@ function copyMpToken() {
   navigator.clipboard.writeText(mpTokenPlaintext.value).then(() => toast.success('Token 已复制'))
 }
 
+// ==================== 公众号清单源：扫码绑定（WP13） ====================
+
+import {
+  getListSession,
+  startListScan,
+  getListScanStatus,
+  unbindListSession,
+  switchListSyncMode,
+  getListHistory,
+  type ListSessionStatus,
+  type ListSyncMode,
+  type ListScanStatusResponse,
+  type ListHistoryItem
+} from '@/api/wechatMp'
+
+const mpList = ref<ListSessionStatus>({ success: true, bound: false })
+const mpAdvancedOpen = ref(false)
+const mpBusy = ref(false)
+const mpModeSwitching = ref(false)
+// 同步模式 select 回弹键：取消/切换失败时 bump，强制重建元素以复位用户改动的原生值
+const mpModeSelectKey = ref(0)
+const mpScan = ref({
+  active: false,
+  scanId: '',
+  qrDataUrl: '',
+  hint: '',
+  error: ''
+})
+let mpPollTimer: ReturnType<typeof setTimeout> | null = null
+
+const MP_LIST_STATUS_LABELS: Record<string, string> = {
+  active: '正常同步中',
+  expiring: '即将过期',
+  expired: '已过期',
+  account_error: '账号异常'
+}
+
+const mpListStatusLabel = computed(() => MP_LIST_STATUS_LABELS[mpList.value.status || ''] || '未知')
+
+const mpListStatusIntent = computed<'success' | 'warning' | 'danger' | 'neutral'>(() => {
+  switch (mpList.value.status) {
+    case 'active': return 'success'
+    case 'expiring': return 'warning'
+    case 'expired':
+    case 'account_error': return 'danger'
+    default: return 'neutral'
+  }
+})
+
+function formatDateTime(value: string | null | undefined): string {
+  if (!value) return ''
+  return value.replace('T', ' ').slice(0, 19)
+}
+
+/** unix 秒 → 本地时间文本（历史清单发布时间展示用）。 */
+function formatUnixTime(ts: number | null | undefined): string {
+  if (!ts) return '-'
+  const d = new Date(ts * 1000)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+// ==================== 首次同步篇数（WP13-r1） ====================
+
+const MP_MAX_ARTICLES_DEFAULT = 100
+
+// 绑定后可改；BaseInput 值为 string，保存时经 clampMpMaxArticles 规整
+const mpMaxArticles = ref<string>(String(MP_MAX_ARTICLES_DEFAULT))
+
+function clampMpMaxArticles(v: unknown): number {
+  const n = Math.floor(Number(v))
+  if (!Number.isFinite(n)) return MP_MAX_ARTICLES_DEFAULT
+  return Math.min(500, Math.max(1, n))
+}
+
+// 渠道列表卡片：清单源状态展示（masked config 明文字段）
+function listStatusLabel(status: string | undefined): string {
+  return MP_LIST_STATUS_LABELS[status || 'active'] || '未知'
+}
+
+function listStatusClass(status: string | undefined): string {
+  switch (status) {
+    case 'expiring': return 'text-warning-700'
+    case 'expired':
+    case 'account_error': return 'text-danger-600'
+    default: return 'text-success-700'
+  }
+}
+
+/** 加载绑定状态（打开 wechat_mp 弹窗/切换渠道类型时）。 */
+async function loadMpListSession() {
+  try {
+    const res = await getListSession()
+    mpList.value = res
+    // 首次同步篇数回显：优先本配置已保存值，其次状态接口回显，缺省 100
+    const saved = (form.value.config as Record<string, any> | undefined)?.list_sync_max_articles
+    mpMaxArticles.value = String(clampMpMaxArticles(saved ?? res.max_articles ?? MP_MAX_ARTICLES_DEFAULT))
+  } catch (e: any) {
+    // 状态加载失败不阻塞配置表单（未绑定态兜底）
+    mpList.value = { success: false, bound: false }
+  }
+}
+
+function stopMpPolling() {
+  if (mpPollTimer) {
+    clearTimeout(mpPollTimer)
+    mpPollTimer = null
+  }
+  mpScan.value.active = false
+}
+
+async function handleStartScan() {
+  mpBusy.value = true
+  mpScan.value.error = ''
+  try {
+    const res = await startListScan()
+    mpScan.value.active = true
+    mpScan.value.scanId = res.scan_id
+    mpScan.value.qrDataUrl = res.qr_data_url
+    mpScan.value.hint = '请用公众号管理员微信扫描二维码并确认授权'
+    scheduleMpPoll(res.scan_id)
+  } catch (e: any) {
+    mpScan.value.error = e.message || '发起扫码失败，请稍后重试'
+  } finally {
+    mpBusy.value = false
+  }
+}
+
+function scheduleMpPoll(scanId: string) {
+  stopMpPolling()
+  mpScan.value.active = true
+  mpPollTimer = setTimeout(async () => {
+    try {
+      const res: ListScanStatusResponse = await getListScanStatus(scanId)
+      switch (res.status) {
+        case 'confirmed':
+          mpScan.value.active = false
+          mpScan.value.hint = ''
+          toast.success(`已绑定公众号「${res.nickname || '未知昵称'}」`)
+          await loadMpListSession()
+          await loadChannels()
+          return
+        case 'scanned':
+          mpScan.value.hint = '已扫码，请在微信上确认授权'
+          break
+        case 'qr_expired':
+          mpScan.value.hint = '二维码已过期，请点击「刷新二维码」'
+          mpScan.value.error = ''
+          return // 停止轮询，等待用户刷新
+        case 'expired':
+          mpScan.value.hint = ''
+          mpScan.value.error = '扫码会话已过期，请重新发起扫码'
+          mpScan.value.active = false
+          return
+        case 'failed':
+          mpScan.value.active = false
+          mpScan.value.error = res.reason || '绑定未完成'
+          toast.error(res.reason || '绑定未完成')
+          await loadMpListSession()
+          return
+        default:
+          break // waiting：继续轮询
+      }
+      scheduleMpPoll(scanId)
+    } catch {
+      // 单次轮询失败（网络抖动）：继续下一轮，连续失败由会话 TTL 兜底
+      scheduleMpPoll(scanId)
+    }
+  }, 2500)
+}
+
+async function handleRefreshQr() {
+  await handleStartScan()
+}
+
+function handleCancelScan() {
+  stopMpPolling()
+  mpScan.value = { active: false, scanId: '', qrDataUrl: '', hint: '', error: '' }
+}
+
+async function handleUnbind() {
+  if (!confirm('解绑后停止自动同步该公众号内容（已入库文章保留），确定解绑吗？')) return
+  mpBusy.value = true
+  try {
+    await unbindListSession()
+    toast.success('已解绑')
+    await loadMpListSession()
+    await loadChannels()
+  } catch (e: any) {
+    toast.error(e.message || '解绑失败')
+  } finally {
+    mpBusy.value = false
+  }
+}
+
+async function handleSwitchSyncMode(mode: ListSyncMode) {
+  // CR P1 修复：BaseSelect 自身 @change（update:modelValue）先于父级 fallthrough
+  // @change 执行，若用 v-model 会在守卫前就把 sync_mode 改成新值，导致
+  // `mode === sync_mode` 恒成立、后端调用被静默跳过。改用单向 :value +
+  // 成功后再提交，取消/失败时 bump key 强制 select 回弹到当前生效模式。
+  const prev = mpList.value.sync_mode || 'auto_all'
+  if (!mode || mode === prev) return
+  if (mode === 'auto_all' && !confirm('切换为「全部自动入库」后，积压的待挑选文章将全部自动入知识库，确定吗？')) {
+    mpModeSelectKey.value++
+    return
+  }
+  mpModeSwitching.value = true
+  try {
+    const res = await switchListSyncMode(mode)
+    mpList.value.sync_mode = mode
+    toast.success(res.enqueued > 0 ? `已切换，${res.enqueued} 篇待挑选文章已入队` : '同步模式已切换')
+  } catch (e: any) {
+    mpModeSelectKey.value++
+    toast.error(e.message || '切换失败')
+  } finally {
+    mpModeSwitching.value = false
+  }
+}
+
+// ==================== 历史文章清单弹窗（WP13-r1，实时只读） ====================
+
+const mpHistory = ref({
+  open: false,
+  loading: false,
+  items: [] as ListHistoryItem[],
+  totalCount: 0,
+  // 下一页消息偏移（begin 按消息数推进，与子篇数无关）
+  nextBegin: 0,
+  count: 5,
+  error: ''
+})
+
+// 「加载更多」可用性：消息偏移推进到总数即无更多（子篇数可能大于消息数，勿混用）
+const mpHistoryHasMore = computed(() => mpHistory.value.nextBegin < mpHistory.value.totalCount)
+
+function openHistoryDialog() {
+  mpHistory.value = { open: true, loading: false, items: [], totalCount: 0, nextBegin: 0, count: 5, error: '' }
+  loadHistoryPage()
+}
+
+async function loadHistoryPage() {
+  const h = mpHistory.value
+  h.loading = true
+  h.error = ''
+  try {
+    const res = await getListHistory({ begin: h.nextBegin, count: h.count })
+    h.items = h.items.concat(res.items)
+    h.totalCount = res.total_count
+    h.nextBegin = res.begin + res.count
+  } catch (e: any) {
+    h.error = e.message || '获取历史清单失败，请稍后重试'
+  } finally {
+    h.loading = false
+  }
+}
+
+function loadMoreHistory() {
+  if (mpHistory.value.loading || !mpHistoryHasMore.value) return
+  loadHistoryPage()
+}
+
+function copyHistoryLink(it: ListHistoryItem) {
+  navigator.clipboard.writeText(it.link).then(() => toast.success('链接已复制，可在知识库「手动导入」粘贴'))
+}
+
 // ==================== 操作 ====================
 
 function openAddChannel() {
@@ -1251,6 +1689,10 @@ function editChannel(ch: any) {
   loadWaitingIndicator(ch.config?.waiting_indicator)
   resetMpTokenState()
   showForm.value = true
+  // WP13：公众号弹窗加载清单源绑定状态（扫码区块置顶主入口）
+  if (ch.channel_type === 'wechat_mp') {
+    loadMpListSession()
+  }
 }
 
 // 处理 RSA 私钥文件上传：读取 .pem 文件内容为文本存入 config
@@ -1322,6 +1764,8 @@ async function saveChannel(): Promise<boolean> {
       payload.config.enabled = form.value.config.enabled !== false
       const hours = parseInt(String(form.value.config.sync_interval_hours ?? ''), 10)
       payload.config.sync_interval_hours = Number.isFinite(hours) && hours > 0 ? hours : 6
+      // WP13-r1：首次同步篇数随 config 保存（后端钳制 1~500，缺失/掩码时保留旧值）
+      payload.config.list_sync_max_articles = clampMpMaxArticles(mpMaxArticles.value)
       const customToken = mpCustomToken.value.trim()
       if (customToken) {
         // 前端先行校验（口径与后端一致：3~32 位字母数字）

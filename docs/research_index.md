@@ -55,3 +55,4 @@
 | 桌面 CLI 无人值守底座与微信/BOSS 就绪度调研（2026-09-08） | [调研](research/weixin-cli/automation-readiness-2026-09-08.md) | 核实微信能力与 Windows/Mac 边界；补核 BOSS 未读/写后证据/候选人/话术/通知现状，通用能力归中立底座设计与计划；本轮无真实发送。 |
 | 竣工图纸差异对比（转图片 + 多模态）测试报告 | [cad-multimodal-drawing-comparison-test-report.md](research/cad-multimodal-drawing-comparison-test-report.md) | 图纸差异对比功能（2026-09-04 实验）。 |
 | CAD 处理与多模态图纸对比技术报告 | [cad-processing-and-multimodal-drawing-comparison-tech-report.md](research/cad-processing-and-multimodal-drawing-comparison-tech-report.md) | 图纸差异对比功能（2026-09-04）。 |
+| 微信公众号历史文章清单获取原理调研（wechat-download-api 源码级分析） | [调研](research/wechat-mp/wechat-download-api-principle-research.md) | 公众号内容入知识库 WPS 托底清单源：机制=管理员扫码会话调公众平台后台 searchbiz/appmsgpublish；结论=方法可自研借鉴（非独门秘籍），Docker 降级为实验对照与应急选项（2026-09-16）。 |

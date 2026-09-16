@@ -22,6 +22,20 @@
         </BaseButton>
       </div>
 
+      <!-- ==================== 清单源授权状态横幅（WP13） ==================== -->
+      <div
+        v-if="listBanner.visible"
+        class="rounded-lg p-4 text-sm"
+        :class="listBanner.danger
+          ? 'bg-danger-50 border border-danger-200 text-danger-800'
+          : 'bg-warning-50 border border-warning-200 text-warning-800'"
+      >
+        <div class="flex items-center justify-between gap-2 flex-wrap">
+          <p class="font-medium">{{ listBanner.text }}</p>
+          <BaseButton size="sm" intent="secondary" @click="goChannelConfig">前往渠道配置重新扫码</BaseButton>
+        </div>
+      </div>
+
       <!-- ==================== 粘贴导入 ==================== -->
       <div class="bg-surface rounded-lg border border-default p-5">
         <h2 class="text-base font-medium text-default mb-1">粘贴文章链接导入</h2>
@@ -142,13 +156,22 @@
               <option value="alias">alias</option>
               <option value="unconfirmed">unconfirmed</option>
             </BaseSelect>
-            <BaseSelect v-model="articleProcessingFilter" size="sm" class="w-36" @change="loadArticles()">
+            <BaseSelect v-model="articleProcessingFilter" size="sm" class="w-36" @change="onFilterChange()">
               <option value="">全部处理状态</option>
               <option value="pending">pending</option>
+              <option value="pending_manual">待挑选（手动模式）</option>
               <option value="success">success</option>
               <option value="sync_failed">sync_failed</option>
               <option value="deferred">deferred</option>
             </BaseSelect>
+            <BaseButton
+              v-if="selectedIds.length > 0"
+              size="sm"
+              :disabled="enqueuing"
+              @click="handleEnqueueSelected"
+            >
+              {{ enqueuing ? '同步中...' : `同步到知识库（${selectedIds.length}）` }}
+            </BaseButton>
           </div>
           <BaseButton intent="ghost" size="sm" @click="loadArticles()">刷新</BaseButton>
         </div>
@@ -159,8 +182,20 @@
           :data="articles"
           row-key="id"
         >
+          <template #select="{ row }">
+            <input
+              v-if="row.processing_status === 'pending_manual'"
+              type="checkbox"
+              class="w-4 h-4 rounded border-primary-200 text-primary-600"
+              :checked="selectedIds.includes(row.id)"
+              @click.stop="toggleSelect(row as WechatMpArticle)"
+            />
+          </template>
           <template #title="{ row }">
             <span class="text-default">{{ row.title || truncate(row.original_url || row.external_id, 40) }}</span>
+          </template>
+          <template #source_channel="{ row }">
+            <BaseBadge size="sm" intent="neutral">{{ sourceLabel(row.source_channel) }}</BaseBadge>
           </template>
           <template #status="{ row }">
             <BaseBadge size="sm" :intent="articleStatusIntent(row.status)">{{ row.status }}</BaseBadge>
@@ -174,6 +209,12 @@
           </template>
           <template #ops="{ row }">
             <div class="flex items-center gap-1">
+              <BaseButton
+                v-if="row.processing_status === 'pending_manual'"
+                intent="secondary"
+                size="sm"
+                @click.stop="handleEnqueueSingle(row as WechatMpArticle)"
+              >同步</BaseButton>
               <BaseButton
                 v-if="row.processing_status === 'failed' || row.processing_status === 'sync_failed'"
                 intent="ghost"
@@ -219,11 +260,14 @@ import {
   getArticles,
   retryArticle,
   recheckArticle,
+  getListSession,
+  enqueueManualArticles,
   type ImportUrlsResponse,
   type WechatMpRun,
   type WechatMpRunItem,
   type WechatMpArticle,
-  type EnqueueResponse
+  type EnqueueResponse,
+  type ListSessionStatus
 } from '@/api/wechatMp'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 
@@ -272,6 +316,103 @@ async function handleLogout() {
 
 function goChannelConfig() {
   router.push(`/t/${tenantId.value}/channels`)
+}
+
+// ==================== 清单源授权状态（WP13 横幅） ====================
+
+const listSession = ref<ListSessionStatus | null>(null)
+
+const listBanner = computed(() => {
+  const status = listSession.value?.bound ? listSession.value.status : null
+  if (status === 'expiring') {
+    return {
+      visible: true,
+      danger: false,
+      text: '公众号清单授权即将过期，请重新扫码以保持自动同步（到期后新文章将停止入库）。'
+    }
+  }
+  if (status === 'expired') {
+    return {
+      visible: true,
+      danger: true,
+      text: '公众号清单授权已过期，自动同步已停止；请到渠道配置重新扫码恢复。'
+    }
+  }
+  if (status === 'account_error') {
+    return {
+      visible: true,
+      danger: true,
+      text: '公众号账号状态异常（已注销或冻结），清单同步不可用；如有疑问请联系运营。'
+    }
+  }
+  return { visible: false, danger: false, text: '' }
+})
+
+async function loadListSession() {
+  try {
+    listSession.value = await getListSession()
+  } catch {
+    listSession.value = null // 状态查询失败不打扰主流程
+  }
+}
+
+// ==================== 手动挑选同步（WP13） ====================
+
+const selectedIds = ref<number[]>([])
+const enqueuing = ref(false)
+
+function toggleSelect(row: WechatMpArticle) {
+  const idx = selectedIds.value.indexOf(row.id)
+  if (idx >= 0) {
+    selectedIds.value.splice(idx, 1)
+  } else {
+    selectedIds.value.push(row.id)
+  }
+}
+
+function onFilterChange() {
+  selectedIds.value = []
+  loadArticles()
+}
+
+async function handleEnqueueSelected() {
+  if (selectedIds.value.length === 0) return
+  enqueuing.value = true
+  try {
+    const res = await enqueueManualArticles(selectedIds.value)
+    toast.success(res.message || '已加入队列')
+    selectedIds.value = []
+    await Promise.all([loadRuns(), loadArticles()])
+  } catch (e) {
+    toast.error(e instanceof Error ? e.message : '同步失败')
+  } finally {
+    enqueuing.value = false
+  }
+}
+
+async function handleEnqueueSingle(row: WechatMpArticle) {
+  enqueuing.value = true
+  try {
+    const res = await enqueueManualArticles([row.id])
+    toast.success(res.message || '已加入队列')
+    await Promise.all([loadRuns(), loadArticles()])
+  } catch (e) {
+    toast.error(e instanceof Error ? e.message : '同步失败')
+  } finally {
+    enqueuing.value = false
+  }
+}
+
+const SOURCE_LABELS: Record<string, string> = {
+  manual: '手动',
+  callback: '回调',
+  freepublish: '接口',
+  list: '清单',
+  '': '-'
+}
+
+function sourceLabel(channel: string): string {
+  return SOURCE_LABELS[channel] || channel || '-'
 }
 
 // ==================== 公众号配置存在性（空态引导） ====================
@@ -432,12 +573,14 @@ const articleStatusFilter = ref('')
 const articleProcessingFilter = ref('')
 
 const articleColumns: TableColumn[] = [
+  { key: 'select', label: '', width: '44px' },
   { key: 'title', label: '标题' },
+  { key: 'source_channel', label: '来源', width: '90px' },
   { key: 'status', label: '状态', width: '90px' },
-  { key: 'processing_status', label: '处理状态', width: '110px' },
+  { key: 'processing_status', label: '处理状态', width: '120px' },
   { key: 'last_synced_at', label: '最近同步', width: '160px' },
   { key: 'error_message', label: '失败原因' },
-  { key: 'ops', label: '操作', width: '140px' }
+  { key: 'ops', label: '操作', width: '170px' }
 ]
 
 async function loadArticles(offset = 0) {
@@ -531,6 +674,7 @@ const TRIGGER_LABELS: Record<string, string> = {
   retry: '重试',
   recheck: '存活复核',
   scheduled: '定时同步',
+  list_sync: '清单同步',
   agent: '智能体'
 }
 
@@ -591,6 +735,7 @@ function processingIntent(status: string): 'primary' | 'success' | 'warning' | '
   switch (status) {
     case 'success': return 'success'
     case 'pending': return 'info'
+    case 'pending_manual': return 'warning'
     case 'deferred': return 'warning'
     case 'sync_failed': return 'danger'
     default: return 'neutral'
@@ -598,6 +743,6 @@ function processingIntent(status: string): 'primary' | 'success' | 'warning' | '
 }
 
 onMounted(async () => {
-  await Promise.all([checkChannelConfig(), loadRuns(), loadArticles()])
+  await Promise.all([checkChannelConfig(), loadRuns(), loadArticles(), loadListSession()])
 })
 </script>

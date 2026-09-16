@@ -23,21 +23,24 @@
   响应不可确认记 unknown，P1 禁止自动重扣；计费失败不回滚内容、不重嵌。
 - **余额**：run 启动预检（不足记 skipped_no_credit 终态）+ 每付费单元（embedding）
   前复查；action='check' 的复核类 item 不受启动预检阻断（删除复核免费）。
-- **图片 VL 解析（WP10，P2）**：有图且文字 < MIN_TEXT_CHARS 时先下载转存微信 CDN
-  图片（image_downloader.py）→ VL 解析（vision.py，无可用多模态模型不发纯文本
-  模型）→ [图片N: 描述] 插回正文入库；无模型/全部失败维持 deferred；文字充足
-  的文章不触发 VL（P3 再评估全量解析）。VL 按张计费 source_type=
-  'wechat_mp_image_parse'，业务提交后独立落账 fail-open，与 embedding 计费合并
-  回写 item 计费字段。
-- **总结入库（WP12，p3）**：VL 之后把 merged 全文（原文文本 + 图片干净描述）
-  交给 LLM 生成 ≤500 字核心要点总结（summarize.py，主 provider 默认文本模型）；
-  chunk 文本 = 总结本身（无「文档标题：」标签前缀，不拼原文链接——WP12 定版：
-  原文链接存 documents.file_path 文档位置字段，与手动上传文档的本地路径同字段，
-  下载边界按 origin 拦截）；raw_text 仍存 merged 全文供审计；总结失败回退
-  merged 原文入库（metadata.summary_fallback/content_mode 标记形态）。
-  总结调用经 record_background_llm_usage(source='wechat_mp_summary') 独立落账
-  fail-open；content_hash 仍按原始节点计算，VL 描述与总结均不进指纹——同文章
-  二次处理仍走 check 零成本。
+- **图片 VL 解析（WP10，P2；WP13 门禁放开）**：有图即先下载转存微信 CDN 图片
+  （image_downloader.py，维持单篇 30 张上限）→ VL 解析（vision.py，无可用多模态
+  模型不发纯文本模型）→ 描述插回正文入库；无模型不再 deferred——有文本照常入库，
+  图片行保留地址、描述留空，metadata 记 image_parse_skipped_reason='no_model'；
+  仅纯图且无任何可总结内容维持 deferred。VL 按张按实际 token 计费 source_type=
+  'wechat_mp_image_parse'（走 calculate_credit_cost 标准算价含价目兜底），业务
+  提交后独立落账 fail-open，与 embedding 计费合并回写 item 计费字段。
+- **总结入库（WP12，p3；WP13 输入改 content_md）**：VL 之后按节点顺序组装
+  Markdown（content.py.build_markdown：# 标题 + 文本段落 + ![VL描述](CDN地址)），
+  存 documents.metadata.content_md 并作为总结输入（图片转述与文本同等参与总结，
+  指令要求图文去重）；LLM 生成 ≤500 字核心要点总结（summarize.py，主 provider
+  默认文本模型）；chunk 文本 = 总结本身（无「文档标题：」标签前缀，不拼原文链接
+  ——WP12 定版：原文链接存 documents.file_path 文档位置字段，与手动上传文档的
+  本地路径同字段，下载边界按 origin 拦截）；raw_text 仍存 merged 纯文本供审计；
+  总结失败回退 content_md 原文入库（metadata.summary_fallback/content_mode 标记
+  形态）。总结调用经 record_background_llm_usage(source='wechat_mp_summary')
+  独立落账 fail-open；content_hash 仍按原始节点计算，VL 描述与总结均不进指纹
+  ——同文章二次处理仍走 check 零成本。
 - **恢复**：``recover_stale_runs()`` —— heartbeat 超时且锁已失效的 running run 标
   interrupted；queued 保持等待。
 
@@ -78,6 +81,7 @@ from loguru import logger
 from src.db.database import get_db_connection
 from src.core.text_sanitizer import sanitize_text
 from src.knowledge.chunker import TextChunker
+from src.wechat_mp import config_codec as wechat_mp_codec
 from src.knowledge.embedding.embedding_client import sanitize_error_info
 from src.knowledge.vector_db.vector_db import get_vector_db
 from src.wechat_mp.client import (
@@ -91,6 +95,7 @@ from src.wechat_mp.content import (
     ContentExtractionError,
     ContentNode,
     ExtractedArticle,
+    build_markdown,
     extract_article,
     nodes_to_text,
 )
@@ -112,14 +117,15 @@ from src.wechat_mp.vision import (
     VISION_PARSE_SOURCE_TYPE,
     VisionParseOutcome,
     VisionParser,
-    calculate_image_parse_credit_cost,
 )
+from src.services.billing import calculate_credit_cost
 
 # ------------------------------- 常量 -------------------------------
 
-# WP12：p2→p3（一篇 URL = 一篇 ≤500 字总结入库，chunk 打在总结上；去掉
-# 「文档标题：」chunk 前缀）。存量 p2 文章在复核/pipeline 不匹配时自动重建为总结版。
-PIPELINE_VERSION = "p3"
+# WP13：p3→p4（图文 Markdown 化——门禁放开有图即解析、metadata.content_md、
+# 总结输入改 content_md、图片计费改按实际 token）。存量 p3 文章在复核/pipeline
+# 不匹配时自动重建：有图文章补 VL 解析与 content_md（补付解析费，运营知会）。
+PIPELINE_VERSION = "p4"
 DOC_ORIGIN = "wechat_mp"
 EMBEDDING_SOURCE_TYPE = "wechat_mp_embedding"
 EMBEDDING_MODEL = "text-embedding-v3"
@@ -141,7 +147,6 @@ RETRY_MAX_SHIFT = 8
 
 # SUMMARY_MAX_CHARS（500 字总结上限）迁至 summarize.py（WP12：总结由 LLM 生成，
 # 不再是 P1 的确定性 300 字截断）；此处 import 以维持既有引用口径。
-MIN_TEXT_CHARS = 20  # 有图且文字不足 → VL 解析（P2），仍失败才 deferred（设计 §13 审阅记录）
 
 # WP12 总结正文形态（documents.metadata.content_mode）
 CONTENT_MODE_SUMMARY = "summary"
@@ -152,6 +157,12 @@ CONTENT_MODE_RAW_FALLBACK = "raw_fallback"
 # 不以数组下标做持久身份。appid/article_id 均不含冒号，解析安全。
 FREEPUBLISH_CHANNEL = "freepublish"
 FREEPUBLISH_COMBINED_SUFFIX = ":combined"
+
+# WP13 自有号清单源（设计 wechat-mp-list-source-design.md §3.4）：
+# - source_channel='list'；子篇短链经 normalize_url 撞键，与 URL/freepublish 通道天然去重
+# - processing_status 新增 'pending_manual'（manual 模式：仅建行不入队，待用户勾选）
+LIST_CHANNEL = "list"
+PENDING_MANUAL = "pending_manual"
 
 
 def freepublish_external_id(appid: str, article_id: str) -> str:
@@ -182,7 +193,8 @@ def _parse_unix_seconds(value: Optional[int]) -> Optional[datetime]:
     except (ValueError, OSError, OverflowError):
         return None
 
-# P2 图片 VL 解析 deferred 原因文案（error_code 仍为 deferred_image_pending）
+# 图片 VL 解析 deferred 原因文案（WP13 起仅「纯图且无任何可总结内容」使用；
+# error_code 仍为 deferred_image_pending）
 _DEFERRED_NO_MODEL = "图片待解析：无可用多模态模型，将自动重试"
 _DEFERRED_PARSE_FAILED = "图片待解析：图片下载或解析全部失败，将自动重试"
 
@@ -626,6 +638,160 @@ def recheck_article(
     )
 
 
+def switch_list_sync_mode(tenant_id: str, mode: str) -> Dict[str, Any]:
+    """切换清单源同步模式（WP13，设计 §3.4：auto_all 全部自动 / manual 手动挑选）。
+
+    - manual→auto_all：自动补齐 pending_manual 积压文章入队（设计 §3.4 定版）
+    - 未绑定清单源 / 模式非法 → 业务错误
+    返回 {"config_id", "mode", "enqueued"}（enqueued=本次补齐入队篇数）。
+    """
+    if mode not in ("auto_all", "manual"):
+        raise WeChatMPBusinessError("同步模式仅支持 auto_all / manual")
+    from src.wechat_mp import list_session as list_session_mod
+
+    config_id = None
+    bound = list_session_mod.find_bound_list_config(tenant_id)
+    if not bound:
+        raise WeChatMPBusinessError("尚未绑定公众号清单源，请先扫码授权")
+    config_id = bound["config_id"]
+
+    # 先补齐积压、后落模式（两步非原子）：若先写模式后入队，入队失败（如队列满）
+    # 会留下「auto_all + 积压滞留 pending_manual」的不一致态——对账对 pending_manual
+    # 行不建 item，积压将无人接管。先入队失败则模式保持 manual，用户可重试。
+    enqueued = 0
+    if mode == "auto_all":
+        pending_ids = _list_pending_manual_ids(tenant_id)
+        if pending_ids:
+            result = enqueue_manual_articles(tenant_id, None, pending_ids)
+            enqueued = int(result.get("enqueued") or 0)
+    ok = list_session_mod.write_list_config_fields(
+        config_id, fields={"list_sync_mode": mode}
+    )
+    if not ok:
+        raise WeChatMPBusinessError("渠道配置不存在或已删除，无法切换模式")
+    logger.bind(module="wechat_mp").info(
+        "wechat_mp 清单同步模式切换 tenant_id={} config_id={} mode={} enqueued={}",
+        tenant_id, config_id, mode, enqueued,
+    )
+    return {"config_id": config_id, "mode": mode, "enqueued": enqueued}
+
+
+def _list_pending_manual_ids(tenant_id: str) -> List[int]:
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT id FROM bs_wechat_mp_articles
+            WHERE tenant_id = %s AND source_channel = %s AND processing_status = %s
+              AND status = 'active'
+            ORDER BY id ASC
+            """,
+            (tenant_id, LIST_CHANNEL, PENDING_MANUAL),
+        )
+        return [r["id"] for r in cursor.fetchall()]
+
+
+def enqueue_manual_articles(
+    tenant_id: str, user_id: Optional[str], article_row_ids: List[int]
+) -> Dict[str, Any]:
+    """manual 模式勾选同步（WP13）：pending_manual 文章单篇/批量入队走 URL 直采。
+
+    - 仅受理本租户 active 且 processing_status='pending_manual' 的行（其余跳过计数）
+    - 一个 queued run（trigger_type='manual'，config_id=绑定配置）+ 每篇一条
+      pending item（action=NULL）；文章行回 processing_status='pending'
+    - 与 retry/recheck 同口径：advisory lock 限流原子化 + queued run 上限 + 受理
+      成功后 best-effort 唤醒 worker
+    """
+    if not article_row_ids:
+        raise WeChatMPBusinessError("请至少选择一篇文章")
+    bound_config_id = None
+    try:
+        from src.wechat_mp import list_session as list_session_mod
+
+        bound = list_session_mod.find_bound_list_config(tenant_id)
+        bound_config_id = bound["config_id"] if bound else None
+    except Exception:  # noqa: BLE001 绑定查询失败不阻断入队（config_id 仅追溯用）
+        bound_config_id = None
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        try:
+            _advisory_enqueue_lock(cursor, tenant_id)
+            cursor.execute(
+                """
+                SELECT count(*) AS c FROM bs_wechat_mp_sync_runs
+                WHERE tenant_id = %s AND status = 'queued'
+                """,
+                (tenant_id,),
+            )
+            queued_count = int(cursor.fetchone()["c"])
+            if queued_count >= MAX_QUEUED_RUNS:
+                raise WeChatMPBusinessError(
+                    f"待处理任务已达 {MAX_QUEUED_RUNS} 个，请等待队列消化后再提交"
+                )
+            cursor.execute(
+                """
+                SELECT id FROM bs_wechat_mp_articles
+                WHERE tenant_id = %s AND id = ANY(%s)
+                  AND status = 'active' AND processing_status = %s
+                """,
+                (tenant_id, list(article_row_ids), PENDING_MANUAL),
+            )
+            valid_ids = [r["id"] for r in cursor.fetchall()]
+            skipped = len(article_row_ids) - len(valid_ids)
+            if not valid_ids:
+                return {"run_id": None, "enqueued": 0, "skipped": skipped,
+                        "message": "所选文章均不在待挑选状态"}
+            cursor.execute(
+                """
+                INSERT INTO bs_wechat_mp_sync_runs
+                    (tenant_id, config_id, user_id, trigger_type, status, total_count)
+                VALUES (%s, %s, %s, 'manual', 'queued', %s)
+                RETURNING id
+                """,
+                (tenant_id, bound_config_id, user_id, len(valid_ids)),
+            )
+            run_id = cursor.fetchone()["id"]
+            for article_row_id in valid_ids:
+                cursor.execute(
+                    """
+                    INSERT INTO bs_wechat_mp_sync_items
+                        (tenant_id, user_id, run_id, article_row_id, action, status)
+                    VALUES (%s, %s, %s, %s, NULL, 'pending')
+                    """,
+                    (tenant_id, user_id, run_id, article_row_id),
+                )
+                cursor.execute(
+                    """
+                    UPDATE bs_wechat_mp_articles
+                    SET processing_status = 'pending', next_retry_at = NULL
+                    WHERE id = %s AND tenant_id = %s
+                    """,
+                    (article_row_id, tenant_id),
+                )
+            conn.commit()
+        except WeChatMPBusinessError:
+            conn.rollback()
+            raise
+        except Exception:
+            conn.rollback()
+            raise
+    logger.bind(module="wechat_mp").info(
+        "wechat_mp 手动挑选同步入队 tenant_id={} run_id={} enqueued={} skipped={}",
+        tenant_id, run_id, len(valid_ids), skipped,
+    )
+    try:
+        notify_queued_work()
+    except Exception as e:  # noqa: BLE001 唤醒失败不影响受理结果
+        logger.bind(module="wechat_mp").debug("wechat_mp 队列唤醒通知异常（忽略）: {}", e)
+    return {
+        "run_id": run_id,
+        "enqueued": len(valid_ids),
+        "skipped": skipped,
+        "message": f"已受理 {len(valid_ids)} 篇并加入队列（run_id={run_id}），同租户按顺序串行处理",
+    }
+
+
 def _enqueue_single_article(
     tenant_id: str,
     user_id: Optional[str],
@@ -927,6 +1093,14 @@ class WeChatMPSyncService:
             if stats is None:
                 # 对账失败已在 _reconcile_scheduled_run 内记 failed（脱敏 error_message），
                 # 不得把拉取失败/结构异常误报 success（设计 §5.2.6）
+                return True
+            count_overrides = stats
+
+        # ---- WP13：list_sync run 先跑自有号清单对账（三阶段同 WP9 模式）----
+        elif run.get("trigger_type") == "list_sync":
+            stats = await asyncio.to_thread(self._reconcile_list_sync_run, tenant_id, run, owner)
+            if stats is None:
+                # 拉取失败/结构异常已在 _reconcile_list_sync_run 内记 failed，不得误报 success
                 return True
             count_overrides = stats
 
@@ -1347,6 +1521,430 @@ class WeChatMPSyncService:
                 "wechat_mp run 失败收尾未命中（owner/状态已变）run_id={}", run_id
             )
 
+    # ==================== WP13 清单源：list_sync run 对账 ====================
+
+    def _reconcile_list_sync_run(
+        self, tenant_id: str, run: Dict[str, Any], owner: str
+    ) -> Optional[Dict[str, int]]:
+        """list_sync run 的对账入口（同步，asyncio.to_thread 调用，设计 §3.4）。
+
+        三阶段同 WP9 模式：①拉清单+diff（单事务）→ ②无跨阶段网络调用
+        （删除只认清单显式 is_deleted 信号，无 missing 详情复核）→ ③同事务软删
+        已在 ① 内完成。失败（会话缺失/失效/账号异常/结构异常）置 run=failed 并
+        返回 None——不得误报 success；session_expired→list_sync_status='expired'，
+        account_error→'account_error'（设计 §3.4）。
+
+        过期通知（设计 §3.5）：仓库现有通知设施（notification_service webhook/
+        email、wecom_bot）均为平台级或按功能独立配置，无「租户管理员」寻址能力，
+        v1 以状态置位 + run failed 记录 + 前端横幅兜底，站外推送登记后续。
+        """
+        from src.wechat_mp import list_session as list_session_mod
+        from src.wechat_mp.list_source import (
+            ListAccountError,
+            ListFreqControlError,
+            ListSessionExpiredError,
+            ListSourceError,
+            OwnListClient,
+        )
+
+        config_id = run.get("config_id")
+        session = list_session_mod.load_list_session(config_id) if config_id else None
+        if session is None:
+            self._fail_run(tenant_id, run["id"], owner, "清单源会话不存在（可能已解绑），请重新扫码绑定")
+            if config_id:
+                list_session_mod.set_list_sync_status(config_id, "expired")
+            return None
+
+        # expiring 预警置位（best-effort）：active 且进入 expire_at-24h 窗口
+        fields = session.get("fields") or {}
+        if fields.get("list_sync_status") == "active" and (
+            list_session_mod.effective_list_sync_status(fields) == "expiring"
+        ):
+            list_session_mod.set_list_sync_status(config_id, "expiring")
+
+        mode = fields.get("list_sync_mode") or "auto_all"
+        # WP13-r1（设计 §3.4）：首次回填上限 + 回填完成标记。
+        # list_backfill_done=false → 首次回填：按子篇计数只取最新 N 篇（fetch 层
+        # 达到上限即停止翻页，边界消息整条计入，超硬顶 500 截断）；
+        # true → 增量：走到重叠即停（整页全部已知且 update_time 一致才停）。
+        backfill_done = bool(fields.get("list_backfill_done"))
+        max_articles = wechat_mp_codec.clamp_list_sync_max_articles(
+            fields.get("list_sync_max_articles")
+        )
+        client = OwnListClient(token=session["token"], cookie=session["cookie"])
+        try:
+            if backfill_done:
+                known_times = self._load_list_known_times(tenant_id)
+                scan = client.fetch_sync_scan(
+                    page_all_known=lambda page: self._page_all_known(known_times, page)
+                )
+            else:
+                scan = client.fetch_sync_scan(max_articles=max_articles)
+        except ListSessionExpiredError as e:
+            # 会话失效：置 expired（前端横幅+徽标提示重新扫码；站外通知 v1 无设施，见上）
+            self._fail_run(tenant_id, run["id"], owner, str(e))
+            list_session_mod.set_list_sync_status(config_id, "expired")
+            return None
+        except ListAccountError as e:
+            self._fail_run(tenant_id, run["id"], owner, str(e))
+            list_session_mod.set_list_sync_status(config_id, "account_error")
+            return None
+        except (ListFreqControlError, ListSourceError) as e:
+            # 频控/结构异常/网络：run=failed 不改绑定状态（下轮 tick 随周期自然重试）
+            self._fail_run(tenant_id, run["id"], owner, str(e))
+            return None
+        except Exception as e:  # noqa: BLE001 未预期异常同样不误报 success
+            logger.opt(exception=True).error(
+                "后端日志：wechat_mp 清单拉取未预期异常 tenant_id={} run_id={}: {}",
+                tenant_id, run["id"], sanitize_error_info(str(e)),
+            )
+            self._fail_run(tenant_id, run["id"], owner, "清单拉取失败（未预期异常）")
+            return None
+        finally:
+            close = getattr(client, "close", None)
+            if callable(close):
+                close()
+
+        try:
+            total_sub, unchanged, deleted = self._reconcile_list_articles(
+                tenant_id, run, scan, mode
+            )
+        except Exception as e:  # noqa: BLE001 diff 落库异常 → run failed
+            logger.opt(exception=True).error(
+                "后端日志：wechat_mp 清单对账落库失败 tenant_id={} run_id={}: {}",
+                tenant_id, run["id"], sanitize_error_info(str(e)),
+            )
+            self._fail_run(tenant_id, run["id"], owner, "清单对账落库失败")
+            return None
+
+        # 成功推进最近同步时间（best-effort，前端「上次同步时间」展示用）；
+        # 首次回填且本轮扫描 complete（翻完或达上限）才置 list_backfill_done——
+        # 不完整扫描不置，下轮继续按上限回填（设计 §3.4）
+        success_fields: Dict[str, Any] = {
+            "list_last_sync_at": datetime.now(timezone.utc).isoformat(),
+        }
+        if not backfill_done and scan.complete:
+            success_fields["list_backfill_done"] = True
+        try:
+            list_session_mod.write_list_config_fields(config_id, fields=success_fields)
+        except Exception as e:  # noqa: BLE001
+            logger.bind(module="wechat_mp").debug(
+                "wechat_mp list_last_sync_at 写入失败（忽略）: {}", e
+            )
+        logger.bind(module="wechat_mp").info(
+            "wechat_mp 清单对账完成 tenant_id={} run_id={} config_id={} mode={} "
+            "messages={} sub_articles={} unchanged={} deleted={} backfill_done={} "
+            "max_articles={} complete={}",
+            tenant_id, run["id"], config_id, mode,
+            scan.total_count, total_sub, unchanged, deleted,
+            success_fields.get("list_backfill_done", backfill_done),
+            max_articles, scan.complete,
+        )
+        return {
+            "total_count": total_sub,
+            "extra_skipped": unchanged,
+            "extra_deleted": deleted,
+        }
+
+    @staticmethod
+    def _list_source_time(art: Any) -> datetime:
+        """清单子篇 update_time（unix 秒）→ UTC naive（对齐既有 wx_update_time 口径）。"""
+        return datetime.fromtimestamp(art.update_time, tz=timezone.utc).replace(tzinfo=None)
+
+    @staticmethod
+    def _load_list_known_times(tenant_id: str) -> Dict[str, Any]:
+        """租户全部 articles 行的 external_id → wx_update_time（增量重叠判定用）。
+
+        撞键范围=本租户全部行（不限 source_channel），与 diff 撞键口径一致：
+        他通道已入库的同身份行同样算「已知」，避免增量轮永远停不下翻页。
+        """
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT external_id, wx_update_time
+                FROM bs_wechat_mp_articles
+                WHERE tenant_id = %s
+                """,
+                (tenant_id,),
+            )
+            return {r["external_id"]: r["wx_update_time"] for r in cursor.fetchall()}
+
+    def _page_all_known(self, known_times: Dict[str, Any], page: List[Any]) -> bool:
+        """增量「走到重叠即停」整页判定（设计 §3.4）：整页子篇全部已知且
+        update_time 与库内一致才返回 True。
+
+        任何一条不满足（身份未知 / 链接不可规范 / 时间缺失或不一致）→ False
+        继续翻页——早停漏拉由下一轮对账兜底，宁多翻不漏新。
+        """
+        for art in page:
+            try:
+                external_id = normalize_url(art.link).external_id
+            except URLIdentityError:
+                return False
+            row_time = known_times.get(external_id)
+            if row_time is None:
+                return False
+            if isinstance(row_time, datetime) and row_time.tzinfo is not None:
+                row_time = row_time.replace(tzinfo=None)  # 防 timestamptz 形态不一致
+            if row_time != self._list_source_time(art):
+                return False
+        return True
+
+    def _reconcile_list_articles(
+        self,
+        tenant_id: str,
+        run: Dict[str, Any],
+        scan: Any,
+        mode: str,
+    ) -> Tuple[int, int, int]:
+        """清单子篇 diff（单事务，设计 §3.4）。
+
+        - 撞键范围=本租户全部文章行（不限 source_channel）：跨通道天然去重——
+          manual/callback/freepublish 通道已入库的文章不再重复建行/重拉
+        - 新行：auto_all 建 articles 行（pending）+ pending item；manual 仅建行
+          processing_status='pending_manual'（不建 item 不计费不入库，待勾选）
+        - list 行 update_time 变更 / sync_failed / pipeline 变更 → 建 item
+          （活跃 item 门禁同 WP9）；未变仅推进 last_synced_at
+        - manual 行仍在 pending_manual（未被勾选）：源时间变化仅刷新 wx_update_time，
+          不入队（未获用户授权不入库）
+        - 删除：清单 is_deleted=true 是源侧明确信号（管理员在公众号后台删除），
+          直接软删 articles 行 + documents——优先级高于 URL 通道多信号推断
+          （设计 §3.4 定版）；alias 行不软删（无独立正文，主记录另行处理）
+
+        返回 (本轮源子篇数, 未变跳过数, 软删数)。
+        """
+        from src.wechat_mp.list_source import OwnArticle
+
+        unchanged = 0
+        deleted_count = 0
+        manual_mode = mode == "manual"
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute(
+                    """
+                    SELECT id, external_id, source_channel, wx_update_time, status,
+                           processing_status, pipeline_version, doc_id
+                    FROM bs_wechat_mp_articles
+                    WHERE tenant_id = %s
+                    """,
+                    (tenant_id,),
+                )
+                existing = {r["external_id"]: dict(r) for r in cursor.fetchall()}
+
+                for art in scan.articles:
+                    if not isinstance(art, OwnArticle):
+                        raise RuntimeError("清单子篇类型异常")
+                    try:
+                        identity = normalize_url(art.link)
+                    except URLIdentityError:
+                        # 单条链接非法（非 mp 域/参数缺失）：跳过该条不致命（不误报
+                        # success 的主体是拉取失败与结构异常），记日志留审计
+                        logger.bind(module="wechat_mp").warning(
+                            "wechat_mp 清单子篇链接不可规范（跳过）tenant_id={} run_id={}",
+                            tenant_id, run["id"],
+                        )
+                        continue
+                    row = existing.get(identity.external_id)
+
+                    # ---- 源侧显式删除信号：直接软删（任何通道的对应文档）----
+                    if art.is_deleted:
+                        if row and row["status"] not in ("deleted", "alias"):
+                            self._soft_delete_list_article(cursor, tenant_id, row)
+                            deleted_count += 1
+                        continue
+
+                    if row is None:
+                        article_row_id = self._insert_list_article(
+                            cursor, tenant_id, run, identity, art, manual_mode
+                        )
+                        if not manual_mode:
+                            self._insert_pending_item(cursor, tenant_id, run, article_row_id)
+                        else:
+                            # manual 新行：无 item，计入 skipped（待用户挑选，非失败）
+                            unchanged += 1
+                        continue
+
+                    if row["status"] == "alias":
+                        unchanged += 1  # 别名行由主记录管理
+                        continue
+                    if row["status"] == "deleted":
+                        # 删除行重现且 is_deleted=false：仅源时间变化（可能重新发布）才恢复
+                        source_time = self._list_source_time(art)
+                        if (
+                            row["wx_update_time"] is not None
+                            and row["wx_update_time"] != source_time
+                        ):
+                            cursor.execute(
+                                """
+                                UPDATE bs_wechat_mp_articles SET status = 'active'
+                                WHERE id = %s AND tenant_id = %s AND status = 'deleted'
+                                """,
+                                (row["id"], tenant_id),
+                            )
+                            self._insert_item_if_idle(cursor, tenant_id, run, row["id"])
+                        else:
+                            unchanged += 1
+                        continue
+                    if row["status"] == "missing":
+                        # 重现恢复（对齐 WP9 语义）：置回 active 并按变更建 item
+                        cursor.execute(
+                            """
+                            UPDATE bs_wechat_mp_articles SET status = 'active'
+                            WHERE id = %s AND tenant_id = %s AND status = 'missing'
+                            """,
+                            (row["id"], tenant_id),
+                        )
+                        self._insert_item_if_idle(cursor, tenant_id, run, row["id"])
+                        continue
+
+                    if row["source_channel"] != LIST_CHANNEL:
+                        # 他通道行：增量归各自通道管理，清单仅提供删除信号（上方）。
+                        # 跨通道去重=不重复建行不重复拉取（设计 §3.4「记录位置语义
+                        # 与既有通道完全一致」）
+                        unchanged += 1
+                        continue
+
+                    source_time = self._list_source_time(art)
+                    if row["processing_status"] == PENDING_MANUAL:
+                        # manual 模式未勾选文章：源更新仅刷新基准时间，保持待挑选
+                        if row["wx_update_time"] is None or row["wx_update_time"] != source_time:
+                            cursor.execute(
+                                """
+                                UPDATE bs_wechat_mp_articles
+                                SET wx_update_time = %s, last_synced_at = now()
+                                WHERE id = %s AND tenant_id = %s
+                                """,
+                                (source_time, row["id"], tenant_id),
+                            )
+                        unchanged += 1
+                        continue
+
+                    need_refresh = (
+                        row["wx_update_time"] is None
+                        or row["wx_update_time"] != source_time
+                        or row["processing_status"] == "sync_failed"
+                        or (row["pipeline_version"] or "") != PIPELINE_VERSION
+                    )
+                    if need_refresh:
+                        # 源时间推进在 diff 阶段落库（URL 通道不走 freepublish 的
+                        # fp_ctx 回填路径，若等 item 处理成功再推进会导致每轮对账
+                        # 都因时间落后重复建 item）
+                        if row["wx_update_time"] != source_time:
+                            cursor.execute(
+                                """
+                                UPDATE bs_wechat_mp_articles
+                                SET wx_update_time = %s
+                                WHERE id = %s AND tenant_id = %s
+                                """,
+                                (source_time, row["id"], tenant_id),
+                            )
+                        self._insert_item_if_idle(cursor, tenant_id, run, row["id"])
+                    else:
+                        unchanged += 1
+                        cursor.execute(
+                            """
+                            UPDATE bs_wechat_mp_articles SET last_synced_at = now()
+                            WHERE id = %s AND tenant_id = %s
+                            """,
+                            (row["id"], tenant_id),
+                        )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+        return len(scan.articles), unchanged, deleted_count
+
+    @staticmethod
+    def _insert_list_article(
+        cursor,
+        tenant_id: str,
+        run: Dict[str, Any],
+        identity: URLIdentity,
+        art: Any,
+        manual_mode: bool,
+    ) -> int:
+        """按清单子篇建 articles 行（元数据存 tags JSONB，入库时并入 documents.metadata）。
+
+        - source_channel='list'；original_url=短链原文，fetch_url=规范抓取链
+        - wx_update_time=清单 update_time（增量对账基准）；publish_time 取 create_time
+        - manual 模式落 pending_manual（不建 item），auto_all 落 pending
+        """
+        publish_time = (
+            datetime.fromtimestamp(art.create_time, tz=timezone.utc).replace(tzinfo=None)
+            if art.create_time
+            else None
+        )
+        wx_update_time = (
+            datetime.fromtimestamp(art.update_time, tz=timezone.utc).replace(tzinfo=None)
+        )
+        title = sanitize_text(art.title)[:255] if art.title else None
+        list_meta = {
+            "aid": art.aid or None,
+            "msgid": art.msgid,
+            "itemidx": art.itemidx,
+            "publish_type": art.publish_type,
+        }
+        cursor.execute(
+            """
+            INSERT INTO bs_wechat_mp_articles
+                (tenant_id, config_id, external_id, original_url, fetch_url,
+                 source_channel, title, publish_time, wx_update_time, tags,
+                 status, processing_status)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'active', %s)
+            ON CONFLICT (tenant_id, external_id) DO NOTHING
+            RETURNING id
+            """,
+            (
+                tenant_id, run.get("config_id"), identity.external_id, art.link,
+                identity.fetch_url, LIST_CHANNEL, title, publish_time, wx_update_time,
+                json.dumps(list_meta, ensure_ascii=False),
+                PENDING_MANUAL if manual_mode else "pending",
+            ),
+        )
+        row = cursor.fetchone()
+        if row:
+            return row["id"]
+        cursor.execute(
+            "SELECT id FROM bs_wechat_mp_articles WHERE tenant_id = %s AND external_id = %s",
+            (tenant_id, identity.external_id),
+        )
+        return cursor.fetchone()["id"]
+
+    @staticmethod
+    def _soft_delete_list_article(cursor, tenant_id: str, row: Dict[str, Any]) -> None:
+        """清单源侧删除信号（is_deleted=true）：软删 documents + articles 行（事务内）。
+
+        语义（设计 §3.4 定版）：清单 is_deleted 是管理员在公众号后台删除的**明确
+        信号**，优先级高于 URL 通道的多信号推断——不再走 missing 两轮防护。
+        """
+        if row.get("doc_id"):
+            cursor.execute(
+                """
+                UPDATE documents SET status = 'deleted', updated_at = now()
+                WHERE id = %s AND tenant_id = %s
+                """,
+                (row["doc_id"], tenant_id),
+            )
+        cursor.execute(
+            """
+            UPDATE bs_wechat_mp_articles
+            SET status = 'deleted', processing_status = 'success',
+                last_checked_at = now(), next_retry_at = NULL, error_message = NULL
+            WHERE id = %s AND tenant_id = %s AND status <> 'deleted'
+            """,
+            (row["id"], tenant_id),
+        )
+
+    # ==================== WP13 清单源：模式切换与勾选入队 ====================
+
+    def _get_list_bound_config_id(self, tenant_id: str) -> Optional[str]:
+        from src.wechat_mp.list_session import find_bound_list_config
+
+        bound = find_bound_list_config(tenant_id)
+        return bound["config_id"] if bound else None
+
     # ==================== 单 item 管道 ====================
 
     async def _process_item(
@@ -1411,22 +2009,24 @@ class WeChatMPSyncService:
                 return
             # doc 行不存在 → 继续重建
 
-        # ---- 6. 纯图/短文本门禁（P2：图片 VL 解析提前，设计 §6.1/§6.2）----
-        # 占位符必须整段剔除：只删 "[图片" 前缀会残留 "N]"，图片多时残留字符
-        # 累积越过阈值，纯图文章漏判 deferred 并对空内容计费（CR P1 修复）
-        plain_text = _IMAGE_PLACEHOLDER_RE.sub("", body_text).strip()
+        # ---- 6. 图片解析（WP13 门禁放开：有图即下载→VL，维持单篇 30 张上限）----
+        # 「文字 < 20 且有图」门禁移除（负责人定稿：公众号文章基本是图文，图片
+        # 内容与文本同等重要，必须进总结）；无多模态模型不再 deferred——有文本
+        # 照常入库，图片行保留地址、描述留空（metadata 记缺失原因）；仅纯图且
+        # 无任何可总结内容维持 deferred（无可总结内容）
         image_billing_successes: List[Any] = []
         image_meta: Dict[str, Any] = {}
-        if extracted.image_count > 0 and len(plain_text) < MIN_TEXT_CHARS:
-            # P2 范围决策（计划 WP10 节）：仅「文字不足且有图」触发 VL 解析（负责人
-            # 痛点：纯图/图文文章被 deferred 无法入库）；文字充足的文章维持 [图片N]
-            # 占位不解析，图片描述全量插回留待 P3 分类阶段再评估
+        image_descriptions: Dict[int, str] = {}
+        if extracted.image_count > 0:
             parse_result = await self._parse_images_or_defer(
                 tenant_id, item, article, extracted
             )
             if parse_result is None:
-                return  # 已置 deferred（无可用模型/全部失败）或 no_credit
-            body_text, image_meta, image_billing_successes = parse_result
+                return  # 已置 deferred（纯图无可总结内容）或 no_credit
+            body_text = parse_result["merged_text"]
+            image_meta = parse_result["image_meta"]
+            image_descriptions = parse_result["descriptions"]
+            image_billing_successes = parse_result["successes"]
 
         # ---- 7. 付费单元前余额复查 ----
         balance_ok, _ = self._check_credit(tenant_id)
@@ -1435,12 +2035,15 @@ class WeChatMPSyncService:
             self._mark_article_no_credit_retry(tenant_id, article["id"])
             return
 
-        # ---- 8. 核心要点总结（WP12：一篇 URL = 一篇 ≤500 字总结，向量打在总结上）----
-        # merged 全文（原文文本节点原样 + [图片N: 干净描述]）交给 LLM 提炼；
-        # 两次尝试均失败回退 merged 原文入库（不丢数据），形态记 metadata.content_mode
+        # ---- 8. 组装 content_md + 核心要点总结（WP12/WP13）----
+        # 按节点顺序忠实组装 Markdown（# 标题 + 文本段落 + ![VL描述](CDN地址)，
+        # VL 失败/超限/无模型的图片 alt 用「图片N」），存 metadata.content_md 并
+        # 作为总结输入（图片转述与文本同等参与总结）；两次尝试均失败回退 content_md
+        # 原文入库（不丢数据），形态记 metadata.content_mode
         doc_title = f"[公众号] {title}"[:255]
         original_url = article["original_url"]
-        summary_result = await self._summarize_article(body_text, title)
+        content_md = build_markdown(title, extracted.nodes, image_descriptions)
+        summary_result = await self._summarize_article(content_md, title)
         content_mode = CONTENT_MODE_RAW_FALLBACK
         summary_column: Optional[str] = None
         if summary_result is not None:
@@ -1448,17 +2051,12 @@ class WeChatMPSyncService:
             doc_content = summary_text
             summary_column = summary_text
             content_mode = CONTENT_MODE_SUMMARY
-            # 总结调用计费（record_background_llm_usage 独立落账，fail-open）
-            self._bill_summary(
-                tenant_id=tenant_id,
-                user_id=item.get("user_id") or run.get("user_id"),
-                usage=summary_usage,
-                model=summary_model,
-            )
         else:
-            # 回退：merged 原文即文档正文；总结列沿用截断口径
-            doc_content = body_text
-            summary_column = body_text[:SUMMARY_MAX_CHARS] if body_text else None
+            # 回退：content_md 即文档正文（已是忠实内容，回退语义不变）；总结列沿用截断口径
+            doc_content = content_md
+            summary_column = content_md[:SUMMARY_MAX_CHARS] if content_md else None
+            summary_model = None
+            summary_usage = None
 
         # ---- 9. 分块 → embedding（事务外）----
         # chunk 文本 = 总结（或回退正文）本身；不加「文档标题：」标签前缀，
@@ -1490,6 +2088,7 @@ class WeChatMPSyncService:
             embeddings=embeddings,
             action=action,
             image_meta=image_meta or None,
+            content_md=content_md,
             location_url=(fp_ctx or {}).get("location_url"),
             wx_update_time=(fp_ctx or {}).get("wx_update_time"),
             extra_metadata=(
@@ -1507,6 +2106,16 @@ class WeChatMPSyncService:
             embedding_tokens=embedding_tokens,
             item_id=item_id,
         )
+        if summary_usage:
+            # 总结调用计费（record_background_llm_usage 独立落账，fail-open）；
+            # 与 embedding/图片计费同序——业务提交后再落账，落库失败不再白扣
+            # 总结费（WP12 遗留 A1，p4 存量重建放大暴露面，2026-09-16 移序）
+            self._bill_summary(
+                tenant_id=tenant_id,
+                user_id=item.get("user_id") or run.get("user_id"),
+                usage=summary_usage,
+                model=summary_model,
+            )
         if image_billing_successes:
             # VL 按张计费（独立提交 + 合并回写 item 计费字段，fail-open）
             self._bill_image_parses(
@@ -1820,21 +2429,48 @@ class WeChatMPSyncService:
         item: Dict[str, Any],
         article: Dict[str, Any],
         extracted: ExtractedArticle,
-    ) -> Optional[Tuple[str, Dict[str, Any], List[Any]]]:
-        """图片下载 + VL 解析 + 正文插回。返回 (增强正文, image metadata, 计费清单)。
+    ) -> Optional[Dict[str, Any]]:
+        """图片下载 + VL 解析（WP13 门禁放开：有图即解析，维持单篇 30 张上限）。
 
-        返回 None 表示 item 已置终态（deferred / no_credit），调用方直接返回：
-        - 无可用多模态模型 → deferred（不发纯文本模型，设计 §6.2）
+        返回 dict：
+        - merged_text：[图片N: 描述] 插回后的 merged 纯文本（raw_text 审计口径）
+        - descriptions：{n: cleaned 描述}（content_md 的 alt 注释来源）
+        - successes：VL 成功清单（按张按 token 计费）
+        - image_meta：image_parsed_count / image_failed_count / image_skipped_count
+          （+ image_local_paths；无模型时另记 image_parse_skipped_reason='no_model'）
+
+        返回 None 表示 item 已置终态，调用方直接返回：
         - 余额不足 → 复用 no_credit 语义（付费单元=按张 VL）
-        - 全部图片下载/解析失败 → deferred（退避重试机制自然接管）
+        - 纯图（剔除占位后无任何文本）且无任何描述（无模型/下载解析全失败）→
+          deferred（无可总结内容，退避重试机制自然接管）；有文本不再 deferred
         """
         vision = self._get_vision_parser()
-        if not vision.available():
-            self._mark_item_deferred(tenant_id, item["id"], _DEFERRED_NO_MODEL)
-            self._mark_article_deferred(
-                tenant_id, article["id"], extracted, _DEFERRED_NO_MODEL
-            )
-            return None
+        has_model = vision.available()
+
+        # 纯图判定：占位符必须整段剔除（只删 "[图片" 前缀会残留 "N]"，图片多时
+        # 残留字符累积会误判为有文本——CR P1 修复口径保留）
+        plain_text = _IMAGE_PLACEHOLDER_RE.sub("", nodes_to_text(extracted.nodes)).strip()
+
+        if not has_model:
+            if not plain_text:
+                # 纯图且无文本且无模型：无可总结内容 → 维持 deferred（自动重试）
+                self._mark_item_deferred(tenant_id, item["id"], _DEFERRED_NO_MODEL)
+                self._mark_article_deferred(
+                    tenant_id, article["id"], extracted, _DEFERRED_NO_MODEL
+                )
+                return None
+            # WP13：有文本 → 照常入库，图片行保留地址、描述留空（不下载不解析）
+            return {
+                "merged_text": nodes_to_text(extracted.nodes),
+                "descriptions": {},
+                "successes": [],
+                "image_meta": {
+                    "image_parsed_count": 0,
+                    "image_failed_count": 0,
+                    "image_skipped_count": 0,
+                    "image_parse_skipped_reason": "no_model",
+                },
+            }
 
         # 文章级余额预检：不足整篇跳过解析（免费动作不预扣，只拦截付费单元）
         ok, _ = self._check_credit(tenant_id)
@@ -1844,9 +2480,9 @@ class WeChatMPSyncService:
             return None
 
         # 下载转存（同步 httpx + Pillow，线程内执行；逐张独立不中断）
-        # 编号必须与 _merge_image_descriptions/nodes_to_text 的图片序数一致
-        # （第 N 个 image 节点即图片 N）——用全节点索引会在混排（短文字+图）文章
-        # 中错位：描述张冠李戴、跨图丢描述（WP10 测试期修复）
+        # 编号必须与 build_markdown/nodes_to_text 的图片序数一致（第 N 个有 src 的
+        # image 节点即图片 N）——用全节点索引会在混排（短文字+图）文章中错位：
+        # 描述张冠李戴、跨图丢描述（WP10 测试期修复）
         srcs: List[Tuple[int, str]] = []
         img_seq = 0
         for node in extracted.nodes:
@@ -1862,23 +2498,31 @@ class WeChatMPSyncService:
                 [(img.n, img.local_path) for img in dl.images], tenant_id
             )
 
-        if not outcome.descriptions:
-            message = _DEFERRED_NO_MODEL if outcome.no_model else _DEFERRED_PARSE_FAILED
-            self._mark_item_deferred(tenant_id, item["id"], message)
-            self._mark_article_deferred(tenant_id, article["id"], extracted, message)
+        if not outcome.descriptions and not plain_text:
+            # 纯图且全部失败：无可总结内容 → deferred（有文本则照常入库）
+            self._mark_item_deferred(tenant_id, item["id"], _DEFERRED_PARSE_FAILED)
+            self._mark_article_deferred(
+                tenant_id, article["id"], extracted, _DEFERRED_PARSE_FAILED
+            )
             return None
 
-        # [图片N: 描述] 插回原文位置；失败图片保留 [图片N] 占位照常入库
-        enhanced_nodes = self._merge_image_descriptions(
-            extracted.nodes, outcome.descriptions
-        )
-        enhanced_text = nodes_to_text(enhanced_nodes)
-        image_meta = {
-            "image_local_paths": [img.local_path for img in dl.images],
-            "image_parse_failed_count": len(outcome.failures),
+        image_meta: Dict[str, Any] = {
+            "image_parsed_count": len(outcome.successes),
+            # 解析失败张 + 下载失败张（均无描述，不产生计费）
+            "image_failed_count": len(outcome.failures) + len(dl.failures),
             "image_skipped_count": dl.skipped_over_limit,
         }
-        return enhanced_text, image_meta, list(outcome.successes)
+        if dl.images:
+            image_meta["image_local_paths"] = [img.local_path for img in dl.images]
+        return {
+            # [图片N: 描述] 插回原文位置；失败图片保留 [图片N] 占位照常入库
+            "merged_text": nodes_to_text(
+                self._merge_image_descriptions(extracted.nodes, outcome.descriptions)
+            ),
+            "descriptions": outcome.descriptions,
+            "successes": list(outcome.successes),
+            "image_meta": image_meta,
+        }
 
     @staticmethod
     def _merge_image_descriptions(
@@ -1908,15 +2552,15 @@ class WeChatMPSyncService:
                 merged.append(node)
         return merged
 
-    # ==================== 核心要点总结（WP12，p3） ====================
+    # ==================== 核心要点总结（WP12，p3；WP13 输入改 content_md） ====================
 
     async def _summarize_article(
         self, merged_text: str, title: str
     ) -> Optional[Tuple[str, str, Dict[str, int]]]:
-        """生成 ≤500 字核心要点总结（WP12）。
+        """生成 ≤500 字核心要点总结（WP12；WP13 起输入为 content_md 全文）。
 
-        返回 (summary, model_name, usage)；merged 为空或两次尝试均失败返回 None，
-        调用方回退 merged 原文入库（不丢数据）。总结器测试可注入，默认
+        返回 (summary, model_name, usage)；输入为空或两次尝试均失败返回 None，
+        调用方回退 content_md 原文入库（不丢数据）。总结器测试可注入，默认
         ArticleSummarizer（LLMGateway() 主 provider 默认文本模型，不 pin VL 模型）。
         """
         if not (merged_text or "").strip():
@@ -2235,6 +2879,7 @@ class WeChatMPSyncService:
         embeddings: List[List[float]],
         action: str,
         image_meta: Optional[Dict[str, Any]] = None,
+        content_md: str = "",
         location_url: Optional[str] = None,
         wx_update_time: Optional[datetime] = None,
         extra_metadata: Optional[Dict[str, Any]] = None,
@@ -2247,6 +2892,10 @@ class WeChatMPSyncService:
         回退时另记 metadata.summary_fallback=true。
         chunk 文本由调用方以总结（或回退正文）预先生成（无「文档标题：」前缀）；
         file_path = 原文链接（文档位置字段）。
+
+        WP13 增补（图文 Markdown 化）：content_md 存 metadata.content_md（# 标题 +
+        文本段落 + ![VL描述](CDN地址)）；metadata.ingested_at = 入库时间（UTC ISO）；
+        image_meta 携带 image_parsed_count / image_failed_count / image_skipped_count。
 
         WP9 freepublish 可选参数（URL 通道不传即维持既有行为）：
         - location_url：文档位置字段与 articles.original_url 回填值（首个未删子篇 url）
@@ -2268,15 +2917,30 @@ class WeChatMPSyncService:
             "image_count": extracted.image_count,
             # WP12：正文形态（总结版 / 总结失败回退原文版）
             "content_mode": content_mode,
+            # WP13：图文 Markdown（# 标题 + 文本段落 + ![VL描述](CDN地址)）与入库时间
+            "content_md": content_md,
+            "ingested_at": datetime.now(timezone.utc).isoformat(),
         }
         if content_mode == CONTENT_MODE_RAW_FALLBACK:
             metadata["summary_fallback"] = True
         if image_meta:
-            # WP10：图片转存路径 / VL 解析失败数 / 超上限跳过数（供前端详情与对账）
+            # WP10/WP13：图片转存路径 / 解析计数（parsed/failed/skipped）/ 无模型
+            # 缺失原因（供前端详情与对账）
             metadata.update(image_meta)
         if extra_metadata:
             # WP9：freepublish 子篇清单（顺序/标题/url/规范身份/删除标记）
             metadata.update(extra_metadata)
+        if article.get("source_channel") == LIST_CHANNEL and article.get("tags"):
+            # WP13：清单源元数据（建行时存 articles.tags JSONB）并入 documents.metadata
+            # 供审计（aid/msgid/itemidx/publish_type）；psycopg2 已把 JSONB 解为 dict
+            list_meta = article["tags"]
+            if isinstance(list_meta, str):
+                try:
+                    list_meta = json.loads(list_meta)
+                except (json.JSONDecodeError, TypeError):
+                    list_meta = None
+            if isinstance(list_meta, dict):
+                metadata["list_source"] = list_meta
         # 文档位置（WP12：URL 即外部文档位置字段）；freepublish 回填首个未删子篇 url
         doc_location_url = location_url or article["original_url"]
         # wx_update_time（WP9 freepublish 增量基准）：None 时 COALESCE 保留现值
@@ -2622,31 +3286,7 @@ class WeChatMPSyncService:
                 "后端日志：wechat_mp 计费状态回写失败 item_id={}: {}", item_id, e
             )
 
-    # ==================== 图片 VL 按张计费（WP10，设计 §6.2/D2） ====================
-
-    @staticmethod
-    def _get_image_parse_price() -> Tuple[float, int]:
-        """读取按张单价（token_cost_prices.price_per_call，model_code=wechat_mp_image_parse）
-        与 usage_factor；缺配置返回 (0, factor)（不扣费不阻断，对齐 ASR 单价缺失口径）。"""
-        from src.config.settings import create_settings
-
-        factor = int(getattr(create_settings().billing, "usage_factor", 100) or 100)
-        try:
-            from src.db.models import TokenCostPriceDB
-
-            tcp = TokenCostPriceDB.get_by_model_name(VISION_PARSE_SOURCE_TYPE)
-            if not tcp:
-                logger.bind(module="wechat_mp").warning(
-                    "wechat_mp 图片按张单价未配置（token_cost_prices 无 "
-                    "model_code=wechat_mp_image_parse 行），credit_cost=0"
-                )
-                return 0.0, factor
-            return float(tcp.get("price_per_call") or 0), factor
-        except Exception as e:  # noqa: BLE001 单价读取失败按 0 计，不阻断入库
-            logger.opt(exception=True).error(
-                "后端日志：wechat_mp 图片按张单价读取异常（按 0 计）: {}", e
-            )
-            return 0.0, factor
+    # ==================== 图片 VL 按张计费（WP13：按实际 token，标准算价路径） ====================
 
     def _bill_image_parses(
         self,
@@ -2659,19 +3299,20 @@ class WeChatMPSyncService:
     ) -> None:
         """VL 按张计费（业务提交后独立提交，fail-open，对齐 _bill_embedding 口径）。
 
-        - 每成功 1 张写一条 chat_records(source_type='wechat_mp_image_parse')，
-          credit_cost=ceil(price_per_call × usage_factor × 100)/100（与 ASR 按次公式
-          同源）；VL 实际 token 用量记 usage_breakdown 供对账，收费按张不按 token
+        WP13 起废弃 price_per_call 固定价（价目种子行保留不用）：每成功 1 张按该张
+        实际 usage × 所用模型单价走标准 text 算价路径（src/services/billing.py
+        calculate_credit_cost，模型无价目行时按 BILLING_FALLBACK_MODEL 兜底）；
+        每张一条 chat_records(source_type='wechat_mp_image_parse')，
+        usage_breakdown 记 billing_mode='token' 与实际模型供对账。
         - gateway.chat() 只做观测性 usage 记录不落账，本方法为唯一计费写入点（无双重扣费）
         - ChatRecordDB.create 内部异常返回 None 且无法区分失败阶段（可能已扣也可能
           未扣）→ 该张记 unknown，禁止自动重扣（设计 §7.4）
         - item.billing_status/billing_reference/credits_charged 与 embedding 计费合并
           回写（两笔独立提交，任一 unknown 即整条标 unknown 防自动补扣误判）
+        - 「图片无法识别」/失败张不在 successes（不计费口径不变）
         """
         if not successes:
             return
-        price_per_call, usage_factor = self._get_image_parse_price()
-        per_image_credit = calculate_image_parse_credit_cost(price_per_call, usage_factor)
 
         image_credits = 0.0
         image_unknown = False
@@ -2679,7 +3320,16 @@ class WeChatMPSyncService:
         import time as _time
 
         for s in successes:
+            usage = getattr(s, "usage", None) or {}
+            prompt_tokens = int(usage.get("prompt_tokens") or 0)
+            completion_tokens = int(usage.get("completion_tokens") or 0)
             try:
+                # 按该张实际 token × 实际模型单价计费（含价目兜底，单价缺失极端
+                # 场景返回 0.0 不阻断）
+                credit = calculate_credit_cost(
+                    prompt_tokens, completion_tokens, model=getattr(s, "model", None)
+                )
+
                 from src.db.models import ChatRecordDB
 
                 record = ChatRecordDB.create(
@@ -2691,21 +3341,22 @@ class WeChatMPSyncService:
                     user_id=str(user_id) if user_id is not None else None,
                     user_message=f"公众号文章图片解析（第{s.n}张）",
                     assistant_message=(s.description or "")[:500],
-                    total_token_count=int(s.usage.get("total_tokens") or 0),
-                    prompt_tokens=int(s.usage.get("prompt_tokens") or 0),
-                    completion_tokens=int(s.usage.get("completion_tokens") or 0),
+                    total_token_count=int(usage.get("total_tokens") or 0),
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
                     model=s.model,
                     provider=s.provider,
                     status="completed",
                     source_type=VISION_PARSE_SOURCE_TYPE,
-                    credit_cost=per_image_credit,
+                    credit_cost=credit,
                     usage_breakdown={
-                        "billing_mode": "per_call",
-                        "price_per_call": price_per_call,
-                        "usage_factor": usage_factor,
+                        "billing_mode": "token",
+                        "model": s.model,
+                        "prompt_tokens": prompt_tokens,
+                        "completion_tokens": completion_tokens,
                         "image_n": s.n,
                         "article_row_id": article_row_id,
-                        "vl_usage": s.usage,
+                        "vl_usage": usage,
                     },
                 )
             except Exception as e:  # noqa: BLE001 单张计费失败不回滚内容
@@ -2716,7 +3367,7 @@ class WeChatMPSyncService:
                     tenant_id, article_row_id, s.n, sanitize_error_info(str(e)),
                 )
             if record and record.get("record_id"):
-                image_credits += per_image_credit
+                image_credits += credit
                 record_ids.append(record["record_id"])
             else:
                 image_unknown = True
@@ -2727,7 +3378,7 @@ class WeChatMPSyncService:
                 )
 
         logger.bind(module="wechat_mp").info(
-            "wechat_mp 图片按张计费 tenant_id={} article_id={} images={} "
+            "wechat_mp 图片按 token 计费 tenant_id={} article_id={} images={} "
             "credits={} unknown={}",
             tenant_id, article_row_id, len(successes), image_credits, image_unknown,
         )
@@ -3017,7 +3668,7 @@ class WeChatMPSyncService:
         deferred 不进失败退避（next_retry_at=NULL，非技术失败）；自动重试由
         scheduler 24h 存活复核通道承接（processing_status='deferred' 在复核到期
         条件内，error_message 向用户承诺「将自动重试」）。复核后 pipeline_version
-        与当前 PIPELINE_VERSION（p3）不匹配，deferred 存量自动走重建分支
+        与当前 PIPELINE_VERSION（p4）不匹配，deferred 存量自动走重建分支
         （VL → 总结 → 入库），无需单独迁移。
         """
         with get_db_connection() as conn:
@@ -3085,6 +3736,8 @@ class WeChatMPSyncService:
         if count_overrides:
             total = int(count_overrides.get("total_count", total))
             skipped_count += int(count_overrides.get("extra_skipped", 0) or 0)
+            # WP13：清单对账的 is_deleted 软删不建 item，计数显式补写
+            deleted_count += int(count_overrides.get("extra_deleted", 0) or 0)
 
         if failed_count == 0 and no_credit_count == 0:
             run_status = "success"

@@ -39,6 +39,7 @@
 | 68 | zhipu 默认模型切 GLM-5.3-Flash + 价目表多模态标识 | 🔧 部分完成 | ①zhipu 缺省模型 glm-4 → GLM-5.3-Flash（GLM-5 系列首个原生多模态，输入 0.8 / 输出 2.8 元/M tokens，… | [设计](design/weixin/weixin-cli-billing.md) | — |
 | 77 | 外部系统入口（SSO 打开第三方系统） | 🔧 部分完成（Phase 1 开发完成，待真机联调） | 连接中心「外部系统」入口 + SSO 通用契约（direct_url/ticket_redirect/token_param）打开第三方系统；Phase 1 完成待真机联调。 | [方案](system/external-system-entry-design.md) | — |
 | 82 | 微信公众号内容入知识库 | 🔧 部分完成 | 公众号文章多通道采集入知识库（回调+URL 直采+手动粘贴+接口对账，图片 VL 解析、500 字总结、按张计费）；P1/P2+接口通道（WP9）完成，待部署验收。 | [设计](system/wechat-mp/wechat-mp-knowledge-ingestion-design.md) | [计划](plans/plan-wechat-mp-knowledge-ingestion.md) |
+| 83 | 公众号自有号清单源（历史文章导入，**主通道**） | 🔧 部分完成 | 租户扫码自有号，定期拉全量「发表记录」清单（含群发历史），走既有 URL 直采入库；通道优先级：清单源>回调+手动URL>freepublish；开发完成待部署验收（宏陶瓷砖管理员扫码实测+会话 TTL 观察）。 | [设计](system/wechat-mp/wechat-mp-list-source-design.md) | — |
 
 ## 数字员工 / 子智能体
 

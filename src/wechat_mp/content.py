@@ -85,6 +85,58 @@ def nodes_to_text(nodes: List[ContentNode], image_placeholder: str = "[图片{n}
     return "\n".join(parts)
 
 
+# WP13：图片 alt 注释（VL 描述）单行最大字符数——防超长描述把 Markdown 图片行撑爆
+MAX_IMAGE_ALT_CHARS = 200
+
+
+def build_markdown(
+    title: Optional[str],
+    nodes: List[ContentNode],
+    image_descriptions: Optional[dict] = None,
+) -> str:
+    """按节点顺序忠实组装 Markdown（WP13：图文 Markdown 化入库）。
+
+    - 首行 ``# {title}``；文本节点→段落原样；图片节点→ ``![描述或图片N](src)``
+    - 块间空行分隔，连续图片行各自独立一行；src 用页面原始 CDN 地址（节点自带）
+    - 描述取 cleaned VL 描述（内含换行压成单行、截断 MAX_IMAGE_ALT_CHARS 防 alt 过长）；
+      VL 失败/超限/无模型 → alt 用「图片N」
+    - 图片编号按「有 src 的图片节点」序数计（与下载/VL/占位编号同口径）
+    - 无图文章同样生成（标题 + 文本段落）；组装失败返回降级纯文本，永不抛异常
+    """
+    try:
+        blocks: List[str] = []
+        heading = (title or "").strip()
+        if heading:
+            blocks.append(f"# {heading}")
+        img_idx = 0
+        for node in nodes:
+            if node.type == "image":
+                if not node.src:
+                    continue  # 无 src 的异常节点不进 Markdown（不占编号）
+                img_idx += 1
+                desc = str((image_descriptions or {}).get(img_idx) or "").strip()
+                if desc:
+                    # alt 注释压成单行 + 截断（VL 产出可能多行/超长）
+                    desc = re.sub(r"\s+", " ", desc).strip()[:MAX_IMAGE_ALT_CHARS]
+                alt = desc or f"图片{img_idx}"
+                blocks.append(f"![{alt}]({node.src.strip()})")
+            elif node.text:
+                blocks.append(node.text)
+        return "\n\n".join(blocks)
+    except Exception:  # noqa: BLE001 组装失败不阻断入库：降级为标题+纯文本
+        # 独立测试发现：降级路径自身若再抛（如节点病态导致 nodes_to_text 失败），
+        # 「永不抛异常」承诺被打破——兜底逐步取值，任何一步失败继续降级
+        try:
+            text = nodes_to_text(nodes)
+        except Exception:  # noqa: BLE001
+            text = ""
+        try:
+            heading = (title or "").strip()
+        except Exception:  # noqa: BLE001
+            heading = ""
+        return f"# {heading}\n{text}".strip()
+
+
 def _flush_text(buf: List[str], nodes: List[ContentNode]) -> None:
     text = "".join(buf).replace("\xa0", " ").strip()
     buf.clear()

@@ -44,11 +44,23 @@ _RPA_CHANNEL_TYPE = "wecom_personal_rpa"
 _WECHAT_MP_CHANNEL_TYPE = "wechat_mp"
 
 # wechat_mp 运行时/三态字段：更新配置时若调用方未提供则保留旧值
+# WP13-r1（CR P2-3 修复）：纳入清单源运行时状态与租户选择字段——前端旧快照
+# 整体覆盖 update 时不再把绑定状态/回填进度/首次回填上限静默抹掉；
+# list_last_sync_at 同为对账运行时写入场（CR 补全：旧快照保存不再丢失
+# 「上次同步时间」，下次对账自愈前的展示口径）
 _WECHAT_MP_RUNTIME_FIELDS = (
     "config_verified_at",
     "last_event_at",
     "last_error",
     "credential_version",
+    "list_sync_status",
+    "list_sync_mode",
+    "list_session_at",
+    "list_session_expire_at",
+    "list_account_nickname",
+    "list_sync_max_articles",
+    "list_backfill_done",
+    "list_last_sync_at",
 )
 
 
@@ -113,6 +125,12 @@ class ChannelConfigDB:
             config_to_write.setdefault("enabled", True)
             config_to_write.setdefault("sync_interval_hours", 6)
             config_to_write["credential_version"] = 1
+            # WP13-r1：首次回填上限入库前钳制（1~500 默认 100，越界记日志）
+            config_to_write["list_sync_max_articles"] = (
+                wechat_mp_codec.clamp_list_sync_max_articles(
+                    config_to_write.get("list_sync_max_articles")
+                )
+            )
             # 同租户同 appid 唯一（DB 部分唯一索引兜底并发竞争）
             appid = str(config_to_write.get("appid") or "").strip()
             if appid and ChannelConfigDB._wechat_mp_appid_exists(tenant_id, appid):
@@ -496,6 +514,18 @@ class ChannelConfigDB:
                     incoming = new_config.get(k)
                     if (not isinstance(incoming, str) or not incoming.strip()) and existing_config.get(k):
                         new_config[k] = existing_config[k]
+
+                # WP13-r1：首次回填上限更新前钳制（1~500 默认 100，越界记日志；
+                # 键缺失时上方保留清单已回填旧值，此处对存量脏数据同样规整）
+                if "list_sync_max_articles" in new_config:
+                    new_config["list_sync_max_articles"] = (
+                        wechat_mp_codec.clamp_list_sync_max_articles(
+                            new_config["list_sync_max_articles"]
+                        )
+                    )
+                if "list_backfill_done" in new_config:
+                    # bool 字段规整：防任意写入路径落非布尔值
+                    new_config["list_backfill_done"] = bool(new_config["list_backfill_done"])
 
                 # 凭据/身份变更检测：callback_token 自定义改密 / appid / original_id /
                 # encoding_aes_key 变更递增凭据版本并撤销回调验证态（设计 §4 密钥轮换与三态语义）

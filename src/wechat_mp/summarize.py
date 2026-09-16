@@ -1,7 +1,7 @@
-"""公众号文章核心要点总结（WP12，入库内容质量优化）。
+"""公众号文章核心要点总结（WP12 入库内容质量优化；WP13 输入改为 content_md 全文）。
 
-职责边界：只做「merged 全文（原文文本节点原样 + [图片N: 干净描述]）→ LLM →
-≤500 字核心要点总结」；不做文档组装/落库（service.py 编排），不做计费落账
+职责边界：只做「content_md 全文（# 标题 + 文本段落 + ![图片描述](CDN地址)）→
+LLM → ≤500 字核心要点总结」；不做文档组装/落库（service.py 编排），不做计费落账
 （service 调 record_background_llm_usage(source='wechat_mp_summary')）。
 
 模型选择（WP12 定版）：``LLMGateway()`` 默认构造 = 主 provider 默认文本模型——
@@ -29,9 +29,11 @@ SUMMARY_SOURCE_TYPE = "wechat_mp_summary"
 # 单次调用超时秒数（gateway.chat 无 timeout 参数，asyncio.wait_for 包裹）
 SUMMARY_TIMEOUT_SECONDS = 60.0
 
-# 总结指令（WP12 定版文案：图文去重 + 无标签 + 不发挥；措辞可微调语义不变）
+# 总结指令（WP13 定版文案：图片转述与文字同等重要纳入总结 + 图文去重 + 无标签 +
+# 不发挥；措辞可微调语义不变）
 SUMMARY_INSTRUCTION = (
     "将以下公众号文章内容提炼为不超过500字的核心要点总结。"
+    "图片转述内容与文字内容同等重要，关键信息需纳入总结；"
     "文字内容与图片转述内容如有重复只保留一份；"
     "直接输出总结正文，不要任何前缀、标签或标题行（如\"总结：\"）；"
     "不评价不发挥、不编造未提及的信息。"
@@ -45,10 +47,11 @@ _SUMMARY_PREFIX_RE = re.compile(r"^(?:总结|核心要点|要点总结|摘要)[:
 
 
 def build_summary_messages(merged_text: str, title: str) -> List[Dict[str, Any]]:
-    """单轮 user message = 固定指令 + 标题 + merged 全文（原文文本 + [图片N: 描述]）。
+    """单轮 user message = 固定指令 + 标题 + content_md 全文（WP13：图片转述以
+    Markdown 图片行进入，与文本同等参与总结）。
 
     标题仅作输入上下文帮助锚定主题；指令已禁止输出任何标签/标题行，
-    merged 全文亦原样进入（图片描述去重交给模型按指令处理）。
+    content_md 亦原样进入（图片描述与文字去重交给模型按指令处理）。
     """
     sections = [SUMMARY_INSTRUCTION]
     if title:

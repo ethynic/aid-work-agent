@@ -1799,6 +1799,11 @@ app.include_router(wechat_mp_callback.router)
 from src.wechat_mp import api as wechat_mp_api  # noqa: E402
 app.include_router(wechat_mp_api.router)
 
+# 公众号清单源扫码会话 API（WP13：扫码绑定/轮询/解绑/绑定状态/模式切换/勾选入队；
+# 登录状态机与绑定持久化在 src/wechat_mp/list_session.py，本 router 仅薄入口）
+from src.wechat_mp import list_session as wechat_mp_list_session  # noqa: E402
+app.include_router(wechat_mp_list_session.router)
+
 # Desktop Agent D1 is opt-in. Default production startup neither imports its
 # module nor registers routes; changing the setting requires a process restart.
 if settings.desktop_agent.enabled:

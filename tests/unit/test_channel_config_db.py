@@ -692,6 +692,103 @@ class TestChannelConfigDBWechatMp:
         written = json.loads(mock_cursor.execute.call_args[0][1][0])
         assert written["last_event_at"] == "2026-09-15T00:00:00+00:00"
 
+    # ==================== WP13-r1：list_* 保留清单与钳制 ====================
+
+    @staticmethod
+    def _update_with_mock(existing: dict, new_config: dict):
+        from src.saas.db.channel_config_db import ChannelConfigDB
+
+        mock_cursor = MagicMock()
+        mock_cursor.rowcount = 1
+        mock_cursor.fetchone.return_value = {
+            "channel_type": "wechat_mp",
+            "config": json.dumps(existing),
+        }
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+        with patch("src.saas.db.channel_config_db.get_db_connection") as mock_get_db:
+            mock_get_db.return_value.__enter__.return_value = mock_conn
+            ok = ChannelConfigDB.update(config_id="chan_x", config=new_config)
+        written = json.loads(mock_cursor.execute.call_args[0][1][0])
+        return ok, written
+
+    def test_update_preserves_list_fields_from_stale_snapshot(self):
+        """CR P2-3 修复回归：前端旧快照（绑定前打开）update 时不得抹掉 list_* 字段。"""
+        existing = {
+            "appid": "wx0000000000000000",
+            "list_sync_status": "active",
+            "list_sync_mode": "manual",
+            "list_session_at": "2026-09-16T08:00:00+00:00",
+            "list_session_expire_at": "2026-09-20T08:00:00+00:00",
+            "list_account_nickname": "夹具昵称",
+            "list_sync_max_articles": 300,
+            "list_backfill_done": True,
+            "list_last_sync_at": "2026-09-16T09:30:00",
+            "callback_token": "gAAAAAoldtoken",
+        }
+        # 旧快照：仅 appid/enabled，无任何 list_* 字段
+        ok, written = self._update_with_mock(
+            existing, {"appid": "wx0000000000000000", "enabled": True}
+        )
+        assert ok is True
+        assert written["list_sync_status"] == "active"
+        assert written["list_sync_mode"] == "manual"
+        assert written["list_session_at"] == "2026-09-16T08:00:00+00:00"
+        assert written["list_session_expire_at"] == "2026-09-20T08:00:00+00:00"
+        assert written["list_account_nickname"] == "夹具昵称"
+        assert written["list_sync_max_articles"] == 300
+        assert written["list_backfill_done"] is True
+        # CR 补全：list_last_sync_at 同为运行时写入场，旧快照保存不丢
+        assert written["list_last_sync_at"] == "2026-09-16T09:30:00"
+
+    def test_update_list_fields_still_overridable_when_provided(self):
+        """保留清单不等于只读：显式传入新值正常覆盖（状态翻转/模式切换/进度推进）。"""
+        existing = {"list_sync_mode": "manual", "list_backfill_done": False, "list_sync_max_articles": 100}
+        _, written = self._update_with_mock(
+            existing,
+            {"list_sync_mode": "auto_all", "list_backfill_done": True, "list_sync_max_articles": 250},
+        )
+        assert written["list_sync_mode"] == "auto_all"
+        assert written["list_backfill_done"] is True
+        assert written["list_sync_max_articles"] == 250
+
+    def test_update_clamps_list_sync_max_articles(self):
+        """update 传入越界值钳制到 1~500；非布尔 backfill_done 规整为 bool。"""
+        existing = {}
+        _, written = self._update_with_mock(
+            existing, {"list_sync_max_articles": 9999, "list_backfill_done": 1}
+        )
+        assert written["list_sync_max_articles"] == 500
+        assert written["list_backfill_done"] is True
+        _, written = self._update_with_mock(
+            existing, {"list_sync_max_articles": 0, "list_backfill_done": 0}
+        )
+        assert written["list_sync_max_articles"] == 1
+        assert written["list_backfill_done"] is False
+
+    def test_create_clamps_list_sync_max_articles_default(self, master_key):
+        """create：缺失默认 100；越界钳到边界（与 update 同一钳制入口）。"""
+        from src.saas.db.channel_config_db import ChannelConfigDB
+
+        for raw, expected in ((None, 100), (9999, 500), (0, 1), (88, 88)):
+            mock_cursor = MagicMock()
+            mock_conn = MagicMock()
+            mock_conn.cursor.return_value = mock_cursor
+            with (
+                patch("src.saas.db.channel_config_db.get_db_connection") as mock_get_db,
+                patch.object(ChannelConfigDB, "_wechat_mp_appid_exists", return_value=False),
+                patch.object(ChannelConfigDB, "get_by_id", return_value={"config_id": "chan_x"}),
+            ):
+                mock_get_db.return_value.__enter__.return_value = mock_conn
+                payload = {"appid": "wx0000000000000000"}
+                if raw is not None:
+                    payload["list_sync_max_articles"] = raw
+                assert ChannelConfigDB.create(
+                    tenant_id="tenant_001", channel_type="wechat_mp", config=payload
+                )
+            written = json.loads(mock_cursor.execute.call_args_list[0][0][1][4])
+            assert written["list_sync_max_articles"] == expected, raw
+
 
 class TestChannelConfigApiWechatMpToken:
     """WP11 API 层：wechat_mp 自定义回调 Token 的入参校验与明文一次性响应（mock DB）。

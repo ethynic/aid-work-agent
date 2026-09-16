@@ -464,10 +464,11 @@ class TestFullIngest:
         assert metadata["original_url"] == SHORT_URL
         assert metadata["source_channel"] == "callback"
         assert metadata["presales_attach"]["status"] == "attached"
-        # WP12：summary 列存总结文本（替身 = merged 截断口径），正文形态记
-        # metadata.content_mode；chunk 文本 = 总结本身（无「文档标题：」前缀、
-        # 不拼原文链接——链接存 documents.file_path 即文档位置字段）
-        assert doc["summary"] == BODY_V1
+        # WP12：summary 列存总结文本（替身 = content_md 截断口径，WP13 起输入为
+        # content_md），正文形态记 metadata.content_mode；chunk 文本 = 总结本身
+        # （无「文档标题：」前缀、不拼原文链接——链接存 documents.file_path 即
+        # 文档位置字段）
+        assert doc["summary"] == f"# 春季活动\n\n{BODY_V1}"
         assert doc["file_path"] == SHORT_URL
         assert metadata["content_mode"] == "summary"
         assert "summary_fallback" not in metadata
@@ -655,10 +656,9 @@ class TestSoftDelete:
 
 class TestDeferredGate:
     async def test_image_only_article_deferred_not_embedded(self, tenant_id):
-        """纯图文章（12 图 0 文字）必须 deferred：占位符残留字符不得越过
-        MIN_TEXT_CHARS 门槛（CR 回归：replace 前缀残留 'N]' 曾致漏判并计费）。
-        P2 起 VL 组件不可用（无多模态模型，_make_service 默认替身）维持 deferred，
-        不触发下载/解析/计费。"""
+        """纯图文章（12 图 0 文字）+ 无多模态模型（_make_service 默认替身）维持
+        deferred：无可总结内容不入库（WP13 起仅纯图无描述场景 deferred；
+        占位符整段剔除的 CR 回归口径保留在纯图判定中）。"""
         _create_tenant(tenant_id)
         fetcher = StubFetcher()
         # 12 图：旧算法残留 "1]..12]" 计 38 字符 > 20，可复现漏判路径
