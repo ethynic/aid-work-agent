@@ -187,11 +187,12 @@ async def _summarize_human(
         from src.services.session_record import record_background_llm_usage
 
         summarize_start = time.time()
+        summarize_messages = [
+            {"role": "system", "content": _HUMAN_SUMMARY_SYSTEM_PROMPT},
+            {"role": "user", "content": f"近期对话记录（时间正序）：\n{transcript}"},
+        ]
         response = await llm_gateway.chat_lite(
-            messages=[
-                {"role": "system", "content": _HUMAN_SUMMARY_SYSTEM_PROMPT},
-                {"role": "user", "content": f"近期对话记录（时间正序）：\n{transcript}"},
-            ],
+            messages=summarize_messages,
             temperature=0.2,
             max_tokens=settings.external_push.pre_sales.summary_max_tokens,
         )
@@ -207,6 +208,7 @@ async def _summarize_human(
         _trace_llm_span(
             payload, "recap:external_push_human:summarize", response,
             _resolve_lite_model_name(), summarize_start,
+            messages=summarize_messages,
         )
         data = _extract_json_object(response.get("content", ""))
         if not data:

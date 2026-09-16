@@ -62,6 +62,7 @@ def _trace_llm_span(
     start_ts: float,
     success: bool = True,
     error: str = "",
+    messages: Optional[List[Dict[str, Any]]] = None,
 ) -> None:
     """向当轮对话 trace 追加 recap LLM 调用 span（generation）"""
     if not payload.trace_id:
@@ -76,11 +77,16 @@ def _trace_llm_span(
             output = error
         else:
             _accumulate_obs_cost(payload, usage, model)
+        # 记录 LLM 输入（messages），前端「最后一次 LLM 调用上下文」取最后一个
+        # generation span 的 input 展示；与主循环 llm_call span 的 input 结构对齐
+        span_input = ""
+        if messages:
+            span_input = json.dumps({"messages": messages}, ensure_ascii=False, default=str)
         append_recap_span(
             trace_id=payload.trace_id,
             name=name,
             span_type="generation",
-            input="",
+            input=span_input,
             output=_truncate(output, _TRACE_TRUNCATE_CHARS),
             model=model or "",
             usage=usage if isinstance(usage, dict) else {},
@@ -513,18 +519,19 @@ async def _summarize(payload: RecapPayload, ctx: Dict[str, Any], topic: str = "�
         from src.services.session_record import record_background_llm_usage
 
         summarize_start = time.time()
+        summarize_messages = [
+            {"role": "system", "content": _SUMMARY_SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": (
+                    f"客户微信昵称：{ctx.get('nickname') or '未知'}\n"
+                    f"客户消息：{_truncate(payload.user_content, _DIALOGUE_TRUNCATE_CHARS)}\n"
+                    f"AI回复：{_truncate(payload.assistant_reply, _DIALOGUE_TRUNCATE_CHARS)}"
+                ),
+            },
+        ]
         response = await llm_gateway.chat_lite(
-            messages=[
-                {"role": "system", "content": _SUMMARY_SYSTEM_PROMPT},
-                {
-                    "role": "user",
-                    "content": (
-                        f"客户微信昵称：{ctx.get('nickname') or '未知'}\n"
-                        f"客户消息：{_truncate(payload.user_content, _DIALOGUE_TRUNCATE_CHARS)}\n"
-                        f"AI回复：{_truncate(payload.assistant_reply, _DIALOGUE_TRUNCATE_CHARS)}"
-                    ),
-                },
-            ],
+            messages=summarize_messages,
             temperature=0.2,
             max_tokens=settings.external_push.pre_sales.summary_max_tokens,
         )
@@ -542,6 +549,7 @@ async def _summarize(payload: RecapPayload, ctx: Dict[str, Any], topic: str = "�
         _trace_llm_span(
             payload, "recap:external_push:summarize", response,
             _resolve_lite_model_name(), summarize_start,
+            messages=summarize_messages,
         )
         data = _extract_json_object(response.get("content", ""))
         if not data:
@@ -927,7 +935,7 @@ async def _run_push_loop(
         )
         _trace_llm_span(
             payload, f"{trace_prefix}:llm_round_{round_no}", response,
-            billed_model, round_start,
+            billed_model, round_start, messages=messages,
         )
 
         tool_calls = response.get("tool_calls") or []
