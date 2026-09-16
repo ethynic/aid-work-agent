@@ -158,6 +158,49 @@ class TransferToHumanTool(BaseTool):
             except Exception as e:
                 logger.warning(f"转人工后写入 system 标记消息失败: {e}")
 
+            # 人工服务归属回写线索（#64）：确定性数据事件驱动即时写，零 LLM 成本。
+            # 仅当会话已留资（metadata.lead_capture）且线索未被删除时生效；
+            # 多次转人工最后写赢（字段语义即「最近一次」）。失败仅留痕，不影响转接主流程
+            try:
+                import asyncio as _asyncio
+
+                lead_id = ""
+                if session_id:
+                    session_row = await _asyncio.to_thread(
+                        channel_session_manager.get_session_by_id, session_id
+                    ) or {}
+                    session_meta = session_row.get("metadata") or {}
+                    lead_id = (session_meta.get("lead_capture") or {}).get("lead_id") or ""
+                if lead_id:
+                    from src.core.cache_utils import CacheKeys
+                    from src.core.redis_client import redis_client
+                    from src.saas.db.lead_capture_db import LeadCaptureDB
+
+                    # 员工姓名尽力而为：复用渠道侧 userid->name Redis 缓存
+                    # （人工期员工消息落库时已填充），映射不到为空（设计 §9.2）
+                    servicer_name = ""
+                    try:
+                        cached = redis_client.get(
+                            f"{CacheKeys.WECOM_KF_SERVICER_NAME}:{tenant_id}:{servicer_userid}"
+                        )
+                        servicer_name = str(cached) if cached else ""
+                    except Exception:
+                        pass
+
+                    updated = await _asyncio.to_thread(
+                        LeadCaptureDB.update_transfer_info,
+                        lead_id,
+                        tenant_id,
+                        servicer_userid,
+                        servicer_name or None,
+                    )
+                    logger.info(
+                        f"转人工回写线索归属: lead_id={lead_id}, servicer={servicer_userid}, "
+                        f"name={servicer_name or '空'}, updated={updated}"
+                    )
+            except Exception as e:
+                logger.warning(f"转人工回写线索归属失败（不影响转接）: {e}")
+
             logger.info(
                 f"微信客服转人工成功: servicer={servicer_userid}, "
                 f"user={external_userid}, reason={reason}"

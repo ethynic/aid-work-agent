@@ -231,6 +231,59 @@ def trigger_recap(
 _background_tasks: set = set()
 
 
+def enqueue_lead_refresh(tenant_id: str, session_id: str, round_message_id: Any) -> None:
+    """人工期消息落库后的线索刷新入队（轻量，不依赖 agent 实例）
+
+    人工期（转人工后）无智能体轮次，trigger_recap 不会被调用——入口 B 在
+    channel_routes._persist_kf_context_customer_message 落库成功后调用本函数，
+    构造最小 RecapPayload rpush 到 RECAP_QUEUE，由 background_runner 消费。
+    lead_refresh 是拉模式（执行时自采 DB），user_content / assistant_reply 留空。
+
+    任何异常吞掉不阻断消息链路；Redis 不可用时直接放弃（不降级进程内执行——
+    消息处理协程在 API worker 中，进程内执行会把 LLM 分析拖回 worker 生命周期，
+    且下一条客户消息会再次触发，无需补偿）。
+    """
+    try:
+        from src.core.temp_logger import tlog as _tlog
+
+        # round_message_id（企微回调 msgid）仅作幂等键成分；缺失时幂等键退化为
+        # 固定串，首条 SET NX 占坑 24h 会把该租户所有线索的入口 B 消息全部
+        # dedup 掉（功能静默停摆），必须与 trigger_recap 同款守卫放弃执行
+        if not round_message_id:
+            logger.warning(
+                f"[recap] enqueue_lead_refresh round_message_id 缺失，放弃入队 session={session_id}"
+            )
+            return
+
+        payload = RecapPayload(
+            tenant_id=tenant_id,
+            session_id=session_id,
+            # session_id 末段即 subagent_id（与 trigger_recap 的回退逻辑一致）
+            subagent_name=_subagent_name_from_session(session_id),
+            round_message_id=round_message_id,
+            user_content="",
+            assistant_reply="",
+            # 人工期消息无系统用户上下文，user_id 不设置——计费归属仅到租户
+            # （chat_records.user_id 为空，与 external_push 请求期触发不同）
+            task_config=[{"name": "lead_refresh", "when": "every_round", "enabled": True}],
+            enqueued_at=time.time(),
+        )
+        enqueued = redis_client.rpush(
+            redis_client.make_key(CacheKeys.RECAP_QUEUE),
+            payload.to_dict(),
+        )
+        _tlog(
+            "lead_refresh",
+            "入口B入队{res}: tenant={tid}, session={sid}, round={rid}",
+            res="ok" if enqueued else "failed(redis不可用)",
+            tid=tenant_id,
+            sid=session_id,
+            rid=round_message_id,
+        )
+    except Exception as e:
+        logger.warning(f"[recap] lead_refresh 入队异常（不影响消息链路）: {e}")
+
+
 def rebuild_tasks(task_config: Optional[List[Dict[str, Any]]]) -> List[RecapTaskConfig]:
     """从序列化的 task_config 重建任务配置列表（background 进程消费队列时使用）"""
     if not task_config or not isinstance(task_config, list):

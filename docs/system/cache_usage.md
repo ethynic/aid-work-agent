@@ -377,6 +377,16 @@ ImageRegistry 管理的图片资产元信息（复用 cp 的 `uploaded_file:{fil
 **失效时机**：无主动失效。Redis 不可用时 rpush 返回 False，触发侧降级为 API worker 进程内 asyncio 执行（旧行为）
 **源文件**：`src/services/recap/runner.py`、`src/background_runner.py`（前缀注册：`src/core/cache_utils.py`；机制设计：`docs/subagent/recap-mechanism-design.md` §4.4）
 
+### 7.4.7 lead_refresh 冷却防抖
+
+**存储**：Redis + 内存降级（`redis_client.acquire_lock` 降级进程内 MemoryBackend——单进程 background_runner 内冷却仍收敛；多副本部署下可能各分析一次，后果是多一次 LLM 分析，方向安全）
+**键模式**：`lead_refresh_cooldown:{tenant_id}:{lead_id}`
+**TTL**：300s（5 分钟冷却，成本控制核心：同一线索 5 分钟内至多 LLM 分析一次）
+**写入方**：`src/services/recap/tasks/lead_refresh.py` 适配器（执行前 SET NX 占坑）
+**失效时机**：LLM 调用 / 解析 / 回写失败时主动 `delete` 删键（允许下一条消息重试）；正常完成靠 TTL 过期
+**关键约束**：冷却跳过不丢数据——分析读执行时刻的消息快照，被跳过期间的消息由下一次触发（冷却到期后客户任一消息再触发）一并覆盖
+**源文件**：`src/services/recap/tasks/lead_refresh.py`（前缀注册：`src/core/cache_utils.py`；设计：`docs/subagent/pre-sales/lead-capture-refresh-design.md` §5.3.1）
+
 ### 7.5 定时任务调度器启动锁
 
 多 worker 环境下，确保只有单个 worker 启动 APScheduler 调度器，避免重复注册定时任务。

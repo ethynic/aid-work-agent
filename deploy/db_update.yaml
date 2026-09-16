@@ -735,3 +735,12 @@
     INSERT INTO token_cost_prices (model_name, price_per_call)
     VALUES ('wechat_mp_image_parse', 0.01)
     ON CONFLICT (model_name) DO NOTHING;
+- datetime: "2026-09-16 12:25:00"
+  remark: "bs_lead_capture_leads 新增 6 列支持留资线索动态刷新（lead_refresh #64）：意向度/需求分条/人工归属/分析游标"
+  statements: |
+    ALTER TABLE bs_lead_capture_leads ADD COLUMN IF NOT EXISTS intent_level TEXT;
+    ALTER TABLE bs_lead_capture_leads ADD COLUMN IF NOT EXISTS intent_reason TEXT;
+    ALTER TABLE bs_lead_capture_leads ADD COLUMN IF NOT EXISTS demand_points JSONB;
+    ALTER TABLE bs_lead_capture_leads ADD COLUMN IF NOT EXISTS servicer_name TEXT;
+    ALTER TABLE bs_lead_capture_leads ADD COLUMN IF NOT EXISTS last_human_transfer_at TIMESTAMP;
+    ALTER TABLE bs_lead_capture_leads ADD COLUMN IF NOT EXISTS last_analyzed_message_id TEXT;

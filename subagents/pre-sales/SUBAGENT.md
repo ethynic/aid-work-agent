@@ -38,6 +38,10 @@ recap:
     - name: external_push
       when: every_round
       enabled: true
+    # 留资线索动态刷新：意向度/需求分条随对话持续回写（#64），未留资会话自动 no-op
+    - name: lead_refresh
+      when: every_round
+      enabled: true
 ---
 
 ## 身份定位
