@@ -6,8 +6,9 @@
   否则可见性条件只约束最后一个 OR 分支（本租户 deleted 文档会泄漏）
 - list/count 默认隐藏 deleted，include_deleted=True 放行；origin 过滤
 - chunks 默认隐藏 deleted 文档，include_deleted 放行
-- 外部来源文档（origin != 'manual_upload'）禁物理删除、禁移动（含批量）
-- 外部来源无本地文件文档下载/票据返回明确错误 + metadata.original_url
+- 外部来源文档（origin != 'manual_upload'）可物理删除（联动标记同步文章行
+  deleted 防复核重建）、禁移动（含批量）
+- 外部来源无本地文件文档下载 302 重定向原文、票据端点 200 + external + metadata.original_url
 """
 import json
 from pathlib import Path
@@ -269,32 +270,52 @@ class TestChunksVisibility:
 
 
 class TestExternalDocWriteBoundary:
-    """origin != 'manual_upload' 的文档禁物理删除/移动（含批量），platform_admin 亦然"""
+    """外部来源文档可删除（联动标记同步文章行 deleted 防复核重建）；移动仍禁止（含批量）"""
 
     @pytest.mark.asyncio
-    async def test_delete_external_doc_rejected(self):
-        cur = _FakeCursor(rows=[{"file_path": None, "origin": "wechat_mp"}])
+    async def test_delete_external_doc_allowed_and_article_suppressed(self):
+        cur = _FakeCursor(rows=[{"file_path": None, "origin": "wechat_mp",
+                                 "external_id": "wx:app1:a1:0", "tenant_id": "t1"}])
         svc = KnowledgeBaseService()
-        with patch.object(KnowledgeBaseService, "_get_db_connection", return_value=_FakeConn(cur)):
+        with patch.object(KnowledgeBaseService, "_get_db_connection", return_value=_FakeConn(cur)), \
+             patch("src.knowledge.service.get_vector_db", return_value=AsyncMock()):
             result = await svc.delete_document(7, tenant_id="t1")
 
-        assert result["success"] is False
-        assert result["status"] == 400
-        assert "同步任务管理" in result["error"]
-        # 只执行了 SELECT，未触碰 DELETE
-        assert len(cur.executed) == 1
+        assert result["success"] is True
+        # 文章行抑制语句必须执行：同事务标记 deleted，防止复核走重建分支
+        article_updates = [(sql, params) for sql, params in cur.executed
+                           if "bs_wechat_mp_articles" in sql]
+        assert len(article_updates) == 1
+        assert "status = 'deleted'" in article_updates[0][0]
+        assert article_updates[0][1] == ("t1", "wx:app1:a1:0")
 
     @pytest.mark.asyncio
-    async def test_delete_external_doc_rejected_even_global_view(self):
-        """platform_admin 全局视图同样不可物理删除外部文档（审计只读）"""
-        cur = _FakeCursor(rows=[{"file_path": None, "origin": "wechat_mp"}])
+    async def test_delete_external_doc_allowed_even_global_view(self):
+        """platform_admin 全局视图同样可删除外部文档（按文档自身 tenant_id 抑制文章行）"""
+        cur = _FakeCursor(rows=[{"file_path": None, "origin": "wechat_mp",
+                                 "external_id": "wx:app1:a2:0", "tenant_id": "t9"}])
         svc = KnowledgeBaseService()
-        with patch.object(KnowledgeBaseService, "_get_db_connection", return_value=_FakeConn(cur)):
+        with patch.object(KnowledgeBaseService, "_get_db_connection", return_value=_FakeConn(cur)), \
+             patch("src.knowledge.service.get_vector_db", return_value=AsyncMock()):
             result = await svc.delete_document(7, tenant_id=None, global_view=True)
 
-        assert result["success"] is False
-        assert result["status"] == 400
-        assert len(cur.executed) == 1
+        assert result["success"] is True
+        article_updates = [(sql, params) for sql, params in cur.executed
+                           if "bs_wechat_mp_articles" in sql]
+        assert article_updates[0][1] == ("t9", "wx:app1:a2:0")
+
+    @pytest.mark.asyncio
+    async def test_delete_external_doc_without_external_id_skips_article_update(self):
+        """存量行 external_id 为空：仅删文档，不触碰文章表"""
+        cur = _FakeCursor(rows=[{"file_path": None, "origin": "wechat_mp",
+                                 "external_id": None, "tenant_id": "t1"}])
+        svc = KnowledgeBaseService()
+        with patch.object(KnowledgeBaseService, "_get_db_connection", return_value=_FakeConn(cur)), \
+             patch("src.knowledge.service.get_vector_db", return_value=AsyncMock()):
+            result = await svc.delete_document(7, tenant_id="t1")
+
+        assert result["success"] is True
+        assert not any("bs_wechat_mp_articles" in sql for sql, _ in cur.executed)
 
     @pytest.mark.asyncio
     async def test_delete_manual_doc_unchanged(self):
@@ -392,7 +413,7 @@ def _patch_doc_row(row):
 
 
 class TestDownloadExternalBoundary:
-    """外部来源无文件文档：下载/票据返回明确错误 + metadata.original_url；
+    """外部来源无文件文档：下载 302 重定向原文、票据端点 200 + external + metadata.original_url；
     软删除文档仅 platform_admin 可审计下载"""
 
     EXT_URL = "https://mp.weixin.qq.com/s/abc123"
@@ -413,61 +434,55 @@ class TestDownloadExternalBoundary:
         return row
 
     @pytest.mark.asyncio
-    async def test_download_external_no_file_400_with_original_url(self):
-        from fastapi import HTTPException
+    async def test_download_external_no_file_302_to_original_url(self):
         from src.knowledge import api as kb_api
 
         set_tenant_context("t1", "u1")
         with _patch_doc_row(self._external_row()):
-            with pytest.raises(HTTPException) as exc_info:
-                await kb_api.download_document(7, http_request=_make_api_request(user_role="employee"))
+            resp = await kb_api.download_document(7, http_request=_make_api_request(user_role="employee"))
 
-        assert exc_info.value.status_code == 400
-        assert exc_info.value.detail["original_url"] == self.EXT_URL
-        assert "原文" in exc_info.value.detail["error"]
+        assert resp.status_code == 302
+        assert resp.headers["location"] == self.EXT_URL
 
     @pytest.mark.asyncio
-    async def test_download_ticket_external_no_file_400_with_original_url(self):
+    async def test_download_ticket_external_no_file_200_with_original_url(self):
+        """票据端点对外部文档返回 200 + external + original_url（预期行为，非错误）"""
         from src.knowledge import api as kb_api
 
         set_tenant_context("t1", "u1")
         with _patch_doc_row(self._external_row()):
             resp = await kb_api.create_download_ticket(7, http_request=_make_api_request(user_role="employee"))
 
-        assert resp.status_code == 400
-        body = json.loads(bytes(resp.body))
-        assert body["original_url"] == self.EXT_URL
-        assert "原文" in body["error"]
+        assert resp["success"] is True
+        assert resp["external"] is True
+        assert resp["original_url"] == self.EXT_URL
 
     @pytest.mark.asyncio
-    async def test_download_external_with_url_as_file_path_still_400(self):
-        """WP12 定版：外部文档 file_path 存原文链接（文档位置字段）——下载仍按
-        origin 拦截返回 400+原文链接，不得把 URL 当本地文件路径打开（防泄漏进报错）。"""
-        from fastapi import HTTPException
+    async def test_download_external_with_url_as_file_path_still_redirects(self):
+        """WP12 定版：外部文档 file_path 存原文链接（文档位置字段）——下载按
+        origin 分支 302 重定向原文，不得把 URL 当本地文件路径打开（防泄漏进报错）。"""
         from src.knowledge import api as kb_api
 
         set_tenant_context("t1", "u1")
         with _patch_doc_row(self._external_row(file_path=self.EXT_URL)):
-            with pytest.raises(HTTPException) as exc_info:
-                await kb_api.download_document(7, http_request=_make_api_request(user_role="employee"))
+            resp = await kb_api.download_document(7, http_request=_make_api_request(user_role="employee"))
 
-        assert exc_info.value.status_code == 400
-        assert exc_info.value.detail["original_url"] == self.EXT_URL
-        assert "原文" in exc_info.value.detail["error"]
+        assert resp.status_code == 302
+        assert resp.headers["location"] == self.EXT_URL
 
     @pytest.mark.asyncio
-    async def test_download_ticket_external_with_url_as_file_path_still_400(self):
-        """同上：票据端点对 file_path=原文链接 的外部文档仍按 origin 拦截。"""
+    async def test_download_ticket_external_with_url_as_file_path_still_external(self):
+        """同上：票据端点对 file_path=原文链接 的外部文档仍按 origin 分支，
+        返回 200 + 原文链接，不得把 URL 当本地文件路径打开（防泄漏进报错）。"""
         from src.knowledge import api as kb_api
 
         set_tenant_context("t1", "u1")
         with _patch_doc_row(self._external_row(file_path=self.EXT_URL)):
             resp = await kb_api.create_download_ticket(7, http_request=_make_api_request(user_role="employee"))
 
-        assert resp.status_code == 400
-        body = json.loads(bytes(resp.body))
-        assert body["original_url"] == self.EXT_URL
-        assert "原文" in body["error"]
+        assert resp["success"] is True
+        assert resp["external"] is True
+        assert resp["original_url"] == self.EXT_URL
 
     @pytest.mark.asyncio
     async def test_download_deleted_doc_hidden_from_tenant(self):

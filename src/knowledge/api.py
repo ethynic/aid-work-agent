@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Optional, List
 
 from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException, Request
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import JSONResponse, FileResponse, RedirectResponse
 from pydantic import BaseModel
 from loguru import logger
 
@@ -527,6 +527,8 @@ async def delete_document(doc_id: int, http_request: Request = None):
     - 级联删除所有向量
     - 删除文件
     - 对象级租户校验：跨租户文档统一按「文档不存在」响应，不泄漏存在性
+    - 外部来源文档（公众号同步等）可删除：物理删除 documents/chunks/向量，
+      并联动标记同步任务文章行 deleted，防止后续复核重建
     """
     # 租户上下文由 TenantMiddleware 注入；service 层 SQL 本体再校验一次（防 TOCTOU）
     result = await knowledge_service.delete_document(
@@ -639,7 +641,7 @@ async def create_download_ticket(doc_id: int, http_request: Request = None):
     认证换取票据，再访问 /documents/{doc_id}/download?ticket=xxx。
 
     软删除文档仅 platform_admin 可审计下载，租户前台按「文档不存在」处理；
-    外部来源文档（无本地文件）返回明确错误并携带原文 URL。
+    外部来源文档（无本地文件）返回 200 + original_url（非错误，前端直接跳转原文）。
     """
     with knowledge_service._get_db_connection() as conn:
         cursor = conn.cursor()
@@ -660,18 +662,17 @@ async def create_download_ticket(doc_id: int, http_request: Request = None):
             and not _is_global_admin_view(http_request):
         raise HTTPException(status_code=403, detail="无权访问该文档")
 
-    # 外部来源文档不提供原始文件下载：不签发下载票据，返回原文 URL 供前端跳转。
-    # file_path 现存放原文链接（WP12 定版：URL 即外部文档的"位置"字段），不能据此
-    # 判定"有本地文件"——一律按 origin 拦截，防止把 URL 当本地文件路径打开
+    # 外部来源文档不提供原始文件下载：不签发下载票据，返回 200 + 原文 URL
+    # 供前端跳转（属预期行为，非错误）。file_path 现存放原文链接（WP12 定版：
+    # URL 即外部文档的"位置"字段），不能据此判定"有本地文件"——一律按 origin
+    # 分支，防止把 URL 当本地文件路径打开
     if (row.get("origin") or "manual_upload") != "manual_upload":
-        return JSONResponse(
-            status_code=400,
-            content={
-                "success": False,
-                "error": "外部来源文档不提供原始文件下载，请访问原文链接",
-                "original_url": _doc_original_url(row),
-            },
-        )
+        return {
+            "success": True,
+            "external": True,
+            "message": "外部来源文档，请访问原文链接",
+            "original_url": _doc_original_url(row),
+        }
 
     from src.core.download_ticket import TICKET_TTL_SECONDS, issue_download_ticket
     from src.saas.context import get_current_user_id
@@ -695,7 +696,7 @@ async def download_document(doc_id: int, http_request: Request = None):
     - 新窗口打开或下载原文
     - 做租户隔离与共享范围校验：仅本租户文档或已启用共享分类可下载
     - 软删除文档仅 platform_admin 可审计下载，租户前台按「文档不存在」处理
-    - 外部来源文档（无本地文件）返回明确错误并携带原文 URL
+    - 外部来源文档（无本地文件）302 重定向到原文链接
     """
     # 查询文档的 file_path + 租户归属（用于权限校验）+ 来源/状态（外部文档与软删除边界）
     with knowledge_service._get_db_connection() as conn:
@@ -715,20 +716,19 @@ async def download_document(doc_id: int, http_request: Request = None):
         raise HTTPException(status_code=404, detail="文档不存在或文件已丢失")
 
     # 权限检查必须先于来源/文件分支（与 create_download_ticket 顺序一致）：
-    # 否则跨租户遍历 doc_id 探测他人外部文档会拿到 400 + original_url，泄漏存在性
+    # 否则跨租户遍历 doc_id 探测他人外部文档会拿到 302 重定向，泄漏存在性
     if not _can_download_document(row, get_current_tenant_id()) \
             and not _is_global_admin_view(http_request):
         raise HTTPException(status_code=403, detail="无权访问该文档")
 
     if (row.get("origin") or "manual_upload") != "manual_upload":
-        # 外部来源文档不提供原始文件下载（file_path 存原文链接，非本地文件路径）
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "外部来源文档不提供原始文件下载，请访问原文链接",
-                "original_url": _doc_original_url(row),
-            },
-        )
+        # 外部来源文档无本地文件（file_path 存原文链接，非本地文件路径）：
+        # 302 重定向到原文。正常前端流程经票据端点 200+original_url 跳转，
+        # 不会触达这里；本分支仅兜底直接导航访问的场景
+        original_url = _doc_original_url(row)
+        if original_url:
+            return RedirectResponse(original_url, status_code=302)
+        raise HTTPException(status_code=404, detail="文档不存在或文件已丢失")
     if not row.get("file_path"):
         raise HTTPException(status_code=404, detail="文档不存在或文件已丢失")
 

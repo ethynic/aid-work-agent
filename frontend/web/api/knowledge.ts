@@ -2,7 +2,7 @@
  * 知识库 API
  */
 import { getAuthHeader } from './auth'
-import { downloadViaTicket } from '@/utils/download'
+import { triggerNativeDownload } from '@/utils/download'
 
 const API_BASE = `${import.meta.env.VITE_API_BASE_URL || '/api'}/knowledge`
 
@@ -232,9 +232,30 @@ export async function getDocumentChunks(docId: number): Promise<ChunkListRespons
  *
  * 走「下载票据 + 原生下载」：先经认证换取短期票据，再用票据直链触发下载，
  * 浏览器下载管理器从第一秒起即可见下载进度。
+ *
+ * 外部来源文档（公众号文章等）没有本地文件，票据端点返回 200 + external +
+ * original_url：直接新开页面打开原文链接。
  */
 export async function downloadDocument(docId: number, fallbackName: string): Promise<void> {
-  await downloadViaTicket(`/knowledge/documents/${docId}/download`, fallbackName)
+  const resp = await fetch(`${API_BASE}/documents/${docId}/download_ticket`, {
+    method: 'POST',
+    headers: { ...getAuthHeader() }
+  })
+  if (!resp.ok) {
+    const body = await resp.json().catch(() => null)
+    throw new Error(body?.detail || body?.error || `下载失败: ${resp.status}`)
+  }
+  const { ticket, external, original_url: originalUrl } = await resp.json()
+  if (external) {
+    if (!originalUrl) throw new Error('外部来源文档缺少原文链接')
+    window.open(originalUrl as string, '_blank', 'noopener')
+    return
+  }
+  if (!ticket) throw new Error('获取下载票据失败')
+  triggerNativeDownload(
+    `${API_BASE}/documents/${docId}/download?ticket=${encodeURIComponent(ticket)}`,
+    fallbackName
+  )
 }
 
 /**

@@ -207,8 +207,14 @@ class TestGlobalAdminViewScope:
         assert result["success"] is True
         sqls = [_flat(s) for s, _ in cur.executed]
         assert len(sqls) == 3
-        for sql in sqls:
-            assert "tenant_id" not in sql
+        for i, sql in enumerate(sqls):
+            if i == 0:
+                # SELECT 带出 tenant_id 列（外部文档删除时按文档归属抑制同步文章行），
+                # 但全局视图下不得携带租户过滤条件
+                assert "tenant_id = %s" not in sql
+                assert "tenant_id IS NULL" not in sql
+            else:
+                assert "tenant_id" not in sql
         assert cur.executed[0][1] == [7]
         assert cur.executed[1][1] == [7, 7]
         assert cur.executed[2][1] == [7]
