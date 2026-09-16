@@ -266,6 +266,7 @@ async def _list_active_sessions_on_date(target_date: date) -> List[SessionInfo]:
                 FROM channel_messages m
                 JOIN channel_sessions s ON m.session_id = s.session_id
                 WHERE m.created_at >= %s AND m.created_at < %s
+                  AND m.status = 'active'
                   AND s.tenant_id IS NOT NULL AND s.tenant_id != ''
                 """,
                 (target_date, next_day),
@@ -406,6 +407,7 @@ async def _load_session_messages(
                 FROM channel_messages
                 WHERE session_id = %s
                   AND created_at >= %s AND created_at < %s
+                  AND status = 'active'
                 ORDER BY created_at ASC
                 LIMIT %s
                 """,

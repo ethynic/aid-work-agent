@@ -348,6 +348,7 @@ async def list_traced_sessions(
                             FROM channel_messages
                             WHERE session_id IN ({placeholders})
                               AND role = 'user'
+                              AND status = 'active'
                         ) t WHERE rn = 1
                     """, session_ids)
                     content_map = {r["session_id"]: (r["content"] or "")[:200] for r in cur.fetchall()}
