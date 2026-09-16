@@ -169,6 +169,19 @@ def mock_db():
                 _lim = int(_m.group(1)) if _m else len(rows)
                 cursor._fetch_rows = rows[-_lim:] if _lim < len(rows) else list(rows)
 
+            elif "select count(*)" in sql_lower and "channel_messages" in sql_lower:
+                # count_messages_by_session：按 SQL 中实际出现的过滤条件模拟计数，
+                # 与 get_messages 分支的过滤语义保持一致（缺失列按 active/未压缩处理）
+                sid = params[0]
+                rows = [r for r in memory_store["messages"] if r["session_id"] == sid]
+                if "compacted = false" in sql_lower:
+                    rows = [r for r in rows if not r.get("compacted")]
+                if "is_recalled = false" in sql_lower:
+                    rows = [r for r in rows if not r.get("is_recalled")]
+                if "status = 'active'" in sql_lower:
+                    rows = [r for r in rows if r.get("status", "active") != "invalid"]
+                cursor._fetch_rows = [MockRow(cnt=len(rows))]
+
             elif "delete from" in sql_lower:
                 if "channel_messages" in sql_lower:
                     sid = params[0]
@@ -539,6 +552,52 @@ class TestGetMessagesFiltersInvalid:
         with patch.object(session_manager, "_has_status_column", return_value=True):
             msgs = session_manager.get_messages(sid, limit=10)
         assert [m["content"] for m in msgs] == ["msg2"]
+
+
+class TestCountMessagesBySessionFilters:
+    """count_messages_by_session 与 get_messages 过滤口径一致性测试。
+
+    WHY：压缩阈值（mid_term.check_threshold）用 COUNT 判定，实际加载用
+    get_messages（过滤 compacted/recalled/invalid）。若口径不一致——例如
+    「新会话」软删除的 status='invalid' 消息永远 compacted=FALSE 且被 COUNT
+    计入——COUNT 永远 >= 阈值，每轮触发压缩但 COMPRESS 区近空（只压到 2 条
+    活跃消息），形成 context_compressed 死循环（2026-09-16 wecom_kf 会话事故）。
+    """
+
+    def test_excludes_invalid_and_compacted(self, session_manager, mock_db):
+        """invalid 软删除消息与 compacted 消息不计入计数，与 get_messages 口径一致"""
+        sid = "test_tenant_wecom_kf_user1_travel-consultant"
+        mock_db["sessions"][sid] = {"session_id": sid}
+        for i in range(4):
+            session_manager.add_message(
+                sid,
+                role="user" if i % 2 == 0 else "assistant",
+                content=f"msg{i}",
+                tenant_id="test_tenant",
+            )
+        mock_db["messages"][0]["status"] = "invalid"
+        mock_db["messages"][1]["compacted"] = True
+        with patch.object(session_manager, "_has_status_column", return_value=True), \
+             patch.object(session_manager, "_has_is_recalled_column", return_value=True):
+            cnt = session_manager.count_messages_by_session(sid)
+        assert cnt == 2, f"应只数 2 条 active 未压缩消息, 实际: {cnt}"
+
+    def test_legacy_db_without_columns_counts_all(self, session_manager, mock_db):
+        """存量库无 status/is_recalled 列时不启用对应过滤（迁移兼容路径）"""
+        sid = "test_tenant_wecom_kf_user1_travel-consultant"
+        mock_db["sessions"][sid] = {"session_id": sid}
+        for i in range(3):
+            session_manager.add_message(
+                sid,
+                role="user" if i % 2 == 0 else "assistant",
+                content=f"msg{i}",
+                tenant_id="test_tenant",
+            )
+        mock_db["messages"][0]["status"] = "invalid"
+        with patch.object(session_manager, "_has_status_column", return_value=False), \
+             patch.object(session_manager, "_has_is_recalled_column", return_value=False):
+            cnt = session_manager.count_messages_by_session(sid)
+        assert cnt == 3, f"列不存在时不应过滤, 实际: {cnt}"
 
 
 class TestSoftDeleteMessages:

@@ -1997,12 +1997,17 @@ class ChannelSessionManager:
         # 撤回消息过滤条件（兼容迁移前的数据库：is_recalled 列不存在时不启用过滤）
         has_recall_column = self._has_is_recalled_column()
         recall_condition = "" if (include_recalled or not has_recall_column) else " AND is_recalled = FALSE"
+        # 软删除过滤：与 get_messages 口径对齐（status='invalid' 不进入 LLM 上下文，
+        # 也不应计入压缩阈值，否则 invalid 消息永远 compacted=FALSE，COUNT 永远
+        # >= 阈值 → 每轮触发压缩但 COMPRESS 区近空的消息死循环）
+        has_status_column = self._has_status_column()
+        status_clause = " AND status = 'active'" if has_status_column else ""
         try:
             with get_db_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
                     f"SELECT COUNT(*) AS cnt FROM channel_messages "
-                    f"WHERE session_id = {placeholder}{compacted_clause}{recall_condition}",
+                    f"WHERE session_id = {placeholder}{compacted_clause}{recall_condition}{status_clause}",
                     (session_id,),
                 )
                 row = cursor.fetchone()
