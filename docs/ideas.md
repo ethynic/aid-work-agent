@@ -21,19 +21,12 @@
 | # | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
 | 78 | 端侧会话任务执行器（P5 后续） | 🔧 部分完成 | 云端下发会话任务（发布/预算/决策/计费/逐条发送许可），Windows 端常驻 Runtime 持久执行与观察回传；C0~C5 分期，真机 10 轮联测未完成。 | [设计](design/desktop-automation/edge-session-task-design.md) | [C0–C5 计划](plans/desktop-automation/plan-edge-session-task.md) / [2026-09-15联测交接](plans/desktop-automation/edge-session-handoff-2026-09-15.md) |
-| 1 | 可观测性与质量保障 | 🔧 部分完成 | 分布式追踪 + LLM 质量评估 + 实时监控 + 结构化告警。 | [设计](infrastructure/observability-design.md) / [延伸设计](infrastructure/observability-channel-sessions-design.md) | [计划](infrastructure/observability-dev-plan.md) |
 | 65 | 母体 Agent 收敛（agent.py Kernel 化） | 📋 待开发 | **不设专项重构、不阻塞其他工作**，继续采用“冻结增长 + 有真实需求时伴生拆分”。 | [原则](system/agent-kernel-convergence-principles.md) | — |
-| 70 | 数据库增量升级脚本 YAML 化 | 🔧 部分完成 | 将 deploy/db_update.sql 全量哈希重跑机制改为 deploy/db_update.yaml + datetime 增量执行（last_datetime），免手动清理、… | [设计](system/database-db-update-incremental-design.md) | — |
-| 71 | 租户附件存储规范整改（第二阶段） | 🔧 部分完成 | 主上传链路整改后仍有 7 处违规写入；存量迁移已完成（测试 09-05 / 生产 09-07），遗留归档保留 30 天。 | — | [迁移方案](plans/plan-storage-legacy-migration.md) |
 
 ## 系统功能
 
 | # | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
-| 5 | 知识库能力增强 | 🔧 部分完成 | 知识库能力增强分期：文档级权限/检索日志（P1）、Rerank/改写/质量评估（P2）；分类树形化、批量移动、搜索跟随分类已上线。 | [设计](system/knowledge-base/knowledge-base-enhancement-design.md) | [计划](system/knowledge-base/knowledge-base-dev-plan.md) / [子级文档包含统一](plans/plan-knowledge-category-subtree-filter.md) |
-| 75 | 知识库 Excel 行级分块（表头注入 + 格式前置判定） | 🔧 部分完成 | 上传 Excel 时按「一行数据 = 一个 chunk」分块，表头字段名注入每个数据行 chunk（键值对形式），使单个商品/记录可独立命中检索。 | [设计](system/knowledge-base/excel-row-chunking-design.md) | — |
-| 42 | 租户积分充值与计费 | 🔧 部分完成 | 预付费积分（credit）充值 + 对话消耗积分 + 余额报警 + 账单查询。 | [设计+计划](system/saas/tenant-credit-billing-design.md) / [LLM 计费接入设计](system/saas/llm-billing-integration-design.md) / [开发计划](plans/plan-llm-billing-integration.md) / [qwen3.7-flash 分段计价计划](plans/plan-qwen3-7-flash-tiered-pricing.md) / [qwen3.7-flash 平替计划](plans/plan-qwen3-7-flash-replacement.md) / [上下文缓存优化计划](plans/plan-qwen3-7-flash-context-cache-optimization.md) / [工具结果截断计划](plans/plan-tool-result-truncation.md) | — |
-| 48 | 连接中心 | 🔧 部分完成 | 租户前台新增「连接中心」一级菜单（`/t/:tenant_id/connections`），单页面 4 Tab：API 配置 / 环境变量 / 内置连接器 / 自定义连接器。 | [设计](system/connection-center-design.md) | [计划](plans/plan-connection-center.md) |
 | 51 | 第一方 CLI / MCP Provider 架构规范 | 📋 待开发 | 所有第一方 CLI 必须成为独立标准 MCP Provider，同时支持 aid-work-agent Web Local Tool Runtime、未来 Agent Desktop、Codex、… | [规范](system/first-party-cli-mcp-provider-standard.md) | 首次落地并入 [BOSS MVP 计划](plans/recruiting/plan-recruiting-cli-agent-integration.md) |
 | 64 | Agent 用户可见中间消息（verbose） | 🔧 部分完成 | Agent 面向用户的中间进度提示（verbose 事件，确定性文案 + owner 级限流 + 渠道适配）；代码完成，待灰度真机验收。 | [设计](system/agent-intermediate-feedback-design.md) | [开发计划](plans/plan-agent-intermediate-feedback.md) / [灰度回滚手册](plans/verbose-feedback-rollout-runbook.md) |
 | 68 | zhipu 默认模型切 GLM-5.3-Flash + 价目表多模态标识 | 🔧 部分完成 | ①zhipu 缺省模型 glm-4 → GLM-5.3-Flash（GLM-5 系列首个原生多模态，输入 0.8 / 输出 2.8 元/M tokens，… | [设计](design/weixin/weixin-cli-billing.md) | — |
@@ -79,14 +72,8 @@
 | # | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
 | 29 | 企业微信个人账号 RPA 接入 | 🔧 部分完成 | **服务端**（已完成）：schemas/db/SQL 表结构锁定共享契约；auth(HMAC)/router/message/action_client/adapter/connection/sec… | [协议](system/wecom-personal-rpa-protocol.md) / [架构设计](system/wecom-personal-rpa-design.md) / [客户端设计](system/wecom-personal-rpa-client-design.md) / [绑定管理 Tab 设计](system/wecom-personal-rpa-portal-binding-design.md) / [服务端监听存档设计](system/wecom-personal-rpa-server-archive-listener-design.md) / [SDK 部署](system/wecom-personal-rpa-sdk-deploy.md) | [服务端+部署计划](plans/plan-wecom-personal-rpa.md) / [客户端计划](plans/plan-wecom-personal-rpa-client.md) / [绑定管理计划](plans/plan-wecom-personal-rpa-portal-binding.md) / [服务端监听存档计划](plans/plan-wecom-personal-rpa-server-archive-listener.md) |
-| 56 | 企微客服账号引流归因（客服账号管理 + 二维码 + C端客户引流统计） | 🔧 部分完成 | **Phase 1 后端 + Phase 2 前端已开发完成**（2026-08-18）：企微 API 5 方法（account_add/del/update/list + add_contact_w… | [方案](channel/wecom_kf/kf-account-referral-plan.md)（含开发计划） | — |
 | 57 | 微信客服回复长图化 + 废除渠道约束提示词 | 🔧 部分完成 | **开发+单测完成（2026-08-19），待部署真机验证**。 | [配额方案（含 2026-08 变更）](channel/wecom_kf/reply_quota_control_plan.md) | — |
 | 58 | 微信客服处理超时等待提示 | 🔧 部分完成 | **开发+单测完成（2026-08-20），待部署真机验证**。 | [计划](plans/plan-wecom-kf-waiting-indicator.md) | — |
-| 59 | 微信客服售前咨询客户留资（手机号 / 顾问微信二维码） | 🔧 部分完成 | **适用边界**：仅售前咨询场景需改造；售后客服支持场景无需改造，现有功能即满足。 | [设计](subagent/pre-sales/lead-capture-design.md) | [开发计划](subagent/pre-sales/lead-capture-dev-plan.md) |
-| 60 | 售前咨询外部推送重构（unionid 查重 + 每轮跟进记录） | 📋 已完成方案 | 售前外部推送重构：unionid 查重防同一微信用户重复推送 + 每轮跟进推送时机调整。 | [方案](subagent/pre-sales/external-push-redesign-plan.md) | — |
-| 61 | 售前推送代码级兜底（recap 任务 external_push） | 🔧 部分完成 | 售前推送代码级兜底：recap 任务收尾时 external_push 直推第三方，替代实测不生效的提示词驱动方案。 | [方案](subagent/pre-sales/external-push-code-hook-design.md) | — |
-| 62 | 子智能体 Recap 机制（轮后异步沉淀任务） | 🔧 部分完成 | **定位**：SUBAGENT.md 目前只有对话期配置（tools/skills/context），缺「每轮问答结束后沉淀类动作」的表达位。 | [机制设计](subagent/recap-mechanism-design.md) | — |
-| 63 | 售前推送链路修复（头像/性别注入 + http_api 审计 + 隐藏命令清留资） | 🔧 部分完成 | 售前推送链路修复：头像/性别注入 + http_api 通道问题（2026-09-08 agent2 排查确认三问题）。 | — | — |
 | 64 | 留资线索动态刷新（lead_refresh：意向度 + 需求分条 + 人工归属） | 📋 已完成方案 | **触发**：2026-09-10 产品需求——留资后客户继续交流（智能体轮次 + 转人工期）仅落 `channel_messages`，线索行不再更新，运营页看不到最新客户状态。 | [设计](subagent/pre-sales/lead-capture-refresh-design.md) | — |
 
 ## 前端
@@ -96,19 +83,6 @@
 | 33 | 前端 Office 预览 | 📋 待开发 | 前端在线预览 Office 文档（Word/Excel/PPT） | [设计](research/frontend/frontend-office-preview-design.md) | — |
 | 36 | Agent 跨平台桌面客户端 | 🔧 部分完成 | 2026-08-12 完成前端目录分层第一阶段：现有 `frontend/src/` 原样迁移到 `frontend/web/`，… | [设计](system/desktop-agent-client-design.md) | [开发计划](system/desktop-agent-client-dev-plan.md) |
 | 43 | 多会话后台流式 | 🔧 部分完成 | 2026-07-20 代码与单测完成，待真实环境 E2E 验收。 | [设计](system/multi-session-background-streaming-design.md) | [开发计划](plans/plan-multi-session-background-streaming.md) |
-| 55 | Playwright E2E 测试框架 | 🔧 部分完成 | 2026-08-16 搭建：`@playwright/test` + Chromium 真实浏览器，连本地容器 aid-agent-api 后端（vite dev :15173 代理 /api → :… | — | — |
-
----
-
-## 技术栈优化
-
-> 在"功能不变、推倒重来"前提下，对前后端技术栈的系统性优化建议。当前状态均为 💡 灵感阶段。
-
-| # | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
-|---|------|------|------|---------|---------|
-| 40 | 后台管理界面引入 Element Plus | 💡 灵感 | 后台管理 16 个页面（表格/表单密集型）从手写 TailwindCSS 迁到 Element Plus 组件库（`el-table`、`el-form`、`el-dialog` 等），… | [设计](tech-stack-optimization/admin-element-plus-migration.md) | — |
-| 41 | toast 迁至 Element Plus ElMessage | 💡 灵感 | 替换停更的 `vue-toastification@rc`，使用 Element Plus 的 `ElMessage.success/error/info/warning`，零额外依赖增量。 | [设计](tech-stack-optimization/toast-migration.md) | — |
-| 67 | report_model 重构为 lite_model（轻量小模型全局单配置 + 跨 provider） | 🔧 部分完成 | `report_model` 字段名不副实——并非只用于报告，还承担日报/周报/复盘/简历评分/数字员工空态摘要等快速便宜小模型任务；… | — | — |
 
 ---
 

@@ -25,6 +25,10 @@
 | 61 | skill_ws 临时工作目录清理机制 | ✅ 已完成开发。修复技能执行工作目录 `skill_ws_*` 创建后永不清理的临时文件泄漏（每月堆积，2026-08-13 迁移核对时发现）。 | — | — |
 | 38 | 后台定时/轮询任务外置 | ✅ 已完成开发（待线上验证）。 | [独立后台运行时设计](infrastructure/background-runner-design.md) | [计划](plans/plan-background-runner.md) |
 | 73 | 本地开发调试环境说明（venv / WSL 容器 / Mac 容器） | ✅ 已完成开发。明确三种本地开发调试方式与网络要求：①本地 venv；②WSL2 内容器（mirrored 镜像网络 + host 网络覆盖）；③macOS Docker Desktop 容器（端口发布到 localhost 或 host networking）。 | [说明](infrastructure/local-dev-environments.md) | — |
+| 1 | 可观测性与质量保障 | 🔧 部分完成 | 分布式追踪 + LLM 质量评估 + 实时监控 + 结构化告警。 | [设计](infrastructure/observability-design.md) / [延伸设计](infrastructure/observability-channel-sessions-design.md) | [计划](infrastructure/observability-dev-plan.md) |
+| 70 | 数据库增量升级脚本 YAML 化 | 🔧 部分完成 | 将 deploy/db_update.sql 全量哈希重跑机制改为 deploy/db_update.yaml + datetime 增量执行（last_datetime），免手动清理、… | [设计](system/database-db-update-incremental-design.md) | — |
+| 71 | 租户附件存储规范整改（第二阶段） | 🔧 部分完成 | 主上传链路整改后仍有 7 处违规写入；存量迁移已完成（测试 09-05 / 生产 09-07），遗留归档保留 30 天。 | — | [迁移方案](plans/plan-storage-legacy-migration.md) |
+
 
 ## 系统功能
 
@@ -43,6 +47,10 @@
 | 47 | 工作成果记录 | ✅ 已完成开发。沉淀子智能体产生的重要工作成果（生成文件、完成业务操作、给出决策建议）到 `work_outcomes` 表，租户前台新增"工作成果"菜单。 | [设计](system/work-outcome-record-design.md) | — |
 | 78 | chat_lite 计费模型错配 | ✅ 已完成开发。11 处小任务调用点 chat_lite 与计费模型错配（多收租户）：交互型改走 chat_no_thinking 对齐实际消耗模型；已完成待部署。 | [已知问题记录](plans/chat-lite-billing-model-mismatch.md) | — |
 | 71 | 彻底移除 demo 模式与 SAAS_ENABLED 开关 | ✅ 已完成开发。demo 模式（`DEMO_ENABLED`/`VITE_DEMO_ENABLED` 控制）已无人使用且与租户模式并存造成大量死分支；系统定位即 SaaS 平台。 | — | — |
+| 5 | 知识库能力增强 | 🔧 已完成开发 | 知识库能力增强分期：文档级权限/检索日志（P1）、Rerank/改写/质量评估（P2）；分类树形化、批量移动、搜索跟随分类已上线。 | [设计](system/knowledge-base/knowledge-base-enhancement-design.md) | [计划](system/knowledge-base/knowledge-base-dev-plan.md) / [子级文档包含统一](plans/plan-knowledge-category-subtree-filter.md) |
+| 75 | 知识库 Excel 行级分块（表头注入 + 格式前置判定） | 🔧 已完成开发 | 上传 Excel 时按「一行数据 = 一个 chunk」分块，表头字段名注入每个数据行 chunk（键值对形式），使单个商品/记录可独立命中检索。 | [设计](system/knowledge-base/excel-row-chunking-design.md) | — |
+| 42 | 租户积分充值与计费 | 🔧 已完成开发 | 预付费积分（credit）充值 + 对话消耗积分 + 余额报警 + 账单查询。 | [设计+计划](system/saas/tenant-credit-billing-design.md) / [LLM 计费接入设计](system/saas/llm-billing-integration-design.md) / [开发计划](plans/plan-llm-billing-integration.md) / [qwen3.7-flash 分段计价计划](plans/plan-qwen3-7-flash-tiered-pricing.md) / [qwen3.7-flash 平替计划](plans/plan-qwen3-7-flash-replacement.md) / [上下文缓存优化计划](plans/plan-qwen3-7-flash-context-cache-optimization.md) / [工具结果截断计划](plans/plan-tool-result-truncation.md) | — |
+| 48 | 连接中心 | 🔧 已完成开发 | 租户前台新增「连接中心」一级菜单（`/t/:tenant_id/connections`），单页面 4 Tab：API 配置 / 环境变量 / 内置连接器 / 自定义连接器。 | [设计](system/connection-center-design.md) | [计划](plans/plan-connection-center.md) |
 
 ## 数字员工 / 子智能体
 
@@ -125,7 +133,12 @@
 | 36 | 渠道语音 ASR 补齐（wecom / feishu / dingtalk） | ✅ 已完成开发。渠道场景下语音消息在渠道层完成阿里云 ASR 转文字后送入 agent，LLM 不再承担语音识别。 | — | — |
 | 38 | wecom_kf 单轮回复配额管控（提示词注入 + 渲染层兜底） | ✅ 已完成开发。**背景**：客户一句「发我英文版和日语版」触发智能体单轮产出 7 个发送单元（文字+表格图+Word ×2 语言+中文总结），微信客服 send_msg 5 条/48h 上限被击穿，最后 2 个 Word 文档丢失。 | — | [开发计划](channel/wecom_kf/reply_quota_control_plan.md) |
 | 60 | 微信客服 95013 (conversation end) 错误修复 | ✅ 已完成开发 **2026-08-28 生产报错调查（2026-08-29 完成）**：13:24 前后 44 次 `errcode=95013` 刷屏 + 25 条客户消息被丢弃。 | — | — |
+| 56 | 企微客服账号引流归因（客服账号管理 + 二维码 + C端客户引流统计） | 🔧 已完成开发 | **Phase 1 后端 + Phase 2 前端已开发完成**（2026-08-18）：企微 API 5 方法（account_add/del/update/list + add_contact_w… | [方案](channel/wecom_kf/kf-account-referral-plan.md)（含开发计划） | — |
+| 59 | 微信客服售前咨询客户留资（手机号 / 顾问微信二维码） | 🔧 已完成开发 | **适用边界**：仅售前咨询场景需改造；售后客服支持场景无需改造，现有功能即满足。 | [设计](subagent/pre-sales/lead-capture-design.md) | [开发计划](subagent/pre-sales/lead-capture-dev-plan.md) |
 | 61 | 微信客服员工-客户对话可见性 | ✅ 已完成开发 **2026-08-29 开发完成**。 | — | — |
+| 61 | 售前推送代码级兜底（recap 任务 external_push） | 🔧 已完成开发 | 售前推送代码级兜底：recap 任务收尾时 external_push 直推第三方，替代实测不生效的提示词驱动方案。 | [方案](subagent/pre-sales/external-push-code-hook-design.md) | — |
+| 62 | 子智能体 Recap 机制（轮后异步沉淀任务） | 🔧 已完成开发 | **定位**：SUBAGENT.md 目前只有对话期配置（tools/skills/context），缺「每轮问答结束后沉淀类动作」的表达位。 | [机制设计](subagent/recap-mechanism-design.md) | — |
+| 63 | 售前推送链路修复（头像/性别注入 + http_api 审计 + 隐藏命令清留资） | 🔧 已完成开发 | 售前推送链路修复：头像/性别注入 + http_api 通道问题（2026-09-08 agent2 排查确认三问题）。 | — | — |
 
 ## SaaS 多租户
 
