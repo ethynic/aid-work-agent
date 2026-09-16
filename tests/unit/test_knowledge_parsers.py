@@ -6,11 +6,15 @@ import pytest
 
 pytestmark = pytest.mark.skills
 
+from src.knowledge.parsers import DocumentParseError
 from src.knowledge.parsers.word_parser import WordParser
 from src.knowledge.parsers.excel_parser import ExcelParser
 from src.knowledge.parsers.ppt_parser import PPTParser
 from src.knowledge.parsers.pdf_parser import PDFParser
 from src.knowledge.parsers.parser_factory import parser_factory
+
+# OLE 复合文件魔数：加密 docx/xlsx/pptx 和老版 .doc/.xls/.ppt 都是这种格式（非 zip）
+OLE_MAGIC = bytes.fromhex("D0CF11E0A1B11AE1") + b"\x00" * 512
 
 
 class TestParserFactory:
@@ -49,6 +53,17 @@ class TestWordParser:
         parser = WordParser()
         with pytest.raises(Exception):
             await parser.parse("non_existent_file.docx")
+
+    @pytest.mark.asyncio
+    async def test_parse_encrypted_or_fake_docx_raises_friendly_error(self, tmp_path):
+        """加密 docx / .doc 改后缀（OLE 复合文件，非 zip）应抛带指引的 DocumentParseError"""
+        file_path = tmp_path / "encrypted.docx"
+        file_path.write_bytes(OLE_MAGIC)
+
+        parser = WordParser()
+        with pytest.raises(DocumentParseError) as exc_info:
+            await parser.parse(str(file_path))
+        assert "另存为" in str(exc_info.value)
 
 
 class TestExcelParser:
@@ -92,6 +107,17 @@ class TestExcelParser:
         chunks = chunker.chunk(text)
         assert len(chunks) >= 2
 
+    @pytest.mark.asyncio
+    async def test_parse_encrypted_or_fake_xlsx_raises_friendly_error(self, tmp_path):
+        """加密 xlsx / .xls 改后缀（OLE 复合文件，非 zip）应抛带指引的 DocumentParseError"""
+        file_path = tmp_path / "encrypted.xlsx"
+        file_path.write_bytes(OLE_MAGIC)
+
+        parser = ExcelParser()
+        with pytest.raises(DocumentParseError) as exc_info:
+            await parser.parse(str(file_path))
+        assert "另存为" in str(exc_info.value)
+
 
 class TestPPTParser:
     """PPT 解析器测试"""
@@ -99,6 +125,17 @@ class TestPPTParser:
     def test_supported_extensions(self):
         parser = PPTParser()
         assert ".pptx" in parser.supported_extensions()
+
+    @pytest.mark.asyncio
+    async def test_parse_encrypted_or_fake_pptx_raises_friendly_error(self, tmp_path):
+        """加密 pptx / .ppt 改后缀（OLE 复合文件，非 zip）应抛带指引的 DocumentParseError"""
+        file_path = tmp_path / "encrypted.pptx"
+        file_path.write_bytes(OLE_MAGIC)
+
+        parser = PPTParser()
+        with pytest.raises(DocumentParseError) as exc_info:
+            await parser.parse(str(file_path))
+        assert "另存为" in str(exc_info.value)
 
 
 class TestPDFParser:

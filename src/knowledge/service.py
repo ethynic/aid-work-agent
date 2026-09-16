@@ -12,6 +12,7 @@ from loguru import logger
 
 from src.core.text_sanitizer import sanitize_text
 from src.knowledge.parsers.parser_factory import parser_factory
+from src.knowledge.parsers import DocumentParseError
 from src.knowledge.chunker import TextChunker
 from src.knowledge.embedding.embedding_client import TextEmbeddingV3Client, sanitize_error_info
 from src.knowledge.vector_db.vector_db import get_vector_db
@@ -615,6 +616,15 @@ class KnowledgeBaseService:
                 "message": "文档处理成功"
             }
 
+        except DocumentParseError as e:
+            # 文件内容不合法（加密/损坏/老格式改后缀），友好文案直接透传给用户
+            logger.warning(f"后端日志：文档内容不合法被拒绝: {file_path}, 原因: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "debug": str(e),
+                "document_id": None
+            }
         except Exception as e:
             error_str = str(e)
             # 避免重复过滤

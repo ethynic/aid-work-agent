@@ -7,10 +7,19 @@ Excel 文档解析器
 """
 
 import re
+import zipfile
 from collections import Counter
 from typing import Any, Dict, List, Optional, Tuple
 from loguru import logger
-from . import BaseParser, ParseResult, ParsedChunk
+from . import BaseParser, DocumentParseError, ParseResult, ParsedChunk
+
+
+def _is_zip_file(path: str) -> bool:
+    """判断文件是否为合法 zip 包（标准 OOXML 文件都是 zip；加密/损坏/老格式不是）"""
+    try:
+        return zipfile.is_zipfile(path)
+    except OSError:
+        return False
 
 # 与 TextChunker.MAX_EMBEDDING_CHUNK_CHARS 一致（embedding API 输入上限），
 # 独立常量避免解析器反向依赖 chunker 内部实现
@@ -132,8 +141,25 @@ class ExcelParser(BaseParser):
     async def parse(self, file_path: str) -> ParseResult:
         logger.info(f"后端日志：开始解析 Excel 文档: {file_path}")
         from openpyxl import load_workbook
+        from openpyxl.utils.exceptions import InvalidFileException
 
-        wb = load_workbook(file_path, read_only=True, data_only=True)
+        try:
+            wb = load_workbook(file_path, read_only=True, data_only=True)
+        except InvalidFileException:
+            # openpyxl 对 .xls（BIFF 老格式改后缀等）抛此异常
+            raise DocumentParseError(
+                "文件不是标准 Excel 文档（可能是老版 .xls 改了后缀，或格式不受支持），"
+                "请用 Office/WPS 打开后另存为标准 .xlsx 再上传"
+            )
+        except Exception as e:
+            # 加密 xlsx（OLE 复合文件）和损坏文件在 zip 层抛 BadZipFile 等异常
+            if not _is_zip_file(file_path):
+                raise DocumentParseError(
+                    "文件不是标准 Excel 文档（可能已设置打开密码，或内容已损坏），"
+                    "请用 Office/WPS 打开后另存为未加密的 .xlsx 再上传"
+                ) from e
+            raise
+
         try:
             return await self._parse_workbook(wb, file_path)
         except Exception as e:

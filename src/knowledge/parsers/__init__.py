@@ -26,6 +26,11 @@ class ParseResult:
     precomputed_chunks: Optional[List[ParsedChunk]] = None
 
 
+class DocumentParseError(Exception):
+    """文档内容不合法（加密/损坏/老版本格式改后缀等），message 为可直接展示给用户的友好文案"""
+    pass
+
+
 class BaseParser(ABC):
     """文档解析器基类"""
 

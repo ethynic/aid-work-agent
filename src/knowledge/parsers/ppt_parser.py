@@ -4,7 +4,7 @@ PPT 文档解析器
 
 from typing import List
 from loguru import logger
-from . import BaseParser, ParseResult
+from . import BaseParser, DocumentParseError, ParseResult
 
 
 class PPTParser(BaseParser):
@@ -17,8 +17,17 @@ class PPTParser(BaseParser):
         logger.info(f"后端日志：开始解析 PPT 文档: {file_path}")
         try:
             from pptx import Presentation
+            from pptx.exc import PackageNotFoundError
 
-            prs = Presentation(file_path)
+            try:
+                prs = Presentation(file_path)
+            except PackageNotFoundError:
+                # python-pptx 对「非 zip 格式文件」统一抛此异常：加密 pptx（OLE 复合文件）、
+                # 老版 .ppt 改后缀、损坏文件等
+                raise DocumentParseError(
+                    "文件不是标准 PPT 文档（可能已设置打开密码，或是老版 .ppt 改了后缀），"
+                    "请用 Office/WPS 打开后另存为未加密的 .pptx 再上传"
+                )
 
             paragraphs = []
             total_slides = len(prs.slides)
@@ -52,6 +61,9 @@ class PPTParser(BaseParser):
             logger.info(f"后端日志：PPT 文档解析完成: {file_path}, 幻灯片数={total_slides}")
             return ParseResult(text=text, metadata=metadata)
 
+        except DocumentParseError as e:
+            logger.warning(f"后端日志：PPT 文档内容不合法被拒绝: {file_path}, 原因: {e}")
+            raise
         except Exception as e:
             logger.opt(exception=True).error(f"后端日志：PPT 文档解析失败: {file_path}, error: {e}")
             raise
