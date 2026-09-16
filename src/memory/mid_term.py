@@ -163,7 +163,7 @@ _MODEL_CONTEXT_LIMITS: Dict[str, int] = {
     # DeepSeek（主 provider）。官方标称均为 1M，按 5 折取值（API 实际可用 ~128K-200K，
     # 且长上下文性能在 150K 以下更稳定，保守打折避免阈值偏晚）
     "deepseek-v4-pro": 512_000,
-    "deepseek-v4-flash": 512_000,
+    "deepseek-flash": 512_000,
     # Qwen3.8-flash（百炼 qwen provider，QWEN_MODEL_CODE 默认值）。官方计价
     # 单档到 1M，按 5 折保守取值与 deepseek 对齐（生产实测 prompt 244K 无异常）
     "qwen3.8-flash": 512_000,
@@ -180,7 +180,7 @@ _PROVIDER_DEFAULTS = {
     "deepseek": {
         "base_url": "https://api.deepseek.com",
         "api_key_env": "DEEPSEEK_API_KEYS",  # 项目使用复数形式，逗号分隔
-        "default_model": "deepseek-v4-flash",
+        "default_model": "deepseek-flash",
     },
     "qwen": {
         "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",

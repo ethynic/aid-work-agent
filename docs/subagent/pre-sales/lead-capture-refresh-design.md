@@ -24,7 +24,7 @@
 | 人工服务归属 | 最近一次转人工的企微员工（姓名 / id） |
 
 **非目标（本期不做）**：
-- 人工期对话推送到第三方系统（推送仍由 external_push 在智能体轮次承担；人工期推送列开放问题 §9.5）
+- 人工期对话推送到第三方系统（推送仍由 external_push 在智能体轮次承担；人工期推送列开放问题 §9.5，已于 2026-09-16 Phase 2 实现 `external_push_human`）
 - 线索 stage 状态机变更（仍由现有工具 / 管理端 PATCH 维护）
 
 ---
@@ -276,10 +276,10 @@ def update_transfer_info(lead_id, tenant_id, transferred_to, servicer_name) -> b
 | 9.2 | servicer_name 数据源 | 尽力而为：从租户客服账号配置（kf_account）按 userid 映射，映射不到为空 | 若无配置数据源，列长期为 NULL 不阻塞功能 |
 | 9.3 | 人工期消息混入分析窗口的噪音 | 人工期消息带"[人工客服]"前缀 / 阶段标记，prompt 中说明区分 | 实测后再调 prompt |
 | 9.4 | 意向度判定标准租户级可配置 | 一期固定通用标准写死适配器 prompt | 若运营反馈口径不一，二期仿 pre-sales-api.md 模式下沉租户配置 |
-| 9.5 | 人工期对话是否推送第三方系统 | 不推送（external_push 仅智能体轮次触发） | 需产品确认：员工接待中的客户动态是否要同步 10605 |
+| 9.5 | 人工期对话是否推送第三方系统 | **Phase 2 已实现（2026-09-16）**：新适配器 `external_push_human`，节流推送（同 lead_refresh 冷却模式，5 分钟冷却按 session 维度）+ 推送时同步客户表转人工字段（zhuanrengongshijian / rengongkefuxingming，多次转人工记录最新）与跟进汇总摘要（genjinhuizongzhaiyao / zhuangtai）+ 不要求留资；入口 B `enqueue_lead_refresh` 更名 `enqueue_human_period_tasks`，task_config 含 [lead_refresh, external_push_human] 两任务；推送契约见 10605 文档 §12.6 | — |
 | 9.6 | converted 线索是否继续刷新 | 继续刷新 | 若产品认为成单后无需跟踪，加一行过滤即可 |
 
 ## 10. 分期
 
 - **Phase 1（本次）**：§4 DDL → §5 全部后端改动 → 测试 → 前端展示 → 部署真机验证
-- **Phase 2（可选，视运营反馈）**：增量游标裁剪、servicer_name 补齐数据源、人工期对话推送第三方、租户级判定标准
+- **Phase 2（可选，视运营反馈）**：增量游标裁剪、servicer_name 补齐数据源、人工期对话推送第三方（✅ 2026-09-16 已实现，见 §9.5）、租户级判定标准

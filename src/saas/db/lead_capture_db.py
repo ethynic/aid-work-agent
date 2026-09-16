@@ -17,9 +17,13 @@ from loguru import logger
 
 from src.db.database import get_db_connection
 from src.db.encryption import encryption_manager
+from src.saas.models.enums import LeadIntentLevel
 
 # 线索阶段枚举（前后端保持一致）
 LEAD_STAGES = ("new", "contacting", "converted", "abandoned")
+
+# 客户意向度枚举（lead_refresh 判定回写，非法值拒绝入库）
+LEAD_INTENT_LEVELS = LeadIntentLevel.all_values()
 
 
 def _encrypt_phone(phone: Optional[str]) -> Optional[str]:
@@ -209,6 +213,77 @@ class LeadCaptureDB:
                 WHERE lead_id = %s AND tenant_id = %s
                 """,
                 (stage, lead_id, tenant_id),
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+
+    @staticmethod
+    def update_analysis(
+        lead_id: str,
+        tenant_id: str,
+        intent_level: str,
+        intent_reason: Optional[str],
+        demand_points: Optional[List[str]],
+        last_analyzed_message_id: Optional[str] = None,
+    ) -> bool:
+        """回写 lead_refresh 分析结果（意向度/判定依据/需求分条/分析游标）。
+
+        demand_points 以 JSONB 存储（字符串数组）；intent_level 非法值拒绝入库
+        （枚举以 src/saas/models/enums.py LeadIntentLevel 为准）。
+        """
+        if intent_level not in LEAD_INTENT_LEVELS:
+            logger.warning(
+                f"后端日志：线索分析回写拒绝非法意向度 lead_id={lead_id}, intent_level={intent_level}"
+            )
+            return False
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                UPDATE bs_lead_capture_leads
+                SET intent_level = %s,
+                    intent_reason = %s,
+                    demand_points = %s::jsonb,
+                    last_analyzed_message_id = %s,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE lead_id = %s AND tenant_id = %s
+                """,
+                (
+                    intent_level,
+                    intent_reason,
+                    json.dumps(demand_points, ensure_ascii=False) if demand_points is not None else None,
+                    last_analyzed_message_id,
+                    lead_id,
+                    tenant_id,
+                ),
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+
+    @staticmethod
+    def update_transfer_info(
+        lead_id: str,
+        tenant_id: str,
+        transferred_to: Optional[str],
+        servicer_name: Optional[str],
+    ) -> bool:
+        """回写人工服务归属（transfer_to_human 工具转接成功后调用）。
+
+        字段语义为「最近一次转人工」，多次转人工最后写赢；
+        last_human_transfer_at 由数据库时间戳记录。
+        """
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                UPDATE bs_lead_capture_leads
+                SET transferred_to = %s,
+                    servicer_name = %s,
+                    last_human_transfer_at = CURRENT_TIMESTAMP,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE lead_id = %s AND tenant_id = %s
+                """,
+                (transferred_to, servicer_name, lead_id, tenant_id),
             )
             conn.commit()
             return cursor.rowcount > 0

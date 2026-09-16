@@ -7,7 +7,7 @@
 - 不同 provider 切换
 - P1-2 修复：生产路径不缓存，provider 切换立即生效
 
-注：v3.1+ 模型映射表只收录现役主力（deepseek-v4-pro / deepseek-v4-flash，均 512K），
+注：v3.1+ 模型映射表只收录现役主力（deepseek-v4-pro / deepseek-flash，均 512K），
 其它 model_code（deepseek-chat / qwen3.7-flash / glm-4 等）已不在表中，会走 fallback。
 """
 
@@ -38,8 +38,8 @@ def test_known_model_deepseek_pro(service, monkeypatch):
 
 
 def test_known_model_deepseek_flash(service, monkeypatch):
-    """deepseek-v4-flash → 512K"""
-    _set_llm(monkeypatch, "deepseek", "deepseek-v4-flash")
+    """deepseek-flash → 512K"""
+    _set_llm(monkeypatch, "deepseek", "deepseek-flash")
     service._model_limit_cache = None
     assert service._get_model_limit() == 512_000
 

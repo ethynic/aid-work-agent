@@ -133,7 +133,7 @@ class TestDefaultLlmQwen:
         from src.tools.excel.excel_template_ai import _default_llm
 
         class _DsCfg:
-            model = 'deepseek-v4-flash'
+            model = 'deepseek-flash'
 
             def get_effective_keys(self):
                 return ['ds-key']
@@ -154,4 +154,4 @@ class TestDefaultLlmQwen:
 
         _, usage = _default_llm('p', return_usage=True)
         assert usage['cached_tokens'] == 400
-        assert usage['model'] == 'deepseek-v4-flash'
+        assert usage['model'] == 'deepseek-flash'

@@ -12,7 +12,7 @@
 
 - 单价单位：元/百万 token（_per_m 后缀）
 - credit_cost 精度：2 位小数，向上取整到 0.01
-- token_cost_prices 无匹配记录时按兜底模型 deepseek-v4-flash 的价格计费
+- token_cost_prices 无匹配记录时按兜底模型 deepseek-flash 的价格计费
   （2026-09-15 负责人定版，breakdown 记 price_model 供对账；兜底也无价目行
   或 model 为空时 credit_cost = 0，不阻断对话，记 warning 日志）
 """
@@ -27,7 +27,7 @@ from src.db.models import TokenCostPriceDB
 
 # 模型未配置单价时的兜底计价模型（负责人定版 2026-09-15：匹配不到按
 # deepseek v4 flash 的价格计算，不再落 0——部署主模型名可能不在价目表）
-BILLING_FALLBACK_MODEL = "deepseek-v4-flash"
+BILLING_FALLBACK_MODEL = "deepseek-flash"
 
 
 def calculate_credit_cost(
@@ -218,7 +218,7 @@ def calculate_credit_cost_with_breakdown(
         "credits": {"non_cached_input": float, "cached_input": float, "output": float},
     }
     cache_creation_input_tokens 按输入单价 125% 计费（显式缓存创建，百炼官方口径）。
-    模型未配置单价时按兜底模型 deepseek-v4-flash 的价格计费（2026-09-15 负责人定版，
+    模型未配置单价时按兜底模型 deepseek-flash 的价格计费（2026-09-15 负责人定版，
     breakdown 记 price_model 供对账）；兜底模型也无价目行或 model 为空时返回 (0.0, {})。
     """
     if not model:

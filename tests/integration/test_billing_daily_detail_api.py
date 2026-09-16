@@ -253,7 +253,7 @@ class TestDailyUsageDetailAPI:
                 "cached_input_tokens": 217088,
                 "completion_tokens": 123,
                 "total_tokens": 217852,
-                "model": "deepseek-v4-flash",
+                "model": "deepseek-flash",
                 "credit": 1.24,
                 "unit_prices": {"input_per_m": 3, "cached_input_per_m": 0.1, "output_per_m": 9},
                 "usage_factor": 50,
@@ -304,7 +304,7 @@ class TestDailyUsageDetailAPI:
         # 找到刚插入的记录，校验 7 分项结构
         items = [it for it in response["items"] if it["credit_cost"] == 3]
         assert len(items) == 1
-        assert items[0]["model"] == "deepseek-v4-flash", \
+        assert items[0]["model"] == "deepseek-flash", \
             "文本模型应从 usage_breakdown.chat.model 解析"
         bd = items[0]["breakdown_items"]
         assert len(bd) == 7, "应返回固定 7 分项"
@@ -383,7 +383,7 @@ class TestDailyUsageDetailAPI:
                 "completion_tokens": 200,
                 "cached_input_tokens": 600,
                 "total_tokens": 1200,
-                "model": "deepseek-v4-flash",
+                "model": "deepseek-flash",
                 "credit": 1.0,
             },
             "embedding": {
@@ -429,7 +429,7 @@ class TestDailyUsageDetailAPI:
         assert response["success"] is True
         items = [it for it in response["items"] if it["credit_cost"] == 2]
         assert len(items) == 1
-        assert items[0]["model"] == "deepseek-v4-flash", "老数据 model 也从 usage_breakdown.chat.model 解析"
+        assert items[0]["model"] == "deepseek-flash", "老数据 model 也从 usage_breakdown.chat.model 解析"
         bd = items[0]["breakdown_items"]
         assert len(bd) == 7
 

@@ -63,7 +63,7 @@ class TestRecordLlmUsageBilling:
         result = ClientUsageLogDB.record_llm_usage(
             tenant_id="tenant_test",
             binding_id="cb_test",
-            model="deepseek-v4-flash",
+            model="deepseek-flash",
             provider="deepseek",
             usage={"prompt_tokens": 1000, "completion_tokens": 500, "total_tokens": 1500},
         )
@@ -242,7 +242,7 @@ class TestClientLlmChatMoonshotBilling:
         from src.api.client_routes import LlmChatRequest
 
         gateway = SimpleNamespace()
-        gateway.get_model_name = lambda: "deepseek-v4-flash"
+        gateway.get_model_name = lambda: "deepseek-flash"
         gateway.get_provider_name = lambda: "deepseek"
 
         async def fake_chat(**kwargs):
@@ -264,7 +264,7 @@ class TestClientLlmChatMoonshotBilling:
             result = asyncio.run(client_routes.llm_chat(req, binding))
 
         mock_get_gw.assert_not_called()
-        assert result["model"] == "deepseek-v4-flash"
+        assert result["model"] == "deepseek-flash"
 
 
 # ============== 激活码生成与校验 ==============

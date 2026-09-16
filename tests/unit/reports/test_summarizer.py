@@ -59,7 +59,7 @@ class TestSummarizePersonal:
         })
 
         with patch("src.reports.summarizer.llm_gateway", mock_gateway), \
-             patch("src.reports.summarizer.get_lite_model", return_value="deepseek-v4-flash"):
+             patch("src.reports.summarizer.get_lite_model", return_value="deepseek-flash"):
             content, usage = await summarize_personal(
                 user_name="张三",
                 department="销售部",
@@ -88,7 +88,7 @@ class TestSummarizePersonal:
         })
 
         with patch("src.reports.summarizer.llm_gateway", mock_gateway), \
-             patch("src.reports.summarizer.get_lite_model", return_value="deepseek-v4-flash"):
+             patch("src.reports.summarizer.get_lite_model", return_value="deepseek-flash"):
             content, usage = await summarize_personal(
                 user_name="李四",
                 department=None,
@@ -107,7 +107,7 @@ class TestSummarizePersonal:
         mock_gateway.chat_lite = AsyncMock(side_effect=RuntimeError("API 限流"))
 
         with patch("src.reports.summarizer.llm_gateway", mock_gateway), \
-             patch("src.reports.summarizer.get_lite_model", return_value="deepseek-v4-flash"):
+             patch("src.reports.summarizer.get_lite_model", return_value="deepseek-flash"):
             with pytest.raises(RuntimeError, match="API 限流"):
                 await summarize_personal(
                     user_name="王五",
@@ -130,7 +130,7 @@ class TestSummarizePersonal:
         records = [{"user_message": f"任务 {i}", "execution_details": "{}"} for i in range(60)]
 
         with patch("src.reports.summarizer.llm_gateway", mock_gateway), \
-             patch("src.reports.summarizer.get_lite_model", return_value="deepseek-v4-flash"):
+             patch("src.reports.summarizer.get_lite_model", return_value="deepseek-flash"):
             await summarize_personal(
                 user_name="测试",
                 department=None,
@@ -174,7 +174,7 @@ class TestSummarizeTeam:
         ]
 
         with patch("src.reports.summarizer.llm_gateway", mock_gateway), \
-             patch("src.reports.summarizer.get_lite_model", return_value="deepseek-v4-flash"):
+             patch("src.reports.summarizer.get_lite_model", return_value="deepseek-flash"):
             content, usage = await summarize_team(
                 tenant_name="某公司",
                 report_date_str="2026-07-22",
@@ -206,7 +206,7 @@ class TestSummarizeTeam:
         })
 
         with patch("src.reports.summarizer.llm_gateway", mock_gateway), \
-             patch("src.reports.summarizer.get_lite_model", return_value="deepseek-v4-flash"):
+             patch("src.reports.summarizer.get_lite_model", return_value="deepseek-flash"):
             content, usage = await summarize_team(
                 tenant_name="某公司",
                 report_date_str="2026-07-22",
@@ -236,7 +236,7 @@ class TestSummarizeTeam:
         ]
 
         with patch("src.reports.summarizer.llm_gateway", mock_gateway), \
-             patch("src.reports.summarizer.get_lite_model", return_value="deepseek-v4-flash"):
+             patch("src.reports.summarizer.get_lite_model", return_value="deepseek-flash"):
             content, _ = await summarize_team(
                 tenant_name="某公司",
                 report_date_str="2026-07-22",
@@ -268,7 +268,7 @@ class TestSummarizeTeam:
         ]
 
         with patch("src.reports.summarizer.llm_gateway", mock_gateway), \
-             patch("src.reports.summarizer.get_lite_model", return_value="deepseek-v4-flash"):
+             patch("src.reports.summarizer.get_lite_model", return_value="deepseek-flash"):
             await summarize_team(
                 tenant_name="某公司",
                 report_date_str="2026-07-22",

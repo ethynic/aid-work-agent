@@ -43,7 +43,7 @@ def _make_settings(enable_thinking=False):
 def _make_deepseek_settings():
     """全局 provider 仍是 qwen，验证 provider_override / env 能切到 deepseek。"""
     class _DeepSeekCfg:
-        model = 'deepseek-v4-flash'
+        model = 'deepseek-flash'
         base_url = 'https://api.deepseek.com'
 
         def get_effective_keys(self):
@@ -167,21 +167,21 @@ class TestCallLlmProviderOverride:
         result = llm_client.call_llm(
             '测试prompt',
             provider_override='deepseek',
-            model_override='deepseek-v4-flash',
+            model_override='deepseek-flash',
             task='test',
         )
 
         assert result == '解析结果'
         assert captured['url'] == 'https://api.deepseek.com/chat/completions'
         assert captured['headers']['Authorization'] == 'Bearer test-deepseek-key'
-        assert captured['payload']['model'] == 'deepseek-v4-flash'
+        assert captured['payload']['model'] == 'deepseek-flash'
 
     def test_env_provider_and_model_fallback(self, monkeypatch):
         import llm_client
         import httpx
 
         monkeypatch.setenv('SKILL_LLM_PROVIDER', 'deepseek')
-        monkeypatch.setenv('SKILL_LLM_MODEL', 'deepseek-v4-flash')
+        monkeypatch.setenv('SKILL_LLM_MODEL', 'deepseek-flash')
         monkeypatch.setattr(settings_module, 'settings', _make_deepseek_settings())
 
         captured = {}
@@ -198,14 +198,14 @@ class TestCallLlmProviderOverride:
 
         assert captured['url'] == 'https://api.deepseek.com/chat/completions'
         assert captured['headers']['Authorization'] == 'Bearer test-deepseek-key'
-        assert captured['payload']['model'] == 'deepseek-v4-flash'
+        assert captured['payload']['model'] == 'deepseek-flash'
 
     def test_explicit_param_beats_env(self, monkeypatch):
         import llm_client
         import httpx
 
         monkeypatch.setenv('SKILL_LLM_PROVIDER', 'deepseek')
-        monkeypatch.setenv('SKILL_LLM_MODEL', 'deepseek-v4-flash')
+        monkeypatch.setenv('SKILL_LLM_MODEL', 'deepseek-flash')
         monkeypatch.setattr(settings_module, 'settings', _make_settings())
 
         captured = {}
@@ -278,9 +278,9 @@ class TestCallLlmEmptyContent:
             return _Resp({"choices": [{"message": {"content": "  "}}]})
 
         monkeypatch.setenv('SKILL_LLM_PROVIDER', 'deepseek')
-        monkeypatch.setenv('SKILL_LLM_MODEL', 'deepseek-v4-flash')
+        monkeypatch.setenv('SKILL_LLM_MODEL', 'deepseek-flash')
         monkeypatch.setattr(settings_module, 'settings', _make_deepseek_settings())
         monkeypatch.setattr(httpx, 'post', _fake_post)
 
-        with pytest.raises(ValueError, match='provider=deepseek.*model=deepseek-v4-flash'):
+        with pytest.raises(ValueError, match='provider=deepseek.*model=deepseek-flash'):
             llm_client.call_llm('p')

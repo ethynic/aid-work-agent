@@ -295,7 +295,7 @@ INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m
 VALUES ('qwen-plus', 0.8, 2.0, 0.16)
 ON CONFLICT (model_name) DO NOTHING;
 INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m)
-VALUES ('deepseek-v4-flash', 2.0, 8.0, 0.04)
+VALUES ('deepseek-flash', 2.0, 8.0, 0.04)
 ON CONFLICT (model_name) DO NOTHING;
 INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m)
 VALUES ('deepseek-v4-pro', 9.0, 27.0, 0.3)
@@ -2010,7 +2010,13 @@ CREATE TABLE IF NOT EXISTS bs_lead_capture_leads (
     stage TEXT DEFAULT 'new',              -- new | contacting | converted | abandoned
     assigned_to TEXT,                      -- 归属员工 user_id（= kf_account.tenant_user_id 快照）
     assignee_name TEXT,                    -- 归属员工姓名快照
-    transferred_to TEXT,                   -- 留资后若转人工，记录 servicer_userid
+    transferred_to TEXT,                   -- 留资后若转人工，记录 servicer_userid（最近一次转人工，transfer_to_human 工具回写）
+    servicer_name TEXT,                    -- 最近一次转人工的企微员工姓名（映射不到为空）
+    last_human_transfer_at TIMESTAMP,      -- 最近一次转人工时间
+    intent_level TEXT,                     -- 客户意向度 high | medium | low（lead_refresh LLM 判定）
+    intent_reason TEXT,                    -- 意向度判定依据（一句话，供运营理解）
+    demand_points JSONB,                   -- 客户需求分条（字符串数组，lead_refresh LLM 产出）
+    last_analyzed_message_id TEXT,         -- 分析游标：最后参与分析的消息 id（Phase 2 增量裁剪预留）
     session_id TEXT,                       -- 产生线索的渠道会话
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP

@@ -140,7 +140,7 @@ def call_llm(prompt: str, *, timeout: float = 300.0,
             keys = settings.llm.deepseek.get_effective_keys()
             if not keys:
                 raise ValueError("DeepSeek API key 未配置")
-            model = model_override or getattr(settings.llm.deepseek, 'model', None) or 'deepseek-v4-flash'
+            model = model_override or getattr(settings.llm.deepseek, 'model', None) or 'deepseek-flash'
             base_url = getattr(settings.llm.deepseek, 'base_url', None) or 'https://api.deepseek.com'
             api_url = f"{base_url.rstrip('/')}/chat/completions"
             # 兜底关思考：调用方 _llm_kwargs 已按生效 provider 处理，此处兜底防漏（evaluate 等

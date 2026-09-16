@@ -436,7 +436,7 @@ class TestExplicitModelHandling:
 
     背景：各 provider 的 request_body.update(kwargs) 会用 kwargs 里的 model
     覆盖请求体模型，若 failover 原样透传，链上所有 provider 都会收到同一个
-    模型串（如 qwen/deepseek-v4-flash）。
+    模型串（如 qwen/deepseek-flash）。
     """
 
     def _make_fg(self, slots):
@@ -465,9 +465,9 @@ class TestExplicitModelHandling:
 
         fg._call_slot = mock_call_slot
 
-        await fg.call_with_failover("chat", messages=[], model="deepseek-v4-flash")
+        await fg.call_with_failover("chat", messages=[], model="deepseek-flash")
 
-        assert captured == [("primary", "deepseek-v4-flash"), ("secondary", None)]
+        assert captured == [("primary", "deepseek-flash"), ("secondary", None)]
 
     @pytest.mark.asyncio
     async def test_model_kwarg_removed_from_provider_kwargs(self):
@@ -480,10 +480,10 @@ class TestExplicitModelHandling:
 
         fg._call_slot = mock_call_slot
 
-        await fg.call_with_failover("chat", messages=[], model="deepseek-v4-flash")
+        await fg.call_with_failover("chat", messages=[], model="deepseek-flash")
 
         assert "model" not in captured_kwargs
-        assert captured_kwargs["model_override"] == "deepseek-v4-flash"
+        assert captured_kwargs["model_override"] == "deepseek-flash"
 
     @pytest.mark.asyncio
     async def test_no_explicit_model_all_slots_use_own_config(self):
@@ -517,11 +517,11 @@ class TestExplicitModelHandling:
         fg._stream_slot = mock_stream
 
         chunks = []
-        async for chunk in fg.stream_with_failover("stream_chat", messages=[], model="deepseek-v4-flash"):
+        async for chunk in fg.stream_with_failover("stream_chat", messages=[], model="deepseek-flash"):
             chunks.append(chunk)
 
         assert chunks == ["fallback"]
-        assert captured == [("primary", "deepseek-v4-flash"), ("secondary", None)]
+        assert captured == [("primary", "deepseek-flash"), ("secondary", None)]
 
     @pytest.mark.asyncio
     async def test_thinking_kwarg_only_kept_for_primary_slot(self):

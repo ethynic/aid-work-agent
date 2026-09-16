@@ -80,7 +80,7 @@ class TestGeneratePersonal:
              patch("src.reports.generator.calculate_credit_cost", return_value=credit_cost), \
              patch("src.reports.generator.WorkDailyReportDB.upsert", return_value=upsert_result) as mock_upsert, \
              patch("src.reports.generator.ChatRecordDB.create") as mock_create_record, \
-             patch("src.reports.generator.get_lite_model", return_value="deepseek-v4-flash"):
+             patch("src.reports.generator.get_lite_model", return_value="deepseek-flash"):
             result = await gen.generate_personal(
                 tenant_id="t1",
                 user_id="u1",
@@ -97,7 +97,7 @@ class TestGeneratePersonal:
         assert result["report_date"] == "2026-07-22"
         assert result["summary_text"] == summary_text
         assert result["credit_cost"] == 5
-        assert result["model"] == "deepseek-v4-flash"
+        assert result["model"] == "deepseek-flash"
 
         # 验证 work_daily_reports UPSERT 被调用
         mock_upsert.assert_called_once()
@@ -106,7 +106,7 @@ class TestGeneratePersonal:
         assert upsert_kwargs["scope"] == "personal"
         assert upsert_kwargs["report_type"] == "daily"
         assert upsert_kwargs["credit_cost"] == 5
-        assert upsert_kwargs["model"] == "deepseek-v4-flash"
+        assert upsert_kwargs["model"] == "deepseek-flash"
 
         # 验证 chat_records 写入（计费链路）
         mock_create_record.assert_called_once()
@@ -115,7 +115,7 @@ class TestGeneratePersonal:
         assert create_kwargs["user_id"] == "u1"
         assert create_kwargs["source_type"] == "report_personal"
         assert create_kwargs["credit_cost"] == 5
-        assert create_kwargs["model"] == "deepseek-v4-flash"
+        assert create_kwargs["model"] == "deepseek-flash"
         assert create_kwargs["prompt_tokens"] == 500
         assert create_kwargs["completion_tokens"] == 200
         # session_id 格式：report:{tenant_id}:{user_id}:{date}:{type}
@@ -143,7 +143,7 @@ class TestGeneratePersonal:
              patch("src.reports.generator.summarize_personal") as mock_summarize, \
              patch("src.reports.generator.WorkDailyReportDB.upsert", return_value=upsert_result) as mock_upsert, \
              patch("src.reports.generator.ChatRecordDB.create") as mock_create_record, \
-             patch("src.reports.generator.get_lite_model", return_value="deepseek-v4-flash"):
+             patch("src.reports.generator.get_lite_model", return_value="deepseek-flash"):
             result = await gen.generate_personal(
                 tenant_id="t1",
                 user_id="u1",
@@ -183,7 +183,7 @@ class TestGeneratePersonal:
              patch("src.reports.generator.calculate_credit_cost", return_value=3), \
              patch("src.reports.generator.WorkDailyReportDB.upsert", return_value={"id": 1, "report_id": "wdr_x"}), \
              patch("src.reports.generator.ChatRecordDB.create", side_effect=RuntimeError("DB 错误")), \
-             patch("src.reports.generator.get_lite_model", return_value="deepseek-v4-flash"):
+             patch("src.reports.generator.get_lite_model", return_value="deepseek-flash"):
             # 不应抛出异常
             result = await gen.generate_personal(
                 tenant_id="t1",
@@ -219,7 +219,7 @@ class TestGeneratePersonal:
              patch("src.reports.generator.calculate_credit_cost", return_value=3), \
              patch("src.reports.generator.WorkDailyReportDB.upsert", return_value={"id": 1, "report_id": "wdr_x"}) as mock_upsert, \
              patch("src.reports.generator.ChatRecordDB.create"), \
-             patch("src.reports.generator.get_lite_model", return_value="deepseek-v4-flash"):
+             patch("src.reports.generator.get_lite_model", return_value="deepseek-flash"):
             await gen.generate_personal(
                 tenant_id="t1",
                 user_id="u1",
@@ -264,7 +264,7 @@ class TestGenerateTeam:
              patch("src.reports.generator.calculate_credit_cost", return_value=8), \
              patch("src.reports.generator.WorkDailyReportDB.upsert", return_value={"id": 1, "report_id": "wdr_team1"}) as mock_upsert, \
              patch("src.reports.generator.ChatRecordDB.create") as mock_create_record, \
-             patch("src.reports.generator.get_lite_model", return_value="deepseek-v4-flash"):
+             patch("src.reports.generator.get_lite_model", return_value="deepseek-flash"):
             result = await gen.generate_team(
                 tenant_id="t1",
                 tenant_name="某公司",
@@ -325,7 +325,7 @@ class TestGenerateTeam:
              patch("src.reports.generator.summarize_team") as mock_summarize, \
              patch("src.reports.generator.WorkDailyReportDB.upsert", return_value={"id": 1, "report_id": "wdr_team_empty"}), \
              patch("src.reports.generator.ChatRecordDB.create") as mock_create_record, \
-             patch("src.reports.generator.get_lite_model", return_value="deepseek-v4-flash"):
+             patch("src.reports.generator.get_lite_model", return_value="deepseek-flash"):
             result = await gen.generate_team(
                 tenant_id="t1",
                 tenant_name="某公司",
@@ -375,7 +375,7 @@ class TestGenerateTeam:
              patch("src.reports.generator.calculate_credit_cost", return_value=20), \
              patch("src.reports.generator.WorkDailyReportDB.upsert", return_value={"id": 1, "report_id": "wdr_team_trunc"}), \
              patch("src.reports.generator.ChatRecordDB.create") as mock_create_record, \
-             patch("src.reports.generator.get_lite_model", return_value="deepseek-v4-flash"):
+             patch("src.reports.generator.get_lite_model", return_value="deepseek-flash"):
             result = await gen.generate_team(
                 tenant_id="t1",
                 tenant_name="某公司",

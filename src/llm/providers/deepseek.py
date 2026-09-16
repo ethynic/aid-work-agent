@@ -29,7 +29,7 @@ class DeepSeekProvider(BaseLLMProvider):
     def __init__(
         self,
         api_key: str,
-        model: str = "deepseek-v4-flash",
+        model: str = "deepseek-flash",
         base_url: Optional[str] = None,
         enable_thinking: bool = True,
         **kwargs

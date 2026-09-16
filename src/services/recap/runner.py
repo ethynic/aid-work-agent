@@ -127,9 +127,10 @@ def parse_recap_tasks(recap_config: Optional[Dict[str, Any]]) -> List[RecapTaskC
 def _system_switch_enabled(task_name: str) -> bool:
     """系统级开关（config.yaml），任一任务的总闸映射在此维护
 
-    external_push -> settings.external_push.pre_sales.enabled（kill switch，回滚手段）
+    external_push / external_push_human -> settings.external_push.pre_sales.enabled
+    （kill switch，回滚手段；人工期推送与 AI 期推送共用同一 settings 块）
     """
-    if task_name == "external_push":
+    if task_name in ("external_push", "external_push_human"):
         try:
             from src.config.settings import settings
             return bool(settings.external_push.pre_sales.enabled)
@@ -229,6 +230,64 @@ def trigger_recap(
 
 # 后台任务自持引用集（仅防 GC，无其他语义）
 _background_tasks: set = set()
+
+
+def enqueue_human_period_tasks(tenant_id: str, session_id: str, round_message_id: Any) -> None:
+    """人工期消息落库后的沉淀任务入队（轻量，不依赖 agent 实例）
+
+    人工期（转人工后）无智能体轮次，trigger_recap 不会被调用——入口 B 在
+    channel_routes._persist_kf_context_customer_message 落库成功后调用本函数，
+    构造最小 RecapPayload rpush 到 RECAP_QUEUE，由 background_runner 消费。
+    任务均为拉模式（执行时自采 DB），user_content / assistant_reply 留空：
+    - lead_refresh：留资线索意向度/需求刷新（未留资会话 no-op）
+    - external_push_human：人工期对话推送第三方系统（未对接租户文档 no-op）
+
+    任何异常吞掉不阻断消息链路；Redis 不可用时直接放弃（不降级进程内执行——
+    消息处理协程在 API worker 中，进程内执行会把 LLM 分析拖回 worker 生命周期，
+    且下一条客户消息会再次触发，无需补偿）。
+    """
+    try:
+        from src.core.temp_logger import tlog as _tlog
+
+        # round_message_id（企微回调 msgid）仅作幂等键成分；缺失时幂等键退化为
+        # 固定串，首条 SET NX 占坑 24h 会把该租户所有线索的入口 B 消息全部
+        # dedup 掉（功能静默停摆），必须与 trigger_recap 同款守卫放弃执行
+        if not round_message_id:
+            logger.warning(
+                f"[recap] enqueue_human_period_tasks round_message_id 缺失，放弃入队 session={session_id}"
+            )
+            return
+
+        payload = RecapPayload(
+            tenant_id=tenant_id,
+            session_id=session_id,
+            # session_id 末段即 subagent_id（与 trigger_recap 的回退逻辑一致）
+            subagent_name=_subagent_name_from_session(session_id),
+            round_message_id=round_message_id,
+            user_content="",
+            assistant_reply="",
+            # 人工期消息无系统用户上下文，user_id 不设置——计费归属仅到租户
+            # （chat_records.user_id 为空，与 external_push 请求期触发不同）
+            task_config=[
+                {"name": "lead_refresh", "when": "every_round", "enabled": True},
+                {"name": "external_push_human", "when": "every_round", "enabled": True},
+            ],
+            enqueued_at=time.time(),
+        )
+        enqueued = redis_client.rpush(
+            redis_client.make_key(CacheKeys.RECAP_QUEUE),
+            payload.to_dict(),
+        )
+        _tlog(
+            "人工期任务",
+            "入口B入队{res}: tenant={tid}, session={sid}, round={rid}",
+            res="ok" if enqueued else "failed(redis不可用)",
+            tid=tenant_id,
+            sid=session_id,
+            rid=round_message_id,
+        )
+    except Exception as e:
+        logger.warning(f"[recap] 人工期任务入队异常（不影响消息链路）: {e}")
 
 
 def rebuild_tasks(task_config: Optional[List[Dict[str, Any]]]) -> List[RecapTaskConfig]:

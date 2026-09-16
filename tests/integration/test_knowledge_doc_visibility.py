@@ -4,8 +4,8 @@
 「兼容回归」在知识库侧的部分：
 - deleted / 过期文档检索（FTS 真实查询）不可见；active 外部文档可见
 - 列表/计数默认隐藏 deleted；include_deleted 放行；过期文档管理端可见
-- 外部文档移动/物理删除被拒绝；手动上传文档移动/删除回归
-- 外部无文件文档下载/票据 400 + 原文 URL；deleted 文档 chunks 租户 404、
+- 外部文档移动被拒绝、物理删除放行（联动标记同步文章行）；手动上传文档移动/删除回归
+- 外部无文件文档下载 302 重定向原文、票据端点 200 + external + 原文 URL；deleted 文档 chunks 租户 404、
   platform_admin 可审计
 
 DB 不可达时整模块 pytest.skip（tests/integration/conftest.py init_db_pool）。
@@ -223,18 +223,19 @@ class TestExternalDocBoundary:
             assert cur.fetchone()["source_type"] == "file"
 
     @pytest.mark.asyncio
-    async def test_delete_external_rejected(self, env):
-        """外部文档物理删除被拒绝，文档保留"""
+    async def test_delete_external_allowed(self, env):
+        """外部文档允许删除（external_id 为空的存量行仅删文档，不触碰文章表）"""
+        from unittest.mock import AsyncMock, patch
         from src.knowledge.service import KnowledgeBaseService
         svc = KnowledgeBaseService()
-        result = await svc.delete_document(env["doc_external"], tenant_id=env["tenant"])
-        assert result["success"] is False
-        assert result["status"] == 400
+        with patch("src.knowledge.service.get_vector_db", return_value=AsyncMock()):
+            result = await svc.delete_document(env["doc_external"], tenant_id=env["tenant"])
+        assert result["success"] is True
         from src.db.database import get_db_connection
         with get_db_connection() as conn:
             cur = conn.cursor()
             cur.execute("SELECT 1 FROM documents WHERE id = %s", (env["doc_external"],))
-            assert cur.fetchone() is not None
+            assert cur.fetchone() is None
 
     @pytest.mark.asyncio
     async def test_delete_manual_regression(self, env):
@@ -247,21 +248,20 @@ class TestExternalDocBoundary:
         assert result["success"] is True
 
     @pytest.mark.asyncio
-    async def test_download_external_400_with_original_url(self, env):
-        """外部无文件文档下载返回明确错误 + 原文 URL"""
-        from fastapi import HTTPException
+    async def test_download_external_redirects_to_original_url(self, env):
+        """外部无文件文档下载 302 重定向原文；票据端点 200 + external + 原文 URL"""
         from src.knowledge import api as kb_api
 
         try:
             set_tenant_context(env["tenant"], "u1")
-            with pytest.raises(HTTPException) as exc_info:
-                await kb_api.download_document(env["doc_external"])
-            assert exc_info.value.status_code == 400
-            assert exc_info.value.detail["original_url"] == EXT_URL
+            resp = await kb_api.download_document(env["doc_external"])
+            assert resp.status_code == 302
+            assert resp.headers["location"] == EXT_URL
 
             resp = await kb_api.create_download_ticket(env["doc_external"])
-            assert resp.status_code == 400
-            assert json.loads(bytes(resp.body))["original_url"] == EXT_URL
+            assert resp["success"] is True
+            assert resp["external"] is True
+            assert resp["original_url"] == EXT_URL
         finally:
             clear_tenant_context()
 

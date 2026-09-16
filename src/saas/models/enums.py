@@ -481,3 +481,28 @@ class ChatRecordSourceType(str, Enum):
             self.BACKGROUND_LLM: "后台 LLM 任务",
         }
         return mapping.get(self, "未知")
+
+
+class LeadIntentLevel(str, Enum):
+    """bs_lead_capture_leads.intent_level 枚举值（留资线索客户意向度，lead_refresh 判定）
+
+    数据库存储：TEXT；枚举值 = 数据库存储值。
+    由 lead_refresh recap 适配器 LLM 分析产出并回写，非法值不入库。
+    设计文档：docs/subagent/pre-sales/lead-capture-refresh-design.md
+    """
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+
+    @classmethod
+    def all_values(cls) -> list[str]:
+        return [m.value for m in cls]
+
+    @property
+    def display_name(self) -> str:
+        mapping = {
+            self.HIGH: "高",
+            self.MEDIUM: "中",
+            self.LOW: "低",
+        }
+        return mapping.get(self, "未知")

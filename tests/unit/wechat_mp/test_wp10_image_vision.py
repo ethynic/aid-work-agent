@@ -704,7 +704,7 @@ class TestVisionTargets:
                             raising=False)
         monkeypatch.setattr(settings.llm.zhipu, "model", "GLM-5.3-Flash", raising=False)
         # deepseek 默认模型为文本模型，不在多模态清单 → 不进入目标
-        monkeypatch.setattr(settings.llm.deepseek, "model", "deepseek-v4-flash",
+        monkeypatch.setattr(settings.llm.deepseek, "model", "deepseek-flash",
                             raising=False)
         self._keys_patch(monkeypatch, ["k"])
 

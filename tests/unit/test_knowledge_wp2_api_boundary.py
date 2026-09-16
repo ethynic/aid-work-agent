@@ -1,6 +1,6 @@
 """WP2 独立验证：API 层外部文档边界探针（开发者自承未验证项）
 
-- 外部文档删除/移动拦截的 API 级状态码
+- 外部文档可删除（联动标记同步文章行）、移动拦截的 API 级状态码
 - include_deleted 权限边界：非 platform_admin 角色（含租户管理员）传入被忽略
 - 跨租户下载外部无文件文档的响应码顺序（权限检查应先于来源检查）
 """
@@ -71,16 +71,24 @@ def _ctx():
 
 class TestApiDeleteExternal:
     @pytest.mark.asyncio
-    async def test_delete_route_returns_400_not_404(self):
-        """API 级：外部文档删除经路由返回 400（service status 透出）"""
+    async def test_delete_route_external_doc_succeeds(self):
+        """API 级：外部文档删除经路由返回 200，并联动标记同步文章行 deleted"""
+        from unittest.mock import AsyncMock
         from src.knowledge import api as kb_api
-        cur = _FakeCursor([{"file_path": None, "origin": "wechat_mp"}])
+        cur = _FakeCursor([{"file_path": None, "origin": "wechat_mp",
+                            "external_id": "wx:app1:a1:0", "tenant_id": "t1"}])
         set_tenant_context("t1", "u1")
         with patch.object(KnowledgeBaseService, "_get_db_connection",
-                          return_value=_FakeConn(cur)):
+                          return_value=_FakeConn(cur)), \
+             patch("src.knowledge.service.get_vector_db", return_value=AsyncMock()):
             resp = await kb_api.delete_document(7, http_request=_req("employee"))
-        assert resp.status_code == 400
-        assert "同步任务管理" in json.loads(bytes(resp.body))["error"]
+        assert resp.status_code == 200
+        assert json.loads(bytes(resp.body))["success"] is True
+        article_updates = [(sql, params) for sql, params in cur.executed
+                           if "bs_wechat_mp_articles" in sql]
+        assert len(article_updates) == 1
+        assert "status = 'deleted'" in article_updates[0][0]
+        assert article_updates[0][1] == ("t1", "wx:app1:a1:0")
 
 
 class TestIncludeDeletedRoles:

@@ -155,3 +155,4 @@ tmp-boss-diag*/
 deploy/ssh_key
 .claude/scheduled_tasks.lock
 tmp/
+deploy/id_rsa

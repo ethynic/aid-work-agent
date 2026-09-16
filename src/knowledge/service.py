@@ -639,6 +639,10 @@ class KnowledgeBaseService:
           （hybrid_retriever/vector_db）及下载侧口径一致，绝不触碰真实租户数据
         - global_view=True（认证 platform_admin 全局视图）且无租户上下文：
           不携带租户过滤，恢复平台管理员跨租户管理文档的原行为
+        - 外部来源文档（origin != manual_upload）允许删除，但必须同时把同步任务
+          的文章行标记 deleted，否则下次复核 content_hash 未变 + doc 行不存在
+          会走重建分支（付费重拉重建）。wechat_mp 语义：文章行 deleted 后源未变
+          则静默跳过，源重新发布（wx_update_time 变化）才会恢复重建
         """
         # 租户作用域条件（常量拼接，无用户输入插值；无租户上下文时收窄到无主文档）
         if tenant_id:
@@ -651,24 +655,16 @@ class KnowledgeBaseService:
             with self._get_db_connection() as conn:
                 cursor = conn.cursor()
 
-                # 获取文件路径与来源（带租户条件，跨租户文档视为不存在）
+                # 获取文件路径、来源与外部标识（带租户条件，跨租户文档视为不存在）
                 cursor.execute(
-                    f"SELECT file_path, origin FROM documents WHERE id = %s AND {scope_sql}",
+                    f"SELECT file_path, origin, external_id, tenant_id FROM documents "
+                    f"WHERE id = %s AND {scope_sql}",
                     [doc_id] + scope_params)
                 row = cursor.fetchone()
                 if not row:
                     return {"success": False, "error": "文档不存在"}
 
-                # 外部来源文档（公众号同步等）禁止走通用物理删除入口，
-                # 由同步任务统一管理（软删除/更新），platform_admin 全局视图同样不可删
-                if (row.get("origin") or "manual_upload") != "manual_upload":
-                    return {
-                        "success": False,
-                        "error": "外部来源文档由同步任务管理，不支持删除",
-                        "status": 400,
-                    }
-
-                # row 是 dict: {"file_path": ..., "origin": ...}，对应 SELECT file_path, origin
+                # row 是 dict: {"file_path", "origin", "external_id", "tenant_id"}
                 file_path = row["file_path"]
 
                 # 删除向量（复用同一个数据库连接，避免锁冲突；文档归属已在上方按租户校验）
@@ -689,6 +685,19 @@ class KnowledgeBaseService:
                 cursor.execute(
                     f"DELETE FROM documents WHERE id = %s AND {scope_sql}",
                     [doc_id] + scope_params)
+
+                # 外部来源文档联动同步任务：标记对应文章行 deleted，防止复核重建。
+                # 新增外部来源（origin）时必须在此挂接各自的同步抑制逻辑
+                if (row.get("origin") or "manual_upload") == "wechat_mp" and row.get("external_id"):
+                    cursor.execute(
+                        """
+                        UPDATE bs_wechat_mp_articles
+                        SET status = 'deleted', processing_status = 'success',
+                            last_checked_at = now(), next_retry_at = NULL, error_message = NULL
+                        WHERE tenant_id = %s AND external_id = %s AND status <> 'deleted'
+                        """,
+                        (row.get("tenant_id"), row["external_id"]),
+                    )
 
                 conn.commit()
 

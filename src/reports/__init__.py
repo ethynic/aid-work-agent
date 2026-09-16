@@ -5,7 +5,7 @@
 
 核心组件：
 - aggregator.py：从 chat_records 聚合输入数据
-- summarizer.py：LLM 摘要生成（走 deepseek-v4-flash 小模型）
+- summarizer.py：LLM 摘要生成（走 deepseek-flash 小模型）
 - time_saver.py：节省时间估算
 - generator.py：日报生成主流程（含写 chat_records 计费链路）
 - db.py：work_daily_reports / work_report_preferences 表 CRUD

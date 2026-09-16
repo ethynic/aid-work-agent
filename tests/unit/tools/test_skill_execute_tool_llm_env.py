@@ -30,7 +30,7 @@ class TestSkillExecuteToolLlmEnv:
             skill_registry=registry,
             llm_env={
                 "SKILL_LLM_PROVIDER": "deepseek",
-                "SKILL_LLM_MODEL": "deepseek-v4-flash",
+                "SKILL_LLM_MODEL": "deepseek-flash",
             },
         )
 
@@ -46,7 +46,7 @@ class TestSkillExecuteToolLlmEnv:
         kwargs = executor.execute_skill_command.await_args.kwargs
         assert kwargs["env_extra"] == {
             "SKILL_LLM_PROVIDER": "deepseek",
-            "SKILL_LLM_MODEL": "deepseek-v4-flash",
+            "SKILL_LLM_MODEL": "deepseek-flash",
         }
 
     def test_no_llm_env_defaults_empty(self):

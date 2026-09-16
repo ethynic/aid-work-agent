@@ -180,6 +180,12 @@ def init_saas_tables(conn):
             assigned_to TEXT,
             assignee_name TEXT,
             transferred_to TEXT,
+            servicer_name TEXT,
+            last_human_transfer_at TIMESTAMP,
+            intent_level TEXT,
+            intent_reason TEXT,
+            demand_points JSONB,
+            last_analyzed_message_id TEXT,
             session_id TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP

@@ -98,7 +98,7 @@ def _llm_dispatch_by_source(golden):
             if label in prompt:
                 return (json.dumps({"records": records}, ensure_ascii=False),
                         {"prompt_tokens": 100, "completion_tokens": 50,
-                         "total_tokens": 150, "model": "deepseek-v4-flash"})
+                         "total_tokens": 150, "model": "deepseek-flash"})
         raise AssertionError(f"mock LLM 无法识别 prompt: {prompt[:120]}")
 
     return llm
@@ -544,7 +544,7 @@ class TestSchemaReextract:
                 stages.append("schema")
                 return (json.dumps({"fields": schema["fields"]}, ensure_ascii=False),
                         {"prompt_tokens": 500, "completion_tokens": 100,
-                         "total_tokens": 600, "model": "deepseek-v4-flash"})
+                         "total_tokens": 600, "model": "deepseek-flash"})
             stages.append("extract")
             by_source = {}
             for g in golden:
@@ -553,7 +553,7 @@ class TestSchemaReextract:
                 if label in prompt:
                     return (json.dumps({"records": records}, ensure_ascii=False),
                             {"prompt_tokens": 100, "completion_tokens": 50,
-                             "total_tokens": 150, "model": "deepseek-v4-flash"})
+                             "total_tokens": 150, "model": "deepseek-flash"})
             raise AssertionError(f"无法识别 prompt: {prompt[:120]}")
 
         result = pipeline.run_etl(

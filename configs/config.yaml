@@ -38,7 +38,7 @@ llm:
   # 轻量小模型（低成本简单任务：报告/复盘/评分/空态摘要），独立于主链路 model。
   # 写法：
   #   - "provider/model"（如 "qwen/qwen3.8-flash"）：跨 provider 调用，用该 provider 的 key/base_url
-  #   - 纯模型名（如 "deepseek-v4-flash"）：用当前主 provider
+  #   - 纯模型名（如 "deepseek-flash"）：用当前主 provider
   # 未配置时 fallback 到主模型 model；详见 docs/research/ai-agent-experience-daily-report-research.md §4.7.6
   lite_model: ${LITE_MODEL_CODE:-}
   # qwen 推理模型（qwen3.x-flash/plus 系）思考开关。true = 思考开启，
@@ -72,7 +72,7 @@ llm:
     queue_timeout: 30
   deepseek:
     api_keys: ${DEEPSEEK_API_KEYS:-}
-    model: ${DEEPSEEK_MODEL_CODE:-deepseek-v4-flash}
+    model: ${DEEPSEEK_MODEL_CODE:-deepseek-flash}
     base_url: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
     max_concurrent_per_key: 2
     queue_timeout: 30
@@ -164,7 +164,7 @@ memory:
     summary_llm_retry: 2             # 摘要 LLM 调用重试次数
     summary_llm:
       provider: deepseek             # 走便宜模型
-      model: deepseek-v4-flash
+      model: deepseek-flash
       timeout_sec: 30
     # 工具结果预处理
     large_tool_result_truncate_chars: 2000
@@ -402,7 +402,7 @@ session_tasks:
   decision_lease_seconds: 120     # 单决策处理租约（覆盖模型调用与一次修复/重试窗口）
   decision_stale_seconds: 900     # 租约过期仍未确认结束的回收线：决策 failed + 任务转人工（§13.5 禁重叠重试）
   decision_batch_limit: 5         # 每 tick 最多领取决策数
-  decision_model_max_tokens: 1000 # 决策/完成审核调用输出上限（有界预留依据）
+  decision_model_max_tokens: 10000 # 决策/完成审核生成上限，含思考 token
   decision_reserve_units: 1.0     # 单次模型调用保守预留积分（实际按 token 用量结算）
   execution_reserve_units: 0.0    # 单次发送执行预留积分（weixin v2 发送现无按次积分价；>0 才预留，不虚构按轮收费）
   opening_enabled: true           # 开场白决策开关（false 拒绝 opening 创建）

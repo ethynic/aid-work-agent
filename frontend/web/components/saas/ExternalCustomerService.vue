@@ -475,6 +475,9 @@
               <template #phone="{ row }">
                 <span :class="row.phone ? '' : 'text-muted'">{{ row.phone || '—' }}</span>
               </template>
+              <template #intent_level="{ row }">
+                <BaseBadge :intent="getIntentInfo(row.intent_level).intent">{{ getIntentInfo(row.intent_level).label }}</BaseBadge>
+              </template>
               <template #stage="{ row }">
                 <BaseBadge :intent="getStageInfo(row.stage).intent">{{ getStageInfo(row.stage).label }}</BaseBadge>
               </template>
@@ -525,13 +528,35 @@
             <div class="text-muted text-xs mb-1">归属员工</div>
             <div class="text-default">{{ leadDetail.assignee_name || '-' }}</div>
           </div>
+          <div>
+            <div class="text-muted text-xs mb-1">客户意向度</div>
+            <div class="flex items-center gap-2">
+              <BaseBadge :intent="getIntentInfo(leadDetail.intent_level).intent">{{ getIntentInfo(leadDetail.intent_level).label }}</BaseBadge>
+            </div>
+            <div v-if="leadDetail.intent_reason" class="text-muted text-xs mt-1">{{ leadDetail.intent_reason }}</div>
+          </div>
+          <div>
+            <div class="text-muted text-xs mb-1">人工服务归属</div>
+            <div class="text-default">{{ formatServicer(leadDetail) }}</div>
+            <div v-if="leadDetail.last_human_transfer_at" class="text-muted text-xs mt-1">转人工时间：{{ formatDate(leadDetail.last_human_transfer_at) }}</div>
+          </div>
           <div class="col-span-2">
             <div class="text-muted text-xs mb-1">留资时间</div>
             <div class="text-default">{{ formatDate(leadDetail.created_at) }}</div>
           </div>
           <div class="col-span-2">
-            <div class="text-muted text-xs mb-1">需求摘要</div>
+            <div class="text-muted text-xs mb-1">需求摘要（留资时点）</div>
             <div class="text-default whitespace-pre-wrap">{{ leadDetail.demand_summary || '-' }}</div>
+          </div>
+          <div class="col-span-2">
+            <div class="text-muted text-xs mb-1">客户需求（随对话动态更新）</div>
+            <div v-if="formatDemandPoints(leadDetail.demand_points).length" class="space-y-1">
+              <div v-for="(p, i) in formatDemandPoints(leadDetail.demand_points)" :key="i" class="text-default flex gap-2">
+                <span class="text-muted">{{ i + 1 }}.</span>
+                <span>{{ p }}</span>
+              </div>
+            </div>
+            <div v-else class="text-muted">暂无（对话进展后由系统自动分析更新）</div>
           </div>
           <div class="col-span-2 flex items-center gap-2 pt-3 border-t border-default">
             <span class="text-muted text-xs">更新阶段</span>
@@ -1002,6 +1027,26 @@ function getMethodLabel(method: string | null | undefined): string {
   return method || '-'
 }
 
+// 客户意向度展示映射（与后端 LeadIntentLevel 枚举保持一致，lead_refresh 分析回写）
+const leadIntentOptions: Record<string, { label: string; intent: any }> = {
+  high: { label: '高', intent: 'danger' },
+  medium: { label: '中', intent: 'warning' },
+  low: { label: '低', intent: 'neutral' },
+}
+function getIntentInfo(level: string | null | undefined): { label: string; intent: any } {
+  return leadIntentOptions[level || ''] || { label: '未分析', intent: 'neutral' }
+}
+function formatDemandPoints(points: any): string[] {
+  if (!Array.isArray(points)) return []
+  return points.filter((p) => typeof p === 'string' && p.trim())
+}
+function formatServicer(row: any): string {
+  const name = row.servicer_name || ''
+  const userid = row.transferred_to || ''
+  if (name && userid) return `${name}（${userid}）`
+  return name || userid || '-'
+}
+
 const leadsLoading = ref(false)
 const leadStats = ref<{ total_leads: number; by_contact_method: any[]; by_kf_account: any[] }>({
   total_leads: 0,
@@ -1136,6 +1181,7 @@ const leadColumns = [
   { key: 'contact_method', label: '留资方式' },
   { key: 'kf_account_name', label: '客服账号', tooltip: (row: any) => row.kf_account_name || row.channel_chat_id || '-' },
   { key: 'assignee_name', label: '归属员工', tooltip: (row: any) => row.assignee_name || '-' },
+  { key: 'intent_level', label: '意向度', tooltip: (row: any) => row.intent_reason || '-' },
   { key: 'stage', label: '阶段' },
   { key: 'created_at', label: '留资时间' },
   { key: 'actions', label: '操作' },

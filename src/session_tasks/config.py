@@ -32,7 +32,7 @@ class SessionTasksConfig:
     decision_lease_seconds: int = 120
     decision_stale_seconds: int = 900
     decision_batch_limit: int = 5
-    decision_model_max_tokens: int = 1000
+    decision_model_max_tokens: int = 10000
     decision_reserve_units: float = 1.0
     execution_reserve_units: float = 0.0
 
@@ -90,7 +90,7 @@ def get_session_tasks_config() -> SessionTasksConfig:
         decision_lease_seconds=int(node.get("decision_lease_seconds") or 120),
         decision_stale_seconds=int(node.get("decision_stale_seconds") or 900),
         decision_batch_limit=int(node.get("decision_batch_limit") or 5),
-        decision_model_max_tokens=int(node.get("decision_model_max_tokens") or 1000),
+        decision_model_max_tokens=int(node.get("decision_model_max_tokens") or 10000),
         decision_reserve_units=float(node.get("decision_reserve_units") or 1.0),
         execution_reserve_units=float(node.get("execution_reserve_units") or 0.0),
     )

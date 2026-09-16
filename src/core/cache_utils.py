@@ -82,6 +82,15 @@ class CacheKeys:
     # recap 任务队列：recap_task_queue（FIFO list，API worker 入队、background runner
     # 消费，把 recap 执行移出 HTTP worker 生命周期；无 TTL，消费即出队）
     RECAP_QUEUE = "recap_task_queue"
+    # lead_refresh 冷却防抖：lead_refresh_cooldown:{tenant_id}:{lead_id}
+    # （留资线索分析 5 分钟冷却占坑，SET NX EX；跳过的消息由下一次触发一并覆盖，
+    # 分析失败时删键允许重试；docs/subagent/pre-sales/lead-capture-refresh-design.md §5.3.1）
+    LEAD_REFRESH_COOLDOWN = "lead_refresh_cooldown"
+    # external_push_human 冷却防抖：external_push_human_cooldown:{tenant_id}:{session_id}
+    # （人工期对话推送 5 分钟冷却占坑，SET NX EX；不要求留资故按 session 维度；
+    # 跳过的消息由下一次触发一并覆盖，推送失败时删键允许重试；
+    # docs/subagent/pre-sales/lead-capture-refresh-design.md §9.5）
+    EXTERNAL_PUSH_HUMAN_COOLDOWN = "external_push_human_cooldown"
 
 
 # ============== 通用缓存函数 ==============

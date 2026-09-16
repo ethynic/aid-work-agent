@@ -124,7 +124,7 @@ class LLMConfig(BaseModel):
     # 轻量小模型（低成本简单任务：报告/复盘/评分/空态摘要），独立于主链路 model。
     # 支持两种写法：
     #   - "provider/model"（如 "qwen/qwen3.8-flash"）：跨 provider 调用，用该 provider 的 key/base_url
-    #   - 纯模型名（如 "deepseek-v4-flash"）：用当前主 provider
+    #   - 纯模型名（如 "deepseek-flash"）：用当前主 provider
     # 未配置（None / 空字符串）时 fallback 到当前主 provider 的 model。
     # 详见 docs/research/ai-agent-experience-daily-report-research.md §4.7.6
     lite_model: Optional[str] = None
@@ -253,7 +253,7 @@ class ShortTermMemoryConfig(BaseModel):
 class SummaryLLMConfig(BaseModel):
     """摘要 LLM 配置（独立于主 LLM，可走便宜模型）"""
     provider: str = "deepseek"
-    model: str = "deepseek-v4-flash"
+    model: str = "deepseek-flash"
     timeout_sec: int = 30
 
 
