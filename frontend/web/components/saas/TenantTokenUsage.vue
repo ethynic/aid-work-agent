@@ -322,9 +322,6 @@ const detailColumns = computed(() => {
     { key: 'channel_label', label: '渠道会话', width: '150px' },
     { key: 'source_type', label: '来源', width: '120px' },
   ]
-  if (isPlatformAdmin.value) {
-    cols.push({ key: 'model', label: '文本模型', width: '150px' })
-  }
   cols.push({ key: 'credit_cost', label: '消耗积分', width: '100px' })
   return cols
 })
