@@ -2891,16 +2891,16 @@ async def _persist_kf_context_customer_message(
             tenant_id=tenant_id,
             metadata=metadata,
         )
-        # 线索刷新入口 B（#64）：人工期无智能体轮次、recap 不会被触发，落库后
-        # 轻量入队 lead_refresh（毫秒级 Redis 操作，异常吞掉不阻断消息链路；
-        # 未留资会话由适配器消费时 no-op）。round_message_id 用企微回调 msgid
-        # （仅作幂等键成分，真正的频控在适配器冷却检查）
+        # 人工期沉淀任务入口 B（#64）：人工期无智能体轮次、recap 不会被触发，落库后
+        # 轻量入队 lead_refresh + external_push_human（毫秒级 Redis 操作，异常吞掉
+        # 不阻断消息链路；未留资/未对接租户由适配器消费时 no-op）。round_message_id
+        # 用企微回调 msgid（仅作幂等键成分，真正的频控在适配器冷却检查）
         try:
-            from src.services.recap.runner import enqueue_lead_refresh
+            from src.services.recap.runner import enqueue_human_period_tasks
 
-            enqueue_lead_refresh(tenant_id, session_id, msg.get("msgid", ""))
+            enqueue_human_period_tasks(tenant_id, session_id, msg.get("msgid", ""))
         except Exception as enqueue_err:
-            logger.warning(f"[wecom_kf] lead_refresh 入队失败（不阻断）: {enqueue_err}")
+            logger.warning(f"[wecom_kf] 人工期任务入队失败（不阻断）: {enqueue_err}")
         _kf_tlog(
             "人工期/已结束客户消息落库: tenant={tenant}, session_id={sid}, msgid={mid}, "
             "source={source}, text={text}",

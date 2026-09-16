@@ -74,7 +74,7 @@
 | 20260616-1526 | 企业微信个人账号 RPA 接入 | 🔧 部分完成 | **服务端**（已完成）：schemas/db/SQL 表结构锁定共享契约；auth(HMAC)/router/message/action_client/adapter/connection/sec… | [协议](system/wecom-personal-rpa-protocol.md) / [架构设计](system/wecom-personal-rpa-design.md) / [客户端设计](system/wecom-personal-rpa-client-design.md) / [绑定管理 Tab 设计](system/wecom-personal-rpa-portal-binding-design.md) / [服务端监听存档设计](system/wecom-personal-rpa-server-archive-listener-design.md) / [SDK 部署](system/wecom-personal-rpa-sdk-deploy.md) | [服务端+部署计划](plans/plan-wecom-personal-rpa.md) / [客户端计划](plans/plan-wecom-personal-rpa-client.md) / [绑定管理计划](plans/plan-wecom-personal-rpa-portal-binding.md) / [服务端监听存档计划](plans/plan-wecom-personal-rpa-server-archive-listener.md) |
 | 20260819-1322 | 微信客服回复长图化 + 废除渠道约束提示词 | 🔧 部分完成 | **开发+单测完成（2026-08-19），待部署真机验证**。 | [配额方案（含 2026-08 变更）](channel/wecom_kf/reply_quota_control_plan.md) | — |
 | 20260820-2131 | 微信客服处理超时等待提示 | 🔧 部分完成 | **开发+单测完成（2026-08-20），待部署真机验证**。 | [计划](plans/plan-wecom-kf-waiting-indicator.md) | — |
-| 20260910-1259 | 留资线索动态刷新（lead_refresh：意向度 + 需求分条 + 人工归属） | 🔧 部分完成 | **Phase 1 开发+单测完成（2026-09-16），待部署真机验证**。触发：2026-09-10 产品需求——留资后客户继续交流（智能体轮次 + 转人工期）仅落 `channel_messages`，线索行不再更新，运营页看不到最新客户状态。 | [设计](subagent/pre-sales/lead-capture-refresh-design.md) | — |
+| 20260910-1259 | 留资线索动态刷新（lead_refresh：意向度 + 需求分条 + 人工归属） | 🔧 部分完成 | **Phase 1 开发+单测完成（2026-09-16），待部署真机验证；Phase 2 §9.5 人工期对话推送（external_push_human：节流推送 + 转人工字段 + 跟进汇总摘要同步 + 不要求留资）开发+单测完成（2026-09-16）**。触发：2026-09-10 产品需求——留资后客户继续交流（智能体轮次 + 转人工期）仅落 `channel_messages`，线索行不再更新，运营页看不到最新客户状态。 | [设计](subagent/pre-sales/lead-capture-refresh-design.md) | — |
 
 ## 前端
 

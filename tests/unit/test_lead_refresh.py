@@ -8,7 +8,7 @@ lead_refresh 适配器单元测试（留资线索动态刷新，#64）
 4. 正常回写（意向度/需求分条/游标，计费调用）
 5. JSON 解析失败 / intent_level 非法 -> 保留旧值 + 删冷却键 + 不回写
 6. LeadCaptureDB.update_analysis 非法意向度拒绝（不触 DB）
-7. enqueue_lead_refresh 入队 payload / 异常吞掉
+7. enqueue_human_period_tasks 入队 payload / 异常吞掉
 """
 
 import time
@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.services.recap.runner import RecapPayload, enqueue_lead_refresh
+from src.services.recap.runner import RecapPayload, enqueue_human_period_tasks
 from src.services.recap.tasks.lead_refresh import LeadRefreshAdapter
 
 
@@ -249,16 +249,19 @@ class TestLeadCaptureDBUpdateAnalysis:
 
 class TestEnqueueLeadRefresh:
     def test_enqueue_payload(self):
-        """入队 payload：task_config 仅 lead_refresh，subagent 从 session_id 解析"""
+        """入队 payload：task_config 含 lead_refresh + external_push_human，subagent 从 session_id 解析"""
         with patch("src.services.recap.runner.redis_client") as mock_redis:
             mock_redis.rpush.return_value = True
             mock_redis.make_key.side_effect = lambda prefix, identifier="": (
                 f"{prefix}:{identifier}" if identifier else prefix
             )
-            enqueue_lead_refresh("tenant_abc", "tenant_abc_wecom_kf_kf1_user1_pre-sales", "msgid_9")
+            enqueue_human_period_tasks("tenant_abc", "tenant_abc_wecom_kf_kf1_user1_pre-sales", "msgid_9")
             body = mock_redis.rpush.call_args[0][1]
         assert "recap_task_queue" in mock_redis.rpush.call_args[0][0]
-        assert body["task_config"] == [{"name": "lead_refresh", "when": "every_round", "enabled": True}]
+        assert body["task_config"] == [
+            {"name": "lead_refresh", "when": "every_round", "enabled": True},
+            {"name": "external_push_human", "when": "every_round", "enabled": True},
+        ]
         assert body["subagent_name"] == "pre-sales"
         assert body["round_message_id"] == "msgid_9"
         assert body["user_content"] == ""
@@ -268,14 +271,14 @@ class TestEnqueueLeadRefresh:
         """Redis 异常：吞掉不阻断消息链路"""
         with patch("src.services.recap.runner.redis_client") as mock_redis:
             mock_redis.rpush.side_effect = RuntimeError("redis down")
-            enqueue_lead_refresh("tenant_abc", "tenant_abc_wecom_kf_kf1_user1_pre-sales", "msgid_9")
+            enqueue_human_period_tasks("tenant_abc", "tenant_abc_wecom_kf_kf1_user1_pre-sales", "msgid_9")
 
     def test_enqueue_redis_unavailable_gives_up(self):
         """Redis 不可用（rpush False）：放弃不降级进程内执行"""
         with patch("src.services.recap.runner.redis_client") as mock_redis, \
                 patch("src.services.recap.runner._run_tasks") as mock_run:
             mock_redis.rpush.return_value = False
-            enqueue_lead_refresh("tenant_abc", "tenant_abc_wecom_kf_kf1_user1_pre-sales", "msgid_9")
+            enqueue_human_period_tasks("tenant_abc", "tenant_abc_wecom_kf_kf1_user1_pre-sales", "msgid_9")
             mock_run.assert_not_called()
 
 
@@ -309,7 +312,7 @@ class TestDemandPointsMissingField:
 
 
 class TestEntryBWiring:
-    """入口 B：人工期客户消息落库后触发 enqueue_lead_refresh"""
+    """入口 B：人工期客户消息落库后触发 enqueue_human_period_tasks"""
 
     @pytest.mark.asyncio
     async def test_persist_customer_message_enqueues_lead_refresh(self):
@@ -319,7 +322,7 @@ class TestEntryBWiring:
         unified_msg.text = "那我再考虑下"
         msg = {"msgid": "wecom_msg_1"}
         with patch.object(channel_routes, "channel_session_manager") as mock_mgr, \
-                patch("src.services.recap.runner.enqueue_lead_refresh") as mock_enqueue:
+                patch("src.services.recap.runner.enqueue_human_period_tasks") as mock_enqueue:
             await channel_routes._persist_kf_context_customer_message(
                 unified_msg, msg, "tenant_abc_wecom_kf_kf1_u1_pre-sales",
                 "kf1", "tenant_abc", "customer_human",
@@ -346,7 +349,7 @@ class TestEntryBWiring:
             )
             mock_mgr.add_message.assert_called_once()
             mock_redis.rpush.assert_not_called()
-            assert recap_runner.enqueue_lead_refresh("t", "s", "") is None
+            assert recap_runner.enqueue_human_period_tasks("t", "s", "") is None
 
 
 class TestTransferWriteback:

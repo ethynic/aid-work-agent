@@ -98,6 +98,7 @@ def _trace_tool_span(
     args: Dict[str, Any],
     result: Any,
     start_ts: float,
+    trace_prefix: str = "recap:external_push",
 ) -> None:
     """向当轮对话 trace 追加 recap 工具调用 span（http_api / report_push_result）"""
     if not payload.trace_id:
@@ -107,7 +108,7 @@ def _trace_tool_span(
 
         append_recap_span(
             trace_id=payload.trace_id,
-            name=f"recap:external_push:tool_{tool_name}",
+            name=f"{trace_prefix}:tool_{tool_name}",
             span_type="span",
             input=_truncate(json.dumps(args, ensure_ascii=False, default=str), _TRACE_TRUNCATE_CHARS),
             output=_truncate(json.dumps(result, ensure_ascii=False, default=str), _TRACE_TRUNCATE_CHARS),
@@ -486,7 +487,7 @@ def _resolve_lite_model_name() -> Optional[str]:
 
     provider 的 _parse_response 不返回 model 键，response.get("model") 恒为 None；
     lite 路径计费需显式解析 settings.llm.get_lite_target() 的模型名，否则独立落库
-    兜底分支会误用主模型（deepseek-v4-flash）单价。
+    兜底分支会误用主模型（deepseek-flash）单价。
     """
     try:
         from src.config.settings import settings
@@ -845,12 +846,18 @@ async def _run_push_loop(
     agent_token: str,
     login: Dict[str, Any],
     topic: str = "外部推送",
+    system_prompt: Optional[str] = None,
+    user_message: Optional[str] = None,
+    billing_source: Optional[str] = None,
+    trace_prefix: str = "recap:external_push",
 ) -> str:
     """推送主体：主模型 + http_api 工具多轮循环，按租户文档自主完成推送
 
     终止：report_push_result（确定性）/ 无 tool_calls / 轮次上限 / 连续失败熔断。
     未收到成功报告即 raise，由 runner 吞掉记 failed（下一轮 recap 自然重试）。
     成功返回模型报告的 detail。
+    system_prompt / user_message 可选覆盖：由变体适配器（如 external_push_human）
+    传入定制提示词；不传时走 external_push 默认组装（行为不变）。
     """
     from src.config.settings import settings
     from src.llm.gateway import llm_gateway
@@ -871,8 +878,8 @@ async def _run_push_loop(
     tools = registry.get_tool_definitions()
 
     messages: List[Dict[str, Any]] = [
-        {"role": "system", "content": _build_system_prompt(doc, meta)},
-        {"role": "user", "content": _build_user_message(payload, ctx, summary, login, meta)},
+        {"role": "system", "content": system_prompt or _build_system_prompt(doc, meta)},
+        {"role": "user", "content": user_message or _build_user_message(payload, ctx, summary, login, meta)},
     ]
 
     auth_retried = False
@@ -908,16 +915,18 @@ async def _run_push_loop(
         billed_model = _resolve_lite_model_name() if used_lite else (
             getattr(settings.llm, "model", None) or None
         )
+        eff_source = billing_source or f"external_push_{ctx.get('subagent') or 'unknown'}"
         record_background_llm_usage(
             response.get("usage") if isinstance(response, dict) else None,
             tenant_id=payload.tenant_id,
             user_id=payload.user_id or getattr(payload.record_service, "user_id", None),
-            source=f"external_push_{ctx.get('subagent') or 'unknown'}",
-            user_message=f"[recap external_push] 推送循环 第{round_no}轮",
+            source=eff_source,
+            # 审计文本：默认路径保持 "[recap external_push]" 原样（不传 billing_source 时行为不变）
+            user_message=f"[recap {billing_source or 'external_push'}] 推送循环 第{round_no}轮",
             model=billed_model,
         )
         _trace_llm_span(
-            payload, f"recap:external_push:llm_round_{round_no}", response,
+            payload, f"{trace_prefix}:llm_round_{round_no}", response,
             billed_model, round_start,
         )
 
@@ -950,7 +959,7 @@ async def _run_push_loop(
                     result = await executor.execute(name, args, context=context)
                 except Exception as e:
                     result = {"success": False, "error": f"工具执行异常: {e}"}
-            _trace_tool_span(payload, name or "unknown", args if isinstance(args, dict) else {}, result, tool_start)
+            _trace_tool_span(payload, name or "unknown", args if isinstance(args, dict) else {}, result, tool_start, trace_prefix)
 
             messages.append({
                 "role": "tool",
