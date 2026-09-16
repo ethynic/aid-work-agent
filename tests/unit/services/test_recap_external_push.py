@@ -173,6 +173,11 @@ class TestParseApiMeta:
         doc = "```api-meta\nlogin_url: http://erp.example.com/login\n```"
         assert parse_api_meta(doc) is None
 
+    def test_unresolved_placeholder_login_url_rejected(self):
+        # 通用模板渲染后仍残留 ${APP_ID} = 租户环境变量未配置，放弃推送
+        doc = "```api-meta\nlogin_url: https://erp${APP_ID}.aidingyi.cn/api/v1/erp.delegate/login\n```"
+        assert parse_api_meta(doc) is None
+
     def test_multiple_blocks_takes_first(self):
         doc = (
             "```api-meta\nlogin_url: https://first.example.com/login\n```\n"
@@ -246,33 +251,22 @@ class TestStripExcludedSections:
 
 
 class TestLoadTenantDoc:
-    def test_missing_file_returns_none(self, tmp_path):
-        with patch("src.services.recap.tasks.external_push._tenant_doc_path",
-                   return_value=tmp_path / "templates" / "pre-sales-api.md"):
+    def test_delegates_to_shared_loader(self):
+        """_load_tenant_doc 委托 tenant_api_doc.load_rendered_doc（租户文档优先 +
+        技能模板 fallback + ${APP_ID} 渲染，与对话内 skill / SSO 入口共用一套口径）"""
+        with patch("src.services.tenant_api_doc.load_rendered_doc",
+                   return_value="# 文档全文") as mock_load:
+            assert _load_tenant_doc("tenant_x", "pre-sales") == "# 文档全文"
+        mock_load.assert_called_once_with("tenant_x", "pre-sales")
+
+    def test_missing_doc_returns_none(self):
+        with patch("src.services.tenant_api_doc.load_rendered_doc", return_value=None):
             assert _load_tenant_doc("tenant_x", "pre-sales") is None
 
-    def test_existing_file_returns_full_text_no_truncation(self, tmp_path):
-        doc_file = tmp_path / "pre-sales-api.md"
-        doc_file.write_text(_doc(), encoding="utf-8")
-        with patch("src.services.recap.tasks.external_push._tenant_doc_path",
-                   return_value=doc_file):
-            assert _load_tenant_doc("tenant_x", "pre-sales") == _doc()
-
-    def test_doc_path_derived_from_subagent_name(self):
-        """文档路径按子智能体推导：templates/{subagent}-api.md（不回退他智能体文档）"""
-        from src.services.recap.tasks.external_push import _tenant_doc_path
-
-        path = _tenant_doc_path("tenant_x", "my-custom-agent")
-        assert path.name == "my-custom-agent-api.md"
-        assert path.parent.name == "templates"
-
-    def test_load_passes_subagent_name_to_path_builder(self):
-        """回归（2026-09-15 生产事故）：_load_tenant_doc 必须把 subagent_name 透传给
-        _tenant_doc_path——c43c65e5 曾漏传该参数导致 TypeError，所有租户推送全挂"""
-        with patch("src.services.recap.tasks.external_push._tenant_doc_path") as mock_path:
-            mock_path.return_value.exists.return_value = False
+    def test_shared_loader_error_returns_none(self):
+        with patch("src.services.tenant_api_doc.load_rendered_doc",
+                   side_effect=RuntimeError("boom")):
             assert _load_tenant_doc("tenant_x", "pre-sales") is None
-        mock_path.assert_called_once_with("tenant_x", "pre-sales")
 
 
 # ============== 委托登录（缓存 + api-meta login_url） ==============

@@ -28,7 +28,6 @@ import time
 import urllib.error
 import urllib.request
 from datetime import datetime
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
@@ -208,35 +207,23 @@ def parse_wecom_kf_session(session_id: str) -> Optional[Dict[str, str]]:
 # ============== 租户文档加载与 api-meta 解析 ==============
 
 
-def _tenant_doc_path(tenant_id: str, subagent_name: str) -> Path:
-    """租户接口文档路径：storage/tenants/{去前缀租户ID}/templates/{subagent_name}-api.md
-
-    按子智能体严格隔离（与上传 API tenant_config_file.py 的命名一致），
-    不回退其他智能体的文档，避免误用别的智能体对接的外部系统。
-    """
-    from src.core.storage import normalize_tenant_id
-
-    return (
-        Path(__file__).resolve().parents[4]
-        / "storage" / "tenants" / normalize_tenant_id(tenant_id) / "templates" / f"{subagent_name}-api.md"
-    )
-
-
 def _load_tenant_doc(tenant_id: str, subagent_name: str) -> Optional[str]:
-    """读取租户接口文档全文；缺失返回 None（放弃本轮）
+    """读取子智能体生效的接口文档全文；缺失返回 None（放弃本轮）
 
-    文档是 LLM 调用外部系统接口的唯一依据，不做任何截断（对齐
-    load_api_config.py 的 _no_truncate 契约）。
+    租户文档优先，未上传时按技能白名单兜底通用模板
+    （configs/api_doc_templates/{skill}.md，如 pre-sales-api.md），并把
+    ${APP_ID} 等非凭证占位符渲染为租户环境变量实际值（凭证类保留，由
+    http_api 运行时替换）。文档是 LLM 调用外部系统接口的唯一依据，不做
+    任何截断（对齐 load_api_config.py 的 _no_truncate 契约）。
     """
-    # subagent_name 是 _tenant_doc_path 的必选参数（c43c65e5 曾漏传导致 TypeError，
+    # subagent_name 是文档路径/模板判定的必选参数（c43c65e5 曾漏传导致 TypeError，
     # 所有租户推送全挂；此处透传，缺参在函数签名处即报错而非静默错路径）
-    path = _tenant_doc_path(tenant_id, subagent_name)
-    if not path.exists():
-        return None
     try:
-        return path.read_text(encoding="utf-8")
+        from src.services.tenant_api_doc import load_rendered_doc
+
+        return load_rendered_doc(tenant_id, subagent_name)
     except Exception as e:
-        logger.warning(f"[external_push] 租户文档读取失败 tenant={tenant_id}: {e}")
+        logger.warning(f"[external_push] 租户文档加载失败 tenant={tenant_id}: {e}")
         return None
 
 
@@ -284,6 +271,10 @@ def parse_api_meta(doc_text: str, topic: str = "外部推送") -> Optional[Dict[
         return None
     if not login_url.startswith("https://"):
         tlog(topic, f"api-meta 解析失败：login_url 非 https（{login_url.split('?')[0]}）")
+        return None
+    if "${" in login_url:
+        # 通用模板渲染后仍残留占位符 = 租户环境变量未配置（如 APP_ID），放弃推送
+        tlog(topic, f"api-meta 解析失败：login_url 占位符未解析（租户环境变量未配置）: {login_url}")
         return None
 
     meta.setdefault("user_token_name", _DEFAULT_USER_TOKEN_NAME)

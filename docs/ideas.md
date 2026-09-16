@@ -34,6 +34,7 @@
 | 20260908-2229 | 外部系统入口（SSO 打开第三方系统） | 🔧 部分完成（Phase 1 开发完成，待真机联调） | 连接中心「外部系统」入口 + SSO 通用契约（direct_url/ticket_redirect/token_param）打开第三方系统；Phase 1 完成待真机联调。 | [方案](system/external-system-entry-design.md) | — |
 | 20260914-1901 | 微信公众号内容入知识库 | 🔧 部分完成 | 公众号文章多通道采集入知识库（回调+URL 直采+手动粘贴+接口对账，图片 VL 解析、500 字总结、按张计费）；P1/P2+接口通道（WP9）完成，待部署验收。 | [设计](system/wechat-mp/wechat-mp-knowledge-ingestion-design.md) | [计划](plans/plan-wechat-mp-knowledge-ingestion.md) |
 | 20260916-1830 | 公众号自有号清单源（历史文章导入，**主通道**） | 🔧 部分完成 | 租户扫码自有号，定期拉全量「发表记录」清单（含群发历史），走既有 URL 直采入库；通道优先级：清单源>回调+手动URL>freepublish；开发完成待部署验收（宏陶瓷砖管理员扫码实测+会话 TTL 观察）。 | [设计](system/wechat-mp/wechat-mp-list-source-design.md) | — |
+| 20260916-2300 | 租户 API 接口文档通用模板（${APP_ID} 环境变量渲染） | 🔧 部分完成 | 新租户开通免上传接口文档：通用模板 `configs/api_doc_templates/pre-sales-api.md`（按技能名命名，具备 pre-sales-api 技能的智能体均适用），应用号用 ${APP_ID} 占位符、加载期由租户环境变量渲染（凭证类占位符仍由 http_api 运行时替换防泄漏）；租户上传文档优先级最高，特殊表/字段租户仍可单独上传；推送/对话 skill/SSO 三入口已接入；存量 3 租户迁移（配 APP_ID + 删旧文档）待部署后执行。 | — | — |
 
 
 ## 数字员工 / 子智能体

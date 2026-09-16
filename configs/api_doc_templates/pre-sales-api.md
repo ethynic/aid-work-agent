@@ -1,0 +1,1330 @@
+# 售前咨询接口文档（通用模板）
+
+<!--
+本文件是第三方售前咨询/CRM 系统的**通用 API 接口文档模板**，按技能名 pre-sales-api 命名，
+存于 configs/api_doc_templates/。适用判定：子智能体技能白名单包含 pre-sales-api 技能。
+
+- 应用号不写死，统一用 ${APP_ID} 占位符；系统在文档加载期用租户环境变量渲染
+  （租户在管理后台「数字员工授权 > 环境变量」配置 APP_ID，与 AGENT_TOKEN 同机制）
+- 凭证类占位符（${AGENT_TOKEN}、${client_token}）不在加载期渲染（防止泄漏进 LLM 上下文），
+  由 http_api 工具在请求时替换
+- 租户文档 storage/tenants/{tid}/templates/{subagent}-api.md 优先级高于本模板，
+  表名/字段有特殊要求的租户仍可单独上传
+-->
+
+<!-- api-meta：系统代码解析的机器可读约定块，请勿删除本块或改键名（login_url 必填；user_token_name / external_userid_field 缺省时分别默认 client_token / unionid；push_exclude_sections 可选，声明推送循环注入 LLM 时裁剪的章节标题，逗号分隔；sso_* 可选，声明浏览器跳转本系统的入口，无 SSO 能力的系统只填 sso_enabled + sso_url） -->
+```api-meta
+login_url: https://erp${APP_ID}.aidingyi.cn/api/v1/erp.delegate/login
+auth_mode: delegate_login
+user_token_name: client_token
+external_userid_field: unionid
+push_exclude_sections: 委托登录接口,客户信息详情接口,跟进记录列表接口,跟进记录详情接口
+http_method: POST
+sso_enabled: true
+sso_system_name: CRM 客户信息
+sso_mode: ticket_redirect
+sso_url: https://erp${APP_ID}.aidingyi.cn/pages/list?id=13&path=kehuxinxi
+sso_ticket_param: sso_ticket
+sso_grant_url: https://erp${APP_ID}.aidingyi.cn/api/v1/erp.delegate/sso_grant
+sso_login_url: https://erp${APP_ID}.aidingyi.cn/api/v1/erp.delegate/sso_login
+sso_fallback_url: https://erp${APP_ID}.aidingyi.cn/
+```
+
+> **对接硬性要求（每个租户的 pre-sales-api.md 均须满足）**：
+> a) 双 Token 机制——`agent_token` 代表智能体身份（环境变量名固定 `AGENT_TOKEN`），用户身份 token（本系统叫 `client_token`，变量名可改，在上方 api-meta 的 `user_token_name` 声明）代表委托用户身份；
+> b) 客户表必须有一个字段承载我方 `external_userid`（本系统是 `t_kehuxinxi.unionid`，其他系统表名/字段名可以不同，在上方 api-meta 的 `external_userid_field` 声明）。
+
+本文档涵盖售前咨询系统的委托登录、客户信息（列表、详情、创建、修改）和跟进记录（列表、详情、创建）接口。后端数据库为 MySQL 5.7。应用号由租户环境变量 `APP_ID` 配置（文档中的 `${APP_ID}` 由系统自动替换，无需人工修改本文档）。
+
+本系统采用**用户委托登录**鉴权：AI 智能体（代理人）持 `agent_token` 代表终端用户（委托人）访问，业务接口须同时携带 `agent_token + client_token`。
+
+**核心表关系概览：**
+
+| 表名 | 用途 | 与 sys_user 的关系 |
+|------|------|-------------------|
+| `sys_user` | **身份表**（用户） | — |
+| `sys_user_post` | 职位管理（角色、部门） | `sys_user_id` → `sys_user.id` |
+| `t_kehuxinxi` | 客户信息 | `create_user` → `sys_user.id`（谁创建的） |
+| `t_lianxijilu` | 跟进记录 | `create_user` → `sys_user.id`（谁创建的） |
+
+---
+
+## 1. 通用调用规范
+
+### 请求地址
+
+BASE_URL：`https://erp${APP_ID}.aidingyi.cn`
+
+### 请求方式
+
+POST，Body 为 `application/json`
+
+### 鉴权方式（双 Token）
+
+| Header | 来源 | 说明 |
+|--------|------|------|
+| `Api-Authorize-Token` | `.env` 环境变量 `${AGENT_TOKEN}` | 代理人 token，固定不变，标识 AI 智能体身份 |
+| `Client-Authorize-Token` | 委托登录接口返回 | 委托人 token，标识终端用户身份，运行时获取 |
+
+- **委托登录接口**（第 2 节）：仅需 `Api-Authorize-Token`
+- **业务接口**（第 3 节起）：双 Token 缺一不可，缺失返回 `Code: -99`
+- `client_token` 与 `agent_token` 绑定，跨 agent_token 不可用
+
+### 返回响应
+
+- HTTP 状态码：`200`，Content-Type：`application/json`
+- 顶层结构：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| Code | int | `0` 正常；`-1` 业务异常；`-99` 认证失败（client_token 失效或缺失，需重新委托登录） |
+| Error | string | 异常信息 |
+| Debug | string | 调试信息（异常时详细输出） |
+| Response | object | 业务数据主体 |
+| Slow | array | 慢查询日志 |
+| Trace | string | 请求追踪信息 |
+
+### 列表接口通用约定
+
+适用于所有 `module_listing_view` 接口。
+
+**分页与排序参数**（Body）
+
+| 参数名 | 类型 | 必填 | 说明 |
+|--------|------|------|------|
+| page | int | 否 | 页码，默认 1 |
+| limit | int | 否 | 每页条数，默认 20 |
+| order | array | 否 | 排序规则，默认 `[]`，由后端按字段默认排序 |
+
+**filters 元素结构**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| attr | string | 否 | 字段英文名 |
+| value | any | 否 | 匹配值，规则见下表 |
+| display_name | string | 否 | 字段中文名 |
+| component | string | 否 | 字段组件类型，用于判断 value 格式 |
+
+**value 类型规则**
+
+| component 类型 | value 格式 | 匹配方式 |
+|----------------|-----------|----------|
+| `input` | 数组 `["值"]` | LIKE 模糊查询（**必须传数组**，见下方说明） |
+| `date` / `datetime` | 数组 `[开始, 结束]` | 时间范围查询 |
+| `integer` / `number` | 数组 `[最小值, 最大值]` | 数值范围查询 |
+| `select` | 字符串 | 精确匹配 |
+
+多个 filter 之间为 **AND** 关系。不指定 `component`，默认为 `input`。
+
+**input 组件 value 必须传数组（重要）**
+
+`component: input` 的 `value` **必须传数组**（如 `["张三"]`、`["13916323347"]`），后端按 `LIKE %%值%%` 模糊拼接。**切勿传字符串**：后端会逐字符遍历 value，字符串会被拆成单字符 `OR LIKE`，导致匹配所有含任一字符的记录（例如传 `"13916323347"` 会命中任意电话）。可选字段：
+
+| 字段 | 类型 | 默认 | 说明 |
+|------|------|------|------|
+| empty | bool | false | `true` 表示"为空"匹配（`value` 被忽略） |
+| exact | bool | false | `true` 改为精确匹配（`=`） |
+
+**返回响应结构**
+
+| 路径 | 类型 | 说明 |
+|------|------|------|
+| Response['data'] | array | 匹配的记录列表 |
+| Response['data2'] | array | 子表数据（无子表字段时为空数组） |
+| Response['fields'] | array | 字段元数据，可用于动态渲染 |
+| Response['total'] | int | 总记录数（用于分页） |
+| Response['total_sum'] | object | 汇总数据（无汇总时为空对象） |
+
+> `fields` 元素包含 `attr_name`、`display_name`、`options`；`options` 内部仅含 `label`、`value`，无选项时不返回 `options` 键。各接口示例仅列部分字段，实际以接口返回为准。
+
+### 数据模型关系
+
+本系统的**身份表**是 `sys_user`（用户管理），不是 `t_kehuxinxi`（客户信息）。理解以下关系对正确调用接口至关重要：
+
+```
+sys_user（身份表）
+├── id            → 用户唯一标识
+├── account       → 登录用户名
+├── name          → 真实姓名
+├── mobile        → 手机号（委托登录的匹配依据）
+│
+├──< t_kehuxinxi.create_user     → sys_user.id（谁创建了这条客户记录）
+└──< t_lianxijilu.create_user    → sys_user.id（谁创建了这条跟进记录）
+```
+
+| 关系 | 说明 |
+|------|------|
+| 委托登录 | 通过 `mobile` 匹配 `sys_user` 表，返回的 `record_id` 即 `sys_user.id` |
+| `t_kehuxinxi.create_user` | 存储 `sys_user.id`，表示该客户由哪个用户创建 |
+| `t_lianxijilu.create_user` | 存储 `sys_user.id`，表示该跟进记录由哪个用户创建 |
+| 数据权限 | 角色数据范围 `personal_scope`：后端通过 `client_token` 解析出 `sys_user.id`，自动过滤 `create_user = 当前委托人id` 的数据 |
+
+> **重要**：`create_user` 存储 `sys_user.id`，标识记录归属。本系统为**用户委托**（身份表为 `sys_user`），创建记录时 `create_user` **可省略**：后端在 insert 时自动补为当前委托人的 `record_id`（`sys_user.id`）。若显式传入，值会被覆盖）。
+
+### 数据权限说明
+
+委托登录下，业务接口返回的数据受委托人身份自动过滤，无需在 filters 中手动指定：
+
+| 模块 | 数据范围 | 过滤依据 |
+|------|---------|---------|
+| 客户信息（kehuxinxi） | 仅自己创建的客户 | `create_user = sys_user.id` |
+| 跟进记录（lianxijilu） | 仅自己创建的跟进记录 | `create_user = sys_user.id` |
+
+> 两个模块的角色数据范围均配置为 `personal_scope`（角色「销售员」），列表/详情自动过滤 `create_user = 当前委托人`，无需在 filters 中手动指定。
+
+---
+
+## 2. 委托登录接口
+
+委托登录流程：用户提供手机号 -> AI 智能体调 `login` 获取 `client_token` -> 业务接口携带双 token。AI 智能体侧对 `client_token` 做 Redis 缓存（见第 12 节「同步业务规则」），有效期最长 1 天，**无需每轮登出**。
+
+> 本系统通过手机号匹配 **`sys_user` 表**中的 `mobile` 字段来确定委托人身份。返回的 `record_id` 即 `sys_user.id`，后续业务操作创建/修改记录的 `create_user` 字段均写入此 id（可省略，后端自动补）。只校验手机号在用户表中**存在**，不校验手机号属于用户本人。
+>
+> **自动建号（2026-09 新增）**：手机号在本系统无对应用户时，后端会**自动创建用户及职位**（归属角色「销售员」、部门「默认组」），无需管理员预先开通账号，登录照常成功。响应中的 `created: true` 标识本次为新建用户。新建用户密码为随机串（不可用密码登录），不影响委托登录与 SSO 跳转。手机号须为 **11 位纯数字**，否则返回格式错误。
+
+### 2.1 委托登录（获取 client_token）
+
+**接口地址**
+
+```
+POST https://erp${APP_ID}.aidingyi.cn/api/v1/erp.delegate/login
+```
+
+**请求参数**
+
+| 参数名 | 类型 | 必填 | 说明 |
+|--------|------|------|------|
+| mobile | string | 否 | 委托人手机号，**11 位纯数字**，格式非法返回 `Code: -1` |
+| name | string | 否 | 用户姓名，仅手机号不存在触发**自动建号**时使用（写入 `sys_user.name`）；未提供时后端按"用户+手机号后4位"兜底命名 |
+
+Header：`Api-Authorize-Token: ${AGENT_TOKEN}`
+
+**请求示例**
+
+```json
+{ "mobile": "18601710942", "name": "张三" }
+```
+
+**返回响应**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| client_token | string | 委托人 token，后续业务接口放在 `Client-Authorize-Token` Header；服务端为文件缓存，有效期最长 1 天，AI 智能体侧应使用脚本缓存复用（见第 12 节），`Code: -99` 时强制刷新重新登录，无需主动 logout |
+| record_id | int | 委托人在 **`sys_user` 表**中的 `id`；创建/修改记录时 `create_user` 可省略（后端自动补为此值），显式传入则需等于此值 |
+| role_id | int | 委托人角色 id |
+| display_name | string | 委托人显示名，对应 `sys_user.name` |
+| agent_name | string | 代理人名称 |
+| created | bool | **2026-09 新增**：本次登录是否自动创建了新用户（手机号此前在 `sys_user` 中不存在）。`true` 时 `display_name` 即新建用户姓名 |
+
+**响应示例**
+
+```json
+{
+  "Code": 0,
+  "Response": {
+    "client_token": "aad76849c85328b20a537160765fe35f4b2742b597e95a65c3893ef8da52ef88",
+    "record_id": 4,
+    "role_id": 3,
+    "display_name": "覃姗测试",
+    "agent_name": "客户管理智能体",
+    "created": false
+  }
+}
+```
+
+> `record_id: 4` 表示 `sys_user.id = 4`，后续创建客户或跟进记录时，`create_user` 字段可省略（后端自动补为 `4`），显式传入则需为 `4`。
+
+> **手机号不存在时不再报错**：后端自动创建用户+职位（角色「销售员」、部门「默认组」）并正常返回 `client_token`，`created: true`。仅当该手机号存在**已被禁用/软删除**的用户时返回 `Code: -1, Error: "该手机号用户未启用，无法自动创建"`；自动建号无需管理员预先维护用户。
+
+### 2.2 委托人信息查询（校验 client_token）
+
+**接口地址**
+
+```
+POST https://erp${APP_ID}.aidingyi.cn/api/v1/erp.delegate/info
+```
+
+Header：`Api-Authorize-Token` + `Client-Authorize-Token`
+
+**请求参数**
+
+无需传递 body 参数，发送空 JSON `{}` 即可。
+
+**返回响应**
+
+```json
+{
+  "Code": 0,
+  "Response": {
+    "record_id": 4,
+    "role_id": 3,
+    "display_name": "覃姗测试",
+    "agent_name": "客户管理智能体",
+    "identity_table": "sys_user"
+  }
+}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| record_id | int | 委托人在 `sys_user` 表中的 `id` |
+| role_id | int | 委托人角色 ID |
+| display_name | string | 委托人显示名称 |
+| agent_name | string | 代理人（AI 智能体）名称 |
+| identity_table | string | 固定为 `"sys_user"` |
+
+用于校验 `client_token` 是否有效。返回 `Code: -99` 表示已失效，需重新调 `login`。`identity_table` 固定为 `sys_user`，表示系统的身份表是用户管理表而非客户信息表。
+
+### 2.3 SSO 浏览器跳转（免登录进入本系统）
+
+AI 智能体前端页面（连接中心「外部系统」入口 / 外部接待客户页「打开 ERP」按钮）打开本系统时使用。流程：我方后端按下表接口获取一次性跳转票据 → 前端 `window.open` 打开返回的 `url`（新开窗口）→ 本系统落地页自动完成票据交换（`sso_exchange`，由本系统前端调用，我方无需实现）并无感登录。
+
+票据签发有两条路径（响应格式相同）：
+
+| 路径 | 接口地址 | Header | Body | 适用场景 |
+|------|---------|--------|------|---------|
+| 首选 | `POST /api/v1/erp.delegate/sso_grant` | `Api-Authorize-Token: ${AGENT_TOKEN}` + `Client-Authorize-Token: <委托会话 client_token>` | `{}` | 已有委托会话（Redis 缓存命中），guard 已完成 client_token 全套校验 |
+| 兜底 | `POST /api/v1/erp.delegate/sso_login` | `Api-Authorize-Token: ${AGENT_TOKEN}` | `{"mobile": "<我方登录用户手机号>", "name": "<用户姓名，可选>"}` | 无委托会话可用；手机号不存在时自动创建用户+职位（同第 2.1 节自动建号，响应多一个 `created` 字段）；既有用户须至少有一个有效职位 |
+
+**响应示例**（两条路径相同）
+
+```json
+{
+  "Code": 0,
+  "Response": {
+    "sso_ticket": "64b4b96b8f2f4d3ea1c5e6a7b8c9d0e1f2a3b4c5d6e7f8091a2b3c4d5e6f7088",
+    "url": "https://erp${APP_ID}.aidingyi.cn/?sso_ticket=64b4b96b8f2f4d3ea1c5e6a7b8c9d0e1f2a3b4c5d6e7f8091a2b3c4d5e6f7088"
+  }
+}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| sso_ticket | string | 一次性 SSO 跳转票据（64 位 hex），**与委托登录的 client_token 相互独立**（委托会话 token 不能用于票据交换，反之亦然）；get 参数名为 `sso_ticket`（区别于委托登录的 client_token） |
+| url | string | 浏览器跳转地址；仅当 agent_token 配置了 `sso_domain` 时返回，未配置时我方按 api-meta 的 `sso_url` + `sso_ticket_param` 自行拼接 |
+
+**约束与失败处理**：
+
+- 票据**一次性**（交换成功即失效）且 **5 分钟有效**；agent_token 配置必须 `identity_table == "sys_user"`（浏览器登录是完整用户身份）。
+- 票据会话与账号密码登录同一体系（单设备设计），被跳转用户若已在本系统同端登录会被顶下线。
+- 失败统一返回 `Code: -1, Error: "单点登录失败"`（不暴露细节）。**2026-09 起"我方用户在本系统无账号"已不再是失败原因**（自动建号兜底，见第 2.1 节），剩余典型原因：该手机号存在已被禁用/软删除的用户、既有用户无有效职位。仍失败时我方按通用契约**回退**：`window.open` 打开普通登录页（api-meta 的 `sso_fallback_url`），提示用户手动登录，后端记录失败原因供区分「账号异常」与「临时故障」。
+- 手机号须为 **11 位纯数字**，否则返回 `Code: -1, Error: "单点登录手机号格式不正确"`。
+
+---
+
+## 3. 客户信息列表接口
+
+### 接口地址
+
+```
+POST https://erp${APP_ID}.aidingyi.cn/api/v1/erp.module/module_listing_view
+```
+
+### 请求参数
+
+| 参数名 | 类型 | 必填 | 说明 |
+|--------|------|------|------|
+| module | string | 否 | 固定为 `"kehuxinxi"` |
+| filters | array | 否 | 过滤条件，参见第 1 节 filters 约定 |
+| page, limit | - | - | 参见第 1 节分页参数 |
+
+**请求示例**
+
+```json
+{
+  "module": "kehuxinxi",
+  "filters": [
+    { "attr": "lianxidianhua", "value": ["13916323347"], "component": "input" }
+  ],
+  "page": 1,
+  "limit": 20
+}
+```
+
+### 返回响应
+
+**响应示例**
+
+```json
+{
+  "Code": 0,
+  "Response": {
+    "data": [
+      {
+        "id": 1, "sid": "KH2026-000001",
+        "xingming": "张三", "lianxiren": "王先生",
+        "lianxidianhua": "13800138000", "weixinhao": "test_wx_001",
+        "weixinnicheng": "张三", "weixintouxiang": "https://wx.qlogo.cn/xxx/avatar.png",
+        "suoshuhangye": "医疗器械", "tuiguangriqi": "2026-08-27",
+        "tuiguangqudao": "微信私聊", "zhuangtai": "感兴趣",
+        "genjinhuizongzhaiyao": null,
+        "beizhu": null,
+        "create_user": "覃姗测试", "create_time": "2026-08-27 10:00:00",
+        "status": 1
+      }
+    ],
+    "data2": [],
+    "fields": [
+      { "attr_name": "sid", "display_name": "业务编号" },
+      { "attr_name": "xingming", "display_name": "客户名称" },
+      { "attr_name": "lianxiren", "display_name": "联系人" },
+      { "attr_name": "lianxidianhua", "display_name": "联系电话" },
+      { "attr_name": "weixinhao", "display_name": "微信号" },
+      { "attr_name": "weixinnicheng", "display_name": "微信昵称" },
+      { "attr_name": "weixintouxiang", "display_name": "微信头像" },
+      { "attr_name": "suoshuhangye", "display_name": "所属行业" },
+      { "attr_name": "tuiguangriqi", "display_name": "推广日期" },
+      { "attr_name": "tuiguangqudao", "display_name": "推广渠道", "options": [{"label": "微信私聊", "value": "微信私聊"}, {"label": "微信群发", "value": "微信群发"}, {"label": "朋友圈", "value": "朋友圈"}, {"label": "企业微信群", "value": "企业微信群"}, {"label": "公众号推送", "value": "公众号推送"}, {"label": "其他", "value": "其他"}] },
+      { "attr_name": "zhuangtai", "display_name": "客户状态", "options": [{"label": "感兴趣", "value": "感兴趣"}, {"label": "不感兴趣", "value": "不感兴趣"}, {"label": "已留资待跟进", "value": "已留资待跟进"}, {"label": "已签约", "value": "已签约"}, {"label": "已流失", "value": "已流失"}] },
+      { "attr_name": "genjinhuizongzhaiyao", "display_name": "跟进汇总摘要" },
+      { "attr_name": "beizhu", "display_name": "备注" },
+      { "attr_name": "id", "display_name": "系统编号" },
+      { "attr_name": "create_user", "display_name": "创建人" },
+      { "attr_name": "create_time", "display_name": "创建时间" },
+      { "attr_name": "update_time", "display_name": "更新时间" },
+      { "attr_name": "status", "display_name": "系统状态" }
+    ],
+    "total": 1,
+    "total_sum": {}
+  }
+}
+```
+
+> **select 类型字段的 options 以接口实际返回为准**，以上仅为示例。
+
+---
+
+## 4. 客户信息详情接口
+
+### 接口地址
+
+```
+POST https://erp${APP_ID}.aidingyi.cn/api/v1/erp.module/module_prepare_edit
+```
+
+### 请求参数
+
+| 参数名 | 类型 | 必填 | 说明 |
+|--------|------|------|------|
+| module | string | 否 | 固定为 `"kehuxinxi"` |
+| did | int | 否 | 客户记录 ID |
+
+**请求示例**
+
+```json
+{ "module": "kehuxinxi", "did": 1 }
+```
+
+### 返回响应
+
+> 响应顶层仅返回 `tables`。`tables[X]` 包含 `table_name`、`display_name`、`primary_key`、`foreign_key`、`parent_table`、`sections`、`data`；`sections[Y]` 包含 `display_name`、`attrs`；`attrs[Z]` 包含 `attr_name`、`display_name`、`options`（无选项时不含 `options` 键）；`options` 内部仅包含 `label`、`value`。
+
+| 路径 | 类型 | 说明 |
+|------|------|------|
+| Response['tables'][0]['data'] | object | 客户主表信息（单条，字典） |
+| Response['tables'][i]['table_name'] | string | 表名 |
+| Response['tables'][i]['display_name'] | string | 表中文名 |
+| Response['tables'][i]['primary_key'] | string | 主键字段名 |
+| Response['tables'][i]['foreign_key'] | string\|null | 外键字段名（子表为 `fid`，主表为 null） |
+| Response['tables'][i]['parent_table'] | string\|null | 父表名（主表为 null） |
+| Response['tables'][i]['sections'] | array | 字段分区定义 |
+| Response['tables'][i]['sections'][j]['attrs'] | array | 分区下的字段元数据（白名单过滤后） |
+
+> **说明**：详情接口（`module_prepare_edit`）在用户委托模式下**可正常返回数据**（此前客户/供应商委托场景的 `KeyError: 'name'` 已修复）。
+
+**响应示例**
+
+```json
+{
+  "Code": 0,
+  "Response": {
+    "tables": [
+      {
+        "display_name": "客户",
+        "table_name": "t_kehuxinxi",
+        "primary_key": "id",
+        "foreign_key": null,
+        "parent_table": null,
+        "data": {
+          "id": 1, "sid": "KH2026-000001",
+          "xingming": "张三", "lianxiren": "王先生",
+          "lianxidianhua": "13800138000", "weixinhao": "test_wx_001",
+          "weixinnicheng": "张三",
+          "weixintouxiang": "https://wx.qlogo.cn/xxx/avatar.png",
+          "suoshuhangye": "医疗器械",
+          "tuiguangriqi": "2026-08-27",
+          "tuiguangqudao": "微信私聊",
+          "zhuangtai": "感兴趣",
+          "genjinhuizongzhaiyao": null,
+          "beizhu": null,
+          "create_user": { "label": "覃姗测试", "value": 4 },
+          "create_group": { "label": "默认组", "value": 1 },
+          "create_time": "2026-08-27 10:00:00",
+          "update_time": "2026-08-27 10:30:00",
+          "status": 1
+        },
+        "sections": [
+          {
+            "display_name": "基本信息",
+            "attrs": [
+              { "attr_name": "xingming", "display_name": "客户名称" },
+              { "attr_name": "lianxiren", "display_name": "联系人" },
+              { "attr_name": "lianxidianhua", "display_name": "联系电话" },
+              { "attr_name": "weixinhao", "display_name": "微信号" },
+              { "attr_name": "weixinnicheng", "display_name": "微信昵称" },
+              { "attr_name": "weixintouxiang", "display_name": "微信头像" },
+              { "attr_name": "suoshuhangye", "display_name": "所属行业" },
+              { "attr_name": "tuiguangriqi", "display_name": "推广日期" },
+              { "attr_name": "tuiguangqudao", "display_name": "推广渠道",
+                "options": [{"label": "微信私聊", "value": "微信私聊"}, {"label": "微信群发", "value": "微信群发"}, {"label": "朋友圈", "value": "朋友圈"}, {"label": "企业微信群", "value": "企业微信群"}, {"label": "公众号推送", "value": "公众号推送"}, {"label": "其他", "value": "其他"}] },
+              { "attr_name": "zhuangtai", "display_name": "客户状态",
+                "options": [{"label": "感兴趣", "value": "感兴趣"}, {"label": "不感兴趣", "value": "不感兴趣"}, {"label": "已留资待跟进", "value": "已留资待跟进"}, {"label": "已签约", "value": "已签约"}, {"label": "已流失", "value": "已流失"}] },
+              { "attr_name": "genjinhuizongzhaiyao", "display_name": "跟进汇总摘要" },
+              { "attr_name": "beizhu", "display_name": "备注" }
+            ]
+          },
+          {
+            "display_name": "系统信息",
+            "attrs": [
+              { "attr_name": "sid", "display_name": "业务编号" },
+              { "attr_name": "id", "display_name": "系统编号" },
+              { "attr_name": "create_user", "display_name": "创建人" },
+              { "attr_name": "create_time", "display_name": "创建时间" },
+              { "attr_name": "update_time", "display_name": "更新时间" },
+              { "attr_name": "status", "display_name": "系统状态" }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+> **与列表接口的差异**：详情接口中仅**系统字段**（`create_user`、`update_user`、`create_group`）的值为 `{label, value}` 对象；业务 select 字段（`suoshuhangye`、`tuiguangqudao`、`zhuangtai`）及普通字段仍为扁平字符串；`null` 值字段保持 `null`。
+
+---
+
+## 5. 客户信息创建接口
+
+### 接口地址
+
+```
+POST https://erp${APP_ID}.aidingyi.cn/api/v1/erp.module/module_data_update
+```
+
+### 请求参数
+
+| 参数名 | 类型 | 必填 | 说明 |
+|--------|------|------|------|
+| module | string | 否 | 固定为 `"kehuxinxi"` |
+| did | null | 否 | 创建时固定为 `null` |
+| tables | array | 否 | 包含主表数据 |
+| temp | bool | 否 | 是否临时保存，固定为 `false` |
+
+**tables 数组结构**
+
+| 元素 | table | method | 说明 |
+|------|-------|--------|------|
+| tables[0] | `t_kehuxinxi` | `insert` | 客户主表，单条数据 |
+
+### 主表 t_kehuxinxi 字段要求
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| xingming | string | 客户名称，取值优先级见第 12 节 |
+| lianxiren | string | 联系人 |
+| lianxidianhua | string | 联系电话 |
+| weixinhao | string | 微信号 |
+| weixinnicheng | string | 微信昵称；客户信息写入后台时，将客户的**微信昵称**写入该字段 |
+| weixintouxiang | string | 微信头像；客户信息写入后台时，将客户的**微信头像**写入该字段 |
+| unionid | string | 外部用户唯一标识，固定写入 AI 侧的 `external_userid`（微信客服客户 ID），作为查重主键，见第 12 节 |
+| suoshuhangye | string | 所属行业，从选项值中选取 |
+| tuiguangriqi | datetime | 推广日期，格式 `YYYY-MM-DD` |
+| tuiguangqudao | string | 推广渠道，从选项值中选取 |
+| zhuangtai | string | 客户状态，默认值由后端设定 |
+| beizhu | string | 备注 |
+| genjinhuizongzhaiyao | string | 跟进汇总摘要；新建客户时**无需填写**，由填写跟进记录后归纳更新（见第 9 节「跟进汇总摘要同步」） |
+| create_user | int | 当前委托人的 `sys_user.id`（= 委托登录返回的 `record_id`）；可省略，后端自动补为委托人 id |
+| update_time | string | 固定为空字符串 `""` |
+| id | string | 固定为空字符串 `""`，表示新建 |
+| zhuanrengongshijian | datetime | 转人工时间；用户说完转人工后，记录转人工的时间，格式 `YYYY-MM-DD HH:MM:SS` |
+| rengongkefuxingming | string | 人工客服姓名；用户说完转人工后，记录转到的人工客服的姓名 |
+
+> **create_user 可省略**：创建时可传 `create_user`（值需为委托登录返回的 `record_id`），也可不传——后端会自动补为当前委托人 `record_id`。
+> **genjinhuizongzhaiyao 新建时无需填写**：该字段用于沉淀客户跟进状态的累计摘要，由后续填写跟进记录时归纳更新（见第 9 节）。
+
+### 请求示例
+
+```json
+{
+  "module": "kehuxinxi",
+  "did": null,
+  "tables": [
+    {
+      "data": [
+        {
+          "xingming": "张三",
+          "lianxiren": "李先生",
+          "lianxidianhua": "13916323347",
+          "weixinhao": "zhangsan_wx",
+          "weixinnicheng": "张三",
+          "weixintouxiang": "https://wx.qlogo.cn/xxx/avatar.png",
+          "suoshuhangye": "医疗器械",
+          "tuiguangriqi": "2026-08-27",
+          "tuiguangqudao": "微信私聊",
+          "zhuangtai": "感兴趣",
+		  "zhuanrengongshijian": "2026-09-07 14:54:09",
+		  "rengongkefuxingming": "yeweiyang",
+          "beizhu": "通过微信咨询产品",
+          "create_user": 4,
+          "update_time": "",
+          "id": ""
+        }
+      ],
+      "method": "insert",
+      "table": "t_kehuxinxi"
+    }
+  ],
+  "temp": false
+}
+```
+
+> `create_user: 4` 为委托登录返回的 `record_id`（`sys_user.id`），不同委托人此值不同。
+
+### 返回响应
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| Code | int | `0` 表示创建成功 |
+| Response | int | 新建客户记录的 `id` ，后续创建跟进记录时作为 `kehuxingming` 的值 |
+
+**响应示例**
+
+```json
+{
+  "Code": 0,
+  "Response": 10
+}
+```
+
+---
+
+## 6. 客户信息修改接口
+
+### 接口地址
+
+```
+POST https://erp${APP_ID}.aidingyi.cn/api/v1/erp.module/module_data_update
+```
+
+### 请求参数
+
+| 参数名 | 类型 | 必填 | 说明 |
+|--------|------|------|------|
+| module | string | 否 | 固定为 `"kehuxinxi"` |
+| did | int | 否 | 客户记录 id（修改时建议填） |
+| tables | array | 否 | 仅包含需要修改的字段 |
+| temp | bool | 否 | 是否临时保存，固定为 `false` |
+
+> **身份过滤**：委托登录下，后端在 update 的 where 条件自动追加身份过滤，AI 智能体无法修改他人客户。若 `did` 不属于当前委托人，接口表面返回成功但实际影响 0 行（数据未变），不会报错。
+
+> **create_user 可省略**：修改时可传 `create_user`，也可不传。传入时值需为委托登录返回的 `record_id`。
+
+### 请求示例
+
+修改客户状态和备注：
+
+```json
+{
+  "module": "kehuxinxi",
+  "did": 8,
+  "tables": [
+    {
+      "data": [
+        {
+          "zhuangtai": "已留资待跟进",
+		  "zhuanrengongshijian": "2026-09-07 14:54:09",
+		  "rengongkefuxingming": "yeweiyang",
+          "beizhu": "已修改备注",
+          "create_user": 4,
+          "update_time": "2026-08-27 16:33:00",
+          "id": 8
+        }
+      ],
+      "method": "update",
+      "table": "t_kehuxinxi"
+    }
+  ],
+  "temp": false
+}
+```
+
+### 返回响应
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| Code | int | `0` 表示修改成功 |
+| Response | array | 修改操作返回空数组 `[]` |
+
+**响应示例**
+
+```json
+{
+  "Code": 0,
+  "Response": []
+}
+```
+
+### 注意事项
+
+1. **修改时必须传递 `id` 字段**：传客户记录的 id
+2. **只传需要修改的字段**：避免传递未变更的字段，防止覆盖意外数据
+3. **转人工时间和人工客服姓名**：用户可能会多次转人工，每次记录最新的
+
+---
+
+## 7. 跟进记录列表接口
+
+独立的「跟进记录」模块，主表 `t_lianxijilu` 通过关联字段 `kehuxingming` 选择【客户信息】模块的客户。**智能体写入跟进记录推荐使用本模块**。
+
+### 接口地址
+
+```
+POST https://erp${APP_ID}.aidingyi.cn/api/v1/erp.module/module_listing_view
+```
+
+### 请求参数
+
+| 参数名 | 类型 | 必填 | 说明 |
+|--------|------|------|------|
+| module | string | 否 | 固定为 `"lianxijilu"` |
+| filters | array | 否 | 过滤条件，参见第 1 节 filters 约定 |
+| page, limit | - | - | 参见第 1 节分页参数 |
+
+**请求示例（按客户姓名查询跟进记录）**
+
+```json
+{
+  "module": "lianxijilu",
+  "filters": [
+    { "attr": "kehuxingming", "value": ["张三"], "component": "input" }
+  ],
+  "page": 1,
+  "limit": 20
+}
+```
+
+**请求示例（按时间范围查询跟进记录）**
+
+```json
+{
+  "module": "lianxijilu",
+  "filters": [
+    { "attr": "shijian", "value": ["2026-08-01", "2026-08-31"], "component": "date" }
+  ],
+  "page": 1,
+  "limit": 20
+}
+```
+
+**业务字段**（数据字典 `t_lianxijilu`）
+
+| 字段 | 中文名 | 类型 | 控件 | 说明 |
+|------|--------|------|------|------|
+| kehuxingming | 客户姓名 | varchar(100) | input（关联选择） | 关联【客户信息】模块客户；列表中为客户名称字符串，详情中为 `{label, value}` 对象；**业务上必须传**（不传则记录无法归属客户） |
+| kehujiatingdizhi | 客户家庭地址 | varchar(50) | input | |
+| lianxiren | 联系人 | varchar(50) |  | 由关联客户自动回填 |
+| lianxifangshi | 联系电话 | varchar(100) |  | 由关联客户自动回填 |
+| weixinhao | 微信号 | varchar(50) |  | 由关联客户自动回填 |
+| suoshuhangye | 所属行业 | varchar(50) |  | 由关联客户自动回填 |
+| shijian | 本次跟进时间 | date | date | 业务上必传，`YYYY-MM-DD` |
+| genjinren | 跟进人 | varchar(100) | input | 业务上必传，填智能体或委托人名称 |
+| xiaciriqi | 下次跟进时间 | date | date | 聊天中约定下次跟进时填 |
+| neirong | 推广内容摘要 | varchar(100) | input | 智能体发送内容的摘要 |
+| kehuhuifuneirong | 客户回复内容 | text | textarea | 客户回复的摘要 |
+| genjindongzuo | 跟进动作 | longtext(200) | textarea | 如"首次触达/报价/邀约" |
+| beizhu | 备注 | text(100) | textarea | |
+
+系统字段：`id`、`sid`、`create_user`、`create_group`、`update_user`、`create_time`、`update_time`、`status`（隐藏）。
+
+**关于 date 截止时间的注意事项**
+
+`value[1]` 必须带时分秒或使用完整日期。写 `"2026-08-31"` 实际表示 `"2026-08-31 00:00:00"` 而非 `2026-08-31 23:59:59`。用户说"8月1日到8月31日之间"应翻译为 `["2026-08-01 00:00:00", "2026-08-31 23:59:59"]`。
+
+### 返回响应
+
+通用返回结构见第 1 节。以下为业务字段示例（实际 `fields` 以接口返回为准）：
+
+**响应示例**
+
+```json
+{
+  "Code": 0,
+  "Response": {
+    "data": [
+      {
+        "id": 1, "sid": "GJJL2026-000001",
+        "kehuxingming": "张三", "kehujiatingdizhi": "上海市徐汇区南宁路1000号",
+        "lianxiren": "王先生", "lianxifangshi": "13800138000",
+        "weixinhao": "test_wx_001", "suoshuhangye": "医疗器械",
+        "shijian": "2026-08-27", "genjinren": "覃姗测试",
+        "xiaciriqi": "2026-08-30",
+        "neirong": "介绍了产品方案，客户表示感兴趣",
+        "kehuhuifuneirong": "好的，我再考虑一下价格",
+        "genjindongzuo": "微信沟通",
+        "beizhu": null,
+        "create_user": "覃姗测试", "create_time": "2026-08-27 14:30:00",
+        "status": 1
+      }
+    ],
+    "data2": [],
+    "fields": [
+      { "attr_name": "sid", "display_name": "业务编号" },
+      { "attr_name": "kehuxingming", "display_name": "客户姓名" },
+      { "attr_name": "kehujiatingdizhi", "display_name": "客户家庭地址" },
+      { "attr_name": "lianxiren", "display_name": "联系人" },
+      { "attr_name": "lianxifangshi", "display_name": "联系电话" },
+      { "attr_name": "weixinhao", "display_name": "微信号" },
+      { "attr_name": "suoshuhangye", "display_name": "所属行业" },
+      { "attr_name": "shijian", "display_name": "本次跟进时间" },
+      { "attr_name": "genjinren", "display_name": "跟进人" },
+      { "attr_name": "xiaciriqi", "display_name": "下次跟进时间" },
+      { "attr_name": "neirong", "display_name": "推广内容摘要" },
+      { "attr_name": "kehuhuifuneirong", "display_name": "客户回复内容" },
+      { "attr_name": "genjindongzuo", "display_name": "跟进动作" },
+      { "attr_name": "beizhu", "display_name": "备注" },
+      { "attr_name": "id", "display_name": "系统编号" },
+      { "attr_name": "create_user", "display_name": "创建人" },
+      { "attr_name": "create_time", "display_name": "创建时间" },
+      { "attr_name": "update_time", "display_name": "更新时间" },
+      { "attr_name": "status", "display_name": "系统状态" }
+    ],
+    "total": 1,
+    "total_sum": {}
+  }
+}
+```
+
+---
+
+## 8. 跟进记录详情接口
+
+### 接口地址
+
+```
+POST https://erp${APP_ID}.aidingyi.cn/api/v1/erp.module/module_prepare_edit
+```
+
+### 请求参数
+
+| 参数名 | 类型 | 必填 | 说明 |
+|--------|------|------|------|
+| module | string | 否 | 固定为 `"lianxijilu"` |
+| did | int | 否 | 跟进记录 id |
+
+**请求示例**
+
+```json
+{ "module": "lianxijilu", "did": 1 }
+```
+
+### 返回响应
+
+> 响应顶层仅返回 `tables`。结构同第 4 节。与列表接口的差异：关联字段 `kehuxingming` 由客户名称字符串变为 `{label, value}` 对象，`value` 为客户记录 id。
+
+| 路径 | 类型 | 说明 |
+|------|------|------|
+| Response['tables'][0]['data'] | object | 跟进记录主表信息（单条，字典） |
+
+**响应示例（已精简）**
+
+```json
+{
+  "Code": 0,
+  "Response": {
+    "tables": [
+      {
+        "display_name": "跟进记录",
+        "table_name": "t_lianxijilu",
+        "primary_key": "id",
+        "foreign_key": null,
+        "parent_table": null,
+        "data": {
+          "id": 1, "sid": "GJJL2026-000001",
+          "kehuxingming": { "label": "张三", "value": "6" },
+          "kehujiatingdizhi": "上海市徐汇区南宁路1000号",
+          "lianxiren": "王先生",
+          "lianxifangshi": "13800138000",
+          "weixinhao": "test_wx_001",
+          "suoshuhangye": "医疗器械",
+          "shijian": "2026-08-27",
+          "genjinren": "覃姗测试",
+          "xiaciriqi": "2026-08-30",
+          "neirong": "介绍了产品方案，客户表示感兴趣",
+          "kehuhuifuneirong": "好的，我再考虑一下价格",
+          "genjindongzuo": "微信沟通",
+          "beizhu": null,
+          "create_user": { "label": "覃姗测试", "value": 4 },
+          "create_group": { "label": "默认组", "value": 1 },
+          "create_time": "2026-08-27 14:30:00",
+          "update_time": "2026-08-27 14:30:00",
+          "status": 1
+        },
+        "sections": [
+          {
+            "display_name": "基本信息",
+            "attrs": [
+              { "attr_name": "kehuxingming", "display_name": "客户姓名" },
+              { "attr_name": "kehujiatingdizhi", "display_name": "客户家庭地址" },
+              { "attr_name": "lianxiren", "display_name": "联系人" },
+              { "attr_name": "lianxifangshi", "display_name": "联系电话" },
+              { "attr_name": "weixinhao", "display_name": "微信号" },
+              { "attr_name": "suoshuhangye", "display_name": "所属行业" },
+              { "attr_name": "shijian", "display_name": "本次跟进时间" },
+              { "attr_name": "genjinren", "display_name": "跟进人" },
+              { "attr_name": "xiaciriqi", "display_name": "下次跟进时间" },
+              { "attr_name": "neirong", "display_name": "推广内容摘要" },
+              { "attr_name": "kehuhuifuneirong", "display_name": "客户回复内容" },
+              { "attr_name": "genjindongzuo", "display_name": "跟进动作" },
+              { "attr_name": "beizhu", "display_name": "备注" }
+            ]
+          },
+          {
+            "display_name": "系统信息",
+            "attrs": [
+              { "attr_name": "id", "display_name": "系统编号" },
+              { "attr_name": "sid", "display_name": "业务编号" },
+              { "attr_name": "create_user", "display_name": "创建人" },
+              { "attr_name": "create_time", "display_name": "创建时间" },
+              { "attr_name": "update_time", "display_name": "更新时间" },
+              { "attr_name": "status", "display_name": "系统状态" }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+> **与列表接口的差异**：详情接口中仅系统字段（`create_user`、`update_user`、`create_group`）的值为 `{label, value}` 对象；`kehuxingming`、`suoshuhangye` 等业务字段仍为扁平字符串。
+
+---
+
+## 9. 跟进记录创建接口
+
+### 接口地址
+
+```
+POST https://erp${APP_ID}.aidingyi.cn/api/v1/erp.module/module_data_update
+```
+
+### 请求参数
+
+| 参数名 | 类型 | 必填 | 说明 |
+|--------|------|------|------|
+| module | string | 否 | 固定为 `"lianxijilu"` |
+| did | null | 否 | 创建时固定为 `null` |
+| tables | array | 否 | 包含主表数据 |
+| temp | bool | 否 | 是否临时保存，固定为 `false` |
+
+**tables 数组结构**
+
+| 元素 | table | method | 说明 |
+|------|-------|--------|------|
+| tables[0] | `t_lianxijilu` | `insert` | 跟进记录主表，单条数据 |
+
+### 主表 t_lianxijilu 字段要求
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| kehuxingming | string | **客户记录 id**（不是客户名称文本），取自客户列表 `data[].id` 或创建客户接口返回值 |
+| kehujiatingdizhi | string | 客户家庭地址，从客户信息中获取 |
+| lianxiren | string | 联系人，**需 AI 智能体从客户信息中获取并传入** |
+| lianxifangshi | string | 联系电话，**需 AI 智能体从客户信息中获取并传入** |
+| weixinhao | string | 微信号，**需 AI 智能体从客户信息中获取并传入** |
+| suoshuhangye | string | 所属行业，**需 AI 智能体从客户信息中获取并传入** |
+| shijian | datetime | 本次跟进时间，格式 `YYYY-MM-DD`，应为当前日期 |
+| genjinren | string | 跟进人，默认取委托人 display_name |
+| xiaciriqi | datetime | 下次跟进时间；**仅当客户在对话中明确约定了下次聊天/跟进时间**时填写，格式 `YYYY-MM-DD`，未明确约定则留空 |
+| neirong | string | 推广内容摘要 |
+| kehuhuifuneirong | string | 客户回复内容 |
+| genjindongzuo | string | 跟进动作（如"电话沟通"、"微信聊天"、"上门拜访"等） |
+| beizhu | string | 备注 |
+| create_user | int | 当前委托人的 `sys_user.id`（= 委托登录返回的 `record_id`）；可省略，后端自动补为委托人 id |
+| update_time | string | 固定为空字符串 `""` |
+| id | string | 固定为空字符串 `""`，表示新建 |
+
+> **`kehuxingming` 字段约束**：该字段为关联字段，后端校验其值必须是【客户信息】模块中已存在客户的记录 id。传客户名称文本或不存在 id 会写入失败。
+
+
+>
+> **字段映射关系**（t_kehuxinxi → t_lianxijilu）：
+>
+> | 客户信息字段 | 跟进记录字段 | 说明 |
+> |-------------|-------------|------|
+> | `xingming` | `kehuxingming` | 客户姓名 |
+> | `lianxiren` | `lianxiren` | 联系人 |
+> | `lianxidianhua` | `lianxifangshi` | 联系电话（注意字段名不同） |
+> | `weixinhao` | `weixinhao` | 微信号 |
+> | `suoshuhangye` | `suoshuhangye` | 所属行业 |
+>
+> **create_user 可省略**：同客户信息创建，`create_user` 可省略，后端自动补为委托人 id；传入则需等于委托登录返回的 `record_id`。
+
+### 创建前的必要步骤
+
+创建跟进记录前，AI 智能体应**先查询客户信息列表**，获取该客户的基本信息，然后填入跟进记录：
+
+```
+1. 调用客户信息列表接口，按 xingming 或 lianxidianhua 查找客户
+2. 从返回的客户记录中提取：lianxiren、lianxidianhua、weixinhao、suoshuhangye
+3. 将这些字段映射到跟进记录的对应字段后，一并传入创建接口
+```
+
+### 请求示例
+
+以下示例展示了完整的字段填充（客户基本信息从客户信息中获取）：
+
+```json
+{
+  "module": "lianxijilu",
+  "did": null,
+  "tables": [
+    {
+      "data": [
+        {
+          "kehuxingming": "6",
+          "kehujiatingdizhi": "上海市徐汇区南宁路1000号",
+          "lianxiren": "李先生",
+          "lianxifangshi": "13916323347",
+          "weixinhao": "zhangsan_wx",
+          "suoshuhangye": "医疗器械",
+          "shijian": "2026-08-27",
+          "genjinren": "覃姗测试",
+          "xiaciriqi": "2026-08-30",
+          "neirong": "介绍了产品方案，客户表示感兴趣，需要进一步沟通价格细节",
+          "kehuhuifuneirong": "好的，价格方面我再考虑一下",
+          "genjindongzuo": "微信沟通",
+          "beizhu": "",
+          "create_user": 4,
+          "update_time": "",
+          "id": ""
+        }
+      ],
+      "method": "insert",
+      "table": "t_lianxijilu"
+    }
+  ],
+  "temp": false
+}
+```
+
+> `create_user: 4` 为委托登录返回的 `record_id`（`sys_user.id`）。
+> `lianxiren`、`lianxifangshi`、`weixinhao`、`suoshuhangye` 的值来源于客户信息记录。
+
+### 返回响应
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| Code | int | `0` 表示创建成功 |
+| Response | int | 新建跟进记录的 `id` |
+
+**响应示例**
+
+```json
+{
+  "Code": 0,
+  "Response": 15
+}
+```
+
+### 9.1 跟进汇总摘要同步（AI 智能体职责）
+
+`t_kehuxinxi.genjinhuizongzhaiyao`（跟进汇总摘要）用于沉淀客户跟进状态的累计摘要。**新建客户时无需填写**（见第 5 节），由填写跟进记录后归纳更新。
+
+每次填写跟进记录后，AI 智能体应**主动同步客户信息**：
+
+1. 判断该客户**最新的客户状态** `zhuangtai`（取值：`感兴趣` / `不感兴趣` / `已留资待跟进` / `已签约` / `已流失`）
+2. 结合本次跟进记录与历史跟进情况，归纳最新的**跟进汇总摘要** `genjinhuizongzhaiyao`（格式要求见下方「跟进汇总摘要格式」）
+3. 调用**客户信息修改接口**（第 6 节，`module_data_update`），同时更新 `zhuangtai`、`genjinhuizongzhaiyao` 两个字段
+4. 若本次跟进记录**没有重要信息**，"客户状态"与"跟进汇总摘要"均**无变化**，可**跳过**客户信息修改接口
+
+**跟进汇总摘要格式（强制）**：
+
+- **按天分条**：每天一条，每条以跟进日期开头，格式为「日期, 当日跟进要点」，日期形如 `2026-9-15`，单条 1~2 句精炼归纳
+- **CRLF 分隔**：条目之间使用 CRLF（`\r\n`）分隔，JSON 请求体中写作 `\r\n` 转义；禁止把多条合并成一段或用分号分隔
+- **保留历史条目**：归纳时须基于客户当前摘要中的已有条目（可精简措辞，不得丢失日期条目），本次跟进新增或更新当天条目后整体回写
+
+示例（两条跟进记录的摘要形态）：
+
+```
+2026-9-15, 首次与客户交流，客户提出了...
+2026-9-17, 客户希望...
+```
+
+> `genjinhuizongzhaiyao` 字段虽为 `longtext` 型，可存储较长文本，但**建议摘要内容控制在 200 字以内**，精炼归纳便于用户阅读；修改接口中仅传需要更新的字段即可（`zhuangtai`、`genjinhuizongzhaiyao`）。
+
+**修改接口请求示例**（填写跟进记录后同步客户状态与跟进汇总摘要）：
+
+```json
+{
+  "module": "kehuxinxi",
+  "did": 8,
+  "tables": [
+    {
+      "data": [
+        {
+          "zhuangtai": "待跟进",
+          "genjinhuizongzhaiyao": "2026-9-15, 首次微信沟通，客户对产品方案感兴趣，价格仍在考虑，已约 8-30 再次跟进。\r\n2026-9-16, 客户确认报价意向，已留资待跟进。",
+          "create_user": 4,
+          "update_time": "2026-08-27 16:33:00",
+          "id": 8
+        }
+      ],
+      "method": "update",
+      "table": "t_kehuxinxi"
+    }
+  ],
+  "temp": false
+}
+```
+
+---
+
+## 10. 权限与写入约束
+
+委托登录下，后端强制执行以下约束，AI 智能体无需也无法绕过，但应了解以避免调用失败。
+
+### 10.1 操作权限矩阵
+
+| 模块 | 列表/详情 | 新增 | 修改 | 删除 |
+|------|----------|------|------|------|
+| 客户信息（kehuxinxi） | ✓ | ✓ | ✓ | ✗ |
+| 跟进记录（lianxijilu） | ✓ | ✓ | ✓ | ✗ |
+
+> 角色「销售员」对两个模块配置的操作均为「增删改导出导入」（sys_operation 28），insert/update 权限均开通，故**跟进记录也可修改**。**删除**（✗）并非权限配置所致，而是后端 `module_data_delete` 对委托登录**硬编码禁止**（见 10.3）。
+
+调用无权限的写入接口会返回 `Code: -1, Error: "委托登录无 insert/update 权限：模块 xxx"`。
+
+### 10.2 数据权限
+
+- 客户信息：仅返回/操作委托人自己的客户数据（`personal_scope`，后端自动过滤，无需在 filters 中指定）
+- 跟进记录：仅返回/操作委托人自己的跟进记录（`personal_scope`，后端自动过滤）；AI 智能体仍可通过 filters 按 `kehuxingming` 等字段进一步筛选特定客户的跟进记录
+
+### 10.3 删除约定
+
+**委托登录禁止物理删除业务数据**。所有"删除"语义需转化为修改状态、软删除。
+
+### 10.4 业务流程约束
+
+AI 智能体在执行业务操作时，应遵循以下流程约束：
+
+| 场景 | 约束说明 |
+|------|---------|
+| 创建跟进记录前 | 应先通过客户信息列表接口确认客户是否已存在；若不存在，需先创建客户信息 |
+| 创建跟进记录时 | `kehuxingming` 必须与客户信息中的 `id` 完全一致 |
+| 创建跟进记录时（客户信息回填） | 必须先查询客户信息，将 `lianxiren`、`lianxidianhua`→`lianxifangshi`、`weixinhao`、`suoshuhangye` 从客户记录中提取并传入跟进记录 |
+| 创建客户信息时 | `xingming`（客户名称）、`lianxiren`（联系人）等字段建议填写，信息不足可留空，后端不强制 |
+| 填写跟进记录后 | 判断该客户最新的客户状态并归纳"跟进汇总摘要"，调用客户信息修改接口同步 `zhuangtai`、`genjinhuizongzhaiyao`（见 9.1） |
+| 跟进记录无重要信息时 | "客户状态"、"跟进汇总摘要"均无变化，可跳过客户信息修改接口 |
+| 修改客户状态时 | 需同时更新 `zhuangtai` 和 `genjinhuizongzhaiyao`（跟进汇总摘要），保持状态与摘要的一致性；`beizhu` 可按需更新 |
+
+---
+
+## 11. 数据字典
+
+### 11.1 客户关系 - 客户 [t_kehuxinxi]
+
+| 序号 | 字段名 | 中文名 | 数据类型 | 数据长度 | 隐藏 | 控件 |
+|------|--------|--------|----------|----------|------|------|
+| 1 | xingming | 客户名称 | varchar | 100 | | input |
+| 2 | lianxiren | 联系人 | varchar | 50 | | input |
+| 3 | lianxidianhua | 联系电话 | varchar | 100 | | input |
+| 4 | weixinhao | 微信号 | varchar | 50 | | input |
+| 5 | weixinnicheng | 微信昵称 | varchar | 50 | | input |
+| 6 | weixintouxiang | 微信头像 | varchar | 200 | | input |
+| 7 | suoshuhangye | 所属行业 | varchar | 50 | | select |
+| 8 | tuiguangriqi | 推广日期 | date | 50 | | date |
+| 9 | tuiguangqudao | 推广渠道 | varchar | 50 | | select |
+| 10 | zhuangtai | 客户状态 | varchar | 100 | | select |
+| 11 | genjinhuizongzhaiyao | 跟进汇总摘要 | longtext | 50 | | textarea |
+| 12 | beizhu | 备注 | text | 100 | | textarea |
+| 13 | id | 系统编号 | int | 50 | | input |
+| 14 | sid | 业务编号 | varchar | 50 | | input |
+| 15 | create_user | 创建人 | int | 50 | | input |
+| 16 | create_group | 创建组 | int | 50 | | input |
+| 17 | update_user | 修改人 | int | 50 | | input |
+| 18 | create_time | 创建时间 | datetime | 50 | | datetime |
+| 19 | update_time | 更新时间 | datetime | 50 | | datetime |
+| 20 | status | 系统状态 | int | 50 | 隐藏 | input |
+| 21 | unionid | 外部用户唯一标识 | varchar | 50 | | input |
+
+> `genjinhuizongzhaiyao`（跟进汇总摘要）虽为 `longtext` 型，但**建议内容控制在 200 字以内**，精炼归纳便于用户阅读（见 9.1 节）。
+>
+> `unionid`（外部用户唯一标识）为 2026-09 新增字段，AI 智能体创建客户时**固定写入我方 `external_userid`**（微信客服客户 ID），作为跨轮次查重主键，见第 12 节。
+
+### 11.2 客户关系 - 跟进记录 [t_lianxijilu]
+
+| 序号 | 字段名 | 中文名 | 数据类型 | 数据长度 | 隐藏 | 控件 |
+|------|--------|--------|----------|----------|------|------|
+| 1 | kehuxingming | 客户姓名 | varchar | 100 | | input |
+| 2 | kehujiatingdizhi | 客户家庭地址 | varchar | 50 | | input |
+| 3 | lianxiren | 联系人 | varchar | 50 | | input |
+| 4 | lianxifangshi | 联系电话 | varchar | 100 | | input |
+| 5 | weixinhao | 微信号 | varchar | 50 | | input |
+| 6 | suoshuhangye | 所属行业 | varchar | 50 | | select |
+| 7 | shijian | 本次跟进时间 | date | 100 | | date |
+| 8 | genjinren | 跟进人 | varchar | 100 | | input |
+| 9 | xiaciriqi | 下次跟进时间 | date | 100 | | date |
+| 10 | neirong | 推广内容摘要 | varchar | 100 | | input |
+| 11 | kehuhuifuneirong | 客户回复内容 | text | 50 | | textarea |
+| 12 | genjindongzuo | 跟进动作 | longtext | 200 | | textarea |
+| 13 | beizhu | 备注 | text | 100 | | textarea |
+| 14 | id | 系统编号 | int | 50 | | input |
+| 15 | sid | 业务编号 | varchar | 50 | | input |
+| 16 | create_user | 创建人 | int | 50 | | input |
+| 17 | create_group | 创建组 | int | 50 | | input |
+| 18 | update_user | 修改人 | int | 50 | | input |
+| 19 | create_time | 创建时间 | datetime | 50 | | datetime |
+| 20 | update_time | 更新时间 | datetime | 50 | | datetime |
+| 21 | status | 系统状态 | int | 50 | 隐藏 | input |
+
+### 11.3 系统管理 - 用户管理 [sys_user]
+
+| 序号 | 字段名 | 中文名 | 数据类型 | 数据长度 | 隐藏 | 控件 |
+|------|--------|--------|----------|----------|------|------|
+| 1 | id | 编号 | INTEGER | 100 | 隐藏 | |
+| 2 | status | 状态 | INTEGER | 100 | 隐藏 | |
+| 3 | create_time | 创建时间 | DATETIME | 100 | | datetime |
+| 4 | update_time | 更新时间 | DATETIME | 100 | | datetime |
+| 5 | sid | 业务编号 | varchar | 100 | | |
+| 6 | create_user | 创建人 | int | 100 | | |
+| 7 | create_group | 创建组 | int | 100 | | |
+| 8 | update_user | 修改人 | int | 100 | | |
+| 9 | account | 用户名 | VARCHAR(50) | 100 | | |
+| 10 | confidential | 加密密码 | VARCHAR(300) | 100 | | |
+| 11 | name | 真实姓名 | VARCHAR(50) | 100 | | |
+| 12 | mobile | 手机号 | VARCHAR(11) | 100 | | |
+
+### 11.4 系统管理 - 职位管理 [sys_user_post]
+
+| 序号 | 字段名 | 中文名 | 数据类型 | 数据长度 | 隐藏 | 控件 |
+|------|--------|--------|----------|----------|------|------|
+| 1 | id | 编号 | INTEGER | 100 | 隐藏 | |
+| 2 | status | 状态 | INTEGER | 100 | 隐藏 | |
+| 3 | create_time | 创建时间 | DATETIME | 100 | | datetime |
+| 4 | update_time | 更新时间 | DATETIME | 100 | | datetime |
+| 5 | sid | 业务编号 | varchar | 100 | | |
+| 6 | create_user | 创建人 | int | 100 | | |
+| 7 | create_group | 创建组 | int | 100 | | |
+| 8 | update_user | 修改人 | int | 100 | | |
+| 9 | sys_user_id | 用户 | INTEGER | 100 | | |
+| 10 | sys_role_id | 角色 | INTEGER | 100 | | |
+| 11 | sys_group_id | 部门 | INTEGER | 100 | | |
+| 12 | is_admin | 是否：管理员 | INTEGER | 100 | 隐藏 | select |
+| 13 | is_disable | 禁用 | INTEGER | 100 | | select |
+| 14 | is_main_post | 是否主职位 | INTEGER | 100 | | select |
+
+> **sys_user 与 sys_user_post 的关系**：`sys_user_post.sys_user_id` 关联 `sys_user.id`，一个用户可拥有多个职位（多角色/多部门）。委托登录时，系统通过 `sys_user.mobile` 匹配用户，再关联 `sys_user_post` 获取角色和部门信息。
+
+---
+
+## 12. 同步业务规则（AI 智能体必读）
+
+> **2026-09-04 更新**：推送由 recap 机制在每轮问答回复送达后由系统自动触发（`src/services/recap/tasks/external_push.py`），由推送循环 LLM 按本节规则通过 http_api 工具执行。主对话智能体仍无需（也不应）在对话中执行推送操作。**本节是推送循环 LLM 的执行规则来源，必须完整保留在租户文档中，不得删减。**
+
+本节定义 AI 智能体把每轮问答数据同步到本系统的业务规则。**推送触发时机**：每完成一轮问答（客户一条消息 → AI 智能体回复完成）推送一次，与是否留资无关。推送是后台客户管理动作，不需要向客户确认、也不要向客户提及。
+
+### 12.1 客户查重与建/改分流（同一客户只保留一条客户记录）
+
+**查重主键**：客户表的 `unionid` 字段固定存储 AI 侧的 `external_userid`（微信客服客户 ID，从 `get_channel_user_info` 工具获取，每条客户消息的 `user_id` 即该值，同一客户跨轮次稳定不变）。
+
+**每轮推送的第一步**：调客户信息列表接口（第 3 节），按 `unionid` 精确查重：
+
+```json
+{
+  "module": "kehuxinxi",
+  "filters": [
+    { "attr": "unionid", "value": ["<external_userid>"], "component": "input", "exact": true }
+  ],
+  "page": 1,
+  "limit": 1
+}
+```
+
+> **必须带 `"exact": true`**：`input` 组件默认是 LIKE 模糊匹配，`external_userid` 前缀相同（同为 `wm` 开头）的多个客户会互相误命中；`exact: true` 改为 `=` 精确匹配。`value` 必须传数组。
+
+| 查重结果 | 动作 |
+|---------|------|
+| 未命中（`total = 0`） | 调**客户创建接口**（第 5 节），`unionid` 写入 `external_userid` |
+| 命中（`total >= 1`） | 取命中记录的 `id` 作为 `did`，后续信息变化时调**客户修改接口**（第 6 节）更新，**严禁再创建** |
+
+**更新时机**：客户提供了新的手机号、微信号或可确认的身份信息时，把变化字段通过修改接口更新（只传变化字段 + `id` ）。**同一会话中多处客户信息修改，尽可能合并提交一次修改接口**，例如客户提供了新手机号、微信昵称也有变化、跟进汇总摘要也发生变化，尽可能合并提交一次客户修改接口。
+
+### 12.2 客户字段取值规则
+
+| 字段 | 取值规则 |
+|------|---------|
+| `xingming`（客户名称） | 客户在对话中表明身份（姓名/称呼）时用该身份；未表明时用**微信昵称**（`get_channel_user_info` 返回的 `nickname`）兜底；昵称也缺失时留空 |
+| `lianxidianhua`（联系电话） | 客户留资手机号；未留资留空，**不得用委托人手机号冒充** |
+| `weixinhao`（微信号） | 留空（微信客服场景拿不到客户微信号） |
+| `weixinnicheng`（微信昵称） | 写入 `get_channel_user_info` 返回的 `nickname`；无昵称时留空 |
+| `weixintouxiang`（微信头像） | 写入 `get_channel_user_info` 返回的 `avatar`；无头像时留空 |
+| `unionid` | 固定写入 `external_userid`（见 12.1），创建后不再变更 |
+| `tuiguangriqi` | 首次咨询日期 `YYYY-MM-DD` |
+| `tuiguangqudao` | 按实际渠道选（微信客服场景一般选「微信私聊」） |
+| `beizhu` | 可写客户来源备注（如「企业微信客服 AI 咨询」） |
+
+> 新增字段说明：`weixinnicheng`（微信昵称）、`weixintouxiang`（微信头像）为 2026-09 新增字段，客户信息写入后台时将微信昵称、微信头像分别写入上述字段（取值见上表）。客户性别（`get_channel_user_info` 返回的 `gender`）暂无对应字段，**暂不推送**，预留后续使用。
+
+### 12.3 每轮问答一条跟进记录
+
+每轮推送**必须**创建一条跟进记录（第 9 节），即使本轮客户未留资。**判定口径：客户问问题 → AI 回复完成，即记一轮问答，对应创建一条跟进记录。**字段取值规则如下：
+
+| 字段 | 取值规则 |
+|------|---------|
+| `shijian` | 当前日期 `YYYY-MM-DD` |
+| `neirong`（推广内容摘要） | LLM 生成的**本轮 AI 回复要点**摘要（1~3 句，概括讲解了什么产品/价格/方案） |
+| `kehuhuifuneirong`（客户回复内容） | LLM 生成的**本轮客户诉求**摘要（客户问了什么、表达了什么意向） |
+| `genjindongzuo` | 固定写「微信咨询（AI）」 |
+| `xiaciriqi`（下次跟进时间） | **仅当客户在对话中明确约定了下次聊天/跟进时间**时填写，换算成具体日期 `YYYY-MM-DD` 写入；客户**未明确约定则留空**，不得凭空填写。填写口径分三档：① 客户明确说出具体日期或星期几（如"下周三""9月15日"）→ **直接将其指定的那个日期**写入；② 客户明确说相对时间（如"明天""后天""下周""月底"）→ 以**客户说话当天的日期**为基准推算出具体日期后写入；③ 含糊承诺、无明确时间（如"过两天""回头再说""以后再说""过阵子"）→ **留空**，不推算、不臆测（此类表述如实记录在客户回复摘要 `kehuhuifuneirong` 中即可） |
+| `kehuxingming`、`lianxiren`、`lianxifangshi`、`weixinhao`、`suoshuhangye` | 按第 9 节「字段映射关系」从命中/新建的客户记录中取值传入（未留资时电话/微信留空） |
+
+**跟进汇总摘要同步（9.1 节）每轮执行**：创建跟进记录后，按 9.1 节判断最新 `zhuangtai` 并归纳 `genjinhuizongzhaiyao`，通过客户修改接口同步；本轮无重要信息可跳过该次修改，但跟进记录本身不可省略。
+
+### 12.4 委托登录与 client_token 缓存
+
+- 使用技能脚本 `delegate_login.py` 获取 `client_token`，脚本内置 Redis 缓存（TTL 23 小时，token 实际有效期 1 天），同一归属员工手机号在有效期内**不重复登录**；返回 `cached=true` 表示命中缓存。
+- **mobile 必须取归属员工手机号**（`record_lead_capture` 成功结果中的 `assignee_phone`，或 `get_channel_user_info` 返回的 `assignee_phone`），切勿使用客户手机号或留空。
+- **归属员工在本系统无账号时自动开户（2026-09 新增）**：登录接口对不存在的手机号自动创建用户+职位（角色「销售员」、部门「默认组」），无需管理员预先开通；响应 `created: true` 标识本次新建。如能取到归属员工姓名，可在登录 body 传 `"name": "<姓名>"` 作为新用户姓名（脚本未支持该参数时可不传，后端按"用户+手机号后4位"兜底命名）。新建用户密码为随机串，不可用密码登录，不影响委托登录与 SSO。
+- 业务接口返回 `Code: -99`（鉴权失效）时，带 `"force_refresh": true` 重新执行脚本强制刷新 token 后重试一次。
+- **无需调用 logout**，token 由缓存过期自然失效。
+
+### 12.5 错误处理与降级
+
+| 场景 | 处理 |
+|------|------|
+| 业务错误（如 `{"Code": -1, "Error": "非空内容"}`） | 对照本文档修正参数后**重试一次**；仍失败则放弃本轮推送 |
+| `Code: -99` 鉴权失效 | `force_refresh` 重新委托登录后重试一次 |
+| 脚本返回「未配置」/ `assignee_phone` 为空 | 跳过本轮推送 |
+
+所有推送失败一律**不阻塞**与客户的正常对话，且不向客户暴露接口报错细节。
+
+### 12.6 人工期推送规则（人工接待期对话，2026-09 新增）
+
+转人工后人工客服接待期间的客户与员工对话，由系统以人工期任务推送（与 12.3 的 AI 智能体每轮推送相互独立）。**本节规则优先于 12.3 节中与之冲突的条款**；12.1 查重分流、12.2 字段取值、9.1 汇总摘要同步、12.4 委托登录、12.5 错误处理照常执行。
+
+| 项 | 规则 |
+|------|------|
+| 触发与节流 | 人工期客户消息触发，同一会话 5 分钟冷却，一次推送覆盖冷却期内全部对话（系统读执行时刻的消息快照） |
+| 跟进记录 | 每次推送创建一条跟进记录（第 9 节），`genjindongzuo` 固定写「微信咨询（人工）」（替代 12.3 的「微信咨询（AI）」） |
+| `neirong` | 人工客服回复要点摘要（系统预生成，见推送数据「预生成摘要」） |
+| `kehuhuifuneirong` | 客户消息摘要（系统预生成） |
+| `xiaciriqi` | 与 12.3 同款三档口径（仅客户明确约定下次跟进时间时填写） |
+| 对话标记 | 推送数据中 `[人工客服]` 开头为员工发言、`[人工接待] 客户：` 开头为客户发言 |
+| 客户表转人工字段 | 随人工期推送更新 `zhuanrengongshijian`（格式 `YYYY-MM-DD HH:MM:SS`，字段定义见第 5 节）与 `rengongkefuxingming`；多次转人工记录最新（数据见推送数据「转人工信息」） |
+| 汇总摘要同步 | 9.1 节 `genjinhuizongzhaiyao` / `zhuangtai` 同步照常执行（人工接待期由本任务承接） |
+| 留资要求 | 不要求已留资：未留资客户同样推送（手机号留空，不得用其他号码冒充） |
+
+---

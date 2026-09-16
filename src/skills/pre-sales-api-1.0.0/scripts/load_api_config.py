@@ -55,26 +55,36 @@ def load_api_config():
         }, ensure_ascii=False))
         return
 
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(script_dir))))
     # tenant_id 数据库带 `tenant_` 前缀，存储规范要求目录不带前缀，统一剥离（与 src.core.storage.normalize_tenant_id 一致）
     if tenant_id.startswith("tenant_"):
         tenant_id = tenant_id[len("tenant_"):]
     # 文档按子智能体隔离：{subagent}-api.md（skill_executor 注入 AID_SUBAGENT_ID；
     # 无上下文的调试场景回退 pre-sales 保持旧行为）
     subagent_id = os.environ.get("AID_SUBAGENT_ID") or "pre-sales"
-    config_path = os.path.join(project_root, "storage", "tenants", tenant_id, "templates", f"{subagent_id}-api.md")
 
-    if not os.path.exists(config_path):
+    # 租户文档优先，未上传时按技能白名单兜底通用模板（configs/api_doc_templates/
+    # pre-sales-api.md），并把 ${APP_ID} 等非凭证占位符渲染为租户环境变量实际值
+    # （凭证类 ${AGENT_TOKEN}/${client_token} 保留，由 http_api 工具请求时替换）
+    try:
+        from src.services.tenant_api_doc import find_unresolved_placeholders, load_rendered_doc
+
+        content = load_rendered_doc(tenant_id, subagent_id)
+    except Exception as e:
+        print(json.dumps({
+            "success": False,
+            "error": f"读取接口文档失败: {e}",
+            "content": ""
+        }, ensure_ascii=False))
+        return
+
+    # 文档缺失，或模板渲染后仍残留非凭证占位符（租户环境变量如 APP_ID 未配置），视为未配置
+    if not content or find_unresolved_placeholders(content):
         print(json.dumps({
             "success": True,
             "content": "未配置外部系统 API。请仅使用 record_lead_capture 工具完成本地留资记录，无需推送外部系统。",
             "configured": False
         }, ensure_ascii=False))
         return
-
-    with open(config_path, "r", encoding="utf-8") as f:
-        content = f.read()
 
     print(json.dumps({
         "success": True,
