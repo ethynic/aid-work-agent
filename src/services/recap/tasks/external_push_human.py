@@ -268,8 +268,8 @@ def _build_human_user_message(
         f"转人工时间：{transfer.get('transferred_at') or '（未知）'}\n"
         "\n"
         "【委托登录信息】\n"
-        f"{user_token}：{login.get('client_token') or ''}\n"
         f"委托人：{login.get('display_name') or ''} / {login.get('agent_name') or ''}"
+        f"（用户身份 token {user_token} 已由系统托管并自动附加到鉴权 Header，无需关注）"
     )
 
 

@@ -226,7 +226,9 @@ class TestExternalPushHumanAdapter:
             assert "转人工客服工号：servicer_1" in kwargs["user_message"]
             assert "转人工客服姓名：王五" in kwargs["user_message"]
             assert "转人工时间：2026-09-16 10:00:00" in kwargs["user_message"]
-            assert "client_token：tok123" in kwargs["user_message"]
+            assert "client_token" in kwargs["user_message"]
+            assert "自动附加" in kwargs["user_message"]
+            assert "tok123" not in kwargs["user_message"]
             assert kwargs["billing_source"] == "external_push_human_pre-sales"
             assert kwargs["trace_prefix"] == "recap:external_push_human"
             # 成功路径不删冷却键（靠 TTL 过期）

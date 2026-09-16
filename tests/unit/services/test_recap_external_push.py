@@ -862,7 +862,8 @@ class TestPushLoop:
         harness = PushLoopHarness(
             responses=[
                 _llm_resp([_tool_call("http_api", {"url": "https://e/list"}, "c1")]),
-                _llm_resp([_tool_call("report_push_result", {"success": True, "detail": "ok"}, "c2")]),
+                _llm_resp([_tool_call("http_api", {"url": "https://e/list"}, "c2")]),
+                _llm_resp([_tool_call("report_push_result", {"success": True, "detail": "ok"}, "c3")]),
             ],
             executor_results=[
                 {"success": False, "error": "业务错误 Code=-99: 鉴权失效"},
@@ -877,11 +878,17 @@ class TestPushLoop:
         # 仅强刷一次（首轮 -99 触发），且带 force_refresh=True
         mock_login.assert_called_once()
         assert mock_login.call_args.args[4] is True
-        # 第 2 轮的 messages 中注入了含新 token 的 user 消息
+        # 第 2 轮的 messages 中注入了刷新通知（不再携带裸 token，由系统自动附加）
         second_call_messages = harness.mock_gw.chat_lite.call_args_list[1].args[0]
         injected = [m for m in second_call_messages
-                    if m["role"] == "user" and "tok_new" in m.get("content", "")]
-        assert injected, "强刷后的新 token 未注入 messages"
+                    if m["role"] == "user" and "强制刷新" in m.get("content", "")]
+        assert injected, "强刷通知消息未注入 messages"
+        # 首轮调用自动注入初始 token，重试调用自动携带强刷后的新 token
+        # （2026-09-16 erp11096 事故修复，2026-09-08 事故后 method 守卫同模式）
+        http_calls = [args for name, args in harness.executor_calls if name == "http_api"]
+        assert len(http_calls) == 2
+        assert http_calls[0]["headers"]["Client-Authorize-Token"] == "tok"
+        assert http_calls[1]["headers"]["Client-Authorize-Token"] == "tok_new"
 
     def test_consecutive_code_99_refreshes_only_once(self):
         harness = PushLoopHarness(

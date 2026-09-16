@@ -40,9 +40,10 @@ from src.tools.base import BaseTool
 
 # ============== 租户接口文档与 api-meta 约定 ==============
 
-# 用户身份 token 默认变量名 / external_userid 承载字段默认名（10605 惯例，
-# 租户可在 api-meta 块中覆盖）
+# 用户身份 token 默认变量名 / 鉴权 Header 名 / external_userid 承载字段默认名
+# （10605 惯例，租户可在 api-meta 块中覆盖）
 _DEFAULT_USER_TOKEN_NAME = "client_token"
+_DEFAULT_USER_TOKEN_HEADER = "Client-Authorize-Token"
 _DEFAULT_EXTERNAL_USERID_FIELD = "unionid"
 
 _HTTP_TIMEOUT_SECONDS = 15
@@ -254,6 +255,9 @@ def parse_api_meta(doc_text: str, topic: str = "外部推送") -> Optional[Dict[
     http_method（可选）：业务接口统一请求方式声明。声明后推送循环强制把 http_api
     调用的 method 纠正为该值（防御 lite 模型把查询类请求自作主张改成 GET 导致
     鉴权 Header 缺失，2026-09-08 Code=-99 事故）；未声明时不干预。
+    user_token_header（可选）：用户身份 token 的鉴权 Header 名，缺省 Client-Authorize-Token。
+    声明后推送循环把该 Header 连同 token 值强制注入每个 http_api 调用
+    （防御 lite 模型漏带鉴权头，2026-09-16 erp11096 Code=-99 事故）。
     push_exclude_sections（可选）：逗号分隔章节标题，注入 LLM 前裁剪对应章节，
     见 _strip_excluded_sections。
     无块 / login_url 缺失 / login_url 非 https 均返回 None（放弃原因写入 tlog）。
@@ -283,6 +287,7 @@ def parse_api_meta(doc_text: str, topic: str = "外部推送") -> Optional[Dict[
         return None
 
     meta.setdefault("user_token_name", _DEFAULT_USER_TOKEN_NAME)
+    meta.setdefault("user_token_header", _DEFAULT_USER_TOKEN_HEADER)
     meta.setdefault("external_userid_field", _DEFAULT_EXTERNAL_USERID_FIELD)
     declared_method = (meta.get("http_method") or "").strip().upper()
     if declared_method:
@@ -747,6 +752,41 @@ def _normalize_http_method(args: Dict[str, Any], meta: Dict[str, str], topic: st
     return corrected
 
 
+def _ensure_user_token_header(
+    args: Dict[str, Any],
+    client_token: str,
+    meta: Dict[str, str],
+    topic: str = "外部推送",
+) -> Dict[str, Any]:
+    """把用户身份 token 强制注入 http_api 调用的鉴权 Header（覆盖式，确定性纠偏）
+
+    2026-09-16 erp11096 Code=-99 事故：lite 模型偶发漏带 Client-Authorize-Token
+    头（-99 强刷自愈实际是多余的，token 并未失效），每轮多 1~2 次重试与延迟。
+    系统本就持有 client_token，直接写入而非依赖模型抄写，与 _normalize_http_method
+    同属确定性纠偏。覆盖式写入保证 -99 强刷后下一轮自动携带新 token；
+    大小写不同的同名 Header 一并清除，避免 httpx 发出重复鉴权头。
+    """
+    if not client_token:
+        return args
+    header = (meta.get("user_token_header") or _DEFAULT_USER_TOKEN_HEADER).strip()
+    headers = args.get("headers")
+    if isinstance(headers, str):
+        headers = _safe_json_loads(headers)
+    if not isinstance(headers, dict):
+        if headers:
+            tlog(topic, f"http_api headers 非法（{type(headers).__name__}），重建 headers 注入 token")
+        headers = {}
+    else:
+        headers = dict(headers)
+    for key in list(headers.keys()):
+        if isinstance(key, str) and key.lower() == header.lower() and key != header:
+            headers.pop(key)
+    headers[header] = client_token
+    corrected = dict(args)
+    corrected["headers"] = headers
+    return corrected
+
+
 def _safe_json_loads(raw: Any) -> Optional[Dict[str, Any]]:
     """解析工具调用 arguments（JSON 字符串）；失败返回 None 不抛"""
     if isinstance(raw, dict):
@@ -778,11 +818,12 @@ def _build_system_prompt(doc: str, meta: Dict[str, str]) -> str:
         "通用约定（与文档冲突时以文档为准，但本条不可违反）：\n"
         "1. 认证：请求头中的 ${AGENT_TOKEN} 占位符由系统自动替换为实际值，"
         "请保持原样书写，不要改写成其他形式。"
-        f"用户身份 token（变量名：{user_token}）已由系统完成委托登录获取，见用户消息；"
+        f"用户身份 token（变量名：{user_token}）已由系统完成委托登录获取，"
+        f"其鉴权 Header（{meta.get('user_token_header', '')}）由系统自动附加到每次 http_api 调用，"
+        "不要自行构造、复制或修改该 Header（文档中的 token 示例值不要照抄）。"
         "不要调用文档中的登录接口。"
-        "若收到「用户身份 token 已强制刷新」的系统消息，用新 token 重试刚才失败的调用。"
-        "每个业务请求必须按文档声明的请求方式调用（不要因为「查询」就自行改用 GET），"
-        "且每次调用都必须完整携带文档要求的全部鉴权 Header，缺一个都会被拒绝。\n"
+        "若收到「用户身份 token 已强制刷新」的系统消息，直接重试刚才失败的调用。"
+        "每个业务请求必须按文档声明的请求方式调用（不要因为「查询」就自行改用 GET）。"
         "2. 成功判定：HTTP 200 不代表业务成功，以文档定义的业务成功码为准；"
         "只有业务成功才算该步完成。\n"
         "3. 执行纪律：严格按文档「同步业务规则」（或同等章节）的顺序与分流执行；"
@@ -837,8 +878,8 @@ def _build_user_message(
         f"当前日期：{datetime.now().strftime('%Y-%m-%d')}\n"
         "\n"
         "【委托登录信息】\n"
-        f"{user_token}：{login.get('client_token') or ''}\n"
         f"委托人：{login.get('display_name') or ''} / {login.get('agent_name') or ''}"
+        f"（用户身份 token {user_token} 已由系统托管并自动附加到鉴权 Header，无需关注）"
     )
 
 
@@ -894,6 +935,9 @@ async def _run_push_loop(
     consecutive_failures = 0
     last_content = ""
     aborted_reason = ""
+    # 系统持有的当前有效用户身份 token：注入 http_api 鉴权头的唯一来源，
+    # -99 强刷成功后同步更新，保证重试自动携带新 token
+    active_client_token = login.get("client_token") or ""
 
     for round_no in range(1, max_rounds + 1):
         round_start = time.time()
@@ -963,6 +1007,7 @@ async def _run_push_loop(
             else:
                 if name == "http_api":
                     args = _normalize_http_method(args, meta, topic)
+                    args = _ensure_user_token_header(args, active_client_token, meta, topic)
                 try:
                     result = await executor.execute(name, args, context=context)
                 except Exception as e:
@@ -996,11 +1041,12 @@ async def _run_push_loop(
                         ctx.get("subagent") or payload.subagent_name or "",
                     )
                     if refreshed and refreshed.get("client_token"):
+                        active_client_token = refreshed["client_token"]
                         messages.append({
                             "role": "user",
                             "content": (
                                 f"用户身份 token（{user_token}）已强制刷新，"
-                                f"请用新 token 重试刚才失败的调用：{refreshed['client_token']}"
+                                f"鉴权 Header 将由系统自动携带新值，请直接重试刚才失败的调用。"
                             ),
                         })
 
