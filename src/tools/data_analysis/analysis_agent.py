@@ -67,6 +67,8 @@ class AnalysisAgent:
         self._chart_nudge_done: bool = False
         # 空总结兜底：无工具调用且 content 为空（推理烧穿 max_tokens 的典型特征）时重试一次
         self._empty_summary_retried: bool = False
+        # 空总结重试时关闭思考（思考烧穿输出预算的修复：重试只为拿结论，无需再推理）
+        self._disable_thinking_next: bool = False
         self._last_table_df = None
 
         # 如果传入了预加载的表，标记为已加载
@@ -97,15 +99,21 @@ class AnalysisAgent:
             )
 
             try:
+                # 不显式传 max_tokens：由网关按当前生效模型查 llm.model_max_tokens
+                # 配置取官方上限（qwen3.8-flash=32768），思考模式下复杂分析才有足够输出预算。
+                # 显式硬上限（曾为 4000，后 16384）会让推理模型烧穿预算返回空结论（2026-08/09 生产事故）
+                llm_kwargs: Dict[str, Any] = {}
+                if self._disable_thinking_next:
+                    from src.llm.gateway import _lite_thinking_off_params
+                    llm_kwargs.update(_lite_thinking_off_params(self.llm.get_provider_name()))
+                    self._disable_thinking_next = False
                 response = await self.llm.chat_with_tools(
                     messages=messages,
                     tools=ANALYSIS_TOOLS,
                     tool_choice="auto",
                     system_prompt=ANALYSIS_SYSTEM_PROMPT,
                     temperature=0.1,
-                    # 4000 曾导致推理模型烧穿预算返回空结论（2026-08 生产事故），
-                    # 提升到与网关默认一致，复杂分析（多品类同比等）才够用
-                    max_tokens=16384,
+                    **llm_kwargs,
                 )
             except Exception as e:
                 logger.error(f"AnalysisAgent LLM call failed: {e}")
@@ -149,13 +157,17 @@ class AnalysisAgent:
                     # 绝不让主智能体拿到空结论误判为"知识库无数据"
                     if not self._empty_summary_retried:
                         self._empty_summary_retried = True
+                        # 重试关思考：原样重试会复现思考烧穿（同一上下文 + 思考开启），
+                        # 推理已完成，第二次调用只为直接产出结论
+                        self._disable_thinking_next = True
                         messages.append({"role": "assistant", "content": content})
                         messages.append({
                             "role": "user",
-                            "content": "（系统提示）你上一步没有输出任何分析结论（可能因输出长度超限被截断）。"
-                                       "请直接给出简洁的最终分析结论；如确需补充计算可再调用工具，但不要重复已完成步骤。",
+                            "content": "（系统提示）你上一步没有输出任何分析结论（可能因思考过程耗尽输出预算）。"
+                                       "请直接给出简洁的最终分析结论，不要再进行推理验算；"
+                                       "如确需补充计算可再调用工具，但不要重复已完成步骤。",
                         })
-                        logger.warning(f"[AnalysisAgent] 空总结（iteration={iteration}），重试一次")
+                        logger.warning(f"[AnalysisAgent] 空总结（iteration={iteration}），关闭思考重试一次")
                         continue
                     logger.error(f"[AnalysisAgent] 空总结重试后仍为空（iteration={iteration}），返回失败")
                     return self._build_result(

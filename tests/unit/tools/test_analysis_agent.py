@@ -559,6 +559,27 @@ class TestEmptySummaryFallback:
         assert "输出为空" in result["error"]
         assert mock_llm.chat_with_tools.call_count == 2
 
+    async def test_empty_summary_retry_disables_thinking_for_qwen(self, agent, mock_llm):
+        """空总结重试时，qwen 通道必须传 enable_thinking=False（防思考再次烧穿输出预算）"""
+        mock_llm.get_provider_name = MagicMock(return_value="qwen")
+        mock_llm.chat_with_tools.side_effect = [
+            _make_llm_response(content=""),
+            _make_llm_response(content="结论"),
+        ]
+        result = await agent.run("各品类毛利同比分析")
+        assert result["success"] is True
+        first_kwargs = mock_llm.chat_with_tools.call_args_list[0].kwargs
+        second_kwargs = mock_llm.chat_with_tools.call_args_list[1].kwargs
+        assert "enable_thinking" not in first_kwargs
+        assert second_kwargs.get("enable_thinking") is False
+
+    async def test_main_call_does_not_pass_hard_max_tokens(self, agent, mock_llm):
+        """主调用不显式传 max_tokens，由网关按模型配置上限解析（思考模式预算充足）"""
+        mock_llm.chat_with_tools.return_value = _make_llm_response(content="done")
+        await agent.run("测试需求")
+        kwargs = mock_llm.chat_with_tools.call_args.kwargs
+        assert "max_tokens" not in kwargs
+
     def test_nudge_skipped_when_chart_exists(self, agent):
         """已有 chart artifact → 不触发"""
         agent._artifacts = [{"type": "chart", "id": "c1"}, {"type": "table", "id": "t1"}]

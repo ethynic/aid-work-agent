@@ -52,12 +52,17 @@ llm:
   # 若需对 qwen3.7-flash 等仅支持显式缓存的模型重新开启，改回 true 即可
   context_cache: false
   # 各模型 max_tokens 上限（调用方未显式指定 max_tokens 时，按当前生效模型查此表作为默认值）
-  # 数据来源：阿里云百炼平台官方文档（2026-08）
+  # 数据来源：阿里云百炼平台官方文档（2026-08）；qwen3.8-flash 见 ext/qwen3.8-flash.md（131072，API 实测一致，2026-09-16；
+  # 注意不是 qwen-flash 通用页的 32768，那是另一个模型）
+  # deepseek-flash / GLM-5.3-Flash 为 API 实测（传超大 max_tokens 由报错回显上限，2026-09-16）
   model_max_tokens:
     qwen-vl-plus: 8192
     qwen-vl-max: 8192
     qwen3.7-plus: 131072
     qwen3-vl-flash: 32768
+    qwen3.8-flash: 131072
+    deepseek-flash: 393216
+    GLM-5.3-Flash: 131072
   qwen:
     api_keys: ${QWEN_API_KEYS:-}
     model: ${QWEN_MODEL_CODE:-qwen3.8-flash}
