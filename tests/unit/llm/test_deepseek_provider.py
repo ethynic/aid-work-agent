@@ -48,3 +48,23 @@ def test_call_level_true_overrides_instance_false():
     body: dict = {}
     provider._apply_thinking_control(body, enable_thinking=True)
     assert body == {}
+
+
+def test_parse_response_tolerates_null_usage():
+    """回归（2026-09-15 生产 AttributeError）：API 返回 "usage": null 时
+    .get 的默认值不生效，历史写法直接在 None 上调 .get 抛 AttributeError。
+    兜底后应按 0 token 解析且不抛异常。"""
+    provider = _make_provider()
+    parsed = provider._parse_response({"id": "x", "choices": [{"message": None, "finish_reason": "stop"}], "usage": None})
+    assert parsed["content"] == ""
+    assert parsed["usage"]["prompt_tokens"] == 0
+    assert parsed["request_id"] == "x"
+
+
+def test_parse_response_tolerates_null_body():
+    """响应体为字面量 null（httpx json() 解析为 None）时不再抛 AttributeError。"""
+    provider = _make_provider()
+    parsed = provider._parse_response(None)
+    assert parsed["content"] == ""
+    assert parsed["finish_reason"] == "stop"
+    assert parsed["usage"]["total_tokens"] == 0

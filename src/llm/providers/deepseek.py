@@ -97,6 +97,11 @@ class DeepSeekProvider(BaseLLMProvider):
                 )
                 response.raise_for_status()
                 result = response.json()
+                if not isinstance(result, dict):
+                    # 200 但 body 不是 JSON 对象（如字面量 null），带上响应体便于定位
+                    raise RuntimeError(
+                        f"DeepSeek 响应非 JSON 对象: {response.text[:500]}"
+                    )
 
             parsed = self._parse_response(result)
 
@@ -228,9 +233,12 @@ class DeepSeekProvider(BaseLLMProvider):
             raise
 
     def _parse_response(self, response: Dict[str, Any]) -> Dict[str, Any]:
-        choices = response.get("choices", [])
-        usage = response.get("usage", {})
-        prompt_details = usage.get("prompt_tokens_details", {})
+        # API 可能返回 "usage": null / "message": null（key 存在但值为 None，
+        # .get 的默认值不生效），统一兜底为空 dict，避免 AttributeError
+        response = response if isinstance(response, dict) else {}
+        choices = response.get("choices") or []
+        usage = response.get("usage") or {}
+        prompt_details = usage.get("prompt_tokens_details") or {}
         cached_tokens = (
             prompt_details.get("cached_tokens", 0)
             if isinstance(prompt_details, dict)
@@ -238,7 +246,7 @@ class DeepSeekProvider(BaseLLMProvider):
         ) or usage.get("prompt_cache_hit_tokens", usage.get("cached_tokens", 0))
 
         if choices:
-            message = choices[0].get("message", {})
+            message = choices[0].get("message") or {}
             content = message.get("content", "")
             reasoning_content = message.get("reasoning_content", "")
             tool_calls = message.get("tool_calls", [])
