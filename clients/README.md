@@ -20,12 +20,28 @@
 
 ## 二、编译新版本（在开发机/构建机上）
 
-### 1. 升版本号
-两处 `package.json` 的 `version` 同步修改：
-- `clients/boss-resume-assistant/package.json`
-- `clients/agent-tool-runtime/package.json`
+### 1. 一键打包（推荐）
 
-### 2. 打包（一条命令，钩子自动完成全部构建）
+```bash
+bash clients/pack.sh 0.2.15        # 版本号必填；--skip-smoke 可跳过冒烟
+```
+
+脚本自动完成并校验（2026-09-17 固化，每步防一个真实踩过的坑）：
+
+- 两处 `package.json` 版本统一修改 + 两个 lockfile 同步（runtime 捆绑 boss CLI 是否刷新
+  **只看版本号**，版本不变会把删 OCR 之前的旧拷贝原样打进包——0.2.13 重打包仍 140MB 即此因）
+- 打包前清 stale 捆绑拷贝 / `__pycache__` / 旧 dist（防陈旧产物混入）
+- `npm pack`（prepack 自动构建 boss CLI → runtime → install-links 捆绑）
+- 产物硬校验：包体 ≤15MB（OCR 环境混入就是 ~140MB，体积是最后防线）、无 ocr-python/
+  rapidocr 残留、捆绑 boss 版本=目标版本、简历管线 4 个 ps1 脚本与双 CLI 入口齐全
+- 冒烟：临时目录安装 tgz，`aid-runtime --help` 与 boss CLI `--help` 均可执行
+- 产物移入 `clients/release/`，并在 `release/VERSION.txt` 顶部插入占位条目
+
+### 2. 手工打包（备用；不推荐）
+
+`clients/boss-resume-assistant` 与 `clients/agent-tool-runtime` 两处 `package.json` 的
+`version` 同步修改后：
+
 ```bash
 cd clients/agent-tool-runtime
 npm pack
@@ -37,8 +53,9 @@ npm pack
 
 > ⚠️ 2026-09-17 去 OCR 化：简历识别改为云端 GLM-5.3-Flash 多模态（0.2.14 起），包内不再捆绑
 > `ocr-python/` Python 环境——体积从 ~140MB 降到 ~3.4MB，客户机不再需要任何本地 OCR 依赖。
-> ⚠️ 打包前**必须升 boss CLI 版本号**：`--install-links` 按 version 判断是否刷新捆绑拷贝，
-> 版本不变会打进 `node_modules` 里的旧拷贝（0.2.13→0.2.14 就栽在这：OCR 已删但包里还有 140MB 旧环境）。
+> ⚠️ 手工打包前**必须升 boss CLI 版本号**并删 `agent-tool-runtime/node_modules/boss-resume-assistant`：
+> `--install-links` 按 version 判断是否刷新捆绑拷贝，版本不变会打进旧副本
+> （0.2.13→0.2.14 就栽在这：OCR 已删但包里还有 140MB 旧环境）。
 
 ### 3. 冒烟验证（发布前必做，防 files 漏文件）
 ```bash
