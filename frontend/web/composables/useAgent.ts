@@ -157,17 +157,36 @@ export function useAgent() {
 
   /**
    * 上传单个文件
+   * 先插入无 file_id 的占位（ChatInput 显示"上传中"转圈），成功后替换为真实结果，失败则移除
    */
   async function uploadAttachment(file: File): Promise<UploadedFile> {
-    const uploaded = await uploadFile(file, getEffectiveAuthHeader())
-    currentFiles.value.push(uploaded)
-    return uploaded
+    const placeholder: UploadedFile = {
+      file_id: '',
+      name: file.name,
+      size: file.size,
+      mime_type: file.type,
+      type: file.type.startsWith('image/') ? 'image' : 'file'
+    }
+    currentFiles.value.push(placeholder)
+    try {
+      const uploaded = await uploadFile(file, getEffectiveAuthHeader())
+      const idx = currentFiles.value.indexOf(placeholder)
+      if (idx !== -1) {
+        currentFiles.value.splice(idx, 1, uploaded)
+      }
+      return uploaded
+    } catch (error) {
+      currentFiles.value = currentFiles.value.filter(f => f !== placeholder)
+      throw error
+    }
   }
 
   /**
    * 移除已上传的附件
+   * 空 file_id 是上传中的占位（无法取消进行中的请求），忽略
    */
   function removeAttachment(file_id: string) {
+    if (!file_id) return
     currentFiles.value = currentFiles.value.filter(f => f.file_id !== file_id)
   }
 
@@ -199,10 +218,11 @@ export function useAgent() {
 
     state.dbLoaded = true
 
-    // 构建用户消息内容（含附件信息）
+    // 构建用户消息内容（含附件信息）；防御性过滤上传中的占位（正常情况下发送按钮已禁用）
+    const readyFiles = currentFiles.value.filter(f => f.file_id)
     let userContent = content.trim()
-    if (currentFiles.value.length > 0) {
-      const fileNames = currentFiles.value.map(f => f.name).join(', ')
+    if (readyFiles.length > 0) {
+      const fileNames = readyFiles.map(f => f.name).join(', ')
       userContent += `\n\n[附件: ${fileNames}]`
     }
 
@@ -211,7 +231,7 @@ export function useAgent() {
       role: 'user',
       content: userContent,
       timestamp: Date.now(),
-      attachments: currentFiles.value.length > 0 ? [...currentFiles.value] : undefined
+      attachments: readyFiles.length > 0 ? [...readyFiles] : undefined
     })
 
     // 重置状态
@@ -240,7 +260,7 @@ export function useAgent() {
     // 附件数据已浅拷贝到用户消息与 SSE 请求参数（下方 connect 调用），
     // 在这里清空附件输入区，确保用户看到自己消息出现的同时附件框立即清空，
     // 避免 ChatContainer.handleSend 在某些 return 分支下漏清空导致附件残留。
-    const filesToSend = currentFiles.value.length > 0 ? [...currentFiles.value] : undefined
+    const filesToSend = readyFiles.length > 0 ? [...readyFiles] : undefined
     currentFiles.value = []
 
     // 流结束时若是后台会话（用户正在查看其他会话），标记完成小点

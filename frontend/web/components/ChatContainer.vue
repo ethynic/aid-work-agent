@@ -530,6 +530,12 @@ async function handleSend(content: string) {
 }
 
 async function handleUpload(file: File) {
+  // 前端大小拦截，避免大文件全量上传后被后端拒绝
+  const MAX_UPLOAD_SIZE = 50 * 1024 * 1024
+  if (file.size > MAX_UPLOAD_SIZE) {
+    toast.error(`文件过大，最大支持 50MB`)
+    return
+  }
   try {
     console.log('前端日志：开始上传文件', file.name, file.size)
     const result = await uploadAttachment(file)

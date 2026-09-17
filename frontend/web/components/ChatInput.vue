@@ -17,8 +17,8 @@
       <!-- 附件预览区 -->
       <div v-if="files.length > 0" class="mb-3 flex flex-wrap gap-2">
         <div
-          v-for="file in files"
-          :key="file.file_id"
+          v-for="(file, index) in files"
+          :key="file.file_id || `uploading-${index}-${file.name}`"
           class="flex items-stretch bg-gray-100 rounded-lg border border-gray-200 overflow-hidden"
         >
           <button
@@ -41,18 +41,18 @@
             class="flex items-center gap-2 pl-3 pr-2 py-1.5 min-w-0"
             :title="`上传中：${file.name}`"
           >
-            <svg v-if="file.type === 'image'" class="w-4 h-4 text-gray-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-            </svg>
-            <svg v-else class="w-4 h-4 text-gray-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            <svg class="w-4 h-4 text-primary-500 animate-spin flex-shrink-0" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
             </svg>
             <span class="text-sm text-gray-400 max-w-32 truncate">{{ file.name }}</span>
+            <span class="text-xs text-gray-400 flex-shrink-0">上传中...</span>
           </span>
           <button
             type="button"
+            :disabled="!file.file_id"
             @click.stop="emit('remove', file.file_id)"
-            class="p-2 min-w-[44px] min-h-[44px] flex items-center justify-center text-gray-400 hover:text-danger-500 hover:bg-danger-50 transition-colors"
+            class="p-2 min-w-[44px] min-h-[44px] flex items-center justify-center text-gray-400 hover:text-danger-500 hover:bg-danger-50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:text-gray-400 disabled:hover:bg-transparent"
             title="移除附件"
           >
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -136,10 +136,10 @@
             <button
               v-else
               @click="handleSend"
-              :disabled="(!inputText.trim() && files.length === 0) || disabled"
+              :disabled="(!inputText.trim() && files.length === 0) || disabled || hasUploading"
               :class="[
                 'w-9 h-9 rounded-full transition-all flex items-center justify-center',
-                (inputText.trim() || files.length > 0) && !disabled
+                (inputText.trim() || files.length > 0) && !disabled && !hasUploading
                   ? 'bg-primary-600 text-white hover:bg-primary-500 shadow-md shadow-primary-500/25'
                   : 'bg-gray-200 text-gray-400 cursor-not-allowed'
               ]"
@@ -203,6 +203,9 @@ const canSend = computed(() => {
   return !props.disabled
 })
 
+/** 是否有附件还在上传中（无 file_id 的占位） */
+const hasUploading = computed(() => props.files.some(f => !f.file_id))
+
 // 前端日志：输入框从禁用恢复时自动聚焦，提升用户体验
 watch(() => props.disabled, (newVal, oldVal) => {
   if (oldVal === true && newVal === false) {
@@ -229,7 +232,7 @@ function handleEnter(e: KeyboardEvent) {
 }
 
 function handleSend() {
-  if (!canSend.value) return
+  if (!canSend.value || hasUploading.value) return
 
   // 有文字内容或有附件时都可以发送
   if (!inputText.value.trim() && props.files.length === 0) return
