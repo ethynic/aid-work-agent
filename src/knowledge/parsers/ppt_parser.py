@@ -28,6 +28,13 @@ class PPTParser(BaseParser):
                     "文件不是标准 PPT 文档（可能已设置打开密码，或是老版 .ppt 改了后缀），"
                     "请用 Office/WPS 打开后另存为未加密的 .pptx 再上传"
                 )
+            except ValueError as e:
+                # python-pptx 1.x 对「合法 zip 但主部件 content type 不是 PPT」
+                # （其他 OOXML 文件改后缀）抛 ValueError
+                raise DocumentParseError(
+                    "文件不是标准 PPT 文档（内容格式与 .pptx 不符），"
+                    "请用 Office/WPS 打开后另存为标准 .pptx 再上传"
+                ) from e
 
             paragraphs = []
             total_slides = len(prs.slides)

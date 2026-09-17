@@ -1054,7 +1054,6 @@ async function handleUpload() {
       }
     }
 
-    showUploadModal.value = false
     clearSearch()
     selectedFiles.value = []
     currentPage.value = 1
@@ -1069,8 +1068,11 @@ async function handleUpload() {
       }
     }
     if (errorResults.length > 0) {
+      // 保留弹框打开，让用户能看到每个文件的失败原因（错误详情渲染在弹框内）
       uploadErrors.value = errorResults
-      toast.warning('' + errorResults.length + ' 个文件上传失败')
+      toast.warning('' + errorResults.length + ' 个文件上传失败，详情见弹框')
+    } else {
+      showUploadModal.value = false
     }
   } catch (error: any) {
     const errorMsg = error.response?.data?.error || error.message || '上传失败'

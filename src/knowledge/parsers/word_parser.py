@@ -28,6 +28,13 @@ class WordParser(BaseParser):
                     "文件不是标准 Word 文档（可能已设置打开密码，或是老版 .doc 改了后缀），"
                     "请用 Office/WPS 打开后另存为未加密的 .docx 再上传"
                 )
+            except ValueError as e:
+                # python-docx 1.x 对「合法 zip 但主部件 content type 不是 Word」
+                # （其他 OOXML 文件改后缀）抛 ValueError
+                raise DocumentParseError(
+                    "文件不是标准 Word 文档（内容格式与 .docx 不符），"
+                    "请用 Office/WPS 打开后另存为标准 .docx 再上传"
+                ) from e
 
             # 提取所有段落文本
             paragraphs = []

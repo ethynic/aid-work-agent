@@ -65,6 +65,19 @@ class TestWordParser:
             await parser.parse(str(file_path))
         assert "另存为" in str(exc_info.value)
 
+    @pytest.mark.asyncio
+    async def test_parse_wrong_content_type_docx_raises_friendly_error(self, tmp_path):
+        """合法 zip 但主部件 content type 不是 Word（其他 OOXML 改后缀）应抛 DocumentParseError"""
+        from pptx import Presentation
+
+        file_path = tmp_path / "fake.docx"
+        Presentation().save(file_path)
+
+        parser = WordParser()
+        with pytest.raises(DocumentParseError) as exc_info:
+            await parser.parse(str(file_path))
+        assert "另存为" in str(exc_info.value)
+
 
 class TestExcelParser:
     """Excel 解析器测试"""
@@ -118,6 +131,19 @@ class TestExcelParser:
             await parser.parse(str(file_path))
         assert "另存为" in str(exc_info.value)
 
+    @pytest.mark.asyncio
+    async def test_parse_zip_without_workbook_part_xlsx_raises_friendly_error(self, tmp_path):
+        """合法 zip 但缺少工作簿部件（其他 OOXML 改后缀）应抛带指引的 DocumentParseError"""
+        from docx import Document
+
+        file_path = tmp_path / "fake.xlsx"
+        Document().save(file_path)
+
+        parser = ExcelParser()
+        with pytest.raises(DocumentParseError) as exc_info:
+            await parser.parse(str(file_path))
+        assert "另存为" in str(exc_info.value)
+
 
 class TestPPTParser:
     """PPT 解析器测试"""
@@ -131,6 +157,19 @@ class TestPPTParser:
         """加密 pptx / .ppt 改后缀（OLE 复合文件，非 zip）应抛带指引的 DocumentParseError"""
         file_path = tmp_path / "encrypted.pptx"
         file_path.write_bytes(OLE_MAGIC)
+
+        parser = PPTParser()
+        with pytest.raises(DocumentParseError) as exc_info:
+            await parser.parse(str(file_path))
+        assert "另存为" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_parse_wrong_content_type_pptx_raises_friendly_error(self, tmp_path):
+        """合法 zip 但主部件 content type 不是 PPT（其他 OOXML 改后缀）应抛 DocumentParseError"""
+        from docx import Document
+
+        file_path = tmp_path / "fake.pptx"
+        Document().save(file_path)
 
         parser = PPTParser()
         with pytest.raises(DocumentParseError) as exc_info:

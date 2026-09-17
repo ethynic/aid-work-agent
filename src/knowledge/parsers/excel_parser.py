@@ -7,19 +7,11 @@ Excel 文档解析器
 """
 
 import re
-import zipfile
 from collections import Counter
 from typing import Any, Dict, List, Optional, Tuple
 from loguru import logger
 from . import BaseParser, DocumentParseError, ParseResult, ParsedChunk
 
-
-def _is_zip_file(path: str) -> bool:
-    """判断文件是否为合法 zip 包（标准 OOXML 文件都是 zip；加密/损坏/老格式不是）"""
-    try:
-        return zipfile.is_zipfile(path)
-    except OSError:
-        return False
 
 # 与 TextChunker.MAX_EMBEDDING_CHUNK_CHARS 一致（embedding API 输入上限），
 # 独立常量避免解析器反向依赖 chunker 内部实现
@@ -152,13 +144,13 @@ class ExcelParser(BaseParser):
                 "请用 Office/WPS 打开后另存为标准 .xlsx 再上传"
             )
         except Exception as e:
-            # 加密 xlsx（OLE 复合文件）和损坏文件在 zip 层抛 BadZipFile 等异常
-            if not _is_zip_file(file_path):
-                raise DocumentParseError(
-                    "文件不是标准 Excel 文档（可能已设置打开密码，或内容已损坏），"
-                    "请用 Office/WPS 打开后另存为未加密的 .xlsx 再上传"
-                ) from e
-            raise
+            # load_workbook 阶段失败的其余情况都不是标准 xlsx：
+            # 加密 OLE 复合文件在 zip 层抛 BadZipFile；zip 结构但缺少工作簿部件
+            # （其他 OOXML 文件改后缀）抛 OSError "File contains no valid workbook part"
+            raise DocumentParseError(
+                "文件不是标准 Excel 文档（可能已设置打开密码，或不是标准 .xlsx 格式），"
+                "请用 Office/WPS 打开后另存为未加密的 .xlsx 再上传"
+            ) from e
 
         try:
             return await self._parse_workbook(wb, file_path)
