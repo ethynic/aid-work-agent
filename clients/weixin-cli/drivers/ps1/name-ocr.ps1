@@ -33,6 +33,7 @@ function SearchCapture {
     return @{handle=$overlay;rect=$rect;width=$rect[2];height=$rect[3];full_frame=(Hash $bytes);png=[Convert]::ToBase64String($bytes)}
 }
 function Capture {
+    param([switch]$SendOnly)
     $path=Join-Path $work ([guid]::NewGuid().ToString('N')+'.png')
     $rect=Get-WeixinWindowSnapshot -Hwnd $script:handle -Path $path
     if(-not $rect[4]){Throw-DriverError 'UI_CHANGED' 'PrintWindow required'}
@@ -61,6 +62,9 @@ function Capture {
         $title=@{x0=$left;y0=[int]($h*0.03);x1=[int]($w*0.75);y1=[int]($h*0.08)}
         $messages=@{x0=$left;y0=[int]($h*0.08);x1=$w-12;y1=$bestY-3}
         $input=@{x0=$left+30;y0=$bestY+18;x1=$w-35;y1=$h-90}
+        if($SendOnly){
+            return @{handle=$script:handle;rect=@($rect[0],$rect[1],$rect[2],$rect[3]);width=$w;height=$h;title_region=$title;input_region=$input;png=[Convert]::ToBase64String([IO.File]::ReadAllBytes($path))}
+        }
         $watch=@{x0=$left;y0=0;x1=$w;y1=$bestY+4}
         $frame=Hash ([Text.Encoding]::ASCII.GetBytes("$w,$h,$bestY,"+(CropHash $bmp $watch)))
         $full=Hash ([IO.File]::ReadAllBytes($path))
@@ -93,8 +97,10 @@ try{
     $script:handle=[int64]$windows[0].Hwnd
     if($req.action -eq 'search'){
         if(-not (Invoke-WeixinActivation $script:handle)){Throw-DriverError 'FOREGROUND_LOST' 'Search requires foreground'}
-        $shot=Capture
-        Send-WeixinPostMessageClick -Hwnd $script:handle -ScreenX ($shot.rect[0]+[int]($shot.width*0.17)) -ScreenY ($shot.rect[1]+[int]($shot.height*0.06))
+        # Search is available on the empty home screen; it needs only window geometry.
+        $searchRect=New-Object WeixinProbeWin32+RECT
+        if(-not [WeixinProbeWin32]::GetWindowRect([IntPtr]$script:handle,[ref]$searchRect)){Throw-DriverError 'UI_CHANGED' 'Search window geometry unavailable'}
+        Send-WeixinPostMessageClick -Hwnd $script:handle -ScreenX ($searchRect.Left+[int](($searchRect.Right-$searchRect.Left)*0.17)) -ScreenY ($searchRect.Top+[int](($searchRect.Bottom-$searchRect.Top)*0.06))
         Start-Sleep -Milliseconds 350
         Send-WeixinKeyChord -Keys @('CTRL','A') -ForegroundGuard{[WeixinProbeWin32]::GetForegroundWindow().ToInt64() -eq $script:handle}
         Send-WeixinPostMessageText -Hwnd $script:handle -Text ([string]$req.target_name)
@@ -106,6 +112,50 @@ try{
         Send-WeixinPostMessageClick -Hwnd $shot.handle -ScreenX ($shot.rect[0]+[int]$req.x) -ScreenY ($shot.rect[1]+[int]$req.y)
         Start-Sleep -Milliseconds 500
         Write-DriverJson @{ok=$true;data=@{done=$true}}
+    }elseif($req.action -eq 'submit'){
+        $timer=[Diagnostics.Stopwatch]::StartNew()
+        $text=[string]$req.text
+        if(-not $text -or $text.Length -gt 500 -or $text -match '[\x00-\x1f\x7f-\x9f]'){Throw-DriverError 'UI_CHANGED' 'Invalid text'}
+        if([int64]$req.handle -ne $script:handle -or @($req.rect).Count -lt 4){Throw-DriverError 'UI_CHANGED' 'Send window changed'}
+        $expected=@($req.rect)
+        $r=$req.input_region
+        if($null -eq $r -or $r.x0 -lt 0 -or $r.y0 -lt 0 -or $r.x1 -le $r.x0 -or $r.y1 -le $r.y0 -or $r.x1 -gt $expected[2] -or $r.y1 -gt $expected[3]){Throw-DriverError 'UI_CHANGED' 'Composer coordinates invalid'}
+        function Assert-SendWindow {
+            if([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() -ge [int64]$req.deadline_ms){Throw-DriverError 'UI_CHANGED' 'Action deadline expired'}
+            if([WeixinProbeWin32]::GetForegroundWindow().ToInt64() -ne $script:handle){Throw-DriverError 'FOREGROUND_LOST' 'Send focus changed'}
+            $current=New-Object WeixinProbeWin32+RECT
+            if(-not [WeixinProbeWin32]::GetWindowRect([IntPtr]$script:handle,[ref]$current) -or $current.Left -ne $expected[0] -or $current.Top -ne $expected[1] -or ($current.Right-$current.Left) -ne $expected[2] -or ($current.Bottom-$current.Top) -ne $expected[3]){Throw-DriverError 'UI_CHANGED' 'Send window moved or resized'}
+        }
+        Assert-SendWindow
+        Send-CheckedComposerClick -Hwnd $script:handle -ScreenX ($expected[0]+[int](($r.x0+$r.x1)/2)) -ScreenY ($expected[1]+[int](($r.y0+$r.y1)/2))
+        $clickMs=$timer.ElapsedMilliseconds
+        # Keep the copied text on the clipboard, as an ordinary copy/paste does.
+        # Restoring immediately would race the target application's paste handler.
+        Set-ClipboardTextRetry -Text $text
+        $clipboardMs=$timer.ElapsedMilliseconds-$clickMs
+        Assert-SendWindow
+        # One ordered input batch: select all, paste the whole text, then Enter.
+        # SendInput serializes the events; no per-character delay or screenshot.
+        $events=New-Object 'System.Collections.Generic.List[WeixinProbeWin32+INPUT]'
+        foreach($key in @(@(0x11,0),@(0x41,0),@(0x41,2),@(0x11,2),@(0x11,0),@(0x56,0),@(0x56,2),@(0x11,2),@(0x0D,0),@(0x0D,2))){
+            $event=New-Object WeixinProbeWin32+INPUT
+            $keyboard=New-Object WeixinProbeWin32+KEYBDINPUT
+            $keyboard.wVk=[uint16]$key[0];$keyboard.dwFlags=[uint32]$key[1]
+            $union=New-Object WeixinProbeWin32+INPUTUNION
+            $union.ki=$keyboard
+            $event.type=1;$event.u=$union
+            $events.Add($event)
+        }
+        $sent=[WeixinProbeWin32]::SendInput($events.Count,$events.ToArray(),[Runtime.InteropServices.Marshal]::SizeOf([type][WeixinProbeWin32+INPUT]))
+        if($sent -ne $events.Count){
+            # Release modifiers on partial insertion; never retry paste or Enter.
+            [WeixinProbeWin32]::keybd_event(0x11,0,2,[IntPtr]::Zero)
+            [WeixinProbeWin32]::keybd_event(0x41,0,2,[IntPtr]::Zero)
+            [WeixinProbeWin32]::keybd_event(0x56,0,2,[IntPtr]::Zero)
+            [WeixinProbeWin32]::keybd_event(0x0D,0,2,[IntPtr]::Zero)
+            Throw-DriverError 'EXECUTION_UNKNOWN' 'Input batch incomplete'
+        }
+        Write-DriverJson @{ok=$true;data=@{done=$true;timings_ms=@{click=$clickMs;clipboard=$clipboardMs;input=($timer.ElapsedMilliseconds-$clickMs-$clipboardMs);total=$timer.ElapsedMilliseconds}}}
     }elseif($req.action -eq 'type' -or $req.action -eq 'enter'){
         if($req.action -eq 'type' -and -not (Invoke-WeixinActivation $script:handle)){Throw-DriverError 'FOREGROUND_LOST' 'Composer replacement requires foreground'}
         $shot=Capture
@@ -131,6 +181,10 @@ try{
             if(-not [WeixinProbeWin32]::PostMessage([IntPtr]$script:handle,0x0101,[IntPtr]0x0D,$lpUp)){Throw-DriverError 'EXECUTION_UNKNOWN' 'Enter release rejected'}
         }
         Write-DriverJson @{ok=$true;data=@{done=$true}}
+    }elseif($req.action -eq 'send_capture'){
+        if(-not (Invoke-WeixinActivation $script:handle)){Throw-DriverError 'FOREGROUND_LOST' 'Send capture requires foreground'}
+        $shot=Capture -SendOnly
+        Write-DriverJson @{ok=$true;data=$shot}
     }elseif($req.action -eq 'search_capture'){
         $shot=SearchCapture;$shot.Remove('handle');$shot.Remove('rect')
         Write-DriverJson @{ok=$true;data=$shot}
@@ -140,6 +194,21 @@ try{
     }else{Throw-DriverError 'UI_CHANGED' 'Unsupported local OCR action'}
 }catch{
     $safeCode='UI_CHANGED';$m=[regex]::Match([string]$_.Exception.Message,'^WXDRIVE\|([A-Z_]+)\|');if($m.Success){$safeCode=$m.Groups[1].Value}
-    Write-DriverJson @{ok=$false;code=$safeCode;message=('Local OCR precondition failed; line='+$_.InvocationInfo.ScriptLineNumber+'; type='+$_.Exception.GetType().Name)}
+    # Only fixed driver reasons may enter diagnostics; never echo arbitrary exception text.
+    $reason='unclassified'
+    $knownReasons=@{
+        'Search PrintWindow required'='search_printwindow_unavailable'
+        'PrintWindow required'='printwindow_unavailable'
+        'Chat divider unavailable'='chat_divider_unavailable'
+        'Composer border unavailable'='composer_border_unavailable'
+        'Search popup unavailable'='search_popup_unavailable'
+        'Unique main window required'='main_window_not_unique'
+        'Search requires foreground'='search_foreground_unavailable'
+        'Search window geometry unavailable'='search_window_geometry_unavailable'
+        'Search result changed'='search_result_changed'
+    }
+    $detail=[regex]::Match([string]$_.Exception.Message,'^WXDRIVE\|[A-Z_]+\|(.+)$')
+    if($detail.Success -and $knownReasons.ContainsKey($detail.Groups[1].Value)){$reason=$knownReasons[$detail.Groups[1].Value]}
+    Write-DriverJson @{ok=$false;code=$safeCode;message=('Local OCR precondition failed; reason='+$reason+'; line='+$_.InvocationInfo.ScriptLineNumber+'; type='+$_.Exception.GetType().Name)}
 }
 finally{if([IO.Directory]::Exists($work)){[IO.Directory]::Delete($work,$true)}}

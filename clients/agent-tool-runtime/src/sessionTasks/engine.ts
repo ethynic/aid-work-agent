@@ -1720,7 +1720,8 @@ export class SessionTaskEngine {
 
   /**
    * 锁内会话复核（§7 顺序 4，C3 门禁 #1）：在 runner 桌面锁内、许可申请之前
-   * 重新观察目标会话并比对决策水位。任何新消息（peer/self/system——生成回复后
+   * 名称场景复核任务门控和已接纳输入版本，标题由发送 Provider 的唯一截图确认。
+   * 旧绑定场景重新观察目标会话并比对决策水位。任何新消息（peer/self/system——生成回复后
    * 客户追加、排队期间人工回复、opening 前新入站）、身份漂移、覆盖缺口、观察
    * 失败、assignment 门禁失效 → 抛 SessionPrecheckError，不申请许可不发送；
    * 新消息由后续常规观察周期合批上报（水位未推进，不丢事实），旧决策由云端
@@ -1738,6 +1739,10 @@ export class SessionTaskEngine {
       this.emit(`task ${task.taskId} 发送前输入版本已前进（冻结 ${frozenInputVersion}，当前 ${task.inputVersion}${task.pendingBatch ? '+聚合中' : ''}），取消本次发送`)
       throw new SessionPrecheckError('INPUT_VERSION_STALE', '决策生成后输入版本已前进（新消息/人工回复待同步）')
     }
+    // Name sends confirm the contact and locate the composer in one fresh capture
+    // inside the same desktop lock as paste + Enter. Do not add a second full
+    // observation here; accepted input versions above still invalidate stale work.
+    if (taskTargetName(task.spec)) return
     let result: ObserverResult
     try {
       // 已在 runner 桌面锁内执行，不再重复取锁（观察与发送共用同一临界区）

@@ -37,18 +37,19 @@ const emptyObserver = async (): Promise<ObserverResult> => ({
 
 interface TaskHandle {
   setVersion(v: number, pending: boolean): void
+  setGate(gate: string, leaseDeadline?: number): void
   recheck(frozen?: number): Promise<void>
 }
 
 /** 构造带注入任务的引擎（不经 claim/网络）：直接操纵内部 tasks map */
-async function makeEngine(): Promise<{ engine: SessionTaskEngine; task: TaskHandle; home: string; cleanup: () => void }> {
+async function makeEngine(options: { nameTarget?: boolean; observer?: typeof emptyObserver } = {}): Promise<{ engine: SessionTaskEngine; task: TaskHandle; home: string; cleanup: () => void }> {
   const home = mkdtempSync(join(tmpdir(), 'st-recheck-'))
   const engine = new SessionTaskEngine({
     api: { sessionTaskClaim: async () => null } as never,
     runtimeHome: home,
     crypto: fakeCrypto(),
     runtimeInstanceId: `rt-${randomUUID().slice(0, 8)}`,
-    observer: emptyObserver,
+    observer: options.observer ?? emptyObserver,
     emit: () => {},
   })
   const store = new SessionStore({ runtimeHome: home, assignmentId: 'a1', crypto: fakeCrypto() })
@@ -64,7 +65,7 @@ async function makeEngine(): Promise<{ engine: SessionTaskEngine; task: TaskHand
     controlEpoch: 1,
     serverControlSeq: 0,
     specRevision: 1,
-    spec: {},
+    spec: options.nameTarget ? { _runtime_target: { policy: 'current_login_name', target_name: 'SyntheticContact' } } : {},
     store,
     phase: 'executing',
     watermark: { last_local_message_id: 'm2', window_fingerprint: 'f' },
@@ -108,6 +109,10 @@ async function makeEngine(): Promise<{ engine: SessionTaskEngine; task: TaskHand
       recheck(frozen?: number) {
         return anyEngine.lockedSessionRecheck(task, frozen)
       },
+      setGate(gate: string, leaseDeadline = Date.now() + 600_000) {
+        task['gate'] = gate
+        task['leaseDeadline'] = leaseDeadline
+      },
     },
     cleanup: () => rmSync(home, { recursive: true, force: true }),
   }
@@ -122,6 +127,41 @@ test('本地输入版本（2）高于冻结版本（1）→ 复核拒绝（旧�
     assert.equal(err.code, 'INPUT_VERSION_STALE')
     return true
   })
+})
+
+test('名称发送不重复观察，旧绑定发送仍执行观察', async (t) => {
+  for (const nameTarget of [true, false]) {
+    let observations = 0
+    const { task, cleanup } = await makeEngine({ nameTarget, observer: async () => {
+      observations++
+      return emptyObserver()
+    } })
+    t.after(cleanup)
+    task.setVersion(1, false)
+    await task.recheck(1)
+    assert.equal(observations, nameTarget ? 0 : 1)
+  }
+})
+
+test('名称发送跳过观察仍拒绝过时版本、待聚合消息、关闭门禁和过期租约', async (t) => {
+  const cases = [
+    { version: 2, pending: false, gate: 'open', expired: false, code: 'INPUT_VERSION_STALE' },
+    { version: 1, pending: true, gate: 'open', expired: false, code: 'INPUT_VERSION_STALE' },
+    { version: 1, pending: false, gate: 'closed', expired: false, code: 'ASSIGNMENT_STALE' },
+    { version: 1, pending: false, gate: 'open', expired: true, code: 'ASSIGNMENT_STALE' },
+  ]
+  for (const scenario of cases) {
+    const { task, cleanup } = await makeEngine({ nameTarget: true, observer: async () => {
+      assert.fail('名称路径不得重新观察')
+    } })
+    t.after(cleanup)
+    task.setVersion(scenario.version, scenario.pending)
+    task.setGate(scenario.gate, scenario.expired ? Date.now() - 1 : Date.now() + 600_000)
+    await assert.rejects(() => task.recheck(1), (err: Error & { code?: string }) => {
+      assert.equal(err.code, scenario.code)
+      return true
+    })
+  }
 })
 
 test('聚合中批次（pendingBatch）存在 → 复核拒绝（即使版本号尚未推进）', async (t) => {
