@@ -25,7 +25,7 @@
 | 协会官网优先资料补全 | [设计](tools/association-profile-enrichment-design.md) | 🔧 部分完成：新增严格 14 字段提取、自动站内导航、批量无界面 CLI 和 Excel 输出。 |
 | 懂车帝与汽车之家客户留资统一接入可行性调研 | [automotive-platform-lead-integration-research.md](research/automotive-platform-lead-integration-research.md) | CRM 智能体、汽车平台渠道集成 |
 | 抖音电商飞鸽客服接入 Agent 可行性调研 | [douyin-shop-pigeon-agent-customer-service-research.md](research/douyin-shop-pigeon-agent-customer-service-research.md) | 抖店/飞鸽客服渠道、Agent 自动接待、转人工 |
-| 摘要生成模型性价比实测 | [llm-summary-cost-benchmark.md](research/llm-summary-cost-benchmark.md) | 知识库摘要、lite 通道选型（deepseek/qwen 已实测；GLM-5.3-Flash 因智谱 key 欠费未测，待充值补测） |
+| 摘要生成模型性价比实测 | [llm-summary-cost-benchmark.md](research/llm-summary-cost-benchmark.md) | 知识库摘要、lite 通道选型（deepseek/qwen/GLM 三家已实测，含缓存机制对比；2026-09-17 补充外部推送工具调用重放实测：GLM 全漏写鉴权头不可用于工具调用型任务，deepseek-flash 综合最优） |
 | 抖音本地生活订单→门店微信群推送系统 私有化部署可行性评估 | [douyin-lifeservice-order-wechat-group-dispatch-research.md](research/douyin-lifeservice-order-wechat-group-dispatch-research.md) | 竞品（TkTok Sys）视频还原；抖音生活服务开放能力接入路径（商家自研 vs 服务商）、微信/企微推送通道选型、功能模块与工作量（一期约 8~10 人月）、预开通账号清单、… |
 | 抖音来客订单同步与门店微信播报系统 解决方案（含开发计划与报价，面向客户） | [design/douyin-lifeservice-dispatch/solution-proposal.md](design/douyin-lifeservice-dispatch/solution-proposal.md) | 一期打包价 ¥29.8 万/203 人日/约 14 周交付；通道矩阵（企微内部群 webhook 全自动合规 / 企微客户群群发限频 / RPA 播报为可选项）；抖店发货提醒等为二期可选包 |
 | 小红书客服接入 Agent 可行性调研 | [xiaohongshu-agent-customer-service-integration-research.md](research/xiaohongshu-agent-customer-service-integration-research.md) | 小红书电商客服、专业号私信、小程序客服、Agent 自动接待与转人工 |

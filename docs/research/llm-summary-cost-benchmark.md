@@ -1,6 +1,6 @@
 # 摘要生成模型性价比实测报告
 
-> 实验日期：2026-09-11；GLM-5.3-Flash 与 deepseek-flash（DeepSeek-V4.1-Flash）于 2026-09-14 按同口径补测。用真实知识库文档实测 deepseek-v4-flash 与 qwen3.8-flash 的摘要生成 token 消耗与成本，验证"仅凭单价表无法对比"的前提（不同模型 tokenizer 不同，同一文档的 prompt tokens 差约 9%）。
+> 实验日期：2026-09-11；GLM-5.3-Flash 与 deepseek-flash（DeepSeek-V4.1-Flash）于 2026-09-14 按同口径补测；2026-09-17 补充外部推送工具调用重放实测（§3.2）。用真实知识库文档实测 deepseek-v4-flash 与 qwen3.8-flash 的摘要生成 token 消耗与成本，验证"仅凭单价表无法对比"的前提（不同模型 tokenizer 不同，同一文档的 prompt tokens 差约 9%）。
 >
 > 复现脚本：[scripts/benchmark_summary_models.py](../../scripts/benchmark_summary_models.py)。补测原始数据：GLM 见 tmp/bench_results_glm.json，deepseek-flash 见 tmp/bench_results_dsv41.json。
 
@@ -108,6 +108,27 @@
 
 注：deepseek 在 doc 2271（开思考）命中了 2,688 个隐式缓存 tokens（同前缀第二次调用），已按 0.04 元/百万计价——生产同前缀高频调用（如批量摘要回填）时 deepseek 的缓存优势会比本表更明显。
 
+### 3.2 外部推送工具调用能力重放实测（2026-09-17 补充）
+
+> 背景：2026-09-17 erp11095 推送循环事故——qwen3.8-flash 在首轮就把 `${AGENT_TOKEN}` 写进错误鉴权 Header（`Authorization: Bearer` / `X-API-Key`），QBA 侧按 `Api-Authorize-Token` 识别智能体身份失败，返回 Code=-99「请求缺少身份令牌」，同一把有效 client_token 也全部被拒，连续 3 次工具调用失败熔断。同根因此前已有 2026-09-16 erp11096 事故（偶发漏带 `Client-Authorize-Token` 头）。用户质疑 qwen3.8-flash 工具调用可靠性，重放对比三家模型。
+
+**实验设计**：取事故 trace（tr_37a5659e3d904f05）`llm_round_1` span 的原始 messages（system 租户接口文档 36,637 字符 + user 上下文 733 字符），用推送循环真实工具 schema（http_api + report_push_result，`_create_tool_runtime` 构建），经 `llm_gateway.chat_direct` 直连三通道，temperature=0.1 与生产一致，每模型连续 3 次，判定模型写出的 http_api 鉴权 Header 名与值形态。只做首轮调用，不执行工具、不访问外部系统。
+
+| 模型 | 鉴权头正确 | 单轮耗时 | 行为 |
+|------|-----------|---------|------|
+| qwen3.8-flash（现役 lite） | 3/3 | 3.1~3.4s | 重放全部正确，生产事故为低概率偶发 |
+| deepseek-flash | 3/3 | **1.2~1.4s** | 全对且最快，耗时约为 qwen 的 40% |
+| GLM-5.3-Flash | **0/3** | 5.4~6.0s | 三次全部**完全漏写 headers**（http_api 调用无 headers 键），且最慢、content 为空 |
+
+要点：
+
+- **GLM 的错误等级比 qwen 更严重**：不是写错头名，而是根本不写任何鉴权头；延迟还高近一倍（5.4~6.0s vs 3.1~3.4s），推送循环一轮 3~4 次 LLM 调用会被显著放大。
+- **deepseek-flash 综合表现最好**：3/3 正确 + 耗时仅为 qwen 的 40%，工具调用格式遵循度优于两家。
+- **qwen3.8-flash 的漏写/写错是偶发行为**：重放 3/3 正确，与两次生产事故均为偶发（次日/下轮自愈）的特征吻合，但偶发概率足以在每日多租户推送量下反复触发熔断。
+- **确定性注入兜底后，模型选型从正确性问题降级为延迟/成本问题**：`_ensure_agent_token_header` / `_ensure_user_token_header`（b1e96f31）把双鉴权头的 Header 名与值强制注入 http_api 调用（GLM 完全漏写也会被重建），三家模型均可用；但依赖模型抄写鉴权头已被证实是设计缺口，不应回退。
+
+复现脚本：[scripts/replay_push_llm_models.py](../../scripts/replay_push_llm_models.py)（在本地 aid-agent-api 容器内执行，`REPLAY_ATTEMPTS` 可加大每模型次数）；messages 快照从 `aid_work_logs2.obs_spans` 按 trace_id 取 `recap:external_push:llm_round_1` 的 input（含真实客户对话上下文，不落仓库），导出后与脚本同目录命名 `messages.json` 即可。
+
 ## 4. GLM-5.3-Flash 缺口与运维风险（已解除）
 
 - 2026-09-11 实验时，本地 `.env`、生产容器（aid-agent-api）、测试容器（aid-agent-api2）三处的智谱 key 调用 GLM-5.3-Flash 均返回 `429 code=1113 余额不足或无可用资源包,请充值`。
@@ -119,7 +140,7 @@
 1. **现网 lite 配置（`LITE_MODEL_CODE=qwen/qwen3.8-flash`，关思考）即成本最优解**：摘要场景每千次 2.09 元，比 deepseek 关思考（4.92 元）省 58%，比开思考的任何组合省 34%~65%。
 2. **deepseek 适合对延迟敏感、成本不敏感的主链路**（快 2.2~2.4 倍）；批量后台任务（摘要回填、 富集、分类）继续走 qwen lite 通道。
 3. **摘要场景无必要开启思考**：成本 +52%~84%、耗时 +2~3 倍，摘要长度与完成率无可见收益（未做人工质量评估，如需可后续补质量盲评）。
-4. **GLM-5.3-Flash 补测结论（2026-09-14，缓存价 2026-09-17 修正）**：关思考成本与 qwen lite 几乎持平（2.08 vs 2.09 元/千次），关思考时延反而更低（2.16s vs 2.62s），可作为 lite 通道的等价备选。cached_input 官方公布 0.23 元/M（此前暂按 0.8 无折扣），相对折扣 28.75% 仍略逊于 qwen 的 20%，绝对单价约 qwen（0.16）的 1.4 倍，同前缀批量场景（如摘要回填）下 qwen 缓存成本仍略优但差距已大幅缩小（原为 5 倍）；现网 lite 配置维持不变。
+4. **GLM-5.3-Flash 补测结论（2026-09-14，缓存价 2026-09-17 修正）**：关思考成本与 qwen lite 几乎持平（2.08 vs 2.09 元/千次），关思考时延反而更低（2.16s vs 2.62s），可作为 lite 通道的等价备选。cached_input 官方公布 0.23 元/M（此前暂按 0.8 无折扣），相对折扣 28.75% 仍略逊于 qwen 的 20%，绝对单价约 qwen（0.16）的 1.4 倍，同前缀批量场景（如摘要回填）下 qwen 缓存成本仍略优但差距已大幅缩小（原为 5 倍）；现网 lite 配置维持不变。**但仅限摘要类任务（见 §3.2）**：2026-09-17 工具调用重放中 GLM 三次全部漏写 http_api 鉴权头且耗时最高，不可用于外部推送等工具调用型 lite 任务。
 5. **deepseek-flash（DeepSeek-V4.1-Flash）补测结论（2026-09-14）**：与旧 v4-flash 行为和价格一致，摘要场景表现不变。官方已将旧名 `deepseek-v4-flash` 退役（请求由 V4.1-Flash 接管、按 flash 价计费），现网配置无需立即改名，但建议择机将 `DEEPSEEK_MODEL_CODE`（及 `SummaryLLMConfig.model` 等配置文件项）切换为官方名 `deepseek-flash`，避免旧名未来被彻底移除时 failover 最后一跳失效。
 
 ## 附：实验局限
