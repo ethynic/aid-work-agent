@@ -145,12 +145,14 @@ else
     sudo find "$SIM_DIR" -name .git -prune -o -type f -name '*.pyc' -delete 2>/dev/null || true
     sudo find "$SIM_DIR" -name .git -prune -o -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
 
-    git -C "$SIM_DIR" add -A -- . ':(exclude).env' ':(exclude).db_passwords'
+    # .env 已被 .gitignore 覆盖，add -A 不会纳入；pathspec 里写字面 .env 会让 git 视为
+    # 「显式添加被忽略文件」而以退出码 1 失败（set -e 中断脚本），故只排除 .db_passwords
+    git -C "$SIM_DIR" add -A -- . ':(exclude).db_passwords'
     if [[ -s "$PATCH_FILE" ]]; then
       log "重放仿真门控增量（git apply --3way）..."
       git -C "$SIM_DIR" apply --3way "$PATCH_FILE" \
         || die "仿真增量重放失败（生产可能改动了同一区域）。patch 已保留: $PATCH_FILE，请手工合并后 git add，再重跑本脚本"
-      git -C "$SIM_DIR" add -A -- . ':(exclude).env' ':(exclude).db_passwords'
+      git -C "$SIM_DIR" add -A -- . ':(exclude).db_passwords'
     fi
     if ! git -C "$SIM_DIR" diff --cached --quiet; then
       git -C "$SIM_DIR" commit -q -m "chore(sim): 同步生产代码 ${PROD_HEAD:0:8} + 重放仿真增量"
