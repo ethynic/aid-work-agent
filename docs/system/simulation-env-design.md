@@ -164,6 +164,7 @@
 
 1. 重建 `agent1.aidingyi.cn.conf`（迁移时删除，备份在新机 `/tmp/agent1.aidingyi.cn.conf.bak_20260915`），反代 `localhost:8010`，SSL 证书与生产同族。
 2. **IP 白名单**：默认 `allow` 办公出口 IP（与 fail2ban 白名单同一批）+ `deny all`——客户无法误入仿真环境。
+   - ⚠️ 白名单文件必须放 `/etc/nginx/snippets/sim_whitelist.conf`（2026-09-17 上线踩坑：放 `conf.d/` 会被 `include conf.d/*.conf` 收进 http 层，裸 `deny all` 被所有 server 继承，生产无白名单 location 一度全部 403，即时修复）。
 3. **callback 路径单独 location 放行**：渠道回调来自服务商服务器 IP（非办公 IP），白名单会挡掉。对 `/t/*/callback/*`、`/api/wechat-mp/callback/*` 单独 location 不做 IP 限制（渠道回调本身有签名验证，配合 §4.1 凭证置空双保险）。日志独立，便于核对回调命中情况。
 4. DNS：`agent1.aidingyi.cn` A 记录仍指向 243（迁移后未删），保留使用。
 5. 日志独立：`/var/log/nginx/` 下 agent1 单独 access/error log，便于排查时区分环境。
