@@ -107,3 +107,23 @@ class DeviceView(BaseModel):
     online: bool = False
     last_seen_at: Optional[str] = None
     created_at: Optional[str] = None
+
+
+class ResumeEvaluateRequest(BaseModel):
+    """简历评估请求（POST /runtime/resume/evaluate，2026-09-17 去 OCR 化 v2）。
+
+    - image：拼接长图 PNG base64（服务端 Pillow 切带重叠横带）；
+    - images：或已分段的图片 base64 列表（按阅读顺序直接作横带，不重复切片）；
+      两字段二选一，都给时以 images 为准
+    - candidate_name：必填（业务必填，模型层 Optional——422 统一走端点的 _http_error 错误形状）。
+      传入 VL 提示词并与图中姓名（name_seen）比对（决策⑨姓名门，≤1 字容差），不符 422 不扣费
+    - job_id / job_name：可选职位上下文，给了才评分；无 → score/match_summary=null 只出总结
+    - model：可选，provider/model 语法（如 zhipu/GLM-5.3-Flash）；须在白名单内
+    """
+
+    image: Optional[str] = Field(None, description="拼接长图 PNG base64（服务端切片）")
+    images: Optional[List[str]] = Field(None, description="分段图片 base64 列表（按阅读顺序）")
+    candidate_name: Optional[str] = Field(None, max_length=30, description="页面候选人姓名（必填，姓名核对基准）")
+    job_id: Optional[str] = Field(None, max_length=64, description="职位 id（可选，给了才评分）")
+    job_name: Optional[str] = Field(None, max_length=100, description="职位名（可选，给了才评分）")
+    model: Optional[str] = Field(None, max_length=100, description="识别模型 provider/model（可选，白名单校验）")

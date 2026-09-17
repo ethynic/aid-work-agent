@@ -12,8 +12,12 @@ boss_* 代理工具为 LOCAL_REQUIRED：execute() 不直接操作 BOSS，
 非空时附 data.options 编号选择元数据（key/label/description，设计 §5.1，供
 LLM/前端直接渲染编号选择列表）。
 
-其中 boss_resume_detail / boss_resume_batch 额外做云端后处理：CLI 成功结果（截图+OCR payload）
-在工具层直接落简历库（batch 逐份落库），只把紧凑摘要返回给 LLM（图片字节不进上下文）。
+其中 boss_resume_detail / boss_resume_batch 额外做云端后处理（2026-09-17 去 OCR 化
+v2，docs/design/desktop-automation/boss-resume-vl-recognition-design.md）：CLI 成功结果
+（截图拼接 payload，一律无文本）在工具层逐份「云端 VL 评估（姓名+总结+评分+key_info
+一次调用）→ 姓名门 → 落简历库+回写 match_* → 按份扣简历识别费」，只把紧凑摘要返回给
+LLM（图片字节不进上下文）。截图免费（价目表 detail/batch=0），识别费单价
+settings.boss_tool_billing.resume_recognition_price；客户端文本不可信（设计 §6 防造假）.
 
 计费（2026-09-01 时机迁移，docs/design/billing/client-billing-integration-design.md §4.1）：
 按次计费已从本模块轮询侧迁到 repository.write_result（Runtime 回写结果权威落库点，
@@ -38,7 +42,12 @@ from pydantic import BaseModel, Field, field_validator
 from src.config.settings import settings
 from src.db.client_binding_db import ClientUsageLogDB
 from src.local_tools import catalog, repository
-from src.local_tools.pricing import overlay_heal_price, tool_credit_price
+from src.local_tools.pricing import (
+    RESUME_RECOGNITION_TOOL_NAME,
+    overlay_heal_price,
+    resume_recognition_price,
+    tool_credit_price,
+)
 from src.services import (
     overlay_heal_service,
     recruiting_job_service,
@@ -46,6 +55,7 @@ from src.services import (
     recruiting_notify_service,
     recruiting_resume_service,
     recruiting_resume_timeline_service,
+    resume_vl_service,
 )
 from src.tools.base import BaseTool, ExecutionTarget
 
@@ -61,6 +71,142 @@ _TERMINAL_SUCCEEDED = "succeeded"
 HEALABLE_ERROR_CODES = frozenset({"UI_CHANGED", "BUSY"})
 # 自愈专项费在台账中的 tool_name（非真实工具；仅在自愈真正救回操作时收取）
 OVERLAY_HEAL_TOOL_NAME = "boss_overlay_heal"
+# 简历识别费台账 tool_name：常量归 pricing（计费唯一取价口），本模块与解析接口共用同科目
+# （RESUME_RECOGNITION_TOOL_NAME 自 pricing import，见文件头 import）
+
+
+async def _evaluate_resume_via_vl(
+    tenant_id: str, payload: Dict[str, Any], invocation_id: Optional[str] = None,
+    device_id: Optional[str] = None, session_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+) -> Tuple[Optional[str], Optional[str], Optional[Dict[str, Any]]]:
+    """云端 VL 评估单份简历（v2：姓名 + 总结 + 评分 + key_info 一次调用，设计 §4.2）。
+
+    客户端 payload 一律只交图：**ocr_text 信任已撤销**——payload 带文本（旧客户端）
+    记 warning 观测后丢弃，文本/评分唯一来源是服务端 VL 看图（设计 §6 防造假）。
+
+    流程：切片 → evaluate_resume（candidate_name 传入提示词，决策⑨）→ 姓名门：
+    resume_name_matches(candidate_name, name_seen) 不符 → RESUME_NAME_MISMATCH +
+    全量日志（name_seen 供区分「识别误读」与「真点错人」），不入库不扣费不打分。
+
+    返回 (None, None, evaluation) 表示成功（payload 已回填 resume_summary/key_info/
+    ocr_engine，evaluation 供入库后回写 match_*）；失败返回 (错误码, 中文原因, None)：
+    - VL 重试后仍失败 → RESUME_VL_FAILED；
+    - 姓名门不过 → RESUME_NAME_MISMATCH（张冠李戴防护，用户铁律：候选人姓名绝不能错）。
+    """
+    candidate_name = str(payload.get("candidate_name") or "").strip()
+    # ocr_text 信任撤销（v2 设计 §6）：CLI 文本一律不可信，带上也只是丢弃 + 观测。
+    # 必须覆盖入库层全部文本别名（create_resume_record_from_tool_result 按别名组
+    # ocr_text/ocr/text 解析 ocr_text 列）——只丢 ocr_text 会留下「换个别名即绕过
+    # 姓名门把客户端文本当 ocr_text 写库」的旁路（文本唯一来源=服务端 VL）
+    dropped_text_keys = [
+        k for k in ("ocr_text", "ocr", "text")
+        if isinstance(payload.get(k), str) and payload[k].strip()
+    ]
+    if dropped_text_keys:
+        logger.warning(
+            f"后端日志：旧客户端 payload 携带识别文本（{'+'.join(dropped_text_keys)}）已丢弃"
+            f"（文本以云端 VL 评分为准） tenant={tenant_id} candidate={candidate_name} "
+            f"ocr_chars={len(payload.get('ocr_text') or '')}"
+        )
+    for key in ("ocr_text", "ocr", "text", "ocr_chars"):
+        payload.pop(key, None)
+
+    images = payload.get("images") or []
+    # images 限定 list：契约外形状（如 dict）按缺图转错误码，绝不在此抛异常
+    # （batch 逐份循环里该调用在 per-item try 之外，KeyError 会中断整批）
+    stitched_b64 = (
+        images[0].get("base64")
+        if isinstance(images, list) and images and isinstance(images[0], dict)
+        else None
+    )
+    if not (stitched_b64 or "").strip():
+        return "RESUME_VL_FAILED", "payload 缺拼接长图（images[0].base64），云端无法识别", None
+
+    # 职位上下文：payload 带 job_id/job_name 即评分（职位库命中 → 结构化要求/备注/话术；
+    # 未命中 → 最小上下文（仅职位名）走隐含要求路径，沿袭 v1「带职位名就评」语义；
+    # 两者皆无 → job_ctx=None，VL 提示词要求 score=null（只出总结，沿袭「未关联职位跳过评分」）
+    job_ctx = None
+    if (payload.get("job_id") or payload.get("job_name") or "").strip():
+        job_ctx = await asyncio.to_thread(
+            recruiting_match_service._load_job_context,
+            tenant_id,
+            payload.get("job_id"),
+            payload.get("job_name"),
+        ) or {"job_name": payload.get("job_name")}
+
+    # 切片（Pillow，同步 CPU 活放线程池）与 VL 调用都失败-loud，此处统一转错误码
+    try:
+        bands = await asyncio.to_thread(resume_vl_service.slice_stitched_image, stitched_b64)
+        evaluation = await resume_vl_service.evaluate_resume(
+            bands, candidate_name, job_ctx
+        )
+    except resume_vl_service.ResumeVLModelError as e:
+        # 模型配置不自洽（改了缺省 model 没同步白名单等）：batch 该调用在 per-item try
+        # 之外，不接住会整批中断——统一转错误码 fail-loud
+        logger.error(f"后端日志：简历 VL 模型配置非法 tenant={tenant_id} candidate={candidate_name}: {e}")
+        return "RESUME_VL_FAILED", f"简历识别模型配置非法：{e}", None
+    except resume_vl_service.ResumeVLError as e:
+        logger.error(f"后端日志：简历云端评估失败 tenant={tenant_id} candidate={candidate_name}: {e}")
+        return "RESUME_VL_FAILED", f"简历云端识别失败（重试后仍失败）：{e}", None
+
+    # 姓名门（决策⑨，评分第一道门）：不符直接返回，不入库不扣费不打分；全量日志
+    # 必含 name_seen——排障区分「识别误读」（重试可救）与「真点错人」（流程问题）
+    name_seen = evaluation.get("name_seen") or ""
+    if not resume_vl_service.resume_name_matches(candidate_name, name_seen):
+        logger.error(
+            f"后端日志：简历姓名核对不匹配（不入库不扣费不打分） tenant={tenant_id} "
+            f"device={device_id} invocation={invocation_id} session={session_id} user={user_id} "
+            f"candidate_name={candidate_name} name_seen={name_seen} bands={len(bands)} "
+            f"model={evaluation.get('model')}——长图见 invocation result_json 可人工核对"
+        )
+        return "RESUME_NAME_MISMATCH", (
+            f"姓名核对不匹配（页面候选人「{candidate_name}」与简历所示「{name_seen}」不一致）："
+            "疑似点击错位打开了其他候选人的简历，已跳过不入库不扣费，请人工核对后重试"
+        ), None
+
+    # 回填（ocr_text/ocr_chars 不再存在；ocr_engine=实际模型名，决策④）
+    payload["resume_summary"] = evaluation.get("resume_summary")
+    payload["key_info"] = evaluation.get("key_info")
+    payload["ocr_engine"] = evaluation.get("model") or "unknown"
+    payload.pop("ocr_accel", None)
+    # 阈值随 evaluation 带出（入库后回写 match_status 用；无职位 None → 不回写 match_*）
+    evaluation["match_threshold"] = (job_ctx or {}).get("match_threshold")
+    return None, None, evaluation
+
+
+async def _bill_resume_recognition(
+    tenant_id: str,
+    user_id: Optional[str],
+    session_id: Optional[str],
+    invocation_id: Optional[str],
+    device_id: Optional[str] = None,
+) -> None:
+    """简历识别费按份直记（复用弹层自愈「编排层直记」模式，2026-09-17 去 OCR 化设计 §4.3）。
+
+    时机（v2）：**VL 评估成功且姓名门通过后即扣**（评分成功 = 服务已交付；其后入库失败
+    不退，成本真实发生，失败场景日志告警可对账）。无独立 invocation，走 record_tool_usage
+    直记台账。计费失败只告警不影响入库结果（台账可对账）；价格 ≤0（总开关关/配置 0）不落账。
+    """
+    price = resume_recognition_price()
+    if price <= 0:
+        return
+    try:
+        await asyncio.to_thread(
+            ClientUsageLogDB.record_tool_usage,
+            tenant_id=tenant_id,
+            tool_name=RESUME_RECOGNITION_TOOL_NAME,
+            credit_cost=price,
+            invocation_id=invocation_id,
+            session_id=session_id,
+            user_id=user_id,
+            device_id=device_id,
+        )
+    except Exception as e:  # noqa: BLE001 计费失败不影响入库结果
+        logger.opt(exception=True).error(
+            f"后端日志：简历识别费落账失败（不影响入库结果）tenant={tenant_id} "
+            f"invocation={invocation_id}: {e}"
+        )
 
 
 class LocalToolProxyTool(BaseTool):
@@ -828,19 +974,59 @@ class BossJobsListTool(LocalToolProxyTool):
         }
 
 
-# ============== 简历入库后自动评分（简历-职位匹配设计 §3，Phase 2） ==============
+# ============== 简历评分回写（v2：评分已合并进 VL 评估调用，此处只做落库回写） ==============
 
 
-async def _evaluate_resume_match_safely(tenant_id: str, resume_id: int) -> Dict[str, Any]:
-    """调评分服务并吞掉一切异常（评分绝不影响工具成功返回，失败不阻塞设计 §3）。
+async def _match_fields_from_evaluation(
+    evaluation: Optional[Dict[str, Any]], tenant_id: str, record: Dict[str, Any]
+) -> Dict[str, Any]:
+    """VL 评估结果 → match_* 四列回写 + 摘要用 match_result dict。
 
-    服务层本身不抛异常，此处兜底防御（如 DB 读简历阶段意外错误），返回失败说明 dict。
+    v2 起评分在 VL 调用内完成（recruiting_match_service.evaluate_and_update 的自动评分
+    路径退役，仅前端重评的无图 fallback 保留），本函数只把 evaluation 里的 score/
+    match_summary/key_info 按职位阈值落库。失败不阻塞工具返回（评分是增强信息）：
+    score=None（无职位/未评）或异常 → match_* 不动 + match_note 说明。
     """
+    base: Dict[str, Any] = {
+        "resume_id": record["id"],
+        "match_score": None,
+        "match_status": None,
+        "match_summary": None,
+    }
+    score = (evaluation or {}).get("score")
+    if score is None:
+        base["match_note"] = "未评分"
+        return base
     try:
-        return await recruiting_match_service.evaluate_and_update(tenant_id, resume_id)
-    except Exception as e:  # noqa: BLE001 评分是增强信息，任何异常都不拖垮入库结果
-        logger.opt(exception=True).error(f"后端日志：简历评分异常 resume_id={resume_id}: {e}")
-        return {"resume_id": resume_id, "score": None, "note": f"评分异常: {e}"}
+        # 显式 None 判断：threshold=0 合法（全员及格），不能被 or 兜底吞成默认 70
+        threshold = (evaluation or {}).get("match_threshold")
+        if threshold is None:
+            threshold = recruiting_job_service.DEFAULT_MATCH_THRESHOLD
+        status = recruiting_match_service._decide_match_status(score, threshold)
+        updated = await asyncio.to_thread(
+            recruiting_match_service._update_match_fields,
+            tenant_id,
+            record["id"],
+            score,
+            (evaluation or {}).get("match_summary"),
+            status,
+            (evaluation or {}).get("key_info"),
+        )
+        if not updated:
+            base["match_note"] = "简历不存在（评分期间被删除）"
+            return base
+        base.update({
+            "match_score": score,
+            "match_status": status,
+            "match_summary": (evaluation or {}).get("match_summary"),
+        })
+        return base
+    except Exception as e:  # noqa: BLE001 评分回写是增强信息，任何异常都不拖垮入库结果
+        logger.opt(exception=True).error(
+            f"后端日志：简历评分回写异常 resume_id={record['id']}: {e}"
+        )
+        base["match_note"] = f"评分回写异常: {e}"
+        return base
 
 
 def _apply_match_fields(summary: Dict[str, Any], match_result: Dict[str, Any]) -> None:
@@ -856,7 +1042,12 @@ def _apply_match_fields(summary: Dict[str, Any], match_result: Dict[str, Any]) -
 
 
 class BossResumeDetailTool(LocalToolProxyTool):
-    """BOSS 读取简历入库：CLI 截图+OCR 结果在云端工具层直接落库，图片字节绝不进 LLM 上下文。
+    """BOSS 读取简历入库：CLI 截图拼接结果在云端工具层识别+落库，图片字节绝不进 LLM 上下文。
+
+    2026-09-17 去 OCR 化 v2（设计 §4.2）：客户端只滚动截图+拼接（截图免费，payload
+    无任何文本），云端一次 VL 评估产出姓名/总结/评分/key_info；姓名门（页面姓名 vs 图中
+    姓名，≤1 字容差）不过 → RESUME_NAME_MISMATCH 不入库不扣费并打全量日志；通过后即扣
+    简历识别费（评分成功=服务交付），再入库+回写 match_*。
 
     注意：工具实例是共享单例（tool_registry.register(tool_cls())），
     禁止把每次调用的状态存 self；tenant/user 一律从 kwargs 的 _trusted_* 取。
@@ -864,8 +1055,8 @@ class BossResumeDetailTool(LocalToolProxyTool):
     name = "boss_resume_detail"
     display_name = "BOSS 读取简历入库"
     description = (
-        "在用户本机 BOSS 直聘「沟通」页读取当前候选人简历详情（截图+OCR），"
-        "结果自动存入简历库，返回紧凑摘要（不含图片与 OCR 全文）"
+        "在用户本机 BOSS 直聘「沟通」页读取当前候选人简历详情（滚动截图拼接，云端识别），"
+        "结果自动存入简历库，返回紧凑摘要（不含图片与简历全文）"
     )
 
     class InputModel(BaseModel):
@@ -873,16 +1064,21 @@ class BossResumeDetailTool(LocalToolProxyTool):
             None,
             max_length=30,
             description=(
-                "必传：当前会话候选人的姓名（姓名唯一来源=非 OCR，"
-                "CLI 会与简历 OCR 文本交叉校验，不符会报错）"
+                "必传：当前会话候选人的姓名（姓名唯一来源=非截图识别，"
+                "云端识别后会与识别文本交叉校验，不符会报错）"
             ),
         )
 
     timeout_seconds = 600
 
+    def _tool_credit_price(self) -> float:
+        # 截图免费（价目表 detail/batch=0，write_result 不扣），预检与扣费口径改为按份简历识别费
+        return resume_recognition_price()
+
     async def execute(self, **kwargs) -> Dict[str, Any]:
         tenant_id = kwargs.get("_trusted_tenant_id")
         user_id = kwargs.get("_trusted_user_id")
+        session_id = kwargs.get("_session_id")
         result = await super().execute(**kwargs)
 
         # CLI 失败/非 success：message/code 透传（message 已带失败原因），不落库。
@@ -891,8 +1087,47 @@ class BossResumeDetailTool(LocalToolProxyTool):
         if not result.get("success"):
             return {**result, "data": None}
 
-        # 成功：结果 payload（invocation result_json.data）直接落库（同步 DB 调用放线程池）
-        payload = result.get("data") or {}
+        # 成功：结果 payload（invocation result_json.data）云端 VL 评估（姓名+总结+评分，
+        # v2 合并调用）再落库。契约外形状（非 dict）归空：回填/日志不碰 payload 字段，
+        # 入库层宽容解析抛 ResumePayloadError（RESUME_PAYLOAD_INVALID）
+        payload = result.get("data")
+        if not isinstance(payload, dict):
+            payload = {}
+        # 姓名门前置校验：无姓名可核对时绝不进 VL（也不浪费一次评估调用）——放行给入库层
+        # 的契约校验抛 ResumePayloadError（RESUME_PAYLOAD_INVALID），fail-loud 语义不变
+        if not (payload.get("candidate_name") or "").strip():
+            logger.error("后端日志：boss_resume_detail payload 缺 candidate_name，不进 VL 评估")
+            return {
+                "success": False,
+                "code": "RESUME_PAYLOAD_INVALID",
+                "message": "payload 缺 candidate_name：姓名唯一来源=非截图识别，缺省不评估不入库",
+                "effect": result.get("effect"),
+                "data": None,
+                "invocation_id": result.get("invocation_id"),
+            }
+        error_code, error_message, evaluation = await _evaluate_resume_via_vl(
+            tenant_id, payload,
+            invocation_id=result.get("invocation_id"),
+            session_id=session_id, user_id=user_id,
+        )
+        if error_code:
+            # fail-loud：评估失败/姓名门不过不入库不扣费（识别费在姓名门通过后才扣）
+            logger.error(
+                f"后端日志：boss_resume_detail 云端评估未通过 code={error_code} "
+                f"candidate={payload.get('candidate_name')}"
+            )
+            return {
+                "success": False,
+                "code": error_code,
+                "message": error_message,
+                "effect": result.get("effect"),
+                "data": None,
+                "invocation_id": result.get("invocation_id"),
+            }
+        # 姓名门通过 → 按份扣简历识别费（v2：评分成功=服务交付，其后入库失败不退）
+        await _bill_resume_recognition(
+            tenant_id, user_id, session_id, result.get("invocation_id")
+        )
         try:
             record = await asyncio.to_thread(
                 recruiting_resume_service.create_resume_record_from_tool_result,
@@ -919,15 +1154,16 @@ class BossResumeDetailTool(LocalToolProxyTool):
                 "data": None,
                 "invocation_id": result.get("invocation_id"),
             }
-        # 入库成功留痕（2026-09-10 排障整改：「存没存进库」服务端日志可直接回答）
+        # 入库成功留痕（2026-09-10 排障整改：「存没存进库」服务端日志可直接回答；
+        # 识别费已在姓名门通过后扣除，v2 起不再有「仅云端识别/旧客户端文本」双路径）
         logger.info(
             f"后端日志：boss_resume_detail 入库成功 resume_id={record['id']} "
             f"candidate={record.get('candidate_name')} images={len(record.get('images') or [])} "
-            f"ocr_chars={len(record.get('ocr_text') or '')}"
+            f"summary_len={len(record.get('resume_summary') or '')}"
         )
 
         # 返回给 LLM 的 data 只含紧凑摘要（recruiting-operator 上下文预算仅 8000 token，
-        # 图片字节/OCR 全文绝不进上下文，完整内容到简历库页面看）。
+        # 图片字节/简历全文绝不进上下文，完整内容到简历库页面看）。
         # job_warning 为服务层职位关联解析的临时字段（0 命中时「未关联职位」提示）
         summary = {
             "resume_id": record["id"],
@@ -935,7 +1171,7 @@ class BossResumeDetailTool(LocalToolProxyTool):
             "job_name": record.get("job_name"),
             "job_id": record.get("job_id"),
             "image_count": len(record.get("images") or []),
-            "ocr_char_count": len(record.get("ocr_text") or ""),
+            "summary_preview": (record.get("resume_summary") or "")[:80],
         }
         message = f"简历已存入简历库：{summary['candidate_name']}"
         if summary["job_name"]:
@@ -944,9 +1180,12 @@ class BossResumeDetailTool(LocalToolProxyTool):
         if record.get("job_warning"):
             summary["warning"] = record["job_warning"]
             message += f"；{record['job_warning']}"
-        # 落库成功后自动评分（设计 §3）：失败不阻塞，评分异常绝不影响工具成功返回
-        match_result = await _evaluate_resume_match_safely(tenant_id, record["id"])
-        _apply_match_fields(summary, match_result)
+        # 回写 match_*（v2：评分已合并进 VL 调用，不再调用 recruiting_match_service 自动评分；
+        # score=None（无职位/未评）→ match_* 不回写，摘要注明未评分，失败不阻塞工具返回）
+        _apply_match_fields(
+            summary,
+            await _match_fields_from_evaluation(evaluation, tenant_id, record),
+        )
         # 基类在 effect=unknown 时已给 message 追加「实际效果未知」提示，覆写摘要时必须保留
         if UNKNOWN_EFFECT_NOTICE in (result.get("message") or ""):
             message = f"{message}；{UNKNOWN_EFFECT_NOTICE}"
@@ -954,11 +1193,13 @@ class BossResumeDetailTool(LocalToolProxyTool):
 
 
 class BossResumeBatchTool(LocalToolProxyTool):
-    """BOSS 批量读取简历入库：CLI 批量 payload 逐份落库，图片字节绝不进 LLM 上下文。
+    """BOSS 批量读取简历入库：CLI 批量 payload 逐份「识别→入库→记账」，图片字节绝不进 LLM 上下文。
 
     与 BossResumeDetailTool 同语义的批量版：CLI（boss_resume_batch）在推荐牛人页逐个点开
-    卡片读取简历，返回 data.resumes 契约 payload 数组 + data.failures；云端逐份入库，
-    单份异常捕获记入 failures（不中断循环，与 CLI 侧 failures 合并语义），只返回紧凑摘要列表。
+    卡片读取简历，返回 data.resumes 契约 payload 数组 + data.failures；云端逐份串行执行
+    「VL 评估 → 姓名门 → 扣识别费 → 入库 → 回写 match_* → push 进度」（决策⑤逐份推进），
+    单份任何环节失败记入 failures 继续（不中断循环，与 CLI 侧 failures 合并语义），
+    只返回紧凑摘要列表。全部失败才 RESUME_STORE_FAILED（现有语义保留）。
 
     注意：工具实例是共享单例（tool_registry.register(tool_cls())），
     禁止把每次调用的状态存 self；tenant/user 一律从 kwargs 的 _trusted_* 取。
@@ -966,8 +1207,8 @@ class BossResumeBatchTool(LocalToolProxyTool):
     name = "boss_resume_batch"
     display_name = "BOSS 批量读取简历入库"
     description = (
-        "在用户本机 BOSS 直聘「推荐」页逐个点开牛人卡片批量读取简历（截图+OCR），"
-        "结果逐份自动存入简历库，返回紧凑摘要列表（不含图片与 OCR 全文）"
+        "在用户本机 BOSS 直聘「推荐」页逐个点开牛人卡片批量读取简历（滚动截图拼接，云端识别），"
+        "结果逐份自动存入简历库，返回紧凑摘要列表（不含图片与简历全文）"
     )
 
     class InputModel(BaseModel):
@@ -980,9 +1221,15 @@ class BossResumeBatchTool(LocalToolProxyTool):
 
     timeout_seconds = 600
 
+    def _tool_credit_price(self) -> float:
+        # 截图免费（价目表 detail/batch=0，write_result 不扣），预检与扣费口径改为按份简历识别费
+        return resume_recognition_price()
+
     async def execute(self, **kwargs) -> Dict[str, Any]:
         tenant_id = kwargs.get("_trusted_tenant_id")
         user_id = kwargs.get("_trusted_user_id")
+        session_id = kwargs.get("_session_id")
+        progress_queue = kwargs.get("_progress_queue")
         result = await super().execute(**kwargs)
 
         # CLI 失败/非 success：message/code 透传，不落库；data 一律置 None（图片字节绝不进上下文）
@@ -992,7 +1239,7 @@ class BossResumeBatchTool(LocalToolProxyTool):
         data = result.get("data") or {}
         resumes = data.get("resumes")
         if not isinstance(resumes, list) or not resumes:
-            # 无简历可入库：data.failures 是客户端逐卡失败现场（含画布/OCR 元信息的定位线索），
+            # 无简历可入库：data.failures 是客户端逐卡失败现场（含画布等元信息的定位线索），
             # 必须随 message/data 透出给 LLM 与 trace——2026-09-10 客户现场排障时该分支把 data
             # 置 None 吞掉证据，只能翻 invocation 原始表才拿到失败原因。纯文本无图片，
             # 不违反「图片字节绝不进 LLM 上下文」约束。
@@ -1022,15 +1269,38 @@ class BossResumeBatchTool(LocalToolProxyTool):
                 "data": {"attempted": attempted, "failures": failure_summary},
                 "invocation_id": result.get("invocation_id"),
             }
-        # CLI 侧单份失败（打开超时/读取失败等）与云端入库失败合并到同一 failures 列表
+        # CLI 侧单份失败（打开超时/读取失败等）与云端识别/入库失败合并到同一 failures 列表
         failures: List[Dict[str, Any]] = [
             f for f in (data.get("failures") or []) if isinstance(f, dict)
         ]
 
-        # 逐份入库：单份异常捕获记录，不中断循环（尽量多收简历）
+        # 逐份串行「VL 评估→姓名门→扣费→入库→回写评分→进度」（v2 设计 §4.2，决策⑤）：
+        # 单份任何环节失败捕获记录，不中断循环（尽量多收简历）
         summaries: List[Dict[str, Any]] = []
         for idx, payload in enumerate(resumes):
             name = payload.get("candidate_name") if isinstance(payload, dict) else None
+            evaluation: Optional[Dict[str, Any]] = None
+            # 非 dict payload 不进 VL（放行给入库契约校验转 ResumePayloadError，原语义）
+            if isinstance(payload, dict):
+                if not (payload.get("candidate_name") or "").strip():
+                    failures.append({"name": None, "error": "payload 缺候选人姓名（candidate_name）：姓名唯一来源=非截图识别，不评估不入库"})
+                    continue
+                error_code, error_message, evaluation = await _evaluate_resume_via_vl(
+                    tenant_id, payload,
+                    invocation_id=result.get("invocation_id"),
+                    session_id=session_id, user_id=user_id,
+                )
+                if error_code:
+                    logger.error(
+                        f"后端日志：boss_resume_batch 第 {idx + 1} 份云端评估未通过 "
+                        f"code={error_code} candidate={name}"
+                    )
+                    failures.append({"name": name, "error": error_message})
+                    continue
+                # 姓名门通过 → 按份扣识别费（v2：评分成功=服务交付，入库失败不退）
+                await _bill_resume_recognition(
+                    tenant_id, user_id, session_id, result.get("invocation_id")
+                )
             try:
                 record = await asyncio.to_thread(
                     recruiting_resume_service.create_resume_record_from_tool_result,
@@ -1050,10 +1320,20 @@ class BossResumeBatchTool(LocalToolProxyTool):
                 "job_name": record.get("job_name"),
                 "job_id": record.get("job_id"),
                 "image_count": len(record.get("images") or []),
-                "ocr_char_count": len(record.get("ocr_text") or ""),
+                "summary_preview": (record.get("resume_summary") or "")[:80],
             })
             if record.get("job_warning"):
                 summaries[-1]["warning"] = record["job_warning"]
+            # 回写 match_*（v2：评分已在 VL 调用内完成，此处仅落库；失败不阻塞）
+            _apply_match_fields(
+                summaries[-1],
+                await _match_fields_from_evaluation(evaluation, tenant_id, record),
+            )
+            self._push_progress(progress_queue, {
+                "type": "progress",
+                "invocation_id": result.get("invocation_id"),
+                "text": f"✅ 第 {idx + 1}/{len(resumes)} 份已入库：{record.get('candidate_name')}",
+            })
 
         # 入库留痕（2026-09-10 排障整改：成功几份、哪几份，服务端日志直接可查）
         logger.info(
@@ -1072,14 +1352,7 @@ class BossResumeBatchTool(LocalToolProxyTool):
                 "invocation_id": result.get("invocation_id"),
             }
 
-        # 逐份自动评分（设计 §3）：gather 并行，单份失败/异常吞掉（helper 已兜底）不影响其余与工具返回
-        match_results = await asyncio.gather(
-            *[_evaluate_resume_match_safely(tenant_id, s["resume_id"]) for s in summaries]
-        )
-        for s, match_result in zip(summaries, match_results):
-            _apply_match_fields(s, match_result)
-
-        # 返回给 LLM 的 data 只含紧凑摘要 + failures（绝不含 base64/OCR 全文，
+        # 返回给 LLM 的 data 只含紧凑摘要 + failures（绝不含 base64/简历全文，
         # recruiting-operator 上下文预算仅 8000 token，完整内容到简历库页面看）
         names = "、".join(s["candidate_name"] or "?" for s in summaries)
         message = f"已存入简历库 {len(summaries)} 份：{names}"

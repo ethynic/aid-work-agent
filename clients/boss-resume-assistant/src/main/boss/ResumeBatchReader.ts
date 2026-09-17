@@ -2,7 +2,8 @@
  * 推荐牛人页批量简历读取执行器（CLI resume-batch 命令 / boss_resume_batch tool，设计 §10.8 延伸）。
  *
  * 链路（模仿 GreetExecutor 的逐个模式）：逐个点击推荐列表的牛人卡片行 → 打开简历详情（canvas）
- * → 复用 ResumeReader 读取管线（Win32 滚轮回顶 → 分段截图 → 拼接 → OCR）→ Escape 关闭 → 下一张。
+ * → 复用 ResumeReader 读取管线（Win32 滚轮回顶 → 分段截图 → 拼接）→ Escape 关闭 → 下一张。
+ * 文本识别在云端（boss_resume_batch 工具层逐份调多模态模型，2026-09-17 去 OCR 化）。
  *
  * 真机实证（2026-08-17，视口 1249x1277）：
  * - 卡片行结构：每行右侧「打招呼」按钮（x≈1162）视口内 7 个、y 间隔 184px；行左上「姓名 + 活跃状态」
@@ -18,14 +19,14 @@
  * 任何分辨率/缩放/窗口尺寸下恒在卡片行内。废除 2026-08-17 按开发机校准的绝对像素主体列点
  * （x=600/按钮 y+70）：客户笔记本布局不同，该点会落进行间空隙（点击无反应）或命中错误行
  * （开错人详情，0.2.9 实证把王亦菲的简历存到了任玮鹤名下）。姓名配对失败的卡片不点击直接
- * 记 failure 跳过——P0 反正不入库，盲点白读还占 ~30 秒真实鼠标滚动。
+ * 记 failure 跳过——反正不入库，盲点白读还占 ~30 秒真实鼠标滚动。
  *
  * 为什么逐张 re-snapshot：打开/关闭详情会触发列表重排，卡片坐标不复用；且已处理的卡按姓名去重
  * （key = name ?? `row@${按钮y}`），同名牛人会被跳过（推荐流很少出现，出现时不重复读同一人）。
  *
- * 姓名策略（P0 防错名）：卡片 DOM 配对是唯一来源 + OCR 文本头部交叉校验（ocrNameMatches，容忍
- * 1 字 OCR 误差）。配对失败或交叉校验不过（疑似点开详情与卡片不符）→ 该份记 failures 跳过，
- * 绝不 OCR 猜名入库（错名简历会导致打招呼打错人，宁跳过不错存）。
+ * 姓名策略（P0 防错名）：卡片 DOM 配对是唯一来源。配对失败 → 该份记 failures 跳过；
+ * 姓名与识别文本的交叉校验在云端做（resume_name_matches），云端不命中同样不入库不扣费——
+ * 绝不猜名入库（错名简历会导致打招呼打错人，宁跳过不错存）。
  *
  * fail-loud：首屏无卡片抛 ResumeBatchError；打开超时/读取失败记 failures 后继续下一张（尽量多收简历）；
  * 但 Escape 关不掉详情时必须 break——弹层挡住列表没法点下一张，绝不盲点。
@@ -43,12 +44,10 @@ import { viewportOf } from './FilterSetter.js'
 import { CancelledError } from '../operations/types.js'
 import {
   ResumeReader,
-  ocrNameMatches,
   locateResumeCanvas,
   canvasCandidates,
   canvasMinSize,
   type DeviceRect,
-  type OcrEngine,
   type ResumeReadResult,
 } from './ResumeReader.js'
 
@@ -70,7 +69,7 @@ export class ResumeBatchError extends Error {
 }
 
 export interface BatchCard {
-  /** DOM 配对出的候选人姓名（唯一来源）；配对失败为 null → 不点击直接记 failure（P0 不入库，读了白读） */
+  /** DOM 配对出的候选人姓名（唯一来源）；配对失败为 null → 不点击直接记 failure（不入库，读了白读） */
   name: string | null
   /** 配对姓名节点的中心点（视口 CSS px，与 CDP 点击同坐标系）。坐标跟 DOM 走，任何分辨率/
    *  缩放/窗口尺寸下恒在卡片行内——2026-09-10 客户机错位事故的修复：废除 2026-08-17 按开发机
@@ -82,7 +81,7 @@ export interface BatchCard {
 }
 
 export interface BatchResumeResult {
-  /** 候选人姓名（卡片 DOM 配对唯一来源 + 已通过 OCR 文本头部交叉校验，见 ocrNameMatches） */
+  /** 候选人姓名（卡片 DOM 配对唯一来源；与识别文本的交叉校验在云端做） */
   name: string
   readResult: ResumeReadResult
 }
@@ -90,7 +89,6 @@ export interface BatchResumeResult {
 export interface ResumeBatchDeps {
   /** 采集 fresh DOMSnapshot（每次点击前重新采集，禁止复用旧坐标） */
   snapshot(): Promise<DomSnapshot>
-  /** CDP 浏览类点击（点卡片打开详情；真机实证有效，不占真实鼠标） */
   /** Win32 真实鼠标点击（打开卡片详情）。2026-09-11 从 CDP 合成点击（clickBrowse）切换：
    *  客户机实证 BOSS 反作弊 SDK 会选择性拦截 CDP 合成点击（同账号 greet 的 Win32 点击一直
    *  正常），被拦时点击静默失效「页面无反应」；Win32 为操作系统级真人输入，SDK 无法区分。 */
@@ -108,16 +106,12 @@ export interface ResumeBatchDeps {
   ): Promise<void>
   /** 像素级同画面确认（真实实现调 scripts/cv-segdiff.ps1）：P1 到底判定加固，透传给内部 ResumeReader */
   sameView(a: string, b: string, rect: DeviceRect): Promise<boolean>
-  /** 裁剪 + 重叠对齐 + 垂直拼接（真实实现调 scripts/cv-stitch.ps1）；cropDir 逐段落盘供逐段 OCR */
+  /** 裁剪 + 重叠对齐 + 垂直拼接（真实实现调 scripts/cv-stitch.ps1）；透传给内部 ResumeReader */
   stitch(
     parts: string[],
     rect: DeviceRect,
     outFile: string,
-    cropDir?: string,
   ): Promise<{ width: number; height: number; overlaps: number[]; seamMis: number[] }>
-  /** 批量 OCR（真实实现 = operations/bossResumeDetail.ts 的 ocrBatch：RapidOCR 主 + WinRT 兜底）；
-   *  透传给内部 ResumeReader（P2 起一次调用处理一份简历的全部段） */
-  ocrBatch(files: string[]): Promise<{ texts: string[]; engine: OcrEngine }>
   /** 协作式取消信号：每张卡循环顶部检查，触发即抛 CancelledError */
   signal?: AbortSignal
   /** 每成功读完 1 份简历回调一次（done 为累计成功数） */
@@ -187,9 +181,9 @@ export class ResumeBatchReader {
   }
 
   /**
-   * 批量读取：逐个点开当前视口牛人卡片 → 复用 ResumeReader 读取 → Escape 关闭 → 下一张。
+   * 批量读取：逐个点开当前视口牛人卡片 → 复用 ResumeReader 读取拼接图 → Escape 关闭 → 下一张。
    * 入口先关闭残留的简历详情弹层（boss_resume_detail 读完不关，详见方法体注释），关不掉 fail-loud。
-   * 单张失败（打开超时/读取失败/姓名无法确定/姓名交叉校验不过）记 failures 后继续；Escape 关不掉详情时 break
+   * 单张失败（打开超时/读取失败/姓名无法确定）记 failures 后继续；Escape 关不掉详情时 break
    * （弹层挡住列表没法点下一张）。signal 取消抛 CancelledError（已读的份数不返回，由调用方按 CANCELLED 处理）。
    */
   async readBatch(opts: { limit: number; saveDir?: string }): Promise<{
@@ -252,7 +246,7 @@ export class ResumeBatchReader {
       processedNames.add(card.name ?? `row@${card.greetButtonY}`)
 
       // 0. 姓名配对前置闸（2026-09-10）：点击点=姓名节点中心，配不出姓名=没有可点点位——
-      //    直接记 failure 跳过，绝不盲点（P0 反正不入库，盲点白读还占 ~30 秒真实鼠标滚动）。
+      //    直接记 failure 跳过，绝不盲点（反正不入库，盲点白读还占 ~30 秒真实鼠标滚动）。
       if (!card.name || !card.namePoint) {
         pushFailure(
           card.name,
@@ -310,7 +304,6 @@ export class ResumeBatchReader {
         wheel: (deltaY, notches) => this.deps.wheel(rect!, viewport, deltaY, notches),
         sameView: (a, b) => this.deps.sameView(a, b, rect!),
         stitch: this.deps.stitch,
-        ocrBatch: this.deps.ocrBatch,
         signal: this.deps.signal,
         sleep: this.sleep,
       })
@@ -331,32 +324,16 @@ export class ResumeBatchReader {
           )
           break
         }
-        pushFailure(card.name, `读取简历失败：${readErrMsg}`, `引擎判定前的读取管线异常，Escape 关闭成功`)
+        pushFailure(card.name, `读取简历失败：${readErrMsg}`, `读取管线异常，Escape 关闭成功`)
         continue
       }
 
-      // 3. 张冠李戴防护交叉校验：卡片姓名必须在 OCR 文本头部模糊命中（容忍 1 字 OCR 误差）。
-      //    未命中 = 疑似点开的详情与卡片不符（弹层残留/点击错位）→ 该份记 failure 跳过，宁跳过不错存
-      if (!ocrNameMatches(card.name, result.text)) {
-        pushFailure(
-          card.name,
-          `姓名交叉校验未通过（卡片配对「${card.name}」未在简历 OCR 文本头部命中，疑似点开详情与卡片不符）：已跳过不入库`,
-          `OCR 头部未见姓名（ocr_chars=${result.chars}，引擎=${result.ocrEngine}` +
-            `${result.ocrEngine === 'winrt' ? '；winrt 识别质量低于 RapidOCR，需怀疑识别差或点开的是他人详情' : ''}）`,
-        )
-        const closed = await this.tryCloseDetail()
-        if (!closed) {
-          pushFailure(card.name, 'Escape 后简历详情未关闭，无法继续处理后续卡片')
-          break
-        }
-        continue
-      }
+      // 3. 关闭详情；关不掉时当前份仍收进 resumes（内容有效）但必须停止。
+      //    姓名与识别文本的交叉校验在云端做（resume_name_matches，不入库不扣费）
       const name = card.name
-
-      // 4. 关闭详情；关不掉时当前份仍收进 resumes（内容有效）但必须停止
       batchLog(
-        `卡片[${name}] 已读取（ocr_chars=${result.chars}，引擎=${result.ocrEngine}，${result.segments} 段` +
-          `${result.bottomReached ? '，已到底' : '，未到底'}）`,
+        `卡片[${name}] 已读取拼接图（${result.segments} 段` +
+          `${result.bottomReached ? '，已到底' : '，未到底'}；${result.width}x${result.height}）`,
       )
       const closed = await this.tryCloseDetail()
       resumes.push({ name, readResult: result })

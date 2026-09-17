@@ -61,6 +61,7 @@
 
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
+| 20260917-1422 | BOSS 简历识别去 OCR 化（GLM-5.3-Flash 多模态） | 🔧 部分完成（开发+真机验证完成，待提交部署） | 客户端只交图，云端 VL 一次评估出姓名/总结/评分/key_info（11s/份）；姓名门防点错人、文本不可信防计费造假；识别费 1 积分/份成功即扣。 | [设计](design/desktop-automation/boss-resume-vl-recognition-design.md) | [计划](plans/desktop-automation/plan-boss-resume-vl-recognition.md) |
 | 20260806-1318 | 协会信息收集客户端（交付产品） | 🔧 部分完成 | 「协会信息收集」四步流水线（搜官网→Playwright 采集→网络兜底→微信 RPA 取证）改造为交付客户的独立客户端。 | [设计](tools/association-client-design.md) | [开发计划](tools/association-client-dev-plan.md) |
 | 20260811-1013 | weixin-cli 第一方微信操作 CLI / MCP Provider | 🔧 部分完成 | 第二个第一方 CLI，面向未来其他项目提供独立 Windows 微信操作能力。 | [设计](design/weixin/weixin-cli-design.md)、[计费关联设计](design/weixin/weixin-cli-billing.md) | [计划](plans/weixin/plan-weixin-cli.md) |
 | 20260831-1509 | wecom-cli 第一方企业微信操作 CLI / MCP Provider | 🔧 部分完成 | **M1+M2+M3 已完成（2026-08-31，三轮三智能体流程 + 全部真机端到端复验通过）**：`clients/wecom-cli`（aid-wecom，… | [探测与设计](research/wecom-cli/probe-and-design-20260829.md) | — |

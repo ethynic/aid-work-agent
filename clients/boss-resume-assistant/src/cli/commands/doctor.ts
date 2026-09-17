@@ -8,14 +8,13 @@
  * ④ 页面含登录态特征（「筛选」按钮或侧边菜单文案）
  * ⑤ 姓名配对自检（2026-09-01 新增）：推荐页视口内「打招呼」按钮与卡片姓名配对——
  *   配对率低说明页面布局与锚定规则失配，定向打招呼会「滚遍列表也找不到人」。
- * ⑥ OCR 引擎（P2 2026-09-02 新增）：简历读取将使用的引擎（RapidOCR 主 + WinRT 兜底），
- *   报告 python 路径 / 兜底原因；WinRT 兜底是合法配置不算失败，强制 rapid 而不可用才失败。
- *   任一失败退出码 1。只读：绝不点击、不产生任何业务写动作。
+ * 任一失败退出码 1。只读：绝不点击、不产生任何业务写动作。
+ * （2026-09-17 去 OCR 化：原第⑥项 OCR 引擎检查随本地 OCR 链路下线删除——
+ * 文本识别在云端多模态模型，客户端零 OCR 依赖。）
  */
 import { CdpGateway } from '../../main/cdp/CdpGateway.js'
 import { DEFAULT_CDP_PORT } from '../../main/chrome/ChromeAttacher.js'
 import { WinMouseClicker } from '../../main/input/WinMouseClicker.js'
-import { benchRapidOcr, resolveOcrEngine } from '../../main/operations/bossResumeDetail.js'
 import type { DomSnapshot } from '../../main/boss/domSnapshot.js'
 import { viewportOf } from '../../main/boss/FilterSetter.js'
 import { GREET_TEXT, findButtonsByExactText, pairCardName } from '../../main/boss/cardName.js'
@@ -95,32 +94,6 @@ export async function doctorCommand(opts: DoctorCommandOptions): Promise<number>
     } catch (e) {
       check(false, '页面登录态特征（筛选按钮/侧边菜单）', e instanceof Error ? e.message : String(e))
     }
-  }
-
-  // ⑥ OCR 引擎（简历读取，P2）：只查本机部署状态（探测 python/RapidOCR 可用性），不触达页面。
-  //    WinRT 兜底 = 合法可用配置 → ℹ️ 信息行不算失败；AID_BOSS_OCR_ENGINE=rapid 强制而不可用 → 失败
-  try {
-    const plan = await resolveOcrEngine()
-    if (plan.engine === 'rapid') {
-      // 单次推理实测（bench）：装机验收拿真实耗时数据 + 加速后端（dml=DirectML GPU 加速，
-      // 需装 onnxruntime-directml；cpu=纯 CPU）。bench 失败只降级为不展示耗时，不算装机失败
-      let benchDetail = ''
-      try {
-        const { seconds, accel } = await benchRapidOcr(plan.python!)
-        const accelLabel = accel === 'dml' ? 'DirectML GPU 加速' : 'CPU'
-        benchDetail = `，${accelLabel}，单次推理实测 ${seconds.toFixed(1)}s`
-      } catch (e) {
-        benchDetail = `（推理实测未出数：${e instanceof Error ? e.message : String(e)}）`
-      }
-      // 捆绑便携环境标注（方案 A）：python 路径含 ocr-python = 用的是包内置环境（非用户自装
-      // Python）。装机支持人员据此外观一眼区分「内置环境正常工作」vs「碰巧用了机器上的解释器」
-      const bundledMark = /ocr-python[\\/]/.test(plan.python ?? '') ? '包内置环境；' : ''
-      check(true, 'OCR 引擎（简历读取）', `RapidOCR（${bundledMark}python: ${plan.python}${benchDetail}）`)
-    } else {
-      console.log(`ℹ️ OCR 引擎（简历读取）：${plan.reason}`)
-    }
-  } catch (e) {
-    check(false, 'OCR 引擎（简历读取）', e instanceof Error ? e.message : String(e))
   }
 
   await gw.close().catch(() => {})

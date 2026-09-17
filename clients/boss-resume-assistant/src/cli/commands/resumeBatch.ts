@@ -4,10 +4,12 @@
  * 用法：
  *   node dist/src/cli/index.js resume-batch [--limit N] [--save-dir <目录>]
  *
- * 逐个点开当前视口牛人卡片 → 滚动分段截图 → 拼接 → OCR → Escape 关闭 → 下一份。
+ * 逐个点开当前视口牛人卡片 → 滚动分段截图 → 拼接 → Escape 关闭 → 下一份。
+ * 文本识别在云端（boss_resume_batch 工具层逐份调多模态模型，2026-09-17 去 OCR 化），
+ * CLI 本地不再产出文本。
  * 只读操作，但每份简历的滚动借用真实鼠标（约 30 秒/份），执行期间请勿移动鼠标。
- * 结果 data.resumes 为云端简历库契约 payload 数组（MCP 链路逐份入库）；
- * CLI 打印每份姓名/字数与失败列表（批量太长，每份只打 OCR 前 200 字预览）。
+ * 结果 data.resumes 为云端简历库契约 payload 数组（MCP 链路逐份识别入库）；
+ * CLI 打印每份姓名与失败列表。
  */
 import { OPERATIONS } from '../../main/operations/index.js'
 import { runCliOperation } from '../render.js'
@@ -23,38 +25,27 @@ export interface ResumeBatchCommandOptions {
 
 interface ResumePayloadView {
   candidate_name?: unknown
-  ocr_text?: unknown
-  ocr_chars?: unknown
-  ocr_engine?: unknown
   job_name?: unknown
+  segments?: unknown
   suspect_seams?: unknown
-  text_seam_unmatched?: unknown
 }
 
 export async function resumeBatchCommand(opts: ResumeBatchCommandOptions): Promise<number> {
   const limit = opts.limit ?? 1
   console.log(
-    `批量读取简历：逐个点开当前视口牛人卡片（上限 ${limit} 份），滚动分段截图 → 拼接 → OCR → 关闭 → 下一份。` +
+    `批量读取简历：逐个点开当前视口牛人卡片（上限 ${limit} 份），滚动分段截图 → 拼接 → 关闭 → 下一份（文本在云端识别）。` +
       '只读操作，但滚动借用真实鼠标（约 30 秒/份），期间请勿移动鼠标、勿遮挡 Chrome 窗口。',
   )
   const onSuccess = (result: OperationResult): void => {
     const resumes = Array.isArray(result.data.resumes) ? (result.data.resumes as ResumePayloadView[]) : []
     for (const r of resumes) {
       const name = typeof r.candidate_name === 'string' ? r.candidate_name : '?'
-      const chars = typeof r.ocr_chars === 'number' ? r.ocr_chars : String(r.ocr_text ?? '').length
       const job = typeof r.job_name === 'string' ? ` · ${r.job_name}` : ''
+      const segments = typeof r.segments === 'number' ? r.segments : '?'
       // P1 接缝质量标记（详细序号在 payload 元信息里）：存在可疑接缝时提示人工核对该份
-      const seamSuspect =
-        (Array.isArray(r.suspect_seams) && (r.suspect_seams as number[]).length > 0) ||
-        (Array.isArray(r.text_seam_unmatched) && (r.text_seam_unmatched as number[]).length > 0)
+      const seamSuspect = Array.isArray(r.suspect_seams) && (r.suspect_seams as number[]).length > 0
       const seamMark = seamSuspect ? ' ⚠️ 可疑拼接接缝，请人工核对' : ''
-      // P2：OCR 引擎（rapid 主 / winrt 兜底）；未知值不显示（宽容渲染）
-      const engineMark =
-        r.ocr_engine === 'rapid' ? ' · RapidOCR' : r.ocr_engine === 'winrt' ? ' · 系统WinRT' : ''
-      console.log(`\n===== ${name}${job}（OCR ${chars} 字${engineMark}）${seamMark}=====`)
-      const text = typeof r.ocr_text === 'string' ? r.ocr_text : ''
-      // 批量不打印全文（太长）：每份只打前 200 字预览
-      console.log(text.slice(0, 200) + (text.length > 200 ? '…（后文省略，完整内容见 --save-dir 或简历库）' : ''))
+      console.log(`\n===== ${name}${job}（${segments} 段拼接，云端识别）${seamMark}=====`)
     }
     const failures = Array.isArray(result.data.failures)
       ? (result.data.failures as Array<{ name?: unknown; error?: unknown }>)

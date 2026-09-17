@@ -473,6 +473,60 @@ class LLMGateway:
             **kwargs,
         )
 
+    async def chat_direct(
+        self,
+        provider_name: str,
+        model: str,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None,
+        temperature: float = 0.7,
+        max_tokens: Optional[int] = None,
+        **kwargs
+    ) -> Dict[str, Any]:
+        """指定 provider + model 直连调用（指定即专用，不参与主链路 failover）。
+
+        与 chat_lite 的跨 provider 分支同机制（_build_key_pool + _build_provider），
+        但 provider/model 由调用方显式给出、不经 lite_model 配置——供「必须落在指定
+        多模态通道」的场景使用（如简历 VL 识别指定 zhipu/GLM-5.3-Flash：主链路
+        provider 可能是纯文本模型，VL 调用绝不能随主链路漂移）。
+
+        对目标 provider 自动加关思考参数（_lite_thinking_off_params，转写类任务
+        无需思考）；不经 record_response_usage / record_background_llm_usage 计费——
+        调用方（如简历识别费按份计价）自行决定账务，避免双份计费。
+
+        Returns:
+            与 chat() 一致的响应字典
+        """
+        max_tokens = self._resolve_max_tokens(max_tokens, model=model)
+        for k, v in _lite_thinking_off_params(provider_name).items():
+            kwargs.setdefault(k, v)
+        call_start = time.time()
+        key_pool = _build_key_pool(provider_name)
+        try:
+            async with key_pool.acquire() as api_key:
+                provider = _build_provider(provider_name, api_key, model=model)
+                result = await provider.chat(
+                    messages=messages,
+                    tools=tools,
+                    tool_choice=tool_choice,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    **kwargs,
+                )
+        except Exception as e:
+            logger.opt(exception=True).error(
+                "[LLM] chat_direct() failed, provider={p}, model={m}, error: {err}",
+                p=provider_name, m=model, err=describe_exception(e),
+            )
+            raise
+        logger.info(
+            "[LLM] chat_direct() completed, provider={p}, model={m}, duration={d:.2f}s, "
+            "has_content={c}",
+            p=provider_name, m=model, d=time.time() - call_start, c=bool(result.get("content")),
+        )
+        return result
+
     async def stream_chat(
         self,
         messages: List[Dict[str, Any]],

@@ -44,6 +44,7 @@ from src.local_tools.proxy_tool import (
 )
 from src.services import recruiting_match_service
 from src.services import recruiting_resume_service as resume_service
+from src.services import resume_vl_service
 
 pytestmark = pytest.mark.integration
 
@@ -132,11 +133,29 @@ def temp_storage_dir(tmp_path, monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _stub_match_llm(monkeypatch):
-    """全模块自动 stub 评分 LLM（Phase 2：落库成功后自动评分）。
+    """全模块自动 stub VL 评估层与文本评分 LLM（不真调网）。
 
-    工具编排测试走「落库 → 自动评分」完整链路但不真调网：固定返回 82 分
-    （默认阈值 70 → matched）；usage 置 None 让计费落库分支 no-op。
+    - VL 层（v2 主路径，2026-09-17 去 OCR 化）：切片返回单带；evaluate_resume 按「是否有
+      职位上下文」定分（有 → 82 分 matched，无 → score=null 未评分），name_seen=传入姓名
+      （姓名门必过）；识别费取价 0（integration 不测计费台账，工具层单测覆盖）
+    - 文本评分 LLM：无图历史记录 re-evaluate 的 fallback 路径用（固定 82 分）
     """
+    async def _fake_evaluate(bands, candidate_name, job_ctx=None, model_param=None):
+        scored = job_ctx is not None
+        return {
+            "name_seen": candidate_name,
+            "resume_summary": f"{candidate_name}：全栈工程师，5 年经验（VL stub）",
+            "score": 82 if scored else None,
+            "match_summary": "PHP/Laravel 经验匹配，本科，5 年经验" if scored else None,
+            "key_info": {"education": "本科", "core_skills": ["PHP", "Laravel"]},
+            "model": "GLM-5.3-Flash",
+            "usage": None,
+        }
+
+    monkeypatch.setattr("src.services.resume_vl_service.slice_stitched_image", lambda b64: ["BAND-STUB"])
+    monkeypatch.setattr("src.services.resume_vl_service.evaluate_resume", _fake_evaluate)
+    monkeypatch.setattr("src.local_tools.proxy_tool.resume_recognition_price", lambda: 0.0)
+
     class _StubMatchGateway:
         async def _chat(self, **kwargs):
             return {"content": json.dumps({
@@ -190,9 +209,10 @@ def _count_jobs(tenant_id: str) -> int:
 
 
 # 紧凑摘要基础字段集合（Phase 1 新增 job_id；未关联职位时附带 warning；
-# Phase 2 新增评分三键 match_score/match_status/match_summary，评分失败附 match_note）
+# Phase 2 新增评分三键 match_score/match_status/match_summary，评分失败附 match_note；
+# v2 去 OCR 化：ocr_char_count → summary_preview（VL 人物总结前 80 字））
 _BASE_SUMMARY_KEYS = {
-    "resume_id", "candidate_name", "job_name", "job_id", "image_count", "ocr_char_count"
+    "resume_id", "candidate_name", "job_name", "job_id", "image_count", "summary_preview"
 }
 _MATCH_SUMMARY_KEYS = {"match_score", "match_status", "match_summary"}
 
@@ -592,7 +612,7 @@ class TestBossResumeDetailToolOrchestration:
         assert result["data"]["job_id"] is None
         assert "未关联职位" in result["data"]["warning"]
         assert result["data"]["image_count"] == 3
-        assert result["data"]["ocr_char_count"] == len(payload["ocr_text"])
+        assert result["data"]["summary_preview"].startswith("张三：全栈工程师")
         assert result["data"]["match_score"] == 82
         assert result["data"]["match_status"] == "matched"
         assert result["data"]["match_summary"]
@@ -604,10 +624,12 @@ class TestBossResumeDetailToolOrchestration:
         assert "张三" in result["message"]
         assert "后端开发" in result["message"]
         assert "3" in result["message"]
-        # 已真实落库（source=boss）且截图落盘；评分四列已回写（未关联职位 → 阈值默认 70）
+        # 已真实落库（source=boss）且截图落盘；评分四列已回写（未关联职位 → 阈值默认 70）；
+        # v2：payload 携带的 ocr_text 已被丢弃（文本唯一来源=服务端 VL），resume_summary 入库
         record = resume_service.get_resume(ctx["tenant_id"], result["data"]["resume_id"])
         assert record["source"] == "boss"
-        assert record["ocr_text"] == payload["ocr_text"]
+        assert record["ocr_text"] is None
+        assert record["resume_summary"].startswith("张三：全栈工程师")
         assert len(record["images"]) == 3
         assert record["match_score"] == 82
         assert record["match_status"] == "matched"
@@ -619,9 +641,10 @@ class TestBossResumeDetailToolOrchestration:
         from src.local_tools.proxy_tool import UNKNOWN_EFFECT_NOTICE
 
         ctx = temp_tenant_with_user
-        payload = {"candidate_name": "李四", "name_source": "param", "images": [
-            {"base64": _TINY_PNG_BASE64, "mime_type": "image/png"},
-        ]}
+        payload = {"candidate_name": "李四", "name_source": "param",
+                   "images": [
+                       {"base64": _TINY_PNG_BASE64, "mime_type": "image/png"},
+                   ]}
         fake = _cli_success_result(payload)
         fake["effect"] = "unknown"
         fake["message"] = f"读取简历详情执行成功；{UNKNOWN_EFFECT_NOTICE}"
@@ -694,7 +717,8 @@ class TestBossResumeDetailToolOrchestration:
         assert result["success"] is False
         assert result["code"] == "RESUME_PAYLOAD_INVALID"
         assert result["invocation_id"] == "inv-test-1"
-        assert "CLI 结果格式需对齐" in result["message"]
+        # v2：缺 candidate_name 在姓名门前即拦截（比较基准缺失，不浪费一次评估调用）
+        assert "candidate_name" in result["message"]
         assert result["data"] is None
         assert _count_resumes(ctx["tenant_id"]) == 0
         assert not list(temp_storage_dir.iterdir())
@@ -799,7 +823,7 @@ class TestBossResumeBatchToolOrchestration:
         assert summaries[0]["job_id"] is None
         assert "未关联职位" in summaries[0]["warning"]
         assert "warning" not in summaries[1]
-        assert summaries[0]["ocr_char_count"] == len(payloads[0]["ocr_text"])
+        assert summaries[0]["summary_preview"].startswith("刘草威：全栈工程师")
         assert summaries[0]["image_count"] == 1
         # 图片字节与 OCR 全文绝不进 LLM 上下文
         serialized = json.dumps(result, ensure_ascii=False)
@@ -927,23 +951,19 @@ class TestBossResumeBatchToolOrchestration:
 
 
 class TestMatchEvaluationIntegration:
-    """工具层评分接入：摘要带分数键；单份评分失败/异常不影响其余份与工具成功返回"""
+    """v2 评分合并进 VL 评估：无职位 → score=null 摘要注明未评分；
+    单份 VL 评估失败该份进 failures（不入库不扣费），不影响其余份"""
 
-    def test_detail_summary_carries_match_note_when_evaluation_fails(
-        self, temp_tenant_with_user, temp_storage_dir, monkeypatch
+    def test_detail_summary_carries_match_note_when_not_scored(
+        self, temp_tenant_with_user, temp_storage_dir
     ):
-        """detail：评分失败（LLM 重试仍败）→ 摘要 match_score=None + match_note「未评分」，工具仍成功"""
+        """detail：无职位上下文（payload 无 job_id/job_name）→ score=null，
+        摘要 match_score=None + match_note「未评分」，简历照常入库（v1「未关联职位跳过评分」语义沿袭）"""
         ctx = temp_tenant_with_user
-
-        async def fake_evaluate(_tid, rid):
-            return {"resume_id": rid, "score": None, "note": "评分失败：LLM 调用失败"}
-
-        monkeypatch.setattr(recruiting_match_service, "evaluate_and_update", fake_evaluate)
 
         payload = {
             "candidate_name": "评分失败者",
             "name_source": "param",
-            "job_name": "后端开发",
             "images": [{"base64": _TINY_PNG_BASE64, "mime_type": "image/png"}],
         }
         fake = _cli_success_result(payload)
@@ -957,33 +977,41 @@ class TestMatchEvaluationIntegration:
         assert result["data"]["match_status"] is None
         assert result["data"]["match_summary"] is None
         assert result["data"]["match_note"] == "未评分"
-        # 简历本体照常入库，评分列留 NULL（评分失败不丢简历）
+        # 简历本体照常入库，评分列留 NULL；总结已入库（VL stub）
         record = resume_service.get_resume(ctx["tenant_id"], result["data"]["resume_id"])
         assert record["candidate_name"] == "评分失败者"
         assert record["match_score"] is None
+        assert record["resume_summary"]
 
-    def test_batch_single_evaluation_exception_does_not_affect_others(
+    def test_batch_single_vl_failure_goes_to_failures_others_stored(
         self, temp_tenant_with_user, temp_storage_dir, monkeypatch
     ):
-        """batch：单份评分服务抛异常（防御兜底）→ 该份 match_note「未评分」，
-        其余份照常带分数；工具成功返回（评分绝不拖垮入库结果，也不进 failures）"""
+        """batch：单份 VL 评估抛异常 → 该份 RESUME_VL_FAILED 进 failures（不入库不扣费），
+        其余份照常评分入库；工具成功返回"""
         ctx = temp_tenant_with_user
 
-        async def fake_evaluate(tid, rid):
-            record = resume_service.get_resume(tid, rid)
-            if record and record["candidate_name"] == "评分失败者":
-                raise RuntimeError("llm gateway boom")
+        async def fake_evaluate(bands, candidate_name, job_ctx=None, model_param=None):
+            if candidate_name == "评估失败者":
+                raise resume_vl_service.ResumeVLError("简历 VL 评估失败（重试后仍失败）：api down")
             return {
-                "resume_id": rid, "match_score": 90,
-                "match_status": "matched", "match_summary": "高度匹配", "key_info": None,
+                "name_seen": candidate_name,
+                "resume_summary": f"{candidate_name}：后端开发 5 年（VL stub）",
+                "score": 90, "match_summary": "高度匹配", "key_info": None,
+                "model": "GLM-5.3-Flash", "usage": None,
             }
 
-        monkeypatch.setattr(recruiting_match_service, "evaluate_and_update", fake_evaluate)
+        monkeypatch.setattr("src.services.resume_vl_service.evaluate_resume", fake_evaluate)
+        # 覆写 autouse 的识别费 0：本用例验证「姓名门通过即扣」不影响返回（落账打桩）
+        monkeypatch.setattr("src.local_tools.proxy_tool.resume_recognition_price", lambda: 1.0)
+        monkeypatch.setattr(
+            "src.local_tools.proxy_tool.ClientUsageLogDB.record_tool_usage",
+            staticmethod(lambda **k: {"credit_cost": k["credit_cost"], "balance_after": 1.0}),
+        )
 
         payloads = [
-            {"candidate_name": "评分失败者", "name_source": "param", "job_name": "后端开发",
+            {"candidate_name": "评估失败者", "name_source": "param", "job_name": "后端开发",
              "images": [{"base64": _TINY_PNG_BASE64, "mime_type": "image/png"}]},
-            {"candidate_name": "评分成功者", "name_source": "param", "job_name": "后端开发",
+            {"candidate_name": "评估成功者", "name_source": "param", "job_name": "后端开发",
              "images": [{"base64": _TINY_PNG_BASE64, "mime_type": "image/png"}]},
         ]
         fake = TestBossResumeBatchToolOrchestration._batch_success_result(payloads)
@@ -993,14 +1021,15 @@ class TestMatchEvaluationIntegration:
             ))
 
         assert result["success"] is True
-        assert result["data"]["failures"] == []  # 评分失败不进 failures（简历已入库）
+        # v2 语义：VL 评估失败 = 该份失败（不入库不扣费），进 failures 而非静默跳过
+        assert len(result["data"]["failures"]) == 1
+        assert result["data"]["failures"][0]["name"] == "评估失败者"
+        assert "简历 VL 评估失败" in result["data"]["failures"][0]["error"]
         summaries = {s["candidate_name"]: s for s in result["data"]["resumes"]}
-        assert summaries["评分失败者"]["match_score"] is None
-        assert summaries["评分失败者"]["match_note"] == "未评分"
-        assert summaries["评分成功者"]["match_score"] == 90
-        assert summaries["评分成功者"]["match_status"] == "matched"
-        assert "match_note" not in summaries["评分成功者"]
-        assert _count_resumes(ctx["tenant_id"]) == 2
+        assert summaries["评估成功者"]["match_score"] == 90
+        assert summaries["评估成功者"]["match_status"] == "matched"
+        assert "match_note" not in summaries["评估成功者"]
+        assert _count_resumes(ctx["tenant_id"]) == 1  # 失败份不入库
 
 
 # ============== 4. import 安全 / 注册 ==============

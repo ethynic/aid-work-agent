@@ -153,6 +153,167 @@ async def evaluate_and_update(tenant_id: str, resume_id: int) -> Dict[str, Any]:
     }
 
 
+# ============== 重新评分 v2：优先 VL 看图（去 OCR 化设计 §4.2），无图回退文本路径 ==============
+
+# 简历识别费台账科目/取价（与工具层、解析接口同科目同价，对账同源）
+_RECOGNITION_TOOL_NAME = "boss_resume_recognition"
+
+
+async def re_evaluate(tenant_id: str, resume_id: int) -> Dict[str, Any]:
+    """前端「重新评分」入口（v2）：优先 VL 看库中简历图评估；无图历史记录回退文本路径。
+
+    - VL 路径：库中 images[0] 读回 → 切片 → evaluate_resume（candidate_name 传入提示词，
+      姓名门不过 → note 说明不入库不扣费）→ 回写 resume_summary/match_*/key_info →
+      按份扣简历识别费（评估成功即扣，弹层自愈同款直记）；
+    - 文本 fallback：历史记录无图 → evaluate_and_update 原文本评分路径（token 计费不变）；
+    - 失败不抛异常（同 evaluate_and_update 语义）：返回 {resume_id, score: None, note}，
+      库中原值保留。
+    """
+    resume = await asyncio.to_thread(recruiting_resume_service.get_resume, tenant_id, resume_id)
+    if resume is None:
+        return {"resume_id": resume_id, "score": None, "note": "简历不存在"}
+
+    # VL 路径前置条件：库中有图（无图的历史记录走文本 fallback）
+    images = resume.get("images") or []
+    stitched_b64: Optional[str] = None
+    if isinstance(images, list) and images and isinstance(images[0], dict):
+        file_id = (images[0].get("file_id") or "").strip()
+        if file_id:
+            stitched_b64 = await asyncio.to_thread(_read_image_file_b64, tenant_id, file_id)
+    if not stitched_b64:
+        return await evaluate_and_update(tenant_id, resume_id)
+
+    candidate_name = (resume.get("candidate_name") or "").strip()
+    job_ctx = await asyncio.to_thread(
+        _load_job_context, tenant_id, resume.get("job_id"), resume.get("job_name")
+    )
+
+    # 函数级 import：resume_vl_service 在模块级导入本模块的解析助手，此处延迟避免环
+    from src.services import resume_vl_service
+
+    try:
+        bands = await asyncio.to_thread(resume_vl_service.slice_stitched_image, stitched_b64)
+        evaluation = await resume_vl_service.evaluate_resume(bands, candidate_name, job_ctx)
+    except resume_vl_service.ResumeVLError as e:
+        logger.warning(f"简历 VL 重评失败（保留库中原值）: tenant={tenant_id}, resume_id={resume_id}, {e}")
+        return {"resume_id": resume_id, "score": None, "note": f"VL 评估失败：{e}"}
+
+    # 姓名门（决策⑨）：不符不入库不扣费，全量日志
+    name_seen = evaluation.get("name_seen") or ""
+    if not resume_vl_service.resume_name_matches(candidate_name, name_seen):
+        logger.error(
+            f"后端日志：简历重评姓名核对不匹配（不回写不扣费） tenant={tenant_id} "
+            f"resume_id={resume_id} candidate_name={candidate_name} name_seen={name_seen} "
+            f"bands={len(bands)} model={evaluation.get('model')}"
+        )
+        return {
+            "resume_id": resume_id,
+            "score": None,
+            "note": f"姓名核对不匹配（页面：{candidate_name}，简历所示：{name_seen}），请人工核对",
+        }
+
+    # 计费：VL 评估成功即扣（与工具层/解析接口同科目同价；失败只告警不影响重评结果）
+    try:
+        from src.local_tools.pricing import resume_recognition_price
+        from src.db.client_binding_db import ClientUsageLogDB
+
+        price = resume_recognition_price()
+        if price > 0:
+            await asyncio.to_thread(
+                ClientUsageLogDB.record_tool_usage,
+                tenant_id=tenant_id,
+                tool_name=_RECOGNITION_TOOL_NAME,
+                credit_cost=price,
+                user_id=resume.get("user_id"),
+            )
+    except Exception as e:  # noqa: BLE001 计费失败不影响重评结果（台账可对账）
+        logger.opt(exception=True).error(
+            f"后端日志：简历重评识别费落账失败（不影响结果）resume_id={resume_id}: {e}"
+        )
+
+    score = evaluation.get("score")
+    if score is None:
+        # 无职位上下文：只回写总结与 key_info，match_* 不动（沿袭「未关联职位跳过评分」）
+        await asyncio.to_thread(
+            _update_resume_summary_only, tenant_id, resume_id,
+            evaluation.get("resume_summary"), evaluation.get("key_info"),
+        )
+        return {
+            "resume_id": resume_id,
+            "match_score": None,
+            "match_status": None,
+            "match_summary": None,
+            "key_info": evaluation.get("key_info"),
+            "note": "未关联职位，仅更新总结与关键信息（未评分）",
+        }
+
+    threshold = (job_ctx or {}).get("match_threshold")
+    if threshold is None:
+        threshold = recruiting_job_service.DEFAULT_MATCH_THRESHOLD
+    status = _decide_match_status(score, threshold)
+    updated = await asyncio.to_thread(
+        _update_match_fields,
+        tenant_id, resume_id, score, evaluation.get("match_summary"), status,
+        evaluation.get("key_info"), evaluation.get("resume_summary"),
+    )
+    if not updated:
+        return {"resume_id": resume_id, "score": None, "note": "简历不存在（评分期间被删除）"}
+
+    logger.info(
+        f"简历 VL 重评完成: tenant={tenant_id}, resume_id={resume_id}, "
+        f"score={score}, status={status}, name_seen={evaluation.get('name_seen')}"
+    )
+    return {
+        "resume_id": resume_id,
+        "match_score": score,
+        "match_status": status,
+        "match_summary": evaluation.get("match_summary"),
+        "key_info": evaluation.get("key_info"),
+    }
+
+
+def _update_resume_summary_only(
+    tenant_id: str,
+    resume_id: int,
+    resume_summary: Optional[str],
+    key_info: Optional[Dict[str, Any]],
+) -> None:
+    """仅回写 resume_summary 与 key_info（match_* 不动——无职位上下文时未评分）"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            UPDATE bs_recruiting_operator_resumes
+            SET resume_summary = %s, key_info = COALESCE(%s, key_info), updated_at = NOW()
+            WHERE id = %s AND tenant_id = %s
+            """,
+            (
+                resume_summary,
+                psycopg2.extras.Json(key_info) if key_info is not None else None,
+                resume_id, tenant_id,
+            ),
+        )
+        conn.commit()
+
+
+def _read_image_file_b64(tenant_id: str, file_id: str) -> Optional[str]:
+    """从盘上读回简历图（file_id → storage 文件 → base64）；找不到/读取失败返回 None（走 fallback）"""
+    import base64 as _base64
+
+    try:
+        from src.core.storage import find_uploaded_file_on_disk
+
+        meta = find_uploaded_file_on_disk(file_id)
+        if not meta or not meta.get("path"):
+            return None
+        with open(meta["path"], "rb") as f:
+            raw = f.read()
+        return _base64.b64encode(raw).decode("ascii") if raw else None
+    except Exception as e:  # noqa: BLE001 读图失败转 fallback，不阻塞重评
+        logger.warning(f"后端日志：简历图读回失败 file_id={file_id} tenant={tenant_id}: {e}")
+        return None
+
+
 # ============== prompt 组装 ==============
 
 def _build_messages(
@@ -394,20 +555,27 @@ def _update_match_fields(
     match_summary: Optional[str],
     match_status: str,
     key_info: Optional[Dict[str, Any]],
+    resume_summary: Optional[str] = None,
 ) -> bool:
-    """回写评分四列（updated_at=NOW()），返回是否命中行（简历被删则 False）"""
+    """回写评分四列（updated_at=NOW()），返回是否命中行（简历被删则 False）。
+
+    resume_summary（v2）：VL 人物总结，传入时一并回写（None 不动原值——文本 fallback
+    路径没有总结，不能把 VL 路径已写入的总结清掉）。
+    """
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
             """
             UPDATE bs_recruiting_operator_resumes
             SET match_score = %s, match_summary = %s, match_status = %s, key_info = %s,
+                resume_summary = COALESCE(%s, resume_summary),
                 updated_at = NOW()
             WHERE id = %s AND tenant_id = %s
             """,
             (
                 match_score, match_summary, match_status,
                 psycopg2.extras.Json(key_info) if key_info is not None else None,
+                resume_summary,
                 resume_id, tenant_id,
             ),
         )

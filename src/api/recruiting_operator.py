@@ -291,9 +291,8 @@ async def delete_resume(resume_id: int, request: Request):
 
 @router.post("/resumes/{resume_id}/re-evaluate")
 async def re_evaluate_resume(resume_id: int, request: Request):
-    """重新评分（前端「重新评分」按钮）：调评分服务回写 match_* / key_info。
-
-    评分失败不抛错：返回 data 带 note 说明原因（库中原值保留），前端据此提示。
+    """重新评分（前端「重新评分」按钮）：v2 优先 VL 看库中简历图评估（含总结回写）；
+    无图历史记录回退文本评分路径。失败不抛错：返回 data 带 note 说明原因（库中原值保留）。
     """
     try:
         tenant_id = _require_tenant()
@@ -301,7 +300,7 @@ async def re_evaluate_resume(resume_id: int, request: Request):
             return _error_response("租户 ID 缺失", "tenant_id is None", 400)
         if resume_service.get_resume(tenant_id, resume_id) is None:
             return _error_response("简历不存在", f"resume_id={resume_id} not found", 404)
-        result = await match_service.evaluate_and_update(tenant_id, resume_id)
+        result = await match_service.re_evaluate(tenant_id, resume_id)
         return {"success": True, "data": result}
     except Exception as e:
         logger.opt(exception=True).error(f"简历重新评分失败: {e}")

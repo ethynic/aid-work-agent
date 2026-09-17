@@ -17,6 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from loguru import logger
 
 from src.api.auth import get_current_user
+from src.db.client_binding_db import ClientUsageLogDB
 from src.desktop_automation import audit, payload_resolver
 from src.desktop_automation.adapters import AdapterNotFoundError
 from src.desktop_automation.constants import BUSINESS_KIND_DESKTOP_AUTOMATION, OPERATION_PROTOCOL_V2
@@ -27,9 +28,12 @@ from src.local_tools.models import (
     PairRequest,
     ProgressRequest,
     ResultRequest,
+    ResumeEvaluateRequest,
     StartedRequest,
     WriteAuthorizeRequest,
 )
+from src.local_tools.pricing import RESUME_RECOGNITION_TOOL_NAME, resume_recognition_price
+from src.services import recruiting_match_service, resume_vl_service
 from src.local_tools.security import generate_claim_token, sha256_hex
 from src.utils import sanitize_error_info
 
@@ -377,6 +381,122 @@ async def runtime_result(
     except Exception as e:
         logger.opt(exception=True).error(f"后端日志：写入 invocation 终态失败 id={invocation_id}: {e}")
         raise _http_error(500, "写入结果失败，请稍后重试", e)
+
+
+@router.post("/runtime/resume/evaluate")
+async def runtime_resume_evaluate(
+    body: ResumeEvaluateRequest, device: Dict = Depends(_require_device)
+):
+    """简历评估接口（2026-09-17 去 OCR 化 v2，boss-resume-vl-recognition-design.md §4.4）：
+    拼接长图/分段图 → 云端 GLM 多模态一次评估 → 返回 {name_seen, resume_summary, score,
+    match_summary, key_info}，评估成功按份扣简历识别费。
+
+    客户端（boss CLI 等）用设备 token 调用。姓名门（决策⑨）：candidate_name 必填并传入
+    VL 提示词，服务端将其与图中姓名（name_seen）确定性比对，不符 422 RESUME_NAME_MISMATCH
+    不扣费 + 全量日志——防 runtime 点击错位开错人。模型可显式指定（provider/model，白名单
+    校验），缺省 zhipu/GLM-5.3-Flash——VL 绝不随主链路（可能纯文本）漂移。
+
+    计费语义（租户决策 2026-09-17）：截图不扣费，VL 评估成功（姓名门通过）即扣一份
+    resume_recognition_price（识别失败不扣）；台账 tool_name=boss_resume_recognition
+    与工具层同科目，对账同源。
+    """
+    tenant_id = device["tenant_id"]
+    candidate_name = (body.candidate_name or "").strip()
+    if not candidate_name:
+        # 姓名门的比较基准，必填（决策⑨）
+        raise _http_error(422, "缺少 candidate_name：页面候选人姓名必传（姓名核对用）")
+    # 模型白名单校验放切片之前：非法 model + 大图不必白耗一次 Pillow 解码切片
+    try:
+        provider_name, model = resume_vl_service.resolve_model_spec(body.model)
+    except resume_vl_service.ResumeVLModelError as e:
+        raise _http_error(422, f"{e}")
+    bands = [b for b in (body.images or []) if (b or "").strip()]
+    if not bands and (body.image or "").strip():
+        # 切片是同步 CPU 活（Pillow 解码 + 裁剪 + PNG 重编码），放线程池不阻塞事件循环
+        try:
+            bands = await asyncio.to_thread(
+                resume_vl_service.slice_stitched_image, body.image
+            )
+        except resume_vl_service.ResumeVLError as e:
+            raise _http_error(422, f"拼接长图切片失败：{e}")
+    if not bands:
+        raise _http_error(422, "缺少识别入参：请传 image（拼接长图 base64）或 images（分段图列表）")
+
+    # 职位上下文（给了 job_id/job_name 才评分；职位库未命中 → 最小上下文走隐含要求路径，
+    # 沿袭「带职位名就评」语义；无 → score/match_summary=null 只出总结）
+    job_ctx = None
+    if (body.job_id or body.job_name or "").strip():
+        job_ctx = await asyncio.to_thread(
+            recruiting_match_service._load_job_context, tenant_id, body.job_id, body.job_name
+        ) or {"job_name": body.job_name}
+
+    try:
+        evaluation = await resume_vl_service.evaluate_resume(
+            bands, candidate_name, job_ctx, body.model
+        )
+    except resume_vl_service.ResumeVLModelError as e:
+        raise _http_error(422, f"{e}")
+    except resume_vl_service.ResumeVLError as e:
+        # 评估失败（含重试后仍失败）：不扣费，fail-loud 让调用方重试
+        logger.error(
+            f"后端日志：简历评估接口失败 tenant={tenant_id} device={device.get('id')} "
+            f"model={provider_name}/{model}: {e}"
+        )
+        raise _http_error(502, f"简历评估失败（重试后仍失败），本次不扣费：{e}")
+
+    # 姓名门（决策⑨）：不符 422 + 全量日志（name_seen 区分识别误读 vs 真点错人），不扣费
+    name_seen = evaluation.get("name_seen") or ""
+    if not resume_vl_service.resume_name_matches(candidate_name, name_seen):
+        logger.error(
+            f"后端日志：简历评估接口姓名核对不匹配（不扣费） tenant={tenant_id} "
+            f"device={device.get('id')} candidate_name={candidate_name} name_seen={name_seen} "
+            f"bands={len(bands)} model={evaluation.get('model')}"
+        )
+        raise _http_error(
+            422,
+            f"姓名核对不匹配（页面候选人「{candidate_name}」与简历所示「{name_seen}」不一致）："
+            "疑似图片简历与所传姓名不符，请人工核对",
+        )
+
+    # 评估成功（姓名门通过）→ 按份扣简历识别费（弹层自愈同款编排层直记；失败只告警不回滚）
+    price = resume_recognition_price()
+    billing: Dict[str, Any] = {"credit_cost": 0.0, "balance_after": None}
+    if price > 0:
+        try:
+            usage_row = await asyncio.to_thread(
+                ClientUsageLogDB.record_tool_usage,
+                tenant_id=tenant_id,
+                tool_name=RESUME_RECOGNITION_TOOL_NAME,
+                credit_cost=price,
+                session_id=None,
+                user_id=device.get("user_id"),
+                # 无 invocation_id 的直记场景，device_id 是对账唯一线索
+                device_id=str(device["id"]) if device.get("id") is not None else None,
+            )
+            billing = {
+                "credit_cost": price,
+                "balance_after": (usage_row or {}).get("balance_after"),
+            }
+        except Exception as e:  # noqa: BLE001 计费失败不影响评估结果返回（台账可对账）
+            logger.opt(exception=True).error(
+                f"后端日志：简历评估接口计费落账失败（不影响返回）tenant={tenant_id}: {e}"
+            )
+    logger.info(
+        f"后端日志：简历评估接口成功 tenant={tenant_id} device={device.get('id')} "
+        f"candidate={candidate_name} name_seen={name_seen} score={evaluation.get('score')} "
+        f"model={evaluation.get('model')} cost={billing['credit_cost']}"
+    )
+    return {
+        "success": True,
+        "name_seen": name_seen,
+        "resume_summary": evaluation.get("resume_summary"),
+        "score": evaluation.get("score"),
+        "match_summary": evaluation.get("match_summary"),
+        "key_info": evaluation.get("key_info"),
+        "model": evaluation.get("model"),
+        "bands": len(bands),
+        "billing": billing,
+    }
 
 
 # ==================== Runtime API（v2 写动作许可 / 结果回传，不暴露给 LLM）====================

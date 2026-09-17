@@ -458,19 +458,36 @@ class ClientConfig(BaseModel):
     llm_request_timeout: int = 120
 
 
+class ResumeVLConfig(BaseModel):
+    """简历云端 VL 识别配置（2026-09-17 去 OCR 化，boss-resume-vl-recognition-design.md §4.1）
+
+    - model: 缺省识别模型，provider/model 语法。GLM-5.3-Flash 为 GLM-5 系首个原生
+      多模态（输入 0.8/输出 2.8 元/M tokens）；主链路 provider 可能是纯文本模型，
+      VL 调用经 chat_direct 指定本通道直连，绝不随主链路漂移
+    - allowed_models: 请求可显式指定的模型白名单（精确匹配）。识别费按份固定积分，
+      放行任意模型会造成「指定贵模型 + 固定低价」的计费错配；空列表 = 只允许默认模型
+    """
+    model: str = "zhipu/GLM-5.3-Flash"
+    allowed_models: List[str] = Field(default_factory=lambda: ["zhipu/GLM-5.3-Flash"])
+
+
 class BossToolBillingConfig(BaseModel):
     """BOSS 本地工具按次计费（2026-08-31 租户交付；台账/扣费复用协会 client_usage_logs 模式）
 
     与 LLM token 计费是两个独立维度：租户的真实推理成本（主智能体/招聘子智能体/简历评分
     的 LLM token）已全部经 chat_records 管线计费；本配置是本地自动化动作的附加计费维度，
-    用于分摊设备占用、本机 OCR 算力与 BOSS 权益（开聊权益）消耗。
+    用于分摊设备占用、简历云端识别与 BOSS 权益（开聊权益）消耗。
     所有价格可经 config.yaml 的 boss_tool_billing 节覆盖，价格设 0 即免费。
 
     - enabled: 总开关（False 时全免费，不查余额不扣费）
     - default_credit_price: 未列入 tool_credit_prices 的工具单次价格（默认 0=免费）
     - tool_credit_prices: 按工具名单次价格（积分）。只在工具成功时扣，
       失败/超时/取消不扣；默认值依据：外部写动作（消耗 BOSS 开聊权益/真实触达候选人）
-      与重只读（滚动+截图+OCR+存储，每份简历约 30 秒）收费，纯导航/探查免费
+      与简历识别收费，纯导航/探查免费
+    - resume_recognition_price: 简历识别费单价（积分/份，2026-09-17 去 OCR 化）。
+      客户端只滚动截图+拼接（截图免费，detail/batch 按次费为 0），云端 VL 识别成功
+      且入库成功后按份扣（tool_name=boss_resume_recognition 直记，成本依据见
+      boss-resume-vl-recognition-design.md §4.3）
     """
     enabled: bool = True
     default_credit_price: float = 0.0
@@ -481,15 +498,18 @@ class BossToolBillingConfig(BaseModel):
         "boss_send_current": 1.0,
         "boss_accept_resume": 1.0,
         "boss_reject_current": 0.5,
-        # 重只读（截图+OCR+落库）
-        "boss_resume_detail": 1.0,
-        "boss_resume_batch": 2.0,
+        # 简历链路（截图免费，识别费另计：成功一份扣一份 resume_recognition_price）
+        "boss_resume_detail": 0.0,
+        "boss_resume_batch": 0.0,
         # 页面筛选操作
         "boss_select_job": 0.5,
         "boss_filter": 0.5,
         # 其余（goto/clear_filter/filter_options/list_jobs/read_chat/open_chat/
         # jobs_list/interview_notify/interview_demo/overlay_inspect/overlay_dismiss）默认 0
     })
+    # 简历识别费（积分/份）：默认 1.0 与原 detail 按次费持平，用户感知不变；
+    # 配 0 可随时停扣（回退手段，见设计 §7）
+    resume_recognition_price: float = 1.0
 
     # 弹层自愈（overlay heal，2026-08-31）：本地工具失败（UI_CHANGED/BUSY）后云端自动
     # 「导出弹层候选 → 启发式/LLM 选关闭控件 → 关闭 → 重试原操作一次」。
@@ -545,6 +565,7 @@ class Settings(BaseModel):
     video_gen: VideoGenConfig = Field(default_factory=VideoGenConfig)
     client: ClientConfig = Field(default_factory=ClientConfig)
     boss_tool_billing: BossToolBillingConfig = Field(default_factory=BossToolBillingConfig)
+    resume_vl: ResumeVLConfig = Field(default_factory=ResumeVLConfig)
     external_push: ExternalPushConfig = Field(default_factory=ExternalPushConfig)
     client_usage_report: ClientUsageReportConfig = Field(default_factory=ClientUsageReportConfig)
     desktop_agent: DesktopAgentConfig = Field(default_factory=DesktopAgentConfig)

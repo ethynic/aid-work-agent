@@ -85,13 +85,14 @@ export interface ResumeListItem {
   updated_at?: string
 }
 
-/** 详情（含 OCR 全文 + 评分关键信息） */
+/** 详情（OCR 全文兼容历史记录；resume_summary 为 v2 VL 人物总结，新记录的主文本字段） */
 export interface ResumeDetail extends ResumeListItem {
   ocr_text?: string
+  resume_summary?: string
   key_info?: Record<string, any> | null
 }
 
-/** 重新评分结果（评分失败不报错，data 带 note 说明原因） */
+/** 重新评分结果（评分失败不报错，data 带 note 说明原因；总结写库后经 getResume 刷新） */
 export interface ReEvaluateResult {
   resume_id?: number
   match_score?: number | null

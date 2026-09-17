@@ -87,6 +87,9 @@ def init_recruiting_operator_tables(conn) -> None:
     - 老库用 ALTER ADD COLUMN IF NOT EXISTS 幂等补列 + DO 块幂等补 FK 约束 + 补索引
     - 存量回填：按 job_name 精确匹配（UNIQUE(tenant_id,job_name) 保证唯一命中）回填 job_id，
       仅命中 job_id IS NULL 的行（幂等）；匹配不上的保持 NULL 由前端提示
+
+    2026-09-17 简历识别去 OCR 化 v2：新增 resume_summary 列（VL 生成的人物总结，
+    替代 ocr_text 全文；ocr_text 列保留兼容历史数据与手工录入路径）
     """
     cursor = conn.cursor()
 
@@ -104,6 +107,7 @@ def init_recruiting_operator_tables(conn) -> None:
             candidate_info JSONB,
             images JSONB NOT NULL DEFAULT '[]'::jsonb,
             ocr_text TEXT,
+            resume_summary TEXT,
             source TEXT NOT NULL DEFAULT 'boss',
             status TEXT NOT NULL DEFAULT 'new',
             match_score INT,
@@ -119,6 +123,9 @@ def init_recruiting_operator_tables(conn) -> None:
     # 老库幂等加列（新库 CREATE 已带列，此处 no-op；match_* / key_info Phase 1 只建列不写值）
     cursor.execute(
         "ALTER TABLE bs_recruiting_operator_resumes ADD COLUMN IF NOT EXISTS job_id UUID"
+    )
+    cursor.execute(
+        "ALTER TABLE bs_recruiting_operator_resumes ADD COLUMN IF NOT EXISTS resume_summary TEXT"
     )
     cursor.execute(
         "ALTER TABLE bs_recruiting_operator_resumes ADD COLUMN IF NOT EXISTS match_score INT"
@@ -285,6 +292,7 @@ def create_resume_record(
     job_id: Optional[str] = None,
     candidate_info: Optional[Dict[str, Any]] = None,
     ocr_text: Optional[str] = None,
+    resume_summary: Optional[str] = None,
     images: Optional[List[Dict[str, str]]] = None,
     images_base64: Optional[List[Dict[str, str]]] = None,
     source: str = "manual",
@@ -296,6 +304,7 @@ def create_resume_record(
     - job_id：可选，硬关联职位（须为本租户职位；仅带 job_id 未带 job_name 时回填职位名显示冗余）
     - images：[{file_id, name}] 已上传引用路
     - images_base64：[{data, name, mime_type}] 直传路（服务端落盘转 file_id，优先合并）
+    - resume_summary：VL 生成的人物总结（v2 去全文转写后的主文本字段；ocr_text 保留兼容历史）
     - fetched_at：ISO 字符串，缺省为当前时间
     """
     if source not in RESUME_SOURCES:
@@ -339,15 +348,15 @@ def create_resume_record(
             """
             INSERT INTO bs_recruiting_operator_resumes
                 (tenant_id, user_id, candidate_name, job_id, job_name, candidate_info, images,
-                 ocr_text, source, status, remark, fetched_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'new', %s, COALESCE(%s, CURRENT_TIMESTAMP))
+                 ocr_text, resume_summary, source, status, remark, fetched_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'new', %s, COALESCE(%s, CURRENT_TIMESTAMP))
             RETURNING *
             """,
             (
                 tenant_id, user_id, candidate_name.strip(), job_uuid, job_name,
                 psycopg2.extras.Json(candidate_info) if candidate_info is not None else None,
                 psycopg2.extras.Json(merged_images),
-                ocr_text, source, remark, fetched_at_dt,
+                ocr_text, resume_summary, source, remark, fetched_at_dt,
             ),
         )
         row = cursor.fetchone()
@@ -644,6 +653,7 @@ def create_resume_record_from_tool_result(
             job_id=job_id,
             candidate_info=basic_info,
             ocr_text=ocr_text,
+            resume_summary=_first_str(payload, ("resume_summary",)),
             images_base64=images_base64,
             source=source,
             fetched_at=_first_str(payload, ("fetched_at",)),

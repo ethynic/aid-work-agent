@@ -1,20 +1,22 @@
 /**
  * boss_resume_batch operation：推荐牛人页逐个点开当前视口牛人卡片 → 读取简历 → 自动关闭 → 下一份。
  *
- * 「打开简历→读简历→入库」串联的最后一环：模仿 greet 的逐个模式，每张卡
+ * 「打开简历→读拼接图」串联的最后一环：模仿 greet 的逐个模式，每张卡
  * CDP 浏览类点击打开详情（真机 2026-08-17 实证卡片点击 CDP 有效）→ 复用 ResumeReader
- * 读取管线（Win32 滚轮回顶 → 分段截图 → 拼接 → OCR，见 ResumeBatchReader 头注释）→ Escape 关闭。
+ * 读取管线（Win32 滚轮回顶 → 分段截图 → 拼接，见 ResumeBatchReader 头注释）→ Escape 关闭。
+ * 文本识别在云端（boss_resume_batch 工具层逐份调多模态模型，2026-09-17 去 OCR 化）。
  *
  * 只读（effect=none），但每份简历的滚动借用真实鼠标约 30 秒，执行期间用户手不能碰鼠标。
  * 输出契约：data = { resumes: [单份契约 payload（buildResumePayload，与 boss_resume_detail 同契约，
- * name_source='dom'）], failures: [{name, error}], attempted }。云端 BossResumeBatchTool 逐份入简历库。
- * 单份失败（打开超时/读取失败/姓名无法确定/姓名交叉校验不过）记 failures 后继续下一份；全部失败仍 success（信息在 data）。
+ * name_source='dom'，无 ocr_text——云端识别后回填）], failures: [{name, error}], attempted }。
+ * 云端 BossResumeBatchTool 逐份识别+入简历库。
+ * 单份失败（打开超时/读取失败/姓名无法确定）记 failures 后继续下一份；全部失败仍 success（信息在 data）。
  */
 import fsp from 'node:fs/promises'
 import { ResumeBatchReader } from '../boss/ResumeBatchReader.js'
 import { JobSwitcher, FILTER_BUTTON_PATTERN } from '../boss/JobSwitcher.js'
 import { viewportOf } from '../boss/FilterSetter.js'
-import { buildResumePayload, wheelAt, sameViewAt, stitchParts, ocrBatch } from './bossResumeDetail.js'
+import { buildResumePayload, wheelAt, sameViewAt, stitchParts } from './bossResumeDetail.js'
 import {
   defaultSessionFactory,
   runBossOperation,
@@ -29,7 +31,7 @@ export interface BossResumeBatchArgs {
   save_dir?: string
 }
 
-/** operation 层 limit 上限；MCP schema 用 maximum=3 收紧（每份约 30 秒滚动+OCR，设计 §14 同 greet） */
+/** operation 层 limit 上限；MCP schema 用 maximum=3 收紧（每份约 30 秒滚动截图，设计 §14 同 greet） */
 const LIMIT_MAX = 10
 
 export function createBossResumeBatchOperation(
@@ -88,7 +90,6 @@ export function createBossResumeBatchOperation(
             wheel: (rect, viewport, deltaY, notches) => wheelAt(rect, viewport, deltaY, notches),
             sameView: (a, b, rect) => sameViewAt(a, b, rect),
             stitch: stitchParts,
-            ocrBatch,
             signal: ctx.signal,
             onProgress: (done) => {
               ctx.progress({
@@ -112,16 +113,11 @@ export function createBossResumeBatchOperation(
               message += `，失败 ${result.failures.length} 个（第一个：${first.name ?? '未知姓名'}—${first.error}）`
             }
           }
-          // P1 接缝质量警告：任一份存在可疑接缝（错位/文本未对上）→ 提示人工核对（元信息随各份 payload 带）
-          const seamSuspectCount = result.resumes.filter(
-            (r) => r.readResult.suspectSeams.length > 0 || r.readResult.textSeamUnmatched.length > 0,
-          ).length
-          if (seamSuspectCount > 0) {
-            const namesSuspect = result.resumes
-              .filter((r) => r.readResult.suspectSeams.length > 0 || r.readResult.textSeamUnmatched.length > 0)
-              .map((r) => r.name)
-              .join('、')
-            message += `；⚠️ ${seamSuspectCount} 份存在可疑拼接接缝（${namesSuspect}）：OCR 文本可能有重复/缺失，请人工核对拼接图`
+          // P1 接缝质量警告：任一份存在可疑接缝（错位）→ 提示人工核对（元信息随各份 payload 带）
+          const seamSuspect = result.resumes.filter((r) => r.readResult.suspectSeams.length > 0)
+          if (seamSuspect.length > 0) {
+            const namesSuspect = seamSuspect.map((r) => r.name).join('、')
+            message += `；⚠️ ${seamSuspect.length} 份存在可疑拼接接缝（${namesSuspect}）：拼接图内容可能有重复/缺失，请人工核对拼接图`
           }
           return {
             message,

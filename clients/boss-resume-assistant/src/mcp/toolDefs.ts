@@ -7,7 +7,7 @@
  * 用 zod v4 toJSONSchema 生成 list_tools 的 inputSchema）。
  *
  * 写动作硬上限在 schema 层收紧（设计 §14）：greet 单次最大 3、accept 最大 1、reject 固定 1；
- * resume_batch 因单份约 30 秒滚动+OCR 也收紧到 3；CLI/operation 层的上限（10）不变。
+ * resume_batch 因单份约 30 秒滚动截图也收紧到 3；CLI/operation 层的上限（10）不变。
  */
 import { z } from 'zod'
 
@@ -248,16 +248,16 @@ export const TOOL_DEFS: BossToolDef[] = [
     title: '读取候选人简历详情入库',
     description:
       '读取 BOSS 直聘当前打开的候选人在线简历详情（推荐牛人页或沟通页均可，前提已点开候选人详情，否则 WRONG_PAGE）。' +
-      '简历是 canvas 像素渲染（DOM 抓不到文字），通过「滚动分段截图 → 重叠拼接 → OCR（RapidOCR 主引擎，机器未装时回退 Windows OCR）」提取。' +
+      '简历是 canvas 像素渲染（DOM 抓不到文字），通过「滚动分段截图 → 重叠拼接」采集拼接长图，' +
+      '文本由云端多模态模型识别（2026-09-17 去 OCR 化，客户端零本地 OCR 依赖）。' +
       '结果按简历库契约返回：candidate_name（必传，缺省直接报错）、' +
-      'job_name（推荐页当前招聘职位）、ocr_text 全文（RapidOCR 时近乎原文；WinRT 兜底时可能含 ~20% 错字）、' +
-      'images 拼接长图 base64（供云端入库，图片绝不进对话上下文）。' +
-      '姓名来源=非 OCR（显式入参+OCR 交叉校验）：所传姓名未在简历 OCR 文本头部命中会报错（疑似打开的不是该候选人的简历）。' +
+      'job_name（推荐页当前招聘职位）、拼接长图 base64（云端识别后入库，图片绝不进对话上下文）。' +
+      '姓名来源=非截图识别（显式入参）：云端识别后会做姓名交叉校验，未在识别文本头部命中会报错（疑似打开的不是该候选人的简历）。' +
       '只读：无外部写副作用；但滚动借用真实鼠标约 1-2 秒，操作期间勿动鼠标、勿遮挡 Chrome 窗口。' +
       '可选 save_image_to 保存拼接长图（PNG）。',
     zodShape: {
       candidate_name: z.string().min(1).max(30).optional().describe(
-        '必传：智能体会话上下文已知的候选人姓名；未传直接报错。姓名来源=非 OCR（显式入参+OCR 交叉校验）',
+        '必传：智能体会话上下文已知的候选人姓名；未传直接报错。姓名来源=非截图识别（显式入参+云端交叉校验）',
       ),
       save_image_to: z.string().min(1).optional().describe('可选：拼接长图保存路径（PNG）；缺省不保留图片'),
     },
@@ -267,15 +267,15 @@ export const TOOL_DEFS: BossToolDef[] = [
     name: 'boss_resume_batch',
     title: '批量读取牛人简历入库',
     description:
-      '在 BOSS 直聘「推荐牛人」页逐个点开当前视口的牛人卡片 → 读取在线简历（滚动分段截图拼接 OCR）→ 自动关闭 → 下一份。' +
-      '结果 resumes 数组按简历库契约返回（姓名=卡片 DOM 配对（唯一来源）+ OCR 文本交叉校验，' +
-      '配对失败或校验不过的记 failures 跳过，绝不错名入库；job_name 取当前招聘职位；' +
-      '含 ocr_text 全文与拼接长图 base64），云端自动逐份存入简历库，只返回紧凑摘要。' +
-      '单份失败（打开超时/读取失败/姓名无法确定/姓名交叉校验不过）记入 failures 后继续下一份。' +
+      '在 BOSS 直聘「推荐牛人」页逐个点开当前视口的牛人卡片 → 读取在线简历（滚动分段截图拼接，文本由云端多模态模型识别）→ 自动关闭 → 下一份。' +
+      '结果 resumes 数组按简历库契约返回（姓名=卡片 DOM 配对，唯一来源；' +
+      '配对失败的记 failures 跳过，绝不错名入库；job_name 取当前招聘职位；' +
+      '含拼接长图 base64，云端识别文本后逐份存入简历库，只返回紧凑摘要）。' +
+      '单份失败（打开超时/读取失败/姓名无法确定/云端姓名交叉校验不过）记入 failures 后继续下一份。' +
       '前置要求：当前在推荐牛人列表页，否则返回 WRONG_PAGE。' +
       '只读：无外部写副作用；但每份简历滚动借用真实鼠标约 30 秒，操作期间勿动鼠标、勿遮挡 Chrome 窗口。',
     zodShape: {
-      limit: z.number().int().min(1).max(3).default(1).describe('读取份数上限：默认 1，单次最大 3（每份约 30 秒滚动+OCR）'),
+      limit: z.number().int().min(1).max(3).default(1).describe('读取份数上限：默认 1，单次最大 3（每份约 30 秒滚动截图）'),
       save_dir: z.string().min(1).optional().describe('可选：拼接长图保存目录（每份存 <姓名>.png）；缺省不保留图片'),
     },
     annotations: { title: '批量读取牛人简历入库', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },

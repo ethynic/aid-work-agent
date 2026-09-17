@@ -165,6 +165,11 @@
               <span v-if="!detail.match_status" class="text-xs text-muted">未评分或未关联职位，可点「重新评分」</span>
             </div>
             <p v-if="detail.match_summary" class="mt-2 text-sm text-default leading-relaxed">{{ detail.match_summary }}</p>
+            <!-- AI 人物总结（v2 去 OCR 化：VL 评估产出；无则不显示，兼容历史记录） -->
+            <div v-if="detail.resume_summary" class="mt-3 rounded-md bg-gray-50 p-3">
+              <div class="text-xs font-semibold text-muted mb-1">AI 简历总结</div>
+              <p class="text-sm text-default leading-relaxed">{{ detail.resume_summary }}</p>
+            </div>
             <div v-if="keyInfoEntries.length" class="mt-2 space-y-1 border-t border-default pt-2">
               <div v-for="[label, value] in keyInfoEntries" :key="label" class="flex text-sm">
                 <span class="text-muted w-24 flex-shrink-0">{{ label }}</span>

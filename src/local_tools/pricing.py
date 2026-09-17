@@ -37,3 +37,23 @@ def overlay_heal_price() -> float:
         return max(0.0, float(cfg.overlay_heal_price))
     except (TypeError, ValueError):
         return 0.0
+
+
+def resume_recognition_price() -> float:
+    """简历识别费单价（积分/份）：计费总开关关 → 0（截图本就免费，识别费一并停扣）。
+
+    两个简历工具的预检覆写与本扣费取价同源，保证「预检收费的工具」与
+    「实际落账的工具」永远是同一份价目（同 tool_credit_price 的约定）。
+    """
+    cfg = settings.boss_tool_billing
+    if not cfg.enabled:
+        return 0.0
+    try:
+        return max(0.0, float(cfg.resume_recognition_price))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+# 简历识别费在台账中的 tool_name（2026-09-17 去 OCR 化）：接口直记与工具层兜底路径同科目，
+# 对账同源。放在 pricing（计费唯一取价口）避免 api 层反向依赖 proxy_tool 重模块
+RESUME_RECOGNITION_TOOL_NAME = "boss_resume_recognition"
