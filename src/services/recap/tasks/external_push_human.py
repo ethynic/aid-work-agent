@@ -37,6 +37,7 @@ from src.services.recap.tasks.external_push import (
     _extract_json_object,
     _get_agent_token,
     _load_tenant_doc,
+    _current_time_line,
     parse_api_meta,
     _resolve_lite_model_name,
     _run_push_loop,
@@ -260,7 +261,7 @@ def _build_human_user_message(
         f"性别：{gender_label}（0未知/1男/2女，仅当租户文档声明性别字段时推送）\n"
         f"留资手机号：{lead_phone}\n"
         f"归属员工手机号：{ctx.get('assignee_phone') or ''}（已用于委托登录，无需再登录）\n"
-        f"当前日期：{datetime.now().strftime('%Y-%m-%d')}\n"
+        f"{_current_time_line()}"
         "\n"
         "【转人工信息】\n"
         f"转人工客服工号：{transfer.get('servicer_userid') or '（未知）'}\n"

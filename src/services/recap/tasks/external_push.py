@@ -466,6 +466,23 @@ def _truncate(text: str, limit: int = _TEXT_TRUNCATE_CHARS) -> str:
     return text[:limit]
 
 
+def _current_time_line() -> str:
+    """注入真实时刻（含时段标签），模型不得自行虚构时间段（2026-09-17 上午被写成"深夜客户"事故）"""
+    dt = datetime.now()
+    h = dt.hour
+    if h < 6:
+        period = "凌晨"
+    elif h < 12:
+        period = "上午"
+    elif h < 13:
+        period = "中午"
+    elif h < 18:
+        period = "下午"
+    else:
+        period = "晚上"
+    return f"当前时间：{dt.strftime('%Y-%m-%d %H:%M')}（{period}）\n"
+
+
 def _extract_json_object(content: str) -> Optional[Dict[str, Any]]:
     """从 LLM 输出中提取 JSON object（容忍 ```json 包裹与前后杂文本）"""
     if not content:
@@ -871,8 +888,11 @@ def _build_system_prompt(doc: str, meta: Dict[str, str]) -> str:
         "7. 执行效率：查重确认后，互不依赖的写操作（如创建跟进记录与修改客户）"
         "应尽量在同一轮并行发起多个工具调用，减少轮次。\n"
         "8. 累计摘要格式：归纳客户的累计摘要（跟进汇总摘要类字段，以租户文档定义为准）时按天分条，"
-        "每条以跟进日期开头（如 2026-9-15, 当日要点，1~2 句），条与条之间用 CRLF（\\r\\n）分隔，"
-        "禁止合并成一段或用分号分隔；须保留客户当前摘要中的历史日期条目，仅新增或更新当天条目。\n"
+        "每条以跟进日期开头（如 2026-9-15, 当日要点），每条不超过 100 字，当天多轮对话合并为一条，"
+        "只保留关键诉求、结论与待办，不逐轮罗列过程；条与条之间用 CRLF（\\r\\n）分隔，"
+        "禁止合并成一段或用分号分隔；须保留客户当前摘要中的历史日期条目（保持原样，不扩写），仅新增或更新当天条目。"
+        "当天条目内区分多轮时以上方系统注入的真实时刻为准，"
+        "禁止虚构「上午/下午/傍晚/晚间/深夜」等与真实时间不符的时段标签。\n"
         "9. 终止：完成全部外部调用、或按规则放弃时，必须调用 report_push_result 工具"
         "（success=true/false + detail 简述执行结果），且它是你最后调用的工具。"
     )
@@ -910,7 +930,7 @@ def _build_user_message(
         f"性别：{gender_label}（0未知/1男/2女，仅当租户文档声明性别字段时推送）\n"
         f"留资手机号：{lead_phone}\n"
         f"归属员工手机号：{ctx.get('assignee_phone') or ''}（已用于委托登录，无需再登录）\n"
-        f"当前日期：{datetime.now().strftime('%Y-%m-%d')}\n"
+        f"{_current_time_line()}"
         "\n"
         "【委托登录信息】\n"
         f"委托人：{login.get('display_name') or ''} / {login.get('agent_name') or ''}"
