@@ -410,6 +410,14 @@ class WeixinConversationAdapter:
             return False
         return True
 
+    def settle_operation_result(self, cursor, result) -> None:  # noqa: ANN001
+        """场景结算钩子（B1.1 预留，B1.2 才有调用方；设计 §5.5.1 职责表）。
+
+        微信结算现状无场景账本（频控/异常队列均为 BOSS 场景 schema），no-op
+        即现状语义：operation_result 事务内不产生任何场景写操作。
+        """
+        return None
+
     def serve_payload(self, ctx: AdapterContext, payload_ref: str) -> bytes:
         """决策冻结正文字节（租户/任务/revision 严格核对 + hash 自检）。"""
         decision_id = parse_payload_ref(payload_ref)
