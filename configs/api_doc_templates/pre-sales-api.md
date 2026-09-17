@@ -12,12 +12,13 @@
   表名/字段有特殊要求的租户仍可单独上传
 -->
 
-<!-- api-meta：系统代码解析的机器可读约定块，请勿删除本块或改键名（login_url 必填；user_token_name / external_userid_field 缺省时分别默认 client_token / unionid；push_exclude_sections 可选，声明推送循环注入 LLM 时裁剪的章节标题，逗号分隔；sso_* 可选，声明浏览器跳转本系统的入口，无 SSO 能力的系统只填 sso_enabled + sso_url） -->
+<!-- api-meta：系统代码解析的机器可读约定块，请勿删除本块或改键名（login_url 必填；user_token_name / external_userid_field 缺省时分别默认 client_token / unionid；user_token_header / agent_token_header 可选，缺省分别为 Client-Authorize-Token / Api-Authorize-Token，推送循环强制注入对应鉴权 Header；push_exclude_sections 可选，声明推送循环注入 LLM 时裁剪的章节标题，逗号分隔；sso_* 可选，声明浏览器跳转本系统的入口，无 SSO 能力的系统只填 sso_enabled + sso_url） -->
 ```api-meta
 login_url: https://erp${APP_ID}.aidingyi.cn/api/v1/erp.delegate/login
 auth_mode: delegate_login
 user_token_name: client_token
 external_userid_field: unionid
+agent_token_header: Api-Authorize-Token
 push_exclude_sections: 委托登录接口,客户信息详情接口,跟进记录列表接口,跟进记录详情接口
 http_method: POST
 sso_enabled: true

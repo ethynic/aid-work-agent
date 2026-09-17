@@ -44,6 +44,8 @@ from src.tools.base import BaseTool
 _DEFAULT_USER_TOKEN_NAME = "client_token"
 _DEFAULT_USER_TOKEN_HEADER = "Client-Authorize-Token"
 _DEFAULT_EXTERNAL_USERID_FIELD = "unionid"
+# 智能体身份 token（AGENT_TOKEN）的鉴权 Header 默认名，api-meta 可覆盖
+_DEFAULT_AGENT_TOKEN_HEADER = "Api-Authorize-Token"
 
 _HTTP_TIMEOUT_SECONDS = 15
 _TEXT_TRUNCATE_CHARS = 200
@@ -245,6 +247,11 @@ def parse_api_meta(doc_text: str, topic: str = "外部推送") -> Optional[Dict[
     user_token_header（可选）：用户身份 token 的鉴权 Header 名，缺省 Client-Authorize-Token。
     声明后推送循环把该 Header 连同 token 值强制注入每个 http_api 调用
     （防御 lite 模型漏带鉴权头，2026-09-16 erp11096 Code=-99 事故）。
+    agent_token_header（可选）：智能体身份 token（AGENT_TOKEN）的鉴权 Header 名，
+    缺省 Api-Authorize-Token。声明后推送循环把该 Header 连同 ${AGENT_TOKEN} 占位符
+    强制注入每个 http_api 调用并清除模型误写的其他鉴权头
+    （防御 lite 模型写错 Header 名导致对方系统识别不了智能体身份，
+    2026-09-17 erp11095 Code=-99「请求缺少身份令牌」事故）。
     push_exclude_sections（可选）：逗号分隔章节标题，注入 LLM 前裁剪对应章节，
     见 _strip_excluded_sections。
     无块 / login_url 缺失 / login_url 非 https 均返回 None（放弃原因写入 tlog）。
@@ -279,6 +286,7 @@ def parse_api_meta(doc_text: str, topic: str = "外部推送") -> Optional[Dict[
 
     meta.setdefault("user_token_name", _DEFAULT_USER_TOKEN_NAME)
     meta.setdefault("user_token_header", _DEFAULT_USER_TOKEN_HEADER)
+    meta.setdefault("agent_token_header", _DEFAULT_AGENT_TOKEN_HEADER)
     meta.setdefault("external_userid_field", _DEFAULT_EXTERNAL_USERID_FIELD)
     declared_method = (meta.get("http_method") or "").strip().upper()
     if declared_method:
@@ -743,6 +751,47 @@ def _normalize_http_method(args: Dict[str, Any], meta: Dict[str, str], topic: st
     return corrected
 
 
+def _normalized_headers(args: Dict[str, Any], topic: str = "外部推送") -> Dict[str, Any]:
+    """从 http_api args 归一化出可写的 headers 副本（JSON 字符串解析 / 非法重建）"""
+    headers = args.get("headers")
+    if isinstance(headers, str):
+        headers = _safe_json_loads(headers)
+    if not isinstance(headers, dict):
+        if headers:
+            tlog(topic, f"http_api headers 非法（{type(headers).__name__}），重建 headers")
+        return {}
+    return dict(headers)
+
+
+def _ensure_agent_token_header(
+    args: Dict[str, Any],
+    meta: Dict[str, str],
+    topic: str = "外部推送",
+) -> Dict[str, Any]:
+    """把智能体身份鉴权 Header 强制注入 http_api 调用（覆盖式，确定性纠偏）
+
+    2026-09-17 erp11095 Code=-99「请求缺少身份令牌」事故：lite 模型把 AGENT_TOKEN
+    写进错误 Header 名（Authorization: Bearer / X-API-Key），对方系统按
+    Api-Authorize-Token 识别智能体身份失败，同一把有效 client_token 也全部被拒。
+    与 _ensure_user_token_header 同属确定性纠偏：Header 名由 api-meta 的
+    agent_token_header 声明（缺省 Api-Authorize-Token），值写 ${AGENT_TOKEN} 占位符
+    由 http_api 运行时替换（同凭证不渲染进 LLM 上下文的原则）；清除模型误写到
+    其他 Header 的 ${AGENT_TOKEN} 值，避免真实凭证经未知 Header 发出。
+    """
+    header = (meta.get("agent_token_header") or _DEFAULT_AGENT_TOKEN_HEADER).strip()
+    headers = _normalized_headers(args, topic)
+    for key in list(headers.keys()):
+        if isinstance(key, str) and key.lower() == header.lower() and key != header:
+            headers.pop(key)
+    for key, value in list(headers.items()):
+        if isinstance(value, str) and "${AGENT_TOKEN}" in value and key != header:
+            headers.pop(key)
+    headers[header] = "${AGENT_TOKEN}"
+    corrected = dict(args)
+    corrected["headers"] = headers
+    return corrected
+
+
 def _ensure_user_token_header(
     args: Dict[str, Any],
     client_token: str,
@@ -760,15 +809,7 @@ def _ensure_user_token_header(
     if not client_token:
         return args
     header = (meta.get("user_token_header") or _DEFAULT_USER_TOKEN_HEADER).strip()
-    headers = args.get("headers")
-    if isinstance(headers, str):
-        headers = _safe_json_loads(headers)
-    if not isinstance(headers, dict):
-        if headers:
-            tlog(topic, f"http_api headers 非法（{type(headers).__name__}），重建 headers 注入 token")
-        headers = {}
-    else:
-        headers = dict(headers)
+    headers = _normalized_headers(args, topic)
     for key in list(headers.keys()):
         if isinstance(key, str) and key.lower() == header.lower() and key != header:
             headers.pop(key)
@@ -807,11 +848,11 @@ def _build_system_prompt(doc: str, meta: Dict[str, str]) -> str:
         "==================================================================\n"
         "\n"
         "通用约定（与文档冲突时以文档为准，但本条不可违反）：\n"
-        "1. 认证：请求头中的 ${AGENT_TOKEN} 占位符由系统自动替换为实际值，"
-        "请保持原样书写，不要改写成其他形式。"
-        f"用户身份 token（变量名：{user_token}）已由系统完成委托登录获取，"
-        f"其鉴权 Header（{meta.get('user_token_header', '')}）由系统自动附加到每次 http_api 调用，"
-        "不要自行构造、复制或修改该 Header（文档中的 token 示例值不要照抄）。"
+        "1. 认证：两把鉴权 Header——智能体身份 Header（"
+        f"{meta.get('agent_token_header', '')}，值 ${'{AGENT_TOKEN}'}）与"
+        f"用户身份 token（变量名：{user_token}）的鉴权 Header（{meta.get('user_token_header', '')}）"
+        "均由系统自动附加到每次 http_api 调用，"
+        "不要自行构造、复制或修改任何鉴权 Header（文档中的 token 示例值不要照抄）。"
         "不要调用文档中的登录接口。"
         "若收到「用户身份 token 已强制刷新」的系统消息，直接重试刚才失败的调用。"
         "每个业务请求必须按文档声明的请求方式调用（不要因为「查询」就自行改用 GET）。"
@@ -1001,6 +1042,7 @@ async def _run_push_loop(
             else:
                 if name == "http_api":
                     args = _normalize_http_method(args, meta, topic)
+                    args = _ensure_agent_token_header(args, meta, topic)
                     args = _ensure_user_token_header(args, active_client_token, meta, topic)
                 try:
                     result = await executor.execute(name, args, context=context)
