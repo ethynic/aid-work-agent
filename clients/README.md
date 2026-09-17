@@ -20,16 +20,6 @@
 
 ## 二、编译新版本（在开发机/构建机上）
 
-### 0. 构建捆绑 OCR 环境（一次性；产物已 gitignore，构建机本地留存即可）
-```bash
-cd clients/boss-resume-assistant
-npm run build:ocr-python
-```
-产出 `ocr-python/`（可嵌入 Python 3.12.6 + RapidOCR/onnxruntime-directml 预装全家桶，
-约 360MB）——随包分发后**客户机零 Python/pip 知识要求**，简历识别（含核显 DirectML 加速）
-开箱即用。脚本幂等（已存在且自检通过则跳过；`--force` 强制重建），自检 fail-loud
-（providers 必须含 DML+CPU、适配器 `--bench` 跑通），prepack 打包链路会自动调用。
-
 ### 1. 升版本号
 两处 `package.json` 的 `version` 同步修改：
 - `clients/boss-resume-assistant/package.json`
@@ -40,10 +30,15 @@ npm run build:ocr-python
 cd clients/agent-tool-runtime
 npm pack
 ```
-`prepack` 钩子会自动依次：构建捆绑 OCR 环境（幂等，见步骤 0）→ 构建 boss CLI → 构建 runtime →
+`prepack` 钩子会自动依次：构建 boss CLI → 构建 runtime →
 `npm install --install-links`（把 file: 符号链接依赖转成实体目录打进 tar，避免 `..` 路径错乱）；
-`postpack` 打完自动恢复开发态。**产物：`agent-tool-runtime-<版本>.tgz`（boss CLI 与 OCR 环境
-已捆绑在内，客户机无需单独安装 boss 包/Python）。**
+`postpack` 打完自动恢复开发态。**产物：`agent-tool-runtime-<版本>.tgz`（boss CLI 已捆绑在内，
+客户机无需单独安装 boss 包）。**
+
+> ⚠️ 2026-09-17 去 OCR 化：简历识别改为云端 GLM-5.3-Flash 多模态（0.2.14 起），包内不再捆绑
+> `ocr-python/` Python 环境——体积从 ~140MB 降到 ~3.4MB，客户机不再需要任何本地 OCR 依赖。
+> ⚠️ 打包前**必须升 boss CLI 版本号**：`--install-links` 按 version 判断是否刷新捆绑拷贝，
+> 版本不变会打进 `node_modules` 里的旧拷贝（0.2.13→0.2.14 就栽在这：OCR 已删但包里还有 140MB 旧环境）。
 
 ### 3. 冒烟验证（发布前必做，防 files 漏文件）
 ```bash
@@ -165,25 +160,16 @@ powershell -ExecutionPolicy Bypass -File clients\scripts\register_runtime_task.p
 - **不要**做成 Windows 系统服务（SYSTEM/Session 0 无法操作用户桌面的 Chrome 与鼠标，
   任务计划的登录任务是唯一正确形态）
 
-### 简历识别引擎（已内置，无需安装）
+### 简历识别（v2 云端化，客户机零识别依赖）
 
-简历读取（resume-detail / resume-batch）P2 起以 **RapidOCR 为主引擎**：识别引擎（RapidOCR +
-GPU 加速）**已内置在安装包中**（`ocr-python/` 捆绑便携 Python 环境），无需安装 Python，
-客户机开箱即用（真机实测近乎完美 vs WinRT 满篇错字；DirectML 核显加速约 3 倍提速）。
-极端情况下 RapidOCR 仍不可用时自动回退系统 WinRT OCR（零依赖可用性，不阻断使用）。
+简历读取（resume-detail / resume-batch）0.2.14 起**改为云端识别**：客户机只做滚动截图+
+拼接，拼接长图随结果回传，由服务端调 GLM-5.3-Flash 多模态一次产出（姓名核对 + 人物总结 +
+职位匹配评分 + key_info）。客户机**不再需要 Python/RapidOCR/任何本地识别引擎**（0.2.13 及
+以前捆绑的 `ocr-python/` 环境已移除，包体积 ~140MB → ~3.4MB）。
 
-- 验证：`aid-runtime doctor`（boss 子进程 doctor）应显示「OCR 引擎（简历读取）：✅ RapidOCR（python: ...，DirectML GPU 加速，单次推理实测 X.Xs）」；
-  未走 DirectML 时显示 CPU 与纯 CPU 耗时，功能不受影响
-- 排障：DirectML 推理异常时适配器自动整批回退 CPU 重跑，无需人工干预；`AID_BOSS_OCR_DML=0` 可强制关闭 GPU 加速
-- 引擎选择（环境变量，均不需要管理员权限）：
-  - `AID_BOSS_RAPIDOCR_PY=<python.exe 路径>`：显式指定解释器（排障/多解释器时用；
-    缺省探测顺序 = 该 env > 包根捆绑环境 `ocr-python/python.exe`（发货物）>
-    仓库根 `venv/Scripts/python.exe`（仅开发布局）> PATH 上的 `python`；
-    开发机构建过 ocr-python 后也优先走捆绑环境——有意为之，验证的就是发货物）
-  - `AID_BOSS_OCR_ENGINE`：`auto`（缺省，自动探测；不可用或运行期失败回退 WinRT 并在 stderr
-    留一行原因）/ `rapid`（强制 RapidOCR：探测不到**或运行期批量失败**都直接报错并提示部署要求，
-    绝不静默降级——要允许回退请用 auto）/ `winrt`（强制回退系统 WinRT OCR）
-- 如需强制退回 WinRT 排障，设 `AID_BOSS_OCR_ENGINE=winrt` 即可
+- 姓名核对：页面姓名与图中姓名由服务端比对（≤1 字容差），不符该份不入库不扣费
+- 计费：识别费 1 积分/份，云端评估成功即扣（截图不扣费）；单价服务端 config 可调
+- 服务端依赖：部署 ≥ 含 resume_vl 的服务端版本，且服务端配置 ZHIPU_API_KEYS（GLM-5.3-Flash）
 
 ## 七、升级 / 卸载
 
@@ -206,7 +192,7 @@ rmdir /s /q "%APPDATA%\aidwork-tool-runtime"   # 可选：清配置与凭证
 | 设备页不在线 | runtime 窗口是否还在运行；`--server` 地址是否正确；服务器网络是否可达 |
 | pair 报配对码无效 | 码超 5 分钟过期，重新生成 |
 | 打招呼/筛选执行失败 EXECUTION_UNKNOWN | 按工具返回的中文提示人工查看页面（多为确认弹层/风控拦截），勿连续重试 |
-| 简历 OCR 错字多 / doctor 显示 OCR 引擎为 WinRT 兜底 | 正常包内已捆绑 RapidOCR（见 §六），出现兜底多为旧版包或包损坏：换新版 tgz 重装后 doctor 复验 |
+| 简历识别失败/提示服务端评估失败 | 0.2.14 起识别在云端：查服务端日志（简历评估/ZHIPU key 配置）；客户机只需确认截图拼接正常 |
 | 提示付费墙（该职位无开聊权益） | BOSS 账号权益问题，切换职位或开通权益 |
 
 ---
