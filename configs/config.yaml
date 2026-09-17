@@ -62,6 +62,7 @@ llm:
     qwen3-vl-flash: 32768
     qwen3.8-flash: 131072
     deepseek-flash: 393216
+    deepseek-v4-flash: 393216   # deepseek-flash 改名后的新模型码，缺失会回退默认 16384 截断长输出
     GLM-5.3-Flash: 131072
   qwen:
     api_keys: ${QWEN_API_KEYS:-}

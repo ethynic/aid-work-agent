@@ -2455,7 +2455,12 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
             # D1 在 _build_messages 前配对，因此最后一条已是本次 tool result。
             initial_len = len(messages) - 1
 
-        max_iterations = 20  # Prevent infinite loops
+        # 独立模式子智能体遵循 SUBAGENT.md 的 context.max_iterations（get_max_iterations
+        # 内置缺省 20 与上限钳制），与 delegate_to_subagent 委托路径保持一致
+        max_iterations = (
+            self.subagent_config.get_max_iterations()
+            if self.subagent_config else 20
+        )
         iteration = 0
         # Phase 2 P2.3：累积所有工具返回的 ImageRef，在工具调用结束后、最终回复生成前
         # 统一推送一次 images SSE 事件（避免事件流太碎）

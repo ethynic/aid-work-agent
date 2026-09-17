@@ -438,6 +438,7 @@ def build_file(finder, spec, project, precise, renderings, out_dir, index=1, par
 
     r = 7
     qty_filled = [0]
+    used_auto_imgs = set()  # 自动兜底图每文件限用一次，防止同一张效果图贴满整组
     for grp in spec["groups"]:
         ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=7)
         c = ws.cell(row=r, column=1, value=grp["title"])
@@ -483,6 +484,15 @@ def build_file(finder, spec, project, precise, renderings, out_dir, index=1, par
 
             h = estimate_height(desc, area, it.get("basis", ""))
             img = finder.resolve(it, precise, renderings, spec.get("default_img"), auto=not disable_auto)
+            if img:
+                # 条目显式指定图（img / precise_images）始终保留；自动兜底图去重，
+                # 已用过的留空（宁缺勿错，避免做法类条目整组贴同一张空间效果图）
+                explicit = bool(it.get("img")) or it.get("code", "") in precise
+                if not explicit:
+                    if tuple(img) in used_auto_imgs:
+                        img = None
+                    else:
+                        used_auto_imgs.add(tuple(img))
             if img:
                 data = finder.get(img)
                 if data:

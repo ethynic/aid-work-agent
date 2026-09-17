@@ -117,3 +117,37 @@ class TestMergeItems:
         parts_dir = _write_parts(tmp_path, {"a.json": part})
         r = _run(tmp_path, parts_dir)
         assert r.returncode != 0
+
+
+class TestParamRefCheck:
+    def _part_with_qty_rule(self, rules, parameters):
+        data = _part("01_客房.xlsx", ["HR-101"])
+        item = data["files"][0]["groups"][0]["items"][0]
+        item["qty_rule"] = rules
+        data["parameters"] = parameters
+        return data
+
+    def test_missing_param_ref_fails(self, tmp_path):
+        parts_dir = _write_parts(tmp_path, {
+            "a.json": self._part_with_qty_rule(
+                {"mode": "expr", "expr": "{客房总数} * 2"}, {"大堂面积": {"value": 200}}),
+        })
+        r = _run(tmp_path, parts_dir)
+        assert r.returncode != 0
+        assert "参数" in r.stderr
+
+    def test_area_param_missing_fails_and_existing_passes(self, tmp_path):
+        parts_dir = _write_parts(tmp_path, {
+            "a.json": self._part_with_qty_rule(
+                {"mode": "area", "param": "客房面积", "waste": 0.05}, {"客房总数": {"value": 500}}),
+        })
+        r = _run(tmp_path, parts_dir)
+        assert r.returncode != 0
+
+        parts_dir = _write_parts(tmp_path, {
+            "a.json": self._part_with_qty_rule(
+                {"mode": "area", "param": "客房面积", "waste": 0.05},
+                {"客房面积": {"value": 21}}),
+        })
+        r = _run(tmp_path, parts_dir)
+        assert r.returncode == 0, r.stderr

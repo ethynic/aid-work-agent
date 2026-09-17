@@ -50,7 +50,12 @@ def validate_file(fp, max_mb):
     if len(sheets) != 3:
         issues.append("表数=%d（期望 3）" % len(sheets))
     if not has_params:
-        issues.append("缺「参数 Parameters」页")
+        issues.append("缺「参数 Parameters」页（非报价清单工作簿，如目录页，跳过逐行校验）")
+        return {
+            "file": fp, "main": main, "items": 0, "computed": 0, "linked": 0,
+            "number": 0, "empty": 0, "images": 0, "size_mb": size_mb(fp, max_mb),
+            "issues": issues, "skipped": True,
+        }
     if not has_notes:
         issues.append("缺「Notes 说明」页")
     if sheets[:3] != [main, "参数 Parameters", "Notes 说明"]:
@@ -63,10 +68,10 @@ def validate_file(fp, max_mb):
         issues.append("无主表")
         return {"file": fp, "issues": issues, "size_mb": size_mb(fp, max_mb)}
 
-    # 2) 表头
-    hdr = {ws.cell(row=6, column=c).value for c in range(1, 13)}
+    # 2) 表头（单元格值统一转字符串：目录页等非报价清单工作簿的表头可能是数字）
+    hdr = {str(ws.cell(row=6, column=c).value or "") for c in range(1, 13)}
     for need in ("Qty", "Price", "Amount", "Ref.", "Image"):
-        if not any(need in (h or "") for h in hdr):
+        if not any(need in h for h in hdr):
             issues.append("表头缺 %s" % need)
 
     # 分组标题行：A:G 合并的单行，跳过（不计为数据条目）

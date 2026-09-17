@@ -15,11 +15,13 @@
   * project      -> 逐字段取第一个非空值
 
 硬校验：同名 code 跨分片出现 -> 报错退出（非 0），提示修改分片。
+qty_rule 引用的参数名不在 parameters 中 -> 报错退出（非 0），定位到条目 code。
 """
 import argparse
 import glob
 import json
 import os
+import re
 import sys
 
 
@@ -75,6 +77,27 @@ def merge(parts):
     return merged
 
 
+def check_param_refs(merged):
+    """qty_rule 引用的参数名必须存在于 parameters，否则数量公式生成后是死引用"""
+    bad = []
+    for f in merged["files"]:
+        for grp in f.get("groups") or []:
+            for it in grp.get("items") or []:
+                rule = it.get("qty_rule")
+                if not rule:
+                    continue
+                names = []
+                if rule.get("mode") == "area":
+                    if rule.get("param"):
+                        names.append(rule["param"])
+                elif rule.get("mode") == "expr":
+                    names = re.findall(r"\{([^}]+)\}", rule.get("expr") or "")
+                for nm in names:
+                    if nm not in merged["parameters"]:
+                        bad.append((it.get("code") or it.get("cn") or "?", nm))
+    return bad
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--parts-dir", required=True, help="分片目录（*.json）")
@@ -83,6 +106,13 @@ def main():
 
     parts = load_parts(args.parts_dir)
     merged = merge(parts)
+    bad_refs = check_param_refs(merged)
+    if bad_refs:
+        for code, nm in bad_refs[:20]:
+            print("  参数缺失引用: %s -> {%s}" % (code, nm), file=sys.stderr)
+        raise SystemExit(
+            "qty_rule 引用了 parameters 中不存在的参数（%d 处），"
+            "请在分片中补定义参数或修正引用后重试" % len(bad_refs))
     n_files = len(merged["files"])
     n_items = sum(len(g.get("items") or []) for f in merged["files"] for g in (f.get("groups") or []))
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
