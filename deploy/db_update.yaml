@@ -753,3 +753,9 @@
       input_price_per_m = EXCLUDED.input_price_per_m,
       output_price_per_m = EXCLUDED.output_price_per_m,
       cached_input_price_per_m = EXCLUDED.cached_input_price_per_m;
+- datetime: "2026-09-17 16:38:06"
+  remark: "token_cost_prices 修正 GLM-5.3-Flash 缓存命中价：官方公布 0.23 元/M（此前暂按输入价 0.8 填待确认）"
+  statements: |
+    UPDATE token_cost_prices
+    SET cached_input_price_per_m = 0.23
+    WHERE model_name = 'GLM-5.3-Flash';

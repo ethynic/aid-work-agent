@@ -323,9 +323,9 @@ VALUES ('qwen3-vl-flash',0.6, 6, 0.012, TRUE)    -- 按顶格 128K<Token≤256K 
 ON CONFLICT (model_name) DO NOTHING;
 
 -- GLM-5.3-Flash（zhipu 默认模型，2026-08-28 起；GLM-5 系列首个原生多模态模型，is_multimodal=TRUE）
--- 智谱官方定价：输入 0.8 元/M、输出 2.8 元/M；缓存命中价官方公布 0.23 元/M，暂按输入价 0.8 填待确认
+-- 智谱官方定价：输入 0.8 元/M、输出 2.8 元/M；缓存命中价官方公布 0.23 元/M（2026-09-17 确认）
 INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m, is_multimodal)
-VALUES ('GLM-5.3-Flash', 0.8, 2.8, 0.8, TRUE)
+VALUES ('GLM-5.3-Flash', 0.8, 2.8, 0.23, TRUE)
 ON CONFLICT (model_name) DO NOTHING;
 
 -- kimi-k3（Moonshot 视觉推理模型，weixin-cli 客户端代理端点白名单路由用，is_multimodal=TRUE）
