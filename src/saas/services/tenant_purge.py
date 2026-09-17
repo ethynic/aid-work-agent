@@ -15,6 +15,10 @@
 - 孤儿扫描按 ctid 分批删除（每批 5000 行），避免长事务和大范围行锁
 - 孤儿判定排除 NULL、''（scheduled_tasks 等表用 '' 表示无租户上下文的遗留行）
   和 '_' 开头的占位值
+- 环境可能存在仓库未声明的单列外键（如 tokens/scheduled_tasks -> users，仅按
+  user_id 关联、无 tenant_id 列），残留子表行会以 FK 挡住父表孤儿删除。删除父表
+  孤儿行前先动态发现此类入站外键，分批预清理引用了父表孤儿行的子表行（复合外键
+  跳过，其引用侧若含 tenant_id 列会被孤儿扫描单独清理，下一轮重试收敛）
 - 单表失败不中断整体清理（逐表 fail-soft，记录错误日志）
 """
 
@@ -42,6 +46,9 @@ CORE_PURGE_SQL: List[Tuple[str, str]] = [
     ("user_email_settings", "DELETE FROM user_email_settings WHERE user_id IN (SELECT user_id FROM users WHERE tenant_id = %s)"),
     ("remote_credentials", "DELETE FROM remote_credentials WHERE user_id IN (SELECT user_id FROM users WHERE tenant_id = %s)"),
     ("tokens", "DELETE FROM tokens WHERE user_id IN (SELECT user_id FROM users WHERE tenant_id = %s)"),
+    # scheduled_tasks 在部分环境对 users 有单列 FK（scheduled_tasks_user_id_fkey），
+    # 必须先于 users 删除；按 user_id 子查询可一并覆盖 tenant_id='' 的遗留行
+    ("scheduled_tasks", "DELETE FROM scheduled_tasks WHERE user_id IN (SELECT user_id FROM users WHERE tenant_id = %s)"),
     ("users", "DELETE FROM users WHERE tenant_id = %s"),
     ("subscriptions", "DELETE FROM subscriptions WHERE tenant_id = %s"),
     ("user_agent_permissions", "DELETE FROM user_agent_permissions WHERE tenant_id = %s"),
@@ -50,6 +57,29 @@ CORE_PURGE_SQL: List[Tuple[str, str]] = [
 
 # 孤儿扫描单批删除行数
 ORPHAN_BATCH_SIZE = 5000
+
+# 入站外键发现：指向某表的单列外键，删除行为为 NO ACTION('a') / RESTRICT('r')
+# （CASCADE / SET NULL 数据库自动处理，不会阻止父行删除）。复合外键（cardinality>1）
+# 跳过：其引用侧若自身含 tenant_id 列会被孤儿扫描单独清理，下一轮重试收敛
+_INBOUND_FK_SQL = """
+SELECT con.conrelid::regclass::text AS table_name,
+       con.confrelid::regclass::text AS ref_table,
+       ga.attname AS column_name,
+       gb.attname AS ref_column
+FROM pg_constraint con
+JOIN pg_attribute ga
+  ON ga.attrelid = con.conrelid AND ga.attnum = con.conkey[1]
+JOIN pg_attribute gb
+  ON gb.attrelid = con.confrelid AND gb.attnum = con.confkey[1]
+JOIN pg_class ref_cls
+  ON ref_cls.oid = con.confrelid
+WHERE con.contype = 'f'
+  AND con.connamespace = 'public'::regnamespace
+  AND ref_cls.relnamespace = 'public'::regnamespace
+  AND con.confdeltype IN ('a', 'r')
+  AND cardinality(con.conkey) = 1
+  AND NOT ga.attisdropped AND NOT gb.attisdropped
+"""
 
 # 孤儿扫描列：exact 'tenant_id' + 共享表的双向租户列（to_tenant_id / from_tenant_id）
 _ORPHAN_COLUMN_SQL = """
@@ -135,6 +165,11 @@ def purge_expired_deleted_tenants(days: int = 7) -> List[str]:
     return purged_ids
 
 
+def _ident(name: str) -> str:
+    """标识符安全加引号（表/列名来自 pg_catalog，仍做转义防意外）"""
+    return '"' + name.replace('"', '""') + '"'
+
+
 def _list_orphan_scan_targets() -> List[Tuple[str, str]]:
     """返回待扫描的 (table, column) 列表（information_schema 动态发现，覆盖 bs_* 业务表）"""
     targets: List[Tuple[str, str]] = []
@@ -144,6 +179,53 @@ def _list_orphan_scan_targets() -> List[Tuple[str, str]]:
         for row in cursor.fetchall():
             targets.append((row["table_name"], row["column_name"]))
     return targets
+
+
+def _fetch_inbound_fks() -> Dict[str, List[Tuple[str, str, str]]]:
+    """返回 {被引用表: [(引用表, 引用列, 被引用列), ...]}，仅含会阻止父行删除的单列 FK"""
+    fks: Dict[str, List[Tuple[str, str, str]]] = {}
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(_INBOUND_FK_SQL)
+        for row in cursor.fetchall():
+            fks.setdefault(row["ref_table"], []).append(
+                (row["table_name"], row["column_name"], row["ref_column"])
+            )
+    return fks
+
+
+def _purge_orphan_fk_dependents(
+    cursor, conn, parent_table: str, parent_col: str,
+    fk: Tuple[str, str, str], batch_size: int,
+) -> int:
+    """分批删除引用「父表孤儿行」的子表行，返回删除总数。
+
+    子表（如 tokens 仅按 user_id 关联 users，无 tenant_id 列）可能不在孤儿扫描目标中，
+    其残留行会以 FK 挡住父表孤儿删除。子表删除条件 = 引用值落在父表孤儿集合内
+    （JOIN 父表并套用同一孤儿谓词），而非简单的「父行已不存在」——后者在父表删除
+    前置阶段拿不到即将被删的行。
+    """
+    fk_table, fk_col, ref_col = fk
+    orphan_pred = (
+        f"t.{_ident(parent_col)} IS NOT NULL AND t.{_ident(parent_col)} <> '' "
+        f"AND t.{_ident(parent_col)} NOT LIKE '\\_%' "
+        f"AND t.{_ident(parent_col)} NOT IN (SELECT tenant_id FROM tenants)"
+    )
+    total = 0
+    while True:
+        cursor.execute(
+            f"DELETE FROM {_ident(fk_table)} WHERE ctid IN ("
+            f"  SELECT r.ctid FROM {_ident(fk_table)} r"
+            f"  JOIN {_ident(parent_table)} t ON t.{_ident(ref_col)} = r.{_ident(fk_col)}"
+            f"  WHERE {orphan_pred}"
+            f"  LIMIT {int(batch_size)})"
+        )
+        deleted = cursor.rowcount
+        conn.commit()
+        total += deleted
+        if deleted < batch_size:
+            break
+    return total
 
 
 def purge_orphan_data(batch_size: int = ORPHAN_BATCH_SIZE) -> Dict[str, int]:
@@ -158,6 +240,13 @@ def purge_orphan_data(batch_size: int = ORPHAN_BATCH_SIZE) -> Dict[str, int]:
         logger.opt(exception=True).error(f"孤儿数据扫描目标发现失败: {e}")
         return total_deleted
 
+    try:
+        inbound_fks = _fetch_inbound_fks()
+    except Exception as e:
+        # FK 预清理是可选增强，发现失败时退化为原行为（父表删除可能被 FK 挡住，下轮重试）
+        logger.opt(exception=True).warning(f"入站外键发现失败，本轮跳过子表预清理: {e}")
+        inbound_fks = {}
+
     for table, column in targets:
         table_ident = f'"{table}"'
         column_ident = f'"{column}"'
@@ -165,6 +254,16 @@ def purge_orphan_data(batch_size: int = ORPHAN_BATCH_SIZE) -> Dict[str, int]:
         try:
             with get_db_connection() as conn:
                 cursor = conn.cursor()
+                # 先清理引用了本表孤儿行的子表行（环境级单列 FK），否则子表残留行
+                # 会以 FK 挡住本表孤儿删除（如 tokens_user_id_fkey 挡住 users）
+                for fk in inbound_fks.get(table, []):
+                    fk_deleted = _purge_orphan_fk_dependents(
+                        cursor, conn, table, column, fk, batch_size)
+                    if fk_deleted > 0:
+                        fk_key = f"{fk[0]}.{fk[1]}"
+                        total_deleted[fk_key] = total_deleted.get(fk_key, 0) + fk_deleted
+                        logger.info(
+                            f"孤儿数据清理（FK 预清理）: {fk[0]}.{fk[1]} 引用 {table} 孤儿行，删除 {fk_deleted} 行")
                 while True:
                     # ctid 分批删除，避免单条 DELETE 长事务；'' 为遗留哨兵值、
                     # '_' 开头为占位值（如 _anonymous），均不视为孤儿

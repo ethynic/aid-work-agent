@@ -54,8 +54,8 @@ def _bump_rowcount(cursor, counts):
 
 class TestPurgeTenantCore:
     def test_deletes_core_tables_in_order_and_commits(self, monkeypatch, tmp_path):
-        # 9 张核心/关联表删除 + 1 条 tenants 复核删除
-        conn, cursor = _make_conn(rowcounts=[1, 2, 0, 0, 1, 2, 1, 3, 1, 1])
+        # 10 张核心/关联表删除 + 1 条 tenants 复核删除
+        conn, cursor = _make_conn(rowcounts=[1, 2, 0, 0, 1, 2, 1, 3, 1, 1, 1])
         monkeypatch.setattr(tenant_purge, "get_db_connection", lambda: _ctx(conn))
         monkeypatch.setattr(tenant_purge, "get_tenants_storage_root", lambda: str(tmp_path))
         invalidated = []
@@ -69,12 +69,12 @@ class TestPurgeTenantCore:
 
         assert result["success"] is True
         executed = [c.args[0] for c in cursor.execute.call_args_list]
-        # 无 tenant_id 列的关联表 + 核心表 + tenants（复核删除），tokens 在 users 之前
+        # 无 tenant_id 列的关联表 + 核心表 + tenants（复核删除），tokens/scheduled_tasks 在 users 之前
         tables = [e.split("FROM ")[1].split(" ")[0].split("(")[0] for e in executed]
         assert tables == [
             "chunks_vec", "chunks", "user_email_settings", "remote_credentials",
-            "tokens", "users", "subscriptions", "user_agent_permissions",
-            "tenant_channel_configs", "tenants",
+            "tokens", "scheduled_tasks", "users", "subscriptions",
+            "user_agent_permissions", "tenant_channel_configs", "tenants",
         ]
         # tenants 行删除带 status 复核（防恢复竞态）
         assert "AND status = %s" in executed[-1]
@@ -85,7 +85,7 @@ class TestPurgeTenantCore:
 
     def test_status_changed_during_purge_rolls_back(self, monkeypatch, tmp_path):
         # tenants 复核删除 rowcount=0（租户被恢复或不存在）-> 整体回滚，不删附件目录
-        conn, cursor = _make_conn(rowcounts=[0] * 9 + [0])
+        conn, cursor = _make_conn(rowcounts=[0] * 10 + [0])
         monkeypatch.setattr(tenant_purge, "get_db_connection", lambda: _ctx(conn))
         monkeypatch.setattr(tenant_purge, "get_tenants_storage_root", lambda: str(tmp_path))
 
@@ -119,7 +119,7 @@ class TestPurgeTenantCore:
         assert tenant_dir.exists()
 
     def test_missing_storage_dir_no_error(self, monkeypatch, tmp_path):
-        conn, _ = _make_conn(rowcounts=[0] * 9 + [1])
+        conn, _ = _make_conn(rowcounts=[0] * 10 + [1])
         monkeypatch.setattr(tenant_purge, "get_db_connection", lambda: _ctx(conn))
         monkeypatch.setattr(tenant_purge, "get_tenants_storage_root", lambda: str(tmp_path))
 
@@ -167,6 +167,7 @@ class TestPurgeOrphanData:
             tenant_purge, "_list_orphan_scan_targets",
             lambda: [("chat_messages", "tenant_id"), ("subscriptions", "tenant_id")],
         )
+        monkeypatch.setattr(tenant_purge, "_fetch_inbound_fks", lambda: {})
 
         result = purge_orphan_data(batch_size=5000)
 
@@ -189,6 +190,7 @@ class TestPurgeOrphanData:
             tenant_purge, "_list_orphan_scan_targets",
             lambda: [("bad_table", "tenant_id"), ("good_table", "tenant_id")],
         )
+        monkeypatch.setattr(tenant_purge, "_fetch_inbound_fks", lambda: {})
 
         # bad_table 第一批执行报错，good_table 正常删除后以 0 行结束
         original_execute = cursor.execute.side_effect
@@ -211,6 +213,76 @@ class TestPurgeOrphanData:
             lambda: (_ for _ in ()).throw(RuntimeError("db down")),
         )
         assert purge_orphan_data() == {}
+
+    def test_fk_dependents_purged_before_parent(self, monkeypatch):
+        # tokens（无 tenant_id 列）残留行通过 FK 挡住 users 孤儿删除：
+        # 先预清理 tokens 中引用 users 孤儿行的数据，再删 users 本表
+        conn, cursor = _make_conn(rowcounts=[3, 10, 0])
+        monkeypatch.setattr(tenant_purge, "get_db_connection", lambda: _ctx(conn))
+        monkeypatch.setattr(
+            tenant_purge, "_list_orphan_scan_targets",
+            lambda: [("users", "tenant_id")],
+        )
+        monkeypatch.setattr(
+            tenant_purge, "_fetch_inbound_fks",
+            lambda: {"users": [("tokens", "user_id", "user_id")]},
+        )
+
+        result = purge_orphan_data(batch_size=5000)
+
+        assert result == {"tokens.user_id": 3, "users.tenant_id": 10}
+        sqls = [c.args[0] for c in cursor.execute.call_args_list]
+        # 预清理 SQL：JOIN 父表套用同一孤儿谓词，且先于父表删除执行
+        assert 'FROM "tokens"' in sqls[0] and 'JOIN "users" t ON' in sqls[0]
+        assert "NOT IN (SELECT tenant_id FROM tenants)" in sqls[0]
+        assert "LIMIT 5000" in sqls[0]
+        assert 'FROM "users"' in sqls[1] and 'JOIN "users"' not in sqls[1]
+        # 每批提交：tokens 1 批（3<5000 即止）+ users 1 批（10<5000 即止）
+        assert conn.commit.call_count == 2
+
+    def test_fk_preclean_failure_skips_parent_table(self, monkeypatch):
+        # FK 预清理失败 -> 该父表整体跳过（fail-soft），其他无 FK 表继续清理
+        conn, cursor = _make_conn(rowcounts=[5, 0])
+        monkeypatch.setattr(tenant_purge, "get_db_connection", lambda: _ctx(conn))
+        monkeypatch.setattr(
+            tenant_purge, "_list_orphan_scan_targets",
+            lambda: [("bad_table", "tenant_id"), ("good_table", "tenant_id")],
+        )
+        monkeypatch.setattr(
+            tenant_purge, "_fetch_inbound_fks",
+            lambda: {"bad_table": [("tokens", "user_id", "user_id")]},
+        )
+
+        original_execute = cursor.execute.side_effect
+
+        def _execute(*args, **kwargs):
+            sql = args[0] if args else ""
+            if 'JOIN "bad_table"' in sql:
+                raise RuntimeError("fk preclean failed")
+            return original_execute(*args, **kwargs)
+
+        cursor.execute.side_effect = _execute
+
+        result = purge_orphan_data()
+
+        assert result == {"good_table.tenant_id": 5}
+
+    def test_inbound_fk_discovery_failure_degrades_to_plain_scan(self, monkeypatch):
+        # 入站外键发现失败 -> 退化为原行为（无预清理），孤儿扫描本身不受影响
+        conn, cursor = _make_conn(rowcounts=[5, 0])
+        monkeypatch.setattr(tenant_purge, "get_db_connection", lambda: _ctx(conn))
+        monkeypatch.setattr(
+            tenant_purge, "_list_orphan_scan_targets",
+            lambda: [("good_table", "tenant_id")],
+        )
+        monkeypatch.setattr(
+            tenant_purge, "_fetch_inbound_fks",
+            lambda: (_ for _ in ()).throw(RuntimeError("db down")),
+        )
+
+        result = purge_orphan_data()
+
+        assert result == {"good_table.tenant_id": 5}
 
 
 class TestCleanupOrphanStorageDirs:
