@@ -18,6 +18,84 @@ from src.prompts.prompt_registry_service import PromptRegistryService
 class SubagentDefinitionService:
     """子智能体定义服务"""
 
+    # ========== 技能依赖自动补全 ==========
+
+    @staticmethod
+    def apply_skill_requirements(
+        tools: Optional[dict],
+        skills: Optional[dict],
+        recap: Optional[dict],
+    ) -> tuple[Optional[dict], Optional[dict], List[str]]:
+        """按技能声明的依赖（SKILL.md frontmatter 的 requires_tools / requires_recap）
+        补全 tools 与 recap 配置。幂等：已存在的配置不修改、不覆盖。
+
+        Returns:
+            (补全后的 tools, 补全后的 recap, 补全明细列表)
+        """
+        if not isinstance(skills, dict):
+            return tools, recap, []
+        allowed = skills.get("allowed") or []
+        if not allowed:
+            return tools, recap, []
+
+        # 惰性导入，避免 import 副作用拉起 master_agent
+        from src.core.agent import get_master_agent
+
+        registry = get_master_agent().skill_registry
+        if not registry:
+            return tools, recap, []
+
+        required_tools: List[str] = []
+        required_recap: List[Dict[str, str]] = []
+        for skill_name in allowed:
+            skill = registry.get_all_skill(skill_name)
+            if not skill:
+                continue
+            for tool_name in getattr(skill, "requires_tools", None) or []:
+                if tool_name and tool_name not in required_tools:
+                    required_tools.append(tool_name)
+            for task in getattr(skill, "requires_recap", None) or []:
+                name = (task or {}).get("name")
+                if name and all(t["name"] != name for t in required_recap):
+                    required_recap.append({
+                        "name": name,
+                        "when": task.get("when") or "every_round",
+                    })
+
+        if not required_tools and not required_recap:
+            return tools, recap, []
+
+        applied: List[str] = []
+
+        # ---- 工具补全 ----
+        # tools 缺省时默认 inherit=true（与前端默认一致；inherit=false + 空列表在装配时会被清空全部工具）
+        new_tools = dict(tools) if isinstance(tools, dict) else {"inherit": True, "additional": []}
+        # 兼容前端 additional / 原始 allowed 两种键名（与 SubagentConfig.get_allowed_tools 一致）
+        list_key = "additional" if "additional" in new_tools else "allowed"
+        existing_tools = new_tools.get(list_key) or []
+        missing_tools = [t for t in required_tools if t not in existing_tools]
+        if missing_tools:
+            new_tools[list_key] = list(existing_tools) + missing_tools
+            applied.extend(f"工具: {t}" for t in missing_tools)
+
+        # ---- recap 任务补全 ----
+        new_recap = dict(recap) if isinstance(recap, dict) else {}
+        tasks = list(new_recap.get("tasks") or [])
+        for task in required_recap:
+            # 同名任务已存在则保留管理员设置的 when/enabled（尊重主动禁用）
+            if any(t.get("name") == task["name"] for t in tasks):
+                continue
+            tasks.append({"name": task["name"], "when": task["when"], "enabled": True})
+            applied.append(f"recap: {task['name']}({task['when']})")
+        if tasks != list(new_recap.get("tasks") or []):
+            new_recap["tasks"] = tasks
+
+        if not applied:
+            return tools, recap, []
+
+        logger.info(f"技能依赖自动补全: {applied}")
+        return new_tools, new_recap, applied
+
     # ========== 定义 CRUD ==========
 
     @staticmethod

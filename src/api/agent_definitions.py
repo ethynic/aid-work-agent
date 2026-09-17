@@ -159,6 +159,10 @@ async def create_definition(request: Request, body: CreateDefinitionRequest):
         if existing:
             return _error(f"智能体 {body.agent_id} 已存在")
 
+        tools, recap, auto_completed = SubagentDefinitionService.apply_skill_requirements(
+            body.tools, body.skills, body.recap,
+        )
+
         result = SubagentDefinitionService.create_definition(
             agent_id=body.agent_id,
             name=body.name,
@@ -167,7 +171,7 @@ async def create_definition(request: Request, body: CreateDefinitionRequest):
             version=body.version,
             author=body.author,
             triggers=body.triggers,
-            tools=body.tools,
+            tools=tools,
             skills=body.skills,
             context=body.context,
             delegatable_to=body.delegatable_to,
@@ -177,7 +181,7 @@ async def create_definition(request: Request, body: CreateDefinitionRequest):
             reply_style=body.reply_style,
             business_pages=body.business_pages,
             knowledge_sources=body.knowledge_sources,
-            recap=body.recap,
+            recap=recap,
             chat_toolbar=body.chat_toolbar,
             upload_accept=body.upload_accept,
             created_by=admin.get("user_id"),
@@ -185,7 +189,7 @@ async def create_definition(request: Request, body: CreateDefinitionRequest):
         )
         if not result:
             return _error("创建失败")
-        return _success(result)
+        return _success(result, auto_completed=auto_completed)
     except HTTPException:
         raise
     except Exception as e:
@@ -230,6 +234,8 @@ async def list_skills_meta(request: Request):
             "id": name,
             "name": name,
             "description": skill.description if skill else '',
+            "requires_tools": list(getattr(skill, "requires_tools", None) or []) if skill else [],
+            "requires_recap": [dict(t) for t in getattr(skill, "requires_recap", None) or []] if skill else [],
         })
     return _success(skills)
 
@@ -342,6 +348,22 @@ async def update_definition(request: Request, agent_id: str, body: UpdateDefinit
         if not updates:
             return _error("没有需要更新的字段")
 
+        # 技能依赖自动补全：tools/recap 未显式传入时读现有定义，避免整列覆盖丢失
+        auto_completed: list = []
+        skills_upd = updates.get("skills")
+        if isinstance(skills_upd, dict) and skills_upd.get("allowed"):
+            current: Dict[str, Any] = {}
+            if "tools" not in updates or "recap" not in updates:
+                current = SubagentDefinitionService.get_definition(agent_id) or {}
+            new_tools, new_recap, auto_completed = SubagentDefinitionService.apply_skill_requirements(
+                updates.get("tools", current.get("tools")),
+                skills_upd,
+                updates.get("recap", current.get("recap")),
+            )
+            if auto_completed:
+                updates["tools"] = new_tools
+                updates["recap"] = new_recap
+
         result = SubagentDefinitionService.update_definition(
             agent_id=agent_id,
             created_by=admin.get("user_id"),
@@ -356,7 +378,7 @@ async def update_definition(request: Request, agent_id: str, body: UpdateDefinit
         if registry:
             registry.load_from_db()
 
-        return _success({"agent_id": agent_id})
+        return _success({"agent_id": agent_id}, auto_completed=auto_completed)
     except HTTPException:
         raise
     except Exception as e:

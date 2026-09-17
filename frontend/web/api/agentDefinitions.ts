@@ -226,6 +226,10 @@ export interface SkillMeta {
   id: string
   name: string
   description: string
+  /** 技能依赖的工具（SKILL.md requires_tools），勾选技能时自动补全 */
+  requires_tools?: string[]
+  /** 技能依赖的 recap 任务（SKILL.md requires_recap），勾选技能时自动补全 */
+  requires_recap?: { name: string; when: string }[]
 }
 
 export interface ReplyStyleMeta {

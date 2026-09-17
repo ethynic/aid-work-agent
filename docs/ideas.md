@@ -41,6 +41,7 @@
 
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
+| 20260917-1000 | 技能依赖自动补全机制（工具 + recap 任务） | ✅ 已完成开发 | 自定义数字员工勾选技能时自动补全其依赖的工具与 recap 任务，根治漏勾配置 bug。技能在 SKILL.md frontmatter 声明 `requires_tools` / `requires_recap`，后端保存兜底（`apply_skill_requirements`）+ 前端勾选联动；已登记 pre-sales-api（完整）、after-sales-api / order-api（http_api）。 | — | — |
 | 20260914-1300 | SubagentRegistry 按 agent_id 为 key + 前端展示 agent_id | 🔧 部分完成 | 2026-09-14 修复生产事故：`subagent_definitions` 两条 active 定义（pre-sales / aidefine-sales-assistant）显示名相同，… | — | — |
 | 20260908-1431 | 桌面 CLI 无人值守自动任务底座＋微信营销首场景 | 🔧 部分完成 | 桌面 CLI 无人值守任务底座（调度/账本/许可/journal/桌面锁）＋微信营销首场景，与端侧会话任务（20260912-2313）共用底座。 | [底座设计](design/desktop-automation/desktop-cli-automation-design.md) / [场景设计](design/weixin/weixin-marketing-automation-design.md) | [底座计划](plans/desktop-automation/plan-desktop-cli-automation.md) / [微信实施与BOSS衔接](plans/weixin/plan-weixin-marketing-automation.md) |
 | 20260908-1432 | BOSS 直聘聊天自动化 | 🔧 部分完成 | 跟踪已打招呼候选人，未读 observer＋候选人绑定＋版本话术/受限决策＋预授权＋人工接管及员工群通知。 | [场景设计 §11](design/weixin/weixin-marketing-automation-design.md#11-第二场景boss-直聘聊天自动化待独立立项) / [底座设计](design/desktop-automation/desktop-cli-automation-design.md) | [BOSS 里程碑](plans/weixin/plan-weixin-marketing-automation.md#12-boss-聊天自动化实施衔接-待独立立项) / [底座计划](plans/desktop-automation/plan-desktop-cli-automation.md) |

@@ -8,6 +8,8 @@ metadata:
     emoji: "🔌"
     requires:
       bins: ["python"]
+# 依赖的工具：自定义数字员工勾选此技能时自动补全（见 subagent_definition_service.apply_skill_requirements）
+requires_tools: [http_api]
 ---
 
 # 订单处理外部系统 API 配置

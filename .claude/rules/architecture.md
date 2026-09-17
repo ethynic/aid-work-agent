@@ -74,6 +74,8 @@
 
 每新增一个 skill 给子智能体用，**只需改 1 处**：管理后台 / DB 的 `subagent_definitions.skills.allowed`。
 
+**技能依赖自动补全**：技能若依赖特定工具或 recap 任务，在 SKILL.md frontmatter 声明 `requires_tools: [tool_a, ...]` 与 `requires_recap: [{name: external_push, when: every_round}, ...]`（loader 由 `src/core/skill_loader.py` 解析）。自定义数字员工保存时（`SubagentDefinitionService.apply_skill_requirements`）与前端勾选技能时自动补全缺失的工具和 recap 任务；幂等，已存在的配置不覆盖。参考 `src/skills/pre-sales-api-1.0.0/SKILL.md`。
+
 **关键**：管理后台技能选择器（3 个 API：`/api/admin/agent-definitions/meta/skills`、`/api/admin/subagents/skills`、`/api/subagents/skills`）读取的是 `SkillRegistry.list_all_loaded_skills()`——全部基础目录已加载 skill（未经主智能体白名单过滤），这样管理员能看到全部可选 skill。`_all_skills` 只含基础目录 skill，不含租户私有 skill（符合 `subagent_definitions` 表无 `tenant_id` 的语义）。
 
 ### 添加子智能体

@@ -97,6 +97,11 @@ class Skill:
     # 依赖项
     dependencies: List[SkillDependency] = field(default_factory=list)
 
+    # 依赖的工具（tool name 列表）与 recap 任务（[{name, when}]），
+    # 自定义数字员工保存/勾选该技能时自动补全到 tools.additional 与 recap.tasks
+    requires_tools: List[str] = field(default_factory=list)
+    requires_recap: List[Dict[str, str]] = field(default_factory=list)
+
     # 资源文件
     scripts: List[Path] = field(default_factory=list)
     references: List[Path] = field(default_factory=list)
@@ -123,6 +128,8 @@ class Skill:
                 {"name": d.name, "type": d.type, "version": d.version}
                 for d in self.dependencies
             ],
+            "requires_tools": list(self.requires_tools),
+            "requires_recap": [dict(t) for t in self.requires_recap],
             "scripts": [str(p) for p in self.scripts],
             "references": [str(p) for p in self.references],
             "assets": [str(p) for p in self.assets],
@@ -242,6 +249,20 @@ class SkillLoader:
         if isinstance(hooks_raw, dict):
             hooks = hooks_raw
 
+        # 解析依赖的工具与 recap 任务
+        requires_tools_raw = frontmatter.get("requires_tools", [])
+        requires_tools = [
+            str(t) for t in requires_tools_raw
+            if isinstance(requires_tools_raw, list) and isinstance(t, str) and t
+        ]
+        requires_recap = []
+        for task in frontmatter.get("requires_recap", []) or []:
+            if isinstance(task, dict) and task.get("name"):
+                requires_recap.append({
+                    "name": str(task["name"]),
+                    "when": str(task.get("when", "every_round")),
+                })
+
         # 解析 env 环境变量声明
         env_raw = frontmatter.get("env", [])
         env_vars = []
@@ -281,6 +302,8 @@ class SkillLoader:
             agent=frontmatter.get("agent"),
             env=env_vars,
             dependencies=dependencies,
+            requires_tools=requires_tools,
+            requires_recap=requires_recap,
             init_script=frontmatter.get("init_script"),
         )
         

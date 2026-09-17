@@ -959,6 +959,24 @@ function toggleSkill(skillId: string) {
     arr.splice(idx, 1)
   } else {
     arr.push(skillId)
+    applySkillRequirements(skillId)
+  }
+}
+
+// 勾选技能时，按技能声明的依赖（requires_tools / requires_recap）自动补全工具与 recap 任务。
+// 只做增量补全，取消勾选不回删，避免误删管理员手动配置。
+function applySkillRequirements(skillId: string) {
+  const skill = availableSkills.value.find(s => s.id === skillId)
+  if (!skill) return
+  for (const toolId of skill.requires_tools || []) {
+    if (!additionalTools.value.includes(toolId)) {
+      additionalTools.value.push(toolId)
+    }
+  }
+  for (const req of skill.requires_recap || []) {
+    if (!recapTasks.value.some(t => t.name === req.name)) {
+      recapTasks.value.push({ name: req.name, when: req.when || 'every_round', enabled: true })
+    }
   }
 }
 
@@ -1039,6 +1057,10 @@ async function saveDefinition() {
       })
       if (res.success) {
         showToast('自定义数字员工已创建')
+        const autoDone = (res as any).auto_completed as string[] | undefined
+        if (autoDone && autoDone.length > 0) {
+          showToast(`已按技能依赖自动补全: ${autoDone.join('、')}`, 'info')
+        }
         pendingCreate.value = null
         await loadList()
         const created = agents.value.find(a => a.agent_id === agentId)
@@ -1053,6 +1075,10 @@ async function saveDefinition() {
     const res = await updateDefinition(selectedAgentId.value, data)
     if (res.success) {
       showToast('定义已保存')
+      const autoDone = (res as any).auto_completed as string[] | undefined
+      if (autoDone && autoDone.length > 0) {
+        showToast(`已按技能依赖自动补全: ${autoDone.join('、')}`, 'info')
+      }
       await loadList()
     } else {
       showToast('保存失败', 'error')
