@@ -41,6 +41,8 @@
 
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
+| 20260917-1200 | spec-to-quotation-list 大项目扩容（轮数/分批/体积） | ✅ 已完成开发 | 解决真实规范书几百条目场景的三大瓶颈：智能体轮数硬编码 20 -> 子智能体可配置（context.max_iterations，缺省 20 上限 100）、items.json 一次性编写 -> 分批编条目 + merge_items.py 合并、xlsx 超 20MB -> --size-budget-mb 图片体积预算自动降质（floor 60）。单测 17 例 + 容器端到端回归通过。 | [设计](subagent/building-supply-chain/spec-to-quotation-scaling-design.md) | — |
+| 20260917-1130 | 建筑供应链智能体（spec book 转报价清单） | ✅ 已完成开发 | 引入第三方技能 spec-to-quotation-list（`src/skills/spec-to-quotation-list-1.0.0/`），把设计手册/FF&E 规范/spec book PDF 转成中英双语「室内材料报价清单」Excel（多文件拆分 + 图片嵌入 + 参数表驱动数量公式）。新建子智能体 `subagents/building-supply-chain/`（仅文件系统注册），已用样例 PDF 在容器内完成 analyze/probe/generate/validate 端到端验证。 | — | — |
 | 20260917-1000 | 技能依赖自动补全机制（工具 + recap 任务） | ✅ 已完成开发 | 自定义数字员工勾选技能时自动补全其依赖的工具与 recap 任务，根治漏勾配置 bug。技能在 SKILL.md frontmatter 声明 `requires_tools` / `requires_recap`，后端保存兜底（`apply_skill_requirements`）+ 前端勾选联动；已登记 pre-sales-api（完整）、after-sales-api / order-api（http_api）。 | — | — |
 | 20260914-1300 | SubagentRegistry 按 agent_id 为 key + 前端展示 agent_id | 🔧 部分完成 | 2026-09-14 修复生产事故：`subagent_definitions` 两条 active 定义（pre-sales / aidefine-sales-assistant）显示名相同，… | — | — |
 | 20260908-1431 | 桌面 CLI 无人值守自动任务底座＋微信营销首场景 | 🔧 部分完成 | 桌面 CLI 无人值守任务底座（调度/账本/许可/journal/桌面锁）＋微信营销首场景，与端侧会话任务（20260912-2313）共用底座。 | [底座设计](design/desktop-automation/desktop-cli-automation-design.md) / [场景设计](design/weixin/weixin-marketing-automation-design.md) | [底座计划](plans/desktop-automation/plan-desktop-cli-automation.md) / [微信实施与BOSS衔接](plans/weixin/plan-weixin-marketing-automation.md) |

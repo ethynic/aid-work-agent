@@ -3504,7 +3504,10 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
             
             # 步骤2：让LLM理解任务并创建计划（如果需要）
             # 子智能体在第一次迭代时可能会调用 create_plan
-            max_iterations = 20
+            max_iterations = (
+                self.subagent_config.get_max_iterations()
+                if self.subagent_config else 20
+            )
             iteration = 0
             final_result = None
             final_summary = ""
