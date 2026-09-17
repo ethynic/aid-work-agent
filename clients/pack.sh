@@ -35,7 +35,7 @@ TGZ="$RUNTIME/agent-tool-runtime-$VER.tgz"
 command -v node >/dev/null && command -v npm >/dev/null || { echo "需要 node/npm"; exit 1; }
 [ -d "$BOSS" ] && [ -d "$RUNTIME" ] || { echo "目录不对：请在 clients/ 仓库里运行"; exit 1; }
 
-echo "[1/7] 两处 package.json 版本 → $VER（同步 lockfile）"
+echo "[1/8] 两处 package.json 版本 → $VER（同步 lockfile）"
 # 注意：node -e 里不能用 MSYS 风格绝对路径（/c/... 会被当成 C:\c\...），cd 进目录用相对路径
 (cd "$BOSS" && node -e "
 const fs = require('fs');
@@ -54,17 +54,17 @@ console.log('  runtime package.json 已更新');
 (cd "$BOSS" && npm install --package-lock-only >/dev/null 2>&1)
 (cd "$RUNTIME" && npm install --package-lock-only >/dev/null 2>&1)
 
-echo "[2/7] 清理：stale 捆绑拷贝 / __pycache__ / 旧 dist"
+echo "[2/8] 清理：stale 捆绑拷贝 / __pycache__ / 旧 dist"
 rm -rf "$RUNTIME/node_modules/boss-resume-assistant"
 rm -rf "$BOSS/scripts/__pycache__"
 rm -rf "$BOSS/dist" "$RUNTIME/dist"
 rm -f "$TGZ"
 
-echo "[3/7] npm pack（prepack 自动：构建 boss CLI → 构建 runtime → install-links 捆绑）"
+echo "[3/8] npm pack（prepack 自动：构建 boss CLI → 构建 runtime → install-links 捆绑）"
 (cd "$RUNTIME" && npm pack >/dev/null 2>&1)
 [ -f "$TGZ" ] || { echo "打包失败：未产出 $TGZ"; exit 1; }
 
-echo "[4/7] 产物校验"
+echo "[4/8] 产物校验"
 SIZE=$(wc -c < "$TGZ")
 if [ "$SIZE" -gt $((15 * 1024 * 1024)) ]; then
     echo "失败：包体 $((SIZE / 1024 / 1024))MB 超过 15MB——大概率 OCR 环境混入（正常 ~3.4MB）"
@@ -87,7 +87,7 @@ grep -q "boss-resume-assistant/dist/src/cli/index.js" <<<"$LIST" \
 grep -q "dist/src/cli.js" <<<"$LIST" || { echo "失败：缺少 runtime 入口"; exit 1; }
 echo "  体积 $((SIZE / 1024 / 1024))MB、无 OCR 残留、捆绑 boss@$BUNDLED_VER、必需脚本齐全"
 
-echo "[5/7] 冒烟（干净目录安装 + 双 CLI 可执行）"
+echo "[5/8] 冒烟（干净目录安装 + 双 CLI 可执行）"
 if [ "$SKIP_SMOKE" = "--skip-smoke" ]; then
     echo "  跳过（--skip-smoke；发布前请自行补做，README §二.3）"
 else
@@ -99,10 +99,10 @@ else
     echo "  aid-runtime / boss CLI 均可执行"
 fi
 
-echo "[6/7] 产物移入 clients/release/"
+echo "[6/8] 产物移入 clients/release/"
 mv "$TGZ" "$RELEASE/"
 
-echo "[7/7] VERSION.txt"
+echo "[7/8] VERSION.txt"
 STAMP=$(date +%Y-%m-%d)
 python - "$VER" "$STAMP" "$RELEASE/VERSION.txt" <<'PYEOF'
 import io, sys, os
@@ -113,9 +113,26 @@ entry = (
     f"{ver} 相对上一版本的变化\n（发布前请把本行替换为实际变更说明）\n\n"
 )
 s = io.open(path, encoding="utf-8").read() if os.path.exists(path) else ""
-io.open(path, "w", encoding="utf-8").write(entry + s)
-print(f"  已插入 {ver} 占位条目（发布前补充实际变更说明）")
+if f"agent-tool-runtime {ver}（" in s:
+    print(f"  VERSION.txt 已有 {ver} 条目，跳过占位插入")
+else:
+    io.open(path, "w", encoding="utf-8").write(entry + s)
+    print(f"  已插入 {ver} 占位条目（发布前补充实际变更说明）")
 PYEOF
+
+echo "[8/8] 客户交付 zip（tgz + 手册 + 启动/自启/诊断脚本 + VERSION.txt）"
+BSDTAR="/c/Windows/System32/tar.exe"
+[ -f "$BSDTAR" ] || BSDTAR="$(command -v tar)"
+ZIP_OUT="$RELEASE/aidwork-recruiting-client-$VER.zip"
+rm -f "$ZIP_OUT"
+# bsdtar -a 按扩展名出 zip；-C 到 release 目录保证包内条目是平铺结构（与历史版本一致）
+(cd "$RELEASE" && "$BSDTAR" -a -c -f "$ZIP_OUT" \
+    "agent-tool-runtime-$VER.tgz" \
+    "安装手册.md" "VERSION.txt" \
+    "start_runtime.bat" "register_runtime_task.ps1" \
+    "collect_logs.bat" "collect_logs.ps1")
+[ -f "$ZIP_OUT" ] && [ "$(wc -c < "$ZIP_OUT")" -gt 1000000 ] \
+    || { echo "失败：zip 产出异常"; exit 1; }
 
 echo ""
 echo "=== 打包完成: clients/release/agent-tool-runtime-$VER.tgz ($((SIZE / 1024 / 1024))MB) ==="
