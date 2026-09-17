@@ -3,9 +3,15 @@
 # 一键同步：生产租户数据 -> 仿真环境（严格单向，无任何反向路径）
 #
 # 用法:
-#   ./sync_tenant_to_sim.sh --tenant <tenant_id> [--wipe] [--redis] [--dry-run]
+#   ./sim.sh --tenant <tenant_id> [--wipe] [--redis] [--skip-code] [--dry-run]
 #
 # 行为:
+#   0. 代码同步（默认执行，--skip-code 跳过）: 保证仿真代码与生产同版本，便于复现 bug
+#      - rsync 生产工作区 /var/www/agent -> /var/www/agent1（排除 .env/.git/log/configs/
+#        plans/storage/uploads/frontend/node_modules，configs 仿真侧独立维护）
+#      - 重放「仿真门控增量」: 以 sim-base tag（记录上次同步的生产基准提交）为基准导出
+#        agent1 独有提交的 patch，rsync 后 git apply --3way 重放并提交，基准前移。
+#        若此前跑过 agent1_update.sh（git 验证模式），工作区即 master 代码、增量为空，自然退化为纯 rsync
 #   1. 安全断言（fail-fast）：写入目标库必须为 aid_work_agent1；
 #      生产侧账号必须为只读账号 aid_readonly
 #   2. 数据同步：动态枚举生产库所有含 tenant_id 列的表，逐表 COPY 同步
@@ -45,12 +51,13 @@ declare -A WIPE_RULES=(
 )
 
 # ---------- 参数解析 ----------
-TENANT="" ; DO_WIPE=0 ; DO_REDIS=0 ; DRY_RUN=0
+TENANT="" ; DO_WIPE=0 ; DO_REDIS=0 ; DRY_RUN=0 ; SKIP_CODE=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --tenant)  TENANT="$2" ; shift 2 ;;
     --wipe)    DO_WIPE=1 ; shift ;;
     --redis)   DO_REDIS=1 ; shift ;;
+    --skip-code) SKIP_CODE=1 ; shift ;;
     --dry-run) DRY_RUN=1 ; shift ;;
     -h|--help) grep '^#' "$0" | sed 's/^# \{0,1\}//' ; exit 0 ;;
     *) echo "未知参数: $1（--help 查看用法）" ; exit 1 ;;
@@ -84,6 +91,93 @@ PROD_USER_ACTUAL=$(prod_psql -t -A -c "SELECT current_user")
 TENANT_EXISTS=$(prod_psql -t -A -c "SELECT COUNT(*) FROM tenants WHERE tenant_id = '$TENANT_SQL' OR tenant_id = 'tenant_$TENANT_SQL'")
 [[ "$TENANT_EXISTS" -ge 1 ]] || die "生产库不存在租户 $TENANT"
 log "断言通过：目标库 $SIM_DB，生产只读账号 $PROD_USER，租户 $TENANT 存在"
+
+# ---------- 代码同步（生产工作区 -> 仿真目录 + 重放仿真门控增量） ----------
+PROD_DIR="/var/www/agent"
+SIM_DIR="/var/www/agent1"
+PATCH_DIR="$SIM_DIR/log/sim_patches"
+GIT_PATHSPEC_EXCLUDES=(
+  ':(exclude)docs' ':(exclude)tests' ':(exclude)openspec' ':(exclude)plans'
+  ':(exclude)ext' ':(exclude)test_uploads' ':(exclude).claude' ':(exclude).agents'
+  ':(exclude).codebuddy' ':(exclude).zcode' ':(exclude).pytest_cache'
+)
+RSYNC_EXCLUDES=(
+  --exclude='.env' --exclude='.git/' --exclude='.db_passwords'
+  --exclude='log/' --exclude='configs/' --exclude='plans/'
+  --exclude='storage/' --exclude='uploads/'
+  --exclude='frontend/node_modules/'
+  --exclude='__pycache__/' --exclude='*.pyc'
+)
+
+if [[ $SKIP_CODE -eq 1 ]]; then
+  log "--skip-code: 跳过代码同步"
+else
+  [[ -d "$PROD_DIR/.git" && -d "$SIM_DIR/.git" ]] || die "代码同步需 $PROD_DIR 与 $SIM_DIR 均为 git 工作区"
+  git config --global --add safe.directory "$PROD_DIR" 2>/dev/null || true
+  git config --global --add safe.directory "$SIM_DIR" 2>/dev/null || true
+
+  PROD_HEAD=$(git -C "$PROD_DIR" rev-parse HEAD)
+  log "代码同步: 生产版本 $(git -C "$PROD_DIR" log -1 --format='%h %s')"
+
+  git -C "$SIM_DIR" fetch --all --quiet
+  # 仿真增量基准：优先 sim-base tag（每次代码同步/agent1_update.sh 后前移），首次用 merge-base
+  BASE=$(git -C "$SIM_DIR" rev-parse -q --verify sim-base 2>/dev/null \
+    || git -C "$SIM_DIR" merge-base HEAD "$PROD_HEAD")
+
+  sudo mkdir -p "$PATCH_DIR"
+  sudo chown "$(id -un):" "$PATCH_DIR"
+  PATCH_FILE="$PATCH_DIR/sim_delta_$(date +%Y%m%d_%H%M%S).patch"
+  git -C "$SIM_DIR" diff --binary "$BASE" HEAD -- . "${GIT_PATHSPEC_EXCLUDES[@]}" > "$PATCH_FILE"
+
+  if [[ $DRY_RUN -eq 1 ]]; then
+    log "== DRY-RUN 代码同步预览 =="
+    log "  生产基准: ${PROD_HEAD:0:12}"
+    log "  仿真增量基准: ${BASE:0:12}"
+    log "  待重放的仿真提交:"
+    git -C "$SIM_DIR" log --oneline "$BASE..HEAD" | sed 's/^/    /' || true
+    log "  增量 patch: $(wc -l < "$PATCH_FILE") 行 -> $PATCH_FILE"
+    log "  将 rsync 生产工作区（排除 .env/.git/log/configs/plans/storage/uploads/frontend/node_modules）"
+  else
+    log "rsync 生产工作区 -> 仿真目录..."
+    sudo rsync -a "${RSYNC_EXCLUDES[@]}" "$PROD_DIR/" "$SIM_DIR/"
+
+    log "清理 Python 字节码缓存..."
+    sudo find "$SIM_DIR" -name .git -prune -o -type f -name '*.pyc' -delete 2>/dev/null || true
+    sudo find "$SIM_DIR" -name .git -prune -o -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
+
+    git -C "$SIM_DIR" add -A -- . ':(exclude).env' ':(exclude).db_passwords'
+    if [[ -s "$PATCH_FILE" ]]; then
+      log "重放仿真门控增量（git apply --3way）..."
+      git -C "$SIM_DIR" apply --3way "$PATCH_FILE" \
+        || die "仿真增量重放失败（生产可能改动了同一区域）。patch 已保留: $PATCH_FILE，请手工合并后 git add，再重跑本脚本"
+      git -C "$SIM_DIR" add -A -- . ':(exclude).env' ':(exclude).db_passwords'
+    fi
+    if ! git -C "$SIM_DIR" diff --cached --quiet; then
+      git -C "$SIM_DIR" commit -q -m "chore(sim): 同步生产代码 ${PROD_HEAD:0:8} + 重放仿真增量"
+      log "已提交同步结果"
+    else
+      log "仿真代码与生产一致，无代码变更"
+    fi
+    git -C "$SIM_DIR" tag -f sim-base "$PROD_HEAD" >/dev/null
+
+    log "configs 差异核对（仿真独立维护，仅提示不覆盖）:"
+    sudo diff -rq "$PROD_DIR/configs" "$SIM_DIR/configs" 2>/dev/null | sed 's/^/  /' || true
+
+    if [[ -n "$(docker ps --filter name=^aid-agent-api1$ --filter status=running -q)" ]]; then
+      log "重启仿真容器 aid-agent-api1..."
+      (cd "$SIM_DIR" && docker compose -f docker-compose.sim.yml restart)
+      HEALTH_OK=0
+      for i in $(seq 1 24); do
+        if curl -sf http://localhost:8010/health >/dev/null; then HEALTH_OK=1; break; fi
+        sleep 5
+      done
+      [[ $HEALTH_OK -eq 1 ]] && log "仿真环境健康检查通过 (localhost:8010/health)" \
+        || warn "健康检查超时（120s），请查看 docker logs aid-agent-api1"
+    else
+      log "仿真容器未运行，跳过重启（需要时: cd $SIM_DIR && docker compose -f docker-compose.sim.yml up -d）"
+    fi
+  fi
+fi
 
 # ---------- 表清单 ----------
 TABLES=$(prod_psql -t -A -c "

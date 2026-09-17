@@ -20,7 +20,7 @@
 
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
-| 20260917-1201 | 生产 243 仿真环境（staging） | 🔧 部分完成 | 代码层完成（a7394c1a）：SIMULATION_MODE 门控（SMTP/通知 dry-run、附件删除跳过、启动横幅）+ 同步脚本 + sim compose + nginx conf；243 服务器侧已上线（2026-09-17）：建库建账号 + schema 初始化（属主移交 aid_sim_user）+ 代码 rsync + cherry-pick + nginx 白名单上线（白名单放 snippets/ 避免 http 层污染生产的踩坑已回写文档）+ aid-agent-api1 healthy、启动横幅生效、表 149 张自动补齐；待 P1 验收（办公 IP 访问 + 同步真实租户联调）。 | [设计](system/simulation-env-design.md) | — |
+| 20260917-1201 | 生产 243 仿真环境（staging） | 🔧 部分完成 | 代码层完成（a7394c1a）：SIMULATION_MODE 门控（SMTP/通知 dry-run、附件删除跳过、启动横幅）+ 同步脚本 + sim compose + nginx conf；243 服务器侧已上线（2026-09-17）：建库建账号 + schema 初始化（属主移交 aid_sim_user）+ 代码 rsync + cherry-pick + nginx 白名单上线（白名单放 snippets/ 避免 http 层污染生产的踩坑已回写文档）+ aid-agent-api1 healthy、启动横幅生效、表 149 张自动补齐；2026-09-17 更新脚本落地：sim.sh 默认附带代码同步（rsync 生产工作区 + sim-base 基准重放仿真增量，--skip-code 可跳过）+ 新增 agent1_update.sh 验证模式（git 拉取指定版本 + 前端构建，与复现模式互斥）；待 P1 验收（办公 IP 访问 + 同步真实租户联调）。 | [设计](system/simulation-env-design.md) | — |
 | 20260916-1534 | 阿里云 ASR AccessKey 更换指南 | ✅ 已完成 | AK 到期重新申请流程（RAM 用户创建、Secret 一次性保存、AliyunNLSFullAccess 授权）。 | [运维文档](ops/aliyun-asr-accesskey-renewal.md) | — |
 | 20260912-2313 | 端侧会话任务执行器（P5 后续） | 🔧 部分完成 | 发送合并后五条实验通过，平均18秒；联系人搜索不再依赖聊天输入框布局。 | [设计](design/desktop-automation/edge-session-task-design.md) | [C0–C5 计划](plans/desktop-automation/plan-edge-session-task.md) / [2026-09-15联测交接](plans/desktop-automation/edge-session-handoff-2026-09-15.md) |
 | 20260819-1126 | 母体 Agent 收敛（agent.py Kernel 化） | 📋 待开发 | **不设专项重构、不阻塞其他工作**，继续采用“冻结增长 + 有真实需求时伴生拆分”。 | [原则](system/agent-kernel-convergence-principles.md) | — |

@@ -105,22 +105,22 @@
 - LLM / Embedding 调用照常执行（复现 bug 往往正需要真实模型行为），费用走同一批 API key 真实计费，**计费落仿真库 `chat_records`**，不影响生产租户额度统计。
 - 知识库检索、数据库读写均落仿真库；附件读共享生产目录（§5.4），与生产数据无写冲突。
 
-## 5. 一键同步脚本设计 `deploy/sync_tenant_to_sim.sh`
+## 5. 一键同步脚本设计 `deploy/sim.sh`
 
 ### 5.1 用法
 
 ```bash
 # 同步指定租户（数据 + Redis 状态；附件共享不复制）
-./sync_tenant_to_sim.sh --tenant <tenant_id>
+./sim.sh --tenant <tenant_id>
 
 # 同步前先清空仿真库中该租户旧数据（推荐，避免多轮同步后数据混杂）
-./sync_tenant_to_sim.sh --tenant <tenant_id> --wipe
+./sim.sh --tenant <tenant_id> --wipe
 
 # 同时镜像 Redis 状态（生产 prefix -> 仿真 prefix 改写复制，见 §5.3）
-./sync_tenant_to_sim.sh --tenant <tenant_id> --redis
+./sim.sh --tenant <tenant_id> --redis
 
 # 只看将执行的操作，不实际执行
-./sync_tenant_to_sim.sh --tenant <tenant_id> --dry-run
+./sim.sh --tenant <tenant_id> --dry-run
 ```
 
 ### 5.2 同步流程
@@ -181,7 +181,7 @@
 
 ## 8. 复现 bug 标准流程（SOP）
 
-1. `sync_tenant_to_sim.sh --tenant <tid> --wipe --redis --dry-run` 预览 → 正式同步
+1. `sim.sh --tenant <tid> --wipe --redis --dry-run` 预览 → 正式同步
 2. 核对仿真代码与生产同版本（rsync 时间戳；必要时先 rsync 代码）
 3. `docker compose -f docker-compose.sim.yml start`，确认启动横幅为「仿真环境」
 4. 办公网内访问 `https://agent1.aidingyi.cn`，用该租户用户账号登录（users 表已同步，密码 hash 一致可正常登录）
@@ -199,7 +199,7 @@
 | P0-2 | 仿真目录初始化：rsync 代码、独立 `.env` / `configs/`、`docker-compose.sim.yml`（附件挂载指向生产目录、Redis 共用 + prefix=aid-agent1） | compose 文件 |
 | P0-3 | SIMULATION_MODE 代码门控：`simulation_mode` 配置项 + 主动外呼 dry-run + 附件删除/覆盖写出口收口门控 + 启动横幅 | 代码 + 单测 |
 | P0-4 | nginx conf 重建 + IP 白名单 + callback 放行 location | conf 文件 |
-| P0-5 | 同步脚本 v1（断言 + 动态枚举 + 渠道凭证置空 + --redis prefix 镜像 + 报告） | `deploy/sync_tenant_to_sim.sh` |
+| P0-5 | 同步脚本 v1（断言 + 动态枚举 + 渠道凭证置空 + --redis prefix 镜像 + 报告） | `deploy/sim.sh` |
 | P1 | 验收：同步一个测试租户 → 起环境 → ①测试渠道应用收发消息正常 ②主动外呼 dry-run 生效 ③生产回调误路由被验签拒答 ④附件新增正常、删除/覆盖被门控跳过 ⑤Redis prefix 隔离互不污染 | 验收记录 |
 | P2（可选增强） | 同步脱敏选项（客户姓名/手机号等字段 masking）；background 容器按需门控方案；附件硬链接镜像（若审计发现大量 in-place 写路径） | — |
 
