@@ -713,15 +713,18 @@ class KnowledgeBaseService:
 
             # 删除文件
             if file_path and os.path.exists(file_path):
-                os.remove(file_path)
-                # 清理空的租户目录
-                try:
-                    parent_dir = os.path.dirname(file_path)
-                    if os.path.isdir(parent_dir) and not os.listdir(parent_dir):
-                        os.rmdir(parent_dir)
-                        logger.info(f"已清理空目录: {parent_dir}")
-                except OSError:
-                    pass  # 目录非空或无权限，忽略
+                from src.core.simulation import skip_disk_delete
+
+                if not skip_disk_delete(file_path, context="knowledge_doc_delete"):
+                    os.remove(file_path)
+                    # 清理空的租户目录
+                    try:
+                        parent_dir = os.path.dirname(file_path)
+                        if os.path.isdir(parent_dir) and not os.listdir(parent_dir):
+                            os.rmdir(parent_dir)
+                            logger.info(f"已清理空目录: {parent_dir}")
+                    except OSError:
+                        pass  # 目录非空或无权限，忽略
 
             logger.info(f"后端日志：文档删除成功，doc_id={doc_id}")
             return {"success": True, "message": "文档已删除"}

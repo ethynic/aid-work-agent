@@ -1,0 +1,58 @@
+# ============================================================================
+# 仿真环境（staging）compose —— 仅部署 api1 容器
+#
+# 设计文档: docs/system/simulation-env-design.md
+# 部署位置: 243 服务器 /var/www/agent1/docker-compose.sim.yml
+#
+# 隔离要点（与生产的差异）:
+#   - 不部署 background 容器（物理消除定时类主动外呼）
+#   - Redis 共用生产 aid-redis 实例，REDIS_KEY_PREFIX=aid-agent1（见 .env）
+#   - 附件目录直接共享挂载生产 agent_storage / agent_uploads（写删由
+#     SIMULATION_MODE 代码门控防护，见 src/core/simulation.py）
+#   - 数据库为同实例新库 aid_work_agent1 / aid_work_logs1（专用账号）
+#   - SIMULATION_MODE=1 启用副作用门控
+#
+# 使用:
+#   docker compose -f docker-compose.sim.yml up -d     # 启动（用完即停）
+#   docker compose -f docker-compose.sim.yml stop      # 停止（默认状态）
+#
+# ⚠️ 修改 .env 后必须 up -d --force-recreate 才能生效（restart 不重读 env_file）
+# ⚠️ 首次使用前确认外部网络名：docker network ls | grep agent
+#    （生产 compose 项目创建的默认网络，redis/postgres 容器在其上）
+# ============================================================================
+networks:
+  aid-prod-net:
+    external: true
+    name: ${SIM_EXTERNAL_NETWORK:-agent_default}   # 按服务器实际网络名调整
+
+services:
+  api:
+    container_name: aid-agent-api1
+    image: aid-agent-api:latest
+    restart: "no"                    # 按需启停，不随机自启
+    ports:
+      - "8010:8000"
+    env_file:
+      - .env
+    environment:
+      - WORKERS=2                    # 低配限额，避免与生产争抢
+      - SIMULATION_MODE=1
+    volumes:
+      - /var/www/agent1:/app
+      - /var/www/agent1/log:/app/log
+      - /var/www/agent1/configs:/app/configs
+      - /var/www/agent1/skills:/app/skills
+      # 附件共享生产目录（读写；删除/覆盖由 SIMULATION_MODE 门控跳过）
+      - /var/www/qb3_upload/agent_storage:/app/storage
+      - /var/www/qb3_upload/agent_uploads:/app/uploads
+    tmpfs:
+      - /tmp:size=200m,mode=1777     # Playwright/Chromium 需要可写 /tmp
+    mem_limit: 4g
+    cpus: 1.5
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      retries: 3
+      start_period: 60s
+    networks:
+      - aid-prod-net

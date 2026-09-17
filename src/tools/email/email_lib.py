@@ -76,18 +76,36 @@ def send_email(user_email: UserEmail, to, subject: str, body: str, cc="") -> Dic
     Returns:
         发送详情（from/to/cc/subject，to/cc 为归一化后的展示字符串）
     """
-    msg = MIMEMultipart()
-    msg["From"] = user_email.email_address
-    msg["Subject"] = subject
-
     to_str, recipients = _split_addresses(to)
     if not recipients:
         # to 为空白/纯逗号等归一化后无有效地址：必现失败，直接抛已知错误，
         # 避免 SMTPRecipientsRefused 落入兜底文案"请稍后重试"误导重试
         raise EmailLibError("收件人地址无效，请检查收件人邮箱地址")
+    cc_str = ""
+    if cc:
+        cc_str, _ = _split_addresses(cc)
+
+    from src.core.simulation import is_simulation_mode
+
+    if is_simulation_mode():
+        # 仿真环境：不建立 SMTP 连接，仅记录发送意图
+        from loguru import logger
+
+        logger.warning(f"仿真环境门控：SMTP dry-run to={to_str} cc={cc_str} subject={subject}")
+        return {
+            "from": user_email.email_address,
+            "to": to_str,
+            "cc": cc_str,
+            "subject": subject,
+            "dry_run": True,
+        }
+
+    msg = MIMEMultipart()
+    msg["From"] = user_email.email_address
+    msg["Subject"] = subject
+
     msg["To"] = to_str
 
-    cc_str = ""
     if cc:
         cc_str, cc_recipients = _split_addresses(cc)
         msg["Cc"] = cc_str

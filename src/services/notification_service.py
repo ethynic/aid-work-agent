@@ -76,6 +76,14 @@ class NotificationService:
     async def _send_email(self, message: NotificationMessage) -> bool:
         """通过 SMTP 发送邮件通知"""
         try:
+            from src.core.simulation import is_simulation_mode
+
+            if is_simulation_mode():
+                logger.warning(
+                    f"仿真环境门控：邮件通知 dry-run recipient={message.recipient} title={message.title}"
+                )
+                return True
+
             from src.config.settings import settings
 
             smtp_server = getattr(settings.tools.email, "smtp_server", None)
@@ -140,6 +148,14 @@ class NotificationService:
     async def _send_webhook(self, message: NotificationMessage) -> bool:
         """通过 Webhook 发送通知"""
         try:
+            from src.core.simulation import is_simulation_mode
+
+            if is_simulation_mode():
+                logger.warning(
+                    f"仿真环境门控：Webhook 通知 dry-run recipient={message.recipient} title={message.title}"
+                )
+                return True
+
             from src.config.settings import settings
 
             webhook_url = ""

@@ -378,6 +378,9 @@ class AppConfig(BaseModel):
     # 对外可访问的基础 URL，用于构造文件下载链接等完整 URL
     # 生产环境应设置为实际域名，如 "https://your-domain.com"
     public_base_url: str = ""
+    # 仿真环境（staging）开关：SIMULATION_MODE=1 时启用副作用防护
+    # （主动外呼 dry-run、租户附件磁盘删除跳过），见 src/core/simulation.py
+    simulation_mode: bool = False
 
 
 class SaasConfig(BaseModel):
@@ -716,6 +719,8 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
 
     if os.getenv("DEBUG", "").lower() in ("true", "1", "yes"):
         yaml_config.setdefault("app", {})["debug"] = True
+    if os.getenv("SIMULATION_MODE") is not None:
+        yaml_config.setdefault("app", {})["simulation_mode"] = os.getenv("SIMULATION_MODE", "").lower() in ("true", "1", "yes")
     if os.getenv("PUBLIC_BASE_URL"):
         yaml_config.setdefault("app", {})["public_base_url"] = os.getenv("PUBLIC_BASE_URL")
 

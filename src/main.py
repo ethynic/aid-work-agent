@@ -25,6 +25,7 @@ from src.config.logging import setup_logging
 from src.core.agent import master_agent
 from src.core.agent_router import agent_router
 from src.core.redis_client import redis_client
+from src.core.simulation import skip_disk_delete
 from src.core.session_queue import session_queue
 from src.core.agent_events import extract_downloadable_file
 from src.models.message import UnifiedMessage
@@ -396,6 +397,10 @@ async def lifespan(app: FastAPI):
 
     # On startup
     logger.info(f"Starting {settings.app.name} v{settings.app.version}")
+    if getattr(settings.app, "simulation_mode", False):
+        logger.warning("=" * 60)
+        logger.warning("⚠️ 仿真环境（SIMULATION_MODE=1）：主动外呼 dry-run、租户附件磁盘删除跳过")
+        logger.warning("=" * 60)
     logger.info(f"LLM Provider: {settings.llm.provider}, Model: {settings.llm.qwen.model}, Base URL: {settings.llm.qwen.base_url}")
     logger.info(f"Registered tools: {master_agent.tool_registry.list_tools()}")
 
@@ -1036,7 +1041,7 @@ async def delete_uploaded_file(file_id: str):
 
     try:
         file_path = Path(file_info["path"])
-        if file_path.exists():
+        if file_path.exists() and not skip_disk_delete(file_path, context="upload_delete"):
             file_path.unlink()
             # 清理空的租户目录
             try:

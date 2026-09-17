@@ -550,7 +550,11 @@ class ImageRegistry:
                 path_str = data.get("path")
                 if path_str:
                     try:
-                        if os.path.exists(path_str):
+                        from src.core.simulation import skip_disk_delete
+
+                        if os.path.exists(path_str) and not skip_disk_delete(
+                            path_str, context="image_cleanup_temp"
+                        ):
                             os.remove(path_str)
                     except OSError as e:
                         logger.warning(

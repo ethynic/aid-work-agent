@@ -245,6 +245,10 @@ def cleanup_orphan_storage_dirs() -> List[str]:
             logger.opt(exception=True).error(f"孤儿存储目录复核失败（跳过该目录）: {entry}: {e}")
             continue
         try:
+            from src.core.simulation import skip_disk_delete
+
+            if skip_disk_delete(entry, context="tenant_purge_orphan_dir"):
+                continue
             shutil.rmtree(entry)
             removed.append(entry.name)
             logger.info(f"孤儿存储目录已删除: {entry}")
@@ -260,6 +264,10 @@ def _remove_tenant_storage_dir(tenant_id: str) -> None:
         # 存储目录名使用规范化 ID（剥离 tenant_ 前缀），见 src/core/storage.py normalize_tenant_id
         target = Path(get_tenants_storage_root()) / normalize_tenant_id(tenant_id)
         if target.is_dir():
+            from src.core.simulation import skip_disk_delete
+
+            if skip_disk_delete(target, context="tenant_purge_storage_dir"):
+                return
             shutil.rmtree(target)
             logger.info(f"租户附件目录已删除: {target}")
     except Exception as e:
