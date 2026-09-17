@@ -44,7 +44,7 @@ context:
 - 所有中间产物（analysis.json、分片 items、items.json、xlsx）用绝对路径存放在 $SKILL_TMP_DIR 下的一次性子目录，跨命令引用一律写绝对路径
 - probe_pdf 只探查关键页，不要 --all 全书探查（节省上下文）
 - 大项目（条目 > 50 或拆分文件 > 3）必须分批编条目：每个拆分文件一个分片落 $OUT/parts/NN_<业态名>.json，每轮只编 10~25 条，编完立即落盘并简报进度（本批条目数 / 累计条目数）；全局参数只在第一个分片定义一次；全部完成后用 merge_items.py 合并再生成
-- 生成的每个 xlsx 用 cp 工具逐个注册回传给用户（register_download=True，display_name 用 NN_业态名_报价清单.xlsx）；条目多、图片多时生成阶段带 --size-budget-mb 15 控制单文件体积
+- 生成的每个 xlsx 用 cp 工具逐个注册回传给用户（register_download=True，display_name 用 NN_业态名_报价清单.xlsx）；体积控制首选拆分裁决时按空间部位细分（单文件目标 3~5MB），--size-budget-mb 15 仅作漏判兜底
 
 ## 硬约束
 

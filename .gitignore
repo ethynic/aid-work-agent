@@ -156,3 +156,6 @@ deploy/ssh_key
 .claude/scheduled_tasks.lock
 tmp/
 deploy/id_rsa
+
+# 第三方参考材料（原始技能包与样例 PDF，不入库；已迁移至 src/skills/）
+ext/建筑供应链智能体/
