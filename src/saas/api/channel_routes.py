@@ -451,7 +451,9 @@ async def _transcribe_voice_with_asr(
         if result.get("success"):
             return result.get("text", "")
         else:
-            logger.warning("[wecom_kf] 语音转文字失败: {}", result.get("error"))
+            # 工具内部（speech_to_text_tool）已打带 status/body 的 ERROR，此处降级
+            # INFO 仅记录渠道侧回退痕迹（返回 "[语音消息]"），避免重复告警刷屏
+            logger.info("[wecom_kf] 语音转文字失败: {}", result.get("error"))
             return "[语音消息]"
     except Exception as e:
         logger.error("[wecom_kf] 调用 ASR 工具异常: {}", e)

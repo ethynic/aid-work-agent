@@ -35,6 +35,7 @@
 | # | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
 | 68 | 客户端计费统一接入（boss cli / 协会采集 / 未来客户端三模式） | ✅ 已完成开发。 | [设计](design/billing/client-billing-integration-design.md) | — |
+| 74 | 生产主日志 WARNING 审计（09-16~09-18） | ✅ 全部完成。3 天 119 条 WARNING 聚合 8 类全部收口：#1 deepseek-flash 部署时差噪音、#3 丢弃预览加长 500 字符（含完整 ASR 文本）、#4 sanitizer 降级 INFO + source 来源标签（8 入口）、#6 Redis DNS 降级三层防御（compose 健康依赖 + 启动重试 + 恢复清残留）、#7 ASR 400 根因为免费试用过期（渠道侧 WARNING 降级 INFO）、#2/#5/#8 人工核对/观察；另 agent_update.sh 发版不再连带重启 redis、Redis 夜间巡检任务（每日 00:30）上线。 | — | [审计报告](ops/log-warning-audit-20260918.md) |
 | 53 | 租户间知识库共享 | ✅ 已完成开发。平台管理员两步配置实现知识库跨租户共享（A 租户知识库共享给 B 租户，B 数字员工检索时本租户+共享库合并检索）。 | [设计](system/knowledge-base/tenant-knowledge-sharing-design.md) | — |
 | 37 | 图片资产全链路承载能力（Phase 0+1+2） | **系统级横切能力**：定义图片资产（Image Asset）从来源/注册/寻址/嵌入/渲染的统一规范。 | [设计](system/image-asset-pipeline-design.md) · [主计划](plans/plan-image-asset-pipeline.md) · [Phase 3 计划](plans/plan-image-asset-pipeline-phase3.md) | — |
 | 6 | 记忆系统 | 短期记忆（滑动窗口）+ 长期记忆（摘要压缩），会话上下文管理 | [设计](memory/memory_design.md) | — |

@@ -16,7 +16,7 @@
 | 4 | `src.core.text_sanitizer:sanitize_text:26` | 5 | 1/0/4 | 中 | ✅ 已完成开发（降级 INFO + 补 source 来源标签，待部署） |
 | 5 | `src.wechat_mp.summarize:summarize:158/161` | 3 | 0/0/3 | 低 | 已有回退，观察 |
 | 6 | `src.core.redis_client:_connect:376` | 2 | 0/1/1 | 低 | ✅ 已完成开发（启动期重试 + compose 健康依赖 + 恢复清残留，待部署） |
-| 7 | `src.saas.api.channel_routes:_transcribe_voice_with_asr:454` | 1 | 09-16 | 低 | 单次，观察 |
+| 7 | `src.saas.api.channel_routes:_transcribe_voice_with_asr:454` | 1 | 09-16 | 低 | ✅ 已处理（根因 ASR 免费试用过期，日志降级 INFO，待部署） |
 | 8 | `src.tools.data_analysis.analysis_agent:run:158` | 1 | 09-16 | 低 | 单次，观察 |
 
 ---
@@ -94,8 +94,8 @@ wechat_mp 文章总结两次尝试均失败（回退 merged 原文入库）: Tim
 [wecom_kf] 语音转文字失败: 阿里云 ASR 服务异常: HTTP 400
 ```
 
-- **现象**：单次。HTTP 400 通常是音频格式/采样率不合规或音频文件损坏（如用户发的语音被截断）。
-- **处理建议**：单次观察；若复发收集当时的音频格式参数（format/rate）定位。
+- **现象**：单次。当时推测音频格式问题，后经 ERROR 日志确认真实根因：`status=40000010 Gateway:FREE_TRIAL_EXPIRED`（阿里云 ASR 免费试用过期，非音频问题），账户问题已另行处理。
+- **处理结论（2026-09-18）**：渠道侧 WARNING 降级 INFO——工具内部（`speech_to_text_tool._call_aliyun_asr`）每次非 200 已打带 status+body 的 ERROR，channel_routes 的 WARNING 属重复记录且信息更少，降级后仅保留「失败 -> 回退 [语音消息]」的渠道侧痕迹。
 
 ### 8. AnalysisAgent 空总结重试（1 条，09-16 15:09）
 
@@ -116,4 +116,4 @@ wechat_mp 文章总结两次尝试均失败（回退 merged 原文入库）: Tim
 | P1 | #2 wechat_mp 验签失败 | 涉及公众号接入可用性，需人工核对 token |
 | P2 | #4 sanitizer 无来源日志 | 治理盲区：有兜底但定位不了源头，补日志字段后再追 |
 | P2 | #3 连续 user 丢弃（ASR 场景） | 涉及用户语音输入丢失，低频但影响体验 |
-| P3 | #5 #6 #7 #8 | 均有兜底机制的单次/偶发事件，观察 |
+| P3 | #5 #6 #8 | 均有兜底机制的单次/偶发事件，观察（#7 已处理，#6 已开发完成） |
