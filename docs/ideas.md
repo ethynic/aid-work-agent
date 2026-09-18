@@ -112,4 +112,3 @@
 ## 调研报告索引
 
 已迁移至独立文件：[research_index.md](research_index.md)。
-| 20260918-2100 | 测试环境主日志 WARNING 审计（09-16~09-18） | ✅ 已完成开发 | 测试机 254 容器 aid-agent-api2 三天 4840 条 WARNING 聚合 15 类，全部收尾：#1 显示名重复告警删除（属正常设计，4627 条刷屏根除）、#9 deepseek-flash 复核为配置时差无需改码、#12 max iterations 升级 ERROR；余类不重要不处理或属正常业务日志。待部署。 | — | [审计报告](ops/log-warning-audit-20260918-testenv.md) |
