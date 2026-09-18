@@ -42,13 +42,21 @@ VISION_PARSE_SOURCE_TYPE = "wechat_mp_image_parse"  # chat_records.source_type�
 UNRECOGNIZED_TEXT = "图片无法识别"  # 模型按指令约定输出的不可识别标记
 
 # 解析指令（设计 §6.2：转述不发挥；WP12 强化：直接输出信息本身，禁止任何
-# 前缀/标签/标题行/说明性开场；措辞可微调语义不变）
+# 前缀/标签/标题行/说明性开场；WP13-r2 放宽：文字优先不变，无文字的图改一句话
+# 客观白描「是什么或什么场景」——石材纹理/装饰条等纯图不再误判为不可识别，
+# 仅真无法判读才输出 UNRECOGNIZED_TEXT 标记；措辞可微调语义不变）
 PARSE_INSTRUCTION = (
-    "直接输出图片中的文字信息与活动内容(时间/地点/优惠/产品名)，转述不评价不发挥；"
+    "若图中有文字：直接输出其中的文字信息与活动内容(时间/地点/优惠/产品名)，"
+    "转述不评价不发挥；若图中没有文字：用一句话客观描述这是什么或什么场景"
+    "(如\"大理石纹理板材图\"\"门店前台实景图\")，不评价不虚构不啰嗦；"
     "不要任何前缀、标签、标题行或说明性开场"
     "(如\"图片识别结果如下：\"\"标题：\"\"这张图片展示了…\")；"
-    f"无法识别时才输出\"{UNRECOGNIZED_TEXT}\""
+    f"确实无法判读图片内容时才输出\"{UNRECOGNIZED_TEXT}\""
 )
+
+# WP13-r2 描述长度护栏：成功路径描述统一 ≤100 字截断（白描放开后防模型长篇
+# 输出挤占 alt/总结输入），放 clean_description 之后仅作用成功路径；截断记 debug 日志
+MAX_DESCRIPTION_CHARS = 100
 
 # 并发限流（对齐 crawler OCR 并发，设计 §6.2）
 PARSE_CONCURRENCY = 3
@@ -409,12 +417,22 @@ class VisionParser:
                 last_reason = "empty_response"
                 continue
             if content == UNRECOGNIZED_TEXT:
-                # 按指令约定的不可识别输出：计 failed 且不计费（设计 §6.2 口径）
+                # 按指令约定的不可识别输出：计 failed 且不计费（设计 §6.2 口径）。
+                # WP13-r2：无文字图按新指令产出白描而不再输出该标记，此判定仅
+                # 保留给真不可判读的图片
                 return ImageParseFailure(n=n, reason="unrecognized")
             # WP12：产出清洗（剥「图片识别结果如下：」等标签前缀），仅成功路径；
+            # WP13-r2：统一 ≤MAX_DESCRIPTION_CHARS 截断（白描放开后防长篇）；
             # model/provider/usage 记当次实际调用目标与用量（WP13 按张按 token 计费）
+            description = clean_description(content)
+            if len(description) > MAX_DESCRIPTION_CHARS:
+                logger.bind(module="wechat_mp").debug(
+                    "wechat_mp VL 描述超长截断 n={} len={} limit={}",
+                    n, len(description), MAX_DESCRIPTION_CHARS,
+                )
+                description = description[:MAX_DESCRIPTION_CHARS]
             return ImageParseSuccess(
-                n=n, description=clean_description(content), model=target.model,
+                n=n, description=description, model=target.model,
                 provider=target.provider, usage=usage,
             )
         return ImageParseFailure(n=n, reason=last_reason)

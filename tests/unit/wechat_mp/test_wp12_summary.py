@@ -15,7 +15,7 @@
 - 计费：record_background_llm_usage 以 source='wechat_mp_summary'+model 被调用
   （monkeypatch 断言）；无 SessionRecord 线程的真实独立落账分支（chat_records 行）
 - 不变量：content_hash 按原始节点（VL 描述/总结均不进指纹）；同文章二次 claim
-  VL/总结 0 次调用、零计费；p2 存量行复核后重建为当前 pipeline（p4）总结版
+  VL/总结 0 次调用、零计费；p2 存量行复核后重建为当前 pipeline（p5）总结版
 
 抓取走 StubFetcher、总结走 FakeSummarizer/ArticleSummarizer+替身网关、VL 走
 FakeVision（照 test_service/test_wp10 范式）。每用例独立随机租户，测后清理。
@@ -302,7 +302,7 @@ class TestPipelineSummary:
         article = _query_one(
             "SELECT doc_id, pipeline_version FROM bs_wechat_mp_articles WHERE id = %s",
             (row_ids[0],))
-        assert article["pipeline_version"] == "p4"
+        assert article["pipeline_version"] == "p5"
         doc, doc_id = _doc_row(row_ids[0])
 
         assert doc["raw_text"] == BODY_V1  # raw_text 存 merged 全文（审计）
@@ -525,9 +525,9 @@ class TestInvariants:
             (tenant_id,))) == len(records_before)
         assert _tenant_balance(tenant_id) == balance_before
 
-    async def test_p2_row_rebuilt_as_summary_p4(self, tenant_id):
+    async def test_p2_row_rebuilt_as_summary_p5(self, tenant_id):
         """p2 存量行（hash 相同、pipeline 不匹配）复核后自动重建为当前 pipeline
-        （p4）总结版。"""
+        （p5）总结版。"""
         _create_tenant(tenant_id)
         html = make_article_html("存量p2", BODY_V1)
         fetcher = StubFetcher()
@@ -574,7 +574,7 @@ class TestInvariants:
             "SELECT processing_status, pipeline_version, doc_id FROM "
             "bs_wechat_mp_articles WHERE id = %s", (row_id,))
         assert article["processing_status"] == "success"
-        assert article["pipeline_version"] == "p4"
+        assert article["pipeline_version"] == "p5"
         all_text = _chunk_join(article["doc_id"])
         assert "p2 存量重建总结" in all_text
         assert "原文链接：" not in all_text

@@ -9,7 +9,8 @@
 - 禁 userinfo / IP 字面量 / 非常规端口；DNS 全量解析必须全部为公网 IP
   （防 DNS 重绑定到内网/回环），重定向**逐跳重新校验**（上限 3 跳）
 - Referer 固定 ``https://mp.weixin.qq.com/``（微信 CDN 防盗链要求）
-- 单张 ≤10MB（流式累计字节超限即中断）、超时 15s、每文章图片上限 30 张
+- 单张 ≤10MB（流式累计字节超限即中断）、超时 15s、每文章图片 200 张硬护栏
+  （防失控文章，非产品限制，WP13-r2 移除原 30 张产品上限）
 - 解码像素上限（防解压炸弹）：像素面积超限拒绝；长边超限等比缩小到 2000px
 
 转存路径对齐 src/core/storage.py 惯例：
@@ -42,7 +43,10 @@ from src.wechat_mp.fetcher import BROWSER_UA, _resolve_all_public
 DEFAULT_TIMEOUT_SECONDS = 15.0
 MAX_IMAGE_BYTES = 10 * 1024 * 1024  # 单张 10MB（设计 §6.1）
 MAX_REDIRECTS = 3  # 重定向上限（逐跳重新校验）
-MAX_IMAGES_PER_ARTICLE = 30  # 每文章图片上限（超出跳过，metadata 记 skipped_count）
+# WP13-r2：单篇图片防失控硬护栏（非产品限制）——原 30 张产品上限移除（奢石图集
+# 等 53 图长图集在 30 张处截断丢图）；200 仅防失控/异常超大文章拖垮下载与计费，
+# 超出部分不请求、记 skipped_over_limit（语义不变）
+MAX_IMAGES_PER_ARTICLE = 200
 REFERER = "https://mp.weixin.qq.com/"
 
 # 微信 CDN 白名单：host 必须以 .qpic.cn 结尾（WP0 实测 mmbiz/mmecoa.qpic.cn）

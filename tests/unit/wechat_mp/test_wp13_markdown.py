@@ -5,8 +5,9 @@
 - build_markdown 组装：图文交错保序、alt=VL 描述、无描述行 ![图片N](url)、
   纯图文章、无图文章、换行描述压缩 + 200 字截断、组装永不抛异常
 - 门禁放开：文字充足有图触发 VL（基础场景已改写进 test_wp10
-  test_text_rich_article_parses_images_gate_open）；37 图维持单篇 30 张上限，
-  超限图片行保留无描述
+  test_text_rich_article_parses_images_gate_open）；WP13-r2 移除单篇 30 张产品
+  上限——37 图全量解析（原超限 7 张无描述行语义取消），单篇仅保留 200 张
+  防失控硬护栏（skipped 只会来自该护栏）
 - 无多模态模型：有文本有图 → 入库成功不再 deferred、metadata 记
   image_parse_skipped_reason='no_model'、图片行无描述、不下载不解析；
   纯图无文本无模型 → 仍 deferred
@@ -16,7 +17,7 @@
   / image_failed_count（VL 失败 + 下载失败）/ image_skipped_count（超上限）
 - 计费：按每张实际 token 走标准算价——无价目模型走 deepseek-v4-flash 兜底、
   model = 实际模型、usage_breakdown.billing_mode='token'、失败张不计费
-- p4：存量 p3 行复核重建（content_md 生成、图片补解析）；hash 不变量：
+- p5：存量 p3 行复核重建（content_md 生成、图片补解析）；hash 不变量：
   二次 claim VL/总结 0 调用零计费
 
 抓取走 StubFetcher、总结走 FakeSummarizer、VL 走 FakeVision、下载走
@@ -97,7 +98,8 @@ class PartialDownloader:
 
 
 class LimitDownloader(FakeDownloader):
-    """模拟单篇 30 张上限的下载替身（超限部分计入 skipped_over_limit）。"""
+    """模拟单篇 200 张防失控硬护栏的下载替身（超限部分计入 skipped_over_limit，
+    WP13-r2：护栏非产品限制，正常文章不再触达）。"""
 
     def download(self, tenant_id, article_row_id, srcs):
         skipped = max(len(srcs) - MAX_IMAGES_PER_ARTICLE, 0)
@@ -292,12 +294,13 @@ class TestGateOpenPipeline:
             "第一段文字\n[图片1: 第一张的描述]\n第二段文字\n[图片2: 第二张的描述]"
         )
 
-    async def test_37_images_over_limit_keeps_placeholder_lines(self, tenant_id):
-        """37 图文章：维持单篇 30 张上限——前 30 张带描述，超限 7 张保留
-        ![图片N](地址) 无描述行；image_skipped_count = 7。"""
+    async def test_37_images_all_parsed_without_product_limit(self, tenant_id):
+        """WP13-r2 移除单篇 30 张产品上限：37 图全量下载解析、全部带描述，
+        image_skipped_count=0（skipped 只会来自 200 防失控护栏）；
+        计数同时回写文章列。"""
         _create_tenant(tenant_id)
         fetcher = StubFetcher()
-        fetcher.set_page(SHORT_URL, ok_result(make_image_only_html("超限文章", 37)))
+        fetcher.set_page(SHORT_URL, ok_result(make_image_only_html("长图集文章", 37)))
         svc = _make_service(fetcher, vision=FakeVision(), downloader=LimitDownloader())
 
         _, row_ids, _, _ = _enqueue(tenant_id, [SHORT_URL])
@@ -305,19 +308,27 @@ class TestGateOpenPipeline:
 
         doc, _ = _doc_row(row_ids[0])
         metadata = json.loads(doc["metadata"])
-        assert metadata["image_parsed_count"] == 30
+        assert metadata["image_parsed_count"] == 37
         assert metadata["image_failed_count"] == 0
-        assert metadata["image_skipped_count"] == 7
+        assert metadata["image_skipped_count"] == 0
+        # WP13-r2：解析计数成功路径回写文章列
+        assert _query_one(
+            "SELECT image_parsed_count FROM bs_wechat_mp_articles WHERE id = %s",
+            (row_ids[0],))["image_parsed_count"] == 37
 
         blocks = metadata["content_md"].split("\n\n")
         assert len(blocks) == 1 + 37  # 标题 + 37 个图片行
         assert blocks[1] == "![第1张图的内容转述](https://mmecoa.qpic.cn/wp5test/img_1.jpg)"
+        # 原 30 张上限两侧的图片行现在均带描述（超限无描述语义已移除）
         assert blocks[30] == (
             "![第30张图的内容转述](https://mmecoa.qpic.cn/wp5test/img_30.jpg)"
         )
-        # 超限图片行保留地址、无描述
-        assert blocks[31] == "![图片31](https://mmecoa.qpic.cn/wp5test/img_31.jpg)"
-        assert blocks[37] == "![图片37](https://mmecoa.qpic.cn/wp5test/img_37.jpg)"
+        assert blocks[31] == (
+            "![第31张图的内容转述](https://mmecoa.qpic.cn/wp5test/img_31.jpg)"
+        )
+        assert blocks[37] == (
+            "![第37张图的内容转述](https://mmecoa.qpic.cn/wp5test/img_37.jpg)"
+        )
 
 
 # =============================== 管道：无多模态模型 ===============================
@@ -470,13 +481,13 @@ class TestTokenBilling:
         assert float(records[0]["credit_cost"]) > 0
 
 
-# =============================== p4 重建与不变量 ===============================
+# =============================== p5 重建与不变量 ===============================
 
 
-class TestRebuildP4:
+class TestRebuildP5:
     async def test_p3_row_rebuilt_with_content_md_and_reparse(self, tenant_id):
-        """存量 p3 成功行（hash 相同、pipeline 不匹配）复核后重建为 p4：
-        content_md 生成、图片补解析（VL 再次调用并计费）。"""
+        """存量 p3 成功行（hash 相同、pipeline 不匹配）复核后重建为当前版本
+        （p5）：content_md 生成、图片补解析（VL 再次调用并计费）。"""
         _create_tenant(tenant_id)
         html = make_image_only_html("存量p3", 2)
         fetcher = StubFetcher()
@@ -494,7 +505,7 @@ class TestRebuildP4:
             "SELECT processing_status, pipeline_version, doc_id FROM "
             "bs_wechat_mp_articles WHERE id = %s", (row_ids[0],))
         assert article["processing_status"] == "success"
-        assert article["pipeline_version"] == "p4"
+        assert article["pipeline_version"] == "p5"
         assert len(vision.calls) == 1  # 图片补解析
         doc, _ = _doc_row(row_ids[0])
         metadata = json.loads(doc["metadata"])
@@ -507,7 +518,8 @@ class TestRebuildP4:
             "AND source_type = %s", (tenant_id, VISION_PARSE_SOURCE_TYPE))["c"] == 2
 
     async def test_hash_invariant_zero_cost_recheck(self, tenant_id):
-        """hash 不变量：VL/总结/md 均不进指纹；二次 claim（hash 未变 + p4 匹配）
+        """hash 不变量：VL/总结/md 均不进指纹；二次 claim（hash 未变 + 当前
+        pipeline 匹配）
         VL/总结 0 调用、零新计费、余额不变。"""
         _create_tenant(tenant_id)
         fetcher = StubFetcher()

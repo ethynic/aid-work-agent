@@ -6,14 +6,17 @@
   域名白名单（qpic.cn 精确后缀命中 / evil-qpic.cn 拒 / IP 字面量拒 / 非 HTTPS 拒 /
   DNS 非公网拒）、重定向逐跳校验（跳内网拒、跳其他 qpic 子域放行）、
   10MB 字节上限（Content-Length 与流式累计两路）、解码像素上限与长边缩小、
-  每文章 30 张上限、幂等复用（同 src 零下载 + src 变更不复用旧图）
+  每文章 200 张防失控硬护栏（WP13-r2 移除 30 张产品上限）、幂等复用（同 src
+  零下载 + src 变更不复用旧图）
 - VL 解析（vision.py）：目标选择（多模态清单 × provider 配置交集、无模型信号）、
   指令构造（单轮 user message、无系统提示/会话历史/工具 schema）、
   Semaphore(3) 并发上限、单张失败重试 1 次、「图片无法识别」计 failed、
+  无文字图白描成功（WP13-r2）、描述超长 ≤100 字截断（WP13-r2）、
   超限图片压缩（data URL 重编码 JPEG）
 - 管道（service.py）：纯图文章 + FakeVL → 入库成功且正文含 [图片N: 描述]、检索
   可见；FakeVL 全失败 → deferred；部分成功 → 失败保留 [图片N] 占位；文字充足有图
-  触发 VL（WP13 门禁放开）；deferred 存量文章在 p4 重建可达；转存路径落 metadata；
+  触发 VL（WP13 门禁放开）；deferred 存量文章在 p5 重建可达；转存路径落 metadata；
+  image_parsed_count 成功路径回写 articles 列（WP13-r2）；
   VL 无余额走 no_credit
 - 按张计费：WP13 起按每张实际 token 走标准算价（无价目模型走兜底）、
   usage_breakdown 对账字段、unknown 不重扣（含「embedding 成功 + 图片 unknown」
@@ -612,8 +615,9 @@ class TestDownloader:
         with Image.open(img.local_path) as check:
             assert max(check.size) == 10
 
-    def test_per_article_image_limit(self, tenant_id):
-        """每文章 30 张上限：超出部分不发起请求，记 skipped_over_limit。"""
+    def test_per_article_image_hard_cap(self, tenant_id):
+        """每文章 200 张防失控硬护栏（WP13-r2，非产品限制）：第 201 张起不发起
+        请求，计入 skipped_over_limit。"""
         requests = []
 
         def handler(request: httpx.Request) -> httpx.Response:
@@ -622,9 +626,9 @@ class TestDownloader:
                                   content=_png_bytes(1, 1))
 
         dl = MPImageDownloader(client=_make_client(handler), resolver=lambda h: True)
-        srcs = [(i, f"https://mmbiz.qpic.cn/{i}.jpg") for i in range(1, 36)]
+        srcs = [(i, f"https://mmbiz.qpic.cn/{i}.jpg") for i in range(1, 206)]
         outcome = dl.download(tenant_id, 9010, srcs)
-        assert outcome.ok_count == MAX_IMAGES_PER_ARTICLE
+        assert outcome.ok_count == MAX_IMAGES_PER_ARTICLE == 200
         assert outcome.skipped_over_limit == 5
         assert len(requests) == MAX_IMAGES_PER_ARTICLE
 
@@ -900,7 +904,10 @@ class TestVisionParser:
         assert len(gateways[("zhipu", "GLM-5.3-Flash")].calls) == 1
 
     def test_unrecognized_counts_failed(self, tmp_path):
-        """「图片无法识别」按约定计 failed（不计费语义由调用方保证）。"""
+        """「图片无法识别」按约定计 failed（不计费语义由调用方保证）。
+
+        WP13-r2：该判定保留给真不可判读的图片；无文字图按新指令产出白描
+        （见 test_textless_image_whitelist_description）。"""
         img = tmp_path / "img_1.png"
         img.write_bytes(_png_bytes(2, 2))
         gw = RecordingGateway(lambda i: _ok_response(UNRECOGNIZED_TEXT))
@@ -911,6 +918,39 @@ class TestVisionParser:
         outcome = asyncio.run(parser.describe_images([(1, str(img))], "t"))
         assert outcome.ok_count == 0
         assert outcome.failures[0].reason == "unrecognized"
+
+    def test_textless_image_whitelist_description(self, tmp_path):
+        """WP13-r2 无文字图白描：模型按新指令返回一句话客观描述 → 计 success，
+        描述原样保留（不再误判为「图片无法识别」）。"""
+        img = tmp_path / "img_1.png"
+        img.write_bytes(_png_bytes(2, 2))
+        gw = RecordingGateway(lambda i: _ok_response("大理石纹理板材图"))
+        parser = VisionParser(
+            targets=[VisionTarget("qwen", "qwen3-vl-plus")],
+            gateway_factory=lambda p, m: gw,
+        )
+        outcome = asyncio.run(parser.describe_images([(1, str(img))], "t"))
+        assert outcome.ok_count == 1
+        assert outcome.failures == []
+        assert outcome.descriptions[1] == "大理石纹理板材图"
+
+    def test_description_truncated_to_100_chars(self, tmp_path):
+        """WP13-r2 长度护栏：成功路径描述统一 ≤100 字截断（放 clean_description
+        之后），截断保留前 100 字。"""
+        img = tmp_path / "img_1.png"
+        img.write_bytes(_png_bytes(2, 2))
+        long_desc = "深灰炭黑基调的天然大理石纹理，" + "白色条带纹路贯穿，" * 20
+        assert len(long_desc) > 100
+        gw = RecordingGateway(lambda i: _ok_response(long_desc))
+        parser = VisionParser(
+            targets=[VisionTarget("qwen", "qwen3-vl-plus")],
+            gateway_factory=lambda p, m: gw,
+        )
+        outcome = asyncio.run(parser.describe_images([(1, str(img))], "t"))
+        assert outcome.ok_count == 1
+        desc = outcome.descriptions[1]
+        assert len(desc) == 100
+        assert desc == long_desc[:100]
 
     def test_empty_response_retried_then_failed(self, tmp_path):
         """空响应按失败重试 1 次，仍空 → failed(empty_response)。"""
@@ -1001,11 +1041,14 @@ class TestPipelineVL:
         assert item["status"] == "success" and item["action"] == "new"
 
         article = _query_one(
-            "SELECT processing_status, pipeline_version, doc_id, image_count "
-            "FROM bs_wechat_mp_articles WHERE id = %s", (row_ids[0],))
+            "SELECT processing_status, pipeline_version, doc_id, image_count, "
+            "image_parsed_count FROM bs_wechat_mp_articles WHERE id = %s",
+            (row_ids[0],))
         assert article["processing_status"] == "success"
-        assert article["pipeline_version"] == PIPELINE_VERSION == "p4"
+        assert article["pipeline_version"] == PIPELINE_VERSION == "p5"
         assert article["image_count"] == 2
+        # WP13-r2：解析计数成功路径回写文章列（口径=metadata.image_parsed_count）
+        assert article["image_parsed_count"] == 2
         doc_id = article["doc_id"]
         assert doc_id
 
@@ -1190,6 +1233,10 @@ class TestPipelineVL:
         # WP13 计数：1 张成功、2 张解析失败；content_md 中失败张 alt 用「图片N」
         assert metadata["image_parsed_count"] == 1
         assert metadata["image_failed_count"] == 2
+        # WP13-r2：成功路径回写文章列（部分成功 → 1，非 metadata 口径不一致）
+        assert _query_one(
+            "SELECT image_parsed_count FROM bs_wechat_mp_articles WHERE id = %s",
+            (row_ids[0],))["image_parsed_count"] == 1
         assert "![首图活动主题]" in metadata["content_md"]
         assert "![图片2]" in metadata["content_md"]
         assert "![图片3]" in metadata["content_md"]
@@ -1235,6 +1282,34 @@ class TestPipelineVL:
         assert doc["summary"] == "图文要点总结"
         metadata = json.loads(doc["metadata"])
         assert metadata["image_parsed_count"] == 2
+
+    async def test_textless_image_described_and_count_written_back(self, tenant_id):
+        """WP13-r2 无文字图白描端到端：模型返回一句话白描 → 计 success、描述入库
+        （raw_text 的 [图片N: 描述] 与 content_md 的 alt），articles.image_parsed_count
+        成功路径回写（原实现仅 metadata 有值、文章列恒 0）。"""
+        _create_tenant(tenant_id)
+        fetcher = StubFetcher()
+        fetcher.set_page(SHORT_URL, ok_result(image_only_html("奢石图集", 2)))
+        vision = FakeVision(descriptions={1: "大理石纹理板材图", 2: "门店前台实景图"})
+        svc = _make_service(fetcher, vision=vision, downloader=FakeDownloader())
+
+        _, row_ids, _ = _enqueue(tenant_id, [SHORT_URL])
+        assert (await svc.claim_and_run(tenant_id))["executed"] is True
+
+        article = _query_one(
+            "SELECT processing_status, image_count, image_parsed_count, doc_id "
+            "FROM bs_wechat_mp_articles WHERE id = %s", (row_ids[0],))
+        assert article["processing_status"] == "success"
+        assert article["image_count"] == 2
+        assert article["image_parsed_count"] == 2  # 成功路径回写文章列
+
+        doc = _query_one("SELECT raw_text, metadata FROM documents WHERE id = %s",
+                         (article["doc_id"],))
+        assert "[图片1: 大理石纹理板材图]" in doc["raw_text"]
+        assert "[图片2: 门店前台实景图]" in doc["raw_text"]
+        metadata = json.loads(doc["metadata"])
+        assert metadata["image_parsed_count"] == 2
+        assert "![大理石纹理板材图]" in metadata["content_md"]
 
     async def test_deferred_article_rebuilds_under_p3(self, tenant_id):
         """p1 deferred 存量文章在当前 pipeline 下重建可达：hash 相同但

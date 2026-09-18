@@ -141,6 +141,7 @@
 - **计费**:图片解析从固定 price_per_call 改为**按实际 token 计费**(每成功一张按该张实际 usage × 所用模型单价走标准 text 算价路径,含价目兜底;usage_breakdown 记 billing_mode='token' 与实际模型);实测均值 ≈0.18 积分/张(输入 1155+输出 305,倍率 100 已含),重图最高 ~0.9。price_per_call 种子行保留不用。
 - **不变量**:content_hash 仍按原始节点;VL/总结/md 均不进指纹;PIPELINE_VERSION p3→p4 存量复核自动重建(存量有图文章补付解析费,运营知会)。
 - 单测:md 组装(顺序/注释/无描述行/纯图/无图)、门禁放开(文字充足有图触发 VL)、无模型入库不 deferred、总结含图片信息、metadata schema(content_md/ingested_at/计数)、按 token 计费(重轻图差异/价目兜底)、p4 重建、hash 不变量。——2026-09-16 完成(三智能体:开发 557 passed;独立测试 16/16 探针修 build_markdown 降级路径可抛缺陷 1 处、全量 573 passed、两批混和工作区互扰检查通过;CR 无 P0/P1,P2 登记:A1 总结计费时序遗留已于 2026-09-16 移序修复（随 p4 放量的暴露面消除）、空描述仍计 parsed、降级中前序目标 token 不落账(少收不漏收);p4 存量重建成本评估:典型 10 图 ≈2-2.5 积分/篇、无图 ≈0.4-0.5、峰值 2000+/天/租户直至消化,deleted 不重建、recheck 20/tick 限速——部署前运营知会。注:工作区另混有列表源接入批次(另一会话,CR 快查无阻塞,文件归属清单见 CR 报告),service.py 为混合文件,提交需协调。待提交)
+- WP13-r2 迭代（2026-09-18，负责人定版）：①VL 指令放宽——文字优先不变，无文字图改一句话客观白描（成功路径统一 ≤100 字截断），真不可判读才输出「图片无法识别」（unrecognized 判定保留）；②移除单篇 30 张产品上限，改 200 张防失控硬护栏（非产品限制，skipped 语义不变）；③image_parsed_count 成功路径回写 articles 列（口径=metadata.image_parsed_count）。PIPELINE_VERSION p4→p5，存量复核自动重建（图片补解析，运营知会）。真机复验 53 图奢石文章：下载 53 成功 0 跳过（旧 23 张超限跳过）、VL 53 成功 0 失败（旧 30 下载中 20 张 unrecognized）。单测 wechat_mp 495 passed + channel_config 65 passed，未提交。
 
 ## 2. 测试与验收矩阵
 

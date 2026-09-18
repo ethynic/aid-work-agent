@@ -24,7 +24,8 @@
 - **余额**：run 启动预检（不足记 skipped_no_credit 终态）+ 每付费单元（embedding）
   前复查；action='check' 的复核类 item 不受启动预检阻断（删除复核免费）。
 - **图片 VL 解析（WP10，P2；WP13 门禁放开）**：有图即先下载转存微信 CDN 图片
-  （image_downloader.py，维持单篇 30 张上限）→ VL 解析（vision.py，无可用多模态
+  （image_downloader.py，单篇 200 张防失控硬护栏，非产品限制）→ VL 解析（vision.py，
+  无可用多模态
   模型不发纯文本模型）→ 描述插回正文入库；无模型不再 deferred——有文本照常入库，
   图片行保留地址、描述留空，metadata 记 image_parse_skipped_reason='no_model'；
   仅纯图且无任何可总结内容维持 deferred。VL 按张按实际 token 计费 source_type=
@@ -123,9 +124,12 @@ from src.services.billing import calculate_credit_cost
 # ------------------------------- 常量 -------------------------------
 
 # WP13：p3→p4（图文 Markdown 化——门禁放开有图即解析、metadata.content_md、
-# 总结输入改 content_md、图片计费改按实际 token）。存量 p3 文章在复核/pipeline
-# 不匹配时自动重建：有图文章补 VL 解析与 content_md（补付解析费，运营知会）。
-PIPELINE_VERSION = "p4"
+# 总结输入改 content_md、图片计费改按实际 token）。
+# WP13-r2：p4→p5（VL 指令放宽——无文字图改一句话客观白描，纯纹理/装饰条图不再
+# 计失败；单篇图片 30 张产品上限移除，改 200 张防失控硬护栏；image_parsed_count
+# 成功路径回写 articles 列）。存量 p4 文章在复核/pipeline 不匹配时自动重建：
+# 图片重新解析（补付解析费，运营知会）。
+PIPELINE_VERSION = "p5"
 DOC_ORIGIN = "wechat_mp"
 EMBEDDING_SOURCE_TYPE = "wechat_mp_embedding"
 EMBEDDING_MODEL = "text-embedding-v3"
@@ -2009,7 +2013,8 @@ class WeChatMPSyncService:
                 return
             # doc 行不存在 → 继续重建
 
-        # ---- 6. 图片解析（WP13 门禁放开：有图即下载→VL，维持单篇 30 张上限）----
+        # ---- 6. 图片解析（WP13 门禁放开：有图即下载→VL；WP13-r2 移除单篇 30 张
+        # 产品上限，下载侧保留 200 张防失控硬护栏）----
         # 「文字 < 20 且有图」门禁移除（负责人定稿：公众号文章基本是图文，图片
         # 内容与文本同等重要，必须进总结）；无多模态模型不再 deferred——有文本
         # 照常入库，图片行保留地址、描述留空（metadata 记缺失原因）；仅纯图且
@@ -2430,14 +2435,17 @@ class WeChatMPSyncService:
         article: Dict[str, Any],
         extracted: ExtractedArticle,
     ) -> Optional[Dict[str, Any]]:
-        """图片下载 + VL 解析（WP13 门禁放开：有图即解析，维持单篇 30 张上限）。
+        """图片下载 + VL 解析（WP13 门禁放开：有图即解析；WP13-r2 移除单篇 30 张
+        产品上限，单篇仅保留下载侧 200 张防失控硬护栏）。
 
         返回 dict：
         - merged_text：[图片N: 描述] 插回后的 merged 纯文本（raw_text 审计口径）
         - descriptions：{n: cleaned 描述}（content_md 的 alt 注释来源）
         - successes：VL 成功清单（按张按 token 计费）
         - image_meta：image_parsed_count / image_failed_count / image_skipped_count
-          （+ image_local_paths；无模型时另记 image_parse_skipped_reason='no_model'）
+          （+ image_local_paths；无模型时另记 image_parse_skipped_reason='no_model'）；
+          image_parsed_count 由 _persist_document_tx 在成功路径回写 articles 列；
+          skipped 只会来自 200 防失控护栏（非产品限制）
 
         返回 None 表示 item 已置终态，调用方直接返回：
         - 余额不足 → 复用 no_credit 语义（付费单元=按张 VL）
@@ -2510,6 +2518,7 @@ class WeChatMPSyncService:
             "image_parsed_count": len(outcome.successes),
             # 解析失败张 + 下载失败张（均无描述，不产生计费）
             "image_failed_count": len(outcome.failures) + len(dl.failures),
+            # WP13-r2：skipped 只会来自 200 防失控护栏（超出部分未发起请求）
             "image_skipped_count": dl.skipped_over_limit,
         }
         if dl.images:
@@ -2895,7 +2904,8 @@ class WeChatMPSyncService:
 
         WP13 增补（图文 Markdown 化）：content_md 存 metadata.content_md（# 标题 +
         文本段落 + ![VL描述](CDN地址)）；metadata.ingested_at = 入库时间（UTC ISO）；
-        image_meta 携带 image_parsed_count / image_failed_count / image_skipped_count。
+        image_meta 携带 image_parsed_count / image_failed_count / image_skipped_count，
+        其中 image_parsed_count 同时回写 articles 列（WP13-r2 补齐成功路径落库）。
 
         WP9 freepublish 可选参数（URL 通道不传即维持既有行为）：
         - location_url：文档位置字段与 articles.original_url 回填值（首个未删子篇 url）
@@ -3079,6 +3089,7 @@ class WeChatMPSyncService:
                         content_hash = %s, doc_id = %s,
                         status = 'active', processing_status = 'success',
                         pipeline_version = %s, image_count = %s,
+                        image_parsed_count = %s,
                         original_url = COALESCE(%s, original_url),
                         wx_update_time = COALESCE(%s, wx_update_time),
                         last_synced_at = now(), last_checked_at = now(),
@@ -3090,6 +3101,9 @@ class WeChatMPSyncService:
                         publish_time_naive,
                         content_hash, doc_id, PIPELINE_VERSION,
                         extracted.image_count,
+                        # WP13-r2：解析计数回写文章列（口径=metadata.image_parsed_count；
+                        # 无图/无模型场景 image_meta 为空或缺省 → 0）
+                        (image_meta or {}).get("image_parsed_count", 0),
                         # WP9：freepublish 回填首个未删子篇 url 与源更新时间；URL 通道传 None 保持现值
                         original_url_write, wx_update_time,
                         article["id"], tenant_id,
@@ -3668,7 +3682,7 @@ class WeChatMPSyncService:
         deferred 不进失败退避（next_retry_at=NULL，非技术失败）；自动重试由
         scheduler 24h 存活复核通道承接（processing_status='deferred' 在复核到期
         条件内，error_message 向用户承诺「将自动重试」）。复核后 pipeline_version
-        与当前 PIPELINE_VERSION（p4）不匹配，deferred 存量自动走重建分支
+        与当前 PIPELINE_VERSION（p5）不匹配，deferred 存量自动走重建分支
         （VL → 总结 → 入库），无需单独迁移。
         """
         with get_db_connection() as conn:
