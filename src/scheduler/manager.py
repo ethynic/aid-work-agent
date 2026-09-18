@@ -405,6 +405,24 @@ class ScheduledTaskManager:
         except Exception as e:
             logger.error(f"后端日志：注册 weixin_marketing 调度任务失败: {e}")
 
+        # ===== Redis 夜间巡检（每日 00:30；REDIS_INSPECTION_ENABLED 门控，默认关）=====
+        # 仅生产本地容器实例启用；测试环境为腾讯云托管 Redis（云监控覆盖），无需自巡检
+        try:
+            if settings.redis.enabled and settings.redis.inspection_enabled:
+                self._scheduler.add_job(
+                    self._run_redis_inspection,
+                    CronTrigger(hour=0, minute=30, timezone="Asia/Shanghai"),
+                    id="job_system_redis_inspection",
+                    name="Redis Inspection",
+                    max_instances=1,
+                    coalesce=True,
+                )
+                logger.info("后端日志：已注册 Redis 夜间巡检任务 (cron=00:30)")
+            else:
+                logger.debug("后端日志：Redis 巡检未启用（REDIS_INSPECTION_ENABLED），跳过注册")
+        except Exception as e:
+            logger.error(f"后端日志：注册 Redis 巡检任务失败: {e}")
+
         # ===== 端侧会话任务决策 worker（C3；session_tasks.enabled + 任一启用场景描述器）=====
         # tick 为同步入口（内部自带事件循环跑模型调用），与 APScheduler 解耦可直接注入调用；
         # 适配器/决策钩子注册仅在调度器启动时执行（ensure_registered，本函数上方调用），
@@ -985,6 +1003,15 @@ class ScheduledTaskManager:
                 tlog("video-agent-阶段三", "background_runner tick 异常 err={err}", err=str(e), level="ERROR")
             except Exception:
                 pass
+
+    # ===== Redis 夜间巡检回调（同步）=====
+    def _run_redis_inspection(self):
+        """Redis 夜间巡检（APScheduler 回调）。巡检逻辑见 src/core/redis_inspection.py。"""
+        try:
+            from src.core.redis_inspection import run_redis_inspection
+            run_redis_inspection()
+        except Exception as e:
+            logger.opt(exception=True).error(f"后端日志：Redis 夜间巡检任务异常: {e}")
 
     def shutdown(self):
         """优雅关闭"""

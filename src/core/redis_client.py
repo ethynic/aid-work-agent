@@ -429,6 +429,16 @@ class RedisClient:
         """返回真实 Redis 是否可用；安全关键分布式状态不得把内存降级视为可用。"""
         return self._ensure_connection()
 
+    def info(self, section: Optional[str] = None) -> Dict[str, Any]:
+        """返回 Redis INFO 指定 section（运维巡检用）；不可用时返回空 dict。"""
+        if not self._ensure_connection() or self._client is None:
+            return {}
+        try:
+            return self._client.info(section)
+        except Exception as e:
+            logger.warning(f"[Redis] INFO({section}) 查询失败: {e}")
+            return {}
+
     def probe_phase3_primitives(self) -> bool:
         """一次性探测 Browser Phase 3 实际使用的 Redis 原语（Phase 3R）。
 

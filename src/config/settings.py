@@ -307,6 +307,9 @@ class RedisConfig(BaseModel):
     db: int = 0
     ssl: bool = False
     key_prefix: str = ""  # Key 前缀，多实例共享同一 Redis 时用于隔离
+    # 夜间巡检开关：仅生产本地容器实例启用（测试环境为腾讯云托管 Redis，
+    # 云监控覆盖，无需自巡检）
+    inspection_enabled: bool = False
 
 
 class AuthConfig(BaseModel):
@@ -814,6 +817,8 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
         redis_cfg["ssl"] = os.getenv("REDIS_SSL", "").lower() in ("true", "1", "yes")
     if os.getenv("REDIS_KEY_PREFIX") is not None:
         redis_cfg["key_prefix"] = os.getenv("REDIS_KEY_PREFIX")
+    if os.getenv("REDIS_INSPECTION_ENABLED") is not None:
+        redis_cfg["inspection_enabled"] = os.getenv("REDIS_INSPECTION_ENABLED", "").lower() in ("true", "1", "yes")
     # 修复 config.yaml 中 ${...} 替换后遗留的字符串布尔值
     for bool_key in ("enabled", "ssl"):
         if bool_key in redis_cfg and isinstance(redis_cfg[bool_key], str):
