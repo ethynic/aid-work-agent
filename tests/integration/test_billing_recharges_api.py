@@ -145,11 +145,83 @@ class TestTenantRechargesORM:
         )
         stats = TenantRechargesDB.stats(tenant_id=tenant_id)
         assert "total_amount_yuan" in stats
+        assert "total_gift_amount_yuan" in stats
         assert "total_credits" in stats
         assert "total_count" in stats
         assert "recent_7d_trend" in stats
         assert stats["total_count"] >= 1
         assert stats["total_credits"] >= 800
+
+    def test_gift_recharge_excluded_from_total_amount(self, temp_tenant):
+        """赠送充值：积分照常入余额，但不计入 total_amount_yuan，计入 total_gift_amount_yuan"""
+        from src.db.models import TenantRechargesDB
+        from src.saas.db.tenant_db import TenantDB
+
+        tenant_id = temp_tenant["tenant_id"]
+        before = TenantDB.get_by_id(tenant_id)
+        balance_before = int(float(before.get("credit_balance") or 0))
+
+        normal = TenantRechargesDB.create(
+            tenant_id=tenant_id, amount_yuan=100.0, credits=1000, rate=10, source="manual"
+        )
+        gift = TenantRechargesDB.create(
+            tenant_id=tenant_id, amount_yuan=50.0, credits=500, rate=10, source="manual", is_gift=True
+        )
+        assert normal is not None and gift is not None
+        assert gift["is_gift"] is True
+
+        # 赠送充值余额照常累加（1000 + 500）；create 不失效缓存，需手动失效后查最新余额
+        from src.core.cache_utils import invalidate_tenant_cache
+        invalidate_tenant_cache(tenant_id)
+        after = TenantDB.get_by_id(tenant_id)
+        balance_after = int(float(after.get("credit_balance") or 0))
+        assert balance_after == balance_before + 1500
+
+        stats = TenantRechargesDB.stats(tenant_id=tenant_id)
+        assert stats["total_amount_yuan"] == pytest.approx(100.0)
+        assert stats["total_gift_amount_yuan"] == pytest.approx(50.0)
+        assert stats["total_count"] >= 2
+
+    def test_stats_real_only_filters_test_tenant(self, temp_tenant):
+        """real_only=True 时排除测试租户（默认 tenant_type=test）的充值"""
+        from src.db.models import TenantRechargesDB
+
+        tenant_id = temp_tenant["tenant_id"]
+        TenantRechargesDB.create(
+            tenant_id=tenant_id, amount_yuan=60.0, credits=600, rate=10, source="manual"
+        )
+        stats_all = TenantRechargesDB.stats(tenant_id=tenant_id, real_only=False)
+        assert stats_all["total_amount_yuan"] >= 60.0
+
+        stats_real = TenantRechargesDB.stats(tenant_id=tenant_id, real_only=True)
+        assert stats_real["total_amount_yuan"] == 0
+        assert stats_real["total_count"] == 0
+
+    def test_create_with_tenant_type_real(self):
+        """TenantDB.create 支持 tenant_type=real，get_by_id 返回该字段"""
+        from src.saas.db.tenant_db import TenantDB
+        from src.db.database import get_db_connection
+        import uuid
+
+        tenant_code = f"T{uuid.uuid4().hex[:6].upper()}"
+        tenant = TenantDB.create(
+            company_name=f"真实租户-{tenant_code}",
+            tenant_code=tenant_code,
+            tenant_type="real",
+        )
+        if not tenant:
+            pytest.skip("无法创建测试租户（DB 不可用）")
+        tenant_id = tenant["tenant_id"]
+        try:
+            assert tenant["tenant_type"] == "real"
+            fetched = TenantDB.get_by_id(tenant_id)
+            assert fetched["tenant_type"] == "real"
+        finally:
+            TenantDB.delete(tenant_id)
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM tenants WHERE tenant_id = %s", (tenant_id,))
+                conn.commit()
 
 
 class TestBillingRechargesAPI:

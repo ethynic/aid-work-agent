@@ -787,3 +787,9 @@
         DROP CONSTRAINT IF EXISTS session_task_control_requests_tenant_id_task_id_expected_co_key;
     CREATE UNIQUE INDEX IF NOT EXISTS uq_session_task_control_requests_idem
         ON session_task_control_requests (tenant_id, task_id, expected_control_epoch, expected_block_epoch, reason);
+- datetime: "2026-09-18 21:59:00"
+  remark: "租户类型与赠送金额字段：tenants 加 tenant_type（real=真实租户/test=测试租户，默认 test，仅影响平台统计页汇总口径）；tenant_recharges 加 is_gift（赠送充值积分照常入余额但不计入平台总充值金额汇总）"
+  statements: |
+    ALTER TABLE tenants ADD COLUMN IF NOT EXISTS tenant_type TEXT NOT NULL DEFAULT 'test';
+    COMMENT ON COLUMN tenants.tenant_type IS '租户类型：real=真实租户（真实金额充值）/ test=测试/演示租户（虚拟充值）。仅影响 /portal/recharge 与 /portal/token-usage 统计汇总口径，不影响审计数据';
+    ALTER TABLE tenant_recharges ADD COLUMN IF NOT EXISTS is_gift BOOLEAN NOT NULL DEFAULT FALSE;

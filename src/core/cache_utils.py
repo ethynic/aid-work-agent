@@ -32,7 +32,7 @@ class CacheKeys:
     TENANT_SUB_COUNT = "tenant_sub_cnt"  # tenant_sub_cnt:{tenant_id}
     AGENT_QUOTA = "agent_quota"        # agent_quota:{tenant_id}:{agent_id}
     USER_AGENTS = "user_agents"        # user_agents:{user_id}
-    PLATFORM_USAGE = "platform_usage"  # platform_usage:{month}
+    PLATFORM_USAGE = "platform_usage_v2"  # platform_usage_v2:{month}；v2：汇总口径改为仅统计真实租户（tenant_type=real），2026-09-18
     TENANT_USAGE = "tenant_usage"      # tenant_usage:{tenant_id}:{month}:{page}
     TENANT_USG_SUM = "tenant_usage_sum"  # tenant_usage_sum:{tenant_id}:{month}
     TOKEN_USAGE = "token_usage"        # token_usage:{tenant_id}:{start}:{end}:{gb}

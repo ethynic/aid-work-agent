@@ -30,6 +30,20 @@
         </div>
       </div>
 
+      <!-- 汇总卡片（全部租户视图仅统计真实租户；排除赠送金额） -->
+      <div v-if="rechargeStats" class="mb-4">
+        <div class="bg-white rounded-xl shadow-sm p-4 border border-default inline-flex items-center gap-6">
+          <div>
+            <div class="text-xs text-muted">{{ filterTenantId ? '总充值金额（不含赠送）' : '总充值金额（真实租户，不含赠送）' }}</div>
+            <div class="text-xl font-bold text-primary-600 mt-1">¥ {{ formatAmount(rechargeStats.total_amount_yuan) }}</div>
+          </div>
+          <div v-if="(rechargeStats.total_gift_amount_yuan ?? 0) > 0">
+            <div class="text-xs text-muted">其中赠送金额</div>
+            <div class="text-sm font-medium text-warning-600 mt-1">¥ {{ formatAmount(rechargeStats.total_gift_amount_yuan) }}</div>
+          </div>
+        </div>
+      </div>
+
       <!-- 表格 -->
       <div class="table-scroll-wrapper flex-1 min-h-0">
         <BaseTable :columns="columns" :data="items" row-key="id">
@@ -41,6 +55,7 @@
           </template>
           <template #amount_yuan="{ row }">
             <span class="text-default font-medium">¥ {{ formatAmount(row.amount_yuan) }}</span>
+            <span v-if="row.is_gift" class="ml-1 px-2 py-0.5 rounded-full text-xs font-medium bg-warning-100 text-warning-700">赠送</span>
           </template>
           <template #credits="{ row }">
             <span class="text-primary-600 font-medium">{{ row.credits }}</span>
@@ -134,6 +149,14 @@
           <textarea v-model="formData.remark" rows="3" placeholder="可填写充值备注"
             class="w-full px-3 py-2 border border-default rounded-lg text-default bg-surface focus:outline-none focus:border-primary-400"></textarea>
         </div>
+        <div>
+          <label class="flex items-center gap-2">
+            <input type="checkbox" v-model="formData.is_gift"
+              class="w-3.5 h-3.5 rounded border-primary-200 text-primary-600 focus:ring-primary-500" />
+            <span class="text-sm text-default">赠送金额</span>
+          </label>
+          <p class="text-xs text-muted mt-1">赠送金额照常兑换积分入余额，但不计入「总充值金额」汇总；租户前台将显示「赠送金额」徽章</p>
+        </div>
       </div>
       <template #footer>
         <BaseButton intent="secondary" @click="showFormDialog = false">取消</BaseButton>
@@ -154,7 +177,7 @@ import BaseModal from '@/components/ui/BaseModal.vue'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 import { usePageContext } from '@/composables/usePageContext'
 import { listTenants } from '@/api/saasTenant'
-import { listRecharges, createRecharge, deleteRecharge, type RechargeItem } from '@/api/billing'
+import { listRecharges, createRecharge, deleteRecharge, getRechargeStats, type RechargeItem, type RechargeStats } from '@/api/billing'
 import { formatCredit } from '@/utils/formatCredit'
 
 const toast = useToast()
@@ -188,6 +211,20 @@ const filterDateTo = ref('')
 const items = ref<RechargeItem[]>([])
 const total = ref(0)
 
+// 汇总统计（全部租户视图仅统计真实租户，均排除赠送金额）
+const rechargeStats = ref<RechargeStats | null>(null)
+
+async function loadStats() {
+  try {
+    // 选中具体租户时按该租户全量统计；「全部租户」视图仅统计真实租户
+    const res = await getRechargeStats(filterTenantId.value || undefined, !filterTenantId.value)
+    rechargeStats.value = res.success ? (res.stats ?? null) : null
+  } catch (e: any) {
+    console.error('前端日志：加载充值汇总失败', e)
+    rechargeStats.value = null
+  }
+}
+
 const { currentPage, pageSize, seqNumber, refresh } = usePageContext(async () => {
   await loadData()
 })
@@ -219,6 +256,7 @@ async function loadData() {
 function handleFilterChange() {
   currentPage.value = 1
   refresh()
+  loadStats()
 }
 
 function onPageChange(page: number, size: number) {
@@ -267,6 +305,7 @@ const defaultForm = () => ({
   credits: 0,
   created_at: getCurrentDateTimeLocal(),
   remark: '',
+  is_gift: false,
 })
 const formData = ref(defaultForm())
 
@@ -300,11 +339,13 @@ async function handleSubmit() {
       credits: credits,
       created_at: formData.value.created_at || undefined,
       remark: formData.value.remark || undefined,
+      is_gift: formData.value.is_gift,
     })
     if (res.success) {
       toast.success('充值成功')
       showFormDialog.value = false
       await refresh()
+      await loadStats()
     } else {
       toast.error(res.message || '充值失败')
     }
@@ -322,6 +363,7 @@ async function handleDelete(row: any) {
     if (res.success) {
       toast.success('删除成功')
       await refresh()
+      await loadStats()
     } else {
       toast.error(res.message || '删除失败')
     }
@@ -375,5 +417,6 @@ function getSourceBadgeClass(source: string): string {
 onMounted(async () => {
   await loadAllTenants()
   await refresh()
+  await loadStats()
 })
 </script>

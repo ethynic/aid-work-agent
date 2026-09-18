@@ -38,6 +38,35 @@ class TenantStatus(str, Enum):
         return mapping.get(self, "未知")
 
 
+# ============== 租户类型 ==============
+
+class TenantType(str, Enum):
+    """
+    租户类型枚举
+
+    数据库存储：TEXT（tenants.tenant_type）
+    - real = 真实租户（真实金额充值）
+    - test = 测试/演示租户（虚拟充值）
+
+    仅影响 /portal/recharge 与 /portal/token-usage 统计汇总口径，
+    不影响审计数据（chat_records / tenant_recharges 原样保留）。
+    """
+    REAL = "real"   # 真实租户（真实金额充值）
+    TEST = "test"   # 测试/演示租户（虚拟充值）
+
+    @classmethod
+    def all_values(cls) -> list[str]:
+        return [cls.REAL.value, cls.TEST.value]
+
+    @property
+    def display_name(self) -> str:
+        mapping = {
+            self.REAL: "真实租户",
+            self.TEST: "测试租户",
+        }
+        return mapping.get(self, "未知")
+
+
 # ============== 订阅状态 ==============
 
 class SubscriptionStatus(str, Enum):

@@ -145,6 +145,7 @@ export interface TenantFormData {
   initial_admin_name?: string
   initial_admin_phone?: string
   plan?: string
+  tenant_type?: string  // real=真实租户（真实金额充值）/ test=测试/演示租户（虚拟充值）
   max_instances?: number
   max_users?: number
   expire_at?: string

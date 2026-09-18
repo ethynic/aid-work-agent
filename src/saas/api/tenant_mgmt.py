@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field
 from src.saas.api.tenant_auth import require_admin
 from src.saas.db.tenant_db import TenantDB
 from src.saas.db.subscription_db import SubscriptionDB
-from src.saas.models.enums import BehaviorAction, BehaviorResourceType, TenantStatus
+from src.saas.models.enums import BehaviorAction, BehaviorResourceType, TenantStatus, TenantType
 from src.saas.services.renewal import enrich_tenants_with_renewal
 from src.services.behavior_log import audit_action
 from src.saas.models.tenant import TenantCreate, TenantUpdate
@@ -188,6 +188,10 @@ async def create_tenant(request: Request, body: TenantCreate):
         # 处理到期日期
         expire_at = _normalize_expire_date(body.expire_at) if body.expire_at else None
 
+        # 校验租户类型
+        if body.tenant_type not in TenantType.all_values():
+            return {"success": False, "error": "租户类型不合法", "debug": f"Invalid tenant_type: {body.tenant_type}"}
+
         tenant = TenantDB.create(
             company_name=body.company_name,
             tenant_code=body.tenant_code,
@@ -196,6 +200,7 @@ async def create_tenant(request: Request, body: TenantCreate):
             initial_admin_name=body.initial_admin_name,
             initial_admin_phone=body.initial_admin_phone,
             plan=body.plan,
+            tenant_type=body.tenant_type,
             max_instances=body.max_instances or 5,
             max_users=body.max_users or 50,
             expire_at=expire_at,
@@ -252,6 +257,12 @@ async def update_tenant(request: Request, tenant_id: str, body: TenantUpdate):
         if isinstance(status_val, str) and status_val in valid_statuses:
             updates["status"] = status_val
 
+    # 处理 tenant_type 字段：校验枚举值（real/test），非法值直接拒绝
+    if "tenant_type" in updates:
+        tenant_type_val = updates["tenant_type"]
+        if not (isinstance(tenant_type_val, str) and tenant_type_val in TenantType.all_values()):
+            return {"success": False, "error": "租户类型不合法", "debug": f"Invalid tenant_type: {tenant_type_val}"}
+
     # 处理到期日期：标准化为当天 23:59:59
     if "expire_at" in updates:
         updates["expire_at"] = _normalize_expire_date(updates["expire_at"])
@@ -273,6 +284,15 @@ async def update_tenant(request: Request, tenant_id: str, body: TenantUpdate):
 
             # 处理 token 联动操作
             token_messages: list[str] = []
+
+            # 0. 租户类型实际变更时，失效平台月度汇总缓存，保证统计口径立即生效
+            if "tenant_type" in updates and updates["tenant_type"] != (existing.get("tenant_type") or "test"):
+                try:
+                    from src.core.cache_utils import CacheKeys, delete_cached_pattern
+                    deleted_keys = delete_cached_pattern(CacheKeys.PLATFORM_USAGE, "")
+                    logger.info(f"租户类型变更，已失效平台汇总缓存 {deleted_keys} 个 key: {tenant_id}")
+                except Exception as cache_err:
+                    logger.warning(f"失效平台汇总缓存失败（非阻断，最长 1 小时后自然过期）: {cache_err}")
 
             # 1. 如果租户被禁用（status 变为 suspended/deactivated），删除该租户下所有用户 token
             if "status" in updates:

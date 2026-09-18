@@ -35,6 +35,7 @@ class RechargeCreateRequest(BaseModel):
     credits: int = Field(..., description="转化积分，正整数") # ge=1, 为调试方便，暂放宽限制
     created_at: Optional[str] = Field(None, description="充值日期（ISO 8601 / YYYY-MM-DDTHH:MM），未传则使用当前时间")
     remark: Optional[str] = Field(None, description="备注")
+    is_gift: bool = Field(False, description="是否为赠送金额：赠送充值积分照常入余额，但不计入平台总充值金额汇总")
 
 
 # ============== 权限校验 ==============
@@ -128,6 +129,7 @@ async def create_recharge(request: Request, body: RechargeCreateRequest):
             credits=body.credits,
             rate=rate,
             source="manual",
+            is_gift=body.is_gift,
             operator_id=admin.get("user_id"),
             operator_name=admin.get("username") or admin.get("phone"),
             remark=body.remark,
@@ -176,13 +178,16 @@ async def delete_recharge(request: Request, recharge_id: int):
 
 
 @router.get("/stats")
-async def recharge_stats(request: Request, tenant_id: Optional[str] = None):
-    """汇总统计：总充值金额、总积分、最近 7 天趋势"""
+async def recharge_stats(request: Request, tenant_id: Optional[str] = None, real_only: bool = False):
+    """汇总统计：总充值金额（排除赠送金额）、总积分、最近 7 天趋势
+
+    real_only=True 时仅统计真实租户（tenants.tenant_type='real'）
+    """
     admin = require_admin(request)
     _require_platform_admin(admin)
 
     try:
-        stats = TenantRechargesDB.stats(tenant_id=tenant_id)
+        stats = TenantRechargesDB.stats(tenant_id=tenant_id, real_only=real_only)
         return {"success": True, "stats": stats}
     except Exception as e:
         logger.error(f"充值汇总查询失败: {e}")

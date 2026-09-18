@@ -26,6 +26,7 @@ export interface RechargeItem {
   operator_id?: string | null
   operator_name?: string | null
   remark?: string | null
+  is_gift?: boolean  // 赠送金额：积分照常入余额，不计入平台总充值金额汇总
   balance_after?: number | null  // 充值后积分余额快照（历史数据为 null）
   created_at: string
 }
@@ -46,6 +47,7 @@ export interface RechargeCreateRequest {
   credits: number
   created_at?: string
   remark?: string
+  is_gift?: boolean
 }
 
 export interface RechargeCreateResponse {
@@ -56,7 +58,8 @@ export interface RechargeCreateResponse {
 }
 
 export interface RechargeStats {
-  total_amount_yuan: number
+  total_amount_yuan: number  // 已排除赠送金额（is_gift）
+  total_gift_amount_yuan: number
   total_credits: number
   total_count: number
   recent_7d_trend: Array<{
@@ -173,8 +176,11 @@ export async function deleteRecharge(rechargeId: number): Promise<{ success: boo
   return res.json()
 }
 
-export async function getRechargeStats(tenantId?: string): Promise<RechargeStatsResponse> {
-  const qs = tenantId ? `?tenant_id=${encodeURIComponent(tenantId)}` : ''
+export async function getRechargeStats(tenantId?: string, realOnly: boolean = false): Promise<RechargeStatsResponse> {
+  const params = new URLSearchParams()
+  if (tenantId) params.set('tenant_id', tenantId)
+  if (realOnly) params.set('real_only', 'true')
+  const qs = params.toString() ? `?${params.toString()}` : ''
   const res = await fetch(`${API_BASE}/recharges/stats${qs}`, {
     headers: getPlatformAuthHeader(tenantId)
   })

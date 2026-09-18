@@ -24,6 +24,7 @@
             <template #seq="{ index }">{{ seqNumber(index) }}</template>
             <template #amount_yuan="{ row }">
               <span class="text-default font-medium">¥ {{ formatAmount(row.amount_yuan) }}</span>
+              <span v-if="row.is_gift" class="ml-1 px-2 py-0.5 rounded-full text-xs font-medium bg-warning-100 text-warning-700">赠送金额</span>
             </template>
             <template #credits="{ row }">
               <span class="text-primary-600 font-medium">{{ row.credits }}</span>

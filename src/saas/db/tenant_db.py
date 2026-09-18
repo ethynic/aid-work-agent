@@ -26,6 +26,7 @@ class TenantDB:
         initial_admin_name: Optional[str] = None,
         initial_admin_phone: Optional[str] = None,
         plan: str = "basic",
+        tenant_type: str = "test",
         max_instances: int = 5,
         max_users: int = 50,
         settings: Optional[dict] = None,
@@ -47,12 +48,12 @@ class TenantDB:
                 cursor.execute("""
                     INSERT INTO tenants (tenant_id, company_name, tenant_code, contact_name, contact_phone,
                                         initial_admin_name, initial_admin_phone,
-                                        plan, max_instances, max_users, settings, expire_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                        plan, tenant_type, max_instances, max_users, settings, expire_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """, (
                     tenant_id, company_name, tenant_code_upper, contact_name, contact_phone,
                     initial_admin_name, initial_admin_phone,
-                    plan, max_instances, max_users,
+                    plan, tenant_type, max_instances, max_users,
                     json.dumps(settings or {}, ensure_ascii=False),
                     expire_at,
                 ))
@@ -111,7 +112,7 @@ class TenantDB:
         allowed_fields = {
             "company_name", "contact_name", "contact_phone",
             "initial_admin_name", "initial_admin_phone",
-            "plan", "status", "max_instances", "max_users", "settings",
+            "plan", "status", "tenant_type", "max_instances", "max_users", "settings",
             "expire_at", "tenant_code", "logo_file_id",
         }
         updates = {}

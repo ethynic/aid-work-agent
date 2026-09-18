@@ -653,9 +653,12 @@ CREATE TABLE IF NOT EXISTS tenants (
     tenant_code TEXT,
     credit_balance NUMERIC(12,2) NOT NULL DEFAULT 0.00,
     logo_file_id TEXT,  -- 租户 Logo 文件 ID（对应 uploaded_file:{file_id}）
+    tenant_type TEXT NOT NULL DEFAULT 'test',  -- 租户类型：real=真实租户（真实金额充值）/ test=测试/演示租户（虚拟充值），仅影响平台统计页汇总口径，不影响审计数据
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+COMMENT ON COLUMN tenants.tenant_type IS '租户类型：real=真实租户（真实金额充值）/ test=测试/演示租户（虚拟充值）。仅影响 /portal/recharge 与 /portal/token-usage 统计汇总口径，不影响审计数据';
 
 COMMENT ON COLUMN tenants.expire_at IS '到期日期（时分秒为 23:59:59，当天仍可登录，空表示永久有效）';
 COMMENT ON COLUMN tenants.credit_balance IS '积分余额（2 位小数），允许透支为负，对话中扣完不中断、下一轮入口拦截';
@@ -1081,6 +1084,7 @@ CREATE TABLE IF NOT EXISTS tenant_recharges (
     operator_id TEXT,
     operator_name TEXT,
     remark TEXT,
+    is_gift BOOLEAN NOT NULL DEFAULT FALSE,  -- 赠送金额标记：true=赠送充值（积分照常入余额，但不计入平台总充值金额汇总）
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     balance_after NUMERIC(12,2),
     PRIMARY KEY (id)

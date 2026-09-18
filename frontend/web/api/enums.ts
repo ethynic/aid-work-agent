@@ -19,6 +19,17 @@ export const TenantStatusMap = {
   [TenantStatus.DEACTIVATED]: { label: '已删除', color: 'gray' },
 } as const;
 
+/** 租户类型（real=真实租户，test=测试/演示租户） */
+export enum TenantType {
+  REAL = 'real',
+  TEST = 'test',
+}
+
+export const TenantTypeMap = {
+  [TenantType.REAL]: { label: '真实租户', color: 'green' },
+  [TenantType.TEST]: { label: '测试租户', color: 'gray' },
+} as const;
+
 /** 用户来源 */
 export enum UserSource {
   WECOM_KF = 'wecom_kf',

@@ -53,6 +53,14 @@
               {{ getStatusLabel(row.status) }}
             </span>
           </template>
+          <template #tenant_type="{ row }">
+            <span
+              :class="getTenantTypeClass(row.tenant_type)"
+              class="px-2 py-1 rounded-full text-xs font-medium"
+            >
+              {{ getTenantTypeLabel(row.tenant_type) }}
+            </span>
+          </template>
           <template #expire_at="{ row }">
             <span v-if="row.expire_at" :class="getExpireStatusClass(row.expire_at)" class="text-sm">
               {{ formatExpireDate(row.expire_at) }}
@@ -237,6 +245,15 @@
             <option value="standard">标准版 (standard)</option>
             <option value="premium">高级版 (premium)</option>
           </select>
+        </div>
+        <div>
+          <label class="text-sm text-muted mb-1 block">租户类型</label>
+          <select v-model="formData.tenant_type"
+            class="w-full px-3 py-2 bg-surface-hover border border-hover rounded-lg text-default focus:outline-none focus:border-primary-400">
+            <option value="test">测试租户（虚拟充值）</option>
+            <option value="real">真实租户（真实金额充值）</option>
+          </select>
+          <p class="text-xs text-muted mt-1">真实租户的消耗与充值计入平台统计汇总；仅影响统计口径，不影响审计数据</p>
         </div>
         <div v-if="isEdit">
           <label class="text-sm text-muted mb-1 block">状态</label>
@@ -584,7 +601,7 @@ import { listTenants, createTenant, updateTenant, deleteTenant, type TenantFormD
 import { getAllAvailableAgents, getTenantAgentPermissions, setTenantAgentPermissions, getSubagentEnvVars, setSubagentEnvVars, getConfigFileStatus, uploadConfigFile, downloadConfigFile, deleteConfigFile, type AgentItem, type EnvVarItem, getSubagentKnowledgeSources, setSubagentKnowledgeSources, type KnowledgeSourceItem, listTenantKnowledgeCategories, getTenantKnowledgeShares, setTenantKnowledgeShares, type KnowledgeShareItem } from '@/api/saasPermissions'
 import TenantMigration from '@/components/saas/TenantMigration.vue'
 import TenantActivationCodes from '@/components/saas/TenantActivationCodes.vue'
-import { TenantStatus, TenantStatusMap } from '@/api/enums'
+import { TenantStatus, TenantStatusMap, TenantType, TenantTypeMap } from '@/api/enums'
 import { formatCredit } from '@/utils/formatCredit'
 
 const toast = useToast()
@@ -602,6 +619,7 @@ const columns: TableColumn[] = [
   { key: 'seq', label: '序号', width: '60px', thAlign: 'center' },
   { key: 'tenant_code', label: '租户代码', width: '140px' },
   { key: 'company_name', label: '企业名称', width: '180px' },
+  { key: 'tenant_type', label: '类型', width: '90px' },
   { key: 'initial_admin_phone', label: '初始管理员手机号', width: '150px' },
   { key: 'status', label: '状态', width: '90px' },
   { key: 'expire_at', label: '到期日期', width: '120px' },
@@ -714,6 +732,7 @@ const defaultFormData: TenantFormData = {
   initial_admin_name: '',
   initial_admin_phone: '',
   plan: 'basic',
+  tenant_type: 'test',
   expire_at: '',
   logo_file_id: null,
 }
@@ -859,6 +878,7 @@ async function openEditDialog(tenant: any) {
     initial_admin_name: tenant.initial_admin_name || '',
     initial_admin_phone: tenant.initial_admin_phone || '',
     plan: tenant.plan,
+    tenant_type: tenant.tenant_type || 'test',
     status: String(tenant.status),
     expire_at: tenant.expire_at ? tenant.expire_at.split('T')[0].split(' ')[0] : '',
     logo_file_id: tenant.logo_file_id || null,
@@ -1272,6 +1292,16 @@ function getStatusClass(status: number | string | undefined): string {
   if (info?.color === 'green') return 'bg-success-100 text-success-700'
   if (info?.color === 'red') return 'bg-danger-100 text-danger-700'
   return 'bg-gray-100 text-gray-600'
+}
+
+function getTenantTypeLabel(tenantType: string | undefined | null): string {
+  const info = (TenantTypeMap as Record<string, { label: string }>)[String(tenantType ?? TenantType.TEST)]
+  return info?.label ?? '测试租户'
+}
+
+function getTenantTypeClass(tenantType: string | undefined | null): string {
+  const info = (TenantTypeMap as Record<string, { color: string }>)[String(tenantType ?? TenantType.TEST)]
+  return info?.color === 'green' ? 'bg-success-100 text-success-700' : 'bg-gray-100 text-gray-600'
 }
 
 function getTenantUrl(tenantId: string): string {

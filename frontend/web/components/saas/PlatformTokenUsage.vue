@@ -19,9 +19,10 @@
 
     <template v-else>
       <!-- 汇总卡片 -->
+      <div v-if="summary" class="mb-2 text-xs text-muted">汇总口径：仅统计真实租户（不含测试/演示租户）</div>
       <div v-if="summary" class="grid grid-cols-2 md:grid-cols-6 gap-4 mb-6">
         <div class="bg-white rounded-xl shadow-sm p-4 border border-default">
-          <div class="text-xs text-muted">租户数量</div>
+          <div class="text-xs text-muted">真实租户数量</div>
           <div class="text-xl font-bold text-default mt-1">{{ summary.tenant_count }}</div>
         </div>
         <div class="bg-white rounded-xl shadow-sm p-4 border border-default">
@@ -61,6 +62,7 @@
                 <th class="px-4 py-2 text-left text-xs font-medium text-muted">序号</th>
                 <th class="px-4 py-2 text-left text-xs font-medium text-muted">租户代码</th>
                 <th class="px-4 py-2 text-left text-xs font-medium text-muted">租户名称</th>
+                <th class="px-4 py-2 text-left text-xs font-medium text-muted">类型</th>
                 <th class="px-4 py-2 text-left text-xs font-medium text-muted">输入Token数 (百万)</th>
                 <th class="px-4 py-2 text-left text-xs font-medium text-muted">输出Token数 (百万)</th>
                 <th class="px-4 py-2 text-left text-xs font-medium text-muted">Token成本 (元)</th>
@@ -74,6 +76,10 @@
                 <td class="px-4 py-2 text-sm text-default">{{ index + 1 }}</td>
                 <td class="px-4 py-2 text-sm text-default">{{ item.tenant_code }}</td>
                 <td class="px-4 py-2 text-sm text-default">{{ item.company_name }}</td>
+                <td class="px-4 py-2">
+                  <span :class="tenantTypeBadgeClass(item.tenant_type)"
+                    class="px-2 py-0.5 rounded-full text-xs font-medium">{{ tenantTypeLabel(item.tenant_type) }}</span>
+                </td>
                 <td class="px-4 py-2 text-sm text-info-600">{{ formatTokensToMillionsThreeDecimals(item.input_tokens) }}</td>
                 <td class="px-4 py-2 text-sm text-success-600">{{ formatTokensToMillionsThreeDecimals(item.output_tokens) }}</td>
                 <td class="px-4 py-2 text-sm text-amber-600">
@@ -92,7 +98,7 @@
               </tr>
               <!-- 汇总行 -->
               <tr v-if="summary" class="bg-canvas font-medium">
-                <td class="px-4 py-2 text-sm text-default" colspan="3">总计</td>
+                <td class="px-4 py-2 text-sm text-default" colspan="4">总计（仅真实租户）</td>
                 <td class="px-4 py-2 text-sm text-info-600">{{ formatTokensToMillionsThreeDecimals(summary.total_input_tokens) }}</td>
                 <td class="px-4 py-2 text-sm text-success-600">{{ formatTokensToMillionsThreeDecimals(summary.total_output_tokens) }}</td>
                 <td class="px-4 py-2 text-sm text-amber-600">
@@ -131,6 +137,7 @@
 import { ref, onMounted } from 'vue'
 import { useToast } from 'vue-toastification'
 import { getPlatformTokenUsage } from '@/api/adminReports'
+import { TenantType, TenantTypeMap } from '@/api/enums'
 import { formatTokensToMillionsThreeDecimals } from '@/utils/formatTokens'
 import { formatCredit } from '@/utils/formatCredit'
 import DailyCreditUsageModal from '@/components/saas/DailyCreditUsageModal.vue'
@@ -176,6 +183,15 @@ function formatCost(cost: number, hasUnpricedTokens?: boolean): string {
   if (cost > 0) return cost.toFixed(2)
   if (hasUnpricedTokens) return '—'
   return '0.00'
+}
+
+function tenantTypeLabel(tenantType?: string): string {
+  return (TenantTypeMap as Record<string, { label: string }>)[tenantType ?? TenantType.TEST]?.label ?? '测试租户'
+}
+
+function tenantTypeBadgeClass(tenantType?: string): string {
+  const color = (TenantTypeMap as Record<string, { color: string }>)[tenantType ?? TenantType.TEST]?.color ?? 'gray'
+  return color === 'green' ? 'bg-success-100 text-success-700' : 'bg-gray-100 text-gray-600'
 }
 
 function formatReferenceAmount(item: any): string {

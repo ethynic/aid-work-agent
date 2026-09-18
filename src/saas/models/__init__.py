@@ -2,6 +2,7 @@
 
 from .enums import (
     TenantStatus,
+    TenantType,
     SubscriptionStatus,
     PaymentStatus,
     UserRole,
@@ -16,6 +17,7 @@ from .usage import UsageSummary, UserUsageDetail
 __all__ = [
     # 枚举
     "TenantStatus",
+    "TenantType",
     "SubscriptionStatus",
     "PaymentStatus",
     "UserRole",

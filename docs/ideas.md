@@ -39,7 +39,6 @@
 | 20260918-2010 | 用户取消请求的 trace 标记与历史可见性 | ✅ 已完成开发 | 触发：线上 tr_30005ad7dd284b3e 排查发现用户取消后 trace 落库 completed 且 output 为空、取消轮次消息不落库（历史页整轮消失）。改动：①agent 两条取消路径（cancel_check 命中 yield cancelled 事件 / CancelledError 穿透包装层）均标记 trace status=cancelled + termination_reason=user_cancelled；②Web SSE 取消轮次落库 user+assistant 消息并打 metadata.cancelled=true（不落 tool 序列防悬空 tool_calls）；③前端停止按钮加 confirm；④历史消息渲染"用户已取消本轮回复"徽章；⑤追踪页（TraceBrowser/TraceDetail/SessionTraces）状态文案改"用户取消"+warning 色。开发+单测（5 用例）+独立验证完成，待部署。 | — | — |
 | 20260918-2045 | Redis 夜间巡检任务（生产专用） | 🔧 部分完成 | background_runner 调度器每日 00:30 巡检生产 Redis（容器 mem_limit 1g）：内存水位（600MB 警告/800MB 严重）、碎片率（仅 used>100MB 判）、AOF 写入/重写状态、键淘汰、连接数、无 TTL 键抽样（上限 1000，超 200 疑似泄漏）。结果以「[Redis巡检]」前缀进主日志（1 条 INFO 汇总 + 越界项 WARNING/ERROR）。REDIS_INSPECTION_ENABLED 门控默认关（测试环境为腾讯云托管无需巡检），生产 .env 已开启待重启生效。改动：新增 src/core/redis_inspection.py + RedisClient.info() + scheduler 注册；单测 11 用例通过，待部署。 | — | — |
 
-
 ## 数字员工 / 子智能体
 
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |

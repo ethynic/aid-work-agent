@@ -16,7 +16,7 @@ from loguru import logger
 from src.config.settings import settings
 from src.db.database import get_db_connection, get_current_timestamp
 from src.saas.db.permission_db import UserAgentPermissionDB
-from src.saas.models.enums import UserStatus
+from src.saas.models.enums import UserStatus, TenantType
 from src.core.cache_utils import CacheKeys, get_cached, set_cached, delete_cached, delete_cached_pattern, invalidate_user_cache, invalidate_tenant_cache
 
 
@@ -1404,7 +1404,11 @@ class ChatRecordDB:
     @staticmethod
     def get_platform_token_usage(month_str: str) -> Dict[str, Any]:
         """
-        获取平台Token消耗汇总报表（所有租户按月统计，优先从 Redis 缓存读取，TTL 1小时）
+        获取平台Token消耗汇总报表（按月统计，优先从 Redis 缓存读取，TTL 1小时）
+
+        汇总口径：仅统计真实租户（tenants.tenant_type = 'real'）；
+        明细列表仍包含全部租户（每行带 tenant_type），便于观察测试租户消耗。
+        口径在查询时实时判断，租户类型变更立即生效，不影响审计数据。
 
         Args:
             month_str: 月份字符串，格式 YYYY-MM
@@ -1455,8 +1459,10 @@ class ChatRecordDB:
                           AND tcp2.model_name IS NULL
                           AND cr2.model IS NOT NULL
                     ) as has_unpriced_tokens,
-                    COUNT(*) FILTER (WHERE r.unit_price IS NULL AND cr.credit_cost > 0) > 0 as has_unrecharged_credits
+                    COUNT(*) FILTER (WHERE r.unit_price IS NULL AND cr.credit_cost > 0) > 0 as has_unrecharged_credits,
+                    t.tenant_type
                 FROM chat_records cr
+                JOIN tenants t ON t.tenant_id = cr.tenant_id
                 LEFT JOIN token_cost_prices tcp ON LOWER(cr.model) = LOWER(tcp.model_name)
                 -- 参考金额：按消耗时刻之前最近一笔充值的金额/积分比值折算（无充值记录时 unit_price 为 NULL）
                 LEFT JOIN LATERAL (
@@ -1470,7 +1476,7 @@ class ChatRecordDB:
                 WHERE cr.created_at >= %s AND cr.created_at <= %s
                   AND cr.tenant_id IS NOT NULL
                   AND NOT (cr.prompt_tokens = 0 AND cr.completion_tokens = 0)
-                GROUP BY cr.tenant_id
+                GROUP BY cr.tenant_id, t.tenant_type
                 ORDER BY conversation_count DESC
             """, (start_date, end_date, start_date, end_date))
             rows = cursor.fetchall()
@@ -1492,8 +1498,10 @@ class ChatRecordDB:
                     tenant_unpriced = bool(row["has_unpriced_tokens"])
                     tenant_credit_cost = float(row["credit_cost"] or 0)
                     tenant_reference_amount = float(row["reference_amount"] or 0)
+                    tenant_type = row.get("tenant_type") or "test"
                     tenant_data.append({
                         "tenant_id": row["tenant_id"],
+                        "tenant_type": tenant_type,
                         "input_tokens": row["input_tokens"],
                         "output_tokens": row["output_tokens"],
                         "conversation_count": row["conversation_count"],
@@ -1505,6 +1513,9 @@ class ChatRecordDB:
                         "has_unpriced_tokens": tenant_unpriced,
                         "has_unrecharged_credits": bool(row["has_unrecharged_credits"])
                     })
+                    # 汇总口径：仅统计真实租户（tenant_type=real）；明细行仍全部保留
+                    if tenant_type != TenantType.REAL.value:
+                        continue
                     total_input_tokens += row["input_tokens"]
                     total_output_tokens += row["output_tokens"]
                     total_conversations += row["conversation_count"]
@@ -1521,7 +1532,7 @@ class ChatRecordDB:
                     "total_input_tokens": total_input_tokens,
                     "total_output_tokens": total_output_tokens,
                     "total_conversations": total_conversations,
-                    "tenant_count": len(tenant_data),
+                    "tenant_count": sum(1 for t in tenant_data if t["tenant_type"] == TenantType.REAL.value),
                     "total_input_cost": round(total_input_cost, 2),
                     "total_output_cost": round(total_output_cost, 2),
                     "total_cost": round(total_input_cost + total_output_cost, 2),
@@ -2394,6 +2405,7 @@ class TenantRechargesDB:
         credits: int,
         rate: int,
         source: str = "manual",
+        is_gift: bool = False,
         operator_id: str = None,
         operator_name: str = None,
         remark: str = None,
@@ -2408,6 +2420,7 @@ class TenantRechargesDB:
 
         Args:
             created_at: 可选，自定义充值时间（"YYYY-MM-DD HH:MM:SS"），未传则使用 DB 默认 CURRENT_TIMESTAMP
+            is_gift: 是否为赠送金额（赠送充值积分照常入余额，但不计入平台总充值金额汇总）
 
         Returns:
             新建记录字典；失败返回 None
@@ -2436,17 +2449,17 @@ class TenantRechargesDB:
 
                 # 构造 INSERT：balance_after 紧跟 remark 之后；created_at 可选（未传走 DB 默认）
                 if created_at:
-                    cols = "(tenant_id, amount_yuan, credits, rate, source, payment_order_id, operator_id, operator_name, remark, balance_after, created_at)"
-                    vals = f"({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})"
+                    cols = "(tenant_id, amount_yuan, credits, rate, source, is_gift, payment_order_id, operator_id, operator_name, remark, balance_after, created_at)"
+                    vals = f"({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})"
                     params = (
-                        tenant_id, amount_yuan, credits, rate, source, payment_order_id,
+                        tenant_id, amount_yuan, credits, rate, source, is_gift, payment_order_id,
                         operator_id, operator_name, remark, balance_after, created_at,
                     )
                 else:
-                    cols = "(tenant_id, amount_yuan, credits, rate, source, payment_order_id, operator_id, operator_name, remark, balance_after)"
-                    vals = f"({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})"
+                    cols = "(tenant_id, amount_yuan, credits, rate, source, is_gift, payment_order_id, operator_id, operator_name, remark, balance_after)"
+                    vals = f"({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})"
                     params = (
-                        tenant_id, amount_yuan, credits, rate, source, payment_order_id,
+                        tenant_id, amount_yuan, credits, rate, source, is_gift, payment_order_id,
                         operator_id, operator_name, remark, balance_after,
                     )
 
@@ -2470,7 +2483,7 @@ class TenantRechargesDB:
                 conn.commit()
                 logger.info(
                     f"Recharge created: tenant={tenant_id}, amount_yuan={amount_yuan}, "
-                    f"credits={credits}, rate={rate}, source={source}, balance_after={balance_after}"
+                    f"credits={credits}, rate={rate}, source={source}, is_gift={is_gift}, balance_after={balance_after}"
                 )
                 return dict(row) if row else None
             except Exception as e:
@@ -2586,26 +2599,41 @@ class TenantRechargesDB:
                 return None
 
     @staticmethod
-    def stats(tenant_id: str = None) -> Dict[str, Any]:
-        """汇总统计：总充值金额、总积分、最近 7 天趋势"""
-        where_sql = "WHERE tenant_id = %s" if tenant_id else "WHERE TRUE"
-        params: list = [tenant_id] if tenant_id else []
+    def stats(tenant_id: str = None, real_only: bool = False) -> Dict[str, Any]:
+        """汇总统计：总充值金额、总积分、赠送总额、最近 7 天趋势
+
+        Args:
+            tenant_id: 可选，按租户筛选
+            real_only: 仅统计真实租户（tenants.tenant_type='real'）
+        """
+        where_clauses: list = []
+        params: list = []
+        if tenant_id:
+            where_clauses.append("tr.tenant_id = %s")
+            params.append(tenant_id)
+        if real_only:
+            where_clauses.append("t.tenant_type = %s")
+            params.append(TenantType.REAL.value)
+        where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else "WHERE TRUE"
 
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 f"""
                 SELECT
-                    COALESCE(SUM(amount_yuan), 0) AS total_amount_yuan,
-                    COALESCE(SUM(credits), 0) AS total_credits,
+                    COALESCE(SUM(amount_yuan) FILTER (WHERE NOT tr.is_gift), 0) AS total_amount_yuan,
+                    COALESCE(SUM(amount_yuan) FILTER (WHERE tr.is_gift), 0) AS total_gift_amount_yuan,
+                    COALESCE(SUM(tr.credits), 0) AS total_credits,
                     COUNT(*) AS total_count
-                FROM tenant_recharges
+                FROM tenant_recharges tr
+                JOIN tenants t ON t.tenant_id = tr.tenant_id
                 {where_sql}
                 """,
                 params,
             )
             row = cursor.fetchone() or {}
             total_amount_yuan = float(row.get("total_amount_yuan") or 0)
+            total_gift_amount_yuan = float(row.get("total_gift_amount_yuan") or 0)
             total_credits = int(row.get("total_credits") or 0)
             total_count = int(row.get("total_count") or 0)
 
@@ -2613,15 +2641,16 @@ class TenantRechargesDB:
             cursor.execute(
                 f"""
                 SELECT
-                    DATE(created_at) AS date,
-                    COALESCE(SUM(amount_yuan), 0) AS amount_yuan,
-                    COALESCE(SUM(credits), 0) AS credits,
+                    DATE(tr.created_at) AS date,
+                    COALESCE(SUM(tr.amount_yuan), 0) AS amount_yuan,
+                    COALESCE(SUM(tr.credits), 0) AS credits,
                     COUNT(*) AS count
-                FROM tenant_recharges
+                FROM tenant_recharges tr
+                JOIN tenants t ON t.tenant_id = tr.tenant_id
                 {where_sql}
-                  AND created_at >= CURRENT_DATE - INTERVAL '6 days'
-                GROUP BY DATE(created_at)
-                ORDER BY DATE(created_at) ASC
+                  AND tr.created_at >= CURRENT_DATE - INTERVAL '6 days'
+                GROUP BY DATE(tr.created_at)
+                ORDER BY DATE(tr.created_at) ASC
                 """,
                 params,
             )
@@ -2637,6 +2666,7 @@ class TenantRechargesDB:
 
         return {
             "total_amount_yuan": total_amount_yuan,
+            "total_gift_amount_yuan": total_gift_amount_yuan,
             "total_credits": total_credits,
             "total_count": total_count,
             "recent_7d_trend": trend,
