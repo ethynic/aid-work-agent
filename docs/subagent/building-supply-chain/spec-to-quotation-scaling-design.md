@@ -1,6 +1,6 @@
 # spec-to-quotation-list 大项目扩容设计（轮数、分批编条目、图片体积）
 
-> 关联：建筑供应链智能体（`subagents/building-supply-chain/`）+ spec-to-quotation-list 技能（`src/skills/spec-to-quotation-list-1.0.0/`）。技能引入与端到端验证已于 2026-09-17 完成（`docs/ideas.md` 条目 20260917-1130）。
+> 关联：建筑行业方案清单生成器（`subagents/building-supply-chain/`）+ spec-to-quotation-list 技能（`src/skills/spec-to-quotation-list-1.0.0/`）。技能引入与端到端验证已于 2026-09-17 完成（`docs/ideas.md` 条目 20260917-1130）。
 >
 > 状态：📋 设计完成，待开发
 

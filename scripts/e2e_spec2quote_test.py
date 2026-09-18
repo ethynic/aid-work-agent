@@ -26,7 +26,7 @@ from datetime import datetime
 from pathlib import Path
 
 PROJECT_ROOT = "/app"
-PDF_PATH = "/app/ext/建筑供应链智能体/Design Specs Book_16JUN2026.pdf"
+PDF_PATH = "/app/ext/建筑行业方案清单生成器/Design Specs Book_16JUN2026.pdf"
 SUBAGENT = "building-supply-chain"
 TENANT_ID = "tenant_e2e_spec2quote"
 TIMEOUT_MSG = "I apologize, but the task is taking too long"
