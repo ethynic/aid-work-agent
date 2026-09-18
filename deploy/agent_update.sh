@@ -99,8 +99,13 @@ FRONTEND_PID=$!
 #    不先 down：up --force-recreate 会自动 stop→remove→create，省去 down 后到 up 之间
 #    所有容器同时停止的全停窗口；api 与 background 由 compose 串行错开重建（api 先起时
 #    background 仍运行），后台任务/心跳中断更少、DB 连接释放重建更平滑
+#    显式列出 api/background 两个服务：--force-recreate 不带服务名会连 redis 一起
+#    重建，导致每次发版 redis 都有 ~10s 不可用窗口（2026-09-18 实证会触发 api worker
+#    首连 DNS 失败降级进内存、跨 worker 状态漂移）。redis 配置/镜像变更时需手动
+#    单独执行：docker compose -f docker-compose.prod.yml up -d --force-recreate --wait aid-redis
 echo "[5] 重启后端服务..."
-docker compose -f docker-compose.prod.yml up -d --force-recreate --remove-orphans --wait
+docker compose -f docker-compose.prod.yml up -d --force-recreate --remove-orphans --wait \
+    aid-agent-api aid-agent-background
 
 # 6. 施加 CPU 限制（docker compose 非 swarm 会忽略 deploy.resources；
 #    内存上限已在 docker-compose.prod.yml 用 mem_limit 声明（api 8G/background 4G/redis 1G），

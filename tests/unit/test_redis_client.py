@@ -9,6 +9,8 @@ RedisClient 单元测试
 import json
 import os
 import time
+from unittest.mock import MagicMock
+
 import pytest
 
 from src.core.redis_client import RedisClient, _InMemoryFallback
@@ -444,3 +446,111 @@ class TestRedisClientWithRealRedis:
         assert client.sismember("test:set", "member1") is True
         client.srem("test:set", "member1")
         assert client.sismember("test:set", "member1") is False
+
+
+# ---------------------------------------------------------------------------
+# 连接重试与降级恢复
+# ---------------------------------------------------------------------------
+
+
+def _make_redis_cfg():
+    from types import SimpleNamespace
+    return SimpleNamespace(
+        enabled=True, host="localhost", port=6379,
+        password=None, db=0, ssl=False, key_prefix="",
+    )
+
+
+def _bare_client():
+    """构造未连接的裸实例（跳过 __init__ 的首连）"""
+    from src.core.redis_client import RedisClient as RC
+    c = RC.__new__(RC)
+    c._client = None
+    c._fallback = _InMemoryFallback()
+    c._connected = False
+    c._key_prefix = ""
+    import threading
+    c._lock = threading.Lock()
+    return c
+
+
+def test_connect_retries_then_succeeds(monkeypatch):
+    """启动首连失败时按 retries 退避重试，恢复后不再降级"""
+    import src.core.redis_client as rc_mod
+
+    monkeypatch.setattr(rc_mod.settings, "redis", _make_redis_cfg(), raising=False)
+    sleeps = []
+    monkeypatch.setattr("time.sleep", lambda s: sleeps.append(s))
+
+    fake_redis = MagicMock()
+    fake_redis.ping.side_effect = [Exception("Error -3 name resolution"), Exception("conn refused"), None]
+    monkeypatch.setattr("redis.Redis", lambda **kw: fake_redis)
+
+    client = _bare_client()
+    client._connect(retries=3)
+
+    assert client._connected is True
+    assert client._client is fake_redis
+    assert fake_redis.ping.call_count == 3
+    assert sleeps == [2, 4]  # 第 3 次成功，不再 sleep
+
+
+def test_connect_exhausts_retries_degrades(monkeypatch):
+    """启动首连重试耗尽后降级内存"""
+    import src.core.redis_client as rc_mod
+
+    monkeypatch.setattr(rc_mod.settings, "redis", _make_redis_cfg(), raising=False)
+    sleeps = []
+    monkeypatch.setattr("time.sleep", lambda s: sleeps.append(s))
+
+    fake_redis = MagicMock()
+    fake_redis.ping.side_effect = Exception("Error -3 name resolution")
+    monkeypatch.setattr("redis.Redis", lambda **kw: fake_redis)
+
+    client = _bare_client()
+    client._connect(retries=3)
+
+    assert client._connected is False
+    assert client._client is None
+    assert sleeps == [2, 4, 8]
+
+
+def test_connect_runtime_default_no_retry(monkeypatch):
+    """运行期重连（retries=0 缺省）只尝试一次，快速失败"""
+    import src.core.redis_client as rc_mod
+
+    monkeypatch.setattr(rc_mod.settings, "redis", _make_redis_cfg(), raising=False)
+    sleeps = []
+    monkeypatch.setattr("time.sleep", lambda s: sleeps.append(s))
+
+    fake_redis = MagicMock()
+    fake_redis.ping.side_effect = Exception("conn refused")
+    monkeypatch.setattr("redis.Redis", lambda **kw: fake_redis)
+
+    client = _bare_client()
+    client._connect()
+
+    assert client._connected is False
+    assert sleeps == []
+
+
+def test_ensure_connection_recovery_clears_fallback(monkeypatch):
+    """从降级恢复连接后，内存降级存储残留数据被清空"""
+    import src.core.redis_client as rc_mod
+
+    monkeypatch.setattr(rc_mod.settings, "redis", _make_redis_cfg(), raising=False)
+
+    client = _bare_client()
+    client._fallback.set("cancelled_session:s1", {"v": 1})
+    assert client._fallback.exists("cancelled_session:s1")
+
+    fake_redis = MagicMock()
+    fake_redis.ping.return_value = None
+
+    def fake_connect(retries=0):
+        client._connected = True
+        client._client = fake_redis
+
+    monkeypatch.setattr(client, "_connect", fake_connect)
+    assert client._ensure_connection() is True
+    assert client._fallback.exists("cancelled_session:s1") is False

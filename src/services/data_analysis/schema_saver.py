@@ -72,10 +72,10 @@ async def save_schema_to_knowledge(
     """
     # 上传文件/HTTP 请求体可能携带孤立代理字符（如 PDF 复制的 \ud83c），
     # 写库前统一清洗（schema_text 与 metadata 均由这些字段派生）
-    table_name = sanitize_text(table_name)
-    description = sanitize_text(description)
-    source_info = sanitize_text(source_info)
-    columns = sanitize_value(columns)
+    table_name = sanitize_text(table_name, source="data_analysis_schema")
+    description = sanitize_text(description, source="data_analysis_schema")
+    source_info = sanitize_text(source_info, source="data_analysis_schema")
+    columns = sanitize_value(columns, source="data_analysis_schema")
     schema_text = generate_schema_text(table_name, description, columns)
 
     try:

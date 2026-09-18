@@ -1640,7 +1640,9 @@ class Agent:
                     c = str(c)
                 return repr(c[:n])
 
-            dropped_preview = [_preview(m) for m in dropped_users]
+            # 被丢弃 user 预览加长到 500 字符：语音消息内容为 "[ASR识别结果] 文本"，
+            # 完整记录识别文本，供人工评判丢弃是否合理（无需回听语音文件）
+            dropped_preview = [_preview(m, 500) for m in dropped_users]
             seq_preview = [
                 f"{m.get('role')}:{_preview(m, 60)}"
                 for m in messages[:30]

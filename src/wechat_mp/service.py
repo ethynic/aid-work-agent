@@ -1397,7 +1397,7 @@ class WeChatMPSyncService:
         publish_time = datetime.fromtimestamp(publish_ts, tz=timezone.utc).replace(tzinfo=None)
         update_time = datetime.fromtimestamp(msg["update_time"], tz=timezone.utc).replace(tzinfo=None)
         first_title = msg.get("first_title")
-        first_title = sanitize_text(first_title)[:255] if first_title else None
+        first_title = sanitize_text(first_title, source="wechat_mp_ingest")[:255] if first_title else None
         cursor.execute(
             """
             INSERT INTO bs_wechat_mp_articles
@@ -1883,7 +1883,7 @@ class WeChatMPSyncService:
         wx_update_time = (
             datetime.fromtimestamp(art.update_time, tz=timezone.utc).replace(tzinfo=None)
         )
-        title = sanitize_text(art.title)[:255] if art.title else None
+        title = sanitize_text(art.title, source="wechat_mp_ingest")[:255] if art.title else None
         list_meta = {
             "aid": art.aid or None,
             "msgid": art.msgid,
@@ -2260,7 +2260,7 @@ class WeChatMPSyncService:
                 self._mark_article_retry(tenant_id, article["id"], "freepublish:sub_structure")
                 return None
             deleted_flag = is_truthy_flag(sub.get("is_deleted"))
-            title = sanitize_text(str(sub.get("title"))) if sub.get("title") else None
+            title = sanitize_text(str(sub.get("title")), source="wechat_mp_ingest") if sub.get("title") else None
             url = sub.get("url") if isinstance(sub.get("url"), str) and sub.get("url") else None
             alias_identity: Optional[URLIdentity] = None
             if url:
@@ -2300,7 +2300,7 @@ class WeChatMPSyncService:
             if first_title is None:
                 first_title = title
                 first_author = (
-                    sanitize_text(str(sub.get("author"))) if sub.get("author") else None
+                    sanitize_text(str(sub.get("author")), source="wechat_mp_ingest") if sub.get("author") else None
                 )
             # 前置子篇标题 text 节点（保序合并，跨子篇可检索边界）
             if title:

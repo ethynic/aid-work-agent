@@ -735,10 +735,10 @@ async def update_schema(doc_id: int, req: SchemaSave, request: Request):
     tenant_id = get_current_tenant_id()
 
     # 请求体可能携带孤立代理字符，写库/向量化前统一清洗
-    req.table_name = sanitize_text(req.table_name)
-    req.description = sanitize_text(req.description)
-    req.source_info = sanitize_text(req.source_info)
-    req.columns = sanitize_value(req.columns)
+    req.table_name = sanitize_text(req.table_name, source="data_analysis_api")
+    req.description = sanitize_text(req.description, source="data_analysis_api")
+    req.source_info = sanitize_text(req.source_info, source="data_analysis_api")
+    req.columns = sanitize_value(req.columns, source="data_analysis_api")
     schema_text = generate_schema_text(req.table_name, req.description, req.columns)
 
     try:
@@ -890,7 +890,7 @@ async def batch_save_relations(req: RelationBatch, request: Request):
     tenant_id = get_current_tenant_id()
 
     try:
-        relations_data = sanitize_value([r.dict() for r in req.relations])
+        relations_data = sanitize_value([r.dict() for r in req.relations], source="data_analysis_api")
 
         def _save():
             with get_db_connection() as conn:
@@ -1004,7 +1004,7 @@ async def add_relation(req: RelationItem, request: Request):
     tenant_id = get_current_tenant_id()
 
     try:
-        relation_data = sanitize_value(req.dict())
+        relation_data = sanitize_value(req.dict(), source="data_analysis_api")
 
         def _add():
             with get_db_connection() as conn:

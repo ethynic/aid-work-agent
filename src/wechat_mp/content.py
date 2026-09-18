@@ -142,7 +142,7 @@ def _flush_text(buf: List[str], nodes: List[ContentNode]) -> None:
     buf.clear()
     if not text:
         return
-    text = sanitize_text(text)
+    text = sanitize_text(text, source="wechat_mp_content")
     if nodes and nodes[-1].type == "text":
         # 同段落相邻文本合并（块级边界已截断，这里合并的是未被块级标签分开的片段）
         nodes[-1].text = f"{nodes[-1].text}\n{text}"
@@ -186,17 +186,17 @@ def _extract_title(soup: BeautifulSoup, html: str) -> Optional[str]:
     if el:
         text = el.get_text(strip=True)
         if text:
-            return sanitize_text(text)
+            return sanitize_text(text, source="wechat_mp_content")
     m = _MSG_TITLE_RE.search(html)
     if m:
         text = html_module.unescape(m.group(1)).strip()
         if text:
-            return sanitize_text(text)
+            return sanitize_text(text, source="wechat_mp_content")
     m = _OG_TITLE_RE.search(html)
     if m:
-        return sanitize_text(html_module.unescape(m.group(1)).strip())
+        return sanitize_text(html_module.unescape(m.group(1)).strip(), source="wechat_mp_content")
     if soup.title and soup.title.string:
-        return sanitize_text(soup.title.string.strip())
+        return sanitize_text(soup.title.string.strip(), source="wechat_mp_content")
     return None
 
 
@@ -238,7 +238,7 @@ def extract_article(html: str) -> ExtractedArticle:
 
     return ExtractedArticle(
         title=_extract_title(soup, html),
-        account_name=sanitize_text(account_name) if account_name else None,
+        account_name=sanitize_text(account_name, source="wechat_mp_content") if account_name else None,
         publish_time=_extract_publish_time(html),
         nodes=nodes,
         alias=extract_alias_url(html),

@@ -137,7 +137,7 @@ class TextEmbeddingV3Client:
         # 否则 _sanitize_texts 会把字符串拆成单字符列表导致 batch 超限 400
         if isinstance(texts, str):
             texts = [texts]
-        texts = _sanitize_texts(texts)
+        texts = _sanitize_texts(texts, source="embedding_input")
         for attempt in range(1, 4):  # 1 + 2 = 3 次尝试
             try:
                 return TextEmbedding.call(

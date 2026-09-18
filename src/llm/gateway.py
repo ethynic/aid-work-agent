@@ -186,7 +186,7 @@ class LLMGateway:
         """
         import time
         if "messages" in kwargs:
-            kwargs["messages"] = sanitize_messages(kwargs["messages"])
+            kwargs["messages"] = sanitize_messages(kwargs["messages"], source="llm_gateway")
         if self._key_pool is None:
             raise RuntimeError(
                 f"LLM网关未配置 provider={self.provider_name} 的 Key，无法调用 {fn_name}；"
@@ -231,7 +231,7 @@ class LLMGateway:
         stream_start = time.time()
         chunk_count = 0
         if "messages" in kwargs:
-            kwargs["messages"] = sanitize_messages(kwargs["messages"])
+            kwargs["messages"] = sanitize_messages(kwargs["messages"], source="llm_gateway")
         logger.info(f"[LLM] _stream_with_pool started, provider={self.provider_name}, fn={fn_name}")
         
         try:

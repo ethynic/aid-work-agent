@@ -488,7 +488,7 @@ class KnowledgeBaseService:
 
             # 源头清洗：PDF ToUnicode 缺陷可能产生孤立代理字符（如 \ud83c），
             # 不清洗会导致写库时 UTF-8 编码失败（UnicodeEncodeError）
-            parse_result.text = sanitize_text(parse_result.text or "")
+            parse_result.text = sanitize_text(parse_result.text or "", source="kb_parse")
 
             # 2. 分块
             if parse_result.precomputed_chunks:
@@ -496,7 +496,7 @@ class KnowledgeBaseService:
                 # 跳过 TextChunker；文件名前缀注入每个 chunk，保证任意块可按文件名命中
                 chunks = []
                 for i, pc in enumerate(parse_result.precomputed_chunks):
-                    text = f"文档标题：{file_filename}\n{sanitize_text(pc.text)}"
+                    text = f"文档标题：{file_filename}\n{sanitize_text(pc.text, source='kb_parse')}"
                     chunks.append({
                         "text": text,
                         "tokens": self.chunker._estimate_tokens(text),

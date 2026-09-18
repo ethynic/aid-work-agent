@@ -128,7 +128,7 @@ class ToolExecutor:
                 result = await tool.execute(**parameters)
             # 工具提取文本可能含孤立代理字符（如 PDF \ud83c），在出口统一清洗，
             # 防止 SSE 编码中断流、会话历史落库报 UnicodeEncodeError
-            result = sanitize_value(result)
+            result = sanitize_value(result, source="tool_result")
             logger.info(f"工具执行成功: {tool_name}")
             return result
         except Exception as e:

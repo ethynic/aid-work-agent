@@ -15,6 +15,13 @@ services:
     # （加载全部工具/skills 后），8G 上限留足余量且不会挤占 postgres/背景 runner
     mem_limit: 8g
 
+    # 等 Redis 健康后再启动 worker：worker 首连 Redis 失败会降级进进程内存，
+    # 造成跨 worker 状态漂移（2026-09-18 实证：Redis 容器重建后 api 先于其就绪
+    # 启动，DNS 解析瞬时失败触发降级）
+    depends_on:
+      aid-redis:
+        condition: service_healthy
+
     # 端口映射
     ports:
       - "${API_PORT:-8000}:8000"
@@ -98,6 +105,11 @@ services:
     # 内存上限：背景 runner 加载整套 Agent + 调度器 + recap 消费，
     # 4G 上限防止异常膨胀拖垮宿主机（超过后容器被 OOM kill 并由 restart 拉起）
     mem_limit: 4g
+
+    # 与 aid-agent-api 同理：等 Redis 健康后再启动（recap 队列/poller 锁均依赖 Redis）
+    depends_on:
+      aid-redis:
+        condition: service_healthy
     env_file:
       - .env
     environment:

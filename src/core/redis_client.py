@@ -331,51 +331,71 @@ class RedisClient:
         self._connected = False
         self._key_prefix = ""
         self._lock = threading.Lock()
-        self._connect()
+        self._connect(retries=3)
 
-    def _connect(self) -> None:
-        """尝试连接 Redis，失败时使用内存降级"""
-        try:
-            redis_cfg = getattr(settings, 'redis', None)
-            if redis_cfg is None:
-                logger.warning("[Redis] 配置中缺少 redis 节，使用内存降级")
-                self._connected = False
-                return
+    def _connect(self, retries: int = 0) -> None:
+        """尝试连接 Redis，失败时使用内存降级。
 
-            enabled = getattr(redis_cfg, 'enabled', False)
-            if not enabled:
-                logger.info("[Redis] 已禁用，使用内存降级")
-                self._connected = False
-                return
-
-            host = getattr(redis_cfg, 'host', 'localhost')
-            port = int(getattr(redis_cfg, 'port', 6379))
-            password = getattr(redis_cfg, 'password', None) or None
-            db = int(getattr(redis_cfg, 'db', 0))
-            ssl = getattr(redis_cfg, 'ssl', False)
-            self._key_prefix = getattr(redis_cfg, 'key_prefix', '') or ''
-
-            import redis as redis_lib
-            self._client = redis_lib.Redis(
-                host=host,
-                port=port,
-                password=password,
-                db=db,
-                ssl=ssl,
-                decode_responses=True,
-                socket_connect_timeout=5,
-                socket_timeout=5,
-                health_check_interval=30,
-                protocol=2,  # 强制 RESP2 协议，兼容 Redis 5.x，避免 HELLO 命令
-            )
-            # 测试连接
-            self._client.ping()
-            self._connected = True
-            logger.info(f"[Redis] 连接成功: {host}:{port}/{db}")
-        except Exception as e:
-            logger.warning(f"[Redis] 连接失败，降级到内存存储: {e}")
+        retries > 0（进程启动首连）时带退避重试，覆盖部署窗口 Redis 容器尚未
+        就绪 / Docker DNS 注册延迟导致的瞬时失败（生产实测 Error -3），避免
+        worker 在本可连通的情况下降级进内存、造成跨 worker 状态漂移。
+        运行期重连（_ensure_connection 触发）retries=0 快速失败：Redis 长期
+        宕机时每次操作最多阻塞一次连接超时，不叠加重试。
+        """
+        redis_cfg = getattr(settings, 'redis', None)
+        if redis_cfg is None:
+            logger.warning("[Redis] 配置中缺少 redis 节，使用内存降级")
             self._connected = False
-            self._client = None
+            return
+
+        enabled = getattr(redis_cfg, 'enabled', False)
+        if not enabled:
+            logger.info("[Redis] 已禁用，使用内存降级")
+            self._connected = False
+            return
+
+        host = getattr(redis_cfg, 'host', 'localhost')
+        port = int(getattr(redis_cfg, 'port', 6379))
+        password = getattr(redis_cfg, 'password', None) or None
+        db = int(getattr(redis_cfg, 'db', 0))
+        ssl = getattr(redis_cfg, 'ssl', False)
+        self._key_prefix = getattr(redis_cfg, 'key_prefix', '') or ''
+
+        import time
+
+        last_err: Optional[Exception] = None
+        for attempt in range(retries + 1):
+            try:
+                import redis as redis_lib
+                self._client = redis_lib.Redis(
+                    host=host,
+                    port=port,
+                    password=password,
+                    db=db,
+                    ssl=ssl,
+                    decode_responses=True,
+                    socket_connect_timeout=5,
+                    socket_timeout=5,
+                    health_check_interval=30,
+                    protocol=2,  # 强制 RESP2 协议，兼容 Redis 5.x，避免 HELLO 命令
+                )
+                # 测试连接
+                self._client.ping()
+                self._connected = True
+                logger.info(f"[Redis] 连接成功: {host}:{port}/{db}" + (f"（第 {attempt + 1} 次尝试）" if attempt else ""))
+                return
+            except Exception as e:
+                last_err = e
+                self._connected = False
+                self._client = None
+                if attempt < retries:
+                    backoff = 2 ** (attempt + 1)  # 2s/4s/8s
+                    logger.warning(
+                        f"[Redis] 连接失败（第 {attempt + 1}/{retries + 1} 次尝试）: {e}，{backoff}s 后重试"
+                    )
+                    time.sleep(backoff)
+        retry_note = f"（已重试 {retries} 次）" if retries else ""
+        logger.warning(f"[Redis] 连接失败，降级到内存存储{retry_note}: {last_err}")
 
     def _ensure_connection(self) -> bool:
         """确保连接可用，尝试重连"""
@@ -389,6 +409,19 @@ class RedisClient:
 
         if not self._connected:
             self._connect()
+            if self._connected:
+                # 从降级恢复：清空内存降级存储。降级窗口内的写入不回补 Redis，
+                # 残留数据会在下一次降级窗口被误读为有效状态，必须丢弃。
+                with self._fallback._lock:
+                    stale = len(self._fallback._data)
+                    self._fallback._data.clear()
+                    self._fallback._types.clear()
+                    self._fallback._ttls.clear()
+                if stale:
+                    logger.warning(
+                        f"[Redis] 已从内存降级恢复连接（降级期内存写入 {stale} 键已丢弃，"
+                        f"相关状态以 Redis 为准，请排查降级窗口内的状态漂移）"
+                    )
 
         return self._connected
 
@@ -1063,6 +1096,8 @@ class RedisClient:
         with self._fallback._lock:
             fallback_cleared = len(self._fallback._data)
             self._fallback._data.clear()
+            self._fallback._types.clear()
+            self._fallback._ttls.clear()
 
         logger.info(
             f"[Redis] clear_all pattern={pattern} deleted={deleted} "
