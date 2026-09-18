@@ -3233,7 +3233,7 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                     logger.opt(exception=True).warning(f"[AGENT] 推送 images SSE 事件失败: {_img_e}")
 
         if iteration >= max_iterations:
-            logger.warning(f"Reached max iterations ({max_iterations})")
+            logger.error(f"Reached max iterations ({max_iterations})")
             yield make_event("response", data="I apologize, but the task is taking too long. Please try again or break it into smaller steps.")
 
         # 收集本轮 tool 消息序列，供 main.py 持久化

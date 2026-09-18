@@ -153,14 +153,6 @@ class SubagentRegistry:
             logger.info(
                 f"DB 定义覆盖内置条目: {agent_id} ({existing_cfg.name} -> {config.name})"
             )
-        # 显示名重复仅告警，不拒绝（显示名仅用于展示）
-        for key, cfg in self._configs.items():
-            if key != agent_id and cfg.name == config.name:
-                logger.warning(
-                    f"显示名重复: agent_id={agent_id} 与 agent_id={key} 均为 "
-                    f"「{config.name}」，两条并存，展示层需以 agent_id 区分"
-                )
-                break
         self._configs[agent_id] = config
 
     def register(self, config: SubagentConfig) -> bool:
