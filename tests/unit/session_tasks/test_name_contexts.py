@@ -94,14 +94,22 @@ def test_same_name_reuses_context_scope(tenant_id, device_row, resolved):
     assert one == two
 
 
-def test_mutually_exclusive_input_and_no_client_runtime_policy(device_row, resolved):
+def test_mutually_exclusive_input_and_no_client_runtime_policy(tenant_id, device_row, resolved):
     with pytest.raises(ValueError):
         TaskDraftCreatePayload(device_id=str(device_row["id"]), resolution_invocation_id=resolved,
                                account_binding_id=str(uuid4()), conversation_binding_id=str(uuid4()), spec=build_spec())
     spec = build_spec()
     spec["_runtime_target"] = {"policy": "current_login_name", "target_name": "injected"}
+    # B1.2 envelope（设计 §4.3）：payload 层 spec 只校验"是对象"，内容校验按场景
+    # 分派到描述器（service.create_draft）；客户端注入的 _runtime_target 在
+    # 服务层 spec 校验被拒（extra=forbid，SpecValidationError 即 ValueError）。
+    from src.session_tasks import service as st_service
+
     with pytest.raises(ValueError):
-        TaskDraftCreatePayload(device_id=str(device_row["id"]), resolution_invocation_id=resolved, spec=spec)
+        st_service.create_draft(
+            tenant_id, "user-1",
+            TaskDraftCreatePayload(device_id=str(device_row["id"]), resolution_invocation_id=resolved, spec=spec),
+        )
 
 
 def test_malformed_result_and_control_character_rejected(tenant_id, device_row, resolved):

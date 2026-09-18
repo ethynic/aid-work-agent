@@ -24,6 +24,7 @@ from fastapi.responses import JSONResponse, Response
 
 from . import decisions as decisions_mod
 from . import service
+from .scenario_descriptor import ScenarioDescriptorError
 from .constants import (
     ERR_IDEMPOTENCY_CONFLICT,
     ERR_VALIDATION_FAILED,
@@ -270,11 +271,11 @@ async def task_notifications(request: Request, limit: int = 20, offset: int = 0)
 
 
 @router.get("/capabilities")
-async def task_capabilities(request: Request):
+async def task_capabilities(request: Request, scenario_key: str = ""):
     from .workbench import capabilities
     try:
         tenant_id, _ = await _current_user_and_tenant(request)
-        return _ok(await asyncio.to_thread(capabilities, tenant_id))
+        return _ok(await asyncio.to_thread(capabilities, tenant_id, scenario_key or None))
     except SessionTaskError as exc:
         return _from_service_error(exc)
 
@@ -308,7 +309,10 @@ async def update_draft(request: Request, task_id: str):
         if expected_version <= 0:
             raise SessionTaskError("expected_version 必填", ERR_VALIDATION_FAILED, 400)
         result = await asyncio.to_thread(
-            service.update_draft, tenant_id, user_id, _parse_path_uuid(task_id, "task_id"), expected_version, body.get("spec") or {}
+            service.update_draft, tenant_id, user_id, _parse_path_uuid(task_id, "task_id"),
+            expected_version, body.get("spec") or {},
+            # B1.2 §4.3：请求显式携带 scenario_key 时按任务行权威场景校验（不得切换）
+            body.get("scenario_key"),
         )
         return _ok(result)
     except SessionTaskError as exc:
@@ -555,16 +559,37 @@ async def claim_session_invocation(request: Request, assignment_id: str, invocat
 # ---------------------------------------------------------------------------
 
 
+def _scenario_binding_resolver(scenario_key: str):
+    """bindings API 按 scenario_key 路由描述器 binding_resolver（CR 阻断 10）。
+
+    缺省微信（旧请求兼容）；未知/未注册场景 fail-closed 400——不回退微信实现。
+    """
+    from .constants import ERR_VALIDATION_FAILED
+    from .scenario_descriptor import get_descriptor
+
+    key = str(scenario_key or "weixin.conversation.v1")
+    descriptor = get_descriptor(key)
+    resolver = getattr(descriptor, "binding_resolver", None) if descriptor is not None else None
+    if resolver is None or not callable(getattr(resolver, "list_bindings", None)) or not callable(
+        getattr(resolver, "create_binding", None)
+    ):
+        # CR 三审 P1-8：resolver 缺失或未实现绑定管理成员 → 受控 400
+        #（不假设场景绑定模型，通用层不预锁微信签名）
+        raise SessionTaskError(f"场景 {key} 不支持绑定管理或未注册", ERR_VALIDATION_FAILED, 400)
+    return resolver
+
+
 @bindings_router.get("/bindings")
-async def list_bindings(request: Request, device_id: str = "", limit: int = 50):
+async def list_bindings(request: Request, device_id: str = "", limit: int = 50, scenario_key: str = ""):
     try:
         tenant_id, user_id = await _current_user_and_tenant(request)
-        from src.weixin_conversation import bindings as bindings_service
-
-        result = await asyncio.to_thread(bindings_service.list_bindings, tenant_id, user_id, device_id, min(limit, 200))
+        resolver = _scenario_binding_resolver(scenario_key)
+        result = await asyncio.to_thread(resolver.list_bindings, tenant_id, user_id, device_id, min(limit, 200))
         return _ok(result)
     except SessionTaskError as exc:
         return _from_service_error(exc)
+    except ScenarioDescriptorError as exc:  # 场景不支持绑定管理（如 fake）→ fail-closed 400
+        return _err(400, str(exc), ERR_VALIDATION_FAILED)
 
 
 @bindings_router.post("/bindings")
@@ -572,16 +597,17 @@ async def create_binding(request: Request):
     try:
         tenant_id, user_id = await _current_user_and_tenant(request)
         body = await request.json()
-        from src.weixin_conversation import bindings as bindings_service
-
+        resolver = _scenario_binding_resolver(str(body.get("scenario_key", "")))
         result = await asyncio.to_thread(
-            bindings_service.create_binding, tenant_id, user_id,
+            resolver.create_binding, tenant_id, user_id,
             str(body.get("device_id", "")), str(body.get("account_binding_id", "")),
             str(body.get("conversation_type", "")), str(body.get("label", "")),
         )
         return _ok(result, status_code=201)
     except SessionTaskError as exc:
         return _from_service_error(exc)
+    except ScenarioDescriptorError as exc:
+        return _err(400, str(exc), ERR_VALIDATION_FAILED)
 
 
 def _validation_error(exc: Exception) -> JSONResponse:

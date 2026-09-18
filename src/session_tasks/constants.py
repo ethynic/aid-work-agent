@@ -43,9 +43,10 @@ DECISION_KINDS = (DECISION_KIND_OPENING, DECISION_KIND_REPLY, DECISION_KIND_COMP
 # 开场白合成批次保留值（普通批次 batch_id 必须是 UUID 字符串，禁用该值）
 OPENING_BATCH_ID = "opening"
 
-# 设备必须协商的能力（设计 §10：新能力 + 既有 v2 写链；共享锁/写后证据随
-# weixin_message_send_v2 的 v2 协议自带，不单列能力名）
-REQUIRED_DEVICE_CAPABILITIES = ("session_task_v1", "session_observer_v1", "weixin_message_send_v2")
+# 设备必须协商的**通用**能力（B1.2 九处 #1，设计 §4.2：场景发送能力由描述器
+# required_send_capability 按 task.scenario_key 拼接，见 service._required_capabilities；
+# 共享锁/写后证据随场景发送协议自带，不单列能力名）
+REQUIRED_DEVICE_CAPABILITIES = ("session_task_v1", "session_observer_v1")
 
 # 租约默认（设计 §4：lease=60s、renew=20s，配置项可调）
 DEFAULT_LEASE_SECONDS = 60

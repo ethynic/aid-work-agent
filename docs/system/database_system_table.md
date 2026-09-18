@@ -746,3 +746,7 @@ tenants（租户）
 ### C4 会话任务站内通知
 
 `session_task_notifications`：任务状态变化的站内通知；`tenant_id/task_id/user_id` 限定归属，`(tenant_id,task_id,control_epoch)` 唯一去重，状态迁移事务中写入。仅 completed/stopped/human_required/blocked 写入，等待状态不刷屏，不外发。只存状态与原因码，不存消息正文；租户+任务外键级联清理。
+
+### B1.2 会话任务通用控制请求表（2026-09-18）
+
+`session_task_control_requests`：human_required **异步控制迁移**队列（BOSS 端侧接入 B1.2，设计 §5.5.5 冻结 schema；DDL 四处同步 `deploy/init-postgres.sql`、`deploy/db_update.yaml` 2026-09-17 20:30:00 块、`src/session_tasks/init_tables.py`、`tests/unit/session_tasks/test_migrations.py`）。`(tenant_id, task_id, expected_control_epoch, expected_block_epoch, reason)` 唯一幂等（CR 三审 P1-1：block epoch 纳入幂等键——同代同原因、不同阻断代的请求各自成行，旧代请求按 epoch 复核自然 stale；唯一索引同时服务 pending 检查的廉价查询）；`expected_control_epoch/expected_block_epoch` 校验不符置 stale，不得覆盖较新阻断；`processing_owner/processing_lease_expires_at` 支撑 `FOR UPDATE SKIP LOCKED` 认领与崩溃重领（5s tick，`src/session_tasks/control_requests.py`）；`retry_count` 限次退避，10 次后 `failed` + 脱敏审计告警。**只负责异步迁移，不是同步发送门禁**；processing/failed 均保持场景 binding 的 `automation_blocked=true`，本表无任何自动解阻路径（人工 owner-only unblock 属 B4）。`source_type` ∈ {permit_denied, rate_settlement}；`source_ref` 仅存受控 delivery/invocation 引用，不落敏感正文。

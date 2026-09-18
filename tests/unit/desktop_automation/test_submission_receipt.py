@@ -13,6 +13,11 @@ from src.weixin_conversation import adapters
 def check(monkeypatch, **changes):
     adapter = adapters.WeixinConversationAdapter()
     monkeypatch.setattr(results.TrustedAdapterRegistry, "get", lambda _: adapter)
+    # B1.2：submitted 接纳白名单移到场景描述器 receipt_policy（值与原硬编码逐字一致）
+    from src.session_tasks import scenario_descriptor as sd_module
+    from src.weixin_conversation.descriptor import build_weixin_descriptor
+
+    monkeypatch.setattr(sd_module, "get_descriptor", lambda _key: build_weixin_descriptor())
     cursor = MagicMock()
     cursor.fetchone.return_value = {"id": "registered"}
     args = {"receipt_mode": "submission", "receipt_context": "weixin_name", "target_ref": "target", "payload_hash": "hash"}

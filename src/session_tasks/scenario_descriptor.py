@@ -44,6 +44,83 @@ class BindingResolver(Protocol):
         """领取/分配时的绑定有效性复核（verified + 验证字段完整且未过期）。"""
         ...
 
+    def resolve_draft_targets(self, conn, tenant_id: str, user_id: str, device_id: str, resolution_invocation_id: str):  # noqa: ANN001
+        """名称定位结果 → (account_binding_id, conversation_binding_id)。
+
+        仅支持 resolution 草稿路径的场景实现（微信）；BOSS 等其他场景可抛
+        ScenarioDescriptorError（models 层已约束 resolution 与非微信场景互斥）。"""
+        ...
+
+    def ensure_valid_for_publish(self, binding: Dict[str, Any]) -> None:  # noqa: ANN001
+        """发布有效性校验（require_verified 分支）：非法时抛 SessionTaskError
+        （场景持有逐条错误文案与状态码语义）。"""
+        ...
+
+    def runtime_target_policy(self, binding_row: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:  # noqa: ANN001
+        """claim 响应运行时目标策略（如微信 _runtime_target；无则 None）。"""
+        ...
+
+    def account_identity_version(self, binding_row: Optional[Dict[str, Any]]) -> int:  # noqa: ANN001
+        """claim 响应 account_identity_version（无账号 scope 语义的场景返回 0）。"""
+        ...
+
+    def list_bindings(self, tenant_id: str, user_id: str, device_id: str, limit: int):  # noqa: ANN001
+        """绑定管理 API 列表（bindings_router 按 scenario_key 路由；不支持的场景抛
+        ScenarioDescriptorError，API 层转 fail-closed 4xx）。"""
+        ...
+
+    def create_binding(self, tenant_id: str, user_id: str, device_id: str,
+                       account_binding_id: str, binding_type: str, label: str):  # noqa: ANN001
+        """绑定管理 API 创建（同上；不支持的场景抛 ScenarioDescriptorError）。"""
+        ...
+
+
+class BindingGuard(Protocol):
+    """场景 binding 同步门禁契约（B1.2，设计 §5.5.2/§5.5.5）。
+
+    场景在自己的绑定表上实现全部行级操作；通用层只负责定位（受信 business_ref
+    → task.conversation_binding_id）并传同一 cursor。微信描述器 binding_guard=None，
+    通用层完全绕过该扩展（锁面不变，B1.0 特征锁定）。
+
+    锁序约束（设计 §5.5.5 矩阵）：guard 的锁总是在调用方已持 subject/task（或
+    invocation/delivery）锁之后获取——场景实现不得在 guard 内反向获取 subject/task。
+    """
+
+    def lock_binding(self, cursor, tenant_id: str, binding_id: str) -> Optional[Dict[str, Any]]:  # noqa: ANN001
+        """场景绑定行 FOR UPDATE（operation-result/permits/Phase A 共用入口）；
+        不存在返回 None。"""
+        ...
+
+    def check_blocked(self, binding_row: Dict[str, Any]) -> Optional[str]:  # noqa: ANN001
+        """已锁定绑定行的同步阻断检查（幂等重 prepare 等只锁不计数路径使用）：
+        blocked 返回原因（受控 reason），未阻断返回 None。"""
+        ...
+
+    def gate_transaction(self, cursor, task: Dict[str, Any], decision: Dict[str, Any],
+                         gate: Callable[..., Any]) -> Dict[str, Any]:  # noqa: ANN001
+        """prepare-send Phase A 门禁（同一事务/同一 cursor 内）。
+
+        职责切分（V1.9 冻结）：guard 只做锁/检查/落库——锁场景 binding 行 →
+        检查 automation_blocked（blocked → terminal，不调 gate）→ 跨日归一化
+        计数 → **调用纯计算 send_eligibility_gate(cursor, task, decision)**（只读，
+        零写入）→ 按冻结词汇落库 effective_count（eligible/deferred 都落，
+        按 last_rate_decision_id 去重）→ 原样返回 gate 的 V1.9 判别联合之一：
+        {"eligible": True, "effective_count": int}
+        | {"deferred": True, "effective_count": int, "server_now": aware-dt,
+           "deferred_until": aware-dt, "retry_after_ms": 正 int,
+           "deferred_reason": str, "response_revision": int}
+        | {"terminal": "human_required", "reason": 受控码}
+        gate 返回畸形词汇/未知标记时 guard 不得擅自解释——原样上抛由通用层
+        fail-closed（只有显式 eligible/deferred/terminal 被处理）。terminal/deferred
+        的任务迁移与响应构造由通用层持有（设计 §5.5.1 职责表）。时间口径统一
+        DB 侧（clock_timestamp/now()），不依赖应用机墙钟。"""
+        ...
+
+    def block_binding(self, cursor, task: Dict[str, Any], reason: str) -> int:  # noqa: ANN001
+        """置 automation_blocked=true 且 block_epoch+1（供 permits 拒绝副作用与
+        operation_result 异常升级复用）；返回新 block epoch。禁止任何自动清除。"""
+        ...
+
 
 class ScenarioDescriptor(Protocol):
     """场景描述器契约（设计 §4.1：单一注册对象；BOSS chat_reply.v1 为第二实现）。"""
@@ -57,7 +134,10 @@ class ScenarioDescriptor(Protocol):
     decision_hooks: scenario_hooks.ScenarioDecisionHooks
     adapter: ScenarioAdapter  # 含 settle_operation_result / validate_submission_evidence / validate_evidence
     workbench_label_resolver: Callable[..., Any]
-    send_eligibility_gate: Optional[Callable[..., Any]]  # BOSS 使用；纯计算只读；微信为 None
+    # 纯计算只读（V1.9 严格判别联合，见设计卷首变更记录 2）；微信为 None；与 binding_guard 同有同无
+    send_eligibility_gate: Optional[Callable[..., Any]]
+    binding_guard: Optional[BindingGuard]  # 锁/检查/落库；微信为 None
+    scenario_enabled: Callable[[str], bool]  # 场景热读门控（通用生命周期按 task.scenario_key 分派）
 
 
 class ScenarioDescriptorError(Exception):
@@ -101,13 +181,18 @@ def register_scenario(descriptor: ScenarioDescriptor) -> None:
     注册锁串行化整个注册与恢复过程；任一步抛异常按调用前快照**恢复调用前
     状态**（旧对象原样恢复、本次新增值删除，恢复顺序与写入相反）后原样重抛
     ——同 key 已有稳定注册（如微信）不因注册失败被清掉，不留半注册状态。
-    回滚自身失败时以 logger.error 明确记录（此时三表可能偏离调用前状态，
-    不再满足全有或全无），不覆盖原始异常。
+    恢复动作逐表独立 best-effort：一张表恢复失败不影响其余表的恢复，恢复异常
+    分别以 logger.error 显式记录（此时注册表可能偏离调用前状态，不再满足全有
+    或全无），不覆盖原始异常。
 
     锁关系：本模块 _LOCK 与 weixin_conversation.registration._LOCK 是两把不同
     粒度的锁，全局只存在 "registration._LOCK → 本锁" 的唯一获取顺序（ensure_registered
     持外层锁后调本函数），无反向获取路径，不会嵌套死锁；选 RLock 容忍同线程
     重入（上层装配代码持本锁时再次调用本函数）。
+
+    演进注意：未来 register 实现若含写入后动作（校验/通知等），异常分支同样
+    必须恢复本表——把该步包进 try/except 并在上面按逆序追加独立的
+    best-effort 恢复，不得只回滚注册表写入而遗留写入后动作的副作用。
     """
     scenario_key = descriptor.scenario_key
     adapter_key = descriptor.adapter.scenario_key
@@ -125,26 +210,26 @@ def register_scenario(descriptor: ScenarioDescriptor) -> None:
         try:
             scenario_hooks.register_hooks(descriptor.decision_hooks)
         except Exception as exc:
-            try:
-                _restore_adapter(scenario_key, old_adapter)
-            except Exception as restore_exc:
-                logger.error(
-                    "register_scenario 回滚失败（决策钩子步，适配器表未恢复）: "
-                    f"scenario_key={scenario_key} 原始异常={exc!r} 回滚异常={restore_exc!r}"
-                )
+            # 每表独立 best-effort：一张表恢复失败不阻断其余恢复（分别 logger）
+            _best_effort_restore("适配器", lambda: _restore_adapter(scenario_key, old_adapter), exc)
             raise
         try:
             register_descriptor(descriptor)
         except Exception as exc:
-            try:
-                _restore_hooks(scenario_key, old_hooks)
-                _restore_adapter(scenario_key, old_adapter)
-            except Exception as restore_exc:
-                logger.error(
-                    "register_scenario 回滚失败（描述器步，钩子/适配器表未恢复）: "
-                    f"scenario_key={scenario_key} 原始异常={exc!r} 回滚异常={restore_exc!r}"
-                )
+            _best_effort_restore("决策钩子", lambda: _restore_hooks(scenario_key, old_hooks), exc)
+            _best_effort_restore("适配器", lambda: _restore_adapter(scenario_key, old_adapter), exc)
             raise
+
+
+def _best_effort_restore(table_name: str, restore, original_exc: Exception) -> None:  # noqa: ANN001
+    """恢复单张注册表；失败仅 logger.error，不向调用方传播（不覆盖原始异常）。"""
+    try:
+        restore()
+    except Exception as restore_exc:  # noqa: BLE001 恢复失败如实记录，注册表可能偏离调用前状态
+        logger.error(
+            f"register_scenario 恢复{table_name}失败（原始异常={original_exc!r} "
+            f"恢复异常={restore_exc!r}）"
+        )
 
 
 def _restore_adapter(scenario_key: str, old_adapter: Optional[ScenarioAdapter]) -> None:

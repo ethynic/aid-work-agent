@@ -1,6 +1,16 @@
 # BOSS 直聘端侧会话任务接入设计（boss.chat_reply.v1）
 
-版本 V1.8 · 2026-09-17 · 设计交付（已吸收实现前复核意见；冻结渲染失败分流与 deferred HTTP 200 union；微信不注册频控 gate、不扩大 prepare-send binding 锁面；补齐控制请求处理节奏、人工解阻、binding 定位和 B0b 统计口径），待开发。启动开发前须另立开发计划文档并登记。
+版本 V1.9 · 2026-09-18 · 设计交付（V1.8 基础上按 B1.2 实现复审冻结协议变更：控制请求幂等键升级五元、gate 契约升级严格判别联合与 UTC 要求、settlement 结构化返回与 guard 缺失升级语义），待开发。启动开发前须另立开发计划文档并登记。
+
+### V1.9 协议变更记录（2026-09-18，随 B1.2 实现复审冻结）
+
+1. **控制请求幂等键五元化**：`UNIQUE (tenant_id, task_id, expected_control_epoch, expected_block_epoch, reason)`——同代连续同原因异常会把 binding block epoch 推进，四元键会吞掉新 epoch 的迁移请求（旧请求 stale、新请求被唯一键吞、任务无人迁移）。写入侧为 INSERT ON CONFLICT 五列 DO NOTHING。
+2. **send_eligibility_gate 严格判别联合**（替代 V1.8 §4.1 的简写返回）：只允许三种显式形态，其他任何返回（空 dict/未知 outcome/缺字段/类型错）一律 fail-closed（SEND_GATE_MALFORMED，不物化 invocation）：
+   - `{"eligible": True, "effective_count": int}`——effective_count 为原生 int（type is int，排除 bool）且 ≥1（计入本次触发后）；
+   - `{"deferred": True, "effective_count": int, "server_now": aware datetime, "deferred_until": aware datetime, "retry_after_ms": 正 int, "deferred_reason": 非空 str, "response_revision": int}`——datetime 必须带 tzinfo 且 utcoffset() 非 None（naive 一律拒绝，单侧 naive 也拒绝）；统一转 UTC 比较，要求 deferred_until > server_now 且 |（deferred_until − server_now）− retry_after_ms| ≤ 2000ms；**禁止使用应用机/客户端墙钟参与判定**；
+   - `{"terminal": "human_required", "reason": 受控码}`。
+   gate 与 guard（binding_guard）必须同有同无，不一致 → SEND_GATE_CONFIG_INVALID。guard 职责=锁 binding/检查 automation_blocked/落库计数，并在锁内调用注入的纯计算 gate；guard 漏调 gate 的实现必然落入 malformed fail-closed。
+3. **settle_operation_result 结构化返回契约**：只允许 `None`（normal）或 `{"status": "anomaly_committed", "reason": <非空受控码>}`（补建/落账保留且调用方升级）；其他任何返回值按未知处理——ROLLBACK TO SAVEPOINT（撤销部分写入）并按结算异常升级。升级路径：脱敏审计（只落受控码与返回类型，不落原始 repr）+ block binding + 幂等控制请求 + 正常 ACK。**guard 缺失（无 binding 上下文）时 settle 异常/非法返回的升级语义**：无升级对象时抛受控错误、回滚主事务且不 ACK，由 Runtime outbox 重投——不得只审计后 ACK（微信 no-op 恒返回 None 不受影响）。
 
 关联：[端侧会话任务设计](edge-session-task-design.md)（权威协议，本文是其第二个场景适配，**不改变其任何冻结契约，包括 §10/§11 的 execution_links 唯一约束与幂等物化语义**）、[中立执行底座](desktop-cli-automation-design.md)、[原 BOSS 场景设计 §11](../weixin/weixin-marketing-automation-design.md#11-第二场景boss-直聘聊天自动化待独立立项)、[原实施衔接 §12](../../plans/weixin/plan-weixin-marketing-automation.md#12-boss-聊天自动化实施衔接-待独立立项)、[BOSS 发送验证设计](../recruiting/boss-send-verification-design.md)、[BOSS CLI 权威设计](../recruiting/boss-resume-assistant-native-cdp-design.md)。登记入口：[ideas.md](../../ideas.md)（20260908-1432 条目）。
 
@@ -81,7 +91,7 @@ class ScenarioDescriptor(Protocol):
     send_eligibility_gate: Optional[Callable]  # BOSS 使用；纯计算，只读判断；微信为 None
 ```
 
-- **send_eligibility_gate 契约**：可选钩子；存在时签名为 `gate(read_cursor, task, decision) -> {eligible} | {deferred, next_send_eligible_at, effective_count} | {terminal: "human_required", reason}`。纯计算零写入；判断触发的写操作全部由通用 prepare-send 在其既有事务统一执行（§5.5.1 职责表）。**微信描述器设为 None，通用层直接走既有 prepare-send，不额外锁场景 binding、不新增门禁写操作**；B1.0 特征测试锁定。
+- **send_eligibility_gate 契约（V1.9 严格判别联合）**：可选钩子；存在时签名为 `gate(read_cursor, task, decision) -> {"eligible": True, "effective_count": int} | {"deferred": True, "effective_count": int, "server_now": aware-dt, "deferred_until": aware-dt, "retry_after_ms": 正 int, "deferred_reason": str, "response_revision": int} | {"terminal": "human_required", "reason": 受控码}`（字段约束与 UTC 要求见卷首 V1.9 变更记录 2）。纯计算零写入；锁/检查/落库由 binding_guard 在通用层事务内完成并注入本 gate；返回值由通用层严格校验，非三种显式形态一律 SEND_GATE_MALFORMED fail-closed。**微信描述器设为 None（binding_guard 同为 None），通用层直接走既有 prepare-send，不额外锁场景 binding、不新增门禁写操作**；B1.0 特征测试锁定。
 - 注册点唯一：`register_scenario(descriptor)` 原子注册，任一失败整体回滚。
 
 ### 4.2 九处去微信化清单
@@ -322,7 +332,7 @@ session_task_control_requests (
   next_retry_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE (tenant_id, task_id, expected_control_epoch, reason),
+  UNIQUE (tenant_id, task_id, expected_control_epoch, expected_block_epoch, reason),
   CHECK (status IN ('pending','processing','applied','stale','failed')),
   CHECK (retry_count >= 0)
 )

@@ -36,7 +36,7 @@ def test_verified_fuzzy_echo_unique_capacity(monkeypatch,sent,observed,manual):
     cursor.fetchall.side_effect=[[],[{'reply_text_id':f'd{i}','sent_count':1} for i in range(len(sent))],[{'text_id':f'm{i}'} for i in range(len(observed))]]
     payloads={**{f'd{i}':{'text':x} for i,x in enumerate(sent)},**{f'm{i}':{'text':x} for i,x in enumerate(observed)}}
     monkeypatch.setattr(decisions,'load_text',lambda conn,tenant,task,key,**kw:payloads[key])
-    assert decisions.check_manual_intervention(conn,'tenant','task',[{'text':observed[-1]}]) is manual
+    assert decisions.check_manual_intervention(conn,'tenant','task',[{'text':observed[-1]}], scenario_key='weixin.conversation.v1') is manual
 
 def test_python_ts_shared_boundaries():
     pairs=[['这是用于测试数字不能错误合并的长消息𐄇','这是用于测试数字不能错误合并的长消息𐄈'],['这是一条用于测试英文否定词边界识别方式的很长消息请not发送','这是一条用于测试英文否定词边界识别方式的很长消息请发送'],['你好\ufeff世界','你好世界'],['“你好，世界！”','你好 世界'],['ＡＢＣ','abc'],['abcdefghij','abcdefghiX'],['好','不好'],['金额−100元','金额-100元'],['金额-100元','金额100元'],['今天会议时间为12:30请确认','今天会议时间为13:30请确认'],['今天会议已经确认请等待😀','今天会议已经确认请等待😢'],['a'*19999+'b','a'*19999+'c']]

@@ -73,17 +73,21 @@ def load_conversation_binding(tenant_id: str, binding_id: str) -> Optional[Dict[
     if key is None:
         return None
     with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            SELECT id, tenant_id, user_id, device_id, account_binding_id, conversation_type,
-                   identity_version, verification_status, verified_at, verifier_version, expires_at
-            FROM bs_weixin_conversation_bindings WHERE tenant_id=%s AND id=%s
-            """,
-            (tenant_id, key),
-        )
-        row = cursor.fetchone()
-        return dict(row) if row else None
+        return _load_conversation_binding_on(conn.cursor(), tenant_id, key)
+
+
+def _load_conversation_binding_on(cursor, tenant_id: str, binding_id: str) -> Optional[Dict[str, Any]]:  # noqa: ANN001
+    """同一游标上的绑定读取（SQL 与 load_conversation_binding 逐字一致；普通 SELECT 不加锁）。"""
+    cursor.execute(
+        """
+        SELECT id, tenant_id, user_id, device_id, account_binding_id, conversation_type,
+               identity_version, verification_status, verified_at, verifier_version, expires_at
+        FROM bs_weixin_conversation_bindings WHERE tenant_id=%s AND id=%s
+        """,
+        (tenant_id, binding_id),
+    )
+    row = cursor.fetchone()
+    return dict(row) if row else None
 
 
 def binding_verified(binding: Optional[Dict[str, Any]]) -> bool:
@@ -138,6 +142,7 @@ class WeixinConversationAdapter:
         authorization_revision: Optional[str],
         authorization_epoch: Optional[int],
         invocation: Optional[Dict[str, Any]] = None,
+        cursor: Optional[Any] = None,
     ) -> AuthorizeDecision:
         """许可事务内场景授权链（设计 §10：实时开关/epoch/fence/预算/目标都在链中）。
 
@@ -150,6 +155,9 @@ class WeixinConversationAdapter:
         invocation=None 为 executor 预检上下文（invocation 创建前）：降级为
         hash+linked 反查并跳过 assignment 段——许可签发（携带 invocation）才是
         发送前授权的权威判定。
+        cursor（B1.2）：许可事务游标——传入时全部读在其上执行（与许可事务的
+        行锁/可见性一致，仍全部为普通 SELECT 不加行锁）；None 时自开连接
+        （executor 预检路径现状）。两种形态读取语义与 B1.1 前逐点一致。
         """
         from .config import scenario_enabled
 
@@ -165,173 +173,192 @@ class WeixinConversationAdapter:
         # 降级路径（hash+linked 反查、跳过 assignment/设备强校验）；许可签发路径
         # （write_authorize 携带 invocation）走严格归属校验，两路径都以许可签发为准
         strict = invocation is not None
+        if cursor is not None:
+            return self._authorize_on_cursor(
+                ctx, cursor, operation=operation, target_ref=target_ref,
+                target_version=target_version, payload_hash=payload_hash,
+                authorization_revision=authorization_revision,
+                authorization_epoch=authorization_epoch, invocation=invocation, strict=strict,
+            )
         with get_db_connection() as conn:
-            cursor = conn.cursor()
+            return self._authorize_on_cursor(
+                ctx, conn.cursor(), operation=operation, target_ref=target_ref,
+                target_version=target_version, payload_hash=payload_hash,
+                authorization_revision=authorization_revision,
+                authorization_epoch=authorization_epoch, invocation=invocation, strict=strict,
+            )
+
+    def _authorize_on_cursor(
+        self, ctx: AdapterContext, cursor, *, operation, target_ref, target_version,
+        payload_hash, authorization_revision, authorization_epoch, invocation, strict,
+    ) -> AuthorizeDecision:  # noqa: ANN001
+        """授权链主体（B1.2 前为 authorize_operation 内联代码，逐行原样迁移：
+        全部为普通 SELECT，读取顺序/判定条件零改动）。"""
+        cursor.execute(
+            """
+            SELECT id, user_id, status, spec_revision, current_spec_id, control_epoch,
+                   conversation_binding_id
+            FROM session_tasks WHERE tenant_id=%s AND id=%s
+            """,
+            (ctx.tenant_id, str(ctx.task_ref)),
+        )
+        task = cursor.fetchone()
+        if task is None:
+            return AuthorizeDecision(allowed=False, reason="session_task_missing")
+        if task["status"] != "active":
+            return AuthorizeDecision(allowed=False, reason=f"session_task_status:{task['status']}")
+        if ctx.user_id and task["user_id"] != ctx.user_id:
+            return AuthorizeDecision(allowed=False, reason="not_owner")
+        # 授权版本：run.revision_ref 必须仍是任务当前 spec
+        if authorization_revision and str(task["current_spec_id"]) != str(authorization_revision):
+            return AuthorizeDecision(allowed=False, reason="spec_revision_switched")
+        # 决策定位（精确执行归属，许可路径）：invocation.business_ref.decision_id 是
+        # 服务端冻结的本次执行归属；hash 只负责校验正文一致，不充当决策标识。
+        # 映射缺失/不一致一律拒绝（首发路径 links 在 prepare Phase C 已写入且早于
+        # claim；fallback 经 delivery.payload_ref 兼容崩溃窗口重试）
+        business_ref = (invocation or {}).get("business_ref") or {}
+        decision_id = str(business_ref.get("decision_id") or "")
+        if strict:
+            if not decision_id:
+                delivery_id = str(business_ref.get("delivery_id") or "")
+                cursor.execute(
+                    "SELECT payload_ref FROM desktop_automation_deliveries WHERE tenant_id=%s AND id=%s",
+                    (ctx.tenant_id, delivery_id),
+                )
+                delivery_row = cursor.fetchone()
+                try:
+                    decision_id = parse_payload_ref(delivery_row["payload_ref"]) if delivery_row and delivery_row["payload_ref"] else ""
+                except ValueError:
+                    decision_id = ""
+            if not decision_id:
+                return AuthorizeDecision(allowed=False, reason="decision_ref_missing")
             cursor.execute(
                 """
-                SELECT id, user_id, status, spec_revision, current_spec_id, control_epoch,
-                       conversation_binding_id
-                FROM session_tasks WHERE tenant_id=%s AND id=%s
+                SELECT id, task_id, status, action, input_version, spec_revision, reply_text_hash,
+                       decision_kind
+                FROM session_task_decisions
+                WHERE tenant_id=%s AND id=%s
                 """,
-                (ctx.tenant_id, str(ctx.task_ref)),
+                (ctx.tenant_id, decision_id),
             )
-            task = cursor.fetchone()
-            if task is None:
-                return AuthorizeDecision(allowed=False, reason="session_task_missing")
-            if task["status"] != "active":
-                return AuthorizeDecision(allowed=False, reason=f"session_task_status:{task['status']}")
-            if ctx.user_id and task["user_id"] != ctx.user_id:
-                return AuthorizeDecision(allowed=False, reason="not_owner")
-            # 授权版本：run.revision_ref 必须仍是任务当前 spec
-            if authorization_revision and str(task["current_spec_id"]) != str(authorization_revision):
-                return AuthorizeDecision(allowed=False, reason="spec_revision_switched")
-            # 决策定位（精确执行归属，许可路径）：invocation.business_ref.decision_id 是
-            # 服务端冻结的本次执行归属；hash 只负责校验正文一致，不充当决策标识。
-            # 映射缺失/不一致一律拒绝（首发路径 links 在 prepare Phase C 已写入且早于
-            # claim；fallback 经 delivery.payload_ref 兼容崩溃窗口重试）
-            business_ref = (invocation or {}).get("business_ref") or {}
-            decision_id = str(business_ref.get("decision_id") or "")
-            if strict:
-                if not decision_id:
-                    delivery_id = str(business_ref.get("delivery_id") or "")
-                    cursor.execute(
-                        "SELECT payload_ref FROM desktop_automation_deliveries WHERE tenant_id=%s AND id=%s",
-                        (ctx.tenant_id, delivery_id),
-                    )
-                    delivery_row = cursor.fetchone()
-                    try:
-                        decision_id = parse_payload_ref(delivery_row["payload_ref"]) if delivery_row and delivery_row["payload_ref"] else ""
-                    except ValueError:
-                        decision_id = ""
-                if not decision_id:
-                    return AuthorizeDecision(allowed=False, reason="decision_ref_missing")
+            decision = cursor.fetchone()
+            if decision is None or str(decision["task_id"]) != str(task["id"]):
+                return AuthorizeDecision(allowed=False, reason="decision_not_found")
+            if invocation.get("id") is not None:
                 cursor.execute(
-                    """
-                    SELECT id, task_id, status, action, input_version, spec_revision, reply_text_hash,
-                           decision_kind
-                    FROM session_task_decisions
-                    WHERE tenant_id=%s AND id=%s
-                    """,
+                    "SELECT invocation_id FROM session_task_execution_links WHERE tenant_id=%s AND decision_id=%s",
                     (ctx.tenant_id, decision_id),
                 )
-                decision = cursor.fetchone()
-                if decision is None or str(decision["task_id"]) != str(task["id"]):
-                    return AuthorizeDecision(allowed=False, reason="decision_not_found")
-                if invocation.get("id") is not None:
-                    cursor.execute(
-                        "SELECT invocation_id FROM session_task_execution_links WHERE tenant_id=%s AND decision_id=%s",
-                        (ctx.tenant_id, decision_id),
-                    )
-                    link_row = cursor.fetchone()
-                    if link_row is not None and str(link_row["invocation_id"] or "") != str(invocation["id"]):
-                        return AuthorizeDecision(allowed=False, reason="execution_link_mismatch")
-            else:
-                # 预检路径（invocation 未创建）：同正文多决策时优先取"已链接且 ready"者；
-                # 最终归属由许可路径严格判定（错绑只影响预检，不产生许可）
-                cursor.execute(
-                    """
-                    SELECT d.id, d.task_id, d.status, d.action, d.input_version, d.spec_revision, d.reply_text_hash,
-                           d.decision_kind
-                    FROM session_task_decisions d
-                    WHERE d.tenant_id=%s AND d.task_id=%s AND d.reply_text_hash=%s
-                    ORDER BY (d.status='ready' AND COALESCE(d.action, 'reply')='reply') DESC,
-                        (EXISTS (
-                           SELECT 1 FROM session_task_execution_links l
-                           WHERE l.tenant_id=d.tenant_id AND l.decision_id=d.id
-                        )) DESC, d.created_at DESC
-                    """,
-                    (ctx.tenant_id, task["id"], payload_hash or ""),
-                )
-                decision = cursor.fetchone()
-                if decision is None:
-                    return AuthorizeDecision(allowed=False, reason="decision_not_found")
-            if not payload_hash:
-                return AuthorizeDecision(allowed=False, reason="payload_hash_required")
-            if decision["status"] != "ready" or (decision["action"] or "reply") != "reply":
-                return AuthorizeDecision(allowed=False, reason=f"decision_state:{decision['status']}")
-            if decision["spec_revision"] != task["spec_revision"]:
-                return AuthorizeDecision(allowed=False, reason="decision_spec_stale")
-            if decision["reply_text_hash"] and payload_hash != decision["reply_text_hash"]:
-                return AuthorizeDecision(allowed=False, reason="payload_hash_not_frozen")
-            # input_version 复验（§9）：决策之后有更新批次被接纳 → 旧决策不得发送
+                link_row = cursor.fetchone()
+                if link_row is not None and str(link_row["invocation_id"] or "") != str(invocation["id"]):
+                    return AuthorizeDecision(allowed=False, reason="execution_link_mismatch")
+        else:
+            # 预检路径（invocation 未创建）：同正文多决策时优先取"已链接且 ready"者；
+            # 最终归属由许可路径严格判定（错绑只影响预检，不产生许可）
             cursor.execute(
                 """
-                SELECT COALESCE(MAX(input_version), 0) AS cur
-                FROM session_task_batches
-                WHERE tenant_id=%s AND task_id=%s AND status='accepted' AND synthetic=FALSE
+                SELECT d.id, d.task_id, d.status, d.action, d.input_version, d.spec_revision, d.reply_text_hash,
+                       d.decision_kind
+                FROM session_task_decisions d
+                WHERE d.tenant_id=%s AND d.task_id=%s AND d.reply_text_hash=%s
+                ORDER BY (d.status='ready' AND COALESCE(d.action, 'reply')='reply') DESC,
+                    (EXISTS (
+                       SELECT 1 FROM session_task_execution_links l
+                       WHERE l.tenant_id=d.tenant_id AND l.decision_id=d.id
+                    )) DESC, d.created_at DESC
                 """,
-                (ctx.tenant_id, task["id"]),
+                (ctx.tenant_id, task["id"], payload_hash or ""),
             )
-            cur_version = int(cursor.fetchone()["cur"])
-            dec_version = int(decision["input_version"] or 0)
-            if dec_version == 0:
-                pass  # opening 合成版本 0：无已接纳普通批次即视为当前（有则 revoke）
-            elif cur_version != dec_version:
-                return AuthorizeDecision(allowed=False, reason="decision_superseded")
-            if dec_version == 0 and cur_version > 0:
-                return AuthorizeDecision(allowed=False, reason="decision_superseded")
-            # 绑定仍 verified，且当前身份版本与冻结 target_version 一致（身份漂移拒发）
-            binding = load_conversation_binding(ctx.tenant_id, str(task["conversation_binding_id"]))
-            if not binding_verified(binding):
-                return AuthorizeDecision(allowed=False, reason="conversation_binding_invalid")
-            if target_version:
-                identity_version = int(binding.get("identity_version") or 0)
-                if f"iv-{identity_version}" != str(target_version):
-                    return AuthorizeDecision(allowed=False, reason="target_version_drift")
-            # 当前 assignment/fence/租约/设备复验（仅许可路径：准备阶段通过不能代替
-            # 发送前授权；预检路径 invocation 未建，无 assignment 上下文）
-            assignment_id = str(business_ref.get("assignment_id") or "")
-            frozen_fence = business_ref.get("fence")
-            if strict and (not assignment_id or frozen_fence is None):
-                return AuthorizeDecision(allowed=False, reason="assignment_ref_missing")
-            if not strict:
-                assignment_id = ""
-            if strict:
-                cursor.execute(
-                    """
-                    SELECT fence, device_id, is_current, lease_expires_at
-                    FROM session_task_assignments WHERE tenant_id=%s AND id=%s
-                    """,
-                    (ctx.tenant_id, assignment_id),
-                )
-                assignment = cursor.fetchone()
-                if assignment is None or not assignment["is_current"]:
-                    return AuthorizeDecision(allowed=False, reason="assignment_not_current")
-                if int(assignment["fence"]) != int(frozen_fence):
-                    return AuthorizeDecision(allowed=False, reason="assignment_fence_stale")
-                if str(assignment["device_id"]) != str(invocation.get("device_id") or ""):
-                    return AuthorizeDecision(allowed=False, reason="assignment_device_mismatch")
-                lease_expires = assignment["lease_expires_at"]
-                lease_expires = lease_expires if lease_expires.tzinfo else lease_expires.replace(tzinfo=timezone.utc)
-                if lease_expires <= datetime.now(timezone.utc):
-                    return AuthorizeDecision(allowed=False, reason="assignment_lease_expired")
-            # 任务层发送计数配额（与 prepare-send 的 max_replies 校验双保险）+ 工作时段
+            decision = cursor.fetchone()
+            if decision is None:
+                return AuthorizeDecision(allowed=False, reason="decision_not_found")
+        if not payload_hash:
+            return AuthorizeDecision(allowed=False, reason="payload_hash_required")
+        if decision["status"] != "ready" or (decision["action"] or "reply") != "reply":
+            return AuthorizeDecision(allowed=False, reason=f"decision_state:{decision['status']}")
+        if decision["spec_revision"] != task["spec_revision"]:
+            return AuthorizeDecision(allowed=False, reason="decision_spec_stale")
+        if decision["reply_text_hash"] and payload_hash != decision["reply_text_hash"]:
+            return AuthorizeDecision(allowed=False, reason="payload_hash_not_frozen")
+        # input_version 复验（§9）：决策之后有更新批次被接纳 → 旧决策不得发送
+        cursor.execute(
+            """
+            SELECT COALESCE(MAX(input_version), 0) AS cur
+            FROM session_task_batches
+            WHERE tenant_id=%s AND task_id=%s AND status='accepted' AND synthetic=FALSE
+            """,
+            (ctx.tenant_id, task["id"]),
+        )
+        cur_version = int(cursor.fetchone()["cur"])
+        dec_version = int(decision["input_version"] or 0)
+        if dec_version == 0:
+            pass  # opening 合成版本 0：无已接纳普通批次即视为当前（有则 revoke）
+        elif cur_version != dec_version:
+            return AuthorizeDecision(allowed=False, reason="decision_superseded")
+        if dec_version == 0 and cur_version > 0:
+            return AuthorizeDecision(allowed=False, reason="decision_superseded")
+        # 绑定仍 verified，且当前身份版本与冻结 target_version 一致（身份漂移拒发）
+        binding = _load_conversation_binding_on(cursor, ctx.tenant_id, str(task["conversation_binding_id"]))
+        if not binding_verified(binding):
+            return AuthorizeDecision(allowed=False, reason="conversation_binding_invalid")
+        if target_version:
+            identity_version = int(binding.get("identity_version") or 0)
+            if f"iv-{identity_version}" != str(target_version):
+                return AuthorizeDecision(allowed=False, reason="target_version_drift")
+        # 当前 assignment/fence/租约/设备复验（仅许可路径：准备阶段通过不能代替
+        # 发送前授权；预检路径 invocation 未建，无 assignment 上下文）
+        assignment_id = str(business_ref.get("assignment_id") or "")
+        frozen_fence = business_ref.get("fence")
+        if strict and (not assignment_id or frozen_fence is None):
+            return AuthorizeDecision(allowed=False, reason="assignment_ref_missing")
+        if not strict:
+            assignment_id = ""
+        if strict:
             cursor.execute(
-                "SELECT limits_json, work_window_json FROM session_task_specs WHERE tenant_id=%s AND id=%s",
-                (ctx.tenant_id, str(task["current_spec_id"])),
+                """
+                SELECT fence, device_id, is_current, lease_expires_at
+                FROM session_task_assignments WHERE tenant_id=%s AND id=%s
+                """,
+                (ctx.tenant_id, assignment_id),
             )
-            spec_row = cursor.fetchone()
-            import json as _json
+            assignment = cursor.fetchone()
+            if assignment is None or not assignment["is_current"]:
+                return AuthorizeDecision(allowed=False, reason="assignment_not_current")
+            if int(assignment["fence"]) != int(frozen_fence):
+                return AuthorizeDecision(allowed=False, reason="assignment_fence_stale")
+            if str(assignment["device_id"]) != str(invocation.get("device_id") or ""):
+                return AuthorizeDecision(allowed=False, reason="assignment_device_mismatch")
+            lease_expires = assignment["lease_expires_at"]
+            lease_expires = lease_expires if lease_expires.tzinfo else lease_expires.replace(tzinfo=timezone.utc)
+            if lease_expires <= datetime.now(timezone.utc):
+                return AuthorizeDecision(allowed=False, reason="assignment_lease_expired")
+        # 任务层发送计数配额（与 prepare-send 的 max_replies 校验双保险）+ 工作时段
+        cursor.execute(
+            "SELECT limits_json, work_window_json FROM session_task_specs WHERE tenant_id=%s AND id=%s",
+            (ctx.tenant_id, str(task["current_spec_id"])),
+        )
+        spec_row = cursor.fetchone()
+        import json as _json
 
-            limits = _json.loads(spec_row["limits_json"]) if spec_row and spec_row["limits_json"] else {}
-            # 任务截止期硬门禁（A3）：后台评估未及触达的窗口内也不得签发新许可
-            _raw_expires = limits.get("expires_at")
-            if _raw_expires:
-                try:
-                    _exp = datetime.fromisoformat(str(_raw_expires).replace("Z", "+00:00"))
-                except ValueError:
-                    _exp = None
-                if _exp is not None:
-                    _exp = _exp if _exp.tzinfo else _exp.replace(tzinfo=timezone.utc)
-                    if _exp <= datetime.now(timezone.utc):
-                        return AuthorizeDecision(allowed=False, reason="task_deadline_exceeded")
-            max_replies = int(limits.get("max_replies") or 0) or 1
-            work_window = None
-            if spec_row and spec_row["work_window_json"]:
-                try:
-                    work_window = _json.loads(spec_row["work_window_json"])
-                except (ValueError, TypeError):
-                    work_window = None
+        limits = _json.loads(spec_row["limits_json"]) if spec_row and spec_row["limits_json"] else {}
+        # 任务截止期硬门禁（A3）：后台评估未及触达的窗口内也不得签发新许可
+        _raw_expires = limits.get("expires_at")
+        if _raw_expires:
+            try:
+                _exp = datetime.fromisoformat(str(_raw_expires).replace("Z", "+00:00"))
+            except ValueError:
+                _exp = None
+            if _exp is not None:
+                _exp = _exp if _exp.tzinfo else _exp.replace(tzinfo=timezone.utc)
+                if _exp <= datetime.now(timezone.utc):
+                    return AuthorizeDecision(allowed=False, reason="task_deadline_exceeded")
+        max_replies = int(limits.get("max_replies") or 0) or 1
+        work_window = None
+        if spec_row and spec_row["work_window_json"]:
+            try:
+                work_window = _json.loads(spec_row["work_window_json"])
+            except (ValueError, TypeError):
+                work_window = None
         if work_window and not _work_window_open(work_window):
             return AuthorizeDecision(allowed=False, reason="work_window_closed")
         scopes = [
@@ -411,10 +438,11 @@ class WeixinConversationAdapter:
         return True
 
     def settle_operation_result(self, cursor, result) -> None:  # noqa: ANN001
-        """场景结算钩子（B1.1 预留，B1.2 才有调用方；设计 §5.5.1 职责表）。
+        """场景结算钩子（设计 §5.5.1 职责表；结构化返回见底座协议，CR 阻断 9）。
 
         微信结算现状无场景账本（频控/异常队列均为 BOSS 场景 schema），no-op
-        即现状语义：operation_result 事务内不产生任何场景写操作。
+        返回 None（=normal，无升级）即现状语义：operation_result 事务内不产生
+        任何场景写操作。
         """
         return None
 

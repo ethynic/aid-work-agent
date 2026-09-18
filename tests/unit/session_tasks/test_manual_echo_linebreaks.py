@@ -29,7 +29,10 @@ def test_echo_keeps_success_capacity_with_ocr_variants(monkeypatch, sent, observ
     payloads = {**{f"d{i}": {"text": text} for i, text in enumerate(sent)},
                 **{f"m{i}": {"text": text} for i, text in enumerate(observed)}}
     monkeypatch.setattr(decisions, "load_text", lambda conn, tenant, task, key, **kw: payloads[key])
-    assert decisions.check_manual_intervention(conn, "tenant", "task", [{"text": observed[-1]}]) is manual
+    assert decisions.check_manual_intervention(
+        conn, "tenant", "task", [{"text": observed[-1]}],
+        scenario_key="weixin.conversation.v1",
+    ) is manual
     assert "dl.state='succeeded'" in cursor.execute.call_args_list[0].args[0]
 
 

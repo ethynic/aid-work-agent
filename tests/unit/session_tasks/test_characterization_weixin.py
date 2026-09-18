@@ -336,11 +336,12 @@ class TestDefaultScenarioChain:
         assert updated["status"] == "draft"
         assert _task_row(tenant_id, created["task_id"])["scenario_key"] == "weixin.conversation.v1"
 
-    def test_claim_response_shape_has_no_scenario_key(self, client, tenant_id, device_row, verified_binding):
-        """设备 claim 响应键集快照：当前无 scenario_key 字段（现状锁定，B1.2 加字段）。
+    def test_claim_response_carries_task_scenario_key(self, client, tenant_id, device_row, verified_binding):
+        """设备 claim 响应键集快照（CR 阻断 3）：scenario_key 为权威任务场景。
 
-        API 层 envelope {"success", "data"} + 固定键集；新增字段（如 B1.2 的
-        scenario_key / 期望指纹）属于契约变更，必须让本测试显式变红后同步更新。
+        B1.2 起响应携带 scenario_key（缺省微信链路恒为 weixin.conversation.v1，
+        多场景下由任务行权威字段承载）；本用例由 B1.0 的"无 scenario_key"断言
+        按计划预期转为新行为断言。
         """
         _device_with_token(tenant_id, device_row, f"tok-{tenant_id}")
         publish_task_helper(tenant_id, verified_binding, build_spec(opening=True))
@@ -354,10 +355,12 @@ class TestDefaultScenarioChain:
         assert body["success"] is True
         data = body["data"]
         assert set(data.keys()) == {
-            "assignment_id", "task_id", "spec", "spec_revision", "fence", "control_epoch",
-            "server_control_seq", "lease_seconds", "input_version_base", "fresh_baseline",
-            "conversation_binding_id", "binding_version", "account_identity_version",
+            "assignment_id", "task_id", "scenario_key", "spec", "spec_revision", "fence",
+            "control_epoch", "server_control_seq", "lease_seconds", "input_version_base",
+            "fresh_baseline", "conversation_binding_id", "binding_version",
+            "account_identity_version",
         }
+        assert data["scenario_key"] == "weixin.conversation.v1"
         assert data["fence"] == 1 and data["lease_seconds"] == 60
         assert data["spec"]["goal"].startswith("确认对方")
 
@@ -741,7 +744,11 @@ class TestPrepareSendSemantics:
             tenant_id, device_row["id"], uuid.UUID(claimed["assignment_id"]), claimed["fence"],
             uuid.UUID(decision["decision_id"])
         )
-        assert result == {"invocation_id": None, "decision_status": "superseded"}
+        # CR 阻断 12：三分支统一 status 词汇（superseded 分支新增 status 字段，
+        # 旧 Runtime 忽略新增字段）
+        assert result == {
+            "status": "superseded", "invocation_id": None, "decision_status": "superseded"
+        }
 
 
 # ---------------------------------------------------------------------------

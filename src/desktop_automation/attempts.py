@@ -79,6 +79,19 @@ def get_attempt_by_invocation_on(cursor, invocation_id: str, tenant_id: str) -> 
     return dict(row) if row else None
 
 
+def lock_attempt_by_invocation_on(cursor, invocation_id: str, tenant_id: str) -> Optional[Dict[str, Any]]:
+    """invocation 唯一映射 attempt 并 FOR UPDATE（CR 阻断 1：operation-result
+    冻结锁序 invocation→attempt→delivery→(guard)binding→rate slot 的第二环；
+    列集与 get_attempt_by_invocation_on 一致）。"""
+    cursor.execute(
+        f"SELECT {_ATTEMPT_COLUMNS} FROM desktop_automation_attempts "
+        "WHERE invocation_id = %s AND tenant_id = %s FOR UPDATE",
+        (invocation_id, tenant_id),
+    )
+    row = cursor.fetchone()
+    return dict(row) if row else None
+
+
 def find_attempt_by_request_id(request_id: str, tenant_id: str) -> Optional[Dict[str, Any]]:
     with get_db_connection() as conn:
         cursor = conn.cursor()

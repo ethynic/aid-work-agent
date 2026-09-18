@@ -88,6 +88,121 @@ class _BalanceBlocked(Exception):
 # ---------------------------------------------------------------------------
 
 
+def _valid_effective_count(value) -> bool:
+    """V1.9 gate 契约：effective_count 原生 int（type is int，排除 bool）且 ≥1
+    （计入本次触发后）。"""
+    return type(value) is int and value >= 1
+
+
+def _is_aware_datetime(value) -> bool:
+    """V1.9：绝对时间必须是 aware datetime——tzinfo 非 None 且 utcoffset() 非
+    None（naive 一律拒绝，互抄 tzinfo 的双 naive 也无法通过本检查）。"""
+    from datetime import datetime as _dt
+
+    return isinstance(value, _dt) and value.tzinfo is not None and value.utcoffset() is not None
+
+
+_GATE_REASON_RE = None
+
+
+def _is_controlled_code(value) -> bool:
+    """受控码：^[a-z][a-z0-9_]{0,63}$（terminal reason / settle reason 通用）。"""
+    global _GATE_REASON_RE
+    if _GATE_REASON_RE is None:
+        import re as _re
+
+        _GATE_REASON_RE = _re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+    return isinstance(value, str) and bool(_GATE_REASON_RE.fullmatch(value))
+
+
+def _validate_gate_outcome_v19(outcome) -> str:
+    """send_eligibility_gate 返回值严格判别联合校验（设计 V1.9 变更记录 2）。
+
+    只允许三种显式形态（标记键恰好一个、字段集合精确匹配、字段类型强校验）：
+    - {"eligible": True, "effective_count": int≥1}
+    - {"deferred": True, "effective_count": int≥1, "server_now": aware-dt,
+      "deferred_until": aware-dt, "retry_after_ms": 正 int,
+      "deferred_reason": 非空 str, "response_revision": int}
+      —— datetime 必须 aware（互抄 tzinfo 的双 naive 拒绝），统一转 UTC 后
+      deferred_until > server_now 且 |差值毫秒 − retry_after_ms| ≤ 2000ms；
+      禁止应用机/客户端墙钟参与判定；
+    - {"terminal": "human_required", "reason": 受控码}
+    其他任何返回（空 dict/未知标记/缺字段/类型错/多余字段/多标记）一律抛
+    SEND_GATE_MALFORMED（不物化 invocation）。返回规范化形态名。
+    """
+    from datetime import timezone as _tz
+
+    if not isinstance(outcome, dict):
+        raise SessionTaskError(
+            f"发送门禁返回非法结果（非对象: {type(outcome).__name__}）",
+            "SEND_GATE_MALFORMED", 500,
+        )
+    markers = [k for k in ("eligible", "deferred", "terminal") if k in outcome]
+    if len(markers) != 1:
+        raise SessionTaskError(
+            f"发送门禁返回非法结果（标记键必须恰好一个，实际 {markers!r}）",
+            "SEND_GATE_MALFORMED", 500,
+        )
+    marker = markers[0]
+    if marker == "eligible":
+        if (
+            set(outcome.keys()) != {"eligible", "effective_count"}
+            or outcome["eligible"] is not True
+            or not _valid_effective_count(outcome["effective_count"])
+        ):
+            raise SessionTaskError(
+                f"发送门禁 eligible 形态非法（outcome={outcome!r}）",
+                "SEND_GATE_MALFORMED", 500,
+            )
+        return "eligible"
+    if marker == "deferred":
+        if set(outcome.keys()) != {
+            "deferred", "effective_count", "server_now", "deferred_until",
+            "retry_after_ms", "deferred_reason", "response_revision",
+        }:
+            raise SessionTaskError(
+                f"发送门禁 deferred 形态字段集非法（outcome={outcome!r}）",
+                "SEND_GATE_MALFORMED", 500,
+            )
+        deferred_until = outcome["deferred_until"]
+        server_now = outcome["server_now"]
+        retry_after_ms = outcome["retry_after_ms"]
+        deferred_reason = outcome["deferred_reason"]
+        response_revision = outcome["response_revision"]
+        malformed = (
+            outcome["deferred"] is not True
+            or not _valid_effective_count(outcome["effective_count"])
+            or not _is_aware_datetime(server_now)
+            or not _is_aware_datetime(deferred_until)
+            or type(retry_after_ms) is not int or retry_after_ms <= 0
+            or not isinstance(deferred_reason, str) or not deferred_reason.strip()
+            or type(response_revision) is not int
+        )
+        if not malformed:
+            # 统一转 UTC 比较（V1.9：禁止应用机/客户端墙钟参与判定）
+            until_utc = deferred_until.astimezone(_tz.utc)
+            now_utc = server_now.astimezone(_tz.utc)
+            gap_ms = (until_utc - now_utc).total_seconds() * 1000
+            malformed = gap_ms <= 0 or abs(gap_ms - retry_after_ms) > 2000
+        if malformed:
+            raise SessionTaskError(
+                f"发送门禁 deferred 形态非法（outcome={outcome!r}）",
+                "SEND_GATE_MALFORMED", 500,
+            )
+        return "deferred"
+    # terminal
+    if (
+        set(outcome.keys()) != {"terminal", "reason"}
+        or outcome["terminal"] != "human_required"
+        or not _is_controlled_code(outcome["reason"])
+    ):
+        raise SessionTaskError(
+            f"发送门禁 terminal 形态非法（outcome={outcome!r}）",
+            "SEND_GATE_MALFORMED", 500,
+        )
+    return "terminal"
+
+
 def _apply_task_transition(conn, tenant_id: str, task_id: UUID, target: str, reason: str,
                            expected_status: Optional[str] = None) -> bool:  # noqa: ANN001
     """worker 触发的任务状态迁移（完成/终止/转人工/阻断）。
@@ -155,6 +270,19 @@ def _apply_task_transition(conn, tenant_id: str, task_id: UUID, target: str, rea
     if subject is not None and cursor.rowcount != 1:
         conn.rollback()
         raise SessionTaskError("任务授权主体缺失", "CONFLICT", 409)
+    # CR 非阻断 d：离开 active 的统一迁移补设计要求的脱敏审计（设计 §5.5.5：
+    # human_required/阻断迁移留审计链；恢复类迁移不在此记——恢复入口自带审计）
+    if target != STATUS_ACTIVE:
+        from src.desktop_automation import audit as _audit
+
+        _audit.insert_audit(
+            cursor, tenant_id, "task_transition", "task", str(task_id),
+            user_id=None, scenario_key=task["scenario_key"],
+            detail={
+                "target": target, "reason": reason,
+                "control_epoch": int(task["control_epoch"]) + 1,
+            },
+        )
     from .notifications import record_notice
     record_notice(conn, tenant_id, task_id, target, reason, task["control_epoch"] + 1)
     return True
@@ -1530,13 +1658,32 @@ def supersede_decisions_on_batch(conn, tenant_id: str, task_id, new_input_versio
     return {"superseded": len(decision_ids), "cancelled_invocations": cancelled}
 
 
-def _submitted_echo_messages(conn, tenant_id, task_id):
+def _submitted_echo_messages(conn, tenant_id, task_id, scenario_key: Optional[str] = None):
     """One self in the first timely post-command batch; no OCR text comparison.
 
     Persistent message IDs consume the one-command capacity across re-batching.
     Multiple self messages or commands competing for one echo remain ambiguous.
+
+    B1.2（九处 #4）：submitted 回执策略（mode/context/scenario）由任务场景描述器
+    receipt_policy 提供（微信逐值一致）。scenario_key 由调用方传入（ingest 事务
+    已持任务行数据，零额外查询；查询语义与 B1.1 前一致）；缺省时回退普通预读
+    （仅直连调用方）。场景未注册或策略非 submission → 空集（回显归属 fail-closed，
+    全部 self 消息按人工介入处理）。
     """
     cursor = conn.cursor()
+    if scenario_key is None:
+        cursor.execute(
+            "SELECT scenario_key FROM session_tasks WHERE tenant_id=%s AND id=%s",
+            (tenant_id, task_id),
+        )
+        task_row = cursor.fetchone()
+        scenario_key = str(task_row["scenario_key"]) if task_row else ""
+    from .scenario_descriptor import get_descriptor
+
+    descriptor = get_descriptor(str(scenario_key)) if scenario_key else None
+    if descriptor is None or descriptor.receipt_policy.get("mode") != "submission":
+        return {}
+    policy = descriptor.receipt_policy
     cursor.execute("""
         WITH candidates AS (
             SELECT d.id AS decision_id, m.message_id, m.text_id
@@ -1555,19 +1702,20 @@ def _submitted_echo_messages(conn, tenant_id, task_id):
                 AND m.batch_id=first_batch.batch_id AND m.sender='self'
             WHERE d.tenant_id=%s AND d.task_id=%s
               AND dl.state='succeeded' AND dl.phase='submitted'
-              AND i.arguments_json->>'receipt_mode'='submission'
-              AND i.arguments_json->>'receipt_context'='weixin_name'
-              AND i.business_ref->>'scenario_key'='weixin.conversation.v1'
+              AND i.arguments_json->>'receipt_mode'=%s
+              AND i.arguments_json->>'receipt_context'=%s
+              AND i.business_ref->>'scenario_key'=%s
               AND first_batch.created_at<=dl.finished_at + INTERVAL '60 seconds'
               AND (SELECT COUNT(*) FROM session_task_messages s WHERE s.tenant_id=d.tenant_id
                    AND s.task_id=d.task_id AND s.batch_id=first_batch.batch_id AND s.sender='self')=1
         ) SELECT message_id, text_id FROM candidates
           GROUP BY message_id, text_id HAVING COUNT(DISTINCT decision_id)=1
-        """, (tenant_id, task_id))
+        """, (tenant_id, task_id, policy["mode"], policy["context"], str(scenario_key)))
     return {str(row["message_id"]): str(row["text_id"]) for row in cursor.fetchall()}
 
 
-def check_manual_intervention(conn, tenant_id: str, task_id, self_messages: List[Dict[str, Any]]) -> bool:  # noqa: ANN001
+def check_manual_intervention(conn, tenant_id: str, task_id, self_messages: List[Dict[str, Any]],
+                              scenario_key: Optional[str] = None) -> bool:  # noqa: ANN001
     """批次内 self 消息归属核对：无法归属到**实际发送成功**的决策 → 人工介入（§5）。
 
     归属依据是发送尝试的结果证据（execution_links → delivery succeeded），不是
@@ -1575,10 +1723,11 @@ def check_manual_intervention(conn, tenant_id: str, task_id, self_messages: List
     计数封顶：同一正文的历史 self 消息总数不得超过该正文成功发送次数——同正文
     再次由人工发送不会被历史正文永久豁免。unknown/不可靠归属按人工介入处理
     （fail-closed，不误发）。消息级证据精确归属属 C0/C5。
+    scenario_key：调用方传入任务场景（回执策略按描述器解析；缺省预读）。
     """
     if not self_messages:
         return False
-    submitted = _submitted_echo_messages(conn, tenant_id, task_id)
+    submitted = _submitted_echo_messages(conn, tenant_id, task_id, scenario_key)
     self_messages = [m for m in self_messages if str(m.get("local_message_id", "")) not in submitted]
     if not self_messages:
         return False
@@ -1715,14 +1864,16 @@ def prepare_send(tenant_id: str, device_id: UUID, assignment_id: UUID, fence: in
             raise SessionTaskError("决策不存在或不属于该任务", "NOT_FOUND", 404)
         if decision["status"] == "superseded":
             conn.rollback()
-            return {"invocation_id": None, "decision_status": "superseded"}
+            # CR 阻断 12：superseded 分支统一携带 status 词汇（与下方版本失配分支
+            # 及 deferred/prepared 判别联合同构；旧 Runtime 忽略新增字段）
+            return {"status": "superseded", "invocation_id": None, "decision_status": "superseded"}
         if decision["status"] != "ready" or (decision["action"] or "reply") != "reply":
             conn.rollback()
             raise SessionTaskError(f"决策状态 {decision['status']} 不可准备发送", "CONFLICT", 409)
         task, spec = _load_task_spec(conn, tenant_id, task_id)
         if int(decision["spec_revision"]) != int(task["spec_revision"]):
             conn.rollback()
-            return {"invocation_id": None, "decision_status": "superseded"}
+            return {"status": "superseded", "invocation_id": None, "decision_status": "superseded"}
         prepare_hooks = require_hooks(task["scenario_key"])
         lane = prepare_hooks.execution_lane
         # 任务截止期硬门禁（A3）：到期即刻拒绝物化并收敛任务终态（不依赖评估扫描）。
@@ -1754,7 +1905,7 @@ def prepare_send(tenant_id: str, device_id: UUID, assignment_id: UUID, fence: in
         if not version_current:
             supersede_decisions_on_batch(conn, tenant_id, task_id, cur_version)
             conn.commit()
-            return {"invocation_id": None, "decision_status": "superseded"}
+            return {"status": "superseded", "invocation_id": None, "decision_status": "superseded"}
         if not _work_window_open(spec, now):
             conn.rollback()
             raise SessionTaskError("当前不在任务工作时段（WORK_WINDOW_CLOSED）", "WORK_WINDOW_CLOSED", 409)
@@ -1783,6 +1934,88 @@ def prepare_send(tenant_id: str, device_id: UUID, assignment_id: UUID, fence: in
             raise SessionTaskError("回复上限已用尽（max_replies）", ERR_BUDGET_EXCEEDED, 409)
         existing_link = next((l for l in links if str(l["decision_id"]) == str(decision_id)), None)
         spec_row_id = str(task["current_spec_id"])
+
+        # ---- B1.2 Phase A 场景门禁（设计 §5.5.2 原子顺序冻结）------------------
+        # 锁序矩阵：subject → task → assignment → decision →（仅 guard 非空再锁
+        # binding）。此处已持全部既有行锁：先做 pending 控制请求同步阻断检查
+        # （微信永远无控制请求行，检查为廉价空查询）；gate/guard 成对注册场景：
+        # guard 在同一事务锁场景 binding、检查 automation_blocked、跨日归一化
+        # 计数、调用纯计算 send_eligibility_gate 并落库 effective_count。
+        # CR 冻结职责切分与 fail-closed（阻断 4）：
+        # - guard/gate 必须同有同无——只注册其一属配置错误，fail-closed；
+        # - 只有显式 eligible 进入 Phase B；未知 outcome/缺字段/非法 deferred
+        #   时间（retry_after_ms≤0、deferred_until 非未来时间）一律 fail-closed
+        #   （SEND_GATE_MALFORMED，不物化 invocation）；
+        # - terminal → 同事务完整 human_required 迁移后 409；deferred → 提交并
+        #   返回 200 deferred 判别联合（不物化 invocation）；
+        # - 幂等重 prepare（已有 execution link）跳过重复计数但**不跳过安全阻断**
+        #   （仍锁 binding 检查 automation_blocked，CR 非阻断 a）。
+        # 微信 binding_guard=None 且 gate=None：完全绕过本扩展，锁面与写操作与
+        # B1.1 前一致（B1.0 特征锁定）。
+        from . import control_requests as control_requests_mod
+        from .scenario_descriptor import get_descriptor
+
+        descriptor = get_descriptor(task["scenario_key"])
+        guard = getattr(descriptor, "binding_guard", None) if descriptor is not None else None
+        gate = getattr(descriptor, "send_eligibility_gate", None) if descriptor is not None else None
+        if (guard is None) != (gate is None):
+            conn.rollback()
+            raise SessionTaskError(
+                f"场景 {task['scenario_key']} 发送门禁配置不一致（binding_guard 与 "
+                "send_eligibility_gate 必须同有同无）",
+                "SEND_GATE_CONFIG_INVALID", 500,
+            )
+        if control_requests_mod.has_pending_control_request(cursor, tenant_id, task_id):
+            conn.rollback()
+            raise SessionTaskError("任务存在待处理控制请求，禁止准备发送", "CONTROL_PENDING", 409)
+        if guard is not None:
+            gate_task = {
+                "id": str(task_id), "tenant_id": tenant_id, "user_id": task["user_id"],
+                "scenario_key": task["scenario_key"],
+                "conversation_binding_id": task["conversation_binding_id"],
+                "control_epoch": task["control_epoch"], "device_id": task["device_id"],
+            }
+            gate_decision = {
+                "id": str(decision_id), "task_id": str(decision["task_id"]),
+                "status": decision["status"], "action": decision["action"],
+                "input_version": decision["input_version"], "spec_revision": decision["spec_revision"],
+                "batch_id": decision["batch_id"], "reply_text_hash": decision["reply_text_hash"],
+            }
+            if existing_link is not None:
+                # 幂等重 prepare：跳过重复计数，不跳过安全阻断（CR 非阻断 a）
+                binding_row = guard.lock_binding(cursor, tenant_id, str(task["conversation_binding_id"]))
+                blocked_reason = guard.check_blocked(binding_row) if binding_row is not None else "binding_missing"
+                if blocked_reason is not None:
+                    conn.rollback()
+                    raise SessionTaskError(
+                        f"场景绑定已被同步阻断，禁止准备发送（{blocked_reason}）", "CONFLICT", 409
+                    )
+            else:
+                outcome = guard.gate_transaction(cursor, gate_task, gate_decision, gate)
+                # V1.9 严格判别联合：三种显式形态之外一律 fail-closed（阻断 4）
+                outcome_name = _validate_gate_outcome_v19(outcome)
+                if outcome_name == "terminal":
+                    # 完整 human_required 迁移（统一函数；subject/task 锁已在本事务持有）
+                    _apply_task_transition(
+                        conn, tenant_id, task_id, STATUS_HUMAN_REQUIRED,
+                        str(outcome["reason"]),
+                    )
+                    conn.commit()
+                    raise SessionTaskError(
+                        f"发送门禁拒绝并转人工（{outcome['reason']}）", "CONFLICT", 409
+                    )
+                if outcome_name == "deferred":
+                    # 字段/时间校验已由 _validate_gate_outcome_v19 完成（UTC 口径）
+                    conn.commit()
+                    return {
+                        "status": "deferred", "deferred": True, "invocation_id": None,
+                        "server_now": outcome.get("server_now"),
+                        "deferred_until": outcome.get("deferred_until"),
+                        "retry_after_ms": int(outcome["retry_after_ms"]),
+                        "deferred_reason": outcome.get("deferred_reason"),
+                        "response_revision": outcome.get("response_revision"),
+                    }
+                # eligible：触发计数已由 guard 在同事务落库 → 提交 Phase A
         conn.commit()
 
     # 执行费用预留（>0 才预留——不虚构按轮收费，§13.4/C3 计划）。结算挂接属
@@ -1808,6 +2041,7 @@ def prepare_send(tenant_id: str, device_id: UUID, assignment_id: UUID, fence: in
         _prior = _qc.fetchone()
     if _prior is not None and _prior["invocation_id"]:
         return {
+            "status": "prepared",
             "invocation_id": str(_prior["invocation_id"]),
             "decision_id": str(decision_id),
             "run_id": None,
@@ -1856,15 +2090,20 @@ def _prepare_send_locked(
     run = _load_run()
     if run is None:
         raise SessionTaskError("执行 run 缺失", "CONFLICT", 409)
+    # B1.2（九处 #2）：operation/provider_key 由场景描述器 operation_descriptor 提供
+    # （微信逐键一致）；target_ref 来源列由 target_ref_source 声明，payload_ref/hash
+    # 由 prepare 阶段冻结（非描述器静态声明）。
+    from .scenario_descriptor import require_descriptor
+
+    descriptor = require_descriptor(task["scenario_key"])
+    op_descriptor = dict(descriptor.operation_descriptor)
+    target_source = op_descriptor.pop("target_ref_source", "conversation_binding_id")
+    op_descriptor["target_ref"] = str(task[target_source])
+    op_descriptor["payload_ref"] = prepare_hooks.build_payload_ref(str(decision_id))
+    op_descriptor["payload_hash"] = decision["reply_text_hash"]
     revision_config = {
         "revision_ref": spec_row_id,
-        "operation_descriptor": {
-            "operation": "weixin_message_send_v2",
-            "provider_key": "weixin",
-            "target_ref": str(task["conversation_binding_id"]),
-            "payload_ref": prepare_hooks.build_payload_ref(str(decision_id)),
-            "payload_hash": decision["reply_text_hash"],
-        },
+        "operation_descriptor": op_descriptor,
     }
     if run["state"] == "pending":
         claimed = da_executor.claim_pending_run(tenant_id=tenant_id, expected_run_id=str(run["id"]), lease_seconds=300)
@@ -1909,6 +2148,7 @@ def _prepare_send_locked(
     # Phase C：execution_links 幂等落账
     invocation_id = existing_link_invocation(tenant_id, task_id, decision_id, run)
     return {
+        "status": "prepared",
         "invocation_id": invocation_id,
         "decision_id": str(decision_id),
         "run_id": str(run["id"]),

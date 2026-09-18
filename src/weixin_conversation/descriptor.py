@@ -123,6 +123,72 @@ class _WeixinBindingResolver:
         expires_at = expires_at if expires_at.tzinfo else expires_at.replace(tzinfo=timezone.utc)
         return expires_at > datetime.now(timezone.utc)
 
+    def resolve_draft_targets(self, conn, tenant_id: str, user_id: str, device_id: str,
+                              resolution_invocation_id: str):  # noqa: ANN001
+        """名称定位结果 → (account_binding_id, conversation_binding_id)。
+
+        语义 = service.create_draft 现状直调 name_contexts.from_resolution
+        （B1.2 切换调用点，函数本体零改动）；仅微信场景支持 resolution 路径
+        （models.py 约束 resolution_invocation_id 与非微信场景互斥）。"""
+        from .name_contexts import from_resolution
+
+        return from_resolution(conn, tenant_id, user_id, device_id, resolution_invocation_id)
+
+    def ensure_valid_for_publish(self, binding: Dict[str, Any]) -> None:  # noqa: ANN001
+        """发布有效性校验（service._verify_bindings require_verified 分支原样迁移）：
+        逐条错误文案/状态码与 B1.1 前一致；名称定位上下文走 resolved 有效性。"""
+        from src.session_tasks.constants import ERR_VALIDATION_FAILED, SessionTaskError
+
+        from .name_contexts import is_name_context, name_context_valid
+
+        if is_name_context(binding):
+            if not name_context_valid(binding):
+                raise SessionTaskError("名称定位上下文已失效", ERR_VALIDATION_FAILED, 409)
+            return
+        if binding["verification_status"] != "verified":
+            raise SessionTaskError("会话绑定尚未通过真机验证（pending 绑定不可发布生产任务）", ERR_VALIDATION_FAILED, 409)
+        if int(binding["identity_version"] or 0) < 1:
+            raise SessionTaskError("会话绑定 identity_version 无效（须有已接纳的真机证据版本）", ERR_VALIDATION_FAILED, 409)
+        if not binding["verified_at"] or not binding["verifier_version"] or binding["expires_at"] is None:
+            raise SessionTaskError("会话绑定验证字段不完整（verified_at/verifier_version/expires_at 必填）", ERR_VALIDATION_FAILED, 409)
+        expires_at = binding["expires_at"]
+        expires_at = expires_at if expires_at.tzinfo else expires_at.replace(tzinfo=timezone.utc)
+        if expires_at <= datetime.now(timezone.utc):
+            raise SessionTaskError("会话绑定验证已过期，需重新核验", ERR_VALIDATION_FAILED, 409)
+
+    def runtime_target_policy(self, binding_row: Optional[Dict[str, Any]]) -> Optional[Dict[str, str]]:  # noqa: ANN001
+        """claim 响应的运行时目标策略（service.claim_task 原样迁移）：
+        名称定位上下文 → current_login_name 路由；常规绑定 → None（无 _runtime_target）。"""
+        from .name_contexts import is_name_context
+
+        if binding_row and is_name_context(binding_row):
+            return {"policy": "current_login_name", "target_name": binding_row["conversation_label"]}
+        return None
+
+    def account_identity_version(self, binding_row: Optional[Dict[str, Any]]) -> int:  # noqa: ANN001
+        """claim 响应的账号身份版本（service.claim_task 原样迁移）：
+        名称定位上下文或缺失行 → 0；否则取账号 scope 的 session_epoch。"""
+        from .name_contexts import is_name_context
+
+        if not binding_row or is_name_context(binding_row):
+            return 0
+        return int(binding_row["account_version"] or 0)
+
+    def list_bindings(self, tenant_id: str, user_id: str, device_id: str, limit: int):  # noqa: ANN001
+        """绑定管理 API 列表（api.bindings_router 按 scenario_key 路由；B1.2 九处 #7）。"""
+        from . import bindings as bindings_service
+
+        return bindings_service.list_bindings(tenant_id, user_id, device_id, limit)
+
+    def create_binding(self, tenant_id: str, user_id: str, device_id: str,
+                       account_binding_id: str, binding_type: str, label: str):  # noqa: ANN001
+        """绑定管理 API 创建（同上）。"""
+        from . import bindings as bindings_service
+
+        return bindings_service.create_binding(
+            tenant_id, user_id, device_id, account_binding_id, binding_type, label
+        )
+
 
 def resolve_workbench_label(cursor, tenant_id: str, binding_id: str) -> Optional[str]:  # noqa: ANN001
     """工作台 binding_label（语义 = workbench.projection 现查 SQL；缺失返回 None）。"""
@@ -157,6 +223,15 @@ class WeixinScenarioDescriptor:
         self.workbench_label_resolver: Callable[..., Any] = resolve_workbench_label
         # 微信不注册频控门禁（设计 §4.1）：通用层完全绕过 gate 扩展
         self.send_eligibility_gate: Optional[Callable[..., Any]] = None
+        # 微信无场景 binding 同步门禁（设计 §5.5.2）：prepare-send 锁面不扩大、
+        # 不新增 binding 行锁或门禁写操作（B1.0 特征锁定）
+        self.binding_guard = None
+
+    def scenario_enabled(self, tenant_id: str) -> bool:
+        """场景热读门控（B1.2 通用生命周期分派；weixin_conversation.enabled 节点）。"""
+        from .config import scenario_enabled
+
+        return scenario_enabled(tenant_id)
 
 
 def build_weixin_descriptor() -> ScenarioDescriptor:

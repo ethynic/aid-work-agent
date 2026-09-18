@@ -19,7 +19,9 @@ CREATE TABLE IF NOT EXISTS session_task_notifications (
 
 
 def record_notice(conn, tenant_id, task_id, status, reason, control_epoch):
-    if status not in ("completed", "stopped", "human_required", "blocked"):
+    # "failed"：控制迁移失败站内告警（CR 阻断 7）；epoch 语义见
+    # control_requests.record_failed_notice（与 human_required 通知不冲突）
+    if status not in ("completed", "stopped", "human_required", "blocked", "failed"):
         return
     cursor = conn.cursor()
     cursor.execute("""INSERT INTO session_task_notifications

@@ -759,3 +759,31 @@
     UPDATE token_cost_prices
     SET cached_input_price_per_m = 0.23
     WHERE model_name = 'GLM-5.3-Flash';
+- datetime: "2026-09-17 20:30:00"
+  remark: "session_task_control_requests 新增通用控制请求表（BOSS 端侧接入 B1.2，设计 §5.5.5 冻结 schema）：human_required 异步控制迁移，含处理租约与期望 epoch 校验列"
+  statements: |
+    CREATE TABLE IF NOT EXISTS session_task_control_requests (
+        id BIGSERIAL PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        task_id UUID NOT NULL,
+        expected_control_epoch INTEGER NOT NULL,
+        expected_block_epoch INTEGER NOT NULL,
+        reason TEXT NOT NULL,
+        source_type TEXT NOT NULL,
+        source_ref TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        processing_owner TEXT,
+        processing_lease_expires_at TIMESTAMPTZ,
+        retry_count INTEGER NOT NULL DEFAULT 0,
+        next_retry_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW(),
+        CHECK (status IN ('pending','processing','applied','stale','failed')),
+        CHECK (retry_count >= 0)
+    );
+    CREATE INDEX IF NOT EXISTS idx_session_task_control_requests_scan
+        ON session_task_control_requests (status, created_at);
+    ALTER TABLE session_task_control_requests
+        DROP CONSTRAINT IF EXISTS session_task_control_requests_tenant_id_task_id_expected_co_key;
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_session_task_control_requests_idem
+        ON session_task_control_requests (tenant_id, task_id, expected_control_epoch, expected_block_epoch, reason);

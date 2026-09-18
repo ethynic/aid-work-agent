@@ -70,6 +70,13 @@ class AuthorizeDecision:
     allowed: bool
     reason: Optional[str] = None
     quota_scopes: List[QuotaScopeSpec] = field(default_factory=list)
+    # 结构化拒绝（B1.2，设计 §5.5.4）：适配器只返回结构化判断，不自行提交事务。
+    # control_action 非空表示拒绝需要通用层在同一许可事务内落地控制副作用
+    # （binding 同步阻断 + 控制请求 + 审计）并先 commit 再返回拒绝；
+    # None（微信现状）→ 既有 denied → 整体 rollback 路径不变。
+    # audit_code：脱敏审计码（不携带敏感正文）。
+    control_action: Optional[str] = None
+    audit_code: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -121,11 +128,45 @@ class ScenarioAdapter(Protocol):
         authorization_revision: Optional[str],
         authorization_epoch: Optional[int],
         invocation: Optional[Dict[str, Any]] = None,
+        cursor: Optional[Any] = None,
     ) -> AuthorizeDecision:
         """写动作许可的场景授权校验（许可事务内调用，同时锁定 subject/epoch）；
         返回额度层级（quota_scopes），任一不足由底座在许可事务内整体回滚。
         invocation：许可目标 invocation 行（含 business_ref）——会话任务等需要
-        精确执行归属的场景据此复核 assignment/fence 等执行上下文"""
+        精确执行归属的场景据此复核 assignment/fence 等执行上下文。
+        cursor（B1.2，设计 §5.5.4）：调用方许可事务的游标——场景复判必须在
+        同一事务/连接上执行（其读与许可事务的行锁/写可见性一致）；None 时
+        场景自开连接（仅限 executor 预检等非许可只读路径）。
+        拒绝时可通过 control_action/audit_code 返回结构化控制请求（§5.5.4）。"""
+        ...
+
+    def validate_submission_evidence(self, ctx: EvidenceContext) -> bool:
+        """提交证据（applied/submitted）存在性与归属校验（receipt_policy.mode=
+        submission 的场景实现；命名空间如 <ns>:<request_id>:1 由场景冻结）。"""
+        ...
+
+    def validate_evidence(
+        self, ctx: EvidenceContext
+    ) -> bool:
+        """写后验证证据的存在性与归属校验（R27 判定链第一环，受信代码内实现）。
+
+        applied+verified 落账前调用：场景按自身证据命名空间/存储校验 evidence_ref
+        是否真实存在且归属本次 request_id；不通过返回 False（delivery 收敛 unknown）。
+        """
+        ...
+
+    def settle_operation_result(self, cursor, result: Dict[str, Any]) -> Optional[Dict[str, Any]]:  # noqa: ANN001
+        """operation-result 事务内的场景结算钩子（B1.2，设计 §5.5.4 顺序 3–6）。
+
+        通用层在 evidence 判定后以 SAVEPOINT rate_settlement 包裹调用；同一
+        cursor 即结果事务游标（attempt/delivery 行锁已在调用前按冻结矩阵获取）。
+        结构化返回（CR 阻断 9）：None=normal；{"status": "anomaly_committed",
+        "reason": <受控码>}=补建/落账写入保留且通用层升级（阻断+控制请求+审计
+        +ACK）；抛异常=通用层 ROLLBACK TO SAVEPOINT 撤销本结算写入并走异常升级。
+        无场景账本的场景（微信）实现为 no-op 返回 None。
+        result：受控回执事实（tenant_id/task_id/invocation_id/delivery_id/
+        attempt_id/effect/phase/evidence_invalid/request_id/permit_id）。
+        """
         ...
 
     def compile_operations(
@@ -138,14 +179,6 @@ class ScenarioAdapter(Protocol):
         self, ctx: AdapterContext, delivery_results: List[Dict[str, Any]]
     ) -> RunBusinessResult:
         """场景业务判定（run 终态后调用；不改变底座机器聚合结果）"""
-        ...
-
-    def validate_evidence(self, ctx: EvidenceContext) -> bool:
-        """写后验证证据的存在性与归属校验（R27 判定链第一环，受信代码内实现）。
-
-        applied+verified 落账前调用：场景按自身证据命名空间/存储校验 evidence_ref
-        是否真实存在且归属本次 request_id；不通过返回 False（delivery 收敛 unknown）。
-        """
         ...
 
     def serve_payload(self, ctx: AdapterContext, payload_ref: str) -> bytes:

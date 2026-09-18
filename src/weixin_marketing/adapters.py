@@ -246,6 +246,7 @@ class WeixinFixedContentAdapter:
         authorization_revision: Optional[str],
         authorization_epoch: Optional[int],
         invocation: Optional[Dict[str, Any]] = None,
+        cursor: Optional[Any] = None,
     ) -> AuthorizeDecision:
         """许可事务内场景授权：操作名/任务状态/active revision/属主/绑定链 + 配额 scopes
 
@@ -259,6 +260,9 @@ class WeixinFixedContentAdapter:
         授权调用即被拒（ADAPTER_DENIED 403，许可零签发），无需重启；文件不可达/
         损坏 fail-closed 拒绝。测试注入配置时门控跟随注入值（文件级传播由
         TestHotGatePropagation 实证）。已签发许可与在途回执接纳不受影响（手册 §4）。
+
+        cursor（B1.2 协议形参）：本场景授权链全部为自开连接的普通读，保持现状
+        不切换游标（不接许可事务写可见性依赖）；形参仅满足协议签名。
         """
         if self._config is not None:
             gate_enabled = self._config.enabled

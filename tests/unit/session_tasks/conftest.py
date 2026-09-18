@@ -29,6 +29,7 @@ SESSION_TASK_TABLES = (
     "chat_records",
     "session_task_decision_attempts",
     "session_tasks_idempotency_keys",
+    "session_task_control_requests",
     "session_task_cost_reservations",
     "session_task_execution_links",
     "session_task_decisions",
@@ -111,12 +112,32 @@ def tenant_id():
 
 @pytest.fixture(autouse=True)
 def _gate_open(monkeypatch):
-    """测试默认放开 enabled/allowlist 热读门控（生产默认关闭，不依赖 yaml 状态）。"""
+    """测试默认放开 enabled/allowlist 热读门控（生产默认关闭，不依赖 yaml 状态）。
+
+    B1.2 起通用层按描述器分派（service/decisions/operation_result），本 fixture
+    同时保证微信场景描述器已注册（生产由 scheduler ensure_registered 自愈），
+    测后复位三处注册表防泄漏。
+    """
     import src.session_tasks.service as service_mod
     import src.weixin_conversation.config as wx_config
+    import src.weixin_conversation.registration as wx_registration
 
     monkeypatch.setattr(service_mod, "tenant_allowed", lambda tenant: True)
     monkeypatch.setattr(wx_config, "scenario_enabled", lambda tenant: True)
+    monkeypatch.setattr(wx_registration, "get_session_tasks_config", lambda: _cfg_enabled())
+    monkeypatch.setattr(wx_config, "scenario_enabled_gate", lambda: True)
+    wx_registration.ensure_registered()
+    yield
+    # 个体用例可能改写过注册（fake 场景等），复位微信注册供后续用例重建
+    wx_registration.reset_registration()
+
+
+def _cfg_enabled():
+    from dataclasses import replace
+
+    from src.session_tasks.config import SessionTasksConfig
+
+    return replace(SessionTasksConfig(), enabled=True)
 
 
 @pytest.fixture()

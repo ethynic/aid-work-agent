@@ -308,6 +308,45 @@ DDL_STATEMENTS: Tuple[str, ...] = (
         UNIQUE (tenant_id, user_id, route, idempotency_key)
     )
     """,
+    # 通用控制请求表（B1.2，设计 §5.5.5 冻结 schema）：human_required 异步迁移；
+    # 只负责异步迁移，不是同步发送门禁；UNIQUE 前缀 (tenant_id, task_id) 同时服务
+    # has_pending_control_request 的廉价检查
+    """
+    CREATE TABLE IF NOT EXISTS session_task_control_requests (
+        id BIGSERIAL PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        task_id UUID NOT NULL,
+        expected_control_epoch INTEGER NOT NULL,
+        expected_block_epoch INTEGER NOT NULL,
+        reason TEXT NOT NULL,
+        source_type TEXT NOT NULL,
+        source_ref TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        processing_owner TEXT,
+        processing_lease_expires_at TIMESTAMPTZ,
+        retry_count INTEGER NOT NULL DEFAULT 0,
+        next_retry_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW(),
+        CHECK (status IN ('pending', 'processing', 'applied', 'stale', 'failed')),
+        CHECK (retry_count >= 0)
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_session_task_control_requests_scan
+        ON session_task_control_requests (status, created_at)
+    """,
+    # CR 三审 P1-1：幂等键纳入 expected_block_epoch（唯一索引形态，可重复执行，
+    # ON CONFLICT 列推断兼容）。同代同原因、不同 block epoch 的请求各自成行，
+    # 旧请求按 epoch 复核自然 stale，新请求可 applied。
+    """
+    ALTER TABLE session_task_control_requests
+        DROP CONSTRAINT IF EXISTS session_task_control_requests_tenant_id_task_id_expected_co_key
+    """,
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_session_task_control_requests_idem
+        ON session_task_control_requests (tenant_id, task_id, expected_control_epoch, expected_block_epoch, reason)
+    """,
 )
 
 

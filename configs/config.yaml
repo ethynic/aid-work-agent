@@ -430,3 +430,10 @@ session_tasks:
 weixin_conversation:
   enabled: false
   tenant_allowlist: []
+
+# BOSS 会话场景（boss.chat_reply.v1；B1.3 注册骨架默认关闭，完整场景包 B2 交付。
+# 热读门控同微信范式：enabled=false（或文件缺失/损坏）时零注册零授权，fail-closed；
+# 敏感词表/resume 字段白名单随 B2 增补）
+boss_conversation:
+  enabled: false
+  tenant_allowlist: []

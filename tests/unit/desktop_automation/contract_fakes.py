@@ -94,6 +94,7 @@ class DualConsumerContractFakeAdapter:
         authorization_revision: Optional[str],
         authorization_epoch: Optional[int],
         invocation: Optional[Dict[str, Any]] = None,
+        cursor: Optional[Any] = None,
     ) -> AuthorizeDecision:
         return AuthorizeDecision(allowed=True)
 

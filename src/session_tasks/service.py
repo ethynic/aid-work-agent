@@ -24,6 +24,7 @@ from .constants import (
     DECISION_KINDS,
     ERR_BUDGET_EXCEEDED,
     ERR_CAPABILITY_MISSING,
+    ERR_CONFLICT,
     ERR_CONVERSATION_IN_USE,
     ERR_EVENT_GAP,
     ERR_EVENT_PAYLOAD_CONFLICT,
@@ -41,7 +42,13 @@ from .constants import (
     TERMINAL_STATUSES,
     SessionTaskError,
 )
-from .models import TaskDraftCreatePayload, TaskSpecPayload, validate_task_spec
+from .models import (
+    SpecValidationError,
+    TaskDraftCreatePayload,
+    TaskSpecPayload,
+    validate_spec_for_scenario,
+    validate_task_spec,
+)
 from .texts import digest_payload, load_text, spec_digest, store_text
 
 logger = logging.getLogger("session_tasks.service")
@@ -64,8 +71,11 @@ def _tz(dt: datetime) -> datetime:
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
-def _spec_to_plain(spec: TaskSpecPayload) -> Dict[str, Any]:
-    return spec.model_dump(mode="json")
+def _spec_to_plain(spec: Any) -> Dict[str, Any]:  # noqa: ANN202
+    """校验结果 → 冻结 plain dict（BaseModel 用 model_dump，场景自定义校验器可直接返回 dict）。"""
+    if hasattr(spec, "model_dump"):
+        return spec.model_dump(mode="json")
+    return dict(spec)
 
 
 def _conn():  # noqa: ANN202
@@ -83,19 +93,37 @@ def create_draft(tenant_id: str, user_id: str, payload: TaskDraftCreatePayload,
                  finalizer=None) -> Dict[str, Any]:  # noqa: ANN001
     """创建 draft（不发送、不占用会话；spec 加密入库，task_id 服务端生成）。
 
+    B1.2 envelope（设计 §4.3）：spec 按请求 scenario_key（缺省微信）分派描述器
+    spec_validator；微信非法 spec 仍由原 TaskSpecPayload 抛 ValidationError，
+    此处加 "spec" loc 前缀包装——HTTP 400 field_errors 路径与 B1.1 前逐字段一致
+    （B1.0 特征测试第 8 项为对照基准）。
+
     finalizer(conn, result)：业务提交前在同一连接写入幂等回执（R51 同事务范式）。
     """
-    validated = validate_task_spec(payload.spec.model_dump(mode="json"))
+    # CR 三审 P1-7：场景关闭仍可创建/保存草稿（workbench draft_enabled 语义，
+    # B1.2 前 create-draft 无执行门控）；publish/claim/decision/resume 才做
+    # 场景开关检查。未注册场景保持 validate_spec_for_scenario 的 400 语义。
+    try:
+        validated = validate_spec_for_scenario(payload.scenario_key, payload.spec)
+    except SessionTaskError:
+        raise
+    except Exception as exc:  # noqa: BLE001 场景 spec_validator 校验失败 → envelope 错误路径
+        raise SpecValidationError(exc) from exc
     plain = _spec_to_plain(validated)
     task_id = uuid4()
     with _conn() as conn:
         account_id, binding_id = payload.account_binding_id, payload.conversation_binding_id
         if payload.resolution_invocation_id:
-            from src.weixin_conversation.name_contexts import from_resolution
-            account_id, binding_id = from_resolution(conn, tenant_id, user_id, payload.device_id,
-                                                     payload.resolution_invocation_id)
+            from .scenario_descriptor import require_descriptor
+
+            account_id, binding_id = require_descriptor(
+                payload.scenario_key
+            ).binding_resolver.resolve_draft_targets(
+                conn, tenant_id, user_id, payload.device_id, payload.resolution_invocation_id
+            )
         _verify_bindings(tenant_id, user_id, payload.device_id, account_id,
-                         binding_id, require_verified=False, conn=conn)
+                         binding_id, require_verified=False, conn=conn,
+                         scenario_key=payload.scenario_key)
         text_id = store_text(conn, tenant_id, task_id, "spec", plain)
         cursor = conn.cursor()
         cursor.execute(
@@ -117,19 +145,34 @@ def create_draft(tenant_id: str, user_id: str, payload: TaskDraftCreatePayload,
     return result
 
 
-def update_draft(tenant_id: str, user_id: str, task_id: UUID, expected_version: int, spec: Dict[str, Any]) -> Dict[str, Any]:
-    """PATCH draft：expected_version CAS；仅 draft 可改（active 不可原地改策略）。"""
-    validated = validate_task_spec(spec)
+def update_draft(tenant_id: str, user_id: str, task_id: UUID, expected_version: int,
+                 spec: Dict[str, Any], request_scenario_key: Optional[str] = None) -> Dict[str, Any]:  # noqa: ANN001
+    """PATCH draft：expected_version CAS；仅 draft 可改（active 不可原地改策略）。
+
+    B1.2 envelope（设计 §4.3）：spec 校验按**任务行权威 scenario_key** 分派
+    （任务场景归属只来自 create，PATCH 不得切换——请求显式携带 scenario_key 且
+    不一致 → 409）。校验先于事务执行（错误优先级与 B1.1 前一致：非法 spec 400
+    先于任务不存在 404）；PATCH 的错误路径保持原 validate_task_spec 的未加前缀
+    pydantic ValidationError（B1.1 前 API 现状）。
+    """
+    # 场景归属普通预读（scenario_key 不可变，仅用于分派校验器；权威校验在锁内 CAS）
+    pre_scenario = _task_scenario_key(tenant_id, task_id)
+    if pre_scenario is not None:
+        validated = validate_spec_for_scenario(pre_scenario, spec)
+    else:
+        validated = validate_task_spec(spec)  # 任务不存在：保持既有 400→404 优先级路径
     plain = _spec_to_plain(validated)
     with _conn() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT status, version FROM session_tasks WHERE tenant_id=%s AND id=%s AND user_id=%s FOR UPDATE",
+            "SELECT status, version, scenario_key FROM session_tasks WHERE tenant_id=%s AND id=%s AND user_id=%s FOR UPDATE",
             (tenant_id, task_id, user_id),
         )
         row = cursor.fetchone()
         if row is None:
             raise SessionTaskError("任务不存在或无权访问", "NOT_FOUND", 404)
+        if request_scenario_key is not None and request_scenario_key != row["scenario_key"]:
+            raise SessionTaskError("请求场景与任务场景不一致，禁止切换场景", ERR_CONFLICT, 409)
         if row["status"] not in (STATUS_DRAFT, STATUS_PAUSED):
             raise SessionTaskError("仅草稿/已暂停任务可编辑；active 需先暂停（设计 §4 改版流程）", "CONFLICT", 409)
         if row["version"] != expected_version:
@@ -196,10 +239,6 @@ def publish_task(tenant_id: str, user_id: str, task_id: UUID, expected_version: 
     """
     if not tenant_allowed(tenant_id):
         raise SessionTaskError("会话任务功能未启用", ERR_FEATURE_DISABLED, 403)
-    from src.weixin_conversation.config import scenario_enabled
-
-    if not scenario_enabled(tenant_id):
-        raise SessionTaskError("微信会话场景未启用", ERR_FEATURE_DISABLED, 403)
     with _conn() as conn:
         # 锁序 1/3：预建并锁定 subject 行（首次发布占位 status='draft'）
         cursor = conn.cursor()
@@ -210,6 +249,9 @@ def publish_task(tenant_id: str, user_id: str, task_id: UUID, expected_version: 
         located = cursor.fetchone()
         if located is None:
             raise SessionTaskError("任务不存在或无权访问", "NOT_FOUND", 404)
+        # 场景门控按任务行权威 scenario_key 分派（CR 阻断 2：微信开关不再控制
+        # 其他场景的生命周期；场景关 → 403 fail-closed）
+        _ensure_scenario_enabled(tenant_id, located["scenario_key"])
         _ensure_task_subject(conn, tenant_id, located["scenario_key"], str(task_id), located["user_id"])
         _lock_task_subject(conn, tenant_id, task_id)
         # 锁序 2/3：task 行
@@ -236,12 +278,14 @@ def publish_task(tenant_id: str, user_id: str, task_id: UUID, expected_version: 
         )
 
         _verify_bindings(tenant_id, user_id, task["device_id"], task["account_binding_id"],
-                         task["conversation_binding_id"], conn=conn)
-        _check_device_capabilities(conn, tenant_id, task["device_id"])
+                         task["conversation_binding_id"], conn=conn,
+                         scenario_key=task["scenario_key"])
+        _check_device_capabilities(conn, tenant_id, task["device_id"], scenario_key=task["scenario_key"])
 
         spec_plain = load_text(conn, tenant_id, task_id, task["draft_spec_text_id"], expected_purpose="spec")
         # 发布时刻复验冻结 spec（草稿保存后 expires_at 可能已过；§5 有限期限发布时仍须有效）
-        validate_task_spec(spec_plain)
+        # B1.2：按任务行权威 scenario_key 分派描述器校验器（微信 = 原 validate_task_spec）
+        validate_spec_for_scenario(task["scenario_key"], spec_plain)
         new_revision = (task["spec_revision"] or 0) + 1
         target_status = STATUS_ACTIVE if task["status"] == STATUS_DRAFT else STATUS_PAUSED
         _publish_result = {
@@ -441,6 +485,34 @@ def control_task(tenant_id: str, user_id: str, task_id: UUID, action: str, expec
             "control_epoch": task["control_epoch"] + 1}
 
 
+def _ensure_scenario_enabled(tenant_id: str, scenario_key) -> None:
+    """场景热读门控（CR 阻断 2）：按权威 task.scenario_key 调对应场景 enabled。
+
+    通用生命周期（publish/claim/create_decision/create_draft）不再直读微信开关：
+    微信关 BOSS 开时 BOSS 可运行；描述器缺失/未注册 → fail-closed 403。
+    """
+    from .scenario_descriptor import get_descriptor
+
+    descriptor = get_descriptor(str(scenario_key or ""))
+    checker = getattr(descriptor, "scenario_enabled", None) if descriptor is not None else None
+    if checker is None or not checker(tenant_id):
+        raise SessionTaskError(f"场景未启用: {scenario_key}", ERR_FEATURE_DISABLED, 403)
+
+
+def _task_scenario_key(tenant_id: str, task_id) -> Optional[str]:  # noqa: ANN001
+    """任务场景归属普通预读（scenario_key 创建后不可变，仅用于分派 spec 校验器）。"""
+    from src.db.database import get_db_connection
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT scenario_key FROM session_tasks WHERE tenant_id=%s AND id=%s",
+            (tenant_id, task_id),
+        )
+        row = cursor.fetchone()
+        return row["scenario_key"] if row else None
+
+
 def _assignment_task_id(conn, tenant_id: str, device_id, assignment_id) -> Optional[Any]:  # noqa: ANN001
     """无锁定位 assignment 所属 task_id（随后按 subject→assignment 顺序加锁）。"""
     cursor = conn.cursor()
@@ -495,12 +567,9 @@ def claim_task(device: Dict[str, Any], runtime_instance_id: str) -> Optional[Dic
     tenant_id = device["tenant_id"]
     if not tenant_allowed(tenant_id):
         raise SessionTaskError("会话任务功能未启用", ERR_FEATURE_DISABLED, 403)
-    from src.weixin_conversation.config import scenario_enabled
-
-    if not scenario_enabled(tenant_id):
-        raise SessionTaskError("微信会话场景未启用", ERR_FEATURE_DISABLED, 403)
     cfg = get_session_tasks_config()
     with _conn() as conn:
+        # 通用能力前置检查（场景发送能力在候选任务定位后按场景检查，九处 #1）
         _check_device_capabilities(conn, tenant_id, device["id"])
         cursor = conn.cursor()
         cursor.execute(
@@ -513,31 +582,38 @@ def claim_task(device: Dict[str, Any], runtime_instance_id: str) -> Optional[Dic
         )
         candidates = cursor.fetchall()
         claimed = None
+        capability_error = None
         for candidate in candidates:
-            claimed = _claim_one(conn, tenant_id, device, runtime_instance_id, candidate, cfg)
+            claimed, skipped_error = _claim_one(
+                conn, tenant_id, device, runtime_instance_id, candidate, cfg
+            )
             if claimed is not None:
                 break
+            if skipped_error is not None and capability_error is None:
+                capability_error = skipped_error  # 记首个能力不匹配（非阻断 b）
         if claimed is None:
             conn.rollback()
-            return None
+            if capability_error is not None:
+                # 有候选但全部因能力不兼容被跳过：保留既有逐项拒绝语义
+                # （单候选缺失能力 → 409 ERR_CAPABILITY_MISSING，特征测试 6 锁定）
+                raise capability_error
+            return None  # 无候选/候选场景全关闭：无任务可领（API 204）
         task, assignment_id, fence = claimed
         spec_plain = _load_spec_by_spec_id(conn, tenant_id, task["current_spec_id"], task["id"])
-        # 观察契约身份字段（session_observer_v1：绑定/账号身份版本供端侧校验）
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            SELECT b.identity_version,b.verifier_version,b.conversation_label,
-                   a.session_epoch AS account_version
-            FROM bs_weixin_conversation_bindings b
-            LEFT JOIN bs_weixin_marketing_account_bindings a ON a.tenant_id=b.tenant_id AND a.id=b.account_binding_id
-            WHERE b.tenant_id=%s AND b.id=%s
-            """,
-            (tenant_id, task["conversation_binding_id"]),
-        )
-        binding_row = cursor.fetchone()
-        from src.weixin_conversation.name_contexts import is_name_context
-        if is_name_context(binding_row):
-            spec_plain["_runtime_target"] = {"policy": "current_login_name", "target_name": binding_row["conversation_label"]}
+        from .scenario_descriptor import get_descriptor
+
+        descriptor = get_descriptor(task["scenario_key"])
+        # 观察契约身份字段（session_observer_v1：绑定/账号身份版本供端侧校验；
+        # B1.2 九处 #5：身份查询/名称上下文分支由描述器 binding_resolver 承载）
+        binding_row = None
+        target_policy = None
+        if descriptor is not None:
+            binding_row = descriptor.binding_resolver.get_runtime_identity(
+                cursor, tenant_id, task["conversation_binding_id"]
+            )
+            target_policy = descriptor.binding_resolver.runtime_target_policy(binding_row)
+        if target_policy:
+            spec_plain["_runtime_target"] = target_policy
         from .workbench import input_version
         version_base = input_version(conn, tenant_id, task["id"])
         cursor.execute("UPDATE session_task_batches SET status='resume_claimed' WHERE tenant_id=%s AND task_id=%s AND batch_id=%s AND status='resume_baseline' RETURNING batch_id", (tenant_id, task["id"], f"resume:{task['control_epoch']}"))
@@ -554,18 +630,24 @@ def claim_task(device: Dict[str, Any], runtime_instance_id: str) -> Optional[Dic
         "lease_seconds": cfg.lease_seconds,
         "input_version_base": version_base,
         "fresh_baseline": fresh_baseline,
+        "scenario_key": str(task["scenario_key"]),
         "conversation_binding_id": str(task["conversation_binding_id"]),
         "binding_version": int(binding_row["identity_version"]) if binding_row else 0,
-        "account_identity_version": int(binding_row["account_version"] or 0) if binding_row and not is_name_context(binding_row) else 0,
+        "account_identity_version": (
+            descriptor.binding_resolver.account_identity_version(binding_row)
+            if descriptor is not None else 0
+        ),
     }
 
 
 def _claim_one(conn, tenant_id: str, device: Dict[str, Any], runtime_instance_id: str,
-               candidate, cfg) -> Optional[tuple]:  # noqa: ANN001
-    """领取单个候选：可领取返回 (task, assignment_id, fence)；跳过返回 None。
+               candidate, cfg) -> tuple:  # noqa: ANN001
+    """领取单个候选：可领取返回 (task, assignment_id, fence)；跳过返回 (None, 跳过原因)。
 
-    跳过 = 本实例已持有有效租约 / 他实例持有有效租约；不可领取时回滚本候选的
-    行锁影响并继续（rollback 释放锁，下一候选重新开始）。
+    跳过 = 本实例已持有有效租约 / 他实例持有有效租约 / 场景关闭 / 能力不匹配
+    （CR 阻断 2 + 非阻断 b：场景关闭与能力不匹配都只跳过本候选，不 fail 整个
+    claim——能力不匹配原因回传调用方，全部候选不兼容时保留既有逐项拒绝语义）；
+    不可领取时回滚本候选的行锁影响并继续（rollback 释放锁，下一候选重新开始）。
     """
     # 锁序 subject→task（评审 P1-1）：先无锁定位（拿 scenario_key/conversation_binding_id），
     # 再锁 subject，最后锁 task 行并在锁内复验 active 与绑定有效性（评审 P1-4）
@@ -580,7 +662,7 @@ def _claim_one(conn, tenant_id: str, device: Dict[str, Any], runtime_instance_id
     located = cursor.fetchone()
     if located is None:
         conn.rollback()
-        return None
+        return None, None
     _lock_task_subject(conn, tenant_id, located["id"])
     cursor = conn.cursor()
     cursor.execute(
@@ -596,10 +678,29 @@ def _claim_one(conn, tenant_id: str, device: Dict[str, Any], runtime_instance_id
     task = cursor.fetchone()
     if task is None:
         conn.rollback()  # 锁定间隙状态变化或被其他事务持有：跳过本候选
-        return None
-    if not _binding_valid_for_allocation(conn, tenant_id, task["conversation_binding_id"]):
+        return None, None
+    # 场景门控按候选任务 scenario_key 分派（CR 阻断 2）：关闭场景的任务跳过
+    # （不 fail 整个 claim——微信关 BOSS 开时 BOSS 任务仍可领）
+    from .scenario_descriptor import get_descriptor
+
+    descriptor = get_descriptor(str(located["scenario_key"] or ""))
+    checker = getattr(descriptor, "scenario_enabled", None) if descriptor is not None else None
+    if checker is None or not checker(tenant_id):
         conn.rollback()
-        return None
+        return None, None
+    # 场景发送能力检查（九处 #1：能力校验按候选任务 scenario_key 拼接描述器能力；
+    # CR 非阻断 b：不匹配跳过本候选继续找兼容场景任务，避免多场景饥饿）
+    try:
+        _check_device_capabilities(conn, tenant_id, device["id"], scenario_key=located["scenario_key"])
+    except SessionTaskError as exc:
+        if exc.code != ERR_CAPABILITY_MISSING:
+            raise
+        conn.rollback()
+        return None, exc
+    if not _binding_valid_for_allocation(conn, tenant_id, task["conversation_binding_id"],
+                                         scenario_key=located["scenario_key"]):
+        conn.rollback()
+        return None, None
     cursor = conn.cursor()
     cursor.execute(
         """
@@ -613,10 +714,10 @@ def _claim_one(conn, tenant_id: str, device: Dict[str, Any], runtime_instance_id
     lease_valid = current is not None and _tz(current["lease_expires_at"]) > _now()
     if current is not None and current["runtime_instance_id"] == runtime_instance_id and lease_valid:
         conn.rollback()
-        return None  # 本实例已持有：跳过，找后续任务
+        return None, None  # 本实例已持有：跳过，找后续任务
     if current is not None and lease_valid:
         conn.rollback()
-        return None  # 他实例有效租约：跳过（设计 §4 显式移交）
+        return None, None  # 他实例有效租约：跳过（设计 §4 显式移交）
     if current is not None:
         cursor = conn.cursor()
         cursor.execute(
@@ -636,7 +737,7 @@ def _claim_one(conn, tenant_id: str, device: Dict[str, Any], runtime_instance_id
         (tenant_id, task["id"], device["id"], runtime_instance_id, fence,
          _now() + timedelta(seconds=cfg.lease_seconds), task["control_epoch"], task["server_control_seq"]),
     )
-    return task, cursor.fetchone()["id"], fence
+    return (task, cursor.fetchone()["id"], fence), None
 
 
 def renew_assignment(tenant_id: str, device_id: UUID, assignment_id: UUID, fence: int, control_epoch: int) -> Dict[str, Any]:
@@ -711,7 +812,7 @@ def ingest_events(tenant_id: str, device_id: UUID, assignment_id: UUID, fence: i
         cursor.execute(
             """
             SELECT a.task_id, a.fence, a.acked_local_seq, a.control_epoch_at_claim, t.status, t.control_epoch, t.server_control_seq,
-                   t.conversation_binding_id
+                   t.conversation_binding_id, t.scenario_key
             FROM session_task_assignments a JOIN session_tasks t ON t.tenant_id=a.tenant_id AND t.id=a.task_id
             WHERE a.tenant_id=%s AND a.id=%s AND a.device_id=%s AND a.is_current=TRUE FOR UPDATE OF a
             """,
@@ -726,7 +827,7 @@ def ingest_events(tenant_id: str, device_id: UUID, assignment_id: UUID, fence: i
             cursor.execute(
                 """
                 SELECT a.task_id, a.fence, a.acked_local_seq, t.status, t.control_epoch, t.server_control_seq,
-                       t.conversation_binding_id
+                       t.conversation_binding_id, t.scenario_key
                 FROM session_task_assignments a JOIN session_tasks t ON t.tenant_id=a.tenant_id AND t.id=a.task_id
                 WHERE a.tenant_id=%s AND a.id=%s AND a.device_id=%s
                   AND (a.is_current=FALSE OR a.control_epoch_at_claim<>t.control_epoch)
@@ -776,7 +877,8 @@ def ingest_events(tenant_id: str, device_id: UUID, assignment_id: UUID, fence: i
                     (tenant_id, a["task_id"], assignment_id, local_seq, event_id, event_type, digest, text_id),
                 )
                 if event_type == "batch":
-                    _materialize_batch(conn, tenant_id, a["task_id"], a["conversation_binding_id"], payload)
+                    _materialize_batch(conn, tenant_id, a["task_id"], a["conversation_binding_id"], payload,
+                                       scenario_key=a["scenario_key"])
                 if event_type == "recovery_blocked" or (event_type in ("phase", "execution_phase", "decision_phase") and payload.get("phase_to", payload.get("to")) == "blocked"):
                     from .notifications import record_notice
                     record_notice(conn, tenant_id, a["task_id"], "blocked", "runtime_blocked", a["control_epoch"])
@@ -839,7 +941,7 @@ def _ingest_historical_facts(conn, tenant_id: str, assignment_id: UUID, hist, re
             if event_type == "batch":
                 # 历史对账批次标记 historical：不可作为决策输入（评审 P1-3）
                 _materialize_batch(conn, tenant_id, hist["task_id"], hist["conversation_binding_id"], payload,
-                                   batch_status="historical")
+                                   batch_status="historical", scenario_key=hist["scenario_key"])
             expected_seq = local_seq
         cursor = conn.cursor()
         cursor.execute(
@@ -858,7 +960,7 @@ def _ingest_historical_facts(conn, tenant_id: str, assignment_id: UUID, hist, re
 
 
 def _materialize_batch(conn, tenant_id: str, task_id: UUID, task_conversation_binding_id, payload: Dict[str, Any],
-                       batch_status: str = "accepted") -> None:  # noqa: ANN001
+                       batch_status: str = "accepted", scenario_key: Optional[str] = None) -> None:  # noqa: ANN001
     """batch 事件物化：messages + batch 行（幂等：批次已存在直接返回）。"""
     batch_id = str(payload.get("batch_id", "")).strip()
     if not batch_id:
@@ -949,7 +1051,9 @@ def _materialize_batch(conn, tenant_id: str, task_id: UUID, task_conversation_bi
         decisions_mod.supersede_decisions_on_batch(conn, tenant_id, task_id, input_version)
         # 人工介入判定（设计 §5）：self 消息无法归属到冻结决策正文 → human_required
         self_messages = [m for m in messages if m.get("sender") == "self"]
-        if self_messages and decisions_mod.check_manual_intervention(conn, tenant_id, task_id, self_messages):
+        if self_messages and decisions_mod.check_manual_intervention(
+            conn, tenant_id, task_id, self_messages, scenario_key=scenario_key
+        ):
             decisions_mod.handle_manual_intervention(conn, tenant_id, task_id)
 
 
@@ -967,15 +1071,13 @@ def create_decision(tenant_id: str, device_id: UUID, assignment_id: UUID, fence:
     if not tenant_allowed(tenant_id):
         raise SessionTaskError("会话任务功能未启用", ERR_FEATURE_DISABLED, 403)
     cfg = get_session_tasks_config()
-    from src.weixin_conversation.config import scenario_enabled
-
-    if not scenario_enabled(tenant_id):  # 场景开关热读（评审 P2-5）：关闭即阻止新决策
-        raise SessionTaskError("微信会话场景未启用", ERR_FEATURE_DISABLED, 403)
     with _conn() as conn:
         # 锁序 subject→assignment（评审 P1-1）：与控制/授权路径串行化
         task_id_loc = _assignment_task_id(conn, tenant_id, device_id, assignment_id)
         if task_id_loc is None:
             raise SessionTaskError("assignment 不存在或不属于本设备", ERR_STALE_ASSIGNMENT, 409)
+        # 场景开关热读（评审 P2-5）：按任务行权威 scenario_key 分派（CR 阻断 2）
+        _ensure_scenario_enabled(tenant_id, _task_scenario_key(tenant_id, task_id_loc))
         _lock_task_subject(conn, tenant_id, task_id_loc)
         cursor = conn.cursor()
         cursor.execute(
@@ -1316,41 +1418,39 @@ def _load_spec_by_spec_id(conn, tenant_id: str, spec_id: Optional[UUID], task_id
     return load_text(conn, tenant_id, task_id, row["spec_text_id"], expected_purpose="spec")
 
 
-def _binding_valid_for_allocation(conn, tenant_id: str, conversation_binding_id) -> bool:  # noqa: ANN001
-    """领取/分配时的绑定复核（评审 P1-4）：verified + 完整验证字段（identity_version
-    ≥1、verified_at/verifier_version/expires_at 非空）且未过期；expires_at=NULL
-    不视为无限有效（真机验证必含有效期）。"""
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-        SELECT verification_status, identity_version, verified_at, verifier_version, expires_at
-        FROM bs_weixin_conversation_bindings WHERE tenant_id=%s AND id=%s
-        """,
-        (tenant_id, conversation_binding_id),
-    )
-    row = cursor.fetchone()
-    from src.weixin_conversation.name_contexts import is_name_context, name_context_valid
-    if is_name_context(row):
-        return name_context_valid(row)
-    if row is None or row["verification_status"] != "verified":
+def _binding_valid_for_allocation(conn, tenant_id: str, conversation_binding_id,
+                                  scenario_key: Optional[str] = None) -> bool:  # noqa: ANN001
+    """领取/分配时的绑定复核（九处 #5）：语义由描述器 binding_resolver 承载。
+
+    微信 resolver 与原内联 SQL 逐字一致（B1.1 行为锁定测试）；场景未注册时
+    fail-closed 返回 False（不可分配）。
+    """
+    from .scenario_descriptor import get_descriptor
+
+    descriptor = get_descriptor(scenario_key) if scenario_key else None
+    if descriptor is None:
         return False
-    if int(row["identity_version"] or 0) < 1:
-        return False
-    if not row["verified_at"] or not row["verifier_version"] or row["expires_at"] is None:
-        return False
-    expires_at = row["expires_at"]
-    expires_at = expires_at if expires_at.tzinfo else expires_at.replace(tzinfo=timezone.utc)
-    return expires_at > _now()
+    return bool(descriptor.binding_resolver.is_valid_for_allocation(conn, tenant_id, conversation_binding_id))
 
 
 def _verify_bindings(tenant_id: str, user_id: str, device_id: str, account_binding_id: str,
-                     conversation_binding_id: str, *, require_verified: bool = True, conn=None) -> None:  # noqa: ANN001
+                     conversation_binding_id: str, *, require_verified: bool = True, conn=None,
+                     scenario_key: Optional[str] = None) -> None:  # noqa: ANN001
     """绑定属主/租户校验：设备 + 会话绑定必须存在且属主匹配（设计 §11/§13.3）。
 
-    生产发布（require_verified=True）要求 conversation binding
-    verification_status='verified'；建草稿允许 pending（§13.3）。conn 可由持锁
-    事务的调用方传入（publish 场景避免嵌套第二个池化连接）；缺省自开连接。
+    B1.2（九处 #5）：绑定行查询与发布有效性语义由描述器 binding_resolver 承载
+    （微信 resolver 与原 SQL/错误文案逐字一致）。
+
+    生产发布（require_verified=True）要求 conversation binding 通过场景发布
+    有效性校验；建草稿允许 pending（§13.3）。conn 可由持锁事务的调用方传入
+    （publish 场景避免嵌套第二个池化连接）；缺省自开连接。
     """
+    from .scenario_descriptor import get_descriptor
+
+    descriptor = get_descriptor(scenario_key) if scenario_key else None
+    if descriptor is None:
+        raise SessionTaskError(f"场景未注册: {scenario_key}", ERR_VALIDATION_FAILED, 400)
+
     def _device_row(db_conn):  # noqa: ANN202
         cursor = db_conn.cursor()
         cursor.execute(
@@ -1359,53 +1459,57 @@ def _verify_bindings(tenant_id: str, user_id: str, device_id: str, account_bindi
         )
         return cursor.fetchone()
 
-    def _binding_row(db_conn):  # noqa: ANN202
-        cursor = db_conn.cursor()
-        cursor.execute(
-            """
-            SELECT tenant_id, user_id, verification_status, device_id, account_binding_id,
-                   identity_version, verified_at, verifier_version, expires_at
-            FROM bs_weixin_conversation_bindings WHERE id=%s
-            """,
-            (conversation_binding_id,),
-        )
-        return cursor.fetchone()
-
     if conn is not None:
         device = _device_row(conn)
-        binding = _binding_row(conn)
     else:
         with _conn() as own_conn:
             device = _device_row(own_conn)
-            binding = _binding_row(own_conn)
     if device is None or str(device["tenant_id"]) != tenant_id or str(device["user_id"]) != user_id:
         raise SessionTaskError("设备不存在或不属于当前用户", "NOT_FOUND", 404)
     if device["status"] not in ("paired", "active"):
         raise SessionTaskError(f"设备状态 {device['status']} 不可用", "CONFLICT", 409)
-    if binding is None or str(binding["tenant_id"]) != tenant_id or str(binding["user_id"]) != user_id:
+    # 绑定行查询（租户过滤；跨租户/不存在统一"不存在或不属于当前用户"）
+    cursor = conn.cursor() if conn is not None else None
+    if cursor is not None:
+        binding = descriptor.binding_resolver.get_binding_by_id(cursor, tenant_id, conversation_binding_id)
+    else:
+        with _conn() as own_conn:
+            binding = descriptor.binding_resolver.get_binding_by_id(
+                own_conn.cursor(), tenant_id, conversation_binding_id
+            )
+    if binding is None or str(binding["user_id"]) != user_id:
         raise SessionTaskError("会话绑定不存在或不属于当前用户", "NOT_FOUND", 404)
     if str(binding["device_id"]) != str(device_id) or str(binding["account_binding_id"]) != str(account_binding_id):
         raise SessionTaskError("会话绑定与设备/账号绑定不匹配", ERR_VALIDATION_FAILED)
     if require_verified:
-        from src.weixin_conversation.name_contexts import is_name_context, name_context_valid
-        if is_name_context(binding):
-            if not name_context_valid(binding):
-                raise SessionTaskError("名称定位上下文已失效", ERR_VALIDATION_FAILED, 409)
-            return
-        if binding["verification_status"] != "verified":
-            raise SessionTaskError("会话绑定尚未通过真机验证（pending 绑定不可发布生产任务）", ERR_VALIDATION_FAILED, 409)
-        if int(binding["identity_version"] or 0) < 1:
-            raise SessionTaskError("会话绑定 identity_version 无效（须有已接纳的真机证据版本）", ERR_VALIDATION_FAILED, 409)
-        if not binding["verified_at"] or not binding["verifier_version"] or binding["expires_at"] is None:
-            raise SessionTaskError("会话绑定验证字段不完整（verified_at/verifier_version/expires_at 必填）", ERR_VALIDATION_FAILED, 409)
-        expires_at = binding["expires_at"]
-        expires_at = expires_at if expires_at.tzinfo else expires_at.replace(tzinfo=timezone.utc)
-        if expires_at <= _now():
-            raise SessionTaskError("会话绑定验证已过期，需重新核验", ERR_VALIDATION_FAILED, 409)
+        # 发布有效性语义（含名称定位上下文分支与逐条错误文案）由场景解析器持有
+        descriptor.binding_resolver.ensure_valid_for_publish(binding)
 
 
-def _check_device_capabilities(conn, tenant_id: str, device_id) -> None:  # noqa: ANN001
-    """claim/publish 前的能力检查：必须协商 session_task_v1 + session_observer_v1。"""
+def _required_capabilities(scenario_key: Optional[str] = None) -> tuple:  # noqa: ANN202
+    """设备必需能力 = 通用部分 + 场景描述器 required_send_capability（九处之 #1）。
+
+    scenario_key 提供且描述器已注册时拼接场景发送能力；未注册/未提供只要求
+    通用能力（session_task_v1 + session_observer_v1）。
+    """
+    caps = list(REQUIRED_DEVICE_CAPABILITIES)
+    if scenario_key:
+        from .scenario_descriptor import get_descriptor
+
+        descriptor = get_descriptor(scenario_key)
+        if descriptor is not None:
+            capability = descriptor.required_send_capability
+            if capability and capability not in caps:
+                caps.append(capability)
+    return tuple(caps)
+
+
+def _check_device_capabilities(conn, tenant_id: str, device_id, scenario_key: Optional[str] = None) -> None:  # noqa: ANN001
+    """claim/publish 前的能力检查：通用能力 + 场景发送能力（scenario_key 提供时拼接）。
+
+    调用点必须携带场景上下文（设计 §4.2 #1）：publish/resume 传任务行
+    scenario_key；claim 在候选任务定位后按候选场景检查。
+    """
     cursor = conn.cursor()
     cursor.execute(
         "SELECT capabilities_json FROM local_tool_devices WHERE tenant_id=%s AND id=%s AND status='active'",
@@ -1415,7 +1519,7 @@ def _check_device_capabilities(conn, tenant_id: str, device_id) -> None:  # noqa
     if row is None:
         raise SessionTaskError("设备不存在或未激活", ERR_CAPABILITY_MISSING, 409)
     cap_names = _parse_capability_names(row["capabilities_json"])
-    missing = [c for c in REQUIRED_DEVICE_CAPABILITIES if c not in cap_names]
+    missing = [c for c in _required_capabilities(scenario_key) if c not in cap_names]
     if missing:
         raise SessionTaskError(f"设备缺少必需能力: {','.join(missing)}", ERR_CAPABILITY_MISSING, 409)
 

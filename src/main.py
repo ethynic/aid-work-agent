@@ -457,6 +457,14 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"weixin_conversation registration failed: {type(e).__name__}")
 
+    # BOSS 会话场景骨架注册（boss_conversation.enabled 门控内，默认 false 零注册；
+    # 完整场景逻辑 B2 交付；失败仅告警不阻断启动）
+    try:
+        from src.boss_conversation.registration import ensure_registered as register_boss_conversation
+        register_boss_conversation()
+    except Exception as e:
+        logger.warning(f"boss_conversation registration failed: {type(e).__name__}")
+
     # Initialize logs database pool (observability, optional)
     try:
         logger.info(f"[pid={_pid}] step3: init_logs_pool ...")

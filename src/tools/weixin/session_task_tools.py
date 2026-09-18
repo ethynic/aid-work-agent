@@ -118,7 +118,9 @@ class SessionTaskPrepareTool(BaseTool):
                     account_binding_id=str(args.account_binding_id) if args.account_binding_id else None,
                     conversation_binding_id=str(args.conversation_binding_id) if args.conversation_binding_id else None,
                     resolution_invocation_id=str(args.resolution_invocation_id) if args.resolution_invocation_id else None,
-                    spec=args.spec)
+                    # B1.2 envelope（设计 §4.3）：spec 字段为 Dict[str, Any]，工具输入模型
+                    # TaskSpecPayload 实例在此转 plain dict（校验语义不变，仅表示形式）
+                    spec=args.spec.model_dump(mode="json"))
                 result = service.create_draft(context.tenant_id, context.user_id, payload)
             task_id = result.get("task_id") or args.task_id
             return {**result, "published": False,

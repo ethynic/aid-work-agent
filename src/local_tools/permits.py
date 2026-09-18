@@ -9,6 +9,9 @@
 subject/epoch，避免检查后授权漂移）→ run（经 delivery.run_id 租户域 FOR UPDATE，
 复验 run 未取消/未终态——终态 run 仅放行人工重试链重开的 delivery，R45/R52——
 与 cancel_run 单事务互斥）→ invocation → delivery → quota buckets（R9 固定 scope 顺序）。
+B1.2 锁序矩阵延伸（设计 §5.5.5）：delivery 之后 guard 场景再取 binding（场景表，
+adapter 复判/拒绝副作用经 guard FOR UPDATE）→ rate slot；task 行只做普通读定位，
+permits 路径不取 task 行锁。五条事务路径均无 binding→subject 反向边。
 
 许可发出后将该 delivery 标为 may_have_started（旧租约过期也不重新分配该条）。
 permit token 明文只在签发响应中返回一次，库里只存 hash。
@@ -130,6 +133,15 @@ def write_authorize(
         if task is None or task["status"] != TASK_STATUS_ACTIVE:
             conn.rollback()
             raise PermitError("TASK_NOT_ACTIVE", 409, "任务已暂停或不存在，拒绝授权")
+
+        # 1b) pending 控制请求同步阻断（B1.2，设计 §5.5.5）：控制请求表只负责异步
+        #     迁移，不是同步门禁——这里的行级同步屏障由后续 binding FOR UPDATE 承担，
+        #     本查询是获锁后的廉价阻断面（微信任务永远无控制请求行，恒为空查询）。
+        from src.session_tasks import control_requests as st_control_requests
+
+        if st_control_requests.has_pending_control_request(cursor, tenant_id, task_ref):
+            conn.rollback()
+            raise PermitError("CONTROL_PENDING", 409, "任务存在待处理控制请求，拒绝授权")
 
         # 2) run 锁定 + 取消/终态复验（R49）：cancel_run 以 run→deliveries→invocations
         #    序单事务持锁——此处 run 先于 invocation/delivery 加锁并复验，取消与许可
@@ -282,7 +294,8 @@ def write_authorize(
             )
 
         # 5) 适配器场景授权（epoch/target_version/payload_hash）+ R9 quota 预留
-        #    （scenario_key 上方已强制非空，fail-closed）
+        #    （scenario_key 上方已强制非空，fail-closed）。B1.2：复判在调用方许可
+        #    事务游标上执行（cursor=cursor；读与许可事务行锁/可见性一致）
         adapter = TrustedAdapterRegistry.get(scenario_key)
         if adapter is None:
             conn.rollback()
@@ -302,9 +315,29 @@ def write_authorize(
             payload_hash=args.get("payload_hash"),
             authorization_revision=args.get("authorization_revision"),
             authorization_epoch=args.get("authorization_epoch"),
+            cursor=cursor,
         )
         if not decision.allowed:
-            conn.rollback()
+            # B1.2 结构化拒绝（设计 §5.5.4 冻结提交语义）：control_action 非空 →
+            # 同一许可事务内落地拒绝副作用（锁 binding → 置同步阻断+epoch+1 →
+            # 幂等控制请求 → 脱敏审计）并**先 commit 再返回拒绝**；control_action
+            # 为 None（微信现状）→ 既有整体 rollback 路径不变，且不产生任何控制请求。
+            if getattr(decision, "control_action", None):
+                try:
+                    _commit_denial_control_side_effects(
+                        conn, cursor, tenant_id=tenant_id, scenario_key=scenario_key,
+                        task_ref=task_ref, decision=decision,
+                        invocation_id=str(inv["id"]), delivery_id=delivery_id,
+                    )
+                except PermitError:
+                    raise
+                except Exception as exc:  # noqa: BLE001 副作用写入失败：不签发许可、不声称已转人工
+                    conn.rollback()
+                    logger.error(f"后端日志：许可拒绝副作用写入失败（回滚，不签发）tenant={tenant_id} invocation={invocation_id}: {exc}")
+                    raise PermitError("CONTROL_SIDE_EFFECT_FAILED", 409, "许可拒绝副作用写入失败，许可未签发")
+                conn.commit()
+            else:
+                conn.rollback()
             raise PermitError("ADAPTER_DENIED", 403, f"场景授权拒绝: {decision.reason}")
         scopes = [
             quota.QuotaScope(
@@ -374,6 +407,65 @@ def write_authorize(
         "permit_token": permit_token,
         "deadline_at": deadline,
     }
+
+
+def _commit_denial_control_side_effects(
+    conn, cursor, *, tenant_id: str, scenario_key: str, task_ref: str,  # noqa: ANN001
+    decision, invocation_id: str, delivery_id: str,
+) -> None:
+    """结构化拒绝的控制副作用（B1.2，设计 §5.5.4；调用方许可事务内执行）。
+
+    锁序（矩阵 write-authorize 行）：subject → run → invocation → delivery →
+    binding。此处 task 行只做普通读（定位 binding 与 control_epoch，不加锁——
+    permits 路径不取 task 行锁）；binding 由 guard FOR UPDATE 后置阻断。
+    幂等控制请求 + 脱敏审计同事务写入，由调用方先 commit 再返回拒绝。
+    """
+    from src.session_tasks import control_requests as st_control_requests
+    from src.session_tasks.scenario_descriptor import get_descriptor
+
+    descriptor = get_descriptor(scenario_key)
+    guard = getattr(descriptor, "binding_guard", None) if descriptor is not None else None
+    if guard is None:
+        raise RuntimeError(
+            f"场景 {scenario_key} 返回 control_action 但无 binding_guard，无法落地拒绝副作用"
+        )
+    # 普通读任务行（不加锁）：binding 定位 + control_epoch 快照
+    cursor.execute(
+        "SELECT id, tenant_id, control_epoch, conversation_binding_id "
+        "FROM session_tasks WHERE tenant_id=%s AND id=%s",
+        (tenant_id, task_ref),
+    )
+    task_row = cursor.fetchone()
+    if task_row is None or not task_row["conversation_binding_id"]:
+        raise RuntimeError("拒绝副作用失败：任务行或场景绑定缺失")
+    binding_row = guard.lock_binding(cursor, tenant_id, str(task_row["conversation_binding_id"]))
+    if binding_row is None:
+        raise RuntimeError("拒绝副作用失败：场景绑定不存在")
+    # CR 非阻断 e：binding 阻断原因/控制请求 reason/审计 detail 只落**受控码**
+    # （control_action / audit_code），不持久化适配器自由文本 decision.reason
+    #（后者可能携带场景上下文描述，进库前不脱敏）。
+    control_action = str(decision.control_action or "adapter_denied")
+    audit_code = str(getattr(decision, "audit_code", None) or control_action)
+    new_block_epoch = guard.block_binding(cursor, dict(task_row), control_action)
+    inserted = st_control_requests.insert_control_request(
+        cursor, tenant_id, task_row["id"],
+        expected_control_epoch=int(task_row["control_epoch"]),
+        expected_block_epoch=int(new_block_epoch),
+        reason=control_action,
+        source_type="permit_denied",
+        source_ref=f"invocation:{invocation_id}/delivery:{delivery_id}",
+    )
+    audit.insert_audit(
+        cursor, tenant_id, "permit_denied_control", "task", str(task_row["id"]),
+        scenario_key=scenario_key,
+        detail={
+            "invocation_id": invocation_id, "delivery_id": delivery_id,
+            "control_action": control_action,
+            "audit_code": audit_code,
+            "block_epoch": int(new_block_epoch),
+            "control_request_inserted": bool(inserted),
+        },
+    )
 
 
 def settle_permit_on_result(

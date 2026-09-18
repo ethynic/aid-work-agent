@@ -14,9 +14,16 @@ from .constants import SessionTaskError
 from .texts import load_text, spec_digest
 
 
-def capabilities(tenant_id):
-    from src.weixin_conversation.config import scenario_enabled
-    enabled = service.tenant_allowed(tenant_id) and scenario_enabled(tenant_id)
+def capabilities(tenant_id, scenario_key=None):
+    """工作台能力开关（CR 阻断 2/10）：门控按 scenario_key 分派描述器场景开关，
+    缺省微信（旧请求兼容）。描述器缺失/未注册 → fail-closed 关闭发布。"""
+    from .scenario_descriptor import get_descriptor
+
+    key = str(scenario_key or "weixin.conversation.v1")
+    descriptor = get_descriptor(key)
+    checker = getattr(descriptor, "scenario_enabled", None) if descriptor is not None else None
+    scenario_on = bool(checker and checker(tenant_id))
+    enabled = service.tenant_allowed(tenant_id) and scenario_on
     return {"publish_enabled": enabled, "draft_enabled": True,
             "reason": None if enabled else "执行门禁未开放，目前可保存草稿和查看任务。"}
 
@@ -30,8 +37,8 @@ def input_version(conn, tenant_id, task_id):
 def resume_task(tenant_id, user_id, task_id, expected_version, resume_from):
     if not isinstance(resume_from, dict) or resume_from.get("mode") != "fresh_baseline" or type(resume_from.get("expected_input_version")) is not int:
         raise SessionTaskError("必须显式选择新基线及当前消息版本；历史消息不会补发", "RESUME_BLOCKED_UNTIL_VERIFIED", 409)
-    if not capabilities(tenant_id)["publish_enabled"]:
-        raise SessionTaskError("执行门禁未开放", "FEATURE_DISABLED", 403)
+    # CR 三审 P1-4：不再按缺省（微信）场景前置阻断——恢复门控在锁定任务并验证
+    # 属主后按 task.scenario_key 分派（微信关 BOSS 开时 BOSS 任务可恢复）
     with service._conn() as conn:
         cursor = conn.cursor()
         # Same ordering as budget reservations, then subject → task → assignment.
@@ -54,14 +61,17 @@ def resume_task(tenant_id, user_id, task_id, expected_version, resume_from):
         version = input_version(conn, tenant_id, task_id)
         if resume_from["expected_input_version"] != version:
             raise SessionTaskError("消息水位已变化，请重新选择", "CONFLICT", 409)
-        service._verify_bindings(tenant_id, user_id, task["device_id"], task["account_binding_id"], task["conversation_binding_id"], conn=conn)
-        service._check_device_capabilities(conn, tenant_id, task["device_id"])
+        service._verify_bindings(tenant_id, user_id, task["device_id"], task["account_binding_id"], task["conversation_binding_id"], conn=conn, scenario_key=task["scenario_key"])
+        service._check_device_capabilities(conn, tenant_id, task["device_id"], scenario_key=task["scenario_key"])
+        # 场景门控按任务行权威 scenario_key 分派（CR 阻断 2）
+        service._ensure_scenario_enabled(tenant_id, task["scenario_key"])
         spec = service._load_spec_by_spec_id(conn, tenant_id, task["current_spec_id"], task_id)
         if task["draft_digest"] != spec_digest(spec):
             raise SessionTaskError("草稿已变更，须先确认发布新版本", "CONFLICT", 409)
-        from .models import validate_task_spec
+        from .models import validate_spec_for_scenario
+
         try:
-            validate_task_spec(spec)
+            validate_spec_for_scenario(task["scenario_key"], spec)
         except ValueError as exc:
             raise SessionTaskError("发布授权已过期或无效", "TASK_EXPIRED", 409) from exc
         cursor.execute("""SELECT 1 FROM session_task_execution_links l
@@ -105,8 +115,13 @@ def resume_task(tenant_id, user_id, task_id, expected_version, resume_from):
 def projection(conn, tenant_id, task):
     task_id = task["id"]
     cursor = conn.cursor()
-    cursor.execute("SELECT conversation_label FROM bs_weixin_conversation_bindings WHERE tenant_id=%s AND id=%s", (tenant_id, task["conversation_binding_id"]))
-    binding = cursor.fetchone()
+    # binding_label 由场景描述器解析（九处 #7；微信 resolver 与原 SQL 一致）
+    binding_label = None
+    from .scenario_descriptor import get_descriptor
+
+    label_resolver = getattr(get_descriptor(task["scenario_key"]), "workbench_label_resolver", None) if task.get("scenario_key") else None
+    if label_resolver is not None:
+        binding_label = label_resolver(cursor, tenant_id, task["conversation_binding_id"])
     cursor.execute("SELECT last_seen_at FROM local_tool_devices WHERE tenant_id=%s AND id=%s", (tenant_id, task["device_id"]))
     device = cursor.fetchone()
     cursor.execute("""SELECT e.event_type,e.payload_text_id,e.received_at FROM session_task_events e
@@ -147,7 +162,7 @@ def projection(conn, tenant_id, task):
         phase = "observation_gap"
     online = bool(device and device["last_seen_at"] and service._tz(device["last_seen_at"]) > service._now()-timedelta(seconds=90))
     return {"phase": phase, "input_version": input_version(conn, tenant_id, task_id),
-            "binding_label": binding["conversation_label"] if binding else None,
+            "binding_label": binding_label,
             "device_online": online, "last_observed_at": observed,
             "replies_count": int(counts["replies"]), "rounds_count": int(counts["rounds"]), "decisions_count": int(decisions["n"])}
 

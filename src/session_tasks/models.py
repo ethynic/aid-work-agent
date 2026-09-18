@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timezone
-from typing import List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -166,7 +166,12 @@ class TaskSpecPayload(BaseModel):
 
 
 class TaskDraftCreatePayload(BaseModel):
-    """POST /api/session-tasks 请求体：spec + 归属绑定（设计 §9）。"""
+    """POST /api/session-tasks 请求体：spec + 归属绑定（设计 §9）。
+
+    B1.2 envelope（设计 §4.3）：spec 类型为 dict（envelope 只校验"是对象"），
+    内容校验按请求 scenario_key 分派到描述器 spec_validator（service.create_draft）；
+    缺省场景 = weixin.conversation.v1（现状锁定）。
+    """
 
     model_config = {"extra": "forbid"}
 
@@ -175,7 +180,7 @@ class TaskDraftCreatePayload(BaseModel):
     account_binding_id: Optional[str] = Field(default=None, pattern=r"^[0-9a-fA-F-]{36}$")
     conversation_binding_id: Optional[str] = Field(default=None, pattern=r"^[0-9a-fA-F-]{36}$")
     resolution_invocation_id: Optional[str] = Field(default=None, pattern=r"^[0-9a-fA-F-]{36}$")
-    spec: TaskSpecPayload
+    spec: Dict[str, Any]
 
     @model_validator(mode="after")
     def _target_source(self):
@@ -190,3 +195,48 @@ class TaskDraftCreatePayload(BaseModel):
 def validate_task_spec(payload: dict) -> TaskSpecPayload:
     """发布/草稿保存的 spec 校验入口；非法抛 pydantic ValidationError（API 层转 field_errors）。"""
     return TaskSpecPayload.model_validate(payload)
+
+
+class SpecValidationError(ValueError):
+    """envelope spec 校验失败（B1.2 §4.3）。
+
+    保留 pydantic errors 面（API 层 _validation_error 以 .errors() 转 field_errors，
+    loc 统一加 "spec" 前缀——微信 POST 错误路径与 B1.1 前逐字段保真，B1.0 特征
+    测试第 8 项快照）；同时保持 ValueError 基类——直连服务层的调用方/测试对
+    非法 spec 的 ValueError 契约与 B1.1 前（pydantic ValidationError 即
+    ValueError）一致。
+    """
+
+    def __init__(self, validation_error: Exception):
+        self.validation_error = validation_error
+        details = getattr(validation_error, "errors", lambda: [])() or []
+        self._errors = [
+            {
+                "loc": ("spec",) + tuple(d.get("loc", [])),
+                "msg": d.get("msg", str(validation_error)),
+                "type": d.get("type", ""),
+            }
+            for d in details
+        ]
+        super().__init__(str(validation_error))
+
+    def errors(self):  # noqa: ANN202
+        return self._errors
+
+
+def validate_spec_for_scenario(scenario_key: str, spec: Dict[str, Any]) -> Any:
+    """按场景分派的 spec 校验（B1.2 §4.3）：描述器缺失/非法 → SessionTaskError 400。
+
+    微信场景 spec 非法仍由原 TaskSpecPayload 抛 pydantic ValidationError；
+    本函数不吞不改（调用方决定是否以 SpecValidationError 加前缀包装）。
+    """
+    from .constants import ERR_VALIDATION_FAILED, SessionTaskError
+    from .scenario_descriptor import ScenarioDescriptorError, require_descriptor
+
+    if not isinstance(spec, dict):
+        raise SessionTaskError("spec 必须是对象", ERR_VALIDATION_FAILED, 400)
+    try:
+        descriptor = require_descriptor(scenario_key)
+    except ScenarioDescriptorError as exc:
+        raise SessionTaskError(f"场景未注册: {scenario_key}", ERR_VALIDATION_FAILED, 400) from exc
+    return descriptor.spec_validator(dict(spec))

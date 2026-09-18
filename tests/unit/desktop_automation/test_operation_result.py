@@ -30,7 +30,7 @@ class TestSubmittedReceipt:
         assert ctx["arguments"]["receipt_context"] == "weixin_name"
 
     @pytest.mark.parametrize("authorized", [False, True])
-    def test_submitted_requires_frozen_scope_and_keeps_phase(self, tenant_id, authorized):
+    def test_submitted_requires_frozen_scope_and_keeps_phase(self, tenant_id, authorized, monkeypatch):
         from psycopg2.extras import Json
         from src.db.database import get_db_connection
         from src.desktop_automation.adapters import TrustedAdapterRegistry
@@ -38,7 +38,15 @@ class TestSubmittedReceipt:
         ctx = harness.build_running_v2_invocation(tenant_id)
         permit = _authorize(tenant_id, ctx)
         if authorized:
+            from src.session_tasks import scenario_descriptor as sd_module
+            from src.weixin_conversation.descriptor import build_weixin_descriptor
+
             TrustedAdapterRegistry.register(WeixinConversationAdapter())
+            # B1.2：submitted 接纳白名单移到场景描述器 receipt_policy（值与原硬编码一致）
+            monkeypatch.setattr(
+                sd_module, "get_descriptor",
+                lambda key: build_weixin_descriptor() if key == "weixin.conversation.v1" else None,
+            )
             with get_db_connection() as conn:
                 cur = conn.cursor()
                 cur.execute("""UPDATE local_tool_invocations SET tool_name='weixin_message_send_v2',

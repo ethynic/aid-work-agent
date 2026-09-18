@@ -2520,6 +2520,35 @@ CREATE TABLE IF NOT EXISTS session_task_notifications (
     FOREIGN KEY (tenant_id, task_id) REFERENCES session_tasks (tenant_id, id) ON DELETE CASCADE
 );
 
+-- B1.2 通用控制请求表（设计 §5.5.5 冻结 schema；human_required 异步迁移，
+-- 只负责异步迁移不是同步发送门禁；处理失败保持 binding 阻断，无自动恢复路径）
+CREATE TABLE IF NOT EXISTS session_task_control_requests (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    task_id UUID NOT NULL,
+    expected_control_epoch INTEGER NOT NULL,
+    expected_block_epoch INTEGER NOT NULL,
+    reason TEXT NOT NULL,
+    source_type TEXT NOT NULL,       -- permit_denied | rate_settlement
+    source_ref TEXT NOT NULL,        -- 受控 delivery/invocation 引用，不存敏感正文
+    status TEXT NOT NULL DEFAULT 'pending', -- pending | processing | applied | stale | failed
+    processing_owner TEXT,
+    processing_lease_expires_at TIMESTAMPTZ,
+    retry_count INTEGER NOT NULL DEFAULT 0,
+    next_retry_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+
+    CHECK (status IN ('pending','processing','applied','stale','failed')),
+    CHECK (retry_count >= 0)
+);
+CREATE INDEX IF NOT EXISTS idx_session_task_control_requests_scan
+    ON session_task_control_requests (status, created_at);
+ALTER TABLE session_task_control_requests
+    DROP CONSTRAINT IF EXISTS session_task_control_requests_tenant_id_task_id_expected_co_key;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_session_task_control_requests_idem
+    ON session_task_control_requests (tenant_id, task_id, expected_control_epoch, expected_block_epoch, reason);
+
 -- ============================================================================
 -- 微信公众号内容入知识库（bs_ 业务表；src/wechat_mp/db.py 同源，设计 §8 二审定稿）
 -- 队列语义：sync_runs + sync_items 即执行队列；受理即建 queued run + pending items；

@@ -24,6 +24,30 @@ _executor = ScheduledTaskExecutor()
 _SCHEDULER_LOCK_KEY = redis_client.make_key(CacheKeys.SCHEDULER_LOCK, "manager")
 
 
+def _ensure_any_session_scenario_registered() -> bool:
+    """任一启用场景描述器注册成功即返回 True（B1.2 九处之八，设计 §4.2/§9.1 B1.3）。
+
+    场景注册点在此显式列举（组合根；通用层 session_tasks 不反向 import 场景实现）。
+    B1.3 起新场景（boss_conversation）追加为并列分支：任一注册成功即注册 worker。
+    逐场景独立 try/ensure（不短路），保证多场景同时启用时各自注册（决策 worker
+    按场景键取描述器，漏注册的场景任务无法被处理）；单场景注册失败不阻断其余场景。
+    """
+    registered = False
+    try:
+        from src.weixin_conversation import registration as wxconv_registration
+
+        registered = wxconv_registration.ensure_registered() or registered
+    except Exception as e:  # noqa: BLE001 单场景注册失败不阻断其余场景注册
+        logger.error(f"后端日志：weixin_conversation 场景注册失败: {e}")
+    try:
+        from src.boss_conversation import registration as boss_registration
+
+        registered = boss_registration.ensure_registered() or registered
+    except Exception as e:  # noqa: BLE001 单场景注册失败不阻断其余场景注册
+        logger.error(f"后端日志：boss_conversation 场景注册失败: {e}")
+    return registered
+
+
 class ScheduledTaskManager:
     """定时任务调度管理器"""
 
@@ -381,34 +405,56 @@ class ScheduledTaskManager:
         except Exception as e:
             logger.error(f"后端日志：注册 weixin_marketing 调度任务失败: {e}")
 
-        # ===== 端侧会话任务决策 worker（C3；session_tasks+weixin_conversation 双门控零注册）=====
+        # ===== 端侧会话任务决策 worker（C3；session_tasks.enabled + 任一启用场景描述器）=====
         # tick 为同步入口（内部自带事件循环跑模型调用），与 APScheduler 解耦可直接注入调用；
         # 适配器/决策钩子注册仅在调度器启动时执行（ensure_registered，本函数上方调用），
         # tick 不重复注册——进程内 registry 不会自发丢失（reset 仅测试场景使用）。
+        # CR 阻断 11：决策 worker 与控制请求 worker 独立注册、独立记录启动失败——
+        # 决策注册失败不得拖垮安全控制 worker（后者是阻断迁移的唯一消费者）。
         try:
             from src.session_tasks.config import get_session_tasks_config
-            from src.weixin_conversation import registration as wxconv_registration
 
             st_cfg = get_session_tasks_config()
-            if st_cfg.enabled and wxconv_registration.ensure_registered():
-                from src.session_tasks.decisions import run_decision_tick
+            if st_cfg.enabled:
+                if _ensure_any_session_scenario_registered():
+                    from src.session_tasks.decisions import run_decision_tick
+
+                    self._scheduler.add_job(
+                        run_decision_tick,
+                        IntervalTrigger(seconds=st_cfg.decision_tick_seconds),
+                        id="job_system_session_task_decisions",
+                        name="Session Task Decision Worker",
+                        max_instances=1,
+                        coalesce=True,
+                    )
+                    logger.info(
+                        f"后端日志：已注册 session_tasks 决策 worker (tick={st_cfg.decision_tick_seconds}s, "
+                        f"max_decisions_per_tenant={st_cfg.max_decisions_per_tenant})"
+                    )
+                else:
+                    logger.debug("后端日志：session_tasks 未启用或无启用场景，跳过决策 worker 注册")
+        except Exception as e:
+            logger.error(f"后端日志：注册 session_tasks 决策 worker 失败: {e}")
+
+        # ===== 控制请求处理器（B1.2，设计 §5.5.5；仅 session_tasks.enabled 门控，
+        # 不依赖场景注册；独立 try 域——CR 阻断 11）=====
+        try:
+            from src.session_tasks.config import get_session_tasks_config as _st_cfg_for_control
+
+            if _st_cfg_for_control().enabled:
+                from src.session_tasks.control_requests import run_control_request_tick
 
                 self._scheduler.add_job(
-                    run_decision_tick,
-                    IntervalTrigger(seconds=st_cfg.decision_tick_seconds),
-                    id="job_system_session_task_decisions",
-                    name="Session Task Decision Worker",
+                    run_control_request_tick,
+                    IntervalTrigger(seconds=5),
+                    id="job_system_session_task_control_requests",
+                    name="Session Task Control Request Processor",
                     max_instances=1,
                     coalesce=True,
                 )
-                logger.info(
-                    f"后端日志：已注册 session_tasks 决策 worker (tick={st_cfg.decision_tick_seconds}s, "
-                    f"max_decisions_per_tenant={st_cfg.max_decisions_per_tenant})"
-                )
-            else:
-                logger.debug("后端日志：session_tasks 或 weixin_conversation 未启用，跳过决策 worker 注册")
+                logger.info("后端日志：已注册 session_tasks 控制请求处理器 (tick=5s)")
         except Exception as e:
-            logger.error(f"后端日志：注册 session_tasks 决策 worker 失败: {e}")
+            logger.error(f"后端日志：注册 session_tasks 控制请求处理器失败: {e}")
 
     def _run_memory_summarizer(self):
         """执行每日记忆总结（APScheduler 回调）"""

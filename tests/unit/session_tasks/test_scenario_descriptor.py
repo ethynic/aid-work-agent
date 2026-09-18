@@ -334,12 +334,16 @@ class TestEnsureRegistered:
         assert scenario_descriptor.get_descriptor("weixin.conversation.v1") is None
 
     def test_session_tasks_gate_closed_registers_nothing(self, monkeypatch):
-        """session_tasks.enabled 关闭：返回 False 且三处注册表零写入。"""
+        """session_tasks.enabled 关闭：返回 False 且三处注册表零写入。
+
+        （B1.2 起 conftest 会为通用层用例预注册微信描述器，本用例先复位注册表
+        再验证"门控关闭 → 不（重新）注册"。）"""
         import src.weixin_conversation.config as wx_config
         import src.weixin_conversation.registration as registration
         from src.desktop_automation.adapters import TrustedAdapterRegistry
         from src.session_tasks import scenario_hooks
 
+        registration.reset_registration()
         monkeypatch.setattr(registration, "get_session_tasks_config", lambda: replace(_cfg(), enabled=False))
         monkeypatch.setattr(wx_config, "scenario_enabled_gate", lambda: True)
         assert registration.ensure_registered() is False
@@ -348,12 +352,16 @@ class TestEnsureRegistered:
         assert scenario_descriptor.get_descriptor("weixin.conversation.v1") is None
 
     def test_scenario_gate_closed_registers_nothing(self, monkeypatch):
-        """weixin_conversation 门控关闭：返回 False 且三处注册表零写入。"""
+        """weixin_conversation 门控关闭：返回 False 且三处注册表零写入。
+
+        （B1.2 起 conftest 会为通用层用例预注册微信描述器，本用例先复位注册表
+        再验证"门控关闭 → 不（重新）注册"。）"""
         import src.weixin_conversation.config as wx_config
         import src.weixin_conversation.registration as registration
         from src.desktop_automation.adapters import TrustedAdapterRegistry
         from src.session_tasks import scenario_hooks
 
+        registration.reset_registration()
         monkeypatch.setattr(registration, "get_session_tasks_config", lambda: _cfg(enabled=True))
         monkeypatch.setattr(wx_config, "scenario_enabled_gate", lambda: False)
         assert registration.ensure_registered() is False

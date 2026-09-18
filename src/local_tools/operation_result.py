@@ -123,10 +123,21 @@ def _check_evidence_and_register(
     # ② 适配器校验（scenario_key 缺失/未注册 → fail-closed 拒绝）
     adapter = TrustedAdapterRegistry.get(scenario_key) if scenario_key else None
     if phase == PHASE_SUBMITTED:
-        if (scenario_key != "weixin.conversation.v1"
-                or args.get("receipt_mode") != "submission"
-                or args.get("receipt_context") != "weixin_name"
-                or invocation.get("tool_name") != "weixin_message_send_v2"
+        # B1.2（九处 #9）：submitted 接纳白名单由场景描述器 receipt_policy +
+        # operation_descriptor 提供（微信逐值一致：submission/weixin_name/
+        # weixin_message_send_v2/session_task）；描述器未注册 → fail-closed
+        # 拒绝（与原"非微信场景必拒"同语义）。
+        from src.session_tasks.scenario_descriptor import get_descriptor
+
+        policy_descriptor = get_descriptor(scenario_key) if scenario_key else None
+        policy = getattr(policy_descriptor, "receipt_policy", None) if policy_descriptor is not None else None
+        op_descriptor = getattr(policy_descriptor, "operation_descriptor", None) if policy_descriptor is not None else None
+        if (policy is None
+                or op_descriptor is None
+                or policy.get("mode") != "submission"
+                or args.get("receipt_mode") != policy.get("mode")
+                or args.get("receipt_context") != policy.get("context")
+                or invocation.get("tool_name") != op_descriptor.get("operation")
                 or invocation.get("execution_lane") != "session_task"):
             return "submission_not_authorized"
         validator = getattr(adapter, "validate_submission_evidence", None)
@@ -224,6 +235,160 @@ def _permit_binding_invalid(
     )
 
 
+def _locate_and_lock_binding(cursor, guard, tenant_id: str, inv: Dict[str, Any]) -> Dict[str, Any]:  # noqa: ANN001
+    """B1.2 binding 定位（设计 §5.5.5 冻结流程，仅 binding_guard 场景）：
+
+    无锁定位（受信 business_ref.task_ref 普通读 task 行，不锁）→ guard 锁场景
+    binding 行（FOR UPDATE）→ **锁后重新读取并核对**（CR 阻断 8）：重读 task 行
+    核对 conversation_binding_id 仍指向已锁 binding、tenant 归属不变、invocation
+    冻结 scenario_key 与任务行一致。定位失败分类处置（CR 三审 P1-2）：
+    - task 缺失 / task 无绑定 / binding 缺失 / guard 返回归属不符行 →
+      **抛 OperationResultError 拒绝且不 ACK**（无受信 task_row 可升级，只审计
+      后 ACK 会让任务无阻断无请求地保持 active）；
+    - 重验不一致（改绑窗口 / 场景漂移）→ 返回 anomaly 走异常升级（阻断+控制
+      请求+审计+ACK）。
+    调用点在冻结锁序 invocation→attempt→delivery 之后（CR 阻断 1），binding→
+    rate slot（结算 SAVEPOINT）最后。不从客户端回执参数接受 binding_id；定位
+    阶段不锁 task（operation-result 不获取 subject/task 锁）。"""
+    business_ref = inv["business_ref"] or {}
+    task_ref = str(business_ref.get("task_ref") or business_ref.get("task_id") or "")
+    if not task_ref:
+        # 无受信 task_ref：拒绝且不 ACK（无定位链即无升级对象）
+        raise OperationResultError(
+            "BINDING_LOCATION_FAILED", 409, "结算定位失败：invocation 冻结链缺 task_ref"
+        )
+    cursor.execute(
+        "SELECT id, tenant_id, conversation_binding_id, control_epoch "
+        "FROM session_tasks WHERE tenant_id=%s AND id=%s",
+        (tenant_id, task_ref),
+    )
+    task_row = cursor.fetchone()
+    if task_row is None or not task_row["conversation_binding_id"]:
+        # CR 三审 P1-2：拒绝且不 ACK——无受信 task_row 时升级无对象，只审计后
+        # ACK 会让任务无阻断无请求地保持 active（Runtime outbox 重投保留事实）
+        raise OperationResultError(
+            "BINDING_LOCATION_FAILED", 409, "结算定位失败：task 缺失或未绑定场景绑定"
+        )
+    # P0-1（四审）：首锁前建 SAVEPOINT——重验不一致时 ROLLBACK 释放旧绑定锁，
+    # 升级段按 binding id 排序重新加锁，消除交叉改绑 A→B/B→A 的 AB-BA 死锁
+    cursor.execute("SAVEPOINT binding_locate")
+    binding_row = guard.lock_binding(cursor, tenant_id, str(task_row["conversation_binding_id"]))
+    if binding_row is None or (
+        str(binding_row.get("tenant_id") or "") != tenant_id
+        or str(binding_row.get("id") or "") != str(task_row["conversation_binding_id"])
+    ):
+        cursor.execute("ROLLBACK TO SAVEPOINT binding_locate")
+        # CR 三审 P1-2：binding 被删除或 guard 返回归属不符行 → 拒绝且不 ACK
+        raise OperationResultError(
+            "BINDING_LOCATION_FAILED", 409, "结算定位失败：场景绑定缺失或归属不符"
+        )
+    # 锁后重验（CR 阻断 8 + 三审 P1-2 scenario 核对）：无锁读→加锁窗口内定位
+    # 被并发改变/场景漂移 → anomaly（有受信 task_row 可升级）
+    cursor.execute(
+        "SELECT id, tenant_id, conversation_binding_id, control_epoch, scenario_key "
+        "FROM session_tasks WHERE tenant_id=%s AND id=%s",
+        (tenant_id, task_ref),
+    )
+    task_row_locked = cursor.fetchone()
+    frozen_scenario = str(business_ref.get("scenario_key") or "")
+    revalidated = (
+        task_row_locked is not None
+        and str(task_row_locked["conversation_binding_id"] or "") == str(binding_row["id"])
+        and str(task_row_locked["tenant_id"]) == tenant_id
+        and str(task_row_locked["id"]) == task_ref
+        and (not frozen_scenario or str(task_row_locked["scenario_key"] or "") == frozen_scenario)
+    )
+    ctx: Dict[str, Any] = {"task_row": None, "binding_row": None, "anomaly": None}
+    if not revalidated:
+        # P0-1（四审）：定位链在无锁读→加锁窗口内被并发改变——回滚到 SAVEPOINT
+        # 释放旧绑定锁（PG 对 SAVEPOINT 后获取的行锁随回滚释放），升级段按
+        # 旧/新 binding id 排序重新加锁（与并发镜像事务同全序，无反向边）；
+        # 再次变化由升级段的二次确认拒绝（无界重试禁止）。
+        cursor.execute("ROLLBACK TO SAVEPOINT binding_locate")
+        ctx["anomaly"] = "binding_location:revalidation_mismatch"
+        ctx["task_row"] = dict(task_row_locked) if task_row_locked is not None else dict(task_row)
+        ctx["stale_binding_id"] = str(binding_row["id"])
+        return ctx
+    cursor.execute("RELEASE SAVEPOINT binding_locate")
+    ctx["task_row"] = dict(task_row_locked)
+    ctx["binding_row"] = dict(binding_row)
+    return ctx
+
+
+def _is_controlled_code_local(value) -> bool:
+    """受控码校验（与 decisions.V1.9 terminal reason 同口径）。"""
+    import re as _re
+
+    return isinstance(value, str) and bool(_re.fullmatch(r"^[a-z][a-z0-9_]{0,63}$", value))
+
+
+def _settle_scenario_result(
+    cursor, descriptor, guard, tenant_id: str, inv: Dict[str, Any], attempt: Dict[str, Any],  # noqa: ANN001
+    delivery_id: str, request_id: str, effect: str, phase: Optional[str],
+    evidence_reason: Optional[str], permit_id: Optional[str],
+) -> Dict[str, Any]:
+    """B1.2 场景结算（设计 §5.5.4 顺序 3–6；CR 阻断 9 结构化结果）：
+    SAVEPOINT rate_settlement 包裹 adapter.settle_operation_result。
+
+    返回 {"kind": "normal"}（结算成功，无升级）
+      | {"kind": "anomaly_committed", "detail": str}（settle 返回
+        {"status": "anomaly_committed", "reason": <非空受控码>}：补建/落账写入
+        **保留**（不回滚），由调用方升级阻断+控制请求+审计）
+      | {"kind": "error", "detail": str}（settle 抛异常或**返回未知值**：ROLLBACK
+        TO SAVEPOINT 撤销本结算写入，原始回执照常持久化，由调用方升级异常）。
+
+    CR 三审 P1-3：只有 None 与严格形态的 anomaly_committed 被识别；拼写错误/
+    未知状态/非 dict 一律按未知返回值处理——回滚 SAVEPOINT 并升级，不得当
+    normal 静默放行。
+
+    微信 adapter settle 为 no-op 返回 None（normal）——SAVEPOINT 包裹 no-op 不改变
+    任何行为；描述器未注册（纯底座场景）不进入本函数（现状零变化）。
+    """
+    business_ref = inv["business_ref"] or {}
+    result_facts = {
+        "tenant_id": tenant_id,
+        "task_id": str(business_ref.get("task_ref") or business_ref.get("task_id") or ""),
+        "invocation_id": str(inv["id"]),
+        "delivery_id": str(delivery_id),
+        "attempt_id": str(attempt["id"]),
+        "request_id": request_id,
+        "effect": effect,
+        "phase": phase,
+        "evidence_invalid": evidence_reason,
+        "permit_id": permit_id,
+    }
+    cursor.execute("SAVEPOINT rate_settlement")
+    try:
+        settle_result = descriptor.adapter.settle_operation_result(cursor, result_facts)
+    except Exception as exc:  # noqa: BLE001 结算失败：回滚到保存点，异常升级由调用方处理
+        logger.warning(
+            "后端日志：场景结算失败（ROLLBACK TO SAVEPOINT，照常接纳回执并升级异常）"
+            f" tenant={tenant_id} invocation={inv['id']}: {exc!r}"
+        )
+        cursor.execute("ROLLBACK TO SAVEPOINT rate_settlement")
+        return {"kind": "error", "detail": f"settlement_failed:{type(exc).__name__}"}
+    if (
+        isinstance(settle_result, dict)
+        and settle_result.get("status") == "anomaly_committed"
+        and isinstance(settle_result.get("reason"), str)
+        and _is_controlled_code_local(settle_result["reason"])
+    ):
+        cursor.execute("RELEASE SAVEPOINT rate_settlement")
+        # 补建写入保留（SAVEPOINT 已 RELEASE 不回滚），仅声明异常升级
+        return {"kind": "anomaly_committed", "detail": settle_result["reason"]}
+    if settle_result is not None:
+        # CR 三审 P1-3：未知返回值（拼写错误/未知状态/非 dict/受控码不合法）
+        # fail-closed——回滚本结算写入并按结算异常升级，不当 normal 静默放行。
+        # 补齐5：审计只落受控码与返回类型名，不落原始 repr（防大对象/敏感内容入审计）。
+        cursor.execute("ROLLBACK TO SAVEPOINT rate_settlement")
+        return {
+            "kind": "error",
+            "detail": f"settlement_unknown_result:{type(settle_result).__name__}",
+        }
+    cursor.execute("RELEASE SAVEPOINT rate_settlement")
+    return {"kind": "normal"}
+
+
 def apply_operation_result(
     *,
     tenant_id: str,
@@ -278,14 +443,33 @@ def apply_operation_result(
             conn.rollback()
             raise OperationResultError("PERMIT_REQUIRED", 409, "submitted 结果必须携带许可及令牌")
 
-        # 同一事务内读 attempt（P1-6：持 invocation 行锁时不再嵌套取池连接）
-        attempt = da_attempts.get_attempt_by_invocation_on(cursor, str(inv["id"]), tenant_id)
+        # ---- CR 阻断 1（P0）：冻结锁序 invocation→attempt→delivery→(guard)binding→
+        # rate slot。invocation 锁后无条件 FOR UPDATE 锁 attempt；随后无条件锁
+        # delivery 并校验租户/归属——不存在必须拒绝且不 ACK（unknown/none 路径
+        # 同样不例外）；evidence 分支复用已锁 delivery（不再各自加锁）；场景
+        # binding 锁定在结算段（delivery 之后），rate slot 在结算 SAVEPOINT 内。
+        attempt = da_attempts.lock_attempt_by_invocation_on(cursor, str(inv["id"]), tenant_id)
         if attempt is None:
             conn.rollback()
             raise OperationResultError("ATTEMPT_NOT_FOUND", 404, "invocation 未绑定 attempt")
 
         delivery_id = str(attempt["delivery_id"])
         run_id = str(attempt["run_id"]) if attempt.get("run_id") else None
+        delivery_row = da_deliveries.lock_delivery(cursor, delivery_id, tenant_id)
+        if delivery_row is None or str(delivery_row.get("tenant_id") or "") != tenant_id:
+            conn.rollback()
+            # 拒绝且不 ACK：attempt/delivery 归属链不完整时不得确认任何回执
+            # （Runtime outbox 会重投；机器副作用事实以 DB 为准）
+            raise OperationResultError(
+                "DELIVERY_NOT_FOUND", 404, "attempt 绑定的 delivery 不存在或归属不符"
+            )
+        if attempt.get("run_id") and delivery_row.get("run_id") and str(
+            delivery_row["run_id"]
+        ) != str(attempt["run_id"]):
+            conn.rollback()
+            raise OperationResultError(
+                "DELIVERY_ATTEMPT_MISMATCH", 409, "delivery 与 attempt 归属不一致"
+            )
 
         if attempt.get("finished_at") is not None:
             # R28：迟到（attempt 已终态）——完整绑定校验（claim/request_id 上方已验；
@@ -311,7 +495,7 @@ def apply_operation_result(
                     evidence_ref=evidence_ref,
                     invocation=inv,
                     attempt=attempt,
-                    delivery=da_deliveries.lock_delivery(cursor, delivery_id, tenant_id),
+                    delivery=delivery_row,  # CR 阻断 1：复用上方已无条件锁定的 delivery
                     args=args,
                     request_id=request_id,
                     effect=effect,
@@ -392,7 +576,7 @@ def apply_operation_result(
                 evidence_ref=evidence_ref,
                 invocation=inv,
                 attempt=attempt,
-                delivery=da_deliveries.lock_delivery(cursor, delivery_id, tenant_id),
+                delivery=delivery_row,  # CR 阻断 1：复用上方已无条件锁定的 delivery
                 args=args,
                 request_id=request_id,
                 effect=effect,
@@ -412,6 +596,37 @@ def apply_operation_result(
         outcome = _map_delivery_outcome(effect, phase)
         if evidence_reason is not None:
             outcome = {"state": "unknown", "effect": EFFECT_UNKNOWN, "phase": "unknown"}
+
+        # ---- B1.2 场景结算（设计 §5.5.4 顺序 3–6；锁序矩阵：invocation→attempt→
+        # delivery→(guard 时)binding→rate slot SAVEPOINT，不获取 subject/task）----
+        # 描述器注册场景：先（guard 时）定位并锁 binding，再 SAVEPOINT 结算；
+        # 结算失败 → ROLLBACK TO SAVEPOINT，照常持久化原始回执后升级异常
+        # （审计 + 阻断 binding + 幂等控制请求）。微信 settle=no-op 且 guard=None：
+        # 仅多一次 SAVEPOINT 包裹 no-op，行为与锁面零变化；无描述器的纯底座
+        # 场景完全不进入（现状零变化）。
+        from src.session_tasks import control_requests as control_requests_mod
+        from src.session_tasks.scenario_descriptor import get_descriptor
+
+        _scenario_key = str((inv["business_ref"] or {}).get("scenario_key") or "")
+        _descriptor = get_descriptor(_scenario_key) if _scenario_key else None
+        _guard = getattr(_descriptor, "binding_guard", None) if _descriptor is not None else None
+        settlement_error: Optional[str] = None
+        settlement_kind: Optional[str] = None
+        binding_ctx: Optional[Dict[str, Any]] = None
+        if _descriptor is not None:
+            if _guard is not None:
+                binding_ctx = _locate_and_lock_binding(cursor, _guard, tenant_id, inv)
+                if binding_ctx["anomaly"]:
+                    settlement_error = binding_ctx["anomaly"]
+                    settlement_kind = "anomaly"
+            if settlement_error is None:
+                settle_outcome = _settle_scenario_result(
+                    cursor, _descriptor, _guard, tenant_id, inv, attempt, delivery_id,
+                    request_id, effect, phase, evidence_reason, permit_id,
+                )
+                settlement_kind = settle_outcome["kind"]
+                if settle_outcome["kind"] != "normal":
+                    settlement_error = settle_outcome["detail"]
 
         # attempt 写结果（原始 effect/phase 与人工业务判定分别存储）
         da_attempts.finish_attempt(
@@ -473,8 +688,87 @@ def apply_operation_result(
                 "invocation_id": str(inv["id"]), "delivery_id": delivery_id,
                 "effect": effect, "phase": phase, "mapped_state": outcome["state"],
                 "permit_id": permit_id, "evidence_invalid": evidence_reason,
+                "settlement_error": settlement_error, "settlement_kind": settlement_kind,
             },
         )
+        if settlement_error is not None:
+            # 结算异常升级（设计 §5.5.4 顺序 5/6；CR 阻断 9 两种来源同一升级路径）：
+            # - kind=error：settle 抛异常/未知返回值，SAVEPOINT 已回滚撤销本结算写入；
+            # - kind=anomaly_committed：settle 结构化返回，补建/落账写入保留。
+            # 两者都：原始回执已照常持久化（attempt 保留上报值）→ 脱敏审计 +
+            # 锁定 binding 置同步阻断 + 幂等 human_required 控制请求 → 提交主事务
+            # 并正常 ACK（回执接纳性不受结算失败影响）。阻断/控制请求任一写入
+            # 失败 → 整体异常（不 ACK、不声称已转人工，机器副作用事实由 Runtime
+            # outbox 重投）。
+            # P1-3（四审）：guard 缺失 = 无升级对象（无 binding 可阻断、控制请求
+            # 无法迁移）——禁止"只审计后 ACK"，抛受控错误、回滚主事务且不 ACK，
+            # 由 Runtime outbox 重投；微信 no-op 恒返回 None 不进入本分支。
+            if _guard is None:
+                conn.rollback()
+                raise OperationResultError(
+                    "SETTLEMENT_ESCALATION_UNAVAILABLE", 409,
+                    "结算异常但场景无升级通道（binding_guard 缺失），回执未接纳",
+                )
+            audit.insert_audit(
+                cursor, tenant_id, "rate_settlement_failed", "attempt", str(attempt["id"]),
+                user_id=str(inv["user_id"]), scenario_key=_scenario_key or None,
+                detail={
+                    "invocation_id": str(inv["id"]), "delivery_id": delivery_id,
+                    "settlement_error": settlement_error,
+                },
+            )
+            if _guard is not None and binding_ctx is not None and binding_ctx.get("task_row"):
+                task_row = binding_ctx["task_row"]
+                new_block_epoch = None
+                # P0-1（四审）：改绑异常时定位段已 ROLLBACK SAVEPOINT 释放旧绑定锁；
+                # 此处按 旧/当前 binding id 排序重新加锁（与并发镜像事务同全序，
+                # 无反向边），随后二次读取 task 确认 binding/scenario 未继续变化——
+                # 再变则拒绝且不 ACK（不做无界重试）。
+                _lock_ids = sorted({
+                    str(task_row.get("conversation_binding_id") or ""),
+                    str(binding_ctx.get("stale_binding_id") or ""),
+                } - {""})
+                _locked_all = bool(_lock_ids)
+                for _bid in _lock_ids:
+                    if _guard.lock_binding(cursor, tenant_id, _bid) is None:
+                        conn.rollback()
+                        raise OperationResultError(
+                            "BINDING_LOCATION_FAILED", 409,
+                            "结算升级失败：场景绑定在升级窗口内被删除",
+                        )
+                if _lock_ids:
+                    # 二次确认：以 anomaly 时刻快照为基准（含 scenario 漂移场景——
+                    # 漂移本身就是 anomaly 的一部分，不与冻结值比较），确认未再变化
+                    _snapshot = task_row
+                    cursor.execute(
+                        "SELECT conversation_binding_id, scenario_key FROM session_tasks "
+                        "WHERE tenant_id=%s AND id=%s",
+                        (tenant_id, task_row["id"]),
+                    )
+                    _recheck = cursor.fetchone()
+                    if (
+                        _recheck is None
+                        or str(_recheck["conversation_binding_id"] or "") != str(
+                            _snapshot.get("conversation_binding_id") or ""
+                        )
+                        or str(_recheck["scenario_key"] or "") != str(
+                            _snapshot.get("scenario_key") or ""
+                        )
+                    ):
+                        conn.rollback()
+                        raise OperationResultError(
+                            "BINDING_LOCATION_FAILED", 409,
+                            "结算升级失败：任务绑定/场景在升级窗口内再次变化",
+                        )
+                    new_block_epoch = _guard.block_binding(cursor, task_row, "rate_ledger_anomaly")
+                control_requests_mod.insert_control_request(
+                    cursor, tenant_id, task_row["id"],
+                    expected_control_epoch=int(task_row["control_epoch"]),
+                    expected_block_epoch=int(new_block_epoch) if new_block_epoch is not None else 0,
+                    reason="rate_ledger_anomaly",
+                    source_type="rate_settlement",
+                    source_ref=f"invocation:{inv['id']}/delivery:{delivery_id}",
+                )
         conn.commit()
 
     # 提交后聚合推进（独立事务：unknown 停后续 / 全部终态落 §5.4 终态）
