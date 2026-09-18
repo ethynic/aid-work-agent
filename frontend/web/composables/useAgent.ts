@@ -150,7 +150,8 @@ export function useAgent() {
         timestamp: new Date(m.created_at).getTime(),
         progressMessages: m.metadata?.progressMessages || [],
         attachments: m.metadata?.attachments || undefined,
-        downloadableFiles: m.metadata?.downloadableFiles || undefined
+        downloadableFiles: m.metadata?.downloadableFiles || undefined,
+        cancelled: m.metadata?.cancelled === true
       })) || []
     state.dbLoaded = true
   }

@@ -36,6 +36,8 @@
 | 20260914-1901 | 微信公众号内容入知识库 | 🔧 部分完成 | 公众号文章多通道采集入知识库（回调+URL 直采+手动粘贴+接口对账，图片 VL 解析、500 字总结、按张计费）；P1/P2+接口通道（WP9）完成，待部署验收。 | [设计](system/wechat-mp/wechat-mp-knowledge-ingestion-design.md) | [计划](plans/plan-wechat-mp-knowledge-ingestion.md) |
 | 20260916-1830 | 公众号自有号清单源（历史文章导入，**主通道**） | 🔧 部分完成 | 租户扫码自有号，定期拉全量「发表记录」清单（含群发历史），走既有 URL 直采入库；通道优先级：清单源>回调+手动URL>freepublish；开发完成待部署验收（宏陶瓷砖管理员扫码实测+会话 TTL 观察）。 | [设计](system/wechat-mp/wechat-mp-list-source-design.md) | — |
 | 20260916-2300 | 租户 API 接口文档通用模板（${APP_ID} 环境变量渲染） | 🔧 部分完成 | 新租户开通免上传接口文档：通用模板 `configs/api_doc_templates/pre-sales-api.md`（按技能名命名，具备 pre-sales-api 技能的智能体均适用），应用号用 ${APP_ID} 占位符、加载期由租户环境变量渲染（凭证类占位符仍由 http_api 运行时替换防泄漏）；租户上传文档优先级最高，特殊表/字段租户仍可单独上传；推送/对话 skill/SSO 三入口已接入；存量 3 租户迁移（配 APP_ID + 删旧文档）待部署后执行。 | — | — |
+| 20260918-1930 | 生产主日志 WARNING 审计（09-16~09-18） | 🔧 部分完成 | 生产 3 天主日志 119 条 WARNING 聚合为 8 类；#1 ContextCompression 不识别 deepseek-flash（93 条）已定性为部署时差噪音、随 09-18 15:56 重启解决，无需改码；#4 sanitizer 日志降级 INFO + 补 source 来源标签与字符类别统计（8 入口）已完成开发待部署；#3 连续 user 丢弃日志预览加长到 500 字符（含完整 ASR 识别文本供人工评判）已完成开发待部署；余下待处理：wechat_mp GET 验签失败（8 条）等。 | — | [审计报告](ops/log-warning-audit-20260918.md) |
+| 20260918-2010 | 用户取消请求的 trace 标记与历史可见性 | ✅ 已完成开发 | 触发：线上 tr_30005ad7dd284b3e 排查发现用户取消后 trace 落库 completed 且 output 为空、取消轮次消息不落库（历史页整轮消失）。改动：①agent 两条取消路径（cancel_check 命中 yield cancelled 事件 / CancelledError 穿透包装层）均标记 trace status=cancelled + termination_reason=user_cancelled；②Web SSE 取消轮次落库 user+assistant 消息并打 metadata.cancelled=true（不落 tool 序列防悬空 tool_calls）；③前端停止按钮加 confirm；④历史消息渲染"用户已取消本轮回复"徽章；⑤追踪页（TraceBrowser/TraceDetail/SessionTraces）状态文案改"用户取消"+warning 色。开发+单测（5 用例）+独立验证完成，待部署。 | — | — |
 
 
 ## 数字员工 / 子智能体

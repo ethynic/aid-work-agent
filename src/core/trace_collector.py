@@ -149,6 +149,10 @@ class TraceCollector:
         elif event_type == "cancelled":
             self.trace.status = "cancelled"
             self.trace.tags.append("cancelled")
+            try:
+                self.trace.metadata["termination_reason"] = "user_cancelled"
+            except Exception:
+                pass
 
     def on_error(self, error: str):
         """Agent 执行出错时调用"""

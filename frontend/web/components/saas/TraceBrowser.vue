@@ -26,7 +26,7 @@
           <option value="">全部状态</option>
           <option value="completed">已完成</option>
           <option value="failed">失败</option>
-          <option value="cancelled">已取消</option>
+          <option value="cancelled">用户取消</option>
         </select>
         <select v-model="filterSourceType" @change="loadData"
           class="px-3 py-1.5 border border-default rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500">

@@ -1984,6 +1984,16 @@ class Agent:
                     except Exception as e:
                         logger.debug(f"Trace on_event failed: {e}")
                 yield event
+        except asyncio.CancelledError:
+            # 取消不被 except Exception 捕获（CancelledError 继承 BaseException），
+            # 必须单独标记 trace 为 cancelled，否则 on_complete 会落成 completed
+            if trace_collector:
+                try:
+                    from src.core.agent_events import make_event
+                    trace_collector.on_event(make_event("cancelled"))
+                except Exception as ce:
+                    logger.debug(f"Trace cancel mark failed: {ce}")
+            raise
         except Exception as e:
             if trace_collector:
                 try:
@@ -2473,6 +2483,8 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
             # 检查用户是否已取消
             if cancel_check and cancel_check():
                 logger.info(f"[AGENT] Cancelled by user at iteration {iteration}, session_id={session_id}")
+                # 通知 TraceCollector 标记 cancelled（否则 trace 会被 on_complete 升级为 completed）
+                yield make_event("cancelled")
                 return
             
             tools = self._get_tools()
@@ -2738,6 +2750,7 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                 # 每个工具执行前检查取消
                 if cancel_check and cancel_check():
                     logger.info(f"[AGENT] Cancelled by user before tool {tool_name}, session_id={session_id}")
+                    yield make_event("cancelled")
                     return
 
                 # 获取工具的用户友好名称

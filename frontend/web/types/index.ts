@@ -47,6 +47,8 @@ export interface ChatMessage {
   verboseMessages?: VerboseMessage[]
   browserAssistance?: BrowserHumanAssistance
   quickOptions?: QuickOption[]  // 编号选择按钮（§5.1 选择交互；纯前端增强，不持久化到历史）
+  /** 用户主动取消的轮次（后端持久化于 assistant metadata.cancelled，历史加载时显示"用户取消"标记） */
+  cancelled?: boolean
 }
 
 /** 编号选择元数据（设计 §5.1 选择交互）：工具结果 data.options，前端渲染编号按钮 */

@@ -1369,6 +1369,7 @@ async def chat_stream(http_request: Request, request: ChatRequest):
         error_occurred = None
         suspended_for_browser = False
         suspension_messages_persisted = False
+        agent_cancelled_by_check = False  # agent 经 cancel_check 正常返回（非 CancelledError）
 
         try:
             # 发送初始连接成功消息
@@ -1462,6 +1463,11 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                         progress_events.append(event)
                     elif event_type == "browser_human_required":
                         suspended_for_browser = True
+                    elif event_type == "cancelled":
+                        # cancel_check 命中路径：agent 正常 return（非 CancelledError），
+                        # 这里对齐取消语义（下方统一置 error_occurred 驱动 mark_error 与取消落库分支）
+                        logger.info(f"[SSE] Agent cancelled by user (cancel_check), session_id={session_id}")
+                        agent_cancelled_by_check = True
 
             except asyncio.CancelledError:
                 logger.info(f"[SSE] Agent cancelled by user, session_id={session_id}")
@@ -1482,6 +1488,14 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                     pass
                 if SessionRecordManager.get_current_record():
                     SessionRecordManager.get_current_record().mark_error(str(e))
+                    SessionRecordManager.end_record()
+
+            # cancel_check 命中路径：agent 正常返回，此处补齐与 CancelledError 路径
+            # 相同的取消语义（不进上方 except，需单独收尾 record）
+            if agent_cancelled_by_check and not error_occurred:
+                error_occurred = "Cancelled by user"
+                if SessionRecordManager.get_current_record():
+                    SessionRecordManager.get_current_record().mark_error("Cancelled by user")
                     SessionRecordManager.end_record()
 
             # 完成记录
@@ -1583,6 +1597,34 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                     )
                 except Exception as e:
                     logger.opt(exception=True).error(f"[SSE] Failed to save messages: {e}")
+
+            elif error_occurred == "Cancelled by user" and not suspension_messages_persisted:
+                # 用户取消的轮次也落库并打 cancelled 标记，避免历史页"整轮消失"造成误解。
+                # 不保存 tool 消息序列：取消可能发生在工具执行中，尾部会留下
+                # "有 tool_calls 无 tool result"的悬空消息，破坏下一轮上下文的消息交替。
+                try:
+                    user_metadata = {"progressMessages": []}
+                    if request.files:
+                        user_metadata["attachments"] = request.files
+                    cancelled_assistant_metadata = {
+                        "cancelled": True,
+                        "progressMessages": progress_events,
+                    }
+                    cancelled_batch = [
+                        {"role": "user", "content": full_message, "metadata": user_metadata,
+                         "created_at": user_message_time},
+                        {"role": "assistant", "content": full_response,
+                         "metadata": cancelled_assistant_metadata,
+                         "created_at": datetime.now()},
+                    ]
+                    created = MessageDB.create_batch_transactional(session_id, cancelled_batch)
+                    if created is None:
+                        raise RuntimeError("create_batch_transactional returned None (transaction rolled back)")
+                    logger.info(
+                        f"[SSE] Cancelled messages saved to DB (transactional, {len(created)} rows), session_id={session_id}"
+                    )
+                except Exception as e:
+                    logger.opt(exception=True).error(f"[SSE] Failed to save cancelled messages: {e}")
 
         except Exception as e:
             import traceback

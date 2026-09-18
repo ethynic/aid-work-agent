@@ -124,7 +124,7 @@
             <!-- Stop Button（处理中替换发送按钮） -->
             <button
               v-if="isProcessing"
-              @click="emit('stop')"
+              @click="handleStopClick"
               class="w-9 h-9 rounded-full bg-danger-50 text-danger-600 border border-danger-200 hover:bg-danger-100 transition-colors flex items-center justify-center"
               title="停止生成"
             >
@@ -229,6 +229,13 @@ function handleEnter(e: KeyboardEvent) {
   // 桌面端：Enter 发送
   e.preventDefault()
   handleSend()
+}
+
+function handleStopClick() {
+  // 防误点确认：取消会导致本轮回复中断并标记为已取消
+  if (confirm('确定要停止生成吗？')) {
+    emit('stop')
+  }
 }
 
 function handleSend() {

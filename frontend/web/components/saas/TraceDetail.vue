@@ -377,12 +377,12 @@ function spanIconClass(span: SpanDetail): string {
 function statusClass(status: string): string {
   if (status === 'completed') return 'bg-success-100 text-success-700'
   if (status === 'failed') return 'bg-danger-100 text-danger-700'
-  if (status === 'cancelled') return 'bg-gray-200 text-default'
+  if (status === 'cancelled') return 'bg-warning-100 text-warning-700'
   return 'bg-info-100 text-info-700'
 }
 
 function statusLabel(status: string): string {
-  const map: Record<string, string> = { completed: '已完成', failed: '失败', cancelled: '已取消', running: '运行中' }
+  const map: Record<string, string> = { completed: '已完成', failed: '失败', cancelled: '用户取消', running: '运行中' }
   return map[status] || status
 }
 

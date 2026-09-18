@@ -52,8 +52,15 @@
         :images="beforeTextImages"
       />
 
+      <!-- 用户取消标记：被中止的轮次正文可能为空，用标记代替空气泡 -->
+      <div v-if="isCancelledRound" class="mb-1">
+        <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-warning-100 text-warning-700">
+          用户已取消本轮回复
+        </span>
+      </div>
+
       <div
-        v-if="!showInputHint"
+        v-if="!showInputHint && (props.message.content || !isCancelledRound)"
         class="text-gray-700 leading-relaxed markdown-content prose-sm md:prose-base prose-slate max-w-none"
         v-html="renderedContent"
       ></div>
@@ -246,6 +253,11 @@ const showInputHint = computed(() => {
     !props.message.content &&
     (props.inputHintState === 'thinking' || props.inputHintState === 'working')
   )
+})
+
+// 用户取消的轮次（历史加载）：assistant metadata.cancelled，渲染明确标记避免误解
+const isCancelledRound = computed(() => {
+  return props.message.role === 'assistant' && props.message.cancelled === true
 })
 
 // verbose 中间提示（Phase 2，设计 §8.2）：assistant 正文为空且处理中时，
