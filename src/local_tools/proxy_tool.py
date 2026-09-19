@@ -612,7 +612,10 @@ class BossFilterInput(BaseModel):
 class BossFilterTool(LocalToolProxyTool):
     name = "boss_filter"
     display_name = "BOSS 筛选牛人"
-    description = "在用户本机 BOSS 直聘「推荐」页设置筛选条件（经验/学历/薪资，至少一项）。仅改变页面筛选，无外部副作用"
+    description = (
+        "在用户本机 BOSS 直聘「推荐牛人」页设置筛选条件（经验/学历/薪资，至少一项）。"
+        "前置：已在推荐牛人页（不在时先 boss_goto recommend）。仅改变页面筛选，无外部副作用"
+    )
     InputModel = BossFilterInput
 
     def _validate_args(self, args: Dict[str, Any]) -> Optional[str]:
@@ -624,7 +627,10 @@ class BossFilterTool(LocalToolProxyTool):
 class BossClearFilterTool(LocalToolProxyTool):
     name = "boss_clear_filter"
     display_name = "BOSS 清空筛选"
-    description = "清空用户本机 BOSS 直聘「推荐」页的筛选条件。仅改变页面筛选，无外部副作用"
+    description = (
+        "清空用户本机 BOSS 直聘「推荐牛人」页的筛选条件。"
+        "前置：已在推荐牛人页（不在时先 boss_goto recommend）。仅改变页面筛选，无外部副作用"
+    )
 
     class InputModel(BaseModel):
         pass
@@ -642,7 +648,8 @@ class BossFilterOptionsTool(LocalToolProxyTool):
     description = (
         "在用户本机 BOSS 直聘「推荐牛人」页只读探查筛选面板的全部可选档位"
         "（经验/学历/薪资各行选项），读完自动收起面板。用于把用户口语化筛选要求"
-        "（如 15k-20k、5年以上、本科及以上）映射成页面实际存在的精确档位后再调 boss_filter"
+        "（如 15k-20k、5年以上、本科及以上）映射成页面实际存在的精确档位后再调 boss_filter。"
+        "前置：已在推荐牛人页（不在时先 boss_goto recommend）"
     )
 
     class InputModel(BaseModel):
@@ -652,7 +659,11 @@ class BossFilterOptionsTool(LocalToolProxyTool):
 class BossGotoTool(LocalToolProxyTool):
     name = "boss_goto"
     display_name = "BOSS 切换页面"
-    description = "切换用户本机 BOSS 直聘页面（recommend 推荐页 / chat 聊天页）。跨页面操作前必须先切换，无外部副作用"
+    description = (
+        "切换用户本机 BOSS 直聘页面（recommend 推荐牛人页 / chat 沟通聊天页）。"
+        "跨页面操作前必须先切换，无外部副作用。点击菜单失败时自动直跳目标页 URL 兜底，"
+        "登录态有效即可到达（返回 via=url-jump 表示走了兜底）"
+    )
     InputModel = BossGotoInput
 
 
@@ -688,8 +699,10 @@ class BossGreetTool(LocalToolProxyTool):
     name = "boss_greet"
     display_name = "BOSS 打招呼"
     description = (
-        "在用户本机 BOSS 直聘「推荐」页向牛人发起打招呼。外部可见写动作，单次最多 3 人，"
-        "需用户在对话中明确授权数量。定向模式：传 names 候选人姓名清单时先匹配卡片姓名再点击，"
+        "在用户本机 BOSS 直聘「推荐牛人」页向牛人发起打招呼。"
+        "前置：已在推荐牛人页（不在时先 boss_goto recommend）。"
+        "外部可见写动作，单次最多 3 人，需用户在对话中明确授权数量。"
+        "定向模式：传 names 候选人姓名清单时先匹配卡片姓名再点击，"
         "只向名单内的人打招呼（配对失败的卡片跳过），打给谁以返回的 greeted_names 为准，"
         "missing_names 是滚到底也没找到的人"
     )
@@ -842,7 +855,7 @@ class BossListJobsTool(LocalToolProxyTool):
         "在用户本机 BOSS 直聘「推荐牛人」页点开职位下拉，列出当前招聘者在 BOSS 页面上的全部职位"
         "（职位名/城市/薪资/是否待开放，只读，读完自动收起）。用于 boss_select_job 前确认页面职位的"
         "精确名（用户口述可能不精确）并避开待开放职位。与 boss_jobs_list（查云端「职位管理」职位库）"
-        "区分：本工具查的是 BOSS 页面上实际发布的职位"
+        "区分：本工具查的是 BOSS 页面上实际发布的职位。前置：已在推荐牛人页（不在时先 boss_goto recommend）"
     )
     timeout_seconds = 180
 
@@ -862,6 +875,7 @@ class BossSelectJobTool(LocalToolProxyTool):
     display_name = "BOSS 切换招聘职位"
     description = (
         "在用户本机 BOSS 直聘「推荐牛人」页把当前招聘职位切换为指定职位名（页面写动作，无对外消息副作用）。"
+        "前置：已在推荐牛人页（不在时先 boss_goto recommend）。"
         "job_name 必须是 boss_list_jobs 返回的精确职位名（不做模糊匹配，0 个或多个匹配都报错）；"
         "待开放（pending）职位会被拒绝（切到未发布职位会致页面异常）；切换后校验职位框已变更，未生效报错"
     )
@@ -1207,8 +1221,9 @@ class BossResumeBatchTool(LocalToolProxyTool):
     name = "boss_resume_batch"
     display_name = "BOSS 批量读取简历入库"
     description = (
-        "在用户本机 BOSS 直聘「推荐」页逐个点开牛人卡片批量读取简历（滚动截图拼接，云端识别），"
-        "结果逐份自动存入简历库，返回紧凑摘要列表（不含图片与简历全文）"
+        "在用户本机 BOSS 直聘「推荐牛人」页逐个点开牛人卡片批量读取简历（滚动截图拼接，云端识别），"
+        "结果逐份自动存入简历库，返回紧凑摘要列表（不含图片与简历全文）。"
+        "前置：已在推荐牛人页（不在时先 boss_goto recommend）"
     )
 
     class InputModel(BaseModel):

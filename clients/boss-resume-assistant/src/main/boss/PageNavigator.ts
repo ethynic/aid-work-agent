@@ -10,8 +10,12 @@
  * - 跳转结果用 target URL 校验（推荐牛人=/web/chat/recommend，沟通=/web/chat/index），
  *   不用页面文本——沟通页 DOM 仍挂载推荐 iframe（含「筛选」「打招呼」），文本判定会骗过（§17 坑 17）
  * - 已在目标页时跳过点击（幂等，避免打扰列表滚动位置）
- * - 幂等兜底（2026-09-01）：点击后 URL 未变且当前已在 /web/chat 区时，用 CDP
- *   Page.navigate 页内直跳目标页再校验（SPA 菜单点击在沟通模块内不触发路由变化）
+ * - 直跳兜底（2026-09-01 沟通区内 / 2026-09-18 扩展到全部点击失败路径）：菜单定位失败
+ *   （文案找不到/侧栏无命中/最左命中不唯一）、点击执行失败（WinClickError，如 BOSS 窗口
+ *   在后台致渲染子窗口不可见）或点击后未到达目标页（点击被拦截、SPA 路由不变化、当前
+ *   不在 /web/chat 区如首页/职位详情页）时，一律用 CDP Page.navigate 直跳目标页再校验——
+ *   登录态有效时目标 URL 即目标页，不依赖菜单可点、不依赖窗口前台；直跳后仍未到达
+ *   （登录态失效被重定向 passport/页面异常）才 fail-loud 报登录提示
  */
 import {
   type DomSnapshot,
@@ -21,6 +25,7 @@ import {
   boundsCenter,
 } from './domSnapshot.js'
 import { viewportOf } from './FilterSetter.js'
+import { WinClickError } from '../input/WinMouseClicker.js'
 import { CancelledError } from '../operations/types.js'
 
 export class NavError extends Error {
@@ -31,6 +36,14 @@ export class NavError extends Error {
 }
 
 export type NavTarget = 'recommend' | 'chat'
+
+/** 一次跳转的完成方式：already=已在目标页（幂等跳过）；menu=点击左侧菜单生效；url-jump=直跳兜底生效 */
+export type NavVia = 'already' | 'menu' | 'url-jump'
+
+export interface NavResult {
+  clicked: boolean
+  via: NavVia
+}
 
 const TARGETS: Record<NavTarget, { menuText: string; urlPattern: string; label: string }> = {
   recommend: { menuText: '推荐牛人', urlPattern: '/web/chat/recommend', label: '推荐牛人' },
@@ -50,9 +63,9 @@ export interface NavDeps {
   click(point: ClickPoint, viewport: { width: number; height: number }): Promise<void>
   /** 当前 BOSS 标签页 URL（Target.getTargets 实时取） */
   getUrl(): Promise<string>
-  /** CDP 页内导航（Page.navigate）兜底，可选。点击菜单未触发 SPA 路由变化且当前已在
-   *  /web/chat 区（如推荐页点「沟通」停在 /web/chat/recommend）时，直跳目标页再校验；
-   *  缺省（旧测试替身/精简会话）保持原 fail-loud 报错 */
+  /** CDP 页内导航（Page.navigate）兜底。任何点击不成功路径（菜单定位失败/点击未生效/
+   *  不在 /web/chat 区）都靠它直跳目标页再校验；缺省（旧测试替身/精简会话）保持原
+   *  fail-loud 报错，真实会话由 defaultSessionFactory 总是注入 */
   pageNavigate?(url: string): Promise<void>
   /** 协作式取消信号：入口检查一次，触发即抛 CancelledError */
   signal?: AbortSignal
@@ -66,39 +79,71 @@ export class PageNavigator {
     this.sleep = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)))
   }
 
-  /** 跳转到目标页；已在目标页则跳过。返回是否发生了点击跳转 */
-  async navigate(target: NavTarget): Promise<{ clicked: boolean }> {
+  /**
+   * 跳转到目标页；已在目标页则跳过。返回是否发生跳转及完成方式。
+   *
+   * 第一优先点击左侧菜单（真实用户路径）；点击链路任一环失败不再直接 fail-loud，
+   * 一律走 CDP 直跳兜底（详见类头注释 2026-09-18 扩展）。
+   */
+  async navigate(target: NavTarget): Promise<NavResult> {
     if (this.deps.signal?.aborted) throw new CancelledError()
     const spec = TARGETS[target]
     const urlBefore = await this.deps.getUrl()
     if (urlBefore.includes(spec.urlPattern)) {
-      return { clicked: false }
+      return { clicked: false, via: 'already' }
     }
 
-    const snap = await this.deps.snapshot()
-    const point = this.locateMenuItem(snap, spec.menuText)
-    await this.deps.click(point, viewportOf(snap))
-    await this.sleep(1500)
-
-    let urlAfter = await this.deps.getUrl()
-    if (!urlAfter.includes(spec.urlPattern)) {
-      // 幂等兜底（2026-09-01）：已在沟通模块内点菜单不触发路由变化（如停在 /web/chat/recommend
-      // 点「沟通」URL 仍不变，真实页面其实已可操作）。此时若当前以 /web/chat 开头且会话提供
-      // 页内导航能力，用 CDP Page.navigate 直跳目标页再校验（不用鼠标键盘，绕开反作弊拦截）；
-      // 不在 /web/chat 区（如职位详情页）或无导航能力时保持原 fail-loud 报错
-      if (this.deps.pageNavigate && urlAfter.includes('/web/chat')) {
-        await this.deps.pageNavigate(`https://www.zhipin.com${spec.urlPattern}`)
-        await this.sleep(1500)
-        urlAfter = await this.deps.getUrl()
-      }
-      if (!urlAfter.includes(spec.urlPattern)) {
-        throw new NavError(
-          `点击左侧菜单「${spec.menuText}」后页面未跳转（当前 URL: ${urlAfter}）：` +
-            '点击可能被拦截或页面结构已变，请人工查看',
-        )
+    // 点击阶段：定位失败（NavError）与点击执行失败（WinClickError，真机 2026-09-18 实证：
+    // BOSS 窗口在后台致渲染子窗口不可见，win-click.ps1 拒绝执行）都不再上抛，记录后交给
+    // 直跳兜底——Page.navigate 不依赖窗口可见性，恰是这类失败的解法；其余异常（基础设施
+    // 故障）保持原样上抛不吞。已在目标页时 locate 不会被调用（上方短路）
+    let clickError: Error | null = null
+    try {
+      const snap = await this.deps.snapshot()
+      const point = this.locateMenuItem(snap, spec.menuText)
+      await this.deps.click(point, viewportOf(snap))
+      await this.sleep(1500)
+    } catch (err) {
+      if (err instanceof CancelledError) throw err
+      if (err instanceof NavError || err instanceof WinClickError) {
+        clickError = err
+      } else {
+        throw err
       }
     }
-    return { clicked: true }
+
+    let url = await this.deps.getUrl()
+    if (url.includes(spec.urlPattern)) {
+      if (clickError) {
+        // 点击阶段已失败而 URL 恰已到目标页（两次 getUrl 之间页面自跳的竞态窗口）：
+        // 按幂等口径汇报，不谎称「已跳转/菜单生效」
+        return { clicked: false, via: 'already' }
+      }
+      return { clicked: true, via: 'menu' }
+    }
+
+    // 直跳兜底：登录态有效时目标 URL 即目标页，不依赖菜单可点、不限当前所在页面
+    if (this.deps.pageNavigate) {
+      if (this.deps.signal?.aborted) throw new CancelledError()
+      await this.deps.pageNavigate(`https://www.zhipin.com${spec.urlPattern}`)
+      await this.sleep(1500)
+      url = await this.deps.getUrl()
+      if (url.includes(spec.urlPattern)) {
+        return { clicked: true, via: 'url-jump' }
+      }
+      throw new NavError(
+        `点击菜单与直跳 ${spec.urlPattern} 后都未到达「${spec.menuText}」页（当前 URL: ${url}）：` +
+          '通常是被重定向到登录页（BOSS 登录态已失效），请确认已登录 BOSS 后重试；' +
+          '若已登录仍复现，页面结构可能已变，请人工查看',
+      )
+    }
+
+    // 无导航能力（旧测试替身/精简会话）：保持原 fail-loud 语义
+    if (clickError) throw clickError
+    throw new NavError(
+      `点击左侧菜单「${spec.menuText}」后页面未跳转（当前 URL: ${url}）：` +
+        '点击可能被拦截或页面结构已变，请人工查看',
+    )
   }
 
   /** 左侧菜单项唯一定位：仅主文档、精确文案、侧栏候选区内、视口内，取 x 最小命中 */

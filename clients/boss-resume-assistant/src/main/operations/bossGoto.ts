@@ -44,9 +44,11 @@ export function createBossGotoOperation(
           })
           ctx.progress({ stage: 'navigate', message: `跳转「${args.target === 'recommend' ? '推荐牛人' : '沟通'}」` })
           const result = await navigator.navigate(args.target)
+          // via=url-jump 表示菜单点击未生效、走了 URL 直跳兜底（2026-09-18），透出便于云端/用户排障
+          const viaNote = result.via === 'url-jump' ? '（菜单点击未生效，URL 直跳兜底）' : ''
           return {
-            message: result.clicked ? '已跳转' : '已在目标页面，无需跳转',
-            data: { target: args.target, navigated: result.clicked },
+            message: result.clicked ? `已跳转${viaNote}` : '已在目标页面，无需跳转',
+            data: { target: args.target, navigated: result.clicked, via: result.via },
           }
         },
       )
