@@ -103,6 +103,7 @@ async def get_platform_token_usage(
             "tenant_id": tenant_id,
             "tenant_code": tenant_code,
             "company_name": company_name,
+            "tenant_type": tenant_item.get("tenant_type", "test"),
             "input_tokens": tenant_item["input_tokens"],
             "output_tokens": tenant_item["output_tokens"],
             "conversation_count": tenant_item["conversation_count"],

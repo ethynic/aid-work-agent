@@ -82,14 +82,16 @@ async def test_kb_search_empty_results():
     mock_retriever.retrieve = AsyncMock(return_value=[])
     tool._retriever = mock_retriever
 
-    with patch("src.tools.knowledge.knowledge_base_tool.get_db_connection") as db_mock:
+    with patch("src.db.database.get_db_connection") as db_shared, \
+            patch("src.tools.knowledge.knowledge_base_tool.get_db_connection") as db_tool:
         result = await tool.execute(query="不存在的内容")
 
     assert result["success"] is True
     assert result["count"] == 0
     assert result["results"] == []
-    # 无结果时不应查 DB
-    assert not db_mock.called
+    # 无结果时不应查 DB（共享范围与标题回查两路都不触发）
+    assert not db_shared.called
+    assert not db_tool.called
 
 
 async def test_kb_search_top_k_string_coerced_to_int():
@@ -119,7 +121,7 @@ async def test_kb_search_top_k_invalid_falls_back_to_default():
     mock_retriever.retrieve = AsyncMock(return_value=[])
     tool._retriever = mock_retriever
 
-    with patch("src.tools.knowledge.knowledge_base_tool.get_db_connection"):
+    with patch("src.db.database.get_db_connection"):
         result = await tool.execute(query="test", top_k="abc")
 
     assert result["success"] is True
@@ -171,7 +173,7 @@ def test_load_shared_ranges_intersection():
         ],
         "share_owners": ["A"],
     }
-    with patch("src.tools.knowledge.knowledge_base_tool.get_db_connection",
+    with patch("src.db.database.get_db_connection",
                return_value=_mock_db_single_row(row)):
         ranges = tool._load_shared_ranges("B", "subagent", None)
 
@@ -190,7 +192,7 @@ def test_load_shared_ranges_empty_when_no_auth():
         "sources": [{"source_type": "industry", "display_name": "行业库", "owner_tenant_id": "A"}],
         "share_owners": [],
     }
-    with patch("src.tools.knowledge.knowledge_base_tool.get_db_connection",
+    with patch("src.db.database.get_db_connection",
                return_value=_mock_db_single_row(row)):
         ranges = tool._load_shared_ranges("B", "subagent", None)
     assert ranges == []
@@ -203,7 +205,7 @@ def test_load_shared_ranges_source_type_filter():
         "sources": [{"source_type": "industry", "display_name": "行业库", "owner_tenant_id": "A"}],
         "share_owners": ["A"],
     }
-    with patch("src.tools.knowledge.knowledge_base_tool.get_db_connection",
+    with patch("src.db.database.get_db_connection",
                return_value=_mock_db_single_row(row)):
         assert tool._load_shared_ranges("B", "subagent", "industry") == [("A", "industry")]
         assert tool._load_shared_ranges("B", "subagent", "tech") == []
@@ -212,7 +214,7 @@ def test_load_shared_ranges_source_type_filter():
 def test_load_shared_ranges_no_row_returns_empty():
     """查询无记录（未配置关联）时返回空"""
     tool = KnowledgeBaseTool()
-    with patch("src.tools.knowledge.knowledge_base_tool.get_db_connection",
+    with patch("src.db.database.get_db_connection",
                return_value=_mock_db_single_row(None)):
         assert tool._load_shared_ranges("B", "subagent", None) == []
 
@@ -224,7 +226,7 @@ async def test_execute_master_agent_passes_empty_shared_ranges():
     mock_retriever.retrieve = AsyncMock(return_value=[])
     tool._retriever = mock_retriever
 
-    with patch("src.tools.knowledge.knowledge_base_tool.get_db_connection") as db_mock:
+    with patch("src.db.database.get_db_connection") as db_mock:
         result = await tool.execute(query="test")
 
     assert result["success"] is True

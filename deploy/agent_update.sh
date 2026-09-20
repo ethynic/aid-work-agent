@@ -17,6 +17,7 @@
 #      并加 --no-audit --prefer-offline，消除全新容器重拉包元数据导致的数分钟卡顿
 #   5. 内存上限移入 docker-compose.prod.yml 的 mem_limit（api 8G/background 4G/redis 1G），
 #      第 6 步只保留 docker update --cpus，不再用 docker update 覆盖内存
+#   6. 原子切换后把 dist 属主恢复为 ubuntu（node 容器以 root 编译，产物属主为 root）
 # ==============================================================================
 
 set -e
@@ -85,7 +86,8 @@ docker run --rm -v "$FRONTEND_DIR":/app -w /app node:22-alpine \
 #    校验链拆开跑：typecheck/boundary 已在 [3]，build 用 npx vite build --outDir
 #    （npm run build 是复合命令，追加 --outDir 会透传给最后的 verify 脚本导致误解析）
 echo "[4] 前端编译 dist.new（后台）..."
-rm -rf "$DIST_DIR.new"
+# dist.new/dist.old 若为上次 root 容器残留，ubuntu 身份 rm 会 Permission denied，须 sudo
+sudo rm -rf "$DIST_DIR.new"
 mkdir -p "$(dirname "$BUILD_LOG")"
 (
   docker run --rm -v "$FRONTEND_DIR":/app -w /app node:22-alpine \
@@ -134,11 +136,13 @@ fi
 
 # 9. 原子切换 dist（同一文件系统内两步 mv，切换瞬间旧→新；nginx 走 /index.html 兜底）
 echo "[9] 原子切换前端 dist..."
-rm -rf "$DIST_DIR.old"
+sudo rm -rf "$DIST_DIR.old"
 [ -d "$DIST_DIR" ] && mv "$DIST_DIR" "$DIST_DIR.old"
 mv "$DIST_DIR.new" "$DIST_DIR"
-rm -rf "$DIST_DIR.old"
-# dist 由 docker root 创建，脚本以 ubuntu 运行无法直接 chmod，须 sudo
+sudo rm -rf "$DIST_DIR.old"
+# dist 由 docker root 容器创建，属主为 root；恢复为 ubuntu，避免残留 root 属主文件
+# 在后续 git 更新/排查时造成 Permission denied 干扰（2026-09-20 事故）
+sudo chown -R ubuntu:ubuntu "$DIST_DIR"
 sudo chmod 777 "$DIST_DIR" # dist 目录需要 777 权限，否则无法ftp上传微信验证文件
 
 # 10. 增量安装 requirements.txt 中新增的依赖（快速更新脚本不重建镜像，

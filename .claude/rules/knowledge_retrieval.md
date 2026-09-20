@@ -53,7 +53,8 @@
 
 | 入口 | 模式 |
 |------|------|
-| `knowledge_base_tool.py` | A |
+| `knowledge_base_tool.py`（knowledge_base_search，内容语义检索） | A |
+| `knowledge_file_search_tool.py`（knowledge_file_search，按文件名定位文档，底层 `KnowledgeService.search_documents_by_title`） | A |
 | `analysis_agent.py`（search_data_tables / list_data_tables / load_table） | A + SQL 租户范围 |
 | `attraction_search_tool.py` / `hotel_search_tool.py` | B |
 | travel_quote 独立 API + hotel/attraction retriever | C |

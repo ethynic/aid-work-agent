@@ -79,7 +79,7 @@ services:
       driver: "json-file"
       options:
         max-size: "10m"
-        max-file: "1"
+        max-file: "3"
 
 # 网络配置（独立网络，避免与生产环境冲突）
 networks:

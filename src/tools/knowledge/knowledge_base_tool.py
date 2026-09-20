@@ -10,7 +10,11 @@ from src.tools.base import BaseTool
 from src.knowledge.vector_db.vector_db import get_vector_db
 from src.knowledge.embedding.embedding_client import TextEmbeddingV3Client
 from src.knowledge.retriever.hybrid_retriever import HybridRetriever
-from src.knowledge.retriever.tenant_range import build_tenant_range_conditions
+from src.knowledge.retriever.tenant_range import (
+    attach_owner_metadata,
+    build_tenant_range_conditions,
+    load_shared_ranges,
+)
 from src.db.database import get_db_connection
 from loguru import logger
 
@@ -26,7 +30,11 @@ class KnowledgeBaseTool(BaseTool):
     """知识库检索工具"""
 
     name = "knowledge_base_search"
-    description = "从知识中心检索相关信息，回答用户问题。当用户询问关于公司制度、文档资料、产品信息等问题时使用此工具。"
+    description = (
+        "从知识中心按内容语义检索相关段落，回答用户问题。"
+        "当用户询问关于公司制度、文档资料、产品信息等问题时使用此工具。"
+        "若已知文件名/文档标题、需要读取整个文件，先用 knowledge_file_search 定位拿到 file_path，再用 read 读取。"
+    )
     display_name = "搜索知识库"
     InputModel = KnowledgeBaseSearchInput
 
@@ -66,55 +74,8 @@ class KnowledgeBaseTool(BaseTool):
         )
 
     def _load_shared_ranges(self, tenant_id: str, subagent_id: str, source_type: Optional[str]) -> List[tuple]:
-        """单条 SQL 取启用清单与有效授权交集，生成共享检索范围（精确 (from_tenant_id, source_type) 对）。
-
-        不信任 LLM/前端传入的租户，由本方法从权威表读取并校验。授权撤销后交集
-        为空，共享项自动失效（无快照，撤销立即生效）。LLM 传了 source_type 时
-        只取该分类的共享项；未传时取全部已启用共享项。
-        """
-        try:
-            conn_cm = get_db_connection()
-            conn = conn_cm.__enter__()
-            try:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT
-                      (SELECT sources FROM subagent_knowledge_sources
-                       WHERE tenant_id = %s AND subagent_name = %s) AS sources,
-                      COALESCE((SELECT json_agg(from_tenant_id) FROM tenant_knowledge_shares
-                       WHERE to_tenant_id = %s), '[]'::json) AS share_owners
-                """, (tenant_id, subagent_id, tenant_id))
-                row = cursor.fetchone()
-            finally:
-                conn_cm.__exit__(None, None, None)
-        except Exception as e:
-            logger.warning(f"后端日志：加载共享检索范围失败: {e}")
-            return []
-
-        if not row:
-            return []
-        sources = row["sources"] or []
-        share_owners = set(row["share_owners"] or [])
-        ranges = []
-        for s in sources:
-            if not isinstance(s, dict):
-                continue
-            owner = s.get("owner_tenant_id")
-            st = s.get("source_type") or ""
-            if owner and owner in share_owners:
-                ranges.append((owner, st))
-        if source_type:
-            ranges = [r for r in ranges if r[1] == source_type]
-        return ranges
-
-    @staticmethod
-    def _attach_owner_metadata(metadata: Dict[str, Any], doc_tenant_id: Optional[str], current_tenant_id: Optional[str]) -> Dict[str, Any]:
-        """共享来源标注：文档属于其他租户（共享库）时，给 metadata 附加 owner_tenant_id，
-        供 LLM 感知内容来源；本租户结果不加标注，行为与现状一致。"""
-        md = dict(metadata or {})
-        if doc_tenant_id and doc_tenant_id != current_tenant_id:
-            md["owner_tenant_id"] = doc_tenant_id
-        return md
+        """委托权威实现（tenant_range.load_shared_ranges），保留方法便于调用方与测试复用"""
+        return load_shared_ranges(tenant_id, subagent_id, source_type)
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
         """
@@ -209,7 +170,7 @@ class KnowledgeBaseTool(BaseTool):
                         "doc_title": doc_titles.get(r["doc_id"], "未知文档"),
                         "file_path": doc_file_paths.get(r["doc_id"], ""),
                         "score": round(r["score"], 4),
-                        "metadata": self._attach_owner_metadata(
+                        "metadata": attach_owner_metadata(
                             r["metadata"], doc_tenant_ids.get(r["doc_id"]), tenant_id,
                         )
                     }
