@@ -286,6 +286,16 @@ def publish_task(tenant_id: str, user_id: str, task_id: UUID, expected_version: 
         # 发布时刻复验冻结 spec（草稿保存后 expires_at 可能已过；§5 有限期限发布时仍须有效）
         # B1.2：按任务行权威 scenario_key 分派描述器校验器（微信 = 原 validate_task_spec）
         validate_spec_for_scenario(task["scenario_key"], spec_plain)
+        # V1.10（设计 §4.1/§5.3，六审 P1-5）：发布事务内场景 spec 强校验钩子——
+        # 已锁 task、写 revision 前调用；BOSS 据此核验 spec 引用话术版本存在、
+        # content_hash 与版本表一致、租户归属（失败抛 SessionTaskError → 本事务
+        # rollback，零 revision 副作用）。微信描述器本成员为 None，行为零变化。
+        from .scenario_descriptor import get_descriptor
+
+        _descriptor = get_descriptor(task["scenario_key"])
+        _publish_spec_validator = getattr(_descriptor, "validate_publish_spec", None)
+        if callable(_publish_spec_validator):
+            _publish_spec_validator(conn, tenant_id, spec_plain)
         new_revision = (task["spec_revision"] or 0) + 1
         target_status = STATUS_ACTIVE if task["status"] == STATUS_DRAFT else STATUS_PAUSED
         _publish_result = {

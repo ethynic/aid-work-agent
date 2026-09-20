@@ -793,3 +793,124 @@
     ALTER TABLE tenants ADD COLUMN IF NOT EXISTS tenant_type TEXT NOT NULL DEFAULT 'test';
     COMMENT ON COLUMN tenants.tenant_type IS '租户类型：real=真实租户（真实金额充值）/ test=测试/演示租户（虚拟充值）。仅影响 /portal/recharge 与 /portal/token-usage 统计汇总口径，不影响审计数据';
     ALTER TABLE tenant_recharges ADD COLUMN IF NOT EXISTS is_gift BOOLEAN NOT NULL DEFAULT FALSE;
+- datetime: "2026-09-18 23:00:00"
+  remark: "BOSS 端侧会话任务场景表（B2，设计 §5 冻结 DDL；src/boss_conversation/init_tables.py 同源）：候选人绑定（频控触发计数+同步阻断列）、不可变话术版本、频控账本与结算异常队列、沟通日志投影队列；投影目标表存在时补列 source_delivery_id/source_message_id + 唯一索引"
+  statements: |
+    CREATE TABLE IF NOT EXISTS bs_boss_conversation_bindings (
+        id UUID DEFAULT gen_random_uuid() NOT NULL,
+        tenant_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        device_id UUID NOT NULL,
+        account_scope_id UUID NOT NULL,
+        candidate_name TEXT NOT NULL,
+        job_id TEXT NOT NULL,
+        resume_id BIGINT,
+        identity_version INTEGER NOT NULL DEFAULT 0,
+        verification_status TEXT NOT NULL DEFAULT 'pending',
+        login_fingerprint_hash TEXT,
+        encrypted_identity_evidence TEXT,
+        verified_at TIMESTAMPTZ,
+        expires_at TIMESTAMPTZ,
+        rate_trigger_date DATE,
+        rate_trigger_count INTEGER NOT NULL DEFAULT 0,
+        last_rate_decision_id UUID,
+        automation_blocked BOOLEAN NOT NULL DEFAULT FALSE,
+        automation_block_reason TEXT,
+        automation_block_epoch INTEGER NOT NULL DEFAULT 0,
+        automation_blocked_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+        updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+        PRIMARY KEY (id),
+        UNIQUE (tenant_id, id),
+        CHECK (verification_status IN ('pending', 'verified', 'invalid', 'expired')),
+        CHECK (rate_trigger_count >= 0),
+        CHECK (automation_block_epoch >= 0)
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_boss_conv_bindings_verified
+        ON bs_boss_conversation_bindings (tenant_id, device_id, candidate_name, job_id)
+        WHERE verification_status = 'verified';
+    CREATE INDEX IF NOT EXISTS idx_boss_conv_bindings_owner
+        ON bs_boss_conversation_bindings (tenant_id, user_id, device_id, created_at DESC);
+    CREATE TABLE IF NOT EXISTS bs_boss_reply_script_versions (
+        id UUID DEFAULT gen_random_uuid() NOT NULL,
+        tenant_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        lineage_id UUID NOT NULL,
+        version_no INTEGER NOT NULL,
+        content_hash TEXT NOT NULL,
+        template TEXT NOT NULL,
+        slot_schema JSONB NOT NULL,
+        source_script_id UUID,
+        source_job_id UUID,
+        source_job_name TEXT NOT NULL DEFAULT '',
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+        PRIMARY KEY (id),
+        UNIQUE (tenant_id, lineage_id, version_no),
+        CHECK (version_no >= 1)
+    );
+    CREATE TABLE IF NOT EXISTS bs_boss_conversation_rate_slots (
+        id BIGSERIAL PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        user_id TEXT,
+        binding_id UUID NOT NULL,
+        decision_id UUID NOT NULL,
+        delivery_id UUID NOT NULL,
+        status TEXT NOT NULL,
+        reserved_at TIMESTAMPTZ NOT NULL,
+        settled_at TIMESTAMPTZ,
+        released_at TIMESTAMPTZ,
+        settlement_effect TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE (tenant_id, delivery_id),
+        UNIQUE (tenant_id, decision_id),
+        CHECK (status IN ('reserved','settled','released')),
+        CHECK (settlement_effect IS NULL OR settlement_effect IN ('submitted','verified','unknown','not_started')),
+        CHECK ((status='reserved' AND settled_at IS NULL AND released_at IS NULL)
+            OR (status='settled'  AND settled_at IS NOT NULL AND released_at IS NULL)
+            OR (status='released' AND released_at IS NOT NULL AND settled_at IS NULL)),
+        CHECK ((status='reserved' AND settlement_effect IS NULL)
+            OR (status='settled' AND settlement_effect IN ('submitted','verified','unknown'))
+            OR (status='released' AND settlement_effect='not_started'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_boss_rate_windows
+        ON bs_boss_conversation_rate_slots (tenant_id, binding_id, reserved_at)
+        WHERE status IN ('reserved','settled');
+    CREATE TABLE IF NOT EXISTS bs_boss_rate_settlement_anomalies (
+        id BIGSERIAL PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        user_id TEXT,
+        task_id UUID NOT NULL,
+        binding_id UUID NOT NULL,
+        delivery_id UUID NOT NULL,
+        invocation_id UUID NOT NULL,
+        error_code TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        retry_count INTEGER NOT NULL DEFAULT 0,
+        next_retry_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE (tenant_id, delivery_id),
+        CHECK (status IN ('pending','processing','resolved','ignored')),
+        CHECK (retry_count >= 0)
+    );
+    CREATE TABLE IF NOT EXISTS bs_boss_comm_log_projection_queue (
+        id BIGSERIAL PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        user_id TEXT,
+        delivery_id UUID NOT NULL,
+        binding_id UUID NOT NULL,
+        resume_id BIGINT,
+        status TEXT NOT NULL DEFAULT 'pending',
+        retry_count INTEGER NOT NULL DEFAULT 0,
+        next_retry_at TIMESTAMPTZ,
+        last_error_code TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE (tenant_id, delivery_id),
+        CHECK (status IN ('pending','processing','done','failed')),
+        CHECK (retry_count >= 0)
+    );
+    CREATE INDEX IF NOT EXISTS idx_boss_comm_log_projection_scan
+        ON bs_boss_comm_log_projection_queue (status, next_retry_at, created_at);
+    DO $boss_comm_logs_alter$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'bs_recruiting_operator_resume_comm_logs') THEN ALTER TABLE bs_recruiting_operator_resume_comm_logs ADD COLUMN IF NOT EXISTS source_delivery_id UUID; ALTER TABLE bs_recruiting_operator_resume_comm_logs ADD COLUMN IF NOT EXISTS source_message_id TEXT; CREATE UNIQUE INDEX IF NOT EXISTS uq_boss_comm_logs_source_delivery ON bs_recruiting_operator_resume_comm_logs (tenant_id, source_delivery_id); END IF; END $boss_comm_logs_alter$;

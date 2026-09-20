@@ -137,6 +137,9 @@ class ScenarioDescriptor(Protocol):
     # 纯计算只读（V1.9 严格判别联合，见设计卷首变更记录 2）；微信为 None；与 binding_guard 同有同无
     send_eligibility_gate: Optional[Callable[..., Any]]
     binding_guard: Optional[BindingGuard]  # 锁/检查/落库；微信为 None
+    # 发布事务内 spec 强校验（V1.10 §4.1/§5.3，P1-5）：(conn, tenant_id, spec)；
+    # service.publish_task 在已锁 task、写 revision 前调用；微信为 None（行为不变）
+    validate_publish_spec: Optional[Callable[..., Any]]
     scenario_enabled: Callable[[str], bool]  # 场景热读门控（通用生命周期按 task.scenario_key 分派）
 
 

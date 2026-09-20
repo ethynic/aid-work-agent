@@ -1,6 +1,14 @@
-# BOSS 直聘端侧会话任务接入设计（boss.chat_reply.v1）
+﻿# BOSS 直聘端侧会话任务接入设计（boss.chat_reply.v1）
 
-版本 V1.9 · 2026-09-18 · 设计交付（V1.8 基础上按 B1.2 实现复审冻结协议变更：控制请求幂等键升级五元、gate 契约升级严格判别联合与 UTC 要求、settlement 结构化返回与 guard 缺失升级语义），待开发。启动开发前须另立开发计划文档并登记。
+版本 V1.10 · 2026-09-18 · 设计交付（V1.8 基础上按 B1.2 实现复审冻结协议变更：控制请求幂等键升级五元、gate 契约升级严格判别联合与 UTC 要求、settlement 结构化返回与 guard 缺失升级语义），待开发。启动开发前须另立开发计划文档并登记。
+
+### V1.10 协议变更记录（2026-09-19，随 B2 实现复审冻结）
+
+1. **publish 事务内话术版本强校验钩子**：ScenarioDescriptor 新增可选成员 `validate_publish_spec(conn, tenant_id, spec)`——publish_task 在已锁 task、写 revision 前调用；场景据此强校验 spec 引用话术版本存在、content_hash 与版本表一致、租户归属（不存在/跨租户/DB hash 不一致 → 发布失败且零 revision 副作用）。微信描述器为 None，现有微信校验与锁面不变。
+2. **rate slot 预留状态机（write-authorize 语义冻结）**：同 delivery slot 行——首次插入 reserved；已 released（人工重试）→ 原子恢复 reserved 并刷新 reserved_at、清理 settled_at/settlement_effect；已 reserved/settled 或 binding/decision 归属不符 → 按结算异常升级（rate_ledger_anomaly）拒绝；每条允许路径必须恰好影响一行（RETURNING/rowcount 校验），禁止 ON CONFLICT DO NOTHING 静默。
+3. **reserved_at 补建顺序冻结**：permit.created_at → attempt.created_at → invocation.created_at 三级依次取用（均为发出前时刻）；三级全缺 → 升级结算异常，不得退回报文到达时间。
+4. **deferred 词汇统一**：旧 `next_send_eligible_at` 词汇废弃，统一为 V1.9 的 `server_now / deferred_until / retry_after_ms`。
+5. **占位符花括号字面量语义**：仅 `{slot_name}`（小写语法名）参与替换；非法大小写（如 `{Company}`）与畸形花括号按字面量原样发送，发布与渲染行为一致。 **slot_schema 边界（八审补冻结）**：每版本槽位数量上限 20、空 schema 合法（无槽位话术契约）；**DB 侧 slot_schema 非合法 dict（JSON null/数组/字符串）→ 发布 409 拒绝（CONFLICT，非 VALIDATION_FAILED），零 revision 副作用**——DB 与 spec 双侧必须经同一 normalize_slot_schema 入口，禁止预降级为空 schema。
 
 ### V1.9 协议变更记录（2026-09-18，随 B1.2 实现复审冻结）
 
@@ -89,6 +97,7 @@ class ScenarioDescriptor(Protocol):
     adapter: ScenarioAdapter   # 含 settle_operation_result / validate_submission_evidence / validate_evidence / authorize_operation(含频控权威复判)
     workbench_label_resolver: Callable
     send_eligibility_gate: Optional[Callable]  # BOSS 使用；纯计算，只读判断；微信为 None
+    validate_publish_spec: Optional[Callable]  # (conn, tenant_id, spec) publish 事务内强校验（话术版本存在/hash/租户归属）；微信为 None
 ```
 
 - **send_eligibility_gate 契约（V1.9 严格判别联合）**：可选钩子；存在时签名为 `gate(read_cursor, task, decision) -> {"eligible": True, "effective_count": int} | {"deferred": True, "effective_count": int, "server_now": aware-dt, "deferred_until": aware-dt, "retry_after_ms": 正 int, "deferred_reason": str, "response_revision": int} | {"terminal": "human_required", "reason": 受控码}`（字段约束与 UTC 要求见卷首 V1.9 变更记录 2）。纯计算零写入；锁/检查/落库由 binding_guard 在通用层事务内完成并注入本 gate；返回值由通用层严格校验，非三种显式形态一律 SEND_GATE_MALFORMED fail-closed。**微信描述器设为 None（binding_guard 同为 None），通用层直接走既有 prepare-send，不额外锁场景 binding、不新增门禁写操作**；B1.0 特征测试锁定。
@@ -142,7 +151,8 @@ bs_boss_reply_script_versions (
 )
 ```
 
-无指向 jobs/scripts 的 FK；lineage_id 非空无 NULL 陷阱；append-only（仅场景 API 写入+测试断言+spec 冻结副本纵深防御）；发布冻结 `{script_version_id, content_hash, frozen_template, slot_schema}`；全链路统一 `script_version_id`；占位符 `{slot_name}` 白名单语法、逐字替换、缺失/未知/超长→handoff。
+无指向 jobs/scripts 的 FK；lineage_id 非空无 NULL 陷阱；append-only（仅场景 API 写入+测试断言+spec 冻结副本纵深防御）；发布冻结 `{script_version_id, content_hash, frozen_template, slot_schema}`；全链路统一 `script_version_id`；占位符 `{slot_name}` 白名单语法、逐字替换、缺失/未知/超长→handoff；非法大小写/畸形花括号按字面量原样发送（V1.10）。
+- **publish 事务内强校验（V1.10，八审补 slot_schema）**：描述器 `validate_publish_spec(conn, tenant_id, spec)` 在 publish_task 已锁 task、写 revision 前核验：①spec 引用版本存在且租户归属；②content_hash 与版本表一致；③**slot_schema 与版本表规范化后精确相等**（双方经同一 normalize_slot_schema 校验字段/补默认值后比较，防 required/描述篡改绕过必需证据约束）。失败发布零 revision 副作用（微信=None 行为不变）。
 
 ### 5.4 BossTaskSpecPayload（完整冻结）与受限决策
 
@@ -187,16 +197,18 @@ resume_field 白名单（key_info.* 子集）、服务端取值、模型不输�
 | 门禁判断 gate | 描述器（仅 BOSS 注册） | **零写入**；通用 prepare-send 先持有既有 subject/task/assignment/decision 锁，再按场景 resolver 锁 BOSS binding，并在同一事务、同一 cursor 内调用，返回判断与 effective_count；微信 gate=None，完全绕过该扩展 |
 | 门禁结果落库 | **通用 prepare-send Phase A 事务** | 不释放上述锁即按决策 ID 去重更新触发计数列；terminal→完整 human_required 迁移（§5.5.5）；更新 epoch/control_seq；阻断后续授权；审计与通知事件 |
 | 权威复判 | BOSS 适配器 authorize_operation（permit 事务同一 cursor） | 通过→同事务插 reserved；失败→返回结构化拒绝，通用 permits 提交 binding 同步阻断+控制请求+审计后再返回拒绝（§5.5.4） |
+
+**rate slot 预留状态机（V1.10 冻结）**：同 delivery slot 行——首次插入 reserved；已 released（人工重试场景）→ 原子恢复 reserved 并刷新 reserved_at、清理 settled_at/settlement_effect；已 reserved/settled 或 binding/decision 归属不符 → 按结算异常升级（rate_ledger_anomaly）拒绝；每条允许路径必须恰好影响一行（RETURNING/rowcount 校验），禁止 ON CONFLICT DO NOTHING 静默。
 | 结算 | BOSS 适配器 settle_operation_result（operation_result 事务内，SAVEPOINT） | §5.5.4 |
 
 #### 5.5.2 第一闸门：prepare-send 物化前预检（纯计算 + 通用层写）
 
-- BOSS gate 只读计算：日上限→`terminal(rate_limit)`；间隔/10min 窗未满足→`deferred(next_send_eligible_at, effective_count)`；否则 eligible。
-- deferred → prepare-send **不物化 invocation**，返回 `{deferred:true, next_send_eligible_at}`；通用层事务内完成触发计数落库（§5.5.3）。
+- BOSS gate 只读计算：日上限→`terminal(rate_limit)`；间隔/10min 窗未满足→`deferred(server_now, deferred_until, retry_after_ms, deferred_reason, response_revision, effective_count)`；否则 eligible。
+- deferred → prepare-send **不物化 invocation**，返回 `{status:"deferred", deferred:true, invocation_id:null, server_now, deferred_until, retry_after_ms, deferred_reason, response_revision}`；通用层事务内完成触发计数落库（§5.5.3）。
 - 微信 gate=None；通用层不解析 BOSS binding、不新增 binding 行锁或门禁写操作；通用 runner 与 write-authorize 不感知 deferred。
 - **原子顺序冻结**：所有场景沿用既有 `subject→task→assignment→decision` 校验；仅 gate 非空时，再通过场景 resolver 获取并锁定 binding，检查同步阻断，跨日归一化计数，以同一 cursor 调 gate，并在不释放锁的情况下落库 effective_count/terminal 结果后提交。gate 纯计算仅表示不写库，不表示无锁读取。只有 eligible（含 gate=None 的既有场景）才进入 Phase B 既有底座幂等物化；Phase B 不再持有 Phase A 行锁，期间若控制状态变化，由 task/decision/epoch 校验及 write-authorize 最终复判阻断。
 
-#### 5.5.3 窗口时间口径、effective_count 与 next_send_eligible_at（冻结）
+#### 5.5.3 窗口时间口径、effective_count 与 deferred 判定（冻结，V1.9 词汇）
 
 - **全部窗口以 `reserved_at` 为发送发生时刻**；settled 沿用最初 reserved_at（settled_at 仅结算时刻）；60s 间隔**含 reserved 行**；10 分钟窗解除=窗内第 3 条可计数行的最早 reserved_at+10min；日上限=当日（Asia/Shanghai）reserved+settled ≥10。
 - **effective_count 公式**：
@@ -205,7 +217,7 @@ resume_field 白名单（key_info.* 子集）、服务端取值、模型不输�
 stored_count    = 跨日归一化后的数据库计数（rate_trigger_date 非当日→按 0）
 effective_count = stored_count      （当前 decision 已计数过）
                 | stored_count + 1  （当前 decision 首次触发）
-next_send_eligible_at 按 effective_count 计算；持久化后的 count 必须等于 gate 使用的 effective_count
+deferred_until/retry_after_ms 按 effective_count 计算（V1.9 deferred 响应词汇）；持久化后的 count 必须等于 gate 使用的 effective_count
 ```
 
 - **决策去重依据（冻结的不变量+测试）**：`last_rate_decision_id` 只防"连续重复的同一 decision"；严格正确性依赖系统不变量——**同一 binding 任意时刻只有一个有效任务（占用唯一约束），旧 decision 被 supersede 后不会再执行（prepare-send 复验 input_version/未 superseded）**。B2 必须有该不变量的定向测试（supersede 后旧 decision 重复触发计数、并发 gate 等用例）。
@@ -286,7 +298,7 @@ bs_boss_rate_settlement_anomalies (
 2. **evidence 判定（不拒绝回执，沿微信现状 `operation_result.py:390-415`）**：evidence 缺失、无法验证、digest 不匹配或已被复用 → **接纳并持久化原始回执（attempt 保留原始上报值）、不承认 applied/verified、delivery 归一化 `unknown/unknown`、写 `evidence_invalid` 审计、频控按保守语义结算 settled、正常 ACK、禁止自动重发**；
 3. `SAVEPOINT rate_settlement` → 执行频控结算。找到 reserved 行时按原始机器事实转换：`submitted/verified/unknown → settled`，明确未开始的失败/取消/过期 → `released(not_started)`；
 4. **正常结算**：找到 reserved 行且守卫更新成功 → 正常提交全部；
-5. **缺失补建**：对于应占额度的 `submitted/verified/unknown`，未找到 slot → 以 `INSERT ... ON CONFLICT` 幂等补建 settled（保守占额度），`reserved_at` 优先取已校验 permit 的创建/签发时刻，缺失时取 attempt started_at，禁止用回执到达时间拉长窗口；明确未开始且未取得 permit 的结果没有 slot 属正常情况，不补建。即使补建成功，其他应占额度结果的 slot 缺失本身仍是不变量破坏，必须写异常队列 `rate_slot_missing` + 脱敏审计 + 锁 binding 置同步阻断 + 写 human_required 控制请求，随后提交主事务并正常 ACK；不得把补建成功视作正常结算；
+5. **缺失补建**：对于应占额度的 `submitted/verified/unknown`，未找到 slot → 以 `INSERT ... ON CONFLICT` 幂等补建 settled（保守占额度），`reserved_at` 按 **permit.created_at → attempt.created_at → invocation.created_at 三级依次取用（V1.10 冻结；三级全缺 → 升级结算异常，禁止用回执到达时间）**；明确未开始且未取得 permit 的结果没有 slot 属正常情况，不补建。即使补建成功，其他应占额度结果的 slot 缺失本身仍是不变量破坏，必须写异常队列 `rate_slot_missing` + 脱敏审计 + 锁 binding 置同步阻断 + 写 human_required 控制请求，随后提交主事务并正常 ACK；不得把补建成功视作正常结算；
 6. **结算/补建失败**：`ROLLBACK TO SAVEPOINT rate_settlement` → 持久化原始回执 + 写异常队列（`rate_slot_state_conflict|settlement_failed`）+ 脱敏审计 + 锁 binding 置同步阻断 + 写 human_required 控制请求 → **提交主事务并正常 ACK**。
 
 正常 ACK 条件=第 1 步全部合法（无论 evidence 判定与结算成败）；仍拒绝条件=第 1 步任一非法。微信现有 evidence-invalid 行为由 B1.0 特征测试锁定。

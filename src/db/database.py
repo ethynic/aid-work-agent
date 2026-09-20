@@ -1043,6 +1043,22 @@ def _init_postgresql():
             except Exception as rollback_err:
                 logger.warning(f"Failed to rollback recruiting_resume_timeline transaction: {rollback_err}")
 
+        # BOSS 直聘会话任务场景表（bs_boss_* 5 表 + comm_logs 投影补列，B2/P1-8：
+        # 接入幂等启动链）。必须位于 recruiting timeline 之后：投影补列/唯一索引的
+        # 目标表 bs_recruiting_operator_resume_comm_logs 由 timeline 模块自建——
+        # 首轮 recruiting 建表失败时本模块探测存在才 ALTER（跳过不报错），下次启动
+        # 幂等重放补齐列与索引；bs_boss_* 表自身无外键，幂等 DDL 可重复执行。
+        # 与 deploy/init-postgres.sql / deploy/db_update.yaml / test_migrations 同步。
+        try:
+            from src.boss_conversation.init_tables import init_boss_conversation_tables
+            init_boss_conversation_tables(conn)
+        except Exception as e:
+            logger.warning(f"Failed to initialize boss_conversation tables: {e}")
+            try:
+                conn.rollback()
+            except Exception as rollback_err:
+                logger.warning(f"Failed to rollback boss_conversation transaction: {rollback_err}")
+
         # 招聘面试邀约企微通知表（bs_recruiting_notify_settings / bs_recruiting_notify_logs，
         # 面试邀约通知设计 Phase 1，见 docs/design/recruiting/recruiting-interview-notify-design.md）
         try:

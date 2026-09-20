@@ -226,6 +226,9 @@ class WeixinScenarioDescriptor:
         # 微信无场景 binding 同步门禁（设计 §5.5.2）：prepare-send 锁面不扩大、
         # 不新增 binding 行锁或门禁写操作（B1.0 特征锁定）
         self.binding_guard = None
+        # 微信无发布事务内 spec 强校验钩子（V1.10 §4.1）：既有发布校验与锁面
+        # 不变（spec 白名单/版本存在性校验为 BOSS 话术版本表语义，P1-5）
+        self.validate_publish_spec = None
 
     def scenario_enabled(self, tenant_id: str) -> bool:
         """场景热读门控（B1.2 通用生命周期分派；weixin_conversation.enabled 节点）。"""

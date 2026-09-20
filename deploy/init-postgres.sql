@@ -2659,3 +2659,152 @@ CREATE TABLE IF NOT EXISTS bs_wechat_mp_sync_items (
 );
 CREATE INDEX IF NOT EXISTS idx_bs_wechat_mp_sync_items_run
     ON bs_wechat_mp_sync_items(tenant_id, run_id);
+
+-- ============================================================================
+-- BOSS 端侧会话任务（boss.chat_reply.v1）场景表（B2；src/boss_conversation/
+-- init_tables.py 同源，设计 §5.2/§5.3/§5.5.4/§5.6 冻结 DDL；bs_ 业务表遵守
+-- tenant_id/user_id/created_at 规范列，无外键/触发器，引用完整性在 Python 层）
+-- ============================================================================
+
+-- 候选人绑定（verified 才可自动发送；频控触发计数列 + 同步阻断列；
+-- 部分唯一索引保证同租户同设备同 candidate_name+job_id 仅一条 verified 有效绑定）
+CREATE TABLE IF NOT EXISTS bs_boss_conversation_bindings (
+    id UUID DEFAULT gen_random_uuid() NOT NULL,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    device_id UUID NOT NULL,
+    account_scope_id UUID NOT NULL,
+    candidate_name TEXT NOT NULL,
+    job_id TEXT NOT NULL,
+    resume_id BIGINT,
+    identity_version INTEGER NOT NULL DEFAULT 0,
+    verification_status TEXT NOT NULL DEFAULT 'pending', -- pending | verified | invalid | expired
+    login_fingerprint_hash TEXT,               -- HMAC-SHA256 摘要，锚点不落库不落日志
+    encrypted_identity_evidence TEXT,          -- 受控加密身份证据（verified 必填）
+    verified_at TIMESTAMPTZ,
+    expires_at TIMESTAMPTZ,
+    rate_trigger_date DATE,                    -- 频控触发计数（Asia/Shanghai 当日）
+    rate_trigger_count INTEGER NOT NULL DEFAULT 0,
+    last_rate_decision_id UUID,                -- 触发计数去重（跨日原子重置时一并清空）
+    automation_blocked BOOLEAN NOT NULL DEFAULT FALSE,
+    automation_block_reason TEXT,
+    automation_block_epoch INTEGER NOT NULL DEFAULT 0,
+    automation_blocked_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    PRIMARY KEY (id),
+    UNIQUE (tenant_id, id),
+    CHECK (verification_status IN ('pending', 'verified', 'invalid', 'expired')),
+    CHECK (rate_trigger_count >= 0),
+    CHECK (automation_block_epoch >= 0)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_boss_conv_bindings_verified
+    ON bs_boss_conversation_bindings (tenant_id, device_id, candidate_name, job_id)
+    WHERE verification_status = 'verified';
+CREATE INDEX IF NOT EXISTS idx_boss_conv_bindings_owner
+    ON bs_boss_conversation_bindings (tenant_id, user_id, device_id, created_at DESC);
+
+-- 不可变话术版本（append-only：仅场景 API 写入；无指向 jobs/scripts 的 FK）
+CREATE TABLE IF NOT EXISTS bs_boss_reply_script_versions (
+    id UUID DEFAULT gen_random_uuid() NOT NULL,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    lineage_id UUID NOT NULL,
+    version_no INTEGER NOT NULL,
+    content_hash TEXT NOT NULL,                -- 模板规范化字节 sha256
+    template TEXT NOT NULL,
+    slot_schema JSONB NOT NULL,
+    source_script_id UUID,                     -- 历史来源引用，无 FK
+    source_job_id UUID,
+    source_job_name TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    PRIMARY KEY (id),
+    UNIQUE (tenant_id, lineage_id, version_no),
+    CHECK (version_no >= 1)
+);
+
+-- 频控账本（设计 §5.5.4 冻结 DDL：正常路径仅在预留成功时创建 reserved 行；
+-- 唯一例外是 operation-result 发现 slot 缺失时补建 settled 异常行）
+CREATE TABLE IF NOT EXISTS bs_boss_conversation_rate_slots (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT,
+    binding_id UUID NOT NULL,
+    decision_id UUID NOT NULL,
+    delivery_id UUID NOT NULL,
+    status TEXT NOT NULL,          -- reserved | settled | released
+    reserved_at TIMESTAMPTZ NOT NULL,
+    settled_at TIMESTAMPTZ,        -- status=settled 时非空
+    released_at TIMESTAMPTZ,       -- status=released 时非空
+    settlement_effect TEXT,        -- submitted | verified | unknown | not_started（结算依据）
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (tenant_id, delivery_id),
+    UNIQUE (tenant_id, decision_id),
+    CHECK (status IN ('reserved','settled','released')),
+    CHECK (settlement_effect IS NULL OR settlement_effect IN ('submitted','verified','unknown','not_started')),
+    CHECK ((status='reserved' AND settled_at IS NULL AND released_at IS NULL)
+        OR (status='settled'  AND settled_at IS NOT NULL AND released_at IS NULL)
+        OR (status='released' AND released_at IS NOT NULL AND settled_at IS NULL)),
+    CHECK ((status='reserved' AND settlement_effect IS NULL)
+        OR (status='settled' AND settlement_effect IN ('submitted','verified','unknown'))
+        OR (status='released' AND settlement_effect='not_started'))
+);
+CREATE INDEX IF NOT EXISTS idx_boss_rate_windows ON bs_boss_conversation_rate_slots (tenant_id, binding_id, reserved_at)
+    WHERE status IN ('reserved','settled');
+
+-- 结算异常队列（敏感异常详情不落明文，只存错误码与受控引用）
+CREATE TABLE IF NOT EXISTS bs_boss_rate_settlement_anomalies (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT,
+    task_id UUID NOT NULL,
+    binding_id UUID NOT NULL,
+    delivery_id UUID NOT NULL,
+    invocation_id UUID NOT NULL,
+    error_code TEXT NOT NULL,       -- rate_slot_missing | rate_slot_state_conflict | settlement_failed 等
+    status TEXT NOT NULL DEFAULT 'pending',  -- pending | processing | resolved | ignored
+    retry_count INT NOT NULL DEFAULT 0,
+    next_retry_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (tenant_id, delivery_id),
+    CHECK (status IN ('pending','processing','resolved','ignored')),
+    CHECK (retry_count >= 0)
+);
+
+-- 沟通日志投影队列（§5.6；verified（或 unknown 人工判定后）入队，后台 job 幂等 upsert）
+CREATE TABLE IF NOT EXISTS bs_boss_comm_log_projection_queue (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT,
+    delivery_id UUID NOT NULL,
+    binding_id UUID NOT NULL,
+    resume_id BIGINT,
+    status TEXT NOT NULL DEFAULT 'pending', -- pending | processing | done | failed
+    retry_count INTEGER NOT NULL DEFAULT 0,
+    next_retry_at TIMESTAMPTZ,
+    last_error_code TEXT,                   -- 仅错误码，不落敏感详情
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (tenant_id, delivery_id),
+    CHECK (status IN ('pending','processing','done','failed')),
+    CHECK (retry_count >= 0)
+);
+CREATE INDEX IF NOT EXISTS idx_boss_comm_log_projection_scan
+    ON bs_boss_comm_log_projection_queue (status, next_retry_at, created_at);
+
+-- 投影目标表补列（表由 recruiting 模块自建，bootstrap 未必已建——存在才执行，
+-- 应用启动 init_recruiting_timeline_tables 建表后由模块/增量块幂等补列）
+DO $boss_comm_logs$
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.tables
+               WHERE table_schema = current_schema()
+                 AND table_name = 'bs_recruiting_operator_resume_comm_logs') THEN
+        ALTER TABLE bs_recruiting_operator_resume_comm_logs ADD COLUMN IF NOT EXISTS source_delivery_id UUID;
+        ALTER TABLE bs_recruiting_operator_resume_comm_logs ADD COLUMN IF NOT EXISTS source_message_id TEXT;
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_boss_comm_logs_source_delivery
+            ON bs_recruiting_operator_resume_comm_logs (tenant_id, source_delivery_id);
+    END IF;
+END
+$boss_comm_logs$;

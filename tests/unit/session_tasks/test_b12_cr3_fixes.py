@@ -476,10 +476,11 @@ class TestBindingApiScenarioDispatch:
         assert exc.value.status_code == 400
 
     def test_boss_skeleton_resolver_raises_controlled(self):
+        """B1.2 绑定 API 按 scenario_key 路由到 boss resolver（B1.3 骨架断言
+        fail-closed 拒绝；B2 真实现后改为锁定路由与成员可达）。"""
         from src.boss_conversation.descriptor import build_boss_descriptor
         from src.session_tasks.api import _scenario_binding_resolver
         from src.session_tasks.scenario_descriptor import (
-            ScenarioDescriptorError,
             register_scenario,
             unregister_descriptor,
         )
@@ -489,8 +490,13 @@ class TestBindingApiScenarioDispatch:
         try:
             resolver = _scenario_binding_resolver("boss.chat_reply.v1")
             assert resolver is descriptor.binding_resolver
-            with pytest.raises(ScenarioDescriptorError):
-                resolver.list_bindings("t", "u", "d", 10)
+            # B2：list_bindings/create_binding 成员真实可达（create 的通用路由形态
+            # 缺 job/candidate 语义 → 受控 400，不猜测语义）
+            from src.session_tasks.constants import SessionTaskError
+
+            assert resolver.list_bindings("t", "u", str(__import__("uuid").uuid4()), 10) == []
+            with pytest.raises(SessionTaskError):
+                resolver.create_binding("t", "u", "d", str(__import__("uuid").uuid4()), "", "")
         finally:
             unregister_descriptor("boss.chat_reply.v1")
 

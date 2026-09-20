@@ -1840,6 +1840,11 @@ app.include_router(session_tasks_api.router)
 app.include_router(session_tasks_api.device_router)
 app.include_router(session_tasks_api.bindings_router)
 
+# BOSS 端侧会话任务 B2（绑定管理 API 面：list/create-pending/invalidate/unblock；
+# 场景执行受 boss_conversation.enabled 热读门控，路由常驻但服务层拒绝未启用租户）
+from src.boss_conversation import api as boss_conversation_api  # noqa: E402
+app.include_router(boss_conversation_api.router)
+
 # 外部系统入口（SSO 打开第三方系统，见 docs/system/external-system-entry-design.md）
 from src.api import external_systems  # noqa: E402
 app.include_router(external_systems.router)

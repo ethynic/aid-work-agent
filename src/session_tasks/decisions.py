@@ -1436,9 +1436,23 @@ def _process_reply(tenant_id: str, task: Dict[str, Any], spec: Dict[str, Any], d
         messages = hooks.build_decision_messages(spec, transcript, DECISION_KIND_REPLY, repair_feedback=feedback)
         content = _call_model_with_budget(task, spec, decision, messages, cfg, ref, model_call)
         try:
-            validated = hooks.validate_decision_output(spec, content, peer_ids, DECISION_KIND_REPLY)
+            # task（B2 设计 §5.4）：渲染需服务端取值的场景（BOSS resume_field 槽位）
+            # 经此获得任务上下文；微信等场景按缺省参数忽略，行为零变化。
+            validated = hooks.validate_decision_output(spec, content, peer_ids, DECISION_KIND_REPLY, task=task)
             break
         except Exception as exc:  # noqa: BLE001 OutputInvalid
+            # B2（设计 §5.4 渲染三级分流）：渲染不变量破坏等**不可修复终局**（场景
+            # 以受控码标记 decision_terminal_reason）不得进入模型修复重试——渲染器
+            # 绝不调模型、不消耗修复次数，直接 failed + human_required(受控 reason)。
+            terminal_reason = getattr(exc, "decision_terminal_reason", None)
+            if isinstance(terminal_reason, str) and _is_controlled_code(terminal_reason):
+                if not _finalize_and_transition(
+                    tenant_id, task_id, decision_id, lease_owner,
+                    decision_status="failed", failure_code=terminal_reason,
+                    transition=(STATUS_HUMAN_REQUIRED, terminal_reason),
+                ):
+                    logger.info("终局决策已失效，跳过任务转人工 tenant=%s decision=%s", tenant_id, decision_id)
+                return
             feedback = str(exc)
             validated = None
     if validated is None:

@@ -194,6 +194,8 @@ def validate_decision_output(
     content: str,
     peer_message_ids: List[str],
     decision_kind: str,
+    *,
+    task: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """解析并校验 reply 决策的受限输出；非法抛 OutputInvalid（含可读原因）。
 
@@ -201,6 +203,8 @@ def validate_decision_output(
     evidence_message_ids, peer_confirmation?, criterion_results?}。
     peer_confirmation 的字段/枚举/引用归属在 completion.validate_peer_confirmation
     二次校验（此处只做结构白名单）。
+    task：B2 通用层新增的可选任务上下文（设计 §5.4，供需要服务端取值的场景）；
+    微信决策不使用，仅接受以保持调用点签名兼容（行为零变化）。
     """
     if decision_kind == "completion_review":
         raise OutputInvalid("completion_review 使用 validate_review_output")

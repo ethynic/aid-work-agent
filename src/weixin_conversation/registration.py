@@ -39,10 +39,12 @@ class _ConversationHooks:
 
         return prompts.build_decision_messages(spec, transcript, decision_kind, repair_feedback=repair_feedback)
 
-    def validate_decision_output(self, spec, content, peer_message_ids, decision_kind):  # noqa: ANN001
+    def validate_decision_output(self, spec, content, peer_message_ids, decision_kind, *, task=None):  # noqa: ANN001
+        # task：B2 通用层可选任务上下文（设计 §5.4，服务端取值场景用）；微信决策
+        # 不使用，仅透传保持调用点签名兼容（行为零变化，B1.0 特征锁定不受影响）。
         from . import prompts
 
-        return prompts.validate_decision_output(spec, content, peer_message_ids, decision_kind)
+        return prompts.validate_decision_output(spec, content, peer_message_ids, decision_kind, task=task)
 
     def build_review_messages(self, spec, transcript, proposal):  # noqa: ANN001
         from . import prompts

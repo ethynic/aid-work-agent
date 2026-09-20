@@ -22,11 +22,15 @@ class BossConversationConfig(NamedTuple):
 
     enabled: bool = False
     tenant_allowlist: List[str] = []
+    sensitive_words: List[str] = []
+    resume_field_whitelist: List[str] = []
 
 
 class _GateHotConfig(NamedTuple):
     enabled: bool
     tenant_allowlist: List[str]
+    sensitive_words: List[str]
+    resume_field_whitelist: List[str]
 
 
 def _as_bool(value, default: bool = False) -> bool:  # noqa: ANN001
@@ -70,6 +74,8 @@ def get_boss_conversation_config() -> BossConversationConfig:
     return BossConversationConfig(
         enabled=_as_bool(node.get("enabled"), False),
         tenant_allowlist=_as_list(node.get("tenant_allowlist")),
+        sensitive_words=_as_list(node.get("sensitive_words")),
+        resume_field_whitelist=_as_list(node.get("resume_field_whitelist")),
     )
 
 
@@ -80,9 +86,11 @@ def _parse_gate(path: Path) -> _GateHotConfig:
         node = (load_yaml_config(path) or {}).get("boss_conversation")
         node = node if isinstance(node, dict) else {}
         return _GateHotConfig(enabled=_as_bool(node.get("enabled"), False),
-                              tenant_allowlist=_as_list(node.get("tenant_allowlist")))
+                              tenant_allowlist=_as_list(node.get("tenant_allowlist")),
+                              sensitive_words=_as_list(node.get("sensitive_words")),
+                              resume_field_whitelist=_as_list(node.get("resume_field_whitelist")))
     except Exception:  # noqa: BLE001 fail-closed
-        return _GateHotConfig(enabled=False, tenant_allowlist=[])
+        return _GateHotConfig(enabled=False, tenant_allowlist=[], sensitive_words=[], resume_field_whitelist=[])
 
 
 _gate_lock = threading.Lock()
@@ -101,7 +109,7 @@ def _read_gate(config_path: Optional[str]) -> _GateHotConfig:
         st = path.stat()
         key = (str(path), st.st_mtime_ns, st.st_size)
     except OSError:
-        return _GateHotConfig(enabled=False, tenant_allowlist=[])
+        return _GateHotConfig(enabled=False, tenant_allowlist=[], sensitive_words=[], resume_field_whitelist=[])
     with _gate_lock:
         if _gate_cache is not None and _gate_cache[0] == key:
             return _gate_cache[1]
@@ -126,3 +134,21 @@ def tenant_allowed(tenant_id: str, config_path: Optional[str] = None) -> bool:
     if not gate.tenant_allowlist:
         return True
     return tenant_id in gate.tenant_allowlist
+
+
+def sensitive_words(config_path: Optional[str] = None) -> tuple:
+    """敏感词表热读（设计 §5.1；yaml 缺省回落 DEFAULT_SENSITIVE_WORDS 初值）。"""
+    from .constants import DEFAULT_SENSITIVE_WORDS
+
+    words = _read_gate(config_path).sensitive_words
+    return tuple(w for w in (words or DEFAULT_SENSITIVE_WORDS) if w)
+
+
+def resume_field_whitelist(config_path: Optional[str] = None) -> tuple:
+    """resume_field 槽位字段白名单热读（设计 §5.1；yaml 缺省回落初值）。
+
+    白名单键为 bs_recruiting_operator_resumes.key_info 内字段名（白名单子集）。"""
+    from .constants import DEFAULT_RESUME_FIELD_WHITELIST
+
+    fields = _read_gate(config_path).resume_field_whitelist
+    return tuple(f for f in (fields or DEFAULT_RESUME_FIELD_WHITELIST) if f)

@@ -474,6 +474,28 @@ class ScheduledTaskManager:
         except Exception as e:
             logger.error(f"后端日志：注册 session_tasks 控制请求处理器失败: {e}")
 
+        # ===== BOSS 沟通日志投影（B2，设计 §5.6；boss_conversation.enabled 热读
+        # 门控，默认关闭零注册；独立 try 域不拖垮其他 worker）=====
+        try:
+            from src.boss_conversation.config import scenario_enabled_gate as _boss_gate
+
+            if _boss_gate():
+                from src.boss_conversation.projection import run_projection_tick
+
+                self._scheduler.add_job(
+                    run_projection_tick,
+                    IntervalTrigger(seconds=30),
+                    id="job_system_boss_comm_log_projection",
+                    name="Boss Comm Log Projection",
+                    max_instances=1,
+                    coalesce=True,
+                )
+                logger.info("后端日志：已注册 boss_conversation 沟通日志投影 (tick=30s)")
+            else:
+                logger.debug("后端日志：boss_conversation 未启用，跳过投影 job 注册")
+        except Exception as e:
+            logger.error(f"后端日志：注册 boss_conversation 投影 job 失败: {e}")
+
     def _run_memory_summarizer(self):
         """执行每日记忆总结（APScheduler 回调）"""
         try:

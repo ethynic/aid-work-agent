@@ -22,8 +22,13 @@ class ScenarioDecisionHooks(Protocol):
         *, repair_feedback: Optional[str] = None,
     ) -> List[Dict[str, str]]: ...
 
+    # task（B2 可选上下文，设计 §5.4）：任务行数据（tenant_id/conversation_binding_id
+    # 等），供需要服务端取值的场景（BOSS resume_field 槽位经绑定 resume_id 从简历库
+    # 取值）使用；微信等不需要的场景忽略。keyword-only 缺省 None 保持旧签名兼容。
     def validate_decision_output(
         self, spec: Dict[str, Any], content: str, peer_message_ids: List[str], decision_kind: str,
+        *,
+        task: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]: ...
 
     def build_review_messages(

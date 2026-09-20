@@ -1,4 +1,4 @@
-# 项目开发目录
+﻿# 项目开发目录
 
 > 本文件是进行中和待开发内容的**纯索引**：每个任务一行，`编号` 为条目首次登记的时间戳（YYYYMMDD-HHMM，历史条目取 git 提交时间），唯一且随时间递增，新增条目取当前时刻。2026-09-16 之前的历史文档中 `#NN` 旧编号已废弃，检索以功能名或时间戳编号为准。每个任务一行，`说明` 只写一句话（≤60 字），`状态` 只写状态短语。开发进度按实际情况更新到任务链接的**开发计划文档**顶部「开发进度」登记区（规范见 AGENTS.md），索引行只同步状态与链接，不要把长文本写进表格。
 > 已完成的功能归档在 [ideas_finished.md](ideas_finished.md)。
@@ -49,7 +49,7 @@
 | 20260917-1000 | 技能依赖自动补全机制（工具 + recap 任务） | ✅ 已完成开发 | 自定义数字员工勾选技能时自动补全其依赖的工具与 recap 任务，根治漏勾配置 bug。技能在 SKILL.md frontmatter 声明 `requires_tools` / `requires_recap`，后端保存兜底（`apply_skill_requirements`）+ 前端勾选联动；已登记 pre-sales-api（完整）、after-sales-api / order-api（http_api）。 | — | — |
 | 20260914-1300 | SubagentRegistry 按 agent_id 为 key + 前端展示 agent_id | 🔧 部分完成 | 2026-09-14 修复生产事故：`subagent_definitions` 两条 active 定义（pre-sales / aidefine-sales-assistant）显示名相同，… | — | — |
 | 20260908-1431 | 桌面 CLI 无人值守自动任务底座＋微信营销首场景 | 🔧 部分完成 | 桌面 CLI 无人值守任务底座（调度/账本/许可/journal/桌面锁）＋微信营销首场景，与端侧会话任务（20260912-2313）共用底座。 | [底座设计](design/desktop-automation/desktop-cli-automation-design.md) / [场景设计](design/weixin/weixin-marketing-automation-design.md) | [底座计划](plans/desktop-automation/plan-desktop-cli-automation.md) / [微信实施与BOSS衔接](plans/weixin/plan-weixin-marketing-automation.md) |
-| 20260908-1432 | BOSS 直聘聊天自动化 | 🔧 部分完成 | 跟踪已打招呼候选人，受限话术决策＋候选人绑定＋预授权＋人工接管通知；执行改由端侧会话任务承接。 | [场景设计 §11](design/weixin/weixin-marketing-automation-design.md#11-第二场景boss-直聘聊天自动化待独立立项) / [端侧接入设计](design/desktop-automation/boss-edge-session-design.md) / [底座设计](design/desktop-automation/desktop-cli-automation-design.md) | [BOSS 端侧接入计划](plans/desktop-automation/plan-boss-edge-session.md) / [BOSS 里程碑](plans/weixin/plan-weixin-marketing-automation.md#12-boss-聊天自动化实施衔接-待独立立项) / [底座计划](plans/desktop-automation/plan-desktop-cli-automation.md) |
+| 20260908-1432 | BOSS 直聘聊天自动化 | 🔧 部分完成 | B2 场景包（fake 端到端）十审通过入库；进入 B3 Runtime+Provider 真机接线。 | [场景设计 §11](design/weixin/weixin-marketing-automation-design.md#11-第二场景boss-直聘聊天自动化待独立立项) / [端侧接入设计](design/desktop-automation/boss-edge-session-design.md) / [底座设计](design/desktop-automation/desktop-cli-automation-design.md) | [BOSS 端侧接入计划](plans/desktop-automation/plan-boss-edge-session.md) / [BOSS 里程碑](plans/weixin/plan-weixin-marketing-automation.md#12-boss-聊天自动化实施衔接-待独立立项) / [底座计划](plans/desktop-automation/plan-desktop-cli-automation.md) |
 | 20260905-1753 | 营销 App 智能外呼代理 | 🔧 部分完成 | 2026-09-05 完成调研、详细设计与实施规划。 | [设计](design/marketing-call-agent-design.md) | [验证与计划](plans/marketing-call-agent-plan.md) / [GLM 实验执行手册](plans/marketing-call-agent-experiment-runbook.md) |
 | 20260817-1154 | 工程审计智能体（客户方案阶段） | ⏸️ 已搁置 | 面向工程管理咨询公司的「四库一平台三智能体」工程审计智能体商务方案（客户需求《工程审计智能体开发建设方案V1.0》）。 | 见 `docs/backups/engineering-audit-agent/`（git 忽略，仅本地） | — |
 | 20260602-0955 | CRM 智能体 | 📋 待开发 | 客户关系管理，客户数据整合与智能跟进建议 | — | — |

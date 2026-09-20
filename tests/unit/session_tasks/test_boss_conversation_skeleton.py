@@ -154,9 +154,9 @@ class TestBossRegistration:
         assert policy["context"] == "boss_reply"
         assert policy["submission_evidence_namespace"] == "boss-submission"
         assert policy["verified_evidence_namespace"] == "boss-send-verifier"
-        # 频控门禁/绑定同步阻断随 B2 接入：骨架两成员必须为 None
-        assert descriptor.send_eligibility_gate is None
-        assert descriptor.binding_guard is None
+        # B2：频控双闸门接入（gate 纯计算 + guard 锁/检查/落库成对注册，§5.5.1）
+        assert descriptor.send_eligibility_gate is not None
+        assert descriptor.binding_guard is not None
         # 注册表三处 scenario_key 一致（register_scenario 预检之外的直接确认）
         assert TrustedAdapterRegistry.get(BOSS_KEY).scenario_key == BOSS_KEY
         assert scenario_hooks.get_hooks(BOSS_KEY).scenario_key == BOSS_KEY
@@ -172,7 +172,11 @@ class TestBossRegistration:
         _enable_boss(monkeypatch)
         assert boss_registration.ensure_registered() is True
         descriptor = scenario_descriptor.require_descriptor(BOSS_KEY)
-        assert descriptor.workbench_label_resolver(None, "t-1", "b-1") == "BOSS 会话"
+        # B2：label 解析自候选人绑定行（缺失绑定返回 None）
+        from src.db.database import get_db_connection
+
+        with get_db_connection() as conn:
+            assert descriptor.workbench_label_resolver(conn.cursor(), "t-1", str(uuid.uuid4())) is None
 
 
 class TestScenarioCoexistence:
@@ -193,66 +197,87 @@ class TestScenarioCoexistence:
 
 
 # ---------------------------------------------------------------------------
-# 骨架 fail-closed：spec_validator / decision_hooks / adapter / binding_resolver
+# B2 场景包：spec_validator / decision_hooks / adapter / binding_resolver 真实现
+# （B1.3 骨架 fail-closed 用例随 B2 占位替换而退役；行为细节定向测试在
+# tests/unit/boss_conversation/，此处只锁定描述器装配面的契约形状）
 # ---------------------------------------------------------------------------
 
 
-class TestSkeletonFailClosed:
+class TestDescriptorB2Wiring:
     @pytest.fixture()
     def descriptor(self, monkeypatch):
         _enable_boss(monkeypatch)
         assert boss_registration.ensure_registered() is True
         return scenario_descriptor.require_descriptor(BOSS_KEY)
 
-    def test_spec_validator_rejects_everything(self, descriptor):
-        with pytest.raises(ValueError, match="B2"):
-            descriptor.spec_validator({})
-        with pytest.raises(ValueError, match="B2"):
+    def test_spec_validator_accepts_valid_and_rejects_invalid(self, descriptor):
+        from src.boss_conversation.models import template_content_hash
+
+        template = "您好，方便沟通吗？"
+        spec = {
+            "goal": "确认意向",
+            "completion_rule": {"mode": "rounds", "rounds_target": 2},
+            "reply_policy": {"style": "简洁礼貌"},
+            "limits": {
+                "max_replies": 10, "max_decisions": 20, "max_cost_units": 100,
+                "expires_at": "2099-01-01T00:00:00Z", "peer_wait_timeout_seconds": 86400,
+            },
+            "scripts": [{
+                "script_version_id": str(uuid.uuid4()),
+                "content_hash": template_content_hash(template),
+                "frozen_template": template,
+                "slot_schema": {},
+            }],
+            "slot_evidence_sources": {},
+        }
+        plain = descriptor.spec_validator(dict(spec))
+        assert plain["scripts"][0]["frozen_template"] == template
+        with pytest.raises(ValueError):
             descriptor.spec_validator({"goal": "x", "completion_rule": {"mode": "rounds"}})
 
-    def test_decision_hooks_members_not_implemented(self, descriptor):
+    def test_decision_hooks_b2_shape(self, descriptor):
         hooks = descriptor.decision_hooks
-        with pytest.raises(NotImplementedError):
-            hooks.build_decision_messages({}, [], "reply")
-        with pytest.raises(NotImplementedError):
-            hooks.validate_decision_output({}, "", [], "reply")
-        with pytest.raises(NotImplementedError):
-            hooks.build_review_messages({}, [], {})
-        with pytest.raises(NotImplementedError):
-            hooks.validate_review_output("")
-        with pytest.raises(NotImplementedError):
-            hooks.validate_review_conclusion({}, {}, {})
-        with pytest.raises(NotImplementedError):
-            hooks.validate_peer_confirmation([], {}, [])
-        with pytest.raises(NotImplementedError):
-            hooks.evaluate_completion()
-        with pytest.raises(NotImplementedError):
-            hooks.build_payload_ref(str(uuid.uuid4()))
+        # rounds 完成判定与 payload_ref 真实现
+        assert hooks.build_payload_ref(str(uuid.uuid4())).startswith("da:boss.chat_reply.v1:boss-reply:")
+        verdict = hooks.evaluate_completion(
+            spec={"limits": {"max_replies": 5, "expires_at": "2099-01-01T00:00:00Z"},
+                  "completion_rule": {"mode": "rounds", "rounds_target": 1}},
+            links=[{"delivery_state": "succeeded", "decision_kind": "reply"}],
+            has_pending_sends=False, latest_reply_evidence=None, review_decision=None,
+            last_peer_activity_at=None, now="2026-09-18T00:00:00Z", pending_decision_count=0,
+        )
+        assert verdict == {"status": "completed", "reason": "rounds_reached"}
+        # rounds-only：审核/peer_confirmation 路径 fail-closed（OutputInvalid）
+        from src.boss_conversation.prompts import OutputInvalid
 
-    def test_adapter_authorize_and_evidence_not_implemented(self, descriptor):
+        with pytest.raises(OutputInvalid):
+            hooks.build_review_messages({}, [], {})
+        with pytest.raises(OutputInvalid):
+            hooks.validate_peer_confirmation([], {}, [])
+
+    def test_adapter_b2_evidence_namespaces(self, descriptor):
         from src.desktop_automation.adapters import AdapterContext, EvidenceContext
 
         adapter = descriptor.adapter
-        ctx = AdapterContext(
-            tenant_id="t-1", user_id="u-1", scenario_key=BOSS_KEY,
-            task_ref=str(uuid.uuid4()), revision_ref="rev-1",
-        )
-        with pytest.raises(NotImplementedError):
-            adapter.authorize_operation(
-                ctx, operation="boss_send_to_v2", target_ref="b-1", target_version=None,
-                payload_hash=None, authorization_revision=None, authorization_epoch=None,
-                invocation=None, cursor=None,
-            )
-        evidence_ctx = EvidenceContext(
-            tenant_id="t-1", scenario_key=BOSS_KEY, request_id="req-1",
-            evidence_ref="boss-submission:req-1:1",
-        )
-        with pytest.raises(NotImplementedError):
-            adapter.validate_submission_evidence(evidence_ctx)
-        with pytest.raises(NotImplementedError):
-            adapter.validate_evidence(evidence_ctx)
+        assert adapter.validate_submission_evidence(EvidenceContext(
+            tenant_id="t", scenario_key=BOSS_KEY, request_id="r-1",
+            evidence_ref="boss-submission:r-1:1",
+        ))
+        assert not adapter.validate_submission_evidence(EvidenceContext(
+            tenant_id="t", scenario_key=BOSS_KEY, request_id="r-1",
+            evidence_ref="weixin-submission:r-1:1",
+        ))
+        assert adapter.validate_evidence(EvidenceContext(
+            tenant_id="t", scenario_key=BOSS_KEY, request_id="r-1",
+            evidence_ref="boss-send-verifier:r-1:2",
+        ))
+        assert not adapter.validate_evidence(EvidenceContext(
+            tenant_id="t", scenario_key=BOSS_KEY, request_id="r-2",
+            evidence_ref="boss-send-verifier:r-1:2",
+        ))
 
     def test_adapter_fail_closed_members(self, descriptor):
+        from src.db.database import get_db_connection
         from src.desktop_automation.adapters import AdapterContext
 
         adapter = descriptor.adapter
@@ -260,32 +285,45 @@ class TestSkeletonFailClosed:
             tenant_id="t-1", user_id="u-1", scenario_key=BOSS_KEY,
             task_ref=str(uuid.uuid4()), revision_ref="rev-1",
         )
-        assert adapter.validate_revision(ctx, {}).ok is False
-        assert adapter.resolve_target(ctx, "b-1").ok is False
         with pytest.raises(Exception):  # noqa: B017 compile fail-closed（BossConversationError）
             adapter.compile_operations(ctx, {})
         with pytest.raises(Exception):  # noqa: B017 payload fail-closed
             adapter.serve_payload(ctx, "boss-reply:x")
-        assert adapter.aggregate_result(ctx, []).verdict == "needs_manual_review"
-        assert adapter.settle_operation_result(None, {}) is None  # no-op（同微信形态）
-        assert adapter.invocation_receipt_arguments(ctx, "b-1") == {}
+        # 目标绑定缺失 → resolve_target fail-closed、回执参数空冻结、settle 正常形态
+        with get_db_connection() as conn:
+            assert adapter.resolve_target(ctx, str(uuid.uuid4())).ok is False
+            assert adapter.invocation_receipt_arguments(ctx, str(uuid.uuid4())) == {}
+        assert adapter.settle_operation_result(_NullCursor(), {
+            "tenant_id": "t", "task_id": str(uuid.uuid4()), "invocation_id": str(uuid.uuid4()),
+            "delivery_id": str(uuid.uuid4()), "attempt_id": str(uuid.uuid4()),
+            "request_id": "r", "effect": "none", "phase": None,
+            "evidence_invalid": None, "permit_id": None,
+        }) is None  # 明确未开始且无 slot → normal（无补建）
 
-    def test_binding_resolver_members_not_implemented(self, descriptor):
+    def test_binding_resolver_b2_shape(self, descriptor):
+        from src.db.database import get_db_connection
+        from src.session_tasks.scenario_descriptor import ScenarioDescriptorError
+
         resolver = descriptor.binding_resolver
-        with pytest.raises(NotImplementedError):
-            resolver.get_binding_by_id(None, "t-1", "b-1")
-        with pytest.raises(NotImplementedError):
-            resolver.get_runtime_identity(None, "t-1", "b-1")
-        with pytest.raises(NotImplementedError):
-            resolver.is_valid_for_allocation(None, "t-1", "b-1")
-        with pytest.raises(NotImplementedError):
+        with pytest.raises(ScenarioDescriptorError):
             resolver.resolve_draft_targets(None, "t-1", "u-1", "d-1", "r-1")
-        with pytest.raises(NotImplementedError):
+        assert resolver.runtime_target_policy({}) is None
+        assert resolver.account_identity_version({}) == 0
+        with pytest.raises(Exception):  # noqa: B017 未验证绑定不可发布
             resolver.ensure_valid_for_publish({})
-        with pytest.raises(NotImplementedError):
-            resolver.runtime_target_policy({})
-        with pytest.raises(NotImplementedError):
-            resolver.account_identity_version({})
+        with get_db_connection() as conn:
+            assert resolver.get_binding_by_id(conn.cursor(), "t-1", str(uuid.uuid4())) is None
+            assert resolver.is_valid_for_allocation(conn, "t-1", str(uuid.uuid4())) is False
+
+
+class _NullCursor:
+    """SET SAVEPOINT/RELEASE 探针游标：结算无 slot 路径只发 SAVEPOINT 语句。"""
+
+    def execute(self, *a, **kw):  # noqa: ANN002, ANN003
+        return None
+
+    def fetchone(self):
+        return None
 
 
 # ---------------------------------------------------------------------------

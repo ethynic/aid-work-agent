@@ -1,4 +1,4 @@
-"""boss.chat_reply.v1 受信注册点（B1.3 骨架）。
+"""boss.chat_reply.v1 受信注册点（B2）。
 
 由受信初始化点调用（scheduler 组合根 / main.py 生命周期；决策 tick 自愈同微信
 由各自 registration 承担）：boss 场景注册结构与微信 registration.py 同构——
@@ -49,7 +49,7 @@ def ensure_registered() -> bool:
 
         scenario_descriptor.register_scenario(build_boss_descriptor())
         _REGISTERED = True
-    logger.info("boss_conversation 描述器骨架已注册（boss.chat_reply.v1；完整逻辑 B2 交付）")
+    logger.info("boss_conversation 场景描述器已注册（boss.chat_reply.v1；B2 场景包）")
     return True
 
 
