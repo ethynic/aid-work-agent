@@ -75,7 +75,7 @@ if [ "$FRONTEND_CHANGED" -gt 0 ] || [ ! -d "$DIST_DIR" ]; then
     docker run --rm -v "$FRONTEND_DIR":/app -w /app node:22-alpine \
         node scripts/check-dependency-boundaries.mjs --scope=web
     # vite build + 产物校验放后台，与后端重启并行
-    rm -rf "$DIST_DIR.new"
+    sudo rm -rf "$DIST_DIR.new"
     mkdir -p "$(dirname "$BUILD_LOG")"
     (
       docker run --rm -v "$FRONTEND_DIR":/app -w /app node:22-alpine \
@@ -118,10 +118,10 @@ if [ -n "$FRONTEND_PID" ]; then
     fi
 
     echo "[6.1] 原子切换前端 dist..."
-    rm -rf "$DIST_DIR.old"
+    sudo rm -rf "$DIST_DIR.old"
     [ -d "$DIST_DIR" ] && mv "$DIST_DIR" "$DIST_DIR.old"
     mv "$DIST_DIR.new" "$DIST_DIR"
-    rm -rf "$DIST_DIR.old"
+    sudo rm -rf "$DIST_DIR.old"
 fi
 # dist 由 docker root 容器创建，属主为 root；恢复为 ubuntu，避免残留 root 属主文件
 # 在后续 git 更新/排查时造成 Permission denied 干扰（2026-09-20 事故）
