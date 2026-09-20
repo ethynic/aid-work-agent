@@ -1576,10 +1576,12 @@ class WeChatMPSyncService:
             list_session_mod.set_list_sync_status(config_id, "expiring")
 
         mode = fields.get("list_sync_mode") or "auto_all"
-        # WP13-r1（设计 §3.4）：首次回填上限 + 回填完成标记。
+        # WP13-r1（设计 §3.4）/ r3 修订：首次回填上限 + 增量边界语义。
         # list_backfill_done=false → 首次回填：按子篇计数只取最新 N 篇（fetch 层
-        # 达到上限即停止翻页，边界消息整条计入，超硬顶 500 截断）；
-        # true → 增量：走到重叠即停（整页全部已知且 update_time 一致才停）。
+        # 达到上限即停止翻页，边界消息整条计入，超硬顶 500 截断）；上限仅对首次
+        # 生效，不影响后续增量。
+        # true → 增量：从最新往下走，**遇到任一已入库子篇即到边界**——边界处照常
+        # 处理（时间变化则更新），其后旧内容一律不动（新文章继续拉取，旧的不动）。
         backfill_done = bool(fields.get("list_backfill_done"))
         max_articles = wechat_mp_codec.clamp_list_sync_max_articles(
             fields.get("list_sync_max_articles")
@@ -1587,9 +1589,9 @@ class WeChatMPSyncService:
         client = OwnListClient(token=session["token"], cookie=session["cookie"])
         try:
             if backfill_done:
-                known_times = self._load_list_known_times(tenant_id)
+                known_ids = set(self._load_list_known_times(tenant_id))
                 scan = client.fetch_sync_scan(
-                    page_all_known=lambda page: self._page_all_known(known_times, page)
+                    page_hit_known=lambda page: self._page_hit_known(known_ids, page)
                 )
             else:
                 scan = client.fetch_sync_scan(max_articles=max_articles)
@@ -1683,26 +1685,22 @@ class WeChatMPSyncService:
             )
             return {r["external_id"]: r["wx_update_time"] for r in cursor.fetchall()}
 
-    def _page_all_known(self, known_times: Dict[str, Any], page: List[Any]) -> bool:
-        """增量「走到重叠即停」整页判定（设计 §3.4）：整页子篇全部已知且
-        update_time 与库内一致才返回 True。
+    def _page_hit_known(self, known_ids: set, page: List[Any]) -> bool:
+        """增量「遇到已入库边界即停」页判定（设计 §3.4，r3 语义修订）：页内任一
+        子篇身份已入库（存在 articles 行）即 True——该页取回处理后，diff 在边界
+        处截断，其后的旧内容一律不动（新文章继续拉取，旧的不动）。
 
-        任何一条不满足（身份未知 / 链接不可规范 / 时间缺失或不一致）→ False
-        继续翻页——早停漏拉由下一轮对账兜底，宁多翻不漏新。
+        链接不可规范的子篇不构成边界（返回 False 继续翻页，宁多翻不漏新）。
+        时间一致性不参与边界判定：已知文章的源时间变化由 diff 更新路径处理。
         """
         for art in page:
             try:
                 external_id = normalize_url(art.link).external_id
             except URLIdentityError:
                 return False
-            row_time = known_times.get(external_id)
-            if row_time is None:
-                return False
-            if isinstance(row_time, datetime) and row_time.tzinfo is not None:
-                row_time = row_time.replace(tzinfo=None)  # 防 timestamptz 形态不一致
-            if row_time != self._list_source_time(art):
-                return False
-        return True
+            if external_id in known_ids:
+                return True
+        return False
 
     def _reconcile_list_articles(
         self,
@@ -1746,8 +1744,13 @@ class WeChatMPSyncService:
                 )
                 existing = {r["external_id"]: dict(r) for r in cursor.fetchall()}
                 seen_external_ids: set = set()
+                hit_boundary = False  # 已入库边界：边界条目照常处理后停止，其后旧内容不动
 
                 for art in scan.articles:
+                    if hit_boundary:
+                        # 边界后的子篇全部是旧内容（r3 语义：新文章继续拉取，
+                        # 旧的不动）——不再处理也不计数
+                        break
                     if not isinstance(art, OwnArticle):
                         raise RuntimeError("清单子篇类型异常")
                     try:
@@ -1770,6 +1773,10 @@ class WeChatMPSyncService:
                         continue
                     seen_external_ids.add(identity.external_id)
                     row = existing.get(identity.external_id)
+                    if row is not None:
+                        # 已入库子篇 = 增量边界：本条照常走下方处理（含时间变化
+                        # 更新/删除信号），其后子篇在下轮循环顶部直接停止
+                        hit_boundary = True
 
                     # ---- 源侧显式删除信号：直接软删（任何通道的对应文档）----
                     if art.is_deleted:

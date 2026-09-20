@@ -68,10 +68,10 @@ class FakeListClient:
         self.fetch_kwargs: dict = {}
         instances.append(self)
 
-    def fetch_sync_scan(self, *, max_articles=None, page_all_known=None):
+    def fetch_sync_scan(self, *, max_articles=None, page_hit_known=None):
         self.fetch_kwargs = {
             "max_articles": max_articles,
-            "page_all_known": page_all_known,
+            "page_hit_known": page_hit_known,
         }
         return self.fetch_all()
 
@@ -647,7 +647,7 @@ async def test_expiring_status_flip_on_reconcile(monkeypatch, billed_tenant):
     assert captured["status_updates"] == [(CONFIG_ID, "expiring")]
 
 
-# ------------------------------- WP13-r1：回填上限与增量重叠即停 -------------------------------
+# ------------------------------- WP13-r1/r3：回填上限与增量边界即停 -------------------------------
 
 
 def _r1_fields(**extra) -> dict:
@@ -675,7 +675,7 @@ async def test_backfill_mode_caps_and_sets_done_on_complete(monkeypatch, billed_
 
     fake = instances[-1]
     assert fake.fetch_kwargs["max_articles"] == 7  # 上限透传给分页引擎
-    assert fake.fetch_kwargs["page_all_known"] is None  # 回填轮不做重叠判定
+    assert fake.fetch_kwargs["page_hit_known"] is None  # 回填轮不做边界判定
     assert _run_row(run_id)["status"] == "success"
     done_writes = [f for _, f, _ in captured["field_writes"] if "list_backfill_done" in f]
     assert done_writes and done_writes[-1]["list_backfill_done"] is True
@@ -731,8 +731,9 @@ async def test_backfill_max_articles_default_when_missing(monkeypatch, billed_te
     assert instances[-1].fetch_kwargs["max_articles"] == 100
 
 
-async def test_incremental_mode_overlap_predicate(monkeypatch, billed_tenant):
-    """done=true：增量轮带重叠判定回调；已知一致页 True / 含未知或变更子篇 False。"""
+async def test_incremental_mode_boundary_predicate(monkeypatch, billed_tenant):
+    """done=true：增量轮带边界判定回调；页内含任一已入库子篇即 True（r3 语义：
+    遇到旧的即停，新文章继续拉取，旧的不动——时间变化不再影响边界判定）。"""
     tenant = billed_tenant
     captured = _patch_list_session(monkeypatch, fields=_r1_fields())
     _patch_list_client(monkeypatch)
@@ -750,26 +751,80 @@ async def test_incremental_mode_overlap_predicate(monkeypatch, billed_tenant):
     _patch_list_session(monkeypatch, fields=_r1_fields(list_backfill_done=True))
     observed = {}
 
-    def fake_fetch(self, *, max_articles=None, page_all_known=None):
-        self.fetch_kwargs = {"max_articles": max_articles, "page_all_known": page_all_known}
-        observed["known"] = page_all_known([_own_article(TOK_A, BASE_TS)])
-        observed["changed"] = page_all_known([_own_article(TOK_A, BASE_TS + 600)])
-        observed["unknown"] = page_all_known([_own_article(TOK_B, BASE_TS)])
-        observed["mixed"] = page_all_known(
-            [_own_article(TOK_A, BASE_TS), _own_article(TOK_B, BASE_TS)]
+    def fake_fetch(self, *, max_articles=None, page_hit_known=None):
+        self.fetch_kwargs = {"max_articles": max_articles, "page_hit_known": page_hit_known}
+        observed["known"] = page_hit_known([_own_article(TOK_A, BASE_TS)])
+        observed["changed"] = page_hit_known([_own_article(TOK_A, BASE_TS + 600)])
+        observed["unknown"] = page_hit_known([_own_article(TOK_B, BASE_TS)])
+        observed["mixed"] = page_hit_known(
+            [_own_article(TOK_B, BASE_TS), _own_article(TOK_A, BASE_TS)]
         )
         return _scan(_own_article(TOK_A, BASE_TS))
 
     monkeypatch.setattr(FakeListClient, "fetch_sync_scan", fake_fetch)
     run2 = _create_list_sync_run(tenant)
     await svc.claim_and_run(tenant)
-    assert observed["known"] is True  # 已入库且时间一致 → 重叠
-    assert observed["changed"] is False  # 时间变化 → 继续
+    assert observed["known"] is True  # 已入库 → 边界
+    assert observed["changed"] is True  # 已入库（时间变化由 diff 更新路径处理）→ 边界
     assert observed["unknown"] is False  # 未知身份 → 继续
-    assert observed["mixed"] is False  # 整页必须全部已知才停
+    assert observed["mixed"] is True  # 页内含任一已入库子篇即到边界
     assert instances[-1].fetch_kwargs["max_articles"] is None
     assert _run_row(run2)["status"] == "success"
 
+
+async def test_incremental_boundary_stops_at_first_known(monkeypatch, billed_tenant):
+    """r3 边界语义（生产超量回填事故修订）：增量轮 diff 在第一篇已入库子篇处
+    截断——其上的新文章照常入库，其后的旧内容不建行不计数（旧的不动）。
+    边界文章自身的源时间变化仍走更新路径。"""
+    tenant = billed_tenant
+    _patch_list_session(monkeypatch)
+    _patch_list_client(monkeypatch)
+
+    known = _own_article(TOK_A, BASE_TS)
+    scan1 = _scan(known)
+    monkeypatch.setattr(FakeListClient, "fetch_all", lambda self: scan1)
+    fetcher = ts.StubFetcher()
+    fetcher.set_page(
+        URL_A, ts.FetchResult(status="ok", html=ts.make_article_html("t", BODY_A, URL_A))
+    )
+    svc = ts._make_service(fetcher)
+
+    _create_list_sync_run(tenant)
+    await svc.claim_and_run(tenant)  # 首轮回填：仅 TOK_A 入库
+    known_row = _article_by_external(tenant, TOK_A)
+    assert known_row and known_row["processing_status"] == "success"
+
+    # 增量轮：scan = [新文章 TOK_B, 已入库 TOK_A, 更旧的 old] → TOK_B 入库，
+    # TOK_A 为边界（处理），old 不建行不计数不拉取
+    _patch_list_session(monkeypatch, fields=_r1_fields(list_backfill_done=True))
+    scan2 = _scan(
+        _own_article(TOK_B, BASE_TS + 3600),
+        known,
+        _own_article("Fk13old001", BASE_TS - 86400),
+        total=3,
+    )
+    monkeypatch.setattr(FakeListClient, "fetch_all", lambda self: scan2)
+    fetcher.set_page(
+        f"https://mp.weixin.qq.com/s/{TOK_B}",
+        ts.FetchResult(
+            status="ok",
+            html=ts.make_article_html("t2", "新文章内容" * 30, f"https://mp.weixin.qq.com/s/{TOK_B}"),
+        ),
+    )
+    run2 = _create_list_sync_run(tenant)
+    await svc.claim_and_run(tenant)
+
+    run = _run_row(run2)
+    assert run["status"] == "success"
+    assert run["new_count"] == 1  # 只有 TOK_B 入库
+    new_row = _article_by_external(tenant, TOK_B)
+    assert new_row and new_row["processing_status"] == "success"
+    old_rows = ts._query_all(
+        "SELECT id FROM bs_wechat_mp_articles WHERE tenant_id = %s AND external_id = %s",
+        (tenant, "mp:s:Fk13old001"),
+    )
+    assert old_rows == []  # 边界之后的旧内容不动
+    assert len(fetcher.calls) == 2  # TOK_A、TOK_B 各一次正文拉取，old 未拉
 
 async def test_find_synced_external_ids_semantics(monkeypatch, billed_tenant):
     """历史清单 synced 判定（真实 DB）：active 计入、deleted 不计（可手动重导）。"""

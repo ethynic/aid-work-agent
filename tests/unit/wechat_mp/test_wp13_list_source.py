@@ -373,7 +373,7 @@ class TestFetchAll:
 
 
 class TestFetchSyncScan:
-    """WP13-r1 分页策略（设计 §3.4）：首次回填上限 / 增量走到重叠即停。
+    """WP13-r1/r3 分页策略（设计 §3.4）：首次回填上限 / 增量遇到已入库边界即停。
 
     兜底语义（空页/重复页/预算/失败码）与 fetch_all 一致，fetch_all 即
     fetch_sync_scan() 的无策略形态。
@@ -439,7 +439,7 @@ class TestFetchSyncScan:
         assert scan.complete is True
 
     def test_incremental_stops_at_all_known_page(self):
-        """增量：整页全部已知（谓词 True）→ 到重叠即停；本页子篇仍进 scan 待 diff。"""
+        """增量：页内含已入库子篇（谓词 True）→ 到边界即停；本页子篇仍进 scan 待 diff。"""
         seen_begins = []
 
         def handler(request: httpx.Request) -> httpx.Response:
@@ -452,7 +452,7 @@ class TestFetchSyncScan:
             return httpx.Response(200, json=_page_body(100, messages))
 
         client, _ = make_client(handler)
-        scan = client.fetch_sync_scan(page_all_known=lambda page: True)
+        scan = client.fetch_sync_scan(page_hit_known=lambda page: True)
         assert seen_begins == [0]
         assert len(scan.articles) == 20
         assert scan.complete is True
@@ -471,7 +471,7 @@ class TestFetchSyncScan:
             return httpx.Response(200, json=_page_body(40, messages))
 
         client, _ = make_client(handler)
-        scan = client.fetch_sync_scan(page_all_known=lambda page: False)
+        scan = client.fetch_sync_scan(page_hit_known=lambda page: False)
         assert calls["n"] == 2
         assert len(scan.articles) == 40 and scan.complete is True
 

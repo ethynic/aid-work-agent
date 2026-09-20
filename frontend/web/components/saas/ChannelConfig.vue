@@ -281,7 +281,7 @@
                   <div>同步频率：每 {{ mpList.sync_interval_hours || 1 }} 小时（可在高级配置调整）</div>
                 </div>
                 <div class="flex items-center gap-2 flex-wrap text-xs text-muted">
-                  <label>首次同步篇数</label>
+                  <label title="仅约束首次拉取量；之后新发布的文章不受此限制，按同步模式自动或手动拉取，旧文章不会重新拉取">首次同步篇数（仅首次生效）</label>
                   <BaseInput
                     v-model="mpMaxArticles"
                     type="number"

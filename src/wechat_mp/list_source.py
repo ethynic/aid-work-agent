@@ -355,7 +355,7 @@ class OwnListClient:
         self,
         *,
         max_articles: Optional[int] = None,
-        page_all_known: Optional[Callable[[List[OwnArticle]], bool]] = None,
+        page_hit_known: Optional[Callable[[List[OwnArticle]], bool]] = None,
     ) -> OwnListScan:
         """分页遍历引擎（WP13-r1，设计 §3.4）：在 fetch_all 基础上支持两类策略早停。
 
@@ -363,9 +363,10 @@ class OwnListClient:
           即停止继续翻页（省请求），边界消息整条计入（允许轻微超出）；累计超出
           LIST_SYNC_HARD_MAX_ARTICLES 时截断到 500（保留最新，页序从新到旧）。
           上限早停视为本轮完整（complete=True），下轮起走增量。
-        - ``page_all_known``（增量「走到重叠即停」判定）：整页子篇全部已知且
-          update_time 与库内一致即停止翻页；判定函数由调用方注入（查库逻辑在
-          service，本模块不碰 DB）。新出现/变更子篇已在 scan.articles 中，照常进 diff。
+        - ``page_hit_known``（增量「遇到已入库边界即停」判定）：页内任一子篇
+          身份已入库即停止翻页（该页本身计入 scan.articles）；判定函数由调用方
+          注入（查库逻辑在 service，本模块不碰 DB）。边界后的旧内容由 diff 在
+          文章级截断（不处理不计数），新出现/变更子篇照常进 diff。
         - 兜底照旧：空页无进展 / 整页重复 / 超预算 → complete=False 不抛异常；
           结构异常 / 失败码 → 抛异常。
         两个策略都未提供时与 fetch_all 历史行为完全一致。
@@ -407,8 +408,9 @@ class OwnListClient:
             scan.articles.extend(articles)
             begin += PAGE_SIZE
             # WP13-r1 策略早停（本页已计入 scan.articles，diff 语义不受影响）：
-            if page_all_known is not None and page_all_known(articles):
-                # 增量：整页已知未变（重叠）→ 后续全是旧内容，停止翻页
+            if page_hit_known is not None and page_hit_known(articles):
+                # 增量：页内含已入库子篇（到达已同步边界）→ 该页计入后停止翻页，
+                # 边界截断由 diff 文章级处理
                 stopped_by_policy = True
                 logger.bind(module="wechat_mp").info(
                     "wechat_mp 清单增量走到重叠即停 begin={} pages={}", begin, scan.pages_fetched
