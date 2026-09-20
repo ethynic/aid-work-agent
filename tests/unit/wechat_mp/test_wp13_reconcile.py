@@ -962,3 +962,39 @@ def _run_async(coro):
     import asyncio
 
     return asyncio.run(coro)
+
+
+async def test_duplicate_article_within_scan_dedup(monkeypatch, billed_tenant):
+    """同一 scan 内重复子篇（翻页边界漂移）：只处理首次出现，run success 不撞唯一键。
+
+    生产 agent 事故根因（2026-09-20）：offset 翻页间隙源顶部插入新消息使边界
+    消息跨页重复，existing 快照不含本 run 新行 → 二次走新增分支撞
+    (tenant_id, run_id, article_row_id) 唯一键致整轮回滚失败。
+    """
+    tenant = billed_tenant
+    _patch_list_session(monkeypatch)
+    _patch_list_client(monkeypatch)
+    art = _own_article(TOK_A, BASE_TS)
+    scan = _scan(art, art, total=2)  # 同一篇出现两次（跨页重叠形态）
+    monkeypatch.setattr(FakeListClient, "fetch_all", lambda self: scan)
+
+    fetcher = ts.StubFetcher()
+    fetcher.set_page(
+        URL_A, ts.FetchResult(status="ok", html=ts.make_article_html("t", BODY_A, URL_A))
+    )
+    svc = ts._make_service(fetcher)
+
+    run_id = _create_list_sync_run(tenant)
+    await svc.claim_and_run(tenant)
+    run = _run_row(run_id)
+    assert run["status"] == "success"
+    items = ts._query_all(
+        "SELECT id FROM bs_wechat_mp_sync_items WHERE run_id = %s AND tenant_id = %s",
+        (run_id, tenant),
+    )
+    assert len(items) == 1
+    rows = ts._query_all(
+        "SELECT id FROM bs_wechat_mp_articles WHERE tenant_id = %s AND external_id = %s",
+        (tenant, f"mp:s:{TOK_A}"),
+    )
+    assert len(rows) == 1

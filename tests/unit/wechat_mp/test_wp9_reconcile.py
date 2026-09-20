@@ -1045,3 +1045,32 @@ async def test_freepublish_cross_source_related_doc_linking(
     assert url_doc_id in json.loads(meta_fp["metadata"]).get("related_doc_ids", [])
     # 不物理合并：两个文档都还在
     assert ts._query_one("SELECT status FROM documents WHERE id = %s", (url_doc_id,))["status"] == "active"
+
+
+async def test_duplicate_message_within_scan_dedup(monkeypatch, billed_tenant, fixture_html):
+    """同一 scan 内重复消息（翻页边界漂移）：只处理首次出现，run success 不撞唯一键。"""
+    tenant = billed_tenant
+    fake = FakeMPAPIClient()
+    msg = _batch_message()
+    fake.messages = [msg, msg]  # 同一消息出现两次（跨页重叠形态）
+    fake.articles = {ARTICLE_ID: _detail(_sub(content=fixture_html, url=LONG_URL))}
+    _patch_api_client(monkeypatch, fake)
+    _patch_channel_config(monkeypatch, tenant)
+
+    run_id = _create_scheduled_run(tenant)
+    svc = ts._make_service(ts.StubFetcher())
+    await svc.claim_and_run(tenant)
+
+    run = ts._query_one("SELECT * FROM bs_wechat_mp_sync_runs WHERE id = %s", (run_id,))
+    assert run["status"] == "success"
+    assert run["new_count"] == 1
+    items = ts._query_all(
+        "SELECT id FROM bs_wechat_mp_sync_items WHERE run_id = %s AND tenant_id = %s",
+        (run_id, tenant),
+    )
+    assert len(items) == 1
+    rows = ts._query_all(
+        "SELECT id FROM bs_wechat_mp_articles WHERE tenant_id = %s AND source_channel = %s",
+        (tenant, FREEPUBLISH_CHANNEL),
+    )
+    assert len(rows) == 1

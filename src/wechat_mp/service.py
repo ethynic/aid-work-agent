@@ -1263,9 +1263,18 @@ class WeChatMPSyncService:
                 existing = {r["external_id"]: dict(r) for r in cursor.fetchall()}
 
                 present_ids: set = set()
+                seen_external_ids: set = set()
                 for msg in scan.messages:
                     external_id = freepublish_external_id(appid, msg["article_id"])
                     present_ids.add(external_id)
+                    # 同一 scan 内重复消息去重：batchget offset 翻页在翻页间隙源
+                    # 顶部插入新消息时边界消息会跨页重复（页级重复检测捕捉不到
+                    # 单条重叠），二次出现按未变跳过，防止同 run 重复建 item 撞
+                    # 唯一键致整轮回滚（与清单源同款修复）
+                    if external_id in seen_external_ids:
+                        unchanged_skipped += 1
+                        continue
+                    seen_external_ids.add(external_id)
                     source_time = datetime.fromtimestamp(
                         msg["update_time"], tz=timezone.utc
                     ).replace(tzinfo=None)
@@ -1736,6 +1745,7 @@ class WeChatMPSyncService:
                     (tenant_id,),
                 )
                 existing = {r["external_id"]: dict(r) for r in cursor.fetchall()}
+                seen_external_ids: set = set()
 
                 for art in scan.articles:
                     if not isinstance(art, OwnArticle):
@@ -1750,6 +1760,15 @@ class WeChatMPSyncService:
                             tenant_id, run["id"],
                         )
                         continue
+                    # 同一 scan 内重复子篇去重：清单接口按 offset 翻页，翻页间隙
+                    # 源顶部插入新消息会使边界消息跨页重复（整页重复检测捕捉不到
+                    # 的单条重叠）。重复出现按未变跳过——只处理首次出现，防止同
+                    # run 内二次建 item 撞 (tenant_id, run_id, article_row_id)
+                    # 唯一键致整轮回滚（生产 agent 事故根因，2026-09-20）
+                    if identity.external_id in seen_external_ids:
+                        unchanged += 1
+                        continue
+                    seen_external_ids.add(identity.external_id)
                     row = existing.get(identity.external_id)
 
                     # ---- 源侧显式删除信号：直接软删（任何通道的对应文档）----
