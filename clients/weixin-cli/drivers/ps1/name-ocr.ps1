@@ -97,13 +97,18 @@ try{
     $script:handle=[int64]$windows[0].Hwnd
     if($req.action -eq 'search'){
         if(-not (Invoke-WeixinActivation $script:handle)){Throw-DriverError 'FOREGROUND_LOST' 'Search requires foreground'}
-        # Search is available on the empty home screen; it needs only window geometry.
-        $searchRect=New-Object WeixinProbeWin32+RECT
-        if(-not [WeixinProbeWin32]::GetWindowRect([IntPtr]$script:handle,[ref]$searchRect)){Throw-DriverError 'UI_CHANGED' 'Search window geometry unavailable'}
-        Send-WeixinPostMessageClick -Hwnd $script:handle -ScreenX ($searchRect.Left+[int](($searchRect.Right-$searchRect.Left)*0.17)) -ScreenY ($searchRect.Top+[int](($searchRect.Bottom-$searchRect.Top)*0.06))
-        Start-Sleep -Milliseconds 350
-        Send-WeixinKeyChord -Keys @('CTRL','A') -ForegroundGuard{[WeixinProbeWin32]::GetForegroundWindow().ToInt64() -eq $script:handle}
-        Send-WeixinPostMessageText -Hwnd $script:handle -Text ([string]$req.target_name)
+        # 2026-09-20 真机：比例坐标点击在高度>~1150px 的窗口上会落在搜索框之外；
+        # 且 4.x Qt 搜索框丢弃 WM_CHAR 注入字符。改为 Ctrl+F 打开搜索面板，确认
+        # 面板出现后用剪贴板粘贴输入（坐标无关，不注入字符，不发送 ESC）。
+        Send-WeixinKeyChord -Keys @('CTRL','F') -ForegroundGuard{[WeixinProbeWin32]::GetForegroundWindow().ToInt64() -eq $script:handle}
+        $popupHwnd=0
+        for($i=0;$i -lt 8;$i++){
+            Start-Sleep -Milliseconds 250
+            $popupHwnd=Get-WeixinSearchOverlayHwnd
+            if($popupHwnd -ne 0){break}
+        }
+        if($popupHwnd -eq 0){Throw-DriverError 'TARGET_NOT_FOUND' 'Search popup unavailable'}
+        Send-WeixinPasteText -Text ([string]$req.target_name) -ForegroundGuard{[WeixinProbeWin32]::GetForegroundWindow().ToInt64() -eq $script:handle}
         Start-Sleep -Milliseconds 700
         Write-DriverJson @{ok=$true;data=@{done=$true}}
     }elseif($req.action -eq 'select'){

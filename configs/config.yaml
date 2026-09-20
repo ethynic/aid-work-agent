@@ -380,7 +380,7 @@ desktop_agent:
 # enabled 默认 false——未启用时零注册零执行（无适配器注册、无调度 tick、无清扫），
 # 线上默认无行为变化；真机门禁（P0）通过前不开放无人值守真实发送。
 weixin_marketing:
-  enabled: false
+  enabled: true
   time_triggers_enabled: true      # 时间触发（once/interval/calendar）
   event_triggers_enabled: false    # 事件触发订阅（worker 接线在 P4）
   images_enabled: false            # 图片内容块（图片 operation 在 P4 交付）
@@ -400,7 +400,7 @@ weixin_marketing:
   assets_orphan_scan_enabled: false  # P5 磁盘孤儿素材扫描（只读告警，默认关，R59③）
   assets_orphan_scan_interval_seconds: 86400  # P5 孤儿扫描 tick 间隔（R59③）
   retention_days: 90               # 业务记录建议留存天数（租户可调）
-  tenant_allowlist: []             # 空 = 不限租户（仍受 enabled 总门控）
+  tenant_allowlist: ["tenant_1dc997a1806b"]  # Demo 租户
   quotas:                          # 微信发送配额 → 底座 quota scopes（许可事务内原子预留）
     window_seconds: 3600
     tenant_limit: 100
@@ -411,8 +411,8 @@ weixin_marketing:
 # 端侧会话任务 C1（默认关闭；发布/claim/许可路径每调用热读 enabled/tenant_allowlist，
 # 调度节奏/租约参数为进程快照，修改需重启）
 session_tasks:
-  enabled: false
-  tenant_allowlist: []            # 空 = 不限租户（仍受 enabled 总门控）
+  enabled: true
+  tenant_allowlist: ["tenant_1dc997a1806b"]  # Demo 租户
   lease_seconds: 60               # 设计 §4：lease=60s
   renew_seconds: 20               # 设计 §4：renew=20s
   max_decisions_per_tenant: 2     # §13.5：同租户跨进程在飞模型调用上限（DB 槽位，C3 已接线）
@@ -428,8 +428,8 @@ session_tasks:
 
 # 微信会话场景（weixin.conversation.v1；场景能力开关，业务绑定骨架 C1 已建）
 weixin_conversation:
-  enabled: false
-  tenant_allowlist: []
+  enabled: true
+  tenant_allowlist: ["tenant_1dc997a1806b"]  # Demo 租户
 
 # BOSS 会话场景（boss.chat_reply.v1；B1.3 注册骨架默认关闭，完整场景包 B2 交付。
 # 热读门控同微信范式：enabled=false（或文件缺失/损坏）时零注册零授权，fail-closed；
