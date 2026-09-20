@@ -7,13 +7,18 @@ import json
 import uuid
 from contextlib import closing
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 from loguru import logger
 
 from src.core.text_sanitizer import sanitize_text
 from src.knowledge.parsers.parser_factory import parser_factory
 from src.knowledge.parsers import DocumentParseError
 from src.knowledge.chunker import TextChunker
+from src.knowledge.retriever.tenant_range import (
+    attach_owner_metadata,
+    build_active_document_condition,
+    build_tenant_range_conditions,
+)
 from src.knowledge.embedding.embedding_client import TextEmbeddingV3Client, sanitize_error_info
 from src.knowledge.vector_db.vector_db import get_vector_db
 from src.config.settings import settings
@@ -1139,6 +1144,119 @@ class KnowledgeBaseService:
             if "=***" not in error_str:
                 error_str = sanitize_error_info(error_str)
             logger.opt(exception=True).error(f"后端日志：文档搜索失败: {error_str}")
+            return {
+                "success": False,
+                "error": "搜索失败，请稍后重试",
+                "debug": error_str,
+                "results": [],
+                "count": 0
+            }
+
+    def search_documents_by_title(
+        self,
+        tenant_id: Optional[str],
+        file_name: str,
+        shared_ranges: Optional[List[Tuple[str, str]]] = None,
+        exact: bool = False,
+        source_type: Optional[str] = None,
+        limit: int = 10,
+    ) -> Dict[str, Any]:
+        """按文件名/标题定位知识库文档（documents.title 匹配，返回文档级元数据）。
+
+        与 search_documents（内容语义检索）互补：本方法回答「有没有这个文件、
+        路径在哪」，供 LLM 拿 file_path 后用 read 工具分页读取。
+
+        可见性与内容检索完全一致（knowledge_retrieval.md 模式 A）：
+        build_tenant_range_conditions（本租户 + 共享精确对）+ active/未过期过滤。
+
+        Args:
+            tenant_id: 本租户 ID，为空时直接返回空结果（无租户上下文不搜）
+            file_name: 文件名或标题关键词
+            shared_ranges: 已启用共享分类的精确 (from_tenant_id, source_type) 对
+            exact: True 时精确匹配 title（兼容去扩展名比对）；False 时模糊包含匹配
+            source_type: 顶级分类代号过滤，不传搜全部
+            limit: 返回条数上限（1~50）
+
+        Returns:
+            {success, results, count}；results 内含 file_path / summary / owner 标注所需字段
+        """
+        file_name = (file_name or "").strip()
+        if not file_name:
+            return {"success": True, "results": [], "count": 0}
+        if not tenant_id:
+            return {"success": True, "results": [], "count": 0}
+
+        try:
+            limit = max(1, min(int(limit), 50))
+        except (TypeError, ValueError):
+            limit = 10
+
+        # 去扩展名比对：用户常传「融合知识库」而 title 是「xxx.md」
+        stem_expr = "regexp_replace(d.title, '\\.[^.]+$', '')"
+
+        # ILIKE 通配符按字面量匹配：file_name 中的 % _ \ 来自 LLM/用户输入，
+        # 不转义会放大匹配范围，以 \ 结尾更会触发 PostgreSQL LIKE 转义错误
+        def _escape_like(s: str) -> str:
+            return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+        if exact:
+            match_sql = f"(d.title = %s OR {stem_expr} = %s)"
+            match_params: List[Any] = [file_name, file_name]
+            order_sql = "CASE WHEN d.title = %s THEN 0 ELSE 1 END"
+            order_params: List[Any] = [file_name]
+        else:
+            match_sql = "d.title ILIKE %s"
+            match_params = [f"%{_escape_like(file_name)}%"]
+            order_sql = "CASE WHEN d.title = %s THEN 0 WHEN d.title ILIKE %s THEN 1 ELSE 2 END"
+            order_params = [file_name, f"{_escape_like(file_name)}%"]
+
+        range_sql, range_params = build_tenant_range_conditions(
+            tenant_id, source_type, shared_ranges, alias="d",
+        )
+        active_sql = build_active_document_condition(alias="d")
+
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(f"""
+                    SELECT id, title, file_path, file_size, file_type,
+                           source_type, summary, created_at, tenant_id
+                    FROM documents d
+                    WHERE ({range_sql})
+                      AND {active_sql}
+                      AND {match_sql}
+                    ORDER BY {order_sql}, d.created_at DESC
+                    LIMIT %s
+                """, range_params + match_params + order_params + [limit])
+
+                formatted_results = []
+                for row in cursor.fetchall():
+                    row = dict(row)
+                    created_at = row.get("created_at")
+                    formatted_results.append({
+                        "doc_id": row["id"],
+                        "title": row.get("title") or "",
+                        "file_path": row.get("file_path") or "",
+                        "file_size": row.get("file_size"),
+                        "file_type": row.get("file_type") or "",
+                        "source_type": row.get("source_type") or "",
+                        "summary": row.get("summary") or "",
+                        "created_at": created_at.strftime("%Y-%m-%d %H:%M:%S") if created_at else "",
+                        "metadata": attach_owner_metadata(
+                            None, row.get("tenant_id"), tenant_id,
+                        ),
+                    })
+
+                return {
+                    "success": True,
+                    "results": formatted_results,
+                    "count": len(formatted_results),
+                }
+        except Exception as e:
+            error_str = str(e)
+            if "=***" not in error_str:
+                error_str = sanitize_error_info(error_str)
+            logger.opt(exception=True).error(f"后端日志：按文件名搜索文档失败: {error_str}")
             return {
                 "success": False,
                 "error": "搜索失败，请稍后重试",

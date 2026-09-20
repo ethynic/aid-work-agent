@@ -8,7 +8,7 @@ OR 条件，供向量检索 / FTS / 标题回查三处复用。
 启用清单，检索到未授权分类。
 """
 
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
 
@@ -112,3 +112,16 @@ def build_tenant_range_conditions(
         params += [from_tenant_id, st]
 
     return " OR ".join(conditions), params
+
+
+def attach_owner_metadata(
+    metadata: Optional[Dict[str, Any]],
+    doc_tenant_id: Optional[str],
+    current_tenant_id: Optional[str],
+) -> Dict[str, Any]:
+    """共享来源标注：文档属于其他租户（共享库）时，给 metadata 附加 owner_tenant_id，
+    供 LLM 感知内容来源；本租户结果不加标注，行为与现状一致。"""
+    md = dict(metadata or {})
+    if doc_tenant_id and doc_tenant_id != current_tenant_id:
+        md["owner_tenant_id"] = doc_tenant_id
+    return md
