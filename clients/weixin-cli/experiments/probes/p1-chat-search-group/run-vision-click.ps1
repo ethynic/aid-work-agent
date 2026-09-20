@@ -10,7 +10,8 @@ $probeDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $probeDir 'probe-lib.ps1')
 
 # Kimi (Moonshot) vision config — kimi-k3 is a reasoning model: answer in content, temp must be 1/omitted
-$apiKey = 'sk-Eqn3ctEHy5mJWCwmEl9IGxERm9TZiHcq6LKII6xbkglxVsTc'
+$apiKey = [string]$env:AID_WEIXIN_KIMI_API_KEY
+if (-not $apiKey) { throw '未设置 AID_WEIXIN_KIMI_API_KEY（与 _common.ps1 一致的环境变量）；密钥不得写入脚本' }
 $apiBase = 'https://api.moonshot.cn/v1/chat/completions'
 $model = 'kimi-k3'
 
