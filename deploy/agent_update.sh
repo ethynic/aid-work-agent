@@ -17,6 +17,7 @@
 #      并加 --no-audit --prefer-offline，消除全新容器重拉包元数据导致的数分钟卡顿
 #   5. 内存上限移入 docker-compose.prod.yml 的 mem_limit（api 8G/background 4G/redis 1G），
 #      第 6 步只保留 docker update --cpus，不再用 docker update 覆盖内存
+#   6. 原子切换后把 dist 属主恢复为 ubuntu（node 容器以 root 编译，产物属主为 root）
 # ==============================================================================
 
 set -e
@@ -138,7 +139,9 @@ rm -rf "$DIST_DIR.old"
 [ -d "$DIST_DIR" ] && mv "$DIST_DIR" "$DIST_DIR.old"
 mv "$DIST_DIR.new" "$DIST_DIR"
 rm -rf "$DIST_DIR.old"
-# dist 由 docker root 创建，脚本以 ubuntu 运行无法直接 chmod，须 sudo
+# dist 由 docker root 容器创建，属主为 root；恢复为 ubuntu，避免残留 root 属主文件
+# 在后续 git 更新/排查时造成 Permission denied 干扰（2026-09-20 事故）
+sudo chown -R ubuntu:ubuntu "$DIST_DIR"
 sudo chmod 777 "$DIST_DIR" # dist 目录需要 777 权限，否则无法ftp上传微信验证文件
 
 # 10. 增量安装 requirements.txt 中新增的依赖（快速更新脚本不重建镜像，

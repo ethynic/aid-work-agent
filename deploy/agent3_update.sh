@@ -14,6 +14,7 @@
 #      deploy.resources，资源值在脚本内维护，为唯一来源）
 #   6. package-lock.json 未变化时跳过 npm install；npm install 挂命名卷缓存
 #      并加 --no-audit --prefer-offline，消除全新容器重拉包元数据导致的数分钟卡顿
+#   7. 切换后把 dist 属主恢复为 ubuntu（node 容器以 root 编译，产物属主为 root）
 # ==============================================================================
 
 set -e
@@ -122,7 +123,11 @@ if [ -n "$FRONTEND_PID" ]; then
     mv "$DIST_DIR.new" "$DIST_DIR"
     rm -rf "$DIST_DIR.old"
 fi
-chmod 777 "$DIST_DIR" # dist 目录需要 777 权限，否则无法ftp上传微信验证文件
+# dist 由 docker root 容器创建，属主为 root；恢复为 ubuntu，避免残留 root 属主文件
+# 在后续 git 更新/排查时造成 Permission denied 干扰（2026-09-20 事故）
+# 用 sudo：dist 为 root 属主时无 sudo 的 chmod 会直接失败
+sudo chown -R ubuntu:ubuntu "$DIST_DIR"
+sudo chmod 777 "$DIST_DIR" # dist 目录需要 777 权限，否则无法ftp上传微信验证文件
 
 # 7. 增量安装 requirements.txt 中新增的依赖（快速更新脚本不重建镜像，
 #    新依赖不会自动安装；下次重建镜像后可移除此步骤）
