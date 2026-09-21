@@ -1814,6 +1814,11 @@ app.include_router(client_routes.router)
 app.include_router(client_activation_mgmt.activation_router)
 app.include_router(client_activation_mgmt.binding_router)
 app.include_router(client_usage_mgmt.router)
+# 租户定制模块路由按需加载（configs/config.yaml tenant_custom_modules 清单控制；
+# 平台入口零租户专名，未配置的部署不 import 定制代码）
+from src.core.optional_modules import load_optional_routers  # noqa: E402
+for _optional_router in load_optional_routers():
+    app.include_router(_optional_router)
 # 视频生成工具（MVP 抽卡式，见 docs/system/content-production/mvp-design.md）
 from src.api import video_gen as video_gen_api  # noqa: E402
 app.include_router(video_gen_api.router)

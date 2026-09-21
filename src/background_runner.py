@@ -199,12 +199,32 @@ async def _run():
         logger.opt(exception=True).error(
             f"background runner: wechat_mp scheduler 启动失败（不影响 runner）: {e}",
         )
+
+    # 6. 租户定制模块调度按需加载（configs/config.yaml tenant_custom_modules 清单
+    # 控制；每个工厂返回带 start()/stop() 的调度器，启动失败不影响 runner）
+    _optional_schedulers = []
+    try:
+        from src.core.optional_modules import load_optional_scheduler_factories
+
+        for _factory in load_optional_scheduler_factories():
+            try:
+                _instance = _factory()
+                await _instance.start()
+                _optional_schedulers.append(_instance)
+            except Exception as e:
+                logger.opt(exception=True).error(
+                    f"background runner: 可选模块调度器启动失败（不影响 runner）: {e}",
+                )
+    except Exception as e:
+        logger.opt(exception=True).error(
+            f"background runner: 可选模块调度加载失败（不影响 runner）: {e}",
+        )
     logger.info("background runner 就绪")
 
     await _stop.wait()
     logger.info("background runner 收到停止信号，开始优雅停机")
 
-    # 停机：poller → wechat_mp scheduler → scheduler → DB 池
+    # 停机：poller → wechat_mp scheduler → hongtao_shop scheduler → scheduler → DB 池
     try:
         if _poller is not None:
             await _poller.stop()
@@ -216,6 +236,14 @@ async def _run():
             await _wmp_scheduler.stop()
     except Exception as e:
         logger.opt(exception=True).error(f"background runner: wechat_mp scheduler stop error: {e}")
+
+    for _optional_scheduler in _optional_schedulers:
+        try:
+            await _optional_scheduler.stop()
+        except Exception as e:
+            logger.opt(exception=True).error(
+                f"background runner: 可选模块调度器 stop error: {e}"
+            )
 
     try:
         scheduled_task_manager.shutdown()

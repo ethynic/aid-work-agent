@@ -59,6 +59,8 @@ VISION_PARSE_SOURCE_TYPE = VL_IMAGE_PARSE_MODEL  # 单一事实源在 bootstrap
 # 失败退避：300s × 2^fail_count，上限 24h（防毒产品反复烧 embedding）
 RETRY_BASE_SECONDS = 300
 RETRY_MAX_SECONDS = 24 * 3600
+STALE_HEARTBEAT_SECONDS = 3600  # stale 回收阈值（单闸决议：需高于单 item 最坏耗时，
+#                              # 含多图 VL 重试；设计 §8 v1.4 修订，见文档）
 
 ERR_FETCH_FAILED = "fetch_failed"
 ERR_CONTENT_EMPTY = "content_empty"
@@ -206,6 +208,22 @@ class HongtaoShopSyncService:
                     run_id = cursor.fetchone()["id"]
                     conn.commit()
                     return {"run_id": run_id, "status": "skipped_no_credit", "reason": reason}
+                # 在队去重：已有 queued/running 直接返回既有 run（防连点堆积整轮同步）
+                cursor.execute(
+                    """
+                    SELECT id FROM bs_content_sync_runs
+                    WHERE tenant_id = %s AND module = %s
+                      AND status IN ('queued', 'running')
+                    ORDER BY id DESC LIMIT 1
+                    """,
+                    (tenant_id, MODULE),
+                )
+                existing = cursor.fetchone()
+                if existing:
+                    conn.commit()
+                    return {
+                        "run_id": existing["id"], "status": "queued", "deduped": True,
+                    }
                 cursor.execute(
                     """
                     INSERT INTO bs_content_sync_runs (tenant_id, module, trigger_type, status)
@@ -215,6 +233,10 @@ class HongtaoShopSyncService:
                 )
                 run_id = cursor.fetchone()["id"]
                 conn.commit()
+                # best-effort 唤醒调度器（失败由 60s 兜底扫描接管）
+                from src.tenant_custom.hongtao_shop.notify import notify_queued_work
+
+                notify_queued_work()
                 return {"run_id": run_id, "status": "queued"}
             except Exception:
                 conn.rollback()
@@ -280,6 +302,137 @@ class HongtaoShopSyncService:
             return {"run_id": accepted["run_id"], "status": "queued"}
         return await self._execute_run(tenant_id, run, owner_token, limit=limit)
 
+    async def claim_and_run(
+        self, tenant_id: str, owner_tokens: Optional[List[str]] = None
+    ) -> Dict[str, Any]:
+        """调度器领取入口：循环领取该租户本模块 queued run 并逐个执行。
+
+        owner_tokens 传入列表时收集本调用产生的 run owner（调度器 stop 时按其
+        主动置 interrupted，防取消在飞 run 后卡 running 阻塞租户）。
+        返回 {"executed": bool, "run_ids": [...], "reason": str}；
+        conflict（已有 running）与空队列都视为无事可做。
+        """
+        run_ids: List[int] = []
+        reason = "empty"
+        while True:
+            owner_token = uuid.uuid4().hex
+            run = self._claim_next_run(tenant_id, owner_token)
+            if run is None:
+                break
+            if run == "conflict":
+                reason = "conflict"
+                break
+            run_ids.append(run["id"])
+            if owner_tokens is not None:
+                owner_tokens.append(owner_token)
+            await self._execute_run(tenant_id, run, owner_token)
+        if run_ids:
+            reason = "executed"
+        return {"executed": bool(run_ids), "run_ids": run_ids, "reason": reason}
+
+    def interrupt_runs_by_owners(self, owner_tokens: List[str]) -> int:
+        """按 owner 主动置 interrupted（调度器 stop 取消在飞 run 后收尾用）。
+
+        部分唯一索引随终态化释放，租户无需等 stale 回收（最长 1h）才可再同步。
+        """
+        owners = [o for o in owner_tokens if o]
+        if not owners:
+            return 0
+        interrupted = 0
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT id FROM bs_content_sync_runs
+                WHERE module = %s AND status = 'running' AND owner_token = ANY(%s)
+                """,
+                (MODULE, owners),
+            )
+            for row in cursor.fetchall():
+                cursor.execute(
+                    """
+                    UPDATE bs_content_sync_runs
+                    SET status = 'interrupted', completed_at = now(),
+                        error_message = COALESCE(error_message, '') || '调度器停机中断'
+                    WHERE id = %s AND status = 'running'
+                    """,
+                    (row["id"],),
+                )
+                if cursor.rowcount:
+                    cursor.execute(
+                        """
+                        UPDATE bs_content_sync_items
+                        SET status = 'interrupted', completed_at = now()
+                        WHERE run_id = %s AND status IN ('pending', 'running')
+                        """,
+                        (row["id"],),
+                    )
+                    interrupted += 1
+            conn.commit()
+        return interrupted
+
+    def _backoff_native_ids(self, tenant_id: str) -> set:
+        """退避未到期的 native_id 集合（失败退避强制消费点：期内不再处理，防毒产品反复烧）。"""
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT native_id FROM bs_content_sync_records
+                WHERE tenant_id = %s AND module = %s
+                  AND next_retry_at IS NOT NULL AND next_retry_at > now()
+                """,
+                (tenant_id, MODULE),
+            )
+            return {r["native_id"] for r in cursor.fetchall()}
+
+    def recover_stale_runs(self) -> Dict[str, Any]:
+        """stale 回收：heartbeat 超 STALE_HEARTBEAT_SECONDS（3600s，单闸决议）的 running run → interrupted。
+
+        owner 守卫：run 终态化只按 id+status='running' 更新（无需 owner——旧 worker
+        若仍活着，其 heartbeat 已 >30min 未推进，后续 _finalize 的 owner 守卫会
+        使其写入失效，不会双写）。items 的 pending/running 置 interrupted。
+        宁晚勿错：仅当 heartbeat 确实超时才回收。
+        """
+        recovered = 0
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT id FROM bs_content_sync_runs
+                WHERE module = %s AND status = 'running'
+                  AND COALESCE(heartbeat_at, started_at, created_at)
+                      < now() - make_interval(secs => %s)
+                """,
+                (MODULE, STALE_HEARTBEAT_SECONDS),
+            )
+            stale_ids = [r["id"] for r in cursor.fetchall()]
+            for run_id in stale_ids:
+                cursor.execute(
+                    """
+                    UPDATE bs_content_sync_runs
+                    SET status = 'interrupted', completed_at = now(),
+                        error_message = COALESCE(error_message, '') || 'heartbeat 超时回收'
+                    WHERE id = %s AND status = 'running'
+                    """,
+                    (run_id,),
+                )
+                if cursor.rowcount:
+                    cursor.execute(
+                        """
+                        UPDATE bs_content_sync_items
+                        SET status = 'interrupted', completed_at = now()
+                        WHERE run_id = %s AND status IN ('pending', 'running')
+                        """,
+                        (run_id,),
+                    )
+                    recovered += 1
+            conn.commit()
+        if recovered:
+            logger.bind(module="hongtao_shop").warning(
+                "hongtao_shop 回收 stale run {} 个", recovered
+            )
+        return {"interrupted": recovered}
+
     async def _execute_run(
         self, tenant_id: str, run: Dict[str, Any], owner_token: str,
         limit: Optional[int] = None,
@@ -318,10 +471,12 @@ class HongtaoShopSyncService:
         forum_media_by_product = self._link_forum_posts(posts_fr.items, products_fr.items)
         # selection 过滤 + status=1 过滤 → 入库集
         selected = self._load_selection(tenant_id)
+        backoff = self._backoff_native_ids(tenant_id)
         eligible = [
             item for item in products_fr.items
             if str(item.get("status")).strip() == "1"
             and (selected is None or str(item.get("id")) in selected)
+            and str(item.get("id")) not in backoff  # 失败退避期内跳过（防毒产品反复烧）
         ]
 
         processed = 0
@@ -647,10 +802,22 @@ class HongtaoShopSyncService:
 
     # ==================== 入库事务 ====================
 
+    def _run_is_active(self, run_id: int) -> bool:
+        """run 仍在 running（stale 回收后 zombie worker 的 item 写入守卫）。"""
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT 1 FROM bs_content_sync_runs WHERE id = %s AND status = 'running'",
+                (run_id,),
+            )
+            return cursor.fetchone() is not None
+
     def _open_item(
         self, tenant_id: str, run_id: int, native_id: str, action: str,
         vl_images: int = 0, vl_billed: int = 0,
     ) -> Dict[str, Any]:
+        if not self._run_is_active(run_id):
+            raise RuntimeError(f"run {run_id} 已非 running（可能被 stale 回收），拒绝写入 item")
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -677,6 +844,11 @@ class HongtaoShopSyncService:
         error_message: Optional[str] = None, billing_status: Optional[str] = None,
         vl_images: int = 0, vl_billed: int = 0,
     ) -> None:
+        if not self._run_is_active(run_id):
+            logger.bind(module="hongtao_shop").warning(
+                "run {} 已非 running，跳过 item 终态写入（防僵尸覆写回收结果）", run_id
+            )
+            return
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -850,6 +1022,9 @@ class HongtaoShopSyncService:
                     UPDATE bs_content_sync_items
                     SET status = 'success', action = %s, completed_at = now()
                     WHERE id = %s AND tenant_id = %s
+                      AND EXISTS (SELECT 1 FROM bs_content_sync_runs r
+                                  WHERE r.id = bs_content_sync_items.run_id
+                                    AND r.status = 'running')
                     """,
                     (action, item["id"], tenant_id),
                 )

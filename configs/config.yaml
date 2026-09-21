@@ -14,6 +14,11 @@ app:
 chat:
   default_upload_accept: "image/*,video/*,.pdf,.doc,.docx,.xls,.xlsx,.txt,.png,.jpg,.jpeg,.gif,.ppt,.pptx"
 
+# 租户定制模块按需加载清单（src/core/optional_modules.py 消费）：
+# 列出的 src/tenant_custom/<name>/ 模块被加载（api.router 挂载 + scheduler 启动）；
+# 移除条目即关闭该模块（平台入口零租户专名，无需改代码）。
+tenant_custom_modules: ["hongtao_shop"]
+
 # 智能体全局配置
 agent:
   reply_style: human-like  # 默认回复风格 ID，对应 src/prompts/styles/{style_id}.md

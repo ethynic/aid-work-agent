@@ -13,8 +13,8 @@
 | P1.3 | vision.py（VL + 图级缓存 + 落账）+ renderer.py（正文/metadata/hash/单 chunk） | ✅ 完成（2026-09-21） | VL 按张 token 计费照 wechat_mp WP13 现行模式（种子行保留不用）|
 | P1.4 | service.py（run 生命周期 + 目录刷新 + 三态 + 对账三路径 + 计费 + 余额预检）+ knowledge 回写分支 | ✅ 完成（2026-09-21） | 一轮独立测试+CR 修复 4 项 P1（run 兜底/VL 单例/观测账本/conftest 清理）；二轮独立审查（用户侧，2026-09-21）修复 detail 图去重 P1（重复解析双倍计费）+ 计费口径/注释路径两处文档 + 5 项 P2（UTC+8 时区/缓存写 fail-open/下载限流/last_error 成功才清/失败 item 口径），56 用例全绿 |
 | P1.5 | CLI 重构（雏形改薄壳）+ 雏形残留清点清理 + agent2 试跑 | 🔧 进行中 | 代码完成（--init-source/--dry-run/--limit）；agent2 真机试跑待环境（含雏形 k_products 残留清点，清理 SQL 已写入 CLI 头注） |
-| P2.1 | scheduler.py + background_runner 注册 + stale 回收 | 📋 待开发 | — |
-| P2.2 | api.py 租户后台 + main.py 注册 | 📋 待开发 | — |
+| P2.1 | scheduler.py + background_runner 注册 + stale 回收 | ✅ 完成（2026-09-21） | 单副本锁/唤醒+60s 兜底/30min tick（新鲜度计入手动 run）/5min 回收；独立测试+CR 后修 2 项 P1（stale 回收单闸决议+item 守卫、trigger 在队去重）；挂载点改通用按需加载 |
+| P2.2 | api.py 租户后台 + main.py 注册 | ✅ 完成（2026-09-21） | source CRUD/trigger/runs/products（本地缓存分页）；挂载点改通用按需加载（configs tenant_custom_modules 清单）；70 用例全绿 |
 | P2.3 | 前端（源设置卡 + 产品挑选列表） | 📋 待开发 | — |
 | ~~P2.4~~ | ~~agent 工具两个~~ | ⛔ 已取消（2026-09-21 用户决议） | 租户专有功能不注册平台工具：触发走后台；发图由 knowledge_base_search 天然覆盖（返回含 documents.metadata 且 _no_truncate） |
 | P3 | agent2 验收（栏目授权/外链抽样）→ 正式部署 | 📋 待开发 | — |

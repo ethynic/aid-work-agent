@@ -5,7 +5,7 @@
 | 代码性质 | 放置位置 | 说明 |
 |---|---|---|
 | 平台通用模块/服务 | `src/services/<name>/`（既有目录，如 billing、recap、content_sync） | 多租户复用的能力；模块会增多，不再平铺到 `src/` 根目录 |
-| 租户定制插件 | `src/tenant_custom/<name>/`（如 hongtao_shop） | 单租户专有代码；零私有表、不注册平台工具、不被平台层 import，只调用通用函数/通用表 |
+| 租户定制插件 | `src/tenant_custom/<name>/`（如 hongtao_shop） | 单租户专有代码；零私有表、不注册平台工具；经 `src/core/optional_modules.py` **按需加载**（configs/config.yaml `tenant_custom_modules` 清单控制），平台入口（main.py/background_runner）零租户专名 |
 | 既有功能模块 | `src/` 根目录存量（wechat_mp、session_tasks 等） | 原地维护不强制迁移；新模块不再进根目录 |
 
 ## 请求流程

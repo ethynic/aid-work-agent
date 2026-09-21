@@ -163,7 +163,7 @@ fetch（双接口全量分页；商品过滤 status=1，价格字段即弃；fol
 代码不写死租户，"谁在定时跑"由配置表行决定：
 
 - **`bs_content_sync_sources`**（通用表，module='hongtao_shop'）：`UNIQUE(tenant_id, module)`、`enabled`、`sync_interval_hours`、`selection_mode('all'|'ids')`、`selected_ids JSONB`、`last_sync_at/last_error`。当前仅 `tenant_d18c257ff434` 一行；正式上线在正式库插同款行，零代码变更。
-- **调度**：`HongtaoIngestScheduler` 注册进 background_runner（照 wechat_mp：Redis 单副本驱动锁、30min tick 扫描到期源、Semaphore(4) 跨租户、租户×源 Redis 锁 + runs 活跃唯一索引双闸、5min stale 回收 heartbeat 1800s）。
+- **调度**：`HongtaoIngestScheduler` 经**通用按需加载**注册进 background_runner（configs/config.yaml `tenant_custom_modules` 清单控制，平台入口零租户专名——2026-09-21 用户决议；照 wechat_mp：Redis 单副本驱动锁、30min tick 扫描到期源、Semaphore(4) 跨租户、5min stale 回收）。**串行闸门为单闸决议**（v1.4 修订）：runs 活跃部分唯一索引单闸 + stale 回收仅凭 heartbeat（阈值 3600s，高于单 item 最坏耗时）+ item 终态写入带 run-running 守卫（防僵尸 worker 覆写回收结果；残余风险上限约一个 item 的 VL+embedding 费用，接受）。API 路由同款按需加载（main.py 通用循环）。
 - **账本**：通用 `bs_content_sync_runs/items`（module 维度）记每次运行的拉取/VL 张数/计费/失败，观测查表。
 - **余额预检**：trigger 时余额 ≤0 → run 直接终态 `skipped_no_credit` 不拉取。
 - **触发统一**：定时 tick、后台"立即运行"、agent 工具同一 `trigger_sync()` 建 queued run。

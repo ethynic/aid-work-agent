@@ -520,6 +520,58 @@ async def test_update_path_rebuilds_chunks(harness):
     assert item["billing_status"] != "pending"
 
 
+async def test_backoff_blocks_processing(harness):
+    """失败退避强制消费：next_retry_at 未来 → 本轮跳过；过期 → 恢复处理。"""
+    from src.db.database import get_db_connection
+
+    harness["create_source"]()
+    harness["scripts"].append(FetchScript(products=[_product(1), _product(2)]))
+    await harness["service"].run_now(harness["tenant_id"])
+    calls_after_first = harness["embedding"].calls
+
+    # 产品 2 置退避（next_retry_at 1 小时后）
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE bs_content_sync_records SET next_retry_at = now() + interval '1 hour', "
+            "processing_status = 'sync_failed' WHERE tenant_id = %s AND native_id = '2'",
+            (harness["tenant_id"],),
+        )
+        conn.commit()
+
+    harness["scripts"].append(FetchScript(products=[_product(1), _product(2)]))
+    result = await harness["service"].run_now(harness["tenant_id"])
+    assert result["counts"]["skip"] == 1  # 只有产品 1 被处理，产品 2 退避跳过
+    assert harness["embedding"].calls == calls_after_first
+
+    # 退避过期 → 恢复处理（hash 未变走 skip 零计费）
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE bs_content_sync_records SET next_retry_at = now() - interval '1 second' "
+            "WHERE tenant_id = %s AND native_id = '2'", (harness["tenant_id"],),
+        )
+        conn.commit()
+    harness["scripts"].append(FetchScript(products=[_product(1), _product(2)]))
+    result = await harness["service"].run_now(harness["tenant_id"])
+    assert result["counts"]["skip"] == 2
+
+
+def test_trigger_dedupes_queued_run(harness):
+    """在队去重：已有 queued/running 时 trigger 返回既有 run（防连点堆积整轮同步）。"""
+    harness["create_source"]()
+    first = harness["service"].trigger_sync(harness["tenant_id"])
+    assert first["status"] == "queued" and not first.get("deduped")
+    second = harness["service"].trigger_sync(harness["tenant_id"])
+    assert second["status"] == "queued" and second.get("deduped") is True
+    assert second["run_id"] == first["run_id"]
+    runs = harness["query"](
+        "SELECT COUNT(*) AS cnt FROM bs_content_sync_runs WHERE tenant_id = %s",
+        (harness["tenant_id"],),
+    )
+    assert runs[0]["cnt"] == 1
+
+
 async def test_claim_conflict_with_existing_running(harness):
     """同租户已有 running → 领取返回 conflict（唯一索引闸门）。"""
     from src.db.database import get_db_connection
