@@ -755,6 +755,37 @@ class AnalysisAgent:
             )
 
             if not results:
+                # 移动兜底（2026-09-20 设计 §4.4）：语义检索受 source_type 过滤影响，
+                # 对被移动出 data-analysis-metadata 栏目的 [数据表] 失效；0 命中且
+                # 放宽后列表非空时，将列表融入返回结果，引导 LLM 直接 load_table
+                fallback_tables = []
+                if self.tenant_id:
+                    try:
+                        fallback_tables = await asyncio.to_thread(self._query_data_tables_list, "")
+                    except Exception as fallback_err:
+                        logger.warning(f"search_data_tables 移动兜底查询失败: {fallback_err}")
+                if fallback_tables:
+                    formatted = [
+                        {
+                            "table_id": t["table_id"],
+                            "table_name": t["table_name"],
+                            "description": t.get("description", ""),
+                            "score": 0.0,
+                            "columns_count": t.get("columns_count", 0),
+                            "loaded": t.get("loaded", False),
+                        }
+                        for t in fallback_tables
+                    ]
+                    return {
+                        "success": True,
+                        "results": formatted,
+                        "count": len(formatted),
+                        "hint": (
+                            "语义检索未命中，以上为本租户全部可统计数据表（含被移动到其他栏目的数据表），"
+                            "请从中选择并使用 load_table(table_id) 加载"
+                        ),
+                    }
+
                 hint = "未找到匹配的数据表"
                 if self._search_count >= 3:
                     hint += "。建议使用 list_data_tables 查看全量数据表列表"
@@ -934,10 +965,16 @@ class AnalysisAgent:
             return result
 
     def _query_data_tables_list(self, keyword: str = "") -> List[Dict]:
-        """查询所有数据表列表（本租户 + 已启用共享来源租户）。"""
+        """查询所有数据表列表（本租户 + 已启用共享来源租户 + 本租户内被移动的表）。
+
+        移动兜底（2026-09-20 设计 §4.4）：用户在知识库界面移动 [数据表] 文档会覆盖
+        source_type，按标题前缀兜底纳入本租户被移动的表；共享侧不放宽（精确对约束）。
+        """
         from src.db.database import get_db_connection
 
         tenant_sql, tenant_params = self._build_tenant_scope()
+        moved_sql = " OR (tenant_id = %s AND title ILIKE '[数据表] %')" if self.tenant_id else ""
+        moved_params = [self.tenant_id] if self.tenant_id else []
         with get_db_connection() as conn:
             cursor = conn.cursor()
             if keyword:
@@ -945,23 +982,21 @@ class AnalysisAgent:
                     f"""
                     SELECT id, title, summary, metadata
                     FROM documents
-                    WHERE source_type = 'data-analysis-metadata'
+                    WHERE (source_type = 'data-analysis-metadata'{tenant_sql}{moved_sql})
                       AND (title ILIKE %s OR summary ILIKE %s)
-                      {tenant_sql}
                     ORDER BY created_at DESC
                     """,
-                    (f"%{keyword}%", f"%{keyword}%", *tenant_params),
+                    (*tenant_params, *moved_params, f"%{keyword}%", f"%{keyword}%"),
                 )
             else:
                 cursor.execute(
                     f"""
                     SELECT id, title, summary, metadata
                     FROM documents
-                    WHERE source_type = 'data-analysis-metadata'
-                      {tenant_sql}
+                    WHERE (source_type = 'data-analysis-metadata'{tenant_sql}{moved_sql})
                     ORDER BY created_at DESC
                     """,
-                    tenant_params,
+                    (*tenant_params, *moved_params),
                 )
 
             results = []
@@ -985,20 +1020,27 @@ class AnalysisAgent:
             return results
 
     def _fetch_single_table_metadata(self, table_id: str) -> Optional[Dict]:
-        """查询单个表的完整 metadata，构造 DataAnalyzer 所需格式（本租户 + 已启用共享来源租户）。"""
+        """查询单个表的完整 metadata，构造 DataAnalyzer 所需格式（本租户 + 已启用共享来源租户 + 本租户内被移动的表）。
+
+        移动兜底（2026-09-20 设计 §4.4）：被移动出 data-analysis-metadata 的 [数据表]
+        按标题前缀兜底加载；经移动分支命中的文档必须带完整 table_name/columns metadata，
+        缺失则视为普通同名文档排除。
+        """
         from src.db.database import get_db_connection
 
         tenant_sql, tenant_params = self._build_tenant_scope()
+        moved_sql = " OR (tenant_id = %s AND title ILIKE '[数据表] %')" if self.tenant_id else ""
+        moved_params = [self.tenant_id] if self.tenant_id else []
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 f"""
-                SELECT id, title, summary, metadata
+                SELECT id, title, summary, metadata, source_type
                 FROM documents
-                WHERE id = %s AND source_type = 'data-analysis-metadata'
-                  {tenant_sql}
+                WHERE id = %s
+                  AND (source_type = 'data-analysis-metadata'{tenant_sql}{moved_sql})
                 """,
-                (int(table_id), *tenant_params),
+                (int(table_id), *tenant_params, *moved_params),
             )
             row = cursor.fetchone()
             if not row:
@@ -1011,6 +1053,12 @@ class AnalysisAgent:
                     meta = json.loads(meta)
                 except (json.JSONDecodeError, TypeError):
                     meta = {}
+
+            # 移动分支命中（source_type 已被移动覆盖）：普通同名文档靠 metadata 判定排除
+            if r.get("source_type") != "data-analysis-metadata" and not (
+                meta.get("table_name") and meta.get("columns")
+            ):
+                return None
 
             result = {
                 "table_id": str(r["id"]),

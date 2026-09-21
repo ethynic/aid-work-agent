@@ -3,12 +3,15 @@
 
 验证 build_tenant_range_conditions：本租户 + 已启用共享精确对（§6.1 设计约束）。
 验证 load_shared_ranges：数字员工级启用 ∩ 租户级授权的交集计算。
+验证 load_authorized_source_types / resolve_category_scope：本租户栏目授权（2026-09-20）。
 """
 from unittest.mock import patch
 
 from src.knowledge.retriever.tenant_range import (
     build_tenant_range_conditions,
+    load_authorized_source_types,
     load_shared_ranges,
+    resolve_category_scope,
 )
 
 
@@ -73,6 +76,23 @@ def test_range_custom_alias():
         "(documents.tenant_id = %s AND documents.source_type = %s)"
     )
     assert params == ["B", "A1", "industry"]
+
+
+def test_range_source_type_list_uses_any():
+    """source_type 为授权收窄 list 时生成 source_type = ANY(%s)（栏目授权收窄场景）"""
+    sql, params = build_tenant_range_conditions("B", ["cat_a", "cat_b"], None)
+    assert sql == "(d.tenant_id = %s AND d.source_type = ANY(%s))"
+    assert params == ["B", ["cat_a", "cat_b"]]
+
+
+def test_range_source_type_list_with_shared_ranges():
+    """收窄 list 与共享精确对叠加（本租户收窄 + 共享精确对同时生效）"""
+    sql, params = build_tenant_range_conditions("B", ["cat_a"], [("A1", "hotel_resource")])
+    assert sql == (
+        "(d.tenant_id = %s AND d.source_type = ANY(%s)) OR "
+        "(d.tenant_id = %s AND d.source_type = %s)"
+    )
+    assert params == ["B", ["cat_a"], "A1", "hotel_resource"]
 
 
 # ---------------------------------------------------------------
@@ -146,3 +166,116 @@ class TestLoadSharedRanges:
         """数据库异常时降级为空共享范围，不阻断检索"""
         with patch("src.db.database.get_db_connection", side_effect=Exception("conn fail")):
             assert load_shared_ranges("B", "travel", None) == []
+
+
+# ---------------------------------------------------------------
+# load_authorized_source_types：本租户自有授权栏目（owner_tenant_id 为空的项）
+# ---------------------------------------------------------------
+
+class TestLoadAuthorizedSourceTypes:
+    """授权语义：空 = 允许全部（None）；非空 = 仅允许列表内栏目"""
+
+    def test_empty_tenant_or_subagent_returns_none(self):
+        """主智能体 / 无租户上下文不受限"""
+        assert load_authorized_source_types(None, None) is None
+        assert load_authorized_source_types("B", None) is None
+        assert load_authorized_source_types(None, "data-analysis") is None
+
+    def test_no_row_returns_none(self):
+        """无配置行 = 未配置 = 允许全部"""
+        with patch("src.db.database.get_db_connection", return_value=_FakeConn(None)):
+            assert load_authorized_source_types("B", "data-analysis") is None
+
+    def test_only_shared_items_returns_none(self):
+        """仅共享项（owner_tenant_id 非空）= 自有项为空 = 未配置"""
+        row = {"sources": [
+            {"owner_tenant_id": "A1", "source_type": "hotel_resource"},
+        ]}
+        with patch("src.db.database.get_db_connection", return_value=_FakeConn(row)):
+            assert load_authorized_source_types("B", "data-analysis") is None
+
+    def test_owned_items_returned_excluding_shared(self):
+        """混合项时只返回自有栏目；共享项不参与判定"""
+        row = {"sources": [
+            {"owner_tenant_id": None, "source_type": "data-analysis"},
+            {"owner_tenant_id": "A1", "source_type": "hotel_resource"},
+            {"source_type": "file"},  # owner_tenant_id 缺失同样视为自有项
+        ]}
+        with patch("src.db.database.get_db_connection", return_value=_FakeConn(row)):
+            assert load_authorized_source_types("B", "data-analysis") == [
+                "data-analysis", "file",
+            ]
+
+    def test_blank_source_type_skipped_and_empty_owned_means_none(self):
+        """空 source_type 的自有项被剔除；剔除后为空 = 未配置"""
+        row = {"sources": [
+            {"owner_tenant_id": None, "source_type": "  "},
+            {"owner_tenant_id": None},
+        ]}
+        with patch("src.db.database.get_db_connection", return_value=_FakeConn(row)):
+            assert load_authorized_source_types("B", "data-analysis") is None
+
+    def test_non_dict_items_ignored(self):
+        """sources 中非 dict 项跳过"""
+        row = {"sources": ["garbage", {"owner_tenant_id": None, "source_type": "cat_a"}]}
+        with patch("src.db.database.get_db_connection", return_value=_FakeConn(row)):
+            assert load_authorized_source_types("B", "data-analysis") == ["cat_a"]
+
+    def test_db_error_returns_none(self):
+        """数据库异常时降级为未配置（允许全部），不阻断检索"""
+        with patch("src.db.database.get_db_connection", side_effect=Exception("conn fail")):
+            assert load_authorized_source_types("B", "data-analysis") is None
+
+
+# ---------------------------------------------------------------
+# resolve_category_scope：栏目授权收口（收窄 / 拒绝）
+# ---------------------------------------------------------------
+
+class TestResolveCategoryScope:
+    """knowledge_base_search / knowledge_file_search 共用收口规则（§4.2）"""
+
+    def test_not_configured_passthrough(self):
+        """未配置精细授权：行为与现状一致，原样透传"""
+        with patch(
+            "src.knowledge.retriever.tenant_range.load_authorized_source_types",
+            return_value=None,
+        ):
+            assert resolve_category_scope("B", "da", "cat_x") == ("cat_x", None)
+            assert resolve_category_scope("B", "da", None) == (None, None)
+
+    def test_requested_authorized_passthrough(self):
+        """传参在授权集合内：正常透传"""
+        with patch(
+            "src.knowledge.retriever.tenant_range.load_authorized_source_types",
+            return_value=["cat_a", "cat_b"],
+        ):
+            assert resolve_category_scope("B", "da", "cat_a") == ("cat_a", None)
+
+    def test_requested_unauthorized_rejected_with_doc_counts(self):
+        """传参未授权：拒绝并返回各授权栏目文档数，帮助 LLM 自纠"""
+        with patch(
+            "src.knowledge.retriever.tenant_range.load_authorized_source_types",
+            return_value=["cat_a", "cat_b"],
+        ), patch(
+            "src.knowledge.retriever.tenant_range.count_active_documents_by_source_types",
+            return_value={"cat_a": 3, "cat_b": 0},
+        ):
+            effective, rejection = resolve_category_scope("B", "da", "cat_x")
+        assert effective is None
+        assert rejection is not None
+        assert rejection["authorized_categories"] == [
+            {"source_type": "cat_a", "doc_count": 3},
+            {"source_type": "cat_b", "doc_count": 0},
+        ]
+        assert "cat_x" in rejection["note"]
+        assert "cat_a（3 篇文档）" in rejection["note"]
+
+    def test_no_request_narrows_to_authorized_set(self):
+        """未传 source_type：收窄为授权栏目集合（list）"""
+        with patch(
+            "src.knowledge.retriever.tenant_range.load_authorized_source_types",
+            return_value=["cat_a", "cat_b"],
+        ):
+            effective, rejection = resolve_category_scope("B", "da", None)
+        assert effective == ["cat_a", "cat_b"]
+        assert rejection is None

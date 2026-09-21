@@ -38,7 +38,16 @@
 - 聚合该租户**所有**子智能体的共享范围：`_resolve_travel_shared_tenant_ids(tenant_id, source_type)`（枚举 `subagent_knowledge_sources` 全部 `subagent_name` → `load_shared_ranges` → 聚合去重）
 - 底层 retriever 提供可选 `shared_tenant_ids` 覆盖参数（不传时行为不变），参考 `src/skills/travel-quote/scripts/hotel_retriever.py` / `attraction_retriever.py`
 
-## 4. 检查清单（新增/修改检索入口必查）
+## 4. 本租户栏目授权（2026-09-20）
+
+- 权威读取函数：`load_authorized_source_types(tenant_id, subagent_id)`（`tenant_range.py`），读 `subagent_knowledge_sources` 中本租户自有栏目项（`owner_tenant_id` 为空）。**返回 None = 未配置（允许全部栏目，默认）；返回列表 = 仅允许列表内栏目**。空自有项（无行 / 仅共享项 / 勾选被清空）均视为未配置。
+- 收口统一走 `resolve_category_scope(tenant_id, subagent_id, requested_source_type)`：传参未授权 → 拒绝并返回各授权栏目文档数（帮助 LLM 自纠）；未传参 → 收窄为授权集合（list），`build_tenant_range_conditions` 对 list 生成 `source_type = ANY(%s)`。
+- 仅子智能体 + 租户模式生效；主智能体 / 无租户上下文不受限（返回 None）。
+- 共享侧不受自有授权影响，恒为 `load_shared_ranges` 精确对。**注意**：source_type 为收窄 list 时调 `load_shared_ranges` 必须传 None（其 source_type 参数仅支持 str 等值过滤；精确对本身已约束共享侧）。
+- 已收口入口：`knowledge_base_search` / `knowledge_file_search`。豁免：`analysis_agent` 数据表发现/加载（`[数据表]` 标题前缀移动兜底，见 [栏目授权设计](../../docs/system/knowledge-base/subagent-kb-category-authorization-design.md) §4.4）。
+- schema_saver 去重不限定 source_type（`title = '[数据表] ' || table_name` + table_name/source_info 判重），表文档被移动后不重复注册。
+
+## 5. 检查清单（新增/修改检索入口必查）
 
 - [ ] 检索 SQL / retriever 是否只按本租户过滤？（必须支持共享）
 - [ ] 候选 SQL 是否带文档可见性过滤 `build_active_document_condition()`（`tenant_range.py`，status='active' 且未过期，排序/LIMIT 前）？核心检索（vector_db/hybrid_retriever）已内置；新增直接 SQL 检索入口必须复用
@@ -47,9 +56,10 @@
 - [ ] 主智能体（`subagent_id` 为空）是否退化为本租户？
 - [ ] 共享侧是否按 `source_type` 精确过滤？
 - [ ] 检索 SQL 是否带 `source_type` 硬过滤（模式 B 缺它会把来源租户全部分类搜进来）？
-- [ ] 新增单测覆盖共享路径（subagent 命中共享 / 无 subagent 退化本租户）
+- [ ] 本租户栏目授权是否经 `resolve_category_scope` 收口（传未授权栏目拒绝、未传参收窄为授权集合）？
+- [ ] 新增单测覆盖共享路径（subagent 命中共享 / 无 subagent 退化本租户）与栏目授权路径（拒绝 / 收窄 / 未配置透传）
 
-## 5. 已实现入口（参考）
+## 6. 已实现入口（参考）
 
 | 入口 | 模式 |
 |------|------|

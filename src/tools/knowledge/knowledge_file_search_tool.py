@@ -13,7 +13,7 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 from src.tools.base import BaseTool
-from src.knowledge.retriever.tenant_range import load_shared_ranges
+from src.knowledge.retriever.tenant_range import load_shared_ranges, resolve_category_scope
 
 
 class KnowledgeFileSearchInput(BaseModel):
@@ -80,11 +80,26 @@ class KnowledgeFileSearchTool(BaseTool):
         tenant_id = context.tenant_id if context else None
         subagent_id = context.subagent_id if context else None
 
+        # 栏目授权收口（收窄 / 拒绝）；未配置精细授权时行为与现状完全一致
+        source_type, rejection = resolve_category_scope(tenant_id, subagent_id, source_type)
+        if rejection:
+            return {
+                "success": False,
+                "error": "本次检索已拒绝：请求的栏目未授权",
+                "results": [],
+                "count": 0,
+                **rejection,
+            }
+
         # 共享范围：仅子智能体 + 租户模式生效（主智能体 subagent_id 为空，恒为空）。
         # 从 DB 权威表读取，不信任 LLM 传入参数。
+        # source_type 为授权收窄 list 时共享侧不过滤栏目（精确对本身已约束）。
         shared_ranges = []
         if tenant_id and subagent_id:
-            shared_ranges = load_shared_ranges(tenant_id, subagent_id, source_type)
+            shared_ranges = load_shared_ranges(
+                tenant_id, subagent_id,
+                source_type if isinstance(source_type, str) else None,
+            )
 
         logger.info(
             f"后端日志：知识库文件搜索 tenant_id={tenant_id}, subagent_id={subagent_id}, "

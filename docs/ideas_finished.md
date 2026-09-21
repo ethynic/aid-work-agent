@@ -115,6 +115,7 @@
 | 20260518-2228 | Word 客户模板格式参考生成 | ✅ 已完成开发（三智能体流程）。 | [设计](tools/word/word_tool_design.md) | — |
 | 20260518-2229 | Word 模板占位符填充增强（场景一） | ✅ 已完成开发（三智能体流程）。 | [设计](tools/word/word_tool_design.md) | — |
 
+| 20260920-2100 | 子智能体知识库栏目授权硬隔离 + 数据表移动兜底 | ✅ 已完成开发（2026-09-21，待部署） | 2026-09-20 双案例驱动：①数据表 `[数据表]` 文档被知识库移动后 source_type 被覆盖，数据分析智能体 search/list/load 三处按 `data-analysis-metadata` 过滤搜到 0 张表（tenant_c148f4efb4dc 生产案例）；②数字员工授权栏目仅 system prompt 软引导，LLM 不传 source_type 即读本租户全部分类（tenant_e9b2fab93a2f 测试反馈）。方案：授权语义确认为「自有栏目为空=允许全部（默认），勾选≥1=仅允许勾选栏目」；tenant_range 新增 load_authorized_source_types，knowledge_base_search / knowledge_file_search 收口（未传收窄为授权集合、传未授权拒绝返回可用清单）；analysis_agent 表发现/加载按 `[数据表]` 前缀 + metadata 判定放宽（豁免栏目授权，共享侧维持精确对）；schema_saver 去重放宽；system prompt 与授权弹框文案同步。零 schema 变更。 | [设计](system/knowledge-base/subagent-kb-category-authorization-design.md) | — |
 ## 渠道集成
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |

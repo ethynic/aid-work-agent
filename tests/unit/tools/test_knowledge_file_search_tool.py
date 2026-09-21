@@ -327,3 +327,79 @@ def test_service_limit_clamped():
             )
             params = mock_cursor.execute.call_args[0][1]
             assert params[-1] == expected
+
+
+# ---------------------------------------------------------------
+# 栏目授权收口（resolve_category_scope 接入，2026-09-20）
+# ---------------------------------------------------------------
+
+def _auth_db_mock(sources):
+    """构造返回给定 sources 配置行的 DB 连接 mock（fetchall 返回空 = 各栏目 0 文档）"""
+    mock_cursor = MagicMock()
+    mock_cursor.fetchone.return_value = {"sources": sources, "share_owners": []}
+    mock_cursor.fetchall.return_value = []
+    mock_conn = MagicMock()
+    mock_conn.cursor.return_value = mock_cursor
+    mock_cm = MagicMock()
+    mock_cm.__enter__ = MagicMock(return_value=mock_conn)
+    mock_cm.__exit__ = MagicMock(return_value=None)
+    return mock_cm
+
+
+async def test_file_search_unauthorized_source_type_rejected():
+    """栏目授权非空 + 传未授权栏目：拒绝并返回授权栏目清单（含文档数）"""
+    from src.tools.context import ToolExecutionContext, tool_execution_scope
+
+    tool = KnowledgeFileSearchTool()
+    mock_cm = _auth_db_mock([{"source_type": "数据分析", "owner_tenant_id": None}])
+    ctx = ToolExecutionContext(tenant_id="tenant_test1", subagent_id="data-analysis")
+    with tool_execution_scope(ctx), \
+            patch("src.db.database.get_db_connection", return_value=mock_cm), \
+            patch("src.knowledge.service.knowledge_service") as svc_mock:
+        result = await tool.execute(file_name="x", source_type="hotel_resource")
+
+    assert result["success"] is False
+    assert result["authorized_categories"] == [
+        {"source_type": "数据分析", "doc_count": 0},
+    ]
+    assert "hotel_resource" in result["note"]
+    assert not svc_mock.search_documents_by_title.called
+
+
+async def test_file_search_no_source_type_narrows_to_authorized():
+    """栏目授权非空 + 未传 source_type：收窄为授权栏目集合（list）传给 service"""
+    from src.tools.context import ToolExecutionContext, tool_execution_scope
+
+    tool = KnowledgeFileSearchTool()
+    mock_cm = _auth_db_mock([{"source_type": "数据分析", "owner_tenant_id": None}])
+    ctx = ToolExecutionContext(tenant_id="tenant_test1", subagent_id="data-analysis")
+    with tool_execution_scope(ctx), \
+            patch("src.db.database.get_db_connection", return_value=mock_cm), \
+            patch("src.knowledge.service.knowledge_service") as svc_mock:
+        svc_mock.search_documents_by_title.return_value = {
+            "success": True, "results": [], "count": 0,
+        }
+        await tool.execute(file_name="x")
+
+    call_kwargs = svc_mock.search_documents_by_title.call_args.kwargs
+    assert call_kwargs["source_type"] == ["数据分析"]
+    # 收窄时共享侧不过滤栏目：load_shared_ranges 传 None
+    assert call_kwargs["shared_ranges"] == []
+
+
+async def test_file_search_authorized_source_type_passthrough():
+    """栏目授权非空 + 传授权内栏目：正常透传"""
+    from src.tools.context import ToolExecutionContext, tool_execution_scope
+
+    tool = KnowledgeFileSearchTool()
+    mock_cm = _auth_db_mock([{"source_type": "数据分析", "owner_tenant_id": None}])
+    ctx = ToolExecutionContext(tenant_id="tenant_test1", subagent_id="data-analysis")
+    with tool_execution_scope(ctx), \
+            patch("src.db.database.get_db_connection", return_value=mock_cm), \
+            patch("src.knowledge.service.knowledge_service") as svc_mock:
+        svc_mock.search_documents_by_title.return_value = {
+            "success": True, "results": [], "count": 0,
+        }
+        await tool.execute(file_name="x", source_type="数据分析")
+
+    assert svc_mock.search_documents_by_title.call_args.kwargs["source_type"] == "数据分析"

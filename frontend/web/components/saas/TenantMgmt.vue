@@ -477,6 +477,7 @@
 
         <div class="text-xs text-muted mb-3">
           选择 {{ knowledgeAgentName }} 可以检索的知识库，关联后运行时会自动注入检索指引。
+          不勾选任何本租户栏目时，该数字员工可读取本租户全部知识库栏目；勾选后仅可读取勾选栏目（跨租户共享的栏目不受此限制）。
         </div>
 
         <div v-if="loadingKnowledge" class="text-center py-6 text-muted text-sm">加载中...</div>

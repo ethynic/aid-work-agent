@@ -14,6 +14,7 @@ from src.knowledge.retriever.tenant_range import (
     attach_owner_metadata,
     build_tenant_range_conditions,
     load_shared_ranges,
+    resolve_category_scope,
 )
 from src.db.database import get_db_connection
 from loguru import logger
@@ -112,10 +113,26 @@ class KnowledgeBaseTool(BaseTool):
         tenant_id = context.tenant_id if context else None
         subagent_id = context.subagent_id if context else None
 
-        # 构造共享检索范围：仅子智能体 + 租户模式生效（主智能体 subagent_id 为空，恒为空）
+        # 栏目授权收口（收窄 / 拒绝）；未配置精细授权时行为与现状完全一致
+        source_type, rejection = resolve_category_scope(tenant_id, subagent_id, source_type)
+        if rejection:
+            return {
+                "success": False,
+                "error": "本次检索已拒绝：请求的栏目未授权",
+                "results": [],
+                "count": 0,
+                **rejection,
+            }
+
+        # 构造共享检索范围：仅子智能体 + 租户模式生效（主智能体 subagent_id 为空，恒为空）。
+        # source_type 为授权收窄 list 时共享侧不过滤栏目（精确对本身已约束；
+        # load_shared_ranges 的 source_type 参数仅支持 str 等值过滤）。
         shared_ranges = []
         if tenant_id and subagent_id:
-            shared_ranges = self._load_shared_ranges(tenant_id, subagent_id, source_type)
+            shared_ranges = self._load_shared_ranges(
+                tenant_id, subagent_id,
+                source_type if isinstance(source_type, str) else None,
+            )
 
         logger.info(f"后端日志：知识库检索 tenant_id={tenant_id}, subagent_id={subagent_id}, query={query}, source_type={source_type}, shared_ranges={shared_ranges}")
 

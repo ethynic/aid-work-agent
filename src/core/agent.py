@@ -793,21 +793,38 @@ class Agent:
                     # 文件系统子智能体：直接用 system_prompt
                     subagent_constraint = self.subagent_config.system_prompt
 
-                # 注入租户级知识库约束
+                # 注入租户级知识库约束（区分栏目授权语义，2026-09-20 设计 §4.5）
                 ks = self._load_knowledge_sources()
                 if ks:
+                    # 自有项判定与 tenant_range.load_authorized_source_types 保持一致
+                    # （剔除空 source_type），避免软引导与硬约束不一致
+                    owned = [
+                        s for s in ks
+                        if not s.get('owner_tenant_id') and (s.get('source_type') or '').strip()
+                    ]
+                    shared = [s for s in ks if s.get('owner_tenant_id')]
                     lines = ["", "## 可用知识库", ""]
-                    lines.append("你可以通过 knowledge_base_search 工具检索以下知识库：")
-                    for src in ks:
+                    if owned:
+                        lines.append("你只能检索以下知识库栏目（其余栏目未授权，检索会被拒绝）：")
+                    else:
+                        lines.append("你可以检索本租户全部知识库栏目（未配置栏目授权）。")
+                    for src in owned:
                         st = src.get('source_type', '')
                         dn = src.get('display_name', st)
-                        owner_company = src.get('owner_company_name')
-                        if owner_company:
-                            # 共享来源：标注来源公司，LLM 感知内容归属
-                            lines.append(f"- {st}（{owner_company} · {dn}）")
-                        else:
-                            lines.append(f"- {st}（{dn}）")
-                    lines.append("调用时必须传入正确的 source_type 参数。")
+                        lines.append(f"- {st}（{dn}）")
+                    if shared:
+                        lines.append("以下为跨租户共享的知识库栏目（不受栏目授权限制）：")
+                        for src in shared:
+                            st = src.get('source_type', '')
+                            dn = src.get('display_name', st)
+                            owner_company = src.get('owner_company_name')
+                            if owner_company:
+                                # 共享来源：标注来源公司，LLM 感知内容归属
+                                lines.append(f"- {st}（{owner_company} · {dn}）")
+                            else:
+                                lines.append(f"- {st}（{dn}）")
+                    if owned:
+                        lines.append("调用时必须传入正确的 source_type 参数。")
                     subagent_constraint += "\n".join(lines)
 
             # 加载租户定制 extra.md

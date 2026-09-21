@@ -877,3 +877,134 @@ class TestSharedTenantScope:
         assert result["analysis_meta"]["iterations"] == 1
         assert len(agent._steps) == 0
         assert len(result["artifacts"]) == 0
+
+
+# ============================================================
+# Tests: 数据表移动兜底（2026-09-20 设计 §4.4）
+# ============================================================
+
+
+def _moved_table_db_mock(list_rows=None, single_row=None):
+    """构造 DB mock：fetchall 返回列表查询行，fetchone 返回单表行"""
+    mock_cursor = MagicMock()
+    mock_cursor.fetchall.return_value = list_rows or []
+    mock_cursor.fetchone.return_value = single_row
+    mock_conn = MagicMock()
+    mock_conn.cursor.return_value = mock_cursor
+    mock_cm = MagicMock()
+    mock_cm.__enter__ = MagicMock(return_value=mock_conn)
+    mock_cm.__exit__ = MagicMock(return_value=None)
+    return mock_cm
+
+
+def _moved_table_agent():
+    return AnalysisAgent(
+        llm_gateway=MagicMock(),
+        analyzer=_loaded_analyzer(),
+        analysis_id="test_moved",
+        tenant_id="tenant_t1",
+        subagent_id="data-analysis",
+    )
+
+
+class TestMovedTableFallback:
+    """被移动出 data-analysis-metadata 的 [数据表] 文档仍可发现/加载"""
+
+    def test_list_includes_moved_table_via_title_prefix(self):
+        """列表查询：OR 兜底分支按标题前缀纳入本租户被移动的表"""
+        agent = _moved_table_agent()
+        rows = [{
+            "id": 2341, "title": "[数据表] 渠道销售", "summary": "渠道维度",
+            "metadata": json.dumps({"table_name": "渠道销售", "columns": [{"name": "amount"}]}),
+        }]
+        mock_cm = _moved_table_db_mock(list_rows=rows)
+        with patch("src.db.database.get_db_connection", return_value=mock_cm):
+            tables = agent._query_data_tables_list("")
+
+        assert [t["table_id"] for t in tables] == ["2341"]
+        sql = " ".join(mock_cm.__enter__().cursor().execute.call_args[0][0].split())
+        # 兜底分支 SQL 存在，且共享侧未放宽（无共享时不产生额外租户）
+        assert "title ILIKE '[数据表] %'" in sql
+        params = mock_cm.__enter__().cursor().execute.call_args[0][1]
+        assert list(params) == [["tenant_t1"], "tenant_t1"]
+
+    def test_list_no_tenant_omits_moved_branch(self):
+        """无租户上下文（platform_admin 全局视图）：不拼兜底分支"""
+        agent = AnalysisAgent(
+            llm_gateway=MagicMock(), analyzer=_loaded_analyzer(),
+            analysis_id="t", tenant_id=None, subagent_id=None,
+        )
+        mock_cm = _moved_table_db_mock(list_rows=[])
+        with patch("src.db.database.get_db_connection", return_value=mock_cm):
+            agent._query_data_tables_list("")
+        sql = " ".join(mock_cm.__enter__().cursor().execute.call_args[0][0].split())
+        assert "title ILIKE '[数据表] %'" not in sql
+
+    def test_load_moved_table_requires_table_metadata(self):
+        """加载：移动分支命中的文档必须带 table_name/columns，普通同名文档排除"""
+        agent = _moved_table_agent()
+
+        # 真数据表（metadata 完整）→ 正常返回
+        real_row = {
+            "id": 2341, "title": "[数据表] 渠道销售", "summary": "渠道维度",
+            "metadata": json.dumps({"table_name": "渠道销售", "columns": [{"name": "amount"}]}),
+            "source_type": "k_cf06ec9b497b",
+        }
+        mock_cm = _moved_table_db_mock(single_row=real_row)
+        mock_cm.__enter__().cursor().fetchone.side_effect = [
+            {"sources": [], "share_owners": []}, real_row,
+        ]
+        with patch("src.db.database.get_db_connection", return_value=mock_cm):
+            meta = agent._fetch_single_table_metadata("2341")
+        assert meta is not None
+        assert meta["table_name"] == "渠道销售"
+        assert meta["columns"] == [{"name": "amount"}]
+
+        # 普通同名文档（缺 table_name/columns）→ 排除
+        plain_row = {
+            "id": 2342, "title": "[数据表] 冒名文档", "summary": "",
+            "metadata": json.dumps({"note": "普通文档"}), "source_type": "file",
+        }
+        mock_cm = _moved_table_db_mock(single_row=plain_row)
+        mock_cm.__enter__().cursor().fetchone.side_effect = [
+            {"sources": [], "share_owners": []}, plain_row,
+        ]
+        with patch("src.db.database.get_db_connection", return_value=mock_cm):
+            assert agent._fetch_single_table_metadata("2342") is None
+
+        # 未被移动（source_type 仍是 data-analysis-metadata）→ 不做 metadata 排除
+        registered_row = dict(real_row, source_type="data-analysis-metadata", metadata="{}")
+        mock_cm = _moved_table_db_mock(single_row=registered_row)
+        mock_cm.__enter__().cursor().fetchone.side_effect = [
+            {"sources": [], "share_owners": []}, registered_row,
+        ]
+        with patch("src.db.database.get_db_connection", return_value=mock_cm):
+            meta = agent._fetch_single_table_metadata("2341")
+        assert meta is not None
+
+    async def test_search_zero_hit_falls_back_to_widened_list(self):
+        """语义检索 0 命中且放宽列表非空：返回列表并附引导 hint"""
+        agent = _moved_table_agent()
+        agent._retriever = MagicMock()
+        agent._retriever.retrieve = AsyncMock(return_value=[])
+        fallback = [{
+            "table_id": "2341", "table_name": "渠道销售", "description": "渠道维度",
+            "columns_count": 1, "loaded": False,
+        }]
+        with patch.object(agent, "_query_data_tables_list", return_value=fallback):
+            result = await agent._handle_search_data_tables("上个月各渠道销售总额")
+
+        assert result["success"] is True
+        assert result["count"] == 1
+        assert result["results"][0]["table_id"] == "2341"
+        assert "load_table" in result["hint"]
+
+    async def test_search_zero_hit_with_empty_list_keeps_original_hint(self):
+        """语义检索 0 命中且放宽列表为空：维持原提示"""
+        agent = _moved_table_agent()
+        agent._retriever = MagicMock()
+        agent._retriever.retrieve = AsyncMock(return_value=[])
+        with patch.object(agent, "_query_data_tables_list", return_value=[]):
+            result = await agent._handle_search_data_tables("不存在的表")
+        assert result["count"] == 0
+        assert "未找到匹配的数据表" in result["hint"]

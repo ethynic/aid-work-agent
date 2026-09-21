@@ -260,3 +260,67 @@ async def test_title_lookup_wraps_range_sql_in_parens():
     assert result["success"] is True
     sql = " ".join(mock_cursor.execute.call_args[0][0].split())
     assert "AND ((documents.tenant_id = %s))" in sql
+
+
+# ---------------------------------------------------------------
+# 栏目授权收口（resolve_category_scope 接入，2026-09-20）
+# ---------------------------------------------------------------
+
+def _auth_db_mock(sources):
+    """构造返回给定 sources 配置行的 DB 连接 mock（fetchall 返回空 = 各栏目 0 文档）"""
+    mock_cursor = MagicMock()
+    mock_cursor.fetchone.return_value = {"sources": sources, "share_owners": []}
+    mock_cursor.fetchall.return_value = []
+    mock_conn = MagicMock()
+    mock_conn.cursor.return_value = mock_cursor
+    mock_cm = MagicMock()
+    mock_cm.__enter__ = MagicMock(return_value=mock_conn)
+    mock_cm.__exit__ = MagicMock(return_value=None)
+    return mock_cm
+
+
+async def test_kb_search_unauthorized_source_type_rejected():
+    """栏目授权非空 + 传未授权栏目：拒绝并返回授权栏目清单（含文档数）"""
+    from src.tools.context import ToolExecutionContext, tool_execution_scope
+
+    tool = KnowledgeBaseTool()
+    mock_retriever = MagicMock()
+    mock_retriever.retrieve = AsyncMock()
+    tool._retriever = mock_retriever
+
+    mock_cm = _auth_db_mock([{"source_type": "数据分析", "owner_tenant_id": None}])
+    ctx = ToolExecutionContext(tenant_id="tenant_test1", subagent_id="data-analysis")
+    with tool_execution_scope(ctx), \
+            patch("src.tools.knowledge.knowledge_base_tool.get_db_connection", return_value=mock_cm), \
+            patch("src.db.database.get_db_connection", return_value=mock_cm):
+        result = await tool.execute(query="x", source_type="hotel_resource")
+
+    assert result["success"] is False
+    assert result["authorized_categories"] == [
+        {"source_type": "数据分析", "doc_count": 0},
+    ]
+    assert "hotel_resource" in result["note"]
+    assert not mock_retriever.retrieve.called
+
+
+async def test_kb_search_no_source_type_narrows_to_authorized():
+    """栏目授权非空 + 未传 source_type：收窄为授权栏目集合（list）传给 retriever"""
+    from src.tools.context import ToolExecutionContext, tool_execution_scope
+
+    tool = KnowledgeBaseTool()
+    mock_retriever = MagicMock()
+    mock_retriever.retrieve = AsyncMock(return_value=[])
+    tool._retriever = mock_retriever
+
+    mock_cm = _auth_db_mock([{"source_type": "数据分析", "owner_tenant_id": None}])
+    ctx = ToolExecutionContext(tenant_id="tenant_test1", subagent_id="data-analysis")
+    with tool_execution_scope(ctx), \
+            patch("src.tools.knowledge.knowledge_base_tool.get_db_connection", return_value=mock_cm), \
+            patch("src.db.database.get_db_connection", return_value=mock_cm):
+        result = await tool.execute(query="x")
+
+    assert result["success"] is True
+    call_kwargs = mock_retriever.retrieve.call_args.kwargs
+    assert call_kwargs["source_type"] == ["数据分析"]
+    # 收窄时共享侧不过滤栏目：load_shared_ranges 传 None
+    assert call_kwargs["shared_ranges"] == []
