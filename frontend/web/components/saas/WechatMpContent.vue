@@ -9,7 +9,7 @@
     >
     </AppHeader>
 
-    <div class="page-content p-6 space-y-6">
+    <div class="page-content p-6 space-y-6 overflow-y-auto">
       <!-- 未配置公众号回调时的空态引导（复用渠道配置页完成的配置能力，此处不重复实现表单） -->
       <div v-if="!hasWechatMpChannel" class="bg-info-50 border border-info-200 rounded-lg p-4 text-sm text-info-800">
         <p class="font-medium mb-1">尚未配置公众号</p>
@@ -112,6 +112,14 @@
         <p v-if="!runsLoading && runs.length === 0" class="text-center text-sm text-muted py-6">
           暂无运行记录，粘贴文章链接或等待群发回调后可见
         </p>
+        <BasePagination
+          v-if="!runsLoading && runsTotal > runsPageSize"
+          class="mt-3"
+          :total="runsTotal"
+          v-model:current-page="runsPage"
+          :page-size="runsPageSize"
+          @update:current-page="loadRuns"
+        />
 
         <!-- 展开的 items 明细 -->
         <div v-if="expandedRunId" class="mt-3 rounded-lg border border-default bg-canvas p-3">
@@ -149,7 +157,7 @@
         <div class="page-toolbar flex-wrap mb-3">
           <div class="flex items-center gap-2 flex-wrap">
             <h2 class="text-base font-medium text-default">文章列表</h2>
-            <BaseSelect v-model="articleStatusFilter" size="sm" class="w-32" @change="loadArticles()">
+            <BaseSelect v-model="articleStatusFilter" size="sm" class="w-32" @change="onArticleFilterChange()">
               <option value="">全部状态</option>
               <option value="active">active</option>
               <option value="deleted">deleted</option>
@@ -233,11 +241,14 @@
         <p v-if="!articlesLoading && articles.length === 0" class="text-center text-sm text-muted py-6">
           暂无文章，先在上方粘贴文章链接导入
         </p>
-        <div v-if="articles.length < articlesTotal" class="flex justify-center mt-3">
-          <BaseButton intent="secondary" size="sm" :disabled="articlesLoading" @click="loadMoreArticles">
-            加载更多（{{ articles.length }}/{{ articlesTotal }}）
-          </BaseButton>
-        </div>
+        <BasePagination
+          v-if="!articlesLoading && articlesTotal > articlesPageSize"
+          class="mt-3"
+          :total="articlesTotal"
+          v-model:current-page="articlesPage"
+          :page-size="articlesPageSize"
+          @update:current-page="onArticlesPageChange"
+        />
       </div>
     </div>
   </div>
@@ -252,6 +263,7 @@ import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseBadge from '@/components/ui/BaseBadge.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
 import BaseTable, { type TableColumn } from '@/components/ui/BaseTable.vue'
+import BasePagination from '@/components/ui/BasePagination.vue'
 import { listChannels } from '@/api/saasTenant'
 import {
   importUrls,
@@ -372,7 +384,11 @@ function toggleSelect(row: WechatMpArticle) {
 
 function onFilterChange() {
   selectedIds.value = []
-  loadArticles()
+  loadArticles(1)
+}
+
+function onArticleFilterChange() {
+  loadArticles(1)
 }
 
 async function handleEnqueueSelected() {
@@ -511,6 +527,8 @@ async function handleImport() {
 const runsLoading = ref(false)
 const runs = ref<WechatMpRun[]>([])
 const runsTotal = ref(0)
+const runsPage = ref(1)
+const runsPageSize = 20
 
 const expandedRunId = ref<number | null>(null)
 const itemsLoading = ref(false)
@@ -526,10 +544,11 @@ const runColumns: TableColumn[] = [
   { key: 'expand', label: '', width: '110px' }
 ]
 
-async function loadRuns() {
+async function loadRuns(page = runsPage.value) {
   runsLoading.value = true
   try {
-    const res = await getRuns({ limit: 20 })
+    const res = await getRuns({ limit: runsPageSize, offset: (page - 1) * runsPageSize })
+    runsPage.value = page
     runs.value = res.runs || []
     runsTotal.value = res.total
     if (expandedRunId.value && !runs.value.some(r => r.id === expandedRunId.value)) {
@@ -569,6 +588,8 @@ async function toggleRunDetail(row: Record<string, any>) {
 const articlesLoading = ref(false)
 const articles = ref<WechatMpArticle[]>([])
 const articlesTotal = ref(0)
+const articlesPage = ref(1)
+const articlesPageSize = 20
 const articleStatusFilter = ref('')
 const articleProcessingFilter = ref('')
 
@@ -583,20 +604,17 @@ const articleColumns: TableColumn[] = [
   { key: 'ops', label: '操作', width: '170px' }
 ]
 
-async function loadArticles(offset = 0) {
+async function loadArticles(page = articlesPage.value) {
   articlesLoading.value = true
   try {
     const res = await getArticles({
       status: articleStatusFilter.value || undefined,
       processing_status: articleProcessingFilter.value || undefined,
-      limit: 20,
-      offset
+      limit: articlesPageSize,
+      offset: (page - 1) * articlesPageSize
     })
-    if (offset > 0) {
-      articles.value = articles.value.concat(res.articles || [])
-    } else {
-      articles.value = res.articles || []
-    }
+    articlesPage.value = page
+    articles.value = res.articles || []
     articlesTotal.value = res.total
   } catch (e) {
     toast.warning(e instanceof Error ? e.message : '获取文章列表失败')
@@ -605,8 +623,9 @@ async function loadArticles(offset = 0) {
   }
 }
 
-async function loadMoreArticles() {
-  await loadArticles(articles.value.length)
+function onArticlesPageChange(page: number) {
+  selectedIds.value = []
+  loadArticles(page)
 }
 
 async function handleRetry(row: WechatMpArticle) {
