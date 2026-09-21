@@ -973,8 +973,9 @@ class AnalysisAgent:
         from src.db.database import get_db_connection
 
         tenant_sql, tenant_params = self._build_tenant_scope()
-        moved_sql = " OR (tenant_id = %s AND title ILIKE '[数据表] %')" if self.tenant_id else ""
-        moved_params = [self.tenant_id] if self.tenant_id else []
+        # ILIKE 模式必须参数化传值：带参执行时查询串里的字面 % 会被 psycopg2 当占位符解析
+        moved_sql = " OR (tenant_id = %s AND title ILIKE %s)" if self.tenant_id else ""
+        moved_params = [self.tenant_id, "[数据表] %"] if self.tenant_id else []
         with get_db_connection() as conn:
             cursor = conn.cursor()
             if keyword:
@@ -1029,8 +1030,9 @@ class AnalysisAgent:
         from src.db.database import get_db_connection
 
         tenant_sql, tenant_params = self._build_tenant_scope()
-        moved_sql = " OR (tenant_id = %s AND title ILIKE '[数据表] %')" if self.tenant_id else ""
-        moved_params = [self.tenant_id] if self.tenant_id else []
+        # ILIKE 模式必须参数化传值：带参执行时查询串里的字面 % 会被 psycopg2 当占位符解析
+        moved_sql = " OR (tenant_id = %s AND title ILIKE %s)" if self.tenant_id else ""
+        moved_params = [self.tenant_id, "[数据表] %"] if self.tenant_id else []
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(

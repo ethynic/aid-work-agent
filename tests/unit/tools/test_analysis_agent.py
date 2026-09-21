@@ -923,10 +923,11 @@ class TestMovedTableFallback:
 
         assert [t["table_id"] for t in tables] == ["2341"]
         sql = " ".join(mock_cm.__enter__().cursor().execute.call_args[0][0].split())
-        # 兜底分支 SQL 存在，且共享侧未放宽（无共享时不产生额外租户）
-        assert "title ILIKE '[数据表] %'" in sql
+        # 兜底分支 SQL 存在（ILIKE 模式参数化传值，避免字面 % 被 psycopg2 当占位符），
+        # 且共享侧未放宽（无共享时不产生额外租户）
+        assert "title ILIKE %s" in sql
         params = mock_cm.__enter__().cursor().execute.call_args[0][1]
-        assert list(params) == [["tenant_t1"], "tenant_t1"]
+        assert list(params) == [["tenant_t1"], "tenant_t1", "[数据表] %"]
 
     def test_list_no_tenant_omits_moved_branch(self):
         """无租户上下文（platform_admin 全局视图）：不拼兜底分支"""
@@ -938,7 +939,7 @@ class TestMovedTableFallback:
         with patch("src.db.database.get_db_connection", return_value=mock_cm):
             agent._query_data_tables_list("")
         sql = " ".join(mock_cm.__enter__().cursor().execute.call_args[0][0].split())
-        assert "title ILIKE '[数据表] %'" not in sql
+        assert "title ILIKE" not in sql
 
     def test_load_moved_table_requires_table_metadata(self):
         """加载：移动分支命中的文档必须带 table_name/columns，普通同名文档排除"""
