@@ -57,6 +57,77 @@ async def test_kb_search_returns_doc_id_and_file_path():
     assert "file_path" in sql_called
 
 
+async def test_kb_search_returns_chunk_position_and_doc_metadata():
+    """结果应附带片段位置（chunk_index 1-based / total_chunks）与文档级元数据，
+    供 LLM 判断片段是否被切断并获取原始信息"""
+    from datetime import datetime
+
+    tool = _make_tool()
+    mock_retriever = MagicMock()
+    mock_retriever.retrieve = AsyncMock(return_value=[
+        {"doc_id": 1, "chunk_index": 2, "text": "片段", "score": 0.9,
+         "metadata": {"sheet_name": "Sheet1"}},
+    ])
+    tool._retriever = mock_retriever
+
+    mock_cm, mock_cursor = _mock_db([
+        {
+            "id": 1,
+            "title": "数据表.xlsx",
+            "file_path": "/x.xlsx",
+            "source_type": "数据分析",
+            "file_type": "xlsx",
+            "total_chunks": 12,
+            "metadata": '{"sheet_count": 3, "sheets": ["A", "B", "C"], "layout_report": [{"sheet": "A"}]}',
+            "summary": "三张工作表的汇总数据",
+            "created_at": datetime(2026, 9, 21, 10, 0, 0),
+        },
+    ])
+
+    with patch("src.tools.knowledge.knowledge_base_tool.get_db_connection", return_value=mock_cm):
+        result = await tool.execute(query="数据表", top_k=5)
+
+    item = result["results"][0]
+    # chunk_index 由 0-based 转为 1-based
+    assert item["chunk_index"] == 3
+    assert item["total_chunks"] == 12
+    assert item["source_type"] == "数据分析"
+    assert item["file_type"] == "xlsx"
+    assert item["created_at"] == "2026-09-21T10:00:00"
+    assert item["summary"] == "三张工作表的汇总数据"
+    # 文档级 metadata 已解析为 dict，内部诊断字段 layout_report 被剔除
+    assert item["doc_metadata"] == {"sheet_count": 3, "sheets": ["A", "B", "C"]}
+    # SQL 必须查询了元数据相关列
+    sql_called = mock_cursor.execute.call_args[0][0]
+    for col in ("total_chunks", "summary", "created_at"):
+        assert col in sql_called
+
+
+async def test_kb_search_doc_metadata_invalid_json_returns_empty():
+    """documents.metadata 为非法 JSON 时 doc_metadata 回退为空 dict，不影响主流程"""
+    tool = _make_tool()
+    mock_retriever = MagicMock()
+    mock_retriever.retrieve = AsyncMock(return_value=[
+        {"doc_id": 1, "chunk_index": 0, "text": "x", "score": 0.9, "metadata": {}},
+    ])
+    tool._retriever = mock_retriever
+
+    mock_cm, _ = _mock_db([
+        {"id": 1, "title": "t.txt", "file_path": None, "metadata": "not-json{",
+         "total_chunks": None, "summary": None, "created_at": None,
+         "source_type": None, "file_type": None},
+    ])
+
+    with patch("src.tools.knowledge.knowledge_base_tool.get_db_connection", return_value=mock_cm):
+        result = await tool.execute(query="test")
+
+    item = result["results"][0]
+    assert item["doc_metadata"] == {}
+    assert item["total_chunks"] is None
+    # 缺失 chunk_index 时兜底为第 1 块
+    assert item["chunk_index"] == 1
+
+
 async def test_kb_search_file_path_fallback_empty_when_none():
     """file_path 为 None 时回退为空字符串（row.get(...) or "" 兜底）"""
     tool = _make_tool()

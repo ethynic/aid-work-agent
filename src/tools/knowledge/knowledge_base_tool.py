@@ -2,6 +2,7 @@
 知识库检索工具 - 提供给 Agent 调用
 """
 
+import json
 from typing import Dict, Any, List, Optional
 
 from pydantic import BaseModel, Field
@@ -18,6 +19,19 @@ from src.knowledge.retriever.tenant_range import (
 )
 from src.db.database import get_db_connection
 from loguru import logger
+
+
+def _parse_doc_metadata(raw: Any) -> Dict[str, Any]:
+    """解析 documents.metadata（TEXT 列存 JSON），剔除内部诊断字段"""
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw) if isinstance(raw, str) else dict(raw)
+    except (TypeError, ValueError):
+        return {}
+    # layout_report 是 Excel 解析的内部布局诊断信息，对 LLM 无用且体积大
+    data.pop("layout_report", None)
+    return data
 
 
 class KnowledgeBaseSearchInput(BaseModel):
@@ -158,7 +172,9 @@ class KnowledgeBaseTool(BaseTool):
                         )
                         params = list(doc_ids) + range_params
                         cursor.execute(f"""
-                            SELECT id, title, file_path, tenant_id FROM documents
+                            SELECT id, title, file_path, tenant_id, source_type,
+                                   file_type, total_chunks, metadata, summary, created_at
+                            FROM documents
                             WHERE id IN ({placeholders}) AND ({range_sql})
                         """, params)
                     else:
@@ -167,7 +183,9 @@ class KnowledgeBaseTool(BaseTool):
                         if source_type:
                             params.append(source_type)
                         cursor.execute(f"""
-                            SELECT id, title, file_path, tenant_id FROM documents
+                            SELECT id, title, file_path, tenant_id, source_type,
+                                   file_type, total_chunks, metadata, summary, created_at
+                            FROM documents
                             WHERE id IN ({placeholders})
                               AND tenant_id IS NULL{source_type_condition}
                         """, params)
@@ -176,6 +194,15 @@ class KnowledgeBaseTool(BaseTool):
                     doc_titles = {row["id"]: row["title"] for row in rows}
                     doc_file_paths = {row["id"]: row.get("file_path") or "" for row in rows}
                     doc_tenant_ids = {row["id"]: row.get("tenant_id") for row in rows}
+                    doc_source_types = {row["id"]: row.get("source_type") for row in rows}
+                    doc_file_types = {row["id"]: row.get("file_type") for row in rows}
+                    doc_total_chunks = {row["id"]: row.get("total_chunks") for row in rows}
+                    doc_metas = {row["id"]: _parse_doc_metadata(row.get("metadata")) for row in rows}
+                    doc_summaries = {row["id"]: row.get("summary") for row in rows}
+                    doc_created_ats = {
+                        row["id"]: row["created_at"].isoformat() if row.get("created_at") else None
+                        for row in rows
+                    }
                 finally:
                     conn_cm.__exit__(None, None, None)
 
@@ -187,6 +214,15 @@ class KnowledgeBaseTool(BaseTool):
                         "doc_title": doc_titles.get(r["doc_id"], "未知文档"),
                         "file_path": doc_file_paths.get(r["doc_id"], ""),
                         "score": round(r["score"], 4),
+                        # 片段在文档中的位置（1-based），total_chunks 为文档总块数；
+                        # 片段只是原文 512 字左右的切块，LLM 可据此判断是否需要读全文
+                        "chunk_index": (r.get("chunk_index") or 0) + 1,
+                        "total_chunks": doc_total_chunks.get(r["doc_id"]),
+                        "source_type": doc_source_types.get(r["doc_id"]),
+                        "file_type": doc_file_types.get(r["doc_id"]),
+                        "created_at": doc_created_ats.get(r["doc_id"]),
+                        "summary": doc_summaries.get(r["doc_id"]),
+                        "doc_metadata": doc_metas.get(r["doc_id"]),
                         "metadata": attach_owner_metadata(
                             r["metadata"], doc_tenant_ids.get(r["doc_id"]), tenant_id,
                         )

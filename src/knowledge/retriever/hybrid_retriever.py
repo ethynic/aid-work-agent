@@ -448,7 +448,7 @@ class HybridRetriever:
         try:
             cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
             cursor.execute(f"""
-                SELECT id, doc_id, text, tokens, metadata
+                SELECT id, doc_id, chunk_index, text, tokens, metadata
                 FROM chunks
                 WHERE id IN ({placeholders})
             """, chunk_ids)
@@ -467,6 +467,7 @@ class HybridRetriever:
                     results.append({
                         "chunk_id": row["id"],
                         "doc_id": row["doc_id"],
+                        "chunk_index": row["chunk_index"],
                         "text": row["text"],
                         "tokens": row["tokens"],
                         "metadata": metadata,
