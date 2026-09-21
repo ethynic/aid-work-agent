@@ -1022,3 +1022,11 @@
         UNIQUE(tenant_id, image_url),
         CHECK (status IN ('ok', 'unrecognized', 'failed'))
     );
+- datetime: "2026-09-21 21:40:00"
+  remark: "为已有数据分析表文档（source_type=data-analysis-metadata）的租户补齐「数据分析-数据源」知识库栏目，使其可被数字员工授权弹框勾选"
+  statements: |
+    INSERT INTO knowledge_categories (tenant_id, source_type, display_name, uuid)
+    SELECT DISTINCT d.tenant_id, 'data-analysis-metadata', '数据分析-数据源', 'kc_' || substr(md5('kc_data_source_' || d.tenant_id), 1, 12)
+    FROM documents d
+    WHERE d.source_type = 'data-analysis-metadata' AND d.tenant_id IS NOT NULL
+    ON CONFLICT (tenant_id, source_type) DO NOTHING;

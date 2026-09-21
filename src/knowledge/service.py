@@ -437,9 +437,26 @@ class KnowledgeBaseService:
 
     def delete_category(self, category_id: int, tenant_id: str) -> Dict[str, Any]:
         """删除分类（仅删记录，不删文档；含子分类的分类禁止删除）"""
+        from src.services.data_analysis.constants import (
+            DATA_ANALYSIS_METADATA_SOURCE_TYPE, DATA_SOURCE_CATEGORY_DISPLAY_NAME,
+        )
         try:
             with self._get_db_connection() as conn:
                 cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT source_type FROM knowledge_categories WHERE id = %s AND tenant_id = %s",
+                    (category_id, tenant_id)
+                )
+                row = cursor.fetchone()
+                if not row:
+                    return {"success": False, "error": "分类不存在"}
+                # 系统栏目禁删：删掉后数据分析表文档失去归属栏目，授权弹框无法勾选
+                if row["source_type"] == DATA_ANALYSIS_METADATA_SOURCE_TYPE:
+                    return {
+                        "success": False,
+                        "error": f"「{DATA_SOURCE_CATEGORY_DISPLAY_NAME}」为系统栏目（数据分析表文档专用），禁止删除",
+                        "status": 400,
+                    }
                 cursor.execute(
                     "SELECT 1 FROM knowledge_categories WHERE parent_id = %s AND tenant_id = %s LIMIT 1",
                     (category_id, tenant_id)

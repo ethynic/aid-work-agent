@@ -4,6 +4,7 @@
 删除含子分类分类被拒、sub_category 上传校验、按 sub_category 列表过滤
 """
 
+import asyncio
 import pytest
 import uuid
 
@@ -242,3 +243,109 @@ class TestKnowledgeCategoryTree:
                 sub_categories=["spec"]
             )
             assert len(r_gc) == 1
+
+
+class TestDataAnalysisSystemCategory:
+    """「数据分析-数据源」系统栏目：schema 保存自动建栏目 + 禁删保护"""
+
+    @pytest.fixture
+    def tenant_id(self):
+        tid = f"kb_da_{uuid.uuid4().hex[:8]}"
+        yield tid
+        with get_db_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "DELETE FROM chunks WHERE doc_id IN (SELECT id FROM documents WHERE tenant_id = %s)",
+                (tid,),
+            )
+            cur.execute("DELETE FROM documents WHERE tenant_id = %s", (tid,))
+            cur.execute("DELETE FROM knowledge_categories WHERE tenant_id = %s", (tid,))
+            conn.commit()
+
+    def test_save_schema_creates_category(self, tenant_id):
+        """save_schema_to_knowledge 自动创建「数据分析-数据源」栏目，文档可被授权弹框勾选"""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from src.services.data_analysis.schema_saver import save_schema_to_knowledge
+        from src.services.data_analysis.constants import DATA_SOURCE_CATEGORY_DISPLAY_NAME
+
+        client = MagicMock()
+        client.embed_batch = AsyncMock(return_value=[[0.0] * 8])
+        client.last_usage_tokens = 0
+        client.model = "text-embedding-v3"
+        with patch(
+            "src.services.data_analysis.schema_saver.TextEmbeddingV3Client",
+            return_value=client,
+        ), patch("src.services.data_analysis.schema_saver.get_vector_db") as vec_mock:
+            vec_client = MagicMock()
+            vec_client.insert = AsyncMock()
+            vec_mock.return_value = vec_client
+            result = asyncio.run(save_schema_to_knowledge(
+                tenant_id=tenant_id,
+                table_name="订单明细",
+                description="订单维度",
+                columns=[{"name": "amount", "data_type": "decimal"}],
+                source_info="orders.xlsx",
+            ))
+
+        assert result["success"] is True
+
+        with get_db_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT source_type, display_name FROM knowledge_categories WHERE tenant_id = %s",
+                (tenant_id,),
+            )
+            rows = cur.fetchall()
+        assert len(rows) == 1
+        assert rows[0]["source_type"] == "data-analysis-metadata"
+        assert rows[0]["display_name"] == DATA_SOURCE_CATEGORY_DISPLAY_NAME
+
+    def test_save_schema_category_idempotent(self, tenant_id):
+        """重复保存不同表，栏目不重复创建"""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from src.services.data_analysis.schema_saver import save_schema_to_knowledge
+
+        client = MagicMock()
+        client.embed_batch = AsyncMock(return_value=[[0.0] * 8])
+        client.last_usage_tokens = 0
+        client.model = "text-embedding-v3"
+        with patch(
+            "src.services.data_analysis.schema_saver.TextEmbeddingV3Client",
+            return_value=client,
+        ), patch("src.services.data_analysis.schema_saver.get_vector_db") as vec_mock:
+            vec_client = MagicMock()
+            vec_client.insert = AsyncMock()
+            vec_mock.return_value = vec_client
+            for i in range(2):
+                asyncio.run(save_schema_to_knowledge(
+                    tenant_id=tenant_id,
+                    table_name=f"表{i}",
+                    description="",
+                    columns=[{"name": "a"}],
+                    source_info=f"f{i}.xlsx",
+                ))
+
+        with get_db_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT COUNT(*) AS cnt FROM knowledge_categories WHERE tenant_id = %s",
+                (tenant_id,),
+            )
+            assert cur.fetchone()["cnt"] == 1
+
+    def test_delete_system_category_rejected(self, tenant_id):
+        """系统栏目禁删，普通栏目可删"""
+        created = knowledge_service.create_category(
+            tenant_id, source_type="data-analysis-metadata", display_name="数据分析-数据源",
+        )
+        assert created["success"] is True
+
+        result = knowledge_service.delete_category(created["id"], tenant_id)
+        assert result["success"] is False
+        assert "系统栏目" in result["error"]
+
+        # 普通栏目不受影响
+        normal = knowledge_service.create_category(tenant_id, source_type="normal_cat")
+        assert knowledge_service.delete_category(normal["id"], tenant_id)["success"] is True

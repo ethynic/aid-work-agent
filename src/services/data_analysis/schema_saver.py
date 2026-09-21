@@ -5,6 +5,7 @@
 """
 
 import json
+import uuid
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
@@ -13,6 +14,33 @@ from src.db.database import get_db_connection
 from src.core.text_sanitizer import sanitize_text, sanitize_value
 from src.knowledge.embedding.embedding_client import TextEmbeddingV3Client
 from src.knowledge.vector_db.vector_db import get_vector_db
+from src.services.data_analysis.constants import (
+    DATA_ANALYSIS_METADATA_SOURCE_TYPE,
+    DATA_SOURCE_CATEGORY_DISPLAY_NAME,
+)
+
+
+def _ensure_data_source_category(cursor, tenant_id: Optional[str]) -> None:
+    """幂等创建「数据分析-数据源」知识库栏目。
+
+    表文档 source_type='data-analysis-metadata' 必须有对应 knowledge_categories 行，
+    才能出现在分类树与数字员工授权弹框中（否则只在"全部"虚拟节点可见，无法授权）。
+    """
+    if not tenant_id:
+        return
+    cursor.execute(
+        """
+        INSERT INTO knowledge_categories (tenant_id, source_type, display_name, uuid)
+        VALUES (%s, %s, %s, %s)
+        ON CONFLICT (tenant_id, source_type) DO NOTHING
+        """,
+        (
+            tenant_id,
+            DATA_ANALYSIS_METADATA_SOURCE_TYPE,
+            DATA_SOURCE_CATEGORY_DISPLAY_NAME,
+            f"kc_{uuid.uuid4().hex[:12]}",
+        ),
+    )
 
 
 def generate_schema_text(
@@ -116,6 +144,11 @@ async def save_schema_to_knowledge(
         with get_db_connection() as conn:
             cursor = conn.cursor()
 
+            # 立即提交：判重命中路径会在 with 正常退出时被 finally rollback，
+            # 栏目创建必须独立落库，才能在重复上传同名表时也自愈
+            _ensure_data_source_category(cursor, tenant_id)
+            conn.commit()
+
             # 去重：检查是否已存在同名同源 schema。
             # 不再限定 source_type：表文档被用户移动到其他栏目后 source_type 被覆盖，
             # 按标题前缀 + table_name/source_info 判重，避免重复注册（2026-09-20 设计 §4.4）
@@ -151,7 +184,7 @@ async def save_schema_to_knowledge(
                 (
                     tenant_id,
                     f"[数据表] {table_name}",
-                    "data-analysis-metadata",
+                    DATA_ANALYSIS_METADATA_SOURCE_TYPE,
                     "json",
                     1,
                     "text-embedding-v3",
