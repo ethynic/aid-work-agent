@@ -9,10 +9,10 @@
     />
 
     <div class="page-content p-6 space-y-6">
-      <!-- 源未初始化空态 -->
+      <!-- 数据源未开通空态（开通入口：portal 企业管理「数据源」页签） -->
       <div v-if="sourceNotFound" class="bg-warning-50 border border-warning-200 rounded-lg p-4 text-sm text-warning-800">
-        <p class="font-medium mb-1">数据源尚未初始化</p>
-        <p class="text-warning-700">请联系平台管理员完成宏陶商城数据源初始化后再使用本页面。</p>
+        <p class="font-medium mb-1">本租户尚未开通「商城产品同步」数据源</p>
+        <p class="text-warning-700">请联系平台管理员在管理后台「企业管理 → 数据源」中开通后再使用本页面。</p>
       </div>
 
       <template v-else>
@@ -36,24 +36,24 @@
           <template v-else-if="source">
             <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div>
-                <label class="block text-xs font-medium text-muted mb-1">定时同步</label>
-                <label class="inline-flex items-center gap-2 text-sm text-default">
-                  <input
-                    type="checkbox"
-                    class="accent-primary-600 w-4 h-4"
-                    :checked="source.enabled"
-                    :disabled="savingSource"
-                    @change="handleToggleEnabled"
-                  />
-                  {{ source.enabled ? '已开启' : '已关闭' }}
-                </label>
+                <label class="block text-xs font-medium text-muted mb-1">同步方式</label>
+                <BaseSelect
+                  :model-value="source.enabled ? 'auto' : 'manual'"
+                  size="sm"
+                  :disabled="savingSource"
+                  class="max-w-44"
+                  @update:model-value="onSyncModeChange"
+                >
+                  <option value="auto">自动同步（按频率定时）</option>
+                  <option value="manual">仅手动同步</option>
+                </BaseSelect>
               </div>
               <div>
                 <label class="block text-xs font-medium text-muted mb-1">同步频率</label>
                 <BaseSelect
                   :model-value="intervalChoice"
                   size="sm"
-                  :disabled="savingSource"
+                  :disabled="savingSource || !source.enabled"
                   class="max-w-40"
                   @update:model-value="onIntervalChange"
                 >
@@ -64,6 +64,7 @@
                     {{ opt.label }}
                   </option>
                 </BaseSelect>
+                <p v-if="!source.enabled" class="text-xs text-muted mt-1">仅手动模式下不按频率运行</p>
               </div>
               <div>
                 <label class="block text-xs font-medium text-muted mb-1">最近同步</label>
@@ -363,11 +364,14 @@ async function saveSourcePatch(patch: Parameters<typeof patchSource>[0], tip: st
   }
 }
 
-async function handleToggleEnabled() {
+// 同步方式切换：自动同步=按频率定时；仅手动同步=关闭调度，仅「立即同步」触发
+async function onSyncModeChange(mode: string | number) {
   if (!source.value) return
+  const wantAuto = String(mode) === 'auto'
+  if (wantAuto === source.value.enabled) return
   await saveSourcePatch(
-    { enabled: !source.value.enabled },
-    source.value.enabled ? '已关闭定时同步' : '已开启定时同步',
+    { enabled: wantAuto },
+    wantAuto ? '已切换为自动同步' : '已切换为仅手动同步',
   )
 }
 

@@ -194,6 +194,18 @@
           >
             激活码
           </button>
+          <button
+            v-if="isEdit"
+            @click="activeTab = 'sources'"
+            :class="[
+              'pb-2 text-sm font-medium border-b-2 transition-colors',
+              activeTab === 'sources'
+                ? 'text-primary-600 border-primary-600'
+                : 'text-muted border-transparent hover:text-default hover:border-hover'
+            ]"
+          >
+            数据源
+          </button>
         </div>
       </div>
 
@@ -359,6 +371,11 @@
       <!-- 激活码标签页 -->
       <div v-show="activeTab === 'activation'" class="overflow-y-auto" style="max-height: calc(90vh - 220px);">
         <TenantActivationCodes v-if="currentTenant" :tenant-id="currentTenant.tenant_id" />
+      </div>
+
+      <!-- 数据源标签页（租户 × 数据源授权记录，portal 开通/停用） -->
+      <div v-show="activeTab === 'sources'" class="overflow-y-auto" style="max-height: calc(90vh - 220px);">
+        <TenantDataSources v-if="currentTenant" :tenant-id="currentTenant.tenant_id" />
       </div>
 
       <div v-if="formError" class="mt-4 p-2 bg-danger-50 border border-danger-200 rounded text-danger-600 text-sm">{{ formError }}</div>
@@ -602,6 +619,7 @@ import { listTenants, createTenant, updateTenant, deleteTenant, type TenantFormD
 import { getAllAvailableAgents, getTenantAgentPermissions, setTenantAgentPermissions, getSubagentEnvVars, setSubagentEnvVars, getConfigFileStatus, uploadConfigFile, downloadConfigFile, deleteConfigFile, type AgentItem, type EnvVarItem, getSubagentKnowledgeSources, setSubagentKnowledgeSources, type KnowledgeSourceItem, listTenantKnowledgeCategories, getTenantKnowledgeShares, setTenantKnowledgeShares, type KnowledgeShareItem } from '@/api/saasPermissions'
 import TenantMigration from '@/components/saas/TenantMigration.vue'
 import TenantActivationCodes from '@/components/saas/TenantActivationCodes.vue'
+import TenantDataSources from '@/components/saas/TenantDataSources.vue'
 import { TenantStatus, TenantStatusMap, TenantType, TenantTypeMap } from '@/api/enums'
 import { formatCredit } from '@/utils/formatCredit'
 
@@ -647,7 +665,7 @@ const isFormDirty = computed(() => {
 })
 
 // 数字员工授权标签页相关
-const activeTab = ref<'basic' | 'agents' | 'migration' | 'activation'>('basic')
+const activeTab = ref<'basic' | 'agents' | 'migration' | 'activation' | 'sources'>('basic')
 const availableAgents = ref<AgentItem[]>([])
 const selectedAgentIds = ref<string[]>([])
 const loadingAgents = ref(false)

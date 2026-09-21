@@ -691,3 +691,18 @@ export function getSaasAuthHeader(): Record<string, string> {
 
   return headers
 }
+
+// ==================== 数据源（内容同步授权记录，连接中心菜单门控） ====================
+
+export interface ConnectionSource {
+  module: string
+  enabled: boolean
+}
+
+export async function listConnectionSources(): Promise<{ success: boolean; sources: ConnectionSource[] }> {
+  const res = await fetch(`${API_BASE}/connection-sources`, {
+    headers: getSaasAuthHeader()
+  })
+  if (!res.ok) throw new Error('获取数据源列表失败')
+  return res.json()
+}

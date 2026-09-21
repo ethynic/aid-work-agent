@@ -753,7 +753,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, reactive } from 'vue'
+import { ref, computed, watch, reactive, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { onClickOutside } from '@vueuse/core'
 import { useSession } from '@/composables/useSession'
@@ -761,6 +761,7 @@ import { useTenantAuth } from '@/composables/useTenantAuth'
 import { useAgent } from '@/composables/useAgent'
 import { useTheme, type ThemeName } from '@/composables/useTheme'
 import { useDesktopUpdater } from '@/composables/useDesktopUpdater'
+import { listConnectionSources } from '@/api/saasTenant'
 import SettingsDialog from './SettingsDialog.vue'
 import MenuIcon from './ui/MenuIcon.vue'
 import BusinessPageIcon from './ui/BusinessPageIcon.vue'
@@ -964,6 +965,21 @@ const adminSubMenuItems = computed(() => {
 
 // 连接中心子菜单项（全体租户用户可见；adminOnly 项仅租户管理员可见）
 // icon 字段为统一的 SVG path 数据，使用 stroke="currentColor" 的细线描边风格
+// 已开通数据源（portal 授权记录）：连接中心子菜单按此门控；拉取失败按未授权处理
+// （页面直链仍有后端 404 兜底，不会出现误入可操作页）
+const grantedModules = ref<Set<string>>(new Set())
+onMounted(async () => {
+  if (!tenantIsLoggedIn.value || !tenantAdmin.value) return
+  try {
+    const data = await listConnectionSources()
+    if (data?.success && Array.isArray(data.sources)) {
+      // 授权行存在即已开通；enabled 只是定时开关（仅手动同步时为 false，入口仍显示）
+      grantedModules.value = new Set(data.sources.map(s => s.module))
+    }
+  } catch {
+    /* 门控失败按未授权显示，不影响其余菜单 */
+  }
+})
 const connectionSubMenuItems = computed(() => {
   if (!tenantId.value) return []
   const base = `/t/${tenantId.value}`
@@ -974,8 +990,6 @@ const connectionSubMenuItems = computed(() => {
     { path: `${base}/channels`, label: '渠道配置', icon: 'M5 12.55a11 11 0 0114 0M1.42 9a16 16 0 0121.16 0M8.53 16.11a6 6 0 016.95 0M12 20h.01', adminOnly: true },
     // 公众号内容：文档/文章页
     { path: `${base}/wechat-mp`, label: '公众号内容', icon: 'M5 4h14a1 1 0 011 1v14a1 1 0 01-1 1H5a1 1 0 01-1-1V5a1 1 0 011-1zM8 9h8M8 13h8M8 17h5', adminOnly: true },
-    // 商城产品同步：商店购物袋（宏陶产品知识库定时同步与挑选）
-    { path: `${base}/hongtao-shop`, label: '商城产品同步', icon: 'M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4H6zM3 6h18M16 10a4 4 0 01-8 0', adminOnly: true },
     // 企微个人RPA：机器人
     { path: `${base}/wecom-personal-rpa`, label: '企微个人RPA', icon: 'M12 4v3M5 8h14a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2v-8a2 2 0 012-2zM9 13h.01M15 13h.01M9 17h6', adminOnly: true },
     // 本地工具：电脑
@@ -983,6 +997,10 @@ const connectionSubMenuItems = computed(() => {
     // 外部系统：链接（管理员与普通员工均可见）
     { path: `${base}/connections/external-systems`, label: '外部系统', icon: 'M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71', adminOnly: false },
   ]
+  // 数据源授权门控：「商城产品同步」仅对已开通租户显示（portal 授权记录，见 GET /api/saas/connection-sources）
+  if (grantedModules.value.has('hongtao_shop')) {
+    all.push({ path: `${base}/hongtao-shop`, label: '商城产品同步', icon: 'M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4H6zM3 6h18M16 10a4 4 0 01-8 0', adminOnly: true })
+  }
   return all.filter(item => !item.adminOnly || isTenantAdmin.value)
 })
 

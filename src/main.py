@@ -1819,6 +1819,9 @@ app.include_router(client_usage_mgmt.router)
 from src.core.optional_modules import load_optional_routers  # noqa: E402
 for _optional_router in load_optional_routers():
     app.include_router(_optional_router)
+# 内容同步通用：租户已开通数据源清单（连接中心菜单门控；平台通用，无租户专名）
+from src.services.content_sync import api as content_sync_api  # noqa: E402
+app.include_router(content_sync_api.router)
 # 视频生成工具（MVP 抽卡式，见 docs/system/content-production/mvp-design.md）
 from src.api import video_gen as video_gen_api  # noqa: E402
 app.include_router(video_gen_api.router)

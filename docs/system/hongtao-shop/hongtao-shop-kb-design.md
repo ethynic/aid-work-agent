@@ -1,6 +1,6 @@
 # 宏陶商城产品知识库同步（hongtao_shop 专用模块）设计
 
-> 版本 v1.4（2026-09-21：v1.1 评审修订；v1.2 确认六表 DDL；v1.3 用户看码后三点决议——knowledge 零侵入/分类用租户「产品」/砍 agent 工具；v1.4 零私有表重构：账本缓存配置全部复用 content_sync 通用五表 + 论坛关联内存态，见 §10 与附录）。
+> 版本 v1.5（2026-09-21：v1.1 评审修订；v1.2 确认六表 DDL；v1.3 用户看码后三点决议——knowledge 零侵入/分类用租户「产品」/砍 agent 工具；v1.4 零私有表重构；v1.5 数据源授权 Web 化——portal 开通/停用 + 连接中心菜单门控 + 同步方式自动/手动，见 §8.1 与附录）。
 > 客户：宏陶陶瓷（`tenant_d18c257ff434`，agent2 测试环境验收后上正式）。
 > 与 api_ingest 通用设计的关系：通用方案**搁置**（见 ideas.md 状态），本模块为宏陶专用；「通用模块成熟后收编」仅作远期备注，不构成依赖。
 
@@ -8,9 +8,10 @@
 
 | 阶段 | 内容 | 状态 | 完成记录 |
 |------|------|------|---------|
-| P1 | 数据管线：双接口拉取/status=1 过滤/价格排除/产品目录缓存/图级 VL 缓存/论坛关联/渲染/幂等落库 + 计费种子行 + CLI 触发 | 📋 待开发 | — |
-| P2 | 定时调度 + 租户后台（开关/频率/立即运行/产品挑选；agent 工具已取消） | 📋 待开发 | — |
-| P3 | agent2 验收（含栏目授权、外链抽样）→ 正式部署（正式库插配置行+种子行即上线） | 📋 待开发 | — |
+| P1 | 数据管线：双接口拉取/status=1 过滤/价格排除/产品目录缓存/图级 VL 缓存/论坛关联/渲染/幂等落库 + 计费种子行 + CLI 触发 | ✅ 完成（2026-09-21） | commit f9e8dcbf；独立测试+CR 通过 |
+| P2 | 定时调度 + 租户后台（开关/频率/立即运行/产品挑选；agent 工具已取消）+ 前端三卡页 | ✅ 完成（2026-09-21） | 后端 0fa634c5、前端 2337b2b9；后端 71 用例全绿 |
+| P2.5 | 数据源授权 Web 化：portal 企业管理「数据源」页签开通/停用 + 通用 connection-sources 接口 + 连接中心菜单门控 + 同步方式自动/手动 | 🔧 进行中 | hongtao 单测 72 全绿、前端 build 过；待用户侧独立审查 + agent2 验收 |
+| P3 | agent2 验收（含栏目授权、外链抽样）→ 正式部署（portal 开通替代插行） | 📋 待开发 | — |
 
 ## 1. 目标与边界
 
@@ -162,7 +163,7 @@ fetch（双接口全量分页；商品过滤 status=1，价格字段即弃；fol
 
 代码不写死租户，"谁在定时跑"由配置表行决定：
 
-- **`bs_content_sync_sources`**（通用表，module='hongtao_shop'）：`UNIQUE(tenant_id, module)`、`enabled`、`sync_interval_hours`、`selection_mode('all'|'ids')`、`selected_ids JSONB`、`last_sync_at/last_error`。当前仅 `tenant_d18c257ff434` 一行；正式上线在正式库插同款行，零代码变更。
+- **`bs_content_sync_sources`**（通用表，module='hongtao_shop'）：`UNIQUE(tenant_id, module)`、`enabled`、`sync_interval_hours`、`selection_mode('all'|'ids')`、`selected_ids JSONB`、`last_sync_at/last_error`。该行同时是租户授权记录（§8.1）；当前仅 `tenant_d18c257ff434` 一行（测试环境由 portal 开通或 CLI 兜底建行）；正式上线在 portal 开通同款行，零代码变更。
 - **调度**：`HongtaoIngestScheduler` 经**通用按需加载**注册进 background_runner（configs/config.yaml `tenant_custom_modules` 清单控制，平台入口零租户专名——2026-09-21 用户决议；照 wechat_mp：Redis 单副本驱动锁、30min tick 扫描到期源、Semaphore(4) 跨租户、5min stale 回收）。**串行闸门为单闸决议**（v1.4 修订）：runs 活跃部分唯一索引单闸 + stale 回收仅凭 heartbeat（阈值 3600s，高于单 item 最坏耗时）+ item 终态写入带 run-running 守卫（防僵尸 worker 覆写回收结果；残余风险上限约一个 item 的 VL+embedding 费用，接受）。API 路由同款按需加载（main.py 通用循环）。
 - **账本**：通用 `bs_content_sync_runs/items`（module 维度）记每次运行的拉取/VL 张数/计费/失败，观测查表。
 - **余额预检**：trigger 时余额 ≤0 → run 直接终态 `skipped_no_credit` 不拉取。
@@ -177,7 +178,16 @@ fetch（双接口全量分页；商品过滤 status=1，价格字段即弃；fol
 | `GET /runs`、`GET /runs/{id}` | 运行账本与进度 |
 | `GET /products?keyword=&page=&selected=` | 产品目录缓存列表（挑选 UI 数据源，本地表分页，不实时调外部 API） |
 
-前端：源设置卡（开关+频率+立即运行）+ 产品挑选列表（复用 Base* 组件）。
+前端：源设置卡（同步方式 自动/仅手动 + 频率 + 立即运行）+ 产品挑选列表（复用 Base* 组件）。
+
+### 8.1 数据源开通与租户授权（v1.5，Web 化）
+
+授权模型：**`bs_content_sync_sources` 行即「租户 × 数据源」授权记录**——有行 = 已开通（连接中心菜单可见、可配置同步）；无行 = 未开通（租户完全不可见）。开通入口全部走 Web，不要求服务器 CLI：
+
+- **portal（平台管理员）**：企业管理弹窗新增「数据源」页签（`TenantDataSources.vue`），开通 = 建源行（幂等，默认 enabled/24h/all）+ 计费种子自举；停用 = 删源行 + **同事务取消在队 run**（置 interrupted；不取消会照常执行，且源行已删时 `_load_selection` 按 'all' 语义绕过白名单全量入库并计费——执行侧另有源行守卫兜底：无源行的 run 直接置 interrupted 终态，不拉取不计费），租户侧立即不可见、调度不再命中；已入库知识与 runs/items 账本保留。**重新开通会以默认配置（enabled/24h/all）重建源行，租户此前的挑选白名单与频率设置不保留**（停用确认文案已明示）。API：`GET /api/saas/hongtao-shop/admin/source`、`POST /admin/grant`、`POST /admin/revoke`（均 require platform_admin）。
+- **租户可见性门控**：平台通用接口 `GET /api/saas/connection-sources`（`src/services/content_sync/api.py`，零租户专名）返回当前租户已开通 module 清单；连接中心菜单按此门控渲染「商城产品同步」，拉取失败按未授权兜底（页面直链仍有后端 404 拦截）。授权行存在即已开通，`enabled` 只是定时开关（仅手动同步时为 false，入口仍显示）。
+- **同步方式**：租户页「同步方式」下拉——自动同步（按频率定时）/ 仅手动同步（关调度，只认「立即同步」）；即 `enabled` 开关的显式语义化。
+- CLI `--init-source` 降级为部署兜底手段，不属产品流程。
 
 ~~agent 工具~~（2026-09-21 用户决议取消：租户定制功能不注册平台工具；发图由 knowledge_base_search 返回 metadata 天然覆盖，触发走租户后台）。原方案：
 
@@ -186,7 +196,7 @@ fetch（双接口全量分页；商品过滤 status=1，价格字段即弃；fol
 
 ## 9. 计费（v1.1 补种子行）
 
-- VL 计费（2026-09-21 审查修正口径）：**按张实际 token × 所用模型单价走标准算价**（`calculate_credit_cost`，照 wechat_mp WP13 现行模式，每张一条 `chat_records` source_type=`hongtao_shop_image_parse`，fail-open）；`price_per_call` 种子行（0.01 元/张）保留不用，仅备运营切换按张固定价（wechat_mp 同款处理）。"图片无法识别"/失败张不计费。种子行不入平台 DDL，由 hongtao 模块自举（bootstrap.ensure_billing_seed，CLI --init-source 种植，幂等不改价）。
+- VL 计费（2026-09-21 审查修正口径）：**按张实际 token × 所用模型单价走标准算价**（`calculate_credit_cost`，照 wechat_mp WP13 现行模式，每张一条 `chat_records` source_type=`hongtao_shop_image_parse`，fail-open）；`price_per_call` 种子行（0.01 元/张）保留不用，仅备运营切换按张固定价（wechat_mp 同款处理）。"图片无法识别"/失败张不计费。种子行不入平台 DDL，由 hongtao 模块自举（bootstrap.ensure_billing_seed，portal 开通/CLI 兜底时种植，幂等不改价）。
 - embedding：通用 `_record_knowledge_embedding_billing`，source_type=`hongtao_shop_embedding`。
 - 计费全记源配置 tenant_id；runs/items 记 VL 张数/tokens、embedding tokens。
 
@@ -227,6 +237,7 @@ src/tenant_custom/hongtao_shop/  # 宏陶租户定制（零私有表、零平台
 ## 附录：开发期架构决议（2026-09-21，用户定版）
 
 - **零私有表（v1.4）**：撤销 v1.2 的六张 hongtao 私有表。账本/缓存/配置复用平台通用 `src/services/content_sync/` 五张表（module 维度；以公众号表为蓝本泛化，公众号不迁移）；products/forum_posts 业务关系表砍除——产品数据只存知识库（documents + metadata），论坛关联内存态每轮重算。用户动机：「以后 100 个源不能建 600 张表」。计费本就合用通用 chat_records。
+- **数据源授权 Web 化（v1.5，2026-09-21 用户决议）**：「所有配置从 Web 端做，客户不可能上我们服务器执行命令」。bs_content_sync_sources 行即租户授权记录；开通/停用走 portal 企业管理「数据源」页签，租户菜单按授权行门控；自动/手动同步为租户页显式选项。授权归属 portal 管理是原则方向，v1.5 落地最小闭环，后续多数据源类型直接复用 module 维度。
 - **分类用租户「产品」（v1.3）**：不建 k_hongtao_products 独立分类；同步启动查租户顶级「产品」分类（查无则建普通分类），文档只进该分类。
 
 - **knowledge 层零侵入（2026-09-21 用户决议）**：撤销 v1.2 的「delete_document 加 origin 回写分支」方案，改为同步侧自愈判定（§6.3）——平台服务只允许通用代码，租户定制的删除抑制收敛在本模块 sync 逻辑内。

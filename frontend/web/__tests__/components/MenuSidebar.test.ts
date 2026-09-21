@@ -97,6 +97,8 @@ vi.mock('@/components/SettingsDialog.vue', () => ({
 
 import MenuSidebar from '@/components/MenuSidebar.vue'
 import type { SubagentListItem } from '@/api/subagent'
+import { server } from '../mocks/server'
+import { http, HttpResponse } from 'msw'
 
 // ============== 测试数据 ==============
 
@@ -437,6 +439,42 @@ describe('MenuSidebar - flyout 二级菜单', () => {
     expect(flyoutText).toContain('渠道配置')
     expect(flyoutText).toContain('企微个人RPA')
     expect(flyoutText).toContain('本地工具')
+  })
+
+  it('数据源门控：默认（未开通任何数据源）管理员子菜单不含「商城产品同步」', async () => {
+    const wrapper = mountTenantSidebar()
+    await flushPromises()
+
+    const trigger = findButtonByText(wrapper, '连接中心')
+    expect(trigger).toBeTruthy()
+    await trigger!.trigger('mouseenter')
+    await flushPromises()
+
+    const flyout = findFlyout()
+    expect(flyout).not.toBeNull()
+    expect(flyout!.textContent || '').not.toContain('商城产品同步')
+  })
+
+  it('数据源门控：已开通 hongtao_shop 时管理员子菜单显示「商城产品同步」', async () => {
+    server.use(
+      http.get('/api/saas/connection-sources', () =>
+        HttpResponse.json({
+          success: true,
+          sources: [{ module: 'hongtao_shop', enabled: true }],
+        })
+      )
+    )
+    const wrapper = mountTenantSidebar()
+    await flushPromises()
+
+    const trigger = findButtonByText(wrapper, '连接中心')
+    expect(trigger).toBeTruthy()
+    await trigger!.trigger('mouseenter')
+    await flushPromises()
+
+    const flyout = findFlyout()
+    expect(flyout).not.toBeNull()
+    expect(flyout!.textContent || '').toContain('商城产品同步')
   })
 
   it('连接中心：本地工具已从用户下拉菜单移除，子菜单点击可跳转', async () => {

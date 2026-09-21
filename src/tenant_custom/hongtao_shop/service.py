@@ -457,6 +457,13 @@ class HongtaoShopSyncService:
         limit: Optional[int], sync_date: str, run_started: datetime,
     ) -> Dict[str, Any]:
         run_id = run["id"]
+        # 源行守卫（=授权记录）：无源行不执行——revoke 删行后 _load_selection
+        # 无行按 'all' 语义会绕过白名单全量入库并计费（设计 §8.1 v1.5）
+        if not await asyncio.to_thread(self._source_row_exists, tenant_id):
+            self._abort_run_interrupted(
+                run_id, owner_token, "数据源未开通或已停用，终止执行（不拉取不计费）"
+            )
+            return {"run_id": run_id, "status": "interrupted"}
         try:
             async with build_client() as client:
                 products_fr = await fetch_products(client, limit=limit)
@@ -599,6 +606,32 @@ class HongtaoShopSyncService:
                 f"selected_ids 损坏（非数组），拒绝按空集处理: tenant={tenant_id}"
             )
         return {str(v) for v in ids}
+
+    def _source_row_exists(self, tenant_id: str) -> bool:
+        """源行（=授权记录）存在性；revoke 删行后同步执行应立即止步。"""
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT 1 FROM bs_content_sync_sources "
+                "WHERE tenant_id = %s AND module = %s",
+                (tenant_id, MODULE),
+            )
+            return cursor.fetchone() is not None
+
+    def _abort_run_interrupted(self, run_id: int, owner_token: str, message: str) -> None:
+        """owner 守卫置 interrupted 终态（源行守卫兜底路径；不动 sources 行）。"""
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                UPDATE bs_content_sync_runs
+                SET status = 'interrupted', error_message = %s,
+                    completed_at = now(), fetch_complete = FALSE
+                WHERE id = %s AND owner_token = %s AND status = 'running'
+                """,
+                (message[:500], run_id, owner_token),
+            )
+            conn.commit()
 
     # ==================== 单产品处理（三态判定） ====================
 

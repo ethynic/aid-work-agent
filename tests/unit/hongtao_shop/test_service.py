@@ -603,3 +603,30 @@ async def test_no_credit_skips_run(harness, monkeypatch):
         (harness["tenant_id"],),
     )
     assert runs and runs[0]["status"] == "skipped_no_credit"
+
+
+async def test_execute_aborts_without_source_row(harness):
+    """源行守卫（P1 修复兜底）：无源行（revoke 后 CLI 误触发等）的 run 直接置
+    interrupted 终态——不拉取、零入库、零计费（源行已删时 _load_selection 按
+    'all' 语义会绕过白名单全量入库）。"""
+    harness["create_source"]()
+    accepted = harness["service"].trigger_sync(harness["tenant_id"])
+    assert accepted["status"] == "queued"
+    # 模拟 revoke 删源行（真实 revoke 会同时取消在队 run；此处直删验证执行侧兜底）
+    harness["query"](
+        "DELETE FROM bs_content_sync_sources WHERE tenant_id = %s",
+        (harness["tenant_id"],),
+    )
+    result = await harness["service"].claim_and_run(harness["tenant_id"])
+    assert result["executed"] is True
+    run = harness["query"](
+        "SELECT status, error_message FROM bs_content_sync_runs WHERE id = %s",
+        (result["run_ids"][0],),
+    )[0]
+    assert run["status"] == "interrupted"
+    assert "数据源" in run["error_message"]
+    assert harness["embedding"].calls == 0  # 零 embedding 计费
+    assert harness["query"](
+        "SELECT COUNT(*) AS cnt FROM documents WHERE tenant_id = %s "
+        "AND origin = 'hongtao_shop'", (harness["tenant_id"],),
+    )[0]["cnt"] == 0  # 零入库

@@ -17,7 +17,8 @@
 | P2.2 | api.py 租户后台 + main.py 注册 | ✅ 完成（2026-09-21） | source CRUD/trigger/runs/products（本地缓存分页）；挂载点改通用按需加载（configs tenant_custom_modules 清单）；70 用例全绿 |
 | P2.3 | 前端（源设置卡 + 产品挑选列表） | ✅ 完成（2026-09-21，待视觉验收） | api/hongtaoShop.ts + HongtaoShopSync.vue（设置/挑选/运行记录三卡，Base* 组件 + AppHeader）+ 路由菜单注册；npm run build 通过、MenuSidebar 回归 14 绿；浏览器视觉验收待 agent2（需已初始化源） |
 | ~~P2.4~~ | ~~agent 工具两个~~ | ⛔ 已取消（2026-09-21 用户决议） | 租户专有功能不注册平台工具：触发走后台；发图由 knowledge_base_search 天然覆盖（返回含 documents.metadata 且 _no_truncate） |
-| P3 | agent2 验收（栏目授权/外链抽样）→ 正式部署 | 📋 待开发 | — |
+| P2.5 | 数据源授权 Web 化（portal 开通/停用 + 菜单门控 + 同步方式自动/手动） | 🔧 进行中 | 设计 v1.5 §8.1：portal TenantDataSources 页签（admin grant/revoke/status 接口）+ 通用 GET /api/saas/connection-sources + MenuSidebar 按授权行门控 + 同步方式下拉语义化 enabled；用户侧独立审查（2026-09-21 二轮）后修 2 项 P1：revoke 同事务取消在队 run + `_execute_run_inner` 源行守卫兜底（防 'all' 语义绕白名单全量入库计费），revoke→re-grant 配置重置语义已入停用确认文案与 §8.1；hongtao 单测 74 全绿、前端 build 过；待 agent2 验收 |
+| P3 | agent2 验收（栏目授权/外链抽样）→ 正式部署（portal 开通） | 📋 待开发 | — |
 
 ## 1. 集成点清单（新代码挂到哪，全部已核对现有模式）
 

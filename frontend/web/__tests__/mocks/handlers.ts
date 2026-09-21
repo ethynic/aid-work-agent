@@ -283,4 +283,9 @@ export const handlers = [
     }
     return HttpResponse.json({ success: true, subagents: [] })
   }),
+
+  // 数据源授权清单（连接中心菜单门控；默认空 = 未开通任何数据源）
+  http.get('/api/saas/connection-sources', () => {
+    return HttpResponse.json({ success: true, sources: [] })
+  }),
 ]

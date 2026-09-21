@@ -71,11 +71,11 @@ def _serialize_source(row: Dict[str, Any]) -> Dict[str, Any]:
 
 @router.get("/source")
 async def get_source(admin: dict = Depends(require_admin)):
-    """读源配置（未初始化时返回 404，提示先跑 CLI --init-source 或后台初始化）。"""
+    """读源配置（本租户未开通该数据源时返回 404）。"""
     tenant_id = admin["tenant_id"]
     row = await asyncio.to_thread(_load_source_row, tenant_id)
     if not row:
-        raise HTTPException(status_code=404, detail="源未初始化（请先执行初始化）")
+        raise HTTPException(status_code=404, detail="数据源未开通")
     return {"success": True, "source": _serialize_source(row)}
 
 
@@ -315,3 +315,101 @@ async def list_products(
         "page": page,
         "page_size": page_size,
     }
+
+
+# ==================== 平台管理员：数据源开通/停用（portal 企业管理） ====================
+#
+# 授权模型（设计 §9）：bs_content_sync_sources 行即「租户 × 数据源」授权记录——
+# 有行 = 已开通（租户菜单可见、可配置同步）；无行 = 未开通（租户不可见）。
+# 开通/停用原则上有 portal UI 操作；CLI --init-source 仅作部署兜底。
+
+
+class GrantRequest(BaseModel):
+    tenant_id: str = Field(min_length=1, max_length=64)
+
+
+def _require_platform_admin(admin: dict) -> None:
+    if admin.get("role") != "platform_admin":
+        raise HTTPException(status_code=403, detail="仅平台管理员可管理数据源授权")
+
+
+@router.get("/admin/source")
+async def admin_get_source(
+    tenant_id: str = Query(..., min_length=1, max_length=64),
+    admin: dict = Depends(require_admin),
+):
+    """平台管理员查某租户的数据源开通状态与当前配置。"""
+    _require_platform_admin(admin)
+    row = await asyncio.to_thread(_load_source_row, tenant_id)
+    return {
+        "success": True,
+        "granted": row is not None,
+        "source": _serialize_source(row) if row else None,
+    }
+
+
+@router.post("/admin/grant")
+async def admin_grant_source(body: GrantRequest, admin: dict = Depends(require_admin)):
+    """开通：建源行（幂等）+ 计费种子自举；租户侧随之可见可配置。"""
+    _require_platform_admin(admin)
+
+    def _grant():
+        from src.saas.db.tenant_db import TenantDB
+        from src.tenant_custom.hongtao_shop.bootstrap import ensure_billing_seed
+
+        if not TenantDB.get_by_id(body.tenant_id):
+            raise HTTPException(status_code=404, detail="租户不存在")
+        ensure_billing_seed()
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO bs_content_sync_sources
+                    (tenant_id, module, enabled, sync_interval_hours,
+                     selection_mode, selected_ids)
+                VALUES (%s, %s, TRUE, 24, 'all', NULL)
+                ON CONFLICT (tenant_id, module) DO NOTHING
+                """,
+                (body.tenant_id, MODULE),
+            )
+            conn.commit()
+        return _load_source_row(body.tenant_id)
+
+    row = await asyncio.to_thread(_grant)
+    return {"success": True, "granted": True, "source": _serialize_source(row)}
+
+
+@router.post("/admin/revoke")
+async def admin_revoke_source(body: GrantRequest, admin: dict = Depends(require_admin)):
+    """停用开通：删源行 + 同事务取消在队 run；租户侧菜单/接口立即不可见，调度不再命中。
+
+    已入库的知识文档不删（归属租户知识库）；runs/items/records 账本保留。
+    重新开通会以默认配置（enabled/24h/all）重建源行，租户此前的挑选白名单
+    与频率设置不保留（v1.5 语义，portal 停用确认文案已同步提示）。
+    """
+    _require_platform_admin(admin)
+
+    def _revoke() -> int:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "DELETE FROM bs_content_sync_sources WHERE tenant_id = %s AND module = %s",
+                (body.tenant_id, MODULE),
+            )
+            # 在队 run 同事务置 interrupted：不取消会照常执行，且源行已删时
+            # _load_selection 按 'all' 语义绕过白名单全量入库并计费
+            cursor.execute(
+                """
+                UPDATE bs_content_sync_runs
+                SET status = 'interrupted', completed_at = now(),
+                    error_message = '数据源已停用，取消排队中的同步'
+                WHERE tenant_id = %s AND module = %s AND status = 'queued'
+                """,
+                (body.tenant_id, MODULE),
+            )
+            cancelled = cursor.rowcount
+            conn.commit()
+            return cancelled
+
+    cancelled = await asyncio.to_thread(_revoke)
+    return {"success": True, "granted": False, "cancelled_runs": cancelled}

@@ -146,3 +146,33 @@ export async function getProducts(params: {
   if (params.page_size) query.set('page_size', String(params.page_size))
   return request(`/products?${query.toString()}`)
 }
+
+// ==================== 平台管理员：数据源开通/停用（portal 企业管理） ====================
+
+export interface AdminSourceState {
+  granted: boolean
+  source: HongtaoSource | null
+}
+
+export async function getAdminSource(tenantId: string): Promise<AdminSourceState> {
+  const data = await request<{ success: boolean; granted: boolean; source: HongtaoSource | null }>(
+    `/admin/source?tenant_id=${encodeURIComponent(tenantId)}`,
+  )
+  return { granted: data.granted, source: data.source }
+}
+
+export async function grantSource(tenantId: string): Promise<AdminSourceState> {
+  const data = await request<{ success: boolean; granted: boolean; source: HongtaoSource | null }>(
+    '/admin/grant',
+    { method: 'POST', body: JSON.stringify({ tenant_id: tenantId }) },
+  )
+  return { granted: data.granted, source: data.source }
+}
+
+export async function revokeSource(tenantId: string): Promise<{ granted: boolean }> {
+  const data = await request<{ success: boolean; granted: boolean }>(
+    '/admin/revoke',
+    { method: 'POST', body: JSON.stringify({ tenant_id: tenantId }) },
+  )
+  return { granted: data.granted }
+}

@@ -192,3 +192,138 @@ def test_products_list_filters(client, tenant_id):
     assert resp.json()["total"] == 0
     resp = client.get("/api/saas/hongtao-shop/products", params={"selected": True})
     assert resp.json()["total"] == 2
+
+
+# ==================== 平台管理员数据源授权（portal 企业管理） ====================
+
+from src.services.content_sync.api import router as content_sync_router  # noqa: E402
+
+
+@pytest.fixture()
+def platform_client(tenant_id):
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[require_admin] = lambda: {
+        "tenant_id": tenant_id, "role": "platform_admin", "user_id": "root-x",
+    }
+    return TestClient(app)
+
+
+@pytest.fixture()
+def cs_client(tenant_id):
+    app = FastAPI()
+    app.include_router(content_sync_router)
+    app.dependency_overrides[require_admin] = lambda: {
+        "tenant_id": tenant_id, "role": "tenant_admin", "user_id": "admin-x",
+    }
+    return TestClient(app)
+
+
+@pytest.fixture()
+def tenant_row(tenant_id, require_db):
+    from src.db.database import get_db_connection
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO tenants (tenant_id, company_name, tenant_type)
+            VALUES (%s, '数据源授权测试租户', 'test')
+            ON CONFLICT (tenant_id) DO NOTHING
+            """,
+            (tenant_id,),
+        )
+        conn.commit()
+    yield tenant_id
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM tenants WHERE tenant_id = %s", (tenant_id,))
+        conn.commit()
+
+
+def test_admin_endpoints_require_platform_admin(client, tenant_id, require_db):
+    resp = client.get("/api/saas/hongtao-shop/admin/source", params={"tenant_id": tenant_id})
+    assert resp.status_code == 403
+    resp = client.post("/api/saas/hongtao-shop/admin/grant", json={"tenant_id": tenant_id})
+    assert resp.status_code == 403
+    resp = client.post("/api/saas/hongtao-shop/admin/revoke", json={"tenant_id": tenant_id})
+    assert resp.status_code == 403
+
+
+def test_admin_grant_status_revoke_roundtrip(platform_client, client, tenant_row, require_db):
+    # 未开通：granted=False
+    resp = platform_client.get("/api/saas/hongtao-shop/admin/source", params={"tenant_id": tenant_row})
+    assert resp.status_code == 200
+    assert resp.json()["granted"] is False and resp.json()["source"] is None
+
+    # 开通（幂等，连开两次不报错不重复建行）：默认 enabled/24h/all
+    for _ in range(2):
+        resp = platform_client.post("/api/saas/hongtao-shop/admin/grant", json={"tenant_id": tenant_row})
+        assert resp.status_code == 200
+    body = resp.json()
+    assert body["granted"] is True
+    assert body["source"]["enabled"] is True
+    assert body["source"]["sync_interval_hours"] == 24
+    assert body["source"]["selection_mode"] == "all"
+
+    # 租户侧从 404 变 200
+    resp = client.get("/api/saas/hongtao-shop/source")
+    assert resp.status_code == 200
+
+    # 不存在的租户拒绝开通
+    resp = platform_client.post(
+        "/api/saas/hongtao-shop/admin/grant", json={"tenant_id": "tenant_not_exists_xx"}
+    )
+    assert resp.status_code == 404
+
+    # 停用：删授权行，租户侧回到 404
+    resp = platform_client.post("/api/saas/hongtao-shop/admin/revoke", json={"tenant_id": tenant_row})
+    assert resp.status_code == 200 and resp.json()["granted"] is False
+    resp = client.get("/api/saas/hongtao-shop/source")
+    assert resp.status_code == 404
+
+
+def test_revoke_cancels_queued_runs(platform_client, tenant_row, require_db):
+    """停用即取消在队 run（P1 修复）：不取消会照常执行，且源行已删时
+    _load_selection 按 'all' 语义绕过白名单全量入库并计费。"""
+    from src.db.database import get_db_connection
+
+    platform_client.post("/api/saas/hongtao-shop/admin/grant", json={"tenant_id": tenant_row})
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO bs_content_sync_runs (tenant_id, module, trigger_type, status) "
+            "VALUES (%s, 'hongtao_shop', 'manual', 'queued')",
+            (tenant_row,),
+        )
+        conn.commit()
+
+    resp = platform_client.post(
+        "/api/saas/hongtao-shop/admin/revoke", json={"tenant_id": tenant_row}
+    )
+    assert resp.status_code == 200
+    assert resp.json()["cancelled_runs"] == 1
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT status, error_message FROM bs_content_sync_runs "
+            "WHERE tenant_id = %s AND module = 'hongtao_shop'",
+            (tenant_row,),
+        )
+        row = cursor.fetchone()
+    assert row["status"] == "interrupted"
+    assert "已停用" in row["error_message"]
+
+
+def test_connection_sources_listing_scoped_by_tenant(cs_client, client, tenant_id, require_db):
+    # 无授权行 → 空清单
+    resp = cs_client.get("/api/saas/connection-sources")
+    assert resp.status_code == 200
+    assert resp.json()["sources"] == []
+
+    # 开通后仅列出本租户的行；enabled=False（仅手动）仍算已授权
+    _create_source(tenant_id, enabled=False)
+    resp = cs_client.get("/api/saas/connection-sources")
+    sources = resp.json()["sources"]
+    assert [s["module"] for s in sources] == ["hongtao_shop"]
+    assert sources[0]["enabled"] is False
