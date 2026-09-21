@@ -3,6 +3,8 @@
 #
 # 设计文档: docs/system/simulation-env-design.md
 # 部署位置: 243 服务器 /var/www/agent1/docker-compose.sim.yml
+# （由 sim.sh / agent1_update.sh 从本仓库 deploy/ 版本自动复制，根目录副本不手工维护；
+#   必须位于仿真根目录，因 env_file: .env 按 compose 文件所在目录解析）
 #
 # 隔离要点（与生产的差异）:
 #   - 不部署 background 容器（物理消除定时类主动外呼）

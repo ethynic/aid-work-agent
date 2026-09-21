@@ -63,7 +63,12 @@
 
 1. 在生产 `aid-postgres`（10864）实例上新建库 `aid_work_agent1` / `aid_work_logs1`，表结构用 `deploy/init-postgres.sql` + `init-postgres-logs.sql` 初始化（db_update.yaml 增量机制启动时自动补齐）。
 2. 新建专用账号 `aid_sim_user`，**只 GRANT** `aid_work_agent1` / `aid_work_logs1` 的 CONNECT + CRUD；生产库（`aid_work_agent`）对其不可见。从权限层面杜绝仿真容器误连/误写生产库。
-3. 新建生产**只读**账号 `aid_readonly`（仅 GRANT SELECT），供同步脚本从生产导出数据。脚本凭据双账号隔离：导出用只读、写入用 sim 账号。
+3. 新建生产**只读**账号 `aid_readonly`（仅 GRANT SELECT），供同步脚本从生产导出数据。脚本凭据双账号隔离：导出用只读、写入用 sim 账号。**整库模式 pg_dump 需要额外一次性授权**（pg_dump 要读序列当前值做还原 setval，表 SELECT 不覆盖序列）：
+   ```sql
+   GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO aid_readonly;
+   ALTER DEFAULT PRIVILEGES FOR ROLE aid_user IN SCHEMA public GRANT SELECT ON SEQUENCES TO aid_readonly;
+   ```
+   整库模式 dump 限定 `--schema=public`（业务表全在 public；timescaledb 内部 schema 对只读账号无权限且仿真环境不需要）。
 4. 仿真库定位为**一次性耗材**：可随时 drop 重建，不做备份、不进备份策略。
 
 ## 4. 副作用防护（SIMULATION_MODE 门控）-- 本方案最关键部分
@@ -130,7 +135,9 @@
    - 校验读取源账号为只读账号 `aid_readonly`（防误用可写账号）
    - 生产 api 容器无需停止（只读导出，不影响线上）
 2. **数据同步**
-   - 通过 `information_schema.columns` 动态枚举生产库所有含 `tenant_id` 列的表，逐表 `COPY (SELECT * WHERE tenant_id = %s) TO STDOUT` → 管道 → 仿真库 `COPY ... FROM STDIN`
+   - **整库模式**（不传 --tenant）：DROP 重建仿真库（编码/排序规则对齐生产库，超管 `aid_user` 执行）→ 超管预建生产库扩展（pg_dump 输出的 CREATE/COMMENT ON EXTENSION 非超管还原会失败）→ `pg_dump --no-owner --no-privileges` 全量还原（结构+数据真镜像，还原时 sed 过滤扩展语句）。天然规避加表/加列/列类型变更/索引约束增减等一切结构漂移；pg_dump 基于 MVCC 快照，生产持续写入不影响一致性
+   - **租户模式**（--tenant）：通过 `information_schema.columns` 动态枚举生产库所有含 `tenant_id` 列的表，逐表 `COPY (SELECT * WHERE tenant_id = %s) TO STDOUT` → 管道 → 仿真库 `COPY ... FROM STDIN`
+   - **结构自动对齐**（仅租户模式；生产加表/加字段后仿真库落后时，避免整表被跳过）：缺表用 `pg_dump --schema-only --no-owner --no-privileges` 从生产拉建表 DDL（含索引/序列/外键，单次批量导出由 pg_dump 处理外键依赖顺序）；缺列用 `ALTER TABLE ADD COLUMN` 补齐（类型/默认值/非空约束取自生产 pg_catalog）；仅类型漂移（同名列类型不同）或补齐失败时跳过该表并告警
    - 无 `tenant_id` 列但业务上归属租户的表（如渠道配置表、`subagent_definitions` 等），维护**显式白名单**并指明关联字段，随表结构演进人工维护
    - **渠道配置表凭证字段置空**（token / secret / aes_key 等列，列清单显式维护）：防误路由验签通过 + 防仿真环境持生产凭证外呼
    - `--wipe`：先按同口径删除仿真库中该租户数据（删除口径 = 导入口径，对称）

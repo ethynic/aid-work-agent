@@ -15,11 +15,10 @@
 #     docker compose v2 直接生效，非 deploy.resources 段）
 #   - 无 /tmp 权限修复步骤（compose tmpfs 已带 mode=1777）
 #   - npm 缓存命名卷独立为 agent1_npm_cache
-#   - 末尾把 sim-base tag 前移到本次 HEAD：agent1_update.sh 与
-#     sim.sh（复现模式，rsync 生产代码 + 重放仿真增量）互为整体替换，
-#     重置后工作区即纯 master 代码、仿真增量为空，前移基准可避免下次数据同步误判
-# ⚠️ 本脚本 git reset --hard 会丢弃工作区本地修改（含复现模式同步来的生产代码
-#    与同步提交）；复现生产 bug 请改跑 sim.sh（默认附带代码同步）
+#   - 与 sim.sh（复现模式，纯 rsync 生产代码整体替换）互为整体替换，
+#     仿真侧不保留任何自有代码改动
+# ⚠️ 本脚本 git reset --hard 会丢弃工作区本地修改（含复现模式同步来的生产代码）；
+#    复现生产 bug 请改跑 sim.sh（默认附带代码同步）
 # ==============================================================================
 
 set -e
@@ -56,11 +55,8 @@ fi
 git reset --hard "$TARGET_REF"
 echo "更新后版本: $(git log -1 --format='%cd %s' --date=format:'%Y-%m-%d %H:%M:%S')"
 
-# 1.1 前移 sim-base 基准（本脚本工作区 = 纯 git 代码，仿真增量视为空）
-git tag -f sim-base HEAD >/dev/null
-
-# 1.2 清除 Python 字节码缓存（避免旧代码运行；rsync 同步可能留下 root 属主残留，用 sudo）
-echo "[1.2] 清除 Python .pyc 缓存..."
+# 1.1 清除 Python 字节码缓存（避免旧代码运行；rsync 同步可能留下 root 属主残留，用 sudo）
+echo "[1.1] 清除 Python .pyc 缓存..."
 sudo find "$SIM_DIR" -name .git -prune -o -type f -name '*.pyc' -delete 2>/dev/null || true
 sudo find "$SIM_DIR" -name .git -prune -o -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
 
@@ -91,6 +87,8 @@ mkdir -p "$(dirname "$BUILD_LOG")"
 FRONTEND_PID=$!
 
 # 5. 重启仿真后端（up 会拉起未运行的容器；--force-recreate 保证 .env 最新）
+# compose 文件以仓库 deploy/ 版本为准（env_file: .env 相对路径要求部署在仿真根目录）
+cp -f "$SIM_DIR/deploy/docker-compose.sim.yml" "$SIM_DIR/docker-compose.sim.yml"
 echo "[5] 重启仿真后端 aid-agent-api1..."
 docker compose -f "$SIM_DIR/docker-compose.sim.yml" up -d --force-recreate --wait
 
