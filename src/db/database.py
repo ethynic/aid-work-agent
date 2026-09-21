@@ -1131,6 +1131,20 @@ def _init_postgresql():
             except Exception as rollback_err:
                 logger.warning(f"Failed to rollback wechat_mp transaction: {rollback_err}")
 
+        # 外部内容同步通用表（content_sync 平台基础设施：sources/runs/items/records/
+        # image_vision_cache 五张通用表 + VL 计费种子行，幂等 DDL；任何数据源模块
+        # （含租户定制）复用，不建私有表；与 deploy/init-postgres.sql /
+        # deploy/db_update.yaml 三处同步）
+        try:
+            from src.services.content_sync.db import init_content_sync_tables
+            init_content_sync_tables(conn)
+        except Exception as e:
+            logger.error(f"Failed to initialize content_sync tables: {e}")
+            try:
+                conn.rollback()
+            except Exception as rollback_err:
+                logger.warning(f"Failed to rollback content_sync transaction: {rollback_err}")
+
         # Skill 表初始化由 SkillLoader._init_skill_tables() 统一处理，
         # 通过 SKILL.md 中的 init_script 字段声明，不再硬编码。
 

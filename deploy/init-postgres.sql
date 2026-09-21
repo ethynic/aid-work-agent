@@ -2808,3 +2808,123 @@ BEGIN
     END IF;
 END
 $boss_comm_logs$;
+
+-- ============================================================================
+-- 外部内容同步通用表（content_sync 平台基础设施；src/services/content_sync/db.py 同源，
+-- 任何数据源模块（含租户定制）复用，不建私有表）
+-- ============================================================================
+
+-- 源配置（谁在定时跑由配置行决定；module 区分数据源）
+CREATE TABLE IF NOT EXISTS bs_content_sync_sources (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    module TEXT NOT NULL,                       -- 数据源模块标识（各模块自定义 slug）
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    sync_interval_hours INT NOT NULL DEFAULT 24,
+    selection_mode VARCHAR(8) NOT NULL DEFAULT 'all',  -- all | ids（挑选白名单）
+    selected_ids JSONB,
+    last_sync_at TIMESTAMP,
+    last_error TEXT,
+    created_at TIMESTAMP DEFAULT now(),
+    updated_at TIMESTAMP DEFAULT now(),
+    UNIQUE(tenant_id, module),
+    CHECK (selection_mode IN ('all', 'ids'))
+);
+
+-- 运行账本 + 执行队列（queued→running→终态；蓝本 bs_wechat_mp_sync_runs）
+CREATE TABLE IF NOT EXISTS bs_content_sync_runs (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    module TEXT NOT NULL,
+    user_id TEXT,
+    trigger_type VARCHAR(16) NOT NULL,          -- manual | scheduled
+    status VARCHAR(32) NOT NULL,                -- queued/running/success/partial_failed/failed/skipped_no_credit/interrupted
+    owner_token TEXT,
+    heartbeat_at TIMESTAMP,
+    new_count INT DEFAULT 0,
+    updated_count INT DEFAULT 0,
+    skipped_count INT DEFAULT 0,
+    deleted_count INT DEFAULT 0,
+    restored_count INT DEFAULT 0,
+    failed_count INT DEFAULT 0,
+    vl_parsed_count INT DEFAULT 0,
+    vl_billed_count INT DEFAULT 0,
+    embedding_tokens INT DEFAULT 0,
+    credits_charged NUMERIC(12,2) DEFAULT 0,
+    fetch_complete BOOLEAN NOT NULL DEFAULT FALSE,  -- 对账门禁佐证
+    total_reported INT,
+    error_message TEXT,
+    started_at TIMESTAMP,
+    completed_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_content_sync_runs_active
+    ON bs_content_sync_runs(tenant_id, module) WHERE status = 'running';
+CREATE INDEX IF NOT EXISTS idx_content_sync_runs_tenant_created
+    ON bs_content_sync_runs(tenant_id, module, created_at DESC);
+
+-- 批次内逐条任务（蓝本 bs_wechat_mp_sync_items）
+CREATE TABLE IF NOT EXISTS bs_content_sync_items (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    run_id BIGINT NOT NULL,
+    module TEXT NOT NULL,
+    native_id TEXT NOT NULL,
+    action VARCHAR(16),                         -- new | update | skip | delete | restore（失败项 action 为空）
+    status VARCHAR(16),                         -- pending/running/success/skipped/failed/interrupted
+    error_code TEXT,
+    error_message TEXT,
+    vl_images INT DEFAULT 0,
+    vl_billed INT DEFAULT 0,
+    embedding_tokens INT DEFAULT 0,
+    billing_status TEXT DEFAULT 'pending',
+    billing_reference TEXT,
+    credits_charged NUMERIC(12,2) DEFAULT 0,
+    started_at TIMESTAMP,
+    completed_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT now(),
+    UNIQUE(run_id, native_id)
+);
+CREATE INDEX IF NOT EXISTS idx_content_sync_items_run
+    ON bs_content_sync_items(tenant_id, run_id);
+
+-- 记录当前态账本（蓝本 bs_wechat_mp_articles；payload JSONB 存各源目录展示字段）
+CREATE TABLE IF NOT EXISTS bs_content_sync_records (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    module TEXT NOT NULL,
+    native_id TEXT NOT NULL,
+    external_id TEXT NOT NULL,                  -- documents.origin/external_id 命名空间
+    content_hash VARCHAR(64),
+    pipeline_version TEXT,
+    doc_id INTEGER,                             -- → documents.id
+    user_deleted BOOLEAN NOT NULL DEFAULT FALSE,-- 同步侧自愈：用户知识库删除抑制
+    miss_streak INT NOT NULL DEFAULT 0,         -- 消失两击计数
+    fail_count INT NOT NULL DEFAULT 0,
+    next_retry_at TIMESTAMP,                    -- 300s×2^fail_count 上限 24h
+    processing_status VARCHAR(16) NOT NULL DEFAULT 'pending',
+    error_message TEXT,
+    payload JSONB,                              -- 各源自定义目录展示字段（name/model/status...）
+    last_seen_at TIMESTAMP,                     -- 每轮 fetch 刷新（消失对账）
+    last_synced_at TIMESTAMP,
+    last_checked_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT now(),
+    UNIQUE(tenant_id, module, native_id)
+);
+CREATE INDEX IF NOT EXISTS idx_content_sync_records_retry
+    ON bs_content_sync_records(tenant_id, module, processing_status, next_retry_at);
+
+-- 通用图级 VL 缓存（tenant+URL 键：任何源的图片共用；URL 不变即图不变）
+CREATE TABLE IF NOT EXISTS bs_image_vision_cache (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    image_url TEXT NOT NULL,
+    description TEXT,
+    model TEXT,
+    status VARCHAR(16) NOT NULL,                -- ok | unrecognized | failed
+    is_billed BOOLEAN NOT NULL DEFAULT FALSE,   -- unrecognized 不计费
+    parsed_at TIMESTAMP DEFAULT now(),
+    created_at TIMESTAMP DEFAULT now(),
+    UNIQUE(tenant_id, image_url),
+    CHECK (status IN ('ok', 'unrecognized', 'failed'))
+);
