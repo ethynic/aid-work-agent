@@ -495,9 +495,9 @@ const columns = [
   { key: 'index', label: '序号', width: '60px' },
   { key: 'title', label: '文档名称', width: '260px' },
   { key: 'summary', label: '摘要', width: '380px' },
-  { key: 'file_type', label: '类型' },
-  { key: 'file_size', label: '大小' },
-  { key: 'total_chunks', label: '分块数' },
+  { key: 'file_type', label: '类型', width: '110px' },
+  { key: 'file_size', label: '大小', width: '90px' },
+  { key: 'total_chunks', label: '分块数', width: '70px' },
   { key: 'created_at', label: '上传时间', width: '160px' },
   { key: 'actions', label: '操作', width: '120px', thAlign: 'center' as const },
 ]
