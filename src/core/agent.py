@@ -2800,11 +2800,14 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
 
                 # Handle create_plan specially - create real plan and save to MD
                 if tool_name == "create_plan":
-                    plan_result = await self._tool_controls.get("create_plan").execute(
+                    # LLM 可能在 tool_args 里带 user_query/session_id（InputModel 有该字段），
+                    # 直接两次传参会报 multiple values，用合并字典让注入值覆盖
+                    plan_args = {
                         **tool_args,
-                        session_id=session_id,
-                        user_query=user_input,
-                    )
+                        "session_id": session_id,
+                        "user_query": user_input,
+                    }
+                    plan_result = await self._tool_controls.get("create_plan").execute(**plan_args)
                     # 发送工具执行结果
                     yield make_event("tool_result", toolName=tool_name, result=plan_result, success=plan_result.get("success", True))
                     yield make_event("progress", data=f"📋 执行计划已创建")
@@ -3772,11 +3775,13 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
 
                     # 处理 create_plan（子智能体创建自己的计划）
                     if tool_name == "create_plan":
-                        plan_result = await self._tool_controls.get("create_plan").execute(
+                        # 同主循环：合并字典避免 LLM tool_args 与注入参数重名冲突
+                        plan_args = {
                             **tool_args,
-                            session_id=self.session_id,
-                            user_query=task_description,
-                        )
+                            "session_id": self.session_id,
+                            "user_query": task_description,
+                        }
+                        plan_result = await self._tool_controls.get("create_plan").execute(**plan_args)
                         tool_result = plan_result
                         subagent_plan_created = True
                         # 发送工具执行结果
