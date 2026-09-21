@@ -129,6 +129,8 @@ focus:ring-primary-500
 | 单元格内边距 | `px-4 py-3` |
 | 空状态 | `text-center text-muted py-12` |
 
+> **列宽陷阱**：单元格含 `line-clamp`/长文本的表格，Chrome 自动布局下列宽会被内容撑爆；启用 `BaseTable` 的 `table-fixed`（`table-layout: fixed`）。列最小宽度 60px（约 2 个汉字）已由 `BaseTable` 内置兜底，未设 `width` 的列自动受保护；内容明确的列仍建议显式设 `width`。屏幕不够时出横向滚动条。详见 [list-page-convention.md](./list-page-convention.md)「固定表格布局（tableFixed）与列宽要求」。
+
 ### 1.8 分页器规范
 
 统一使用 `BasePagination` 组件。

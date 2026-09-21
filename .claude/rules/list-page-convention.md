@@ -90,6 +90,28 @@
 - 统一由 `BaseTable` 提供斑马线、表头样式、单元格 `title` 提示、空状态等基础能力。
 - 自定义列通过具名 slot（如 `#actions="{ row, index }"`）实现，但表格主体结构仍由 `BaseTable` 渲染。
 
+### 固定表格布局（tableFixed）与列宽要求
+
+`BaseTable` 默认 `table-layout: auto`，列宽由内容自动计算，跨浏览器表现不稳定。已知事故（2026-09-21，知识库页面）：
+
+- 摘要列使用 `line-clamp-2`（`display: -webkit-box`），在 Chrome 的表格自动布局下该元素**不收缩**，最小内容宽度按全文计算，列被撑到上千 px，相邻列（文档名称）被挤成每行 1 个汉字；Edge 上窗口更宽/引擎行为差异掩盖了问题
+- 换成 `table-layout: fixed` 后，**未设置 `width` 的列只能平分剩余空间**，窄屏（如 1722px）下 类型/大小/分块数 三列又被挤成 1 个汉字宽；且 fixed 布局**忽略单元格上的 `min-width`**
+
+**规则**：
+
+1. 单元格内容含 `line-clamp`（`display: -webkit-box`）、超长不可断行文本（长 URL、长英文串）或大段文本的表格，必须启用固定布局：
+
+   ```vue
+   <BaseTable :columns="columns" :data="data" row-key="id" table-fixed>
+   ```
+
+2. **列最小宽度 60px（约 2 个汉字 + 内边距）**：`BaseTable` 已内置兜底——未设 `width` 的列在表头上加 `min-width: 60px`（自动布局生效）；`table-fixed` 布局下单元格 `min-width` 被浏览器忽略，改为按「已设宽度之和 + 未设宽度列数 × 60px」计算整表 `min-width`，保证未设宽度列每列至少分到 60px。显式设置的 `width` / `minWidth` 优先于兜底值（如勾选列 40px 仍然生效）
+3. 启用 `table-fixed` 时，内容明确的列（类型徽章、大小、操作等）仍应显式设置 `width`（参考：类型徽章 `110px` 容纳 MARKDOWN、大小 `90px`、分块数 `70px`），只让确实弹性的列留空共享剩余空间
+4. 屏幕不够宽时表格整体撑开（整表 `min-width` 兜底）、由 `table-scroll-wrapper` 出横向滚动条——这是预期行为，不要为了让表格塞进视口而压缩列宽
+5. 长文本列配合 `truncate`（flex 子元素加 `min-w-0`）实现单行省略，完整内容靠单元格 `title` 悬停提示（`BaseTable` 内置）或列定义的 `tooltip` 字段
+
+**经验来源**：`KnowledgeBase.vue` 列定义 + `BaseTable.vue` 的 `tableFixed` prop 与 60px 最小列宽兜底（提交 f856656c、6f037dde）。
+
 ### 表格列规范
 
 #### 序号列

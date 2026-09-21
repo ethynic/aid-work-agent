@@ -1,6 +1,6 @@
 <template>
   <div :class="slots.wrapper()">
-    <table :class="[slots.table(), tableFixed ? 'table-fixed' : '']">
+    <table :class="[slots.table(), tableFixed ? 'table-fixed' : '']" :style="tableStyle">
       <thead :class="slots.thead()">
         <tr>
           <th
@@ -9,7 +9,7 @@
             :class="slots.th()"
             :style="[
               col.width ? { width: col.width } : undefined,
-              col.minWidth ? { minWidth: col.minWidth } : undefined,
+              col.minWidth ? { minWidth: col.minWidth } : (!col.width ? { minWidth: DEFAULT_MIN_COL_WIDTH } : undefined),
               col.thAlign ? { textAlign: col.thAlign } : undefined
             ]"
           >
@@ -65,7 +65,7 @@ export interface TableColumn {
   tooltip?: string | ((row: Record<string, any>) => string | undefined)
 }
 
-defineProps<{
+const props = defineProps<{
   columns: TableColumn[]
   data: Record<string, any>[]
   rowKey?: string
@@ -77,6 +77,23 @@ defineProps<{
 }>()
 
 const slots = computed(() => table())
+
+/** 列默认最小宽度（约 2 个汉字 + 内边距），防止表头/单元格被挤成 1 个汉字宽 */
+const DEFAULT_MIN_COL_WIDTH = '60px'
+
+// table-fixed 下单元格 min-width 会被忽略，改为用整表 min-width 兜底：
+// 已设宽度列之和 + 未设宽度列数 × 60px，保证未设宽度列每列至少分到 60px
+const tableStyle = computed(() => {
+  if (!props.tableFixed) return undefined
+  let minTotal = 0
+  let unspecified = 0
+  for (const col of props.columns) {
+    if (col.width) minTotal += parseFloat(col.width) || 0
+    else unspecified += 1
+  }
+  minTotal += unspecified * (parseFloat(DEFAULT_MIN_COL_WIDTH) || 0)
+  return minTotal > 0 ? { minWidth: `${minTotal}px` } : undefined
+})
 
 // 获取单元格 title（悬停显示完整内容）
 function getCellTitle(row: Record<string, any>, col: TableColumn): string | undefined {
