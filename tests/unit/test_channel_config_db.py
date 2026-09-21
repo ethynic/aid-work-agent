@@ -502,6 +502,99 @@ class TestChannelConfigDBWechatMp:
         assert written["credential_version"] == 1  # 身份未变，版本不递增
         assert written["enabled"] is False
 
+    def test_update_server_owned_list_fields_keep_db_values(self):
+        """update：旧快照回传清单状态/时间戳不覆盖库内新值；max_articles 仍可更新。
+
+        复现 2026-09-21 agent2 事故：扫码绑定写入 active+新会话时间戳后，
+        前端把弹窗打开时的旧快照（expired+旧时间戳）原样回传，覆盖回 expired。
+        """
+        from src.saas.db.channel_config_db import ChannelConfigDB
+
+        existing = {
+            "appid": "wx0000000000000000",
+            "original_id": "gh_test00000000",
+            "list_sync_status": "active",
+            "list_session_at": "2026-09-21T03:48:48+00:00",
+            "list_session_expire_at": "2026-09-25T03:48:48+00:00",
+            "list_last_sync_at": "2026-09-21T04:00:00+00:00",
+            "list_account_nickname": "新昵称",
+            "list_sync_mode": "auto_all",
+            "list_backfill_done": True,
+        }
+        mock_cursor = MagicMock()
+        mock_cursor.rowcount = 1
+        mock_cursor.fetchone.return_value = {
+            "channel_type": "wechat_mp",
+            "config": json.dumps(existing),
+        }
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+
+        with patch("src.saas.db.channel_config_db.get_db_connection") as mock_get_db:
+            mock_get_db.return_value.__enter__.return_value = mock_conn
+            ok = ChannelConfigDB.update(
+                config_id="chan_x",
+                config={
+                    "appid": "wx0000000000000000",
+                    "original_id": "gh_test00000000",
+                    "enabled": True,
+                    # 模拟旧快照：扫码前的状态与时间戳被原样回传
+                    "list_sync_status": "expired",
+                    "list_session_at": "2026-09-17T04:46:48+00:00",
+                    "list_session_expire_at": "2026-09-21T04:46:48+00:00",
+                    "list_last_sync_at": "2026-09-19T23:33:11+00:00",
+                    "list_account_nickname": "旧昵称",
+                    "list_sync_mode": "manual",
+                    "list_backfill_done": False,
+                    # 用户可编辑字段：随表单更新
+                    "list_sync_max_articles": 300,
+                },
+            )
+
+        assert ok is True
+        written = json.loads(mock_cursor.execute.call_args[0][1][0])
+        assert written["list_sync_status"] == "active"
+        assert written["list_session_at"] == "2026-09-21T03:48:48+00:00"
+        assert written["list_session_expire_at"] == "2026-09-25T03:48:48+00:00"
+        assert written["list_last_sync_at"] == "2026-09-21T04:00:00+00:00"
+        assert written["list_account_nickname"] == "新昵称"
+        assert written["list_sync_mode"] == "auto_all"
+        assert written["list_backfill_done"] is True
+        assert written["list_sync_max_articles"] == 300
+
+    def test_update_discards_list_keys_when_db_has_none(self):
+        """update：库内无清单字段的存量配置，传入旧清单键被丢弃而非落库。"""
+        from src.saas.db.channel_config_db import ChannelConfigDB
+
+        existing = {
+            "appid": "wx0000000000000000",
+            "original_id": "gh_test00000000",
+        }
+        mock_cursor = MagicMock()
+        mock_cursor.rowcount = 1
+        mock_cursor.fetchone.return_value = {
+            "channel_type": "wechat_mp",
+            "config": json.dumps(existing),
+        }
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+
+        with patch("src.saas.db.channel_config_db.get_db_connection") as mock_get_db:
+            mock_get_db.return_value.__enter__.return_value = mock_conn
+            ok = ChannelConfigDB.update(
+                config_id="chan_x",
+                config={
+                    "appid": "wx0000000000000000",
+                    "list_sync_status": "expired",
+                    "list_session_expire_at": "2026-09-21T04:46:48+00:00",
+                },
+            )
+
+        assert ok is True
+        written = json.loads(mock_cursor.execute.call_args[0][1][0])
+        assert "list_sync_status" not in written
+        assert "list_session_expire_at" not in written
+
     def test_update_credential_change_bumps_version_and_revokes_verified(self, master_key):
         """update：AESKey 换新明文 → 加密入库、版本递增、撤销 config_verified_at。"""
         from src.saas.db.channel_config_db import ChannelConfigDB
@@ -741,30 +834,32 @@ class TestChannelConfigDBWechatMp:
         # CR 补全：list_last_sync_at 同为运行时写入场，旧快照保存不丢
         assert written["list_last_sync_at"] == "2026-09-16T09:30:00"
 
-    def test_update_list_fields_still_overridable_when_provided(self):
-        """保留清单不等于只读：显式传入新值正常覆盖（状态翻转/模式切换/进度推进）。"""
+    def test_update_server_owned_list_fields_ignore_provided_values(self):
+        """WP13-r2：服务端拥有字段传入即丢弃——旧快照不得覆盖绑定/对账写入的新值
+        （2026-09-21 agent2「保存覆盖扫码状态」事故回归）；仅 max_articles 作为
+        租户偏好仍随表单更新。"""
         existing = {"list_sync_mode": "manual", "list_backfill_done": False, "list_sync_max_articles": 100}
         _, written = self._update_with_mock(
             existing,
             {"list_sync_mode": "auto_all", "list_backfill_done": True, "list_sync_max_articles": 250},
         )
-        assert written["list_sync_mode"] == "auto_all"
-        assert written["list_backfill_done"] is True
+        assert written["list_sync_mode"] == "manual"
+        assert written["list_backfill_done"] is False
         assert written["list_sync_max_articles"] == 250
 
     def test_update_clamps_list_sync_max_articles(self):
-        """update 传入越界值钳制到 1~500；非布尔 backfill_done 规整为 bool。"""
+        """update 传入越界值钳制到 1~500；backfill_done 属服务端拥有字段，传入即丢弃。"""
         existing = {}
         _, written = self._update_with_mock(
             existing, {"list_sync_max_articles": 9999, "list_backfill_done": 1}
         )
         assert written["list_sync_max_articles"] == 500
-        assert written["list_backfill_done"] is True
+        assert "list_backfill_done" not in written
         _, written = self._update_with_mock(
             existing, {"list_sync_max_articles": 0, "list_backfill_done": 0}
         )
         assert written["list_sync_max_articles"] == 1
-        assert written["list_backfill_done"] is False
+        assert "list_backfill_done" not in written
 
     def test_create_clamps_list_sync_max_articles_default(self, master_key):
         """create：缺失默认 100；越界钳到边界（与 update 同一钳制入口）。"""

@@ -63,6 +63,21 @@ _WECHAT_MP_RUNTIME_FIELDS = (
     "list_last_sync_at",
 )
 
+# 清单源服务端拥有字段：由绑定/对账/模式切换等经 write_list_config_fields 写入，
+# update 一律以库内值为准。前端配置快照可能携带扫码/同步前的旧状态，原样回传会把
+# 刚扫码绑定写入的新状态覆盖回旧值（2026-09-21 agent2「扫码成功后一点保存又显示
+# 已过期」事故根因），故 update 时传入值无条件丢弃。list_sync_max_articles 是
+# 租户偏好（表单可编辑），不在此列。
+_WECHAT_MP_SERVER_OWNED_LIST_FIELDS = (
+    "list_sync_status",
+    "list_session_at",
+    "list_session_expire_at",
+    "list_last_sync_at",
+    "list_account_nickname",
+    "list_sync_mode",
+    "list_backfill_done",
+)
+
 
 def _is_wechat_mp(channel_type: Optional[str]) -> bool:
     return channel_type == _WECHAT_MP_CHANNEL_TYPE
@@ -477,6 +492,11 @@ class ChannelConfigDB:
                 new_config = credential_codec.encrypt_sensitive_fields(new_config)
 
             elif _is_wechat_mp(existing_channel_type):
+                # 清单源服务端拥有字段：无条件丢弃传入值（防旧快照覆盖刚扫码
+                # 绑定的会话状态），随后由下方运行时字段保留逻辑回填库内值
+                for k in _WECHAT_MP_SERVER_OWNED_LIST_FIELDS:
+                    new_config.pop(k, None)
+
                 # 保留运行时三态字段（前端不传时用旧值，避免被重置）
                 for k in _WECHAT_MP_RUNTIME_FIELDS:
                     if k not in new_config and k in existing_config:
@@ -523,9 +543,6 @@ class ChannelConfigDB:
                             new_config["list_sync_max_articles"]
                         )
                     )
-                if "list_backfill_done" in new_config:
-                    # bool 字段规整：防任意写入路径落非布尔值
-                    new_config["list_backfill_done"] = bool(new_config["list_backfill_done"])
 
                 # 凭据/身份变更检测：callback_token 自定义改密 / appid / original_id /
                 # encoding_aes_key 变更递增凭据版本并撤销回调验证态（设计 §4 密钥轮换与三态语义）

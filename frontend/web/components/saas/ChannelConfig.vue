@@ -1345,6 +1345,18 @@ const mpCustomToken = ref('')
 const mpCustomTokenError = ref('')
 const MP_TOKEN_PATTERN = /^[A-Za-z0-9]{3,32}$/
 
+// 清单源服务端拥有字段（与后端 _WECHAT_MP_SERVER_OWNED_LIST_FIELDS 对齐）：
+// 保存时从 payload 剔除，防弹窗打开时的旧快照把刚扫码绑定的会话状态覆盖回旧值
+const MP_SERVER_OWNED_LIST_KEYS = [
+  'list_sync_status',
+  'list_session_at',
+  'list_session_expire_at',
+  'list_last_sync_at',
+  'list_account_nickname',
+  'list_sync_mode',
+  'list_backfill_done'
+]
+
 // 保存成功后展示「公众平台服务器配置」一站式面板（三件套 + 逐步指引）
 const mpSetupVisible = ref(false)
 // 最近一次保存/轮换的 Token 是否来自用户自定义（面板提示文案区分）
@@ -1766,6 +1778,10 @@ async function saveChannel(): Promise<boolean> {
       payload.config.sync_interval_hours = Number.isFinite(hours) && hours > 0 ? hours : 6
       // WP13-r1：首次同步篇数随 config 保存（后端钳制 1~500，缺失/掩码时保留旧值）
       payload.config.list_sync_max_articles = clampMpMaxArticles(mpMaxArticles.value)
+      // 服务端拥有字段不随快照回传（后端 update 亦无条件丢弃，双保险）
+      for (const k of MP_SERVER_OWNED_LIST_KEYS) {
+        delete payload.config[k]
+      }
       const customToken = mpCustomToken.value.trim()
       if (customToken) {
         // 前端先行校验（口径与后端一致：3~32 位字母数字）
