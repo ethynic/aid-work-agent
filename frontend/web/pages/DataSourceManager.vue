@@ -1,5 +1,5 @@
 <template>
-  <div class="p-6 max-w-[1400px] mx-auto">
+  <div class="p-6 max-w-[1400px] mx-auto h-full overflow-y-auto w-full">
     <!-- Tab switcher -->
     <div class="flex gap-1 mb-5 border-b border-default">
       <button
@@ -42,8 +42,8 @@
         </div>
       </div>
 
-      <BaseTable :columns="schemaColumns" :data="(filteredSchemas as any[])" row-key="id">
-        <template #index="{ index }">{{ index + 1 }}</template>
+      <BaseTable :columns="schemaColumns" :data="(schemas as any[])" row-key="id">
+        <template #index="{ index }">{{ seqNumber(index) }}</template>
         <template #title="{ row }"><span class="font-medium">{{ row.title }}</span></template>
         <template #source="{ row }">{{ row.metadata?.source_info || '-' }}</template>
         <template #source_status="{ row }">
@@ -63,6 +63,14 @@
         <template v-if="loadingSchemas" #empty>加载中...</template>
         <template v-else #empty>暂无数据表，请上传 Excel/CSV 或从数据库导入</template>
       </BaseTable>
+
+      <BasePagination
+        class="mt-4"
+        :total="total"
+        :current-page="currentPage"
+        :page-size="pageSize"
+        @change="handlePageChange"
+      />
     </div>
 
     <!-- Tab: Connectors -->
@@ -318,6 +326,8 @@ import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseTable from '@/components/ui/BaseTable.vue'
 import BaseModal from '@/components/ui/BaseModal.vue'
 import BaseBadge from '@/components/ui/BaseBadge.vue'
+import BasePagination from '@/components/ui/BasePagination.vue'
+import { usePageContext } from '@/composables/usePageContext'
 import {
   listConnectors,
   createConnector,
@@ -349,9 +359,36 @@ const activeTab = ref<'schemas' | 'connectors'>('schemas')
 // ===== Schemas tab =====
 const loadingSchemas = ref(false)
 const schemas = ref<SchemaDocument[]>([])
+const total = ref(0)
 const searchQuery = ref('')
 const searched = ref(false)
 const searching = ref(false)
+
+const {
+  currentPage,
+  pageSize,
+  seqNumber,
+  handleSearch: ctxSearch,
+  handlePageChange,
+  refresh,
+} = usePageContext(async () => {
+  loadingSchemas.value = true
+  try {
+    const res = await listSchemas({
+      page: currentPage.value,
+      pageSize: pageSize.value,
+      keyword: searched.value ? searchQuery.value.trim() : '',
+    })
+    schemas.value = res.schemas
+    total.value = res.total
+  } catch (e) {
+    console.error('加载数据表失败', e)
+    schemas.value = []
+    total.value = 0
+  } finally {
+    loadingSchemas.value = false
+  }
+})
 
 const schemaColumns = [
   { key: 'index', label: '序号', width: '60px' },
@@ -364,32 +401,20 @@ const schemaColumns = [
   { key: 'actions', label: '操作', width: '120px' },
 ]
 
-const filteredSchemas = computed(() => {
-  if (!searched.value) return schemas.value
-  const q = searchQuery.value.toLowerCase()
-  return schemas.value.filter(s => s.title?.toLowerCase().includes(q))
-})
-
 async function loadSchemas() {
-  loadingSchemas.value = true
-  try {
-    schemas.value = await listSchemas()
-  } catch (e) {
-    console.error('加载数据表失败', e)
-    schemas.value = []
-  } finally {
-    loadingSchemas.value = false
-  }
+  await refresh()
 }
 
 function searchSchemas() {
   if (!searchQuery.value.trim()) return
   searched.value = true
+  ctxSearch(searchQuery.value)
 }
 
-function clearSearch() {
+async function clearSearch() {
   searchQuery.value = ''
   searched.value = false
+  await ctxSearch('')
 }
 
 function countRelations(row: any): number {

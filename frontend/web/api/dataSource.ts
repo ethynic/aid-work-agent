@@ -334,15 +334,24 @@ export function uploadExcelStream(
 
 // ===== Schema Management =====
 
-export async function listSchemas(): Promise<SchemaDocument[]> {
-  const response = await fetch(`${API_BASE}/schemas`, {
+export async function listSchemas(params?: {
+  page?: number
+  pageSize?: number
+  keyword?: string
+}): Promise<{ schemas: SchemaDocument[]; total: number }> {
+  const query = new URLSearchParams()
+  if (params?.page) query.set('page', String(params.page))
+  if (params?.pageSize) query.set('page_size', String(params.pageSize))
+  if (params?.keyword) query.set('keyword', params.keyword)
+  const qs = query.toString()
+  const response = await fetch(`${API_BASE}/schemas${qs ? '?' + qs : ''}`, {
     headers: { ...getAuthHeader() }
   })
   if (!response.ok) {
     throw new Error(`获取数据表列表失败: ${response.status}`)
   }
   const result = await response.json()
-  return result.schemas || result.data || result
+  return { schemas: result.schemas || result.data || [], total: result.total ?? 0 }
 }
 
 export async function saveSchema(

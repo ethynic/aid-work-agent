@@ -683,9 +683,17 @@ def _resolve_schema_source_status(meta: dict, valid_connector_ids: set) -> str:
 
 
 @router.get("/schemas")
-async def list_schemas(request: Request):
-    """列出知识库中所有数据分析 schema，并标注每条 schema 的源数据是否仍可用"""
+async def list_schemas(
+    request: Request,
+    page: int = 1,
+    page_size: int = 20,
+    keyword: str = "",
+):
+    """分页列出知识库中所有数据分析 schema，并标注每条 schema 的源数据是否仍可用"""
     tenant_id = get_current_tenant_id()
+    page = max(1, page)
+    page_size = min(max(1, page_size), 100)
+    keyword = (keyword or "").strip()
 
     def _list():
         with get_db_connection() as conn:
@@ -694,14 +702,24 @@ async def list_schemas(request: Request):
             cursor.execute("SELECT id FROM data_connectors WHERE tenant_id = %s", (tenant_id,))
             valid_connector_ids = {str(dict(row)["id"]) for row in cursor.fetchall()}
 
+            where_sql = "tenant_id = %s AND source_type = 'data-analysis-metadata'"
+            params: list = [tenant_id]
+            if keyword:
+                where_sql += " AND title ILIKE %s"
+                params.append(f"%{keyword}%")
+
+            cursor.execute(f"SELECT COUNT(*) AS cnt FROM documents WHERE {where_sql}", tuple(params))
+            total = int(dict(cursor.fetchone())["cnt"])
+
             cursor.execute(
-                """
+                f"""
                 SELECT id, title, source_type, metadata, summary, created_at
                 FROM documents
-                WHERE tenant_id = %s AND source_type = 'data-analysis-metadata'
+                WHERE {where_sql}
                 ORDER BY created_at DESC
+                LIMIT %s OFFSET %s
                 """,
-                (tenant_id,),
+                tuple(params + [page_size, (page - 1) * page_size]),
             )
             results = []
             for row in cursor.fetchall():
@@ -719,11 +737,11 @@ async def list_schemas(request: Request):
                 # 标注源数据是否仍可用（防止孤儿元数据误导用户和分析智能体）
                 r["source_status"] = _resolve_schema_source_status(meta, valid_connector_ids)
                 results.append(r)
-            return results
+            return results, total
 
     try:
-        schemas = await asyncio.to_thread(_list)
-        return {"success": True, "schemas": schemas}
+        schemas, total = await asyncio.to_thread(_list)
+        return {"success": True, "schemas": schemas, "total": total, "page": page, "page_size": page_size}
     except Exception as e:
         logger.opt(exception=True).error(f"获取 schema 列表失败: {e}")
         return _error_response("获取 schema 列表失败", debug=str(e))
