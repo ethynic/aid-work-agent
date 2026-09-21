@@ -974,6 +974,8 @@ const connectionSubMenuItems = computed(() => {
     { path: `${base}/channels`, label: '渠道配置', icon: 'M5 12.55a11 11 0 0114 0M1.42 9a16 16 0 0121.16 0M8.53 16.11a6 6 0 016.95 0M12 20h.01', adminOnly: true },
     // 公众号内容：文档/文章页
     { path: `${base}/wechat-mp`, label: '公众号内容', icon: 'M5 4h14a1 1 0 011 1v14a1 1 0 01-1 1H5a1 1 0 01-1-1V5a1 1 0 011-1zM8 9h8M8 13h8M8 17h5', adminOnly: true },
+    // 商城产品同步：商店购物袋（宏陶产品知识库定时同步与挑选）
+    { path: `${base}/hongtao-shop`, label: '商城产品同步', icon: 'M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4H6zM3 6h18M16 10a4 4 0 01-8 0', adminOnly: true },
     // 企微个人RPA：机器人
     { path: `${base}/wecom-personal-rpa`, label: '企微个人RPA', icon: 'M12 4v3M5 8h14a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2v-8a2 2 0 012-2zM9 13h.01M15 13h.01M9 17h6', adminOnly: true },
     // 本地工具：电脑
@@ -999,6 +1001,7 @@ const isConnectionActive = computed(() => {
     `${base}/connections/external-systems`,
     `${base}/channels`,
     `${base}/wechat-mp`,
+    `${base}/hongtao-shop`,
     `${base}/wecom-personal-rpa`,
     `${base}/local-tools`,
   ].includes(route.path)
