@@ -1212,3 +1212,45 @@ class TestToNative:
 
     def test_regular_string(self):
         assert DataAnalyzer._to_native("hello") == "hello"
+
+
+# ==================== describe ====================
+
+
+class TestDescribe:
+    @pytest.fixture
+    def list_col_analyzer(self, analyzer):
+        """含 list/dict 不可哈希单元格的数据表"""
+        analyzer._tables["t1"] = pd.DataFrame({
+            "tags": [[1, 2], [3], [1, 2], None],
+            "info": [{"a": 1}, {"b": 2}, {"a": 1}, {"b": 2}],
+            "name": ["x", "y", "x", "z"],
+            "num": [1.0, 2.5, 3.5, 4.0],
+        })
+        return analyzer
+
+    def test_describe_unhashable_list_cells(self, list_col_analyzer):
+        """list/dict 单元格不导致 describe 失败（unhashable type 回归）"""
+        result = list_col_analyzer.describe(source="t1")
+        stats = {c["column"]: c for c in result["columns_summary"]}
+        assert stats["tags"]["unique_count"] == 2
+        assert stats["tags"]["unique_values"] == [[1, 2], [3]]
+        assert stats["info"]["unique_count"] == 2
+        assert stats["name"]["unique_count"] == 3
+
+    def test_describe_unhashable_top_values_branch(self, list_col_analyzer):
+        """不可哈希列在超过 max_unique 时降级为序列化代理键计数"""
+        result = list_col_analyzer.describe(source="t1", max_unique=1)
+        stats = {c["column"]: c for c in result["columns_summary"]}
+        assert stats["tags"]["top_values"] == [{"value": "[1, 2]", "count": 2}]
+
+    def test_describe_normal_columns_unchanged(self, list_col_analyzer):
+        """普通列与数值列统计不受降级逻辑影响"""
+        result = list_col_analyzer.describe(source="t1")
+        stats = {c["column"]: c for c in result["columns_summary"]}
+        assert stats["num"]["numeric_summary"]["mean"] == 2.75
+        assert stats["num"]["unique_values"] == [1.0, 2.5, 3.5, 4.0]
+
+    def test_describe_missing_source(self, analyzer):
+        with pytest.raises(ValueError, match="数据源不存在"):
+            analyzer.describe(source="not_exist")

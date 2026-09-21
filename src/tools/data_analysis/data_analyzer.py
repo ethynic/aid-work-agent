@@ -5,6 +5,7 @@ DataAnalyzer — pandas/numpy 数据分析执行引擎
 以及数据加载（load_table）和变量管理（_resolve_source/_store）。
 """
 
+import json
 import math
 import os
 import re
@@ -1266,7 +1267,16 @@ class DataAnalyzer:
             series = df[col]
             non_null = int(series.notna().sum())
             null_count = int(series.isna().sum())
-            nunique = int(series.nunique(dropna=True))
+
+            # 单元格含 list/dict 等不可哈希值（如 JSON 数组列）时，
+            # nunique/unique/value_counts 会抛 TypeError，降级用序列化字符串做去重计数
+            key_series = None
+            try:
+                nunique = int(series.nunique(dropna=True))
+            except TypeError:
+                dropped = series.dropna()
+                key_series = dropped.map(DataAnalyzer._hashable_key)
+                nunique = int(key_series.nunique())
             dtype = str(series.dtype)
 
             stat = {
@@ -1279,14 +1289,23 @@ class DataAnalyzer:
 
             # 唯一值示例
             if nunique <= max_unique:
-                uniques = series.dropna().unique().tolist()
+                if key_series is None:
+                    uniques = series.dropna().unique().tolist()
+                else:
+                    uniques = series.dropna().loc[key_series.drop_duplicates().index].tolist()
                 stat["unique_values"] = [self._to_native(v) for v in uniques]
             else:
-                top_vals = series.dropna().value_counts().head(max_unique)
-                stat["top_values"] = [
-                    {"value": self._to_native(v), "count": int(c)}
-                    for v, c in top_vals.items()
-                ]
+                if key_series is None:
+                    top_vals = series.dropna().value_counts().head(max_unique)
+                    stat["top_values"] = [
+                        {"value": self._to_native(v), "count": int(c)}
+                        for v, c in top_vals.items()
+                    ]
+                else:
+                    top_keys = key_series.value_counts().head(max_unique)
+                    stat["top_values"] = [
+                        {"value": k, "count": int(c)} for k, c in top_keys.items()
+                    ]
 
             # 数值列统计
             if pd.api.types.is_numeric_dtype(series):
@@ -1350,6 +1369,15 @@ class DataAnalyzer:
         except (ValueError, TypeError):
             pass
         return val
+
+    @staticmethod
+    def _hashable_key(v) -> Any:
+        """不可哈希值（list/dict/ndarray 等）转序列化字符串，作为去重/计数代理键"""
+        try:
+            hash(v)
+            return v
+        except TypeError:
+            return json.dumps(v, ensure_ascii=False, sort_keys=True, default=str)
 
     @staticmethod
     def _df_to_native_rows(df) -> List[List]:
