@@ -30,6 +30,102 @@ SEARCH_METHODS = {"search_data_tables", "list_data_tables"}
 CONTEXT_COMPRESS_THRESHOLD = 50000
 
 
+def _build_tenant_scope_params(tenant_id: Optional[str], subagent_id: Optional[str]) -> tuple:
+    """构建租户范围 SQL 与参数：本租户 + 已启用共享来源租户。subagent_id 为空时退化为本租户。"""
+    if not tenant_id:
+        return "", []
+    if not subagent_id:
+        return "AND tenant_id = %s", [tenant_id]
+    from src.knowledge.retriever.tenant_range import load_shared_ranges
+
+    tenant_ids = [tenant_id]
+    for from_tenant_id, _st in load_shared_ranges(tenant_id, subagent_id, "data-analysis-metadata"):
+        if from_tenant_id not in tenant_ids:
+            tenant_ids.append(from_tenant_id)
+    return "AND tenant_id = ANY(%s)", [tenant_ids]
+
+
+def fetch_table_metadata_from_db(
+    table_id: str, tenant_id: Optional[str], subagent_id: Optional[str]
+) -> Optional[Dict]:
+    """按 doc_id 回查 documents 表完整 metadata，构造 DataAnalyzer 所需格式。
+
+    供 AnalysisAgent.load_table 与 SmartDataAnalysisTool 预加载复用：主智能体可能传入
+    search_data_tables 的简化结构（仅 table_id/table_name/description，无 source），
+    必须回查补全后才能加载数据。非数字 table_id 返回 None（调用方按"未找到"处理）。
+
+    移动兜底（2026-09-20 设计 §4.4）：被移动出 data-analysis-metadata 的 [数据表]
+    按标题前缀兜底加载；经移动分支命中的文档必须带完整 table_name/columns metadata，
+    缺失则视为普通同名文档排除。
+    """
+    from src.db.database import get_db_connection
+
+    try:
+        numeric_id = int(table_id)
+    except (TypeError, ValueError):
+        return None
+
+    tenant_sql, tenant_params = _build_tenant_scope_params(tenant_id, subagent_id)
+    # ILIKE 模式必须参数化传值：带参执行时查询串里的字面 % 会被 psycopg2 当占位符解析
+    moved_sql = " OR (tenant_id = %s AND title ILIKE %s)" if tenant_id else ""
+    moved_params = [tenant_id, "[数据表] %"] if tenant_id else []
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            f"""
+            SELECT id, title, summary, metadata, source_type
+            FROM documents
+            WHERE id = %s
+              AND (source_type = 'data-analysis-metadata'{tenant_sql}{moved_sql})
+            """,
+            (numeric_id, *tenant_params, *moved_params),
+        )
+        row = cursor.fetchone()
+
+    if not row:
+        return None
+
+    r = dict(row)
+    meta = r.get("metadata", {})
+    if isinstance(meta, str):
+        try:
+            meta = json.loads(meta)
+        except (json.JSONDecodeError, TypeError):
+            meta = {}
+
+    # 移动分支命中（source_type 已被移动覆盖）：普通同名文档靠 metadata 判定排除
+    if r.get("source_type") != "data-analysis-metadata" and not (
+        meta.get("table_name") and meta.get("columns")
+    ):
+        return None
+
+    result = {
+        "table_id": str(r["id"]),
+        "table_name": meta.get("table_name", r.get("title", "").replace("[数据表] ", "")),
+        "description": r.get("summary", ""),
+        "columns": meta.get("columns", []),
+    }
+
+    # 构造 source 对象
+    source = meta.get("source")
+    if source:
+        result["source"] = source
+    elif meta.get("connector_id"):
+        result["source"] = {
+            "type": "database",
+            "connector_id": str(meta["connector_id"]),
+            "db_table_name": meta.get("table_name", ""),
+        }
+    elif meta.get("source_info"):
+        # 尝试从 source_info 解析文件路径
+        result["source"] = {
+            "type": "excel",
+            "file_path": meta["source_info"],
+        }
+
+    return result
+
+
 class AnalysisAgent:
     """迷你 Agent 循环，LLM 通过 function calling 完成数据表检索、加载和分析。"""
 
@@ -725,15 +821,7 @@ class AnalysisAgent:
 
     def _build_tenant_scope(self) -> tuple:
         """构建租户范围 SQL 与参数：本租户 + 已启用共享来源租户。subagent_id 为空时退化为本租户。"""
-        if not self.tenant_id:
-            return "", []
-        if not self.subagent_id:
-            return "AND tenant_id = %s", [self.tenant_id]
-        tenant_ids = [self.tenant_id]
-        for from_tenant_id, _st in self._load_shared_ranges():
-            if from_tenant_id not in tenant_ids:
-                tenant_ids.append(from_tenant_id)
-        return "AND tenant_id = ANY(%s)", [tenant_ids]
+        return _build_tenant_scope_params(self.tenant_id, self.subagent_id)
 
     async def _handle_search_data_tables(self, query: str, top_k: int = 5) -> Dict[str, Any]:
         """语义搜索数据表。"""
@@ -1021,72 +1109,8 @@ class AnalysisAgent:
             return results
 
     def _fetch_single_table_metadata(self, table_id: str) -> Optional[Dict]:
-        """查询单个表的完整 metadata，构造 DataAnalyzer 所需格式（本租户 + 已启用共享来源租户 + 本租户内被移动的表）。
-
-        移动兜底（2026-09-20 设计 §4.4）：被移动出 data-analysis-metadata 的 [数据表]
-        按标题前缀兜底加载；经移动分支命中的文档必须带完整 table_name/columns metadata，
-        缺失则视为普通同名文档排除。
-        """
-        from src.db.database import get_db_connection
-
-        tenant_sql, tenant_params = self._build_tenant_scope()
-        # ILIKE 模式必须参数化传值：带参执行时查询串里的字面 % 会被 psycopg2 当占位符解析
-        moved_sql = " OR (tenant_id = %s AND title ILIKE %s)" if self.tenant_id else ""
-        moved_params = [self.tenant_id, "[数据表] %"] if self.tenant_id else []
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                f"""
-                SELECT id, title, summary, metadata, source_type
-                FROM documents
-                WHERE id = %s
-                  AND (source_type = 'data-analysis-metadata'{tenant_sql}{moved_sql})
-                """,
-                (int(table_id), *tenant_params, *moved_params),
-            )
-            row = cursor.fetchone()
-            if not row:
-                return None
-
-            r = dict(row)
-            meta = r.get("metadata", {})
-            if isinstance(meta, str):
-                try:
-                    meta = json.loads(meta)
-                except (json.JSONDecodeError, TypeError):
-                    meta = {}
-
-            # 移动分支命中（source_type 已被移动覆盖）：普通同名文档靠 metadata 判定排除
-            if r.get("source_type") != "data-analysis-metadata" and not (
-                meta.get("table_name") and meta.get("columns")
-            ):
-                return None
-
-            result = {
-                "table_id": str(r["id"]),
-                "table_name": meta.get("table_name", r.get("title", "").replace("[数据表] ", "")),
-                "description": r.get("summary", ""),
-                "columns": meta.get("columns", []),
-            }
-
-            # 构造 source 对象
-            source = meta.get("source")
-            if source:
-                result["source"] = source
-            elif meta.get("connector_id"):
-                result["source"] = {
-                    "type": "database",
-                    "connector_id": str(meta["connector_id"]),
-                    "db_table_name": meta.get("table_name", ""),
-                }
-            elif meta.get("source_info"):
-                # 尝试从 source_info 解析文件路径
-                result["source"] = {
-                    "type": "excel",
-                    "file_path": meta["source_info"],
-                }
-
-            return result
+        """查询单个表的完整 metadata（本租户 + 已启用共享来源租户 + 本租户内被移动的表）。"""
+        return fetch_table_metadata_from_db(table_id, self.tenant_id, self.subagent_id)
 
     @staticmethod
     def _df_to_native_rows(df) -> List[List]:

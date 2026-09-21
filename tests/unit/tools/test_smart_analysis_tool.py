@@ -173,7 +173,9 @@ class TestExecuteWithMock:
     @pytest.mark.asyncio
     async def test_execute_load_table_failure(self):
         """加载数据表失败时返回错误"""
-        with patch("src.tools.data_analysis.data_analyzer.DataAnalyzer") as MockAnalyzer:
+        with patch("src.tools.data_analysis.data_analyzer.DataAnalyzer") as MockAnalyzer, \
+             patch("src.tools.data_analysis.analysis_agent.fetch_table_metadata_from_db") as mock_fetch:
+            mock_fetch.return_value = {"table_id": "t1", "source": {"type": "excel", "file_path": "test.xlsx"}}
             mock_analyzer_instance = MockAnalyzer.return_value
             mock_analyzer_instance.load_table = AsyncMock(side_effect=Exception("文件不存在"))
 
@@ -187,11 +189,89 @@ class TestExecuteWithMock:
             assert "加载数据表失败" in result["error"]
 
     @pytest.mark.asyncio
+    async def test_execute_enriches_simplified_metadata(self):
+        """主智能体传入简化结构（无 source）时回查 DB 补全，用完整 metadata 预加载并传给 AnalysisAgent"""
+        mock_result = {
+            "success": True,
+            "conclusion": "分析完成",
+            "artifacts": [],
+            "analysis_meta": {"iterations": 1, "duration_ms": 10, "tokens_used": 10, "tables_used": ["9078"], "trace_id": "t"},
+        }
+        full_meta = {
+            "table_id": "9078",
+            "table_name": "ecommerce_clothing_orders",
+            "description": "电商衣服订单数据",
+            "columns": [{"name": "订单编号", "data_type": "text", "description": "订单唯一编号"}],
+            "source": {"type": "excel", "file_path": "/app/storage/tenants/t1/data_sources/a.xlsx"},
+        }
+
+        with patch("src.tools.data_analysis.data_analyzer.DataAnalyzer") as MockAnalyzer, \
+             patch("src.tools.data_analysis.analysis_agent.AnalysisAgent") as MockAgent, \
+             patch("src.tools.data_analysis.analysis_agent.fetch_table_metadata_from_db") as mock_fetch, \
+             patch("src.core.master_agent") as mock_master:
+            mock_fetch.return_value = full_meta
+            mock_master.llm = MagicMock()
+            mock_analyzer_instance = MockAnalyzer.return_value
+            mock_analyzer_instance.load_table = AsyncMock()
+            mock_agent_instance = MockAgent.return_value
+            mock_agent_instance.run = AsyncMock(return_value=mock_result)
+
+            tool = SmartDataAnalysisTool()
+            result = await tool.execute(
+                requirement="各渠道销售情况",
+                tables_metadata=[{"table_id": "9078", "table_name": "ecommerce_clothing_orders", "description": "电商衣服订单数据"}],
+            )
+
+            assert result["success"] is True
+            # 回查用的是 table_id + 租户上下文
+            mock_fetch.assert_called_once_with("9078", None, None)
+            # 预加载用的是补全后的完整 metadata（带 source）
+            mock_analyzer_instance.load_table.assert_awaited_once_with(full_meta)
+            # AnalysisAgent 收到的也是完整 metadata
+            assert MockAgent.call_args.kwargs["tables_metadata"] == [full_meta]
+
+    @pytest.mark.asyncio
+    async def test_execute_enrich_miss_falls_back_to_original(self):
+        """回查未命中（表不可见/非数字 id）时保留原 metadata，加载报显式错误"""
+        mock_result = {
+            "success": True,
+            "conclusion": "分析完成",
+            "artifacts": [],
+            "analysis_meta": {"iterations": 1, "duration_ms": 10, "tokens_used": 10, "tables_used": [], "trace_id": "t"},
+        }
+
+        with patch("src.tools.data_analysis.data_analyzer.DataAnalyzer") as MockAnalyzer, \
+             patch("src.tools.data_analysis.analysis_agent.AnalysisAgent") as MockAgent, \
+             patch("src.tools.data_analysis.analysis_agent.fetch_table_metadata_from_db") as mock_fetch, \
+             patch("src.core.master_agent") as mock_master:
+            mock_fetch.return_value = None
+            mock_master.llm = MagicMock()
+            mock_analyzer_instance = MockAnalyzer.return_value
+            mock_analyzer_instance.load_table = AsyncMock(side_effect=ValueError(
+                "加载数据表 not_a_number 失败：源数据不存在或无法读取，请检查源文件/数据库连接器是否仍存在"
+            ))
+            mock_agent_instance = MockAgent.return_value
+            mock_agent_instance.run = AsyncMock(return_value=mock_result)
+
+            tool = SmartDataAnalysisTool()
+            result = await tool.execute(
+                requirement="分析数据",
+                tables_metadata=[{"table_id": "not_a_number"}],
+            )
+
+            # 回查未命中 → 用原 metadata 加载 → DataAnalyzer 显式报"源数据不存在"
+            mock_analyzer_instance.load_table.assert_awaited_once_with({"table_id": "not_a_number"})
+            assert result["success"] is False
+            assert "源数据不存在" in result["error"]
+
+    @pytest.mark.asyncio
     async def test_execute_agent_failure(self):
         """AnalysisAgent 运行失败时返回错误"""
         with patch("src.tools.data_analysis.data_analyzer.DataAnalyzer") as MockAnalyzer, \
              patch("src.tools.data_analysis.analysis_agent.AnalysisAgent") as MockAgent, \
+             patch("src.tools.data_analysis.analysis_agent.fetch_table_metadata_from_db") as mock_fetch, \
              patch("src.core.master_agent") as mock_master:
+            mock_fetch.return_value = {"table_id": "t1", "source": {"type": "excel", "file_path": "test.xlsx"}}
             mock_master.llm_gateway = MagicMock()
             mock_analyzer_instance = MockAnalyzer.return_value
             mock_analyzer_instance.load_table = AsyncMock()
@@ -233,7 +313,9 @@ class TestExecuteWithMock:
 
         with patch("src.tools.data_analysis.data_analyzer.DataAnalyzer") as MockAnalyzer, \
              patch("src.tools.data_analysis.analysis_agent.AnalysisAgent") as MockAgent, \
+             patch("src.tools.data_analysis.analysis_agent.fetch_table_metadata_from_db") as mock_fetch, \
              patch("src.core.master_agent") as mock_master:
+            mock_fetch.return_value = {"table_id": "t1", "source": {"type": "excel", "file_path": "test.xlsx"}}
             mock_master.llm_gateway = MagicMock()
             mock_analyzer_instance = MockAnalyzer.return_value
             mock_analyzer_instance.load_table = AsyncMock()
@@ -264,7 +346,9 @@ class TestExecuteWithMock:
 
         with patch("src.tools.data_analysis.data_analyzer.DataAnalyzer") as MockAnalyzer, \
              patch("src.tools.data_analysis.analysis_agent.AnalysisAgent") as MockAgent, \
+             patch("src.tools.data_analysis.analysis_agent.fetch_table_metadata_from_db") as mock_fetch, \
              patch("src.core.master_agent") as mock_master:
+            mock_fetch.return_value = {"table_id": "t1", "source": {"type": "excel", "file_path": "test.xlsx"}}
             mock_master.llm_gateway = MagicMock()
             mock_analyzer_instance = MockAnalyzer.return_value
             mock_analyzer_instance.load_table = AsyncMock()

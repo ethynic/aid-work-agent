@@ -5,6 +5,7 @@ BaseTool 子类，注册到主智能体工具列表。
 接收用户分析需求，内部 Agent 循环自动完成：检索匹配表 → 加载数据 → 编排分析步骤 → 返回结果。
 """
 
+import asyncio
 import uuid
 from typing import Dict, List, Optional
 
@@ -67,17 +68,34 @@ class SmartDataAnalysisTool(BaseTool):
         from src.tools.data_analysis.data_analyzer import DataAnalyzer
         analyzer = DataAnalyzer(session_id=session_id, tenant_id=tenant_id or "")
 
-        # 3. 预加载表（仅加载带 table_id/doc_id 的完整 metadata；简化结构交给 AnalysisAgent 自行检索加载）
+        # 3. 预加载表（仅加载带 table_id/doc_id 的完整 metadata）
+        # 主智能体可能传入 search_data_tables 的简化结构（仅 table_id/table_name/description，
+        # 无 source），直接加载必失败；先回查 documents 表补全完整 metadata，再加载。
         if tables_metadata:
+            from src.tools.data_analysis.analysis_agent import fetch_table_metadata_from_db
+
+            enriched_tables: List[dict] = []
             for meta in tables_metadata:
                 table_id = meta.get("table_id") or meta.get("doc_id")
                 if not table_id:
+                    enriched_tables.append(meta)
                     continue
+                if not meta.get("source"):
+                    try:
+                        full_meta = await asyncio.to_thread(
+                            fetch_table_metadata_from_db, str(table_id), tenant_id, subagent_id
+                        )
+                        if full_meta:
+                            meta = full_meta
+                    except Exception as e:
+                        logger.warning(f"[SmartDataAnalysisTool] 回查表 {table_id} 完整元数据失败: {e}")
+                enriched_tables.append(meta)
                 try:
                     await analyzer.load_table(meta)
                 except Exception as e:
                     logger.opt(exception=True).error(f"[SmartDataAnalysisTool] 加载表失败: {e}")
                     return {"success": False, "error": f"加载数据表失败: {e}"}
+            tables_metadata = enriched_tables
 
         # 4. 运行 AnalysisAgent
         try:
