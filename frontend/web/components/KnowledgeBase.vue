@@ -160,7 +160,7 @@
                 <!-- Table -->
                 <div v-else class="h-full flex flex-col">
                   <div class="flex-1 overflow-auto table-scroll-wrapper">
-                    <BaseTable :columns="columns" :data="documents" row-key="id">
+                    <BaseTable :columns="columns" :data="documents" row-key="id" table-fixed>
                       <!-- 表头全选框 -->
                       <template #checkbox_header>
                         <input
@@ -185,7 +185,7 @@
                               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                             </svg>
                           </div>
-                          <span @click="openDocument(row.id, row.title)" class="text-sm font-medium text-primary-600 hover:text-primary-700 hover:underline cursor-pointer block" :title="'点击下载原文: ' + row.title">{{ row.title }}</span>
+                          <span @click="openDocument(row.id, row.title)" class="text-sm font-medium text-primary-600 hover:text-primary-700 hover:underline cursor-pointer block flex-1 min-w-0 truncate" :title="'点击下载原文: ' + row.title">{{ row.title }}</span>
                         </div>
                       </template>
                       <template #summary="{ row }">

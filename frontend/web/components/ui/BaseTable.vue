@@ -1,6 +1,6 @@
 <template>
   <div :class="slots.wrapper()">
-    <table :class="slots.table()">
+    <table :class="[slots.table(), tableFixed ? 'table-fixed' : '']">
       <thead :class="slots.thead()">
         <tr>
           <th
@@ -71,6 +71,9 @@ defineProps<{
   rowKey?: string
   /** 行点击回调，传入当前行数据 */
   onRowClick?: (row: Record<string, any>) => void
+  /** 固定表格布局（table-layout: fixed），列宽完全由 columns 定义决定，不受单元格内容撑开。
+   *  用于含 line-clamp / 长文本的表格，避免 Chrome 自动布局下列宽被内容挤爆 */
+  tableFixed?: boolean
 }>()
 
 const slots = computed(() => table())
