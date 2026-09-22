@@ -45,7 +45,7 @@
           </div>
           <div>
             <span class="text-xs text-muted block">入库范围</span>
-            {{ state.source.selection_mode === 'ids' ? '白名单挑选' : '全部上架产品' }}
+            {{ state.source.selection_mode === 'ids' ? '部分同步（勾选产品）' : '全部上架产品' }}
           </div>
           <div>
             <span class="text-xs text-muted block">最近同步</span>
@@ -102,7 +102,7 @@ async function handleGrant() {
 }
 
 async function handleRevoke() {
-  if (!confirm('确定停用该租户的「商城产品同步」数据源？停用后：租户侧入口立即隐藏、定时同步停止、排队中的同步将被取消；已入库知识与历史记录保留。注意：重新开通后同步配置将重置为默认（全部产品、每 24 小时），租户此前设置的白名单与频率不保留。')) return
+  if (!confirm('确定停用该租户的「商城产品同步」数据源？停用后：租户侧入口立即隐藏、定时同步停止、排队中的同步将被取消；已入库知识与历史记录保留。注意：重新开通后同步配置将重置为默认（全部产品、每 24 小时），租户此前勾选的产品范围与频率不保留。')) return
   operating.value = true
   try {
     await revokeSource(props.tenantId)

@@ -71,23 +71,63 @@ def _forum_media():
 def test_render_product_basic_structure():
     r = render_product(_item(), _vl_map(), _forum_media(), "2026-09-21")
     assert r.title == "TFZJ1890014欧典米灰"
-    assert r.content_md.startswith("# TFZJ1890014欧典米灰")
-    # 型号来自 name 前缀提取
-    assert "（型号 TFZJ1890014）" in r.content_md
-    # VL 描述段：ok 的进正文，unrecognized 的不进
+    assert r.content_md.startswith("# TFZJ1890014欧典米灰\n\n## 产品信息")
+    # v1.8：去掉"是宏陶商城在售的一款…产品。"开场句（信息与字段区重复）
+    assert "宏陶商城在售" not in r.content_md
+    # v1.7 结构化正文：产品信息字段区
+    assert "- 产品名称：TFZJ1890014欧典米灰" in r.content_md
+    assert "- 型号：TFZJ1890014" in r.content_md
+    assert "- 颜色：欧典米灰" in r.content_md  # 名称去型号前缀的色名
+    assert "- 工艺：通体大理石" in r.content_md  # sellpoint 并入工艺
+    # 旧格式 VL 描述（无字段前缀）整体落入「其他」；unrecognized 的不进
     assert "欧典米灰纹理砖效果图" in r.content_md
-    # 论坛计数与效果图计数
-    assert "1 组实铺实拍素材" in r.content_md
-    assert "3 张效果图" in r.content_md  # pic + 2 pics 去重
-    # detail 文字并入正文
-    assert "防滑耐磨" in r.content_md
-    # 基本信息含稳定字段
-    for line in ("商品ID：574", "商品卖点：通体大理石", "上架时间："):
-        assert line in r.content_md
+    # detail 富文本文字（极少）并入「其他」
+    assert "详情说明：防滑耐磨" in r.content_md
+    # v1.7：标识字段只进 metadata，不进正文
+    for absent in ("商品ID", "上架时间", "商品编码", "商品分类ID", "基本信息",
+                   "实拍素材", "效果图。"):
+        assert absent not in r.content_md, f"正文不应再包含 {absent}"
     # 正文无易变数值与同步日期（设计 §3.1：只含稳定内容）
     assert "1000" not in r.content_md
     assert "库存" not in r.content_md and "销量" not in r.content_md
     assert "2026-09-21" not in r.content_md
+
+
+def test_render_structured_vl_fields():
+    """v1.7 字段化 VL 转述：按「字段名：内容」解析入对应栏目，尺寸进其他。"""
+    vl = {
+        "https://oss/d574_1.jpg": CachedVision(
+            image_url="https://oss/d574_1.jpg",
+            description=(
+                "型号：TFZJ1890014\n"
+                "尺寸：750x1500mm\n"
+                "系列：通体大理石\n"
+                "颜色：欧典米灰\n"
+                "工艺：柔抛工艺\n"
+                "卖点：防滑耐磨 温润如玉\n"
+                "适用空间：家装、工装"
+            ),
+            model="GLM-5.3-Flash", status="ok", is_billed=True,
+        )
+    }
+    r = render_product(_item(), vl, [], "2026-09-21")
+    assert "- 型号：TFZJ1890014" in r.content_md
+    assert "- 颜色：欧典米灰" in r.content_md  # 名称色名与 VL 颜色去重合一
+    assert "- 工艺：通体大理石；柔抛工艺" in r.content_md  # sellpoint/VL系列/VL工艺 合并去重
+    assert "- 卖点：防滑耐磨 温润如玉" in r.content_md
+    assert "- 适用空间：家装、工装" in r.content_md
+    assert "- 其他：尺寸 750x1500mm" in r.content_md
+
+
+def test_parse_vl_fields_prefix_and_fallback():
+    from src.tenant_custom.hongtao_shop.renderer import _parse_vl_fields
+    parsed = _parse_vl_fields(
+        "型号:TFG157013\r\n  尺寸：900x1800mm\n无前缀的转述行\n\n卖点：石中贵族"
+    )
+    assert parsed["型号"] == ["TFG157013"]  # 半角冒号容错
+    assert parsed["尺寸"] == ["900x1800mm"]
+    assert parsed["卖点"] == ["石中贵族"]
+    assert parsed["其他"] == ["无前缀的转述行"]
 
 
 def test_render_product_metadata_complete():
@@ -99,6 +139,9 @@ def test_render_product_metadata_complete():
     assert m["pics"] == ["https://oss/pic574.jpg", "https://oss/p574_1.jpg", "https://oss/p574_2.jpg"]
     assert m["detail_images"] == ["https://oss/d574_1.jpg", "https://oss/d574_2.jpg"]
     assert len(m["forum_media"]) == 1
+    # v1.7：标识字段从正文移入 metadata（正文不再含商品ID/上架时间）
+    assert m["cid"] == "12"
+    assert m["listing_date"] == "2025-09-21"  # createtime 1758432000 @UTC+8
     assert m["trace"]["source"] == "hongtao_shop"
     assert m["trace"]["native_id"] == "574"
     assert m["trace"]["sync_date"] == "2026-09-21"
@@ -126,13 +169,23 @@ def test_render_placeholder_product_gets_suspected_model():
 
 
 def test_hash_idempotent_and_sensitive():
-    """同输入同 hash；论坛计数变 → hash 变（关联变化触发重嵌）；pipeline 进 hash。"""
+    """同输入同 hash；VL 内容变 → hash 变；论坛关联变化不进正文（v1.7：只走
+    metadata 轻量更新，不再触发重嵌）；pipeline 进 hash。"""
     r1 = render_product(_item(), _vl_map(), _forum_media(), "2026-09-21")
     r2 = render_product(_item(), _vl_map(), _forum_media(), "2026-12-31")
     assert r1.content_hash == r2.content_hash  # sync_date 不进正文 → 不影响 hash
 
     r3 = render_product(_item(), _vl_map(), _forum_media() + _forum_media(), "2026-09-21")
-    assert r3.content_hash != r1.content_hash  # 实拍素材计数变化触发重判
+    assert r3.content_hash == r1.content_hash  # v1.7：实拍素材计数不再进正文
+
+    vl_changed = {
+        "https://oss/d574_1.jpg": CachedVision(
+            image_url="https://oss/d574_1.jpg", description="完全不同的描述",
+            model="GLM-5.3-Flash", status="ok", is_billed=True,
+        )
+    }
+    r4 = render_product(_item(), vl_changed, _forum_media(), "2026-09-21")
+    assert r4.content_hash != r1.content_hash  # VL 内容变化触发重判
 
     import hashlib
     manual = hashlib.sha256((PIPELINE_VERSION + "\n" + r1.content_md).encode()).hexdigest()

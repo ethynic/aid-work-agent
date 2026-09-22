@@ -6,6 +6,7 @@ import httpx
 import pytest
 
 from src.tenant_custom.hongtao_shop.vision import (
+    MAX_DESCRIPTION_CHARS,
     UNRECOGNIZED_TEXT,
     CachedVision,
     ImageParseSuccess,
@@ -100,9 +101,10 @@ async def test_parser_download_failed():
     assert outcome.failures[0].reason == "download_failed"
 
 
-async def test_parser_description_truncated_to_100():
+async def test_parser_description_truncated_to_cap():
+    """描述上限截断（v1.6：100→400，防文字密集详情图转述被切半句）。"""
     png = _png_bytes()
-    long_text = "字" * 150
+    long_text = "字" * 500
 
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, content=png)
@@ -114,7 +116,7 @@ async def test_parser_description_truncated_to_100():
             client=client,
         )
         outcome = await parser.describe_images(["https://oss/a.jpg"])
-    assert len(outcome.successes[0].description) == 100
+    assert len(outcome.successes[0].description) == MAX_DESCRIPTION_CHARS
 
 
 async def test_describe_images_cached_dedupes_urls(tenant_id):

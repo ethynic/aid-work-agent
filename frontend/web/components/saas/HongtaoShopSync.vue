@@ -8,7 +8,7 @@
       @logout="handleLogout"
     />
 
-    <div class="page-content p-6 space-y-6">
+    <div class="page-content p-6 space-y-6 overflow-y-auto">
       <!-- 数据源未开通空态（开通入口：portal 企业管理「数据源」页签） -->
       <div v-if="sourceNotFound" class="bg-warning-50 border border-warning-200 rounded-lg p-4 text-sm text-warning-800">
         <p class="font-medium mb-1">本租户尚未开通「商城产品同步」数据源</p>
@@ -90,8 +90,8 @@
               <h2 class="text-base font-medium text-default">产品挑选</h2>
               <p class="text-xs text-muted mt-0.5">
                 {{ source?.selection_mode === 'ids'
-                  ? `白名单模式：已选 ${selectedCount} 个产品，仅选中产品入库`
-                  : '全部模式：所有上架产品自动入库' }}
+                  ? `部分同步：已选 ${selectedCount} 个产品，仅勾选保存的产品入库`
+                  : '全部同步：所有上架产品自动入库' }}
               </p>
             </div>
             <div class="flex items-center gap-2">
@@ -102,7 +102,7 @@
                   :disabled="savingSelection"
                   @click="handleSelectionMode('ids')"
                 >
-                  白名单模式
+                  部分同步
                 </BaseButton>
                 <BaseButton
                   size="sm"
@@ -116,7 +116,7 @@
             </div>
           </div>
 
-          <!-- 白名单模式下的选择工具行 -->
+          <!-- 部分同步下的选择工具行 -->
           <div v-if="source?.selection_mode === 'ids'" class="flex items-center gap-3 mb-3 flex-wrap">
             <div class="flex-1 min-w-52">
               <BaseInput
@@ -134,7 +134,7 @@
               :disabled="savingSelection || !selectionDirty"
               @click="handleSaveSelection"
             >
-              {{ savingSelection ? '保存中...' : selectionDirty ? '保存挑选' : '已保存' }}
+              {{ savingSelection ? '保存中...' : selectionDirty ? '保存所选（部分同步）' : '已保存' }}
             </BaseButton>
           </div>
 
@@ -175,8 +175,8 @@
             <p v-if="products.length === 0" class="text-center text-sm text-muted py-6">暂无产品目录（完成一轮同步后可见）</p>
             <div v-if="productTotal > productPageSize" class="mt-3 flex justify-end">
               <BasePagination
+                v-model:current-page="productPage"
                 :total="productTotal"
-                :current-page="productPage"
                 :page-size="productPageSize"
                 :show-size-changer="false"
                 @change="onProductPageChange"
@@ -470,14 +470,14 @@ function toggleProduct(nativeId: string) {
 async function handleSelectionMode(mode: 'all' | 'ids') {
   if (!source.value || source.value.selection_mode === mode) return
   if (mode === 'all') {
-    if (!confirm('切换为全部同步后，所有上架产品将入库（含此前取消勾选的）。确认切换？')) return
+    if (!confirm('切换为全部同步后，所有上架产品将入库（含此前未勾选的）。确认切换？')) return
     await saveSourcePatch({ selection_mode: 'all' }, '已切换为全部同步')
     selectionDirty.value = false
   } else {
-    // 危险操作对称确认：空白名单意味着下一轮同步会把已入库产品全部下架
-    if (!confirm('切换为白名单模式将从空白名单开始：保存前不会影响知识库，'
+    // 危险操作对称确认：空选择集意味着下一轮同步会把已入库产品全部下架
+    if (!confirm('切换为部分同步将从空选择开始：保存前不会影响知识库，'
       + '但若未勾选任何产品就发生同步，已入库产品将被全部下架。确认切换？')) return
-    await saveSourcePatch({ selection_mode: 'ids', selected_ids: [] }, '已切换为白名单模式，请勾选产品后保存')
+    await saveSourcePatch({ selection_mode: 'ids', selected_ids: [] }, '已切换为部分同步，请勾选产品后保存')
   }
   loadProducts()
 }
@@ -491,7 +491,7 @@ async function handleSaveSelection() {
     })
     source.value = resp.source
     selectionDirty.value = false
-    toast.success(`已保存挑选（${draftSelected.value.size} 个产品），下一轮同步生效`)
+    toast.success(`已按部分同步保存（${draftSelected.value.size} 个产品），下一轮同步生效`)
     loadProducts()
   } catch (e) {
     toast.error((e as Error).message)
@@ -609,7 +609,7 @@ function formatTime(value: string | null): string {
 onMounted(async () => {
   await loadSource()
   if (!sourceNotFound.value) {
-    // 白名单模式下初始化草稿集（含未加载页的全部选中项）
+    // 部分同步模式下初始化草稿集（含未加载页的全部选中项）
     if (source.value?.selection_mode === 'ids') {
       draftSelected.value = new Set(source.value.selected_ids)
     }

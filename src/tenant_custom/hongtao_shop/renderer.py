@@ -1,9 +1,10 @@
 """宏陶商城产品 → 知识文档渲染（renderer，纯函数模块）。
 
-设计 §3：正文只含稳定内容（无库存/销量/评分/同步日期，消除 hash 抖动），
-易变数值只进 metadata；VL 描述段承载详情图语义；占位名商品（"编号:xx"）由 VL
-提取的疑似型号/系列补全名称语义；「M 组实拍素材」计数随论坛关联变化，
-低频触发重嵌属预期。
+设计 §3（v1.7 结构化正文）：正文只含稳定内容（无库存/销量/评分/同步日期，
+消除 hash 抖动），易变数值只进 metadata；正文为「产品信息」字段区——
+产品名称/型号/颜色/工艺/卖点/适用空间/其他，由 VL 按字段转述（vision 指令）
++ 名称/接口字段聚合而成；商品ID/上架时间等标识字段只进 metadata；
+论坛实拍素材不再进正文计数（关联变化只走 metadata 轻量更新，不触发重嵌）。
 
 hash 口径（设计 §5.1）：sha256(pipeline_version + 渲染正文全文)。pipeline_version
 独立于契约演进——渲染/分块管线升级时 +1 触发全量重判。
@@ -14,6 +15,7 @@ hash 口径（设计 §5.1）：sha256(pipeline_version + 渲染正文全文)。
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
@@ -24,13 +26,20 @@ from src.knowledge.chunker import MAX_EMBEDDING_CHUNK_CHARS, TextChunker
 from src.knowledge.parsers import ParsedChunk
 
 # 渲染/分块管线版本（升级触发全量重判重嵌，与业务字段无关）
-PIPELINE_VERSION = "hts-render-v1"
+PIPELINE_VERSION = "hts-render-v3"
 
 BRAND = "宏陶商城"
 TITLE_MAX_CHARS = 120
 
 # 占位名商品判定（实测 96/674 为 "编号:xx" 形态）
 PLACEHOLDER_NAME_PREFIX = "编号"
+
+# VL 按字段转述的字段名（vision.PARSE_INSTRUCTION 约定；渲染器按「字段名：」
+# 前缀逐行解析，无前缀的行归入「其他」——兼容旧格式缓存的全量转述文本）
+VL_FIELD_NAMES = ("型号", "尺寸", "系列", "颜色", "工艺", "卖点", "适用空间", "其他")
+
+# 名称色名提取：去掉前缀型号段（TFG157013松烟黛墨 → 松烟黛墨）
+_NAME_MODEL_PREFIX_RE = re.compile(r"^[A-Za-z]{2,5}\d{5,7}[A-Za-z]?")
 
 
 @dataclass
@@ -84,6 +93,44 @@ def _suspected_models_from_vl(vl_map: Dict[str, Any], ordered_urls: List[str]) -
     return tokens[:3]
 
 
+def _parse_vl_fields(description: str) -> Dict[str, List[str]]:
+    """按「字段名：内容」前缀逐行解析 VL 转述（v1.7 指令产物）。
+
+    无字段前缀的行归入「其他」（兼容旧格式缓存的全量转述与一句白描）。
+    """
+    fields: Dict[str, List[str]] = {f: [] for f in VL_FIELD_NAMES}
+    for raw_line in description.splitlines():
+        line = raw_line.strip().lstrip("-•·").strip()
+        if not line:
+            continue
+        matched = False
+        for field in VL_FIELD_NAMES:
+            prefix = field + "："
+            if line.startswith(prefix) and len(line) > len(prefix):
+                fields[field].append(line[len(prefix):].strip())
+                matched = True
+                break
+            # 半角冒号容错
+            prefix_half = field + ":"
+            if line.startswith(prefix_half) and len(line) > len(prefix_half):
+                fields[field].append(line[len(prefix_half):].strip())
+                matched = True
+                break
+        if not matched:
+            fields["其他"].append(line)
+    return fields
+
+
+def _merge_dedup(*parts: str) -> List[str]:
+    """合并去重（大小写不敏感，保序）。"""
+    merged: List[str] = []
+    for p in parts:
+        p = (p or "").strip()
+        if p and p.upper() not in [m.upper() for m in merged]:
+            merged.append(p)
+    return merged
+
+
 def render_product(
     item: Dict[str, Any],
     vl_map: Dict[str, Any],
@@ -110,54 +157,53 @@ def render_product(
 
     lines: List[str] = [f"# {name}", ""]
 
-    # 开头自然语义段（检索语义主要承载区；无易变数值）
-    intro = f"{name}"
-    if model:
-        intro += f"（型号 {model}）"
-    intro += f"是{BRAND}在售的一款"
-    intro += f"{sellpoint}系列" if sellpoint else ""
-    intro += "产品。"
-    if detail_text:
-        intro += f"详情说明：{detail_text}。"
-    lines += [intro, ""]
-
-    # VL 描述段：每张详情图 ≤100 字客观描述，按 detail_imgs 顺序渲染（防 DB 行序
-    # 抖动引起 hash 漂移）；unrecognized/failed 无描述的跳过
-    vl_lines = []
+    # VL 字段聚合：多图按 detail_imgs 顺序合并去重（防 DB 行序抖动引起 hash 漂移）；
+    # unrecognized/failed 无描述的跳过；旧格式缓存（无字段前缀）整体落入「其他」
+    vl_fields: Dict[str, List[str]] = {f: [] for f in VL_FIELD_NAMES}
     for url in detail_imgs:
         cached = vl_map.get(url)
         if cached is None:
             continue
         description = (getattr(cached, "description", None) or "").strip()
-        if getattr(cached, "status", "") == "ok" and description:
-            vl_lines.append(description)
-    if vl_lines:
-        lines += [f"- {desc}" for desc in vl_lines]
-        lines.append("")
+        if getattr(cached, "status", "") != "ok" or not description:
+            continue
+        for field, values in _parse_vl_fields(description).items():
+            for value in values:
+                if value.upper() not in [v.upper() for v in vl_fields[field]]:
+                    vl_fields[field].append(value)
 
     # 占位名商品：VL 提取到疑似型号/系列时补全名称语义（标题保留原名，设计 v1.1）
-    is_placeholder = name.startswith(PLACEHOLDER_NAME_PREFIX)
-    if is_placeholder:
+    suspected: List[str] = []
+    if name.startswith(PLACEHOLDER_NAME_PREFIX):
         suspected = _suspected_models_from_vl(vl_map, detail_imgs)
-        if suspected:
-            lines += [f"疑似型号/系列：{'、'.join(suspected)}。", ""]
 
-    if forum_media:
-        lines.append(f"该产品另有 {len(forum_media)} 组实铺实拍素材（来自门店工地实景帖）")
-    else:
-        lines.append("该产品暂无实铺实拍素材")
-    lines.append(f"与 {len(pics)} 张效果图。")
-    lines += ["", "## 基本信息", ""]
-    lines.append(f"- 商品ID：{pid}")
-    if procode:
-        lines.append(f"- 商品编码：{procode}")
-    if sellpoint:
-        lines.append(f"- 商品卖点：{sellpoint}")
-    if cid:
-        lines.append(f"- 商品分类ID：{cid}")
-    if created:
-        lines.append(f"- 上架时间：{created}")
-    lines += ["", "---", "", f"数据来源：{BRAND}商品接口。", ""]
+    # 「产品信息」字段区（v1.7：结构化正文；标识类字段只进 metadata 不进正文）
+    name_color = _NAME_MODEL_PREFIX_RE.sub("", name).strip()
+    if not name_color or name_color == name:
+        name_color = ""
+    color_values = _merge_dedup(*([name_color] if name_color else []), *vl_fields["颜色"])
+    craft_values = _merge_dedup(sellpoint, *vl_fields["系列"], *vl_fields["工艺"])
+    other_values = _merge_dedup(
+        *(["尺寸 " + "、".join(vl_fields["尺寸"])] if vl_fields["尺寸"] else []),
+        *(["详情说明：" + detail_text] if detail_text else []),
+        *vl_fields["其他"],
+        *(["疑似型号/系列：" + "、".join(suspected)] if suspected else []),
+    )
+    info_lines = [f"- 产品名称：{name}"]
+    if model:
+        info_lines.append(f"- 型号：{model}")
+    if color_values:
+        info_lines.append(f"- 颜色：{'；'.join(color_values)}")
+    if craft_values:
+        info_lines.append(f"- 工艺：{'；'.join(craft_values)}")
+    if vl_fields["卖点"]:
+        info_lines.append(f"- 卖点：{'；'.join(vl_fields['卖点'])}")
+    if vl_fields["适用空间"]:
+        info_lines.append(f"- 适用空间：{'；'.join(vl_fields['适用空间'])}")
+    if other_values:
+        info_lines.append(f"- 其他：{'；'.join(other_values)}")
+    lines += ["## 产品信息", "", *info_lines, ""]
+    lines += ["---", "", f"数据来源：{BRAND}商品接口。", ""]
 
     content_md = "\n".join(lines)
     title = name[:TITLE_MAX_CHARS] or f"商品{pid}"
@@ -175,6 +221,8 @@ def render_product(
         "model": model or "",
         "procode": procode,
         "sellpoint": sellpoint,
+        "cid": cid,
+        "listing_date": created,
         "stock": _s(item.get("stock")),
         "sales": _s(item.get("sales")),
         "comment_score": _s(item.get("comment_score")),

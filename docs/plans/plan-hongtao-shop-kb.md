@@ -18,6 +18,9 @@
 | P2.3 | 前端（源设置卡 + 产品挑选列表） | ✅ 完成（2026-09-21，待视觉验收） | api/hongtaoShop.ts + HongtaoShopSync.vue（设置/挑选/运行记录三卡，Base* 组件 + AppHeader）+ 路由菜单注册；npm run build 通过、MenuSidebar 回归 14 绿；浏览器视觉验收待 agent2（需已初始化源） |
 | ~~P2.4~~ | ~~agent 工具两个~~ | ⛔ 已取消（2026-09-21 用户决议） | 租户专有功能不注册平台工具：触发走后台；发图由 knowledge_base_search 天然覆盖（返回含 documents.metadata 且 _no_truncate） |
 | P2.5 | 数据源授权 Web 化（portal 开通/停用 + 菜单门控 + 同步方式自动/手动） | 🔧 进行中 | 设计 v1.5 §8.1：portal TenantDataSources 页签（admin grant/revoke/status 接口）+ 通用 GET /api/saas/connection-sources + MenuSidebar 按授权行门控 + 同步方式下拉语义化 enabled；用户侧独立审查（2026-09-21 二轮）后修 2 项 P1：revoke 同事务取消在队 run + `_execute_run_inner` 源行守卫兜底（防 'all' 语义绕白名单全量入库计费），revoke→re-grant 配置重置语义已入停用确认文案与 §8.1；hongtao 单测 74 全绿、前端 build 过；待 agent2 验收 |
+| P2.6 | VL 描述上限修正（agent2 试跑发现） | ✅ 完成（2026-09-22） | 设计 v1.6：详情图文字密集，100 字上限把逐字转述切在半句（40/43 条恰好卡 100，"皇家玉石"图切在"突破"处）；上限 100→400（vision.py 常量 + renderer 注释 + 单测改断言 cap 常量）；存量缓存清运 SQL 已登记设计附录（agent2 已执行，58 行待重解析） |
+| P2.7 | 正文结构化字段区（用户决议 v1.7） | ✅ 完成（2026-09-22） | 设计 v1.7 §3.1：产品信息字段区（产品名称/型号/颜色/工艺/卖点/适用空间/其他）；VL 指令改按字段转述 + 渲染器前缀解析聚合；商品ID/上架时间/编码/分类ID 移 metadata（新增 listing_date/cid）；砍实拍素材计数行（论坛变化走 metadata 轻量更新）；pipeline 升 hts-render-v2；76 用例全绿；agent2 已热部署并重灌 17 个存量产品 |
+| P2.8 | 去开场句 + 部分同步更名 + 滚动修复（用户决议 v1.8） | ✅ 完成（2026-09-22） | 正文删开场句（详情文字并入其他，pipeline v3）；前端「白名单模式」→「部分同步」全量更名；产品列表 page-content 补 overflow-y-auto 修滚动/分页不可达 + 分页 v-model 接法；76 用例 + build 过；agent2 已热部署（含前端重建）并重灌 17 产品 |
 | P3 | agent2 验收（栏目授权/外链抽样）→ 正式部署（portal 开通） | 📋 待开发 | — |
 
 ## 1. 集成点清单（新代码挂到哪，全部已核对现有模式）

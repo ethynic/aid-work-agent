@@ -31,7 +31,7 @@ class SourcePatch(BaseModel):
     selection_mode: Optional[str] = None
     selected_ids: Optional[List[str]] = Field(
         default=None, max_length=2000,
-        description="挑选白名单（单独传等价于 selection_mode=ids）",
+        description="部分同步的勾选产品集（单独传等价于 selection_mode=ids）",
     )
 
 
