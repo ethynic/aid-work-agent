@@ -174,18 +174,23 @@ class TestExternalPushHumanAdapter:
 
     @pytest.mark.asyncio
     async def test_cooldown_skip(self):
-        """冷却中（占坑失败）：跳过推送，不调 LLM"""
+        """冷却中（占坑失败）：跳过推送，不调 LLM，登记延迟补推兜底"""
         payload = _make_payload()
         with patch(f"{_TOPIC_NS}._collect_context", return_value=_make_ctx()), \
                 patch(f"{_TOPIC_NS}._load_tenant_doc", return_value=_FAKE_DOC), \
                 patch(f"{_TOPIC_NS}._get_agent_token", return_value="agent_tok"), \
                 patch("src.channels.session.channel_session_manager") as mock_mgr, \
                 patch(f"{_TOPIC_NS}.redis_client") as mock_redis, \
+                patch(f"{_TOPIC_NS}.defer_recap_task") as mock_defer, \
                 patch(f"{_TOPIC_NS}._run_push_loop") as mock_loop:
             mock_mgr.get_messages.return_value = _human_period_messages()
             mock_redis.acquire_lock.return_value = False
+            mock_redis.ttl.return_value = 120
             await ExternalPushHumanAdapter.execute(payload)
             mock_loop.assert_not_called()
+            mock_defer.assert_called_once()
+            assert mock_defer.call_args[0][0] is payload
+            assert mock_defer.call_args[0][1] == "external_push_human"
 
     @pytest.mark.asyncio
     async def test_normal_push(self):

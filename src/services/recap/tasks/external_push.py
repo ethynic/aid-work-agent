@@ -46,6 +46,8 @@ _DEFAULT_USER_TOKEN_HEADER = "Client-Authorize-Token"
 _DEFAULT_EXTERNAL_USERID_FIELD = "unionid"
 # 智能体身份 token（AGENT_TOKEN）的鉴权 Header 默认名，api-meta 可覆盖
 _DEFAULT_AGENT_TOKEN_HEADER = "Api-Authorize-Token"
+# 累计摘要字段名缺省值（10605 惯例）；租户文档 api-meta 可用 summary_fields 覆盖（逗号分隔）
+_DEFAULT_SUMMARY_FIELDS = "genjinhuizongzhaiyao"
 
 _HTTP_TIMEOUT_SECONDS = 15
 _TEXT_TRUNCATE_CHARS = 200
@@ -254,6 +256,9 @@ def parse_api_meta(doc_text: str, topic: str = "外部推送") -> Optional[Dict[
     2026-09-17 erp11095 Code=-99「请求缺少身份令牌」事故）。
     push_exclude_sections（可选）：逗号分隔章节标题，注入 LLM 前裁剪对应章节，
     见 _strip_excluded_sections。
+    summary_fields（可选）：逗号分隔的累计摘要字段名（如 genjinhuizongzhaiyao）。
+    推送循环扫描 http_api 查询结果中的这些字段，命中后向上下文显式注入
+    「客户当前摘要 + 回写规则」提醒，消除对模型自觉查重合并的依赖（见 _run_push_loop）。
     无块 / login_url 缺失 / login_url 非 https 均返回 None（放弃原因写入 tlog）。
     宁可解析失败放弃本轮，绝不猜测 URL。
     """
@@ -293,6 +298,7 @@ def parse_api_meta(doc_text: str, topic: str = "外部推送") -> Optional[Dict[
         meta["http_method"] = declared_method
     else:
         meta.pop("http_method", None)
+    meta["summary_fields"] = (meta.get("summary_fields") or "").strip() or _DEFAULT_SUMMARY_FIELDS
     return meta
 
 
@@ -892,7 +898,10 @@ def _build_system_prompt(doc: str, meta: Dict[str, str]) -> str:
         "只保留关键诉求、结论与待办，不逐轮罗列过程；条与条之间用 CRLF（\\r\\n）分隔，"
         "禁止合并成一段或用分号分隔；须保留客户当前摘要中的历史日期条目（保持原样，不扩写），仅新增或更新当天条目。"
         "当天条目内区分多轮时以上方系统注入的真实时刻为准，"
-        "禁止虚构「上午/下午/傍晚/晚间/深夜」等与真实时间不符的时段标签。\n"
+        "禁止虚构「上午/下午/傍晚/晚间/深夜」等与真实时间不符的时段标签。"
+        "回写前必须自查：同一日期在整个摘要中只能出现一条；"
+        "若当前摘要已有当天日期条目，必须原地改写该条（合并当天多轮要点），"
+        "严禁在已有当天条目的情况下再追加同日期新条目。\n"
         "9. 终止：完成全部外部调用、或按规则放弃时，必须调用 report_push_result 工具"
         "（success=true/false + detail 简述执行结果），且它是你最后调用的工具。"
     )
@@ -936,6 +945,24 @@ def _build_user_message(
         f"委托人：{login.get('display_name') or ''} / {login.get('agent_name') or ''}"
         f"（用户身份 token {user_token} 已由系统托管并自动附加到鉴权 Header，无需关注）"
     )
+
+
+def _extract_field_values(obj: Any, fields: List[str]) -> Dict[str, str]:
+    """递归提取对象中首个命中的指定字段值（查重/详情响应里的累计摘要字段）"""
+    found: Dict[str, str] = {}
+
+    def _walk(node: Any) -> None:
+        if isinstance(node, dict):
+            for k, v in node.items():
+                if k in fields and isinstance(v, str) and v.strip() and k not in found:
+                    found[k] = v
+                _walk(v)
+        elif isinstance(node, list):
+            for item in node:
+                _walk(item)
+
+    _walk(obj)
+    return found
 
 
 # ============== LLM 工具循环 ==============
@@ -990,12 +1017,17 @@ async def _run_push_loop(
     consecutive_failures = 0
     last_content = ""
     aborted_reason = ""
+    # 累计摘要字段：查询结果命中后显式注入「当前值 + 回写规则」提醒（每轮循环至多一次），
+    # 消除对 lite 模型自觉从查重响应中找到并正确合并摘要的依赖（同日多条摘要事故）
+    summary_fields = [f.strip() for f in (meta.get("summary_fields") or "").split(",") if f.strip()]
+    summary_reminder_injected = False
     # 系统持有的当前有效用户身份 token：注入 http_api 鉴权头的唯一来源，
     # -99 强刷成功后同步更新，保证重试自动携带新 token
     active_client_token = login.get("client_token") or ""
 
     for round_no in range(1, max_rounds + 1):
         round_start = time.time()
+        round_summary_values: Dict[str, str] = {}
         used_lite = True
         try:
             # 推送循环用 lite 轻量模型降延迟（主模型每轮携带完整租户文档，实测 3~11s/轮）。
@@ -1078,6 +1110,10 @@ async def _run_push_loop(
 
             consecutive_failures = 0 if result.get("success") else consecutive_failures + 1
 
+            if name == "http_api" and result.get("success") and summary_fields:
+                for k, v in _extract_field_values(result, summary_fields).items():
+                    round_summary_values.setdefault(k, v)
+
             if name == "report_push_result":
                 reported = True
             else:
@@ -1105,6 +1141,27 @@ async def _run_push_loop(
                                 f"鉴权 Header 将由系统自动携带新值，请直接重试刚才失败的调用。"
                             ),
                         })
+
+        if round_summary_values and not summary_reminder_injected:
+            summary_reminder_injected = True
+            values_text = "\n".join(f"{k} = {v}" for k, v in round_summary_values.items())
+            messages.append({
+                "role": "user",
+                "content": (
+                    "【系统提醒】已从查询结果中提取客户当前累计摘要，更新该类字段时必须基于以下当前值整体回写：\n"
+                    f"{values_text}\n"
+                    "回写规则：按天分条，同一日期在整个摘要中只能出现一条；"
+                    "已有当天条目必须原地改写合并（当天多轮要点并入该条），严禁追加同日期第二条；"
+                    "历史日期条目保持原样。"
+                ),
+            })
+            tlog(
+                topic,
+                "累计摘要注入提醒: fields={fields}, values_len={vlen}, round={round_no}",
+                fields=",".join(round_summary_values.keys()),
+                vlen=len(values_text),
+                round_no=round_no,
+            )
 
         if reported:
             break

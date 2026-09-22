@@ -30,6 +30,11 @@ RECAP_MAX_QUEUE_AGE_SECONDS = 3600  # 1h
 # 触发时机白名单：当前仅支持 every_round
 VALID_WHEN = ("every_round",)
 
+# 冷却跳过补推：到期时间在冷却剩余 TTL 基础上加缓冲（保证补推执行时冷却键已过期），
+# payload 键 TTL 在补推延迟基础上再加冗余，防止 zset 成员到期时 payload 已被误删
+RECAP_DEFER_BUFFER_SECONDS = 5
+RECAP_DEFERRED_PAYLOAD_EXTRA_TTL = 300
+
 
 @dataclass
 class RecapTaskConfig:
@@ -288,6 +293,89 @@ def enqueue_human_period_tasks(tenant_id: str, session_id: str, round_message_id
         )
     except Exception as e:
         logger.warning(f"[recap] 人工期任务入队异常（不影响消息链路）: {e}")
+
+
+def defer_recap_task(payload: RecapPayload, task_name: str, delay_seconds: float) -> bool:
+    """冷却跳过后登记延迟补推（冷却剩余到期后由 background runner 消费者取出执行）
+
+    解决「冷却期内跳过后客户再无新消息，最后一批消息永不推送」的缺口：
+    - round_message_id 加 -defer 后缀生成新幂等键（原轮幂等键已被跳过那次占坑）
+    - 同会话同任务重复跳过时 latest-wins：payload 键覆盖 + zset member 复用
+    - Redis 不可用时返回 False（退化为原行为：等下一次触发一并覆盖）
+    """
+    try:
+        deferred = payload.to_dict()
+        deferred["round_message_id"] = f"{payload.round_message_id}-defer"
+        deferred["enqueued_at"] = time.time()
+        member = f"{payload.tenant_id}:{payload.session_id}:{task_name}"
+        payload_key = redis_client.make_key(CacheKeys.RECAP_DEFERRED_PAYLOAD, member)
+        payload_ttl = int(delay_seconds) + RECAP_DEFER_BUFFER_SECONDS + RECAP_DEFERRED_PAYLOAD_EXTRA_TTL
+        redis_client.set(payload_key, deferred, ex=max(payload_ttl, 60))
+        redis_client.zadd(
+            redis_client.make_key(CacheKeys.RECAP_DEFERRED_QUEUE),
+            {member: time.time() + delay_seconds},
+        )
+        # set/zadd 均无有效返回值（失败只记 warning），回读校验写入成功
+        stored = redis_client.get(payload_key) is not None
+        tlog(
+            "人工期任务",
+            "延迟补推登记{res}: tenant={tid}, session={sid}, task={task}, delay={delay}s",
+            res="ok" if stored else "failed(payload未写入)",
+            tid=payload.tenant_id,
+            sid=payload.session_id,
+            task=task_name,
+            delay=round(delay_seconds),
+        )
+        return stored
+    except Exception as e:
+        logger.warning(f"[recap] 延迟补推登记异常（退化为跳过不补推）: {e}")
+        return False
+
+
+def poll_due_deferred_tasks() -> int:
+    """取出到期的延迟补推任务并派发执行（background runner recap 消费者每轮调用）
+
+    先按 score 范围取出成员、再整段移除（非原子，多副本竞争由 RECAP_TASK_DEDUP
+    幂等键兜底）；payload 键缺失（已过期/已消费）时跳过该成员。
+    执行失败不回队，与主队列「消费即出队」语义一致。
+    """
+    now = time.time()
+    queue_key = redis_client.make_key(CacheKeys.RECAP_DEFERRED_QUEUE)
+    try:
+        due = redis_client.zrangebyscore(queue_key, 0, now)
+    except Exception as e:
+        logger.warning(f"[recap] 延迟补推队列读取异常: {e}")
+        return 0
+    if not due:
+        return 0
+
+    redis_client.zremrangebyscore(queue_key, 0, now)
+    dispatched = 0
+    for member in due:
+        payload_key = redis_client.make_key(CacheKeys.RECAP_DEFERRED_PAYLOAD, member)
+        try:
+            raw = redis_client.get(payload_key)
+            redis_client.delete(payload_key)
+            if not raw:
+                continue
+            data = json.loads(raw) if isinstance(raw, str) else raw
+            payload = RecapPayload.from_dict(data)
+            task_name = member.rsplit(":", 1)[-1]
+            payload.task_config = [{"name": task_name, "when": "every_round", "enabled": True}]
+            bg_task = asyncio.create_task(_run_tasks(rebuild_tasks(payload.task_config), payload))
+            _background_tasks.add(bg_task)
+            bg_task.add_done_callback(_background_tasks.discard)
+            dispatched += 1
+            tlog(
+                "人工期任务",
+                "延迟补推派发: session={sid}, task={task}, round={rid}",
+                sid=payload.session_id,
+                task=task_name,
+                rid=payload.round_message_id,
+            )
+        except Exception as e:
+            logger.opt(exception=True).error(f"[recap] 延迟补推任务派发异常 member={member}: {e}")
+    return dispatched
 
 
 def rebuild_tasks(task_config: Optional[List[Dict[str, Any]]]) -> List[RecapTaskConfig]:

@@ -91,6 +91,13 @@ class CacheKeys:
     # 跳过的消息由下一次触发一并覆盖，推送失败时删键允许重试；
     # docs/subagent/pre-sales/lead-capture-refresh-design.md §9.5）
     EXTERNAL_PUSH_HUMAN_COOLDOWN = "external_push_human_cooldown"
+    # recap 冷却跳过延迟补推队列：recap_deferred_queue（zset，member={tenant_id}:{session_id}:{task_name}，
+    # score=到期 epoch 秒；冷却期内跳过的任务到期后由 background runner recap 消费者取出执行，
+    # 解决「冷却期跳过后客户再无新消息导致最后一批消息永不推送」的缺口）
+    RECAP_DEFERRED_QUEUE = "recap_deferred_queue"
+    # recap 延迟补推 payload：recap_deferred_payload:{tenant_id}:{session_id}:{task_name}
+    # （同会话同任务重复跳过时 latest-wins 覆盖；TTL = 补推延迟 + 缓冲，过期即放弃补推）
+    RECAP_DEFERRED_PAYLOAD = "recap_deferred_payload"
 
 
 # ============== 通用缓存函数 ==============

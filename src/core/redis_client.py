@@ -212,6 +212,12 @@ class _InMemoryFallback:
                 selected = sorted_items[start:end + 1]
             return [m for m, s in selected]
 
+    def zrangebyscore(self, key: str, min_score: float, max_score: float) -> List[str]:
+        with self._lock:
+            items = self._data.get(key, [])
+            sorted_items = sorted(items, key=lambda x: x[1])
+            return [m for m, s in sorted_items if float(min_score) <= s <= float(max_score)]
+
     def publish(self, channel: str, message: str) -> int:
         # 内存降级不支持 pub/sub，静默忽略
         return 0
@@ -892,6 +898,18 @@ class RedisClient:
             return self._fallback.zrange(key, start, end)
         except Exception as e:
             logger.warning(f"[Redis] zrange 失败 [{key}]: {e}")
+            return []
+
+    def zrangebyscore(self, key: str, min_score: float, max_score: float) -> List[str]:
+        """按 score 范围获取成员（按 score 升序）"""
+        backend = self._get_backend()
+        try:
+            if self._connected and self._client:
+                result = backend.zrangebyscore(key, min_score, max_score)
+                return [r.decode('utf-8') if isinstance(r, bytes) else r for r in result]
+            return self._fallback.zrangebyscore(key, min_score, max_score)
+        except Exception as e:
+            logger.warning(f"[Redis] zrangebyscore 失败 [{key}]: {e}")
             return []
 
     # ============== 分布式锁 ==============

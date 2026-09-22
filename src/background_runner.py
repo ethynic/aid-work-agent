@@ -88,6 +88,7 @@ async def _recap_consumer():
     """
     from src.core.cache_utils import CacheKeys
     from src.core.redis_client import redis_client
+    from src.services.recap.runner import poll_due_deferred_tasks
 
     queue_key = redis_client.make_key(CacheKeys.RECAP_QUEUE)
     logger.info(f"background runner: recap 消费者启动, queue={queue_key}")
@@ -100,6 +101,11 @@ async def _recap_consumer():
             msg = None
 
         if msg is None:
+            # 无主队列消息时也轮询冷却跳过延迟补推队列（到期成员派发执行）
+            try:
+                poll_due_deferred_tasks()
+            except Exception as e:
+                logger.warning(f"background runner: 延迟补推轮询异常: {e}")
             try:
                 await asyncio.wait_for(_stop.wait(), timeout=2)
             except asyncio.TimeoutError:
@@ -112,6 +118,11 @@ async def _recap_consumer():
             _handle_recap_message(msg)
         except Exception as e:
             logger.opt(exception=True).error(f"background runner: recap 消息处理异常: {e}")
+
+        try:
+            poll_due_deferred_tasks()
+        except Exception as e:
+            logger.warning(f"background runner: 延迟补推轮询异常: {e}")
 
 
 def _handle_recap_message(msg) -> None:
