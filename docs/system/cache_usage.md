@@ -399,7 +399,7 @@ ImageRegistry 管理的图片资产元信息（复用 cp 的 `uploaded_file:{fil
 
 ### 7.4.9 recap 冷却跳过延迟补推
 
-**存储**：Redis + 内存降级（zset 队列 + string payload 两键配合）
+**存储**：仅 Redis、禁内存降级（zset 队列 + string payload 两键配合；跨进程队列——API worker 写、background_runner 消费，降级写入对消费者进程永远不可见，对齐 7.4.6 rpush 语义）
 **键模式**：
 - `recap_deferred_queue`（zset，member=`{tenant_id}:{session_id}:{task_name}`，score=补推到期 epoch 秒）
 - `recap_deferred_payload:{tenant_id}:{session_id}:{task_name}`（RecapPayload 序列化 JSON，round_message_id 加 `-defer` 后缀生成新幂等键）
@@ -408,7 +408,7 @@ ImageRegistry 管理的图片资产元信息（复用 cp 的 `uploaded_file:{fil
 **写入方**：`src/services/recap/tasks/external_push_human.py` 冷却跳过分支（按冷却键剩余 TTL + 缓冲登记补推）
 **消费方**：`src/background_runner.py` `_recap_consumer`（每轮轮询 `runner.poll_due_deferred_tasks`，到期成员整段移除后派发执行）
 **失效时机**：同会话同任务重复跳过时 payload latest-wins 覆盖；payload 过期后 zset 残留成员在取出时跳过并清理
-**关键约束**：解决「冷却期跳过后客户再无新消息，最后一批人工期消息永不推送」的缺口；多副本竞争由 RECAP_TASK_DEDUP 幂等键兜底（defer 后缀轮次的幂等键是新鲜的，先占坑者执行）；Redis 不可用时登记失败退化为旧行为（等下一次触发一并覆盖）
+**关键约束**：解决「冷却期跳过后客户再无新消息，最后一批人工期消息永不推送」的缺口；多副本竞争由 RECAP_TASK_DEDUP 幂等键兜底（defer 后缀轮次的幂等键是新鲜的，先占坑者执行）；写入侧 `is_available()` 门控（Redis 不可用登记失败返回 False，退化为旧行为等下一次触发一并覆盖，禁止内存降级）；zadd 失败经 zscore 回读确认，未入队即清理 payload 键并返回 False；消费侧 payload 用 getdel 原子取出，避免并发 re-defer 覆盖的新 payload 被误删
 **源文件**：`src/services/recap/runner.py`（defer_recap_task / poll_due_deferred_tasks）、`src/services/recap/tasks/external_push_human.py`、`src/background_runner.py`（前缀注册：`src/core/cache_utils.py`）
 
 ### 7.5 定时任务调度器启动锁

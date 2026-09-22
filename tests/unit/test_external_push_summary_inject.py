@@ -7,6 +7,7 @@ external_push 推送循环累计摘要注入单元测试（方案 B）
    注入「当前值 + 回写规则」提醒，且整个循环至多注入一次
 """
 
+import json
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -186,3 +187,110 @@ class TestPushLoopSummaryInjection:
             m for m in round2_messages
             if m.get("role") == "user" and "系统提醒" in (m.get("content") or "")
         ]
+
+    @pytest.mark.asyncio
+    async def test_write_echo_response_not_extracted(self):
+        """回写响应回显的摘要字段值不作为「当前值」注入（请求参数携带字段名时跳过提取）"""
+        meta = {
+            "summary_fields": "genjinhuizongzhaiyao",
+            "user_token_name": "client_token",
+            "user_token_header": "Client-Authorize-Token",
+            "agent_token_header": "Api-Authorize-Token",
+        }
+        payload = _make_payload()
+        ctx = {"subagent": "pre-sales", "external_userid": "ext_1"}
+
+        executor = MagicMock()
+        report_holder: list = []
+
+        async def _execute(name, args, context=None):
+            if name == "report_push_result":
+                report_holder.append({"success": True, "detail": "ok"})
+                return {"success": True}
+            params = args.get("params_json") or ""
+            if "genjinhuizongzhaiyao" in params:
+                # 回写响应：回显模型刚提交的值
+                return {"success": True, "data": {"genjinhuizongzhaiyao": "模型回写的部分值"}}
+            # 查询响应：服务端权威当前值
+            return {"success": True, "data": {"list": [{"genjinhuizongzhaiyao": "服务端真实值"}]}}
+
+        executor.execute = AsyncMock(side_effect=_execute)
+
+        responses = [
+            _llm_response(tool_calls=[_tool_call(
+                "http_api",
+                json.dumps({"url": "https://x/save", "method": "POST",
+                            "params_json": json.dumps({"genjinhuizongzhaiyao": "模型回写的部分值"})},
+                           ensure_ascii=False),
+                "c1")]),
+            _llm_response(tool_calls=[_tool_call(
+                "http_api", '{"url": "https://x/list", "method": "POST", "params_json": "{}"}', "c2")]),
+            _llm_response(tool_calls=[_tool_call(
+                "report_push_result", '{"success": true, "detail": "ok"}', "c3")]),
+        ]
+        gateway = MagicMock()
+        gateway.chat_lite = AsyncMock(side_effect=responses)
+
+        with self._patch_runtime_with_holder(executor, report_holder), \
+                patch("src.llm.gateway.llm_gateway", gateway), \
+                patch("src.services.session_record.record_background_llm_usage"):
+            await _run_push_loop(payload, ctx, {}, "doc", meta, "tok", {"client_token": "t"})
+
+        # 注意：chat_lite 的 messages 列表是原地追加，call_args_list 各项指向同一对象
+        # （最终状态）。若回写回显被误提取，round_summary_values 先占坑的将是回显值
+        # （setdefault 不被后续查询覆盖），最终提醒内容即含回显值——据此断言即可区分
+        final_messages = gateway.chat_lite.call_args_list[-1].args[0]
+        reminders = [
+            m for m in final_messages
+            if m.get("role") == "user" and "系统提醒" in (m.get("content") or "")
+        ]
+        assert len(reminders) == 1
+        assert "服务端真实值" in reminders[0]["content"]
+        assert "模型回写的部分值" not in reminders[0]["content"]
+
+    @pytest.mark.asyncio
+    async def test_write_only_echo_never_injected(self):
+        """只回写未查询时不注入提醒（回显值无权威性）"""
+        meta = {
+            "summary_fields": "genjinhuizongzhaiyao",
+            "user_token_name": "client_token",
+            "user_token_header": "Client-Authorize-Token",
+            "agent_token_header": "Api-Authorize-Token",
+        }
+        payload = _make_payload()
+        ctx = {"subagent": "pre-sales", "external_userid": "ext_1"}
+
+        executor = MagicMock()
+        report_holder: list = []
+
+        async def _execute(name, args, context=None):
+            if name == "report_push_result":
+                report_holder.append({"success": True, "detail": "ok"})
+                return {"success": True}
+            return {"success": True, "data": {"genjinhuizongzhaiyao": "模型回写的部分值"}}
+
+        executor.execute = AsyncMock(side_effect=_execute)
+
+        responses = [
+            _llm_response(tool_calls=[_tool_call(
+                "http_api",
+                json.dumps({"url": "https://x/save", "method": "POST",
+                            "params_json": json.dumps({"genjinhuizongzhaiyao": "模型回写的部分值"})},
+                           ensure_ascii=False),
+                "c1")]),
+            _llm_response(tool_calls=[_tool_call(
+                "report_push_result", '{"success": true, "detail": "ok"}', "c2")]),
+        ]
+        gateway = MagicMock()
+        gateway.chat_lite = AsyncMock(side_effect=responses)
+
+        with self._patch_runtime_with_holder(executor, report_holder), \
+                patch("src.llm.gateway.llm_gateway", gateway), \
+                patch("src.services.session_record.record_background_llm_usage"):
+            await _run_push_loop(payload, ctx, {}, "doc", meta, "tok", {"client_token": "t"})
+
+        reminders = [
+            m for call in gateway.chat_lite.call_args_list for m in call.args[0]
+            if m.get("role") == "user" and "系统提醒" in (m.get("content") or "")
+        ]
+        assert not reminders

@@ -1111,8 +1111,13 @@ async def _run_push_loop(
             consecutive_failures = 0 if result.get("success") else consecutive_failures + 1
 
             if name == "http_api" and result.get("success") and summary_fields:
-                for k, v in _extract_field_values(result, summary_fields).items():
-                    round_summary_values.setdefault(k, v)
+                # 回写响应回显的摘要字段值不是服务端权威当前值（模型先写后查时会把
+                # 回显当「当前值」注入，整体回写会锁死在部分覆盖上）：请求参数里
+                # 携带摘要字段名说明本次是写入，跳过提取，等真正的查询响应提供权威值
+                request_blob = json.dumps(args, ensure_ascii=False, default=str) if isinstance(args, dict) else ""
+                if not any(field in request_blob for field in summary_fields):
+                    for k, v in _extract_field_values(result, summary_fields).items():
+                        round_summary_values.setdefault(k, v)
 
             if name == "report_push_result":
                 reported = True

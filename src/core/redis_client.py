@@ -198,6 +198,14 @@ class _InMemoryFallback:
             ]
             return original_len - len(self._data[key])
 
+    def zscore(self, key: str, member: str) -> Optional[float]:
+        with self._lock:
+            items = self._data.get(key, [])
+            for m, s in items:
+                if m == member:
+                    return s
+            return None
+
     def zcard(self, key: str) -> int:
         with self._lock:
             return len(self._data.get(key, []))
@@ -806,6 +814,31 @@ class RedisClient:
             logger.warning(f"[Redis] lpop 失败 [{key}]: {e}")
             return None
 
+    def getdel(self, key: str) -> Optional[Any]:
+        """原子读取并删除（GETDEL 语义，JSON 反序列化）
+
+        跨进程队列消费语义，与 rpush/lpop 同款禁降级：写侧已按跨进程队列禁降级，
+        消费侧若降级读进程内存会造成「读到本进程私有数据」的假阳性。Redis 不可用
+        返回 None。用 Lua get+del（兼容 GETDEL 命令缺失的旧版本 Redis）。
+        """
+        if not self._ensure_connection() or self._client is None:
+            return None
+        try:
+            script = """
+            local v = redis.call('get', KEYS[1])
+            if v then redis.call('del', KEYS[1]) end
+            return v
+            """
+            raw = self._client.eval(script, 1, key)
+            if raw is None:
+                return None
+            if isinstance(raw, bytes):
+                raw = raw.decode('utf-8')
+            return json.loads(raw)
+        except Exception as e:
+            logger.warning(f"[Redis] getdel 失败 [{key}]: {e}")
+            return None
+
     def smembers(self, key: str) -> List[Any]:
         """获取 Set 所有成员（JSON 反序列化）"""
         backend = self._get_backend()
@@ -865,6 +898,17 @@ class RedisClient:
         except Exception as e:
             logger.warning(f"[Redis] zadd 失败 [{key}]: {e}")
             return 0
+
+    def zscore(self, key: str, member: str) -> Optional[float]:
+        """获取 Sorted Set 成员的 score；成员不存在返回 None"""
+        backend = self._get_backend()
+        try:
+            if self._connected and self._client:
+                return backend.zscore(key, member)
+            return self._fallback.zscore(key, member)
+        except Exception as e:
+            logger.warning(f"[Redis] zscore 失败 [{key}]: {e}")
+            return None
 
     def zremrangebyscore(self, key: str, min_score: float, max_score: float) -> int:
         """按 score 范围移除成员"""

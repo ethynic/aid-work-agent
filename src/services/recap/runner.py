@@ -301,26 +301,39 @@ def defer_recap_task(payload: RecapPayload, task_name: str, delay_seconds: float
     解决「冷却期内跳过后客户再无新消息，最后一批消息永不推送」的缺口：
     - round_message_id 加 -defer 后缀生成新幂等键（原轮幂等键已被跳过那次占坑）
     - 同会话同任务重复跳过时 latest-wins：payload 键覆盖 + zset member 复用
-    - Redis 不可用时返回 False（退化为原行为：等下一次触发一并覆盖）
+    - Redis 不可用时返回 False（退化为原行为：等下一次触发一并覆盖）。
+      这是跨进程队列（API worker 写、background runner 消费），与 rpush 同款
+      禁降级进程内内存——降级写入对消费者进程永远不可见，等于静默丢补推
     """
     try:
+        if not redis_client.is_available():
+            tlog(
+                "人工期任务",
+                "延迟补推登记failed(redis不可用): tenant={tid}, session={sid}, task={task}",
+                tid=payload.tenant_id,
+                sid=payload.session_id,
+                task=task_name,
+            )
+            return False
         deferred = payload.to_dict()
         deferred["round_message_id"] = f"{payload.round_message_id}-defer"
         deferred["enqueued_at"] = time.time()
         member = f"{payload.tenant_id}:{payload.session_id}:{task_name}"
+        queue_key = redis_client.make_key(CacheKeys.RECAP_DEFERRED_QUEUE)
         payload_key = redis_client.make_key(CacheKeys.RECAP_DEFERRED_PAYLOAD, member)
         payload_ttl = int(delay_seconds) + RECAP_DEFER_BUFFER_SECONDS + RECAP_DEFERRED_PAYLOAD_EXTRA_TTL
         redis_client.set(payload_key, deferred, ex=max(payload_ttl, 60))
-        redis_client.zadd(
-            redis_client.make_key(CacheKeys.RECAP_DEFERRED_QUEUE),
-            {member: time.time() + delay_seconds},
-        )
-        # set/zadd 均无有效返回值（失败只记 warning），回读校验写入成功
-        stored = redis_client.get(payload_key) is not None
+        redis_client.zadd(queue_key, {member: time.time() + delay_seconds})
+        # set/zadd 失败只记 warning 无有效返回值：zscore 回读确认已入队，
+        # 避免「payload 已写但未入队」返回 True 导致到期后静默丢补推
+        enqueued = redis_client.zscore(queue_key, member) is not None
+        if not enqueued:
+            redis_client.delete(payload_key)
+        stored = enqueued and redis_client.get(payload_key) is not None
         tlog(
             "人工期任务",
             "延迟补推登记{res}: tenant={tid}, session={sid}, task={task}, delay={delay}s",
-            res="ok" if stored else "failed(payload未写入)",
+            res="ok" if stored else "failed(payload未写入或未入队)",
             tid=payload.tenant_id,
             sid=payload.session_id,
             task=task_name,
@@ -336,7 +349,9 @@ def poll_due_deferred_tasks() -> int:
     """取出到期的延迟补推任务并派发执行（background runner recap 消费者每轮调用）
 
     先按 score 范围取出成员、再整段移除（非原子，多副本竞争由 RECAP_TASK_DEDUP
-    幂等键兜底）；payload 键缺失（已过期/已消费）时跳过该成员。
+    幂等键兜底）；payload 用 getdel 原子取出——避免 get 与 delete 之间并发
+    re-defer 刚覆盖的新 payload 被误删（已登记补推被静默取消）。
+    payload 键缺失（已过期/已消费）时跳过该成员。
     执行失败不回队，与主队列「消费即出队」语义一致。
     """
     now = time.time()
@@ -354,11 +369,9 @@ def poll_due_deferred_tasks() -> int:
     for member in due:
         payload_key = redis_client.make_key(CacheKeys.RECAP_DEFERRED_PAYLOAD, member)
         try:
-            raw = redis_client.get(payload_key)
-            redis_client.delete(payload_key)
-            if not raw:
+            data = redis_client.getdel(payload_key)
+            if not data:
                 continue
-            data = json.loads(raw) if isinstance(raw, str) else raw
             payload = RecapPayload.from_dict(data)
             task_name = member.rsplit(":", 1)[-1]
             payload.task_config = [{"name": task_name, "when": "every_round", "enabled": True}]

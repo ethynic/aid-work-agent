@@ -44,7 +44,10 @@ def _make_redis():
     redis.make_key.side_effect = lambda prefix, identifier="": (
         f"{prefix}:{identifier}" if identifier else prefix
     )
+    redis.is_available.return_value = True
+    redis.zscore.return_value = 123.0
     redis.get.return_value = None
+    redis.getdel.return_value = None
     redis.ttl.return_value = -2
     return redis
 
@@ -95,6 +98,28 @@ class TestDeferRecapTask:
         with patch("src.services.recap.runner.redis_client", redis):
             assert defer_recap_task(_make_payload(), "external_push_human", 60) is False
 
+    def test_defer_redis_unavailable_returns_false(self):
+        """跨进程队列禁内存降级：Redis 不可用时直接返回 False，不写进程内存"""
+        redis = _make_redis()
+        redis.is_available.return_value = False
+
+        with patch("src.services.recap.runner.redis_client", redis):
+            assert defer_recap_task(_make_payload(), "external_push_human", 60) is False
+
+        redis.set.assert_not_called()
+        redis.zadd.assert_not_called()
+
+    def test_defer_zadd_not_enqueued_cleans_payload(self):
+        """zadd 失败（zscore 回读 None）时清理 payload 键并返回 False，不谎报入队成功"""
+        redis = _make_redis()
+        redis.get.return_value = {"round_message_id": "msg_123-defer"}
+        redis.zscore.return_value = None
+
+        with patch("src.services.recap.runner.redis_client", redis):
+            assert defer_recap_task(_make_payload(), "external_push_human", 60) is False
+
+        redis.delete.assert_called_once()
+
 
 # ============== poll_due_deferred_tasks ==============
 
@@ -110,7 +135,7 @@ class TestPollDueDeferredTasks:
             {"name": "lead_refresh", "when": "every_round", "enabled": True},
             {"name": "external_push_human", "when": "every_round", "enabled": True},
         ]
-        redis.get.return_value = payload.to_dict()
+        redis.getdel.return_value = payload.to_dict()
 
         with patch("src.services.recap.runner.redis_client", redis), \
                 patch("src.services.recap.runner._run_tasks") as mock_run, \
@@ -123,7 +148,7 @@ class TestPollDueDeferredTasks:
         assert [t.name for t in tasks_arg] == ["external_push_human"]
         assert payload_arg.round_message_id == "msg_123-defer"
         redis.zremrangebyscore.assert_called_once()
-        redis.delete.assert_called_once()
+        redis.getdel.assert_called_once()
 
     def test_no_due_members(self):
         redis = _make_redis()
@@ -135,17 +160,17 @@ class TestPollDueDeferredTasks:
 
     @pytest.mark.asyncio
     async def test_missing_payload_skipped(self):
-        """payload 已过期（get 返回 None）时跳过派发，zset 成员仍清理"""
+        """payload 已过期（getdel 返回 None）时跳过派发，zset 成员仍清理"""
         redis = _make_redis()
         redis.zrangebyscore.return_value = ["tenant_abc:sess:external_push_human"]
-        redis.get.return_value = None
+        redis.getdel.return_value = None
 
         with patch("src.services.recap.runner.redis_client", redis), \
                 patch("src.services.recap.runner._run_tasks"), \
                 patch("src.services.recap.runner.asyncio.create_task") as mock_create:
             assert poll_due_deferred_tasks() == 0
         assert mock_create.called is False
-        redis.delete.assert_called_once()
+        redis.getdel.assert_called_once()
 
     def test_redis_error_returns_zero(self):
         redis = _make_redis()
