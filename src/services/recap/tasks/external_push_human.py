@@ -244,6 +244,14 @@ def _build_human_user_message(
     lead_phone = ctx.get("lead_phone") or "（客户未留资，留空，不得用其他号码冒充）"
     from src.tools.channel.channel_user_info import GENDER_LABELS
 
+    servicer_userid = (transfer.get("servicer_userid") or "").strip()
+    servicer_name = (transfer.get("servicer_name") or "").strip()
+    # 展示格式：真实姓名（工号），如「覃姗（YeWeiYang）」；姓名缺失降级为工号
+    if servicer_name and servicer_userid:
+        servicer_display = f"{servicer_name}（{servicer_userid}）"
+    else:
+        servicer_display = servicer_name or servicer_userid or "（未知）"
+
     gender = int(ctx.get("gender") or 0)
     gender_label = GENDER_LABELS.get(gender, "未知")
     return (
@@ -267,8 +275,8 @@ def _build_human_user_message(
         f"{_current_time_line()}"
         "\n"
         "【转人工信息】\n"
-        f"转人工客服工号：{transfer.get('servicer_userid') or '（未知）'}\n"
-        f"转人工客服姓名：{transfer.get('servicer_name') or '（未知）'}\n"
+        f"转人工客服工号：{servicer_userid or '（未知）'}\n"
+        f"转人工客服姓名：{servicer_display}\n"
         f"转人工时间：{transfer.get('transferred_at') or '（未知）'}\n"
         "\n"
         "【委托登录信息】\n"
@@ -384,6 +392,17 @@ class ExternalPushHumanAdapter:
             transfer = await asyncio.to_thread(
                 _resolve_transfer_info, payload.tenant_id, session_row.get("metadata") or {}
             )
+            # 姓名兜底：缓存与线索都无姓名（如转人工早于员工首条消息、缓存已过期）时，
+            # 经租户渠道配置反查企微通讯录；失败则展示层降级为工号
+            if transfer.get("servicer_userid") and not (transfer.get("servicer_name") or "").strip():
+                try:
+                    from src.channels.wecom_kf.servicer import resolve_servicer_name
+
+                    transfer["servicer_name"] = await resolve_servicer_name(
+                        payload.tenant_id, transfer["servicer_userid"]
+                    )
+                except Exception as e:
+                    logger.debug(f"[external_push_human] 员工姓名 API 兜底失败: {e}")
 
             summary = await _summarize_human(payload, ctx, transcript, topic)
 

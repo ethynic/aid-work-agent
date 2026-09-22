@@ -172,18 +172,18 @@ class TransferToHumanTool(BaseTool):
                     session_meta = session_row.get("metadata") or {}
                     lead_id = (session_meta.get("lead_capture") or {}).get("lead_id") or ""
                 if lead_id:
-                    from src.core.cache_utils import CacheKeys
-                    from src.core.redis_client import redis_client
                     from src.saas.db.lead_capture_db import LeadCaptureDB
 
-                    # 员工姓名尽力而为：复用渠道侧 userid->name Redis 缓存
-                    # （人工期员工消息落库时已填充），映射不到为空（设计 §9.2）
+                    # 员工姓名尽力而为：走统一姓名反查（Redis 缓存 -> 企微通讯录 API，
+                    # 带回调上下文的 api_client），转人工时即落真实姓名；
+                    # 映射不到为空（设计 §9.2）
                     servicer_name = ""
                     try:
-                        cached = redis_client.get(
-                            f"{CacheKeys.WECOM_KF_SERVICER_NAME}:{tenant_id}:{servicer_userid}"
+                        from src.channels.wecom_kf.servicer import resolve_servicer_name
+
+                        servicer_name = await resolve_servicer_name(
+                            tenant_id, servicer_userid, api_client=adapter.api_client
                         )
-                        servicer_name = str(cached) if cached else ""
                     except Exception:
                         pass
 

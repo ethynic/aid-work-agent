@@ -159,6 +159,8 @@ class TestExternalPushHumanAdapter:
                 patch("src.channels.session.channel_session_manager") as mock_mgr, \
                 patch(f"{_TOPIC_NS}.redis_client") as mock_redis, \
                 patch(f"{_TOPIC_NS}._delegate_login", return_value=None), \
+                patch("src.channels.wecom_kf.servicer.resolve_servicer_name",
+                      new=AsyncMock(return_value="")), \
                 patch("src.llm.gateway.llm_gateway") as mock_gw, \
                 patch("src.services.session_record.record_background_llm_usage"):
             mock_mgr.get_session_by_id.return_value = {"metadata": {"transferred_to": "servicer_1"}}
@@ -229,7 +231,7 @@ class TestExternalPushHumanAdapter:
             assert "[人工接待] 客户：那我再考虑下" in kwargs["user_message"]
             assert "客户询价后表示再考虑" in kwargs["user_message"]
             assert "转人工客服工号：servicer_1" in kwargs["user_message"]
-            assert "转人工客服姓名：王五" in kwargs["user_message"]
+            assert "转人工客服姓名：王五（servicer_1）" in kwargs["user_message"]
             assert "转人工时间：2026-09-16 10:00:00" in kwargs["user_message"]
             assert "client_token" in kwargs["user_message"]
             assert "自动附加" in kwargs["user_message"]
@@ -238,6 +240,60 @@ class TestExternalPushHumanAdapter:
             assert kwargs["trace_prefix"] == "recap:external_push_human"
             # 成功路径不删冷却键（靠 TTL 过期）
             mock_redis.delete.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_name_api_fallback_and_display_format(self):
+        """缓存与线索都无姓名：经企微通讯录 API 兜底，姓名显示「真实姓名（工号）」"""
+        payload = _make_payload()
+        with patch(f"{_TOPIC_NS}._collect_context", return_value=_make_ctx()), \
+                patch(f"{_TOPIC_NS}._load_tenant_doc", return_value=_FAKE_DOC), \
+                patch(f"{_TOPIC_NS}._get_agent_token", return_value="agent_tok"), \
+                patch("src.channels.session.channel_session_manager") as mock_mgr, \
+                patch(f"{_TOPIC_NS}.redis_client") as mock_redis, \
+                patch(f"{_TOPIC_NS}._delegate_login", return_value={"client_token": "tok123"}), \
+                patch(f"{_TOPIC_NS}._run_push_loop") as mock_loop, \
+                patch("src.channels.wecom_kf.servicer.resolve_servicer_name",
+                      new=AsyncMock(return_value="覃姗")) as mock_resolve, \
+                patch("src.llm.gateway.llm_gateway") as mock_gw, \
+                patch("src.services.session_record.record_background_llm_usage"):
+            mock_mgr.get_session_by_id.return_value = {"metadata": {"transferred_to": "YeWeiYang"}}
+            mock_mgr.get_messages.return_value = _human_period_messages()
+            mock_redis.acquire_lock.return_value = True
+            mock_redis.get.return_value = None
+            mock_gw.chat_lite = AsyncMock(return_value={"content": _summary_json(), "usage": None})
+
+            await ExternalPushHumanAdapter.execute(payload)
+
+            mock_resolve.assert_awaited_once_with("tenant_abc", "YeWeiYang")
+            user_message = mock_loop.call_args.kwargs["user_message"]
+            assert "转人工客服工号：YeWeiYang" in user_message
+            assert "转人工客服姓名：覃姗（YeWeiYang）" in user_message
+
+    @pytest.mark.asyncio
+    async def test_name_unresolved_falls_back_to_userid(self):
+        """姓名兜底仍失败：姓名字段降级为工号，不显示（未知）遮挡工号"""
+        payload = _make_payload()
+        with patch(f"{_TOPIC_NS}._collect_context", return_value=_make_ctx()), \
+                patch(f"{_TOPIC_NS}._load_tenant_doc", return_value=_FAKE_DOC), \
+                patch(f"{_TOPIC_NS}._get_agent_token", return_value="agent_tok"), \
+                patch("src.channels.session.channel_session_manager") as mock_mgr, \
+                patch(f"{_TOPIC_NS}.redis_client") as mock_redis, \
+                patch(f"{_TOPIC_NS}._delegate_login", return_value={"client_token": "tok123"}), \
+                patch(f"{_TOPIC_NS}._run_push_loop") as mock_loop, \
+                patch("src.channels.wecom_kf.servicer.resolve_servicer_name",
+                      new=AsyncMock(return_value="")), \
+                patch("src.llm.gateway.llm_gateway") as mock_gw, \
+                patch("src.services.session_record.record_background_llm_usage"):
+            mock_mgr.get_session_by_id.return_value = {"metadata": {"transferred_to": "YeWeiYang"}}
+            mock_mgr.get_messages.return_value = _human_period_messages()
+            mock_redis.acquire_lock.return_value = True
+            mock_redis.get.return_value = None
+            mock_gw.chat_lite = AsyncMock(return_value={"content": _summary_json(), "usage": None})
+
+            await ExternalPushHumanAdapter.execute(payload)
+
+            user_message = mock_loop.call_args.kwargs["user_message"]
+            assert "转人工客服姓名：YeWeiYang" in user_message
 
     @pytest.mark.asyncio
     async def test_summary_parse_failure_fallback(self):
@@ -251,6 +307,8 @@ class TestExternalPushHumanAdapter:
                 patch(f"{_TOPIC_NS}.redis_client") as mock_redis, \
                 patch(f"{_TOPIC_NS}._delegate_login", return_value={"client_token": "tok123"}), \
                 patch(f"{_TOPIC_NS}._run_push_loop") as mock_loop, \
+                patch("src.channels.wecom_kf.servicer.resolve_servicer_name",
+                      new=AsyncMock(return_value="")), \
                 patch("src.llm.gateway.llm_gateway") as mock_gw, \
                 patch("src.services.session_record.record_background_llm_usage"):
             mock_mgr.get_session_by_id.return_value = {"metadata": {"transferred_to": "servicer_1"}}
@@ -275,6 +333,8 @@ class TestExternalPushHumanAdapter:
                 patch(f"{_TOPIC_NS}.redis_client") as mock_redis, \
                 patch(f"{_TOPIC_NS}._delegate_login", return_value={"client_token": "tok123"}), \
                 patch(f"{_TOPIC_NS}._run_push_loop", side_effect=RuntimeError("push failed")), \
+                patch("src.channels.wecom_kf.servicer.resolve_servicer_name",
+                      new=AsyncMock(return_value="")), \
                 patch("src.llm.gateway.llm_gateway") as mock_gw, \
                 patch("src.services.session_record.record_background_llm_usage"):
             mock_mgr.get_session_by_id.return_value = {"metadata": {"transferred_to": "servicer_1"}}

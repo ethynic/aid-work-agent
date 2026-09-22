@@ -2762,40 +2762,15 @@ async def _process_tenant_wecom_kf_messages(
         )
 
 
-# 企微通讯录成员姓名缓存 TTL：姓名极少变更，1 天足够
-_KF_SERVICER_NAME_TTL = 86400
-
-
 async def _resolve_kf_servicer_name(api_client, tenant_id: str, servicer_userid: str) -> str:
     """查询企微侧员工姓名（Redis 缓存 userid→name，TTL 1 天）。
 
     查询失败返回空串，由调用方降级只存 servicer_userid，不阻塞落库主流程。
+    实现统一收口到 src/channels/wecom_kf/servicer.py（转人工/推送侧同源复用）。
     """
-    if not servicer_userid:
-        return ""
-    cache_key = f"{CacheKeys.WECOM_KF_SERVICER_NAME}:{tenant_id}:{servicer_userid}"
-    try:
-        cached = redis_client.get(cache_key)
-        if cached is not None:
-            return str(cached)
-    except Exception as e:
-        logger.debug(f"[wecom_kf] 员工姓名缓存读取失败: {e}")
+    from src.channels.wecom_kf.servicer import resolve_servicer_name
 
-    try:
-        result = await api_client.get_user(servicer_userid)
-    except Exception as e:
-        logger.debug(f"[wecom_kf] 员工姓名查询失败: userid={servicer_userid}, error={e}")
-        return ""
-
-    if result.get("errcode", 0) != 0:
-        return ""
-    name = str(result.get("name", "") or "")
-    if name:
-        try:
-            redis_client.set(cache_key, name, ex=_KF_SERVICER_NAME_TTL)
-        except Exception as e:
-            logger.debug(f"[wecom_kf] 员工姓名缓存写入失败: {e}")
-    return name
+    return await resolve_servicer_name(tenant_id, servicer_userid, api_client=api_client)
 
 
 async def _persist_kf_servicer_message(
@@ -2850,6 +2825,19 @@ async def _persist_kf_servicer_message(
             tenant_id=tenant_id,
             metadata=metadata,
         )
+        # 人工期沉淀任务入口 B 扩展：员工消息同样触发。此前仅客户消息入队，
+        # 员工作为对话最后一方（客户不再回复）时消息会滞留到客户下次发起才推送。
+        # 门控与 _persist_kf_context_customer_message 的 customer_human/customer_ended
+        # 语义对齐：仅在人工接待(3)/已结束(4)状态入队；智能体接待期(1)员工手动插话不触发。
+        # 冷却防抖 + latest-wins 补推由 external_push_human 适配器兜底，连发多条不重复推送
+        service_state = (session.get("metadata") or {}).get("service_state")
+        if msg.get("msgid") and service_state in (3, 4):
+            try:
+                from src.services.recap.runner import enqueue_human_period_tasks
+
+                enqueue_human_period_tasks(tenant_id, session_id, msg.get("msgid", ""))
+            except Exception as enqueue_err:
+                logger.warning(f"[wecom_kf] 员工消息人工期任务入队失败（不阻断）: {enqueue_err}")
         _kf_tlog(
             "员工消息落库: tenant={tenant}, session_id={sid}, msgid={mid}, "
             "servicer={servicer}, text={text}",
