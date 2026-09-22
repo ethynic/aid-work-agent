@@ -110,6 +110,7 @@
 | qwen3.7-flash 工具结果缓存数组化回显故障复盘 | [qwen-tool-message-cache-echo-incident.md](incidents/qwen-tool-message-cache-echo-incident.md) | 2026-08-19 线上故障：显式缓存"末尾标记"把 tool 消息 content 数组化（违反 OpenAI 兼容规范），qwen3.7-flash 概率性(~7%)… |
 | 数据分析智能体 max_tokens 截断致空结论误判"无数据" | [analysis-agent-empty-conclusion-incident.md](incidents/analysis-agent-empty-conclusion-incident.md) | 2026-08-26 生产故障：AnalysisAgent 硬编码 max_tokens=4000，deepseek-v4-pro 推理模型烧穿预算返回空结论（completion 恰达上限 + co… |
 | BOSS 批量读简历 0 份入库且日志无线索 | [boss-resume-batch-empty-incident.md](incidents/boss-resume-batch-empty-incident.md) | 2026-09-10 客户现场：boss_resume_batch 大部分卡片点击无反应打不开详情、打开的详情与卡片姓名不符（0.2.9 曾把王亦菲简历存到任玮鹤名下）、… |
+| 数据分析智能体单次 392 积分消耗复盘 | [analysis-agent-cost-392-credits-incident.md](incidents/analysis-agent-cost-392-credits-incident.md) | 2026-09-20 生产：重分析任务 6 次 analyze_data 内层 200+ 调用致 1319 万 prompt token（95% 在内层循环）；压缩只摘 preview 压不住、tool_calls 参数不压缩；含 create_plan TypeError 崩溃（已修 fc24dfa9 待部署）与内层成本优化细化方案 |
 
 ## 调研报告索引
 
