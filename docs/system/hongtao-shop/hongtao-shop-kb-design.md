@@ -1,6 +1,6 @@
 # 宏陶商城产品知识库同步（hongtao_shop 专用模块）设计
 
-> 版本 v1.7（2026-09-22：v1.1 评审修订；v1.2 确认六表 DDL；v1.3 用户看码后三点决议——knowledge 零侵入/分类用租户「产品」/砍 agent 工具；v1.4 零私有表重构；v1.5 数据源授权 Web 化——portal 开通/停用 + 连接中心菜单门控 + 同步方式自动/手动；v1.6 VL 描述上限 100→400（agent2 试跑发现文字密集详情图被切半句）；v1.7 正文结构化字段区——产品名称/型号/颜色/工艺/卖点/适用空间/其他，标识字段移 metadata，砍实拍素材计数行；v1.8 去开场句 + 前端「白名单模式」更名「部分同步」+ 产品列表滚动修复，见 §3.1 与附录）。
+> 版本 v1.9（2026-09-22：v1.1 评审修订；v1.2 确认六表 DDL；v1.3 用户看码后三点决议——knowledge 零侵入/分类用租户「产品」/砍 agent 工具；v1.4 零私有表重构；v1.5 数据源授权 Web 化——portal 开通/停用 + 连接中心菜单门控 + 同步方式自动/手动；v1.6 VL 描述上限 100→400（agent2 试跑发现文字密集详情图被切半句）；v1.7 正文结构化字段区——产品名称/型号/颜色/工艺/卖点/适用空间/其他，标识字段移 metadata，砍实拍素材计数行；v1.8 去开场句 + 前端「白名单模式」更名「部分同步」+ 产品列表滚动修复，见 §3.1 与附录；v1.9 metadata 业务数据收进 raw_payload 与通用 api-ingest 契约对齐，见 §3.2）。
 > 客户：宏陶陶瓷（`tenant_d18c257ff434`，agent2 测试环境验收后上正式）。
 > 与 api_ingest 通用设计的关系：通用方案**搁置**（见 ideas.md 状态），本模块为宏陶专用；「通用模块成熟后收编」仅作远期备注，不构成依赖。
 
@@ -70,18 +70,22 @@ VL 转述为**按字段结构化输出**（v1.7 指令：每行「字段名：�
 
 ### 3.2 metadata（documents.metadata，TEXT JSON，不进向量）
 
-智能体经 `knowledge_base_search` 检索命中读到的 metadata（`_no_truncate` 全量返回，v1.3 已取消专有工具）获取链接与实时库存：
+**v1.9 结构**：业务数据整包嵌套在 `raw_payload`（与通用 api-ingest 契约 D12 对齐），顶层只留系统痕迹（trace/pipeline_version/sync_run_id）。检索工具 `knowledge_base_search` 的 `doc_metadata` 白名单只取 `raw_payload`——新增业务键无需改工具侧，系统痕迹不进 LLM 上下文；完整 metadata 供人查看走前端文档详情弹窗。存量平铺行由 skip 路径「先比对后写」自动迁移（结构不等 → 轻量 UPDATE，零重嵌入；content_hash 只含 pipeline_version + 正文，结构变化不触发重判）。`file_type` 同轮由 markdown 修正为 json（API 来源文档无实体文件，表达数据源形态）；前端点击标题下载对外部无原文链接文档提示改走操作列「详情」（列表 title/类型 badge/详情弹窗随之显示 JSON）。
+
+智能体经 `knowledge_base_search` 检索命中读到的 `documents.<doc_id>.doc_metadata`（仅 raw_payload，`_no_truncate` 全量返回，v1.3 已取消专有工具）获取链接与实时库存：
 
 ```json
 {
-  "name": "...", "model": "...", "procode": "...", "sellpoint": "...", "cid": "...",
-  "listing_date": "2025-09-21",
-  "stock": 1000, "sales": 0, "comment_score": "5.0", "comment_num": 0,
-  "pics": ["效果图轮播 URL..."], "detail_images": ["详情长图 URL..."], "video": "",
-  "forum_media": [
-    {"post_id": 419, "catename": "工地实景", "content": "TPJ157042地面铺贴实景…",
-     "images": ["..."], "video": "https://...mp4"}
-  ],
+  "raw_payload": {
+    "name": "...", "model": "...", "procode": "...", "sellpoint": "...", "cid": "...",
+    "listing_date": "2025-09-21",
+    "stock": 1000, "sales": 0, "comment_score": "5.0", "comment_num": 0,
+    "pics": ["效果图轮播 URL..."], "detail_images": ["详情长图 URL..."], "video": "",
+    "forum_media": [
+      {"post_id": 419, "catename": "工地实景", "content": "TPJ157042地面铺贴实景…",
+       "images": ["..."], "video": "https://...mp4"}
+    ]
+  },
   "trace": {"source": "hongtao_shop", "native_id": 574,
             "content_hash": "sha256...", "sync_date": "2026-09-21", "ingested_at": "..."}
 }

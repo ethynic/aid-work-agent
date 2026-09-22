@@ -268,7 +268,8 @@ export async function getDocumentChunks(docId: number): Promise<ChunkListRespons
  * 浏览器下载管理器从第一秒起即可见下载进度。
  *
  * 外部来源文档（公众号文章等）没有本地文件，票据端点返回 200 + external +
- * original_url：直接新开页面打开原文链接。
+ * original_url：直接新开页面打开原文链接；API 同步类外部文档（如宏陶商品）
+ * 既无本地文件也无原文链接，提示改走操作列「详情」查看。
  */
 export async function downloadDocument(docId: number, fallbackName: string): Promise<void> {
   const resp = await fetch(`${API_BASE}/documents/${docId}/download_ticket`, {
@@ -281,7 +282,9 @@ export async function downloadDocument(docId: number, fallbackName: string): Pro
   }
   const { ticket, external, original_url: originalUrl } = await resp.json()
   if (external) {
-    if (!originalUrl) throw new Error('外部来源文档缺少原文链接')
+    if (!originalUrl) {
+      throw new Error('该文档来源于 API 同步，无原文文件可下载，请点击操作列「详情」查看')
+    }
     window.open(originalUrl as string, '_blank', 'noopener')
     return
   }

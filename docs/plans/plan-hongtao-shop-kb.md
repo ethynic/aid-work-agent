@@ -21,6 +21,7 @@
 | P2.6 | VL 描述上限修正（agent2 试跑发现） | ✅ 完成（2026-09-22） | 设计 v1.6：详情图文字密集，100 字上限把逐字转述切在半句（40/43 条恰好卡 100，"皇家玉石"图切在"突破"处）；上限 100→400（vision.py 常量 + renderer 注释 + 单测改断言 cap 常量）；存量缓存清运 SQL 已登记设计附录（agent2 已执行，58 行待重解析） |
 | P2.7 | 正文结构化字段区（用户决议 v1.7） | ✅ 完成（2026-09-22） | 设计 v1.7 §3.1：产品信息字段区（产品名称/型号/颜色/工艺/卖点/适用空间/其他）；VL 指令改按字段转述 + 渲染器前缀解析聚合；商品ID/上架时间/编码/分类ID 移 metadata（新增 listing_date/cid）；砍实拍素材计数行（论坛变化走 metadata 轻量更新）；pipeline 升 hts-render-v2；76 用例全绿；agent2 已热部署并重灌 17 个存量产品 |
 | P2.8 | 去开场句 + 部分同步更名 + 滚动修复（用户决议 v1.8） | ✅ 完成（2026-09-22） | 正文删开场句（详情文字并入其他，pipeline v3）；前端「白名单模式」→「部分同步」全量更名；产品列表 page-content 补 overflow-y-auto 修滚动/分页不可达 + 分页 v-model 接法；76 用例 + build 过；agent2 已热部署（含前端重建）并重灌 17 产品 |
+| P2.9 | metadata 业务数据收进 raw_payload（用户决议 v1.9，配合检索工具 doc_metadata 白名单） | ✅ 完成（2026-09-22，待 agent2 部署后同步自动迁移存量） | 渲染器 metadata 改 raw_payload 整包嵌套（与 api-ingest D12 对齐），顶层只留 trace/pipeline_version/sync_run_id；content_hash 只含 pipeline_version+正文，结构变化不触发重嵌（不 bump 版本避免全量重嵌计费）；存量平铺行由 skip 路径先比对后写自动轻量 UPDATE 迁移；knowledge_base_search doc_metadata 白名单仅取 raw_payload；file_type 同轮 markdown→json（API 来源文档无实体文件，INSERT/重灌 UPDATE/skip 轻 UPDATE 三处）；前端下载对外部无原文链接文档提示「来源于 API 同步，请点操作列详情」；renderer/service/tool 测试同步；设计文档 §3.2 v1.9 |
 | P3 | agent2 验收（栏目授权/外链抽样）→ 正式部署（portal 开通） | 📋 待开发 | — |
 
 ## 1. 集成点清单（新代码挂到哪，全部已核对现有模式）

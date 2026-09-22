@@ -787,12 +787,14 @@ class HongtaoShopSyncService:
                 )
                 row = cursor.fetchone()
                 if row and not _metadata_equivalent(row["metadata"], rendered.metadata, run):
-                    # 值变才一次轻量 UPDATE（含本轮 sync_run_id/ingested_at 刷新）
+                    # 值变才一次轻量 UPDATE（含本轮 sync_run_id/ingested_at 刷新）；
+                    # file_type 随 v1.9 同轮修正（markdown→json），存量行迁移零额外轮次
                     fresh = dict(rendered.metadata)
                     fresh["pipeline_version"] = PIPELINE_VERSION
                     fresh["sync_run_id"] = run["id"]
                     cursor.execute(
-                        "UPDATE documents SET metadata = %s, updated_at = now() "
+                        "UPDATE documents SET metadata = %s, file_type = 'json', "
+                        "updated_at = now() "
                         "WHERE id = %s AND tenant_id = %s",
                         (_dump_metadata(fresh), doc_id, tenant_id),
                     )
@@ -965,7 +967,7 @@ class HongtaoShopSyncService:
                             file_type, file_path, file_size, total_chunks, embedding_model,
                             raw_text, metadata, summary, uuid,
                             origin, external_id, status
-                        ) VALUES (NULL, %s, %s, %s, NULL, 'markdown', '', %s, %s, %s,
+                        ) VALUES (NULL, %s, %s, %s, NULL, 'json', '', %s, %s, %s,
                                   %s, %s, NULL, %s, %s, %s, 'active')
                         ON CONFLICT (tenant_id, origin, external_id) WHERE external_id IS NOT NULL
                         DO NOTHING
@@ -1002,6 +1004,7 @@ class HongtaoShopSyncService:
                         UPDATE documents
                         SET title = %s, raw_text = %s, metadata = %s,
                             total_chunks = %s, embedding_model = %s, source_type = %s,
+                            file_type = 'json',
                             status = 'active', expires_at = NULL, updated_at = now()
                         WHERE id = %s AND tenant_id = %s
                         """,

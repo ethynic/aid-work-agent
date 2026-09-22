@@ -216,21 +216,26 @@ def render_product(
     if ingested_at:
         trace["ingested_at"] = ingested_at
 
+    # v1.9：业务数据收进 raw_payload（与通用 api-ingest 契约对齐），顶层只留
+    # trace/pipeline_version/sync_run_id 等系统痕迹；检索工具 doc_metadata 白名单
+    # 只取 raw_payload，新增业务键无需改工具侧
     metadata: Dict[str, Any] = {
-        "name": name,
-        "model": model or "",
-        "procode": procode,
-        "sellpoint": sellpoint,
-        "cid": cid,
-        "listing_date": created,
-        "stock": _s(item.get("stock")),
-        "sales": _s(item.get("sales")),
-        "comment_score": _s(item.get("comment_score")),
-        "comment_num": _s(item.get("comment_num")),
-        "pics": pics,
-        "detail_images": detail_imgs,
-        "video": video,
-        "forum_media": forum_media,
+        "raw_payload": {
+            "name": name,
+            "model": model or "",
+            "procode": procode,
+            "sellpoint": sellpoint,
+            "cid": cid,
+            "listing_date": created,
+            "stock": _s(item.get("stock")),
+            "sales": _s(item.get("sales")),
+            "comment_score": _s(item.get("comment_score")),
+            "comment_num": _s(item.get("comment_num")),
+            "pics": pics,
+            "detail_images": detail_imgs,
+            "video": video,
+            "forum_media": forum_media,
+        },
     }
     # trace.content_hash 由渲染结果计算后回填（metadata 内的 hash 即本条内容的指纹）
     content_hash = compute_content_hash(content_md)

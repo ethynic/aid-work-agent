@@ -22,16 +22,24 @@ from loguru import logger
 
 
 def _parse_doc_metadata(raw: Any) -> Dict[str, Any]:
-    """解析 documents.metadata（TEXT 列存 JSON），剔除内部诊断字段"""
+    """解析 documents.metadata（TEXT 列存 JSON），白名单只保留 raw_payload
+
+    raw_payload 是各入库管线统一的业务原始数据位（api-ingest 契约与宏陶 hts-render
+    v1.9 起均为：图片链接/易变指标等未写入正文的数据整包嵌套于此）。白名单外的键
+    是系统内部痕迹（溯源 source_code/native_id/run_id/trace、pipeline_version、
+    入库时间、content_md、解析诊断等），不进 LLM 上下文；完整 metadata 供人查看
+    走前端文档详情。白名单方式防未来新增内部键泄漏给 LLM。
+    """
     if not raw:
         return {}
     try:
         data = json.loads(raw) if isinstance(raw, str) else dict(raw)
     except (TypeError, ValueError):
         return {}
-    # layout_report 是 Excel 解析的内部布局诊断信息，对 LLM 无用且体积大
-    data.pop("layout_report", None)
-    return data
+    if not isinstance(data, dict):
+        return {}
+    payload = data.get("raw_payload")
+    return {"raw_payload": payload} if payload is not None else {}
 
 
 class KnowledgeBaseSearchInput(BaseModel):
@@ -48,6 +56,10 @@ class KnowledgeBaseTool(BaseTool):
     description = (
         "从知识中心按内容语义检索相关段落，回答用户问题。"
         "当用户询问关于公司制度、文档资料、产品信息等问题时使用此工具。"
+        "结果分两部分：results 为命中片段（text/doc_id/score/chunk_index/metadata）；"
+        "documents 按 doc_id 归并文档信息（title/file_path/summary/doc_metadata 等），"
+        "同一文档命中多个片段时文档信息只出现一次，片段经 doc_id 关联所属文档；"
+        "doc_metadata 仅含 raw_payload（业务原始数据：图片链接/销量/库存等未写入正文的字段）。"
         "若已知文件名/文档标题、需要读取整个文件，先用 knowledge_file_search 定位拿到 file_path，再用 read 读取。"
     )
     display_name = "搜索知识库"
@@ -206,23 +218,31 @@ class KnowledgeBaseTool(BaseTool):
                 finally:
                     conn_cm.__exit__(None, None, None)
 
-                # 格式化结果
+                # 文档级信息按 doc_id 归并，同一文档只输出一次：标题/摘要/
+                # doc_metadata（仅 raw_payload，上限 32KB）不随命中的每个片段
+                # 重复进 LLM 上下文；片段经 doc_id 引用所属文档
+                documents_out: Dict[str, Any] = {}
+                for doc_id in doc_ids:
+                    documents_out[str(doc_id)] = {
+                        "title": doc_titles.get(doc_id, "未知文档"),
+                        "file_path": doc_file_paths.get(doc_id, ""),
+                        "source_type": doc_source_types.get(doc_id),
+                        "file_type": doc_file_types.get(doc_id),
+                        "total_chunks": doc_total_chunks.get(doc_id),
+                        "created_at": doc_created_ats.get(doc_id),
+                        "summary": doc_summaries.get(doc_id),
+                        "doc_metadata": doc_metas.get(doc_id),
+                    }
+
+                # 片段级结果：chunk_index 为片段在文档中的 1-based 位置，
+                # 配合所属文档的 total_chunks 可判断片段是否被切断
+                # （片段只是原文 512 字左右的切块，LLM 可据此判断是否需要读全文）
                 formatted_results = [
                     {
                         "text": r["text"],
                         "doc_id": r["doc_id"],
-                        "doc_title": doc_titles.get(r["doc_id"], "未知文档"),
-                        "file_path": doc_file_paths.get(r["doc_id"], ""),
                         "score": round(r["score"], 4),
-                        # 片段在文档中的位置（1-based），total_chunks 为文档总块数；
-                        # 片段只是原文 512 字左右的切块，LLM 可据此判断是否需要读全文
                         "chunk_index": (r.get("chunk_index") or 0) + 1,
-                        "total_chunks": doc_total_chunks.get(r["doc_id"]),
-                        "source_type": doc_source_types.get(r["doc_id"]),
-                        "file_type": doc_file_types.get(r["doc_id"]),
-                        "created_at": doc_created_ats.get(r["doc_id"]),
-                        "summary": doc_summaries.get(r["doc_id"]),
-                        "doc_metadata": doc_metas.get(r["doc_id"]),
                         "metadata": attach_owner_metadata(
                             r["metadata"], doc_tenant_ids.get(r["doc_id"]), tenant_id,
                         )
@@ -231,11 +251,13 @@ class KnowledgeBaseTool(BaseTool):
                 ]
             else:
                 formatted_results = []
+                documents_out = {}
 
             # _no_truncate: 检索结果每条含完整文本，保头保尾截断会丢失排名靠后的
             # 中间结果（LLM 无法看到完整候选集）。声明不截断，让 LLM 看到全部结果。
             return {
                 "success": True,
+                "documents": documents_out,
                 "results": formatted_results,
                 "count": len(formatted_results),
                 "_no_truncate": True

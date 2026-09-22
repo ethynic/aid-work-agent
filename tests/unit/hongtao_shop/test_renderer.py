@@ -133,15 +133,18 @@ def test_parse_vl_fields_prefix_and_fallback():
 def test_render_product_metadata_complete():
     r = render_product(_item(), _vl_map(), _forum_media(), "2026-09-21", ingested_at="2026-09-21T12:00:00")
     m = r.metadata
-    assert m["name"] == "TFZJ1890014欧典米灰"
-    assert m["model"] == "TFZJ1890014"
-    assert m["stock"] == "1000" and m["sales"] == "9"  # 易变数值只在 metadata
-    assert m["pics"] == ["https://oss/pic574.jpg", "https://oss/p574_1.jpg", "https://oss/p574_2.jpg"]
-    assert m["detail_images"] == ["https://oss/d574_1.jpg", "https://oss/d574_2.jpg"]
-    assert len(m["forum_media"]) == 1
+    # v1.9：业务数据整包嵌套在 raw_payload（与通用 api-ingest 契约对齐），
+    # 顶层只留 trace 等系统痕迹
+    rp = m["raw_payload"]
+    assert rp["name"] == "TFZJ1890014欧典米灰"
+    assert rp["model"] == "TFZJ1890014"
+    assert rp["stock"] == "1000" and rp["sales"] == "9"  # 易变数值只在 metadata
+    assert rp["pics"] == ["https://oss/pic574.jpg", "https://oss/p574_1.jpg", "https://oss/p574_2.jpg"]
+    assert rp["detail_images"] == ["https://oss/d574_1.jpg", "https://oss/d574_2.jpg"]
+    assert len(rp["forum_media"]) == 1
     # v1.7：标识字段从正文移入 metadata（正文不再含商品ID/上架时间）
-    assert m["cid"] == "12"
-    assert m["listing_date"] == "2025-09-21"  # createtime 1758432000 @UTC+8
+    assert rp["cid"] == "12"
+    assert rp["listing_date"] == "2025-09-21"  # createtime 1758432000 @UTC+8
     assert m["trace"]["source"] == "hongtao_shop"
     assert m["trace"]["native_id"] == "574"
     assert m["trace"]["sync_date"] == "2026-09-21"

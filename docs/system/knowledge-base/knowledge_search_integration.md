@@ -84,8 +84,15 @@ from src.tools.knowledge.knowledge_base_tool import KnowledgeBaseTool
 tool = KnowledgeBaseTool()
 result = await tool.execute(query="公司年假制度", top_k=5)
 
-# 返回结构略有不同（无 title/file_type/file_path，使用 doc_title）：
-# {"success": True, "results": [{"text": ..., "doc_title": ..., "score": ...}], "count": N}
+# 返回结构分两层（文档级按 doc_id 归并，同一文档命中多片段只出一次）：
+# {"success": True,
+#  "documents": {"<doc_id>": {"title": ..., "file_path": ..., "source_type": ...,
+#                             "file_type": ..., "total_chunks": ..., "created_at": ...,
+#                             "summary": ..., "doc_metadata": ...}},
+#  "results": [{"text": ..., "doc_id": ..., "score": ..., "chunk_index": ..., "metadata": ...}],
+#  "count": N}
+# 片段经 doc_id 关联 documents 中的所属文档；doc_metadata 白名单仅含 raw_payload
+# （原始业务数据：图片链接等未写入正文的字段；系统溯源痕迹不进 LLM 上下文）
 ```
 
 ### 方式三：直接使用 HybridRetriever（底层）

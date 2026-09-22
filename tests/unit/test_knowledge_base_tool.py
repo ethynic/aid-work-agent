@@ -1,8 +1,11 @@
 """
 知识库检索工具单元测试
 
-验证 execute() 返回结构包含 doc_id 和 file_path（源文件来源）。
+验证 execute() 返回结构：results 为片段级（text/doc_id/score/chunk_index/metadata），
+documents 按 doc_id 归并文档级信息（title/file_path/summary/doc_metadata 等，
+同一文档命中多片段只输出一次）。
 """
+import json
 from unittest.mock import MagicMock, AsyncMock, patch
 
 from src.tools.knowledge.knowledge_base_tool import KnowledgeBaseTool
@@ -48,9 +51,11 @@ async def test_kb_search_returns_doc_id_and_file_path():
 
     item = result["results"][0]
     assert item["doc_id"] == 1
-    assert item["doc_title"] == "报价模板.xlsx"
-    assert item["file_path"] == "storage/tenants/tenant_test1/knowledge/kb_xxx.xlsx"
     assert item["text"] == "报价模板内容"
+
+    doc = result["documents"]["1"]
+    assert doc["title"] == "报价模板.xlsx"
+    assert doc["file_path"] == "storage/tenants/tenant_test1/knowledge/kb_xxx.xlsx"
 
     # 关键：SQL 必须查询了 file_path 列
     sql_called = mock_cursor.execute.call_args[0][0]
@@ -78,7 +83,10 @@ async def test_kb_search_returns_chunk_position_and_doc_metadata():
             "source_type": "数据分析",
             "file_type": "xlsx",
             "total_chunks": 12,
-            "metadata": '{"sheet_count": 3, "sheets": ["A", "B", "C"], "layout_report": [{"sheet": "A"}]}',
+            "metadata": json.dumps({
+                "sheet_count": 3, "layout_report": [{"sheet": "A"}],
+                "raw_payload": {"rows": 3},
+            }),
             "summary": "三张工作表的汇总数据",
             "created_at": datetime(2026, 9, 21, 10, 0, 0),
         },
@@ -90,17 +98,118 @@ async def test_kb_search_returns_chunk_position_and_doc_metadata():
     item = result["results"][0]
     # chunk_index 由 0-based 转为 1-based
     assert item["chunk_index"] == 3
-    assert item["total_chunks"] == 12
-    assert item["source_type"] == "数据分析"
-    assert item["file_type"] == "xlsx"
-    assert item["created_at"] == "2026-09-21T10:00:00"
-    assert item["summary"] == "三张工作表的汇总数据"
-    # 文档级 metadata 已解析为 dict，内部诊断字段 layout_report 被剔除
-    assert item["doc_metadata"] == {"sheet_count": 3, "sheets": ["A", "B", "C"]}
+
+    doc = result["documents"]["1"]
+    assert doc["total_chunks"] == 12
+    assert doc["source_type"] == "数据分析"
+    assert doc["file_type"] == "xlsx"
+    assert doc["created_at"] == "2026-09-21T10:00:00"
+    assert doc["summary"] == "三张工作表的汇总数据"
+    # doc_metadata 白名单：只保留 raw_payload（业务原始数据）
+    assert doc["doc_metadata"] == {"raw_payload": {"rows": 3}}
     # SQL 必须查询了元数据相关列
     sql_called = mock_cursor.execute.call_args[0][0]
     for col in ("total_chunks", "summary", "created_at"):
         assert col in sql_called
+
+
+async def test_kb_search_same_doc_multiple_chunks_doc_info_once():
+    """同一文档命中多个片段时，文档级信息（含 raw_payload）只在 documents 出现
+    一次，片段条目不携带文档级字段（否则 raw_payload ≤32KB 随片段数成倍进上下文）"""
+    tool = _make_tool()
+    mock_retriever = MagicMock()
+    mock_retriever.retrieve = AsyncMock(return_value=[
+        {"doc_id": 7, "chunk_index": 0, "text": "片段一", "score": 0.9, "metadata": {}},
+        {"doc_id": 7, "chunk_index": 1, "text": "片段二", "score": 0.8, "metadata": {}},
+        {"doc_id": 9, "chunk_index": 0, "text": "其他文档片段", "score": 0.7, "metadata": {}},
+    ])
+    tool._retriever = mock_retriever
+
+    mock_cm, _ = _mock_db([
+        {"id": 7, "title": "宏陶商品.json", "file_path": None, "source_type": "hongtao",
+         "file_type": "json", "total_chunks": 2, "summary": None, "created_at": None,
+         "metadata": json.dumps({"raw_payload": {"pics": ["https://x/1.jpg"]}})},
+        {"id": 9, "title": "制度.docx", "file_path": "/y.docx", "source_type": "policy",
+         "file_type": "docx", "total_chunks": 5, "summary": None, "created_at": None,
+         "metadata": None},
+    ])
+
+    with patch("src.tools.knowledge.knowledge_base_tool.get_db_connection", return_value=mock_cm):
+        result = await tool.execute(query="瓷砖", top_k=5)
+
+    assert result["count"] == 3
+    # 文档表按 doc_id 归并：7 命中两个片段但只出现一次
+    assert set(result["documents"].keys()) == {"7", "9"}
+    assert result["documents"]["7"]["doc_metadata"] == {
+        "raw_payload": {"pics": ["https://x/1.jpg"]}}
+    # 片段条目只含片段级字段
+    for item in result["results"]:
+        assert set(item.keys()) == {"text", "doc_id", "score", "chunk_index", "metadata"}
+    assert len([i for i in result["results"] if i["doc_id"] == 7]) == 2
+
+
+async def test_kb_search_doc_metadata_whitelist_raw_payload_only():
+    """doc_metadata 白名单：只保留业务原始数据，系统内部痕迹（溯源 code/id、
+    管线版本、入库时间、解析诊断、file_type/original_url 等）一律不进 LLM 上下文"""
+    tool = _make_tool()
+    mock_retriever = MagicMock()
+    mock_retriever.retrieve = AsyncMock(return_value=[
+        {"doc_id": 5, "chunk_index": 0, "text": "文章", "score": 0.9, "metadata": {}},
+        {"doc_id": 8, "chunk_index": 0, "text": "文本", "score": 0.85, "metadata": {}},
+        {"doc_id": 7, "chunk_index": 0, "text": "瓷砖", "score": 0.8, "metadata": {}},
+    ])
+    tool._retriever = mock_retriever
+
+    mock_cm, _ = _mock_db([
+        {"id": 5, "title": "公众号文章", "file_path": "https://mp.weixin.qq.com/s/abc",
+         "file_type": "md", "total_chunks": 1, "summary": None, "created_at": None,
+         "metadata": json.dumps({
+             "original_url": "https://mp.weixin.qq.com/s/abc", "fetch_url": "https://x",
+             "publish_time": "2026-09-01T08:00:00", "account_name": "某号",
+             "sync_run_id": 42, "pipeline_version": "wp13", "ingested_at": "2026-09-01T09:00:00",
+             "content_md": "# 标题", "list_source": {"aid": 1},
+         })},  # 无白名单键（公众号文档）→ doc_metadata 为空对象
+        {"id": 8, "title": "说明.txt", "file_path": "/storage/说明.txt",
+         "file_type": "txt", "total_chunks": 1, "summary": None, "created_at": None,
+         "metadata": json.dumps({
+             "file_type": ".txt", "encoding": "utf-8",
+             "source_code": "ht_mall", "native_id": 123, "run_id": "run_9",
+             "pipeline_version": "v1.8", "ingested_at": "2026-09-20T00:00:00",
+             "raw_payload": {"name": "瓷砖", "pics": ["https://x/1.jpg"], "sales": 30},
+         })},
+        # 宏陶专用模块（hts-render v1.9）：业务数据嵌套在 raw_payload，
+        # 顶层只留 pipeline_version/sync_run_id/trace 等系统痕迹
+        {"id": 7, "title": "8-TPG2680D046ABCD瑞峰", "file_path": "",
+         "file_type": "markdown", "total_chunks": 1, "summary": None, "created_at": None,
+         "metadata": json.dumps({
+             "raw_payload": {
+                 "pics": ["https://oss/p1.jpg"], "detail_images": ["https://oss/d1.jpg"],
+                 "forum_media": [], "video": "", "listing_date": "2025-07-10",
+                 "sales": "0", "stock": "1000", "comment_score": "5.0", "comment_num": "0",
+                 "name": "瑞峰", "model": "8-TPG2680D046ABCD", "procode": "8-TPG2680D046ABCD",
+                 "cid": "10", "sellpoint": "",
+             },
+             "pipeline_version": "hts-render-v3", "sync_run_id": 1242,
+             "trace": {"native_id": "83", "content_hash": "abc", "ingested_at": "2026-09-22"},
+         })},
+    ])
+
+    with patch("src.tools.knowledge.knowledge_base_tool.get_db_connection", return_value=mock_cm):
+        result = await tool.execute(query="瓷砖", top_k=5)
+
+    # 无业务键的文档：痕迹字段全部不输出
+    assert result["documents"]["5"]["doc_metadata"] == {}
+    # 通用 api-ingest 形态：仅 raw_payload，业务数据（图片链接/销量）完整可达
+    assert result["documents"]["8"]["doc_metadata"] == {
+        "raw_payload": {"name": "瓷砖", "pics": ["https://x/1.jpg"], "sales": 30}}
+    # 宏陶 v1.9 形态：raw_payload 整包（含正文已有字段也整包保留，取数语义统一），
+    # 顶层痕迹键不输出
+    assert result["documents"]["7"]["doc_metadata"] == {"raw_payload": {
+        "pics": ["https://oss/p1.jpg"], "detail_images": ["https://oss/d1.jpg"],
+        "forum_media": [], "video": "", "listing_date": "2025-07-10",
+        "sales": "0", "stock": "1000", "comment_score": "5.0", "comment_num": "0",
+        "name": "瑞峰", "model": "8-TPG2680D046ABCD", "procode": "8-TPG2680D046ABCD",
+        "cid": "10", "sellpoint": ""}}
 
 
 async def test_kb_search_doc_metadata_invalid_json_returns_empty():
@@ -122,8 +231,9 @@ async def test_kb_search_doc_metadata_invalid_json_returns_empty():
         result = await tool.execute(query="test")
 
     item = result["results"][0]
-    assert item["doc_metadata"] == {}
-    assert item["total_chunks"] is None
+    doc = result["documents"]["1"]
+    assert doc["doc_metadata"] == {}
+    assert doc["total_chunks"] is None
     # 缺失 chunk_index 时兜底为第 1 块
     assert item["chunk_index"] == 1
 
@@ -143,7 +253,7 @@ async def test_kb_search_file_path_fallback_empty_when_none():
         result = await tool.execute(query="test")
 
     assert result["success"] is True
-    assert result["results"][0]["file_path"] == ""
+    assert result["documents"]["2"]["file_path"] == ""
 
 
 async def test_kb_search_empty_results():
@@ -160,6 +270,7 @@ async def test_kb_search_empty_results():
     assert result["success"] is True
     assert result["count"] == 0
     assert result["results"] == []
+    assert result["documents"] == {}
     # 无结果时不应查 DB（共享范围与标题回查两路都不触发）
     assert not db_shared.called
     assert not db_tool.called

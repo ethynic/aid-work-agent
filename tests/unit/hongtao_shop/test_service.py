@@ -203,13 +203,15 @@ async def test_full_pipeline_new_products(harness):
     assert result["counts"]["new"] == 2
 
     docs = harness["query"](
-        "SELECT title, origin, external_id, status, source_type, metadata "
+        "SELECT title, origin, external_id, status, source_type, file_type, metadata "
         "FROM documents WHERE tenant_id = %s AND origin = 'hongtao_shop' ORDER BY id",
         (harness["tenant_id"],),
     )
     assert len(docs) == 2
     assert {d["external_id"] for d in docs} == {"product:1", "product:2"}
     assert all(d["status"] == "active" for d in docs)
+    # v1.9：API 来源文档 file_type 标 json（非 markdown，无实体文件）
+    assert all(d["file_type"] == "json" for d in docs)
     # 分类：租户知识库顶级「产品」普通分类（查无则建），文档全部归属它
     cats = harness["query"](
         "SELECT source_type FROM knowledge_categories "
@@ -220,7 +222,8 @@ async def test_full_pipeline_new_products(harness):
     assert all(d["source_type"] == cats[0]["source_type"] for d in docs)
     # 论坛关联：TPJ157042 帖挂到产品 2
     meta2 = json.loads(next(d["metadata"] for d in docs if d["external_id"] == "product:2"))
-    assert len(meta2["forum_media"]) == 1 and meta2["forum_media"][0]["post_id"] == "419"
+    rp2 = meta2["raw_payload"]
+    assert len(rp2["forum_media"]) == 1 and rp2["forum_media"][0]["post_id"] == "419"
     # chunks：一产品一 chunk（whole）
     chunk_rows = harness["query"](
         "SELECT c.doc_id, COUNT(*) AS cnt FROM chunks c "
@@ -289,10 +292,13 @@ async def test_metadata_only_change_updates_without_reembed(harness):
     assert result["counts"]["skip"] == 1  # hash 未变仍 skip
     assert harness["embedding"].calls == calls_after_first
     doc = harness["query"](
-        "SELECT metadata FROM documents WHERE tenant_id = %s AND origin = 'hongtao_shop'",
+        "SELECT metadata, file_type FROM documents "
+        "WHERE tenant_id = %s AND origin = 'hongtao_shop'",
         (harness["tenant_id"],),
     )[0]
-    assert json.loads(doc["metadata"])["stock"] == "42"
+    assert json.loads(doc["metadata"])["raw_payload"]["stock"] == "42"
+    # skip 轻量 UPDATE 同轮修正 file_type（存量 markdown 行迁移）
+    assert doc["file_type"] == "json"
 
 
 async def test_off_shelf_soft_delete_and_restore(harness):
@@ -630,3 +636,38 @@ async def test_execute_aborts_without_source_row(harness):
         "SELECT COUNT(*) AS cnt FROM documents WHERE tenant_id = %s "
         "AND origin = 'hongtao_shop'", (harness["tenant_id"],),
     )[0]["cnt"] == 0  # 零入库
+
+
+def test_metadata_equivalent_legacy_flat_vs_v19_nested():
+    """v1.9 结构迁移：存量平铺 metadata vs 新 raw_payload 嵌套渲染结果判定不等，
+    skip 路径走轻量 UPDATE 自动迁移（零重嵌入）；新结构自身剔除易变键后等价跳过。"""
+    from src.tenant_custom.hongtao_shop.service import (
+        PIPELINE_VERSION, _metadata_equivalent,
+    )
+
+    run = {"id": 101}
+    rendered_new = {
+        "raw_payload": {"name": "瑞峰", "stock": "1000", "sales": "0",
+                        "pics": ["https://oss/p1.jpg"]},
+        "trace": {"source": "hongtao_shop", "native_id": "83",
+                  "sync_date": "2026-09-22"},
+    }
+
+    # 存量平铺结构（v1.8 及以前）：与嵌套渲染不等 → 触发轻量 UPDATE 迁移
+    legacy_stored = json.dumps({
+        "name": "瑞峰", "stock": "1000", "sales": "0",
+        "pics": ["https://oss/p1.jpg"],
+        "trace": {"source": "hongtao_shop", "native_id": "83",
+                  "sync_date": "2026-09-22"},
+        "pipeline_version": PIPELINE_VERSION, "sync_run_id": 100,
+    })
+    assert _metadata_equivalent(legacy_stored, rendered_new, run) is False
+
+    # 新结构已落库（仅易变键差异）：等价 → 零写跳过
+    stored_new = json.dumps({
+        "raw_payload": rendered_new["raw_payload"],
+        "trace": {"source": "hongtao_shop", "native_id": "83",
+                  "sync_date": "2026-09-22", "ingested_at": "2026-09-22T00:00:00"},
+        "pipeline_version": PIPELINE_VERSION, "sync_run_id": 100,
+    })
+    assert _metadata_equivalent(stored_new, rendered_new, run) is True
