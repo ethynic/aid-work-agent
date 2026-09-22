@@ -801,7 +801,7 @@ class KnowledgeBaseService:
             logger.opt(exception=True).error(f"后端日志：文档移动失败: {e}")
             return {"success": False, "error": "移动文档失败", "debug": sanitize_error_info(str(e))}
 
-    def count_documents(self, user_id: Optional[int] = None, tenant_id: Optional[str] = None, source_type: Optional[str] = None, sub_category: Optional[str] = None, global_view: bool = False, include_deleted: bool = False, origin: Optional[str] = None) -> int:
+    def count_documents(self, user_id: Optional[int] = None, tenant_id: Optional[str] = None, source_type: Optional[str] = None, sub_category: Optional[str] = None, global_view: bool = False, include_deleted: bool = False, origin: Optional[str] = None, include_subcategories: bool = True) -> int:
         """获取文档总数
 
         租户作用域（安全加固设计 §2.4）：有租户上下文只统计本租户；无租户上下文
@@ -813,6 +813,8 @@ class KnowledgeBaseService:
         include_deleted=True（仅 platform_admin 审计入口传入）包含已删除。
         expires_at 只限制检索，不过滤管理端计数。
         origin 非空时按来源类型过滤。
+        include_subcategories=False（不含子栏目）时子分类精确匹配、
+        顶级分类只统计直接挂载（sub_category 为空）的文档。
         """
         try:
             with self._get_db_connection() as conn:
@@ -842,7 +844,11 @@ class KnowledgeBaseService:
                     conditions.append("source_type = %s")
                     params.append(source_type)
                 if sub_category is not None:
-                    if tenant_id is not None:
+                    if not include_subcategories:
+                        # 仅本栏目：精确匹配，不展开后代分类
+                        conditions.append("sub_category = %s")
+                        params.append(sub_category)
+                    elif tenant_id is not None:
                         # 展开为自身 + 所有后代分类，保证与 list_documents 语义一致
                         subtree = self._get_category_subtree_source_types(tenant_id, sub_category)
                         conditions.append("sub_category = ANY(%s)")
@@ -850,6 +856,9 @@ class KnowledgeBaseService:
                     else:
                         conditions.append("sub_category = %s")
                         params.append(sub_category)
+                elif source_type is not None and not include_subcategories:
+                    # 仅本栏目：顶级分类下只统计直接挂载（sub_category 为空）的文档
+                    conditions.append("sub_category IS NULL")
 
                 where_clause = " AND ".join(conditions)
                 if where_clause:
@@ -874,7 +883,8 @@ class KnowledgeBaseService:
         sub_category: Optional[str] = None,
         global_view: bool = False,
         include_deleted: bool = False,
-        origin: Optional[str] = None
+        origin: Optional[str] = None,
+        include_subcategories: bool = True
     ) -> List[Dict[str, Any]]:
         """获取文档列表
 
@@ -886,6 +896,8 @@ class KnowledgeBaseService:
         软删除可见性（公众号 WP2，设计 §7.3）：默认只返回 status='active'；
         include_deleted=True（仅 platform_admin 审计入口传入）包含已删除。
         expires_at 只限制检索，过期文档仍可管理查看。origin 非空时按来源类型过滤。
+        include_subcategories=False（不含子栏目）时子分类精确匹配、
+        顶级分类只返回直接挂载（sub_category 为空）的文档。
         """
         try:
             with self._get_db_connection() as conn:
@@ -916,7 +928,11 @@ class KnowledgeBaseService:
                     conditions.append(f"source_type = {placeholder}")
                     params.append(source_type)
                 if sub_category is not None:
-                    if tenant_id is not None:
+                    if not include_subcategories:
+                        # 仅本栏目：精确匹配，不展开后代分类
+                        conditions.append(f"sub_category = {placeholder}")
+                        params.append(sub_category)
+                    elif tenant_id is not None:
                         # 展开为自身 + 所有后代分类，与 count_documents / list_categories 语义一致
                         subtree = self._get_category_subtree_source_types(tenant_id, sub_category)
                         conditions.append(f"sub_category = ANY({placeholder})")
@@ -924,6 +940,9 @@ class KnowledgeBaseService:
                     else:
                         conditions.append(f"sub_category = {placeholder}")
                         params.append(sub_category)
+                elif source_type is not None and not include_subcategories:
+                    # 仅本栏目：顶级分类下只返回直接挂载（sub_category 为空）的文档
+                    conditions.append("sub_category IS NULL")
 
                 where_clause = ""
                 if conditions:

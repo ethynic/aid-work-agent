@@ -71,13 +71,16 @@ export interface DocumentListResponse {
 /**
  * 获取知识库文档列表（分页）
  */
-export async function listDocuments(limit = 100, offset = 0, sourceType?: string, subCategory?: string): Promise<DocumentListResponse> {
+export async function listDocuments(limit = 100, offset = 0, sourceType?: string, subCategory?: string, includeSubcategories = true): Promise<DocumentListResponse> {
   let url = `${API_BASE}/documents?limit=${limit}&offset=${offset}`
   if (sourceType) {
     url += `&source_type=${encodeURIComponent(sourceType)}`
   }
   if (subCategory) {
     url += `&sub_category=${encodeURIComponent(subCategory)}`
+  }
+  if (!includeSubcategories) {
+    url += `&include_subcategories=false`
   }
   const response = await fetch(url, {
     headers: { ...getAuthHeader() }

@@ -409,6 +409,7 @@ async def list_documents(
     sub_category: Optional[str] = None,
     origin: Optional[str] = None,
     include_deleted: bool = False,
+    include_subcategories: bool = True,
     http_request: Request = None
 ):
     """
@@ -418,6 +419,7 @@ async def list_documents(
     - 支持按 source_type 过滤（顶级分类）
     - 支持按 sub_category 过滤（子分类）
     - 支持按 origin 过滤来源（manual_upload / wechat_mp 等）
+    - include_subcategories=false 时只返回选中分类的直接文档（不展开子分类）
     - 默认只返回 active 文档；include_deleted=true 仅 platform_admin 生效
       （审计用途），其他角色传入时静默忽略（与 global_view 收窄风格一致）
     - 返回 {items, total} 格式
@@ -435,12 +437,14 @@ async def list_documents(
         global_view=_is_global_admin_view(http_request),
         include_deleted=include_deleted,
         origin=origin,
+        include_subcategories=include_subcategories,
     )
     total = knowledge_service.count_documents(
         tenant_id=tenant_id, source_type=source_type, sub_category=sub_category,
         global_view=_is_global_admin_view(http_request),
         include_deleted=include_deleted,
         origin=origin,
+        include_subcategories=include_subcategories,
     )
 
     return {

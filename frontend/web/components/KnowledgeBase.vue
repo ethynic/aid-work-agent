@@ -76,6 +76,16 @@
               <div class="page-toolbar mb-3">
                 <div class="page-toolbar-left">
                   <BaseInput v-model="searchQuery" placeholder="在当前选中分类（含子级）中搜索文档" size="sm" class="w-[400px]" @keyup.enter="handleSearchInput" @input="handleSearchInput" />
+                  <BaseSelect
+                    v-if="showScopeToggle"
+                    v-model="categoryScope"
+                    size="sm"
+                    class="w-[140px]"
+                    title="控制列表是否包含子分类下的文档（搜索始终包含子级）"
+                  >
+                    <option value="include">含子栏目</option>
+                    <option value="direct">不含子栏目</option>
+                  </BaseSelect>
                   <BaseButton v-if="isSearchMode" size="sm" intent="secondary" @click="clearSearch">显示全部</BaseButton>
                 </div>
                 <div class="page-toolbar-right">
@@ -120,6 +130,15 @@
                   </svg>
                   <p class="text-muted mb-2">未找到匹配的文档</p>
                   <p class="text-sm text-muted">尝试其他关键词</p>
+                </div>
+
+                <!-- Document List Empty（不含子栏目且子栏目有文档） -->
+                <div v-else-if="isDirectScopeWithSubDocs && documents.length === 0 && !isSearchMode && !isLoading" class="flex flex-col items-center justify-center h-full">
+                  <svg class="w-16 h-16 text-gray-300 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  </svg>
+                  <p class="text-muted mb-2">本栏目下没有直接文档</p>
+                  <p class="text-sm text-muted">子栏目中共有 {{ selectedCategoryAggCount }} 篇文档，切换为「含子栏目」可查看</p>
                 </div>
 
                 <!-- Document List Empty -->
@@ -187,6 +206,9 @@
                           </div>
                           <span @click="openDocument(row.id, row.title)" class="text-sm font-medium text-primary-600 hover:text-primary-700 hover:underline cursor-pointer block flex-1 min-w-0 truncate" :title="'点击下载原文: ' + row.title">{{ row.title }}</span>
                         </div>
+                      </template>
+                      <template #category_name="{ row }">
+                        <span class="text-sm text-default">{{ getCategoryName(row as DocumentResponse) }}</span>
                       </template>
                       <template #summary="{ row }">
                         <p v-if="row.summary" class="text-sm text-default line-clamp-2" :title="row.summary">{{ row.summary }}</p>
@@ -440,7 +462,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useToast } from 'vue-toastification'
 import AppHeader from './AppHeader.vue'
@@ -494,6 +516,7 @@ const columns = [
   { key: 'checkbox', label: '', width: '40px' },
   { key: 'index', label: '序号', width: '60px' },
   { key: 'title', label: '文档名称', width: '260px' },
+  { key: 'category_name', label: '所属栏目', width: '130px', tooltip: (row: Record<string, any>) => getCategoryPath(row as DocumentResponse) },
   { key: 'summary', label: '摘要', width: '380px' },
   { key: 'file_type', label: '类型', width: '110px' },
   { key: 'file_size', label: '大小', width: '90px' },
@@ -561,6 +584,69 @@ const isRenamingCategory = ref(false)
 const documents = ref<DocumentResponse[]>([])
 const isLoading = ref(false)
 const searchQuery = ref('')
+
+// 栏目范围：include=含子栏目（默认），direct=不含子栏目（仅直接挂载文档）
+const categoryScope = ref<'include' | 'direct'>('include')
+
+// 仅当选中的栏目存在子栏目时才显示范围开关，叶子栏目两种口径结果一致，显示反而让用户迷惑
+const selectedCategoryHasChildren = computed(() => {
+  const target = selectedSubCategory.value || selectedSourceType.value
+  if (!target) return false
+  const cat = categories.value.find(c => c.source_type === target)
+  if (!cat) return false
+  return categories.value.some(c => c.parent_id === cat.id)
+})
+const showScopeToggle = computed(() => !!selectedSourceType.value && selectedCategoryHasChildren.value)
+// 开关隐藏（叶子栏目）时恒按含子栏目口径请求，避免残留的 direct 口径隐藏已删除子栏目的孤儿文档
+const effectiveIncludeSub = computed(() => !showScopeToggle.value || categoryScope.value === 'include')
+
+// 程序性改值（搜索自动切回含子栏目）时抑制 watch 触发的清搜索/重载，避免与进行中的搜索互相打断
+let suppressScopeWatch = false
+
+watch(categoryScope, () => {
+  if (suppressScopeWatch) {
+    suppressScopeWatch = false
+    return
+  }
+  currentPage.value = 1
+  clearSearch()
+  clearSelection()
+  loadDocuments()
+})
+
+// 所属栏目显示名：子分类优先，未挂子分类时为顶级分类
+function getCategoryName(row: DocumentResponse): string {
+  const target = row.sub_category || row.source_type
+  if (!target) return '-'
+  const cat = categories.value.find(c => c.source_type === target)
+  return cat ? (cat.display_name || cat.source_type) : target
+}
+
+// 所属栏目完整路径（用于悬停提示），沿 parent_id 向上追溯
+function getCategoryPath(row: DocumentResponse): string {
+  const target = row.sub_category || row.source_type
+  if (!target) return ''
+  const path: string[] = []
+  let current = categories.value.find(c => c.source_type === target)
+  while (current) {
+    path.unshift(current.display_name || current.source_type)
+    current = current.parent_id != null
+      ? categories.value.find(c => c.id === current!.parent_id)
+      : undefined
+  }
+  return path.join(' / ')
+}
+
+// 「不含子栏目」空列表提示：当前选中栏目的聚合文档数（含子级，来自 list_categories）
+const selectedCategoryAggCount = computed(() => {
+  const target = selectedSubCategory.value || selectedSourceType.value
+  if (!target) return 0
+  const cat = categories.value.find(c => c.source_type === target)
+  return cat?.document_count ?? 0
+})
+const isDirectScopeWithSubDocs = computed(() =>
+  !effectiveIncludeSub.value && !!selectedSourceType.value && selectedCategoryAggCount.value > 0
+)
 
 // 分块详情弹窗
 const showChunkModal = ref(false)
@@ -676,6 +762,11 @@ async function performSearch(query: string) {
     searchResults.value = []
     searchError.value = ''
     return
+  }
+  // 搜索始终为含子级口径：开关停在「不含子栏目」时自动切回，避免控件状态与实际过滤范围不一致
+  if (categoryScope.value !== 'include') {
+    suppressScopeWatch = true
+    categoryScope.value = 'include'
   }
   isSearching.value = true
   searchError.value = ''
@@ -922,7 +1013,7 @@ async function handleDeleteCategory(cat: CategoryResponse) {
 async function loadDocuments() {
   isLoading.value = true
   try {
-    const result = await listDocuments(pageSize.value, (currentPage.value - 1) * pageSize.value, selectedSourceType.value || undefined, selectedSubCategory.value || undefined)
+    const result = await listDocuments(pageSize.value, (currentPage.value - 1) * pageSize.value, selectedSourceType.value || undefined, selectedSubCategory.value || undefined, effectiveIncludeSub.value)
     documents.value = result.items
     totalDocuments.value = result.total
     // 选中"全部"分类时，total 才是全部文档的总数
