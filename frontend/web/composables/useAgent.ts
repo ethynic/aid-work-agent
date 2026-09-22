@@ -563,9 +563,9 @@ export function useAgent() {
     if (state?.isProcessing.value) {
       // 标记为用户主动取消，让 onComplete 显示取消状态
       state.cancelledByUser = true
-      // 先断开前端连接
-      state.sseManager.disconnect()
-      // 通知后端取消生成，避免继续消耗token
+      // 先通知后端取消（设置 Redis 标记，agent 在检查点正常收尾落账），再断开连接。
+      // 顺序不能反：若先 disconnect，后端走 CancelledError 兜底路径，取消轮次的
+      // 取消消息落库（cancelled 标记）会丢失，仅剩计费兜底。
       try {
         const apiBase = import.meta.env.VITE_API_BASE_URL || '/api'
         await fetch(`${apiBase}/chat/${encodeURIComponent(sid)}/cancel`, {
@@ -577,6 +577,7 @@ export function useAgent() {
         console.warn('[abortStreaming] failed to notify backend:', err)
         // 即使后端通知失败，前端仍然中止
       }
+      state.sseManager.disconnect()
       state.isProcessing.value = false
       state.inputHintState.value = 'idle'
     }

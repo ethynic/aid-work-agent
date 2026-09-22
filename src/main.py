@@ -1480,13 +1480,18 @@ async def chat_stream(http_request: Request, request: ChatRequest):
             except asyncio.CancelledError:
                 logger.info(f"[SSE] Agent cancelled by user, session_id={session_id}")
                 error_occurred = "Cancelled by user"
+                # 落账必须在 yield 之前：客户端断连触发本路径时，anyio cancel scope
+                # 已取消，yield 交回控制权后 stream_response 的 await send 会立即再抛
+                # CancelledError，落在 yield 之后的收尾代码永远执行不到（曾致取消轮次
+                # chat_records 完全无落账）。end_record -> save 是同步调用，取消任务内
+                # 仍可完整执行。见 docs/incidents/user-cancel-billing-gap-incident.md
+                if SessionRecordManager.get_current_record():
+                    SessionRecordManager.get_current_record().mark_error("Cancelled by user")
+                    SessionRecordManager.end_record()
                 try:
                     yield f"data: {json.dumps({'type': 'cancelled', 'timestamp': int(datetime.now().timestamp() * 1000)}, ensure_ascii=False)}\n\n"
                 except (BrokenPipeError, ConnectionResetError, OSError):
                     pass
-                if SessionRecordManager.get_current_record():
-                    SessionRecordManager.get_current_record().mark_error("Cancelled by user")
-                    SessionRecordManager.end_record()
             except Exception as e:
                 logger.opt(exception=True).error(f"[SSE] Agent error, session_id={session_id}, error: {type(e).__name__}: {e}")
                 error_occurred = str(e)
