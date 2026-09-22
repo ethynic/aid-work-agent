@@ -135,6 +135,7 @@
                                   class="w-4 h-4 rounded border-primary-200 text-primary-600 focus:ring-primary-500"
                                   :checked="additionalTools.includes(tool.id)" @change="toggleTool(tool.id)" />
                                 <span class="font-medium text-gray-700">{{ tool.name }}</span>
+                                <span class="text-[11px] text-gray-400 font-mono" :title="tool.id">{{ tool.id }}</span>
                                 <span class="text-gray-400 truncate flex-1" :title="tool.description">{{ tool.description }}</span>
                               </label>
                               <div v-if="availableTools.length === 0" class="text-sm text-gray-400 py-2">加载中...</div>
@@ -154,6 +155,7 @@
                           <input type="checkbox" :checked="additionalTools.includes(tool.id)"
                             @change="toggleTool(tool.id)" />
                           <span class="font-medium text-gray-700">{{ tool.name }}</span>
+                          <span class="text-[11px] text-gray-400 font-mono" :title="tool.id">{{ tool.id }}</span>
                           <span class="text-gray-400 truncate flex-1" :title="tool.description">{{ tool.description }}</span>
                         </label>
                         <div v-if="availableTools.length === 0" class="text-xs text-gray-400 py-1">加载中...</div>
