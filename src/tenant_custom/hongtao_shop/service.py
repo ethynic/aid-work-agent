@@ -52,6 +52,10 @@ EXTERNAL_ID_PREFIX = "product:"
 PRODUCT_CATEGORY_NAME = "产品"
 EMBEDDING_MODEL = "text-embedding-v3"
 EMBEDDING_SOURCE_TYPE = "hongtao_shop_embedding"
+# VL 计费倍率（用户决议 2026-09-22）：宏陶场景在公众号现行倍率（全局
+# settings.billing.usage_factor）基础上 ×3；经 usage_factor_override 仅作用于
+# 本模块，公众号侧不受影响
+VL_USAGE_FACTOR_MULTIPLIER = 3
 from src.tenant_custom.hongtao_shop.bootstrap import VL_IMAGE_PARSE_MODEL
 
 VISION_PARSE_SOURCE_TYPE = VL_IMAGE_PARSE_MODEL  # 单一事实源在 bootstrap
@@ -1126,11 +1130,25 @@ class HongtaoShopSyncService:
         self, tenant_id: str, run: Dict[str, Any], item: Dict[str, Any],
         native_id: str, successes,
     ) -> None:
-        """VL 按张 token 计费（照 wechat_mp WP13 模式；unrecognized/失败张不在 successes）。"""
-        from src.services.billing import calculate_credit_cost
+        """VL 按张 token 计费（照 wechat_mp WP13 模式；unrecognized/失败张不在 successes）。
 
+        倍率：宏陶 = 全局 usage_factor × VL_USAGE_FACTOR_MULTIPLIER（固定 ×3），
+        经 usage_factor_override 传入——公众号侧仍走全局系数，互不影响。
+        """
         if not successes:
             return
+
+        from src.services.billing import calculate_credit_cost
+
+        # 宏陶 VL 计费倍率：公众号现行倍率（全局系数）× 3（用户决议 2026-09-22）；
+        # 配置读取异常按全局默认 100 兜底——计费辅助逻辑不得把已入库内容标失败
+        from src.config.settings import create_settings
+        try:
+            base_factor = getattr(create_settings().billing, "usage_factor", 100) or 100
+        except Exception:  # noqa: BLE001
+            base_factor = 100
+        vl_usage_factor = int(base_factor) * VL_USAGE_FACTOR_MULTIPLIER
+
         credits_total = 0.0
         unknown = False
         record_ids: List[str] = []
@@ -1140,7 +1158,8 @@ class HongtaoShopSyncService:
             completion_tokens = int(usage.get("completion_tokens") or 0)
             try:
                 credit = calculate_credit_cost(
-                    prompt_tokens, completion_tokens, model=getattr(s, "model", None)
+                    prompt_tokens, completion_tokens, model=getattr(s, "model", None),
+                    usage_factor_override=vl_usage_factor,
                 )
                 from src.db.models import ChatRecordDB
 
@@ -1162,6 +1181,9 @@ class HongtaoShopSyncService:
                         "billing_mode": "token",
                         "model": s.model,
                         "native_id": native_id,
+                        # 对账标识：本行为宏陶倍率计费（全局系数 × N）
+                        "usage_factor": vl_usage_factor,
+                        "usage_factor_multiplier": VL_USAGE_FACTOR_MULTIPLIER,
                     },
                 )
             except Exception as e:  # noqa: BLE001 单张计费失败不回滚内容

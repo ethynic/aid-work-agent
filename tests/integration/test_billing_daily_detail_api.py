@@ -982,3 +982,76 @@ class TestClientUsageRowsMerged:
                 cursor = conn.cursor()
                 cursor.execute("DELETE FROM client_usage_logs WHERE tenant_id = %s", (tenant_id,))
                 conn.commit()
+
+
+class TestImageParseAggregation:
+    """VL 图片解析计费行的客户视角聚合（2026-09-22 用户决议）：
+    租户管理员按文章/产品聚合为一行（总积分+张数），平台管理员保留逐张明细审计"""
+
+    def _seed_rows(self, tenant_id):
+        """2 张公众号图（同一文章）+ 1 张宏陶图（同一产品）+ 1 条普通对话"""
+        uid = f"detail_test_{uuid.uuid4().hex[:6]}"
+        today = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        _insert_chat_record(tenant_id, uid, f"sess_{uuid.uuid4().hex[:8]}", credit_cost=5)
+        for _ in range(2):
+            _insert_chat_record(
+                tenant_id, uid, f"sess_{uuid.uuid4().hex[:8]}", credit_cost=3,
+                source_type="wechat_mp_image_parse",
+                usage_breakdown={"billing_mode": "token", "article_row_id": 1001},
+            )
+        _insert_chat_record(
+            tenant_id, uid, f"sess_{uuid.uuid4().hex[:8]}", credit_cost=7,
+            source_type="hongtao_shop_image_parse",
+            usage_breakdown={"billing_mode": "token", "native_id": "83"},
+        )
+        return uid, today
+
+    @staticmethod
+    def _call(role, tenant_id, date_str):
+        from src.saas.api import billing_balance
+
+        def fake_require_admin(request):
+            return {"user_id": f"{role}_xxx", "role": role, "tenant_id": tenant_id}
+
+        class FakeRequest:
+            pass
+
+        with patch("src.saas.api.billing_balance.require_admin", fake_require_admin):
+            import asyncio
+            return asyncio.get_event_loop().run_until_complete(
+                billing_balance.get_daily_usage_detail(
+                    FakeRequest(), date=date_str, page=1, page_size=50)
+            )
+
+    def test_tenant_admin_sees_aggregated_image_rows(self, temp_tenant_for_detail):
+        tenant_id = temp_tenant_for_detail
+        uid, today = self._seed_rows(tenant_id)
+
+        resp = self._call("tenant_admin", tenant_id, today[:10])
+
+        assert resp["success"] is True
+        # 3 行：普通对话 1（原样）+ 公众号图聚合 1 + 宏陶图聚合 1
+        assert resp["total"] == 3
+        by_source = {it["source_type"]: it for it in resp["items"]}
+        assert by_source["chat"]["credit_cost"] == 5
+        agg_wx = by_source["wechat_mp_image_parse"]
+        assert agg_wx["user_message"] == "公众号文章图片解析（文章 1001，2 张）"
+        assert agg_wx["credit_cost"] == 6  # 3 + 3
+        assert agg_wx["record_id"].startswith("img-")
+        agg_ht = by_source["hongtao_shop_image_parse"]
+        assert agg_ht["user_message"] == "宏陶商城产品详情图解析（产品 83，1 张）"
+        assert agg_ht["credit_cost"] == 7
+
+    def test_platform_admin_sees_raw_image_rows(self, temp_tenant_for_detail):
+        tenant_id = temp_tenant_for_detail
+        uid, today = self._seed_rows(tenant_id)
+
+        resp = self._call("platform_admin", tenant_id, today[:10])
+
+        assert resp["success"] is True
+        # 平台管理员审计视角：4 行原始明细（不聚合）
+        assert resp["total"] == 4
+        image_rows = [it for it in resp["items"]
+                      if it["source_type"].endswith("_image_parse")]
+        assert len(image_rows) == 3
+        assert all(not it["record_id"].startswith("img-") for it in image_rows)

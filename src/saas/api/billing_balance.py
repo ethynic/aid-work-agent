@@ -26,6 +26,12 @@ from src.db.database import get_db_connection
 
 router = APIRouter(prefix="/api/saas/billing", tags=["SaaS 余额与用量"])
 
+# VL 图片解析计费行伪模型名（事实源：src/wechat_mp/vision.py VISION_PARSE_SOURCE_TYPE、
+# src/tenant_custom/hongtao_shop/bootstrap.py VL_IMAGE_PARSE_MODEL；此处硬编码避免
+# saas api 跨层 import 租户定制/公众号模块，勿单侧改名——集成测试
+# TestImageParseAggregation 锁定现值）
+IMAGE_PARSE_SOURCE_TYPES_SQL = "('wechat_mp_image_parse', 'hongtao_shop_image_parse')"
+
 
 # ============== API 端点 ==============
 
@@ -246,6 +252,10 @@ async def get_daily_usage_detail(
     """查询某日用量明细，chat（智能体对话）+ client（客户端调用）双类型行
     （平台管理员 + 租户管理员可访问）
 
+    租户管理员视角：VL 图片解析计费行（wechat_mp_image_parse /
+    hongtao_shop_image_parse）按文章/产品聚合成一行——总积分 + 张数
+    （2026-09-22 用户决议：客户不看逐张明细）；平台管理员保留逐张原始明细供审计。
+
     返回字段：record_id、usage_type（chat/client）、session_id、session_title
     （JOIN chat_sessions，client 行为 stage 中文标签）、user_display（JOIN users）、
     source_type、user_message、assistant_message、credit_cost、created_at；
@@ -291,7 +301,59 @@ async def get_daily_usage_detail(
             # credit_cost>0 排除遥测行）。client 行 source_type=stage 标签（boss_tool→BOSS 工具），
             # command/arguments 取自 detail，用户经 detail->>'user_id' 反查 users。两子查询列按位对齐，
             # record_id 加 'client-' 前缀防与 chat record_id 撞 key。
-            merged_sql = """
+            #
+            # 图片解析计费行（VL 按张）：租户管理员视角按文章/产品聚合成一行
+            # （总积分+张数，2026-09-22 用户决议「客户不看逐张明细，看一条数据/一篇文章
+            # 的总积分」；聚合行不展示触发用户，与该决议一致）；平台管理员保留
+            # 逐张原始明细供审计（reveal_tokens 分支不加聚合）
+            if reveal_tokens:
+                chat_extra_filter = ""
+                image_agg_sql = ""
+                image_agg_params: tuple = ()
+            else:
+                chat_extra_filter = f" AND cr.source_type NOT IN {IMAGE_PARSE_SOURCE_TYPES_SQL}"
+                image_agg_sql = f"""
+                UNION ALL
+                SELECT
+                    ('img-' || MIN(cr.record_id)) AS record_id,
+                    MAX(cr.created_at) AS created_at,
+                    NULL AS session_id,
+                    NULL AS session_title,
+                    NULL AS user_id,
+                    NULL AS username,
+                    NULL AS phone,
+                    NULL AS nickname,
+                    cr.source_type,
+                    (CASE cr.source_type
+                         WHEN 'wechat_mp_image_parse'
+                             THEN '公众号文章图片解析（文章 '
+                         ELSE '宏陶商城产品详情图解析（产品 '
+                     END
+                     || COALESCE(cr.usage_breakdown->>'article_row_id',
+                                 cr.usage_breakdown->>'native_id', '')
+                     || '，' || COUNT(*) || ' 张）') AS user_message,
+                    NULL AS assistant_message,
+                    0 AS prompt_tokens,
+                    0 AS cached_input_tokens,
+                    0 AS completion_tokens,
+                    SUM(cr.credit_cost) AS credit_cost,
+                    NULL AS model,
+                    NULL AS usage_breakdown,
+                    NULL AS channel_chat_id,
+                    NULL AS channel_type,
+                    'chat' AS usage_type,
+                    NULL AS command,
+                    NULL::jsonb AS arguments
+                FROM chat_records cr
+                WHERE cr.tenant_id = %s AND DATE(cr.created_at) = %s
+                  AND cr.source_type IN {IMAGE_PARSE_SOURCE_TYPES_SQL}
+                GROUP BY cr.source_type,
+                         COALESCE(cr.usage_breakdown->>'article_row_id',
+                                  cr.usage_breakdown->>'native_id', '')
+                """
+                image_agg_params = (tenant_id, date)
+
+            merged_sql = f"""
                 SELECT
                     cr.record_id,
                     cr.created_at,
@@ -319,7 +381,8 @@ async def get_daily_usage_detail(
                 LEFT JOIN users u ON u.user_id = cr.user_id
                 LEFT JOIN chat_sessions cs ON cs.session_id = cr.session_id
                 LEFT JOIN channel_sessions chs ON chs.session_id = cr.session_id
-                WHERE cr.tenant_id = %s AND DATE(cr.created_at) = %s
+                WHERE cr.tenant_id = %s AND DATE(cr.created_at) = %s{chat_extra_filter}
+                {image_agg_sql}
                 UNION ALL
                 SELECT
                     ('client-' || cl.id::TEXT) AS record_id,
@@ -353,7 +416,9 @@ async def get_daily_usage_detail(
                 LEFT JOIN users u2 ON u2.user_id = NULLIF(cl.detail, '')::jsonb->>'user_id' AND u2.tenant_id = cl.tenant_id
                 WHERE cl.tenant_id = %s AND DATE(cl.created_at) = %s AND cl.credit_cost > 0
             """
-            merged_params = (tenant_id, date, tenant_id, date)
+            # 占位符顺序：chat（租户+日期）→ [图片聚合（租户+日期，仅租户视角）]
+            # → client（租户+日期）
+            merged_params = (tenant_id, date) + image_agg_params + (tenant_id, date)
 
             # 总数（chat + client 两类行）
             cursor.execute(

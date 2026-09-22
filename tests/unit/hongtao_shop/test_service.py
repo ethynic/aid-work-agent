@@ -8,6 +8,7 @@ fetch_posts/describe_images_cached；构造器注入 fake embedding client。
 import importlib.util
 import json
 from dataclasses import dataclass, field
+from unittest.mock import patch
 from pathlib import Path
 from typing import List
 
@@ -671,3 +672,56 @@ def test_metadata_equivalent_legacy_flat_vs_v19_nested():
         "pipeline_version": PIPELINE_VERSION, "sync_run_id": 100,
     })
     assert _metadata_equivalent(stored_new, rendered_new, run) is True
+
+
+def test_bill_vl_images_usage_factor_is_triple_global():
+    """宏陶 VL 计费倍率 = 公众号现行倍率（全局 usage_factor）×3（用户决议
+    2026-09-22）；usage_breakdown 记倍率供对账，公众号侧不受影响（无 override）。
+
+    数值选取整数友好：1M prompt × 1 元/M = 1 元 token 成本 → 全局系数 100
+    计 100 积分，宏陶系数 300 计 300 积分，无 ceil 浮点歧义。
+    """
+    from types import SimpleNamespace
+
+    from src.tenant_custom.hongtao_shop.service import (
+        HongtaoShopSyncService, VL_USAGE_FACTOR_MULTIPLIER,
+    )
+
+    class _FakeBillingConf:
+        usage_factor = 100
+
+    class _FakeSettings:
+        billing = _FakeBillingConf()
+
+    price_row = {"input_price_per_m": 1.0, "output_price_per_m": 1.0,
+                 "cached_input_price_per_m": None, "tiered_pricing": None}
+
+    captured = []
+
+    class _FakeChatRecordDB:
+        @staticmethod
+        def create(**kwargs):
+            captured.append(kwargs)
+            return {"record_id": f"r_{len(captured)}"}
+
+    s = SimpleNamespace(
+        usage={"prompt_tokens": 1_000_000, "completion_tokens": 0, "total_tokens": 1_000_000},
+        model="glm-4.5v", provider="zhipu", description="瓷砖图", n=1,
+    )
+    service = HongtaoShopSyncService()
+    service._merge_item_billing = lambda *a, **k: None
+
+    # 字符串路径 patch：`from src.config import settings` 拿到的是包 __init__
+    # 转发的配置实例而非模块，patch.object 无法定位 create_settings
+    with patch("src.services.billing.TokenCostPriceDB") as tcp, \
+            patch("src.services.billing.create_settings", return_value=_FakeSettings()), \
+            patch("src.config.settings.create_settings", return_value=_FakeSettings()), \
+            patch("src.db.models.ChatRecordDB", _FakeChatRecordDB):
+        tcp.get_by_model_name.return_value = price_row
+        service._bill_vl_images("t1", {"id": 1}, {"id": 2}, "83", [s])
+
+    assert len(captured) == 1
+    # 全局系数 100 → 100 积分；宏陶 ×3 → 系数 300 → 300 积分
+    assert captured[0]["credit_cost"] == 300.0
+    assert captured[0]["usage_breakdown"]["usage_factor"] == 300
+    assert captured[0]["usage_breakdown"]["usage_factor_multiplier"] == VL_USAGE_FACTOR_MULTIPLIER == 3

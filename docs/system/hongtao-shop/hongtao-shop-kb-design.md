@@ -206,6 +206,8 @@ fetch（双接口全量分页；商品过滤 status=1，价格字段即弃；fol
 ## 9. 计费（v1.1 补种子行）
 
 - VL 计费（2026-09-21 审查修正口径）：**按张实际 token × 所用模型单价走标准算价**（`calculate_credit_cost`，照 wechat_mp WP13 现行模式，每张一条 `chat_records` source_type=`hongtao_shop_image_parse`，fail-open）；`price_per_call` 种子行（0.01 元/张）保留不用，仅备运营切换按张固定价（wechat_mp 同款处理）。"图片无法识别"/失败张不计费。种子行不入平台 DDL，由 hongtao 模块自举（bootstrap.ensure_billing_seed，portal 开通/CLI 兜底时种植，幂等不改价）。
+- **VL 倍率（v1.9，用户决议 2026-09-22）：宏陶 = 公众号现行倍率 × 3**——`_bill_vl_images` 传 `usage_factor_override = settings.billing.usage_factor × 3`（常量 `VL_USAGE_FACTOR_MULTIPLIER`），公众号侧仍走全局系数不受影响；usage_breakdown 记 `usage_factor`/`usage_factor_multiplier` 供对账。仅对新解析生效（缓存命中零计费路径不变）。
+- **客户视角明细聚合（2026-09-22 用户决议）**：租户管理员在 `/saas/billing/usage/daily-detail` 看到的图片解析计费行按文章（usage_breakdown.article_row_id）/产品（native_id）聚合成一行（总积分 + 张数），不看逐张明细；平台管理员分支保留逐张原始明细供审计。
 - embedding：通用 `_record_knowledge_embedding_billing`，source_type=`hongtao_shop_embedding`。
 - 计费全记源配置 tenant_id；runs/items 记 VL 张数/tokens、embedding tokens。
 
