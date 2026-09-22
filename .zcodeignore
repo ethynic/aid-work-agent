@@ -1,0 +1,189 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+# 例外：企微会话存档 C SDK（Linux x86 v3.0，运行时必需，不放 git 会导致部署缺失）
+!src/channels/wecom_personal_rpa/archive/native_sdk/libWeWorkFinanceSdk_C.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+*.tar
+*.zip
+*.gz
+*.7z
+
+# Virtual Environment
+venv/
+ENV/
+env/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Environment Variables
+.env
+.env.local
+.env.*.local
+
+# Logs
+logs/
+log/
+*.log
+backups/
+
+# Database
+*.db
+*.sqlite3
+*.db-wal
+*.db-shm
+
+# Cache
+.cache/
+*.cache
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# MyPy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre
+.pyre/
+
+# Project Specific
+
+# Build logs
+build.log
+
+# Old SQLite database
+aid_work_agent.db
+
+# Skill .env files (只提交 .env.example)
+src/skills/*/.env
+src/skills/*/*/.env
+
+!skills/.gitkeep
+!memory/.gitkeep
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary Files
+*.tmp
+*.temp
+*.bak
+
+# Frontend (Vue3 + TypeScript)
+node_modules/
+frontend/dist/
+frontend/dist-desktop/
+frontend/.vite/
+frontend/.output/
+frontend/*.local
+clients/agent-desktop/release/
+
+# Frontend env
+frontend/.env
+frontend/.env.local
+frontend/.env.*.local
+
+# Frontend package cache
+frontend/package/
+frontend/npm.tgz
+
+# PPT Node renderer dependencies and build output
+src/tools/ppt/renderer-node/dist/
+src/tools/ppt/renderer-node/dist-tests/
+
+uploads/
+memories/
+storage/
+plans/cron_user*
+
+# Playwright E2E（认证快照含 token，不入库）
+frontend/e2e/.auth/
+frontend/playwright-report/
+frontend/test-results/
+
+# 客户端分发包（tgz 二进制不入库，脚本与手册入库）
+clients/release/*.tgz
+
+# plans 运行时产物（PlanManager 会话计划文件，仅设计/开发文档入库）
+plans/cron_user_*.md
+plans/interactive_session_*.md
+
+# ZCode 会话计划产物（plan-sess_*.md，与 plans/ 运行时产物同类，不入库）
+.zcode/plans/
+
+# Claude Code 启动脚本（内含 API key 引用，不入库）
+cc.sh
+
+# 捆绑便携 OCR Python 环境（build-ocr-python.mjs 构建产物，~360MB 二进制不入库；
+# 幂等脚本可随时重建，见 clients/README.md「编译新版本」）
+clients/boss-resume-assistant/ocr-python/
+
+# 真机排障临时产物（简历拼接图含候选人个人信息，绝不入库）
+tmp-boss-diag*/
+
+# SSH 私钥（每台开发机自放，含服务器凭据，绝不入库）
+deploy/ssh_key
+.claude/scheduled_tasks.lock
+tmp/
+deploy/id_rsa
+
+# 第三方参考材料（原始技能包与样例 PDF，不入库；已迁移至 src/skills/）
+ext/建筑供应链智能体/
+
+# demo 运行日志目录（runtime 日志可能含对话内容/密钥，不入库；*.log 已覆盖日志本体，此处挡住 .latest 等指针文件）
+demo-logs/
+
+# ===== ↑ 以上同步自 .gitignore（「从 .gitignore 同步」只重写以上部分）=====
+.git/
+.hg/
+.svn/
+bower_components/
+jspm_packages/
+site-packages/
+coverage/
+lcov-report/
+cmakefiles/
+cmake-build-*/
+bazel-*/
+pods/
+deriveddata/
+storybook-static/
+playwright-report/
+test-results/
+allure-results/
+allure-report/
+cdk.out/
+*.dist-info/
+pip-wheel-metadata/
+# ----- ↑ 以上为 ZCode 默认排除规则（自定义规则请写在本行下方，不会被同步/恢复改动）-----
+# 自定义规则写在下方（本行提示可删除）
