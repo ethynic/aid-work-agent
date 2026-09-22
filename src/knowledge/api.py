@@ -579,6 +579,29 @@ async def get_document_chunks(doc_id: int, http_request: Request = None):
     })
 
 
+@router.get("/documents/{doc_id}")
+async def get_document_detail(doc_id: int, http_request: Request = None):
+    """
+    获取文档详情（含 metadata，供前端元数据查看）
+
+    - 对象级租户校验与分块接口同口径：跨租户/软删除文档统一 404「文档不存在」，
+      不泄漏存在性；软删除文档仅 platform_admin 审计可查（include_deleted）
+    - metadata 含 api-ingest 溯源（source_code/external_id/run_id/pipeline_version
+      等）、metadata_only 易变字段与 raw_payload 原始记录，租户内与文档本体同可见性
+    """
+    detail = knowledge_service.get_document_detail(
+        doc_id,
+        tenant_id=get_current_tenant_id(),
+        global_view=_is_global_admin_view(http_request),
+        include_deleted=_is_platform_admin(http_request),
+    )
+
+    if not detail:
+        raise HTTPException(status_code=404, detail="文档不存在")
+
+    return JSONResponse(content={"success": True, "document": detail})
+
+
 def _has_shared_access(to_tenant_id: str, from_tenant_id: str, source_type: str) -> bool:
     """校验 B 租户（to_tenant_id）是否对 A 租户（from_tenant_id）该分类拥有已启用的共享下载权限。
 

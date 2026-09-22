@@ -11,6 +11,7 @@
 - 外部来源无本地文件文档下载 302 重定向原文、票据端点 200 + external + metadata.original_url
 """
 import json
+from datetime import datetime
 from pathlib import Path
 import importlib.util
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -267,6 +268,127 @@ class TestChunksVisibility:
         sql, params = executed[0]
         assert "status" not in _flat(sql)
         assert params == ["t1", 7]
+
+
+class TestDocDetailVisibility:
+    """文档详情（含 metadata）与 chunks 同口径：默认隐藏 deleted、租户对象级校验、
+    metadata 解析为对象（脏 JSON 容错为空对象）、API 层 404 不泄漏存在性"""
+
+    DETAIL_ROW = {
+        "id": 7, "title": "商品 A", "source_type": "hongtao", "sub_category": None,
+        "file_type": ".md", "file_path": None, "file_size": 0, "total_chunks": 1,
+        "created_at": datetime(2026, 9, 1, 12, 0, 0), "summary": None,
+        "origin": "hongtao_api", "status": "active", "expires_at": None,
+        "metadata": json.dumps({"external_id": "p1", "raw_payload": {"name": "瓷砖"}}),
+    }
+
+    def test_default_filters_deleted_and_tenant_scoped(self):
+        # SELECT 列含 status 字段本身，断言限定在过滤片段上
+        _, executed = _run("get_document_detail", 7, tenant_id="t1")
+        sql, params = executed[0]
+        flat = _flat(sql)
+        assert "AND status = 'active'" in flat
+        assert "tenant_id = %s" in flat
+        assert params == ["t1", 7]
+
+    def test_include_deleted_omits_status_filter(self):
+        _, executed = _run("get_document_detail", 7, tenant_id="t1", include_deleted=True)
+        sql, params = executed[0]
+        assert "AND status = 'active'" not in _flat(sql)
+        assert params == ["t1", 7]
+
+    def test_global_view_no_tenant_filter(self):
+        _, executed = _run("get_document_detail", 7, global_view=True, include_deleted=True)
+        sql, params = executed[0]
+        flat = _flat(sql)
+        assert "tenant_id" not in flat
+        assert params == [7]
+
+    def test_no_tenant_context_narrows_to_orphan_docs(self):
+        """无租户上下文（非管理员）收窄到无主文档，防真实租户文档泄漏"""
+        _, executed = _run("get_document_detail", 7)
+        sql, params = executed[0]
+        flat = _flat(sql)
+        assert "tenant_id IS NULL" in flat
+        assert "AND status = 'active'" in flat
+        assert params == [7]
+
+    def test_json_null_metadata_falls_back_to_empty_object(self):
+        """metadata 为合法 JSON "null"（非对象）时容错为空对象，兑现 dict 契约"""
+        row = dict(self.DETAIL_ROW, metadata="null")
+        result, _ = _run("get_document_detail", 7, tenant_id="t1", rows=[row])
+        assert result["metadata"] == {}
+
+    def test_returns_parsed_metadata_and_isoformat_dates(self):
+        result, _ = _run("get_document_detail", 7, tenant_id="t1", rows=[self.DETAIL_ROW])
+        assert result["metadata"] == {"external_id": "p1", "raw_payload": {"name": "瓷砖"}}
+        assert result["created_at"] == "2026-09-01T12:00:00"
+
+    def test_missing_row_returns_none(self):
+        result, _ = _run("get_document_detail", 7, tenant_id="t1")
+        assert result is None
+
+    def test_dirty_metadata_json_falls_back_to_empty_object(self):
+        row = dict(self.DETAIL_ROW, metadata="{not json")
+        result, _ = _run("get_document_detail", 7, tenant_id="t1", rows=[row])
+        assert result["metadata"] == {}
+
+    def test_none_metadata_returns_empty_object(self):
+        row = dict(self.DETAIL_ROW, metadata=None)
+        result, _ = _run("get_document_detail", 7, tenant_id="t1", rows=[row])
+        assert result["metadata"] == {}
+
+
+class TestApiDocDetail:
+    """详情端点参数透传与 404 边界（跨租户/软删除统一「文档不存在」）"""
+
+    def setup_method(self):
+        set_tenant_context(None, None)
+
+    def teardown_method(self):
+        set_tenant_context(None, None)
+
+    @staticmethod
+    async def _call(user_role, tenant_ctx, return_value=None):
+        from src.knowledge import api as kb_api
+
+        if tenant_ctx:
+            set_tenant_context(*tenant_ctx)
+        request = _make_api_request(user_role=user_role, path="/api/knowledge/documents/7")
+        with patch.object(kb_api.knowledge_service, "get_document_detail",
+                          MagicMock(return_value=return_value)) as m_detail:
+            resp = await kb_api.get_document_detail(7, http_request=request)
+        return resp, m_detail.call_args.kwargs
+
+    @pytest.mark.asyncio
+    async def test_returns_document_with_metadata(self):
+        # mock 的是 service 返回值：metadata 已解析为对象、日期已 isoformat
+        row = dict(TestDocDetailVisibility.DETAIL_ROW,
+                   created_at="2026-09-01T12:00:00",
+                   metadata={"external_id": "p1", "raw_payload": {"name": "瓷砖"}})
+        resp, kwargs = await self._call("employee", ("t1", "u1"), return_value=row)
+
+        assert resp.status_code == 200
+        body = json.loads(resp.body)
+        assert body["success"] is True
+        assert body["document"]["metadata"]["external_id"] == "p1"
+        assert kwargs == {"tenant_id": "t1", "global_view": False, "include_deleted": False}
+
+    @pytest.mark.asyncio
+    async def test_platform_admin_include_deleted_and_global_view(self):
+        row = dict(TestDocDetailVisibility.DETAIL_ROW,
+                   created_at="2026-09-01T12:00:00", metadata={})
+        _, kwargs = await self._call("platform_admin", (None, "admin-1"), return_value=row)
+        assert kwargs == {"tenant_id": None, "global_view": True, "include_deleted": True}
+
+    @pytest.mark.asyncio
+    async def test_not_found_or_cross_tenant_404(self):
+        from fastapi import HTTPException
+
+        with pytest.raises(HTTPException) as exc_info:
+            await self._call("employee", ("t1", "u1"), return_value=None)
+        assert exc_info.value.status_code == 404
+        assert exc_info.value.detail == "文档不存在"
 
 
 class TestExternalDocWriteBoundary:

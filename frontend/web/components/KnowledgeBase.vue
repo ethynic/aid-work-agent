@@ -223,7 +223,8 @@
                       </template>
                       <template #created_at="{ row }">{{ formatTime(row.created_at) }}</template>
                       <template #actions="{ row }">
-                        <div class="flex justify-center">
+                        <div class="flex justify-center gap-2">
+                          <BaseButton intent="ghost" size="sm" class="whitespace-nowrap text-xs" @click="openDocDetail(row as DocumentResponse)">详情</BaseButton>
                           <BaseButton intent="danger-ghost" size="sm" class="whitespace-nowrap text-xs" @click="handleDelete(row)">删除</BaseButton>
                         </div>
                       </template>
@@ -416,6 +417,84 @@
       </template>
     </BaseModal>
 
+    <!-- Document Detail Modal（元数据查看） -->
+    <BaseModal v-model="showDocDetailModal" title="文档详情" size="lg" mode="view">
+      <div class="mb-3 text-sm text-muted truncate" :title="docDetailTitle">{{ docDetailTitle }}</div>
+      <div v-if="isLoadingDocDetail" class="flex items-center justify-center py-12">
+        <svg class="w-6 h-6 animate-spin text-primary-600" fill="none" viewBox="0 0 24 24">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+        </svg>
+        <span class="ml-2 text-muted">加载中...</span>
+      </div>
+      <div v-else-if="docDetail" class="overflow-y-auto">        <!-- 基本信息 -->
+        <dl class="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
+          <div class="flex gap-2 min-w-0">
+            <dt class="text-muted flex-shrink-0 w-16">来源</dt>
+            <dd class="text-default break-all min-w-0">{{ docDetail.origin || 'manual_upload' }}</dd>
+          </div>
+          <div class="flex gap-2 min-w-0">
+            <dt class="text-muted flex-shrink-0 w-16">分类</dt>
+            <dd class="text-default break-all min-w-0">{{ docDetail.source_type }}<template v-if="docDetail.sub_category"> / {{ docDetail.sub_category }}</template></dd>
+          </div>
+          <div class="flex gap-2 min-w-0">
+            <dt class="text-muted flex-shrink-0 w-16">类型</dt>
+            <dd class="text-default min-w-0 uppercase">{{ docDetail.file_type.replace('.', '') }}</dd>
+          </div>
+          <div class="flex gap-2 min-w-0">
+            <dt class="text-muted flex-shrink-0 w-16">大小</dt>
+            <dd class="text-default min-w-0">{{ formatFileSize(docDetail.file_size) }}</dd>
+          </div>
+          <div class="flex gap-2 min-w-0">
+            <dt class="text-muted flex-shrink-0 w-16">分块数</dt>
+            <dd class="text-default min-w-0">{{ docDetail.total_chunks }}</dd>
+          </div>
+          <div class="flex gap-2 items-center min-w-0">
+            <dt class="text-muted flex-shrink-0 w-16">状态</dt>
+            <dd class="min-w-0"><BaseBadge :intent="docDetail.status === 'active' ? 'success' : 'warning'">{{ docDetail.status }}</BaseBadge></dd>
+          </div>
+          <div class="flex gap-2 min-w-0 col-span-2">
+            <dt class="text-muted flex-shrink-0 w-16">上传时间</dt>
+            <dd class="text-default min-w-0">{{ formatTime(docDetail.created_at) }}</dd>
+          </div>
+        </dl>
+
+        <!-- 元数据 -->
+        <div class="border-t border-default mt-4 pt-3">
+          <div class="text-sm font-medium text-default mb-2">元数据</div>
+          <p v-if="metaEntries.length === 0 && !rawPayloadText" class="text-sm text-muted">暂无元数据</p>
+          <div v-else class="space-y-1.5">
+            <div v-for="entry in metaEntries" :key="entry.key" class="flex text-sm gap-2">
+              <span class="text-muted flex-shrink-0 w-28 truncate text-right" :title="entry.key">{{ entry.label }}</span>
+              <pre v-if="entry.multiline" class="flex-1 min-w-0 bg-canvas rounded p-2 text-xs text-default font-mono whitespace-pre-wrap break-all">{{ entry.text }}</pre>
+              <span v-else class="text-default break-all flex-1 min-w-0">{{ entry.text }}</span>
+            </div>
+          </div>
+
+          <!-- raw_payload 原始记录：可能很大（默认 ≤32KB），单独折叠展示 -->
+          <div v-if="rawPayloadText" class="mt-3">
+            <div class="flex items-center gap-3 mb-1">
+              <button class="flex items-center gap-1 text-xs text-primary-600 hover:text-primary-700 font-medium"
+                      @click="rawPayloadExpanded = !rawPayloadExpanded">
+                <svg :class="['w-3.5 h-3.5 transition-transform', rawPayloadExpanded ? 'rotate-90' : '']" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+                </svg>
+                原始记录（raw_payload）
+              </button>
+              <button class="text-xs text-primary-600 hover:text-primary-700" @click="copyToClipboard(rawPayloadText, '原始记录')">复制</button>
+            </div>
+            <pre v-if="rawPayloadExpanded"
+                 class="bg-canvas rounded p-3 text-xs text-muted font-mono whitespace-pre-wrap break-all max-h-72 overflow-y-auto cursor-pointer hover:bg-primary-50 transition-colors"
+                 @click="copyToClipboard(rawPayloadText, '原始记录')" title="点击复制">{{ rawPayloadText }}</pre>
+          </div>
+        </div>
+      </div>
+      <div v-else class="text-center text-muted py-12">文档详情加载失败</div>
+      <template #footer>
+        <BaseButton intent="secondary" @click="showDocDetailModal = false">关闭</BaseButton>
+      </template>
+    </BaseModal>
+
     <!-- Chunk Detail Modal -->
     <BaseModal v-model="showChunkModal" title="分块详情" size="xl" mode="view">
       <div class="mb-2 text-sm text-muted">{{ chunkDocTitle }}</div>
@@ -490,7 +569,8 @@ import {
   type DocumentResponse, type SearchResultItem,
   listCategories, createCategory, updateCategory, deleteCategory,
   type CategoryResponse,
-  getDocumentChunks, type ChunkResponse
+  getDocumentChunks, type ChunkResponse,
+  getDocumentDetail, type DocumentDetail
 } from '@/api/knowledge'
 import { formatFileSize } from '@/utils/file'
 import { useTenantAuth } from '@/composables/useTenantAuth'
@@ -522,7 +602,7 @@ const columns = [
   { key: 'file_size', label: '大小', width: '90px' },
   { key: 'total_chunks', label: '分块数', width: '70px' },
   { key: 'created_at', label: '上传时间', width: '160px' },
-  { key: 'actions', label: '操作', width: '120px', thAlign: 'center' as const },
+  { key: 'actions', label: '操作', width: '150px', thAlign: 'center' as const },
 ]
 
 // ========== 分类状态 ==========
@@ -653,6 +733,14 @@ const showChunkModal = ref(false)
 const chunkDocTitle = ref('')
 const chunkList = ref<ChunkResponse[]>([])
 const isLoadingChunks = ref(false)
+
+// 文档详情弹窗（元数据查看）
+const showDocDetailModal = ref(false)
+const docDetailTitle = ref('')
+const docDetail = ref<DocumentDetail | null>(null)
+const isLoadingDocDetail = ref(false)
+const rawPayloadExpanded = ref(false)
+let docDetailRequestId = 0
 const searchResults = ref<SearchResultItem[]>([])
 const isSearching = ref(false)
 const searchError = ref('')
@@ -1331,6 +1419,85 @@ async function openChunkDetail(row: DocumentResponse) {
     toast.error('获取分块详情失败')
   } finally {
     isLoadingChunks.value = false
+  }
+}
+
+// ========== 文档详情（元数据查看） ==========
+
+// 常见溯源/元数据键的展示名；未知键按原键名显示，不做穷举维护
+const META_LABELS: Record<string, string> = {
+  original_url: '原文链接',
+  external_id: '外部 ID',
+  native_id: '记录原生 ID',
+  source_code: '来源编码',
+  run_id: '同步运行 ID',
+  content_mode: '内容模式',
+  pipeline_version: '管线版本',
+  ingested_at: '入库时间',
+  granularity: '知识粒度',
+  granularity_overflow: '整条超限回退',
+  author: '作者',
+  publish_time: '发布时间',
+}
+
+interface MetaEntry {
+  key: string
+  label: string
+  text: string
+  multiline: boolean
+}
+
+function formatMetaValue(value: unknown): string {
+  if (value === null || value === undefined) return '-'
+  if (typeof value === 'string') return value
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  try {
+    return JSON.stringify(value, null, 2)
+  } catch {
+    return String(value)
+  }
+}
+
+// raw_payload（api-ingest 原始记录，默认 ≤32KB）单独折叠展示，不混入键值列表
+const metaEntries = computed<MetaEntry[]>(() => {
+  const meta = docDetail.value?.metadata
+  if (!meta) return []
+  return Object.entries(meta)
+    .filter(([key]) => key !== 'raw_payload')
+    .map(([key, value]) => ({
+      key,
+      label: META_LABELS[key] || key,
+      text: formatMetaValue(value),
+      multiline: typeof value === 'object' && value !== null,
+    }))
+})
+
+const rawPayloadText = computed(() => {
+  const raw = docDetail.value?.metadata?.raw_payload
+  if (raw === null || raw === undefined) return ''
+  return formatMetaValue(raw)
+})
+
+async function openDocDetail(row: DocumentResponse) {
+  // 过期响应守卫：快速切换文档时丢弃晚到的旧响应，避免标题与内容错配
+  const requestId = ++docDetailRequestId
+  docDetailTitle.value = row.title
+  docDetail.value = null
+  rawPayloadExpanded.value = false
+  showDocDetailModal.value = true
+  isLoadingDocDetail.value = true
+  try {
+    const result = await getDocumentDetail(row.id)
+    if (requestId !== docDetailRequestId) return
+    docDetail.value = result.document || null
+  } catch (e) {
+    if (requestId !== docDetailRequestId) return
+    console.error('获取文档详情失败:', e)
+    toast.error(e instanceof Error ? e.message : '获取文档详情失败')
+  } finally {
+    if (requestId === docDetailRequestId) {
+      isLoadingDocDetail.value = false
+    }
   }
 }
 

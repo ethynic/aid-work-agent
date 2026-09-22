@@ -69,6 +69,37 @@ export interface DocumentListResponse {
 }
 
 /**
+ * 文档详情（含 metadata）
+ *
+ * metadata 为 JSON 对象：api-ingest 溯源字段（source_code/external_id/run_id/
+ * pipeline_version 等）、metadata_only 易变字段、raw_payload 原始记录等
+ */
+export interface DocumentDetail extends DocumentResponse {
+  origin: string | null
+  status: string | null
+  expires_at: string | null
+  metadata: Record<string, any>
+}
+
+export interface DocumentDetailResponse {
+  success: boolean
+  document: DocumentDetail
+}
+
+/**
+ * 获取文档详情（含 metadata，操作列「详情」入口按需拉取，列表接口不携带）
+ */
+export async function getDocumentDetail(docId: number): Promise<DocumentDetailResponse> {
+  const response = await fetch(`${API_BASE}/documents/${docId}`, {
+    headers: { ...getAuthHeader() }
+  })
+  if (!response.ok) {
+    throw new Error('获取文档详情失败')
+  }
+  return response.json()
+}
+
+/**
  * 获取知识库文档列表（分页）
  */
 export async function listDocuments(limit = 100, offset = 0, sourceType?: string, subCategory?: string, includeSubcategories = true): Promise<DocumentListResponse> {

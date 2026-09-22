@@ -36,6 +36,7 @@
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
 | 20260901-1358 | 客户端计费统一接入（boss cli / 协会采集 / 未来客户端三模式） | ✅ 已完成开发。 | [设计](design/billing/client-billing-integration-design.md) | — |
+| 20260922-0920 | 知识库文档元数据查看 | ✅ 已完成开发（开发+独立测试+审查，待部署）。文档操作列新增「详情」弹窗查看 documents.metadata：溯源/易变字段键值展示、raw_payload 折叠 JSON；新增 GET /documents/{id} 详情接口（按需拉取，租户隔离与 chunks 同口径）。 | [设计](system/knowledge-base/doc-metadata-view-design.md) | — |
 | 20260918-2031 | 生产主日志 WARNING 审计（09-16~09-18） | ✅ 全部完成。3 天 119 条 WARNING 聚合 8 类全部收口：#1 deepseek-flash 部署时差噪音、#3 丢弃预览加长 500 字符（含完整 ASR 文本）、#4 sanitizer 降级 INFO + source 来源标签（8 入口）、#6 Redis DNS 降级三层防御（compose 健康依赖 + 启动重试 + 恢复清残留）、#7 ASR 400 根因为免费试用过期（渠道侧 WARNING 降级 INFO）、#2/#5/#8 人工核对/观察；另 agent_update.sh 发版不再连带重启 redis、Redis 夜间巡检任务（每日 00:30）上线。 | — | [审计报告](ops/log-warning-audit-20260918.md) |
 | 20260918-2106 | 测试环境主日志 WARNING 审计（09-16~09-18） | ✅ 全部完成。测试机 254 三天 4840 条 WARNING 聚合 15 类全部收口：#1 显示名重复告警删除（属正常设计，根除 95.6% 刷屏，63248ed6）、#9 deepseek-flash 未配单价复核为配置时差零复发、#12 max iterations 升级 ERROR；余类不重要不处理或属正常业务日志。 | — | [审计报告](ops/log-warning-audit-20260918-testenv.md) |
 | 20260918-2200 | 租户类型（真实/测试）与平台统计口径改造 | ✅ 全部完成（开发+独立测试+CodeReview，待部署）。tenants 加 tenant_type（real/test，存量默认 test）+ 前后端 TenantType 枚举；/portal/token-usage 汇总只算真实租户（明细保留全部+类型徽章）；/portal/recharge 头部新增总充值金额汇总（真实租户、排除赠送）+「赠送金额」勾选（is_gift，积分照常入余额但不计入汇总，租户前台显示赠送徽章）；租户管理列表/表单支持类型字段。口径实时判断不影响审计数据；PLATFORM_USAGE 缓存 key 升 v2；租户类型变更主动失效月度缓存。上线后需管理员把生产真实租户标为 real（运营动作）。 | — | — |

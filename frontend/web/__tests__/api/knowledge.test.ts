@@ -9,7 +9,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { http, HttpResponse } from 'msw'
 import { server } from '../mocks/server'
-import { moveDocuments } from '@/api/knowledge'
+import { moveDocuments, getDocumentDetail } from '@/api/knowledge'
 
 const TENANT_ID = 'tenant_kb_test'
 const TENANT_PATH = `/t/${TENANT_ID}/knowledge`
@@ -97,5 +97,63 @@ describe('knowledge API - moveDocuments', () => {
       })
     )
     await expect(moveDocuments([1], 'bad_top', null)).rejects.toThrow('目标顶级分类不存在')
+  })
+})
+
+describe('knowledge API - getDocumentDetail', () => {
+  const originalPath = window.location.pathname
+
+  beforeEach(() => {
+    localStorage.clear()
+    window.history.pushState({}, '', TENANT_PATH)
+    localStorage.setItem(`saas_token_${TENANT_ID}`, 'test_kb_token')
+  })
+
+  afterEach(() => {
+    window.history.pushState({}, '', originalPath)
+  })
+
+  const DETAIL_BODY = {
+    success: true,
+    document: {
+      id: 7, title: '商品 A', source_type: 'hongtao', sub_category: null,
+      file_type: '.md', file_path: null, file_size: 0, total_chunks: 1,
+      created_at: '2026-09-01T12:00:00', summary: null, origin: 'hongtao_api',
+      status: 'active', expires_at: null,
+      metadata: { external_id: 'p1', raw_payload: { name: '瓷砖' } },
+    },
+  }
+
+  it('GET /documents/{id}，带 Authorization 与 X-Tenant-Id，解析 metadata', async () => {
+    let captured: { method: string; url: string; authorization: string | null; tenantId: string | null } | null = null
+    server.use(
+      http.get('/api/knowledge/documents/7', ({ request }) => {
+        captured = {
+          method: request.method,
+          url: new URL(request.url).pathname,
+          authorization: request.headers.get('Authorization'),
+          tenantId: request.headers.get('X-Tenant-Id'),
+        }
+        return HttpResponse.json(DETAIL_BODY)
+      })
+    )
+
+    const result = await getDocumentDetail(7)
+
+    expect(captured!.method).toBe('GET')
+    expect(captured!.url).toBe('/api/knowledge/documents/7')
+    expect(captured!.authorization).toBe('Bearer test_kb_token')
+    expect(captured!.tenantId).toBe(TENANT_ID)
+    expect(result.success).toBe(true)
+    expect(result.document.metadata).toEqual({ external_id: 'p1', raw_payload: { name: '瓷砖' } })
+  })
+
+  it('404 响应按中文错误抛出（跨租户/软删除统一「文档不存在」）', async () => {
+    server.use(
+      http.get('/api/knowledge/documents/404', () => {
+        return HttpResponse.json({ detail: '文档不存在' }, { status: 404 })
+      })
+    )
+    await expect(getDocumentDetail(404)).rejects.toThrow('获取文档详情失败')
   })
 })

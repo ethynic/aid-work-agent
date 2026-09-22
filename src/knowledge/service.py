@@ -1031,6 +1031,63 @@ class KnowledgeBaseService:
             logger.opt(exception=True).error(f"后端日志：获取文档分块失败: {e}")
             return []
 
+    def get_document_detail(
+        self,
+        doc_id: int,
+        tenant_id: Optional[str] = None,
+        global_view: bool = False,
+        include_deleted: bool = False
+    ) -> Optional[Dict[str, Any]]:
+        """获取文档详情（含 metadata JSON，供前端查看元数据）
+
+        对象级租户校验与 get_document_chunks 同口径（安全加固设计 §2.4）：
+        跨租户/不存在文档统一返回 None，对外表现为「文档不存在」，不泄漏存在性；
+        无租户上下文收窄到无主文档；global_view=True（认证 platform_admin 全局
+        视图）恢复跨租户口径。软删除文档默认不可见，include_deleted=True
+        （仅 platform_admin 审计入口传入）放行，与 chunks/list 口径一致。
+        """
+        # 租户作用域条件（常量拼接，无用户输入插值；无租户上下文时收窄到无主文档）
+        if tenant_id:
+            scope_sql, scope_params = "tenant_id = %s", [tenant_id]
+        elif global_view:
+            scope_sql, scope_params = "1=1", []
+        else:
+            scope_sql, scope_params = "tenant_id IS NULL", []
+        status_sql = "" if include_deleted else " AND status = 'active'"
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(f"""
+                    SELECT id, title, source_type, sub_category, file_type, file_path,
+                           file_size, total_chunks, created_at, summary, origin,
+                           status, expires_at, metadata
+                    FROM documents
+                    WHERE id = %s AND {scope_sql}{status_sql}
+                """, scope_params + [doc_id])
+
+                row = cursor.fetchone()
+                if not row:
+                    return None
+
+                doc = dict(row)
+                if doc.get("created_at"):
+                    doc["created_at"] = doc["created_at"].isoformat()
+                if doc.get("expires_at"):
+                    doc["expires_at"] = doc["expires_at"].isoformat()
+                # metadata 为 TEXT JSON 列，详情返回解析后的对象；可解析但非对象
+                # （如 "null"）与脏 JSON 一并容错为空对象
+                try:
+                    parsed = json.loads(doc["metadata"]) if doc.get("metadata") else {}
+                    doc["metadata"] = parsed if isinstance(parsed, dict) else {}
+                except (TypeError, ValueError):
+                    logger.warning(f"后端日志：文档 {doc_id} metadata 非法 JSON，按空对象返回")
+                    doc["metadata"] = {}
+                return doc
+
+        except Exception as e:
+            logger.opt(exception=True).error(f"后端日志：获取文档详情失败: {e}")
+            return None
+
     async def search_documents(
         self,
         query: str,
