@@ -19,8 +19,8 @@
 ```mermaid
 flowchart TB
     P["第一方 CLI / MCP Provider"]
-    W["aid-work-agent Web\nLocal Tool Runtime"] -->|"MCP stdio"| P
-    D["aid-work-agent Desktop\nLocal MCP Host"] -->|"MCP stdio"| P
+    W["Web/渠道发起的 Cloud Run\nLocal Tool Runtime"] -->|"MCP stdio"| P
+    D["aid-work-agent Desktop\n内置同一 Runtime core"] -->|"MCP stdio"| P
     C["Codex 等第三方 Host"] -->|"MCP stdio"| P
     B["WorkBuddy 等第三方 Host"] -->|"MCP stdio"| P
     H["人工终端"] -->|"CLI command"| P
@@ -29,7 +29,7 @@ flowchart TB
 因此：
 
 - CLI 业务能力只实现一次；
-- aid-work-agent Web、未来 Desktop 和第三方 Agent 只是不同 Host；
+- Web、Desktop 和渠道是云端 Agent 的不同入口；本地执行统一由 Local Tool Runtime Host 完成；
 - 自有云端通信、租户体系和 UI 不得侵入 Provider 核心；
 - 更换 Host 或 transport 不得要求重写第一方 CLI。
 
@@ -40,7 +40,7 @@ flowchart TB
 | Provider | 业务 operation、参数校验、实际副作用、结果校验 | 对话、LLM 编排、租户路由 |
 | MCP Host | 启停 Provider、工具发现、调用、取消、授权提示 | Provider 内部业务规则 |
 | Local Tool Runtime | Web Agent 的本地 Host；连接云端、领取任务、转调 Provider | 重写 CLI 业务 |
-| Agent Desktop | 桌面 Host；管理本地 Provider、权限和可视状态 | 把 CLI 代码塞进 renderer |
+| Agent Desktop | 内置同一 Runtime core，管理执行节点和 Provider 的可视状态 | UI 直调 Provider、建立第二套 Host/业务 Run |
 | 云端 Agent | LLM、子智能体、SERVER/LOCAL 路由、租户/用户权限 | 直接控制用户本机进程 |
 
 ## 3. 强制工程分层
@@ -135,17 +135,17 @@ terminal user        any MCP Host
 - annotations 是 Host 提示，不替代 Provider 自身安全门禁；
 - 支持标准 initialize/list_tools/call_tool/progress/cancel；可选能力必须能降级。
 
-## 6. Provider manifest
+## 6. Provider runtime manifest 与 package envelope
 
-每个发布包携带只读 manifest：
+Provider runtime manifest 描述解包后的业务 Host 契约，不承担下载包身份或签名职责：
 
 ```json
 {
+  "manifest_version": 1,
   "provider_id": "ai.aidwork.boss-recruiting",
   "provider_version": "1.0.0",
   "protocol": "mcp",
   "transport": "stdio",
-  "platforms": ["win32-x64"],
   "entrypoint": ["boss-recruiting.exe", "mcp", "--stdio"],
   "tools": [],
   "schema_digest": "sha256:...",
@@ -153,12 +153,45 @@ terminal user        any MCP Host
 }
 ```
 
+catalog 中另有不可变 package envelope，描述一次可下载发布：
+
+```json
+{
+  "envelope_version": 1,
+  "provider_release_id": "prvrel_...",
+  "provider_id": "ai.aidwork.boss-recruiting",
+  "provider_version": "1.0.0",
+  "platform": "win32",
+  "arch": "x64",
+  "package_format": "zip",
+  "package_size": 12345678,
+  "package_digest": "sha256:...",
+  "manifest_digest": "sha256:...",
+  "min_runtime_version": "1.0.0",
+  "max_runtime_version": null,
+  "publisher_key_id": "aid-provider-2026-01",
+  "signature_algorithm": "Ed25519",
+  "signature": "base64:...",
+  "created_at": "2026-09-22T00:00:00Z"
+}
+```
+
 规则：
 
-- manifest 随签名包发布，运行时不可由云端请求覆盖；
+- runtime manifest 随签名包发布，运行时不可由云端请求覆盖；entrypoint 必须是包根目录内的相对
+  路径，不得含 `..`、绝对路径、shell 或任意环境注入；
+- `provider_release_id` 是 package 发布身份，不写入业务 tool contract；同一 release id 一经发布，
+  envelope、package digest、manifest digest 和内容全部不可覆盖。修复必须创建新 release id；
+- package envelope 使用 RFC 8785 规范化后的无 `signature` 字段内容，并与 package digest 绑定后做
+  Ed25519 签名。操作系统代码签名可作为额外门禁，不能替代该跨平台包签名；
+- Runtime 内置平台 trust root/key id allowlist；签名私钥只存在于批准的 release KMS/HSM/离线签名
+  边界。轮换使用新旧公钥重叠窗口，紧急撤回进入 catalog denylist 并随 heartbeat/resolve 传播；
 - Host 只取自身批准 catalog 与运行时 capability 的交集；
 - 客户端上报的 schema 不直接进入 LLM；
 - manifest digest 不一致时禁用整个 Provider并提示升级，不能部分猜测兼容。
+- 解包前检查 envelope size/format；解包时拒绝绝对路径、`..` 路径穿越、symlink、hardlink、设备文件、
+  权限提升位、文件数/单文件/总展开大小/压缩比超限和重复路径。只在完整包验签、digest 与 manifest
+  校验、受限目录原子落盘后执行 `version --json`/`doctor`；验证进程仍按最低权限、无业务写权限运行。
 
 ## 7. 执行位置与数据边界
 
@@ -172,16 +205,21 @@ Provider manifest 声明执行位置；最终路由由 aid-work-agent 的服务�
 
 ## 8. aid-work-agent Desktop 的 Host 约束
 
-未来 Desktop 与 Codex/WorkBuddy 一样，是标准本地 MCP Host：
+Desktop 安装包内置与独立 `agent-tool-runtime` 相同核心，并通过该 Runtime 充当标准本地 MCP Host：
 
-1. Electron main 或其隔离 child Tool Runtime 管理 Provider；renderer 不 spawn 进程。
+1. Electron main 管理隔离 child Runtime；Runtime 管理 Provider，renderer 不 spawn 进程。
 2. Provider 注册、启停、版本、权限、进度和结果使用统一 Host API。
 3. 第一方 Provider 与第三方 Provider 走同一 MCP session/lifecycle；区别只在信任、签名、默认授权和更新来源。
 4. Desktop 不导入 BOSS 等 Provider 的 domain 源码，也不调用其内部模块。
 5. Desktop 专属 UI 可以展示状态和授权，但不得创造 Desktop-only tool schema。
 6. 第一方 CLI 若只能被自有 Desktop 调用，视为架构违规。
 
-Web Agent 使用 Local Tool Runtime 作为 Host；Desktop 可内嵌同一 Runtime core 作为当前电脑执行 Host，也必须能通过后台选择另一台运行 `agent-tool-runtime` 的授权电脑。Desktop 与远端 Runtime 不建立 P2P 私有协议，统一经云端 invocation/claim 中转，Provider 接口保持相同。
+Web、Desktop 或渠道发起的任务都由云端 RunService 创建受权 Invocation；Desktop 内置 Runtime 与
+独立 `agent-tool-runtime` 使用同一 Device API claim/回传，不建立 Desktop UI→Provider 的本地业务
+旁路。Desktop 也必须能通过后台选择另一台运行 Runtime 的授权电脑；两台设备不建立 P2P 私有协议。
+
+Desktop P1 支持同一安装包以完整桌面、仅交互或执行节点模式运行。执行节点模式可以不打开会话 UI，
+但仍只处理云端分配的 Invocation，不能变成本地独立 Agent。
 
 ## 9. 安全与生命周期
 
@@ -201,6 +239,36 @@ Web Agent 使用 Local Tool Runtime 作为 Host；Desktop 可内嵌同一 Runtim
 - 商业授权位于 Provider 外围，不改变标准 MCP；
 - 独立产品、自有 Agent 能力包和企业部署使用同一 Provider 二进制；
 - 第三方 Host 兼容是发布门禁，不是“社区版”分叉。
+
+### 10.1 aid-work-agent 第一方按需交付
+
+- Runtime core 随 Desktop 主安装包交付；BOSS CLI、weixin CLI 等 Provider 使用独立签名包和版本化
+  manifest，不要求永久预装进主包；
+- 云端 Invocation 只固定 `provider_id`、`provider_release_id` 和 `manifest_digest`。Provider 缺失时，
+  Runtime 只从平台受控 catalog 领取短期、单设备、单 release 下载票据；
+- Runtime 必须校验发布者签名、SHA-256、平台/架构、最低 Runtime 版本、manifest 和撤回状态，
+  通过 staging + 原子切换安装；模型、Renderer 和业务参数不能提供下载 URL、entrypoint 或安装路径；
+- 在途调用固定到具体 release，新旧版本可短期并存；升级失败保留旧可用版本，损坏版本进入隔离，
+  已发生动作的结果与 outbox 不随包回滚删除；
+- P1 自动安装范围仅限平台签名的第一方 Provider。第三方市场、开放上传、第三方信任和审核体系
+  另行立项，不得借第一方更新通道提前开放任意代码分发。
+
+最小发布链必须是受权管理用例，而不是开发者直接改 catalog 文件：
+
+```text
+reproducible build + tests + SBOM
+  → 生成 runtime manifest 与 package envelope
+  → 安全扫描/人工或策略审核
+  → release signer 对 envelope+digest 签名
+  → 上传 immutable object
+  → catalog 发布/灰度
+  → Runtime resolve/download
+  → 必要时停止新下载并紧急撤回
+```
+
+catalog 数据与不可变包对象的 owner、存储位置、审核角色、发布审计、撤回 SLA、密钥轮换和灾难恢复
+由 Desktop P1 D00 package/signing ADR 冻结。上传成功不等于发布；只有受权 publisher/reviewer 才能
+把 release 从 draft 提升为 active。撤回不删除历史审计或已发生 Invocation 的 release 引用。
 
 ## 11. 统一契约测试
 

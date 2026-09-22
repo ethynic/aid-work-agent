@@ -2,7 +2,7 @@
 
 > 日期：2026-09-22
 >
-> 版本：v1.2
+> 版本：v1.5
 >
 > 优先级：P1；可按门禁与整体架构 P0 并行，P0 仍拥有资源优先级
 >
@@ -25,6 +25,10 @@
 - 可以删除、改名或重写未发布的桌面协议和接口壳；
 - 不能因为目录名称含 desktop 就删除被生产 Web、CLI 或独立 Runtime 使用的真实能力；
 - 首次正式发布后再建立客户端版本兼容和升级责任。
+
+这里的“没有正式使用方”只指未发布的 Desktop D1/Coordinator 产品，不适用于已经独立分发的
+`agent-tool-runtime`、`/api/local-tools/runtime/*`、Provider、result outbox 和 `session_tasks`。
+这些能力在生产使用盘点完成前承担兼容责任，新 Device API 必须版本化演进而非破坏性替换。
 
 ## 2. 必须继承的平台约束
 
@@ -50,6 +54,13 @@
     替换快照并丢弃不可恢复的旧 progress；不得把 progress 缺口当作 Run 失败或重新提交任务。
 15. Channel Gateway/Connector 属云端渠道入口，不进入 Desktop Main/Renderer/Runtime。Desktop
     如获授权查看渠道 Session，也只通过 Agent API 读取 typed Session/Run 投影。
+16. Web 与 Desktop 是同一云端 Agent 的两个交互入口：两者都把命令提交给云端 RunService；
+    即使 Runtime 与 Desktop 安装在同一台电脑，Desktop UI 也不得绕过云端直接调用 Provider。
+17. Desktop 正式安装包必须内置与独立 `agent-tool-runtime` 共用核心的 Runtime Host；同一安装包
+    既可运行完整桌面界面，也可在不使用会话 UI 时作为受信执行节点运行。两种形态共用 Device API、
+    设备身份、journal、资源锁和 result outbox，不形成两套 Runtime。
+18. BOSS CLI、weixin CLI 等第一方 Provider 不永久塞入主安装包；P1 必须提供受控 catalog、签名包、
+    按需安装、版本固定、回滚与隔离能力。模型和 Invocation 都不能提供任意下载 URL 或可执行路径。
 
 ## 3. 桌面目标结构
 
@@ -66,14 +77,21 @@ Desktop Main
   窗口、系统通知、文件对话框、凭据访问、Runtime 进程管理
         │
         ├──────── AgentClient ────────> Cloud Agent API
-        │
-        └──────── Runtime Bridge ─────> Local Runtime
-                                           │
-                                           ▼
-                                        Providers
+        │                                      │
+        │                                      ▼
+        │                                  Cloud RunService
+        │                                      │
+        │                               authorized Invocation
+        │                                      ▼
+        └─ Runtime Control Bridge ───> Embedded Runtime <──── Cloud Device API
+                                          │
+                                          ├─ Provider Package Manager <── signed first-party catalog
+                                          └─ Provider Host ─────────────> BOSS/weixin/... Provider
 ```
 
-逻辑职责可以部署在较少进程中，但依赖方向和权限边界不能合并。
+逻辑职责可以部署在较少进程中，但依赖方向和权限边界不能合并。`Runtime Control Bridge` 只管理
+配对、启停、暂停、升级和诊断；业务工具调用仍由云端 RunService 产生 Invocation，再由 Runtime
+通过 Device API 领取。Web 发起与 Desktop 发起最终进入的是同一条执行链。
 
 ### 3.1 Renderer
 
@@ -97,7 +115,11 @@ Desktop Main
 
 Main 不保存客户任务下一步、不维护权威 Run 状态、不实现工具快捷执行旁路。所有 IPC 都按不可信 Renderer 输入校验；不得暴露万能 `executeNative(method,args)`。
 
-### 3.3 Local Runtime
+长期 bearer token、会话校验/滑动续期、401/撤权处理和 Artifact 上传下载授权全部留在 Main；Renderer 永远只获得
+脱敏 AuthSessionSummary，不接触 token，也不能向下载 IPC 提供 URL、Authorization 或 tenantId。
+P1 只支持单 active tenant，不支持平台管理员代租户；切换身份必须先 drain 旧命令/Runtime。
+
+### 3.3 内置 Runtime 与产品形态
 
 Runtime 只负责授权范围内的设备执行事实：
 
@@ -111,6 +133,18 @@ Runtime 不建立业务 Run、不调用云端模型决定下一步、不覆盖�
 本地 Runtime Provider 与云端 Channel Connector 是两类不同扩展：前者执行受信设备 Invocation，
 后者转换第三方消息入口/出口；不得为了复用插件框架让 Provider 绕过 Device API，或让 Connector
 进入本地工具执行路径。
+
+Desktop 安装包不是“UI 外加一个可选的另一产品”，而是同一产品中的交互面与执行面：
+
+| 运行形态 | 交互界面 | 本机 Runtime | 典型用途 |
+| --- | --- | --- | --- |
+| 完整桌面模式 | 有 | 用户启用后运行 | 在 Desktop 对话，也允许这台电脑执行 BOSS/微信等本地工具 |
+| 仅交互模式 | 有 | 关闭 | 只把 Desktop 当云端 Agent 入口，本地工具可由其他已授权电脑执行 |
+| 执行节点模式 | 仅托盘/状态与设置，不要求打开会话 UI | 有 | 同一安装包充当 Runtime 客户端，供 Web、Desktop 或渠道发起的 Run 使用 |
+| 独立 headless Runtime | 无 | 独立包 | 兼容既有生产客户、服务器/VM 和无 GUI 设备 |
+
+完整桌面模式与执行节点模式使用同一内置 Runtime 二进制和数据目录约束；独立 headless Runtime
+继续作为受兼容保护的部署形态。关闭会话窗口不等于停止执行节点，停止执行节点也不等于取消云端 Run。
 
 ### 3.4 产品壳、UI 与依赖边界
 
@@ -126,7 +160,7 @@ Runtime 不建立业务 Run、不调用云端模型决定下一步、不覆盖�
 - Windows/macOS 共用同一 renderer；菜单、快捷键、窗口、权限、更新和进程管理差异封装在
   Platform Driver，不复制两套业务 UI，也不在业务组件中散落 `process.platform` 判断。
 
-## 4. 两份远端契约
+## 4. 远端契约与第一方 Provider 分发
 
 ### 4.1 Agent API
 
@@ -134,15 +168,29 @@ Runtime 不建立业务 Run、不调用云端模型决定下一步、不覆盖�
 AgentApplication 语义，但具体 Connector 不作为 Agent API 客户端直连 RunService：
 
 ```text
+create_session / list_sessions / get_session
+list_messages(after_cursor)       # canonical Conversation
 submit(typed_session_ref)
 append_input(run_id, expected_version, mode)
 get_run / list_session_runs(typed_session_ref)
 subscribe(after_seq)
+get_command_receipt(command_id, request_digest)
 cancel
 resolve_approval                 # 仅授权主体
 reply_to_clarification(wait_ref, expected_version)
+upload_artifact(typed_session_ref, metadata, content_stream)
+get_artifact_metadata / authorize_artifact_download
+list_devices / get_device / select_device_intent
 list_notifications / mark_notification_read
 ```
+
+G0/B01 冻结除 Notification 外的上述基础 DTO、cursor、权限摘要和错误语义；G1/B11 才表示真实接口
+已经实现并可联调。Notification DTO 与服务端表面到 G3/B13 才成为正式契约，G0 前后的通知 UI
+只能使用 Desktop 私有 ViewModel/Fake。
+
+Artifact 上传和下载都由 Main 执行：文件选择器只向 Renderer 返回短期 opaque local handle 与脱敏
+文件名/大小/MIME，不返回绝对路径；用户确认目标 typed SessionRef 后，Main 重新校验 handle、当前身份、
+大小、MIME 和权限并流式上传。Renderer 不能传 Authorization、tenantId、任意上传/下载 URL 或路径。
 
 Desktop 直接使用统一新契约，不使用旧 D1 `agent/next` 或 outcome 循环。
 该方法是 P0 `ReplyToClarificationCommand` 的客户端表面，必须携带稳定 command_id、run_id、
@@ -158,11 +206,52 @@ wait_ref、expected_run_version 和 input；Desktop 不实现自己的 wait-resu
 register / heartbeat / capabilities
 claim_invocation / accept / reject
 progress / result / evidence
-result_outbox_ack
+durable result receipt          # 服务端持久 2xx 即 outbox ACK
 reconcile_report
 ```
 
 工具结果必须绑定 tenant、device、runtime epoch、invocation、run fence、参数摘要和结果摘要。知道 run_id 不足以提交结果。
+
+Device API 以现有 `/api/local-tools/runtime/*` 为兼容起点，而不是另建第二套设备队列。P0 B01
+拥有规范协议；Desktop P1 Device Backend 子轨负责现有服务端 endpoint、表族、旧/新 Runtime
+兼容和测试环境。`operation-result` 的持久 2xx 即 result outbox ACK；旧稳定 Runtime 至少跨两个
+发布窗口受支持，停止旧版新 claim 后仍允许原 invocation 身份受限补交历史结果。
+
+### 4.3 第一方 Provider Package API
+
+P1 为 BOSS CLI、weixin CLI 等第一方 Provider 提供最小可生产的受控分发面：
+
+```text
+# 仅 release CI/受权运营主体
+create_release_draft(envelope, immutable_object_ref)
+approve_release(provider_release_id, review_evidence)
+publish_release(provider_release_id, rollout_policy)
+revoke_release(provider_release_id, reason, effective_at)
+
+# 已配对 Runtime
+resolve_release(provider_id, platform, arch, runtime_version, policy_ref)
+issue_download_ticket(provider_release_id, device_id)
+download_signed_package(ticket)
+report_installation(provider_release_id, manifest_digest, status)
+```
+
+release 管理面和 Runtime 下载面使用不同 principal/capability；Desktop 用户、Renderer、模型和普通
+Runtime 都不能创建、审核、发布或撤回 release。
+
+- Device Invocation 只引用服务端已批准的 `provider_id + provider_release_id + manifest_digest`，
+  不携带任意 URL、命令、环境变量或可执行路径；
+- Runtime 先检查本地版本缓存。缺失或版本不匹配时，按租户策略从第一方 catalog 获取短期下载票据，
+  校验发布者签名、SHA-256、平台/架构、manifest、最低 Runtime 版本和撤回状态后原子安装；
+- 安装到版本化目录，Invocation 固定到具体 release。在途调用完成前保留旧版本；失败版本进入隔离，
+  不覆盖可用版本，也不偷偷改用另一版本；
+- 安装期间云端 Run 显示明确的 `waiting_tool`/工具准备进度；下载或校验失败以稳定错误码收敛，
+  写工具不得因安装失败绕路执行；
+- heartbeat/capabilities 上报 `available/installing/quarantined/update_required` 等 Provider 状态，
+  但客户端上报的 schema 不能直接进入模型工具清单；
+- P1 自动按需安装仅限平台签名的第一方 Provider。第三方市场、开放上传和社区信任治理仍属 P2。
+- 可信 release 只能经“可复现构建/测试/SBOM → immutable package+envelope → Ed25519 签名 →
+  审核 → 发布/灰度 → 可审计撤回”进入 catalog；上传不自动发布，同一 `provider_release_id` 永不
+  覆盖内容。D00 必须冻结 catalog/对象存储 owner、trust root/密钥轮换/紧急撤回和管理权限。
 
 ## 5. 共享客户端边界
 
@@ -193,15 +282,20 @@ Node 或 `window.agentDesktop`，Desktop 失败也不能让 Web 部署依赖 Des
 
 | 行为 | Desktop / Runtime | 云端 Run |
 | --- | --- | --- |
-| 关闭普通窗口 | 隐藏或关闭 UI；按产品配置保留 Main/Runtime | 不取消，稍后由 snapshot 恢复 |
+| 关闭会话窗口 | 隐藏或关闭 UI；已启用的执行节点按设置继续 | 不取消，稍后由 snapshot 恢复 |
 | Renderer 崩溃或刷新 | 重建 UI 和 RunProjection | 不受影响 |
 | 临时断网 | 保留投影；Runtime 保存待回传结果 | 云端等待设备或继续纯云端步骤 |
-| 暂停本机自动执行 | Runtime 停止接纳新写动作，在安全边界暂停 | 依赖设备的 Run 进入明确等待 |
-| 显式退出且 Runtime 由应用管理 | drain、保存 outbox、停止接单后退出 | 设备下线，不等于取消业务 Run |
+| 暂停本机自动执行 | 默认停止全部新 Invocation；当前动作在安全边界收敛 | 依赖设备的 Run 进入明确等待 |
+| 退出会话界面但保留执行节点 | 关闭窗口，托盘 Runtime 继续 heartbeat/claim | 设备保持在线；不影响由 Web/渠道发起的 Run |
+| 停止执行节点并退出 | drain、保存 outbox、停止接单后退出 | 设备下线，不等于取消业务 Run |
 | 显式退出但 Runtime 是外部实例 | UI 断开，不终止其他启动者管理的 Runtime | Runtime 可在授权范围内继续 |
 | Runtime 崩溃/电脑重启 | journal 恢复；unknown 动作先核验 | 不自动改派另一设备重发 |
 
-桌面首版可以不做系统服务或开机启动，但必须明确 Runtime 是 managed child 还是 external attachment。
+桌面首版不做系统级 service/daemon 或多用户后台服务；可以提供用户明确启用的托盘运行和当前用户
+登录后启动执行节点，且必须可随时关闭。用户显式启用本地工具后，当前电脑优先使用 managed child；
+已经运行的同 installation/device external Runtime 通过受认证 attach 复用，不能 attach 时拒绝再启动
+一个 Host。登出/撤权停止新 claim但允许受限补交旧 outbox；正常退出/更新先 drain，effect unknown
+或 outbox 无法持久化时默认阻止退出。
 
 ## 7. 安全与本地资源约束
 
@@ -220,6 +314,12 @@ Node 或 `window.agentDesktop`，Desktop 失败也不能让 Web 部署依赖 Des
 - 本地日志和截图遵循最小化、ACL、保留时间和容量限制；磁盘写入失败时保守阻断新副作用。
 - 下载只允许已配置 API origin，校验 redirect、文件名和大小，以临时文件 + 原子替换落盘；
   日志、崩溃和诊断包默认排除 token、验证码、消息正文、文件内容和本地绝对路径。
+- Provider 包只允许来自服务端批准的第一方 catalog 和短期签名票据；安装前校验发布签名、digest、
+  manifest、平台/架构和 Runtime 兼容性，安装后重新执行只读 `version --json`/`doctor` 验证。
+- Provider 包使用版本化目录、原子切换和最小权限运行；下载、解压、安装、回滚和删除均不得接受
+  Renderer 或模型提供的任意路径。被撤回或隔离版本不能承接新 Invocation。
+- Provider archive 解包拒绝路径穿越、绝对路径、symlink/hardlink、设备文件、权限提升位、重复路径、
+  文件数/单文件/展开总量/压缩比超限；完整验签、digest 与 manifest 校验前不得执行 `doctor/version`。
 - 解绑或撤权后允许受限补交历史结果，但不得借补传通道接纳新动作。
 
 ## 8. 实施阶段
@@ -228,31 +328,58 @@ Node 或 `window.agentDesktop`，Desktop 失败也不能让 Web 部署依赖 Des
 
 - 固定仓库 commit、现有桌面/D1/Runtime/CLI 依赖图；
 - 标记可直接删除的未发布桌面模块和必须迁移的共用能力；
-- 形成 Agent API、Device API、PlatformPorts、Runtime ownership 四份 ADR；
+- 形成 Agent API、Device API、PlatformPorts、Runtime ownership、Provider package/catalog/signing 五份 ADR；
 - 停止继续开发旧 D1 和桌面业务 Coordinator。
 
 退出条件：没有未知生产调用方会因清理被误删；桌面团队只有一套目标协议。
 
-### DC1：共享客户端与桌面壳
+### DC1a：Desktop 私有模型、Fake 场景与 UI 骨架
+
+- 在 Desktop prototype/test 命名空间建立 ViewModel、场景 Fake 和页面状态矩阵；
+- 完成 Session Rail、Conversation、Run/Wait 卡、三动作 Composer、Artifact/通知壳；
+- 不定义正式 status/event/wait/error，不导出 shared public contract，不称为 golden fixtures；
+- 把认证网络/token 迁入 Main，Renderer 改用脱敏 Auth Bridge。
+
+退出条件：无需 P0 正式协议即可验证交互，但生产 adapter 不依赖 Prototype 类型。
+
+### DC1b：正式共享客户端与投影（依赖 G0）
 
 - 接入统一契约生成物；
-- 实现 AgentClient 和纯 RunProjection；
+- 实现 Session/Conversation/Agent/Artifact/Device ports 和纯 RunProjection；Notification 只保留内部
+  展示端口，正式 Notification DTO/adapter 等 G3；
 - 支持 typed SessionRef、append_input、clarification/approval 分权和 reset_required 快照替换；
 - 建立窄 Preload IPC、凭据边界和 PlatformPorts；
-- 使用假服务完成会话、Run、等待、审批、Artifact 和通知界面。
+- Fake/真实 adapter 复跑同一 contract，正式 fixtures 只来自 P0 golden examples。
 
-退出条件：不启动 Runtime 也能用录制事件验证两端投影一致；Renderer 无 Node/Provider 直连。
+退出条件：reducer 只返回 gap/reset/terminal-refresh effects，不发网络；Renderer 无 Node/Provider/token 直连。
 
 ### DC2：Runtime Bridge 与设备契约
 
 - 复用现有 Runtime 的调用接纳、journal、resource lock、result outbox；
-- 实现设备配对、版本/能力握手、managed/external ownership；
+- 将同一 Runtime core 打入 Desktop 安装包，实现完整桌面/仅交互/执行节点三种模式；
+- 实现设备配对、版本/能力握手、managed/external ownership、托盘状态和显式启停；
 - 删除 Main/Renderer 的工具快捷旁路；
 - 不支持的能力和版本明确拒绝。
 
-退出条件：独立启动 Runtime 时仍可登记、接单、执行假 Provider 并补传结果；多启动者不会争抢同一资源。
+退出条件：内置与独立 Runtime 使用同一 Device contract；Desktop 不打开会话 UI 时仍可作为执行节点；
+独立启动 Runtime 时仍可登记、接单、执行假 Provider 并补传结果；多启动者不会争抢同一资源。
 
-### DC3：三条纵向链路
+### DC3：真实 Agent API、恢复与通知
+
+- G1 后接入真实 Session/Conversation/Run/Artifact 和 command receipt；
+- G2 后验证关闭、断网和 runner 故障恢复；
+- G3 后接入持久通知、已读同步和系统通知隐私策略。
+
+退出条件：真实测试租户的纯云端长任务、刷新恢复、等待与通知闭环通过。
+
+### DC4：Device Backend、Runtime 迁移与三条纵向链路
+
+- G0 后先在现有 `src/local_tools` 上实现不碰 Run DDL 的版本化兼容 API、旧 Runtime contract 和缺失
+  reject/reconcile 语义；P0 B04/B05 合入后，才以排序在后的独立 migration 增加 local-tool 表到
+  Run/Invocation/fence/evidence 的稳定引用和 repository 联调，禁止同时编辑 P0 migration；
+- 新 Runtime adapter 与旧稳定版运行兼容矩阵，形成 Device Gate；
+- 实现第一方 Provider catalog、签名包发布、短期下载票据和 Runtime Package Manager，形成
+  Provider Gate；BOSS CLI 与 weixin CLI 至少各完成一次缺失→按需安装→调用→升级/回滚演练；
 
 分别验证：
 
@@ -260,25 +387,32 @@ Node 或 `window.agentDesktop`，Desktop 失败也不能让 Web 部署依赖 Des
 2. 本地只读工具：Run 等待设备、Runtime 执行、结果回传后继续；
 3. 本地写工具：审批、参数绑定、资源锁、结果证据、unknown reconciliation 全链路。
 
-退出条件：断网、重复提交、Runtime 重启和迟到结果不会产生重复副作用。
+退出条件：断网、重复提交、Runtime 重启和迟到结果不会产生重复副作用；缺失/损坏/过旧 Provider
+不会执行，按需安装失败可观察、可恢复且不能下载任意代码。
 
-### DC4：首发收口
+### DC5：首发收口
 
 - 完成窗口、退出、暂停设备和系统通知体验；
 - 建立协议支持窗口、最低 Runtime 版本和能力拒绝规则；
 - 删除发布产物中的旧 D1 入口、类型和业务主持循环；
 - 完成 Windows/macOS 安装包、签名/notarization、更新、供应链、安全检查、故障注入和回滚说明。
 
+退出条件：D11 与 D-final、本文首发验收、独立测试/CR 和 Sev 门禁全部完成并签署 Desktop Release
+Gate 后，才允许面向批准用户发布 RC/GA；Desktop Core Gate 只允许开始本阶段和构建候选包。
+
 ## 9. 与总体架构的协作门禁
 
 | 桌面工作 | 前置条件 |
 | --- | --- |
-| UI 原型与假数据页面 | 可立即进行，不形成正式协议 |
-| AgentClient / RunProjection | P0 Phase 0 协议、事件、等待与权限契约冻结 |
-| 连接真实 Run | P0 Phase 1 AgentApplication 与 Phase 2 Run/Event repository 可用 |
-| 连接真实 Runtime | P0 Phase 0 Device API、ToolInvocation effect 和授权边界冻结 |
-| 写工具端到端 | P0 Phase 2 finalization/outbox 与 Phase 3 lease/fence 可用 |
-| 桌面正式首发 | P0 Phase 0/2/3/4 与相关 Phase 5 Agent/通知门禁通过、Device API 测试环境可用，桌面 DC0～DC4 通过；不以 P0 Phase 6 全渠道迁移作为技术阻塞项 |
+| DC1a UI 原型与假数据页面 | 可立即进行，不形成正式协议 |
+| DC1b AgentClient / RunProjection | G0：P0 B01 已合入并由 contract/consumer owner 签署 |
+| 连接真实 Run | G1：P0 B11 及依赖完成并部署隔离测试环境 |
+| 后台恢复 | G2：P0 B09+B10 故障演练通过；访问仍依赖 G1 |
+| 通知 | G3：P0 B13 查询/已读/订阅部署隔离环境 |
+| 连接真实 Runtime | Device Gate：兼容 API 已通过；P0 B04/B05 后的稳定引用/migration 已合入；Runtime compatibility/adapter 与 G2 故障链通过 |
+| 按需安装第一方 Provider | Provider Gate：D00 签名 ADR、immutable release 构建/上传/审核/发布/撤回链、catalog/下载票据、Runtime 安装器与供应链测试通过 |
+| 构建 RC candidate | Desktop Core Gate：G0～G3、Device Gate、Provider Gate、D00～D10 通过且无开放 Sev-0/Sev-1 |
+| 正式 RC/首发 | Desktop Release Gate：D11、D-final、完成定义和 Sev 门禁全部通过；不以 P0 Phase 6 全渠道迁移作为技术阻塞项 |
 
 桌面不能为了赶进度临时定义第二套状态或续接协议。如果平台契约尚未准备好，使用 fake adapter 继续界面开发，而不是让 UI 成为事实来源。
 
@@ -304,14 +438,30 @@ Node 或 `window.agentDesktop`，Desktop 失败也不能让 Web 部署依赖 Des
 16. after_seq 落入已清理 delta 时，Desktop 通过 reset_required/snapshot 恢复；不显示永久 loading、
     不重复提交任务，也不重放已经过时的 progress。
 17. Desktop 查看渠道 Run 时只使用 Agent API；安装包不包含生产 Channel Connector 或渠道 secret。
+18. Renderer 无法取得 bearer/device token，也不能向下载接口注入 URL、Authorization 或 tenantId；
+    401/撤权后停止新命令/claim但不丢失已执行结果。
+19. terminal 后由 canonical Conversation cursor 刷新最终消息；RunProjection 不发网络、不把 delta
+    或 local pending 拼成服务端事实。
+20. 旧稳定 `agent-tool-runtime` 与新版服务端兼容矩阵通过；提升最低版本前已完成灰度、旧版 drain、
+    outbox 补交和回滚演练。
+21. 系统通知默认不显示客户正文、工具参数或文件名；前台抑制、去重、已读同步、权限拒绝降级通过。
+22. Web 发起的 Run 与 Desktop 发起的 Run 都可路由到同一个内置/独立 Runtime，且不存在
+    Desktop UI 直调 Provider 的旁路。
+23. 关闭会话窗口后，用户已启用的执行节点仍能接收由 Web/渠道发起的 Invocation；“退出界面”与
+    “停止执行节点”有不同的明确操作和状态展示。
+24. 本地缺少 BOSS CLI 或 weixin CLI 时，Runtime 只从签名第一方 catalog 按需安装被固定的 release；
+    任意 URL、digest 不符、签名错误、平台不符、版本撤回或 Runtime 不兼容都 fail-closed。
+25. Provider 升级不影响固定到旧 release 的在途 Invocation；安装失败保留旧可用版本，损坏版本隔离，
+    result/outbox 不因 Provider 安装或回滚而丢失。
 
 ## 11. 本规划不包含
 
 - 平台 Run 表结构、runner 部署和 Web 迁移实现；
 - browser executor 重构；
-- 某个具体 Provider 的业务流程和 UI；
-- 重写已经存在的桌面更新体系、插件市场和复杂离线 Agent；现有 updater 的安全收口、签名包联调
-  和活跃任务 quiesce 属于 DC4/DC5 首发工作；
+- 某个具体 Provider 的业务流程和专属业务 UI；第一方 Provider 的通用 catalog、按需安装、状态和
+  版本管理属于 P1；
+- 重写已经存在的桌面更新体系、第三方插件市场和复杂离线 Agent；现有 updater 的安全收口、签名包联调
+  和活跃任务 quiesce 属于 DC5 首发工作；
 - 本地自行选择模型供应商或绕过云端计费；
 - 为尚未发布的 D1 构建兼容层。
 

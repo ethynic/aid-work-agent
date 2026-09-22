@@ -85,7 +85,7 @@ Phase 6 的数据库、Gateway 和 worker 基建在 Phase 2 schema 稳定后即�
 - 开发者完成实现和定向自测；
 - 独立测试者根据行为重新选择测试，不只复述开发者结果；
 - 独立 Code Review 检查并发、事务、权限、异步资源、配置和测试有效性；
-- P0/P1 问题修复后重跑相关测试并复核；
+- Sev-0/Sev-1 缺陷修复后重跑相关测试并复核；这里的 Sev 是缺陷严重度，不是项目 P0/P1 优先级；
 - 每批只更新本计划的真实进度，不在 `docs/ideas.md` 写开发流水账；
 - 未获得用户明确授权，不提交或推送 Git。
 
@@ -128,8 +128,20 @@ Phase 6 的数据库、Gateway 和 worker 基建在 Phase 2 schema 稳定后即�
 
 - `commands.py`：Submit、AppendInput、ReplyToClarification、Cancel、Approval、ToolResult；
 - `models.py`：typed `SessionRef`、RunSnapshot、RunResult、RunEvent、WaitDescriptor、error class；
+- RunSnapshot 最小 wire 字段冻结为 run/session identity、规范 status/phase、`run_version`、
+  `snapshot_seq`、updated_at、wait/blocked/result/error/capability 摘要；终态包含 terminal_at 与
+  terminal_version。相同 version/seq 不同 digest 是协议违例，unknown critical status/wait kind
+  fail-loud；optional minor progress event 可忽略但必须可观测；
 - `states.py`：合法迁移、终态、内部 phase 到外部 status 映射；
 - 同批冻结跨 Python/TypeScript 的正式 wire 协议源、生成命令、兼容样例和 owner；建议目标为 `contracts/agent-run/` 与 `contracts/device-runtime/`，最终路径由 Phase 0 评审确认。旧 `contracts/desktop-agent` D1 保持 frozen，只作删除审计；Desktop P1 只能消费生成类型，不能先行手写另一套正式 DTO；
+- B01/G0 同批冻结交互客户端所需的基础 wire DTO：typed `SessionRef`、Session create/list/get summary、
+  canonical Conversation message/cursor/page、Artifact upload request/metadata/authorized ref、按
+  `command_id + request_digest` 查询的 command receipt，以及受权 Device directory list/get/select intent/
+  receipt。这里仅冻结身份、权限摘要、分页/cursor、版本与错误语义；B11 才实现真实 HTTP/存储表面。
+  Notification DTO 不冒充 G0 交付，统一由 B13/G3 冻结并实现；
+- B01 对 Device API 的责任止于规范身份、版本、Invocation、claim/fence、result/evidence/ACK、
+  reconcile 和兼容样例；完整服务端 endpoint、现有 `/api/local-tools/runtime/*` 兼容迁移与测试部署
+  由 Desktop P1 Device Backend 子轨负责。该子轨不是 P0 完成前置，也不能反向改写 B01 语义；
 - fake model、fake tool、memory repository、fake clock；
 - repository contract suite 必须与实现无关：同一组状态、幂等、版本、队列和 finalization 场景从 B01 起对 memory repository 运行，B05 起以参数化 fixture/共享 contract mixin 对 PostgreSQL repository 原样复跑；PG 独有的事务隔离、行锁、唯一约束冲突和 `SKIP LOCKED` 另加集成测试，不能用 memory 绿替代；
 - 对 command 幂等、版本 CAS、迟到澄清、append 终态竞态、取消请求与取消完成分离建立红灯测试。
@@ -186,7 +198,7 @@ DDL 评审通过后，实施时同步维护：
 - [ ] 生产 evidence query pack 已由运维/设计 owner 执行并记录窗口、快照时间和覆盖缺口；无法取得的数据已按保守策略处理；
 - [ ] deadline 覆盖 P95/P99 和合法长任务，不以猜测定值；
 - [ ] Web/渠道/worker 上线与回滚负责人、指标和阈值已写入 SOP；
-- [ ] 独立测试与独立 CR 完成，无未关闭 P0/P1 问题。
+- [ ] 独立测试与独立 CR 完成，无未关闭 Sev-0/Sev-1 缺陷。
 
 ## 4. Phase 1：统一应用服务，仍保持 inline
 
@@ -354,8 +366,15 @@ Phase 1 的 inline 新路径也必须灰度，不能因为它仍在 HTTP 请求�
 - submit：返回 RunAccepted；
 - get/list：按 session_ref 发现 active/最近 Run；
 - subscribe：snapshot + `after_seq`，支持 reset；
+- command receipt：按 `command_id + request_digest` 查询已接纳/拒绝/未知，用于客户端崩溃恢复；
 - append_input、reply_to_clarification、cancel；
 - approval 由有权限管理入口处理；
+- 明确 Desktop/Web 可共同消费的受权客户端表面：Session create/list/get、canonical Conversation
+  messages cursor、Artifact upload/metadata/download authorization 和 Device directory。B11 实现 B01
+  已冻结的 typed SessionRef、权限、cursor、command receipt 和终态刷新 contract；可复用现有路由，
+  但不得重新定义 wire DTO，也不允许客户端从 Run delta 拼最终消息；
+- Session/Run snapshot 返回服务端计算的 action capability 摘要；客户端不能从 role 名称猜审批、
+  渠道查看或设备选择权限；
 - 旧 cancel 补认证/归属并映射 active Run；
 - `/api/chat` 按 Phase 0 决议正式退场或启用兼容 adapter。
 
@@ -493,7 +512,7 @@ Session 行锁内只做头项顺序、预算、epoch 和 sending CAS；平台 HT
 | 批次 | 内容 | 前置 | 禁止混入 |
 |------|------|------|----------|
 | B00 | 事实盘点、生产查询包、工具矩阵、协议/DDL、压测与 E2E 方案 | 无 | 生产行为修改 |
-| B01 | commands/models/states/fakes/contract tests + Agent/Device 协议源 | B00 | 数据库、HTTP 切换、旧 D1 扩展 |
+| B01 | commands/models/states/fakes/contract tests + Agent/Device 规范协议源；冻结 Run/Session/Conversation/Artifact/command receipt/Device directory 基础 DTO，通知除外；Device 服务端实现归 Desktop P1 | B00 | 数据库、HTTP 切换、旧 D1 扩展 |
 | B02 | Agent executor + ConversationRepository 接口 | B01 | 后台 runner |
 | B03 | Web inline adapter + shadow 转换器 + allowlist 灰度 | B02 | 双执行、双主写 |
 | B04 | Run/Command/Event DDL 与 migration tests | B00/B01 | 渠道真机切换 |
@@ -503,7 +522,7 @@ Session 行锁内只做头项顺序、预算、epoch 和 sending CAS；平台 HT
 | B08 | maintenance/reaper/event retention | B05/B07 | runner 扩容 |
 | B09 | agent-runner/lease/fence/reclaim/deadline | B07 | Web route 切换 |
 | B10 | runner compose/health/runbook/metrics + 隔离环境压测 | B09 | 渠道 worker |
-| B11 | Web API + frontend RunProjection/三动作 | B06/B09 | 旧链删除 |
+| B11 | 实现 B01 已冻结的 Agent API（Run + command receipt + Session/Conversation/Artifact/Device directory 受权表面）+ Web RunProjection/三动作 | B06/B09 | 旧链删除、重新发明 DTO |
 | B12 | Web shadow/draining/run_service 灰度 | B11 | 全租户一次切换 |
 | B13 | notification outbox + global subscription/UI | B07 | 旧通知表迁移 |
 | B14 | channel receipt/batch/ports/schema | B04/B06 | 具体平台发送改写 |
@@ -629,7 +648,7 @@ Playwright 报告、失败截图和 trace 作为 B11/B12 批次证据。操作�
 - 最终改动范围和 commit（仅实际提交后记录）；
 - 开发者自测命令与结果；
 - 独立测试命令、通过/失败/跳过；
-- 独立 CR 的 P0/P1/P2 结论；
+- 独立 CR 的 Sev-0/Sev-1/Sev-2 结论；
 - 未验证项和生产前置；
 - 若有回滚演练，记录 route epoch、积压和恢复结果，不记录凭据。
 
@@ -707,7 +726,7 @@ Phase 0 用基线数据给出数值阈值；以下任一越过阈值即停止扩
 - [ ] Web 三动作、刷新恢复、全局通知和用户行为变更说明上线；
 - [ ] runner/channel worker 的 compose、健康检查、claim 开关、优雅 drain 和 runbook 完成；
 - [ ] legacy Web/匿名 loop 和已迁渠道的独立生命周期代码删除，或有明确时限与 owner；
-- [ ] 所有 P0 代码批次经过独立测试和独立 CR，无开放 P0/P1 问题；
+- [ ] 所有 P0 代码批次经过独立测试和独立 CR，无开放 Sev-0/Sev-1 缺陷；
 - [ ] P1 桌面和 P2 演进文档仍遵守本次冻结的 Agent API、Device API、typed SessionRef 和状态所有权，没有复制 Run 状态机。
 
 ## 14. 开发者开始 Phase 0 时的首批动作
@@ -721,7 +740,7 @@ Phase 0 用基线数据给出数值阈值；以下任一越过阈值即停止扩
 
 ## 15. 批次记录
 
-本节是批次级证据的唯一索引，Phase 顶部表只表示阶段状态。状态更新规则：某 Phase 的首个批次实际开始时改为“🔧 进行中”；该 Phase 全部必需批次完成、独立测试/CR 关闭 P0/P1 且退出门禁通过后，才改为“✅ 完成（日期）”。仅写完代码、仅测试通过或仅部署均不能提前标记完成。
+本节是批次级证据的唯一索引，Phase 顶部表只表示阶段状态。状态更新规则：某 Phase 的首个批次实际开始时改为“🔧 进行中”；该 Phase 全部必需批次完成、独立测试/CR 关闭 Sev-0/Sev-1 且退出门禁通过后，才改为“✅ 完成（日期）”。仅写完代码、仅测试通过或仅部署均不能提前标记完成。
 
 每个批次开始时在 `docs/plans/evidence/agent-run/<batch>.md` 建立一份简短证据附件并从下表链接。附件记录改动范围、命令与退出状态、独立测试、CR、未验证项、灰度/回滚结果；只保存脱敏摘要，不提交原始生产数据、凭据、完整日志、Playwright storageState 或大体积压测输出。纯调研的 B00 同样使用该格式。目录和附件在批次真正开始时创建，不预建空文件。
 

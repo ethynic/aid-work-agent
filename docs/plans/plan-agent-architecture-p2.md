@@ -1,7 +1,7 @@
 # AID Work Agent 其他架构演进 P2 规划
 
 > 日期：2026-09-22  
-> 版本：v1.0  
+> 版本：v1.1
 > 优先级：P2  
 > 来源：`AID_Work_Agent_架构评审与桌面端统一设计_v2.0.md` 中不属于整体架构 P0、也不属于桌面客户端 P1 的内容
 >
@@ -13,7 +13,7 @@
 
 1. ZCode、Codex 的对照研究和外部参考来源；
 2. 超出 P0 最小恢复范围的完整事件、检查点与长期保留能力；
-3. Provider 独立发布、能力市场和版本生态；
+3. 第三方 Provider 市场、开放生态与高级版本治理；
 4. browser 工具按 Execution Fabric 重新设计；
 5. 复杂离线、系统级常驻和跨设备调度；
 6. 多客户长期任务、发现/决策/执行分层和公平调度；
@@ -70,31 +70,34 @@ P0 只要求关键事实可靠、断线可恢复、runner 崩溃后安全收敛�
 
 同一专题可进一步统一 Server、Local Runtime 和其他受信执行节点的能力登记、健康状态、亲和性和调度，但不能把所有执行节点提升为业务 Run 所有者。
 
-## 4. P2-03 Device Provider 与 Channel Connector 生态
+## 4. P2-03 Device Provider 与 Channel Connector 开放生态
 
-在真实 Provider/Connector 数量和升级压力出现后，再推进，但保留两种独立端口：
+Desktop P1 已负责 Runtime 内置、BOSS/weixin 等第一方 Provider 的最小受控 catalog、签名包、按需安装、
+版本固定、撤回、回滚与隔离。这些是当前产品主链，不得后移到 P2。P2 只在真实 Provider/Connector
+数量和开放生态压力出现后推进第三方与高级治理，同时保留两种独立端口：
 
 - Device Provider 位于受信 Runtime 后面，领取 Invocation、执行本地动作并回传 evidence；
 - Channel Connector 位于云端 Channel Gateway 边缘，只负责认证/解密/ACK、规范消息转换和
   平台 delivery，不执行 Agent 工具，也不拥有 Run。
 
 不得为了“统一插件”把二者合并成一个拥有渠道 secret、设备密钥和业务 Run 权限的万能扩展。
-在此前提下再推进：
+在此前提下再推进 P1 之上的能力：
 
-- 稳定 Provider 接口、manifest、能力版本和健康检查；
-- Runtime 核心不依赖具体微信、BOSS、browser 等业务 Provider；
-- Provider 独立构建、签名、发布、回滚和最低 Runtime 版本；
+- 面向第三方的 SDK、开发者门户、沙箱、发布审核、签名委托和信任分级；
+- catalog 多来源、企业私有源、分批发布、自动灰度、撤回传播和长期版本治理；
 - Connector 独立 capability profile、凭据引用、契约测试、灰度和最低 Gateway 版本；
-- 第一方 CLI/MCP Provider 与 Runtime 的统一接入规范；
-- 多 Provider 共用本地资源仲裁；
-- 安装包可预装常用 Provider，但源码和版本生命周期解耦；
-- 插件市场、第三方 Provider 审核和自动更新在确有需求时另行立项。
+- 多 Provider 的优先级、配额、磁盘回收、依赖冲突和共用本地资源仲裁；
+- 第三方插件市场、商业结算、企业 allowlist、恶意包响应与生态运营；
+- Provider/Runtime 大规模兼容矩阵和跨版本自动迁移。
+
+P2 不重新定义 P1 的 Device API、Provider manifest 或第一方安全下载链，也不能要求 Desktop 主包
+静态捆绑全部 Provider。P1 的实现应成为 P2 扩展的可信底座。
 
 ### 退出条件
 
-- Runtime 能在没有任一特定业务 Provider 的情况下构建和测试；
-- Provider 缺失、过旧、损坏或能力不足时明确拒绝，不偷偷降级到不安全路径；
-- 一个 Provider 的发布不要求同步发布所有客户端和服务端组件；
+- 第三方 Provider 不能取得 Runtime、Device 或其他 Provider 的越权能力；
+- 企业可限制第三方来源、版本和权限，撤回能在明确 SLA 内传播；
+- 一个第三方 Provider 的发布/回滚不要求同步发布所有客户端和服务端组件；
 - 一个新 Channel Connector 无需修改 AgentApplication，且不能绕过 durable receipt、wait binding、
   delivery outbox、route_epoch/draining 和持久预算规则。
 
@@ -126,9 +129,10 @@ P0 只要求关键事实可靠、断线可恢复、runner 崩溃后安全收敛�
 
 ## 6. P2-05 复杂离线、常驻与跨设备能力
 
-桌面 P1 只定义 managed child 与 external Runtime 的基本生命周期。以下能力后置：
+桌面 P1 已定义 managed child/external Runtime、执行节点模式、用户显式托盘运行和当前用户登录后启动。
+以下更复杂的系统级能力后置：
 
-- 系统服务/daemon、开机启动和多用户会话；
+- 系统服务/daemon、无人登录的系统开机启动和多用户会话；
 - 长时间离线队列和有限离线授权；
 - 多设备候选、设备亲和性和人工迁移；
 - 跨设备接管前的证据核验与资源 fencing；
@@ -193,7 +197,7 @@ P1 只要求 Desktop 与 Web 共用 AgentClient、RunProjection 和协议语义�
 | --- | --- | --- |
 | 1 | 事件/检查点与 reconciliation 运营化 | P0 RunService 稳定并积累真实故障数据 |
 | 2 | 企业治理与指标 | P0 的 Run、Invocation、ModelAttempt、notification 关联可靠 |
-| 3 | Provider 独立发布 | Desktop P1 Runtime 接口稳定且出现多个真实 Provider |
+| 3 | 第三方 Provider 市场与高级发布治理 | Desktop P1 第一方按需分发稳定且出现明确第三方生态需求 |
 | 4 | 多客户长期任务调度 | Task/Run 分离和至少一个设备写工具链路稳定 |
 | 5 | browser/Execution Fabric 重构 | 有明确产品需求和恢复安全预算 |
 | 6 | 复杂离线、常驻、跨设备 | 桌面正式使用后有可量化需求 |

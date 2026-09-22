@@ -97,6 +97,15 @@
 - 停止在统一 Run 主线继续扩展旧 D1；生产和共享依赖确认后，旧桌面专属入口由桌面 P1 直接替换或删除。
 - 可复用的授权票据、幂等、Invocation、证据和结果接纳能力迁入 AgentApplication、Device API 或 Execution Fabric，不保留第二套 Run 生命周期。
 - 新桌面未来直接使用统一 Agent API；受信 Runtime 使用独立 Device API。普通 UI 身份不能提交工具结果。
+- “旧 D1 无兼容义务”只适用于未发布的 `/api/desktop/v1` 与 Desktop Coordinator 协议，不适用于
+  已存在的 `agent-tool-runtime`、`/api/local-tools/runtime/*`、Provider、result outbox 和
+  `session_tasks`。这些能力在 Phase 0/D00 按“可能已生产使用”审计，未取得反证前不得破坏性删除。
+- P0 B01 负责冻结 Device API 的身份、Invocation、claim/fence、result/evidence/ACK 与版本协商
+  语义，但 P0 Web/渠道主线不负责交付完整 Device API 服务端。现有 Runtime 协议的兼容演进、
+  服务端 adapter 和测试环境由 Desktop P1 的 Device Backend 子轨交付，不阻塞 P0 完成。
+- P0 B01/G0 同时冻结 Web/Desktop 共用的 typed SessionRef、Session summary、canonical Conversation
+  cursor/page、Artifact upload/metadata/ref、command receipt 和受权 Device directory 基础 DTO；Phase 4
+  B11 负责实现这些表面。Notification DTO 与实现都留到 B13/G3，不计入 G0。
 - `execution_id`、窗口 ID、连接 ID 均不得成为 Run 身份；Run、Session、Invocation、Device 和 Runtime epoch 必须分离。
 
 旧 D1 的 ID 生成和行为只作为删除/迁移依赖审计，不再成为 P0 的新协议设计任务或验收对象。
@@ -874,6 +883,10 @@ Redis Pub/Sub 只发“有新 seq”的唤醒。delta 不按 token 逐行写，�
 
 1. Web 变为 `submit → subscribe`；会话切换继续沿用现有 per-session UI，但运行状态改读 Run snapshot。
 2. 新增 `GET run`、带 `after_seq` 的事件订阅，以及按已授权 `session_ref` 查询 active/最近 Run 的分页接口（例如 `GET /runs?session_ref=&active=`）。页面刷新只有 session_id 时，先发现 Run，再按 snapshot_seq 订阅；查询必须经 Session 归属校验。
+   实现 B01 已冻结的 Session create/list/get、canonical Conversation cursor、Artifact upload/metadata/
+   download authorization、Device directory 和按 `command_id + request_digest` 查询 command receipt
+   的受权客户端表面；这些接口供 Web/Desktop 共用，不要求把现有物理表合并，也不得在 B11
+   重新发明不兼容 DTO。
 3. `waiting_tool/waiting_approval/waiting_device/waiting_clarification` 使用统一等待对象和恢复命令；
    只有有效 `wait_ref + expected_run_version` 且调用者通过对应 wait kind 授权才能恢复原 Run。
    外部渠道用户仅有 clarification 回复权，不因持有 wait_ref 获得 approval/tool/device 权限。
