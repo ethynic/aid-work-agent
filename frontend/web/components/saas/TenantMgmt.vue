@@ -494,7 +494,8 @@
 
         <div class="text-xs text-muted mb-3">
           选择 {{ knowledgeAgentName }} 可以检索的知识库，关联后运行时会自动注入检索指引。
-          不勾选任何本租户栏目时，该数字员工可读取本租户全部知识库栏目；勾选后仅可读取勾选栏目（跨租户共享的栏目不受此限制）。
+          本租户栏目三态：半选 = 未配置（默认可读取全部栏目）；勾选 = 允许；取消勾选 = 不允许。
+          勾选后仅可读取勾选栏目（跨租户共享的栏目不受此限制）。
         </div>
 
         <div v-if="loadingKnowledge" class="text-center py-6 text-muted text-sm">加载中...</div>
@@ -509,9 +510,10 @@
               <label v-for="cat in knowledgeGroups.self" :key="selectionKey(cat)"
                 class="flex items-start gap-2.5 p-2 rounded-lg hover:bg-canvas cursor-pointer transition-colors">
                 <input type="checkbox"
-                  :value="selectionKey(cat)"
-                  v-model="knowledgeSelectedKeys"
-                  class="mt-0.5 w-4 h-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
+                  :checked="knowledgeOwnChecked.includes(selectionKey(cat))"
+                  :indeterminate="!knowledgeOwnConfigured"
+                  class="mt-0.5 w-4 h-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                  @change="handleOwnCellClick(selectionKey(cat), $event)" />
                 <div class="flex-1 min-w-0">
                   <div class="text-sm font-medium text-default">{{ cat.display_name || cat.source_type }}</div>
                   <div class="text-xs text-muted">{{ cat.source_type }} · {{ cat.document_count }} 篇文档</div>
@@ -527,7 +529,7 @@
                 class="flex items-start gap-2.5 p-2 rounded-lg hover:bg-canvas cursor-pointer transition-colors">
                 <input type="checkbox"
                   :value="selectionKey(cat)"
-                  v-model="knowledgeSelectedKeys"
+                  v-model="knowledgeSharedChecked"
                   class="mt-0.5 w-4 h-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
                 <div class="flex-1 min-w-0">
                   <div class="text-sm font-medium text-default">{{ cat.display_name || cat.source_type }}</div>
@@ -692,7 +694,11 @@ const knowledgeAgentId = ref('')
 const knowledgeAgentName = ref('')
 const knowledgeCategories = ref<KnowledgeCategoryItem[]>([])
 // 勾选键格式：`${owner_tenant_id || '__self__'}:${source_type}`，区分本租户与共享来源
-const knowledgeSelectedKeys = ref<string[]>([])
+// 本租户栏目三态：knowledgeOwnConfigured=false（未配置）时全部半选 = 默认允许全部栏目
+const knowledgeOwnChecked = ref<string[]>([])
+const knowledgeOwnConfigured = ref(false)
+// 共享栏目无「默认全部」语义，保持二态勾选
+const knowledgeSharedChecked = ref<string[]>([])
 const loadingKnowledge = ref(false)
 const savingKnowledge = ref(false)
 const knowledgeError = ref('')
@@ -723,6 +729,30 @@ function parseSelectionKey(key: string): { owner: string | null; source_type: st
   const owner = idx < 0 ? '__self__' : key.slice(0, idx)
   const source_type = idx < 0 ? key : key.slice(idx + 1)
   return { owner: owner === '__self__' ? null : owner, source_type }
+}
+
+function handleOwnCellClick(key: string, ev?: Event) {
+  if (!knowledgeOwnConfigured.value) {
+    const cat = knowledgeCategories.value.find(c => selectionKey(c) === key)
+    const catName = cat?.display_name || cat?.source_type || key
+    if (!confirm(`「${knowledgeAgentName.value}」当前允许访问全部本租户栏目。勾选后将转为仅允许显式勾选的栏目（首次仅勾选「${catName}」），可继续调整其他栏目。确定？`)) {
+      // confirm 取消时无状态变化、无重渲染，需手动还原浏览器已翻转的 checkbox 视觉状态
+      const el = ev?.target as HTMLInputElement | undefined
+      if (el) {
+        el.checked = false
+        el.indeterminate = true
+      }
+      return
+    }
+    knowledgeOwnConfigured.value = true
+    knowledgeOwnChecked.value = [key]
+    return
+  }
+  knowledgeOwnChecked.value = knowledgeOwnChecked.value.includes(key)
+    ? knowledgeOwnChecked.value.filter(k => k !== key)
+    : [...knowledgeOwnChecked.value, key]
+  // 全部取消勾选时恢复为未配置（默认全部允许）
+  if (knowledgeOwnChecked.value.length === 0) knowledgeOwnConfigured.value = false
 }
 
 // 知识库接入弹窗（租户级共享授权）
@@ -1060,7 +1090,9 @@ async function openKnowledgeDialog(agent: AgentItem) {
   knowledgeAgentId.value = agent.agent_id
   knowledgeAgentName.value = agent.name
   knowledgeError.value = ''
-  knowledgeSelectedKeys.value = []
+  knowledgeOwnChecked.value = []
+  knowledgeOwnConfigured.value = false
+  knowledgeSharedChecked.value = []
   showKnowledgeDialog.value = true
   loadingKnowledge.value = true
   try {
@@ -1092,9 +1124,12 @@ async function openKnowledgeDialog(agent: AgentItem) {
     knowledgeCategories.value = [...knowledgeCategories.value, ...sharedCatGroups.flat()]
     // 回显已关联（含共享来源）
     if (srcRes.success && srcRes.data) {
-      knowledgeSelectedKeys.value = srcRes.data.map((s: KnowledgeSourceItem) =>
+      const keys = srcRes.data.map((s: KnowledgeSourceItem) =>
         `${s.owner_tenant_id || '__self__'}:${s.source_type}`
       )
+      knowledgeOwnChecked.value = keys.filter(k => k.startsWith('__self__:'))
+      knowledgeOwnConfigured.value = knowledgeOwnChecked.value.length > 0
+      knowledgeSharedChecked.value = keys.filter(k => !k.startsWith('__self__:'))
     }
   } catch (e) {
     console.error('加载知识库关联失败:', e)
@@ -1108,7 +1143,9 @@ async function handleSaveKnowledge() {
   savingKnowledge.value = true
   knowledgeError.value = ''
   try {
-    const sources: KnowledgeSourceItem[] = knowledgeSelectedKeys.value.map(key => {
+    // 未配置（无自有栏目勾选）= 空自有项 = 检索侧默认全部栏目；共享项按勾选回传
+    const effectiveKeys = [...(knowledgeOwnConfigured.value ? knowledgeOwnChecked.value : []), ...knowledgeSharedChecked.value]
+    const sources: KnowledgeSourceItem[] = effectiveKeys.map(key => {
       const { owner, source_type } = parseSelectionKey(key)
       const cat = knowledgeCategories.value.find(c =>
         c.source_type === source_type && (c.owner_tenant_id || null) === owner

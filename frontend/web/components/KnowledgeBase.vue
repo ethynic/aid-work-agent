@@ -89,6 +89,7 @@
                   <BaseButton v-if="isSearchMode" size="sm" intent="secondary" @click="clearSearch">显示全部</BaseButton>
                 </div>
                 <div class="page-toolbar-right">
+                  <BaseButton v-if="tenantId" intent="secondary" class="ml-4" @click="showAuthMatrix = true">访问授权</BaseButton>
                   <BaseButton :disabled="selectedArr.length === 0" intent="secondary" @click="openMoveModal">移动 ({{ selectedArr.length }})</BaseButton>
                   <BaseButton :disabled="selectedArr.length === 0" intent="danger" @click="handleBatchDelete">批量删除 ({{ selectedArr.length }})</BaseButton>
                   <BaseButton @click="openUploadModal">上传文档</BaseButton>
@@ -585,6 +586,12 @@
         <BaseButton intent="secondary" @click="showChunkModal = false">关闭</BaseButton>
       </template>
     </BaseModal>
+
+    <KnowledgeAuthMatrix
+      v-model="showAuthMatrix"
+      :tenant-id="tenantId"
+      :categories="topLevelCategories"
+    />
   </div>
 </template>
 
@@ -602,6 +609,7 @@ import BaseModal from '@/components/ui/BaseModal.vue'
 import BasePagination from '@/components/ui/BasePagination.vue'
 import BaseBadge from '@/components/ui/BaseBadge.vue'
 import CategoryTreeItem from './knowledge/CategoryTreeItem.vue'
+import KnowledgeAuthMatrix from './KnowledgeAuthMatrix.vue'
 
 interface CategoryTreeNode extends CategoryResponse {
   children: CategoryTreeNode[]
@@ -804,6 +812,11 @@ const uploadErrors = ref<{ filename: string; error: string }[]>([])
 const documentToDelete = ref<DocumentResponse | null>(null)
 const showDeleteConfirm = ref(false)
 const isDeleting = ref(false)
+
+// ========== 访问授权矩阵 ==========
+const showAuthMatrix = ref(false)
+const tenantId = computed(() => String(route.params.tenant_id || ''))
+const topLevelCategories = computed(() => categories.value.filter(c => c.parent_id == null))
 
 // ========== 移动文档 ==========
 const showMoveModal = ref(false)
