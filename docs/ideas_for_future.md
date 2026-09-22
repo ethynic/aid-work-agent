@@ -4,12 +4,11 @@
 >
 > 当前日期：2026-08-28。进入实际开发时，再将对应项目迁入 `ideas.md`；开发完成后按规范归档到 `ideas_finished.md`。
 
-## Agent Desktop 下一代架构
+## Agent Desktop 相关长期调研
 
 | 主题 | 状态 | 文档 |
 |---|---|---|
-| Windows/macOS 独立 Desktop UI 与 Local Agent Coordinator | 📋 架构完成，Phase A 目录迁移已完成 | [客户端设计](system/desktop-agent-client-design.md) / [开发计划](system/desktop-agent-client-dev-plan.md) |
-| Desktop 本地工具、服务端工具与远端 Runtime 分工 | 📋 调研完成 | [调研](research/desktop-agent-local-vs-server-tool-execution-research.md) |
+| Desktop 本地工具、服务端工具与远端 Runtime 分工 | 📋 调研完成；业务执行所有权以当前 P1 为准 | [调研](research/desktop-agent-local-vs-server-tool-execution-research.md) / [当前 P1](plans/plan-desktop-client-p1.md) |
 | 第一方 CLI / MCP Provider 跨 Host 规范 | 📋 规范完成 | [架构规范](system/first-party-cli-mcp-provider-standard.md) |
 
 ## 企业 Agent 平台长期设想
@@ -25,7 +24,9 @@
 | 企业记忆与知识治理 | 📋 待独立评审 | [Memory & Knowledge](system/enterprise-agent-platform/enterprise-memory-knowledge-design.md) |
 | Agent 发布评测与运营 | 📋 待独立评审 | [Evaluation & Operations](system/enterprise-agent-platform/enterprise-agent-evaluation-operations-design.md) |
 
-各能力必须按真实业务场景独立验证边界。服务器继续权威管理租户、账号、计费、LLM 和企业策略；`DEVICE_OWNED` 会话的原设备、Coordinator 与 workspace 不因跨端接续而变化。
+各能力必须按真实业务场景独立验证边界，并遵守统一 Run P0 与 Desktop P1：云端 RunService
+拥有业务执行权威，设备只执行已授权 Invocation；旧 `DEVICE_OWNED`/Local Coordinator 假设
+只存在于带“基线替代”提示的历史研究稿中，不能作为新实施前提。
 
 ## 企业多智能体协作体系
 

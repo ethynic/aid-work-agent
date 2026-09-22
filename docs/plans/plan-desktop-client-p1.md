@@ -1,14 +1,23 @@
-# AID Work Agent 桌面客户端 P1 架构与实施规划
+# AID Work Agent 桌面客户端 P1 架构与约束基线
 
-> 日期：2026-09-22  
-> 版本：v1.0  
-> 优先级：P1；在整体架构 P0 契约和最小执行链稳定后实施  
-> 状态：设计与实施规划，桌面尚未发布，可破坏性调整旧草案  
-> 上位约束：[统一 Agent Run P0 规划](./plan-unified-agent-run-lifecycle.md)（统一 Run 架构 P0 唯一实施计划）
+> 日期：2026-09-22
+>
+> 版本：v1.2
+>
+> 优先级：P1；可按门禁与整体架构 P0 并行，P0 仍拥有资源优先级
+>
+> 状态：架构与约束基线；实施批次和进度只在[桌面 P1 并行开发执行计划](./plan-desktop-client-p1-implementation.md)登记
+>
+> 上位约束：[统一 Agent Run P0 设计基线](./plan-unified-agent-run-lifecycle.md)与[P0 开发执行计划](./plan-unified-agent-run-lifecycle-implementation.md)
 
 ## 1. 文档定位
 
 本文只规划桌面客户端，不重新定义平台 Run、计费、授权或消息持久化。平台对象和状态所有权由总体架构决定；桌面负责接入并遵守。
+
+旧 Desktop v2.3 设计与 v2.4 开发计划中仍有效的 Shell、Shared、Electron 安全、构建、发布
+约束和完成证据已经分别合并到本文与配套执行计划；旧文件已删除，避免与统一 Run 架构形成
+双重权威。Local Agent Coordinator、`DEVICE_OWNED` 本地业务权威、旧 D1
+`agent/next`/outcome 路线明确废弃，只能通过 Git 历史用于 DC0 删除审计，禁止继续扩展。
 
 桌面目前没有正式使用方，因此：
 
@@ -103,6 +112,20 @@ Runtime 不建立业务 Run、不调用云端模型决定下一步、不覆盖�
 后者转换第三方消息入口/出口；不得为了复用插件框架让 Provider 绕过 Device API，或让 Connector
 进入本地工具执行路径。
 
+### 3.4 产品壳、UI 与依赖边界
+
+- `frontend/desktop` 是独立 Desktop renderer，不加载 `frontend/web` 的 App、路由、页面外壳或
+  Portal；Web 与 Desktop 只通过经过验证的 `frontend/shared` 纯类型、客户端、投影和展示组件复用。
+- `clients/agent-desktop` 长期作为 Electron Main/Preload、系统能力、Runtime 管理、打包、签名和
+  更新边界存在，不能在 UI 完成后删除；Vue 页面不得放入该目录。
+- 正式客户端只加载安装包内静态资源并连接配置的 HTTPS/SSE 服务，不加载远程页面后赋予
+  Electron 权限。低频、未桌面化的管理页只能通过 HTTPS/host allowlist 在系统浏览器打开。
+- Desktop 自己定义 Session、Run、Device、Settings 等路由和导航；`/portal/**` 永不进入安装包。
+- 720×500 是安全最小窗口，推荐默认 1200×800；100%～200% 缩放、键盘路径、焦点态、
+  可访问名称和错误恢复都属于首发门禁。窄窗口使用桌面紧凑布局，不模拟移动端抽屉。
+- Windows/macOS 共用同一 renderer；菜单、快捷键、窗口、权限、更新和进程管理差异封装在
+  Platform Driver，不复制两套业务 UI，也不在业务组件中散落 `process.platform` 判断。
+
 ## 4. 两份远端契约
 
 ### 4.1 Agent API
@@ -161,6 +184,11 @@ AgentClient 的网络重试必须遵守命令幂等语义。查询可以重试�
 RunProjection 遇到 `reset_required` 时以服务端 snapshot 为基线清除旧 ephemeral progress，再从
 `snapshot_seq` 继续；terminal snapshot 优先于残留 progress，不能在桌面端自行补造事件。
 
+Shared 采用单模块迁移，不做一次性搬家：先建立无平台依赖的真实实现，Web 原路径保留短期
+re-export，Fake/真实适配器复跑同一 contract tests；Web typecheck、测试、production build、
+路由/认证和 bundle 边界通过后 Desktop 才能消费。`shared` 禁止依赖 Web/Desktop 页面、Electron、
+Node 或 `window.agentDesktop`，Desktop 失败也不能让 Web 部署依赖 Desktop 构建产物。
+
 ## 6. 桌面生命周期
 
 | 行为 | Desktop / Runtime | 云端 Run |
@@ -178,10 +206,20 @@ RunProjection 遇到 `reset_required` 时以服务端 snapshot 为基线清除�
 ## 7. 安全与本地资源约束
 
 - 优先使用权限受限的本地 IPC；如使用 localhost 端口，必须有会话认证，不能信任“来自本机”。
+- Electron 固定 `nodeIntegration=false`、`contextIsolation=true`、`sandbox=true`、
+  `webSecurity=true`；自定义 scheme 为 standard/secure 且不绕过 CSP。
+- 所有 IPC 校验 sender、main frame、方法白名单、参数 schema、大小、版本和 capability；禁止
+  暴露原始 `ipcRenderer`、任意 URL、任意路径、命令、脚本或更新地址。
 - Renderer 不读取设备长期秘密；密钥存储由 Main 或 Runtime 的受限能力负责。
 - 同一交互桌面、应用实例、账号和目标窗口使用明确资源锁；定位目标、输入和提交属于同一个受保护动作窗口。
 - Desktop 与独立 CLI 同时运行时，必须连接同一执行宿主或拒绝冲突，不能产生两个互不知情的控制器。
+- Local Host 位于隔离 utility/child process，Provider 再作为 Host 子进程；Provider 崩溃、超时、
+  输出过大或取消只能终止当前调用，不能拖垮 Electron Main 或云端聊天主链。
+- Windows 使用 kill-on-job-close 并检查 breakaway；macOS 使用 process group/PID+create-time
+  ownership，禁止 Provider daemonize，也禁止按进程名全局清理。
 - 本地日志和截图遵循最小化、ACL、保留时间和容量限制；磁盘写入失败时保守阻断新副作用。
+- 下载只允许已配置 API origin，校验 redirect、文件名和大小，以临时文件 + 原子替换落盘；
+  日志、崩溃和诊断包默认排除 token、验证码、消息正文、文件内容和本地绝对路径。
 - 解绑或撤权后允许受限补交历史结果，但不得借补传通道接纳新动作。
 
 ## 8. 实施阶段
@@ -229,7 +267,7 @@ RunProjection 遇到 `reset_required` 时以服务端 snapshot 为基线清除�
 - 完成窗口、退出、暂停设备和系统通知体验；
 - 建立协议支持窗口、最低 Runtime 版本和能力拒绝规则；
 - 删除发布产物中的旧 D1 入口、类型和业务主持循环；
-- 完成安装包、安全检查、故障注入和回滚说明。
+- 完成 Windows/macOS 安装包、签名/notarization、更新、供应链、安全检查、故障注入和回滚说明。
 
 ## 9. 与总体架构的协作门禁
 
@@ -240,7 +278,7 @@ RunProjection 遇到 `reset_required` 时以服务端 snapshot 为基线清除�
 | 连接真实 Run | P0 Phase 1 AgentApplication 与 Phase 2 Run/Event repository 可用 |
 | 连接真实 Runtime | P0 Phase 0 Device API、ToolInvocation effect 和授权边界冻结 |
 | 写工具端到端 | P0 Phase 2 finalization/outbox 与 Phase 3 lease/fence 可用 |
-| 桌面正式首发 | 总体 P0 验收通过，桌面 DC0～DC4 通过 |
+| 桌面正式首发 | P0 Phase 0/2/3/4 与相关 Phase 5 Agent/通知门禁通过、Device API 测试环境可用，桌面 DC0～DC4 通过；不以 P0 Phase 6 全渠道迁移作为技术阻塞项 |
 
 桌面不能为了赶进度临时定义第二套状态或续接协议。如果平台契约尚未准备好，使用 fake adapter 继续界面开发，而不是让 UI 成为事实来源。
 
@@ -272,8 +310,34 @@ RunProjection 遇到 `reset_required` 时以服务端 snapshot 为基线清除�
 - 平台 Run 表结构、runner 部署和 Web 迁移实现；
 - browser executor 重构；
 - 某个具体 Provider 的业务流程和 UI；
-- 桌面自动更新、插件市场和复杂离线 Agent；
+- 重写已经存在的桌面更新体系、插件市场和复杂离线 Agent；现有 updater 的安全收口、签名包联调
+  和活跃任务 quiesce 属于 DC4/DC5 首发工作；
 - 本地自行选择模型供应商或绕过云端计费；
 - 为尚未发布的 D1 构建兼容层。
 
 这些内容需要各自专题，但都必须遵守总体架构固定的执行所有权、安全和事实一致性约束。
+
+## 12. 双平台发布与供应链基线
+
+旧设计中仍有效的交付约束在此收敛，后续不得再引用旧阶段编号：
+
+| 平台 | 首发范围 | 正式交付门禁 |
+|------|----------|--------------|
+| Windows | Windows 10/11 x64、user-scope NSIS | Authenticode 有效；publisher/appId/更新源一致；安装、覆盖升级、跳版本、损坏包与错误签名拒绝通过 |
+| macOS | macOS 13+ arm64/x64，DMG + updater ZIP | Developer ID、Hardened Runtime、notarization、stapling、Gatekeeper 通过；arm64 真机必测，x64 在全量发布前有真机或受控 runner 证据 |
+
+- `electron-updater` 只使用包内只读 HTTPS 更新源；Renderer 不能提供更新 URL。
+- `autoDownload=false`，下载完成后只有在 Run/Runtime/Artifact outbox 已 quiesce 或用户明确确认的
+  安全点才能重启安装；强制安全更新也不能丢失本地执行事实。
+- Windows/macOS 分平台、分架构发布，metadata、安装包、blockmap/ZIP 必须来自同一次构建并原子发布。
+- release manifest 记录 commit、dirty 状态、Node/Electron、平台/架构、输入哈希、产物 SHA-256、
+  签名/notarization；同时生成 SBOM、许可证清单并执行解包/ASAR、安全和 smoke 门禁。
+- 撤回坏版本使用更高 SemVer 修复版，不能覆盖同版本文件；不兼容本地 schema 时禁止直接降级，
+  迁移失败进入旧 binary 或只读 safe mode。
+
+平台约束以实现期锁定版本的官方文档复核：
+
+- [Electron Security](https://www.electronjs.org/docs/latest/tutorial/security)
+- [Electron Code Signing](https://www.electronjs.org/docs/latest/tutorial/code-signing)
+- [electron-builder macOS](https://www.electron.build/docs/mac/)
+- [electron-builder Auto Update](https://www.electron.build/docs/features/auto-update/)

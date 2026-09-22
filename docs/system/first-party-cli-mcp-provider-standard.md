@@ -8,7 +8,7 @@
 >
 > 第二个落地设计：[weixin-cli 第一方微信操作 CLI / MCP Provider](../design/weixin/weixin-cli-design.md)
 >
-> 关联客户端：[Agent 跨平台桌面客户端设计](desktop-agent-client-design.md)
+> 关联客户端：[桌面客户端 P1 架构与约束基线](../plans/plan-desktop-client-p1.md)
 
 ## 1. 核心决策
 

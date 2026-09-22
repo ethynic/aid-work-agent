@@ -2,7 +2,11 @@
 
 > 日期：2026-08-12
 >
-> 关联设计：[Agent 跨平台桌面客户端设计](../system/desktop-agent-client-design.md)
+> 当前设计：[桌面客户端 P1 架构与约束基线](../plans/plan-desktop-client-p1.md)
+>
+> 架构替代说明：本文关于本地/服务端双文件执行器、受权 FileRef、Provider Host 和本地副作用
+> 安全边界的调研结论仍有效；第 8 节推荐的 Local Agent Coordinator、旧 `agent/next` 与
+> Remote Tool Gateway 路线已被统一云端 Run + Agent API/Device API 替代，不得作为实现依据。
 
 ## 1. 结论
 
@@ -144,49 +148,47 @@ Office/PDF 等格式不要在第一期复制全部 Python parser。先支持文�
 
 | 方案 | 优点 | 代价 | 判断 |
 |---|---|---|---|
-| 完整 Cloud Agent + 设备工具中转 | 最大复用现有系统，Web/渠道一致 | 高频本地工具多一跳；本地状态控制弱 | 可作为迁移兼容，不是 Desktop 最终形态 |
+| 云端 RunService + Device API/Runtime | Web、渠道、Desktop 共用一个业务生命周期；断线、计费、审批和恢复只有一个权威 | 高频本地工具多一跳，需要可靠 claim/fence/result outbox | 当前目标架构 |
 | 把现有 Python Agent 全量打进 Desktop | 本地工具直调 | 当前 `Agent` 约 4113 行并依赖 Redis、租户 Skill/缓存、记忆、子智能体、数据库、计费和大量 Python 工具；跨平台打包与双实现风险极高 | 否决 |
-| Desktop Local Agent Coordinator + 云端决策/模型/远端工具网关 | 本地工具直调，云端治理保留，Web 不动 | 需要新 Agent Turn Protocol 和 Remote Tool Gateway | 推荐目标架构 |
+| Desktop Local Agent Coordinator + 旧 Agent Turn/Remote Tool Gateway | 部分本地调用延迟较低 | 形成第二个业务状态机，断线恢复、审批、计费和工具续接双写 | 已废弃，不建立兼容层 |
 
 ### 8.3 推荐拆分
 
-Desktop 本地 Agent Coordinator 负责：
+Desktop Renderer/Main 负责：
 
-- 一个回合的生命周期和 tool-call loop；
-- 本地工作空间、FileRef、审批、取消、并发和进程监管；
-- 当前设备 Local File/Shell/MCP 工具直接调用；
-- 将远端节点和服务端工具调用交给后台网关；
-- 本地短期 journal，断线后与服务端会话恢复。
+- 通过 Agent API 提交命令、查询和订阅云端 Run；
+- 展示 Session、Run、等待、审批、Artifact 和通知投影；
+- 管理凭据、文件选择器、系统通知和受信 Runtime 进程；
+- 不运行模型/tool-call loop，不提交工具成功事实。
 
-服务器继续负责：
+云端 RunService 负责：
 
 - 模型网关和供应商密钥；
-- Prompt、租户策略、数字员工/Skill 配置、长期记忆和会话权威记录；
-- 计费、审计、工具授权和有效 catalog；
-- 服务端 ToolExecutor；
-- 其他 `agent-tool-runtime` 节点的 invocation 中转。
+- Prompt、租户策略、数字员工/Skill、记忆、消息、审批、计费和 Run 权威；
+- Server ToolExecutor 与设备 ToolInvocation 的选择和续接；
+- 设备调用的授权、claim/fence、结果接纳和 reconciliation。
 
-建议定义两个稳定接口：
+受信 Runtime 负责：
 
-```text
-POST /api/desktop/agent/next
-  输入：session/version/messages/tool results/device capabilities
-  输出：final | local_tool_call | remote_tool_call | clarification
+- 通过 Device API 注册能力、领取已授权 Invocation；
+- 在授权 workspace 内运行 Local File/Shell/MCP Provider；
+- persist-before-effect，保存 result/evidence outbox，ACK 前只补传结果；
+- 不创建业务 Run，不审批，不调用模型决定下一步。
 
-POST /api/desktop/tools/invoke + events/cancel
-  输入：tool name/schema version/args/idempotency key
-  服务端注入：tenant/user/secret/policy
-```
-
-互联网链路首选 HTTPS JSON + SSE/WSS，复用 FastAPI、企业代理和现有认证。gRPC 可以用于内部服务或未来高吞吐节点，但它只是 transport，不是架构目标，也不应让 Desktop 直连内部工具服务。
+Agent API 与 Device API 是两份身份和权限分离的稳定契约。互联网链路首选 HTTPS JSON +
+authenticated SSE/长轮询；transport 可以演进，但不能让 Desktop 直连内部数据库/工具服务，
+也不能让 Runtime 通过知道 `run_id` 就推进业务状态。
 
 ### 8.4 执行路径
 
 ```text
-本机工具：Desktop Coordinator → Local Host → result → Agent next
-服务端工具：Desktop Coordinator → Remote Tool Gateway → Server ToolExecutor → result
-其他电脑：Desktop Coordinator → Cloud invocation → agent-tool-runtime → Provider → result
-模型调用：Desktop Coordinator → Agent Turn/Model Gateway → Qwen/ZhipuAI
+本机工具：RunService → Device API Invocation → 当前 Desktop Runtime → Provider → result/evidence
+服务端工具：RunService → Server ToolExecutor → result
+其他电脑：RunService → Device API Invocation → 指定 agent-tool-runtime → Provider → result/evidence
+模型调用：RunService → Model Gateway → Qwen/ZhipuAI
 ```
 
-这使当前电脑的 `read/write/edit/shell` 不再经过 invocation 表和轮询；远端 GUI 工具仍由后台中转。Web、企微、钉钉、飞书继续使用现有 Cloud Agent，不被 Desktop 架构改造牵动。
+这让 `read/write/edit/shell` 的真实副作用仍发生在授权设备，同时 Web、企微、钉钉、飞书和
+Desktop 使用同一云端 Run 生命周期。设备调用会经过持久 Invocation/结果接纳链路；不得为了
+降低一跳延迟恢复 Desktop 私有 Agent loop。性能问题应通过连接复用、批量读取、局部纯计算和
+Provider 协议优化解决，而不是牺牲状态所有权。

@@ -1,5 +1,9 @@
 # 企业统一 Policy Engine 设计
 
+> **2026-09-22 基线替代**：本文只作为 P2 策略研究输入；涉及 Local Agent Coordinator、
+> `DEVICE_OWNED` 或旧 Remote Tool Gateway 的链路已失效。任何实施必须遵守统一 Run P0、
+> Desktop P1 的云端所有权与 Agent API/Device API 边界，并重新立项评审。
+>
 > 状态：架构设计稿（待评审）
 >
 > 日期：2026-08-12

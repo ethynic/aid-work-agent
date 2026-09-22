@@ -1,5 +1,9 @@
 # 企业分层 Memory / Knowledge 设计
 
+> **2026-09-22 基线替代**：本文的分层记忆/知识治理可作为 P2 研究输入；`DEVICE_OWNED`、
+> 本地完整会话权威和 Desktop Local Coordinator 假设已失效。后续设计必须以云端 RunService、
+> ConversationRepository 和 Desktop P1 的客户端投影边界重新评审。
+>
 > 版本：v1.0
 >
 > 日期：2026-08-12
@@ -463,6 +467,6 @@ context.cache_revoked
 - `docs/system/knowledge-base/knowledge-base-enhancement-design.md`
 - `docs/tools/knowledge-base-search-tenant-isolation-design.md`
 - `docs/infrastructure/prompt-lifecycle-design.md`
-- `docs/system/desktop-agent-client-design.md`
+- `docs/plans/plan-desktop-client-p1.md`
 
 本设计是上述模块之上的企业上下文治理总设计；实现时应更新原专题的状态，不复制第二套 Memory 或 Knowledge 运行时。

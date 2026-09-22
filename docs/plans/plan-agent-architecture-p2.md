@@ -27,6 +27,11 @@ finalization、等待权限、事件 reset 和副作用恢复语义，也不得�
 运行中心。未来渠道统一通过 Channel Gateway/Connector 接入，未来设备能力统一通过 Device
 API/Provider 接入，两类扩展不能互相替代或绕过各自信任边界。
 
+2026-08-12 形成的 `docs/system/enterprise-agent-platform/` 系列文件仍可作为问题域研究输入，
+但其中 Local Agent Coordinator、`DEVICE_OWNED`、Desktop 本地业务 Run 权威和旧 Remote Tool
+Gateway 假设已经失效；各文件顶部已标注基线替代。在对应 P2 专题重新评审前，不得把这些旧
+正文当作可执行设计或恢复其旧协议。
+
 ## 2. P2-01 完整事件、检查点与长期恢复
 
 P0 只要求关键事实可靠、断线可恢复、runner 崩溃后安全收敛。P2 在此基础上补充：

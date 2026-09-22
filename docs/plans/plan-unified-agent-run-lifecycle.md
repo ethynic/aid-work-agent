@@ -744,6 +744,9 @@ Redis Pub/Sub 只发“有新 seq”的唤醒。delta 不按 token 逐行写，�
 1. 输出当前 Web、旧 D1、渠道、browser continuation、`session_tasks`、`local_tools` 的字段级对象与真实调用方映射；旧 D1 只做删除/迁移审计。
 2. 冻结 Run status、event envelope、RunResult、error class、等待描述和 command 契约；明确
    Web 字段、Channel Gateway 与 Desktop 方法都映射到唯一 `reply_to_clarification` 应用用例。
+   同时冻结跨 Python/TypeScript 的正式 Agent/Device wire 协议源、生成命令、兼容样例和 owner；
+   建议目标目录为 `contracts/agent-run/` 与 `contracts/device-runtime/`，最终路径经 Phase 0 评审
+   确认。旧 `contracts/desktop-agent` D1 保持 frozen，只作删除审计，Desktop 只能消费生成类型。
 3. 冻结云端 RunService 与 Device Runtime 的所有权边界；停止旧 D1 协议扩展，不改线上 Web 执行路径。
 4. 建立 fake model、fake tool、内存 repository 的应用服务契约测试骨架；测试必须通过参数化
    fixture 或共享 contract mixin 与仓储实现解耦。Phase 2 PostgreSQL repository 完成后原样复跑

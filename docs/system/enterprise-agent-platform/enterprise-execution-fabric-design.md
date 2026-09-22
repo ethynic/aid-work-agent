@@ -1,5 +1,9 @@
 # Enterprise Execution Fabric 设计
 
+> **2026-09-22 基线替代**：本文是 P2 历史研究输入。Local Agent Coordinator、
+> `DEVICE_OWNED`、Desktop 直达 Local Host 并绕过云端 Invocation 的路线已失效；后续重构必须以
+> 云端 RunService、Agent API、Device API 和 P2 Execution Fabric 约束重新设计，不得直接实施本文旧链路。
+>
 > 状态：架构设计稿（待评审）
 >
 > 日期：2026-08-12

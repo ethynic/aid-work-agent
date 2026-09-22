@@ -1,5 +1,9 @@
 # 企业多智能体协作架构设计 v1.0
 
+> **2026-09-22 暂停/替代**：本文依赖 `DEVICE_OWNED` 与 Desktop Local Coordinator 的部分已经
+> 失效，不能作为开发基线。未来多智能体专题必须建立在统一云端 RunService 上，并按
+> [其他演进 P2](../../plans/plan-agent-architecture-p2.md)重新评审。
+>
 > 日期：2026-08-12
 >
 > 状态：📋 架构基线设计

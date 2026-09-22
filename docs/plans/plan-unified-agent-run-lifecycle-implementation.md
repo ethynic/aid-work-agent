@@ -129,6 +129,7 @@ Phase 6 的数据库、Gateway 和 worker 基建在 Phase 2 schema 稳定后即�
 - `commands.py`：Submit、AppendInput、ReplyToClarification、Cancel、Approval、ToolResult；
 - `models.py`：typed `SessionRef`、RunSnapshot、RunResult、RunEvent、WaitDescriptor、error class；
 - `states.py`：合法迁移、终态、内部 phase 到外部 status 映射；
+- 同批冻结跨 Python/TypeScript 的正式 wire 协议源、生成命令、兼容样例和 owner；建议目标为 `contracts/agent-run/` 与 `contracts/device-runtime/`，最终路径由 Phase 0 评审确认。旧 `contracts/desktop-agent` D1 保持 frozen，只作删除审计；Desktop P1 只能消费生成类型，不能先行手写另一套正式 DTO；
 - fake model、fake tool、memory repository、fake clock；
 - repository contract suite 必须与实现无关：同一组状态、幂等、版本、队列和 finalization 场景从 B01 起对 memory repository 运行，B05 起以参数化 fixture/共享 contract mixin 对 PostgreSQL repository 原样复跑；PG 独有的事务隔离、行锁、唯一约束冲突和 `SKIP LOCKED` 另加集成测试，不能用 memory 绿替代；
 - 对 command 幂等、版本 CAS、迟到澄清、append 终态竞态、取消请求与取消完成分离建立红灯测试。
@@ -492,7 +493,7 @@ Session 行锁内只做头项顺序、预算、epoch 和 sending CAS；平台 HT
 | 批次 | 内容 | 前置 | 禁止混入 |
 |------|------|------|----------|
 | B00 | 事实盘点、生产查询包、工具矩阵、协议/DDL、压测与 E2E 方案 | 无 | 生产行为修改 |
-| B01 | commands/models/states/fakes/contract tests | B00 | 数据库、HTTP 切换 |
+| B01 | commands/models/states/fakes/contract tests + Agent/Device 协议源 | B00 | 数据库、HTTP 切换、旧 D1 扩展 |
 | B02 | Agent executor + ConversationRepository 接口 | B01 | 后台 runner |
 | B03 | Web inline adapter + shadow 转换器 + allowlist 灰度 | B02 | 双执行、双主写 |
 | B04 | Run/Command/Event DDL 与 migration tests | B00/B01 | 渠道真机切换 |

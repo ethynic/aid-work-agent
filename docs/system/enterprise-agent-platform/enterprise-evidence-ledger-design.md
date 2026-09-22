@@ -1,5 +1,9 @@
 # 企业 Agent Evidence Ledger 设计
 
+> **2026-09-22 基线替代**：本文只作为 P2 Evidence 研究输入；Local Agent Coordinator 和
+> `DEVICE_OWNED` 不是当前执行所有权。实施时必须绑定统一 Run/ToolInvocation/Artifact 身份，
+> 并遵守 Agent API/Device API，不得恢复旧桌面主持链路。
+>
 > 版本：v1.0
 >
 > 日期：2026-08-12

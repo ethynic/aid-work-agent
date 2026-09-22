@@ -1,5 +1,10 @@
 # 企业 Agent 平台总体架构设计 v1.0
 
+> **2026-09-22 基线替代**：本文是 P2 历史研究输入，不是当前实施权威。文中 Local Agent
+> Coordinator、`DEVICE_OWNED` 和 Desktop 拥有业务 Run 的假设已失效；未来专题必须遵守
+> [统一 Run P0](../../plans/plan-unified-agent-run-lifecycle.md)、[Desktop P1](../../plans/plan-desktop-client-p1.md)
+> 与[其他演进 P2](../../plans/plan-agent-architecture-p2.md)，不得按旧所有权直接开工。
+>
 > 日期：2026-08-12
 >
 > 状态：架构设计稿，六个能力面分别评审和立项

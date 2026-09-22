@@ -223,7 +223,10 @@ Phase 3R 实施按项目三智能体流程串行执行：开发与自测 → 独
 
 ## 7. Phase 4：Agent Desktop 项目内集成 browser runtime
 
-本 Phase 的客户端工作归属 [Agent Desktop 开发计划 Phase 4](../../system/desktop-agent-client-dev-plan.md)。浏览器计划不创建客户端工程、安装包、更新器、托盘或独立发布流程，只维护服务端协议、RemoteExecutor 和联合验收依赖。
+本 Phase 不属于当前 [Agent Desktop P1 开发计划](../../plans/plan-desktop-client-p1-implementation.md)；
+只有 P0 将 browser 标记从 `not_migrated` 解除、P2/Execution Fabric 重新评审并建立独立门禁后，
+才能作为 Desktop 可选模块排期。浏览器计划不创建另一套客户端工程、安装包、更新器、托盘或
+业务 Run 状态机。
 
 ### Phase 4A：浏览器侧协议与服务端适配
 

@@ -1,5 +1,9 @@
 # 企业 Agent Evaluation & Operations 设计
 
+> **2026-09-22 基线替代**：本文只作为 P2 评估运营研究输入；Local Agent Coordinator、
+> `DEVICE_OWNED` 和桌面本地 release 权威假设已失效。后续实施必须基于统一云端 Run、正式
+> Agent/Device 协议和 P0/P1 版本事实重新设计。
+>
 > 版本：v1.0
 >
 > 日期：2026-08-12
@@ -596,6 +600,6 @@ audit_export.generated
 - `docs/system/work-outcome-record-design.md`
 - `docs/system/saas/tenant-credit-billing-design.md`
 - `docs/system/knowledge-base/knowledge-base-enhancement-design.md`
-- `docs/system/desktop-agent-client-design.md`
+- `docs/plans/plan-desktop-client-p1.md`
 
 本设计负责把上述能力串成“版本—评估—发布—观测—业务结果—回滚”的企业运营闭环，不替代其模块级实现设计。
