@@ -735,6 +735,47 @@ async def create_download_ticket(doc_id: int, http_request: Request = None):
     return {"ticket": ticket, "expires_in": TICKET_TTL_SECONDS}
 
 
+def _parse_doc_metadata(raw) -> dict:
+    """documents.metadata 为 TEXT（JSON 字符串），安全解析为 dict"""
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str) and raw:
+        try:
+            parsed = json.loads(raw)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def _resolve_schema_doc_file(meta: dict, tenant_id: Optional[str]) -> Optional[dict]:
+    """数据表 schema 文档的源文件兜底解析
+
+    schema 文档（[数据表] 前缀）不落 documents.file_path，原始 Excel/CSV
+    路径记录在 metadata.source.file_path（页面上传）或 metadata.source_info
+    的 "file:" 前缀串（对话上传），据此还原下载路径与原始文件名。
+
+    metadata.source / source_info 为用户可控字段，路径必须经租户附件目录
+    白名单校验，防止构造任意路径实现认证后任意文件读取。
+    """
+    from src.core.storage import is_tenant_owned_file
+
+    source = meta.get("source")
+    if isinstance(source, dict):
+        file_path = source.get("file_path")
+        if file_path and is_tenant_owned_file(file_path, tenant_id or ""):
+            filename = meta.get("source_info") or None
+            if filename and str(filename).startswith("file:"):
+                filename = None
+            return {"file_path": file_path, "filename": filename}
+    source_info = meta.get("source_info")
+    if isinstance(source_info, str) and source_info.startswith("file:"):
+        file_path = source_info[5:]
+        if is_tenant_owned_file(file_path, tenant_id or ""):
+            return {"file_path": file_path, "filename": os.path.basename(file_path)}
+    return None
+
+
 @router.get("/documents/{doc_id}/download")
 async def download_document(doc_id: int, http_request: Request = None):
     """
@@ -776,11 +817,18 @@ async def download_document(doc_id: int, http_request: Request = None):
         if original_url:
             return RedirectResponse(original_url, status_code=302)
         raise HTTPException(status_code=404, detail="文档不存在或文件已丢失")
-    if not row.get("file_path"):
+    file_path = row.get("file_path")
+    # schema 文档兜底：无 documents.file_path 时从 metadata 还原源文件路径与原始文件名
+    download_name_base = None
+    if not file_path:
+        resolved = _resolve_schema_doc_file(_parse_doc_metadata(row.get("metadata")), row.get("tenant_id"))
+        if resolved:
+            file_path = resolved["file_path"]
+            download_name_base = resolved["filename"]
+    if not file_path:
         raise HTTPException(status_code=404, detail="文档不存在或文件已丢失")
 
-    file_path = row["file_path"]
-    title = row.get("title") or f"document_{doc_id}"
+    title = download_name_base or row.get("title") or f"document_{doc_id}"
 
     if not os.path.exists(file_path):
         logger.warning(f"后端日志：下载文档失败，文件不存在: {file_path}")

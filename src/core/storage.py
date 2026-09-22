@@ -53,6 +53,31 @@ def normalize_tenant_id(tenant_id: str) -> str:
     return tenant_id
 
 
+def is_tenant_owned_file(file_path: str, tenant_id: str) -> bool:
+    """校验文件路径是否位于该租户的附件目录内（含 legacy uploads 双轨路径）。
+
+    用于把用户可控元数据中的路径（如数据表 schema 文档的源文件路径）作为
+    下载目标前的白名单校验，防止构造任意路径实现认证后任意文件读取。
+    """
+    if not file_path or not tenant_id:
+        return False
+    try:
+        real = os.path.realpath(file_path)
+    except Exception:
+        return False
+    tid = normalize_tenant_id(tenant_id)
+    roots = [
+        os.path.join(_TENANTS_ROOT, tid),
+        os.path.join("storage", "uploads", tid),
+        os.path.join("storage", "uploads", f"tenant_{tid}"),
+    ]
+    for root in roots:
+        root_real = os.path.realpath(root)
+        if real == root_real or real.startswith(root_real + os.sep):
+            return True
+    return False
+
+
 def strip_legacy_storage_prefix(path: str) -> str:
     """剥离相对路径头部的旧存储基名段，防止产生嵌套目录。
 

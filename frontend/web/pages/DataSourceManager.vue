@@ -45,7 +45,15 @@
       <BaseTable :columns="schemaColumns" :data="(schemas as any[])" row-key="id">
         <template #index="{ index }">{{ seqNumber(index) }}</template>
         <template #title="{ row }"><span class="font-medium">{{ row.title }}</span></template>
-        <template #source="{ row }">{{ row.metadata?.source_info || '-' }}</template>
+        <template #source="{ row }">
+          <a
+            v-if="isSchemaDownloadable(row)"
+            class="text-primary-600 hover:text-primary-700 hover:underline cursor-pointer"
+            title="点击下载源文件"
+            @click="handleSchemaDownload(row)"
+          >{{ schemaSourceDisplay(row) }}</a>
+          <span v-else>{{ row.metadata?.source_info || '-' }}</span>
+        </template>
         <template #source_status="{ row }">
           <BaseBadge :intent="sourceStatusIntent(row.source_status)">
             {{ sourceStatusLabel(row.source_status) }}
@@ -352,6 +360,7 @@ import {
   type RelationItem,
 } from '@/api/dataSource'
 import { formatDateTime as formatDate } from '@/utils/date'
+import { downloadDocument } from '@/api/knowledge'
 
 // ===== Tab state =====
 const activeTab = ref<'schemas' | 'connectors'>('schemas')
@@ -433,6 +442,33 @@ function sourceStatusLabel(s?: string): string {
   if (s === 'available') return '可用'
   if (s === 'missing') return '源已失效'
   return '未知'
+}
+
+// ===== 来源列下载 =====
+
+function schemaSourceInfo(row: any): string {
+  const info = row.metadata?.source_info
+  return typeof info === 'string' ? info : ''
+}
+
+function isSchemaDownloadable(row: any): boolean {
+  if (row.metadata?.source?.file_path) return true
+  return schemaSourceInfo(row).startsWith('file:')
+}
+
+function schemaSourceDisplay(row: any): string {
+  const info = schemaSourceInfo(row)
+  if (info.startsWith('file:')) return info.slice(5).split('/').pop() || info
+  return info || '-'
+}
+
+async function handleSchemaDownload(row: any) {
+  const name = schemaSourceDisplay(row)
+  try {
+    await downloadDocument(row.id, name === '-' ? row.title : name)
+  } catch (e: any) {
+    alert(e.message || '源文件下载失败')
+  }
 }
 
 // ===== Schema review modal =====
