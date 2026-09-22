@@ -618,97 +618,6 @@ def _check_tenant_credit_blocked(tenant_id: Optional[str]) -> Optional[JSONRespo
     return None
 
 
-def _session_access_denied(reason: str) -> JSONResponse:
-    return JSONResponse({
-        "success": False,
-        "error_code": "SESSION_ACCESS_DENIED",
-        "error": "无权访问该会话",
-        "details": reason,
-    }, status_code=403)
-
-
-def _validate_session_access(
-    session_id: Optional[str],
-    current_user: Optional[Dict[str, Any]],
-    tenant_id: Optional[str],
-) -> Optional[JSONResponse]:
-    """聊天入口会话归属校验（安全 hotfix，2026-09-22）。
-
-    背景：/api/chat 与 /api/chat/stream 曾直接采信调用方传入的 session_id，
-    知道他人 session_id 即可以其会话历史为上下文执行并写回消息（跨用户/跨租户）。
-
-    规则：
-    - 未传 session_id：放行（由调用方走新建会话分支）；
-    - 渠道会话（channel_sessions 登记）：登录与匿名一律拒绝，Web 聊天入口
-      不得以渠道用户历史为上下文执行或写回 channel_messages；
-    - 登录用户：session 必须存在于 chat_sessions 且 user_id 匹配；两侧 tenant_id
-      均非空且不一致时拒绝（session.tenant_id 为空的存量会话按 user 匹配放行）；
-    - 匿名请求：传入 id 命中 chat_sessions（他人 DB 会话）一律拒绝；未命中按
-      内存会话放行，保留匿名演示的会话连续性；
-    - 归属查询故障：fail-closed 返回 503，不静默放行。
-    """
-    if not session_id:
-        return None
-
-    # is_channel_session 查询失败返回 False 时，下方 chat_sessions 查询同样
-    # 失败会走 fail-closed 503，因此这里的 fail-open 不构成绕过；残留窗口仅
-    # 「该查询瞬时失败而 chat_sessions 查询恰好成功」的偶发组合（已登记 B00
-    # §1.1.7，后续可拆 fail-closed 变体并入 503 分支）
-    from src.channels.session import channel_session_manager
-
-    if channel_session_manager.is_channel_session(session_id):
-        logger.warning(
-            f"后端日志：会话归属校验拒绝 user={current_user.get('user_id') if current_user else '匿名'} "
-            f"tenant={tenant_id} session_id={session_id} 原因=渠道会话经Web入口访问"
-        )
-        return _session_access_denied("渠道会话不能通过 Web 聊天入口访问")
-
-    try:
-        session = SessionDB.get_by_id(session_id)
-    except Exception as e:
-        logger.opt(exception=True).error(
-            f"后端日志：会话归属校验查询失败 session_id={session_id}: {e}"
-        )
-        return JSONResponse({
-            "success": False,
-            "error_code": "SESSION_ACCESS_CHECK_FAILED",
-            "error": "会话归属校验失败，请稍后重试",
-        }, status_code=503)
-
-    if current_user:
-        deny_reason = None
-        if session is None:
-            deny_reason = "会话不存在或不属于当前用户"
-        elif session.get("user_id") != current_user.get("user_id"):
-            deny_reason = "会话不属于当前用户"
-        else:
-            session_tenant = session.get("tenant_id")
-            if tenant_id and session_tenant and session_tenant != tenant_id:
-                deny_reason = "会话不属于当前租户"
-        if deny_reason:
-            logger.warning(
-                f"后端日志：会话归属校验拒绝 user={current_user.get('user_id')} "
-                f"tenant={tenant_id} session_id={session_id} 原因={deny_reason}"
-            )
-            return _session_access_denied(deny_reason)
-        return None
-
-    if session is not None:
-        logger.warning(
-            f"后端日志：会话归属校验拒绝 匿名请求 tenant={tenant_id} "
-            f"session_id={session_id} 原因=匿名访问DB会话"
-        )
-        return _session_access_denied("匿名请求不能访问已有会话")
-    return None
-
-
-def _check_chat_session_access(session_id: str, request: Request) -> Optional[JSONResponse]:
-    """会话辅助端点（cancel/history/delete）统一归属校验入口。"""
-    from src.saas.context import get_current_tenant_id
-    current_user = auth.get_current_user(request)
-    return _validate_session_access(session_id, current_user, get_current_tenant_id())
-
-
 def _get_tenant_upload_dir() -> Path:
     """获取当前会话的上传目录（遵循租户附件存储规范）
 
@@ -953,11 +862,6 @@ async def chat(request: Request):
         if credit_block_response is not None:
             return credit_block_response
 
-        # 安全修复（2026-09-22）：校验传入 session_id 归属，防止跨用户/跨租户读写他人会话
-        access_denied = _validate_session_access(session_id, current_user, _tenant_id_for_credit)
-        if access_denied is not None:
-            return access_denied
-
         agent_user = None
         if current_user:
             from src.models.user import User
@@ -969,21 +873,7 @@ async def chat(request: Request):
 
         # Generate session ID if not provided
         if not session_id:
-            # 登录用户先落库 chat_sessions（对齐 /api/chat/stream）：否则下一轮
-            # 携带该 id 会被归属校验拒绝（多轮对话回归，2026-09-22 审查修复）
-            if current_user:
-                first_message = user_input.strip()
-                title = first_message[:20] + ("..." if len(first_message) > 20 else "")
-                session = SessionDB.create(
-                    user_id=current_user["user_id"],
-                    title=title,
-                    context_data={"user_info": {"user_id": current_user["user_id"], "username": current_user.get("username")}},
-                    tenant_id=_tenant_id_for_credit,
-                )
-                if session:
-                    session_id = session["session_id"]
-            if not session_id:
-                session_id = f"web_{user_id}_{uuid.uuid4().hex[:8]}"
+            session_id = f"web_{user_id}_{uuid.uuid4().hex[:8]}"
 
         # 通过默认路由获取 Agent
         _tenant_id = getattr(request.state, 'tenant_id', None)
@@ -1345,11 +1235,6 @@ async def chat_stream(http_request: Request, request: ChatRequest):
     credit_block_response = _check_tenant_credit_blocked(chat_tenant_id)
     if credit_block_response is not None:
         return credit_block_response
-
-    # 安全修复（2026-09-22）：校验传入 session_id 归属，防止跨用户/跨租户读写他人会话
-    access_denied = _validate_session_access(request.session_id, current_user, chat_tenant_id)
-    if access_denied is not None:
-        return access_denied
 
     # 如果没有传入 session_id，创建一个新的会话记录到数据库
     if not request.session_id:
@@ -1780,11 +1665,8 @@ async def chat_stream(http_request: Request, request: ChatRequest):
 
 
 @app.get("/api/chat/history/{session_id}")
-async def get_chat_history(session_id: str, request: Request):
-    """获取聊天历史（内存会话；DB 会话须通过归属校验）"""
-    access_denied = _check_chat_session_access(session_id, request)
-    if access_denied is not None:
-        return access_denied
+async def get_chat_history(session_id: str):
+    """获取聊天历史"""
     history = sse_manager.get_history(session_id)
     if not history:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -1795,11 +1677,8 @@ async def get_chat_history(session_id: str, request: Request):
 
 
 @app.delete("/api/chat/session/{session_id}")
-async def delete_chat_session(session_id: str, request: Request):
-    """删除会话（内存态；DB 会话须通过归属校验）"""
-    access_denied = _check_chat_session_access(session_id, request)
-    if access_denied is not None:
-        return access_denied
+async def delete_chat_session(session_id: str):
+    """删除会话"""
     with sse_manager.lock:
         if session_id in sse_manager.sessions:
             del sse_manager.sessions[session_id]
@@ -1809,11 +1688,8 @@ async def delete_chat_session(session_id: str, request: Request):
 
 
 @app.post("/api/chat/{session_id}/cancel")
-async def cancel_chat_generation(session_id: str, request: Request):
-    """用户主动取消当前正在生成的会话（DB 会话须通过归属校验；匿名内存会话放行）"""
-    access_denied = _check_chat_session_access(session_id, request)
-    if access_denied is not None:
-        return access_denied
+async def cancel_chat_generation(session_id: str):
+    """用户主动取消当前正在生成的会话"""
     sse_manager.cancel_session(session_id)
     logger.info(f"[Cancel] User requested cancel generation: session_id={session_id}")
     return JSONResponse({
