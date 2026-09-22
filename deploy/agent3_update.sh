@@ -15,9 +15,30 @@
 #   6. package-lock.json 未变化时跳过 npm install；npm install 挂命名卷缓存
 #      并加 --no-audit --prefer-offline，消除全新容器重拉包元数据导致的数分钟卡顿
 #   7. 切换后把 dist 属主恢复为 ubuntu（node 容器以 root 编译，产物属主为 root）
+#   8. 支持选择发布分支：不传参数时进入交互菜单（↑/↓ 或输入序号，回车确认，
+#      默认 master），用于开发分支在线真机验收；也可 ./agent3_update.sh <远程分支名>
+#      直接指定跳过菜单；checkout -f -B 切换/重建本地分支并对齐 origin/<分支>，
+#      替代固定 reset --hard origin/master
 # ==============================================================================
 
 set -e
+
+# 用法: ./agent3_update.sh [远程分支名]
+#   不传参数：进入交互菜单选择发布分支（↑/↓ 移动或输入序号，回车确认，默认 master）；
+#   传参数  ：跳过菜单直接发布该远程分支（便于自动化调用）。
+TARGET_BRANCH="${1:-}"
+if [ "$TARGET_BRANCH" = "-h" ] || [ "$TARGET_BRANCH" = "--help" ]; then
+    echo "用法: $0 [远程分支名]"
+    echo "  不传参数时进入交互菜单（↑/↓ 或输入序号，回车确认，默认 master）；"
+    echo "  传远程分支名则跳过菜单直接发布，如：$0 feature/unified-agent-run-p0"
+    exit 0
+fi
+# 分支名白名单：字母/数字开头，仅含字母/数字/._-/（远程分支名含 / 是合法的），
+# 拒绝 ..、尾斜杠与特殊字符；更严的合法性最终由 show-ref 存在性校验兜底
+if [ -n "$TARGET_BRANCH" ] && { [[ ! "$TARGET_BRANCH" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]+$ ]] || [[ "$TARGET_BRANCH" == *..* ]] || [[ "$TARGET_BRANCH" == */ ]]; }; then
+    echo "错误：非法分支名 '$TARGET_BRANCH'"
+    exit 1
+fi
 
 START_TS=$(date +%s)
 
@@ -32,13 +53,93 @@ BUILD_LOG="/var/www/agent3/log/frontend-build.log"
 # 配置 Git 安全目录（避免所有权检查错误）
 git config --global --add safe.directory /var/www/agent3 2>/dev/null || true
 
-# 1. 拉取代码
+# ─── 交互选择发布分支：↑/↓ 移动或输入序号，回车确认；默认 master；q 取消 ───
+# 选中结果写入全局 TARGET_BRANCH；菜单阶段脚本尚未做任何变更，取消直接退出。
+# master 固定第一项且为默认；其余按最近推送时间排序，只列前 15 个（更多用参数指定）。
+interactive_select_branch() {
+    local -a BRANCHES=("master")
+    local b i key tail sel=0 num="" drawn=0
+    while IFS= read -r b; do
+        BRANCHES+=("$b")
+    done < <(git for-each-ref --sort=-committerdate --format='%(refname:short)' refs/remotes/origin/ \
+             | grep -v -e '^origin/HEAD$' -e '^origin/master$' \
+             | sed -e 's|^origin/||' | head -n 15)
+    local count=${#BRANCHES[@]}
+    echo "选择要发布的分支："
+    while true; do
+        # 重绘前把光标移回菜单首行，覆盖上一次输出（首次绘制不回退）
+        if [ "$drawn" -gt 0 ]; then printf '\033[%dA' "$count"; fi
+        i=0
+        while [ "$i" -lt "$count" ]; do
+            if [ "$i" -eq "$sel" ]; then
+                printf '\r\033[K  \033[1;36m❯ %2d) %s\033[0m\n' "$((i+1))" "${BRANCHES[$i]}"
+            else
+                printf '\r\033[K    %2d) %s\n' "$((i+1))" "${BRANCHES[$i]}"
+            fi
+            i=$((i+1))
+        done
+        printf '\r\033[K  ↑/↓ 移动 / 输入序号 / 回车确认（默认 master）/ q 取消  %s' "$num"
+        drawn=1
+        if ! read -rsn1 key; then
+            printf '\n'
+            echo "已取消（输入结束），未做任何变更。"
+            exit 1
+        fi
+        case "$key" in
+            $'\x1b')  # 方向键为 ESC [ A/B 三字节序列，一次读完剩余 2 字节
+                if read -rsn2 -t 1 tail; then
+                    case "$tail" in
+                        '[A') sel=$(((sel - 1 + count) % count)); num="" ;;
+                        '[B') sel=$(((sel + 1) % count)); num="" ;;
+                    esac
+                fi ;;
+            '')  # 回车：已输入序号则按序号（越界忽略），否则取当前高亮项（初始即 master）
+                if [ -n "$num" ] && [ "$num" -ge 1 ] && [ "$num" -le "$count" ]; then
+                    sel=$((num - 1))
+                fi
+                TARGET_BRANCH="${BRANCHES[$sel]}"
+                printf '\n'
+                return ;;
+            [0-9])
+                if [ "${#num}" -lt 2 ]; then num="${num}${key}"; fi ;;
+            q|Q)
+                printf '\n'
+                echo "已取消，未做任何变更。"
+                exit 0 ;;
+            *)
+                num="" ;;
+        esac
+    done
+}
+
+# 1. 拉取代码（发布分支由参数或交互菜单确定，默认 master）
 echo "[1] 拉取最新代码..."
 cd "/var/www/agent3"
+echo "当前分支: $(git rev-parse --abbrev-ref HEAD)"
 OLD_HEAD=$(git rev-parse HEAD)
 echo "更新前版本: $(git log -1 --format='%cd %s' --date='format:%Y-%m-%d %H:%M:%S')"
 git fetch --all
-git reset --hard origin/master
+# 参数优先；未传参数时交互选择；stdin 非终端（管道/cron）回退默认 master
+if [ -z "$TARGET_BRANCH" ]; then
+    if [ -t 0 ]; then
+        interactive_select_branch
+    else
+        echo "stdin 非交互终端，默认发布 master"
+        TARGET_BRANCH="master"
+    fi
+fi
+echo "目标分支: origin/$TARGET_BRANCH"
+if ! git show-ref --verify --quiet "refs/remotes/origin/$TARGET_BRANCH"; then
+    echo "错误：远程分支 origin/$TARGET_BRANCH 不存在，可用远程分支："
+    git branch -r | grep -v 'HEAD' | sed 's/^/  /'
+    exit 1
+fi
+if [ "$TARGET_BRANCH" != "master" ]; then
+    echo "⚠️  正在发布非 master 分支 '$TARGET_BRANCH'（开发/验收用途）"
+fi
+# checkout -f -B：切换或重建本地分支并强制对齐 origin/<分支>；
+# -f 丢弃本地改动与挡路的未跟踪文件，与原 reset --hard origin/master 的部署语义一致
+git checkout -f -B "$TARGET_BRANCH" "origin/$TARGET_BRANCH"
 echo "更新后版本: $(git log -1 --format='%cd %s' --date='format:%Y-%m-%d %H:%M:%S')"
 NEW_HEAD=$(git rev-parse HEAD)
 find . -type d -name "__pycache__" -exec chmod -R 777 {} + 2>/dev/null || true
