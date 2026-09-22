@@ -1,8 +1,9 @@
 # API 数据源入知识库（api_ingest）设计文档
 
-> 状态：2026-09-20 v2.2 修订（设计完成，未开发）。
+> 状态：**⛔ 暂不开发（2026-09-22 归档）**——宏陶需求由 [hongtao_shop 专用模块](../hongtao-shop/hongtao-shop-kb-design.md) 承接，本文作为多租户通用方案归档保留。2026-09-21 v2.3 修订（设计完成，未开发）。
 > v2 修订：客户 API 说明到位（宏陶商城 `hongtaoshop.gzfenxiao.com`，「论坛帖子」+「商城商品」两个只读列表接口，见 §12），接入路线定稿为**文档即配置、agent 驱动、不写每接口代码**；运行期执行模式定为契约直执（默认）+ agent 循环兜底。
 > v2.2 修订（独立评审后，评审结论已逐项落文）：① §6.4 明确 `max_items_per_run` 截断与删除对账的门禁交互；② §9 SSRF 增私网禁令与 host 清单强制人审；③ knowledge 删除回写分支提前至 Phase 1；④ 校正"复用先例"表述（白名单子类与 agent_loop token 预算均为新代码，external_push 无先例）；⑤ 粒度与分块统一字符口径（平台护栏为字符制）；⑥ 新增 §4.1 契约生命周期与 §6.5 detail_fetch 执行语义。
+> v2.3 修订（开发前澄清，15 项决议全文见 §13）：① 删除记录重现规则（对齐公众号 deleted 重现先例）；② content_hash 并入 granularity 口径；③ runs 表增 `scope` 列；④ 分页 stop 与页码参数单一来源；⑤ title 派生规则与 `get_by_path` 类型严格性；⑥ verify/retry/secrets 端点语义；⑦ 上传格式与上限；⑧ DNS pin 决议；⑨ 响应超限截断即拒收不落盘；⑩ P1 余额简单预检。
 > 关联：[公众号内容入知识库设计](../wechat-mp/wechat-mp-knowledge-ingestion-design.md)（范式来源，其 §10「外部内容源接入规约」为本设计遵循的架构规约）。
 > 开发计划：[plan-api-ingest-knowledge.md](../../plans/plan-api-ingest-knowledge.md)（技术实现方案 + 分期任务拆解 + 验收标准）。
 
@@ -48,7 +49,7 @@
 | D6 | 每源一个知识库分类 | 顶级分类 `source_type = f"k_api_ingest_{source_code}"`（展示名=源名称），惰性创建；源内可配 sub_category | knowledge_categories `UNIQUE(tenant_id, source_type)` 决定顶级分类以 source_type 为键；检索/知识共享可按源粒度开关 |
 | D7 | 与 knowledge 服务的关系 | 与公众号一致：**直写 documents/chunks/chunks_vec 三表单事务**（照搬 `_persist_document_tx` 模式），不走 `upload_document`（它无 external_id 语义） | 遵循公众号 §10 规约第 2 条；`KnowledgeBaseService` 幂等 upsert 缺位是既有债务，不在本模块偿还 |
 | D8 | 列表/详情两种形态 | 契约声明 `detail_endpoint` 有无：无则 `list_payload` 模式（列表响应即全量数据，本客户即此形态，Phase 1 实现）；有则 `detail_fetch` 模式（列表只产 external_id + 时间戳，按 §6.5 语义逐条拉详情，Phase 2 实现，Phase 1 契约校验直接拒绝该模式） | 覆盖常见 ERP/开放平台两种形态；本客户用不到 detail_fetch，避免 Phase 1 背负未验证的执行语义 |
-| D9 | 与 http_api 工具的代码关系 | **运行期复用 HttpApiTool 请求层**：环境变量替换、占位符 fail-fast、大响应落盘、审计（单行 JSON、URL 剥 query、headers 不落盘）是现成能力；**白名单子类为新增代码**——HttpApiTool 现无任何 URL 策略钩子（follow_redirects 直接透传 httpx），子类需自建「解析后 IP 禁令 + 重定向每跳 host 校验 + 响应大小上限」切入层。能力边界：业务错误识别的判据是响应含 `Code` 字段，`status` 型接口（本客户）由契约 `success_check` 自行承担；不改共享工具路径 | 用户点名"用现成工具调用接口"；复用的是 external_push 的隔离 ToolRegistry 装配模式——其注册的实为基线 HttpApiTool，全仓库无子类先例，护栏靠循环内逐次纠偏；本设计把约束下沉进子类，比逐次纠偏更强。SSRF 债务不外溢，共享工具债务独立登记 |
+| D9 | 与 http_api 工具的代码关系 | **运行期复用 HttpApiTool 请求层**：占位符 fail-fast、审计（单行 JSON、URL 剥 query、headers 不落盘）是现成能力；**白名单子类为新增代码**——HttpApiTool 现无任何 URL 策略钩子（follow_redirects 直接透传 httpx），子类需自建「解析后 IP 禁令 + pin 连接（§13-8）+ 重定向每跳 host 校验 + 流式响应大小上限（超限截断拒收，§13-9）」切入层，并 override `_substitute_env_vars` 注入 secrets 最高优先级（§13-6，基类只有 subagent_env_vars+进程环境两级）。能力边界：业务错误识别的判据是响应含 `Code` 字段，`status` 型接口（本客户）由契约 `success_check` 自行承担；不改共享工具路径 | 用户点名"用现成工具调用接口"；复用的是 external_push 的隔离 ToolRegistry 装配模式——其注册的实为基线 HttpApiTool，全仓库无子类先例，护栏靠循环内逐次纠偏；本设计把约束下沉进子类，比逐次纠偏更强。SSRF 债务不外溢，共享工具债务独立登记。基类 spill（大响应落盘）语义是"完整保留供排查"，与护栏"拒收超限"语义相反，故不沿用 |
 | D10 | 字段范围与 hash 口径（v2 新增） | 契约把字段分两类：`in_doc`（渲染进文档正文，自动参与 content_hash——进正文的字段一变即判更新，语义正确）；`metadata_only`（易变指标如阅读数/点赞/库存/销量/评分，只进 documents.metadata，不触发重嵌入、不产生计费） | 防成本陷阱：本客户接口的 sales/stock/readcount 等每次同步都变，若进正文则每次全量重嵌入。价格/卖点是否进正文由租户在 dry-run 时确认（进正文=改价即更新） |
 | D11 | 图片与视频（v2 新增） | v1：图片以原始 URL 进 markdown（`![](url)`），视频/头像等非正文资源只进 metadata。Phase 3 可选「转存 + VL 描述」：复用 wechat_mp image_downloader/vision 模式，按张计费 | 外链图片可用性依赖对方图床；VL 转述才有检索价值但成本高，按需后置 |
 | D12 | 结构化数据→语义文本与原始留存（v2.1 新增） | 接口返回的 JSON/XML 键值数据**不裸进知识库**：契约字段带中文 label，模板渲染或通用结构渲染器生成语义化 markdown（扁平对象→「label：值」行、嵌套对象→小节、对象数组→表格）；doc_template 可省略（省略即用通用渲染器）。原始记录 JSON 存 `documents.metadata.raw_payload`（默认 ≤32KB，超出转存租户文件放指针），支撑溯源审计与**模板/管线升级时免重拉接口本地重渲**。契约支持 `response_format: json\|xml`，XML 先标准解析转 JSON 再走同一提取链 | RAG 检索的是语义文本，裸 key-value（英文键名、嵌套 JSON）直接分块入库检索质量差；label 化让「sellpoint: …」变成「商品卖点：…」；raw_payload 留存让 pipeline_version 升级不打对方接口 |
@@ -116,16 +117,18 @@ src/api_ingest/
   "response_format": "json",                    // json | xml（xml 先标准解析转 json 再提取）
   "base_url": "https://hongtaoshop.gzfenxiao.com",
   "list_endpoint": { "method": "GET", "path": "/",
-    "query": { "s": "/ApiExternal/getShopProduct", "aid": 1, "pagenum": "{page}", "pernum": 100 },
+    "query": { "s": "/ApiExternal/getShopProduct", "aid": 1, "pagenum": 1, "pernum": 100 },
+                                                // 页码由引擎按 page_param 注入覆盖；query 模板禁写 {page} 占位符（§13-11）
     "records_path": "$.datalist",
     "success_check": { "path": "$.status", "equals": 1 },
     "pagination": { "type": "page", "page_param": "pagenum",
-                    "stop": "empty|short_page|total_reached", "total_path": "$.total",
+                    "stop": "total_reached",   // 主停止条件三选一（empty|short_page|total_reached）；empty/short_page 恒为兜底（§13-11）
+                    "total_path": "$.total",
                     "max_pages": 50 } },
   "detail_endpoint": null,
   "record": {
     "native_id_path": "$.id",
-    "title_field": "name",                       // 无 doc_template 时作 # 标题
+    "title_field": "name",                       // 无 doc_template 时作 # 标题；支持对象形式 {"field":"content","max_chars":40} 按字符截断派生标题（帖子源用，§13-5）
     "source_updated_at_path": "$.createtime",    // unix 秒；仅展示/排序用，本接口无增量过滤
     "content_format": "html",                    // html|text|md（detail 为富文本 HTML）
     "in_doc_fields": { "name": { "path": "$.name", "label": "商品名称" },
@@ -159,7 +162,7 @@ src/api_ingest/
 
 `secrets`（同表独立列，Fernet 加密）：`${VAR}` 占位符取值，本客户接口无鉴权故为空。source_code：租户内唯一 slug（`^[a-z][a-z0-9_]{1,31}$`），建后不可改。另存 `doc_file`（上传文档引用）、`target_sub_category`、`sync_cursor`、verify 状态与时间戳。`in_doc_fields` 渲染结果整体参与 content_hash；模板字段缺失 → mapping_failed，不静默出空文档。
 
-**契约 DSL 受限子集**（确定性执行要求，contract.py 强校验）：`records_path`/字段 `path` 用 JSONPath 受限子集——仅 `$` 起点的字段访问与数组索引（`$.datalist`、`$.pics[0]`），不支持过滤器/通配符/递归下降；XML 响应按 xmltodict 默认规则转 JSON（属性键 `@` 前缀、文本节点 `#text`）；`doc_template` 为 str.format 风格，字面大括号用 `{{`/`}}` 转义，字段引用支持 `{field}` 与 `{field[0]}` 数组索引。
+**契约 DSL 受限子集**（确定性执行要求，contract.py 强校验）：`records_path`/字段 `path` 用 JSONPath 受限子集——仅 `$` 起点的字段访问与数组索引（`$.datalist`、`$.pics[0]`），不支持过滤器/通配符/递归下降；`get_by_path` 类型严格：索引访问仅对 list 合法、键访问仅对 dict 合法，类型不匹配 → mapping_failed，不静默取首字符（§13-12）；XML 响应按 xmltodict 默认规则转 JSON（属性键 `@` 前缀、文本节点 `#text`），解析必须 `disable_entities=True`；`doc_template` 为 str.format 风格，字面大括号用 `{{`/`}}` 转义，字段引用支持 `{field}` 与 `{field[0]}` 数组索引（无截断语法，标题截断走 `title_field` 对象形式）。
 
 ### 4.1 契约生命周期与变更管理
 
@@ -174,7 +177,7 @@ src/api_ingest/
 
 **bs_api_ingest_records**（记录当前态账本，对齐 bs_wechat_mp_articles）：`record_id PK`、`tenant_id`、`source_id`、`native_id TEXT`、`external_id TEXT`、`content_hash VARCHAR(64)`、`pipeline_version TEXT`、`source_updated_at TIMESTAMP`、`doc_id INTEGER`（→documents.id）、`status(active/missing/deleted)`、`processing_status(pending/success/sync_failed/deferred)`、`last_synced_at/last_checked_at`、`miss_streak INT`（two_strike 计数）、`next_retry_at`、`fail_count`、`error_code/error_message`；`UNIQUE(tenant_id, source_id, native_id)`。与 bs_wechat_mp_articles 的**有意偏离**：公众号 two_strike 是 active→missing→missing_recheck→deleted 状态机，第三步逐条调详情接口复核后才软删；本模块 list_payload 形态无单条接口可复核，改用 `miss_streak` 计数等价实现两击（miss_streak≥2 即软删），`fail_count` 亦为新增列；detail_fetch 模式（Phase 2）可将详情 404 作为逐条复核证据，对齐公众号第三步。
 
-**bs_api_ingest_runs**：`run_id PK`、`tenant_id`、`source_id`、`trigger_type(manual/scheduled/full_scan/retry)`、`status(queued/running/success/partial_failed/failed/skipped_no_credit/interrupted)`、`owner_token + heartbeat_at`、六项计数（new/updated/deleted/skipped/failed/credits_charged）、`cursor_snapshot`；**部分唯一索引 `(tenant_id, source_id) WHERE status='running'`**（同源串行，异源可并行，受 worker Semaphore 约束）。
+**bs_api_ingest_runs**：`run_id PK`、`tenant_id`、`source_id`、`trigger_type(manual/scheduled/full_scan/retry)`、`scope(sync/full，默认 sync；手动 trigger?mode 与调度生成器写入；P1 无增量源时 full 行为等同 sync，P2 增量源 full=忽略游标全量拉取，§13-2)`、`status(queued/running/success/partial_failed/failed/skipped_no_credit/interrupted)`、`owner_token + heartbeat_at`、六项计数（new/updated/deleted/skipped/failed/credits_charged）、`cursor_snapshot`；**部分唯一索引 `(tenant_id, source_id) WHERE status='running'`**（同源串行，异源可并行，受 worker Semaphore 约束）。
 
 **bs_api_ingest_items**：`UNIQUE(run_id, record_id)`、`action(new/update/check/delete/restore)`、`status(pending/running/success/skipped/failed/interrupted)`、`error_code`、计费三字段。error_code 固定白名单（中文文案）：`no_credit / fetch_failed / auth_failed / contract_invalid / parse_failed / mapping_failed / record_missing / content_empty / internal_error`。
 
@@ -193,8 +196,9 @@ src/api_ingest/
 ### 6.3 处理管道（`_process_item`，两模式共用）
 
 1. 取 payload（XML 响应先转 JSON）→ in_doc 字段映射 + HTML→markdown（通用转换：html.parser 去 script/style，保留标题/列表/表格文本语义，`<img>` 转 markdown 图）→ 语义化渲染：有 doc_template 按模板；无模板用通用结构渲染器（title 字段作 `#` 标题，逐字段「label：值」行，嵌套对象→小节，对象数组→markdown 表格）。字段缺失 → mapping_failed，不静默出空文档。
-2. `content_hash = sha256(pipeline_version + doc_template 指纹 + in_doc 字段规整序列)`，模板指纹 = doc_template 全文 sha256（无模板记 `"generic"`）——模板改动必触发内容重判，不依赖 content_rev；metadata_only 字段只落 documents.metadata。
-3. hash 相同 且 doc active 且 pipeline 相同 → `_handle_check_unchanged`（零计费跳过；metadata_only 值**先比对后写**——无变化完全不写 documents 行，避免每轮全表 UPDATE 与 updated_at 抖动，有变化才 UPDATE metadata）；doc 被软删 → `_handle_restore`；doc 行缺失 → 重建（用户在知识库侧删除已由回写分支同步置 record deleted，正常不会走到重建，见「删除联动」）。
+2. `content_hash = sha256(pipeline_version + doc_template 指纹 + in_doc 字段规整序列 + granularity 规整串)`，模板指纹 = doc_template 全文 sha256（无模板记 `"generic"`），granularity 规整串 = `mode/whole_max_chars/chunk_size/overlap`（改粒度必触发内容重判与重嵌入，§13-10）——模板或粒度改动必触发内容重判，不依赖 content_rev；metadata_only 字段只落 documents.metadata。
+3. hash 相同 且 doc active 且 pipeline 相同 → `_handle_check_unchanged`（零计费跳过；metadata_only 值**先比对后写**——无变化完全不写 documents 行，避免每轮全表 UPDATE 与 updated_at 抖动，有变化才 UPDATE metadata）；doc 被软删 → `_handle_restore`；doc 行缺失 → 重建（计费，等同"重新发布"语义）。
+   **deleted 记录重现规则**（对齐公众号 deleted 重现先例 wechat_mp/service.py「仅源时间变化才恢复」；list_payload 手中即全量数据，增加 hash 变化为第二触发）：record `status='deleted'` 且本轮 fetched 集重现——`source_updated_at` 变化**或**渲染 hash 变化 → 置回 active 走 new/update（two_strike 软删有 chunks 也须重嵌入计费；用户删除后 doc 已物理删即重建计费）；两者均未变（含渲染/mapping 失败，无法比较时）→ 保持 deleted 静默跳过零计费。`status='missing'` 重现 → 置回 active（hash 未变走 check_unchanged 零计费）并清零 miss_streak。不新增 deleted_by 列：两种删除来源在上述规则下行为一致，差异（chunks 是否留存）由 doc 行是否存在自然承载。
 4. 可选 `template+summary`：LLM 生成 ≤500 字摘要（超时重试 1 次，失败回退原文，对齐公众号 summarize）。
 5. 按契约 granularity 落块：`whole` 模式整条 1 个 chunk（超 `whole_max_chars`，字符口径、硬上限 ≤6000 字符护栏，逐记录回退 TextChunker 切分并记 `metadata.granularity_overflow`）；`chunked` 模式 TextChunker（chunk_size/overlap 可按契约覆盖）。随后 `_persist_document_tx` 单事务：documents `INSERT ... ON CONFLICT (tenant_id, origin, external_id)` / UPDATE 覆盖 + chunks/chunks_vec 删旧重建 + record/item 终态 + 惰性建分类。metadata 记 `raw_payload`（原始记录 JSON，按契约 max_kb 截断、超出转存租户文件放指针）+ metadata_only 字段值（含 label）+ `granularity/overflow 标记` + 溯源（source_code/native_id/run_id/content_mode/pipeline_version/ingested_at）。whole 模式下一个产品 = 一条知识 = 一个检索单元，检索命中即完整产品，不自我拆分占用多个 top-k 名额。
 6. 计费 fail-open：embedding 复用 `_record_knowledge_embedding_billing`（source_type=`api_ingest_embedding`），摘要 `api_ingest_summary`；no_credit 走退避且 run 终态 `skipped_no_credit`。
@@ -210,7 +214,8 @@ src/api_ingest/
 - `max_items_per_run` 是保险丝不是常规路径：默认配置应覆盖源全量（本客户 200 > 记录总数），触顶即异常信号。
 - **可靠性判定拆两半**：抓取完整（分页走完 + total 核对/分页耗尽）与条目处理完整（本 run items 全部终态）缺一不可；任一不满足 → run 终态 `partial_failed`，**不做删除对账、不推进任何 record 的 miss_streak**，只落已处理 items。
 - 截断后续跑：无增量过滤参数的源**不依赖游标续跑**——下一轮 scheduled run 全量重来，靠 hash 跳过已处理记录（百级量级成本可忽略），规则简单优于游标精确；`sync_cursor` 仅用于有增量过滤参数的源记录增量水位。
-- 连续 3 轮 `partial_failed` → 源级 `last_error` 告警日志，提示调大 max_items_per_run 或排查单条耗时。
+- 连续 3 轮 `partial_failed` → 源级 `last_error` 告警日志，提示调大 max_items_per_run 或排查单条耗时（跨 run 计数属调度治理，归 P2.1）。
+- **对账归属（§13-2）**：删除对账门禁**数据驱动、与 trigger_type 无关**——任何 run（manual/scheduled/retry）满足「抓取完整 + total 核对一致 + items 全终态」即推进 miss_streak，并推进源级 `last_full_scan_at`。无增量过滤参数的源（本客户）scheduled sync 即全量，每轮对账，调度生成器③（full_scan）的条件「距最近满足门禁 run 超过 full_scan_interval_hours」自然不触发；有增量过滤参数的源 sync run 拉不全、门禁不满足，由生成器③的全量 run 负责对账。
 
 ### 6.5 detail_fetch 模式执行语义（Phase 2）
 
@@ -241,9 +246,14 @@ src/api_ingest/
 
 租户端另有 `GET /runs`、`GET /runs/{id}`、`GET /records`（status 过滤）、`POST /records/{id}/retry`、源 CRUD + `POST /sources/{id}/verify` + 文档上传（复用租户配置文件存储）；平台端 `GET /portal/runs|/portal/sources` 跨租户审计（platform_admin）。
 
+- **verify 语义（§13-4）**：人工确认动作而非重新实探——置 `verify_status=verified` + 时间戳 + 操作者；「置信度≥0.8 自动通过其余字段」=这些字段无需逐项人工核对即可被 verify 接受，**allowed_hosts 不豁免**：请求体必须携带 `allowed_hosts_confirmed: true`（前端展示域名清单，管理员勾选），否则 400。状态机：`verify_status(unverified→verified)`；契约修改（content_rev+1）→ unverified + 源置 disabled，需重新 dry-run+verify；`status(enabled/disabled)` 为独立开关（PATCH 可切）；调度条件 = `status='enabled' AND verify_status='verified'`；auth_failed 停调度 = 置 disabled + last_error，恢复需重新 verify。
+- **retry 语义（§13-3）**：`POST /records/{id}/retry` 触发一次 `trigger_type='retry'` 的源级 queued run（list_payload 无单条接口，不做本地重处理、不留存失败 payload）；failed/deferred record 必然被重处理，其余 hash 跳过零计费；retry 同时清该 record 的 `next_retry_at`。P2 detail_fetch 可优化为仅拉该条。
+- **secrets 录入（§13-13）**：`PATCH /sources/{id}` 接受可选 `secrets` 对象（`{VAR: value}` 整体替换，加密落库），`POST /sources` 建源亦可带；GET/响应只回变量名列表 + 掩码，不回值。
+- **上传格式与上限（§13-14）**：扩展名 `{.txt,.md,.markdown,.json,.yaml,.yml}`，上限 2MB，存储于 `storage/tenants/{tid}/api_ingest/`（独立于 subagent templates 目录）；.pdf 不做（Phase 3+ 可选登记）。
+
 ## 9. 安全与治理
 
-- **SSRF**：三层防线。① `allowed_hosts` 域名白名单（契约生成期实探、保存时、运行期逐请求含重定向后每跳 host 校验）；② **私网禁令（新增，白名单不可豁免）**——allowed_hosts 来自租户上传文档属不可信输入，白名单挡不住「租户指定内网地址」：host 为 IP 字面量或 DNS 解析后任一 A/AAAA 记录命中私网/保留/回环/链路本地段（含 169.254.169.254）即拒绝，校验解析结果而非域名以防 DNS rebinding；③ **host 清单强制人审**——高置信度自动通过不豁免 allowed_hosts 确认，首次启用前管理员必须核对目标域名清单。运行期校验由 HttpApiTool 白名单子类承载，共享工具的 SSRF 债务不外溢、独立登记。
+- **SSRF**：三层防线。① `allowed_hosts` 域名白名单（契约生成期实探、保存时、运行期逐请求含重定向后每跳 host 校验）；② **私网禁令（新增，白名单不可豁免）+ DNS pin（§13-8）**——allowed_hosts 来自租户上传文档属不可信输入，白名单挡不住「租户指定内网地址」：host 为 IP 字面量或 DNS 解析后任一 A/AAAA 记录命中私网/保留/回环/链路本地段（含 169.254.169.254）即拒绝；**校验与连接共享同一次解析**（消除 rebinding TOCTOU 窗口）：`PinnedAsyncHTTPTransport(httpx.AsyncHTTPTransport)` 在 `handle_async_request` 内解析→校验→URL host 改写为通过校验的 IP、Host 头保留原域名、`extensions["sni_hostname"]=原域名`（SNI 与证书校验均对原域名），重定向手动逐跳每跳重走该 transport；若当前 httpx 版本不支持 sni_hostname 扩展（P1.3 首日 spike 验证），退化为「60s DNS 解析缓存 + 声明残余窗口」并登记风险表；③ **host 清单强制人审**——高置信度自动通过不豁免 allowed_hosts 确认（verify 请求体 `allowed_hosts_confirmed: true`），首次启用前管理员必须核对目标域名清单。运行期校验由 HttpApiTool 白名单子类承载，共享工具的 SSRF 债务不外溢、独立登记。
 - **凭证**：secrets 加密落库；日志/审计/错误信息一律脱敏（复用 `sanitize_error_info`，位于 knowledge/embedding/embedding_client.py，wechat_mp 同款用法）；占位符未解析 fail-fast 拒发（继承 http_api Code=-99 事故教训）；契约生成期凭证不进 LLM 上下文。
 - **审计**：executor 独立审计日志（仿 http_api audit：单行 JSON、URL 剥 query、headers 不落盘）。
 - **可观测**：run/item 两级账本 + 源级时间戳（last_sync_at/last_full_scan_at/last_error）+ portal 审计视图；无外部告警通道，与公众号现状一致（诚实声明）。
@@ -285,3 +295,25 @@ src/api_ingest/
 | 结构化→语义文本 | 契约字段中文 label（商品名称/商品卖点/售价(元)/已售/评分…）+ 模板渲染语义化 markdown（无模板走通用结构渲染器）；原始记录 JSON 存 metadata.raw_payload（本接口单条含 detail HTML，体积远小于 32KB 上限），模板/管线升级可免重拉本地重渲 |
 | 知识粒度 | 商品源 `granularity=whole`（一条商品=一条知识，检索命中即完整商品）；dry-run 按样例渲染后**字符长度分布**定，个别超大详情商品逐记录回退切分并标 overflow；帖子源 content 为长文 → agent 在契约生成期决定 chunked 或 auto（dry-run 展示 p95 字符数与切块数依据） |
 | 待实现期确认 | detail 富文本实际标签复杂度（决定 HTML 转换器打磨点）；pics 外链图床可达性与防盗链（影响 Phase 3 转存决策）；商品 `status`（1 上架）是否同步下架语义（下架→删除 or metadata_only 标记，dry-run 定） |
+
+## 13. 开发前澄清决议（2026-09-21 v2.3，15 项）
+
+开发智能体开发前核对代码事实后提出的 15 项澄清，决议如下（各项已同步回正文相应章节）：
+
+| # | 问题 | 决议 |
+|---|------|------|
+| 1 | 用户删除与 two_strike 删除的 `deleted` 不可区分；list 模式每轮重遇该记录走哪条路 | 不加 deleted_by 列。`deleted` 记录重现：`source_updated_at` 变化**或**渲染 hash 变化 → 置回 active 走 new/update（用户删除后 doc 已物理删即重建计费，等同"重新发布"语义）；均未变（含渲染失败无法比较）→ 保持 deleted 静默跳过零计费。`missing` 重现 → 置回 active、清零 miss_streak（内容未变走 check_unchanged 零计费）。对齐公众号先例（wechat_mp/service.py deleted 行仅源时间变化才恢复），hash 变化为第二触发因 list_payload 手中即全量数据、比较零成本 |
+| 2 | sync run 与 full_scan run 的对账归属；runs 表无模式列 | 对账门禁**数据驱动、与 trigger_type 无关**：任何 run 满足「抓取完整+total 核对+items 全终态」即推进 miss_streak 并推进 `last_full_scan_at`。无增量参数源（本客户）sync 即全量、每轮对账，调度生成器③自然不触发；增量源 sync 拉不全、门禁不满足，由③负责。runs 表增 `scope(sync/full)` 列（默认 sync，P1 中 full 行为等同 sync）。P1.4 mark_only = 推进 miss_streak、置 missing、不动 documents；「miss_streak≥2 软删 documents」在 P2.2；「连续 3 轮 partial_failed 置源级 last_error」归 P2.1 |
+| 3 | `POST /records/{id}/retry` 在 list_payload 模式下做什么 | 触发一次 `trigger_type='retry'` 的源级 queued run（无单条接口，不做本地重处理、不留存失败 payload）；failed/deferred record 必然重处理，其余 hash 跳过零计费；retry 清该 record 的 `next_retry_at`。P2 detail_fetch 可优化为仅拉该条 |
+| 4 | verify 的确切语义与源状态机 | verify = 人工确认动作（非重新实探）：置 verified+时间戳+操作者；「≥0.8 自动通过其余字段」=无需逐项人工核对即可被 verify 接受，**allowed_hosts 不豁免**——请求体必须带 `allowed_hosts_confirmed:true` 否则 400。契约修改 → verify_status=unverified + disabled，重新 dry-run+verify；enabled/disabled 独立开关；调度条件 = enabled AND verified；auth_failed → disabled+last_error，恢复需重新 verify |
+| 5 | 帖子源标题派生 DSL 缺失 | `title_field` 支持对象形式 `{"field":"content","max_chars":40}`：按字符截断（加省略号）作 `#` 标题与 documents.title；字符串形式保持全量引用；模板 `{field}` 语法不扩展截断 |
+| 6 | secrets 解析层在 http_api 中不存在 | 事实确认：`_substitute_env_vars`（http_api.py:358）仅 subagent_env_vars+进程环境两级。子类 override 该函数：先查解密 secrets，未命中调 super()。优先级 secrets > subagent_env_vars > 进程环境（D3 原序，租户为源显式配置压倒全局变量）。fail-fast 沿用 `_find_unresolved_vars`，错误文案仅占位符名不含值（现有实现即如此，加单测断言） |
+| 7 | xmltodict 非现有依赖；markdownify 已存在 | xmltodict 允许新增（`xmltodict>=0.13`），解析必须 `disable_entities=True`（拒 XXE/实体膨胀），加单测。html_to_markdown 放弃自写 html.parser，改 markdownify+bs4 包装（既有依赖，wechat_mp 在用）：bs4 预删 script/style，markdownify ATX headings |
+| 8 | DNS rebinding TOCTOU 窗口 | 决议 pin（校验与连接共享同一次解析）：`PinnedAsyncHTTPTransport(httpx.AsyncHTTPTransport)` 在 `handle_async_request` 内解析→校验→URL host 改写为通过校验 IP、Host 头保留原域名、`extensions["sni_hostname"]=原域名`（SNI 与证书校验均对原域名）；重定向逐跳每跳重走该 transport。P1.3 首日 spike 验证 sni_hostname 扩展；不支持则退化「60s DNS 缓存+声明残余窗口」登记风险表 |
+| 9 | max_response_mb 流式截断 vs http_api spill | 新代码流式读（`client.stream` 逐块累计），超限即停止读取，已读部分标记 `response_truncated`，**剩余不落盘**（不沿用 spill——护栏语义是拒收而非完整保留）；截断体随后解析失败 → run failed、error_code=parse_failed、error_message 注明超限截断。max_response_mb 同时约束内存与磁盘 |
+| 10 | granularity 变更不触发重嵌入 | content_hash 输入增加 granularity 规整串（`mode/whole_max_chars/chunk_size/overlap`）。改粒度 → 全量重嵌入（§4.1 影响面加此条，dry-run 提示预计条数） |
+| 11 | pagination 两处歧义 | `stop` 为主停止条件**三选一**；`empty`/`short_page` 恒为兜底（遇空页/短页即停，无需声明）；`max_pages` 恒为硬上限。页码单一来源 = `page_param`：契约校验**拒绝 query 模板含 `{page}` 占位符**，引擎按 page_param 注入覆盖（示例契约 `"pagenum":1`） |
+| 12 | `{pics[0]}` 对字符串字段的行为；api.txt 原文不在仓库 | `get_by_path` 类型严格：索引访问仅对 list、键访问仅对 dict，不匹配 → mapping_failed（不静默取首字符）；P1 无 split DSL，字符串形态整串引用，字段真实形态以实探样例为准。api.txt 原文需客户提供，脱敏后放 `docs/system/api-ingest/samples/` 供 P1.2/P1.5 验收；到位前单测用构造样例（数组+字符串两形态） |
+| 13 | secrets 录入端点未定义 | `PATCH /sources/{id}` 接受可选 `secrets` 对象（整体替换、加密落库），`POST /sources` 建源亦可带；GET/响应只回变量名列表+掩码。无独立 secrets 端点 |
+| 14 | 文档上传格式与大小 | 扩展名 `{.txt,.md,.markdown,.json,.yaml,.yml}`，上限 2MB，存储 `storage/tenants/{tid}/api_ingest/`；.pdf 不做（Phase 3+ 可选登记）。先例 tenant_config_file.py 的 {.md}/1MB 不适用（那是 subagent API 文档场景） |
+| 15 | P1 期间余额不足行为 | P1 带简单预检：trigger 时读租户 embedding 余额，≤0 → run 直接终态 `skipped_no_credit` 不拉取；运行中计费余额不足按 fail-open 照记账目（可能负余额，由既有账务体系处理），已入库数据不回滚。完整 no_credit 退避治理 P2.2 |
