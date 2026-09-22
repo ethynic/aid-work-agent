@@ -435,6 +435,88 @@ class KnowledgeBaseService:
             logger.opt(exception=True).error(f"更新分类失败: {e}")
             return {"success": False, "error": "更新分类失败"}
 
+    def move_category(self, category_id: int, tenant_id: str, target_parent_id: int) -> Dict[str, Any]:
+        """移动子分类到目标父分类下（顶级分类不可移动）。
+        规则：顶级分类的 source_type 是 documents.source_type 与授权配置的锚点，禁止移动；
+        目标不能是自身或其子孙；跨顶级移动时子树文档的 source_type（恒存顶级代号）批量回填为新顶级代号。
+        返回 {success, moved_documents}；moved_documents 为跨顶级回填的文档数（同顶级移动为 0）。"""
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT id, source_type, parent_id FROM knowledge_categories WHERE tenant_id = %s",
+                    (tenant_id,)
+                )
+                rows = cursor.fetchall()
+                by_id = {r["id"]: r for r in rows}
+                cat = by_id.get(category_id)
+                if not cat:
+                    return {"success": False, "error": "分类不存在", "status": 404}
+                if cat["parent_id"] is None:
+                    return {"success": False, "error": "顶级分类不可移动", "status": 400}
+                target = by_id.get(target_parent_id)
+                if not target:
+                    return {"success": False, "error": "目标父分类不存在", "status": 404}
+                if target["id"] == cat["id"]:
+                    return {"success": False, "error": "目标父分类不能是当前分类自身", "status": 400}
+                # 沿目标父分类向上走祖先链，命中当前分类说明目标位于其子树内
+                walk_id = target["id"]
+                depth = 0
+                while walk_id is not None and depth < 100:
+                    if walk_id == cat["id"]:
+                        return {"success": False, "error": "目标父分类不能是当前分类的子分类", "status": 400}
+                    walk_row = by_id.get(walk_id)
+                    if not walk_row:
+                        return {"success": False, "error": "子分类层级异常（父分类记录缺失）", "status": 400}
+                    walk_id = walk_row["parent_id"]
+                    depth += 1
+
+                def _root_source_type(start_id: int) -> str:
+                    node = by_id[start_id]
+                    depth = 0
+                    while node["parent_id"] is not None and depth < 100:
+                        node = by_id[node["parent_id"]]
+                        depth += 1
+                    return node["source_type"]
+
+                old_root = _root_source_type(cat["parent_id"])
+                new_root = _root_source_type(target["id"])
+
+                children = {}  # parent_id -> [child_id]
+                for r in rows:
+                    children.setdefault(r["parent_id"], []).append(r["id"])
+                subtree_codes = [cat["source_type"]]
+                stack = list(children.get(cat["id"], []))
+                while stack:
+                    cid = stack.pop()
+                    subtree_codes.append(by_id[cid]["source_type"])
+                    stack.extend(children.get(cid, []))
+
+                cursor.execute("""
+                    UPDATE knowledge_categories SET parent_id = %s, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = %s AND tenant_id = %s
+                """, (target_parent_id, category_id, tenant_id))
+                if cursor.rowcount == 0:
+                    return {"success": False, "error": "分类不存在"}
+                moved_documents = 0
+                if old_root != new_root:
+                    # documents.source_type 恒存顶级分类代号，子树内文档（sub_category 指向子树内分类代号）需回填
+                    cursor.execute(
+                        "UPDATE documents SET source_type = %s, updated_at = CURRENT_TIMESTAMP "
+                        "WHERE tenant_id = %s AND sub_category = ANY(%s)",
+                        (new_root, tenant_id, subtree_codes)
+                    )
+                    moved_documents = cursor.rowcount
+                conn.commit()
+            logger.info(
+                f"后端日志：分类移动成功，category_id={category_id}, 目标父分类={target_parent_id}, "
+                f"顶级分类 {old_root} -> {new_root}, 回填文档数={moved_documents}"
+            )
+            return {"success": True, "moved_documents": moved_documents}
+        except Exception as e:
+            logger.opt(exception=True).error(f"移动分类失败: {e}")
+            return {"success": False, "error": "移动分类失败", "debug": sanitize_error_info(str(e))}
+
     def delete_category(self, category_id: int, tenant_id: str) -> Dict[str, Any]:
         """删除分类（仅删记录，不删文档；含子分类的分类禁止删除）"""
         from src.services.data_analysis.constants import (

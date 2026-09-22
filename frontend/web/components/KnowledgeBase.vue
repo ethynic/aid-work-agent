@@ -400,7 +400,7 @@
     </BaseModal>
 
     <!-- Rename Category Modal -->
-    <BaseModal v-model="showRenameCategoryModal" title="重命名分类" size="md" mode="edit">
+    <BaseModal v-model="showRenameCategoryModal" title="编辑分类" size="md" mode="edit">
       <div class="space-y-4">
         <div>
           <label class="text-sm text-muted mb-1 block">英文代号</label>
@@ -410,10 +410,58 @@
           <label class="text-sm text-muted mb-1 block">分类名称 <span class="text-danger-500">*</span></label>
           <BaseInput v-model="renameCategoryDisplayName" />
         </div>
+        <div>
+          <label class="text-sm text-muted mb-1 block">所属父栏目</label>
+          <div v-if="renameCategoryParentId != null" class="flex items-center gap-2">
+            <div class="flex-1">
+              <BaseInput :model-value="renameCategoryPath.join(' / ')" disabled />
+            </div>
+            <BaseButton intent="secondary" @click="openMoveCategory">移动</BaseButton>
+          </div>
+          <p v-else class="text-sm text-muted">顶级栏目，不支持移动</p>
+        </div>
       </div>
       <template #footer>
         <BaseButton intent="secondary" @click="showRenameCategoryModal = false">取消</BaseButton>
         <BaseButton :disabled="isRenamingCategory" @click="handleRenameCategory">{{ isRenamingCategory ? '保存中...' : '保存' }}</BaseButton>
+      </template>
+    </BaseModal>
+
+    <!-- Move Category Modal -->
+    <BaseModal v-model="showMoveCategoryModal" title="移动栏目到目标父栏目" size="md" mode="edit">
+      <div class="mb-4 p-3 bg-canvas rounded-lg">
+        <p class="text-sm text-default">
+          将把「<span class="font-medium text-primary-600">{{ renameCategoryDisplayName }}</span>」移动到目标父栏目下
+        </p>
+      </div>
+      <div v-if="moveCategoryTargetId != null" class="mb-4 p-3 bg-primary-50 rounded-lg">
+        <p class="text-sm text-default">
+          目标父栏目：<span class="font-medium text-primary-700">{{ moveCategoryTargetPath.join(' / ') }}</span>
+        </p>
+      </div>
+      <div v-if="isCrossTopMove" class="mb-4 p-3 bg-warning-50 rounded-lg">
+        <p class="text-sm text-warning-700">
+          目标顶级栏目与当前不同，该栏目下 {{ renameCategoryDocCount }} 篇文档将同步变更所属顶级栏目，相关授权配置需检查
+        </p>
+      </div>
+      <div class="max-h-[50vh] overflow-auto border border-default rounded-lg p-2">
+        <CategoryTreeItem
+          v-for="cat in moveCategoryTree"
+          :key="cat.id"
+          :category="cat"
+          :depth="0"
+          :selected-source-type="moveCategoryTargetSourceType"
+          :selected-sub-category="moveCategoryTargetSubCategory"
+          :show-actions="false"
+          :default-expanded="true"
+          @select="handleMoveCategoryTargetSelect"
+        />
+      </div>
+      <template #footer>
+        <BaseButton intent="secondary" @click="showMoveCategoryModal = false">取消</BaseButton>
+        <BaseButton :disabled="moveCategoryTargetId == null || isMovingCategory" @click="confirmMoveCategory">
+          {{ isMovingCategory ? '移动中...' : '移动' }}
+        </BaseButton>
       </template>
     </BaseModal>
 
@@ -567,7 +615,7 @@ import {
   listDocuments, deleteDocument, uploadDocument, searchDocuments, downloadDocument,
   moveDocuments,
   type DocumentResponse, type SearchResultItem,
-  listCategories, createCategory, updateCategory, deleteCategory,
+  listCategories, createCategory, updateCategory, deleteCategory, moveCategory,
   type CategoryResponse,
   getDocumentChunks, type ChunkResponse,
   getDocumentDetail, type DocumentDetail
@@ -658,6 +706,7 @@ const showRenameCategoryModal = ref(false)
 const renameCategoryId = ref<number | null>(null)
 const renameCategorySourceType = ref('')
 const renameCategoryDisplayName = ref('')
+const renameCategoryParentId = ref<number | null>(null)
 const isRenamingCategory = ref(false)
 
 // ========== 文档状态 ==========
@@ -1052,6 +1101,7 @@ function openRenameCategory(cat: CategoryResponse) {
   renameCategoryId.value = cat.id
   renameCategorySourceType.value = cat.source_type
   renameCategoryDisplayName.value = cat.display_name || cat.source_type
+  renameCategoryParentId.value = cat.parent_id
   showRenameCategoryModal.value = true
 }
 
@@ -1067,11 +1117,114 @@ async function handleRenameCategory() {
     await updateCategory(renameCategoryId.value, name)
     showRenameCategoryModal.value = false
     await loadCategories()
-    toast.success('分类重命名成功')
+    toast.success('分类更新成功')
   } catch (e: any) {
-    toast.error(e.message || '重命名失败')
+    toast.error(e.message || '更新失败')
   } finally {
     isRenamingCategory.value = false
+  }
+}
+
+// ========== 移动栏目 ==========
+
+const showMoveCategoryModal = ref(false)
+const moveCategoryTargetId = ref<number | null>(null)
+const moveCategoryTargetSourceType = ref<string | null>(null)
+const moveCategoryTargetSubCategory = ref<string | null>(null)
+const isMovingCategory = ref(false)
+
+// 剪掉当前栏目节点（连带整个子树），目标列表自然排除自身与所有子孙
+function pruneCategoryNode(nodes: CategoryTreeNode[], id: number): CategoryTreeNode[] {
+  return nodes
+    .filter(n => n.id !== id)
+    .map(n => ({ ...n, children: pruneCategoryNode(n.children, id) }))
+}
+
+const moveCategoryTree = computed<CategoryTreeNode[]>(() =>
+  renameCategoryId.value != null
+    ? pruneCategoryNode(categoryTree.value, renameCategoryId.value)
+    : categoryTree.value
+)
+
+function categoryPathById(id: number): string[] {
+  const path: string[] = []
+  let current = categories.value.find(c => c.id === id)
+  while (current) {
+    path.unshift(current.display_name || current.source_type)
+    current = current.parent_id != null
+      ? categories.value.find(c => c.id === current!.parent_id)
+      : undefined
+  }
+  return path
+}
+
+// 编辑弹框中当前父栏目的完整路径
+const renameCategoryPath = computed<string[]>(() =>
+  renameCategoryParentId.value != null ? categoryPathById(renameCategoryParentId.value) : []
+)
+
+const moveCategoryTargetPath = computed<string[]>(() =>
+  moveCategoryTargetId.value != null ? categoryPathById(moveCategoryTargetId.value) : []
+)
+
+function rootCategoryIdOf(id: number): number | null {
+  let current = categories.value.find(c => c.id === id)
+  while (current && current.parent_id != null) {
+    current = categories.value.find(c => c.id === current!.parent_id)
+  }
+  return current ? current.id : null
+}
+
+// 跨顶级移动时后端会回填子树文档的 source_type，需警示
+const isCrossTopMove = computed(() =>
+  renameCategoryParentId.value != null &&
+  moveCategoryTargetId.value != null &&
+  rootCategoryIdOf(renameCategoryParentId.value) !== rootCategoryIdOf(moveCategoryTargetId.value)
+)
+
+const renameCategoryDocCount = computed(() => {
+  const node = findCategoryNode(categoryTree.value, renameCategoryId.value ?? -1)
+  return node ? node.document_count : 0
+})
+
+function openMoveCategory() {
+  moveCategoryTargetId.value = null
+  moveCategoryTargetSourceType.value = null
+  moveCategoryTargetSubCategory.value = null
+  showRenameCategoryModal.value = false
+  showMoveCategoryModal.value = true
+}
+
+function handleMoveCategoryTargetSelect(cat: CategoryTreeNode) {
+  moveCategoryTargetId.value = cat.id
+  moveCategoryTargetSourceType.value = cat.parent_id === null
+    ? cat.source_type
+    : (cat.rootSourceType || cat.source_type)
+  moveCategoryTargetSubCategory.value = cat.parent_id === null ? null : cat.source_type
+}
+
+async function confirmMoveCategory() {
+  if (renameCategoryId.value == null || moveCategoryTargetId.value == null) return
+  if (moveCategoryTargetId.value === renameCategoryParentId.value) {
+    toast.warning('目标父栏目与当前父栏目相同，无需移动')
+    return
+  }
+  isMovingCategory.value = true
+  try {
+    const result = await moveCategory(renameCategoryId.value, moveCategoryTargetId.value)
+    showMoveCategoryModal.value = false
+    await loadCategories()
+    await loadDocuments()
+    if (result.moved_documents && result.moved_documents > 0) {
+      toast.success(`移动成功，${result.moved_documents} 篇文档已同步变更所属顶级栏目`)
+    } else {
+      toast.success('栏目移动成功')
+    }
+  } catch (e: any) {
+    console.error('前端日志：移动栏目失败', e)
+    toast.error(e.message || '移动栏目失败')
+  } finally {
+    isMovingCategory.value = false
   }
 }
 

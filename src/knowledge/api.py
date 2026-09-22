@@ -106,6 +106,10 @@ class MoveDocumentsRequest(BaseModel):
     sub_category: Optional[str] = None  # 目标直接所属子分类代号，顶级分类下为 None
 
 
+class MoveCategoryRequest(BaseModel):
+    target_parent_id: int  # 目标父分类 ID（顶级分类不可移动，目标不能是自身或其子孙）
+
+
 class CreateCategoryRequest(BaseModel):
     source_type: Optional[str] = None  # 分类英文代号，不传时后端自动生成
     display_name: Optional[str] = None
@@ -183,6 +187,22 @@ async def update_category(category_id: int, request: UpdateCategoryRequest, http
     if not result.get("success"):
         return JSONResponse(status_code=404, content={"success": False, "error": result.get("error", "更新失败")})
     return {"success": True}
+
+
+@router.post("/categories/{category_id}/move")
+@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.KNOWLEDGE_CATEGORY, id_arg="category_id")
+async def move_category(category_id: int, request: MoveCategoryRequest, http_request: Request = None):
+    """移动分类到目标父分类下（顶级分类不可移动；跨顶级移动时同步回填子树文档 source_type）"""
+    tenant_id = get_current_tenant_id()
+    result = knowledge_service.move_category(category_id, tenant_id, request.target_parent_id)
+    if not result.get("success"):
+        status_code = result.get("status", 400)
+        return JSONResponse(status_code=status_code, content={
+            "success": False,
+            "error": result.get("error", "移动失败"),
+            "debug": result.get("debug", result.get("error", ""))
+        })
+    return result
 
 
 @router.delete("/categories/{category_id}")

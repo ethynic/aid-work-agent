@@ -336,6 +336,12 @@ export interface CategoryListResponse {
   items: CategoryResponse[]
 }
 
+export interface MoveCategoryResponse {
+  success: boolean
+  moved_documents?: number
+  error?: string
+}
+
 /**
  * 获取知识库分类列表
  */
@@ -383,6 +389,25 @@ export async function updateCategory(categoryId: number, displayName: string): P
   const result = await response.json()
   if (!response.ok) {
     throw new Error(result.error || '更新分类失败')
+  }
+  return result
+}
+
+/**
+ * 移动分类到目标父分类下（顶级分类不可移动；跨顶级移动时后端同步回填子树文档 source_type）
+ */
+export async function moveCategory(categoryId: number, targetParentId: number): Promise<MoveCategoryResponse> {
+  const response = await fetch(`${API_BASE}/categories/${categoryId}/move`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...getAuthHeader()
+    },
+    body: JSON.stringify({ target_parent_id: targetParentId })
+  })
+  const result = await response.json()
+  if (!response.ok || result.success === false) {
+    throw new Error(result.error || '移动分类失败')
   }
   return result
 }
