@@ -1030,3 +1030,38 @@
     FROM documents d
     WHERE d.source_type = 'data-analysis-metadata' AND d.tenant_id IS NOT NULL
     ON CONFLICT (tenant_id, source_type) DO NOTHING;
+- datetime: "2026-09-22 19:45:00"
+  remark: "reply_styles 增加安全审计表与触发器（记录 DELETE/UPDATE/TRUNCATE 的 db_user/client_addr/application_name）——2026-09-22 排查生产风格表被直连 SQL 两次清空（无任何审计痕迹）后加装观察点；属安全审计非业务逻辑，故使用触发器实现（database_dev.md 禁忌的例外，理由见 docs/ops/log-warning-audit-20260922.md #3）"
+  statements: |
+    CREATE TABLE IF NOT EXISTS reply_styles_audit (
+        id SERIAL PRIMARY KEY,
+        op TEXT NOT NULL,
+        old_row JSONB,
+        new_row JSONB,
+        db_user TEXT,
+        client_addr TEXT,
+        application_name TEXT,
+        happened_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE OR REPLACE FUNCTION fn_reply_styles_audit() RETURNS trigger AS $$
+    BEGIN
+        INSERT INTO reply_styles_audit (op, old_row, new_row, db_user, client_addr, application_name)
+        VALUES (
+            TG_OP,
+            CASE WHEN TG_OP IN ('DELETE', 'UPDATE') THEN to_jsonb(OLD) END,
+            CASE WHEN TG_OP IN ('INSERT', 'UPDATE') THEN to_jsonb(NEW) END,
+            current_user,
+            inet_client_addr()::text,
+            current_setting('application_name', true)
+        );
+        RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE COALESCE(NEW, OLD) END;
+    END;
+    $$ LANGUAGE plpgsql;
+    DROP TRIGGER IF EXISTS trg_reply_styles_audit ON reply_styles;
+    CREATE TRIGGER trg_reply_styles_audit
+    AFTER INSERT OR UPDATE OR DELETE ON reply_styles
+    FOR EACH ROW EXECUTE FUNCTION fn_reply_styles_audit();
+    DROP TRIGGER IF EXISTS trg_reply_styles_audit_truncate ON reply_styles;
+    CREATE TRIGGER trg_reply_styles_audit_truncate
+    AFTER TRUNCATE ON reply_styles
+    FOR EACH STATEMENT EXECUTE FUNCTION fn_reply_styles_audit();

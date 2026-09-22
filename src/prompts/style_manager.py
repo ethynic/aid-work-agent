@@ -21,6 +21,7 @@ class StyleManager:
         self._disk_styles: dict = {}      # style_id -> content（磁盘 fallback）
         self._last_load_time: float = 0
         self._db_loaded: bool = False
+        self._last_loaded_count: int = 0
         self._load_disk_files()
 
     def _load_disk_files(self):
@@ -43,7 +44,14 @@ class StyleManager:
                 if s["tenant_id"] == SYSTEM_TENANT:
                     self._system_styles[s["style_id"]] = s["content"]
             self._db_loaded = True
-            logger.info(f"Loaded {len(styles)} reply styles from database")
+            if len(styles) < self._last_loaded_count:
+                # 风格数量减少：风格表被删除/清空的前兆（曾有外部直连 SQL 清空事故），
+                # 归因查 reply_styles_audit 表（记录 db_user/client_addr/application_name）
+                logger.warning(
+                    f"Reply styles count decreased: {self._last_loaded_count} -> {len(styles)}, "
+                    "check reply_styles_audit table for who deleted them"
+                )
+            self._last_loaded_count = len(styles)
         except Exception as e:
             if not self._db_loaded:
                 logger.warning(f"Failed to load reply styles from database, using disk fallback: {e}")

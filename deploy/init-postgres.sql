@@ -708,6 +708,45 @@ CREATE TABLE IF NOT EXISTS reply_styles (
 
 CREATE INDEX IF NOT EXISTS idx_reply_styles_tenant_active ON reply_styles(tenant_id, is_active);
 
+-- 回复风格审计表（安全审计用，非业务逻辑：记录 reply_styles 的全部写操作来源，
+-- 用于追查直连 SQL 清空风格表的事故，见 docs/ops/log-warning-audit-20260922.md）
+CREATE TABLE IF NOT EXISTS reply_styles_audit (
+    id SERIAL PRIMARY KEY,
+    op TEXT NOT NULL,
+    old_row JSONB,
+    new_row JSONB,
+    db_user TEXT,
+    client_addr TEXT,
+    application_name TEXT,
+    happened_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 审计触发器（记录 current_user / inet_client_addr / application_name，可归因直连 SQL）
+CREATE OR REPLACE FUNCTION fn_reply_styles_audit() RETURNS trigger AS $$
+BEGIN
+    INSERT INTO reply_styles_audit (op, old_row, new_row, db_user, client_addr, application_name)
+    VALUES (
+        TG_OP,
+        CASE WHEN TG_OP IN ('DELETE', 'UPDATE') THEN to_jsonb(OLD) END,
+        CASE WHEN TG_OP IN ('INSERT', 'UPDATE') THEN to_jsonb(NEW) END,
+        current_user,
+        inet_client_addr()::text,
+        current_setting('application_name', true)
+    );
+    RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE COALESCE(NEW, OLD) END;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_reply_styles_audit ON reply_styles;
+CREATE TRIGGER trg_reply_styles_audit
+AFTER INSERT OR UPDATE OR DELETE ON reply_styles
+FOR EACH ROW EXECUTE FUNCTION fn_reply_styles_audit();
+
+DROP TRIGGER IF EXISTS trg_reply_styles_audit_truncate ON reply_styles;
+CREATE TRIGGER trg_reply_styles_audit_truncate
+AFTER TRUNCATE ON reply_styles
+FOR EACH STATEMENT EXECUTE FUNCTION fn_reply_styles_audit();
+
 -- 租户渠道配置表
 CREATE TABLE IF NOT EXISTS tenant_channel_configs (
     id SERIAL PRIMARY KEY,
