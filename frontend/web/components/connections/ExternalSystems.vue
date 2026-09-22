@@ -18,7 +18,7 @@
           <path d="M21 12a9 9 0 11-18 0 9 9 0 0118 0zM12 8v4M12 16h.01"/>
         </svg>
         <p class="text-sm text-muted">暂无可用外部系统</p>
-        <p class="text-xs text-muted mt-1">外部系统由租户接口文档（pre-sales-api.md）的 sso 配置声明</p>
+        <p class="text-xs text-muted mt-1">外部系统由租户接口文档的 SSO 配置声明</p>
       </div>
 
       <div v-else class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 max-w-5xl">
