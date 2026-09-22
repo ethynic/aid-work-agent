@@ -283,24 +283,27 @@ class TestDocDetailVisibility:
     }
 
     def test_default_filters_deleted_and_tenant_scoped(self):
-        # SELECT 列含 status 字段本身，断言限定在过滤片段上
+        # SELECT 列含 status 字段本身，断言限定在过滤片段上；钉死占位符顺序
+        # （id 在前、租户参数在后——错序在真库上 id='t1' 整表不匹配，表现为 404）
         _, executed = _run("get_document_detail", 7, tenant_id="t1")
         sql, params = executed[0]
         flat = _flat(sql)
-        assert "AND status = 'active'" in flat
-        assert "tenant_id = %s" in flat
-        assert params == ["t1", 7]
+        assert "WHERE id = %s AND tenant_id = %s AND status = 'active'" in flat
+        assert params == [7, "t1"]
 
     def test_include_deleted_omits_status_filter(self):
         _, executed = _run("get_document_detail", 7, tenant_id="t1", include_deleted=True)
         sql, params = executed[0]
-        assert "AND status = 'active'" not in _flat(sql)
-        assert params == ["t1", 7]
+        flat = _flat(sql)
+        assert "WHERE id = %s AND tenant_id = %s" in flat
+        assert "AND status = 'active'" not in flat
+        assert params == [7, "t1"]
 
     def test_global_view_no_tenant_filter(self):
         _, executed = _run("get_document_detail", 7, global_view=True, include_deleted=True)
         sql, params = executed[0]
         flat = _flat(sql)
+        assert "WHERE id = %s AND 1=1" in flat
         assert "tenant_id" not in flat
         assert params == [7]
 
@@ -309,8 +312,7 @@ class TestDocDetailVisibility:
         _, executed = _run("get_document_detail", 7)
         sql, params = executed[0]
         flat = _flat(sql)
-        assert "tenant_id IS NULL" in flat
-        assert "AND status = 'active'" in flat
+        assert "WHERE id = %s AND tenant_id IS NULL AND status = 'active'" in flat
         assert params == [7]
 
     def test_json_null_metadata_falls_back_to_empty_object(self):

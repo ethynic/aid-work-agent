@@ -30,3 +30,7 @@
 - 后端：`tests/unit/test_knowledge_doc_visibility.py` 43 passed（新增 TestDocDetailVisibility 9 例 + TestApiDocDetail 3 例：SQL 作用域/软删除过滤/无租户收窄/metadata 解析与容错/参数透传/404 边界）；相邻回归 test_download_ticket + test_knowledge_tenant_scope + test_knowledge_upload_sanitize 51 passed
 - 前端：`web/__tests__/api/knowledge.test.ts` 5 passed（新增 getDocumentDetail 2 例：认证头与解析、404 中文错误）；`npm run build` 通过
 - 独立验证智能体：测试复跑一致 + diff 审查通过（租户边界/路由无冲突/语义 token/竞态守卫）；其指出的 P2 弹窗过期响应竞态与 nit（加载失败占位态、JSON null 边界）已在交付前修复并复跑
+
+## 线上修正（2026-09-22）
+
+真机验收（agent2）发现详情接口 404：`WHERE id = %s AND tenant_id = %s` 的参数绑成了 `[tenant_id, doc_id]`（错序），真库上 `id='t1'` 整表不匹配，service 捕获异常返回 None → 统一 404「文档不存在」。本地假游标测试只断言了 SQL 片段存在、未断言占位符顺序，未能拦截。修正为既有 delete 路径惯例（`id = %s` 在前 + `[doc_id] + scope_params`），测试改为钉死完整 WHERE 子句与参数顺序。

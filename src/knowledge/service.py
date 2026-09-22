@@ -1063,7 +1063,7 @@ class KnowledgeBaseService:
                            status, expires_at, metadata
                     FROM documents
                     WHERE id = %s AND {scope_sql}{status_sql}
-                """, scope_params + [doc_id])
+                """, [doc_id] + scope_params)
 
                 row = cursor.fetchone()
                 if not row:
