@@ -151,6 +151,107 @@ class TestPushLoopSummaryInjection:
         assert "同一日期" in reminders[0]["content"]
 
     @pytest.mark.asyncio
+    async def test_today_entry_warning_injected(self):
+        """当前摘要已含今天日期条目时，提醒点名今天条目并要求原地合并"""
+        from datetime import datetime
+
+        now = datetime.now()
+        today_entry = f"{now.year}-{now.month}-{now.day}, 客户询问定价"
+        meta = {
+            "summary_fields": "genjinhuizongzhaiyao",
+            "user_token_name": "client_token",
+            "user_token_header": "Client-Authorize-Token",
+            "agent_token_header": "Api-Authorize-Token",
+        }
+        payload = _make_payload()
+        ctx = {"subagent": "pre-sales", "external_userid": "ext_1"}
+
+        executor = MagicMock()
+        report_holder: list = []
+
+        async def _execute(name, args, context=None):
+            if name == "report_push_result":
+                report_holder.append({"success": True, "detail": "ok"})
+                return {"success": True}
+            return {"success": True, "data": {"list": [{"genjinhuizongzhaiyao": today_entry}]}}
+
+        executor.execute = AsyncMock(side_effect=_execute)
+
+        responses = [
+            _llm_response(tool_calls=[_tool_call(
+                "http_api", '{"url": "https://x/list", "method": "POST", "params_json": "{}"}', "c1")]),
+            _llm_response(tool_calls=[_tool_call(
+                "report_push_result", '{"success": true, "detail": "ok"}', "c2")]),
+        ]
+        gateway = MagicMock()
+        gateway.chat_lite = AsyncMock(side_effect=responses)
+
+        with self._patch_runtime_with_holder(executor, report_holder), \
+                patch("src.llm.gateway.llm_gateway", gateway), \
+                patch("src.services.session_record.record_background_llm_usage"):
+            detail = await _run_push_loop(payload, ctx, {}, "doc", meta, "tok", {"client_token": "t"})
+
+        assert detail == "ok"
+        calls = gateway.chat_lite.call_args_list
+        reminders = [
+            m for m in calls[1].args[0]
+            if m.get("role") == "user" and "系统提醒" in (m.get("content") or "")
+        ]
+        assert len(reminders) == 1
+        assert "已包含今天" in reminders[0]["content"]
+        assert today_entry in reminders[0]["content"]
+
+    @pytest.mark.asyncio
+    async def test_history_only_entry_no_today_warning(self):
+        """当前摘要仅含历史日期条目时，提醒不点名今天"""
+        from datetime import datetime, timedelta
+
+        past = datetime.now() - timedelta(days=5)
+        history_entry = f"{past.year}-{past.month}-{past.day}, 想了解价格"
+        meta = {
+            "summary_fields": "genjinhuizongzhaiyao",
+            "user_token_name": "client_token",
+            "user_token_header": "Client-Authorize-Token",
+            "agent_token_header": "Api-Authorize-Token",
+        }
+        payload = _make_payload()
+        ctx = {"subagent": "pre-sales", "external_userid": "ext_1"}
+
+        executor = MagicMock()
+        report_holder: list = []
+
+        async def _execute(name, args, context=None):
+            if name == "report_push_result":
+                report_holder.append({"success": True, "detail": "ok"})
+                return {"success": True}
+            return {"success": True, "data": {"list": [{"genjinhuizongzhaiyao": history_entry}]}}
+
+        executor.execute = AsyncMock(side_effect=_execute)
+
+        responses = [
+            _llm_response(tool_calls=[_tool_call(
+                "http_api", '{"url": "https://x/list", "method": "POST", "params_json": "{}"}', "c1")]),
+            _llm_response(tool_calls=[_tool_call(
+                "report_push_result", '{"success": true, "detail": "ok"}', "c2")]),
+        ]
+        gateway = MagicMock()
+        gateway.chat_lite = AsyncMock(side_effect=responses)
+
+        with self._patch_runtime_with_holder(executor, report_holder), \
+                patch("src.llm.gateway.llm_gateway", gateway), \
+                patch("src.services.session_record.record_background_llm_usage"):
+            detail = await _run_push_loop(payload, ctx, {}, "doc", meta, "tok", {"client_token": "t"})
+
+        assert detail == "ok"
+        calls = gateway.chat_lite.call_args_list
+        reminders = [
+            m for m in calls[1].args[0]
+            if m.get("role") == "user" and "系统提醒" in (m.get("content") or "")
+        ]
+        assert len(reminders) == 1
+        assert "已包含今天" not in reminders[0]["content"]
+
+    @pytest.mark.asyncio
     async def test_no_summary_in_query_no_injection(self):
         """查询结果无摘要字段时不注入提醒"""
         meta = {"summary_fields": "genjinhuizongzhaiyao"}

@@ -489,6 +489,16 @@ def _current_time_line() -> str:
     return f"当前时间：{dt.strftime('%Y-%m-%d %H:%M')}（{period}）\n"
 
 
+def _today_summary_entries(value: str) -> List[str]:
+    """从当前累计摘要中提取含今天日期的条目（宽松匹配月/日带不带前导零，如 2026-9-23 / 2026-09-23）
+
+    兼容注入提醒的「字段名 = 摘要值」拼接格式，故按行内搜索而非行首匹配。
+    """
+    now = datetime.now()
+    pattern = re.compile(rf"{now.year}-0?{now.month}-0?{now.day}(?!\d)")
+    return [line for line in (value or "").splitlines() if pattern.search(line)]
+
+
 def _extract_json_object(content: str) -> Optional[Dict[str, Any]]:
     """从 LLM 输出中提取 JSON object（容忍 ```json 包裹与前后杂文本）"""
     if not content:
@@ -894,9 +904,12 @@ def _build_system_prompt(doc: str, meta: Dict[str, str]) -> str:
         "7. 执行效率：查重确认后，互不依赖的写操作（如创建跟进记录与修改客户）"
         "应尽量在同一轮并行发起多个工具调用，减少轮次。\n"
         "8. 累计摘要格式：归纳客户的累计摘要（跟进汇总摘要类字段，以租户文档定义为准）时按天分条，"
-        "每条以跟进日期开头（如 2026-9-15, 当日要点），每条不超过 100 字，当天多轮对话合并为一条，"
+        "每条以跟进日期开头（如 2026-9-15, 当日要点），每条尽量精简（约 100 字）；"
+        "当天多轮对话必须合并为同一条，合并后超长时允许压缩已有措辞，"
+        "但不得以「超长」「主题不同」为由拆成多条；"
         "只保留关键诉求、结论与待办，不逐轮罗列过程；条与条之间用 CRLF（\\r\\n）分隔，"
-        "禁止合并成一段或用分号分隔；须保留客户当前摘要中的历史日期条目（保持原样，不扩写），仅新增或更新当天条目。"
+        "禁止合并成一段或用分号分隔；须保留客户当前摘要中的历史日期条目（保持原样，不扩写），"
+        "仅改写当天条目（当前摘要无当天条目时才允许新增一条）。"
         "当天条目内区分多轮时以上方系统注入的真实时刻为准，"
         "禁止虚构「上午/下午/傍晚/晚间/深夜」等与真实时间不符的时段标签。"
         "回写前必须自查：同一日期在整个摘要中只能出现一条；"
@@ -1150,11 +1163,21 @@ async def _run_push_loop(
         if round_summary_values and not summary_reminder_injected:
             summary_reminder_injected = True
             values_text = "\n".join(f"{k} = {v}" for k, v in round_summary_values.items())
+            today_lines = _today_summary_entries(values_text)
+            today_warning = ""
+            if today_lines:
+                first = _truncate(today_lines[0], 80)
+                now = datetime.now()
+                today_warning = (
+                    f"注意：当前摘要已包含今天（{now.year}-{now.month}-{now.day}）条目（如「{first}」等），"
+                    "本轮对话要点必须原地合并进该条，严禁再新增同日期条目。\n"
+                )
             messages.append({
                 "role": "user",
                 "content": (
                     "【系统提醒】已从查询结果中提取客户当前累计摘要，更新该类字段时必须基于以下当前值整体回写：\n"
                     f"{values_text}\n"
+                    + today_warning +
                     "回写规则：按天分条，同一日期在整个摘要中只能出现一条；"
                     "已有当天条目必须原地改写合并（当天多轮要点并入该条），严禁追加同日期第二条；"
                     "历史日期条目保持原样。"
