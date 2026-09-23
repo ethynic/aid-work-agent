@@ -12,6 +12,8 @@ import pytest
 
 from src.tools.data_analysis.data_analyzer import (
     AGG_FUNC_WHITELIST,
+    CHART_THEMES,
+    DEFAULT_CHART_THEME,
     FILTER_OP_WHITELIST,
     DataAnalyzer,
 )
@@ -1032,10 +1034,11 @@ class TestToChart:
         assert os.path.exists(result["file_path"])
 
     def test_chart_pie_more_categories_than_palette(self, analyzer, tmp_path):
-        """饼图类目数 > 色板长度(3)时派生渐变色，生成成功"""
+        """饼图类目数 > 色板长度(10)时插值派生唯一色，生成成功"""
         analyzer.chart_output_dir = str(tmp_path / "charts")
         analyzer._variables["td"] = pd.DataFrame({
-            "cat": ["A", "B", "C", "D", "E"], "v": [10, 20, 15, 25, 30],
+            "cat": [f"C{i}" for i in range(12)],
+            "v": [10, 20, 15, 25, 30, 12, 18, 22, 28, 16, 24, 14],
         })
         result = analyzer.to_chart("td", chart_type="pie", x_column="cat", y_columns=["v"], theme="ft")
         assert result["theme_name"] == "财经风"
@@ -1088,6 +1091,98 @@ class TestToChart:
             assert not leg.get_window_extent().overlaps(title_artist.get_window_extent())
         finally:
             plt.close(fig)
+
+
+# ==================== 系列取色（多渠道不混淆） ====================
+
+
+class TestSeriesColors:
+
+    def test_theme_palettes_unique_and_backward_compatible(self):
+        """每主题色板 ≥10 色且无重复；前 3 色保持原始主色，旧图表视觉不变。"""
+        original_primary = {
+            "ft": ["#990F3D", "#0F5499", "#4D8B31"],
+            "corporate": ["#1F3A5F", "#5B8FB9", "#C9A66B"],
+            "morandi": ["#6B7B8C", "#B5A28E", "#9CAE9B"],
+            "dark": ["#22D3EE", "#F472B6", "#A78BFA"],
+        }
+        assert set(CHART_THEMES) == set(original_primary)
+        for key, t in CHART_THEMES.items():
+            pal = t["palette"]
+            assert len(pal) >= 10, f"主题 {key} 色板应有至少 10 色"
+            assert len(set(pal)) == len(pal), f"主题 {key} 色板存在重复色"
+            assert pal[:3] == original_primary[key], f"主题 {key} 前 3 主色不应变化"
+
+    def test_series_colors_unique_within_palette(self, analyzer):
+        """系列数在色板内：每系列一色、互不重复（6 渠道场景回归）。"""
+        t = CHART_THEMES[DEFAULT_CHART_THEME]
+        colors = analyzer._series_colors(t, 6)
+        assert len(colors) == 6
+        assert len(set(colors)) == 6
+
+    def test_series_colors_first_three_match_legacy(self, analyzer):
+        """前 3 系列颜色与旧版取色一致，保证存量图表视觉兼容。"""
+        t = CHART_THEMES[DEFAULT_CHART_THEME]
+        assert analyzer._series_colors(t, 3) == t["palette"][:3]
+
+    def test_series_colors_derived_beyond_palette_unique(self, analyzer):
+        """系列数超出色板长度：插值派生色仍然每系列唯一（hex 字符串）。"""
+        t = CHART_THEMES[DEFAULT_CHART_THEME]
+        n = len(t["palette"]) + 5
+        colors = analyzer._series_colors(t, n)
+        assert len(colors) == n
+        assert len(set(colors)) == n
+        assert all(isinstance(c, str) and c.startswith("#") for c in colors)
+
+    @pytest.mark.parametrize("theme", list(CHART_THEMES.keys()))
+    def test_series_colors_unique_across_themes(self, analyzer, theme):
+        """4 套主题下 6 系列颜色均唯一。"""
+        colors = analyzer._series_colors(CHART_THEMES[theme], 6)
+        assert len(set(colors)) == 6
+
+    def test_six_channel_grouped_bar_renders_unique_legend_colors(
+            self, analyzer, tmp_path, monkeypatch):
+        """端到端回归：6 渠道 group_by 分组柱状图，实际渲染图例 6 色互不相同。
+
+        通过拦截 Figure.savefig 从渲染产物提取图例句柄颜色，
+        避免"重调 _series_colors 断言自身"的恒真风险。
+        """
+        import matplotlib
+        from matplotlib.colors import to_hex
+
+        rendered = {}
+        orig_savefig = matplotlib.figure.Figure.savefig
+
+        def _capture_legend(self, *args, **kwargs):
+            for ax in self.axes:
+                leg = ax.get_legend()
+                if leg is not None:
+                    rendered["colors"] = [
+                        to_hex(h.get_facecolor()) for h in leg.legend_handles
+                    ]
+            return orig_savefig(self, *args, **kwargs)
+
+        monkeypatch.setattr(
+            matplotlib.figure.Figure, "savefig", _capture_legend)
+
+        analyzer.chart_output_dir = str(tmp_path / "charts")
+        channels = ["公众号", "视频号", "抖音", "小红书", "B站", "快手"]
+        rows = [
+            {"month": f"2026-{m:02d}", "channel": ch, "revenue": m * 10 + i}
+            for m in range(1, 7)
+            for i, ch in enumerate(channels)
+        ]
+        analyzer._variables["channel_data"] = pd.DataFrame(rows)
+        result = analyzer.to_chart(
+            "channel_data", chart_type="grouped_bar",
+            x_column="month", y_columns=["revenue"], group_by="channel",
+        )
+        assert os.path.exists(result["file_path"])
+        assert len(result["data_columns"]) == 1 + len(channels)
+        legend_colors = rendered["colors"]
+        assert len(legend_colors) == len(channels)
+        assert len(set(legend_colors)) == len(channels), \
+            f"渲染图例存在重复色: {legend_colors}"
 
 
 # ==================== _eval_expression 安全性 ====================

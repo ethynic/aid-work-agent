@@ -49,29 +49,46 @@ AGG_FUNC_WHITELIST = {
 }
 
 # 图表配色主题（4 套高端风格，默认 ft 财经风）
-# 与白名单同构：模块级常量，简单可控；palette 按 series 数循环取色
+# 与白名单同构：模块级常量，简单可控。
+# 每主题 10 色（前 3 色为原始主色，保持既有图表视觉不变；追加色延续主题风格，
+# 同图并列可区分）。系列数超出色板时由 _series_colors 插值派生唯一色，
+# 不再按色板长度取模循环——多渠道场景循环取色会导致系列同色、图例混淆。
 CHART_THEMES = {
     "ft": {
         "name": "财经风",
-        "palette": ["#990F3D", "#0F5499", "#4D8B31"],
+        "palette": [
+            "#990F3D", "#0F5499", "#4D8B31", "#0D7680", "#FF8833",
+            "#FBBD26", "#7B4B9E", "#8C6D46", "#B2457E", "#737373",
+        ],
         "bg": "#FFF1E5", "grid": "#E8D9C8", "text": "#33302E",
         "subtext": "#8C7B68", "label": "#33302E", "rounded": False,
     },
     "corporate": {
         "name": "商务深蓝",
-        "palette": ["#1F3A5F", "#5B8FB9", "#C9A66B"],
+        "palette": [
+            "#1F3A5F", "#5B8FB9", "#C9A66B", "#74A089", "#A65D57",
+            "#8A7CA8", "#0E7490", "#C1794F", "#8C9BA5", "#6B6B6B",
+        ],
         "bg": "#FFFFFF", "grid": "#EAEEF3", "text": "#1F2D3D",
         "subtext": "#7F8C9A", "label": "#2C3E50", "rounded": False,
     },
+    # morandi 为低饱和美学：追加色已按 CIE76 区分度重排（前 3 主色锚定不变），
+    # 7 系列内最小色差约 ΔE 12；9+ 系列存在 ΔE≈9 的近色对，属风格固有限制
     "morandi": {
         "name": "莫兰迪",
-        "palette": ["#6B7B8C", "#B5A28E", "#9CAE9B"],
+        "palette": [
+            "#6B7B8C", "#B5A28E", "#9CAE9B", "#9A8FA8", "#ADA86E",
+            "#B08A93", "#978375", "#C9A9A6", "#8BA8A4", "#9B9B93",
+        ],
         "bg": "#F7F5F2", "grid": "#E4DFD8", "text": "#4A4641",
         "subtext": "#8E8578", "label": "#4A4641", "rounded": True,
     },
     "dark": {
         "name": "深色科技",
-        "palette": ["#22D3EE", "#F472B6", "#A78BFA"],
+        "palette": [
+            "#22D3EE", "#F472B6", "#A78BFA", "#34D399", "#FBBF24",
+            "#F87171", "#60A5FA", "#F97316", "#A3E635", "#94A3B8",
+        ],
         "bg": "#0F1419", "grid": "#1E2730", "text": "#E6EDF3",
         "subtext": "#8B949E", "label": "#E6EDF3", "rounded": True,
     },
@@ -809,9 +826,19 @@ class DataAnalyzer:
         return t
 
     @staticmethod
-    def _theme_color(t: dict, i: int) -> str:
-        """按系列序号循环取主题色。"""
-        return t["palette"][i % len(t["palette"])]
+    def _series_colors(t: dict, n: int) -> List[str]:
+        """返回 n 个互不相同的系列色。
+
+        n 不超过色板长度时取前 n 色（系列顺序稳定，前 3 系列与旧版视觉一致）；
+        超出时在色板上不循环插值派生 n 个唯一色，保证任意系列数下
+        每个系列（图例）颜色唯一，多渠道场景不混淆。
+        """
+        pal = t["palette"]
+        if n <= len(pal):
+            return pal[:n]
+        from matplotlib.colors import LinearSegmentedColormap, to_hex
+        cmap = LinearSegmentedColormap.from_list("_theme", pal)
+        return [to_hex(cmap(i / (n - 1))) for i in range(n)]
 
     @staticmethod
     def _fmt_value(v) -> str:
@@ -998,8 +1025,9 @@ class DataAnalyzer:
         x = df[x_column]
         x_range = range(len(x))
         x_labels = [str(v) for v in x]
+        series_colors = self._series_colors(t, len(y_columns))
         legend_handles = [
-            Patch(facecolor=self._theme_color(t, i), linewidth=0, label=yc)
+            Patch(facecolor=series_colors[i], linewidth=0, label=yc)
             for i, yc in enumerate(y_columns)
         ]
         leg = None
@@ -1008,15 +1036,8 @@ class DataAnalyzer:
         if chart_type == "pie":
             values = df[y_columns[0]]
             n_cat = len(x_labels)
-            pal_len = len(t["palette"])
-            if n_cat <= pal_len:
-                colors = [self._theme_color(t, i) for i in range(n_cat)]
-            else:
-                # 类目多于色板：从主题色板派生连续渐变色，避免相邻扇区同色
-                from matplotlib.colors import LinearSegmentedColormap
-                cmap = LinearSegmentedColormap.from_list(
-                    "_theme", t["palette"] + [t["palette"][0]])
-                colors = [cmap(i / max(n_cat - 1, 1)) for i in range(n_cat)]
+            # 类目色与系列色同源：色板内直接取，超出插值派生，扇区颜色始终唯一
+            colors = self._series_colors(t, n_cat)
             wedges, texts, autotexts = ax.pie(
                 values, labels=x_labels, colors=colors,
                 autopct="%1.1f%%", startangle=90, counterclock=False,
@@ -1038,7 +1059,7 @@ class DataAnalyzer:
                 offset = (i - len(y_columns) / 2 + 0.5) * width
                 xs = [xi + offset for xi in x_range]
                 self._draw_bar_series(ax, xs, df[y_col].values, width * 0.88,
-                                      self._theme_color(t, i), t)
+                                      series_colors[i], t)
             ax.set_xticks(list(x_range))
             ax.set_xticklabels(x_labels, rotation=30, ha="right")
             # 柱上数值标签需要头部空间：默认 5% 边距装不下"2% 偏移 + 文字高度"，
@@ -1056,7 +1077,7 @@ class DataAnalyzer:
             bottom = np.zeros(len(x))
             for i, y_col in enumerate(y_columns):
                 ax.bar(x_range, df[y_col], width=0.62, bottom=bottom,
-                       color=self._theme_color(t, i), linewidth=0, zorder=3)
+                       color=series_colors[i], linewidth=0, zorder=3)
                 bottom += df[y_col].values
             ax.set_xticks(list(x_range))
             ax.set_xticklabels(x_labels, rotation=30, ha="right")
@@ -1071,7 +1092,7 @@ class DataAnalyzer:
                              or pd.api.types.is_datetime64_any_dtype(x_series))
             plot_x = x_series.values if is_continuous else list(x_range)
             for i, y_col in enumerate(y_columns):
-                ax.plot(plot_x, df[y_col].values, color=self._theme_color(t, i),
+                ax.plot(plot_x, df[y_col].values, color=series_colors[i],
                         linewidth=2.6, marker="o", markersize=6, markeredgewidth=0,
                         label=y_col, zorder=3)
             if not is_continuous:
@@ -1083,7 +1104,7 @@ class DataAnalyzer:
 
         elif chart_type == "scatter":
             for i, y_col in enumerate(y_columns):
-                ax.scatter(df[x_column], df[y_col], color=self._theme_color(t, i),
+                ax.scatter(df[x_column], df[y_col], color=series_colors[i],
                            alpha=0.7, s=42, linewidth=0, label=y_col, zorder=3)
             self._apply_axes_style(ax, t)
             if len(y_columns) > 1:
