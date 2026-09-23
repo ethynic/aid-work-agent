@@ -618,9 +618,9 @@ class TestEmptySummaryFallback:
 
 class TestWhitelist:
     def test_allowed_methods(self):
-        """白名单包含全部 14 个方法"""
+        """白名单包含全部 15 个方法"""
         from src.tools.data_analysis.analysis_tools_schema import ALLOWED_METHODS
-        expected = {"search_data_tables", "list_data_tables", "load_table", "describe",
+        expected = {"search_data_tables", "list_data_tables", "load_table", "load_output", "describe",
                     "query", "aggregate", "merge", "pivot", "calculate",
                     "compare", "trend", "extract_hierarchy", "to_table", "to_chart"}
         assert expected == ALLOWED_METHODS
@@ -647,9 +647,9 @@ class TestWhitelist:
 
 class TestSchemaDefinition:
     def test_tools_count(self):
-        """工具定义数量为 14"""
+        """工具定义数量为 15"""
         from src.tools.data_analysis.analysis_tools_schema import ANALYSIS_TOOLS
-        assert len(ANALYSIS_TOOLS) == 14
+        assert len(ANALYSIS_TOOLS) == 15
 
     def test_all_tools_have_required_structure(self):
         """每个工具定义包含 name/description/parameters"""
@@ -664,7 +664,7 @@ class TestSchemaDefinition:
             assert params["type"] == "object"
             assert "properties" in params
             names.add(func["name"])
-        assert names == {"search_data_tables", "list_data_tables", "load_table", "describe",
+        assert names == {"search_data_tables", "list_data_tables", "load_table", "load_output", "describe",
                          "query", "aggregate", "merge", "pivot", "calculate",
                          "compare", "trend", "extract_hierarchy", "to_table", "to_chart"}
 

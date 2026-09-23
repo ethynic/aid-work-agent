@@ -137,6 +137,7 @@ class AnalysisAgent:
         tables_metadata: Optional[List[Dict]] = None,
         tenant_id: Optional[str] = None,
         subagent_id: Optional[str] = None,
+        session_id: Optional[str] = None,
     ):
         self.llm = llm_gateway
         self.analyzer = analyzer
@@ -144,6 +145,8 @@ class AnalysisAgent:
         self.tables_metadata = tables_metadata or []
         self.tenant_id = tenant_id
         self.subagent_id = subagent_id
+        # 会话 ID：分析产物注册表的作用域（同会话多次 analyze_data 复用中间产物）
+        self.session_id = session_id or getattr(analyzer, "session_id", None) or None
 
         self._loaded_table_ids: set = set()
         self._search_count: int = 0
@@ -156,6 +159,8 @@ class AnalysisAgent:
         }
         # artifacts 是工具返回给主智能体的唯一产物索引（chart/table/data_file）
         self._artifacts: List[Dict] = []
+        # 本次运行新注册的中间产物（供主智能体在后续 analyze_data 中引用复用）
+        self._new_artifacts: List[Dict] = []
         # _steps 仅用于 trace 持久化，不放进对外返回值
         self._steps: List[Dict] = []
         self._spans: List[SpanRecord] = []
@@ -346,6 +351,8 @@ class AnalysisAgent:
         # 加载工具
         if method_name == "load_table":
             return await self._handle_load_table(params.get("table_id", ""))
+        if method_name == "load_output":
+            return self._handle_load_output(params.get("output_var", ""))
 
         # 概览工具（返回 dict，不走 DATA_PROCESSING_METHODS 路径）
         if method_name == "describe":
@@ -399,6 +406,10 @@ class AnalysisAgent:
 
         # 构建步骤描述
         description = self._describe_step(method_name, params)
+
+        # 注册到会话产物注册表：同会话后续 analyze_data 可 load_output 复用，
+        # 免去重复「加载原始表 → 加工 → 合并」（392 积分事故主因）
+        self._register_artifact(output_var, method_name, description, rows, columns)
 
         step = {
             "step": len(self._steps) + 1,
@@ -596,17 +607,43 @@ class AnalysisAgent:
 
     def _build_user_message(self, requirement: str) -> str:
         """构建初始用户消息。"""
+        parts = [f"## 用户需求\n{requirement}"]
+
         if self._loaded_table_ids:
-            tables_info = self._build_tables_info()
-            return f"## 用户需求\n{requirement}\n\n## 已加载的数据表\n{tables_info}"
+            parts.append(f"## 已加载的数据表\n{self._build_tables_info()}")
         else:
-            return (
-                f"## 用户需求\n{requirement}\n\n"
-                f"## 说明\n"
-                f"目前没有预加载的数据表。请先分析用户需求，提取搜索关键词，"
-                f"使用 search_data_tables 搜索相关数据表，"
-                f"然后用 load_table 加载需要的表进行分析。"
+            parts.append(
+                "## 说明\n"
+                "目前没有预加载的数据表。请先分析用户需求，提取搜索关键词，"
+                "使用 search_data_tables 搜索相关数据表，"
+                "然后用 load_table 加载需要的表进行分析。"
             )
+
+        artifacts_info = self._build_artifacts_info()
+        if artifacts_info:
+            parts.append(artifacts_info)
+
+        return "\n\n".join(parts)
+
+    def _build_artifacts_info(self) -> str:
+        """构建本会话历史分析产物清单（供 load_output 复用）；无产物返回空串。"""
+        entries = self._session_artifacts()
+        if not entries:
+            return ""
+        lines = [
+            "## 本会话已有分析产物（优先复用！）",
+            "以下产物是本会话此前分析已生成的中间数据，**若其中已覆盖当前需求所需的数据"
+            "（如已合并的宽表、已聚合的结果），必须优先调用 load_output(output_var) 加载复用，"
+            "禁止重新 load_table 原始表再做一遍相同的加载、清洗和合并**：",
+        ]
+        for e in entries:
+            cols = ", ".join(e.get("columns", [])[:8])
+            col_note = f"（列: {cols}）" if cols else ""
+            lines.append(
+                f"- `{e['var']}`: {e.get('rows', 0)} 行{col_note} — {e.get('description', '')}"
+            )
+        lines.append("若清单中没有所需数据，再按正常流程 search/load 原始表。")
+        return "\n".join(lines)
 
     def _compress_messages(self, messages: List[Dict]) -> None:
         """当 messages 过大时，将早期工具结果压缩为摘要，保留最近几轮的详细信息。"""
@@ -734,6 +771,10 @@ class AnalysisAgent:
                 "trace_id": self.analysis_id,
             },
         }
+        # 本次运行新注册的中间产物：主智能体可在后续 analyze_data 的 requirement 中
+        # 引用这些 output_var 实现复用（无新产物时不携带，避免结果膨胀）
+        if self._new_artifacts:
+            result["reusable_outputs"] = self._new_artifacts
         if error:
             result["error"] = error
         return result
@@ -994,6 +1035,95 @@ class AnalysisAgent:
         except Exception as e:
             logger.error(f"load_table failed: {e}")
             return {"success": False, "error": str(e)}
+
+    def _handle_load_output(self, output_var: str) -> Dict[str, Any]:
+        """加载本会话此前 analyze_data 的中间产物（租户 temp 目录 {var}.csv）。"""
+        from src.tools.data_analysis.analysis_artifacts import (
+            artifact_csv_path,
+            is_valid_var_name,
+        )
+
+        if not output_var:
+            return {"success": False, "error": "output_var 不能为空"}
+        if not is_valid_var_name(output_var):
+            return {"success": False, "error": f"非法的产物变量名: {output_var}"}
+        if not self.tenant_id:
+            return {"success": False, "error": "缺少租户上下文，无法复用历史产物"}
+
+        csv_path = artifact_csv_path(self.tenant_id, output_var)
+        # 路径穿越防线：解析后必须仍位于本租户 temp 目录内
+        from src.core.storage import get_tenant_storage_dir
+
+        temp_dir = os.path.realpath(get_tenant_storage_dir(self.tenant_id, "temp"))
+        if not csv_path or not os.path.realpath(csv_path).startswith(temp_dir + os.sep):
+            return {"success": False, "error": f"非法的产物路径: {output_var}"}
+        if not os.path.exists(csv_path):
+            available = [
+                e["var"] for e in self._session_artifacts() if e["var"] != output_var
+            ]
+            hint = f"，当前可用: {available}" if available else ""
+            return {
+                "success": False,
+                "error": f"产物 {output_var} 不存在{hint}。若清单中无所需数据，请 load_table 原始表",
+            }
+
+        try:
+            import pandas as pd
+
+            df = pd.read_csv(csv_path)
+        except Exception as e:
+            return {"success": False, "error": f"产物文件读取失败: {e}"}
+
+        # 装入分析环境：后续 merge/aggregate 等可直接以 var 引用
+        self.analyzer._variables[output_var] = df
+        columns = list(df.columns)
+        rows = len(df)
+        logger.info(
+            f"[AnalysisAgent] load_output 复用产物 {output_var}: {rows} 行 × {len(columns)} 列"
+        )
+        return {
+            "success": True,
+            "output_var": output_var,
+            "rows": rows,
+            "columns": columns,
+            "preview_columns": columns,
+            "preview_rows": min(3, rows),
+            "preview": self._df_to_native_rows(df.head(3)),
+            "hint": f"已复用本会话历史产物，后续可直接用 output_var '{output_var}' 作为 source 参数",
+        }
+
+    def _register_artifact(
+        self, output_var: str, method_name: str, description: str, rows: int, columns: List[str]
+    ) -> None:
+        """中间产物写入会话注册表（容错：失败不影响分析）。"""
+        try:
+            from src.tools.data_analysis.analysis_artifacts import record_artifact
+
+            if record_artifact(
+                self.tenant_id or "",
+                self.session_id or "",
+                output_var,
+                description=description,
+                method=method_name,
+                rows=rows,
+                columns=columns,
+            ):
+                self._new_artifacts.append({
+                    "output_var": output_var,
+                    "description": description,
+                    "rows": rows,
+                })
+        except Exception as e:
+            logger.warning(f"[AnalysisAgent] 产物注册失败（不影响分析）: {e}")
+
+    def _session_artifacts(self) -> List[Dict]:
+        """本会话已注册的历史产物条目（最近的在前）。"""
+        try:
+            from src.tools.data_analysis.analysis_artifacts import load_artifacts
+
+            return load_artifacts(self.tenant_id or "", self.session_id or "")
+        except Exception:
+            return []
 
     def _handle_describe(self, params: Dict, iteration: int) -> Dict[str, Any]:
         """处理 describe 工具：返回数据概览统计。"""

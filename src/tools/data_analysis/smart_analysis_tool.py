@@ -35,6 +35,9 @@ class SmartDataAnalysisTool(BaseTool):
         "智能数据分析工具。接收用户的分析需求，自动搜索匹配相关数据表，"
         "编排分析步骤（查询、聚合、关联、对比、趋势、透视、计算、可视化等），"
         "一次性完成分析并返回结果摘要和图表文件。"
+        "对同一数据源的多个分析子问题，尽量合并为一次调用完成（不要每个子问题单独调用一次）；"
+        "本会话先前调用返回的 reusable_outputs 中的产物（如已合并的宽表）可直接复用，"
+        "在 requirement 中注明要复用的 output_var 即可，无需重新分析原始数据。"
     )
     display_name = "智能数据分析"
     category = "data_analysis"
@@ -61,6 +64,11 @@ class SmartDataAnalysisTool(BaseTool):
                 subagent_id = context.subagent_id
                 if not tenant_id:
                     tenant_id = context.tenant_id
+                # session_id 以服务端工具执行上下文为准（LLM 参数可幻觉/被注入，
+                # 且是产物注册表路径成分，不可信值会导致复用错位或路径异常）；
+                # 无上下文的调用方（后台任务）才用参数值
+                if context.session_id:
+                    session_id = context.session_id
         except Exception:
             pass
 
@@ -113,6 +121,7 @@ class SmartDataAnalysisTool(BaseTool):
                 tables_metadata=tables_metadata,
                 tenant_id=tenant_id,
                 subagent_id=subagent_id,
+                session_id=session_id,
             )
             result = await agent.run(requirement)
         except Exception as e:

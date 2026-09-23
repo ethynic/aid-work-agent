@@ -1,9 +1,9 @@
 """
 AnalysisAgent 工具 Schema 定义 + System Prompt
 
-12 个工具的 JSON Schema（OpenAI function calling 格式）：
+15 个工具的 JSON Schema（OpenAI function calling 格式）：
   检索: search_data_tables, list_data_tables
-  加载: load_table
+  加载: load_table, load_output（会话内产物复用）
   分析: query, aggregate, merge, pivot, calculate, compare, trend
   输出: to_table, to_chart
 """
@@ -23,6 +23,7 @@ ANALYSIS_SYSTEM_PROMPT = """你是一个数据分析专家。根据用户的分�
 1. 对需要使用的每个表，调用 load_table(table_id) 加载到分析环境
 2. 加载成功后会返回表的完整字段信息（列名、类型、描述），后续可用 table_id 引用该表
 3. 必须等表加载成功后，才能对该表执行查询、聚合等操作
+4. ⚠️ 若用户需求后附带「本会话已有分析产物」清单，且其中已有产物覆盖当前所需数据（如已合并的宽表、已聚合的中间结果），必须优先调用 load_output(output_var) 复用该产物，禁止重新 load_table 原始表再做一遍相同的加载、清洗和合并——重复加工会消耗大量时间和成本
 
 ## 阶段三：了解数据（强烈建议！节省大量步骤）
 
@@ -183,6 +184,29 @@ ANALYSIS_TOOLS = [
                     },
                 },
                 "required": ["table_id"],
+            },
+        },
+    },
+    # ==================== 产物复用工具 ====================
+    {
+        "type": "function",
+        "function": {
+            "name": "load_output",
+            "description": (
+                "加载本会话此前 analyze_data 已产出的中间分析产物（如已合并的宽表、聚合结果），"
+                "加载后可直接用其 output_var 作为后续分析方法的 source。"
+                "当「本会话已有分析产物」清单中存在覆盖当前需求的数据时，"
+                "必须优先用此工具复用，禁止重新 load_table 原始表再做一遍相同的加载/合并。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "output_var": {
+                        "type": "string",
+                        "description": "此前分析步骤的产物变量名（来自「本会话已有分析产物」清单或用户需求）",
+                    },
+                },
+                "required": ["output_var"],
             },
         },
     },
@@ -599,7 +623,7 @@ ALLOWED_METHODS = {
     # 检索
     "search_data_tables", "list_data_tables",
     # 加载
-    "load_table",
+    "load_table", "load_output",
     # 概览
     "describe",
     # 分析
