@@ -5,6 +5,13 @@
 > **核心**：无状态单 action `fill_template(样例, data)`；行数不匹配处理；输出不残留样例数据。
 > **流程**：每个 Phase 走 [dev_workflow.md](../../.claude/rules/dev_workflow.md) 三智能体流程。pytest 走 `./scripts/dev_test.sh`。
 
+## 开发进度
+
+| 阶段 | 内容 | 状态 | 完成记录 |
+|------|------|------|---------|
+| Phase A | 数据感知分析 + 行数不匹配渲染 | ✅ 完成（2026-07-20） | 详见下文 Phase A 清单 |
+| 运行时修复 | fill_template 缺 data/variables 的引导兜底 | ✅ 完成（2026-09-23） | 生产 tr_4a28eb2429a84dbd（tenant_aa3c4ef6c4f3 报价单）首拍只传 instruction+附件干报错，Agent 需 3 次工具调用自愈；改为返回 needs_data + 模板预览（to_md 40 行/4000 字符带截断标记）+ data 结构指引，一次往返自愈；TOOL_DESCRIPTION 同步强化调用约定。单测 10 例 + 独立测试 13 项 + CR 通过（P2 四项已采纳：截断标记/execute 穿透测试/to_thread/空预览降级文案）；生产真实模板本地验证引导兜底与智能填充双路径正常。待提交部署 |
+
 ## Phase A — 数据感知分析 + 行数不匹配渲染（主体）✅ 已完成（2026-07-20）
 
 > 依赖：无。工具的核心能力。

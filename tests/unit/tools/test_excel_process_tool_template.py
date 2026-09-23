@@ -174,6 +174,70 @@ async def test_execute_nested_totals_returns_actionable_error(sample_path):
 
 
 @pytest.mark.asyncio
+async def test_fill_without_data_returns_guided_needs_data(sample_path):
+    """生产回归（tenant_aa3c4ef6c4f3 tr_4a28eb2429a84dbd）：调用方只传
+    instruction + 模板附件、无 data/variables 时，不再干报错，而是返回
+    needs_data 引导（含模板内容预览 + data 结构指引），Agent 一次往返即可
+    构造 data 重试，无需额外"读模板"调用"""
+    tool = ExcelProcessTool()
+    from src.tools.excel.excel_process_tool import PipelineContext
+    ctx = PipelineContext(
+        file_paths=[str(sample_path)],
+        instruction="按照模板《报价单》样式生成报价单",
+        output_name="报价单.xlsx",
+    )
+    res = await tool._handle_fill_template(ctx, {})
+
+    assert not res["success"]
+    assert res.get("needs_data") is True
+    assert "data" in res["error"] and "instruction" in res["error"]
+    # 模板预览包含样例实际内容（Agent 据此构造 data，省一次 to_md 往返）
+    assert "住宿" in res.get("template_preview", "")
+    assert "合计" in res.get("template_preview", "")
+
+
+@pytest.mark.asyncio
+async def test_fill_without_data_preview_failure_still_guides(sample_path):
+    """模板预览生成异常时不影响引导兜底主体（error/needs_data 仍完整），
+    且空预览时 error 提示降级为"先读模板"指引"""
+    tool = ExcelProcessTool()
+    from src.tools.excel.excel_process_tool import PipelineContext
+    ctx = PipelineContext(file_paths=[str(sample_path)])
+    with patch(
+        "src.tools.excel.excel_to_md.excel_to_markdown",
+        side_effect=RuntimeError("boom"),
+    ):
+        res = await tool._handle_fill_template(ctx, {})
+    assert not res["success"]
+    assert res.get("needs_data") is True
+    assert res["error"]
+    assert "读取该模板内容" in res["error"]  # 空预览降级指引
+    assert res.get("template_preview") == ""
+
+
+@pytest.mark.asyncio
+async def test_execute_fill_without_data_passes_needs_data_fields(sample_path):
+    """execute() 全链路回归：路由判 fill_template 但无 data/variables 时，
+    pipeline 仅追加 failed_at、原样透传 needs_data/template_preview，
+    Agent 收到完整引导（与 _handle_export 的 needs_data 同一穿透机制）"""
+    tool = ExcelProcessTool()
+
+    async def fake_resolve(*args, **kwargs):
+        return {"task": "fill_template", "params": {}}
+
+    with patch.object(ExcelProcessTool, "_resolve_task", fake_resolve):
+        res = await tool.execute(
+            file_paths=[str(sample_path)],
+            instruction="按照模板《报价单》样式生成报价单",
+            output_name="报价单.xlsx",
+        )
+    assert not res["success"]
+    assert res.get("failed_at") == "fill_template"
+    assert res.get("needs_data") is True
+    assert "住宿" in res.get("template_preview", "")
+
+
+@pytest.mark.asyncio
 async def test_legacy_variables_path_still_works(sample_path, tmp_path):
     """旧 variables 占位符路径不被新 data 分支破坏（直接调 handler）"""
     # 构造一个带 {{var}} 的模板

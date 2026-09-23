@@ -116,6 +116,7 @@ TOOL_DESCRIPTION = """Excel电子表格处理工具。处理Excel(.xlsx/.csv)文
 调用方式（重要）：
 - 推荐使用 instruction + content：instruction 放用户目的，content 放待导出的完整表格数据
 - 兼容旧调用：也可以将用户的原始需求描述和相关内容放在 context 中
+- 基于模板/样例附件生成 Excel 时，必须把待填数据构造为 data 参数（{title?, meta, rows, totals}）一并传入；尚不清楚模板结构时，可先以 instruction="读取该模板内容" 调用本工具查看模板，再带 data 重新调用
 - 如果需要将数据导出为Excel，content 或 context 中必须包含完整的 Markdown表格、CSV 或 JSON数组 数据
 - 如果当前对话中已有表格数据（由其他工具生成或用户提供），必须将其完整放入 content 中
 - output_name 可传入业务文件名
@@ -725,9 +726,48 @@ class ExcelProcessTool(BaseTool):
         from src.tools.excel.excel_template import fill_template
         variables = params.get("variables", {})
         if not variables:
-            return {"success": False, "error": "fill_template 需要 data（智能填充）或 variables（占位符替换）"}
+            return await self._fill_template_needs_data(template_path)
 
         return fill_template(template_path, variables=variables, output_name=output_name)
+
+    @staticmethod
+    async def _fill_template_needs_data(template_path: str) -> Dict:
+        """fill_template 缺 data/variables 的引导兜底：附模板内容预览返回 needs_data。
+
+        生产实证（tenant_aa3c4ef6c4f3 tr_4a28eb2429a84dbd）：调用方首拍常只传
+        instruction + 模板附件，干报错后 Agent 需额外一次"读模板"往返才能构造
+        data 自愈（报错→to_md→带 data 重试，共 3 次工具调用）。这里把模板预览
+        直接附在引导错误里，Agent 一次往返即可拿到"模板长什么样 + data 怎么传"。
+        """
+        preview = ""
+        try:
+            import asyncio
+            from src.tools.excel.excel_to_md import excel_to_markdown
+            md = await asyncio.to_thread(excel_to_markdown, template_path, max_rows=40)
+            raw = md.get("markdown") or ""
+            if len(raw) > 4000:
+                preview = raw[:4000] + "\n...(预览过长已截断，完整内容可先调用 to_md 读取)"
+            else:
+                preview = raw
+        except Exception as e:
+            logger.warning(f"[ExcelProcess] fill_template 引导兜底：模板预览生成失败: {e}")
+        if preview:
+            hint = "模板当前内容见 template_preview，按其字段构造 data。"
+        else:
+            hint = '模板预览不可用，可先调用本工具读取模板内容（instruction="读取该模板内容"）后再构造 data。'
+        return {
+            "success": False,
+            "needs_data": True,
+            "error": (
+                "fill_template 需要 data（智能填充）或 variables（占位符替换）。"
+                "请把要填入模板的数据以 data 参数传入后再调用："
+                '形如 {"title":"大标题", "meta":{"日期":"...", ...}, '
+                '"rows":[{"列名":"值", ...}, ...], "totals":{"grand_total": 123}}，'
+                "所有值必须是标量（str/int/float/bool），不要把数据写进 instruction。"
+                + hint
+            ),
+            "template_preview": preview,
+        }
 
     async def _handle_list_templates(self, ctx: PipelineContext, params: Dict) -> Dict:
         from src.tools.excel.excel_template import list_templates

@@ -76,7 +76,7 @@
 | 20260630-1733 | PDF reportlab 固定版式生成器 | 📋 待开发 | 暂不开发，未来如出现强固定版式需求再评估。 | [设计](tools/pdf/pdf_tool_gap_analysis_design.md) | — |
 | 20260630-1734 | PDF 视觉回归样本集 | 💡 灵感 | 低优先级未来项。用于沉淀小型样例 PDF、渲染 PNG 或预期检查结果，后续在改动 PDF 生成器、渲染器、验证器时做回归校验，防止中文乱码、空白页、黑页、页数错误、表格溢出等质量退化。 | [设计](tools/pdf/pdf_tool_gap_analysis_design.md) | — |
 | 20260702-1250 | 工具总体优化梳理 | 🔧 部分完成 | 跨工具层面的优化梳理登记文档（区别于单工具设计）。 | [总体设计](tools/tool-overall-optimization-design.md) / [落盘闭环+grep](tools/large-content-retrieval-design.md) / [文件工具对齐](tools/file-tools-claude-code-parity-design.md) | [开发计划](tools/tool-overall-optimization-dev-plan.md) / [落盘闭环计划](tools/large-content-retrieval-dev-plan.md) |
-| 20260720-2104 | Excel 智能模板填充工具（样例 + 数据 → 按版式生成） | 🔧 部分完成 | 通用**无状态**能力：任何"样例表格 + 结构化数据 → 按样例版式生成 Excel"的场景（旅游报价 / CRM 对账单 / 财务报表 / 贸易报价单）。 | [设计](tools/excel/excel-template-ai-design.md) | [计划](plans/plan-excel-template-ai.md) |
+| 20260720-2104 | Excel 智能模板填充工具（样例 + 数据 → 按版式生成） | 🔧 部分完成 | 通用**无状态**能力：任何"样例表格 + 结构化数据 → 按样例版式生成 Excel"的场景（旅游报价 / CRM 对账单 / 财务报表 / 贸易报价单）；2026-09-23 补缺 data 首拍引导兜底（needs_data+模板预览，生产 tr_4a28eb2429a84dbd），待部署。 | [设计](tools/excel/excel-template-ai-design.md) | [计划](plans/plan-excel-template-ai.md) |
 | 20260819-1127 | 多源脏 Excel → 标准模板 LLM 抽取填充 | 🔧 部分完成 | 场景：用户一次上传多家供应商人员增减报表 + 一个标准模板，统一汇总填入模板（样本 `ExcelAI测试.zip`，5 来源 + 1 模板）。 | [调研+决议](tools/excel/excel-etl-gap-analysis.md) / [点数测算](tools/excel/excel-etl-points-estimation.md) | [开发计划](plans/plan-excel-etl-and-email.md) |
 | 20260819-1724 | 邮件工具整体审查与整改 | 🔧 部分完成 | 邮件工具（项目最早实现，3 工具单文件 687 行）整体审查与整改：凭据加密、附件场景、开发规范对齐。 | — | [开发计划](plans/plan-excel-etl-and-email.md) |
 
