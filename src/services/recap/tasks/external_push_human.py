@@ -49,8 +49,8 @@ from src.services.recap.tasks.lead_refresh import _COLLECT_MESSAGE_LIMIT, _forma
 
 _TOPIC = "人工期推送"
 
-# 冷却防抖：同一会话 5 分钟内至多推送一次（成本控制核心，跳过不丢数据）
-_HUMAN_COOLDOWN_SECONDS = 300
+# 冷却防抖：同一会话 1 分钟内至多推送一次（成本控制核心，跳过不丢数据）
+_HUMAN_COOLDOWN_SECONDS = 60
 
 # 冷却跳过补推缓冲：补推到期时间在冷却剩余 TTL 基础上再加该缓冲，保证执行时冷却键已过期
 _COOLDOWN_DEFER_BUFFER_SECONDS = 5
@@ -356,7 +356,7 @@ class ExternalPushHumanAdapter:
             _trace_summary(payload, "skipped", "窗口内无人工期消息")
             return
 
-        # 冷却占坑（防抖）：占坑失败说明 5 分钟内已推送过，本次跳过。
+        # 冷却占坑（防抖）：占坑失败说明 1 分钟内已推送过，本次跳过。
         # 不要求留资，按 session 维度；跳过不丢数据——冷却到期后延迟补推兜底
         # （期间新消息再触发会刷新补推计划，latest-wins）
         cooldown_key = redis_client.make_key(
