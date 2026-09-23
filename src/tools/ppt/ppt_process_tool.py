@@ -19,6 +19,31 @@ from src.tools.ppt.input_normalizer import NormalizedPptInput, PptInputNormalize
 from src.tools.ppt.ppt_config import get_ppt_config
 
 
+class ImageAssetInput(BaseModel):
+    """随内容嵌入的图片资产（如 analyze_data 图表 artifacts）。"""
+
+    path: str = Field(
+        ...,
+        description="图片文件路径（如 analyze_data 图表 artifacts 的 download_path），须为当前租户存储内可读的 .png/.jpg/.jpeg 文件",
+    )
+    title: str = Field(..., description="图片标题，如「月度销售额趋势」")
+    caption: str = Field(..., description="图片说明：该图展示什么数据、支撑什么结论")
+
+    @field_validator("path", "title", "caption", mode="before")
+    @classmethod
+    def strip_fields(cls, value):
+        if isinstance(value, str):
+            return value.strip()
+        return value
+
+    @field_validator("path", "title", "caption")
+    @classmethod
+    def must_not_be_blank(cls, value):
+        if not value or not value.strip():
+            raise ValueError("不能为空")
+        return value.strip()
+
+
 class PptProcessInput(BaseModel):
     instruction: Optional[str] = Field(
         None, description="用户目的或操作指令，如“生成PPT”或“基于模板生成”"
@@ -44,6 +69,10 @@ class PptProcessInput(BaseModel):
     file_paths: Optional[List[str]] = Field(
         None,
         description="workspace 内的附件路径列表（.pptx 模板或 .html/.htm 文件）；外部文件须先用 cp 复制到 workspace"
+    )
+    images: Optional[List[ImageAssetInput]] = Field(
+        None,
+        description="随内容嵌入的图片资产列表（如 analyze_data 图表），每项含 path/title/caption；仅主题/大纲模式支持，将以 image 页嵌入",
     )
 
     @field_validator(
@@ -97,6 +126,10 @@ TOOL_DESCRIPTION = """PPT生成工具。根据用户需求生成可编辑的 Pow
   外部/临时文件先调用
   cp(source_file_path="<来源路径>", file_path="workspace/<文件名>",
      register_download=false, visible=false)，再使用 cp 返回的新路径
+- images：随内容嵌入的图片资产列表（如 analyze_data 返回的图表 artifacts），每项含
+  path（本租户存储内的图片文件路径，如 artifacts 的 download_path）、title（图片标题）、
+  caption（图片说明：该图展示什么数据、支撑什么结论，三项必填）；图片将以 image 页
+  编排进 PPT，仅主题/大纲模式支持
 工具会自动判断模式并生成PPT。
 
 📦 生成文件后必须用 cp 注册下载（重要）：
@@ -137,13 +170,33 @@ class PptProcessTool(BaseTool):
             }
 
         normalized = self._normalizer.normalize(
-            **payload.model_dump()
+            **payload.model_dump(exclude={"images"})
         )
 
         if not normalized.content and not normalized.file_paths:
             return {"success": False, "error": "请提供主题或内容（content），或提供模板文件（file_paths）"}
 
         mode = self._detect_mode(normalized)
+
+        if payload.images and mode not in {"topic_to_pptx", "outline_to_pptx"}:
+            return {
+                "success": False,
+                "error": "images 仅支持主题/大纲生成模式；模板、HTML 与 spec 模式不支持传入图片资产",
+            }
+
+        validated_images: List = []
+        if payload.images:
+            from src.tools.ppt.image_assets import validate_images
+
+            validated, image_errors = validate_images(
+                [item.model_dump() for item in payload.images]
+            )
+            if image_errors:
+                return {
+                    "success": False,
+                    "error": "图片资产校验失败：" + "；".join(image_errors),
+                }
+            validated_images = validated
 
         try:
             if mode == "template":
@@ -153,7 +206,7 @@ class PptProcessTool(BaseTool):
             elif mode == "spec_to_pptx":
                 result = await self._handle_spec(normalized)
             else:
-                result = await self._handle_auto(normalized, mode)
+                result = await self._handle_auto(normalized, mode, validated_images)
             if result.get("success"):
                 return await asyncio.to_thread(self._apply_quality_validation, result)
             return result
@@ -278,7 +331,7 @@ class PptProcessTool(BaseTool):
         return result
 
     async def _handle_auto(
-        self, normalized: NormalizedPptInput, mode: str
+        self, normalized: NormalizedPptInput, mode: str, images: Optional[List] = None
     ) -> Dict[str, Any]:
         """一键生成模式。"""
         planner = self._get_planner()
@@ -300,12 +353,18 @@ class PptProcessTool(BaseTool):
             else mode
         )
         if merged_mode == "outline_to_pptx":
-            plan = await planner.plan_from_content(content)
+            plan = await planner.plan_from_content(content, images=images)
         else:
-            plan = await planner.plan_from_topic(content or "演示文稿")
+            plan = await planner.plan_from_topic(content or "演示文稿", images=images)
 
         if "error" in plan:
             return {"success": False, "error": plan["error"]}
+
+        image_warnings: List[str] = []
+        if images:
+            from src.tools.ppt.image_assets import reconcile_image_slides
+
+            plan, image_warnings = reconcile_image_slides(plan, images)
 
         plan["title"] = (
             self._normalizer.output_title(normalized.output_name)
@@ -316,7 +375,18 @@ class PptProcessTool(BaseTool):
         plan.setdefault("style", "soft")
 
         # 生成 PPT
-        return await self._generate_ppt(plan)
+        result = await self._generate_ppt(plan)
+        if result.get("success") and images:
+            placed = sum(
+                1
+                for slide in plan.get("slides", [])
+                if isinstance(slide, dict)
+                and str(slide.get("layout") or slide.get("type") or "").lower() == "image"
+            )
+            result["message"] = f"{result.get('message', '')}，编排图片 {placed} 页".strip("，")
+        if image_warnings and result.get("success"):
+            result["warnings"] = [*result.get("warnings", []), *image_warnings]
+        return result
 
     async def _handle_template(self, normalized: NormalizedPptInput) -> Dict[str, Any]:
         """模板生成模式。"""
@@ -388,6 +458,15 @@ class PptProcessTool(BaseTool):
         output_title = self._normalizer.output_title(normalized.output_name)
         if output_title:
             spec = spec.model_copy(update={"title": output_title})
+
+        from src.tools.ppt.image_assets import normalize_spec_image_paths
+
+        spec_errors = normalize_spec_image_paths(spec)
+        if spec_errors:
+            return {
+                "success": False,
+                "error": "spec 图片路径校验失败：" + "；".join(spec_errors),
+            }
         return await asyncio.to_thread(self._render_node_spec, spec)
 
     async def _generate_ppt(self, plan: dict) -> Dict[str, Any]:
@@ -612,6 +691,8 @@ class PptProcessTool(BaseTool):
             return "content_type 不受支持，请使用 auto、text、markdown、html 或 slide_deck_spec"
         if "export_mode" in invalid_fields:
             return "export_mode 不受支持，请使用 high_fidelity、editable 或 both"
+        if any(field.split(".", 1)[0] == "images" for field in invalid_fields):
+            return "images 参数无效：每项必须包含 path、title（图片标题）与 caption（图片说明），且不能为空"
         return "请提供主题或内容（content/context），或提供模板文件（file_paths）"
 
     def _looks_like_outline(self, text: str) -> bool:

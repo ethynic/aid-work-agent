@@ -1,6 +1,7 @@
 """PPT 工具 Phase 0 回归测试。"""
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -14,13 +15,16 @@ class FakePlanner:
         self.plan = plan
         self.topic_calls = []
         self.content_calls = []
+        self.images_seen = []
 
-    async def plan_from_topic(self, topic, slide_count=None, theme_id=None):
+    async def plan_from_topic(self, topic, slide_count=None, theme_id=None, images=None):
         self.topic_calls.append(topic)
+        self.images_seen.append(images)
         return self.plan
 
-    async def plan_from_content(self, content, theme_id=None):
+    async def plan_from_content(self, content, theme_id=None, images=None):
         self.content_calls.append(content)
+        self.images_seen.append(images)
         return self.plan
 
 
@@ -414,7 +418,7 @@ async def test_unexpected_value_error_does_not_leak_details(monkeypatch):
 
     tool = PptProcessTool()
 
-    async def raise_sensitive_error(context, file_paths):
+    async def raise_sensitive_error(normalized, mode, images=None):
         raise ValueError("api_key=secret-value C:\\tenant\\private.pptx")
 
     monkeypatch.setattr(tool, "_handle_auto", raise_sensitive_error)
@@ -425,3 +429,181 @@ async def test_unexpected_value_error_does_not_leak_details(monkeypatch):
     assert result["error"] == "PPT生成失败，请检查输入内容或稍后重试"
     assert "secret-value" not in str(result)
     assert "private.pptx" not in str(result)
+
+
+# ==================== images 图片资产（分析图表嵌入）====================
+
+
+
+def _make_image(tmp_path, name="chart.png"):
+    from PIL import Image
+
+    path = tmp_path / name
+    Image.new("RGB", (40, 30), color=(30, 90, 200)).save(path)
+    return str(path)
+
+
+def _patch_tenant_root(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        "src.tools.ppt.image_assets.resolve_tenant_root", lambda: str(tmp_path)
+    )
+
+
+@pytest.mark.asyncio
+async def test_images_flow_to_planner_and_missing_appended_before_summary(
+    tmp_path, monkeypatch
+):
+    from src.tools.ppt.generator import PPTGenerator
+    from src.tools.ppt.ppt_process_tool import PptProcessTool
+
+    monkeypatch.setenv("PPT_RENDERER", "python_pptx")
+    monkeypatch.setattr(PPTGenerator, "_get_output_dir", lambda self: tmp_path)
+    _patch_tenant_root(monkeypatch, tmp_path)
+    image_path = _make_image(tmp_path)
+
+    tool = PptProcessTool()
+    planner = FakePlanner(_sample_plan("销售分析报告"))
+    tool._planner = planner
+
+    result = await tool.execute(
+        content="销售分析报告",
+        images=[{"path": image_path, "title": "月度销售额趋势", "caption": "Q3 环比 +23%"}],
+    )
+
+    assert result["success"] is True
+    images_passed = planner.images_seen[0]
+    assert images_passed and images_passed[0].path == os.path.realpath(image_path)
+    assert "编排图片 1 页" in result["message"]
+    assert any("补图片页" in w for w in result["warnings"])
+    # 补页在 summary 前：第 3 页为图片页、第 4 页为总结
+    prs = Presentation(result["file_path"])
+    assert len(prs.slides) == 4
+    assert any(shape.shape_type == 13 for shape in prs.slides[2].shapes)  # PICTURE
+    assert "总结" in _slide_texts(result["file_path"])[3]
+
+
+@pytest.mark.asyncio
+async def test_images_rejected_in_template_and_spec_and_html_modes(
+    tmp_path, monkeypatch
+):
+    from src.tools.ppt.ppt_process_tool import PptProcessTool
+
+    _patch_tenant_root(monkeypatch, tmp_path)
+    image_path = _make_image(tmp_path)
+    template = tmp_path / "template.pptx"
+    Presentation().save(str(template))
+
+    tool = PptProcessTool()
+
+    result = await tool.execute(
+        file_paths=[str(template)],
+        content="模板演示",
+        images=[{"path": image_path, "title": "t", "caption": "c"}],
+    )
+    assert result["success"] is False
+    assert "仅支持主题/大纲" in result["error"]
+
+    spec = {
+        "title": "spec 演示",
+        "slides": [{"id": "s1", "nodes": [{"type": "text", "x": 1, "y": 1, "w": 5, "h": 1, "text": "hi"}]}],
+    }
+    result = await tool.execute(
+        content=json.dumps(spec), content_type="slide_deck_spec",
+        images=[{"path": image_path, "title": "t", "caption": "c"}],
+    )
+    assert result["success"] is False
+    assert "仅支持主题/大纲" in result["error"]
+
+    result = await tool.execute(
+        content="<html><body><h1>页面</h1></body></html>", content_type="html",
+        images=[{"path": image_path, "title": "t", "caption": "c"}],
+    )
+    assert result["success"] is False
+    assert "仅支持主题/大纲" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_images_outside_tenant_root_rejected(tmp_path, monkeypatch):
+    from src.tools.ppt.ppt_process_tool import PptProcessTool
+
+    tenant_root = tmp_path / "tenant"
+    tenant_root.mkdir()
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+    outside_image = _make_image(outside_dir, "secret.png")
+    _patch_tenant_root(monkeypatch, tenant_root)
+
+    tool = PptProcessTool()
+    result = await tool.execute(
+        content="销售分析",
+        images=[{"path": outside_image, "title": "越界图", "caption": "c"}],
+    )
+    assert result["success"] is False
+    assert "不在当前租户存储目录内" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_images_missing_caption_rejected_by_schema(tmp_path, monkeypatch):
+    from src.tools.ppt.ppt_process_tool import PptProcessTool
+
+    _patch_tenant_root(monkeypatch, tmp_path)
+    image_path = _make_image(tmp_path)
+
+    tool = PptProcessTool()
+    result = await tool.execute(
+        content="销售分析",
+        images=[{"path": image_path, "title": "有标题没说明"}],
+    )
+    assert result["success"] is False
+    assert "images 参数无效" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_spec_mode_image_node_path_normalized_and_outside_rejected(
+    tmp_path, monkeypatch
+):
+    from src.tools.ppt.ppt_process_tool import PptProcessTool
+
+    tenant_root = tmp_path / "tenant"
+    tenant_root.mkdir()
+    _patch_tenant_root(monkeypatch, tenant_root)
+    image_path = _make_image(tenant_root)
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+    outside_image = _make_image(outside_dir, "secret.png")
+
+    def _spec(image_path):
+        return {
+            "title": "spec 图片",
+            "slides": [{
+                "id": "s1",
+                "nodes": [
+                    {"type": "image", "x": 1, "y": 1, "w": 4, "h": 3, "path": image_path},
+                ],
+            }],
+        }
+
+    tool = PptProcessTool()
+    captured = {}
+    monkeypatch.setattr(
+        tool,
+        "_render_node_spec",
+        lambda spec, output_stem=None: captured.update(spec=spec)
+        or {"success": True, "file_path": str(tmp_path / "out.pptx"), "slide_count": 1},
+    )
+    monkeypatch.setattr(tool, "_apply_quality_validation", lambda result: result)
+
+    # 越界路径：校验失败，返回明确错误
+    result = await tool.execute(
+        content=json.dumps(_spec(outside_image)), content_type="slide_deck_spec"
+    )
+    assert result["success"] is False
+    assert "spec 图片路径校验失败" in result["error"]
+
+    # 合法路径：校验通过，节点路径被规范化为绝对路径
+    result = await tool.execute(
+        content=json.dumps(_spec(image_path)), content_type="slide_deck_spec"
+    )
+    assert result["success"] is True
+    node = captured["spec"].slides[0].nodes[0]
+    assert node.path == os.path.realpath(image_path)

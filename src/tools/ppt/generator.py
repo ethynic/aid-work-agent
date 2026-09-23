@@ -18,6 +18,7 @@ from src.tools.ppt.layouts.toc import render_toc
 from src.tools.ppt.layouts.section import render_section
 from src.tools.ppt.layouts.content import render_content
 from src.tools.ppt.layouts.chart import render_chart
+from src.tools.ppt.layouts.image import render_image
 from src.tools.ppt.layouts.summary import render_summary
 
 
@@ -63,6 +64,8 @@ class PPTGenerator:
             layout = data.get("layout", "bullets")
             if layout == "chart":
                 render_chart(slide, data, self.theme, index, total)
+            elif layout == "image":
+                render_image(slide, data, self.theme, index, total)
             else:
                 render_content(slide, data, self.theme, index, total)
         else:

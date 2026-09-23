@@ -31,7 +31,6 @@ def render_content(slide, data: dict, theme: PPTTheme, index: int, total: int):
         "stat": _render_stat,
         "comparison": _render_comparison,
         "timeline": _render_timeline,
-        "image": _render_image,
     }.get(layout, _render_bullets)
 
     renderer(slide, data, theme)
@@ -221,64 +220,4 @@ def _render_timeline(slide, data: dict, theme: PPTTheme):
             x=cx - 1.2, y=text_y, w=2.4, h=0.9,
             font_size=13, color=theme.secondary,
             align="center",
-        )
-
-
-# ── image：图片占位（记录图片路径信息） ──
-
-def _render_image(slide, data: dict, theme: PPTTheme):
-    image_path = data.get("image_path", "")
-    caption = data.get("caption", "")
-    points = data.get("points", [])
-
-    if image_path:
-        try:
-            from pptx.util import Inches
-            slide.shapes.add_picture(
-                image_path,
-                Inches(1.0), Inches(2.0),
-                Inches(5.0), Inches(4.0),
-            )
-        except Exception:
-            # 图片加载失败时显示占位框
-            add_shape_rounded_rect(
-                slide, 1.0, 2.0, 5.0, 4.0,
-                fill_color=theme.light,
-                corner_radius=0.1,
-            )
-            add_textbox(
-                slide, "图片区域",
-                x=1.5, y=3.5, w=4.0, h=1.0,
-                font_size=20, color=theme.secondary,
-                align="center",
-            )
-    else:
-        add_shape_rounded_rect(
-            slide, 1.0, 2.0, 5.0, 4.0,
-            fill_color=theme.light,
-            corner_radius=0.1,
-        )
-        add_textbox(
-            slide, "图片区域",
-            x=1.5, y=3.5, w=4.0, h=1.0,
-            font_size=20, color=theme.secondary,
-            align="center",
-        )
-
-    # 右侧要点
-    if points:
-        for i, point in enumerate(points[:5]):
-            y = 2.0 + i * 0.7
-            add_textbox(
-                slide, f"• {point}",
-                x=6.5, y=y, w=5.5, h=0.5,
-                font_size=14, color=theme.secondary,
-            )
-
-    # 图片说明
-    if caption:
-        add_textbox(
-            slide, caption,
-            x=1.0, y=6.2, w=5.0, h=0.4,
-            font_size=11, color=theme.accent,
         )

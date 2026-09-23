@@ -6,12 +6,15 @@ PPT LLM 内容规划器
 
 import json
 import re
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from loguru import logger
 
 from src.tools.context import resolve_llm_gateway
 from src.tools.ppt.layout_registry import LAYOUT_IDS
+
+if TYPE_CHECKING:
+    from src.tools.ppt.image_assets import ImageAsset
 
 _LAYOUT_LIST = "/".join(LAYOUT_IDS)
 
@@ -28,6 +31,7 @@ SYSTEM_PROMPT = f"""你是一个专业的PPT内容规划师。根据用户输入
 8. bullets/timeline 不超过5项，stat/comparison/image/summary每组不超过4项
 9. chart 不超过8个分类，table 每页不超过8行（含表头）
 10. 内容放不下时主动拆成多页，不缩小字号、不添加坐标
+11. image 页的 image_path 必须原样取自「可用图片资源」清单中的路径，不得编造或修改
 
 布局与数据槽位：
 - cover: 封面页（title, subtitle, presenter, date）
@@ -69,22 +73,30 @@ class PPTPlanner:
         return resolve_llm_gateway(self._gateway)
 
     async def plan_from_topic(self, topic: str, slide_count: Optional[int] = None,
-                              theme_id: Optional[int] = None) -> Dict[str, Any]:
+                              theme_id: Optional[int] = None,
+                              images: Optional[List["ImageAsset"]] = None) -> Dict[str, Any]:
         """从主题生成大纲。"""
         prompt = f"请为以下主题生成一份PPT大纲：{topic}"
         if slide_count:
             prompt += f"\n期望页数：约{slide_count}页"
         if theme_id:
             prompt += f"\n指定配色方案ID：{theme_id}"
+        if images:
+            from src.tools.ppt.image_assets import format_image_resources
+            prompt += f"\n\n{format_image_resources(images)}"
 
         return await self._call_llm(prompt)
 
     async def plan_from_content(self, content: str,
-                                theme_id: Optional[int] = None) -> Dict[str, Any]:
+                                theme_id: Optional[int] = None,
+                                images: Optional[List["ImageAsset"]] = None) -> Dict[str, Any]:
         """从 Markdown 内容生成大纲。"""
         prompt = f"请将以下内容转换为PPT大纲：\n\n{content}"
         if theme_id:
             prompt += f"\n指定配色方案ID：{theme_id}"
+        if images:
+            from src.tools.ppt.image_assets import format_image_resources
+            prompt += f"\n\n{format_image_resources(images)}"
 
         return await self._call_llm(prompt)
 
