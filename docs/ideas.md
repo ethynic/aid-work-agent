@@ -65,7 +65,7 @@
 
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
-| 20260923-2340 | PPT 图片资产接入（分析图表嵌入） | 🔧 部分完成（开发+测试+CR 完成，待提交部署） | ppt_process 新增 images 结构化入参（path+title+caption），分析图表 PNG 经租户根域校验后由 planner 编排为 image 页，agent 自主调度零引导 | [设计](tools/ppt/ppt-image-assets-design.md) | [开发计划](plans/plan-ppt-image-assets.md) |
+| 20260923-2340 | PPT 图片资产接入（分析图表嵌入） | 🔧 部分完成（开发+测试+CR 完成，待部署验证） | ppt_process 新增 images 结构化入参（path+title+caption），分析图表 PNG 经租户根域校验后由 planner 编排为 image 页，agent 自主调度零引导 | [设计](tools/ppt/ppt-image-assets-design.md) | [开发计划](plans/plan-ppt-image-assets.md) |
 | 20260923-1142 | 数据分析产物复用（analyze_data 跨调用） | 🔧 部分完成 | 同会话多次 analyze_data 复用中间产物（注册表 + load_output），消除 392 积分事故的重复合并 | [事故复盘](incidents/analysis-agent-cost-392-credits-incident.md) | [开发计划](plans/plan-analysis-artifact-reuse.md) |
 | 20260920-1554 | 知识库文件搜索工具（knowledge_file_search） | 🔧 部分完成（开发+测试完成，待部署验证） | 按原始文件名（documents.title，模糊/精确）定位知识库文档，返回 file_path 供 LLM 用 read 分页读取，解决「提示词按文件名引用知识库文档 → LLM 拿标题当路径 read 连败」（2026-09-20 生产案例：tenant_923f70a485a1 数据分析助手 3 连 read 失败）。与 /api/knowledge/search_documents 语义检索互补不替代；领域逻辑下沉 KnowledgeService.search_documents_by_title，共享范围/可见性/owner 标注公共化复用，模式 A；互引 description + 0 命中引导防与 knowledge_base_search 误用。纯 DB 元数据查询，无计费点。 | — | [开发计划](plans/plan-knowledge-file-search.md) |
 | 20260917-1422 | BOSS 简历识别去 OCR 化（GLM-5.3-Flash 多模态） | 🔧 部分完成（开发+真机验证完成，待提交部署） | 客户端只交图，云端 VL 一次评估出姓名/总结/评分/key_info（11s/份）；姓名门防点错人、文本不可信防计费造假；识别费 1 积分/份成功即扣。 | [设计](design/desktop-automation/boss-resume-vl-recognition-design.md) | [计划](plans/desktop-automation/plan-boss-resume-vl-recognition.md) |
