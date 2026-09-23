@@ -8,35 +8,35 @@
 | Phase 1 | AgentApplication 抽取与 inline 单执行链 | 📋 待开发 | — |
 | Phase 2 | Run/Command/Event 持久化、队列、等待与终态事务 | 📋 待开发 | — |
 | Phase 3 | 独立 agent-runner、租约恢复、deadline 与运维能力 | 📋 待开发 | — |
-| Phase 4 | Web submit/subscribe、前端恢复、灰度切换与旧链退场 | 📋 待开发 | — |
+| Phase 4 | Web submit/subscribe 与前端恢复 | 📋 待开发 | — |
 | Phase 5 | 持久通知、全局订阅与浏览器通知 | 📋 待开发 | — |
 | Phase 6 | Channel Gateway、微信客服首接与全部生产渠道迁移 | 📋 待开发 | — |
-| P0 收口 | 压测、故障演练、生产灰度、旧路径删除与验收归档 | 📋 待开发 | — |
+| P0 收口 | 完整候选版在 agent3 联合验收、旧路径删除与上线准备 | 📋 待开发 | — |
 
 > 状态：待开发。本文只负责任务拆解、依赖、交付批次、测试门禁和上线顺序；业务语义与协议以
 > [P0 设计基线](./plan-unified-agent-run-lifecycle.md)为唯一权威。两处冲突时先修订设计基线，再修改实现，禁止在代码或本文中另造语义。
 >
-> 优先级：P0。微信客服 `wecom_kf` 与 Phase 0 盘点出的全部已售、生产启用渠道完成迁移，才算 P0 完成。
+> 优先级：P0。Web、微信客服 `wecom_kf` 与 Phase 0 盘点出的全部已售、生产启用渠道必须在同一候选版本中完成。完整版本在 agent3 测试通过后才能合并到 master，随后按一次生产发布执行；本文的 Phase/B 批次是开发与验证顺序，不是生产灰度批次。
 >
 > 日期：2026-09-22
 
 ## 1. 文档分工与技术实现文档结论
 
-现有 P0 设计基线已经明确了对象、状态机、命令、事件、数据责任、目录结构、执行进程、超时、灰度、回滚和验收，不再新建一份覆盖全系统的“纯技术实现文档”。再复制一遍会造成状态、字段和切换规则在两处漂移。
+现有 P0 设计基线已经明确了对象、状态机、命令、事件、数据责任、目录结构、执行进程、超时、一次性切换、故障收敛和验收，不再新建一份覆盖全系统的“纯技术实现文档”。
 
 三类文档的职责固定如下：
 
 | 文档 | 负责什么 | 不负责什么 |
 |------|----------|------------|
 | P0 设计基线 | 为什么改、规范语义、所有权、契约、状态机、数据与切换规则 | 开发排期、领取任务、逐批进度 |
-| 本开发执行计划 | 做事顺序、代码落点、批次边界、测试门禁、灰度和完成定义 | 重新定义状态、协议或数据库语义 |
+| 本开发执行计划 | 做事顺序、代码落点、批次边界、agent3 验收与一次发布门禁 | 重新定义状态、协议或数据库语义 |
 | 局部实现附件 | 仅在需要时记录经代码/实测才能冻结的窄主题 | 复制整份架构设计 |
 
 Phase 0 只有在以下情况出现时，才补局部附件或 ADR：
 
 - DDL 字段、索引或数据回填方案超过主设计可清楚表达的范围；
 - 某个渠道的平台顺序、咨询 epoch、重试回执需要独立协议表；
-- Web 或渠道生产切换需要操作级 runbook；
+- Web 与渠道一次性生产切换需要操作级 runbook；
 - agent-runner/channel-worker 的容量压测形成独立基线；
 - `/api/chat` 调用方审计产生退场或兼容迁移清单。
 
@@ -54,29 +54,27 @@ Phase 0 只有在以下情况出现时，才补局部附件或 ADR：
 6. 所有入库、查询和控制命令先做可信 tenant/user/session 归属校验；客户端提交的 tenant 或授权声明不可信。
 7. Browser 首期 fail-closed，不得为兼容其进程内 owner/Hub 破坏新架构。
 8. 不使用外键、触发器、存储过程或复杂视图；跨表完整性由稳定引用、唯一索引和 Python 事务校验保证。
+9. P0 一次上线不能中断已在生产使用的独立 Runtime + Provider 链路。P0 可沿用现有 `/api/local-tools/runtime/*` 兼容协议，但 Run 发起的本地工具调用必须通过受信设备执行边界关联 Invocation、结果和 Run；完整新版 Device API 服务端仍由桌面 P1 子轨实现。
 
 ### 2.2 依赖关系
 
 ```text
-Phase 0 契约与事实盘点
+Phase 0 契约、现状和一次切换条件
         ↓
-Phase 1 单进程 AgentApplication
+Phase 1 AgentApplication（只在隔离环境验证）
         ↓
-Phase 2 持久状态/事件/终态事务
-        ├────────→ Phase 3 agent-runner
-        ├────────→ Phase 5 通知基础
-        └────────→ Phase 6 渠道基础设施
+Phase 2 持久状态、队列、终态事务
+        ├────────→ Phase 3 runner 与恢复
+        ├────────→ Phase 4 Web 客户端与 API
+        ├────────→ Phase 5 通知
+        └────────→ Phase 6 Gateway、worker、全部生产 Connector
                          ↓
-Phase 3 + Phase 4 Web 完成生产切换门槛
+             完整候选版在 agent3 联合验收
                          ↓
-                 微信客服生产切换
-                         ↓
-                  其余生产渠道迁移
-                         ↓
-                      P0 收口
+              合并 master → 一次生产发布
 ```
 
-Phase 6 的数据库、Gateway 和 worker 基建在 Phase 2 schema 稳定后即可与 Phase 3～5 并行；微信客服真正切到 `run_service` 依赖 Phase 4 的统一 Run 生产链路，不依赖 Phase 5 浏览器通知。
+Phase 3～6 可在共同契约和 Phase 2 schema 稳定后并行开发；微信客服及其余渠道无需等待 Web 先在生产切换。Web、全部生产渠道、通知、runner 和 channel worker 必须在 agent3 作为一个系统通过验收，才产生可合并 master 的候选版。批次完成可以提交到功能分支，但不得把未完成的 P0 功能部署到生产。
 
 ### 2.3 高风险开发流程
 
@@ -103,11 +101,11 @@ Phase 6 的数据库、Gateway 和 worker 基建在 Phase 2 schema 稳定后即�
 4. 运维/设计 owner 对执行时间、数据范围和查询结果签注；开发者负责把脱敏聚合结论写入 B00 交付物。原始客户消息、附件、密钥、token、完整手机号/外部联系人标识不得进入仓库，必要的租户/账号明细保存在批准的安全位置，版本库只记录受控引用和结论。
 5. 只有用户或运维明确授权且已有最小权限只读机制时，开发者才可直接查询生产；该授权不扩展为写权限，也不允许临时复制生产凭据到配置或文档。
 
-责任分工：开发者拥有查询定义、代码事实和结论分析；运维/设计 owner 拥有生产查询执行、数据脱敏与覆盖证明。B00 可以先开展代码侧工作，但以下证据未交付前不得标记完成，也不得进入对应生产切换：browser 真实用量、生产渠道账号清单、`/api/chat` 调用量、Run/模型/工具耗时分布。
+责任分工：开发者拥有查询定义、代码事实和结论分析；运维/设计 owner 拥有生产查询执行、数据脱敏与覆盖证明。B00 可以先开展代码侧工作，但以下证据未交付前不得标记完成，也不得确定完整生产切换方案：browser 真实用量、生产渠道账号清单、`/api/chat` 调用量、Run/模型/工具耗时分布。
 
 责任人与时限不再使用无归属的“等待运维”表述：本计划发起人/生产环境负责人是 accountable owner，也是开发者提交 query pack 的默认接收人；B00 启动记录必须填写实际执行人姓名、备份人姓名和安全回传位置。个人姓名不能由设计文档猜测，必须由 accountable owner 在 B00 kickoff 时确认。query pack 提交后默认 2 个工作日内回传结果或书面说明数据缺口；逾期即执行下述保守策略，不无限阻塞开发。仿真快照必须同时回传 `source_snapshot_at`、`restore_completed_at` 和覆盖的数据源；任一时间未知时不得把该快照当成“当前生产”证据。
 
-若某项生产证据在计划窗口内仍不可获得，采用保守结论而不是猜测：相关工具保持 background deny；可能使用 browser 的租户保持 legacy；`/api/chat` 按“存在调用方”实现 durable compatibility adapter、不得 410；未核实渠道账号保持 legacy 且仍在 P0 清单；deadline 只允许内部小流量验证，不得扩大生产灰度。
+若某项生产证据在计划窗口内仍不可获得，采用保守结论而不是猜测：相关工具保持 background deny；可能使用 browser 的客户须在整体上线前完成能力替代或经业务负责人确认的停用处理；`/api/chat` 按“存在调用方”实现 durable compatibility adapter、不得 410；未核实渠道账号继续计入 P0 范围并阻断整体发布；deadline 先在隔离环境校准，完整候选版再到 agent3 验证。不能以某租户或渠道继续留在 legacy 作为 P0 完成条件。
 
 ### WP0.1 真实调用方与对象映射
 
@@ -120,7 +118,7 @@ Phase 6 的数据库、Gateway 和 worker 基建在 Phase 2 schema 稳定后即�
 - `session_tasks`、`local_tool_invocations`、Trace、usage、`chat_records`、Artifact 的 Run 关联方式；
 - 所有 server tool 的 effect、幂等性、可取消性、timeout、结果未知与恢复策略。
 
-交付物：字段级映射表、生产渠道清单、工具准入矩阵、`/api/chat` 二选一决议、browser allowlist/替代方案。所有无法确认的工具默认不进入 background Run。
+交付物：字段级映射表、生产渠道清单、工具准入矩阵、`/api/chat` 二选一决议、browser 替代方案或客户停用/迁移决议。所有无法确认的工具默认不进入 background Run。
 
 ### WP0.2 公共契约与状态测试
 
@@ -134,14 +132,15 @@ Phase 6 的数据库、Gateway 和 worker 基建在 Phase 2 schema 稳定后即�
   fail-loud；optional minor progress event 可忽略但必须可观测；
 - `states.py`：合法迁移、终态、内部 phase 到外部 status 映射；
 - 同批冻结跨 Python/TypeScript 的正式 wire 协议源、生成命令、兼容样例和 owner；建议目标为 `contracts/agent-run/` 与 `contracts/device-runtime/`，最终路径由 Phase 0 评审确认。旧 `contracts/desktop-agent` D1 保持 frozen，只作删除审计；Desktop P1 只能消费生成类型，不能先行手写另一套正式 DTO；
+- 契约符合性测试必须从同一份规范样例覆盖 Web adapter、Channel Gateway/Connector、Desktop Fake/正式 AgentClient 与现有 Runtime 兼容 adapter：命令身份和幂等、typed SessionRef、Run 状态/事件顺序、错误/权限拒绝、Invocation 结果与版本不兼容。各入口可以有不同传输与认证，但转换后不能有不同的 Run 语义；P0 B-final 验 Web/全部生产渠道/现有 Runtime，桌面正式客户端在 P1 Gate 复跑；
 - B01/G0 同批冻结交互客户端所需的基础 wire DTO：typed `SessionRef`、Session create/list/get summary、
   canonical Conversation message/cursor/page、Artifact upload request/metadata/authorized ref、按
   `command_id + request_digest` 查询的 command receipt，以及受权 Device directory list/get/select intent/
   receipt。这里仅冻结身份、权限摘要、分页/cursor、版本与错误语义；B11 才实现真实 HTTP/存储表面。
   Notification DTO 不冒充 G0 交付，统一由 B13/G3 冻结并实现；
 - B01 对 Device API 的责任止于规范身份、版本、Invocation、claim/fence、result/evidence/ACK、
-  reconcile 和兼容样例；完整服务端 endpoint、现有 `/api/local-tools/runtime/*` 兼容迁移与测试部署
-  由 Desktop P1 Device Backend 子轨负责。该子轨不是 P0 完成前置，也不能反向改写 B01 语义；
+  reconcile 和兼容样例；完整新版服务端 endpoint 与版本化迁移由 Desktop P1 Device Backend 子轨负责。
+  但 P0 必须保留并接通现有生产 Runtime 协议，让新 Run 可使用现有本地 Provider；这条兼容链的真实联调是 P0 发布门禁，不得因为完整新版 Device API 归 P1 就跳过；
 - fake model、fake tool、memory repository、fake clock；
 - repository contract suite 必须与实现无关：同一组状态、幂等、版本、队列和 finalization 场景从 B01 起对 memory repository 运行，B05 起以参数化 fixture/共享 contract mixin 对 PostgreSQL repository 原样复跑；PG 独有的事务隔离、行锁、唯一约束冲突和 `SKIP LOCKED` 另加集成测试，不能用 memory 绿替代；
 - 对 command 幂等、版本 CAS、迟到澄清、append 终态竞态、取消请求与取消完成分离建立红灯测试。
@@ -152,10 +151,12 @@ Phase 6 的数据库、Gateway 和 worker 基建在 Phase 2 schema 稳定后即�
 
 冻结最小表/扩列、索引、租户查询路径、保留期限和清理 owner。至少覆盖：
 
-- Run、command、event、tenant Web route、legacy Web claim；
+- Run、command、event；不为发布新增旧执行在途 claim、入站缓冲、全局切换代次或按租户切换的 Web route 表；
+- 旧 Web/渠道 Session 历史继续可读，但旧 `session_queue` pending/responding、browser suspension
+  和其他旧执行标记不迁成新 Run，也不得占用新 Session active 槽；
 - `agent_run_commands.input_snapshot`（或 DDL 评审确认的等价 JSONB 字段）保存有序输入块和可信 artifact 快照：稳定 `artifact_id/storage_ref`、mime、size、digest、retention；不保存临时下载 URL、凭据或裸路径。P0 默认不为此另建全局 Artifact 表，除非现有产物存储无法提供稳定引用或所需保留期；
 - notification/outbox；
-- 渠道 receipt、batch、wait binding、processing claim、projector cursor、delivery outbox、reply budget 与 route epoch；
+- 新版本正常运行所需的渠道 receipt、batch、wait binding、processing claim、projector cursor、delivery outbox 和 reply budget；不使用按渠道账号灰度的 route mode；
 - ToolInvocation/ModelAttempt/Artifact 的稳定 Run 引用；
 - finalization 如何复用现有 `ChatRecordDB.create` 的事务连接；
 - `chat_sessions` 与 `channel_sessions` 两类 Session 锁锚点；
@@ -184,10 +185,10 @@ DDL 评审通过后，实施时同步维护：
 - `frontend/web/composables/useAgent.ts` 的 submit/subscribe、断网重试、stable command_id 和 RunProjection；
 - `ChatContainer.vue`、`ChatInput.vue` 的停止/补充/新任务三动作；
 - 会话列表的 active/queued/blocked/completed unread 投影；
-- 刷新后的 `list_session_runs` 恢复、`reset_required`、draining 和 cancel requested 展示；
+- 刷新后的 `list_session_runs` 恢复、`reset_required`、全局维护窗口和 cancel requested 展示；
 - `src/config/settings.py` 与 `configs/config.yaml` 的 flag/default；
 - `docker-compose.prod.yml` 中 `aid-agent-runner`、`aid-channel-worker`、healthcheck、优雅 drain 和副本配置；
-- Web 与渠道 shadow/draining/run_service 的上线 SOP 和监控面板字段。
+- agent3 完整验收清单、Web/渠道停机发版 SOP、旧任务允许失败与用户重试提示、恢复后新请求验证。
 
 ### Phase 0 退出门禁
 
@@ -197,12 +198,12 @@ DDL 评审通过后，实施时同步维护：
 - [ ] `/api/chat`、browser、旧 D1、生产渠道清单均已拍板；
 - [ ] 生产 evidence query pack 已由运维/设计 owner 执行并记录窗口、快照时间和覆盖缺口；无法取得的数据已按保守策略处理；
 - [ ] deadline 覆盖 P95/P99 和合法长任务，不以猜测定值；
-- [ ] Web/渠道/worker 上线与回滚负责人、指标和阈值已写入 SOP；
+- [ ] agent3 联合验收与一次停机发版的负责人、不可用窗口、旧任务失败告知、恢复验证和故障处理 SOP 已明确；
 - [ ] 独立测试与独立 CR 完成，无未关闭 Sev-0/Sev-1 缺陷。
 
-## 4. Phase 1：统一应用服务，仍保持 inline
+## 4. Phase 1：统一应用服务，在隔离环境保持 inline
 
-目标是在不引入后台 worker 的情况下，让生产 Web 新路径能通过一个应用服务完成一次真实运行。此阶段禁止双执行和双主写。
+目标是在不引入后台 worker 的情况下，证明 Web 与渠道适配器可以调用同一个应用服务完成真实用例。该阶段只在本地和隔离测试环境运行，不能作为生产 Web 的中间版本。
 
 ### WP1.1 AgentApplication 与执行适配器
 
@@ -230,33 +231,27 @@ src/services/agent_run/
 - 匿名入口迁到受限 `transient_inline`，不创建 durable Run、不执行写工具；
 - 按 Phase 0 决议，把 `/api/chat` 做 deprecated/410 准备或 durable transient adapter。
 
-### WP1.2 Web shadow 转换器与对账准备
+### WP1.2 旧行为对照与适配器契约
 
-- legacy 仍是唯一执行者和消息主写者；
-- 本阶段只完成“legacy 事件→规范 Run 事件/快照”的转换器、测试 sink 和对账规则，不声称已持久接纳 Run；
-- Phase 2 仓储和 DDL 上线后，才把转换结果持久化为 `run_origin=shadow_projection` 快照并启用生产 shadow；
-- shadow Run 无 owner/lease，不占 Session active 槽，不进入 runner/reaper；
-- 对比最终文本、状态、消息引用、usage 和错误分类；发现差异只记录，不让 shadow 改业务事实。
+- 使用固定录制用例和假模型/工具验证可重复的边界、异常与并发；同时使用用户现有本地容器中的真实模型、真实工具、测试数据库和隔离账号，验证代表性的发问→工具→回复链路。假工具不能代替真实联调；会触达外部平台的 Provider 只能使用已确认的测试账号/资源；
+- 同一输入只运行一条执行链并由 ConversationRepository 主写；测试对照不产生生产 shadow Run、额外消息或第二次外部副作用；
+- 将发现的行为差异作为 Phase 1 缺陷修复，不能等上线后靠租户 shadow 对账发现。
 
-### WP1.3 Phase 1 临时生产灰度
+### WP1.3 阶段验证与集成条件
 
-Phase 1 的 inline 新路径也必须灰度，不能因为它仍在 HTTP 请求内执行就直接替换全部 Web：
-
-- 默认所有租户保持 legacy；使用服务端临时配置 `agent_runs.phase1_inline_tenant_allowlist=[]`，客户端无权选择；
-- 先只加入内部测试租户，验证 Agent 构造、消息主写、usage/计费、取消、附件和 browser fail-closed，再按 Phase 0 冻结的指标扩到少量明确批准租户；
-- 每次扩量前等待上一批观察窗口结束；任何重复消息、漏计费、权限错误或行为差异立即移出 allowlist，当前请求自然收敛，不在中途交给另一条路径；
-- Phase 2 DDL 部署前停止扩量；部署时先等 Phase 1 inline 在途请求结束，再把普通生产租户收回 legacy/shadow，对新的持久 Run 以 shadow 对账为主，仅内部/测试租户保留 inline 验证；
-- `tenant_agent_run_routes` 上线并通过 Phase 2/3 门禁后，删除临时 allowlist，后续只使用持久 route mode/epoch，不能让两套租户路由长期并存。
+- 用隔离租户覆盖 Agent 构造、消息主写、usage/计费、取消、附件、browser fail-closed 和 Web/渠道 SessionRef 权限；
+- 先合入经过测试的应用服务和 adapter 到 P0 功能分支，再继续 Phase 2 的持久化；此时生产仍运行现有版本，不部署 Phase 1；
+- 旧 Web 和渠道入口的兼容性由录制回归和最终 agent3 联合验收验证，Phase 1 没有按租户 allowlist 或临时生产路由。
 
 ### Phase 1 退出门禁
 
 - [ ] 假模型+假工具可完成 submit→tool→final→query→cancel；
-- [ ] 原 Web 行为回归通过，且 shadow 转换器不产生第二次模型/工具执行或第二次消息主写；
+- [ ] 本地测试环境中的真实模型、真实工具和测试数据库完成至少一条代表性端到端链路，并核对消息、工具结果与用量；
+- [ ] 原 Web 和渠道代表性行为回归通过；同一输入没有第二次模型/工具执行或消息双写；
 - [ ] Web/渠道 SessionRef 无法混用，越权查询 fail-closed；
 - [ ] 匿名路径无持久 Run、无写工具，断线可终止；
 - [ ] `/api/chat` 分支有对应计量、队列和退场测试；
-- [ ] Phase 1 allowlist 已完成内部租户→批准小批租户灰度，扩量/回退指标有记录，进入 Phase 2 前在途 inline 已排空；
-- [ ] 对账指标达到 Phase 0 门槛后才进入 Phase 2。
+- [ ] 隔离环境的真实应用用例完成，差异已修复或记为阻断项；Phase 1 代码没有生产启用路径。
 
 ## 5. Phase 2：持久权威、事件和终态事务
 
@@ -267,7 +262,7 @@ Phase 1 的 inline 新路径也必须灰度，不能因为它仍在 HTTP 请求�
 - 实施 Phase 0 通过的 DDL 和升级记录；
 - `repository.py` 提供 Run/Command/claim/wait/cancel/queue/finalization 的事务方法；
 - `event_store.py` 在 PostgreSQL 内按 Run 分配唯一单调 seq；
-- 接入 Phase 1 shadow 转换器，持久化 `run_origin=shadow_projection` 对账快照；该投影无 owner/lease、不占队列槽；
+- 接入 Phase 1 的应用服务和 Web/渠道 adapter；仅真正 accepted 的 Run 写入持久仓储；
 - delta 按冻结阈值合并写入，Redis Pub/Sub 只发布“有新 seq”；
 - subscriber 游标落入清理缺口时返回 `reset_required + snapshot_seq`；
 - 所有 tenant 查询经 typed SessionRef 和对应 session 归属中转。
@@ -301,7 +296,7 @@ Phase 1 的 inline 新路径也必须灰度，不能因为它仍在 HTTP 请求�
 - 单例 `background_runner` 增加事件清理、队列修复和失效 wait 扫描；
 - ephemeral delta 只在终态可靠落库后满 15 分钟清理，关键事件初始保留 30 天；
 - projector 落后时按 snapshot 跳到 terminal 或 reset，不为补 progress 阻塞 final；
-- reaper 只处理有 owner/lease 的执行 Run，排除 shadow projection；
+- reaper 只处理有 owner/lease 的执行 Run；
 - inline orphan 有可观测、可重排或明确收敛策略。
 
 ### Phase 2 退出门禁
@@ -329,6 +324,7 @@ Phase 1 的 inline 新路径也必须灰度，不能因为它仍在 HTTP 请求�
 - 自动 reclaim 使用冻结次数/退避，耗尽后 `failed(error_class=worker_interrupted)`；
 - 不可安全重试或副作用未知的 attempt 进入 `reconcile_required`；
 - `agent_runs.runner_claim_enabled` 只控制新领取，不篡改已接纳事实。
+- P0 兼容适配现有已部署 Runtime：本地工具 Invocation 带稳定 Run 引用和受信结果，不能由 UI 伪造完成；不要求等桌面 P1 完整新版 Device API 服务端上线。
 
 ### WP3.2 timeout 与取消
 
@@ -354,6 +350,7 @@ Phase 1 的 inline 新路径也必须灰度，不能因为它仍在 HTTP 请求�
 - [ ] waiting 不持 lease，回复后新 claim 且 reclaim_count 不变；
 - [ ] 停 claim、优雅发布、横向扩缩容演练通过；
 - [ ] browser 与未准入工具 fail-closed。
+- [ ] 本地测试容器用真实模型、现有 Runtime 和测试 Provider 跑通短/长 Run 的设备工具链；runner/Runtime 断线后结果只补传、不重复执行。已售客户正在使用的 Provider 按 Phase 0 清单覆盖。
 
 ## 7. Phase 4：Web 产品链切换
 
@@ -386,29 +383,27 @@ Phase 1 的 inline 新路径也必须灰度，不能因为它仍在 HTTP 请求�
 - RunProjection 以 snapshot/version/seq 为准，不把本地 loading 当事实；
 - 刷新后先 list_session_runs，再按 snapshot_seq 订阅；
 - 停止、补充/纠正、下一任务三个明确动作；
-- 展示 queued、blocked_by、waiting_*、cancel_requested、reconcile_required、draining；
+- 展示 queued、blocked_by、waiting_*、cancel_requested、reconcile_required 和发布窗口维护提示；
 - response delta 可丢后由 snapshot/最终消息恢复；
 - 终态后刷新会话历史，避免 UI 自己拼最终 assistant 消息；
 - 发布说明明确“关页面不等于停止，停止按钮才是取消请求”。
 
-### WP4.3 Web shadow/draining/run_service 切换
+### WP4.3 Web 完整接入与停机发布准备
 
-- 全局 `agent_runs.web_mode_default` 只提供默认；`tenant_agent_run_routes` 的 mode/epoch 是租户权威；
-- `agent_runs.enabled` 只作为新接纳紧急门禁；
-- shadow 建立 durable legacy execution claim；
-- draining 期间新请求可靠 queued，旧 claim 清空后再领取；
-- unknown effect 不强切，先 reconcile；
-- 切换按单租户低风险顺序推进，不能把已 accepted Run 回退到 legacy；
-- 回滚只停止新 claim/新路由，已有 Run 继续由新链收敛。
+- 在隔离集成环境验证全部 Web 入口只经 AgentApplication 提交，页面关闭不取消、恢复与历史主写一致；完整候选版在 B-final 再上 agent3；
+- 停机发版时旧 Web SSE 轮允许失败，不转成新 Run，也不等待它们排空；服务不可达时用户明确知道需要恢复后重新发送；
+- 新版本恢复后，无论新建还是已有 Session 的新消息都由 AgentApplication 接纳为 Run；旧版未完成请求不自动重放；
+- `agent_runs.admission_enabled` 是新版本正常运维的紧急门禁，关闭时不能把已经 accepted 的 Run 交给旧入口重跑；
+- 不建设 `shadow/draining/run_service` 的租户路由、临时 allowlist 或按租户扩量逻辑。
 
 ### Phase 4 退出门禁
 
 - [ ] 页面刷新、切会话、关闭标签、API worker 重启后 Run 继续且可找回；
 - [ ] 网络重试不重复 Run，seq 缺口能 reset；
 - [ ] 三动作和四种 waiting 的 UI/权限/竞态测试通过；
-- [ ] 旧新链切换期间同一 Session 无双执行者；
+- [ ] 停机发版演练中旧轮可失败；恢复后新旧 Session 的新请求统一进入 Run，旧轮不被自动重跑；
 - [ ] 新 final 消息只由 ConversationRepository 主写一次；
-- [ ] 至少一个内部租户完成 shadow→draining→run_service 和回滚演练。
+- [ ] Web 自身在隔离集成环境的功能验收与停机/恢复演练通过；与全部渠道的 agent3 联合验收留在 B-final，不阻塞并行开发。
 
 ## 8. Phase 5：持久通知
 
@@ -465,11 +460,11 @@ Phase 1 的 inline 新路径也必须灰度，不能因为它仍在 HTTP 请求�
 - `agent_channels.projector_claim_enabled`；
 - `agent_channels.delivery_claim_enabled`。
 
-Session 行锁内只做头项顺序、预算、epoch 和 sending CAS；平台 HTTP 在锁外执行。头项为 sending/unknown 时后项不得越过。projector 落后于 ephemeral 清理边界时按 Run snapshot 跳到 terminal/reset，绝不重跑 Run 或为 progress 阻塞 final。
+Session 行锁内只做头项顺序、预算和 sending CAS；平台 HTTP 在锁外执行。头项为 sending/unknown 时后项不得越过。projector 落后于 ephemeral 清理边界时按 Run snapshot 跳到 terminal/reset，绝不重跑 Run 或为 progress 阻塞 final。
 
 ### WP6.3 微信客服首接
 
-微信客服是首个生产切换渠道，必须交付：
+微信客服是已售生产主渠道，先在隔离账号完成真机联调；完整版本到 B-final 才在 agent3 与其他渠道联合验收，不得先于其他生产渠道单独切换：
 
 - 回调快速 ACK 后 durable receipt；
 - 平台消息去重与可靠 consultation epoch；
@@ -478,8 +473,8 @@ Session 行锁内只做头项顺序、预算、epoch 和 sending CAS；平台 HT
 - progress/clarification/final 的能力降级与额度策略；
 - final 发送失败只重试 delivery；
 - Web 管理端可查询渠道 Run、处理 approval/reconcile；
-- route_epoch + receipt claim 的 shadow→draining→run_service；
-- draining 低峰、单账号、分钟级静默窗口 SOP 与运营面板。
+- 新版本 receipt 单执行者校验；停机发布时旧 task 可失败、不迁入 Run，恢复后新消息由 Gateway 接纳；
+- 告知停机期间平台回调可能失败，平台是否重试不作为发布保证，用户/运营可恢复后重新发送。
 
 ### WP6.4 其余生产渠道
 
@@ -491,9 +486,9 @@ Session 行锁内只做头项顺序、预算、epoch 和 sending CAS；平台 HT
 - 消息/附件归一化；
 - capability profile；
 - delivery idempotency/回执；
-- shadow 对账、draining SOP、回滚和真机验收记录。
+- 完整候选版的真机验收、正常运行期回调重试/去重测试，以及停机后新消息接入记录。
 
-不能可靠接入的已售生产渠道必须取得业务批准的阻断方案，不得静默从 P0 完成范围剔除。
+任一已售生产渠道不能可靠接入，完整候选版就不能通过 agent3 验收或合并 master；业务批准停用某渠道必须在切换前完成客户迁移与影响告知，并更新生产范围清单，不能把它留在 legacy。
 
 ### Phase 6 退出门禁
 
@@ -502,8 +497,8 @@ Session 行锁内只做头项顺序、预算、epoch 和 sending CAS；平台 HT
 - [ ] clarification binding 优先且一次消费，approval 越权被拒绝；
 - [ ] 微信客服预算并发测试不超过 5 且始终保留 final；
 - [ ] delivery unknown 不释放预算、不越序、不重跑 Agent；
-- [ ] 微信客服先完成单账号生产灰度和回滚演练；
-- [ ] Phase 0 盘点的所有生产渠道均有迁移或批准的阻断结论。
+- [ ] 微信客服与 Phase 0 清单中每个生产渠道在隔离环境使用测试账号完成真机联调，agent3 联合验收留给 B-final；
+- [ ] 全部生产 Connector 的停机/恢复、新消息接纳、重复抑制和新版本故障恢复联合演练通过；旧版停机期间消息允许失败。
 
 ## 10. 交付批次与提交边界
 
@@ -514,22 +509,22 @@ Session 行锁内只做头项顺序、预算、epoch 和 sending CAS；平台 HT
 | B00 | 事实盘点、生产查询包、工具矩阵、协议/DDL、压测与 E2E 方案 | 无 | 生产行为修改 |
 | B01 | commands/models/states/fakes/contract tests + Agent/Device 规范协议源；冻结 Run/Session/Conversation/Artifact/command receipt/Device directory 基础 DTO，通知除外；Device 服务端实现归 Desktop P1 | B00 | 数据库、HTTP 切换、旧 D1 扩展 |
 | B02 | Agent executor + ConversationRepository 接口 | B01 | 后台 runner |
-| B03 | Web inline adapter + shadow 转换器 + allowlist 灰度 | B02 | 双执行、双主写 |
+| B03 | Web/渠道应用服务适配器 + 隔离环境旧行为对照 | B02 | 生产启用、双执行、双主写 |
 | B04 | Run/Command/Event DDL 与 migration tests | B00/B01 | 渠道真机切换 |
 | B05 | repository/event store/subscribe/reset + 双实现 contract suite | B04 | 前端大改 |
 | B06 | Session queue/wait/append/cancel | B05 | 通知 UI |
 | B07 | finalization/usage/billing/queue promotion | B05/B06 | 模型或工具重跑逻辑 |
 | B08 | maintenance/reaper/event retention | B05/B07 | runner 扩容 |
-| B09 | agent-runner/lease/fence/reclaim/deadline | B07 | Web route 切换 |
+| B09 | agent-runner/lease/fence/reclaim/deadline | B07 | Web 生产切换 |
 | B10 | runner compose/health/runbook/metrics + 隔离环境压测 | B09 | 渠道 worker |
-| B11 | 实现 B01 已冻结的 Agent API（Run + command receipt + Session/Conversation/Artifact/Device directory 受权表面）+ Web RunProjection/三动作 | B06/B09 | 旧链删除、重新发明 DTO |
-| B12 | Web shadow/draining/run_service 灰度 | B11 | 全租户一次切换 |
+| B11 | 实现 B01 已冻结的 Agent API（Run + command receipt + Session/Conversation/Artifact/Device directory 受权表面）+ Web RunProjection/三动作 | B06/B09 | 生产切换、重新发明 DTO |
+| B12 | Web 入口完整接入与停机/恢复演练 | B11；联动 B15/B16/B17+ | 按租户灰度、生产启用 |
 | B13 | notification outbox + global subscription/UI | B07 | 旧通知表迁移 |
 | B14 | channel receipt/batch/ports/schema | B04/B06 | 具体平台发送改写 |
 | B15 | channel worker/projector/delivery/budget | B14/B07 | 所有 Connector 同批迁移 |
-| B16 | wecom_kf Connector + 真机灰度 | B12/B15 | 其余渠道顺手改造 |
-| B17+ | 每个生产 Connector 独立批次 | B15/B16 | 未核实平台事实的假设 |
-| B-final | 压测、故障演练、legacy 删除、文档归档 | 全部 | 新功能扩项 |
+| B16 | wecom_kf Connector + 隔离账号真机联调 | B15；Agent API 用 B11 | 生产单账号切换、单独部署 agent3 |
+| B17+ | 每个生产 Connector 独立开发/测试批次 | B15；可与 B16 并行 | 生产逐账号迁移、未核实的平台假设 |
+| B-final | Web/全部生产渠道/通知/worker 在 agent3 联合验收、压测、停机/恢复演练、legacy 删除与文档归档 | B08～B17+ 全部 | 未完成先合 master 或部署生产 |
 
 推荐每批提交正文关联：
 
@@ -612,9 +607,9 @@ npm run build
 
 - submit 后切换会话、刷新页面、关闭并重新打开页面，能够通过 list+snapshot+seq 恢复；
 - 停止、补充/纠正、下一任务分别发出不同命令，终态竞态和断网重试不重复；
-- queued/blocked、四类 waiting、cancel_requested、reconcile_required、draining 展示正确；
+- queued/blocked、四类 waiting、cancel_requested、reconcile_required 和维护窗口展示正确；
 - 丢失 Pub/Sub 唤醒或清理 delta 后，客户端按 `reset_required` 恢复最终结果；
-- route 灰度期间 legacy/shadow/run_service 页面投影与回退提示正确。
+- 停机发版演练中旧请求可失败，恢复后新旧 Session 的新消息都进入 Run，用户能重新发送。
 
 E2E 使用 `docker-compose.test.yml`、测试租户和仅测试环境启用的确定性 fake model/tool，禁止调用真实写工具或依赖不可复现的外部 LLM。执行命令：
 
@@ -624,7 +619,7 @@ node e2e/scripts/refresh-auth.mjs
 npx playwright test e2e/specs/agent-run-lifecycle.spec.ts --project=tenant-admin
 ```
 
-Playwright 报告、失败截图和 trace 作为 B11/B12 批次证据。操作系统级 Notification 权限弹窗、真实标签页后台通知以及生产 route 切换仍补一份人工验收清单；人工记录必须包含环境、tenant、route epoch、时间、预期/实际和截图引用，不能用“肉眼通过”一句代替。
+Playwright 报告、失败截图和 trace 作为 B11/B12 批次证据。操作系统级 Notification 权限弹窗、真实标签页后台通知以及 agent3 停机/恢复演练仍补人工验收清单；记录必须包含环境、代码提交、时间、旧任务失败数量、恢复后新请求结果、预期/实际和截图引用。
 
 ### 11.5 压测环境与负载工具
 
@@ -639,7 +634,7 @@ Playwright 报告、失败截图和 trace 作为 B11/B12 批次证据。操作�
 - 固定 seed、并发数、Run 数、每 Run 事件数、payload 大小和 worker 副本数；
 - 输出吞吐、P50/P95/P99、错误率、重复领取/seq 冲突、queued age、数据库连接占用和容器峰值内存。
 
-运行参数由 B00 workload profile 给出，不在计划中凭空写死容量目标。原始结果写入未提交的 `tmp/agent-run-bench/`；命令、代码版本、compose 配置、机器规格和脱敏摘要写入 B10 批次证据。资源数据优先取应用指标、数据库查询耗时与 `docker stats --no-stream`；若引入新的观测依赖，必须单独评审。B-final 在候选发布版本上复跑同一 profile，未达到 Phase 0 冻结阈值不得扩大灰度。
+运行参数由 B00 workload profile 给出，不在计划中凭空写死容量目标。原始结果写入未提交的 `tmp/agent-run-bench/`；命令、代码版本、compose 配置、机器规格和脱敏摘要写入 B10 批次证据。资源数据优先取应用指标、数据库查询耗时与 `docker stats --no-stream`；若引入新的观测依赖，必须单独评审。B-final 在候选发布版本上复跑同一 profile，未达到 Phase 0 冻结阈值不得通过 agent3 发布门禁。
 
 ### 11.6 独立验证证据
 
@@ -650,60 +645,56 @@ Playwright 报告、失败截图和 trace 作为 B11/B12 批次证据。操作�
 - 独立测试命令、通过/失败/跳过；
 - 独立 CR 的 Sev-0/Sev-1/Sev-2 结论；
 - 未验证项和生产前置；
-- 若有回滚演练，记录 route epoch、积压和恢复结果，不记录凭据。
+- 若有停机/恢复演练，记录不可用时长、旧任务失败样本和恢复后新请求结果，不记录凭据。
 
-## 12. 灰度、观测与回滚
+## 12. agent3 联合验收与一次停机发版
 
-### 12.1 开关初始值
+### 12.1 发布模型与全局开关
 
-新版本首次部署时，新领取/消费开关全部关闭：
+Phase 0～6 和 B00～B-final 都是 `feature/unified-agent-run-p0` 上的开发批次，不是生产发布批次。不得部署 Phase 1 的 inline 半成品、Phase 2 的 shadow 投影或仅 Web/仅微信客服的新生命周期到生产，也不建立按租户、渠道账号选择新旧架构的长期路由。完整候选版必须包含 Web、微信客服、Phase 0 清单中全部生产渠道、通知、runner/channel worker、迁移和运维脚本；在 agent3 按生产等价配置联合验收通过后才允许合并 master 并安排一次生产发布。测试租户/测试账号只用于 agent3 隔离验证，不是生产灰度。
+
+以下是新版本的日常接纳/领取/消费开关，**不是发布专用的新旧切换协议**：
 
 ```text
-agent_runs.enabled=false
-agent_runs.web_mode_default=legacy
-agent_runs.phase1_inline_tenant_allowlist=[]  # Phase 1 临时配置，Phase 2 正式路由稳定后删除
+agent_runs.admission_enabled=false
 agent_runs.runner_claim_enabled=false
 agent_channels.batch_claim_enabled=false
 agent_channels.projector_claim_enabled=false
 agent_channels.delivery_claim_enabled=false
 agent_notifications.write_outbox=false
 agent_notifications.consume=false
-channel_accounts.run_mode=legacy       # PostgreSQL 每账号默认值
-channel_accounts.route_epoch=0         # PostgreSQL 初始路由代次
 ```
 
-精确配置层级和命名以 P0 Phase 0 冻结结果为准；`web_mode_default=legacy` 只在租户没有持久 route 行时兜底，租户 Web route 与渠道账号 route/epoch 必须持久化，不能只放环境变量。
+精确命名以 Phase 0 契约为准。部署完成并验证健康后统一启用新版本入口；关闭领取只阻止新工作，不取消已接纳 Run。P0 不因发版引入旧任务排空、旧新路由、入站缓冲或切换代次。
 
-### 12.2 推荐启用顺序
+### 12.2 agent3 完整候选版验收
 
-Phase 1 前置灰度先按 WP1.3 执行：全局默认 legacy，只给内部租户开启临时 inline allowlist，
-再扩少量批准租户；进入下列 Phase 2+ 顺序前先停止扩量、等待在途 inline 请求结束，并将普通
-生产租户收回 legacy/shadow。临时 allowlist 与正式 route 表不得同时承担长期路由权威。
+agent3 必须运行拟合入功能分支的完整候选 commit、部署拓扑和迁移脚本，使用隔离数据与各平台测试账号。合并 master 后核对部署产物与已验收候选的代码/配置/迁移一致，并跑合并提交的 CI；合并引入任何实质差异须重新验收，不能拿旧 agent3 报告为变更背书。B-final 的签字证据至少包括：
 
-1. 部署 schema 和只读/shadow 代码，所有 claim/consume 关闭；
-2. 启动 agent-runner/channel-worker，验证健康但不领取；
-3. 开启内部租户 Web shadow，对账状态、结果、usage；
-4. 内部租户 draining 后切 Web run_service；
-5. 扩到小批低风险 Web 租户；
-6. 微信客服单测试账号 shadow→draining→run_service；
-7. 微信客服单生产账号低峰灰度，观察一个完整业务周期；
-8. 分账号扩微信客服，再逐一迁其余生产渠道；
-9. 通知 write/consume 同批开启；
-10. 达到稳定窗口后再删除 legacy，不以“已部署新代码”视为完成。
+1. 对真实旧数据形状执行 schema 升级、历史读取、计量对账和兼容性检查；验证回退/前向修复边界。
+2. Web、`/api/chat` 决议后的兼容入口、匿名受限入口及全部生产 Connector 的 submit、等待、补充、停止、最终回复、通知和权限路径通过；微信客服使用真实平台测试账号。
+3. 至少两副本 runner/channel worker 的 claim、崩溃恢复、重启、超时、重复回调、未知发送效果、预算和顺序故障注入通过。
+4. 停机发版演练通过：旧版在途 Web/渠道任务允许失败且不自动迁入 Run，停机期间入口不可用；恢复后新建与既有 Session 的新消息全部由 AgentApplication/Run 执行。平台若自行重试旧回调，新 Gateway 按稳定消息 ID 去重；不要求平台一定重试。
+   旧 Session 的遗留 pending/responding/等待标记不阻塞新消息，历史记录仍可授权读取。
+5. 前端浏览器级验收、压测、独立测试和独立 CR 完成；Phase 0 冻结的阻断指标与客户影响处理均满足。任何生产渠道或 browser 现有客户没有明确迁移/停用处理结果，仍阻断整体发布；停机期间无法保证消息送达本身不阻断发布。
 
-### 12.3 回滚原则
+### 12.3 一次停机发版 SOP
 
-- 关闭新 claim 只阻止新领取，不把 running/accepted Run 改成不存在；
-- 已 accepted Run 由新链完成、等待或明确收敛，不能交给 legacy 再跑一次；
-- Web/channel route epoch 只单调推进，stale receipt/claim 不得越代接管；
-- draining 超时保持缓冲并报警，不强切；
-- 发送失败只回滚投递，不重跑 Agent；
-- 数据库变更优先向前兼容，回滚应用版本前确认旧版本不会误读新状态；
-- reconcile_required 由人工/受信流程核验，不用批量 retry 掩盖未知副作用。
+1. 选择低峰窗口，告知所有用户/渠道运营：发版期间完全不可用，旧版在途任务和期间发送的消息可能失败，恢复后需自行重新发送；写操作重试可能重复外部效果。确认备份、迁移方案、值班人和恢复验收清单。只在收到明确部署授权时执行。
+2. 停止旧版 Web/API/渠道执行进程并关闭入口。不等待旧 SSE、进程内 channel task 或发送全部排空，也不把这些工作自动迁入 Run；发版期间不承诺 ACK、缓冲、平台重试或补拉。
+3. 应用已在 agent3 验证的数据库迁移和完整新版本，启动 API、agent-runner、channel worker 与通知消费者；全部健康后恢复 Web 和所有生产渠道入口。恢复后所有新消息——包括旧 Session 里的新消息——只经 AgentApplication 接纳为 Run。
+4. 逐入口验证 Web、微信客服及其他生产渠道的提交、Run、final、delivery、billing 和 notification。发布后观察不是逐租户/逐账号扩量；出现新版本阻断指标按 §12.4 处理。
 
-### 12.4 上线阻断指标
+### 12.4 失败与回滚边界
 
-Phase 0 用基线数据给出数值阈值；以下任一越过阈值即停止扩大灰度：
+- 新路径尚未 accepted 任何 Run/receipt 前，可在确认旧版本与 schema 兼容后撤销发布；旧版在途失败不会自动恢复，不默认直接回滚数据库。
+- 一旦有新 Run 或渠道 receipt 被接纳，禁止切回旧 Agent 执行路径重跑这些工作。先关闭新接纳与新 claim，保留持久记录，用兼容的新版本修复或让已接纳工作明确收敛；未知副作用进入 `reconcile_required`。
+- 新版本已接纳消息的发送失败只修复同一 delivery，不重跑 Agent；旧版停机中断的任务不自动重试，用户自行重新提交前需了解外部副作用可能已经发生。数据库迁移优先向前兼容，回退应用版本前先验证可读性和状态语义。
+- 停机超出预告窗口时通告延期；服务恢复后仍有入口或新 Run 故障时停止新接纳并修复。旧任务没有“必须排空才能开服”的门槛。
+
+### 12.5 发布阻断指标
+
+Phase 0 用基线数据给出数值阈值；agent3 验收时越阈值不得合并 master，生产发布后越阈值即按 §12.4 止血：
 
 - duplicate Run/tool/delivery；
 - terminal 与 final message/usage/billing 不一致；
@@ -718,7 +709,8 @@ Phase 0 用基线数据给出数值阈值；以下任一越过阈值即停止扩
 只有同时满足以下条件，才将本计划标记完成并把 `docs/ideas.md` 条目迁入 `ideas_finished.md`：
 
 - [ ] Web 和所有已售生产渠道使用同一 AgentApplication/Run 生命周期；
-- [ ] 微信客服完成生产灰度，回调、合并、等待、进度、final、重试和预算均真机验收；
+- [ ] 微信客服和全部生产渠道在 agent3 使用隔离账号完成真机验收，生产一次发布后逐渠道核验回调、合并、等待、进度、final、重试和预算；
+- [ ] 现有独立 Runtime + 已在用 Provider 由新 Run 发起、执行和回传的真实链路在 agent3 验收，P0 上线不要求桌面客户端先发布；
 - [ ] 浏览器关闭、API/runner/channel worker 重启不会丢已接纳 Run 或最终回复；
 - [ ] cancel、append、clarification、approval、device、reconcile 均有持久语义和权限测试；
 - [ ] 消息、终态、usage/扣费、通知和队列晋升的幂等边界通过故障注入；
@@ -727,6 +719,7 @@ Phase 0 用基线数据给出数值阈值；以下任一越过阈值即停止扩
 - [ ] runner/channel worker 的 compose、健康检查、claim 开关、优雅 drain 和 runbook 完成；
 - [ ] legacy Web/匿名 loop 和已迁渠道的独立生命周期代码删除，或有明确时限与 owner；
 - [ ] 所有 P0 代码批次经过独立测试和独立 CR，无开放 Sev-0/Sev-1 缺陷；
+- [ ] 完整候选版在 agent3 联合验收通过，随后合并 master 并按一次发布 SOP 上线；没有按租户/账号的生产灰度或未完成渠道遗留在旧生命周期；
 - [ ] P1 桌面和 P2 演进文档仍遵守本次冻结的 Agent API、Device API、typed SessionRef 和状态所有权，没有复制 Run 状态机。
 
 ## 14. 开发者开始 Phase 0 时的首批动作
@@ -742,7 +735,7 @@ Phase 0 用基线数据给出数值阈值；以下任一越过阈值即停止扩
 
 本节是批次级证据的唯一索引，Phase 顶部表只表示阶段状态。状态更新规则：某 Phase 的首个批次实际开始时改为“🔧 进行中”；该 Phase 全部必需批次完成、独立测试/CR 关闭 Sev-0/Sev-1 且退出门禁通过后，才改为“✅ 完成（日期）”。仅写完代码、仅测试通过或仅部署均不能提前标记完成。
 
-每个批次开始时在 `docs/plans/evidence/agent-run/<batch>.md` 建立一份简短证据附件并从下表链接。附件记录改动范围、命令与退出状态、独立测试、CR、未验证项、灰度/回滚结果；只保存脱敏摘要，不提交原始生产数据、凭据、完整日志、Playwright storageState 或大体积压测输出。纯调研的 B00 同样使用该格式。目录和附件在批次真正开始时创建，不预建空文件。
+每个批次开始时在 `docs/plans/evidence/agent-run/<batch>.md` 建立一份简短证据附件并从下表链接。附件记录改动范围、命令与退出状态、独立测试、CR、未验证项、agent3 停机/恢复演练结果；只保存脱敏摘要，不提交原始生产数据、凭据、完整日志、Playwright storageState 或大体积压测输出。纯调研的 B00 同样使用该格式。目录和附件在批次真正开始时创建，不预建空文件。
 
 | 批次 | 所属阶段 | 状态 | 开始/完成 | 证据附件 | 阻塞/遗留 |
 |------|----------|------|-----------|----------|-----------|
