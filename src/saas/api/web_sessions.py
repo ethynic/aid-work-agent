@@ -75,10 +75,12 @@ async def get_user_web_sessions(
     if not tenant_id:
         raise HTTPException(status_code=400, detail="缺少租户信息")
 
-    # 验证用户属于该租户
+    # 仅校验用户存在。不用 users.tenant_id 校验归属：与列表接口的 chat_sessions.tenant_id
+    # 口径保持一致（测试环境共享账号的 users.tenant_id 可能为 NULL，会话却挂在多个租户下），
+    # 租户隔离由下方会话查询的 tenant_id 过滤保证
     user = UserDB.get_by_id(user_id)
-    if not user or user.get("tenant_id") != tenant_id:
-        raise HTTPException(status_code=404, detail="用户不存在或不属于该租户")
+    if not user:
+        raise HTTPException(status_code=404, detail="用户不存在")
 
     try:
         subagent_ids = None
