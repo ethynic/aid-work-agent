@@ -22,8 +22,10 @@
 #      - 租户模式（--tenant x）：枚举所有含 tenant_id 列的表，按租户过滤复制；
 #        生产加表/加字段自动补齐到仿真库（缺表用 pg_dump 从生产拉建表 DDL、
 #        缺列用 ALTER ADD 补齐；类型漂移无法自动修复时跳过该表并告警）
-#   3. 渠道凭证置空：tenant_channel_configs.config 同步后整体清空
-#      （防生产回调误路由验签通过 + 防仿真环境持生产凭证外呼）
+#   3. 渠道配置「清生产、保仿真」：tenant_channel_configs 同步前先备份仿真库
+#      自有配置（测试同学在仿真侧自建应用配置的回调凭证，回调地址指向仿真域名
+#      agent1.aidingyi.cn，与生产回调天然隔离），同步后删除从生产带过来的渠道行
+#      并回填仿真自有配置（防仿真持生产凭证外呼，同时避免每次同步后重新配渠道）
 #   4. 旧数据清理 / 整库还原：
 #      - 整库模式：DROP 重建仿真库（编码/排序规则对齐生产库），再从生产全量还原
 #      - 租户模式：仅 --wipe 时按 tenant_id DELETE 仿真库中该租户旧数据
@@ -37,6 +39,10 @@
 # 在 243 生产服务器上执行。连接走 docker exec aid-postgres（同实例双库）。
 # ============================================================================
 set -euo pipefail
+
+# 渠道配置备份临时文件（退出时清理）
+CHANNEL_BACKUP_FILE=""
+trap '[[ -n "$CHANNEL_BACKUP_FILE" ]] && rm -f "$CHANNEL_BACKUP_FILE"' EXIT
 
 # ---------- 可配置项（环境变量覆盖） ----------
 PG_CONTAINER="${PG_CONTAINER:-aid-postgres}"
@@ -61,6 +67,8 @@ REDIS_KEY_PATTERNS="${REDIS_KEY_PATTERNS:-uploaded_file:*}"
 # 设计依据: docs/system/simulation-env-design.md §4.1
 # tenant_channel_configs.config 为 JSON 文本，含 token/secret/aes_key 全部凭证
 # 租户模式自动追加 WHERE tenant_id = '...'；整库模式不带 WHERE（全表置空）
+# 兜底清空（防仿真侧无配置可备份时残留生产凭证）；正常路径下仿真自有配置
+# 会在「渠道配置备份/恢复」两节先备份、后回填覆盖
 declare -A WIPE_RULES=(
   ["tenant_channel_configs"]="UPDATE tenant_channel_configs SET config = '{}', verified = 0"
 )
@@ -332,6 +340,24 @@ fi
 
 START_TS=$(date +%s)
 
+# ---------- 渠道配置备份（同步前；整库模式须在 DROP 仿真库之前） ----------
+# 备份仿真库自有的 tenant_channel_configs（含 verified 状态与 id 序列）。
+# 整库模式该表随 DROP 一起消失；租户模式 \copy 为追加写入、重跑会撞
+# config_id 唯一约束，故租户模式备份后顺带删除该租户行，让后续写入干净执行。
+log "备份仿真库自有渠道配置 tenant_channel_configs..."
+if [[ "$(sim_psql -t -A -c "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public' AND table_name='tenant_channel_configs'")" == "0" ]]; then
+  warn "仿真库不存在 tenant_channel_configs 表，跳过备份（无仿真自有渠道配置可保留）"
+else
+  CHANNEL_BACKUP_FILE=$(mktemp)
+  sim_psql -c "\copy (SELECT * FROM tenant_channel_configs$TENANT_WHERE) TO STDOUT WITH (FORMAT csv, HEADER)" > "$CHANNEL_BACKUP_FILE"
+  CHANNEL_BACKUP_COLS=$(head -n1 "$CHANNEL_BACKUP_FILE")
+  BACKUP_ROWS=$(( $(wc -l < "$CHANNEL_BACKUP_FILE") - 1 ))
+  log "  已备份 $BACKUP_ROWS 行仿真自有渠道配置"
+  if [[ $FULL_MODE -eq 0 ]]; then
+    sim_psql -c "DELETE FROM tenant_channel_configs$TENANT_WHERE" >/dev/null
+  fi
+fi
+
 # ---------- 整库模式：DROP 重建仿真库（真镜像第一步） ----------
 if [[ $FULL_MODE -eq 1 ]]; then
   admin_psql() {     # 超管执行 DDL（连 postgres 库，DROP/CREATE 不能在事务块里）
@@ -418,17 +444,6 @@ if [[ $FULL_MODE -eq 1 ]]; then
   SIM_T=$(sim_psql -t -A -c "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE'")
   [[ "$PROD_T" == "$SIM_T" ]] || warn "还原后表数不一致: 生产 $PROD_T vs 仿真 $SIM_T"
   log "整库还原完成: $SIM_T 张表（生产 $PROD_T）"
-
-  # 无条件拉起仿真容器（整库镜像完成后环境立即可用；up -d 幂等，已运行则为 no-op）
-  log "启动仿真容器 aid-agent-api1..."
-  (cd "$SIM_DIR" && docker compose -f docker-compose.sim.yml up -d api)
-  HEALTH_OK=0
-  for i in $(seq 1 24); do
-    curl -sf http://localhost:8010/health >/dev/null 2>&1 && { HEALTH_OK=1; break; }
-    sleep 5
-  done
-  [[ $HEALTH_OK -eq 1 ]] && log "仿真环境健康检查通过 (localhost:8010/health)" \
-    || warn "健康检查超时（120s），请查看 docker logs aid-agent-api1"
 else
   log "开始数据同步（租户 $TENANT）..."
   for t in $TABLES; do
@@ -467,8 +482,35 @@ for t in "${!WIPE_RULES[@]}"; do
     SQL="${WIPE_RULES[$t]} WHERE tenant_id = '$TENANT_SQL'"
   fi
   sim_psql -c "$SQL" >/dev/null
-  warn "已置空 $t 的凭证字段（渠道回调将验签失败拒答，主动外呼不可用）"
+  warn "已清空 $t 的生产凭证（防回调误路由验签通过 + 防仿真持生产凭证外呼）"
 done
+
+# ---------- 渠道配置恢复（删生产行，回填仿真自有配置） ----------
+# 置空规则兜底已清凭证；此处直接按备份范围整段删除后回填，仿真自有配置
+# （含 verified 状态）原样恢复。列清单取备份文件表头，规避整库模式 DROP
+# 前后表列序漂移导致的按位错插。
+if [[ -n "$CHANNEL_BACKUP_FILE" ]]; then
+  log "恢复仿真自有渠道配置..."
+  sim_psql -c "DELETE FROM tenant_channel_configs$TENANT_WHERE" >/dev/null
+  docker exec -i -e PGPASSWORD="$SIM_PG_PASSWORD" "$PG_CONTAINER" \
+    psql -U "$SIM_USER" -d "$SIM_DB" -v ON_ERROR_STOP=1 -q \
+    -c "\copy tenant_channel_configs ($CHANNEL_BACKUP_COLS) FROM STDIN WITH (FORMAT csv, HEADER)" < "$CHANNEL_BACKUP_FILE"
+  sim_psql -c "SELECT setval(pg_get_serial_sequence('tenant_channel_configs', 'id'), GREATEST(COALESCE((SELECT MAX(id) FROM tenant_channel_configs), 1), 1))" >/dev/null
+  log "  已回填 $BACKUP_ROWS 行仿真自有渠道配置（生产带过来的渠道配置已清除）"
+fi
+
+# ---------- 启动仿真容器（渠道配置就绪后再拉起；up -d 幂等） ----------
+if [[ $FULL_MODE -eq 1 ]]; then
+  log "启动仿真容器 aid-agent-api1..."
+  (cd "$SIM_DIR" && docker compose -f docker-compose.sim.yml up -d api)
+  HEALTH_OK=0
+  for i in $(seq 1 24); do
+    curl -sf http://localhost:8010/health >/dev/null 2>&1 && { HEALTH_OK=1; break; }
+    sleep 5
+  done
+  [[ $HEALTH_OK -eq 1 ]] && log "仿真环境健康检查通过 (localhost:8010/health)" \
+    || warn "健康检查超时（120s），请查看 docker logs aid-agent-api1"
+fi
 
 # ---------- Redis prefix 镜像 ----------
 if [[ $DO_REDIS -eq 1 ]]; then
