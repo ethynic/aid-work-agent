@@ -618,7 +618,7 @@
           <span>工作成果</span>
         </button>
 
-        <!-- 外部接待客户：所有租户用户可见（普通用户仅见自己负责的客服账号数据） -->
+        <!-- 微信接待客户：所有租户用户可见（普通用户仅见自己负责的客服账号数据） -->
         <button
           v-if="tenantId"
           @click="router.push(`/t/${tenantId}/external-customers`); closeFlyout()"
@@ -632,7 +632,7 @@
           <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
             <path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2M12 11a4 4 0 100-8 4 4 0 000 8z" />
           </svg>
-          <span>外部接待客户</span>
+          <span>微信接待客户</span>
         </button>
       </template>
 

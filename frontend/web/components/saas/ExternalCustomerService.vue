@@ -1,7 +1,7 @@
 <template>
   <div class="h-screen flex flex-col bg-gray-50">
     <AppHeader
-      title="外部接待客户"
+      title="微信接待客户"
       :is-logged-in="effectiveIsLoggedIn"
       :user="effectiveUser"
       @toggle-sidebar="handleToggleSidebar"

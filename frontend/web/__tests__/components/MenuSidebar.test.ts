@@ -201,7 +201,7 @@ describe('MenuSidebar - flyout 二级菜单', () => {
     const flyoutText = flyout!.textContent || ''
     expect(flyoutText).toContain('工作日报')
     expect(flyoutText).toContain('工作成果')
-    expect(flyoutText).toContain('外部接待客户')
+    expect(flyoutText).toContain('微信接待客户')
   })
 
   it('桌面 click 经验中心：toggle 开/关', async () => {
