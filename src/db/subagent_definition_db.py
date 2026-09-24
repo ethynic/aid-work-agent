@@ -150,6 +150,19 @@ class SubagentDefinitionDB:
             return [dict(row) for row in cursor.fetchall()]
 
     @staticmethod
+    def get_name_map(agent_ids: List[str]) -> Dict[str, str]:
+        """批量查询 agent_id -> 中文名称（包含非 active 状态，未命中的由调用方回退）"""
+        if not agent_ids:
+            return {}
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT agent_id, name FROM subagent_definitions WHERE agent_id = ANY(%s)",
+                (list(agent_ids),),
+            )
+            return {row["agent_id"]: row["name"] for row in cursor.fetchall()}
+
+    @staticmethod
     def update(agent_id: str, **kwargs) -> Optional[Dict[str, Any]]:
         # llm_provider 和 llm_model_codes 需要合并为 JSONB 写入 llm_provider 列
         llm_provider_val = kwargs.get("llm_provider")

@@ -2063,6 +2063,7 @@ class ChannelSessionManager:
         user_id: Optional[str] = None,
         tenant_id: Optional[str] = None,
         channel_chat_id: Optional[str] = None,
+        subagent_id: Optional[str] = None,
         limit: int = 50,
     ) -> List[Dict[str, Any]]:
         """
@@ -2073,6 +2074,8 @@ class ChannelSessionManager:
             user_id: 用户ID过滤
             tenant_id: 租户ID过滤
             channel_chat_id: 渠道会话/群ID过滤（可选）。None 不过滤；
+                空串匹配 NULL 或空串（legacy 会话）；非空精确匹配
+            subagent_id: 数字员工ID过滤（可选）。None 不过滤；
                 空串匹配 NULL 或空串（legacy 会话）；非空精确匹配
             limit: 限制条数
 
@@ -2103,6 +2106,13 @@ class ChannelSessionManager:
                 else:
                     conditions.append("channel_chat_id = %s")
                     values.append(channel_chat_id)
+
+            if subagent_id is not None:
+                if subagent_id == "":
+                    conditions.append("(subagent_id IS NULL OR subagent_id = '')")
+                else:
+                    conditions.append("subagent_id = %s")
+                    values.append(subagent_id)
 
             where_clause = " AND ".join(conditions) if conditions else "1=1"
 

@@ -45,8 +45,8 @@
         <div class="p-4 border-b border-default">
           <div class="flex gap-2">
             <BaseInput
-              v-model="searchUsername"
-              placeholder="搜索用户名"
+              v-model="searchKeyword"
+              placeholder="搜索用户名或智能体名称"
               size="sm"
               clearable
               class="w-full"
@@ -67,9 +67,9 @@
           <div v-else>
             <div
               v-for="user in userList"
-              :key="user.user_id"
+              :key="rowKey(user)"
               class="p-4 border-b border-default cursor-pointer transition-all"
-              :class="selectedUserId === user.user_id ? 'bg-primary-50 border-l-4 border-l-primary-500' : 'hover:bg-surface-hover'"
+              :class="selectedRowKey === rowKey(user) ? 'bg-primary-50 border-l-4 border-l-primary-500' : 'hover:bg-surface-hover'"
               @click="selectUser(user)"
             >
               <div class="flex items-center gap-3">
@@ -80,6 +80,7 @@
                 />
                 <div class="flex-1 min-w-0">
                   <div class="font-medium text-default truncate">{{ user.nickname || user.username || '未知用户' }}</div>
+                  <div class="text-xs text-primary-600 truncate mt-0.5">{{ user.subagent_name || '未知智能体' }}</div>
                   <div class="text-xs text-muted mt-1">
                     {{ formatSessionDateRange(user) }}
                   </div>
@@ -112,6 +113,7 @@
             />
             <div>
               <div class="font-medium text-default">{{ selectedUser.nickname || selectedUser.username || '未知用户' }}</div>
+              <div class="text-xs text-primary-600">{{ selectedUser.subagent_name || '未知智能体' }}</div>
               <div class="text-xs text-muted">创建于 {{ formatDate(selectedUser.created_at) }}</div>
             </div>
           </div>
@@ -315,8 +317,8 @@ const effectiveUser = computed(() => {
   } : null
 })
 
-// 搜索条件
-const searchUsername = ref('')
+// 搜索条件（用户名/昵称 或 智能体名称）
+const searchKeyword = ref('')
 
 // 用户列表
 const userList = ref<any[]>([])
@@ -332,10 +334,15 @@ const messagePage = ref(1)
 const messagePageSize = ref(50)
 const loadingMessages = ref(false)
 
-// 当前选中的用户
+// 当前选中的用户（列表行粒度 = 用户 × 智能体，用组合键区分同一用户的多个智能体行）
 const selectedUserId = ref('')
+const selectedRowKey = ref('')
 const selectedUser = ref<any>(null)
 const selectedSessionId = ref('')
+
+function rowKey(user: any): string {
+  return `${user.user_id}__${user.subagent_id || ''}`
+}
 
 // 默认头像
 const defaultAvatar = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMjAiIGhlaWdodD0iMTIwIiB2aWV3Qm94PSIwIDAgMTIwIDEyMCI+PGNpcmNsZSBjeD0iNjAiIGN5PSI2MCIgcj0iNjAiIGZpbGw9IiMwN0MxNjAiLz48Y2lyY2xlIGN4PSI2MCIgY3k9IjQ0IiByPSIxNiIgZmlsbD0iI2ZmZiIvPjxlbGxpcHNlIGN4PSI2MCIgY3k9Ijg2IiByeD0iMjgiIHJ5PSIyMiIgZmlsbD0iI2ZmZiIvPjwvc3ZnPg=='
@@ -372,8 +379,9 @@ async function loadUsers() {
   loadingUsers.value = true
   try {
     const res = await listExternalUsers({
-      username: searchUsername.value || undefined,
+      keyword: searchKeyword.value || undefined,
       channel_type: activeChannel.value,
+      group_by_subagent: true,
       page: userPage.value,
       page_size: userPageSize.value,
     })
@@ -383,7 +391,7 @@ async function loadUsers() {
       userTotal.value = res.total || 0
 
       // 默认选中第一个用户
-      if (userList.value.length > 0 && !selectedUserId.value) {
+      if (userList.value.length > 0 && !selectedRowKey.value) {
         await selectUser(userList.value[0])
       }
     } else {
@@ -401,7 +409,9 @@ async function loadUsers() {
 }
 
 async function selectUser(user: any) {
-  if (selectedUserId.value === user.user_id) return
+  const key = rowKey(user)
+  if (selectedRowKey.value === key) return
+  selectedRowKey.value = key
   selectedUserId.value = user.user_id
   selectedUser.value = user
   messageList.value = []
@@ -418,6 +428,7 @@ async function loadUserSessions() {
     const res = await getUserSessions({
       user_id: selectedUserId.value,
       channel_type: activeChannel.value,
+      subagent_id: selectedUser.value?.subagent_id ?? '',
       page: 1,
       page_size: 100,
     })
@@ -591,6 +602,7 @@ function previewImage(url: string) {
 watch(activeChannel, (val, oldVal) => {
   if (!val || val === oldVal) return
   selectedUserId.value = ''
+  selectedRowKey.value = ''
   selectedUser.value = null
   selectedSessionId.value = ''
   messageList.value = []

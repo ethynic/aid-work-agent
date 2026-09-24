@@ -75,6 +75,8 @@ async def list_external_users(
     channel_chat_id: Optional[str] = None,
     referral_start_date: Optional[str] = None,
     referral_end_date: Optional[str] = None,
+    keyword: Optional[str] = None,
+    group_by_subagent: bool = False,
     page: int = 1,
     page_size: int = 20,
 ):
@@ -88,6 +90,9 @@ async def list_external_users(
         channel_chat_id: 客服账号（open_kfid）筛选（可选，客服账号下拉框筛选时传入）
         referral_start_date: 引流起始日期（可选，含当日，格式 YYYY-MM-DD，引流统计下钻时传入）
         referral_end_date: 引流结束日期（可选，含当日）
+        keyword: 组合搜索词（可选，办公软件会话页）：用户名/昵称 OR 智能体名称
+        group_by_subagent: 按「用户 × 渠道 × 智能体」拆分组合（可选，办公软件会话页），
+            返回行带 subagent_id / subagent_name
         page: 页码
         page_size: 每页数量
     """
@@ -110,6 +115,8 @@ async def list_external_users(
         channel_chat_id=channel_chat_id,
         referral_start_date=referral_start_date,
         referral_end_date=referral_end_date,
+        keyword=keyword,
+        group_by_subagent=group_by_subagent,
         page=page,
         page_size=page_size,
     )
@@ -134,6 +141,16 @@ async def list_external_users(
                 u["kf_name"] = kf_map.get(cid, cid)
         else:
             u["kf_name"] = None
+
+    # 智能体名称反查：按「用户 × 智能体」组合返回时把 subagent_id 翻译为中文名
+    if group_by_subagent:
+        from src.db.subagent_definition_db import SubagentDefinitionDB
+
+        agent_ids = sorted({u.get("subagent_id") for u in result.get("users", []) if u.get("subagent_id")})
+        agent_name_map = SubagentDefinitionDB.get_name_map(agent_ids) if agent_ids else {}
+        for u in result.get("users", []):
+            sid = u.get("subagent_id") or ""
+            u["subagent_name"] = agent_name_map.get(sid, sid) if sid else ""
 
     return {"success": True, **result}
 
@@ -331,6 +348,7 @@ async def get_user_sessions(
     instance_id: Optional[str] = None,
     channel_type: Optional[str] = None,
     channel_chat_id: Optional[str] = None,
+    subagent_id: Optional[str] = None,
     page: int = 1,
     page_size: int = 20,
 ):
@@ -341,6 +359,8 @@ async def get_user_sessions(
         instance_id: 数字员工实例ID筛选（可选）
         channel_type: 渠道类型过滤（可选，与 channel_chat_id 组合精确定位某客服账号会话）
         channel_chat_id: 渠道会话/客服账号ID过滤（可选，空串匹配 legacy NULL 会话）
+        subagent_id: 数字员工ID过滤（可选，办公软件会话页按「用户 × 智能体」组合传入；
+            空串匹配 legacy NULL 会话）
         page: 页码
         page_size: 每页数量
     """
@@ -368,6 +388,7 @@ async def get_user_sessions(
         user_id=user_id,
         tenant_id=tenant_id,
         channel_chat_id=channel_chat_id,
+        subagent_id=subagent_id,
         limit=page_size,
     )
 

@@ -374,6 +374,8 @@ class UserDB:
         channel_chat_id: str = None,
         referral_start_date: str = None,
         referral_end_date: str = None,
+        keyword: str = None,
+        group_by_subagent: bool = False,
         page: int = 1,
         page_size: int = 20,
     ) -> dict:
@@ -391,6 +393,9 @@ class UserDB:
             channel_type: 渠道会话类型筛选（可选，按 channel_sessions.channel_type 过滤，
                 办公软件会话页按渠道 Tab 传入 wecom/dingtalk/feishu；
                 传入时放宽 source 非空硬条件，有该渠道会话的用户即返回）
+            keyword: 组合搜索词（可选，办公软件会话页用）：用户名/昵称 OR 智能体名称/ID
+            group_by_subagent: 按用户 × 渠道 × 智能体拆分组合（可选，办公软件会话页用），
+                返回行带 subagent_id 字段
             referrer_user_id: 引流员工筛选（可选，命中则只返回该员工引流的客户）
             referral_start_date: 引流起始日期（可选，含当日，格式 YYYY-MM-DD），过滤基准 = customer_referrals.created_at，
                 与引流统计 Tab 同口径（引流统计下钻时传入）
@@ -404,18 +409,33 @@ class UserDB:
             {"users": [...], "total": int, "page": int, "page_size": int}
         """
         offset = (page - 1) * page_size
-        # 渠道会话组合子查询：wecom_kf 按客服账号拆分（legacy NULL 折叠为空），其它渠道折叠为空
-        cs_subquery = """
-            SELECT user_id,
-                   channel_type,
-                   CASE WHEN channel_type = 'wecom_kf' THEN COALESCE(channel_chat_id, '') ELSE '' END AS channel_chat_id,
-                   MIN(created_at) AS first_session_at,
-                   MAX(updated_at) AS last_session_at
-            FROM channel_sessions
-            WHERE user_id IS NOT NULL
-            GROUP BY user_id, channel_type,
-                     CASE WHEN channel_type = 'wecom_kf' THEN COALESCE(channel_chat_id, '') ELSE '' END
-        """
+        if group_by_subagent:
+            # 办公软件会话页：按「用户 × 渠道 × 智能体」拆分组合
+            # channel_chat_id 占位列：外层 SELECT/条件固定引用该列，拆智能体时不按客服账号拆分
+            cs_subquery = """
+                SELECT user_id,
+                       channel_type,
+                       subagent_id,
+                       '' AS channel_chat_id,
+                       MIN(created_at) AS first_session_at,
+                       MAX(updated_at) AS last_session_at
+                FROM channel_sessions
+                WHERE user_id IS NOT NULL
+                GROUP BY user_id, channel_type, subagent_id
+            """
+        else:
+            # 渠道会话组合子查询：wecom_kf 按客服账号拆分（legacy NULL 折叠为空），其它渠道折叠为空
+            cs_subquery = """
+                SELECT user_id,
+                       channel_type,
+                       CASE WHEN channel_type = 'wecom_kf' THEN COALESCE(channel_chat_id, '') ELSE '' END AS channel_chat_id,
+                       MIN(created_at) AS first_session_at,
+                       MAX(updated_at) AS last_session_at
+                FROM channel_sessions
+                WHERE user_id IS NOT NULL
+                GROUP BY user_id, channel_type,
+                         CASE WHEN channel_type = 'wecom_kf' THEN COALESCE(channel_chat_id, '') ELSE '' END
+            """
         with get_db_connection() as conn:
             cursor = conn.cursor()
 
@@ -431,6 +451,29 @@ class UserDB:
                 conditions.append("(u.username ILIKE %s OR u.nickname ILIKE %s)")
                 params.append(f"%{username}%")
                 params.append(f"%{username}%")
+
+            if keyword:
+                # 组合搜索：用户名/昵称 OR 智能体名称。智能体先按名称/ID 翻译成 agent_id 集合再匹配
+                cursor.execute(
+                    "SELECT agent_id FROM subagent_definitions WHERE name ILIKE %s OR agent_id ILIKE %s",
+                    (f"%{keyword}%", f"%{keyword}%"),
+                )
+                agent_match_ids = [row["agent_id"] for row in cursor.fetchall()]
+                if agent_match_ids and group_by_subagent:
+                    conditions.append(
+                        "((u.username ILIKE %s OR u.nickname ILIKE %s) OR cs.subagent_id = ANY(%s))"
+                    )
+                    params.extend([f"%{keyword}%", f"%{keyword}%", agent_match_ids])
+                elif agent_match_ids:
+                    conditions.append(
+                        "((u.username ILIKE %s OR u.nickname ILIKE %s) OR EXISTS ("
+                        "SELECT 1 FROM channel_sessions cf"
+                        " WHERE cf.user_id = u.user_id AND cf.subagent_id = ANY(%s)))"
+                    )
+                    params.extend([f"%{keyword}%", f"%{keyword}%", agent_match_ids])
+                else:
+                    conditions.append("(u.username ILIKE %s OR u.nickname ILIKE %s)")
+                    params.extend([f"%{keyword}%", f"%{keyword}%"])
 
             if source:
                 conditions.append("u.source = %s")
@@ -484,6 +527,7 @@ class UserDB:
             cursor.execute(f"""
                 SELECT u.user_id, u.username, u.nickname, u.avatar_url, u.source, u.tenant_id, u.created_at,
                        cs.channel_type,
+                       {'cs.subagent_id,' if group_by_subagent else ''}
                        cs.channel_chat_id,
                        cs.first_session_at,
                        cs.last_session_at,

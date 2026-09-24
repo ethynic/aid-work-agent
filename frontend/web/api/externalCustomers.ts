@@ -44,6 +44,8 @@ export async function listExternalUsers(params: {
   channel_chat_id?: string
   referral_start_date?: string
   referral_end_date?: string
+  keyword?: string
+  group_by_subagent?: boolean
   page?: number
   page_size?: number
 }): Promise<{
@@ -62,6 +64,8 @@ export async function listExternalUsers(params: {
   if (params.channel_chat_id) searchParams.set('channel_chat_id', params.channel_chat_id)
   if (params.referral_start_date) searchParams.set('referral_start_date', params.referral_start_date)
   if (params.referral_end_date) searchParams.set('referral_end_date', params.referral_end_date)
+  if (params.keyword) searchParams.set('keyword', params.keyword)
+  if (params.group_by_subagent) searchParams.set('group_by_subagent', 'true')
   if (params.page) searchParams.set('page', params.page.toString())
   if (params.page_size) searchParams.set('page_size', params.page_size.toString())
 
@@ -194,6 +198,7 @@ export async function getUserSessions(params: {
   instance_id?: string
   channel_type?: string
   channel_chat_id?: string
+  subagent_id?: string
   page?: number
   page_size?: number
 }): Promise<{
@@ -209,6 +214,7 @@ export async function getUserSessions(params: {
   if (params.channel_type) searchParams.set('channel_type', params.channel_type)
   // 空串必须显式传（匹配 legacy NULL 会话），不能用真值判断
   if (params.channel_chat_id !== undefined) searchParams.set('channel_chat_id', params.channel_chat_id)
+  if (params.subagent_id !== undefined) searchParams.set('subagent_id', params.subagent_id)
   if (params.page) searchParams.set('page', params.page.toString())
   if (params.page_size) searchParams.set('page_size', params.page_size.toString())
 

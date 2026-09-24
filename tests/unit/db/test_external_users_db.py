@@ -134,6 +134,64 @@ class TestListExternalUsersCombinationGranularity:
         count_sql = calls[0][0][0]
         assert "cs.channel_type = %s" not in count_sql
 
+    def test_group_by_subagent_splits_combinations(self):
+        """group_by_subagent=True 时子查询按 user/channel/subagent 分组并带出 cs.subagent_id"""
+        result, calls = self._run(
+            tenant_id="tenant_001",
+            channel_type="dingtalk",
+            group_by_subagent=True,
+            page=1,
+            page_size=20,
+        )
+        count_sql = calls[0][0][0]
+        list_sql = calls[1][0][0]
+        # 子查询分组三要素变为 user_id / channel_type / subagent_id
+        assert "GROUP BY user_id, channel_type, subagent_id" in count_sql
+        assert "GROUP BY user_id, channel_type, subagent_id" in list_sql
+        # 外层 SELECT 带出 cs.subagent_id
+        assert "cs.subagent_id," in list_sql
+        # 不再按 wecom_kf CASE 折叠
+        assert "CASE WHEN channel_type = 'wecom_kf'" not in list_sql
+        # 子查询保留 channel_chat_id 占位列（外层 SELECT 固定引用该列）
+        assert "'' AS channel_chat_id" in count_sql
+        assert "'' AS channel_chat_id" in list_sql
+        # keyword 未传时无组合搜索条件
+        assert "cs.subagent_id = ANY(%s)" not in count_sql
+
+    def test_keyword_searches_username_or_agent_name(self):
+        """keyword 组合搜索：用户名/昵称 OR 智能体名称（翻译成 agent_id 集合后 ANY 匹配）"""
+        from src.db.models import UserDB
+
+        mock_cursor = MagicMock()
+        mock_cursor.fetchone.return_value = {"cnt": 0}
+        # 第一次 fetchall（subagent_definitions 名称反查）返回命中智能体
+        mock_cursor.fetchall.return_value = [{"agent_id": "sales-pro"}]
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+
+        with patch("src.db.models.get_db_connection") as mock_get_db:
+            mock_get_db.return_value.__enter__.return_value = mock_conn
+            UserDB.list_external_users(
+                tenant_id="tenant_001",
+                channel_type="dingtalk",
+                keyword="售前",
+                group_by_subagent=True,
+                page=1,
+                page_size=20,
+            )
+            count_sql, count_params = mock_cursor.execute.call_args_list[1][0]
+            # 智能体名称反查先执行
+            agent_sql, agent_params = mock_cursor.execute.call_args_list[0][0]
+            assert "subagent_definitions" in agent_sql
+            assert "%售前%" in agent_params
+            # count 查询带 OR 组合条件
+            assert "(u.username ILIKE %s OR u.nickname ILIKE %s) OR cs.subagent_id = ANY(%s)" in count_sql
+            assert "%售前%" in count_params
+            # agent_id 集合以列表参数传入 ANY(%s)（channel_type 参数在其后追加）
+            assert any(
+                isinstance(p, list) and "sales-pro" in p for p in count_params
+            )
+
     def test_normalizes_channel_chat_id_and_referrer_name(self):
         """返回行归一化：无会话用户 channel_chat_id 为空串；引流人名称正确解析"""
         rows = [
