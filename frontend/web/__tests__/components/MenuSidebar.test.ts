@@ -204,6 +204,35 @@ describe('MenuSidebar - flyout 二级菜单', () => {
     expect(flyoutText).toContain('微信接待客户')
   })
 
+  it('办公软件会话：租户管理员可见', async () => {
+    const wrapper = mountTenantSidebar()
+    await flushPromises()
+
+    const trigger = findButtonByText(wrapper, '经验中心')
+    await trigger.trigger('mouseenter')
+    await flushPromises()
+
+    const flyout = findFlyout()
+    expect(flyout?.textContent || '').toContain('办公软件会话')
+  })
+
+  it('办公软件会话：普通用户不可见', async () => {
+    routeState.path = '/t/test-tenant/chat'
+    tenantIsLoggedIn.value = true
+    tenantAdmin.value = { username: 'staff', role: 'user' }
+    tenant.value = { company_name: '测试租户' }
+    wrapper = mountAndTrack()
+    await flushPromises()
+
+    const trigger = findButtonByText(wrapper, '经验中心')
+    await trigger.trigger('mouseenter')
+    await flushPromises()
+
+    const flyout = findFlyout()
+    expect(flyout?.textContent || '').toContain('微信接待客户')
+    expect(flyout?.textContent || '').not.toContain('办公软件会话')
+  })
+
   it('桌面 click 经验中心：toggle 开/关', async () => {
     const wrapper = mountTenantSidebar()
     await flushPromises()

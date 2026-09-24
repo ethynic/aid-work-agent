@@ -368,6 +368,7 @@ class UserDB:
         tenant_id: str,
         username: str = None,
         source: str = None,
+        channel_type: str = None,
         referrer_user_id: str = None,
         visible_kf_ids: Optional[list] = None,
         channel_chat_id: str = None,
@@ -387,6 +388,9 @@ class UserDB:
             tenant_id: 租户ID
             username: 用户名搜索（可选）
             source: 用户来源筛选（可选）
+            channel_type: 渠道会话类型筛选（可选，按 channel_sessions.channel_type 过滤，
+                办公软件会话页按渠道 Tab 传入 wecom/dingtalk/feishu；
+                传入时放宽 source 非空硬条件，有该渠道会话的用户即返回）
             referrer_user_id: 引流员工筛选（可选，命中则只返回该员工引流的客户）
             referral_start_date: 引流起始日期（可选，含当日，格式 YYYY-MM-DD），过滤基准 = customer_referrals.created_at，
                 与引流统计 Tab 同口径（引流统计下钻时传入）
@@ -416,7 +420,11 @@ class UserDB:
             cursor = conn.cursor()
 
             # 构建查询条件
-            conditions = ["u.tenant_id = %s", "u.source IS NOT NULL"]
+            # 传 channel_type 时按渠道会话聚合定位用户，放宽 source 非空硬条件
+            # （存量办公软件渠道用户 source 可能未回填，有会话即应可见）
+            conditions = ["u.tenant_id = %s"]
+            if not channel_type:
+                conditions.append("u.source IS NOT NULL")
             params = [tenant_id]
 
             if username:
@@ -427,6 +435,10 @@ class UserDB:
             if source:
                 conditions.append("u.source = %s")
                 params.append(source)
+
+            if channel_type:
+                conditions.append("cs.channel_type = %s")
+                params.append(channel_type)
 
             if channel_chat_id:
                 conditions.append("cs.channel_chat_id = %s")

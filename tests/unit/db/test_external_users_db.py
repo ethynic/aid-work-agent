@@ -105,6 +105,35 @@ class TestListExternalUsersCombinationGranularity:
         assert "u.username ILIKE %s OR u.nickname ILIKE %s" in count_sql
         assert "%张三%" in count_params
 
+    def test_channel_type_filter_adds_condition(self):
+        """channel_type 过滤应加入 cs.channel_type 条件并放宽 source 非空硬条件（办公软件会话页按渠道 Tab 传入）"""
+        _, calls = self._run(
+            tenant_id="tenant_001",
+            channel_type="dingtalk",
+            page=1,
+            page_size=20,
+        )
+        count_sql = calls[0][0][0]
+        count_params = calls[0][0][1]
+        assert "cs.channel_type = %s" in count_sql
+        assert "dingtalk" in count_params
+        # source 未回填的存量渠道用户也应可见
+        assert "u.source IS NOT NULL" not in count_sql
+        # 列表查询同口径
+        list_sql = calls[1][0][0]
+        assert "cs.channel_type = %s" in list_sql
+        assert "dingtalk" in calls[1][0][1]
+
+    def test_no_channel_type_filter_no_condition(self):
+        """不传 channel_type 时不应出现 cs.channel_type 过滤条件（微信接待客户页不受影响）"""
+        _, calls = self._run(
+            tenant_id="tenant_001",
+            page=1,
+            page_size=20,
+        )
+        count_sql = calls[0][0][0]
+        assert "cs.channel_type = %s" not in count_sql
+
     def test_normalizes_channel_chat_id_and_referrer_name(self):
         """返回行归一化：无会话用户 channel_chat_id 为空串；引流人名称正确解析"""
         rows = [

@@ -634,6 +634,23 @@
           </svg>
           <span>微信接待客户</span>
         </button>
+
+        <!-- 办公软件会话：仅租户管理员可见（企微/钉钉/飞书渠道聊天记录） -->
+        <button
+          v-if="tenantId && isTenantAdmin"
+          @click="router.push(`/t/${tenantId}/office-sessions`); closeFlyout()"
+          :class="[
+            'w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-sm',
+            route.path === `/t/${tenantId}/office-sessions`
+              ? 'bg-primary-50 text-primary-700 font-medium'
+              : 'text-gray-600 hover:bg-gray-50'
+          ]"
+        >
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0H5m4-4h.01M12 17h.01M16 17h.01M8 13h.01M12 13h.01M16 13h.01M8 9h.01M12 9h.01M16 9h.01" />
+          </svg>
+          <span>办公软件会话</span>
+        </button>
       </template>
 
       <!-- 管理子菜单 -->

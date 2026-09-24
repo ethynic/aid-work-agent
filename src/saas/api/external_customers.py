@@ -70,6 +70,7 @@ async def list_external_users(
     request: Request,
     username: Optional[str] = None,
     source: Optional[str] = None,
+    channel_type: Optional[str] = None,
     referrer_user_id: Optional[str] = None,
     channel_chat_id: Optional[str] = None,
     referral_start_date: Optional[str] = None,
@@ -82,6 +83,7 @@ async def list_external_users(
     Args:
         username: 用户名/昵称搜索（可选）
         source: 用户来源筛选（可选）
+        channel_type: 渠道会话类型筛选（可选，办公软件会话页按渠道 Tab 传入 wecom/dingtalk/feishu）
         referrer_user_id: 引流员工筛选（可选，引流统计下钻时传入）
         channel_chat_id: 客服账号（open_kfid）筛选（可选，客服账号下拉框筛选时传入）
         referral_start_date: 引流起始日期（可选，含当日，格式 YYYY-MM-DD，引流统计下钻时传入）
@@ -102,6 +104,7 @@ async def list_external_users(
         tenant_id=tenant_id,
         username=username,
         source=source,
+        channel_type=channel_type,
         referrer_user_id=referrer_user_id,
         visible_kf_ids=visible_kf_ids,
         channel_chat_id=channel_chat_id,

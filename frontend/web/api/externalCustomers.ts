@@ -39,6 +39,7 @@ export function getSaasAuthHeader(): Record<string, string> {
 export async function listExternalUsers(params: {
   username?: string
   source?: string
+  channel_type?: string
   referrer_user_id?: string
   channel_chat_id?: string
   referral_start_date?: string
@@ -56,6 +57,7 @@ export async function listExternalUsers(params: {
   const searchParams = new URLSearchParams()
   if (params.username) searchParams.set('username', params.username)
   if (params.source) searchParams.set('source', params.source)
+  if (params.channel_type) searchParams.set('channel_type', params.channel_type)
   if (params.referrer_user_id) searchParams.set('referrer_user_id', params.referrer_user_id)
   if (params.channel_chat_id) searchParams.set('channel_chat_id', params.channel_chat_id)
   if (params.referral_start_date) searchParams.set('referral_start_date', params.referral_start_date)
