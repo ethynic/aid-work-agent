@@ -831,7 +831,7 @@ class FeishuAdapter(ChannelAdapter):
                 "position": user.get("position", ""),
                 "email": user.get("email", ""),
                 "mobile": user.get("mobile", ""),
-                "avatar": user.get("avatar", {}).get("avatar_72", ""),
+                "avatar": (user.get("avatar") or {}).get("avatar_72", ""),
             }
 
         except Exception as e:

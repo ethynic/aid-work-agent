@@ -868,11 +868,14 @@ async def _process_tenant_dingtalk_background(
             logger.debug(f"[Tenant DingTalk] 消息被忽略: tenant={tenant_id}")
             return
 
-        # 自动注册用户
+        # 自动注册用户（缺头像时按需从钉钉通讯录抓取姓名/头像）
         user_id = None
         try:
             from src.saas.services.auto_register import ensure_user_registered
-            user_id = await ensure_user_registered("dingtalk", message.user_id, tenant_id, source="dingtalk")
+            user_id = await ensure_user_registered(
+                "dingtalk", message.user_id, tenant_id, source="dingtalk",
+                user_info_fetcher=lambda: adapter.get_user_info(message.user_id),
+            )
         except Exception as e:
             logger.warning(f"[Tenant DingTalk] 自动注册失败: {e}")
 
@@ -1040,11 +1043,14 @@ async def _process_tenant_feishu_background(
             logger.debug(f"[Tenant Feishu] 消息被忽略（群聊未@机器人等）: tenant={tenant_id}")
             return
 
-        # 自动注册用户
+        # 自动注册用户（缺头像时按需从飞书通讯录抓取姓名/头像）
         user_id = None
         try:
             from src.saas.services.auto_register import ensure_user_registered
-            user_id = await ensure_user_registered("feishu", message.user_id, tenant_id, source="feishu")
+            user_id = await ensure_user_registered(
+                "feishu", message.user_id, tenant_id, source="feishu",
+                user_info_fetcher=lambda: adapter.get_user_info(message.user_id),
+            )
         except Exception as e:
             logger.warning(f"[Tenant Feishu] 自动注册失败: {e}")
 
