@@ -9,7 +9,7 @@
 - 已结束会话积压入库：远程=4 -> source=customer_ended，未触发 AI
 - 穿插顺序：同页 C1 -> S1 -> C2 -> S2，入库顺序必须为 C1、S1、C2、S2
 - 队尾员工消息：晚于本页最后客户消息 -> 循环后 flush
-- 语音占位符过滤：人工期语音消息（text="[语音消息]"）不入库
+- 语音占位符落库：人工期/员工语音消息 ASR 不可用时落 [语音消息] 占位符（留痕推送）
 - 消息去重：同 msgid 员工消息重复拉取只入库一次（servicer: 前缀 key）
 
 测试通过真实调用 _process_tenant_wecom_kf_messages，mock 外部依赖（adapter / 会话 / 去重 / add_message）。
@@ -230,13 +230,16 @@ class TestServicerMessage:
         add_message_mock.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_servicer_voice_not_persisted(self):
-        """员工语音消息（非 text）不入库（与 should_process_kf_message 口径一致）。"""
+    async def test_servicer_voice_persisted_as_placeholder(self):
+        """员工语音消息落库：ASR 不可用（测试环境无 download_media）时落 [语音消息] 占位符。"""
         now = int(time.time())
         msgs = [_voice_msg("sv_voice", now, origin=5)]
         _a, add_message_mock, _u, _p = await _run(msgs, remote_state=4)
 
-        add_message_mock.assert_not_called()
+        add_message_mock.assert_called_once()
+        kwargs = add_message_mock.call_args.kwargs
+        assert kwargs["content"] == "[人工客服] [语音消息]"
+        assert kwargs["metadata"]["source"] == "servicer"
 
     @pytest.mark.asyncio
     async def test_servicer_dedup_by_servicer_prefix(self):
@@ -288,13 +291,16 @@ class TestContextCustomerMessage:
         pp_mock.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_human_period_voice_placeholder_filtered(self):
-        """人工期语音消息（text="[语音消息]"）不入库（人工期不做 ASR，占位符过滤）。"""
+    async def test_human_period_voice_persisted_as_placeholder(self):
+        """人工期语音消息落库：ASR 不可用时落 [语音消息] 占位符（留痕并推送，不静默丢弃）。"""
         now = int(time.time())
         msgs = [_voice_msg("v1", now, origin=3)]
         _a, add_message_mock, _u, _p = await _run(msgs, remote_state=3)
 
-        add_message_mock.assert_not_called()
+        add_message_mock.assert_called_once()
+        kwargs = add_message_mock.call_args.kwargs
+        assert kwargs["content"] == "[语音消息]"
+        assert kwargs["metadata"]["source"] == "customer_human"
 
     @pytest.mark.asyncio
     async def test_waiting_pool_customer_persisted(self):
@@ -306,6 +312,99 @@ class TestContextCustomerMessage:
         add_message_mock.assert_called_once()
         assert add_message_mock.call_args.kwargs["metadata"]["source"] == "customer_human"
         pp_mock.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_human_period_file_persisted_as_placeholder(self):
+        """人工期客户文件消息落库：[文件] 文件名 占位符，不丢弃不触发 AI。"""
+        now = int(time.time())
+        msgs = [{
+            "msgid": "f1",
+            "origin": 3,
+            "msgtype": "file",
+            "external_userid": "u1",
+            "send_time": now,
+            "file": {"media_id": "m1", "file_name": "报价单.pdf"},
+        }]
+        _a, add_message_mock, _u, pp_mock = await _run(msgs, remote_state=3)
+
+        add_message_mock.assert_called_once()
+        kwargs = add_message_mock.call_args.kwargs
+        assert kwargs["content"] == "[文件] 报价单.pdf"
+        assert kwargs["metadata"]["source"] == "customer_human"
+        pp_mock.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_human_period_file_download_and_link(self, tmp_path):
+        """人工期客户文件消息下载成功：content 带免认证下载链接，attachments 含 file_id。"""
+        now = int(time.time())
+        # 真实临时文件，验证 rename 为 {file_id}.pdf
+        local_file = tmp_path / "20260924120000_m1.pdf"
+        local_file.write_bytes(b"pdf-bytes")
+
+        msgs = [{
+            "msgid": "f1",
+            "origin": 3,
+            "msgtype": "file",
+            "external_userid": "u1",
+            "send_time": now,
+            "file": {"media_id": "m1", "file_name": "报价单.pdf"},
+        }]
+        redis_mock = MagicMock()
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(
+                cr_module, "_download_and_build_attachments",
+                AsyncMock(return_value=[{
+                    "type": "file", "media_id": "m1", "file_name": "报价单.pdf",
+                    "mime_type": "application/pdf", "file_size": 2400000,
+                    "content": "cGRmLWJ5dGVz", "local_path": str(local_file),
+                    "saved_at": "2026-09-24 12:00:00",
+                }]),
+            ))
+            stack.enter_context(patch.object(cr_module, "redis_client", redis_mock))
+            _a, add_message_mock, _u, _p = await _run(msgs, remote_state=3)
+
+        kwargs = add_message_mock.call_args.kwargs
+        # content 带大小与下载链接
+        assert kwargs["content"].startswith("[文件] 报价单.pdf (")
+        assert "下载链接: /api/files/file_" in kwargs["content"]
+        assert kwargs["content"].endswith("/download")
+        # attachments 元数据含 file_id/download_url
+        att = kwargs["attachments"][0]
+        assert att["file_id"].startswith("file_")
+        assert att["download_url"] == f"/api/files/{att['file_id']}/download"
+        # 文件重命名为 {file_id}.pdf，Redis 注册含 path/size/mime_type
+        renamed = tmp_path / f"{att['file_id']}.pdf"
+        assert renamed.exists() and not local_file.exists()
+        assert att["local_path"] == str(renamed)
+        assert redis_mock.hset.called and redis_mock.expire.called
+
+    @pytest.mark.asyncio
+    async def test_human_period_voice_asr_success(self):
+        """人工期客户语音 ASR 成功：落 [ASR识别结果] 文本并补 ASR 计费。"""
+        now = int(time.time())
+        msgs = [_voice_msg("v1", now, origin=3)]
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(
+                cr_module, "_download_and_build_attachments",
+                AsyncMock(return_value=[{
+                    "type": "voice", "content": "YmluYXJ5",
+                    "audio_format": "wav", "sample_rate": 16000,
+                }]),
+            ))
+            stack.enter_context(patch.object(
+                cr_module, "_transcribe_voice_with_asr",
+                AsyncMock(return_value="请问发货了吗"),
+            ))
+            billing_mock = MagicMock()
+            stack.enter_context(patch.object(
+                cr_module, "_persist_kf_asr_billing", billing_mock,
+            ))
+            _a, add_message_mock, _u, _p = await _run(msgs, remote_state=3)
+
+        add_message_mock.assert_called_once()
+        kwargs = add_message_mock.call_args.kwargs
+        assert kwargs["content"] == "[ASR识别结果] 请问发货了吗"
+        billing_mock.assert_called_once()
 
 
 class TestInterleavedOrder:

@@ -2009,34 +2009,14 @@ async def _process_tenant_wecom_kf_messages(
                     continue
                 # ===== 旧消息过滤结束 =====
 
-                # 仅处理文字 + 语音消息：图片/视频/文件等附件消息直接过滤，
-                # 避免转发给智能体产生"看不了视频"等无效回复消耗积分
-                from src.channels.wecom_kf.message import (
-                    KF_FILTER_HINT_MESSAGE,
-                    should_process_kf_message,
-                )
-                if not should_process_kf_message(msg_type):
-                    logger.info(
-                        f"[wecom_kf] 跳过非文字/语音消息: msgid={msg_id}, msgtype={msg_type}"
-                    )
-                    # 通知客户：无法识别该类型文件，请用文字或语音描述需求。
-                    # 按客户维度节流（复用 dedup，5 分钟窗口），避免连续发文件刷屏
-                    try:
-                        ext_user = msg.get("external_userid", "")
-                        if ext_user:
-                            dedup = _get_tenant_dedup(tenant_id)
-                            if not await dedup.is_duplicate(
-                                f"kf_filter_hint:{tenant_id}:{ext_user}"
-                            ):
-                                adapter.current_open_kfid = open_kfid
-                                await adapter.send_text(
-                                    KF_FILTER_HINT_MESSAGE, ext_user
-                                )
-                    except Exception as e:
-                        logger.warning(
-                            f"[wecom_kf] 发送文件类型提示失败: msgid={msg_id}, error={e}"
-                        )
+                # 事件型条目（msgtype=event）已在上游按事件分支处理（撤回/进入会话等），
+                # 其余事件类型不作为客户消息处理，防止穿透到落库/推送链路
+                if msg_type == "event":
                     continue
+
+                # 消息类型过滤后移：附件类消息（image/video/file 等）不再在收集层丢弃，
+                # 人工期/已结束期需落库并推送第三方系统（external_push_human）；
+                # 智能体期在会话状态确定后统一拦截（见下方"智能体期附件消息拦截"）
 
                 # 消息去重
                 dedup = _get_tenant_dedup(tenant_id)
@@ -2203,6 +2183,7 @@ async def _process_tenant_wecom_kf_messages(
                                 await _persist_kf_context_customer_message(
                                     unified_msg, msg, session_id, open_kfid, tenant_id,
                                     "customer_human",
+                                    api_client=adapter.api_client,
                                 )
                                 continue
                             elif actual_state == 4:
@@ -2219,6 +2200,7 @@ async def _process_tenant_wecom_kf_messages(
                                 await _persist_kf_context_customer_message(
                                     unified_msg, msg, session_id, open_kfid, tenant_id,
                                     "customer_ended",
+                                    api_client=adapter.api_client,
                                 )
                                 continue
                             elif actual_state == 0:
@@ -2250,6 +2232,7 @@ async def _process_tenant_wecom_kf_messages(
                                     await _persist_kf_context_customer_message(
                                         unified_msg, msg, session_id, open_kfid, tenant_id,
                                         "customer_human",
+                                        api_client=adapter.api_client,
                                     )
                                     continue
                             else:
@@ -2261,6 +2244,7 @@ async def _process_tenant_wecom_kf_messages(
                                 await _persist_kf_context_customer_message(
                                     unified_msg, msg, session_id, open_kfid, tenant_id,
                                     "customer_human",
+                                    api_client=adapter.api_client,
                                 )
                                 continue
                         except Exception as e:
@@ -2301,6 +2285,7 @@ async def _process_tenant_wecom_kf_messages(
                                 await _persist_kf_context_customer_message(
                                     unified_msg, msg, session_id, open_kfid, tenant_id,
                                     "customer_ended",
+                                    api_client=adapter.api_client,
                                 )
                                 continue
                             elif actual_state == 0:
@@ -2328,6 +2313,7 @@ async def _process_tenant_wecom_kf_messages(
                                     await _persist_kf_context_customer_message(
                                         unified_msg, msg, session_id, open_kfid, tenant_id,
                                         "customer_human",
+                                        api_client=adapter.api_client,
                                     )
                                     continue
                             elif actual_state == 3:
@@ -2337,6 +2323,7 @@ async def _process_tenant_wecom_kf_messages(
                                     await _persist_kf_context_customer_message(
                                         unified_msg, msg, session_id, open_kfid, tenant_id,
                                         "customer_human",
+                                        api_client=adapter.api_client,
                                     )
                                     continue
                                 logger.info(
@@ -2346,6 +2333,7 @@ async def _process_tenant_wecom_kf_messages(
                                 await _persist_kf_context_customer_message(
                                     unified_msg, msg, session_id, open_kfid, tenant_id,
                                     "customer_human",
+                                    api_client=adapter.api_client,
                                 )
                                 continue
                             else:
@@ -2357,6 +2345,7 @@ async def _process_tenant_wecom_kf_messages(
                                 await _persist_kf_context_customer_message(
                                     unified_msg, msg, session_id, open_kfid, tenant_id,
                                     "customer_human",
+                                    api_client=adapter.api_client,
                                 )
                                 continue
                         except Exception as e:
@@ -2421,6 +2410,7 @@ async def _process_tenant_wecom_kf_messages(
                             await _persist_kf_context_customer_message(
                                 unified_msg, msg, session_id, open_kfid, tenant_id,
                                 "customer_ended",
+                                api_client=adapter.api_client,
                             )
                             continue
                         # 远程状态 0(未处理)：可切回智能助手，行为不变
@@ -2452,6 +2442,7 @@ async def _process_tenant_wecom_kf_messages(
                                 await _persist_kf_context_customer_message(
                                     unified_msg, msg, session_id, open_kfid, tenant_id,
                                     "customer_human",
+                                    api_client=adapter.api_client,
                                 )
                                 continue
                         else:
@@ -2467,6 +2458,7 @@ async def _process_tenant_wecom_kf_messages(
                             await _persist_kf_context_customer_message(
                                 unified_msg, msg, session_id, open_kfid, tenant_id,
                                 "customer_human",
+                                api_client=adapter.api_client,
                             )
                             continue
                 except Exception as e:
@@ -2474,6 +2466,33 @@ async def _process_tenant_wecom_kf_messages(
                         f"[wecom_kf] 远程状态校验失败，继续处理: "
                         f"session_id={session_id}, error={e}"
                     )
+
+                # 智能体期附件消息拦截：到达这里说明会话由智能体接待（人工期/已结束期
+                # 已在上方 _persist_kf_context_customer_message 分支落库并 continue）。
+                # 图片/视频/文件等附件消息转发给智能体会产生"看不了视频"等无效回复
+                # 消耗积分，此处提示客户并跳过（与历史收集层过滤行为一致）。
+                # 按客户维度节流（复用 dedup，5 分钟窗口），避免连续发文件刷屏
+                if msg.get("msgtype", "") not in ("text", "voice"):
+                    logger.info(
+                        f"[wecom_kf] 智能体期跳过非文字/语音消息: msgid={msg_id}, "
+                        f"msgtype={msg.get('msgtype', '')}"
+                    )
+                    from src.channels.wecom_kf.message import KF_FILTER_HINT_MESSAGE
+                    try:
+                        if unified_msg.user_id:
+                            dedup = _get_tenant_dedup(tenant_id)
+                            if not await dedup.is_duplicate(
+                                f"kf_filter_hint:{tenant_id}:{unified_msg.user_id}"
+                            ):
+                                adapter.current_open_kfid = open_kfid
+                                await adapter.send_text(
+                                    KF_FILTER_HINT_MESSAGE, unified_msg.user_id
+                                )
+                    except Exception as e:
+                        logger.warning(
+                            f"[wecom_kf] 发送文件类型提示失败: msgid={msg_id}, error={e}"
+                        )
+                    continue
 
                 # 检查隐藏命令
                 from src.core.hidden_commands import is_hidden_command, execute_hidden_command
@@ -2791,24 +2810,14 @@ async def _persist_kf_servicer_message(
     content 前缀 `[人工客服] ` 让 LLM 明确区分「客户发言」与「人工客服发言」，
     避免把员工消息误当客户提问。servicer_userid + servicer_name（企微通讯录反查，
     Redis 缓存 1 天）存 metadata，供外部接待客户页面显示是哪位员工在接待。
-    员工消息仅文本入库（语音/图片/文件跳过）。
+    语音消息走 ASR 转文字（失败落 [语音消息] 占位）；文件/图片/视频落占位符，
+    与文字消息一样入队 external_push_human 推送第三方系统。
     异常吞掉不影响主流程（去重 key 已在收集时标记，TTL 内不重试、过期后重拉可补）。
     """
     try:
         external_userid = msg.get("external_userid", "")
         if not external_userid:
             return
-        # 员工消息仅文本入库（与 should_process_kf_message 口径一致）
-        if msg.get("msgtype") != "text":
-            return
-        text = msg.get("text", {}).get("content", "")
-        if not text:
-            return
-
-        servicer_userid = msg.get("servicer_userid", "")
-        servicer_name = ""
-        if api_client is not None:
-            servicer_name = await _resolve_kf_servicer_name(api_client, tenant_id, servicer_userid)
 
         session = channel_session_manager.get_or_create_session(
             channel_type="wecom_kf",
@@ -2818,6 +2827,28 @@ async def _persist_kf_servicer_message(
             channel_chat_id=open_kfid,
         )
         session_id = session["session_id"]
+
+        msg_type = msg.get("msgtype", "")
+        file_attachments_meta: list = []
+        if msg_type == "text":
+            text = msg.get("text", {}).get("content", "")
+        elif msg_type == "voice":
+            text = await _transcribe_kf_voice_for_persist(
+                msg, session_id, tenant_id, api_client
+            )
+        elif msg_type == "file":
+            text, file_attachments_meta = await _build_kf_file_message_content(
+                msg, session_id, tenant_id, api_client
+            )
+        else:
+            text = _kf_media_placeholder_text(msg)
+        if not text:
+            return
+
+        servicer_userid = msg.get("servicer_userid", "")
+        servicer_name = ""
+        if api_client is not None:
+            servicer_name = await _resolve_kf_servicer_name(api_client, tenant_id, servicer_userid)
 
         metadata = {
             "source": "servicer",
@@ -2831,6 +2862,7 @@ async def _persist_kf_servicer_message(
             role="user",
             content=f"[人工客服] {text}",
             message_type="text",
+            attachments=file_attachments_meta or None,
             tenant_id=tenant_id,
             metadata=metadata,
         )
@@ -2863,19 +2895,216 @@ async def _persist_kf_servicer_message(
         )
 
 
+def _register_kf_attachment_download(attachment: dict, tenant_id: str) -> Optional[dict]:
+    """人工期附件注册 file_id，返回 {"file_id", "download_url"}（免认证直链）。
+
+    复用 uploaded_file:{file_id} Redis 命名空间与 /api/files/{file_id}/download
+    免认证路由（与聊天图片同机制，file_id 为 uuid 不可枚举）。
+    文件重命名为 {file_id}{ext}，保证 Redis TTL（24h）过期后
+    find_uploaded_file_on_disk 磁盘扫描回退仍能命中，链接长期可访问。
+    下载/注册失败返回 None（推送退化为仅文件名占位，不阻断）。
+    """
+    local_path = attachment.get("local_path", "")
+    if not local_path or not os.path.exists(local_path):
+        return None
+    try:
+        import uuid
+        from src.channels.base import build_public_url
+
+        file_id = f"file_{uuid.uuid4().hex[:12]}"
+        ext = os.path.splitext(local_path)[1] or ""
+        new_path = os.path.join(os.path.dirname(local_path), f"{file_id}{ext}")
+        os.rename(local_path, new_path)
+        # 原地更新 local_path，调用方落库 attachments 元数据时指向重命名后的文件
+        attachment["local_path"] = new_path
+
+        key = redis_client.make_key("uploaded_file", file_id)
+        for field, value in {
+            "file_id": file_id,
+            "name": attachment.get("file_name", f"{file_id}{ext}"),
+            "path": new_path,
+            "size": attachment.get("file_size", 0),
+            "mime_type": attachment.get("mime_type", "application/octet-stream"),
+            "type": attachment.get("type", "file"),
+            "tenant_id": tenant_id,
+        }.items():
+            redis_client.hset(key, field, value)
+        redis_client.expire(key, 86400)
+
+        return {
+            "file_id": file_id,
+            "download_url": build_public_url(f"/api/files/{file_id}/download"),
+        }
+    except Exception as e:
+        logger.warning(
+            f"[wecom_kf] 附件注册下载链接失败（推送退化为文件名占位）: "
+            f"local_path={local_path}, error={e}"
+        )
+        return None
+
+
+async def _build_kf_file_message_content(
+    msg: dict, session_id: str, tenant_id: str, api_client
+) -> tuple:
+    """人工期文件消息（客户/员工共用）：下载附件并注册免认证下载链接。
+
+    返回 (content, attachments_meta)：
+    - content 形如 `[文件] 报价单.pdf (2.3MB)\n下载链接: https://...`，
+      链接为 /api/files/{file_id}/download 免认证直链，第三方可直接访问；
+    - attachments_meta 写入 channel_messages.attachments（不含 base64）；
+    - 下载或注册失败退化为 `[文件] 文件名` 占位（无链接），不阻断主流程。
+    """
+    from src.channels.base import format_file_size
+
+    file_name = msg.get("file", {}).get("file_name", "")
+    placeholder = f"[文件] {file_name}" if file_name else "[文件]"
+    try:
+        attachments = await _download_and_build_attachments(
+            api_client, msg, session_id, tenant_id
+        )
+    except Exception as e:
+        logger.warning(
+            f"[wecom_kf] 人工期文件附件下载失败（落占位符留痕）: "
+            f"session_id={session_id}, error={e}"
+        )
+        return placeholder, []
+    if not attachments:
+        return placeholder, []
+
+    att = attachments[0]
+    reg = _register_kf_attachment_download(att, tenant_id)
+    attachments_meta = [{
+        "type": att["type"],
+        "media_id": att["media_id"],
+        "file_name": att["file_name"],
+        "mime_type": att["mime_type"],
+        "file_size": att["file_size"],
+        "local_path": att["local_path"],
+        "saved_at": att["saved_at"],
+        **({"file_id": reg["file_id"], "download_url": reg["download_url"]} if reg else {}),
+    }]
+    content = f"{placeholder} ({format_file_size(att['file_size'])})"
+    if reg:
+        content += f"\n下载链接: {reg['download_url']}"
+    return content, attachments_meta
+
+
+def _persist_kf_asr_billing(session_id: str, tenant_id: str) -> None:
+    """人工期语音 ASR 独立落账（chat_records，source_type=wecom_kf_human_asr）。
+
+    人工期无 SessionRecordService（start_record 仅智能体期调用），
+    SpeechToTextTool 内部的 add_asr_usage 落空（get_current_record 为 None），
+    按 billing_audit.md §4.4 在调用方补计费；record 非 None 时工具内部已计，
+    此处跳过避免双计。
+    """
+    try:
+        from src.services.session_record import SessionRecordManager
+
+        if SessionRecordManager.get_current_record() is not None:
+            return
+        from src.db.models import ChatRecordDB
+        from src.services.billing import calculate_asr_credit_cost
+
+        credit_cost = calculate_asr_credit_cost(asr_calls=1)
+        usage_breakdown = {
+            "asr": {"calls": 1, "model": "aliyun-nls-asr", "credit": round(credit_cost, 2)}
+        }
+        ChatRecordDB.create(
+            session_id=session_id,
+            tenant_id=tenant_id,
+            user_message="[人工期语音识别]",
+            model="aliyun-nls-asr",
+            source_type="wecom_kf_human_asr",
+            credit_cost=credit_cost,
+            asr_calls=1,
+            usage_breakdown=usage_breakdown,
+            status="completed",
+        )
+    except Exception as e:
+        logger.opt(exception=True).error(
+            f"wecom_kf 人工期 ASR 计费落库失败: session_id={session_id}, error={e}"
+        )
+
+
+async def _transcribe_kf_voice_for_persist(
+    msg: dict, session_id: str, tenant_id: str, api_client
+) -> str:
+    """人工期语音消息下载 + ASR 转文字（客户与员工消息共用）。
+
+    与智能体期口径一致：下载媒体后调 `_transcribe_voice_with_asr`，
+    识别成功返回 `[ASR识别结果] 文本`；下载失败/识别失败返回
+    `[语音消息]` 占位符（留痕落库并推送，不静默丢弃）。
+    ASR 真实调用成功后补计费（人工期无 SessionRecordService）。
+    """
+    try:
+        attachments = await _download_and_build_attachments(
+            api_client, msg, session_id, tenant_id
+        )
+        if not attachments:
+            return "[语音消息]"
+        audio_content = attachments[0].get("content", "")
+        # 优先使用 magic bytes 检测结果（避免 WeCom 错误标记 .mp3）
+        audio_format = attachments[0].get("audio_format") \
+            or attachments[0].get("file_name", "").split(".")[-1] \
+            or "amr"
+        audio_sample_rate = attachments[0].get("sample_rate") or 16000
+        asr_text = await _transcribe_voice_with_asr(
+            audio_content, audio_format, audio_sample_rate
+        )
+        if not asr_text or asr_text.startswith("[语音消息"):
+            return "[语音消息]"
+        _persist_kf_asr_billing(session_id, tenant_id)
+        return f"[ASR识别结果] {asr_text}"
+    except Exception as e:
+        logger.warning(
+            f"[wecom_kf] 人工期语音 ASR 失败（落占位符留痕）: "
+            f"session_id={session_id}, error={e}"
+        )
+        return "[语音消息]"
+
+
+def _kf_media_placeholder_text(msg: dict) -> Optional[str]:
+    """附件类消息转为可读占位文本；None 表示该类型不落库。"""
+    msg_type = msg.get("msgtype", "")
+    if msg_type == "file":
+        file_name = msg.get("file", {}).get("file_name", "")
+        return f"[文件] {file_name}" if file_name else "[文件]"
+    if msg_type == "image":
+        return "[图片]"
+    if msg_type == "video":
+        return "[视频]"
+    return None
+
+
 async def _persist_kf_context_customer_message(
-    unified_msg, msg: dict, session_id: str, open_kfid: str, tenant_id: str, source: str
+    unified_msg, msg: dict, session_id: str, open_kfid: str, tenant_id: str, source: str,
+    api_client=None,
 ) -> None:
     """人工期/已结束期客户消息落库到 channel_messages：只持久化，不触发 AI。
 
     source 取值 customer_human（人工接待期）/ customer_ended（已结束会话积压），
     仅用于前端展示与事后排查，不影响 LLM 上下文重建（都是 role=user）。
-    语音占位符（`[语音消息]`）在人工期不做 ASR，过滤不落库。
+    语音消息走 ASR 转文字后落库（失败落 [语音消息] 占位）；
+    文件/图片/视频落占位符（[文件] 文件名 / [图片] / [视频]），
+    与文字消息一样触发 external_push_human 推送第三方系统。
     """
     try:
-        text = getattr(unified_msg, "text", None)
-        if not text or text.startswith("[语音消息"):
-            return  # 语音占位符不入库（人工期不做 ASR）
+        msg_type = msg.get("msgtype", "text")
+        file_attachments_meta: list = []
+        if msg_type == "voice":
+            text = await _transcribe_kf_voice_for_persist(
+                msg, session_id, tenant_id, api_client
+            )
+        elif msg_type == "file":
+            text, file_attachments_meta = await _build_kf_file_message_content(
+                msg, session_id, tenant_id, api_client
+            )
+        elif msg_type in ("image", "video"):
+            text = _kf_media_placeholder_text(msg)
+        else:
+            text = getattr(unified_msg, "text", None)
+        if not text:
+            return
 
         metadata = {
             "source": source,
@@ -2888,6 +3117,7 @@ async def _persist_kf_context_customer_message(
             content=text,
             message_type="text",
             tenant_id=tenant_id,
+            attachments=file_attachments_meta or None,
             metadata=metadata,
         )
         # 人工期沉淀任务入口 B（#64）：人工期无智能体轮次、recap 不会被触发，落库后
