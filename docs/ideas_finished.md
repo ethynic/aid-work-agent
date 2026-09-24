@@ -154,6 +154,7 @@
 | 20260518-2231 | 多租户 SaaS 架构 | 租户隔离、订阅计费、权限管理、管理后台 | [设计](system/saas/multi-tenant-saas-design.md) | — |
 | 20260518-2232 | 租户级 Skills | 每个租户维护自己的 Skills 文件夹，按需加载 | [设计](system/saas/tenant_skills_design.md) | — |
 | 20260518-2233 | 订阅权限合并 | 订阅计划与功能权限的统一管理 | [设计](system/saas/subscription_permission_merge_plan.md) | — |
+| 20260924-2047 | ✅ 网页端会话页面 | 管理员查看 web 端聊天记录：三栏布局（用户列表+用户名搜索 / 会话列表+智能体名称搜索 / 消息记录），菜单入口在「办公软件会话」下，仅管理员可见。后端 /api/saas/web-sessions/*（chat_sessions/chat_messages，租户隔离）。 | — | — |
 
 ## 前端
 

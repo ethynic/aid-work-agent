@@ -651,6 +651,23 @@
           </svg>
           <span>办公软件会话</span>
         </button>
+
+        <!-- 网页端会话：仅租户管理员可见（web 渠道恒存在，无需渠道配置门控） -->
+        <button
+          v-if="tenantId && isTenantAdmin"
+          @click="router.push(`/t/${tenantId}/web-sessions`); closeFlyout()"
+          :class="[
+            'w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-sm',
+            route.path === `/t/${tenantId}/web-sessions`
+              ? 'bg-primary-50 text-primary-700 font-medium'
+              : 'text-gray-600 hover:bg-gray-50'
+          ]"
+        >
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M8 21h8m-4-4v4M3 5a2 2 0 012-2h14a2 2 0 012 2v10a2 2 0 01-2 2H5a2 2 0 01-2-2V5z" />
+          </svg>
+          <span>网页端会话</span>
+        </button>
       </template>
 
       <!-- 管理子菜单 -->

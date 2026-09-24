@@ -1785,6 +1785,7 @@ app.include_router(work_outcomes.router)
 from src.saas.api import tenant_auth, tenant_mgmt, subscriptions
 from src.saas.api import channel_config, tenant_skills, channel_routes
 from src.saas.api import tenant_users, usage_reports, permissions, reply_styles, external_customers, tenant_migration
+from src.saas.api import web_sessions
 from src.saas.api import context_compression_routes
 from src.saas.api import billing_recharges, billing_balance
 from src.saas.api.knowledge_share import router as knowledge_share_router
@@ -1805,6 +1806,7 @@ app.include_router(usage_reports.public_router)
 app.include_router(permissions.router)
 app.include_router(reply_styles.router)
 app.include_router(external_customers.router)
+app.include_router(web_sessions.router)
 app.include_router(tenant_migration.router)
 app.include_router(context_compression_routes.router)
 app.include_router(billing_recharges.router)

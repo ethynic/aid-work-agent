@@ -559,11 +559,68 @@ class UserDB:
         return {"users": users, "total": total, "page": page, "page_size": page_size}
 
     @staticmethod
+    def list_web_session_users(
+        tenant_id: str,
+        keyword: str = None,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> dict:
+        """列出有网页端会话的用户（按租户聚合，最近活跃倒序）
+
+        Args:
+            tenant_id: 租户ID（必填，租户隔离）
+            keyword: 用户名/昵称搜索（可选，ILIKE 模糊匹配）
+            page: 页码，从1开始
+            page_size: 每页数量
+
+        Returns:
+            {"users": [...], "total": int, "page": int, "page_size": int}
+        """
+        offset = (page - 1) * page_size
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+
+            conditions = ["cs.tenant_id = %s"]
+            params = [tenant_id]
+            if keyword:
+                conditions.append("(u.username ILIKE %s OR u.nickname ILIKE %s)")
+                params.extend([f"%{keyword}%", f"%{keyword}%"])
+            where_clause = " AND ".join(conditions)
+
+            cursor.execute(f"""
+                SELECT COUNT(*) as cnt FROM (
+                    SELECT cs.user_id
+                    FROM chat_sessions cs
+                    JOIN users u ON u.user_id = cs.user_id
+                    WHERE {where_clause}
+                    GROUP BY cs.user_id
+                ) t
+            """, params)
+            total = cursor.fetchone()["cnt"]
+
+            cursor.execute(f"""
+                SELECT cs.user_id, u.username, u.nickname, u.avatar_url,
+                       COUNT(*) AS session_count,
+                       MAX(cs.updated_at) AS last_active_at
+                FROM chat_sessions cs
+                JOIN users u ON u.user_id = cs.user_id
+                WHERE {where_clause}
+                GROUP BY cs.user_id, u.username, u.nickname, u.avatar_url
+                ORDER BY MAX(cs.updated_at) DESC
+                LIMIT %s OFFSET %s
+            """, params + [page_size, offset])
+
+            users = [dict(row) for row in cursor.fetchall()]
+        return {"users": users, "total": total, "page": page, "page_size": page_size}
+
+    @staticmethod
     def get_user_sessions(
         user_id: str,
         instance_id: str = None,
         page: int = 1,
         page_size: int = 20,
+        tenant_id: str = None,
+        subagent_ids: list = None,
     ) -> dict:
         """获取用户的会话列表（分页）
 
@@ -572,6 +629,8 @@ class UserDB:
             instance_id: 数字员工实例ID筛选（可选）
             page: 页码，从1开始
             page_size: 每页数量
+            tenant_id: 租户ID筛选（可选，管理端查询必传以保证租户隔离）
+            subagent_ids: 智能体ID集合筛选（可选，按智能体名称搜索时传入）
 
         Returns:
             {"sessions": [...], "total": int, "page": int, "page_size": int}
@@ -587,6 +646,14 @@ class UserDB:
             if instance_id:
                 conditions.append("instance_id = %s")
                 params.append(instance_id)
+
+            if tenant_id:
+                conditions.append("tenant_id = %s")
+                params.append(tenant_id)
+
+            if subagent_ids:
+                conditions.append("subagent_id = ANY(%s)")
+                params.append(list(subagent_ids))
 
             where_clause = " AND ".join(conditions)
 
@@ -612,6 +679,7 @@ class UserDB:
         content_search: str = None,
         page: int = 1,
         page_size: int = 50,
+        exclude_roles: list = None,
     ) -> dict:
         """获取会话的消息列表（支持内容搜索）
 
@@ -620,6 +688,7 @@ class UserDB:
             content_search: 聊天内容搜索（可选）
             page: 页码，从1开始
             page_size: 每页数量
+            exclude_roles: 排除的消息角色（可选，如 ["tool"]）
 
         Returns:
             {"messages": [...], "total": int, "page": int, "page_size": int}
@@ -635,6 +704,10 @@ class UserDB:
             if content_search:
                 conditions.append("content LIKE %s")
                 params.append(f"%{content_search}%")
+
+            if exclude_roles:
+                conditions.append("role != ALL(%s)")
+                params.append(list(exclude_roles))
 
             where_clause = " AND ".join(conditions)
 

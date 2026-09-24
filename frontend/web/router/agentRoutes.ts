@@ -41,6 +41,7 @@ export const agentRoutes: RouteRecordRaw[] = [
       { path: 'reply-styles', name: 'tenant-reply-styles', component: () => import('@/components/saas/ReplyStyleManager.vue') },
       { path: 'external-customers', name: 'tenant-external-customers', component: () => import('@/components/saas/ExternalCustomerService.vue') },
       { path: 'office-sessions', name: 'tenant-office-sessions', component: () => import('@/components/saas/OfficeSessions.vue') },
+      { path: 'web-sessions', name: 'tenant-web-sessions', component: () => import('@/components/saas/WebSessions.vue') },
       { path: 'data-sources', name: 'tenant-data-sources', component: () => import('@/pages/DataSourceManager.vue') },
       { path: 'social-media', name: 'tenant-social-media', component: () => import('@/components/social-media/VideoCreationWorkbench.vue') },
       { path: 'assets', name: 'tenant-video-agent-assets', component: () => import('@/components/video-agent/AssetLibrary.vue') },
