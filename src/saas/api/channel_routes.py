@@ -489,7 +489,7 @@ async def _process_tenant_wecom_background(
         user_id = None
         try:
             from src.saas.services.auto_register import ensure_user_registered
-            user_id = await ensure_user_registered("wecom", message.user_id, tenant_id)
+            user_id = await ensure_user_registered("wecom", message.user_id, tenant_id, source="wecom")
         except Exception as e:
             logger.warning(f"[Tenant WeCom] 自动注册失败: {e}")
 
@@ -869,7 +869,7 @@ async def _process_tenant_dingtalk_background(
         user_id = None
         try:
             from src.saas.services.auto_register import ensure_user_registered
-            user_id = await ensure_user_registered("dingtalk", message.user_id, tenant_id)
+            user_id = await ensure_user_registered("dingtalk", message.user_id, tenant_id, source="dingtalk")
         except Exception as e:
             logger.warning(f"[Tenant DingTalk] 自动注册失败: {e}")
 
@@ -1041,7 +1041,7 @@ async def _process_tenant_feishu_background(
         user_id = None
         try:
             from src.saas.services.auto_register import ensure_user_registered
-            user_id = await ensure_user_registered("feishu", message.user_id, tenant_id)
+            user_id = await ensure_user_registered("feishu", message.user_id, tenant_id, source="feishu")
         except Exception as e:
             logger.warning(f"[Tenant Feishu] 自动注册失败: {e}")
 
