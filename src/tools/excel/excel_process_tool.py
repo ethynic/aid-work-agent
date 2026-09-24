@@ -408,7 +408,18 @@ class ExcelProcessTool(BaseTool):
     ) -> Optional[Dict]:
         """低风险确定性路由，覆盖明确的数据导出 Excel 场景。"""
         # 优先：结构化 data + 样例附件 → 智能模板填充（无需 LLM 路由）
-        if data and file_paths:
+        # 仅当 data 携带非空 rows（fill_with_sample 实际消费的形状）才确定性劫持。
+        # 平铺标量 dict（如 {"日期": "...", "意向场景": "..."} 这类键值对）FillData
+        # 消费不了，必须交给 LLM 路由识别为 modify/set_cell 等单元格级操作——
+        # 2026-09-23 报价单事故：平铺 dict 被劫持后 fill_with_sample 报
+        # "data.rows 为空，无需填充"，agent 退回发原模板副本
+        if (
+            data
+            and file_paths
+            and isinstance(data, dict)
+            and isinstance(data.get("rows"), list)
+            and data["rows"]
+        ):
             return {
                 "task": "fill_template",
                 "params": {
@@ -708,6 +719,18 @@ class ExcelProcessTool(BaseTool):
 
         # 新路径：结构化 data → 智能模板填充（AI 分析样例结构 + 行数不匹配 + 样式保留）
         data = params.get("data") or ctx.data
+        # data 传了但没有可消费的 rows（平铺标量 dict / 仅 meta / rows 空列表）：
+        # fill_with_sample 只会硬报 "data.rows 为空"，这里提前拦截并附模板预览引导，
+        # agent 一次往返即可改走 modify/set_cell 或补构造 rows 自愈
+        if data and not (isinstance(data, dict) and isinstance(data.get("rows"), list) and data["rows"]):
+            return await self._fill_template_needs_data(
+                template_path,
+                shape_hint=(
+                    "当前传入的 data 不含可填充的数据行（rows 为空或不是列表）。两种改法："
+                    "1) 若要把表格数据填入模板，构造 data={'rows': [{'列名': '值', ...}, ...]} 后重调；"
+                    "2) 若只需填写个别单元格并保留模板其余内容，改用 modify 操作（set_cell 指定单元格坐标），不要用 fill_template。"
+                ),
+            )
         if data:
             import asyncio
             from src.tools.excel.excel_template_ai import fill_with_sample
@@ -731,13 +754,16 @@ class ExcelProcessTool(BaseTool):
         return fill_template(template_path, variables=variables, output_name=output_name)
 
     @staticmethod
-    async def _fill_template_needs_data(template_path: str) -> Dict:
+    async def _fill_template_needs_data(template_path: str, shape_hint: str = "") -> Dict:
         """fill_template 缺 data/variables 的引导兜底：附模板内容预览返回 needs_data。
 
         生产实证（tenant_aa3c4ef6c4f3 tr_4a28eb2429a84dbd）：调用方首拍常只传
         instruction + 模板附件，干报错后 Agent 需额外一次"读模板"往返才能构造
         data 自愈（报错→to_md→带 data 重试，共 3 次工具调用）。这里把模板预览
         直接附在引导错误里，Agent 一次往返即可拿到"模板长什么样 + data 怎么传"。
+
+        shape_hint：data 形状不符（有 data 但无有效 rows）时的针对性引导，
+        区别于"完全没传 data"的首次引导。
         """
         preview = ""
         try:
@@ -755,6 +781,8 @@ class ExcelProcessTool(BaseTool):
             hint = "模板当前内容见 template_preview，按其字段构造 data。"
         else:
             hint = '模板预览不可用，可先调用本工具读取模板内容（instruction="读取该模板内容"）后再构造 data。'
+        if shape_hint:
+            hint = f"{shape_hint}{hint}"
         return {
             "success": False,
             "needs_data": True,

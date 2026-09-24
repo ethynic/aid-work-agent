@@ -320,3 +320,94 @@ def test_rule_route_to_md_still_works_for_read_intent():
     router = ExcelRouter()
     res = router._rule_based_route("读取这个附件的内容", ["a.xlsx"])
     assert res["task"] == "to_md"
+
+
+# ============================================================
+# fill_template 平铺 data 事故回归（2026-09-23 报价单，tr_26e2c23499dc4441）
+# ============================================================
+
+def test_deterministic_fill_hijack_requires_nonempty_rows():
+    """确定性劫持仅在 data 携带非空 rows 时触发；平铺标量 dict 交给 LLM 路由"""
+    from src.tools.excel.excel_process_tool import ExcelProcessTool
+
+    tool = ExcelProcessTool()
+
+    # 平铺标量 dict（事故现场形状）：不劫持，交 LLM 路由识别 modify/set_cell
+    flat = {"日期": "2026年09月23日", "意向场景": "人力资源AI员工"}
+    assert tool._resolve_task_deterministic("填日期和意向场景", ["file_x"]) is None
+    assert tool._resolve_task_deterministic("填日期", ["file_x"], data=flat) is None
+
+    # rows 空列表：同样不劫持
+    assert tool._resolve_task_deterministic("填充", ["file_x"], data={"rows": []}) is None
+
+    # 非 dict data：不劫持（走原有分支）
+    assert tool._resolve_task_deterministic("填充", ["file_x"], data="文本数据") is None
+
+    # 合法结构化 data：仍确定性走 fill_template
+    ok = tool._resolve_task_deterministic("填充", ["file_x"], data={"rows": [{"品名": "A"}]})
+    assert ok["task"] == "fill_template"
+    assert ok["params"]["data"] == {"rows": [{"品名": "A"}]}
+
+
+@pytest.mark.asyncio
+async def test_fill_template_flat_data_returns_needs_data_with_modify_hint(tmp_path):
+    """data 无有效 rows 时返回 needs_data 引导（含 modify/set_cell 改路提示 + 模板预览）"""
+    from openpyxl import Workbook
+    from src.tools.excel.excel_process_tool import ExcelProcessTool
+
+    tpl = tmp_path / "tpl.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws["A1"] = "报价单"
+    ws["B4"] = "日期："
+    wb.save(tpl)
+
+    res = await ExcelProcessTool._fill_template_needs_data(
+        str(tpl),
+        shape_hint=(
+            "当前传入的 data 不含可填充的数据行（rows 为空或不是列表）。两种改法："
+            "1) 若要把表格数据填入模板，构造 data={'rows': [{'列名': '值', ...}, ...]} 后重调；"
+            "2) 若只需填写个别单元格并保留模板其余内容，改用 modify 操作（set_cell 指定单元格坐标），不要用 fill_template。"
+        ),
+    )
+    assert res["success"] is False
+    assert res["needs_data"] is True
+    # 引导里必须包含两条自愈路径：构造 rows / 改走 modify
+    assert "rows" in res["error"]
+    assert "modify" in res["error"] or "set_cell" in res["error"]
+    # 模板预览附在引导里，Agent 一次往返拿到"模板长什么样"
+    assert "报价单" in res.get("template_preview", "")
+
+
+@pytest.mark.asyncio
+async def test_fill_template_routed_with_flat_data_heals_in_one_roundtrip(tmp_path):
+    """LLM 路由返回 fill_template + 平铺 data：不再干报错，直接 needs_data 自愈引导"""
+    from openpyxl import Workbook
+    from src.tools.excel.excel_process_tool import ExcelProcessTool
+
+    tpl = tmp_path / "quote.xlsx"
+    wb = Workbook()
+    wb.active["A1"] = "产品报价单"
+    wb.save(tpl)
+
+    tool = ExcelProcessTool()
+    flat = {"日期": "2026年09月23日", "意向场景": "人力资源AI员工"}
+
+    with patch.object(tool, "_resolve_file", return_value=str(tpl)), \
+         patch.object(tool, "_get_router") as mock_router_getter:
+        mock_router = AsyncMock()
+        mock_router.route.return_value = {
+            "task": "fill_template",
+            "params": {"template_file": str(tpl)},
+        }
+        mock_router_getter.return_value = mock_router
+
+        res = await tool.execute(
+            instruction="仅填充日期和意向场景，其余保留模板原文",
+            file_paths=[str(tpl)],
+            data=flat,
+        )
+
+    assert res["success"] is False
+    assert res.get("needs_data") is True
+    assert "modify" in res["error"] or "set_cell" in res["error"]
