@@ -204,7 +204,15 @@ describe('MenuSidebar - flyout 二级菜单', () => {
     expect(flyoutText).toContain('微信接待客户')
   })
 
-  it('办公软件会话：租户管理员可见', async () => {
+  it('办公软件会话：租户管理员且配置了办公渠道时可见', async () => {
+    server.use(
+      http.get('/api/saas/channels', () =>
+        HttpResponse.json({
+          success: true,
+          channels: [{ config_id: 'c1', channel_type: 'dingtalk', name: '钉钉' }],
+        })
+      )
+    )
     const wrapper = mountTenantSidebar()
     await flushPromises()
 
@@ -216,7 +224,33 @@ describe('MenuSidebar - flyout 二级菜单', () => {
     expect(flyout?.textContent || '').toContain('办公软件会话')
   })
 
+  it('办公软件会话：未配置办公渠道时不显示（管理员也不显示）', async () => {
+    server.use(
+      http.get('/api/saas/channels', () =>
+        HttpResponse.json({ success: true, channels: [] })
+      )
+    )
+    const wrapper = mountTenantSidebar()
+    await flushPromises()
+
+    const trigger = findButtonByText(wrapper, '经验中心')
+    await trigger.trigger('mouseenter')
+    await flushPromises()
+
+    const flyout = findFlyout()
+    expect(flyout?.textContent || '').toContain('微信接待客户')
+    expect(flyout?.textContent || '').not.toContain('办公软件会话')
+  })
+
   it('办公软件会话：普通用户不可见', async () => {
+    server.use(
+      http.get('/api/saas/channels', () =>
+        HttpResponse.json({
+          success: true,
+          channels: [{ config_id: 'c1', channel_type: 'dingtalk', name: '钉钉' }],
+        })
+      )
+    )
     routeState.path = '/t/test-tenant/chat'
     tenantIsLoggedIn.value = true
     tenantAdmin.value = { username: 'staff', role: 'user' }

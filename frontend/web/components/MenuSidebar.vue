@@ -635,9 +635,9 @@
           <span>微信接待客户</span>
         </button>
 
-        <!-- 办公软件会话：仅租户管理员可见（企微/钉钉/飞书渠道聊天记录） -->
+        <!-- 办公软件会话：仅租户管理员可见，且租户配置了企微/钉钉/飞书任一渠道才显示 -->
         <button
-          v-if="tenantId && isTenantAdmin"
+          v-if="tenantId && isTenantAdmin && hasOfficeChannels"
           @click="router.push(`/t/${tenantId}/office-sessions`); closeFlyout()"
           :class="[
             'w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-sm',
@@ -778,7 +778,7 @@ import { useTenantAuth } from '@/composables/useTenantAuth'
 import { useAgent } from '@/composables/useAgent'
 import { useTheme, type ThemeName } from '@/composables/useTheme'
 import { useDesktopUpdater } from '@/composables/useDesktopUpdater'
-import { listConnectionSources } from '@/api/saasTenant'
+import { listConnectionSources, listChannels } from '@/api/saasTenant'
 import SettingsDialog from './SettingsDialog.vue'
 import MenuIcon from './ui/MenuIcon.vue'
 import BusinessPageIcon from './ui/BusinessPageIcon.vue'
@@ -995,6 +995,19 @@ onMounted(async () => {
     }
   } catch {
     /* 门控失败按未授权显示，不影响其余菜单 */
+  }
+})
+
+// 办公软件会话入口门控：租户配置了企微/钉钉/飞书任一渠道才显示；拉取失败按未配置处理
+const hasOfficeChannels = ref(false)
+onMounted(async () => {
+  if (!tenantIsLoggedIn.value || !isTenantAdmin.value) return
+  try {
+    const res = await listChannels()
+    const configured = new Set((res.channels || []).map((c: any) => c.channel_type))
+    hasOfficeChannels.value = ['wecom', 'dingtalk', 'feishu'].some(key => configured.has(key))
+  } catch {
+    /* 拉取失败按未配置处理，不显示入口 */
   }
 })
 const connectionSubMenuItems = computed(() => {
