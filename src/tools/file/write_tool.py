@@ -133,27 +133,6 @@ FORBIDDEN_EXTENSIONS: set = {
     ".aspx",
 }
 
-# MIME 类型映射
-MIME_MAP: dict = {
-    ".md": "text/markdown",
-    ".markdown": "text/markdown",
-    ".html": "text/html",
-    ".htm": "text/html",
-    ".txt": "text/plain",
-    ".text": "text/plain",
-    ".csv": "text/csv",
-    ".tsv": "text/tab-separated-values",
-    ".json": "application/json",
-    ".jsonl": "application/jsonl",
-    ".xml": "application/xml",
-    ".yaml": "text/yaml",
-    ".yml": "text/yaml",
-    ".css": "text/css",
-    ".js": "text/javascript",
-    ".mjs": "text/javascript",
-    ".svg": "image/svg+xml",
-}
-
 
 # ---------------------------------------------------------------------------
 # 模块级工具函数

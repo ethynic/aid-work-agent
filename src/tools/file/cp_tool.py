@@ -8,6 +8,7 @@
 """
 
 import asyncio
+import mimetypes
 import os
 import shutil
 import tempfile
@@ -93,7 +94,33 @@ MIME_MAP = {
     ".js": "text/javascript",
     ".mjs": "text/javascript",
     ".svg": "image/svg+xml",
+    # 二进制文档/媒体类型：兜底不能落 text/plain，否则企微等渠道内置浏览器
+    # 会把文件当纯文本渲染成乱码（2026-09-23 生产事故）
+    ".pdf": "application/pdf",
+    ".doc": "application/msword",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".xls": "application/vnd.ms-excel",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".ppt": "application/vnd.ms-powerpoint",
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ".zip": "application/zip",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".mp3": "audio/mpeg",
+    ".mp4": "video/mp4",
+    ".wav": "audio/wav",
 }
+
+
+def guess_mime_type(file_path: Path) -> str:
+    """按后缀推断 MIME 类型；未知二进制类型返回 application/octet-stream，
+    禁止回退 text/plain（会被浏览器内联渲染为乱码）"""
+    suffix = file_path.suffix.lower()
+    mime = MIME_MAP.get(suffix) or mimetypes.guess_type(file_path.name)[0]
+    return mime or "application/octet-stream"
 
 
 def _resolve_upload_dir(tenant_id: Optional[str], user_id: Optional[str]) -> Path:
@@ -326,7 +353,7 @@ cp(source_file_path="src/skills/xxx/assets/template.html", file_path="ppt/index.
         if not display_name.lower().endswith(suffix):
             display_name += suffix
 
-        mime_type = MIME_MAP.get(suffix, "text/plain")
+        mime_type = guess_mime_type(file_path)
 
         from src.tools.context import current_tool_execution_context
         context = current_tool_execution_context()

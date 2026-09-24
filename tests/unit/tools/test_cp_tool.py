@@ -759,3 +759,51 @@ class TestCpToolUserIdTenantId:
         CpTool()
         _set_test_context(tenant_id="t1")
         assert current_tool_execution_context().tenant_id == "t1"
+
+
+class TestGuessMimeType:
+    """MIME 推断测试：二进制类型禁止回退 text/plain（2026-09-23 企微乱码事故）"""
+
+    def test_office_binary_types(self):
+        from src.tools.file.cp_tool import guess_mime_type
+
+        assert guess_mime_type(Path("a.xlsx")) == (
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+        assert guess_mime_type(Path("a.docx")) == (
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        )
+        assert guess_mime_type(Path("a.pptx")) == (
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        )
+        assert guess_mime_type(Path("a.pdf")) == "application/pdf"
+        assert guess_mime_type(Path("a.zip")) == "application/zip"
+
+    def test_image_types(self):
+        from src.tools.file.cp_tool import guess_mime_type
+
+        assert guess_mime_type(Path("a.png")) == "image/png"
+        assert guess_mime_type(Path("a.jpg")) == "image/jpeg"
+        assert guess_mime_type(Path("a.jpeg")) == "image/jpeg"
+
+    def test_text_types_unchanged(self):
+        from src.tools.file.cp_tool import guess_mime_type
+
+        assert guess_mime_type(Path("a.md")) == "text/markdown"
+        assert guess_mime_type(Path("a.txt")) == "text/plain"
+        assert guess_mime_type(Path("a.csv")) == "text/csv"
+
+    def test_unknown_binary_ext_falls_to_octet_stream(self):
+        """未知后缀禁止回退 text/plain，避免渠道端内联渲染成乱码"""
+        from src.tools.file.cp_tool import guess_mime_type
+
+        assert guess_mime_type(Path("a.unknownext")) == "application/octet-stream"
+        assert guess_mime_type(Path("no_ext")) == "application/octet-stream"
+
+    def test_uppercase_suffix(self):
+        from src.tools.file.cp_tool import guess_mime_type
+
+        assert guess_mime_type(Path("a.PDF")) == "application/pdf"
+        assert guess_mime_type(Path("a.XLSX")) == (
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
