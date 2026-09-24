@@ -26,6 +26,7 @@ async def ensure_user_registered(
     tenant_id: Optional[str] = None,
     user_info: Optional[Dict[str, Any]] = None,
     source: Optional[str] = None,
+    user_info_fetcher: Optional[Any] = None,
 ) -> Optional[str]:
     """
     确保 IM 用户已注册。
@@ -39,6 +40,10 @@ async def ensure_user_registered(
         channel_user_id: 渠道用户 ID
         tenant_id: 租户 ID（有值时注册为企业用户）
         user_info: 用户信息 {"name": "昵称", "avatar": "头像URL"}
+        source: 用户来源标识（写入 users.source）
+        user_info_fetcher: 按需抓取渠道用户资料的异步回调（返回 {"name": ..., "avatar": ...}）。
+            仅当本地用户缺头像或新建用户且未传 user_info 时才调用，
+            避免每条渠道消息都请求渠道 API。抓取失败不阻断注册主流程。
 
     Returns:
         user_id 或 None
@@ -46,27 +51,31 @@ async def ensure_user_registered(
     # 1. 尝试通过渠道用户 ID 查找已有用户
     existing_user_id = _find_user_by_channel_id(channel_type, channel_user_id, tenant_id)
     if existing_user_id:
+        user = UserDB.get_by_id(existing_user_id)
+
         # 如果有 tenant_id 但用户没有，更新
-        if tenant_id:
-            user = UserDB.get_by_id(existing_user_id)
-            if user and not user.get("tenant_id"):
-                UserDB.update(existing_user_id, tenant_id=tenant_id)
-                logger.info(f"Updated user {existing_user_id} tenant_id to {tenant_id}")
+        if tenant_id and user and not user.get("tenant_id"):
+            UserDB.update(existing_user_id, tenant_id=tenant_id)
+            logger.info(f"Updated user {existing_user_id} tenant_id to {tenant_id}")
+
+        # 本地用户缺头像时按需抓取渠道资料（姓名/头像补全）
+        if user_info is None and user_info_fetcher and user and not user.get("avatar_url"):
+            user_info = await _safe_fetch_user_info(user_info_fetcher, channel_type, channel_user_id)
 
         # 更新昵称和头像（如果提供了 user_info）
         if user_info:
             _update_user_info_from_channel(existing_user_id, user_info)
 
         # 补写 source（如果当前为空且有传入）
-        if source:
-            user = UserDB.get_by_id(existing_user_id)
-            if user and not user.get("source"):
-                UserDB.update_info(existing_user_id, source=source)
-                logger.info(f"补写用户 {existing_user_id} source={source}")
+        if source and user and not user.get("source"):
+            UserDB.update_info(existing_user_id, source=source)
+            logger.info(f"补写用户 {existing_user_id} source={source}")
 
         return existing_user_id
 
-    # 2. 用户不存在，创建用户（设置 tenant_id）
+    # 2. 用户不存在，创建用户（设置 tenant_id）；顺带抓取渠道资料补全姓名/头像
+    if user_info is None and user_info_fetcher:
+        user_info = await _safe_fetch_user_info(user_info_fetcher, channel_type, channel_user_id)
     username = _build_username(channel_type, channel_user_id)
     nickname = _extract_nickname(user_info)
     wx_openid = _extract_wx_openid(user_info)
@@ -171,6 +180,20 @@ def _extract_nickname(user_info: Optional[Dict[str, Any]] = None) -> Optional[st
     if user_info and user_info.get("name"):
         return user_info["name"]
     return None
+
+
+async def _safe_fetch_user_info(
+    fetcher: Any,
+    channel_type: str,
+    channel_user_id: str,
+) -> Optional[Dict[str, Any]]:
+    """调用渠道资料抓取器，返回非空 dict；失败/空结果返回 None，不阻断注册主流程"""
+    try:
+        info = await fetcher()
+        return info if isinstance(info, dict) and info else None
+    except Exception as e:
+        logger.warning(f"渠道用户资料抓取失败: {channel_type}:{channel_user_id}: {e}")
+        return None
 
 
 def _extract_wx_openid(user_info: Optional[Dict[str, Any]] = None) -> Optional[str]:

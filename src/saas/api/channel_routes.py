@@ -485,11 +485,14 @@ async def _process_tenant_wecom_background(
             logger.error(f"[Tenant WeCom] adapter 不可用: tenant={tenant_id}")
             return
 
-        # 自动注册用户
+        # 自动注册用户（缺头像时按需从企微通讯录抓取姓名/头像）
         user_id = None
         try:
             from src.saas.services.auto_register import ensure_user_registered
-            user_id = await ensure_user_registered("wecom", message.user_id, tenant_id, source="wecom")
+            user_id = await ensure_user_registered(
+                "wecom", message.user_id, tenant_id, source="wecom",
+                user_info_fetcher=lambda: adapter.get_user_info(message.user_id),
+            )
         except Exception as e:
             logger.warning(f"[Tenant WeCom] 自动注册失败: {e}")
 
