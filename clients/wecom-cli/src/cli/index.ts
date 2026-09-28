@@ -6,6 +6,7 @@
  * M3 增加：unread / read / watch。
  * M5 增加：select。
  * M7 增加：send-image。
+ * M8 增加：send-file。
  * 动词子命令集合固定；不存在按对象命名的子命令——`aid-wecom contacts` 之类
  * 一律落入 default 报「未知子命令」。
  *
@@ -15,6 +16,7 @@
  *   node dist/src/cli/index.js select --target-ref <ref> [--json]
  *   node dist/src/cli/index.js send --target-ref <ref> --text <文本> [--json]
  *   node dist/src/cli/index.js send-image --target-ref <ref> --image <本地绝对路径> [--json]
+ *   node dist/src/cli/index.js send-file --target-ref <ref> --file <本地绝对路径> [--json]
  *   node dist/src/cli/index.js unread [--name <名>] [--json]
  *   node dist/src/cli/index.js read --target-ref <ref> [--max-pages N] [--since-days N] [--json]
  *   node dist/src/cli/index.js watch [--interval 秒] [--once]
@@ -48,6 +50,12 @@ const USAGE = `aid-wecom — 企业微信操作 CLI / MCP Provider（M1）
                             ≤20MB，路径须为装有 wecom-cli 的机器上的本地绝对路径，调用方
                             负责落盘；粘贴经剪贴板通道会覆盖用户剪贴板；发送后校验失败
                             不自动重试，effect=unknown 时请人工核对）
+  send-file --target-ref <ref> --file <本地绝对路径> [--json]
+                            向 target_ref 目标发送 1 个文件（写动作；扩展名不限，
+                            ≤100MB，路径须为装有 wecom-cli 的机器上的本地绝对路径，
+                            文件名去空白后须 ≥3 字符（过短拒发），调用方负责落盘；
+                            粘贴经剪贴板通道会覆盖用户剪贴板；
+                            发送后校验失败不自动重试，effect=unknown 时请人工核对）
   unread [--name <名>] [--json]
                             未读会话快照（只读，不开会话不清角标）：
                             [{name, preview, unread_count}]，可选 --name 子串过滤
@@ -104,6 +112,14 @@ async function main(): Promise<number> {
       return sendImageCommand({
         targetRef: flagString(args, 'target-ref'),
         image: flagString(args, 'image'),
+        json: hasFlag(args, 'json'),
+      })
+    }
+    case 'send-file': {
+      const { sendFileCommand } = await import('./commands/sendFile.js')
+      return sendFileCommand({
+        targetRef: flagString(args, 'target-ref'),
+        file: flagString(args, 'file'),
         json: hasFlag(args, 'json'),
       })
     }

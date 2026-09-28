@@ -53,19 +53,19 @@ test('manifest 字段完整且与静态 provider-manifest.json 同源', () => {
 
   // M1：wecom_probe + wecom_add_customer；M2：wecom_chat_search + wecom_message_send；
   // M3：wecom_unread_list + wecom_watch_poll；M5：wecom_chat_select（半写：清角标/切视图）；
-  // M7：wecom_send_image（写：发图片）
+  // M7：wecom_send_image（写：发图片）；M8：wecom_send_file（写：发文件）
   // （wecom_history_read 只走 CLI，不进 MCP）
-  assert.deepEqual(TOOL_NAMES, ['wecom_probe', 'wecom_add_customer', 'wecom_chat_search', 'wecom_chat_select', 'wecom_message_send', 'wecom_send_image', 'wecom_unread_list', 'wecom_watch_poll'])
-  assert.equal(m.tools.length, 8)
+  assert.deepEqual(TOOL_NAMES, ['wecom_probe', 'wecom_add_customer', 'wecom_chat_search', 'wecom_chat_select', 'wecom_message_send', 'wecom_send_image', 'wecom_send_file', 'wecom_unread_list', 'wecom_watch_poll'])
+  assert.equal(m.tools.length, 9)
   const probe = m.tools[0]!
   assert.equal(probe.name, 'wecom_probe')
   assert.ok(probe.title.length > 0 && probe.description.length > 0)
   assert.equal(probe.inputSchema.type, 'object')
   assert.equal(probe.annotations.readOnlyHint, true)
 
-  // 注解语义：add_customer / message_send / send_image 是写动作（readOnly=false 且非幂等），search 只读幂等
+  // 注解语义：add_customer / message_send / send_image / send_file 是写动作（readOnly=false 且非幂等），search 只读幂等
   const byName = new Map(m.tools.map((t) => [t.name, t]))
-  for (const n of ['wecom_add_customer', 'wecom_message_send', 'wecom_send_image']) {
+  for (const n of ['wecom_add_customer', 'wecom_message_send', 'wecom_send_image', 'wecom_send_file']) {
     assert.equal(byName.get(n)!.annotations.readOnlyHint, false, `${n} 应为写动作`)
     assert.equal(byName.get(n)!.annotations.idempotentHint, false, `${n} 应非幂等`)
   }
@@ -95,6 +95,8 @@ test('tool schema 单一来源：manifestTools 的 inputSchema 由 toolDefs 推�
   assert.deepEqual(sendSchema.required, ['target_ref', 'text'])
   const sendImageSchema = tools[5]!.inputSchema
   assert.deepEqual(sendImageSchema.required, ['target_ref', 'image_path'])
+  const sendFileSchema = tools[6]!.inputSchema
+  assert.deepEqual(sendFileSchema.required, ['target_ref', 'file_path'])
 })
 
 test('toolDefs ↔ registry 一致性守卫：每个 toolDef 可取到 operation，未注册名 fail-loud', () => {
@@ -103,9 +105,9 @@ test('toolDefs ↔ registry 一致性守卫：每个 toolDef 可取到 operation
   for (const name of TOOL_NAMES) {
     assert.equal(getOperationEntry(name).operation.name, name)
   }
-  // registry ⊇ toolDefs：M7 起 registry 有 9 个 operation（wecom_history_read 仅 CLI），
-  // toolDefs 8 个（MCP 不暴露 history_read）；每个 MCP tool 必须能在 registry 取到
-  assert.equal(OPERATION_NAMES.length, 9)
+  // registry ⊇ toolDefs：M8 起 registry 有 10 个 operation（wecom_history_read 仅 CLI），
+  // toolDefs 9 个（MCP 不暴露 history_read）；每个 MCP tool 必须能在 registry 取到
+  assert.equal(OPERATION_NAMES.length, 10)
   assert.ok(OPERATION_NAMES.includes('wecom_history_read'))
   for (const name of TOOL_NAMES) {
     assert.ok(OPERATION_NAMES.includes(name), `MCP tool「${name}」必须在 OPERATIONS 注册`)
@@ -121,6 +123,6 @@ test('version --json 输出与 buildManifest/computeSchemaDigest 同源', () => 
   assert.equal(parsed.provider_id, 'ai.aidwork.wecom')
   assert.deepEqual(
     parsed.tools.map((t: { name: string }) => t.name),
-    ['wecom_probe', 'wecom_add_customer', 'wecom_chat_search', 'wecom_chat_select', 'wecom_message_send', 'wecom_send_image', 'wecom_unread_list', 'wecom_watch_poll'],
+    ['wecom_probe', 'wecom_add_customer', 'wecom_chat_search', 'wecom_chat_select', 'wecom_message_send', 'wecom_send_image', 'wecom_send_file', 'wecom_unread_list', 'wecom_watch_poll'],
   )
 })

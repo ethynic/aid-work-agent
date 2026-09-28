@@ -235,7 +235,18 @@ Authorization: Bearer $TYPESAFE_API_KEY
 - M7 命令 `send-image --target-ref --image <本地绝对路径>`（三智能体流程，151/151）：共享分发编排抽取（navigate.ts，messageSend 切换零回归/文案逐字保留）；方差三点判据（粘贴预览不足 → UI_CHANGED 未按 Enter 无副作用）；终态 = 方差回落 + 「[图片]」列表预览 + Jev#2（含图片 hash/大小证据，无本体）。真机 21.5s 全链路（快路径），`effect=applied`。
 - 文件契约（用户定稿）：CLI 只收**本地路径**（≤20MB，png/jpg/jpeg/bmp/gif）——调用方（agent/上层）负责把文件落到装有 runtime 与 wecom-cli 的机器上；hash 由 TS 计算（流式读，fail-fast 先于任何 UI 交互）。
 - CR 遗留（真机轮次处理）：终态判据② 左栏过滤 x0<0.40w 在宽窗口（1640/2916）会混入聊天区窄条——建议改像素锚定 x0<min(0.40w,600) 后真机复验。
-- 已知限制：标题复核失败时图片预览可能残留在输入区（无法像文本那样 Ctrl+A 清除，也不用 ESC）——message 注明需人工处理。
+- 已知限制：标题复核失败时图片预览可能残留在输入区（M8 已实测 Ctrl+A+Delete 同样可清图片预览卡片？未单测图片场景——M8 的清理实测基于文件卡片，图片卡片同机制预期可清，待图片场景复验）。
+
+### E3 + M8：send-file（2026-09-28）——✅ 真机双路径通过，RPA 替代 UI 执行面收口
+
+- 探针（`experiments/probes/e6-file/file-send-probe.ps1`）：Clipboard.SetFileDropList + attachstate Ctrl+V → **无确认弹窗**（5.0.9 内联文件卡片，RPA 时代的弹窗流程已过时），输入区 OCR 可读文件名+大小 → Enter → 列表预览「[文件名]」。
+- M8 `send-file --target-ref --file`（三智能体 161/161）：CR 加固——**基线差分三判据**（粘贴/消失/列表只认基线后新出现的 token，杀死通用主干假阳性链）、短主干回退全名、TS 极短文件名拒发、输入带 0.74w 右界（排除侧栏与 self 气泡）。
+- 主控者真机验证又修 3 项：
+  1. **Jev#1 底部带 0.72h→0.80h**（三驱动统一）：0.72h 把消息区尾部（时间分割线+最后一条消息/文件气泡）包进"输入带"，E3 发出的文件气泡被 Jev 误判为草稿 → has_draft 误杀。0.80h 与气泡证据带上界互补不重叠。
+  2. **粘贴判据带左界 620→420 像素锚定**：输入框比聊天区宽（文件卡片实测 x0≈497 < 聊天区左界 620），CR 按聊天区推理的左界把卡片整段漏掉、粘贴校验恒 false。
+  3. **失败路径清理文件卡片**：实测 Ctrl+A+Delete **可以**清除输入区文件卡片（修正驱动注释里"清不掉"的未验证假设）；粘贴校验失败/标题复核失败均先清理自贴卡片再中止，防残留累积。
+- 真机验证：快路径 + 分发路径（navigated:true）+ **重发同名文件**三场景全部通过（CR 预担心的同名重发保守降级未复现）。
+- 至此 RPA UI 执行面（search_user/send_text/send_image/send_file + 复用会话即 select）全部被 wecom-cli 覆盖且强于 RPA（RPA 的 Enter 盲进/无校验 vs CLI 的全程 fail-closed + Jev 决策）；剩余：登录态+二维码（E5）、常驻 OCR 性能、协议壳对接（wecom-ops 调用方切换）。
 
 最终双路径真机验证通过：快路径（当前会话即目标直发）+ 分发路径（navigated:true 自动 search+select+send），均 `effect=applied` + Jev 终态校验通过；mock 测试 141/141。耗时 ~25s（final_ocr 11.7s 三次 OCR 进程冷启动是大头——**常驻 OCR server 是下一个性能优化项**）。
 

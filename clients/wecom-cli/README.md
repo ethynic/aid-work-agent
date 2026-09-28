@@ -24,6 +24,9 @@ aid-wecom send --target-ref <ref> --text <文本> [--json]
 aid-wecom send-image --target-ref <ref> --image <本地绝对路径> [--json]
                                             # 写动作：向 target_ref 目标发送 1 张图片（png/jpg/jpeg/bmp/gif
                                             # ≤20MB；文件契约见 send-image 章节）
+aid-wecom send-file --target-ref <ref> --file <本地绝对路径> [--json]
+                                            # 写动作：向 target_ref 目标发送 1 个文件（扩展名不限
+                                            # ≤100MB；文件契约见 send-file 章节）
 aid-wecom unread [--name <名>] [--json]     # 未读会话快照（只读，不开会话不清角标）
 aid-wecom read --target-ref <ref> [--max-pages N] [--since-days N] [--json]
                                             # 读会话消息（只读内容；进入会话会清除该会话未读角标）
@@ -206,14 +209,60 @@ name+section+subtitle 消歧键一致才可信——Jev 看不到 target_ref 的
   `sent_verification`（method=jev|rule_2of2）、`navigated` 与 `timing_ms`。
 - MCP 工具 `wecom_send_image`（target_ref + image_path），description 注明同一文件契约。
 
+## send-file 命令（M8：发送文件）
+
+向 target_ref 目标发送 1 个本地文件（写动作，零自动重试）。编排骨架与 `send`/`send-image`
+同源（`src/operations/navigate.ts` 智能分发共享实现），发送阶段驱动
+`drivers/ps1/send-file.ps1`。E3 真机验证 2026-09-28（`experiments/probes/e6-file`）。
+
+- **文件契约**：`--file` 只收**本地绝对路径**——调用方（agent/上层）负责把文件落到装有
+  runtime 与 wecom-cli 的机器上；**扩展名不限**（任意文件），**≤100MB**（对齐 RPA
+  AttachmentDownloader 先例），**文件名去空白后须 ≥3 字符**（「a」「ab」这类极短名无论
+  主干还是全名都只有 1-2 字符，OCR contains 判据无法与无关 token 区分 → INVALID_ARGUMENT
+  拒发提示改名；「a.txt」不在拒绝范围——主干过短时驱动回退用完整文件名做匹配键）。TS
+  校验语义：不存在/是目录/超限/相对路径/文件名过短 → INVALID_ARGUMENT；路径存在但读取
+  失败 → CONFIG_MISSING（SHA-256 由 TS 计算，仅供日志/结果摘要，驱动不复算）。target_ref
+  须为 M4+ 含坐标版本（旧版无坐标 ref → INVALID_ARGUMENT，重新 search）。
+- **发送链路与判定链**（驱动内）：Jev #1 三问判定当前会话（措辞同 send-image；非目标 →
+  navigate_required 交还 TS 编排 search+select；输入区有用户草稿 → UI_CHANGED 中止，
+  上次失败尝试残留的文件卡片同样会被 input 判空拦下）→ 点输入框 → 取输入区
+  （y≥0.75h、x∈(聊天区左界 max(0.10w,620), 0.74w]——E3 标定带；左界像素锚定防宽窗口
+  漏卡片、右界 0.74w 排除外部联系人「智能总结」侧栏，同 chat_ocr.py input 模式阈值）
+  OCR 干净基线 → `Clipboard.SetFileDropList`（StringCollection + 绝对路径，5 次重试×
+  150ms，全败 CONFIG_MISSING）→ attachstate Ctrl+V → 1.5s 后粘贴校验：输入区出现
+  **基线没有的新 token** 且归一化 contains 文件名主干（去扩展名防 OCR 把 .txt 误读，
+  取前 12 字；主干归一化后 <3 字符回退完整文件名匹配键）——不含 → UI_CHANGED「文件卡片
+  未出现（粘贴可能未生效）」，**此时未按 Enter，无发送副作用** → 发送前标题复核（同
+  send-image 严格匹配）→ Send-WeComEnter → 1.8s → 终态证据双判据（同为**基线差分**，
+  只认基线之后新出现的 token，防占位符/侧栏/其他会话预览等既有 token 假命中）：①输入区
+  文件名 token 消失（复测粘贴校验同带）②会话列表（左栏 x0<0.40w）新 token 归一化含
+  「[+文件名主干」或文件名主干（列表预览格式实测「[e3-test-file.txt]」，容忍括号误读）；
+  Jev #2 两问可用以其判定为准（method=jev；state 含两判据结果、列表证据行、文件名+
+  sha256+大小；注明文件消息无文本气泡属正常、重发同名文件列表预览不变属正常），no/
+  unclear → EXECUTION_UNKNOWN；Jev 不可用/答案非法降级规则双判据须 2/2 全过
+  （method=rule_2of2），<2/2 → EXECUTION_UNKNOWN。
+- **副作用**：粘贴经剪贴板通道，**覆盖用户剪贴板且不恢复**（与 send-image 同款刻意
+  行为）；成功后剪贴板仍保留该文件列表。
+- **已知限制**：发送前标题复核失败中止时，输入区可能残留文件卡片需**人工清理**——
+  文件卡片不是文本草稿，Ctrl+A 清不掉，ESC 会最小化企微（禁用），驱动不做任何清理动作；
+  **重发同名文件**时会话列表预览保持不变、基线差分不命中 → 规则链可能报
+  EXECUTION_UNKNOWN（保守方向：文件实际已发出，人工确认即可；Jev 链有重发例外提示）。
+- **artifact**：`send-file-<ts>/`（两轮分发则为两个目录）含 step1-precheck /
+  step2-baseline / step3-pasted / step4-after 四步截图 + `driver-log.txt`（记文件
+  文件名/sha256/大小/匹配键/判据结果/Jev 摘要；**不复制文件本体**）。返回 data 附
+  `paste_check:{stem,paste_hit,input_gone,list_hit}`（stem=实际匹配键：主干，主干
+  过短时为完整文件名）、`file:{name,size_bytes,sha256}`、`sent_verification`
+  （method=jev|rule_2of2）、`navigated` 与 `timing_ms`。
+- MCP 工具 `wecom_send_file`（target_ref + file_path），description 注明同一文件契约。
+
 ## 运行依赖
 
 - **Windows（win32-x64）**，已登录且未锁屏的交互桌面会话；
 - 企业微信 Windows 客户端（WXWork.exe）**已登录**（5.0.9 实测）；
 - PowerShell（powershell.exe 在 PATH）；
-- `add-customer` / `search` / `select` / `send` / `send-image` / `unread` / `read` / `watch` 另需 OCR：仓库根 `venv` 的 python + `rapidocr_onnxruntime`
+- `add-customer` / `search` / `select` / `send` / `send-image` / `send-file` / `unread` / `read` / `watch` 另需 OCR：仓库根 `venv` 的 python + `rapidocr_onnxruntime`
   （`drivers/ps1` 上四级为仓库根，取 `venv\Scripts\python.exe`；缺失 → CONFIG_MISSING）；
-- `search` / `send` / `send-image` 的 Jev 决策另需可选环境变量 `TYPESAFE_API_KEY`（缺失自动降级规则链，功能不中断）。
+- `search` / `send` / `send-image` / `send-file` 的 Jev 决策另需可选环境变量 `TYPESAFE_API_KEY`（缺失自动降级规则链，功能不中断）。
 
 ## 关键实现事实（真机实测，勿随意改）
 
@@ -276,6 +325,16 @@ name+section+subtitle 消歧键一致才可信——Jev 看不到 target_ref 的
   1.8s 方差回落 + 会话列表预览出现「[图片]」。图片消息无文本气泡，终态双判据 =
   方差回落 + 列表 [图片]，Jev state 须注明气泡空白属正常。智能分发编排在 M7 抽取为
   navigate.ts 共享实现（send 与 send-image 共用）。
+- M8（2026-09-28 真机验证 e6-file）：Clipboard.SetFileDropList（StringCollection 装绝对
+  路径）+ attachstate Ctrl+V → **无确认弹窗**，输入区直接出现内联文件卡片（OCR 可读
+  文件名 + 大小标签「53B」，y≈0.86h）→ Send-WeComEnter 后卡片消失 + 会话列表预览出现
+  「[e3-test-file.txt]」，文件真实送达。文件卡片是 OCR 可读文本，判据直接 token 匹配
+  文件名主干（去扩展名取前 12 字，防 .txt 误读），无需图片方差通道。CR 加固（2026-09-28）：
+  三判据全部**基线差分**（只认粘贴/发送后新出现的 token，防占位符「发送消息」/侧栏/其他
+  会话预览含主干假命中——通用主干「a」「test」的假阳性链由差分+短主干全名回退+TS 极短
+  名拒发三层关闭）；输入区带左界像素锚定 max(0.10w,620)（纯比例 0.30w 在 2916 宽窗口会
+  整段漏掉卡片 x0≈650px≈0.22w）、右界 0.74w 无条件排除智能总结侧栏（chat_ocr.py input
+  模式同阈值）。
 - 含中文的 .ps1 必须 **UTF-8 with BOM**。
 
 ## 目录
@@ -286,7 +345,7 @@ src/mcp/          MCP stdio server + toolDefs + manifest digest
 src/operations/   业务能力层（统一 OperationResult 契约，永不 reject）
 src/platform/     PowerShell 驱动执行器 / 环境探测 / 命名互斥 / target_ref（HMAC 短期句柄）/ watch 水位状态
 src/security/     日志脱敏（手机号不明文入日志）
-drivers/ps1/      UI 自动化驱动（_common.ps1 底座 + probe/add-customer/chat-search/chat-select/message-send/send-image/unread-list/history-read）
+drivers/ps1/      UI 自动化驱动（_common.ps1 底座 + probe/add-customer/chat-search/chat-select/message-send/send-image/send-file/unread-list/history-read）
 drivers/py/       RapidOCR：add_customer_result.py（添加客户弹窗）+ chat_ocr.py（search/send/unread/history 单一入口）
 tests/            node:test，全部 mock（绝不触达真实企微窗口）
 ```

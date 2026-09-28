@@ -3,7 +3,7 @@
 # 不对时返回 navigate_required=true 交还 TS 编排（search+select 后二次调用本驱动）。
 # 流程：
 #   1) 解析主窗口 → PrintWindow 截图 → OCR 两带（boxes 模式拿 token+坐标）：
-#      标题带（y<0.07h，聊天区顶部）+ 底部输入带（y>0.72h，含工具栏图标行与输入区）
+#      标题带（y<0.07h，聊天区顶部）+ 底部输入带（y>0.80h，含工具栏图标行与输入区）
 #   2) Jev #1（三问合一）：right_conversation（当前会话是否目标）/ input_point（点哪
 #      聚焦文本输入框）/ has_draft（输入区是否有草稿）。降级链：标题归一化规则匹配 /
 #      比例坐标 (0.500w,0.900h)（M2 标定）/ input 模式判空（占位符与图标碎字剔除）
@@ -76,7 +76,7 @@ function Get-WeComBandTokens {
     #             旧 0.15w 会放进搜索框查询残留（x0≈0.13-0.17w）与会话列表首行（≈0.17w），
     #             与聊天区标题拼接成「文件传输助手文件传输助手」致复核误杀；标题带实测
     #             x0≥0.22w（外部联系人）/0.296w（普通），0.20w 两侧安全排除）
-    #   bottom — y0 >= 0.72h 且 x0 > max(0.10w,620)（含工具栏图标行 ≈0.83h 与文本输入区，
+    #   bottom — y0 >= 0.80h 且 x0 > max(0.10w,620)（含工具栏图标行 ≈0.83h 与文本输入区，
     #             排除左栏会话列表；右缘 0.95w 截掉窗口边框噪声）
     param(
         [Parameter(Mandatory)]$Boxes,
@@ -91,7 +91,7 @@ function Get-WeComBandTokens {
     }
     $chatXMin = [Math]::Max([int]($W * 0.10), 620)
     return @($Boxes | Where-Object {
-        [double]$_.y0 -ge ($H * 0.72) -and
+        [double]$_.y0 -ge ($H * 0.80) -and
         [double]$_.x0 -gt $chatXMin -and [double]$_.x0 -lt ($W * 0.95)
     } | Sort-Object { [double]$_.y0 }, { [double]$_.x0 })
 }
@@ -186,7 +186,7 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WecomCli.MessageSend' -Body {
     $stateLines += '—— 标题带（y<0.07h，聊天区顶部会话标题区）：'
     if ($titleTokens.Count -gt 0) { $stateLines += (Format-WeComTokenLines -Tokens $titleTokens -KeyPrefix 'T') }
     else { $stateLines += '（无 token）' }
-    $stateLines += '—— 底部输入带（y>0.72h，含工具栏图标行与文本输入区；右侧可能有智能总结侧栏，非输入框）：'
+    $stateLines += '—— 底部输入带（y>0.80h，含工具栏图标行与文本输入区；右侧可能有智能总结侧栏，非输入框）：'
     if ($bottomTokens.Count -gt 0) { $stateLines += (Format-WeComTokenLines -Tokens $bottomTokens -KeyPrefix 'B') }
     else { $stateLines += '（无 token）' }
     $stateLines += ('目标会话：name=' + $TargetName + ' subtitle=' + $Subtitle + ' section=' + $sectionDesc)

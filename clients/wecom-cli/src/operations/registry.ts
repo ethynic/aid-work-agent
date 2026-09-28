@@ -7,7 +7,8 @@
  * （wecom_history_read 只走 CLI read 动词，不进 MCP toolDefs——MCP 只暴露
  * unread_list 与 watch_poll 两个读工具）；M5 增加 wecom_chat_select（CLI 按动作
  * 处理打 ⚠️ 前置提示：进会话清角标/切换当前会话视图，但 effect 恒 none）；
- * M7 增加 wecom_send_image（写：向 target_ref 目标发送 1 张本地图片）。
+ * M7 增加 wecom_send_image（写：向 target_ref 目标发送 1 张本地图片）；
+ * M8 增加 wecom_send_file（写：向 target_ref 目标发送 1 个本地文件）。
  */
 import { createWecomAddCustomerOperation } from './addCustomer.js'
 import { createWecomChatSearchOperation } from './chatSearch.js'
@@ -15,6 +16,7 @@ import { createWecomChatSelectOperation } from './chatSelect.js'
 import { createWecomHistoryReadOperation } from './historyRead.js'
 import { createWecomMessageSendOperation } from './messageSend.js'
 import { createWecomProbeOperation } from './probe.js'
+import { createWecomSendFileOperation } from './sendFile.js'
 import { createWecomSendImageOperation } from './sendImage.js'
 import { createWecomUnreadListOperation } from './unreadList.js'
 import { createWecomWatchPollOperation } from './watchPoll.js'
@@ -37,6 +39,7 @@ export const OPERATIONS: Record<string, OperationEntry> = {
   wecom_chat_select: { operation: createWecomChatSelectOperation(), cli: { write: true } },
   wecom_message_send: { operation: createWecomMessageSendOperation(), cli: { write: true } },
   wecom_send_image: { operation: createWecomSendImageOperation(), cli: { write: true } },
+  wecom_send_file: { operation: createWecomSendFileOperation(), cli: { write: true } },
   wecom_unread_list: { operation: createWecomUnreadListOperation(), cli: { write: false } },
   wecom_history_read: { operation: createWecomHistoryReadOperation(), cli: { write: false } },
   wecom_watch_poll: { operation: createWecomWatchPollOperation(), cli: { write: false } },
