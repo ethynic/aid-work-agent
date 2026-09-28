@@ -10,7 +10,8 @@
 #      坐标信任策略：OCR 复核到的条目自身 x/y 优先，payload X/Y 作对照——两者中心距
 #      >40px → UI_CHANGED（面板可能已变）；≤40px 用 OCR 条目坐标（更新鲜）；OCR 条目
 #      坐标缺失时用 payload X/Y；
-#   4) 屏幕坐标 = overlay 实时 rect.X/Y + 条目 x/y → Send-WeComClick（默认 WindowFromPoint
+#   4) 屏幕坐标 = overlay 实时 rect.X/Y + 条目 x/y → Send-WeComClick（显式投递 overlay 顶层
+#      hwnd，不用 WindowFromPoint 路由——Chromium 嵌入窗口可能盖住 overlay 吞点击）
 #      路由，点中结果行实际归属的 HWND）；
 #   5) 点击后面板应自动关闭（M2 实测）：轮询 ≤3s 等可见 overlay 消失；未消失 → UI_CHANGED；
 #   6) 重新解析主窗口（外部联系人会话会把主窗口撑宽，hwnd 可能不变但 rect 变，已实测）
@@ -110,14 +111,17 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WecomCli.ChatSelect' -Body {
     }
     $timing.verify = [int]($swTotal.ElapsedMilliseconds - $t0)
 
-    # 4) 屏幕坐标 = overlay 实时 rect + 条目 x/y → 点击（WindowFromPoint 路由）
+    # 4) 屏幕坐标 = overlay 实时 rect + 条目 x/y → 显式投递给 overlay 顶层 hwnd。
+    #    不用 WindowFromPoint 路由（2026-09-28 真机实测：外部联系人会话的智能总结侧栏等
+    #    Chromium 嵌入窗口（Chrome_RenderWidgetHostHWND）Z 序可能盖住 overlay 左半，
+    #    自动路由会把点击交给它、被 Chromium 吞掉——M2 message-send 本就显式传 overlay hwnd）。
     $t0 = $swTotal.ElapsedMilliseconds
     $ovl = Get-WeComWindowInfo ([IntPtr]$overlayHwnd)
     $clickX = [int]($ovl.X + $itemX)
     $clickY = [int]($ovl.Y + $itemY)
-    $routed = Send-WeComClick -ScreenX $clickX -ScreenY $clickY
+    $routed = Send-WeComClick -Hwnd $overlayHwnd -ScreenX $clickX -ScreenY $clickY
     $timing.click = [int]($swTotal.ElapsedMilliseconds - $t0)
-    Write-DriverLog ('step4 click 结果行 screen=(' + $clickX + ',' + $clickY + ')（overlay rect=(' + $ovl.X + ',' + $ovl.Y + ') + 条目=(' + $itemX + ',' + $itemY + ')）路由 hwnd=' + $routed + ' 耗时=' + $timing.click + 'ms')
+    Write-DriverLog ('step4 click 结果行 screen=(' + $clickX + ',' + $clickY + ')（overlay rect=(' + $ovl.X + ',' + $ovl.Y + ') + 条目=(' + $itemX + ',' + $itemY + ')）投递 overlay hwnd=' + $routed + ' 耗时=' + $timing.click + 'ms')
 
     # 5) 等 overlay 自动关闭（≤3s；关闭后窗口以 visible=False 残留属正常）
     $t0 = $swTotal.ElapsedMilliseconds
@@ -133,6 +137,18 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WecomCli.ChatSelect' -Body {
     }
     Write-DriverLog ('step5 overlay 已关闭 耗时=' + $timing.close_wait + 'ms')
 
+    # 5.5) 清空搜索框查询残留：点击结果行后搜索框仍保留查询词，残留在标题带同高位置、
+    #      会污染标题 OCR（2026-09-28 真机实测：标题读到「、搜索文件传输助手」——框内残留
+    #      与碎片合并所致，校验误杀）。Ctrl+F 聚焦框 → Ctrl+A+Delete 清空（已验证原语，
+    #      清空后框回占位符、overlay 保持关闭，标题带干净）。
+    $t0 = $swTotal.ElapsedMilliseconds
+    [void](Send-WeComAttachChordKey -Hwnd $mainHwnd -Vk 0x46)
+    Start-Sleep -Milliseconds 150
+    [void](Clear-WeComSearchBoxV2 -MainHwnd $mainHwnd)
+    Start-Sleep -Milliseconds 200
+    $timing.box_clear = [int]($swTotal.ElapsedMilliseconds - $t0)
+    Write-DriverLog ('step5.5 搜索框残留清空 耗时=' + $timing.box_clear + 'ms')
+
     # 6) 重新解析主窗口 → 截图 → OCR 标题带 → 严格校验（外部联系人会话会撑宽主窗口）；
     #    点击后 1500ms 渲染等待对齐 message-send 实测节奏（过早 OCR 会读到旧会话标题）
     $t0 = $swTotal.ElapsedMilliseconds
@@ -140,9 +156,11 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WecomCli.ChatSelect' -Body {
     $mainHwnd = Resolve-WeComMainWindow
     $shotMain = Join-Path $ArtifactDir 'main-opened.png'
     [void](Get-WeComWindowSnapshot -Hwnd $mainHwnd -Path $shotMain)
-    $titleOcr = Invoke-WeComChatOcr -ImagePath $shotMain -Mode 'title'
-    $title = [string]$titleOcr.title
-    Write-DriverLog ('OCR[title] title=' + $title)
+    # 标题读取用聊天区带过滤（x0>0.20w，2026-09-28 真机实测修订）：py title 模式的整带拼接
+    # 会被搜索框残留/占位符/会话列表首行污染成「搜索文件传输助手」等，几何过滤不再依赖
+    # 5.5 清空是否生效（清空仍保留作状态恢复 best-effort）。
+    $title = Get-WeComChatAreaTitle -ImagePath $shotMain
+    Write-DriverLog ('title(band-filtered)=' + $title)
     # 严格匹配（同 message-send）：归一化后相等，或以「名字 + 分隔符」形式开头（外部联系人
     # 「陆伟 @微信」、群「产品讨论群（13）」）；纯子串不放行（「陆伟」不得落入「陆伟民」）
     $expected = $TargetName -replace '@微信$', ''

@@ -211,6 +211,26 @@ Authorization: Bearer $TYPESAFE_API_KEY
 
 安全注：key 经用户级环境变量 `TYPESAFE_API_KEY` 注入（setx），不入脚本/日志/提交；该 key 曾在对话明文出现，建议实验期结束后在 console.typesafe.ai 轮换。
 
+### M6 send 真机验证发现与修复（2026-09-28，主控者验证阶段）
+
+三智能体流程后真机验证，接连发现并修复 6 个真机独有问题（mock 测试无法覆盖）：
+
+1. **分区门截断误读**：窗口 1280 宽时「应用提醒」被 OCR 读成「应用」→ 精确匹配丢弃整个分区 → 搜「文件传输助手」误报无结果。修复：截断容忍匹配（`text==name 或 name.startswith(text)`，不做反向前缀防「联系人小王」误配）。
+2. **Chromium 嵌入窗口劫持点击**：外部联系人会话的 `Chrome_RenderWidgetHostHWND`（智能总结侧栏 webview，288x1357）Z 序盖住 overlay 左半，WindowFromPoint 自动路由把结果行点击交给它、被吞。修复：select 点击显式投递 overlay 顶层 hwnd（回归 M2 语义）。
+3. **搜索框残留污染标题带**：点结果行后框内查询词与标题带同高，拼接成「文件传输助手文件传输助手」/「搜索文件传输助手」致校验误杀。修复：标题读取统一改**聊天区带过滤（x0>0.20w，y0<0.07h）**（_common 新增 Get-WeComChatAreaTitle；send 标题带 0.15w→0.20w），从几何上排除搜索框（0.13-0.17w）/会话列表首行（0.17w），不再依赖清空成败；select 5.5 清空保留作状态恢复。
+4. **应用类会话聊天区 CEF 渲染不可截图**：文件传输助手等官方应用的消息区 PrintWindow 截出**纯白**（实测 mean=247 stddev=0），气泡证据结构性不可得。修复：终态 ③ 会话列表预览改为前缀命中即算（去掉列错位敏感的目标名 AND）；前缀 12→8 字（预览列只显示约 10 字+「..」）；Jev#2 state 补充证据说明（气泡空白属渲染限制，列表预览+「刚刚」即发送证据）、failure_mode criteria 措辞修正（旧措辞把「无气泡」错归 not_sent，Jev 忠实执行了错误判据）。
+5. **主窗口 hwnd 布局切换时销毁重建**（265798→790070 实测）：send 在截图/点击/Enter 前增加窗口存活复查，失效重解析（Enter 打在死窗口=静默未发却报 unknown 的语义错位必须防）。
+6. **Jev input_point 误选「发送(S)」按钮**：criteria 未排除按钮文本。修复：归一化前缀「发送」剔除，剔除后无候选则不问该题（走比例坐标降级）。
+
+### E1：粘贴机制裁定 + M6 多行支持（2026-09-28）——✅ attachstate Ctrl+V 一次通过
+
+- 探针（`experiments/probes/e4-paste/paste-probe.ps1`）：点输入框 → Set-Clipboard 三行 CRLF → **attachstate Ctrl+V（VK 0x56）** → OCR 验证：三行全部落入输入框且**换行保留**（y=1184/1201/1222 三独立行）→ Ctrl+A+Delete 清空验证 leftover=0。
+- **G1/G2（send_image/send_file）与 G6（多行）全部解锁**：同一 attachstate 机制通吃 Ctrl+F/Ctrl+A/Ctrl+V。
+- M6 多行支持（开发+测试两智能体，143/143）：text 含换行 → 剪贴板通道（Set-Clipboard 重试 5 次 + Ctrl+V + 粘贴回读校验 fail-closed + 日志只记前 12 字脱敏）；单行 → 原逐字。剪贴板覆盖不恢复（weixin-cli 先例：paste handler 异步读，恢复有竞态）。真机验证：三行消息真实送达文件传输助手，预览/Jev 终态通过。
+- 已知限制（记录）：≥5 行的多行消息首行可能长过回读带 y≥0.80h 上界 → 保守 UI_CHANGED（fail-closed 方向）；E2/E3 时按需放宽。
+
+最终双路径真机验证通过：快路径（当前会话即目标直发）+ 分发路径（navigated:true 自动 search+select+send），均 `effect=applied` + Jev 终态校验通过；mock 测试 141/141。耗时 ~25s（final_ocr 11.7s 三次 OCR 进程冷启动是大头——**常驻 OCR server 是下一个性能优化项**）。
+
 ### E6c：Jev 全流程闭环（兜底定位 + 结果选择，2026-09-28）——✅ 真机点击闭环通过
 
 `experiments/probes/e3-jev-search/jev-search.ps1`：**两级决策全部由 Jev 做，真机点击执行**，全链路 15.7s：

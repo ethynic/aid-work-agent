@@ -5,7 +5,8 @@
  * 无结果 TARGET_NOT_FOUND / type 过滤。
  * wecom_message_send：成功 / 标题不一致 UI_CHANGED 透传 / 草稿残留 UI_CHANGED 透传 /
  * TARGET_AMBIGUOUS 透传 / target_ref 过期 TARGET_REF_STALE / 篡改 INVALID_ARGUMENT /
- * 超时→EXECUTION_UNKNOWN / 取消→CANCELLED(unknown) / 空 text 超长 text 换行 INVALID_ARGUMENT。
+ * 超时→EXECUTION_UNKNOWN / 取消→CANCELLED(unknown) / 空 text 超长 text INVALID_ARGUMENT /
+ * 换行放行（多行走驱动侧剪贴板粘贴通道，驱动收到原文）。
  */
 import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -120,6 +121,9 @@ test('chat_search：空 query / 超长 / 非法 type / 非法 limit → INVALID_
 })
 
 // ---------- wecom_message_send ----------
+// M6：send 的智能分发（navigate_required → search+select → 二次 send）细测见
+// message-send-v2.test.ts；本段保留驱动层错误透传 / 超时 / 取消 / 参数校验契约
+// （navigate_required 缺省视为 false = 快路径终态）。
 
 const VALID_REF = 'valid-ref'
 const TARGET = { name: '陆伟', type: 'contact', subtitle: '微信联系人' }
@@ -143,7 +147,15 @@ test('message_send：成功 → OK + effect=applied，驱动参数带 name/subti
     const artifactArg = opts.args?.[9]
     assert.ok(typeof artifactArg === 'string' && artifactArg.startsWith(dir), 'ArtifactDir 应位于 artifact 根目录下')
     assert.match(artifactArg!, /send-\d{4}-\d{2}-\d{2}T/, 'ArtifactDir 应为 send-<ISO 时间戳> 目录')
-    return { title: '陆伟 @微信', screenshot_paths: ['a.png'] }
+    // M6 契约：navigate_required=false 终态 + sent_verification/input_point/timing 透传
+    return {
+      navigate_required: false,
+      title: '陆伟 @微信',
+      sent_verification: { method: 'rule_2of3', result: 'sent', rule_checks_passed: 3 },
+      input_point: { x: 640, y: 648, source: 'ratio' },
+      timing_ms: { jev1: 0, typing: 1500, total: 8000 },
+      screenshot_paths: ['a.png'],
+    }
   })
   try {
     const r = await op.execute({ target_ref: VALID_REF, text: 'hello' }, silentCtx())
@@ -153,6 +165,10 @@ test('message_send：成功 → OK + effect=applied，驱动参数带 name/subti
     assert.equal(r.retryable, false)
     assert.equal(r.data.target, '陆伟')
     assert.equal(r.data.title, '陆伟 @微信')
+    assert.equal(r.data.navigated, false)
+    assert.deepEqual(r.data.sent_verification, { method: 'rule_2of3', result: 'sent' })
+    assert.deepEqual(r.data.input_point, { x: 640, y: 648 })
+    assert.equal((r.data.timing_ms as Record<string, number>).total, 8000)
     assert.deepEqual(r.data.screenshot_paths, ['a.png'])
   } finally {
     rmSync(dir, { recursive: true, force: true })
@@ -265,7 +281,7 @@ test('message_send：驱动执行中被取消 → CANCELLED + effect=unknown（�
   assert.equal(r.effect, 'unknown')
 })
 
-test('message_send：空 text / 超长（>2000）/ 含换行 / 缺 target_ref → INVALID_ARGUMENT，不调驱动', async () => {
+test('message_send：空 text / 超长（>2000）/ 缺 target_ref → INVALID_ARGUMENT，不调驱动', async () => {
   let called = 0
   const { op } = makeSendOp(async () => {
     called++
@@ -274,11 +290,23 @@ test('message_send：空 text / 超长（>2000）/ 含换行 / 缺 target_ref �
   for (const bad of [
     { target_ref: VALID_REF, text: '' },
     { target_ref: VALID_REF, text: 'x'.repeat(2001) },
-    { target_ref: VALID_REF, text: 'line1\nline2' },
     { target_ref: '', text: 'hello' },
   ]) {
     const r = await op.execute(bad, silentCtx())
     assert.equal(r.code, 'INVALID_ARGUMENT', JSON.stringify(bad).slice(0, 60))
   }
   assert.equal(called, 0)
+})
+
+test('message_send：含换行 text → 放行且驱动参数收到原文（多行走驱动侧剪贴板粘贴通道）', async () => {
+  const multiline = 'line1\nline2\r\nline3'
+  const { op } = makeSendOp(async (opts) => {
+    const i = opts.args?.indexOf('-Text') ?? -1
+    assert.notEqual(i, -1)
+    assert.equal(opts.args?.[i + 1], multiline)
+    return { navigate_required: false, title: '陆伟', sent_verification: { method: 'jev', result: 'sent' }, timing_ms: {} }
+  })
+  const r = await op.execute({ target_ref: VALID_REF, text: multiline }, silentCtx())
+  assert.equal(r.code, 'OK')
+  assert.equal(r.effect, 'applied')
 })

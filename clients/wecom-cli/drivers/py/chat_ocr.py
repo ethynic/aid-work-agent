@@ -203,10 +203,15 @@ def normalize_text(s):
 # ---------- search：SearchResultWindow2 结果列表 ----------
 
 def is_bottom_button(text, y_center, h):
-    """底部「进入全局搜索 (Ctrl+Alt+F)」按钮判定：精确标记 + 底部 15% 区域模糊特征。"""
+    """底部「进入全局搜索 (Ctrl+Alt+F)」按钮判定：精确标记 + 底部区域模糊特征。
+
+    底部区域阈值 0.80（2026-09-28 真机实测修订：矮面板（如仅 1 条应用提醒结果的 194px
+    面板）里「查找联系人、文档、应用等」占位行 y=164 恰好低于旧阈值 0.85h=165 一像素
+    逃过过滤、混进结果条目；0.80 对两种实测面板几何均安全——194px 面板真实条目最高
+    y=67，542px 面板最高 y=405 < 0.80h=434）。"""
     if any(m in text for m in SEARCH_EXCLUDE_MARKERS):
         return True
-    if h and y_center > h * 0.85 and any(f in text for f in BOTTOM_BUTTON_FEATURES):
+    if h and y_center > h * 0.80 and any(f in text for f in BOTTOM_BUTTON_FEATURES):
         return True
     return False
 
@@ -236,13 +241,27 @@ def analyze_search(boxes, img_path):
 
     items = []
     section = ''
+
+    def match_section(text):
+        # 分区标题匹配（截断容忍，2026-09-28 真机实测：窗口 1280 宽时「应用提醒」被 OCR
+        # 读成「应用」，精确匹配导致整个分区结果被丢弃 → 搜「文件传输助手」误报无结果）。
+        # 只接受「相等」或「规范名以 text 开头」（截断方向）；不做反向前缀（text 以规范名
+        # 开头），防名为「联系人小王」之类的结果行被误当分区头。<2 字不认（防单字误配）。
+        if not text or len(text) < 2:
+            return None
+        for name in SECTION_NAMES:
+            if text == name or name.startswith(text):
+                return name
+        return None
+
     for i, line in enumerate(lines):
         text = line_text(line)
         if not text:
             continue
-        # 分区标题：整行精确等于分区名（任何 y 都认，含顶部）
-        if text in SECTION_NAMES:
-            section = text
+        # 分区标题：整行等于分区名（任何 y 都认，含顶部；截断容忍）
+        sec = match_section(text)
+        if sec:
+            section = sec
             continue
         # 底部「进入全局搜索」按钮等非结果行
         if is_bottom_button(text, line_center_y(line), h):
@@ -255,7 +274,7 @@ def analyze_search(boxes, img_path):
         if not subtitle and i + 1 < len(lines):
             nxt = lines[i + 1]
             ntext = line_text(nxt)
-            if (ntext and ntext not in SECTION_NAMES
+            if (ntext and not match_section(ntext)
                     and not is_bottom_button(ntext, line_center_y(nxt), h)
                     and abs(nxt[0]['x0'] - line[0]['x0']) < 12):
                 subtitle = ntext

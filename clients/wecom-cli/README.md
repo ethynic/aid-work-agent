@@ -18,7 +18,9 @@ aid-wecom select --target-ref <ref> [--json]
                                             # 点击 search 返回的搜索结果进入会话（动作；不发送消息，
                                             # 进入会话会清除其未读角标并切换当前会话视图）
 aid-wecom send --target-ref <ref> --text <文本> [--json]
-                                            # 写动作：向 target_ref 目标发送 1 条文本消息
+                                            # 写动作：向 target_ref 目标发送 1 条文本（支持多行，经剪贴板
+                                            # 粘贴通道，会覆盖用户剪贴板；智能分发：当前会话对→直接发；
+                                            # 不对→自动 search+select 切换后发）
 aid-wecom unread [--name <名>] [--json]     # 未读会话快照（只读，不开会话不清角标）
 aid-wecom read --target-ref <ref> [--max-pages N] [--since-days N] [--json]
                                             # 读会话消息（只读内容；进入会话会清除该会话未读角标）
@@ -74,10 +76,11 @@ MCP 只暴露 `wecom_unread_list` 与 `wecom_watch_poll` 两个 M3 工具（每�
 `search` 返回的每个候选带 `target_ref`：base64url(payload) + HMAC-SHA256 签名
 （本机密钥 `%LOCALAPPDATA%\AidWorkAgent\wecom-cli\target-ref.key`，不可跨机验证），
 payload 含 name/type/subtitle 与条目 overlay 相对坐标 x/y（M4 起可选；老 ref 无坐标对，
-verify 不因未知字段失败），**有效期 5 分钟**。`send` 必须持有效 target_ref：
-过期 → TARGET_REF_STALE（重新 search 获取）；篡改/格式非法 → INVALID_ARGUMENT。
-发送时驱动按 name+section+subtitle 在搜索结果里精确匹配，同名多项消歧失败 →
-TARGET_AMBIGUOUS 拒绝发送。
+verify 不因未知字段失败；`send` 不要求坐标，`select` 要求），**有效期 5 分钟**。`send` 必须持有效
+target_ref：过期 → TARGET_REF_STALE（重新 search 获取）；篡改/格式非法 → INVALID_ARGUMENT。
+send 的分发阶段按 name+section（subtitle 优先收紧）匹配搜索候选：取 Jev best（须与目标
+name+section+subtitle 消歧键一致才可信——Jev 看不到 target_ref 的 subtitle，同名同分区
+多条时直接信任 best 会发错人），否则取规则唯一匹配项；多项无法消歧 → TARGET_AMBIGUOUS 拒绝发送。
 
 ## search 命令（M4：Jev 决策 + 坐标句柄）
 
@@ -127,6 +130,47 @@ TARGET_AMBIGUOUS 拒绝发送。
 - artifact 目录 `artifacts/select-<ts>/`：点击前 overlay 截图 + 点击后主窗口截图 +
   `driver-log.txt`（各步耗时、OCR 摘要、坐标换算记录）。
 
+## send 命令（M6：智能分发发送）
+
+向 target_ref 目标发送 1 条文本（写动作，零自动重试）。TS 层编排 + 发送阶段驱动
+（`drivers/ps1/message-send.ps1`）两阶段交互：
+
+- **两条路径**：
+  1. **快路径**——发送驱动先 PrintWindow 截图 + OCR 两带（标题带 y<0.07h、底部输入带
+     y>0.72h 含工具栏图标行与输入区，boxes 模式带坐标），**Jev #1 三问合一**（当前会话是否
+     目标 / 点哪聚焦输入框 / 输入区是否有草稿）判定当前会话就是目标 → 直接输入发送；
+  2. **分发路径**——驱动判定非目标/无法判定 → 返回 `navigate_required=true` 交还 TS 层 →
+     内部依次调用 chatSearch（注入同一 runDriverFn，Jev 选 best）与 chatSelect（点击进会话 +
+     标题严格校验）→ **再次调用发送驱动**完成发送。两轮均不在目标会话 → TARGET_NOT_FOUND；
+     编排失败（search 无结果 / select 校验失败等）透传对应错误码（此时未发送消息，effect=none）。
+- **Jev 两次判定**：#1 发送前三问（见上）；#2 终态两问（sent_successfully / failure_mode，
+     state = 发送后输入区/消息区末尾/会话列表 OCR 证据）。#2 判 no/unclear →
+     EXECUTION_UNKNOWN（消息可能已发出，绝不自动重试）。
+- **降级链**（Jev 无 key/超时/坏响应，逐问独立降级）：right_conversation → 标题归一化规则
+     匹配；input_point → 比例坐标 (0.500w, 0.900h)（M2 标定）；has_draft → input 模式判空
+     （占位符「发送消息/输入消息/聊点什么」与图标行碎字剔除）；终态 → M2 三选二（输入框清空 /
+     消息区末尾任一行含 text 归一化前缀 12 字 / 会话列表含目标名且含前缀），<2 项 →
+     EXECUTION_UNKNOWN。
+- **草稿防串**：输入区已有**用户草稿** → 立即 UI_CHANGED 中止，绝不清除（可能是用户未发送
+     的文字）；输入后、发送前规则复核会话标题，不一致 → **清空自己刚输入的草稿**
+     （attachstate Ctrl+A + Delete，只清自己输入的内容）再 UI_CHANGED 中止，绝不把文字留在
+     错误会话、绝不带着错误标题按 Enter。
+- **text 约束**：≤2000 字、纯空白拒绝（归一化后为空会使终态校验失真）；**支持多行**——
+  含换行时驱动走**剪贴板粘贴通道**：`Set-Clipboard` 重试 5 次（×150ms，全败 CONFIG_MISSING）→
+  attachstate Ctrl+V（输入框已聚焦，2026-09-28 真机验证换行保留）→ 500ms → OCR 回读输入带
+  （y≥0.80h、300<x<0.97w，token 按 (y,x) 序拼接归一化）须含 text 归一化前 8 字，不符 →
+  UI_CHANGED fail-closed（不按 Enter，输入框可能有残留需人工检查）。**副作用：发送多行消息
+  会覆盖用户剪贴板且不恢复**（不备份恢复是刻意为之：paste handler 异步读剪贴板，恢复竞态会
+  粘贴到错的内容，weixin-cli 先例）；driver-log 对多行文本只记前 12 字 + 总字数，不落全文。
+  发送前复核与终态校验对多行无需特判（气泡/会话列表预览显示为单行截断，归一化前缀取整文
+  开头 8 字 = 首行开头）。驱动超时 → EXECUTION_UNKNOWN；取消 → CANCELLED。
+- **artifact 结构**（同一 artifact 根下独立留痕）：`send-<ts>/`（两轮分发则为两个目录）
+  含 `step1-precheck.png`（两带判定现场）、`step2-typed.png`（输入后复核现场）、
+  `step3-after.png`（发送后终态现场）与 `driver-log.txt`（Jev state/answer 摘要、OCR 摘要、
+  各阶段耗时；绝不含 TYPESAFE_API_KEY）；分发路径另有 `search-<ts>/`、`select-<ts>/`
+  （内部命令自建）。返回 data 附 `navigated`（是否走了分发）、`sent_verification`
+  （method=jev|rule_2of3）、`input_point` 与 `timing_ms`。
+
 ## 运行依赖
 
 - **Windows（win32-x64）**，已登录且未锁屏的交互桌面会话；
@@ -134,7 +178,7 @@ TARGET_AMBIGUOUS 拒绝发送。
 - PowerShell（powershell.exe 在 PATH）；
 - `add-customer` / `search` / `select` / `send` / `unread` / `read` / `watch` 另需 OCR：仓库根 `venv` 的 python + `rapidocr_onnxruntime`
   （`drivers/ps1` 上四级为仓库根，取 `venv\Scripts\python.exe`；缺失 → CONFIG_MISSING）；
-- `search` 的 Jev 决策另需可选环境变量 `TYPESAFE_API_KEY`（缺失自动降级规则 best，功能不中断）。
+- `search` / `send` 的 Jev 决策另需可选环境变量 `TYPESAFE_API_KEY`（缺失自动降级规则链，功能不中断）。
 
 ## 关键实现事实（真机实测，勿随意改）
 
@@ -185,6 +229,11 @@ TARGET_AMBIGUOUS 拒绝发送。
   按 x1∈[212,400] 判定）：旧固定像素带在 1280 宽窗口把聊天区标题误判为残留（已证实 bug）。
   搜索 overlay 用后**保持打开**（坐标句柄供 select 消费）；overlay 关闭后窗口以
   visible=False 残留，判开必须带可见性过滤。Jev 决策 API 措辞敏感，state 模板不得随意改。
+- M6（2026-09-28 设计定稿）：send 智能分发——驱动返回 `navigate_required=true` 表示当前
+  会话非目标，TS 层内部编排 chatSearch→chatSelect→二次 send（不经 CLI，注入同一驱动依赖）；
+  用户草稿绝不清除（UI_CHANGED 中止），自己输入的草稿发送前复核失败必清
+  （Clear-WeComFocusedInput，与 Clear-WeComSearchBoxV2 同款 Ctrl+A+Delete 原语）；
+  终态 Jev 判定 no/unclear 或降级三选二 <2 项 → EXECUTION_UNKNOWN 绝不自动重试。
 - 含中文的 .ps1 必须 **UTF-8 with BOM**。
 
 ## 目录

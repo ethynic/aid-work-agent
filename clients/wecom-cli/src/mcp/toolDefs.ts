@@ -92,13 +92,19 @@ export const TOOL_DEFS: WecomToolDef[] = [
     name: 'wecom_message_send',
     title: '企业微信发送文本消息',
     description:
-      '向 target_ref 指定的联系人/群聊发送 1 条文本消息（写动作，单次单目标单条）。' +
+      '向 target_ref 指定的联系人/群聊发送 1 条文本消息（写动作，单次单目标单条，智能分发）。' +
       'target_ref 必须来自 wecom_chat_search（有效期 5 分钟，过期 TARGET_REF_STALE 需重新搜索）。' +
-      '发送前 OCR 校验会话标题与目标一致、输入框无残留草稿，不一致即中止；' +
-      '发送后做终态校验，失败返回 EXECUTION_UNKNOWN（消息可能已发出，系统不会自动重试，请人工确认）。',
+      '智能分发：发送驱动先 OCR 标题带+输入带并由 Jev 判定——当前会话就是目标时直接输入发送（快路径）；' +
+      '不是目标或无法判定时自动执行 search（Jev 选最优候选）+ select（点击进会话并校验标题）后再发送，' +
+      '两轮均不在目标会话返回 TARGET_NOT_FOUND（未发送消息）。' +
+      '草稿防串：输入区已有用户草稿时立即 UI_CHANGED 中止（绝不动用户草稿）；输入后发送前复核会话标题，' +
+      '不一致会清空自己刚输入的草稿并中止。多行文本（含换行）经剪贴板粘贴通道输入并 OCR 回读校验，' +
+      '副作用：发送多行消息会覆盖用户剪贴板且不恢复。Jev 不可用时逐级降级为标题规则匹配、比例坐标输入点、' +
+      '输入区判空与终态三选二规则。' +
+      '发送后由 Jev 判定终态，失败返回 EXECUTION_UNKNOWN（消息可能已发出，系统不会自动重试，请人工确认）。',
     zodShape: {
       target_ref: z.string().min(1).describe('发送目标句柄（wecom_chat_search 返回的 target_ref）'),
-      text: z.string().min(1).max(2000).describe('消息文本（单行，不含换行，最长 2000 字；更长请分段多次发送）'),
+      text: z.string().min(1).max(2000).describe('消息文本（最长 2000 字，支持多行：含换行时经剪贴板粘贴通道输入并覆盖用户剪贴板且不恢复；更长请分段多次发送）'),
     },
     annotations: { title: '企业微信发送文本消息', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   },

@@ -727,6 +727,30 @@ function Clear-WeComSearchBoxV2 {
     return $ok
 }
 
+function Get-WeComChatAreaTitle {
+    # 主窗口截图 → boxes OCR → 聊天区标题带（y0<0.07h 且 x0>0.20w）token 按视觉行拼接。
+    # 2026-09-28 真机实测修订：搜索框内容/占位符（x0≈0.13-0.17w）与会话列表首行（≈0.17w）
+    # 都在标题带同高位置，旧「整带拼接」会被污染成「搜索文件传输助手」/「XX XX」双拼；
+    # 0.20w 阈值从几何上排除它们（聊天区标题实测 ≥0.22w 外部联系人 / 0.296w 普通会话），
+    # 不再依赖搜索框是否已清空。行聚类：y 中心差 ≤14px 视为同一视觉行（标题高约 20-24px）。
+    param([Parameter(Mandatory)][string]$ImagePath)
+    $ocr = Invoke-WeComChatOcr -ImagePath $ImagePath -Mode 'boxes'
+    Add-Type -AssemblyName System.Drawing
+    $img = [System.Drawing.Image]::FromFile($ImagePath)
+    $w = $img.Width; $h = $img.Height
+    $img.Dispose()
+    $tokens = @($ocr.boxes | Where-Object {
+        [double]$_.y0 -lt ($h * 0.07) -and [double]$_.x0 -gt ($w * 0.20)
+    } | Sort-Object { [double]$_.y0 }, { [double]$_.x0 })
+    if ($tokens.Count -eq 0) { return '' }
+    $anchorCy = ([double]$tokens[0].y0 + [double]$tokens[0].y1) / 2
+    $line = @($tokens | Where-Object {
+        $cy = ([double]$_.y0 + [double]$_.y1) / 2
+        [Math]::Abs($cy - $anchorCy) -le 14
+    })
+    return (($line | ForEach-Object { [string]$_.text }) -join '')
+}
+
 function Invoke-WeComJev {
     # Jev System One 决策 API（2026-09-28 实测通）：
     # POST https://api.typesafe.ai/v1/systemone，body = {"state","model":"jev-latest","questions"}，
@@ -826,6 +850,30 @@ function Focus-WeComSearchBox {
         }
     }
     Throw-DriverError 'UI_CHANGED' '无法聚焦搜索框（attachstate Ctrl+F 失败且 OCR 降级路径均不可用），页面结构可能已变化'
+}
+
+# ---------- M6：发送 V2 共享助手（message-send 用；只增不改，M1-M5 函数不动） ----------
+
+function Clear-WeComFocusedInput {
+    # 清空当前聚焦的文本输入框内容（attachstate Ctrl+A 全选 + VK_DELETE 删除，与
+    # Clear-WeComSearchBoxV2 同款原语）。M6 message-send 发送前会话复核失败时，用它清理
+    # **自己刚输入**的会话草稿（防把文字留给错误会话）——只清自己输入的内容，
+    # 绝不用于清除用户草稿（用户草稿场景一律 UI_CHANGED 中止，不触碰）。
+    # 前提：目标输入框已聚焦（M6 驱动先点输入框并完成逐字输入，焦点确定在输入区）。
+    # 复核是否真清空由调用方决定（尽力而为的防护动作，失败不阻断后续中止语义）。
+    # 返回 $true=按键序列已发出；$false=attach 失败（调用方记录日志即可）。
+    param([Parameter(Mandatory)][int64]$Hwnd)
+    $ok = Send-WeComAttachChordKey -Hwnd $Hwnd -Vk 0x41
+    Start-Sleep -Milliseconds 150
+    Initialize-WeComWin32
+    $scan = [WeComWin32]::MapVirtualKeyW([uint32]0x2E, 0)
+    $lpDown = [IntPtr](1 -bor ($scan -shl 16))
+    $lpUp = [IntPtr](1 -bor ($scan -shl 16) -bor 0xC0000000L)
+    [void][WeComWin32]::PostMessageW([IntPtr]$Hwnd, 0x0100, [IntPtr]0x2E, $lpDown)
+    Start-Sleep -Milliseconds 50
+    [void][WeComWin32]::PostMessageW([IntPtr]$Hwnd, 0x0101, [IntPtr]0x2E, $lpUp)
+    Start-Sleep -Milliseconds 300
+    return $ok
 }
 
 # ---------- 驱动统一入口 ----------
