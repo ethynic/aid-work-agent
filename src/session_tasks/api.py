@@ -259,11 +259,14 @@ async def parse_spec(request: Request):
         if not isinstance(body, dict):
             raise SessionTaskError("请求体必须是对象", ERR_VALIDATION_FAILED, 400)
         from .nl_parse import parse_natural_language
+        from .constants import DEFAULT_SCENARIO_KEY
 
-        scenario_key = str(body.get("scenario_key") or "weixin.conversation.v1")
+        scenario_key = str(body.get("scenario_key") or DEFAULT_SCENARIO_KEY)
         return _ok(await parse_natural_language(tenant_id, user_id, str(body.get("text") or ""), scenario_key))
     except SessionTaskError as exc:
         return _from_service_error(exc)
+    except ValueError as exc:  # 含 json.JSONDecodeError：请求体非法
+        return _err(400, f"参数非法: {exc}", ERR_VALIDATION_FAILED)
 
 
 @router.get("")

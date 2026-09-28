@@ -101,14 +101,14 @@ async function parse() {
   try {
     const result = await sessionTasksApi.parseSpec(nlText.value.trim(), draftController?.signal)
     if (result.bindings?.length) bindings.value = result.bindings
-    selected.value = result.binding_candidates[0]?.id || ''
+    if (result.binding_candidates[0]?.id) selected.value = result.binding_candidates[0].id
     await nextTick()
     editor.value?.load(result.spec)
     const missing = result.missing.map(item => missingFieldLabels[item.field] || item.field).filter(Boolean)
     parseOk.value = !result.parse_error
     parseStatus.value = result.parse_error || (missing.length ? `解析完成，描述中未提到：${missing.join('、')}，请补充后再保存` : '解析完成，请核对清单后保存')
   } catch (e) {
-    parseStatus.value = `${errorMessage(e)}；可直接手动填写下方表单`
+    if ((e as Error).name !== 'AbortError') parseStatus.value = `${errorMessage(e)}；可直接手动填写下方表单`
   } finally { parsing.value = false }
 }
 function closeCreate() { if (saving.value) return; if (!window.confirm('关闭后未保存的草稿内容将丢失，确定关闭？')) return; creating.value = false }
