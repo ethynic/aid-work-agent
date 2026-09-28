@@ -542,7 +542,33 @@ class ClientUsageReportConfig(BaseModel):
     """
     enabled: bool = False
     default_credit_price: float = 0.0
-    command_credit_prices: Dict[str, float] = Field(default_factory=dict)
+    command_credit_prices: Dict[str, float] = Field(default_factory=lambda: {
+        # 会话历史解析：/session-history 端点已在服务端按 GLM token 用量计费
+        # （成本×100 积分），C 模式若再上报同名 command 按 0 计，防双扣
+        "session_history": 0.0,
+    })
+
+
+class SessionHistoryConfig(BaseModel):
+    """会话聊天记录解析配置（M10a，POST /api/client/v1/session-history）
+
+    - model: 解析模型，provider/model 语法。锁定 GLM-5.3-Flash（zhipu 原生多模态），
+      不用 glm-5.3-flashx——2026-09-28 实测其思考 token 翻倍无提速、价格 2.5 倍、
+      time 沿袭质量差。该模型强制思考不可关，压延迟靠服务端并行分页调用。
+    - input_price_per_m / output_price_per_m: 智谱价目（元/百万 token），计费只依赖
+      这两个常量、不查 token_cost_prices 表。来源：智谱开放平台 GLM-5.3-Flash 价目，
+      2026-09-17 核对（与 resume_vl 设计文档同源）；调价只改这里。
+    - credit_multiplier: 计费倍率，积分 = ceil(token 成本(元) × 倍率 × 100) / 100。
+      用户定稿 100（即 1 元 = 100 积分）；区别于 /llm/chat 的「标准积分 ×10」客户端系数。
+    - min_credit_charge: 最低计费保护：单次计费不足该值按该值收（积分）
+    - page_timeout_seconds: 单页 GLM 调用超时（秒）；失败页跳过，全部失败才 502
+    """
+    model: str = "zhipu/GLM-5.3-Flash"
+    input_price_per_m: float = 0.8
+    output_price_per_m: float = 2.8
+    credit_multiplier: int = 100
+    min_credit_charge: float = 1.0
+    page_timeout_seconds: int = 120
 
 
 class DesktopAgentConfig(BaseModel):
@@ -576,6 +602,7 @@ class Settings(BaseModel):
     resume_vl: ResumeVLConfig = Field(default_factory=ResumeVLConfig)
     external_push: ExternalPushConfig = Field(default_factory=ExternalPushConfig)
     client_usage_report: ClientUsageReportConfig = Field(default_factory=ClientUsageReportConfig)
+    session_history: SessionHistoryConfig = Field(default_factory=SessionHistoryConfig)
     desktop_agent: DesktopAgentConfig = Field(default_factory=DesktopAgentConfig)
 
     # 认证相关配置（从环境变量加载）

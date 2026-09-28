@@ -13,6 +13,7 @@ import json
 import math
 import secrets
 from datetime import datetime
+from decimal import Decimal, ROUND_CEILING
 from typing import Any, Optional
 
 import bcrypt
@@ -335,8 +336,17 @@ class ClientUsageLogDB:
         association_name: Optional[str] = None,
         stage: str = "llm",
         status: str = "success",
+        credit_cost_override: Optional[float] = None,
+        detail: Optional[dict[str, Any]] = None,
     ) -> dict[str, float]:
         """记录一次 LLM 调用消耗，同事务扣减租户余额（×10 系数）。
+
+        Args:
+            credit_cost_override: 调用方自算最终积分（如 session-history 按
+                settings.session_history 配置价目「成本×100」计费，不查
+                token_cost_prices、不吃客户端 ×10 系数）。传入时 raw/credit 同值
+                （再 ceil 到分防未取整入参）；None 走既有 ×10 标准链路，行为不变。
+            detail: 补充存档（pages/latency 等审计信息），写入 detail 列。
 
         Returns:
             {"raw_credit_cost": float, "credit_cost": float, "balance_after": float}
@@ -348,16 +358,26 @@ class ClientUsageLogDB:
         cache_creation_tokens = int(usage.get("cache_creation_tokens") or 0)
         total_tokens = int(usage.get("total_tokens") or (prompt_tokens + completion_tokens))
 
-        # 标准积分（复用现有计费函数）
-        raw_credit = calculate_credit_cost(
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            model=model,
-            cached_input_tokens=cached_tokens,
-            cache_creation_input_tokens=cache_creation_tokens,
-        )
-        # 客户端 ×10 系数，2 位小数向上取整
-        credit_cost = math.ceil(raw_credit * _client_credit_multiplier() * 100) / 100
+        if credit_cost_override is not None:
+            # 调用方自算积分：不走 calculate_credit_cost 与 ×10 系数（M10a 会话历史解析）
+            raw_credit = float(credit_cost_override)
+            # Decimal 取整防浮点多收：math.ceil(2.2*100)/100 会因二进制表示得 2.21
+            # （约 46% 的两位小数值踩中，同 usage/report 的 0.1×3 教训），override
+            # 入参即使已两位小数也不能用浮点 ceil 重取整
+            credit_cost = float(
+                Decimal(str(raw_credit)).quantize(Decimal("0.01"), rounding=ROUND_CEILING)
+            )
+        else:
+            # 标准积分（复用现有计费函数）
+            raw_credit = calculate_credit_cost(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                model=model,
+                cached_input_tokens=cached_tokens,
+                cache_creation_input_tokens=cache_creation_tokens,
+            )
+            # 客户端 ×10 系数，2 位小数向上取整
+            credit_cost = math.ceil(raw_credit * _client_credit_multiplier() * 100) / 100
 
         balance_after: Optional[float] = None
         with get_db_connection() as conn:
@@ -366,13 +386,14 @@ class ClientUsageLogDB:
                 """INSERT INTO client_usage_logs
                    (tenant_id, binding_id, session_id, association_name, stage, status,
                     model, provider, prompt_tokens, completion_tokens, cached_tokens,
-                    total_tokens, raw_credit_cost, credit_cost)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    total_tokens, raw_credit_cost, credit_cost, detail)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                    RETURNING id""",
                 (
                     tenant_id, binding_id, session_id, association_name, stage, status,
                     model, provider, prompt_tokens, completion_tokens, cached_tokens,
                     total_tokens, raw_credit, credit_cost,
+                    json.dumps(detail, ensure_ascii=False) if detail else None,
                 ),
             )
             # 同事务原子扣减租户余额

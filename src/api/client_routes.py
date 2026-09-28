@@ -3,22 +3,30 @@
 
 设计文档：docs/tools/association-client-design.md §2.2
 路由前缀：/api/client/v1
-- POST /activate      激活码激活（无需鉴权）
-- GET  /credits       积分余额查询
-- POST /llm/chat      LLM 代理（计费 ×10；可选 model 白名单路由，如 kimi-k3 视觉模型）
-- POST /ocr/parse     OCR 代理（不扣费，记录调用）
-- POST /logs          日志上报
-- POST /usage/report  通用用量上报（C 模式，客户端计费统一接入 P4）
+- POST /activate          激活码激活（无需鉴权）
+- GET  /credits           积分余额查询
+- POST /llm/chat          LLM 代理（计费 ×10；可选 model 白名单路由，如 kimi-k3 视觉模型）
+- POST /ocr/parse         OCR 代理（不扣费，记录调用）
+- POST /session-history   会话聊天记录解析（M10a：GLM-5.3-Flash 多模态并行分页，计费 成本×100 积分）
+- POST /logs              日志上报
+- POST /usage/report      通用用量上报（C 模式，客户端计费统一接入 P4）
 """
 
 from __future__ import annotations
 
+import asyncio
+import base64
+import binascii
+import json
 import math
 import os
+import re
+import time
+import unicodedata
 from decimal import Decimal, ROUND_CEILING
 import tempfile
 from datetime import datetime
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, File, Header, HTTPException, UploadFile
 from loguru import logger
@@ -101,6 +109,52 @@ class LogEntry(BaseModel):
     association_name: Optional[str] = None
     message: str
     detail: Optional[dict[str, Any]] = None
+
+
+# 会话聊天记录解析单图 base64 解码后大小上限（5MB）
+SESSION_IMAGE_MAX_BYTES = 5 * 1024 * 1024
+# 单请求图片数上下限（M10a 定稿 1..10 张）
+SESSION_IMAGE_MIN_COUNT = 1
+SESSION_IMAGE_MAX_COUNT = 10
+
+
+class SessionHistoryRequest(BaseModel):
+    """会话聊天记录解析请求（M10a）。
+
+    images：聊天截图 base64（PNG），按时间序旧→新，1..10 张；
+    构造时校验 base64 合法性与单图 ≤5MB（解码后），非法直接 422。
+    """
+
+    images: List[str] = Field(
+        ..., min_length=SESSION_IMAGE_MIN_COUNT, max_length=SESSION_IMAGE_MAX_COUNT,
+        description="聊天截图 base64 数组，按时间序旧→新",
+    )
+    client: Literal["wecom", "weixin"] = Field(..., description="上报客户端标识")
+    session_title: Optional[str] = Field(
+        None, max_length=200, description="会话标题（仅存台账 detail 供审计）",
+    )
+
+    @model_validator(mode="after")
+    def _validate_images(self) -> "SessionHistoryRequest":
+        cleaned: List[str] = []
+        for i, img in enumerate(self.images):
+            s = (img or "").strip()
+            # 容错：客户端若误带 data URL 前缀（data:image/png;base64,xxx），剥离后按纯 base64 处理
+            if s.startswith("data:") and "base64," in s:
+                s = s.split("base64,", 1)[1]
+            try:
+                raw = base64.b64decode(s, validate=True)
+            except (binascii.Error, ValueError):
+                raise ValueError(f"INVALID_BASE64: 第 {i} 张图片不是合法 base64")
+            if not raw:
+                raise ValueError(f"INVALID_BASE64: 第 {i} 张图片为空")
+            if len(raw) > SESSION_IMAGE_MAX_BYTES:
+                raise ValueError(
+                    f"IMAGE_TOO_LARGE: 第 {i} 张图片超过 5MB 限制"
+                )
+            cleaned.append(s)
+        self.images = cleaned
+        return self
 
 
 class LogBatchRequest(BaseModel):
@@ -355,6 +409,278 @@ async def ocr_parse(
                 os.unlink(tmp_path)
             except Exception:
                 pass
+
+
+# ============== 会话聊天记录解析（M10a，计费 = 成本×100 积分） ==============
+
+# 单页解析提示词（单页语义：每页独立请求，无跨页去重要求——去重由服务端合并完成）。
+# 措辞与 2026-09-28 GLM-5.3-Flash 实验验证版本对齐：
+# - time 沿袭：消息带最近一条时间分割线原文，首条分割线之前的消息省略 time；
+# - side：左=peer 右=self；时间分割线条目 side/kind 均为 timeline；
+# - 图片消息「[图片] +图内可见文字摘要」、文件消息「[文件] 文件名」；
+# - 多行消息完整逐字转录（换行 \n），不得概括改写。
+_SESSION_HISTORY_PAGE_PROMPT = (
+    "你是聊天记录截图转写器。请把这张聊天会话界面截图完整转写为结构化聊天记录，"
+    "只输出一个 JSON 数组，数组元素按从上到下的可见顺序，每条对应一条消息气泡或时间分割线，"
+    '格式示例：[{"time": "14:02", "side": "peer", "kind": "text", "text": "消息内容"}]。规则：\n'
+    '1. side：对方（左侧）消息为 "peer"，自己（右侧）消息为 "self"，时间分割线为 "timeline"。\n'
+    "2. time：填该条消息上方最近一条时间分割线的原文（如 \"昨天 14:02\"）；"
+    "第一条分割线之前的消息省略 time 字段；时间分割线条目本身省略 time，text 填分割线文字。\n"
+    '3. kind：普通文本消息 "text"；图片消息 "image"，text 为 "[图片] 图内可见文字摘要"；'
+    '文件消息 "file"，text 为 "[文件] 文件名"；时间分割线 "timeline"。\n'
+    "4. 多行消息必须完整逐字转录，换行用 \\n 表示，不得合并行、不得省略、不得概括改写。\n"
+    "5. 仅依据图中可见内容，严禁编造；只输出 JSON 数组本身，不要 markdown 代码块、不要任何解释文字。\n"
+)
+
+_SESSION_VALID_SIDES = {"self", "peer", "timeline"}
+_SESSION_VALID_KINDS = {"text", "image", "file", "timeline"}
+
+
+def _normalize_session_message_key(msg: dict[str, Any]) -> tuple:
+    """重叠比对键：(side, kind, 归一化 text)。归一化 = NFKC 全角转半角 + 去全部空白 + 小写。"""
+    text = unicodedata.normalize("NFKC", str(msg.get("text") or ""))
+    return (
+        str(msg.get("side") or "").lower(),
+        str(msg.get("kind") or "").lower(),
+        re.sub(r"\s+", "", text).lower(),
+    )
+
+
+def _extract_json_array(content: str) -> list:
+    """从模型输出提取最外层 JSON 数组（容错 ```json 围栏与前后杂文字）。"""
+    text = (content or "").strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```[a-zA-Z]*\s*", "", text)
+        text = re.sub(r"\s*```$", "", text)
+    start, end = text.find("["), text.rfind("]")
+    if start == -1 or end <= start:
+        raise ValueError("输出中未找到 JSON 数组")
+    data = json.loads(text[start:end + 1])
+    if not isinstance(data, list):
+        raise ValueError("输出不是 JSON 数组")
+    return data
+
+
+def _sanitize_page_messages(items: list) -> list[dict[str, Any]]:
+    """单页消息数组清洗：单条字段非法（side/kind 越界、text 非 str）跳过该条，不影响其余。"""
+    msgs: list[dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        side = str(item.get("side") or "").strip().lower()
+        kind = str(item.get("kind") or "").strip().lower()
+        text = item.get("text")
+        if side not in _SESSION_VALID_SIDES or kind not in _SESSION_VALID_KINDS:
+            continue
+        if not isinstance(text, str):
+            continue
+        if side == "timeline":
+            kind = "timeline"
+        msg: dict[str, Any] = {}
+        if side != "timeline":
+            t = item.get("time")
+            if isinstance(t, str) and t.strip():
+                msg["time"] = t.strip()
+        msg.update(side=side, kind=kind, text=text)
+        msgs.append(msg)
+    return msgs
+
+
+def _merge_session_pages(pages_messages: list[list[dict[str, Any]]]) -> tuple[list[dict[str, Any]], bool]:
+    """按页序（旧→新）拼接 + 相邻页重叠去重，返回 (合并结果, 是否存在页间 gap)。
+
+    后一页（更新）的开头与前文尾部的连续公共序列（按 side+kind+归一化 text 键比对）
+    取最大重叠后拼接；无重叠则保留全部并标记 page_gap——相邻截图物理上必有重叠，
+    无重叠说明翻页过快漏了内容，warning 提示客户端重截。
+    """
+    if not pages_messages:
+        return [], False
+    merged = list(pages_messages[0])
+    page_gap = False
+    for page in pages_messages[1:]:
+        overlap = 0
+        for k in range(min(len(merged), len(page)), 0, -1):
+            if all(
+                _normalize_session_message_key(merged[len(merged) - k + j])
+                == _normalize_session_message_key(page[j])
+                for j in range(k)
+            ):
+                overlap = k
+                break
+        if overlap == 0:
+            page_gap = True
+        merged.extend(page[overlap:])
+    return merged, page_gap
+
+
+def _session_history_credit_cost(prompt_tokens: int, completion_tokens: int) -> float:
+    """会话历史解析计费：积分 = ceil(token 成本(元) × credit_multiplier × 100) / 100。
+
+    成本(元) = prompt×输入单价/1e6 + completion×输出单价/1e6（单价取
+    settings.session_history 配置常量，来源与核对日期见配置注释；缓存命中
+    token 智谱侧未提供该模型独立价目，统一按输入单价计）。最低计费保护：
+    不足 min_credit_charge 按该值收。
+
+    Decimal 十进制计价防浮点多收：math.ceil(2.2×100×100)/100 会因二进制表示
+    得 220.01（同 usage/report 的 0.1×3 教训），价目常量是任意小数矩阵。
+    """
+    cfg = settings.session_history
+    cost_yuan = (
+        Decimal(str(int(prompt_tokens))) * Decimal(str(cfg.input_price_per_m))
+        + Decimal(str(int(completion_tokens))) * Decimal(str(cfg.output_price_per_m))
+    ) / Decimal(1_000_000)
+    credits = float(
+        (cost_yuan * Decimal(str(cfg.credit_multiplier))).quantize(
+            Decimal("0.01"), rounding=ROUND_CEILING
+        )
+    )
+    return max(credits, float(cfg.min_credit_charge))
+
+
+def _split_model_spec(spec: str) -> tuple[str, str]:
+    """拆 provider/model 配置（如 zhipu/GLM-5.3-Flash），格式非法时 fail loud。"""
+    provider, sep, model = (spec or "").partition("/")
+    if not sep or not provider.strip() or not model.strip():
+        raise ValueError(f"模型标识 {spec!r} 格式非法：须为 provider/model（如 zhipu/GLM-5.3-Flash）")
+    return provider.strip(), model.strip()
+
+
+async def _parse_history_page(index: int, image_b64: str) -> dict[str, Any]:
+    """单页 GLM-5.3-Flash 多模态解析（并行单元）。失败/超时/解析失败返回 ok=False，不抛异常。"""
+    cfg = settings.session_history
+    provider_name, model = _split_model_spec(cfg.model)
+    started = time.perf_counter()
+    try:
+        messages = [{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": _SESSION_HISTORY_PAGE_PROMPT},
+                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_b64}"}},
+            ],
+        }]
+        response = await asyncio.wait_for(
+            llm_gateway.chat_direct(provider_name, model, messages=messages, temperature=0.1),
+            timeout=float(cfg.page_timeout_seconds),
+        )
+    except Exception as e:  # noqa: BLE001 单页失败隔离：部分成功优于全败（网关层已记完整堆栈）
+        logger.warning(f"会话历史解析单页调用失败 page={index} error={type(e).__name__}")
+        return {"index": index, "ok": False, "messages": [], "usage": {},
+                "latency_ms": int((time.perf_counter() - started) * 1000)}
+    usage = (response or {}).get("usage") or {}
+    try:
+        msgs = _sanitize_page_messages(_extract_json_array((response or {}).get("content") or ""))
+    except Exception as e:  # noqa: BLE001 整页输出不可解析按失败页处理
+        logger.warning(f"会话历史解析单页输出解析失败 page={index} error={type(e).__name__}")
+        return {"index": index, "ok": False, "messages": [], "usage": {},
+                "latency_ms": int((time.perf_counter() - started) * 1000)}
+    return {"index": index, "ok": True, "messages": msgs, "usage": usage,
+            "latency_ms": int((time.perf_counter() - started) * 1000)}
+
+
+def _record_history_failure(binding: ClientBinding, req: SessionHistoryRequest, failed_pages: list[int], status: str) -> None:
+    """失败/部分失败落 0 积分台账行（错误仪表可见）；落账异常不阻断业务响应。"""
+    try:
+        ClientUsageLogDB.record_non_llm_usage(
+            tenant_id=binding.tenant_id,
+            binding_id=binding.binding_id,
+            stage="session_history",
+            status=status,
+            detail={"client": req.client, "failed_pages": failed_pages},
+        )
+    except Exception as e:  # noqa: BLE001 观测性落账失败不影响主流程
+        logger.warning(f"会话历史解析失败行落账异常 tenant={binding.tenant_id} error={type(e).__name__}")
+
+
+@router.post("/session-history")
+async def parse_session_history(
+    req: SessionHistoryRequest,
+    binding: ClientBinding = Depends(_require_binding),
+):
+    """会话聊天记录解析：客户端上传多张聊天截图（时间序旧→新）→ 结构化消息列表。
+
+    - 并行分页：每页一个 GLM-5.3-Flash 请求（asyncio.gather，单页超时
+      settings.session_history.page_timeout_seconds）。该模型强制思考不可关，
+      串行 2 图实测 ~35s，并行分页 + 服务端合并是唯一有效提速路径（2 页 → ~20s）；
+    - 合并去重：按页序拼接 + 相邻页最大重叠去重（side+kind+归一化 text 键），
+      无重叠保留全部并在响应加 warning="page_gap"；
+    - 部分成功优于全败：失败页跳过并在响应加 failed_pages（0 基页序）；
+      全部失败 → 502 MODEL_UNAVAILABLE；
+    - 计费：token 成本(元) ×100 积分（settings.session_history 价目常量），
+      最低 1 积分；沿用 _check_credit 预检 + record_llm_usage 同事务扣减（command=stage
+      'session_history'，C 模式 usage/report 价目表已登记同名命令 0 价防双扣）。
+    - 安全：消息明文与图片不入服务端日志（结构化日志只记 client/pages/tokens/
+      credits/latency）；session_title 仅入台账 detail。
+    """
+    _check_credit(binding)
+    started = time.perf_counter()
+
+    results = await asyncio.gather(
+        *[_parse_history_page(i, img) for i, img in enumerate(req.images)]
+    )
+    ok_results = [r for r in results if r["ok"]]
+    failed_pages = [r["index"] for r in results if not r["ok"]]
+
+    if not ok_results:
+        _record_history_failure(binding, req, failed_pages, status="failed")
+        raise HTTPException(status_code=502, detail="MODEL_UNAVAILABLE: 全部页面解析失败")
+
+    messages, page_gap = _merge_session_pages([r["messages"] for r in ok_results])
+
+    prompt_tokens = sum(int((r["usage"] or {}).get("prompt_tokens") or 0) for r in ok_results)
+    completion_tokens = sum(int((r["usage"] or {}).get("completion_tokens") or 0) for r in ok_results)
+    cached_tokens = sum(int((r["usage"] or {}).get("cached_tokens") or 0) for r in ok_results)
+    total_ms = int((time.perf_counter() - started) * 1000)
+
+    credits = _session_history_credit_cost(prompt_tokens, completion_tokens)
+    provider_name, model = _split_model_spec(settings.session_history.model)
+    billing = ClientUsageLogDB.record_llm_usage(
+        tenant_id=binding.tenant_id,
+        binding_id=binding.binding_id,
+        model=model,
+        provider=provider_name,
+        usage={
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "cached_tokens": cached_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+        },
+        stage="session_history",
+        credit_cost_override=credits,
+        detail={
+            "client": req.client,
+            "session_title": req.session_title,
+            "pages_total": len(req.images),
+            "pages_ok": len(ok_results),
+            "failed_pages": failed_pages,
+            "page_gap": page_gap,
+            "latency_ms_total": total_ms,
+        },
+    )
+
+    if failed_pages:
+        _record_history_failure(binding, req, failed_pages, status="partial")
+
+    resp: dict[str, Any] = {
+        "messages": messages,
+        "pages": len(ok_results),
+        "latency_ms": {"total": total_ms, "per_page": [r["latency_ms"] for r in results]},
+        "model_usage": {"prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens},
+        "billing": {"credits_charged": billing["credit_cost"]},
+    }
+    if failed_pages:
+        resp["failed_pages"] = failed_pages
+    if page_gap:
+        resp["warning"] = "page_gap"
+
+    # 结构化日志：不含消息明文/图片内容（安全要求）
+    logger.info(
+        f"会话历史解析 client={req.client} tenant={binding.tenant_id} "
+        f"binding={binding.binding_id} pages={len(ok_results)}/{len(req.images)} "
+        f"messages={len(messages)} tokens=p:{prompt_tokens}/c:{completion_tokens} "
+        f"credits={billing['credit_cost']} latency={total_ms}ms "
+        f"failed_pages={failed_pages} page_gap={page_gap}"
+    )
+    return resp
 
 
 # ============== 日志上报 ==============
