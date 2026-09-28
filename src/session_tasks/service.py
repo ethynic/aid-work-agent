@@ -1357,13 +1357,19 @@ def list_tasks(tenant_id: str, user_id: str, *, limit: int = 20, offset: int = 0
         )
         items = [dict(r) for r in cursor.fetchall()]
     # Reuse the ACL-protected projection and never expose encrypted references.
+    # 单条投影失败（如旧主密钥密文解不开）只降级该行，不让整个列表 503：
+    # 列表页必须永远可打开，坏行保留基础字段并标记 projection_degraded。
     for item in items:
-        detail = get_task(tenant_id, user_id, item["id"])
-        spec = detail.get("draft_spec") or detail.get("spec") or {}
-        for key in ("phase", "input_version", "binding_label", "device_online", "last_observed_at", "replies_count", "rounds_count", "decisions_count", "cost", "blocked_reason"):
-            item[key] = detail.get(key)
-        item["goal_summary"] = spec.get("goal", "")[:120]
-        item.update({k: spec.get("limits", {}).get(k) for k in ("max_replies", "max_cost_units", "expires_at")})
+        try:
+            detail = get_task(tenant_id, user_id, item["id"])
+            spec = detail.get("draft_spec") or detail.get("spec") or {}
+            for key in ("phase", "input_version", "binding_label", "device_online", "last_observed_at", "replies_count", "rounds_count", "decisions_count", "cost", "blocked_reason"):
+                item[key] = detail.get(key)
+            item["goal_summary"] = spec.get("goal", "")[:120]
+            item.update({k: spec.get("limits", {}).get(k) for k in ("max_replies", "max_cost_units", "expires_at")})
+        except SessionTaskError as exc:
+            logger.warning("session_task 列表投影降级 tenant=%s task=%s code=%s", tenant_id, item["id"], exc.code)
+            item.update({"projection_degraded": True, "goal_summary": "历史数据不可读", "phase": None})
     return {"total": total, "items": items}
 
 

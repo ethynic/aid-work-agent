@@ -250,6 +250,22 @@ async def create_task(request: Request, idempotency_key: Optional[str] = Header(
         return _validation_error(exc)
 
 
+@router.post("/parse-spec")
+async def parse_spec(request: Request):
+    """自然语言任务描述 → 部分草稿 spec + 缺失要素清单（纯读：绑定查询 + LLM，不落库）。"""
+    try:
+        tenant_id, user_id = await _current_user_and_tenant(request)
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise SessionTaskError("请求体必须是对象", ERR_VALIDATION_FAILED, 400)
+        from .nl_parse import parse_natural_language
+
+        scenario_key = str(body.get("scenario_key") or "weixin.conversation.v1")
+        return _ok(await parse_natural_language(tenant_id, user_id, str(body.get("text") or ""), scenario_key))
+    except SessionTaskError as exc:
+        return _from_service_error(exc)
+
+
 @router.get("")
 async def list_tasks(request: Request, status: Optional[str] = None, limit: int = 20, offset: int = 0):
     try:

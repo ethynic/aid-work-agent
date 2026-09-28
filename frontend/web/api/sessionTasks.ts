@@ -16,6 +16,20 @@ export interface SessionTask {
   device_online?: boolean; last_observed_at?: string; replies_count?: number; rounds_count?: number; decisions_count?: number; expires_at?: string; cost?: { settled: number; reserved: number }
 }
 export interface Timeline { batches: Record<string, any>[]; decisions: Record<string, any>[]; executions: Record<string, any>[]; messages?: Record<string, any>[] }
+export interface NlParseResult {
+  spec: {
+    goal: string
+    opening_text: string | null
+    completion_rule: CompletionRule | null
+    reply_policy: { style: string; allowed_facts: string[]; forbidden_commitments: string[] }
+    limits: { max_replies: number; max_decisions: number; max_cost_units: number; expires_at: string | null; peer_wait_timeout_seconds: number }
+    work_window: { start_hour_utc: number; end_hour_utc: number; weekdays_utc: number[] } | null
+  }
+  binding_candidates: Binding[]
+  bindings: Binding[]
+  missing: { field: string; message: string }[]
+  parse_error: string | null
+}
 export class SessionTaskApiError extends Error {
   constructor(message: string, public code: string, public status: number) { super(message) }
 }
@@ -33,6 +47,7 @@ export const sessionTasksApi = {
   timeline: (id: string, signal?: AbortSignal, offset = 0) => request<Timeline>(`/session-tasks/${id}/timeline?limit=100&offset=${offset}`, 'GET', undefined, signal),
   capabilities: (signal?: AbortSignal) => request<{ publish_enabled: boolean; reason?: string }>('/session-tasks/capabilities', 'GET', undefined, signal),
   bindings: (signal?: AbortSignal) => request<Binding[]>('/weixin-conversation/bindings?limit=200', 'GET', undefined, signal),
+  parseSpec: (text: string, signal?: AbortSignal) => request<NlParseResult>('/session-tasks/parse-spec', 'POST', { text }, signal),
   create: (body: unknown, key: string, signal?: AbortSignal) => request<{ task_id: string; version: number; status: string }>('/session-tasks', 'POST', body, signal, key),
   save: (id: string, version: number, spec: TaskSpec, signal?: AbortSignal) => request<SessionTask>(`/session-tasks/${id}/draft`, 'PATCH', { expected_version: version, spec }, signal),
   confirm: (id: string, version: number, signal?: AbortSignal) => request<{ confirmation_id: string }>(`/session-tasks/${id}/confirm`, 'POST', { expected_version: version }, signal),

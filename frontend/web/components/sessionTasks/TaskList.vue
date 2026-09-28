@@ -9,7 +9,7 @@
     <div class="table-scroll-wrapper flex-1" @scroll.passive="onScroll">
       <BaseTable class="min-w-[1100px]" :columns="columns" :data="items" row-key="id" :loading="loading && !items.length">
         <template #sequence="{ index }">{{ isMobile ? index + 1 : (page - 1) * 20 + index + 1 }}</template>
-        <template #goal_summary="{ row }"><span>{{ row.goal_summary || '未提供目标摘要' }}</span></template>
+        <template #goal_summary="{ row }"><span :class="row.projection_degraded ? 'text-warning-700' : ''">{{ row.projection_degraded ? '历史数据不可读' : (row.goal_summary || '未提供目标摘要') }}</span></template>
         <template #status="{ row }">{{ phaseLabel(row as SessionTask) }}</template>
         <template #device_online="{ row }">{{ row.device_online ? '在线' : '离线 / 未知' }}</template>
         <template #last_observed_at="{ row }">{{ dateLabel(row.last_observed_at) }}</template>
@@ -22,33 +22,55 @@
       <p v-if="isMobile && items.length" class="p-3 text-center text-muted">{{ loadingMore ? '加载中…' : items.length >= total ? '没有更多了' : '下滑加载更多' }}</p>
     </div>
     <BasePagination v-if="!isMobile" :current-page="page" :page-size="20" :total="total" :show-size-changer="false" @update:current-page="load" />
-    <BaseModal accessible :model-value="creating" title="新建会话任务草稿" size="xl" :close-on-overlay="false" @update:model-value="value => { if (!value) closeCreate() }">
+    <BaseModal accessible :model-value="creating" title="新建会话任务" size="xl" :close-on-overlay="false" @update:model-value="value => { if (!value) closeCreate() }">
       <form @submit.prevent="save">
-        <div class="flex gap-2 mb-4"><BaseButton type="submit" :disabled="saving || !selected">{{ saving ? '保存中…' : '保存草稿' }}</BaseButton><BaseButton type="button" intent="secondary" :disabled="saving" @click="closeCreate">取消</BaseButton></div>
+        <div class="flex gap-2 mb-4"><BaseButton type="submit" :disabled="saving || !requiredReady">{{ saving ? '保存中…' : '保存草稿' }}</BaseButton><BaseButton type="button" intent="secondary" :disabled="saving" @click="closeCreate">取消</BaseButton></div>
         <p v-if="createError" role="alert" class="text-danger-600 mb-3">{{ createError }}</p>
+        <BaseCard title="第一步：用自然语言描述任务" class="mb-4">
+          <label class="block text-sm text-muted mb-2">想联系谁、要达成什么、聊到什么程度、什么时候截止——直接描述即可
+            <textarea v-model="nlText" :class="input()" rows="3" maxlength="4000" :disabled="parsing" placeholder="示例：给张三发消息介绍我们的会员新版，聊够 3 轮就算完成，本周五 18 点前结束，不要提价格优惠" />
+          </label>
+          <div class="flex items-center gap-2 flex-wrap">
+            <BaseButton type="button" intent="secondary" :disabled="parsing || !nlText.trim()" @click="parse">{{ parsing ? '解析中…' : '智能解析' }}</BaseButton>
+            <span v-if="parseStatus" role="status" class="text-sm" :class="parseOk ? 'text-success-600' : 'text-warning-700'">{{ parseStatus }}</span>
+          </div>
+          <p class="text-xs text-muted mt-2">解析会自动填好绑定和下方表单；描述里没提到的必要项会在这里提醒，全部就绪后才能保存。也可以跳过解析直接手动填写。</p>
+        </BaseCard>
+        <BaseCard title="第二步：必要要素清单" class="mb-4">
+          <ul class="space-y-1 text-sm">
+            <li v-for="item in requiredItems" :key="item.key">
+              <span>{{ item.ok ? '✅' : '⬜' }} {{ item.label }}</span>
+              <span v-if="!item.ok" class="text-warning-700"> —— {{ item.hint }}</span>
+            </li>
+          </ul>
+        </BaseCard>
         <label class="block text-sm text-muted mb-4">对象 / 设备 / 账号绑定 *<BaseSelect v-model="selected"><option value="">请选择已有会话绑定</option><option v-for="binding in bindings" :key="binding.id" :value="binding.id">{{ binding.conversation_label || binding.id }} · {{ binding.conversation_type }} · {{ binding.verification_status }} · 设备 {{ binding.device_id }}</option></BaseSelect></label>
         <p v-if="!bindings.length" class="text-sm text-muted mb-3">暂无可用绑定。请先在设备完成会话绑定；草稿不会执行或发送。</p>
+        <p class="text-sm text-muted mb-2">任务详情（解析结果已自动填入，可检查调整）：</p>
         <TaskSpecForm ref="editor" :disabled="saving" />
       </form>
     </BaseModal>
   </div>
 </template>
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ref, computed, nextTick, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useMobile } from '@/composables/useMobile'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
 import BaseBadge from '@/components/ui/BaseBadge.vue'
+import BaseCard from '@/components/ui/BaseCard.vue'
 import BaseModal from '@/components/ui/BaseModal.vue'
 import BaseTable from '@/components/ui/BaseTable.vue'
 import BasePagination from '@/components/ui/BasePagination.vue'
 import TaskSpecForm from './TaskSpecForm.vue'
+import { input } from '@/variants/input'
 import { sessionTasksApi, type SessionTask, type Binding } from '@/api/sessionTasks'
 import { statusLabels, phaseLabel, dateLabel, errorMessage } from './presentation'
 const router = useRouter(), route = useRoute(), { isMobile } = useMobile()
 const items = ref<SessionTask[]>([]), total = ref(0), page = ref(1), status = ref(''), loading = ref(false), loadingMore = ref(false), error = ref('')
 const creating = ref(false), saving = ref(false), createError = ref(''), bindings = ref<Binding[]>([]), selected = ref(''), editor = ref<InstanceType<typeof TaskSpecForm>>()
+const nlText = ref(''), parsing = ref(false), parseStatus = ref(''), parseOk = ref(false)
 const notifications = ref<{ id: string; task_id: string; status: string; reason?: string; created_at: string }[]>([])
 let generation = 0, alive = true, controller: AbortController | undefined, draftController: AbortController | undefined, draftGeneration = 0
 let saveAttempt: { body: string; key: string } | undefined
@@ -63,10 +85,37 @@ async function load(next = 1, append = false) {
 }
 function onScroll(event: Event) { const el = event.target as HTMLElement; if (isMobile.value && !loading.value && !loadingMore.value && items.value.length < total.value && el.scrollHeight - el.scrollTop - el.clientHeight < 80) void load(page.value + 1, true) }
 function goDetail(id: string) { void router.push({ name: 'tenant-weixin-session-task-detail', params: { taskId: id } }) }
+// 必要要素清单：目标用户 / 任务目标 / 完成方式 / 截止时间（解析与表单状态实时汇总）
+const missingFieldLabels: Record<string, string> = { binding: '目标用户', goal: '任务目标', completion_rule: '完成方式', expires_at: '截止时间' }
+const editorForm = computed(() => editor.value?.form)
+const requiredItems = computed(() => [
+  { key: 'binding', label: '目标用户（会话绑定）', ok: !!selected.value, hint: '请在下方选择要发消息的对象' },
+  { key: 'goal', label: '任务目标', ok: !!editorForm.value?.goal?.trim(), hint: '请在任务详情表单填写目标' },
+  { key: 'completion_rule', label: '完成方式', ok: !!editorForm.value?.mode, hint: '请在任务详情表单选择聊到什么程度算完成' },
+  { key: 'expires_at', label: '截止时间', ok: !!editorForm.value?.expires, hint: '请在任务详情表单选择截止时间' },
+])
+const requiredReady = computed(() => requiredItems.value.every(item => item.ok))
+async function parse() {
+  if (parsing.value || !nlText.value.trim()) return
+  parsing.value = true; parseStatus.value = ''; parseOk.value = false; createError.value = ''
+  try {
+    const result = await sessionTasksApi.parseSpec(nlText.value.trim(), draftController?.signal)
+    if (result.bindings?.length) bindings.value = result.bindings
+    selected.value = result.binding_candidates[0]?.id || ''
+    await nextTick()
+    editor.value?.load(result.spec)
+    const missing = result.missing.map(item => missingFieldLabels[item.field] || item.field).filter(Boolean)
+    parseOk.value = !result.parse_error
+    parseStatus.value = result.parse_error || (missing.length ? `解析完成，描述中未提到：${missing.join('、')}，请补充后再保存` : '解析完成，请核对清单后保存')
+  } catch (e) {
+    parseStatus.value = `${errorMessage(e)}；可直接手动填写下方表单`
+  } finally { parsing.value = false }
+}
 function closeCreate() { if (saving.value) return; if (!window.confirm('关闭后未保存的草稿内容将丢失，确定关闭？')) return; creating.value = false }
-async function openCreate() { creating.value = true; selected.value = ''; createError.value = ''; saveAttempt = undefined; draftController?.abort(); draftController = new AbortController(); const gen = ++draftGeneration; try { const data = await sessionTasksApi.bindings(draftController.signal); if (alive && gen === draftGeneration && creating.value) bindings.value = data } catch(e) { if (alive && gen === draftGeneration && (e as Error).name !== 'AbortError') createError.value = errorMessage(e) } }
+async function openCreate() { creating.value = true; selected.value = ''; createError.value = ''; saveAttempt = undefined; nlText.value = ''; parseStatus.value = ''; parseOk.value = false; draftController?.abort(); draftController = new AbortController(); const gen = ++draftGeneration; try { const data = await sessionTasksApi.bindings(draftController.signal); if (alive && gen === draftGeneration && creating.value) bindings.value = data } catch(e) { if (alive && gen === draftGeneration && (e as Error).name !== 'AbortError') createError.value = errorMessage(e) } }
 async function save() {
   if (saving.value) return
+  if (!requiredReady.value) { createError.value = '必要要素尚未齐全，请按清单补充后再保存'; return }
   const binding = bindings.value.find(b => b.id === selected.value); if (!binding || !editor.value) return
   const gen = draftGeneration; saving.value = true; createError.value = ''
   try { const body = { scenario_key: 'weixin.conversation.v1', device_id: binding.device_id, account_binding_id: binding.account_binding_id, conversation_binding_id: binding.id, spec: editor.value.getSpec() }; const serialized = JSON.stringify(body); if (saveAttempt?.body !== serialized) saveAttempt = { body: serialized, key: crypto.randomUUID() }; const result = await sessionTasksApi.create(body, saveAttempt.key, draftController?.signal); if (alive && gen === draftGeneration && creating.value) { creating.value = false; goDetail(result.task_id) } }
