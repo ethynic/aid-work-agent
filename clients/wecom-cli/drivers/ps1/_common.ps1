@@ -108,11 +108,13 @@ function Get-WeComTopLevelWindows {
 }
 
 function Find-WeComLoginWindow {
-    # 登录二维码页：小尺寸 WeWorkWindow（真机典型 380x540；启发式沿用 wecom-personal-rpa F7）
+    # 登录二维码页（2026-09-28 真机实测修订：企微 5.0.9 登录窗 class=WeChatLogin，
+    # 实测 300x420 @ 标题「企业微信」——旧启发式只认小尺寸 WeWorkWindow 会漏检报 offline）。
+    # 双类名匹配：WeChatLogin（新版实测）或小尺寸 WeWorkWindow（RPA 时代形态，向后兼容）。
     foreach ($w in @(Get-WeComTopLevelWindows)) {
-        if ($w.Class -eq 'WeWorkWindow' -and $w.Visible -and $w.W -gt 0 -and $w.W -lt 500 -and $w.H -lt 700) {
-            return $w
-        }
+        if (-not $w.Visible) { continue }
+        if ($w.Class -eq 'WeChatLogin' -and $w.W -gt 0) { return $w }
+        if ($w.Class -eq 'WeWorkWindow' -and $w.W -gt 0 -and $w.W -lt 500 -and $w.H -lt 700) { return $w }
     }
     return $null
 }

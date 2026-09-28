@@ -275,3 +275,10 @@ Authorization: Bearer $TYPESAFE_API_KEY
 ### 部署决策记录（2026-09-28，用户定稿）
 
 - **常驻 OCR 不进 CLI**：OCR 服务部署方向为独立容器/云服务（性能更好、集中管理）；CLI 侧后续将把 OCR 调用从本地 venv python 改为 HTTP 远程服务（涉及 _common.ps1 Invoke-WeComChatOcr 与各驱动 OCR 入口，迁移时需处理网络失败降级与延迟预算）。
+
+### E5 真机补验（2026-09-28 用户登出配合）——✅ 全链路闭环
+
+- **发现并修复 offline 误报**：企微 5.0.9 登录窗 class=`WeChatLogin`（实测 300x420），旧 Find-WeComLoginWindow 只认小尺寸 WeWorkWindow → 漏检报 offline。修复为双类名匹配（WeChatLogin 优先 + 旧形态向后兼容）。
+- **need_login 全链路实测**：probe 返回 login_state=need_login + login_window rect + qr_image_base64（300x420 PNG，双峰像素特征）+ hint=normal（正常态无误报）；base64 解码为图片 → 用户手机扫码 → **登录成功**（监控轮询 4 秒内捕获 online 转换，新主窗口 hwnd）。
+- 「发给别人扫码」通路：CLI 侧 qr_image_base64 即为此设计（生产走 RPA 模式：上报服务端→推送前端/手机通知）；本次用本地图片+屏幕显示等效验证整条链路（截图→base64→图片→扫码→online）。二维码凭证文件用后即删。
+- 过期态（expired hint）未覆盖（用户扫码及时）；下次遇到再补。
