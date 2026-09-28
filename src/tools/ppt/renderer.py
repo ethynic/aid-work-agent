@@ -2,6 +2,7 @@
 
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -75,8 +76,11 @@ class NodePptRenderer:
                 json.dumps(qa, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
-            os.replace(rendered_path, output)
-            os.replace(published_layout, output.with_suffix(".layout.json"))
+            # 发布产物：TMPDIR（容器层）与输出目录（如 bind mount 的 storage）
+            # 可能不在同一文件系统，os.replace 跨设备会抛 EXDEV（Errno 18）；
+            # shutil.move 同设备时仍是原子 rename，跨设备时退化为拷贝后删除
+            shutil.move(str(rendered_path), output)
+            shutil.move(str(published_layout), str(output.with_suffix(".layout.json")))
         return {"file_path": str(output), "qa": qa}
 
     @staticmethod
