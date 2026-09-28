@@ -290,3 +290,23 @@ Authorization: Bearer $TYPESAFE_API_KEY
 - CR 参数化 refuseDesc（readonly 链路歧义文案「已中止读取」）；测试 172/172。
 - 真机验证：快路径（陆伟会话，peer 消息 side 正确）+ 分发路径（navigated:true 自动导航到文件传输助手）；**已知自发文本 7/7 全部 self（右侧）**——side 语义实测锁定（左=peer 右=self）；time 字段 11/17 覆盖（其余为最早页首条分割线之前，符合设计）。
 - 已知限制（记录）：**图片消息的 side 判定不可靠**——OCR 读的是图内文本（从图左缘开始），M7 图片消息被判 peer；文本消息无此问题。缓解方向（后续）：图片气泡检测（像素方差特征）排除 side 判定或标记 image 类型。
+
+### E7：多模态模型提取聊天记录（2026-09-28，用户方案验证）——✅ 质量碾压 OCR，延迟待优化
+
+方案（用户定稿）：read-session 截图按时间序（旧→新）多图一次调用多模态模型（GLM-5.3-Flash，`open.bigmodel.cn` OpenAI 兼容，模仿 weixin-cli 视觉通道），模型输出结构化聊天记录——**作为聊天记录获取主通道，OCR 滚动方案降为兜底**（模型不可达时）。服务端后续加统一接口（企微/微信 CLI 共用）。
+
+实验（`experiments/probes/e7-vlm-history/vlm_history.py`，2 页截图 587KB base64）：
+
+| 维度 | GLM-5.3-Flash | OCR 现状 |
+|------|---------------|----------|
+| 消息完整性 | 12/12 | 12/12 |
+| side 准确率 | **12/12（含 2 张图片消息全对 self）** | 文本对，图片误判 peer |
+| kind 标注 | text/image/file/timeline | 无 |
+| 时间戳 | 每条精确（6 时段全对） | 分割线沿袭 |
+| 跨页去重 | 零重复 | 零重复 |
+| 延迟 | 35.4s（1981 reasoning tokens ≈75 tok/s 生成是瓶颈） | 每页 ~2s |
+| 成本 | 7437 tokens（Flash 档，极低） | 0 |
+
+- 关键优势实证：**图片消息 side/kind 判定完美**（模型看气泡位置，OCR 只看文字坐标）——直接解决 M9 记录的已知限制；多行消息仅提取首行（prompt 可优化要求完整转录）。
+- thinking 档位：该模型版本始终思考不可关闭（API 报错自相矛盾：提示用 low 又拒 low）；降采样无助（瓶颈在生成非图片 token）。
+- 架构建议（下阶段）：服务端 `/api/client/v1/session-history`（企微/微信共用，激活码计费同 weixin-cli 模式）；CLI 侧 read-session 双通道（模型主/OCR 兜底，模型不可达/超时自动降级，数据结构统一 {time,side,kind,text}）。
