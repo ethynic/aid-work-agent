@@ -17,7 +17,13 @@ import pytest
 
 from src.config.settings import BossToolBillingConfig, settings
 from src.db.client_binding_db import BOSS_TOOL_BINDING_SENTINEL, BOSS_TOOL_USAGE_STAGE
-from src.local_tools.proxy_tool import BossGotoTool, BossGreetTool
+from src.local_tools.proxy_tool import (
+    BossCloseDetailTool,
+    BossGotoTool,
+    BossGreetDetailTool,
+    BossGreetTool,
+    BossOpenDetailTool,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -72,6 +78,14 @@ def _patch_repo(devices, invocation=None, events=None):
 class TestPriceResolution:
     def test_priced_tool_hit_table(self):
         assert BossGreetTool()._tool_credit_price() == 1.0
+
+    def test_detail_greet_trio_pricing(self):
+        """详情页三件套（2026-09-28 筛选主路径）：greet_detail 是外部写动作（真实发消息，
+        消耗开聊权益），与列表页 boss_greet 同价 1.0；open/close 为页面状态操作免费。
+        防回归：价目表漏登记 greet_detail 会让筛选主路径的写动作全部免费"""
+        assert BossGreetDetailTool()._tool_credit_price() == 1.0
+        assert BossOpenDetailTool()._tool_credit_price() == 0.0
+        assert BossCloseDetailTool()._tool_credit_price() == 0.0
 
     def test_unlisted_tool_falls_back_to_default_zero(self):
         assert BossGotoTool()._tool_credit_price() == 0.0

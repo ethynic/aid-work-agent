@@ -331,7 +331,8 @@ boss_tool_billing:
   enabled: true
   default_credit_price: 0.0  # 未列出工具的单次价格
   tool_credit_prices:
-    boss_greet: 1.0            # 打招呼（消耗 BOSS 开聊权益）
+    boss_greet: 1.0            # 列表页打招呼（消耗 BOSS 开聊权益；手动/兜底路径）
+    boss_greet_detail: 1.0     # 详情页打招呼（筛选主路径写动作，与列表页同价）
     boss_send_to: 1.0          # 发消息（真实触达候选人）
     boss_send_current: 1.0     # 当前会话发消息
     boss_accept_resume: 1.0    # 接收简历
@@ -340,6 +341,8 @@ boss_tool_billing:
     boss_resume_batch: 0.0     # 批量读取（同上，按份收简历识别费）
     boss_select_job: 0.5       # 切换职位
     boss_filter: 0.5           # 设置筛选
+    boss_open_detail: 0.0      # 找人开简历详情（页面状态操作，与 goto/open_chat 同类免费）
+    boss_close_detail: 0.0     # 关闭简历详情（清理步，无业务副作用）
     # 以下工具默认免费（未列出走 default_credit_price）：
     # boss_goto / boss_clear_filter / boss_filter_options / boss_list_jobs /
     # boss_read_chat / boss_open_chat / boss_jobs_list / boss_interview_notify / boss_interview_demo
