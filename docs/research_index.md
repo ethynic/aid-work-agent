@@ -26,6 +26,7 @@
 | 懂车帝与汽车之家客户留资统一接入可行性调研 | [automotive-platform-lead-integration-research.md](research/automotive-platform-lead-integration-research.md) | CRM 智能体、汽车平台渠道集成 |
 | 抖音电商飞鸽客服接入 Agent 可行性调研 | [douyin-shop-pigeon-agent-customer-service-research.md](research/douyin-shop-pigeon-agent-customer-service-research.md) | 抖店/飞鸽客服渠道、Agent 自动接待、转人工 |
 | 摘要生成模型性价比实测 | [llm-summary-cost-benchmark.md](research/llm-summary-cost-benchmark.md) | 知识库摘要、lite 通道选型（deepseek/qwen/GLM 三家已实测，含缓存机制对比；2026-09-17 补充外部推送工具调用重放实测：GLM 全漏写鉴权头不可用于工具调用型任务，deepseek-flash 综合最优） |
+| wecom-cli 取代 wecom-personal-rpa 差距分析与实验设计 | [rpa-replacement-gap-analysis-20260928.md](research/wecom-cli/rpa-replacement-gap-analysis-20260928.md) | wecom-cli 第二期（图片/文件发送、粘贴机制裁定、视觉定位对比、登录态二维码） |
 | 抖音本地生活订单→门店微信群推送系统 私有化部署可行性评估 | [douyin-lifeservice-order-wechat-group-dispatch-research.md](research/douyin-lifeservice-order-wechat-group-dispatch-research.md) | 竞品（TkTok Sys）视频还原；抖音生活服务开放能力接入路径（商家自研 vs 服务商）、微信/企微推送通道选型、功能模块与工作量（一期约 8~10 人月）、预开通账号清单、… |
 | 抖音来客订单同步与门店微信播报系统 解决方案（含开发计划与报价，面向客户） | [design/douyin-lifeservice-dispatch/solution-proposal.md](design/douyin-lifeservice-dispatch/solution-proposal.md) | 一期打包价 ¥29.8 万/203 人日/约 14 周交付；通道矩阵（企微内部群 webhook 全自动合规 / 企微客户群群发限频 / RPA 播报为可选项）；抖店发货提醒等为二期可选包 |
 | 小红书客服接入 Agent 可行性调研 | [xiaohongshu-agent-customer-service-integration-research.md](research/xiaohongshu-agent-customer-service-integration-research.md) | 小红书电商客服、专业号私信、小程序客服、Agent 自动接待与转人工 |
@@ -56,3 +57,5 @@
 | 竣工图纸差异对比（转图片 + 多模态）测试报告 | [cad-multimodal-drawing-comparison-test-report.md](research/cad-multimodal-drawing-comparison-test-report.md) | 图纸差异对比功能（2026-09-04 实验）。 |
 | CAD 处理与多模态图纸对比技术报告 | [cad-processing-and-multimodal-drawing-comparison-tech-report.md](research/cad-processing-and-multimodal-drawing-comparison-tech-report.md) | 图纸差异对比功能（2026-09-04）。 |
 | 微信公众号历史文章清单获取原理调研（wechat-download-api 源码级分析） | [调研](research/wechat-mp/wechat-download-api-principle-research.md) | 公众号内容入知识库 WPS 托底清单源：机制=管理员扫码会话调公众平台后台 searchbiz/appmsgpublish；结论=方法可自研借鉴（非独门秘籍），Docker 降级为实验对照与应急选项（2026-09-16）。 |
+| 邮箱服务器自动发现（Autoconfig）调研与配置体验优化方案 | [调研](research/email-server-autoconfig-research.md) | 邮箱设置体验优化：内置表+MX/ISPDB/Autoconfig 探测链，用户只填地址+授权码；含前端两步式表单与分期建议。 |
+| 文生图/图生图能力缺失核查与生图模型选型调研 | [调研](research/image-generation-model-research.md) | 生图工具选型（2026-09-28）：确认项目无 AI 生图能力；建议一期智谱 CogView-4（文生图）+ 百炼 qwen-image-edit（图生图）复用现有账号，二期可选火山 Seedream。 |

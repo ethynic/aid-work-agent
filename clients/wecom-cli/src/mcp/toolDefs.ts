@@ -60,8 +60,11 @@ export const TOOL_DEFS: WecomToolDef[] = [
     title: '企业微信搜索联系人/会话',
     description:
       '在企业微信主窗口搜索框按关键词检索联系人/群聊（只读，不打开会话、不读历史消息）。' +
-      '返回候选列表（name/subtitle/section），每个候选带 target_ref（HMAC 签名短期句柄，有效期 5 分钟），' +
-      '供 wecom_message_send 作为发送目标使用。无结果返回 TARGET_NOT_FOUND。',
+      '返回候选列表（name/subtitle/section/x/y 及 Jev 概率）与 best 最优候选（含置信度与概率分布），' +
+      '每个候选带 target_ref（HMAC 签名短期句柄，有效期 5 分钟，payload 含 overlay 相对坐标），' +
+      '供 wecom_message_send 等后续命令作为目标使用。' +
+      '注意：搜索结果面板（overlay）在返回后保持打开，其坐标句柄由后续 select 类命令消费。' +
+      '无结果返回 TARGET_NOT_FOUND（data 附 reason 与 jev/timing_ms 诊断信息）。',
     zodShape: {
       query: z.string().min(1).max(100).describe('搜索关键词（联系人/群名，1-100 字）'),
       type: z.enum(['contact', 'group', 'any']).optional().describe('过滤分区：contact=联系人，group=群聊，any=全部（默认）'),

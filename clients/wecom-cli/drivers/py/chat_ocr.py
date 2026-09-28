@@ -12,6 +12,9 @@
 #   searchbox — 主窗口：读顶部搜索框内容 tokens → {texts}
 #       （企微搜索框保留上次查询词：搜索前判残留/清空后复核/输入后回读验证用；
 #       占位符「搜索」与 × 清空按钮误识由 PS 侧过滤，此处只平铺 tokens）
+#   boxes — 任意截图的原始 token 框（带坐标）→ {boxes: [{text, x0, y0, x1, y1}]}
+#       （M4 动态搜索框状态检测用：PS 侧裁切放大后调本模式，坐标除回放大倍率后
+#       由 PS 侧 /4 加回裁切偏移换算成窗口坐标；不做任何过滤）
 #   unread  — 主窗口：聚合未读会话（M3）→ {unread: [{name, preview, unread_count, x, y}]}
 #       未读角标 = 会话行头像右上角的红色圆形白字数字（像素 blob 检测定位 +
 #       裁切放大单独 OCR 读数，读不出兜底 1），y 与会话名称行对齐即归属该行；
@@ -394,6 +397,12 @@ def analyze_searchbox(boxes, img_path):
     return {'texts': texts}
 
 
+# ---------- boxes：原始 token 框（带坐标，不过滤） ----------
+
+def analyze_boxes(boxes, img_path):
+    return {'boxes': boxes}
+
+
 # ---------- unread：左栏会话列表未读聚合（M3） ----------
 
 def is_time_box(b, w):
@@ -587,9 +596,9 @@ def analyze_history(boxes, img_path):
 def main():
     modes = {'search': analyze_search, 'title': analyze_title, 'input': analyze_input,
              'bubble': analyze_bubble, 'preview': analyze_preview, 'searchbox': analyze_searchbox,
-             'unread': analyze_unread, 'history': analyze_history}
+             'boxes': analyze_boxes, 'unread': analyze_unread, 'history': analyze_history}
     if len(sys.argv) < 3 or sys.argv[2] not in modes:
-        emit({'error': 'BAD_ARGS', 'message': '用法：chat_ocr.py <截图路径> <search|title|input|bubble|preview|searchbox|unread|history>'})
+        emit({'error': 'BAD_ARGS', 'message': '用法：chat_ocr.py <截图路径> <search|title|input|bubble|preview|searchbox|boxes|unread|history>'})
         return
     img_path, mode = sys.argv[1], sys.argv[2]
     boxes, err = load_boxes(img_path)

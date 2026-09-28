@@ -23,17 +23,30 @@ function silentCtx(): OpContext {
 
 // ---------- wecom_chat_search ----------
 
-function makeSearchOp(runDriverFn: RunPowerShellDriverFn, createRefFn?: (name: string, type: string, subtitle?: string) => string) {
+const tempDirs: string[] = []
+after(() => {
+  for (const d of tempDirs) rmSync(d, { recursive: true, force: true })
+})
+
+function makeSearchOp(
+  runDriverFn: RunPowerShellDriverFn,
+  createRefFn?: (name: string, type: string, subtitle?: string, coords?: { x: number; y: number }) => string,
+) {
+  // M4 起 search 也会建 artifact 目录（稳定帧截图 + driver-log）：测试注入临时目录，不碰真实 %LOCALAPPDATA%
+  const dir = mkdtempSync(join(tmpdir(), 'wecom-chat-search-test-'))
+  tempDirs.push(dir)
   return createWecomChatSearchOperation({
     runDriverFn,
     createRefFn: createRefFn ?? ((name, type, subtitle) => `ref:${type}:${name}:${subtitle ?? ''}`),
+    artifactDirFn: () => dir,
   })
 }
 
 test('chat_search：成功 → 候选带 name/subtitle/section/target_ref，effect=none', async () => {
   const op = makeSearchOp(async (opts) => {
     assert.ok(opts.script.endsWith('chat-search.ps1'))
-    assert.deepEqual(opts.args, ['-Query', '陆伟'])
+    assert.deepEqual(opts.args?.slice(0, 2), ['-Query', '陆伟'])
+    assert.equal(opts.args?.[2], '-ArtifactDir')
     return {
       items: [
         { name: '陆伟', subtitle: '微信联系人', section: '联系人' },
@@ -121,11 +134,6 @@ function makeSendOp(runDriverFn: RunPowerShellDriverFn, verifyRefFn?: (ref: stri
   })
   return { op, dir }
 }
-
-const tempDirs: string[] = []
-after(() => {
-  for (const d of tempDirs) rmSync(d, { recursive: true, force: true })
-})
 
 test('message_send：成功 → OK + effect=applied，驱动参数带 name/subtitle/section/text/ArtifactDir', async () => {
   const { op, dir } = makeSendOp(async (opts) => {

@@ -85,6 +85,8 @@ export async function runWecomOperation(
         : (err instanceof CodedOperationError && err.effectOverride) ||
           writeEffect(false, mapped.code, tracker.completed)
     const data: Record<string, unknown> = {}
+    // 主动失败附带的结构化 data（如 chat_search TARGET_NOT_FOUND 的 query/jev 透传）
+    if (err instanceof CodedOperationError && err.data) Object.assign(data, err.data)
     if (kind === 'write' && tracker.completed > 0) data.completed = tracker.completed
     return failResult(runId, mapped.code, mapped.message, effect, data)
   }

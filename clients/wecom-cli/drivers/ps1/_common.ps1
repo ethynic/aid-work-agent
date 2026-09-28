@@ -572,6 +572,262 @@ function ConvertTo-WeComNormalized([string]$s) {
     return $sb.ToString().ToLower()
 }
 
+# ---------- M4：搜索 V2（attachstate 聚焦 / 动态搜索框状态 / Jev 决策） ----------
+# 2026-09-28 真机验证结论（experiments/probes/e1/e2/e3 系列）：
+#   - attachstate 组合键（AttachThreadInput 共享键状态 + PostMessage）全后台 ~250ms 可用；
+#     keybd_event/SendInput 被企微 5.0.9 丢弃（M1 结论，继续禁止）；ESC 禁用（最小化企微）。
+#   - 旧固定像素带 searchbox OCR（x∈[140,510]）在窗口 1280 宽时把聊天区标题误判为残留
+#     （已证实 bug）：改为裁切 x∈[120,420]、y∈[0,62] + 4x 放大 + 坐标判态（Get-WeComSearchBoxState）。
+#   - Jev 决策 API（api.typesafe.ai/v1/systemone）实测通；无 key/超时/HTTP 错一律降级规则兜底。
+
+function Initialize-WeComAttachInput {
+    # attachstate 所需 P/Invoke（AttachThreadInput/Get/SetKeyboardState/GetCurrentThreadId）；幂等
+    if ([type]::GetType('WeComAttach32') -ne $null) { return }
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public class WeComAttach32 {
+    [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+    [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint a, uint b, bool attach);
+    [DllImport("user32.dll")] public static extern bool GetKeyboardState(byte[] ks);
+    [DllImport("user32.dll")] public static extern bool SetKeyboardState(byte[] ks);
+}
+'@
+}
+
+function Send-WeComAttachChordKey {
+    # attachstate 组合键（Ctrl+Vk，全后台）：AttachThreadInput(本线程, 目标窗口线程) →
+    # GetKeyboardState 存副本 → ks[0x11]=0x80（Ctrl 按下）→ SetKeyboardState → PostMessage
+    # WM_KEYDOWN（lParam=1|(scan<<16)）→ 60ms → WM_KEYUP（lParam 再 |0xC0000000）→ finally
+    # 恢复键状态 + detach。scan=MapVirtualKeyW(Vk,0)。
+    # 返回 $true=按键已发出；$false=AttachThreadInput 失败（调用方走降级链）。
+    param(
+        [Parameter(Mandatory)][int64]$Hwnd,
+        [Parameter(Mandatory)][int]$Vk
+    )
+    Initialize-WeComWin32
+    Initialize-WeComAttachInput
+    $wxPid = 0
+    $wxThread = [WeComAttach32]::GetWindowThreadProcessId([IntPtr]$Hwnd, [ref]$wxPid)
+    $me = [WeComAttach32]::GetCurrentThreadId()
+    if (-not [WeComAttach32]::AttachThreadInput($me, $wxThread, $true)) { return $false }
+    $ks = New-Object 'byte[]' 256
+    [void][WeComAttach32]::GetKeyboardState($ks)
+    $saved = $ks.Clone()
+    $ks[0x11] = 0x80
+    [void][WeComAttach32]::SetKeyboardState($ks)
+    try {
+        $scan = [WeComWin32]::MapVirtualKeyW([uint32]$Vk, 0)
+        $lpDown = [IntPtr](1 -bor ($scan -shl 16))
+        $lpUp = [IntPtr](1 -bor ($scan -shl 16) -bor 0xC0000000L)
+        [void][WeComWin32]::PostMessageW([IntPtr]$Hwnd, 0x0100, [IntPtr]$Vk, $lpDown)
+        Start-Sleep -Milliseconds 60
+        [void][WeComWin32]::PostMessageW([IntPtr]$Hwnd, 0x0101, [IntPtr]$Vk, $lpUp)
+        Start-Sleep -Milliseconds 60
+    } finally {
+        [void][WeComAttach32]::SetKeyboardState($saved)
+        [void][WeComAttach32]::AttachThreadInput($me, $wxThread, $false)
+    }
+    return $true
+}
+
+function Get-WeComSearchBoxState {
+    # 动态搜索框状态检测（替代旧 Get-WeComSearchBoxTexts 固定像素带——旧带 x0∈[140,510]
+    # 在窗口 1280 宽时把聊天区标题误判为残留，已证实 bug）：
+    # 截主窗口 → 裁 x∈[120,420]、y∈[0,62]（窗口像素）→ 4x 双三次放大 → RapidOCR boxes
+    # 原始 token → 坐标 /4 加回偏移 = 窗口坐标 → 判态：
+    #   - 占位符：token 匹配 搜[索素粟]（次字误读容忍：索 U+7D22/素 U+7D20/粟 U+7C9B）
+    #   - 按钮：单字符 ^[xX×+十士]$（× 清空按钮 / + 按钮及其误读）
+    #   - 内容 token 用 x1∈[212,400] 判定：OCR 常把图标+文本合并成一个 token「Q 陆伟」，
+    #     x0 是图标的 ~186 不能用；x1 卡 212..400 排除左侧导航角标与右侧 + 按钮区
+    # state：有 ×（x/X/× 单字符）→ has_content；有占位符无 × → empty；否则 unknown
+    # （has_content/unknown 都触发清空）。返回 pscustomobject：
+    #   State / Tokens（日志用格式串）/ TokensRaw（带窗口坐标 token 数组）/
+    #   Content（内容 token 拼接）/ PlaceholderPos、ContentPos（@(x,y) 窗口坐标或 $null，
+    #   聚焦降级链的点击锚点）
+    param(
+        [Parameter(Mandatory)][int64]$MainHwnd,
+        [string]$Tag = 'state'
+    )
+    $shot = Join-Path $env:TEMP ('wecom-driver-sbstate-' + $Tag + '.png')
+    Get-WeComWindowSnapshot -Hwnd $MainHwnd -Path $shot | Out-Null
+    Add-Type -AssemblyName System.Drawing
+    $img = [System.Drawing.Image]::FromFile($shot)
+    $cx0 = 120; $cy0 = 0
+    $cx1 = [Math]::Min(420, $img.Width); $cy1 = [Math]::Min(62, $img.Height)
+    $crop = New-Object System.Drawing.Bitmap (($cx1 - $cx0) * 4), (($cy1 - $cy0) * 4)
+    $g = [System.Drawing.Graphics]::FromImage($crop)
+    $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+    $g.DrawImage($img, (New-Object System.Drawing.Rectangle 0, 0, $crop.Width, $crop.Height),
+        (New-Object System.Drawing.Rectangle $cx0, $cy0, ($cx1 - $cx0), ($cy1 - $cy0)),
+        [System.Drawing.GraphicsUnit]::Pixel)
+    $g.Dispose()
+    $cropPath = $shot -replace '\.png$', '-crop.png'
+    $crop.Save($cropPath, [System.Drawing.Imaging.ImageFormat]::Png)
+    $img.Dispose(); $crop.Dispose()
+
+    # chat_ocr boxes 模式（内部 2x 放大后除回，坐标落在 4x 裁切图坐标系）→ /4 加回偏移
+    $ocr = Invoke-WeComChatOcr -ImagePath $cropPath -Mode 'boxes'
+    $mapped = @($ocr.boxes | ForEach-Object {
+        [pscustomobject]@{
+            text = [string]$_.text
+            x0 = [int]($cx0 + $_.x0 / 4); x1 = [int]($cx0 + $_.x1 / 4)
+            y0 = [int]($cy0 + $_.y0 / 4); y1 = [int]($cy0 + $_.y1 / 4)
+        }
+    })
+    # × 清空按钮（x/X/× 单字符；+/十/士是右侧 + 按钮误读，不指示有内容）
+    $xBox = @($mapped | Where-Object { $_.text -match '^[xX×]$' }) | Select-Object -First 1
+    $placeholder = @($mapped | Where-Object { $_.text -match '^搜[索素粟]$' -or $_.text -eq '搜' }) | Select-Object -First 1
+    # 占位符剔除只按占位符形态（^搜[索素粟]?$，同上方 $placeholder 判定）：整串含「搜」的
+    # 真查询词（如「搜索测试」）不得被 substring 排除，否则回读 Content 恒空 → 误杀 UI_CHANGED
+    $content = @($mapped | Where-Object {
+        $_.text -notmatch '^搜[索素粟]?$' -and
+        $_.text -notmatch '^[xX×+十士]$' -and
+        $_.x1 -ge 212 -and $_.x1 -le 400 -and
+        $_.text.Length -ge 1 -and $_.text.Length -le 12
+    })
+    $state = 'unknown'
+    if ($placeholder -and -not $xBox) { $state = 'empty' }
+    elseif ($xBox) { $state = 'has_content' }
+    $phPos = $null
+    if ($placeholder) { $phPos = @([int](($placeholder.x0 + $placeholder.x1) / 2), [int](($placeholder.y0 + $placeholder.y1) / 2)) }
+    $ctPos = $null
+    if ($content.Count -gt 0) {
+        $c0 = $content[0]
+        $ctPos = @([int](($c0.x0 + $c0.x1) / 2), [int](($c0.y0 + $c0.y1) / 2))
+    }
+    return [pscustomobject]@{
+        State = $state
+        Tokens = (($mapped | ForEach-Object { '{0}@{1}-{2},y{3}' -f $_.text, $_.x0, $_.x1, $_.y0 }) -join ' | ')
+        TokensRaw = $mapped
+        Content = (($content | ForEach-Object { $_.text }) -join '')
+        PlaceholderPos = $phPos
+        ContentPos = $ctPos
+    }
+}
+
+function Clear-WeComSearchBoxV2 {
+    # V2 清空（前提：搜索框已聚焦，即 Focus-WeComSearchBox 之后调用）：
+    # attachstate Ctrl+A（VK 'A'=0x41 全选）→ 150ms → WM_KEYDOWN VK_DELETE(0x2E) →
+    # 50ms → WM_KEYUP → 300ms。副作用：清空会关闭已打开的搜索 overlay（企微行为）。
+    # 复核（必须 empty）由调用方做：清不空 UI_CHANGED fail-closed。
+    # 返回 $true=按键序列已发出；$false=attach 失败（复核大概率不过，由调用方判）。
+    param([Parameter(Mandatory)][int64]$MainHwnd)
+    $ok = Send-WeComAttachChordKey -Hwnd $MainHwnd -Vk 0x41
+    Start-Sleep -Milliseconds 150
+    Initialize-WeComWin32
+    $scan = [WeComWin32]::MapVirtualKeyW([uint32]0x2E, 0)
+    $lpDown = [IntPtr](1 -bor ($scan -shl 16))
+    $lpUp = [IntPtr](1 -bor ($scan -shl 16) -bor 0xC0000000L)
+    [void][WeComWin32]::PostMessageW([IntPtr]$MainHwnd, 0x0100, [IntPtr]0x2E, $lpDown)
+    Start-Sleep -Milliseconds 50
+    [void][WeComWin32]::PostMessageW([IntPtr]$MainHwnd, 0x0101, [IntPtr]0x2E, $lpUp)
+    Start-Sleep -Milliseconds 300
+    return $ok
+}
+
+function Invoke-WeComJev {
+    # Jev System One 决策 API（2026-09-28 实测通）：
+    # POST https://api.typesafe.ai/v1/systemone，body = {"state","model":"jev-latest","questions"}，
+    # questions = {名: {type:"choice", instructions, criteria:{键:描述}}}；
+    # 响应 answers.{名}.{choice, confidence, probabilities}。
+    # key 只从环境变量读（进程 env，缺省回退用户级 env——MCP stdio Host 可能只传白名单
+    # 环境变量），绝不入日志/命令行参数/artifact：Authorization 头走 -H @临时文件，
+    # 请求体走 --data-binary @临时文件（UTF-8 无 BOM），用后即删；curl.exe 经
+    # System.Diagnostics.Process 直启（同 Invoke-WeComChatOcr 的管道激活规避）。
+    # 降级契约：无 key/超时(--max-time 15)/HTTP 错/响应异常 → used=false + reason，
+    # 绝不抛错（调用方走规则兜底）。返回 @{ used; latency_ms; answers; reason }。
+    param(
+        [Parameter(Mandatory)][string]$StateText,
+        [Parameter(Mandatory)][hashtable]$Questions
+    )
+    $key = $env:TYPESAFE_API_KEY
+    if ([string]::IsNullOrEmpty($key)) { $key = [Environment]::GetEnvironmentVariable('TYPESAFE_API_KEY', 'User') }
+    if ([string]::IsNullOrEmpty($key)) { return @{ used = $false; latency_ms = 0; reason = 'no_api_key'; answers = $null } }
+
+    $bodyObj = @{ state = $StateText; model = 'jev-latest'; questions = $Questions }
+    $reqPath = Join-Path $env:TEMP ('jev-req-' + [guid]::NewGuid().ToString('N') + '.json')
+    $hdrPath = Join-Path $env:TEMP ('jev-hdr-' + [guid]::NewGuid().ToString('N') + '.txt')
+    [System.IO.File]::WriteAllText($reqPath, (ConvertTo-Json -InputObject $bodyObj -Depth 10), (New-Object System.Text.UTF8Encoding $false))
+    [System.IO.File]::WriteAllText($hdrPath, ('Content-Type: application/json' + "`n" + 'Authorization: Bearer ' + $key), (New-Object System.Text.UTF8Encoding $false))
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    try {
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = 'curl.exe'
+        $psi.Arguments = ('-s --fail --max-time 15 -X POST -H "@' + $hdrPath + '" --data-binary "@' + $reqPath + '" https://api.typesafe.ai/v1/systemone')
+        $psi.UseShellExecute = $false
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        $psi.CreateNoWindow = $true
+        $proc = [System.Diagnostics.Process]::Start($psi)
+        $out = $proc.StandardOutput.ReadToEnd()
+        $proc.WaitForExit()
+        $latency = [int]$sw.ElapsedMilliseconds
+        if ($proc.ExitCode -ne 0) { return @{ used = $false; latency_ms = $latency; reason = ('curl_exit_' + $proc.ExitCode); answers = $null } }
+        $parsed = $null
+        try { $parsed = $out | ConvertFrom-Json } catch { $parsed = $null }
+        if ($null -eq $parsed -or $null -eq $parsed.answers) {
+            return @{ used = $false; latency_ms = $latency; reason = 'bad_response'; answers = $null }
+        }
+        return @{ used = $true; latency_ms = $latency; answers = $parsed.answers; reason = $null }
+    } catch {
+        return @{ used = $false; latency_ms = [int]$sw.ElapsedMilliseconds; reason = 'invoke_error'; answers = $null }
+    } finally {
+        Remove-Item -LiteralPath $reqPath, $hdrPath -ErrorAction SilentlyContinue
+    }
+}
+
+function Focus-WeComSearchBox {
+    # 聚焦主窗口搜索框（三级链，2026-09-28 真机验证）：
+    # 1) 主路径：attachstate Ctrl+F（全后台 ~250ms）；
+    # 2) attach 失败 → 裁切 OCR 顶部布局 → Jev 选 token → 点击其中心；
+    # 3) Jev 不可用 → 规则：点击占位符 token 中心（token 匹配 搜[索素粟]）；
+    #    占位符不可见（框内有残留内容）时点首个内容 token 中心（同在框内）。
+    # 聚焦是否真正成功由调用方输入后的 OCR 回读兜底校验（此处不做二次确认）。
+    # 返回聚焦方法 'ctrl_f' | 'jev_click' | 'placeholder_click'；三级全失败 → UI_CHANGED。
+    param([Parameter(Mandatory)][int64]$MainHwnd)
+    if (Send-WeComAttachChordKey -Hwnd $MainHwnd -Vk 0x46) {
+        Start-Sleep -Milliseconds 150
+        return 'ctrl_f'
+    }
+    $main = Get-WeComWindowInfo ([IntPtr]$MainHwnd)
+    $sb = Get-WeComSearchBoxState -MainHwnd $MainHwnd -Tag 'focus'
+    $tokens = @($sb.TokensRaw)
+    if ($tokens.Count -gt 0) {
+        $lines = @(); $crit = @{}
+        for ($i = 0; $i -lt $tokens.Count; $i++) {
+            $tk = $tokens[$i]
+            $cx = [int](($tk.x0 + $tk.x1) / 2); $cy = [int](($tk.y0 + $tk.y1) / 2)
+            $lines += ('T{0}: text={1} x0={2} x1={3} y0={4} y1={5} center=({6},{7})' -f $i, $tk.text, $tk.x0, $tk.x1, $tk.y0, $tk.y1, $cx, $cy)
+            $crit[('T' + $i)] = ('OCR文本「' + $tk.text + '」中心坐标')
+        }
+        $stateText = '企业微信主窗口顶部区域 OCR 结果（窗口像素坐标）：' + "`n" + ($lines -join "`n") + "`n" + '任务：点击搜索输入框以聚焦它（准备输入搜索关键词）。'
+        $r = Invoke-WeComJev -StateText $stateText -Questions @{
+            click_which = @{ type = 'choice'; instructions = '点击哪个位置可以聚焦搜索输入框？'; criteria = $crit }
+        }
+        if ($r.used -and $r.answers.click_which.choice -match '^T(\d+)$') {
+            $idx = [int]$Matches[1]
+            if ($idx -lt $tokens.Count) {
+                $tk = $tokens[$idx]
+                $clickX = [int]($main.X + ($tk.x0 + $tk.x1) / 2)
+                $clickY = [int]($main.Y + ($tk.y0 + $tk.y1) / 2)
+                [void](Send-WeComClick -Hwnd $MainHwnd -ScreenX $clickX -ScreenY $clickY)
+                Start-Sleep -Milliseconds 400
+                return 'jev_click'
+            }
+        }
+        $pos = $sb.PlaceholderPos
+        if ($null -eq $pos) { $pos = $sb.ContentPos }
+        if ($null -ne $pos) {
+            [void](Send-WeComClick -Hwnd $MainHwnd -ScreenX ([int]($main.X + $pos[0])) -ScreenY ([int]($main.Y + $pos[1])))
+            Start-Sleep -Milliseconds 400
+            return 'placeholder_click'
+        }
+    }
+    Throw-DriverError 'UI_CHANGED' '无法聚焦搜索框（attachstate Ctrl+F 失败且 OCR 降级路径均不可用），页面结构可能已变化'
+}
+
 # ---------- 驱动统一入口 ----------
 
 function Invoke-DriverMain {

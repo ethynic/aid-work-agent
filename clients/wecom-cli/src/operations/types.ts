@@ -92,6 +92,11 @@ export class CodedOperationError extends Error {
     message: string,
     /** 写动作失败时的 effect 显式覆盖（如取消发生在动作发出后且无法确认 → CANCELLED/unknown） */
     readonly effectOverride?: Effect,
+    /**
+     * 失败结果附带的结构化 data（如 chat_search TARGET_NOT_FOUND 时的 query/jev/timing_ms
+     * 透传）；runWecomOperation 会合并进 failResult.data，不影响其余错误路径
+     */
+    readonly data?: Record<string, unknown>,
   ) {
     super(message)
     this.name = 'CodedOperationError'

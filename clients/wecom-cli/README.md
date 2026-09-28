@@ -12,7 +12,8 @@ CLI 动词子命令与 MCP stdio server 共用同一 operation 层，UI 自动�
 ```
 aid-wecom probe [--verbose] [--json]        # 只读环境探测：平台/交互会话/PowerShell/进程/主窗口/登录态/当前页
 aid-wecom search --query <词> [--type contact|group|any] [--limit N] [--json]
-                                            # 搜索联系人/群聊（只读），返回带 target_ref 的候选
+                                            # 搜索联系人/群聊（只读）：Jev 选最优候选，返回 best/坐标/概率 + 带 target_ref 的候选
+                                            # 副作用：搜索结果面板保持打开（坐标句柄供后续 select 命令消费）
 aid-wecom send --target-ref <ref> --text <文本> [--json]
                                             # 写动作：向 target_ref 目标发送 1 条文本消息
 aid-wecom unread [--name <名>] [--json]     # 未读会话快照（只读，不开会话不清角标）
@@ -69,10 +70,35 @@ MCP 只暴露 `wecom_unread_list` 与 `wecom_watch_poll` 两个 M3 工具（每�
 
 `search` 返回的每个候选带 `target_ref`：base64url(payload) + HMAC-SHA256 签名
 （本机密钥 `%LOCALAPPDATA%\AidWorkAgent\wecom-cli\target-ref.key`，不可跨机验证），
-payload 含 name/type/subtitle，**有效期 5 分钟**。`send` 必须持有效 target_ref：
+payload 含 name/type/subtitle 与条目 overlay 相对坐标 x/y（M4 起可选；老 ref 无坐标对，
+verify 不因未知字段失败），**有效期 5 分钟**。`send` 必须持有效 target_ref：
 过期 → TARGET_REF_STALE（重新 search 获取）；篡改/格式非法 → INVALID_ARGUMENT。
 发送时驱动按 name+section+subtitle 在搜索结果里精确匹配，同名多项消歧失败 →
 TARGET_AMBIGUOUS 拒绝发送。
+
+## search 命令（M4：Jev 决策 + 坐标句柄）
+
+流程（2026-09-28 真机验证）：attachstate Ctrl+F 聚焦搜索框（attach 失败降级
+「裁切 OCR → Jev 选 token → 点击」，Jev 不可用再降级规则点占位符 token）→
+动态搜索框状态检测（裁 x∈[120,420]/y∈[0,62] + 4x 放大 OCR，坐标判态；替代已证实
+有误判 bug 的固定像素带）→ 残留清空（Ctrl+A+Delete，清不空 UI_CHANGED fail-closed）→
+输入 query + OCR 回读验证 → 等 SearchResultWindow2 高度稳定 → 稳定帧 OCR 条目 →
+**Jev 单次合并调用**（best_result + is_ambiguous，附概率分布）。
+
+- 返回 `data.best`（最优候选：name/坐标/screen 参考坐标/confidence/概率分布）与
+  `items`（每项含 overlay 相对坐标 x/y、probability、target_ref）；`search_successful`
+  按规则判定（items 非空），不用 Jev；无结果 → TARGET_NOT_FOUND（data 附
+  reason=no_results/filtered_out 与 jev/timing_ms 诊断）。`--type` 过滤把 best 滤掉时，
+  从过滤后候选重选（probability 最高，全 null 则第一条）。
+- **副作用：搜索结果面板（overlay）在返回后保持打开**——条目坐标与 overlay rect 是
+  后续 select 命令的消费句柄；下一次 search 开头的残留清空会自动关掉旧 overlay。
+- **Jev 集成与降级**：决策 API `api.typesafe.ai/v1/systemone`（模型 jev-latest），
+  需要环境变量 `TYPESAFE_API_KEY`（可选依赖；MCP stdio 白名单场景回退用户级 env）。
+  无 key/超时/HTTP 错 → `jev.used=false` + reason，best 走规则（归一化 name 精确 ==
+  query 的第一条，否则第一条），probability 全 null。key 只经临时头文件瞬态使用，
+  绝不入日志/命令行/artifact。
+- artifact 目录 `artifacts/search-<ts>/`：稳定帧截图 + `driver-log.txt`（OCR 原始
+  token、Jev state/answer 摘要、各阶段耗时）。
 
 ## 运行依赖
 
@@ -80,7 +106,8 @@ TARGET_AMBIGUOUS 拒绝发送。
 - 企业微信 Windows 客户端（WXWork.exe）**已登录**（5.0.9 实测）；
 - PowerShell（powershell.exe 在 PATH）；
 - `add-customer` / `search` / `send` / `unread` / `read` / `watch` 另需 OCR：仓库根 `venv` 的 python + `rapidocr_onnxruntime`
-  （`drivers/ps1` 上四级为仓库根，取 `venv\Scripts\python.exe`；缺失 → CONFIG_MISSING）。
+  （`drivers/ps1` 上四级为仓库根，取 `venv\Scripts\python.exe`；缺失 → CONFIG_MISSING）；
+- `search` 的 Jev 决策另需可选环境变量 `TYPESAFE_API_KEY`（缺失自动降级规则 best，功能不中断）。
 
 ## 关键实现事实（真机实测，勿随意改）
 
@@ -125,6 +152,12 @@ TARGET_AMBIGUOUS 拒绝发送。
   会话行右侧时间列误识多（「07/09」→「60/L0」），按宽松形近字符模式剔除。
   消息区滚动：PostMessage WM_MOUSEWHEEL（wParam=delta<<16 按 uint32 掩码，lParam=屏幕坐标）有效；
   输入工具栏图标行在 0.71-0.73h（OCR 会读成「X·三」碎字），history 模式消息区上界卡 0.70h。
+- M4（2026-09-28 实测）：attachstate 组合键（AttachThreadInput 共享键状态 + PostMessage
+  Ctrl+F/Ctrl+A）全后台 ~250ms 可用，是聚焦/全选主路径；ESC 禁用（最小化企微）。
+  搜索框状态检测必须动态裁切（x∈[120,420]、y∈[0,62] + 4x 放大 + 坐标判态，内容 token
+  按 x1∈[212,400] 判定）：旧固定像素带在 1280 宽窗口把聊天区标题误判为残留（已证实 bug）。
+  搜索 overlay 用后**保持打开**（坐标句柄供 select 消费）；overlay 关闭后窗口以
+  visible=False 残留，判开必须带可见性过滤。Jev 决策 API 措辞敏感，state 模板不得随意改。
 - 含中文的 .ps1 必须 **UTF-8 with BOM**。
 
 ## 目录
