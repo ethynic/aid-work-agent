@@ -470,9 +470,13 @@ export class FilterSetter {
   }
 
   /**
-   * 滚动核心：目标中心 y 超出可视区上下界（含 MARGIN 边距）即 CDP 滚动（下方越界正
-   * deltaY 下滚；用户手动预滚过面板时目标可能在上方越界，负 deltaY 上滚），滚后 sleep
-   * 再 fresh snapshot 重新定位（滚动内容 bounds 随滚动更新），最多滚 3 次。
+   * 滚动核心：目标中心 y 超出可视区上下界即 CDP 滚动（下方越界正 deltaY 下滚；用户
+   * 手动预滚过面板时目标可能在上方越界，负 deltaY 上滚），滚后 sleep 再 fresh snapshot
+   * 重新定位（滚动内容 bounds 随滚动更新），最多滚 3 次。
+   * 可视判定 = 严格的中心点在 clip 内（top ≤ cy ≤ bottom），不留边距：真机实证
+   * （2026-09-28 非 VIP 首跑）经验要求行是面板第一行、中心距容器顶仅 ~39px，带 MARGIN
+   * 的上界会把正常可见的首行误判为越界（滚 3 次失败报错）。中心在 clip 内时点击点
+   * 几何上必在可视区内，无需额外安全边距；VIP 场景目标行真正超出 clip 时依然命中。
    * 目标本就可见 → 直接返回当前 snap（零开销路径，非 VIP 行为完全不变）。
    */
   private async ensureHitVisible(
@@ -482,13 +486,12 @@ export class FilterSetter {
     what: string,
     mode: 'panel' | 'viewport',
   ): Promise<DomSnapshot> {
-    const MARGIN = 40
     for (let attempt = 0; ; attempt++) {
       const hit = locate(snap)
       const cy = this.toGlobalPoint(snap, hit).y
       const { top, bottom } = this.visibleClipOf(snap, mode)
-      const range = `[${Math.round(top + MARGIN)}, ${Math.round(bottom - MARGIN)}]`
-      if (cy <= bottom - MARGIN && cy >= top + MARGIN) return snap
+      const range = `[${Math.round(top)}, ${Math.round(bottom)}]`
+      if (cy <= bottom && cy >= top) return snap
       if (attempt >= 3) {
         throw new PanelScrollError(
           `目标「${what}」滚动 3 次后仍在筛选弹窗可视区外（y=${Math.round(cy)} 不在 ${range}），请人工查看`,
@@ -500,9 +503,9 @@ export class FilterSetter {
         )
       }
       // 滚动点在弹窗可视区内中部偏下（上滚时护住 clip 顶）；|deltaY| = 超出量 + 200 缓冲
-      const deltaY = cy > bottom - MARGIN
-        ? Math.ceil(cy - (bottom - MARGIN)) + 200
-        : -(Math.ceil(top + MARGIN - cy) + 200)
+      const deltaY = cy > bottom
+        ? Math.ceil(cy - bottom) + 200
+        : -(Math.ceil(top - cy) + 200)
       const wheelY = Math.max(top + 50, bottom - 100)
       await this.deps.mouseWheel(scrollXOf(snap, hit), wheelY, deltaY)
       await this.sleep(400)

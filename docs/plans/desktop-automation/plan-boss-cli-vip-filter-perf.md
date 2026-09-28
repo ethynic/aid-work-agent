@@ -81,4 +81,4 @@
 | Phase 1 | perf 模块 + runBossOperation 埋点 | ✅ 完成（2026-09-28） | typecheck 0 错；新增 perf/boss-context-perf 共 10 用例 |
 | Phase 2 | FilterSetter VIP 滚动适配 | ✅ 完成（2026-09-28） | 新增 PanelScrollError（滚动失败不进保底映射链）；CR 后主控补修：目标上方越界负 deltaY 上滚；清除/确定改纯视口判定（footer 不随内容区滚动，防非 VIP 误判越界） |
 | 验证 | 三智能体流程 + typecheck/test 全绿 | ✅ 完成（2026-09-28） | 开发 382/382 → 测试智能体独立复跑 382/382 + 启动冒烟通过 → CR 无 P0/P1 → 补修后主控复验 typecheck 0 错、npm test 384/384 |
-| 真机 | VIP 账号真机验收 + 数据收集 | 📋 待开发 | 重点核对：LCA 容器几何是否≈可视 clip（误判则退化为仅视口）；滚点/deltaY 缓冲/sleep(400) 校准；非 VIP 账号回归零滚动；[boss-perf] 行落 runtime.log 后按数据定优化项 |
+| 真机 | VIP 账号真机验收 + 数据收集 | 🔧 进行中（非 VIP 已验） | 2026-09-28 非 VIP 真机首跑抓到误判：面板第一行中心距容器顶 <40px 被上界 MARGIN 误判越界→滚 3 次失败；修复为严格中心点在 clip 内（无 MARGIN），真机 filter 四条件一次通过零误滚（筛选·4，10-15K 自动映射 10-20K）。VIP 账号自动滚动验证仍待做（当前账号非 VIP）；[boss-perf] 已持续产出数据（open-detail 30 屏搜索 47s 中 sleep:1200×30=36s 为最大头） |

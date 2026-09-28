@@ -495,7 +495,7 @@ function vipSnap(rowY: number, btnY: number): DomSnapshot {
 }
 
 test('VIP 场景：目标行在容器 clip 下方 → mouseWheel 滚入可视区后点击坐标正确', async () => {
-  // 行 cy=1101 > 760（越界）；清除/确定 cy=711.5（本就可见）。滚动 541px 后行移到 cy=560。
+  // 行 cy=1101 > 800（越界，严格 clip [300,800]）；清除/确定 cy=711.5（本就可见）。滚动 501px 后行移到 cy=560。
   const w = wheelRecorder()
   const r = recorder()
   const setter = new FilterSetter({
@@ -515,7 +515,7 @@ test('VIP 场景：目标行在容器 clip 下方 → mouseWheel 滚入可视区
   ])
   // 滚动一次：x=行标签列（经验要求 cx=637.5），y=可视区内中部偏下（800-100），deltaY=超出量+200
   assert.equal(w.wheels.length, 1)
-  assert.deepEqual(w.wheels[0], { x: 637.5, y: 700, deltaY: 541 })
+  assert.deepEqual(w.wheels[0], { x: 637.5, y: 700, deltaY: 501 })
   assert.ok(w.wheels[0]!.deltaY > 0)
 })
 
@@ -539,8 +539,8 @@ test('VIP 场景：滚 3 次目标仍不可见 → FilterSetError fail-loud，�
 test('VIP 场景：目标越界且未注入 mouseWheel → FilterSetError（保护旧调用方，拒绝盲点）', async () => {
   const r = recorder()
   const setter = new FilterSetter({
-    // 清除/确定越出视口下界（footer 按纯视口判定，不随内容滚动）
-    snapshot: snapshotQueue([vipSnap(1090, 1880)]),
+    // 清除/确定越出视口下界（footer 按纯视口判定，不随内容滚动；严格边界 cy>1905）
+    snapshot: snapshotQueue([vipSnap(1090, 1900)]),
     click: r.click,
     sleep: r.sleep,
   })
@@ -562,7 +562,7 @@ test('VIP 场景：用户预滚过面板，目标行在容器 clip 上方 → �
   assert.equal(result.filterCount, 1)
   assert.deepEqual(r.clicks[1], { x: 903.75, y: 560 })
   assert.equal(w.wheels.length, 1)
-  assert.deepEqual(w.wheels[0], { x: 637.5, y: 700, deltaY: -469 })
+  assert.deepEqual(w.wheels[0], { x: 637.5, y: 700, deltaY: -429 })
   assert.ok(w.wheels[0]!.deltaY < 0)
 })
 
