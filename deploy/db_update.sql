@@ -111,6 +111,7 @@ CREATE TABLE IF NOT EXISTS client_bindings (
     machine_id TEXT,                                 -- 绑定的机器码
     access_token TEXT UNIQUE NOT NULL,               -- 长期访问令牌 secrets.token_urlsafe(48)
     status TEXT NOT NULL DEFAULT 'active',           -- active / disabled
+    token_type TEXT DEFAULT 'activated',             -- activated=激活产出 / static=管理端签发的长期直连 token（M10c，鉴权跳过过期检查）
     last_seen_at TIMESTAMP,                          -- 最后活跃时间
     expires_at TIMESTAMP,                            -- 绑定过期时间（默认null=不过期）
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

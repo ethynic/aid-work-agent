@@ -367,6 +367,117 @@ class TestVerifyClientToken:
         }
         assert verify_client_token("tok") is None
 
+    @patch("src.api.client_auth.ClientBindingDB.update_last_seen")
+    @patch("src.api.client_auth.TenantDB.get_by_id")
+    @patch("src.api.client_auth.ClientBindingDB.get_by_token")
+    def test_static_token_skips_expiry_check(self, mock_get, mock_tenant, mock_seen):
+        """M10c：token_type='static' 的长期 token 跳过过期检查（expires_at 残留值也放行）"""
+        from src.api.client_auth import verify_client_token
+        mock_get.return_value = {
+            "binding_id": "cb_static", "tenant_id": "t1", "status": "active",
+            "access_token": "tok-static", "client_name": "wecom-cli@PC",
+            "token_type": "static",
+            "expires_at": datetime.now() - timedelta(days=1),  # 即使残留过期时间也放行
+        }
+        mock_tenant.return_value = {"status": "active", "credit_balance": 100.0}
+        binding = verify_client_token("tok-static")
+        assert binding is not None
+        assert binding.binding_id == "cb_static"
+        assert binding.tenant_id == "t1"
+
+    @patch("src.api.client_auth.TenantDB.get_by_id")
+    @patch("src.api.client_auth.ClientBindingDB.get_by_token")
+    def test_missing_token_type_defaults_activated_and_expires(self, mock_get, mock_tenant):
+        """token_type 缺省（NULL/迁移前旧行）按 activated 处理：过期仍拒绝"""
+        from src.api.client_auth import verify_client_token
+        mock_get.return_value = {
+            "binding_id": "cb_old", "tenant_id": "t1", "status": "active",
+            "access_token": "tok-old", "client_name": None,
+            "token_type": None,
+            "expires_at": datetime.now() - timedelta(days=1),
+        }
+        assert verify_client_token("tok-old") is None
+
+    @patch("src.api.client_auth.ClientBindingDB.update_last_seen")
+    @patch("src.api.client_auth.TenantDB.get_by_id")
+    @patch("src.api.client_auth.ClientBindingDB.get_by_token")
+    def test_activated_token_with_future_expiry_passes(self, mock_get, mock_tenant, mock_seen):
+        """activated 且未过期：行为与改动前完全一致（防回归）"""
+        from src.api.client_auth import verify_client_token
+        mock_get.return_value = {
+            "binding_id": "cb_act", "tenant_id": "t1", "status": "active",
+            "access_token": "tok-act", "client_name": None,
+            "token_type": "activated",
+            "expires_at": datetime.now() + timedelta(days=30),
+        }
+        mock_tenant.return_value = {"status": "active", "credit_balance": 100.0}
+        assert verify_client_token("tok-act") is not None
+
+
+class TestCreateStaticBinding:
+    """ClientBindingDB.create_static（M10c）：INSERT 带 token_type='static' 且无过期时间。"""
+
+    @patch("src.db.client_binding_db.get_db_connection")
+    def test_create_static_inserts_token_type_static(self, mock_conn):
+        from src.db.client_binding_db import ClientBindingDB
+
+        row = {
+            "binding_id": "cb_static", "tenant_id": "t1", "access_token": "tok-plain",
+            "token_type": "static", "expires_at": None, "created_at": datetime.now(),
+        }
+        cursor = MagicMock()
+        cursor.fetchone.return_value = row
+        mock_conn.return_value.__enter__.return_value.cursor.return_value = cursor
+
+        result = ClientBindingDB.create_static(tenant_id="t1", client_name="wecom-cli@PC")
+
+        sql = cursor.execute.call_args[0][0]
+        assert "token_type" in sql
+        assert "'static'" in sql
+        assert result["access_token"] == "tok-plain"  # 明文 token 返回给调用方（仅此一次）
+
+
+class TestCreateStaticBindingRoute:
+    """POST /api/saas/client-bindings/static（M10c）：仅 platform_admin 可签发（防跨租户签发）。"""
+
+    def _make_req(self):
+        from src.saas.api.client_activation_mgmt import StaticBindingCreateRequest
+        return StaticBindingCreateRequest(tenant_id="t1", client_name="wecom-cli@PC")
+
+    @patch("src.saas.api.client_activation_mgmt.ClientBindingDB.create_static")
+    @patch("src.saas.api.client_activation_mgmt.require_admin")
+    def test_platform_admin_can_issue(self, mock_admin, mock_create):
+        import asyncio
+
+        from src.saas.api.client_activation_mgmt import create_static_binding
+
+        mock_admin.return_value = {"user_id": "u1", "role": "platform_admin"}
+        mock_create.return_value = {
+            "binding_id": "cb_static", "access_token": "tok-plain", "tenant_id": "t1",
+            "client_name": "wecom-cli@PC", "token_type": "static",
+            "created_at": datetime.now(),
+        }
+        resp = asyncio.run(create_static_binding(self._make_req(), MagicMock()))
+        assert resp["access_token"] == "tok-plain"
+        assert resp["token_type"] == "static"
+        mock_create.assert_called_once()
+
+    @patch("src.saas.api.client_activation_mgmt.ClientBindingDB.create_static")
+    @patch("src.saas.api.client_activation_mgmt.require_admin")
+    def test_non_platform_admin_rejected_403(self, mock_admin, mock_create):
+        """require_admin 放行 user/tenant_admin：签发不过期 token 必须再显式校验角色"""
+        import asyncio
+
+        from fastapi import HTTPException
+        from src.saas.api.client_activation_mgmt import create_static_binding
+
+        for role in ("user", "tenant_admin"):
+            mock_admin.return_value = {"user_id": "u2", "role": role}
+            with pytest.raises(HTTPException) as exc_info:
+                asyncio.run(create_static_binding(self._make_req(), MagicMock()))
+            assert exc_info.value.status_code == 403, role
+        mock_create.assert_not_called()  # 拒绝时不得落库签发
+
 
 class TestGetClientTokenFromHeader:
     """Authorization 头解析。"""

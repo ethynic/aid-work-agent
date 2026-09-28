@@ -7,8 +7,8 @@
  *   model_latency_ms/pages_read 透传；模型通道下 since_days 仍传驱动（早停忽略）
  * - 模型失败（unavailable）→ 驱动二次调用 -ParseMode ocr 兜底，channel=ocr +
  *   fallback_reason；驱动 navigate_required 分发后的二次调用同为 none
- * - 402 余额不足 → INSUFFICIENT_CREDIT 不降级（驱动只一次）；激活失败 config →
- *   CONFIG_MISSING 不降级
+ * - 402 余额不足 → INSUFFICIENT_CREDIT 不降级（驱动只一次）；token 配置错误
+ *   config → CONFIG_MISSING 不降级
  * - 截图文件缺失 / page_paths 为空 → 降级 OCR
  * - 模型调用中用户取消 → CANCELLED，不触发 OCR 兜底
  */
@@ -44,7 +44,10 @@ after(() => {
 })
 
 const TARGET = { name: '陆伟', type: 'contact', subtitle: '微信联系人' }
-const ENV_MODEL = { AID_WECOM_SERVER_URL: 'https://agent.example.com' } as NodeJS.ProcessEnv
+const ENV_MODEL = {
+  AID_WECOM_SERVER_URL: 'https://agent.example.com',
+  AID_WECOM_SERVER_TOKEN: 'tok-static-1',
+} as NodeJS.ProcessEnv
 
 /** OCR 模式驱动返回（兜底/直连） */
 const OCR_DATA = {
@@ -318,12 +321,16 @@ test('双通道：402 余额不足 → INSUFFICIENT_CREDIT 不降级（驱动只
   assert.equal(argAfter(calls[0]!.args, '-ParseMode'), 'none')
 })
 
-test('双通道：激活失败（config）→ CONFIG_MISSING 不降级', async () => {
+test('双通道：token 配置错误（config，401）→ CONFIG_MISSING 不降级', async () => {
   const calls: DriverCall[] = []
   const op = makeOp(makeMockDriver({ calls }), {
     env: ENV_MODEL,
     parseHistoryFn: async () => {
-      throw new ProxyError('config', 'token 失效且重新激活失败：激活失败：ACTIVATION_CODE_USED')
+      throw new ProxyError(
+        'config',
+        '服务端拒绝 token（401：UNAUTHORIZED）：AID_WECOM_SERVER_TOKEN 无效或已被禁用，请检查配置',
+        401,
+      )
     },
   })
   const r = await op.execute({ target_ref: 'ref' }, silentCtx())
@@ -331,7 +338,7 @@ test('双通道：激活失败（config）→ CONFIG_MISSING 不降级', async (
   assert.equal(r.code, 'CONFIG_MISSING')
   assert.equal(r.effect, 'none')
   assert.match(r.message, /模型通道不可用/)
-  assert.equal(calls.length, 1, '激活失败不得降级 OCR')
+  assert.equal(calls.length, 1, 'token 配置错误不得降级 OCR')
 })
 
 test('双通道：截图文件缺失 → 降级 OCR（驱动二次调用 ocr）', async () => {

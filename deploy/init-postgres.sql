@@ -1159,6 +1159,7 @@ CREATE TABLE IF NOT EXISTS client_bindings (
     machine_id TEXT,
     access_token TEXT NOT NULL,
     status TEXT DEFAULT 'active' NOT NULL,
+    token_type TEXT DEFAULT 'activated',             -- activated=激活产出 / static=管理端签发的长期直连 token（M10c，鉴权跳过过期检查）
     last_seen_at TIMESTAMP,
     expires_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

@@ -3,13 +3,18 @@
 
 设计文档：docs/tools/association-client-design.md §2.2
 路由前缀：/api/client/v1
-- POST /activate          激活码激活（无需鉴权）
+- POST /activate          激活码激活（无需鉴权；weixin-cli 仍在用，wecom-cli M10c 起改
+                          用管理端签发的 static 长期 token 直连，见 /api/saas/client-bindings/static）
 - GET  /credits           积分余额查询
 - POST /llm/chat          LLM 代理（计费 ×10；可选 model 白名单路由，如 kimi-k3 视觉模型）
 - POST /ocr/parse         OCR 代理（不扣费，记录调用）
 - POST /session-history   会话聊天记录解析（M10a：GLM-5.3-Flash 多模态并行分页，计费 成本×100 积分）
 - POST /logs              日志上报
 - POST /usage/report      通用用量上报（C 模式，客户端计费统一接入 P4）
+
+鉴权统一走 _require_binding（Authorization Bearer token → client_bindings 行）：
+激活产出的 binding（token_type='activated'，受 expires_at 约束）与管理端签发的
+static 长期 token（token_type='static'，跳过过期检查）共用同一路由，端点无感知。
 """
 
 from __future__ import annotations
@@ -165,7 +170,11 @@ class LogBatchRequest(BaseModel):
 # ============== 鉴权依赖 ==============
 
 def _require_binding(authorization: Optional[str] = Header(None)) -> ClientBinding:
-    """FastAPI 依赖：从 Authorization 头校验客户端令牌。"""
+    """FastAPI 依赖：从 Authorization 头校验客户端令牌。
+
+    行为不区分 token 来源：激活产出的 binding 与管理端签发的 static 长期 token
+    （M10c）均按 access_token 查 client_bindings（过期过滤见 client_auth.verify_client_token）。
+    """
     token = get_client_token_from_header(authorization)
     if not token:
         raise HTTPException(status_code=401, detail="UNAUTHORIZED")

@@ -33,9 +33,9 @@ aid-wecom unread [--name <名>] [--json]     # 未读会话快照（只读，不
 aid-wecom read-session --target-ref <ref> [--max-pages N] [--since-days N] [--json]
                                             # 读会话消息（只读内容；进入会话会清除该会话未读角标；
                                             # 智能分发进会话 + 滚动截屏；M10b 双通道解析：配置
-                                            # AID_WECOM_SERVER_URL 时走服务端模型通道（按次计积分），
-                                            # 否则/模型不可用时本地 OCR（页间去重 + 时间戳沿袭）。
-                                            # M9 由 read 改名，旧 read 动词废弃无别名）
+                                            # AID_WECOM_SERVER_URL+TOKEN 时走服务端模型通道（按次
+                                            # 计积分），否则/模型不可用时本地 OCR（页间去重 + 时间
+                                            # 戳沿袭）。（M9 由 read 改名，旧 read 动词废弃无别名）
 aid-wecom watch [--interval 秒] [--once]    # 新消息跟踪循环：事件 NDJSON 逐行写 stdout，Ctrl+C 退出
 aid-wecom add-customer --phone <11位> --yes [--json]
                                             # 写动作：通讯录→新的客户→添加→检索→发邀请（--yes 显式确认）
@@ -121,28 +121,30 @@ read-session 抓取截图后的解析分流（E7 实验结论：多模态模型�
 本地 OCR，图片消息 side 判定完美，定为主通道方向）：
 
 ```
-配置 AID_WECOM_SERVER_URL？
+配置 AID_WECOM_SERVER_URL + AID_WECOM_SERVER_TOKEN？
 ├─ 否 → 驱动一次调用 -ParseMode ocr（逐页 OCR + 页间去重 + 时间戳沿袭）
 │        → channel="ocr"，不报错
-└─ 是（模型主通道）→ 驱动调用 -ParseMode none（只导航 + 滚动截图，不逐页 OCR，
-         省每页 ~2s OCR 冷启动）→ TS 读 page-*.png 转 base64（反转采集序为
-         时间序旧→新）→ POST /api/client/v1/session-history（服务端 GLM-5.3-Flash
-         多模态并行分页解析 + 页间重叠去重，超时 150s）
+└─ 是（模型主通道，M10c 直连长期 token）→ 驱动调用 -ParseMode none（只导航 +
+         滚动截图，不逐页 OCR，省每页 ~2s OCR 冷启动）→ TS 读 page-*.png 转
+         base64（反转采集序为时间序旧→新）→ POST /api/client/v1/session-history
+         （Authorization Bearer 长期 token；服务端 GLM-5.3-Flash 多模态并行分页
+         解析 + 页间重叠去重，超时 150s）
          ├─ 200 → channel="model"：messages 带 side/kind/time（kind=text|image|
          │        file|timeline），model_usage/billing/model_latency_ms 透传
          ├─ 网络/超时/5xx/422/截图文件缺失超限 → 降级：驱动二次调用 -ParseMode ocr
          │        → channel="ocr" + fallback_reason（既有 OCR 链原样保留在驱动里）
          ├─ 402 余额不足 → INSUFFICIENT_CREDIT 直接报错，不降级（走 OCR 会让用户
          │        以为模型通道免费）
-         └─ 激活失败/无激活码/token 重激活后仍 401 → CONFIG_MISSING 直接报错，
-                  不降级（静默走 OCR 会让用户误以为模型通道正常）
+         └─ 401 token 无效 / 缺 URL/TOKEN 配置 → CONFIG_MISSING 直接报错，不降级
+                  （token 是手工配置的长期值，直报让用户修配置，不重试）
 ```
 
-- **配置（环境变量，不新增 CLI 动词）**：`AID_WECOM_SERVER_URL`（服务端地址，设置
-  即启用模型通道）+ `AID_WECOM_ACTIVATION_CODE`（一次性激活码，可选——本地无绑定时
-  首次调用自动激活）。access_token 不落明文：DPAPI（CurrentUser）加密存
-  `%LOCALAPPDATA%\AidWorkAgent\wecom-cli\server-binding.json`；token 失效（401）自动
-  清缓存重激活一次重试。
+- **配置（环境变量，不新增 CLI 动词；M10c 起免激活码直连）**：
+  `AID_WECOM_SERVER_URL`（服务端地址，设置即启用模型通道）+
+  `AID_WECOM_SERVER_TOKEN`（服务端长期 token）。token 由服务端管理端签发
+  （`POST /api/saas/client-bindings/static`，static 绑定不过期，明文仅签发时返回
+  一次），直接配置即用——无激活流程、无本地缓存文件（M10b 的激活码 +
+  DPAPI `server-binding.json` 缓存链路已随 M10c 移除）。
 - **计费提示**：模型通道按次计积分（服务端 token 成本×100 积分、最低 1 积分/次，
   响应 `billing.credits_charged`），**402 余额不足时不降级 OCR 直接报错**——降级会
   让用户误以为模型通道免费；未配置 SERVER_URL 时 OCR 通道免费不计量。
@@ -358,8 +360,9 @@ name+section+subtitle 消歧键一致才可信——Jev 看不到 target_ref 的
   `probe` 的 `qr_status_hint` 也走该 OCR 但为 best-effort（缺失 → hint=normal，探测不失败）；
 - `search` / `send` / `send-image` / `send-file` / `read-session` 的 Jev 决策另需可选环境变量 `TYPESAFE_API_KEY`（缺失自动降级规则链，功能不中断；watch 轮询内的 read-session 同样适用）；
 - `read-session` 的**模型主通道**另需可选环境变量 `AID_WECOM_SERVER_URL`（服务端地址）+
-  `AID_WECOM_ACTIVATION_CODE`（一次性激活码，本地无绑定时首次调用自动激活）——两者
-  均未配置时直接走本地 OCR 通道（不报错）；模型通道按次计积分，详见 M10b 章节。
+  `AID_WECOM_SERVER_TOKEN`（服务端长期 token，管理端 `POST /api/saas/client-bindings/static`
+  签发）——两者均未配置时直接走本地 OCR 通道（不报错）；模型通道按次计积分，详见
+  M10b 章节。
 
 ## 关键实现事实（真机实测，勿随意改）
 
@@ -441,9 +444,14 @@ name+section+subtitle 消歧键一致才可信——Jev 看不到 target_ref 的
 - M10b（2026-09-28 设计定稿）：read-session 双通道解析——模型主通道（截图 base64 上传
   服务端 `/api/client/v1/session-history`，GLM-5.3-Flash 多模态并行分页 + 服务端重叠
   去重，来源 E7 实验结论）+ OCR 兜底。驱动加 `-ParseMode ocr|none`（none=只截图不逐页
-  OCR，省每页 ~2s 冷启动；缺省 ocr 向后兼容 watch）；TS 侧 serverProxy.ts（激活码 →
-  access_token，DPAPI 加密缓存 server-binding.json，401 重激活一次，超时 150s）；
-  402 余额不足/激活失败不降级直接报错（INSUFFICIENT_CREDIT / CONFIG_MISSING）。
+  OCR，省每页 ~2s 冷启动；缺省 ocr 向后兼容 watch）；TS 侧 serverProxy.ts；
+  402 余额不足/配置错误不降级直接报错（INSUFFICIENT_CREDIT / CONFIG_MISSING）。
+- M10c（2026-09-29 用户定稿）：模型通道鉴权由「激活码模式」简化为「直连长期 token
+  模式」——自有机器调自有服务端，去掉激活码；配置 `AID_WECOM_SERVER_URL`+
+  `AID_WECOM_SERVER_TOKEN`（服务端管理端签发的 static 长期 token，见 M10b 章节配置
+  说明）直接调用扣积分。激活码链路（`AID_WECOM_ACTIVATION_CODE`、/activate 调用、
+  401 重激活、DPAPI 缓存 server-binding.json、src/security/dpapi.ts）全部移除；
+  401 token 无效改判 config 直报不重试不降级。
 - 含中文的 .ps1 必须 **UTF-8 with BOM**。
 
 ## 目录
@@ -452,8 +460,8 @@ name+section+subtitle 消歧键一致才可信——Jev 看不到 target_ref 的
 src/cli/          动词子命令 + 薄 renderer（进度/退出码/跨进程互斥）
 src/mcp/          MCP stdio server + toolDefs + manifest digest
 src/operations/   业务能力层（统一 OperationResult 契约，永不 reject）
-src/platform/     PowerShell 驱动执行器 / 环境探测 / 命名互斥 / target_ref（HMAC 短期句柄）/ watch 水位状态 / serverProxy（M10b 模型通道：激活码绑定 + /session-history 客户端）
-src/security/     日志脱敏（手机号不明文入日志）+ DPAPI 凭据加密（serverProxy access_token）
+src/platform/     PowerShell 驱动执行器 / 环境探测 / 命名互斥 / target_ref（HMAC 短期句柄）/ watch 水位状态 / serverProxy（M10c 模型通道：长期 token 直连 /session-history）
+src/security/     日志脱敏（手机号不明文入日志）
 drivers/ps1/      UI 自动化驱动（_common.ps1 底座 + probe/add-customer/chat-search/chat-select/message-send/send-image/send-file/unread-list/read-session）
 drivers/py/       RapidOCR：add_customer_result.py（添加客户弹窗）+ chat_ocr.py（search/send/unread/history 单一入口）
 tests/            node:test，全部 mock（绝不触达真实企微窗口）

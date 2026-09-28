@@ -31,8 +31,13 @@ class ClientBinding:
 def verify_client_token(access_token: str) -> Optional[ClientBinding]:
     """校验客户端 access_token，返回绑定上下文。
 
+    兼容两类绑定（M10c）：激活产出的 binding（token_type='activated'，受 expires_at
+    约束）与管理端手工签发的 static 长期 token（token_type='static'，跳过过期检查）；
+    两者共用同一 access_token → ClientBinding 链路，路由侧 _require_binding 无感知。
+
     Returns:
-        ClientBinding 对象；token 无效 / 绑定已禁用 / 租户非 active 时返回 None。
+        ClientBinding 对象；token 无效 / 绑定已禁用 / 租户非 active（activated 且
+        已过期）时返回 None。
     """
     if not access_token or not access_token.strip():
         return None
@@ -45,14 +50,16 @@ def verify_client_token(access_token: str) -> Optional[ClientBinding]:
         logger.warning(f"客户端绑定非 active: binding_id={binding_row.get('binding_id')}")
         return None
 
-    # 检查绑定过期
-    expires_at = binding_row.get("expires_at")
-    if expires_at:
-        from datetime import datetime
+    # 检查绑定过期（M10c：token_type='static' 为管理端手工签发的长期 token，跳过过期
+    # 检查——直连模式的 token 生命周期由管理端 disable/rotate 控制，不受 expires_at 约束）
+    if (binding_row.get("token_type") or "activated") != "static":
+        expires_at = binding_row.get("expires_at")
+        if expires_at:
+            from datetime import datetime
 
-        if datetime.now() >= expires_at:
-            logger.warning(f"客户端绑定已过期: binding_id={binding_row.get('binding_id')}")
-            return None
+            if datetime.now() >= expires_at:
+                logger.warning(f"客户端绑定已过期: binding_id={binding_row.get('binding_id')}")
+                return None
 
     tenant_id = binding_row["tenant_id"]
     tenant = TenantDB.get_by_id(tenant_id)

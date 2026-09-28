@@ -1,33 +1,28 @@
 /**
- * 服务端代理（M10b 模型主通道）：read-session 抓取的聊天截图上传服务端
- * /api/client/v1/session-history，由 GLM-5.3-Flash 多模态并行解析为结构化消息
- * （服务端 M10a 实现，commit 551871c7）。模式对齐 weixin-cli serverProxy.ts
- * （激活码→access_token、DPAPI CurrentUser 加密缓存、401 重激活、402 透传），
- * 差异：weixin-cli 由 PowerShell 驱动持 token 调服务端（env 注入），wecom-cli
- * 由 TS 侧直接调用（驱动只负责导航+滚动截图），因此激活与解析请求均带超时/取消。
+ * 服务端代理（M10c 起直连长期 token 模式）：read-session 抓取的聊天截图上传
+ * 服务端 /api/client/v1/session-history，由 GLM-5.3-Flash 多模态并行解析为结构化
+ * 消息（服务端 M10a 实现，commit 551871c7）。
+ *
+ * M10c（用户定稿）：自有机器调自有服务端，去掉激活码链路——不再有
+ * /activate 调用、DPAPI 缓存 server-binding.json、401 重激活；直接用管理端签发的
+ * static 长期 token（服务端 POST /api/saas/client-bindings/static 签发，
+ * 鉴权时跳过过期检查）配置进环境变量。
  *
  * 配置（环境变量驱动，不新增 CLI 动词）：
- * - AID_WECOM_SERVER_URL        服务端地址，设置即启用模型主通道
- * - AID_WECOM_ACTIVATION_CODE   一次性激活码；本地无有效绑定时首次调用自动激活
- *
- * access_token 不落明文：DPAPI（CurrentUser）加密后存
- * %LOCALAPPDATA%\AidWorkAgent\wecom-cli\server-binding.json。
+ * - AID_WECOM_SERVER_URL     服务端地址，设置即启用模型主通道
+ * - AID_WECOM_SERVER_TOKEN   服务端长期 token（static binding 的 access_token）
  *
  * 错误分类（readSession 按此决定是否降级 OCR）：
- * - config               配置/激活问题（无绑定无激活码、激活码被拒、token 重激活后
- *                        仍 401）→ 不降级，直接报给用户（静默走 OCR 会让用户以为
- *                        模型通道免费或正常）
+ * - config               配置问题（缺 URL/TOKEN、token 无效被服务端 401 拒绝）
+ *                        → 不降级，直接报给用户（静默走 OCR 会让用户以为模型通道
+ *                        免费或正常）；token 是手工配置的，直报让用户修配置，不重试
  * - insufficient_credit  402 余额不足 → 不降级，明确报给用户（走 OCR 会让用户以为
  *                        模型通道免费）
  * - unavailable          网络错误/超时/5xx/422（服务端暂时不可用或请求形态不符）
  *                        → 可降级 OCR 兜底
  * 用户取消（signal abort）抛 CancelledError，绝不归并为 unavailable。
  */
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
-import { hostname } from 'node:os'
-import { join } from 'node:path'
 import { CancelledError } from '../operations/types.js'
-import { protectText, unprotectText, type DpapiRunnerFn } from '../security/dpapi.js'
 
 export interface ProxyAuth {
   serverUrl: string
@@ -61,30 +56,10 @@ export type FetchFn = (
 export interface ServerProxyDeps {
   env?: NodeJS.ProcessEnv
   fetchFn?: FetchFn
-  dpapiRunFn?: DpapiRunnerFn
-  /** 测试用：覆盖状态目录（默认 %LOCALAPPDATA%\AidWorkAgent\wecom-cli 或 ~/.AidWorkAgent/wecom-cli） */
-  stateDir?: string
-  hostnameFn?: () => string
-  /** 请求超时（默认 150s：服务端单页 120s + 余量；激活与解析各自独立计时；测试可缩短） */
+  /** 请求超时（默认 150s：服务端单页 120s + 余量；测试可缩短） */
   timeoutMs?: number
-  /** 用户取消信号（激活与解析请求均响应；abort 时抛 CancelledError 而非 ProxyError） */
+  /** 用户取消信号（解析请求响应；abort 时抛 CancelledError 而非 ProxyError） */
   signal?: AbortSignal
-}
-
-interface BindingFile {
-  server_url: string
-  token_blob: string
-  tenant_name?: string
-  activated_at?: string
-}
-
-export function getStateDir(env: NodeJS.ProcessEnv = process.env): string {
-  const base = env.LOCALAPPDATA || env.HOME || '.'
-  return join(base, 'AidWorkAgent', 'wecom-cli')
-}
-
-function bindingPath(stateDir: string): string {
-  return join(stateDir, 'server-binding.json')
 }
 
 function normalizeServerUrl(raw: string | undefined): string {
@@ -96,36 +71,6 @@ export function serverUrlConfigured(env: NodeJS.ProcessEnv = process.env): strin
   return normalizeServerUrl(env.AID_WECOM_SERVER_URL) || null
 }
 
-/** 读取本地绑定并解出 access_token；文件缺失/损坏/解密失败一律返回 null（触发重新激活） */
-export async function loadBinding(
-  deps: ServerProxyDeps = {},
-): Promise<(ProxyAuth & { tenantName?: string }) | null> {
-  const env = deps.env ?? process.env
-  const stateDir = deps.stateDir ?? getStateDir(env)
-  const path = bindingPath(stateDir)
-  if (!existsSync(path)) return null
-  try {
-    const parsed = JSON.parse(readFileSync(path, 'utf8')) as BindingFile
-    if (!parsed.server_url || !parsed.token_blob) return null
-    const accessToken = await unprotectText(parsed.token_blob, deps.dpapiRunFn)
-    if (!accessToken) return null
-    return { serverUrl: parsed.server_url, accessToken, tenantName: parsed.tenant_name }
-  } catch {
-    return null
-  }
-}
-
-/** 删除本地绑定缓存（401 token 失效时清掉重激活用）；文件不存在/删除失败不抛 */
-export function clearBinding(deps: ServerProxyDeps = {}): void {
-  const env = deps.env ?? process.env
-  const stateDir = deps.stateDir ?? getStateDir(env)
-  try {
-    unlinkSync(bindingPath(stateDir))
-  } catch {
-    // 不存在/占用等：重激活成功后会整体覆盖，无需失败
-  }
-}
-
 // ---------- 服务端请求基建（超时/取消常量 + 共用 POST） ----------
 
 /** 服务端单页模型超时 120s（settings.session_history.page_timeout_seconds）+ 余量 */
@@ -134,7 +79,7 @@ export const SESSION_HISTORY_TIMEOUT_MS = 150_000
 /** 服务端单图解码后大小上限（服务端 SESSION_IMAGE_MAX_BYTES，客户端预检同值省一次无效上传） */
 export const SESSION_IMAGE_MAX_BYTES = 5 * 1024 * 1024
 
-/** 带超时与取消的服务端 POST（激活/会话解析共用）；返回状态码 + 解析后的 JSON 体 */
+/** 带超时与取消的服务端 POST（会话解析用）；返回状态码 + 解析后的 JSON 体 */
 async function fetchJson(
   url: string,
   init: { method: string; headers: Record<string, string>; body: string },
@@ -169,85 +114,32 @@ async function fetchJson(
   }
 }
 
-/** 激活码 → access_token，DPAPI 加密后落盘（明文 token 仅存在于内存） */
-export async function activateAndStore(
-  serverUrl: string,
-  activationCode: string,
-  deps: ServerProxyDeps = {},
-): Promise<ProxyAuth> {
-  const env = deps.env ?? process.env
-  const stateDir = deps.stateDir ?? getStateDir(env)
-  const machineId = (deps.hostnameFn ?? hostname)()
-
-  const { status, data } = await fetchJson(
-    `${serverUrl}/api/client/v1/activate`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        activation_code: activationCode.trim().toUpperCase(),
-        machine_id: machineId,
-        client_name: `wecom-cli@${machineId}`,
-      }),
-    },
-    '激活',
-    deps,
-  )
-  if (status !== 200) {
-    const detail = typeof data.detail === 'string' ? data.detail : `HTTP ${status}`
-    throw new ProxyError('config', `激活失败：${detail}`, status)
-  }
-  const accessToken = typeof data.access_token === 'string' ? data.access_token : ''
-  if (!accessToken) throw new ProxyError('config', '激活响应缺少 access_token（服务端契约变更？）')
-
-  const blob = await protectText(accessToken, deps.dpapiRunFn)
-  mkdirSync(stateDir, { recursive: true })
-  const file: BindingFile = {
-    server_url: serverUrl,
-    token_blob: blob,
-    tenant_name: typeof data.tenant_name === 'string' ? data.tenant_name : undefined,
-    activated_at: new Date().toISOString(),
-  }
-  writeFileSync(bindingPath(stateDir), JSON.stringify(file), { mode: 0o600 })
-  return { serverUrl, accessToken }
-}
-
 export type ProxyResolution =
   | { status: 'disabled' } // 未配置 AID_WECOM_SERVER_URL → read-session 直接 OCR 通道
   | { status: 'ok'; auth: ProxyAuth }
   | { status: 'error'; serverUrl: string; kind: ProxyFailureKind; message: string }
 
 /**
- * 解析代理凭据：本地绑定命中 → 复用；否则有激活码 → 惰性激活；否则 config 错误。
- * 失败归并为 error 状态（kind 区分 config/unavailable，readSession 按此决定降级）；
- * 唯一例外：用户取消（CancelledError）直接透传，绝不吞成 error。
+ * 解析代理凭据（M10c 直连模式）：URL + token 都配置 → 直接可用；缺任一 → config 错误
+ * （message 提示两个环境变量名）。无网络请求、无本地状态——token 即配置即用。
  */
-export async function resolveProxyAuth(deps: ServerProxyDeps = {}): Promise<ProxyResolution> {
+export function resolveProxyAuth(deps: ServerProxyDeps = {}): ProxyResolution {
   const env = deps.env ?? process.env
   const serverUrl = normalizeServerUrl(env.AID_WECOM_SERVER_URL)
   if (!serverUrl) return { status: 'disabled' }
 
-  const cached = await loadBinding(deps)
-  if (cached && cached.serverUrl === serverUrl) return { status: 'ok', auth: cached }
-
-  const code = (env.AID_WECOM_ACTIVATION_CODE ?? '').trim()
-  if (!code) {
+  const accessToken = (env.AID_WECOM_SERVER_TOKEN ?? '').trim()
+  if (!accessToken) {
     return {
       status: 'error',
       serverUrl,
       kind: 'config',
       message:
-        '已配置 AID_WECOM_SERVER_URL 但本机无有效绑定；请设置 AID_WECOM_ACTIVATION_CODE（一次性激活码）后重试，首次调用会自动激活',
+        '已配置 AID_WECOM_SERVER_URL 但缺少 AID_WECOM_SERVER_TOKEN（服务端长期 token）；'
+        + '请同时设置 AID_WECOM_SERVER_URL 与 AID_WECOM_SERVER_TOKEN 后重试',
     }
   }
-  try {
-    const auth = await activateAndStore(serverUrl, code, deps)
-    return { status: 'ok', auth }
-  } catch (err) {
-    if (err instanceof CancelledError) throw err
-    if (err instanceof ProxyError) return { status: 'error', serverUrl, kind: err.kind, message: err.message }
-    return { status: 'error', serverUrl, kind: 'unavailable', message: err instanceof Error ? err.message : String(err) }
-  }
+  return { status: 'ok', auth: { serverUrl, accessToken } }
 }
 
 // ---------- 会话历史解析响应模型（M10a 服务端契约） ----------
@@ -315,9 +207,18 @@ function parseSessionHistoryResponse(data: Record<string, unknown>): SessionHist
   return resp
 }
 
-/** 按状态码分类非 200 响应（402 不降级 / 5xx·422 可降级 / 其余 4xx 可降级但带状态码） */
+/** 按状态码分类非 200 响应（401 config 不降级 / 402 不降级 / 5xx·422 可降级） */
 function classifyHttpFailure(status: number, data: Record<string, unknown>): ProxyError {
   const detail = typeof data.detail === 'string' ? data.detail : ''
+  if (status === 401) {
+    // 直连模式：token 是手工配置的长期值，401 = 配置错误（token 无效/被禁用），
+    // 不重试不降级——直报让用户修配置
+    return new ProxyError(
+      'config',
+      `服务端拒绝 token（401${detail ? `：${detail}` : ''}）：AID_WECOM_SERVER_TOKEN 无效或已被禁用，请检查配置`,
+      status,
+    )
+  }
   if (status === 402) {
     return new ProxyError(
       'insufficient_credit',
@@ -338,56 +239,35 @@ function classifyHttpFailure(status: number, data: Record<string, unknown>): Pro
 /**
  * 会话历史解析（模型主通道）：截图 base64 上传服务端 → 结构化消息。
  *
- * 流程：resolveProxyAuth（本地绑定/惰性激活）→ POST session-history → 401 时清绑定
- * 重激活一次重试 → 200 返回归一响应。失败抛 ProxyError（kind 决定 readSession 是否
- * 降级 OCR：config/insufficient_credit 不降级，unavailable 降级）；用户取消抛
- * CancelledError。未配置 SERVER_URL 抛 ProxyError('config')（readSession 预检后不应走到）。
+ * 流程：resolveProxyAuth（URL+token 直读环境变量）→ POST session-history → 200 返回
+ * 归一响应。失败抛 ProxyError（kind 决定 readSession 是否降级 OCR：config/
+ * insufficient_credit 不降级，unavailable 降级）；用户取消抛 CancelledError。
+ * 未配置 SERVER_URL 抛 ProxyError('config')（readSession 预检后不应走到）。
  */
 export async function parseSessionHistory(
   params: ParseSessionHistoryParams,
   deps: ServerProxyDeps = {},
 ): Promise<SessionHistoryResponse> {
   const fullDeps: ServerProxyDeps = { ...deps, signal: params.signal ?? deps.signal }
-  const resolution = await resolveProxyAuth(fullDeps)
+  const resolution = resolveProxyAuth(fullDeps)
   if (resolution.status === 'error') {
     throw new ProxyError(resolution.kind, resolution.message)
   }
   if (resolution.status === 'disabled') {
     throw new ProxyError('config', '未配置 AID_WECOM_SERVER_URL（模型通道未启用）')
   }
-  let auth = resolution.auth
+  const { auth } = resolution
 
-  const postOnce = (): Promise<{ status: number; data: Record<string, unknown> }> =>
-    fetchJson(
-      `${auth.serverUrl}/api/client/v1/session-history`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${auth.accessToken}` },
-        body: JSON.stringify({ images: params.images, client: 'wecom', session_title: params.sessionTitle }),
-      },
-      '会话解析',
-      fullDeps,
-    )
-
-  let first = await postOnce()
-  if (first.status === 200) return parseSessionHistoryResponse(first.data)
-
-  // 401：token 失效（服务端重启/换库/过期）→ 清缓存重激活一次重试
-  if (first.status === 401) {
-    clearBinding(fullDeps)
-    const reResolved = await resolveProxyAuth(fullDeps)
-    if (reResolved.status === 'error') {
-      throw new ProxyError(reResolved.kind, `token 失效且重新激活失败：${reResolved.message}`)
-    }
-    if (reResolved.status === 'disabled') {
-      throw new ProxyError('config', '未配置 AID_WECOM_SERVER_URL（模型通道未启用）')
-    }
-    auth = reResolved.auth
-    first = await postOnce()
-    if (first.status === 200) return parseSessionHistoryResponse(first.data)
-    if (first.status === 401) {
-      throw new ProxyError('config', 'token 无效且重新激活后仍被拒绝（401），请检查服务端配置', 401)
-    }
-  }
-  throw classifyHttpFailure(first.status, first.data)
+  const { status, data } = await fetchJson(
+    `${auth.serverUrl}/api/client/v1/session-history`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${auth.accessToken}` },
+      body: JSON.stringify({ images: params.images, client: 'wecom', session_title: params.sessionTitle }),
+    },
+    '会话解析',
+    fullDeps,
+  )
+  if (status === 200) return parseSessionHistoryResponse(data)
+  throw classifyHttpFailure(status, data)
 }

@@ -11,6 +11,7 @@
 
 路由前缀：/api/saas/client-bindings
 - GET  /list            列出客户端绑定
+- POST /static          签发静态长期绑定（M10c 直连 token：token_type='static'，不过期）
 - POST /{binding_id}/disable  禁用绑定（踢下线）
 - POST /{binding_id}/rotate-token  轮换 access_token
 
@@ -42,6 +43,14 @@ class ActivationCodeCreateRequest(BaseModel):
     client_name: Optional[str] = None
     expires_at: Optional[str] = None  # ISO 8601
     max_uses: int = 1
+
+
+class StaticBindingCreateRequest(BaseModel):
+    """静态长期绑定签发（M10c）：自有机器直连自有服务端，免激活码。"""
+
+    tenant_id: str
+    client_name: Optional[str] = None
+    machine_id: Optional[str] = None
 
 
 # ============== 激活码管理 ==============
@@ -180,6 +189,40 @@ async def revoke_binding_by_code(code_id: int, request: Request):
 
 # ============== 绑定管理 ==============
 
+@binding_router.post("/static")
+@audit_action(BehaviorAction.CREATE, BehaviorResourceType.CLIENT_BINDING, name_arg="client_name")
+async def create_static_binding(req: StaticBindingCreateRequest, request: Request):
+    """签发静态长期客户端绑定（M10c 直连模式，token_type='static'，不过期）。
+
+    自有机器调自有服务端场景（wecom-cli M10c）：跳过激活码，签发后把 access_token
+    配到客户端 AID_WECOM_SERVER_TOKEN 直连使用；生命周期由 disable/rotate-token 管理。
+    明文 access_token 仅此一次返回。
+    """
+    admin = require_admin(request)
+    # 文件头声明「仅 platform_admin」：require_admin 放行任意已登录角色（含 user/
+    # tenant_admin），签发不过期记名 token 属高权限操作，必须显式校验角色，
+    # 防任意租户用户为任意 tenant_id 签发 token 消耗他租户积分
+    if admin.get("role") != "platform_admin":
+        raise HTTPException(status_code=403, detail="仅平台管理员可签发静态绑定")
+    record = ClientBindingDB.create_static(
+        tenant_id=req.tenant_id,
+        client_name=req.client_name,
+        machine_id=req.machine_id,
+    )
+    logger.info(
+        f"静态客户端绑定签发 tenant={req.tenant_id} binding={record['binding_id']} "
+        f"client_name={req.client_name}"
+    )
+    return {
+        "binding_id": record["binding_id"],
+        "access_token": record["access_token"],  # ⚠️ 仅此一次明文返回
+        "tenant_id": record["tenant_id"],
+        "client_name": record.get("client_name"),
+        "token_type": record.get("token_type") or "static",
+        "created_at": record["created_at"].isoformat() if record.get("created_at") else None,
+    }
+
+
 @binding_router.get("/list")
 async def list_bindings(
     request: Request,
@@ -196,7 +239,7 @@ async def list_bindings(
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT id, binding_id, tenant_id, activation_code_id, client_name, machine_id, "
-                "status, last_seen_at, expires_at, created_at FROM client_bindings "
+                "status, token_type, last_seen_at, expires_at, created_at FROM client_bindings "
                 "ORDER BY created_at DESC LIMIT 200"
             )
             records = [dict(r) for r in cursor.fetchall()]
@@ -209,6 +252,7 @@ async def list_bindings(
             "client_name": r.get("client_name"),
             "machine_id": r.get("machine_id"),
             "status": r["status"],
+            "token_type": r.get("token_type") or "activated",
             "last_seen_at": r["last_seen_at"].isoformat() if r.get("last_seen_at") else None,
             "expires_at": r["expires_at"].isoformat() if r.get("expires_at") else None,
             "created_at": r["created_at"].isoformat() if r.get("created_at") else None,

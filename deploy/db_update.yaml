@@ -1065,3 +1065,7 @@
     CREATE TRIGGER trg_reply_styles_audit_truncate
     AFTER TRUNCATE ON reply_styles
     FOR EACH STATEMENT EXECUTE FUNCTION fn_reply_styles_audit();
+- datetime: "2026-09-29 10:30:00"
+  remark: "client_bindings 增加 token_type 字段（activated=激活产出默认 / static=管理端手工签发的长期直连 token，M10c wecom-cli 去激活码模式）——static 记录鉴权时跳过 expires_at 过期检查，生命周期由管理端 disable/rotate-token 控制"
+  statements: |
+    ALTER TABLE client_bindings ADD COLUMN IF NOT EXISTS token_type TEXT DEFAULT 'activated';

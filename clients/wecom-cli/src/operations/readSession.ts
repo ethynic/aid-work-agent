@@ -24,9 +24,9 @@
  *   model_usage/billing/model_latency_ms 透传）；
  * - 模型通道失败分类（ProxyError.kind）：unavailable（网络/超时/5xx/422/截图文件
  *   缺失超限）→ 驱动二次调用 -ParseMode ocr 兜底（channel="ocr"+fallback_reason）；
- *   insufficient_credit（402 余额不足）/ config（激活失败、无激活码、token 重激活后
- *   仍 401）→ **不降级**直接报错（INSUFFICIENT_CREDIT / CONFIG_MISSING）——走 OCR
- *   会让用户以为模型通道免费/正常；用户取消 → CancelledError 透传；
+ *   insufficient_credit（402 余额不足）/ config（缺 URL/TOKEN 配置、token 无效被
+ *   服务端 401 拒绝）→ **不降级**直接报错（INSUFFICIENT_CREDIT / CONFIG_MISSING）
+ *   ——走 OCR 会让用户以为模型通道免费/正常；用户取消 → CancelledError 透传；
  * - since_days 超龄早停依赖逐页 OCR，仅 OCR 通道生效（模型通道抓满 max_pages 页，
  *   调用方按返回 time 字段自行过滤）。
  */
@@ -314,7 +314,7 @@ export function createWecomReadSessionOperation(
           } catch (err) {
             if (err instanceof CancelledError) throw err
             if (err instanceof ProxyError) {
-              // 402 余额不足 / 激活失败：不降级，明确报给用户（走 OCR 会让用户以为模型通道免费/正常）
+              // 402 余额不足 / 配置错误（token 缺失/无效）：不降级，明确报给用户（走 OCR 会让用户以为模型通道免费/正常）
               if (err.kind === 'insufficient_credit') {
                 throw new CodedOperationError('INSUFFICIENT_CREDIT', err.message, 'none')
               }

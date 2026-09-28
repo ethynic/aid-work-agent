@@ -192,6 +192,38 @@ class ClientBindingDB:
         return row
 
     @staticmethod
+    def create_static(
+        *,
+        tenant_id: str,
+        client_name: Optional[str] = None,
+        machine_id: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """创建静态长期绑定（M10c：管理端手工签发的直连 token，token_type='static'）。
+
+        与激活产出的绑定共用同一 access_token 鉴权链路（_require_binding 零改动），
+        差异仅在过期过滤：static 记录跳过 expires_at 检查（见 client_auth.
+        verify_client_token），供自有机器直连自有服务端（wecom-cli M10c 去激活码模式）。
+        返回含明文 access_token 的记录（明文仅此一次返回）。
+        """
+        binding_id = ClientBindingDB._new_binding_id()
+        access_token = ClientBindingDB._new_access_token()
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """INSERT INTO client_bindings
+                   (binding_id, tenant_id, activation_code_id, client_name, machine_id,
+                    access_token, status, token_type, expires_at)
+                   VALUES (%s, %s, NULL, %s, %s, %s, 'active', 'static', NULL)
+                   RETURNING id, binding_id, tenant_id, activation_code_id, client_name,
+                             machine_id, access_token, status, token_type, expires_at, created_at""",
+                (binding_id, tenant_id, client_name, machine_id, access_token),
+            )
+            row = dict(cursor.fetchone())
+            conn.commit()
+        logger.info(f"静态客户端绑定创建 binding_id={binding_id} tenant={tenant_id} client_name={client_name}")
+        return row
+
+    @staticmethod
     def get_by_token(access_token: str) -> Optional[dict[str, Any]]:
         """按 access_token 查询绑定（Redis 缓存，TTL 300s）。仅返回 status='active' 的记录。"""
         cached = get_cached(ClientBindingDB._CACHE_PREFIX, access_token)
@@ -201,7 +233,7 @@ class ClientBindingDB:
             cursor = conn.cursor()
             cursor.execute(
                 """SELECT id, binding_id, tenant_id, activation_code_id, client_name,
-                          machine_id, access_token, status, expires_at
+                          machine_id, access_token, status, token_type, expires_at
                    FROM client_bindings
                    WHERE access_token = %s AND status = 'active'""",
                 (access_token,),
