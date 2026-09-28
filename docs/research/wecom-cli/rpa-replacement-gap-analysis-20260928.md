@@ -310,3 +310,9 @@ Authorization: Bearer $TYPESAFE_API_KEY
 - 关键优势实证：**图片消息 side/kind 判定完美**（模型看气泡位置，OCR 只看文字坐标）——直接解决 M9 记录的已知限制；多行消息仅提取首行（prompt 可优化要求完整转录）。
 - thinking 档位：该模型版本始终思考不可关闭（API 报错自相矛盾：提示用 low 又拒 low）；降采样无助（瓶颈在生成非图片 token）。
 - 架构建议（下阶段）：服务端 `/api/client/v1/session-history`（企微/微信共用，激活码计费同 weixin-cli 模式）；CLI 侧 read-session 双通道（模型主/OCR 兜底，模型不可达/超时自动降级，数据结构统一 {time,side,kind,text}）。
+
+### M10：聊天记录双通道（2026-09-28）——✅ 服务端 + CLI 双端完成，降级路径真机验证通过
+
+- **M10a 服务端**（551871c7）：`POST /api/client/v1/session-history`——GLM-5.3-Flash 并行分页（模型锁定：flashx 实测思考 token 翻倍无提速且贵 2.5 倍已排除；思考不可关闭是 API 契约限制）+ 服务端最大后缀-前缀重叠去重 + page_gap 告警；计费 token 成本×100 积分（0.8/2.8 元/M 价目常量），最低 1 积分，402 预检原子扣减。测试智能体修复计费浮点多扣 0.01（Decimal 化）；CR 含合并算法 7 场景手工推演。
+- **M10b CLI**：read-session 双通道——配置 AID_WECOM_SERVER_URL 时驱动只截图（-ParseMode none，省每页 ~2s OCR 冷启动）→ TS 调服务端（激活码→token，DPAPI 缓存 %LOCALAPPDATA%，401 重激活一次）→ channel=model（含 kind/time/billing 透传）；网络/超时/5xx 降级完整 OCR 链（channel=ocr + fallback_reason）；**402/激活码被拒直报不降级**；未配置直接 OCR（watch 恒 OCR 通道，计费保护）。serverProxy/dpapi 模仿 weixin-cli（代码体逐行一致）。测试 195/195（+23）。
+- 真机已验：OCR 直连通道、假地址降级（fallback_reason 正确）。**待用户配合 E2E**：服务端地址 + 激活码 → 模型通道实测（延迟/计费扣减/kind 字段）。

@@ -32,7 +32,9 @@ aid-wecom send-file --target-ref <ref> --file <本地绝对路径> [--json]
 aid-wecom unread [--name <名>] [--json]     # 未读会话快照（只读，不开会话不清角标）
 aid-wecom read-session --target-ref <ref> [--max-pages N] [--since-days N] [--json]
                                             # 读会话消息（只读内容；进入会话会清除该会话未读角标；
-                                            # 智能分发进会话 + 滚动截屏 OCR + 页间去重 + 时间戳沿袭。
+                                            # 智能分发进会话 + 滚动截屏；M10b 双通道解析：配置
+                                            # AID_WECOM_SERVER_URL 时走服务端模型通道（按次计积分），
+                                            # 否则/模型不可用时本地 OCR（页间去重 + 时间戳沿袭）。
                                             # M9 由 read 改名，旧 read 动词废弃无别名）
 aid-wecom watch [--interval 秒] [--once]    # 新消息跟踪循环：事件 NDJSON 逐行写 stdout，Ctrl+C 退出
 aid-wecom add-customer --phone <11位> --yes [--json]
@@ -65,7 +67,7 @@ aid-wecom version [--json]                  # 版本 + provider manifest（含 s
   代码按 wecom-personal-rpa `wecom-ops.ps1` get_login_state 先例实现（小窗判定 +
   CopyFromScreen 截图 base64）；上线前需登出企微复验二维码可见性与 hint 判定。
 
-## 新消息跟踪（M3：unread / read-session / watch；M9 read 改名 + 智能分发）
+## 新消息跟踪（M3：unread / read-session / watch；M9 read 改名 + 智能分发；M10b 双通道）
 
 无会话归档场景的核心能力，三个层次：
 
@@ -79,25 +81,28 @@ aid-wecom version [--json]                  # 版本 + provider manifest（含 s
   不输入文字，**草稿判定不适用，绝不因输入区草稿中止**；Jev 不可用降级标题归一化
   规则匹配）；判 no/unclear → 返回 `navigate_required=true` 交 TS 编排（内部
   chatSearch + chatSelect 切换会话后二次调用本驱动）；判 yes → 标题严格校验（防串
-  会话，同 select/send 语义）→ 先下滚到底 → 逐屏上滚截图 OCR → 页间「旧页后缀 ==
-  已合并前缀」最大重叠去重 → 时间戳沿袭（见下）→ finally 滚回底部恢复原位。
+  会话，同 select/send 语义）→ 先下滚到底 → 逐屏上滚截图 → **M10b 起解析按双通道
+  分流（见下节）**→ finally 滚回底部恢复原位。
   **旧 M3 流程（驱动内 Open-WeComSearchOverlay 搜索定位链）自 M9 退役**——旧链在
   窄窗口有残留误判 bug + ESC 最小化风险（见 M4 段）。
   - **row 快路径（watch 依赖）**：驱动可选参数 `-RowX/-RowY`（unread OCR 名称行中心）
     >0 时先直点会话列表行，再走同一会话判定做校验兜底（点击未命中/列表已滚动 →
     判定不过 → navigate_required 分发）。watchPoll 只在首轮带 row 坐标，分发后的
     二次调用已在目标会话、不再点行。
-  - **返回 data**：`{target, title, navigated, messages:[{side,text,time?}], pages_read,
-    timing_ms, screenshot_paths}`；`navigated` 标识快路径（false=当前会话直读）还是
+  - **返回 data**：`{target, title, navigated, channel, messages, pages_read, timing_ms,
+    screenshot_paths}`（模型通道另附 `model_usage`/`billing`/`model_latency_ms`，
+    降级时附 `fallback_reason`）；`navigated` 标识快路径（false=当前会话直读）还是
     走了 search+select 分发（true）。
   - **side 语义（锁定，勿改）**：气泡**左缘锚定 = peer（对方发的）**、**右缘锚定 =
-    self（自己发的）**、timeline = 时间分割线；实现为 chat_ocr.py classify_side 的
-    OCR 启发式（长行可能误判），调用方不得依赖 side 做安全判定。
+    self（自己发的）**、timeline = 时间分割线；OCR 通道实现为 chat_ocr.py
+    classify_side 的 OCR 启发式（长行可能误判），模型通道由服务端 GLM 多模态判定
+    （质量更高）；调用方不得依赖 side 做安全判定。
   - **time 字段语义（M9 时间戳沿袭）**：消息的 `time` = **最近一条时间分割线的原文**
     （如「7月16日 09:01」「08:23」），是**近似时间**；首条分割线之前的消息无 `time`
     字段。timeline 条目保留在输出中（watch 的页间去重/水位逻辑依赖 side|text 键，
     不受影响；其 `text` 即时间文本本身，不带 `time`）。
-  - `--since-days N`：某屏最早「M月D日」分割线超龄即停止上翻（简单版）。
+  - `--since-days N`：某屏最早「M月D日」分割线超龄即停止上翻（简单版；**仅 OCR 通道
+    生效**——模型通道无逐页 OCR 早停，抓满 max_pages 页，调用方按返回 time 自行过滤）。
   - **副作用：进入会话会清除该会话未读角标**（企微客户端固有行为）；阶段超时预算
     600s 不变；effect=none（含 navigate 阶段失败——select 本身 effect=none）。
 - **`watch`**：新消息跟踪循环。每轮 = `wecom_watch_poll` 单轮：unread 快照与本机水位
@@ -109,6 +114,43 @@ aid-wecom version [--json]                  # 版本 + provider manifest（含 s
   相同消息**；读取成功后角标水位归零（进会话已清角标，之后任何角标都是新增，防止
   「读取后来 1 条」被旧水位压住漏报）；读取失败的候选不推进水位（下轮重试，不丢
   消息）；会话从快照消失时水位同样归零。
+
+### M10b 双通道解析（模型主通道 + OCR 兜底）
+
+read-session 抓取截图后的解析分流（E7 实验结论：多模态模型提取聊天记录质量碾压
+本地 OCR，图片消息 side 判定完美，定为主通道方向）：
+
+```
+配置 AID_WECOM_SERVER_URL？
+├─ 否 → 驱动一次调用 -ParseMode ocr（逐页 OCR + 页间去重 + 时间戳沿袭）
+│        → channel="ocr"，不报错
+└─ 是（模型主通道）→ 驱动调用 -ParseMode none（只导航 + 滚动截图，不逐页 OCR，
+         省每页 ~2s OCR 冷启动）→ TS 读 page-*.png 转 base64（反转采集序为
+         时间序旧→新）→ POST /api/client/v1/session-history（服务端 GLM-5.3-Flash
+         多模态并行分页解析 + 页间重叠去重，超时 150s）
+         ├─ 200 → channel="model"：messages 带 side/kind/time（kind=text|image|
+         │        file|timeline），model_usage/billing/model_latency_ms 透传
+         ├─ 网络/超时/5xx/422/截图文件缺失超限 → 降级：驱动二次调用 -ParseMode ocr
+         │        → channel="ocr" + fallback_reason（既有 OCR 链原样保留在驱动里）
+         ├─ 402 余额不足 → INSUFFICIENT_CREDIT 直接报错，不降级（走 OCR 会让用户
+         │        以为模型通道免费）
+         └─ 激活失败/无激活码/token 重激活后仍 401 → CONFIG_MISSING 直接报错，
+                  不降级（静默走 OCR 会让用户误以为模型通道正常）
+```
+
+- **配置（环境变量，不新增 CLI 动词）**：`AID_WECOM_SERVER_URL`（服务端地址，设置
+  即启用模型通道）+ `AID_WECOM_ACTIVATION_CODE`（一次性激活码，可选——本地无绑定时
+  首次调用自动激活）。access_token 不落明文：DPAPI（CurrentUser）加密存
+  `%LOCALAPPDATA%\AidWorkAgent\wecom-cli\server-binding.json`；token 失效（401）自动
+  清缓存重激活一次重试。
+- **计费提示**：模型通道按次计积分（服务端 token 成本×100 积分、最低 1 积分/次，
+  响应 `billing.credits_charged`），**402 余额不足时不降级 OCR 直接报错**——降级会
+  让用户误以为模型通道免费；未配置 SERVER_URL 时 OCR 通道免费不计量。
+- **模型通道限制**：单图 ≤5MB、1..10 张（超限/文件缺失走 OCR 降级）；`since_days`
+  早停不生效（见上）；消息明文与截图会上传服务端（服务端承诺不入日志，仅台账记
+  client/pages/tokens/credits）。
+- watch 轮询内的 read-session 驱动调用不带 `-ParseMode`（缺省 ocr），watch 维持
+  纯本地 OCR（模型通道按次计费，不适合轮询高频调用）。
 
 `read-session`/`watch` 的 artifact 目录（`%LOCALAPPDATA%\AidWorkAgent\wecom-cli\artifacts\read-session-*` / `watch-*`）
 含逐屏截图与 `driver-log.txt`（OCR 原始输出，**含消息明文**），仅用于真机排障；
@@ -314,7 +356,10 @@ name+section+subtitle 消歧键一致才可信——Jev 看不到 target_ref 的
 - `add-customer` / `search` / `select` / `send` / `send-image` / `send-file` / `unread` / `read-session` / `watch` 另需 OCR：仓库根 `venv` 的 python + `rapidocr_onnxruntime`
   （`drivers/ps1` 上四级为仓库根，取 `venv\Scripts\python.exe`；缺失 → CONFIG_MISSING）；
   `probe` 的 `qr_status_hint` 也走该 OCR 但为 best-effort（缺失 → hint=normal，探测不失败）；
-- `search` / `send` / `send-image` / `send-file` / `read-session` 的 Jev 决策另需可选环境变量 `TYPESAFE_API_KEY`（缺失自动降级规则链，功能不中断；watch 轮询内的 read-session 同样适用）。
+- `search` / `send` / `send-image` / `send-file` / `read-session` 的 Jev 决策另需可选环境变量 `TYPESAFE_API_KEY`（缺失自动降级规则链，功能不中断；watch 轮询内的 read-session 同样适用）；
+- `read-session` 的**模型主通道**另需可选环境变量 `AID_WECOM_SERVER_URL`（服务端地址）+
+  `AID_WECOM_ACTIVATION_CODE`（一次性激活码，本地无绑定时首次调用自动激活）——两者
+  均未配置时直接走本地 OCR 通道（不报错）；模型通道按次计积分，详见 M10b 章节。
 
 ## 关键实现事实（真机实测，勿随意改）
 
@@ -393,6 +438,12 @@ name+section+subtitle 消歧键一致才可信——Jev 看不到 target_ref 的
   旧驱动内搜索链退役原因：固定像素带在窄窗口把聊天区标题误判为搜索框残留（已证实
   bug），且 ESC 关闭路径有最小化企微风险——搜索/清空统一走 M4 V2 链（Ctrl+F 聚焦 +
   Ctrl+A+Delete 清空），会话切换交 TS 编排 chatSearch+chatSelect。
+- M10b（2026-09-28 设计定稿）：read-session 双通道解析——模型主通道（截图 base64 上传
+  服务端 `/api/client/v1/session-history`，GLM-5.3-Flash 多模态并行分页 + 服务端重叠
+  去重，来源 E7 实验结论）+ OCR 兜底。驱动加 `-ParseMode ocr|none`（none=只截图不逐页
+  OCR，省每页 ~2s 冷启动；缺省 ocr 向后兼容 watch）；TS 侧 serverProxy.ts（激活码 →
+  access_token，DPAPI 加密缓存 server-binding.json，401 重激活一次，超时 150s）；
+  402 余额不足/激活失败不降级直接报错（INSUFFICIENT_CREDIT / CONFIG_MISSING）。
 - 含中文的 .ps1 必须 **UTF-8 with BOM**。
 
 ## 目录
@@ -401,8 +452,8 @@ name+section+subtitle 消歧键一致才可信——Jev 看不到 target_ref 的
 src/cli/          动词子命令 + 薄 renderer（进度/退出码/跨进程互斥）
 src/mcp/          MCP stdio server + toolDefs + manifest digest
 src/operations/   业务能力层（统一 OperationResult 契约，永不 reject）
-src/platform/     PowerShell 驱动执行器 / 环境探测 / 命名互斥 / target_ref（HMAC 短期句柄）/ watch 水位状态
-src/security/     日志脱敏（手机号不明文入日志）
+src/platform/     PowerShell 驱动执行器 / 环境探测 / 命名互斥 / target_ref（HMAC 短期句柄）/ watch 水位状态 / serverProxy（M10b 模型通道：激活码绑定 + /session-history 客户端）
+src/security/     日志脱敏（手机号不明文入日志）+ DPAPI 凭据加密（serverProxy access_token）
 drivers/ps1/      UI 自动化驱动（_common.ps1 底座 + probe/add-customer/chat-search/chat-select/message-send/send-image/send-file/unread-list/read-session）
 drivers/py/       RapidOCR：add_customer_result.py（添加客户弹窗）+ chat_ocr.py（search/send/unread/history 单一入口）
 tests/            node:test，全部 mock（绝不触达真实企微窗口）

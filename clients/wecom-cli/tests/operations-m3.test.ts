@@ -134,6 +134,9 @@ function makeReadOp(
     verifyRefFn: extra.verifyRefFn ?? (() => TARGET),
     createRefFn: extra.createRefFn,
     artifactDirFn: extra.artifactDirFn ?? (() => dir),
+    // M10b：显式空 env 锁定 OCR 通道（既有用例全部为 OCR 链路），防宿主机
+    // AID_WECOM_SERVER_URL 环境变量把用例意外切进模型通道
+    env: {},
   })
 }
 

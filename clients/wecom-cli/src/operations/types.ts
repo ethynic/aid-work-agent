@@ -41,6 +41,8 @@ export type ErrorCode =
   | 'CANCELLED'
   // 写动作
   | 'EXECUTION_UNKNOWN'
+  // 计费（M10b 模型通道 402 余额不足；只读操作无 OCR 降级，直接报给用户）
+  | 'INSUFFICIENT_CREDIT'
   // 兜底
   | 'INTERNAL_ERROR'
 

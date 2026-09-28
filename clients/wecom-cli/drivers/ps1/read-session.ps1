@@ -23,6 +23,14 @@
 #      截图 OCR（chat_ocr.py history 模式）→ 页间「旧页后缀 == 已合并前缀」最大重叠去重
 #      → -SinceDays>0 时本页最早「M月D日」分割线超龄即停止上翻 → 上滚后整页与前一页
 #      完全相同视为到顶停止 → finally 滚回底部恢复原位（无论成败）。
+#      M10b 双通道：-ParseMode none 时只截图不逐页 OCR（省每页 ~2s OCR 冷启动），
+#      page-*.png 路径经 page_paths 返回交 TS 读文件转 base64 调服务端模型通道
+#      （/api/client/v1/session-history，服务端做重叠去重与时间戳）；OCR 依赖的早停
+#      （空页/到顶/SinceDays 超龄）在 none 模式不可用——抓满 MaxPages 页，重复页由
+#      服务端重叠去重兜底，SinceDays 静默忽略（调用方按返回 time 字段自行过滤）。
+#      none 失败（网络/超时/5xx）由 TS 二次调用本驱动 -ParseMode ocr 兜底（模型通道
+#      402 余额不足/激活失败不降级，直接报错）。标题带 boxes OCR 与 Jev 会话判定
+#      （防串会话 fail-closed）两种模式都保留。
 #   6) 时间戳沿袭（M9）：页合并完成后沿合并消息流（旧→新）遍历，side=timeline 的条目
 #      记住其文本（如「7月16日 09:01」「08:23」），后续 self/peer 条目带 time=<最近
 #      分割线原文>；首条分割线之前的消息无 time 字段。timeline 条目保留在输出中
@@ -39,6 +47,9 @@ param(
     [int]$SinceDays = 0,
     [int]$RowX = -1,
     [int]$RowY = -1,
+    # M10b 双通道：ocr=逐页 OCR+去重+时间戳（缺省，watch 等既有调用不变）；
+    # none=只截图不 OCR（模型通道首轮抓取，解析交服务端）
+    [string]$ParseMode = 'ocr',
     [Parameter(Mandatory)][string]$ArtifactDir
 )
 $ErrorActionPreference = 'Stop'
@@ -156,8 +167,15 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WecomCli.ReadSession' -Body {
     if ($MaxPages -lt 1 -or $MaxPages -gt 10) {
         Throw-DriverError 'INVALID_ARGUMENT' ('MaxPages 必须是 1..10（实际：' + $MaxPages + '）')
     }
+    if ($ParseMode -ne 'ocr' -and $ParseMode -ne 'none') {
+        Throw-DriverError 'INVALID_ARGUMENT' ('ParseMode 必须是 ocr 或 none（实际：' + $ParseMode + '）')
+    }
     if ((($RowX -gt 0) -or ($RowY -gt 0)) -and -not (($RowX -gt 0) -and ($RowY -gt 0))) {
         Throw-DriverError 'INVALID_ARGUMENT' 'RowX/RowY 必须成对提供（unread OCR 名称行中心，图像坐标系）'
+    }
+    if ($SinceDays -gt 0 -and $ParseMode -eq 'none') {
+        # none 模式无逐页 OCR，SinceDays 超龄早停不可用（抓满 MaxPages 页，调用方按 time 过滤）
+        Write-DriverLog ('SinceDays=' + $SinceDays + ' 在 none 模式下忽略（无逐页 OCR 早停）')
     }
 
     # 0.5) 搜索框残留防御（best-effort，同 send-file）：Ctrl+F 聚焦 → Ctrl+A+Delete 清空
@@ -182,7 +200,7 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WecomCli.ReadSession' -Body {
     }
 
     # 2) 截图 + 标题带 OCR → 拼接标题（判定与严格校验共用同一来源）
-    Write-DriverLog ('target=' + $TargetName + ' subtitle=' + $Subtitle + ' section=' + $Section + ' mainHwnd=' + $mainHwnd + ' row=(' + $RowX + ',' + $RowY + ') maxPages=' + $MaxPages + ' sinceDays=' + $SinceDays)
+    Write-DriverLog ('target=' + $TargetName + ' subtitle=' + $Subtitle + ' section=' + $Section + ' mainHwnd=' + $mainHwnd + ' row=(' + $RowX + ',' + $RowY + ') maxPages=' + $MaxPages + ' sinceDays=' + $SinceDays + ' parseMode=' + $ParseMode)
     $t0 = $swTotal.ElapsedMilliseconds
     $pre = Save-StepShot $mainHwnd 'step1-precheck.png'
     [void]$shots.Add([string]$pre.path)
@@ -261,12 +279,25 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WecomCli.ReadSession' -Body {
     Send-WeComWheel -Hwnd $mainHwnd -Delta -120 -Count 40
     Start-Sleep -Milliseconds 800
 
-    $pages = New-Object System.Collections.ArrayList   # 每页 = @{ msgs; keys }，pages[0]=最新底部页
+    $pages = New-Object System.Collections.ArrayList   # 每页 = @{ msgs; keys }（ocr 模式），pages[0]=最新底部页
+    $pagePaths = New-Object System.Collections.ArrayList  # page-N.png 采集序（新→旧），none 模式模型通道上传用
     try {
         for ($page = 1; $page -le $MaxPages; $page++) {
             $mainHwnd = Resolve-WeComMainWindow
             $s = Save-StepShot $mainHwnd ('page-' + $page + '.png')
             [void]$shots.Add([string]$s.path)
+            [void]$pagePaths.Add([string]$s.path)
+            if ($ParseMode -eq 'none') {
+                # M10b none 模式：只截图不 OCR（省每页 ~2s OCR 冷启动，解析交服务端模型）；
+                # OCR 依赖的早停（空页/到顶/SinceDays）不可用，抓满 MaxPages 页，
+                # 重复页由服务端页间重叠去重兜底
+                Write-DriverLog ('page' + $page + ' 截图（none 模式不 OCR）')
+                if ($page -lt $MaxPages) {
+                    Send-WeComWheel -Hwnd $mainHwnd -Delta 120 -Count 8
+                    Start-Sleep -Milliseconds 800
+                }
+                continue
+            }
             $ocr = Invoke-ReadSessionOcr ([string]$s.path) 'history'
             $msgs = @($ocr.messages | ForEach-Object {
                 @{ side = [string]$_.side; text = [string]$_.text }
@@ -306,6 +337,23 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WecomCli.ReadSession' -Body {
         }
     }
     $timing.scroll = [int]($swTotal.ElapsedMilliseconds - $t0)
+
+    # M10b none 模式：无逐页 OCR 无合并，直接返回截图清单（TS 读 page-*.png 转
+    # base64 调服务端模型通道；pages_read = 截图页数，messages 不产出）
+    if ($ParseMode -eq 'none') {
+        $timing.total = [int]($swTotal.ElapsedMilliseconds)
+        Write-DriverLog ('done(none) pages=' + $pagePaths.Count + ' timing=' + ($timing | ConvertTo-Json -Compress))
+        return @{
+            navigate_required = $false
+            title = $title
+            parse_mode = 'none'
+            page_paths = @($pagePaths.ToArray())
+            pages_read = $pagePaths.Count
+            timing_ms = $timing
+            screenshot_paths = @($shots.ToArray())
+        }
+    }
+
     if ($pages.Count -eq 0) {
         Throw-DriverError 'CONTENT_UNAVAILABLE' '未抓到任何消息行（消息区为空或 OCR 全部漏检）'
     }
@@ -361,7 +409,9 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WecomCli.ReadSession' -Body {
     return @{
         navigate_required = $false
         title = $title
+        parse_mode = 'ocr'
         messages = $outMsgs.ToArray()
+        page_paths = @($pagePaths.ToArray())
         pages_read = $pages.Count
         timing_ms = $timing
         screenshot_paths = @($shots.ToArray())
