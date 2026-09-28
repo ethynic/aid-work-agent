@@ -24,6 +24,7 @@ from src.knowledge.vector_db.vector_db import get_vector_db
 from src.config.settings import settings
 from src.db.database import get_db_connection
 from src.db.models import ChatRecordDB
+from src.db.subagent_knowledge_source_db import SubagentKnowledgeSourceDB
 from src.llm.gateway import LLMGateway
 from src.services.billing import (
     calculate_credit_cost_with_breakdown,
@@ -550,6 +551,13 @@ class KnowledgeBaseService:
                 """, (category_id, tenant_id))
                 if cursor.rowcount == 0:
                     return {"success": False, "error": "分类不存在"}
+                # 级联清理 subagent_knowledge_sources 中引用该栏目的授权项
+                # （本租户自有项 + 共享给其他租户的项），避免授权弹框残留"幽灵栏目"
+                cleaned = SubagentKnowledgeSourceDB.remove_source_type(
+                    row["source_type"], tenant_id, conn=conn
+                )
+                if cleaned > 0:
+                    logger.info(f"后端日志：删除栏目 {row['source_type']} 级联清理 {cleaned} 行授权配置")
                 conn.commit()
                 return {"success": True}
         except Exception as e:

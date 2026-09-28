@@ -99,6 +99,57 @@ class SubagentKnowledgeSourceDB:
                 return False
 
     @staticmethod
+    def remove_source_type(source_type: str, owner_tenant_id: str, conn=None) -> int:
+        """级联清理引用某栏目的授权项（栏目被删除时调用，同事务执行由调用方传入 conn）。
+
+        清理两类引用：
+        - owner_tenant_id 租户的自有项：tenant_id = owner_tenant_id 且项内 owner_tenant_id 为空
+        - 其他租户的共享项：项内 owner_tenant_id = owner_tenant_id（来源栏目已不存在）
+
+        注意：同名 source_type 的他租户自有项不受影响（靠 owner_tenant_id 条件区分）。
+
+        Returns: 受影响行数（非清理项数）；DB 异常时由调用方回滚。
+        """
+        def _run(cursor) -> int:
+            cursor.execute(
+                """UPDATE subagent_knowledge_sources s
+                   SET sources = (
+                       SELECT COALESCE(jsonb_agg(e), '[]'::jsonb)
+                       FROM jsonb_array_elements(COALESCE(s.sources, '[]'::jsonb)) AS e
+                       WHERE NOT COALESCE(
+                           e->>'source_type' = %s
+                           AND ((COALESCE(e->>'owner_tenant_id', '') = '' AND s.tenant_id = %s)
+                                OR e->>'owner_tenant_id' = %s),
+                           FALSE)
+                   ),
+                   updated_at = CURRENT_TIMESTAMP
+                   WHERE EXISTS (
+                       SELECT 1
+                       FROM jsonb_array_elements(COALESCE(s.sources, '[]'::jsonb)) AS e
+                       WHERE COALESCE(
+                           e->>'source_type' = %s
+                           AND ((COALESCE(e->>'owner_tenant_id', '') = '' AND s.tenant_id = %s)
+                                OR e->>'owner_tenant_id' = %s),
+                           FALSE)
+                   )""",
+                (source_type, owner_tenant_id, owner_tenant_id) * 2,
+            )
+            return cursor.rowcount
+
+        if conn is not None:
+            return _run(conn.cursor())
+        with get_db_connection() as own_conn:
+            cursor = own_conn.cursor()
+            try:
+                affected = _run(cursor)
+                own_conn.commit()
+                return affected
+            except Exception as e:
+                own_conn.rollback()
+                logger.error(f"级联清理知识库授权项失败: {e}")
+                return -1
+
+    @staticmethod
     def delete(tenant_id: str, subagent_name: str) -> bool:
         """删除某租户某子智能体的知识库关联"""
         with get_db_connection() as conn:

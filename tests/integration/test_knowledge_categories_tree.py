@@ -131,6 +131,48 @@ class TestKnowledgeCategoryTree:
             cur.execute("SELECT COUNT(*) AS c FROM documents WHERE tenant_id = %s", (tenant_id,))
             assert cur.fetchone()["c"] == 1  # 文档保留
 
+    def test_delete_category_cascades_knowledge_sources(self, tenant_id):
+        """删除栏目级联清理 subagent_knowledge_sources：本租户自有项 + 他租户共享项，
+        同名 source_type 的他租户自有项与本租户共享项（来源为他租户）不受影响"""
+        from src.db.subagent_knowledge_source_db import SubagentKnowledgeSourceDB
+
+        other_tid = f"kb_tree_other_{uuid.uuid4().hex[:8]}"
+        cat = knowledge_service.create_category(tenant_id, "policy_gradual", "梯度培育政策")
+        assert cat["success"] is True
+        st = cat["source_type"]
+        try:
+            # 本租户销售助手：自有项(待清理) + 其他自有项(保留) + 他租户共享项(保留，来源他租户)
+            SubagentKnowledgeSourceDB.set(tenant_id, "sales-helper", [
+                {"source_type": st, "display_name": "梯度培育政策", "owner_tenant_id": None},
+                {"source_type": "other_kept", "display_name": "其他栏目", "owner_tenant_id": None},
+                {"source_type": st, "display_name": "他租户同名栏目", "owner_tenant_id": other_tid},
+            ])
+            # 他租户数字员工：共享项(来源本租户，待清理) + 同名自有项(保留)
+            SubagentKnowledgeSourceDB.set(other_tid, "some-agent", [
+                {"source_type": st, "display_name": "借用的梯度培育", "owner_tenant_id": tenant_id},
+                {"source_type": st, "display_name": "我自己的同名栏目", "owner_tenant_id": None},
+            ])
+
+            result = knowledge_service.delete_category(cat["id"], tenant_id)
+            assert result["success"] is True
+
+            own_sources = SubagentKnowledgeSourceDB.get(tenant_id, "sales-helper")
+            own_pairs = {(s["source_type"], s.get("owner_tenant_id")) for s in own_sources}
+            assert (st, None) not in own_pairs  # 自有项已清理
+            assert ("other_kept", None) in own_pairs  # 其他自有项保留
+            assert (st, other_tid) in own_pairs  # 他租户来源的共享项保留
+
+            other_sources = SubagentKnowledgeSourceDB.get(other_tid, "some-agent")
+            other_pairs = {(s["source_type"], s.get("owner_tenant_id")) for s in other_sources}
+            assert (st, tenant_id) not in other_pairs  # 共享项已清理
+            assert (st, None) in other_pairs  # 他租户同名自有项保留
+        finally:
+            with get_db_connection() as conn:
+                cur = conn.cursor()
+                cur.execute("DELETE FROM subagent_knowledge_sources WHERE tenant_id IN (%s, %s)",
+                            (tenant_id, other_tid))
+                conn.commit()
+
     async def test_upload_subcategory_validation(self, tenant_id):
         """sub_category 归属校验：不属于所选顶级分类时失败"""
         top = knowledge_service.create_category(tenant_id, "product", "产品资料")
