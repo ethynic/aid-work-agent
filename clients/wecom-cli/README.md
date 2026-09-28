@@ -30,8 +30,10 @@ aid-wecom send-file --target-ref <ref> --file <本地绝对路径> [--json]
                                             # 写动作：向 target_ref 目标发送 1 个文件（扩展名不限
                                             # ≤100MB；文件契约见 send-file 章节）
 aid-wecom unread [--name <名>] [--json]     # 未读会话快照（只读，不开会话不清角标）
-aid-wecom read --target-ref <ref> [--max-pages N] [--since-days N] [--json]
-                                            # 读会话消息（只读内容；进入会话会清除该会话未读角标）
+aid-wecom read-session --target-ref <ref> [--max-pages N] [--since-days N] [--json]
+                                            # 读会话消息（只读内容；进入会话会清除该会话未读角标；
+                                            # 智能分发进会话 + 滚动截屏 OCR + 页间去重 + 时间戳沿袭。
+                                            # M9 由 read 改名，旧 read 动词废弃无别名）
 aid-wecom watch [--interval 秒] [--once]    # 新消息跟踪循环：事件 NDJSON 逐行写 stdout，Ctrl+C 退出
 aid-wecom add-customer --phone <11位> --yes [--json]
                                             # 写动作：通讯录→新的客户→添加→检索→发邀请（--yes 显式确认）
@@ -63,27 +65,52 @@ aid-wecom version [--json]                  # 版本 + provider manifest（含 s
   代码按 wecom-personal-rpa `wecom-ops.ps1` get_login_state 先例实现（小窗判定 +
   CopyFromScreen 截图 base64）；上线前需登出企微复验二维码可见性与 hint 判定。
 
-## 新消息跟踪（M3：unread / read / watch）
+## 新消息跟踪（M3：unread / read-session / watch；M9 read 改名 + 智能分发）
 
 无会话归档场景的核心能力，三个层次：
 
 - **`unread`**：未读会话快照。PrintWindow 截主窗口 → OCR 会话列表列 →
   `[{name, preview, unread_count, x, y}]`（无未读不出现；`x/y` 为名称行中心，
   供 watch 直点会话行）。只读，不打开会话、不清角标。
-- **`read`**：读会话消息。target_ref 定位进会话（M2 搜索机制 + 标题严格校验防串会话）
-  → 先下滚到底 → 逐屏上滚截图 OCR → 页间「旧页后缀 == 已合并前缀」最大重叠去重 →
-  `{title, messages:[{side,text}], pages_read}`（side ∈ self/peer/timeline），
-  事后滚回底部恢复原位。**副作用：进入会话会清除该会话未读角标**（企微客户端固有行为）。
-  `--since-days N`：某屏最早「M月D日」分割线超龄即停止上翻（简单版）。
+- **`read-session`**（M9 由 `read` 改名，旧动词直接废弃无别名）：读会话消息。
+  **M9 起导航迁移到共享智能分发**（与 send/send-image/send-file 同款，TS 层
+  navigate.ts 编排）：读取阶段驱动（`drivers/ps1/read-session.ps1`）先做会话判定——
+  标题带 OCR + **Jev #1 单问** `right_conversation`（read 是只读动作：不点输入框、
+  不输入文字，**草稿判定不适用，绝不因输入区草稿中止**；Jev 不可用降级标题归一化
+  规则匹配）；判 no/unclear → 返回 `navigate_required=true` 交 TS 编排（内部
+  chatSearch + chatSelect 切换会话后二次调用本驱动）；判 yes → 标题严格校验（防串
+  会话，同 select/send 语义）→ 先下滚到底 → 逐屏上滚截图 OCR → 页间「旧页后缀 ==
+  已合并前缀」最大重叠去重 → 时间戳沿袭（见下）→ finally 滚回底部恢复原位。
+  **旧 M3 流程（驱动内 Open-WeComSearchOverlay 搜索定位链）自 M9 退役**——旧链在
+  窄窗口有残留误判 bug + ESC 最小化风险（见 M4 段）。
+  - **row 快路径（watch 依赖）**：驱动可选参数 `-RowX/-RowY`（unread OCR 名称行中心）
+    >0 时先直点会话列表行，再走同一会话判定做校验兜底（点击未命中/列表已滚动 →
+    判定不过 → navigate_required 分发）。watchPoll 只在首轮带 row 坐标，分发后的
+    二次调用已在目标会话、不再点行。
+  - **返回 data**：`{target, title, navigated, messages:[{side,text,time?}], pages_read,
+    timing_ms, screenshot_paths}`；`navigated` 标识快路径（false=当前会话直读）还是
+    走了 search+select 分发（true）。
+  - **side 语义（锁定，勿改）**：气泡**左缘锚定 = peer（对方发的）**、**右缘锚定 =
+    self（自己发的）**、timeline = 时间分割线；实现为 chat_ocr.py classify_side 的
+    OCR 启发式（长行可能误判），调用方不得依赖 side 做安全判定。
+  - **time 字段语义（M9 时间戳沿袭）**：消息的 `time` = **最近一条时间分割线的原文**
+    （如「7月16日 09:01」「08:23」），是**近似时间**；首条分割线之前的消息无 `time`
+    字段。timeline 条目保留在输出中（watch 的页间去重/水位逻辑依赖 side|text 键，
+    不受影响；其 `text` 即时间文本本身，不带 `time`）。
+  - `--since-days N`：某屏最早「M月D日」分割线超龄即停止上翻（简单版）。
+  - **副作用：进入会话会清除该会话未读角标**（企微客户端固有行为）；阶段超时预算
+    600s 不变；effect=none（含 navigate 阶段失败——select 本身 effect=none）。
 - **`watch`**：新消息跟踪循环。每轮 = `wecom_watch_poll` 单轮：unread 快照与本机水位
   文件 `%LOCALAPPDATA%\AidWorkAgent\wecom-cli\watch-state.json` diff（unread_count
-  增大或新出现 → 候选）→ 每候选直点会话列表行（标题校验不一致降级搜索定位）→
-  读当前屏 → 与水位比对只取增量 → 推进水位。**同一水位不会重复推送相同消息**；
-  读取成功后角标水位归零（进会话已清角标，之后任何角标都是新增，防止「读取后来 1 条」
-  被旧水位压住漏报）；读取失败的候选不推进水位（下轮重试，不丢消息）；
-  会话从快照消失时水位同样归零。
+  增大或新出现 → 候选）→ 每候选经共享智能分发编排调 read-session 驱动（首轮带
+  unread 行坐标走 row 快路径直点会话列表行；判定不过 → navigate_required → 内部
+  chatSearch+chatSelect 分发 → 二次读取，**取代旧「直点行 UI_CHANGED 降级搜索
+  重试」**）→ 读当前屏 → 与水位比对只取增量 → 推进水位。**同一水位不会重复推送
+  相同消息**；读取成功后角标水位归零（进会话已清角标，之后任何角标都是新增，防止
+  「读取后来 1 条」被旧水位压住漏报）；读取失败的候选不推进水位（下轮重试，不丢
+  消息）；会话从快照消失时水位同样归零。
 
-`read`/`watch` 的 artifact 目录（`%LOCALAPPDATA%\AidWorkAgent\wecom-cli\artifacts\history-*` / `watch-*`）
+`read-session`/`watch` 的 artifact 目录（`%LOCALAPPDATA%\AidWorkAgent\wecom-cli\artifacts\read-session-*` / `watch-*`）
 含逐屏截图与 `driver-log.txt`（OCR 原始输出，**含消息明文**），仅用于真机排障；
 watch 事件 NDJSON 的 `messages` 同样是消息明文（能力本身即读消息）。请注意本机文件与管道输出的访问控制。
 
@@ -98,7 +125,8 @@ watch 事件 NDJSON 协议（stdout 逐行一条 JSON，进度/告警只写 stde
 `--once` 单轮（测试/手动）；循环期间持有跨进程互斥，与 send/search 等命令不并行。
 
 MCP 只暴露 `wecom_unread_list` 与 `wecom_watch_poll` 两个 M3 工具（每轮一次 tool call）；
-`wecom_history_read` 只走 CLI `read`（长滚动抓取不适合 Host 高频调用）。
+`wecom_read_session`（M9 由 `wecom_history_read` 改名）只走 CLI `read-session`
+（维持 M3 决策：长滚动抓取不适合 Host 高频调用）。
 
 ## target_ref（搜索 → 发送 的目标句柄）
 
@@ -151,7 +179,7 @@ name+section+subtitle 消歧键一致才可信——Jev 看不到 target_ref 的
   OCR 坐标（更新鲜）；OCR 坐标缺失时退用 payload 坐标。点击后等面板自动关闭
   （≤3s），再重新解析主窗口（外部联系人会话会撑宽主窗口）并 OCR 校验会话标题
   （复用 send 的严格语义：归一化相等或「名字+@/（」前缀，防「陆伟」误入「陆伟民」）。
-- **副作用**：进入会话会**清除该会话未读角标**（企微客户端固有行为，与 read 同款），
+- **副作用**：进入会话会**清除该会话未读角标**（企微客户端固有行为，与 read-session 同款），
   并切换主窗口当前会话视图；不清理搜索框内残留查询词（下次 search 自行清空）。
 - **失败语义**：面板已关或 ref 过期 → TARGET_REF_STALE（重新 search 获取新句柄）；
   面板内容与句柄不符 / 坐标漂移 >40px / 点击后面板未关 / 会话标题不一致 → UI_CHANGED
@@ -283,10 +311,10 @@ name+section+subtitle 消歧键一致才可信——Jev 看不到 target_ref 的
 - **Windows（win32-x64）**，已登录且未锁屏的交互桌面会话；
 - 企业微信 Windows 客户端（WXWork.exe）**已登录**（5.0.9 实测）；
 - PowerShell（powershell.exe 在 PATH）；
-- `add-customer` / `search` / `select` / `send` / `send-image` / `send-file` / `unread` / `read` / `watch` 另需 OCR：仓库根 `venv` 的 python + `rapidocr_onnxruntime`
+- `add-customer` / `search` / `select` / `send` / `send-image` / `send-file` / `unread` / `read-session` / `watch` 另需 OCR：仓库根 `venv` 的 python + `rapidocr_onnxruntime`
   （`drivers/ps1` 上四级为仓库根，取 `venv\Scripts\python.exe`；缺失 → CONFIG_MISSING）；
   `probe` 的 `qr_status_hint` 也走该 OCR 但为 best-effort（缺失 → hint=normal，探测不失败）；
-- `search` / `send` / `send-image` / `send-file` 的 Jev 决策另需可选环境变量 `TYPESAFE_API_KEY`（缺失自动降级规则链，功能不中断）。
+- `search` / `send` / `send-image` / `send-file` / `read-session` 的 Jev 决策另需可选环境变量 `TYPESAFE_API_KEY`（缺失自动降级规则链，功能不中断；watch 轮询内的 read-session 同样适用）。
 
 ## 关键实现事实（真机实测，勿随意改）
 
@@ -359,6 +387,12 @@ name+section+subtitle 消歧键一致才可信——Jev 看不到 target_ref 的
   名拒发三层关闭）；输入区带左界像素锚定 max(0.10w,620)（纯比例 0.30w 在 2916 宽窗口会
   整段漏掉卡片 x0≈650px≈0.22w）、右界 0.74w 无条件排除智能总结侧栏（chat_ocr.py input
   模式同阈值）。
+- M9（2026-09-28 设计定稿）：read → read-session 改名（旧动词废弃）+ 导航迁移共享
+  智能分发（navigate.ts readonly 模式：阶段超时/取消原样透传，不套写动作 unknown
+  语义）+ 时间戳沿袭（页合并后沿消息流记最近 timeline 分割线原文为 time，近似时间）。
+  旧驱动内搜索链退役原因：固定像素带在窄窗口把聊天区标题误判为搜索框残留（已证实
+  bug），且 ESC 关闭路径有最小化企微风险——搜索/清空统一走 M4 V2 链（Ctrl+F 聚焦 +
+  Ctrl+A+Delete 清空），会话切换交 TS 编排 chatSearch+chatSelect。
 - 含中文的 .ps1 必须 **UTF-8 with BOM**。
 
 ## 目录
@@ -369,7 +403,7 @@ src/mcp/          MCP stdio server + toolDefs + manifest digest
 src/operations/   业务能力层（统一 OperationResult 契约，永不 reject）
 src/platform/     PowerShell 驱动执行器 / 环境探测 / 命名互斥 / target_ref（HMAC 短期句柄）/ watch 水位状态
 src/security/     日志脱敏（手机号不明文入日志）
-drivers/ps1/      UI 自动化驱动（_common.ps1 底座 + probe/add-customer/chat-search/chat-select/message-send/send-image/send-file/unread-list/history-read）
+drivers/ps1/      UI 自动化驱动（_common.ps1 底座 + probe/add-customer/chat-search/chat-select/message-send/send-image/send-file/unread-list/read-session）
 drivers/py/       RapidOCR：add_customer_result.py（添加客户弹窗）+ chat_ocr.py（search/send/unread/history 单一入口）
 tests/            node:test，全部 mock（绝不触达真实企微窗口）
 ```

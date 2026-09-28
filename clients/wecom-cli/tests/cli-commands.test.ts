@@ -138,8 +138,8 @@ test('select --json：篡改 target_ref → INVALID_ARGUMENT（签名校验失�
   assert.equal(parsed.code, 'INVALID_ARGUMENT')
 })
 
-test('read --json：缺 --target-ref → INVALID_ARGUMENT，退出码 2，不触达企微', () => {
-  const { status, stdout } = runCli(['read', '--json'])
+test('read-session --json：缺 --target-ref → INVALID_ARGUMENT，退出码 2，不触达企微', () => {
+  const { status, stdout } = runCli(['read-session', '--json'])
   assert.equal(status, 2)
   const parsed = JSON.parse(stdout.trim().split('\n').pop()!)
   assert.equal(parsed.success, false)
@@ -147,13 +147,19 @@ test('read --json：缺 --target-ref → INVALID_ARGUMENT，退出码 2，不触
   assert.equal(parsed.effect, 'none')
 })
 
-test('read --json：非法 --max-pages（NaN / 超上限）→ INVALID_ARGUMENT，退出码 2，不触达企微', () => {
+test('read-session --json：非法 --max-pages（NaN / 超上限）→ INVALID_ARGUMENT，退出码 2，不触达企微', () => {
   for (const bad of ['abc', '0', '11']) {
-    const { status, stdout } = runCli(['read', '--target-ref', 'x', '--max-pages', bad, '--json'])
+    const { status, stdout } = runCli(['read-session', '--target-ref', 'x', '--max-pages', bad, '--json'])
     assert.equal(status, 2, `--max-pages ${bad} 应被拒绝`)
     const parsed = JSON.parse(stdout.trim().split('\n').pop()!)
     assert.equal(parsed.code, 'INVALID_ARGUMENT')
   }
+})
+
+test('read（旧动词，M9 废弃）→ 未知子命令退出码 2（改名 read-session，无别名）', () => {
+  const { status, stderr } = runCli(['read', '--target-ref', 'x'])
+  assert.equal(status, 2)
+  assert.ok(stderr.includes('未知子命令'), '旧 read 动词应提示未知子命令（直接废弃，无别名）')
 })
 
 test('watch：非法 --interval → 退出码 2，不触达企微', () => {

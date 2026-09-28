@@ -10,7 +10,8 @@
  * M5 增加 wecom_chat_select（半写：无出站消息，但进会话清角标/切换会话视图）；
  * M7 增加 wecom_send_image（写：向 target_ref 目标发送 1 张本地图片）；
  * M8 增加 wecom_send_file（写：向 target_ref 目标发送 1 个本地文件）。
- * wecom_history_read 只走 CLI read 动词不进 MCP（长滚动抓取不适合 Host 高频调用）；
+ * wecom_read_session（M9 由 wecom_history_read 改名）只走 CLI read-session 动词不进
+ * MCP（维持 M3 决策：长滚动抓取不适合 Host 高频调用）；
  * 未真机验证的能力不得在此占位。
  */
 import { z } from 'zod'

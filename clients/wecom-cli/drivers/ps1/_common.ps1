@@ -530,7 +530,7 @@ function Invoke-WeComChatOcr {
     return $parsed
 }
 
-# ---------- M3：滚轮 / 归一化 共享助手（history-read 用） ----------
+# ---------- M3：滚轮 / 归一化 共享助手（read-session 用；M9 前身 history-read） ----------
 
 function Send-WeComWheel {
     # PostMessage WM_MOUSEWHEEL（0x020A）：wParam 高字=delta（120 上滚看历史 / -120 下滚，

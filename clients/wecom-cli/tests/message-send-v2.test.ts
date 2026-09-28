@@ -345,6 +345,8 @@ test('v2 候选歧义（best 不符 + 两条 name+section 匹配且 subtitle 均
   assert.equal(r.code, 'TARGET_AMBIGUOUS')
   assert.equal(r.effect, 'none')
   assert.match(r.message, /未发送消息/)
+  // 写路径 refuseDesc 缺省「已拒绝发送」逐字保持（M9 参数化后不得漂移）
+  assert.match(r.message, /已拒绝发送/)
   assert.equal(mock.calls.length, 2, '歧义时不调 select')
 })
 

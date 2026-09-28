@@ -54,7 +54,7 @@ test('manifest 字段完整且与静态 provider-manifest.json 同源', () => {
   // M1：wecom_probe + wecom_add_customer；M2：wecom_chat_search + wecom_message_send；
   // M3：wecom_unread_list + wecom_watch_poll；M5：wecom_chat_select（半写：清角标/切视图）；
   // M7：wecom_send_image（写：发图片）；M8：wecom_send_file（写：发文件）
-  // （wecom_history_read 只走 CLI，不进 MCP）
+  // （wecom_read_session 只走 CLI，不进 MCP）
   assert.deepEqual(TOOL_NAMES, ['wecom_probe', 'wecom_add_customer', 'wecom_chat_search', 'wecom_chat_select', 'wecom_message_send', 'wecom_send_image', 'wecom_send_file', 'wecom_unread_list', 'wecom_watch_poll'])
   assert.equal(m.tools.length, 9)
   const probe = m.tools[0]!
@@ -79,8 +79,8 @@ test('manifest 字段完整且与静态 provider-manifest.json 同源', () => {
   // M5：wecom_chat_select 半写注解——无出站消息（readOnly）但清角标/切视图（非幂等）
   assert.equal(byName.get('wecom_chat_select')!.annotations.readOnlyHint, true)
   assert.equal(byName.get('wecom_chat_select')!.annotations.idempotentHint, false)
-  // wecom_history_read 不进 MCP（长滚动抓取只适合 CLI）
-  assert.equal(byName.has('wecom_history_read'), false)
+  // wecom_read_session（M9 由 wecom_history_read 改名）不进 MCP（维持 M3 决策：长滚动抓取只适合 CLI）
+  assert.equal(byName.has('wecom_read_session'), false)
 })
 
 test('tool schema 单一来源：manifestTools 的 inputSchema 由 toolDefs 推导（改 toolDefs 即改 digest）', () => {
@@ -105,10 +105,11 @@ test('toolDefs ↔ registry 一致性守卫：每个 toolDef 可取到 operation
   for (const name of TOOL_NAMES) {
     assert.equal(getOperationEntry(name).operation.name, name)
   }
-  // registry ⊇ toolDefs：M8 起 registry 有 10 个 operation（wecom_history_read 仅 CLI），
-  // toolDefs 9 个（MCP 不暴露 history_read）；每个 MCP tool 必须能在 registry 取到
+  // registry ⊇ toolDefs：M9 起 registry 有 10 个 operation（wecom_read_session 仅 CLI，
+  // 由 wecom_history_read 改名而来），toolDefs 9 个（MCP 不暴露 read_session）；
+  // 每个 MCP tool 必须能在 registry 取到
   assert.equal(OPERATION_NAMES.length, 10)
-  assert.ok(OPERATION_NAMES.includes('wecom_history_read'))
+  assert.ok(OPERATION_NAMES.includes('wecom_read_session'))
   for (const name of TOOL_NAMES) {
     assert.ok(OPERATION_NAMES.includes(name), `MCP tool「${name}」必须在 OPERATIONS 注册`)
   }

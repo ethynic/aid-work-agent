@@ -282,3 +282,11 @@ Authorization: Bearer $TYPESAFE_API_KEY
 - **need_login 全链路实测**：probe 返回 login_state=need_login + login_window rect + qr_image_base64（300x420 PNG，双峰像素特征）+ hint=normal（正常态无误报）；base64 解码为图片 → 用户手机扫码 → **登录成功**（监控轮询 4 秒内捕获 online 转换，新主窗口 hwnd）。
 - 「发给别人扫码」通路：CLI 侧 qr_image_base64 即为此设计（生产走 RPA 模式：上报服务端→推送前端/手机通知）；本次用本地图片+屏幕显示等效验证整条链路（截图→base64→图片→扫码→online）。二维码凭证文件用后即删。
 - 过期态（expired hint）未覆盖（用户扫码及时）；下次遇到再补。
+
+### M9：read-session（2026-09-28）——✅ 真机双路径验证通过
+
+- 改名 read→read-session（旧名废弃无别名）；导航迁移共享智能分发（navigate.ts 新增 readonly 模式：阶段超时/取消原样透传不套 EXECUTION_UNKNOWN）；**旧 M2 搜索链（固定像素/固定带残留检查/× 清空/ESC 关闭）从本驱动全部退役**；row 快路径保留（watch 依赖，点击后走同一 Jev#1 校验）。
+- 时间戳归消息：合并后沿袭分割线原文（py/OCR 未动）；首条分割线前无 time；timeline 条目保留（watch 去重键不变）。
+- CR 参数化 refuseDesc（readonly 链路歧义文案「已中止读取」）；测试 172/172。
+- 真机验证：快路径（陆伟会话，peer 消息 side 正确）+ 分发路径（navigated:true 自动导航到文件传输助手）；**已知自发文本 7/7 全部 self（右侧）**——side 语义实测锁定（左=peer 右=self）；time 字段 11/17 覆盖（其余为最早页首条分割线之前，符合设计）。
+- 已知限制（记录）：**图片消息的 side 判定不可靠**——OCR 读的是图内文本（从图左缘开始），M7 图片消息被判 peer；文本消息无此问题。缓解方向（后续）：图片气泡检测（像素方差特征）排除 side 判定或标记 image 类型。

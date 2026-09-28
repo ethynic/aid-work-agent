@@ -7,6 +7,7 @@
  * M5 增加：select。
  * M7 增加：send-image。
  * M8 增加：send-file。
+ * M9：read 改名 read-session（旧 read 动词直接废弃，无别名）。
  * 动词子命令集合固定；不存在按对象命名的子命令——`aid-wecom contacts` 之类
  * 一律落入 default 报「未知子命令」。
  *
@@ -18,7 +19,7 @@
  *   node dist/src/cli/index.js send-image --target-ref <ref> --image <本地绝对路径> [--json]
  *   node dist/src/cli/index.js send-file --target-ref <ref> --file <本地绝对路径> [--json]
  *   node dist/src/cli/index.js unread [--name <名>] [--json]
- *   node dist/src/cli/index.js read --target-ref <ref> [--max-pages N] [--since-days N] [--json]
+ *   node dist/src/cli/index.js read-session --target-ref <ref> [--max-pages N] [--since-days N] [--json]
  *   node dist/src/cli/index.js watch [--interval 秒] [--once]
  *   node dist/src/cli/index.js add-customer --phone <11位手机号> --yes [--json]
  *   node dist/src/cli/index.js mcp --stdio
@@ -59,9 +60,12 @@ const USAGE = `aid-wecom — 企业微信操作 CLI / MCP Provider（M1）
   unread [--name <名>] [--json]
                             未读会话快照（只读，不开会话不清角标）：
                             [{name, preview, unread_count}]，可选 --name 子串过滤
-  read --target-ref <ref> [--max-pages N] [--since-days N] [--json]
+  read-session --target-ref <ref> [--max-pages N] [--since-days N] [--json]
                             读会话消息（只读内容；进入会话会清除其未读角标）：
-                            滚动截屏 OCR + 页间去重，返回 {title, messages, pages_read}
+                            智能分发进会话（当前会话对→直读；不对→自动 search+select
+                            切换后读）→ 滚动截屏 OCR + 页间去重，返回
+                            {title, messages:[{side,text,time?}], pages_read}
+                            （M9 由 read 改名，旧 read 动词废弃）
   watch [--interval 秒] [--once]
                             新消息跟踪循环：事件 NDJSON 逐行写 stdout
                             （new_messages / tick），Ctrl+C 干净退出；--once 单轮
@@ -130,9 +134,9 @@ async function main(): Promise<number> {
         json: hasFlag(args, 'json'),
       })
     }
-    case 'read': {
-      const { readCommand } = await import('./commands/read.js')
-      return readCommand({
+    case 'read-session': {
+      const { readSessionCommand } = await import('./commands/readSession.js')
+      return readSessionCommand({
         targetRef: flagString(args, 'target-ref'),
         maxPages: flagString(args, 'max-pages'),
         sinceDays: flagString(args, 'since-days'),

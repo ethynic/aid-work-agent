@@ -1,14 +1,18 @@
 /**
- * wecom_watch_poll operation（M3）：新消息跟踪单轮（无会话归档时的核心能力）。
+ * wecom_watch_poll operation（M3；M9 起读取阶段换用 read-session 驱动 + 智能分发）：
+ * 新消息跟踪单轮（无会话归档时的核心能力）。
  *
- * 单轮流程（TS 编排，组合 unread-list / history-read 两个驱动）：
+ * 单轮流程（TS 编排，组合 unread-list / read-session 两个驱动）：
  *   1) unread_list 快照（不开会话不清角标）；
  *   2) 与 watch-state.json 水位 diff：unread_count 增大或新出现 → 候选
  *      （读取成功后 last_unread 归零：进会话已清角标，之后任何角标都是新增；
  *      会话从快照消失时 last_unread 归零，否则「读完再来 1 条」会被旧水位压住漏报）；
- *   3) 每候选：直点会话列表行（unread OCR 给的行坐标；标题校验不一致 UI_CHANGED 时
- *      降级搜索定位重试一次）→ 读当前屏消息 → 与 last_seen_text_norm 比对取增量 →
- *      推进水位。读取失败的候选不推进水位（下轮仍候选，不丢消息）；
+ *   3) 每候选：经共享智能分发编排（navigate.ts，readonly 模式）调 read-session 驱动——
+ *      首轮带 unread OCR 的行坐标走 row 快路径直点会话列表行，驱动内会话判定不过
+ *      （列表已滚动/坐标漂移/非目标）→ navigate_required → 内部 chatSearch+chatSelect
+ *      切换会话 → 二次调用（不再点行，已在目标会话）；读取失败不重试 → 读当前屏消息 →
+ *      与 last_seen_text_norm 比对取增量 → 推进水位。读取失败的候选不推进水位
+ *      （下轮仍候选，不丢消息）；
  *   4) 产出 NDJSON 事件（data.events）：{type:"new_messages",session,unread_count,messages}
  *      或（本轮无任何新消息时）{type:"tick",unread_total}。
  *
@@ -23,16 +27,23 @@ import { runWecomOperation } from './context.js'
 import { CancelledError, CodedOperationError, type OperationResult, type OpContext, type WecomOperation } from './types.js'
 import { runPowerShellDriver, type RunPowerShellDriverFn } from '../platform/powershell.js'
 import { artifactDir } from '../platform/environment.js'
+import {
+  createTargetRef,
+  verifyTargetRef,
+  type CreateTargetRefFn,
+  type VerifyTargetRefFn,
+} from '../platform/targetRef.js'
 import { loadWatchState, saveWatchState, watchStatePath, type WatchState } from '../platform/watchState.js'
 import { parseUnreadEntries, type UnreadEntry } from './unreadList.js'
-import { parseHistoryMessages, type HistoryMessage } from './historyRead.js'
+import { parseSessionMessages, type SessionMessage } from './readSession.js'
+import { runStageWithNavigation } from './navigate.js'
 
 /** dist/src/operations → 包根 drivers/ps1 */
 const UNREAD_DRIVER_PATH = fileURLToPath(new URL('../../../drivers/ps1/unread-list.ps1', import.meta.url))
-const HISTORY_DRIVER_PATH = fileURLToPath(new URL('../../../drivers/ps1/history-read.ps1', import.meta.url))
+const READ_SESSION_DRIVER_PATH = fileURLToPath(new URL('../../../drivers/ps1/read-session.ps1', import.meta.url))
 
 /** 历史抓取按屏滚动 + OCR 较慢，单候选预算 600s */
-const HISTORY_TIMEOUT_MS = 600_000
+const READ_SESSION_TIMEOUT_MS = 600_000
 
 export interface WecomWatchPollArgs {
   // 当前无入参（占位对象，保持 operation 契约一致）
@@ -42,7 +53,7 @@ export interface WatchEventNewMessages {
   type: 'new_messages'
   session: string
   unread_count: number
-  messages: HistoryMessage[]
+  messages: SessionMessage[]
 }
 
 export interface WatchEventTick {
@@ -71,7 +82,7 @@ export function normalizeChatText(s: string): string {
 }
 
 /** 最后一行非时间线消息的归一化文本（水位）；无消息返回 '' */
-export function lastMessageNorm(messages: HistoryMessage[]): string {
+export function lastMessageNorm(messages: SessionMessage[]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i]!
     if (m.side !== 'timeline' && m.text.length > 0) return normalizeChatText(m.text)
@@ -85,7 +96,7 @@ export function lastMessageNorm(messages: HistoryMessage[]): string {
  * 水位未找到（历史上滚/会话重建）→ 当前屏全部非时间线消息（保守全量，
  * 可能重复一轮；同内容不重发由 unread_count diff 兜底）。
  */
-export function computeDelta(messages: HistoryMessage[], watermark: string): HistoryMessage[] {
+export function computeDelta(messages: SessionMessage[], watermark: string): SessionMessage[] {
   const chat = messages.filter((m) => m.side !== 'timeline')
   if (chat.length === 0) return []
   if (!watermark) return chat
@@ -107,6 +118,9 @@ export function createWecomWatchPollOperation(
     nowFn?: () => Date
     loadStateFn?: (path: string) => WatchState
     saveStateFn?: (path: string, state: WatchState) => void
+    /** M9 智能分发依赖（内部 chatSearch 签发 / chatSelect 验证 target_ref），测试可替换 */
+    verifyRefFn?: VerifyTargetRefFn
+    createRefFn?: CreateTargetRefFn
   } = {},
 ): WecomOperation<WecomWatchPollArgs> {
   const runDriverFn = deps.runDriverFn ?? runPowerShellDriver
@@ -115,6 +129,10 @@ export function createWecomWatchPollOperation(
   const nowFn = deps.nowFn ?? (() => new Date())
   const loadStateFn = deps.loadStateFn ?? loadWatchState
   const saveStateFn = deps.saveStateFn ?? saveWatchState
+  const verifyRefFn = deps.verifyRefFn ?? verifyTargetRef
+  // 与 chatSearch 的默认签发适配保持一致（坐标随条目写入 payload，select 消费）
+  const createRefFn: CreateTargetRefFn =
+    deps.createRefFn ?? ((name, type, subtitle, coords) => createTargetRef(name, type, subtitle, { coords }))
   return {
     name: 'wecom_watch_poll',
     execute(args: WecomWatchPollArgs, ctx: OpContext): Promise<OperationResult> {
@@ -151,7 +169,8 @@ export function createWecomWatchPollOperation(
             return !prev || e.unread_count > prev.last_unread
           })
 
-          // 3) 每候选读当前屏取增量
+          // 3) 每候选读当前屏取增量（M9：read-session 驱动 + 共享智能分发编排，
+          //    旧「直点行 UI_CHANGED 降级 search 重试」由驱动的 navigate_required 分发取代）
           const roundDir = join(root, `watch-${nowFn().toISOString().replace(/[:.]/g, '-')}`)
           mkdirSync(roundDir, { recursive: true })
           const events: WatchEvent[] = []
@@ -161,49 +180,52 @@ export function createWecomWatchPollOperation(
             const candDir = join(roundDir, `cand-${i}`)
             mkdirSync(candDir, { recursive: true })
             opCtx.progress({ stage: 'execute', current: i + 1, total: candidates.length, message: `读取候选会话「${cand.name}」（未读 ${cand.unread_count}）` })
-            let data: Record<string, unknown>
-            try {
-              data = await runDriverFn({
-                script: HISTORY_DRIVER_PATH,
-                args: [
-                  '-TargetName', cand.name,
-                  '-MaxPages', '1',
-                  '-OpenMode', 'row',
-                  '-RowX', String(cand.x),
-                  '-RowY', String(cand.y),
-                  '-ArtifactDir', candDir,
-                ],
-                timeoutMs: HISTORY_TIMEOUT_MS,
+            // row 快路径只在首轮使用：分发（search+select）后的二次调用已在目标会话，
+            // 不再点行（行坐标可能已陈旧，重复点击反有串会话风险）
+            let stageCalls = 0
+            const spawnReadStage = (dir: string): Promise<Record<string, unknown>> => {
+              stageCalls++
+              const driverArgs = ['-TargetName', cand.name, '-MaxPages', '1', '-ArtifactDir', dir]
+              if (stageCalls === 1 && cand.x > 0 && cand.y > 0) {
+                driverArgs.push('-RowX', String(cand.x), '-RowY', String(cand.y))
+              }
+              return runDriverFn({
+                script: READ_SESSION_DRIVER_PATH,
+                args: driverArgs,
+                timeoutMs: READ_SESSION_TIMEOUT_MS,
                 signal: opCtx.signal,
               })
+            }
+            let data: Record<string, unknown>
+            try {
+              const outcome = await runStageWithNavigation({
+                runDriverFn,
+                verifyRefFn,
+                createRefFn,
+                opCtx,
+                root: candDir,
+                // unread 候选只有会话名（无 type/subtitle 消歧键）：按名字唯一匹配定位，
+                // 同名多条无法消歧 → TARGET_AMBIGUOUS（旧降级搜索链同名语义）
+                target: { name: cand.name, type: 'other', subtitle: '' },
+                artifactPrefix: 'read-session',
+                spawnStage: spawnReadStage,
+                readonly: true,
+                texts: {
+                  writeDesc: '读取消息',
+                  notSentNote: '未读取消息',
+                  checkDesc: '读取前检查',
+                  afterEnter: '执行消息读取',
+                  refuseDesc: '已中止读取',
+                },
+              })
+              data = outcome.data
             } catch (err) {
               if (err instanceof CancelledError) throw err
-              // 直点行标题校验不一致（列表已滚动/坐标漂移）→ 降级搜索定位重试一次
-              if (err instanceof CodedOperationError && err.code === 'UI_CHANGED') {
-                opCtx.progress({ stage: 'execute', message: `「${cand.name}」直点会话行未命中，降级搜索定位重试` })
-                try {
-                  data = await runDriverFn({
-                    script: HISTORY_DRIVER_PATH,
-                    args: [
-                      '-TargetName', cand.name,
-                      '-MaxPages', '1',
-                      '-OpenMode', 'search',
-                      '-ArtifactDir', candDir,
-                    ],
-                    timeoutMs: HISTORY_TIMEOUT_MS,
-                    signal: opCtx.signal,
-                  })
-                } catch (err2) {
-                  if (err2 instanceof CancelledError) throw err2
-                  opCtx.progress({ stage: 'execute', message: `「${cand.name}」读取失败（不推进水位，下轮重试）：${err2 instanceof Error ? err2.message : String(err2)}` })
-                  continue
-                }
-              } else {
-                opCtx.progress({ stage: 'execute', message: `「${cand.name}」读取失败（不推进水位，下轮重试）：${err instanceof Error ? err.message : String(err)}` })
-                continue
-              }
+              // 读取失败（含分发链 search/select 失败）：不推进水位，下轮重试不丢消息
+              opCtx.progress({ stage: 'execute', message: `「${cand.name}」读取失败（不推进水位，下轮重试）：${err instanceof Error ? err.message : String(err)}` })
+              continue
             }
-            const messages = parseHistoryMessages(data)
+            const messages = parseSessionMessages(data)
             const prev = state.sessions[cand.name]
             const watermark = prev?.last_seen_text_norm ?? ''
             const delta = computeDelta(messages, watermark)

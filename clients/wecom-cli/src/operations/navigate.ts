@@ -2,6 +2,8 @@
  * 「智能分发」共享编排（M7 从 messageSend.ts 无侵入抽取；wecom_message_send 与
  * wecom_send_image 共用，两 operation 的措辞差异全部经 texts 参数化——
  * messageSend 的既有测试对文案断言逐一兼容，切换共享实现不改任何行为）。
+ * M9 起 wecom_read_session / wecom_watch_poll 的读取阶段驱动也共用本编排（readonly
+ * 模式：阶段超时/取消不套写动作 unknown 语义，原样透传由上层按 readonly 归 effect=none）。
  *
  * 编排（原 messageSend.ts 内联实现，语义不变）：阶段驱动（发送文本/发送图片）返回
  * navigate_required=true（当前会话不是目标/无法判定）→ 内部编排：直接调用 chatSearch
@@ -12,6 +14,8 @@
  *
  * 阶段驱动的超时/取消在本编排统一翻译为写动作语义：RESULT_TIMEOUT → EXECUTION_UNKNOWN
  * （写可能已落地，无法确认）；CancelledError → CANCELLED/effect=unknown；零自动重试。
+ * readonly=true 的阶段（read-session/watch）无写副作用可处于 unknown：超时/取消原样
+ * 透传（RESULT_TIMEOUT / CANCELLED，上层 readonly operation 归 effect=none）。
  */
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
@@ -127,6 +131,12 @@ export interface StageNavigationTexts {
   checkDesc: string
   /** 进入会话后的进度动作（「执行发送」/「执行图片发送」） */
   afterEnter: string
+  /**
+   * TARGET_AMBIGUOUS 拒绝动作文案：写动作缺省「已拒绝发送」；readonly 阶段
+   * （read-session/watch）传「已中止读取」——只读链路触达该分支时说「已拒绝发送」
+   * 与实际动作（读取）不符（M9 参数化，缺省值保持写路径文案逐字不变）。
+   */
+  refuseDesc?: string
 }
 
 export interface StageNavigationConfig {
@@ -138,10 +148,16 @@ export interface StageNavigationConfig {
   /** artifact 根目录（已存在；阶段目录在本编排内创建） */
   root: string
   target: TargetRefIdentity
-  /** 阶段驱动 artifact 目录前缀（send / send-image），时间戳冲突加序号后缀 */
+  /** 阶段驱动 artifact 目录前缀（send / send-image / read-session），时间戳冲突加序号后缀 */
   artifactPrefix: string
   /** 阶段驱动调用（不含超时/取消翻译——本编排统一包装为写动作 unknown 语义） */
   spawnStage: (dir: string) => Promise<Record<string, unknown>>
+  /**
+   * 阶段是否只读（M9 read-session / watch 共用）：true 时阶段超时/取消**原样透传**
+   * （无写副作用可处于 unknown，上层 readonly operation 归 effect=none），不套用
+   * 「写可能已发出」的 EXECUTION_UNKNOWN/unknown 翻译；缺省 false = 写动作语义。
+   */
+  readonly?: boolean
   texts: StageNavigationTexts
 }
 
@@ -173,6 +189,9 @@ export async function runStageWithNavigation(cfg: StageNavigationConfig): Promis
     try {
       return await cfg.spawnStage(makeArtifactDir())
     } catch (err) {
+      // 只读阶段（read-session / watch）：无写副作用可处于 unknown——超时/取消原样透传，
+      // 由上层 readonly operation 归 effect=none，不得套用「写可能已发出」的 unknown 文案
+      if (cfg.readonly === true) throw err
       // 驱动超时/被取消都无法确认写是否落地：按写动作 unknown 语义上报，绝不自动重试
       if (err instanceof CodedOperationError && err.code === 'RESULT_TIMEOUT') {
         throw new CodedOperationError(
@@ -228,7 +247,7 @@ export async function runStageWithNavigation(cfg: StageNavigationConfig): Promis
     if (picked === 'ambiguous') {
       throw new CodedOperationError(
         'TARGET_AMBIGUOUS',
-        `搜索「${query}」有多个与「${cfg.target.name}」匹配的候选且无法消歧，已拒绝发送（${cfg.texts.notSentNote}）`,
+        `搜索「${query}」有多个与「${cfg.target.name}」匹配的候选且无法消歧，${cfg.texts.refuseDesc ?? '已拒绝发送'}（${cfg.texts.notSentNote}）`,
         'none',
         searchRes.data,
       )
