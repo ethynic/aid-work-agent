@@ -52,9 +52,10 @@ test('manifest 字段完整且与静态 provider-manifest.json 同源', () => {
   assert.equal(m.schema_digest, computeSchemaDigest())
 
   // M1：wecom_probe + wecom_add_customer；M2：wecom_chat_search + wecom_message_send；
-  // M3：wecom_unread_list + wecom_watch_poll（wecom_history_read 只走 CLI，不进 MCP）
-  assert.deepEqual(TOOL_NAMES, ['wecom_probe', 'wecom_add_customer', 'wecom_chat_search', 'wecom_message_send', 'wecom_unread_list', 'wecom_watch_poll'])
-  assert.equal(m.tools.length, 6)
+  // M3：wecom_unread_list + wecom_watch_poll；M5：wecom_chat_select（半写：清角标/切视图）
+  // （wecom_history_read 只走 CLI，不进 MCP）
+  assert.deepEqual(TOOL_NAMES, ['wecom_probe', 'wecom_add_customer', 'wecom_chat_search', 'wecom_chat_select', 'wecom_message_send', 'wecom_unread_list', 'wecom_watch_poll'])
+  assert.equal(m.tools.length, 7)
   const probe = m.tools[0]!
   assert.equal(probe.name, 'wecom_probe')
   assert.ok(probe.title.length > 0 && probe.description.length > 0)
@@ -74,6 +75,9 @@ test('manifest 字段完整且与静态 provider-manifest.json 同源', () => {
   assert.equal(byName.get('wecom_unread_list')!.annotations.idempotentHint, true)
   assert.equal(byName.get('wecom_watch_poll')!.annotations.readOnlyHint, true)
   assert.equal(byName.get('wecom_watch_poll')!.annotations.idempotentHint, false)
+  // M5：wecom_chat_select 半写注解——无出站消息（readOnly）但清角标/切视图（非幂等）
+  assert.equal(byName.get('wecom_chat_select')!.annotations.readOnlyHint, true)
+  assert.equal(byName.get('wecom_chat_select')!.annotations.idempotentHint, false)
   // wecom_history_read 不进 MCP（长滚动抓取只适合 CLI）
   assert.equal(byName.has('wecom_history_read'), false)
 })
@@ -84,7 +88,9 @@ test('tool schema 单一来源：manifestTools 的 inputSchema 由 toolDefs 推�
   assert.equal(probeProps.verbose!.type, 'boolean')
   const addSchema = tools[1]!.inputSchema
   assert.deepEqual(addSchema.required, ['phone', 'confirm'])
-  const sendSchema = tools[3]!.inputSchema
+  const selectSchema = tools[3]!.inputSchema
+  assert.deepEqual(selectSchema.required, ['target_ref'])
+  const sendSchema = tools[4]!.inputSchema
   assert.deepEqual(sendSchema.required, ['target_ref', 'text'])
 })
 
@@ -94,9 +100,9 @@ test('toolDefs ↔ registry 一致性守卫：每个 toolDef 可取到 operation
   for (const name of TOOL_NAMES) {
     assert.equal(getOperationEntry(name).operation.name, name)
   }
-  // registry ⊇ toolDefs：M3 起 registry 有 7 个 operation（wecom_history_read 仅 CLI），
-  // toolDefs 6 个（MCP 不暴露 history_read）；每个 MCP tool 必须能在 registry 取到
-  assert.equal(OPERATION_NAMES.length, 7)
+  // registry ⊇ toolDefs：M5 起 registry 有 8 个 operation（wecom_history_read 仅 CLI），
+  // toolDefs 7 个（MCP 不暴露 history_read）；每个 MCP tool 必须能在 registry 取到
+  assert.equal(OPERATION_NAMES.length, 8)
   assert.ok(OPERATION_NAMES.includes('wecom_history_read'))
   for (const name of TOOL_NAMES) {
     assert.ok(OPERATION_NAMES.includes(name), `MCP tool「${name}」必须在 OPERATIONS 注册`)
@@ -112,6 +118,6 @@ test('version --json 输出与 buildManifest/computeSchemaDigest 同源', () => 
   assert.equal(parsed.provider_id, 'ai.aidwork.wecom')
   assert.deepEqual(
     parsed.tools.map((t: { name: string }) => t.name),
-    ['wecom_probe', 'wecom_add_customer', 'wecom_chat_search', 'wecom_message_send', 'wecom_unread_list', 'wecom_watch_poll'],
+    ['wecom_probe', 'wecom_add_customer', 'wecom_chat_search', 'wecom_chat_select', 'wecom_message_send', 'wecom_unread_list', 'wecom_watch_poll'],
   )
 })

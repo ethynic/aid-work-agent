@@ -4,12 +4,14 @@
  * M1 实现：probe / add-customer / mcp / doctor / version。
  * M2 增加：search / send。
  * M3 增加：unread / read / watch。
+ * M5 增加：select。
  * 动词子命令集合固定；不存在按对象命名的子命令——`aid-wecom contacts` 之类
  * 一律落入 default 报「未知子命令」。
  *
  * 用法：
  *   node dist/src/cli/index.js probe [--verbose] [--json]
  *   node dist/src/cli/index.js search --query <词> [--type contact|group|any] [--limit N] [--json]
+ *   node dist/src/cli/index.js select --target-ref <ref> [--json]
  *   node dist/src/cli/index.js send --target-ref <ref> --text <文本> [--json]
  *   node dist/src/cli/index.js unread [--name <名>] [--json]
  *   node dist/src/cli/index.js read --target-ref <ref> [--max-pages N] [--since-days N] [--json]
@@ -32,6 +34,10 @@ const USAGE = `aid-wecom — 企业微信操作 CLI / MCP Provider（M1）
                             失败不自动重试，effect=unknown 时请人工核对）
   search --query <词> [--type contact|group|any] [--limit N] [--json]
                             搜索联系人/群聊（只读），返回带 target_ref 的候选（5 分钟有效）
+  select --target-ref <ref> [--json]
+                            点击 search 返回的搜索结果进入会话（动作；不发送消息，
+                            进入会话会清除其未读角标并切换当前会话视图；
+                            前置：搜索面板仍打开，ref 5 分钟内有效）
   send --target-ref <ref> --text <文本> [--json]
                             向 target_ref 目标发送 1 条文本消息（写动作；
                             发送后校验失败不自动重试，effect=unknown 时请人工核对）
@@ -68,6 +74,13 @@ async function main(): Promise<number> {
         query: flagString(args, 'query'),
         type: flagString(args, 'type'),
         limit: flagString(args, 'limit'),
+        json: hasFlag(args, 'json'),
+      })
+    }
+    case 'select': {
+      const { selectCommand } = await import('./commands/select.js')
+      return selectCommand({
+        targetRef: flagString(args, 'target-ref'),
         json: hasFlag(args, 'json'),
       })
     }

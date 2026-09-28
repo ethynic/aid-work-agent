@@ -14,6 +14,9 @@ aid-wecom probe [--verbose] [--json]        # 只读环境探测：平台/交互
 aid-wecom search --query <词> [--type contact|group|any] [--limit N] [--json]
                                             # 搜索联系人/群聊（只读）：Jev 选最优候选，返回 best/坐标/概率 + 带 target_ref 的候选
                                             # 副作用：搜索结果面板保持打开（坐标句柄供后续 select 命令消费）
+aid-wecom select --target-ref <ref> [--json]
+                                            # 点击 search 返回的搜索结果进入会话（动作；不发送消息，
+                                            # 进入会话会清除其未读角标并切换当前会话视图）
 aid-wecom send --target-ref <ref> --text <文本> [--json]
                                             # 写动作：向 target_ref 目标发送 1 条文本消息
 aid-wecom unread [--name <名>] [--json]     # 未读会话快照（只读，不开会话不清角标）
@@ -100,12 +103,36 @@ TARGET_AMBIGUOUS 拒绝发送。
 - artifact 目录 `artifacts/search-<ts>/`：稳定帧截图 + `driver-log.txt`（OCR 原始
   token、Jev state/answer 摘要、各阶段耗时）。
 
+## select 命令（M5：点击搜索结果进入会话）
+
+消费 `search` 留下的搜索结果面板（overlay），点击指定条目进入会话。**不发送任何消息**
+（effect 恒 none），但属「半写」动作——CLI 执行前打印 ⚠️ 提示，MCP 注解非幂等。
+
+- **前置条件**：必须先 `search` 且搜索结果面板（SearchResultWindow2）仍处于打开状态；
+  `target_ref` 有效期 5 分钟，且必须是 M4+ 签发的含坐标版本（旧版无坐标 ref →
+  INVALID_ARGUMENT，提示重新 search）。
+- **点击前校验（防陈旧面板）**：驱动按类名 + 可见性找 overlay（面板关闭后窗口以
+  visible=False 残留，只按类名会误判），PrintWindow 截图 OCR 复核条目名称（剥 @微信
+  后缀双向归一化比较；同名多条——同一人在「联系人」与「聊天记录」分区各一行——
+  取距 payload 坐标最近的一条）。**坐标信任策略**：OCR 复核到的条目自身 x/y 优先，
+  payload 坐标作对照——两者中心距 >40px 判 UI_CHANGED（面板可能已变）；≤40px 用
+  OCR 坐标（更新鲜）；OCR 坐标缺失时退用 payload 坐标。点击后等面板自动关闭
+  （≤3s），再重新解析主窗口（外部联系人会话会撑宽主窗口）并 OCR 校验会话标题
+  （复用 send 的严格语义：归一化相等或「名字+@/（」前缀，防「陆伟」误入「陆伟民」）。
+- **副作用**：进入会话会**清除该会话未读角标**（企微客户端固有行为，与 read 同款），
+  并切换主窗口当前会话视图；不清理搜索框内残留查询词（下次 search 自行清空）。
+- **失败语义**：面板已关或 ref 过期 → TARGET_REF_STALE（重新 search 获取新句柄）；
+  面板内容与句柄不符 / 坐标漂移 >40px / 点击后面板未关 / 会话标题不一致 → UI_CHANGED
+  （同样建议重新 search）；链路超时 → EXECUTION_UNKNOWN（可能已切换会话，不自动重试）。
+- artifact 目录 `artifacts/select-<ts>/`：点击前 overlay 截图 + 点击后主窗口截图 +
+  `driver-log.txt`（各步耗时、OCR 摘要、坐标换算记录）。
+
 ## 运行依赖
 
 - **Windows（win32-x64）**，已登录且未锁屏的交互桌面会话；
 - 企业微信 Windows 客户端（WXWork.exe）**已登录**（5.0.9 实测）；
 - PowerShell（powershell.exe 在 PATH）；
-- `add-customer` / `search` / `send` / `unread` / `read` / `watch` 另需 OCR：仓库根 `venv` 的 python + `rapidocr_onnxruntime`
+- `add-customer` / `search` / `select` / `send` / `unread` / `read` / `watch` 另需 OCR：仓库根 `venv` 的 python + `rapidocr_onnxruntime`
   （`drivers/ps1` 上四级为仓库根，取 `venv\Scripts\python.exe`；缺失 → CONFIG_MISSING）；
 - `search` 的 Jev 决策另需可选环境变量 `TYPESAFE_API_KEY`（缺失自动降级规则 best，功能不中断）。
 
@@ -168,7 +195,7 @@ src/mcp/          MCP stdio server + toolDefs + manifest digest
 src/operations/   业务能力层（统一 OperationResult 契约，永不 reject）
 src/platform/     PowerShell 驱动执行器 / 环境探测 / 命名互斥 / target_ref（HMAC 短期句柄）/ watch 水位状态
 src/security/     日志脱敏（手机号不明文入日志）
-drivers/ps1/      UI 自动化驱动（_common.ps1 底座 + probe/add-customer/chat-search/message-send/unread-list/history-read）
+drivers/ps1/      UI 自动化驱动（_common.ps1 底座 + probe/add-customer/chat-search/chat-select/message-send/unread-list/history-read）
 drivers/py/       RapidOCR：add_customer_result.py（添加客户弹窗）+ chat_ocr.py（search/send/unread/history 单一入口）
 tests/            node:test，全部 mock（绝不触达真实企微窗口）
 ```

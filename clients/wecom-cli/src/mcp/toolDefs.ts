@@ -6,7 +6,8 @@
  * 用 zod v4 toJSONSchema 生成 list_tools 的 inputSchema）。
  *
  * M1 有 wecom_probe（只读）与 wecom_add_customer（写）；M2 增加 wecom_chat_search（只读）
- * 与 wecom_message_send（写）；M3 增加 wecom_unread_list 与 wecom_watch_poll（读）。
+ * 与 wecom_message_send（写）；M3 增加 wecom_unread_list 与 wecom_watch_poll（读）；
+ * M5 增加 wecom_chat_select（半写：无出站消息，但进会话清角标/切换会话视图）。
  * wecom_history_read 只走 CLI read 动词不进 MCP（长滚动抓取不适合 Host 高频调用）；
  * 未真机验证的能力不得在此占位。
  */
@@ -71,6 +72,21 @@ export const TOOL_DEFS: WecomToolDef[] = [
       limit: z.number().int().min(1).max(20).optional().describe('返回候选上限（1-20，默认 10）'),
     },
     annotations: { title: '企业微信搜索联系人/会话', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  {
+    name: 'wecom_chat_select',
+    title: '企业微信进入会话',
+    description:
+      '点击 wecom_chat_search 返回的搜索结果条目，进入对应联系人/群聊会话（不发送任何消息）。' +
+      '前置条件：必须先调 wecom_chat_search 且搜索结果面板（overlay）仍处于打开状态，' +
+      'target_ref 有效期 5 分钟；面板已关或 ref 过期返回 TARGET_REF_STALE（需重新 search）。' +
+      '点击前 OCR 复核面板条目与坐标（防陈旧面板），点击后校验会话标题与目标一致，不符返回 UI_CHANGED。' +
+      '副作用（半写动作，无出站消息）：进入会话会清除该会话未读角标（企微客户端固有行为），' +
+      '并切换主窗口当前会话视图。',
+    zodShape: {
+      target_ref: z.string().min(1).describe('目标句柄（wecom_chat_search 返回的 target_ref，须含坐标的 M4+ 版本）'),
+    },
+    annotations: { title: '企业微信进入会话', readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
   {
     name: 'wecom_message_send',

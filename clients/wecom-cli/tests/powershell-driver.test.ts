@@ -50,7 +50,7 @@ test('ok=false：白名单 code 透传，message 保留', () => {
 })
 
 test('ok=false：M1 关键错误码在白名单内（WECOM_NOT_FOUND/NOT_LOGGED_IN/CUSTOMER_NOT_FOUND/EXECUTION_UNKNOWN/CONFIG_MISSING）', () => {
-  for (const code of ['WECOM_NOT_FOUND', 'NOT_LOGGED_IN', 'CUSTOMER_NOT_FOUND', 'EXECUTION_UNKNOWN', 'CONFIG_MISSING', 'FOREGROUND_LOST', 'WINDOW_AMBIGUOUS']) {
+  for (const code of ['WECOM_NOT_FOUND', 'NOT_LOGGED_IN', 'CUSTOMER_NOT_FOUND', 'EXECUTION_UNKNOWN', 'CONFIG_MISSING', 'FOREGROUND_LOST', 'WINDOW_AMBIGUOUS', 'TARGET_REF_STALE']) {
     assertCoded(() => parseDriverOutcome(r(`DRIVER_JSON: {"ok":false,"code":"${code}","message":"x"}`)), code)
   }
 })

@@ -123,6 +123,21 @@ test('send --json：篡改 target_ref → INVALID_ARGUMENT（签名校验失败�
   assert.equal(parsed.code, 'INVALID_ARGUMENT')
 })
 
+test('select --json：缺 --target-ref → INVALID_ARGUMENT，退出码 2，不触达企微', () => {
+  const { status, stdout } = runCli(['select', '--json'])
+  assert.equal(status, 2)
+  const parsed = JSON.parse(stdout.trim().split('\n').pop()!) as { code?: string; effect?: string }
+  assert.equal(parsed.code, 'INVALID_ARGUMENT')
+  assert.equal(parsed.effect, 'none')
+})
+
+test('select --json：篡改 target_ref → INVALID_ARGUMENT（签名校验失败），退出码 2，不调驱动', () => {
+  const { status, stdout } = runCli(['select', '--target-ref', 'aGVsbG8.dGFtcGVyZWQ', '--json'])
+  assert.equal(status, 2)
+  const parsed = JSON.parse(stdout.trim().split('\n').pop()!) as { code?: string }
+  assert.equal(parsed.code, 'INVALID_ARGUMENT')
+})
+
 test('read --json：缺 --target-ref → INVALID_ARGUMENT，退出码 2，不触达企微', () => {
   const { status, stdout } = runCli(['read', '--json'])
   assert.equal(status, 2)
