@@ -40,7 +40,7 @@ export function createBossOpenChatOperation(
     execute(args: BossOpenChatArgs, ctx: OpContext): Promise<OperationResult> {
       const contact = args?.contact ?? ''
       return runBossOperation(
-        'readonly',
+        { kind: 'readonly', name: 'boss_open_chat' },
         ctx,
         sessionFactory,
         () => {

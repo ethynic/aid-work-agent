@@ -27,7 +27,7 @@ export function createBossOverlayDismissOperation(
     execute(args: BossOverlayDismissArgs, ctx: OpContext): Promise<OperationResult> {
       const text = args?.text ?? ''
       return runBossOperation(
-        'readonly',
+        { kind: 'readonly', name: 'boss_overlay_dismiss' },
         ctx,
         sessionFactory,
         () => {

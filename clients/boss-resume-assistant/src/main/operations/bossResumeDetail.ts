@@ -241,7 +241,7 @@ export function createBossResumeDetailOperation(
       const rawSaveTo = args?.save_image_to
       const saveImageTo = (rawSaveTo ?? '').trim()
       return runBossOperation(
-        'readonly',
+        { kind: 'readonly', name: 'boss_resume_detail' },
         ctx,
         sessionFactory,
         // 参数前置校验（connect Chrome 之前 fail-fast，types.ts 契约）：candidate_name 必传

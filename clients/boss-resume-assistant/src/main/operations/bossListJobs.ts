@@ -20,7 +20,7 @@ export function createBossListJobsOperation(
     name: 'boss_list_jobs',
     execute(_args: Record<string, never>, ctx: OpContext): Promise<OperationResult> {
       return runBossOperation(
-        'readonly',
+        { kind: 'readonly', name: 'boss_list_jobs' },
         ctx,
         sessionFactory,
         () => null,

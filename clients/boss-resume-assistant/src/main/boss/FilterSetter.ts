@@ -26,6 +26,17 @@ export class FilterSetError extends Error {
   }
 }
 
+/**
+ * 面板滚动适配失败（目标在弹窗可视区外且无滚动能力 / 滚 3 次仍不可见）：
+ * 属页面状态问题而非档位缺失，不可由 apply 的保底档位映射恢复——直接 fail-loud。
+ */
+export class PanelScrollError extends FilterSetError {
+  constructor(message: string) {
+    super(message)
+    this.name = 'PanelScrollError'
+  }
+}
+
 export interface FilterSpec {
   /** 经验要求行选项，如 '5-10年' */
   experience?: string
@@ -44,6 +55,12 @@ export interface FilterSetterDeps {
   signal?: AbortSignal
   /** 可注入 sleep（测试） */
   sleep?(ms: number): Promise<void>
+  /** CDP 浏览类滚动（VIP 面板内滚动，不占真实鼠标，真实接线由 operation 传 session.mouseWheel）。
+   *  目标本就在可视区内时零滚动不触发；目标越界且未注入 → fail-loud 拒绝盲点（保护旧调用方） */
+  mouseWheel?(x: number, y: number, deltaY: number): Promise<void>
+  /** 阶段计时埋点（panel:open / panel:clear / panel:option / panel:confirm / panel:verify /
+   *  probe:describe，只记名称与毫秒，不记页面内容）；缺省恒等透传 */
+  step?<T>(name: string, fn: () => Promise<T>): Promise<T>
 }
 
 interface VisibleHit {
@@ -121,9 +138,11 @@ const EXTRA_ROW_LABEL_PREFIXES = ['年龄', '活跃度', '性别', '近期没有
 
 export class FilterSetter {
   private readonly sleep: (ms: number) => Promise<void>
+  private readonly step: <T>(name: string, fn: () => Promise<T>) => Promise<T>
 
   constructor(private readonly deps: FilterSetterDeps) {
     this.sleep = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)))
+    this.step = deps.step ?? ((_name, fn) => fn())
   }
 
   /**
@@ -133,17 +152,24 @@ export class FilterSetter {
   async clear(): Promise<void> {
     if (this.deps.signal?.aborted) throw new CancelledError()
     let snap = await this.ensurePanelOpen()
-    const clearBtn = this.locateUniqueText(snap, (s) => s === '清除', '清除按钮')
-    await this.deps.click(clearBtn, viewportOf(snap))
-    await this.sleep(500)
+    // VIP 适配：目标可能在弹窗滚动区下方，点击前先确保可见
+    snap = await this.ensureButtonVisible(snap, '清除')
+    await this.step('panel:clear', async () => {
+      const clearBtn = this.locateUniqueText(snap, (s) => s === '清除', '清除按钮')
+      await this.deps.click(clearBtn, viewportOf(snap))
+      await this.sleep(500)
+    })
 
     snap = await this.deps.snapshot()
-    const confirm = this.locateUniqueText(snap, (s) => s === '确定', '确定按钮')
-    await this.deps.click(confirm, viewportOf(snap))
-    await this.sleep(2000)
+    snap = await this.ensureButtonVisible(snap, '确定')
+    await this.step('panel:confirm', async () => {
+      const confirm = this.locateUniqueText(snap, (s) => s === '确定', '确定按钮')
+      await this.deps.click(confirm, viewportOf(snap))
+      await this.sleep(2000)
+    })
 
     // 校验：徽章应为无计数的「筛选」
-    snap = await this.deps.snapshot()
+    snap = await this.step('panel:verify', () => this.deps.snapshot())
     const badge = snap.strings.map((s) => FILTER_BADGE_PATTERN.exec(s.trim())).find((m) => m !== null)
     if (badge) {
       throw new FilterSetError(`清除筛选校验失败：徽章仍为「筛选·${badge[1]}」（确定可能未生效）`)
@@ -184,23 +210,31 @@ export class FilterSetter {
     let snap = await this.ensurePanelOpen()
 
     // 2. 先清除残留选择（反选防护，见方法注释）
-    const clearBtn = this.locateUniqueText(snap, (s) => s === '清除', '清除按钮')
-    await this.deps.click(clearBtn, viewportOf(snap))
-    await this.sleep(500)
+    snap = await this.ensureButtonVisible(snap, '清除')
+    await this.step('panel:clear', async () => {
+      const clearBtn = this.locateUniqueText(snap, (s) => s === '清除', '清除按钮')
+      await this.deps.click(clearBtn, viewportOf(snap))
+      await this.sleep(500)
+    })
 
-    // 3. 逐项行锚定点击（每项 fresh snapshot，页面可能重排）。
+    // 3. 逐项行锚定点击（每项 fresh snapshot，页面可能重排；VIP 面板目标行可能在滚动区
+    //    下方，点击前先 ensureRowVisible 滚入可视区）。
     //    先按原文走 locateRowOption（保留折行放宽/诱饵消歧等既有行为）；0 命中进入保底链：
     //    归一化精确匹配（15k-20k ≡ 15-20K）→ 数值保底映射到页面真实存在的最接近档位
     //    （记 substitution 由调用方转述用户）；数值都不兼容（如学历「大专以上」）才报错
-    //    并列出该行全部可选档位（AI 据此自纠重试）
+    //    并列出该行全部可选档位（AI 据此自纠重试）。保底映射分支同样在滚动后定位。
     const substitutions: Array<{ row: string; requested: string; matched: string }> = []
     for (const row of rows) {
       for (const option of row.options) {
         snap = await this.deps.snapshot()
         let point: ClickPoint
         try {
+          snap = await this.ensureRowVisible(snap, row.labelPrefix, option)
           point = this.locateRowOption(snap, row.labelPrefix, option)
         } catch (err) {
+          // 滚动适配失败（无滚动能力/滚 3 次仍不可见）换档位也无济于事（同一行都在滚动区外），
+          // 直接 fail-loud，不进保底映射链（否则同一目标会再滚 3 次）
+          if (err instanceof PanelScrollError) throw err
           const available = this.rowOptionTexts(snap, row.labelPrefix)
           const exact = available.find((t) => normalizeOptionText(t) === normalizeOptionText(option))
           const closest = exact ?? pickClosestOption(option, available)
@@ -214,24 +248,33 @@ export class FilterSetter {
           if (!exact) {
             substitutions.push({ row: row.labelPrefix, requested: option, matched: closest })
           }
+          snap = await this.ensureRowVisible(snap, row.labelPrefix, closest)
           point = this.locateRowOption(snap, row.labelPrefix, closest)
         }
-        await this.deps.click(point, viewportOf(snap))
-        await this.sleep(500)
+        const clickSnap = snap
+        await this.step('panel:option', async () => {
+          await this.deps.click(point, viewportOf(clickSnap))
+          await this.sleep(500)
+        })
       }
     }
 
     // 4. 确定
     snap = await this.deps.snapshot()
-    const confirm = this.locateUniqueText(snap, (s) => s === '确定', '确定按钮')
-    await this.deps.click(confirm, viewportOf(snap))
-    await this.sleep(2000)
+    snap = await this.ensureButtonVisible(snap, '确定')
+    await this.step('panel:confirm', async () => {
+      const confirm = this.locateUniqueText(snap, (s) => s === '确定', '确定按钮')
+      await this.deps.click(confirm, viewportOf(snap))
+      await this.sleep(2000)
+    })
 
     // 5. 徽章计数校验（筛选·N）
-    snap = await this.deps.snapshot()
     const expected = rows.reduce((n, r) => n + r.options.length, 0)
-    const badge = snap.strings.map((s) => FILTER_BADGE_PATTERN.exec(s.trim())).find((m) => m !== null)
-    const count = badge ? Number(badge[1]) : null
+    const count = await this.step('panel:verify', async () => {
+      const verifySnap = await this.deps.snapshot()
+      const badge = verifySnap.strings.map((s) => FILTER_BADGE_PATTERN.exec(s.trim())).find((m) => m !== null)
+      return badge ? Number(badge[1]) : null
+    })
     if (count !== expected) {
       throw new FilterSetError(
         `筛选结果校验失败：期望「筛选·${expected}」，实际 ${count === null ? '未找到徽章（面板可能未提交）' : `筛选·${count}`}`,
@@ -245,6 +288,10 @@ export class FilterSetter {
    * 供 apply() 与探针模式共用。
    */
   async ensurePanelOpen(): Promise<DomSnapshot> {
+    return this.step('panel:open', () => this.openPanel())
+  }
+
+  private async openPanel(): Promise<DomSnapshot> {
     let snap = await this.deps.snapshot()
     if (this.visibleHits(snap, (s) => s === '经验要求').length === 1) return snap
     const button = this.locateUniqueText(snap, (s) => FILTER_BUTTON_PATTERN.test(s), '筛选按钮')
@@ -264,7 +311,8 @@ export class FilterSetter {
   async probeOptions(): Promise<PanelRowInfo[]> {
     if (this.deps.signal?.aborted) throw new CancelledError()
     const snap = await this.ensurePanelOpen()
-    const rows = this.describePanel(snap)
+    // describePanel 只读结构（全量行都要读，不点击）——无需滚动适配
+    const rows = await this.step('probe:describe', async () => this.describePanel(snap))
     const readable = rows.filter((r) => r.options.length > 0)
     if (readable.length === 0) {
       throw new FilterSetError('筛选面板未解析到任何可选档位（面板可能未打开或页面结构已变），请人工查看')
@@ -365,11 +413,134 @@ export class FilterSetter {
 
   /** 唯一文本定位（含 iframe owner 偏移），多命中/零命中 fail-loud */
   private locateUniqueText(snap: DomSnapshot, pred: (s: string) => boolean, what: string): ClickPoint {
+    return this.toGlobalPoint(snap, this.locateUniqueTextHit(snap, pred, what))
+  }
+
+  /** locateUniqueText 的 hit 版（VIP 可视性判定需要完整 bounds 而不只是中心点） */
+  private locateUniqueTextHit(snap: DomSnapshot, pred: (s: string) => boolean, what: string): VisibleHit {
     const hits = this.visibleHits(snap, pred)
     if (hits.length !== 1) {
       throw new FilterSetError(`${what}必须恰好 1 个可见匹配，实际 ${hits.length} 个`)
     }
-    return this.toGlobalPoint(snap, hits[0]!)
+    return hits[0]!
+  }
+
+  // ---------- VIP 面板滚动适配（2026-09-28） ----------
+  // VIP 账号筛选弹窗含大量 VIP 独享行，目标行（经验/学历/薪资）可能位于弹窗滚动区下方、
+  // 弹窗可视 clip 之外（用户手动预滚过面板时也可能在上方越界）。DOMSnapshot 仍能取到其
+  // bounds（布局存在），直接换算坐标点击会落点错误。点击前先把目标滚进可视区；
+  // 滚不动（3 次）或无滚动能力 fail-loud。
+
+  /** 某节点自身全局 bounds（文档 bounds + owner 偏移）；不在 layout / 无 bounds / owner 不可见时 null */
+  private nodeGlobalBounds(snap: DomSnapshot, documentIndex: number, nodeIndex: number): [number, number, number, number] | null {
+    const layout = snap.documents[documentIndex]?.layout
+    const pos = layout ? layout.nodeIndex.indexOf(nodeIndex) : -1
+    if (pos < 0) return null
+    const b = layout!.bounds[pos]
+    if (!b || b.length !== 4) return null
+    let offset: { x: number; y: number }
+    try {
+      offset = accumulateOwnerOffset(snap, documentIndex)
+    } catch {
+      return null // 隐藏 iframe owner 无可见 bounds——按取不到容器处理
+    }
+    return [b[0]! + offset.x, b[1]! + offset.y, b[2]!, b[3]!]
+  }
+
+  /**
+   * 可视 clip（panel 模式 = 行标签 LCA 容器与视口的交集，容器取不到时退化为仅视口；
+   * viewport 模式 = 仅视口，供「清除/确定」按钮用——按钮在弹窗 footer，不随内容区滚动，
+   * 用行容器底做下界会把 footer 按钮误判为越界）。
+   */
+  private visibleClipOf(snap: DomSnapshot, mode: 'panel' | 'viewport'): { top: number; bottom: number } {
+    const viewport = viewportOf(snap)
+    let top = 0
+    let bottom = viewport.height
+    if (mode === 'panel') {
+      const allLabelHits = ROW_DEFS.flatMap((d) => this.visibleHits(snap, (s) => s.startsWith(d.labelPrefix)))
+      for (const [docIdx, nodeIdx] of this.panelContainerByDoc(snap, allLabelHits)) {
+        const b = this.nodeGlobalBounds(snap, docIdx, nodeIdx)
+        if (b) {
+          bottom = Math.min(bottom, b[1] + b[3])
+          top = Math.max(top, b[1])
+        }
+      }
+    }
+    return { top, bottom }
+  }
+
+  /**
+   * 滚动核心：目标中心 y 超出可视区上下界（含 MARGIN 边距）即 CDP 滚动（下方越界正
+   * deltaY 下滚；用户手动预滚过面板时目标可能在上方越界，负 deltaY 上滚），滚后 sleep
+   * 再 fresh snapshot 重新定位（滚动内容 bounds 随滚动更新），最多滚 3 次。
+   * 目标本就可见 → 直接返回当前 snap（零开销路径，非 VIP 行为完全不变）。
+   */
+  private async ensureHitVisible(
+    snap: DomSnapshot,
+    locate: (s: DomSnapshot) => VisibleHit,
+    scrollXOf: (s: DomSnapshot, hit: VisibleHit) => number,
+    what: string,
+    mode: 'panel' | 'viewport',
+  ): Promise<DomSnapshot> {
+    const MARGIN = 40
+    for (let attempt = 0; ; attempt++) {
+      const hit = locate(snap)
+      const cy = this.toGlobalPoint(snap, hit).y
+      const { top, bottom } = this.visibleClipOf(snap, mode)
+      const range = `[${Math.round(top + MARGIN)}, ${Math.round(bottom - MARGIN)}]`
+      if (cy <= bottom - MARGIN && cy >= top + MARGIN) return snap
+      if (attempt >= 3) {
+        throw new PanelScrollError(
+          `目标「${what}」滚动 3 次后仍在筛选弹窗可视区外（y=${Math.round(cy)} 不在 ${range}），请人工查看`,
+        )
+      }
+      if (!this.deps.mouseWheel) {
+        throw new PanelScrollError(
+          `目标「${what}」在筛选弹窗可视区外（y=${Math.round(cy)} 不在 ${range}），且未注入滚动能力，拒绝盲点`,
+        )
+      }
+      // 滚动点在弹窗可视区内中部偏下（上滚时护住 clip 顶）；|deltaY| = 超出量 + 200 缓冲
+      const deltaY = cy > bottom - MARGIN
+        ? Math.ceil(cy - (bottom - MARGIN)) + 200
+        : -(Math.ceil(top + MARGIN - cy) + 200)
+      const wheelY = Math.max(top + 50, bottom - 100)
+      await this.deps.mouseWheel(scrollXOf(snap, hit), wheelY, deltaY)
+      await this.sleep(400)
+      snap = await this.deps.snapshot()
+    }
+  }
+
+  /** 确保某行选项在弹窗可视区内；返回已确认可见的最新 snap（调用方再定位最终点击点） */
+  private async ensureRowVisible(snap: DomSnapshot, labelPrefix: string, option: string): Promise<DomSnapshot> {
+    return this.ensureHitVisible(
+      snap,
+      (s) => this.locateRowOptionHit(s, labelPrefix, option),
+      (s) => {
+        // 滚动点 x 取行标签列（标签 x 恒在弹窗左列内，比选项 x 更稳）
+        const hits = this.visibleHits(s, (t) => t.startsWith(labelPrefix))
+        if (hits.length !== 1) {
+          throw new FilterSetError(`行标签「${labelPrefix}」必须恰好 1 个可见匹配，实际 ${hits.length} 个`)
+        }
+        return this.toGlobalPoint(s, hits[0]!).x
+      },
+      `${labelPrefix}:${option}`,
+      'panel',
+    )
+  }
+
+  /**
+   * 确保「清除」/「确定」按钮在可视区内。footer 不随弹窗内容区滚动，按纯视口判定：
+   * 行容器底做下界会把按钮误判为越界（非 VIP 页按钮恒在行容器下方），滚内容也救不了
+   * footer 越屏——真越屏直接 fail-loud。
+   */
+  private async ensureButtonVisible(snap: DomSnapshot, text: string): Promise<DomSnapshot> {
+    return this.ensureHitVisible(
+      snap,
+      (s) => this.locateUniqueTextHit(s, (t) => t === text, `${text}按钮`),
+      (s, hit) => this.toGlobalPoint(s, hit).x,
+      text,
+      'viewport',
+    )
   }
 
   /**
@@ -381,6 +552,11 @@ export class FilterSetter {
    * 故用「最近的其他行标签」垂直距离的一半作为行带半径，兼容同行/分行两种布局。
    */
   private locateRowOption(snap: DomSnapshot, labelPrefix: string, option: string): ClickPoint {
+    return this.toGlobalPoint(snap, this.locateRowOptionHit(snap, labelPrefix, option))
+  }
+
+  /** locateRowOption 的 hit 版（VIP 可视性判定需要完整 bounds 而不只是中心点） */
+  private locateRowOptionHit(snap: DomSnapshot, labelPrefix: string, option: string): VisibleHit {
     const labelHits = this.visibleHits(snap, (s) => s.startsWith(labelPrefix))
     if (labelHits.length !== 1) {
       throw new FilterSetError(`行标签「${labelPrefix}」必须恰好 1 个可见匹配，实际 ${labelHits.length} 个`)
@@ -426,7 +602,7 @@ export class FilterSetter {
         `选项「${option}」在「${labelPrefix}」行内必须恰好 1 个可见匹配，实际 ${candidates.length} 个`,
       )
     }
-    return this.toGlobalPoint(snap, candidates[0]!)
+    return candidates[0]!
   }
 
   /** 本行标签下方最近的其他行标签 cy（折行兜底的下界）；没有则返回 null */

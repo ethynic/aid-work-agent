@@ -30,7 +30,7 @@ export function createBossSendCurrentOperation(
       const message = args?.message ?? ''
       const dryRun = args?.dry_run === true
       return runBossOperation(
-        'write',
+        { kind: 'write', name: 'boss_send_current' },
         ctx,
         sessionFactory,
         () => {

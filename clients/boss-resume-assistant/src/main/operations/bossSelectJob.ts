@@ -26,7 +26,7 @@ export function createBossSelectJobOperation(
     execute(args: BossSelectJobArgs, ctx: OpContext): Promise<OperationResult> {
       const jobName = (args?.job_name ?? '').trim()
       return runBossOperation(
-        'write',
+        { kind: 'write', name: 'boss_select_job' },
         ctx,
         sessionFactory,
         () => (jobName ? null : 'job_name（职位名）不能为空'),

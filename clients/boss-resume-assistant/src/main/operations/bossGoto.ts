@@ -25,7 +25,7 @@ export function createBossGotoOperation(
     name: 'boss_goto',
     execute(args: BossGotoArgs, ctx: OpContext): Promise<OperationResult> {
       return runBossOperation(
-        'readonly',
+        { kind: 'readonly', name: 'boss_goto' },
         ctx,
         sessionFactory,
         () => {

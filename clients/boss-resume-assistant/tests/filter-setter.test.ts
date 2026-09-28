@@ -460,3 +460,143 @@ test('probeOptions：面板行标签在但行内无选项（无可读行）→ f
   })
   await assert.rejects(setter.probeOptions(), /未解析到任何可选档位/)
 })
+
+// ---------- VIP 面板滚动适配（2026-09-28：目标行/按钮在弹窗滚动区下方） ----------
+
+/** 滚动调用记录器 */
+function wheelRecorder() {
+  const wheels: Array<{ x: number; y: number; deltaY: number }> = []
+  return {
+    wheels,
+    mouseWheel: async (x: number, y: number, deltaY: number) => {
+      wheels.push({ x, y, deltaY })
+    },
+  }
+}
+
+/**
+ * VIP 面板 snapshot：可视 clip 容器 [500,300,1300,500]（可视底 = 300+500 = 800，边距 40 →
+ * 可点击下界 760），行/按钮 y 可配置。行标签 + 选项 + 按钮挂在容器下（LCA 容器），
+ * 「筛选」按钮在面板外挂根。
+ */
+function vipSnap(rowY: number, btnY: number): DomSnapshot {
+  const items: Array<{ text: string; bounds: [number, number, number, number] }> = [
+    { text: '筛选', bounds: [1514, 33.5, 42, 23] },
+    { text: '经验要求', bounds: [600, rowY, 75, 22] },
+    { text: '5-10年', bounds: [874.5, rowY, 58.5, 22] },
+    { text: '学历要求', bounds: [600, rowY + 150, 75, 22] },
+    { text: '薪资待遇[单选]', bounds: [600, rowY + 300, 105, 22] },
+    { text: '清除', bounds: [1633, btnY, 42, 23] },
+    { text: '确定', bounds: [1738.5, btnY, 42, 23] },
+    { text: '', bounds: [500, 300, 1300, 500] }, // 面板可视 clip 容器
+  ]
+  const container = items.length // 容器 nodeIndex（node 0 为根）
+  return buildSnap(items, [0, container, container, container, container, container, container, 0])
+}
+
+test('VIP 场景：目标行在容器 clip 下方 → mouseWheel 滚入可视区后点击坐标正确', async () => {
+  // 行 cy=1101 > 760（越界）；清除/确定 cy=711.5（本就可见）。滚动 541px 后行移到 cy=560。
+  const w = wheelRecorder()
+  const r = recorder()
+  const setter = new FilterSetter({
+    snapshot: snapshotQueue([vipSnap(1090, 700), vipSnap(1090, 700), vipSnap(549, 700), vipSnap(549, 700), doneSnap1]),
+    click: r.click,
+    sleep: r.sleep,
+    mouseWheel: w.mouseWheel,
+  })
+  const result = await setter.apply({ experience: '5-10年' })
+  assert.equal(result.filterCount, 1)
+  assert.deepEqual(result.substitutions, [])
+  // 点击序列：清除（本就可见）→ 5-10年（滚动后坐标）→ 确定；坐标全部在可视下界之上
+  assert.deepEqual(r.clicks, [
+    { x: 1654, y: 711.5 },
+    { x: 903.75, y: 560 },
+    { x: 1759.5, y: 711.5 },
+  ])
+  // 滚动一次：x=行标签列（经验要求 cx=637.5），y=可视区内中部偏下（800-100），deltaY=超出量+200
+  assert.equal(w.wheels.length, 1)
+  assert.deepEqual(w.wheels[0], { x: 637.5, y: 700, deltaY: 541 })
+  assert.ok(w.wheels[0]!.deltaY > 0)
+})
+
+test('VIP 场景：滚 3 次目标仍不可见 → FilterSetError fail-loud，绝不盲点选项', async () => {
+  const w = wheelRecorder()
+  const r = recorder()
+  const setter = new FilterSetter({
+    // 队列恒为越界布局：滚多少次 snapshot 都不变
+    snapshot: snapshotQueue(Array(6).fill(vipSnap(1090, 700))),
+    click: r.click,
+    sleep: r.sleep,
+    mouseWheel: w.mouseWheel,
+  })
+  await assert.rejects(setter.apply({ experience: '5-10年' }), /滚动 3 次后仍在筛选弹窗可视区外/)
+  // 只允许点过前置「清除」，目标选项一次都没点
+  assert.equal(r.clicks.length, 1)
+  assert.deepEqual(r.clicks[0], { x: 1654, y: 711.5 })
+  assert.equal(w.wheels.length, 3)
+})
+
+test('VIP 场景：目标越界且未注入 mouseWheel → FilterSetError（保护旧调用方，拒绝盲点）', async () => {
+  const r = recorder()
+  const setter = new FilterSetter({
+    // 清除/确定越出视口下界（footer 按纯视口判定，不随内容滚动）
+    snapshot: snapshotQueue([vipSnap(1090, 1880)]),
+    click: r.click,
+    sleep: r.sleep,
+  })
+  await assert.rejects(setter.clear(), /在筛选弹窗可视区外.*未注入滚动能力/)
+  assert.equal(r.clicks.length, 0) // 面板已打开：连筛选按钮都没点
+})
+
+test('VIP 场景：用户预滚过面板，目标行在容器 clip 上方 → 负 deltaY 上滚后点击', async () => {
+  // 行 cy=71 < 340（clip [300,800] 上界 300+40）→ 上滚；滚后行回到 cy=560 可见
+  const w = wheelRecorder()
+  const r = recorder()
+  const setter = new FilterSetter({
+    snapshot: snapshotQueue([vipSnap(60, 700), vipSnap(60, 700), vipSnap(549, 700), vipSnap(549, 700), doneSnap1]),
+    click: r.click,
+    sleep: r.sleep,
+    mouseWheel: w.mouseWheel,
+  })
+  const result = await setter.apply({ experience: '5-10年' })
+  assert.equal(result.filterCount, 1)
+  assert.deepEqual(r.clicks[1], { x: 903.75, y: 560 })
+  assert.equal(w.wheels.length, 1)
+  assert.deepEqual(w.wheels[0], { x: 637.5, y: 700, deltaY: -469 })
+  assert.ok(w.wheels[0]!.deltaY < 0)
+})
+
+test('清除/确定在行容器下方但在视口内 → 纯视口判定不误滚（footer 不随内容区滚动）', async () => {
+  // 容器 clip [300,800]，行 cy=611 可见；按钮 cy=861.5 越过容器底 760 但在视口内：
+  // 旧「容器底做按钮下界」会误判越界滚动，现应零滚动直接点击
+  const w = wheelRecorder()
+  const r = recorder()
+  const setter = new FilterSetter({
+    snapshot: snapshotQueue([vipSnap(600, 850), vipSnap(600, 850), vipSnap(600, 850), doneSnap1]),
+    click: r.click,
+    sleep: r.sleep,
+    mouseWheel: w.mouseWheel,
+  })
+  const result = await setter.apply({ experience: '5-10年' })
+  assert.equal(result.filterCount, 1)
+  assert.equal(w.wheels.length, 0)
+  assert.deepEqual(r.clicks, [
+    { x: 1654, y: 861.5 },
+    { x: 903.75, y: 611 },
+    { x: 1759.5, y: 861.5 },
+  ])
+})
+
+test('目标全部在可视区内 → mouseWheel 从不被调用（非 VIP 行为零变化）', async () => {
+  const w = wheelRecorder()
+  const r = recorder()
+  const setter = new FilterSetter({
+    snapshot: snapshotQueue([panelSnap, panelSnap, closedSnap]),
+    click: r.click,
+    sleep: r.sleep,
+    mouseWheel: w.mouseWheel,
+  })
+  await setter.clear()
+  assert.equal(r.clicks.length, 2)
+  assert.equal(w.wheels.length, 0)
+})

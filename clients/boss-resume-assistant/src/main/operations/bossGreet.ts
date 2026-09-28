@@ -41,7 +41,7 @@ export function createBossGreetOperation(
       const limit = args?.limit ?? 10
       const names = args?.names
       return runBossOperation(
-        'write',
+        { kind: 'write', name: 'boss_greet' },
         ctx,
         sessionFactory,
         () => {

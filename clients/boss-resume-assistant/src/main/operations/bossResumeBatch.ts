@@ -43,7 +43,7 @@ export function createBossResumeBatchOperation(
       const limit = args?.limit ?? 1
       const saveDir = (args?.save_dir ?? '').trim()
       return runBossOperation(
-        'readonly',
+        { kind: 'readonly', name: 'boss_resume_batch' },
         ctx,
         sessionFactory,
         () => {

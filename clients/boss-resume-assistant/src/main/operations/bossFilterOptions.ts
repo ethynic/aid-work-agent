@@ -23,11 +23,11 @@ export function createBossFilterOptionsOperation(
     name: 'boss_filter_options',
     execute(_args: Record<string, never>, ctx: OpContext): Promise<OperationResult> {
       return runBossOperation(
-        'readonly',
+        { kind: 'readonly', name: 'boss_filter_options' },
         ctx,
         sessionFactory,
         () => null,
-        async (session) => {
+        async (session, _tracker, perf) => {
           // 前置校验：必须在推荐牛人列表页（有「筛选」按钮，与 bossGreet 同源判定）
           const probe = await session.snapshot()
           if (!probe.strings.some((s) => FILTER_BUTTON_PATTERN.test(s.trim()))) {
@@ -40,6 +40,11 @@ export function createBossFilterOptionsOperation(
             snapshot: session.snapshot,
             click: session.click,
             signal: ctx.signal,
+            // 性能埋点：固定 sleep 与关键阶段耗时进 collector（只记名称与毫秒）
+            sleep: (ms) => perf.time(`sleep:${ms}`, () => new Promise<void>((r) => setTimeout(r, ms))),
+            step: <T>(name: string, fn: () => Promise<T>) => perf.time(`filter:${name}`, fn),
+            // VIP 面板滚动适配：CDP 浏览类滚动（不占真实鼠标）
+            mouseWheel: session.mouseWheel,
           })
           ctx.progress({ stage: 'execute', message: '打开筛选面板读取可选档位（借用真实鼠标，请勿移动）' })
           const rows = await setter.probeOptions()

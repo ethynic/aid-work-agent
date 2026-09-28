@@ -22,6 +22,7 @@ import {
   type OpContext,
 } from './types.js'
 import { mapExecutorError } from './errorMapping.js'
+import { PerfCollector } from '../perf.js'
 
 /**
  * operation 级失败日志（stderr，经 providerManager 转发落 runtime.log）：
@@ -32,6 +33,43 @@ import { mapExecutorError } from './errorMapping.js'
 function logOpFailure(runId: string, code: string, message: string): void {
   const trimmed = message.length > 200 ? `${message.slice(0, 200)}…` : message
   process.stderr.write(`[boss-op] 失败 run_id=${runId} code=${code} message=${trimmed}\n`)
+}
+
+/**
+ * 性能埋点单行日志（stderr，与 [boss-op] 同通道经 providerManager 落 runtime.log）：
+ * 每次 operation 运行结束（成功/失败都）输出一条可解析的分步耗时汇总，供数据驱动优化。
+ * 只记工具名/步骤名与毫秒数，不记页面内容/坐标/候选人信息（与 logOpFailure 同口径）。
+ */
+function logPerfLine(name: string, runId: string, ok: boolean, totalMs: number, perf: PerfCollector): void {
+  const parts = perf.summaryParts()
+  process.stderr.write(
+    `[boss-perf] tool=${name} run_id=${runId} ok=${ok ? 1 : 0} total_ms=${totalMs}` +
+      ` connect_ms=${perf.totalMsOf('connect')} body_ms=${perf.totalMsOf('body')} close_ms=${perf.totalMsOf('close')}` +
+      (parts ? ` ${parts}` : '') +
+      '\n',
+  )
+}
+
+/**
+ * 对 session 原语逐字段包一层计时（不用 Proxy，显式包装更清晰）：
+ * 测试注入的 fake session 同样被覆盖。包装函数只闭包引用 session.xxx（this 无关）。
+ * 可选成员（clearInput/pageNavigate）存在才包装；close 不在此包（run 的 finally 单独计时）。
+ */
+function instrumentSession(session: BossSession, perf: PerfCollector): BossSession {
+  const { clearInput, pageNavigate } = session
+  return {
+    snapshot: () => perf.time('snapshot', () => session.snapshot()),
+    click: (point, viewport) => perf.time('win32:click', () => session.click(point, viewport)),
+    clickBrowse: (point) => perf.time('cdp:clickBrowse', () => session.clickBrowse(point)),
+    clickAndType: (point, viewport, text) => perf.time('win32:clickAndType', () => session.clickAndType(point, viewport, text)),
+    mouseWheel: (x, y, deltaY) => perf.time('cdp:mouseWheel', () => session.mouseWheel(x, y, deltaY)),
+    pressEscape: () => perf.time('cdp:escape', () => session.pressEscape()),
+    captureFullpage: () => perf.time('cdp:screenshot', () => session.captureFullpage()),
+    getUrl: () => perf.time('cdp:getUrl', () => session.getUrl()),
+    ...(clearInput ? { clearInput: () => perf.time('cdp:clearInput', () => clearInput()) } : {}),
+    ...(pageNavigate ? { pageNavigate: (url: string) => perf.time('cdp:navigate', () => pageNavigate(url)) } : {}),
+    close: () => session.close(),
+  }
 }
 
 /**
@@ -169,13 +207,18 @@ export interface CompletedTracker {
  * operation 执行骨架（规格 §2：永不 throw、参数校验在 connect 前、统一结果）：
  * 参数校验（validate）→ signal 入口检查 → session 工厂（connect+attach）→ body → finally close。
  * 任何异常经 errorMapping 映射为结构化失败结果；写动作失败按 tracker.completed 计算 effect。
+ *
+ * 性能埋点（2026-09-28）：首参为 { kind, name } 对象（name = operation 名，进 [boss-perf] 行）；
+ * run 内创建 PerfCollector，connect/body/close 三段与 session 各原语逐层计时，
+ * 结束时（进入 body 前的参数校验失败除外——尚未发生任何 I/O）向 stderr 输出 [boss-perf] 单行。
+ * body 第三参为 collector（可选使用，既有 2 参 body 不受影响）。
  */
 export async function runBossOperation(
-  kind: 'write' | 'readonly',
+  spec: { kind: 'write' | 'readonly'; name: string },
   ctx: OpContext,
   sessionFactory: BossSessionFactory,
   validate: () => string | null,
-  body: (session: BossSession, tracker: CompletedTracker) => Promise<OperationOutcome>,
+  body: (session: BossSession, tracker: CompletedTracker, perf: PerfCollector) => Promise<OperationOutcome>,
 ): Promise<OperationResult> {
   const runId = randomUUID()
   const invalid = validate()
@@ -184,24 +227,30 @@ export async function runBossOperation(
     return failResult(runId, 'INVALID_ARGUMENT', invalid, 'none')
   }
 
+  const perf = new PerfCollector()
+  const startMs = Date.now()
   const tracker: CompletedTracker = { completed: 0 }
   let session: BossSession | undefined
+  let ok = false
   try {
     if (ctx.signal.aborted) throw new CancelledError()
-    session = await sessionFactory(ctx)
-    const outcome = await body(session, tracker)
-    const effect = outcome.effect ?? (kind === 'readonly' ? 'none' : writeEffect(true, 'OK', tracker.completed))
+    session = await perf.time('connect', () => sessionFactory(ctx))
+    const outcome = await perf.time('body', () => body(instrumentSession(session!, perf), tracker, perf))
+    const effect = outcome.effect ?? (spec.kind === 'readonly' ? 'none' : writeEffect(true, 'OK', tracker.completed))
     ctx.progress({ stage: 'done', message: outcome.message })
+    ok = true
     return okResult(runId, outcome.message, effect, outcome.data ?? {})
   } catch (err) {
     const mapped = mapExecutorError(err)
     logOpFailure(runId, mapped.code, mapped.message)
-    const effect = kind === 'readonly' ? 'none' : writeEffect(false, mapped.code, tracker.completed)
+    const effect = spec.kind === 'readonly' ? 'none' : writeEffect(false, mapped.code, tracker.completed)
     const data: Record<string, unknown> = {}
-    if (kind === 'write' && tracker.completed > 0) data.completed = tracker.completed
+    if (spec.kind === 'write' && tracker.completed > 0) data.completed = tracker.completed
     return failResult(runId, mapped.code, mapped.message, effect, data)
   } finally {
-    await session?.close()
+    // close 计时后统一输出 [boss-perf]（成功/失败都输出；ok 由上方分支标记）
+    if (session) await perf.time('close', () => session!.close())
+    logPerfLine(spec.name, runId, ok, Date.now() - startMs, perf)
   }
 }
 

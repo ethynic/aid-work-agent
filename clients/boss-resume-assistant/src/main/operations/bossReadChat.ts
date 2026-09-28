@@ -33,7 +33,7 @@ export function createBossReadChatOperation(
     execute(args: BossReadChatArgs, ctx: OpContext): Promise<OperationResult> {
       const rawContact = args?.contact
       return runBossOperation(
-        'readonly',
+        { kind: 'readonly', name: 'boss_read_chat' },
         ctx,
         sessionFactory,
         () => {

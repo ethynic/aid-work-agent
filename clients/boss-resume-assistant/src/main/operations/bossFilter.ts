@@ -47,34 +47,45 @@ export function createBossFilterOperation(
   return {
     name: 'boss_filter',
     execute(args: BossFilterArgs, ctx: OpContext): Promise<OperationResult> {
-      return runBossOperation('write', ctx, sessionFactory, () => validateFilterArgs(args), async (session) => {
-        ctx.progress({ stage: 'execute', message: '设置筛选面板' })
-        const setter = new FilterSetter({
-          snapshot: session.snapshot,
-          click: session.click,
-          signal: ctx.signal,
-        })
-        const spec: FilterSpec = {
-          experience: args.experience?.trim(),
-          educations: args.educations?.map((e) => e.trim()),
-          salary: args.salary?.trim(),
-        }
-        const result = await setter.apply(spec)
-        // 保底映射说明：LLM/用户传的档位页面上不存在时已自动映射到最接近的真实档位，必须转述
-        const subNote = result.substitutions
-          .map((s) => `${s.row}「${s.requested}」无该档位，已按最接近的「${s.matched}」设置`)
-          .join('；')
-        return {
-          message:
-            `筛选已应用并校验通过：筛选·${result.filterCount}` + (subNote ? `；${subNote}` : ''),
-          data: {
-            filter_count: result.filterCount,
-            applied: true,
-            ...(result.substitutions.length > 0 ? { substitutions: result.substitutions } : {}),
-          },
-          effect: 'applied' as const,
-        }
-      })
+      return runBossOperation(
+        { kind: 'write', name: 'boss_filter' },
+        ctx,
+        sessionFactory,
+        () => validateFilterArgs(args),
+        async (session, _tracker, perf) => {
+          ctx.progress({ stage: 'execute', message: '设置筛选面板' })
+          const setter = new FilterSetter({
+            snapshot: session.snapshot,
+            click: session.click,
+            signal: ctx.signal,
+            // 性能埋点：固定 sleep 与关键阶段耗时进 collector（只记名称与毫秒）
+            sleep: (ms) => perf.time(`sleep:${ms}`, () => new Promise<void>((r) => setTimeout(r, ms))),
+            step: <T>(name: string, fn: () => Promise<T>) => perf.time(`filter:${name}`, fn),
+            // VIP 面板滚动适配：CDP 浏览类滚动（不占真实鼠标）
+            mouseWheel: session.mouseWheel,
+          })
+          const spec: FilterSpec = {
+            experience: args.experience?.trim(),
+            educations: args.educations?.map((e) => e.trim()),
+            salary: args.salary?.trim(),
+          }
+          const result = await setter.apply(spec)
+          // 保底映射说明：LLM/用户传的档位页面上不存在时已自动映射到最接近的真实档位，必须转述
+          const subNote = result.substitutions
+            .map((s) => `${s.row}「${s.requested}」无该档位，已按最接近的「${s.matched}」设置`)
+            .join('；')
+          return {
+            message:
+              `筛选已应用并校验通过：筛选·${result.filterCount}` + (subNote ? `；${subNote}` : ''),
+            data: {
+              filter_count: result.filterCount,
+              applied: true,
+              ...(result.substitutions.length > 0 ? { substitutions: result.substitutions } : {}),
+            },
+            effect: 'applied' as const,
+          }
+        },
+      )
     },
   }
 }
@@ -85,20 +96,29 @@ export function createBossClearFilterOperation(
   return {
     name: 'boss_clear_filter',
     execute(_args: Record<string, never>, ctx: OpContext): Promise<OperationResult> {
-      return runBossOperation('write', ctx, sessionFactory, () => null, async (session) => {
-        ctx.progress({ stage: 'execute', message: '打开面板 → 清除 → 确定' })
-        const setter = new FilterSetter({
-          snapshot: session.snapshot,
-          click: session.click,
-          signal: ctx.signal,
-        })
-        await setter.clear()
-        return {
-          message: '筛选已清除（徽章无计数）',
-          data: { filter_count: 0, applied: true },
-          effect: 'applied' as const,
-        }
-      })
+      return runBossOperation(
+        { kind: 'write', name: 'boss_clear_filter' },
+        ctx,
+        sessionFactory,
+        () => null,
+        async (session, _tracker, perf) => {
+          ctx.progress({ stage: 'execute', message: '打开面板 → 清除 → 确定' })
+          const setter = new FilterSetter({
+            snapshot: session.snapshot,
+            click: session.click,
+            signal: ctx.signal,
+            sleep: (ms) => perf.time(`sleep:${ms}`, () => new Promise<void>((r) => setTimeout(r, ms))),
+            step: <T>(name: string, fn: () => Promise<T>) => perf.time(`filter:${name}`, fn),
+            mouseWheel: session.mouseWheel,
+          })
+          await setter.clear()
+          return {
+            message: '筛选已清除（徽章无计数）',
+            data: { filter_count: 0, applied: true },
+            effect: 'applied' as const,
+          }
+        },
+      )
     },
   }
 }

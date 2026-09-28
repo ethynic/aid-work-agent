@@ -26,7 +26,7 @@ export function createBossOverlayInspectOperation(
     name: 'boss_overlay_inspect',
     execute(_args: BossOverlayInspectArgs, ctx: OpContext): Promise<OperationResult> {
       return runBossOperation(
-        'readonly',
+        { kind: 'readonly', name: 'boss_overlay_inspect' },
         ctx,
         sessionFactory,
         () => null,

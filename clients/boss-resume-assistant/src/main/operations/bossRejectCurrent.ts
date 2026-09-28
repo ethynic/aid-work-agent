@@ -19,7 +19,7 @@ export function createBossRejectCurrentOperation(
   return {
     name: 'boss_reject_current',
     execute(_args: Record<string, never>, ctx: OpContext): Promise<OperationResult> {
-      return runBossOperation('write', ctx, sessionFactory, () => null, async (session) => {
+      return runBossOperation({ kind: 'write', name: 'boss_reject_current' }, ctx, sessionFactory, () => null, async (session) => {
         await ensureChatPage(session, ctx)
         const executor = new ChatRejectExecutor({
           snapshot: session.snapshot,

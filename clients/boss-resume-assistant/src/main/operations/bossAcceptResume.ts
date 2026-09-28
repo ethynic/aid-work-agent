@@ -33,7 +33,7 @@ export function createBossAcceptResumeOperation(
       const limit = args?.limit ?? 20
       const preview = args?.preview ?? true
       return runBossOperation(
-        'write',
+        { kind: 'write', name: 'boss_accept_resume' },
         ctx,
         sessionFactory,
         () => {

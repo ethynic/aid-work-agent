@@ -25,7 +25,7 @@ export function createBossInterviewDemoOperation(
     name: 'boss_interview_demo',
     execute(args: BossInterviewDemoArgs, ctx: OpContext): Promise<OperationResult> {
       return runBossOperation(
-        'readonly',
+        { kind: 'readonly', name: 'boss_interview_demo' },
         ctx,
         sessionFactory,
         () => {
