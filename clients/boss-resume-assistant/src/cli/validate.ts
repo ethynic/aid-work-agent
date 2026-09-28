@@ -33,6 +33,10 @@ const COMMAND_FLAGS: Readonly<Record<string, readonly string[]>> = {
   'select-job': [],
   'resume-detail': ['name', 'save-image'],
   'resume-batch': ['limit', 'save-dir'],
+  // 详情页打招呼三件套（2026-09-28 筛选主路径）：open/greet-detail 的姓名走位置参数（select-job 同款）
+  'open-detail': [], // 无专属 flag（必带 1 个姓名位置参数；缺失/空白在 command 层 fail-loud）
+  'greet-detail': ['dry-run'],
+  'close-detail': [],
   mcp: ['stdio'],
   doctor: [],
   version: ['json'],
@@ -48,6 +52,8 @@ const COMMAND_POSITIONALS: Readonly<Record<string, number>> = {
   'select-job': 1, // select-job <职位名>
   'read-chat': 1, // read-chat [姓名]（可选，缺省读当前会话）
   'open-chat': 1, // open-chat <姓名>（必填）
+  'open-detail': 1, // open-detail <姓名>（必填；缺失在 command 层 fail-loud，与 open-chat 同款）
+  'greet-detail': 1, // greet-detail <姓名>（必填；--dry-run 为可选 flag）
 }
 
 /** greet 定向名单上限（与 operation 层 bossGreet、MCP schema 的 3 人硬上限一致，CLI 提前拦） */

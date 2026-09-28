@@ -3,7 +3,8 @@
  * BOSS 招聘操作 CLI 入口。
  *
  * 操作命令（filter / greet / goto / accept / reject / interview / send-to / send-current /
- * read-chat / open-chat / list-jobs / select-job / resume-detail / resume-batch，其中 filter 含设置与 --clear 两种用法） + 3 个标准 Provider 命令（mcp / doctor / version）。
+ * read-chat / open-chat / list-jobs / select-job / resume-detail / resume-batch /
+ * open-detail / greet-detail / close-detail，其中 filter 含设置与 --clear 两种用法） + 3 个标准 Provider 命令（mcp / doctor / version）。
  * 操作命令只是薄 renderer，业务能力在 src/main/operations/，与 MCP tool handler 共享。
  *
  * 用法：
@@ -23,6 +24,9 @@
  *   node dist/src/cli/index.js select-job <职位名>
  *   node dist/src/cli/index.js resume-detail [--name <姓名>] [--save-image <path>]
  *   node dist/src/cli/index.js resume-batch [--limit N] [--save-dir <目录>]
+ *   node dist/src/cli/index.js open-detail <姓名>
+ *   node dist/src/cli/index.js greet-detail <姓名> [--dry-run]
+ *   node dist/src/cli/index.js close-detail
  *   node dist/src/cli/index.js mcp --stdio
  *   node dist/src/cli/index.js doctor
  *   node dist/src/cli/index.js version [--json]
@@ -54,6 +58,9 @@ const USAGE = `BOSS 招聘操作 CLI
   select-job <职位名>          切换到指定职位（精确职位名，可用 list-jobs 查看；真实写动作，期间勿动鼠标）
   resume-detail --name <姓名> [--save-image <path>]   读取当前打开的候选人简历详情（canvas 截图拼接，文本在云端识别；--name 候选人姓名必传，缺省报错；前提先点开候选人详情；只读，但滚动借用真实鼠标，期间勿动鼠标）
   resume-batch [--limit N] [--save-dir <目录>]   批量打开推荐牛人卡片并读取简历（默认 1 份，最大 10；逐个点开→读取→关闭→下一份，文本在云端识别；只读，但滚动借用真实鼠标约 30 秒/份，期间勿动鼠标）
+  open-detail <姓名>            打开指定姓名候选人的简历详情（推荐牛人页按姓名找人并点开，详情保持打开供 resume-detail 读取；当前屏没有自动滚动查找，找不到 fail-loud 列出当前屏可见姓名；点击/滚动借用真实鼠标，期间勿动鼠标）
+  greet-detail <姓名> [--dry-run]   在当前打开的简历详情页点「打招呼」（校验详情属于指定候选人防止打错人；已打过幂等返回；打完自动关闭详情；--dry-run 只定位不点击；真实写动作，期间勿动鼠标）
+  close-detail                  关闭当前打开的简历详情弹层（筛选不合格时的清理步，无业务副作用，详情未打开时幂等成功；期间勿动鼠标键盘）
 
 Provider 命令：
   mcp --stdio                 启动标准本地 MCP server（stdout 只承载协议，供 Codex/WorkBuddy 等 Host 使用）
@@ -281,6 +288,34 @@ async function main(): Promise<number> {
       if (cdpPort === 'invalid') return 2
       const { resumeBatchCommand } = await import('./commands/resumeBatch.js')
       return resumeBatchCommand({ limit, saveDir, cdpPort })
+    }
+    case 'open-detail': {
+      const name = args.positional[1]
+      if (!name || !name.trim()) {
+        console.error('open-detail 缺少候选人姓名：open-detail <姓名>（与推荐列表卡片姓名精确一致）')
+        return 2
+      }
+      const cdpPort = parseCdpPort(args)
+      if (cdpPort === 'invalid') return 2
+      const { openDetailCommand } = await import('./commands/openDetail.js')
+      return openDetailCommand({ name: name.trim(), cdpPort })
+    }
+    case 'greet-detail': {
+      const name = args.positional[1]
+      if (!name || !name.trim()) {
+        console.error('greet-detail 缺少候选人姓名：greet-detail <姓名> [--dry-run]（详情归属校验依赖该姓名）')
+        return 2
+      }
+      const cdpPort = parseCdpPort(args)
+      if (cdpPort === 'invalid') return 2
+      const { greetDetailCommand } = await import('./commands/greetDetail.js')
+      return greetDetailCommand({ name: name.trim(), dryRun: hasFlag(args, 'dry-run'), cdpPort })
+    }
+    case 'close-detail': {
+      const cdpPort = parseCdpPort(args)
+      if (cdpPort === 'invalid') return 2
+      const { closeDetailCommand } = await import('./commands/closeDetail.js')
+      return closeDetailCommand({ cdpPort })
     }
     case 'mcp': {
       const cdpPort = parseCdpPort(args)

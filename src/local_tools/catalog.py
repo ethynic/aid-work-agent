@@ -41,6 +41,12 @@ TRUSTED_PROVIDERS: Dict[str, Dict[str, Any]] = {
             "boss_jobs_list",
             "boss_resume_detail",
             "boss_resume_batch",
+            # 详情页打招呼三件套（筛选主路径，2026-09-28，plan-boss-detail-greet）：
+            # boss_open_detail（按姓名开详情）→ boss_resume_detail（读取）→
+            # boss_greet_detail（合格打招呼）/ boss_close_detail（不合格清理）
+            "boss_open_detail",
+            "boss_greet_detail",
+            "boss_close_detail",
         ],
     },
     # 微信 Provider（P3-A1）：与 Runtime src/providers.ts 的 weixin manifest（5 工具）

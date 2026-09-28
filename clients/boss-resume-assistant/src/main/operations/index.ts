@@ -19,6 +19,9 @@ import { createBossListJobsOperation } from './bossListJobs.js'
 import { createBossSelectJobOperation } from './bossSelectJob.js'
 import { createBossResumeDetailOperation } from './bossResumeDetail.js'
 import { createBossResumeBatchOperation } from './bossResumeBatch.js'
+import { createBossOpenDetailOperation } from './bossOpenDetail.js'
+import { createBossGreetDetailOperation } from './bossGreetDetail.js'
+import { createBossCloseDetailOperation } from './bossCloseDetail.js'
 import { createBossOverlayInspectOperation } from './bossOverlayInspect.js'
 import { createBossOverlayDismissOperation } from './bossOverlayDismiss.js'
 import type { BossOperation } from './types.js'
@@ -50,6 +53,11 @@ export const OPERATIONS: Record<string, OperationEntry> = {
   boss_select_job: { operation: createBossSelectJobOperation(), cli: { write: true } },
   boss_resume_detail: { operation: createBossResumeDetailOperation(), cli: { write: false } },
   boss_resume_batch: { operation: createBossResumeBatchOperation(), cli: { write: false } },
+  // 详情页打招呼三件套（2026-09-28 筛选主路径，plan-boss-detail-greet）：open/close 借真实鼠标
+  // 但无外部写副作用（与 resume-batch 同款 readonly 先例，USAGE 保留「期间勿动鼠标」提示）
+  boss_open_detail: { operation: createBossOpenDetailOperation(), cli: { write: false } },
+  boss_greet_detail: { operation: createBossGreetDetailOperation(), cli: { write: true } },
+  boss_close_detail: { operation: createBossCloseDetailOperation(), cli: { write: false } },
   // 弹层自愈原语（2026-08-31）：仅供云端自愈编排内部调用，不进 SUBAGENT 白名单（agent 不可见）
   boss_overlay_inspect: { operation: createBossOverlayInspectOperation(), cli: { write: false } },
   boss_overlay_dismiss: { operation: createBossOverlayDismissOperation(), cli: { write: false } },

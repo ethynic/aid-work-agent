@@ -704,7 +704,10 @@ class BossGreetTool(LocalToolProxyTool):
         "外部可见写动作，单次最多 3 人，需用户在对话中明确授权数量。"
         "定向模式：传 names 候选人姓名清单时先匹配卡片姓名再点击，"
         "只向名单内的人打招呼（配对失败的卡片跳过），打给谁以返回的 greeted_names 为准，"
-        "missing_names 是滚到底也没找到的人"
+        "missing_names 是滚到底也没找到的人。"
+        "注意：简历筛选主流程的打招呼请走详情页路径"
+        "（boss_open_detail → boss_resume_detail → boss_greet_detail）；"
+        "本工具保留用于用户明确要求在列表页打招呼的手动/兜底场景"
     )
     InputModel = BossGreetInput
     timeout_seconds = 600
@@ -1380,6 +1383,70 @@ class BossResumeBatchTool(LocalToolProxyTool):
         return {**result, "data": {"resumes": summaries, "failures": failures}, "message": message}
 
 
+# ============== 详情页打招呼三件套（筛选主路径，2026-09-28，docs/plans/desktop-automation/plan-boss-detail-greet.md） ==============
+# 纯代理工具（无计费、无云端后处理）：云端 AI 编排筛选主流程，每候选人四步——
+# boss_open_detail（开详情）→ boss_resume_detail（既有，读取+VL 评估入库）→
+# 合格 boss_greet_detail（详情页打招呼）/ 不合格 boss_close_detail（清理关闭）。
+
+
+class BossOpenDetailInput(BaseModel):
+    name: str = Field(
+        ..., min_length=1, max_length=30,
+        description="候选人姓名（精确，与推荐列表卡片姓名一致）",
+    )
+
+
+class BossOpenDetailTool(LocalToolProxyTool):
+    """打开指定候选人的简历详情（纯代理：本机 Runtime 执行，无云端后处理、无计费）。"""
+
+    name = "boss_open_detail"
+    display_name = "BOSS 打开简历详情"
+    description = (
+        "打开指定姓名候选人的简历详情（推荐牛人页按姓名找人并点开，保持详情打开）。"
+        "筛选主流程第一步：boss_open_detail → boss_resume_detail → 合格则 boss_greet_detail。"
+        "前置：已在推荐牛人页。打开借用真实鼠标，期间勿动鼠标"
+    )
+    InputModel = BossOpenDetailInput
+    timeout_seconds = 300
+
+
+class BossGreetDetailInput(BaseModel):
+    name: str = Field(
+        ..., min_length=1, max_length=30,
+        description="候选人姓名（校验当前打开的详情属于该候选人，防止打错人）",
+    )
+    dry_run: bool = Field(
+        False, description="只定位不点击（测试链路，默认 false 真实点击）",
+    )
+
+
+class BossGreetDetailTool(LocalToolProxyTool):
+    """在当前打开的简历详情页点「打招呼」（纯代理：本机 Runtime 执行，无云端后处理、无计费）。"""
+
+    name = "boss_greet_detail"
+    display_name = "BOSS 详情页打招呼"
+    description = (
+        "在当前打开的简历详情页点「打招呼」（校验详情属于指定姓名候选人，防止打错人；"
+        "已打过则幂等返回；打完自动关闭详情）。筛选主流程的打招呼路径——列表页 boss_greet "
+        "仅作手动兜底，不用于筛选流程。dry_run=true 只定位不点击。写动作，期间勿动鼠标"
+    )
+    InputModel = BossGreetDetailInput
+    timeout_seconds = 600
+
+
+class BossCloseDetailTool(LocalToolProxyTool):
+    """关闭当前打开的简历详情弹层（纯代理：本机 Runtime 执行，无业务副作用）。"""
+
+    name = "boss_close_detail"
+    display_name = "BOSS 关闭简历详情"
+    description = (
+        "关闭当前打开的简历详情弹层（筛选不合格时的清理步，无业务副作用）"
+    )
+
+    class InputModel(BaseModel):
+        pass
+
+
 # ============== 话术发送闭环（职位管理 → boss_send_to / boss_send_current，2026-08-17） ==============
 
 # 简历摘录上限（字符）：供 LLM 填话术 {{占位符}} 用，够提炼亮点且省上下文
@@ -1784,6 +1851,9 @@ LOCAL_PROXY_TOOL_CLASSES = (
     BossJobsListTool,
     BossResumeDetailTool,
     BossResumeBatchTool,
+    BossOpenDetailTool,
+    BossGreetDetailTool,
+    BossCloseDetailTool,
     BossSendToTool,
     BossSendCurrentTool,
     BossReadChatTool,

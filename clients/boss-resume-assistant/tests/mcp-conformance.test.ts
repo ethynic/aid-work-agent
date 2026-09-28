@@ -71,6 +71,9 @@ test('mcp-conformance 套件全项通过', async () => {
       'boss_filter_options',
       'boss_resume_detail',
       'boss_resume_batch',
+      'boss_open_detail',
+      'boss_greet_detail',
+      'boss_close_detail',
     ],
     // 无 Chrome：空闲端口 → 快速返回结构化 CHROME_UNAVAILABLE
     callProbe: { name: 'boss_goto', arguments: { target: 'chat' } },
@@ -104,7 +107,7 @@ test('mcp-conformance 套件 CLI 模式可独立运行', async () => {
       '--require-base',
       path.join(DIST_ROOT, '..', 'package.json'),
       '--expect-tools',
-      'boss_filter,boss_clear_filter,boss_goto,boss_greet,boss_accept_resume,boss_reject_current,boss_interview_demo,boss_send_to,boss_send_current,boss_read_chat,boss_open_chat,boss_overlay_inspect,boss_overlay_dismiss,boss_list_jobs,boss_select_job,boss_filter_options,boss_resume_detail,boss_resume_batch',
+      'boss_filter,boss_clear_filter,boss_goto,boss_greet,boss_accept_resume,boss_reject_current,boss_interview_demo,boss_send_to,boss_send_current,boss_read_chat,boss_open_chat,boss_overlay_inspect,boss_overlay_dismiss,boss_list_jobs,boss_select_job,boss_filter_options,boss_resume_detail,boss_resume_batch,boss_open_detail,boss_greet_detail,boss_close_detail',
       '--call',
       'boss_goto:{"target":"chat"}',
       '--invalid',

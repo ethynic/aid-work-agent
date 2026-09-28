@@ -18,10 +18,13 @@ from src.local_tools.proxy_tool import (
     LOCAL_PROXY_TOOL_CLASSES,
     LOCAL_PROXY_TOOL_NAMES,
     BossAcceptResumeTool,
+    BossCloseDetailTool,
     BossFilterTool,
     BossGotoTool,
+    BossGreetDetailTool,
     BossGreetTool,
     BossJobsListTool,
+    BossOpenDetailTool,
     BossSelectJobTool,
 )
 from src.tools.base import ExecutionTarget
@@ -63,16 +66,18 @@ def _patch_repo(devices, invocation=None, events=None):
 
 class TestToolDefinitions:
     def test_all_tools_local_required(self):
-        """20 个 proxy 工具全部 LOCAL_REQUIRED + local_boss 分类，名称与受信 manifest 一致
+        """23 个 proxy 工具全部 LOCAL_REQUIRED + local_boss 分类，名称与受信 manifest 一致
 
         含 Phase 3 新增的 boss_list_jobs / boss_select_job / boss_jobs_list、
         面试通知 Phase 1 的 boss_interview_notify、沟通会话只读能力
         boss_read_chat / boss_open_chat（boss-cli 0.2.4）与弹层自愈原语
         boss_overlay_inspect / boss_overlay_dismiss（0.2.6，仅供自愈编排内部调用）；
         其中 boss_jobs_list / boss_interview_notify 是混合模式（云端执行逻辑 + 代理注册），
-        execution_target 仍 LOCAL_REQUIRED
+        execution_target 仍 LOCAL_REQUIRED。详情页打招呼三件套
+        boss_open_detail / boss_greet_detail / boss_close_detail（2026-09-28 筛选主路径）
+        为纯代理注册。
         """
-        assert len(LOCAL_PROXY_TOOL_CLASSES) == 20
+        assert len(LOCAL_PROXY_TOOL_CLASSES) == 23
         assert LOCAL_PROXY_TOOL_NAMES == set(catalog.allowed_tools("boss-recruiting"))
         for cls in LOCAL_PROXY_TOOL_CLASSES:
             tool = cls()
@@ -237,6 +242,12 @@ class TestAuthCaps:
         model = BossGreetTool.InputModel(names=[" 刘草威 ", "张三丰", "刘草威"])
         assert model.names == ["刘草威", "张三丰"]
 
+    def test_greet_description_marks_detail_path(self):
+        """boss_greet 描述已改标「筛选主流程走详情页三件套，本工具仅手动/兜底」（2026-09-28）"""
+        assert "boss_open_detail" in BossGreetTool.description
+        assert "boss_greet_detail" in BossGreetTool.description
+        assert "兜底" in BossGreetTool.description
+
     def test_accept_resume_limit_hard_cap(self):
         """accept 单次上限 1：limit=2 Pydantic 拒绝"""
         with pytest.raises(ValidationError):
@@ -254,6 +265,53 @@ class TestAuthCaps:
         assert result["code"] == "INVALID_ARGS"
         assert "筛选条件" in result["message"]
         create_invocation.assert_not_called()
+
+
+class TestDetailGreetTools:
+    """详情页打招呼三件套（2026-09-28 筛选主路径，plan-boss-detail-greet）：注册/描述/参数校验"""
+
+    def test_tools_registered_with_detail_path_description(self):
+        """三个纯代理工具：名称/分类/描述齐全，描述标注筛选主流程与详情页路径"""
+        for cls, expected_name in (
+            (BossOpenDetailTool, "boss_open_detail"),
+            (BossGreetDetailTool, "boss_greet_detail"),
+            (BossCloseDetailTool, "boss_close_detail"),
+        ):
+            tool = cls()
+            assert tool.name == expected_name
+            assert tool.execution_target == ExecutionTarget.LOCAL_REQUIRED
+            assert tool.category == "local_boss"
+            assert tool.display_name
+            assert tool.description
+        assert "boss_open_detail" in BossOpenDetailTool.description
+        assert "boss_resume_detail" in BossOpenDetailTool.description
+        assert "boss_greet_detail" in BossOpenDetailTool.description
+        # close 是清理步：无业务副作用
+        assert "无业务副作用" in BossCloseDetailTool.description
+
+    def test_open_detail_name_required(self):
+        """boss_open_detail：name 必填（min_length=1），空白拒绝"""
+        with pytest.raises(ValidationError):
+            BossOpenDetailTool.InputModel(name="")
+        tool = BossOpenDetailTool()
+        assert tool.validate_parameters(name="刘草威") is True
+        assert tool.validate_parameters() is False
+        assert tool.validate_parameters(name="") is False
+
+    def test_greet_detail_name_required_and_dry_run_optional(self):
+        """boss_greet_detail：name 必填（min_length=1，空白语义由 CLI operation 层 trim 校验）；dry_run 可选 boolean（缺省 False）"""
+        with pytest.raises(ValidationError):
+            BossGreetDetailTool.InputModel(name="")
+        tool = BossGreetDetailTool()
+        assert tool.validate_parameters(name="刘草威") is True
+        assert tool.validate_parameters() is False
+        model = BossGreetDetailTool.InputModel(name="刘草威", dry_run=True)
+        assert model.dry_run is True
+        assert BossGreetDetailTool.InputModel(name="刘草威").dry_run is False
+
+    def test_close_detail_no_args(self):
+        """boss_close_detail：无入参，校验恒通过"""
+        assert BossCloseDetailTool().validate_parameters() is True
 
 
 class TestTerminalMapping:

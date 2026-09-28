@@ -223,6 +223,56 @@ test('原型链风格 flag（--__proto__ / --constructor）按未知 flag 拒绝
   if (!r2.ok) assert.match(r2.message, /--constructor/)
 })
 
+// ---------- 详情页打招呼三件套（open-detail / greet-detail / close-detail，2026-09-28） ----------
+// 姓名走位置参数（select-job 同款）：缺姓名不在本层拦（位置参数个数上限只防多不带少），
+// 由 index.ts 命令层（exit 2）与 operation validate（INVALID_ARGUMENT，connect Chrome 前）fail-loud，
+// 缺参拒绝已在 boss-detail-greet-ops.test.ts 覆盖。
+
+test('open-detail 带姓名 → ok（姓名是必填位置参数）', () => {
+  assert.equal(v(['open-detail', '刘草威']).ok, true)
+  assert.equal(v(['open-detail', '刘草威', '--cdp-port', '9223']).ok, true)
+})
+
+test('open-detail 未知 flag 拒绝：--name（姓名只走位置参数）→ 拒绝', () => {
+  const r = v(['open-detail', '刘草威', '--name', 'x'])
+  assert.equal(r.ok, false)
+  if (!r.ok) {
+    assert.match(r.message, /不认识的参数 --name/)
+    assert.match(r.message, /open-detail --help/)
+  }
+})
+
+test('open-detail 多余位置参数拒绝：open-detail 张三 李四 → 拒绝（最多 1 个姓名）', () => {
+  const r = v(['open-detail', '张三', '李四'])
+  assert.equal(r.ok, false)
+  if (!r.ok) assert.match(r.message, /李四/)
+})
+
+test('greet-detail 带姓名（± --dry-run）→ ok', () => {
+  assert.equal(v(['greet-detail', '刘草威']).ok, true)
+  assert.equal(v(['greet-detail', '刘草威', '--dry-run']).ok, true)
+})
+
+test('greet-detail 未知 flag 拒绝：--dry（拼写错误）→ 拒绝而非静默忽略', () => {
+  const r = v(['greet-detail', '刘草威', '--dry'])
+  assert.equal(r.ok, false)
+  if (!r.ok) assert.match(r.message, /不认识的参数 --dry/)
+})
+
+test('greet-detail 多余位置参数拒绝：greet-detail 张三 李四 → 拒绝', () => {
+  const r = v(['greet-detail', '张三', '李四'])
+  assert.equal(r.ok, false)
+  if (!r.ok) assert.match(r.message, /李四/)
+})
+
+test('close-detail 裸命令 → ok；带位置参数或未知 flag → 拒绝', () => {
+  assert.equal(v(['close-detail']).ok, true)
+  assert.equal(v(['close-detail', 'now']).ok, false)
+  const r = v(['close-detail', '--force'])
+  assert.equal(r.ok, false)
+  if (!r.ok) assert.match(r.message, /不认识的参数 --force/)
+})
+
 // ---------- parseGreetNames（index.ts greet case 取值共用同一函数） ----------
 
 test('parseGreetNames：split → trim，半角/全角逗号都支持', () => {

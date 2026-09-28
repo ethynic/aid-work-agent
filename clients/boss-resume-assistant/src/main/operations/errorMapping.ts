@@ -18,6 +18,7 @@ import { OverlayDismissError } from '../boss/OverlayDismissExecutor.js'
 import { JobSwitchError } from '../boss/JobSwitcher.js'
 import { ResumeReadError } from '../boss/ResumeReader.js'
 import { ResumeBatchError } from '../boss/ResumeBatchReader.js'
+import { DetailGreetError } from '../boss/DetailGreetExecutor.js'
 import { WinClickError } from '../input/WinMouseClicker.js'
 import { CancelledError, CodedOperationError, type ErrorCode } from './types.js'
 
@@ -78,6 +79,14 @@ const CHAT_READ_PRECONDITION_MARKERS = ['未打开会话', '存在但未打开',
  */
 const CHAT_OPEN_PRECONDITION_MARKERS = ['会话列表中不存在']
 
+/**
+ * DetailGreetError 前置类标记（2026-09-28 详情页打招呼三件套）：详情未打开 / 姓名与预期
+ * 不符（防打错人）/ 列表找不到人——属「页面状态与预期不符」，按 WRONG_PAGE（可重试：
+ * 用户重新打开/确认姓名/调整筛选后再试）。其余（操作列定位失败/按钮状态歧义/关闭失败）→
+ * UI_CHANGED。注意本块必须在 POST_WRITE_VERIFY_MARKERS 之前。
+ */
+const DETAIL_GREET_PRECONDITION_MARKERS = ['详情未打开', '姓名与预期不符', '未找到「']
+
 function causeCode(err: unknown): string | undefined {
   const cause = (err as { cause?: { code?: unknown } } | null)?.cause
   return typeof cause?.code === 'string' ? cause.code : undefined
@@ -108,7 +117,9 @@ export function mapExecutorError(err: unknown): MappedError {
       message: `未找到已登录的 BOSS 页面：${message}。请确认已在该 Chrome 登录 BOSS 直聘并打开页面`,
     }
   }
-  if (err instanceof GreetError && message.includes('付费墙')) {
+  // 付费墙（GreetExecutor 列表页 / DetailGreetExecutor 详情页 2026-09-28 同款文案）：PAYWALL
+  // 不在云端 HEALABLE_ERROR_CODES 内——绝不因自愈关闭购买弹层后重试写动作
+  if ((err instanceof GreetError || err instanceof DetailGreetError) && message.includes('付费墙')) {
     return { code: 'PAYWALL', message }
   }
   if (err instanceof FilterSetError && FILTER_ARG_MARKERS.some((m) => message.includes(m))) {
@@ -136,6 +147,9 @@ export function mapExecutorError(err: unknown): MappedError {
     }
     return { code: 'UI_CHANGED', message }
   }
+  if (err instanceof DetailGreetError && DETAIL_GREET_PRECONDITION_MARKERS.some((m) => message.includes(m))) {
+    return { code: 'WRONG_PAGE', message }
+  }
   if (POST_WRITE_VERIFY_MARKERS.some((m) => message.includes(m))) {
     return {
       code: 'EXECUTION_UNKNOWN',
@@ -159,6 +173,7 @@ export function mapExecutorError(err: unknown): MappedError {
     err instanceof JobSwitchError ||
     err instanceof ResumeReadError ||
     err instanceof ResumeBatchError ||
+    err instanceof DetailGreetError ||
     err instanceof WinClickError
   ) {
     return { code: 'UI_CHANGED', message }

@@ -38,6 +38,9 @@ const EXPECTED_TOOLS = [
   'boss_filter_options',
   'boss_resume_detail',
   'boss_resume_batch',
+  'boss_open_detail',
+  'boss_greet_detail',
+  'boss_close_detail',
 ]
 
 /** 找一个空闲端口（listen 0 后立即关闭） */
@@ -86,7 +89,7 @@ test('initialize：serverInfo + instructions（含关键前提与写动作上限
   }
 })
 
-test('list_tools：16 个 tool，名称与 annotations 正确', async () => {
+test('list_tools：21 个 tool，名称与 annotations 正确', async () => {
   const client = await startClient([CLI, 'mcp', '--stdio', '--cdp-port', String(await freePort())])
   try {
     const { tools } = await client.listTools()
@@ -101,6 +104,9 @@ test('list_tools：16 个 tool，名称与 annotations 正确', async () => {
     assert.equal(byName.get('boss_greet')!.annotations?.destructiveHint, false)
     assert.equal(byName.get('boss_filter')!.annotations?.idempotentHint, true)
     assert.equal(byName.get('boss_clear_filter')!.annotations?.idempotentHint, true)
+    // 详情页打招呼三件套（2026-09-28）：只有 close 是只读语义；greet 是写动作
+    assert.equal(byName.get('boss_close_detail')!.annotations?.readOnlyHint, true)
+    assert.equal(byName.get('boss_greet_detail')!.annotations?.readOnlyHint, false)
     // 标题全部中文
     for (const t of tools) {
       assert.match(t.title ?? '', /[一-龥]/, `${t.name} 缺中文标题`)

@@ -28,6 +28,7 @@ import { InterviewDemoError } from '../src/main/boss/InterviewDemoExecutor.js'
 import { JobSwitchError } from '../src/main/boss/JobSwitcher.js'
 import { ResumeReadError } from '../src/main/boss/ResumeReader.js'
 import { ResumeBatchError } from '../src/main/boss/ResumeBatchReader.js'
+import { DetailGreetError } from '../src/main/boss/DetailGreetExecutor.js'
 import { WinClickError } from '../src/main/input/WinMouseClicker.js'
 
 function silentCtx(): OpContext {
@@ -501,6 +502,12 @@ test('errorMapping：未登录/未打开 BOSS 页面', () => {
 
 test('errorMapping：付费墙与参数类', () => {
   assert.equal(mapExecutorError(new GreetError('第 1 个打招呼触发付费墙：当前职位无开聊权益')).code, 'PAYWALL')
+  // 详情页打招呼同款付费墙文案（DetailGreetError）：也必须 PAYWALL（不可自愈重试的写动作终态），
+  // 不得落入 UI_CHANGED（HEALABLE → 云端会关掉购买弹层后重试写工具，2026-09-28 CR 修复）
+  assert.equal(
+    mapExecutorError(new DetailGreetError('打招呼触发付费墙：当前职位无开聊权益（BOSS 弹出购买弹层），已停止。')).code,
+    'PAYWALL',
+  )
   assert.equal(mapExecutorError(new FilterSetError('学历要求 行为单选，收到 2 个选项')).code, 'INVALID_ARGUMENT')
   assert.equal(mapExecutorError(new FilterSetError('未提供任何筛选条件')).code, 'INVALID_ARGUMENT')
 })
@@ -542,8 +549,41 @@ test('errorMapping：结构变化/找不到元素 → UI_CHANGED', () => {
   }
 })
 
-test('errorMapping：脚本缺失与兜底 → INTERNAL_ERROR', () => {
-  assert.equal(mapExecutorError(new WinClickError('未找到 scripts/win-click.ps1（已从 x 向上探测）')).code, 'INTERNAL_ERROR')
+// 详情页三件套（DetailGreetError）错误分类（2026-09-28 CR 回归）：
+// 前置类（详情未打开/姓名不符/找不到人）→ WRONG_PAGE 可重试；结构/关闭类 → UI_CHANGED；
+// 点击后翻转失败（含「可能未生效」）→ EXECUTION_UNKNOWN 不重试；付费墙 → PAYWALL。
+// 前置类与结构类的文案不得误含 POST_WRITE_VERIFY_MARKERS 子串（如「未打开」），
+// 否则零点击失败会被谎报成「写动作已发出」的 EXECUTION_UNKNOWN
+test('errorMapping：详情页三件套 DetailGreetError 分类', () => {
+  // WRONG_PAGE（前置，可重试）
+  const wrongPage = [
+    '详情未打开：页面未找到简历详情画布（大尺寸 CANVAS），请先执行 boss_open_detail 打开候选人详情',
+    '详情页候选人姓名与预期不符（预期 刘草威），拒绝打招呼——防打错人：详情画布顶部区未找到该姓名文本，请人工确认当前打开的是预期候选人的简历',
+    '在推荐牛人列表当前屏未找到「刘草威」（且未注入滚动能力）：当前屏可见姓名：张三丰',
+    '已滚动到列表底部仍未找到「刘草威」：当前屏可见姓名：张三丰；目标可能不在当前筛选结果中，建议调整筛选条件后重试',
+  ]
+  for (const message of wrongPage) {
+    assert.equal(mapExecutorError(new DetailGreetError(message)).code, 'WRONG_PAGE', message)
+  }
+  // UI_CHANGED（结构/关闭类，零点击前置失败绝不落入 EXECUTION_UNKNOWN）
+  const uiChanged = [
+    '详情操作列未定位到：页面可见文本中「收藏/举报/不合适」同文档命中不足 2 个（详情可能尚未渲染完成、已被关闭或页面结构已变化），请人工查看页面',
+    '详情操作列内打招呼按钮状态不明确：「打招呼」0 个、「继续沟通」0 个（预期二选一恰好 1 个；操作列容器外的列表按钮不计入），已停止，请人工查看页面',
+    'Escape 未能关闭当前打开的简历详情：请人工按 Escape 关闭后重试',
+  ]
+  for (const message of uiChanged) {
+    assert.equal(mapExecutorError(new DetailGreetError(message)).code, 'UI_CHANGED', message)
+  }
+  // EXECUTION_UNKNOWN（点击已发出的翻转校验失败，绝不自动重试）
+  assert.equal(
+    mapExecutorError(
+      new DetailGreetError('点击「打招呼」后按钮未翻转为「继续沟通」（轮询 3 次未取得翻转证据）：打招呼可能未生效（unknown，不要重试），请人工查看页面'),
+    ).code,
+    'EXECUTION_UNKNOWN',
+  )
+})
+
+test('errorMapping：脚本缺失与兜底 → INTERNAL_ERROR', () => {  assert.equal(mapExecutorError(new WinClickError('未找到 scripts/win-click.ps1（已从 x 向上探测）')).code, 'INTERNAL_ERROR')
   assert.equal(mapExecutorError(new Error('unexpected')).code, 'INTERNAL_ERROR')
   assert.equal(mapExecutorError('字符串错误').code, 'INTERNAL_ERROR')
 })
