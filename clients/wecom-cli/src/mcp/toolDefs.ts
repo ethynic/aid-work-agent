@@ -7,7 +7,8 @@
  *
  * M1 有 wecom_probe（只读）与 wecom_add_customer（写）；M2 增加 wecom_chat_search（只读）
  * 与 wecom_message_send（写）；M3 增加 wecom_unread_list 与 wecom_watch_poll（读）；
- * M5 增加 wecom_chat_select（半写：无出站消息，但进会话清角标/切换会话视图）。
+ * M5 增加 wecom_chat_select（半写：无出站消息，但进会话清角标/切换会话视图）；
+ * M7 增加 wecom_send_image（写：向 target_ref 目标发送 1 张本地图片）。
  * wecom_history_read 只走 CLI read 动词不进 MCP（长滚动抓取不适合 Host 高频调用）；
  * 未真机验证的能力不得在此占位。
  */
@@ -107,6 +108,23 @@ export const TOOL_DEFS: WecomToolDef[] = [
       text: z.string().min(1).max(2000).describe('消息文本（最长 2000 字，支持多行：含换行时经剪贴板粘贴通道输入并覆盖用户剪贴板且不恢复；更长请分段多次发送）'),
     },
     annotations: { title: '企业微信发送文本消息', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  },
+  {
+    name: 'wecom_send_image',
+    title: '企业微信发送图片消息',
+    description:
+      '向 target_ref 指定的联系人/群聊发送 1 张本地图片（写动作，单次单目标单张，智能分发同 wecom_message_send）。' +
+      '文件契约：image_path 必须是本机（装有 runtime 与 wecom-cli 的机器）上的**绝对路径**，' +
+      '调用方（agent/上层）负责先把文件落到该机器；仅支持 png/jpg/jpeg/bmp/gif，≤20MB。' +
+      '粘贴经剪贴板通道（Clipboard.SetImage + Ctrl+V），副作用：覆盖用户剪贴板且不恢复。' +
+      '终态由两条证据与 Jev 判定：输入区像素方差回落 + 会话列表预览出现「[图片]」；' +
+      '校验失败返回 EXECUTION_UNKNOWN（图片可能已发出，系统不会自动重试，请人工确认）。' +
+      '已知限制：发送前标题复核失败中止时，输入区可能残留图片预览（非文本草稿无法自动清除），需人工清理。',
+    zodShape: {
+      target_ref: z.string().min(1).describe('发送目标句柄（wecom_chat_search 返回的 target_ref，须为含坐标的 M4+ 版本）'),
+      image_path: z.string().min(1).describe('图片本地绝对路径（png/jpg/jpeg/bmp/gif，≤20MB；调用方负责先落盘到本机）'),
+    },
+    annotations: { title: '企业微信发送图片消息', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   },
   {
     name: 'wecom_unread_list',

@@ -21,6 +21,9 @@ aid-wecom send --target-ref <ref> --text <文本> [--json]
                                             # 写动作：向 target_ref 目标发送 1 条文本（支持多行，经剪贴板
                                             # 粘贴通道，会覆盖用户剪贴板；智能分发：当前会话对→直接发；
                                             # 不对→自动 search+select 切换后发）
+aid-wecom send-image --target-ref <ref> --image <本地绝对路径> [--json]
+                                            # 写动作：向 target_ref 目标发送 1 张图片（png/jpg/jpeg/bmp/gif
+                                            # ≤20MB；文件契约见 send-image 章节）
 aid-wecom unread [--name <名>] [--json]     # 未读会话快照（只读，不开会话不清角标）
 aid-wecom read --target-ref <ref> [--max-pages N] [--since-days N] [--json]
                                             # 读会话消息（只读内容；进入会话会清除该会话未读角标）
@@ -171,14 +174,46 @@ name+section+subtitle 消歧键一致才可信——Jev 看不到 target_ref 的
   （内部命令自建）。返回 data 附 `navigated`（是否走了分发）、`sent_verification`
   （method=jev|rule_2of3）、`input_point` 与 `timing_ms`。
 
+## send-image 命令（M7：发送图片）
+
+向 target_ref 目标发送 1 张本地图片（写动作，零自动重试）。编排骨架与 `send` 同源
+（M7 抽取的 `src/operations/navigate.ts` 智能分发共享实现），发送阶段驱动
+`drivers/ps1/send-image.ps1`。E2 真机验证 2026-09-28（`experiments/probes/e5-image`）。
+
+- **文件契约**：`--image` 只收**本地绝对路径**——调用方（agent/上层）负责把文件落到装有
+  runtime 与 wecom-cli 的机器上；支持 png/jpg/jpeg/bmp/gif，**≤20MB**。TS 校验语义：
+  不存在/类型不符/超限/相对路径 → INVALID_ARGUMENT；路径存在但读取失败 → CONFIG_MISSING。
+  target_ref 须为 M4+ 含坐标版本（旧版无坐标 ref → INVALID_ARGUMENT，重新 search）。
+- **发送链路与判定链**（驱动内）：Jev #1 三问判定当前会话（措辞同 send；非目标 →
+  navigate_required 交还 TS 编排 search+select；输入区有用户草稿 → UI_CHANGED 中止）→
+  点输入框 → 取输入区（x∈[0.35w,0.90w]、y∈[0.82h,0.95h]）灰度方差基线 std0 →
+  `Clipboard.SetImage`（Bitmap FromFile，5 次重试×150ms，全败 CONFIG_MISSING）→
+  attachstate Ctrl+V → 1.5s 后方差复测：std1 ≤ std0+8 → UI_CHANGED「图片预览未出现
+  （粘贴可能未生效）」，**此时未按 Enter，无发送副作用** → 发送前标题复核（同 send 严格
+  匹配）→ Send-WeComEnter → 1.8s → 终态证据双判据：①输入区方差回落（std2 < std0+8）
+  ②会话列表（左栏）boxes OCR 归一化含「[图片]」；Jev #2 两问可用以其判定为准
+  （method=jev；state 含方差数值、列表证据行、图片文件名+sha256+大小；注明图片消息
+  无文本气泡属正常），no/unclear → EXECUTION_UNKNOWN；Jev 不可用/答案非法降级规则
+  双判据须 2/2 全过（method=rule_2of2），<2/2 → EXECUTION_UNKNOWN。
+- **副作用**：粘贴经剪贴板通道，**覆盖用户剪贴板且不恢复**（与 send 多行通道同款刻意
+  行为）；成功后剪贴板仍保留该图片。
+- **已知限制**：发送前标题复核失败中止时，输入区可能残留图片预览需**人工清理**——
+  图片预览不是文本草稿，Ctrl+A 清不掉，ESC 会最小化企微（禁用），驱动不做任何清理动作。
+- **artifact**：`send-image-<ts>/`（两轮分发则为两个目录）含 step1-precheck /
+  step2-baseline / step3-pasted / step4-after 四步截图 + `driver-log.txt`（记图片
+  文件名/sha256/大小/方差数值/Jev 摘要；**不复制图片本体**）。返回 data 附
+  `input_stddev:{before,paste,after}`、`image:{name,size_bytes,sha256}`、
+  `sent_verification`（method=jev|rule_2of2）、`navigated` 与 `timing_ms`。
+- MCP 工具 `wecom_send_image`（target_ref + image_path），description 注明同一文件契约。
+
 ## 运行依赖
 
 - **Windows（win32-x64）**，已登录且未锁屏的交互桌面会话；
 - 企业微信 Windows 客户端（WXWork.exe）**已登录**（5.0.9 实测）；
 - PowerShell（powershell.exe 在 PATH）；
-- `add-customer` / `search` / `select` / `send` / `unread` / `read` / `watch` 另需 OCR：仓库根 `venv` 的 python + `rapidocr_onnxruntime`
+- `add-customer` / `search` / `select` / `send` / `send-image` / `unread` / `read` / `watch` 另需 OCR：仓库根 `venv` 的 python + `rapidocr_onnxruntime`
   （`drivers/ps1` 上四级为仓库根，取 `venv\Scripts\python.exe`；缺失 → CONFIG_MISSING）；
-- `search` / `send` 的 Jev 决策另需可选环境变量 `TYPESAFE_API_KEY`（缺失自动降级规则链，功能不中断）。
+- `search` / `send` / `send-image` 的 Jev 决策另需可选环境变量 `TYPESAFE_API_KEY`（缺失自动降级规则链，功能不中断）。
 
 ## 关键实现事实（真机实测，勿随意改）
 
@@ -234,6 +269,13 @@ name+section+subtitle 消歧键一致才可信——Jev 看不到 target_ref 的
   用户草稿绝不清除（UI_CHANGED 中止），自己输入的草稿发送前复核失败必清
   （Clear-WeComFocusedInput，与 Clear-WeComSearchBoxV2 同款 Ctrl+A+Delete 原语）；
   终态 Jev 判定 no/unclear 或降级三选二 <2 项 → EXECUTION_UNKNOWN 绝不自动重试。
+- M7（2026-09-28 真机验证 e5-image）：Clipboard.SetImage（System.Windows.Forms，FromFile
+  加载 Bitmap）+ attachstate Ctrl+V（Send-WeComAttachChordKey -Vk 0x56）在输入框聚焦时
+  可后台粘贴图片；输入区缩略图使灰度方差 9.8→36.5（检测函数 Get-WeComRegionStddev，
+  区域 x∈[0.35w,0.90w]、y∈[0.82h,0.95h] 隔 4px 采样，判据 ±8）；Send-WeComEnter 发送后
+  1.8s 方差回落 + 会话列表预览出现「[图片]」。图片消息无文本气泡，终态双判据 =
+  方差回落 + 列表 [图片]，Jev state 须注明气泡空白属正常。智能分发编排在 M7 抽取为
+  navigate.ts 共享实现（send 与 send-image 共用）。
 - 含中文的 .ps1 必须 **UTF-8 with BOM**。
 
 ## 目录
@@ -244,7 +286,7 @@ src/mcp/          MCP stdio server + toolDefs + manifest digest
 src/operations/   业务能力层（统一 OperationResult 契约，永不 reject）
 src/platform/     PowerShell 驱动执行器 / 环境探测 / 命名互斥 / target_ref（HMAC 短期句柄）/ watch 水位状态
 src/security/     日志脱敏（手机号不明文入日志）
-drivers/ps1/      UI 自动化驱动（_common.ps1 底座 + probe/add-customer/chat-search/chat-select/message-send/unread-list/history-read）
+drivers/ps1/      UI 自动化驱动（_common.ps1 底座 + probe/add-customer/chat-search/chat-select/message-send/send-image/unread-list/history-read）
 drivers/py/       RapidOCR：add_customer_result.py（添加客户弹窗）+ chat_ocr.py（search/send/unread/history 单一入口）
 tests/            node:test，全部 mock（绝不触达真实企微窗口）
 ```

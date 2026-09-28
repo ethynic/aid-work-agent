@@ -229,6 +229,14 @@ Authorization: Bearer $TYPESAFE_API_KEY
 - M6 多行支持（开发+测试两智能体，143/143）：text 含换行 → 剪贴板通道（Set-Clipboard 重试 5 次 + Ctrl+V + 粘贴回读校验 fail-closed + 日志只记前 12 字脱敏）；单行 → 原逐字。剪贴板覆盖不恢复（weixin-cli 先例：paste handler 异步读，恢复有竞态）。真机验证：三行消息真实送达文件传输助手，预览/Jev 终态通过。
 - 已知限制（记录）：≥5 行的多行消息首行可能长过回读带 y≥0.80h 上界 → 保守 UI_CHANGED（fail-closed 方向）；E2/E3 时按需放宽。
 
+### E2 + M7：send-image（2026-09-28）——✅ 真机端到端通过
+
+- 探针（`experiments/probes/e5-image/image-send-probe.ps1`）：Clipboard.SetImage + attachstate Ctrl+V → 输入区像素方差 9.8→36.5（缩略图出现）→ Enter → 9.8（清空）+ 会话列表预览「[图片]」。
+- M7 命令 `send-image --target-ref --image <本地绝对路径>`（三智能体流程，151/151）：共享分发编排抽取（navigate.ts，messageSend 切换零回归/文案逐字保留）；方差三点判据（粘贴预览不足 → UI_CHANGED 未按 Enter 无副作用）；终态 = 方差回落 + 「[图片]」列表预览 + Jev#2（含图片 hash/大小证据，无本体）。真机 21.5s 全链路（快路径），`effect=applied`。
+- 文件契约（用户定稿）：CLI 只收**本地路径**（≤20MB，png/jpg/jpeg/bmp/gif）——调用方（agent/上层）负责把文件落到装有 runtime 与 wecom-cli 的机器上；hash 由 TS 计算（流式读，fail-fast 先于任何 UI 交互）。
+- CR 遗留（真机轮次处理）：终态判据② 左栏过滤 x0<0.40w 在宽窗口（1640/2916）会混入聊天区窄条——建议改像素锚定 x0<min(0.40w,600) 后真机复验。
+- 已知限制：标题复核失败时图片预览可能残留在输入区（无法像文本那样 Ctrl+A 清除，也不用 ESC）——message 注明需人工处理。
+
 最终双路径真机验证通过：快路径（当前会话即目标直发）+ 分发路径（navigated:true 自动 search+select+send），均 `effect=applied` + Jev 终态校验通过；mock 测试 141/141。耗时 ~25s（final_ocr 11.7s 三次 OCR 进程冷启动是大头——**常驻 OCR server 是下一个性能优化项**）。
 
 ### E6c：Jev 全流程闭环（兜底定位 + 结果选择，2026-09-28）——✅ 真机点击闭环通过

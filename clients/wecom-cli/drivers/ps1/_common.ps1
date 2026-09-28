@@ -876,6 +876,41 @@ function Clear-WeComFocusedInput {
     return $ok
 }
 
+# ---------- M7：图片发送共享助手（send-image 用；只增不改，M1-M6 函数不动） ----------
+
+function Get-WeComRegionStddev {
+    # 图像区域内灰度标准差（M7 send-image 图片预览检测；采样算法与阈值标定源自
+    # experiments/probes/e5-image 真机验证 2026-09-28：输入区贴图后缩略图使方差
+    # 9.8 → 36.5，判据 std1 > std0+8；发送后回落 std2 < std0+8）。
+    # 区域坐标 = 截图图像像素坐标（窗口截图原点 = 窗口左上角，与 rect 同尺寸）；
+    # 隔 4px 采样 ITU-R BT.601 灰度，返回总体标准差（double）。区域退化（n=0）返回 0。
+    param(
+        [Parameter(Mandatory)][string]$ImagePath,
+        [Parameter(Mandatory)][int]$X0,
+        [Parameter(Mandatory)][int]$Y0,
+        [Parameter(Mandatory)][int]$X1,
+        [Parameter(Mandatory)][int]$Y1
+    )
+    Add-Type -AssemblyName System.Drawing
+    $img = [System.Drawing.Image]::FromFile($ImagePath)
+    $bmp = New-Object System.Drawing.Bitmap $img
+    $sum = 0.0; $sum2 = 0.0; $n = 0
+    try {
+        for ($x = $X0; $x -lt $X1; $x += 4) {
+            for ($y = $Y0; $y -lt $Y1; $y += 4) {
+                $p = $bmp.GetPixel($x, $y)
+                $g = [int](0.299 * $p.R + 0.587 * $p.G + 0.114 * $p.B)
+                $sum += $g; $sum2 += $g * $g; $n++
+            }
+        }
+    } finally {
+        $bmp.Dispose(); $img.Dispose()
+    }
+    if ($n -eq 0) { return 0.0 }
+    $mean = $sum / $n
+    return [Math]::Sqrt([Math]::Max(0, $sum2 / $n - $mean * $mean))
+}
+
 # ---------- 驱动统一入口 ----------
 
 function Invoke-DriverMain {

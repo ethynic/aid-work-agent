@@ -27,6 +27,7 @@ const INSTRUCTIONS =
   '企业微信操作 Provider。工具：wecom_probe（只读环境/登录态探测）、' +
   'wecom_chat_search（只读搜索联系人/群聊，返回带 target_ref 的候选）、' +
   'wecom_message_send（写：向 target_ref 目标发送 1 条文本消息）、' +
+  'wecom_send_image（写：向 target_ref 目标发送 1 张本地图片，image_path 须为本机绝对路径且 ≤20MB，调用方负责落盘）、' +
   'wecom_add_customer（写：按手机号检索并发送添加客户邀请，confirm 必须显式为 true）、' +
   'wecom_unread_list（只读：未读会话快照）、' +
   'wecom_watch_poll（读：新消息跟踪单轮，返回增量消息事件；会清除被读会话的未读角标并推进本机水位）。' +
