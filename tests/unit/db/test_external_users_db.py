@@ -125,7 +125,7 @@ class TestListExternalUsersCombinationGranularity:
         assert "dingtalk" in calls[1][0][1]
 
     def test_no_channel_type_filter_no_condition(self):
-        """不传 channel_type 时不应出现 cs.channel_type 过滤条件（微信接待客户页不受影响）"""
+        """不传 channel_type 时不应出现 cs.channel_type 等值过滤条件（微信接待客户页不受影响）"""
         _, calls = self._run(
             tenant_id="tenant_001",
             page=1,
@@ -133,6 +133,33 @@ class TestListExternalUsersCombinationGranularity:
         )
         count_sql = calls[0][0][0]
         assert "cs.channel_type = %s" not in count_sql
+
+    def test_no_channel_type_excludes_office_channel_rows(self):
+        """不传 channel_type 时应排除办公软件渠道会话组合（防止企微内部员工混入微信接待客户页）"""
+        _, calls = self._run(
+            tenant_id="tenant_001",
+            page=1,
+            page_size=20,
+        )
+        count_sql = calls[0][0][0]
+        list_sql = calls[1][0][0]
+        expected = "(cs.channel_type IS NULL OR cs.channel_type NOT IN ('wecom', 'dingtalk', 'feishu'))"
+        assert expected in count_sql
+        assert expected in list_sql
+        # source 非空硬条件仍保留
+        assert "u.source IS NOT NULL" in count_sql
+
+    def test_channel_type_passed_no_office_exclusion(self):
+        """传 channel_type（办公软件会话页）时不应加办公渠道排除条件"""
+        _, calls = self._run(
+            tenant_id="tenant_001",
+            channel_type="wecom",
+            page=1,
+            page_size=20,
+        )
+        count_sql = calls[0][0][0]
+        assert "cs.channel_type NOT IN" not in count_sql
+        assert "u.source IS NOT NULL" not in count_sql
 
     def test_group_by_subagent_splits_combinations(self):
         """group_by_subagent=True 时子查询按 user/channel/subagent 分组并带出 cs.subagent_id"""

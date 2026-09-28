@@ -207,8 +207,9 @@ class TestListExternalUsersCombination:
         assert all(r["user_id"] == user_id for r in rows)
         assert all(r["channel_type"] == "wecom_kf" for r in rows)
 
-    def test_legacy_null_and_other_channel_fold_to_empty(self, temp_tenant_for_external):
-        """legacy NULL 会话与其它渠道会话折叠为空串组合，无会话客户单行"""
+    def test_legacy_null_fold_and_office_channel_excluded(self, temp_tenant_for_external):
+        """legacy NULL 会话折叠为空串组合；办公软件渠道（wecom）组合默认排除，
+        传 channel_type=wecom 时可见（办公软件会话页口径）"""
         from src.saas.api import external_customers
 
         tenant_id = temp_tenant_for_external
@@ -217,7 +218,7 @@ class TestListExternalUsersCombination:
         # wecom_kf legacy NULL 会话
         _insert_channel_session(tenant_id, f"sess_{uuid.uuid4().hex[:8]}", u_legacy,
                                 channel_type="wecom_kf", channel_chat_id=None)
-        # 其它渠道（wecom）会话：即使 channel_chat_id 非空也应折叠为空串
+        # 办公软件渠道（wecom）会话：默认列表应排除，防止内部员工企微会话混入微信接待客户页
         _insert_channel_session(tenant_id, f"sess_{uuid.uuid4().hex[:8]}", u_legacy,
                                 channel_type="wecom", channel_chat_id="grp_xxx")
 
@@ -229,19 +230,29 @@ class TestListExternalUsersCombination:
 
         assert resp["success"] is True
         rows = resp["users"]
-        # 客户B：wecom_kf 空串一行 + wecom 空串一行（channel_type 区分）
+        # 客户B：仅 wecom_kf 空串一行，wecom 组合被排除
         rows_b = [r for r in rows if r["user_id"] == u_legacy]
-        assert len(rows_b) == 2
-        types = sorted(r["channel_type"] for r in rows_b)
-        assert types == ["wecom", "wecom_kf"]
-        assert all(r["channel_chat_id"] == "" for r in rows_b)
-        assert all(r["kf_name"] is None for r in rows_b)
+        assert len(rows_b) == 1
+        assert rows_b[0]["channel_type"] == "wecom_kf"
+        assert rows_b[0]["channel_chat_id"] == ""
+        assert rows_b[0]["kf_name"] is None
         # 客户C：无会话单行，channel_chat_id 归一为空串、kf_name None
         rows_c = [r for r in rows if r["user_id"] == u_none]
         assert len(rows_c) == 1
         assert rows_c[0]["channel_chat_id"] == ""
         assert rows_c[0]["kf_name"] is None
         assert rows_c[0]["channel_type"] is None
+
+        # 办公软件会话页传 channel_type=wecom 时，wecom 组合可见（不被排除）
+        with patch("src.saas.api.external_customers.require_admin", fake_require_admin):
+            resp_wecom = _call(
+                external_customers.list_external_users, FakeRequest(),
+                channel_type="wecom", page=1, page_size=20,
+            )
+        assert resp_wecom["success"] is True
+        rows_b_wecom = [r for r in resp_wecom["users"] if r["user_id"] == u_legacy]
+        assert len(rows_b_wecom) == 1
+        assert rows_b_wecom[0]["channel_type"] == "wecom"
 
     def test_referrer_drill_down_filter(self, temp_tenant_for_external):
         """引流统计下钻：referrer_user_id 过滤只返回该员工引流的客户组合"""

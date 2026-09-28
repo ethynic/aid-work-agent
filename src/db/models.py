@@ -385,6 +385,8 @@ class UserDB:
         仅 wecom_kf 渠道按 channel_chat_id（open_kfid，客服账号）拆分，
         其它渠道折叠为单个组合（channel_chat_id 为空），避免 wecom_personal_rpa
         等渠道因 conversation_id 不稳定导致一个客户多行。
+        不传 channel_type 时排除办公软件渠道（wecom/dingtalk/feishu）会话组合，
+        避免内部员工混入微信接待客户页；传 channel_type（办公软件会话页）不过滤。
 
         Args:
             tenant_id: 租户ID
@@ -444,7 +446,13 @@ class UserDB:
             # （存量办公软件渠道用户 source 可能未回填，有会话即应可见）
             conditions = ["u.tenant_id = %s"]
             if not channel_type:
-                conditions.append("u.source IS NOT NULL")
+                # 微信接待客户页口径：只显示接待类会话组合（wecom_kf / wecom_personal_rpa 等）。
+                # 办公软件渠道（wecom/dingtalk/feishu）用户注册时也写 source（2edf4007 起），
+                # 仅凭 source IS NOT NULL 会把内部员工的企微办公会话混入本页，按组合行排除
+                conditions.append(
+                    "(u.source IS NOT NULL AND "
+                    "(cs.channel_type IS NULL OR cs.channel_type NOT IN ('wecom', 'dingtalk', 'feishu')))"
+                )
             params = [tenant_id]
 
             if username:
