@@ -11,6 +11,8 @@ CLI 动词子命令与 MCP stdio server 共用同一 operation 层，UI 自动�
 
 ```
 aid-wecom probe [--verbose] [--json]        # 只读环境探测：平台/交互会话/PowerShell/进程/主窗口/登录态/当前页
+                                            # 登录态三态 online/need_login/offline；need_login 时附登录窗二维码
+                                            # PNG base64 + qr_status_hint 供扫码上线（见 probe 命令章节）
 aid-wecom search --query <词> [--type contact|group|any] [--limit N] [--json]
                                             # 搜索联系人/群聊（只读）：Jev 选最优候选，返回 best/坐标/概率 + 带 target_ref 的候选
                                             # 副作用：搜索结果面板保持打开（坐标句柄供后续 select 命令消费）
@@ -39,6 +41,27 @@ aid-wecom version [--json]                  # 版本 + provider manifest（含 s
 ```
 
 退出码：成功 0 / 参数错误 2 / 其余失败 1。`--json` 时 stdout 最后一行为 OperationResult JSON。
+
+## probe 命令（E5：登录态增强，RPA get_login_state 完整替代）
+
+- **登录态三态**：`online` = 主窗口（≥600x400 可见 WeWorkWindow）在；
+  `need_login` = 检测到登录二维码小窗（宽<500 且高<700 的可见 WeWorkWindow，复用
+  Find-WeComLoginWindow）；`offline` = WXWork 进程不在或无任何 WeWorkWindow（托盘隐藏/已退出）。
+- **need_login 时额外返回**：`login_window`（登录窗 rect {x,y,w,h}）、`qr_image_base64`
+  （登录窗**整窗** PNG base64，供扫码上线）、`qr_status_hint`（`normal|expired|limited|unknown`）。
+  截图策略：PrintWindow(hwnd,2) 优先 → 9 点采样**全黑或全白**回退 Graphics.CopyFromScreen 按窗口
+  rect（M6 真机实测 PrintWindow 对 CEF 区域出纯白 mean=247 stddev=0，登录页同源——
+  **CopyFromScreen 是主路径而非兜底**，需登录窗在屏幕可见，登录窗通常前台弹出，成立）。
+  截图失败不致命：仅缺 `qr_image_base64`（hint=unknown），need_login 语义不变。
+- **qr_status_hint 判定**（best-effort）：对同一张登录窗截图跑 RapidOCR，
+  「已失效/过期/刷新」→ `expired`、「受限/冻结/异常」→ `limited`；OCR 不可用（venv 缺失）或
+  无标记 → `normal`——探测不因可选依赖缺席而失败。
+- **安全注记**：二维码是登录凭证——`qr_image_base64` 只随 OperationResult 走 stdout，
+  绝不写 driver-log、绝不存 artifact（probe 无 artifact）；OCR 临时文件固定名、用完即删，
+  文件名不含敏感信息。online/offline 状态不返回任何 qr 字段。
+- **待真机复验**：本机开发态已登录，need_login 分支（登出/断网凭据失效场景）未真机实测，
+  代码按 wecom-personal-rpa `wecom-ops.ps1` get_login_state 先例实现（小窗判定 +
+  CopyFromScreen 截图 base64）；上线前需登出企微复验二维码可见性与 hint 判定。
 
 ## 新消息跟踪（M3：unread / read / watch）
 
@@ -262,6 +285,7 @@ name+section+subtitle 消歧键一致才可信——Jev 看不到 target_ref 的
 - PowerShell（powershell.exe 在 PATH）；
 - `add-customer` / `search` / `select` / `send` / `send-image` / `send-file` / `unread` / `read` / `watch` 另需 OCR：仓库根 `venv` 的 python + `rapidocr_onnxruntime`
   （`drivers/ps1` 上四级为仓库根，取 `venv\Scripts\python.exe`；缺失 → CONFIG_MISSING）；
+  `probe` 的 `qr_status_hint` 也走该 OCR 但为 best-effort（缺失 → hint=normal，探测不失败）；
 - `search` / `send` / `send-image` / `send-file` 的 Jev 决策另需可选环境变量 `TYPESAFE_API_KEY`（缺失自动降级规则链，功能不中断）。
 
 ## 关键实现事实（真机实测，勿随意改）

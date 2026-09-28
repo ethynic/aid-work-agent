@@ -264,3 +264,14 @@ Authorization: Bearer $TYPESAFE_API_KEY
 - is_ambiguous 的低置信度是免费的质量信号：现有规则在此场景直接 TARGET_AMBIGUOUS 拒绝，Jev 给出主选 + 歧义度 + 次选概率，可支撑「高置信自动执行 / 低置信拒绝」的分级策略。
 - 工程坑：含中文的 .ps1 无 BOM 会被 PS 5.1 按 ANSI 解析直接语法错误（README 已有警告，实验脚本同样适用——Write 工具默认无 BOM，需补）。
 
+
+### E5：probe 登录态增强（2026-09-28）——✅ 已登录分支回归通过
+
+- probe data 新增：`login_state`（online/need_login/offline 三态，offline 原已实现）、need_login 时附 `qr_image_base64`（登录窗整窗 PNG；PrintWindow→全黑/全白检测→CopyFromScreen 回退，CEF 登录页预计回退为主路径）+ `qr_status_hint`（best-effort OCR 标记：已失效/过期/刷新→expired、受限/冻结/异常→limited）+ `login_window` rect。
+- 安全：二维码是登录凭证——base64 只走 stdout，不落 driver-log/不存 artifact/临时文件即删（测试智能体全链路核查无泄露面）。
+- 开发+测试两步流程（165/165）；测试智能体修复窗口消失竞态（CopyFromScreen 前补 IsWindow 复查）；「刷新」标记词误报风险评估为可接受（hint 仅 advisory）。
+- **待补真机验证**：need_login/过期分支需登出场景（当前已登录无法实测）；验证点：二维码可见性、正常态登录页文案不含标记词（防 expired 误报）、过期态转 expired。
+
+### 部署决策记录（2026-09-28，用户定稿）
+
+- **常驻 OCR 不进 CLI**：OCR 服务部署方向为独立容器/云服务（性能更好、集中管理）；CLI 侧后续将把 OCR 调用从本地 venv python 改为 HTTP 远程服务（涉及 _common.ps1 Invoke-WeComChatOcr 与各驱动 OCR 入口，迁移时需处理网络失败降级与延迟预算）。

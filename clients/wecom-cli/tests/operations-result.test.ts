@@ -1,5 +1,6 @@
 /**
- * OperationResult 字段契约 / effect 枚举 / 错误映射 / probe 参数校验与环境判定。
+ * OperationResult 字段契约 / effect 枚举 / 错误映射 / probe 参数校验与环境判定
+ * （E5：need_login 附 qr_image_base64/qr_status_hint/login_window 的透传与防御性归一）。
  *
  * 用注入替身（platform/sessionName/execFileFn）模拟环境，不依赖真机企微：
  * 参数校验失败时不得触达任何系统命令；环境违规映射为稳定错误码。
@@ -187,6 +188,97 @@ test('probe：企微进程在运行 → 走驱动（mock）带回窗口/登录�
   assert.equal(mw.hwnd, 69334)
   assert.ok(typeof r.data.os_release === 'string')
   assert.ok(typeof r.data.node_version === 'string')
+})
+
+test('probe：need_login → 透传 qr_image_base64/qr_status_hint/login_window（E5）', async () => {
+  const { fn } = fakeExec({
+    'where.exe': 'C:\\powershell.exe\r\n',
+    tasklist: '"WXWork.exe","12345","Console","1","100,000 K"\r\n',
+  })
+  const op = createWecomProbeOperation({
+    probeEnvironmentFn: (opts) => probeEnvironment({ ...opts, sessionName: 'Console', execFileFn: fn }),
+    runDriverFn: async () => ({
+      login_state: 'need_login',
+      main_window: null,
+      current_page: null,
+      login_window: { x: 770, y: 270, w: 380, h: 540 },
+      qr_image_base64: 'iVBORw0KGgoAAAANSUhEUg==',
+      qr_status_hint: 'expired',
+    }),
+  })
+  const r = await op.execute({}, silentCtx())
+  assert.equal(r.success, true)
+  assert.equal(r.code, 'OK')
+  assert.equal(r.data.login_state, 'need_login')
+  assert.equal(r.data.main_window, null)
+  assert.equal(r.data.qr_image_base64, 'iVBORw0KGgoAAAANSUhEUg==')
+  assert.equal(r.data.qr_status_hint, 'expired')
+  assert.deepEqual(r.data.login_window, { x: 770, y: 270, w: 380, h: 540 })
+})
+
+test('probe：online → 无 qr/login_window 字段（二维码仅 need_login 时返回）', async () => {
+  const { fn } = fakeExec({
+    'where.exe': 'C:\\powershell.exe\r\n',
+    tasklist: '"WXWork.exe","12345","Console","1","100,000 K"\r\n',
+  })
+  const op = createWecomProbeOperation({
+    probeEnvironmentFn: (opts) => probeEnvironment({ ...opts, sessionName: 'Console', execFileFn: fn }),
+    runDriverFn: async () => ({
+      login_state: 'online',
+      main_window: { hwnd: 69334, x: 1466, y: 331, w: 1089, h: 828 },
+      current_page: '消息',
+    }),
+  })
+  const r = await op.execute({}, silentCtx())
+  assert.equal(r.success, true)
+  assert.equal(r.data.login_state, 'online')
+  assert.ok(!('qr_image_base64' in r.data), 'online 不得返回 qr_image_base64')
+  assert.ok(!('qr_status_hint' in r.data), 'online 不得返回 qr_status_hint')
+  assert.ok(!('login_window' in r.data), 'online 不得返回 login_window')
+})
+
+test('probe：offline（进程在但无窗口）→ login_state=offline，无 qr 字段', async () => {
+  const { fn } = fakeExec({
+    'where.exe': 'C:\\powershell.exe\r\n',
+    tasklist: '"WXWork.exe","12345","Console","1","100,000 K"\r\n',
+  })
+  const op = createWecomProbeOperation({
+    probeEnvironmentFn: (opts) => probeEnvironment({ ...opts, sessionName: 'Console', execFileFn: fn }),
+    runDriverFn: async () => ({
+      login_state: 'offline',
+      main_window: null,
+      current_page: null,
+    }),
+  })
+  const r = await op.execute({}, silentCtx())
+  assert.equal(r.success, true)
+  assert.equal(r.data.login_state, 'offline')
+  assert.ok(!('qr_image_base64' in r.data))
+  assert.ok(!('qr_status_hint' in r.data))
+})
+
+test('probe：need_login 但驱动返回非法 hint/qr/login_window → 防御性归一（hint=unknown，qr/rect 缺省）', async () => {
+  const { fn } = fakeExec({
+    'where.exe': 'C:\\powershell.exe\r\n',
+    tasklist: '"WXWork.exe","12345","Console","1","100,000 K"\r\n',
+  })
+  const op = createWecomProbeOperation({
+    probeEnvironmentFn: (opts) => probeEnvironment({ ...opts, sessionName: 'Console', execFileFn: fn }),
+    runDriverFn: async () => ({
+      login_state: 'need_login',
+      main_window: null,
+      current_page: null,
+      login_window: { x: 'oops', y: 270, w: 380, h: 540 },
+      qr_image_base64: 12345, // 非字符串 → 丢弃
+      qr_status_hint: 'exploded', // 非法枚举 → unknown
+    }),
+  })
+  const r = await op.execute({}, silentCtx())
+  assert.equal(r.success, true)
+  assert.equal(r.data.login_state, 'need_login')
+  assert.equal(r.data.qr_status_hint, 'unknown')
+  assert.ok(!('qr_image_base64' in r.data), '非字符串 qr 不得透传')
+  assert.ok(!('login_window' in r.data), '字段非法的 login_window 不得透传')
 })
 
 test('probe：驱动失败（mock 抛 CodedOperationError）→ 错误码透传，不 reject', async () => {
