@@ -431,6 +431,52 @@ async def test_unexpected_value_error_does_not_leak_details(monkeypatch):
     assert "private.pptx" not in str(result)
 
 
+# ==================== 空白标题回归（生产崩溃修复）====================
+
+
+def test_add_textbox_with_empty_text_returns_shape_without_error():
+    from src.tools.ppt.utils import add_textbox
+
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+
+    # 空串文本 p.runs 为空，不应触发 _Paragraph._r 的 AttributeError
+    shape = add_textbox(slide, "", x=1.0, y=1.0, w=4.0, h=1.0)
+    assert shape is not None
+    assert shape.text_frame.text == ""
+
+    # 纯空白文本有 run，同样不应报错
+    blank_shape = add_textbox(slide, "   ", x=1.0, y=2.0, w=4.0, h=1.0)
+    assert blank_shape is not None
+
+
+def test_generate_with_blank_title_slides_creates_file(tmp_path, monkeypatch):
+    from src.tools.ppt.generator import PPTGenerator
+
+    monkeypatch.setattr(PPTGenerator, "_get_output_dir", lambda self: tmp_path)
+    plan = {
+        "title": "空白标题回归",
+        "slides": [
+            # 生产触发样例：缺 type 字段（按内容页渲染）且缺 title 的目录页数据
+            {"layout": "toc", "sections": [{"title": "背景"}, {"title": "方案"}]},
+            # 纯空白标题的内容页
+            {"type": "content", "layout": "bullets", "title": "   ", "points": ["要点"]},
+            # 无 title 的图表页
+            {
+                "type": "content",
+                "layout": "chart",
+                "chart": {"type": "bar", "labels": ["Q1", "Q2"], "series": [{"name": "销售额", "values": [10, 20]}]},
+            },
+        ],
+    }
+
+    path = PPTGenerator().generate(plan)
+
+    _assert_pptx(path, 3)
+    # 要点正文正常渲染（空白标题只跳过标题元素，不影响正文）
+    assert "要点" in _slide_texts(path)[1]
+
+
 # ==================== images 图片资产（分析图表嵌入）====================
 
 

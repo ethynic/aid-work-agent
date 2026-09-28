@@ -142,12 +142,19 @@ RUN echo "deb ${APT_MIRROR}/debian/ trixie main non-free-firmware" > /etc/apt/so
     # FFmpeg：用于视频生成模块烧录「AI 生成内容」标识（2025.9.1 法规）
     # 中文字形由 fonts-noto-cjk 提供，drawtext 已验证可用
     ffmpeg \
+    # Node.js 运行时：PPT 高保真渲染器 PptxGenJS 需要 Node 执行
+    # renderer-node/dist/render.js。renderer-node 的 node_modules/dist 产物在
+    # 宿主机挂载目录（由 deploy/agent2_update.sh 用侧车容器构建），
+    # 镜像内只需 Node 运行时，无需在构建阶段编译前端或渲染器
+    nodejs \
+    npm \
     # gosu 用于 entrypoint 中以非 root 用户身份启动 gunicorn（保持 PID 1 信号处理）
     gosu \
     && rm -rf /var/lib/apt/lists/*
 
-# 构建时校验文档转换工具，避免依赖缺失延迟到运行时才暴露
-RUN soffice --headless --version && pandoc --version && ffmpeg -hide_banner -version | head -1
+# 构建时校验文档转换工具与 Node 运行时，避免依赖缺失延迟到运行时才暴露
+RUN soffice --headless --version && pandoc --version && ffmpeg -hide_banner -version | head -1 \
+    && node --version && npm --version
 
 # 创建非 root 用户及 home 目录（Uvicorn control server 需要）
 # 注意：uid=1000 与宿主机 SMB 挂载的 ubuntu 用户 uid 保持一致

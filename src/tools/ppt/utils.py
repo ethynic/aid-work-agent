@@ -87,21 +87,23 @@ def add_textbox(
     p.font.bold = bold
     p.font.color.rgb = parse_color(color) or RGB(0, 0, 0)
 
-    # 设置中英文字体
-    p.font.name = font_name_en
-    run_elem = p.runs[0]._r if p.runs else p._r
-    from pptx.oxml.ns import qn
-    rPr = run_elem.find(qn("a:rPr"))
-    if rPr is None:
-        rPr = run_elem.makeelement(qn("a:rPr"), {})
-        run_elem.insert(0, rPr)
-    rPr.set("lang", "zh-CN")
-    rPr.set("altLang", "en-US")
-    ea = rPr.find(qn("a:ea"))
-    if ea is None:
-        ea = run_elem.makeelement(qn("a:ea"), {})
-        rPr.append(ea)
-    ea.set("typeface", font_name_cn)
+    # 设置中英文字体。空文本时 p.runs 为空（无可见字符，无需设置字体），
+    # 直接跳过整段字体 XML 处理；注意 _Paragraph 没有 _r 属性，不能回退到 p._r
+    if p.runs:
+        p.font.name = font_name_en
+        run_elem = p.runs[0]._r
+        from pptx.oxml.ns import qn
+        rPr = run_elem.find(qn("a:rPr"))
+        if rPr is None:
+            rPr = run_elem.makeelement(qn("a:rPr"), {})
+            run_elem.insert(0, rPr)
+        rPr.set("lang", "zh-CN")
+        rPr.set("altLang", "en-US")
+        ea = rPr.find(qn("a:ea"))
+        if ea is None:
+            ea = run_elem.makeelement(qn("a:ea"), {})
+            rPr.append(ea)
+        ea.set("typeface", font_name_cn)
 
     align_map = {"left": PA.LEFT, "center": PA.CENTER, "right": PA.RIGHT}
     p.alignment = align_map.get(align, PA.LEFT)

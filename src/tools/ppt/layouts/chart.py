@@ -14,15 +14,17 @@ def render_chart(slide, data: dict, theme: PPTTheme, index: int, total: int):
     """渲染图表页。"""
     set_slide_bg(slide, theme.bg)
 
-    # 页面标题
-    add_textbox(
-        slide, data.get("title", ""),
-        x=0.8, y=0.4, w=11.7, h=0.9,
-        font_size=28, bold=True, color=theme.primary,
-    )
+    # 页面标题（空白标题跳过标题与装饰线，避免渲染无意义元素）
+    title = data.get("title") or ""
+    if title.strip():
+        add_textbox(
+            slide, title,
+            x=0.8, y=0.4, w=11.7, h=0.9,
+            font_size=28, bold=True, color=theme.primary,
+        )
 
-    # 装饰线
-    add_shape_rect(slide, x=0.8, y=1.2, w=1.5, h=0.04, fill_color=theme.accent)
+        # 装饰线
+        add_shape_rect(slide, x=0.8, y=1.2, w=1.5, h=0.04, fill_color=theme.accent)
 
     chart_data = data.get("chart", {})
     chart_type = chart_data.get("type", "bar")

@@ -14,6 +14,10 @@
 #   5. npm install 挂命名卷缓存
 #      并加 --no-audit --prefer-offline，消除全新容器重拉包元数据导致的数分钟卡顿
 #   6. 原子切换后把 dist 属主恢复为 ubuntu（node 容器以 root 编译，产物属主为 root）
+#   7. 新增 Node PPT 渲染器构建步骤：renderer-node 的 node_modules/dist 是
+#      gitignore 覆盖的 untracked 构建产物（git reset --hard 不会删除），用
+#      node:22-alpine 侧车容器 npm ci + tsc 构建，产物留在宿主机挂载目录，
+#      容器内 node 直接执行；dist 比 package-lock 新且依赖齐全时跳过构建
 # ==============================================================================
 
 set -e
@@ -27,6 +31,7 @@ echo "=========================================="
 FRONTEND_DIR="/var/www/agent2/frontend"
 DIST_DIR="$FRONTEND_DIR/dist"
 BUILD_LOG="/var/www/agent2/log/frontend-build.log"
+PPT_RENDERER_DIR="/var/www/agent2/src/tools/ppt/renderer-node"
 
 # 配置 Git 安全目录（避免所有权检查错误）
 git config --global --add safe.directory /var/www/agent2 2>/dev/null || true
@@ -80,21 +85,48 @@ mkdir -p "$(dirname "$BUILD_LOG")"
 ) > "$BUILD_LOG" 2>&1 &
 FRONTEND_PID=$!
 
-# 5. 后端重启（与前端编译并行）。
+# 5. 构建 Node PPT 渲染器（PptxGenJS）。容器挂载整个项目目录，镜像内产物会被
+#    挂载遮住，node_modules/dist 必须落在宿主机检出目录（untracked，git reset
+#    不会删除）。dist/render.js 比 package-lock.json 和全部 .ts 源码新且
+#    pptxgenjs 已安装时跳过构建（只改 .ts 不动依赖也要重建，否则沿用旧 dist）；
+#    npm 缓存复用前端的命名卷，避免重复拉包元数据
+echo "[5] 构建 Node PPT 渲染器..."
+if [ -f "$PPT_RENDERER_DIR/dist/render.js" ] && \
+   [ "$PPT_RENDERER_DIR/dist/render.js" -nt "$PPT_RENDERER_DIR/package-lock.json" ] && \
+   [ -d "$PPT_RENDERER_DIR/node_modules/pptxgenjs" ] && \
+   ! find "$PPT_RENDERER_DIR/src" -name '*.ts' -newer "$PPT_RENDERER_DIR/dist/render.js" | grep -q .; then
+  echo "  dist/render.js 已是最新，跳过构建"
+else
+  docker run --rm \
+      -v "$PPT_RENDERER_DIR":/app \
+      -v agent2_npm_cache:/root/.npm \
+      -w /app node:22-alpine \
+      sh -c "npm ci --no-audit --no-fund --prefer-offline && npm run build"
+  # 构建后校验产物存在：docker run 成功但产物缺失时明确报错，避免带病重启后端
+  if [ ! -f "$PPT_RENDERER_DIR/dist/render.js" ]; then
+    echo "  错误：Node PPT 渲染器构建失败，dist/render.js 不存在"
+    exit 1
+  fi
+  # 侧车以 root 构建，产物属主为 root；恢复为 ubuntu，避免 root 属主文件
+  # 在后续 git 更新/排查时造成 Permission denied 干扰（同第 [10] 步 dist 处理）
+  sudo chown -R ubuntu:ubuntu "$PPT_RENDERER_DIR/dist" "$PPT_RENDERER_DIR/node_modules"
+fi
+
+# 6. 后端重启（与前端编译并行）。
 #    不先 down：up --force-recreate 会自动 stop→remove→create，api 与 background
 #    由 compose 串行错开重建，避免所有容器同时停止的全停窗口
-echo "[5] 重启后端服务..."
+echo "[6] 重启后端服务..."
 docker compose -f docker-compose.test.yml up -d --force-recreate --remove-orphans --wait
 
-# 6. 施加资源限制（docker compose 非 swarm 会忽略 deploy.resources，改用 docker update
+# 7. 施加资源限制（docker compose 非 swarm 会忽略 deploy.resources，改用 docker update
 #    显式施加 cgroup 限制；资源值在本脚本内维护，为唯一来源）
-echo "[6] 施加容器资源限制..."
+echo "[7] 施加容器资源限制..."
 docker update --cpus 1 --memory 1G --memory-reservation 512M aid-agent-api2
 docker update --cpus 0.5 --memory 512M --memory-reservation 256M aid-agent-background2
 
-# 7. 修复容器内 /tmp 权限（python:3.11-slim 的 /tmp 是 tmpfs 且默认 755，
+# 8. 修复容器内 /tmp 权限（python:3.11-slim 的 /tmp 是 tmpfs 且默认 755，
 #    Dockerfile 的 chmod 不生效，entrypoint 已处理；此处作为运行时兜底）
-echo "[7] 修复容器 /tmp 权限..."
+echo "[8] 修复容器 /tmp 权限..."
 if ! docker exec -u root aid-agent-api2 chmod 1777 /tmp 2>/dev/null; then
   echo "  chmod 失败，尝试 mount remount..."
   docker exec -u root aid-agent-api2 mount -o remount,mode=1777 /tmp 2>/dev/null || \
@@ -102,16 +134,16 @@ if ! docker exec -u root aid-agent-api2 chmod 1777 /tmp 2>/dev/null; then
 fi
 docker exec -u root aid-agent-api2 ls -ld /tmp || true
 
-# 8. 等待前端编译完成
-echo "[8] 等待前端编译完成..."
+# 9. 等待前端编译完成
+echo "[9] 等待前端编译完成..."
 if ! wait "$FRONTEND_PID"; then
   echo "  错误：前端编译失败，详见 $BUILD_LOG"
   echo "  后端已更新但前端仍为旧版本，请检查后重跑本脚本"
   exit 1
 fi
 
-# 9. 原子切换 dist（同一文件系统内两步 mv，切换瞬间旧→新；nginx 走 /index.html 兜底）
-echo "[9] 原子切换前端 dist..."
+# 10. 原子切换 dist（同一文件系统内两步 mv，切换瞬间旧→新；nginx 走 /index.html 兜底）
+echo "[10] 原子切换前端 dist..."
 sudo rm -rf "$DIST_DIR.old"
 [ -d "$DIST_DIR" ] && mv "$DIST_DIR" "$DIST_DIR.old"
 mv "$DIST_DIR.new" "$DIST_DIR"
@@ -121,9 +153,9 @@ sudo rm -rf "$DIST_DIR.old"
 sudo chown -R ubuntu:ubuntu "$DIST_DIR"
 sudo chmod 777 "$DIST_DIR" # dist 目录需要 777 权限，否则无法ftp上传微信验证文件
 
-# 10. 增量安装 requirements.txt 中新增的依赖（快速更新脚本不重建镜像，
+# 11. 增量安装 requirements.txt 中新增的依赖（快速更新脚本不重建镜像，
 #     新依赖不会自动安装；下次重建镜像后可移除此步骤）
-echo "[10] 增量安装新增依赖..."
+echo "[11] 增量安装新增依赖..."
 docker exec -u root aid-agent-api2 \
     pip install --no-cache-dir -r /app/requirements.txt \
     -i https://mirrors.cloud.tencent.com/pypi/simple \
