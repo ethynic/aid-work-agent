@@ -19,23 +19,27 @@ aid-wecom search --query <词> [--type contact|group|any] [--limit N] [--json]
 aid-wecom select --target-ref <ref> [--json]
                                             # 点击 search 返回的搜索结果进入会话（动作；不发送消息，
                                             # 进入会话会清除其未读角标并切换当前会话视图）
-aid-wecom send --target-ref <ref> --text <文本> [--json]
-                                            # 写动作：向 target_ref 目标发送 1 条文本（支持多行，经剪贴板
+aid-wecom send (--target-ref <ref> | --target-name <会话名> [--subtitle <副标题>]) --text <文本> [--json]
+                                            # 写动作：向目标发送 1 条文本（支持多行，经剪贴板
                                             # 粘贴通道，会覆盖用户剪贴板；智能分发：当前会话对→直接发；
                                             # 不对→自动 search+select 切换后发）
-aid-wecom send-image --target-ref <ref> --image <本地绝对路径> [--json]
-                                            # 写动作：向 target_ref 目标发送 1 张图片（png/jpg/jpeg/bmp/gif
-                                            # ≤20MB；文件契约见 send-image 章节）
-aid-wecom send-file --target-ref <ref> --file <本地绝对路径> [--json]
-                                            # 写动作：向 target_ref 目标发送 1 个文件（扩展名不限
-                                            # ≤100MB；文件契约见 send-file 章节）
+                                            # M11a 直达模式：--target-name 与 --target-ref 二选一，
+                                            # 内部自动 search 定位（身份校验+唯一匹配，歧义拒绝），
+                                            # data 附 resolved_target；--subtitle 仅直达模式消歧用
+aid-wecom send-image (--target-ref <ref> | --target-name <会话名>) --image <本地绝对路径> [--json]
+                                            # 写动作：向目标发送 1 张图片（png/jpg/jpeg/bmp/gif
+                                            # ≤20MB；文件契约见 send-image 章节；--target-name 同 M11a 直达模式）
+aid-wecom send-file (--target-ref <ref> | --target-name <会话名>) --file <本地绝对路径> [--json]
+                                            # 写动作：向目标发送 1 个文件（扩展名不限
+                                            # ≤100MB；文件契约见 send-file 章节；--target-name 同 M11a 直达模式）
 aid-wecom unread [--name <名>] [--json]     # 未读会话快照（只读，不开会话不清角标）
-aid-wecom read-session --target-ref <ref> [--max-pages N] [--since-days N] [--json]
+aid-wecom read-session (--target-ref <ref> | --target-name <会话名>) [--max-pages N] [--since-days N] [--json]
                                             # 读会话消息（只读内容；进入会话会清除该会话未读角标；
                                             # 智能分发进会话 + 滚动截屏；M10b 双通道解析：配置
                                             # AID_WECOM_SERVER_URL+TOKEN 时走服务端模型通道（按次
                                             # 计积分），否则/模型不可用时本地 OCR（页间去重 + 时间
-                                            # 戳沿袭）。（M9 由 read 改名，旧 read 动词废弃无别名）
+                                            # 戳沿袭）；--target-name 同 M11a 直达模式。
+                                            # （M9 由 read 改名，旧 read 动词废弃无别名）
 aid-wecom watch [--interval 秒] [--once]    # 新消息跟踪循环：事件 NDJSON 逐行写 stdout，Ctrl+C 退出
 aid-wecom add-customer --phone <11位> --yes [--json]
                                             # 写动作：通讯录→新的客户→添加→检索→发邀请（--yes 显式确认）
@@ -182,6 +186,21 @@ target_ref：过期 → TARGET_REF_STALE（重新 search 获取）；篡改/格�
 send 的分发阶段按 name+section（subtitle 优先收紧）匹配搜索候选：取 Jev best（须与目标
 name+section+subtitle 消歧键一致才可信——Jev 看不到 target_ref 的 subtitle，同名同分区
 多条时直接信任 best 会发错人），否则取规则唯一匹配项；多项无法消歧 → TARGET_AMBIGUOUS 拒绝发送。
+
+## --target-name 直达模式（M11a：runtime/agent 路径只有会话名时的免 ref 接入）
+
+`send` / `send-image` / `send-file` / `read-session` 四命令（及对应 MCP tool，read-session
+除外）支持 `--target-name`（`target_name`）与 `--target-ref`（`target_ref`）**二选一**：
+两个都传或都不传 → INVALID_ARGUMENT。定位语义（`src/operations/navigate.ts` 的
+`resolveTargetByName`，runtime 接入 M11a 的前置）：内部调 chatSearch（query 剥
+`@微信` 后缀，type=any）→ Jev best 过身份校验（best.name 剥 @微信 归一化 == target_name
+归一化，且落在 subtitle 收紧后的候选集内）才采纳；best 身份不符 → 回退 items 里
+name（+send 的 `--subtitle` 消歧键）唯一匹配；多项 → TARGET_AMBIGUOUS 拒绝（fail-closed
+不猜）；0 项 → TARGET_NOT_FOUND；search 失败透传错误码。定位成功后**用命中条目的
+target_ref 走既有链路**（快路径直发/直读；navigate_required 时二次 search+select 分发，
+首次 search 的 overlay 由分发 search 开头的残留清空处理，ref 5 分钟 TTL 在内部链路
+耗时可忽略）。`data.resolved_target = {name, subtitle, section}` 透传实际定位到的条目，
+供 agent 观察定位结果；effect/错误码/零重试契约与 ref 模式完全一致。
 
 ## search 命令（M4：Jev 决策 + 坐标句柄）
 

@@ -1,8 +1,12 @@
 /**
- * CLI 子命令 read-session：读取与 target_ref 目标的会话消息（只读消息内容）。
+ * CLI 子命令 read-session：读取与目标的会话消息（只读消息内容）。
  *
- * 用法：
+ * 用法（target-ref 与 target-name 二选一，M11a）：
  *   aid-wecom read-session --target-ref <ref> [--max-pages N] [--since-days N] [--json]
+ *   aid-wecom read-session --target-name <会话名> [--max-pages N] [--since-days N] [--json]
+ *
+ * --target-name 直达模式：CLI 内部自动 search 定位（身份校验 + 唯一匹配，歧义拒绝），
+ * data 附 resolved_target；其余契约与 --target-ref 模式一致。
  *
  * M10b 双通道解析（M10c 起直连 token）：配置 AID_WECOM_SERVER_URL +
  * AID_WECOM_SERVER_TOKEN 时走服务端模型通道（按次计积分，data.channel="model"，
@@ -20,6 +24,7 @@ import type { WecomReadSessionArgs } from '../../operations/readSession.js'
 
 export interface ReadSessionCommandOptions {
   targetRef?: string
+  targetName?: string
   maxPages?: string
   sinceDays?: string
   /** true 时 stdout 最后一行输出 OperationResult JSON */
@@ -29,7 +34,8 @@ export interface ReadSessionCommandOptions {
 export async function readSessionCommand(opts: ReadSessionCommandOptions): Promise<number> {
   // 数字参数原样转换；非法值（NaN）留给 operation 统一返回 INVALID_ARGUMENT
   const args: WecomReadSessionArgs = {
-    target_ref: opts.targetRef as string,
+    ...(opts.targetRef !== undefined ? { target_ref: opts.targetRef } : {}),
+    ...(opts.targetName !== undefined ? { target_name: opts.targetName } : {}),
     max_pages: opts.maxPages === undefined ? undefined : Number(opts.maxPages),
     since_days: opts.sinceDays === undefined ? undefined : Number(opts.sinceDays),
   }

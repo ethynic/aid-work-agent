@@ -409,13 +409,17 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WecomCli.MessageSend' -Body {
     } | Sort-Object { [double]$_.y0 }, { [double]$_.x0 })
     $bubbleHit = $false
     $bubbleTexts = @()
+    $bubbleHitTexts = @()
     foreach ($bt in $bubbleTokens) {
         $nbt = ConvertTo-WeComNormalized ([string]$bt.text)
-        if ($nbt -and $nbt.Contains($prefix)) { $bubbleHit = $true }
+        if ($nbt -and $nbt.Contains($prefix)) { $bubbleHit = $true; $bubbleHitTexts += [string]$bt.text }
         if ($bubbleTexts.Count -lt 8) { $bubbleTexts += [string]$bt.text }
     }
-    $allBubbleNorm = ConvertTo-WeComNormalized (($bubbleTokens | ForEach-Object { [string]$_.text }) -join '')
+    $allBubbleNorm = ConvertTo-WeComNormalized (($bubbleTokens | ForEach-Object { [string]$bt.text }) -join '')
     if ($allBubbleNorm.Contains($prefix)) { $bubbleHit = $true }
+    # Jev#2 证据视图必须包含命中前缀的 token（2026-09-29 真机实测修订：旧文件气泡占满
+    # 8-token 上限把新发文本气泡挤出 Jev 视野 → 好证据被遮蔽误判 not_sent；命中项置顶必含）
+    $bubbleTexts = @($bubbleHitTexts | Select-Object -First 4) + @($bubbleTexts | Where-Object { $bubbleHitTexts -notcontains $_ } | Select-Object -First 6)
     # ③ 会话列表：任一行含 text 前缀即命中（2026-09-28 真机实测修订：应用类会话（文件传输
     #    助手等）的聊天区为 CEF 渲染，PrintWindow 截出纯白（实测 mean=247 stddev=0），气泡
     #    证据结构性不可得，终态只能靠 ①+③；旧「含目标名 且 含前缀」的 AND 在 preview 列

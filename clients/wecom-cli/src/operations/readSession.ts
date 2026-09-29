@@ -29,6 +29,10 @@
  *   ——走 OCR 会让用户以为模型通道免费/正常；用户取消 → CancelledError 透传；
  * - since_days 超龄早停依赖逐页 OCR，仅 OCR 通道生效（模型通道抓满 max_pages 页，
  *   调用方按返回 time 字段自行过滤）。
+ *
+ * M11a 直达模式：target_name 与 target_ref 二选一——name 模式经 resolveTargetByName
+ * 内部 search 挑唯一目标转 ref 后走同一读取链路，data 附 resolved_target；
+ * effect/错误码契约与 ref 模式一致（本 operation 恒 readonly，effect=none）。
  */
 import { readFile, stat } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
@@ -50,13 +54,21 @@ import {
   type CreateTargetRefFn,
   type VerifyTargetRefFn,
 } from '../platform/targetRef.js'
-import { runStageWithNavigation, sanitizeTiming } from './navigate.js'
+import {
+  resolveTargetByName,
+  runStageWithNavigation,
+  sanitizeTiming,
+  validateTargetSelector,
+  type ResolvedByNameTarget,
+} from './navigate.js'
 
 /** dist/src/operations → 包根 drivers/ps1 */
 const DRIVER_PATH = fileURLToPath(new URL('../../../drivers/ps1/read-session.ps1', import.meta.url))
 
 export interface WecomReadSessionArgs {
-  target_ref: string
+  target_ref?: string
+  /** M11a 直达模式：按会话名定位（与 target_ref 二选一；内部 search + 身份校验转 ref） */
+  target_name?: string
   /** 最多向上翻几屏（含底部当前屏），默认 1，上限 10 */
   max_pages?: number
   /** 只读最近 N 天：某屏最早「M月D日」分割线超龄即停止上翻（简单版，可选；仅 OCR 通道生效） */
@@ -184,11 +196,10 @@ export function createWecomReadSessionOperation(
         ctx,
         () => {
           if (args === null || typeof args !== 'object' || Array.isArray(args)) {
-            return '参数必须是对象（target_ref 必填；max_pages/since_days 可选）'
+            return '参数必须是对象（target_ref/target_name 二选一；max_pages/since_days 可选）'
           }
-          if (typeof args.target_ref !== 'string' || args.target_ref.length === 0) {
-            return 'target_ref 必填且必须是非空字符串（先经 wecom_chat_search 获取）'
-          }
+          const selectorErr = validateTargetSelector(args)
+          if (selectorErr !== null) return selectorErr
           if (
             args.max_pages !== undefined &&
             (!Number.isInteger(args.max_pages) || args.max_pages < 1 || args.max_pages > MAX_PAGES_LIMIT)
@@ -209,7 +220,19 @@ export function createWecomReadSessionOperation(
             throw new CodedOperationError('INTERNAL_ERROR', '%LOCALAPPDATA% 未设置，无法定位 artifact 目录')
           }
 
-          const target = verifyRefFn(args.target_ref)
+          // M11a 直达模式：内部 search 身份定位转 ref（定位失败 effect=none 且注明未读取
+          // 消息），定位成功后走与 ref 模式完全一致的既有链路（search→取 ref→read-session
+          // 分发：overlay 由分发链的二次 search 残留清空/新 select 消费，同款生命周期）
+          let resolved: ResolvedByNameTarget | null = null
+          if (args.target_name !== undefined) {
+            resolved = await resolveTargetByName(
+              { runDriverFn, createRefFn, opCtx, root },
+              args.target_name,
+              '',
+              { notSentNote: '未读取消息', refuseDesc: '已中止读取' },
+            )
+          }
+          const target = verifyRefFn(resolved !== null ? resolved.target_ref : args.target_ref!)
           const maxPages = args.max_pages ?? DEFAULT_MAX_PAGES
           const modelEnabled = serverUrlConfigured(env) !== null
           opCtx.progress({
@@ -268,6 +291,9 @@ export function createWecomReadSessionOperation(
               message: `已读取与「${target.name}」的会话消息 ${messages.length} 行（${pages} 屏${navigated ? '，已自动搜索并切换会话' : '，当前会话直读'}${channelNote}）`,
               data: {
                 target: target.name,
+                ...(resolved !== null
+                  ? { resolved_target: { name: resolved.name, subtitle: resolved.subtitle, section: resolved.section } }
+                  : {}),
                 title: typeof data.title === 'string' && data.title.length > 0 ? data.title : target.name,
                 navigated,
                 channel: 'ocr' as const,
@@ -338,6 +364,9 @@ export function createWecomReadSessionOperation(
             message: `已读取与「${target.name}」的会话消息 ${messages.length} 行（${pages} 屏${navigated ? '，已自动搜索并切换会话' : '，当前会话直读'}，模型通道${credits}）`,
             data: {
               target: target.name,
+              ...(resolved !== null
+                ? { resolved_target: { name: resolved.name, subtitle: resolved.subtitle, section: resolved.section } }
+                : {}),
               title: shotTitle,
               navigated,
               channel: 'model' as const,

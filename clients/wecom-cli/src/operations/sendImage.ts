@@ -19,6 +19,10 @@
  * 副作用：粘贴经剪贴板通道，**覆盖用户剪贴板且不恢复**（与 message-send 多行通道同款
  * 刻意行为）。写语义：成功 effect=applied；超时 300s → EXECUTION_UNKNOWN；取消 →
  * CANCELLED（effect=unknown）；零自动重试；定位阶段失败 effect=none 且注明未发送图片。
+ *
+ * M11a 直达模式：target_name 与 target_ref 二选一——name 模式经 resolveTargetByName
+ * 内部 search 挑唯一目标转 ref 后走同一链路（内部签发的 ref 含坐标，分发链路可消费），
+ * data 附 resolved_target；effect/错误码/零重试契约与 ref 模式一致。
  */
 import { createHash } from 'node:crypto'
 import { readFileSync, statSync } from 'node:fs'
@@ -34,13 +38,21 @@ import {
   type CreateTargetRefFn,
   type VerifyTargetRefFn,
 } from '../platform/targetRef.js'
-import { runStageWithNavigation, sanitizeTiming } from './navigate.js'
+import {
+  resolveTargetByName,
+  runStageWithNavigation,
+  sanitizeTiming,
+  validateTargetSelector,
+  type ResolvedByNameTarget,
+} from './navigate.js'
 
 /** dist/src/operations → 包根 drivers/ps1 */
 const DRIVER_PATH = fileURLToPath(new URL('../../../drivers/ps1/send-image.ps1', import.meta.url))
 
 export interface WecomSendImageArgs {
-  target_ref: string
+  target_ref?: string
+  /** M11a 直达模式：按会话名定位（与 target_ref 二选一；内部 search + 身份校验转 ref） */
+  target_name?: string
   /** 图片本地绝对路径（调用方负责落盘到本机） */
   image_path: string
 }
@@ -78,11 +90,10 @@ export function createWecomSendImageOperation(
         ctx,
         () => {
           if (args === null || typeof args !== 'object' || Array.isArray(args)) {
-            return '参数必须是对象（target_ref/image_path 必填）'
+            return '参数必须是对象（target_ref/target_name 二选一；image_path 必填）'
           }
-          if (typeof args.target_ref !== 'string' || args.target_ref.length === 0) {
-            return 'target_ref 必填且必须是非空字符串（先经 wecom_chat_search 获取）'
-          }
+          const selectorErr = validateTargetSelector(args)
+          if (selectorErr !== null) return selectorErr
           if (typeof args.image_path !== 'string' || args.image_path.length === 0) {
             return 'image_path 必填且必须是非空字符串'
           }
@@ -132,7 +143,18 @@ export function createWecomSendImageOperation(
             throw new CodedOperationError('CONFIG_MISSING', `图片文件读取失败（无法计算 SHA-256）：${args.image_path}`)
           }
 
-          const target = verifyRefFn(args.target_ref)
+          // M11a 直达模式：内部 search 身份定位转 ref（定位失败 effect=none 且注明未发送
+          // 图片），定位成功后走与 ref 模式完全一致的既有链路
+          let resolved: ResolvedByNameTarget | null = null
+          if (args.target_name !== undefined) {
+            resolved = await resolveTargetByName(
+              { runDriverFn, createRefFn, opCtx, root },
+              args.target_name,
+              '',
+              { notSentNote: '未发送图片' },
+            )
+          }
+          const target = verifyRefFn(resolved !== null ? resolved.target_ref : args.target_ref!)
           // 与 chat_select 同款要求 M4+ 含坐标 ref（send-image 分发链路消费坐标句柄）
           if (target.x === undefined || target.y === undefined) {
             throw new CodedOperationError('INVALID_ARGUMENT', '该 target_ref 不含坐标（旧版签发），请重新 search')
@@ -195,6 +217,9 @@ export function createWecomSendImageOperation(
             message: `已向「${target.name}」发送图片消息，发送后校验通过（${methodDesc}校验${navigated ? '，已自动搜索并切换会话' : '，当前会话直发'}）`,
             data: {
               target: target.name,
+              ...(resolved !== null
+                ? { resolved_target: { name: resolved.name, subtitle: resolved.subtitle, section: resolved.section } }
+                : {}),
               title: typeof data.title === 'string' && data.title.length > 0 ? data.title : target.name,
               navigated,
               image: { name: basename(args.image_path), size_bytes: sizeBytes, sha256 },

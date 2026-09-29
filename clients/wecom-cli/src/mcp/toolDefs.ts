@@ -10,6 +10,8 @@
  * M5 增加 wecom_chat_select（半写：无出站消息，但进会话清角标/切换会话视图）；
  * M7 增加 wecom_send_image（写：向 target_ref 目标发送 1 张本地图片）；
  * M8 增加 wecom_send_file（写：向 target_ref 目标发送 1 个本地文件）。
+ * M11a 起 message_send / send_image / send_file 的 target_ref 转为可选，新增可选
+ * target_name（二选一，XOR 校验在 operation 层做——两个都传/都不传返回 INVALID_ARGUMENT）。
  * wecom_read_session（M9 由 wecom_history_read 改名）只走 CLI read-session 动词不进
  * MCP（维持 M3 决策：长滚动抓取不适合 Host 高频调用）；
  * 未真机验证的能力不得在此占位。
@@ -98,6 +100,8 @@ export const TOOL_DEFS: WecomToolDef[] = [
     description:
       '向 target_ref 指定的联系人/群聊发送 1 条文本消息（写动作，单次单目标单条，智能分发）。' +
       'target_ref 必须来自 wecom_chat_search（有效期 5 分钟，过期 TARGET_REF_STALE 需重新搜索）。' +
+      'M11a 直达模式：改传 target_name（与 target_ref 二选一，可选 subtitle 消歧），内部自动 search 定位' +
+      '（身份校验 + 唯一匹配，同名多候选无法消歧返回 TARGET_AMBIGUOUS），data 附 resolved_target。' +
       '智能分发：发送驱动先 OCR 标题带+输入带并由 Jev 判定——当前会话就是目标时直接输入发送（快路径）；' +
       '不是目标或无法判定时自动执行 search（Jev 选最优候选）+ select（点击进会话并校验标题）后再发送，' +
       '两轮均不在目标会话返回 TARGET_NOT_FOUND（未发送消息）。' +
@@ -107,7 +111,9 @@ export const TOOL_DEFS: WecomToolDef[] = [
       '输入区判空与终态三选二规则。' +
       '发送后由 Jev 判定终态，失败返回 EXECUTION_UNKNOWN（消息可能已发出，系统不会自动重试，请人工确认）。',
     zodShape: {
-      target_ref: z.string().min(1).describe('发送目标句柄（wecom_chat_search 返回的 target_ref）'),
+      target_ref: z.string().min(1).optional().describe('发送目标句柄（wecom_chat_search 返回的 target_ref；与 target_name 二选一）'),
+      target_name: z.string().min(1).max(100).optional().describe('直达模式：按会话名（联系人/群名，可含 @微信 后缀）定位目标，内部自动 search 并做身份校验（同名多候选无法消歧返回 TARGET_AMBIGUOUS）；与 target_ref 二选一'),
+      subtitle: z.string().max(100).optional().describe('直达模式可选消歧副标题（同名多候选时收紧匹配，如「微信联系人」）；仅 target_name 模式生效'),
       text: z.string().min(1).max(2000).describe('消息文本（最长 2000 字，支持多行：含换行时经剪贴板粘贴通道输入并覆盖用户剪贴板且不恢复；更长请分段多次发送）'),
     },
     annotations: { title: '企业微信发送文本消息', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
@@ -117,6 +123,8 @@ export const TOOL_DEFS: WecomToolDef[] = [
     title: '企业微信发送图片消息',
     description:
       '向 target_ref 指定的联系人/群聊发送 1 张本地图片（写动作，单次单目标单张，智能分发同 wecom_message_send）。' +
+      'M11a 直达模式：改传 target_name（与 target_ref 二选一），内部自动 search 定位' +
+      '（身份校验 + 唯一匹配，同名多候选无法消歧返回 TARGET_AMBIGUOUS），data 附 resolved_target。' +
       '文件契约：image_path 必须是本机（装有 runtime 与 wecom-cli 的机器）上的**绝对路径**，' +
       '调用方（agent/上层）负责先把文件落到该机器；仅支持 png/jpg/jpeg/bmp/gif，≤20MB。' +
       '粘贴经剪贴板通道（Clipboard.SetImage + Ctrl+V），副作用：覆盖用户剪贴板且不恢复。' +
@@ -124,7 +132,8 @@ export const TOOL_DEFS: WecomToolDef[] = [
       '校验失败返回 EXECUTION_UNKNOWN（图片可能已发出，系统不会自动重试，请人工确认）。' +
       '已知限制：发送前标题复核失败中止时，输入区可能残留图片预览（非文本草稿无法自动清除），需人工清理。',
     zodShape: {
-      target_ref: z.string().min(1).describe('发送目标句柄（wecom_chat_search 返回的 target_ref，须为含坐标的 M4+ 版本）'),
+      target_ref: z.string().min(1).optional().describe('发送目标句柄（wecom_chat_search 返回的 target_ref，须为含坐标的 M4+ 版本；与 target_name 二选一）'),
+      target_name: z.string().min(1).max(100).optional().describe('直达模式：按会话名（联系人/群名，可含 @微信 后缀）定位目标，内部自动 search 并做身份校验（同名多候选无法消歧返回 TARGET_AMBIGUOUS）；与 target_ref 二选一'),
       image_path: z.string().min(1).describe('图片本地绝对路径（png/jpg/jpeg/bmp/gif，≤20MB；调用方负责先落盘到本机）'),
     },
     annotations: { title: '企业微信发送图片消息', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
@@ -134,6 +143,8 @@ export const TOOL_DEFS: WecomToolDef[] = [
     title: '企业微信发送文件消息',
     description:
       '向 target_ref 指定的联系人/群聊发送 1 个本地文件（写动作，单次单目标单个，智能分发同 wecom_message_send）。' +
+      'M11a 直达模式：改传 target_name（与 target_ref 二选一），内部自动 search 定位' +
+      '（身份校验 + 唯一匹配，同名多候选无法消歧返回 TARGET_AMBIGUOUS），data 附 resolved_target。' +
       '文件契约：file_path 必须是本机（装有 runtime 与 wecom-cli 的机器）上的**绝对路径**，' +
       '调用方（agent/上层）负责先把文件落到该机器；扩展名不限（任意文件），≤100MB，' +
       '文件名去空白后不足 3 字符会被拒绝（OCR 发送校验无法可靠区分，请改名）。' +
@@ -143,7 +154,8 @@ export const TOOL_DEFS: WecomToolDef[] = [
       '已知限制：发送前标题复核失败中止时，输入区可能残留文件卡片（非文本草稿无法自动清除），需人工清理；' +
       '重发同名文件时会话列表预览可能不变，校验或报 EXECUTION_UNKNOWN（属保守方向，人工确认即可）。',
     zodShape: {
-      target_ref: z.string().min(1).describe('发送目标句柄（wecom_chat_search 返回的 target_ref，须为含坐标的 M4+ 版本）'),
+      target_ref: z.string().min(1).optional().describe('发送目标句柄（wecom_chat_search 返回的 target_ref，须为含坐标的 M4+ 版本；与 target_name 二选一）'),
+      target_name: z.string().min(1).max(100).optional().describe('直达模式：按会话名（联系人/群名，可含 @微信 后缀）定位目标，内部自动 search 并做身份校验（同名多候选无法消歧返回 TARGET_AMBIGUOUS）；与 target_ref 二选一'),
       file_path: z.string().min(1).describe('文件本地绝对路径（扩展名不限，≤100MB，文件名去空白后须 ≥3 字符；调用方负责先落盘到本机）'),
     },
     annotations: { title: '企业微信发送文件消息', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },

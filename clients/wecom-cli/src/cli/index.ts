@@ -8,6 +8,8 @@
  * M7 增加：send-image。
  * M8 增加：send-file。
  * M9：read 改名 read-session（旧 read 动词直接废弃，无别名）。
+ * M11a：send / send-image / send-file / read-session 增加 --target-name 直达模式
+ * （与 --target-ref 二选一：内部自动 search 定位，data 附 resolved_target）。
  * 动词子命令集合固定；不存在按对象命名的子命令——`aid-wecom contacts` 之类
  * 一律落入 default 报「未知子命令」。
  *
@@ -15,11 +17,11 @@
  *   node dist/src/cli/index.js probe [--verbose] [--json]
  *   node dist/src/cli/index.js search --query <词> [--type contact|group|any] [--limit N] [--json]
  *   node dist/src/cli/index.js select --target-ref <ref> [--json]
- *   node dist/src/cli/index.js send --target-ref <ref> --text <文本> [--json]
- *   node dist/src/cli/index.js send-image --target-ref <ref> --image <本地绝对路径> [--json]
- *   node dist/src/cli/index.js send-file --target-ref <ref> --file <本地绝对路径> [--json]
+ *   node dist/src/cli/index.js send (--target-ref <ref> | --target-name <会话名> [--subtitle <副标题>]) --text <文本> [--json]
+ *   node dist/src/cli/index.js send-image (--target-ref <ref> | --target-name <会话名>) --image <本地绝对路径> [--json]
+ *   node dist/src/cli/index.js send-file (--target-ref <ref> | --target-name <会话名>) --file <本地绝对路径> [--json]
  *   node dist/src/cli/index.js unread [--name <名>] [--json]
- *   node dist/src/cli/index.js read-session --target-ref <ref> [--max-pages N] [--since-days N] [--json]
+ *   node dist/src/cli/index.js read-session (--target-ref <ref> | --target-name <会话名>) [--max-pages N] [--since-days N] [--json]
  *   node dist/src/cli/index.js watch [--interval 秒] [--once]
  *   node dist/src/cli/index.js add-customer --phone <11位手机号> --yes [--json]
  *   node dist/src/cli/index.js mcp --stdio
@@ -43,16 +45,18 @@ const USAGE = `aid-wecom — 企业微信操作 CLI / MCP Provider（M1）
                             点击 search 返回的搜索结果进入会话（动作；不发送消息，
                             进入会话会清除其未读角标并切换当前会话视图；
                             前置：搜索面板仍打开，ref 5 分钟内有效）
-  send --target-ref <ref> --text <文本> [--json]
-                            向 target_ref 目标发送 1 条文本消息（写动作；
-                            发送后校验失败不自动重试，effect=unknown 时请人工核对）
-  send-image --target-ref <ref> --image <本地绝对路径> [--json]
-                            向 target_ref 目标发送 1 张图片（写动作；png/jpg/jpeg/bmp/gif
+  send (--target-ref <ref> | --target-name <会话名> [--subtitle <副标题>]) --text <文本> [--json]
+                            向目标发送 1 条文本消息（写动作；target-ref 与 target-name
+                            二选一——name 直达模式内部自动 search 定位，同名多候选
+                            无法消歧时拒绝；发送后校验失败不自动重试，
+                            effect=unknown 时请人工核对）
+  send-image (--target-ref <ref> | --target-name <会话名>) --image <本地绝对路径> [--json]
+                            向目标发送 1 张图片（写动作；png/jpg/jpeg/bmp/gif
                             ≤20MB，路径须为装有 wecom-cli 的机器上的本地绝对路径，调用方
                             负责落盘；粘贴经剪贴板通道会覆盖用户剪贴板；发送后校验失败
                             不自动重试，effect=unknown 时请人工核对）
-  send-file --target-ref <ref> --file <本地绝对路径> [--json]
-                            向 target_ref 目标发送 1 个文件（写动作；扩展名不限，
+  send-file (--target-ref <ref> | --target-name <会话名>) --file <本地绝对路径> [--json]
+                            向目标发送 1 个文件（写动作；扩展名不限，
                             ≤100MB，路径须为装有 wecom-cli 的机器上的本地绝对路径，
                             文件名去空白后须 ≥3 字符（过短拒发），调用方负责落盘；
                             粘贴经剪贴板通道会覆盖用户剪贴板；
@@ -60,7 +64,7 @@ const USAGE = `aid-wecom — 企业微信操作 CLI / MCP Provider（M1）
   unread [--name <名>] [--json]
                             未读会话快照（只读，不开会话不清角标）：
                             [{name, preview, unread_count}]，可选 --name 子串过滤
-  read-session --target-ref <ref> [--max-pages N] [--since-days N] [--json]
+  read-session (--target-ref <ref> | --target-name <会话名>) [--max-pages N] [--since-days N] [--json]
                             读会话消息（只读内容；进入会话会清除其未读角标）：
                             智能分发进会话（当前会话对→直读；不对→自动 search+select
                             切换后读）→ 滚动截屏 OCR + 页间去重，返回
@@ -107,6 +111,8 @@ async function main(): Promise<number> {
       const { sendCommand } = await import('./commands/send.js')
       return sendCommand({
         targetRef: flagString(args, 'target-ref'),
+        targetName: flagString(args, 'target-name'),
+        subtitle: flagString(args, 'subtitle'),
         text: flagString(args, 'text'),
         json: hasFlag(args, 'json'),
       })
@@ -115,6 +121,7 @@ async function main(): Promise<number> {
       const { sendImageCommand } = await import('./commands/sendImage.js')
       return sendImageCommand({
         targetRef: flagString(args, 'target-ref'),
+        targetName: flagString(args, 'target-name'),
         image: flagString(args, 'image'),
         json: hasFlag(args, 'json'),
       })
@@ -123,6 +130,7 @@ async function main(): Promise<number> {
       const { sendFileCommand } = await import('./commands/sendFile.js')
       return sendFileCommand({
         targetRef: flagString(args, 'target-ref'),
+        targetName: flagString(args, 'target-name'),
         file: flagString(args, 'file'),
         json: hasFlag(args, 'json'),
       })
@@ -138,6 +146,7 @@ async function main(): Promise<number> {
       const { readSessionCommand } = await import('./commands/readSession.js')
       return readSessionCommand({
         targetRef: flagString(args, 'target-ref'),
+        targetName: flagString(args, 'target-name'),
         maxPages: flagString(args, 'max-pages'),
         sinceDays: flagString(args, 'since-days'),
         json: hasFlag(args, 'json'),

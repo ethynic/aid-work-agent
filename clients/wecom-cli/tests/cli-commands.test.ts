@@ -123,6 +123,21 @@ test('send --json：篡改 target_ref → INVALID_ARGUMENT（签名校验失败�
   assert.equal(parsed.code, 'INVALID_ARGUMENT')
 })
 
+test('send --json：--target-ref 与 --target-name 双传 → INVALID_ARGUMENT（M11a 互斥），退出码 2，不触达企微', () => {
+  const { status, stdout } = runCli(['send', '--target-ref', 'x', '--target-name', '张三', '--text', 'hi', '--json'])
+  assert.equal(status, 2)
+  const parsed = JSON.parse(stdout.trim().split('\n').pop()!) as { code?: string; message?: string }
+  assert.equal(parsed.code, 'INVALID_ARGUMENT')
+  assert.match(parsed.message!, /互斥/)
+})
+
+test('read-session --json：--target-ref 与 --target-name 双传 → INVALID_ARGUMENT（M11a 互斥），退出码 2，不触达企微', () => {
+  const { status, stdout } = runCli(['read-session', '--target-ref', 'x', '--target-name', '张三', '--json'])
+  assert.equal(status, 2)
+  const parsed = JSON.parse(stdout.trim().split('\n').pop()!) as { code?: string }
+  assert.equal(parsed.code, 'INVALID_ARGUMENT')
+})
+
 test('select --json：缺 --target-ref → INVALID_ARGUMENT，退出码 2，不触达企微', () => {
   const { status, stdout } = runCli(['select', '--json'])
   assert.equal(status, 2)

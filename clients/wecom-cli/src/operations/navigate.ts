@@ -16,6 +16,10 @@
  * （写可能已落地，无法确认）；CancelledError → CANCELLED/effect=unknown；零自动重试。
  * readonly=true 的阶段（read-session/watch）无写副作用可处于 unknown：超时/取消原样
  * 透传（RESULT_TIMEOUT / CANCELLED，上层 readonly operation 归 effect=none）。
+ *
+ * M11a 起 navigate.ts 兼载 target-name 直达模式的身份定位：validateTargetSelector
+ * （target_ref/target_name 二选一校验）与 resolveTargetByName（内部 search → 身份
+ * 校验挑唯一目标 → 转 ref），send / send-image / send-file / read-session 四命令共用。
  */
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
@@ -110,6 +114,122 @@ export function pickLocatedTarget(
   if (candidates.length === 0) return null
   if (candidates.length > 1) return 'ambiguous'
   return { name: candidates[0]!.name, target_ref: candidates[0]!.target_ref }
+}
+
+/** M11a 直达模式 target_name 长度上限（与 chatSearch 的 query 上限一致） */
+const MAX_TARGET_NAME_LENGTH = 100
+
+/**
+ * M11a：target_ref / target_name 二选一校验（send / send-image / send-file /
+ * read-session 四命令共用）。两个都传或都不传 → 错误文案（INVALID_ARGUMENT）；
+ * 只传其一且合法 → null。
+ */
+export function validateTargetSelector(args: { target_ref?: unknown; target_name?: unknown }): string | null {
+  if (args.target_ref !== undefined && args.target_name !== undefined) {
+    return 'target_ref 与 target_name 互斥，只能传其一（ref 模式用 target_ref，直达模式用 target_name）'
+  }
+  if (args.target_ref !== undefined) {
+    if (typeof args.target_ref !== 'string' || args.target_ref.length === 0) {
+      return 'target_ref 必填且必须是非空字符串（先经 wecom_chat_search 获取）'
+    }
+    return null
+  }
+  if (args.target_name === undefined) {
+    return 'target_ref 与 target_name 必须传其一（target_ref 来自 wecom_chat_search；target_name 为直达模式，内部自动搜索定位）'
+  }
+  if (typeof args.target_name !== 'string' || args.target_name.trim().length === 0) {
+    return 'target_name 必须是非空字符串（直达模式：内部自动搜索定位，可含 @微信 后缀）'
+  }
+  if (args.target_name.length > MAX_TARGET_NAME_LENGTH) {
+    return `target_name 长度不能超过 ${MAX_TARGET_NAME_LENGTH} 字`
+  }
+  return null
+}
+
+/** M11a 直达模式定位结果：resolved_target 透传用（name/subtitle/section 来自命中条目） */
+export interface ResolvedByNameTarget {
+  name: string
+  subtitle: string
+  section: string
+  target_ref: string
+}
+
+/** 直达模式定位失败文案（与各 operation 的分发文案保持同款：notSentNote / refuseDesc） */
+export interface ResolveByNameTexts {
+  notSentNote: string
+  refuseDesc?: string
+}
+
+/**
+ * M11a target-name 直达模式身份定位：内部调 chatSearch operation（注入依赖同 send
+ * 编排）→ 从结果挑唯一目标 → 返回其 target_ref 与身份三元组，调用方用 ref 走既有链路
+ * （后续零新逻辑）。
+ *
+ * 挑选语义（复用 pickLocatedTarget，M6 同款 fail-closed）：Jev 已在 search 里选了
+ * best（概率+confidence）→ 优先信 best，但须过身份校验——best.name 剥 @微信 归一化后
+ * == target-name 归一化（且落在 subtitle 收紧后的候选集内）才采纳；best 身份不符 →
+ * 回退规则：items 里 name（+调用方传入的 subtitle 消歧键）唯一匹配；多项 →
+ * TARGET_AMBIGUOUS 拒绝（不猜）；0 项 → TARGET_NOT_FOUND；search 本身失败 → 透传
+ * 其错误码（此时未发生任何写动作，effect=none）。
+ *
+ * overlay 生命周期：search 返回后 overlay 保持打开；若后续阶段驱动判 navigate_required，
+ * 分发链的第二次 search 开头的残留清空会自动关掉旧 overlay，select 消费新 overlay——
+ * 与 ref 模式分发同款链路。ref 5 分钟 TTL 在内部链路（search 完立即用）耗时可忽略。
+ */
+export async function resolveTargetByName(
+  cfg: {
+    runDriverFn: RunPowerShellDriverFn
+    createRefFn: CreateTargetRefFn
+    opCtx: OpContext
+    root: string
+  },
+  targetName: string,
+  subtitle: string,
+  texts: ResolveByNameTexts,
+): Promise<ResolvedByNameTarget> {
+  const query = targetName.replace(/@微信$/, '').trim()
+  cfg.opCtx.progress({ stage: 'execute', message: `按名称「${targetName}」直达：内部搜索定位目标` })
+  const searchOp = createWecomChatSearchOperation({
+    runDriverFn: cfg.runDriverFn,
+    createRefFn: cfg.createRefFn,
+    artifactDirFn: () => cfg.root,
+  })
+  const searchRes = await searchOp.execute({ query, type: 'any' }, cfg.opCtx)
+  if (!searchRes.success) {
+    // search 本身失败（面板未出现/驱动错等）：透传错误码，未发生任何写动作
+    throw new CodedOperationError(
+      searchRes.code as ErrorCode,
+      `按名称定位「${targetName}」失败（搜索阶段，${texts.notSentNote}）：${searchRes.message}`,
+      'none',
+      searchRes.data,
+    )
+  }
+  // 身份未知（不带 type）→ pickLocatedTarget 的分区匹配不限定，仅按 name（+subtitle）消歧
+  const picked = pickLocatedTarget(searchRes.data, { name: targetName, type: 'other', subtitle })
+  if (picked === null) {
+    throw new CodedOperationError(
+      'TARGET_NOT_FOUND',
+      `按名称「${targetName}」搜索结果中没有匹配候选（${texts.notSentNote}）`,
+      'none',
+      searchRes.data,
+    )
+  }
+  if (picked === 'ambiguous') {
+    throw new CodedOperationError(
+      'TARGET_AMBIGUOUS',
+      `按名称「${targetName}」搜索有多个匹配候选且无法消歧，${texts.refuseDesc ?? '已拒绝发送'}（${texts.notSentNote}）`,
+      'none',
+      searchRes.data,
+    )
+  }
+  // subtitle/section 按 target_ref 回查命中条目（best 也派生自 items，必命中；防御性兜底空串）
+  const hit = parseCandidates(searchRes.data.items).find((it) => it.target_ref === picked.target_ref)
+  return {
+    name: picked.name,
+    subtitle: hit?.subtitle ?? '',
+    section: hit?.section ?? '',
+    target_ref: picked.target_ref,
+  }
 }
 
 export function sanitizeTiming(raw: unknown): Record<string, number> {

@@ -91,12 +91,24 @@ test('tool schema 单一来源：manifestTools 的 inputSchema 由 toolDefs 推�
   assert.deepEqual(addSchema.required, ['phone', 'confirm'])
   const selectSchema = tools[3]!.inputSchema
   assert.deepEqual(selectSchema.required, ['target_ref'])
+  // M11a：send 三工具的 target_ref 转可选（target_name 二选一，XOR 在 operation 层校验）
   const sendSchema = tools[4]!.inputSchema
-  assert.deepEqual(sendSchema.required, ['target_ref', 'text'])
+  assert.deepEqual(sendSchema.required, ['text'])
+  const sendProps = sendSchema.properties as Record<string, { type?: string }>
+  assert.equal(sendProps.target_name!.type, 'string')
+  assert.equal(sendProps.subtitle!.type, 'string')
   const sendImageSchema = tools[5]!.inputSchema
-  assert.deepEqual(sendImageSchema.required, ['target_ref', 'image_path'])
+  assert.deepEqual(sendImageSchema.required, ['image_path'])
+  assert.equal(
+    (sendImageSchema.properties as Record<string, { type?: string }>).target_name!.type,
+    'string',
+  )
   const sendFileSchema = tools[6]!.inputSchema
-  assert.deepEqual(sendFileSchema.required, ['target_ref', 'file_path'])
+  assert.deepEqual(sendFileSchema.required, ['file_path'])
+  assert.equal(
+    (sendFileSchema.properties as Record<string, { type?: string }>).target_name!.type,
+    'string',
+  )
 })
 
 test('toolDefs ↔ registry 一致性守卫：每个 toolDef 可取到 operation，未注册名 fail-loud', () => {
