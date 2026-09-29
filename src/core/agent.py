@@ -2292,6 +2292,7 @@ class Agent:
             tenant_id=_resolve_tenant_id,
             user_id=user.user_id if user else getattr(self, "_init_user_id", None),
             session_id=session_id,
+            channel=ExecutionContextFactory.channel_from_record(),
             subagent_id=(
                 self.subagent_config.dir_name
                 if self.subagent_config and getattr(self.subagent_config, "dir_name", None)
@@ -3482,6 +3483,7 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
             tenant_id=self._init_tenant_id,
             user_id=self._init_user_id,
             session_id=parent_session_id,
+            channel=ExecutionContextFactory.channel_from_record(),
             subagent_id=(
                 self.subagent_config.dir_name
                 if self.subagent_config and getattr(self.subagent_config, "dir_name", None)
