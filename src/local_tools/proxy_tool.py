@@ -37,7 +37,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from loguru import logger
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from src.config.settings import settings
 from src.db.client_binding_db import ClientUsageLogDB
@@ -217,6 +217,14 @@ class LocalToolProxyTool(BaseTool):
     execution_target = ExecutionTarget.LOCAL_REQUIRED
     category = "local_boss"
     provider_key = "boss-recruiting"
+    # invocation 行 provider_key（claim 过滤键）：None → 行 NULL（boss 既有行为，
+    # 任意设备可领 + claim 侧 catalog 校验兜底）；新 Provider（wecom）覆写为自己的
+    # key，让行级 claim 过滤只派给覆盖该 provider 的设备（weixin_name_resolve 先例）
+    invocation_provider_key: Optional[str] = None
+    # 设备能力不含本工具 provider 时的引导文案（boss 原文案保留在基类，wecom 覆写）
+    unsupported_provider_message = (
+        "选定设备不支持 BOSS 招聘操作。请确认本机 Runtime 已启用 boss-recruiting 能力后再试"
+    )
     timeout_seconds = 180  # 默认 3 分钟；写动作（greet/accept）子类改为 10 分钟
     # 弹层自愈主体标记：False 的工具失败后不再触发自愈（overlay 原语自身防递归）
     heal_eligible = True
@@ -288,6 +296,7 @@ class LocalToolProxyTool(BaseTool):
             tool_name=self.name,
             arguments=args,
             session_id=session_id,
+            provider_key=self.invocation_provider_key,
         )
         invocation_id = str(invocation["id"])
         logger.info(
@@ -363,9 +372,13 @@ class LocalToolProxyTool(BaseTool):
         if not online:
             return None, "本机 Runtime 当前离线。请在本机启动 Runtime 并保持运行，然后再试"
 
-        provider_key = catalog.get_provider_key_for_device(device.get("capabilities_json"))
-        if not provider_key or not catalog.is_tool_allowed(provider_key, self.name):
-            return None, "选定设备不支持 BOSS 招聘操作。请确认本机 Runtime 已启用 boss-recruiting 能力后再试"
+        # 多 Provider 解析（M11c）：设备可同时覆盖多个 provider（boss+wecom 等），
+        # 本工具只需其中任一 provider 的 catalog 白名单放行即可。对 boss 单
+        # Provider 设备与旧解析（get_provider_key_for_device 单键）结论一致：
+        # boss 设备 → boss 键放行 boss 工具；非 boss 设备对 boss 工具同样拒绝。
+        provider_keys = catalog.get_provider_keys_for_device(device.get("capabilities_json"))
+        if not any(catalog.is_tool_allowed(pk, self.name) for pk in provider_keys):
+            return None, self.unsupported_provider_message
 
         return device, None
 
@@ -1836,6 +1849,243 @@ class BossOverlayDismissTool(LocalToolProxyTool):
     InputModel = BossOverlayDismissInput
 
 
+# ============== 企业微信 Provider 6 工具（M11c，2026-09-29，纯代理） ==============
+# 云端创建 invocation（行 provider_key='wecom'，claim 只派给 wecom 能力设备），
+# 本机 Runtime 驱动 wecom-cli 执行。Input 模型与 CLI MCP toolDefs
+# （clients/wecom-cli/src/mcp/toolDefs.ts，M11a 直达模式 + M11b read_session 进 MCP）
+# 对齐；6 工具与 runtime wecom manifest / catalog TRUSTED_PROVIDERS['wecom'] 逐字一致。
+
+
+class WecomTargetInput(BaseModel):
+    """send/read 类工具的目标定位基座：target_ref 与 target_name 二选一（XOR）。
+
+    CLI 侧 XOR 在 operation 层做（M11a）；云端在 Input 模型层先拦（executor
+    validate_parameters 即拒绝），双端同一语义——两个都传/都不传无效。
+    """
+
+    target_ref: Optional[str] = Field(
+        None,
+        min_length=1,
+        description=(
+            "发送/读取目标句柄（wecom_chat_search 返回的 target_ref，HMAC 签名短期句柄，"
+            "5 分钟有效，过期需重新搜索）；与 target_name 二选一"
+        ),
+    )
+    target_name: Optional[str] = Field(
+        None,
+        min_length=1,
+        max_length=100,
+        description=(
+            "直达模式（M11a）：按会话名（联系人/群名，可含 @微信 后缀）定位目标，"
+            "内部自动搜索并做身份校验（同名多候选无法消歧返回 TARGET_AMBIGUOUS 不执行）；"
+            "与 target_ref 二选一"
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _target_xor(self) -> "WecomTargetInput":
+        if bool(self.target_ref) == bool(self.target_name):
+            raise ValueError("target_ref 与 target_name 必须二选一（只传其中一个）")
+        return self
+
+
+class WecomLocalToolProxyTool(LocalToolProxyTool):
+    """企业微信本地代理工具基类（M11c）：wecom Provider 公共注册面，不单独实例化。
+
+    - invocation 行 provider_key='wecom'：claim 过滤只派给 wecom 能力设备
+      （weixin_name_resolve 传 provider_key 的同款行级路由先例）
+    - heal_eligible=False：弹层自愈是 BOSS 页面专用编排（导出 Chrome DOM 候选），
+      对 wecom（原生窗口 OCR 链路）失败码不适用，绝不触发
+    - 计价 0：防双计费（见 _tool_credit_price 注释）
+    """
+
+    category = "local_wecom"
+    provider_key = "wecom"
+    invocation_provider_key = "wecom"
+    heal_eligible = False
+    unsupported_provider_message = (
+        "选定设备不支持企业微信操作。请确认本机 Runtime 已启用 wecom 能力"
+        "（安装 wecom-cli 并配置 Provider entry）后再试"
+    )
+
+    def _tool_credit_price(self) -> float:
+        # 防双计费（M11c 定稿）：wecom_read_session 的模型解析通道已在服务端
+        # /session-history 按次计积分（M10a，结果 data.billing.credits_charged），
+        # 工具层再计即双重扣费；send 系 Phase 1 暂不收工具积分。
+        # 后续调价改两处并保持一致：本覆写（余额预检口径）+
+        # configs/config.yaml boss_tool_billing.tool_credit_prices（write_result
+        # 落库计费口径，当前走 default_credit_price=0）。
+        return 0.0
+
+
+class WecomProbeInput(BaseModel):
+    verbose: bool = Field(False, description="返回更多诊断字段（系统版本/Node 版本），默认 false")
+
+
+class WecomProbeTool(WecomLocalToolProxyTool):
+    name = "wecom_probe"
+    display_name = "企业微信环境探测"
+    description = (
+        "只读探测用户本机企业微信操作环境：Windows 平台、交互桌面会话（已登录未锁屏）、"
+        "PowerShell 可用性、WXWork.exe 进程存在性；进程运行时再解析主窗口、登录态"
+        "（online/need_login/offline）与当前内容页；need_login 时附登录窗二维码截图"
+        "（qr_image_base64）与状态提示，供扫码上线。"
+        "不激活窗口、不发送输入、不改剪贴板，无外部写副作用。发送/读取报环境类错误时先用它定位原因"
+    )
+    InputModel = WecomProbeInput
+
+
+class WecomMessageSendInput(WecomTargetInput):
+    subtitle: Optional[str] = Field(
+        None,
+        max_length=100,
+        description=(
+            "直达模式可选消歧副标题（同名多候选时收紧匹配，如「微信联系人」）；"
+            "仅 target_name 模式生效"
+        ),
+    )
+    text: str = Field(
+        ...,
+        min_length=1,
+        max_length=2000,
+        description=(
+            "消息文本（1-2000 字，支持多行；含换行时经剪贴板粘贴通道输入并覆盖本机剪贴板且不恢复；"
+            "更长请分段多次发送）"
+        ),
+    )
+
+
+class WecomMessageSendTool(WecomLocalToolProxyTool):
+    """企业微信发送文本消息（外部写动作，纯代理本机执行）。"""
+
+    name = "wecom_message_send"
+    display_name = "企业微信发送文本消息"
+    description = (
+        "向指定联系人/群聊发送 1 条文本消息（外部写动作，单次单目标单条，智能分发）。"
+        "目标二选一：target_ref（搜索句柄，5 分钟有效）或 target_name 直达模式"
+        "（内部自动搜索定位 + 身份校验 + 唯一匹配，同名多候选返回 TARGET_AMBIGUOUS 不发送）。"
+        "智能分发：当前会话就是目标时直接输入发送；不是目标时自动搜索进入会话并校验标题后再发送，"
+        "两轮均未找到目标返回 TARGET_NOT_FOUND（未发送消息）。"
+        "草稿防串：输入区已有用户草稿立即中止（绝不动用户草稿）。"
+        "多行文本经剪贴板粘贴输入并回读校验（覆盖本机剪贴板且不恢复）。"
+        "终态校验失败返回 EXECUTION_UNKNOWN（消息可能已发出，禁止自动重试，须提示用户人工确认）。"
+        "发送是真实触达：发送前向用户复述目标与最终文案并征得同意"
+    )
+    InputModel = WecomMessageSendInput
+    timeout_seconds = 300
+
+
+class WecomSendImageInput(WecomTargetInput):
+    image_path: str = Field(
+        ...,
+        min_length=1,
+        description=(
+            "图片在**本机（装有 Runtime 与 wecom-cli 的机器）上的绝对路径**"
+            "（png/jpg/jpeg/bmp/gif，≤20MB）；文件必须已先落到该机器上，工具不上传文件"
+        ),
+    )
+
+
+class WecomSendImageTool(WecomLocalToolProxyTool):
+    """企业微信发送图片消息（外部写动作，纯代理本机执行）。"""
+
+    name = "wecom_send_image"
+    display_name = "企业微信发送图片消息"
+    description = (
+        "向指定联系人/群聊发送 1 张图片（外部写动作，单次单目标单张，智能分发同 wecom_message_send）。"
+        "目标二选一：target_ref 或 target_name 直达模式（身份校验+唯一匹配）。"
+        "image_path 必须是本机（Runtime 所在机器）上的绝对路径——文件须已在该机器上"
+        "（png/jpg/jpeg/bmp/gif，≤20MB），工具不上传文件。"
+        "粘贴经剪贴板通道（覆盖本机剪贴板且不恢复）。"
+        "终态校验失败返回 EXECUTION_UNKNOWN（图片可能已发出，禁止自动重试，须提示用户人工确认）。"
+        "已知限制：发送前标题复核失败中止时，输入区可能残留图片预览（无法自动清除），需人工清理"
+    )
+    InputModel = WecomSendImageInput
+    timeout_seconds = 300
+
+
+class WecomSendFileInput(WecomTargetInput):
+    file_path: str = Field(
+        ...,
+        min_length=1,
+        description=(
+            "文件在**本机（装有 Runtime 与 wecom-cli 的机器）上的绝对路径**"
+            "（扩展名不限，≤100MB，文件名去空白后须 ≥3 字符）；文件必须已先落到该机器上，工具不上传文件"
+        ),
+    )
+
+
+class WecomSendFileTool(WecomLocalToolProxyTool):
+    """企业微信发送文件消息（外部写动作，纯代理本机执行）。"""
+
+    name = "wecom_send_file"
+    display_name = "企业微信发送文件消息"
+    description = (
+        "向指定联系人/群聊发送 1 个文件（外部写动作，单次单目标单个，智能分发同 wecom_message_send）。"
+        "目标二选一：target_ref 或 target_name 直达模式（身份校验+唯一匹配）。"
+        "file_path 必须是本机（Runtime 所在机器）上的绝对路径——文件须已在该机器上"
+        "（扩展名不限，≤100MB；文件名去空白后不足 3 字符会被拒绝，请先改名）。"
+        "粘贴经剪贴板通道（覆盖本机剪贴板且不恢复）。"
+        "终态校验失败返回 EXECUTION_UNKNOWN（文件可能已发出，禁止自动重试，须提示用户人工确认）。"
+        "已知限制：中止时输入区可能残留文件卡片（无法自动清除）需人工清理；"
+        "重发同名文件时会话列表预览可能不变而报 EXECUTION_UNKNOWN（保守方向，人工确认即可）"
+    )
+    InputModel = WecomSendFileInput
+    timeout_seconds = 300
+
+
+class WecomReadSessionInput(WecomTargetInput):
+    max_pages: Optional[int] = Field(
+        None,
+        ge=1,
+        le=10,
+        description="最多向上翻几屏（含底部当前屏，默认 1，上限 10）",
+    )
+    since_days: Optional[int] = Field(
+        None,
+        ge=1,
+        description=(
+            "只读最近 N 天：某屏最早时间分割线超龄即停止上翻"
+            "（仅 OCR 通道生效；模型通道抓满 max_pages，按返回 time 自行过滤）"
+        ),
+    )
+
+
+class WecomReadSessionTool(WecomLocalToolProxyTool):
+    """企业微信读取会话消息（只读内容，纯代理本机执行；进会话清角标为客户端固有副作用）。"""
+
+    name = "wecom_read_session"
+    display_name = "企业微信读取会话消息"
+    description = (
+        "读取与目标联系人/群聊的会话消息（只读消息内容、无出站消息；当前不在目标会话时自动搜索切换后读取，"
+        "读毕滚回底部）。目标二选一：target_ref 或 target_name 直达模式（身份校验+唯一匹配）。"
+        "解析双通道：本机已配置模型通道时消息带 side/kind/time（质量优于 OCR）——"
+        "该模型解析按次计积分（结果 data.billing.credits_charged，余额不足直接报错不降级）；"
+        "未配置或模型通道不可用时走本机 OCR 兜底（免费）；data.channel 标记实际通道。"
+        "副作用：进入会话会清除该会话未读角标并切换主窗口会话视图——"
+        "适合低频按需读取（配合 wecom_unread_list 有未读再读），不适合高频轮询"
+    )
+    InputModel = WecomReadSessionInput
+    timeout_seconds = 600
+
+
+class WecomUnreadListInput(BaseModel):
+    name: Optional[str] = Field(None, max_length=100, description="可选：按会话名子串过滤")
+
+
+class WecomUnreadListTool(WecomLocalToolProxyTool):
+    """企业微信未读会话快照（只读，纯代理本机执行）。"""
+
+    name = "wecom_unread_list"
+    display_name = "企业微信未读会话快照"
+    description = (
+        "读取本机企业微信主窗口会话列表的未读会话快照（只读，不打开会话、不清除未读角标）。"
+        "返回 [{name, preview, unread_count}]（无未读的会话不出现）；可选 name 子串过滤。"
+        "适合「谁给我发消息了/有多少未读」的轻量探测，有未读再用 wecom_read_session 读取具体内容"
+    )
+    InputModel = WecomUnreadListInput
+
+
 LOCAL_PROXY_TOOL_CLASSES = (
     BossFilterTool,
     BossClearFilterTool,
@@ -1860,6 +2110,12 @@ LOCAL_PROXY_TOOL_CLASSES = (
     BossOpenChatTool,
     BossOverlayInspectTool,
     BossOverlayDismissTool,
+    WecomProbeTool,
+    WecomMessageSendTool,
+    WecomSendImageTool,
+    WecomSendFileTool,
+    WecomReadSessionTool,
+    WecomUnreadListTool,
 )
 
 LOCAL_PROXY_TOOL_NAMES = frozenset(cls.name for cls in LOCAL_PROXY_TOOL_CLASSES)

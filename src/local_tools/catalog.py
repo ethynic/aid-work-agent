@@ -68,6 +68,28 @@ TRUSTED_PROVIDERS: Dict[str, Dict[str, Any]] = {
             "weixin_message_send_v2",
         ],
     },
+    # 企业微信 Provider（M11c，2026-09-29）：与 Runtime src/providers.ts 的 wecom
+    # manifest（WECOM_TOOLS，M11b bdcd1233）逐字对齐——**照 boss 先例全量 6 工具含
+    # v1 写**（message_send/send_image/send_file），与 weixin 只读+v2 名单的特例不同：
+    # - boss 先例：v1 写（boss_send_to 等）一直走底座 invocation 链路进受信清单；
+    # - wecom 写动作自带 fail-closed 身份校验链（target_ref 为 HMAC 签名短期句柄
+    #   5 分钟 TTL；target_name 直达模式内部 search 定位 + 身份校验 + 唯一匹配，
+    #   同名多候选 TARGET_AMBIGUOUS 拒绝），不存在 weixin「v1 写不经底座许可链路」
+    #   的特例前提，故 weixin 排除 v1 写的理由不适用于 wecom。
+    # 6 工具 = runtime 接入面（search/select/watch_poll/add_customer 按用户定稿不接入）。
+    "wecom": {
+        "provider_id": "ai.aidwork.wecom",
+        "min_provider_version": "1.0.0",
+        "execution_target": "local_required",
+        "tools": [
+            "wecom_probe",
+            "wecom_message_send",
+            "wecom_send_image",
+            "wecom_send_file",
+            "wecom_read_session",
+            "wecom_unread_list",
+        ],
+    },
 }
 
 

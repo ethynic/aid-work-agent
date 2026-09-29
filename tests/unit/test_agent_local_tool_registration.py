@@ -55,6 +55,17 @@ BOSS_TOOLS = {
     "boss_close_detail",
 }
 
+# 企业微信 6 工具（M11c，2026-09-29）：与 catalog TRUSTED_PROVIDERS['wecom'] /
+# runtime wecom manifest 逐字一致；recruiting-operator 与 boss 工具同面注册
+WECOM_TOOLS = {
+    "wecom_probe",
+    "wecom_message_send",
+    "wecom_send_image",
+    "wecom_send_file",
+    "wecom_read_session",
+    "wecom_unread_list",
+}
+
 
 def _make_agent(is_master: bool, config=None):
     """构造 Agent（patch LLM/Skill/Plan 依赖，与 test_agent_loop.py 同一模式）"""
@@ -81,6 +92,7 @@ class TestLocalToolVisibility:
         """主智能体注册表不含任何 boss_* 工具（设计 §11）"""
         agent = _make_agent(is_master=True)
         assert not (set(agent.tool_registry._tools.keys()) & BOSS_TOOLS)
+        assert not (set(agent.tool_registry._tools.keys()) & WECOM_TOOLS)
 
     def test_inherit_true_subagent_has_no_boss_tools(self):
         """inherit=true 的子智能体不获得 boss 工具"""
@@ -88,6 +100,7 @@ class TestLocalToolVisibility:
         config = SubagentConfig(name="测试子智能体", tools={"inherit": True})
         agent = _make_agent(is_master=False, config=config)
         assert not (set(agent.tool_registry._tools.keys()) & BOSS_TOOLS)
+        assert not (set(agent.tool_registry._tools.keys()) & WECOM_TOOLS)
 
     def test_unrelated_allowed_subagent_has_no_boss_tools(self):
         """allowed 与 boss 无交集的子智能体不注册 boss 工具"""
@@ -98,15 +111,17 @@ class TestLocalToolVisibility:
         )
         agent = _make_agent(is_master=False, config=config)
         assert not (set(agent.tool_registry._tools.keys()) & BOSS_TOOLS)
+        assert not (set(agent.tool_registry._tools.keys()) & WECOM_TOOLS)
 
     def test_recruiting_operator_has_exactly_twenty_one_boss_tools(self):
-        """recruiting-operator 配置下：21 个 boss 工具齐全且只有这 21 个
+        """recruiting-operator 配置下：21 个 boss 工具 + 6 个 wecom 工具齐全且只有这 27 个
 
-        boss_jobs_list / boss_interview_notify 为混合模式（云端执行逻辑 + 代理注册），同样以 LOCAL_REQUIRED 注册
+        boss_jobs_list / boss_interview_notify 为混合模式（云端执行逻辑 + 代理注册），同样以 LOCAL_REQUIRED 注册；
+        wecom 6 工具（M11c）与 boss 同面注册（BOSS—企业微信招聘协同）
         """
         config = _load_recruiting_config()
         agent = _make_agent(is_master=False, config=config)
-        assert set(agent.tool_registry._tools.keys()) == BOSS_TOOLS
+        assert set(agent.tool_registry._tools.keys()) == BOSS_TOOLS | WECOM_TOOLS
         for tool in agent.tool_registry._tools.values():
             from src.tools.base import ExecutionTarget
             assert tool.execution_target == ExecutionTarget.LOCAL_REQUIRED
@@ -118,7 +133,7 @@ class TestRecruitingSubagentMd:
         config = _load_recruiting_config()
         assert config.dir_name == "recruiting-operator"
         assert config.tools.get("inherit") is False
-        assert set(config.get_allowed_tools()) == BOSS_TOOLS
+        assert set(config.get_allowed_tools()) == BOSS_TOOLS | WECOM_TOOLS
         assert config.system_prompt, "system_prompt 为空（body 未被采用）"
         assert "授权规则" in config.system_prompt
         assert "capabilities:" not in config.system_prompt  # 证明是 body 而非 frontmatter 串入
