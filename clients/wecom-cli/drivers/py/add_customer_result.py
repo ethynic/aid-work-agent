@@ -12,7 +12,11 @@
 import json
 import sys
 
-RESULT_NO_MARKERS = ('未找到', '找不到', '无结果', '没有相关')
+# 2026-09-29 真机用户报告补充：重复添加等场景弹窗会显示「用户不存在」/频控类文案——
+# 旧清单不覆盖时 py 归 none（当作结果区空），驱动空转重发 Enter ~15s 且窗口滞留。
+# 归入 not_found 终态后驱动立即 CUSTOMER_NOT_FOUND 返回（不重试），finally 关窗。
+RESULT_NO_MARKERS = ('未找到', '找不到', '无结果', '没有相关', '用户不存在', '不存在',
+                     '操作频繁', '过于频繁', '稍后再试', '已是联系人', '已经是')
 ADD_BUTTON_TEXT = '添加'
 SENT_BUTTON_TEXT = '已发送申请'
 SEND_BUTTON_TEXT = '发送'

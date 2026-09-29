@@ -99,15 +99,32 @@ function Invoke-AddCustomerOcr([string]$ImagePath, [string]$Mode) {
 }
 
 function Close-SearchDialogBestEffort([int64]$DlgHwnd) {
-    # best-effort 关闭「网络查找手机/邮箱」弹窗（× 对 PostMessage 点击有效，真机实测）；失败不影响结果
+    # best-effort 关闭「网络查找手机/邮箱」弹窗（× 对 PostMessage 点击有效，真机实测）；失败不影响结果。
+    # 2026-09-29 真机用户报告加固：个别状态（如「用户不存在」）下单次 × 点击可能不生效致窗口滞留——
+    # 升级为三轮递进（× → WM_CLOSE → 再 ×），每轮后按 IsWindowVisible 验证消失（≤1s），仍可见继续下一轮；
+    # 三轮后仍可见仅记日志（best-effort 语义，不覆盖业务错误码）。
     try {
-        if ([WeComWin32]::IsWindow([IntPtr]$DlgHwnd)) {
+        if (-not [WeComWin32]::IsWindow([IntPtr]$DlgHwnd)) { return }
+        foreach ($round in 1..3) {
             $info = Get-WeComWindowInfo ([IntPtr]$DlgHwnd)
-            $closeX = [int]($info.X + $info.W * $script:DlgCloseRx)
-            $closeY = [int]($info.Y + $info.H * $script:DlgCloseRy)
-            Write-DriverLog ('关闭检索弹窗 × screen=(' + $closeX + ',' + $closeY + ') dlgHwnd=' + $DlgHwnd)
-            [void](Send-WeComClick -Hwnd $DlgHwnd -ScreenX $closeX -ScreenY $closeY)
+            if ($round -eq 2) {
+                Write-DriverLog ('关闭检索弹窗 round2 WM_CLOSE dlgHwnd=' + $DlgHwnd)
+                [void][WeComWin32]::PostMessageW([IntPtr]$DlgHwnd, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)
+            } else {
+                $closeX = [int]($info.X + $info.W * $script:DlgCloseRx)
+                $closeY = [int]($info.Y + $info.H * $script:DlgCloseRy)
+                Write-DriverLog ('关闭检索弹窗 round' + $round + ' × screen=(' + $closeX + ',' + $closeY + ') dlgHwnd=' + $DlgHwnd)
+                [void](Send-WeComClick -Hwnd $DlgHwnd -ScreenX $closeX -ScreenY $closeY)
+            }
+            $gone = $false
+            $deadline = [DateTime]::UtcNow.AddMilliseconds(1000)
+            while ([DateTime]::UtcNow -lt $deadline) {
+                Start-Sleep -Milliseconds 200
+                if (-not [WeComWin32]::IsWindowVisible([IntPtr]$DlgHwnd)) { $gone = $true; break }
+            }
+            if ($gone) { return }
         }
+        Write-DriverLog ('警告：检索弹窗三轮关闭尝试后仍可见（dlgHwnd=' + $DlgHwnd + '），请人工关闭')
     } catch {}
 }
 
