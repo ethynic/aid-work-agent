@@ -7,6 +7,7 @@
 import { getSaasAuthHeader } from './saasTenant'
 
 const API_BASE = `${import.meta.env.VITE_API_BASE_URL || '/api'}/saas/client-activations`
+const BINDING_API_BASE = `${import.meta.env.VITE_API_BASE_URL || '/api'}/saas/client-bindings`
 
 export interface ActivationCode {
   id: number
@@ -30,6 +31,20 @@ export interface CreatedActivationCode {
   max_uses: number
   expires_at: string | null
   created_at: string | null
+}
+
+export interface StaticBinding {
+  binding_id: string
+  tenant_id: string
+  client_name: string | null
+  token_type: 'static' | string
+  status: string
+  created_at: string | null
+}
+
+// 签发响应不含 status（仅 list 返回）；access_token 明文仅创建时一次返回
+export interface CreatedStaticBinding extends Omit<StaticBinding, 'status'> {
+  access_token: string
 }
 
 async function parseError(res: Response, fallback: string): Promise<never> {
@@ -86,4 +101,21 @@ export async function revokeActivationBinding(codeId: number): Promise<{ revoked
   if (!res.ok) await parseError(res, '吊销绑定失败')
   const data = await res.json()
   return { revoked_count: Number(data?.revoked_count ?? 0) }
+}
+
+/**
+ * 签发静态长期客户端绑定（M10c 直连 token，仅 platform_admin）。
+ * 后端：POST /api/saas/client-bindings/static，明文 access_token 仅此一次返回。
+ */
+export async function createStaticBinding(params: {
+  tenant_id: string
+  client_name: string
+}): Promise<CreatedStaticBinding> {
+  const res = await fetch(`${BINDING_API_BASE}/static`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getSaasAuthHeader() },
+    body: JSON.stringify(params),
+  })
+  if (!res.ok) await parseError(res, '签发直连 Token 失败')
+  return res.json()
 }

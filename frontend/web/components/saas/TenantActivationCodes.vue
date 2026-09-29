@@ -7,6 +7,7 @@
       </div>
       <div class="flex gap-2">
         <BaseButton size="sm" intent="ghost" @click="loadCodes">刷新</BaseButton>
+        <BaseButton size="sm" @click="openStatic">签发直连 Token</BaseButton>
         <BaseButton size="sm" @click="openGenerate">生成激活码</BaseButton>
       </div>
     </div>
@@ -110,6 +111,44 @@
         <BaseButton intent="secondary" @click="showCreated = false">我已保存</BaseButton>
       </template>
     </BaseModal>
+
+    <!-- 签发直连 Token 子弹窗（M10c：static 长期绑定，token 仅一次返回） -->
+    <BaseModal v-model="showStatic" title="签发直连 Token" size="md">
+      <div class="space-y-4">
+        <div>
+          <label class="block">
+            <span class="text-sm text-muted mb-1 block">客户名（必填）</span>
+            <BaseInput v-model="staticForm.client_name" placeholder="如：wecom-cli@PC" />
+          </label>
+        </div>
+        <div class="text-xs text-muted space-y-1">
+          <div>· Token 仅签发时显示一次，关闭后无法再查看。</div>
+          <div>· 用于自有机器直连场景：配置到客户端环境变量 AID_WECOM_SERVER_TOKEN。</div>
+          <div>· 长期有效、不过期；吊销/换发请在「客户端绑定管理」中操作。</div>
+        </div>
+        <div v-if="staticError" class="p-2 bg-danger-50 border border-danger-200 rounded text-danger-600 text-sm">{{ staticError }}</div>
+      </div>
+      <template #footer>
+        <BaseButton intent="secondary" @click="showStatic = false">取消</BaseButton>
+        <BaseButton :disabled="issuing" @click="handleIssueStatic">
+          {{ issuing ? '签发中…' : '签发' }}
+        </BaseButton>
+      </template>
+    </BaseModal>
+
+    <!-- 签发结果（明文 token 仅一次展示 + 复制，镜像 createdCode 模式） -->
+    <BaseModal v-model="showStaticCreated" title="直连 Token 已签发" size="sm">
+      <div class="text-center space-y-3">
+        <div class="text-sm text-muted">请立即复制并妥善保存，配置到客户端 AID_WECOM_SERVER_TOKEN；仅显示这一次：</div>
+        <div class="py-3 px-2 bg-surface-hover rounded-lg">
+          <span class="font-mono text-sm font-bold text-primary-600 break-all select-all">{{ createdStatic?.access_token }}</span>
+        </div>
+        <BaseButton size="sm" @click="copyCode(createdStatic?.access_token || '')">复制 Token</BaseButton>
+      </div>
+      <template #footer>
+        <BaseButton intent="secondary" @click="closeStaticCreated">我已保存</BaseButton>
+      </template>
+    </BaseModal>
   </div>
 </template>
 
@@ -126,8 +165,10 @@ import {
   createActivationCode,
   disableActivationCode,
   revokeActivationBinding,
+  createStaticBinding,
   type ActivationCode,
   type CreatedActivationCode,
+  type CreatedStaticBinding,
 } from '@/api/clientActivation'
 
 const props = defineProps<{ tenantId: string }>()
@@ -155,6 +196,16 @@ const genForm = ref({ client_name: '', max_uses: '1', expires_at: '' })
 // 生成结果
 const showCreated = ref(false)
 const createdCode = ref<CreatedActivationCode | null>(null)
+
+// 签发直连 Token（M10c static 绑定）
+const showStatic = ref(false)
+const issuing = ref(false)
+const staticError = ref('')
+const staticForm = ref({ client_name: '' })
+
+// 签发结果（明文 token 仅一次展示）
+const showStaticCreated = ref(false)
+const createdStatic = ref<CreatedStaticBinding | null>(null)
 
 async function loadCodes() {
   if (!props.tenantId) return
@@ -200,6 +251,43 @@ async function handleGenerate() {
   } finally {
     generating.value = false
   }
+}
+
+function openStatic() {
+  staticForm.value = { client_name: '' }
+  staticError.value = ''
+  showStatic.value = true
+}
+
+async function handleIssueStatic() {
+  staticError.value = ''
+  const clientName = staticForm.value.client_name.trim()
+  if (!clientName) {
+    staticError.value = '请填写客户名（如：wecom-cli@PC）'
+    return
+  }
+  issuing.value = true
+  try {
+    const created = await createStaticBinding({
+      tenant_id: props.tenantId,
+      client_name: clientName,
+    })
+    createdStatic.value = created
+    showStatic.value = false
+    showStaticCreated.value = true
+    toast.success('直连 Token 已签发')
+  } catch (e: any) {
+    // 后端 403 返回 detail=「仅平台管理员可签发静态绑定」，parseError 已透出，直接展示
+    staticError.value = e?.message || '签发直连 Token 失败'
+  } finally {
+    issuing.value = false
+  }
+}
+
+function closeStaticCreated() {
+  showStaticCreated.value = false
+  // token 仅一次返回，关闭即清空，避免残留
+  createdStatic.value = null
 }
 
 async function handleDisable(row: any) {
