@@ -338,3 +338,10 @@ Authorization: Bearer $TYPESAFE_API_KEY
 - **延迟远超预期**：模型层 total 6454ms（per_page 6271/6453 并行）——服务端 prompt 更紧凑使推理 token 降至 889（实验时 2602），叠加并行分页，较串行实验 35s 提速 5 倍+；read-session 全链路 21.3s。
 - **计费闭环**：成本 0.67 积分（5184+889 tokens）→ 最低 1 积分兜底；服务端余额 633.21 → 632.21，today_consumed=1.0 ✓。
 - 小瑕疵：图片消息文本偶有多余空行（模型转录细节，无害）。
+
+### 命令面真机补测 + RPA 废弃标记（2026-09-29）
+
+- **unread**：真机复测通过（5.9s，1 未读会话，角标 blob 检测正常）——M3 代码经 M4-M9 改造无回归。
+- **watch --once**：真机单轮全通（26.5s）：unread 快照 → row 直点（企业微信团队）→ read-session OCR 通道增量读取（时间戳沿袭可见）→ NDJSON new_messages 事件——M9 重构后的 watch 编排链路真机验证。注意水位首读全量属设计行为（首次无水位保守全推）。
+- **add-customer**：静态扫描无禁用原语（全 PostMessage，注释与 M1 标定一致）；发送邀请为真实外发写动作，**待安全手机号真机验证**（用户提供后执行）。
+- **RPA 废弃**（6d48163e）：README/STATUS 横幅 + 前端新增渠道入口移除（存量可管理）+ 激活码管理 9 端点越权收口（R1，platform_admin 统一）。
