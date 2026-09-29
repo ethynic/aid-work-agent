@@ -323,3 +323,10 @@ Authorization: Bearer $TYPESAFE_API_KEY
 - 服务端：client_bindings 增 token_type（static 不过期，disable/rotate 管生命周期）；管理端 POST /api/saas/client-bindings/static 签发（token 64 字符仅一次返回）；迁移 init/db_update 双轨同构。
 - **CR 修复 P1 越权**：签发端点原实现仅 require_admin（任意登录角色可跨租户签发盗刷积分）——补 platform_admin 角色检查 + 2 例回归；同文件激活码端点的同款既有弱点记录为 R1 待单独收口。
 - 测试：CLI 193/193（server-proxy 重写 12 例）、服务端 unit/api 139 通过。
+
+### 鉴权架构定稿（2026-09-29 用户裁定：token 机制分层定位）
+
+- **Agent 路径**（正式产品链路）：CLI 只做 UI 自动化 + 返回截图，模型解析由 agent 在服务端内部发起（自带租户会话上下文）——**零网络凭据**。实现（CLI --raw-pages 模式 + /session-history 支持标准租户鉴权）**与协议壳对接一起做**。
+- **Runtime 路径**：安装绑定时自动签发机器级长期凭据（本质是 static token，存机器、用户无感）——复用 M10c 的 static binding 底座。
+- **裸 CLI 直调**（开发/调试/当前测试）：M10b 直连 + M10c 静态 token + M10d 前端签发界面维持现状；服务端公网暴露时必须凭据（传参 tenant_id 仅限可信内网）。
+- 裁定依据：token 解决的是"网络调用方鉴权"而非"站点身份"（身份在 agent/runtime 上下文天然存在）；问题根源是 M10b 把模型调用放在 CLI 进程直连——agent 路径落地后正式链路 CLI 退化为纯本地工具。
