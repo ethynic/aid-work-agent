@@ -330,3 +330,11 @@ Authorization: Bearer $TYPESAFE_API_KEY
 - **Runtime 路径**：安装绑定时自动签发机器级长期凭据（本质是 static token，存机器、用户无感）——复用 M10c 的 static binding 底座。
 - **裸 CLI 直调**（开发/调试/当前测试）：M10b 直连 + M10c 静态 token + M10d 前端签发界面维持现状；服务端公网暴露时必须凭据（传参 tenant_id 仅限可信内网）。
 - 裁定依据：token 解决的是"网络调用方鉴权"而非"站点身份"（身份在 agent/runtime 上下文天然存在）；问题根源是 M10b 把模型调用放在 CLI 进程直连——agent 路径落地后正式链路 CLI 退化为纯本地工具。
+
+### M10 模型通道 E2E 实测（2026-09-29，agent2 生产环境）——✅ 全项通过
+
+- 环境：服务端 agent2.aidingyi.cn（已部署含迁移）+ 前端签发静态 token；CLI 环境变量直连。
+- 结果：channel=model，2 页 23 条消息（kind：text 11/image 4/file 3/timeline 5；time 沿袭 16 条「昨天 HH:MM」格式；side 全对含图片/文件）。
+- **延迟远超预期**：模型层 total 6454ms（per_page 6271/6453 并行）——服务端 prompt 更紧凑使推理 token 降至 889（实验时 2602），叠加并行分页，较串行实验 35s 提速 5 倍+；read-session 全链路 21.3s。
+- **计费闭环**：成本 0.67 积分（5184+889 tokens）→ 最低 1 积分兜底；服务端余额 633.21 → 632.21，today_consumed=1.0 ✓。
+- 小瑕疵：图片消息文本偶有多余空行（模型转录细节，无害）。
