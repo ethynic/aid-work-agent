@@ -316,3 +316,10 @@ Authorization: Bearer $TYPESAFE_API_KEY
 - **M10a 服务端**（551871c7）：`POST /api/client/v1/session-history`——GLM-5.3-Flash 并行分页（模型锁定：flashx 实测思考 token 翻倍无提速且贵 2.5 倍已排除；思考不可关闭是 API 契约限制）+ 服务端最大后缀-前缀重叠去重 + page_gap 告警；计费 token 成本×100 积分（0.8/2.8 元/M 价目常量），最低 1 积分，402 预检原子扣减。测试智能体修复计费浮点多扣 0.01（Decimal 化）；CR 含合并算法 7 场景手工推演。
 - **M10b CLI**：read-session 双通道——配置 AID_WECOM_SERVER_URL 时驱动只截图（-ParseMode none，省每页 ~2s OCR 冷启动）→ TS 调服务端（激活码→token，DPAPI 缓存 %LOCALAPPDATA%，401 重激活一次）→ channel=model（含 kind/time/billing 透传）；网络/超时/5xx 降级完整 OCR 链（channel=ocr + fallback_reason）；**402/激活码被拒直报不降级**；未配置直接 OCR（watch 恒 OCR 通道，计费保护）。serverProxy/dpapi 模仿 weixin-cli（代码体逐行一致）。测试 195/195（+23）。
 - 真机已验：OCR 直连通道、假地址降级（fallback_reason 正确）。**待用户配合 E2E**：服务端地址 + 激活码 → 模型通道实测（延迟/计费扣减/kind 字段）。
+
+### M10c：去激活码改直连静态 token（2026-09-29，用户定稿：自有机器直连调用扣积分）
+
+- CLI：`AID_WECOM_SERVER_URL` + `AID_WECOM_SERVER_TOKEN` 直连 Bearer；激活码/activate/DPAPI 缓存链路全部删除（dpapi.ts 移除）；401→CONFIG_MISSING 直报（修配置，不降级）；402/网络降级语义不变。
+- 服务端：client_bindings 增 token_type（static 不过期，disable/rotate 管生命周期）；管理端 POST /api/saas/client-bindings/static 签发（token 64 字符仅一次返回）；迁移 init/db_update 双轨同构。
+- **CR 修复 P1 越权**：签发端点原实现仅 require_admin（任意登录角色可跨租户签发盗刷积分）——补 platform_admin 角色检查 + 2 例回归；同文件激活码端点的同款既有弱点记录为 R1 待单独收口。
+- 测试：CLI 193/193（server-proxy 重写 12 例）、服务端 unit/api 139 通过。
