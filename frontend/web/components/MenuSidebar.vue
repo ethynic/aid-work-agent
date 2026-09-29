@@ -1038,6 +1038,9 @@ const connectionSubMenuItems = computed(() => {
     // 公众号内容：文档/文章页
     { path: `${base}/wechat-mp`, label: '公众号内容', icon: 'M5 4h14a1 1 0 011 1v14a1 1 0 01-1 1H5a1 1 0 01-1-1V5a1 1 0 011-1zM8 9h8M8 13h8M8 17h5', adminOnly: true },
     // 企微个人RPA：机器人
+    // wecom-personal-rpa 已废弃（2026-09-29）：入口保留仅供存量租户管理已部署的 RPA 客户端
+    // （暂停/恢复、密钥轮换等，失联即不可运维）；渠道新增入口已在 ChannelConfig 移除。
+    // 待 runtime + wecom 生产稳定后随页面一起删除。
     { path: `${base}/wecom-personal-rpa`, label: '企微个人RPA', icon: 'M12 4v3M5 8h14a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2v-8a2 2 0 012-2zM9 13h.01M15 13h.01M9 17h6', adminOnly: true },
     // 本地工具：电脑
     { path: `${base}/local-tools`, label: '本地工具', icon: 'M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z', adminOnly: false },

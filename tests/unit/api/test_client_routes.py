@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import math
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
@@ -477,6 +478,255 @@ class TestCreateStaticBindingRoute:
                 asyncio.run(create_static_binding(self._make_req(), MagicMock()))
             assert exc_info.value.status_code == 403, role
         mock_create.assert_not_called()  # 拒绝时不得落库签发
+
+
+class TestActivationMgmtPlatformAdminOnly:
+    """R1 越权收口：client_activation_mgmt 其余端点统一仅 platform_admin（照 static 端点 2 例模式）。
+
+    require_admin 只校验登录（放行 user/tenant_admin），激活码（含明文 code）与绑定
+    （含 access_token）是平台级跨租户资源，非 platform_admin 一律 403 且不触发 DB 副作用。
+    """
+
+    ROLES_REJECTED = ("user", "tenant_admin")
+
+    # ---- POST /api/saas/client-activations 生成激活码 ----
+
+    @patch("src.saas.api.client_activation_mgmt.ClientActivationCodeDB.create")
+    @patch("src.saas.api.client_activation_mgmt.require_admin")
+    def test_create_activation_code_platform_admin_ok(self, mock_admin, mock_create):
+        from src.saas.api.client_activation_mgmt import (
+            ActivationCodeCreateRequest,
+            create_activation_code,
+        )
+
+        mock_admin.return_value = {"user_id": "u1", "role": "platform_admin"}
+        mock_create.return_value = {
+            "id": 1, "code": "AC-PLAIN", "tenant_id": "t1", "client_name": "wecom-cli@PC",
+            "status": "active", "max_uses": 1, "expires_at": None, "created_at": datetime.now(),
+        }
+        resp = asyncio.run(
+            create_activation_code(
+                ActivationCodeCreateRequest(tenant_id="t1", client_name="wecom-cli@PC"),
+                MagicMock(),
+            )
+        )
+        assert resp["code"] == "AC-PLAIN"
+        mock_create.assert_called_once()
+
+    @patch("src.saas.api.client_activation_mgmt.ClientActivationCodeDB.create")
+    @patch("src.saas.api.client_activation_mgmt.require_admin")
+    def test_create_activation_code_non_platform_admin_403(self, mock_admin, mock_create):
+        from fastapi import HTTPException
+        from src.saas.api.client_activation_mgmt import (
+            ActivationCodeCreateRequest,
+            create_activation_code,
+        )
+
+        for role in self.ROLES_REJECTED:
+            mock_admin.return_value = {"user_id": "u2", "role": role}
+            with pytest.raises(HTTPException) as exc_info:
+                asyncio.run(
+                    create_activation_code(
+                        ActivationCodeCreateRequest(tenant_id="t1"), MagicMock()
+                    )
+                )
+            assert exc_info.value.status_code == 403, role
+        mock_create.assert_not_called()
+
+    # ---- GET /api/saas/client-activations/list 激活码列表（明文 code 跨租户泄露面） ----
+
+    @patch("src.saas.api.client_activation_mgmt.ClientActivationCodeDB.list_by_tenant")
+    @patch("src.saas.api.client_activation_mgmt.require_admin")
+    def test_list_activation_codes_platform_admin_ok(self, mock_admin, mock_list):
+        from src.saas.api.client_activation_mgmt import list_activation_codes
+
+        mock_admin.return_value = {"user_id": "u1", "role": "platform_admin"}
+        mock_list.return_value = []
+        resp = asyncio.run(list_activation_codes(MagicMock(), tenant_id="t1"))
+        assert resp == []
+        mock_list.assert_called_once_with("t1")
+
+    @patch("src.saas.api.client_activation_mgmt.ClientActivationCodeDB.list_by_tenant")
+    @patch("src.saas.api.client_activation_mgmt.require_admin")
+    def test_list_activation_codes_non_platform_admin_403(self, mock_admin, mock_list):
+        from fastapi import HTTPException
+        from src.saas.api.client_activation_mgmt import list_activation_codes
+
+        for role in self.ROLES_REJECTED:
+            mock_admin.return_value = {"user_id": "u2", "role": role}
+            with pytest.raises(HTTPException) as exc_info:
+                asyncio.run(list_activation_codes(MagicMock(), tenant_id="t1"))
+            assert exc_info.value.status_code == 403, role
+        mock_list.assert_not_called()
+
+    # ---- GET /api/saas/client-activations/{code_id} 激活码详情 ----
+
+    @patch("src.saas.api.client_activation_mgmt.ClientActivationCodeDB.get_by_id")
+    @patch("src.saas.api.client_activation_mgmt.require_admin")
+    def test_get_activation_code_platform_admin_ok(self, mock_admin, mock_get):
+        from src.saas.api.client_activation_mgmt import get_activation_code
+
+        mock_admin.return_value = {"user_id": "u1", "role": "platform_admin"}
+        mock_get.return_value = {
+            "id": 1, "code": "AC-PLAIN", "tenant_id": "t1", "status": "active",
+            "max_uses": 1, "used_count": 0, "created_at": datetime.now(),
+        }
+        resp = asyncio.run(get_activation_code(1, MagicMock()))
+        assert resp["code"] == "AC-PLAIN"
+
+    @patch("src.saas.api.client_activation_mgmt.ClientActivationCodeDB.get_by_id")
+    @patch("src.saas.api.client_activation_mgmt.require_admin")
+    def test_get_activation_code_non_platform_admin_403(self, mock_admin, mock_get):
+        from fastapi import HTTPException
+        from src.saas.api.client_activation_mgmt import get_activation_code
+
+        for role in self.ROLES_REJECTED:
+            mock_admin.return_value = {"user_id": "u2", "role": role}
+            with pytest.raises(HTTPException) as exc_info:
+                asyncio.run(get_activation_code(1, MagicMock()))
+            assert exc_info.value.status_code == 403, role
+        mock_get.assert_not_called()
+
+    # ---- DELETE /api/saas/client-activations/{code_id} 禁用激活码 ----
+
+    @patch("src.saas.api.client_activation_mgmt.ClientActivationCodeDB.disable")
+    @patch("src.saas.api.client_activation_mgmt.ClientActivationCodeDB.get_by_id")
+    @patch("src.saas.api.client_activation_mgmt.require_admin")
+    def test_disable_activation_code_platform_admin_ok(self, mock_admin, mock_get, mock_disable):
+        from src.saas.api.client_activation_mgmt import disable_activation_code
+
+        mock_admin.return_value = {"user_id": "u1", "role": "platform_admin"}
+        mock_get.return_value = {"id": 1, "tenant_id": "t1"}
+        resp = asyncio.run(disable_activation_code(1, MagicMock()))
+        assert resp == {"ok": True}
+        mock_disable.assert_called_once_with(1)
+
+    @patch("src.saas.api.client_activation_mgmt.ClientActivationCodeDB.disable")
+    @patch("src.saas.api.client_activation_mgmt.ClientActivationCodeDB.get_by_id")
+    @patch("src.saas.api.client_activation_mgmt.require_admin")
+    def test_disable_activation_code_non_platform_admin_403(self, mock_admin, mock_get, mock_disable):
+        from fastapi import HTTPException
+        from src.saas.api.client_activation_mgmt import disable_activation_code
+
+        for role in self.ROLES_REJECTED:
+            mock_admin.return_value = {"user_id": "u2", "role": role}
+            with pytest.raises(HTTPException) as exc_info:
+                asyncio.run(disable_activation_code(1, MagicMock()))
+            assert exc_info.value.status_code == 403, role
+        mock_get.assert_not_called()
+        mock_disable.assert_not_called()
+
+    # ---- POST /api/saas/client-activations/{code_id}/revoke 吊销绑定 ----
+
+    @patch("src.db.database.get_db_connection")
+    @patch("src.saas.api.client_activation_mgmt.ClientActivationCodeDB.get_by_id")
+    @patch("src.saas.api.client_activation_mgmt.require_admin")
+    def test_revoke_binding_platform_admin_ok(self, mock_admin, mock_get, mock_conn):
+        from src.saas.api.client_activation_mgmt import revoke_binding_by_code
+
+        mock_admin.return_value = {"user_id": "u1", "role": "platform_admin"}
+        mock_get.return_value = {"id": 1, "tenant_id": "t1"}
+        cursor = MagicMock()
+        cursor.fetchall.return_value = []
+        mock_conn.return_value.__enter__.return_value.cursor.return_value = cursor
+        resp = asyncio.run(revoke_binding_by_code(1, MagicMock()))
+        assert resp == {"ok": True, "revoked_count": 0}
+
+    @patch("src.db.database.get_db_connection")
+    @patch("src.saas.api.client_activation_mgmt.ClientActivationCodeDB.get_by_id")
+    @patch("src.saas.api.client_activation_mgmt.require_admin")
+    def test_revoke_binding_non_platform_admin_403(self, mock_admin, mock_get, mock_conn):
+        from fastapi import HTTPException
+        from src.saas.api.client_activation_mgmt import revoke_binding_by_code
+
+        for role in self.ROLES_REJECTED:
+            mock_admin.return_value = {"user_id": "u2", "role": role}
+            with pytest.raises(HTTPException) as exc_info:
+                asyncio.run(revoke_binding_by_code(1, MagicMock()))
+            assert exc_info.value.status_code == 403, role
+        mock_get.assert_not_called()
+        mock_conn.assert_not_called()
+
+    # ---- GET /api/saas/client-bindings/list 绑定列表 ----
+
+    @patch("src.saas.api.client_activation_mgmt.ClientBindingDB.list_by_tenant")
+    @patch("src.saas.api.client_activation_mgmt.require_admin")
+    def test_list_bindings_platform_admin_ok(self, mock_admin, mock_list):
+        from src.saas.api.client_activation_mgmt import list_bindings
+
+        mock_admin.return_value = {"user_id": "u1", "role": "platform_admin"}
+        mock_list.return_value = []
+        resp = asyncio.run(list_bindings(MagicMock(), tenant_id="t1"))
+        assert resp == []
+        mock_list.assert_called_once_with("t1")
+
+    @patch("src.saas.api.client_activation_mgmt.ClientBindingDB.list_by_tenant")
+    @patch("src.saas.api.client_activation_mgmt.require_admin")
+    def test_list_bindings_non_platform_admin_403(self, mock_admin, mock_list):
+        from fastapi import HTTPException
+        from src.saas.api.client_activation_mgmt import list_bindings
+
+        for role in self.ROLES_REJECTED:
+            mock_admin.return_value = {"user_id": "u2", "role": role}
+            with pytest.raises(HTTPException) as exc_info:
+                asyncio.run(list_bindings(MagicMock(), tenant_id="t1"))
+            assert exc_info.value.status_code == 403, role
+        mock_list.assert_not_called()
+
+    # ---- POST /api/saas/client-bindings/{binding_id}/disable 禁用绑定 ----
+
+    @patch("src.saas.api.client_activation_mgmt.ClientBindingDB.disable")
+    @patch("src.saas.api.client_activation_mgmt.ClientBindingDB.get_by_id")
+    @patch("src.saas.api.client_activation_mgmt.require_admin")
+    def test_disable_binding_platform_admin_ok(self, mock_admin, mock_get, mock_disable):
+        from src.saas.api.client_activation_mgmt import disable_binding
+
+        mock_admin.return_value = {"user_id": "u1", "role": "platform_admin"}
+        mock_get.return_value = {"binding_id": "cb1", "tenant_id": "t1", "status": "active"}
+        resp = asyncio.run(disable_binding("cb1", MagicMock()))
+        assert resp == {"ok": True}
+        mock_disable.assert_called_once_with("cb1")
+
+    @patch("src.saas.api.client_activation_mgmt.ClientBindingDB.disable")
+    @patch("src.saas.api.client_activation_mgmt.ClientBindingDB.get_by_id")
+    @patch("src.saas.api.client_activation_mgmt.require_admin")
+    def test_disable_binding_non_platform_admin_403(self, mock_admin, mock_get, mock_disable):
+        from fastapi import HTTPException
+        from src.saas.api.client_activation_mgmt import disable_binding
+
+        for role in self.ROLES_REJECTED:
+            mock_admin.return_value = {"user_id": "u2", "role": role}
+            with pytest.raises(HTTPException) as exc_info:
+                asyncio.run(disable_binding("cb1", MagicMock()))
+            assert exc_info.value.status_code == 403, role
+        mock_get.assert_not_called()
+        mock_disable.assert_not_called()
+
+    # ---- POST /api/saas/client-bindings/{binding_id}/rotate-token 轮换令牌 ----
+
+    @patch("src.saas.api.client_activation_mgmt.ClientBindingDB.rotate_token")
+    @patch("src.saas.api.client_activation_mgmt.require_admin")
+    def test_rotate_token_platform_admin_ok(self, mock_admin, mock_rotate):
+        from src.saas.api.client_activation_mgmt import rotate_token
+
+        mock_admin.return_value = {"user_id": "u1", "role": "platform_admin"}
+        mock_rotate.return_value = {"binding_id": "cb1", "access_token": "tok-new"}
+        resp = asyncio.run(rotate_token("cb1", MagicMock()))
+        assert resp == {"ok": True, "access_token": "tok-new"}
+        mock_rotate.assert_called_once_with("cb1")
+
+    @patch("src.saas.api.client_activation_mgmt.ClientBindingDB.rotate_token")
+    @patch("src.saas.api.client_activation_mgmt.require_admin")
+    def test_rotate_token_non_platform_admin_403(self, mock_admin, mock_rotate):
+        from fastapi import HTTPException
+        from src.saas.api.client_activation_mgmt import rotate_token
+
+        for role in self.ROLES_REJECTED:
+            mock_admin.return_value = {"user_id": "u2", "role": role}
+            with pytest.raises(HTTPException) as exc_info:
+                asyncio.run(rotate_token("cb1", MagicMock()))
+            assert exc_info.value.status_code == 403, role
+        mock_rotate.assert_not_called()
 
 
 class TestGetClientTokenFromHeader:

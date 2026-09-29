@@ -1133,7 +1133,9 @@ function closeModal() {
 const channelTypes = [
   { value: 'wecom', label: '企业微信', icon: '' },
   { value: 'wecom_kf', label: '企业微信客服', icon: '' },
-  { value: 'wecom_personal_rpa', label: '企微个人号RPA', icon: '' },
+  // wecom_personal_rpa 已废弃（2026-09-29）：UI 执行职责由 clients/wecom-cli（agent-tool-runtime）替代，
+  // 新增渠道入口移除；下方 label/字段映射/配置指引保留，供存量租户编辑既有配置。
+  // 待 runtime + wecom 生产稳定后随渠道整体删除（RPA 客户端代码同步删除）。
   { value: 'wechat_mp', label: '公众号内容', icon: '' },
   { value: 'dingtalk', label: '钉钉', icon: '' },
   { value: 'feishu', label: '飞书', icon: '' },

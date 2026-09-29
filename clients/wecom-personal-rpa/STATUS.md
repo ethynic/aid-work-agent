@@ -1,5 +1,11 @@
 # 客户端开发状态（视觉定位方案落地后盘点）
 
+> **⚠️ 已废弃（2026-09-29）**
+> UI 执行职责已被 `clients/wecom-cli`（经 agent-tool-runtime 接入）全面替代，本项目不再修复、不再发版。
+> 现存部署的入站消息走服务端会话归档，不受本客户端废弃影响。
+> 代码保留至 runtime + wecom 生产稳定后删除；替代方案差距分析见
+> [docs/research/wecom-cli/rpa-replacement-gap-analysis-20260928.md](../../docs/research/wecom-cli/rpa-replacement-gap-analysis-20260928.md)。
+
 > 维护对象：`clients/wecom-personal-rpa/`（企业微信个人账号 RPA .NET 客户端）
 > 盘点日期：2026-06-24
 > 前序盘点：2026-06-22 初版（仅工程骨架 + 36 单测）→ 2026-06-23 视觉定位方案验证 → 2026-06-24 视觉定位落地

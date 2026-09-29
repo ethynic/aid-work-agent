@@ -15,7 +15,8 @@
 - POST /{binding_id}/disable  禁用绑定（踢下线）
 - POST /{binding_id}/rotate-token  轮换 access_token
 
-权限：仅 platform_admin
+权限：仅 platform_admin（R1 收口：所有端点经 _require_platform_admin 显式校验角色，
+      require_admin 单独只校验登录、不放行角色）
 """
 
 from __future__ import annotations
@@ -34,6 +35,20 @@ from src.services.behavior_log import audit_action
 
 activation_router = APIRouter(prefix="/api/saas/client-activations", tags=["SaaS 客户端激活码管理"])
 binding_router = APIRouter(prefix="/api/saas/client-bindings", tags=["SaaS 客户端绑定管理"])
+
+
+def _require_platform_admin(request: Request, action: str = "执行该操作") -> dict:
+    """本模块统一角色校验（R1 越权收口）。
+
+    require_admin 只校验已登录（放行 user/tenant_admin 等任意角色），而本模块文件头声明
+    「仅 platform_admin」：激活码（含明文 code）与客户端绑定（含 access_token）是平台级
+    跨租户资源，任意租户用户可对他租户 tenant_id 生成/吊销/签发即构成越权，
+    故每个端点显式校验角色。
+    """
+    admin = require_admin(request)
+    if admin.get("role") != "platform_admin":
+        raise HTTPException(status_code=403, detail=f"仅平台管理员可{action}")
+    return admin
 
 
 # ============== 请求模型 ==============
@@ -59,7 +74,7 @@ class StaticBindingCreateRequest(BaseModel):
 @audit_action(BehaviorAction.CREATE, BehaviorResourceType.ACTIVATION_CODE, name_arg="client_name")
 async def create_activation_code(req: ActivationCodeCreateRequest, request: Request):
     """生成激活码（明文 code 仅此一次返回）。"""
-    require_admin(request)
+    _require_platform_admin(request, "生成激活码")
 
     expires_at = None
     if req.expires_at:
@@ -94,7 +109,7 @@ async def list_activation_codes(
     tenant_id: Optional[str] = Query(None),
 ):
     """列出激活码（支持按 tenant 过滤）。不含 code_hash。"""
-    require_admin(request)
+    _require_platform_admin(request, "查看激活码列表")
     if tenant_id:
         records = ClientActivationCodeDB.list_by_tenant(tenant_id)
     else:
@@ -130,7 +145,7 @@ async def list_activation_codes(
 @activation_router.get("/{code_id}")
 async def get_activation_code(code_id: int, request: Request):
     """查看激活码详情。"""
-    require_admin(request)
+    _require_platform_admin(request, "查看激活码详情")
     record = ClientActivationCodeDB.get_by_id(code_id)
     if not record:
         raise HTTPException(status_code=404, detail="ACTIVATION_CODE_NOT_FOUND")
@@ -153,7 +168,7 @@ async def get_activation_code(code_id: int, request: Request):
 @audit_action(BehaviorAction.UPDATE, BehaviorResourceType.ACTIVATION_CODE, id_arg="code_id")
 async def disable_activation_code(code_id: int, request: Request):
     """禁用激活码（未激活的不可再激活）。"""
-    require_admin(request)
+    _require_platform_admin(request, "禁用激活码")
     record = ClientActivationCodeDB.get_by_id(code_id)
     if not record:
         raise HTTPException(status_code=404, detail="ACTIVATION_CODE_NOT_FOUND")
@@ -166,7 +181,7 @@ async def disable_activation_code(code_id: int, request: Request):
 @audit_action(BehaviorAction.UPDATE, BehaviorResourceType.CLIENT_BINDING, id_arg="code_id")
 async def revoke_binding_by_code(code_id: int, request: Request):
     """吊销该激活码关联的客户端绑定（下线客户端）。"""
-    require_admin(request)
+    _require_platform_admin(request, "吊销客户端绑定")
     record = ClientActivationCodeDB.get_by_id(code_id)
     if not record:
         raise HTTPException(status_code=404, detail="ACTIVATION_CODE_NOT_FOUND")
@@ -198,12 +213,7 @@ async def create_static_binding(req: StaticBindingCreateRequest, request: Reques
     配到客户端 AID_WECOM_SERVER_TOKEN 直连使用；生命周期由 disable/rotate-token 管理。
     明文 access_token 仅此一次返回。
     """
-    admin = require_admin(request)
-    # 文件头声明「仅 platform_admin」：require_admin 放行任意已登录角色（含 user/
-    # tenant_admin），签发不过期记名 token 属高权限操作，必须显式校验角色，
-    # 防任意租户用户为任意 tenant_id 签发 token 消耗他租户积分
-    if admin.get("role") != "platform_admin":
-        raise HTTPException(status_code=403, detail="仅平台管理员可签发静态绑定")
+    _require_platform_admin(request, "签发静态绑定")
     record = ClientBindingDB.create_static(
         tenant_id=req.tenant_id,
         client_name=req.client_name,
@@ -229,7 +239,7 @@ async def list_bindings(
     tenant_id: Optional[str] = Query(None),
 ):
     """列出客户端绑定。"""
-    require_admin(request)
+    _require_platform_admin(request, "查看客户端绑定")
     if tenant_id:
         records = ClientBindingDB.list_by_tenant(tenant_id)
     else:
@@ -265,7 +275,7 @@ async def list_bindings(
 @audit_action(BehaviorAction.UPDATE, BehaviorResourceType.CLIENT_BINDING, id_arg="binding_id")
 async def disable_binding(binding_id: str, request: Request):
     """禁用绑定（踢下线）。"""
-    require_admin(request)
+    _require_platform_admin(request, "禁用客户端绑定")
     binding = ClientBindingDB.get_by_id(binding_id)
     if not binding:
         raise HTTPException(status_code=404, detail="BINDING_NOT_FOUND")
@@ -278,7 +288,7 @@ async def disable_binding(binding_id: str, request: Request):
 @audit_action(BehaviorAction.UPDATE, BehaviorResourceType.CLIENT_BINDING, id_arg="binding_id")
 async def rotate_token(binding_id: str, request: Request):
     """轮换 access_token（返回新明文）。"""
-    require_admin(request)
+    _require_platform_admin(request, "轮换客户端令牌")
     new_binding = ClientBindingDB.rotate_token(binding_id)
     if not new_binding:
         raise HTTPException(status_code=404, detail="BINDING_NOT_FOUND")
