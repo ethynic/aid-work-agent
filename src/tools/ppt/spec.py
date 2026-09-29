@@ -8,16 +8,20 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 class SpecModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    @staticmethod
+    def _normalize_hex(value: str) -> str:
+        normalized = value.removeprefix("#").upper()
+        if len(normalized) != 6 or any(character not in "0123456789ABCDEF" for character in normalized):
+            raise ValueError("color must be a 6-digit hexadecimal value")
+        return normalized
+
     @field_validator(
         "color", "fill", "line_color", "header_fill", "header_color",
         "border_color", "background", check_fields=False,
     )
     @classmethod
     def validate_hex_color(cls, value: str) -> str:
-        normalized = value.removeprefix("#").upper()
-        if len(normalized) != 6 or any(character not in "0123456789ABCDEF" for character in normalized):
-            raise ValueError("color must be a 6-digit hexadecimal value")
-        return normalized
+        return cls._normalize_hex(value)
 
 
 class PositionedNode(SpecModel):
@@ -80,6 +84,12 @@ class TableNode(PositionedNode):
     header_fill: str = "1F4E78"
     header_color: str = "FFFFFF"
     border_color: str = "D9E2F3"
+    zebra_color: str | None = None  # 偶数数据行底色（浅色斑马纹），None 为纯白
+
+    @field_validator("zebra_color")
+    @classmethod
+    def validate_optional_hex_color(cls, value: str | None) -> str | None:
+        return None if value is None else cls._normalize_hex(value)
 
     @model_validator(mode="after")
     def validate_rows(self):
@@ -104,6 +114,12 @@ class ChartNode(PositionedNode):
     show_legend: bool = True
     show_title: bool = False
     title: str | None = None
+    chart_colors: list[str] = Field(default_factory=list)  # 主题色板；空则用库默认
+
+    @field_validator("chart_colors")
+    @classmethod
+    def validate_chart_colors(cls, value: list[str]) -> list[str]:
+        return [cls._normalize_hex(item) for item in value]
 
     @model_validator(mode="after")
     def validate_chart_data(self):

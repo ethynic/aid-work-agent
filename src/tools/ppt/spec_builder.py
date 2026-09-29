@@ -1,4 +1,9 @@
-"""Convert planner JSON into a deterministic, registry-backed renderer spec."""
+"""Convert planner JSON into a deterministic, registry-backed renderer spec.
+
+视觉规范由主题（themes.py）驱动：深浅「三明治」结构（封面/章节深底、内容页浅底）、
+卡片用浅色调圆角（不用边缘色条）、标题不带装饰线——业界明确的 AI 痕迹红线，
+详见 docs/research/ppt-generation-quality-research.md。
+"""
 
 from copy import deepcopy
 from typing import Any
@@ -14,15 +19,25 @@ from src.tools.ppt.spec import (
     TableNode,
     TextNode,
 )
+from src.tools.ppt.themes import PptTheme, get_ppt_theme
 
-COLORS = {
-    "navy": "17324D", "blue": "2F75B5", "light": "EAF1F8", "ink": "243240",
-    "muted": "667788", "white": "FFFFFF", "green": "3A8D7D", "orange": "E88C45",
-}
+DECK_W, DECK_H = 13.333, 7.5
+
+
 class SlideDeckSpecBuilder:
     """Build a renderable deck using deterministic layout and overflow rules."""
 
+    def __init__(self, theme: PptTheme | str | None = None):
+        if isinstance(theme, PptTheme):
+            self.theme = theme
+        else:
+            self.theme = get_ppt_theme(theme)
+
     def from_planner(self, plan: dict[str, Any]) -> SlideDeckSpec:
+        # plan 显式给了 theme 才覆盖构造时传入的主题；未知值回落默认主题
+        theme_id = plan.get("theme") or plan.get("theme_id")
+        if theme_id is not None:
+            self.theme = get_ppt_theme(str(theme_id))
         title = self._text(plan.get("title"), "演示文稿")
         raw_slides = plan.get("slides")
         if not isinstance(raw_slides, list) or not raw_slides:
@@ -304,86 +319,129 @@ class SlideDeckSpecBuilder:
             )
         return pages
 
+    # ── 视觉构建（主题驱动）──────────────────────────────────────────
+
     def _build_slide(self, index: int, layout_id: str, data: dict[str, Any]) -> SlideSpec:
+        theme = self.theme
+        dark = layout_id in {"cover", "section"}
+        background = theme.dark_bg if dark else theme.bg
         builders = {
             "cover": self._cover, "toc": self._toc, "section": self._section,
             "bullets": self._bullets, "stat": self._stats, "comparison": self._comparison,
             "timeline": self._timeline, "chart": self._chart, "table": self._table,
             "image": self._image, "summary": self._summary,
         }
-        background = COLORS["navy"] if layout_id == "section" else "F7F9FC"
         return SlideSpec(
             id=f"slide-{index}", layout=layout_id, background=background,
             nodes=builders[layout_id](data),
         )
 
     def _cover(self, data: dict[str, Any]) -> list:
-        layout = get_layout("cover")
+        """分栏封面：左侧深底承载标题，右侧次深色块承载汇报信息。"""
+        theme = self.theme
         nodes = [
-            self._shape(layout.slots["accent"], fill=COLORS["navy"]),
-            TextNode(**self._pos(layout.slots["title"]), text=self._text(data.get("title"), "演示文稿"),
-                     font_size=layout.font_sizes["title"], bold=True, color=COLORS["navy"], valign="mid"),
-            TextNode(**self._pos(layout.slots["meta"]),
-                     text="  |  ".join(filter(None, [self._text(data.get("presenter"), ""), self._text(data.get("date"), "")])) or "AID",
-                     font_size=layout.font_sizes["meta"], color=COLORS["muted"]),
+            ShapeNode(x=0, y=0, w=8.35, h=DECK_H, shape="rect", fill=theme.dark_bg),
+            ShapeNode(x=8.35, y=0, w=DECK_W - 8.35, h=DECK_H, shape="rect", fill=theme.dark_bg_alt),
+            TextNode(x=1.0, y=1.45, w=7.0, h=1.6,
+                     text=self._text(data.get("title"), "演示文稿"),
+                     font_size=32, bold=True, color=theme.dark_text, valign="mid"),
         ]
         if data.get("subtitle"):
-            nodes.append(TextNode(**self._pos(layout.slots["subtitle"]), text=str(data["subtitle"]),
-                                  font_size=layout.font_sizes["subtitle"], color=COLORS["muted"]))
+            nodes.append(TextNode(x=1.0, y=3.4, w=7.0, h=1.0, text=str(data["subtitle"]),
+                                  font_size=15, color=theme.dark_text_muted, valign="top"))
+        # 右栏汇报信息：小标签 + 值，成组呈现
+        info = [("汇报人", data.get("presenter")), ("日期", data.get("date"))]
+        y = 2.35
+        for label, value in info:
+            if value is None or not str(value).strip():
+                continue
+            nodes.append(TextNode(x=9.15, y=y, w=3.4, h=0.35, text=str(label),
+                                  font_size=12, color=theme.dark_text_muted))
+            nodes.append(TextNode(x=9.15, y=y + 0.38, w=3.4, h=0.5, text=str(value),
+                                  font_size=16, bold=True, color=theme.dark_text))
+            y += 1.15
         return nodes
 
     def _toc(self, data: dict[str, Any]) -> list:
-        layout = get_layout("toc")
-        items = [
-            f"{item.get('number', i + 1)}  {item.get('title', '')}"
-            for i, item in enumerate(data.get("sections") or []) if isinstance(item, dict)
-        ]
-        return self._title(data, layout, "目录") + [
-            TextNode(**self._pos(layout.slots["body"]), text="\n".join(items) or "内容概览",
-                     font_size=layout.font_sizes["body"], color=COLORS["ink"], margin=0.08)
-        ]
+        """目录：双列浅色圆角卡片，强调色编号。"""
+        theme = self.theme
+        sections = [item for item in data.get("sections") or [] if isinstance(item, dict)]
+        nodes = self._title(data, get_layout("toc"), "目录")
+        if not sections:
+            nodes.append(TextNode(x=0.8, y=2.2, w=11.7, h=1.0, text="内容概览",
+                                  font_size=18, color=theme.muted))
+            return nodes
+        cols = 1 if len(sections) <= 3 else 2
+        rows = (len(sections) + cols - 1) // cols
+        card_w, card_h = 5.7 if cols == 2 else 11.75, 1.0
+        gap_x, gap_y = 0.35, 0.28
+        for i, item in enumerate(sections):
+            col, row = i % cols, i // cols
+            x = 0.8 + col * (card_w + gap_x)
+            y = 1.7 + row * (card_h + gap_y)
+            number = self._text(item.get("number"), f"{i + 1:02d}")
+            nodes.extend([
+                ShapeNode(x=x, y=y, w=card_w, h=card_h, shape="roundRect",
+                          fill=theme.card_tint, line_color=theme.card_tint),
+                TextNode(x=x + 0.3, y=y, w=0.85, h=card_h, text=number,
+                         font_size=20, bold=True, color=theme.accent, valign="mid"),
+                TextNode(x=x + 1.25, y=y, w=card_w - 1.5, h=card_h,
+                         text=self._text(item.get("title"), "未命名章节"),
+                         font_size=16, bold=True, color=theme.ink, valign="mid"),
+            ])
+        return nodes
 
     def _section(self, data: dict[str, Any]) -> list:
-        layout = get_layout("section")
+        """章节页：超大强调色编号 + 白色标题 + 浅色导语。"""
+        theme = self.theme
         nodes = [
-            TextNode(**self._pos(layout.slots["number"]), text=self._text(data.get("number"), "SECTION"),
-                     font_size=layout.font_sizes["number"], bold=True, color=COLORS["orange"]),
-            TextNode(**self._pos(layout.slots["title"]), text=self._text(data.get("title"), "章节"),
-                     font_size=layout.font_sizes["title"], bold=True, color=COLORS["white"], valign="mid"),
+            TextNode(x=1.0, y=1.35, w=4.0, h=1.3, text=self._text(data.get("number"), "SECTION"),
+                     font_size=48, bold=True, color=theme.accent),
+            TextNode(x=1.05, y=2.75, w=10.5, h=1.3, text=self._text(data.get("title"), "章节"),
+                     font_size=34, bold=True, color=theme.dark_text, valign="mid"),
         ]
         if data.get("intro"):
-            nodes.append(TextNode(**self._pos(layout.slots["intro"]), text=str(data["intro"]),
-                                  font_size=layout.font_sizes["intro"], color="D7E2EC"))
+            nodes.append(TextNode(x=1.05, y=4.15, w=9.6, h=0.9, text=str(data["intro"]),
+                                  font_size=16, color=theme.dark_text_muted))
         return nodes
 
     def _bullets(self, data: dict[str, Any]) -> list:
         layout = get_layout("bullets")
-        return self._title(data, layout, "内容") + self._panel(
-            layout.slots["body"], "核心要点", self._list(data.get("points")),
-            COLORS["blue"], layout.font_sizes["panel_title"], layout.font_sizes["body"],
+        return self._title(data, layout, "内容") + self._card(
+            layout.slots["body"], "核心要点", self._list(data.get("points")), self.theme.card_tint,
+            layout.font_sizes["panel_title"], layout.font_sizes["body"],
         )
 
     def _stats(self, data: dict[str, Any]) -> list:
+        theme = self.theme
         layout = get_layout("stat")
         nodes = self._title(data, layout, "数据亮点")
         grid = layout.slots["grid"]
         stats = [item for item in data.get("stats") or [] if isinstance(item, dict)]
-        for i, item in enumerate(stats or [{"value": "-", "label": "指标"}]):
+        if not stats:
+            stats = [{"value": "-", "label": "指标"}]
+        for i, item in enumerate(stats):
             frame = Frame(grid.x + (i % 2) * 6.1, grid.y + (i // 2) * 2.55, 5.65, 2.1)
             nodes.extend(self._stat(frame, item, layout.font_sizes))
         return nodes
 
     def _comparison(self, data: dict[str, Any]) -> list:
+        """左右对比：两块浅色卡片（主色调 / 强调色调），缺内容不填占位符。"""
+        theme = self.theme
         layout = get_layout("comparison")
         nodes = self._title(data, layout, "对比")
-        for slot, fallback, accent in (("left", "方案 A", COLORS["blue"]), ("right", "方案 B", COLORS["orange"])):
+        slots = (("left", theme.card_tint), ("right", theme.card_tint_accent))
+        for slot, tint in slots:
             side = data.get(slot) if isinstance(data.get(slot), dict) else {}
-            nodes.extend(self._panel(layout.slots[slot], self._text(side.get("title"), fallback),
-                                     self._list(side.get("items")), accent,
-                                     layout.font_sizes["panel_title"], layout.font_sizes["body"]))
+            nodes.extend(self._card(
+                layout.slots[slot], self._text(side.get("title"), ""),
+                self._list(side.get("items")), tint,
+                layout.font_sizes["panel_title"], layout.font_sizes["body"],
+            ))
         return nodes
 
     def _timeline(self, data: dict[str, Any]) -> list:
+        theme = self.theme
         layout = get_layout("timeline")
         track = layout.slots["track"]
         points = self._list(data.get("points"))
@@ -392,14 +450,14 @@ class SlideDeckSpecBuilder:
         for i, point in enumerate(points):
             x = track.x + i * step + step / 2
             nodes.extend([
-                ShapeNode(x=x - 0.17, y=track.y + 0.2, w=0.35, h=0.35, shape="ellipse", fill=COLORS["orange"]),
+                ShapeNode(x=x - 0.17, y=track.y + 0.2, w=0.35, h=0.35, shape="ellipse", fill=theme.accent),
                 TextNode(x=max(track.x, x - step / 2), y=track.y + 0.8, w=step, h=1.5,
-                         text=point, font_size=layout.font_sizes["body"], color=COLORS["ink"], align="center"),
+                         text=point, font_size=layout.font_sizes["body"], color=theme.ink, align="center"),
             ])
         if len(points) > 1:
             nodes.append(ShapeNode(x=track.x + step / 2, y=track.y + 0.36,
                                    w=step * (len(points) - 1), h=0.03, shape="line",
-                                   line_color=COLORS["blue"], line_width=2))
+                                   line_color=theme.line, line_width=1.5))
         return nodes
 
     def _chart(self, data: dict[str, Any]) -> list:
@@ -416,82 +474,154 @@ class SlideDeckSpecBuilder:
             series = [ChartSeries(name="数据", values=[0 for _ in labels])]
         return self._title(data, layout, "图表") + [
             ChartNode(**self._pos(layout.slots["chart"]), chart_type=self._chart_type(chart.get("type")),
-                      labels=labels, series=series)
+                      labels=labels, series=series, chart_colors=self.theme.chart_palette())
         ]
 
     def _table(self, data: dict[str, Any]) -> list:
+        theme = self.theme
         layout = get_layout("table")
-        rows = data.get("rows") if isinstance(data.get("rows"), list) else [["暂无数据"]]
+        rows = data.get("rows") if isinstance(data.get("rows"), list) else []
         width = len(rows[0]) if rows and isinstance(rows[0], list) else 1
         valid_rows = [[str(cell) for cell in row] for row in rows if isinstance(row, list) and len(row) == width]
-        return self._title(data, layout, "表格") + [
-            TableNode(**self._pos(layout.slots["table"]), rows=valid_rows or [["暂无数据"]],
-                      font_size=layout.font_sizes["body"])
+        valid_rows = valid_rows or [["暂无数据"]]
+        frame = layout.slots["table"]
+        # 行高封顶后按实际行数收缩高度并垂直居中（渲染端同样按 0.62 封顶）
+        row_h = min(frame.h / len(valid_rows), 0.62)
+        pos = {
+            "x": frame.x, "w": frame.w,
+            "y": frame.y + (frame.h - row_h * len(valid_rows)) / 2,
+            "h": row_h * len(valid_rows),
+        }
+        return self._title(data, layout, "明细数据") + [
+            TableNode(**pos, rows=valid_rows,
+                      font_size=layout.font_sizes["body"],
+                      color=theme.ink, header_fill=theme.primary, header_color="FFFFFF",
+                      border_color=theme.line, zebra_color=theme.card_tint)
         ]
 
     def _image(self, data: dict[str, Any]) -> list:
+        """图片页：等比适配（contain）嵌入左框，右侧浅色卡片承载图注。"""
+        theme = self.theme
         layout = get_layout("image")
-        nodes = self._title(data, layout, "图片")
+        nodes = self._title(data, layout, "图表解读")
+        points = self._list(data.get("points"))
+        caption = self._text(data.get("caption"), "") if not points else ""
+        frame = layout.slots["image"]
         if data.get("image_path"):
-            nodes.append(ImageNode(**self._pos(layout.slots["image"]), path=str(data["image_path"])))
-        caption = "\n".join(self._list(data.get("points"))) or self._text(data.get("caption"), "图片说明")
-        nodes.append(TextNode(**self._pos(layout.slots["caption"]), text=caption,
-                              font_size=layout.font_sizes["body"], color=COLORS["ink"]))
+            # 白卡承托图表（上游 PNG 自带米色底，与主题浅底直排会显脏；白底卡片统一观感）
+            nodes.append(ShapeNode(x=frame.x - 0.12, y=frame.y - 0.12, w=frame.w + 0.24,
+                                   h=frame.h + 0.24, shape="roundRect", fill="FFFFFF",
+                                   line_color=theme.line, line_width=0.75))
+            nodes.append(ImageNode(**self._fit_image(str(data["image_path"]), frame),
+                                   path=str(data["image_path"])))
+        cap_frame = layout.slots["caption"]
+        card = Frame(cap_frame.x - 0.25, cap_frame.y - 0.25, cap_frame.w + 0.5, cap_frame.h + 0.5)
+        if points or caption:
+            # 与 _card 同款行分布 + 垂直居中，图注不再堆在顶部
+            nodes.extend(self._card(card, "图表解读", points or ([caption] if caption else []),
+                                    theme.card_tint, 16, layout.font_sizes["body"]))
         return nodes
 
     def _summary(self, data: dict[str, Any]) -> list:
+        theme = self.theme
         layout = get_layout("summary")
         nodes = (
             self._title(data, layout, "总结")
-            + self._panel(layout.slots["left"], "关键结论", self._list(data.get("takeaways")),
-                          COLORS["blue"], layout.font_sizes["panel_title"], layout.font_sizes["body"])
-            + self._panel(layout.slots["right"], "下一步", self._list(data.get("next_steps")),
-                          COLORS["green"], layout.font_sizes["panel_title"], layout.font_sizes["body"])
+            + self._card(layout.slots["left"], "关键结论", self._list(data.get("takeaways")),
+                         theme.card_tint, layout.font_sizes["panel_title"], layout.font_sizes["body"])
+            + self._card(layout.slots["right"], "下一步", self._list(data.get("next_steps")),
+                         theme.card_tint_accent, layout.font_sizes["panel_title"], layout.font_sizes["body"])
         )
         if data.get("contact"):
             nodes.append(TextNode(
                 **self._pos(layout.slots["contact"]), text=str(data["contact"]),
-                font_size=12, color=COLORS["muted"], align="right",
+                font_size=12, color=theme.muted, align="right",
             ))
         return nodes
 
     def _title(self, data: dict[str, Any], layout: Any, fallback: str) -> list:
+        """内容页标题：强调色小方块 + 主色标题（无装饰线——AI 痕迹红线）。"""
+        theme = self.theme
         frame = layout.slots["title"]
         return [
-            TextNode(**self._pos(frame), text=self._text(data.get("title"), fallback),
-                     font_size=layout.font_sizes["title"], bold=True, color=COLORS["navy"], valign="mid"),
-            ShapeNode(x=frame.x, y=frame.y + frame.h + 0.1, w=1.2, h=0.06, fill=COLORS["orange"]),
+            ShapeNode(x=frame.x, y=frame.y + frame.h / 2 - 0.09, w=0.18, h=0.18,
+                      shape="roundRect", fill=theme.accent, line_color=theme.accent),
+            TextNode(x=frame.x + 0.38, y=frame.y, w=frame.w - 0.38, h=frame.h,
+                     text=self._text(data.get("title"), fallback),
+                     font_size=layout.font_sizes["title"], bold=True, color=theme.primary, valign="mid"),
         ]
 
-    def _panel(
-        self, frame: Frame, title: str, items: list[str], accent: str,
+    def _card(
+        self, frame: Frame, title: str, items: list[str], tint: str,
         title_size: float, body_size: float,
     ) -> list:
-        body = "\n".join(f"• {item}" for item in items) or "• 暂无内容"
-        return [
-            self._shape(frame, fill="FFFFFF", line_color="D9E2EC", line_width=1),
-            ShapeNode(x=frame.x, y=frame.y, w=0.1, h=frame.h, fill=accent),
-            TextNode(x=frame.x + 0.35, y=frame.y + 0.3, w=frame.w - 0.7, h=0.45,
-                     text=title, font_size=title_size, bold=True, color=accent),
-            TextNode(x=frame.x + 0.35, y=frame.y + 1.0, w=frame.w - 0.7, h=frame.h - 1.3,
-                     text=body, font_size=body_size, color=COLORS["ink"], margin=0.05),
-        ]
+        """浅色调圆角卡片：条目按行分布并整体垂直居中，避免内容挤在顶部。
+
+        行高封顶（0.95in）：条目少时上下留白均衡，不会撑出过大空隙。
+        """
+        theme = self.theme
+        nodes = [ShapeNode(x=frame.x, y=frame.y, w=frame.w, h=frame.h,
+                           shape="roundRect", fill=tint, line_color=tint)]
+        top = frame.y + 0.3
+        if title:
+            nodes.append(TextNode(x=frame.x + 0.35, y=top, w=frame.w - 0.7, h=0.45,
+                                  text=title, font_size=title_size, bold=True, color=theme.primary))
+            top += 0.62
+        if items:
+            body_h = frame.y + frame.h - top - 0.25
+            row_h = min(0.95, body_h / len(items))
+            start_y = top + max(0, (body_h - row_h * len(items)) / 2)
+            for i, item in enumerate(items):
+                nodes.append(TextNode(x=frame.x + 0.35, y=start_y + i * row_h,
+                                      w=frame.w - 0.7, h=row_h, text=f"• {item}",
+                                      font_size=body_size, color=theme.ink,
+                                      valign="mid", margin=0.05))
+        return nodes
 
     def _stat(self, frame: Frame, item: dict[str, Any], fonts: Any) -> list:
+        theme = self.theme
         nodes = [
-            self._shape(frame, fill="FFFFFF", line_color="D9E2EC", line_width=1),
-            TextNode(x=frame.x + 0.35, y=frame.y + 0.3, w=3.7, h=0.75,
+            ShapeNode(x=frame.x, y=frame.y, w=frame.w, h=frame.h,
+                      shape="roundRect", fill=theme.card_tint, line_color=theme.card_tint),
+            TextNode(x=frame.x + 0.4, y=frame.y + 0.3, w=frame.w - 1.9, h=0.8,
                      text=self._text(item.get("value"), "-"), font_size=fonts["value"],
-                     bold=True, color=COLORS["blue"]),
-            TextNode(x=frame.x + 0.35, y=frame.y + 1.2, w=3.7, h=0.45,
+                     bold=True, color=theme.accent),
+            TextNode(x=frame.x + 0.4, y=frame.y + 1.25, w=frame.w - 0.8, h=0.5,
                      text=self._text(item.get("label"), "指标"), font_size=fonts["label"],
-                     color=COLORS["muted"]),
+                     color=theme.muted),
         ]
         if item.get("trend"):
-            nodes.append(TextNode(x=frame.x + 4.0, y=frame.y + 0.65, w=1.25, h=0.45,
+            nodes.append(TextNode(x=frame.x + frame.w - 1.75, y=frame.y + 0.35, w=1.4, h=0.45,
                                   text=str(item["trend"]), font_size=fonts["trend"], bold=True,
-                                  color=COLORS["green"], align="right"))
+                                  color=theme.primary, align="right"))
         return nodes
+
+    @staticmethod
+    def _fit_image(path: str, frame: Frame) -> dict[str, float]:
+        """等比 contain 适配：读图片实际像素，长边贴合、短边居中，防拉伸变形。"""
+        try:
+            from PIL import Image
+
+            with Image.open(path) as image:
+                pixel_w, pixel_h = image.size
+        except Exception:
+            return {"x": frame.x, "y": frame.y, "w": frame.w, "h": frame.h}
+        if pixel_w <= 0 or pixel_h <= 0:
+            return {"x": frame.x, "y": frame.y, "w": frame.w, "h": frame.h}
+        frame_ratio = frame.w / frame.h
+        image_ratio = pixel_w / pixel_h
+        if image_ratio > frame_ratio:
+            w = frame.w
+            h = w / image_ratio
+        else:
+            h = frame.h
+            w = h * image_ratio
+        return {
+            "x": frame.x + (frame.w - w) / 2,
+            "y": frame.y + (frame.h - h) / 2,
+            "w": w,
+            "h": h,
+        }
 
     @staticmethod
     def _shape(frame: Frame, **kwargs: Any) -> ShapeNode:

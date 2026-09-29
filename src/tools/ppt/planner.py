@@ -12,11 +12,13 @@ from loguru import logger
 
 from src.tools.context import resolve_llm_gateway
 from src.tools.ppt.layout_registry import LAYOUT_IDS
+from src.tools.ppt.themes import format_theme_catalog
 
 if TYPE_CHECKING:
     from src.tools.ppt.image_assets import ImageAsset
 
 _LAYOUT_LIST = "/".join(LAYOUT_IDS)
+_THEME_CATALOG = format_theme_catalog()
 
 SYSTEM_PROMPT = f"""你是一个专业的PPT内容规划师。根据用户输入生成结构化PPT大纲。
 
@@ -32,6 +34,8 @@ SYSTEM_PROMPT = f"""你是一个专业的PPT内容规划师。根据用户输入
 9. chart 不超过8个分类，table 每页不超过8行（含表头）
 10. 内容放不下时主动拆成多页，不缩小字号、不添加坐标
 11. image 页的 image_path 必须原样取自「可用图片资源」清单中的路径，不得编造或修改
+12. 所选布局的必备槽位必须填真实内容：comparison 必须有 left/right（各含 title+items）、
+    chart 必须有 labels+series、table 必须有 rows——缺槽位会被渲染层拒绝
 
 布局与数据槽位：
 - cover: 封面页（title, subtitle, presenter, date）
@@ -46,17 +50,11 @@ SYSTEM_PROMPT = f"""你是一个专业的PPT内容规划师。根据用户输入
 - image: 图片页（image_path + caption + points）
 - summary: 总结页（takeaways + next_steps + contact）
 
-配色方案选择（根据主题自动选择 1-18）：
-- 商务/企业/金融 → 2 或 18
-- 科技/互联网/AI → 7 或 15
-- 教育/培训 → 4 或 10
-- 健康/医疗 → 1
-- 创意/设计 → 5 或 12
-- 环保/自然 → 3 或 11
-- 产品/营销 → 7 或 16
+主题选择（从以下 id 中选最贴合内容气质的一个，写入 theme 字段）：
+{_THEME_CATALOG}
 
 输出严格 JSON，不包含 markdown 代码块，不输出 type 和坐标：
-{{"title":"PPT标题","theme_id":数字,"style":"soft","slides":[...]}}"""
+{{"title":"PPT标题","theme":"theme_id","slides":[...]}}"""
 
 
 class PPTPlanner:
@@ -73,14 +71,14 @@ class PPTPlanner:
         return resolve_llm_gateway(self._gateway)
 
     async def plan_from_topic(self, topic: str, slide_count: Optional[int] = None,
-                              theme_id: Optional[int] = None,
+                              theme_id: Optional[str] = None,
                               images: Optional[List["ImageAsset"]] = None) -> Dict[str, Any]:
         """从主题生成大纲。"""
         prompt = f"请为以下主题生成一份PPT大纲：{topic}"
         if slide_count:
             prompt += f"\n期望页数：约{slide_count}页"
         if theme_id:
-            prompt += f"\n指定配色方案ID：{theme_id}"
+            prompt += f"\n指定主题 id：{theme_id}"
         if images:
             from src.tools.ppt.image_assets import format_image_resources
             prompt += f"\n\n{format_image_resources(images)}"
@@ -88,12 +86,12 @@ class PPTPlanner:
         return await self._call_llm(prompt)
 
     async def plan_from_content(self, content: str,
-                                theme_id: Optional[int] = None,
+                                theme_id: Optional[str] = None,
                                 images: Optional[List["ImageAsset"]] = None) -> Dict[str, Any]:
         """从 Markdown 内容生成大纲。"""
         prompt = f"请将以下内容转换为PPT大纲：\n\n{content}"
         if theme_id:
-            prompt += f"\n指定配色方案ID：{theme_id}"
+            prompt += f"\n指定主题 id：{theme_id}"
         if images:
             from src.tools.ppt.image_assets import format_image_resources
             prompt += f"\n\n{format_image_resources(images)}"

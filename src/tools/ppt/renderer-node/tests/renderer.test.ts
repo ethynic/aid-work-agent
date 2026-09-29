@@ -19,10 +19,10 @@ const spec: SlideDeckSpec = {
         line_color: "2F75B5", line_width: 1 },
       { type: "table", x: 4, y: 2.2, w: 4, h: 2, rows: [["A", "B"], ["1", "2"]],
         font_size: 14, color: "222222", header_fill: "1F4E78", header_color: "FFFFFF",
-        border_color: "D9E2F3" },
+        border_color: "D9E2F3", zebra_color: null },
       { type: "chart", x: 8.3, y: 2.2, w: 4, h: 3, chart_type: "column",
         labels: ["A", "B"], series: [{ name: "S", values: [1, 2] }],
-        show_legend: true, show_title: false },
+        show_legend: true, show_title: false, chart_colors: [] },
     ],
   }],
 };

@@ -82,6 +82,81 @@ def test_spec_normalizes_colors_and_rejects_invalid_values():
         TextNode(x=0, y=0, w=1, h=1, text="x", color="red")
 
 
+def test_table_and_chart_theme_fields_match_renderer_hex_rules():
+    table = TableNode(x=0, y=0, w=4, h=2, rows=[["A"], ["1"]])
+    assert table.zebra_color is None
+    table = TableNode(x=0, y=0, w=4, h=2, rows=[["A"], ["1"]], zebra_color="#eaf5f5")
+    assert table.zebra_color == "EAF5F5"
+    with pytest.raises(ValidationError, match="6-digit hexadecimal"):
+        TableNode(x=0, y=0, w=4, h=2, rows=[["A"], ["1"]], zebra_color="not-a-color")
+
+    def chart(**overrides):
+        return ChartNode(
+            x=0, y=0, w=4, h=3, labels=["A"],
+            series=[ChartSeries(name="S", values=[1])], **overrides,
+        )
+
+    assert chart().chart_colors == []
+    assert chart(chart_colors=["#0f5e62", "E8871E"]).chart_colors == ["0F5E62", "E8871E"]
+    with pytest.raises(ValidationError, match="6-digit hexadecimal"):
+        chart(chart_colors=["red"])
+
+
+def test_builder_theme_selection_and_fallback():
+    def background_of(theme):
+        plan = {"title": "T", "slides": [{"layout": "bullets", "points": ["A"]}]}
+        return SlideDeckSpecBuilder(theme).from_planner(plan).slides[0].background
+
+    assert background_of("teal_tech") == "FFFFFF"
+    assert background_of("unknown_theme") == background_of(None)
+    plan = {"theme": "teal_tech", "title": "T",
+            "slides": [{"layout": "section", "number": "01", "title": "章"}]}
+    spec = SlideDeckSpecBuilder().from_planner(plan)
+    assert spec.slides[0].background == "07393C"
+    legacy = SlideDeckSpecBuilder().from_planner({**plan, "theme_id": 7, "theme": None})
+    assert legacy.slides[0].background == "0F2B4C"
+
+
+def test_builder_comparison_without_slots_has_no_placeholder():
+    spec = SlideDeckSpecBuilder().from_planner({
+        "title": "T", "slides": [{"layout": "comparison", "title": "对比"}],
+    })
+    texts = [node.text for node in spec.slides[0].nodes if node.type == "text"]
+    assert not any("方案" in text or "暂无内容" in text for text in texts)
+
+
+def test_builder_table_shrinks_row_height_and_centers_vertically():
+    from src.tools.ppt.layout_registry import get_layout
+
+    frame = get_layout("table").slots["table"]
+    rows = [["列"], ["值"]]
+    spec = SlideDeckSpecBuilder().from_planner({
+        "title": "T", "slides": [{"layout": "table", "rows": rows}],
+    })
+    table = next(node for node in spec.slides[0].nodes if node.type == "table")
+    assert table.h == pytest.approx(0.62 * 2)
+    assert table.y == pytest.approx(frame.y + (frame.h - table.h) / 2)
+    assert table.y + table.h < frame.y + frame.h
+
+
+def test_fit_image_scales_contain_and_centers(tmp_path):
+    from PIL import Image
+
+    from src.tools.ppt.layout_registry import Frame
+    from src.tools.ppt.spec_builder import SlideDeckSpecBuilder
+
+    frame = Frame(0.8, 1.45, 7.7, 5.35)
+    wide = tmp_path / "wide.png"
+    Image.new("RGB", (2000, 500), "white").save(wide)
+    result = SlideDeckSpecBuilder._fit_image(str(wide), frame)
+    assert result["w"] == pytest.approx(frame.w)
+    assert result["h"] == pytest.approx(frame.w / 4)
+    assert result["y"] == pytest.approx(frame.y + (frame.h - result["h"]) / 2)
+
+    missing = SlideDeckSpecBuilder._fit_image(str(tmp_path / "missing.png"), frame)
+    assert missing == {"x": frame.x, "y": frame.y, "w": frame.w, "h": frame.h}
+
+
 def test_builder_covers_existing_planner_layouts():
     layouts = [
         {"layout": "bullets", "points": ["A"]},

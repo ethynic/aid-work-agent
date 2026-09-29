@@ -44,6 +44,7 @@ export interface TableNode extends BaseNode {
   header_fill: string;
   header_color: string;
   border_color: string;
+  zebra_color?: string | null;
 }
 
 export interface ChartSeries {
@@ -59,6 +60,7 @@ export interface ChartNode extends BaseNode {
   show_legend: boolean;
   show_title: boolean;
   title?: string | null;
+  chart_colors: string[];
 }
 
 export type SlideNode = TextNode | ShapeNode | ImageNode | TableNode | ChartNode;
@@ -143,20 +145,21 @@ function assertNode(node: SlideNode): void {
       return;
     case "table": {
       exactKeys(node, [...bounds, "rows", "font_size", "color", "header_fill",
-        "header_color", "border_color"]);
+        "header_color", "border_color", "zebra_color"]);
       if (!Array.isArray(node.rows) || !node.rows.length || !Array.isArray(node.rows[0]) ||
           !node.rows[0].length || !node.rows.every((row) =>
             Array.isArray(row) && row.length === node.rows[0].length &&
             row.every((cell) => typeof cell === "string")) ||
           !positive(node.font_size) || node.font_size > 100 ||
-          ![node.color, node.header_fill, node.header_color, node.border_color].every(color)) {
+          ![node.color, node.header_fill, node.header_color, node.border_color].every(color) ||
+          (node.zebra_color != null && !color(node.zebra_color))) {
         throw new Error("invalid table node");
       }
       return;
     }
     case "chart":
       exactKeys(node, [...bounds, "chart_type", "labels", "series", "show_legend",
-        "show_title", "title"]);
+        "show_title", "title", "chart_colors"]);
       if (!["bar", "column", "line", "pie", "doughnut"].includes(node.chart_type) ||
           !Array.isArray(node.labels) || !node.labels.length ||
           !node.labels.every((label) => typeof label === "string") ||
@@ -164,7 +167,10 @@ function assertNode(node: SlideNode): void {
           !node.series.every((series) => typeof series?.name === "string" &&
             Array.isArray(series.values) && series.values.length === node.labels.length &&
             series.values.every((item) => typeof item === "number" && Number.isFinite(item))) ||
-          typeof node.show_legend !== "boolean" || typeof node.show_title !== "boolean") {
+          typeof node.show_legend !== "boolean" ||
+          typeof node.show_title !== "boolean" ||
+          !Array.isArray(node.chart_colors) ||
+          !node.chart_colors.every((item) => color(item))) {
         throw new Error("invalid chart node");
       }
   }
