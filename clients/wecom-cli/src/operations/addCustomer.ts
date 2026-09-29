@@ -1,11 +1,13 @@
 /**
  * wecom_add_customer operation（M1 写动作）：按手机号检索微信用户并发送添加邀请。
  *
- * 流程（设计文档 §3.5，步骤已按 2026-08-29 真机实测修正）：
+ * 流程（M12：2026-09-29 真机重标定的主窗口搜索直达路线；旧「通讯录→子窗口⊕添加」
+ * 路线因客户端更新失效已废弃）：
  * TS 校验参数（phone 11 位 1 开头 + 显式 confirm: true）→
- * spawn drivers/ps1/add-customer.ps1 全链路（点「通讯录」导航 → 校验内容子窗口
- * 类名 → OCR 校验「新的客户」页头 → 点「添加」 → SearchExternalsWnd 输入手机号 →
- * PostMessage Enter 检索（结果为空时每 2s 重发，最多 5 次）→ OCR 读结果行微信名 →
+ * spawn drivers/ps1/add-customer.ps1 全链路（Ctrl+F 聚焦搜索框 → 残留清空复核 →
+ * 输入手机号 + 回读验证 → SearchResultWindow2 overlay 找「网络查找」行并校验含手机号 →
+ * 点击进 SearchExternalsWnd 弹窗（自动填号，未填则回退手输）→ PostMessage Enter 检索
+ * （结果为空时每 2s 重发，最多 5 次）→ OCR 读结果行微信名 →
  * PostMessage 点「添加」（InputReasonWnd 有数秒延迟，等 15s）→ 点「发送」 →
  * 终态轮询校验「已发送申请」（发送后 InputReasonWnd ≤1s 关闭、结果行 ≤3s 才刷新，每 1s 上限 10s）。
  *

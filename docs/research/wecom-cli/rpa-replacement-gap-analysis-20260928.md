@@ -362,3 +362,15 @@ Authorization: Bearer $TYPESAFE_API_KEY
 5. 点添加 → InputReasonWnd（类名不变，验证语预填）→ 发送按钮 → 终态「已发送申请」✓ 全部自动化可用
 
 真机验证：13671705875 → WayneLu 邀请已发出（终态闭环）。驱动修复 = 替换入口三步（1-2 已有方案，3 需真实点击方案验证）+ 弹窗段 M1 代码原样保留。
+
+### M12：add-customer 驱动重写（2026-09-29）——✅ 全自动真机验证通过，13 命令全通关
+
+新路线（取代旧通讯录路线，全程 PostMessage 零真实点击）：Ctrl+F 聚焦搜索框 → 清残留 → 输入手机号（回读 contains 校验）→ 搜索 overlay 出现「网络查找手机号/邮箱：<号>」行（同行拼接校验防点错）→ 点击该行 → **SearchExternalsWnd 自动填号**（校验+手输回退）→ Enter 检索 → 结果行（微信名+添加）→ InputReasonWnd → 发送 → 终态「已发送申请」轮询。弹窗段 M1 代码逐行保留。
+
+关键事实：
+- ④添加按钮（新的客户页）PostMessage/mouse_event 均无效（CEF 渲染+注入过滤）——网络查找路线完全绕开
+- 网络查找行点击投 overlay hwnd；SearchExternalsWnd 自动填号（两处可校验：标题+输入框）
+- 陈旧弹窗防御（CR P1 修复）：超时 kill/人工遗留的可见弹窗在关键点击前关闭并等消失，关不掉 fail-closed——防向旧号码误发
+- OCR 调用改 Process 直启（规避 MCP stdio 白名单 CantActivateDocumentInPipeline）
+- finally 清搜索框手机号残留（隐私：不留屏）
+- 真机：13671705875 → WayneLu 全自动 25.3s，终态校验通过（三智能体流程，测试修复 finally 契约缺口）

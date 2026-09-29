@@ -42,7 +42,8 @@ aid-wecom read-session (--target-ref <ref> | --target-name <会话名>) [--max-p
                                             # （M9 由 read 改名，旧 read 动词废弃无别名）
 aid-wecom watch [--interval 秒] [--once]    # 新消息跟踪循环：事件 NDJSON 逐行写 stdout，Ctrl+C 退出
 aid-wecom add-customer --phone <11位> --yes [--json]
-                                            # 写动作：通讯录→新的客户→添加→检索→发邀请（--yes 显式确认）
+                                            # 写动作：主窗口搜索手机号→「网络查找」→检索→发邀请（--yes 显式确认；
+                                            # M12 搜索直达路线，旧通讯录路线已废弃，见「关键实现事实」M12 条）
 aid-wecom mcp --stdio                       # MCP server（stdout 只承载协议）
 aid-wecom doctor [--json]                   # 只读环境自检（任一门禁失败退出码 1）
 aid-wecom version [--json]                  # 版本 + provider manifest（含 schema_digest）
@@ -387,7 +388,8 @@ target_ref 走既有链路**（快路径直发/直读；navigate_required 时二
 ## 关键实现事实（真机实测，勿随意改）
 
 - 主窗口 = 可见、class `WeWorkWindow`、标题「企业微信」、≥600x400 且面积最大者；hwnd 动态，每次重新解析。
-- 内容子窗口 class `WXworkWindow - 企业微信-<页名>`，类名编码页名（页面状态校验用）。
+- 内容子窗口 class `WXworkWindow - 企业微信-<页名>`，类名编码页名（M1 时代页面状态校验用；
+  **2026-09-29 客户端更新后已不存在**——主窗口 0 子窗口，probe current_page=null 同源，勿再依赖，见 M12 条）。
 - 点击走 PostMessage（WM_MOUSEMOVE+LBUTTONDOWN/UP），按 WindowFromPoint 路由到坐标归属 HWND；
   截图走 `PrintWindow(hwnd, hdc, 2)`（遮挡/最小化可用，9 点采样全黑回退 CopyFromScreen）。
 - 文本输入只用纯 WM_KEYDOWN+WM_KEYUP（**禁止同发 WM_CHAR**，双倍字符）；
@@ -472,6 +474,26 @@ target_ref 走既有链路**（快路径直发/直读；navigate_required 时二
   说明）直接调用扣积分。激活码链路（`AID_WECOM_ACTIVATION_CODE`、/activate 调用、
   401 重激活、DPAPI 缓存 server-binding.json、src/security/dpapi.ts）全部移除；
   401 token 无效改判 config 直报不重试不降级。
+- **M12（2026-09-29 真机重标定）：add-customer 改走主窗口搜索直达路线，旧「通讯录→新的
+  客户→⊕添加」路线整体废弃**——客户端更新后内容子窗口 `WXworkWindow - 企业微信-<页名>`
+  已不存在（子窗口校验失效）、通讯录导航坐标漂移、④添加按钮 PostMessage/mouse_event 均
+  无效（真机逐步验证）。新流程：attachstate **Ctrl+F 聚焦搜索框**（失败 fail-closed，绝不
+  带不确定焦点输入）→ `Clear-WeComSearchBoxV2` 残留清空 + 状态复核 → 输入手机号 + 搜索框
+  带 token 回读（**contains 判定**：天然容忍前导 Q 图标伪读/末尾光标伪影/「网络查找」行
+  混入；截断丢字必失败）→ 等 `SearchResultWindow2` overlay 高度稳定（手机号搜索形态实测
+  高 148 = 单行 + 底部按钮行）→ boxes OCR 找「网络查找」行（实测 token 形态
+  「网络查找手机W/邮箱：13671705876」，W=「号」误读，按 contains '网络查找' 匹配 + **同
+  视觉行拼接校验含手机号**防点错行/陈旧面板）→ PostMessage 点行中心（显式投 overlay
+  hwnd，同 M2 结果行点击模式）→ **SearchExternalsWnd 弹窗（400x292，类名与 M1 相同）
+  自动填号**（标题「网络查找手机/邮箱：\<号\>」+ 输入框数字两处 OCR 可验；未自动填回退：
+  点输入框 M1 标定 0.5w/0.257h + 清空 + 手输 + 回读）→ 弹窗段（Enter 检索重发 / result
+  模式 OCR / InputReasonWnd 15s / 发送 / 终态「已发送申请」10s 轮询）**M1 原样保留**。
+  收尾成功/失败统一 best-effort：关两弹窗 + 清空搜索框手机号残留（Ctrl+F + Ctrl+A+Delete，
+  同时关掉可能残留的 overlay）。**陈旧弹窗防御**：点「网络查找」行与点结果行「添加」之前
+  先关闭已存在的同类可见弹窗（SearchExternalsWnd/InputReasonWnd；上轮被超时 kill 或人工
+  遗留时，残留旧号码的结果行/「发送」窗无法与新开弹窗区分，会被当成新结果误发——关不掉
+  → UI_CHANGED 中止；正常路径无残留时为空操作）。`add_customer_result.py` result/reason
+  模式对新弹窗兼容（同布局，实测结果行「WayneLu」+「添加」可解析），原样复用。
 - 含中文的 .ps1 必须 **UTF-8 with BOM**。
 
 ## 目录
