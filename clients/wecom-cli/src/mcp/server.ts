@@ -26,10 +26,12 @@ import { redactSensitive } from '../security/redaction.js'
 const INSTRUCTIONS =
   '企业微信操作 Provider。工具：wecom_probe（只读环境/登录态探测）、' +
   'wecom_chat_search（只读搜索联系人/群聊，返回带 target_ref 的候选）、' +
-  'wecom_message_send（写：向 target_ref 目标发送 1 条文本消息）、' +
+  'wecom_message_send（写：向 target_ref/target_name 目标发送 1 条文本消息；target_name 直达模式内部自动 search 定位）、' +
   'wecom_send_image（写：向 target_ref 目标发送 1 张本地图片，image_path 须为本机绝对路径且 ≤20MB，调用方负责落盘）、' +
   'wecom_add_customer（写：按手机号检索并发送添加客户邀请，confirm 必须显式为 true）、' +
   'wecom_unread_list（只读：未读会话快照）、' +
+  'wecom_read_session（读：按 target_ref/target_name 读取会话消息，进会话会清除该会话未读角标；' +
+  '模型通道按次计费，未配置或不可用走本地 OCR）、' +
   'wecom_watch_poll（读：新消息跟踪单轮，返回增量消息事件；会清除被读会话的未读角标并推进本机水位）。' +
   '前提：仅 Windows（win32-x64）；需要已登录且未锁屏的企业微信 Windows 客户端（WXWork.exe）与交互桌面会话。' +
   '副作用预告：自动化全链路纯 PostMessage 后台注入，不移动真实光标、不使用 SendInput 键鼠注入（企微 5.0.9 会丢弃）；' +

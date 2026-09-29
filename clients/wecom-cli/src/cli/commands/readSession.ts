@@ -15,7 +15,8 @@
  * 报错不降级。详见 README M10b 章节。
  *
  * 副作用提示：进入会话会清除该会话未读角标（企微客户端固有行为，stderr 提示）；
- * 抓取完成后驱动滚回底部恢复原位。wecom_read_session 不进 MCP，只能走本命令。
+ * 抓取完成后驱动滚回底部恢复原位。M11b 起同名 MCP tool 也暴露（runtime/agent 路径），
+ * 本命令仍是 CLI 本地用法（交互提示与 artifact 输出更完整）。
  * （M9 由 read 改名而来，旧 read 动词直接废弃，无别名。）
  */
 import { getOperationEntry } from '../../operations/registry.js'

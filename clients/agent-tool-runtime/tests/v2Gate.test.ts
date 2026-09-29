@@ -58,6 +58,27 @@ test('v2 门禁：v1 invocation 不受影响，weixin 工具正常执行（门�
   }
 })
 
+test('v2 门禁：wecom（M11b，v1 manifest）带 protocol_version=2 → PROTOCOL_NOT_SUPPORTED，不降级', async () => {
+  const stack = await startTestStack({ providerEntries: { wecom: fakeProviderEntry() } })
+  try {
+    const id = stack.cloud.enqueueInvocation(
+      'wecom_message_send',
+      { protocol_version: 2, target_name: '张三', text: 'hi' },
+      { provider: 'wecom' },
+    )
+    const result = await waitForResult(stack, id, 'wecom v2 rejected')
+    const calls = stack.cloud.callsFor(id)
+    assert.ok(!calls.some((c) => c.type === 'started'), 'v2 拒绝不得标记 started')
+    assert.equal(result.payload['success'], false)
+    assert.equal(result.payload['code'], 'PROTOCOL_NOT_SUPPORTED')
+    assert.equal(result.payload['effect'], 'none')
+    assert.equal(result.payload['retryable'], false)
+    assert.equal(stack.cloud.getInvocation(id)!.state, 'failed')
+  } finally {
+    await stack.stop()
+  }
+})
+
 test('v2 门禁：protocol_version=1（或非数字）不触发门禁，按 v1 链路处理', async () => {
   const stack = await startTestStack()
   try {

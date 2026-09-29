@@ -80,6 +80,76 @@ test('claim 路由：claim 回包无 provider 字段（旧服务端）→ 路由
   }
 })
 
+test('claim 路由：provider=wecom 的 invocation 路由到 wecom Provider 实例执行成功（M11b）', async () => {
+  const stack = await startTestStack({
+    providerEntries: { wecom: fakeProviderEntry() },
+  })
+  try {
+    // 只读工具（probe）+ 写工具（message_send：manifest 写集合驱动锁屏前置与桌面锁）
+    const readId = stack.cloud.enqueueInvocation('wecom_probe', { durationMs: 50 }, { provider: 'wecom' })
+    await stack.cloud.waitFor(() => stack.cloud.getInvocation(readId)?.state === 'succeeded', 10_000, 'wecom probe succeeded')
+    const readResult = stack.cloud.callsFor(readId).find((c) => c.type === 'result')!
+    assert.equal((readResult.payload['data'] as Record<string, unknown>)['echo_tool'], 'wecom_probe')
+
+    const writeId = stack.cloud.enqueueInvocation('wecom_message_send', { durationMs: 50 }, { provider: 'wecom' })
+    await stack.cloud.waitFor(() => stack.cloud.getInvocation(writeId)?.state === 'succeeded', 10_000, 'wecom send succeeded')
+    const writeResult = stack.cloud.callsFor(writeId).find((c) => c.type === 'result')!
+    assert.equal((writeResult.payload['data'] as Record<string, unknown>)['echo_tool'], 'wecom_message_send')
+
+    // 路由到独立 Provider 实例：wecom Manager 已 spawn，且与 boss Manager 是不同进程
+    const wecomManager = stack.providers.get('wecom')
+    assert.ok(wecomManager.childPid !== null, 'wecom Provider 应已 spawn')
+    assert.ok(stack.provider.childPid === null || wecomManager.childPid !== stack.provider.childPid,
+      'wecom 与 boss 应是不同 Provider 子进程')
+  } finally {
+    await stack.stop()
+  }
+})
+
+test('claim 路由：provider=wecom 未接入的工具（search/watch_poll）→ TOOL_NOT_ALLOWED', async () => {
+  const stack = await startTestStack({
+    providerEntries: { wecom: fakeProviderEntry() },
+  })
+  try {
+    for (const tool of ['wecom_chat_search', 'wecom_watch_poll']) {
+      const id = stack.cloud.enqueueInvocation(tool, { durationMs: 50 }, { provider: 'wecom' })
+      await stack.cloud.waitFor(
+        () => stack.cloud.callsFor(id).some((c) => c.type === 'result'),
+        10_000,
+        `${tool} rejected`,
+      )
+      const calls = stack.cloud.callsFor(id)
+      assert.ok(!calls.some((c) => c.type === 'started'), '白名单拒绝不得标记 started')
+      const result = calls.find((c) => c.type === 'result')!
+      assert.equal(result.payload['code'], 'TOOL_NOT_ALLOWED')
+      assert.equal(result.payload['effect'], 'none')
+      assert.equal(result.payload['retryable'], false)
+    }
+  } finally {
+    await stack.stop()
+  }
+})
+
+test('claim 路由：provider=wecom 且未配置入口 → PROVIDER_NOT_AVAILABLE，不 started', async () => {
+  const stack = await startTestStack() // 默认仅 boss
+  try {
+    const id = stack.cloud.enqueueInvocation('wecom_probe', {}, { provider: 'wecom' })
+    await stack.cloud.waitFor(
+      () => stack.cloud.callsFor(id).some((c) => c.type === 'result'),
+      10_000,
+      'wecom PROVIDER_NOT_AVAILABLE result',
+    )
+    const calls = stack.cloud.callsFor(id)
+    assert.ok(!calls.some((c) => c.type === 'started'), '未安装 provider 不得标记 started')
+    const result = calls.find((c) => c.type === 'result')!
+    assert.equal(result.payload['success'], false)
+    assert.equal(result.payload['code'], 'PROVIDER_NOT_AVAILABLE')
+    assert.equal(result.payload['retryable'], true)
+  } finally {
+    await stack.stop()
+  }
+})
+
 test('ProviderSet：同一 provider 复用实例，未配置 key 抛 ProviderNotAvailableError，shutdownAll 回收', async () => {
   const { ProviderSet, ProviderNotAvailableError } = await import('../src/providerManager.js')
   const providers = new ProviderSet({ 'boss-recruiting': fakeProviderEntry() }, { shutdownTimeoutMs: 1_000 })

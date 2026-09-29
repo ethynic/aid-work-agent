@@ -172,9 +172,10 @@ watch 事件 NDJSON 协议（stdout 逐行一条 JSON，进度/告警只写 stde
 `new_messages` 每个有增量的候选会话一条；本轮无任何新消息时发一条 `tick`。
 `--once` 单轮（测试/手动）；循环期间持有跨进程互斥，与 send/search 等命令不并行。
 
-MCP 只暴露 `wecom_unread_list` 与 `wecom_watch_poll` 两个 M3 工具（每轮一次 tool call）；
-`wecom_read_session`（M9 由 `wecom_history_read` 改名）只走 CLI `read-session`
-（维持 M3 决策：长滚动抓取不适合 Host 高频调用）。
+MCP 暴露 `wecom_unread_list` / `wecom_watch_poll` / `wecom_read_session` 三个读工具；
+`wecom_read_session`（M9 由 `wecom_history_read` 改名）自 M11b 起进 MCP（撤销 M3
+「不进 MCP」决策——runtime 模式调用方是 agent，低频理性调用，且模型通道已把长滚动
+抓取变快）；高频轮询仍走 CLI `watch` 动词。
 
 ## target_ref（搜索 → 发送 的目标句柄）
 
@@ -189,8 +190,8 @@ name+section+subtitle 消歧键一致才可信——Jev 看不到 target_ref 的
 
 ## --target-name 直达模式（M11a：runtime/agent 路径只有会话名时的免 ref 接入）
 
-`send` / `send-image` / `send-file` / `read-session` 四命令（及对应 MCP tool，read-session
-除外）支持 `--target-name`（`target_name`）与 `--target-ref`（`target_ref`）**二选一**：
+`send` / `send-image` / `send-file` / `read-session` 四命令（及对应 MCP tool，M11b 起
+read-session 也进 MCP）支持 `--target-name`（`target_name`）与 `--target-ref`（`target_ref`）**二选一**：
 两个都传或都不传 → INVALID_ARGUMENT。定位语义（`src/operations/navigate.ts` 的
 `resolveTargetByName`，runtime 接入 M11a 的前置）：内部调 chatSearch（query 剥
 `@微信` 后缀，type=any）→ Jev best 过身份校验（best.name 剥 @微信 归一化 == target_name

@@ -1,5 +1,6 @@
 /**
- * Provider manifest 注册表：boss 18 工具逐项一致、digest 兼容锚点、weixin 白名单与写集合。
+ * Provider manifest 注册表：boss 18 工具逐项一致、digest 兼容锚点、weixin/wecom
+ * 白名单与写集合（M11b：wecom 接入 6 工具，digest 独立计算）。
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
@@ -110,12 +111,46 @@ test('weixin v2 会话变体：仅显式协商后生效（setManifestOverride）
   assert.ok(!isToolAllowedFor(reverted, 'weixin_message_send_v2'))
 })
 
+test('wecom manifest：M11b 接入 6 工具清单一致，仅三个发送工具为写，v1 独占桌面锁', () => {
+  const wecom = getProviderManifest('wecom')!
+  assert.deepEqual([...wecom.tools], [
+    'wecom_probe',
+    'wecom_message_send',
+    'wecom_send_image',
+    'wecom_send_file',
+    'wecom_read_session',
+    'wecom_unread_list',
+  ])
+  assert.equal(wecom.provider_id, 'ai.aidwork.wecom')
+  assert.equal(wecom.execution_target, 'local_required')
+  assert.equal(wecom.protocol_version, 1)
+  assert.equal(wecom.shared_lock_capable, false)
+  for (const tool of wecom.tools) {
+    const expected = tool === 'wecom_message_send' || tool === 'wecom_send_image' || tool === 'wecom_send_file'
+    assert.equal(isWriteToolFor(wecom, tool), expected, `${tool} 写属性不符（读类 probe/unread/read_session 不进写集合）`)
+  }
+  // M11b 决策：search/select 不接入（send 内含 search 定位）；watch_poll/add_customer 不接入
+  assert.ok(!isToolAllowedFor(wecom, 'wecom_chat_search'))
+  assert.ok(!isToolAllowedFor(wecom, 'wecom_chat_select'))
+  assert.ok(!isToolAllowedFor(wecom, 'wecom_watch_poll'))
+  assert.ok(!isToolAllowedFor(wecom, 'wecom_add_customer'))
+  // digest 独立计算（与 boss/weixin 各不相同，boss 基线不受影响——见上）
+  assert.match(manifestDigestFor('wecom'), /^[0-9a-f]{64}$/)
+  assert.notEqual(manifestDigestFor('wecom'), manifestDigestFor('boss-recruiting'), '各 Provider digest 应独立')
+  assert.notEqual(manifestDigestFor('wecom'), manifestDigestFor('weixin'), '各 Provider digest 应独立')
+})
+
 test('白名单：跨 Provider 工具不串道，未知 provider 无 manifest', () => {
   const boss = getProviderManifest('boss-recruiting')!
   const weixin = getProviderManifest('weixin')!
+  const wecom = getProviderManifest('wecom')!
   assert.ok(!isToolAllowedFor(weixin, 'boss_greet'), 'weixin manifest 不得放行 boss 工具')
   assert.ok(!isToolAllowedFor(boss, 'weixin_message_send'), 'boss manifest 不得放行 weixin 工具')
+  assert.ok(!isToolAllowedFor(wecom, 'boss_greet'), 'wecom manifest 不得放行 boss 工具')
+  assert.ok(!isToolAllowedFor(wecom, 'weixin_message_send'), 'wecom manifest 不得放行 weixin 工具')
+  assert.ok(!isToolAllowedFor(boss, 'wecom_message_send'), 'boss manifest 不得放行 wecom 工具')
+  assert.ok(!isToolAllowedFor(weixin, 'wecom_message_send'), 'weixin manifest 不得放行 wecom 工具')
   assert.ok(!isToolAllowed('weixin_message_send'), '兼容 isToolAllowed 仍按 boss 白名单判断')
   assert.equal(getProviderManifest('nope-unknown'), undefined)
-  assert.equal(Object.keys(TRUSTED_MANIFESTS).length, 2)
+  assert.equal(Object.keys(TRUSTED_MANIFESTS).length, 3)
 })

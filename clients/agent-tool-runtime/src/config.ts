@@ -179,6 +179,13 @@ export function deviceCapabilities(config?: RuntimeConfig | null): Record<string
       capabilities.push('weixin_message_send_v2')
     }
   }
+  // wecom 工具能力（M11b Phase 1）：粒度对齐 weixin（能力串 = MCP 工具名，云端按
+  // 工具名做发布/分配门禁）——与实际生效 manifest 同源（真实能力上报，未接入的
+  // search/select/watch_poll/add_customer 不出现）；Provider 未安装（无 entry）不上报
+  if (entries['wecom']) {
+    const effectiveWecom = effectiveManifestFor('wecom')
+    if (effectiveWecom) capabilities.push(...effectiveWecom.tools)
+  }
   return {
     providers: available,
     protocol_version: 2,

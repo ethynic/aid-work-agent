@@ -31,9 +31,13 @@ const TOOL_NAMES = [
   'weixin_unread_list',
   'weixin_probe_v2',
   'weixin_message_send_v2',
+  'wecom_probe',
+  'wecom_message_send',
+  'wecom_read_session',
+  'wecom_unread_list',
 ] as const
 
-const WRITE_TOOLS = new Set(['boss_greet', 'boss_accept_resume', 'boss_reject_current', 'boss_interview_demo', 'weixin_message_send'])
+const WRITE_TOOLS = new Set(['boss_greet', 'boss_accept_resume', 'boss_reject_current', 'boss_interview_demo', 'weixin_message_send', 'wecom_message_send'])
 
 /** v2 受控写工具样例（宪章 P1-C：接受 permit handle 并回 effect/phase） */
 const V2_WRITE_TOOLS = new Set(['weixin_message_send_v2'])

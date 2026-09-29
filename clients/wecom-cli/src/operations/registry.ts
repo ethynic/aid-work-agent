@@ -3,14 +3,13 @@
  *
  * CLI command 与 MCP tool handler 都从这里取 operation，保证业务能力只实现一次。
  * M1 有 wecom_probe / wecom_add_customer；M2 增加 wecom_chat_search / wecom_message_send；
- * M3 增加 wecom_unread_list / wecom_history_read / wecom_watch_poll
- * （wecom_history_read 只走 CLI read 动词，不进 MCP toolDefs——MCP 只暴露
- * unread_list 与 watch_poll 两个读工具）；M5 增加 wecom_chat_select（CLI 按动作
- * 处理打 ⚠️ 前置提示：进会话清角标/切换当前会话视图，但 effect 恒 none）；
+ * M3 增加 wecom_unread_list / wecom_history_read / wecom_watch_poll；M5 增加 wecom_chat_select
+ * （CLI 按动作处理打 ⚠️ 前置提示：进会话清角标/切换当前会话视图，但 effect 恒 none）；
  * M7 增加 wecom_send_image（写：向 target_ref 目标发送 1 张本地图片）；
  * M8 增加 wecom_send_file（写：向 target_ref 目标发送 1 个本地文件）；
  * M9 将 wecom_history_read 改名为 wecom_read_session（CLI 动词 read → read-session，
- * 旧名直接废弃无别名；MCP 仍不暴露，维持 M3 决策）。
+ * 旧名直接废弃无别名）；M11b 起进 MCP toolDefs（撤销 M3「不进 MCP」决策：runtime
+ * 模式调用方是 agent，低频理性，且模型通道已把长滚动抓取变快）。
  */
 import { createWecomAddCustomerOperation } from './addCustomer.js'
 import { createWecomChatSearchOperation } from './chatSearch.js'

@@ -12,8 +12,9 @@
  * M8 增加 wecom_send_file（写：向 target_ref 目标发送 1 个本地文件）。
  * M11a 起 message_send / send_image / send_file 的 target_ref 转为可选，新增可选
  * target_name（二选一，XOR 校验在 operation 层做——两个都传/都不传返回 INVALID_ARGUMENT）。
- * wecom_read_session（M9 由 wecom_history_read 改名）只走 CLI read-session 动词不进
- * MCP（维持 M3 决策：长滚动抓取不适合 Host 高频调用）；
+ * M11b 撤销 M3 决策：wecom_read_session 进 MCP toolDefs——runtime 模式调用方是
+ * agent（低频理性调用，非 Host 高频轮询），且 M10b 模型通道已把长滚动抓取变快；
+ * 高频轮询仍走 CLI watch 动词（wecom_watch_poll 不进 runtime 受信清单）。
  * 未真机验证的能力不得在此占位。
  */
 import { z } from 'zod'
@@ -171,6 +172,29 @@ export const TOOL_DEFS: WecomToolDef[] = [
       name: z.string().max(100).optional().describe('可选：按会话名子串过滤'),
     },
     annotations: { title: '企业微信未读会话快照', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  {
+    name: 'wecom_read_session',
+    title: '企业微信读取会话消息',
+    description:
+      '读取与目标联系人/群聊的当前会话消息（只读消息内容，无出站消息；当前不在目标会话时自动搜索切换后读取，读毕滚回底部）。' +
+      '目标二选一：target_ref（wecom_chat_search 返回的句柄，有效期 5 分钟）或 target_name 直达模式' +
+      '（按会话名内部自动 search 定位 + 身份校验，同名多候选无法消歧返回 TARGET_AMBIGUOUS，data 附 resolved_target；两个都传/都不传 INVALID_ARGUMENT）。' +
+      '解析双通道（M10b）：本机已配置 AID_WECOM_SERVER_URL 时走服务端模型主通道——' +
+      'messages 带 side/kind/time（GLM 多模态判定，质量优于 OCR），**按次计积分**（data.billing.credits_charged），' +
+      '402 余额不足/配置错误不降级直接报错；未配置或模型通道不可用（网络/超时/5xx）时走本地 OCR 兜底（免费，side 为启发式判定）。' +
+      'data.channel 标记实际通道（model/ocr）。返回 data.messages=[{side:self|peer|timeline, kind?, text, time?}]' +
+      '（kind=text/image/file/timeline 仅模型通道；time 为最近时间分割线原文的近似时间，首条分割线前无 time），' +
+      '另有 channel/pages_read/title/navigated。' +
+      '副作用：进入会话会清除该会话未读角标（企微客户端固有行为）并切换主窗口会话视图——' +
+      '适合低频按需读取（如配合 wecom_unread_list 有未读再读），不适合高频轮询（长循环请用 CLI watch 动词）。',
+    zodShape: {
+      target_ref: z.string().min(1).optional().describe('目标句柄（wecom_chat_search 返回的 target_ref；与 target_name 二选一）'),
+      target_name: z.string().min(1).max(100).optional().describe('直达模式：按会话名（联系人/群名，可含 @微信 后缀）定位目标，内部自动 search 并做身份校验（同名多候选无法消歧返回 TARGET_AMBIGUOUS）；与 target_ref 二选一'),
+      max_pages: z.number().int().min(1).max(10).optional().describe('最多向上翻几屏（含底部当前屏，默认 1，上限 10）'),
+      since_days: z.number().int().min(1).optional().describe('只读最近 N 天：某屏最早时间分割线超龄即停止上翻（仅 OCR 通道生效；模型通道抓满 max_pages，调用方按返回 time 自行过滤）'),
+    },
+    annotations: { title: '企业微信读取会话消息', readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
   {
     name: 'wecom_watch_poll',

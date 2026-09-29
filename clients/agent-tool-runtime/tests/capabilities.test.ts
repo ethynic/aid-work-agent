@@ -33,6 +33,34 @@ test('配置 weixin entry：providers 数组含 weixin，manifests 双份，旧 
   assert.notEqual(manifests['weixin']!['manifest_digest'], manifests['boss-recruiting']!['manifest_digest'])
 })
 
+test('配置 wecom entry：providers 数组含 wecom，manifests 含独立摘要，capabilities 上报 6 工具能力', () => {
+  const caps = deviceCapabilities(makeConfig({ providers: { wecom: { entry: 'C:/fake/wecom.js' } } }))
+  assert.deepEqual(caps['providers'], ['boss-recruiting', 'wecom'])
+  assert.equal(caps['provider_id'], 'ai.aidwork.boss-recruiting', 'boss 恒为第一个可用 provider（云端兼容）')
+  const manifests = caps['provider_manifests'] as Record<string, Record<string, unknown>>
+  assert.equal(manifests['wecom']!['provider_id'], 'ai.aidwork.wecom')
+  assert.equal(manifests['wecom']!['manifest_digest'], manifestDigestFor('wecom'))
+  assert.notEqual(manifests['wecom']!['manifest_digest'], manifests['boss-recruiting']!['manifest_digest'])
+  assert.equal(manifests['wecom']!['protocol_version'], 1)
+  // M11b：wecom 工具能力按工具名上报（与 manifest 同源；粒度对齐 weixin_message_send_v2）
+  const capabilities = caps['capabilities'] as string[]
+  for (const tool of ['wecom_probe', 'wecom_message_send', 'wecom_send_image', 'wecom_send_file', 'wecom_read_session', 'wecom_unread_list']) {
+    assert.ok(capabilities.includes(tool), `${tool} 应在 capabilities`)
+  }
+  // 未接入 runtime 受信面的工具不得上报
+  for (const tool of ['wecom_chat_search', 'wecom_chat_select', 'wecom_watch_poll', 'wecom_add_customer']) {
+    assert.ok(!capabilities.includes(tool), `${tool} 未接入不得上报`)
+  }
+})
+
+test('未配置 wecom entry：capabilities 与 provider_manifests 均不含 wecom（未安装不上报）', () => {
+  const caps = deviceCapabilities(makeConfig({ providers: { weixin: { entry: 'C:/fake/weixin.js' } } }))
+  assert.ok(!(caps['providers'] as string[]).includes('wecom'))
+  assert.equal((caps['provider_manifests'] as Record<string, unknown>)['wecom'], undefined)
+  const capabilities = caps['capabilities'] as string[]
+  assert.ok(!capabilities.some((c) => c.startsWith('wecom_')), 'wecom 未安装不得上报任何工具能力')
+})
+
 test('配置兼容：旧 config.json 只有 bossCliEntry 时 resolveProviderEntries 正常折算', () => {
   const entries = resolveProviderEntries(makeConfig({ bossCliEntry: 'C:/boss/entry.js' }))
   assert.deepEqual(entries, { 'boss-recruiting': 'C:/boss/entry.js' })

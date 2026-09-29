@@ -158,6 +158,11 @@ async function cmdStart(args: ParsedArgs): Promise<number> {
 
   const api = new ApiClient(server, token)
   const bridgeKey = randomBytes(32).toString('hex')
+  // providerEnv：仅 per-Provider 追加注入（weixin bridge key）。wecom Phase 1 不注入——
+  // read_session 未配置模型通道时自动走本地 OCR 兜底，开箱即用；如需启用模型通道，
+  // 在本机（runtime 进程）环境配 AID_WECOM_SERVER_URL + AID_WECOM_SERVER_TOKEN 即可：
+  // providerManager spawn 显式继承完整环境（env: { ...process.env, ...providerEnv }），
+  // 无需代码改动；未来交付 runtime 机器级凭据时再在此加 wecom 项注入。
   const providers = new ProviderSet(entries, { providerEnv: { weixin: { AIDWORK_WEIXIN_BRIDGE_KEY: bridgeKey } } })
   const nameBridge = new NameSessionBridge(providers, api, bridgeKey)
   // #6 能力真实性：v2 会话 manifest 变体仅经 config.providers.weixin.v2Send 显式
