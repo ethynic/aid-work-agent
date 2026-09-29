@@ -345,3 +345,9 @@ Authorization: Bearer $TYPESAFE_API_KEY
 - **watch --once**：真机单轮全通（26.5s）：unread 快照 → row 直点（企业微信团队）→ read-session OCR 通道增量读取（时间戳沿袭可见）→ NDJSON new_messages 事件——M9 重构后的 watch 编排链路真机验证。注意水位首读全量属设计行为（首次无水位保守全推）。
 - **add-customer**：静态扫描无禁用原语（全 PostMessage，注释与 M1 标定一致）；发送邀请为真实外发写动作，**待安全手机号真机验证**（用户提供后执行）。
 - **RPA 废弃**（6d48163e）：README/STATUS 横幅 + 前端新增渠道入口移除（存量可管理）+ 激活码管理 9 端点越权收口（R1，platform_admin 统一）。
+
+### add-customer 真机诊断（2026-09-29）——❌ 客户端更新致流程失效，需重标定
+
+- 失效点（三层）：①内容子窗口 `WXworkWindow - 企业微信-<页名>` 已不存在（主窗口 0 子窗口，probe current_page=null 同源）——页面校验机制失效；②通讯录导航坐标 M1 标定 y=1175 已漂移（当前 1280×1392 窗口实测 y≈370，导航项 OCR 可动态定位——工作台 324/通讯录 358/微盘 388）；③「新的客户」页签布局重构（现为组织架构树节点），右上角 ⊕添加 / 行首 + 按钮 / 添加成员 均未出现 SearchExternalsWnd 弹窗——添加客户入口已变位，旧流程（弹窗输入手机号→检索→添加→InputReasonWnd）不可达。
+- 结论：add-customer 需一次 M1 式重标定探测（新入口发现 + 弹窗流程 + 终态校验）；动态导航定位（OCR 找通讯录项）与 OCR 页面校验替代子窗口校验的修复方向已明确。
+- 其余 12 命令全部真机验证通过；add-customer 是唯一待重标定项。
