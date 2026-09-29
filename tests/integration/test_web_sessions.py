@@ -4,7 +4,8 @@
 覆盖：
 - GET /users 聚合（session_count / last_active_at 排序）+ keyword 用户名/昵称搜索
 - 跨租户隔离（他租户用户会话不可见）
-- GET /users/{id}/sessions 按 tenant+user 过滤 + agent_keyword 智能体名称搜索 + subagent_name 反查
+- GET /users/{id}/sessions 按 tenant+user 过滤 + subagent_id 精确筛选（含 master）+ subagent_name 反查
+- GET /users/{id}/agents 会话出现过的智能体去重列表（下拉框选项）
 - GET /sessions/{id}/messages 排除 tool 角色 + 跨租户访问会话 403
 """
 
@@ -205,7 +206,7 @@ class TestListWebSessionUsers:
 class TestGetUserWebSessions:
     """GET /users/{user_id}/sessions"""
 
-    def test_sessions_filter_and_agent_keyword(self, temp_tenant_for_web):
+    def test_sessions_filter_and_subagent_id(self, temp_tenant_for_web):
         from src.saas.api import web_sessions
 
         tenant_id = temp_tenant_for_web
@@ -219,10 +220,12 @@ class TestGetUserWebSessions:
 
         with patch("src.saas.api.web_sessions.require_admin", _fake_admin(tenant_id)):
             resp_all = _call(web_sessions.get_user_web_sessions, FakeRequest(), user_id=user_a)
-            resp_kw = _call(web_sessions.get_user_web_sessions, FakeRequest(),
-                            user_id=user_a, agent_keyword="售前")
+            resp_agent = _call(web_sessions.get_user_web_sessions, FakeRequest(),
+                               user_id=user_a, subagent_id=agent_id)
+            resp_master = _call(web_sessions.get_user_web_sessions, FakeRequest(),
+                                user_id=user_a, subagent_id="master")
             resp_miss = _call(web_sessions.get_user_web_sessions, FakeRequest(),
-                              user_id=user_a, agent_keyword="不存在的智能体xyz")
+                              user_id=user_a, subagent_id="webtest_agent_not_exist")
 
         # 全量：两条会话，NULL subagent 也返回（前端显示主智能体）
         assert resp_all["total"] == 2
@@ -230,11 +233,51 @@ class TestGetUserWebSessions:
         assert sessions[sess_agent]["subagent_name"] == "售前助手"
         assert "subagent_name" not in sessions[sess_master] or sessions[sess_master]["subagent_name"] is None
 
-        # 按智能体名称搜索：只命中智能体会话
-        assert [s["session_id"] for s in resp_kw["sessions"]] == [sess_agent]
+        # 按智能体 ID 精确筛选：只命中智能体会话
+        assert [s["session_id"] for s in resp_agent["sessions"]] == [sess_agent]
 
-        # 搜索无匹配智能体：空列表
+        # master 筛选：只命中主智能体会话
+        assert [s["session_id"] for s in resp_master["sessions"]] == [sess_master]
+
+        # 筛选无匹配智能体：空列表
         assert resp_miss["sessions"] == [] and resp_miss["total"] == 0
+
+    def test_agents_dedup_list(self, temp_tenant_for_web):
+        """GET /users/{id}/agents 返回会话出现过的智能体去重列表，master 排最前"""
+        from src.saas.api import web_sessions
+
+        tenant_id = temp_tenant_for_web
+        agent_a = f"webtest_agent_{uuid.uuid4().hex[:6]}"
+        agent_b = f"webtest_agent_{uuid.uuid4().hex[:6]}"
+        _insert_subagent(agent_a, "售前助手")
+        _insert_subagent(agent_b, "数据分析专家")
+        user_a = _insert_user(tenant_id, f"webtest_{uuid.uuid4().hex[:6]}", username="员工A")
+        _insert_chat_session(f"wsess_{uuid.uuid4().hex[:8]}", user_a, tenant_id,
+                             subagent_id=agent_a, title="s1")
+        _insert_chat_session(f"wsess_{uuid.uuid4().hex[:8]}", user_a, tenant_id,
+                             subagent_id=agent_a, title="s2")
+        _insert_chat_session(f"wsess_{uuid.uuid4().hex[:8]}", user_a, tenant_id, title="s3")
+
+        with patch("src.saas.api.web_sessions.require_admin", _fake_admin(tenant_id)):
+            resp = _call(web_sessions.list_user_web_session_agents, FakeRequest(), user_id=user_a)
+
+        assert resp["success"] is True
+        agents = {a["agent_id"]: a for a in resp["agents"]}
+        assert set(agents.keys()) == {"master", agent_a}
+        assert agents["master"]["agent_name"] == "主智能体"
+        assert agents[agent_a]["agent_name"] == "售前助手"
+        assert agents[agent_a]["session_count"] == 2
+        assert resp["agents"][0]["agent_id"] == "master"
+
+        # 从未产生会话的智能体不出现在列表中
+        assert agent_b not in agents
+
+        # 租户隔离：他租户管理员查询同一用户，看不到本租户会话的智能体（返回空列表）
+        other_tenant = f"other_tenant_{uuid.uuid4().hex[:6]}"
+        with patch("src.saas.api.web_sessions.require_admin", _fake_admin(other_tenant)):
+            resp_other = _call(web_sessions.list_user_web_session_agents, FakeRequest(), user_id=user_a)
+        assert resp_other["success"] is True
+        assert resp_other["agents"] == []
 
     def test_user_tenant_check(self, temp_tenant_for_web):
         """用户不属于当前租户时 404"""

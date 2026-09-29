@@ -629,6 +629,7 @@ class UserDB:
         page_size: int = 20,
         tenant_id: str = None,
         subagent_ids: list = None,
+        master_agent_only: bool = False,
     ) -> dict:
         """获取用户的会话列表（分页）
 
@@ -638,7 +639,8 @@ class UserDB:
             page: 页码，从1开始
             page_size: 每页数量
             tenant_id: 租户ID筛选（可选，管理端查询必传以保证租户隔离）
-            subagent_ids: 智能体ID集合筛选（可选，按智能体名称搜索时传入）
+            subagent_ids: 智能体ID集合筛选（可选，精确匹配）
+            master_agent_only: 仅主智能体会话（subagent_id 为空，可选）
 
         Returns:
             {"sessions": [...], "total": int, "page": int, "page_size": int}
@@ -663,6 +665,9 @@ class UserDB:
                 conditions.append("subagent_id = ANY(%s)")
                 params.append(list(subagent_ids))
 
+            if master_agent_only:
+                conditions.append("subagent_id IS NULL")
+
             where_clause = " AND ".join(conditions)
 
             # 统计总数
@@ -680,6 +685,32 @@ class UserDB:
 
             sessions = [dict(row) for row in cursor.fetchall()]
         return {"sessions": sessions, "total": total, "page": page, "page_size": page_size}
+
+    @staticmethod
+    def get_user_session_agent_counts(user_id: str, tenant_id: str = None) -> list:
+        """用户会话中出现过的智能体去重统计（含 subagent_id 为 NULL 的主智能体会话）
+
+        Returns:
+            [{"subagent_id": str|None, "session_count": int}, ...]
+        """
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            conditions = ["user_id = %s"]
+            params = [user_id]
+            if tenant_id:
+                conditions.append("tenant_id = %s")
+                params.append(tenant_id)
+            cursor.execute(
+                f"""
+                SELECT subagent_id, COUNT(*) AS session_count
+                FROM chat_sessions
+                WHERE {" AND ".join(conditions)}
+                GROUP BY subagent_id
+                ORDER BY COUNT(*) DESC
+                """,
+                params,
+            )
+            return [dict(row) for row in cursor.fetchall()]
 
     @staticmethod
     def get_session_messages(
