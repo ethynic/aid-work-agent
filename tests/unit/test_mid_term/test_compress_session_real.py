@@ -149,8 +149,9 @@ async def test_get_model_limit_actually_called_when_force_false(service, monkeyp
 
 
 @pytest.mark.asyncio
-async def test_force_true_does_not_call_get_model_limit(service):
-    """force=True 时不调 _get_model_limit（v3.2: force 跳过整个 check_threshold）"""
+async def test_force_true_skips_threshold_but_gate_reads_model_limit(service):
+    """force=True 跳过阈值判断，但经济性闸门（2026-09-30）仍需读模型上限
+    计算 near_limit——_get_model_limit 被调用是预期行为（旧不变量已失效）"""
     async def _fake_meta(sid, st):
         from src.memory.mid_term import SessionMeta
         return SessionMeta(session_id=sid, source_type=st, tenant_id="t1")
@@ -164,12 +165,17 @@ async def test_force_true_does_not_call_get_model_limit(service):
     service._resolve_session_meta = _fake_meta
     service._load_messages = _fake_load
 
-    def _boom():
-        raise AssertionError("_get_model_limit 不应在 force=True 时被调用")
-    service._get_model_limit = _boom
+    called = {"n": 0}
+    orig = service._get_model_limit
+
+    def _spy():
+        called["n"] += 1
+        return orig()
+    service._get_model_limit = _spy
 
     result = await service.compress_session("sess", "chat", force=True)
     assert result is not None
+    assert called["n"] >= 1, "经济性闸门应读取模型上限计算 near_limit"
 
 
 @pytest.mark.asyncio

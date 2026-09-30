@@ -1281,6 +1281,10 @@ class Agent:
                             llm_provider=result.llm_provider,
                             llm_model=result.llm_model,
                             duration_ms=duration_ms,
+                            llm_prompt_tokens=result.llm_prompt_tokens,
+                            llm_completion_tokens=result.llm_completion_tokens,
+                            llm_cached_tokens=result.llm_cached_tokens,
+                            summary_truncated=result.summary_truncated,
                         )
                         # 暂存，让 _process_message_impl 在压缩后立即 yield
                         self._pending_compression_event = event.to_dict()

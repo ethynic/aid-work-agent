@@ -170,7 +170,8 @@ memory:
     # 分段保留
     header_keep: 3                   # 头部保留消息数
     tail_keep: 30                    # 尾部保留消息数（按工具链边界对齐）
-    # 摘要 LLM
+    # 摘要 LLM（自适应下限；实际 max_tokens = clamp( COMPRESS区tokens÷50, 此值, 4096 )，
+    # 保证摘要成本不低于 50:1 压缩经济性；finish_reason=length 时续写一次兜底）
     summary_max_tokens: 1500
     summary_llm_retry: 2             # 摘要 LLM 调用重试次数
     summary_llm:

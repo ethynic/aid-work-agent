@@ -132,6 +132,13 @@ class CompressionResult:
     fallback_used: bool
     llm_provider: Optional[str] = None
     llm_model: Optional[str] = None
+    # 摘要 LLM 真实消耗（2026-09-30：从 _call_summary_llm 透传，含重试/续写累计；
+    # fallback/闸门跳过路径为 0）
+    llm_prompt_tokens: int = 0
+    llm_completion_tokens: int = 0
+    llm_cached_tokens: int = 0
+    # finish_reason=length 续写一次后仍被截断时为 True
+    summary_truncated: bool = False
     # 触发压缩的原因（force / token_threshold(...) / message_threshold(...)）
     # 由 check_threshold 返回的 reason 透传（force 时填 "force"）
     trigger_reason: str = ""
@@ -203,6 +210,15 @@ _THINKING_OFF_PARAMS = {
     "zhipu": {"reasoning_effort": "low"},
 }
 
+# 自适应摘要预算上限（token）。下限取配置 summary_max_tokens，实际 =
+# clamp(摘要输入 tokens ÷ 50, summary_max_tokens, 此值)。÷50 对应
+# 「输入:摘要 ≥ 50:1」的经济性要求（cache-hit 重读价约为 miss 价 1/50）。
+_SUMMARY_MAX_TOKENS_CAP = 4096
+
+# 经济性闸门：摘要输入 tokens ÷ 50 低于此值（即输入 < 4 万 token）且上下文
+# 未接近模型上限时，压缩无经济价值，跳过 LLM 摘要走 truncate 降级
+_SUMMARY_GATE_MIN_INPUT_TOKENS = 800 * 50
+
 
 def _get_provider_api_key(provider: str) -> Optional[str]:
     """从环境变量读取指定 provider 的第一个有效 API key。"""
@@ -217,6 +233,30 @@ def _get_provider_api_key(provider: str) -> Optional[str]:
     return first or None
 
 
+def _normalize_summary_usage(raw_usage: Any) -> Optional[Dict[str, Any]]:
+    """把直连摘要调用返回的原始 usage 规范化为 gateway 同口径。
+
+    原始 OpenAI 兼容 usage 的 cache-hit token 藏在 prompt_tokens_details.cached_tokens
+    或顶层 prompt_cache_hit_tokens，缺顶层 cached_tokens 键会让计费/观测链路把
+    cache-hit 当 0 处理。规范化逻辑与 src/llm/providers/deepseek.py `_parse_response`
+    保持一致。
+    """
+    if not isinstance(raw_usage, dict):
+        return None if raw_usage is None else {}
+    prompt_details = raw_usage.get("prompt_tokens_details")
+    cached_tokens = (
+        prompt_details.get("cached_tokens", 0)
+        if isinstance(prompt_details, dict)
+        else 0
+    ) or raw_usage.get("prompt_cache_hit_tokens", raw_usage.get("cached_tokens", 0))
+    return {
+        "prompt_tokens": raw_usage.get("prompt_tokens", 0) or 0,
+        "completion_tokens": raw_usage.get("completion_tokens", 0) or 0,
+        "total_tokens": raw_usage.get("total_tokens", 0) or 0,
+        "cached_tokens": cached_tokens or 0,
+    }
+
+
 async def _call_summary_llm_direct(
     provider: str,
     model: str,
@@ -224,7 +264,7 @@ async def _call_summary_llm_direct(
     temperature: float,
     max_tokens: int,
     timeout: float,
-) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+) -> Tuple[Optional[str], Optional[Dict[str, Any]], str]:
     """直接调用指定 provider 的 OpenAI 兼容 chat completions endpoint。
 
     绕过 llm_gateway 的主 provider 路由，用于摘要 LLM 切换到 deepseek 等便宜模型。
@@ -238,7 +278,9 @@ async def _call_summary_llm_direct(
         timeout: 超时秒数
 
     Returns:
-        (content, usage)：成功时 content 为字符串（可能为空），usage 为 dict 或 None；
+        (content, usage, finish_reason)：成功时 content 为字符串（可能为空），
+        usage 为规范化后的 dict（含顶层 cached_tokens，口径与 gateway provider
+        _parse_response 一致）或 None，finish_reason 为 "stop"/"length" 等；
         网络层异常时抛出。
     """
     import httpx
@@ -270,11 +312,13 @@ async def _call_summary_llm_direct(
     # OpenAI 兼容响应
     choices = data.get("choices") or []
     content: Optional[str] = None
+    finish_reason = "stop"
     if choices:
         msg = choices[0].get("message") or {}
         content = msg.get("content")
-    usage = data.get("usage")
-    return content, usage
+        finish_reason = choices[0].get("finish_reason") or "stop"
+    usage = _normalize_summary_usage(data.get("usage"))
+    return content, usage, finish_reason
 
 
 # ============== 服务 ==============
@@ -869,8 +913,8 @@ class ContextCompressionService:
         *,
         tenant_id: Optional[str] = None,
         user_id: Optional[str] = None,
-    ) -> Optional[str]:
-        """调用摘要 LLM，独立超时 + 重试 M 次。失败返回 None。
+    ) -> Tuple[Optional[str], Dict[str, int], bool]:
+        """调用摘要 LLM，独立超时 + 重试 M 次，length 截断续写一次。
 
         优先级（P0-3）：
           1. 若 summary_llm.provider 配置了独立 API key（环境变量 *_API_KEYS），
@@ -887,9 +931,16 @@ class ContextCompressionService:
             user_id: 用户 ID（同上）
 
         Returns:
-            摘要文本；重试耗尽仍失败时返回 None
+            (summary_text, total_usage, truncated)：
+            - summary_text：摘要文本；重试耗尽仍失败时为 None
+            - total_usage：本次压缩全部 LLM 调用（含重试/续写）的累计真实 usage
+              （prompt/completion/total/cached_tokens），失败时为已发生调用的累计
+            - truncated：finish_reason=length 续写一次后仍被截断时为 True
 
         Note:
+            自适应预算（2026-09-30）：max_tokens = clamp(摘要输入 tokens ÷ 50,
+            summary_max_tokens, 4096)。÷50 保证「输入:摘要 ≥ 50:1」的经济性
+            （cache-hit 重读价约为 miss 价 1/50），summary_max_tokens 为质量下限。
             外层 asyncio.wait_for 超时设为 summary_llm.timeout_sec * 2，留出
             gateway/provider 内部超时空间（避免双层超时冲突，P1-7）。
         """
@@ -897,6 +948,12 @@ class ContextCompressionService:
         messages_for_llm = [
             {"role": "user", "content": prompt},
         ]
+        # 自适应预算：保证压缩比 ≥ 50:1（经济性），下限保质量、上限防失控
+        zone_tokens = count_text_tokens(prompt)
+        max_tokens = min(
+            max(zone_tokens // 50, self._settings.summary_max_tokens),
+            _SUMMARY_MAX_TOKENS_CAP,
+        )
         provider_cfg = self._summary_provider_cfg
         model_cfg = self._summary_model_cfg
         has_direct_key = _get_provider_api_key(provider_cfg) is not None
@@ -904,75 +961,119 @@ class ContextCompressionService:
         # 外层超时留 2x 余量，给 provider 内部超时留空间（P1-7）
         outer_timeout = self._summary_timeout * 2
 
+        total_usage: Dict[str, int] = {}
+
+        def _accumulate_usage(usage: Optional[Dict[str, Any]]) -> None:
+            if not usage:
+                return
+            for key in ("prompt_tokens", "completion_tokens", "total_tokens", "cached_tokens"):
+                total_usage[key] = total_usage.get(key, 0) + int(usage.get(key, 0) or 0)
+
+        async def _invoke_once(
+            messages: List[Dict[str, Any]],
+        ) -> Tuple[str, Optional[Dict[str, Any]], str]:
+            """单次摘要调用（直连/网关双路径），返回 (content, usage, finish_reason)。"""
+            if has_direct_key:
+                content, usage, finish_reason = await asyncio.wait_for(
+                    _call_summary_llm_direct(
+                        provider=provider_cfg,
+                        model=model_cfg,
+                        messages_for_llm=messages,
+                        temperature=0.3,
+                        max_tokens=max_tokens,
+                        timeout=float(self._summary_timeout),
+                    ),
+                    timeout=outer_timeout,
+                )
+                self._actual_provider = provider_cfg
+                self._actual_model = model_cfg
+                billed_model = model_cfg
+            else:
+                # fallback 到主 gateway（仅首次记录 warning）
+                if not getattr(self, "_summary_gateway_warned", False):
+                    logger.warning(
+                        f"summary_llm provider [{provider_cfg}] not configured, "
+                        f"fallback to main gateway"
+                    )
+                    self._summary_gateway_warned = True
+                gateway = self._get_llm_gateway()
+                result = await asyncio.wait_for(
+                    gateway.chat_lite(
+                        messages=messages,
+                        temperature=0.3,
+                        max_tokens=max_tokens,
+                    ),
+                    timeout=outer_timeout,
+                )
+                result = result or {}
+                content = result.get("content")
+                usage = result.get("usage")
+                finish_reason = result.get("finish_reason") or "stop"
+                # fallback 到主 gateway，provider/model 以 gateway 实际为准
+                self._actual_provider = getattr(gateway, "provider_name", None) or "main"
+                self._actual_model = settings.llm.get_lite_model()
+                billed_model = settings.llm.get_lite_model()  # chat_lite 实际消耗 lite 模型，按 lite 单价计费
+            # 累加 LLM 用量到当前 SessionRecordService（对话内后台 LLM 调用计费）
+            # v3.2.2 P1 修复：background_runner 调度场景透传 tenant_id/user_id，
+            # 让兜底落库路径能归属租户
+            from src.services.session_record import record_background_llm_usage
+            record_background_llm_usage(
+                usage,
+                tenant_id=tenant_id,
+                user_id=user_id,
+                source="mid_term_summary",
+                user_message="上下文压缩扫描摘要",
+                model=billed_model,
+            )
+            return content or "", usage, finish_reason or "stop"
+
         last_error: Optional[Exception] = None
         for attempt in range(1, max_attempts + 1):
             try:
-                if has_direct_key:
-                    # 直连路径（P0-3）：用独立 provider 调用
-                    content, _usage = await asyncio.wait_for(
-                        _call_summary_llm_direct(
-                            provider=provider_cfg,
-                            model=model_cfg,
-                            messages_for_llm=messages_for_llm,
-                            temperature=0.3,
-                            max_tokens=self._settings.summary_max_tokens,
-                            timeout=float(self._summary_timeout),
-                        ),
-                        timeout=outer_timeout,
-                    )
-                    self._actual_provider = provider_cfg
-                    self._actual_model = model_cfg
-                    # 累加 LLM 用量到当前 SessionRecordService（对话内后台 LLM 调用计费）
-                    # v3.2.2 P1 修复：background_runner 调度场景透传 tenant_id/user_id，
-                    # 让兜底落库路径能归属租户
-                    from src.services.session_record import record_background_llm_usage
-                    record_background_llm_usage(
-                        _usage,
-                        tenant_id=tenant_id,
-                        user_id=user_id,
-                        source="mid_term_summary",
-                        user_message="上下文压缩扫描摘要",
-                        model=model_cfg,
-                    )
-                else:
-                    # fallback 到主 gateway（仅首次记录 warning）
-                    if attempt == 1:
-                        logger.warning(
-                            f"summary_llm provider [{provider_cfg}] not configured, "
-                            f"fallback to main gateway"
-                        )
-                    gateway = self._get_llm_gateway()
-                    result = await asyncio.wait_for(
-                        gateway.chat_lite(
-                            messages=messages_for_llm,
-                            temperature=0.3,
-                            max_tokens=self._settings.summary_max_tokens,
-                        ),
-                        timeout=outer_timeout,
-                    )
-                    content = (result or {}).get("content")
-                    # fallback 到主 gateway，provider/model 以 gateway 实际为准
-                    self._actual_provider = getattr(gateway, "provider_name", None) or "main"
-                    self._actual_model = settings.llm.get_lite_model()
-                    # 累加 LLM 用量到当前 SessionRecordService（对话内后台 LLM 调用计费）
-                    # v3.2.2 P1 修复：background_runner 调度场景透传 tenant_id/user_id
-                    from src.services.session_record import record_background_llm_usage
-                    record_background_llm_usage(
-                        (result or {}).get("usage"),
-                        tenant_id=tenant_id,
-                        user_id=user_id,
-                        source="mid_term_summary",
-                        user_message="上下文压缩扫描摘要",
-                        model=settings.llm.get_lite_model(),  # chat_lite 实际消耗 lite 模型，按 lite 单价计费
-                    )
+                content, usage, finish_reason = await _invoke_once(messages_for_llm)
+                _accumulate_usage(usage)
 
                 content = (content or "").strip()
                 if content:
+                    truncated = False
+                    # length 截断兜底：续写一次拼接（2026-09-30，生产实测 1500
+                    # 预算被 16 万 token 输入打满截断，用户偏好段丢失）
+                    if finish_reason == "length":
+                        try:
+                            cont_content, cont_usage, cont_finish = await _invoke_once(
+                                messages_for_llm
+                                + [
+                                    {"role": "assistant", "content": content},
+                                    {
+                                        "role": "user",
+                                        "content": "继续，从中断处接着写，不要重复已写内容",
+                                    },
+                                ]
+                            )
+                            _accumulate_usage(cont_usage)
+                            cont_content = (cont_content or "").strip()
+                            if cont_content:
+                                content = f"{content}\n{cont_content}"
+                            if cont_finish == "length":
+                                truncated = True
+                                logger.warning(
+                                    f"ContextCompression summary still truncated "
+                                    f"after continuation, session budget={max_tokens}x2"
+                                )
+                        except Exception as cont_err:
+                            # 续写失败不影响已有摘要可用性，但首段确实被截断了
+                            truncated = True
+                            logger.warning(
+                                f"ContextCompression summary continuation failed: "
+                                f"{type(cont_err).__name__}: {cont_err}"
+                            )
                     logger.info(
                         f"ContextCompression summary LLM ok, attempt={attempt}, "
-                        f"len={len(content)}, provider={self._actual_provider}"
+                        f"len={len(content)}, provider={self._actual_provider}, "
+                        f"finish_reason={finish_reason}, truncated={truncated}, "
+                        f"max_tokens={max_tokens}"
                     )
-                    return content
+                    return content, total_usage, truncated
                 # 空 content 也视为失败，进入重试
                 last_error = ValueError("empty content from summary LLM")
                 logger.warning(f"ContextCompression summary LLM empty content, attempt={attempt}")
@@ -995,7 +1096,7 @@ class ContextCompressionService:
         logger.error(
             f"ContextCompression summary LLM exhausted retries, last_error={last_error}"
         )
-        return None
+        return None, total_usage, False
 
     # ========== 同步降级路径 ==========
 
@@ -1372,30 +1473,54 @@ class ContextCompressionService:
         # 5) 预处理 COMPRESS 区
         processed_compress = self._preprocess_tool_results(compress)
 
-        # 6) 摘要 LLM（失败 → 降级）
+        # 5.5) 经济性闸门（2026-09-30）：COMPRESS 区太小（< 4 万 token，摘要
+        # 输入:摘要比凑不出 50:1）且上下文远未接近模型上限时，压缩无经济价值
+        # ——后续重读走 cache-hit 便宜价即可，跳过 LLM 摘要走 truncate 降级
         existing_summary = self.get_active_summary(session_id, source_type)
-        # v3.2.2 P1 修复：透传 SessionMeta 的 tenant_id/user_id，让 background_runner
-        # 调度场景（无 HTTP 上下文）的计费能归属到具体租户
-        summary_text = await self._call_summary_llm(
-            existing_summary,
-            processed_compress,
-            tenant_id=meta.tenant_id,
-            user_id=meta.user_id,
+        zone_tokens = count_text_tokens(
+            self._build_summary_prompt(existing_summary, processed_compress)
         )
-        fallback_used = False
-        llm_tokens_used: Optional[int] = None
-        if summary_text is None:
+        near_limit = meta.context_token_count >= int(self._get_model_limit() * 0.8)
+        if zone_tokens < _SUMMARY_GATE_MIN_INPUT_TOKENS and not near_limit:
+            logger.info(
+                f"ContextCompression gate skip: zone_tokens={zone_tokens} < "
+                f"{_SUMMARY_GATE_MIN_INPUT_TOKENS} and context far from model limit "
+                f"({meta.context_token_count}/{self._get_model_limit()}), "
+                f"sid={session_id}, source={source_type}"
+            )
             summary_text = self._fallback_truncate(compress)
+            summary_usage: Dict[str, int] = {}
+            summary_truncated = False
             fallback_used = True
             llm_tokens_used = 0
-            logger.warning(
-                f"ContextCompression fallback to truncate, session={session_id}, source={source_type}"
-            )
         else:
-            # 估算 LLM 消耗（粗略：prompt + output）
-            llm_tokens_used = count_text_tokens(
-                self._build_summary_prompt(existing_summary, processed_compress)
-            ) + count_text_tokens(summary_text)
+            # 6) 摘要 LLM（失败 → 降级）
+            # v3.2.2 P1 修复：透传 SessionMeta 的 tenant_id/user_id，让 background_runner
+            # 调度场景（无 HTTP 上下文）的计费能归属到具体租户
+            summary_text, summary_usage, summary_truncated = await self._call_summary_llm(
+                existing_summary,
+                processed_compress,
+                tenant_id=meta.tenant_id,
+                user_id=meta.user_id,
+            )
+            fallback_used = False
+            llm_tokens_used: Optional[int] = None
+            if summary_text is None:
+                summary_text = self._fallback_truncate(compress)
+                summary_usage = {}
+                summary_truncated = False
+                fallback_used = True
+                llm_tokens_used = 0
+                logger.warning(
+                    f"ContextCompression fallback to truncate, session={session_id}, source={source_type}"
+                )
+            else:
+                # 真实 LLM 消耗（含重试/续写累计），无 usage 时回退估算
+                llm_tokens_used = (
+                    summary_usage.get("prompt_tokens", 0) + summary_usage.get("completion_tokens", 0)
+                ) or count_text_tokens(
+                    self._build_summary_prompt(existing_summary, processed_compress)
+                ) + count_text_tokens(summary_text)
 
         # 7) 收集被压缩消息的 BIGINT id
         compressed_ids: List[int] = []
@@ -1448,6 +1573,10 @@ class ContextCompressionService:
             fallback_used=fallback_used,
             llm_provider=self._actual_provider or self._summary_provider_cfg,
             llm_model=self._actual_model or self._summary_model_cfg,
+            llm_prompt_tokens=summary_usage.get("prompt_tokens", 0),
+            llm_completion_tokens=summary_usage.get("completion_tokens", 0),
+            llm_cached_tokens=summary_usage.get("cached_tokens", 0),
+            summary_truncated=summary_truncated,
             trigger_reason=final_reason,
         )
 

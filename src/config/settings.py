@@ -269,7 +269,7 @@ class MidTermMemoryConfig(BaseModel):
     # 分段保留
     header_keep: int = 3                     # 头部保留消息数
     tail_keep: int = 30                      # 尾部保留消息数（按工具链边界对齐）
-    # 摘要 LLM
+    # 摘要 LLM（自适应下限；实际 max_tokens = clamp( COMPRESS区tokens÷50, 此值, 4096 )）
     summary_max_tokens: int = 1500
     summary_llm_retry: int = 2               # 摘要 LLM 调用重试次数
     summary_llm: SummaryLLMConfig = Field(default_factory=SummaryLLMConfig)

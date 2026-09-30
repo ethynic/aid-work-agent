@@ -60,7 +60,7 @@ async def test_call_summary_llm_direct_deepseek_success(monkeypatch):
     import httpx
     monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
 
-    content, usage = await _call_summary_llm_direct(
+    content, usage, finish_reason = await _call_summary_llm_direct(
         provider="deepseek",
         model="deepseek-chat",
         messages_for_llm=[{"role": "user", "content": "test prompt"}],
@@ -70,6 +70,7 @@ async def test_call_summary_llm_direct_deepseek_success(monkeypatch):
     )
     assert content == "## 用户与背景\n- alice"
     assert usage is not None
+    assert finish_reason == "stop"
     assert "deepseek.com" in captured["url"]
     assert "/chat/completions" in captured["url"]
     assert captured["headers"]["Authorization"] == "Bearer sk-test-deepseek-key"
@@ -124,14 +125,16 @@ async def test_summary_llm_uses_direct_path_when_key_present(monkeypatch):
 
     async def fake_direct(**kwargs):
         called_direct["flag"] = True
-        return ("## 用户与背景\n- direct path", {"prompt_tokens": 10})
+        return ("## 用户与背景\n- direct path", {"prompt_tokens": 10}, "stop")
 
     monkeypatch.setattr("src.memory.mid_term._call_summary_llm_direct", fake_direct)
     monkeypatch.setattr(asyncio, "sleep", AsyncMock(return_value=None))
 
-    result = await svc._call_summary_llm(None, [{"role": "user", "content": "x"}])
+    summary, usage, truncated = await svc._call_summary_llm(None, [{"role": "user", "content": "x"}])
 
-    assert result == "## 用户与背景\n- direct path"
+    assert summary == "## 用户与背景\n- direct path"
+    assert usage["prompt_tokens"] == 10
+    assert truncated is False
     assert called_direct["flag"] is True
     # gateway 不应被调用
     assert gateway.chat_lite.await_count == 0

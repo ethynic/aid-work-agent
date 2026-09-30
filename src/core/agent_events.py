@@ -187,6 +187,12 @@ class ContextCompressedEvent:
     llm_provider: Optional[str] = None
     llm_model: Optional[str] = None
     duration_ms: int = 0
+    # 压缩 LLM 调用自身的真实用量（多次重试/续写已累加；fallback 路径为 0）
+    llm_prompt_tokens: int = 0
+    llm_completion_tokens: int = 0
+    llm_cached_tokens: int = 0
+    # 摘要是否仍被 max_tokens 截断（续写兜底后仍 finish_reason=length）
+    summary_truncated: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         """转为通过 SSE / trace 流转发的事件字典。
@@ -207,6 +213,10 @@ class ContextCompressedEvent:
             "llm_provider": self.llm_provider,
             "llm_model": self.llm_model,
             "duration_ms": self.duration_ms,
+            "llm_prompt_tokens": self.llm_prompt_tokens,
+            "llm_completion_tokens": self.llm_completion_tokens,
+            "llm_cached_tokens": self.llm_cached_tokens,
+            "summary_truncated": self.summary_truncated,
         }
 
 

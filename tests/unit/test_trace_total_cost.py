@@ -18,11 +18,13 @@ from unittest.mock import MagicMock, patch
 import pytest
 from loguru import logger
 
-from src.core.trace_collector import TraceCollector
+from src.core.trace_collector import TraceCollector, SpanRecord
 from src.core.trace_persist import (
     _do_persist,
     _pending_total_cost_updates,
     _remember_pending_total_cost,
+    append_recap_span,
+    append_recap_summary,
     update_total_cost,
 )
 from src.services.session_record import SessionRecordService
@@ -349,3 +351,191 @@ def test_pending_total_cost_merge_is_monotonic_and_keeps_order():
 
     # 更新已有 key 不改变插入顺序（tr_mono 的多次更新不会把它挪到队首）
     assert list(_pending_total_cost_updates) == ["tr_first", "tr_mono"]
+
+
+# ============================================================
+# obs_spans.cost 填充（2026-09-30）
+# ============================================================
+
+
+def _mock_span_cost(cost):
+    return patch(
+        "src.services.billing.calculate_credit_cost", return_value=cost
+    )
+
+
+def _make_span(model="deepseek-v4-flash", usage=None):
+    return SpanRecord(
+        span_id="sp_cost1",
+        name="context_compressed",
+        start_time=1000.0,
+        end_time=1002.0,
+        span_type="context_compressed",
+        tool_args="{}",
+        result="{}",
+        duration_ms=2000,
+        success=True,
+        model=model,
+        usage=usage if usage is not None else {
+            "prompt_tokens": 160000, "completion_tokens": 4096, "cached_tokens": 120000,
+        },
+    )
+
+
+def test_span_insert_writes_cost_from_price_table():
+    """span 带 model + usage 时，INSERT 写入按价目表计算的 cost"""
+    collector = TraceCollector("sid", "t1", "user", "input", "chat")
+    span = _make_span()
+    collector.trace.spans.append(span)
+
+    cursor = MagicMock()
+    with _mock_span_cost(3.14), patch(
+        "src.db.database.get_logs_connection", return_value=_logs_cm(cursor)
+    ):
+        _do_persist(collector.trace)
+
+    span_sql = None
+    span_params = None
+    for call in cursor.execute.call_args_list:
+        if "INSERT INTO obs_spans" in call[0][0]:
+            span_sql, span_params = call[0][0], call[0][1]
+    assert span_sql is not None
+    assert "cost" in span_sql
+    # 参数顺序：..., prompt_tokens(8), completion_tokens(9), cached_tokens(10), cost(11), ...
+    assert span_params[8] == 160000
+    assert span_params[9] == 4096
+    assert span_params[10] == 120000
+    assert span_params[11] == 3.14
+
+
+def test_span_insert_passes_cached_tokens_to_billing():
+    """cached_tokens 参与计价（cache-hit 低价口径）"""
+    collector = TraceCollector("sid", "t1", "user", "input", "chat")
+    collector.trace.spans.append(_make_span())
+
+    cursor = MagicMock()
+    with patch(
+        "src.services.billing.calculate_credit_cost",
+        return_value=1.0,
+    ) as cost_mock, patch(
+        "src.db.database.get_logs_connection", return_value=_logs_cm(cursor)
+    ):
+        _do_persist(collector.trace)
+
+    kwargs = cost_mock.call_args.kwargs
+    assert kwargs["cached_input_tokens"] == 120000
+    assert kwargs["model"] == "deepseek-v4-flash"
+
+
+def test_span_insert_no_model_keeps_zero_cost_without_billing():
+    """model 为空 → cost=0，不触达价目表"""
+    collector = TraceCollector("sid", "t1", "user", "input", "chat")
+    collector.trace.spans.append(_make_span(model="", usage={"prompt_tokens": 10}))
+
+    cursor = MagicMock()
+    with patch(
+        "src.services.billing.calculate_credit_cost",
+        side_effect=AssertionError("不应调用计价"),
+    ) as cost_mock, patch(
+        "src.db.database.get_logs_connection", return_value=_logs_cm(cursor)
+    ):
+        _do_persist(collector.trace)
+
+    cost_mock.assert_not_called()
+    span_call = next(
+        c for c in cursor.execute.call_args_list if "INSERT INTO obs_spans" in c[0][0]
+    )
+    assert span_call[0][1][10] == 0  # cached_tokens
+    assert span_call[0][1][11] == 0  # cost
+
+
+def test_span_insert_billing_failure_keeps_zero_cost():
+    """价目查询异常 → cost=0，span 仍正常落库（best-effort）"""
+    collector = TraceCollector("sid", "t1", "user", "input", "chat")
+    collector.trace.spans.append(_make_span())
+
+    cursor = MagicMock()
+    with patch(
+        "src.services.billing.calculate_credit_cost",
+        side_effect=RuntimeError("价目表缺失"),
+    ), patch(
+        "src.db.database.get_logs_connection", return_value=_logs_cm(cursor)
+    ):
+        _do_persist(collector.trace)
+
+    span_call = next(
+        c for c in cursor.execute.call_args_list if "INSERT INTO obs_spans" in c[0][0]
+    )
+    assert span_call[0][1][11] == 0
+
+
+def test_persist_metadata_has_total_tokens_scope():
+    """trace metadata 标注 total_tokens 口径：主对话记录（不含独立落账后台调用）"""
+    collector = TraceCollector("sid", "t1", "user", "input", "chat")
+    cursor = MagicMock()
+    with patch("src.db.database.get_logs_connection", return_value=_logs_cm(cursor)):
+        _do_persist(collector.trace)
+
+    import json
+    trace_call = cursor.execute.call_args_list[0]
+    metadata = json.loads(trace_call[0][1][7])
+    assert metadata["total_tokens_scope"] == "session_record_main"
+
+
+def test_append_recap_span_writes_cost():
+    """recap 旁路 span 同口径计算并写入 cost"""
+    cursor = MagicMock()
+    with _mock_span_cost(0.66), patch(
+        "src.db.database.get_logs_connection", return_value=_logs_cm(cursor)
+    ):
+        append_recap_span(
+            trace_id="tr_recap",
+            name="recap:external_push:llm",
+            model="deepseek-flash",
+            usage={"prompt_tokens": 5000, "completion_tokens": 500, "cached_tokens": 4000},
+            start_time=1000.0,
+            end_time=1001.0,
+        )
+
+    sql_arg, params_arg = cursor.execute.call_args.args
+    assert "INSERT INTO obs_spans" in sql_arg
+    assert "cost" in sql_arg
+    # 参数顺序：..., prompt_tokens(8), completion_tokens(9), cached_tokens(10), cost(11), ...
+    assert params_arg[8] == 5000
+    assert params_arg[9] == 500
+    assert params_arg[10] == 4000
+    assert params_arg[11] == 0.66
+
+
+def test_append_recap_summary_writes_recap_tokens():
+    """total_tokens>0 时合并进 metadata.recap_tokens"""
+    cursor = MagicMock()
+    cursor.rowcount = 1
+    with patch("src.db.database.get_logs_connection", return_value=_logs_cm(cursor)):
+        append_recap_summary(
+            "tr_recap",
+            {"recap": {"task": "external_push", "status": "ok"}},
+            total_cost=1.5,
+            total_tokens=53949,
+        )
+
+    import json
+    sql_arg, params_arg = cursor.execute.call_args.args
+    assert "recap_tokens" not in sql_arg  # 走 JSONB merge，不在 SQL 里
+    metadata = json.loads(params_arg[0])
+    assert metadata["recap_tokens"] == 53949
+    assert metadata["recap"]["task"] == "external_push"
+    assert params_arg[1] == 1.5
+
+
+def test_append_recap_summary_zero_tokens_no_recap_tokens_key():
+    """total_tokens=0 时不写 recap_tokens，不改变原 metadata"""
+    cursor = MagicMock()
+    cursor.rowcount = 1
+    with patch("src.db.database.get_logs_connection", return_value=_logs_cm(cursor)):
+        append_recap_summary("tr_recap", {"recap": {"task": "x"}}, total_cost=0.0)
+
+    import json
+    params_arg = cursor.execute.call_args.args[1]
+    metadata = json.loads(params_arg[0])
+    assert "recap_tokens" not in metadata

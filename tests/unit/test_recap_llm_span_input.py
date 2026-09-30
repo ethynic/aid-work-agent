@@ -55,3 +55,39 @@ def test_llm_span_no_trace_id_skipped():
                         {"content": "x"}, "deepseek-flash", 1000.0,
                         messages=[{"role": "user", "content": "hi"}])
     mock_append.assert_not_called()
+
+
+def test_accumulate_obs_tokens_survive_billing_failure():
+    """计价异常（价目缺失等）时 _obs_cost 不增，但 _obs_tokens 仍累计"""
+    from src.services.recap.tasks.external_push import _accumulate_obs_cost
+
+    payload = _payload()
+    with patch("src.services.billing.calculate_credit_cost",
+               side_effect=RuntimeError("价目表缺失")):
+        _accumulate_obs_cost(
+            payload,
+            {"prompt_tokens": 100, "completion_tokens": 50},
+            model="deepseek-flash",
+        )
+    assert payload._obs_tokens == 150
+    assert getattr(payload, "_obs_cost", 0.0) == 0.0
+
+
+def test_accumulate_obs_cost_accumulates_both():
+    """计价正常时 _obs_cost 与 _obs_tokens 均累计"""
+    from src.services.recap.tasks.external_push import _accumulate_obs_cost
+
+    payload = _payload()
+    with patch("src.services.billing.calculate_credit_cost", return_value=0.5):
+        _accumulate_obs_cost(
+            payload,
+            {"prompt_tokens": 100, "completion_tokens": 50},
+            model="deepseek-flash",
+        )
+        _accumulate_obs_cost(
+            payload,
+            {"prompt_tokens": 10, "completion_tokens": 5},
+            model="deepseek-flash",
+        )
+    assert payload._obs_tokens == 165
+    assert payload._obs_cost == 1.0

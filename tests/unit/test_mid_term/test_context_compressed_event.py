@@ -31,6 +31,10 @@ class TestContextCompressedEvent:
         assert e.llm_provider is None
         assert e.llm_model is None
         assert e.duration_ms == 0
+        assert e.llm_prompt_tokens == 0
+        assert e.llm_completion_tokens == 0
+        assert e.llm_cached_tokens == 0
+        assert e.summary_truncated is False
 
     def test_full_fields(self):
         e = ContextCompressedEvent(
@@ -86,6 +90,49 @@ class TestContextCompressedEvent:
         d = ContextCompressedEvent().to_dict()
         after = int(time.time() * 1000)
         assert before <= d["timestamp"] <= after
+
+    def test_usage_fields_in_to_dict_and_span(self):
+        """压缩 LLM 真实用量透传 to_dict，collector 写入 span.usage；截断标记进 info"""
+        e = ContextCompressedEvent(
+            summary_id="csum_usage",
+            llm_provider="deepseek",
+            llm_model="deepseek-flash",
+            llm_prompt_tokens=160000,
+            llm_completion_tokens=4096,
+            llm_cached_tokens=120000,
+            summary_truncated=True,
+            duration_ms=9000,
+        )
+        d = e.to_dict()
+        assert d["llm_prompt_tokens"] == 160000
+        assert d["llm_completion_tokens"] == 4096
+        assert d["llm_cached_tokens"] == 120000
+        assert d["summary_truncated"] is True
+
+        c = TraceCollector(
+            session_id="sess_u", tenant_id="t_u", user_id="u_u",
+            input_msg="hi", source_type="chat",
+        )
+        c.on_event(d)
+        span = next(s for s in c.trace.spans if s.span_type == "context_compressed")
+        assert span.usage == {
+            "prompt_tokens": 160000,
+            "completion_tokens": 4096,
+            "cached_tokens": 120000,
+        }
+        assert span.compression_info["summary_truncated"] is True
+
+    def test_zero_usage_yields_no_span_usage(self):
+        """fallback/闸门路径 usage 全 0 → span.usage 为 None（与旧行为一致）"""
+        c = TraceCollector(
+            session_id="sess_z", tenant_id="t_z", user_id="u_z",
+            input_msg="hi", source_type="chat",
+        )
+        c.on_event(
+            ContextCompressedEvent(summary_id="csum_z", fallback_used=True).to_dict()
+        )
+        span = next(s for s in c.trace.spans if s.span_type == "context_compressed")
+        assert span.usage is None
 
 
 class TestTraceCollectorHandleContextCompressed:
