@@ -130,3 +130,49 @@ def test_no_message_loss_after_split(service):
     original_ids = [m.get("id") for m in msgs]
     assert sorted(combined_ids) == sorted(original_ids), "分段不能丢消息或重复"
     assert len(combined_ids) == len(set(combined_ids)), "分段不能有重复 id"
+
+
+def test_header_keep_zero_compress_covers_all_but_tail():
+    """header_keep=0（生产默认）：开场消息进 COMPRESS 区，HEADER 为空。
+
+    背景：header_keep>0 时 LLM 上下文为「摘要在前、开场原文在后」，
+    存在时序倒挂（LLM 可能把开场消息当成摘要后的新消息）。
+    """
+    cfg = MidTermMemoryConfig(header_keep=0, tail_keep=10)
+    svc = ContextCompressionService(settings_cfg=cfg)
+    msgs = [{"role": "user", "content": str(i), "id": i} for i in range(50)]
+    header, compress, tail = svc._split_messages(msgs)
+    assert header == []
+    # 开场消息（id=0）必须落入 COMPRESS 区被摘要覆盖
+    compress_ids = [m.get("id") for m in compress]
+    assert 0 in compress_ids
+    assert len(tail) >= 10
+
+
+def test_header_keep_zero_first_unit_with_tool_chain_stays_intact():
+    """header_keep=0 且开场对话单元含完整工具链（user → assistant(tc) → tool）：
+    切断点落在 index 0（user 是安全点），整个单元完整落入 COMPRESS 区，
+    工具链不被切断、不产生孤儿 tool。
+    """
+    cfg = MidTermMemoryConfig(header_keep=0, tail_keep=10)
+    svc = ContextCompressionService(settings_cfg=cfg)
+    msgs = [
+        {"role": "user", "content": "q", "id": 1},
+        {
+            "role": "assistant", "content": "calling tool", "id": 2,
+            "tool_calls": [{
+                "id": "call_1", "type": "function",
+                "function": {"name": "weather", "arguments": '{"city": "BJ"}'},
+            }],
+        },
+        {"role": "tool", "content": "sunny", "id": 3, "metadata": {"tool_name": "weather"}},
+        {"role": "assistant", "content": "final answer", "id": 4},
+    ]
+    msgs += [{"role": "user", "content": str(i), "id": 10 + i} for i in range(50)]
+    header, compress, tail = svc._split_messages(msgs)
+    assert header == []
+    # 完整工具链单元（id 1-4）全部落入 COMPRESS 区，摘要可见
+    compress_ids = [m.get("id") for m in compress]
+    for i in (1, 2, 3, 4):
+        assert i in compress_ids, f"id={i} 应完整落入 COMPRESS 区"
+    assert len(tail) >= 10

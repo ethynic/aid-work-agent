@@ -267,7 +267,7 @@ class MidTermMemoryConfig(BaseModel):
     token_threshold_ratio: float = 0.7       # token 主阈值：占模型上下文上限的比例
     message_count_threshold: int = 200       # 消息数兜底阈值（含工具消息）；缓存=0 时靠它兜底极端长会话
     # 分段保留
-    header_keep: int = 3                     # 头部保留消息数
+    header_keep: int = 0                     # 头部保留消息数（0=开场消息一并压缩，避免摘要与开场原文的时序倒挂）
     tail_keep: int = 30                      # 尾部保留消息数（按工具链边界对齐）
     # 摘要 LLM（自适应下限；实际 max_tokens = clamp( COMPRESS区tokens÷50, 此值, 4096 )）
     summary_max_tokens: int = 1500

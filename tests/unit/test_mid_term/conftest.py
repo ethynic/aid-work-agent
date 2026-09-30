@@ -11,8 +11,12 @@ from src.config.settings import MidTermMemoryConfig
 
 @pytest.fixture
 def mid_term_settings() -> MidTermMemoryConfig:
-    """标准中期记忆配置（用默认值）"""
-    return MidTermMemoryConfig()
+    """标准中期记忆配置。
+
+    header_keep 显式钉在 3：分段边界测试需覆盖 HEADER 区机制；
+    生产默认已改为 0（开场消息一并压缩，消除摘要时序倒挂）。
+    """
+    return MidTermMemoryConfig(header_keep=3)
 
 
 @pytest.fixture(autouse=True)
