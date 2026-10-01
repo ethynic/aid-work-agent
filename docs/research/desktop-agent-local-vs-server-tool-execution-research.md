@@ -2,7 +2,7 @@
 
 > 日期：2026-08-12
 >
-> 当前设计：[桌面客户端 P1 架构与约束基线](../plans/plan-desktop-client-p1.md)
+> 当前架构：[Agent 应用层架构优化设计](../system/agent-application-architecture-design.md)（原桌面 P1 基线已于 2026-10-01 删除）
 >
 > 架构替代说明：本文关于本地/服务端双文件执行器、受权 FileRef、Provider Host 和本地副作用
 > 安全边界的调研结论仍有效；第 8 节推荐的 Local Agent Coordinator、旧 `agent/next` 与

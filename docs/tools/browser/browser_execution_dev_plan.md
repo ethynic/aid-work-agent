@@ -223,8 +223,8 @@ Phase 3R 实施按项目三智能体流程串行执行：开发与自测 → 独
 
 ## 7. Phase 4：Agent Desktop 项目内集成 browser runtime
 
-本 Phase 不属于当前 [Agent Desktop P1 开发计划](../../plans/plan-desktop-client-p1-implementation.md)；
-只有 P0 将 browser 标记从 `not_migrated` 解除、P2/Execution Fabric 重新评审并建立独立门禁后，
+本 Phase 不属于当前任何桌面开发计划（原 Desktop P1 计划已于 2026-10-01 删除）；
+只有桌面规划按[应用层架构](../../system/agent-application-architecture-design.md)重写、Execution Fabric 重新评审并建立独立门禁后，
 才能作为 Desktop 可选模块排期。浏览器计划不创建另一套客户端工程、安装包、更新器、托盘或
 业务 Run 状态机。
 

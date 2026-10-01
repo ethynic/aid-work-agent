@@ -600,6 +600,6 @@ audit_export.generated
 - `docs/system/work-outcome-record-design.md`
 - `docs/system/saas/tenant-credit-billing-design.md`
 - `docs/system/knowledge-base/knowledge-base-enhancement-design.md`
-- `docs/plans/plan-desktop-client-p1.md`
+- `docs/system/agent-application-architecture-design.md`
 
 本设计负责把上述能力串成“版本—评估—发布—观测—业务结果—回滚”的企业运营闭环，不替代其模块级实现设计。

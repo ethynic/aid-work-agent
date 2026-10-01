@@ -467,6 +467,6 @@ context.cache_revoked
 - `docs/system/knowledge-base/knowledge-base-enhancement-design.md`
 - `docs/tools/knowledge-base-search-tenant-isolation-design.md`
 - `docs/infrastructure/prompt-lifecycle-design.md`
-- `docs/plans/plan-desktop-client-p1.md`
+- `docs/system/agent-application-architecture-design.md`
 
 本设计是上述模块之上的企业上下文治理总设计；实现时应更新原专题的状态，不复制第二套 Memory 或 Knowledge 运行时。

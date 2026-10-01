@@ -29,7 +29,7 @@
 
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
-| 20260922-1142 | 统一 Agent Run 应用服务与持久执行 | 📋 待开发 | P0 统一生产 Web 与已售生产渠道（微信客服必选）的 Run 生命周期、断线后台执行、运行中补充、等待/取消、可靠最终回复与通知；桌面 P1 和其余 P2 独立规划。 | [平台架构](system/enterprise-agent-platform/enterprise-agent-platform-integration-design.md) / [P0 设计基线](plans/plan-unified-agent-run-lifecycle.md) | [P0 开发计划](plans/plan-unified-agent-run-lifecycle-implementation.md) / [P1 桌面设计](plans/plan-desktop-client-p1.md) / [P1 桌面开发计划](plans/plan-desktop-client-p1-implementation.md) / [P2 演进规划](plans/plan-agent-architecture-p2.md) |
+| 20261001-1849 | Agent 应用层架构优化（统一入口 + 内核收敛） | 📋 待开发 | 新增唯一入口 AgentService.run(request, sink)，逐个迁移 Web/渠道/定时/桌面入口，再从 agent.py 拆出上下文装配；每步可独立上线。 | [设计](system/agent-application-architecture-design.md) | — |
 | 20260920-1006 | API 数据源入知识库（api_ingest，多租户通用） | ⛔ 暂不开发（宏陶由专用模块承接） | **文档即配置、agent 驱动、不写每接口代码**：租户上传接口文档 → agent 实探生成源契约 → dry-run 人审；运行期契约直执（白名单 HttpApiTool 翻页，零 token）+ agent_loop 兜底；键值数据按字段 label 转语义 markdown、原始记录存 metadata.raw_payload；**知识粒度由 agent 决定**（产品类一记录=一条知识整条入库，长文类切分）；in_doc/metadata_only 分家防易变字段重嵌入；external_id/hash 判新增更新、幂等 upsert、调度协程、two_strike 删除、手动 API+工具；已按宏陶商城 API 说明完成适配核对。 | [设计](system/api-ingest/api-ingest-knowledge-design.md) | [开发计划](plans/plan-api-ingest-knowledge.md) |
 | 20260921-1100 | 宏陶商城产品知识库同步（hongtao_shop 专用模块） | 🔧 部分完成 | P1 已提交（f9e8dcbf）；P2 后端已提交（0fa634c5，含按需加载/单闸/退避强制）；P2.3 前端完成（build 过）；P2.5 已提交（c1993b04）；agent2 试跑修复三轮（v1.6 VL 上限 400/v1.7 正文结构化字段/v1.8 去开场句+部分同步更名+滚动修复），17 产品已重灌，待全量验收。 | [设计](system/hongtao-shop/hongtao-shop-kb-design.md) | [开发计划](plans/plan-hongtao-shop-kb.md) |
 | 20260810-2104 | 第一方 CLI / MCP Provider 架构规范 | 📋 待开发 | 所有第一方 CLI 必须成为独立标准 MCP Provider，同时支持 aid-work-agent Web Local Tool Runtime、未来 Agent Desktop、Codex、… | [规范](system/first-party-cli-mcp-provider-standard.md) | 首次落地并入 [BOSS MVP 计划](plans/recruiting/plan-recruiting-cli-agent-integration.md) |
@@ -101,7 +101,7 @@
 |---|------|------|------|---------|---------|
 | 20260922-1931 | 租户前台知识库「访问授权」矩阵 | 🔧 部分完成（开发完成，待部署验收） | 租户管理员在知识库页面右上角「访问授权」弹框中以矩阵（行=一级栏目、列=数字员工）自助查看/配置数字员工栏目授权，补齐管理后台按员工勾选视角下「未配置=全部允许」不可见的盲区。三态复选框（半选=未配置默认全允许）；首勾弹窗确认收窄；取消全部勾选恢复默认全允许；复用现有 /api/saas/tenant/subagent-knowledge 接口（后端零改动），保存时原样保留跨租户共享项。三态语义已同步到管理后台 TenantMgmt 知识库授权弹框（本租户栏目三态、共享栏目保持二态），前后台 UI 一致。 | — | — |
 | 20260602-0956 | 前端 Office 预览 | 📋 待开发 | 前端在线预览 Office 文档（Word/Excel/PPT） | [设计](research/frontend/frontend-office-preview-design.md) | — |
-| 20260714-1912 | Agent 跨平台桌面客户端 | 🔧 部分完成 | 已完成独立 Shell、安全与构建基础；后续按统一云端 Run 的 P1 基线并行开发，旧 D1/本地 Coordinator 路线停止。 | [P1 设计基线](plans/plan-desktop-client-p1.md) | [P1 并行开发计划](plans/plan-desktop-client-p1-implementation.md) |
+| 20260714-1912 | Agent 跨平台桌面客户端 | 🔧 部分完成 | 已完成独立 Shell、安全与构建基础；原 P1 规划已于 2026-10-01 删除，待应用层架构 S2 迁移桌面入口时重写。 | [应用层架构](system/agent-application-architecture-design.md) | — |
 | 20260720-1459 | 多会话后台流式 | 🔧 部分完成 | 2026-07-20 代码与单测完成，待真实环境 E2E 验收。 | [设计](system/multi-session-background-streaming-design.md) | [开发计划](plans/plan-multi-session-background-streaming.md) |
 
 ---

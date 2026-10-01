@@ -14,7 +14,7 @@
 >
 > v2.5 变更：把人工参与改为可持久化的工具 suspend/resume；增加结构化操作指引、完成条件监测、自动/手工交还和原 Agent 工具调用续跑，禁止依赖用户再次发消息或 LLM 重新调用工具。
 >
-> v2.6 变更：确立 Agent-first 原则。桌面执行能力改为 [Agent Desktop](../../plans/plan-desktop-client-p1.md) 的可选 browser runtime。当前 Desktop P1 不接入 browser legacy，后续须按 P2/Execution Fabric 重新评审。
+> v2.6 变更：确立 Agent-first 原则。桌面执行能力改为 Agent Desktop 的可选 browser runtime。桌面规划重写前不接入 browser legacy，后续须按 Execution Fabric 重新评审。
 >
 > v2.7 变更：彻底删除独立浏览器客户端产品、工程、安装包、协议 scheme、更新器和发布依赖。桌面执行只作为 Agent Desktop 内置可选 `browser-runtime` 模块存在；`browser/1.0` 仅是主进程内 runtime 与服务端 RemoteExecutor 的隔离协议。
 >
