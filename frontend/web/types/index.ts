@@ -34,7 +34,25 @@ export interface ImageRef {
   linked_chunk_id?: number
 }
 
+/** 提交失败态（纯内存，不持久化；失败轮次本就未落库，刷新即失）。
+ *  POST /api/chat/runners 失败时挂到乐观 assistant 占位消息上，
+ *  提交被接受后随乐观组一起被 runner 视图替换而消失。 */
+export interface SubmitFailureState {
+  /** definitive：4xx 已放弃自动重试；retrying：网络/5xx 仍在指数退避自动重试 */
+  kind: 'definitive' | 'retrying'
+  /** 展示给用户的错误文案（与 runnerError 同一归约） */
+  message: string
+  /** 已自动重试次数（仅 retrying 态有意义） */
+  attempts: number
+  /** 手动重试：复用原 client_request_id 与原 body 幂等重放（函数字段，不进序列化路径） */
+  retry: () => void
+}
+
 export interface ChatMessage {
+  messageId?: string
+  runnerId?: string
+  clientRequestId?: string
+  queueOrder?: number
   role: 'user' | 'assistant'
   content: string
   timestamp?: number
@@ -46,9 +64,16 @@ export interface ChatMessage {
    *  Phase 2 裁决：前端默认不消费/不渲染，仅声明形状供历史恢复使用） */
   verboseMessages?: VerboseMessage[]
   browserAssistance?: BrowserHumanAssistance
+  /** Safe verification notice on the original assistant message. */
+  waitingNotice?: string
   quickOptions?: QuickOption[]  // 编号选择按钮（§5.1 选择交互；纯前端增强，不持久化到历史）
   /** 用户主动取消的轮次（后端持久化于 assistant metadata.cancelled，历史加载时显示"用户取消"标记） */
   cancelled?: boolean
+  /** 所属 runner 仍在执行（queued/running/finalizing）：执行中在气泡下展示最近
+   *  工具活动作为过程反馈，终态后收起（完整执行详情仍仅 debug 模式展开） */
+  runnerActive?: boolean
+  /** 提交失败态（纯内存，不持久化）：runner POST 失败时挂乐观 assistant 消息 */
+  submitFailure?: SubmitFailureState
 }
 
 /** 编号选择元数据（设计 §5.1 选择交互）：工具结果 data.options，前端渲染编号按钮 */
@@ -71,6 +96,8 @@ export interface BrowserHumanAssistance {
   expires_at: string
   state?: 'pending' | 'controlling' | 'resume_queued' | 'resumed' | 'cancelled' | 'failed'
   missing_conditions?: string[]
+  /** Proven availability of this exact native wait's observation endpoint. */
+  view_available?: boolean
 }
 
 export interface ProgressMessage {

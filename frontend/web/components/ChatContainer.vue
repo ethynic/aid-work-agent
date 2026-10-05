@@ -55,6 +55,7 @@
               :disabled="isProcessing || isWaitingHuman"
               :is-processing="isProcessing"
               :files="currentFiles"
+              :can-stop="canStop"
               :upload-accept="currentUploadAccept"
               :toolbar-buttons="currentToolbarButtons"
               :quick-prompts="currentQuickPrompts"
@@ -111,6 +112,7 @@ const toggleSidebarFn = inject<() => void>('toggleSidebar', () => {})
 const {
   messages,
   isProcessing,
+  canStop,
   currentFiles,
   sendMessage,
   clearSession,
@@ -123,8 +125,15 @@ const {
   abortStreaming,
   sessionId: agentSessionId,
   inputHintState,
-  isWaitingHuman
+  isWaitingHuman,
+  runnerFeedback
 } = useAgent()
+
+// Runner errors are already reduced to safe product messages by the owner.
+// This is the single toast consumer; legacy SSE feedback keeps its old path.
+watch(runnerFeedback, feedback => {
+  if (feedback?.canPresent()) toast.error(feedback.message)
+})
 
 const { admin: tenantAdmin, isLoggedIn: tenantIsLoggedIn, init: initAuth, logout: doLogout } = useTenantAuth()
 const { currentSessionId, sessions, createNewSession, loadSessions, loadLatestSession, selectSession, renameSession, clearSessionCache: clearSessionListCache } = useSession()
@@ -526,7 +535,10 @@ async function handleSend(content: string) {
     }
   }
 
-  await sendMessage(content, subagentName.value, sid, instanceId.value)
+  const disposition = await sendMessage(content, subagentName.value, sid, instanceId.value)
+  if (disposition?.restoreInput && disposition.canRestore() && currentSessionId.value === sid) {
+    chatInputRef.value?.fillQuickPrompt(content, true)
+  }
 }
 
 async function handleUpload(file: File) {

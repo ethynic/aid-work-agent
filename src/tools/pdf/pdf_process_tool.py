@@ -133,10 +133,11 @@ class PdfProcessTool(BaseTool):
         self._user_id = user_id
 
     def _resolve_tenant_user(self):
-        """双轨获取 tenant_id/user_id：注入优先，ContextVar 兜底（HTTP 请求场景）。
-
-        与 word_process_tool._handle_md_to_word 一致。
-        """
+        """可信工具上下文优先；旧调用保留 setter 和 SaaS 上下文。"""
+        from src.tools.context import current_tool_execution_context
+        context = current_tool_execution_context()
+        if context is not None:
+            return context.tenant_id, context.user_id
         tenant_id = self._tenant_id
         if not tenant_id:
             try:

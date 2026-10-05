@@ -69,14 +69,17 @@ WECOM_TOOLS = {
 
 def _make_agent(is_master: bool, config=None):
     """构造 Agent（patch LLM/Skill/Plan 依赖，与 test_agent_loop.py 同一模式）"""
-    with patch("src.core.agent.llm_gateway") as mock_llm, \
-         patch("src.core.agent.SkillRegistry"), \
-         patch("src.core.agent.SkillExecutor"), \
-         patch("src.core.agent.PlanManager"):
+    with patch("src.services.agent_runner.runtime.profile.llm_gateway") as mock_llm, \
+         patch("src.services.agent_runner.runtime.profile.SkillRegistry"), \
+         patch("src.services.agent_runner.runtime.profile.SkillExecutor"), \
+         patch("src.services.agent_runner.runtime.profile.PlanManager"):
         mock_llm.get_model_name.return_value = "test-model"
         mock_llm.get_provider_name.return_value = "test-provider"
         from src.core.agent import Agent
-        return Agent(is_master=is_master, subagent_config=config)
+        agent = Agent(is_master=is_master, subagent_config=config)
+        # Metadata resources are lazy; construct them while I/O mocks are active.
+        agent.tool_registry
+        return agent
 
 
 def _load_recruiting_config():

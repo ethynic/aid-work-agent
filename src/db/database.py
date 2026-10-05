@@ -109,6 +109,10 @@ def init_postgres_pool(minconn: int = None, maxconn: int = None):
         connect_timeout=5,
         # 语句超时（30秒保护，防止慢查询堆积）
         options="-c statement_timeout=30000",
+        # TCP 层兜底：本环境 keepalives 对在用连接不生效（见下方健康检查注释），
+        # 半开 socket 上的查询会无限阻塞；tcp_user_timeout 让内核在 60s 无 ACK
+        # 后强制断开，使在用连接也能走异常路径而非永挂（Linux libpq 支持）。
+        tcp_user_timeout=60000,
         # 应用名称（方便在 pg_stat_activity 中识别）
         application_name="aid-work-agent"
     )

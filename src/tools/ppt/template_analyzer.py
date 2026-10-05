@@ -622,8 +622,8 @@ class TemplateAnalyzer:
 
     def _get_output_dir(self) -> Path:
         try:
-            from src.main import _get_tenant_upload_dir
+            from src.core.storage import get_current_conversation_dir
 
-            return _get_tenant_upload_dir()
+            return get_current_conversation_dir()
         except (ImportError, AttributeError):
             return Path("storage/ppt")

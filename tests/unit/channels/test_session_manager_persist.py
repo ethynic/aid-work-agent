@@ -426,10 +426,11 @@ class TestProcessAndPersist:
             "source": "user_upload",
             "usage": "attachment",
         }
-        stub_agent._last_response_images = [img_ref]
+        from src.core.agent import AgentResponse
+        send_response = AsyncMock(return_value=True)
         patched_session_queue.enqueue_and_process.return_value = EnqueueResult(
             status="success",
-            response_text="",
+            response_text=AgentResponse("", [img_ref]),
             merged_input="你好",
             was_merged=False,
             lease_token="lease-1",
@@ -440,7 +441,7 @@ class TestProcessAndPersist:
             tenant_id="t1",
             user_content="你好",
             agent=stub_agent,
-            send_response=AsyncMock(return_value=True),
+            send_response=send_response,
         )
 
         assert result["status"] == "success"
@@ -453,7 +454,7 @@ class TestProcessAndPersist:
             metadata = json.loads(metadata)
         assert metadata["images"] == [img_ref]
         # 图片同时透传 send_response（发送链路不受影响）
-        stub_agent._last_response_images = []
+        assert send_response.call_args.args[2] == [img_ref]
 
     @pytest.mark.asyncio
     async def test_merged_path_does_not_write_any_message(
@@ -922,3 +923,26 @@ class TestRecapTrigger:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "--tb=short"])
+
+
+# Reuse only the external Redis boundary fixture; queue/manager execution stays real.
+from tests.unit.test_session_queue import fake_redis, q
+
+
+@pytest.mark.asyncio
+async def test_image_only_reply_flows_through_real_queue_then_channel_storage_and_delivery(manager, mock_db_ctx, stub_agent, q, fake_redis, monkeypatch):
+    from src.core.agent import AgentResponse
+    image = {"file_id": "image-only", "download_url": "/api/files/image-only/download"}
+    stub_agent.process_message_sync.return_value = AgentResponse("", [image])
+    monkeypatch.setattr("src.core.session_queue.session_queue", q)
+    send = AsyncMock(return_value=True)
+    result = await manager.process_and_persist(session_id="image-only-session", tenant_id="t1",
+        user_content="show image", agent=stub_agent, send_response=send)
+    assert result["status"] == "success"
+    memory_store, _, _ = mock_db_ctx
+    row = next(message for message in memory_store["messages"] if message["role"] == "assistant")
+    metadata = row["metadata"]
+    if isinstance(metadata, str):
+        metadata = json.loads(metadata)
+    assert metadata["images"] == [image]
+    assert send.call_args.args[2] == [image]

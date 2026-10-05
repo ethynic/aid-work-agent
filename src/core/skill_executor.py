@@ -37,10 +37,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 from loguru import logger
 
-# 确保 .env 文件被加载
-from dotenv import load_dotenv
-load_dotenv()
-
 from src.core.skill_loader import Skill, SkillDependency
 from src.core.skill_registry import SkillRegistry
 from src.config.settings import settings
@@ -76,6 +72,7 @@ class SkillExecutionContext:
         self.user_id = user_id
         self.files: Dict[str, bytes] = {}
         self.variables: Dict[str, Any] = {}
+        self.environment: Optional[Dict[str, str]] = None
         self.start_time = time.time()
     
     def add_file(self, filename: str, content: bytes):
@@ -152,7 +149,15 @@ class SkillExecutor:
         workdir.mkdir(parents=True, exist_ok=True)
         return workdir
     
-    async def load_skill(self, skill_name: str, substitutions: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    def environment(self, skill_name, *, context=None, tenant_id=None, env_vars=None, env_extra=None):
+        if context is None:
+            from src.tools.context import current_tool_execution_context
+            context = current_tool_execution_context()
+        overrides = {**dict(env_extra or {}), **dict(env_vars or {})}
+        return self.skill_registry.environment(skill_name, tenant_id=tenant_id,
+                                               env_vars=overrides, context=context)
+
+    async def load_skill(self, skill_name: str, substitutions: Optional[Dict[str, Any]] = None, *, tenant_id=None, env_vars=None, context=None) -> Optional[str]:
         """
         加载Skill内容
 
@@ -170,7 +175,11 @@ class SkillExecutor:
             available = ", ".join(self.skill_registry.list_skills()) or "none"
             return f"Error: Unknown skill '{skill_name}'. Available: {available}"
 
-        content = self.skill_registry.get_content(skill_name, substitutions=substitutions)
+        if context is None:
+            from src.tools.context import current_tool_execution_context
+            context = current_tool_execution_context()
+        content = await asyncio.to_thread(self.skill_registry.get_content, skill_name, substitutions=substitutions,
+            tenant_id=tenant_id, env_vars=env_vars, context=context)
         if content:
             # 包装在标签中，让模型知道这是Skill内容
             return f"""<skill-loaded name="{skill_name}">
@@ -225,7 +234,7 @@ Follow the instructions in the skill above to complete the user's task."""
                 check_result = await self._execute_command(
                     f"python -c 'import {dep.name}'",
                     context.workdir,
-                    timeout=30
+                    timeout=30, env=context.environment
                 )
                 
                 if check_result.success:
@@ -237,7 +246,7 @@ Follow the instructions in the skill above to complete the user's task."""
                 install_result = await self._execute_command(
                     f"pip install {dep.name}{version_spec}",
                     context.workdir,
-                    timeout=SKILL_COMMAND_TIMEOUT_SECONDS
+                    timeout=SKILL_COMMAND_TIMEOUT_SECONDS, env=context.environment
                 )
                 results[dep.name] = install_result.success
                 
@@ -251,7 +260,7 @@ Follow the instructions in the skill above to complete the user's task."""
                 check_result = await self._execute_command(
                     f"dpkg -l {dep.name}",
                     context.workdir,
-                    timeout=30
+                    timeout=30, env=context.environment
                 )
                 
                 if check_result.success:
@@ -262,7 +271,7 @@ Follow the instructions in the skill above to complete the user's task."""
                 install_result = await self._execute_command(
                     f"apt-get update && apt-get install -y {dep.name}",
                     context.workdir,
-                    timeout=SKILL_COMMAND_TIMEOUT_SECONDS
+                    timeout=SKILL_COMMAND_TIMEOUT_SECONDS, env=context.environment
                 )
                 results[dep.name] = install_result.success
             
@@ -271,7 +280,7 @@ Follow the instructions in the skill above to complete the user's task."""
                 check_result = await self._execute_command(
                     f"npm list {dep.name}",
                     context.workdir,
-                    timeout=30
+                    timeout=30, env=context.environment
                 )
                 
                 if check_result.success:
@@ -282,7 +291,7 @@ Follow the instructions in the skill above to complete the user's task."""
                 install_result = await self._execute_command(
                     f"npm install {dep.name}",
                     context.workdir,
-                    timeout=SKILL_COMMAND_TIMEOUT_SECONDS
+                    timeout=SKILL_COMMAND_TIMEOUT_SECONDS, env=context.environment
                 )
                 results[dep.name] = install_result.success
         
@@ -327,6 +336,7 @@ Follow the instructions in the skill above to complete the user's task."""
         timeout: int = SKILL_COMMAND_TIMEOUT_SECONDS,
         stdin_content: Optional[bytes] = None,
         env_extra: Optional[Dict[str, str]] = None,
+        env: Optional[Dict[str, str]] = None,
     ) -> ExecutionResult:
         """
         执行命令
@@ -342,10 +352,13 @@ Follow the instructions in the skill above to complete the user's task."""
             执行结果
         """
         start_time = time.time()
+        process = None
 
         try:
             # 获取当前进程的环境变量，确保子进程继承所有环境变量（包括 .env 加载的）
-            env = os.environ.copy()
+            from src.core.skill_environment import base_environment, bind_identity
+            resolved_env = env is not None
+            env = dict(env) if resolved_env else base_environment()
             # 注入子智能体 LLM 覆盖（provider/model），供技能脚本 llm_client 读取
             if env_extra:
                 env.update(env_extra)
@@ -354,7 +367,7 @@ Follow the instructions in the skill above to complete the user's task."""
             # 上下文缺失（后台调度等场景）不设置，子进程自行兜底。
             try:
                 from src.tools.context import current_tool_execution_context
-                _tool_ctx = current_tool_execution_context()
+                _tool_ctx = None if resolved_env else current_tool_execution_context()
             except Exception:
                 _tool_ctx = None
             if _tool_ctx is not None:
@@ -370,6 +383,11 @@ Follow the instructions in the skill above to complete the user's task."""
                     env['AID_USER_ID'] = _tool_ctx.user_id
                 if _tool_ctx.subagent_id:
                     env['AID_SUBAGENT_ID'] = _tool_ctx.subagent_id
+            if _tool_ctx is not None:
+                bind_identity(env, _tool_ctx)
+            from src.llm.call_observer import (prepare_child_environment, observe_child_exit,
+                prepare_child_process, register_child_process, release_child_process)
+            prepare_child_environment(env)
             # 强制子进程使用 UTF-8 编码，避免 Windows 上 GBK/cp936 导致中文乱码
             env['PYTHONIOENCODING'] = 'utf-8'
             env['PYTHONUTF8'] = '1'
@@ -386,6 +404,7 @@ Follow the instructions in the skill above to complete the user's task."""
                 cmd_preview = command[:500] if len(command) > 500 else command
                 logger.info(f"后端日志：[trade-customer诊断] 子进程命令: {cmd_preview}")
 
+            prepare_child_process(env)
             process = await asyncio.create_subprocess_shell(
                 command,
                 stdout=asyncio.subprocess.PIPE,
@@ -393,7 +412,9 @@ Follow the instructions in the skill above to complete the user's task."""
                 stdin=asyncio.subprocess.PIPE,  # 始终创建 PIPE，避免子进程 stdin 阻塞
                 cwd=str(workdir),
                 env=env,  # 显式传递环境变量
+                start_new_session=os.name == 'posix',
             )
+            register_child_process(process.pid,env)
 
             try:
                 stdout, stderr = await asyncio.wait_for(
@@ -401,6 +422,7 @@ Follow the instructions in the skill above to complete the user's task."""
                     timeout=timeout
                 )
                 duration = time.time() - start_time
+                observe_child_exit(process.returncode)
 
                 # 后端日志：诊断 trade-customer 子进程结果
                 if is_trade_customer_cmd:
@@ -423,8 +445,9 @@ Follow the instructions in the skill above to complete the user's task."""
                     timed_out=False,
                 )
             except asyncio.TimeoutError:
-                process.kill()
-                await process.wait()
+                from src.core.subprocess_owner import stop_process_group_async
+                await stop_process_group_async(process)
+                observe_child_exit(None)
                 duration = time.time() - start_time
                 
                 return ExecutionResult(
@@ -436,7 +459,13 @@ Follow the instructions in the skill above to complete the user's task."""
                     timed_out=True,
                     error="Timeout",
                 )
+        except asyncio.CancelledError:
+            from src.core.subprocess_owner import stop_process_group_async
+            await stop_process_group_async(process)
+            raise
         except Exception as e:
+            if getattr(e,'authoritative_storage_failure',False):
+                raise
             duration = time.time() - start_time
             return ExecutionResult(
                 success=False,
@@ -446,6 +475,10 @@ Follow the instructions in the skill above to complete the user's task."""
                 duration=duration,
                 error=str(e),
             )
+        finally:
+            if 'env' in locals():
+                from src.llm.call_observer import release_child_process
+                release_child_process(env)
 
     async def execute_skill_command(
         self,
@@ -457,6 +490,7 @@ Follow the instructions in the skill above to complete the user's task."""
         user_id: Optional[str] = None,
         stdin_content: Optional[bytes] = None,
         env_extra: Optional[Dict[str, str]] = None,
+        *, context=None, tenant_id=None, env_vars=None,
     ) -> ExecutionResult:
         """
         执行Skill命令
@@ -487,6 +521,15 @@ Follow the instructions in the skill above to complete the user's task."""
                 error="Unknown skill",
             )
         
+        if context is not None:
+            if (session_id is not None and session_id != context.session_id
+                    or user_id is not None and user_id != context.user_id
+                    or tenant_id is not None and tenant_id != context.tenant_id):
+                raise ValueError("SKILL_EXECUTION_IDENTITY_MISMATCH")
+            session_id, user_id, tenant_id = context.session_id, context.user_id, context.tenant_id
+        environment = await asyncio.to_thread(self.environment, skill_name, context=context,
+            tenant_id=tenant_id, env_vars=env_vars, env_extra=env_extra)
+
         # 创建执行上下文
         workdir = self._create_workdir(skill_name, session_id)
         context = SkillExecutionContext(
@@ -496,6 +539,8 @@ Follow the instructions in the skill above to complete the user's task."""
             user_id=user_id,
         )
         
+        context.environment = environment
+
         # 添加文件
         if files:
             for filename, content in files.items():
@@ -535,7 +580,7 @@ Follow the instructions in the skill above to complete the user's task."""
                 context.workdir,
                 timeout=SKILL_COMMAND_TIMEOUT_SECONDS,
                 stdin_content=stdin_content,
-                env_extra=env_extra,
+                env=environment,
             )
 
             return result
@@ -605,6 +650,8 @@ Follow the instructions in the skill above to complete the user's task."""
             session_id=session_id,
         )
         
+        context.environment = await asyncio.to_thread(self.environment, skill_name)
+
         # 添加文件
         if files:
             for filename, content in files.items():
@@ -621,6 +668,7 @@ Follow the instructions in the skill above to complete the user's task."""
             result = await self._execute_command(
                 f"python {script_path}",
                 context.workdir,
+                env=context.environment,
                 timeout=SKILL_COMMAND_TIMEOUT_SECONDS
             )
             

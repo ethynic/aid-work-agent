@@ -97,6 +97,9 @@ async def test_run_background_compression_scan_compresses():
     """enabled 时：scan 返回 1 个 session，compress 返回 result → compressed=1"""
     fake_service = MagicMock()
     fake_service._get_model_limit = MagicMock(return_value=100000)
+    # 阈值公式已收敛到 service._effective_token_threshold（公式本身的覆盖见
+    # test_check_threshold.py 与下方 cap 用例）；这里按 0.7×100000=70000 桩返回
+    fake_service._effective_token_threshold = MagicMock(return_value=70000)
     fake_service.scan_over_threshold_sessions = AsyncMock(return_value=[("s1", "chat")])
     fake_service.compress_session = AsyncMock(return_value={"summary_id": "csum_x"})
 
@@ -105,7 +108,6 @@ async def test_run_background_compression_scan_compresses():
     ), patch("src.memory.mid_term.settings") as mock_settings:
         mock_settings.memory.mid_term.enabled = True
         mock_settings.memory.mid_term.background_scan_enabled = True
-        mock_settings.memory.mid_term.token_threshold_ratio = 0.7
         mock_settings.memory.mid_term.background_scan_batch_size = 50
 
         stats = await run_background_compression_scan()
@@ -120,10 +122,46 @@ async def test_run_background_compression_scan_compresses():
 
 
 @pytest.mark.asyncio
+async def test_run_background_compression_scan_threshold_respects_absolute_cap():
+    """scan 阈值来自 _effective_token_threshold=min(比例阈值, 绝对上限)：
+    512K 档比例阈值 358.4K 被绝对上限 60000 封顶——与 _eval_threshold 同公式，
+    主流程/后台扫描阈值不分叉（2026-10-04 绝对上限）"""
+    from types import MethodType
+
+    from src.config.settings import MidTermMemoryConfig
+
+    fake_service = MagicMock()
+    fake_service._get_model_limit = MagicMock(return_value=512_000)
+    fake_service._settings = MidTermMemoryConfig(
+        token_threshold_ratio=0.7, token_threshold_absolute=60_000
+    )
+    # 绑定真实方法验证公式（MagicMock 自动桩会掩盖 min 语义）
+    fake_service._effective_token_threshold = MethodType(
+        ContextCompressionService._effective_token_threshold, fake_service
+    )
+    fake_service.scan_over_threshold_sessions = AsyncMock(return_value=[])
+    fake_service.compress_session = AsyncMock()
+
+    with patch(
+        "src.memory.mid_term.get_compression_service", return_value=fake_service
+    ), patch("src.memory.mid_term.settings") as mock_settings:
+        mock_settings.memory.mid_term.enabled = True
+        mock_settings.memory.mid_term.background_scan_enabled = True
+        mock_settings.memory.mid_term.background_scan_batch_size = 50
+
+        stats = await run_background_compression_scan()
+
+    assert stats["scanned"] == 0
+    fake_service.scan_over_threshold_sessions.assert_awaited_once_with(60_000, 50)
+    fake_service.compress_session.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_run_background_compression_scan_isolates_per_session_failure():
     """scan 返回 2 session，第一个 compress 抛异常、第二个成功 → failed=1, compressed=1"""
     fake_service = MagicMock()
     fake_service._get_model_limit = MagicMock(return_value=100000)
+    fake_service._effective_token_threshold = MagicMock(return_value=70000)
     fake_service.scan_over_threshold_sessions = AsyncMock(
         return_value=[("s1", "chat"), ("s2", "wecom_kf")]
     )
@@ -136,7 +174,6 @@ async def test_run_background_compression_scan_isolates_per_session_failure():
     ), patch("src.memory.mid_term.settings") as mock_settings:
         mock_settings.memory.mid_term.enabled = True
         mock_settings.memory.mid_term.background_scan_enabled = True
-        mock_settings.memory.mid_term.token_threshold_ratio = 0.7
         mock_settings.memory.mid_term.background_scan_batch_size = 50
 
         stats = await run_background_compression_scan()

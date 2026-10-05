@@ -20,12 +20,10 @@ def service(mid_term_settings):
 async def test_resolve_channel_db_exception_returns_empty_meta(service, monkeypatch):
     """channel 源 DB 异常 → 返回空 meta（不抛给上层）"""
     class _FakeMgr:
-        def get_session_by_id(self, session_id):
+        def get_session(self, session_id, source_type):
             raise RuntimeError("channel db down")
 
-    import src.channels.session as session_mod
-    # P1-4：替换单例对象
-    monkeypatch.setattr(session_mod, "channel_session_manager", _FakeMgr())
+    monkeypatch.setattr(service, "_session_repository", _FakeMgr())
 
     meta = await service._resolve_session_meta("sess_x", "wecom_kf")
     assert meta.session_id == "sess_x"

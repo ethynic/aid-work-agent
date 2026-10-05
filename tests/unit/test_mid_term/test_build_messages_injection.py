@@ -13,10 +13,8 @@ import pytest
 
 
 def _make_agent():
-    from src.core.agent import Agent, AgentMode
-    agent = Agent.__new__(Agent)
-    agent.mode = AgentMode.MASTER
-    return agent
+    from src.services.agent_runner.runtime.history import SessionHistory
+    return SessionHistory(MagicMock(), "chat", MagicMock(), tolerate_read_failure=True)
 
 
 def test_injected_user_content_contains_full_summary(monkeypatch):
@@ -25,13 +23,14 @@ def test_injected_user_content_contains_full_summary(monkeypatch):
     fake_memory = MagicMock()
     fake_memory.get_context.return_value = [{"role": "user", "content": "real"}]
     agent.memory = fake_memory
-    agent._detect_source_type = lambda: "chat"
+    agent.source_type = "chat"
 
-    import src.core.agent as agent_mod
+    import src.services.agent_runner.runtime.history as agent_mod
     monkeypatch.setattr(agent_mod.settings.memory.mid_term, "enabled", True)
 
     special_summary = "## 摘要\n- 用户来自北京 👤\n- 决定: purchase 'widget' @ $9.99"
     fake_cs = MagicMock()
+    agent.reader.active_summary = fake_cs.get_active_summary
     fake_cs.get_active_summary.return_value = special_summary
     monkeypatch.setattr("src.memory.mid_term.get_compression_service", lambda: fake_cs)
 
@@ -50,9 +49,9 @@ def test_mid_term_disabled_skips_compression_service(monkeypatch):
     fake_memory = MagicMock()
     fake_memory.get_context.return_value = [{"role": "user", "content": "real"}]
     agent.memory = fake_memory
-    agent._detect_source_type = lambda: "chat"
+    agent.source_type = "chat"
 
-    import src.core.agent as agent_mod
+    import src.services.agent_runner.runtime.history as agent_mod
     monkeypatch.setattr(agent_mod.settings.memory.mid_term, "enabled", False)
 
     called = {"n": 0}
@@ -61,7 +60,7 @@ def test_mid_term_disabled_skips_compression_service(monkeypatch):
         called["n"] += 1
         return MagicMock()
 
-    monkeypatch.setattr("src.memory.mid_term.get_compression_service", _should_not_be_called)
+    monkeypatch.setattr(agent.reader, "active_summary", _should_not_be_called)
 
     messages, _ = agent._build_messages("sess")
     assert called["n"] == 0, "mid_term 禁用时不应该调 get_compression_service"
@@ -79,12 +78,13 @@ def test_injection_prepend_count(monkeypatch):
     ]
     fake_memory.get_context.return_value = list(base_history)
     agent.memory = fake_memory
-    agent._detect_source_type = lambda: "chat"
+    agent.source_type = "chat"
 
-    import src.core.agent as agent_mod
+    import src.services.agent_runner.runtime.history as agent_mod
     monkeypatch.setattr(agent_mod.settings.memory.mid_term, "enabled", True)
 
     fake_cs = MagicMock()
+    agent.reader.active_summary = fake_cs.get_active_summary
     fake_cs.get_active_summary.return_value = "summary text"
     monkeypatch.setattr("src.memory.mid_term.get_compression_service", lambda: fake_cs)
 
@@ -103,12 +103,13 @@ def test_summary_with_only_whitespace_not_injected(monkeypatch):
     fake_memory = MagicMock()
     fake_memory.get_context.return_value = [{"role": "user", "content": "real"}]
     agent.memory = fake_memory
-    agent._detect_source_type = lambda: "chat"
+    agent.source_type = "chat"
 
-    import src.core.agent as agent_mod
+    import src.services.agent_runner.runtime.history as agent_mod
     monkeypatch.setattr(agent_mod.settings.memory.mid_term, "enabled", True)
 
     fake_cs = MagicMock()
+    agent.reader.active_summary = fake_cs.get_active_summary
     fake_cs.get_active_summary.return_value = "   \n  "  # 仅空白
     monkeypatch.setattr("src.memory.mid_term.get_compression_service", lambda: fake_cs)
 

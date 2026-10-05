@@ -8,7 +8,8 @@
  * - 多会话 A/B 完全隔离：后台会话收到的 verbose 不得串到当前查看会话
  * - 「10 秒 mock 工具约 8 秒提示随后 final」场景用 fake timers 表达时间线
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { legacyRunnerCapabilitiesFetch } from '../mocks/legacyRunnerCapabilities'
 
 // ---- mock SSEManager：按 sessionId 注册回调，测试手动驱动 SSE 事件 ----
 interface StreamCallbacks {
@@ -81,8 +82,10 @@ describe('useAgent live verbose（每轮一条中间提示）', () => {
     streamRegistry.clear()
     vi.clearAllMocks()
     vi.resetModules()
+    vi.stubGlobal('fetch', legacyRunnerCapabilitiesFetch())
     ;({ useAgent } = await import('@/composables/useAgent'))
   })
+  afterEach(() => vi.unstubAllGlobals())
 
   it('verbose 写入当前会话状态；同 eventId 重复帧被覆盖不累积', async () => {
     const agent = useAgent()

@@ -19,6 +19,7 @@ from .executor.models import BrowserRunSpec
 from .router import BrowserRouter
 from .run_db import BrowserRunDB
 from .run_store import BrowserRunStore, RunRecord, create_run_store
+from .owner_port import current_browser_execution_owner, BrowserOwnerFailure, propagate_owner_failure
 
 
 _ACTIVE_MANAGERS: weakref.WeakSet["BrowserRunManager"] = weakref.WeakSet()
@@ -76,6 +77,11 @@ class BrowserRunManager:
         self._renew_tasks: dict[tuple[str, str], asyncio.Task] = {}
         self._finalize_locks: dict[tuple[str, str], asyncio.Lock] = {}
         self._owner_tokens: dict[tuple[str, str], str] = {}
+        self.execution_owner=current_browser_execution_owner()
+        self.owner_lease_seconds=int(getattr(settings.tools.browser,'owner_lease_ttl',30))
+        self._created_keys=set()
+        self._started_keys=set()
+        self._close_confirmations=set()
         _ACTIVE_MANAGERS.add(self)
 
     @property
@@ -93,13 +99,25 @@ class BrowserRunManager:
             state=RunState.CREATED.value, execution_target=execution_target,
             degraded_single_request=self.degraded,
         )
-        if not await self.store.create(record):
-            raise RuntimeError("RUN_ID_CONFLICT")
+        if self.execution_owner is not None:
+            if self.degraded:
+                raise BrowserOwnerFailure('BROWSER_RUNNER_REDIS_REQUIRED')
+            # Mandatory original binding precedes Redis creation/publication.
+            await self.execution_owner.bind_run(self,record)
+        self._created_keys.add((tenant_id,run_id))
         try:
-            await self.run_db.create_run(record.model_dump(mode="json"))
-        except Exception as exc:
-            # 审计库故障不得阻止单请求 server run；终态仍由 finally 回收。
-            logger.warning("browser run 审计创建失败: type={}", type(exc).__name__)
+            if not await self.store.create(record):
+                raise RuntimeError("RUN_ID_CONFLICT")
+        except BaseException:
+            if self.execution_owner is not None:
+                await self._close_local_executor((tenant_id,run_id),'create_failed')
+                await self.execution_owner.close_browser_owner(tenant_id,run_id,RunState.FAILED.value)
+            raise
+        if self.execution_owner is None:
+            try:
+                await self.run_db.create_run(record.model_dump(mode="json"))
+            except Exception as exc:
+                logger.warning("browser run 审计创建失败: type={}", type(exc).__name__)
         return record
 
     async def start(self, record: RunRecord) -> BrowserExecutor:
@@ -119,7 +137,8 @@ class BrowserRunManager:
             owner_acquired = True
             self._owner_tokens[key] = str(owner_token)
             executor = FencedBrowserExecutor(
-                executor, self.store, record.tenant_id, record.run_id, str(owner_token)
+                executor, self.store, record.tenant_id, record.run_id, str(owner_token),
+                execution_owner=self.execution_owner,
             )
             self._executors[key] = executor
             if self.store.distributed:
@@ -140,6 +159,7 @@ class BrowserRunManager:
                 viewport_width=min(settings.tools.browser.viewport_width, 1280),
                 viewport_height=min(settings.tools.browser.viewport_height, 720),
             )
+            self._started_keys.add(key)
             result = await executor.start(spec)
             if result.status.value == "error":
                 raise RuntimeError(result.error_code or "BROWSER_START_FAILED")
@@ -147,7 +167,11 @@ class BrowserRunManager:
                 record.tenant_id, record.run_id, str(owner_token), time.time()
             )
             if fence_error is not None:
+                if self.execution_owner is not None:
+                    raise BrowserOwnerFailure(fence_error)
                 raise RuntimeError(fence_error)
+            if self.execution_owner is not None:
+                await self.execution_owner.activate_run(self,record)
             await self.transition(record.tenant_id, record.run_id, RunState.RUNNING_AGENT)
             return executor
         except BaseException:
@@ -161,6 +185,7 @@ class BrowserRunManager:
                         )
                     )
                 except Exception as exc:
+                    propagate_owner_failure(exc)
                     logger.warning("browser start 失败收口异常: type={}", type(exc).__name__)
             raise
 
@@ -174,17 +199,51 @@ class BrowserRunManager:
         updated = await self.store.compare_state(tenant_id, run_id, {current.value}, new_state.value)
         if updated is None:
             raise InvalidRunTransition("RUN_STATE_RACE")
-        try:
-            await self.run_db.update_run_state(tenant_id, run_id, new_state.value)
-        except Exception as exc:
-            logger.warning("browser run 审计更新失败: type={}", type(exc).__name__)
+        if self.execution_owner is not None:
+            await self.execution_owner.record_state(tenant_id,run_id,new_state.value)
+        else:
+            try:
+                await self.run_db.update_run_state(tenant_id, run_id, new_state.value)
+            except Exception as exc:
+                logger.warning("browser run 审计更新失败: type={}", type(exc).__name__)
         return updated
+
+    def agent_executor(self,executor):
+        if self.execution_owner is None:
+            return executor
+        from .executor.agent_owned import AgentOwnedBrowserExecutor
+        return AgentOwnedBrowserExecutor(executor,self.execution_owner)
+
+    def human_executor(self,tenant_id,run_id):
+        return self._executors.get((tenant_id,run_id))
+
+    def resource_close_confirmed(self,tenant_id,run_id):
+        return (tenant_id,run_id) in self._close_confirmations
 
     async def request_cancel(self, tenant_id: str, user_id: str, run_id: str) -> bool:
         record = await self.store.get(tenant_id, run_id)
         if record is None or record.user_id != user_id:
             return False
         if RunState(record.state) in TERMINAL_STATES:
+            return True
+        if self.execution_owner is not None:
+            # Runner cancellation already has a durable authority. Publishing
+            # the legacy Redis flag before the guarded Close would let the
+            # renew task close the executor after an ordinary guard rejection.
+            from .owner_port import current_resource_close_guard, HumanActionRejected
+            guard = current_resource_close_guard()
+            if guard is None:
+                raise HumanActionRejected('BROWSER_CANCEL_OWNER_MISMATCH')
+            executor = self._executors.get((tenant_id, run_id))
+            if executor is not None:
+                result = await executor.close('cancelled')
+                if not result.closed or not executor.resource_close_confirmed:
+                    raise BrowserOwnerFailure('BROWSER_CLOSE_VERIFICATION_REQUIRED')
+            else:
+                await guard()
+            # Every live Run state permits FINALIZING. Only confirmed original
+            # resources can pass finalize's close/PG-owner proof below.
+            await self.finalize(tenant_id, run_id, RunState.CANCELLED, 'cancelled')
             return True
         await self.store.request_cancel(tenant_id, run_id)
         try:
@@ -208,12 +267,18 @@ class BrowserRunManager:
             record = await self.store.get(tenant_id, run_id)
             if record is None:
                 await self._close_local_executor(key, reason)
+                if self.execution_owner is not None:
+                    await self.execution_owner.close_browser_owner(tenant_id,run_id,terminal.value)
                 await self._stop_renew_task(key)
                 await self._release_owner(key)
+                if self.execution_owner is not None:
+                    raise BrowserOwnerFailure('RUN_NOT_FOUND')
                 raise KeyError("RUN_NOT_FOUND")
             state = RunState(record.state)
             if state in TERMINAL_STATES:
                 await self._close_local_executor(key, reason)
+                if self.execution_owner is not None:
+                    await self.execution_owner.close_browser_owner(tenant_id,run_id,state.value)
                 await self._stop_renew_task(key)
                 await self._release_owner(key)
                 return record
@@ -224,19 +289,31 @@ class BrowserRunManager:
                 await self._close_local_executor(key, "owner_lost")
                 await self._stop_renew_task(key)
                 self._owner_tokens.pop(key, None)
+                if self.execution_owner is not None:
+                    raise BrowserOwnerFailure('OWNER_LEASE_LOST')
                 raise RuntimeError("OWNER_LEASE_LOST")
             if state != RunState.FINALIZING:
-                await self.transition(tenant_id, run_id, RunState.FINALIZING)
+                try:
+                    await self.transition(tenant_id, run_id, RunState.FINALIZING)
+                except BaseException:
+                    # Losing the durable observation cannot strand an owned
+                    # process. Reap it, but retain the original authority error.
+                    if self.execution_owner is not None:
+                        await self._close_local_executor(key, reason)
+                    raise
             await self._close_local_executor(key, reason)
+            if self.execution_owner is not None:
+                await self.execution_owner.close_browser_owner(tenant_id,run_id,terminal.value)
             updated = await self.store.compare_state(tenant_id, run_id, {RunState.FINALIZING.value}, terminal.value)
             if updated is None:
                 updated = await self.store.get(tenant_id, run_id)
                 if updated is None:
                     raise KeyError("RUN_NOT_FOUND")
             try:
-                await self.run_db.update_run_state(
+                if self.execution_owner is None:
+                    await self.run_db.update_run_state(
                     tenant_id, run_id, terminal.value, close_reason=reason
-                )
+                    )
             except Exception as exc:
                 logger.warning("browser run 终态审计失败: type={}", type(exc).__name__)
             await self._stop_renew_task(key)
@@ -249,14 +326,25 @@ class BrowserRunManager:
             await self.store.release_owner(key[0], key[1], owner_token)
 
     async def _close_local_executor(self, key: tuple[str, str], reason: str) -> None:
-        executor = self._executors.pop(key, None)
+        executor = self._executors.get(key)
         if executor:
             try:
-                await asyncio.shield(executor.close(reason))
+                result=await asyncio.shield(executor.close(reason))
+                if self.execution_owner is not None and (not result.closed or not executor.resource_close_confirmed):
+                    raise BrowserOwnerFailure('BROWSER_CLOSE_VERIFICATION_REQUIRED')
+                self._executors.pop(key,None)
+                self._close_confirmations.add(key)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                if self.execution_owner is not None:
+                    if getattr(exc,'authoritative_storage_failure',False):
+                        raise
+                    raise BrowserOwnerFailure('BROWSER_CLOSE_VERIFICATION_REQUIRED') from exc
+                self._executors.pop(key,None)
                 logger.warning("browser executor 关闭失败: type={}", type(exc).__name__)
+        elif key in self._created_keys and key not in self._started_keys:
+            self._close_confirmations.add(key)
 
     async def _stop_renew_task(self, key: tuple[str, str]) -> None:
         renew = self._renew_tasks.pop(key, None)
@@ -270,6 +358,9 @@ class BrowserRunManager:
         try:
             while True:
                 await asyncio.sleep(interval)
+                if self.execution_owner is not None and self.resource_close_confirmed(tenant_id,run_id):
+                    # Finalization owns lease release after the actual close.
+                    return
                 record = await self.store.get(tenant_id, run_id)
                 if record is None:
                     await self._close_local_executor((tenant_id, run_id), "owner_state_lost")
@@ -292,15 +383,35 @@ class BrowserRunManager:
                 if not await self.store.renew_owner(tenant_id, run_id, owner_token, ttl):
                     await self._close_local_executor((tenant_id, run_id), "owner_lost")
                     return
+                if self.execution_owner is not None and record.state not in {
+                    RunState.CREATED.value,RunState.ROUTING.value,RunState.STARTING.value,
+                }:
+                    await self.execution_owner.renew_browser_owner(tenant_id,run_id)
         except asyncio.CancelledError:
             return
+        except Exception as exc:
+            if self.execution_owner is None:
+                raise
+            self.execution_owner.record_owner_failure(exc)
+            # This is resource cleanup, never permission to continue actions.
+            try:
+                await self._close_local_executor((tenant_id,run_id),'owner_renew_failed')
+            except Exception as close_error:
+                self.execution_owner.record_owner_failure(close_error)
+            logger.opt(exception=True).error('browser owner renewal stopped: type={}',type(exc).__name__)
 
     async def close_all(self, reason: str = "shutdown") -> None:
-        for tenant_id, run_id in list(self._executors):
+        failure = None
+        keys = self._created_keys if self.execution_owner is not None else self._executors
+        for tenant_id, run_id in list(keys):
             try:
                 await self.finalize(tenant_id, run_id, RunState.FAILED, reason)
             except Exception as exc:
+                if self.execution_owner is not None:
+                    failure = exc
                 logger.warning("browser run shutdown 失败: type={}", type(exc).__name__)
+        if failure is not None:
+            raise failure
 
 
 async def close_all_active_browser_managers(reason: str = "shutdown") -> None:
@@ -311,3 +422,22 @@ async def close_all_active_browser_managers(reason: str = "shutdown") -> None:
             *(manager.close_all(reason) for manager in managers),
             return_exceptions=True,
         )
+
+
+async def close_worker_browser_managers(worker_boot):
+    """Only this actual process boot's native resources, never global browsers."""
+    from .human_control import unregister_owned_runtime
+    failure = None
+    for manager in list(_ACTIVE_MANAGERS):
+        owner=manager.execution_owner
+        if owner is None or owner.worker_boot!=worker_boot:
+            continue
+        try:
+            await manager.close_all('shutdown')
+        except Exception as exc:
+            failure = exc
+        for tenant_id,run_id in manager._created_keys:
+            if manager.resource_close_confirmed(tenant_id,run_id):
+                await unregister_owned_runtime(tenant_id,run_id)
+    if failure is not None:
+        raise failure

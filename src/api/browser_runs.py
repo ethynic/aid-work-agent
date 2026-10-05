@@ -7,7 +7,6 @@ import secrets
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
-from pydantic import BaseModel, Field
 
 from src.api.auth import get_current_user
 from src.core.cache_utils import CacheKeys
@@ -23,14 +22,7 @@ router = APIRouter(prefix="/api/browser", tags=["browser-human-control"])
 agent_router = APIRouter(prefix="/api/agent", tags=["agent-continuations"])
 
 
-class InputMessage(BaseModel):
-    type: str
-    action: str | None = None
-    x: float = Field(default=0, ge=0, le=1280, allow_inf_nan=False)
-    y: float = Field(default=0, ge=0, le=720, allow_inf_nan=False)
-    delta_x: float = Field(default=0, ge=-10000, le=10000, allow_inf_nan=False)
-    delta_y: float = Field(default=0, ge=-10000, le=10000, allow_inf_nan=False)
-    key: str | None = Field(default=None, max_length=128)
+from src.tools.browser.executor.models import InputMessage
 
 
 def _identity(request) -> tuple[str, str]:
@@ -49,8 +41,37 @@ async def _authorize_run(request, run_id: str):
     return tenant_id, user_id, record
 
 
+async def _native_view(run_id):
+    from src.config.settings import settings
+    from src.services.agent_runner.browser_web_auth import BrowserWebAuth
+    from src.services.agent_runner.contracts import RunnerError
+    try:
+        return await asyncio.to_thread(BrowserWebAuth(settings.agent_runner.browser_owner).is_native,run_id)
+    except RunnerError as error:
+        raise HTTPException(error.status,detail={'error_code':error.code,'debug':error.code}) from None
+
+
 @router.post("/runs/{run_id}/view_ticket")
 async def create_view_ticket(request: Request, run_id: str):
+    from src.api.web_subject import fresh_web_user
+    # Authenticate before PG classification/configuration responses. A revoked
+    # or missing login cannot probe whether a run or native capability exists.
+    await asyncio.to_thread(fresh_web_user,request.headers.get('Authorization',''))
+    if await _native_view(run_id):
+        from src.config.settings import settings
+        from src.services.agent_runner.browser_web_auth import BrowserWebAuth
+        from src.services.agent_runner.browser_view_tickets import issue_view_ticket
+        from src.services.agent_runner.contracts import RunnerError
+        config = settings.agent_runner.browser_owner
+        try:
+            assertion = await asyncio.to_thread(BrowserWebAuth(config).issue_assertion,
+                request.headers.get('Authorization',''),run_id,
+                target_tenant=request.headers.get('X-Tenant-Id') or None)
+            if not config.view_enabled:
+                raise RunnerError('BROWSER_VIEW_NOT_AVAILABLE',503)
+            return await asyncio.to_thread(issue_view_ticket,assertion)
+        except RunnerError as error:
+            raise HTTPException(error.status,detail={'error_code':error.code,'debug':error.code}) from None
     tenant_id, user_id, _ = await _authorize_run(request, run_id)
     if not redis_client.is_available():
         raise HTTPException(status_code=503, detail={"error_code": "WEB_PRESENCE_REQUIRED"})
@@ -98,6 +119,16 @@ async def _consume_ticket(websocket: WebSocket, run_id: str, ticket: str) -> tup
 
 @router.websocket("/runs/{run_id}/view_ws")
 async def browser_view_ws(websocket: WebSocket, run_id: str, ticket: str):
+    try:
+        native = await _native_view(run_id)
+    except Exception:
+        await websocket.close(code=4403)
+        return
+    if native:
+        from src.config.settings import settings
+        from src.services.agent_runner.browser_view_gateway import observe_native_browser
+        await observe_native_browser(websocket,run_id,ticket,settings.agent_runner.browser_owner)
+        return
     identity = await _consume_ticket(websocket, run_id, ticket)
     if identity is None:
         await websocket.close(code=4403)
@@ -200,14 +231,59 @@ async def _coordinator_call(request: Request, run_id: str, assistance_id: str, m
         raise HTTPException(status_code=status, detail={"error_code": code})
 
 
+async def _native_action(request,run_id,assistance_id,action):
+    from src.api.web_subject import fresh_web_user
+    from src.config.settings import settings
+    from src.services.agent_runner.browser_web_auth import BrowserWebAuth
+    from src.services.agent_runner.browser_view_gateway import perform_native_action
+    from src.services.agent_runner.repository import RunnerRepository
+    from src.services.agent_runner.contracts import RunnerError
+    await asyncio.to_thread(fresh_web_user,request.headers.get('Authorization',''))
+    if not await _native_view(run_id):
+        return None
+    config=settings.agent_runner.browser_owner
+    auth=BrowserWebAuth(config)
+    try:
+        if action=='complete':
+            from src.services.agent_runner.browser_human_actions import accepted_completion_response
+            from src.tools.browser.owner_port import HumanActionRejected
+            known=await asyncio.to_thread(auth.completion_read,
+                request.headers.get('Authorization',''),run_id,assistance_id,
+                target_tenant=request.headers.get('X-Tenant-Id') or None)
+            if known is not None:
+                try:
+                    return await accepted_completion_response(known)
+                except HumanActionRejected as error:
+                    raise RunnerError(error.code,409) from None
+        assertion=await asyncio.to_thread(auth.issue_assertion,
+            request.headers.get('Authorization',''),run_id,
+            target_tenant=request.headers.get('X-Tenant-Id') or None,live=action!='cancel')
+        if assertion.assistance_id!=assistance_id:
+            raise RunnerError('BROWSER_WAIT_OWNER_MISMATCH',403)
+        if action=='cancel':
+            row,principal=await asyncio.to_thread(auth.authorize_action,assertion,execute=False)
+            await asyncio.to_thread(RunnerRepository().cancel,principal,row['runner_id'])
+            return {'success':True}
+        await asyncio.to_thread(auth.authorize_action,assertion,credit=True)
+        return await perform_native_action(assertion,action,config)
+    except RunnerError as error:
+        raise HTTPException(error.status,detail={'error_code':error.code,'debug':error.code}) from None
+
+
 @router.post("/runs/{run_id}/take_control")
 async def take_control(request: Request, run_id: str, assistance_id: str):
+    native=await _native_action(request,run_id,assistance_id,'take')
+    if native is not None:
+        return native
     record = await _coordinator_call(request, run_id, assistance_id, "take_control")
     return {"success": True, "state": record.state}
 
 
 @router.post("/runs/{run_id}/assistance/{assistance_id}/complete")
 async def complete_assistance(request: Request, run_id: str, assistance_id: str):
+    native=await _native_action(request,run_id,assistance_id,'complete')
+    if native is not None:
+        return native
     record, missing = await _coordinator_call(request, run_id, assistance_id, "complete")
     if missing:
         return {
@@ -219,6 +295,9 @@ async def complete_assistance(request: Request, run_id: str, assistance_id: str)
 
 @router.post("/runs/{run_id}/assistance/{assistance_id}/extend")
 async def extend_assistance(request: Request, run_id: str, assistance_id: str):
+    native=await _native_action(request,run_id,assistance_id,'extend')
+    if native is not None:
+        return native
     record = await _coordinator_call(request, run_id, assistance_id, "extend")
     return {
         "success": True, "expires_at": datetime.fromtimestamp(
@@ -229,12 +308,33 @@ async def extend_assistance(request: Request, run_id: str, assistance_id: str):
 
 @router.post("/runs/{run_id}/cancel")
 async def cancel_run(request: Request, run_id: str, assistance_id: str):
+    native=await _native_action(request,run_id,assistance_id,'cancel')
+    if native is not None:
+        return native
     await _coordinator_call(request, run_id, assistance_id, "cancel")
     return {"success": True}
 
 
 @agent_router.get("/continuations/{continuation_id}/events")
 async def continuation_events(request: Request, continuation_id: str, after_seq: int = 0):
+    # M7 旧缓存卡片薄读桥：bac 已持久关联 native Runner wait 时，按持久行 JOIN
+    # agent_runners 复验当前 owner/selected tenant 后从 Runner 持久事实只读补发
+    # （Redis 投影存续期原样返回；纯只读，不入旧 jobs、不重新拉起 legacy Agent）。
+    from src.services.agent_runner.browser_continuation_read import native_continuation_events
+    from src.services.agent_runner.contracts import RunnerError
+    try:
+        native = await asyncio.to_thread(
+            native_continuation_events,
+            request.headers.get("Authorization", ""),
+            request.headers.get("X-Tenant-Id") or None,
+            continuation_id,
+            max(0, after_seq),
+        )
+    except RunnerError as error:
+        raise HTTPException(error.status, detail={"error_code": error.code, "debug": error.code}) from None
+    if native is not None:
+        events, last_seq = native
+        return {"events": events, "last_seq": last_seq}
     tenant_id, user_id = _identity(request)
     store = ResumeStore()
     events = await store.events_after(tenant_id, continuation_id, max(0, after_seq))

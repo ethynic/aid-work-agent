@@ -11,7 +11,8 @@
  * 这些测试守住的是「会话间流式状态隔离」这一核心业务承诺，
  * 一旦状态池实现退回全局单份状态，测试应立即失败。
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { legacyRunnerCapabilitiesFetch } from '../mocks/legacyRunnerCapabilities'
 
 // ---- mock SSEManager：按 sessionId 注册回调，测试手动驱动 SSE 事件 ----
 interface StreamCallbacks {
@@ -64,8 +65,7 @@ vi.mock('@/composables/useTenantAuth', () => ({
 }))
 
 // fetch（abortStreaming 通知后端 cancel）mock
-const fetchMock = vi.fn().mockResolvedValue({ ok: true })
-Object.defineProperty(globalThis, 'fetch', { value: fetchMock, writable: true })
+const fetchMock = legacyRunnerCapabilitiesFetch()
 
 // useAgent 含模块级状态池，每个测试需 resetModules + 动态 import 获得干净状态
 let useAgent: typeof import('@/composables/useAgent').useAgent
@@ -96,8 +96,10 @@ describe('useAgent 多会话后台流式', () => {
     streamRegistry.clear()
     vi.clearAllMocks()
     vi.resetModules()
+    vi.stubGlobal('fetch', fetchMock)
     ;({ useAgent } = await import('@/composables/useAgent'))
   })
+  afterEach(() => vi.unstubAllGlobals())
 
   it('后台会话的 SSE 事件写入自己的状态，不串到当前查看的会话', async () => {
     const agent = useAgent()
@@ -197,9 +199,8 @@ describe('useAgent 多会话后台流式', () => {
     // 后端 cancel 通知使用 B 的 sessionId
     // 注：测试环境 fetch 被 MSW 包装，mock 收到的是 FetchRequest 对象而非 (url, options)
     expect(fetchMock).toHaveBeenCalled()
-    const firstArg = fetchMock.mock.calls[0][0]
-    const cancelUrl = typeof firstArg === 'string' ? firstArg : firstArg.url
-    expect(cancelUrl).toContain('/chat/session_B/cancel')
+    const urls = fetchMock.mock.calls.map(([input]) => typeof input === 'string' ? input : input instanceof URL ? input.href : input.url)
+    expect(urls.filter(url => url.endsWith('/cancel'))).toEqual(['/api/chat/session_B/cancel'])
   })
 
   it('switchSession 不再中断正在进行的流式连接', async () => {

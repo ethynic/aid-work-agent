@@ -464,3 +464,17 @@ async def _run_tasks(tasks: List[RecapTaskConfig], payload: RecapPayload) -> Non
             results.append(f"{task.name}=failed")
 
     logger.info(f"[recap] 会话 {payload.session_id} 轮后任务完成: {', '.join(results)}")
+
+
+async def dispatch_persisted_task(name,payload):
+    """PG caller already owns this exact job; preserve the original adapter.
+
+    No Redis pre-dispatch dedup is repeated here. The void return says only that
+    the original adapter returned; caller must not infer lead/push completion.
+    """
+    from src.services.recap.tasks import RECAP_TASK_ADAPTERS
+    from src.services.session_record import SessionRecordManager
+    if name not in RECAP_TASK_ADAPTERS or not _system_switch_enabled(name):
+        raise RuntimeError('RECAP_ADAPTER_UNAVAILABLE')
+    SessionRecordManager.set_current_record(None)
+    await RECAP_TASK_ADAPTERS[name].execute(payload)

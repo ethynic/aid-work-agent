@@ -240,8 +240,8 @@ def _parse_fetched_at(value: str) -> datetime:
         raise ValueError(f"获取日期格式非法: {value}")
 
 
-def save_base64_image(tenant_id: str, data: str, name: Optional[str], mime_type: str) -> Dict[str, str]:
-    """把 base64 图片落盘到租户 recruiting 目录，返回 {file_id, name}。
+def decode_resume_image(data: str, mime_type: str) -> tuple:
+    """复用原图片校验并返回 bytes/mime/extension，不落盘或生成文件身份。
 
     - data 兼容 data:image/png;base64,xxxx 前缀写法
     - mime_type（或 data URL 前缀里的 mime）必须为 image/*
@@ -273,6 +273,12 @@ def save_base64_image(tenant_id: str, data: str, name: Optional[str], mime_type:
     ext = _MIME_EXT_MAP.get(effective_mime)
     if not ext:
         raise ValueError(f"不支持的图片类型 {effective_mime}，仅支持 png/jpeg/gif")
+    return raw, effective_mime, ext
+
+
+def save_base64_image(tenant_id: str, data: str, name: Optional[str], mime_type: str) -> Dict[str, str]:
+    """旧上传入口仍按原目录/随机 ID 写图；领域 owner 使用同一解码校验。"""
+    raw, effective_mime, ext = decode_resume_image(data, mime_type)
     file_id = f"file_{uuid.uuid4().hex[:12]}"
     dir_path = ensure_tenant_storage_dir(tenant_id, _IMAGE_SCENE)
     file_path = os.path.join(dir_path, f"{file_id}{ext}")
@@ -282,6 +288,52 @@ def save_base64_image(tenant_id: str, data: str, name: Optional[str], mime_type:
 
 
 # ============== 简历 CRUD 服务 ==============
+
+def create_resume_record_in_tx(
+    cursor, tenant_id: str, user_id: Optional[str], *, candidate_name: str,
+    job_name: Optional[str] = None, job_id: Optional[str] = None,
+    candidate_info: Optional[Dict[str, Any]] = None, images: Optional[List[Dict[str,str]]] = None,
+    ocr_text: Optional[str] = None, resume_summary: Optional[str] = None,
+    source: str = 'manual', remark: Optional[str] = None, fetched_at: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Insert prepared references using the caller's transaction; no file IO or commit.
+
+    The domain owner prepares images before entering this transaction. Its stable
+    phase links the returned record id atomically; this DAL does not deduplicate
+    unrelated business operations or import an execution service.
+    """
+    if source not in RESUME_SOURCES or not (candidate_name or '').strip():
+        raise ValueError('RESUME_RECORD_INVALID')
+    job_uuid = str(uuid.UUID(str(job_id))) if job_id is not None else None
+    if job_uuid is not None:
+        cursor.execute('SELECT job_name FROM bs_recruiting_operator_jobs WHERE id=%s AND tenant_id=%s',
+                       (job_uuid,tenant_id))
+        job = cursor.fetchone()
+        if not job:
+            raise ValueError('RESUME_JOB_OWNER_MISMATCH')
+        job_name = job_name or job['job_name']
+    merged_images = images or []
+    if any(not isinstance(item,dict) or not item.get('file_id') for item in merged_images):
+        raise ValueError('RESUME_IMAGE_REFERENCE_INVALID')
+    fetched_at_dt = _parse_fetched_at(fetched_at) if fetched_at else None
+    cursor.execute(
+        """
+        INSERT INTO bs_recruiting_operator_resumes
+            (tenant_id, user_id, candidate_name, job_id, job_name, candidate_info, images,
+             ocr_text, resume_summary, source, status, remark, fetched_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'new', %s, COALESCE(%s, CURRENT_TIMESTAMP))
+        RETURNING *
+        """,
+        (
+            tenant_id, user_id, candidate_name.strip(), job_uuid, job_name,
+            psycopg2.extras.Json(candidate_info) if candidate_info is not None else None,
+            psycopg2.extras.Json(merged_images),
+            ocr_text, resume_summary, source, remark, fetched_at_dt,
+        ),
+    )
+    row = cursor.fetchone()
+    return _row_to_resume(row)
+
 
 def create_resume_record(
     tenant_id: str,
@@ -343,28 +395,15 @@ def create_resume_record(
         fetched_at_dt = None
 
     with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            INSERT INTO bs_recruiting_operator_resumes
-                (tenant_id, user_id, candidate_name, job_id, job_name, candidate_info, images,
-                 ocr_text, resume_summary, source, status, remark, fetched_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'new', %s, COALESCE(%s, CURRENT_TIMESTAMP))
-            RETURNING *
-            """,
-            (
-                tenant_id, user_id, candidate_name.strip(), job_uuid, job_name,
-                psycopg2.extras.Json(candidate_info) if candidate_info is not None else None,
-                psycopg2.extras.Json(merged_images),
-                ocr_text, resume_summary, source, remark, fetched_at_dt,
-            ),
-        )
-        row = cursor.fetchone()
+        record = create_resume_record_in_tx(conn.cursor(),tenant_id,user_id,
+            candidate_name=candidate_name,job_name=job_name,job_id=job_uuid,
+            candidate_info=candidate_info,images=merged_images,ocr_text=ocr_text,
+            resume_summary=resume_summary,source=source,remark=remark,fetched_at=fetched_at)
         conn.commit()
 
     logger.info(f"简历入库: tenant={tenant_id}, candidate={candidate_name}, "
                 f"job={job_name}, job_id={job_uuid}, source={source}, images={len(merged_images)}")
-    return _row_to_resume(row)
+    return record
 
 
 def list_resumes(
@@ -555,13 +594,11 @@ def delete_resume(tenant_id: str, resume_id: int) -> bool:
 
 # ============== CLI 结果契约适配（boss_resume_detail） ==============
 
-def create_resume_record_from_tool_result(
+def prepare_resume_record_from_tool_result(
     tenant_id: str,
-    user_id: Optional[str],
     payload: Dict[str, Any],
-    source: str = "boss",
 ) -> Dict[str, Any]:
-    """把 boss_resume_detail CLI 结果 payload 适配为入库记录，返回完整记录 dict。
+    """校验并解析 CLI 结果，不写记录或图片，供原 wrapper 和领域 adapter 复用。
 
     ──【契约对齐点 2026-08-16】明日 CLI `resume-detail` 命令落地时在此对齐字段名 ──
     预期 payload 形状（宽容解析，支持别名；CLI 侧最终字段名以真机联调为准）：
@@ -644,21 +681,21 @@ def create_resume_record_from_tool_result(
     # 职位关联解析（§4.1）：带 job_id 校验租户后直用；只带 job_name 精确匹配；绝不自动创建职位
     job_id, job_name, job_warning = _resolve_job_link(tenant_id, payload.get("job_id"), job_name)
 
+    return dict(candidate_name=candidate_name, job_name=job_name, job_id=job_id,
+        candidate_info=basic_info, ocr_text=ocr_text,
+        resume_summary=_first_str(payload, ("resume_summary",)),
+        images_base64=images_base64, fetched_at=_first_str(payload, ("fetched_at",)),
+        remark=_first_str(payload, ("remark",)), job_warning=job_warning)
+
+
+def create_resume_record_from_tool_result(
+    tenant_id: str, user_id: Optional[str], payload: Dict[str, Any], source: str = "boss",
+) -> Dict[str, Any]:
+    """原调用保留解析、文件清理和独立事务行为；Runner 用同一解析结果。"""
+    prepared = prepare_resume_record_from_tool_result(tenant_id, payload)
+    job_warning = prepared.pop('job_warning')
     try:
-        record = create_resume_record(
-            tenant_id,
-            user_id,
-            candidate_name=candidate_name,
-            job_name=job_name,
-            job_id=job_id,
-            candidate_info=basic_info,
-            ocr_text=ocr_text,
-            resume_summary=_first_str(payload, ("resume_summary",)),
-            images_base64=images_base64,
-            source=source,
-            fetched_at=_first_str(payload, ("fetched_at",)),
-            remark=_first_str(payload, ("remark",)),
-        )
+        record = create_resume_record(tenant_id, user_id, source=source, **prepared)
     except ResumePayloadError:
         raise
     except ValueError as e:

@@ -83,8 +83,9 @@ class ExecutionContextFactory:
         *, tenant_id=None, user_id=None, session_id=None, channel=None,
         subagent_id=None, chat_record_id=None, agent_execution_id=None,
         tool_call_id=None, request_data=None, env_vars=None, llm_gateway=None,
+        infer_legacy_identity=True,
     ) -> ToolExecutionContext:
-        if tenant_id is None or user_id is None:
+        if infer_legacy_identity and (tenant_id is None or user_id is None):
             try:
                 from src.saas.context import get_current_tenant_id, get_current_user_id
                 tenant_id = tenant_id or get_current_tenant_id()

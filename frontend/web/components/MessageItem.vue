@@ -59,11 +59,42 @@
         </span>
       </div>
 
+      <!-- 提交失败态（纯内存标记）：不受 runnerActive/debug 门控，
+           definitive 显示错误文案+重试；retrying 显示自动重试次数+立即重试 -->
+      <div v-if="submitFailure" class="mb-1" role="alert">
+        <div class="flex items-center gap-2 flex-wrap">
+          <span
+            :class="['inline-flex items-center px-2 py-0.5 rounded text-xs font-medium',
+                     submitFailure.kind === 'definitive'
+                       ? 'bg-danger-100 text-danger-700'
+                       : 'bg-warning-100 text-warning-700']"
+          >
+            {{ submitFailure.kind === 'definitive'
+              ? `发送失败：${submitFailure.message}`
+              : `发送不稳定，已自动重试 ${submitFailure.attempts} 次` }}
+          </span>
+          <button
+            type="button"
+            :class="['px-3 py-1 bg-white border rounded-full text-xs transition-colors',
+                     submitFailure.kind === 'definitive'
+                       ? 'border-danger-200 text-danger-600 hover:border-danger-400'
+                       : 'border-warning-200 text-warning-700 hover:border-warning-400']"
+            @click="submitFailure.retry()"
+          >
+            {{ submitFailure.kind === 'definitive' ? '重试' : '立即重试' }}
+          </button>
+        </div>
+      </div>
+
       <div
         v-if="!showInputHint && (props.message.content || !isCancelledRound)"
         class="text-gray-700 leading-relaxed markdown-content prose-sm md:prose-base prose-slate max-w-none"
         v-html="renderedContent"
       ></div>
+
+      <p v-if="message.waitingNotice" class="mt-2 text-sm text-muted" role="status">
+        {{ message.waitingNotice }}
+      </p>
 
       <!-- after_text 图片：文本下方（默认位置，Phase 2 P2.7） -->
       <ImageGallery
@@ -104,6 +135,8 @@
 
       <HumanAssistanceCard
         v-if="message.browserAssistance"
+        :key="message.browserAssistance.run_id + ':' + message.browserAssistance.assistance_id"
+        :runner-id="message.runnerId"
         :assistance="message.browserAssistance"
         :auth-headers="authHeaders"
         @updated="updateAssistance"
@@ -126,8 +159,21 @@
         </button>
       </div>
 
-      <!-- 执行详情（仅 debug 模式显示） -->
-      <div v-if="isDebugEnabled && hasProgress" class="mt-2">
+      <!-- 执行中过程反馈：runner 仍在运行时展示最近工具活动，让长执行可见；终态后收起 -->
+      <div v-if="message.runnerActive && hasProgress && !isDebugEnabled" class="mt-2">
+        <div class="space-y-0.5">
+          <div
+            v-for="(msg, index) in liveProgressTail"
+            :key="index"
+            :class="['text-xs py-1 px-2 rounded text-gray-500', getProgressClass(msg)]"
+          >
+            <span class="opacity-80">{{ formatProgressContent(msg) }}</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 执行详情（仅 debug 模式显示；执行中由上方过程反馈承接，避免重复） -->
+      <div v-if="isDebugEnabled && hasProgress && !message.runnerActive" class="mt-2">
         <button
           @click="toggleExpanded"
           class="flex items-center gap-1 p-2 -m-2 min-w-[44px] min-h-[44px] text-xs text-gray-400 hover:text-gray-600 transition-colors"
@@ -221,10 +267,12 @@ const { isDebugEnabled } = useDebugMode()
 const authHeaders = computed(() => useTenantAuth().getAuthHeader())
 
 function updateAssistance(assistance: any) {
+  if (props.message.runnerId) return
   props.message.browserAssistance = assistance
 }
 
 function handleContinuation(events: any[]) {
+  if (props.message.runnerId) return
   const responseText = events
     .filter(event => event.type === 'response' && typeof event.data === 'string')
     .map(event => event.data)
@@ -250,10 +298,16 @@ const showInputHint = computed(() => {
   return (
     props.message.role === 'assistant' &&
     props.isProcessing &&
+    !props.message.waitingNotice &&
+    !props.message.submitFailure &&
     !props.message.content &&
     (props.inputHintState === 'thinking' || props.inputHintState === 'working')
   )
 })
+
+// 提交失败态（纯内存，乐观 assistant 消息专用）：失败时原地展示错误/重试，
+// 不落入「对方正在输入中」占位
+const submitFailure = computed(() => props.message.submitFailure)
 
 // 用户取消的轮次（历史加载）：assistant metadata.cancelled，渲染明确标记避免误解
 const isCancelledRound = computed(() => {
@@ -276,6 +330,8 @@ const displayMessages = computed(() => {
   if (isExpanded.value) return props.message.progressMessages
   return props.message.progressMessages.slice(0, 5)
 })
+/** 执行中只展示最近的工具活动，避免长任务把气泡刷屏 */
+const liveProgressTail = computed(() => (props.message.progressMessages || []).slice(-4))
 
 function toggleExpanded() {
   isExpanded.value = !isExpanded.value

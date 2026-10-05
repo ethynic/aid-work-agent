@@ -9,7 +9,7 @@ import pytest
 from fastapi import HTTPException
 
 from src.api import browser_runs
-from src.core.agent import Agent, _preserve_suspension_sibling_results
+from src.core.agent import Agent
 from src.tools.browser.agent_resume_coordinator import (
     AgentResumeCoordinator, BrowserResumeWorker,
 )
@@ -112,44 +112,24 @@ async def test_completion_stops_on_unmet_first_sample():
     assert missing == ["challenge_iframe_absent"]
 
 
-def test_agent_runtime_treats_suspension_as_control_flow():
-    source = Path("src/core/agent.py").read_text(encoding="utf-8")
-    suspension_branch = source[source.index("if isinstance(result, ToolSuspension)"):]
-    suspension_branch = suspension_branch[:suspension_branch.index("# 发送工具执行完成事件")]
-    assert "yield result.event" in suspension_branch
-    assert "return" in suspension_branch
-    assert "tool_results.append" not in suspension_branch
-    assert "mark_task_completed" not in suspension_branch
-
-
-def test_suspension_preserves_executed_siblings_and_defers_pending_calls():
-    messages = []
-
-    class Memory:
-        def __init__(self):
-            self.saved = []
-
-        def add_message(self, session_id, message):
-            self.saved.append((session_id, message))
-
-    memory = Memory()
-    _preserve_suspension_sibling_results(
-        messages,
-        memory,
-        "session-a",
-        [{"tool_call_id": "call-before", "content": {"success": True}}],
-        [{"id": "call-after", "name": "later_tool", "arguments": {}}],
+@pytest.mark.asyncio
+async def test_agent_runtime_treats_suspension_as_control_flow():
+    # Agent is now the compatibility API. Its execution owner is the real
+    # Engine; use the existing behavior case rather than an obsolete substring.
+    from tests.unit.test_agent_engine_acceptance import (
+        test_unknown_external_effect_stays_waiting_and_never_repeats_write,
     )
-    assert [item["tool_call_id"] for item in messages] == [
-        "call-before", "call-after",
-    ]
-    assert messages[0]["content"] == {"success": True}
-    assert messages[1]["content"]["error_code"] == (
-        "TOOL_DEFERRED_BY_HUMAN_ASSISTANCE"
+    await test_unknown_external_effect_stays_waiting_and_never_repeats_write()
+
+
+@pytest.mark.asyncio
+async def test_suspension_preserves_executed_siblings_and_defers_pending_calls():
+    from tests.unit.test_agent_engine_acceptance import (
+        test_pause_between_sibling_calls_preserves_remaining_work_and_result_pairing,
+        test_waiting_tool_resume_recovers_call_then_executes_untouched_siblings,
     )
-    assert memory.saved == [
-        ("session-a", messages[0]), ("session-a", messages[1]),
-    ]
+    await test_pause_between_sibling_calls_preserves_remaining_work_and_result_pairing()
+    await test_waiting_tool_resume_recovers_call_then_executes_untouched_siblings()
 
 
 @pytest.mark.asyncio

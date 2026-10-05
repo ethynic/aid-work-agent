@@ -82,8 +82,10 @@ class SkillExecuteTool(BaseTool):
                 files = {}
         elif not isinstance(files, dict):
             files = {}
-        session_id = kwargs.get("session_id")
-        user_id = kwargs.get("user_id")
+        from src.tools.context import current_tool_execution_context
+        tool_context = current_tool_execution_context()
+        session_id = tool_context.session_id if tool_context is not None else kwargs.get("session_id")
+        user_id = tool_context.user_id if tool_context is not None else kwargs.get("user_id")
         workdir = kwargs.get("workdir")
 
         # 后端日志：诊断 skill_execute 调用
@@ -123,7 +125,7 @@ class SkillExecuteTool(BaseTool):
         real_session_id = session_id
 
         # 如果没有传入 user_id，从 session 中获取
-        if not real_user_id and session_id:
+        if tool_context is None and not real_user_id and session_id:
             from src.db.models import SessionDB
             session_info = SessionDB.get_by_id(session_id)
             if session_info:
@@ -132,8 +134,8 @@ class SkillExecuteTool(BaseTool):
                 logger.info(f"后端日志：skill_execute 获取真实 user_id={real_user_id}")
 
         # 替换占位符
-        if "{user_id}" in processed_command and real_user_id:
-            processed_command = processed_command.replace("{user_id}", real_user_id)
+        if "{user_id}" in processed_command and (real_user_id or tool_context is not None):
+            processed_command = processed_command.replace("{user_id}", real_user_id or "")
             logger.info(f"后端日志：已替换 {{user_id}} 占位符")
         if "{session_id}" in processed_command and real_session_id:
             processed_command = processed_command.replace("{session_id}", real_session_id)
@@ -143,10 +145,10 @@ class SkillExecuteTool(BaseTool):
         user_id_pattern = r'--user-id["\s]+["\']?([^"\'\s]+)["\']?'
         matches = re.findall(user_id_pattern, processed_command)
         for old_user_id in matches:
-            if old_user_id != real_user_id and real_user_id:
+            if old_user_id != real_user_id and (real_user_id or tool_context is not None):
                 processed_command = re.sub(
                     rf'--user-id["\s]+["\']?{re.escape(old_user_id)}["\']?',
-                    f'--user-id "{real_user_id}"',
+                    f'--user-id "{real_user_id or ""}"',
                     processed_command
                 )
                 logger.info(f"后端日志：强制替换 LLM 编造的 user_id '{old_user_id}' -> '{real_user_id}'")
@@ -165,14 +167,11 @@ class SkillExecuteTool(BaseTool):
 
         # 解析 tenant_id（无论是否有 content 都需要）
         import json as _json
-        resolved_tenant_id = None
-
-        # 优先从 ContextVar 获取（Agent 进程内直接可用）
-        try:
+        resolved_tenant_id = tool_context.tenant_id if tool_context is not None else None
+        if tool_context is None:
+            # Legacy callers without explicit tool identity keep their ingress context.
             from src.saas.context import get_current_tenant_id
             resolved_tenant_id = get_current_tenant_id()
-        except Exception:
-            pass
 
         # 解析 subagent_id（数字员工级共享启用需要；主智能体直接调用时为空，不启用共享）
         subagent_id = None
@@ -184,7 +183,7 @@ class SkillExecuteTool(BaseTool):
         except Exception:
             pass
 
-        if not resolved_tenant_id and real_session_id:
+        if tool_context is None and not resolved_tenant_id and real_session_id:
             # 方式1：从 chat_sessions 表查询（Web端会话）
             from src.db.models import SessionDB
             session_info = SessionDB.get_by_id(real_session_id)
@@ -284,6 +283,7 @@ class SkillExecuteTool(BaseTool):
                 user_id=real_user_id,
                 stdin_content=stdin_content,
                 env_extra=self.llm_env,
+                context=tool_context,
             )
 
             # 跨租户路径防护：输出后置脱敏。覆盖命令预检无法命中的场景

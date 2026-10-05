@@ -39,6 +39,50 @@ def get_tenants_storage_root() -> str:
     return _TENANTS_ROOT
 
 
+def configured_storage_root() -> Path:
+    """Shared upload/artifact mount, independent of an API/worker process cwd."""
+    return Path(os.environ.get('AGENT_RUNNER_STORAGE_ROOT',str(Path(__file__).resolve().parents[2]/'storage'))).resolve()
+
+
+def get_current_conversation_dir() -> Path:
+    """Trusted tool identity wins, including a deliberately global identity."""
+    from src.tools.context import current_tool_execution_context
+    context = current_tool_execution_context()
+    if context is not None:
+        tenant_id = context.tenant_id
+    else:
+        from src.saas.context import get_current_tenant_id
+        tenant_id = get_current_tenant_id()
+    return get_conversation_dir(tenant_id)
+
+
+def get_conversation_dir(tenant_id: Optional[str]) -> Path:
+    """Artifact/upload leaf with an explicit trusted identity and shared mount."""
+    root = configured_storage_root()
+    owner = normalize_tenant_id(tenant_id or '_anonymous')
+    directory = _owner_anchor(root, 'tenants', owner, 'conversation')
+    directory.mkdir(parents=True,exist_ok=True)
+    # Recheck after creation as well; existing parent symlinks cannot redefine
+    # the canonical tenant anchor into a different tenant or external directory.
+    _owner_anchor(root, 'tenants', owner, 'conversation')
+    return directory
+
+
+def _owner_anchor(root: Path, category: str, owner: str, *scenes: str) -> Path:
+    """Validate below an already canonical trusted mount before any read/mkdir."""
+    if not owner or owner in ('.', '..') or '/' in owner or '\\' in owner:
+        raise ValueError('STORAGE_OWNER_SCOPE_INVALID')
+    path = root / category / owner
+    for scene in scenes:
+        path = path / scene
+    try:
+        if path.resolve() != path:
+            raise ValueError('STORAGE_OWNER_SCOPE_INVALID')
+    except (OSError, RuntimeError) as error:
+        raise ValueError('STORAGE_OWNER_SCOPE_INVALID') from error
+    return path
+
+
 def normalize_tenant_id(tenant_id: str) -> str:
     """规范化租户 ID 用于存储路径：剥离 `tenant_` 前缀。
 
@@ -166,11 +210,89 @@ _MIME_BY_SUFFIX = {
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
     ".gif": "image/gif",
+    ".webp": "image/webp",
     ".html": "text/html",
     ".htm": "text/html",
     ".mp3": "audio/mpeg",
     ".mp4": "video/mp4",
 }
+
+
+def resolve_scoped_uploaded_file(file_id: str, tenant_id: Optional[str], *,
+                                 storage_root=None, metadata=None) -> Optional[dict]:
+    """Resolve only this authenticated tenant's roots, never enumerate tenants.
+
+    Upload IDs are generated basenames. Existing Redis metadata has no tenant
+    field; ownership follows its resolved path, including the legacy upload roots.
+    A lost/expired index can be rebuilt within the same bounded directories.
+    """
+    target = Path(file_id)
+    if not file_id or target.name != file_id or file_id in ('.', '..'):
+        return None
+    if not target.suffix and not file_id.startswith('file_'):
+        return None
+    base = Path(storage_root).resolve() if storage_root is not None else configured_storage_root()
+    tid = normalize_tenant_id(tenant_id or '_anonymous')
+    try:
+        roots = [_owner_anchor(base, 'tenants', tid)]
+        if tenant_id is not None:
+            roots += [_owner_anchor(base, 'uploads', tid),
+                      _owner_anchor(base, 'uploads', f'tenant_{tid}')]
+    except ValueError:
+        return None
+    def permitted(path):
+        # A scene/month symlink cannot change the owner root either. File
+        # symlinks are only permitted when both source and target stay owned.
+        try:
+            return (any(path.is_relative_to(root) for root in roots)
+                    and path.parent.resolve() == path.parent
+                    and any(path.resolve().is_relative_to(root) for root in roots))
+        except (OSError, RuntimeError):
+            return False
+    if metadata and metadata.get('path'):
+        path = Path(metadata['path']).absolute()
+        if not permitted(path):
+            return None
+        if path.is_file():
+            return {**metadata,'path':str(path.resolve())}
+    for root in roots:
+        if not root.is_dir():
+            continue
+        # Same depth as the existing upload recovery: root, scene, scene/month.
+        directories = [root]
+        for first in root.iterdir():
+            if first.is_dir() and first.resolve()==first and permitted(first):
+                directories.append(first)
+                directories.extend(second for second in first.iterdir()
+                                   if second.is_dir() and second.resolve()==second and permitted(second))
+        for directory in directories:
+            for candidate in directory.iterdir():
+                matched = candidate.name == file_id if target.suffix else candidate.stem == file_id
+                if matched and permitted(candidate) and candidate.is_file():
+                    path = candidate.resolve()
+                    mime = _MIME_BY_SUFFIX.get(path.suffix.lower(),'application/octet-stream')
+                    return {'file_id':file_id,'name':path.name,'path':str(path),'size':path.stat().st_size,
+                            'mime_type':mime,'type':'image' if mime.startswith('image/') else 'file'}
+    return None
+
+
+def resolve_delivery_file_info(file_id: str, metadata=None) -> Optional[dict]:
+    """File delivery read leaf, retaining legacy public opaque-id semantics.
+
+    Explicit tool identities and authenticated Web subjects are scoped even
+    when tenant_id is None. Only the existing public file URL without a subject
+    uses the legacy scanner; a failed scoped lookup never falls back to it.
+    """
+    from src.tools.context import current_tool_execution_context
+    context = current_tool_execution_context()
+    if context is not None:
+        return resolve_scoped_uploaded_file(file_id, context.tenant_id, metadata=metadata)
+    from src.saas.context import get_current_tenant_id, get_current_user_id
+    if get_current_user_id() is not None:
+        return resolve_scoped_uploaded_file(file_id, get_current_tenant_id(), metadata=metadata)
+    if metadata:
+        return dict(metadata)
+    return find_uploaded_file_on_disk(file_id)
 
 
 def find_uploaded_file_on_disk(file_id: str, register_to_redis: bool = True) -> Optional[dict]:
@@ -198,7 +320,7 @@ def find_uploaded_file_on_disk(file_id: str, register_to_redis: bool = True) -> 
     if not file_id or ".." in Path(file_id).parts:
         return None
     try:
-        tenants_root = Path(_TENANTS_ROOT)
+        tenants_root = configured_storage_root()/'tenants'
         if not tenants_root.exists():
             return None
 

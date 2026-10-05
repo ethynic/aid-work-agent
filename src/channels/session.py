@@ -721,59 +721,14 @@ class ChannelSessionManager:
                     mark_recalled = (hit_recall or is_recalled_assistant) and has_recall_col
 
                     message_id = f"msg_{uuid.uuid4().hex[:16]}"
-                    if mark_recalled:
-                        cursor.execute("""
-                            INSERT INTO channel_messages
-                            (message_id, session_id, tenant_id, role, content, message_type,
-                             attachments, metadata, is_recalled, recalled_at)
-                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, TRUE, NOW())
-                        """, (
-                            message_id,
-                            session_id,
-                            tenant_id,
-                            role,
-                            content,
-                            message_type,
-                            json.dumps(attachments, ensure_ascii=False) if attachments else None,
-                            json.dumps(metadata, ensure_ascii=False, default=str) if metadata else None,
-                        ))
-                        # tlog(
-                        #     "撤回消息",
-                        #     "落库前命中 recall_pending，直接标记 is_recalled=TRUE: "
-                        #     "session_id={session_id}, message_id={message_id}, "
-                        #     "role={role}, hit_user={hit_user}, is_recalled_assistant={is_assistant}, "
-                        #     "content_preview={preview!r}",
-                        #     session_id=session_id,
-                        #     message_id=message_id,
-                        #     role=role,
-                        #     hit_user=hit_recall,
-                        #     is_assistant=is_recalled_assistant,
-                        #     preview=(content or "")[:80],
-                        # )
-                    else:
-                        cursor.execute("""
-                            INSERT INTO channel_messages
-                            (message_id, session_id, tenant_id, role, content, message_type,
-                             attachments, metadata)
-                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                        """, (
-                            message_id,
-                            session_id,
-                            tenant_id,
-                            role,
-                            content,
-                            message_type,
-                            json.dumps(attachments, ensure_ascii=False) if attachments else None,
-                            json.dumps(metadata, ensure_ascii=False, default=str) if metadata else None,
-                        ))
+                    from src.db.channel_message_repository import insert_message
+                    insert_message(cursor,message_id=message_id,session_id=session_id,
+                        tenant_id=tenant_id,role=role,content=content,message_type=message_type,
+                        attachments=attachments,metadata=metadata,is_recalled=mark_recalled)
                     created_ids.append(message_id)
 
-                # 更新会话最后消息时间（只调一次）
-                cursor.execute("""
-                    UPDATE channel_sessions
-                    SET last_message_at = %s, updated_at = %s
-                    WHERE session_id = %s
-                """, (now, now, session_id))
+                from src.db.channel_message_repository import touch_session
+                touch_session(cursor,session_id,now)
 
                 conn.commit()
 
@@ -1186,7 +1141,7 @@ class ChannelSessionManager:
         # 发送链路不变，仍由 send_response 透传渠道 adapter
         agent_images: List[Dict[str, Any]] = []
         try:
-            agent_images = list(getattr(agent, "_last_response_images", []) or [])
+            agent_images = list(getattr(result.response_text, "images", []) or [])
         except Exception:
             agent_images = []
 
@@ -1366,11 +1321,11 @@ class ChannelSessionManager:
         send_ok = False
         try:
             session_queue.mark_responding(session_id)
-            # Phase 2 P2.3 CodeReview P0 修复：从 agent 实例读取累积的 ImageRef
+            # Phase 2 P2.3 CodeReview P0 修复：从本次执行结果读取累积的 ImageRef
             # 列表，透传给渠道 adapter（feishu/dingtalk 拆分发送，wecom_kf 不用）
             agent_images = []
             try:
-                agent_images = list(getattr(agent, "_last_response_images", []) or [])
+                agent_images = list(getattr(result.response_text, "images", []) or [])
             except Exception:
                 agent_images = []
             send_ok = await send_response(response_text, downloadable_files, agent_images)

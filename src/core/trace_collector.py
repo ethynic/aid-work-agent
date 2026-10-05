@@ -160,7 +160,7 @@ class TraceCollector:
         self.trace.error_message = error
         self.trace.tags.append("error")
 
-    def on_complete(self, record_service=None):
+    def on_complete(self, record_service=None, *, persist_sync=False):
         """
         请求完成时调用。从 SessionRecordService 获取 LLM 调用数据，
         然后将完整 trace + spans 异步持久化。
@@ -182,15 +182,18 @@ class TraceCollector:
                 span.end_time = now
                 span.duration_ms = int((now - span.start_time) * 1000)
 
-        # 将最后一次 LLM 调用 span 加入 spans 列表（覆盖策略，只保留最后一次）
+        # 最后一次 LLM 调用已在 _handle_llm_call 中按事件顺序落列，这里只补齐结束时间
         if self._last_llm_span:
             self._last_llm_span.end_time = self._last_llm_span.start_time + self._last_llm_span.duration_ms / 1000.0
-            self.trace.spans.append(self._last_llm_span)
 
         # 异步持久化
         try:
-            from src.core.trace_persist import schedule_persist
-            schedule_persist(self.trace)
+            if persist_sync:
+                from src.core.trace_persist import persist_now
+                persist_now(self.trace)
+            else:
+                from src.core.trace_persist import schedule_persist
+                schedule_persist(self.trace)
         except Exception as e:
             logger.warning(f"Trace persist scheduling failed: {e}")
 
@@ -230,7 +233,12 @@ class TraceCollector:
             del self._active_spans[key]
 
     def _handle_llm_call(self, event: dict):
-        """处理 LLM 调用事件 — 只保留最后一次（覆盖策略）"""
+        """处理 LLM 调用事件。
+
+        每次调用都保留一个 span（时间线完整可诊断）：非最后一次以精简摘要落列
+        （不含全量 messages，避免长会话下 span 体积成倍膨胀）；最后一次保留
+        完整输入，供 Trace 详情页查看最后一次 LLM 上下文。
+        """
         messages = event.get("messages", [])
         tools = event.get("tools", [])
         system_prompt = event.get("system_prompt", "")
@@ -260,8 +268,31 @@ class TraceCollector:
             request_id=event.get("request_id"),
         )
 
-        # 覆盖：只保留最后一次 LLM 调用
+        # 上一次调用已确定不是最后一次：原地精简（保留列表中的时间顺序）
+        if self._last_llm_span is not None:
+            self._lean_llm_span(self._last_llm_span)
+        span_record = span
+        # 按事件到达顺序立即落列；最后一次保持全量输入
+        self.trace.spans.append(span_record)
         self._last_llm_span = span
+
+    @staticmethod
+    def _lean_llm_span(span: "SpanRecord"):
+        """把历史 generation span 的输入压缩为摘要（保留计时/用量诊断价值）。"""
+        try:
+            payload = json.loads(span.tool_args or '{}')
+        except Exception:
+            payload = {}
+        messages = payload.get('messages') or []
+        summary = {
+            'summary_only': True,
+            'message_count': len(messages),
+            'has_tools': bool(payload.get('tools')),
+            'system_prompt_chars': len(payload.get('system_prompt') or ''),
+            'messages_chars': sum(len(str(item.get('content') or '')) for item in messages
+                                  if isinstance(item, dict)),
+        }
+        span.tool_args = json.dumps(summary, ensure_ascii=False)
 
     def _handle_context_compressed(self, event: dict):
         """处理上下文压缩完成事件（Phase 7 §7.1）。

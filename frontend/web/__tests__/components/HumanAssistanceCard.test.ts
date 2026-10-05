@@ -31,7 +31,9 @@ describe('HumanAssistanceCard', () => {
 
   it('renders structured safe instructions and lease', () => {
     const wrapper = mount(HumanAssistanceCard, { props: { assistance, authHeaders: {} } })
-    expect(wrapper.text()).toContain('浏览器任务已暂停')
+    // 重构后标题按状态映射（HumanAssistanceCard.vue statusText）：pending 显示
+    // 「浏览器任务等待人工协助」，不再是旧静态「浏览器任务已暂停」。
+    expect(wrapper.text()).toContain('浏览器任务等待人工协助')
     expect(wrapper.text()).toContain('请完成页面验证')
     expect(wrapper.text()).toContain('开始接管')
     expect(wrapper.text()).toContain('画面不会保存到服务器')

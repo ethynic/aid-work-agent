@@ -1,0 +1,246 @@
+# AgentRunner 分进程部署 overlay（同一代码制品，与各环境主 compose 叠加使用）。
+#
+# 用法（叠加到目标环境主 compose，例如生产）：
+#   docker compose -f docker-compose.prod.yml -f docker-compose.agent-runner.yml config   # 纯语法/插值校验
+#   docker compose -f docker-compose.prod.yml -f docker-compose.agent-runner.yml up -d runner-api runner-worker
+#   # KF 两服务必须显式启用 profile 才会启动（见下），否则不会出现在任何 up 输出中：
+#   docker compose -f docker-compose.prod.yml -f docker-compose.agent-runner.yml --profile wecom-kf up -d kf-ingress kf-admission
+#
+# ⚠️ 红线：本文件只是部署配置。执行 up/down/restart/recreate 即激活 AgentRunner 接线并变更
+# 用户环境（configs/config.yaml 为三环境共享挂载，agent_runner.enabled 当前为本地验证态 true），
+# 一切启动/回退都必须由用户当场明确授权后按 deploy/agent-runner-deploy-checklist.md 执行。
+#
+# 三个宿主路径/网络变量经 .env 或命令行注入（默认值对齐生产 docker-compose.prod.yml）：
+#   AGENT_RUNNER_NETWORK          容器网络：prod=aid-network / test=aid-network2 / dev=aid-network3
+#   AGENT_RUNNER_UPLOADS_HOST_DIR 上传宿主目录（与目标环境主 compose 的 uploads 挂载同一路径）
+#   AGENT_RUNNER_STORAGE_HOST_DIR 产物宿主目录（与目标环境主 compose 的 storage 挂载同一路径）
+# 这三个变量仅参与 compose 插值，src/config/settings.py 不读取（应用读取的 AGENT_RUNNER_* 见
+# settings.py 的 env 覆盖段，二者命名不冲突）。
+
+services:
+  # AgentRunner 独立 API（bootstrap 入口）：接单/事件/控制 HTTP 面，不执行任务。
+  # 与主 API/worker 共享数据库与 storage 挂载；不迁移、不建表（启动仅 assert_schema 断言，
+  # 建表走 deploy/db_update.yaml，见 deploy/agent-runner-deploy-checklist.md 前置①）。
+  runner-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: aid-agent-api:latest
+    container_name: aid-runner-api
+    restart: unless-stopped
+    # 轻量 FastAPI 面（不加载 Agent 运行时），1G 上限留足余量
+    mem_limit: 1g
+    env_file:
+      - .env
+    environment:
+      # 应用代码不读取 SERVER_MODE，仅作运维识别标签（先例：background 的 SERVER_MODE=background）
+      - SERVER_MODE=agent-runner-api
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      # 分进程差异注入：API 地址指向 compose 服务名（旧值 127.0.0.1:8091 仅单机同进程形态可用）。
+      # 消费者：kf-admission 的 SourceClient（source_client.py 以 config.api_url 为 base_url）、
+      # 主 API 容器的 Runner header 转接（web_client.py，需在主 API 容器另行注入，见清单前置②）。
+      # 本服务自身不调用该地址，注入仅为配置自描述/统一。
+      - AGENT_RUNNER_API_URL=http://runner-api:8091
+      # 共享产物路径显式注入（容器内默认解析结果相同，显式声明避免依赖 cwd）：
+      # storage 根 = src/core/storage.py::configured_storage_root，产物/快照落此挂载卷
+      - AGENT_RUNNER_STORAGE_ROOT=/app/storage
+      # worker 侧 RuntimeFactory 资源目录（默认 storage/agent_runner，同挂载卷内）
+      - AGENT_RUNNER_RESOURCE_DIR=/app/storage/agent_runner
+    # 覆盖 Dockerfile ENTRYPOINT：跳过 gunicorn，直接跑 bootstrap（uvicorn 单进程）。
+    # bootstrap 默认绑定 settings.agent_runner.host（config.yaml 为 127.0.0.1），容器内须显式
+    # --host 0.0.0.0 才能被同网络的其他服务按服务名访问。沿用 prod background 的
+    # fix_tmp.sh + gosu 降权先例（docker-compose.prod.yml aid-agent-background）。
+    entrypoint: ["sh", "-c"]
+    command: ["/usr/local/bin/fix_tmp.sh && exec gosu appuser python -m src.services.agent_runner.bootstrap --host 0.0.0.0 --port 8091"]
+    volumes:
+      - .:/app
+      - ./log:/app/log
+      - ./configs:/app/configs
+      - ./skills:/app/skills
+      # 与主 API 共享上传/产物目录（路径变量化，取目标环境主 compose 同一宿主路径）
+      - ${AGENT_RUNNER_UPLOADS_HOST_DIR:-/var/www/qb3_upload/agent_uploads}:/app/uploads
+      - ${AGENT_RUNNER_STORAGE_HOST_DIR:-/var/www/qb3_upload/agent_storage}:/app/storage
+      # /tmp 权限兜底（与主 compose 各服务同款，见 docker-compose.prod.yml 注释）
+      - type: tmpfs
+        target: /tmp
+        tmpfs:
+          mode: 1777
+          size: 200m
+    networks:
+      - ${AGENT_RUNNER_NETWORK:-aid-network}
+    # 独立 API 自带 /health（api.py health 端点）
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8091/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # AgentRunner 执行 worker：认领/心跳/执行/恢复，全部经共享数据库，不监听 HTTP。
+  # 内存口径对齐 aid-agent-background（加载整套 Agent 运行时）。
+  runner-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: aid-agent-api:latest
+    container_name: aid-runner-worker
+    restart: unless-stopped
+    mem_limit: 4g
+    # 先起独立 API（schema 断言/接单面就绪）再起 worker；worker 自身也会 assert_schema，
+    # 该依赖只为启动顺序确定性，不构成运行时耦合（worker 只访问 DB，不调用 API）。
+    depends_on:
+      runner-api:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      - SERVER_MODE=agent-runner-worker
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - AGENT_RUNNER_API_URL=http://runner-api:8091
+      - AGENT_RUNNER_STORAGE_ROOT=/app/storage
+      - AGENT_RUNNER_RESOURCE_DIR=/app/storage/agent_runner
+    entrypoint: ["sh", "-c"]
+    command: ["/usr/local/bin/fix_tmp.sh && exec gosu appuser python -m src.services.agent_runner.worker"]
+    volumes:
+      - .:/app
+      - ./log:/app/log
+      - ./configs:/app/configs
+      - ./skills:/app/skills
+      # 共享业务存储（产物/资源目录与主 API、runner-api 一致）
+      - ${AGENT_RUNNER_UPLOADS_HOST_DIR:-/var/www/qb3_upload/agent_uploads}:/app/uploads
+      - ${AGENT_RUNNER_STORAGE_HOST_DIR:-/var/www/qb3_upload/agent_storage}:/app/storage
+      # worker 执行 Browser 工具（Playwright/Chromium），/tmp 权限兜底必须有
+      - type: tmpfs
+        target: /tmp
+        tmpfs:
+          mode: 1777
+          size: 200m
+    networks:
+      - ${AGENT_RUNNER_NETWORK:-aid-network}
+    # worker 无 HTTP/心跳文件端点（background_runner 的 .bg_runner_alive 机制不在此进程），
+    # 只能用 pgrep 进程判活（镜像已装 procps）。[.] 写法防止 healthcheck 自身命令行被
+    # pgrep -f 误匹配。仅证明进程存活，不证明 lease/执行健康——局限见部署清单。
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'src[.]services[.]agent_runner[.]worker' >/dev/null"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # 微信客服可信拉取 worker（KF ingress）：按账号租约逐页 sync 落库。
+  # profiles 门控是强制设计：wecom_kf.enabled=false 时入口直接 raise（ingress_worker.py
+  # KF_INGRESS_DISABLED），不加 profile 门控会在 disabled 状态陷入 raise→restart 循环。
+  # 启用即随 profile 注入 AGENT_RUNNER_WECOM_KF_ENABLED=true（settings.py 支持），使服务
+  # 生效完全由 --profile wecom-kf 决定，不受共享 config.yaml 当前 false 值影响。
+  kf-ingress:
+    profiles:
+      - wecom-kf
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: aid-agent-api:latest
+    container_name: aid-kf-ingress
+    restart: unless-stopped
+    mem_limit: 1g
+    env_file:
+      - .env
+    environment:
+      - SERVER_MODE=agent-runner-kf-ingress
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - AGENT_RUNNER_API_URL=http://runner-api:8091
+      - AGENT_RUNNER_STORAGE_ROOT=/app/storage
+      - AGENT_RUNNER_RESOURCE_DIR=/app/storage/agent_runner
+      - AGENT_RUNNER_WECOM_KF_ENABLED=true
+    entrypoint: ["sh", "-c"]
+    command: ["/usr/local/bin/fix_tmp.sh && exec gosu appuser python -m src.channels.wecom_kf.ingress_worker"]
+    volumes:
+      - .:/app
+      - ./log:/app/log
+      - ./configs:/app/configs
+      - ./skills:/app/skills
+      - ${AGENT_RUNNER_UPLOADS_HOST_DIR:-/var/www/qb3_upload/agent_uploads}:/app/uploads
+      - ${AGENT_RUNNER_STORAGE_HOST_DIR:-/var/www/qb3_upload/agent_storage}:/app/storage
+      - type: tmpfs
+        target: /tmp
+        tmpfs:
+          mode: 1777
+          size: 200m
+    networks:
+      - ${AGENT_RUNNER_NETWORK:-aid-network}
+    # 同 runner-worker：无 HTTP 端点，pgrep 进程判活（局限见部署清单）
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'src[.]channels[.]wecom_kf[.]ingress_worker' >/dev/null"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # 微信客服接单/投递 worker（KF admission）：扫固定上下文输入，经 SourceClient 向
+  # runner-api 提交并驱动投递完成。SourceClient 以 config.api_url 为 base_url，
+  # 故必须注入 AGENT_RUNNER_API_URL=http://runner-api:8091（旧值 127.0.0.1 容器内不可达）。
+  kf-admission:
+    profiles:
+      - wecom-kf
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: aid-agent-api:latest
+    container_name: aid-kf-admission
+    restart: unless-stopped
+    mem_limit: 1g
+    # admission 会同步调用 runner-api HTTP 面，等其健康后启动
+    depends_on:
+      runner-api:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      - SERVER_MODE=agent-runner-kf-admission
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - AGENT_RUNNER_API_URL=http://runner-api:8091
+      - AGENT_RUNNER_STORAGE_ROOT=/app/storage
+      - AGENT_RUNNER_RESOURCE_DIR=/app/storage/agent_runner
+      - AGENT_RUNNER_WECOM_KF_ENABLED=true
+    entrypoint: ["sh", "-c"]
+    command: ["/usr/local/bin/fix_tmp.sh && exec gosu appuser python -m src.channels.wecom_kf.admission_worker"]
+    volumes:
+      - .:/app
+      - ./log:/app/log
+      - ./configs:/app/configs
+      - ./skills:/app/skills
+      - ${AGENT_RUNNER_UPLOADS_HOST_DIR:-/var/www/qb3_upload/agent_uploads}:/app/uploads
+      - ${AGENT_RUNNER_STORAGE_HOST_DIR:-/var/www/qb3_upload/agent_storage}:/app/storage
+      - type: tmpfs
+        target: /tmp
+        tmpfs:
+          mode: 1777
+          size: 200m
+    networks:
+      - ${AGENT_RUNNER_NETWORK:-aid-network}
+    # 同上：pgrep 进程判活（局限见部署清单）
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'src[.]channels[.]wecom_kf[.]admission_worker' >/dev/null"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

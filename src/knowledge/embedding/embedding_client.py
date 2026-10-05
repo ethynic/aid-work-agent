@@ -65,6 +65,16 @@ def _extract_usage_tokens(resp) -> int:
     return 0
 
 
+def _observed_embedding_usage(resp):
+    """Preserve raw counts for the authoritative receipt validator."""
+    usage = getattr(resp,'usage',None)
+    if isinstance(usage,dict):
+        tokens = usage.get('total_tokens',usage.get('tokens'))
+    else:
+        tokens = getattr(usage,'total_tokens',getattr(usage,'tokens',None))
+    return {'tokens':tokens} if tokens is not None else None
+
+
 def sanitize_error_info(error_msg: str) -> str:
     """过滤错误信息中的敏感信息"""
     if not error_msg:
@@ -140,14 +150,13 @@ class TextEmbeddingV3Client:
         texts = _sanitize_texts(texts, source="embedding_input")
         for attempt in range(1, 4):  # 1 + 2 = 3 次尝试
             try:
-                return TextEmbedding.call(
-                    model=self.model,
-                    input=texts,
-                    parameters={
-                        "text_type": "document",
-                        "dimension": self.dimension,
-                    },
-                )
+                from src.llm.call_observer import observed_call_sync
+                return observed_call_sync(TextEmbedding.call, provider='dashscope', model=self.model,
+                    owner='embedding', purpose='embedding',
+                    kwargs=dict(model=self.model, input=texts, parameters={
+                        'text_type':'document', 'dimension':self.dimension}),
+                    normalize=lambda response: {'usage': _observed_embedding_usage(response),
+                        'request_id':getattr(response,'request_id','')})
             except Exception as e:
                 last_exc = e
                 if not _is_transient_error(e):

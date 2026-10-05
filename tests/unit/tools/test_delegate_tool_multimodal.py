@@ -3,7 +3,7 @@ video-agent 多模态支持单元测试
 
 覆盖：
 1. DelegateToSubagentInput schema 含 image_paths 字段
-2. Agent._build_multimodal_user_content 构造 OpenAI 多模态 content
+2. AttachmentAssembler._build_multimodal_user_content 构造 OpenAI 多模态 content
 3. delegate_tool.execute 透传 image_paths 给 executor.delegate
 """
 
@@ -70,13 +70,12 @@ class TestDelegateToSubagentInput:
 
 
 class TestBuildMultimodalUserContent:
-    """Agent._build_multimodal_user_content 构造 OpenAI 多模态 content。"""
+    """AttachmentAssembler._build_multimodal_user_content 构造 OpenAI 多模态 content。"""
 
     def _make_agent(self):
         """构造一个最小 Agent 实例，跳过 __init__ 重组件"""
-        from src.core.agent import Agent
-        agent = Agent.__new__(Agent)
-        return agent
+        from src.services.agent_runner.runtime.attachments import AttachmentAssembler
+        return AttachmentAssembler()
 
     def test_none_image_paths_returns_none(self):
         """image_paths=None 返回 None，调用方按纯文本处理"""
@@ -176,6 +175,46 @@ class TestBuildMultimodalUserContent:
         # 只有 valid 被附加
         assert len(result) == 2
         assert result[1]["image_url"]["url"].startswith("data:image/png;base64,")
+
+
+class TestDurableImageReferenceContent:
+    """durable 装配点改存 runner_image 引用；data URL 仅保留为 provider wire 形态。"""
+
+    def test_owner_workspace_builds_reference_parts_without_data_url(self, tmp_path):
+        from src.services.agent_runner.runtime.attachments import AttachmentAssembler
+        img_path = tmp_path / "upload" / "product.png"
+        img_path.parent.mkdir()
+        img_path.write_bytes(_PNG_BYTES)
+        owner = tmp_path / "workspaces" / "namespace"
+        assembler = AttachmentAssembler(owner)
+
+        parts, artifacts = assembler.build_image_reference_content("描述这张图", [str(img_path)])
+
+        assert parts is not None and parts[0] == {"type": "text", "text": "描述这张图"}
+        reference = parts[1]
+        assert reference["type"] == "runner_image"
+        assert set(reference) == {"type", "name", "mime_type", "size_bytes", "sha256"}
+        assert reference["mime_type"] == "image/png"
+        assert reference["size_bytes"] == len(_PNG_BYTES)
+        import hashlib
+        assert reference["sha256"] == hashlib.sha256(_PNG_BYTES).hexdigest()
+        # 持久 content 不含 data:；字节数与登记一致
+        assert "data:" not in str(parts)
+        stored = owner / f"image_{reference['sha256']}.png"
+        assert stored.read_bytes() == _PNG_BYTES
+        assert artifacts[0]["path"] == str(stored)
+
+    def test_legacy_assembler_without_owner_keeps_wire_form(self, tmp_path):
+        """无 owner workspace（旧内存路径）不引用化，保持 data URL wire 形态。"""
+        from src.services.agent_runner.runtime.attachments import AttachmentAssembler
+        img_path = tmp_path / "legacy.png"
+        img_path.write_bytes(_PNG_BYTES)
+        assembler = AttachmentAssembler(None)
+
+        parts, artifacts = assembler.build_image_reference_content("t", [str(img_path)])
+        assert parts is None and artifacts == []
+        wire = assembler._build_multimodal_user_content("t", [str(img_path)])
+        assert wire[1]["image_url"]["url"].startswith("data:image/png;base64,")
 
 
 class TestDelegateToolExecutePassesImagePaths:
@@ -292,3 +331,25 @@ class TestDelegateToolExecutePassesImagePaths:
         # 全空被过滤为 None
         delegate_call = executor.delegate.call_args
         assert delegate_call.kwargs.get("image_paths") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["waiting", "paused", "failed", "cancelled"])
+async def test_delegate_noncompleted_child_never_reports_success(status):
+    from src.tools.agent.delegate_tool import DelegateToSubagentTool
+    from src.subagents.protocol import SubagentTaskRecord
+    registry, executor = MagicMock(), MagicMock()
+    registry.get.return_value = MagicMock(name="child")
+    executor.delegate = AsyncMock(return_value=MagicMock(success=True, execution_id="child-id"))
+    record = SubagentTaskRecord(execution_id="child-id", task_id="task-id", subagent_name="child",
+        task_description="task", parent_session_id="session", status=status,
+        result={"waiting": {"kind": "verification_required"}}, token_usage={"input": 7, "output": 3})
+    executor.wait_for_result = AsyncMock(return_value=record)
+    tool = DelegateToSubagentTool(registry, executor, authorizer=_AllowAuthorizer())
+    with tool_execution_scope(ToolExecutionContext(tenant_id="tenant", user_id="user", session_id="session")):
+        result = await tool.execute(subagent_name="child", task_description="task")
+    assert result["success"] is False
+    assert result["status"] == status
+    assert result["waiting"] == {"kind": "verification_required"}
+    assert result["token_usage"] == {"input": 7, "output": 3}
+    assert record.is_terminal() is True, "Legacy poll must return suspended tasks instead of hanging"

@@ -1,9 +1,9 @@
-"""Agent._run_compression_phase 可观测性集成测试（Phase 7 §7.1 + §7.2）
+"""CompressionCoordinator._run_compression_phase 可观测性集成测试（Phase 7 §7.1 + §7.2）
 
 **这是 Phase 7 测试的核心**。现有 test_process_message_order.py 只验证
 v3.2 顺序（check_threshold → compress_now），完全没有验证 Phase 7 新增的可观测性逻辑：
 
-1. 压缩成功 → ContextCompressedEvent 被构造并存到 `_pending_compression_event`
+1. 压缩成功 → ContextCompressedEvent 被构造并存到 `event`
 2. 压缩成功 → CompressionMetrics.record_invocation('success'|'fallback', source_type) 被调
 3. 压缩成功 → record_duration + record_ratio 被调
 4. 未达阈值 → record_invocation('skipped', source_type) 被调
@@ -33,12 +33,9 @@ class _StubMemory:
 
 
 def _make_minimal_agent():
-    """构造最小 Agent 实例（绕过 __init__）。"""
-    from src.core.agent import Agent
-
-    agent = Agent.__new__(Agent)
-    agent.memory = _StubMemory()  # type: ignore[assignment]
-    return agent
+    """Call the actual compression owner rather than the legacy facade."""
+    from src.services.agent_runner.runtime.compression import CompressionCoordinator
+    return CompressionCoordinator("chat")
 
 
 def _patch_compression_service_with_result(
@@ -86,24 +83,24 @@ def _patch_compression_service_with_result(
 
 @pytest.mark.asyncio
 async def test_compression_success_emits_context_compressed_event(monkeypatch):
-    """压缩成功 → agent._pending_compression_event 应被设置为 ContextCompressedEvent 字典。
+    """压缩成功 → agent.event 应被设置为 ContextCompressedEvent 字典。
 
     Mutation testing 关键断点：如果有人删掉 _run_compression_phase 里的
-    `event = ContextCompressedEvent(...)` 和 `self._pending_compression_event = event.to_dict()`，
+    `event = ContextCompressedEvent(...)` 和 `self.event = event.to_dict()`，
     本测试会失败。
     """
     agent = _make_minimal_agent()
-    agent._detect_source_type = lambda: "chat"  # type: ignore[assignment]
+    agent.source_type = "chat"  # type: ignore[assignment]
     _patch_compression_service_with_result(monkeypatch, should_compress=True)
 
     # 初始状态：没有 pending event
-    assert not hasattr(agent, "_pending_compression_event") or agent._pending_compression_event is None
+    assert not hasattr(agent, "event") or agent.event is None
 
     await agent._run_compression_phase("sess_1")
 
     # Phase 7 §7.1：压缩成功后必须构造并暂存事件
-    assert hasattr(agent, "_pending_compression_event")
-    evt = agent._pending_compression_event
+    assert hasattr(agent, "event")
+    evt = agent.event
     assert evt is not None
     assert evt["type"] == "context_compressed"
     assert evt["summary_id"] == "csum_abc"
@@ -127,7 +124,7 @@ async def test_compression_success_records_metrics_success(monkeypatch):
     Mutation testing：把代码里的 'success' 改成 'failed'，此测试会失败。
     """
     agent = _make_minimal_agent()
-    agent._detect_source_type = lambda: "chat"  # type: ignore[assignment]
+    agent.source_type = "chat"  # type: ignore[assignment]
     _patch_compression_service_with_result(
         monkeypatch, should_compress=True, fallback_used=False
     )
@@ -157,7 +154,7 @@ async def test_compression_fallback_records_metrics_fallback(monkeypatch):
     此测试会失败。
     """
     agent = _make_minimal_agent()
-    agent._detect_source_type = lambda: "chat"  # type: ignore[assignment]
+    agent.source_type = "chat"  # type: ignore[assignment]
     _patch_compression_service_with_result(
         monkeypatch, should_compress=True, fallback_used=True
     )
@@ -178,7 +175,7 @@ async def test_compression_fallback_records_metrics_fallback(monkeypatch):
     assert fallback_calls[0][1] == "chat"
 
     # 同时 event.fallback_used 也应为 True（链路一致性）
-    assert agent._pending_compression_event["fallback_used"] is True
+    assert agent.event["fallback_used"] is True
 
 
 @pytest.mark.asyncio
@@ -188,7 +185,7 @@ async def test_compression_success_records_duration_and_ratio(monkeypatch):
     Mutation testing：删掉任一调用，测试失败。
     """
     agent = _make_minimal_agent()
-    agent._detect_source_type = lambda: "wecom_kf"  # type: ignore[assignment]
+    agent.source_type = "wecom_kf"  # type: ignore[assignment]
     _patch_compression_service_with_result(monkeypatch, should_compress=True)
 
     mock_metrics = MagicMock()
@@ -219,7 +216,7 @@ async def test_compression_below_threshold_records_skipped(monkeypatch):
     Mutation testing：把 else 分支的 'skipped' 改成 'failed' 或删掉，测试失败。
     """
     agent = _make_minimal_agent()
-    agent._detect_source_type = lambda: "chat"  # type: ignore[assignment]
+    agent.source_type = "chat"  # type: ignore[assignment]
     _patch_compression_service_with_result(monkeypatch, should_compress=False)
 
     calls: List[tuple] = []
@@ -237,7 +234,7 @@ async def test_compression_below_threshold_records_skipped(monkeypatch):
     assert len(skipped_calls) == 1, f"expected 1 skipped call, got {calls}"
     assert skipped_calls[0][1] == "chat"
     # 未达阈值时不构造 event
-    assert getattr(agent, "_pending_compression_event", None) is None
+    assert getattr(agent, "event", None) is None
 
 
 @pytest.mark.asyncio
@@ -247,7 +244,7 @@ async def test_compression_exception_records_failed(monkeypatch):
     Mutation testing：把 except 块的 'failed' 改成 'skipped'，测试失败。
     """
     agent = _make_minimal_agent()
-    agent._detect_source_type = lambda: "chat"  # type: ignore[assignment]
+    agent.source_type = "chat"  # type: ignore[assignment]
     _patch_compression_service_with_result(
         monkeypatch,
         should_compress=True,
@@ -285,7 +282,7 @@ async def test_metrics_exception_does_not_break_main_flow(monkeypatch):
         except Exception as oe: logger.debug(...)
     """
     agent = _make_minimal_agent()
-    agent._detect_source_type = lambda: "chat"  # type: ignore[assignment]
+    agent.source_type = "chat"  # type: ignore[assignment]
     _patch_compression_service_with_result(monkeypatch, should_compress=True)
 
     mock_metrics = MagicMock()
@@ -321,7 +318,7 @@ async def test_event_fields_match_compression_result(monkeypatch):
     `original_token_count=result.compressed_token_count`（抄错），此测试会失败。
     """
     agent = _make_minimal_agent()
-    agent._detect_source_type = lambda: "chat"  # type: ignore[assignment]
+    agent.source_type = "chat"  # type: ignore[assignment]
     _patch_compression_service_with_result(
         monkeypatch,
         should_compress=True,
@@ -330,7 +327,7 @@ async def test_event_fields_match_compression_result(monkeypatch):
     )
 
     await agent._run_compression_phase("sess_1")
-    evt = agent._pending_compression_event
+    evt = agent.event
     assert evt is not None
 
     # 字段一致性（每个字段独立断言，便于定位抄错）
@@ -353,7 +350,7 @@ async def test_trigger_reason_passthrough_force(monkeypatch):
     都能正确透传。
     """
     agent = _make_minimal_agent()
-    agent._detect_source_type = lambda: "chat"  # type: ignore[assignment]
+    agent.source_type = "chat"  # type: ignore[assignment]
 
     for reason in [
         "force",
@@ -361,10 +358,10 @@ async def test_trigger_reason_passthrough_force(monkeypatch):
         "message_threshold(160/200)",
     ]:
         # 重置 pending event
-        agent._pending_compression_event = None
+        agent.event = None
         _patch_compression_service_with_result(
             monkeypatch, should_compress=True, trigger_reason=reason
         )
         await agent._run_compression_phase("sess_1")
-        assert agent._pending_compression_event["trigger_reason"] == reason, \
+        assert agent.event["trigger_reason"] == reason, \
             f"reason not passed through: {reason}"

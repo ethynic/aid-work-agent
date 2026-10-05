@@ -12,6 +12,7 @@
 """
 import asyncio
 import hashlib
+import json
 import os
 from typing import Any, Dict, List, Optional
 
@@ -27,7 +28,8 @@ from src.channels.base import (
 from src.channels.wecom_kf.budget import WeComKfReplyBudget
 from src.channels.wecom.crypto import WeComCrypto
 from src.channels.wecom.message_builder import WeComMessageBuilder
-from src.channels.wecom_kf.api_client import WeComKfApiClient
+from src.channels.wecom_kf.api_client import (WeComKfApiClient, NativeWritePreparationFailed,
+                                           NativeWriteStopped)
 from src.channels.wecom_kf.cursor import CursorManager
 from src.channels.wecom_kf.message import (
     contains_table_or_image,
@@ -83,7 +85,9 @@ class WeComKfAdapter(ChannelAdapter):
         self._http_client: Optional[httpx.AsyncClient] = None
 
         # 当前回调上下文中的客服账号 ID（由回调 handler 设置）
-        self.current_open_kfid: str = ""
+        self._current_open_kfid: str = ""
+        self._native_actor_id = None
+        self._native_observer = None
 
         # 表格渲染器（懒加载）
         self._renderer: Optional[WeComKfRenderer] = None
@@ -97,6 +101,56 @@ class WeComKfAdapter(ChannelAdapter):
     @property
     def channel_type(self) -> str:
         return "wecom_kf"
+
+    @property
+    def current_open_kfid(self):
+        return self._current_open_kfid
+
+    @current_open_kfid.setter
+    def current_open_kfid(self, value):
+        if self._native_observer is not None and value != self._current_open_kfid:
+            raise NativeWriteStopped('KF_NATIVE_TARGET_MISMATCH')
+        self._current_open_kfid = value
+
+    def enable_native_delivery(self, observer, *, open_kfid: str, actor_id: str):
+        """One adapter/client belongs to one application-verified full route."""
+        if not open_kfid or not actor_id:
+            raise ValueError('KF_NATIVE_TARGET_REQUIRED')
+        if self._native_observer is not None and (
+                observer is not self._native_observer or actor_id != self._native_actor_id
+                or open_kfid != self._current_open_kfid):
+            raise NativeWriteStopped('KF_NATIVE_OWNER_ALREADY_BOUND')
+        self.api_client.enable_native_writes(observer, open_kfid=open_kfid, actor_id=actor_id)
+        self._current_open_kfid = open_kfid
+        self._native_actor_id = actor_id
+        self._native_observer = observer
+
+    def _native_budget(self, message, budget):
+        if self.api_client.native_write_enabled:
+            if self._native_observer is None:
+                raise NativeWriteStopped('KF_NATIVE_ADAPTER_OWNER_REQUIRED')
+            if message.reply_to != self._native_actor_id:
+                raise NativeWriteStopped('KF_NATIVE_TARGET_MISMATCH')
+            if not isinstance(budget, WeComKfReplyBudget) or not budget.native:
+                raise NativeWriteStopped('KF_NATIVE_BUDGET_OWNER_REQUIRED')
+
+    async def _native_local_preparation(self, kind, identity, reason):
+        """Current zero-POST evidence, never proof that an older write stopped."""
+        if not self.api_client.native_write_enabled:
+            return
+        suppressed = getattr(self._native_observer, 'suppressed', None)
+        if not callable(suppressed):
+            raise NativeWriteStopped('KF_NATIVE_SUPPRESSION_OWNER_REQUIRED')
+        try:
+            raw = json.dumps(identity, sort_keys=True, ensure_ascii=False,
+                             separators=(',', ':'), allow_nan=False).encode()
+        except (TypeError, ValueError):
+            raise NativeWriteStopped('KF_NATIVE_ASSET_IDENTITY_INVALID') from None
+        if len(raw) > 65536:
+            raise NativeWriteStopped('KF_NATIVE_ASSET_IDENTITY_INVALID')
+        await suppressed(kind, {'reason': 'known_local_preparation_' + reason,
+            'asset_digest': hashlib.sha256(raw).hexdigest(),
+            'file_id': identity.get('file_id', '') if isinstance(identity, dict) else ''})
 
     async def set_tenant_id(self, tenant_id: str) -> None:
         """
@@ -260,6 +314,7 @@ class WeComKfAdapter(ChannelAdapter):
         # owner 级回复预算（Phase 3，设计 §9.3）：由 make_send_response /
         # make_send_verbose 注入 content 私有键；无预算注入时行为与历史完全一致。
         budget: Optional[WeComKfReplyBudget] = message.content.pop("_kf_reply_budget", None)
+        self._native_budget(message, budget)
 
         if text:
             if budget is not None:
@@ -379,6 +434,7 @@ class WeComKfAdapter(ChannelAdapter):
         if not text:
             return StatusDeliveryResult.suppressed_unsupported("empty verbose text")
         budget: Optional[WeComKfReplyBudget] = message.content.pop("_kf_reply_budget", None)
+        self._native_budget(message, budget)
         if budget is None:
             # 无法保证 final 至少一次正文投递（规则 5）：不发送
             return StatusDeliveryResult.suppressed_unsupported(
@@ -386,6 +442,9 @@ class WeComKfAdapter(ChannelAdapter):
             )
         need = 1 + max(0, int(reserve_for_final))
         if not budget.can_reserve(need):
+            if budget.native:
+                await budget.suppress_native(self._native_observer, 'verbose',
+                                             event_id=message.message_id, reserve_for_final=reserve_for_final)
             return StatusDeliveryResult.suppressed_rate_limit(
                 f"reply budget remaining={budget.remaining} < need={need}"
             )
@@ -397,6 +456,8 @@ class WeComKfAdapter(ChannelAdapter):
                 content={"content": text},
             )
         except Exception as e:  # noqa: BLE001 - best-effort：异常收敛为 failed
+            if self.api_client.native_write_enabled:
+                raise
             return StatusDeliveryResult.failed(f"send_msg exception: {e}")
         if result.get("errcode", 0) != 0:
             # 失败不扣预算（规则 1：成功才扣 1）
@@ -487,7 +548,12 @@ class WeComKfAdapter(ChannelAdapter):
             True 如果长图渲染并发送成功，False 否则
         """
         try:
-            image_path = await self.renderer.render_markdown(markdown_text)
+            try:
+                image_path = await self.renderer.render_markdown(markdown_text)
+            except Exception as error:
+                if self._native_observer is not None and not getattr(error, 'authoritative_storage_failure', False):
+                    return False
+                raise
             if not image_path or not os.path.exists(image_path):
                 logger.error(
                     f"[wecom_kf] 整段 markdown 长图渲染失败（Playwright/Chromium 异常或内容超限），"
@@ -521,6 +587,8 @@ class WeComKfAdapter(ChannelAdapter):
             )
             return False
         except Exception as e:
+            if self.api_client.native_write_enabled and not isinstance(e, NativeWritePreparationFailed):
+                raise
             logger.opt(exception=True).error(
                 f"[wecom_kf] 整段 markdown 长图渲染/发送异常，降级走分段逻辑: "
                 f"open_kfid={self.current_open_kfid}: {e}",
@@ -579,6 +647,8 @@ class WeComKfAdapter(ChannelAdapter):
                         return True
                     logger.warning(f"表格图片发送失败: {send_result.get('errmsg')}")
         except Exception as e:
+            if self.api_client.native_write_enabled and not isinstance(e, NativeWritePreparationFailed):
+                raise
             logger.warning(f"表格渲染/上传失败，降级为纯文本: {e}")
 
         # 降级：纯文本表格
@@ -638,6 +708,8 @@ class WeComKfAdapter(ChannelAdapter):
             )
             return (False, False)
         except Exception as e:
+            if self.api_client.native_write_enabled and not isinstance(e, NativeWritePreparationFailed):
+                raise
             logger.warning(
                 f"图片文件 image 消息发送异常，降级为 link: file_id={file_id}, err={e}"
             )
@@ -660,20 +732,32 @@ class WeComKfAdapter(ChannelAdapter):
         """
         file_id = ref.get("file_id") if isinstance(ref, dict) else None
         if not file_id:
+            if self.api_client.native_write_enabled:
+                await self._native_local_preparation('image_ref', ref, 'missing_file_id')
+                return False
             # 无可发送内容，不视为失败
             return True
         # 企微临时素材 image 限制 2MB
         if (ref.get("size_bytes") or 0) > 2 * 1024 * 1024:
+            if self.api_client.native_write_enabled:
+                await self._native_local_preparation('image_ref', ref, 'size_limit')
+                return False
             logger.warning(f"图片 ref 超过 2MB 跳过 image 发送: file_id={file_id}")
             return True
 
         key = redis_client.make_key("uploaded_file", file_id)
         file_meta = redis_client.hgetall(key)
         if not file_meta:
+            if self.api_client.native_write_enabled:
+                await self._native_local_preparation('image_ref', ref, 'missing_metadata')
+                return False
             logger.warning(f"图片 ref 未在 Redis 找到，跳过: file_id={file_id}")
             return True
         file_path = file_meta.get("path")
         if not file_path or not os.path.exists(file_path):
+            if self.api_client.native_write_enabled:
+                await self._native_local_preparation('image_ref', ref, 'missing_file')
+                return False
             logger.warning(f"图片 ref 本地文件不存在，跳过: file_id={file_id}")
             return True
 
@@ -699,6 +783,11 @@ class WeComKfAdapter(ChannelAdapter):
                 return False
             return True
         except Exception as e:
+            if self.api_client.native_write_enabled and not isinstance(e, NativeWritePreparationFailed):
+                raise
+            if self.api_client.native_write_enabled:
+                await self._native_local_preparation('image_ref', ref, e.code)
+                return False
             logger.warning(f"图片 ref image 消息发送异常: file_id={file_id}, err={e}")
             return False
 
@@ -726,6 +815,8 @@ class WeComKfAdapter(ChannelAdapter):
                 return True
             logger.warning(f"link 消息发送失败: {result.get('errmsg')}")
         except Exception as e:
+            if self.api_client.native_write_enabled and not isinstance(e, NativeWritePreparationFailed):
+                raise
             logger.warning(f"link 消息发送异常，降级为纯文本: {e}")
 
         # 降级：纯文本 URL
@@ -868,6 +959,19 @@ class WeComKfAdapter(ChannelAdapter):
 
     async def close(self):
         """关闭 HTTP 连接池"""
+        if self.api_client.native_write_enabled:
+            async def close_owned():
+                try:
+                    await self.api_client.close()
+                finally:
+                    try:
+                        if self._renderer:
+                            await self._renderer.close()
+                    finally:
+                        if self._http_client and not self._http_client.is_closed:
+                            await self._http_client.aclose()
+            await self.api_client._drain_task(asyncio.create_task(close_owned()))
+            return
         if self._renderer:
             await self._renderer.close()
         await self.api_client.close()

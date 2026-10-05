@@ -98,9 +98,7 @@ async def test_context_token_count_actually_passed_to_eval_threshold(
 
     # patch COUNT 查询返回较小值
     import src.db.models as models_mod
-    models_mod.MessageDB.count_messages_by_session = staticmethod(
-        lambda session_id, include_compacted=False: 10
-    )
+    monkeypatch.setattr(service._session_repository, "count_messages", lambda session_id, source_type: 10)
 
     # 替换 _eval_threshold，记录参数
     def _spy_eval(cached_tok, msg_count, model_limit):
@@ -140,9 +138,7 @@ async def test_get_model_limit_actually_called_when_force_false(service, monkeyp
 
     # patch COUNT 查询返回较小值（不触发）
     import src.db.models as models_mod
-    models_mod.MessageDB.count_messages_by_session = staticmethod(
-        lambda session_id, include_compacted=False: 0
-    )
+    monkeypatch.setattr(service._session_repository, "count_messages", lambda session_id, source_type: 0)
 
     await service.compress_session("sess", "chat")
     assert called["n"] >= 1, "_get_model_limit 必须在 force=False 时被 check_threshold 调用"

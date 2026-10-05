@@ -590,22 +590,26 @@ class WordProcessTool(BaseTool):
             or (f"{self._safe_file_stem(title)}.docx" if title else None)
         )
 
-        # 双轨获取 tenant_id：注入优先，ContextVar 兜底（HTTP 请求场景）
-        tenant_id = self._tenant_id
-        if not tenant_id:
-            try:
-                from src.saas.context import get_current_tenant_id
-                tenant_id = get_current_tenant_id()
-            except Exception:
-                tenant_id = None
-
-        user_id = self._user_id
-        if not user_id:
-            try:
-                from src.saas.context import get_current_user_id
-                user_id = get_current_user_id()
-            except Exception:
-                user_id = None
+        from src.tools.context import current_tool_execution_context
+        tool_context = current_tool_execution_context()
+        if tool_context is not None:
+            tenant_id, user_id = tool_context.tenant_id, tool_context.user_id
+        else:
+            # 无可信工具上下文的旧调用仍支持 setter 和 SaaS 请求上下文。
+            tenant_id = self._tenant_id
+            if not tenant_id:
+                try:
+                    from src.saas.context import get_current_tenant_id
+                    tenant_id = get_current_tenant_id()
+                except Exception:
+                    tenant_id = None
+            user_id = self._user_id
+            if not user_id:
+                try:
+                    from src.saas.context import get_current_user_id
+                    user_id = get_current_user_id()
+                except Exception:
+                    user_id = None
 
         # 直接 await convert_async，避免 nested event loop
         doc = await convert_async(

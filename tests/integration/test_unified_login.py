@@ -33,7 +33,8 @@ class TestUnifiedLoginAPI:
             "role": "user"
         }
 
-    def test_unified_login_success(self, mock_tenant, mock_user):
+    @pytest.mark.asyncio
+    async def test_unified_login_success(self, mock_tenant, mock_user):
         """测试统一登录成功"""
         from src.api.auth import unified_login
         from fastapi import Request
@@ -48,12 +49,13 @@ class TestUnifiedLoginAPI:
             mock_verify_captcha.return_value = True
 
             # 模拟租户查询
-            with patch("src.api.auth.TenantDB") as mock_tenant_db:
+            with patch("src.saas.db.tenant_db.TenantDB") as mock_tenant_db:
                 mock_tenant_db.get_by_code.return_value = mock_tenant
 
-                # 模拟用户查询
-                with patch("src.api.auth.UserDB") as mock_user_db:
-                    mock_user_db.get_by_phone.return_value = mock_user
+                # 模拟用户查询（unified_login 以裸 SQL 直查 users 表，
+                # 须 mock get_db_connection 才能拦截，见 api/auth.py 用户凭证段）
+                with patch("src.api.auth.get_db_connection") as mock_db:
+                    mock_db.return_value.__enter__.return_value.cursor.return_value.fetchone.return_value = mock_user
 
                     # 模拟密码验证
                     with patch("src.api.auth.verify_password") as mock_verify_password:
@@ -73,7 +75,7 @@ class TestUnifiedLoginAPI:
                             )
 
                             # 调用API
-                            response = unified_login(mock_request, login_request)
+                            response = await unified_login(mock_request, login_request)
 
                             # 验证响应
                             assert response.success is True
@@ -82,7 +84,8 @@ class TestUnifiedLoginAPI:
                             assert response.redirect_url == "/t/tenant_test123"
                             assert response.errors is None
 
-    def test_unified_login_invalid_tenant_code(self):
+    @pytest.mark.asyncio
+    async def test_unified_login_invalid_tenant_code(self):
         """测试无效租户代码"""
         from src.api.auth import unified_login
         from fastapi import Request
@@ -97,7 +100,7 @@ class TestUnifiedLoginAPI:
             mock_verify_captcha.return_value = True
 
             # 模拟租户查询返回None
-            with patch("src.api.auth.TenantDB") as mock_tenant_db:
+            with patch("src.saas.db.tenant_db.TenantDB") as mock_tenant_db:
                 mock_tenant_db.get_by_code.return_value = None
 
                 # 创建请求
@@ -110,7 +113,7 @@ class TestUnifiedLoginAPI:
                 )
 
                 # 调用API
-                response = unified_login(mock_request, login_request)
+                response = await unified_login(mock_request, login_request)
 
                 # 验证响应
                 assert response.success is False
@@ -119,7 +122,8 @@ class TestUnifiedLoginAPI:
                 assert response.errors[0]["field"] == "tenant_code"
                 assert "不存在" in response.errors[0]["message"]
 
-    def test_unified_login_invalid_captcha(self):
+    @pytest.mark.asyncio
+    async def test_unified_login_invalid_captcha(self):
         """测试无效验证码"""
         from src.api.auth import unified_login
         from fastapi import Request
@@ -143,7 +147,7 @@ class TestUnifiedLoginAPI:
             )
 
             # 调用API
-            response = unified_login(mock_request, login_request)
+            response = await unified_login(mock_request, login_request)
 
             # 验证响应
             assert response.success is False
@@ -152,7 +156,8 @@ class TestUnifiedLoginAPI:
             assert response.errors[0]["field"] == "captcha_code"
             assert "验证码" in response.errors[0]["message"]
 
-    def test_unified_login_user_not_belong_to_tenant(self, mock_tenant, mock_user):
+    @pytest.mark.asyncio
+    async def test_unified_login_user_not_belong_to_tenant(self, mock_tenant, mock_user):
         """测试用户不属于租户"""
         from src.api.auth import unified_login
         from fastapi import Request
@@ -171,12 +176,12 @@ class TestUnifiedLoginAPI:
             mock_verify_captcha.return_value = True
 
             # 模拟租户查询
-            with patch("src.api.auth.TenantDB") as mock_tenant_db:
+            with patch("src.saas.db.tenant_db.TenantDB") as mock_tenant_db:
                 mock_tenant_db.get_by_code.return_value = mock_tenant
 
-                # 模拟用户查询
-                with patch("src.api.auth.UserDB") as mock_user_db:
-                    mock_user_db.get_by_phone.return_value = mock_user_wrong_tenant
+                # 模拟用户查询（裸 SQL 直查，mock get_db_connection）
+                with patch("src.api.auth.get_db_connection") as mock_db:
+                    mock_db.return_value.__enter__.return_value.cursor.return_value.fetchone.return_value = mock_user_wrong_tenant
 
                     # 模拟密码验证
                     with patch("src.api.auth.verify_password") as mock_verify_password:
@@ -192,7 +197,7 @@ class TestUnifiedLoginAPI:
                         )
 
                         # 调用API
-                        response = unified_login(mock_request, login_request)
+                        response = await unified_login(mock_request, login_request)
 
                         # 验证响应
                         assert response.success is False
@@ -201,7 +206,8 @@ class TestUnifiedLoginAPI:
                         assert response.errors[0]["field"] == "identifier"
                         assert "不属于" in response.errors[0]["message"]
 
-    def test_unified_login_wrong_password(self, mock_tenant, mock_user):
+    @pytest.mark.asyncio
+    async def test_unified_login_wrong_password(self, mock_tenant, mock_user):
         """测试错误密码"""
         from src.api.auth import unified_login
         from fastapi import Request
@@ -216,12 +222,12 @@ class TestUnifiedLoginAPI:
             mock_verify_captcha.return_value = True
 
             # 模拟租户查询
-            with patch("src.api.auth.TenantDB") as mock_tenant_db:
+            with patch("src.saas.db.tenant_db.TenantDB") as mock_tenant_db:
                 mock_tenant_db.get_by_code.return_value = mock_tenant
 
-                # 模拟用户查询
-                with patch("src.api.auth.UserDB") as mock_user_db:
-                    mock_user_db.get_by_phone.return_value = mock_user
+                # 模拟用户查询（裸 SQL 直查，mock get_db_connection）
+                with patch("src.api.auth.get_db_connection") as mock_db:
+                    mock_db.return_value.__enter__.return_value.cursor.return_value.fetchone.return_value = mock_user
 
                     # 模拟密码验证失败
                     with patch("src.api.auth.verify_password") as mock_verify_password:
@@ -237,7 +243,7 @@ class TestUnifiedLoginAPI:
                         )
 
                         # 调用API
-                        response = unified_login(mock_request, login_request)
+                        response = await unified_login(mock_request, login_request)
 
                         # 验证响应
                         assert response.success is False

@@ -54,7 +54,33 @@ class PageOps:
         }
 
     async def take_snapshot(self, mode: str = "interactive") -> Dict[str, Any]:
-        result = await self.executor.snapshot(SnapshotCommand(**self._fields(), mode=mode))
+        return await self._snapshot(self.executor, mode)
+
+    async def _human_snapshot(self, manager) -> Dict[str, Any]:
+        """Original human sampler only; reuse this PageOps sequence and cache."""
+        from .owner_port import BrowserOwnerFailure
+        owner = getattr(manager, 'execution_owner', None)
+        raw = manager.human_executor(owner.record.tenant_id, self.run_id) if owner and owner.record else None
+        if (raw is None or owner.record.run_id != self.run_id
+                or getattr(self.executor, 'owner', None) is not owner
+                or getattr(self.executor, 'executor', None) is not raw):
+            raise BrowserOwnerFailure('BROWSER_HUMAN_SAMPLER_OWNER_MISMATCH')
+        return await self._snapshot(raw, 'interactive')
+
+    async def _snapshot(self, executor, mode) -> Dict[str, Any]:
+        from .owner_port import current_human_action_guard, HumanActionRejected
+        if current_human_action_guard() is not None:
+            deferred=getattr(executor,'execute_deferred',None)
+            if deferred is None:
+                raise HumanActionRejected('HUMAN_DEFERRED_IPC_REQUIRED')
+            if mode not in {'interactive','all'}:
+                raise HumanActionRejected('HUMAN_SNAPSHOT_MODE_INVALID')
+            from .executor.models import SnapshotResult
+            timeout=float(getattr(settings.tools.browser,'command_timeout',30.0))
+            result=await deferred(lambda:SnapshotCommand(**self._fields(),mode=mode),SnapshotResult,
+                deadline_at=datetime.now(timezone.utc)+timedelta(seconds=timeout))
+        else:
+            result = await executor.snapshot(SnapshotCommand(**self._fields(), mode=mode))
         if not self._ok(result):
             return {"success": False, "error": result.error_code or "SNAPSHOT_FAILED"}
         self._elements = {item.ref: item for item in result.interactive_elements if item.ref}

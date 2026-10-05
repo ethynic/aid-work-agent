@@ -252,27 +252,37 @@ def format_done_content(job_name: str, candidates: List[Dict[str, Any]]) -> str:
 
 # ============== 留痕读写 ==============
 
+def insert_log_in_tx(
+    cursor,
+    tenant_id: str, kind: str, candidates: List[Dict[str, Any]],
+    content: str, status: str, error: Optional[str],
+    resume_id: Optional[int] = None,
+) -> int:
+    """写通知留痕，返回日志 id；事务由调用方管理，不打开连接或提交。
+
+    resume_id：单候选人推送时关联的简历 id，多候选人推送传 None（列语义，不强制）。
+    """
+    cursor.execute(
+        """
+        INSERT INTO bs_recruiting_notify_logs
+            (tenant_id, kind, candidates, content, status, error, resume_id)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        RETURNING id
+        """,
+        (tenant_id, kind, psycopg2.extras.Json(candidates), content, status, error, resume_id),
+    )
+    return cursor.fetchone()["id"]
+
+
 def _insert_log(
     tenant_id: str, kind: str, candidates: List[Dict[str, Any]],
     content: str, status: str, error: Optional[str],
     resume_id: Optional[int] = None,
 ) -> int:
-    """写通知留痕，返回日志 id（独立连接，失败由调用方兜底）。
-
-    resume_id：单候选人推送时关联的简历 id，多候选人推送传 None（列语义，不强制）。
-    """
+    """旧调用保留独立连接/提交，Runner 组合根使用 cursor 入口。"""
     with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            INSERT INTO bs_recruiting_notify_logs
-                (tenant_id, kind, candidates, content, status, error, resume_id)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-            RETURNING id
-            """,
-            (tenant_id, kind, psycopg2.extras.Json(candidates), content, status, error, resume_id),
-        )
-        log_id = cursor.fetchone()["id"]
+        log_id = insert_log_in_tx(conn.cursor(), tenant_id, kind, candidates,
+            content, status, error, resume_id)
         conn.commit()
         return log_id
 

@@ -207,6 +207,7 @@ def calculate_credit_cost_with_breakdown(
     cached_input_tokens: int = 0,
     cache_creation_input_tokens: int = 0,
     usage_factor_override: Optional[int] = None,
+    *, price_snapshot: Optional[dict] = None,
 ) -> tuple:
     """计算本轮对话消耗的积分，并返回分项单价/积分 breakdown。
 
@@ -225,9 +226,9 @@ def calculate_credit_cost_with_breakdown(
         logger.warning("计费：model 为空，credit_cost=0")
         return 0.0, {}
 
-    tcp = TokenCostPriceDB.get_by_model_name(model)
-    price_model = model
-    if not tcp:
+    tcp = price_snapshot if price_snapshot is not None else TokenCostPriceDB.get_by_model_name(model)
+    price_model = tcp.get("price_model", model) if tcp else model
+    if not tcp and price_snapshot is None:
         # 负责人定版（2026-09-15）：模型未配置单价时按兜底模型价格计费，不再落 0——
         # 部署主模型名可能不在价目表（实测 agent2 deepseek-flash 致总结计费 0）
         tcp = TokenCostPriceDB.get_by_model_name(BILLING_FALLBACK_MODEL)
@@ -242,16 +243,19 @@ def calculate_credit_cost_with_breakdown(
             f"计费：模型 {model} 未配置单价，按兜底模型 {BILLING_FALLBACK_MODEL} 价格计费"
         )
 
+    if not tcp:
+        return 0.0, {}
+
     input_price, output_price, has_cached_price, cached_input_price = _resolve_unit_prices(tcp, prompt_tokens)
 
     if input_price <= 0 and output_price <= 0:
         logger.warning(f"计费：模型 {model} 单价全部为 0，credit_cost=0")
         return 0.0, {}
 
-    settings = create_settings()
     if usage_factor_override is not None:
         usage_factor = usage_factor_override
     else:
+        settings = create_settings()
         usage_factor = getattr(settings.billing, "usage_factor", 100) or 100
 
     prompt_tokens = prompt_tokens or 0
@@ -309,6 +313,7 @@ def calculate_llm_credit_cost_with_breakdown(
     usage_calls: list,
     model: Optional[str],
     usage_factor_override: Optional[int] = None,
+    *, price_snapshot: Optional[dict] = None,
 ) -> tuple:
     """多轮 LLM 调用合并计费（分段计价模型专用入口）
 
@@ -334,7 +339,7 @@ def calculate_llm_credit_cost_with_breakdown(
     if not usage_calls:
         return 0.0, {}
 
-    tcp = TokenCostPriceDB.get_by_model_name(model)
+    tcp = price_snapshot if price_snapshot is not None else TokenCostPriceDB.get_by_model_name(model)
     if not tcp:
         logger.warning(f"计费：模型 {model} 未配置单价，credit_cost=0")
         return 0.0, {}
@@ -349,12 +354,13 @@ def calculate_llm_credit_cost_with_breakdown(
             cached_input_tokens=sum(int(c.get("cached_tokens", 0) or 0) for c in usage_calls),
             cache_creation_input_tokens=sum(int(c.get("cache_creation_tokens", 0) or 0) for c in usage_calls),
             usage_factor_override=usage_factor_override,
+            price_snapshot=tcp,
         )
 
-    settings = create_settings()
     if usage_factor_override is not None:
         usage_factor = usage_factor_override
     else:
+        settings = create_settings()
         usage_factor = getattr(settings.billing, "usage_factor", 100) or 100
 
     # 逐轮取档，累加「单价 × token 数」加权和（中间量，/1e6 后为元）与各分项 token 数
@@ -441,6 +447,7 @@ def calculate_embedding_credit_cost_with_breakdown(
     embedding_tokens: int,
     model: Optional[str] = "text-embedding-v3",
     usage_factor_override: Optional[int] = None,
+    *, price_snapshot: Optional[dict] = None,
 ) -> tuple:
     """计算 embedding 积分，并返回单价/系数 breakdown。
 
@@ -454,7 +461,7 @@ def calculate_embedding_credit_cost_with_breakdown(
     if not embedding_tokens or embedding_tokens <= 0:
         return 0.0, {}
 
-    tcp = TokenCostPriceDB.get_by_model_name(model)
+    tcp = price_snapshot if price_snapshot is not None else TokenCostPriceDB.get_by_model_name(model)
     if not tcp:
         logger.warning(f"embedding 计费：模型 {model} 未配置单价，credit_cost=0")
         return 0.0, {}
@@ -464,10 +471,10 @@ def calculate_embedding_credit_cost_with_breakdown(
         logger.warning(f"embedding 计费：模型 {model} 的 embedding_price_per_m 为空或 0，credit_cost=0")
         return 0.0, {}
 
-    settings = create_settings()
     if usage_factor_override is not None:
         usage_factor = usage_factor_override
     else:
+        settings = create_settings()
         usage_factor = getattr(settings.billing, "embedding_usage_factor", 100) or 100
 
     token_cost = embedding_tokens * embedding_price / 1_000_000
@@ -488,6 +495,7 @@ def calculate_asr_credit_cost_with_breakdown(
     asr_calls: int,
     model: str = "aliyun-nls-asr",
     usage_factor_override: Optional[int] = None,
+    *, price_snapshot: Optional[dict] = None,
 ) -> tuple:
     """计算 ASR 积分，并返回单价/系数 breakdown。
 
@@ -501,7 +509,7 @@ def calculate_asr_credit_cost_with_breakdown(
         logger.warning("ASR 计费：model 为空，credit_cost=0")
         return 0.0, {}
 
-    tcp = TokenCostPriceDB.get_by_model_name(model)
+    tcp = price_snapshot if price_snapshot is not None else TokenCostPriceDB.get_by_model_name(model)
     if not tcp:
         logger.warning(f"ASR 计费：模型 {model} 未配置单价，credit_cost=0")
         return 0.0, {}
@@ -511,10 +519,10 @@ def calculate_asr_credit_cost_with_breakdown(
         logger.warning(f"ASR 计费：模型 {model} 的 asr_price_per_call 为空或 0，credit_cost=0")
         return 0.0, {}
 
-    settings = create_settings()
     if usage_factor_override is not None:
         usage_factor = usage_factor_override
     else:
+        settings = create_settings()
         usage_factor = getattr(settings.billing, "asr_usage_factor", 100) or 100
 
     cost = asr_calls * asr_price

@@ -214,7 +214,14 @@ class SkillRegistry:
         feedback = metadata.get("user_feedback") if isinstance(metadata, dict) else None
         return feedback if isinstance(feedback, dict) else None
     
-    def get_content(self, name: str, substitutions: Optional[Dict[str, str]] = None) -> Optional[str]:
+    def environment(self, name, *, tenant_id=None, env_vars=None, context=None):
+        from src.core.skill_environment import resolve_skill_environment
+        skill = self.get(name)
+        if skill is None:
+            raise ValueError("UNKNOWN_SKILL")
+        return resolve_skill_environment(skill, tenant_id=tenant_id, env_vars=env_vars, context=context)
+
+    def get_content(self, name: str, substitutions: Optional[Dict[str, str]] = None, *, tenant_id=None, env_vars=None, context=None) -> Optional[str]:
         """
         获取Skill内容
 
@@ -228,11 +235,11 @@ class SkillRegistry:
         # 优先使用 _loaders 精确定位（多目录场景）
         loader = self._loaders.get(name)
         if loader:
-            return loader.get_skill_content(name, substitutions=substitutions)
+            return loader.get_skill_content(name, substitutions=substitutions, tenant_id=tenant_id, env_vars=env_vars, context=context)
 
         # Fallback 到单一 _loader（向后兼容）
         if self._loader:
-            return self._loader.get_skill_content(name, substitutions=substitutions)
+            return self._loader.get_skill_content(name, substitutions=substitutions, tenant_id=tenant_id, env_vars=env_vars, context=context)
 
         # Last resort: 直接使用 skill body
         skill = self.get(name)

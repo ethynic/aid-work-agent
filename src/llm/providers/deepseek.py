@@ -267,6 +267,7 @@ class DeepSeekProvider(BaseLLMProvider):
                 "cached_tokens": cached_tokens,
             },
             "request_id": response.get("id", ""),
+            "_provider_usage_reported": isinstance(response.get("usage"), dict) and "prompt_tokens" in response["usage"] and "completion_tokens" in response["usage"],
         }
 
         if reasoning_content:

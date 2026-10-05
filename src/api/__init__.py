@@ -1,7 +1,13 @@
-"""
-API 模块
-"""
+"""API modules load only when requested, without unrelated route side effects."""
 
-from src.api import auth, session, customer, word
+from importlib import import_module
 
-__all__ = ['auth', 'session', 'customer', 'word']
+__all__ = ["auth", "session", "customer", "word"]
+
+
+def __getattr__(name):
+    if name not in __all__:
+        raise AttributeError(name)
+    value = import_module("." + name, __name__)
+    globals()[name] = value
+    return value

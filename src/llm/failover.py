@@ -293,7 +293,9 @@ class FailoverGateway:
             model = model_override or self._model_codes.get(slot.provider_name)
             provider = _build_provider(slot.provider_name, api_key, model=model)
             method = getattr(provider, fn_name)
-            return await method(**kwargs)
+            from src.llm.call_observer import observed_call
+            return await observed_call(method, provider=slot.provider_name,
+                model=model or provider.model, kwargs=kwargs)
 
     async def _stream_slot(
         self, slot: ProviderSlot, fn_name: str, model_override: Optional[str] = None, **kwargs
@@ -450,6 +452,8 @@ class FailoverGateway:
                 slot.circuit_breaker.record_success()
                 return result
             except Exception as e:
+                if getattr(e, 'authoritative_storage_failure', False):
+                    raise
                 duration_ms = (time.monotonic() - start) * 1000
                 error_msg = f"{type(e).__name__}: {e}"
                 errors.append({

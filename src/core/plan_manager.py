@@ -33,7 +33,8 @@ class PlanManager:
     - 生成进度报告
     """
     
-    def __init__(self, plans_dir: Optional[Path] = None):
+    def __init__(self, plans_dir: Optional[Path] = None, *, execution_scope: Optional[str] = None,
+                 plan_store=None):
         """
         初始化计划管理器
         
@@ -44,6 +45,8 @@ class PlanManager:
             plans_dir = Path(__file__).parent.parent.parent / "plans"
         
         self.plans_dir = plans_dir
+        self.execution_scope = execution_scope
+        self.plan_store = plan_store
         try:
             self.plans_dir.mkdir(parents=True, exist_ok=True)
         except (PermissionError, OSError) as e:
@@ -55,18 +58,26 @@ class PlanManager:
     # ==================== Redis Plan Storage ====================
 
     def _plan_key(self, session_id: str) -> str:
-        return redis_client.make_key("execution_plan", session_id)
+        identifier = session_id if self.execution_scope is None else json.dumps([self.execution_scope, session_id], separators=(",", ":"))
+        return redis_client.make_key("execution_plan", identifier)
 
     def _save_plan(self, session_id: str, plan: ExecutionPlan) -> None:
         """将计划序列化并保存到 Redis"""
         key = self._plan_key(session_id)
         data = plan.model_dump(mode="json")
-        redis_client.set(key, data, ex=3600)
+        if self.plan_store is not None:
+            self.plan_store.save(session_id, data)
+            try:
+                redis_client.set(key, data, ex=3600)
+            except Exception:
+                logger.warning('Plan Redis projection unavailable')
+        else:
+            redis_client.set(key, data, ex=3600)
 
     def _load_plan(self, session_id: str) -> Optional[ExecutionPlan]:
         """从 Redis 加载并反序列化计划"""
         key = self._plan_key(session_id)
-        data = redis_client.get(key)
+        data = self.plan_store.load(session_id) if self.plan_store is not None else redis_client.get(key)
         if data:
             try:
                 return ExecutionPlan.model_validate(data)
@@ -77,6 +88,8 @@ class PlanManager:
     def _delete_plan(self, session_id: str) -> None:
         """从 Redis 删除计划"""
         key = self._plan_key(session_id)
+        if self.plan_store is not None:
+            self.plan_store.delete(session_id)
         redis_client.delete(key)
     
     def create_plan(

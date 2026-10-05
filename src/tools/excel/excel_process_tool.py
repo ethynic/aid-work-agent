@@ -178,7 +178,11 @@ class ExcelProcessTool(BaseTool):
         return LongRunningFeedback(start_message="正在读取 Excel 模板并生成实际文件，可能需要一些时间，请稍候。")
 
     def _resolve_tenant_user(self):
-        """双轨获取 tenant_id/user_id：注入优先，ContextVar 兜底（HTTP 请求场景）。"""
+        """可信工具上下文优先；旧调用保留 setter 和 SaaS 上下文。"""
+        from src.tools.context import current_tool_execution_context
+        context = current_tool_execution_context()
+        if context is not None:
+            return context.tenant_id, context.user_id
         tenant_id = self._tenant_id
         if not tenant_id:
             try:
@@ -196,11 +200,15 @@ class ExcelProcessTool(BaseTool):
         return tenant_id, user_id
 
     def _resolve_output_dir(self) -> Optional[str]:
-        """注入的 tenant 优先构造输出目录；未注入返回 None（让 save_temp 走 ContextVar）。
+        """可信工具上下文使用共享目录；旧调用保留注入的输出目录。
 
         路径: storage/tenants/{tenant_id}/conversation/
         无 tenant_id: storage/tenants/_anonymous/conversation/
         """
+        from src.tools.context import current_tool_execution_context
+        if current_tool_execution_context() is not None:
+            from src.core.storage import get_current_conversation_dir
+            return str(get_current_conversation_dir())
         if not self._tenant_id and not self._user_id:
             return None
         try:

@@ -68,7 +68,11 @@ class UseSkillTool(BaseTool):
             }
 
         skill = self.skill_registry.get(skill_name)
-        skill_content = self.skill_registry.get_content(skill_name, substitutions=substitutions)
+        from src.tools.context import current_tool_execution_context
+        import asyncio
+        context = current_tool_execution_context()
+        skill_content = await asyncio.to_thread(self.skill_registry.get_content, skill_name, substitutions=substitutions,
+            tenant_id=context.tenant_id if context else None, env_vars=context.env_vars if context else None, context=context)
 
         if skill_content is None:
             available = self.skill_registry.list_skills()

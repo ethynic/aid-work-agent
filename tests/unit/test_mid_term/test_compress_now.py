@@ -235,9 +235,7 @@ async def test_compress_session_compat_calls_check_then_compress(service, monkey
 
     # patch COUNT 查询
     import src.db.models as models_mod
-    models_mod.MessageDB.count_messages_by_session = staticmethod(
-        lambda session_id, include_compacted=False: 100
-    )
+    monkeypatch.setattr(service._session_repository, "count_messages", lambda session_id, source_type: 100)
 
     result = await service.compress_session("sess", "chat")
     assert result is not None
@@ -255,9 +253,7 @@ async def test_compress_session_compat_below_threshold_returns_none(service, mon
     service._resolve_session_meta = _meta
 
     import src.db.models as models_mod
-    models_mod.MessageDB.count_messages_by_session = staticmethod(
-        lambda session_id, include_compacted=False: 50
-    )
+    monkeypatch.setattr(service._session_repository, "count_messages", lambda session_id, source_type: 50)
 
     # compress_now 不应被调用
     async def _explode(*args, **kwargs):

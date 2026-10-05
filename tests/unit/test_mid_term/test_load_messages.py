@@ -3,7 +3,7 @@
 直接验证 ContextCompressionService._load_messages 的路由 + 异常兜底。
 覆盖：
 - source_type='chat' → 调 MessageDB.list_by_session（默认过滤 compacted）
-- 非 chat 源 → 调 channel_session_manager.get_messages（模块级单例，P1-4，默认过滤 compacted）
+- 非 chat 源 → 调 CompressionSessionRepository.load_messages（默认过滤 compacted）
 - DB 异常时返回空 list（不抛异常给上层）
 """
 
@@ -41,19 +41,17 @@ async def test_load_messages_chat_source(service, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_load_messages_channel_source(service, monkeypatch):
-    """非 chat 源 → 调 channel_session_manager.get_messages（模块级单例，P1-4）"""
+    """非 chat 源 → 调 CompressionSessionRepository.load_messages"""
     captured = {"called": False, "sid": None, "limit": None}
 
     class _FakeMgr:
-        def get_messages(self, session_id, limit=100, **kwargs):
+        def load_messages(self, session_id, source_type, limit=10000):
             captured["called"] = True
             captured["sid"] = session_id
             captured["limit"] = limit
             return [{"id": 1, "role": "user", "content": "y"}]
 
-    import src.channels.session as session_mod
-    # P1-4：_load_messages 复用模块级单例 channel_session_manager，测试替换单例对象
-    monkeypatch.setattr(session_mod, "channel_session_manager", _FakeMgr())
+    monkeypatch.setattr(service, "_session_repository", _FakeMgr())
 
     msgs = await service._load_messages("sess_kf", "wecom_kf", tenant_id=None)
     assert captured["called"] is True
@@ -79,12 +77,10 @@ async def test_load_messages_chat_exception_returns_empty(service, monkeypatch):
 async def test_load_messages_channel_exception_returns_empty(service, monkeypatch):
     """channel 源 DB 异常 → 返回空 list，不抛"""
     class _FakeMgr:
-        def get_messages(self, *args, **kwargs):
+        def load_messages(self, *args, **kwargs):
             raise RuntimeError("channel db down")
 
-    import src.channels.session as session_mod
-    # P1-4：替换单例对象
-    monkeypatch.setattr(session_mod, "channel_session_manager", _FakeMgr())
+    monkeypatch.setattr(service, "_session_repository", _FakeMgr())
 
     msgs = await service._load_messages("sess_y", "feishu", tenant_id=None)
     assert msgs == []

@@ -126,7 +126,9 @@ def _insert_subagent(agent_id: str, name: str):
 def _call(fn, *args, **kwargs):
     """在补丁 require_admin 下同步调用异步 API 函数"""
     import asyncio
-    return asyncio.get_event_loop().run_until_complete(fn(*args, **kwargs))
+    # Own the loop: preceding pytest-asyncio cases may have closed and cleared
+    # the thread's default loop. API assertions must not depend on test order.
+    return asyncio.run(fn(*args, **kwargs))
 
 
 class FakeRequest:

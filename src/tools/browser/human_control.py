@@ -20,6 +20,7 @@ from .human_requirement_detector import CAPTCHA_MARKERS
 from .resume_store import AssistanceRecord, ResumeStore
 from .run_db import BrowserRunDB
 from .run_manager import BrowserRunManager, RunState
+from .owner_port import propagate_owner_failure
 
 
 HUMAN_LEASE_SECONDS = 300
@@ -201,6 +202,7 @@ class HumanControlCoordinator:
             if is_captcha else ()
         )
         expires_at = time.time() + HUMAN_LEASE_SECONDS
+        owner=getattr(manager,'execution_owner',None)
         record = AssistanceRecord(
             tenant_id=tenant_id, user_id=user_id, session_id=session_id,
             assistance_id=assistance_id, run_id=run_id,
@@ -209,7 +211,14 @@ class HumanControlCoordinator:
             instruction_code=instruction_code, completion_mode=completion_mode,
             predicates=predicates, step_index=step_index, expires_at=expires_at,
             agent_name=replaces.agent_name if replaces is not None else None,
+            runner_id=owner.runner_id if owner is not None else None,
         )
+        audit={**record.model_dump(mode='json'),
+            'predicate_type':predicates[0]['type'] if predicates else None,
+            'expires_at':datetime.fromtimestamp(expires_at,timezone.utc)}
+        if owner is not None:
+            # Original PG wait and leaf CP precede Redis/public registration.
+            await owner.bind_wait(manager,None,audit,None)
         saved = (
             await self.store.replace_suspension(
                 replaces, record, HUMAN_LEASE_SECONDS
@@ -220,14 +229,11 @@ class HumanControlCoordinator:
         if not saved:
             raise RuntimeError("TOOL_SUSPEND_FAILED")
         try:
-            try:
-                await self.run_db.create_assistance({
-                    **record.model_dump(mode="json"),
-                    "predicate_type": predicates[0]["type"] if predicates else None,
-                    "expires_at": datetime.fromtimestamp(expires_at, timezone.utc),
-                })
-            except Exception as exc:
-                logger.warning("browser assistance 审计创建失败: type={}", type(exc).__name__)
+            if owner is None:
+                try:
+                    await self.run_db.create_assistance(audit)
+                except Exception as exc:
+                    logger.warning("browser assistance 审计创建失败: type={}", type(exc).__name__)
             await manager.transition(tenant_id, run_id, RunState.WAITING_HUMAN)
             await register_owned_runtime(
                 tenant_id, run_id, OwnedHumanRuntime(manager, orchestrator, executor)
@@ -241,6 +247,7 @@ class HumanControlCoordinator:
                     )
                 )
             except Exception as exc:
+                propagate_owner_failure(exc)
                 logger.warning("browser assistance 挂起收口异常: type={}", type(exc).__name__)
             await unregister_owned_runtime(tenant_id, run_id)
             await self.store.clear(record)
@@ -311,14 +318,29 @@ class HumanControlCoordinator:
                 if record.expires_at <= time.time():
                     return
                 try:
-                    queued, missing = await self.complete(
-                        tenant_id, user_id, assistance_id, automatic=True
-                    )
+                    if record.runner_id is not None:
+                        runtime=await get_owned_runtime(tenant_id,record.run_id)
+                        owner=getattr(getattr(runtime,'manager',None),'execution_owner',None)
+                        if owner is None:
+                            return
+                        result=await owner.complete_assistance(assistance_id,automatic=True)
+                        missing=result['missing_conditions']
+                    else:
+                        queued, missing = await self.complete(
+                            tenant_id, user_id, assistance_id, automatic=True
+                        )
                     if not missing:
                         # enqueue_resume 已写入持久 Stream；由 BrowserResumeWorker
                         # 领取，不能退化成请求内 create_task。
                         return
                 except RuntimeError as exc:
+                    from .owner_port import HumanActionRejected
+                    if record.runner_id is not None:
+                        if isinstance(exc,HumanActionRejected):
+                            await asyncio.sleep(max(0.2,self.monitor.sample_interval))
+                            continue
+                        propagate_owner_failure(exc)
+                        return
                     if str(exc) in {"RESUME_ALREADY_CONSUMED", "HUMAN_TIMEOUT"}:
                         return
                     if str(exc) == "RESUME_CONTEXT_LOST":
@@ -411,6 +433,54 @@ class HumanControlCoordinator:
             raise RuntimeError("TOOL_SUSPEND_FAILED")
         return queued, []
 
+    async def complete_owned(self, owner, assistance_id, *, automatic=False):
+        """Trusted native owner observation; never the legacy resume-job path."""
+        from .owner_port import BrowserOwnerFailure
+        record = await self.store.get_assistance(owner.record.tenant_id, assistance_id)
+        runtime = await get_owned_runtime(owner.record.tenant_id, owner.record.run_id)
+        if (not record or not runtime or runtime.manager is not owner.manager
+                or runtime.manager.execution_owner is not owner
+                or runtime.executor is not owner.manager.human_executor(record.tenant_id, record.run_id)
+                or record.runner_id != owner.runner_id or record.run_id != owner.record.run_id
+                or record.agent_execution_id != owner.state.execution_id or record.tool_call_id != owner.call_id
+                or record.user_id != owner.record.user_id or record.session_id != owner.record.session_id
+                or record.step_index != len(runtime.orchestrator.steps)
+                or record.state not in {'pending', 'controlling'}):
+            raise BrowserOwnerFailure('BROWSER_COMPLETION_RUNTIME_MISMATCH')
+
+        if automatic:
+            # Native automatic completion belongs to the original task, not to
+            # a particular observer's bearer or the legacy resume stream.
+            from .owner_port import HumanActionRejected
+            if record.completion_mode=='confirm_only':
+                raise HumanActionRejected('HUMAN_CONFIRMATION_REQUIRED')
+            await owner.authorize_human_completion(assistance_id)
+
+        async def sampler():
+            if automatic:
+                snapshot=await owner.sample_human_completion(assistance_id,runtime.orchestrator.page_ops)
+            else:
+                snapshot = await runtime.orchestrator.page_ops._human_snapshot(owner.manager)
+            if not snapshot.get('success'):
+                raise BrowserOwnerFailure('BROWSER_COMPLETION_SNAPSHOT_FAILED')
+            elements = snapshot.get('interactive_elements', [])
+            structural = frozenset(str(item.get('role') or item.get('element_type') or '') for item in elements)
+            challenge = any(any(marker in ' '.join(str(item.get(k) or '')
+                for k in ('label','role','element_type','tag','name')).lower()
+                for marker in CAPTCHA_MARKERS) for item in elements) or bool(snapshot.get('challenge_iframe_present'))
+            return CompletionObservation(origin_path=str(snapshot.get('url', '')),
+                present_elements=structural, challenge_iframe_present=challenge)
+
+        missing = []
+        if record.completion_mode != 'confirm_only':
+            met, missing = await self.monitor.stable(
+                tuple(CompletionPredicate(**item) for item in record.predicates), sampler)
+            if not met:
+                return dict(completion_ref=None, bridged=False, missing_conditions=missing)
+        else:
+            await sampler()
+        return await owner.record_completion(record, completed_by_human=not automatic)
+
     async def extend(self, tenant_id: str, user_id: str, assistance_id: str) -> AssistanceRecord:
         record = await self._owned_record(tenant_id, user_id, assistance_id)
         if record.extended:
@@ -444,6 +514,10 @@ class HumanControlCoordinator:
         record = await self.store.get_assistance(tenant_id, assistance_id)
         if record is None or record.user_id != user_id:
             raise KeyError("ASSISTANCE_NOT_FOUND")
+        if record.runner_id is not None:
+            # This producer slice cannot enter the legacy resume queue. The
+            # owner sidecar/fresh ticket and fact-to-control bridge follow next.
+            raise RuntimeError('BROWSER_RUNNER_OWNER_REQUIRED')
         get_active = getattr(self.store, "get_active_session", None)
         if get_active is not None:
             active = await get_active(tenant_id, record.session_id)

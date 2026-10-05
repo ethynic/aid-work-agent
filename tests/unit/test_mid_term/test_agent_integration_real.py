@@ -22,6 +22,21 @@ def _make_minimal_agent():
     return agent
 
 
+def _make_history(memory, source):
+    from src.core.agent_engine.contracts import Identity
+    from src.services.agent_runner.runtime.history import SessionHistory
+    from src.services.agent_runner.runtime.legacy import LegacyHistoryReader
+    return SessionHistory(memory, source,
+        LegacyHistoryReader(Identity(None, None, "sess", source)), tolerate_read_failure=True)
+
+
+@pytest.fixture(autouse=True)
+def _legacy_session_registration(monkeypatch):
+    monkeypatch.setattr(
+        "src.services.agent_runner.runtime.history_repository.HistoryRepository.legacy_session_kind",
+        lambda session_id, tenant_id=None: "web")
+
+
 # ============== _detect_source_type 真实代码测试 ==============
 
 
@@ -40,7 +55,7 @@ def test_detect_source_type_real_code_uses_current_record():
     orig = sr_mod.SessionRecordManager.get_current_record
     sr_mod.SessionRecordManager.get_current_record = staticmethod(lambda: fake_record)
     try:
-        result = agent._detect_source_type()
+        result = agent._identity("session-source").source
         assert result == "feishu", "当前上下文 record 的 source_type 应被采用"
     finally:
         sr_mod.SessionRecordManager.get_current_record = orig
@@ -54,7 +69,7 @@ def test_detect_source_type_real_code_no_record_defaults_chat():
     orig = sr_mod.SessionRecordManager.get_current_record
     sr_mod.SessionRecordManager.get_current_record = staticmethod(lambda: None)
     try:
-        assert agent._detect_source_type() == "chat"
+        assert agent._identity("session-source").source == "chat"
     finally:
         sr_mod.SessionRecordManager.get_current_record = orig
 
@@ -73,7 +88,7 @@ def test_detect_source_type_real_code_session_record_exception_falls_back():
         raise RuntimeError("session record service unavailable")
     sr_mod.SessionRecordManager.get_current_record = staticmethod(_boom)
     try:
-        result = agent._detect_source_type()
+        result = agent._identity("session-source").source
         assert result == "chat", (
             "SessionRecordManager 异常时必须降级 'chat'，不应抛给上层"
         )
@@ -93,13 +108,14 @@ def test_build_messages_real_code_injects_summary_with_correct_prefix():
     fake_memory = MagicMock()
     fake_memory.get_context.return_value = []
     agent.memory = fake_memory
-    agent._detect_source_type = lambda: "chat"
+    agent = _make_history(fake_memory, "chat")
 
-    import src.core.agent as agent_mod
+    import src.services.agent_runner.runtime.history as agent_mod
     monkeypatch_target = pytest.MonkeyPatch()
     monkeypatch_target.setattr(agent_mod.settings.memory.mid_term, "enabled", True)
 
     fake_cs = MagicMock()
+    agent.reader.active_summary = fake_cs.get_active_summary
     fake_cs.get_active_summary.return_value = "## 摘要内容"
     monkeypatch_target.setattr(
         "src.memory.mid_term.get_compression_service", lambda: fake_cs
@@ -131,13 +147,14 @@ def test_build_messages_real_code_no_summary_returns_original_history():
     ]
     fake_memory.get_context.return_value = list(base_history)
     agent.memory = fake_memory
-    agent._detect_source_type = lambda: "chat"
+    agent = _make_history(fake_memory, "chat")
 
-    import src.core.agent as agent_mod
+    import src.services.agent_runner.runtime.history as agent_mod
     mp = pytest.MonkeyPatch()
     mp.setattr(agent_mod.settings.memory.mid_term, "enabled", True)
 
     fake_cs = MagicMock()
+    agent.reader.active_summary = fake_cs.get_active_summary
     fake_cs.get_active_summary.return_value = None
     mp.setattr("src.memory.mid_term.get_compression_service", lambda: fake_cs)
 
@@ -163,18 +180,20 @@ def test_build_messages_real_code_call_args_to_get_active_summary():
 
     # 验证 source_type 路由：返回特定值，看是否被传给 get_active_summary
     captured = {"sid": None, "st": None}
-    agent._detect_source_type = lambda: "wecom_personal_rpa"
+    agent = _make_history(fake_memory, "wecom_personal_rpa")
 
-    import src.core.agent as agent_mod
+    import src.services.agent_runner.runtime.history as agent_mod
     mp = pytest.MonkeyPatch()
     mp.setattr(agent_mod.settings.memory.mid_term, "enabled", True)
 
     fake_cs = MagicMock()
+    agent.reader.active_summary = fake_cs.get_active_summary
     def _capture(sid, st, tenant_id=None):
         captured["sid"] = sid
         captured["st"] = st
         return None
     fake_cs.get_active_summary = _capture
+    agent.reader.active_summary = _capture
     mp.setattr("src.memory.mid_term.get_compression_service", lambda: fake_cs)
 
     try:
@@ -197,7 +216,7 @@ def test_reload_memory_real_code_chat_source_clears_and_reloads(monkeypatch):
     fake_memory = MagicMock()
     fake_memory.short_term.max_messages = 100
     agent.memory = fake_memory
-    agent._detect_source_type = lambda: "chat"
+    agent = _make_history(fake_memory, "chat")
 
     import src.db.models as models_mod
     monkeypatch.setattr(
@@ -216,7 +235,7 @@ def test_reload_memory_real_code_channel_source_uses_channel_loader(monkeypatch)
     agent = _make_minimal_agent()
     fake_memory = MagicMock()
     agent.memory = fake_memory
-    agent._detect_source_type = lambda: "wecom_kf"
+    agent = _make_history(fake_memory, "wecom_kf")
 
     channel_called = {"n": 0}
     def _fake_channel_history(sid, current_input):
@@ -238,7 +257,7 @@ def test_reload_memory_real_code_db_exception_does_not_propagate(monkeypatch):
     agent = _make_minimal_agent()
     fake_memory = MagicMock()
     agent.memory = fake_memory
-    agent._detect_source_type = lambda: "chat"
+    agent = _make_history(fake_memory, "chat")
 
     import src.db.models as models_mod
 
@@ -256,7 +275,7 @@ def test_reload_memory_real_code_tool_message_metadata_extracted(monkeypatch):
     fake_memory = MagicMock()
     fake_memory.short_term.max_messages = 100
     agent.memory = fake_memory
-    agent._detect_source_type = lambda: "chat"
+    agent = _make_history(fake_memory, "chat")
 
     captured = {"history": None}
     def _capture_load(sid, history):
@@ -292,7 +311,7 @@ def test_reload_memory_real_code_assistant_with_tool_calls(monkeypatch):
     fake_memory = MagicMock()
     fake_memory.short_term.max_messages = 100
     agent.memory = fake_memory
-    agent._detect_source_type = lambda: "chat"
+    agent = _make_history(fake_memory, "chat")
 
     captured = {"history": None}
     fake_memory.load_history = lambda sid, h: captured.__setitem__("history", h)
@@ -321,21 +340,41 @@ def test_reload_memory_real_code_assistant_with_tool_calls(monkeypatch):
 # ============== Agent 调用站点真实逻辑（不复刻 agent.py 代码）==============
 
 
-def test_agent_has_compress_call_site_attribute():
-    """防御性：Agent 类必须仍定义 _detect_source_type 和 _reload_memory_from_db。
+@pytest.mark.asyncio
+async def test_agent_has_compress_call_site_attribute(monkeypatch):
+    """Actual context preparation calls compression before reloading history.
 
-    mutation: 如果有人删了这两个方法（重构了 agent.py），调用点 compress_session 会崩。
+    Replaces the old assertion tying private methods to the facade with a
+    behavior check on the new caller, without copying its implementation.
     """
-    from src.core.agent import Agent
-    assert hasattr(Agent, "_detect_source_type"), (
-        "Agent 必须实现 _detect_source_type（v3.1 Phase 4.1）"
-    )
-    assert hasattr(Agent, "_reload_memory_from_db"), (
-        "Agent 必须实现 _reload_memory_from_db（v3.1 Phase 4.2）"
-    )
-    assert hasattr(Agent, "_build_messages"), (
-        "Agent._build_messages 必须存在（v3.1 Phase 4.3 注入点）"
-    )
+    from src.core.agent_engine.contracts import AgentMode, Identity
+    from src.services.agent_runner.runtime.context_assembler import ContextAssembler
+    order = []
+    compression = MagicMock()
+    async def compress(session_id):
+        order.append("compress")
+    compression._run_compression_phase = compress
+    compression.event = None
+    history = _make_history(MagicMock(), "chat")
+    history.memory.get_context.return_value = []
+    def reload(*args):
+        order.append("reload")
+    history._reload_memory_from_db = reload
+    history.active_summary = lambda session_id: None
+    attachments = MagicMock()
+    attachments.prepare.return_value = ("user input", "", None)
+    attachments._build_multimodal_user_content.return_value = None
+    visibility, remember = MagicMock(), MagicMock()
+    visibility.prime = AsyncMock()
+    remember._handle_remember_intent = AsyncMock()
+    prompts = MagicMock()
+    prompts._build_system_prompt.return_value = "system"
+    assembler = ContextAssembler(identity=Identity(None, None, "sess"), role=AgentMode.MASTER,
+        profile_config=None, history=history, compression=compression, prompt_sources=prompts,
+        skills=MagicMock(), remember=remember, attachments=attachments, visibility=visibility)
+    execution, _ = await assembler.prepare("user input")
+    assert order == ["compress", "reload"]
+    assert execution.messages[-1]["content"] == "user input"
 
 
 def test_agent_compress_session_imports_correctly():

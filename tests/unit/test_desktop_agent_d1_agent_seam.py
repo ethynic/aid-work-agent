@@ -13,6 +13,13 @@ from tests.unit.test_desktop_agent_d1 import SECRET, correlation, invoke_request
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def disable_optional_memory_io(monkeypatch):
+    from src.config.settings import settings
+    monkeypatch.setattr(settings.memory.mid_term, "enabled", False)
+    monkeypatch.setattr(settings.memory.long_term, "enabled", False)
+
+
 class CountingEcho(BaseTool):
     name = "test_echo"
     description = "provider-level seam test"
@@ -58,9 +65,7 @@ def test_default_agent_path_still_executes_tools_and_keeps_legacy_memory_order(m
         monkeypatch.setattr(master_agent, "llm", provider)
         monkeypatch.setattr(master_agent, "tool_registry", registry)
         monkeypatch.setattr(master_agent, "tool_executor", ToolExecutor(registry))
-        monkeypatch.setattr(master_agent, "_run_compression_phase", lambda _session: asyncio.sleep(0))
-        monkeypatch.setattr(master_agent, "_ensure_tenant_skills_loaded", lambda: None)
-        monkeypatch.setattr("src.channels.session.channel_session_manager.is_channel_session", lambda _session: False)
+        monkeypatch.setattr("src.services.agent_runner.runtime.history_repository.HistoryRepository.legacy_session_kind", lambda _session, tenant_id=None: "web")
         monkeypatch.setattr("src.db.models.MessageDB.list_by_session", lambda _session, limit: [])
         master_agent.memory.clear(session_id)
 
@@ -88,9 +93,7 @@ def test_existing_agent_backend_pauses_real_agent_model_loop_and_resumes(monkeyp
         monkeypatch.setattr(master_agent, "llm", provider)
         monkeypatch.setattr(master_agent, "tool_registry", registry)
         monkeypatch.setattr(master_agent, "tool_executor", ToolExecutor(registry))
-        monkeypatch.setattr(master_agent, "_run_compression_phase", no_compression)
-        monkeypatch.setattr(master_agent, "_ensure_tenant_skills_loaded", lambda: None)
-        monkeypatch.setattr("src.channels.session.channel_session_manager.is_channel_session", lambda _session: False)
+        monkeypatch.setattr("src.services.agent_runner.runtime.history_repository.HistoryRepository.legacy_session_kind", lambda _session, tenant_id=None: "web")
 
         def rows(_session_id, limit):
             result = []
@@ -135,9 +138,7 @@ def test_existing_agent_backend_fails_loud_on_parallel_model_tool_calls(monkeypa
         monkeypatch.setattr(master_agent, "llm", MultiProvider())
         monkeypatch.setattr(master_agent, "tool_registry", registry)
         monkeypatch.setattr(master_agent, "tool_executor", ToolExecutor(registry))
-        monkeypatch.setattr(master_agent, "_run_compression_phase", lambda _session: asyncio.sleep(0))
-        monkeypatch.setattr(master_agent, "_ensure_tenant_skills_loaded", lambda: None)
-        monkeypatch.setattr("src.channels.session.channel_session_manager.is_channel_session", lambda _session: False)
+        monkeypatch.setattr("src.services.agent_runner.runtime.history_repository.HistoryRepository.legacy_session_kind", lambda _session, tenant_id=None: "web")
         monkeypatch.setattr("src.db.models.MessageDB.list_by_session", lambda _session, limit: [])
         backend = ExistingAgentBackend({"test_echo"}, agent_provider=lambda _session, _tenant: master_agent, persist_messages=lambda *_args: [], session_lookup=lambda _session: {"tenant_id": "tenant-1", "user_id": "user-1"})
         with pytest.raises(RuntimeError, match="MULTIPLE_TOOL_CALLS"):
@@ -160,9 +161,7 @@ def test_existing_agent_backend_persists_selected_call_after_empty_provider_call
         monkeypatch.setattr(master_agent, "llm", EmptyThenValidProvider())
         monkeypatch.setattr(master_agent, "tool_registry", registry)
         monkeypatch.setattr(master_agent, "tool_executor", ToolExecutor(registry))
-        monkeypatch.setattr(master_agent, "_run_compression_phase", lambda _session: asyncio.sleep(0))
-        monkeypatch.setattr(master_agent, "_ensure_tenant_skills_loaded", lambda: None)
-        monkeypatch.setattr("src.channels.session.channel_session_manager.is_channel_session", lambda _session: False)
+        monkeypatch.setattr("src.services.agent_runner.runtime.history_repository.HistoryRepository.legacy_session_kind", lambda _session, tenant_id=None: "web")
         monkeypatch.setattr("src.db.models.MessageDB.list_by_session", lambda _session, limit: [])
         persisted = []
         backend = ExistingAgentBackend({"test_echo"}, agent_provider=lambda *_args: master_agent, persist_messages=lambda _session, batch: persisted.extend(batch) or batch, session_lookup=lambda _session: {"tenant_id": "tenant-1", "user_id": "user-1"})

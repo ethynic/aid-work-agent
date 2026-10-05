@@ -19,6 +19,7 @@ from src.tools.browser.human_requirement_detector import (
 )
 from src.tools.browser.page_ops import PageOps
 from src.tools.browser.run_manager import BrowserRunManager, RunState
+from src.tools.browser.owner_port import propagate_owner_failure
 from src.tools.browser.run_store import RunRecord
 
 
@@ -135,6 +136,8 @@ class BrowserOrchestrator:
         if self.run_manager is None or self.run_record is None:
             raise RuntimeError("RUN_CONTEXT_REQUIRED")
         self.executor = await self.run_manager.start(self.run_record)
+        if getattr(self.run_manager,'execution_owner',None) is not None:
+            self.executor = self.run_manager.agent_executor(self.executor)
         self.page_ops = PageOps(self.executor, self.run_record.run_id)
 
     async def _take_screenshot(self) -> Optional[str]:
@@ -351,6 +354,7 @@ class BrowserOrchestrator:
             self.cancel_event.set()
             raise
         except Exception as exc:
+            propagate_owner_failure(exc)
             close_reason = "error"
             logger.error("浏览器编排执行失败: type={}", type(exc).__name__)
             return self._build_result(
@@ -377,6 +381,7 @@ class BrowserOrchestrator:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                propagate_owner_failure(exc)
                 logger.warning("浏览器边界关闭异常: type={}", type(exc).__name__)
 
     async def _execute_task(
@@ -576,6 +581,7 @@ class BrowserOrchestrator:
         except asyncio.CancelledError:
             raise
         except Exception as e:
+            propagate_owner_failure(e)
             logger.error("浏览器自动化执行异常: type={}", type(e).__name__)
             await self._take_screenshot()
             return self._build_result(
@@ -658,6 +664,8 @@ class BrowserOrchestrator:
                     await self.page_ops.take_snapshot()
 
             except Exception as e:
+
+                propagate_owner_failure(e)
                 raw_error = str(e)
                 if self._is_unrecoverable_error(raw_error):
                     return {"success": False, "error": "浏览器发生不可恢复错误"}
@@ -707,6 +715,7 @@ class BrowserOrchestrator:
                     await self.page_ops.keyboard("Enter")
                     await asyncio.sleep(1.5)
                 except Exception as e:
+                    propagate_owner_failure(e)
                     logger.debug("fill 后回车失败（可忽略）: type={}", type(e).__name__)
             return result
 
@@ -762,6 +771,7 @@ class BrowserOrchestrator:
                 await progress_callback("scroll", f"已向{direction}滚动")
             return result
         except Exception as e:
+            propagate_owner_failure(e)
             return {
                 "success": False,
                 "error": sanitize_error(e, fallback="页面滚动失败"),

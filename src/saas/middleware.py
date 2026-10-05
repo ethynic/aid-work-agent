@@ -87,6 +87,29 @@ class TenantContextMiddleware(BaseHTTPMiddleware):
     - ContextVar (current_tenant_id)
     """
 
+    async def __call__(self, scope, receive, send):
+        # This exact observer route must see real socket backpressure. Ordinary
+        # requests keep BaseHTTP, and both paths share the original dispatch.
+        if (scope['type'] != 'http' or scope.get('method') != 'GET'
+                or not re.fullmatch(r'/api/chat/runners/[^/]+/events', scope.get('path', ''))):
+            return await super().__call__(scope, receive, send)
+        forwarded = object()
+        started = False
+
+        async def direct_send(message):
+            nonlocal started
+            if message['type'] == 'http.response.start':
+                started = True
+            await send(message)
+
+        async def direct_next(_request):
+            await self.app(scope, receive, direct_send)
+            return forwarded
+
+        response = await self.dispatch(Request(scope, receive), direct_next)
+        if response is not forwarded and not started:
+            await response(scope, receive, send)
+
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         tenant_id = None
         user_id = None

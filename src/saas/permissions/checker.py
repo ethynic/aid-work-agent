@@ -7,7 +7,6 @@
 from typing import List, Optional, Tuple
 from src.db.database import get_db_connection
 from src.saas.db.permission_db import UserAgentPermissionDB
-from src.core.agent import master_agent
 from src.core.cache_utils import CacheKeys, get_cached, set_cached, delete_cached
 
 
@@ -109,6 +108,9 @@ def check_agent_access(agent_id: str, user: dict) -> bool:
 
 def _all_subagent_dir_names() -> List[str]:
     """返回注册表中所有非主智能体的 dir_name 列表（统一返回 agent_id/dir_name）。"""
+    # Only legacy global list callers use this compatibility registry. Ordinary
+    # permission checks must also be usable in an independent runner process.
+    from src.core.agent import master_agent
     registry = master_agent.subagent_registry
     if not registry:
         return []
