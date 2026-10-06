@@ -334,10 +334,42 @@ class SubagentSkillsConfig(BaseModel):
     default_allowed: List[str] = Field(default_factory=list)  # 默认允许列表
 
 
+class SkillDeviceExecutionConfig(BaseModel):
+    """插件 skill 设备执行配置（M2 执行路由，docs/plans/plan-external-skill-plugin-m2.md §4.1）
+
+    enabled=false 时 evaluate_device_execution 判定 c 项不满足（DEVICE_EXECUTION_DISABLED
+    拦截，不建 invocation）；timeout/max_args/max_arg_chars 为云端入队前命令门禁上限，
+    设备侧双端强制同值（设备 timeout 另取 min(下发值, 设备硬顶 1800s)）。
+    """
+    enabled: bool = False  # M2 设备执行开关，默认关
+    timeout_seconds: int = 900  # 单次执行超时（proxy 轮询超时 + payload 下发值）
+    max_args: int = 16  # args 数量上限
+    max_arg_chars: int = 500  # 单 arg 字符上限
+    max_stdout_chars: int = 200_000  # 工具结果 stdout 截断上限（尾部保留）
+
+
+class SkillPluginsConfig(BaseModel):
+    """外部 Skill 插件配置（M1 知识层，docs/plans/plan-external-skill-plugin-m1.md §3.10）
+
+    目录链低 → 高：repo_dir（仓库根第一方插件位，compose 已挂载）→
+    storage_subdir（运维动态安装位）。审批门唯一出口 src/core/skill_plugin_gate.py；
+    插件 skill 经审批 + allowed 白名单后对 Agent 可见，M1 只读不可执行
+    （skill_executor 入口全量拦截；M2 起已审批 device 声明经下方 device_execution 放行）。
+    """
+    enabled: bool = False  # 总开关，默认关（合入即安全）
+    repo_dir: str = "skills"  # 相对仓库根（容器内 /app/skills）；绝对路径按原样使用
+    storage_subdir: str = "skills/plugins"  # 相对 configured_storage_root()
+    approvals_subpath: str = "skills/plugin-approvals.json"  # 审批清单，相对 storage 根
+    # M2 设备执行链路（plan-external-skill-plugin-m2.md §3.1/§3.2/§4.1）：
+    # 默认关——放行需「已审批插件 + execution=device + 审批含 entries/exec_hash」全满足
+    device_execution: SkillDeviceExecutionConfig = Field(default_factory=SkillDeviceExecutionConfig)
+
+
 class SkillsConfig(BaseModel):
     """Skill 全局配置"""
     master_agent: MasterAgentSkillsConfig = Field(default_factory=MasterAgentSkillsConfig)
     subagent: SubagentSkillsConfig = Field(default_factory=SubagentSkillsConfig)
+    plugins: SkillPluginsConfig = Field(default_factory=SkillPluginsConfig)
 
 
 class AgentVerboseFeedbackConfig(BaseModel):

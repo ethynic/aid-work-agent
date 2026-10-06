@@ -165,6 +165,26 @@ class SkillExecuteTool(BaseTool):
         stdin_content = None
         content_text = kwargs.get("content")
 
+        # M2 设备执行路由（docs/plans/plan-external-skill-plugin-m2.md §3.1）：
+        # device 路由技能 + 显式 content → 提前拒绝（INVALID_DEVICE_INPUT）。
+        # executor 侧无法区分用户 content 与服务端注入的身份 JSON（skill_executor
+        # 只见合并后的 stdin bytes），判定必须在 tool 层完成；设备链路 stdin_content
+        # 恒不透传（设备 spawn stdin 'ignore'），显式 content 若不拒绝将静默丢失
+        # （fail-closed，不留静默丢弃）。evaluate 内部对非插件/未放行技能判定为
+        # 非 executable，普通技能的 content-stdin 路径不受影响。
+        if content_text:
+            from src.local_tools import skill_runner_proxy
+            decision = skill_runner_proxy.evaluate_device_execution(self.skill_registry, skill_name)
+            if decision.executable:
+                logger.info(
+                    f"后端日志：[skill_execute] 设备路由技能拒绝 content 参数（INVALID_DEVICE_INPUT）",
+                    extra={"skill_name": skill_name})
+                return {
+                    "success": False,
+                    "error": skill_runner_proxy.invalid_device_input_message("content", skill_name),
+                    "skill_name": skill_name,
+                }
+
         # 解析 tenant_id（无论是否有 content 都需要）
         import json as _json
         resolved_tenant_id = tool_context.tenant_id if tool_context is not None else None

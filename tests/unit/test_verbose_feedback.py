@@ -4,7 +4,9 @@
 对应 docs/plans/plan-agent-intermediate-feedback.md「Phase 1：统一反馈内核」必测场景：
 1. 长任务 policy 事件在首个 tool_start 前；无策略的 turn（无论多慢）不产生任何
    verbose（2026-09-01 产品决策：system watchdog 已删除，无系统兜底）；
-2. 空/无效 tool call 不触发；
+2. 空 tool call 不触发（注：非法 JSON 参数在现行引擎中直接失败
+   INVALID_TOOL_ARGUMENTS，engine.py normalize_calls，不再归一为 {}，见
+   tests/integration/test_agent_runtime_acceptance.py）；
 3. Skill/Tool 模板含换行/超长/路径/JSON/命令/敏感键/数字 ETA/代码块/HTML/百分比
    → 整体降级 fallback 文案（仍属 policy 决定的提示）；
 4. 并行 tool calls 仍最多一条（取第一个长任务策略）；
@@ -15,20 +17,33 @@
 9. 捕获同一轮后续及下一轮 provider 请求（mock LLM），断言 messages 中不存在
     verbose 文案；Skill prompt 和 tool schema 中不存在 feedback metadata。
 
-impl 驱动方式与 tests/unit/test_tool_result_truncation.py 同款：
-Agent.__new__ 跳过 __init__ 副作用 + monkeypatch 必要依赖 + AsyncMock LLM。
+33f9dba1 重构后的驱动方式：
+- policy 注入（TestPolicyInjection）：真实 AgentEngine + 真实 ToolDispatcher
+  （before_tools 注入点），假 registry/executor/model —— 复用
+  tests/unit/_agent_runtime_seam.py（与 test_agent_engine_acceptance.py 同款
+  fake port 模式）；
+- 包装入口（TestSyncAndWrapperEntries）：Agent.__new__ 跳过 __init__ 副作用 +
+  实例属性注入 _identity / _execution 替身（薄壳 _process_message_impl 只代理
+  execution 事件流，agent.py:88-102 注释明确保留测试替换能力）。
+
+注（差异已修复，2026-10-06）：旧 agent.py 在注入点检查
+verbose_config.effective_enabled；现行 ToolDispatcher.before_tools 已补
+effective_enabled 门（tools.py），disabled / force_disabled 配置在注入点直接
+拦截，由本文件 test_disabled_config_gates_policy_injection 覆盖；包装入口的
+门控位于 prepare_turn_feedback（verbose_feedback.py），由 sync 级用例覆盖。
 """
 
 import asyncio
 import json
 import time
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
-import src.core.agent as agent_module
-from src.core.agent import Agent
+from src.core.agent import Agent, AgentMode
+from src.core.agent_engine import Outcome
+from src.core.agent_engine.contracts import Identity
 from src.core.agent_events import make_verbose_event
 from src.core.verbose_feedback import (
     DEFAULT_FALLBACK_MESSAGE,
@@ -41,6 +56,15 @@ from src.core.verbose_feedback import (
     new_verbose_event_id,
     resolve_feedback_policy,
     validate_feedback_text,
+)
+from tests.unit._agent_runtime_seam import (
+    FakeTool,
+    Model,
+    call,
+    completion,
+    execution_state,
+    make_dispatcher,
+    run_engine,
 )
 
 pytestmark = pytest.mark.agent
@@ -257,83 +281,30 @@ class TestContextIsolation:
 
 
 # ============================================================
-# Agent 主循环 policy 注入（valid_tool_calls 后、首个 tool_start 前）
+# Agent 主循环 policy 注入（engine + ToolDispatcher.before_tools）
 # ============================================================
-
+# 33f9dba1 重构后的注入点：ToolDispatcher.before_tools（tools.py）由 AgentEngine
+# 在首个 tool_start 之前调用（engine.py presentation 接线）；RuntimeExecution 只把
+# verbose_config / verbose_state / policy_source=catalog 透传给 dispatcher
+# （executor.py 构造 ToolDispatcher 处）。以下用例直测该接缝。
 
 LONG_TOOL_RESULT = {"success": True, "content": "tool-ok"}
 
 
-def _patch_impl_deps(monkeypatch, *, version_block=None):
-    """patch _process_message_impl 的重依赖（与 test_tool_result_truncation.py 同款）。"""
-    monkeypatch.setattr(Agent, "_get_pending_clarification", lambda self, sid: None)
-    monkeypatch.setattr(Agent, "_ensure_tenant_skills_loaded", lambda self: None)
-    monkeypatch.setattr(Agent, "_run_compression_phase", AsyncMock(return_value=None))
-    monkeypatch.setattr(Agent, "_handle_remember_intent", AsyncMock(return_value=None))
-    monkeypatch.setattr(Agent, "_build_messages", lambda self, sid: ([], []))
-    monkeypatch.setattr(Agent, "_build_system_prompt", lambda self, *a, **k: "SYSTEM-PROMPT")
-    monkeypatch.setattr(Agent, "_get_tools", lambda self: [{"name": "read"}])
-    monkeypatch.setattr(Agent, "_get_tool_display_name", lambda self, n, a: n)
-    monkeypatch.setattr(Agent, "_detect_source_type", lambda self: "chat")
-    # skill_execute 分支短路：直接返回 version block，避免真实执行器依赖
-    monkeypatch.setattr(
-        Agent, "_check_skill_version_consistency",
-        lambda self, sid, skill: version_block,
+def _policy_dispatcher(*, tools, config, state):
+    """组装带 verbose 参数的真实 ToolDispatcher（executor 结果按需供给）。"""
+    return make_dispatcher(
+        tools=tools,
+        executor_results=[dict(LONG_TOOL_RESULT)] * 4,
+        verbose_config=config,
+        verbose_state=state,
     )
 
 
-def _make_agent(monkeypatch, llm_side_effects, *, skill_feedback=None, tools=None,
-                tool_delay=0.0, version_block=None):
-    _patch_impl_deps(monkeypatch, version_block=version_block)
-    agent = Agent.__new__(Agent)
-    agent.is_master = False
-    agent.subagent_config = None
-    agent._init_tenant_id = None
-    agent._pending_compression_event = None
-    agent.memory = MagicMock()
-    agent.memory.get_context.return_value = []
-    agent.memory.short_term = MagicMock(max_messages=10)
-    agent.plan_manager = MagicMock()
-    agent.plan_manager.get_plan.return_value = None
-    agent.plan_manager.get_next_pending_task.return_value = None
-    agent.skill_registry = _FakeRegistry(skill_feedback or {})
-    agent.tool_registry = _FakeToolRegistry(tools or {})
-    agent._tool_controls = MagicMock()
-    agent._tool_controls.get.return_value = None
-
-    async def _execute(tool_name, tool_args, context=None):
-        if tool_delay:
-            await asyncio.sleep(tool_delay)
-        return dict(LONG_TOOL_RESULT)
-
-    agent.tool_executor = MagicMock()
-    agent.tool_executor.execute = AsyncMock(side_effect=_execute)
-    agent.llm = MagicMock()
-    agent.llm.chat_with_tools = AsyncMock(side_effect=llm_side_effects)
-    agent.llm.get_model_name.return_value = "test-model"
-    agent.llm.get_provider_name.return_value = "test-provider"
-    return agent
-
-
-def _tool_call(name, arguments=None, call_id="c1"):
-    return {
-        "id": call_id, "type": "function",
-        "function": {"name": name, "arguments": json.dumps(arguments or {})},
-    }
-
-
-def _llm_round(tool_calls=None, content="", request_id="r1"):
-    """构造一轮 LLM 响应（chat_with_tools 返回值）。"""
-    return {
-        "tool_calls": list(tool_calls or []),
-        "content": content,
-        "usage": {},
-        "request_id": request_id,
-    }
-
-
-_ROUND1_READ = _llm_round(tool_calls=[_tool_call("read")])
-_ROUND2_FINAL = _llm_round(content="完成", request_id="r2")
+def _hooked_read(message=VALID_TEXT):
+    if message is None:
+        return FakeTool("read")
+    return FakeTool("read", feedback=LongRunningFeedback(start_message=message))
 
 
 async def _collect(gen):
@@ -341,20 +312,15 @@ async def _collect(gen):
 
 
 class TestPolicyInjection:
-    """policy 事件注入点（impl 级集成测试）。"""
+    """policy 事件注入点（真实 AgentEngine + 真实 ToolDispatcher 集成）。"""
 
-    async def test_policy_event_before_first_tool_start(self, monkeypatch):
+    async def test_policy_event_before_first_tool_start(self):
         """长任务 policy 事件出现在首个 tool_start 之前，且恰好一条。"""
-        agent = _make_agent(
-            monkeypatch,
-            [_ROUND1_READ, _ROUND2_FINAL],
-            tools={"read": _HookTool(LongRunningFeedback(start_message=VALID_TEXT))},
-        )
-        events = await _collect(agent.process_message(
-            "帮我处理", "s1",
-            verbose_config=_fast_config(),
-            verbose_state=VerboseFeedbackState(),
-        ))
+        state = VerboseFeedbackState()
+        h = _policy_dispatcher(
+            tools=[_hooked_read(VALID_TEXT)], config=_fast_config(), state=state)
+        model = Model(completion("", [call()]), completion("完成"))
+        events = await run_engine(execution_state(), model, h.dispatcher)
         types = [e.get("type") for e in events]
         verbose_idx = [i for i, t in enumerate(types) if t == "verbose"]
         tool_start_idx = types.index("tool_start")
@@ -365,78 +331,58 @@ class TestPolicyInjection:
         assert verbose["data"] == VALID_TEXT
         assert verbose["eventId"].startswith("verbose_")
 
-    async def test_no_verbose_when_config_disabled(self, monkeypatch):
-        """配置关闭（默认）：同样的长工具调用不产生任何 verbose。"""
-        agent = _make_agent(
-            monkeypatch,
-            [_ROUND1_READ, _ROUND2_FINAL],
-            tools={"read": _HookTool(LongRunningFeedback(start_message=VALID_TEXT))},
-        )
-        events = await _collect(agent.process_message(
-            "帮我处理", "s1",
-            verbose_config=_fast_config(enabled=False),
-            verbose_state=VerboseFeedbackState(),
-        ))
-        assert not [e for e in events if e.get("type") == "verbose"]
-
-    async def test_no_verbose_without_verbose_params(self, monkeypatch):
+    async def test_no_verbose_without_verbose_params(self):
         """原始 generator（Desktop/internal 调用方）不被自动注入 verbose。"""
-        agent = _make_agent(
-            monkeypatch,
-            [_ROUND1_READ, _ROUND2_FINAL],
-            tools={"read": _HookTool(LongRunningFeedback(start_message=VALID_TEXT))},
-        )
-        events = await _collect(agent.process_message("帮我处理", "s1"))
+        h = _policy_dispatcher(tools=[_hooked_read(VALID_TEXT)],
+                               config=None, state=None)
+        model = Model(completion("", [call()]), completion("完成"))
+        events = await run_engine(execution_state(), model, h.dispatcher)
         assert not [e for e in events if e.get("type") == "verbose"]
 
-    async def test_empty_and_invalid_tool_call_no_verbose(self, monkeypatch):
-        """空 tool name / 参数非法 JSON 的 tool call 不触发 policy 提示。"""
-        agent = _make_agent(
-            monkeypatch,
-            [
-                _llm_round(tool_calls=[
-                    # 空 name 的调用被规范化丢弃；非法 JSON 参数归一为 {} 后 skill 名为空
-                    _tool_call("", call_id="c0"),
-                    {"id": "c1", "type": "function",
-                     "function": {"name": "skill_execute", "arguments": "{invalid-json"}},
-                ]),
-                _ROUND2_FINAL,
-            ],
-            skill_feedback={"travel-quote": {"long_running": True, "start_message": VALID_TEXT}},
-            version_block={"success": False, "error": "version-mismatch"},
-        )
-        events = await _collect(agent.process_message(
-            "帮我处理", "s1",
-            verbose_config=_fast_config(),
-            verbose_state=VerboseFeedbackState(),
-        ))
+    async def test_disabled_config_gates_policy_injection(self):
+        """enabled=False（含 force_disabled）时 dispatcher 注入点直接拦截：
+        不产生任何 verbose 事件——直连 process_message_with_feedback 的调用方
+        不会绕过全局关闭开关（对齐 prepare_turn_feedback 的 effective_enabled 门）。"""
+        state = VerboseFeedbackState()
+        h = _policy_dispatcher(tools=[_hooked_read(VALID_TEXT)],
+                               config=_fast_config(enabled=False), state=state)
+        model = Model(completion("", [call()]), completion("完成"))
+        events = await run_engine(execution_state(), model, h.dispatcher)
+        assert not [e for e in events if e.get("type") == "verbose"]
+
+    async def test_empty_tool_call_no_verbose(self):
+        """空 tool name 的调用被引擎规范化丢弃（engine.py normalize_calls），
+        不触发任何 verbose / tool_start，执行正常完成。
+
+        注：旧用例中「非法 JSON 参数归一为 {} 后不触发」的语义已不存在——
+        现行引擎对非法 JSON 参数直接抛 INVALID_TOOL_ARGUMENTS（engine.py），
+        由 tests/integration/test_agent_runtime_acceptance.py 覆盖。
+        """
+        state = VerboseFeedbackState()
+        h = _policy_dispatcher(tools=[_hooked_read(VALID_TEXT)],
+                               config=_fast_config(), state=state)
+        model = Model(completion("", [call("c0", "")]))
+        engine_state = execution_state()
+        events = await run_engine(engine_state, model, h.dispatcher)
         assert not [e for e in events if e.get("type") == "verbose"], (
             "空/无效 tool call 不得触发 verbose"
         )
+        assert not [e for e in events if e.get("type") == "tool_start"]
+        assert engine_state.outcome == Outcome.COMPLETED
 
-    async def test_parallel_tool_calls_single_policy_first_wins(self, monkeypatch):
+    async def test_parallel_tool_calls_single_policy_first_wins(self):
         """并行 tool calls 仍最多一条：按顺序取第一个长任务策略，不拼接。"""
         other_text = "正在生成行程表格，请稍候"
-        agent = _make_agent(
-            monkeypatch,
-            [
-                _llm_round(tool_calls=[
-                    _tool_call("read", call_id="c0"),
-                    _tool_call("skill_execute", {"skill": "travel-quote"}, call_id="c1"),
-                ]),
-                _ROUND2_FINAL,
-            ],
-            skill_feedback={
-                "travel-quote": {"long_running": True, "start_message": VALID_TEXT},
-                "excel-to-template": {"long_running": True, "start_message": other_text},
-            },
-            version_block={"success": False, "error": "version-mismatch"},
+        state = VerboseFeedbackState()
+        h = _policy_dispatcher(tools=[
+            _hooked_read(VALID_TEXT),
+            FakeTool("excel_tool", feedback=LongRunningFeedback(start_message=other_text)),
+        ], config=_fast_config(), state=state)
+        model = Model(
+            completion("", [call("c0", "read"), call("c1", "excel_tool")]),
+            completion("完成"),
         )
-        events = await _collect(agent.process_message(
-            "帮我处理", "s1",
-            verbose_config=_fast_config(),
-            verbose_state=VerboseFeedbackState(),
-        ))
+        events = await run_engine(execution_state(), model, h.dispatcher)
         verbose_events = [e for e in events if e.get("type") == "verbose"]
         assert len(verbose_events) == 1
         assert verbose_events[0]["data"] == VALID_TEXT
@@ -446,78 +392,62 @@ class TestPolicyInjection:
         "bad_message",
         [
             "第一行\n第二行",
-            "好" * 61,
-            "正在读取 C:\\repos\\x\\a.py，请稍候。",
-            "正在处理 {\"task\": \"fill_template\"}。",
-            "正在执行 rm -rf /tmp/data，请稍候。",
-            "您的 password 已更新，处理中。",
             "预计 30 秒后完成。",
-            "正在生成 ```code``` 内容。",
-            "正在处理 <b>加急</b> 请求。",
-            "已完成 85%，请稍候。",
         ],
     )
-    async def test_invalid_template_degrades_to_system_fallback(self, monkeypatch, bad_message):
-        """Skill 模板违规：整体降级为 system fallback 文案，绝不透出原文。"""
-        agent = _make_agent(
-            monkeypatch,
-            [_llm_round(tool_calls=[_tool_call("skill_execute", {"skill": "bad"})]), _ROUND2_FINAL],
-            skill_feedback={"bad": {"long_running": True, "start_message": bad_message}},
-            version_block={"success": False, "error": "version-mismatch"},
-        )
-        events = await _collect(agent.process_message(
-            "帮我处理", "s1",
-            verbose_config=_fast_config(),
-            verbose_state=VerboseFeedbackState(),
-        ))
+    async def test_invalid_template_degrades_to_system_fallback(self, bad_message):
+        """Skill/Tool 模板违规：整体降级为 system fallback 文案，绝不透出原文。
+
+        其余 8 类违规样例（超长/路径/JSON/命令/敏感键/代码块/HTML/百分比）与
+        本文件 TestResolveFeedbackPolicy.test_skill_invalid_template_returns_empty_message_for_fallback
+        的参数化矩阵一一对应（校验逻辑 validate_feedback_text 无第二实现），
+        此处保留两条代表样例验证注入链路的降级接线。
+        """
+        state = VerboseFeedbackState()
+        h = _policy_dispatcher(tools=[_hooked_read(bad_message)],
+                               config=_fast_config(), state=state)
+        model = Model(completion("", [call()]), completion("完成"))
+        events = await run_engine(execution_state(), model, h.dispatcher)
         verbose_events = [e for e in events if e.get("type") == "verbose"]
         assert len(verbose_events) == 1
         assert verbose_events[0]["data"] == TEST_FALLBACK
         assert bad_message not in json.dumps(events, ensure_ascii=False, default=str)
 
-    async def test_verbose_never_enters_llm_context(self, monkeypatch):
+    async def test_verbose_never_enters_llm_context(self):
         """同一轮后续及下一轮 provider 请求的 messages/system prompt 均无 verbose 文案。"""
-        agent = _make_agent(
-            monkeypatch,
-            [_ROUND1_READ, _ROUND2_FINAL],
-            tools={"read": _HookTool(LongRunningFeedback(start_message=VALID_TEXT))},
-        )
-        events = await _collect(agent.process_message(
-            "帮我处理", "s1",
-            verbose_config=_fast_config(),
-            verbose_state=VerboseFeedbackState(),
-        ))
+        state = VerboseFeedbackState()
+        h = _policy_dispatcher(tools=[_hooked_read(VALID_TEXT)],
+                               config=_fast_config(), state=state)
+        model = Model(completion("", [call()]), completion("完成"))
+        engine_state = execution_state()
+        events = await run_engine(engine_state, model, h.dispatcher)
         assert any(e.get("type") == "verbose" for e in events)
-        # 捕获全部 LLM 调用的 system prompt 与 messages
-        assert agent.llm.chat_with_tools.await_count == 2
-        for call in agent.llm.chat_with_tools.await_args_list:
-            kwargs = call.kwargs
-            assert VALID_TEXT not in str(kwargs.get("system_prompt"))
+        # 捕获全部 LLM 调用的 system prompt 与 messages（model port 留存每次 checkpoint）
+        assert len(model.requests) == 2
+        for request, _call_id, _definitions in model.requests:
+            assert VALID_TEXT not in str(request["system_prompt"])
             assert VALID_TEXT not in json.dumps(
-                kwargs.get("messages", []), ensure_ascii=False, default=str
+                request["messages"], ensure_ascii=False, default=str
             )
             assert "user_feedback" not in json.dumps(
-                kwargs.get("messages", []), ensure_ascii=False, default=str
+                request["messages"], ensure_ascii=False, default=str
             )
-        # memory（进入下一轮上下文的唯一途径）也不含 verbose 文案
-        for call_args in agent.memory.add_message.call_args_list + agent.memory.add.call_args_list:
-            assert VALID_TEXT not in str(call_args)
-
-    async def test_second_long_tool_in_same_turn_stays_single(self, monkeypatch):
-        """同一 turn 第二轮又命中长任务：状态机拦截，整轮仍只有一条。"""
-        agent = _make_agent(
-            monkeypatch,
-            [
-                _ROUND1_READ,
-                _llm_round(tool_calls=[_tool_call("read", call_id="c2")], request_id="r3"),
-                _ROUND2_FINAL,
-            ],
-            tools={"read": _HookTool(LongRunningFeedback(start_message=VALID_TEXT))},
+        # state.messages 是进入下一轮上下文的唯一权威来源，也不含 verbose 文案
+        assert VALID_TEXT not in json.dumps(
+            engine_state.messages, ensure_ascii=False, default=str
         )
+
+    async def test_second_long_tool_in_same_turn_stays_single(self):
+        """同一 turn 第二轮又命中长任务：状态机拦截，整轮仍只有一条。"""
         state = VerboseFeedbackState()
-        events = await _collect(agent.process_message(
-            "帮我处理", "s1", verbose_config=_fast_config(), verbose_state=state,
-        ))
+        h = _policy_dispatcher(tools=[_hooked_read(VALID_TEXT)],
+                               config=_fast_config(), state=state)
+        model = Model(
+            completion("", [call("c1")]),
+            completion("", [call("c2")]),
+            completion("完成"),
+        )
+        events = await run_engine(execution_state(), model, h.dispatcher)
         assert len([e for e in events if e.get("type") == "verbose"]) == 1
         assert state.event is not None and state.emitted_at is not None
 
@@ -754,16 +684,73 @@ class TestVerboseWrapper:
 # ============================================================
 # process_message_sync / process_message_with_feedback 包装入口
 # ============================================================
+# 两个包装入口仍在 Agent 薄壳（agent.py）。驱动方式：Agent.__new__ 跳过
+# __init__ 副作用 + 实例属性注入 _identity / _execution 替身（薄壳
+# _process_message_impl 只代理 execution 的事件流，agent.py:88-102 注释明确
+# 保留 legacy embedders / tests 的替换能力），真实驱动包装入口的
+# gating / state 复用 / 事件过滤逻辑。policy 注入本身已由
+# TestPolicyInjection 在 engine+dispatcher 接缝覆盖。
+
+class StubExecution:
+    """RuntimeExecution 替身：按脚本产出事件，模拟 policy 注入语义。
+
+    "policy" 步骤与真实 ToolDispatcher.before_tools 一致：仅当编排层传入
+    verbose_config（非 None）时，用 make_verbose_event + verbose_state.try_emit
+    注册并 yield（None 门控）。run 的入参 kwargs 全量记录供断言。
+    """
+
+    def __init__(self, script, delay=0.0):
+        self.script = list(script)
+        self.delay = delay
+        self.state = None
+        self.run_calls = []
+
+    async def run(self, text, user=None, attachments=None, request_context=None,
+                  **kwargs):
+        self.run_calls.append(kwargs)
+        config = kwargs.get("verbose_config")
+        feedback_state = kwargs.get("verbose_state")
+        for step in self.script:
+            if step == "policy":
+                if config is None:
+                    continue
+                event = make_verbose_event(new_verbose_event_id(), VALID_TEXT, "policy")
+                if feedback_state is not None and feedback_state.try_emit(event):
+                    yield event
+            elif step == "tool_start":
+                yield {"type": "tool_start", "toolCallId": "c1", "toolName": "read",
+                       "displayName": "read", "toolArgs": {}}
+            elif step == "progress":
+                if self.delay:
+                    await asyncio.sleep(self.delay)
+                yield {"type": "progress", "data": "working"}
+            elif step == "response":
+                yield {"type": "response", "data": "完成"}
+
+
+def _shell_agent(script, *, delay=0.0):
+    """Agent.__new__ + 实例属性注入（不触库、不装配真实资源）。"""
+    agent = Agent.__new__(Agent)
+    agent.mode = AgentMode.MASTER
+    agent.is_master = True
+    agent.subagent_config = None
+    agent.session_id = None
+    agent.execution_id = None
+    agent.parent_plan_manager = None
+    agent._default_tenant_id = None
+    agent._default_user_id = None
+    agent._prototype = None
+    agent._identity = lambda session_id, user=None: Identity("tenant-1", "user-1", session_id)
+    execution = StubExecution(script, delay=delay)
+    agent._execution = (lambda identity, cancel_check=None, record=None, task_record=None:
+                        execution)
+    return agent, execution
 
 
 class TestSyncAndWrapperEntries:
-    async def test_sync_callback_gets_single_policy_verbose_and_reuses_state(self, monkeypatch):
+    async def test_sync_callback_gets_single_policy_verbose_and_reuses_state(self):
         """渠道 sync 路径：有 callback 时启用 wrapper；外部传入 state 必须复用。"""
-        agent = _make_agent(
-            monkeypatch,
-            [_ROUND1_READ, _ROUND2_FINAL],
-            tools={"read": _HookTool(LongRunningFeedback(start_message=VALID_TEXT))},
-        )
+        agent, _execution = _shell_agent(["policy", "tool_start", "response"])
         state = VerboseFeedbackState()
         received = []
 
@@ -782,14 +769,9 @@ class TestSyncAndWrapperEntries:
         # 外部传入的 state 被复用（未内部另建）
         assert state.event is verbose_events[0]
 
-    async def test_sync_slow_tool_without_policy_no_verbose(self, monkeypatch):
+    async def test_sync_slow_tool_without_policy_no_verbose(self):
         """渠道 sync 路径：慢工具但无策略命中 → 无任何 verbose（无系统兜底）。"""
-        agent = _make_agent(
-            monkeypatch,
-            [_ROUND1_READ, _ROUND2_FINAL],
-            tools={"read": _HookTool(None)},
-            tool_delay=0.2,
-        )
+        agent, _execution = _shell_agent(["progress", "progress", "response"], delay=0.05)
         state = VerboseFeedbackState()
         received = []
 
@@ -806,14 +788,9 @@ class TestSyncAndWrapperEntries:
         )
         assert state.event is None
 
-    async def test_sync_without_callback_not_affected(self, monkeypatch):
-        """scheduler 等无用户表面（callback=None）：不启用 wrapper、不产生 verbose。"""
-        agent = _make_agent(
-            monkeypatch,
-            [_ROUND1_READ, _ROUND2_FINAL],
-            tools={"read": _HookTool(None)},
-            tool_delay=0.3,
-        )
+    async def test_sync_without_callback_not_affected(self):
+        """scheduler 等无用户表面（callback=None）：不启用 wrapper、不注入 verbose。"""
+        agent, execution = _shell_agent(["policy", "response"])
         state = VerboseFeedbackState()
         result = await agent.process_message_sync(
             "帮我处理", "s-sched",
@@ -821,16 +798,34 @@ class TestSyncAndWrapperEntries:
         )
         assert result == "完成"
         assert state.event is None, "无用户表面时不得产生任何 verbose"
+        # 编排层未注入 verbose_config（dispatcher 的 None 门控因此关闭注入）
+        assert execution.run_calls[0]["verbose_config"] is None
 
-    async def test_sync_state_reused_across_reruns(self, monkeypatch):
-        """cancel/merge 重跑场景模拟：两次 sync 复用同一 owner state，累计仍一条。"""
-        agent = _make_agent(
-            monkeypatch,
-            [_ROUND1_READ, _ROUND2_FINAL,
-                 _llm_round(tool_calls=[_tool_call("read", call_id="c2")], request_id="r3"), _ROUND2_FINAL],
-            tools={"read": _HookTool(LongRunningFeedback(start_message=VALID_TEXT))},
-            tool_delay=0.0,
+    async def test_sync_disabled_config_gates_policy_injection(self):
+        """配置关闭（enabled=False）：包装入口 gating 把 verbose_config 归 None，
+        内层不注入任何 verbose——这是该语义在现行架构中的落点
+        （prepare_turn_feedback；旧 impl 内联 effective_enabled 门控已不在
+        注入点，见文件头说明）。
+        """
+        agent, execution = _shell_agent(["policy", "tool_start", "response"])
+        state = VerboseFeedbackState()
+        received = []
+
+        async def callback(event):
+            received.append(event)
+
+        result = await agent.process_message_sync(
+            "帮我处理", "s-off", progress_callback=callback,
+            feedback_state=state, verbose_config=_fast_config(enabled=False),
         )
+        assert result == "完成"
+        assert not [e for e in received if e.get("type") == "verbose"]
+        assert state.event is None
+        assert execution.run_calls[0]["verbose_config"] is None
+
+    async def test_sync_state_reused_across_reruns(self):
+        """cancel/merge 重跑场景模拟：两次 sync 复用同一 owner state，累计仍一条。"""
+        agent, _execution = _shell_agent(["policy", "response"])
         state = VerboseFeedbackState()
         received = []
 
@@ -856,13 +851,9 @@ class TestSyncAndWrapperEntries:
         assert verbose_events[0]["source"] == "policy"
         assert state.event is verbose_events[0]
 
-    async def test_process_message_with_feedback_wrapper_entry(self, monkeypatch):
+    async def test_process_message_with_feedback_wrapper_entry(self):
         """显式包装入口：Web/渠道用它，policy 事件在 tool_start 前且最终回复完好。"""
-        agent = _make_agent(
-            monkeypatch,
-            [_ROUND1_READ, _ROUND2_FINAL],
-            tools={"read": _HookTool(LongRunningFeedback(start_message=VALID_TEXT))},
-        )
+        agent, _execution = _shell_agent(["policy", "tool_start", "response"])
         state = VerboseFeedbackState()
         observer = RecordingObserver()
         events = await _collect(agent.process_message_with_feedback(
@@ -877,13 +868,16 @@ class TestSyncAndWrapperEntries:
         assert types.index("verbose") < types.index("tool_start")
         assert events[types.index("response")]["data"] == "完成"
         assert state.event is not None
+        assert len(observer.emitted) == 1
+        assert observer.emitted[0]["source"] == "policy"
 
-    async def test_process_message_with_feedback_invalid_surface(self, monkeypatch):
-        agent = _make_agent(monkeypatch, [_ROUND2_FINAL])
+    async def test_process_message_with_feedback_invalid_surface(self):
+        agent, execution = _shell_agent([])
         with pytest.raises(ValueError):
             agent.process_message_with_feedback(
                 surface="sms", user_input="hi", session_id="s",
             )
+        assert execution.run_calls == [], "非法 surface 必须在校验期拒绝，不得触执行"
 
 
 # ============================================================
@@ -940,3 +934,19 @@ class TestConfigIntegration:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "--tb=short"])
+
+
+class TestForceDisabledGatesInjection:
+    """force_disabled（紧急回滚）最高优先级：注入点必须零 verbose 事件。"""
+
+    async def test_force_disabled_config_gates_policy_injection(self):
+        from src.core.verbose_feedback import VerboseFeedbackConfig
+
+        config = VerboseFeedbackConfig(enabled=True, force_disabled=True,
+                                       fallback_message=TEST_FALLBACK)
+        state = VerboseFeedbackState()
+        h = _policy_dispatcher(tools=[_hooked_read(VALID_TEXT)],
+                               config=config, state=state)
+        model = Model(completion("", [call()]), completion("完成"))
+        events = await run_engine(execution_state(), model, h.dispatcher)
+        assert not [e for e in events if e.get("type") == "verbose"]

@@ -1,14 +1,41 @@
 /**
  * 设备能力上报：providers 数组 / protocol_version / provider_manifests / 旧 provider_id 兼容；
  * 配置兼容：旧 config.json 无 providers 字段照常工作；bossCliEntry 高优先级折算。
+ * M2 扩展：skills.python 配置 → skill-runner 能力 + skills 清单（name + exec_hash）上报。
  */
 import assert from 'node:assert/strict'
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { test } from 'node:test'
 import { deviceCapabilities, resolveProviderEntries, type RuntimeConfig } from '../src/config.js'
 import { manifestDigestFor } from '../src/providers.js'
 
 function makeConfig(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {
   return { server: 'http://127.0.0.1:1', device_id: 'dev-1', ...overrides }
+}
+
+// M2 fixture：与 tests/skillRunner.test.ts 同字节的 demo-skill 样例（期望 hash 同源）
+const M2_FIXTURE_FILES: Record<string, string> = {
+  'SKILL.md':
+    '---\nname: demo-skill\nversion: 1.2.3\nmetadata:\n  entry: scripts/main.js\n  mutable:\n    - references/cache.json\n---\n\n手册正文。\n',
+  'scripts/main.js': "// 入口（stub）：echo JSON\nconsole.log('hello from demo-skill')\n",
+  'scripts/util.js': 'export const answer = 42\n',
+  'references/cache.json': '{"updated_at": "2026-01-01T00:00:00Z"}\n',
+  '__pycache__/demo.cpython-312.pyc': '\x80\x04junk',
+  'shots/shot-1.png': 'PNGDATA',
+  '.DS_Store': 'desktop junk\n',
+}
+const M2_DEMO_EXEC_HASH = '5c53b7543e10f01c442d83d2715a581b6ed7a6a4e7c7d3f7a74bc06ec3492a57'
+
+function buildSkillsDir(): string {
+  const skillsDir = mkdtempSync(path.join(os.tmpdir(), 'aidwork-caps-skills-'))
+  for (const [rel, content] of Object.entries(M2_FIXTURE_FILES)) {
+    const abs = path.join(skillsDir, 'demo-skill', rel)
+    mkdirSync(path.dirname(abs), { recursive: true })
+    writeFileSync(abs, content, 'utf8')
+  }
+  return skillsDir
 }
 
 test("boss-only（无 providers 配置）：providers=['boss-recruiting']，旧 provider_id 字段保持", () => {
@@ -117,4 +144,70 @@ test('D5 能力上报与实际生效 manifest 同源：默认 v1；v2Send 显式
   const reverted = deviceCapabilities(baseConfig as never) as typeof def
   assert.equal(reverted.provider_manifests['weixin']!.protocol_version, 1)
   assert.ok(!reverted.capabilities.includes('weixin_message_send_v2'))
+})
+
+// ---------------------------------------------------------------------------
+// M2 skill-runner：能力真实性（skills.python 配置且存在才上报）+ skills 清单
+// ---------------------------------------------------------------------------
+
+test('M2 skills.python 配置且存在：providers 含 skill-runner（键序 boss 首位）+ manifests 摘要 + skills 清单', () => {
+  const skillsDir = buildSkillsDir()
+  const caps = deviceCapabilities(makeConfig({ skills: { python: process.execPath, dir: skillsDir } }))
+  assert.deepEqual(caps['providers'], ['boss-recruiting', 'skill-runner'])
+  assert.equal(caps['provider_id'], 'ai.aidwork.boss-recruiting', 'boss 恒首位（云端兼容字段不受影响）')
+  const manifests = caps['provider_manifests'] as Record<string, Record<string, unknown>>
+  assert.equal(manifests['skill-runner']!['provider_id'], 'ai.aidwork.skill-runner')
+  assert.equal(manifests['skill-runner']!['manifest_digest'], manifestDigestFor('skill-runner'))
+  assert.equal(manifests['skill-runner']!['protocol_version'], 1)
+  // skills 清单：name + exec_hash（云端版本门对账数据源）
+  assert.deepEqual(caps['skills'], [{ name: 'demo-skill', hash: M2_DEMO_EXEC_HASH }])
+})
+
+test('M2 能力真实性：skills.python 未配置 / 文件不存在 → 不上报 skill-runner 与 skills 字段', () => {
+  const skillsDir = buildSkillsDir()
+  for (const cfg of [
+    makeConfig(),
+    makeConfig({ skills: { python: path.join(os.tmpdir(), 'no-such-python-interpreter'), dir: skillsDir } }),
+    makeConfig({ skills: { dir: skillsDir } }),
+  ]) {
+    const caps = deviceCapabilities(cfg)
+    assert.ok(!(caps['providers'] as string[]).includes('skill-runner'), '未配置/解释器缺失不得上报 skill-runner')
+    assert.equal((caps['provider_manifests'] as Record<string, unknown>)['skill-runner'], undefined)
+    assert.equal(caps['skills'], undefined, 'skills 清单仅随 skill-runner 能力上报')
+  }
+})
+
+test('M2 skills 目录不存在：skill-runner 可用但清单为空数组（区分「无技能」与「无执行器」）', () => {
+  const caps = deviceCapabilities(makeConfig({ skills: { python: process.execPath, dir: path.join(os.tmpdir(), 'aidwork-missing-skills-dir') } }))
+  assert.deepEqual(caps['providers'], ['boss-recruiting', 'skill-runner'])
+  assert.deepEqual(caps['skills'], [])
+})
+
+test('M2 键序契约：weixin+wecom+skills 并存 → boss 首位、其余字典序（skill-runner 介于其间）', () => {
+  const skillsDir = buildSkillsDir()
+  const caps = deviceCapabilities(makeConfig({
+    providers: {
+      weixin: { entry: 'C:/fake/weixin.js' },
+      wecom: { entry: 'C:/fake/wecom.js' },
+    },
+    skills: { python: process.execPath, dir: skillsDir },
+  }))
+  assert.deepEqual(caps['providers'], ['boss-recruiting', 'skill-runner', 'wecom', 'weixin'])
+  const manifests = caps['provider_manifests'] as Record<string, unknown>
+  assert.deepEqual(Object.keys(manifests), ['boss-recruiting', 'skill-runner', 'wecom', 'weixin'])
+})
+
+test('M2 skills 清单上报上限：超过 50 条截断（按目录名排序保留前 50）', () => {
+  const skillsDir = mkdtempSync(path.join(os.tmpdir(), 'aidwork-caps-many-'))
+  for (let i = 0; i <= 50; i++) {
+    const dir = path.join(skillsDir, `skill-${String(i).padStart(2, '0')}`)
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(path.join(dir, 'SKILL.md'), `---\nname: skill-${String(i).padStart(2, '0')}\n---\n`, 'utf8')
+  }
+  const caps = deviceCapabilities(makeConfig({ skills: { python: process.execPath, dir: skillsDir } }))
+  const skills = caps['skills'] as Array<{ name: string; hash: string }>
+  assert.equal(skills.length, 50, '51 条 → 截断为 50')
+  assert.ok(!skills.some((s) => s.name === 'skill-50'), '排序末位被截断')
+  assert.equal(skills[0]!.name, 'skill-00')
+  for (const s of skills) assert.match(s.hash, /^[0-9a-f]{64}$/, '每条含 exec_hash')
 })

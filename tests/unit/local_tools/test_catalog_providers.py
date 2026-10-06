@@ -118,3 +118,60 @@ class TestProviderKeysForDevice:
         assert catalog.get_provider_keys_for_device(caps) == ["boss-recruiting"]
         assert catalog.get_provider_keys_for_device(None) == []
         assert catalog.get_provider_keys_for_device({}) == []
+
+
+SKILL_RUNNER_PROVIDER_ID = "ai.aidwork.skill-runner"
+
+
+class TestSkillRunnerProviderEntry:
+    """M2（docs/plans/plan-external-skill-plugin-m2.md §4.1）：skill-runner 通用执行器
+    Provider 条目——纯追加，不动 boss/weixin/wecom 三既有条目。"""
+
+    def test_entry_registered_with_contract_fields(self):
+        entry = catalog.TRUSTED_PROVIDERS["skill-runner"]
+        assert entry["provider_id"] == SKILL_RUNNER_PROVIDER_ID
+        assert entry["min_provider_version"] == "1.0.0"
+        assert entry["execution_target"] == "local_required"
+        assert entry["tools"] == ["skill_script_run"]
+
+    def test_tool_allowlist_gates(self):
+        assert catalog.is_tool_allowed("skill-runner", "skill_script_run")
+        # 跨 provider 不串扰：其他 Provider 工具名不落在 skill-runner 白名单内
+        assert not catalog.is_tool_allowed("skill-runner", "boss_send_to")
+        assert not catalog.is_tool_allowed("skill-runner", "weixin_chat_search")
+        assert not catalog.is_tool_allowed("boss-recruiting", "skill_script_run")
+        assert not catalog.is_tool_allowed("weixin", "skill_script_run")
+
+    def test_existing_three_entries_unchanged(self):
+        """skill-runner 追加不改变三既有 Provider 条目与工具白名单"""
+        assert set(catalog.allowed_tools("boss-recruiting")) == set(
+            catalog.get_provider("boss-recruiting")["tools"])
+        assert catalog.get_provider("boss-recruiting")["provider_id"] == BOSS_PROVIDER_ID
+        assert catalog.get_provider("weixin")["provider_id"] == WEIXIN_PROVIDER_ID
+        assert catalog.get_provider("wecom")["provider_id"] == "ai.aidwork.wecom"
+        assert catalog.get_provider("nonexistent") is None
+        # 预期条目数（skill-runner 为第 4 个，2026-10 M2）
+        assert len(catalog.TRUSTED_PROVIDERS) == 4
+
+    def test_device_capabilities_with_skills_resolves_skill_runner(self):
+        """设备心跳上报（capabilities 含 skill-runner + skills 已安装清单）的解析：
+        providers 数组直接命中 + skills 清单字段原样保留（版本门第 1 层消费）"""
+        caps = {
+            "providers": ["boss-recruiting", "skill-runner"],
+            "protocol_version": 2,
+            "provider_manifests": {
+                "skill-runner": {"provider_id": SKILL_RUNNER_PROVIDER_ID, "protocol_version": 1},
+            },
+            "skills": [
+                {"name": "jingpian-house-finder", "hash": "abc123"},
+                {"name": "another-skill", "hash": "def456"},
+            ],
+        }
+        keys = catalog.get_provider_keys_for_device(caps)
+        assert "skill-runner" in keys and "boss-recruiting" in keys
+
+    def test_device_capabilities_without_skill_runner_excluded(self):
+        """未上报 skill-runner 的设备（未配置 skills.python——能力真实性对齐
+        weixin v2Send 先例）→ key 不在解析结果内（行级 claim 过滤不派发）"""
+        caps = {"providers": ["boss-recruiting"], "protocol_version": 2}
+        assert "skill-runner" not in catalog.get_provider_keys_for_device(caps)

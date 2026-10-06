@@ -29,6 +29,9 @@ class ContextAssembler:
             attachments = None
             image_paths = None
         workspace = None
+        # continuation 分支不装配图片附件，必须预置 None——公开续跑路径
+        # （agent.continue_tool_call）走 continuation 分支，缺省会 UnboundLocalError
+        image_artifacts = None
         handed_off = False
         try:
             await asyncio.to_thread(self.history.reader.assert_authorized)

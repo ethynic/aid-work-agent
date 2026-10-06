@@ -155,17 +155,25 @@ class SkillLoader:
     这种设计保持上下文精简，同时允许任意深度的资源访问。
     """
     
-    def __init__(self, skills_dir: Path):
+    def __init__(self, skills_dir: Path, include: Optional[set] = None, run_init: bool = True):
         """
         初始化Skill加载器
-        
+
         Args:
             skills_dir: Skill目录路径
+            include: 仅注册 frontmatter name 命中该集合的 skill（None 表示不过滤）。
+                未注册的 skill 不参与 _init_skill_tables——外部插件目录 loader
+                以此确保插件 init_script 不被 importlib 执行（纵深防御第一层，
+                见 docs/plans/plan-external-skill-plugin-m1.md §3.2）。
+            run_init: 是否在加载后执行 skill 声明的 init_script（默认 True，现状
+                行为）。插件目录 loader 必须传 False。
         """
         self.skills_dir = Path(skills_dir)
         self.skills: Dict[str, Skill] = {}
         self._metadata_cache: Dict[str, Dict] = {}  # 元数据缓存
-        
+        self._include = include
+        self._run_init = run_init
+
         if self.skills_dir.exists():
             self.load_skills()
         else:
@@ -354,13 +362,18 @@ class SkillLoader:
 
             skill = self.parse_skill_md(skill_md)
             if skill:
+                # include 过滤：未命中的 skill 不注册（插件审批门 include 集），
+                # 未注册即不参与 _init_skill_tables
+                if self._include is not None and skill.name not in self._include:
+                    continue
                 self.skills[skill.name] = skill
                 # logger.info(f"Loaded skill: {skill.name} v{skill.version}")
 
         logger.info(f"Total skills loaded: {len(self.skills)}")
 
-        # 对需要数据库初始化的 skill 执行初始化
-        self._init_skill_tables()
+        # 对需要数据库初始化的 skill 执行初始化（插件 loader run_init=False 跳过）
+        if self._run_init:
+            self._init_skill_tables()
 
     def _init_skill_tables(self):
         """初始化需要数据库表的 skill（通用机制）

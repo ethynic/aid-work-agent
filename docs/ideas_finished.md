@@ -35,6 +35,7 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
+| 20261006-0958 | 外部 Skill 插件机制（M1 知识层） | ✅ 已完成开发（开发+独立测试+CR，257 单测 + 26 集成验收全绿，未部署）。插件目录链+审批/hash 门+同名拒绝；M1 全拦插件云端执行（device 占位）；第二轮整改含 33f9dba1 遗留修复（红测试/截断豁免断链/续跑崩溃）。执行路由与设备侧属 M2（另行立项）。 | [调研](../research/external-skill-plugin-integration-research.md) | [开发计划](../plans/plan-external-skill-plugin-m1.md) |
 | 20260901-1358 | 客户端计费统一接入（boss cli / 协会采集 / 未来客户端三模式） | ✅ 已完成开发。 | [设计](design/billing/client-billing-integration-design.md) | — |
 | 20260922-0920 | 知识库文档元数据查看 | ✅ 已完成开发（开发+独立测试+审查，待部署）。文档操作列新增「详情」弹窗查看 documents.metadata：溯源/易变字段键值展示、raw_payload 折叠 JSON；新增 GET /documents/{id} 详情接口（按需拉取，租户隔离与 chunks 同口径）。 | [设计](system/knowledge-base/doc-metadata-view-design.md) | — |
 | 20260918-2031 | 生产主日志 WARNING 审计（09-16~09-18） | ✅ 全部完成。3 天 119 条 WARNING 聚合 8 类全部收口：#1 deepseek-flash 部署时差噪音、#3 丢弃预览加长 500 字符（含完整 ASR 文本）、#4 sanitizer 降级 INFO + source 来源标签（8 入口）、#6 Redis DNS 降级三层防御（compose 健康依赖 + 启动重试 + 恢复清残留）、#7 ASR 400 根因为免费试用过期（渠道侧 WARNING 降级 INFO）、#2/#5/#8 人工核对/观察；另 agent_update.sh 发版不再连带重启 redis、Redis 夜间巡检任务（每日 00:30）上线。 | — | [审计报告](ops/log-warning-audit-20260918.md) |

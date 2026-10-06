@@ -77,17 +77,28 @@ class TenantSkillCache:
         tenant_id: str,
         base_skills_dir: Path,
     ) -> Dict[str, Skill]:
-        """从磁盘加载基础 + 租户 skills 并合并（全量，不过滤 allowed）"""
+        """从磁盘加载基础 + 租户 skills 并合并（全量，不过滤 allowed）
+
+        base 部分经审批门（skill_plugin_gate.build_base_registry_sources）：
+        内置 + 已审批插件（插件 loader run_init=False），未审批 / hash 不符 /
+        与内置同名的插件在 gate 扫描阶段剔除——租户链不得绕过审批门
+        （docs/plans/plan-external-skill-plugin-m1.md §3.7）。
+        """
         try:
             combined: Dict[str, Skill] = {}
 
-            # 1. 加载基础 skills
+            # 1. 加载基础 skills（内置 + 已审批插件，经 gate）
             if base_skills_dir.exists():
-                base_loader = SkillLoader(base_skills_dir)
-                combined.update(base_loader.skills)
-                logger.debug(f"[TenantSkillCache] 基础 skills: {len(base_loader.skills)} 个")
+                from src.core.skill_plugin_gate import build_base_registry_sources
+                sources = build_base_registry_sources(base_skills_dir)
+                combined.update(sources.builtin_loader.skills)
+                for plugin_loader in sources.plugin_loaders:
+                    combined.update(plugin_loader.skills)
+                logger.debug(f"[TenantSkillCache] 基础 skills: {len(combined)} 个"
+                             f"（插件目录 {len(sources.plugin_loaders)} 个经审批门加载）")
 
-            # 2. 加载租户 skills（覆盖同名基础 skill）
+            # 2. 加载租户 skills（覆盖同名基础/插件 skill；租户目录身份判定下
+            #    不被误判为插件，可读可执行语义不变）
             tenant_dir = SkillResolver.get_tenant_skills_dir(tenant_id)
             if tenant_dir.exists():
                 tenant_loader = SkillLoader(tenant_dir)
@@ -100,7 +111,7 @@ class TenantSkillCache:
 
         except Exception as e:
             logger.error(f"[TenantSkillCache] 加载租户 {tenant_id} skills 失败: {e}")
-            # Fallback: 仅加载基础 skills
+            # Fallback: 仅加载基础 skills（不经过插件目录——审批门不可用时不放行插件）
             try:
                 if base_skills_dir.exists():
                     base_loader = SkillLoader(base_skills_dir)

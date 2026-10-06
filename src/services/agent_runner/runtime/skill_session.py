@@ -54,7 +54,8 @@ class SkillSession:
             if cached and self._skills_loaded_at >= cached[1]:
                 return
 
-        # 加载合并后的 skills
+        # 加载合并后的 skills（base 部分经审批门：内置 + 已审批插件，见
+        # tenant_skill_cache._load_and_merge；插件 loader 由 gate 构造）
         from src.saas.services.tenant_skill_cache import tenant_skill_cache
         from src.saas.services.skill_resolver import SkillResolver
 
@@ -63,8 +64,7 @@ class SkillSession:
             tenant_id, base_skills_dir, self.skill_registry._allowed,
         )
 
-        # 重建 _loaders 映射
-        base_loader = self.skill_registry._loader
+        # 租户 skills 目录解析（mkdir 失败不抛垮 processor）
         try:
             tenant_dir = SkillResolver.get_tenant_skills_dir(tenant_id)
         except Exception as e:
@@ -76,13 +76,62 @@ class SkillSession:
             from src.core.skill_loader import SkillLoader
             tenant_loader = SkillLoader(tenant_dir)
 
-        new_loaders = {}
-        if base_loader:
-            for name in base_loader.skills:
-                new_loaders[name] = base_loader
+        # 重建 _loaders 映射：以 registry 的 base loaders 快照起底（内置 + 插件，
+        # load_from_* 全量加载时维护，不含任何租户 overlay），租户 loader 覆盖其上。
+        # 替代旧 `registry._loader` 单 loader 起底——多目录链下 _loader 为 None
+        # （load_from_sources）或指向最后目录（load_from_directories）的错位隐患
+        # （计划 §3.7）。租户覆盖同名插件后按目录身份判定为租户 skill，
+        # 不被插件执行拦截/内容门误伤。
+        # 不得以 registry._loaders 当前值起底：resource_cache 共享实例被前一次
+        # 租户执行原地改写后，其中已含该租户的 loader 映射——下一个租户起底会
+        # 带入残留（本租户未覆盖同名时不被冲掉），导致 get_content 经 stale
+        # loader 串读前一租户手册、插件同名场景 is_plugin_skill=False 使 M1
+        # 执行拦截失效（跨租户串读回归，CR 阻断级意见）。
+        base_loaders = getattr(self.skill_registry, "_base_loaders", None)
+        if base_loaders is None:
+            # 兼容未维护快照的 registry：按目录身份过滤当前 _loaders，仅保留
+            # 内置目录与插件目录的 loader（无法识别目录身份的 loader 保守丢弃，
+            # 宁少勿串）。AgentRunner 链（load_from_sources）始终维护快照，不走此分支。
+            plugin_dirs = set()
+            for d in getattr(self.skill_registry, "_plugin_loader_dirs", ()) or ():
+                try:
+                    plugin_dirs.add(Path(d).resolve())
+                except (TypeError, OSError):
+                    continue
+            builtin_root = base_skills_dir.resolve()
+            base_loaders = {}
+            for name, loader in dict(self.skill_registry._loaders).items():
+                try:
+                    loader_dir = Path(loader.skills_dir).resolve()
+                except (TypeError, OSError):
+                    continue
+                if loader_dir == builtin_root or loader_dir in plugin_dirs:
+                    base_loaders[name] = loader
+
+        new_loaders = dict(base_loaders)
         if tenant_loader:
             for name in tenant_loader.skills:
-                new_loaders[name] = tenant_loader  # 租户覆盖基础
+                new_loaders[name] = tenant_loader  # 租户覆盖基础/插件
+
+        # 撤销/hash 不符触发的租户 TTL 300s 半状态：缓存合并结果可能带出当前
+        # registry 已剔除的插件 skill（新实例 _plugin_hashes 不含）。注回 _skills
+        # 前按目录身份剔除，避免已撤销插件重新出现在工具描述与 registry.get；
+        # 执行门另由 is_plugin_skill 的目录身份 fail-closed 兜底双保险（计划 §3.1）。
+        current_plugin_hashes = getattr(self.skill_registry, "_plugin_hashes", None)
+        is_plugin_dir = getattr(self.skill_registry, "is_plugin_dir", None)
+        if current_plugin_hashes is not None and callable(is_plugin_dir):
+            dropped = sorted(
+                name for name, skill in skills_dict.items()
+                if name not in current_plugin_hashes and is_plugin_dir(getattr(skill, "dir", None))
+            )
+            if dropped:
+                # 构造新 dict 而非原地删：skills_dict 可能是 tenant_skill_cache
+                # 缓存内的全量 dict（allowed=None 时原样返回），原地改会污染进程缓存
+                skills_dict = {
+                    name: skill for name, skill in skills_dict.items() if name not in set(dropped)
+                }
+                logger.warning(f"租户 {tenant_id} 合并结果含 {len(dropped)} 个当前审批集外"
+                               f"的插件 skill（TTL 半状态残留），已剔除: {dropped}")
 
         # 应用到当前 registry
         self.skill_registry._skills = dict(skills_dict)

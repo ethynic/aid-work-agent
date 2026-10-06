@@ -105,7 +105,11 @@ class ToolDispatcher:
                     if isinstance(terminal.content,dict) else 'Tool execution failed')
 
     def before_tools(self, state):
-        if self.verbose_config is None or self.verbose_state is None or state.iteration in self.policy_iterations:
+        # disabled 配置在注入点直接拦截（对齐 prepare_turn_feedback 的
+        # effective_enabled 门），直连 process_message_with_feedback 的调用
+        # 不会绕过全局关闭开关
+        if (self.verbose_config is None or not self.verbose_config.effective_enabled
+                or self.verbose_state is None or state.iteration in self.policy_iterations):
             return []
         from src.core.verbose_feedback import build_policy_verbose_event
         self.policy_iterations.add(state.iteration)

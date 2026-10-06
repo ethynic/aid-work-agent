@@ -117,4 +117,7 @@ class ControlToolAdapter:
                 output = f"\n❌ 重新执行任务失败：{result.get('error') or '重新执行失败'}"
             yield DispatchResult(result, success=success, final_output=str(output).strip())
             return
-        yield DispatchResult(result, success=success, preserve_content=name == "use_skill")
+        # 与普通工具路径（tools.py 的 _no_truncate pop）对齐：控制工具（如
+        # skill_execute）声明的截断豁免同样生效，且该键不残留进 LLM 内容
+        preserve = name == "use_skill" or bool(isinstance(result, dict) and result.pop("_no_truncate", False))
+        yield DispatchResult(result, success=success, preserve_content=preserve)

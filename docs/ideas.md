@@ -29,6 +29,7 @@
 
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
+| 20261006-1204 | 外部 Skill 插件机制 M2（执行路由 + skill-runner Provider） | 🔧 部分完成（待真机验收） | 云端+设备端开发完成、测试门/typecheck 通过；评审修复 3 条复核未全过，待 Windows 真机验收。 | [调研](research/external-skill-plugin-integration-research.md) | [开发计划](plans/plan-external-skill-plugin-m2.md) |
 | 20261001-1849 | AgentRunner 独立服务 | 🔧 部分完成（M6a 完成） | M0–M6a 完成；接手修复2条错误测试尾批全绿。M7 进行中（性能/adapter契约/KF client池化等整改，详见计划）。M6b/c 待开发。 | [设计](system/agent-application-architecture-design.md) | [计划](plans/plan-agent-runner-service.md) / [交接](plans/agent-runner-m6a-handoff-2026-10-04.md) |
 | 20260920-1006 | API 数据源入知识库（api_ingest，多租户通用） | ⛔ 暂不开发（宏陶由专用模块承接） | **文档即配置、agent 驱动、不写每接口代码**：租户上传接口文档 → agent 实探生成源契约 → dry-run 人审；运行期契约直执（白名单 HttpApiTool 翻页，零 token）+ agent_loop 兜底；键值数据按字段 label 转语义 markdown、原始记录存 metadata.raw_payload；**知识粒度由 agent 决定**（产品类一记录=一条知识整条入库，长文类切分）；in_doc/metadata_only 分家防易变字段重嵌入；external_id/hash 判新增更新、幂等 upsert、调度协程、two_strike 删除、手动 API+工具；已按宏陶商城 API 说明完成适配核对。 | [设计](system/api-ingest/api-ingest-knowledge-design.md) | [开发计划](plans/plan-api-ingest-knowledge.md) |
 | 20260921-1100 | 宏陶商城产品知识库同步（hongtao_shop 专用模块） | 🔧 部分完成 | P1 已提交（f9e8dcbf）；P2 后端已提交（0fa634c5，含按需加载/单闸/退避强制）；P2.3 前端完成（build 过）；P2.5 已提交（c1993b04）；agent2 试跑修复三轮（v1.6 VL 上限 400/v1.7 正文结构化字段/v1.8 去开场句+部分同步更名+滚动修复），17 产品已重灌，待全量验收。 | [设计](system/hongtao-shop/hongtao-shop-kb-design.md) | [开发计划](plans/plan-hongtao-shop-kb.md) |
