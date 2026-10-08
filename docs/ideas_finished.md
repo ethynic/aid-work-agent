@@ -123,7 +123,7 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
-| 20261008-1340 | 微信客服原渠道恢复与 AgentRunner 接入 | ✅ 已完成开发：原渠道接入独立 Runner，误重构已移除，迁移历史保留，待真机验收。 | [设计](system/agent-application-architecture-design.md) | [计划](plans/plan-kf-voice-fix-and-session-unlock.md) |
+| 20261008-1340 | 微信客服原渠道恢复与 AgentRunner 接入 | ✅ 已完成开发：原渠道接入独立 Runner，误重构已移除，迁移历史保留；agent2 已发布并真机验收通过（文本/语音/合并/取代）。 | [设计](system/agent-application-architecture-design.md) | [计划](plans/plan-wecom-kf-channel-restore.md) |
 | 20260713-1358 | RPA 连续消息合并与无效 Trace 治理 | ✅ 已完成开发。稳定 session key 与 legacy 原地迁移、Redis 原子 finalizing/ownership lease、文本及附件 merge/pending、Trace 显式终止语义、监控页中间过程折叠。 | [方案](channel/wecom-personal-rpa-message-merge-and-trace-plan.md) / [关联设计](channel/concurrent-message-serialization-plan.md) | [开发计划](channel/wecom-personal-rpa-message-merge-and-trace-dev-plan.md) |
 | 20260713-1821 | RPA 自消息循环与错发防护 | ✅ 已完成开发。 | [优化方案](channel/wecom-personal-rpa-self-message-loop-and-safe-send-plan.md) | [技术实现与开发计划](channel/wecom-personal-rpa-self-message-loop-and-safe-send-dev-plan.md) |
 | 20260606-1456 | RPA 客户端 EXE 单一交付 | ✅ 已完成开发。按运维决策永久下线安装包交付：删除安装包工程、构建/安装脚本及专属指南，只保留 `dotnet build -c Release` 本机编译和 `scripts/publish.ps1` 自包含 EXE 目录发布；同步 README、状态、操作手册、设计与计划，并新增静态防回归检查。 | — | — |
