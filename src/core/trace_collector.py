@@ -282,7 +282,17 @@ class TraceCollector:
             "compression_ratio": event.get("compression_ratio", 0.0),
             "fallback_used": bool(event.get("fallback_used", False)),
             "trigger_reason": event.get("trigger_reason", ""),
+            "summary_truncated": bool(event.get("summary_truncated", False)),
         }
+        span_usage = None
+        prompt_tokens = int(event.get("llm_prompt_tokens") or 0)
+        completion_tokens = int(event.get("llm_completion_tokens") or 0)
+        if prompt_tokens or completion_tokens:
+            span_usage = {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "cached_tokens": int(event.get("llm_cached_tokens") or 0),
+            }
         span = SpanRecord(
             span_id=f"sp_{uuid.uuid4().hex[:16]}",
             name="context_compressed",
@@ -297,6 +307,7 @@ class TraceCollector:
             success=True,
             model=event.get("llm_model"),
             provider=event.get("llm_provider"),
+            usage=span_usage,
             compression_info=info,
         )
         self.trace.spans.append(span)

@@ -248,16 +248,23 @@ class TestCompressSessionBilling:
         before = _count_chat_records(tenant_id)
 
         async def fake_direct(*args, **kwargs):
-            return ("summary text", fake_usage)
+            return ("summary text", fake_usage, "stop")
 
         with patch(
             "src.memory.mid_term._call_summary_llm_direct", new=fake_direct
         ), patch(
             "src.memory.mid_term._get_provider_api_key",
             return_value="fake_key_for_test",
+        ), patch(
+            # 本用例 COMPRESS 区只有 1 条消息，远小于经济性闸门阈值；
+            # 计费链路验证需绕过闸门强制走 LLM 路径
+            "src.memory.mid_term._SUMMARY_GATE_MIN_INPUT_TOKENS",
+            0,
         ):
             import asyncio
-            result = asyncio.get_event_loop().run_until_complete(
+            # asyncio.run 每次新建 loop；get_event_loop 在前面的 pytest-asyncio
+            # 测试之后运行会因主线程无当前 loop 抛 RuntimeError（顺序依赖）
+            result = asyncio.run(
                 service.compress_session(session_id, "chat", force=True)
             )
 

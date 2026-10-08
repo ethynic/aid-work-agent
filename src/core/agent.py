@@ -1281,6 +1281,10 @@ class Agent:
                             llm_provider=result.llm_provider,
                             llm_model=result.llm_model,
                             duration_ms=duration_ms,
+                            llm_prompt_tokens=result.llm_prompt_tokens,
+                            llm_completion_tokens=result.llm_completion_tokens,
+                            llm_cached_tokens=result.llm_cached_tokens,
+                            summary_truncated=result.summary_truncated,
                         )
                         # 暂存，让 _process_message_impl 在压缩后立即 yield
                         self._pending_compression_event = event.to_dict()
@@ -2292,6 +2296,7 @@ class Agent:
             tenant_id=_resolve_tenant_id,
             user_id=user.user_id if user else getattr(self, "_init_user_id", None),
             session_id=session_id,
+            channel=ExecutionContextFactory.channel_from_record(),
             subagent_id=(
                 self.subagent_config.dir_name
                 if self.subagent_config and getattr(self.subagent_config, "dir_name", None)
@@ -3482,6 +3487,7 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
             tenant_id=self._init_tenant_id,
             user_id=self._init_user_id,
             session_id=parent_session_id,
+            channel=ExecutionContextFactory.channel_from_record(),
             subagent_id=(
                 self.subagent_config.dir_name
                 if self.subagent_config and getattr(self.subagent_config, "dir_name", None)

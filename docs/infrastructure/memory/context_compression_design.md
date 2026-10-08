@@ -302,7 +302,7 @@ def _should_compress(messages: list[dict], model_limit: int) -> tuple[bool, str]
 ```yaml
 memory:
   mid_term:
-    header_keep: 3              # 头部保留消息数（必须是连续的完整 user+assistant 对）
+    header_keep: 0              # 头部保留消息数（0=开场消息一并压缩，避免摘要与开场原文的时序倒挂；>0 时须为连续的完整 user+assistant 对）
     tail_keep: 30               # 尾部保留消息数（按工具链边界对齐后可能略多于 30）
     token_threshold_ratio: 0.7  # token 主阈值比例（占模型上限）
     message_count_threshold: 200  # 消息数兜底阈值
@@ -463,7 +463,7 @@ memory:
     message_count_threshold: 200     # 消息数兜底阈值（含工具消息）
 
     # 分段保留
-    header_keep: 3                   # 头部保留消息数
+    header_keep: 0                   # 头部保留消息数（0=开场消息一并压缩，避免时序倒挂）
     tail_keep: 30                    # 尾部保留消息数（按工具链边界对齐）
 
     # 摘要 LLM
@@ -498,7 +498,7 @@ class MidTermMemoryConfig(BaseModel):
     token_threshold_ratio: float = 0.7
     message_count_threshold: int = 200
     # 分段保留
-    header_keep: int = 3
+    header_keep: int = 0
     tail_keep: int = 30
     # 摘要 LLM
     summary_max_tokens: int = 1500

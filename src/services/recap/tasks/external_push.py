@@ -138,6 +138,11 @@ def _accumulate_obs_cost(payload: RecapPayload, usage: Any, model: Optional[str]
     """
     if not isinstance(usage, dict):
         return
+    # token 累计先于计价：计价异常（如价目缺失）不应丢失 token 观测
+    tokens = int(usage.get("prompt_tokens") or 0) + int(
+        usage.get("completion_tokens") or 0
+    )
+    payload._obs_tokens = getattr(payload, "_obs_tokens", 0) + tokens
     try:
         from src.services.billing import calculate_credit_cost
 
@@ -165,7 +170,8 @@ def _trace_summary(payload: RecapPayload, status: str, detail: str) -> None:
                 "detail": _truncate(str(detail), _TRACE_TRUNCATE_CHARS),
                 "round": str(payload.round_message_id),
             },
-        }, total_cost=round(getattr(payload, "_obs_cost", 0.0), 2))
+        }, total_cost=round(getattr(payload, "_obs_cost", 0.0), 2),
+        total_tokens=int(getattr(payload, "_obs_tokens", 0)))
     except Exception as e:
         logger.debug(f"[external_push] trace summary 写入失败: {e}")
 

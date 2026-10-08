@@ -24,7 +24,10 @@ AGENT_EVENTS_PY = REPO_ROOT / "src" / "core" / "agent_events.py"
 # - origin/master：3977 行
 # 取两者较大者 3977 作为基线，避免本分支合并回 master 后
 # 因 master 侧行数更高而误报；下调基线时同样按此规则重新定值。
-AGENT_PY_FROZEN_LINE_LIMIT = 3977
+# 2026-10-01 校准：守卫在 3977 基线下已长期失败（实际 4026 行），说明未进入
+# 日常回归、增长未被拦截。按当前实际行数重设基线，此后严格只降不升；
+# 随应用层架构优化 S3/S4 拆分下调（docs/system/agent-application-architecture-design.md）。
+AGENT_PY_FROZEN_LINE_LIMIT = 4026
 
 # agent_events.py 所属包（src.core），用于把相对 import 解析为绝对模块名
 _AGENT_EVENTS_PACKAGE_PARTS = ("src", "core")

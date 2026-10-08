@@ -8,7 +8,7 @@
 
 | 主题 | 状态 | 文档 |
 |---|---|---|
-| Desktop 本地工具、服务端工具与远端 Runtime 分工 | 📋 调研完成；业务执行所有权以当前 P1 为准 | [调研](research/desktop-agent-local-vs-server-tool-execution-research.md) / [当前 P1](plans/plan-desktop-client-p1.md) |
+| Desktop 本地工具、服务端工具与远端 Runtime 分工 | 📋 调研完成；业务执行所有权待桌面规划重写 | [调研](research/desktop-agent-local-vs-server-tool-execution-research.md) |
 | 第一方 CLI / MCP Provider 跨 Host 规范 | 📋 规范完成 | [架构规范](system/first-party-cli-mcp-provider-standard.md) |
 
 ## 企业 Agent 平台长期设想

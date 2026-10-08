@@ -1,6 +1,6 @@
 # Desktop Agent protocol source
 
-> **Frozen legacy D1（2026-09-22）**：该协议尚未发布，现只用于 DC0 调用方/删除审计和旧测试识别，不再增加 `agent/next`、outcome 或客户端推进 Run 的正式能力。新 Desktop 直接使用统一 Agent API，Runtime 使用 Device API；目标协议与迁移计划见 `docs/plans/plan-desktop-client-p1.md` 和 `docs/plans/plan-desktop-client-p1-implementation.md`。新协议可用并完成依赖迁移后删除本目录，不建立兼容层。
+> **Frozen legacy D1（2026-09-22）**：该协议尚未发布，现只用于 DC0 调用方/删除审计和旧测试识别，不再增加 `agent/next`、outcome 或客户端推进 Run 的正式能力。新 Desktop 直接使用统一 Agent API，Runtime 使用 Device API；原桌面 P1 规划已于 2026-10-01 删除，目标协议待按 `docs/system/agent-application-architecture-design.md` 重写桌面规划时确定。新协议可用并完成依赖迁移后删除本目录，不建立兼容层。
 
 本目录曾是 Desktop Coordinator 与服务端之间的 D1 协议源，保留完整关联链、四种 Agent Turn
 outcome、版本协商和 Remote Tool Gateway invoke 契约，仅供识别旧调用方和验证安全删除。

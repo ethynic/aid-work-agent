@@ -31,10 +31,23 @@ export async function listWebSessionUsers(params: {
   return res.json()
 }
 
+// 获取用户网页端会话中出现过的智能体去重列表（下拉框选项）
+export async function listUserSessionAgents(user_id: string): Promise<{
+  success: boolean
+  agents?: { agent_id: string; agent_name: string; session_count: number }[]
+  message?: string
+}> {
+  const res = await fetch(`${API_BASE}/users/${encodeURIComponent(user_id)}/agents`, {
+    headers: getSaasAuthHeader()
+  })
+  if (!res.ok) throw new Error('获取智能体列表失败')
+  return res.json()
+}
+
 // 获取用户的网页端会话列表
 export async function getUserWebSessions(params: {
   user_id: string
-  agent_keyword?: string
+  subagent_id?: string
   page?: number
   page_size?: number
 }): Promise<{
@@ -46,7 +59,7 @@ export async function getUserWebSessions(params: {
   message?: string
 }> {
   const searchParams = new URLSearchParams()
-  if (params.agent_keyword) searchParams.set('agent_keyword', params.agent_keyword)
+  if (params.subagent_id) searchParams.set('subagent_id', params.subagent_id)
   if (params.page) searchParams.set('page', params.page.toString())
   if (params.page_size) searchParams.set('page_size', params.page_size.toString())
 

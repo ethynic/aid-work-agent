@@ -39,6 +39,9 @@ def page_inventory(doc, pno, search=None):
 
 
 def main():
+    if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help"):
+        print(__doc__.strip())
+        return
     pdf = sys.argv[1]
     doc = fitz.open(pdf)
     if "--all" in sys.argv:

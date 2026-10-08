@@ -2,7 +2,8 @@
 
 路由：/api/saas/web-sessions/*
 - 有网页端会话的用户列表（用户名搜索）
-- 用户的网页端会话列表（智能体名称搜索）
+- 用户的网页端会话中出现过的智能体去重列表（下拉框选项）
+- 用户的网页端会话列表（智能体精确筛选）
 - 会话消息查询
 
 数据源：chat_sessions / chat_messages（web 端专用表，与渠道表分离）
@@ -53,11 +54,58 @@ async def list_web_session_users(
         raise HTTPException(status_code=500, detail="查询用户列表失败")
 
 
+@router.get("/users/{user_id}/agents")
+async def list_user_web_session_agents(request: Request, user_id: str):
+    """获取用户网页端会话中出现过的智能体去重列表（用于会话筛选下拉框）
+
+    Returns:
+        agents: [{agent_id, agent_name, session_count}]，主智能体会话
+        以 agent_id="master" 表示，排在最前
+    """
+    admin = require_admin(request)
+    tenant_id = admin.get("tenant_id")
+
+    if not tenant_id:
+        raise HTTPException(status_code=400, detail="缺少租户信息")
+
+    # 与 sessions 接口口径一致：仅校验用户存在，租户隔离由查询的 tenant_id 过滤保证
+    user = UserDB.get_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="用户不存在")
+
+    try:
+        rows = UserDB.get_user_session_agent_counts(user_id=user_id, tenant_id=tenant_id)
+        agent_ids = [r["subagent_id"] for r in rows if r["subagent_id"]]
+        name_map = SubagentDefinitionDB.get_name_map(agent_ids) if agent_ids else {}
+
+        agents = []
+        for r in rows:
+            sid = r["subagent_id"]
+            if sid:
+                agents.append({
+                    "agent_id": sid,
+                    "agent_name": name_map.get(sid, sid),
+                    "session_count": r["session_count"],
+                })
+            else:
+                agents.insert(0, {
+                    "agent_id": "master",
+                    "agent_name": "主智能体",
+                    "session_count": r["session_count"],
+                })
+        return {"success": True, "agents": agents}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.opt(exception=True).error(f"网页端会话智能体列表查询失败: {e}")
+        raise HTTPException(status_code=500, detail="查询智能体列表失败")
+
+
 @router.get("/users/{user_id}/sessions")
 async def get_user_web_sessions(
     request: Request,
     user_id: str,
-    agent_keyword: Optional[str] = None,
+    subagent_id: Optional[str] = None,
     page: int = 1,
     page_size: int = 20,
 ):
@@ -65,7 +113,7 @@ async def get_user_web_sessions(
 
     Args:
         user_id: 用户ID
-        agent_keyword: 智能体名称搜索（可选，按智能体名称/ID 模糊匹配）
+        subagent_id: 智能体精确筛选（可选）；"master" 表示主智能体（subagent_id 为空）
         page: 页码
         page_size: 每页数量
     """
@@ -84,24 +132,17 @@ async def get_user_web_sessions(
 
     try:
         subagent_ids = None
-        if agent_keyword:
-            # 智能体先按名称/ID 翻译成 agent_id 集合再匹配（与办公软件会话 keyword 口径一致）
-            from src.db.database import get_db_connection
-
-            with get_db_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    "SELECT agent_id FROM subagent_definitions WHERE name ILIKE %s OR agent_id ILIKE %s",
-                    (f"%{agent_keyword}%", f"%{agent_keyword}%"),
-                )
-                subagent_ids = [row["agent_id"] for row in cursor.fetchall()]
-            if not subagent_ids:
-                return {"success": True, "sessions": [], "total": 0, "page": page, "page_size": page_size}
+        master_agent_only = False
+        if subagent_id == "master":
+            master_agent_only = True
+        elif subagent_id:
+            subagent_ids = [subagent_id]
 
         result = UserDB.get_user_sessions(
             user_id=user_id,
             tenant_id=tenant_id,
             subagent_ids=subagent_ids,
+            master_agent_only=master_agent_only,
             page=page,
             page_size=page_size,
         )

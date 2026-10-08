@@ -46,6 +46,27 @@ def _remember_pending_total_cost(trace_id: str, total_cost: float) -> None:
             _pending_total_cost_updates.pop(oldest_trace_id, None)
 
 
+def _compute_span_cost(model: str, usage: dict) -> float:
+    """按价目表计算 span 观测成本（best-effort，算不出返回 0）。
+
+    仅用于 obs_spans.cost 展示口径，非计费权威（计费走 chat_records）。
+    """
+    if not model or not usage:
+        return 0.0
+    try:
+        from src.services.billing import calculate_credit_cost
+
+        return float(calculate_credit_cost(
+            prompt_tokens=int(usage.get("prompt_tokens") or 0),
+            completion_tokens=int(usage.get("completion_tokens") or 0),
+            model=model,
+            cached_input_tokens=int(usage.get("cached_tokens") or 0),
+        ) or 0.0)
+    except Exception as e:
+        logger.debug(f"span cost calc failed (model={model}): {e}")
+        return 0.0
+
+
 def schedule_persist(trace: 'TraceRecord'):
     """将 trace 数据放入异步持久化队列"""
     global _worker_started
@@ -117,6 +138,8 @@ def _do_persist(trace):
                     "model": trace.model,
                     "provider": trace.provider,
                     **(getattr(trace, "metadata", None) or {}),
+                    # total_tokens 口径标注：主对话记录（含压缩），不含独立落账的后台调用
+                    "total_tokens_scope": "session_record_main",
                 }, ensure_ascii=False),
                 trace.tags, trace.total_tokens, getattr(trace, "total_cost", 0),
                 trace.duration_ms,
@@ -170,12 +193,12 @@ def _do_persist(trace):
                     INSERT INTO obs_spans
                         (span_id, trace_id, parent_span_id, span_type, name,
                          input, output, metadata, model,
-                         prompt_tokens, completion_tokens,
+                         prompt_tokens, completion_tokens, cached_tokens, cost,
                          start_time, end_time, duration_ms, status,
                          error_message, created_at)
                     VALUES (%s, %s, NULL, %s, %s,
                             %s, %s, %s, %s,
-                            %s, %s,
+                            %s, %s, %s, %s,
                             to_timestamp(%s), to_timestamp(%s), %s, %s,
                             NULL, NOW())
                     ON CONFLICT (span_id) DO NOTHING
@@ -186,6 +209,8 @@ def _do_persist(trace):
                     span.model,
                     (span.usage or {}).get("prompt_tokens", 0),
                     (span.usage or {}).get("completion_tokens", 0),
+                    (span.usage or {}).get("cached_tokens", 0),
+                    _compute_span_cost(span.model, span.usage or {}),
                     span.start_time, span.end_time,
                     span.duration_ms,
                     'completed' if span.success else 'failed',
@@ -330,12 +355,12 @@ def append_recap_span(
                 INSERT INTO obs_spans
                     (span_id, trace_id, parent_span_id, span_type, name,
                      input, output, metadata, model,
-                     prompt_tokens, completion_tokens,
+                     prompt_tokens, completion_tokens, cached_tokens, cost,
                      start_time, end_time, duration_ms, status,
                      error_message, created_at)
                 VALUES (%s, %s, NULL, %s, %s,
                         %s, %s, %s, %s,
-                        %s, %s,
+                        %s, %s, %s, %s,
                         to_timestamp(%s), to_timestamp(%s), %s, %s,
                         NULL, NOW())
                 ON CONFLICT (span_id) DO NOTHING
@@ -346,6 +371,8 @@ def append_recap_span(
                 model,
                 usage.get("prompt_tokens", 0),
                 usage.get("completion_tokens", 0),
+                usage.get("cached_tokens", 0),
+                _compute_span_cost(model, usage),
                 start_ts, end_ts,
                 duration_ms,
                 'completed' if success else 'failed',
@@ -355,16 +382,26 @@ def append_recap_span(
         logger.warning(f"append_recap_span failed (trace_id={trace_id}, name={name}): {e}")
 
 
-def append_recap_summary(trace_id: str, metadata: dict, total_cost: float = 0.0) -> None:
+def append_recap_summary(
+    trace_id: str,
+    metadata: dict,
+    total_cost: float = 0.0,
+    total_tokens: int = 0,
+) -> None:
     """recap 任务结束时向 obs_traces 合并任务摘要 metadata 并累加观测成本。
 
-    metadata 按 JSONB merge 写入（如 metadata.recap = {...}）；total_cost 与
-    update_total_cost 同语义取 GREATEST，不回退已有值。obs_traces 主行尚未
-    落库的窄窗口（rowcount=0）只记 warning，不做补丁重放——recap 执行通常
-    在 trace 落库后数十秒，窗口极窄。失败不影响 recap 业务。
+    metadata 按 JSONB merge 写入（如 metadata.recap = {...}）；total_tokens>0
+    时同步写 metadata.recap_tokens（本次 recap 各 span token 总和，与
+    total_tokens 主对话口径区分）；total_cost 与 update_total_cost 同语义取
+    GREATEST，不回退已有值。obs_traces 主行尚未落库的窄窗口（rowcount=0）
+    只记 warning，不做补丁重放——recap 执行通常在 trace 落库后数十秒，窗口
+    极窄。失败不影响 recap 业务。
     """
     if not trace_id:
         return
+    if total_tokens:
+        metadata = dict(metadata or {})
+        metadata["recap_tokens"] = int(total_tokens)
     try:
         from src.db.database import get_logs_connection
         with get_logs_connection() as cur:

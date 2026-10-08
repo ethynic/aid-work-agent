@@ -96,6 +96,7 @@ CATALOG_EXCLUDED_TOOLS = {
     "use_skill",
     "skill_execute",
     "clarify",
+    "present_options",
     "delegate_to_subagent",
     "speech_to_text",
 }

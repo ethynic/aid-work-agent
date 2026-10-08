@@ -71,18 +71,20 @@
 
       <!-- 中间：会话列表 -->
       <div class="w-80 border-r border-default bg-surface flex flex-col">
-        <!-- 智能体搜索栏 -->
+        <!-- 智能体筛选下拉框 -->
         <div class="p-4 border-b border-default">
-          <div class="flex gap-2">
-            <BaseInput
-              v-model="agentKeyword"
-              placeholder="搜索智能体名称"
-              size="sm"
-              class="w-full"
-              @keyup.enter="handleAgentSearch"
-            />
-            <BaseButton size="sm" @click="handleAgentSearch">搜索</BaseButton>
-          </div>
+          <BaseSelect
+            v-model="selectedAgentId"
+            size="sm"
+            class="w-full"
+            :disabled="!selectedUserId"
+            @change="handleAgentChange"
+          >
+            <option value="">全部智能体</option>
+            <option v-for="agent in agentOptions" :key="agent.agent_id" :value="agent.agent_id">
+              {{ agent.agent_name }}
+            </option>
+          </BaseSelect>
         </div>
 
         <!-- 会话列表 -->
@@ -221,10 +223,11 @@
 import { ref, computed, onMounted, watch, nextTick, inject } from 'vue'
 import AppHeader from '@/components/AppHeader.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
+import BaseSelect from '@/components/ui/BaseSelect.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BasePagination from '@/components/ui/BasePagination.vue'
 import DownloadFileCard from '@/components/DownloadFileCard.vue'
-import { listWebSessionUsers, getUserWebSessions, getWebSessionMessages } from '@/api/webSessions'
+import { listWebSessionUsers, listUserSessionAgents, getUserWebSessions, getWebSessionMessages } from '@/api/webSessions'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 import type { DownloadableFile } from '@/types'
 import { useToast } from 'vue-toastification'
@@ -252,7 +255,8 @@ const userPageSize = ref(20)
 const loadingUsers = ref(false)
 
 // 中栏：会话列表
-const agentKeyword = ref('')
+const selectedAgentId = ref('')
+const agentOptions = ref<{ agent_id: string; agent_name: string; session_count: number }[]>([])
 const sessionList = ref<any[]>([])
 const sessionTotal = ref(0)
 const sessionPage = ref(1)
@@ -294,11 +298,22 @@ async function handleSearch() {
   }
 }
 
-async function handleAgentSearch() {
+async function handleAgentChange() {
+  // 翻回第 1 页会触发 watch(sessionPage) -> loadUserSessions，避免双重请求
   if (sessionPage.value !== 1) {
     sessionPage.value = 1
   } else {
     await loadUserSessions()
+  }
+}
+
+async function loadAgentOptions(userId: string) {
+  try {
+    const res = await listUserSessionAgents(userId)
+    agentOptions.value = res.success ? res.agents || [] : []
+  } catch (e: any) {
+    agentOptions.value = []
+    toast.error(e.message || '获取智能体列表失败')
   }
 }
 
@@ -345,7 +360,8 @@ async function selectUser(user: any) {
   selectedUser.value = user
   sessionList.value = []
   sessionTotal.value = 0
-  agentKeyword.value = ''
+  selectedAgentId.value = ''
+  loadAgentOptions(user.user_id)
   selectedSessionId.value = ''
   selectedSession.value = null
   messageList.value = []
@@ -367,7 +383,7 @@ async function loadUserSessions() {
   try {
     const res = await getUserWebSessions({
       user_id: selectedUserId.value,
-      agent_keyword: agentKeyword.value || undefined,
+      subagent_id: selectedAgentId.value || undefined,
       page: sessionPage.value,
       page_size: sessionPageSize.value,
     })

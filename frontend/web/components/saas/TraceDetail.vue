@@ -279,8 +279,8 @@ function safeParse(text: string): any {
 }
 
 const lastLlmSpan = computed(() => {
-  // 找到最后一个 span_type=generation 的 span
-  const genSpans = spans.value.filter(s => s.span_type === 'generation')
+  // 找到最后一个 span_type=generation 的 span（排除 recap 等后台任务的 span）
+  const genSpans = spans.value.filter(s => s.span_type === 'generation' && !s.metadata?.recap)
   return genSpans.length > 0 ? genSpans[genSpans.length - 1] : null
 })
 

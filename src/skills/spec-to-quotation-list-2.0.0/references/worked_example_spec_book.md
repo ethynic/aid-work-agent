@@ -35,11 +35,18 @@
 | 71–76 | 固定家具照片 | 厨房柜 / 衣柜 / 全身镜 / 书桌 / 行李架 / 床头板 |
 | 78 / 79 | 洁具与卫浴五金 | 龙头 / 恒温淋浴柱 / 坐便器 / 台上盆 / 淋浴门 / 纸巾架 / 镜 / 浴巾架 |
 
-## 4. 配图与拆分结果（示意）
+## 4. 拆分结果（数据驱动，示意）
 
-- 按业态拆成多个文件：客房 / 公共区域 / 餐饮 / 外立面及室外 / 后勤与机电 / 材料标准与供应商。
-- 交付时把「客房」再拆成「客房 + 卫浴模块」两个文件（卫浴为预制模块包，供应商完全不同），
-  这是**人工判断优先于脚本建议**的典型场景。
+本技能**不写死拆分清单**。把每条目打上 `space`(真实空间名) / `theme`(大类) / `category`(产品类别)，
+生成器自动：
+
+- 动态发现空间集合与大类集合，按 `(space, theme)` 组合生成 `{space}_{theme}.xlsx`。
+- 例如同一本规范书会动态产出：`HappyRoom_硬装材料.xlsx` / `HappyRoom_家具软装.xlsx` /
+  `HappyRoom MEP_机电与设备.xlsx` / `Bathroom Pod_硬装材料.xlsx` / `Public Areas_硬装材料.xlsx` /
+  `Façade_外立面与室外.xlsx` / `Standards & Suppliers_硬装材料.xlsx` …（具体文件数由数据决定）。
+- **卫浴模块 Bathroom Pod 单独成文件**（工厂预制、供应商不同于现场硬装），靠给这些条目打
+  `space="Bathroom Pod"` 实现——这是**人工判断 + 数据驱动**的典型场景（不必在代码里写死）。
+- **艺术品整类不生成**：若只有 TBC 占位、无真实可报价产品，该 (space,theme) 组合被跳过。
 - 配图率 >95%：纯表格/纯文字页（如发电机组、空调、隔声性能、洁具流量限值）确无图，留空或效果图兜底。
 - 图片用 JPEG(q80, dpi130)，多个文件合计约 4MB。
 
@@ -63,6 +70,41 @@
 
 未写规则的条目，脚本会按「每间客房 2 个」「3 台」「×4」等文本自动识别；
 识别不出且非面积项则留空（浅黄底），推导依据写进 `basis` 列，不得凭空填数。
+
+## 5.1 数据驱动条目写法（本技能标准格式）
+
+每条目带 `space` / `theme` / `category` 三个维度，文件拆分由它们决定：
+
+```jsonc
+{
+  "project": {"title": "Material & Product Quotation List", "project": "Hotel101", "issue_date": "16 SEP 2026"},
+  "parameters": {
+    "客房总数": {"value": 500, "remark": "待业主提供；填写后所有 per_room 条目联动"},
+    "卧室地面面积": {"value": 11.39, "remark": "手册 2.1：HappyRoom 卧室 11.39 ㎡"}
+  },
+  "precise_images": {"HR-1103": ["x", 63, 39]},
+  "page_renderings": {"32": 165},
+  "items": [
+    {"code": "HR-1103", "space": "HappyRoom", "theme": "硬装材料", "category": "建材 Building Materials",
+     "cn": "卧室地毯", "en": "Bedroom carpet", "uom": "Sq.M",
+     "qty_rule": {"mode": "area", "param": "卧室地面面积", "multiply": 1.0, "waste": 0.05},
+     "basis": "按卧室地面面积+5%损耗", "vendor": "BANIG / TO BID", "ref": "2.1 (P.11)",
+     "spec": ["100% nylon", "6mm membrane backing"]},
+    {"code": "HR-2404", "space": "HappyRoom", "theme": "家具软装", "category": "家具 Furniture",
+     "cn": "床架（1.5m）", "en": "Bed base (1.5m)", "uom": "Each",
+     "qty_rule": {"mode": "per_room", "per": 1}, "basis": "每间客房 1 张",
+     "vendor": "U-Choice", "ref": "2.4 (P.21)", "spec": ["solid timber"]},
+    {"code": "FF-HR-C01", "space": "HappyRoom", "theme": "家具软装", "category": "窗帘 Curtains",
+     "tbc": true, "cn": "客房窗帘（待定）", "en": "Guestroom Curtains (TBC)", "uom": "Sq.M",
+     "basis": "手册未指定；待软装深化", "vendor": "TO BID", "ref": "2.4 (待深化)"}
+  ]
+}
+```
+
+→ 生成器动态产出：`HappyRoom_硬装材料.xlsx`（含 HR-1103 等）、`HappyRoom_家具软装.xlsx`
+（含 HR-2404 真实家具；`FF-HR-C01` 因同属 家具软装 且含真实产品，作为 TBC 占位列出、
+数量留空）；`HappyRoom MEP_机电与设备.xlsx` 等。空间名即文档里的 `HappyRoom`。
+
 
 ## 6. 踩过的坑（通用，适用于所有规范书）
 
