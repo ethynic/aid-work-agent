@@ -23,14 +23,12 @@
 | 20260917-1201 | 生产 243 仿真环境（staging） | 🔧 部分完成 | 代码层完成（a7394c1a）：SIMULATION_MODE 门控（SMTP/通知 dry-run、附件删除跳过、启动横幅）+ 同步脚本 + sim compose + nginx conf；243 服务器侧已上线（2026-09-17）：建库建账号 + schema 初始化（属主移交 aid_sim_user）+ 代码 rsync + cherry-pick + nginx 白名单上线（白名单放 snippets/ 避免 http 层污染生产的踩坑已回写文档）+ aid-agent-api1 healthy、启动横幅生效、表 149 张自动补齐；2026-09-17 更新脚本落地：sim.sh 默认附带代码同步（rsync 生产工作区 + sim-base 基准重放仿真增量，--skip-code 可跳过）+ 新增 agent1_update.sh 验证模式（git 拉取指定版本 + 前端构建，与复现模式互斥）；待 P1 验收（办公 IP 访问 + 同步真实租户联调）。 | [设计](system/simulation-env-design.md) | — |
 | 20260916-1534 | 阿里云 ASR AccessKey 更换指南 | ✅ 已完成 | AK 到期重新申请流程（RAM 用户创建、Secret 一次性保存、AliyunNLSFullAccess 授权）。 | [运维文档](ops/aliyun-asr-accesskey-renewal.md) | — |
 | 20260912-2313 | 端侧会话任务执行器（P5 后续） | 🔧 部分完成 | NL 建任务向导（解析+缺要素提醒+齐备才可存）与任务列表降级修复已完成开发，待部署验收。 | [设计](design/desktop-automation/edge-session-task-design.md) | [C0–C5 计划](plans/desktop-automation/plan-edge-session-task.md) / [NL建任务+列表修复](plans/desktop-automation/plan-session-task-nl-create.md) / [联测交接](plans/desktop-automation/edge-session-handoff-2026-09-15.md) / [agent2 Demo手册](ops/weixin-auto-chat-demo-agent2.md) |
-| 20260819-1126 | 母体 Agent 收敛（agent.py Kernel 化） | 📋 待开发 | **不设专项重构、不阻塞其他工作**，继续采用“冻结增长 + 有真实需求时伴生拆分”。 | [原则](system/agent-kernel-convergence-principles.md) | — |
 
 ## 系统功能
 
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
 | 20261006-1204 | 外部 Skill 插件机制 M2（执行路由 + skill-runner Provider） | 🔧 部分完成（待真机验收） | 云端+设备端开发完成、测试门/typecheck 通过；评审修复 3 条复核未全过，待 Windows 真机验收。 | [调研](research/external-skill-plugin-integration-research.md) | [开发计划](plans/plan-external-skill-plugin-m2.md) |
-| 20261001-1849 | AgentRunner 独立服务 | 🔧 部分完成 | Web 已接入；KF 恢复原渠道并接入共用 Runner，其他渠道与 M7 继续按计划。 | [设计](system/agent-application-architecture-design.md) | [计划](plans/plan-agent-runner-service.md) |
 | 20260920-1006 | API 数据源入知识库（api_ingest，多租户通用） | ⛔ 暂不开发（宏陶由专用模块承接） | **文档即配置、agent 驱动、不写每接口代码**：租户上传接口文档 → agent 实探生成源契约 → dry-run 人审；运行期契约直执（白名单 HttpApiTool 翻页，零 token）+ agent_loop 兜底；键值数据按字段 label 转语义 markdown、原始记录存 metadata.raw_payload；**知识粒度由 agent 决定**（产品类一记录=一条知识整条入库，长文类切分）；in_doc/metadata_only 分家防易变字段重嵌入；external_id/hash 判新增更新、幂等 upsert、调度协程、two_strike 删除、手动 API+工具；已按宏陶商城 API 说明完成适配核对。 | [设计](system/api-ingest/api-ingest-knowledge-design.md) | [开发计划](plans/plan-api-ingest-knowledge.md) |
 | 20260921-1100 | 宏陶商城产品知识库同步（hongtao_shop 专用模块） | 🔧 部分完成 | P1 已提交（f9e8dcbf）；P2 后端已提交（0fa634c5，含按需加载/单闸/退避强制）；P2.3 前端完成（build 过）；P2.5 已提交（c1993b04）；agent2 试跑修复三轮（v1.6 VL 上限 400/v1.7 正文结构化字段/v1.8 去开场句+部分同步更名+滚动修复），17 产品已重灌，待全量验收。 | [设计](system/hongtao-shop/hongtao-shop-kb-design.md) | [开发计划](plans/plan-hongtao-shop-kb.md) |
 | 20260810-2104 | 第一方 CLI / MCP Provider 架构规范 | 📋 待开发 | 所有第一方 CLI 必须成为独立标准 MCP Provider，同时支持 aid-work-agent Web Local Tool Runtime、未来 Agent Desktop、Codex、… | [规范](system/first-party-cli-mcp-provider-standard.md) | 首次落地并入 [BOSS MVP 计划](plans/recruiting/plan-recruiting-cli-agent-integration.md) |
@@ -91,6 +89,7 @@
 
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
+| 20261008-1603 | 飞书、钉钉对话服务接入 AgentRunner | 📋 待开发 | 保留原渠道业务，仅接入独立 Runner 并传递可信渠道来源。 | [接入边界](system/agent-application-architecture-design.md#81-后续接入的固定边界) | [飞书](channel/feishu/implementation_plan.md#agentrunner-接入后续独立事项) / [钉钉](channel/dingtalk/implementation_plan.md#agentrunner-接入后续独立事项) |
 | 20260616-1526 | 企业微信个人账号 RPA 接入 | 🔧 部分完成 | **服务端**（已完成）：schemas/db/SQL 表结构锁定共享契约；auth(HMAC)/router/message/action_client/adapter/connection/sec… | [协议](system/wecom-personal-rpa-protocol.md) / [架构设计](system/wecom-personal-rpa-design.md) / [客户端设计](system/wecom-personal-rpa-client-design.md) / [绑定管理 Tab 设计](system/wecom-personal-rpa-portal-binding-design.md) / [服务端监听存档设计](system/wecom-personal-rpa-server-archive-listener-design.md) / [SDK 部署](system/wecom-personal-rpa-sdk-deploy.md) | [服务端+部署计划](plans/plan-wecom-personal-rpa.md) / [客户端计划](plans/plan-wecom-personal-rpa-client.md) / [绑定管理计划](plans/plan-wecom-personal-rpa-portal-binding.md) / [服务端监听存档计划](plans/plan-wecom-personal-rpa-server-archive-listener.md) |
 | 20260819-1322 | 微信客服回复长图化 + 废除渠道约束提示词 | 🔧 部分完成 | **开发+单测完成（2026-08-19），待部署真机验证**。 | [配额方案（含 2026-08 变更）](channel/wecom_kf/reply_quota_control_plan.md) | — |
 | 20260820-2131 | 微信客服处理超时等待提示 | 🔧 部分完成 | **开发+单测完成（2026-08-20），待部署真机验证**。 | [计划](plans/plan-wecom-kf-waiting-indicator.md) | — |

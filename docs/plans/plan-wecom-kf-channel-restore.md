@@ -50,9 +50,9 @@
 
 **历史数据库记录保留**：`db_update.yaml` 和累积 `init-postgres.sql` 的已提交历史完整保留，新库仍沿历史创建退役 KF 表，运行代码不消费。旧表、消息和审计数据不自动 DROP，不提供可选清理块。
 
-仅在末尾追加 `2026-10-08 15:21:10` 退役操作：`ALTER TABLE IF EXISTS agent_runner_session_claims DROP COLUMN IF EXISTS gate`，初始化 SQL 末尾同步，使新库与升级库最终结构一致。当前更新器按 `_db_update_applied.last_datetime` 执行；历史 `file_hash` 字段不控制是否重跑。本次只准备文件，未执行真实迁移。
+仅在末尾追加 `2026-10-08 15:21:10` 退役操作：`ALTER TABLE IF EXISTS agent_runner_session_claims DROP COLUMN IF EXISTS gate`，初始化 SQL 末尾同步，使新库与升级库最终结构一致。当前更新器按 `_db_update_applied.last_datetime` 执行；历史 `file_hash` 字段不控制是否重跑。迁移准备阶段仅修改文件；后续 agent2 发布已实际执行迁移，见 Phase 5，不将本地 fake SQL 测试当作实库执行证据。
 
-## 发布与待验收
+## 发布流程与环境验收
 
 具体步骤以 [部署检查清单](../../deploy/agent-runner-deploy-checklist.md) 为准，发布前必须完成：
 

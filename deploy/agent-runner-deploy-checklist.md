@@ -5,6 +5,8 @@
 `runner-worker`（`python -m src.services.agent_runner.worker`）。微信 KF 恢复主 API 原渠道入口，
 overlay 不再包含 KF ingress/admission 或 `wecom-kf` profile。
 
+Agent/AgentRunner 架构重构已完成，本清单继续作为各环境发布与核查说明，不是“重构未完成”事项。KF agent2 切换及真机验收已于 2026-10-08 完成，agent3 旧 KF 开关/凭据清理见[恢复计划 Phase 5](../docs/plans/plan-wecom-kf-channel-restore.md)；其他环境不能据此视为已验收。后续渠道保留原业务，只接入共用 Runner，不新增渠道专属容器。
+
 ## 已部署旧 KF 方案的切换前置
 
 旧渠道重构已退出新版；新版不包含旧任务兼容消费者或重复消息 receipt 跳过逻辑。切换前在旧制品上完成以下核对，不能直接启动新版并期待它接管旧任务：
@@ -27,7 +29,7 @@ overlay 不再包含 KF ingress/admission 或 `wecom-kf` profile。
 - 移除旧 KF 专用 peer 及 `agent_runner.wecom_kf` 节；保留主 API peer 对 `chat`、`wecom_kf` 的授权、`AGENT_RUNNER_WEB_SERVICE_TOKEN`、共用 API URL 与 Browser 配置。
 - 新进程装配后验证 Web 和 KF 均能提交到共用 Runner，且退役 peer 无法认证；删除 `.env` 行不会更新已经运行的容器，按授权发布流程重建相关新容器。
 
-上述四键对应关系需在目标环境核实，本任务未读取 agent2/agent3 的 `.env`，未撤销凭据或操作容器。
+上述四键对应关系需按目标环境核实；此清单准备阶段未读取服务器 `.env` 或操作容器，后续 agent2/agent3 清理记录以恢复计划为准，不用准备阶段的限制覆盖已完成发布事实。
 
 > ⚠️ **红线**：本清单是准备与核查材料。执行 `up/down/restart/recreate`、跑迁移、改服务器配置
 > 均属部署动作，必须由用户当场明确授权（见 AGENTS.md「真机部署授权」）。本文所有命令均为

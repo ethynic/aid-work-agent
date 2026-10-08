@@ -66,6 +66,8 @@
 
 ### 2.7 纯 helper 与结构守卫
 
+Agent/AgentRunner 重构已完成；`agent.py` 当前为兼容 API，模型循环由 AgentEngine 与运行时适配承担。本节是持续安全约束，不能据此将母体收敛重新列为待开发；现行职责见[AgentRunner 架构](agent-application-architecture-design.md)。
+
 - 可保留与领域无关、无 I/O 的 `agent_events` 纯函数拆分，但必须证明行为等价。
 - `agent.py` 维持“新逻辑优先落独立模块、核心文件只做接线”的约束。
 - 行数只降不升和依赖方向守卫独立存在，不依赖任何通用领域模型。
