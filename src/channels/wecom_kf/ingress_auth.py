@@ -118,7 +118,10 @@ def callback_account_in_tx(cursor, tenant_id: str, config_id: str, query: dict, 
 
 def decrypt_callback(token: str, key: str, corp_id: str, query: dict, body: bytes):
     """Only the configured encrypted mode proves a durable pull notification."""
-    if not isinstance(body, bytes) or len(body) > 65536 or b"<!" in body:
+    # 微信标准回调 XML 的文本节点用 <![CDATA[...]]> 包裹（官方格式，Encrypt 字段同），
+    # 注入防护只允许精确拦截 DTD/实体声明（XXE），不得用 "<!" 泛匹配拒绝 CDATA 载荷。
+    if (not isinstance(body, bytes) or len(body) > 65536
+            or b"<!DOCTYPE" in body or b"<!ENTITY" in body):
         raise KfIngressError("KF_INGRESS_INVALID_CALLBACK", 400)
     try:
         outer = ET.fromstring(body)
@@ -132,7 +135,8 @@ def decrypt_callback(token: str, key: str, corp_id: str, query: dict, body: byte
         if not crypto.verify_signature(signature, timestamp, nonce, encrypted):
             raise KfIngressError("KF_INGRESS_SIGNATURE_INVALID", 403)
         plain = crypto.decrypt(encrypted)
-        if len(plain.encode("utf-8")) > 65536 or "<!" in plain:
+        if (len(plain.encode("utf-8")) > 65536
+                or "<!DOCTYPE" in plain or "<!ENTITY" in plain):
             raise KfIngressError("KF_INGRESS_INVALID_CALLBACK", 400)
         event = ET.fromstring(plain)
         if len({child.tag for child in event}) != len(event):
